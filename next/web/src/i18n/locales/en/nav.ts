@@ -35,9 +35,7 @@ export default {
     myWallet: 'Wallet',
     myProfile: 'Profile'
   },
-  views: {
-    settings: 'System settings'
-  },
+  label: 'Console menu',
   backToConsole: 'Back to console',
   crumbs: {
     pluginDetail: 'Plugin details',

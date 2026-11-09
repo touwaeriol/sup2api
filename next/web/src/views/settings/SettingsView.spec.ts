@@ -5,7 +5,7 @@ import { createPinia, setActivePinia, type Pinia } from 'pinia'
 import { hasIcon } from '@sub2api/ui'
 import { i18n } from '@/i18n'
 import type { ViewGroup } from '@/layouts/sidebarViews'
-import { useAppStore, type NavSection } from '@/stores/app'
+import { CCGATEWAY_PAGE } from '@/views/plugins/pluginUtil'
 import SettingsView from './SettingsView.vue'
 import { emptyFailurePolicy } from './failurePolicy'
 import { useSettingsMenu, useSettingsNav } from './settingsNav'
@@ -52,10 +52,6 @@ function servePlugins(installed: () => object[]) {
   api.list.mockImplementation(path => Promise.resolve({ items: path === '/plugins' ? installed() : [], total: 0 }))
 }
 const pluginRequests = () => api.list.mock.calls.filter(([path]) => path === '/plugins')
-
-const systemMenu = (): NavSection[] => [
-  { key: 'system', items: [{ id: 'settings', labelKey: 'nav.items.settings', icon: 'settings', path: '/settings' }] }
-]
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -136,8 +132,43 @@ describe('the settings page', () => {
 })
 
 describe('useSettingsNav', () => {
-  it('lists eight pages in three groups', () => {
-    const { groups } = setupOf(useSettingsNav)
+  it('knows the eight configuration pages', () => {
+    const { pages } = setupOf(useSettingsNav)
+    expect(pages.value.map(p => p.tab)).toEqual([
+      'gateway',
+      'failure',
+      'sticky',
+      'offload',
+      'billing',
+      'notifications',
+      'updates',
+      'environment'
+    ])
+  })
+
+  it('leaves out the pages the caller may not open', () => {
+    permissions.denied = ['settings:read']
+    const { pages, activeTab, missing } = setupOf(useSettingsNav)
+    expect(pages.value.map(p => p.tab)).toEqual(['sticky'])
+    // The linked page (billing) is not the caller's to see.
+    expect(activeTab.value).toBe('sticky')
+    expect(missing.value).toBe(true)
+  })
+
+  it('opens the page asked for, else the first one', () => {
+    const { activeTab, activeLabel, missing } = setupOf(useSettingsNav)
+    expect([activeTab.value, activeLabel.value, missing.value]).toEqual(['billing', '计费', false])
+    route.query = {}
+    expect([activeTab.value, activeLabel.value, missing.value]).toEqual(['gateway', '网关设置', false])
+    route.query = { tab: 'plugin:..' }
+    expect([activeTab.value, missing.value]).toEqual(['gateway', true])
+  })
+})
+
+describe('useSettingsMenu', () => {
+  it('lists the eight pages in three groups', async () => {
+    const groups = setupOf(useSettingsMenu)
+    await flushPromises()
     expect(shape(groups.value)).toEqual([
       ['网关', ['gateway', 'failure', 'sticky', 'offload']],
       ['计费与通知', ['billing', 'notifications']],
@@ -150,46 +181,21 @@ describe('useSettingsNav', () => {
     })
   })
 
-  it('gives every page an icon of its own that SIcon can draw', () => {
-    const icons = setupOf(useSettingsNav).groups.value.flatMap(g => g.links.map(l => l.item.icon!))
+  it('gives every page an icon of its own that SIcon can draw', async () => {
+    const groups = setupOf(useSettingsMenu)
+    await flushPromises()
+    const icons = groups.value.flatMap(g => g.links.map(l => l.item.icon!))
     expect(icons.filter(hasIcon)).toHaveLength(8)
     expect(new Set(icons).size).toBe(8)
   })
 
-  it('leaves out the pages the caller may not open, and the groups left empty', () => {
-    permissions.denied = ['settings:read']
-    const { groups, activeTab, missing } = setupOf(useSettingsNav)
-    expect(shape(groups.value)).toEqual([['网关', ['sticky']]])
-    // The linked page (billing) is not the caller's to see.
-    expect(activeTab.value).toBe('sticky')
-    expect(missing.value).toBe(true)
-  })
-
-  it('opens the page asked for, else the first one', () => {
-    const { activeTab, activeLabel, missing } = setupOf(useSettingsNav)
-    expect([activeTab.value, activeLabel.value, missing.value]).toEqual(['billing', '计费', false])
-    route.query = {}
-    expect([activeTab.value, activeLabel.value, missing.value]).toEqual(['gateway', '网关设置', false])
-    route.query = { tab: 'plugin:mailer' }
-    expect([activeTab.value, missing.value]).toEqual(['gateway', true])
-  })
-
-  it('lights up the open page only on the settings page', () => {
-    const { groups } = setupOf(useSettingsNav)
-    expect(activeKeys(groups.value)).toEqual(['billing'])
-    route.path = '/plugins/mailer/settings'
-    expect(activeKeys(groups.value)).toEqual([])
-  })
-})
-
-describe('useSettingsMenu', () => {
   it('puts the settings of enabled plugins with a form between billing and runtime', async () => {
     servePlugins(() => [
       plugin('mailer', '邮件'),
       plugin('guard', '请求守卫', { status: 'disabled' }),
       // Native settings live on the plugin's own page: the server reports no form.
       plugin('moderation', '提示词审核', { has_settings: false }),
-      // Has an entry of its own in the sidebar (/ccgateway).
+      // Has an entry of its own in the sidebar.
       plugin('ccgateway', 'Claude Code')
     ])
     const groups = setupOf(useSettingsMenu)
@@ -205,6 +211,26 @@ describe('useSettingsMenu', () => {
       item: { id: 'plugin-settings:mailer', label: '邮件', icon: 'puzzle', path: '/plugins/mailer/settings', pluginKey: 'mailer' },
       active: false
     })
+    expect(groups.value.flatMap(g => g.links.map(l => l.item.path))).not.toContain(CCGATEWAY_PAGE)
+  })
+
+  it('leaves out the pages the caller may not open and the groups left empty, not the plugins', async () => {
+    permissions.denied = ['settings:read']
+    servePlugins(() => [plugin('mailer', '邮件')])
+    const groups = setupOf(useSettingsMenu)
+    await flushPromises()
+    expect(shape(groups.value)).toEqual([
+      ['网关', ['sticky']],
+      ['插件设置', ['plugin:mailer']]
+    ])
+  })
+
+  it('lights up the open configuration page on the settings page only', async () => {
+    const groups = setupOf(useSettingsMenu)
+    await flushPromises()
+    expect(activeKeys(groups.value)).toEqual(['billing'])
+    route.path = '/nodes'
+    expect(activeKeys(groups.value)).toEqual([])
   })
 
   it("lights up a plugin's entry on that plugin's settings page, and nothing else", async () => {
@@ -217,42 +243,49 @@ describe('useSettingsMenu', () => {
     expect(activeKeys(groups.value)).toEqual(['plugin:mailer'])
   })
 
-  it('follows plugins enabled while it is open, not the first menu load', async () => {
-    let installed: object[] = []
-    servePlugins(() => installed)
-    const groups = setupOf(useSettingsMenu)
-    const app = useAppStore()
-    app.menus = systemMenu()
+  it('draws the plugins of the last visit at once and refreshes them behind', async () => {
+    servePlugins(() => [plugin('mailer', '邮件')])
+    setupOf(useSettingsMenu)
     await flushPromises()
-    expect(pluginRequests()).toHaveLength(1)
-    expect(shape(groups.value).map(([label]) => label)).toEqual(['网关', '计费与通知', '运行环境'])
-    // Enabling a plugin refreshes the menu.
-    installed = [plugin('mailer', '邮件')]
-    app.menus = systemMenu()
+
+    let answer!: (list: object) => void
+    api.list.mockImplementation(() => new Promise(resolve => (answer = resolve)))
+    const again = setupOf(useSettingsMenu)
+    expect(again.value.map(g => g.key)).toEqual(['gateway', 'billing', 'pluginSettings', 'runtime'])
+    answer({ items: [plugin('mailer', '邮件'), plugin('growth', '增长管理')], total: 2 })
     await flushPromises()
+    expect(again.value[2].links.map(l => l.key)).toEqual(['plugin:mailer', 'plugin:growth'])
     expect(pluginRequests()).toHaveLength(2)
-    expect(groups.value.map(g => g.key)).toEqual(['gateway', 'billing', 'pluginSettings', 'runtime'])
   })
 
-  it("has no plugin group when the list fails or is not the caller's to read", async () => {
-    api.list.mockRejectedValue(new Error('down'))
-    const failed = setupOf(useSettingsMenu)
+  it('drops a late answer to an earlier visit', async () => {
+    const answers: Array<(list: object) => void> = []
+    api.list.mockImplementation(() => new Promise(resolve => answers.push(resolve)))
+    setupOf(useSettingsMenu)
+    const groups = setupOf(useSettingsMenu)
+    answers[1]({ items: [plugin('growth', '增长管理')], total: 1 })
+    answers[0]({ items: [plugin('mailer', '邮件')], total: 1 })
     await flushPromises()
-    expect(failed.value.map(g => g.key)).toEqual(['gateway', 'billing', 'runtime'])
+    expect(groups.value[2].links.map(l => l.key)).toEqual(['plugin:growth'])
+  })
+
+  it('has no plugin group when the list fails', async () => {
+    api.list.mockRejectedValue(new Error('down'))
+    const groups = setupOf(useSettingsMenu)
+    await flushPromises()
+    expect(groups.value.map(g => g.key)).toEqual(['gateway', 'billing', 'runtime'])
+  })
+
+  it('forgets the plugins shown to an earlier user who could list them', async () => {
+    servePlugins(() => [plugin('mailer', '邮件')])
+    setupOf(useSettingsMenu)
+    await flushPromises()
 
     api.list.mockClear()
     permissions.denied = ['plugin:read']
-    const denied = setupOf(useSettingsMenu)
-    await flushPromises()
-    expect(pluginRequests()).toHaveLength(0)
-    expect(denied.value.map(g => g.key)).toEqual(['gateway', 'billing', 'runtime'])
-  })
-
-  it('keeps the plugin group for a caller with no runtime page', async () => {
-    permissions.denied = ['settings:read']
-    servePlugins(() => [plugin('mailer', '邮件')])
     const groups = setupOf(useSettingsMenu)
     await flushPromises()
-    expect(groups.value.map(g => g.key)).toEqual(['gateway', 'pluginSettings'])
+    expect(pluginRequests()).toHaveLength(0)
+    expect(groups.value.map(g => g.key)).toEqual(['gateway', 'billing', 'runtime'])
   })
 })

@@ -1,13 +1,13 @@
 import { ref, watch, type Ref } from 'vue'
 import type { NavItem, NavSection } from '@/stores/app'
-import { SIDEBAR_VIEWS } from './sidebarViews'
 
 /**
  * The console menu shows three groups (CONTRACTS §90): the console every role
  * has (section "overview"), personal ("me") and admin, which holds every other
  * section in the server's order: gateway, security and finance listed flat,
  * the sections of FOLDED_SECTIONS and a plugin's own folded into a submenu,
- * and last the entries that open a sidebar view (system settings).
+ * and last the entries that open a sidebar view (system settings), which
+ * the caller passes in (sidebarViews.ts).
  */
 export type NavGroupKey = 'overview' | 'me' | 'admin'
 
@@ -49,25 +49,21 @@ const linkOf = (item: NavItem): NavLink => ({ key: `item:${item.id}`, item })
 const sectionRows = (s: NavSection): NavRow[] =>
   folds(s) && s.items.length > 1 ? [{ key: `section:${s.key}`, section: s }] : s.items.map(linkOf)
 
-function adminEntries(menus: NavSection[]): NavEntry[] {
-  const views = SIDEBAR_VIEWS.flatMap(v => v.entry(menus) ?? [])
-  // A view's entry takes the place of the menu entry of the same page (/settings).
-  const sections = menus
-    .filter(s => s.key !== 'overview' && s.key !== 'me')
-    .map(s => ({ ...s, items: s.items.filter(i => !views.some(v => v.path === i.path)) }))
-  const rows = [
-    ...sections.flatMap(s => sectionRows(s).map(row => ({ row, block: blockOf(s) }))),
-    ...views.map(v => ({ row: linkOf(v), block: 'views' }))
-  ]
+function adminEntries(sections: NavSection[], viewEntries: NavItem[]): NavEntry[] {
+  // A view's entry moves from its section to the end of the group.
+  const stays = (i: NavItem) => !viewEntries.some(v => v.path === i.path)
+  const rowsOf = (s: NavSection) => sectionRows({ ...s, items: s.items.filter(stays) }).map(row => ({ row, block: blockOf(s) }))
+  const rows = [...sections.flatMap(rowsOf), ...viewEntries.map(v => ({ row: linkOf(v), block: 'views' }))]
   return rows.map(({ row, block }, i) => ({ ...row, gap: i > 0 && rows[i - 1].block !== block }))
 }
 
-export function groupMenus(menus: NavSection[]): NavGroup[] {
+export function groupMenus(menus: NavSection[], viewEntries: NavItem[]): NavGroup[] {
   const linksIn = (key: string) => menus.filter(s => s.key === key).flatMap(s => s.items.map(linkOf))
+  const others = menus.filter(s => s.key !== 'overview' && s.key !== 'me')
   const groups: NavGroup[] = [
     { key: 'overview', entries: linksIn('overview') },
     { key: 'me', entries: linksIn('me') },
-    { key: 'admin', entries: adminEntries(menus) }
+    { key: 'admin', entries: adminEntries(others, viewEntries) }
   ]
   return groups.filter(g => g.entries.length > 0)
 }

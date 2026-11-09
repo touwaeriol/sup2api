@@ -18,7 +18,7 @@ const logOverrides = ref<number | null>(null)
 </script>
 <template>
   <div class="space-y-5">
-    <SPageHeader v-if="!embedded" :title="t('ccgateway.title')" :description="t('ccgateway.description')"><template v-if="auth.has('plugin:read')" #actions><SButton to="/plugins/ccgateway">{{ t('nav.crumbs.pluginDetail') }}</SButton></template></SPageHeader>
+    <SPageHeader v-if="!embedded" :title="t('ccgateway.title')" :description="t('ccgateway.description')"><template v-if="auth.has('plugin:read')" #actions><SButton to="/plugins/ccgateway">{{ t('ccgateway.pluginDetail') }}</SButton></template></SPageHeader>
     <SHint v-if="!manage">{{ t('ccgateway.readOnly') }}</SHint>
     <RemoteSettings :disabled="!manage" :request-log-overrides="logOverrides" @saved="revision++">
       <template #accounts><AccountRuntimes :key="revision" @overrides="logOverrides = $event" /></template>

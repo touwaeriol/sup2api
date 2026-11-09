@@ -35,9 +35,7 @@ export default {
     myWallet: '钱包',
     myProfile: '个人设置'
   },
-  views: {
-    settings: '系统设置'
-  },
+  label: '控制台菜单',
   backToConsole: '返回控制台',
   crumbs: {
     pluginDetail: '插件详情',

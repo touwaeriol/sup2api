@@ -30,6 +30,7 @@ import type { CcgAuthSession, CcgDraft, CcgRuntimeHealth, CcgRuntimeStatus, CcgS
 import { useProxiesLookup } from '@/composables/lookups'
 import { ACCOUNT_KEYS } from '@/composables/useOwnership'
 import BusyText from '@/components/BusyText.vue'
+import { CCGATEWAY_PAGE } from '@/views/plugins/pluginUtil'
 import CcgAuthHeader from './CcgAuthHeader.vue'
 import CcgBlockedAlert from './CcgBlockedAlert.vue'
 import CcgErrorAlert from './CcgErrorAlert.vue'
@@ -73,7 +74,7 @@ const POLL_MS = 2000
 /** Draft keep-alive: the core sweeps drafts untouched for 15 minutes. */
 const HEARTBEAT_MS = 60_000
 /** The CCGateway page, scrolled to the runtime card (install / upgrade the containers). */
-const settingsLink = '/ccgateway#ccgateway-runtime'
+const settingsLink = `${CCGATEWAY_PAGE}#ccgateway-runtime`
 
 /** A re-authorization of a saved account (the draft is given); otherwise a new account's draft. */
 const inPlace = computed(() => Number.isSafeInteger(props.reauthAccountId) && (props.reauthAccountId ?? 0) > 0)

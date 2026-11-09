@@ -11,12 +11,14 @@ import SidebarLink from './SidebarLink.vue'
 import SidebarSubmenu from './SidebarSubmenu.vue'
 import SidebarViewMenu from './SidebarViewMenu.vue'
 import { groupLinks, groupMenus, showGroupTitle, useOpenSections, type NavGroup, type NavLink } from './sidebarGroups'
-import { useConsoleReturn, useSidebarView } from './sidebarViews'
+import { useConsoleReturn, useMenuHandover, useSidebarView, useViewEntries } from './sidebarViews'
+import { useNavItemLabel } from './navItem'
 import { useActiveMenuPath } from './useActiveMenu'
 
 const app = useAppStore()
 const route = useRoute()
 const { t } = useI18n()
+const labelOf = useNavItemLabel()
 
 function sectionLabel(s: NavSection): string {
   return s.label ? lt(s.label) : t(`nav.sections.${s.key}`)
@@ -42,11 +44,16 @@ const collapsed = computed(() => app.sidebarCollapsed && !app.mobileNavOpen)
 // A page of a sidebar view (system settings) swaps the console menu for the view's own.
 const view = useSidebarView()
 const backTo = useConsoleReturn(view)
-// The menu swapped in starts at its top, not where the other one was scrolled to.
 const nav = ref<HTMLElement>()
-const scrollToTop = () => nav.value?.scrollTo({ top: 0 })
+const handover = useMenuHandover(nav)
+/** Names the landmark after the menu it shows: a view's by the entry that opens it. */
+const navLabel = computed(() => {
+  const entry = view.value?.entry(app.menus)
+  return entry ? labelOf(entry) : t('nav.label')
+})
 
-const groups = computed(() => groupMenus(app.menus))
+const viewEntries = useViewEntries()
+const groups = computed(() => groupMenus(app.menus, viewEntries.value))
 const activeSubmenu = computed(
   () => groups.value.flatMap(g => g.entries).find(e => e.section?.items.some(i => i.path === activePath.value))?.section?.key
 )
@@ -68,14 +75,14 @@ const { isOpen, toggle } = useOpenSections(activeSubmenu)
         <VersionBadge :compact="collapsed" />
       </div>
     </div>
-    <nav ref="nav" class="flex-1 overflow-y-auto px-3 py-3">
+    <nav ref="nav" class="flex-1 overflow-y-auto px-3 py-3" :aria-label="navLabel">
       <Transition
         mode="out-in"
         enter-active-class="transition duration-150 ease-out motion-reduce:transition-none"
         enter-from-class="translate-x-1 opacity-0"
         leave-active-class="transition duration-75 ease-in motion-reduce:transition-none"
         leave-to-class="opacity-0"
-        @before-enter="scrollToTop"
+        v-bind="handover"
       >
         <SidebarViewMenu v-if="view" :key="view.key" :view="view" :back-to="backTo" :collapsed="collapsed" />
         <div v-else key="console">

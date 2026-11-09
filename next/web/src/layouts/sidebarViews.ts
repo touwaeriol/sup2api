@@ -1,6 +1,6 @@
 import { computed, ref, watchEffect, type ComputedRef, type Ref } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
-import type { NavItem, NavSection } from '@/stores/app'
+import { useRoute, useRouter, type RouteLocationNormalizedLoaded } from 'vue-router'
+import { useAppStore, type NavItem, type NavSection } from '@/stores/app'
 import { SETTINGS_PAGE, useSettingsMenu } from '@/views/settings/settingsNav'
 import { useRouteLineage } from './useActiveMenu'
 
@@ -27,7 +27,7 @@ export interface ViewGroup {
 
 export interface SidebarView {
   key: SidebarViewKey
-  /** The console-view entry that opens this view; undefined when the caller sees none of its pages. */
+  /** The menu entry that opens this view, shown last in the admin group; undefined when the caller's menu has none. */
   entry(menus: NavSection[]): NavItem | undefined
   /** The view's own menu. Called once in the setup of the component that renders it. */
   useGroups(): ComputedRef<ViewGroup[]>
@@ -37,25 +37,38 @@ export interface SidebarView {
 export const SIDEBAR_VIEWS: SidebarView[] = [
   {
     key: 'settings',
-    entry: menus =>
-      menus.some(s => s.items.some(i => i.path === SETTINGS_PAGE))
-        ? { id: 'view:settings', labelKey: 'nav.views.settings', icon: 'settings', path: SETTINGS_PAGE }
-        : undefined,
+    entry: menus => menus.flatMap(s => s.items).find(i => i.path === SETTINGS_PAGE),
     useGroups: () => useSettingsMenu()
   }
 ]
 
-/** The view the current page opens in: the one its route declares, else the nearest page above it; none on a console page. */
+/** The entries of the views the caller may open. */
+export function useViewEntries(): ComputedRef<NavItem[]> {
+  const app = useAppStore()
+  return computed(() => SIDEBAR_VIEWS.flatMap(v => v.entry(app.menus) ?? []))
+}
+
+/**
+ * The view the current page opens in: the one its route declares, else the
+ * nearest page above it; none on a console page. A caller whose menu lacks the
+ * view's entry keeps the console menu (a plugin's settings page opened with
+ * that plugin's permission alone); until the menu loads the route decides.
+ */
 export function useSidebarView(): ComputedRef<SidebarView | undefined> {
+  const app = useAppStore()
   const router = useRouter()
   const lineage = useRouteLineage()
   return computed(() => {
     const key = lineage.value.map(p => router.resolve(p).meta.sidebar).find(Boolean)
-    return SIDEBAR_VIEWS.find(v => v.key === key)
+    const view = SIDEBAR_VIEWS.find(v => v.key === key)
+    return view && (!app.menusLoaded || view.entry(app.menus)) ? view : undefined
   })
 }
 
 const CONSOLE_HOME = '/dashboard'
+
+/** Where a refused or an unknown address ends up (router/index.ts): nothing to come back to. */
+const isErrorPage = (route: RouteLocationNormalizedLoaded) => route.path === '/forbidden' || 'pathMatch' in route.params
 
 /**
  * Where "Back to console" leads: the console page the user opened the view
@@ -66,7 +79,26 @@ export function useConsoleReturn(view: Ref<SidebarView | undefined>): ComputedRe
   const route = useRoute()
   const last = ref<string>()
   watchEffect(() => {
-    if (!view.value) last.value = route.fullPath
+    if (!view.value && !isErrorPage(route)) last.value = route.fullPath
   })
   return computed(() => last.value ?? CONSOLE_HOME)
+}
+
+/**
+ * Hands the menu area over when the sidebar swaps its menu (hooks of the
+ * transition): the new menu starts at its top, not where the old one was
+ * scrolled to, and takes the keyboard focus the old one held, which would
+ * otherwise fall back to the page.
+ */
+export function useMenuHandover(nav: Ref<HTMLElement | undefined>) {
+  let focused = false
+  return {
+    onBeforeLeave: () => {
+      focused = !!nav.value?.contains(document.activeElement)
+    },
+    onBeforeEnter: () => nav.value?.scrollTo({ top: 0 }),
+    onAfterEnter: () => {
+      if (focused) nav.value?.querySelector<HTMLElement>('a, button')?.focus()
+    }
+  }
 }

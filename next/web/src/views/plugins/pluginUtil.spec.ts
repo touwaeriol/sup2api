@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import en from '@/i18n/locales/en/plugins'
 import zh from '@/i18n/locales/zh/plugins'
-import { HOST_PERMISSION_RISK, accountTypesOf, consoleSettings, consoleSettingsPath, endpointText, hasSettingsForm, hpKey, nativeSettingsPath, platformsOf, pluginStatusTone, settingsFieldErrors } from './pluginUtil'
+import { CCGATEWAY_PAGE, HOST_PERMISSION_RISK, accountTypesOf, consoleSettings, consoleSettingsPath, endpointText, hasSettingsForm, hpKey, isPluginKey, nativeSettingsPath, platformsOf, pluginSettingsPath, pluginStatusTone, settingsFieldErrors } from './pluginUtil'
 
 describe('plugin endpoint declarations', () => {
   it('preserves the same subset in manifests and installation reviews', () => {
@@ -91,8 +91,28 @@ describe('where the plugin list opens settings', () => {
   })
   it("is ccgateway's own page, for settings:read, whatever its manifest says", () => {
     expect(hasSettingsForm({ key: 'ccgateway', has_settings: true })).toBe(false)
-    expect(consoleSettingsPath({ key: 'ccgateway', has_settings: true }, all)).toBe('/ccgateway')
+    expect(consoleSettingsPath({ key: 'ccgateway', has_settings: true }, all)).toBe(CCGATEWAY_PAGE)
     expect(consoleSettingsPath({ key: 'ccgateway' }, perm => perm !== 'settings:read')).toBeUndefined()
+  })
+})
+
+describe('console addresses', () => {
+  it("keeps the CCGateway page under a segment the SDK reserves for the console", () => {
+    const reserved = readFileSync('../sdk/manifest/routes.go', 'utf8').match(/var ConsoleSegments = \[\]string\{([^}]*)\}/)?.[1] ?? ''
+    expect(CCGATEWAY_PAGE).toBe('/system/ccgateway')
+    expect([...reserved.matchAll(/"([^"]+)"/g)].map(m => m[1])).toContain(CCGATEWAY_PAGE.split('/')[1])
+  })
+  it("gives a plugin's settings form a page of its own", () => {
+    expect(pluginSettingsPath('mailer')).toBe('/plugins/mailer/settings')
+  })
+})
+
+describe('isPluginKey', () => {
+  it('is the key rule of sdk/manifest/check', () => {
+    const rule = readFileSync('../sdk/manifest/check/validate.go', 'utf8').match(/\bkeyRe\s*=\s*regexp\.MustCompile\(`([^`]+)`\)/)?.[1]
+    expect(rule).toBe('^[a-z][a-z0-9_]{1,29}$')
+    for (const key of ['mailer', 'claude_oauth', 'a1']) expect([key, isPluginKey(key)]).toEqual([key, true])
+    for (const key of ['', 'a', '..', 'a/b', 'Mailer', 'guard-on', '1st', 'x'.repeat(31)]) expect([key, isPluginKey(key)]).toEqual([key, false])
   })
 })
 

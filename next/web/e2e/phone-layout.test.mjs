@@ -86,7 +86,7 @@ for (const name of DEVICES) {
       await page.click('button[type=submit]')
       await page.waitForURL(url => !url.pathname.startsWith('/login'))
       await page.waitForSelector('aside nav a[href]', { state: 'attached' })
-      // The plugin submenus start folded; open them all to list every page.
+      // The submenus (core directories and plugin sections) start folded; open them all to list every page.
       await page.$$eval('aside nav [aria-expanded="false"]', buttons => buttons.forEach(b => b.click()))
       const sidebar = await page.$$eval('aside nav a[href]', links => links.map(a => a.getAttribute('href')))
       pages = [...new Set([...sidebar, ...(await settingsPages(page))])]

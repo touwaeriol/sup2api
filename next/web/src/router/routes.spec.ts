@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { CCGATEWAY_PAGE } from '@/views/plugins/pluginUtil'
 import { router } from './index'
 
 const auth = vi.hoisted(() => ({ denied: [] as string[] }))
@@ -32,9 +33,9 @@ describe('where pages belong (CONTRACTS §90)', () => {
     expect(metaOf('/plugins/mailer/settings')).toMatchObject({ parent: '/settings' })
   })
 
-  it('puts roles below users and leaves the feature pages of the sidebar without a parent', () => {
-    expect(metaOf('/roles').parent).toBe('/users')
+  it('leaves the feature pages of the sidebar without a parent', () => {
     for (const path of [
+      '/roles',
       '/proxies',
       '/platforms',
       '/plugins',
@@ -44,7 +45,7 @@ describe('where pages belong (CONTRACTS §90)', () => {
       '/system/tasks',
       '/system/upgrades',
       '/system/audit',
-      '/ccgateway'
+      CCGATEWAY_PAGE
     ]) {
       expect([path, metaOf(path).parent, metaOf(path).sidebar]).toEqual([path, undefined, undefined])
     }
@@ -54,20 +55,27 @@ describe('where pages belong (CONTRACTS §90)', () => {
 
 describe('the CCGateway page', () => {
   it('has an address of its own, for settings:read', async () => {
-    expect(metaOf('/ccgateway')).toMatchObject({ perm: 'settings:read', title: 'ccgateway.title' })
-    expect(await follow('/ccgateway')).toBe('/ccgateway')
+    expect(metaOf(CCGATEWAY_PAGE)).toMatchObject({ perm: 'settings:read', title: 'ccgateway.title' })
+    expect(await follow(CCGATEWAY_PAGE)).toBe(CCGATEWAY_PAGE)
   })
 
-  it('takes over its old addresses, keeping the anchor', async () => {
-    expect(await follow('/system/ccgateway')).toBe('/ccgateway')
-    expect(await follow('/plugins/ccgateway/settings#ccgateway-runtime')).toBe('/ccgateway#ccgateway-runtime')
-    expect(await follow('/settings?tab=plugin:ccgateway')).toBe('/ccgateway')
+  it('is not for a caller without settings:read', async () => {
+    auth.denied = ['settings:read']
+    // From another page: a link to the open page is no navigation.
+    await follow('/forbidden')
+    expect(await follow(CCGATEWAY_PAGE)).toBe('/forbidden?perm=settings:read')
+  })
+
+  it("takes over the plugin's settings addresses, keeping the anchor", async () => {
+    expect(await follow('/plugins/ccgateway/settings#ccgateway-runtime')).toBe(`${CCGATEWAY_PAGE}#ccgateway-runtime`)
+    expect(await follow('/settings?tab=plugin:ccgateway#ccgateway-runtime')).toBe(`${CCGATEWAY_PAGE}#ccgateway-runtime`)
   })
 })
 
 describe('old links to plugin settings as a tab of the settings page', () => {
-  it("lead to the plugin's settings page", async () => {
+  it("lead to the plugin's settings page, keeping the anchor", async () => {
     expect(await follow('/settings?tab=plugin:mailer')).toBe('/plugins/mailer/settings')
+    expect(await follow('/settings?tab=plugin:mailer#smtp')).toBe('/plugins/mailer/settings#smtp')
   })
 
   it('also from the settings page itself, where only the query changes', async () => {
@@ -79,6 +87,12 @@ describe('old links to plugin settings as a tab of the settings page', () => {
     auth.denied = ['settings:read', 'sticky:read']
     expect(await follow('/settings?tab=plugin:mailer')).toBe('/plugins/mailer/settings')
     expect(await follow('/settings?tab=billing')).toMatch(/^\/forbidden/)
+  })
+
+  it('stay on the settings page, which reports the page missing, when the key is not a plugin key', async () => {
+    for (const link of ['/settings?tab=plugin:..', '/settings?tab=plugin:', '/settings?tab=plugin:a/b', '/settings?tab=plugin:Mailer']) {
+      expect(await follow(link)).toBe(link)
+    }
   })
 
   it('leave the configuration pages where they are', async () => {

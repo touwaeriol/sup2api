@@ -135,7 +135,7 @@ export default {
     invalid: '配置格式不正确，请检查 CC 特性中的设置。'
   },
  runtime: {"switchHint": "切换代理会在共享出口网关里改该账号的线路，正在进行的请求可能中断；其他账号不受影响。"},
-  title: 'CCGateway 管理', description: '连接 CCGateway 控制器，管理每个 Claude Code 账号的独立容器。', readOnly: '当前权限仅允许查看配置。',
+  title: 'CCGateway 管理', description: '连接 CCGateway 控制器，管理每个 Claude Code 账号的独立容器。', readOnly: '当前权限仅允许查看配置。', pluginDetail: '插件详情',
   accountAuth: {
     title: 'Claude 授权',
     steps: { proxy: '选择代理', container: '启动账号容器', login: '复制链接登录 Claude', code: '粘贴授权码', done: '凭据已保存' },

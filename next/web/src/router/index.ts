@@ -1,9 +1,10 @@
-import { createRouter, createWebHistory, type RouteLocationNormalized, type RouteRecordRaw } from 'vue-router'
+import { createRouter, createWebHistory, type RouteLocationNormalized, type RouteLocationRaw, type RouteRecordRaw } from 'vue-router'
 import { session } from '@sub2api/host'
 import { useAuthStore } from '@/stores/auth'
 import { ACCOUNT_PAGE_PERMS, PROXY_PAGE_PERMS } from '@/composables/useOwnership'
 import AppLayout from '@/layouts/AppLayout.vue'
 import type { SidebarViewKey } from '@/layouts/sidebarViews'
+import { CCGATEWAY_PAGE, isPluginKey, pluginSettingsPath } from '@/views/plugins/pluginUtil'
 import { closeLayersOnBack } from './layerBack'
 
 declare module 'vue-router' {
@@ -21,17 +22,22 @@ declare module 'vue-router' {
     /** Where a caller without `perm` goes instead of /forbidden, if anywhere. */
     deniedRedirect?: (to: RouteLocationNormalized) => string | undefined
     /** Where an old address of this page now lives; asked on every navigation, a change of the query alone included. */
-    movedTo?: (to: RouteLocationNormalized) => string | undefined
+    movedTo?: (to: RouteLocationNormalized) => RouteLocationRaw | undefined
     /** The sidebar view this page and the pages under it open in (CONTRACTS §90). */
     sidebar?: SidebarViewKey
   }
 }
 
-/** Plugin settings were tabs of the settings page (?tab=plugin:<key>) before they had an address of their own. */
-function movedSettingsTab(to: RouteLocationNormalized): string | undefined {
+/**
+ * Plugin settings were tabs of the settings page (?tab=plugin:<key>) before
+ * they had an address of their own. Anything but a plugin key stays: the
+ * settings page says the linked page is not available.
+ */
+function movedSettingsTab(to: RouteLocationNormalized): RouteLocationRaw | undefined {
   const tab = to.query.tab
   if (typeof tab !== 'string' || !tab.startsWith('plugin:')) return undefined
-  return `/plugins/${encodeURIComponent(tab.slice('plugin:'.length))}/settings`
+  const key = tab.slice('plugin:'.length)
+  return isPluginKey(key) ? { path: pluginSettingsPath(key), hash: to.hash } : undefined
 }
 
 const children: RouteRecordRaw[] = [
@@ -39,7 +45,7 @@ const children: RouteRecordRaw[] = [
   { path: 'dashboard', component: () => import('@/views/dashboard/DashboardView.vue'), meta: { title: 'nav.items.dashboard' } },
 
   { path: 'users', component: () => import('@/views/users/UsersView.vue'), meta: { perm: 'user:read', title: 'nav.items.users' } },
-  { path: 'roles', component: () => import('@/views/roles/RolesView.vue'), meta: { perm: 'role:read', title: 'nav.items.roles', parent: '/users' } },
+  { path: 'roles', component: () => import('@/views/roles/RolesView.vue'), meta: { perm: 'role:read', title: 'nav.items.roles' } },
   { path: 'api-keys', redirect: '/me/api-keys' },
   { path: 'me/api-keys', component: () => import('@/views/keys/MyApiKeysView.vue'), meta: { perm: 'apikey:self:manage', title: 'nav.items.myApiKeys' } },
   { path: 'groups', component: () => import('@/views/groups/GroupsView.vue'), meta: { perm: 'group:read', title: 'nav.items.groups' } },
@@ -67,8 +73,7 @@ const children: RouteRecordRaw[] = [
   { path: 'sticky', redirect: { path: '/settings', query: { tab: 'sticky' } } },
   { path: 'settings', component: () => import('@/views/settings/SettingsView.vue'), meta: { perm: ['settings:read', 'sticky:read'], title: 'nav.items.settings', sidebar: 'settings', movedTo: movedSettingsTab } },
 
-  { path: 'ccgateway', component: () => import('@/views/ccgateway/CCGatewayView.vue'), meta: { perm: 'settings:read', title: 'ccgateway.title' } },
-  { path: 'system/ccgateway', redirect: '/ccgateway' },
+  { path: CCGATEWAY_PAGE, component: () => import('@/views/ccgateway/CCGatewayView.vue'), meta: { perm: 'settings:read', title: 'ccgateway.title' } },
   { path: 'plugins', component: () => import('@/views/plugins/PluginsView.vue'), meta: { perm: 'plugin:read', title: 'nav.items.plugins' } },
   {
     path: 'plugins/:key/versions/:version/consent',
@@ -84,11 +89,11 @@ const children: RouteRecordRaw[] = [
       title: 'nav.crumbs.pluginDetail',
       parent: '/plugins',
       // Plugins link to ?tab=settings; holders of the plugin's settings permission get the settings page.
-      deniedRedirect: (to) => (to.query.tab === 'settings' ? `/plugins/${encodeURIComponent(String(to.params.key))}/settings` : undefined)
+      deniedRedirect: to => (to.query.tab === 'settings' ? pluginSettingsPath(String(to.params.key)) : undefined)
     }
   },
   // ccgateway's settings are a core page of its own.
-  { path: 'plugins/ccgateway/settings', redirect: '/ccgateway' },
+  { path: 'plugins/ccgateway/settings', redirect: CCGATEWAY_PAGE },
   // Access is the plugin's settings permission or plugin:read, checked by the core.
   {
     path: 'plugins/:key/settings',

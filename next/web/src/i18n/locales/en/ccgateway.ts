@@ -135,7 +135,7 @@ export default {
     invalid: 'Invalid settings. Check the CC features settings.'
   },
  runtime: {"switchHint": "Proxy changes switch this account’s route in the shared egress gateway; its calls in flight may be interrupted. Other accounts are unaffected."},
-  title: 'CCGateway management', description: 'Connect to the CCGateway controller that runs a separate container for every Claude Code account.', readOnly: 'Your permissions allow viewing configuration only.',
+  title: 'CCGateway management', description: 'Connect to the CCGateway controller that runs a separate container for every Claude Code account.', readOnly: 'Your permissions allow viewing configuration only.', pluginDetail: 'Plugin details',
   accountAuth: {
     title: 'Claude authorization',
     steps: { proxy: 'Choose a proxy', container: 'Start the account container', login: 'Copy the link and sign in to Claude', code: 'Paste the authorization code', done: 'Credentials saved' },
