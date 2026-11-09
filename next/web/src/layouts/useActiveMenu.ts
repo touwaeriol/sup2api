@@ -19,8 +19,8 @@ export function useRouteLineage() {
 
 /**
  * The menu entry of the current page: the page itself, else the nearest page
- * above it, else a path prefix. So /plugins/x/settings, a child of the
- * settings page, lights up Settings.
+ * above it, else a path prefix. So /plugins/x, a child of the plugin list,
+ * lights up Installed plugins.
  */
 export function useActiveMenuPath() {
   const app = useAppStore()
@@ -31,11 +31,4 @@ export function useActiveMenuPath() {
     const own = lineage.value.find(p => paths.includes(p))
     return own ?? paths.filter(x => x !== '/' && route.path.startsWith(x + '/')).sort((a, b) => b.length - a.length)[0]
   })
-}
-
-/** The menu section of the current page, e.g. "system" for every page of system settings. */
-export function useActiveMenuSection() {
-  const app = useAppStore()
-  const path = useActiveMenuPath()
-  return computed(() => app.menus.find(s => s.items.some(i => i.path === path.value))?.key)
 }

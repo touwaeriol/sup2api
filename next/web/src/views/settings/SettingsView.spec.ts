@@ -1,54 +1,66 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { enableAutoUnmount, flushPromises, mount, type VueWrapper } from '@vue/test-utils'
-import { h, reactive } from 'vue'
+import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
+import { defineComponent, reactive } from 'vue'
 import { createPinia, setActivePinia, type Pinia } from 'pinia'
+import { hasIcon } from '@sub2api/ui'
 import { i18n } from '@/i18n'
-import SettingsShell from '@/layouts/SettingsShell.vue'
+import type { ViewGroup } from '@/layouts/sidebarViews'
 import { useAppStore, type NavSection } from '@/stores/app'
 import SettingsView from './SettingsView.vue'
 import { emptyFailurePolicy } from './failurePolicy'
+import { useSettingsMenu, useSettingsNav } from './settingsNav'
 
 const api = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn(), list: vi.fn() }))
-const permissions = vi.hoisted(() => ({ manage: true }))
-const route = reactive<{ path: string; meta: object; query: { tab: string; sub?: string } }>({ path: '/settings', meta: {}, query: { tab: 'billing' } })
-const router = {
-  replace: vi.fn((to: { query: { tab: string } }) => { route.query.tab = to.query.tab }),
-  push: vi.fn(),
-  resolve: vi.fn(() => ({ meta: {} }))
-}
+const permissions = vi.hoisted(() => ({ manage: true, denied: [] as string[] }))
+const route = reactive<{ path: string; meta: object; query: { tab?: string; sub?: string } }>({
+  path: '/settings',
+  meta: {},
+  query: { tab: 'billing' }
+})
+const router = { replace: vi.fn(), push: vi.fn() }
 vi.mock('vue-router', async original => ({ ...(await original<object>()), useRoute: () => route, useRouter: () => router }))
 vi.mock('@sub2api/host', async original => ({ ...(await original<object>()), api }))
-vi.mock('@/stores/auth', () => ({ useAuthStore: () => ({ has: (key: string) => permissions.manage || key.endsWith(':read') }) }))
+vi.mock('@/stores/auth', () => ({
+  useAuthStore: () => ({ has: (key: string) => !permissions.denied.includes(key) && (permissions.manage || key.endsWith(':read')) })
+}))
 enableAutoUnmount(afterEach)
 
 let pinia: Pinia
 
-/** The settings page as the app shows it: inside the system settings shell. */
-const mountSettings = (stubs: Record<string, boolean> = {}) =>
-  mount(SettingsShell, { slots: { default: () => h(SettingsView) }, global: { plugins: [i18n, pinia], stubs } })
+const mountSettings = () => mount(SettingsView, { global: { plugins: [i18n, pinia] } })
 
-/** The navigation's groups, by header, as the keys of their entries. */
-const navGroups = (wrapper: VueWrapper) => Object.fromEntries(
-  wrapper.findAll('[data-testid="settings-nav"] > div').map(g => [
-    g.get('.text-xxs').text(),
-    g.findAll('button').map(b => b.attributes('data-testid')!.replace('settings-nav-', ''))
-  ])
-)
+/** What a composable returns inside a mounted component, as the sidebar and the settings page call it. */
+function setupOf<T>(use: () => T): T {
+  let result!: T
+  mount(defineComponent({ setup: () => ((result = use()), () => null) }), { global: { plugins: [i18n, pinia] } })
+  return result
+}
 
-/** The "system" menu section: the settings page itself, core pages and a plugin page. */
-const systemMenu = (): NavSection[] => [{
-  key: 'system',
-  items: [
-    { id: 'settings', labelKey: 'nav.items.settings', icon: 'settings', path: '/settings' },
-    { id: 'platforms', labelKey: 'nav.items.platforms', icon: 'platform', path: '/platforms' },
-    { id: 'nodes', labelKey: 'nav.items.nodes', icon: 'server', path: '/nodes' },
-    { id: 'dynweight:dynweight', label: { zh: '动态权重' }, icon: 'chart', path: '/p/dynweight/dashboard', pluginKey: 'dynweight' }
-  ]
-}]
+/** Groups by header, as the keys of their links. */
+const shape = (groups: ViewGroup[]) => groups.map(g => [g.label, g.links.map(l => l.key)])
+const activeKeys = (groups: ViewGroup[]) => groups.flatMap(g => g.links.filter(l => l.active).map(l => l.key))
+
+const plugin = (key: string, name: string, more: object = {}) => ({
+  key,
+  name: { zh: name },
+  status: 'enabled',
+  has_settings: true,
+  ...more
+})
+/** Answers GET /plugins with whatever `installed` holds at the time. */
+function servePlugins(installed: () => object[]) {
+  api.list.mockImplementation(path => Promise.resolve({ items: path === '/plugins' ? installed() : [], total: 0 }))
+}
+const pluginRequests = () => api.list.mock.calls.filter(([path]) => path === '/plugins')
+
+const systemMenu = (): NavSection[] => [
+  { key: 'system', items: [{ id: 'settings', labelKey: 'nav.items.settings', icon: 'settings', path: '/settings' }] }
+]
 
 beforeEach(() => {
   vi.clearAllMocks()
   permissions.manage = true
+  permissions.denied = []
   route.path = '/settings'
   route.meta = {}
   route.query = { tab: 'billing' }
@@ -68,15 +80,20 @@ beforeEach(() => {
   }[path as string] ?? {}))
 })
 
-describe('system settings use platform title ownership', () => {
-  it('does not repeat any active section title while preserving distinct groups', async () => {
+describe('the settings page', () => {
+  it('names the open page once: the panel carries its title, no heading repeats it', async () => {
+    const titles = {
+      billing: '计费',
+      gateway: '网关设置',
+      failure: '调度策略',
+      sticky: '粘性会话',
+      offload: 'CPU 保护',
+      updates: '在线更新'
+    }
     const wrapper = mountSettings()
-    for (const tab of ['billing', 'gateway', 'failure', 'sticky', 'offload', 'updates']) {
+    for (const [tab, title] of Object.entries(titles)) {
       route.query.tab = tab
       await flushPromises()
-      const selected = wrapper.get(`[data-testid="settings-nav-${tab}"]`)
-      expect(selected.attributes('aria-current')).toBe('page')
-      const title = selected.text()
       const panel = wrapper.get('[data-testid="settings-panel"]')
       expect(panel.attributes('aria-label')).toBe(title)
       expect(panel.findAll('h1,h2,h3,h4,h5,h6').map(el => el.text())).not.toContain(title)
@@ -84,88 +101,22 @@ describe('system settings use platform title ownership', () => {
     }
   })
 
-  it('drops the scheduling page sub-tab when switching pages', async () => {
-    route.query = { tab: 'failure', sub: 'balance' }
+  it('shows the first page without a tab, and says so when the linked one is not available', async () => {
+    route.query = {}
     const wrapper = mountSettings()
     await flushPromises()
-    await wrapper.get('[data-testid="settings-nav-gateway"]').trigger('click')
-    expect(router.replace.mock.calls[0][0].query).toStrictEqual({ tab: 'gateway', sub: undefined })
-  })
-
-  it('groups the sections and lists enabled plugins with settings', async () => {
-    const base = api.get.getMockImplementation()!
-    api.get.mockImplementation(path => path === '/plugins'
-      ? Promise.resolve([
-        { key: 'mailer', name: { zh: '邮件' }, status: 'enabled', has_settings: true },
-        { key: 'guard', name: { zh: '请求守卫' }, status: 'disabled', has_settings: true },
-        { key: 'relay', name: { zh: '中转' }, status: 'enabled', has_settings: false }
-      ])
-      : base(path))
-    const wrapper = mountSettings({ PluginSettings: true })
-    await flushPromises()
-    expect(Object.keys(navGroups(wrapper))).toEqual(['网关', '计费与通知', '插件设置', '系统'])
-    expect(wrapper.find('[data-testid="settings-nav-plugin:guard"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="settings-nav-plugin:relay"]').exists()).toBe(false)
-    await wrapper.get('[data-testid="settings-nav-plugin:mailer"]').trigger('click')
-    await flushPromises()
-    expect(router.replace).toHaveBeenCalledWith({ query: { tab: 'plugin:mailer' } })
-    expect(wrapper.get('[data-testid="settings-panel"]').attributes('aria-label')).toBe('邮件')
-  })
-
-  it('opens a linked plugin page once the plugin list arrives, without loading another page first', async () => {
-    let release!: (v: unknown) => void
-    const base = api.get.getMockImplementation()!
-    api.get.mockImplementation(path => path === '/plugins'
-      ? new Promise(r => { release = r })
-      : base(path))
-    route.query.tab = 'plugin:mailer'
-    const wrapper = mountSettings({ PluginSettings: true })
-    await flushPromises()
-    expect(wrapper.find('[data-testid="settings-waiting"]').exists()).toBe(true)
-    expect(api.get).not.toHaveBeenCalledWith('/settings/gateway')
-    release([{ key: 'mailer', name: { zh: '邮件' }, status: 'enabled', has_settings: true }])
-    await flushPromises()
-    expect(wrapper.find('[data-testid="settings-waiting"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="settings-panel"]').attributes('aria-label')).toBe('网关设置')
     expect(wrapper.find('[data-testid="settings-missing"]').exists()).toBe(false)
-    expect(wrapper.get('[data-testid="settings-panel"]').attributes('aria-label')).toBe('邮件')
-  })
-
-  it('follows plugins enabled while the navigation is open, not the first menu load', async () => {
-    const base = api.get.getMockImplementation()!
-    let installed: object[] = []
-    api.get.mockImplementation(path => path === '/plugins' ? Promise.resolve(installed) : base(path))
-    const wrapper = mountSettings({ PluginSettings: true })
-    const app = useAppStore()
-    app.menus = systemMenu()
+    route.query = { tab: 'gone' }
     await flushPromises()
-    expect(api.get.mock.calls.filter(([path]) => path === '/plugins')).toHaveLength(1)
-    expect(wrapper.find('[data-testid="settings-nav-plugin:mailer"]').exists()).toBe(false)
-    // Enabling a plugin refreshes the menu.
-    installed = [{ key: 'mailer', name: { zh: '邮件' }, status: 'enabled', has_settings: true }]
-    app.menus = systemMenu()
-    await flushPromises()
-    expect(wrapper.find('[data-testid="settings-nav-plugin:mailer"]').exists()).toBe(true)
-  })
-
-  it("lights up a plugin's tab on that plugin's own settings page", async () => {
-    const base = api.get.getMockImplementation()!
-    api.get.mockImplementation(path => path === '/plugins'
-      ? Promise.resolve([{ key: 'mailer', name: { zh: '邮件' }, status: 'enabled', has_settings: true }])
-      : base(path))
-    route.path = '/plugins/mailer/settings'
-    route.meta = { parent: '/settings', settingsTab: () => 'plugin:mailer' }
-    const wrapper = mount(SettingsShell, { slots: { default: () => h('div') }, global: { plugins: [i18n, pinia] } })
-    await flushPromises()
-    expect(wrapper.get('[data-testid="settings-nav-plugin:mailer"]').attributes('aria-current')).toBe('page')
-    expect(wrapper.findAll('[aria-current="page"]')).toHaveLength(1)
-  })
-
-  it('says so when a linked page is not available', async () => {
-    api.get.mockImplementation(path => path === '/plugins' ? Promise.resolve([]) : Promise.resolve({}))
-    route.query.tab = 'plugin:gone'
-    const wrapper = mountSettings()
-    await flushPromises()
+    expect(wrapper.get('[data-testid="settings-panel"]').attributes('aria-label')).toBe('网关设置')
     expect(wrapper.find('[data-testid="settings-missing"]').exists()).toBe(true)
+  })
+
+  it('makes no request for plugins: their settings open at their own address', async () => {
+    mountSettings()
+    await flushPromises()
+    expect(pluginRequests()).toHaveLength(0)
   })
 
   it('retains saving and removes the empty billing header for read-only users', async () => {
@@ -182,45 +133,126 @@ describe('system settings use platform title ownership', () => {
     expect(readonly.find('[data-testid="billing-settings"] header').exists()).toBe(false)
     expect(readonly.find('[data-testid="settings-save"]').exists()).toBe(false)
   })
+})
 
-  describe('with the pages of the system menu section', () => {
-    beforeEach(() => { useAppStore().menus = systemMenu() })
-
-    it('lists the system section pages in their groups, without the settings page itself', async () => {
-      const wrapper = mountSettings()
-      await flushPromises()
-      expect(navGroups(wrapper)).toEqual({
-        网关: ['gateway', 'failure', 'sticky', 'offload', 'page:platforms'],
-        计费与通知: ['billing', 'notifications'],
-        插件设置: ['page:dynweight:dynweight'],
-        系统: ['page:nodes', 'updates', 'environment']
-      })
-      expect(wrapper.get('[data-testid="settings-nav-page:dynweight:dynweight"]').text()).toBe('动态权重')
+describe('useSettingsNav', () => {
+  it('lists eight pages in three groups', () => {
+    const { groups } = setupOf(useSettingsNav)
+    expect(shape(groups.value)).toEqual([
+      ['网关', ['gateway', 'failure', 'sticky', 'offload']],
+      ['计费与通知', ['billing', 'notifications']],
+      ['运行环境', ['updates', 'environment']]
+    ])
+    expect(groups.value[0].links[2]).toEqual({
+      key: 'sticky',
+      item: { id: 'settings:sticky', labelKey: 'settings.tabs.sticky', icon: 'sticky', path: '/settings?tab=sticky' },
+      active: false
     })
+  })
 
-    it('opens a page entry at its own address', async () => {
-      const wrapper = mountSettings()
-      await flushPromises()
-      await wrapper.get('[data-testid="settings-nav-page:platforms"]').trigger('click')
-      expect(router.push).toHaveBeenCalledWith('/platforms')
-      expect(router.replace).not.toHaveBeenCalled()
-    })
+  it('gives every page an icon of its own that SIcon can draw', () => {
+    const icons = setupOf(useSettingsNav).groups.value.flatMap(g => g.links.map(l => l.item.icon!))
+    expect(icons.filter(hasIcon)).toHaveLength(8)
+    expect(new Set(icons).size).toBe(8)
+  })
 
-    it('opens a settings tab from another page of the shell', async () => {
-      route.path = '/nodes'
-      const wrapper = mountSettings()
-      await flushPromises()
-      await wrapper.get('[data-testid="settings-nav-gateway"]').trigger('click')
-      expect(router.push).toHaveBeenCalledWith({ path: '/settings', query: { tab: 'gateway' } })
-      expect(router.replace).not.toHaveBeenCalled()
-    })
+  it('leaves out the pages the caller may not open, and the groups left empty', () => {
+    permissions.denied = ['settings:read']
+    const { groups, activeTab, missing } = setupOf(useSettingsNav)
+    expect(shape(groups.value)).toEqual([['网关', ['sticky']]])
+    // The linked page (billing) is not the caller's to see.
+    expect(activeTab.value).toBe('sticky')
+    expect(missing.value).toBe(true)
+  })
 
-    it('marks the open page, not the remembered tab, as current on another page', async () => {
-      route.path = '/nodes'
-      const wrapper = mountSettings()
-      await flushPromises()
-      const current = wrapper.findAll('[data-testid="settings-nav"] [aria-current="page"]')
-      expect(current.map(b => b.attributes('data-testid'))).toEqual(['settings-nav-page:nodes'])
+  it('opens the page asked for, else the first one', () => {
+    const { activeTab, activeLabel, missing } = setupOf(useSettingsNav)
+    expect([activeTab.value, activeLabel.value, missing.value]).toEqual(['billing', '计费', false])
+    route.query = {}
+    expect([activeTab.value, activeLabel.value, missing.value]).toEqual(['gateway', '网关设置', false])
+    route.query = { tab: 'plugin:mailer' }
+    expect([activeTab.value, missing.value]).toEqual(['gateway', true])
+  })
+
+  it('lights up the open page only on the settings page', () => {
+    const { groups } = setupOf(useSettingsNav)
+    expect(activeKeys(groups.value)).toEqual(['billing'])
+    route.path = '/plugins/mailer/settings'
+    expect(activeKeys(groups.value)).toEqual([])
+  })
+})
+
+describe('useSettingsMenu', () => {
+  it('puts the settings of enabled plugins with a form between billing and runtime', async () => {
+    servePlugins(() => [
+      plugin('mailer', '邮件'),
+      plugin('guard', '请求守卫', { status: 'disabled' }),
+      // Native settings live on the plugin's own page: the server reports no form.
+      plugin('moderation', '提示词审核', { has_settings: false }),
+      // Has an entry of its own in the sidebar (/ccgateway).
+      plugin('ccgateway', 'Claude Code')
+    ])
+    const groups = setupOf(useSettingsMenu)
+    await flushPromises()
+    expect(shape(groups.value)).toEqual([
+      ['网关', ['gateway', 'failure', 'sticky', 'offload']],
+      ['计费与通知', ['billing', 'notifications']],
+      ['插件设置', ['plugin:mailer']],
+      ['运行环境', ['updates', 'environment']]
+    ])
+    expect(groups.value[2].links[0]).toEqual({
+      key: 'plugin:mailer',
+      item: { id: 'plugin-settings:mailer', label: '邮件', icon: 'puzzle', path: '/plugins/mailer/settings', pluginKey: 'mailer' },
+      active: false
     })
+  })
+
+  it("lights up a plugin's entry on that plugin's settings page, and nothing else", async () => {
+    servePlugins(() => [plugin('mailer', '邮件'), plugin('growth', '增长管理')])
+    const groups = setupOf(useSettingsMenu)
+    await flushPromises()
+    expect(activeKeys(groups.value)).toEqual(['billing'])
+    route.path = '/plugins/mailer/settings'
+    route.query = {}
+    expect(activeKeys(groups.value)).toEqual(['plugin:mailer'])
+  })
+
+  it('follows plugins enabled while it is open, not the first menu load', async () => {
+    let installed: object[] = []
+    servePlugins(() => installed)
+    const groups = setupOf(useSettingsMenu)
+    const app = useAppStore()
+    app.menus = systemMenu()
+    await flushPromises()
+    expect(pluginRequests()).toHaveLength(1)
+    expect(shape(groups.value).map(([label]) => label)).toEqual(['网关', '计费与通知', '运行环境'])
+    // Enabling a plugin refreshes the menu.
+    installed = [plugin('mailer', '邮件')]
+    app.menus = systemMenu()
+    await flushPromises()
+    expect(pluginRequests()).toHaveLength(2)
+    expect(groups.value.map(g => g.key)).toEqual(['gateway', 'billing', 'pluginSettings', 'runtime'])
+  })
+
+  it("has no plugin group when the list fails or is not the caller's to read", async () => {
+    api.list.mockRejectedValue(new Error('down'))
+    const failed = setupOf(useSettingsMenu)
+    await flushPromises()
+    expect(failed.value.map(g => g.key)).toEqual(['gateway', 'billing', 'runtime'])
+
+    api.list.mockClear()
+    permissions.denied = ['plugin:read']
+    const denied = setupOf(useSettingsMenu)
+    await flushPromises()
+    expect(pluginRequests()).toHaveLength(0)
+    expect(denied.value.map(g => g.key)).toEqual(['gateway', 'billing', 'runtime'])
+  })
+
+  it('keeps the plugin group for a caller with no runtime page', async () => {
+    permissions.denied = ['settings:read']
+    servePlugins(() => [plugin('mailer', '邮件')])
+    const groups = setupOf(useSettingsMenu)
+    await flushPromises()
+    expect(groups.value.map(g => g.key)).toEqual(['gateway', 'pluginSettings'])
   })
 })

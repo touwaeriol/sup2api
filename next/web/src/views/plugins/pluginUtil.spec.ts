@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import en from '@/i18n/locales/en/plugins'
 import zh from '@/i18n/locales/zh/plugins'
-import { HOST_PERMISSION_RISK, accountTypesOf, consoleSettings, endpointText, hpKey, nativeSettingsPath, platformsOf, pluginStatusTone, settingsFieldErrors } from './pluginUtil'
+import { HOST_PERMISSION_RISK, accountTypesOf, consoleSettings, consoleSettingsPath, endpointText, hasSettingsForm, hpKey, nativeSettingsPath, platformsOf, pluginStatusTone, settingsFieldErrors } from './pluginUtil'
 
 describe('plugin endpoint declarations', () => {
   it('preserves the same subset in manifests and installation reviews', () => {
@@ -78,6 +78,21 @@ describe('settings modes (§75.5)', () => {
     expect(nativeSettingsPath('moderation', { mode: 'native', page: 'dashboard', schema, values: {} })).toBe('/p/moderation/dashboard?tab=settings')
     expect(nativeSettingsPath('moderation', { mode: 'native', schema, values: {} })).toBeNull()
     expect(nativeSettingsPath('guard', { mode: 'schema', schema, values: {} })).toBeNull()
+  })
+})
+
+describe('where the plugin list opens settings', () => {
+  const all = () => true
+  it('is the form on the detail page for a plugin that has one', () => {
+    expect(hasSettingsForm({ key: 'mailer', has_settings: true })).toBe(true)
+    expect(consoleSettingsPath({ key: 'mailer', has_settings: true }, all)).toBe('/plugins/mailer?tab=settings')
+    expect(hasSettingsForm({ key: 'relay' })).toBe(false)
+    expect(consoleSettingsPath({ key: 'relay' }, all)).toBeUndefined()
+  })
+  it("is ccgateway's own page, for settings:read, whatever its manifest says", () => {
+    expect(hasSettingsForm({ key: 'ccgateway', has_settings: true })).toBe(false)
+    expect(consoleSettingsPath({ key: 'ccgateway', has_settings: true }, all)).toBe('/ccgateway')
+    expect(consoleSettingsPath({ key: 'ccgateway' }, perm => perm !== 'settings:read')).toBeUndefined()
   })
 })
 

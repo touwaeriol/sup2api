@@ -56,21 +56,17 @@ const FIRST_SCREEN_PAGES = [
 ]
 
 /**
- * The pages of system settings (CONTRACTS §90), which the sidebar shows as one
- * entry: the "system" section of GET /me/menus, plus the settings page's own
- * tabs. The tabs are read from the settings shell's side list, which a phone
- * renders too, only hidden behind a select; its other entries ("page:<id>")
- * are the section's pages.
+ * The pages of system settings (CONTRACTS §90): on the settings page the
+ * sidebar shows the settings view's menu instead of the console's, with the
+ * configuration pages (/settings?tab=<key>) and the plugins' settings forms.
  */
-async function settingsPages(page, menus) {
-  const paths = menus.find(s => s.section === 'system')?.items.map(i => i.path) ?? []
-  if (!paths.includes('/settings')) return paths
+async function settingsPages(page) {
   await page.goto(`${BASE}/settings`)
+  await page.waitForSelector('[data-testid="nav-view-settings"]', { state: 'attached' })
   await page.waitForLoadState('networkidle')
-  const keys = await page.$$eval('[data-testid="settings-nav"] button[data-testid]', buttons =>
-    buttons.map(b => b.dataset.testid.replace(/^settings-nav-/, ''))
+  return page.$$eval('[data-testid="nav-view-settings"] a[href]:not([data-testid="nav-back"])', links =>
+    links.map(a => a.getAttribute('href'))
   )
-  return [...paths, ...keys.filter(k => !k.startsWith('page:')).map(k => `/settings?tab=${k}`)]
 }
 
 for (const name of DEVICES) {
@@ -87,15 +83,13 @@ for (const name of DEVICES) {
       await page.goto(`${BASE}/login`)
       await page.fill('input[type=email]', 'admin@example.com')
       await page.fill('input[type=password]', 'admin')
-      const menus = page.waitForResponse(r => r.url().endsWith('/me/menus'))
       await page.click('button[type=submit]')
       await page.waitForURL(url => !url.pathname.startsWith('/login'))
       await page.waitForSelector('aside nav a[href]', { state: 'attached' })
       // The plugin submenus start folded; open them all to list every page.
       await page.$$eval('aside nav [aria-expanded="false"]', buttons => buttons.forEach(b => b.click()))
       const sidebar = await page.$$eval('aside nav a[href]', links => links.map(a => a.getAttribute('href')))
-      const { data } = await (await menus).json()
-      pages = [...new Set([...sidebar, ...(await settingsPages(page, data))])]
+      pages = [...new Set([...sidebar, ...(await settingsPages(page))])]
     })
     after(() => browser?.close())
 

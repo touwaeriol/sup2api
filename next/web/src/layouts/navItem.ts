@@ -8,7 +8,7 @@ export function useNavItemLabel() {
   return (item: NavItem) => (item.labelKey ? t(item.labelKey) : lt(item.label))
 }
 
-/** The look of a navigation entry, the current one highlighted: shared by the sidebar and the settings navigation. */
+/** The look of a navigation entry, the current one highlighted. */
 export const navStateClass = (active: boolean) =>
   active
     ? 'bg-primary-50 font-medium text-primary-700 dark:bg-primary-900/20 dark:text-primary-300'

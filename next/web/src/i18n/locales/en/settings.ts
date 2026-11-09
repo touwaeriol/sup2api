@@ -1,14 +1,11 @@
 export default {
   description: 'System-wide billing, gateway and scheduling settings.',
-  missingTab: 'That settings page is not available to you (or its plugin is not enabled); showing the first one instead.',
-  navLabel: 'Settings sections',
+  missingTab: 'That settings page is not available to you (or no longer exists); showing the first one instead.',
   groups: {
     gateway: 'Gateway',
     billing: 'Billing & notifications',
-    access: 'Users & access',
-    plugins: 'Plugins',
     pluginSettings: 'Plugin settings',
-    system: 'System'
+    runtime: 'Runtime'
   },
   tabs: {
     notifications: 'Notifications',

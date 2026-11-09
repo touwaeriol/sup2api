@@ -1156,12 +1156,12 @@ type ProxyResolver interface {
 | 区 | order | 核心项 | 内置插件菜单 |
 | --- | --- | --- | --- |
 | overview 概览（§90 起叫“控制台”） | 100 | 仪表盘（§90 起还有 API 密钥、模型与价格、用量概览、使用日志、全站概览、全站日志） | |
-| gateway 网关 | 200 | 分组、账号、平台、代理、模型价格（§90 起使用记录移到控制台，平台、代理移到系统设置） | 模型目录（anthropic 0.2.9）、动态权重（dynweight 0.5.4 起移到系统设置） |
+| gateway 网关 | 200 | 分组、账号、平台、代理、模型价格（§90 起使用记录移到控制台，另有 CCGateway） | 模型目录（anthropic 0.2.9）、动态权重（dynweight；只有 0.5.4 在 `system` 区） |
 | security 安全 | 300 | 无（空区不返回） | 请求守卫（guard 0.2.7）、提示词审核（moderation 0.6.2） |
 | finance 财务 | 400 | 余额流水 `/ledger`（`balance:all:read`） | 增长管理（growth 0.1.5，去掉了自己的 growth 区） |
-| users 用户与权限 | 500 | 用户、角色与权限（§90 起角色与权限移到系统设置） | |
-| plugins 插件 | 600 | 已安装插件、插件市场、发布者（§90 起移到系统设置）；`section:"plugins"` 的插件菜单接在后面 | |
-| system 系统（§90 起叫“系统设置”） | 700 | 集群节点、定时任务、核心升级、审计日志、设置（§90 起还有平台、代理、角色与权限、已安装插件、插件市场、发布者，侧栏只显示为一项） | （§90 起）动态权重 |
+| users 用户与权限（§90 起叫“用户”） | 500 | 用户、角色与权限 | |
+| plugins 插件 | 600 | 已安装插件、插件市场、发布者；`section:"plugins"` 的插件菜单接在后面 | |
+| system 系统 | 700 | 集群节点、定时任务、核心升级、审计日志、设置（§90 起设置排在最后，侧栏单独显示为“系统设置”） | 动态权重（只有 dynweight 0.5.4） |
 | me 我的账户（§90 起叫“个人中心”） | 800 | API 密钥、使用记录（§90 起只剩钱包、个人设置） | 我的邀请、每日签到 |
 
 - ~~只有概览和我的账户的用户，控制台把"我的账户"排到仪表盘之后并且不画它的标题~~（§90 起所有人都按三组显示）。
@@ -1173,7 +1173,7 @@ type ProxyResolver interface {
 
 **表格页的"新建"按钮**：manifest `ui.pages.<id>.create: {page, permission?}` 只能写在 `type:"table"` 的页面上，`page` 必须是同一插件的 `type:"form"` 页面，`permission` 是 `userPermissions` 里的 key。控制台在表格上方画一个主按钮，文字取目标页的 `title`，点击打开 `/p/<插件>/<page>`。`GET /ui/plugins` 对没有该权限的调用者去掉 `create`，表单页如果没有可见菜单指向它也一并去掉；表格页本身因菜单权限对调用者不可见时，它的 `create` 链接同样不算可用，只靠这条链接到达的表单页也去掉（即使链接不要求权限）。校验错误：`ui.pages.<id>.create` invalid（非表格页）、`.create.page` unknown / invalid（不存在 / 不是表单）、`.create.permission` unknown。volcengine 0.12.6 用它替代了"新建素材组""新建素材"两个菜单项，需要核心 0.1.229。
 
-**控制台布局**：路由 `meta.parent` 指向上级页面，顶栏在标题前显示面包屑（价格详情、价格同步源、同步预览、插件详情、发布进度、安装授权、插件设置）。设置页改为左侧二级导航（网关 / 计费 / 通知 / 系统 / 插件设置；§90 起分组见 90.2），页面仍用 `?tab=` 选择；"插件设置"列出已启用且有设置表单的插件（以及 ccgateway），选中为 `?tab=plugin:<key>`，内容即插件设置页。
+**控制台布局**：路由 `meta.parent` 指向上级页面，顶栏在标题前显示面包屑（价格详情、价格同步源、同步预览、插件详情、发布进度、安装授权、插件设置）。设置页改为左侧二级导航（网关 / 计费 / 通知 / 系统 / 插件设置），页面仍用 `?tab=` 选择；"插件设置"列出已启用且有设置表单的插件（以及 ccgateway），选中为 `?tab=plugin:<key>`，内容即插件设置页。（§90 起二级导航改为侧栏的系统设置视图，插件设置的地址是 `/plugins/<key>/settings`，见 90.2、90.4。）
 
 ## 23. 原生插件 UI 的共享库：`@sub2api/ui`、`@sub2api/host`、`@sub2api/vite-preset`（2026-09-27，用户要求）
 
@@ -5795,7 +5795,8 @@ new-api 的动态权重做在核心的渠道模型里（`model/channel_dynamic_w
   - 账号权重被修改后的重置从键上次评估的窗口算起，新权重下第一个有流量的窗口不再被重置吞掉。见下文"基准权重"。
   - `GET /weights` 的 `changed_at` 改为 unix 秒，与 `/status` 一致（控制台两种格式都认）。
   - 控制台：状态色全部改用 `@sub2api/ui` 组件的 `tone`，去掉插件自造的色板和对 `html.dark` 的依赖（§23.4；规则位图的命中格改为中性色实心，调整项动作行的方向色从左边框改为 `SStatusDot`）；按 id 读账号名改为批量 `GET /accounts?ids=`；百分比和毫秒数用 `host.i18n.formatNumber`。
-- **0.5.4（2026-11-10）**：manifest 只把菜单的 `section` 从 `gateway` 改成 `system`，随 §90 进系统设置的导航（插件设置组）；`hostCompat`、`hostUICompat`、能力、授权、配置文档格式都不变，没有新迁移，可以单独升级插件。装在 §90 之前的核心上时菜单进旧的“系统”区。（0.5.3 只把控制台的操作按钮改成文字，同样可单独升级。）
+- **0.5.4（2026-11-10）**：manifest 只把菜单的 `section` 从 `gateway` 改成 `system`（0.5.5 改回）；`hostCompat`、`hostUICompat`、能力、授权、配置文档格式都不变，没有新迁移，可以单独升级插件。（0.5.3 只把控制台的操作按钮改成文字，同样可单独升级。）
+- **0.5.5（2026-11-10）**：manifest 只把菜单的 `section` 从 `system` 改回 `gateway`（§90：功能页归各自的区）；`hostCompat`、`hostUICompat`、能力、授权、配置文档格式都不变，没有新迁移，可以单独升级插件。0.5.4 的菜单仍在 `system` 区，排在 `/settings` 之后。
 - **只安装不启用**（`BUILTIN_PLUGINS_INSTALL_ONLY`）：启用后每次调度都会调用它，所以要由管理员有意打开。
 
 #### 计数
@@ -6910,51 +6911,68 @@ node 任务（可工作节点各跑，`RequireWork`）：
 - 读数：`core.AccountLimiter.ModelUsage`（`account/limiter.go`），`core.AccountRef.ModelLimitIndex`（`core/ports_identity.go`）
 - 前端：`web/src/views/settings/SchedulingPolicyView.vue`、`LoadBalanceSettingsCard.vue`
 
-## 90. 侧栏三组：控制台、个人中心、管理员；系统设置（2026-11-10，用户要求：参考 new-api 的菜单，分三类；无迁移）
+## 90. 侧栏三组：控制台、个人中心、管理员；系统设置视图（2026-11-10，用户要求：参考 new-api 的菜单，分三类；第三版：设置归设置，功能归功能；无迁移）
 
-侧栏按三组显示，接口 `GET /me/menus` 的形状和区 id 不变，存储不变：
+原则：设置归设置，功能归功能。功能页放在各自的区，系统设置只有 `/settings` 一个配置页入口。接口 `GET /me/menus` 的形状、区 id、SDK（`CoreMenuSections()`）和存储都不变。
+
+侧栏按三组显示：
 
 | 组 | 来自哪个区 | 内容 |
 | --- | --- | --- |
 | 控制台 | `overview`（标签“控制台 / Console”） | 仪表盘、API 密钥、模型与价格、用量概览（`/me/usage/overview`）、使用日志（`/me/usage`），以及有 `usage:all:read` 才有的全站概览（`/usage/overview`）、全站日志（`/usage`） |
 | 个人中心 | `me`（标签“个人中心 / Personal”） | 钱包、个人设置（`/me/profile`）；`section:"me"` 的插件菜单（我的邀请、每日签到）接在后面 |
-| 管理员 | 其余所有区，按服务端顺序 | 核心区的项平铺、不画区标题；插件自己的区（`<插件>:<id>`）有两项及以上时折叠成子菜单（区名、首项图标），只有一项时直接显示这一项；`system` 区整体显示为最后一项“系统设置” |
+| 管理员 | 其余所有区，按服务端顺序 | `gateway`、`security`、`finance` 的项平铺、不画区标题；`users`、`plugins`、`system`（不含 `/settings`）和插件自己的区（`<插件>:<id>`）折叠成目录，见 90.3；最后一项是“系统设置”（`system` 区的 `/settings`） |
 
 ### 90.1 区的内容
 
-| 区 | 核心项 | 内置插件菜单 |
+| 区（标签） | 核心项（按返回顺序） | 内置插件菜单 |
 | --- | --- | --- |
-| gateway 网关 | 账号、分组、模型价格 | 模型目录（anthropic） |
+| gateway 网关 | 账号、分组、平台、代理、模型价格、CCGateway | 模型目录（anthropic）、动态权重（dynweight；只有 0.5.4 在 `system` 区） |
 | security 安全 | 无 | 请求守卫、提示词审核 |
 | finance 财务 | 余额流水 | 增长管理 |
-| users 用户与权限 | 用户 | |
-| plugins 插件 | 无（核心项移到系统设置）；`section:"plugins"`（默认）的插件菜单仍进这里 | |
-| system 系统设置（标签“系统设置 / System settings”） | 设置 `/settings`、平台、代理、角色与权限、已安装插件、插件市场、发布者、集群节点、定时任务、核心升级、审计日志 | 动态权重（dynweight 0.5.4 起，`section` 由 `gateway` 改为 `system`） |
+| users 用户（标签“用户 / Users”） | 用户、角色与权限 | |
+| plugins 插件 | 已安装插件、插件市场、发布者；`section:"plugins"` 的插件菜单接在后面 | |
+| system 系统（标签“系统 / System”） | 集群节点、定时任务、核心升级、审计日志、系统设置 `/settings` | |
 
-`section:"system"` 的插件菜单并入系统设置。各区仍按 `CoreMenuSections()` 的 order 返回（`me` 是 800），三组的排列由控制台决定。
+- CCGateway：id `ccgateway`，地址 `/system/ccgateway`，权限 `settings:read`；只在 ccgateway 插件已启用（在当前一代里）时返回。
+- 系统设置：id `settings`，权限 `settings:read` 或 `sticky:read`，是 `system` 区最后一个核心项。`section:"system"` 的插件菜单仍并入 `system` 区，排在 `/settings` 之后（如 dynweight 0.5.4 的动态权重），和其余项一起进“系统”目录。
+- 平台、代理、角色与权限、插件管理各项的权限和图标不变。只有 `account:own:*` / `proxy:own:*` 的调用者（供应商）在 `gateway` 区看到账号、平台、代理，没有 `system` 区。
+- 各区仍按 `CoreMenuSections()` 的 order 返回（`me` 是 800），三组的排列由控制台决定。
 
-### 90.2 系统设置
+### 90.2 系统设置视图
 
-- 侧栏的“系统设置”一项代表整个 `system` 区：点击打开调用者能看到的第一页（区内第一项），当前页是区内任一页时它高亮。
-- 区内各页地址不变，路由 `meta.parent` 为 `/settings`，顶栏面包屑为“系统设置 › 页面”；这些页和设置页都显示在同一个外壳里：宽屏左侧二级导航，窄屏页面上方一个下拉框（`SSelect`）。页面所属的区由它自己或 `meta.parent` 链上第一个菜单项决定（如 `/plugins/:key/settings` 属于系统设置）；菜单加载失败时 `/settings` 仍带外壳。
-- 二级导航分组（设置页自己的页仍用 `?tab=<key>`，其余页用自己的地址，按权限显示，空组不显示）：
-  - 网关：网关设置、调度策略、粘性会话、CPU 保护、平台、代理
+- 侧栏有两种状态：控制台视图（默认）和系统设置视图。点击管理员组的“系统设置”，侧栏整体换成系统设置视图的菜单；顶部“返回控制台”回到进入前的页面，没有则回仪表盘。
+- 视图由路由决定：路由 meta `sidebar` 声明所属视图，没有声明的沿上级链（`meta.parent`）取，刷新不丢。
+- 系统设置视图分四组（按权限显示，空组不显示）：
+  - 网关：网关设置、调度策略、粘性会话、CPU 保护
   - 计费与通知：计费、通知
-  - 用户与权限：角色与权限
-  - 插件：已安装插件、插件市场、发布者
-  - 插件设置：已启用且有设置的插件（`?tab=plugin:<key>`），以及 `system` 区的插件页（如动态权重）
-  - 系统：集群节点、定时任务、核心升级、在线更新、审计日志、环境变量；`system` 区里没有指定位置的核心页排在这里
-- 只有 `account:own:*` / `proxy:own:*` 的调用者（供应商）：管理员组里有“账号”，系统设置里有“平台”“代理”，侧栏的“系统设置”直接打开平台页。
+  - 插件设置：每个已启用且有设置表单的插件一项，地址 `/plugins/<key>/settings`（ccgateway 除外，它的页面是 `/system/ccgateway`）
+  - 运行环境：在线更新、环境变量
+- 八个配置页的地址仍是 `/settings?tab=<key>`。功能页（平台、代理、角色与权限、插件管理、集群节点、定时任务、核心升级、审计日志）不在这个视图里，各自留在控制台视图的区里。
 
 ### 90.3 侧栏
 
 - 所有角色都有控制台，看到哪些项按权限过滤。
-- “管理员”标题只在调用者有 gateway/security/finance/users/system 任一区时显示；只有公开插件页的普通用户，这些页排在个人中心之后、没有组标题。
-- 插件子菜单展开状态存在浏览器 `localStorage` 的 `s2a.navOpen`；当前页面所在的子菜单自动展开。
-- 侧栏收起（只剩图标）时没有组标题和子菜单：所有项按组平铺成图标（插件子菜单展开，系统设置仍是一个图标），三组之间画分隔线。
+- 目录：`users`（“用户”）、`plugins`（“插件”）、去掉 `/settings` 后的 `system`（“系统”）和插件自己的区，可见项有两项及以上时折叠成目录（区名、首项图标），只有一项时直接显示这一项。`plugins` 区的插件管理页和插件菜单都在“插件”目录里。
+- `/settings` 由控制台从 `system` 区单独拿出来，显示为管理员组最后一项“系统设置”。
+- 目录展开状态存在浏览器 `localStorage` 的 `s2a.navOpen`；当前页面所在的目录自动展开。
+- 侧栏收起（只剩图标）时没有组标题和目录：所有项按组平铺成图标，三组之间画分隔线。
 
-### 90.4 实现位置
+### 90.4 地址
 
-- 服务端：`server/internal/authz/menus.go`（`coreMenus`）；`plugins/dynweight/manifest.json`
-- 侧栏：`web/src/layouts/sidebarGroups.ts`（分组、系统设置一项、子菜单、展开状态）、`AppSidebar.vue`、`SidebarLink.vue`、`SidebarSubmenu.vue`、`useActiveMenu.ts`（当前页对应的菜单项与区）
-- 系统设置：`web/src/layouts/SettingsShell.vue`、`AppLayout.vue`（套外壳），`web/src/views/settings/settingsNav.ts`（二级导航）、`SettingsView.vue`；面包屑见 `web/src/router/index.ts`
+控制台页面的地址都不变，不新增页面根（`ConsoleSegments` 不变）：
+
+- CCGateway 页面是 `/system/ccgateway`（0.1.264 及更早这个地址跳到插件详情的设置标签，现在就是页面本身）；`/plugins/ccgateway/settings`、`/settings?tab=plugin:ccgateway` 跳转到它。接口 `/api/v1/system/ccgateway/*` 不变。
+- `/settings?tab=plugin:<key>` 跳转到 `/plugins/<key>/settings`。
+
+### 90.5 实现位置
+
+- 服务端：`server/internal/authz/menus.go`（`coreMenus`；`coreMenuItem.plugin` 为“只在该插件启用时显示”）；`plugins/dynweight/manifest.json`
+- 侧栏：`web/src/layouts/sidebarGroups.ts`（分组、目录、展开状态）、`sidebarViews.ts`（视图登记表、当前视图、返回目标）、`AppSidebar.vue`、`SidebarGroup.vue`、`SidebarLink.vue`、`SidebarSubmenu.vue`、`SidebarViewMenu.vue`（视图菜单与返回行）、`useActiveMenu.ts`（当前页对应的菜单项）
+- 系统设置：`web/src/views/settings/settingsNav.ts`（视图菜单）、`SettingsView.vue`；路由 meta 与跳转见 `web/src/router/index.ts`
+
+### 90.6 沿革与混跑
+
+- 第二版（核心 0.1.264）把平台、代理、角色与权限、插件管理、集群节点、定时任务、核心升级、审计日志都放在 `system` 区（标签“系统设置”），控制台把这个区画成设置页左侧的第二列导航；dynweight 0.5.4 的菜单也在 `system` 区。第三版（核心 0.1.265、dynweight 0.5.5）按本节归类，第二列导航取消。
+- 滚动升级期间新旧核心并存，页面都能打开：旧控制台拿到新菜单时，这些功能页在管理员组里平铺，CCGateway 项的 `/system/ccgateway` 在旧控制台里跳到插件详情的设置标签；新控制台拿到旧菜单时，`system` 区去掉 `/settings` 后整体进“系统”目录。刷新页面后恢复一致。
+- dynweight 0.5.4 配新核心：菜单在“系统”目录里；0.5.5 配旧核心：菜单在 `gateway` 区平铺。

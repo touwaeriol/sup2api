@@ -303,6 +303,7 @@ const MENU_PERMS: Record<string, string | string[]> = {
   '/publishers': 'publisher:read',
   '/nodes': 'node:read',
   '/settings': ['settings:read', 'sticky:read'],
+  '/ccgateway': 'settings:read',
   '/system/upgrades': 'system:update:read',
   '/system/audit': 'audit:read',
   '/system/tasks': 'task:read',
@@ -344,8 +345,13 @@ const MENUS = [
     items: [
       { id: 'accounts', label: L('Accounts', '账号'), icon: 'account', path: '/accounts' },
       { id: 'groups', label: L('Groups', '分组'), icon: 'group', path: '/groups' },
+      { id: 'platforms', label: L('Platforms', '平台'), icon: 'globe', path: '/platforms' },
+      { id: 'proxies', label: L('Proxies', '代理'), icon: 'proxy', path: '/proxies' },
       { id: 'prices', label: L('Model prices', '模型价格'), icon: 'price', path: '/prices' },
-      { id: 'anthropic:anthropic-models', label: L('Model catalog', '模型目录'), icon: 'list', path: '/p/anthropic/models', plugin_key: 'anthropic' }
+      // The server lists it only while the ccgateway plugin is enabled.
+      ...(process.env.SUB2API_MOCK_CCGATEWAY ? [{ id: 'ccgateway', label: L('CCGateway', 'CCGateway'), icon: 'code', path: '/ccgateway' }] : []),
+      { id: 'anthropic:anthropic-models', label: L('Model catalog', '模型目录'), icon: 'list', path: '/p/anthropic/models', plugin_key: 'anthropic' },
+      { id: 'dynweight:dynweight', label: L('Dynamic Weight', '动态权重'), icon: 'chart', path: '/p/dynweight/dashboard', plugin_key: 'dynweight' }
     ]
   },
   {
@@ -354,24 +360,32 @@ const MENUS = [
     items: [{ id: 'guard:guard', label: L('Guard', '请求守卫'), icon: 'shield', path: '/p/guard/dashboard', plugin_key: 'guard' }]
   },
   { section: 'finance', label: L('Finance', '财务'), items: [{ id: 'ledger', label: L('Balance ledger', '余额流水'), icon: 'ledger', path: '/ledger' }] },
-  { section: 'users', label: L('Users & access', '用户与权限'), items: [{ id: 'users', label: L('Users', '用户'), icon: 'user', path: '/users' }] },
-  // The "plugins" section has no core items; the bundled plugins put no menu there.
   {
-    section: 'system',
-    label: L('System settings', '系统设置'),
+    section: 'users',
+    label: L('Users', '用户'),
     items: [
-      { id: 'settings', label: L('System settings', '系统设置'), icon: 'settings', path: '/settings' },
-      { id: 'platforms', label: L('Platforms', '平台'), icon: 'globe', path: '/platforms' },
-      { id: 'proxies', label: L('Proxies', '代理'), icon: 'proxy', path: '/proxies' },
-      { id: 'roles', label: L('Roles & permissions', '角色与权限'), icon: 'role', path: '/roles' },
+      { id: 'users', label: L('Users', '用户'), icon: 'user', path: '/users' },
+      { id: 'roles', label: L('Roles & permissions', '角色与权限'), icon: 'role', path: '/roles' }
+    ]
+  },
+  {
+    section: 'plugins',
+    label: L('Plugins', '插件'),
+    items: [
       { id: 'plugins', label: L('Installed plugins', '已安装插件'), icon: 'plugin', path: '/plugins' },
       { id: 'market', label: L('Plugin market', '插件市场'), icon: 'market', path: '/market' },
-      { id: 'publishers', label: L('Publishers', '发布者'), icon: 'publisher', path: '/publishers' },
+      { id: 'publishers', label: L('Publishers', '发布者'), icon: 'publisher', path: '/publishers' }
+    ]
+  },
+  {
+    section: 'system',
+    label: L('System', '系统'),
+    items: [
       { id: 'nodes', label: L('Cluster nodes', '集群节点'), icon: 'node', path: '/nodes' },
       { id: 'tasks', label: L('Scheduled tasks', '定时任务'), icon: 'clock', path: '/system/tasks' },
       { id: 'upgrades', label: L('Core updates', '核心升级'), icon: 'refresh', path: '/system/upgrades' },
       { id: 'audit', label: L('Audit logs', '审计日志'), icon: 'clock', path: '/system/audit' },
-      { id: 'dynweight:dynweight', label: L('Dynamic Weight', '动态权重'), icon: 'chart', path: '/p/dynweight/dashboard', plugin_key: 'dynweight' }
+      { id: 'settings', label: L('System settings', '系统设置'), icon: 'settings', path: '/settings' }
     ]
   },
   {

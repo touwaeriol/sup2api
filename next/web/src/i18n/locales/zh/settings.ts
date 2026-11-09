@@ -1,14 +1,11 @@
 export default {
   description: '全局的计费、网关与调度设置。',
-  missingTab: '链接指向的设置页不可用（没有权限，或对应插件未启用），已显示第一个设置页。',
-  navLabel: '设置分类',
+  missingTab: '链接指向的设置页不可用（没有权限，或已不存在），已显示第一个设置页。',
   groups: {
     gateway: '网关',
     billing: '计费与通知',
-    access: '用户与权限',
-    plugins: '插件',
     pluginSettings: '插件设置',
-    system: '系统'
+    runtime: '运行环境'
   },
   tabs: {
     notifications: '通知',

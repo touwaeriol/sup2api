@@ -3,6 +3,7 @@ import { session } from '@sub2api/host'
 import { useAuthStore } from '@/stores/auth'
 import { ACCOUNT_PAGE_PERMS, PROXY_PAGE_PERMS } from '@/composables/useOwnership'
 import AppLayout from '@/layouts/AppLayout.vue'
+import type { SidebarViewKey } from '@/layouts/sidebarViews'
 import { closeLayersOnBack } from './layerBack'
 
 declare module 'vue-router' {
@@ -19,9 +20,18 @@ declare module 'vue-router' {
     public?: boolean
     /** Where a caller without `perm` goes instead of /forbidden, if anywhere. */
     deniedRedirect?: (to: RouteLocationNormalized) => string | undefined
-    /** The settings-page tab this page stands for in the system settings navigation (CONTRACTS §90). */
-    settingsTab?: (to: RouteLocationNormalized) => string
+    /** Where an old address of this page now lives; asked on every navigation, a change of the query alone included. */
+    movedTo?: (to: RouteLocationNormalized) => string | undefined
+    /** The sidebar view this page and the pages under it open in (CONTRACTS §90). */
+    sidebar?: SidebarViewKey
   }
+}
+
+/** Plugin settings were tabs of the settings page (?tab=plugin:<key>) before they had an address of their own. */
+function movedSettingsTab(to: RouteLocationNormalized): string | undefined {
+  const tab = to.query.tab
+  if (typeof tab !== 'string' || !tab.startsWith('plugin:')) return undefined
+  return `/plugins/${encodeURIComponent(tab.slice('plugin:'.length))}/settings`
 }
 
 const children: RouteRecordRaw[] = [
@@ -29,13 +39,13 @@ const children: RouteRecordRaw[] = [
   { path: 'dashboard', component: () => import('@/views/dashboard/DashboardView.vue'), meta: { title: 'nav.items.dashboard' } },
 
   { path: 'users', component: () => import('@/views/users/UsersView.vue'), meta: { perm: 'user:read', title: 'nav.items.users' } },
-  { path: 'roles', component: () => import('@/views/roles/RolesView.vue'), meta: { perm: 'role:read', title: 'nav.items.roles', parent: '/settings' } },
+  { path: 'roles', component: () => import('@/views/roles/RolesView.vue'), meta: { perm: 'role:read', title: 'nav.items.roles', parent: '/users' } },
   { path: 'api-keys', redirect: '/me/api-keys' },
   { path: 'me/api-keys', component: () => import('@/views/keys/MyApiKeysView.vue'), meta: { perm: 'apikey:self:manage', title: 'nav.items.myApiKeys' } },
   { path: 'groups', component: () => import('@/views/groups/GroupsView.vue'), meta: { perm: 'group:read', title: 'nav.items.groups' } },
-  { path: 'proxies', component: () => import('@/views/proxies/ProxiesView.vue'), meta: { perm: PROXY_PAGE_PERMS, title: 'nav.items.proxies', parent: '/settings' } },
+  { path: 'proxies', component: () => import('@/views/proxies/ProxiesView.vue'), meta: { perm: PROXY_PAGE_PERMS, title: 'nav.items.proxies' } },
   { path: 'accounts', component: () => import('@/views/accounts/AccountsView.vue'), meta: { perm: ACCOUNT_PAGE_PERMS, title: 'nav.items.accounts' } },
-  { path: 'platforms', component: () => import('@/views/platforms/PlatformsView.vue'), meta: { perm: ACCOUNT_PAGE_PERMS, title: 'nav.items.platforms', parent: '/settings' } },
+  { path: 'platforms', component: () => import('@/views/platforms/PlatformsView.vue'), meta: { perm: ACCOUNT_PAGE_PERMS, title: 'nav.items.platforms' } },
 
   { path: 'prices', component: () => import('@/views/prices/PricesView.vue'), meta: { perm: 'price:read', title: 'nav.items.prices' } },
   { path: 'prices/new', component: () => import('@/views/prices/PriceEditView.vue'), meta: { perm: 'price:manage', title: 'prices.newTitle', parent: '/prices' } },
@@ -55,10 +65,11 @@ const children: RouteRecordRaw[] = [
   { path: 'me/ledger', redirect: '/me/wallet' },
   { path: 'me/balance', redirect: '/me/wallet' },
   { path: 'sticky', redirect: { path: '/settings', query: { tab: 'sticky' } } },
-  { path: 'settings', component: () => import('@/views/settings/SettingsView.vue'), meta: { perm: ['settings:read', 'sticky:read'], title: 'nav.items.settings' } },
+  { path: 'settings', component: () => import('@/views/settings/SettingsView.vue'), meta: { perm: ['settings:read', 'sticky:read'], title: 'nav.items.settings', sidebar: 'settings', movedTo: movedSettingsTab } },
 
-  { path: 'system/ccgateway', redirect: '/plugins/ccgateway?tab=settings' },
-  { path: 'plugins', component: () => import('@/views/plugins/PluginsView.vue'), meta: { perm: 'plugin:read', title: 'nav.items.plugins', parent: '/settings' } },
+  { path: 'ccgateway', component: () => import('@/views/ccgateway/CCGatewayView.vue'), meta: { perm: 'settings:read', title: 'ccgateway.title' } },
+  { path: 'system/ccgateway', redirect: '/ccgateway' },
+  { path: 'plugins', component: () => import('@/views/plugins/PluginsView.vue'), meta: { perm: 'plugin:read', title: 'nav.items.plugins' } },
   {
     path: 'plugins/:key/versions/:version/consent',
     component: () => import('@/views/plugins/ConsentView.vue'),
@@ -76,18 +87,20 @@ const children: RouteRecordRaw[] = [
       deniedRedirect: (to) => (to.query.tab === 'settings' ? `/plugins/${encodeURIComponent(String(to.params.key))}/settings` : undefined)
     }
   },
+  // ccgateway's settings are a core page of its own.
+  { path: 'plugins/ccgateway/settings', redirect: '/ccgateway' },
   // Access is the plugin's settings permission or plugin:read, checked by the core.
   {
     path: 'plugins/:key/settings',
     component: () => import('@/views/plugins/PluginSettingsView.vue'),
-    meta: { title: 'nav.crumbs.pluginSettings', parent: '/settings', settingsTab: (to) => `plugin:${String(to.params.key)}` }
+    meta: { title: 'nav.crumbs.pluginSettings', parent: '/settings' }
   },
-  { path: 'market', component: () => import('@/views/plugins/MarketView.vue'), meta: { perm: 'plugin:market:read', title: 'nav.items.market', parent: '/settings' } },
-  { path: 'publishers', component: () => import('@/views/plugins/PublishersView.vue'), meta: { perm: 'publisher:read', title: 'nav.items.publishers', parent: '/settings' } },
-  { path: 'nodes', component: () => import('@/views/nodes/NodesView.vue'), meta: { perm: 'node:read', title: 'nav.items.nodes', parent: '/settings' } },
-  { path: 'system/tasks', component: () => import('@/views/tasks/TasksView.vue'), meta: { perm: 'task:read', title: 'nav.items.tasks', parent: '/settings' } },
-  { path: 'system/upgrades', component: () => import('@/views/upgrades/UpgradesView.vue'), meta: { perm: 'system:update:read', title: 'upgrades.title', parent: '/settings' } },
-  { path: 'system/audit', component: () => import('@/views/upgrades/AuditView.vue'), meta: { perm: 'audit:read', title: 'observe.audit', parent: '/settings' } },
+  { path: 'market', component: () => import('@/views/plugins/MarketView.vue'), meta: { perm: 'plugin:market:read', title: 'nav.items.market' } },
+  { path: 'publishers', component: () => import('@/views/plugins/PublishersView.vue'), meta: { perm: 'publisher:read', title: 'nav.items.publishers' } },
+  { path: 'nodes', component: () => import('@/views/nodes/NodesView.vue'), meta: { perm: 'node:read', title: 'nav.items.nodes' } },
+  { path: 'system/tasks', component: () => import('@/views/tasks/TasksView.vue'), meta: { perm: 'task:read', title: 'nav.items.tasks' } },
+  { path: 'system/upgrades', component: () => import('@/views/upgrades/UpgradesView.vue'), meta: { perm: 'system:update:read', title: 'upgrades.title' } },
+  { path: 'system/audit', component: () => import('@/views/upgrades/AuditView.vue'), meta: { perm: 'audit:read', title: 'observe.audit' } },
 
   { path: 'p/:plugin/:page', component: () => import('@/views/plugin-host/PluginPageView.vue') },
   { path: 'forbidden', component: () => import('@/views/errors/ForbiddenView.vue') },
@@ -120,6 +133,8 @@ router.beforeEach(async (to) => {
       if (!session.get()) return { path: '/login', query: { redirect: to.fullPath } }
     }
   }
+  const moved = to.meta.movedTo?.(to)
+  if (moved) return moved
   if (to.meta.perm && !auth.has(to.meta.perm)) {
     const redirect = to.meta.deniedRedirect?.(to)
     if (redirect) return redirect

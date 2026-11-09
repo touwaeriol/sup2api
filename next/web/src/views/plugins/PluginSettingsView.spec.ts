@@ -7,8 +7,7 @@ import PluginSettingsView from './PluginSettingsView.vue'
 const mocks = vi.hoisted(() => ({ get: vi.fn(), replace: vi.fn(), route: null as unknown as { params: { key: string } } }))
 vi.mock('@sub2api/host', async (original) => ({ ...(await original<object>()), api: { get: mocks.get } }))
 vi.mock('vue-router', () => ({ useRoute: () => mocks.route, useRouter: () => ({ replace: mocks.replace }) }))
-vi.mock('@/stores/auth', () => ({ useAuthStore: () => ({ has: () => true }) }))
-vi.mock('@/stores/plugins', () => ({ usePluginStore: () => ({ plugin: () => null }) }))
+vi.mock('@/stores/plugins', () => ({ usePluginStore: () => ({ plugin: (key: string) => (key === 'alpha' ? { name: { en: 'Alpha mail' } } : null) }) }))
 vi.mock('./detail/SettingsTab.vue', () => ({ default: { name: 'SettingsTab', props: ['pluginKey', 'settings'], template: '<div data-testid="tab">{{ pluginKey }}:{{ settings.values.who }}</div>' } }))
 enableAutoUnmount(afterEach)
 
@@ -40,13 +39,13 @@ describe('PluginSettingsView', () => {
     expect(w.find('[data-testid="tab"]').exists()).toBe(false)
   })
 
-  it('leaves the page header to the settings page that embeds it', async () => {
-    mocks.route = reactive({ params: { key: '' } })
+  it("titles the page with the plugin's name", async () => {
+    mocks.route = reactive({ params: { key: 'alpha' } })
     mocks.get.mockResolvedValue(settingsOf('alpha'))
-    const header = { name: 'SPageHeader', template: '<header />' }
-    const embedded = mount(PluginSettingsView, { props: { pluginKey: 'alpha' }, global: { plugins: [i18n], stubs: { SPageHeader: header } } })
+    const header = { name: 'SPageHeader', props: ['title'], template: '<header>{{ title }}</header>' }
+    const w = mount(PluginSettingsView, { global: { plugins: [i18n], stubs: { SPageHeader: header } } })
     await flushPromises()
-    expect(embedded.find('header').exists()).toBe(false)
-    expect(embedded.get('[data-testid="tab"]').text()).toBe('alpha:alpha')
+    expect(w.get('header').text()).toBe('Alpha mail')
+    expect(w.get('[data-testid="tab"]').text()).toBe('alpha:alpha')
   })
 })

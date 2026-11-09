@@ -72,8 +72,8 @@ const draftsBase = computed(() => (props.preparationUrl ? '/account-preparations
 const POLL_MS = 2000
 /** Draft keep-alive: the core sweeps drafts untouched for 15 minutes. */
 const HEARTBEAT_MS = 60_000
-/** CCGateway settings, scrolled to the runtime card (install / upgrade the containers). */
-const settingsLink = '/plugins/ccgateway?tab=settings#ccgateway-runtime'
+/** The CCGateway page, scrolled to the runtime card (install / upgrade the containers). */
+const settingsLink = '/ccgateway#ccgateway-runtime'
 
 /** A re-authorization of a saved account (the draft is given); otherwise a new account's draft. */
 const inPlace = computed(() => Number.isSafeInteger(props.reauthAccountId) && (props.reauthAccountId ?? 0) > 0)

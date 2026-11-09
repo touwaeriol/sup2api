@@ -402,17 +402,26 @@ export interface PluginDetail {
   versions?: PluginVersion[]
 }
 
-/**
- * Whether the plugin's settings page is a core view: ccgateway keeps its
- * settings in the core (settings:read), not in the plugin settings form.
- */
+/** ccgateway keeps its settings in a core view (settings:read), not in a plugin settings form. */
+const CORE_SETTINGS_KEY = 'ccgateway'
+
+/** The page of that core view, an entry of the sidebar (CONTRACTS §90). */
+const CORE_SETTINGS_PAGE = '/ccgateway'
+
+/** Whether the plugin's settings are that core view and the caller may open it. */
 export function hasCoreSettings(key: string, has: (perm: string) => boolean): boolean {
-  return key === 'ccgateway' && has('settings:read')
+  return key === CORE_SETTINGS_KEY && has('settings:read')
 }
 
-/** Whether the plugin has console settings: the core view of ccgateway, else a schema form (has_settings). */
-export function hasConsoleSettings(p: Pick<PluginSummary, 'key' | 'has_settings'>, has: (perm: string) => boolean): boolean {
-  return p.key === 'ccgateway' ? hasCoreSettings(p.key, has) : !!p.has_settings
+/** Whether the console renders the plugin's settings as a form: has_settings is false for native settings (§75.5). */
+export function hasSettingsForm(p: Pick<PluginSummary, 'key' | 'has_settings'>): boolean {
+  return p.key !== CORE_SETTINGS_KEY && !!p.has_settings
+}
+
+/** Where the plugin list opens a plugin's settings: the form on its detail page, or the core view's page; undefined without either. */
+export function consoleSettingsPath(p: Pick<PluginSummary, 'key' | 'has_settings'>, has: (perm: string) => boolean): string | undefined {
+  if (hasSettingsForm(p)) return `/plugins/${encodeURIComponent(p.key)}?tab=settings`
+  return hasCoreSettings(p.key, has) ? CORE_SETTINGS_PAGE : undefined
 }
 
 export interface PluginSettings {

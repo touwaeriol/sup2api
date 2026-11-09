@@ -4,9 +4,9 @@ export default {
     gateway: 'Gateway',
     security: 'Security',
     finance: 'Finance',
-    users: 'Users & access',
+    users: 'Users',
     plugins: 'Plugins',
-    system: 'System settings',
+    system: 'System',
     me: 'Personal',
     admin: 'Admin'
   },
@@ -35,6 +35,10 @@ export default {
     myWallet: 'Wallet',
     myProfile: 'Profile'
   },
+  views: {
+    settings: 'System settings'
+  },
+  backToConsole: 'Back to console',
   crumbs: {
     pluginDetail: 'Plugin details',
     pluginRollout: 'Rollout',

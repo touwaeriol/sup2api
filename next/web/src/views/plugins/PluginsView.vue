@@ -14,7 +14,7 @@ import { consentPath, putReview } from './reviewCache'
 import PluginAvatar from './parts/PluginAvatar.vue'
 import RetiredKeys from './parts/RetiredKeys.vue'
 import TrustBadge from './parts/TrustBadge.vue'
-import { conflictLines, hasConsoleSettings, shownStatus } from './pluginUtil'
+import { conflictLines, consoleSettingsPath, shownStatus } from './pluginUtil'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -75,8 +75,8 @@ function open(p: PluginSummary) {
   router.push(`/plugins/${encodeURIComponent(p.key)}`)
 }
 
-function canOpenSettings(p: PluginSummary): boolean {
-  return p.status !== 'awaiting_consent' && hasConsoleSettings(p, (perm) => auth.has(perm))
+function settingsPath(p: PluginSummary): string | undefined {
+  return p.status === 'awaiting_consent' ? undefined : consoleSettingsPath(p, perm => auth.has(perm))
 }
 
 function review(p: PluginSummary) {
@@ -194,7 +194,7 @@ onMounted(load)
             {{ t('plugins.list.review') }}
           </SButton>
           <SButton size="sm" variant="ghost" @click="open(row)">{{ t('common.detail') }}</SButton>
-          <SButton v-if="canOpenSettings(row)" size="sm" :to="`/plugins/${encodeURIComponent(row.key)}?tab=settings`" icon="settings">
+          <SButton v-if="settingsPath(row)" size="sm" :to="settingsPath(row)" icon="settings">
             {{ t('plugins.detail.tabs.settings') }}
           </SButton>
         </div>

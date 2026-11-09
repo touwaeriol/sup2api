@@ -4,7 +4,7 @@ import type { NavSection } from '@/stores/app'
 import SidebarLink from './SidebarLink.vue'
 import { navItemContext } from './navItem'
 
-/** A plugin's own section folded under one expandable entry, shown with its first page's icon. */
+/** A menu section folded under one expandable entry, shown with its first page's icon. */
 defineProps<{ section: NavSection; label: string; open: boolean; activePath?: string }>()
 defineEmits<{ toggle: [] }>()
 </script>

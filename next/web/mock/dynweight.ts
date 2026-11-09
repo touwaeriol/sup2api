@@ -18,7 +18,7 @@ export const dynweightUIPlugin = {
   version: '0.5.0',
   name: { en: 'Dynamic Weight', zh: '动态权重' },
   asset_base: '/plugin-ui/dynweight/0.5.0-dev',
-  menus: [{ id: 'dynweight', section: 'system', label: { en: 'Dynamic Weight', zh: '动态权重' }, page: 'dashboard', icon: 'chart' }],
+  menus: [{ id: 'dynweight', section: 'gateway', label: { en: 'Dynamic Weight', zh: '动态权重' }, page: 'dashboard', icon: 'chart' }],
   pages: { dashboard: { type: 'native', title: { en: 'Dynamic Weight', zh: '动态权重' }, component: 'DynweightDashboard' } },
   slots: [
     { slot: 'account.list.weight', component: 'DynweightAccountWeight', permission: 'dynweight:read' },

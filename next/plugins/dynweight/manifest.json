@@ -6,7 +6,7 @@
     "en": "Lowers the scheduling weight of an account in a group and model while it fails or slows down, and brings it back once healthy. Each (account, group, client model) is counted per window and judged by configurable rules (error rate, first token and whole attempt percentiles, the weight itself) and strategies (degrade, climb, clear sticky sessions). Turning points can be notified through a core notification channel.",
     "zh": "账号在某个分组和模型下出错或变慢时降低其调度权重，恢复健康后再逐步抬回。每个（账号、分组、客户端模型）按窗口计数，由可配置的规则（错误率、首字与整次耗时分位、权重本身）和策略（降权、回升、清理粘性会话）判定。权重拐点可经核心通知渠道发送通知。"
   },
-  "version": "0.5.4",
+  "version": "0.5.5",
   "publisher": "sub2api",
   "icon": "text:W",
   "runtime": "grpc",
@@ -67,7 +67,7 @@
     "menus": [
       {
         "id": "dynweight",
-        "section": "system",
+        "section": "gateway",
         "label": { "en": "Dynamic Weight", "zh": "动态权重" },
         "icon": "chart",
         "page": "dashboard",

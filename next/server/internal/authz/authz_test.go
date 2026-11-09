@@ -51,6 +51,15 @@ type fakeGen struct {
 
 func (g fakeGen) Plugins() []core.PluginInfo { return g.plugins }
 
+func (g fakeGen) Plugin(key string) (core.PluginInfo, bool) {
+	for _, p := range g.plugins {
+		if p.Key == key {
+			return p, true
+		}
+	}
+	return core.PluginInfo{}, false
+}
+
 type fakeRegistry struct{ gen core.Generation }
 
 func (r fakeRegistry) Current() core.Generation                       { return r.gen }
@@ -604,7 +613,7 @@ func TestPluginCatalog(t *testing.T) {
 func TestMenus(t *testing.T) {
 	t.Parallel()
 	db := testutil.DB(t)
-	reg := fakeRegistry{gen: fakeGen{plugins: []core.PluginInfo{{
+	plugins := []core.PluginInfo{{
 		Key: "guard",
 		Manifest: &manifest.Manifest{UI: &manifest.UI{Menus: []manifest.Menu{
 			{ID: "dash", Section: "plugins", Label: manifest.LocalizedText{"en": "Guard", "zh": "请求守卫"}, Page: "dashboard", Permission: "stats:read", Order: 2},
@@ -623,7 +632,9 @@ func TestMenus(t *testing.T) {
 				{ID: "audit", Section: "security", Label: manifest.LocalizedText{"en": "Mod audit"}, Page: "audit", Permission: "mod:read"},
 				{ID: "weights", Section: "system", Label: manifest.LocalizedText{"en": "Mod weights"}, Page: "weights", Permission: "mod:read"},
 			}}},
-	}}}}
+	}}
+	// The registry is read on every call, so the test swaps generations.
+	reg := &fakeRegistry{gen: fakeGen{plugins: plugins}}
 	s := newService(t, db, newMemBus(), reg)
 	ctx := context.Background()
 	if _, err := db.Pool.Exec(ctx, `INSERT INTO plugins (key, name, status) VALUES ('guard', '{"en":"Guard"}', 'enabled'), ('mod', '{"en":"Mod"}', 'enabled')`); err != nil {
@@ -681,8 +692,11 @@ func TestMenus(t *testing.T) {
 	for _, m := range menus {
 		byKey[m.Section] = m
 	}
-	// No core item is left in the shared plugin section: plugin menus by order.
-	if p := byKey["plugins"].Items; len(p) != 2 || p[0].Path != "/p/guard/info" || p[1].Path != "/p/guard/dashboard" || p[1].Label.Get("zh") != "请求守卫" {
+	// Plugin management first, then the plugin menus by order.
+	if got := menuPaths(byKey["plugins"]); got != "/plugins,/market,/publishers,/p/guard/info,/p/guard/dashboard" {
+		t.Fatalf("admin plugin menus = %s", got)
+	}
+	if p := byKey["plugins"].Items; p[4].Label.Get("zh") != "请求守卫" {
 		t.Fatalf("admin plugin menus = %+v", p)
 	}
 	if sec := byKey["mod:safety"]; sec.Label.Get("zh") != "安全" || len(sec.Items) != 1 || sec.Items[0].Path != "/p/mod/dashboard" {
@@ -695,22 +709,24 @@ func TestMenus(t *testing.T) {
 	if got := menuPaths(byKey["overview"]); got != "/dashboard,/me/api-keys,/me/models,/me/usage/overview,/me/usage,/usage/overview,/usage" {
 		t.Fatalf("admin console = %s", got)
 	}
-	if got := menuPaths(byKey["gateway"]); got != "/accounts,/groups,/prices,/p/mod/rules" {
+	// No /system/ccgateway: the ccgateway plugin is not in the generation.
+	if got := menuPaths(byKey["gateway"]); got != "/accounts,/groups,/platforms,/proxies,/prices,/p/mod/rules" {
 		t.Fatalf("core section with plugin item = %s", got)
 	}
-	if got := menuPaths(byKey["users"]); got != "/users" {
-		t.Fatalf("users = %s", got)
+	if sec := byKey["users"]; menuPaths(sec) != "/users,/roles" || sec.Label.Get("zh") != "用户" {
+		t.Fatalf("users = %+v", sec)
 	}
-	// Configuration and operations pages make up system settings, its own page first, plugin pages after the core's.
-	if got := menuPaths(byKey["system"]); got != "/settings,/platforms,/proxies,/roles,/plugins,/market,/publishers,/nodes,/system/tasks,/system/upgrades,/system/audit,/p/mod/weights" {
-		t.Fatalf("system settings = %s", got)
+	// Operations pages, then system settings as the last core item; a plugin
+	// that still declares section "system" comes after it.
+	if sec := byKey["system"]; menuPaths(sec) != "/nodes,/system/tasks,/system/upgrades,/system/audit,/settings,/p/mod/weights" || sec.Label.Get("zh") != "系统" {
+		t.Fatalf("system = %+v", sec)
 	}
 	if f := byKey["finance"].Items; len(f) != 1 || f[0].Path != "/ledger" {
 		t.Fatalf("finance = %+v", f)
 	}
 
-	// A caller who only manages its own accounts: its accounts in the admin
-	// group, platforms and proxies in system settings without the settings page.
+	// A caller who only manages its own accounts sees them with platforms and
+	// proxies in the gateway section, and nothing of system.
 	role, err := s.CreateRole(ctx, admin, CreateRoleInput{Key: "vendor", Name: core.LocalizedText{"en": "Vendor"},
 		PermissionKeys: []string{"account:own:read", "proxy:own:read", "proxy:own:manage"}})
 	if err != nil {
@@ -725,26 +741,49 @@ func TestMenus(t *testing.T) {
 	for _, m := range menus {
 		byKey[m.Section] = m
 	}
-	if got := menuPaths(byKey["gateway"]) + " | " + menuPaths(byKey["system"]); got != "/accounts | /platforms,/proxies" {
+	if got := menuPaths(byKey["gateway"]) + " | " + menuPaths(byKey["system"]); got != "/accounts,/platforms,/proxies | " {
 		t.Fatalf("vendor menus = %s", got)
 	}
 
-	// Sticky sessions alone open the settings page and nothing else of system settings.
+	// Sticky sessions alone open the settings page and nothing else of system.
 	role, err = s.CreateRole(ctx, admin, CreateRoleInput{Key: "sticky", Name: core.LocalizedText{"en": "Sticky"}, PermissionKeys: []string{"sticky:read"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	menus, err = s.Menus(ctx, addUser(t, s, "st@x.com", role.Key))
+	sticky := addUser(t, s, "st@x.com", role.Key)
+	if got := sectionPaths(t, s, sticky, "system"); got != "/settings" {
+		t.Fatalf("sticky-only system = %s", got)
+	}
+
+	// The CCGateway page needs both the enabled plugin and settings:read.
+	reg.gen = fakeGen{plugins: append(plugins, core.PluginInfo{Key: "ccgateway"})}
+	if got := sectionPaths(t, s, admin, "gateway"); got != "/accounts,/groups,/platforms,/proxies,/prices,/system/ccgateway,/p/mod/rules" {
+		t.Fatalf("gateway with ccgateway enabled = %s", got)
+	}
+	if got := sectionPaths(t, s, vendor, "gateway"); got != "/accounts,/platforms,/proxies" {
+		t.Fatalf("gateway without settings:read = %s", got)
+	}
+	// No generation is no enabled plugin, not "every plugin".
+	reg.gen = nil
+	if got := sectionPaths(t, s, admin, "gateway"); got != "/accounts,/groups,/platforms,/proxies,/prices" {
+		t.Fatalf("gateway without a generation = %s", got)
+	}
+}
+
+// sectionPaths lists the paths of one section of the user's sidebar ("" when
+// the section is not returned).
+func sectionPaths(t *testing.T, s *Service, userID int64, section string) string {
+	t.Helper()
+	menus, err := s.Menus(context.Background(), userID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, m := range menus {
-		if m.Section == "system" {
-			if got := menuPaths(m); got != "/settings" {
-				t.Fatalf("sticky-only system settings = %s", got)
-			}
+		if m.Section == section {
+			return menuPaths(m)
 		}
 	}
+	return ""
 }
 
 func menuPaths(sec MenuSection) string {
