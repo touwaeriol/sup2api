@@ -6938,7 +6938,7 @@ node 任务（可工作节点各跑，`RequireWork`）：
 
 - 分组（`/groups`，`group:read`）、模型价格（`/prices`，`price:read`）、CCGateway（`/system/ccgateway`，`settings:read`）没有菜单项，由控制台列在系统设置视图里（90.2）；页面、地址、权限和接口不变。
 - 余额流水（`/ledger`，`balance:all:read`）没有菜单项，从用户列表的行操作打开；页面和接口不变。有 `balance:all:read` 而没有 `user:read` 的自定义角色只能凭地址打开它。
-- 平台页取消，没有菜单项（地址见 90.4）；接口 `GET /platforms`、`GET /me/platforms` 不变。
+- 平台页取消，没有菜单项（地址见 90.4）；接口 `GET /platforms`、`GET /me/platforms` 不变，控制台的平台列表一律取 `GET /me/platforms`。
 - 模型目录：anthropic 0.3.1 去掉了菜单 `anthropic-models`、页面 `models` 和宿主权限 `ui.menu`；插件接口 `GET /api/v1/p/anthropic/models` 和权限 `model_catalog:read` 保留。
 - 系统设置：id `settings`，是 `system` 区最后一个核心项，持有 `settings:read`、`sticky:read`、`group:read`、`price:read` 任意一个就返回：后两个是因为分组、模型价格从系统设置视图进入，内置运维角色有它们而没有 `settings` / `sticky` 权限。`section:"system"` 的插件菜单仍并入 `system` 区，排在 `/settings` 之后（如 dynweight 0.5.4 的动态权重），和其余项一起进“系统”目录。
 - 账号、代理、角色与权限、插件管理各项的权限和图标不变。只有 `account:own:*` / `proxy:own:*` 的调用者（供应商）在 `gateway` 区看到账号、代理，没有 `system` 区；再有 `group:read` 或 `price:read` 时，`system` 区只有“系统设置”一项，视图里只列他能打开的页面。
@@ -6947,12 +6947,12 @@ node 任务（可工作节点各跑，`RequireWork`）：
 ### 90.2 系统设置视图
 
 - 侧栏有两种状态：控制台视图（默认）和系统设置视图。点击管理员组的“系统设置”，侧栏整体换成系统设置视图的菜单；顶部“返回控制台”回到进入前的页面，没有则回仪表盘。
-- 视图由路由决定：路由 meta `sidebar` 声明所属视图，没有声明的沿上级链（`meta.parent`）取，刷新不丢。调用者的菜单里没有“系统设置”这一项时（比如只持有某个插件设置权限的用户打开 `/plugins/<key>/settings`）不换视图，侧栏仍是控制台视图。
+- 视图由路由决定：只有 `/settings` 的路由 meta `sidebar` 声明视图，视图里其余页面（`/groups`、`/prices`、`/system/ccgateway`、`/plugins/<key>/settings`）的 `meta.parent` 是 `/settings`，它们和各自的子页沿上级链取到这个视图，面包屑以“系统设置 ›”开头；刷新不丢。调用者的菜单里没有“系统设置”这一项时（比如只持有某个插件设置权限的用户打开 `/plugins/<key>/settings`）不换视图，侧栏仍是控制台视图。
 - 系统设置视图分五组（按权限显示，空组不显示）：
   - 网关：网关设置、调度策略、粘性会话、CPU 保护
   - 分组与定价：分组（`/groups`，`group:read`）、模型价格（`/prices`，`price:read`）；它们的子页（价格详情、同步源等）也显示这个视图
   - 计费与通知：计费、通知
-  - 插件设置：每个已启用且有控制台设置页的插件一项，地址 `/plugins/<key>/settings`；ccgateway 的是 `/system/ccgateway`（`settings:read`）。这一组来自插件列表，调用者要有 `plugin:read` 才有；已安装插件列表里的“设置”按钮打开的也是这些页面
+  - 插件设置：每个已启用且有控制台设置页的插件一项，地址 `/plugins/<key>/settings`；ccgateway 的是 `/system/ccgateway`（`settings:read`）。这一组来自插件列表，调用者要有 `plugin:read` 才有；已安装插件列表里的“设置”按钮，插件已启用时打开的也是这些页面，其他状态（视图里不列）打开插件详情的设置标签 `/plugins/<key>?tab=settings`
   - 运行环境：在线更新、环境变量
 - 八个配置页的地址仍是 `/settings?tab=<key>`，权限是 `settings:read`（粘性会话是 `sticky:read`）。一个配置页都不能打开的调用者打开不带 `tab` 的 `/settings`，进入视图里他能打开的第一个页面：先 `/groups`，再 `/prices`；带 `tab` 的链接仍按该配置页的权限判断。
 - 功能页（账号、代理、角色与权限、插件管理、集群节点、定时任务、核心升级、审计日志）不在这个视图里，各自留在控制台视图的区里。
@@ -6970,7 +6970,7 @@ node 任务（可工作节点各跑，`RequireWork`）：
 
 留下的控制台页面地址都不变，不新增页面根（`ConsoleSegments` 不变）：
 
-- 分组 `/groups`、模型价格 `/prices` 及其子页的地址不变，打开时侧栏是系统设置视图。
+- 分组 `/groups`、模型价格 `/prices` 及其子页的地址不变，打开时侧栏是系统设置视图，上级页面是 `/settings`。
 - 余额流水 `/ledger` 的地址不变，上级页面是 `/users`。
 - `/platforms` 跳转到 `/accounts`。
 - `/p/anthropic/models` 随 anthropic 0.3.1 消失（插件不再声明这个页面）。

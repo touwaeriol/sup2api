@@ -46,7 +46,7 @@ const page = (tab: string, perm: string, label: string, icon: string): Page => (
   label,
   icon
 })
-/** A page with an address of its own; the pages below it (meta.parent) open in the view too. */
+/** A page with an address of its own; its route sits under the settings page (meta.parent), which opens it in the view. */
 const ownPage = (path: string, perm: string, label: string, icon: string): Page => ({ path, perm, label, icon })
 
 /** The groups and their pages, in the order shown. */

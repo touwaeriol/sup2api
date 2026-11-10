@@ -252,25 +252,11 @@ export interface PlatformEndpoint {
 
 /**
  * A platform: built into the core (anthropic, openai, gemini) or declared by
- * an enabled plugin. Endpoints belong to exactly one platform.
+ * an enabled plugin. Endpoints belong to exactly one platform. As listed by
+ * GET /me/platforms (CONTRACTS §14.1): every platform available now; any
+ * logged-in user may read it.
  */
 export interface Platform {
-  id: string
-  label: LText
-  builtin: boolean
-  /** Declaring plugin (plugin platforms only). */
-  plugin_key?: string | null
-  plugin_name?: LText // assumed, not in the contract
-  endpoints: PlatformEndpoint[]
-  /** Registered account types that declare support for the platform. */
-  account_types: Array<{ plugin_key: string; type: string; label: LText }>
-}
-
-/**
- * A platform as listed by GET /me/platforms (CONTRACTS §14.1): every platform
- * available now, without account types; any logged-in user may read it.
- */
-export interface MyPlatform {
   id: string
   label: LText
   builtin: boolean

@@ -1,6 +1,6 @@
 // Mock catalog of gateway platforms (CONTRACTS §13): the core's built-in
 // anthropic / openai / gemini, plus the platforms of enabled plugins.
-// GET /platforms is registered in accounts.ts (it lists account types too).
+// GET /me/platforms is registered in accounts.ts.
 
 type L = { en: string; zh: string }
 export interface MockEndpoint {
@@ -14,7 +14,6 @@ export interface MockPlatform {
   label: L
   builtin: boolean
   plugin_key: string | null
-  plugin_name?: L
   endpoints: MockEndpoint[]
 }
 
@@ -55,7 +54,6 @@ export const pluginPlatforms: Array<MockPlatform & { enabled: boolean }> = [
     label: { en: 'MyVideo', zh: 'MyVideo 视频' },
     builtin: false,
     plugin_key: 'videogen',
-    plugin_name: { en: 'Video generation', zh: '视频生成' },
     enabled: true,
     endpoints: [ep('POST', '/v1/video/generations', 'myvideo.generate'), ep('GET', '/v1/video/generations/:id', 'myvideo.status', 'free')]
   },
@@ -65,7 +63,6 @@ export const pluginPlatforms: Array<MockPlatform & { enabled: boolean }> = [
     label: { en: 'Foo', zh: 'Foo' },
     builtin: false,
     plugin_key: 'foo_platform',
-    plugin_name: { en: 'Foo Platform', zh: 'Foo 平台' },
     enabled: false,
     endpoints: [ep('POST', '/v1/foo/chat', 'foo.chat')]
   }

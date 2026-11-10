@@ -14,7 +14,7 @@ import { consentPath, putReview } from './reviewCache'
 import PluginAvatar from './parts/PluginAvatar.vue'
 import RetiredKeys from './parts/RetiredKeys.vue'
 import TrustBadge from './parts/TrustBadge.vue'
-import { conflictLines, consoleSettingsPath, shownStatus } from './pluginUtil'
+import { conflictLines, pluginListSettingsPath, shownStatus } from './pluginUtil'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -76,7 +76,7 @@ function open(p: PluginSummary) {
 }
 
 function settingsPath(p: PluginSummary): string | undefined {
-  return p.status === 'awaiting_consent' ? undefined : consoleSettingsPath(p, perm => auth.has(perm))
+  return p.status === 'awaiting_consent' ? undefined : pluginListSettingsPath(p, perm => auth.has(perm))
 }
 
 function review(p: PluginSummary) {

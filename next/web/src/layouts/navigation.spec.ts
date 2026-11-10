@@ -33,8 +33,8 @@ function makeRouter() {
       { path: '/accounts', component: Blank, meta: { title: 'nav.items.accounts' } },
       { path: '/users', component: Blank, meta: { title: 'nav.items.users' } },
       { path: '/ledger', component: Blank, meta: { title: 'nav.items.ledger', parent: '/users' } },
-      { path: '/groups', component: Blank, meta: { title: 'nav.items.groups', sidebar: 'settings' } },
-      { path: '/prices', component: Blank, meta: { title: 'nav.items.prices', sidebar: 'settings' } },
+      { path: '/groups', component: Blank, meta: { title: 'nav.items.groups', parent: '/settings' } },
+      { path: '/prices', component: Blank, meta: { title: 'nav.items.prices', parent: '/settings' } },
       { path: '/prices/sources', component: Blank, meta: { title: 'prices.sources.title', parent: '/prices' } },
       { path: '/prices/sources/:id/sync', component: Blank, meta: { title: 'prices.syncPrices', parent: '/prices/sources' } },
       {
@@ -172,6 +172,13 @@ describe('sidebar', () => {
     expect(current(ledger.wrapper)).toEqual(['users'])
     expect(ledger.wrapper.get('[data-testid="nav-submenu-users"]').attributes('aria-expanded')).toBe('true')
     expect(current((await mountSidebar(operatorMenu, '/accounts/5')).wrapper)).toEqual(['accounts'])
+  })
+
+  it('lights up a page of the settings view that an older core still lists in the console menu', async () => {
+    const menu = [overview, { section: 'gateway', items: [item('accounts', '/accounts'), item('groups', '/groups')] }]
+    const { wrapper } = await mountSidebar(menu, '/groups')
+    expect(wrapper.find('[data-testid="nav-view-settings"]').exists()).toBe(false)
+    expect(current(wrapper)).toEqual(['groups'])
   })
 
   it('keeps the labels in the mobile drawer when collapsed on desktop', async () => {
@@ -326,11 +333,12 @@ describe('top bar', () => {
     const wrapper = mount(AppTopbar, { global: { plugins: [i18n, router], stubs: { ChangePasswordDialog: true } } })
     const crumbs = wrapper.get('[data-testid="breadcrumbs"]').findAll('a')
     expect(crumbs.map(a => [a.text(), a.attributes('href')])).toEqual([
+      ['系统设置', '/settings'],
       ['模型价格', '/prices'],
       ['价格同步源', '/prices/sources']
     ])
     expect(wrapper.get('h1').text()).toBe('同步价格')
-    await router.push('/prices')
+    await router.push('/accounts')
     await flushPromises()
     expect(wrapper.find('[data-testid="breadcrumbs"]').exists()).toBe(false)
   })
@@ -338,11 +346,15 @@ describe('top bar', () => {
   it('does not link a parent page the caller cannot open', async () => {
     denied.add('settings:read').add('sticky:read')
     const router = makeRouter()
-    await router.push('/plugins/mailer/settings')
     const wrapper = mount(AppTopbar, { global: { plugins: [i18n, router], stubs: { ChangePasswordDialog: true } } })
-    const nav = wrapper.get('[data-testid="breadcrumbs"]')
-    expect(nav.findAll('a')).toHaveLength(0)
-    expect(nav.text()).toContain('系统设置')
+    // Plugin settings for a holder of the plugin's permission, groups for the built-in operator.
+    for (const path of ['/plugins/mailer/settings', '/groups']) {
+      await router.push(path)
+      await flushPromises()
+      const nav = wrapper.get('[data-testid="breadcrumbs"]')
+      expect([path, nav.findAll('a').length]).toEqual([path, 0])
+      expect(nav.text()).toContain('系统设置')
+    }
   })
 
   it('keeps the menu button, title and account menu on a phone, language and theme inside the menu', async () => {

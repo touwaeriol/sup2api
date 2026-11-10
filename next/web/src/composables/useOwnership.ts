@@ -29,7 +29,7 @@ export const PROXY_KEYS = {
   manage: ['proxy:manage', 'proxy:own:manage']
 } as const satisfies Record<string, readonly [string, string]>
 
-/** Any of these opens the accounts / platforms pages (menus, routes). */
+/** Any of these opens the accounts page (menus, routes). */
 export const ACCOUNT_PAGE_PERMS = ['account:read', 'account:own:read', 'account:own:create']
 /** Any of these opens the proxies page. */
 export const PROXY_PAGE_PERMS = ['proxy:read', 'proxy:own:read', 'proxy:own:manage']

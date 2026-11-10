@@ -94,17 +94,17 @@ for (const name of DEVICES) {
       // The submenus (core directories and plugin sections) start folded; open them all to list every page.
       await page.$$eval('aside nav [aria-expanded="false"]', buttons => buttons.forEach(b => b.click()))
       const sidebar = await page.$$eval('aside nav a[href]', links => links.map(a => a.getAttribute('href')))
-      pages = [...new Set([...sidebar, ...(await settingsPages(page)), ...LINKED_PAGES])]
+      pages = [...new Set([...sidebar, ...(await settingsPages(page))])]
     })
     after(() => browser?.close())
 
     test('the menu and system settings list the console pages', () => {
       assert.ok(pages.length > 10, `pages: ${pages.join(', ')}`)
-      for (const path of CARD_PAGES) assert.ok(pages.includes(path), `${path} is not in the menu`)
+      for (const path of CARD_PAGES.filter(p => !LINKED_PAGES.includes(p))) assert.ok(pages.includes(path), `${path} is not in the menu`)
     })
 
     test('no page scrolls sideways; list pages show cards, the main ones within the first screen', async t => {
-      for (const path of pages) {
+      for (const path of [...pages, ...LINKED_PAGES]) {
         await t.test(path, async () => {
           await page.goto(`${BASE}${path}`)
           await page.waitForLoadState('networkidle')

@@ -424,19 +424,24 @@ export function hasCoreSettings(key: string, has: (perm: string) => boolean): bo
   return key === CORE_SETTINGS_KEY && has('settings:read')
 }
 
-/** Whether the console renders the plugin's settings as a form: has_settings is false for native settings (§75.5). */
-function hasSettingsForm(p: Pick<PluginSummary, 'key' | 'has_settings'>): boolean {
-  return p.key !== CORE_SETTINGS_KEY && !!p.has_settings
+/**
+ * The page of system settings that holds a plugin's settings (CONTRACTS §90):
+ * the core view's, or the page of the form the console renders (has_settings
+ * is false for native settings, §75.5); undefined without either.
+ */
+export function consoleSettingsPath(p: Pick<PluginSummary, 'key' | 'has_settings'>, has: (perm: string) => boolean): string | undefined {
+  if (hasCoreSettings(p.key, has)) return CCGATEWAY_PAGE
+  return p.has_settings && p.key !== CORE_SETTINGS_KEY ? pluginSettingsPath(p.key) : undefined
 }
 
 /**
- * The page of system settings that holds a plugin's settings (CONTRACTS §90),
- * where the settings view and the plugin list open them: the page of its
- * form, or the core view's; undefined without either.
+ * Where the plugin list opens a plugin's settings: their page of system
+ * settings while the plugin is enabled, as the settings view lists it only
+ * then, else the settings tab of its detail page.
  */
-export function consoleSettingsPath(p: Pick<PluginSummary, 'key' | 'has_settings'>, has: (perm: string) => boolean): string | undefined {
-  if (hasSettingsForm(p)) return pluginSettingsPath(p.key)
-  return hasCoreSettings(p.key, has) ? CCGATEWAY_PAGE : undefined
+export function pluginListSettingsPath(p: Pick<PluginSummary, 'key' | 'has_settings' | 'status'>, has: (perm: string) => boolean): string | undefined {
+  const page = consoleSettingsPath(p, has)
+  return page && p.status !== 'enabled' ? `/plugins/${encodeURIComponent(p.key)}?tab=settings` : page
 }
 
 export interface PluginSettings {

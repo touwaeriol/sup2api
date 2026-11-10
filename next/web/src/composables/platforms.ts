@@ -1,16 +1,12 @@
 import { ref } from 'vue'
 import { api } from '@sub2api/host'
-import type { LText, MyPlatform, Platform, PlatformEndpoint } from '@/api/types'
+import type { LText, Platform, PlatformEndpoint } from '@/api/types'
 import { lt } from '@/i18n'
-import { useAuthStore } from '@/stores/auth'
-import { ACCOUNT_PAGE_PERMS } from './useOwnership'
 
-// Gateway platforms. Admins with account:read (or an own-level account key,
-// CONTRACTS §21.2) load GET /platforms (CONTRACTS
-// §13, with account types); everyone else loads GET /me/platforms (§14.1:
-// every available platform and its endpoints, no account types). When both
-// fail, the built-in catalog below is used; plugin platforms then show their
-// id only.
+// Gateway platforms: GET /me/platforms (CONTRACTS §14.1) lists every
+// available platform and its endpoints to any signed-in user. When it fails,
+// the built-in catalog below is used; plugin platforms then show their id
+// only.
 
 const ep = (id: string, method: string, path: string, protocol: string, billing = 'usage'): PlatformEndpoint => ({ id, method, path, protocol, billing })
 
@@ -20,8 +16,7 @@ export const BUILTIN_PLATFORMS: Platform[] = [
     id: 'anthropic',
     label: { en: 'Anthropic', zh: 'Anthropic' },
     builtin: true,
-    endpoints: [ep('messages', 'POST', '/v1/messages', 'anthropic.messages'), ep('count_tokens', 'POST', '/v1/messages/count_tokens', 'anthropic.count_tokens', 'free')],
-    account_types: []
+    endpoints: [ep('messages', 'POST', '/v1/messages', 'anthropic.messages'), ep('count_tokens', 'POST', '/v1/messages/count_tokens', 'anthropic.count_tokens', 'free')]
   },
   {
     id: 'openai',
@@ -31,8 +26,7 @@ export const BUILTIN_PLATFORMS: Platform[] = [
       ep('chat_completions', 'POST', '/v1/chat/completions', 'openai.chat'),
       ep('responses', 'POST', '/v1/responses', 'openai.responses'),
       ep('embeddings', 'POST', '/v1/embeddings', 'openai.embeddings')
-    ],
-    account_types: []
+    ]
   },
   {
     id: 'gemini',
@@ -42,8 +36,7 @@ export const BUILTIN_PLATFORMS: Platform[] = [
       ep('generate_content', 'POST', '/v1beta/models/:model:generateContent', 'gemini.generate'),
       ep('stream_generate_content', 'POST', '/v1beta/models/:model:streamGenerateContent', 'gemini.stream_generate'),
       ep('count_tokens', 'POST', '/v1beta/models/:model:countTokens', 'gemini.count_tokens', 'free')
-    ],
-    account_types: []
+    ]
   }
 ]
 
@@ -52,37 +45,14 @@ const loaded = ref(false)
 /** true when the list came from the server (plugin platforms included). */
 const complete = ref(false)
 let pending: Promise<void> | null = null
-let loadedFor: number | null = null
-
-function normalize(p: Platform | MyPlatform): Platform {
-  return { ...p, endpoints: p.endpoints || [], account_types: (p as Platform).account_types || [] }
-}
-
-/** GET /me/platforms, normalized to Platform (no account types). */
-async function fetchMyPlatforms(): Promise<Platform[]> {
-  const r = await api.get<MyPlatform[]>('/me/platforms')
-  return (Array.isArray(r) ? r : []).map(normalize)
-}
 
 export function usePlatforms() {
-  const auth = useAuthStore()
-
-  function load(force = false): Promise<void> {
-    // The cache is per user: /platforms and /me/platforms differ by permission.
-    const who = auth.me?.id ?? null
-    if (who !== loadedFor) force = true
-    if (pending && !force) return pending
-    loadedFor = who
-    const primary: Promise<Platform[]> = auth.has(ACCOUNT_PAGE_PERMS)
-      ? api
-          .get<Platform[]>('/platforms')
-          .then((r) => (Array.isArray(r) ? r : []).map(normalize))
-          // e.g. the permission was just revoked: the user endpoint still works.
-          .catch(() => fetchMyPlatforms())
-      : fetchMyPlatforms()
-    pending = primary
+  /** Loads the list once for every caller; a failed load is tried again by the next one. */
+  function load(): Promise<void> {
+    pending ??= api
+      .get<Platform[]>('/me/platforms')
       .then((list) => {
-        platforms.value = list
+        platforms.value = (Array.isArray(list) ? list : []).map((p) => ({ ...p, endpoints: p.endpoints || [] }))
         complete.value = true
       })
       .catch(() => {

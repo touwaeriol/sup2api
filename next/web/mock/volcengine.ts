@@ -15,7 +15,7 @@ if (process.env.SUB2API_MOCK_VOLCENGINE === '1') {
     return JSON.parse(readFileSync(absolute,'utf8'))
   }
   const manifest = read('manifest.json')
-  const platforms = [...builtinPlatforms, ...manifest.platforms.map((p: any) => ({ ...p, builtin: false, plugin_key: manifest.key, plugin_name: manifest.name }))]
+  const platforms = [...builtinPlatforms, ...manifest.platforms.map((p: any) => ({ ...p, builtin: false }))]
   const accountTypes = manifest.accountTypes.map((type: any) => ({
     plugin_key: manifest.key, plugin_name: manifest.name, plugin_version: manifest.version,
     asset_base: `/plugin-ui/${manifest.key}/${manifest.version}`, trust: 'official',
@@ -26,7 +26,7 @@ if (process.env.SUB2API_MOCK_VOLCENGINE === '1') {
     endpoints: type.platforms.flatMap((p: any) => (platforms.find(x => x.id===p.platform)?.endpoints || []).map((e: any) => ({ ...e,platform:p.platform,native:true,grade:'native' })))
   }))
   on('GET','/account-types',()=>accountTypes)
-  on('GET','/platforms',()=>platforms.map(p=>({ ...p,account_types:accountTypes.filter((a: any)=>a.platforms.some((s: any)=>s.id===p.id)).map((a: any)=>({plugin_key:a.plugin_key,type:a.type,label:a.label})) })))
+  on('GET','/me/platforms',()=>platforms.map(p=>({ id:p.id,label:p.label,builtin:p.builtin,endpoints:p.endpoints })))
   on('GET','/account-types/volcengine/:type/form',req=>{
     const type=manifest.accountTypes.find((a: any)=>a.id===req.params.type)
     if (!type) return fail(404,'not_found','Unknown Volcengine account type')

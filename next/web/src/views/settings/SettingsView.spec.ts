@@ -18,7 +18,7 @@ const route = reactive<{ path: string; meta: { parent?: string }; query: { tab?:
   query: { tab: 'billing' }
 })
 /** The pages above a page (meta.parent), as the real routes declare them. */
-const PARENTS: Record<string, string> = { '/prices/sources': '/prices' }
+const PARENTS: Record<string, string> = { '/prices/sources': '/prices', '/prices': '/settings' }
 const router = { replace: vi.fn(), push: vi.fn(), resolve: (path: string) => ({ meta: { parent: PARENTS[path] } }) }
 vi.mock('vue-router', async original => ({ ...(await original<object>()), useRoute: () => route, useRouter: () => router }))
 vi.mock('@sub2api/host', async original => ({ ...(await original<object>()), api }))
@@ -268,6 +268,7 @@ describe('useSettingsMenu', () => {
     await flushPromises()
     route.query = {}
     route.path = '/groups'
+    route.meta = { parent: '/settings' }
     expect(activeKeys(groups.value)).toEqual(['/groups'])
     route.path = '/prices/sources/3/sync'
     route.meta = { parent: '/prices/sources' }
@@ -284,7 +285,6 @@ describe('useSettingsMenu', () => {
     route.query = {}
     expect(activeKeys(groups.value)).toEqual(['plugin:mailer'])
     route.path = CCGATEWAY_PAGE
-    route.meta = {}
     expect(activeKeys(groups.value)).toEqual(['plugin:ccgateway'])
   })
 

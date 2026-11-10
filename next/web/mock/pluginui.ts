@@ -1,7 +1,7 @@
 import { readFileSync, existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { join, normalize } from 'node:path'
-import { now, on, paginate } from './router'
+import { now, on } from './router'
 import { moderationAsset, moderationUIPlugin } from './moderation'
 import { dynweightAsset, dynweightUIPlugin } from './dynweight'
 import { codexAsset, codexUIPlugin } from './codex'
@@ -26,30 +26,6 @@ const uiPlugins = [
   dynweightUIPlugin,
   codexUIPlugin,
   controlsUIPlugin,
-  {
-    key: 'anthropic',
-    version: '0.1.0',
-    name: { en: 'Anthropic', zh: 'Anthropic' },
-    asset_base: '/plugin-ui/anthropic/0.1.0-dev',
-    pages: {
-      models: {
-        type: 'table',
-        title: { en: 'Model catalog', zh: '模型目录' },
-        source: 'GET /models',
-        search: 'q',
-        columns: [
-          { key: 'id', label: { en: 'Model', zh: '模型' } },
-          { key: 'family', label: { en: 'Family', zh: '系列' }, format: 'badge' },
-          { key: 'context_window', label: { en: 'Context', zh: '上下文' }, format: 'number' },
-          { key: 'input_price', label: { en: 'Input $/M', zh: '输入 $/M' }, format: 'currency' },
-          { key: 'released_at', label: { en: 'Released', zh: '发布时间' }, format: 'datetime' }
-        ]
-      }
-    },
-    slots: [],
-    native_entry: '',
-    trust: 'official'
-  },
   {
     key: 'guard',
     version: '0.1.0',
@@ -87,28 +63,6 @@ const uiPlugins = [
 const hasExtension = (p: MockUIPlugin) =>
   !!(p.menus?.length || Object.keys(p.pages || {}).length || p.slots?.length || p.account_actions?.length || p.native_entry)
 on('GET', '/ui/plugins', () => uiPlugins.filter(hasExtension))
-
-// The anthropic model catalog is the mock's declarative table. It declares
-// `search: 'q'` and the route below really honours ?q= and really paginates
-// (it answers with a page envelope), so `npm run dev` exercises both halves of
-// the declaration: the box appears because the page declared a parameter, and
-// DeclarativeTable reads server pagination off the response instead of
-// guessing it from the row count. Giving the demo route only three rows used
-// to hide the bug this replaces - the old heuristic said "client paged" until
-// the data outgrew one page.
-const MOCK_MODELS = [
-  { id: 'claude-opus-4-1', family: 'opus', context_window: 200000, input_price: '15', released_at: '2025-08-05T00:00:00Z' },
-  { id: 'claude-sonnet-4-5', family: 'sonnet', context_window: 1000000, input_price: '3', released_at: '2025-09-29T00:00:00Z' },
-  { id: 'claude-haiku-4-5', family: 'haiku', context_window: 200000, input_price: '1', released_at: '2025-10-15T00:00:00Z' }
-]
-
-on('GET', '/p/anthropic/models', (req) => {
-  const q = String(req.query.q || '')
-    .trim()
-    .toLowerCase()
-  const items = q ? MOCK_MODELS.filter((m) => m.id.toLowerCase().includes(q) || m.family.includes(q)) : MOCK_MODELS
-  return paginate(items, req.query)
-})
 
 let demoSettings: Record<string, unknown> = { endpoint: 'https://demo.example.com', retries: 3, verbose: false }
 on('GET', '/p/demo/settings', () => demoSettings)

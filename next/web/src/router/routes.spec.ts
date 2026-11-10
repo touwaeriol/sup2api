@@ -1,11 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { flushPromises, mount } from '@vue/test-utils'
+import { defineComponent } from 'vue'
+import { i18n } from '@/i18n'
 import { CCGATEWAY_PAGE } from '@/views/plugins/pluginUtil'
+import { useSettingsMenu } from '@/views/settings/settingsNav'
 import { router } from './index'
 
 const auth = vi.hoisted(() => ({ denied: [] as string[] }))
 vi.mock('@sub2api/host', async original => ({ ...(await original<object>()), session: { get: () => 'token' } }))
 vi.mock('@/stores/auth', () => ({
   useAuthStore: () => ({ me: {}, has: (perm: string | string[]) => [perm].flat().some(p => !auth.denied.includes(p)) })
+}))
+// GET /plugins: a plugin with a settings form, and the one whose settings are a core page.
+vi.mock('@/composables/lookups', async original => ({
+  ...(await original<object>()),
+  fetchFirstPage: () =>
+    Promise.resolve([
+      { key: 'mailer', status: 'enabled', has_settings: true },
+      { key: 'ccgateway', status: 'enabled' }
+    ])
 }))
 // The pages the navigations below end on; the routes are what is under test.
 const Page = vi.hoisted(() => ({ default: { render: () => null } }))
@@ -26,21 +39,29 @@ async function follow(link: string): Promise<string> {
 
 const metaOf = (path: string) => router.resolve(path).meta
 
+/** The sidebar view a page opens in: the one its route declares, else that of the page above it. */
+function viewOf(path: string): string | undefined {
+  const { sidebar, parent } = metaOf(path)
+  return sidebar ?? (parent ? viewOf(parent) : undefined)
+}
+
 beforeEach(() => {
   auth.denied = []
 })
 
 describe('where pages belong (CONTRACTS §90)', () => {
-  it('opens the settings page and the plugin settings below it in the settings view', () => {
-    expect(metaOf('/settings').sidebar).toBe('settings')
-    expect(metaOf('/plugins/mailer/settings')).toMatchObject({ parent: '/settings' })
+  it('opens every page the settings menu lists, and the pages below them, in the settings view', async () => {
+    let menu!: ReturnType<typeof useSettingsMenu>
+    mount(defineComponent({ setup: () => ((menu = useSettingsMenu()), () => null) }), { global: { plugins: [i18n, router] } })
+    await flushPromises()
+    const listed = menu.value.flatMap(g => g.links.map(l => l.item.path))
+    expect(listed).toEqual(expect.arrayContaining(['/settings?tab=sticky', '/groups', '/prices', '/plugins/mailer/settings', CCGATEWAY_PAGE]))
+    for (const path of [...listed, '/prices/new', '/prices/sources/3/sync']) expect([path, viewOf(path)]).toEqual([path, 'settings'])
   })
 
-  it('opens groups, model prices with the pages below them, and the CCGateway page in the settings view', () => {
-    for (const path of ['/groups', '/prices', CCGATEWAY_PAGE]) expect([path, metaOf(path).sidebar]).toEqual([path, 'settings'])
-    expect(metaOf('/prices/new').parent).toBe('/prices')
-    expect(metaOf('/prices/sources/3/sync').parent).toBe('/prices/sources')
-    expect(metaOf('/prices/sources').parent).toBe('/prices')
+  it('declares the view once, on the settings page: the others join it as pages below', () => {
+    const declaring = router.getRoutes().filter(r => r.meta.sidebar)
+    expect(declaring.map(r => r.path)).toEqual(['/settings'])
   })
 
   it('leaves the feature pages of the sidebar without a parent', () => {

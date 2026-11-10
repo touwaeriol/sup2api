@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import en from '@/i18n/locales/en/plugins'
 import zh from '@/i18n/locales/zh/plugins'
-import { CCGATEWAY_PAGE, HOST_PERMISSION_RISK, accountTypesOf, consoleSettings, consoleSettingsPath, endpointText, hpKey, isPluginKey, nativeSettingsPath, platformsOf, pluginSettingsPath, pluginStatusTone, settingsFieldErrors } from './pluginUtil'
+import { CCGATEWAY_PAGE, HOST_PERMISSION_RISK, accountTypesOf, consoleSettings, consoleSettingsPath, endpointText, hpKey, isPluginKey, nativeSettingsPath, platformsOf, pluginListSettingsPath, pluginSettingsPath, pluginStatusTone, settingsFieldErrors } from './pluginUtil'
 
 describe('plugin endpoint declarations', () => {
   it('preserves the same subset in manifests and installation reviews', () => {
@@ -90,6 +90,23 @@ describe("the page of system settings that holds a plugin's settings", () => {
   it("is ccgateway's own page, for settings:read, whatever its manifest says", () => {
     expect(consoleSettingsPath({ key: 'ccgateway', has_settings: true }, all)).toBe(CCGATEWAY_PAGE)
     expect(consoleSettingsPath({ key: 'ccgateway' }, perm => perm !== 'settings:read')).toBeUndefined()
+  })
+})
+
+describe('where the plugin list opens settings', () => {
+  const all = () => true
+  it('is their page of system settings for an enabled plugin', () => {
+    expect(pluginListSettingsPath({ key: 'mailer', has_settings: true, status: 'enabled' }, all)).toBe(pluginSettingsPath('mailer'))
+    expect(pluginListSettingsPath({ key: 'ccgateway', status: 'enabled' }, all)).toBe(CCGATEWAY_PAGE)
+  })
+  it('is the settings tab of the detail page for a plugin the settings view does not list', () => {
+    expect(pluginListSettingsPath({ key: 'mailer', has_settings: true, status: 'disabled' }, all)).toBe('/plugins/mailer?tab=settings')
+    expect(pluginListSettingsPath({ key: 'ccgateway', status: 'installed' }, all)).toBe('/plugins/ccgateway?tab=settings')
+  })
+  it('is nowhere without settings the console holds', () => {
+    expect(pluginListSettingsPath({ key: 'relay', status: 'enabled' }, all)).toBeUndefined()
+    expect(pluginListSettingsPath({ key: 'relay', status: 'disabled' }, all)).toBeUndefined()
+    expect(pluginListSettingsPath({ key: 'ccgateway', status: 'disabled' }, perm => perm !== 'settings:read')).toBeUndefined()
   })
 })
 

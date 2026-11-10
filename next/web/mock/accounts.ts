@@ -9,7 +9,7 @@ import { customAccountTypes, customCredentialErrors, customForm } from './custom
 import { checkControls, controlsAccountTypes, controlsForm } from './controls'
 
 // Mock handlers: accounts, account types (form modes schema + iframe) and
-// GET /platforms (CONTRACTS §13). Ownership (CONTRACTS §21): own-level keys
+// GET /me/platforms (CONTRACTS §14.1). Ownership (CONTRACTS §21): own-level keys
 // only reach accounts the caller created; sign in as vendor@example.com to
 // try it (see core.ts).
 
@@ -641,13 +641,7 @@ export function uninstallPluginAccounts(pluginKey: string, purge: boolean): numb
   return purge ? n : 0
 }
 
-on('GET', '/platforms', () =>
-  activePlatforms().map((p) => ({
-    ...p,
-    account_types: accountTypeDecls.filter((d) => d.supports.includes(p.id)).map((d) => ({ plugin_key: d.plugin_key, type: d.type, label: d.label }))
-  }))
-)
-// Any signed-in user: available platforms and endpoints, no account types (CONTRACTS §14.1).
+// Any signed-in user: available platforms and endpoints (CONTRACTS §14.1).
 on('GET', '/me/platforms', () => activePlatforms().map((p) => ({ id: p.id, label: p.label, builtin: p.builtin, endpoints: p.endpoints })))
 const autoDisableSettings = {
   enabled: true,
