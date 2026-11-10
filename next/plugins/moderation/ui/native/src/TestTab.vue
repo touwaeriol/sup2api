@@ -53,7 +53,7 @@ function onKey(e: KeyboardEvent) {
   <div>
     <SHint class="mod-hint">{{ t('test.hint') }}</SHint>
 
-    <SGrid template="repeat(auto-fit, minmax(340px, 1fr))" class="mod-test-grid">
+    <SGrid template="repeat(auto-fit, minmax(min(340px, 100%), 1fr))" class="mod-test-grid">
       <SCard :title="t('test.title')">
         <div class="mod-form">
           <SField :label="t('test.flow')">

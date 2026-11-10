@@ -71,13 +71,13 @@ const goTab = (tab: TabKey) => emit('go-tab', tab)
       </SGrid>
     </template>
 
-    <SGrid template="repeat(auto-fit, minmax(360px, 1fr))" class="mod-section">
+    <SGrid template="repeat(auto-fit, minmax(min(360px, 100%), 1fr))" class="mod-section">
       <AttentionUsers @open-watch="emit('open-watch', $event)" @go-tab="goTab" />
       <AiReviewCard :review="status.data.value?.ai_review" :today="status.data.value?.today" @go-tab="goTab" />
     </SGrid>
     <TodayCostCard v-if="status.data.value" :costs="status.data.value.costs" class="mod-section" />
     <PerformanceCard class="mod-section" />
-    <SGrid template="repeat(auto-fit, minmax(360px, 1fr))" class="mod-section">
+    <SGrid template="repeat(auto-fit, minmax(min(360px, 100%), 1fr))" class="mod-section">
       <CategoriesCard />
       <FunnelCard :funnels="status.data.value?.funnels || []" @go-tab="goTab" />
     </SGrid>
