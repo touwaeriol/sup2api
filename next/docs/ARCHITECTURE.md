@@ -1448,7 +1448,7 @@ anthropic 平台及其端点、用量规则、默认粘性规则由**核心内�
 | 错误分类 | 400 直接返回；401/403 切换并禁用账号；429 切换并冷却到 `retry-after`（默认 60 秒）；529 切换并冷却 30 秒；5xx 切换并冷却 10 秒 |
 | 模型目录 | 自己的 schema `plg_anthropic.model_catalog` + 迁移 `0001_init.sql`；接口 `GET /models`；用户权限 `model_catalog:read`（0.3.1 起没有控制台菜单和页面，CONTRACTS §90） |
 | 升级演示 | 测试用 `0.2.0` 增加 `0002_add_family.sql`（加字段并回填），验证升级迁移和旧数据迁移 |
-| 权限 | `platform.register`、`accounts.credentials`（`{"types":"own"}`）、`db.schema`、`kv`、`routes.admin`、`ui.menu` |
+| 权限 | `platform.register`、`db.schema`、`routes.admin`、`kv` |
 
 另有市场插件 **relay（Claude 中转）**：只声明账号类型 `relay_key`（支持平台 `anthropic`，按平台覆盖 requestFields/passHeaders），演示多个插件的账号类型在同一分组中共同服务 `/v1/messages`。
 
@@ -1585,7 +1585,7 @@ flowchart LR
 2. 超级管理员创建角色"运营"（只有账号、代理权限）并分配给新用户，该用户只能看到对应菜单，调用其他接口返回 403
 
 **插件与平台**
-3. 从市场索引安装 anthropic（签名为 official）→ 确认授权 → 启用 → 两个节点均为 active；模型目录接口（`GET /p/anthropic/models`）返回数据，数据来自插件 schema
+3. 从市场索引安装 anthropic（签名为 official）→ 确认授权 → 启用 → 两个节点均为 active；模型目录接口（`GET /api/v1/p/anthropic/models`）返回数据，数据来自插件 schema
 4. 新建账号：选择"Anthropic / API Key"→ 插件提供的录入界面 → 保存成功、凭证脱敏
 5. 升级到 anthropic 0.2.0：迁移执行一次、旧数据已回填、两个节点切换期间请求不中断
 6. 禁用插件：账号保留、插件权限变灰、其端点消失（404）；重新启用恢复；内置插件不能卸载

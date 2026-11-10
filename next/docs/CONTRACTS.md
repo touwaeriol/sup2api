@@ -6937,7 +6937,7 @@ node 任务（可工作节点各跑，`RequireWork`）：
 | system 系统（标签“系统 / System”） | 集群节点、定时任务、核心升级、审计日志、系统设置 `/settings` | |
 
 - 分组（`/groups`，`group:read`）、模型价格（`/prices`，`price:read`）、CCGateway（`/system/ccgateway`，`settings:read`）没有菜单项，由控制台列在系统设置视图里（90.2）；页面、地址、权限和接口不变。
-- 余额流水（`/ledger`，`balance:all:read`）没有菜单项，从用户列表的行操作打开；页面和接口不变。
+- 余额流水（`/ledger`，`balance:all:read`）没有菜单项，从用户列表的行操作打开；页面和接口不变。有 `balance:all:read` 而没有 `user:read` 的自定义角色只能凭地址打开它。
 - 平台页取消，没有菜单项（地址见 90.4）；接口 `GET /platforms`、`GET /me/platforms` 不变。
 - 模型目录：anthropic 0.3.1 去掉了菜单 `anthropic-models`、页面 `models` 和宿主权限 `ui.menu`；插件接口 `GET /api/v1/p/anthropic/models` 和权限 `model_catalog:read` 保留。
 - 系统设置：id `settings`，是 `system` 区最后一个核心项，持有 `settings:read`、`sticky:read`、`group:read`、`price:read` 任意一个就返回：后两个是因为分组、模型价格从系统设置视图进入，内置运维角色有它们而没有 `settings` / `sticky` 权限。`section:"system"` 的插件菜单仍并入 `system` 区，排在 `/settings` 之后（如 dynweight 0.5.4 的动态权重），和其余项一起进“系统”目录。

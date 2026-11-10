@@ -85,9 +85,9 @@ var coreMenus = []coreMenuSection{
 		{"publishers", lt("Publishers", "发布者"), "publisher", "/publishers", []string{"publisher:read"}},
 	}},
 	// Operations pages, then the one entry of system settings, shown to
-	// whoever may open a page of the settings view: a configuration page
-	// (settings, sticky sessions), groups or model prices. Plugin menus with
-	// section "system" still join it, after /settings (dynweight 0.5.4).
+	// holders of a permission one of its core pages needs: a configuration
+	// page (settings, sticky sessions), groups or model prices. Plugin menus
+	// with section "system" still join it, after /settings (dynweight 0.5.4).
 	{"system", lt("System", "系统"), []coreMenuItem{
 		{"nodes", lt("Cluster nodes", "集群节点"), "node", "/nodes", []string{"node:read"}},
 		{"tasks", lt("Scheduled tasks", "定时任务"), "clock", "/system/tasks", []string{"task:read"}},
@@ -139,7 +139,7 @@ func (s *Service) Menus(ctx context.Context, userID int64) ([]MenuSection, error
 			out[i].Items = append(out[i].Items, MenuItem{ID: it.id, Label: it.label, Icon: it.icon, Path: it.path})
 		}
 	}
-	for _, pm := range pluginMenus(s.generation(), set) {
+	for _, pm := range s.pluginMenus(set) {
 		i := add(pm.sectionKey, pm.sectionLabel, pm.sectionOrder)
 		out[i].Items = append(out[i].Items, pm.MenuItem)
 	}
@@ -163,7 +163,11 @@ type pluginMenu struct {
 	order        int
 }
 
-func pluginMenus(gen core.Generation, set core.PermissionSet) []pluginMenu {
+func (s *Service) pluginMenus(set core.PermissionSet) []pluginMenu {
+	if s.plugins == nil {
+		return nil
+	}
+	gen := s.plugins.Current()
 	if gen == nil {
 		return nil
 	}
@@ -216,14 +220,6 @@ func pluginMenus(gen core.Generation, set core.PermissionSet) []pluginMenu {
 		return list[i].ID < list[j].ID
 	})
 	return list
-}
-
-// generation returns the current plugin generation, nil without a registry.
-func (s *Service) generation() core.Generation {
-	if s.plugins == nil {
-		return nil
-	}
-	return s.plugins.Current()
 }
 
 func hasAny(set core.PermissionSet, perms []string) bool {

@@ -7,8 +7,9 @@ import (
 
 // AC 3: anthropic is a built-in plugin: the core installs and enables it at
 // startup (signed as official, every host permission granted), it is active
-// on both nodes, it cannot be uninstalled, the "model catalog" menu appears
-// and its data comes from the plugin schema. The market still lists it.
+// on both nodes, it cannot be uninstalled, it declares no console UI and its
+// model catalog route serves data from the plugin schema. The market still
+// lists it.
 func TestAC03_InstallAnthropicFromMarket(t *testing.T) {
 	e := Setup(t)
 	admin := e.Admin()
