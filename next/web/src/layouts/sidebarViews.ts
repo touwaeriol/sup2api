@@ -51,8 +51,9 @@ export function useViewEntries(): ComputedRef<NavItem[]> {
 /**
  * The view the current page opens in: the one its route declares, else the
  * nearest page above it; none on a console page. A caller whose menu lacks the
- * view's entry keeps the console menu (a plugin's settings page opened with
- * that plugin's permission alone); until the menu loads the route decides.
+ * view's entry keeps the console menu (an older core lists groups and model
+ * prices in it and gives their readers no settings entry); until the menu
+ * loads the route decides.
  */
 export function useSidebarView(): ComputedRef<SidebarView | undefined> {
   const app = useAppStore()

@@ -413,8 +413,8 @@ export interface PluginDetail {
 const CORE_SETTINGS_KEY = 'ccgateway'
 
 /**
- * The page of that core view, a page of system settings (CONTRACTS §90). Its
- * first segment is one the SDK reserves for the console
+ * The page of that core view, opened from the installed plugins (CONTRACTS
+ * §90). Its first segment is one the SDK reserves for the console
  * (manifest.ConsoleSegments), so no plugin endpoint can take the address.
  */
 export const CCGATEWAY_PAGE = '/system/ccgateway'
@@ -425,23 +425,15 @@ export function hasCoreSettings(key: string, has: (perm: string) => boolean): bo
 }
 
 /**
- * The page of system settings that holds a plugin's settings (CONTRACTS §90):
- * the core view's, or the page of the form the console renders (has_settings
- * is false for native settings, §75.5); undefined without either.
+ * Where the installed plugins list opens a plugin's settings, the one place
+ * the console offers them (CONTRACTS §90): the page of the core view, or the
+ * settings tab of the detail page for the form the console renders
+ * (has_settings is false for native settings, §75.5); undefined without
+ * either.
  */
 export function consoleSettingsPath(p: Pick<PluginSummary, 'key' | 'has_settings'>, has: (perm: string) => boolean): string | undefined {
   if (hasCoreSettings(p.key, has)) return CCGATEWAY_PAGE
-  return p.has_settings && p.key !== CORE_SETTINGS_KEY ? pluginSettingsPath(p.key) : undefined
-}
-
-/**
- * Where the plugin list opens a plugin's settings: their page of system
- * settings while the plugin is enabled, as the settings view lists it only
- * then, else the settings tab of its detail page.
- */
-export function pluginListSettingsPath(p: Pick<PluginSummary, 'key' | 'has_settings' | 'status'>, has: (perm: string) => boolean): string | undefined {
-  const page = consoleSettingsPath(p, has)
-  return page && p.status !== 'enabled' ? `/plugins/${encodeURIComponent(p.key)}?tab=settings` : page
+  return p.has_settings && p.key !== CORE_SETTINGS_KEY ? `/plugins/${encodeURIComponent(p.key)}?tab=settings` : undefined
 }
 
 export interface PluginSettings {
@@ -468,7 +460,7 @@ export function consoleSettings(s: PluginSettings | null | undefined): PluginSet
   return s && s.schema && (s.mode ?? 'schema') === 'schema' ? s : null
 }
 
-/** A plugin's settings form on its own page, a page of system settings (CONTRACTS §90). */
+/** A plugin's settings form on a page of its own: for holders of the plugin's settings permission alone, and for old links. */
 export function pluginSettingsPath(key: string): string {
   return `/plugins/${encodeURIComponent(key)}/settings`
 }

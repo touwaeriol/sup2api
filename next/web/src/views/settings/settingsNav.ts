@@ -1,19 +1,14 @@
-import { computed, onMounted, shallowRef, type ComputedRef, type Ref } from 'vue'
+import { computed, type ComputedRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
-import type { PluginSummary } from '@/api/types'
-import { fetchFirstPage } from '@/composables/lookups'
-import { lt } from '@/i18n'
 import type { ViewGroup, ViewLink } from '@/layouts/sidebarViews'
 import { useRouteLineage } from '@/layouts/useActiveMenu'
 import { useAuthStore } from '@/stores/auth'
-import { consoleSettingsPath } from '@/views/plugins/pluginUtil'
 
 /**
  * System settings (CONTRACTS §90): the configuration pages of the settings
  * page (?tab=<key>) and, in the sidebar's settings view, the pages with an
- * address of their own that belong with them: groups, model prices and the
- * settings of the enabled plugins.
+ * address of their own that belong with them: groups and model prices.
  */
 
 /** The settings page: every configuration page is one of its tabs. */
@@ -31,11 +26,10 @@ interface Page {
   icon: string
 }
 
-/** A group of the settings view: its pages, or (`plugins`) the settings of the plugins. */
+/** A group of the settings view. */
 interface Group {
   key: string
   pages: Page[]
-  plugins?: true
 }
 
 /** A configuration page. */
@@ -74,7 +68,6 @@ const LAYOUT: Group[] = [
       page('notifications', 'settings:read', 'settings.tabs.notifications', 'inbox')
     ]
   },
-  { key: 'pluginSettings', pages: [], plugins: true },
   {
     key: 'runtime',
     pages: [
@@ -117,68 +110,22 @@ export function settingsLanding(): string | undefined {
   return PAGES.find(p => !p.tab && auth.has(p.perm))?.path
 }
 
-/**
- * The enabled plugins. Kept between visits of the settings view: it draws the
- * last answer at once and refreshes behind it, so the groups below do not
- * jump every time it opens.
- */
-const enabledPlugins = shallowRef<PluginSummary[]>([])
-let lastRefresh = 0
-
-function useEnabledPlugins(): Ref<PluginSummary[]> {
-  const auth = useAuthStore()
-  async function load(): Promise<PluginSummary[]> {
-    // Not this caller's to list: nothing an earlier user was shown stays either.
-    if (!auth.has('plugin:read')) return []
-    try {
-      const list = await fetchFirstPage<PluginSummary>('/plugins')
-      return list.filter(p => p.status === 'enabled')
-    } catch {
-      // The group is an index; the plugin list page still reaches them.
-      return []
-    }
-  }
-  async function refresh() {
-    const mine = ++lastRefresh
-    const list = await load()
-    // A late answer to an earlier visit, an earlier user's even, is dropped.
-    if (mine === lastRefresh) enabledPlugins.value = list
-  }
-  onMounted(refresh)
-  return enabledPlugins
-}
-
-/** The menu of the sidebar's settings view: the pages of every group the caller may open, the plugins' settings among them. */
+/** The menu of the sidebar's settings view: the pages of every group the caller may open. */
 export function useSettingsMenu(): ComputedRef<ViewGroup[]> {
   const { t } = useI18n()
   const route = useRoute()
   const auth = useAuthStore()
   const { activeTab } = useSettingsNav()
-  const plugins = useEnabledPlugins()
   const lineage = useRouteLineage()
 
   const onSettingsPage = computed(() => route.path === SETTINGS_PAGE)
-  /** The open page is the one at `path` or a page below it. */
-  const within = (path: string) => lineage.value.includes(path)
   const pageLink = (p: Page): ViewLink => ({
     key: p.tab ?? p.path,
     item: { id: `settings:${p.tab ?? p.path}`, labelKey: p.label, icon: p.icon, path: p.path },
-    active: p.tab ? onSettingsPage.value && activeTab.value === p.tab : within(p.path)
+    // A page with an address of its own is lit on that page and on the pages below it.
+    active: p.tab ? onSettingsPage.value && activeTab.value === p.tab : lineage.value.includes(p.path)
   })
-  /** A plugin's entry, when its settings have a page this caller may open. */
-  const pluginLinks = (p: PluginSummary): ViewLink[] => {
-    const path = consoleSettingsPath(p, perm => auth.has(perm))
-    if (!path) return []
-    return [
-      {
-        key: `plugin:${p.key}`,
-        item: { id: `plugin-settings:${p.key}`, label: lt(p.name) || p.key, icon: 'puzzle', path, pluginKey: p.key },
-        active: within(path)
-      }
-    ]
-  }
-  const linksOf = (g: Group): ViewLink[] =>
-    g.plugins ? plugins.value.flatMap(pluginLinks) : g.pages.filter(p => auth.has(p.perm)).map(pageLink)
+  const linksOf = (g: Group): ViewLink[] => g.pages.filter(p => auth.has(p.perm)).map(pageLink)
 
   return computed(() =>
     LAYOUT.map(g => ({ key: g.key, label: t(`settings.groups.${g.key}`), links: linksOf(g) })).filter(g => g.links.length > 0)

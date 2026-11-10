@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { mount } from '@vue/test-utils'
 import { defineComponent } from 'vue'
 import { i18n } from '@/i18n'
 import { CCGATEWAY_PAGE } from '@/views/plugins/pluginUtil'
@@ -10,15 +10,6 @@ const auth = vi.hoisted(() => ({ denied: [] as string[] }))
 vi.mock('@sub2api/host', async original => ({ ...(await original<object>()), session: { get: () => 'token' } }))
 vi.mock('@/stores/auth', () => ({
   useAuthStore: () => ({ me: {}, has: (perm: string | string[]) => [perm].flat().some(p => !auth.denied.includes(p)) })
-}))
-// GET /plugins: a plugin with a settings form, and the one whose settings are a core page.
-vi.mock('@/composables/lookups', async original => ({
-  ...(await original<object>()),
-  fetchFirstPage: () =>
-    Promise.resolve([
-      { key: 'mailer', status: 'enabled', has_settings: true },
-      { key: 'ccgateway', status: 'enabled' }
-    ])
 }))
 // The pages the navigations below end on; the routes are what is under test.
 const Page = vi.hoisted(() => ({ default: { render: () => null } }))
@@ -50,13 +41,18 @@ beforeEach(() => {
 })
 
 describe('where pages belong (CONTRACTS §90)', () => {
-  it('opens every page the settings menu lists, and the pages below them, in the settings view', async () => {
+  it('opens every page the settings menu lists, and the pages below them, in the settings view', () => {
     let menu!: ReturnType<typeof useSettingsMenu>
     mount(defineComponent({ setup: () => ((menu = useSettingsMenu()), () => null) }), { global: { plugins: [i18n, router] } })
-    await flushPromises()
     const listed = menu.value.flatMap(g => g.links.map(l => l.item.path))
-    expect(listed).toEqual(expect.arrayContaining(['/settings?tab=sticky', '/groups', '/prices', '/plugins/mailer/settings', CCGATEWAY_PAGE]))
+    expect(listed).toEqual(expect.arrayContaining(['/settings?tab=sticky', '/groups', '/prices']))
     for (const path of [...listed, '/prices/new', '/prices/sources/3/sync']) expect([path, viewOf(path)]).toEqual([path, 'settings'])
+  })
+
+  it('opens plugin settings in the console view, under the installed plugins', () => {
+    for (const path of [CCGATEWAY_PAGE, '/plugins/mailer/settings']) {
+      expect([path, metaOf(path).parent, viewOf(path)]).toEqual([path, '/plugins', undefined])
+    }
   })
 
   it('declares the view once, on the settings page: the others join it as pages below', () => {

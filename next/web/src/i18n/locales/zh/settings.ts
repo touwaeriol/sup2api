@@ -5,7 +5,6 @@ export default {
     gateway: '网关',
     pricing: '分组与定价',
     billing: '计费与通知',
-    pluginSettings: '插件设置',
     runtime: '运行环境'
   },
   tabs: {

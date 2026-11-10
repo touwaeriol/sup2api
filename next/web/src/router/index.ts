@@ -87,7 +87,7 @@ const children: RouteRecordRaw[] = [
     }
   },
 
-  { path: CCGATEWAY_PAGE, component: () => import('@/views/ccgateway/CCGatewayView.vue'), meta: { perm: 'settings:read', title: 'ccgateway.title', parent: '/settings' } },
+  { path: CCGATEWAY_PAGE, component: () => import('@/views/ccgateway/CCGatewayView.vue'), meta: { perm: 'settings:read', title: 'ccgateway.title', parent: '/plugins' } },
   { path: 'plugins', component: () => import('@/views/plugins/PluginsView.vue'), meta: { perm: 'plugin:read', title: 'nav.items.plugins' } },
   {
     path: 'plugins/:key/versions/:version/consent',
@@ -112,7 +112,7 @@ const children: RouteRecordRaw[] = [
   {
     path: 'plugins/:key/settings',
     component: () => import('@/views/plugins/PluginSettingsView.vue'),
-    meta: { title: 'nav.crumbs.pluginSettings', parent: '/settings' }
+    meta: { title: 'nav.crumbs.pluginSettings', parent: '/plugins' }
   },
   { path: 'market', component: () => import('@/views/plugins/MarketView.vue'), meta: { perm: 'plugin:market:read', title: 'nav.items.market' } },
   { path: 'publishers', component: () => import('@/views/plugins/PublishersView.vue'), meta: { perm: 'publisher:read', title: 'nav.items.publishers' } },

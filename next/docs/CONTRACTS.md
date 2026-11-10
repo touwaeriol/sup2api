@@ -6913,9 +6913,9 @@ node 任务（可工作节点各跑，`RequireWork`）：
 - 读数：`core.AccountLimiter.ModelUsage`（`account/limiter.go`），`core.AccountRef.ModelLimitIndex`（`core/ports_identity.go`）
 - 前端：`web/src/views/settings/SchedulingPolicyView.vue`、`LoadBalanceSettingsCard.vue`
 
-## 90. 侧栏三组：控制台、个人中心、管理员；系统设置视图（2026-11-10，用户要求：参考 new-api 的菜单，分三类；第四版：分组、模型价格、插件设置进系统设置视图，平台、模型目录、余额流水的菜单取消；无迁移）
+## 90. 侧栏三组：控制台、个人中心、管理员；系统设置视图（2026-11-10，用户要求：参考 new-api 的菜单，分三类；第四版：分组、模型价格进系统设置视图，插件设置只从已安装插件列表打开，平台、模型目录、余额流水的菜单取消；无迁移）
 
-原则：设置归设置，功能归功能。功能页放在各自的区；系统设置只有 `/settings` 一个入口，配置页、分组、模型价格和插件设置都在它打开的系统设置视图里（90.2）。接口 `GET /me/menus` 的形状、区 id、SDK（`CoreMenuSections()`）和存储都不变。
+原则：设置归设置，功能归功能。功能页放在各自的区；系统设置只有 `/settings` 一个入口，配置页、分组、模型价格都在它打开的系统设置视图里（90.2）；插件的设置属于插件，只从已安装插件列表的“设置”按钮打开。接口 `GET /me/menus` 的形状、区 id、SDK（`CoreMenuSections()`）和存储都不变。
 
 侧栏按三组显示：
 
@@ -6936,7 +6936,7 @@ node 任务（可工作节点各跑，`RequireWork`）：
 | plugins 插件 | 已安装插件、插件市场、发布者；`section:"plugins"` 的插件菜单接在后面 | |
 | system 系统（标签“系统 / System”） | 集群节点、定时任务、核心升级、审计日志、系统设置 `/settings` | |
 
-- 分组（`/groups`，`group:read`）、模型价格（`/prices`，`price:read`）、CCGateway（`/system/ccgateway`，`settings:read`）没有菜单项，由控制台列在系统设置视图里（90.2）；页面、地址、权限和接口不变。
+- 分组（`/groups`，`group:read`）、模型价格（`/prices`，`price:read`）没有菜单项，由控制台列在系统设置视图里（90.2）；CCGateway（`/system/ccgateway`，`settings:read`）没有菜单项，从已安装插件列表里 ccgateway 一行的“设置”按钮打开；页面、地址、权限和接口不变。
 - 余额流水（`/ledger`，`balance:all:read`）没有菜单项，从用户列表的行操作打开；页面和接口不变。有 `balance:all:read` 而没有 `user:read` 的自定义角色只能凭地址打开它。
 - 平台页取消，没有菜单项（地址见 90.4）；接口 `GET /platforms`、`GET /me/platforms` 不变，控制台的平台列表一律取 `GET /me/platforms`。
 - 模型目录：anthropic 0.3.1 去掉了菜单 `anthropic-models`、页面 `models` 和宿主权限 `ui.menu`；插件接口 `GET /api/v1/p/anthropic/models` 和权限 `model_catalog:read` 保留。
@@ -6947,13 +6947,13 @@ node 任务（可工作节点各跑，`RequireWork`）：
 ### 90.2 系统设置视图
 
 - 侧栏有两种状态：控制台视图（默认）和系统设置视图。点击管理员组的“系统设置”，侧栏整体换成系统设置视图的菜单；顶部“返回控制台”回到进入前的页面，没有则回仪表盘。
-- 视图由路由决定：只有 `/settings` 的路由 meta `sidebar` 声明视图，视图里其余页面（`/groups`、`/prices`、`/system/ccgateway`、`/plugins/<key>/settings`）的 `meta.parent` 是 `/settings`，它们和各自的子页沿上级链取到这个视图，面包屑以“系统设置 ›”开头；刷新不丢。调用者的菜单里没有“系统设置”这一项时（比如只持有某个插件设置权限的用户打开 `/plugins/<key>/settings`）不换视图，侧栏仍是控制台视图。
-- 系统设置视图分五组（按权限显示，空组不显示）：
+- 视图由路由决定：只有 `/settings` 的路由 meta `sidebar` 声明视图，视图里其余页面（`/groups`、`/prices`）的 `meta.parent` 是 `/settings`，它们和各自的子页沿上级链取到这个视图，面包屑以“系统设置 ›”开头；刷新不丢。调用者的菜单里没有“系统设置”这一项时（比如第三版核心的菜单：只有 `group:read` 的调用者在管理员组里有分组、没有“系统设置”）不换视图，侧栏仍是控制台视图。
+- 系统设置视图分四组（按权限显示，空组不显示）：
   - 网关：网关设置、调度策略、粘性会话、CPU 保护
   - 分组与定价：分组（`/groups`，`group:read`）、模型价格（`/prices`，`price:read`）；它们的子页（价格详情、同步源等）也显示这个视图
   - 计费与通知：计费、通知
-  - 插件设置：每个已启用且有控制台设置页的插件一项，地址 `/plugins/<key>/settings`；ccgateway 的是 `/system/ccgateway`（`settings:read`）。这一组来自插件列表，调用者要有 `plugin:read` 才有；已安装插件列表里的“设置”按钮，插件已启用时打开的也是这些页面，其他状态（视图里不列）打开插件详情的设置标签 `/plugins/<key>?tab=settings`
   - 运行环境：在线更新、环境变量
+- 插件设置不在这个视图里，只有一个入口：已安装插件列表（`/plugins`，`plugin:read`）每行的“设置”按钮（待授权的插件没有）。有控制台设置表单的插件打开插件详情的设置标签 `/plugins/<key>?tab=settings`；ccgateway 打开 `/system/ccgateway`（要 `settings:read`）。`/system/ccgateway` 和 `/plugins/<key>/settings` 的 `meta.parent` 是 `/plugins`：侧栏是控制台视图，“已安装插件”高亮，面包屑以“已安装插件 ›”开头。`/plugins/<key>/settings` 留给只持有插件设置权限、打不开插件详情的调用者，以及旧链接。
 - 八个配置页的地址仍是 `/settings?tab=<key>`，权限是 `settings:read`（粘性会话是 `sticky:read`）。一个配置页都不能打开的调用者打开不带 `tab` 的 `/settings`，进入视图里他能打开的第一个页面：先 `/groups`，再 `/prices`；带 `tab` 的链接仍按该配置页的权限判断。
 - 功能页（账号、代理、角色与权限、插件管理、集群节点、定时任务、核心升级、审计日志）不在这个视图里，各自留在控制台视图的区里。
 
@@ -6974,7 +6974,7 @@ node 任务（可工作节点各跑，`RequireWork`）：
 - 余额流水 `/ledger` 的地址不变，上级页面是 `/users`。
 - `/platforms` 跳转到 `/accounts`。
 - `/p/anthropic/models` 随 anthropic 0.3.1 消失（插件不再声明这个页面）。
-- CCGateway 页面是 `/system/ccgateway`（0.1.264 及更早这个地址跳到插件详情的设置标签，现在就是页面本身）；`/plugins/ccgateway/settings`、`/settings?tab=plugin:ccgateway` 跳转到它。接口 `/api/v1/system/ccgateway/*` 不变。
+- CCGateway 页面是 `/system/ccgateway`（0.1.264 及更早这个地址跳到插件详情的设置标签，现在就是页面本身）；`/plugins/ccgateway/settings`、`/settings?tab=plugin:ccgateway` 跳转到它。接口 `/api/v1/system/ccgateway/*` 不变。上级页面是 `/plugins`。
 - `/settings?tab=plugin:<key>` 跳转到 `/plugins/<key>/settings`。
 
 ### 90.5 实现位置
@@ -6988,6 +6988,7 @@ node 任务（可工作节点各跑，`RequireWork`）：
 - 第二版（核心 0.1.264）把平台、代理、角色与权限、插件管理、集群节点、定时任务、核心升级、审计日志都放在 `system` 区（标签“系统设置”），控制台把这个区画成设置页左侧的第二列导航；dynweight 0.5.4 的菜单也在 `system` 区。第三版（核心 0.1.265、dynweight 0.5.5）把功能页放回各自的区、系统设置只留 `/settings` 一项，第二列导航取消。
 - 第二版与第三版的核心并存时，页面都能打开：旧控制台拿到新菜单时，这些功能页在管理员组里平铺，CCGateway 项的 `/system/ccgateway` 在旧控制台里跳到插件详情的设置标签；新控制台拿到旧菜单时，`system` 区去掉 `/settings` 后整体进“系统”目录。刷新页面后恢复一致。
 - dynweight 0.5.4 配第三版及以后的核心：菜单在“系统”目录里；0.5.5 配第二版核心：菜单在 `gateway` 区平铺。
-- 第三版的 `gateway` 区还有分组、平台、模型价格和 CCGateway（id `ccgateway`，`settings:read`，只在 ccgateway 插件已启用时返回），`finance` 区有余额流水，anthropic 0.3.0 在 `gateway` 区有模型目录；“系统设置”只认 `settings:read` / `sticky:read`，系统设置视图是四组（没有分组与定价）。第四版（anthropic 0.3.1）按本节。
-- 第三版与第四版的核心并存时，核心页面的地址都能打开：第三版控制台拿到第四版菜单，侧栏暂时没有分组、模型价格、CCGateway、平台、余额流水的入口；它的 `/settings` 只认 `settings:read` / `sticky:read`，只有 `group:read` / `price:read` 的调用者点“系统设置”看到无权限页。第四版控制台拿到第三版菜单，这几项仍在管理员组里平铺（平台项跳到账号页），分组、模型价格、CCGateway 同时也在系统设置视图里。刷新页面后恢复一致。
+- 第三版的 `gateway` 区还有分组、平台、模型价格和 CCGateway（id `ccgateway`，`settings:read`，只在 ccgateway 插件已启用时返回），`finance` 区有余额流水，anthropic 0.3.0 在 `gateway` 区有模型目录；“系统设置”只认 `settings:read` / `sticky:read`，系统设置视图是四组：网关、计费与通知、插件设置、运行环境（没有分组与定价）。第四版（anthropic 0.3.1）按本节。
+- 第三版与第四版的核心并存时，核心页面的地址都能打开：第三版控制台拿到第四版菜单，侧栏暂时没有分组、模型价格、CCGateway、平台、余额流水的入口；它的 `/settings` 只认 `settings:read` / `sticky:read`，只有 `group:read` / `price:read` 的调用者点“系统设置”看到无权限页。第四版控制台拿到第三版菜单，这几项仍在管理员组里平铺（平台项跳到账号页），分组、模型价格同时也在系统设置视图里；CCGateway 项打开的页面在控制台视图里。刷新页面后恢复一致。
+- 核心 0.1.267 的系统设置视图还有第五组“插件设置”（每个已启用且有控制台设置页的插件一项，ccgateway 的是 `/system/ccgateway`），这些页面的上级页面是 `/settings`；它和已安装插件列表的“设置”是同一批页面，0.1.268 起去掉这一组，按 90.2。
 - anthropic 0.3.0 配第四版核心：模型目录的菜单和页面还在；0.3.1 配第三版核心：没有模型目录。

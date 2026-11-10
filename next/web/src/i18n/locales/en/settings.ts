@@ -5,7 +5,6 @@ export default {
     gateway: 'Gateway',
     pricing: 'Groups & pricing',
     billing: 'Billing & notifications',
-    pluginSettings: 'Plugin settings',
     runtime: 'Runtime'
   },
   tabs: {

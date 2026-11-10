@@ -25,7 +25,7 @@ const title = computed(() => (route.meta.title ? t(route.meta.title as string) :
 /**
  * The pages above this one (meta.parent, followed upwards), outermost first.
  * A page the caller may not open stays as plain text: e.g. plugin settings
- * sit under Settings for operators, but their main users only hold the
+ * sit under the installed plugins, but their main users only hold the
  * plugin's own settings permission.
  */
 const crumbs = computed(() => {
