@@ -21,7 +21,7 @@ declare module 'vue-router' {
     parent?: string
     public?: boolean
     /** Where a caller without `perm` goes instead of /forbidden, if anywhere. */
-    deniedRedirect?: (to: RouteLocationNormalized) => string | undefined
+    deniedRedirect?: (to: RouteLocationNormalized) => RouteLocationRaw | undefined
     /** Where an old address of this page now lives; asked on every navigation, a change of the query alone included. */
     movedTo?: (to: RouteLocationNormalized) => RouteLocationRaw | undefined
     /** The sidebar view this page and the pages under it open in (CONTRACTS §90). */
@@ -103,7 +103,7 @@ const children: RouteRecordRaw[] = [
       title: 'nav.crumbs.pluginDetail',
       parent: '/plugins',
       // Plugins link to ?tab=settings; holders of the plugin's settings permission get the settings page.
-      deniedRedirect: to => (to.query.tab === 'settings' ? pluginSettingsPath(String(to.params.key)) : undefined)
+      deniedRedirect: to => (to.query.tab === 'settings' ? { path: pluginSettingsPath(String(to.params.key)), hash: to.hash } : undefined)
     }
   },
   // ccgateway's settings are a core page of its own.

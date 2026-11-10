@@ -89,7 +89,7 @@ describe('where the installed plugins list opens settings', () => {
   })
   it("is ccgateway's own page, for settings:read, whatever its manifest says", () => {
     expect(consoleSettingsPath({ key: 'ccgateway', has_settings: true }, all)).toBe(CCGATEWAY_PAGE)
-    expect(consoleSettingsPath({ key: 'ccgateway' }, perm => perm !== 'settings:read')).toBeUndefined()
+    expect(consoleSettingsPath({ key: 'ccgateway', has_settings: true }, perm => perm !== 'settings:read')).toBeUndefined()
   })
 })
 

@@ -1175,7 +1175,7 @@ type ProxyResolver interface {
 
 **表格页的"新建"按钮**：manifest `ui.pages.<id>.create: {page, permission?}` 只能写在 `type:"table"` 的页面上，`page` 必须是同一插件的 `type:"form"` 页面，`permission` 是 `userPermissions` 里的 key。控制台在表格上方画一个主按钮，文字取目标页的 `title`，点击打开 `/p/<插件>/<page>`。`GET /ui/plugins` 对没有该权限的调用者去掉 `create`，表单页如果没有可见菜单指向它也一并去掉；表格页本身因菜单权限对调用者不可见时，它的 `create` 链接同样不算可用，只靠这条链接到达的表单页也去掉（即使链接不要求权限）。校验错误：`ui.pages.<id>.create` invalid（非表格页）、`.create.page` unknown / invalid（不存在 / 不是表单）、`.create.permission` unknown。volcengine 0.12.6 用它替代了"新建素材组""新建素材"两个菜单项，需要核心 0.1.229。
 
-**控制台布局**：路由 `meta.parent` 指向上级页面，顶栏在标题前显示面包屑（价格详情、价格同步源、同步预览、插件详情、发布进度、安装授权、插件设置）。设置页改为左侧二级导航（网关 / 计费 / 通知 / 系统 / 插件设置），页面仍用 `?tab=` 选择；"插件设置"列出已启用且有设置表单的插件（以及 ccgateway），选中为 `?tab=plugin:<key>`，内容即插件设置页。（§90 起二级导航改为侧栏的系统设置视图，插件设置的地址是 `/plugins/<key>/settings`，见 90.2、90.4。）
+**控制台布局**：路由 `meta.parent` 指向上级页面，顶栏在标题前显示面包屑（价格详情、价格同步源、同步预览、插件详情、发布进度、安装授权、插件设置）。设置页改为左侧二级导航（网关 / 计费 / 通知 / 系统 / 插件设置），页面仍用 `?tab=` 选择；"插件设置"列出已启用且有设置表单的插件（以及 ccgateway），选中为 `?tab=plugin:<key>`，内容即插件设置页。（§90 起二级导航改为侧栏的系统设置视图；插件设置不在其中，从已安装插件列表的“设置”按钮打开，`?tab=plugin:<key>` 跳到 `/plugins/<key>/settings`，见 90.2、90.4。）
 
 ## 23. 原生插件 UI 的共享库：`@sub2api/ui`、`@sub2api/host`、`@sub2api/vite-preset`（2026-09-27，用户要求）
 
@@ -6915,7 +6915,7 @@ node 任务（可工作节点各跑，`RequireWork`）：
 
 ## 90. 侧栏三组：控制台、个人中心、管理员；系统设置视图（2026-11-10，用户要求：参考 new-api 的菜单，分三类；第四版：分组、模型价格进系统设置视图，插件设置只从已安装插件列表打开，平台、模型目录、余额流水的菜单取消；无迁移）
 
-原则：设置归设置，功能归功能。功能页放在各自的区；系统设置只有 `/settings` 一个入口，配置页、分组、模型价格都在它打开的系统设置视图里（90.2）；插件的设置属于插件，只从已安装插件列表的“设置”按钮打开。接口 `GET /me/menus` 的形状、区 id、SDK（`CoreMenuSections()`）和存储都不变。
+原则：设置归设置，功能归功能。功能页放在各自的区；系统设置只有 `/settings` 一个入口，配置页、分组、模型价格都在它打开的系统设置视图里（90.2）；插件的设置属于插件，侧栏和系统设置视图里都没有入口，从已安装插件列表的“设置”按钮打开。接口 `GET /me/menus` 的形状、区 id、SDK（`CoreMenuSections()`）和存储都不变。
 
 侧栏按三组显示：
 
@@ -6936,7 +6936,7 @@ node 任务（可工作节点各跑，`RequireWork`）：
 | plugins 插件 | 已安装插件、插件市场、发布者；`section:"plugins"` 的插件菜单接在后面 | |
 | system 系统（标签“系统 / System”） | 集群节点、定时任务、核心升级、审计日志、系统设置 `/settings` | |
 
-- 分组（`/groups`，`group:read`）、模型价格（`/prices`，`price:read`）没有菜单项，由控制台列在系统设置视图里（90.2）；CCGateway（`/system/ccgateway`，`settings:read`）没有菜单项，从已安装插件列表里 ccgateway 一行的“设置”按钮打开；页面、地址、权限和接口不变。
+- 分组（`/groups`，`group:read`）、模型价格（`/prices`，`price:read`）没有菜单项，由控制台列在系统设置视图里（90.2）；CCGateway（`/system/ccgateway`，`settings:read`）没有菜单项，从已安装插件列表里 ccgateway 一行的“设置”按钮打开；页面、地址、权限和接口不变。有 `settings:read` 而没有 `plugin:read` 的自定义角色只能凭地址或账号授权对话框里的链接打开它。
 - 余额流水（`/ledger`，`balance:all:read`）没有菜单项，从用户列表的行操作打开；页面和接口不变。有 `balance:all:read` 而没有 `user:read` 的自定义角色只能凭地址打开它。
 - 平台页取消，没有菜单项（地址见 90.4）；接口 `GET /platforms`、`GET /me/platforms` 不变，控制台的平台列表一律取 `GET /me/platforms`。
 - 模型目录：anthropic 0.3.1 去掉了菜单 `anthropic-models`、页面 `models` 和宿主权限 `ui.menu`；插件接口 `GET /api/v1/p/anthropic/models` 和权限 `model_catalog:read` 保留。
@@ -6953,7 +6953,7 @@ node 任务（可工作节点各跑，`RequireWork`）：
   - 分组与定价：分组（`/groups`，`group:read`）、模型价格（`/prices`，`price:read`）；它们的子页（价格详情、同步源等）也显示这个视图
   - 计费与通知：计费、通知
   - 运行环境：在线更新、环境变量
-- 插件设置不在这个视图里，只有一个入口：已安装插件列表（`/plugins`，`plugin:read`）每行的“设置”按钮（待授权的插件没有）。有控制台设置表单的插件打开插件详情的设置标签 `/plugins/<key>?tab=settings`；ccgateway 打开 `/system/ccgateway`（要 `settings:read`）。`/system/ccgateway` 和 `/plugins/<key>/settings` 的 `meta.parent` 是 `/plugins`：侧栏是控制台视图，“已安装插件”高亮，面包屑以“已安装插件 ›”开头。`/plugins/<key>/settings` 留给只持有插件设置权限、打不开插件详情的调用者，以及旧链接。
+- 插件设置不在这个视图里，侧栏也没有入口；入口是已安装插件列表（`/plugins`，`plugin:read`）每行的“设置”按钮（待授权的插件没有）。有控制台设置表单的插件打开插件详情的设置标签 `/plugins/<key>?tab=settings`；ccgateway 打开 `/system/ccgateway`（要 `settings:read`）。`/system/ccgateway` 和 `/plugins/<key>/settings` 的 `meta.parent` 是 `/plugins`：侧栏是控制台视图，面包屑以“已安装插件 ›”开头；有 `plugin:read` 时“已安装插件”高亮、面包屑可点，没有时不高亮、面包屑是纯文本。插件详情的设置标签对 ccgateway 嵌的是同一个 CCGateway 页面（`/plugins/ccgateway?tab=settings`）。`/plugins/<key>/settings` 留给只持有插件设置权限、打不开插件详情的调用者，以及旧链接。
 - 八个配置页的地址仍是 `/settings?tab=<key>`，权限是 `settings:read`（粘性会话是 `sticky:read`）。一个配置页都不能打开的调用者打开不带 `tab` 的 `/settings`，进入视图里他能打开的第一个页面：先 `/groups`，再 `/prices`；带 `tab` 的链接仍按该配置页的权限判断。
 - 功能页（账号、代理、角色与权限、插件管理、集群节点、定时任务、核心升级、审计日志）不在这个视图里，各自留在控制台视图的区里。
 

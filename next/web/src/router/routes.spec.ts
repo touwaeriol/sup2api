@@ -130,7 +130,7 @@ describe('the CCGateway page', () => {
   })
 })
 
-describe('old links to plugin settings as a tab of the settings page', () => {
+describe('links to plugin settings as a tab', () => {
   it("lead to the plugin's settings page, keeping the anchor", async () => {
     expect(await follow('/settings?tab=plugin:mailer')).toBe('/plugins/mailer/settings')
     expect(await follow('/settings?tab=plugin:mailer#smtp')).toBe('/plugins/mailer/settings#smtp')
@@ -145,6 +145,11 @@ describe('old links to plugin settings as a tab of the settings page', () => {
     auth.denied = ['settings:read', 'sticky:read']
     expect(await follow('/settings?tab=plugin:mailer')).toBe('/plugins/mailer/settings')
     expect(await follow('/settings?tab=billing')).toMatch(/^\/forbidden/)
+  })
+
+  it("of the detail page lead a holder of only the plugin's settings permission to the settings page, keeping the anchor", async () => {
+    auth.denied = ['plugin:read']
+    expect(await follow('/plugins/mailer?tab=settings#smtp')).toBe('/plugins/mailer/settings#smtp')
   })
 
   it('stay on the settings page, which reports the page missing, when the key is not a plugin key', async () => {

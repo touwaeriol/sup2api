@@ -425,11 +425,11 @@ export function hasCoreSettings(key: string, has: (perm: string) => boolean): bo
 }
 
 /**
- * Where the installed plugins list opens a plugin's settings, the one place
- * the console offers them (CONTRACTS §90): the page of the core view, or the
- * settings tab of the detail page for the form the console renders
- * (has_settings is false for native settings, §75.5); undefined without
- * either.
+ * Where the installed plugins list opens a plugin's settings; neither the
+ * sidebar nor system settings lists them (CONTRACTS §90). The page of the
+ * core view, or the settings tab of the detail page for the form the console
+ * renders (has_settings is false for native settings, §75.5); undefined
+ * without either.
  */
 export function consoleSettingsPath(p: Pick<PluginSummary, 'key' | 'has_settings'>, has: (perm: string) => boolean): string | undefined {
   if (hasCoreSettings(p.key, has)) return CCGATEWAY_PAGE
