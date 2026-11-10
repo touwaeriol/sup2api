@@ -75,19 +75,16 @@ func TestAC03_InstallAnthropicFromMarket(t *testing.T) {
 	}
 	e.WaitPlugin(admin, "anthropic", "enabled", version)
 
-	// Menu "model catalog" appears (plugin menu, permission granted to admin).
-	found := false
+	// The plugin declares no console UI: no menu of its own, and it is not
+	// among the plugins the console loads UI for.
 	for _, it := range admin.Menus(t) {
 		if it.Get("plugin_key").String() == "anthropic" {
-			found = true
+			t.Fatalf("anthropic menu in /me/menus: %s", it.Raw)
 		}
 	}
-	if !found {
-		t.Fatal("anthropic menu missing from /me/menus")
-	}
 	ui := admin.OK(t, http.MethodGet, "/ui/plugins", nil).Array()
-	if _, ok := Find(ui, "key", "anthropic"); !ok {
-		t.Fatalf("anthropic missing from /ui/plugins: %v", ui)
+	if _, ok := Find(ui, "key", "anthropic"); ok {
+		t.Fatalf("anthropic in /ui/plugins: %v", ui)
 	}
 
 	// Data served by the plugin from plg_anthropic.model_catalog, on every node.

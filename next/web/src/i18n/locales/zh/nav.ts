@@ -21,7 +21,6 @@ export default {
     ledger: '余额流水',
     users: '用户',
     roles: '角色与权限',
-    platforms: '平台',
     plugins: '已安装插件',
     market: '插件市场',
     publishers: '发布者',

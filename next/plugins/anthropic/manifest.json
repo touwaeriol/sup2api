@@ -6,7 +6,7 @@
     "en": "Anthropic API key account type and a model catalog. The anthropic platform and its endpoints are built into the core; model prices are set by administrators in the core.",
     "zh": "Anthropic API Key 账号类型与模型目录（anthropic 平台及其端点由核心内置；模型价格由管理员在核心中配置）。"
   },
-  "version": "0.3.0",
+  "version": "0.3.1",
   "publisher": "sub2api",
   "icon": "assets/anthropic.svg",
   "runtime": "grpc",
@@ -77,34 +77,6 @@
     { "method": "GET", "path": "/models", "scope": "admin", "permission": "model_catalog:read" }
   ],
 
-  "ui": {
-    "menus": [
-      {
-        "id": "anthropic-models",
-        "section": "gateway",
-        "label": { "en": "Model catalog", "zh": "模型目录" },
-        "icon": "list",
-        "page": "models",
-        "permission": "model_catalog:read",
-        "order": 100
-      }
-    ],
-    "pages": {
-      "models": {
-        "type": "table",
-        "title": { "en": "Claude model catalog", "zh": "Claude 模型目录" },
-        "source": "GET /models",
-        "columns": [
-          { "key": "model_id", "label": { "en": "Model", "zh": "模型" }, "format": "text" },
-          { "key": "display_name", "label": { "en": "Name", "zh": "名称" }, "format": "text" },
-          { "key": "context_window", "label": { "en": "Context window", "zh": "上下文窗口" }, "format": "number" },
-          { "key": "max_output_tokens", "label": { "en": "Max output", "zh": "最大输出" }, "format": "number" },
-          { "key": "status", "label": { "en": "Status", "zh": "状态" }, "format": "badge" }
-        ]
-      }
-    }
-  },
-
   "resources": { "memoryMB": 64, "cpu": 0.25, "maxThreads": 64, "maxOpenFiles": 256 },
 
   "hostPermissions": [
@@ -113,9 +85,7 @@
     { "id": "db.schema",
       "reason": { "en": "Store the model catalog", "zh": "保存模型目录" } },
     { "id": "routes.admin",
-      "reason": { "en": "Serve the model catalog to the console", "zh": "向控制台提供模型目录接口" } },
-    { "id": "ui.menu",
-      "reason": { "en": "Add the \"Model catalog\" menu", "zh": "添加\"模型目录\"菜单" } },
+      "reason": { "en": "Serve the model catalog over the admin API", "zh": "通过管理接口提供模型目录" } },
     { "id": "kv",
       "reason": { "en": "Cache small runtime state", "zh": "缓存少量运行时状态" } }
   ],

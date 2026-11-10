@@ -1,21 +1,8 @@
 export default {
-  title: 'Platforms',
-  description:
-    'Platforms declare gateway endpoints. The core ships anthropic, openai and gemini; plugins can add new platforms. Account types declare the platforms they support; accounts of those types serve the endpoints.',
-  builtin: 'Built-in',
-  pluginBy: 'Plugin: {name}',
   endpoints: 'Endpoints',
-  method: 'Method',
-  path: 'Path',
-  protocol: 'Protocol',
-  billing: 'Billing',
   billed: 'Billed',
   free: 'Free',
-  accountTypes: 'Supported by account types',
-  noAccountTypes: 'No account type supports this platform yet.',
   noEndpoints: 'This platform declares no endpoint.',
-  none: 'No platform is available.',
-  fallbackNotice: 'The platform list could not be loaded; only the built-in platforms are shown.',
   unavailable: 'Platform not enabled',
   unavailableHint: 'The plugin declaring platform "{id}" is not enabled, so this account type does not serve it for now.',
   supported: 'Supported platforms',
@@ -27,5 +14,5 @@ export default {
   keyEndpoints: 'Keys in this group can call',
   keyNoPlatforms: 'This group cannot serve requests yet (no usable accounts).',
   moreEndpoints: '+{n} more',
-  unknownEndpoints: 'Endpoints of this platform are listed on the Platforms page.'
+  unknownEndpoints: 'The endpoints of this platform are not available right now.'
 }

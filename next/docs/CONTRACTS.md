@@ -1071,7 +1071,7 @@ mock-upstream：`/v1/chat/completions` 请求里带名为 `submit_verdict` 的�
 | POST `/proxies` | `proxy:manage` / `proxy:own:manage` | `created_by` = 调用者 |
 | PATCH/DELETE `/proxies/:id`、POST `/proxies/:id/test` | `proxy:manage` / `proxy:own:manage` | 范围外（含 `created_by` 为空的历史行）一律 404，**先判可见再判占用**；自己级下删除时 409 的 `account_count` 仍是引用它的全部账号数 |
 
-菜单（`/me/menus`、前端回退表、路由 meta）：账号/平台菜单 anyOf `account:read account:own:read account:own:create`；代理菜单 anyOf `proxy:read proxy:own:read proxy:own:manage`。
+菜单（`/me/menus`、前端回退表、路由 meta）：账号/平台菜单 anyOf `account:read account:own:read account:own:create`（§90 第四版起没有平台菜单）；代理菜单 anyOf `proxy:read proxy:own:read proxy:own:manage`。
 
 审计（新公共包 `server/internal/audit`，`plugin/install/audit.go` 的 helper 上提到这里，原调用方改用；API：`audit.Audit(ctx, q store.Querier, actorID int64, action, targetType, targetID string, detail any) error`（actorID 0 = 系统，detail nil 写 `{}`，q 可为 pool 或 tx）、`audit.WithClientIP(ctx, ip)` / `audit.ClientIP(ctx)`、`audit.Context(c *gin.Context) context.Context`（= `WithClientIP(c.Request.Context(), c.ClientIP())`，handler 里用它替代 `c.Request.Context()` 即可）；IP 超过 64 字符截断）：账号 `account.create`（detail `{name, plugin_key, type}`）、`account.update`（`{fields:[...]}`：请求体里出现的字段名，不记值；`credentials` 只记 `credentials` 一个名，`proxy_url` 记 `proxy_url`）、`account.delete`（`{name}`）；原有的 `account.credentials.reveal`（detail `{}`）改用本包写入，因此也带 IP；代理 `proxy.create`（手工创建 detail `{auto:false, name, protocol, host, port}`，自动创建 `{auto:true, account_id}`）、`proxy.update`（`{fields:[...]}`，字段名同请求体，密码只记 `password`）、`proxy.delete`（`{name}`）。`target_type` 为 `account` / `proxy`，`target_id` 为十进制 id 字符串，`user_id` 为操作人，IP 取 `audit.WithClientIP`。账号、代理的写操作与审计行在同一事务。
 
@@ -1158,12 +1158,12 @@ type ProxyResolver interface {
 | 区 | order | 核心项 | 内置插件菜单 |
 | --- | --- | --- | --- |
 | overview 概览（§90 起叫“控制台”） | 100 | 仪表盘（§90 起还有 API 密钥、模型与价格、用量概览、使用日志、全站概览、全站日志） | |
-| gateway 网关 | 200 | 分组、账号、平台、代理、模型价格（§90 起使用记录移到控制台，另有 CCGateway） | 模型目录（anthropic 0.2.9）、动态权重（dynweight；只有 0.5.4 在 `system` 区） |
+| gateway 网关 | 200 | 分组、账号、平台、代理、模型价格（§90 起使用记录移到控制台；§90 第四版起只剩账号、代理） | 模型目录（anthropic 0.2.9–0.3.0，0.3.1 删除）、动态权重（dynweight；只有 0.5.4 在 `system` 区） |
 | security 安全 | 300 | 无（空区不返回） | 请求守卫（guard 0.2.7）、提示词审核（moderation 0.6.2） |
-| finance 财务 | 400 | 余额流水 `/ledger`（`balance:all:read`） | 增长管理（growth 0.1.5，去掉了自己的 growth 区） |
+| finance 财务 | 400 | 余额流水 `/ledger`（`balance:all:read`；§90 第四版起没有核心项，余额流水从用户列表打开） | 增长管理（growth 0.1.5，去掉了自己的 growth 区） |
 | users 用户与权限（§90 起叫“用户”） | 500 | 用户、角色与权限 | |
 | plugins 插件 | 600 | 已安装插件、插件市场、发布者；`section:"plugins"` 的插件菜单接在后面 | |
-| system 系统 | 700 | 集群节点、定时任务、核心升级、审计日志、设置（§90 起设置排在最后，侧栏单独显示为“系统设置”） | 动态权重（只有 dynweight 0.5.4） |
+| system 系统 | 700 | 集群节点、定时任务、核心升级、审计日志、设置（§90 起设置排在最后，侧栏单独显示为“系统设置”，分组、模型价格从它进入） | 动态权重（只有 dynweight 0.5.4） |
 | me 我的账户（§90 起叫“个人中心”） | 800 | API 密钥、使用记录（§90 起只剩钱包、个人设置） | 我的邀请、每日签到 |
 
 - ~~只有概览和我的账户的用户，控制台把"我的账户"排到仪表盘之后并且不画它的标题~~（§90 起所有人都按三组显示）。
@@ -6913,9 +6913,9 @@ node 任务（可工作节点各跑，`RequireWork`）：
 - 读数：`core.AccountLimiter.ModelUsage`（`account/limiter.go`），`core.AccountRef.ModelLimitIndex`（`core/ports_identity.go`）
 - 前端：`web/src/views/settings/SchedulingPolicyView.vue`、`LoadBalanceSettingsCard.vue`
 
-## 90. 侧栏三组：控制台、个人中心、管理员；系统设置视图（2026-11-10，用户要求：参考 new-api 的菜单，分三类；第三版：设置归设置，功能归功能；无迁移）
+## 90. 侧栏三组：控制台、个人中心、管理员；系统设置视图（2026-11-10，用户要求：参考 new-api 的菜单，分三类；第四版：分组、模型价格、插件设置进系统设置视图，平台、模型目录、余额流水的菜单取消；无迁移）
 
-原则：设置归设置，功能归功能。功能页放在各自的区，系统设置只有 `/settings` 一个配置页入口。接口 `GET /me/menus` 的形状、区 id、SDK（`CoreMenuSections()`）和存储都不变。
+原则：设置归设置，功能归功能。功能页放在各自的区；系统设置只有 `/settings` 一个入口，配置页、分组、模型价格和插件设置都在它打开的系统设置视图里（90.2）。接口 `GET /me/menus` 的形状、区 id、SDK（`CoreMenuSections()`）和存储都不变。
 
 侧栏按三组显示：
 
@@ -6929,28 +6929,33 @@ node 任务（可工作节点各跑，`RequireWork`）：
 
 | 区（标签） | 核心项（按返回顺序） | 内置插件菜单 |
 | --- | --- | --- |
-| gateway 网关 | 账号、分组、平台、代理、模型价格、CCGateway | 模型目录（anthropic）、动态权重（dynweight；只有 0.5.4 在 `system` 区） |
+| gateway 网关 | 账号、代理 | 动态权重（dynweight；只有 0.5.4 在 `system` 区） |
 | security 安全 | 无 | 请求守卫、提示词审核 |
-| finance 财务 | 余额流水 | 增长管理 |
+| finance 财务 | 无 | 增长管理 |
 | users 用户（标签“用户 / Users”） | 用户、角色与权限 | |
 | plugins 插件 | 已安装插件、插件市场、发布者；`section:"plugins"` 的插件菜单接在后面 | |
 | system 系统（标签“系统 / System”） | 集群节点、定时任务、核心升级、审计日志、系统设置 `/settings` | |
 
-- CCGateway：id `ccgateway`，地址 `/system/ccgateway`，权限 `settings:read`；只在 ccgateway 插件已启用（在当前一代里）时返回。
-- 系统设置：id `settings`，权限 `settings:read` 或 `sticky:read`，是 `system` 区最后一个核心项。`section:"system"` 的插件菜单仍并入 `system` 区，排在 `/settings` 之后（如 dynweight 0.5.4 的动态权重），和其余项一起进“系统”目录。
-- 平台、代理、角色与权限、插件管理各项的权限和图标不变。只有 `account:own:*` / `proxy:own:*` 的调用者（供应商）在 `gateway` 区看到账号、平台、代理，没有 `system` 区。
+- 分组（`/groups`，`group:read`）、模型价格（`/prices`，`price:read`）、CCGateway（`/system/ccgateway`，`settings:read`）没有菜单项，由控制台列在系统设置视图里（90.2）；页面、地址、权限和接口不变。
+- 余额流水（`/ledger`，`balance:all:read`）没有菜单项，从用户列表的行操作打开；页面和接口不变。
+- 平台页取消，没有菜单项（地址见 90.4）；接口 `GET /platforms`、`GET /me/platforms` 不变。
+- 模型目录：anthropic 0.3.1 去掉了菜单 `anthropic-models`、页面 `models` 和宿主权限 `ui.menu`；插件接口 `GET /api/v1/p/anthropic/models` 和权限 `model_catalog:read` 保留。
+- 系统设置：id `settings`，是 `system` 区最后一个核心项，持有 `settings:read`、`sticky:read`、`group:read`、`price:read` 任意一个就返回：后两个是因为分组、模型价格从系统设置视图进入，内置运维角色有它们而没有 `settings` / `sticky` 权限。`section:"system"` 的插件菜单仍并入 `system` 区，排在 `/settings` 之后（如 dynweight 0.5.4 的动态权重），和其余项一起进“系统”目录。
+- 账号、代理、角色与权限、插件管理各项的权限和图标不变。只有 `account:own:*` / `proxy:own:*` 的调用者（供应商）在 `gateway` 区看到账号、代理，没有 `system` 区；再有 `group:read` 或 `price:read` 时，`system` 区只有“系统设置”一项，视图里只列他能打开的页面。
 - 各区仍按 `CoreMenuSections()` 的 order 返回（`me` 是 800），三组的排列由控制台决定。
 
 ### 90.2 系统设置视图
 
 - 侧栏有两种状态：控制台视图（默认）和系统设置视图。点击管理员组的“系统设置”，侧栏整体换成系统设置视图的菜单；顶部“返回控制台”回到进入前的页面，没有则回仪表盘。
 - 视图由路由决定：路由 meta `sidebar` 声明所属视图，没有声明的沿上级链（`meta.parent`）取，刷新不丢。调用者的菜单里没有“系统设置”这一项时（比如只持有某个插件设置权限的用户打开 `/plugins/<key>/settings`）不换视图，侧栏仍是控制台视图。
-- 系统设置视图分四组（按权限显示，空组不显示）：
+- 系统设置视图分五组（按权限显示，空组不显示）：
   - 网关：网关设置、调度策略、粘性会话、CPU 保护
+  - 分组与定价：分组（`/groups`，`group:read`）、模型价格（`/prices`，`price:read`）；它们的子页（价格详情、同步源等）也显示这个视图
   - 计费与通知：计费、通知
-  - 插件设置：每个已启用且有设置表单的插件一项，地址 `/plugins/<key>/settings`（ccgateway 除外，它的页面是 `/system/ccgateway`）
+  - 插件设置：每个已启用且有控制台设置页的插件一项，地址 `/plugins/<key>/settings`；ccgateway 的是 `/system/ccgateway`（`settings:read`）。这一组来自插件列表，调用者要有 `plugin:read` 才有；已安装插件列表里的“设置”按钮打开的也是这些页面
   - 运行环境：在线更新、环境变量
-- 八个配置页的地址仍是 `/settings?tab=<key>`。功能页（平台、代理、角色与权限、插件管理、集群节点、定时任务、核心升级、审计日志）不在这个视图里，各自留在控制台视图的区里。
+- 八个配置页的地址仍是 `/settings?tab=<key>`，权限是 `settings:read`（粘性会话是 `sticky:read`）。一个配置页都不能打开的调用者打开不带 `tab` 的 `/settings`，进入视图里他能打开的第一个页面：先 `/groups`，再 `/prices`；带 `tab` 的链接仍按该配置页的权限判断。
+- 功能页（账号、代理、角色与权限、插件管理、集群节点、定时任务、核心升级、审计日志）不在这个视图里，各自留在控制台视图的区里。
 
 ### 90.3 侧栏
 
@@ -6963,19 +6968,26 @@ node 任务（可工作节点各跑，`RequireWork`）：
 
 ### 90.4 地址
 
-控制台页面的地址都不变，不新增页面根（`ConsoleSegments` 不变）：
+留下的控制台页面地址都不变，不新增页面根（`ConsoleSegments` 不变）：
 
+- 分组 `/groups`、模型价格 `/prices` 及其子页的地址不变，打开时侧栏是系统设置视图。
+- 余额流水 `/ledger` 的地址不变，上级页面是 `/users`。
+- `/platforms` 跳转到 `/accounts`。
+- `/p/anthropic/models` 随 anthropic 0.3.1 消失（插件不再声明这个页面）。
 - CCGateway 页面是 `/system/ccgateway`（0.1.264 及更早这个地址跳到插件详情的设置标签，现在就是页面本身）；`/plugins/ccgateway/settings`、`/settings?tab=plugin:ccgateway` 跳转到它。接口 `/api/v1/system/ccgateway/*` 不变。
 - `/settings?tab=plugin:<key>` 跳转到 `/plugins/<key>/settings`。
 
 ### 90.5 实现位置
 
-- 服务端：`server/internal/authz/menus.go`（`coreMenus`；`coreMenuItem.plugin` 为“只在该插件启用时显示”）；`plugins/dynweight/manifest.json`
+- 服务端：`server/internal/authz/menus.go`（`coreMenus`）；`plugins/anthropic/manifest.json`、`plugins/dynweight/manifest.json`
 - 侧栏：`web/src/layouts/sidebarGroups.ts`（分组、目录、展开状态）、`sidebarViews.ts`（视图登记表、当前视图、返回目标）、`AppSidebar.vue`、`SidebarGroup.vue`、`SidebarLink.vue`、`SidebarSubmenu.vue`、`SidebarViewMenu.vue`（视图菜单与返回行）、`useActiveMenu.ts`（当前页对应的菜单项）
 - 系统设置：`web/src/views/settings/settingsNav.ts`（视图菜单）、`SettingsView.vue`；路由 meta 与跳转见 `web/src/router/index.ts`
 
 ### 90.6 沿革与混跑
 
-- 第二版（核心 0.1.264）把平台、代理、角色与权限、插件管理、集群节点、定时任务、核心升级、审计日志都放在 `system` 区（标签“系统设置”），控制台把这个区画成设置页左侧的第二列导航；dynweight 0.5.4 的菜单也在 `system` 区。第三版（核心 0.1.265、dynweight 0.5.5）按本节归类，第二列导航取消。
-- 滚动升级期间新旧核心并存，页面都能打开：旧控制台拿到新菜单时，这些功能页在管理员组里平铺，CCGateway 项的 `/system/ccgateway` 在旧控制台里跳到插件详情的设置标签；新控制台拿到旧菜单时，`system` 区去掉 `/settings` 后整体进“系统”目录。刷新页面后恢复一致。
-- dynweight 0.5.4 配新核心：菜单在“系统”目录里；0.5.5 配旧核心：菜单在 `gateway` 区平铺。
+- 第二版（核心 0.1.264）把平台、代理、角色与权限、插件管理、集群节点、定时任务、核心升级、审计日志都放在 `system` 区（标签“系统设置”），控制台把这个区画成设置页左侧的第二列导航；dynweight 0.5.4 的菜单也在 `system` 区。第三版（核心 0.1.265、dynweight 0.5.5）把功能页放回各自的区、系统设置只留 `/settings` 一项，第二列导航取消。
+- 第二版与第三版的核心并存时，页面都能打开：旧控制台拿到新菜单时，这些功能页在管理员组里平铺，CCGateway 项的 `/system/ccgateway` 在旧控制台里跳到插件详情的设置标签；新控制台拿到旧菜单时，`system` 区去掉 `/settings` 后整体进“系统”目录。刷新页面后恢复一致。
+- dynweight 0.5.4 配第三版及以后的核心：菜单在“系统”目录里；0.5.5 配第二版核心：菜单在 `gateway` 区平铺。
+- 第三版的 `gateway` 区还有分组、平台、模型价格和 CCGateway（id `ccgateway`，`settings:read`，只在 ccgateway 插件已启用时返回），`finance` 区有余额流水，anthropic 0.3.0 在 `gateway` 区有模型目录；“系统设置”只认 `settings:read` / `sticky:read`，系统设置视图是四组（没有分组与定价）。第四版（anthropic 0.3.1）按本节。
+- 第三版与第四版的核心并存时，核心页面的地址都能打开：第三版控制台拿到第四版菜单，侧栏暂时没有分组、模型价格、CCGateway、平台、余额流水的入口；它的 `/settings` 只认 `settings:read` / `sticky:read`，只有 `group:read` / `price:read` 的调用者点“系统设置”看到无权限页。第四版控制台拿到第三版菜单，这几项仍在管理员组里平铺（平台项跳到账号页），分组、模型价格、CCGateway 同时也在系统设置视图里。刷新页面后恢复一致。
+- anthropic 0.3.0 配第四版核心：模型目录的菜单和页面还在；0.3.1 配第三版核心：没有模型目录。

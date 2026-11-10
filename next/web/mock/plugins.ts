@@ -202,7 +202,7 @@ for (const key of ['openai', 'gemini'] as const) {
 if (process.env.SUB2API_MOCK_CCGATEWAY) {
   plugins.set('ccgateway', {
     key: 'ccgateway',
-    name: { en: 'Claude Code', zh: 'Claude Code' },
+    name: { en: 'CCGateway', zh: 'CCGateway' },
     description: { en: 'Claude Code accounts (fixture)', zh: 'Claude Code 账号（夹具）' },
     status: 'enabled',
     status_reason: '',

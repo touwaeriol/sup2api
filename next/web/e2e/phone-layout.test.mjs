@@ -7,7 +7,8 @@
 //   NODE_PATH=$(npm root -g) E2E_WEB_URL=http://localhost:5185 node --test e2e/phone-layout.test.mjs
 //
 // On an iPhone 13 and a Pixel 7 it signs in (admin@example.com / admin), opens
-// every page of the console menu and of system settings and checks that
+// every page of the console menu and of system settings, and the pages only
+// another page links to, and checks that
 // - the page does not scroll sideways: documentElement.scrollWidth stays within
 //   the device width (innerWidth itself grows with the content under device
 //   emulation, so it is not the yardstick);
@@ -55,10 +56,14 @@ const FIRST_SCREEN_PAGES = [
   '/me/usage'
 ]
 
+/** Pages without a menu entry: the balance ledger is opened from a row of the users list. */
+const LINKED_PAGES = ['/ledger']
+
 /**
  * The pages of system settings (CONTRACTS §90): on the settings page the
  * sidebar shows the settings view's menu instead of the console's, with the
- * configuration pages (/settings?tab=<key>) and the plugins' settings forms.
+ * configuration pages (/settings?tab=<key>), groups, model prices and the
+ * plugins' settings.
  */
 async function settingsPages(page) {
   await page.goto(`${BASE}/settings`)
@@ -89,7 +94,7 @@ for (const name of DEVICES) {
       // The submenus (core directories and plugin sections) start folded; open them all to list every page.
       await page.$$eval('aside nav [aria-expanded="false"]', buttons => buttons.forEach(b => b.click()))
       const sidebar = await page.$$eval('aside nav a[href]', links => links.map(a => a.getAttribute('href')))
-      pages = [...new Set([...sidebar, ...(await settingsPages(page))])]
+      pages = [...new Set([...sidebar, ...(await settingsPages(page)), ...LINKED_PAGES])]
     })
     after(() => browser?.close())
 

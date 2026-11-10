@@ -1,17 +1,3 @@
 {
-  "version": "0.3.1-test",
-  "ui": {
-    "pages": {
-      "models": {
-        "columns": [
-          { "key": "model_id", "label": { "en": "Model", "zh": "模型" }, "format": "text" },
-          { "key": "display_name", "label": { "en": "Name", "zh": "名称" }, "format": "text" },
-          { "key": "family", "label": { "en": "Family", "zh": "系列" }, "format": "badge" },
-          { "key": "context_window", "label": { "en": "Context window", "zh": "上下文窗口" }, "format": "number" },
-          { "key": "max_output_tokens", "label": { "en": "Max output", "zh": "最大输出" }, "format": "number" },
-          { "key": "status", "label": { "en": "Status", "zh": "状态" }, "format": "badge" }
-        ]
-      }
-    }
-  }
+  "version": "0.3.2-test"
 }

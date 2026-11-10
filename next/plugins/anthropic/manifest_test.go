@@ -30,7 +30,7 @@ const declaration = `{"preset":"anthropic","filterFields":[]}`
 // anthropic platform, the model catalog and its upgrade fixture.
 func TestManifest(t *testing.T) {
 	m := load(t)
-	if m.Key != "anthropic" || m.Version != "0.3.0" || m.APIVersion != manifest.APIVersion {
+	if m.Key != "anthropic" || m.Version != "0.3.1" || m.APIVersion != manifest.APIVersion {
 		t.Fatalf("key/version = %s %s", m.Key, m.Version)
 	}
 	if m.Database == nil || m.Database.Schema != "plg_"+m.Key {
@@ -105,6 +105,10 @@ func TestManifest(t *testing.T) {
 	// The credentials stay inside the core, which builds the requests.
 	if _, ok := perms["accounts.credentials"]; ok {
 		t.Error("a declared account type needs no accounts.credentials")
+	}
+	// The catalog is an admin route only: the console has no menu or page for it.
+	if _, ok := perms["ui.menu"]; ok || m.UI != nil {
+		t.Errorf("ui = %+v, want none and no ui.menu permission", m.UI)
 	}
 	for _, r := range m.Routes {
 		found := false

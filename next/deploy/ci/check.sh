@@ -75,7 +75,7 @@ plugins() {
     pkg=$("$checks/sub2api-plugin" pack --dir "plugins/$p" --runtimes "$checks/$p-runtime" --out-dir "$dest")
     "$checks/sub2api-plugin" sign --key "$checks/keys/managed-test.key" --key-id managed-test --publisher sub2api "$pkg" >> "$out/plugin-build-$p.log"
   done
-  # R2 alone bundles a newer anthropic (the 0.3.1-test overlay, which adds a
+  # R2 alone bundles a newer anthropic (the 0.3.2-test overlay, which adds a
   # migration), so updating the core must update it.
   mkdir -p "$checks/builtin-next"
   "$checks/sub2api-plugin" build --dir plugins/anthropic --overlay testdata/upgrade --out "$checks/anthropic-next-runtime" >> "$out/plugin-build-anthropic.log"

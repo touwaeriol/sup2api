@@ -413,7 +413,7 @@ export interface PluginDetail {
 const CORE_SETTINGS_KEY = 'ccgateway'
 
 /**
- * The page of that core view, an entry of the sidebar (CONTRACTS §90). Its
+ * The page of that core view, a page of system settings (CONTRACTS §90). Its
  * first segment is one the SDK reserves for the console
  * (manifest.ConsoleSegments), so no plugin endpoint can take the address.
  */
@@ -425,13 +425,17 @@ export function hasCoreSettings(key: string, has: (perm: string) => boolean): bo
 }
 
 /** Whether the console renders the plugin's settings as a form: has_settings is false for native settings (§75.5). */
-export function hasSettingsForm(p: Pick<PluginSummary, 'key' | 'has_settings'>): boolean {
+function hasSettingsForm(p: Pick<PluginSummary, 'key' | 'has_settings'>): boolean {
   return p.key !== CORE_SETTINGS_KEY && !!p.has_settings
 }
 
-/** Where the plugin list opens a plugin's settings: the form on its detail page, or the core view's page; undefined without either. */
+/**
+ * The page of system settings that holds a plugin's settings (CONTRACTS §90),
+ * where the settings view and the plugin list open them: the page of its
+ * form, or the core view's; undefined without either.
+ */
 export function consoleSettingsPath(p: Pick<PluginSummary, 'key' | 'has_settings'>, has: (perm: string) => boolean): string | undefined {
-  if (hasSettingsForm(p)) return `/plugins/${encodeURIComponent(p.key)}?tab=settings`
+  if (hasSettingsForm(p)) return pluginSettingsPath(p.key)
   return hasCoreSettings(p.key, has) ? CCGATEWAY_PAGE : undefined
 }
 

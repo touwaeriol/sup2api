@@ -31,7 +31,10 @@ function makeRouter() {
     routes: [
       { path: '/dashboard', component: Blank, meta: { title: 'nav.items.dashboard' } },
       { path: '/accounts', component: Blank, meta: { title: 'nav.items.accounts' } },
-      { path: '/prices', component: Blank, meta: { title: 'nav.items.prices' } },
+      { path: '/users', component: Blank, meta: { title: 'nav.items.users' } },
+      { path: '/ledger', component: Blank, meta: { title: 'nav.items.ledger', parent: '/users' } },
+      { path: '/groups', component: Blank, meta: { title: 'nav.items.groups', sidebar: 'settings' } },
+      { path: '/prices', component: Blank, meta: { title: 'nav.items.prices', sidebar: 'settings' } },
       { path: '/prices/sources', component: Blank, meta: { title: 'prices.sources.title', parent: '/prices' } },
       { path: '/prices/sources/:id/sync', component: Blank, meta: { title: 'prices.syncPrices', parent: '/prices/sources' } },
       {
@@ -94,16 +97,16 @@ describe('sidebar', () => {
   const overview = { section: 'overview', items: [item('dashboard', '/dashboard')] }
   const operatorMenu = [
     overview,
-    { section: 'gateway', items: [item('accounts', '/accounts'), item('groups', '/groups')] },
+    { section: 'gateway', items: [item('accounts', '/accounts'), item('proxies', '/proxies')] },
     { section: 'security', items: [item('guard', '/p/guard/dashboard')] },
-    { section: 'finance', items: [item('ledger', '/ledger')] },
+    { section: 'finance', items: [item('growth', '/p/growth/dashboard')] },
     { section: 'users', items: [item('users', '/users'), item('roles', '/roles')] },
     { section: 'plugins', items: [item('plugins', '/plugins'), item('market', '/market'), item('inbox', '/p/mailer/inbox')] },
     { section: 'vol:ark', label: { zh: '火山方舟' }, items: [item('assets', '/p/vol/assets'), item('sets', '/p/vol/sets')] },
     { section: 'system', items: [item('nodes', '/nodes'), item('tasks', '/system/tasks'), settings] },
     { section: 'me', items: [item('wallet', '/me/wallet')] }
   ]
-  const flat = ['dashboard', 'wallet', 'accounts', 'groups', 'guard', 'ledger']
+  const flat = ['dashboard', 'wallet', 'accounts', 'proxies', 'guard', 'growth']
 
   it('lists gateway, security and finance flat, folds the other admin sections and ends with system settings', async () => {
     const { wrapper, app } = await mountSidebar(operatorMenu)
@@ -163,10 +166,12 @@ describe('sidebar', () => {
   })
 
   it('lights up the menu entry of the page, else of its nearest parent page, else of a path it starts with', async () => {
-    const menu = [overview, { section: 'gateway', items: [item('accounts', '/accounts'), item('prices', '/prices')] }]
-    expect(current((await mountSidebar(menu, '/prices')).wrapper)).toEqual(['prices'])
-    expect(current((await mountSidebar(menu, '/prices/sources/3/sync')).wrapper)).toEqual(['prices'])
-    expect(current((await mountSidebar(menu, '/accounts/5')).wrapper)).toEqual(['accounts'])
+    expect(current((await mountSidebar(operatorMenu, '/accounts')).wrapper)).toEqual(['accounts'])
+    // The balance ledger has no entry: it is opened from the users list.
+    const ledger = await mountSidebar(operatorMenu, '/ledger?user_id=3')
+    expect(current(ledger.wrapper)).toEqual(['users'])
+    expect(ledger.wrapper.get('[data-testid="nav-submenu-users"]').attributes('aria-expanded')).toBe('true')
+    expect(current((await mountSidebar(operatorMenu, '/accounts/5')).wrapper)).toEqual(['accounts'])
   })
 
   it('keeps the labels in the mobile drawer when collapsed on desktop', async () => {
@@ -193,19 +198,20 @@ describe('sidebar', () => {
     expect(labels(wrapper)).toEqual(['仪表盘'])
     api.get.mockResolvedValue([
       { section: 'overview', items: [item('dashboard', '/dashboard')] },
-      { section: 'gateway', items: [item('groups', '/groups')] }
+      { section: 'gateway', items: [item('accounts', '/accounts')] }
     ])
     await wrapper.get('[data-testid="menu-retry"]').trigger('click')
     await flushPromises()
     expect(app.menusError).toBe(false)
     expect(wrapper.find('[data-testid="menu-retry"]').exists()).toBe(false)
-    expect(labels(wrapper)).toEqual(['dashboard', 'groups'])
+    expect(labels(wrapper)).toEqual(['dashboard', 'accounts'])
   })
 
   describe('settings view', () => {
     const link = (key: string, path: string, active = false) => ({ key, item: item(key, path), active })
     const groups: ViewGroup[] = [
       { key: 'gateway', label: '网关', links: [link('gateway', '/settings?tab=gateway', true), link('sticky', '/settings?tab=sticky')] },
+      { key: 'pricing', label: '分组与定价', links: [link('groups', '/groups')] },
       { key: 'pluginSettings', label: '插件设置', links: [link('mailer', '/plugins/mailer/settings')] }
     ]
     const view = (w: Sidebar) => w.find('[data-testid="nav-view-settings"]')
@@ -219,24 +225,28 @@ describe('sidebar', () => {
     it('swaps the console menu for the menu of system settings, under a way back', async () => {
       const { wrapper } = await mountSidebar(operatorMenu, '/settings')
       expect(wrapper.find('[data-testid="nav-group-admin"]').exists()).toBe(false)
-      expect(labels(wrapper)).toEqual(['返回控制台', 'gateway', 'sticky', 'mailer'])
+      expect(labels(wrapper)).toEqual(['返回控制台', 'gateway', 'sticky', 'groups', 'mailer'])
       expect(wrapper.findAll('nav a').map(a => a.attributes('href'))).toEqual([
         '/dashboard',
         '/settings?tab=gateway',
         '/settings?tab=sticky',
+        '/groups',
         '/plugins/mailer/settings'
       ])
       expect(view(wrapper).text()).toContain('网关')
+      expect(view(wrapper).text()).toContain('分组与定价')
       expect(view(wrapper).text()).toContain('插件设置')
       expect(current(wrapper)).toEqual(['gateway'])
     })
 
-    it('is chosen by the route: the settings page and the pages under it, not a page of the system section', async () => {
+    it('is chosen by the route: the pages of the view and the pages under them, not a page of the system section', async () => {
       const { wrapper, router } = await mountSidebar(operatorMenu, '/plugins/mailer/settings')
       expect(view(wrapper).exists()).toBe(true)
-      await router.push('/settings?tab=sticky')
-      await flushPromises()
-      expect(view(wrapper).exists()).toBe(true)
+      for (const path of ['/settings?tab=sticky', '/groups', '/prices/sources/3/sync']) {
+        await router.push(path)
+        await flushPromises()
+        expect([path, view(wrapper).exists()]).toEqual([path, true])
+      }
       // One menu serves the whole stay in the view.
       expect(useGroups).toHaveBeenCalledTimes(1)
       await router.push('/nodes')
@@ -302,9 +312,9 @@ describe('sidebar', () => {
       app.sidebarCollapsed = true
       await flushPromises()
       expect(view(wrapper).text()).toBe('')
-      expect(wrapper.findAll('nav a').map(a => a.attributes('aria-label'))).toEqual(['返回控制台', 'gateway', 'sticky', 'mailer'])
+      expect(wrapper.findAll('nav a').map(a => a.attributes('aria-label'))).toEqual(['返回控制台', 'gateway', 'sticky', 'groups', 'mailer'])
       expect(back(wrapper).attributes('title')).toBe('返回控制台')
-      expect(wrapper.findAll('nav hr')).toHaveLength(2)
+      expect(wrapper.findAll('nav hr')).toHaveLength(3)
     })
   })
 })

@@ -11,6 +11,9 @@ vi.mock('@/stores/auth', () => ({
 const Page = vi.hoisted(() => ({ default: { render: () => null } }))
 vi.mock('@/layouts/AppLayout.vue', () => Page)
 vi.mock('@/views/settings/SettingsView.vue', () => Page)
+vi.mock('@/views/groups/GroupsView.vue', () => Page)
+vi.mock('@/views/prices/PricesView.vue', () => Page)
+vi.mock('@/views/accounts/AccountsView.vue', () => Page)
 vi.mock('@/views/plugins/PluginSettingsView.vue', () => Page)
 vi.mock('@/views/ccgateway/CCGatewayView.vue', () => Page)
 vi.mock('@/views/errors/ForbiddenView.vue', () => Page)
@@ -33,23 +36,61 @@ describe('where pages belong (CONTRACTS §90)', () => {
     expect(metaOf('/plugins/mailer/settings')).toMatchObject({ parent: '/settings' })
   })
 
+  it('opens groups, model prices with the pages below them, and the CCGateway page in the settings view', () => {
+    for (const path of ['/groups', '/prices', CCGATEWAY_PAGE]) expect([path, metaOf(path).sidebar]).toEqual([path, 'settings'])
+    expect(metaOf('/prices/new').parent).toBe('/prices')
+    expect(metaOf('/prices/sources/3/sync').parent).toBe('/prices/sources')
+    expect(metaOf('/prices/sources').parent).toBe('/prices')
+  })
+
   it('leaves the feature pages of the sidebar without a parent', () => {
     for (const path of [
       '/roles',
       '/proxies',
-      '/platforms',
       '/plugins',
       '/market',
       '/publishers',
       '/nodes',
       '/system/tasks',
       '/system/upgrades',
-      '/system/audit',
-      CCGATEWAY_PAGE
+      '/system/audit'
     ]) {
       expect([path, metaOf(path).parent, metaOf(path).sidebar]).toEqual([path, undefined, undefined])
     }
     expect(metaOf('/plugins/mailer').parent).toBe('/plugins')
+  })
+
+  it('puts the balance ledger under the users list it is opened from', () => {
+    expect(metaOf('/ledger')).toMatchObject({ perm: 'balance:all:read', parent: '/users' })
+    expect(metaOf('/ledger').sidebar).toBeUndefined()
+  })
+
+  it('sends the old platforms page to the accounts', async () => {
+    expect(await follow('/platforms')).toBe('/accounts')
+  })
+})
+
+describe('the settings entry', () => {
+  // From another page: a link to the open page is no navigation.
+  beforeEach(() => follow('/forbidden'))
+
+  it('opens the settings page for a caller with a configuration page', async () => {
+    auth.denied = ['settings:read']
+    expect(await follow('/settings')).toBe('/settings')
+  })
+
+  it('leads a caller without one to the first page of the view that is theirs', async () => {
+    auth.denied = ['settings:read', 'sticky:read']
+    expect(await follow('/settings')).toBe('/groups')
+    auth.denied.push('group:read')
+    expect(await follow('/settings')).toBe('/prices')
+  })
+
+  it('is refused without any page of the view, as is a link to a configuration page', async () => {
+    auth.denied = ['settings:read', 'sticky:read']
+    expect(await follow('/settings?tab=billing')).toMatch(/^\/forbidden\?perm=settings:read/)
+    auth.denied.push('group:read', 'price:read')
+    expect(await follow('/settings')).toMatch(/^\/forbidden\?perm=settings:read/)
   })
 })
 

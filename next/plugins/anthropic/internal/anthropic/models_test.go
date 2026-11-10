@@ -39,7 +39,7 @@ func TestModelCatalogUpgrade(t *testing.T) {
 
 	fh := pluginsdktest.NewFakeHost()
 	fh.SetDSN(dsn, schema)
-	h := pluginsdktest.Start(t, New(), pluginsdktest.Options{Host: fh, SDK: []pluginsdk.Option{pluginsdk.WithInfo("anthropic", "0.3.0")}})
+	h := pluginsdktest.Start(t, New(), pluginsdktest.Options{Host: fh, SDK: []pluginsdk.Option{pluginsdk.WithInfo("anthropic", "0.3.1")}})
 
 	all := getModels(t, h, nil)
 	if all.Page.Total != 10 || len(all.Data) != 10 || all.Data[0]["model_id"] != "claude-fable-5-1" {

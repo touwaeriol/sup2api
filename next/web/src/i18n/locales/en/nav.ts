@@ -21,7 +21,6 @@ export default {
     ledger: 'Balance ledger',
     users: 'Users',
     roles: 'Roles & permissions',
-    platforms: 'Platforms',
     plugins: 'Installed plugins',
     market: 'Plugin market',
     publishers: 'Publishers',

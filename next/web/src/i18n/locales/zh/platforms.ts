@@ -1,20 +1,8 @@
 export default {
-  title: '平台',
-  description: '平台声明网关端点。核心内置 anthropic、openai、gemini 三个平台，插件可以声明新平台。账号类型声明自己支持哪些平台，该类型的账号为这些平台的端点提供服务。',
-  builtin: '内置',
-  pluginBy: '插件：{name}',
   endpoints: '端点',
-  method: '方法',
-  path: '路径',
-  protocol: '协议',
-  billing: '计费',
   billed: '计费',
   free: '不计费',
-  accountTypes: '支持它的账号类型',
-  noAccountTypes: '还没有账号类型支持此平台。',
   noEndpoints: '此平台没有声明端点。',
-  none: '没有可用的平台。',
-  fallbackNotice: '平台列表加载失败，仅显示内置平台。',
   unavailable: '平台未启用',
   unavailableHint: '声明平台 "{id}" 的插件未启用，该账号类型暂时不服务此平台。',
   supported: '支持的平台',
@@ -26,5 +14,5 @@ export default {
   keyEndpoints: '此分组的 Key 可以调用',
   keyNoPlatforms: '该分组暂时无法提供服务（没有可用账号）。',
   moreEndpoints: '另有 {n} 个',
-  unknownEndpoints: '该平台的端点见"平台"页面。'
+  unknownEndpoints: '暂时无法获取该平台的端点。'
 }

@@ -394,10 +394,10 @@ func TestHTTP(t *testing.T) {
 	if code, out = c.do("GET", "/me", tok, nil); code != 200 || out["data"].(map[string]any)["superuser"] != true {
 		t.Fatalf("me: %d %v", code, out)
 	}
-	// A superuser sees every core section that has items. security has no
-	// core item (only plugins join it, CONTRACTS §90) and empty sections are
-	// dropped.
-	if code, out = c.do("GET", "/me/menus", tok, nil); code != 200 || sectionKeys(out["data"]) != "overview,gateway,finance,users,plugins,system,me" {
+	// A superuser sees every core section that has items. security and
+	// finance have no core item (only plugins join them, CONTRACTS §90) and
+	// empty sections are dropped.
+	if code, out = c.do("GET", "/me/menus", tok, nil); code != 200 || sectionKeys(out["data"]) != "overview,gateway,users,plugins,system,me" {
 		t.Fatalf("menus: %d %v", code, out)
 	}
 	if code, out = c.do("GET", "/permissions", tok, nil); code != 200 {

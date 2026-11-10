@@ -12,7 +12,7 @@
 #   <outdir>/<name>-<version>.s2plugin for every next/plugins/<name> that has a
 #     manifest.json -- the list is DISCOVERED, not enumerated here, so a new
 #     plugin lands in the market with no change to this script,
-#   <outdir>/anthropic-0.3.1-test.s2plugin  (upgrade test fixture),
+#   <outdir>/anthropic-0.3.2-test.s2plugin  (upgrade test fixture),
 #   <outdir>/index.json, index.json.sig,
 #   <outdir>/test/guard-<version>-test.s2plugin  (guardtest build, not indexed)
 #

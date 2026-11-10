@@ -31,7 +31,6 @@ const uiPlugins = [
     version: '0.1.0',
     name: { en: 'Anthropic', zh: 'Anthropic' },
     asset_base: '/plugin-ui/anthropic/0.1.0-dev',
-    menus: [{ id: 'models', section: 'plugins', label: { en: 'Model catalog', zh: '模型目录' }, page: 'models' }],
     pages: {
       models: {
         type: 'table',
