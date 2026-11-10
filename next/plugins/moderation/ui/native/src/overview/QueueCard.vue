@@ -30,7 +30,7 @@ const rows = computed<DescItem[]>(() => {
 
 <template>
   <SCard :title="t('queue.title')" :subtitle="t('queue.hint')">
-    <SGrid template="repeat(auto-fit, minmax(260px, 1fr))">
+    <SGrid template="repeat(auto-fit, minmax(min(260px, 100%), 1fr))">
       <ul class="mod-queue-list">
         <li v-for="q in queue" :key="q.name">
           <SProgress v-if="q.capacity" :value="q.length" :max="q.capacity" :tone="q.length >= q.capacity ? 'danger' : 'info'">

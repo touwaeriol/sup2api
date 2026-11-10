@@ -43,7 +43,7 @@ const hasTrend = computed(() => (data.value?.trend || []).some((p) => Number(p.c
     <SAlert v-if="totals?.unpriced_calls" tone="warning" class="mod-block">
       {{ t('cost.unpriced', { n: n(totals.unpriced_calls), tokens: n(totals.unpriced_tokens) }) }}
     </SAlert>
-    <SGrid template="repeat(auto-fit, minmax(260px, 1fr))">
+    <SGrid template="repeat(auto-fit, minmax(min(260px, 100%), 1fr))">
       <div>
         <div class="mod-cost-total">
           <span class="mod-cost-amount mod-num">{{ totals ? money(totals.cost) : '—' }}</span>
