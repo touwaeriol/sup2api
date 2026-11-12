@@ -38,6 +38,7 @@ const run = async (d: 'apply' | 'reject' | 'undo') => (await decide(props.analys
     </div>
     <p v-if="p.reason" class="mod-proposal-reason">{{ t('ai.reasonLabel') }}{{ p.reason }}</p>
     <SHint v-if="p.status === 'dropped'" size="xs">{{ t('ai.droppedHint') }}</SHint>
+    <SHint v-else-if="p.status === 'refused'" size="xs">{{ enumLabel('ai.refusal', p.refusal) }}</SHint>
     <div v-if="!compact && (p.evidence_ids.length || p.decided_at)" class="mod-proposal-meta">
       <span v-if="p.evidence_ids.length">
         {{ t('ai.evidence', { n: p.evidence_ids.length }) }}:

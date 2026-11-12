@@ -33,7 +33,7 @@
 | D5 | 白名单、黑名单是否并入观察名单 | **本期只改名**（"只后台审核" / "总是先审"），第 4 期再并入观察名单，作为"锁定条目" | 立即合并：要迁移数据，而且 AI 分析和自动观察的规则都要一起改 |
 | D6 | AI 的权限（§9.4）——**用户已确认** | **升级、降级、移出三项各自三档：AI 自主执行 / AI 只给建议 / 不允许**。已有安装沿用原来的 `analysis_allow_*`（开为自主执行，关为只给建议），升级后行为不变，用户的站点三项都是自主执行。新装推荐：升级自主，降级和移出只给建议（理由见 §9.4）。所有执行都可以撤销，并记入名单历史 | （已定） |
 | D7 | AI 复核的触发时机（§9） | **每 N 次违规（observe、enforce 都计）+ 名单到期前一天 + 手动**；同一用户最短间隔 60 分钟，期间的触发顺延而不是丢掉；全站每天上限 200 次 | 维持现状：只按违规次数触发，且只有 observe 级计数（默认级别为拦截时 enforce 级也计）；分析运行期间的触发会丢 |
-| D8 | 由谁决定名单调整（§9.4）——**用户已确认** | **由 AI 自主判断**：AI 在提交里给出它决定的动作和理由，可以附带风险等级作说明。服务端不再按规则推出动作，只按 D6 的授权做闸门：自主执行就执行，只给建议就转成待确认，不允许就丢弃并在复核记录里注明"越权动作已丢弃" | （已定） |
+| D8 | 由谁决定名单调整（§9.4）——**用户已确认** | **由 AI 自主判断**：AI 在提交里给出它决定的动作和理由，可以附带风险等级作说明。服务端不再按规则推出动作，只按 D6 的授权做闸门：自主执行就执行，只给建议就转成待确认，不允许就丢弃并在复核记录里注明"越权已丢弃" | （已定） |
 
 ---
 
@@ -377,9 +377,9 @@
 
 | 期 | 范围 | 主要文件 | 估算改动量 | 迁移 | rolling | 测试要点 |
 |---|---|---|---|---|---|---|
-| **第 1 期：平台侧栏加界面整理** | UI 3.14 插件页 nav（平台）；审核插件改为侧栏；设置拆成 8 页；改名与文案修正（P6/P7/P10，记录标签）；后端小修 P8（`auto_watch`）和 P11（缓存可设 0）；**AI 复核的界面部分**（§9.4 归期：只读的复核视图、抽屉卡片、设置拆分、`?user=`、去掉准则里的后果段） | sdk manifest/check、server plugin/api/ui.go、`WEB/src/layouts/pluginNav.ts`、`sidebarViews.ts`、packages 版本；`UI/nav.ts`、`ModerationDashboard.vue`、`SettingsTab.vue`、`settingsForm.ts`、`forms/*.json`、`messages.ts`、`EventDetail.vue`；`M/store.go`、`M/settings.go` | 平台约 +500/-20 行（含测试），插件 UI 约 +600/-250 行，Go 约 +20 行 | 无 | 可以（核心 0.1.284 + 插件 0.10.0；旧控制台自动回退到页内标签） | `nav.spec`（manifest 与 nav.ts 一致）、`pluginNav.spec`、`navigation.spec`、`ui-contract.spec`、`check/ui_test`、`api/unit_test`；`settingsForm.spec`（分页覆盖）；手动验证旧链接 `?tab=settings` 和 `?record=` |
+| **第 1 期：平台侧栏加界面整理** | UI 3.14 插件页 nav（平台）；审核插件改为侧栏；设置拆成 8 页；改名与文案修正（P6/P7/P10，记录标签）；后端小修 P8（`auto_watch`）和 P11（缓存可设 0）；**AI 复核的界面部分**（§9.4 归期：`GET /analyses` 与只读的复核视图、抽屉卡片、设置拆分、`?user=`、改正准则里错误的动作含义） | sdk manifest/check、server plugin/api/ui.go、`WEB/src/layouts/pluginNav.ts`、`sidebarViews.ts`、packages 版本；`UI/nav.ts`、`ModerationDashboard.vue`、`SettingsTab.vue`、`settingsForm.ts`、`forms/*.json`、`messages.ts`、`EventDetail.vue`；`M/store.go`、`M/settings.go` | 平台约 +500/-20 行（含测试），插件 UI 约 +600/-250 行，Go 约 +20 行 | 无 | 可以（核心 0.1.284 + 插件 0.10.0；旧控制台自动回退到页内标签） | `nav.spec`（manifest 与 nav.ts 一致）、`pluginNav.spec`、`navigation.spec`、`ui-contract.spec`、`check/ui_test`、`api/unit_test`；`settingsForm.spec`（分页覆盖）；手动验证旧链接 `?tab=settings` 和 `?record=` |
 | **第 2 期：审核范围加命中重放** | `Spec.scope` 与角色过滤、指纹包含 scope；`hit_replay=new_content`；`fail_policy` | `M/flow.go`、`hook.go`、`extract.go`（只加过滤表）、`snapshot.go`、`settings.go`；`UI/FlowConfigCard.vue` 等（原型已有） | Go 约 +250 行（含测试），前端少量 | 无 | **分两步发版**：先让后端认识 `scope`（界面不提供），全部节点升级后再开放界面 | 各协议抽取在不同 scope 下的矩阵测试；缓存指纹随 scope 变化；重放后新内容是否送审；先审拒绝的语义不变 |
-| **第 3 期：可观测性** | `flow_source`、`level_source` 入库；绑定页标出失效绑定；概览提示；**AI 复核的建议模型**（§9.4：`proposal_*` 列、决策接口与撤销、新触发与上限、`allow_*` 退役） | `M/snapshot.go`、`hook.go`、`account_binding.go`、`store.go`、`routes_bindings.go`、`migrations/0011_*.sql`；`UI/BindingsTab.vue`、`EventDetail.vue`、overview | Go 约 +200 行，SQL 约 10 行，前端约 +150 行 | **有**（events 加 5 列，可为空） | 走 maintenance | 迁移前后记录的读取；fallback 的三种原因；account 与 group 的优先级 |
+| **第 3 期：可观测性** | `flow_source`、`level_source` 入库；绑定页标出失效绑定；概览提示；**AI 决定名单调整加授权闸门**（§9.4 归期：`submit_analysis` 的 `action` 和 `reason`、按权限生成的提示词、`proposal_*` 列、`dropped` / `refused` 状态、决策接口与撤销、新触发与上限、`allow_*` 退役） | `M/snapshot.go`、`hook.go`、`account_binding.go`、`store.go`、`routes_bindings.go`、`migrations/0011_*.sql`；`UI/BindingsTab.vue`、`EventDetail.vue`、overview | Go 约 +200 行，SQL 约 10 行，前端约 +150 行 | **有**（events 加 5 列，可为空） | 走 maintenance | 迁移前后记录的读取；fallback 的三种原因；account 与 group 的优先级 |
 | **第 4 期：清理与合并** | 名单并入观察名单（锁定条目）；删除 0.1 旧字段和 `on_error`；`decideHandling` 收拢；可选把输入上限移到流程 | `M/settings.go`、`legacy.go`、`hook.go`、`watch*.go`、`store.go`、`analysis_queue.go`、migrations；`forms/*`、`WatchTab.vue` | Go 约 +300/-400 行 | **有**（watchlist 加 `locked`，名单数据迁移） | 不能 rolling，一次性切换，走 maintenance | 迁移后先审 / 后审的判定与迁移前逐用户对比；AI 分析不能修改锁定条目 |
 
 ---
@@ -591,7 +591,7 @@ cd next/web && node node_modules/vite/bin/vite.js --mode mock
 | # | 问题 | 证据 |
 |---|---|---|
 | A1 | **定位不清**：同一次运行既是"逐条二次判断"，又是"用户趋势"，又是"处置"。界面主打"趋势"，真正影响用户的却是矩阵推出的处置，而处置规则不在界面上 | `M/analysis_queue.go:219-273`；现状 `UI/UserAnalysisBar.vue` |
-| A2 | **模型被告知的后果与代码不一致**：准则说"解除时观察级、拦截级都一样直接移出"，代码对 enforce 级只降级，另有 high 严重度拦截，`allow_remove` 默认关闭。而且把后果写给模型，本身就会诱导它调整结论 | `M/analysis_guidelines.go:46` 对比 `M/analysis_queue.go:233-246`、:379-391 |
+| A2 | **模型被告知的后果与代码不一致**：准则说"解除时观察级、拦截级都一样直接移出"，代码对 enforce 级只降级，另有 high 严重度拦截，`allow_remove` 默认关闭。（在旧模型里，把后果写给模型还会诱导它调整结论；D8 让 AI 成为决策者后，取舍见 §9.4"提示词"） | `M/analysis_guidelines.go:46` 对比 `M/analysis_queue.go:233-246`、:379-391 |
 | A3 | **触发会丢、会偏**：分析运行期间到达的触发被合并后清掉；失败不重试，计数却已清零；手动排队也清零自动计数；enforce 级条目的误报撤不回计数；新进名单、到期前都不复核 | `M/store.go:362-364`、`M/analysis_queue.go:351`、:454-455、`M/routes.go:707` |
 | A4 | **结论不可执行、不可追溯**：没有"待确认"状态和驳回动作；自动动作无法一键撤销；跳过的动作（`*_skipped`、`auto_not_allowed`）只在名单历史里留一行 | `M/analysis_queue.go:201-208`；CONTRACTS.md:5659 |
 | A5 | **与名单、封禁规则重叠**：AI 升级会变成永久 enforce，与人工有期限的规则不同；AI 判误报不影响封禁和违规计数；白名单用户被分析却只能降级 | `M/analysis_queue.go:396-406`、`M/store.go:443` |
@@ -615,6 +615,8 @@ cd next/web && node node_modules/vite/bin/vite.js --mode mock
   - 两个名单：只后台审核的用户不升级；总是先审的用户不降级、不移出；
   - 动作要与当前级别相符：enforce 级不能"移出"，只能"降级"；
   - 原有的"近期有高严重度记录时不移出"保留为硬性检查（`M/analysis_queue.go:379-391`）。
+- 违反硬性约束的动作，无论权限如何都不执行，状态记为 `refused`，并带上原因 `refusal`（allowlisted / blocklisted / level / high_severity）。复核记录和界面都会显示"不符合规则，未执行"和具体原因，与"越权已丢弃"区分开（原型 `UI/ProposalBox.vue`）。
+- **旧的 `suggestion` 字段**（release / observe / block）由 `action` 取代，只保留在旧的分析行里，供 `proposalOf()` 兼容当前后端。内置准则里"【建议怎么给】"整段（`M/analysis_guidelines.go:40-46`）改写为"怎么决定名单调整"，包括动作含义和需要的证据，不再描述服务端矩阵。
 
 **授权闸门**（D6，用户已确认）
 
@@ -622,20 +624,25 @@ cd next/web && node node_modules/vite/bin/vite.js --mode mock
   - `auto`：AI 自主执行，复核结束即执行，之后可以撤销；
   - `suggest`：AI 只给建议，转成 `pending`，在"AI 复核"页和用户抽屉里等人采纳或驳回；
   - `off`：不允许。这个动作不会出现在提示词和 `submit_analysis` 的枚举里。万一 AI 仍然提交了它，服务端丢弃，状态记为 `dropped`，复核记录里注明"越权已丢弃"，名单不变。
-- 动作的状态：`pending`、`applied`（人工采纳）、`auto_applied`（AI 已执行）、`rejected`、`expired`（名单在此期间被人工改过，即原来的 stale）、`undone`、`dropped`。
+- 动作的状态：`pending`、`applied`（人工采纳）、`auto_applied`（AI 已执行）、`rejected`、`expired`（名单在此期间被人工改过，即原来的 stale）、`undone`、`dropped`（越权已丢弃）、`refused`（不符合规则，未执行）。
 - `pending` 可以采纳或驳回；`applied` 和 `auto_applied` **随时可以撤销**，撤销恢复原级别和有效期。
 - 每个动作写 `watch_events`，带上 `analysis_id` 和操作人（AI 执行时操作人为空），名单历史里可以追溯。
 - AI 升级按 `watch_days` 到期，不再永久（A5）。
 
 **默认值**
 
-- **已有安装**（设置里存过任何值）：沿用 `analysis_allow_*`，开着的为 `auto`，关着的为 `suggest`，升级后行为不变。
-  - 从未单独存过某个开关的，按插件原来的默认值：升级开、降级开、**移出关**（0.6.0 起 `analysis_allow_remove` 默认为 false，CONTRACTS.md:5663）。所以移出默认为"只给建议"。
+- **所有安装都沿用 `analysis_allow_*`**：开着的为 `auto`（AI 自主执行），关着的为 `suggest`（AI 只给建议），所以升级后行为不变。
+  - 从未存过某个开关的，按它原来的默认值：升级开、降级开、**移出关**（0.6.0 起 `analysis_allow_remove` 默认为 false，CONTRACTS.md:5663）。所以默认是升级和降级 AI 自主执行，移出 AI 只给建议。
+  - 新键的 schema 默认值就是这三个值，单测保证它们与旧开关的默认值一致（原型 `UI/settingsForm.spec.ts`）。
   - 用户的站点三项都开着，所以三项都是 AI 自主执行。
-- **新装**（设置为空）推荐：升级 `auto`，降级 `suggest`，移出 `suggest`。理由：
-  - 升级是收紧的方向，用户原文即使诱导模型给出升级，对攻击者也没有好处；而且晚一步升级，就会多放过几次实时请求；升级可以撤销。
-  - 降级和移出是放宽的方向，被复核的恰恰是可能带注入的用户原文，所以放宽由人确认更稳。
-- 实现上，后端解码时：新键没存时读旧开关；旧开关也没存时，按"设置是否为空"区分已有安装和新装（原型 `UI/settingsForm.ts` 的 `EFFECT_KEYS.wasOn` 与之一致，并有单测）。
+- **新装的推荐**，不作为隐含默认值，而是在设置页每一项的说明里写明推荐和理由：
+  - 升级推荐 `auto`：这是收紧的方向，用户原文即使诱导模型去升级，对攻击者也没有好处；而且晚一步升级，就会多放过几次实时请求；升级可以撤销。
+  - 降级和移出推荐 `suggest`：这是放宽的方向，而被复核的恰恰是可能带注入的用户原文，所以放宽由人确认更稳。
+- **为什么不给新装一套不同的隐含默认值**：插件读不到"这是新装还是升级"。用"设置是否为空"来区分并不可靠：
+  - 新装后只要保存过任何一项（例如模式），就会被当成已有安装，默认值悄悄变回旧的；
+  - 写回的旧开关和隐藏键也会干扰判断。
+
+  要真正区分，需要核心在安装时写入初始设置（以后有这个能力时，再让新装直接带上推荐值）；在那之前，统一沿用旧开关，靠说明文字给出推荐。
 
 **提示词**
 
@@ -644,11 +651,12 @@ cd next/web && node node_modules/vite/bin/vite.js --mode mock
   - `downgrade`：拦截级降为观察级，之后后台审核、只记录；
   - `remove`：从观察名单移出，只适用于观察级用户；
   - 以及哪些用户不适用。
-- 同时注明该动作会直接执行还是作为建议。
+- **不**告诉 AI 某个动作会直接执行还是只作为建议。否则"只给建议"的动作在模型眼里代价更低，用户原文也更容易诱导它提出。
 - 删除内置准则里错误的"观察级、拦截级都一样直接移出"（`M/analysis_guidelines.go:46`，A2）。原型 mock 的提示词预览已按此生成。
 - **取舍**：之前（D8 定稿前）的方案是"不把后果写给模型"，以减少用户原文诱导模型去追求某个后果。
   - 现在 AI 是决策者，必须知道每个动作的含义，否则它的决定就没有意义。
-  - 由此带来的偏差靠三道兜底：授权闸门（放宽的动作可以只给建议或不允许）、硬性约束（名单、级别、高严重度）、撤销和审计（名单历史关联 `analysis_id`）。
+  - 但只告诉它动作的含义，不告诉它是否有人复查（见上一条）。
+  - 由此带来的偏差靠三道兜底：授权闸门（放宽的动作可以只给建议或不允许）、硬性约束（名单、级别、高严重度，违反时记为 `refused`）、撤销和审计（名单历史关联 `analysis_id`）。
 
 **触发**（D7）
 
@@ -778,7 +786,7 @@ cd next/web && node node_modules/vite/bin/vite.js --mode mock
 | 高 | 新增的 `?user=` 写回会与切换分节的 push 竞争，导致导航被取消（例如抽屉里"查看记录"、从 AI 复核页打开用户时） | 已修：抽屉完全由地址驱动（`?tab=watch&user=`），打开和关闭都只改地址；`useSection` 在真正切换分节时去掉 `user` 和 `record`，`?user=` 链接默认打开观察名单；删除 `preset` 通道；补了测试 |
 | 高 | 当前后端的分析没有 `proposal`，抽屉对每次分析都显示"无需调整"，原来的"按 AI 建议执行"也没了 | 已修：`proposalOf()` 把旧的 `suggestion` 转成可采纳的建议，经名单接口执行（截图 `ai-desktop-user-legacy`） |
 | 高 | 当前后端没有 `GET /analyses`，AI 复核页对所有人报错 | 已修：按能力 `analyses_list` 开放，没有时显示说明（`ai-desktop-unsupported`）；设计在第 1 期加入该接口 |
-| 中 | 没保存过旧开关时，降级显示为"只给建议"，实际节点却会自动执行 | 已修：`analysis_downgrade` 的 schema 默认值改为 auto，与 Go 默认一致（D6 定稿后即为最终方案：默认沿用旧开关） |
+| 中 | 没保存过旧开关时，降级显示为"只给建议"，实际节点却会自动执行 | 已修：`analysis_downgrade` 的 schema 默认值改为 auto，与 Go 默认一致。D6 定稿后仍是如此：所有安装沿用旧开关，新键默认值与旧开关默认值一致，并有单测保证；新装的推荐只写在说明里（§9.4"默认值"） |
 | 中 | 写回旧开关时，会无提示地覆盖别人同时做的修改；"不提出"在旧节点上会退化 | 已修：新增 `retiredConflicts` 进入确认流程；设置页说明了退化 |
 | 中 | 新的触发设置在当前后端上不生效，抽屉却总显示"到期前复核" | 已修：设置页注明需要新版本；抽屉只显示后端给出的 `review_at` |
 | 中 | 在一处做出决定后，另一处的列表（观察名单行、AI 复核页）不刷新 | 已修：共享的 `proposalsVersion`，各视图收到后重载 |
@@ -800,3 +808,25 @@ cd next/web && node node_modules/vite/bin/vite.js --mode mock
 - 插件 UI：vitest 18 个文件、185 个用例全部通过，vue-tsc 无错误；
 - Go：`next/plugins/moderation` 的 manifest 测试通过；
 - 截图共 42 张，全部重拍。
+
+### 9.7 D6、D8 定稿后的独立审查
+
+独立审查子代理只读取 `a587761249..0794b532fc`，共报告 15 条（2 高、8 中、5 低）。修复在下一个提交里。
+
+| 级别 | 发现 | 处理 |
+|---|---|---|
+| 高 | 用"设置是否为空"区分已有安装和新装不可靠：新装后保存任意一项就会变回旧默认值；从未保存过的已有安装又会被当成新装 | 已改：不再区分。所有安装沿用旧开关（新键默认值 = 旧开关默认值，单测保证）；新装的推荐和理由写进每一项的说明里；文档说明为什么不做隐含区分（§9.4"默认值"） |
+| 高 | 单测锁定了上述错误规则 | 已改：测试改为"从未存过的任何安装都得到旧开关的效果"，并检查新旧默认值一致 |
+| 中 | §9.6 的记录与新的默认值矛盾 | 已改为说明 D6 之后的情况 |
+| 中 | §5 分期表的第 1 期、第 3 期仍是旧描述 | 已与 §9.4"归期"对齐 |
+| 中 | §9.3 A2 仍把旧模型的观点当作现状 | 已加注，指向 §9.4 的取舍 |
+| 中 | 提示词告诉 AI 动作会直接执行还是只作建议，取舍里没有交代 | 已改：不再告诉 AI 是否有人复查，并写明理由；mock 的提示词同步修改 |
+| 中 | 违反硬性约束（名单、级别、高严重度）的动作，结局没有定义 | 已定义 `refused`（不符合规则，未执行）加原因 `refusal`，与"越权已丢弃"区分；类型、界面和文案都已加上 |
+| 中 | 旧的 `suggestion` 和准则里"【建议怎么给】"整段的去向没有说明 | 已说明：`action` 取代 `suggestion`，后者只保留在旧行里供兼容；整段准则改写；mock 的新分析去掉了 `suggestion`，模拟当前后端时由动作反推 |
+| 中 | mock 自相矛盾：注释说移出"不允许"，设置里却是"只给建议" | 注释改为"较早的一次运行，当时移出为不允许" |
+| 中 | mock 的提示词会提到没有授权的 downgrade，也缺少高严重度的限制 | 已改：只在 downgrade 有权限时才提及；补上高严重度的说明 |
+| 低 | "越权动作已丢弃"和"越权已丢弃"两种写法并存；英文写法别扭 | 统一为"越权已丢弃"，英文为 "Dropped (not allowed)" |
+| 低 | 侧栏描述仍是旧模型 | 已改为"按你给的权限调整名单或提出建议" |
+| 低 | `wasOn` 重复了默认值 | 已删除，改用 schema 默认值，单测检查新旧一致；mock 的 `permission()` 注明与设置页同一规则 |
+| 低 | "越权已丢弃"与驳回、撤销同色 | 已改为 danger 色 |
+| 低 | 界面上看不到推荐值 | 每一项的说明都写了推荐和理由 |

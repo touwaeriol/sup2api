@@ -1092,8 +1092,8 @@
       },
       "page": "analysis",
       "description": {
-        "en": "During a review the AI itself decides whether to change the watch list, and says why. Here you set its permission for each change: AI decides (it changes the list; undo any time), AI proposes (decided on the AI review page) or Not allowed (the AI is not offered it; should it still ask, the request is dropped and the review says so). Every change goes into the watch history. Existing sites keep their three former switches: on means AI decides, off means AI proposes. Nodes not yet upgraded only know whether the AI decides: there, Not allowed works like AI proposes.",
-        "zh": "复核时由 AI 自己判断要不要调整名单，并给出理由。这里决定它对每种调整的权限：AI 自主执行（直接调整，可随时撤销）、AI 只给建议（在“AI 复核”页等你采纳或驳回）、不允许（AI 看不到这个选项；万一提出也会丢弃，并在复核记录里注明）。每次调整都记入名单历史。已有站点沿用原来的三个开关：开着的是 AI 自主执行，关着的是 AI 只给建议。尚未升级的节点只认是否自主执行：“不允许”在那里按“只给建议”处理。"
+        "en": "During a review the AI itself decides whether to change the watch list, and says why. Here you set its permission for each change: AI decides (it changes the list; undo any time), AI proposes (decided on the AI review page) or Not allowed (the AI is not offered it; should it still ask, the request is dropped and the review says so). Every change goes into the watch history. Until changed, the three former switches apply. Nodes not yet upgraded only know whether the AI decides: there, Not allowed works like AI proposes.",
+        "zh": "复核时由 AI 自己判断要不要调整名单，并给出理由。这里决定它对每种调整的权限：AI 自主执行（直接调整，可随时撤销）、AI 只给建议（在“AI 复核”页等你采纳或驳回）、不允许（AI 看不到这个选项；万一提出也会丢弃，并在复核记录里注明“越权已丢弃”）。每次调整都记入名单历史。没改过的沿用原来的三个开关。尚未升级的节点只认是否自主执行：“不允许”在那里按“只给建议”处理。"
       }
     },
     "ui:widget": "segmented",
@@ -1116,8 +1116,8 @@
       }
     ],
     "ui:help": {
-      "en": "Users on the background-only list are never raised. Entries the AI raises expire after the watch period.",
-      "zh": "“只后台审核”名单里的用户不会被升级。AI 升级的条目按观察期到期。"
+      "en": "Recommended: AI decides. It tightens, talking the AI into it gains an attacker nothing, and every delay lets more live requests through. Users on the background-only list are never raised; entries the AI raises expire after the watch period.",
+      "zh": "推荐 AI 自主执行：这是收紧的方向，诱导 AI 升级对攻击者没有好处，晚升级会多放过实时请求。“只后台审核”名单里的用户不会被升级；AI 升级的条目按观察期到期。"
     }
   },
   "analysis_downgrade": {
@@ -1141,8 +1141,8 @@
       }
     ],
     "ui:help": {
-      "en": "Users on the always-check-first list are never lowered.",
-      "zh": "“总是先审”名单里的用户不会被降级。"
+      "en": "Recommended: AI proposes. It loosens, and the reviewed records are user text that may talk the AI into leniency. Users on the always-check-first list are never lowered.",
+      "zh": "推荐 AI 只给建议：这是放宽的方向，而被复核的是用户原文，可能诱导 AI 放宽。“总是先审”名单里的用户不会被降级。"
     }
   },
   "analysis_remove": {
@@ -1166,8 +1166,8 @@
       }
     ],
     "ui:help": {
-      "en": "Users on the always-check-first list are never taken off.",
-      "zh": "“总是先审”名单里的用户不会被移出。"
+      "en": "Recommended: AI proposes (as for lowering). Only users at the observe level; never while they have recent high-severity records; never users on the always-check-first list.",
+      "zh": "推荐 AI 只给建议（理由同降级）。只适用于观察级用户；近期有高严重度记录时不会移出；“总是先审”名单里的用户不会被移出。"
     }
   },
   "analysis_review_before_expiry": {

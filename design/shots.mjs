@@ -77,7 +77,12 @@ for (const [file, q, o] of SHOTS.filter(([f]) => !process.env.ONLY || f.startsWi
       if (v && typeof v === 'object') {
         delete v.features
         delete v.review_at
-        if ('proposal' in v && 'suggestion' in v) delete v.proposal, delete v.risk
+        if ('proposal' in v && 'steps' in v) {
+          const legacy = { upgrade: 'block', downgrade: 'observe', remove: 'release' }
+          v.suggestion = v.suggestion || legacy[v.proposal?.action] || ''
+          delete v.proposal
+          delete v.risk
+        }
         Object.values(v).forEach(strip)
       }
     }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import schema from '../../../forms/settings.schema.json'
 import ui from '../../../forms/settings.ui.json'
-import { CUSTOM_KEYS, displayValues, editableKeys, LEGACY_KEY, LEGACY_KEY_PAGE, retiredConflicts, schemaKeys, sectionsOf, sentSetting, settingSections, settingsKey, verdictCacheOff, withRetiredMirrored } from './settingsForm'
+import { CUSTOM_KEYS, displayValues, editableKeys, effectOf, LEGACY_KEY, LEGACY_KEY_PAGE, retiredConflicts, schemaKeys, sectionsOf, sentSetting, settingSections, settingsKey, verdictCacheOff, withRetiredMirrored } from './settingsForm'
 import { NAV_GROUPS } from './nav'
 import { mergeSettings, type PageValues } from './settingsMerge'
 
@@ -358,11 +358,16 @@ describe('AI review effects (prototype)', () => {
 
 describe('AI review effects: defaults and conflicts (prototype)', () => {
   const keys = ['analysis_upgrade', 'analysis_downgrade', 'analysis_remove']
-  it('keeps a configured install that never stored the switches on their defaults: on, on, off', () => {
-    expect(displayValues(schema, { mode: 'observe' }, keys)).toEqual({ analysis_upgrade: 'auto', analysis_downgrade: 'auto', analysis_remove: 'suggest' })
+  it('gives every install that never stored a switch what the switch did: the AI raises and lowers, removal is proposed', () => {
+    for (const stored of [{}, { mode: 'observe' }]) {
+      expect(displayValues(schema, stored, keys)).toEqual({ analysis_upgrade: 'auto', analysis_downgrade: 'auto', analysis_remove: 'suggest' })
+    }
   })
-  it('gives a new install the recommended permissions: the AI raises, and proposes lowering and removal', () => {
-    expect(displayValues(schema, {}, keys)).toEqual({ analysis_upgrade: 'auto', analysis_downgrade: 'suggest', analysis_remove: 'suggest' })
+  it('keeps each permission default equal to what its retired switch defaults to', () => {
+    const props = schema.properties as Record<string, { default?: unknown }>
+    for (const [k, retired] of [['analysis_upgrade', 'analysis_allow_upgrade'], ['analysis_downgrade', 'analysis_allow_downgrade'], ['analysis_remove', 'analysis_allow_remove']]) {
+      expect(props[k].default).toBe(effectOf(props[retired].default === true))
+    }
   })
   it('asks before overwriting a retired switch someone else changed', () => {
     expect(retiredConflicts(['analysis_upgrade'], { analysis_allow_upgrade: true }, { analysis_allow_upgrade: false })).toEqual(['analysis_upgrade'])

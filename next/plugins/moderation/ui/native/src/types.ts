@@ -731,12 +731,14 @@ export interface Analysis {
  * permission of that kind of change (analysis_upgrade / _downgrade /
  * _remove: auto | suggest | off) gates it: auto applies it (undoable),
  * suggest waits for a moderator, off drops it and the review says so
- * (dropped). The watch history links every change to the analysis.
+ * (dropped). A change that breaks a hard rule (the user lists, the level,
+ * recent high-severity records) is refused whatever the permission. The
+ * watch history links every change to the analysis.
  */
 export type Risk = 'low' | 'medium' | 'high'
 export const PROPOSAL_ACTIONS = ['upgrade', 'downgrade', 'remove'] as const
 export type ProposalAction = (typeof PROPOSAL_ACTIONS)[number]
-export type ProposalStatus = 'pending' | 'applied' | 'auto_applied' | 'rejected' | 'expired' | 'undone' | 'dropped'
+export type ProposalStatus = 'pending' | 'applied' | 'auto_applied' | 'rejected' | 'expired' | 'undone' | 'dropped' | 'refused'
 export interface Proposal {
   action: ProposalAction
   /** null = off the watch list */
@@ -747,6 +749,8 @@ export interface Proposal {
   evidence_ids: number[]
   /** why the AI decides this change (its own words) */
   reason?: string
+  /** refused: the hard rule the change breaks, whatever the permission (design §9.4) */
+  refusal?: 'allowlisted' | 'blocklisted' | 'level' | 'high_severity'
   decided_by?: number | null
   decided_at?: string | null
   /** Made in the console from a suggestion of a backend without proposals: applied through the watch list API, never rejected or undone. */

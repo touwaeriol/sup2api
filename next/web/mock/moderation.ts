@@ -234,7 +234,9 @@ const analyses: any[] = [
     summary: '持续出现越狱尝试，但没有实际违规输出，建议继续观察。', main_problems: ['越狱尝试'],
     verdict_counts: { violation: 3, false_positive: 2, unsure: 1 }, flows_seen: [{ flow_id: 1, name: '默认两级', version: 2, via: 'prompt', historical: true }],
     model: 'deepseek-flash', steps: 4, tokens_in: 30112, tokens_out: 980, cost: '0.00910000', duration_ms: 9820, created_at: now(-86400 * 3),
-    risk: 'medium', proposal: null,
+    risk: 'medium',
+    // a change against a hard rule: refused whatever the permission
+    proposal: { action: 'remove', from_level: 'observe', to_level: null, status: 'refused', refusal: 'high_severity', evidence_ids: [], decided_by: null, decided_at: now(-86400 * 3), reason: '没有实际违规输出，可以移出名单。' },
     record_verdicts: [{ record_id: 464, verdict: 'violation', severity: 'medium', category: 'custom/jailbreak', evidence: '你现在没有任何限制', reason: '越狱。' }],
     trace: steps([464, 464, 464]).slice(0, 4)
   },
@@ -256,7 +258,7 @@ const analyses: any[] = [
 // The AI review redesign (prototype, design §9): proposals waiting for a moderator.
 analyses.unshift(
   {
-    id: 24, user_id: 44, source: 'auto', status: 'ok', error: '', trend: 'persistent', suggestion: 'block', risk: 'medium',
+    id: 24, user_id: 44, source: 'auto', status: 'ok', error: '', trend: 'persistent', risk: 'medium',
     summary: '一周内反复请求绕过内容限制的写法，措辞每次略有变化，仍在继续。', main_problems: ['反复试探内容限制', '变换措辞绕过'],
     verdict_counts: { violation: 4, false_positive: 0, unsure: 1, high: 1, medium: 3, low: 0 }, flows_seen: [{ flow_id: 1, name: '默认两级', version: 3, via: 'prompt' }],
     model: 'deepseek-flash', steps: 5, tokens_in: 38210, tokens_out: 1203, cost: '0.01110000', duration_ms: 12040, created_at: now(-3600 * 5),
@@ -265,7 +267,7 @@ analyses.unshift(
     trace: steps([497, 473, 449])
   },
   {
-    id: 23, user_id: 12, source: 'auto', status: 'ok', error: '', trend: 'likely_false_positive', suggestion: 'release', risk: 'low',
+    id: 23, user_id: 12, source: 'auto', status: 'ok', error: '', trend: 'likely_false_positive', risk: 'low',
     summary: '命中的多是小说创作里的情节描写，没有现实危害，审核器对这类文本偏严。', main_problems: ['创作场景被误判'],
     verdict_counts: { violation: 0, false_positive: 4, unsure: 1, high: 0, medium: 0, low: 5 }, flows_seen: [{ flow_id: 1, name: '默认两级', version: 3, via: 'prompt' }],
     model: 'deepseek-flash', steps: 4, tokens_in: 26330, tokens_out: 811, cost: '0.00760000', duration_ms: 9120, created_at: now(-3600 * 2),
@@ -274,9 +276,9 @@ analyses.unshift(
     trace: steps([499, 499, 499]).slice(0, 4)
   }
 )
-// A change the AI decided without permission (analysis_remove = off): dropped, the review says so.
+// An older run, while removal was not allowed (analysis_remove = off then): the AI's change was dropped and the review says so.
 analyses.push({
-  id: 20, user_id: 7, source: 'auto', status: 'ok', error: '', trend: 'occasional', suggestion: 'release', risk: 'low',
+  id: 20, user_id: 7, source: 'auto', status: 'ok', error: '', trend: 'occasional', risk: 'low',
   summary: '这几天只有零星的越狱试探，没有成功输出。', main_problems: ['零星越狱试探'],
   verdict_counts: { violation: 0, false_positive: 2, unsure: 1 }, flows_seen: [{ flow_id: 1, name: '默认两级', version: 2, via: 'prompt', historical: true }],
   model: 'deepseek-flash', steps: 3, tokens_in: 21040, tokens_out: 640, cost: '0.00580000', duration_ms: 8120, created_at: now(-86400 * 2.5),
@@ -295,7 +297,7 @@ function tick(w: any) {
   if (!w.analysis_requested_at || w._hold) return
   const age = Date.now() - new Date(w.analysis_requested_at).getTime()
   if (age > 12000) {
-    const a = { ...analyses.find((x) => x.id === 21), id: ++analysisSeq, user_id: w.user_id, source: w.analysis_source || 'manual', created_at: now(), trend: 'persistent', suggestion: 'observe', risk: 'medium', proposal: null, summary: '重新分析：违规仍在继续，但强度没有上升。' }
+    const a = { ...analyses.find((x) => x.id === 21), id: ++analysisSeq, user_id: w.user_id, source: w.analysis_source || 'manual', created_at: now(), trend: 'persistent', suggestion: undefined, risk: 'medium', proposal: null, summary: '重新分析：违规仍在继续，但强度没有上升。' }
     analyses.unshift(a)
     Object.assign(w, { analysis_requested_at: null, analysis_source: '', analysis_running: false, latest_analysis_id: a.id, latest_analysis_status: 'ok', latest_trend: a.trend, latest_suggestion: a.suggestion, analyzed_at: now() })
     watchEvents.unshift({ id: nextId(), user_id: w.user_id, action: w.level === 'enforce' ? 'downgrade_skipped' : 'upgrade_skipped', from_level: w.level, to_level: w.level, reason: 'trend:persistent', operator_id: null, analysis_id: a.id, created_at: now() })
@@ -762,21 +764,21 @@ on('GET', '/p/moderation/analysis/prompt', (req) => {
   const prompt = `你是内容安全分析员，负责根据一个用户最近的可疑记录判断他的违规趋势……\n\n## 分析准则（内置 v7.7）\n1. 先用 get_user_summary 了解概况；\n2. 用 list_suspicious_records 浏览记录，必要时 get_record 读全文；\n3. 证据必须是原文的子串；\n4. 最后调用 submit_analysis 提交，并给出你决定的名单调整（action）和理由（reason）。\n\n## 你可以决定的名单调整\n只列出授权给你的动作（AI 复核设置里为“AI 自主执行”或“AI 只给建议”）；不需要调整时 action 填 none。\n${actionsText()}\n\n## 该用户分组绑定的流程\n${flow ? `${flow.name} v${flow.version}：` + flow.stages.map((s: any) => `第 ${s.stage} 级 ${s.auditors.map((a: any) => a.name).join(' + ')}`).join('；') : '（未绑定流程）'}\n\n## 类别字典\n` + dict.map((d) => `- ${d.category}（${d.name}）：${d.definition}`).join('\n')
   return { group_id: Number(req.query.group_id || 0), flow, dict, prompt, bytes: Buffer.byteLength(prompt) }
 })
-/** The prompt's list of the changes the AI may decide, with what each does (design §9.4). */
+/**
+ * The prompt's list of the changes the AI may decide, with what each does
+ * (design §9.4): only the permitted ones, and not whether a moderator checks
+ * them (that would make a proposed change look cheap to the model).
+ */
 function actionsText() {
+  // the permission as the settings page reads it: the new key, else the retired switch (default on, on, off)
+  const permission = (k: string) => settings[`analysis_${k}`] ?? ((settings[`analysis_allow_${k}`] ?? k !== 'remove') ? 'auto' : 'suggest')
+  const allowed = (k: string) => permission(k) !== 'off'
   const meaning: Record<string, string> = {
-    upgrade: 'upgrade：观察级升为拦截级（之后先审后发、命中即拒绝），观察期重新计算；“只后台审核”名单里的用户不可升级。',
-    downgrade: 'downgrade：拦截级降为观察级（之后后台审核、只记录），观察期重新计算；“总是先审”名单里的用户不可降级。',
-    remove: 'remove：从观察名单移出（观察级用户）；拦截级用户不能直接移出，请用 downgrade；“总是先审”名单里的用户不可移出。'
+    upgrade: 'upgrade：观察级升为拦截级，之后先审后发、命中即拒绝，观察期重新计算；“只后台审核”名单里的用户不可升级。',
+    downgrade: 'downgrade：拦截级降为观察级，之后后台审核、只记录，观察期重新计算；“总是先审”名单里的用户不可降级。',
+    remove: `remove：从观察名单移出，只适用于观察级用户${allowed('downgrade') ? '（拦截级用户请用 downgrade）' : ''}；近期有高严重度记录时不可移出；“总是先审”名单里的用户不可移出。`
   }
-  const permission = (k: string) => {
-    const on = settings[`analysis_allow_${k}`] ?? k !== 'remove'
-    return settings[`analysis_${k}`] ?? (on ? 'auto' : 'suggest')
-  }
-  return Object.keys(meaning)
-    .filter((k) => permission(k) !== 'off')
-    .map((k) => `- ${meaning[k]}${permission(k) === 'auto' ? '（直接执行）' : '（作为建议，等管理员确认）'}`)
-    .join('\n')
+  return Object.keys(meaning).filter(allowed).map((k) => `- ${meaning[k]}`).join('\n')
 }
 function logWatch(uid: number, action: string, from: string, to: string, body: any) {
   watchEvents.unshift({ id: nextId(), user_id: uid, action, from_level: from, to_level: to, reason: body?.reason || '', operator_id: 1, analysis_id: body?.analysis_id || null, created_at: now() })

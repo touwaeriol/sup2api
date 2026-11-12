@@ -82,18 +82,20 @@ const RETIRED_CACHE_TTL = 'cache_ttl_seconds'
 const DAY_SECONDS = 86400
 /**
  * The permission of each change the AI may decide (prototype, design §9, D6:
- * auto = the AI does it, suggest = the AI proposes it, off = not allowed),
- * the retired switch each replaces and that switch's built-in default. A
- * switch that was on let the AI do the change, one that was off left it to a
- * moderator, so: on = auto, off = suggest. A configured install that never
- * stored a switch ran on its default and keeps doing so; the schema default
- * is for a new install only.
+ * auto = the AI does it, suggest = the AI proposes it, off = not allowed)
+ * and the retired switch it replaces. A switch that was on let the AI do the
+ * change, one that was off left it to a moderator: on = auto, off = suggest.
+ * Never stored, a switch ran on its default, which the new key's schema
+ * default repeats (settingsForm.spec keeps the two equal), so every install
+ * keeps what it did.
  */
-const EFFECT_KEYS: Record<string, { retired: string; wasOn: boolean }> = {
-  analysis_upgrade: { retired: 'analysis_allow_upgrade', wasOn: true },
-  analysis_downgrade: { retired: 'analysis_allow_downgrade', wasOn: true },
-  analysis_remove: { retired: 'analysis_allow_remove', wasOn: false }
+const EFFECT_KEYS: Record<string, string> = {
+  analysis_upgrade: 'analysis_allow_upgrade',
+  analysis_downgrade: 'analysis_allow_downgrade',
+  analysis_remove: 'analysis_allow_remove'
 }
+/** The permission a retired switch stands for. */
+export const effectOf = (on: boolean) => (on ? 'auto' : 'suggest')
 const CACHE_DAYS_MAX = 30
 
 /** The stored settings turn the verdict cache off: only the retired cache_ttl_seconds = 0 does, until verdict_cache_days is saved. */
@@ -102,13 +104,8 @@ export const verdictCacheOff = (stored: Record<string, unknown>) => stored[CACHE
 /** What the plugin reads for a key never stored whose retired key is: undefined = nothing (the schema default applies). */
 function retiredValue(stored: Record<string, unknown>, k: string): unknown {
   if (k === ALLOWLIST_KEY) return stored[RETIRED_ALLOWLIST]
-  const effect = EFFECT_KEYS[k]
-  if (effect) {
-    const on = stored[effect.retired]
-    if (typeof on === 'boolean') return on ? 'auto' : 'suggest'
-    // a configured install (anything stored) ran on the switch's default
-    return Object.keys(stored).length ? (effect.wasOn ? 'auto' : 'suggest') : undefined
-  }
+  const on = stored[EFFECT_KEYS[k]]
+  if (typeof on === 'boolean') return effectOf(on)
   const ttl = stored[RETIRED_CACHE_TTL]
   if (k !== CACHE_DAYS_KEY || typeof ttl !== 'number' || !(ttl > 0)) return undefined
   return Math.min(CACHE_DAYS_MAX, Math.max(1, Math.ceil(ttl / DAY_SECONDS)))
@@ -181,7 +178,7 @@ export function withRetiredMirrored(values: Record<string, unknown>, changed: re
 function withEffectsMirrored(values: Record<string, unknown>, changed: readonly string[]): Record<string, unknown> {
   const saved = Object.entries(EFFECT_KEYS).filter(([k]) => changed.includes(k))
   if (!saved.length) return values
-  return { ...values, ...Object.fromEntries(saved.map(([k, { retired }]) => [retired, values[k] === undefined ? undefined : values[k] === 'auto'])) }
+  return { ...values, ...Object.fromEntries(saved.map(([k, retired]) => [retired, values[k] === undefined ? undefined : values[k] === 'auto'])) }
 }
 
 /**
@@ -191,7 +188,7 @@ function withEffectsMirrored(values: Record<string, unknown>, changed: readonly 
  */
 export function retiredConflicts(changed: readonly string[], loaded: Record<string, unknown>, latest: Record<string, unknown>): string[] {
   return Object.entries(EFFECT_KEYS)
-    .filter(([k, { retired }]) => changed.includes(k) && JSON.stringify(loaded[retired]) !== JSON.stringify(latest[retired]))
+    .filter(([k, retired]) => changed.includes(k) && JSON.stringify(loaded[retired]) !== JSON.stringify(latest[retired]))
     .map(([k]) => k)
 }
 

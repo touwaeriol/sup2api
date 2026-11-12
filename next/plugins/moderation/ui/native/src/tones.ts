@@ -63,9 +63,11 @@ export function suggestionTone(v: string | null | undefined): Tone {
   return v === 'block' ? 'danger' : v === 'observe' ? 'warning' : v === 'release' ? 'success' : 'gray'
 }
 
-/** A proposal's state (prototype, design §9): waiting stands out, done is calm. */
+/** A proposal's state (prototype, design §9): waiting stands out, done is calm, a change the AI was not allowed is flagged. */
 export function proposalTone(v: string | null | undefined): Tone {
-  return v === 'pending' ? 'warning' : v === 'applied' || v === 'auto_applied' ? 'success' : 'gray'
+  if (v === 'pending') return 'warning'
+  if (v === 'applied' || v === 'auto_applied') return 'success'
+  return v === 'dropped' ? 'danger' : 'gray'
 }
 
 /** A user's risk as the AI judged it (prototype). */
