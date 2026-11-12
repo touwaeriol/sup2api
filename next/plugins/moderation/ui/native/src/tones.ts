@@ -62,3 +62,13 @@ export function trendTone(v: string | null | undefined): Tone {
 export function suggestionTone(v: string | null | undefined): Tone {
   return v === 'block' ? 'danger' : v === 'observe' ? 'warning' : v === 'release' ? 'success' : 'gray'
 }
+
+/** A proposal's state (prototype, design §9): waiting stands out, done is calm. */
+export function proposalTone(v: string | null | undefined): Tone {
+  return v === 'pending' ? 'warning' : v === 'applied' || v === 'auto_applied' ? 'success' : 'gray'
+}
+
+/** A user's risk as the AI judged it (prototype). */
+export function riskTone(v: string | null | undefined): Tone {
+  return v === 'high' ? 'danger' : v === 'medium' ? 'warning' : v === 'low' ? 'success' : 'gray'
+}

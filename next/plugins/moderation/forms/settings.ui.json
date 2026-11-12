@@ -19,14 +19,13 @@
     "ban_duration_hours",
     "analysis_channel_id",
     "analysis_every_violations",
-    "analysis_allow_upgrade",
-    "analysis_allow_downgrade",
-    "analysis_allow_remove",
+    "analysis_review_before_expiry",
+    "analysis_cooldown_minutes",
+    "analysis_daily_limit",
+    "analysis_upgrade",
+    "analysis_downgrade",
+    "analysis_remove",
     "analysis_guidelines",
-    "analysis_timeout_ms",
-    "analysis_concurrency",
-    "analysis_context_kb",
-    "analysis_keep_per_user",
     "jev_default_set",
     "block_status",
     "block_message",
@@ -45,9 +44,16 @@
     "queue_size",
     "max_inflight_mb",
     "ttft_timeout_ms",
+    "analysis_timeout_ms",
+    "analysis_concurrency",
+    "analysis_context_kb",
+    "analysis_keep_per_user",
     "error_rate_alert_percent",
     "notify_webhook_url",
     "notify_webhook_secret",
+    "analysis_allow_upgrade",
+    "analysis_allow_downgrade",
+    "analysis_allow_remove",
     "base_url",
     "api_key",
     "model",
@@ -208,8 +214,8 @@
   },
   "analysis_every_violations": {
     "ui:title": {
-      "en": "Analyse every",
-      "zh": "每多少次违规自动分析一次"
+      "en": "Review every N violations",
+      "zh": "每多少次违规复核一次"
     },
     "ui:help": {
       "en": "Violations of an observe-level user (one per request) that queue an AI analysis; the count then restarts. With enforce as the default level, enforce-level users count too. 0 = only manual analyses.",
@@ -271,10 +277,14 @@
     },
     "ui:section": {
       "title": {
-        "en": "AI analysis",
-        "zh": "AI 分析"
+        "en": "When reviews run",
+        "zh": "何时复核"
       },
-      "page": "analysis"
+      "page": "analysis",
+      "description": {
+        "en": "Only users on the watch list are reviewed. Each review calls the analysis channel; its cost counts as analysis.",
+        "zh": "复核只针对观察名单上的用户。每次复核会调用一次分析渠道，费用计入“分析”。"
+      }
     }
   },
   "record_pass": {
@@ -858,7 +868,7 @@
     }
   },
   "analysis_allow_upgrade": {
-    "ui:widget": "switch",
+    "ui:widget": "hidden",
     "ui:title": {
       "en": "Let the AI upgrade to enforce",
       "zh": "允许 AI 升为拦截级"
@@ -869,14 +879,14 @@
     }
   },
   "analysis_allow_downgrade": {
-    "ui:widget": "switch",
+    "ui:widget": "hidden",
     "ui:title": {
       "en": "Let the AI downgrade to observe",
       "zh": "允许 AI 降为观察级"
     }
   },
   "analysis_allow_remove": {
-    "ui:widget": "switch",
+    "ui:widget": "hidden",
     "ui:title": {
       "en": "Let the AI remove users",
       "zh": "允许 AI 移出名单"
@@ -899,10 +909,10 @@
     },
     "ui:section": {
       "title": {
-        "en": "Analysis resources",
-        "zh": "分析资源"
+        "en": "AI review resources",
+        "zh": "AI 复核资源"
       },
-      "page": "analysis",
+      "page": "advanced",
       "collapsed": true
     }
   },
@@ -946,6 +956,14 @@
     "ui:help": {
       "en": "Empty uses the built-in guidelines (preview on the Watch list tab).",
       "zh": "留空使用内置准则（可在「观察名单」页预览完整提示词）。"
+    },
+    "ui:section": {
+      "title": {
+        "en": "Guidelines",
+        "zh": "分析准则"
+      },
+      "page": "analysis",
+      "collapsed": true
     }
   },
   "error_rate_alert_percent": {
@@ -1064,6 +1082,129 @@
     "ui:help": {
       "en": "When a conversation still holds content that hit: the recommended choice replays only that part and moderates what is new; the old behaviour treats the whole request as a hit, so with checking first every later turn is refused.",
       "zh": "对话历史里含有已命中的内容时：推荐只把那部分按原结论处理，其余新内容照常送审；旧行为是整个请求直接按命中处理，先审时整段会话都会被拒。"
+    }
+  },
+  "analysis_upgrade": {
+    "ui:section": {
+      "title": {
+        "en": "How conclusions take effect",
+        "zh": "结论如何生效"
+      },
+      "page": "analysis",
+      "description": {
+        "en": "Each kind of change can be applied automatically, proposed for a moderator (decided on the AI review page) or not proposed. Every automatic change can be undone.",
+        "zh": "每种名单调整可以自动执行、只给建议（在“AI 复核”页等你采纳或驳回），或不提出。自动执行的调整都可以撤销。"
+      }
+    },
+    "ui:widget": "segmented",
+    "ui:title": {
+      "en": "Raise to enforce",
+      "zh": "升为拦截级"
+    },
+    "ui:enumNames": [
+      {
+        "en": "Automatic",
+        "zh": "自动执行"
+      },
+      {
+        "en": "Propose",
+        "zh": "只给建议"
+      },
+      {
+        "en": "Off",
+        "zh": "不提出"
+      }
+    ],
+    "ui:help": {
+      "en": "Users on the background-only list are never raised.",
+      "zh": "“只后台审核”名单里的用户不会被升级。"
+    }
+  },
+  "analysis_downgrade": {
+    "ui:widget": "segmented",
+    "ui:title": {
+      "en": "Lower to observe",
+      "zh": "降为观察级"
+    },
+    "ui:enumNames": [
+      {
+        "en": "Automatic",
+        "zh": "自动执行"
+      },
+      {
+        "en": "Propose",
+        "zh": "只给建议"
+      },
+      {
+        "en": "Off",
+        "zh": "不提出"
+      }
+    ],
+    "ui:help": {
+      "en": "Users on the always-check-first list are never lowered. The reviewed records are user text that may talk the model into leniency, so proposing is recommended.",
+      "zh": "“总是先审”名单里的用户不会被降级。被复核的记录是用户原文，可能诱导模型给出宽松结论，推荐只给建议。"
+    }
+  },
+  "analysis_remove": {
+    "ui:widget": "segmented",
+    "ui:title": {
+      "en": "Take off the watch list",
+      "zh": "移出观察名单"
+    },
+    "ui:enumNames": [
+      {
+        "en": "Automatic",
+        "zh": "自动执行"
+      },
+      {
+        "en": "Propose",
+        "zh": "只给建议"
+      },
+      {
+        "en": "Off",
+        "zh": "不提出"
+      }
+    ],
+    "ui:help": {
+      "en": "Users at the enforce level are only proposed a downgrade; nothing is proposed while they have recent high-severity records.",
+      "zh": "拦截级用户只会被建议降级，不会直接移出；近期有高严重度记录时不提出。"
+    }
+  },
+  "analysis_review_before_expiry": {
+    "ui:widget": "switch",
+    "ui:title": {
+      "en": "Review before expiry",
+      "zh": "到期前复核"
+    },
+    "ui:help": {
+      "en": "Review an entry one day before it expires, to let it expire or extend it.",
+      "zh": "名单条目到期前一天复核一次，决定是到期移出还是延长。"
+    }
+  },
+  "analysis_cooldown_minutes": {
+    "ui:title": {
+      "en": "Minimum interval per user",
+      "zh": "同一用户最短间隔"
+    },
+    "ui:help": {
+      "en": "Two automatic reviews of a user are at least this far apart; a trigger in between runs after it instead of being lost.",
+      "zh": "同一用户两次自动复核至少相隔这么久；期间达到触发条件的会在间隔后补跑，不会丢。"
+    },
+    "ui:options": {
+      "unit": {
+        "en": "min",
+        "zh": "分钟"
+      }
+    }
+  },
+  "analysis_daily_limit": {
+    "ui:title": {
+      "en": "Reviews per day",
+      "zh": "每天最多复核次数"
+    },
+    "ui:help": {
+      "en": "Automatic reviews per day across the site; 0 = no limit. Manual reviews are not limited.",
+      "zh": "全站每天自动复核的上限，0 = 不限。手动复核不受限制。"
     }
   }
 }

@@ -3,7 +3,7 @@ import { computed, ref, toRef, watch } from 'vue'
 import { SAlert, SDescriptions, SDrawer, SSectionTitle, SSpinner, STabs, type DescItem } from '@sub2api/ui'
 import EventDetail from './EventDetail.vue'
 import UserAnalyses from './UserAnalyses.vue'
-import UserAnalysisBar from './UserAnalysisBar.vue'
+import UserAiReview from './UserAiReview.vue'
 import UserDailyChart from './UserDailyChart.vue'
 import UserStateSection from './UserStateSection.vue'
 import UserTimeline from './UserTimeline.vue'
@@ -15,9 +15,10 @@ import type { ReviewStatus, SourceFilter, Watch, WatchItem } from './types'
 import { useUserDetail } from './useUserDetail'
 
 // User detail drawer (§72.13.6, new-api user-detail-drawer), for any user:
-// state (allowlist / blocklist mark included) and inline watch level, the entry, a summary with the last 30 days
-// and its sources, the analysis state, then the analyses, the suspicious
-// records (filterable by source, bulk review) and the watch history. The
+// state (allowlist / blocklist mark included) and inline watch level, the AI
+// review (latest assessment and its proposal), the entry, a summary with the
+// last 30 days and its sources, then the suspicious records (filterable by
+// source, bulk review), the analyses and the watch history. The
 // record detail opened here links no user (this drawer is the user).
 const props = defineProps<{ open: boolean; userId: number | null; item?: WatchItem | null }>()
 const emit = defineEmits<{
@@ -46,13 +47,13 @@ function refreshCounts() {
   emit('changed', null)
 }
 
-const section = ref('analyses')
+const section = ref('records')
 const source = ref<SourceFilter | null>(null)
 const totals = ref({ analyses: 0, records: 0, history: 0 })
 watch(
   () => props.userId,
   () => {
-    section.value = 'analyses'
+    section.value = 'records'
     source.value = null
     totals.value = { analyses: 0, records: 0, history: 0 }
   }
@@ -78,8 +79,8 @@ const fields = computed<DescItem[]>(() => {
 })
 
 const tabs = computed(() => [
-  { key: 'analyses', label: `${t('watch.analyses')} (${num(totals.value.analyses)})` },
   { key: 'records', label: `${t('watch.suspicious')} (${num(totals.value.records)})` },
+  { key: 'analyses', label: `${t('watch.analyses')} (${num(totals.value.analyses)})` },
   { key: 'history', label: `${t('watch.history')} (${num(totals.value.history)})` }
 ])
 
@@ -109,6 +110,7 @@ function onDeleted(id: number) {
       <!-- a failed reload (polling, refresh) keeps the user shown; the next load clears it -->
       <SAlert v-if="error" tone="warning" dense>{{ t('watch.refreshFailed', { error }) }}</SAlert>
       <UserStateSection :user-id="detail.user_id" :state="detail" @watch-changed="refreshWatch" @show-user="emit('show-user', $event)" />
+      <UserAiReview :detail="detail" :state="state" @changed="refreshWatch" @open-record="openRecord" />
 
       <div v-if="entry">
         <SSectionTitle tag="p">{{ t('watch.info') }}</SSectionTitle>
@@ -121,7 +123,6 @@ function onDeleted(id: number) {
         <UserDailyChart v-if="detail.daily.length" :daily="detail.daily" />
       </div>
 
-      <UserAnalysisBar :detail="detail" :state="state" @changed="refreshWatch" />
 
       <STabs v-model="section" :tabs="tabs" size="sm">
         <UserAnalyses v-show="section === 'analyses'" :user-id="userId" :version="version" @open-record="openRecord" @total="totals.analyses = $event" />

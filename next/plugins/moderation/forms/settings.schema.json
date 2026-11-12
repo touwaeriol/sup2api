@@ -557,6 +557,55 @@
         "whole"
       ],
       "default": "new_content"
+    },
+    "analysis_upgrade": {
+      "type": "string",
+      "title": "AI upgrade",
+      "enum": [
+        "auto",
+        "suggest",
+        "off"
+      ],
+      "default": "auto"
+    },
+    "analysis_downgrade": {
+      "type": "string",
+      "title": "AI downgrade",
+      "enum": [
+        "auto",
+        "suggest",
+        "off"
+      ],
+      "default": "suggest"
+    },
+    "analysis_remove": {
+      "type": "string",
+      "title": "AI removal",
+      "enum": [
+        "auto",
+        "suggest",
+        "off"
+      ],
+      "default": "suggest"
+    },
+    "analysis_review_before_expiry": {
+      "type": "boolean",
+      "title": "Review before expiry",
+      "default": true
+    },
+    "analysis_cooldown_minutes": {
+      "type": "integer",
+      "title": "Review cooldown (minutes)",
+      "minimum": 0,
+      "maximum": 1440,
+      "default": 60
+    },
+    "analysis_daily_limit": {
+      "type": "integer",
+      "title": "Reviews per day",
+      "minimum": 0,
+      "maximum": 100000,
+      "default": 200
     }
   }
 }

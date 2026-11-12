@@ -7,7 +7,7 @@ import { mergeSettings, type PageValues } from './settingsMerge'
 
 const MASK = '******'
 /** The converted 0.1 fields and the keys retired in 0.8.0: in the schema (the core validates and masks them), never on the page. */
-const LEGACY = ['base_url', 'api_key', 'model', 'system_prompt', 'categories', 'tool_choice', 'max_turns', 'temperature', 'max_tokens', 'timeout_ms', 'on_error', 'sample_rate', 'group_ids', 'model_patterns', 'retention_days', 'exempt_user_ids', 'cache_ttl_seconds']
+const LEGACY = ['base_url', 'api_key', 'model', 'system_prompt', 'categories', 'tool_choice', 'max_turns', 'temperature', 'max_tokens', 'timeout_ms', 'on_error', 'sample_rate', 'group_ids', 'model_patterns', 'retention_days', 'exempt_user_ids', 'cache_ttl_seconds', 'analysis_allow_upgrade', 'analysis_allow_downgrade', 'analysis_allow_remove']
 
 const sections = settingSections(schema, ui)
 const zh = (v: unknown) => (v as { zh: string }).zh
@@ -20,20 +20,22 @@ describe('settingSections', () => {
       'cache/送审输入上限',
       'lists/固定名单',
       'lists/自动观察与封禁',
-      'analysis/AI 分析',
-      'analysis/分析资源',
+      'analysis/何时复核',
+      'analysis/结论如何生效',
+      'analysis/分析准则',
       'jev/Jev 默认题集',
       'response/拦截响应',
       'records/记录内容',
       'records/保留期',
       'advanced/性能',
+      'advanced/AI 复核资源',
       'advanced/告警与通知'
     ])
     const shown = sections.flatMap((g) => g.keys)
     expect(shown).toEqual(ui['ui:order'].filter((k) => !LEGACY.includes(k)))
     expect(new Set(shown).size).toBe(shown.length)
     expect(Object.keys(schema.properties).filter((k) => !shown.includes(k)).sort()).toEqual([...LEGACY].sort())
-    expect(sections.filter((g) => g.collapsed).map((g) => g.id)).toEqual(['analysis_timeout_ms'])
+    expect(sections.filter((g) => g.collapsed).map((g) => g.id)).toEqual(['analysis_guidelines', 'analysis_timeout_ms'])
   })
 
   it('puts every section on a settings page of the sidebar, and every such page has a section', () => {
@@ -336,5 +338,20 @@ describe('mergeSettings', () => {
       jev_default_set: { preamble: '', items: [{ category: 'a', threshold: 0.5 }] }
     })
     expect(m.changed).toEqual([])
+  })
+})
+
+describe('AI review effects (prototype)', () => {
+  const keys = ['analysis_upgrade', 'analysis_downgrade', 'analysis_remove']
+  it('shows what the retired switches meant until the new keys are stored: on = automatic, off = proposed', () => {
+    const shown = displayValues(schema, { analysis_allow_upgrade: true, analysis_allow_downgrade: false }, keys)
+    expect(shown).toEqual({ analysis_upgrade: 'auto', analysis_downgrade: 'suggest', analysis_remove: 'suggest' })
+    expect(displayValues(schema, { analysis_upgrade: 'off', analysis_allow_upgrade: true }, ['analysis_upgrade'])).toEqual({ analysis_upgrade: 'off' })
+  })
+  it('writes the retired switch of each saved key, for nodes that read only the switch', () => {
+    const values = { analysis_upgrade: 'auto', analysis_downgrade: 'suggest', analysis_remove: 'off' }
+    expect(withRetiredMirrored(values, keys)).toEqual({ ...values, analysis_allow_upgrade: true, analysis_allow_downgrade: false, analysis_allow_remove: false })
+    expect(withRetiredMirrored(values, ['analysis_upgrade'])).toEqual({ ...values, analysis_allow_upgrade: true })
+    expect(withRetiredMirrored(values, ['block_status'])).toBe(values)
   })
 })

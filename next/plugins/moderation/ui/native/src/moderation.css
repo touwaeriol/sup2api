@@ -1146,3 +1146,41 @@ p.mod-text-danger {
 .mod-settings-switch {
   margin-bottom: 1rem;
 }
+
+/* AI review (prototype, design §9): a proposal, pending ones stand out. */
+.mod-proposal {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid rgb(var(--line));
+  border-radius: 0.5rem;
+}
+.mod-proposal-pending {
+  border-color: rgb(var(--mod-warning) / 0.5);
+  background: rgb(var(--mod-warning) / 0.06);
+}
+.mod-proposal-head,
+.mod-proposal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+.mod-proposal-head {
+  justify-content: space-between;
+}
+.mod-proposal-move {
+  font-weight: 500;
+}
+.mod-proposal-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  font-size: 0.75rem;
+  color: rgb(var(--fg-muted));
+}
+.mod-ai-summary {
+  text-align: left;
+  white-space: normal;
+}

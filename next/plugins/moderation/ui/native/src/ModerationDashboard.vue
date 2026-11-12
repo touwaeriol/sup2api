@@ -11,6 +11,7 @@ import AuditorsTab from './AuditorsTab.vue'
 import ChannelsTab from './ChannelsTab.vue'
 import TestTab from './TestTab.vue'
 import SettingsTab from './SettingsTab.vue'
+import AiReviewTab from './AiReviewTab.vue'
 import { useCatalog } from './catalog'
 import { canManage, canManageSettings, useModHost } from './host'
 import { useStatus } from './status'
@@ -139,6 +140,7 @@ function openWatch(userId: number) {
       <BindingsTab v-if="shown('bindings')" v-show="tab === 'bindings'" :ref="setRef('bindings')" @go-tab="goTab" />
       <WatchTab v-if="shown('watch')" v-show="tab === 'watch'" :ref="setRef('watch')" :preset="watchPreset" @show-user="showUser" />
       <BlocksTab v-if="shown('blocks')" v-show="tab === 'blocks'" :ref="setRef('blocks')" />
+      <AiReviewTab v-if="shown('ai')" v-show="tab === 'ai'" :ref="setRef('ai')" @open-watch="openWatch" @go-tab="goTab" />
       <AuditorsTab v-if="shown('auditors')" v-show="tab === 'auditors'" :ref="setRef('auditors')" />
       <ChannelsTab v-if="shown('channels')" v-show="tab === 'channels'" :ref="setRef('channels')" :alert-percent="status.data.value?.error_rate_alert_percent ?? 0" />
       <SSegmented v-if="!inSidebar && isSettingsPage(tab)" v-model="tab" :options="settingsOptions" size="sm" class="mod-settings-switch" />

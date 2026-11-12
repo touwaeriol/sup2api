@@ -162,6 +162,14 @@ watch(
   (p) => p && openDetail(p.user_id),
   { immediate: true }
 )
+// ?user=<id> opens that user's drawer, and the open drawer is in the address, as ?record= is for a record.
+const linked = Number(host.router.currentRoute.value.query.user)
+if (Number.isSafeInteger(linked) && linked > 0) openDetail(linked)
+watch([detailOpen, detailUser], ([isOpen, id]) => {
+  const route = host.router.currentRoute.value
+  const user = isOpen && id ? String(id) : undefined
+  if (route.query.user !== user) host.router.replace({ query: { ...route.query, user } })
+})
 
 /**
  * Keeps a row in step with the drawer: an entry patches its row; null (the

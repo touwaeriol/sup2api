@@ -2,6 +2,7 @@ import { apiBase, isApiError, listAll, pluginApiBase, requestRaw, useList, type 
 import type {
   Analysis,
   AnalysisDetail,
+  AnalysisRow,
   AnalysisPrompt,
   AnalysisTool,
   Auditor,
@@ -27,6 +28,7 @@ import type {
   ModEventDetail,
   PerformanceResult,
   PluginSettings,
+  ProposalDecision,
   ReviewStatus,
   SimulateBody,
   SourceFilter,
@@ -196,6 +198,10 @@ export const analyzeWatch = (userId: number) => api().post<Watch>(`${WATCHLIST_P
 export const fetchWatchAnalyses = (userId: number, page = 1, pageSize = 10) =>
   api().list<Analysis>(`${WATCHLIST_PATH}/${userId}/analyses`, { page, page_size: pageSize })
 export const fetchAnalysis = (id: number) => api().get<AnalysisDetail>(`/analyses/${id}`)
+/** Every user's analyses, newest first; proposal = pending lists the ones waiting for a moderator (prototype). */
+export const fetchAnalyses = (q: { proposal?: 'pending'; page?: number; page_size?: number }) => api().list<AnalysisRow>('/analyses', q)
+/** Applies, rejects or undoes the proposal of an analysis (manage, prototype); answers the analysis. */
+export const decideProposal = (id: number, decision: ProposalDecision) => api().post<Analysis>(`/analyses/${id}/decision`, { decision })
 export const fetchAnalysisPrompt = (q: { group_id?: number; flow_id?: number }) => api().get<AnalysisPrompt>('/analysis/prompt', q)
 export async function fetchAnalysisTools(): Promise<AnalysisTool[]> {
   const r = await api().get<AnalysisTool[] | { tools: AnalysisTool[] } | null>('/analysis/tools')

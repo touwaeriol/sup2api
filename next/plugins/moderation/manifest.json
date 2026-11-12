@@ -632,6 +632,14 @@
                   "icon": "lock"
                 },
                 {
+                  "key": "ai",
+                  "label": {
+                    "en": "AI review",
+                    "zh": "AI 复核"
+                  },
+                  "icon": "bolt"
+                },
+                {
                   "key": "lists",
                   "label": {
                     "en": "List rules",
@@ -644,10 +652,10 @@
                 {
                   "key": "analysis",
                   "label": {
-                    "en": "AI analysis",
-                    "zh": "AI 分析"
+                    "en": "AI review settings",
+                    "zh": "AI 复核设置"
                   },
-                  "icon": "bolt",
+                  "icon": "settings",
                   "permission": "moderation:manage",
                   "corePermission": "plugin:manage"
                 }

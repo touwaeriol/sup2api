@@ -705,7 +705,40 @@ export interface Analysis {
   unpriced_calls?: number
   duration_ms: number
   created_at: string
+  /** How risky the user is now (prototype): the one judgement a reader needs first. */
+  risk?: Risk | ''
+  /** What the analysis proposes for the watch entry and what became of it (prototype). */
+  proposal?: Proposal | null
 }
+
+/**
+ * The AI review redesign (prototype, design §9): an analysis ends in at most
+ * one proposal for the user's watch entry. Each kind of change is applied
+ * automatically, waits for a moderator, or is not proposed at all
+ * (analysis_upgrade / _downgrade / _remove); every applied change can be
+ * undone, and the watch history links it to the analysis.
+ */
+export type Risk = 'low' | 'medium' | 'high'
+export const PROPOSAL_ACTIONS = ['upgrade', 'downgrade', 'remove'] as const
+export type ProposalAction = (typeof PROPOSAL_ACTIONS)[number]
+export type ProposalStatus = 'pending' | 'applied' | 'auto_applied' | 'rejected' | 'expired' | 'undone'
+export interface Proposal {
+  action: ProposalAction
+  from_level: WatchLevel
+  /** null = off the watch list */
+  to_level: WatchLevel | null
+  status: ProposalStatus
+  /** records the proposal rests on (the AI's violations) */
+  evidence_ids: number[]
+  decided_by?: number | null
+  decided_at?: string | null
+}
+/** A row of GET /analyses (every user, newest first). */
+export interface AnalysisRow extends Analysis {
+  /** the user's watch level now; null = not on the list */
+  level: WatchLevel | null
+}
+export type ProposalDecision = 'apply' | 'reject' | 'undo'
 
 /** GET /analyses/:id */
 export interface AnalysisDetail extends Analysis {

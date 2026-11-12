@@ -80,6 +80,17 @@ export const CACHE_DAYS_KEY = 'verdict_cache_days'
 const RETIRED_ALLOWLIST = 'exempt_user_ids'
 const RETIRED_CACHE_TTL = 'cache_ttl_seconds'
 const DAY_SECONDS = 86400
+/**
+ * How each kind of AI watch change takes effect (prototype, design §9:
+ * auto | suggest | off), and the retired switch each replaces: a switch that
+ * was on applied the change automatically, one that was off recorded it as
+ * not allowed - a proposal a moderator could apply by hand.
+ */
+const EFFECT_KEYS: Record<string, string> = {
+  analysis_upgrade: 'analysis_allow_upgrade',
+  analysis_downgrade: 'analysis_allow_downgrade',
+  analysis_remove: 'analysis_allow_remove'
+}
 const CACHE_DAYS_MAX = 30
 
 /** The stored settings turn the verdict cache off: only the retired cache_ttl_seconds = 0 does, until verdict_cache_days is saved. */
@@ -88,6 +99,8 @@ export const verdictCacheOff = (stored: Record<string, unknown>) => stored[CACHE
 /** What the plugin reads for a key never stored whose retired key is: undefined = nothing (the schema default applies). */
 function retiredValue(stored: Record<string, unknown>, k: string): unknown {
   if (k === ALLOWLIST_KEY) return stored[RETIRED_ALLOWLIST]
+  const allowed = stored[EFFECT_KEYS[k]]
+  if (typeof allowed === 'boolean') return allowed ? 'auto' : 'suggest'
   const ttl = stored[RETIRED_CACHE_TTL]
   if (k !== CACHE_DAYS_KEY || typeof ttl !== 'number' || !(ttl > 0)) return undefined
   return Math.min(CACHE_DAYS_MAX, Math.max(1, Math.ceil(ttl / DAY_SECONDS)))
@@ -153,6 +166,17 @@ export function sentSetting(schema: JSONSchema | undefined, stored: Record<strin
  *   the same allowlist) and the retired key gets it without those users.
  */
 export function withRetiredMirrored(values: Record<string, unknown>, changed: readonly string[]): Record<string, unknown> {
+  return withEffectsMirrored(withAllowlistMirrored(values, changed), changed)
+}
+
+/** A saved effect key also writes its retired switch (on = auto), for nodes that read only the switch. */
+function withEffectsMirrored(values: Record<string, unknown>, changed: readonly string[]): Record<string, unknown> {
+  const saved = Object.entries(EFFECT_KEYS).filter(([k]) => changed.includes(k))
+  if (!saved.length) return values
+  return { ...values, ...Object.fromEntries(saved.map(([k, retired]) => [retired, values[k] === undefined ? undefined : values[k] === 'auto'])) }
+}
+
+function withAllowlistMirrored(values: Record<string, unknown>, changed: readonly string[]): Record<string, unknown> {
   const allowSaved = changed.includes(ALLOWLIST_KEY)
   if (!allowSaved && !changed.includes(BLOCKLIST_KEY)) return values
   const retired = values[RETIRED_ALLOWLIST]
