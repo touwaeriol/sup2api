@@ -23,6 +23,7 @@ import {
   type TableColumn
 } from '@sub2api/ui'
 import WatchDetail from './WatchDetail.vue'
+import { proposalsVersion } from './useProposal'
 import WatchEditModal from './WatchEditModal.vue'
 import WatchActionDialog from './WatchActionDialog.vue'
 import AnalysisPromptModal from './AnalysisPromptModal.vue'
@@ -52,7 +53,6 @@ import { levelRefused, userListHint, type WatchAction } from './watchLevels'
 // others fold under "more filters" (applied ones are chips under the bar).
 // Each table cell keeps to one line; the level changes and the removal are
 // row actions, confirmed in a dialog.
-const props = defineProps<{ preset?: { user_id: number; n: number } | null }>()
 const emit = defineEmits<{ (e: 'show-user', userId: number): void }>()
 const host = useModHost()
 const t = host.t
@@ -150,26 +150,26 @@ function ask(r: WatchItem, a: WatchAction) {
 const moreActions = computed(() => [{ key: 'remove', label: t('watch.remove'), danger: true }])
 
 // ---- detail drawer and analysis prompt preview
-const detailOpen = ref(false)
-const detailUser = ref<number | null>(null)
-const detailItem = computed(() => list.items.value.find((x) => x.user_id === detailUser.value) ?? null)
-function openDetail(userId: number) {
-  detailUser.value = userId
-  detailOpen.value = true
-}
-watch(
-  () => props.preset,
-  (p) => p && openDetail(p.user_id),
-  { immediate: true }
-)
-// ?user=<id> opens that user's drawer, and the open drawer is in the address, as ?record= is for a record.
-const linked = Number(host.router.currentRoute.value.query.user)
-if (Number.isSafeInteger(linked) && linked > 0) openDetail(linked)
-watch([detailOpen, detailUser], ([isOpen, id]) => {
-  const route = host.router.currentRoute.value
-  const user = isOpen && id ? String(id) : undefined
-  if (route.query.user !== user) host.router.replace({ query: { ...route.query, user } })
+// The drawer is the address: ?tab=watch&user=<id> opens it, closing it drops
+// user, and leaving the section closes it (useSection drops user). Other
+// sections open a user with that address too (ModerationDashboard
+// openWatch), so nothing here races a section change.
+const route = host.router.currentRoute
+const linkedUser = computed(() => {
+  const n = Number(route.value.query.tab === 'watch' ? route.value.query.user : NaN)
+  return Number.isSafeInteger(n) && n > 0 ? n : null
 })
+/** The user shown, kept while the drawer closes. */
+const detailUser = ref<number | null>(null)
+watch(linkedUser, (id) => id && (detailUser.value = id), { immediate: true })
+const detailOpen = computed({
+  get: () => linkedUser.value !== null,
+  set: (open) => !open && host.router.replace({ query: { ...route.value.query, user: undefined } })
+})
+const detailItem = computed(() => list.items.value.find((x) => x.user_id === detailUser.value) ?? null)
+const openDetail = (userId: number) => host.router.push({ query: { ...route.value.query, tab: 'watch', user: String(userId) } })
+// A decision on a proposal (here or on the AI review page) changes levels and rows.
+watch(proposalsVersion, () => list.reload())
 
 /**
  * Keeps a row in step with the drawer: an entry patches its row; null (the
@@ -185,10 +185,8 @@ function onAction(w: Watch | null) {
   if (w) patchRow(acting.value?.user_id ?? null, w)
   void list.reload()
 }
-function showUser(id: number) {
-  detailOpen.value = false
-  emit('show-user', id)
-}
+/** The user's records: the section change closes the drawer. */
+const showUser = (id: number) => emit('show-user', id)
 const promptOpen = ref(false)
 </script>
 

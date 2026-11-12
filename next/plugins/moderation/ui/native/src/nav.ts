@@ -34,7 +34,7 @@ export const NAV_GROUPS = [
       { key: 'blocks', icon: 'lock', access: 'read' },
       { key: 'ai', icon: 'bolt', access: 'read' },
       { key: 'lists', icon: 'user', access: 'settings' },
-      { key: 'analysis', icon: 'settings', access: 'settings' }
+      { key: 'analysis', icon: 'role', access: 'settings' }
     ]
   },
   {
@@ -94,7 +94,9 @@ export const hostShowsNav = (host: Pick<PluginHost, 'version'>) => satisfiesRang
  * console's sidebar lights the same item, an old ?tab=settings link turns
  * into the page it opens, and closing a linked record keeps the records.
  * Changing the section adds a history entry when the sidebar lists the
- * sections (like a click in it), and replaces it with tabs.
+ * sections (like a click in it), and replaces it with tabs; it drops
+ * ?record= and ?user= (their drawers belong to the section left). A ?user=
+ * link without a section opens the watch list.
  */
 export function useSection(router: PluginHost['router'], visible: Ref<readonly SectionKey[]>, inSidebar: boolean) {
   const route = router.currentRoute
@@ -104,9 +106,13 @@ export function useSection(router: PluginHost['router'], visible: Ref<readonly S
     // While the console leaves the page the route is another page's: keep the section.
     if (route.value.path !== page) return last
     const q = route.value.query
-    return (last = sectionOf(q.tab ?? (q.record ? 'events' : undefined), visible.value))
+    return (last = sectionOf(q.tab ?? (q.record ? 'events' : q.user ? 'watch' : undefined), visible.value))
   })
-  const go = (tab: SectionKey, how: 'push' | 'replace') => router[how]({ query: { ...route.value.query, tab } })
+  // A section change drops the record and the user a drawer of the old section showed.
+  const go = (tab: SectionKey, how: 'push' | 'replace') =>
+    router[how]({ query: { ...route.value.query, tab, ...(left(tab) && { record: undefined, user: undefined }) } })
+  /** A change from one named section to another (writing back the section a link resolved to is none). */
+  const left = (tab: SectionKey) => !!route.value.query.tab && route.value.query.tab !== tab && sectionOf(route.value.query.tab, visible.value) !== tab
   watch(
     section,
     (v) => {

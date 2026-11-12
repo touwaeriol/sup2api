@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import schema from '../../../forms/settings.schema.json'
 import ui from '../../../forms/settings.ui.json'
-import { CUSTOM_KEYS, displayValues, editableKeys, LEGACY_KEY, LEGACY_KEY_PAGE, schemaKeys, sectionsOf, sentSetting, settingSections, settingsKey, verdictCacheOff, withRetiredMirrored } from './settingsForm'
+import { CUSTOM_KEYS, displayValues, editableKeys, LEGACY_KEY, LEGACY_KEY_PAGE, retiredConflicts, schemaKeys, sectionsOf, sentSetting, settingSections, settingsKey, verdictCacheOff, withRetiredMirrored } from './settingsForm'
 import { NAV_GROUPS } from './nav'
 import { mergeSettings, type PageValues } from './settingsMerge'
 
@@ -353,5 +353,20 @@ describe('AI review effects (prototype)', () => {
     expect(withRetiredMirrored(values, keys)).toEqual({ ...values, analysis_allow_upgrade: true, analysis_allow_downgrade: false, analysis_allow_remove: false })
     expect(withRetiredMirrored(values, ['analysis_upgrade'])).toEqual({ ...values, analysis_allow_upgrade: true })
     expect(withRetiredMirrored(values, ['block_status'])).toBe(values)
+  })
+})
+
+describe('AI review effects: defaults and conflicts (prototype)', () => {
+  it('shows what the plugin does when nothing is stored: upgrade and downgrade automatic, removal proposed', () => {
+    expect(displayValues(schema, {}, ['analysis_upgrade', 'analysis_downgrade', 'analysis_remove'])).toEqual({
+      analysis_upgrade: 'auto',
+      analysis_downgrade: 'auto',
+      analysis_remove: 'suggest'
+    })
+  })
+  it('asks before overwriting a retired switch someone else changed', () => {
+    expect(retiredConflicts(['analysis_upgrade'], { analysis_allow_upgrade: true }, { analysis_allow_upgrade: false })).toEqual(['analysis_upgrade'])
+    expect(retiredConflicts(['analysis_upgrade'], { analysis_allow_upgrade: true }, { analysis_allow_upgrade: true })).toEqual([])
+    expect(retiredConflicts(['block_status'], {}, { analysis_allow_upgrade: false })).toEqual([])
   })
 })

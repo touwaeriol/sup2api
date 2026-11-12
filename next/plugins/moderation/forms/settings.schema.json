@@ -576,7 +576,7 @@
         "suggest",
         "off"
       ],
-      "default": "suggest"
+      "default": "auto"
     },
     "analysis_remove": {
       "type": "string",

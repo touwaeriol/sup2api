@@ -176,6 +176,17 @@ function withEffectsMirrored(values: Record<string, unknown>, changed: readonly 
   return { ...values, ...Object.fromEntries(saved.map(([k, retired]) => [retired, values[k] === undefined ? undefined : values[k] === 'auto'])) }
 }
 
+/**
+ * The effect keys this save changes whose retired switch someone changed
+ * since the page loaded (an older console or node): the mirror would
+ * overwrite it, so the save asks first, as for a key of the page.
+ */
+export function retiredConflicts(changed: readonly string[], loaded: Record<string, unknown>, latest: Record<string, unknown>): string[] {
+  return Object.entries(EFFECT_KEYS)
+    .filter(([k, retired]) => changed.includes(k) && JSON.stringify(loaded[retired]) !== JSON.stringify(latest[retired]))
+    .map(([k]) => k)
+}
+
 function withAllowlistMirrored(values: Record<string, unknown>, changed: readonly string[]): Record<string, unknown> {
   const allowSaved = changed.includes(ALLOWLIST_KEY)
   if (!allowSaved && !changed.includes(BLOCKLIST_KEY)) return values

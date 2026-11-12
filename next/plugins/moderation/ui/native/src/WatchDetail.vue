@@ -123,7 +123,6 @@ function onDeleted(id: number) {
         <UserDailyChart v-if="detail.daily.length" :daily="detail.daily" />
       </div>
 
-
       <STabs v-model="section" :tabs="tabs" size="sm">
         <UserAnalyses v-show="section === 'analyses'" :user-id="userId" :version="version" @open-record="openRecord" @total="totals.analyses = $event" />
         <UserTimeline

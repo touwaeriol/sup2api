@@ -655,7 +655,7 @@
                     "en": "AI review settings",
                     "zh": "AI 复核设置"
                   },
-                  "icon": "settings",
+                  "icon": "role",
                   "permission": "moderation:manage",
                   "corePermission": "plugin:manage"
                 }

@@ -395,7 +395,7 @@ cd next/web && node node_modules/vite/bin/vite.js --mode mock
 ```
 
 - mock 直接读取插件 manifest 的 `ui.pages`（含 nav）和真实的 `forms/*.json`；记录 mock 里带有 `flow_source`、`level_source` 和 `scope`。
-- 截图在 `design/shots/`，共 40 张（其中 `ai-*` 14 张见 §9.5），脚本是 `design/shots.mjs`。重拍方法：在一个装有 `playwright-core@1.56.0` 的目录里运行 `mcr.microsoft.com/playwright:v1.56.0-noble` 容器，加 `--network host`，并把截图目录挂载到 `/out`。截图用 Playwright 1.56 加 Chromium 拍摄，视口如下：
+- 截图在 `design/shots/`，共 42 张（其中 `ai-*` 16 张见 §9.5），脚本是 `design/shots.mjs`。重拍方法：在一个装有 `playwright-core@1.56.0` 的目录里运行 `mcr.microsoft.com/playwright:v1.56.0-noble` 容器，加 `--network host`，并把截图目录挂载到 `/out`。截图用 Playwright 1.56 加 Chromium 拍摄，视口如下：
   - 桌面 1440×900；
   - 手机 390×844 @3x，即 iPhone 14 视口；
   - 暗色模式。
@@ -656,9 +656,9 @@ cd next/web && node node_modules/vite/bin/vite.js --mode mock
 | `analysis_cooldown_minutes` | — | AI 复核设置 / 何时复核 | **新增** | 60 |
 | `analysis_daily_limit` | — | AI 复核设置 / 何时复核 | **新增**（0 = 不限） | 200 |
 | `analysis_upgrade` | — | AI 复核设置 / 结论如何生效 | **新增**，取代 `analysis_allow_upgrade` | auto |
-| `analysis_downgrade` | — | 同上 | **新增**，取代 `analysis_allow_downgrade` | suggest（D6；现状为自动） |
+| `analysis_downgrade` | — | 同上 | **新增**，取代 `analysis_allow_downgrade` | auto（与现状一致；D6 推荐第 3 期改为 suggest） |
 | `analysis_remove` | — | 同上 | **新增**，取代 `analysis_allow_remove` | suggest |
-| `analysis_allow_upgrade`、`analysis_allow_downgrade`、`analysis_allow_remove` | AI 分析 | 隐藏 | **退役**。新键没保存过时按旧值显示（true 为 auto，false 为 suggest）；保存新键时同步写回旧键（auto 为 true，否则 false），供混跑期间的旧节点读取（原型 `UI/settingsForm.ts` 的 `EFFECT_KEYS`）。第 4 期删除 | — |
+| `analysis_allow_upgrade`、`analysis_allow_downgrade`、`analysis_allow_remove` | AI 分析 | 隐藏 | **退役**，第 4 期删除（原型 `UI/settingsForm.ts` 的 `EFFECT_KEYS`）：<br>· 新键没保存过时按旧值显示（true 为 auto，false 为 suggest）；<br>· 保存新键时同步写回旧键（auto 为 true，否则 false），供混跑期间的旧节点读取；<br>· 若旧键在此期间被别人改过，保存前先确认（`retiredConflicts`）；<br>· 旧节点上"不提出"按"只给建议"处理，设置页已说明 | — |
 | `analysis_guidelines` | AI 分析 | AI 复核设置 / 分析准则（折叠） | 保留；内置准则删去"后果"一段（A2） | "" |
 | `analysis_timeout_ms`、`analysis_concurrency`、`analysis_context_kb`、`analysis_keep_per_user` | AI 分析 | 高级 / AI 复核资源（折叠） | 保留（资源类，很少改动） | 60000 / 2 / 64 / 20 |
 
@@ -675,12 +675,25 @@ cd next/web && node node_modules/vite/bin/vite.js --mode mock
   - `GET /analyses?proposal=pending`（read）；
   - `POST /analyses/:id/decision {apply|reject|undo}`（manage），在 `block_subjects` 锁内校验状态和当前级别，写 `watch_events`。
 - `escalateWatch` 改为"建议生成加按设置执行"：同一份规则产出 `proposal`，`auto` 直接执行，`suggest` 写入 `pending`（`M/analysis_queue.go:376-427`）。
-- 发版顺序（rolling 时的注意）：新节点写 `proposal_*` 时，旧节点只是读不到，没有坏处。但"撤销"必须等全部节点升级后才在界面开放，方法与 §4.1 相同：由状态接口给出最低节点版本。
+- 发版顺序（rolling 时的注意）：新节点写 `proposal_*` 时，旧节点只是读不到，没有坏处。
+- **能力开关：** 状态接口的 `runtime.features` 列出全部节点都已实现的能力（原型 `UI/types.ts` `Runtime.features`）：
+  - `analyses_list`：跨用户的复核列表；
+  - `proposals`：建议模型、决策接口和撤销。
+
+  界面按能力开放功能：
+  - 没有 `analyses_list` 时，"AI 复核"页显示说明，而不是报错；
+  - 没有 `proposals` 时，"撤销"不出现。
+- **与当前后端兼容：** 当前后端的分析没有 `proposal` 字段，`proposalOf()`（原型 `UI/useProposal.ts`）会把它的 `suggestion` 转成一条"待确认"的建议。
+  - 这类建议仍通过名单接口执行，带上 `analysis_id`，与原来的"按 AI 建议执行"相同；
+  - 不提供驳回和撤销；
+  - 对审核管理员或"只后台审核"名单里的用户，不显示会被后端拒绝的操作，而是说明原因。
 
 **归期**
 
-- **第 1 期（仅界面，无迁移）：**
+- **第 1 期（无迁移）：**
+  - 新增只读接口 `GET /analyses`（read，跨用户、可分页），并加上能力 `analyses_list`；
   - 侧栏"AI 复核"视图先只读，展示最近的复核，用现有的 `user_analyses` 数据；
+  - 抽屉里的建议框兼容旧的 `suggestion`（见上文"与当前后端兼容"）；
   - 抽屉卡片调整顺序；
   - 设置拆分并改文案；
   - `?user=` 深链；
@@ -717,7 +730,38 @@ cd next/web && node node_modules/vite/bin/vite.js --mode mock
 | AI 复核设置 | `ai-desktop-settings` | `ai-dark-settings` | `ai-mobile-settings` |
 | 高级 / AI 复核资源 | `ai-desktop-advanced-resources` | — | — |
 | 侧栏中的入口 | — | — | `ai-mobile-sidebar` |
+| 当前后端：没有跨用户列表时的说明 | `ai-desktop-unsupported` | — | — |
+| 当前后端：抽屉里的旧建议（只能采纳，经名单接口执行） | `ai-desktop-user-legacy` | — | — |
 
 ### 9.6 独立审查
 
-（待补）
+独立审查子代理只读取本部分的 diff（`bcdc8fc74e..eca9e64819`），共报告 20 条（4 高、8 中、8 低）。修复都在后续提交里。
+
+| 级别 | 发现 | 处理 |
+|---|---|---|
+| 高 | 三个 `analysis_allow_*` 设为隐藏后，Go 测试 `TestSettingsForms` 会失败 | 已修：`manifest_test.go` 的 `legacy` 列表加上这三个键；`go test .` 通过 |
+| 高 | 新增的 `?user=` 写回会与切换分节的 push 竞争，导致导航被取消（例如抽屉里"查看记录"、从 AI 复核页打开用户时） | 已修：抽屉完全由地址驱动（`?tab=watch&user=`），打开和关闭都只改地址；`useSection` 在真正切换分节时去掉 `user` 和 `record`，`?user=` 链接默认打开观察名单；删除 `preset` 通道；补了测试 |
+| 高 | 当前后端的分析没有 `proposal`，抽屉对每次分析都显示"无需调整"，原来的"按 AI 建议执行"也没了 | 已修：`proposalOf()` 把旧的 `suggestion` 转成可采纳的建议，经名单接口执行（截图 `ai-desktop-user-legacy`） |
+| 高 | 当前后端没有 `GET /analyses`，AI 复核页对所有人报错 | 已修：按能力 `analyses_list` 开放，没有时显示说明（`ai-desktop-unsupported`）；设计在第 1 期加入该接口 |
+| 中 | 没保存过旧开关时，降级显示为"只给建议"，实际节点却会自动执行 | 已修：`analysis_downgrade` 的 schema 默认值改为 auto，与 Go 默认一致；D6 的改动推迟到第 3 期 |
+| 中 | 写回旧开关时，会无提示地覆盖别人同时做的修改；"不提出"在旧节点上会退化 | 已修：新增 `retiredConflicts` 进入确认流程；设置页说明了退化 |
+| 中 | 新的触发设置在当前后端上不生效，抽屉却总显示"到期前复核" | 已修：设置页注明需要新版本；抽屉只显示后端给出的 `review_at` |
+| 中 | 在一处做出决定后，另一处的列表（观察名单行、AI 复核页）不刷新 | 已修：共享的 `proposalsVersion`，各视图收到后重载 |
+| 中 | 对审核管理员、"只后台审核"名单里的用户，也显示了会被拒绝的采纳按钮 | 已修：`blockedReason()` 改为显示原因 |
+| 中 | 撤销没有按设计等全部节点升级后再开放 | 已修：用能力 `proposals` 控制 |
+| 中 | mock 的决策接口状态有误（重新加入时缺 `user_id`、没有 expired 路径、撤销不恢复有效期、未知决定也会生效） | 已修：校验决定；级别已被改动时返回 409 并标为 expired；保存被替换的条目，撤销时恢复；采纳后让同一用户的其它待确认建议失效 |
+| 中 | mock 的"重新复核"复用了 #21 的建议对象 | 已修：新的复核结果 `proposal: null`、`risk: medium` |
+| 低 | 待确认列表只取 50 条，没有提示 | 已修：超出时显示"只显示前 50 条"。分页留到正式实现 |
+| 低 | 决定后返回的分析对象没有使用；判断逻辑在两处重复 | 已修：`decided` 不再带数据；`proposalOf` 统一放在 `useProposal.ts` |
+| 低 | AI 页没有按过时（stale）规则处理 | 已修：同由 `proposalOf` 处理 |
+| 低 | 抽屉文案："还剩 0 次"、英文首字母小写、不在名单的用户也显示卡片、丢了排队时间 | 已修 |
+| 低 | "分析"与"复核"用词混用；总结为空时显示"—" | 总结已改用 `ai.noSummary`；"AI 分析渠道"等现有文案保留（渠道的名字），其余名称留到第 1 期统一 |
+| 低 | AI 复核设置与"高级"用了同一个图标；`WatchDetail` 多了一个空行 | 已修：改用 `role` 图标 |
+| 低 | 手机布局：待确认表的时间被收进"详情" | 已修：时间放到卡片正文，最近复核的时间收进详情 |
+| 低 | 多处没有测试 | 已补：`useProposal.spec.ts`（旧建议的转换、过时、拦截原因）、`settingsForm.spec`（默认值、冲突、写回）、`nav.spec`（`?user=`）。决策接口的 mock 状态转换和组件交互没有单测，以截图人工核对 |
+
+修复后的验证：
+
+- 插件 UI：vitest 18 个文件、185 个用例全部通过，vue-tsc 无错误；
+- Go：`next/plugins/moderation` 的 manifest 测试通过；
+- 截图共 42 张，全部重拍。

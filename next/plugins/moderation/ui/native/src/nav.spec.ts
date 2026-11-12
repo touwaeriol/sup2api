@@ -64,7 +64,7 @@ describe('useSection', () => {
   const flush = () => nextTick()
   async function at(path: string, inSidebar = true) {
     const router = fakeRouter(path)
-    const section = useSection(router as never, ref<SectionKey[]>(['overview', 'events', 'policy']), inSidebar)
+    const section = useSection(router as never, ref<SectionKey[]>(['overview', 'events', 'policy', 'watch']), inSidebar)
     await flush()
     return { router, section, q: () => router.currentRoute.value.query }
   }
@@ -76,6 +76,20 @@ describe('useSection', () => {
     await router.replace({ query: { ...q(), record: undefined } })
     await flush()
     expect(section.value).toBe('events')
+  })
+
+  it('opens the watch list for a ?user= link, and a section change drops the user and the record', async () => {
+    const { section, q } = await at('/p/moderation/dashboard?user=5')
+    expect(section.value).toBe('watch' as SectionKey)
+    expect(q()).toEqual({ user: '5', tab: 'watch' })
+    section.value = 'events'
+    await flush()
+    expect(q()).toEqual({ tab: 'events' })
+  })
+
+  it('keeps a linked record when an old section name is written back', async () => {
+    const { q } = await at('/p/moderation/dashboard?tab=settings&record=3')
+    expect(q()).toEqual({ tab: 'policy', record: '3' })
   })
 
   it('turns an old ?tab=settings link into the page it opens', async () => {

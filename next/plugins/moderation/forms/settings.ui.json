@@ -282,8 +282,8 @@
       },
       "page": "analysis",
       "description": {
-        "en": "Only users on the watch list are reviewed. Each review calls the analysis channel; its cost counts as analysis.",
-        "zh": "复核只针对观察名单上的用户。每次复核会调用一次分析渠道，费用计入“分析”。"
+        "en": "Only users on the watch list are reviewed. Each review calls the analysis channel; its cost counts as analysis. Review before expiry, the interval and the daily limit need a newer plugin (design phase 3).",
+        "zh": "复核只针对观察名单上的用户。每次复核会调用一次分析渠道，费用计入“分析”。到期前复核、最短间隔和每日上限需要新版本插件（设计第 3 期）才生效。"
       }
     }
   },
@@ -1092,8 +1092,8 @@
       },
       "page": "analysis",
       "description": {
-        "en": "Each kind of change can be applied automatically, proposed for a moderator (decided on the AI review page) or not proposed. Every automatic change can be undone.",
-        "zh": "每种名单调整可以自动执行、只给建议（在“AI 复核”页等你采纳或驳回），或不提出。自动执行的调整都可以撤销。"
+        "en": "Each kind of change can be applied automatically, proposed for a moderator (decided on the AI review page) or not proposed. Every automatic change can be undone. Nodes not yet upgraded only know automatic or not: there, Off works like Propose.",
+        "zh": "每种名单调整可以自动执行、只给建议（在“AI 复核”页等你采纳或驳回），或不提出。自动执行的调整都可以撤销。尚未升级的节点只认“自动执行”与否：“不提出”在那里按“只给建议”处理。"
       }
     },
     "ui:widget": "segmented",

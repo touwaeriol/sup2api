@@ -10,6 +10,13 @@ export type AuditorType = 'openai_moderation' | 'typesafe' | 'llm_verdict' | 'll
 
 /** Runtime state of the node that served the request. */
 export interface Runtime {
+  /**
+   * What the backend of every node implements beyond the base contract
+   * (prototype, design §9.4): 'analyses_list' = GET /analyses, 'proposals' =
+   * analyses carry proposals and POST /analyses/:id/decision. Absent on
+   * today's backend.
+   */
+  features?: string[]
   mode: Mode
   /** a flow is bound to a group */
   configured: boolean
@@ -407,7 +414,14 @@ export interface UserDetail extends UserState {
   /** last 30 UTC days */
   daily: UserDay[]
   latest_analysis: Analysis | null
-  analysis: { running: boolean; queued: boolean; violations_since_analysis: number; every: number }
+  analysis: {
+    running: boolean
+    queued: boolean
+    violations_since_analysis: number
+    every: number
+    /** when the review before expiry runs; absent when it is off or the backend has none (prototype) */
+    review_at?: string | null
+  }
 }
 
 export type Protocol = 'openai_chat' | 'openai_responses' | 'anthropic'
@@ -724,19 +738,24 @@ export type ProposalAction = (typeof PROPOSAL_ACTIONS)[number]
 export type ProposalStatus = 'pending' | 'applied' | 'auto_applied' | 'rejected' | 'expired' | 'undone'
 export interface Proposal {
   action: ProposalAction
-  from_level: WatchLevel
   /** null = off the watch list */
+  from_level: WatchLevel | null
   to_level: WatchLevel | null
   status: ProposalStatus
   /** records the proposal rests on (the AI's violations) */
   evidence_ids: number[]
   decided_by?: number | null
   decided_at?: string | null
+  /** Made in the console from a suggestion of a backend without proposals: applied through the watch list API, never rejected or undone. */
+  legacy?: boolean
 }
 /** A row of GET /analyses (every user, newest first). */
 export interface AnalysisRow extends Analysis {
   /** the user's watch level now; null = not on the list */
   level: WatchLevel | null
+  /** the user moderates (never watched) / is on the background-only list */
+  staff?: boolean
+  allowlisted?: boolean
 }
 export type ProposalDecision = 'apply' | 'reject' | 'undo'
 

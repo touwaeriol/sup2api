@@ -46,7 +46,10 @@ const SHOTS = [
   ['ai-mobile-review', 'tab=ai', { mobile: true, wait: '[data-testid="mod-ai-pending"]', full: true }],
   ['ai-mobile-user-pending', 'tab=watch&user=44', { mobile: true, wait: '[data-testid="mod-user-ai"]' }],
   ['ai-mobile-settings', 'tab=analysis', { mobile: true, full: true }],
-  ['ai-mobile-sidebar', 'tab=ai', { mobile: true, drawer: true }]
+  ['ai-mobile-sidebar', 'tab=ai', { mobile: true, drawer: true }],
+  // Against today's backend: no proposals and no cross-user list (oldBackend strips them from the mock's answers).
+  ['ai-desktop-unsupported', 'tab=ai', { oldBackend: true, wait: '[data-testid="mod-ai-unsupported"]' }],
+  ['ai-desktop-user-legacy', 'tab=watch&user=44', { oldBackend: true, wait: '[data-testid="mod-user-ai"]' }]
 ]
 
 const browser = await chromium.launch()
@@ -67,6 +70,24 @@ for (const [file, q, o] of SHOTS.filter(([f]) => !process.env.ONLY || f.startsWi
     localStorage.setItem('s2a.locale', 'zh')
   }, [JSON.stringify(session), o.theme || 'light'])
   const p = await ctx.newPage()
+  if (o.oldBackend) {
+    // Today's backend: the status has no feature flags, analyses have no risk or proposal.
+    const strip = (v) => {
+      if (Array.isArray(v)) return v.forEach(strip)
+      if (v && typeof v === 'object') {
+        delete v.features
+        delete v.review_at
+        if ('proposal' in v && 'suggestion' in v) delete v.proposal, delete v.risk
+        Object.values(v).forEach(strip)
+      }
+    }
+    await p.route(/\/api\/v1\/p\/moderation\/(status|users\/)/, async (route) => {
+      const res = await route.fetch()
+      const body = await res.json()
+      strip(body)
+      await route.fulfill({ response: res, json: body })
+    })
+  }
   const errors = []
   p.on('pageerror', (e) => errors.push(e.message))
   await p.goto(page_(q), { waitUntil: 'networkidle' })

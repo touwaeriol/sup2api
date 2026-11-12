@@ -105,11 +105,8 @@ function showUser(userId: number) {
 }
 
 // "Open this user's watch detail" from the overview.
-const watchPreset = ref<{ user_id: number; n: number } | null>(null)
-function openWatch(userId: number) {
-  watchPreset.value = { user_id: userId, n: ++presetN }
-  tab.value = 'watch'
-}
+/** A user's watch list drawer (?tab=watch&user=, WatchTab). */
+const openWatch = (userId: number) => host.router.push({ query: { tab: 'watch', user: String(userId) } })
 </script>
 
 <template>
@@ -138,7 +135,7 @@ function openWatch(userId: number) {
       <TestTab v-if="shown('test')" v-show="tab === 'test'" @go-tab="goTab" />
       <FlowsTab v-if="shown('flows')" v-show="tab === 'flows'" :ref="setRef('flows')" @go-tab="goTab" />
       <BindingsTab v-if="shown('bindings')" v-show="tab === 'bindings'" :ref="setRef('bindings')" @go-tab="goTab" />
-      <WatchTab v-if="shown('watch')" v-show="tab === 'watch'" :ref="setRef('watch')" :preset="watchPreset" @show-user="showUser" />
+      <WatchTab v-if="shown('watch')" v-show="tab === 'watch'" :ref="setRef('watch')" @show-user="showUser" />
       <BlocksTab v-if="shown('blocks')" v-show="tab === 'blocks'" :ref="setRef('blocks')" />
       <AiReviewTab v-if="shown('ai')" v-show="tab === 'ai'" :ref="setRef('ai')" @open-watch="openWatch" @go-tab="goTab" />
       <AuditorsTab v-if="shown('auditors')" v-show="tab === 'auditors'" :ref="setRef('auditors')" />

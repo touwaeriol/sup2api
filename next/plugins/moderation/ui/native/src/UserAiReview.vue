@@ -6,7 +6,8 @@ import ProposalBox from './ProposalBox.vue'
 import { dt, enumLabel, num } from './format'
 import { analyzeWatch, canManage, errorMessage, useModHost } from './host'
 import { riskTone, trendTone } from './tones'
-import type { Analysis, Proposal, UserDetail } from './types'
+import { proposalOf, type ProposalUser } from './useProposal'
+import type { UserDetail } from './types'
 
 // The AI review of one user (prototype, design §9), first thing in the user
 // drawer: the latest assessment (risk, trend, summary), its proposal for the
@@ -23,15 +24,15 @@ const latest = computed(() => props.detail.latest_analysis)
 /** The entry changed while the analysis ran: shown, but its proposal no longer applies (§72.13.4). */
 const stale = computed(() => latest.value?.error === 'stale')
 const failed = computed(() => !!latest.value && latest.value.status !== 'ok')
-const withProposal = (a: Analysis | null): a is Analysis & { proposal: Proposal } => !!a?.proposal && !stale.value
+const user = computed<ProposalUser>(() => ({ level: entry.value?.level ?? null, staff: props.detail.staff, allowlisted: props.detail.allowlisted }))
+const proposal = computed(() => proposalOf(latest.value, user.value))
 
-/** What starts the next analysis: violations to go, or the review before the entry expires. */
+/** What starts the next analysis: violations to go, and the review before expiry when the backend plans one. */
 const next = computed(() => {
   const a = props.detail.analysis
-  if (!entry.value || props.state !== 'idle') return ''
-  const parts = a.every ? [t('ai.next', { n: num(Math.max(a.every - a.violations_since_analysis, 0)) })] : []
-  if (entry.value.expires_at) parts.push(t('ai.nextExpiry', { time: dt(entry.value.expires_at) }))
-  return parts.join(t('clauseSep'))
+  if (!entry.value || props.state !== 'idle') return []
+  const left = a.every - a.violations_since_analysis
+  return [a.every && left > 0 ? t('ai.next', { n: num(left) }) : '', a.review_at ? t('ai.nextExpiry', { time: dt(a.review_at) }) : ''].filter(Boolean)
 })
 
 const analyzing = ref(false)
@@ -57,7 +58,7 @@ async function analyze() {
 </script>
 
 <template>
-  <SCard :title="t('ai.cardTitle')" dense data-testid="mod-user-ai">
+  <SCard v-if="entry || latest" :title="t('ai.cardTitle')" dense data-testid="mod-user-ai">
     <template #actions>
       <SBadge v-if="state !== 'idle'" :tone="state === 'running' ? 'info' : 'warning'" dot>{{ enumLabel('analysisState', state) }}</SBadge>
       <SButton v-if="manage && entry" size="sm" icon="refresh" :loading="analyzing" :disabled="state !== 'idle'" @click="analyze">{{ t('ai.rerun') }}</SButton>
@@ -73,11 +74,14 @@ async function analyze() {
         <SAlert v-if="failed" tone="danger" dense>{{ enumLabel('analysisErr', latest.error) }}</SAlert>
         <SAlert v-else-if="stale" tone="warning" dense>{{ enumLabel('analysisErr', 'stale') }}</SAlert>
         <p v-if="latest.summary" class="mod-analysis-summary mod-prewrap">{{ latest.summary }}</p>
-        <ProposalBox v-if="withProposal(latest)" :analysis="latest" @decided="emit('changed')" @open-record="emit('open-record', $event)" />
+        <ProposalBox v-if="proposal" :analysis="latest" :proposal="proposal" :user="user" @decided="emit('changed')" @open-record="emit('open-record', $event)" />
         <SHint v-else-if="!failed && !stale" size="xs">{{ t('ai.noChange') }}</SHint>
       </template>
       <SHint v-else size="xs">{{ t('ai.never') }}</SHint>
-      <SHint v-if="next" size="xs">{{ next }}</SHint>
+      <SHint v-if="state !== 'idle' && entry?.analysis_requested_at" size="xs">
+        {{ t('ai.queuedAt', { time: dt(entry.analysis_requested_at), source: enumLabel('source', entry.analysis_source || 'manual') }) }}
+      </SHint>
+      <SHint v-for="line in next" :key="line" size="xs">{{ line }}</SHint>
     </div>
   </SCard>
 </template>

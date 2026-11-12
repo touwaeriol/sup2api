@@ -274,8 +274,10 @@ analyses.unshift(
     trace: steps([499, 499, 499]).slice(0, 4)
   }
 )
-const analysisRow = ({ trace: _t, record_verdicts: _r, ...a }: any) => a
-const removedWatch = new Map<number, any>()
+const analysisRow = ({ trace: _t, record_verdicts: _r, proposal, ...a }: any) => {
+  const { _before, ...shown } = proposal ?? {}
+  return { ...a, proposal: proposal ? shown : proposal }
+}
 let analysisSeq = 30
 
 /** Mock queue progress of a manual analysis: queued 4 s, running 8 s, then done. */
@@ -283,7 +285,7 @@ function tick(w: any) {
   if (!w.analysis_requested_at || w._hold) return
   const age = Date.now() - new Date(w.analysis_requested_at).getTime()
   if (age > 12000) {
-    const a = { ...analyses.find((x) => x.id === 21), id: ++analysisSeq, user_id: w.user_id, source: w.analysis_source || 'manual', created_at: now(), trend: 'persistent', suggestion: 'observe', summary: '重新分析：违规仍在继续，但强度没有上升。' }
+    const a = { ...analyses.find((x) => x.id === 21), id: ++analysisSeq, user_id: w.user_id, source: w.analysis_source || 'manual', created_at: now(), trend: 'persistent', suggestion: 'observe', risk: 'medium', proposal: null, summary: '重新分析：违规仍在继续，但强度没有上升。' }
     analyses.unshift(a)
     Object.assign(w, { analysis_requested_at: null, analysis_source: '', analysis_running: false, latest_analysis_id: a.id, latest_analysis_status: 'ok', latest_trend: a.trend, latest_suggestion: a.suggestion, analyzed_at: now() })
     watchEvents.unshift({ id: nextId(), user_id: w.user_id, action: w.level === 'enforce' ? 'downgrade_skipped' : 'upgrade_skipped', from_level: w.level, to_level: w.level, reason: 'trend:persistent', operator_id: null, analysis_id: a.id, created_at: now() })
@@ -424,7 +426,8 @@ on('GET', '/p/moderation/status', () => {
       channels: [costRef(2, summary('0.01394000', 30)), costRef(5, analysis), costRef(1, summary('0', 61, { free_calls: 61, tokens_in: 0, tokens_out: 0 }))],
       auditors: [costRef(2, summary('0.01394000', 30)), costRef(1, summary('0', 61, { free_calls: 61, tokens_in: 0, tokens_out: 0 }))]
     },
-    runtime: { mode: settings.mode, configured: true, settings_hash: 'ab12cd', config_version: 14, flows: 2, auditors: 3, queue_len: 2, queue_cap: 1000, dropped: 0, inflight: 1, calls: 1884, errors: 12, cache_hits: 640, cache_entries: 5321, avg_latency_ms: 731, blocked_users: blocks.length, watched_users: watch.length, analysis: { channel_configured: !!settings.analysis_channel_id, pending: watch.filter((w) => w.analysis_requested_at && !w.analysis_running).length, running: watch.filter((w) => w.analysis_running).length } }
+    // The prototype backend of the AI review redesign (design §9.4) on every node.
+    runtime: { features: ['analyses_list', 'proposals'], mode: settings.mode, configured: true, settings_hash: 'ab12cd', config_version: 14, flows: 2, auditors: 3, queue_len: 2, queue_cap: 1000, dropped: 0, inflight: 1, calls: 1884, errors: 12, cache_hits: 640, cache_entries: 5321, avg_latency_ms: 731, blocked_users: blocks.length, watched_users: watch.length, analysis: { channel_configured: !!settings.analysis_channel_id, pending: watch.filter((w) => w.analysis_requested_at && !w.analysis_running).length, running: watch.filter((w) => w.analysis_running).length } }
   }
 })
 
@@ -681,7 +684,10 @@ on('GET', '/p/moderation/users/:id', (req) => {
     context: { group_id: group, flow: f ? { flow_id: f.id, name: f.name, version: f.version } : null, sources },
     daily,
     latest_analysis: latest ? analysisRow(latest) : null,
-    analysis: { running: !!w?.analysis_running, queued: !!w?.analysis_requested_at, violations_since_analysis: w?.violation_count || 0, every: settings.analysis_every_violations }
+    analysis: {
+      running: !!w?.analysis_running, queued: !!w?.analysis_requested_at, violations_since_analysis: w?.violation_count || 0, every: settings.analysis_every_violations,
+      review_at: w?.expires_at && settings.analysis_review_before_expiry !== false ? new Date(new Date(w.expires_at).getTime() - 86400000).toISOString() : null
+    }
   }
 })
 on('POST', '/p/moderation/watchlist/:id/analyze', (req) => {
@@ -695,7 +701,7 @@ on('GET', '/p/moderation/watchlist/:id/analyses', (req) => paginate(analyses.fil
 on('GET', '/p/moderation/analyses', (req) => {
   const rows = analyses
     .filter((a) => req.query.proposal !== 'pending' || a.proposal?.status === 'pending')
-    .map((a) => ({ ...analysisRow(a), level: watch.find((w) => w.user_id === a.user_id)?.level ?? null }))
+    .map((a) => ({ ...analysisRow(a), level: watch.find((w) => w.user_id === a.user_id)?.level ?? null, staff: userState(a.user_id).staff, allowlisted: userState(a.user_id).allowlisted }))
   return paginate(rows, req.query)
 })
 on('POST', '/p/moderation/analyses/:id/decision', (req) => {
@@ -703,17 +709,26 @@ on('POST', '/p/moderation/analyses/:id/decision', (req) => {
   const p = a?.proposal
   const decision = req.body?.decision
   if (!a || !p) return fail(404, 'not_found', 'no proposal / 没有建议')
+  if (!['apply', 'reject', 'undo'].includes(decision)) return fail(400, 'invalid', 'decision: apply | reject | undo')
   const done = p.status === 'applied' || p.status === 'auto_applied'
-  if ((decision === 'undo') !== done || (decision !== 'undo' && p.status !== 'pending')) return fail(409, 'proposal_state', 'the proposal is no longer in that state / 建议的状态已变化')
-  const setLevel = (level: string | null) => {
-    const i = watch.findIndex((w) => w.user_id === a.user_id)
-    if (level === null && i >= 0) removedWatch.set(a.user_id, watch.splice(i, 1)[0])
-    else if (level && i >= 0) watch[i].level = level
-    else if (level) watch.push({ ...removedWatch.get(a.user_id), level })
-    watchEvents.unshift({ id: nextId(), user_id: a.user_id, action: decision === 'undo' ? 'ai_undo' : 'ai_apply', from_level: decision === 'undo' ? p.to_level : p.from_level, to_level: level, reason: `analysis:${a.id}`, operator_id: 1, analysis_id: a.id, created_at: now() })
+  if (decision === 'undo' ? !done : p.status !== 'pending') return fail(409, 'proposal_state', 'the proposal is no longer in that state / 建议的状态已变化')
+  const i = watch.findIndex((w) => w.user_id === a.user_id)
+  const current = i >= 0 ? watch[i].level : null
+  // The entry changed by hand since: a pending proposal no longer applies, an applied one is not undone over it.
+  if (current !== (decision === 'undo' ? p.to_level : p.from_level)) {
+    if (decision === 'apply') p.status = 'expired'
+    return fail(409, 'proposal_state', 'the watch entry changed / 名单已被修改')
   }
-  if (decision === 'apply') setLevel(p.to_level)
-  if (decision === 'undo') setLevel(p.from_level)
+  const entryBefore = i >= 0 ? { ...watch[i] } : null
+  if (decision !== 'reject') {
+    const restore = decision === 'undo' ? p._before : null
+    const to = decision === 'undo' ? p.from_level : p.to_level
+    if (i >= 0) watch.splice(i, 1)
+    if (to) watch.push(restore ?? { ...(entryBefore ?? { user_id: a.user_id, source: 'analysis', since_at: now(), hit_count: 0, violation_count: 0, note: '' }), level: to, source: 'analysis', updated_at: now(), expires_at: now(86400 * settings.watch_days) })
+    if (decision === 'apply') p._before = entryBefore
+    watchEvents.unshift({ id: nextId(), user_id: a.user_id, action: decision === 'undo' ? 'ai_undo' : 'ai_apply', from_level: current, to_level: to, reason: `analysis:${a.id}`, operator_id: 1, analysis_id: a.id, created_at: now() })
+  }
+  if (decision === 'apply') for (const o of analyses) if (o !== a && o.user_id === a.user_id && o.proposal?.status === 'pending') o.proposal.status = 'expired'
   Object.assign(p, { status: decision === 'apply' ? 'applied' : decision === 'reject' ? 'rejected' : 'undone', decided_by: 1, decided_at: now() })
   return analysisRow(a)
 })
