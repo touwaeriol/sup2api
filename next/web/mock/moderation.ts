@@ -13,7 +13,7 @@ export const moderationUIPlugin = {
   version: '0.2.0',
   name: { en: 'Prompt Moderation', zh: '提示词审核' },
   asset_base: '/plugin-ui/moderation/0.2.0-dev',
-  menus: [{ id: 'moderation', section: 'plugins', label: { en: 'Prompt Moderation', zh: '提示词审核' }, page: 'dashboard', icon: 'shield' }],
+  menus: [{ id: 'moderation', section: 'security', label: { en: 'Prompt Moderation', zh: '提示词审核' }, page: 'dashboard', icon: 'shield' }],
   // The pages as the manifest declares them (the sections in ui.pages.dashboard.nav).
   pages: JSON.parse(readFileSync(fileURLToPath(new URL('../../plugins/moderation/manifest.json', import.meta.url)), 'utf8')).ui.pages,
   slots: [],

@@ -6,7 +6,8 @@ import { useCatalog } from '../catalog'
 import { joinList } from '../format'
 import { canManage, canManageSettings, useModHost } from '../host'
 import { modeTone } from '../tones'
-import type { Status, TabKey } from '../types'
+import type { Status } from '../types'
+import type { SectionKey } from '../nav'
 
 // Running state (new-api status-line) as short label + badge entries:
 // moderation (switch and the default level: the level of users without a
@@ -15,7 +16,7 @@ import type { Status, TabKey } from '../types'
 // or moderation is off. Long explanations (group names, why analyses are off)
 // are the badges' tooltips.
 const props = defineProps<{ status: Status }>()
-const emit = defineEmits<{ (e: 'go-tab', tab: TabKey): void; (e: 'go-settings'): void }>()
+const emit = defineEmits<{ (e: 'go-tab', tab: SectionKey): void }>()
 const t = useModHost().t
 const catalog = useCatalog()
 
@@ -81,12 +82,11 @@ const entries = computed(() =>
   ].filter((e): e is { key: string; badges: Badge[]; settings?: boolean } => !!e.badges)
 )
 
-const notice = computed<{ tone: 'warning' | 'info'; text: string; action: 'flows' | 'settings' | '' } | null>(() => {
+const notice = computed<{ tone: 'warning' | 'info'; text: string; action: 'flows' | 'policy' | '' } | null>(() => {
   if (!props.status.runtime.configured) return { tone: 'warning', text: t('overview.notConfigured'), action: canManage() ? 'flows' : '' }
-  if (props.status.mode === 'off') return { tone: 'info', text: t('overview.offHint'), action: settingsLink.value ? 'settings' : '' }
+  if (props.status.mode === 'off') return { tone: 'info', text: t('overview.offHint'), action: settingsLink.value ? 'policy' : '' }
   return null
 })
-const act = (action: 'flows' | 'settings') => (action === 'settings' ? emit('go-settings') : emit('go-tab', action))
 </script>
 
 <template>
@@ -95,7 +95,7 @@ const act = (action: 'flows' | 'settings') => (action === 'settings' ? emit('go-
       <dt>{{ t(`statusLine.label.${e.key}`) }}</dt>
       <dd>
         <SBadge v-for="b in e.badges" :key="b.text" :tone="b.tone" :dot="b.dot" size="xs" :title="b.title">{{ b.text }}</SBadge>
-        <SLink v-if="e.settings" as="button" @click="emit('go-settings')">{{ t('settings') }}</SLink>
+        <SLink v-if="e.settings" as="button" @click="emit('go-tab', 'analysis')">{{ t('settings') }}</SLink>
       </dd>
     </div>
   </dl>
@@ -103,7 +103,7 @@ const act = (action: 'flows' | 'settings') => (action === 'settings' ? emit('go-
   <SAlert v-if="notice" :tone="notice.tone" class="mod-block">
     {{ notice.text }}
     <template v-if="notice.action" #actions>
-      <SButton :variant="notice.action === 'flows' ? 'primary' : 'secondary'" size="sm" @click="act(notice.action)">
+      <SButton :variant="notice.action === 'flows' ? 'primary' : 'secondary'" size="sm" @click="emit('go-tab', notice.action)">
         {{ notice.action === 'flows' ? t('tabs.flows') : t('settings') }}
       </SButton>
     </template>

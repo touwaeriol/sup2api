@@ -445,8 +445,8 @@
       "zh": "判定缓存天数"
     },
     "ui:help": {
-      "en": "Verdicts under the same flow are kept this many days; content that passed is not sent again. 0 turns the cache off.",
-      "zh": "同一流程下已审过的内容，结论保留这么多天，放行的不再送审。0 = 关闭缓存。"
+      "en": "Verdicts on content already moderated under the same flow are kept this many days: content that passed is not sent again, and a hit is applied again as it was (a request moderated first is refused) without calling the moderation channels.",
+      "zh": "同一流程下已经审过的内容，结论保留这么多天：放行的不再送审，命中的直接按原结论处理（先审的请求被拒绝），不再调用审核渠道。"
     },
     "ui:details": {
       "en": "Runs with errors, passes with a skipped stage and URL images are not cached. Changing a flow's stages, auditors, question sets, thresholds or channel models invalidates that flow's cache. A replayed cached hit is recorded as usual but is not a new violation.",

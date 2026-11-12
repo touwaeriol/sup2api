@@ -1141,3 +1141,8 @@ p.mod-text-danger {
   white-space: nowrap;
   font-size: 0.75rem;
 }
+
+/* The switch over the settings pages on a console without the sidebar sections (ModerationDashboard). */
+.mod-settings-switch {
+  margin-bottom: 1rem;
+}

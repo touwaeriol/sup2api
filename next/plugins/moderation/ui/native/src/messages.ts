@@ -614,6 +614,7 @@ export default {
         all: '全部内容（含 AI 回复与工具调用，旧行为）'
       },
       scopeWarn: '审核 AI 回复与工具输出会显著增加误报、成本和延迟：编码代理每次工具调用都会触发一次审核。',
+      scopeLegacy: '这个流程沿用旧行为（全部内容）。只审用户输入可以明显减少误报，可在这里切换。',
       models: '模型',
       modelsHint: '按客户端模型匹配，支持 * 和 ? 通配。',
       sampleRate: '抽样比例（%）',
@@ -1265,6 +1266,8 @@ export default {
       blockAlwaysPre: '“总是先审”名单里的用户总是先审，名单级别不影响时机'
     },
     settingsTab: {
+      leaveTitle: '离开这一页？',
+      leaveMessage: '这一页的设置还没有保存，离开后修改会丢失。',
       loadFailed: '设置加载失败',
       noSchema: '核心没有返回设置表单，请把核心升级到 0.1.223 或更高版本',
       preview: '拦截响应预览',
@@ -1302,7 +1305,7 @@ export default {
   },
   en: {
     title: 'Prompt Moderation',
-    subtitle: 'Moderates gateway requests with the flow bound to their group or account; blocklisted and enforce-level users are moderated before the upstream call (so are users without a watch entry while the default level is enforce), the rest in the background.',
+    subtitle: 'Moderates gateway requests with the flow bound to their group or account; users on the always-check-first list and enforce-level users are moderated before the upstream call (so are users without a watch entry while the default level is enforce), the rest in the background.',
     refresh: 'Refresh',
     filter: 'Filter',
     settings: 'Settings',
@@ -1645,7 +1648,7 @@ export default {
       empty: 'No auditor calls'
     },
     watch: {
-      hint: 'Observe: requests pass and are moderated in the background, violations are counted. Enforce: requests are moderated first and refused on a hit. Users with a first suspicious record join at the default level (configurable). users on the background-only list are only moderated after their requests, whatever their level; users on the always-check-first list are always moderated first. Staff never join the list.',
+      hint: 'Observe: requests pass and are moderated in the background, violations are counted. Enforce: requests are moderated first and refused on a hit. Users with a first suspicious record join at the default level (configurable). Users on the background-only list are only moderated after their requests, whatever their level; users on the always-check-first list are always moderated first. Staff never join the list.',
       add: 'Add user',
       editTitle: 'Edit user #{id}',
       levelHint: 'Every request of an enforce-level user is moderated first and refused on a hit.',
@@ -1825,6 +1828,7 @@ export default {
         all: 'Everything, AI replies and tool calls included (old behaviour)'
       },
       scopeWarn: 'Moderating AI replies and tool output adds false positives, cost and latency: a coding agent triggers a run on every tool call.',
+      scopeLegacy: 'This flow keeps the old behaviour (everything). Moderating user input only cuts false positives a lot; switch it here.',
       models: 'Model patterns',
       modelsHint: 'Client model, * and ? wildcards.',
       sampleRate: 'Sample rate (%)',
@@ -2014,7 +2018,7 @@ export default {
       pubNoGroups: '(none bound: no request is moderated)',
       pubAccountsOnly: '(no group bound; only requests sent to its {n} bound accounts are moderated)',
       pubGroupsNote: 'Group bindings take effect when saved and do not change with publishing',
-      pubTiming: 'Timing: blocklisted and enforce-level users pre (synchronous, a hit is refused); allowlisted and observe-level users post (background, recorded only); everyone else by the default level.',
+      pubTiming: 'Timing: users on the always-check-first list and enforce-level users pre (synchronous, a hit is refused); users on the background-only list and observe-level users post (background, recorded only); everyone else by the default level.',
       pubStage: 'Stage {n} · {role}: {auditors}',
       pubFallback: 'Hit → final hit (pre: refused) · Pass or failure → next fallback stage; no hit in any allows',
       pubNote: 'Effective on every node within seconds; roll back from the version history.',
@@ -2472,10 +2476,12 @@ export default {
       block: 'Always check first',
       allowHint: 'Only moderated after the request, never refused',
       blockHint: 'Always moderated first',
-      allowOnlyObserve: 'Allowlisted users can only be observed',
-      blockAlwaysPre: 'Blocklisted users are always moderated first; the watch level does not change the timing'
+      allowOnlyObserve: 'Users on the background-only list can only be observed',
+      blockAlwaysPre: 'Users on the always-check-first list are always moderated first; the watch level does not change the timing'
     },
     settingsTab: {
+      leaveTitle: 'Leave this page?',
+      leaveMessage: 'The settings on this page are not saved; leaving drops the changes.',
       loadFailed: 'Failed to load the settings',
       noSchema: 'The core sent no settings form; upgrade the core to 0.1.223 or later',
       preview: 'Block response preview',

@@ -7,14 +7,15 @@ import { onOverviewTick } from './tick'
 import { useAsync } from '../useAsync'
 import { categoryLabel, enumLabel } from '../format'
 import { fetchWatchList, useModHost } from '../host'
-import type { TabKey, WatchItem } from '../types'
+import type { WatchItem } from '../types'
+import type { SectionKey } from '../nav'
 import { levelTone, trendTone } from '../tones'
 
 // "最需关注的人": the first six of the watch list in its default order (new
 // records since last seen first), one line a user: level, top categories
 // (the rest behind "+N"), new records and trend. A row opens the user's
 // watch detail.
-const emit = defineEmits<{ (e: 'open-watch', userId: number): void; (e: 'go-tab', tab: TabKey): void }>()
+const emit = defineEmits<{ (e: 'open-watch', userId: number): void; (e: 'go-tab', tab: SectionKey): void }>()
 const t = useModHost().t
 
 const list = useAsync(() => fetchWatchList({ page: 1, page_size: 6, sort: 'new' }), () => t('watch.loadFailed'))

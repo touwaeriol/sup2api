@@ -40,7 +40,13 @@ function useGroups(plugin: string, page: string): ComputedRef<ViewGroup[]> {
       label: lt(g.label),
       links: g.items.map(i => ({
         key: i.key,
-        item: { id: `${plugin}:${i.key}`, label: i.label, icon: i.icon, path: `${path}?${NAV_QUERY}=${encodeURIComponent(i.key)}`, pluginKey: plugin },
+        item: {
+          id: `${plugin}:${i.key}`,
+          label: i.label,
+          icon: i.icon,
+          path: `${path}?${NAV_QUERY}=${encodeURIComponent(i.key)}`,
+          pluginKey: plugin
+        },
         active: i.key === active
       }))
     }))
@@ -71,7 +77,15 @@ export function usePluginPageView(): ComputedRef<SidebarView | undefined> {
 
 function pluginPageView(route: RouteLocationNormalizedLoaded, pageOf: ReturnType<typeof usePluginStore>['page']): SidebarView | undefined {
   const m = PAGE_ROUTE.exec(route.path)
-  if (!m) return undefined
-  const [, plugin, page] = m.map(decodeURIComponent)
-  return pageOf(plugin, page)?.page.nav?.groups.length ? viewOf(plugin, page) : undefined
+  const [plugin, page] = m ? [decoded(m[1]), decoded(m[2])] : []
+  return plugin && page && pageOf(plugin, page)?.page.nav?.groups.length ? viewOf(plugin, page) : undefined
+}
+
+/** A path segment decoded; undefined for a malformed one (the router shows that address as unknown). */
+function decoded(s: string): string | undefined {
+  try {
+    return decodeURIComponent(s)
+  } catch {
+    return undefined
+  }
 }

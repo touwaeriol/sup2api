@@ -3,13 +3,14 @@ import { computed, ref } from 'vue'
 import { SCard, SEmpty, SGrid, SLink, SSegmented, SStatCard } from '@sub2api/ui'
 import { num } from '../format'
 import { useModHost } from '../host'
-import type { Funnel, TabKey } from '../types'
+import type { Funnel } from '../types'
+import type { SectionKey } from '../nav'
 
 // Today's funnel per flow (new-api funnel-card), left to right: what entered,
 // what each stage received, hit and passed on (a later stage's pass
 // overturns), and the flow result.
 const props = defineProps<{ funnels: Funnel[] }>()
-const emit = defineEmits<{ (e: 'go-tab', tab: TabKey): void }>()
+const emit = defineEmits<{ (e: 'go-tab', tab: SectionKey): void }>()
 const t = useModHost().t
 
 const picked = ref<number | null>(null)

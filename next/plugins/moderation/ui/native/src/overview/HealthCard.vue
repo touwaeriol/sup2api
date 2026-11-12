@@ -6,13 +6,14 @@ import RateCell from '../RateCell.vue'
 import { useCatalog } from '../catalog'
 import { enumLabel, num } from '../format'
 import { useModHost } from '../host'
-import type { Status, TabKey } from '../types'
+import type { Status } from '../types'
+import type { SectionKey } from '../nav'
 
 // Channels · auditors in the last hour (new-api health-card): calls, hit and
 // error rate (red when flagged or above the alert threshold). Failed calls
 // pass as moderation errors without retry.
 const props = defineProps<{ status: Status }>()
-const emit = defineEmits<{ (e: 'go-tab', tab: TabKey): void }>()
+const emit = defineEmits<{ (e: 'go-tab', tab: SectionKey): void }>()
 const t = useModHost().t
 const catalog = useCatalog()
 const alert = computed(() => props.status.error_rate_alert_percent)

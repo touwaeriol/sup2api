@@ -58,7 +58,7 @@ export function isAuditorType(type: string | undefined): type is AuditorType {
 
 /** A blank draft: all models, 100 % sampling, timeout computed on publish. */
 export function newSpec(): Spec {
-  return { model_filter: { type: 'all', models: [] }, scope: 'input', sample_rate: 100, total_timeout_ms: 0, stages: [] }
+  return { model_filter: { type: 'all', models: [] }, sample_rate: 100, total_timeout_ms: 0, stages: [] }
 }
 
 const withStages = (spec: Spec, stages: Stage[]): Spec => ({ ...spec, stages })
@@ -205,7 +205,7 @@ export function setCombine(spec: Spec, stageIndex: number, combine: Combine, n?:
 export function canonicalSpec(spec: Spec): Spec {
   return {
     model_filter: { type: spec.model_filter?.type, models: [...(spec.model_filter?.models || [])] },
-    scope: spec.scope ?? 'all',
+    ...(spec.scope && spec.scope !== 'all' ? { scope: spec.scope } : {}),
     sample_rate: spec.sample_rate,
     total_timeout_ms: spec.total_timeout_ms,
     stages: (spec.stages || []).map((s) => {

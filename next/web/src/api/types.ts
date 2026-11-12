@@ -1479,6 +1479,9 @@ export interface UIPageNavItem {
   key: string
   label: LText
   icon?: string
+  /** Sent as declared; the core has already filtered by them. */
+  permission?: string
+  corePermission?: string
 }
 
 /**

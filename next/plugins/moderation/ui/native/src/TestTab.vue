@@ -8,9 +8,9 @@ import ImageInput from './ImageInput.vue'
 import { useCatalog } from './catalog'
 import { runTest, useModHost } from './host'
 import { useAsync } from './useAsync'
-import type { TabKey } from './types'
+import type { SectionKey } from './nav'
 
-const emit = defineEmits<{ (e: 'go-tab', tab: TabKey): void }>()
+const emit = defineEmits<{ (e: 'go-tab', tab: SectionKey): void }>()
 
 // Playground: POST /test {text, images, flow_id} -> result + per-stage trace.
 // Nothing is cached, recorded or counted. Only the latest run shows.

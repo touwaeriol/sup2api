@@ -3,12 +3,13 @@ import { computed } from 'vue'
 import { SAlert, SCard, SEmpty, SLink, SStatCard } from '@sub2api/ui'
 import { num, pct } from '../format'
 import { useModHost } from '../host'
-import type { AIReviewCounts, TodayCounts, TabKey } from '../types'
+import type { AIReviewCounts, TodayCounts } from '../types'
+import type { SectionKey } from '../nav'
 
 // Today's AI review (new-api ai-review-card): verdicts of the records the
 // analyses reviewed, with a hint when false positives dominate.
 const props = defineProps<{ review?: AIReviewCounts; today?: TodayCounts }>()
-const emit = defineEmits<{ (e: 'go-tab', tab: TabKey): void }>()
+const emit = defineEmits<{ (e: 'go-tab', tab: SectionKey): void }>()
 const t = useModHost().t
 
 /** A false-positive share at or above this (with enough reviews) hints at strict thresholds. */

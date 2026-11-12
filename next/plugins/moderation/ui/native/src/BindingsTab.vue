@@ -24,7 +24,8 @@ import { useCatalog } from './catalog'
 import { joinList } from './format'
 import { defaultGroupCandidate, groupAccountsFirst, idNumber } from './forms'
 import { canManage, deleteBinding, errorMessage, fetchAccountNames, toastError, useModHost } from './host'
-import type { Binding, BindingKind, TabKey } from './types'
+import type { Binding, BindingKind } from './types'
+import type { SectionKey } from './nav'
 import { useAsync } from './useAsync'
 
 // Bindings of flows to groups and accounts (CONTRACTS §72.17): every
@@ -42,7 +43,7 @@ const host = useModHost()
 const t = host.t
 const { EntityPicker } = host.components
 const manage = computed(() => canManage())
-const emit = defineEmits<{ (e: 'go-tab', tab: TabKey): void }>()
+const emit = defineEmits<{ (e: 'go-tab', tab: SectionKey): void }>()
 const { compact } = useViewport()
 
 const catalog = useCatalog()

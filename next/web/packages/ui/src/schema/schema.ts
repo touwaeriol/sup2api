@@ -23,10 +23,12 @@
 //   ui:enumNames    [LocalizedText...] labels for enum values
 //   ui:visibleWhen  {field: "a.b", equals|notEquals|in|notIn|truthy|falsy}
 //                   or a plain map {"mode": "oauth"} (all must match)
-//   ui:section      LocalizedText, or {title, description?, collapsed?}: starts a
+//   ui:section      LocalizedText, or {title, description?, collapsed?, page?}: starts a
 //                   titled group of the parent object at this field (until the
 //                   next field with a section). collapsed groups open on click,
-//                   and by themselves while they hold a value or an error.
+//                   and by themselves while they hold a value or an error. page
+//                   is not read here: a native page that splits one form over
+//                   several of its sections uses it (moderation settings).
 // Secrets: widget "secret", format "password" or writeOnly: true. Existing
 // values come back as "******" and are sent back unchanged to keep them.
 //

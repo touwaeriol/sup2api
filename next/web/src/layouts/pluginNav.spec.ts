@@ -7,7 +7,14 @@ import { activeSection, usePluginPageView } from './pluginNav'
 
 const nav: UIPageNav = {
   groups: [
-    { key: 'run', label: { zh: '运行' }, items: [{ key: 'overview', label: { zh: '概览' }, icon: 'dashboard' }, { key: 'events', label: '记录' }] },
+    {
+      key: 'run',
+      label: { zh: '运行' },
+      items: [
+        { key: 'overview', label: { zh: '概览' }, icon: 'dashboard' },
+        { key: 'events', label: '记录' }
+      ]
+    },
     { key: 'sys', label: '系统', items: [{ key: 'settings', label: '设置' }] }
   ]
 }
@@ -64,11 +71,29 @@ describe('plugin page sections in the sidebar', () => {
         key: 'run',
         label: '运行',
         links: [
-          { key: 'overview', item: { id: 'mod:overview', label: { zh: '概览' }, icon: 'dashboard', path: '/p/mod/dash?tab=overview', pluginKey: 'mod' }, active: false },
-          { key: 'events', item: { id: 'mod:events', label: '记录', icon: undefined, path: '/p/mod/dash?tab=events', pluginKey: 'mod' }, active: true }
+          {
+            key: 'overview',
+            item: { id: 'mod:overview', label: { zh: '概览' }, icon: 'dashboard', path: '/p/mod/dash?tab=overview', pluginKey: 'mod' },
+            active: false
+          },
+          {
+            key: 'events',
+            item: { id: 'mod:events', label: '记录', icon: undefined, path: '/p/mod/dash?tab=events', pluginKey: 'mod' },
+            active: true
+          }
         ]
       },
-      { key: 'sys', label: '系统', links: [{ key: 'settings', item: { id: 'mod:settings', label: '设置', icon: undefined, path: '/p/mod/dash?tab=settings', pluginKey: 'mod' }, active: false }] }
+      {
+        key: 'sys',
+        label: '系统',
+        links: [
+          {
+            key: 'settings',
+            item: { id: 'mod:settings', label: '设置', icon: undefined, path: '/p/mod/dash?tab=settings', pluginKey: 'mod' },
+            active: false
+          }
+        ]
+      }
     ])
   })
 

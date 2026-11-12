@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import schema from '../../../forms/settings.schema.json'
 import ui from '../../../forms/settings.ui.json'
-import { CUSTOM_KEYS, displayValues, editableKeys, LEGACY_KEY, schemaKeys, sectionsOf, sentSetting, settingSections, settingsKey, verdictCacheOff, withRetiredMirrored } from './settingsForm'
+import { CUSTOM_KEYS, displayValues, editableKeys, LEGACY_KEY, LEGACY_KEY_PAGE, schemaKeys, sectionsOf, sentSetting, settingSections, settingsKey, verdictCacheOff, withRetiredMirrored } from './settingsForm'
 import { NAV_GROUPS } from './nav'
 import { mergeSettings, type PageValues } from './settingsMerge'
 
@@ -67,9 +67,10 @@ describe('settingSections', () => {
 
 describe('editableKeys', () => {
   it('adds the 0.1 API key only while one is stored, and never renders it with a schema widget', () => {
-    expect(editableKeys(sections, {})).not.toContain(LEGACY_KEY)
-    const keys = editableKeys(sections, { api_key: MASK })
+    expect(editableKeys(sections, {}, LEGACY_KEY_PAGE)).not.toContain(LEGACY_KEY)
+    const keys = editableKeys(sections, { api_key: MASK }, LEGACY_KEY_PAGE)
     expect(keys).toContain(LEGACY_KEY)
+    expect(editableKeys(sections, { api_key: MASK }, 'cache')).not.toContain(LEGACY_KEY)
     const widgets = schemaKeys(keys)
     expect(widgets).not.toContain(LEGACY_KEY)
     for (const k of CUSTOM_KEYS) expect(widgets).not.toContain(k)
@@ -81,7 +82,7 @@ describe('the save of the settings tab', () => {
   // What the page sends for a key: the widget value, or the mask of a kept secret.
   const page = (stored: Record<string, unknown>, form: Record<string, unknown>): PageValues => {
     const out: PageValues = {}
-    for (const k of schemaKeys(editableKeys(sections, stored))) out[k] = sentSetting((schema.properties as Record<string, any>)[k], stored, k, form[k])
+    for (const k of schemaKeys(editableKeys(sections, stored, LEGACY_KEY_PAGE))) out[k] = sentSetting((schema.properties as Record<string, any>)[k], stored, k, form[k])
     out.analysis_channel_id = (form.analysis_channel_id as number) ?? 0
     out.notify_webhook_url = stored.notify_webhook_url === MASK ? MASK : undefined
     out.notify_webhook_secret = stored.notify_webhook_secret === MASK ? MASK : undefined
@@ -101,7 +102,7 @@ describe('the save of the settings tab', () => {
     group_ids: [3],
     retention_days: 60
   }
-  const keys = editableKeys(sections, stored)
+  const keys = editableKeys(sections, stored, LEGACY_KEY_PAGE)
   const form: Record<string, unknown> = { ...displayValues(schema, stored, schemaKeys(keys)), analysis_channel_id: 0, api_key: MASK }
   const initial = page(stored, form)
 
@@ -122,7 +123,7 @@ describe('the save of the settings tab', () => {
   // The same reading as settings.go DecodeSettings (TestExemptBecomesAllowlist).
   describe('the allowlist of settings saved before 0.8.0', () => {
     const old = { ...stored, exempt_user_ids: ['5', '9'] }
-    const oldKeys = editableKeys(sections, old)
+    const oldKeys = editableKeys(sections, old, LEGACY_KEY_PAGE)
     const oldForm: Record<string, unknown> = { ...displayValues(schema, old, schemaKeys(oldKeys)), analysis_channel_id: 0, api_key: MASK }
     const oldInitial = page(old, oldForm)
 
@@ -232,7 +233,7 @@ describe('the save of the settings tab', () => {
       expect(verdictCacheOff({ ...off, verdict_cache_days: 7 })).toBe(false)
       expect(verdictCacheOff(stored)).toBe(false)
       expect(days(off)).toBeUndefined()
-      const offKeys = editableKeys(sections, off)
+      const offKeys = editableKeys(sections, off, LEGACY_KEY_PAGE)
       const offForm: Record<string, unknown> = { ...displayValues(schema, off, schemaKeys(offKeys)), analysis_channel_id: 0, api_key: MASK }
       const m = mergeSettings(offKeys, off, off, page(off, offForm), page(off, { ...offForm, verdict_cache_days: 7 }))
       expect(m.changed).toEqual(['verdict_cache_days'])
@@ -243,7 +244,7 @@ describe('the save of the settings tab', () => {
   // settings.go verdictCache: without verdict_cache_days a stored cache_ttl_seconds is read again.
   describe('cleared cache days while the retired cache_ttl_seconds is stored', () => {
     const cleared = (s: Record<string, unknown>) => {
-      const ks = editableKeys(sections, s)
+      const ks = editableKeys(sections, s, LEGACY_KEY_PAGE)
       const f: Record<string, unknown> = { ...displayValues(schema, s, schemaKeys(ks)), analysis_channel_id: 0, api_key: MASK }
       return mergeSettings(ks, s, s, page(s, f), page(s, { ...f, verdict_cache_days: '' }))
     }

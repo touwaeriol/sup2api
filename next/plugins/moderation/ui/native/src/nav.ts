@@ -1,3 +1,4 @@
+import { computed, watch, type Ref } from 'vue'
 import { satisfiesRange, type PluginHost } from '@sub2api/host'
 
 // The sections of the moderation page and their groups. A console from UI
@@ -84,3 +85,38 @@ export function visibleGroups(may: (a: Access) => boolean) {
 
 /** The console lists the sections in its sidebar (UI 3.14). */
 export const hostShowsNav = (host: Pick<PluginHost, 'version'>) => satisfiesRange(host.version, '>=3.14.0')
+
+/**
+ * The section shown and the way to change it, on the page that is open now.
+ * ?tab= names it (a ?record= link without one opens the records); the page
+ * writes the section it resolved back into ?tab= (a replace), so the
+ * console's sidebar lights the same item, an old ?tab=settings link turns
+ * into the page it opens, and closing a linked record keeps the records.
+ * Changing the section adds a history entry when the sidebar lists the
+ * sections (like a click in it), and replaces it with tabs.
+ */
+export function useSection(router: PluginHost['router'], visible: Ref<readonly SectionKey[]>, inSidebar: boolean) {
+  const route = router.currentRoute
+  const page = route.value.path
+  let last: SectionKey = visible.value[0]
+  const section = computed<SectionKey>(() => {
+    // While the console leaves the page the route is another page's: keep the section.
+    if (route.value.path !== page) return last
+    const q = route.value.query
+    return (last = sectionOf(q.tab ?? (q.record ? 'events' : undefined), visible.value))
+  })
+  const go = (tab: SectionKey, how: 'push' | 'replace') => router[how]({ query: { ...route.value.query, tab } })
+  watch(
+    section,
+    (v) => {
+      if (route.value.path === page && route.value.query.tab !== v) go(v, 'replace')
+    },
+    { immediate: true }
+  )
+  return computed<SectionKey>({
+    get: () => section.value,
+    set: (v) => {
+      if (v !== section.value && visible.value.includes(v)) go(v, inSidebar ? 'push' : 'replace')
+    }
+  })
+}

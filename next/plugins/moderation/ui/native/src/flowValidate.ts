@@ -33,6 +33,7 @@ export interface SpecIssue {
   field?: string
 }
 
+// scope is the prototype field ParseSpec does not take yet (types.ts SCOPES); canonicalSpec leaves it out unless narrowed.
 const SPEC_KEYS = ['model_filter', 'scope', 'sample_rate', 'total_timeout_ms', 'stages']
 const MODEL_FILTER_KEYS = ['type', 'models']
 const STAGE_KEYS = ['auditors', 'combine', 'n', 'fallback']

@@ -131,7 +131,6 @@ watch(data, (v) => {
   initial.value = pageValues()
 })
 onMounted(reload)
-defineExpose({ reload })
 
 /** A webhook value as sent: the new value, the mask to keep the stored one, or undefined to clear it (a secret is sent as typed). */
 function webhookValue(k: WebhookKey) {
@@ -150,6 +149,8 @@ function pageValues(): PageValues {
   return out
 }
 const dirty = computed(() => !!settings.value && JSON.stringify(pageValues()) !== JSON.stringify(initial.value))
+/** reload for the header button; dirty for leaving the page (ModerationDashboard). */
+defineExpose({ reload, dirty })
 
 function setField(k: string, v: unknown) {
   form[k] = v

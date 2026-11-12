@@ -15,7 +15,7 @@ import UserStateSection from './UserStateSection.vue'
 import { useCatalog } from './catalog'
 import { categoryLabel, dt, enumLabel, idText, isSuspicious, ms, num } from './format'
 import { canManage, deleteEvent, fetchEvent, reviewDoneText, reviewEvents, toastError, useModHost } from './host'
-import { aiVerdictTone, severityTone } from './tones'
+import { aiVerdictTone, modeTone, severityTone } from './tones'
 import type { EventFilter, ModEvent, ModEventDetail, ReviewStatus, Watch } from './types'
 import { useAsync } from './useAsync'
 
@@ -135,17 +135,19 @@ function openRecord(id: number) {
   currentId.value = id
 }
 
+/** Why the bound flow no longer applies; an unknown reason shows as sent. */
+const fallbackReason = (e: ModEvent) => (e.flow_fallback ? enumLabel('detail.match.reason', e.flow_fallback.reason) : '')
+
 /** How the flow was found; records written before it was kept show nothing. */
 function matchText(e: ModEvent): string {
   if (!e.flow_source) return ''
-  const reason = e.flow_fallback ? t(`detail.match.reason.${e.flow_fallback.reason}`) : ''
-  return t(`detail.match.${e.flow_source}`, { reason })
+  return e.flow_source === 'fallback' ? t('detail.match.fallback', { reason: fallbackReason(e) }) : enumLabel('detail.match', e.flow_source)
 }
 
 /** Checked first or in the background, and what decided it (the record's mode alone said neither). */
 function handlingText(e: ModEvent): string {
   if (!e.level_source || !e.level) return ''
-  return t(`detail.level.${e.level_source === 'watch' || e.level_source === 'default' ? `${e.level_source}_${e.level}` : e.level_source}`)
+  return enumLabel('detail.level', e.level_source === 'watch' || e.level_source === 'default' ? `${e.level_source}_${e.level}` : e.level_source)
 }
 
 const fields = computed<DescItem[]>(() => {
@@ -159,9 +161,6 @@ const fields = computed<DescItem[]>(() => {
     { key: 'key', label: t('detail.f.key'), value: idText(e.api_key_id) },
     { key: 'group', label: t('detail.f.group'), value: catalog.groupName(e.group_id) },
     { key: 'flow', label: t('detail.f.flow') },
-    { key: 'match', label: t('detail.f.match'), value: matchText(e) },
-    { key: 'handling', label: t('detail.f.handling'), value: handlingText(e) },
-    { key: 'scope', label: t('detail.f.scope'), value: e.scope ? enumLabel('flows.scope', e.scope) : '' },
     { key: 'model', label: t('detail.f.model'), value: e.model || '' },
     { key: 'protocol', label: t('detail.f.protocol'), value: e.protocol || '' },
     { key: 'endpoint', label: t('detail.f.endpoint'), value: e.endpoint || '', mono: true },
@@ -169,6 +168,10 @@ const fields = computed<DescItem[]>(() => {
     { key: 'counted', label: t('detail.f.counted'), value: e.counted ? t('yes') : t('no') },
     { key: 'keep', label: t('detail.f.keepUntil'), value: e.keep_until ? dt(e.keep_until) : '' }
   ]
+  // Written from the prototype record fields on; older records keep the mode badge instead.
+  for (const [key, value] of [['match', matchText(e)], ['handling', handlingText(e)], ['scope', e.scope ? enumLabel('flows.scope', e.scope) : '']] as const) {
+    if (value) items.push({ key, label: t(`detail.f.${key}`), value })
+  }
   if (e.reviewed_at) items.push({ key: 'reviewed', label: t('detail.f.reviewed'), value: `${dt(e.reviewed_at)} ${idText(e.reviewed_by)}` })
   if (e.session_fp) items.push({ key: 'session', label: t('detail.f.session'), value: e.session_fp, mono: true, copyable: true, full: true })
   if (e.llm_model) items.push({ key: 'llm', label: t('detail.f.llmModel'), value: e.llm_model })
@@ -186,12 +189,13 @@ const fields = computed<DescItem[]>(() => {
         <ReplayBadge v-if="ev.replayed" />
         <VerdictBadge :event="ev" />
         <SBadge v-if="ev.timing">{{ enumLabel('timing', ev.timing) }}</SBadge>
+        <SBadge v-if="ev.mode && !ev.level_source" :tone="modeTone(ev.mode)">{{ enumLabel('mode', ev.mode) }}</SBadge>
         <SBadge v-if="ev.severity" :tone="severityTone(ev.severity)">{{ t('detail.f.severity') }}: {{ enumLabel('severity', ev.severity) }}</SBadge>
         <SHint inline size="xs" class="mod-detail-time">{{ dt(ev.created_at) }}</SHint>
       </div>
 
       <SAlert v-if="ev.flow_fallback" tone="warning" data-testid="mod-match-fallback">
-        {{ t('detail.matchFallbackHint', { id: ev.flow_fallback.flow_id, reason: t(`detail.match.reason.${ev.flow_fallback.reason}`) }) }}
+        {{ t('detail.matchFallbackHint', { id: ev.flow_fallback.flow_id, reason: fallbackReason(ev) }) }}
       </SAlert>
       <SAlert v-if="ev.reason" tone="neutral" :icon="false" :title="t('detail.f.reason')">{{ ev.reason }}</SAlert>
       <SAlert v-if="ev.error" tone="danger" :title="t('detail.f.error')"><span class="mod-prewrap">{{ ev.error }}</span></SAlert>

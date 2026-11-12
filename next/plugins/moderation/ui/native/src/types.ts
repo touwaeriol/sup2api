@@ -82,7 +82,7 @@ export interface ModEvent {
   level_source?: 'blocklist' | 'allowlist' | 'watch' | 'default'
   /** The level that applied: enforce = checked first. */
   level?: 'observe' | 'enforce'
-  /** The scope of the flow version that ran (prototype; none = all). */
+  /** The scope of the flow version that ran (prototype; none = not recorded, an older record). */
   scope?: Scope
   severity: string
   hit_categories: string[]
@@ -853,8 +853,11 @@ export interface Stage {
  * What of a request a flow moderates (prototype, CONTRACTS §72.4): input =
  * system and user text with the user's images and documents; tools adds the
  * tool results; all_but_own adds the assistant turns except those the
- * gateway answered itself; all = everything the client sent (before the
- * field existed every flow did, so a spec without it means all).
+ * gateway answered itself; all = everything the client sent. A spec without
+ * the field means all - what every flow did before it existed - and is sent
+ * without it (canonicalSpec), so a backend that does not know the field
+ * still takes the flows nobody narrowed. Whether a new flow starts at input
+ * is decided with the backend (design D1).
  */
 export const SCOPES = ['input', 'tools', 'all_but_own', 'all'] as const
 export type Scope = (typeof SCOPES)[number]
@@ -1084,7 +1087,3 @@ export interface ImportResult {
   auditor_ids?: number[]
 }
 
-// ---- page
-
-/** Tabs of the moderation page (?tab=). */
-export type { SectionKey as TabKey } from './nav'

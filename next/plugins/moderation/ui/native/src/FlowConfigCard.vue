@@ -103,7 +103,7 @@ function setRate(v: unknown) {
       <SField :label="t('flows.scopeTitle')" :hint="t('flows.scopeHint')" class="mod-config-wide" data-testid="mod-flow-scope">
         <div class="mod-form">
           <SSelect :model-value="scope" :options="scopeOptions" :disabled="disabled" :aria-label="t('flows.scopeTitle')" @update:model-value="patch({ scope: $event as Scope })" />
-          <SAlert v-if="scope === 'all' || scope === 'all_but_own'" tone="warning">{{ t('flows.scopeWarn') }}</SAlert>
+          <SAlert v-if="scope === 'all' || scope === 'all_but_own'" :tone="draft.scope ? 'warning' : 'info'">{{ draft.scope ? t('flows.scopeWarn') : t('flows.scopeLegacy') }}</SAlert>
         </div>
       </SField>
 

@@ -34,7 +34,8 @@ import { useCatalog } from './catalog'
 import { enumLabel, joinList, ms, num, pct } from './format'
 import { defaultGroupCandidate, idNumber } from './forms'
 import { canManage, confirmDelete, deleteFlow, errorMessage, setFlowEnabled, toastError, useModHost } from './host'
-import type { Flow, Group, Spec, TabKey } from './types'
+import type { Flow, Group, Spec } from './types'
+import type { SectionKey } from './nav'
 import { exemptGroups, flowBindingsInactive, flowBound, groupCoverage, type GroupOwner } from './bindingOps'
 
 // Flows (CONTRACTS §72.7): the list (one line a row: groups as chips, 24 h
@@ -46,7 +47,7 @@ const host = useModHost()
 const t = host.t
 const { EntityPicker } = host.components
 const manage = computed(() => canManage())
-const emit = defineEmits<{ (e: 'go-tab', tab: TabKey): void }>()
+const emit = defineEmits<{ (e: 'go-tab', tab: SectionKey): void }>()
 const { compact } = useViewport()
 
 const catalog = useCatalog()

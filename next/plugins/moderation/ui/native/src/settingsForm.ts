@@ -64,7 +64,7 @@ export const LEGACY_KEY_PAGE = 'policy'
 export const sectionsOf = (sections: SettingSection[], page: string) => sections.filter((g) => g.page === page)
 
 /** The keys a page edits: its visible fields, and on LEGACY_KEY_PAGE the 0.1 API key while one is stored (to clear it). */
-export function editableKeys(sections: SettingSection[], stored: Record<string, unknown>, page = LEGACY_KEY_PAGE): string[] {
+export function editableKeys(sections: SettingSection[], stored: Record<string, unknown>, page: string): string[] {
   const keys = sections.flatMap((g) => g.keys)
   return stored[LEGACY_KEY] && page === LEGACY_KEY_PAGE ? [...keys, LEGACY_KEY] : keys
 }

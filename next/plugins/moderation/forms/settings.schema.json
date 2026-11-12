@@ -249,7 +249,7 @@
     "verdict_cache_days": {
       "type": "integer",
       "title": "Verdict cache (days)",
-      "minimum": 0,
+      "minimum": 1,
       "maximum": 30,
       "default": 7
     },
