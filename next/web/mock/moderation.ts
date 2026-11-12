@@ -71,6 +71,7 @@ const MASK = '******'
 const SECRET_SETTINGS = ['notify_webhook_url', 'notify_webhook_secret']
 const settings: Record<string, any> = {
   mode: 'observe', exempt_user_ids: [], block_status: 403, auto_watch: true, watch_days: 30,
+  // analysis_*: stored keys of the removed AI analysis, kept to exercise the hidden legacy keys
   analysis_every_violations: 30, error_rate_alert_percent: 5, stats_retention_days: 90, analysis_channel_id: 5,
   notify_webhook_url: 'https://hooks.example.com/moderation', notify_webhook_secret: 's3cr3t', jev_default_set: null
 }
@@ -289,13 +290,13 @@ function health(id: number, calls: number, hits: number, errors: number, skipped
 }
 const costRef = (id: number, cost: any) => ({ id, cost })
 
-// GET /status (new-api overview): today's counts, AI review, watch counts,
+// GET /status (new-api overview): today's counts, watch counts,
 // last-hour health, funnels, queues, today's cost and the runtime.
 on('GET', '/p/moderation/status', () => {
   const observe = watch.filter((w) => w.level === 'observe')
   const audit = summary('0.01394000', 91, { free_calls: 61 })
   const manual = summary('0.00021000', 3, { unpriced_calls: 1, unpriced_tokens: 812 })
-  const total = summary('0.02063000', 96, { free_calls: 61, unpriced_calls: 1, unpriced_tokens: 812 })
+  const total = summary('0.01415000', 94, { free_calls: 61, unpriced_calls: 1, unpriced_tokens: 812 })
   return {
     enabled: settings.mode !== 'off',
     running: true,
@@ -581,7 +582,7 @@ on('POST', '/p/moderation/watchlist', (req) => {
   const uid = Number(req.body?.user_id)
   if (watch.some((w) => w.user_id === uid)) return fail(409, 'already_watched', 'user is already on the watch list / 该用户已在观察名单中')
   if (uid === 1) return fail(400, 'invalid_argument', 'staff cannot be watched', { fields: [{ field: 'user_id', code: 'staff', message: 'staff users cannot be watched / 管理员不能加入名单' }] })
-  const w = { user_id: uid, level: req.body.level || 'observe', source: 'manual', since_at: now(), expires_at: expiryOf(req.body, levelExpiry(req.body.level || 'observe')), hit_count: 0, violation_count: 0, hits_since_seen: 0, last_hit_at: null, note: req.body.note || '', updated_at: now(), analysis_requested_at: null, analysis_source: '', analysis_running: false, latest_analysis_id: null, latest_analysis_status: '', latest_trend: '', latest_suggestion: '', analyzed_at: null }
+  const w = { user_id: uid, level: req.body.level || 'observe', source: 'manual', since_at: now(), expires_at: expiryOf(req.body, levelExpiry(req.body.level || 'observe')), hit_count: 0, violation_count: 0, hits_since_seen: 0, last_hit_at: null, note: req.body.note || '', updated_at: now() }
   watch.push(w)
   logWatch(uid, 'add', '', w.level, req.body)
   return w

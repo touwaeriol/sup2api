@@ -14,7 +14,7 @@ import { useBulkReview } from './useBulkReview'
 
 // The suspicious records of a user (new-api user timeline), newest first,
 // optionally of one source (group → flow@version), as a table of one-line
-// rows (the AI reason in the text's tooltip); a row opens the record, manage
+// rows; a row opens the record, manage
 // users review checked records in bulk. Reloads when `version` changes; a
 // review here emits `reviewed` so the drawer refreshes the counts.
 const props = defineProps<{ userId: number; version: number; source: SourceFilter | null }>()

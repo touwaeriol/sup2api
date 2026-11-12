@@ -9,7 +9,7 @@ import { recentFrom, useModHost } from './host'
 import type { SourceFilter, UserDetail, WatchItem } from './types'
 
 // Summary of a user (new-api user-detail-summary and context bar): all
-// suspicious records by severity, handling status and AI verdict, the group
+// suspicious records by severity and handling status, the group
 // and flow now, and the group → flow@version sources of the last 30 days.
 // Main categories come from the watch list row when there is one. A source
 // picks the timeline filter (pick-source), limited to the same last 30 days

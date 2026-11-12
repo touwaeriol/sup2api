@@ -36,8 +36,7 @@ import type { JevQuestions } from './types'
 // forms/settings.ui.json whose page is this one (nav.ts), rendered by the schema widgets (the console's own
 // among them: the allowlist and the blocklist pick their users with
 // entity-select), except a few with their own editor here: the block
-// response preview per API format, the
-// webhook address and secret ("set" / clear) and the Jev default question
+// response preview per API format, the webhook address and secret ("set" / clear) and the Jev default question
 // set. The converted 0.1 fields are hidden and go back as stored; a stored
 // 0.1 API key can only be cleared.
 //

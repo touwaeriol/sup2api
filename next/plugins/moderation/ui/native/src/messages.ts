@@ -160,7 +160,7 @@ export default {
       denied: '{action}未获允许（趋势：{trend}）'
     },
     trend: { occasional: '偶发', persistent: '持续', escalating: '越来越重', likely_false_positive: '多半是误报' },
-    verdict: { violation: '违规', false_positive: '误报', none: '未复核' },
+    verdict: { violation: '违规', false_positive: '误报', none: '待处理' },
     protocol: { openai_chat: 'OpenAI Chat', openai_responses: 'OpenAI Responses', anthropic: 'Anthropic Messages' },
     priceReason: { no_price: '核心没有该模型价格', video_only: '只有视频价格，不能按 Token 计', eval_error: '价格表达式出错' },
     costSource: { audit: '审核', analysis: 'AI 分析', test: '在线测试', try: '审核器试跑', simulate: '流程模拟' },
@@ -343,7 +343,6 @@ export default {
         reviewed: '处理时间',
         llmModel: '审核模型',
       },
-      verdictBy: '{verdict}（{by}）',
       related: '同一请求的其他记录',
     },
     trace: {
@@ -393,8 +392,6 @@ export default {
       detailTitle: '观察名单 · 用户 #{id}',
       info: '条目信息',
       since: '计数开始',
-      notWatched: '该用户已不在观察名单上。',
-      loadMore: '加载更多',
       suspicious: '可疑记录',
       noSuspicious: '没有可疑记录',
       allRecords: '在审核记录中查看全部',
@@ -1266,7 +1263,7 @@ export default {
       denied: '{action} is not allowed (trend: {trend})'
     },
     trend: { occasional: 'Occasional', persistent: 'Persistent', escalating: 'Escalating', likely_false_positive: 'Likely false positive' },
-    verdict: { violation: 'Violation', false_positive: 'False positive', none: 'Not reviewed' },
+    verdict: { violation: 'Violation', false_positive: 'False positive', none: 'Pending' },
     protocol: { openai_chat: 'OpenAI Chat', openai_responses: 'OpenAI Responses', anthropic: 'Anthropic Messages' },
     priceReason: { no_price: 'The core has no price for this model', video_only: 'Video price only, cannot price tokens', eval_error: 'Price expression failed' },
     costSource: { audit: 'Moderation', analysis: 'AI analysis', test: 'Playground', try: 'Auditor try', simulate: 'Flow simulation' },
@@ -1436,7 +1433,6 @@ export default {
         reviewed: 'Reviewed',
         llmModel: 'Moderation model',
       },
-      verdictBy: '{verdict} ({by})',
       related: 'Other records of this request',
     },
     trace: {
@@ -1486,8 +1482,6 @@ export default {
       detailTitle: 'Watch list · user #{id}',
       info: 'Entry',
       since: 'Counting since',
-      notWatched: 'The user is no longer on the watch list.',
-      loadMore: 'Load more',
       suspicious: 'Suspicious records',
       noSuspicious: 'No suspicious records',
       allRecords: 'All in Records',

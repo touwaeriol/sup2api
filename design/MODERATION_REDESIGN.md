@@ -13,7 +13,7 @@
    - 这一层复用宿主现有的"侧栏视图"机制（`WEB/src/layouts/sidebarViews.ts`，CONTRACTS §90），控制台 UI 升到 3.14。
    - 旧控制台会忽略这个声明，插件可以保留页内标签作为回退。因此 **不需要提高 `hostUICompat`**。
    - 审核插件是第一个接入者。
-2. **审核插件界面：** 原来横排的 10 个标签改为 5 组、15 个侧栏条目。原来一整页的设置拆成 7 个短页，每页 1–2 张卡片，不再需要长滚动。名单、模式等命名改成"说出它实际做什么"。
+2. **审核插件界面：** 原来横排的 10 个标签改为 5 组、16 个侧栏条目。原来一整页的设置拆成 7 个短页，每页 1–2 张卡片，不再需要长滚动。名单、模式等命名改成"说出它实际做什么"。
 3. **审核逻辑：** 按评估报告逐条落地，最重要的四项是：
    - 流程增加"审核范围"，新建流程默认只审 system + user；
    - 命中重放只重放命中部分，新内容照常审；
@@ -22,20 +22,20 @@
 
 原型已在本分支实现了前端、平台声明、校验和过滤；审核插件的 Go 后端没有改动。界面用 web mock 运行，Playwright 截图在 `design/shots/`（§6）。
 
-### 待用户确认的决策点（推荐值写在前面）
+### 决策点（D1–D5、D9、D10 用户已按推荐确认；D6–D8 随功能删除作废）
 
 | # | 决策 | 推荐 | 备选 |
 |---|---|---|---|
-| D1 | 已有流程的"审核范围"怎么处理 | **保持 `all`（旧行为），不自动改**。新建流程默认 `input`（与第 2 期后端同时上线）；未设置范围的流程在编辑页显示提示，由管理员手动切换 | 升级时把所有已有流程改成 `input`：误报立刻下降，但会悄悄缩小审核面 |
-| D2 | `mode` 是否拆成"开关"和"默认级别"两个字段 | **不拆，只改文案**（关闭 / 开启·默认后台审核 / 开启·默认先审后发），不需要迁移 | 拆成 `enabled` + `default_level`：概念更干净，但要做设置迁移和兼容读取 |
-| D3 | 缓存命中的重放方式 | **`new_content`：只重放命中部分，新内容照常送审** | `whole`：旧行为，整个请求直接按命中处理 |
-| D4 | 审核失败时的处理 | **默认 `open`（放行并记为出错，与现状一致）**，可选 `close_pre`（先审的请求返回 503） | 默认 `close_pre`：更安全，但上游一抖动就会拒绝用户 |
-| D5 | 白名单、黑名单是否并入观察名单 | **本期只改名**（"只后台审核" / "总是先审"），第 4 期再并入观察名单，作为"锁定条目" | 立即合并：要迁移数据，而且 AI 分析和自动观察的规则都要一起改 |
+| D1 | 已有流程的"审核范围"怎么处理——**用户已确认（按推荐）** | **保持 `all`（旧行为），不自动改**。新建流程默认 `input`（与第 2 期后端同时上线）；未设置范围的流程在编辑页显示提示，由管理员手动切换 | 升级时把所有已有流程改成 `input`：误报立刻下降，但会悄悄缩小审核面 |
+| D2 | `mode` 是否拆成"开关"和"默认级别"两个字段——**用户已确认（按推荐）** | **不拆，只改文案**（关闭 / 开启·默认后台审核 / 开启·默认先审后发），不需要迁移 | 拆成 `enabled` + `default_level`：概念更干净，但要做设置迁移和兼容读取 |
+| D3 | 缓存命中的重放方式——**用户已确认（按推荐）** | **`new_content`：只重放命中部分，新内容照常送审** | `whole`：旧行为，整个请求直接按命中处理 |
+| D4 | 审核失败时的处理——**用户已确认（按推荐）** | **默认 `open`（放行并记为出错，与现状一致）**，可选 `close_pre`（先审的请求返回 503） | 默认 `close_pre`：更安全，但上游一抖动就会拒绝用户 |
+| D5 | 白名单、黑名单是否并入观察名单——**用户已确认（按推荐）** | **本期只改名**（"只后台审核" / "总是先审"），第 4 期再并入观察名单，作为"锁定条目" | 立即合并：要迁移数据，而且自动观察的规则要一起改 |
 | D6 | AI 的权限 | **作废（功能删除）**：AI 分析整体删除（§9），不再需要 | — |
 | D7 | AI 复核的触发与数量限制 | **作废（功能删除）** | — |
 | D8 | 由谁决定名单调整 | **作废（功能删除）** | — |
-| D9 | 删除后，历史 AI 结论和分析记录是否还在界面上展示（§9.3） | **第一步就不再展示**：界面只认人工处理；数据在迁移那一期之前留在库里但不读取，不导出（有自动备份） | 只读保留到迁移那期：要保留一套只读界面和接口，与"功能已删除"相矛盾 |
-| D10 | 是否用一条固定规则替代 AI 的自动升级（§9.3） | **暂不加**：默认级别为拦截时本来全部先审；观察级的严重情况有封禁阈值兜底，其余手动升级 | 加"观察期内违规 N 次自动升为拦截级"：确定、无 AI 成本，但又多一个设置 |
+| D9 | 删除后，历史 AI 结论和分析记录是否还在界面上展示（§9.3）——**用户已确认（按推荐）** | **第一步就不再展示**：界面只认人工处理；数据在迁移那一期之前留在库里但不读取，不导出（有自动备份） | 只读保留到迁移那期：要保留一套只读界面和接口，与"功能已删除"相矛盾 |
+| D10 | 是否用一条固定规则替代 AI 的自动升级（§9.3）——**用户已确认（按推荐）** | **暂不加**：默认级别为拦截时本来全部先审；观察级的严重情况有封禁阈值兜底，其余手动升级 | 加"观察期内违规 N 次自动升为拦截级"：确定、无 AI 成本，但又多一个设置 |
 
 ---
 
@@ -351,7 +351,7 @@
 - **目标行为：**
   - 第 1 期只改名："只后台审核"和"总是先审"，原型已实现；
   - 修复 `auto_watch`，跳过只后台审核名单里的用户；
-  - 第 4 期把两个名单并入观察名单，成为"锁定条目"（级别固定、不过期、AI 不能修改），设置里不再有这两个列表。
+  - 第 4 期把两个名单并入观察名单，成为"锁定条目"（级别固定、不过期），设置里不再有这两个列表。
 - **后端：**
   - 第 1 期：`store.go:297` 加判断 `!c.allowlisted(uid)`；
   - 第 4 期：`watchlist` 加 `locked bool`，迁移把两个列表转成锁定条目，`preModerated` 只看观察名单级别加默认级别。
@@ -410,7 +410,7 @@ AI 分析已删除（§9）。审核本身的并发设置 `max_concurrency` 这�
 | **第 1 期：平台侧栏加界面整理** | UI 3.14 插件页 nav（平台）；审核插件改为侧栏；设置拆成 7 页；改名与文案修正（P6/P7/P10，记录标签）；后端小修 P8（`auto_watch`）和 P11（缓存可设 0）；**AI 分析第一步：停用并隐藏**（§9.4：删除 Go 代码、路由和任务，`analysis_*` 改为隐藏的 legacy 键，界面移除） | sdk manifest/check、server plugin/api/ui.go、`WEB/src/layouts/pluginNav.ts`、`sidebarViews.ts`、packages 版本；`UI/nav.ts`、`ModerationDashboard.vue`、`SettingsTab.vue`、`settingsForm.ts`、`forms/*.json`、`messages.ts`、`EventDetail.vue`；`M/store.go`、`M/settings.go` | 平台约 +500/-20 行（含测试），插件 UI 约 +600/-250 行，Go 约 +20 行；删除 AI 分析约 −2 900（后端）、−600（测试）、−1 000（前端）行 | 无 | 可以（核心 0.1.284 + 插件 0.10.0；旧控制台自动回退到页内标签） | `nav.spec`（manifest 与 nav.ts 一致）、`pluginNav.spec`、`navigation.spec`、`ui-contract.spec`、`check/ui_test`、`api/unit_test`；`settingsForm.spec`（分页覆盖）；手动验证旧链接 `?tab=settings` 和 `?record=` |
 | **第 2 期：审核范围加命中重放** | `Spec.scope` 与角色过滤、指纹包含 scope；`hit_replay=new_content`；`fail_policy` | `M/flow.go`、`hook.go`、`extract.go`（只加过滤表）、`snapshot.go`、`settings.go`；`UI/FlowConfigCard.vue` 等（原型已有） | Go 约 +250 行（含测试），前端少量 | 无 | **分两步发版**：先让后端认识 `scope`（界面不提供），全部节点升级后再开放界面 | 各协议抽取在不同 scope 下的矩阵测试；缓存指纹随 scope 变化；重放后新内容是否送审；先审拒绝的语义不变 |
 | **第 3 期：可观测性** | `flow_source`、`level_source` 入库；绑定页标出失效绑定；概览提示 | `M/snapshot.go`、`hook.go`、`account_binding.go`、`store.go`、`routes_bindings.go`、`migrations/0011_*.sql`；`UI/BindingsTab.vue`、`EventDetail.vue`、overview | Go 约 +200 行，SQL 约 10 行，前端约 +150 行 | **有**（events 加 5 列，可为空） | 走 maintenance | 迁移前后记录的读取；fallback 的三种原因；account 与 group 的优先级 |
-| **第 4 期：清理与合并** | 名单并入观察名单（锁定条目）；删除 0.1 旧字段和 `on_error`；`decideHandling` 收拢；可选把输入上限移到流程；**AI 分析第二步：迁移删除** `user_analyses`、名单行的分析列、记录的 `ai_*` 列和 `analysis_*` legacy 键（§9.4） | `M/settings.go`、`legacy.go`、`hook.go`、`watch*.go`、`store.go`、`analysis_queue.go`、migrations；`forms/*`、`WatchTab.vue` | Go 约 +300/-400 行 | **有**（watchlist 加 `locked`，名单数据迁移） | 不能 rolling，一次性切换，走 maintenance | 迁移后先审 / 后审的判定与迁移前逐用户对比；AI 分析不能修改锁定条目 |
+| **第 4 期：清理与合并** | 名单并入观察名单（锁定条目）；删除 0.1 旧字段和 `on_error`；`decideHandling` 收拢；可选把输入上限移到流程；**AI 分析第二步：迁移删除** `user_analyses`、名单行的分析列、记录的 `ai_*` 列和 `analysis_*` legacy 键（§9.4） | `M/settings.go`、`legacy.go`、`hook.go`、`watch*.go`、`store.go`、migrations；`forms/*`、`WatchTab.vue` | Go 约 +300/-400 行 | **有**（watchlist 加 `locked`，名单数据迁移） | 不能 rolling，一次性切换，走 maintenance | 迁移后先审 / 后审的判定与迁移前逐用户对比 |
 
 ---
 
@@ -534,20 +534,20 @@ cd next/web && node node_modules/vite/bin/vite.js --mode mock
 | 位置 | 删除内容 |
 |---|---|
 | `M/analysis.go`、`analysis_queue.go`、`analysis_tools.go`、`analysis_prompt.go`、`analysis_guidelines.go` | 整个文件，共 2 407 行。`agent.go` 是"大模型判定"审核器，保留；`llmproto.go` 是审核器与分析共用的协议层，保留 |
-| `M/store.go:212-251`、:313-368 | 违规计数触发分析的部分（`analysis_every_violations` 判断、排队、`kickAnalyses`）。保留违规计数本身，它用于显示和观察期顺延 |
-| `M/watch.go:35-49` 及 :141、:294、:350-353、:372、:400 | 名单行上的分析字段、`analysis_id` 参数、"过时"判定 |
-| `M/watch_list.go:21`、:156、:167-190、:285 起 | `trend` 过滤、`ai_counts`、`analysis_every_violations` |
-| `M/user_detail.go:21-35`、:46、:69-73 | `AIVerdictCounts`、最近一次分析、分析进度 |
-| `M/routes.go:40-43`、:140、:160、:201-202 | 4 条分析路由、状态里的 `analysis` 运行信息、记录的 `ai_*` 字段和过滤 |
-| `M/stats_api.go:243-249`、:314、:372、:480 | 今日分析次数、AI 复核占比、费用来源 `analysis` |
+| `M/store.go:212-251`、:313-368 | 违规计数触发分析的部分：`analysis_every_violations` 判断、排队、`kickAnalyses`。保留违规计数本身，它用于显示和观察期顺延 |
+| `M/watch.go:35-49`、:55-65、:88-98、:127、:149、:181-182、:295、:373、:377-387 | 名单行上的分析字段（扫描与 `fillRunning`）、名单历史的 `analysis` 列、`analysis_id` 参数及其校验、`deleteWatch` 的 `analysis_id` 查询参数 |
+| `M/watch_list.go:21`、:156、:167-190、:285 起（`loadWatchAICounts`） | `trend` 过滤、`ai_counts`、`analysis_every_violations` |
+| `M/user_detail.go:21-35`、:46、:69-73、:84-85、:98-106、:115-129、:162-170、:202-212（`loadLatestAnalysis`） | `AIVerdictCounts`、最近一次分析、分析进度 |
+| `M/routes.go:39-43`、:140、:160、:201-207、:239、:268、:274、:305-319、:548-568 | 5 条分析路由（含手动分析），状态里的 `analysis` 运行信息，记录的 `ai_*` 字段、扫描与 `ai_verdict` / `verdict=needs_review\|disagree` 过滤，详情里查 `user_analyses` 的 `eventExtras` |
+| `M/stats_api.go:243-249`、:314、:331、:372、:480、:497、:499-510（`addAnalysisCounts`） | 今日分析次数、`AIReview` 占比、健康统计与费用里的分析来源 |
 | `M/routes_config.go:48-51`、:189-194、:419-421 | 渠道上的"分析渠道"标记，以及删除时的 409 保护 |
-| `M/routes_misc.go:202-210`、:300-303 | 导入导出里的 `analysis_guidelines` |
+| `M/routes_misc.go:202-210`、:300-303、:317、:358-359（`case JobAnalysis`）、:389-393 | 导入导出里的 `analysis_guidelines`、`analysis` 任务的分派、每日清理时裁剪 `user_analyses` |
 | `M/notify.go:111-135` | AI 调整名单时的通知 |
-| `M/plugin.go:105-106` 及 `analysis` 任务的注册 | 分析的调度 |
-| `M/settings.go:106-114`、:180-182、:408-418 | `analysis_*` 设置的字段、默认值和解码 |
+| `M/plugin.go:105-106` | 正在运行的分析计数 |
+| `M/settings.go:106-117`、:180-182、:408-423 | `analysis_*` 设置的字段、默认值和解码 |
 | `M/costs.go:25` | `SourceAnalysis`。历史费用行仍然以这个来源存在，保留常量和"AI 分析"文案，等统计保留期过后再删 |
 | `M/marker.go:55` | 注释里分析开场消息的说明 |
-| `next/plugins/moderation/manifest.json` | `analysis` 任务（:119-121）、4 条分析路由和 1 条手动分析路由（:406-432）、jobs 权限说明（:808-809）。描述里的 AI 分析一句已在原型中删掉 |
+| `next/plugins/moderation/manifest.json` | `analysis` 任务（:119-121）、4 条分析路由和 1 条手动分析路由（:406-432）、jobs 权限说明（:616-617）。描述里的 AI 分析一句已在原型中删掉 |
 | `next/docs/CONTRACTS.md` | §72 对比表里的"AI 分析"一行（:5116）、§72.8 的计数（:5426）、§72.13.4 整节（:5629-5693）、§72.13.6 中观察名单的分析部分（:5709-5714）、用户详情抽屉的分析部分（:5851） |
 
 **前端**（原型已全部删除）
@@ -560,7 +560,7 @@ cd next/web && node node_modules/vite/bin/vite.js --mode mock
 - **用户抽屉**：AI 复核卡片、"分析记录"标签页、"AI 结论"统计，以及只为跟踪分析进度而做的轮询。
 - **概览**：AI 复核卡片、状态行的"AI 分析"项、运行状态的分析队列行、今日费用的"AI 分析"来源。
 - **渠道**："AI 分析渠道"标记和删除保护。
-- **其它**：相关类型、接口函数、色调函数、CSS，以及约 120 条文案键（中英各一份）。
+- **其它**：相关类型、接口函数、色调函数、CSS，以及 154 个文案键（中英各一份）。
 - **mock**：分析数据和接口、记录上的 `ai_*` 字段。
 
 **保留的部分**（这些只是为了能读懂历史数据，不再产生新数据）
@@ -575,7 +575,7 @@ cd next/web && node node_modules/vite/bin/vite.js --mode mock
 |---|---|
 | 后端非测试 | 约 2 900 行：`analysis*.go` 共 2 407 行，加上其它文件中的约 500 行（估算） |
 | 后端测试 | 约 600 行：`analysis_test.go` 359 行，加上 `lists_test`、`stats_api_test` 等中的约 250 行（估算） |
-| 前端（相对 `ed988819c`） | 约 1 000 行：删除的 6 个文件共 573 行，文案约 250 行，其余文件约 200 行（估算） |
+| 前端（相对 `ed988819c`） | 约 1 000 行：删除的 5 个文件共 458 行，文案键 154 个（中英两份约 300 行），其余文件约 200 行（估算） |
 
 本分支原型的实际 diff：前端非测试 −1 865 / +93 行（含原型里新加后又删掉的部分），测试 −108 / +13，mock −237 / +23，表单与 manifest −260 / +39。
 
@@ -603,13 +603,16 @@ cd next/web && node node_modules/vite/bin/vite.js --mode mock
 - 后端不再触发、不再读取分析：删除上表中的 Go 代码、路由和任务。
 - `analysis_*` 设置改为隐藏的 legacy 键，保证已存的值仍能通过核心校验。
 - 界面移除（原型已完成）。
-- rolling 期间，旧节点可能还会跑完手上已排队的分析。它们写的数据新节点不读，没有影响。
+- **rolling 期间**，全部节点升级之前，旧节点照常排队、分析、自动调整名单并发送通知；新节点不读这些数据。若不希望升级窗口内还有 AI 调整名单，升级前先在旧版设置里清空分析渠道（`analysis_channel_id`），旧节点就不再分析。
+- 当天已产生的分析费用仍计入今日费用合计，但不再单列来源，第二天起不再出现。
 
 **第二步：迁移删除**（需要迁移，走 maintenance，并入第 4 期）
 
 - 删除 `user_analyses` 表（`migrations/0004_analysis_costs.sql:25-47`）。
 - 删除名单行上的分析列（0004:13-21）。
 - 删除记录上的 `ai_verdict`、`ai_severity`、`ai_category`、`ai_evidence`、`ai_reason`、`ai_analysis_id`。
+- 删除索引 `watchlist_analysis_requested_idx`（0004:22）和 `user_analyses_user_idx`（0004:48，随表删除）。
+- `watch_events.analysis_id` 列保留，作为历史 AI 动作的审计信息，只是不再写入。
 - 删除 schema 里的 `analysis_*` legacy 键。
 - 名单历史 `watch_events` 里 AI 当年的动作属于审计记录，保留。
 
@@ -620,3 +623,24 @@ cd next/web && node node_modules/vite/bin/vite.js --mode mock
 - 已删除 `design/shots/ai-*.png`。
 - 重拍了受影响的截图：侧栏（`desktop-overview-sidebar`、`dark-overview-sidebar`、`mobile-sidebar-drawer`、`mobile-dark-drawer`）、观察名单详情（新增 `desktop-watch-detail`、`dark-watch-detail`、`mobile-watch-detail`）、设置页（`desktop-settings-*`、`dark-settings-policy`、`mobile-settings-*`）。
 - 不再有 `desktop-settings-analysis`。
+
+### 9.6 独立审查
+
+独立审查子代理复核了 `d2cbd7b96f..38a8264a59`。没有高优先级问题，共报告中 4 条、低 10 条，均已处理。
+
+- **§9.2 的行号**：按审查核对的结果改正并补全，例如 `watch.go`、`routes.go`、`user_detail.go`、`stats_api.go`、`routes_misc.go` 中漏列的位置；`analysis` 任务的分派在 `routes_misc.go:358-359`，不在 `plugin.go`；manifest 的 jobs 说明在 :616-617。
+- **文档里残留的 AI 措辞**：D5 备选、§4.7、第 4 期的文件和测试要点中的已去掉。
+- **mock 的今日费用合计**：改为审核加手动的和，与分项一致。§9.4 说明了当天已有的分析费用只计入合计。
+- **rolling 期间旧节点的行为**：已如实写明，并给出做法：升级前先清空分析渠道。
+- **数字**：删除的文件为 5 个、共 458 行；文案键 154 个；侧栏条目 16 个。
+- **第二步迁移的范围**：补上两个索引；`watch_events.analysis_id` 列保留，作为审计信息。
+- **代码清理**：
+  - 删除不再使用的 CSS（`.mod-bar*`、`.mod-danger`、`.mod-verdict-badge .mod-sub`）；
+  - 删除不再使用的文案键（`watch.notWatched`、`watch.loadMore`、`detail.verdictBy`）；
+  - 改正过时的注释；
+  - mock 新建名单条目时不再带分析字段；
+  - `deleteWatch` 的参数改名为 `body`；
+  - 概览里只剩一张卡片的网格去掉。
+- **措辞与标题**：
+  - 记录的"未复核"改为"待处理"，与"结论"筛选一致；
+  - 隐藏的 `analysis_*` 键标题加上"（已停用）"。

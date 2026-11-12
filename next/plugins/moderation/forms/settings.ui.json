@@ -208,8 +208,8 @@
   },
   "analysis_every_violations": {
     "ui:title": {
-      "en": "Analyse every",
-      "zh": "每多少次违规自动分析一次"
+      "en": "Analyse every (retired)",
+      "zh": "每多少次违规自动分析一次（已停用）"
     },
     "ui:widget": "hidden",
     "ui:section": {
@@ -260,8 +260,8 @@
   },
   "analysis_channel_id": {
     "ui:title": {
-      "en": "AI analysis channel",
-      "zh": "AI 分析渠道"
+      "en": "AI analysis channel (retired)",
+      "zh": "AI 分析渠道（已停用）"
     },
     "ui:widget": "hidden"
   },
@@ -840,57 +840,57 @@
   },
   "analysis_allow_upgrade": {
     "ui:title": {
-      "en": "Let the AI upgrade to enforce",
-      "zh": "允许 AI 升为拦截级"
+      "en": "Let the AI upgrade to enforce (retired)",
+      "zh": "允许 AI 升为拦截级（已停用）"
     },
     "ui:widget": "hidden"
   },
   "analysis_allow_downgrade": {
     "ui:title": {
-      "en": "Let the AI downgrade to observe",
-      "zh": "允许 AI 降为观察级"
+      "en": "Let the AI downgrade to observe (retired)",
+      "zh": "允许 AI 降为观察级（已停用）"
     },
     "ui:widget": "hidden"
   },
   "analysis_allow_remove": {
     "ui:title": {
-      "en": "Let the AI remove users",
-      "zh": "允许 AI 移出名单"
+      "en": "Let the AI remove users (retired)",
+      "zh": "允许 AI 移出名单（已停用）"
     },
     "ui:widget": "hidden"
   },
   "analysis_timeout_ms": {
     "ui:title": {
-      "en": "Analysis timeout",
-      "zh": "单次分析超时"
+      "en": "Analysis timeout (retired)",
+      "zh": "单次分析超时（已停用）"
     },
     "ui:widget": "hidden"
   },
   "analysis_concurrency": {
     "ui:title": {
-      "en": "Concurrent analyses per node",
-      "zh": "每个节点同时分析数"
+      "en": "Concurrent analyses per node (retired)",
+      "zh": "每个节点同时分析数（已停用）"
     },
     "ui:widget": "hidden"
   },
   "analysis_context_kb": {
     "ui:title": {
-      "en": "Context budget",
-      "zh": "上下文预算"
+      "en": "Context budget (retired)",
+      "zh": "上下文预算（已停用）"
     },
     "ui:widget": "hidden"
   },
   "analysis_keep_per_user": {
     "ui:title": {
-      "en": "Analyses kept per user",
-      "zh": "每个用户保留的分析数"
+      "en": "Analyses kept per user (retired)",
+      "zh": "每个用户保留的分析数（已停用）"
     },
     "ui:widget": "hidden"
   },
   "analysis_guidelines": {
     "ui:title": {
-      "en": "Analysis guidelines",
-      "zh": "分析准则"
+      "en": "Analysis guidelines (retired)",
+      "zh": "分析准则（已停用）"
     },
     "ui:widget": "hidden"
   },

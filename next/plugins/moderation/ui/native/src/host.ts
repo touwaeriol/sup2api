@@ -134,8 +134,8 @@ export const deleteBlock = (userId: number) => api().del(`/blocks/${userId}`)
 
 export const createWatch = (body: WatchChange & { user_id: number }) => api().post<Watch>(WATCHLIST_PATH, body)
 export const updateWatch = (userId: number, body: WatchChange) => api().patch<Watch>(`${WATCHLIST_PATH}/${userId}`, body)
-/** link: the reason of a release, written to the history. */
-export const deleteWatch = (userId: number, link?: { reason?: string }) => api().del(`${WATCHLIST_PATH}/${userId}`, link)
+/** body: the reason of a release, written to the history. */
+export const deleteWatch = (userId: number, body?: { reason?: string }) => api().del(`${WATCHLIST_PATH}/${userId}`, body)
 export const markWatchSeen = (userId: number) => api().post(`${WATCHLIST_PATH}/${userId}/seen`, {})
 export const fetchWatchEvents = (userId: number) => api().get<WatchEvent[]>(`${WATCHLIST_PATH}/${userId}/events`)
 

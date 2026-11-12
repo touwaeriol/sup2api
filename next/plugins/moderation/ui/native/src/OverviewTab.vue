@@ -71,9 +71,7 @@ const goTab = (tab: SectionKey) => emit('go-tab', tab)
       </SGrid>
     </template>
 
-    <SGrid template="repeat(auto-fit, minmax(min(360px, 100%), 1fr))" class="mod-section">
-      <AttentionUsers @open-watch="emit('open-watch', $event)" @go-tab="goTab" />
-    </SGrid>
+    <AttentionUsers class="mod-section" @open-watch="emit('open-watch', $event)" @go-tab="goTab" />
     <TodayCostCard v-if="status.data.value" :costs="status.data.value.costs" class="mod-section" />
     <PerformanceCard class="mod-section" />
     <SGrid template="repeat(auto-fit, minmax(min(360px, 100%), 1fr))" class="mod-section">

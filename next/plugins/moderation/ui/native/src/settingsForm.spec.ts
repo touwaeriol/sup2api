@@ -6,7 +6,7 @@ import { NAV_GROUPS } from './nav'
 import { mergeSettings, type PageValues } from './settingsMerge'
 
 const MASK = '******'
-/** The converted 0.1 fields and the keys retired in 0.8.0: in the schema (the core validates and masks them), never on the page. */
+/** The converted 0.1 fields, the keys retired in 0.8.0 and the analysis_* keys of the removed AI analysis: in the schema (the core validates and masks them), never on the page. */
 const LEGACY = ['base_url', 'api_key', 'model', 'system_prompt', 'categories', 'tool_choice', 'max_turns', 'temperature', 'max_tokens', 'timeout_ms', 'on_error', 'sample_rate', 'group_ids', 'model_patterns', 'retention_days', 'exempt_user_ids', 'cache_ttl_seconds', 'analysis_every_violations', 'analysis_channel_id', 'analysis_guidelines', 'analysis_timeout_ms', 'analysis_concurrency', 'analysis_context_kb', 'analysis_keep_per_user', 'analysis_allow_upgrade', 'analysis_allow_downgrade', 'analysis_allow_remove']
 
 const sections = settingSections(schema, ui)

@@ -19,7 +19,7 @@ import type { EventFilter, ModEvent, ModEventDetail, ReviewStatus, Watch } from 
 import { useAsync } from './useAsync'
 
 // Record detail (GET /events/:id, new-api record-detail-drawer): result, the
-// user's state with inline watch actions, AI review, per-stage trace, the
+// user's state with inline watch actions, per-stage trace, the
 // flow version it ran with, other records of the same request, text and the
 // structured input message; manage users review a suspicious record (hit,
 // block) or delete any. userLink=false (the user drawer, already showing
