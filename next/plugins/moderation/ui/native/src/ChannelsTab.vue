@@ -75,7 +75,7 @@ const usedBy = (c: Channel): ChipListItem[] => (c.used_by || []).map((a) => ({ k
 const urlTitle = (c: Channel) =>
   [c.base_url, `${t('channels.col.timeout')} ${ms(c.timeout_ms)}`, c.has_proxy ? t('channels.viaProxy') : ''].filter(Boolean).join('\n')
 
-/** Today's tokens, cost by source ("审核 $0.01 · AI 分析 $0.02", sources with calls only) and unpriced calls: the tooltip of today's cost. */
+/** Today's tokens, cost by source ("审核 $0.01 · 在线测试 $0.02", sources with calls only) and unpriced calls: the tooltip of today's cost. */
 function todayTitle(c: Channel): string {
   const s = c.stats
   if (!s) return ''
@@ -112,10 +112,9 @@ async function setEnabled(c: Channel, enabled: boolean) {
   }
 }
 
-/** Why a channel cannot be deleted: the analysis channel, or the auditors using it. */
+/** Why a channel cannot be deleted: the auditors using it. */
 function deleteError(e: unknown): string {
   if (!isApiError(e) || e.status !== 409) return errorMessage(e, t('actionFailed'))
-  if (e.code === 'analysis_channel') return t('channels.isAnalysis')
   const names = errorDetails(e, 'auditors').map((a) => a.name || `#${a.id}`)
   return names.length ? t('channels.inUse', { names: joinList(names) }) : errorMessage(e, t('actionFailed'))
 }
@@ -159,7 +158,6 @@ async function test(c: Channel) {
           <span class="mod-cell-line">
             <span class="mod-ellipsis" :title="row.name">{{ row.name }}</span>
             <SHint inline size="xs" class="mod-num">#{{ row.id }}</SHint>
-            <SBadge v-if="row.analysis" tone="purple" size="xs">{{ t('channels.analysis') }}</SBadge>
             <SBadge v-if="!row.has_key" size="xs" tone="warning">{{ t('channels.noKey') }}</SBadge>
           </span>
         </template>
@@ -183,7 +181,7 @@ async function test(c: Channel) {
         <template #cell-billing_model="{ row }">{{ row.billing_model || '—' }}</template>
         <template #cell-used_by="{ row }">
           <SChipList v-if="row.used_by?.length" :items="usedBy(row)" :max="1" />
-          <SHint v-else inline>{{ row.analysis ? '—' : t('channels.unused') }}</SHint>
+          <SHint v-else inline>{{ t('channels.unused') }}</SHint>
         </template>
         <template #cell-hour="{ row }">
           <span v-if="row.stats" class="mod-cell-line mod-num" :title="t('stats.errorRate')">

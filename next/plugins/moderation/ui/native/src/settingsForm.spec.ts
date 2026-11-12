@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import schema from '../../../forms/settings.schema.json'
 import ui from '../../../forms/settings.ui.json'
-import { CUSTOM_KEYS, displayValues, editableKeys, effectOf, LEGACY_KEY, LEGACY_KEY_PAGE, retiredConflicts, schemaKeys, sectionsOf, sentSetting, settingSections, settingsKey, verdictCacheOff, withRetiredMirrored } from './settingsForm'
+import { CUSTOM_KEYS, displayValues, editableKeys, LEGACY_KEY, LEGACY_KEY_PAGE, schemaKeys, sectionsOf, sentSetting, settingSections, settingsKey, verdictCacheOff, withRetiredMirrored } from './settingsForm'
 import { NAV_GROUPS } from './nav'
 import { mergeSettings, type PageValues } from './settingsMerge'
 
 const MASK = '******'
 /** The converted 0.1 fields and the keys retired in 0.8.0: in the schema (the core validates and masks them), never on the page. */
-const LEGACY = ['base_url', 'api_key', 'model', 'system_prompt', 'categories', 'tool_choice', 'max_turns', 'temperature', 'max_tokens', 'timeout_ms', 'on_error', 'sample_rate', 'group_ids', 'model_patterns', 'retention_days', 'exempt_user_ids', 'cache_ttl_seconds', 'analysis_allow_upgrade', 'analysis_allow_downgrade', 'analysis_allow_remove', 'analysis_concurrency']
+const LEGACY = ['base_url', 'api_key', 'model', 'system_prompt', 'categories', 'tool_choice', 'max_turns', 'temperature', 'max_tokens', 'timeout_ms', 'on_error', 'sample_rate', 'group_ids', 'model_patterns', 'retention_days', 'exempt_user_ids', 'cache_ttl_seconds', 'analysis_every_violations', 'analysis_channel_id', 'analysis_guidelines', 'analysis_timeout_ms', 'analysis_concurrency', 'analysis_context_kb', 'analysis_keep_per_user', 'analysis_allow_upgrade', 'analysis_allow_downgrade', 'analysis_allow_remove']
 
 const sections = settingSections(schema, ui)
 const zh = (v: unknown) => (v as { zh: string }).zh
@@ -20,22 +20,18 @@ describe('settingSections', () => {
       'cache/送审输入上限',
       'lists/固定名单',
       'lists/自动观察与封禁',
-      'analysis/何时复核',
-      'analysis/AI 的权限',
-      'analysis/分析准则',
       'jev/Jev 默认题集',
       'response/拦截响应',
       'records/记录内容',
       'records/保留期',
       'advanced/性能',
-      'advanced/AI 复核资源',
       'advanced/告警与通知'
     ])
     const shown = sections.flatMap((g) => g.keys)
     expect(shown).toEqual(ui['ui:order'].filter((k) => !LEGACY.includes(k)))
     expect(new Set(shown).size).toBe(shown.length)
     expect(Object.keys(schema.properties).filter((k) => !shown.includes(k)).sort()).toEqual([...LEGACY].sort())
-    expect(sections.filter((g) => g.collapsed).map((g) => g.id)).toEqual(['analysis_guidelines', 'analysis_timeout_ms'])
+    expect(sections.filter((g) => g.collapsed).map((g) => g.id)).toEqual([])
   })
 
   it('puts every section on a settings page of the sidebar, and every such page has a section', () => {
@@ -85,7 +81,6 @@ describe('the save of the settings tab', () => {
   const page = (stored: Record<string, unknown>, form: Record<string, unknown>): PageValues => {
     const out: PageValues = {}
     for (const k of schemaKeys(editableKeys(sections, stored, LEGACY_KEY_PAGE))) out[k] = sentSetting((schema.properties as Record<string, any>)[k], stored, k, form[k])
-    out.analysis_channel_id = (form.analysis_channel_id as number) ?? 0
     out.notify_webhook_url = stored.notify_webhook_url === MASK ? MASK : undefined
     out.notify_webhook_secret = stored.notify_webhook_secret === MASK ? MASK : undefined
     out.jev_default_set = (stored.jev_default_set as unknown) ?? null
@@ -105,7 +100,7 @@ describe('the save of the settings tab', () => {
     retention_days: 60
   }
   const keys = editableKeys(sections, stored, LEGACY_KEY_PAGE)
-  const form: Record<string, unknown> = { ...displayValues(schema, stored, schemaKeys(keys)), analysis_channel_id: 0, api_key: MASK }
+  const form: Record<string, unknown> = { ...displayValues(schema, stored, schemaKeys(keys)), api_key: MASK }
   const initial = page(stored, form)
 
   it('shows schema defaults for keys never stored, without writing them', () => {
@@ -126,7 +121,7 @@ describe('the save of the settings tab', () => {
   describe('the allowlist of settings saved before 0.8.0', () => {
     const old = { ...stored, exempt_user_ids: ['5', '9'] }
     const oldKeys = editableKeys(sections, old, LEGACY_KEY_PAGE)
-    const oldForm: Record<string, unknown> = { ...displayValues(schema, old, schemaKeys(oldKeys)), analysis_channel_id: 0, api_key: MASK }
+    const oldForm: Record<string, unknown> = { ...displayValues(schema, old, schemaKeys(oldKeys)), api_key: MASK }
     const oldInitial = page(old, oldForm)
 
     it('starts from the stored exempt_user_ids while allowlist_user_ids was never stored', () => {
@@ -236,7 +231,7 @@ describe('the save of the settings tab', () => {
       expect(verdictCacheOff(stored)).toBe(false)
       expect(days(off)).toBeUndefined()
       const offKeys = editableKeys(sections, off, LEGACY_KEY_PAGE)
-      const offForm: Record<string, unknown> = { ...displayValues(schema, off, schemaKeys(offKeys)), analysis_channel_id: 0, api_key: MASK }
+      const offForm: Record<string, unknown> = { ...displayValues(schema, off, schemaKeys(offKeys)), api_key: MASK }
       const m = mergeSettings(offKeys, off, off, page(off, offForm), page(off, { ...offForm, verdict_cache_days: 7 }))
       expect(m.changed).toEqual(['verdict_cache_days'])
       expect(m.values).toEqual({ ...off, verdict_cache_days: 7 })
@@ -247,7 +242,7 @@ describe('the save of the settings tab', () => {
   describe('cleared cache days while the retired cache_ttl_seconds is stored', () => {
     const cleared = (s: Record<string, unknown>) => {
       const ks = editableKeys(sections, s, LEGACY_KEY_PAGE)
-      const f: Record<string, unknown> = { ...displayValues(schema, s, schemaKeys(ks)), analysis_channel_id: 0, api_key: MASK }
+      const f: Record<string, unknown> = { ...displayValues(schema, s, schemaKeys(ks)), api_key: MASK }
       return mergeSettings(ks, s, s, page(s, f), page(s, { ...f, verdict_cache_days: '' }))
     }
 
@@ -338,40 +333,5 @@ describe('mergeSettings', () => {
       jev_default_set: { preamble: '', items: [{ category: 'a', threshold: 0.5 }] }
     })
     expect(m.changed).toEqual([])
-  })
-})
-
-describe('AI review effects (prototype)', () => {
-  const keys = ['analysis_upgrade', 'analysis_downgrade', 'analysis_remove']
-  it('shows what the retired switches meant until the new keys are stored: on = the AI decides, off = it proposes', () => {
-    const shown = displayValues(schema, { analysis_allow_upgrade: true, analysis_allow_downgrade: false }, keys)
-    expect(shown).toEqual({ analysis_upgrade: 'auto', analysis_downgrade: 'suggest', analysis_remove: 'suggest' })
-    expect(displayValues(schema, { analysis_upgrade: 'off', analysis_allow_upgrade: true }, ['analysis_upgrade'])).toEqual({ analysis_upgrade: 'off' })
-  })
-  it('writes the retired switch of each saved key, for nodes that read only the switch', () => {
-    const values = { analysis_upgrade: 'auto', analysis_downgrade: 'suggest', analysis_remove: 'off' }
-    expect(withRetiredMirrored(values, keys)).toEqual({ ...values, analysis_allow_upgrade: true, analysis_allow_downgrade: false, analysis_allow_remove: false })
-    expect(withRetiredMirrored(values, ['analysis_upgrade'])).toEqual({ ...values, analysis_allow_upgrade: true })
-    expect(withRetiredMirrored(values, ['block_status'])).toBe(values)
-  })
-})
-
-describe('AI review effects: defaults and conflicts (prototype)', () => {
-  const keys = ['analysis_upgrade', 'analysis_downgrade', 'analysis_remove']
-  it('gives every install that never stored a switch what the switch did: the AI raises and lowers, removal is proposed', () => {
-    for (const stored of [{}, { mode: 'observe' }]) {
-      expect(displayValues(schema, stored, keys)).toEqual({ analysis_upgrade: 'auto', analysis_downgrade: 'auto', analysis_remove: 'suggest' })
-    }
-  })
-  it('keeps each permission default equal to what its retired switch defaults to', () => {
-    const props = schema.properties as Record<string, { default?: unknown }>
-    for (const [k, retired] of [['analysis_upgrade', 'analysis_allow_upgrade'], ['analysis_downgrade', 'analysis_allow_downgrade'], ['analysis_remove', 'analysis_allow_remove']]) {
-      expect(props[k].default).toBe(effectOf(props[retired].default === true))
-    }
-  })
-  it('asks before overwriting a retired switch someone else changed', () => {
-    expect(retiredConflicts(['analysis_upgrade'], { analysis_allow_upgrade: true }, { analysis_allow_upgrade: false })).toEqual(['analysis_upgrade'])
-    expect(retiredConflicts(['analysis_upgrade'], { analysis_allow_upgrade: true }, { analysis_allow_upgrade: true })).toEqual([])
-    expect(retiredConflicts(['block_status'], {}, { analysis_allow_upgrade: false })).toEqual([])
   })
 })

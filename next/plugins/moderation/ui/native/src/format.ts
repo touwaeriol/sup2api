@@ -111,27 +111,18 @@ export function callCostText(c: CallCost | string | null | undefined): { text: s
 export const isSuspicious = (e: Pick<ModEvent, 'result'>) => e.result === 'hit' || e.result === 'block'
 
 /**
- * Final verdict of a record, computed only in the UI (§72.9): the human
- * review wins, else the AI verdict (unsure = needs review). null = no verdict
- * and nothing to review (a passing record nobody looked at).
+ * Final verdict of a record, computed only in the UI (§72.9): the
+ * moderator's review; a suspicious record nobody reviewed is pending. null =
+ * nothing to review (a passing record).
  */
 export interface FinalVerdict {
-  key: 'violation' | 'false_positive' | 'needs_review' | 'none'
-  by: 'human' | 'ai' | ''
+  key: 'violation' | 'false_positive' | 'none'
   tone: Tone
 }
-export function finalVerdict(e: Pick<ModEvent, 'review_status' | 'ai_verdict' | 'result'>): FinalVerdict | null {
-  if (e.review_status === 'confirmed') return { key: 'violation', by: 'human', tone: 'danger' }
-  if (e.review_status === 'false_positive') return { key: 'false_positive', by: 'human', tone: 'success' }
-  switch (e.ai_verdict) {
-    case 'violation':
-      return { key: 'violation', by: 'ai', tone: 'danger' }
-    case 'false_positive':
-      return { key: 'false_positive', by: 'ai', tone: 'success' }
-    case 'unsure':
-      return { key: 'needs_review', by: 'ai', tone: 'warning' }
-  }
-  return isSuspicious(e) ? { key: 'none', by: '', tone: 'gray' } : null
+export function finalVerdict(e: Pick<ModEvent, 'review_status' | 'result'>): FinalVerdict | null {
+  if (e.review_status === 'confirmed') return { key: 'violation', tone: 'danger' }
+  if (e.review_status === 'false_positive') return { key: 'false_positive', tone: 'success' }
+  return isSuspicious(e) ? { key: 'none', tone: 'gray' } : null
 }
 
 /**

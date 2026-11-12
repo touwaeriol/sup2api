@@ -16,7 +16,6 @@ const t = useModHost().t
 
 const rows = computed<DescItem[]>(() => {
   const r = props.runtime
-  const analysis = r.analysis
   const cache: DescItem[] = []
   if (typeof r.cache_bytes === 'number') cache.push({ key: 'cacheBytes', label: t('runtime.cacheBytes'), value: mib(r.cache_bytes) })
   if (typeof r.kv_errors === 'number') cache.push({ key: 'kvErrors', label: t('runtime.kvErrors'), value: num(r.kv_errors) })
@@ -29,12 +28,7 @@ const rows = computed<DescItem[]>(() => {
     { key: 'calls', label: t('runtime.calls'), value: `${num(r.calls)} (${t('runtime.errorsN', { n: num(r.errors) })})` },
     { key: 'cacheHits', label: t('runtime.cacheHits'), value: `${num(r.cache_hits)} (${num(r.cache_entries)})` },
     ...cache,
-    { key: 'avgLatency', label: t('runtime.avgLatency'), value: ms(r.avg_latency_ms) },
-    {
-      key: 'analysis',
-      label: t('runtime.analysis'),
-      value: analysis?.channel_configured ? t('runtime.analysisValue', { pending: num(analysis.pending), running: num(analysis.running) }) : t('runtime.analysisOff')
-    }
+    { key: 'avgLatency', label: t('runtime.avgLatency'), value: ms(r.avg_latency_ms) }
   ]
 })
 </script>

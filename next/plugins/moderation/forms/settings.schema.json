@@ -557,41 +557,6 @@
         "whole"
       ],
       "default": "new_content"
-    },
-    "analysis_upgrade": {
-      "type": "string",
-      "title": "AI may raise to enforce",
-      "enum": [
-        "auto",
-        "suggest",
-        "off"
-      ],
-      "default": "auto"
-    },
-    "analysis_downgrade": {
-      "type": "string",
-      "title": "AI may lower to observe",
-      "enum": [
-        "auto",
-        "suggest",
-        "off"
-      ],
-      "default": "auto"
-    },
-    "analysis_remove": {
-      "type": "string",
-      "title": "AI may take off the watch list",
-      "enum": [
-        "auto",
-        "suggest",
-        "off"
-      ],
-      "default": "suggest"
-    },
-    "analysis_review_before_expiry": {
-      "type": "boolean",
-      "title": "Review before expiry",
-      "default": true
     }
   }
 }

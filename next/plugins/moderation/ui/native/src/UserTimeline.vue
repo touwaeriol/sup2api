@@ -98,7 +98,7 @@ const columns = computed<TableColumn[]>(() => [
       <template #cell-verdict="{ row }"><VerdictBadge :event="row" /></template>
       <template #cell-hit_categories="{ row }"><CategoryChips :categories="row.hit_categories" :max="1" /></template>
       <template #cell-text_excerpt="{ row }">
-        <span class="mod-ellipsis" :title="row.ai_reason ? `${row.text_excerpt}\nAI: ${row.ai_reason}` : row.text_excerpt">{{ row.text_excerpt || '—' }}</span>
+        <span class="mod-ellipsis" :title="row.text_excerpt">{{ row.text_excerpt || '—' }}</span>
       </template>
     </STable>
     <div v-if="total > records.length" class="mod-center">

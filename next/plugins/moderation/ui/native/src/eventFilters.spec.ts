@@ -1,22 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { conclusionQuery, conclusionValue, filterChips, flowQuery, flowValue, optionText, pairOptions, type FilterField } from './eventFilters'
-
-describe('verdict select', () => {
-  it.each([
-    ['review_status:pending', { review_status: 'pending', ai_verdict: '', verdict: '' }],
-    ['ai_verdict:none', { review_status: '', ai_verdict: 'none', verdict: '' }],
-    ['verdict:needs_review', { review_status: '', ai_verdict: '', verdict: 'needs_review' }],
-    ['', { review_status: '', ai_verdict: '', verdict: '' }],
-    ['severity:high', { review_status: '', ai_verdict: '', verdict: '' }]
-  ])('%s sets only its own parameter', (v, q) => {
-    expect(conclusionQuery(v)).toEqual(q)
-  })
-
-  it('reads the value back from an applied query', () => {
-    for (const v of ['review_status:false_positive', 'ai_verdict:unsure', 'verdict:disagree', '']) expect(conclusionValue(conclusionQuery(v))).toBe(v)
-    expect(conclusionValue({ result: 'hit' } as never)).toBe('')
-  })
-})
+import { filterChips, flowQuery, flowValue, optionText, pairOptions, type FilterField } from './eventFilters'
 
 describe('flow select', () => {
   it.each([

@@ -3,7 +3,6 @@ import { computed, onBeforeUnmount, onMounted } from 'vue'
 import { SAlert, SGrid, SSpinner, SStatCard } from '@sub2api/ui'
 import StatusLine from './overview/StatusLine.vue'
 import AttentionUsers from './overview/AttentionUsers.vue'
-import AiReviewCard from './overview/AiReviewCard.vue'
 import TodayCostCard from './overview/TodayCostCard.vue'
 import PerformanceCard from './overview/PerformanceCard.vue'
 import CategoriesCard from './overview/CategoriesCard.vue'
@@ -74,7 +73,6 @@ const goTab = (tab: SectionKey) => emit('go-tab', tab)
 
     <SGrid template="repeat(auto-fit, minmax(min(360px, 100%), 1fr))" class="mod-section">
       <AttentionUsers @open-watch="emit('open-watch', $event)" @go-tab="goTab" />
-      <AiReviewCard :review="status.data.value?.ai_review" :today="status.data.value?.today" @go-tab="goTab" />
     </SGrid>
     <TodayCostCard v-if="status.data.value" :costs="status.data.value.costs" class="mod-section" />
     <PerformanceCard class="mod-section" />

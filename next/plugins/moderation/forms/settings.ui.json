@@ -17,13 +17,6 @@
     "ban_threshold",
     "ban_window_hours",
     "ban_duration_hours",
-    "analysis_channel_id",
-    "analysis_every_violations",
-    "analysis_review_before_expiry",
-    "analysis_upgrade",
-    "analysis_downgrade",
-    "analysis_remove",
-    "analysis_guidelines",
     "jev_default_set",
     "block_status",
     "block_message",
@@ -42,13 +35,16 @@
     "queue_size",
     "max_inflight_mb",
     "ttft_timeout_ms",
-    "analysis_timeout_ms",
-    "analysis_context_kb",
-    "analysis_keep_per_user",
     "error_rate_alert_percent",
     "notify_webhook_url",
     "notify_webhook_secret",
+    "analysis_every_violations",
+    "analysis_channel_id",
+    "analysis_guidelines",
+    "analysis_timeout_ms",
     "analysis_concurrency",
+    "analysis_context_kb",
+    "analysis_keep_per_user",
     "analysis_allow_upgrade",
     "analysis_allow_downgrade",
     "analysis_allow_remove",
@@ -145,8 +141,8 @@
       "zh": "总是先审的用户"
     },
     "ui:help": {
-      "en": "Every request is checked before it is sent on and refused on a hit; the AI never downgrades them. This is not a ban: bans are under Banned users.",
-      "zh": "每个请求都先审后发，命中即拒绝；AI 不会把他们降级。这不是封禁：封禁在“封禁用户”。"
+      "en": "Every request is checked before it is sent on and refused on a hit. This is not a ban: bans are under Banned users.",
+      "zh": "每个请求都先审后发，命中即拒绝。这不是封禁：封禁在“封禁用户”。"
     }
   },
   "block_status": {
@@ -212,18 +208,16 @@
   },
   "analysis_every_violations": {
     "ui:title": {
-      "en": "Review every N violations",
-      "zh": "每多少次违规复核一次"
+      "en": "Analyse every",
+      "zh": "每多少次违规自动分析一次"
     },
-    "ui:help": {
-      "zh": "名单用户（观察级、拦截级都计）每累计这么多次违规（同一请求只计一次）就复核一次，然后重新计数。0 表示只手动复核。拦截级也计数需要新版本插件（设计第 3 期）。",
-      "en": "A watched user (observe or enforce) is reviewed after this many violations (one per request), then the count starts again. 0 = manual reviews only. Counting at the enforce level needs a newer plugin (design phase 3)."
-    },
-    "ui:options": {
-      "unit": {
-        "en": "violations",
-        "zh": "次"
-      }
+    "ui:widget": "hidden",
+    "ui:section": {
+      "title": {
+        "en": "Retired settings (not shown)",
+        "zh": "已停用的配置（不显示）"
+      },
+      "collapsed": true
     }
   },
   "ban_threshold": {
@@ -269,21 +263,7 @@
       "en": "AI analysis channel",
       "zh": "AI 分析渠道"
     },
-    "ui:help": {
-      "en": "An llm channel (any protocol) of the Channels tab; none = no AI analysis.",
-      "zh": "只能选「渠道」页的大模型渠道（三种协议都可以）；不使用则不做 AI 分析。"
-    },
-    "ui:section": {
-      "title": {
-        "en": "When reviews run",
-        "zh": "何时复核"
-      },
-      "page": "analysis",
-      "description": {
-        "en": "Only users on the watch list are reviewed, with no limit on how many: a user has one review at a time, triggers that arrive meanwhile are merged and run right after it. Each review calls the analysis channel and its cost counts as analysis; the triggers below decide how often. Review before expiry needs a newer plugin (design phase 3).",
-        "zh": "复核只针对观察名单上的用户，不设数量上限：同一用户同一时刻只跑一次，期间来的触发合并，跑完立刻补跑一次。每次复核会调用分析渠道，费用计入“分析”，多少由下面的触发条件决定。到期前复核需要新版本插件（设计第 3 期）才生效。"
-      }
-    }
+    "ui:widget": "hidden"
   },
   "record_pass": {
     "ui:widget": "switch",
@@ -328,8 +308,8 @@
       "zh": "保存被审核的文本，以及有级命中时判定那一块的原始消息，可能包含用户数据；出错记录只保存开头（见“出错记录保存字数”）。"
     },
     "ui:details": {
-      "en": "Whatever is moderated is also sent to the moderation channels (and the AI analysis channel reads the stored text): choose channels whose data handling you accept.",
-      "zh": "被审核的内容会发送给审核渠道（AI 分析渠道还会读取保存的原文），请选择数据处理方式可以接受的渠道。"
+      "en": "Whatever is moderated is also sent to the moderation channels: choose channels whose data handling you accept.",
+      "zh": "被审核的内容会发送给审核渠道，请选择数据处理方式可以接受的渠道。"
     }
   },
   "record_pass_input_message": {
@@ -443,8 +423,8 @@
       "zh": "上游调用在这段时间内没有响应（收到响应头，流式调用为第一个模型输出）就按 ttft_timeout 失败。非流式的 LLM 调用一次性收到全部回答，只受渠道超时限制。"
     },
     "ui:details": {
-      "en": "Applies to the OpenAI moderation and Jev auditor calls and to every AI analysis step (streamed), together with the channel's total timeout; whichever fires first ends the call. LLM verdict auditors are not streamed and only have the channel timeout.",
-      "zh": "对 OpenAI 审核和 Jev 审核器的调用以及 AI 分析的每一步（流式）生效，与渠道的总超时同时计时，先到者结束调用。LLM 判定审核器不走流式，只受渠道超时限制。"
+      "en": "Applies to the OpenAI moderation and Jev auditor calls, together with the channel's total timeout; whichever fires first ends the call. LLM verdict auditors are not streamed and only have the channel timeout.",
+      "zh": "对 OpenAI 审核和 Jev 审核器的调用生效，与渠道的总超时同时计时，先到者结束调用。LLM 判定审核器不走流式，只受渠道超时限制。"
     }
   },
   "verdict_cache_days": {
@@ -639,13 +619,6 @@
     },
     "ui:options": {
       "mono": true
-    },
-    "ui:section": {
-      "title": {
-        "en": "0.1 settings (converted, not shown)",
-        "zh": "0.1 旧版配置（已转换，不显示）"
-      },
-      "collapsed": true
     }
   },
   "api_key": {
@@ -866,104 +839,60 @@
     }
   },
   "analysis_allow_upgrade": {
-    "ui:widget": "hidden",
     "ui:title": {
       "en": "Let the AI upgrade to enforce",
       "zh": "允许 AI 升为拦截级"
     },
-    "ui:help": {
-      "en": "Block + persistent / escalating trend + at least one violation. Off: only written to the history.",
-      "zh": "建议拦截、趋势为持续或越来越重、且至少 1 条复核为违规时。关闭后只记入名单历史，级别不变。"
-    }
+    "ui:widget": "hidden"
   },
   "analysis_allow_downgrade": {
-    "ui:widget": "hidden",
     "ui:title": {
       "en": "Let the AI downgrade to observe",
       "zh": "允许 AI 降为观察级"
-    }
+    },
+    "ui:widget": "hidden"
   },
   "analysis_allow_remove": {
-    "ui:widget": "hidden",
     "ui:title": {
       "en": "Let the AI remove users",
       "zh": "允许 AI 移出名单"
     },
-    "ui:help": {
-      "en": "Off by default: the analysed records are user text and can try to talk the AI into a release. Even when on, a release only removes observe-level users without high-severity records in the watch window; enforce-level users are only downgraded.",
-      "zh": "默认关闭：被分析的记录是用户原文，可能诱导 AI 给出解除建议。即使打开，也只移出观察窗口内没有高危记录的观察级用户；拦截级用户只会降为观察级。"
-    }
+    "ui:widget": "hidden"
   },
   "analysis_timeout_ms": {
     "ui:title": {
       "en": "Analysis timeout",
       "zh": "单次分析超时"
     },
-    "ui:options": {
-      "unit": {
-        "en": "ms",
-        "zh": "毫秒"
-      }
-    },
-    "ui:section": {
-      "title": {
-        "en": "AI review resources",
-        "zh": "AI 复核资源"
-      },
-      "page": "advanced",
-      "collapsed": true
-    }
+    "ui:widget": "hidden"
   },
   "analysis_concurrency": {
-    "ui:widget": "hidden",
     "ui:title": {
-      "en": "Analyses per node (retired)",
-      "zh": "每个节点同时分析数（已停用）"
-    }
+      "en": "Concurrent analyses per node",
+      "zh": "每个节点同时分析数"
+    },
+    "ui:widget": "hidden"
   },
   "analysis_context_kb": {
     "ui:title": {
       "en": "Context budget",
       "zh": "上下文预算"
     },
-    "ui:help": {
-      "en": "Earlier tool results are dropped above it.",
-      "zh": "超出时丢掉较早的工具结果。"
-    },
-    "ui:options": {
-      "unit": {
-        "en": "KB",
-        "zh": "KB"
-      }
-    }
+    "ui:widget": "hidden"
   },
   "analysis_keep_per_user": {
     "ui:title": {
       "en": "Analyses kept per user",
       "zh": "每个用户保留的分析数"
-    }
+    },
+    "ui:widget": "hidden"
   },
   "analysis_guidelines": {
-    "ui:widget": "textarea",
-    "ui:options": {
-      "rows": 8
-    },
     "ui:title": {
       "en": "Analysis guidelines",
       "zh": "分析准则"
     },
-    "ui:help": {
-      "en": "Empty uses the built-in guidelines (preview on the Watch list tab).",
-      "zh": "留空使用内置准则（可在「观察名单」页预览完整提示词）。"
-    },
-    "ui:section": {
-      "title": {
-        "en": "Guidelines",
-        "zh": "分析准则"
-      },
-      "page": "analysis",
-      "collapsed": true
-    }
+    "ui:widget": "hidden"
   },
   "error_rate_alert_percent": {
     "ui:title": {
@@ -988,8 +917,8 @@
       "zh": "通知 webhook 地址"
     },
     "ui:help": {
-      "en": "Receives flow error-rate alerts and automatic watch list changes made by the AI analysis. Empty: no notices.",
-      "zh": "接收流程异常率告警，以及 AI 分析自动调整观察名单的通知。留空则不发送。"
+      "en": "Receives flow error-rate alerts. Empty: no notices.",
+      "zh": "接收流程异常率告警。留空则不发送。"
     }
   },
   "notify_webhook_secret": {
@@ -1081,103 +1010,6 @@
     "ui:help": {
       "en": "When a conversation still holds content that hit: the recommended choice replays only that part and moderates what is new; the old behaviour treats the whole request as a hit, so with checking first every later turn is refused.",
       "zh": "对话历史里含有已命中的内容时：推荐只把那部分按原结论处理，其余新内容照常送审；旧行为是整个请求直接按命中处理，先审时整段会话都会被拒。"
-    }
-  },
-  "analysis_upgrade": {
-    "ui:section": {
-      "title": {
-        "en": "What the AI may do",
-        "zh": "AI 的权限"
-      },
-      "page": "analysis",
-      "description": {
-        "en": "During a review the AI itself decides whether to change the watch list, and says why. Here you set its permission for each change: AI decides (it changes the list; undo any time), AI proposes (decided on the AI review page) or Not allowed (the AI is not offered it; should it still ask, the request is dropped and the review says so). Every change goes into the watch history. Until changed, the three former switches apply. Nodes not yet upgraded only know whether the AI decides: there, Not allowed works like AI proposes.",
-        "zh": "复核时由 AI 自己判断要不要调整名单，并给出理由。这里决定它对每种调整的权限：AI 自主执行（直接调整，可随时撤销）、AI 只给建议（在“AI 复核”页等你采纳或驳回）、不允许（AI 看不到这个选项；万一提出也会丢弃，并在复核记录里注明“越权已丢弃”）。每次调整都记入名单历史。没改过的沿用原来的三个开关。尚未升级的节点只认是否自主执行：“不允许”在那里按“只给建议”处理。"
-      }
-    },
-    "ui:widget": "segmented",
-    "ui:title": {
-      "en": "Raise to enforce",
-      "zh": "升为拦截级"
-    },
-    "ui:enumNames": [
-      {
-        "en": "AI decides",
-        "zh": "AI 自主执行"
-      },
-      {
-        "en": "AI proposes",
-        "zh": "AI 只给建议"
-      },
-      {
-        "en": "Not allowed",
-        "zh": "不允许"
-      }
-    ],
-    "ui:help": {
-      "en": "Recommended: AI decides. It tightens, talking the AI into it gains an attacker nothing, and every delay lets more live requests through. Users on the background-only list are never raised; entries the AI raises expire after the watch period.",
-      "zh": "推荐 AI 自主执行：这是收紧的方向，诱导 AI 升级对攻击者没有好处，晚升级会多放过实时请求。“只后台审核”名单里的用户不会被升级；AI 升级的条目按观察期到期。"
-    }
-  },
-  "analysis_downgrade": {
-    "ui:widget": "segmented",
-    "ui:title": {
-      "en": "Lower to observe",
-      "zh": "降为观察级"
-    },
-    "ui:enumNames": [
-      {
-        "en": "AI decides",
-        "zh": "AI 自主执行"
-      },
-      {
-        "en": "AI proposes",
-        "zh": "AI 只给建议"
-      },
-      {
-        "en": "Not allowed",
-        "zh": "不允许"
-      }
-    ],
-    "ui:help": {
-      "en": "Recommended: AI proposes. It loosens, and the reviewed records are user text that may talk the AI into leniency. Users on the always-check-first list are never lowered.",
-      "zh": "推荐 AI 只给建议：这是放宽的方向，而被复核的是用户原文，可能诱导 AI 放宽。“总是先审”名单里的用户不会被降级。"
-    }
-  },
-  "analysis_remove": {
-    "ui:widget": "segmented",
-    "ui:title": {
-      "en": "Take off the watch list",
-      "zh": "移出观察名单"
-    },
-    "ui:enumNames": [
-      {
-        "en": "AI decides",
-        "zh": "AI 自主执行"
-      },
-      {
-        "en": "AI proposes",
-        "zh": "AI 只给建议"
-      },
-      {
-        "en": "Not allowed",
-        "zh": "不允许"
-      }
-    ],
-    "ui:help": {
-      "en": "Recommended: AI proposes (as for lowering). Only users at the observe level; never while they have recent high-severity records; never users on the always-check-first list.",
-      "zh": "推荐 AI 只给建议（理由同降级）。只适用于观察级用户；近期有高严重度记录时不会移出；“总是先审”名单里的用户不会被移出。"
-    }
-  },
-  "analysis_review_before_expiry": {
-    "ui:widget": "switch",
-    "ui:title": {
-      "en": "Review before expiry",
-      "zh": "到期前复核"
-    },
-    "ui:help": {
-      "en": "Review an entry one day before it expires, to let it expire or extend it.",
-      "zh": "名单条目到期前一天复核一次，决定是到期移出还是延长。"
     }
   }
 }

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { SBadge, SCard, SIcon, SLink, STable, type TableColumn } from '@sub2api/ui'
+import { SCard, SIcon, SLink, STable, type TableColumn } from '@sub2api/ui'
 import EnabledBadge from '../EnabledBadge.vue'
 import RateCell from '../RateCell.vue'
 import { useCatalog } from '../catalog'
@@ -73,7 +73,6 @@ const channelColumns = computed<TableColumn[]>(() => [
             {{ catalog.channelName(row.id) }}
             <template v-if="row.channel">
               <span class="mod-sub">{{ enumLabel('channelType', row.channel.type) }}</span>
-              <SBadge v-if="row.channel.analysis" tone="purple" size="xs">{{ t('channels.analysis') }}</SBadge>
               <EnabledBadge v-if="!row.channel.enabled" :enabled="false" size="xs" />
             </template>
           </span>

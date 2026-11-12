@@ -2,8 +2,6 @@
 import { computed, ref, toRef, watch } from 'vue'
 import { SAlert, SDescriptions, SDrawer, SSectionTitle, SSpinner, STabs, type DescItem } from '@sub2api/ui'
 import EventDetail from './EventDetail.vue'
-import UserAnalyses from './UserAnalyses.vue'
-import UserAiReview from './UserAiReview.vue'
 import UserDailyChart from './UserDailyChart.vue'
 import UserStateSection from './UserStateSection.vue'
 import UserTimeline from './UserTimeline.vue'
@@ -15,10 +13,10 @@ import type { ReviewStatus, SourceFilter, Watch, WatchItem } from './types'
 import { useUserDetail } from './useUserDetail'
 
 // User detail drawer (§72.13.6, new-api user-detail-drawer), for any user:
-// state (allowlist / blocklist mark included) and inline watch level, the AI
-// review (latest assessment and its proposal), the entry, a summary with the
-// last 30 days and its sources, then the suspicious records (filterable by
-// source, bulk review), the analyses and the watch history. The
+// state (allowlist / blocklist mark included) and inline watch level, the
+// entry, a summary with the last 30 days and its sources, then the
+// suspicious records (filterable by source, bulk review) and the watch
+// history. The
 // record detail opened here links no user (this drawer is the user).
 const props = defineProps<{ open: boolean; userId: number | null; item?: WatchItem | null }>()
 const emit = defineEmits<{
@@ -29,12 +27,11 @@ const emit = defineEmits<{
 const t = useModHost().t
 const manage = computed(() => canManage())
 
-/** Bumped when the lists must reload: an analysis finished or the watch entry changed. */
+/** Bumped when the lists must reload: the watch entry changed. */
 const version = ref(0)
-const { detail, loading, error, entry, state, reload } = useUserDetail(toRef(props, 'open'), toRef(props, 'userId'), {
+const { detail, loading, error, entry, reload } = useUserDetail(toRef(props, 'open'), toRef(props, 'userId'), {
   manage,
-  changed: (w) => emit('changed', w),
-  finished: () => version.value++
+  changed: (w) => emit('changed', w)
 })
 function refreshWatch() {
   void reload()
@@ -49,13 +46,13 @@ function refreshCounts() {
 
 const section = ref('records')
 const source = ref<SourceFilter | null>(null)
-const totals = ref({ analyses: 0, records: 0, history: 0 })
+const totals = ref({ records: 0, history: 0 })
 watch(
   () => props.userId,
   () => {
     section.value = 'records'
     source.value = null
-    totals.value = { analyses: 0, records: 0, history: 0 }
+    totals.value = { records: 0, history: 0 }
   }
 )
 function pickSource(s: SourceFilter) {
@@ -80,7 +77,6 @@ const fields = computed<DescItem[]>(() => {
 
 const tabs = computed(() => [
   { key: 'records', label: `${t('watch.suspicious')} (${num(totals.value.records)})` },
-  { key: 'analyses', label: `${t('watch.analyses')} (${num(totals.value.analyses)})` },
   { key: 'history', label: `${t('watch.history')} (${num(totals.value.history)})` }
 ])
 
@@ -110,7 +106,6 @@ function onDeleted(id: number) {
       <!-- a failed reload (polling, refresh) keeps the user shown; the next load clears it -->
       <SAlert v-if="error" tone="warning" dense>{{ t('watch.refreshFailed', { error }) }}</SAlert>
       <UserStateSection :user-id="detail.user_id" :state="detail" @watch-changed="refreshWatch" @show-user="emit('show-user', $event)" />
-      <UserAiReview :detail="detail" :state="state" @changed="refreshWatch" @open-record="openRecord" />
 
       <div v-if="entry">
         <SSectionTitle tag="p">{{ t('watch.info') }}</SSectionTitle>
@@ -124,7 +119,6 @@ function onDeleted(id: number) {
       </div>
 
       <STabs v-model="section" :tabs="tabs" size="sm">
-        <UserAnalyses v-show="section === 'analyses'" :user-id="userId" :version="version" @open-record="openRecord" @total="totals.analyses = $event" />
         <UserTimeline
           v-show="section === 'records'"
           ref="timeline"

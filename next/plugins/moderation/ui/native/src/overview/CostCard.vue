@@ -27,14 +27,14 @@ const channelColumns = computed<TableColumn[]>(() => [
   { key: 'name', label: t('channels.col.name'), grow: true, mobile: 'title' },
   { key: 'model', label: t('events.col.model'), ellipsis: '9rem', mobile: 'subtitle' },
   { key: 'calls', label: t('cost.callsCol'), align: 'right', nowrap: true, mobile: 'meta' },
-  { key: 'cost', label: t('analysis.cost'), align: 'right', nowrap: true, mobile: 'meta' }
+  { key: 'cost', label: t('cost.amount'), align: 'right', nowrap: true, mobile: 'meta' }
 ])
 
 // Day buckets of /costs start at the browser's midnight (tz_offset_minutes).
 const chart = computed(() => {
   const trend = data.value?.trend || []
   const labels = trend.map((p) => bucketLabel(p.bucket, range.value === '24h' ? 'hour' : 'day'))
-  return barChart(labels, { name: t('analysis.cost'), data: trend.map((p) => Number(p.cost) || 0) }, money)
+  return barChart(labels, { name: t('cost.amount'), data: trend.map((p) => Number(p.cost) || 0) }, money)
 })
 const totalsSub = computed(() => {
   const s = totals.value

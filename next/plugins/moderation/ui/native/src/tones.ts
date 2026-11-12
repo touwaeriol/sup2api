@@ -39,38 +39,3 @@ export function severityTone(s: string | undefined): Tone {
       return 'gray'
   }
 }
-
-export function aiVerdictTone(v: string | null | undefined): Tone {
-  return v === 'violation' ? 'danger' : v === 'false_positive' ? 'success' : v === 'unsure' ? 'warning' : 'gray'
-}
-
-export function trendTone(v: string | null | undefined): Tone {
-  switch (v) {
-    case 'escalating':
-      return 'danger'
-    case 'persistent':
-      return 'warning'
-    case 'occasional':
-      return 'info'
-    case 'likely_false_positive':
-      return 'success'
-    default:
-      return 'gray'
-  }
-}
-
-export function suggestionTone(v: string | null | undefined): Tone {
-  return v === 'block' ? 'danger' : v === 'observe' ? 'warning' : v === 'release' ? 'success' : 'gray'
-}
-
-/** A proposal's state (prototype, design §9): waiting stands out, done is calm, a change the AI was not allowed is flagged. */
-export function proposalTone(v: string | null | undefined): Tone {
-  if (v === 'pending') return 'warning'
-  if (v === 'applied' || v === 'auto_applied') return 'success'
-  return v === 'dropped' ? 'danger' : 'gray'
-}
-
-/** A user's risk as the AI judged it (prototype). */
-export function riskTone(v: string | null | undefined): Tone {
-  return v === 'high' ? 'danger' : v === 'medium' ? 'warning' : v === 'low' ? 'success' : 'gray'
-}

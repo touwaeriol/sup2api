@@ -1,35 +1,18 @@
 import type { FilterChipItem, SelectOption } from '@sub2api/ui'
 
-// Filters of the records tab (EventsTab): the selects that stand for two
-// query parameters (verdict, flow); and the chips of the applied filters,
-// shared with the watch list tab.
-
-/** The verdict select sets one of these query parameters at a time. */
-export const CONCLUSION_PARAMS = ['review_status', 'ai_verdict', 'verdict'] as const
-export type ConclusionParam = (typeof CONCLUSION_PARAMS)[number]
+// Filters of the records tab (EventsTab): the select that stands for two
+// query parameters (flow); and the chips of the applied filters, shared
+// with the watch list tab.
 
 /**
  * Options of a select that stands for two query parameters: each value is
- * "<first>:<option value>" (a verdict parameter and its value, a flow id and
- * a version).
+ * "<first>:<option value>" (a flow id and a version).
  */
 export const pairOptions = (first: string | number, options: SelectOption[]): SelectOption[] => options.map((o) => ({ ...o, value: `${first}:${o.value}` }))
 
 function splitPair(v: string): [string, string] {
   const i = v.indexOf(':')
   return i < 0 ? ['', ''] : [v.slice(0, i), v.slice(i + 1)]
-}
-
-/** The verdict select's value as its query: "review_status:pending" sets review_status, the other two ''. */
-export function conclusionQuery(v: string): Record<ConclusionParam, string> {
-  const [param, value] = splitPair(v)
-  return { review_status: '', ai_verdict: '', verdict: '', ...(CONCLUSION_PARAMS.includes(param as ConclusionParam) && { [param]: value }) }
-}
-
-/** The verdict select's value of a query ('' when none of its parameters is set). */
-export function conclusionValue(q: Partial<Record<ConclusionParam, unknown>>): string {
-  const param = CONCLUSION_PARAMS.find((p) => q[p])
-  return param ? `${param}:${q[param]}` : ''
 }
 
 /** The flow select's value as its query: "<flow id>:<version>", an empty version for every version. */

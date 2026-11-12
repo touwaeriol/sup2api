@@ -6,7 +6,7 @@ import FlowRef from './FlowRef.vue'
 import { useCatalog } from './catalog'
 import { joinList, num } from './format'
 import { recentFrom, useModHost } from './host'
-import type { AIVerdictCounts, SourceFilter, UserDetail, WatchItem } from './types'
+import type { SourceFilter, UserDetail, WatchItem } from './types'
 
 // Summary of a user (new-api user-detail-summary and context bar): all
 // suspicious records by severity, handling status and AI verdict, the group
@@ -20,11 +20,9 @@ const t = useModHost().t
 const catalog = useCatalog()
 
 const REVIEW = ['pending', 'confirmed', 'false_positive'] as const
-const AI_VERDICTS: Array<keyof AIVerdictCounts> = ['violation', 'false_positive', 'unsure', 'none']
 const nonZero = <K extends string>(keys: readonly K[], counts: Record<K, number>) => keys.filter((k) => counts[k] > 0).map((k) => ({ key: k, n: counts[k] }))
 
 const review = computed(() => nonZero(REVIEW, props.detail.summary))
-const ai = computed(() => nonZero(AI_VERDICTS, props.detail.summary.ai_verdicts))
 
 const fields = computed<DescItem[]>(() => {
   const { summary: s, context: c } = props.detail
@@ -32,7 +30,6 @@ const fields = computed<DescItem[]>(() => {
   const items: DescItem[] = [
     { key: 'suspicious', label: t('watchList.col.suspicious'), value: `${num(s.total)} · ${t('watchList.sev.high', { n: s.by_severity.high })} / ${t('watchList.sev.medium', { n: s.by_severity.medium })} / ${t('watchList.sev.low', { n: s.by_severity.low })}` },
     { key: 'review', label: t('watchSummary.review') },
-    { key: 'ai', label: t('watchSummary.ai') },
     { key: 'categories', label: t('watchList.col.categories') },
     { key: 'group', label: t('watchList.col.group'), value: groups.length ? joinList(groups.map(catalog.groupName)) : '—' },
     { key: 'flow', label: t('events.col.flow') }
@@ -47,11 +44,6 @@ const fields = computed<DescItem[]>(() => {
     <template #item-review>
       <span class="mod-chips">
         <SBadge v-for="r in review" :key="r.key" size="xs">{{ t(`review.${r.key}`) }} {{ num(r.n) }}</SBadge>
-      </span>
-    </template>
-    <template #item-ai>
-      <span class="mod-chips">
-        <SBadge v-for="a in ai" :key="a.key" size="xs">{{ t(`aiVerdict.${a.key}`) }} {{ num(a.n) }}</SBadge>
       </span>
     </template>
     <template #item-categories>

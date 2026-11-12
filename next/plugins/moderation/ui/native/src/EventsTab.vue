@@ -32,7 +32,7 @@ import UserRef from './UserRef.vue'
 import VerdictBadge from './VerdictBadge.vue'
 import { useCatalog } from './catalog'
 import { useCategoryOptions } from './categories'
-import { conclusionQuery, conclusionValue, filterChips, flowQuery, flowValue, isSet, pairOptions, type FilterField } from './eventFilters'
+import { filterChips, flowQuery, flowValue, isSet, pairOptions, type FilterField } from './eventFilters'
 import { applyFilters, defaultGroupCandidate } from './forms'
 import { enumLabel, enumOptions, idText, isSuspicious, ms, num } from './format'
 import { canManage, errorMessage, useEventList, useModHost } from './host'
@@ -64,8 +64,8 @@ const emptyForm = () => ({
   user_id: '',
   user_text: '',
   q: '',
-  // more filters; conclusion and flow stand for two query parameters each (eventFilters)
-  conclusion: '',
+  // more filters; flow stands for two query parameters (eventFilters)
+  review_status: '',
   severity: '',
   category: '',
   flow: '',
@@ -94,7 +94,7 @@ function query() {
   return {
     result: form.result,
     timing: form.timing,
-    ...conclusionQuery(form.conclusion),
+    review_status: form.review_status,
     severity: form.severity,
     watch_level: form.watch_level,
     replayed: form.replayed,
@@ -155,22 +155,7 @@ interface Field extends FilterField<FormKey> {
 }
 const advancedFields = computed<Field[]>(() => {
   const fields: Field[] = [
-    {
-      key: 'conclusion',
-      label: t('events.conclusion'),
-      options: [
-        { value: null, label: t('events.conclusionGroup.review'), options: pairOptions('review_status', enumOptions('review', ['pending', 'confirmed', 'false_positive'])) },
-        { value: null, label: t('events.conclusionGroup.ai'), options: pairOptions('ai_verdict', enumOptions('aiVerdict', ['violation', 'false_positive', 'unsure', 'none'])) },
-        {
-          value: null,
-          label: t('events.conclusionGroup.summary'),
-          options: pairOptions('verdict', [
-            { value: 'needs_review', label: t('events.needsReview') },
-            { value: 'disagree', label: t('events.disagree') }
-          ])
-        }
-      ]
-    },
+    { key: 'review_status', label: t('events.conclusion'), options: enumOptions('review', ['pending', 'confirmed', 'false_positive']) },
     { key: 'severity', label: t('events.severity'), options: enumOptions('severity', ['high', 'medium', 'low']) },
     { key: 'category', label: t('events.category'), options: categories.value, searchable: true },
     {
@@ -208,7 +193,7 @@ const hiddenFields = computed<Field[]>(() => [
 
 // The chips and the counts show the applied filters (what the list shows),
 // not what is typed and not yet searched.
-const applied = computed<Record<string, unknown>>(() => ({ ...list.filters, conclusion: conclusionValue(list.filters), flow: flowValue(list.filters) }))
+const applied = computed<Record<string, unknown>>(() => ({ ...list.filters, flow: flowValue(list.filters) }))
 const chips = computed(() => filterChips([...advancedFields.value, ...hiddenFields.value], applied.value))
 const advancedCount = computed(() => advancedFields.value.filter((f) => isSet(applied.value[f.key])).length)
 /** The default-slot filters off their default (SFilterBar adds advancedCount for the phone Filters badge). */

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { SAlert, SBadge, SButton, SLink, type Tone } from '@sub2api/ui'
+import { SAlert, SBadge, SButton, type Tone } from '@sub2api/ui'
 import { exemptGroups, groupCoverage } from '../bindingOps'
 import { useCatalog } from '../catalog'
 import { joinList } from '../format'
@@ -12,9 +12,8 @@ import type { SectionKey } from '../nav'
 // Running state (new-api status-line) as short label + badge entries:
 // moderation (switch and the default level: the level of users without a
 // watch entry, `mode` of the settings), flows, moderated / unmoderated groups,
-// channels, the analysis channel; plus the setup hint when nothing is bound
-// or moderation is off. Long explanations (group names, why analyses are off)
-// are the badges' tooltips.
+// channels; plus the setup hint when nothing is bound or moderation is off.
+// Long explanations (group names) are the badges' tooltips.
 const props = defineProps<{ status: Status }>()
 const emit = defineEmits<{ (e: 'go-tab', tab: SectionKey): void }>()
 const t = useModHost().t
@@ -62,24 +61,15 @@ const channels = computed<Badge[]>(() => {
   return [down ? { text: t('statusLine.channelsDown', { n: down }), tone: 'warning' } : { text: t('statusLine.channelsOk'), tone: 'success' }]
 })
 
-const analysis = computed<Badge[]>(() => {
-  const a = props.status.runtime.analysis
-  if (a?.channel_configured) return [{ text: t('statusLine.analysisOn'), tone: 'success' }]
-  // why analyses are off: no channel, or the saved one is not a usable llm channel
-  if (a?.channel_problem) return [{ text: t('statusLine.analysisUnusable'), tone: 'warning', title: t(`statusLine.analysisProblem.${a.channel_problem}`) }]
-  return [{ text: t('statusLine.analysisOffShort'), tone: 'warning', title: t('statusLine.analysisOff') }]
-})
-
-// Settings links only for those who may edit the settings (canManageSettings).
+// The settings link only for those who may edit the settings (canManageSettings).
 const settingsLink = computed(() => canManageSettings())
 const entries = computed(() =>
   [
     { key: 'state', badges: state.value },
     { key: 'flows', badges: flows.value },
     { key: 'groups', badges: groups.value },
-    { key: 'channels', badges: channels.value },
-    { key: 'analysis', badges: analysis.value, settings: settingsLink.value && !props.status.runtime.analysis?.channel_configured }
-  ].filter((e): e is { key: string; badges: Badge[]; settings?: boolean } => !!e.badges)
+    { key: 'channels', badges: channels.value }
+  ].filter((e): e is { key: string; badges: Badge[] } => !!e.badges)
 )
 
 const notice = computed<{ tone: 'warning' | 'info'; text: string; action: 'flows' | 'policy' | '' } | null>(() => {
@@ -95,7 +85,6 @@ const notice = computed<{ tone: 'warning' | 'info'; text: string; action: 'flows
       <dt>{{ t(`statusLine.label.${e.key}`) }}</dt>
       <dd>
         <SBadge v-for="b in e.badges" :key="b.text" :tone="b.tone" :dot="b.dot" size="xs" :title="b.title">{{ b.text }}</SBadge>
-        <SLink v-if="e.settings" as="button" @click="emit('go-tab', 'analysis')">{{ t('settings') }}</SLink>
       </dd>
     </div>
   </dl>

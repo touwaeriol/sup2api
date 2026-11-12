@@ -28,7 +28,6 @@ watch(history.data, (h) => emit('total', h?.length ?? 0))
           <span v-if="e.from_level || e.to_level" class="mod-sub">{{ enumLabel('level', e.from_level) }} → {{ enumLabel('level', e.to_level) }}</span>
           <SHint inline size="xs">{{ dt(e.created_at) }}</SHint>
           <UserRef v-if="e.operator_id" :user-id="e.operator_id" class="mod-sub" />
-          <SHint v-if="e.analysis_id" inline size="xs">· {{ t('analysis.title', { id: e.analysis_id }) }}</SHint>
         </div>
         <div v-if="e.reason" class="mod-sub">{{ watchReason(e.action, e.reason) }}</div>
       </li>

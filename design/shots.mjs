@@ -15,7 +15,6 @@ const SHOTS = [
   ['desktop-settings-policy', 'tab=policy', {}],
   ['desktop-settings-cache', 'tab=cache', {}],
   ['desktop-settings-lists', 'tab=lists', {}],
-  ['desktop-settings-analysis', 'tab=analysis', {}],
   ['desktop-settings-jev', 'tab=jev', {}],
   ['desktop-settings-response', 'tab=response', {}],
   ['desktop-settings-records', 'tab=records', {}],
@@ -32,24 +31,10 @@ const SHOTS = [
   ['mobile-record-match', 'tab=events&record=498', { mobile: true, wait: '[data-testid="mod-match-fallback"]' }],
   ['mobile-record-match-fields', 'tab=events&record=498', { mobile: true, wait: '[data-testid="mod-match-fallback"]', scrollTo: 'text=匹配来源' }],
   ['mobile-dark-drawer', 'tab=overview', { mobile: true, drawer: true, theme: 'dark' }],
-  // AI review redesign (design §9)
-  ['ai-desktop-review', 'tab=ai', { wait: '[data-testid="mod-ai-pending"]', full: true }],
-  ['ai-desktop-apply-confirm', 'tab=ai', { wait: '[data-testid="mod-proposal"] button', click: '[data-testid="mod-proposal"] button' }],
-  ['ai-desktop-user-pending', 'tab=watch&user=44', { wait: '[data-testid="mod-user-ai"]' }],
-  ['ai-desktop-user-auto-applied', 'tab=watch&user=7', { wait: '[data-testid="mod-user-ai"]' }],
-  ['ai-desktop-user-queued', 'tab=watch&user=12', { wait: '[data-testid="mod-user-ai"]' }],
-  ['ai-desktop-settings', 'tab=analysis', { full: true }],
-  ['ai-desktop-advanced-resources', 'tab=advanced', { click: 'text=AI 复核资源', full: true }],
-  ['ai-dark-review', 'tab=ai', { theme: 'dark', wait: '[data-testid="mod-ai-pending"]' }],
-  ['ai-dark-user-pending', 'tab=watch&user=44', { theme: 'dark', wait: '[data-testid="mod-user-ai"]' }],
-  ['ai-dark-settings', 'tab=analysis', { theme: 'dark', full: true }],
-  ['ai-mobile-review', 'tab=ai', { mobile: true, wait: '[data-testid="mod-ai-pending"]', full: true }],
-  ['ai-mobile-user-pending', 'tab=watch&user=44', { mobile: true, wait: '[data-testid="mod-user-ai"]' }],
-  ['ai-mobile-settings', 'tab=analysis', { mobile: true, full: true }],
-  ['ai-mobile-sidebar', 'tab=ai', { mobile: true, drawer: true }],
-  // Against today's backend: no proposals and no cross-user list (oldBackend strips them from the mock's answers).
-  ['ai-desktop-unsupported', 'tab=ai', { oldBackend: true, wait: '[data-testid="mod-ai-unsupported"]' }],
-  ['ai-desktop-user-legacy', 'tab=watch&user=44', { oldBackend: true, wait: '[data-testid="mod-user-ai"]' }]
+  // The watch list drawer (the AI review card and tab are gone, design §9)
+  ['desktop-watch-detail', 'tab=watch&user=7', { wait: 'text=条目信息' }],
+  ['dark-watch-detail', 'tab=watch&user=7', { theme: 'dark', wait: 'text=条目信息' }],
+  ['mobile-watch-detail', 'tab=watch&user=7', { mobile: true, wait: 'text=条目信息' }]
 ]
 
 const browser = await chromium.launch()
@@ -71,29 +56,6 @@ for (const [file, q, o] of SHOTS.filter(([f]) => !only.length || only.some((x) =
     localStorage.setItem('s2a.locale', 'zh')
   }, [JSON.stringify(session), o.theme || 'light'])
   const p = await ctx.newPage()
-  if (o.oldBackend) {
-    // Today's backend: the status has no feature flags, analyses have no risk or proposal.
-    const strip = (v) => {
-      if (Array.isArray(v)) return v.forEach(strip)
-      if (v && typeof v === 'object') {
-        delete v.features
-        delete v.review_at
-        if ('proposal' in v && 'steps' in v) {
-          const legacy = { upgrade: 'block', downgrade: 'observe', remove: 'release' }
-          v.suggestion = v.suggestion || legacy[v.proposal?.action] || ''
-          delete v.proposal
-          delete v.risk
-        }
-        Object.values(v).forEach(strip)
-      }
-    }
-    await p.route(/\/api\/v1\/p\/moderation\/(status|users\/)/, async (route) => {
-      const res = await route.fetch()
-      const body = await res.json()
-      strip(body)
-      await route.fulfill({ response: res, json: body })
-    })
-  }
   const errors = []
   p.on('pageerror', (e) => errors.push(e.message))
   await p.goto(page_(q), { waitUntil: 'networkidle' })

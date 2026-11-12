@@ -13,7 +13,7 @@
    - 这一层复用宿主现有的"侧栏视图"机制（`WEB/src/layouts/sidebarViews.ts`，CONTRACTS §90），控制台 UI 升到 3.14。
    - 旧控制台会忽略这个声明，插件可以保留页内标签作为回退。因此 **不需要提高 `hostUICompat`**。
    - 审核插件是第一个接入者。
-2. **审核插件界面：** 原来横排的 10 个标签改为 5 组、17 个侧栏条目。原来一整页的设置拆成 8 个短页，每页 1–2 张卡片，不再需要长滚动。名单、模式等命名改成"说出它实际做什么"。
+2. **审核插件界面：** 原来横排的 10 个标签改为 5 组、15 个侧栏条目。原来一整页的设置拆成 7 个短页，每页 1–2 张卡片，不再需要长滚动。名单、模式等命名改成"说出它实际做什么"。
 3. **审核逻辑：** 按评估报告逐条落地，最重要的四项是：
    - 流程增加"审核范围"，新建流程默认只审 system + user；
    - 命中重放只重放命中部分，新内容照常审；
@@ -31,9 +31,11 @@
 | D3 | 缓存命中的重放方式 | **`new_content`：只重放命中部分，新内容照常送审** | `whole`：旧行为，整个请求直接按命中处理 |
 | D4 | 审核失败时的处理 | **默认 `open`（放行并记为出错，与现状一致）**，可选 `close_pre`（先审的请求返回 503） | 默认 `close_pre`：更安全，但上游一抖动就会拒绝用户 |
 | D5 | 白名单、黑名单是否并入观察名单 | **本期只改名**（"只后台审核" / "总是先审"），第 4 期再并入观察名单，作为"锁定条目" | 立即合并：要迁移数据，而且 AI 分析和自动观察的规则都要一起改 |
-| D6 | AI 的权限（§9.4）——**用户已确认** | **升级、降级、移出三项各自三档：AI 自主执行 / AI 只给建议 / 不允许**。已有安装沿用原来的 `analysis_allow_*`（开为自主执行，关为只给建议），升级后行为不变，用户的站点三项都是自主执行。新装推荐：升级自主，降级和移出只给建议（理由见 §9.4）。所有执行都可以撤销，并记入名单历史 | （已定） |
-| D7 | AI 复核的触发与数量限制（§9.4）——**用户已确认：AI 复核不设数量限制** | 触发：每 N 次违规（observe、enforce 都计）+ 名单到期前一天 + 手动。**不设**同一用户最短间隔、每日上限和分析并发上限（`analysis_concurrency` 退役）。保留两条正确性规则：同一用户同一时刻只跑一次；运行期间来的触发合并，跑完立刻补跑一次。成本由每 N 次违规这个触发频率决定 | （已定） |
-| D8 | 由谁决定名单调整（§9.4）——**用户已确认** | **由 AI 自主判断**：AI 在提交里给出它决定的动作和理由，可以附带风险等级作说明。服务端不再按规则推出动作，只按 D6 的授权做闸门：自主执行就执行，只给建议就转成待确认，不允许就丢弃并在复核记录里注明"越权已丢弃" | （已定） |
+| D6 | AI 的权限 | **作废（功能删除）**：AI 分析整体删除（§9），不再需要 | — |
+| D7 | AI 复核的触发与数量限制 | **作废（功能删除）** | — |
+| D8 | 由谁决定名单调整 | **作废（功能删除）** | — |
+| D9 | 删除后，历史 AI 结论和分析记录是否还在界面上展示（§9.3） | **第一步就不再展示**：界面只认人工处理；数据在迁移那一期之前留在库里但不读取，不导出（有自动备份） | 只读保留到迁移那期：要保留一套只读界面和接口，与"功能已删除"相矛盾 |
+| D10 | 是否用一条固定规则替代 AI 的自动升级（§9.3） | **暂不加**：默认级别为拦截时本来全部先审；观察级的严重情况有封禁阈值兜底，其余手动升级 | 加"观察期内违规 N 次自动升为拦截级"：确定、无 AI 成本，但又多一个设置 |
 
 ---
 
@@ -57,9 +59,7 @@
 名单与处置（users）
   ├ 观察名单        ?tab=watch      读
   ├ 封禁用户        ?tab=blocks     读
-  ├ AI 复核         ?tab=ai         读      （待确认的建议 + 最近的复核，§9）
-  ├ 名单规则        ?tab=lists      设置权限
-  └ AI 复核设置     ?tab=analysis   设置权限
+  └ 名单规则        ?tab=lists      设置权限
 资源（resources）
   ├ 审核器          ?tab=auditors   读
   ├ 渠道            ?tab=channels   读
@@ -137,7 +137,7 @@
 - **新核心 + 旧插件：** 没有 `nav`，行为完全不变。
 - **新核心 + 新插件：** 控制台 3.14 使用侧栏；插件不再渲染标签，标题改为当前条目名加一句说明。
   - 声明了 nav 的插件页**总会**得到侧栏视图，即使调用者的主菜单里没有这个页的入口（例如通过链接打开）。否则在 3.14 控制台上，插件已经去掉了标签，分节就没有入口了（原型 `sidebarViews.ts` `useSidebarView`）。
-  - 旧控制台的回退：其它分节照常做成标签，所有设置页合并成一个"设置"标签，标签内用分段切换各设置页，避免 17 个标签挤在一行。
+  - 旧控制台的回退：其它分节照常做成标签，所有设置页合并成一个"设置"标签，标签内用分段切换各设置页，避免十几个标签挤在一行。
 - **只有离开侧栏就不能用的插件**，才需要声明 `hostUICompat: "^3.14"` 和 `hostCompat >= 0.1.284`。校验器的 `uiFloors` 会检查这一对是否一致。
 
 ### 2.4 其它插件怎么沿用
@@ -166,14 +166,13 @@
 - 0.1 旧 API key 的清除提示只出现在 `policy` 页（`LEGACY_KEY_PAGE`）。
 - `settingsForm.spec.ts` 新增一条校验："每个分节都属于 nav 中某个设置页，且每个设置页至少有一个分节"。
 
-结果是 8 个短页：
+结果是 7 个短页（AI 分析页随功能删除，§9）：
 
 | 页（侧栏） | 分节 | 字段数 |
 |---|---|---|
 | 执行策略 policy | 执行方式 | 2 |
 | 缓存与输入 cache | 判定缓存与重放 / 送审输入上限 | 3 + 5 |
 | 名单规则 lists | 固定名单 / 自动观察与封禁 | 2 + 5 |
-| AI 分析 analysis | AI 分析 / 分析资源（默认折叠） | 6 + 4 |
 | Jev 默认题集 jev | Jev 默认题集 | 1 |
 | 拦截提示 response | 拦截响应（带预览） | 2 |
 | 记录与保留 records | 记录内容 / 保留期 | 6 + 5 |
@@ -201,7 +200,7 @@
 | `blocklist_user_ids` | 同上 | 名单规则 / 固定名单 | **改名** | [] | 总是先审的用户 / Always check first。说明里写明"这不是封禁" |
 | `auto_watch`、`watch_days` | 观察名单与封禁 | 名单规则 / 自动观察与封禁 | 保留；后端修复 P8（跳过只后台审核的用户） | T / 30 | — |
 | `ban_threshold`、`ban_window_hours`、`ban_duration_hours` | 同上 | 同上 | 保留 | 0 / 24 / 24 | — |
-| `analysis_*`（10 项） | AI 分析 | AI 复核设置、高级 / AI 复核资源 | 见 §9.4 的逐项去向表 | — | — |
+| `analysis_*`（10 项） | AI 分析 | — | **删除**（AI 分析整体删除）：第一步改为隐藏的 legacy 键，后端不再读取；第二步迁移时从 schema 删除（§9.4） | — |
 | `jev_default_set` | Jev 默认题集 | 资源 / Jev 默认题集 | 保留（独立成页，挂在资源下，靠近审核器） | null | — |
 | `block_status`、`block_message` | 拦截响应 | 系统 / 拦截提示 | 保留（带预览） | 403 / 英文默认 | — |
 | `record_pass`、`record_overturned`、`record_errors`、`store_text`、`record_pass_input_message`、`error_text_max_chars` | 记录与保留 | 记录与保留 / 记录内容 | 保留 | F/T/T/T/T/2000 | — |
@@ -318,7 +317,7 @@
 
 - **现状：**
   - 普通级是复核链：第 1 级通过就结束，后续级只在前一级命中时才跑（`M/flow.go:412-458`）。
-  - 级名按审核器类型推出（`UI/flowOps.ts:269-273`，后端在 `M/analysis_prompt.go:52` 有重复实现）。
+  - 级名按审核器类型推出（`UI/flowOps.ts:269-273`，后端在 `M/analysis_prompt.go:52` 有重复实现，这个文件随 AI 分析删除，见 §9）。
   - 第 1 级全部 skipped 时，补审级也不跑（`M/flow.go:436-438`）。
 - **目标行为：**
   - 级名只按语义取：第 1 级叫"初审"，后续普通级叫"复核"，fallback 级叫"补审"，不再出现"行为审查"。
@@ -373,7 +372,7 @@
 
 ### 4.9 可选后续：审核本身的 `max_concurrency` 是否也默认不限（未改，待定）
 
-D7 只针对 AI 复核。审核本身的并发设置 `max_concurrency` 这次**不改**，这里只列出风险，供以后决定。
+AI 分析已删除（§9）。审核本身的并发设置 `max_concurrency` 这次**不改**，这里只列出风险，供以后决定。
 
 **现状**（行号指 `ed988819c`）
 
@@ -400,7 +399,7 @@ D7 只针对 AI 复核。审核本身的并发设置 `max_concurrency` 这次**�
     - 先审的 goroutine 数等于网关的并发请求数，本来就由网关控制；
     - 后台审核的 goroutine 数由 `queue_size` 封顶；
     - 每个任务还会对每个审核器各开一个 goroutine（`M/flow.go:494-496`），这个数量不变。
-- 建议：如果要改，先给审核器调用加上与 AI 复核相同的 429 重试（按 `Retry-After`），或者在渠道层面加限流，然后再把默认值改为不限。
+- 建议：如果要改，先给审核器调用加上 429 重试（按 `Retry-After`，可参照原 AI 分析的单步重试 `M/analysis.go:247-280`），或者在渠道层面加限流，然后再把默认值改为不限。
 
 ## 5. 分期实施计划
 
@@ -408,10 +407,10 @@ D7 只针对 AI 复核。审核本身的并发设置 `max_concurrency` 这次**�
 
 | 期 | 范围 | 主要文件 | 估算改动量 | 迁移 | rolling | 测试要点 |
 |---|---|---|---|---|---|---|
-| **第 1 期：平台侧栏加界面整理** | UI 3.14 插件页 nav（平台）；审核插件改为侧栏；设置拆成 8 页；改名与文案修正（P6/P7/P10，记录标签）；后端小修 P8（`auto_watch`）和 P11（缓存可设 0）；**AI 复核的界面部分**（§9.4 归期：`GET /analyses` 与只读的复核视图、抽屉卡片、设置拆分、`?user=`、改正准则里错误的动作含义） | sdk manifest/check、server plugin/api/ui.go、`WEB/src/layouts/pluginNav.ts`、`sidebarViews.ts`、packages 版本；`UI/nav.ts`、`ModerationDashboard.vue`、`SettingsTab.vue`、`settingsForm.ts`、`forms/*.json`、`messages.ts`、`EventDetail.vue`；`M/store.go`、`M/settings.go` | 平台约 +500/-20 行（含测试），插件 UI 约 +600/-250 行，Go 约 +20 行 | 无 | 可以（核心 0.1.284 + 插件 0.10.0；旧控制台自动回退到页内标签） | `nav.spec`（manifest 与 nav.ts 一致）、`pluginNav.spec`、`navigation.spec`、`ui-contract.spec`、`check/ui_test`、`api/unit_test`；`settingsForm.spec`（分页覆盖）；手动验证旧链接 `?tab=settings` 和 `?record=` |
+| **第 1 期：平台侧栏加界面整理** | UI 3.14 插件页 nav（平台）；审核插件改为侧栏；设置拆成 7 页；改名与文案修正（P6/P7/P10，记录标签）；后端小修 P8（`auto_watch`）和 P11（缓存可设 0）；**AI 分析第一步：停用并隐藏**（§9.4：删除 Go 代码、路由和任务，`analysis_*` 改为隐藏的 legacy 键，界面移除） | sdk manifest/check、server plugin/api/ui.go、`WEB/src/layouts/pluginNav.ts`、`sidebarViews.ts`、packages 版本；`UI/nav.ts`、`ModerationDashboard.vue`、`SettingsTab.vue`、`settingsForm.ts`、`forms/*.json`、`messages.ts`、`EventDetail.vue`；`M/store.go`、`M/settings.go` | 平台约 +500/-20 行（含测试），插件 UI 约 +600/-250 行，Go 约 +20 行；删除 AI 分析约 −2 900（后端）、−600（测试）、−1 000（前端）行 | 无 | 可以（核心 0.1.284 + 插件 0.10.0；旧控制台自动回退到页内标签） | `nav.spec`（manifest 与 nav.ts 一致）、`pluginNav.spec`、`navigation.spec`、`ui-contract.spec`、`check/ui_test`、`api/unit_test`；`settingsForm.spec`（分页覆盖）；手动验证旧链接 `?tab=settings` 和 `?record=` |
 | **第 2 期：审核范围加命中重放** | `Spec.scope` 与角色过滤、指纹包含 scope；`hit_replay=new_content`；`fail_policy` | `M/flow.go`、`hook.go`、`extract.go`（只加过滤表）、`snapshot.go`、`settings.go`；`UI/FlowConfigCard.vue` 等（原型已有） | Go 约 +250 行（含测试），前端少量 | 无 | **分两步发版**：先让后端认识 `scope`（界面不提供），全部节点升级后再开放界面 | 各协议抽取在不同 scope 下的矩阵测试；缓存指纹随 scope 变化；重放后新内容是否送审；先审拒绝的语义不变 |
-| **第 3 期：可观测性** | `flow_source`、`level_source` 入库；绑定页标出失效绑定；概览提示；**AI 决定名单调整加授权闸门**（§9.4 归期：`submit_analysis` 的 `action` 和 `reason`、按权限生成的提示词、`proposal_*` 列、`dropped` / `refused` 状态、决策接口与撤销、新触发与上限、`allow_*` 退役） | `M/snapshot.go`、`hook.go`、`account_binding.go`、`store.go`、`routes_bindings.go`、`migrations/0011_*.sql`；`UI/BindingsTab.vue`、`EventDetail.vue`、overview | Go 约 +200 行，SQL 约 10 行，前端约 +150 行 | **有**（events 加 5 列，可为空） | 走 maintenance | 迁移前后记录的读取；fallback 的三种原因；account 与 group 的优先级 |
-| **第 4 期：清理与合并** | 名单并入观察名单（锁定条目）；删除 0.1 旧字段和 `on_error`；`decideHandling` 收拢；可选把输入上限移到流程 | `M/settings.go`、`legacy.go`、`hook.go`、`watch*.go`、`store.go`、`analysis_queue.go`、migrations；`forms/*`、`WatchTab.vue` | Go 约 +300/-400 行 | **有**（watchlist 加 `locked`，名单数据迁移） | 不能 rolling，一次性切换，走 maintenance | 迁移后先审 / 后审的判定与迁移前逐用户对比；AI 分析不能修改锁定条目 |
+| **第 3 期：可观测性** | `flow_source`、`level_source` 入库；绑定页标出失效绑定；概览提示 | `M/snapshot.go`、`hook.go`、`account_binding.go`、`store.go`、`routes_bindings.go`、`migrations/0011_*.sql`；`UI/BindingsTab.vue`、`EventDetail.vue`、overview | Go 约 +200 行，SQL 约 10 行，前端约 +150 行 | **有**（events 加 5 列，可为空） | 走 maintenance | 迁移前后记录的读取；fallback 的三种原因；account 与 group 的优先级 |
+| **第 4 期：清理与合并** | 名单并入观察名单（锁定条目）；删除 0.1 旧字段和 `on_error`；`decideHandling` 收拢；可选把输入上限移到流程；**AI 分析第二步：迁移删除** `user_analyses`、名单行的分析列、记录的 `ai_*` 列和 `analysis_*` legacy 键（§9.4） | `M/settings.go`、`legacy.go`、`hook.go`、`watch*.go`、`store.go`、`analysis_queue.go`、migrations；`forms/*`、`WatchTab.vue` | Go 约 +300/-400 行 | **有**（watchlist 加 `locked`，名单数据迁移） | 不能 rolling，一次性切换，走 maintenance | 迁移后先审 / 后审的判定与迁移前逐用户对比；AI 分析不能修改锁定条目 |
 
 ---
 
@@ -426,7 +425,7 @@ cd next/web && node node_modules/vite/bin/vite.js --mode mock
 ```
 
 - mock 直接读取插件 manifest 的 `ui.pages`（含 nav）和真实的 `forms/*.json`；记录 mock 里带有 `flow_source`、`level_source` 和 `scope`。
-- 截图在 `design/shots/`，共 42 张（其中 `ai-*` 16 张见 §9.5），脚本是 `design/shots.mjs`。重拍方法：在一个装有 `playwright-core@1.56.0` 的目录里运行 `mcr.microsoft.com/playwright:v1.56.0-noble` 容器，加 `--network host`，并把截图目录挂载到 `/out`。截图用 Playwright 1.56 加 Chromium 拍摄，视口如下：
+- 截图在 `design/shots/`，共 28 张，脚本是 `design/shots.mjs`。重拍方法：在一个装有 `playwright-core@1.56.0` 的目录里运行 `mcr.microsoft.com/playwright:v1.56.0-noble` 容器，加 `--network host`，并把截图目录挂载到 `/out`。截图用 Playwright 1.56 加 Chromium 拍摄，视口如下：
   - 桌面 1440×900；
   - 手机 390×844 @3x，即 iPhone 14 视口；
   - 暗色模式。
@@ -436,11 +435,12 @@ cd next/web && node node_modules/vite/bin/vite.js --mode mock
 | 内容 | 桌面 | 暗色 | 手机 |
 |---|---|---|---|
 | 左侧子菜单 | `desktop-overview-sidebar` | `dark-overview-sidebar` | `mobile-sidebar-drawer`、`mobile-dark-drawer` |
-| 设置各页 | `desktop-settings-{policy,cache,lists,analysis,jev,response,records,advanced}` | `dark-settings-policy` | `mobile-settings-policy`、`mobile-settings-cache` |
+| 设置各页 | `desktop-settings-{policy,cache,lists,jev,response,records,advanced}` | `dark-settings-policy` | `mobile-settings-policy`、`mobile-settings-cache` |
 | 旧链接 `?tab=settings` 跳转 | `desktop-legacy-tab-settings` | — | — |
 | 流程编辑里的审核范围 | `desktop-flow-scope` | `dark-flow-scope` | `mobile-flow-scope` |
 | 记录详情的匹配来源 | `desktop-record-match-fallback`、`desktop-record-match-fields`、`desktop-record-match-default` | `dark-record-match` | `mobile-record-match`、`mobile-record-match-fields` |
 | 记录列表 | `desktop-events-list` | — | — |
+| 观察名单用户详情（AI 分析删除后） | `desktop-watch-detail` | `dark-watch-detail` | `mobile-watch-detail` |
 
 原型没有实现、或没有截图的部分：
 
@@ -512,384 +512,111 @@ cd next/web && node node_modules/vite/bin/vite.js --mode mock
 
 ---
 
-## 9. AI 分析重设计
+## 9. AI 分析：删除
+
+### 9.1 结论
+
+**整个 AI 分析（原型里叫"AI 复核"）功能删除。**
+
+- 用户原话："这样直接去掉 AI 复合功能吧，没什么用。因为我们现在直接有 AI 二级复合了呀，根本就不用那个 AI 所谓的 AI 复合了。"
+- 被删除的功能：按用户跑的 agent，复核名单用户的可疑记录，给出趋势和建议，并自动调整名单级别。
+- 删除的理由：流程里已经有第 2 级 LLM 复核，按请求复核就够了。
+- D6–D8 作废（见 §0）。之前为 AI 复核写的方案（谁来决定、授权闸门、触发、提示词等）不再保留，git 历史里可以查到。
+
+### 9.2 删除清单
+
+行号指 `ed988819c`。`M/` 指 `next/plugins/moderation/internal/moderation/`。
+
+**后端**
+
+原型里没有删除后端代码，这里列出改动点。删除时同一个提交里要一并改掉的有：manifest、CONTRACTS 和 Go 测试。
+
+| 位置 | 删除内容 |
+|---|---|
+| `M/analysis.go`、`analysis_queue.go`、`analysis_tools.go`、`analysis_prompt.go`、`analysis_guidelines.go` | 整个文件，共 2 407 行。`agent.go` 是"大模型判定"审核器，保留；`llmproto.go` 是审核器与分析共用的协议层，保留 |
+| `M/store.go:212-251`、:313-368 | 违规计数触发分析的部分（`analysis_every_violations` 判断、排队、`kickAnalyses`）。保留违规计数本身，它用于显示和观察期顺延 |
+| `M/watch.go:35-49` 及 :141、:294、:350-353、:372、:400 | 名单行上的分析字段、`analysis_id` 参数、"过时"判定 |
+| `M/watch_list.go:21`、:156、:167-190、:285 起 | `trend` 过滤、`ai_counts`、`analysis_every_violations` |
+| `M/user_detail.go:21-35`、:46、:69-73 | `AIVerdictCounts`、最近一次分析、分析进度 |
+| `M/routes.go:40-43`、:140、:160、:201-202 | 4 条分析路由、状态里的 `analysis` 运行信息、记录的 `ai_*` 字段和过滤 |
+| `M/stats_api.go:243-249`、:314、:372、:480 | 今日分析次数、AI 复核占比、费用来源 `analysis` |
+| `M/routes_config.go:48-51`、:189-194、:419-421 | 渠道上的"分析渠道"标记，以及删除时的 409 保护 |
+| `M/routes_misc.go:202-210`、:300-303 | 导入导出里的 `analysis_guidelines` |
+| `M/notify.go:111-135` | AI 调整名单时的通知 |
+| `M/plugin.go:105-106` 及 `analysis` 任务的注册 | 分析的调度 |
+| `M/settings.go:106-114`、:180-182、:408-418 | `analysis_*` 设置的字段、默认值和解码 |
+| `M/costs.go:25` | `SourceAnalysis`。历史费用行仍然以这个来源存在，保留常量和"AI 分析"文案，等统计保留期过后再删 |
+| `M/marker.go:55` | 注释里分析开场消息的说明 |
+| `next/plugins/moderation/manifest.json` | `analysis` 任务（:119-121）、4 条分析路由和 1 条手动分析路由（:406-432）、jobs 权限说明（:808-809）。描述里的 AI 分析一句已在原型中删掉 |
+| `next/docs/CONTRACTS.md` | §72 对比表里的"AI 分析"一行（:5116）、§72.8 的计数（:5426）、§72.13.4 整节（:5629-5693）、§72.13.6 中观察名单的分析部分（:5709-5714）、用户详情抽屉的分析部分（:5851） |
+
+**前端**（原型已全部删除）
+
+- **文件**：`UserAnalyses.vue`、`AnalysisCard.vue`、`AnalysisModal.vue`、`AnalysisPromptModal.vue`、`overview/AiReviewCard.vue`，以及原型里新加的 `AiReviewTab.vue`、`UserAiReview.vue`、`ProposalBox.vue`、`useProposal.ts`（含测试）。
+- **侧栏**："AI 复核""AI 复核设置"两个条目（`nav.ts` 和 manifest 的 `nav`）。
+- **设置**："AI 复核设置"页，以及"高级 / AI 复核资源"一节。全部 `analysis_*` 改为隐藏的 legacy 键；原型里新加的 `analysis_upgrade`、`analysis_downgrade`、`analysis_remove`、`analysis_review_before_expiry` 直接删除。
+- **记录**：AI 结论一节、"查看这次分析"，以及筛选里的"AI 复核""待复核""人与 AI 意见相反"。"结论"筛选改为只按人工处理状态；最终结论只看人工处理。
+- **观察名单**："分析"列、"AI 结论"列、"趋势"筛选、"每 N 次违规自动分析"提示、"分析提示词"按钮。
+- **用户抽屉**：AI 复核卡片、"分析记录"标签页、"AI 结论"统计，以及只为跟踪分析进度而做的轮询。
+- **概览**：AI 复核卡片、状态行的"AI 分析"项、运行状态的分析队列行、今日费用的"AI 分析"来源。
+- **渠道**："AI 分析渠道"标记和删除保护。
+- **其它**：相关类型、接口函数、色调函数、CSS，以及约 120 条文案键（中英各一份）。
+- **mock**：分析数据和接口、记录上的 `ai_*` 字段。
+
+**保留的部分**（这些只是为了能读懂历史数据，不再产生新数据）
+
+- 名单历史里 AI 当年的动作文案（`auto_upgrade` 等）和原因格式；
+- 名单来源"AI 分析"；
+- 费用来源"AI 分析"。
+
+**代码量估算**
+
+| 部分 | 删除行数 |
+|---|---|
+| 后端非测试 | 约 2 900 行：`analysis*.go` 共 2 407 行，加上其它文件中的约 500 行（估算） |
+| 后端测试 | 约 600 行：`analysis_test.go` 359 行，加上 `lists_test`、`stats_api_test` 等中的约 250 行（估算） |
+| 前端（相对 `ed988819c`） | 约 1 000 行：删除的 6 个文件共 573 行，文案约 250 行，其余文件约 200 行（估算） |
+
+本分支原型的实际 diff：前端非测试 −1 865 / +93 行（含原型里新加后又删掉的部分），测试 −108 / +13，mock −237 / +23，表单与 manifest −260 / +39。
+
+### 9.3 影响
+
+- **观察名单的级别今后只靠三种规则变化**，都不依赖分析模块：
+  - `auto_watch`：首次出现可疑记录时，以默认级别加入（`M/store.go:297-306`）；观察级每次违规都会顺延观察期（:331-337）；
+  - 封禁阈值：窗口内违规达到阈值即封禁（`M/store.go:375-401`），计数只排除人工误报（:443）；
+  - 手动调整：设级别、移出、加备注（`M/watch.go`）。
+
+  加上到期移出和两个固定名单，这几条与分析模块的交点只有 `store.go:239` 的 `kickAnalyses` 调用和 :349-368 的排队，删掉不影响它们。
+- **这些规则够不够用**：
+  - 默认级别为拦截时，所有没有名单条目的用户本来就先审，不需要自动升级。
+  - 默认级别为观察时，失去了"持续违规自动升为拦截级"。但封禁阈值会处理严重的情况，其余由管理员在名单里手动升级。
+  - 失去了"误报多时自动移出"。条目会按观察期自然到期，也可以手动移出。
+  - 判断：够用。如果以后需要，可以加一条不依赖 AI 的固定规则，例如"观察期内违规 N 次自动升为拦截级"（D10）。
+- **"AI 结论"等展示**：第一步就不再展示（D9）。数据在迁移之前仍留在数据库里，但界面不读。
+- **第 2 级 LLM 复核能覆盖的**：对每个可疑请求做二次判断，减少单次误报。这正是用户看重的部分。
+- **覆盖不到的**：跨请求的行为趋势（把违规拆散到多个请求、逐步升级），以及基于趋势自动调整名单。
+
+### 9.4 数据与发布
+
+**第一步：停用并隐藏**（不需要迁移，可以 rolling，放入第 1 期）
+
+- 后端不再触发、不再读取分析：删除上表中的 Go 代码、路由和任务。
+- `analysis_*` 设置改为隐藏的 legacy 键，保证已存的值仍能通过核心校验。
+- 界面移除（原型已完成）。
+- rolling 期间，旧节点可能还会跑完手上已排队的分析。它们写的数据新节点不读，没有影响。
+
+**第二步：迁移删除**（需要迁移，走 maintenance，并入第 4 期）
+
+- 删除 `user_analyses` 表（`migrations/0004_analysis_costs.sql:25-47`）。
+- 删除名单行上的分析列（0004:13-21）。
+- 删除记录上的 `ai_verdict`、`ai_severity`、`ai_category`、`ai_evidence`、`ai_reason`、`ai_analysis_id`。
+- 删除 schema 里的 `analysis_*` legacy 键。
+- 名单历史 `watch_events` 里 AI 当年的动作属于审计记录，保留。
+
+**已有数据是否导出**：不导出。数据库有自动备份；而且第一步之后界面不再展示这些数据（D9），导出也没有使用者。
 
-### 9.0 结论
+### 9.5 原型截图
 
-- **"AI 趋势分析"指的是插件里的"AI 分析"。** 它对观察名单上的用户运行一个 agent：
-  - 逐条复核该用户的可疑记录；
-  - 给出趋势（`trend`）和建议（`suggestion`）；
-  - 按一张矩阵自动调整名单级别。
-
-  插件里另有两处叫"趋势"的东西，都不是 AI（§9.1）。
-- **设计的主要问题：一个功能同时做四件事，但对外只露出一个模糊的"趋势"：**
-  - 逐条复核；
-  - 用户趋势判断；
-  - 自动处置；
-  - 手动"按 AI 建议执行"。
-
-  处置规则写在服务端矩阵里，并且**与给模型的准则互相矛盾**。触发会丢；结论没有"待确认、驳回、撤销"的状态；界面上的信息分散在五处，侧栏里只有一个设置页。
-- **方案：把它重新定位为"AI 复核"（D6、D8 用户已确认）。**
-  - **由 AI 自己决定**要不要调整名单：每次复核最多一个动作（升级、降级、移出），附上理由，可以附带风险等级作说明。
-  - **服务端只按授权做闸门：** 升级、降级、移出各自三档，"AI 自主执行 / AI 只给建议 / 不允许"。
-    - 自主执行：直接执行；
-    - 只给建议：转成待确认；
-    - 不允许：丢弃，并注明"越权已丢弃"。
-  - 所有执行都可以撤销，并在名单历史里关联 `analysis_id`。
-  - 侧栏"名单与处置"下新增"AI 复核"视图（待确认的建议 + 最近的复核）；用户详情抽屉的第一张卡片就是该用户的复核结论；设置拆成"AI 复核设置"和"高级 / AI 复核资源"。
-- **原型已经实现上述界面**，后端用 mock；截图是 `design/shots/ai-*.png`。
-- **决策点** D6、D7、D8 用户已确认；D1–D5 还在等回复，所以本节只做原型。
-
-### 9.1 "AI 趋势分析"具体指什么
-
-| 功能 | 是否 AI | 位置 | 说明 |
-|---|---|---|---|
-| **AI 分析**（本节对象） | 是 | 后端：`M/analysis*.go`；界面：用户抽屉中的 `UserAnalysisBar.vue`、`UserAnalyses.vue`、`AnalysisCard.vue`，名单页的提示词预览 `AnalysisPromptModal.vue`，记录详情的 AI 结论，概览的 `overview/AiReviewCard.vue` | 输出里最显眼的是"趋势"（偶发 / 持续 / 越来越重 / 多半是误报），用户说的"趋势分析"指的应该就是它（推测） |
-| 概览的"趋势"卡 | 否 | `UI/messages.ts` `trendCard`（"各流程的可疑率与各审核节点"） | 统计图表 |
-| 用户每日图表 | 否 | `UI/UserDailyChart.vue` | 近 30 天的审核、可疑、高危、出错 |
-
-**当初的设计意图：** CONTRACTS §72.13.4（`next/docs/CONTRACTS.md:5629` 起）和 §72.13.6（:5706 起），2026-10-31，插件 0.3.0。
-
-- 当时照搬 new-api 的 `analysis.go`、`analysis_tools.go`、`escalate.go`，目标是"带 5 个工具的 agent，结论自动调整名单"（CONTRACTS.md:5116）。
-- 0.6.0 加了防注入：移出名单默认关闭，enforce 级用户只降级不移出（:5662 起）。
-- 0.8.0 加了白名单、黑名单的限制。
-- 界面原定为：名单详情抽屉里放"重新分析"、分析状态、分析卡片、时间线、名单历史（:5709-5714）。
-
-### 9.2 现状
-
-以下由子代理逐行核对、本人抽查关键行；行号指 `ed988819c`。
-
-**触发**
-
-- 违规计数在 `countWatchHit` 里（`M/store.go:313-358`）。
-  - **只有 observe 级条目计数**；默认级别为拦截时，enforce 级条目也计（`M/store.go:318`）。
-  - 计数达到 `analysis_every_violations`（默认 30）时清零并排队（`M/store.go:351-364`）。
-- 手动触发：`POST /watchlist/:id/analyze`，需要 manage（`M/analysis_queue.go:463-510`）。
-- 每分钟的 `analysis` 任务只负责调度。
-- 新进名单、名单即将到期都**不会**触发。
-- 白名单用户照样会被分析、产生费用。
-
-**上下文**
-
-- 系统提示词由分析准则（`analysis_guidelines`，为空时用内置准则 `M/analysis_guidelines.go`）、该用户当前分组绑定的流程、类别字典组成（`M/analysis_prompt.go:340-370`）。
-- 不预先塞入记录，由模型调用 5 个工具获取（`M/analysis_tools.go:38-87`）。
-- 原文放在 `<user_text>` 里（:208-223）。
-- `analysis_context_kb` 用来截断和替换早期的工具结果（`M/analysis.go:298`、:428-453）。
-- **没有轮数上限**，只受超时约束（`M/analysis.go:300`）。
-
-**输出**
-
-- `trend` 有 4 个取值，`suggestion` 有 3 个取值，另有总结、主要问题和逐条结论（`M/analysis.go:53-72`）。
-- **没有总体的风险等级。**
-
-**作用于名单**
-
-- `escalationOf` 矩阵（`M/analysis_queue.go:219-252`）加上三个 `allow_*` 开关和两个名单（:258-273），共有十余种组合。其中不少组合"什么也不做、不留痕"，例如 enforce 级加 `block`、observe 级加 `observe`。
-- AI 升级后 `expires_at` 置空，即**永久 enforce**（`M/analysis_queue.go:396-406`，只有降级会设有效期）。
-- **没有"待确认"状态，也不能驳回、撤销。**
-  - 现在界面上的"按 AI 建议执行"只是前端拿最近一次分析，再调普通的名单接口（现状 `UI/UserAnalysisBar.vue`，原型已删除）。
-  - 撤销就是再手动改一次。
-- AI 不能封禁。AI 判为误报的结论**不会**减少封禁计数（`M/store.go:443` 只排除人工误报）。
-
-**保存**
-
-- `user_analyses` 每个用户保留 `analysis_keep_per_user` 条（`M/analysis_queue.go:329`）。
-- 记录上的 `ai_*` 会被覆盖；分析被裁剪后，记录里的 `ai_analysis_id` 会悬空。
-
-**失败**
-
-- 只有 ok 和 failed 两种状态；失败不重试，排队直接清掉（`M/analysis_queue.go:351`）。
-- 渠道不可用时，排队一直挂着。
-
-**费用**
-
-- 每一步都按核心价格计价，记在来源"分析"下。概览只显示次数和 token。
-
-**界面**
-
-现状的分析信息分散在五处：
-
-1. 用户抽屉中部的一行"分析状态 + 趋势 + 建议 + 执行按钮"（现状 `UI/UserAnalysisBar.vue`，放在概况之后）；
-2. 抽屉下方的"分析"标签页（`UserAnalyses.vue`，卡片里有 trace）；
-3. 记录详情里的 AI 结论；
-4. 概览里的 AI 复核占比卡；
-5. 名单历史里的 `auto_*` 动作。
-
-此外，**看不到跨用户的结论**，例如"哪些用户在等我处理"。
-
-### 9.3 哪里"设计不对"
-
-| # | 问题 | 证据 |
-|---|---|---|
-| A1 | **定位不清**：同一次运行既是"逐条二次判断"，又是"用户趋势"，又是"处置"。界面主打"趋势"，真正影响用户的却是矩阵推出的处置，而处置规则不在界面上 | `M/analysis_queue.go:219-273`；现状 `UI/UserAnalysisBar.vue` |
-| A2 | **模型被告知的后果与代码不一致**：准则说"解除时观察级、拦截级都一样直接移出"，代码对 enforce 级只降级，另有 high 严重度拦截，`allow_remove` 默认关闭。（在旧模型里，把后果写给模型还会诱导它调整结论；D8 让 AI 成为决策者后，取舍见 §9.4"提示词"） | `M/analysis_guidelines.go:46` 对比 `M/analysis_queue.go:233-246`、:379-391 |
-| A3 | **触发会丢、会偏**：分析运行期间到达的触发被合并后清掉；失败不重试，计数却已清零；手动排队也清零自动计数；enforce 级条目的误报撤不回计数；新进名单、到期前都不复核 | `M/store.go:362-364`、`M/analysis_queue.go:351`、:454-455、`M/routes.go:707` |
-| A4 | **结论不可执行、不可追溯**：没有"待确认"状态和驳回动作；自动动作无法一键撤销；跳过的动作（`*_skipped`、`auto_not_allowed`）只在名单历史里留一行 | `M/analysis_queue.go:201-208`；CONTRACTS.md:5659 |
-| A5 | **与名单、封禁规则重叠**：AI 升级会变成永久 enforce，与人工有期限的规则不同；AI 判误报不影响封禁和违规计数；白名单用户被分析却只能降级 | `M/analysis_queue.go:396-406`、`M/store.go:443` |
-| A6 | **单次运行没有轮数上限**，只受超时约束（D7 定稿后，数量类限制按用户要求不设，见 §9.4"触发"） | `M/analysis.go:300` |
-| A7 | **界面信息层级混乱**：结论分散在五处；抽屉里最重要的"建议"夹在概况和标签页之间；侧栏的"名单与处置 / AI 分析"只是一个设置页，没有可查看结论的视图 | §9.2 界面 |
-| A8 | **与新信息架构不契合**：新侧栏把"名单与处置"作为处理人的地方，AI 分析却只占一个设置页；三个 `allow_*` 布尔开关与两个名单的交互，在"名单规则"页和"AI 分析"页两处都要理解 | §1.1、§3 |
-| A9 | **小问题**：手动接口在"已排队"时返回 202 但什么也不做，CONTRACTS 写的是 409；分析被裁剪后记录上的 `ai_analysis_id` 悬空；不再拥有认领的节点也会写入分析行 | `M/analysis_queue.go:455`、:499；CONTRACTS.md:5633；`M/analysis_queue.go:304`、:329 |
-
-### 9.4 方案
-
-**定位：AI 复核 = 对名单用户的二次判断，由 AI 决定名单调整，服务端按授权执行。** 逐条结论（`ai_*`）照旧写进记录，作为人工复核的参考。
-
-**谁来决定**（D8，用户已确认）
-
-- `submit_analysis` 增加两个字段：
-  - `action`：`none`，或授权给 AI 的动作之一；
-  - `reason`：AI 自己的理由。
-- 可以附带 `risk`（低 / 中 / 高）作说明；`summary`、`main_problems`、逐条结论照旧；`trend` 保留为说明性标签。
-- 服务端**不再按规则推出动作**，删除 `escalationOf` 矩阵（`M/analysis_queue.go:219-252`）。
-- 服务端只保留**与 AI 无关的硬性约束**，作为闸门：
-  - 两个名单：只后台审核的用户不升级；总是先审的用户不降级、不移出；
-  - 动作要与当前级别相符：enforce 级不能"移出"，只能"降级"；
-  - 原有的"近期有高严重度记录时不移出"保留为硬性检查（`M/analysis_queue.go:379-391`）。
-- 违反硬性约束的动作，无论权限如何都不执行，状态记为 `refused`，并带上原因 `refusal`（allowlisted / blocklisted / level / high_severity）。复核记录和界面都会显示"不符合规则，未执行"和具体原因，与"越权已丢弃"区分开（原型 `UI/ProposalBox.vue`）。
-- **旧的 `suggestion` 字段**（release / observe / block）由 `action` 取代，只保留在旧的分析行里，供 `proposalOf()` 兼容当前后端。内置准则里"【建议怎么给】"整段（`M/analysis_guidelines.go:40-46`）改写为"怎么决定名单调整"，包括动作含义和需要的证据，不再描述服务端矩阵。
-
-**授权闸门**（D6，用户已确认）
-
-- 升级、降级、移出各有一个设置，三档：
-  - `auto`：AI 自主执行，复核结束即执行，之后可以撤销；
-  - `suggest`：AI 只给建议，转成 `pending`，在"AI 复核"页和用户抽屉里等人采纳或驳回；
-  - `off`：不允许。这个动作不会出现在提示词和 `submit_analysis` 的枚举里。万一 AI 仍然提交了它，服务端丢弃，状态记为 `dropped`，复核记录里注明"越权已丢弃"，名单不变。
-- 动作的状态：`pending`、`applied`（人工采纳）、`auto_applied`（AI 已执行）、`rejected`、`expired`（名单在此期间被人工改过，即原来的 stale）、`undone`、`dropped`（越权已丢弃）、`refused`（不符合规则，未执行）。
-- `pending` 可以采纳或驳回；`applied` 和 `auto_applied` **随时可以撤销**，撤销恢复原级别和有效期。
-- 每个动作写 `watch_events`，带上 `analysis_id` 和操作人（AI 执行时操作人为空），名单历史里可以追溯。
-- AI 升级按 `watch_days` 到期，不再永久（A5）。
-
-**默认值**
-
-- **所有安装都沿用 `analysis_allow_*`**：开着的为 `auto`（AI 自主执行），关着的为 `suggest`（AI 只给建议），所以升级后行为不变。
-  - 从未存过某个开关的，按它原来的默认值：升级开、降级开、**移出关**（0.6.0 起 `analysis_allow_remove` 默认为 false，CONTRACTS.md:5663）。所以默认是升级和降级 AI 自主执行，移出 AI 只给建议。
-  - 新键的 schema 默认值就是这三个值，单测保证它们与旧开关的默认值一致（原型 `UI/settingsForm.spec.ts`）。
-  - 用户的站点三项都开着，所以三项都是 AI 自主执行。
-- **新装的推荐**，不作为隐含默认值，而是在设置页每一项的说明里写明推荐和理由：
-  - 升级推荐 `auto`：这是收紧的方向，用户原文即使诱导模型去升级，对攻击者也没有好处；而且晚一步升级，就会多放过几次实时请求；升级可以撤销。
-  - 降级和移出推荐 `suggest`：这是放宽的方向，而被复核的恰恰是可能带注入的用户原文，所以放宽由人确认更稳。
-- **为什么不给新装一套不同的隐含默认值**：插件读不到"这是新装还是升级"。用"设置是否为空"来区分并不可靠：
-  - 新装后只要保存过任何一项（例如模式），就会被当成已有安装，默认值悄悄变回旧的；
-  - 写回的旧开关和隐藏键也会干扰判断。
-
-  要真正区分，需要核心在安装时写入初始设置（以后有这个能力时，再让新装直接带上推荐值）；在那之前，统一沿用旧开关，靠说明文字给出推荐。
-
-**提示词**
-
-- 只列出授权为 `auto` 或 `suggest` 的动作，说明每个动作的准确含义（与代码一致）：
-  - `upgrade`：观察级升为拦截级，之后先审后发、命中即拒绝，观察期重新计算；
-  - `downgrade`：拦截级降为观察级，之后后台审核、只记录；
-  - `remove`：从观察名单移出，只适用于观察级用户；
-  - 以及哪些用户不适用。
-- **不**告诉 AI 某个动作会直接执行还是只作为建议。否则"只给建议"的动作在模型眼里代价更低，用户原文也更容易诱导它提出。
-- 删除内置准则里错误的"观察级、拦截级都一样直接移出"（`M/analysis_guidelines.go:46`，A2）。原型 mock 的提示词预览已按此生成。
-- **取舍**：之前（D8 定稿前）的方案是"不把后果写给模型"，以减少用户原文诱导模型去追求某个后果。
-  - 现在 AI 是决策者，必须知道每个动作的含义，否则它的决定就没有意义。
-  - 但只告诉它动作的含义，不告诉它是否有人复查（见上一条）。
-  - 由此带来的偏差靠三道兜底：授权闸门（放宽的动作可以只给建议或不允许）、硬性约束（名单、级别、高严重度，违反时记为 `refused`）、撤销和审计（名单历史关联 `analysis_id`）。
-
-**触发**（D7）
-
-**用户已确认：AI 复核不设数量限制。** 原则是能删就删。
-
-- **触发条件**：
-  - 每 N 次违规，observe 和 enforce 级都计数；
-  - 名单到期前一天复核一次，决定是到期移出还是延长；
-  - 手动触发；在"AI 复核"页上可以批量触发（后续）。
-- **不设数量限制**：
-  - 不新增"同一用户最短间隔"和"每日上限"；
-  - 现有的分析并发上限 `analysis_concurrency`（每个节点 2 个，`M/analysis_queue.go:85`）退役，排队的复核立即开跑；
-  - 没有单独的分析队列上限：排队记录就在名单行上，每个用户最多一条，所以队列天然不会超过名单人数。
-- **保留两条正确性规则**（去重，不是限流，触发不会因此等待）：
-  1. 同一用户同一时刻只跑一次：沿用名单行上的认领和令牌（`M/analysis_queue.go:123-158`）。
-  2. 运行期间来的触发合并为一次"待补跑"，跑完立刻再跑一次，不丢。这修复了 A3：现在运行中的触发会在结束时被清掉（`M/store.go:362-364`、`M/analysis_queue.go:351`）。
-- 失败后按退避重试 1 次，失败本身不清零违规计数（A3）。
-- **单次运行的轮数上限：保留为不可配置的内部常量 `maxSteps = 12`，界面不展示。** 它不是限流，是防止 agent 死循环的健壮性兜底。
-  - 只靠超时（默认 60 s）不够：一个很快的模型如果一直调工具，60 秒里可以调用几十次，而且每一步都要重发不断变长的上下文（最多 `analysis_context_kb`）。
-  - 正常的复核用 3–8 步（例如 trace 里的 5 步），12 步留有余量。
-  - 达到上限时，与上下文超出预算时一样，强制下一步提交（`M/analysis.go:306-307` 已有这个机制）。
-
-**不限之后的风险与兜底**
-
-- **成本**：由触发频率决定。每 N 次违规才触发一次（`analysis_every_violations`，默认 30），名单到期前最多再触发一次，加上手动触发。同一用户永远不会并行跑两次，运行期间的触发也只合并成一次补跑。所以复核次数的上限大约是"违规数 / N + 名单人数 + 手动次数"。想降低成本就调大 N，或者关掉"到期前复核"。
-- **上游 429 和 5xx**：现有逻辑是单步重试 1 次，优先按 `Retry-After` 等待（`M/analysis.go:247-280`）。仍然失败时，这次复核记为失败，按上一条退避重试 1 次，再失败就等下一次触发。
-  - 突发时，例如渠道恢复后大量排队的复核同时开跑，可能连续遇到 429。之后由每次复核自己的重试错开，不会丢失触发，计数也不清零。
-  - 如果以后发现某个渠道经常被打满，优先在渠道层面限流（渠道属于共享资源，限流放在那里，审核器也能受益），而不是恢复一个复核专用的并发数。
-- **内存和 goroutine**：每个运行中的复核是一个 goroutine，加上一份最多 `analysis_context_kb`（默认 64 KB）的上下文；名单 1 000 人全部同时运行时约 64 MB。实际同时运行数不会超过名单人数（每人最多一次）。
-
-**界面**（原型已实现）
-
-- **侧栏"名单与处置 / AI 复核"**（`?tab=ai`，读权限）：
-  - 顶部 3 个统计：待确认的建议数、今日复核次数（含失败数）、今日分析 token；
-  - "待确认的建议"表：用户和当前级别、风险和趋势、总结（点开看分析过程）、动作框（AI 的理由，采纳 / 驳回）；
-  - "最近的复核"表：所有用户的结果、费用和时间，结果分为"AI 已执行（可撤销）""AI 建议（待确认）""越权已丢弃"等。
-  - 手机上动作框直接显示在卡片里，不收进"详情"。
-- **用户抽屉**：
-  - 第一张卡片是"AI 复核"：风险、趋势、总结、动作框（AI 的理由、状态、采纳 / 驳回 / 撤销、依据的记录链接）、下次触发条件、"重新复核"按钮；
-  - 下方标签页改为"可疑记录"优先，其次是"分析记录"和"名单历史"；
-  - 原来的 `UserAnalysisBar.vue`（"按 AI 建议执行"）已删除，由动作框取代。
-- **设置**：
-  - "AI 复核设置"页分三节：何时复核 / AI 的权限 / 分析准则（折叠）；
-  - 资源类设置移到"高级 / AI 复核资源"（折叠）。
-- 新增 `?tab=watch&user=<id>` 深链。
-- 组件复用：动作框 `ProposalBox.vue` 和决策逻辑 `useProposal.ts` 由"AI 复核"页和抽屉共用；风险和建议状态的颜色在 `tones.ts` 中统一定义。
-
-**`analysis_*` 设置项去向**
-
-| 键 | 现在 | 新位置 | 处理 | 默认 |
-|---|---|---|---|---|
-| `analysis_channel_id` | AI 分析 | AI 复核设置 / 何时复核 | 保留（文案"AI 分析渠道"） | 0 |
-| `analysis_every_violations` | AI 分析 | AI 复核设置 / 何时复核 | 保留，改名"每多少次违规复核一次"；observe 和 enforce 都计数（后端） | 30 |
-| `analysis_review_before_expiry` | — | AI 复核设置 / 何时复核 | **新增** | true |
-| `analysis_cooldown_minutes`、`analysis_daily_limit` | — | — | **不新增**（D7：不设数量限制） | — |
-| `analysis_upgrade` | — | AI 复核设置 / AI 的权限 | **新增**，取代 `analysis_allow_upgrade`；AI 自主执行 / AI 只给建议 / 不允许（D6） | 已有安装沿用旧开关（未存过为 auto）；新装 auto |
-| `analysis_downgrade` | — | 同上 | **新增**，取代 `analysis_allow_downgrade` | 已有安装沿用旧开关（未存过为 auto）；新装 suggest |
-| `analysis_remove` | — | 同上 | **新增**，取代 `analysis_allow_remove` | 已有安装沿用旧开关（未存过为 suggest，因为旧默认为 false）；新装 suggest |
-| `analysis_allow_upgrade`、`analysis_allow_downgrade`、`analysis_allow_remove` | AI 分析 | 隐藏 | **退役**，第 4 期删除（原型 `UI/settingsForm.ts` 的 `EFFECT_KEYS`）：<br>· 新键没保存过时按旧值显示（true 为 auto，false 为 suggest）；<br>· 保存新键时同步写回旧键（auto 为 true，否则 false），供混跑期间的旧节点读取；<br>· 若旧键在此期间被别人改过，保存前先确认（`retiredConflicts`）；<br>· 旧节点上"不允许"按"只给建议"处理，设置页已说明 | — |
-| `analysis_guidelines` | AI 分析 | AI 复核设置 / 分析准则（折叠） | 保留；内置准则改正动作含义，授权的动作由系统追加（见"提示词"） | "" |
-| `analysis_concurrency` | AI 分析 | 隐藏 | **退役**（D7：不设并发上限）。schema 中保留为隐藏键，只是为了让已存的值仍能通过核心的校验；第 4 期删除 | — |
-| `analysis_timeout_ms`、`analysis_context_kb`、`analysis_keep_per_user` | AI 分析 | 高级 / AI 复核资源（折叠） | 保留：超时与上下文预算是单次运行的健壮性设置，保留条数是存储设置，都不是数量限制 | 60000 / 64 / 20 |
-
-**后端改动点与迁移**
-
-- 以下改动**都不需要数据库迁移**，因为设置 JSON 的解码本来就宽松，可以 rolling：
-  - 设置：`M/settings.go` 解码新键，并兼容旧的 `allow_*`；
-  - 触发：`M/store.go:313-368` 去掉"只有 observe 级计数"；运行期间的触发改为设置"待补跑"标记；
-  - `M/analysis_queue.go:351` 在有"待补跑"时不清掉排队；
-  - 准则与提示词：`M/analysis_guidelines.go` 改正动作含义；`M/analysis_prompt.go:340-370` 按授权追加"你可以决定的名单调整"一段；
-  - 轮数上限：`M/analysis.go:300` 的循环加上内部常量 `maxSteps = 12`，达到上限时强制提交；
-  - 不设并发：`M/analysis_queue.go:85` 的 `free` 计算去掉 `AnalysisConcurrency`，认领到的都立即运行；`M/settings.go:418` 不再解码 `analysis_concurrency`。
-- `user_analyses` 加列 `risk`、`proposal_action`、`proposal_from`、`proposal_to`、`proposal_status`、`proposal_reason`、`proposal_evidence`、`decided_by`、`decided_at`；`watchlist` 加"待补跑"标记列（运行期间来的触发写这一列，跑完若有就立刻再排一次）。这些**需要迁移**，属于加列，按约定走 maintenance。
-- 新接口：
-  - `GET /analyses?proposal=pending`（read）；
-  - `POST /analyses/:id/decision {apply|reject|undo}`（manage），在 `block_subjects` 锁内校验状态和当前级别，写 `watch_events`。
-- 删除 `escalationOf` 和 `decideEscalation`（`M/analysis_queue.go:219-273`）。`escalateWatch` 改为"闸门"：
-  - 读取 AI 提交的 `action` 和 `reason`；
-  - 先做硬性约束检查；
-  - 再按授权执行：`auto` 执行，`suggest` 写入 `pending`，`off` 写入 `dropped`（`M/analysis_queue.go:376-427`）。
-- `submit_analysis` 的参数 schema 按授权生成 `action` 枚举（`M/analysis.go:53-72`、`M/analysis_tools.go:38-87`）。
-- 发版顺序（rolling 时的注意）：新节点写 `proposal_*` 时，旧节点只是读不到，没有坏处。
-- **能力开关：** 状态接口的 `runtime.features` 列出全部节点都已实现的能力（原型 `UI/types.ts` `Runtime.features`）：
-  - `analyses_list`：跨用户的复核列表；
-  - `proposals`：建议模型、决策接口和撤销。
-
-  界面按能力开放功能：
-  - 没有 `analyses_list` 时，"AI 复核"页显示说明，而不是报错；
-  - 没有 `proposals` 时，"撤销"不出现。
-- **与当前后端兼容：** 当前后端的分析没有 `proposal` 字段，`proposalOf()`（原型 `UI/useProposal.ts`）会把它的 `suggestion` 转成一条"待确认"的建议。
-  - 这类建议仍通过名单接口执行，带上 `analysis_id`，与原来的"按 AI 建议执行"相同；
-  - 不提供驳回和撤销；
-  - 对审核管理员或"只后台审核"名单里的用户，不显示会被后端拒绝的操作，而是说明原因。
-
-**归期**
-
-- **第 1 期（无迁移）：**
-  - 新增只读接口 `GET /analyses`（read，跨用户、可分页），并加上能力 `analyses_list`；
-  - 侧栏"AI 复核"视图先只读，展示最近的复核，用现有的 `user_analyses` 数据；
-  - 抽屉里的动作框兼容旧的 `suggestion`（见上文"与当前后端兼容"）；
-  - 抽屉卡片调整顺序；
-  - 设置拆分并改文案；
-  - `?user=` 深链；
-  - 改正内置准则里错误的动作含义（"拦截级直接移出"）；
-  - 修复手动接口的 202 / 409 不一致；
-  - 去掉分析并发上限，加上内部轮数上限（都不需要迁移）。
-- **第 3 期（与 events 加列放在同一个 maintenance 窗口）：** 由 AI 决定动作加授权闸门（`submit_analysis` 的 `action` 和 `reason`、`proposal_*` 列、决策接口、撤销、`dropped` 状态）、按授权生成提示词、新的触发方式（到期前复核、待补跑）、`allow_*` 和 `analysis_concurrency` 退役。默认值按上文"默认值"执行，已有安装的行为不变。
-
-### 9.5 原型与截图
-
-- 新增文件：
-  - `UI/AiReviewTab.vue`：AI 复核页；
-  - `UI/UserAiReview.vue`：抽屉卡片；
-  - `UI/ProposalBox.vue`：动作框（AI 决定的动作、理由与状态）；
-  - `UI/useProposal.ts`：决策逻辑。
-- 修改的文件：
-  - `UI/types.ts`：`Risk`、`Proposal`、`AnalysisRow`；
-  - `UI/host.ts`：`fetchAnalyses`、`decideProposal`；
-  - `UI/nav.ts` 和 manifest：增加 `ai` 条目；
-  - `UI/WatchDetail.vue`、`UI/WatchTab.vue`：`?user=` 深链；
-  - `forms/*.json`、`UI/settingsForm.ts`：`EFFECT_KEYS` 的读取与回写；
-  - `UI/messages.ts`；
-  - web mock：分析带 `risk` 和 `proposal`，新增两个接口；
-  - `design/shots.mjs`：增加 ai 截图。
-- 删除 `UI/UserAnalysisBar.vue`，以及它独用的 9 个文案键。
-- 截图（`design/shots/`，可用 `ONLY=ai-` 只重拍这一组）：
-
-| 内容 | 桌面 1440 | 暗色 | 手机 |
-|---|---|---|---|
-| 复核结果与待确认建议 | `ai-desktop-review` | `ai-dark-review` | `ai-mobile-review` |
-| 采纳的确认框 | `ai-desktop-apply-confirm` | — | — |
-| 用户详情里的复核卡片（待确认） | `ai-desktop-user-pending` | `ai-dark-user-pending` | `ai-mobile-user-pending` |
-| 用户详情（AI 已执行，可撤销） | `ai-desktop-user-auto-applied` | — | — |
-| 用户详情（排队中 + 重新复核入口） | `ai-desktop-user-queued` | — | — |
-| AI 复核设置 | `ai-desktop-settings` | `ai-dark-settings` | `ai-mobile-settings` |
-| 高级 / AI 复核资源 | `ai-desktop-advanced-resources` | — | — |
-| 侧栏中的入口 | — | — | `ai-mobile-sidebar` |
-| 当前后端：没有跨用户列表时的说明 | `ai-desktop-unsupported` | — | — |
-| 当前后端：抽屉里的旧建议（只能采纳，经名单接口执行） | `ai-desktop-user-legacy` | — | — |
-
-### 9.6 独立审查
-
-独立审查子代理只读取本部分的 diff（`bcdc8fc74e..eca9e64819`），共报告 20 条（4 高、8 中、8 低）。修复都在后续提交里。
-
-| 级别 | 发现 | 处理 |
-|---|---|---|
-| 高 | 三个 `analysis_allow_*` 设为隐藏后，Go 测试 `TestSettingsForms` 会失败 | 已修：`manifest_test.go` 的 `legacy` 列表加上这三个键；`go test .` 通过 |
-| 高 | 新增的 `?user=` 写回会与切换分节的 push 竞争，导致导航被取消（例如抽屉里"查看记录"、从 AI 复核页打开用户时） | 已修：抽屉完全由地址驱动（`?tab=watch&user=`），打开和关闭都只改地址；`useSection` 在真正切换分节时去掉 `user` 和 `record`，`?user=` 链接默认打开观察名单；删除 `preset` 通道；补了测试 |
-| 高 | 当前后端的分析没有 `proposal`，抽屉对每次分析都显示"无需调整"，原来的"按 AI 建议执行"也没了 | 已修：`proposalOf()` 把旧的 `suggestion` 转成可采纳的建议，经名单接口执行（截图 `ai-desktop-user-legacy`） |
-| 高 | 当前后端没有 `GET /analyses`，AI 复核页对所有人报错 | 已修：按能力 `analyses_list` 开放，没有时显示说明（`ai-desktop-unsupported`）；设计在第 1 期加入该接口 |
-| 中 | 没保存过旧开关时，降级显示为"只给建议"，实际节点却会自动执行 | 已修：`analysis_downgrade` 的 schema 默认值改为 auto，与 Go 默认一致。D6 定稿后仍是如此：所有安装沿用旧开关，新键默认值与旧开关默认值一致，并有单测保证；新装的推荐只写在说明里（§9.4"默认值"） |
-| 中 | 写回旧开关时，会无提示地覆盖别人同时做的修改；"不提出"在旧节点上会退化 | 已修：新增 `retiredConflicts` 进入确认流程；设置页说明了退化 |
-| 中 | 新的触发设置在当前后端上不生效，抽屉却总显示"到期前复核" | 已修：设置页注明需要新版本；抽屉只显示后端给出的 `review_at` |
-| 中 | 在一处做出决定后，另一处的列表（观察名单行、AI 复核页）不刷新 | 已修：共享的 `proposalsVersion`，各视图收到后重载 |
-| 中 | 对审核管理员、"只后台审核"名单里的用户，也显示了会被拒绝的采纳按钮 | 已修：`blockedReason()` 改为显示原因 |
-| 中 | 撤销没有按设计等全部节点升级后再开放 | 已修：用能力 `proposals` 控制 |
-| 中 | mock 的决策接口状态有误（重新加入时缺 `user_id`、没有 expired 路径、撤销不恢复有效期、未知决定也会生效） | 已修：校验决定；级别已被改动时返回 409 并标为 expired；保存被替换的条目，撤销时恢复；采纳后让同一用户的其它待确认建议失效 |
-| 中 | mock 的"重新复核"复用了 #21 的建议对象 | 已修：新的复核结果 `proposal: null`、`risk: medium` |
-| 低 | 待确认列表只取 50 条，没有提示 | 已修：超出时显示"只显示前 50 条"。分页留到正式实现 |
-| 低 | 决定后返回的分析对象没有使用；判断逻辑在两处重复 | 已修：`decided` 不再带数据；`proposalOf` 统一放在 `useProposal.ts` |
-| 低 | AI 页没有按过时（stale）规则处理 | 已修：同由 `proposalOf` 处理 |
-| 低 | 抽屉文案："还剩 0 次"、英文首字母小写、不在名单的用户也显示卡片、丢了排队时间 | 已修 |
-| 低 | "分析"与"复核"用词混用；总结为空时显示"—" | 总结已改用 `ai.noSummary`；"AI 分析渠道"等现有文案保留（渠道的名字），其余名称留到第 1 期统一 |
-| 低 | AI 复核设置与"高级"用了同一个图标；`WatchDetail` 多了一个空行 | 已修：改用 `role` 图标 |
-| 低 | 手机布局：待确认表的时间被收进"详情" | 已修：时间放到卡片正文，最近复核的时间收进详情 |
-| 低 | 多处没有测试 | 已补：`useProposal.spec.ts`（旧建议的转换、过时、拦截原因）、`settingsForm.spec`（默认值、冲突、写回）、`nav.spec`（`?user=`）。决策接口的 mock 状态转换和组件交互没有单测，以截图人工核对 |
-
-修复后的验证：
-
-- 插件 UI：vitest 18 个文件、185 个用例全部通过，vue-tsc 无错误；
-- Go：`next/plugins/moderation` 的 manifest 测试通过；
-- 截图共 42 张，全部重拍。
-
-### 9.7 D6、D8 定稿后的独立审查
-
-独立审查子代理只读取 `a587761249..0794b532fc`，共报告 15 条（2 高、8 中、5 低）。修复在下一个提交里。
-
-| 级别 | 发现 | 处理 |
-|---|---|---|
-| 高 | 用"设置是否为空"区分已有安装和新装不可靠：新装后保存任意一项就会变回旧默认值；从未保存过的已有安装又会被当成新装 | 已改：不再区分。所有安装沿用旧开关（新键默认值 = 旧开关默认值，单测保证）；新装的推荐和理由写进每一项的说明里；文档说明为什么不做隐含区分（§9.4"默认值"） |
-| 高 | 单测锁定了上述错误规则 | 已改：测试改为"从未存过的任何安装都得到旧开关的效果"，并检查新旧默认值一致 |
-| 中 | §9.6 的记录与新的默认值矛盾 | 已改为说明 D6 之后的情况 |
-| 中 | §5 分期表的第 1 期、第 3 期仍是旧描述 | 已与 §9.4"归期"对齐 |
-| 中 | §9.3 A2 仍把旧模型的观点当作现状 | 已加注，指向 §9.4 的取舍 |
-| 中 | 提示词告诉 AI 动作会直接执行还是只作建议，取舍里没有交代 | 已改：不再告诉 AI 是否有人复查，并写明理由；mock 的提示词同步修改 |
-| 中 | 违反硬性约束（名单、级别、高严重度）的动作，结局没有定义 | 已定义 `refused`（不符合规则，未执行）加原因 `refusal`，与"越权已丢弃"区分；类型、界面和文案都已加上 |
-| 中 | 旧的 `suggestion` 和准则里"【建议怎么给】"整段的去向没有说明 | 已说明：`action` 取代 `suggestion`，后者只保留在旧行里供兼容；整段准则改写；mock 的新分析去掉了 `suggestion`，模拟当前后端时由动作反推 |
-| 中 | mock 自相矛盾：注释说移出"不允许"，设置里却是"只给建议" | 注释改为"较早的一次运行，当时移出为不允许" |
-| 中 | mock 的提示词会提到没有授权的 downgrade，也缺少高严重度的限制 | 已改：只在 downgrade 有权限时才提及；补上高严重度的说明 |
-| 低 | "越权动作已丢弃"和"越权已丢弃"两种写法并存；英文写法别扭 | 统一为"越权已丢弃"，英文为 "Dropped (not allowed)" |
-| 低 | 侧栏描述仍是旧模型 | 已改为"按你给的权限调整名单或提出建议" |
-| 低 | `wasOn` 重复了默认值 | 已删除，改用 schema 默认值，单测检查新旧一致；mock 的 `permission()` 注明与设置页同一规则 |
-| 低 | "越权已丢弃"与驳回、撤销同色 | 已改为 danger 色 |
-| 低 | 界面上看不到推荐值 | 每一项的说明都写了推荐和理由 |
-
-### 9.8 D7 定稿（AI 复核不设数量限制）
-
-- **删除**：原型里新加的"同一用户最短间隔"和"每日上限"（设置页控件、schema、文档）都删掉，不作为"0 = 不限"的选项保留。
-- **退役**：`analysis_concurrency` 改为隐藏，已存的值仍能通过校验，后端不再读取。
-- **保留**：单次超时、上下文预算和保留条数，这些都不是数量限制。
-- **正确性规则保留**：同一用户同一时刻只跑一次；运行期间的触发合并，跑完立刻补跑一次。
-- **内部常量**：单次运行的轮数上限 12 作为不可配置的内部常量（理由见 §9.4"触发"）。
-- **审核本身的 `max_concurrency` 未改**，列为可选后续，风险评估见 §4.9。
-- **审查**：本次只改了设置表单、Go 和 TS 测试里的隐藏键清单、文档和截图，没有业务逻辑或 Go 代码改动，所以只做了自审。
-- **重拍的截图**：`ai-desktop-settings`、`ai-mobile-settings`、`ai-dark-settings`、`ai-desktop-advanced-resources`、`desktop-settings-advanced`。整页截图时让底部的保存栏放到页面末尾，不再盖住内容。
+- 已删除 `design/shots/ai-*.png`。
+- 重拍了受影响的截图：侧栏（`desktop-overview-sidebar`、`dark-overview-sidebar`、`mobile-sidebar-drawer`、`mobile-dark-drawer`）、观察名单详情（新增 `desktop-watch-detail`、`dark-watch-detail`、`mobile-watch-detail`）、设置页（`desktop-settings-*`、`dark-settings-policy`、`mobile-settings-*`）。
+- 不再有 `desktop-settings-analysis`。

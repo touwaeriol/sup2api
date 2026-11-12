@@ -54,13 +54,7 @@ describe('messages', () => {
   // overview/QueueCard.vue: the runtime rows, kv_writing and kv_skipped among
   // them (0.8.1). Exactly these, so a key no row uses does not come back.
   it('has the texts of the runtime rows of the overview, and no others', () => {
-    const rows = ['flows', 'inflight', 'calls', 'errorsN', 'cacheHits', 'cacheBytes', 'kvErrors', 'kvWriting', 'kvSkipped', 'imagesRefused', 'avgLatency', 'analysis', 'analysisValue', 'analysisOff']
+    const rows = ['flows', 'inflight', 'calls', 'errorsN', 'cacheHits', 'cacheBytes', 'kvErrors', 'kvWriting', 'kvSkipped', 'imagesRefused', 'avgLatency']
     for (const lang of [messages.zh, messages.en]) expect(Object.keys(lang.runtime).sort()).toEqual([...rows].sort())
-  })
-
-  it('has a text for every analysis error code of the backend', () => {
-    // internal/moderation: upstream.go ErrType*, analysis.go analysisErr*
-    const codes = ['timeout', 'ttft_timeout', 'upstream_error', 'network', 'bad_response', 'no_channel', 'auditor_missing', 'panic', 'canceled', 'no_submit', 'bad_submit', 'disabled', 'stale']
-    for (const lang of [messages.zh, messages.en]) expect(codes.filter((c) => !(c in lang.analysisErr))).toEqual([])
   })
 })

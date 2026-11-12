@@ -1,10 +1,5 @@
 import { apiBase, isApiError, listAll, pluginApiBase, requestRaw, useList, type ApiClient, type ListResult, type PageInfo, type PluginHost, type Query } from '@sub2api/host'
 import type {
-  Analysis,
-  AnalysisDetail,
-  AnalysisRow,
-  AnalysisPrompt,
-  AnalysisTool,
   Auditor,
   AuditorDraft,
   Binding,
@@ -28,7 +23,6 @@ import type {
   ModEventDetail,
   PerformanceResult,
   PluginSettings,
-  ProposalDecision,
   ReviewStatus,
   SimulateBody,
   SourceFilter,
@@ -140,8 +134,8 @@ export const deleteBlock = (userId: number) => api().del(`/blocks/${userId}`)
 
 export const createWatch = (body: WatchChange & { user_id: number }) => api().post<Watch>(WATCHLIST_PATH, body)
 export const updateWatch = (userId: number, body: WatchChange) => api().patch<Watch>(`${WATCHLIST_PATH}/${userId}`, body)
-/** link: the reason of a release and an applied AI "release" suggestion, written to the history. */
-export const deleteWatch = (userId: number, link?: { reason?: string; analysis_id?: number }) => api().del(`${WATCHLIST_PATH}/${userId}`, link)
+/** link: the reason of a release, written to the history. */
+export const deleteWatch = (userId: number, link?: { reason?: string }) => api().del(`${WATCHLIST_PATH}/${userId}`, link)
 export const markWatchSeen = (userId: number) => api().post(`${WATCHLIST_PATH}/${userId}/seen`, {})
 export const fetchWatchEvents = (userId: number) => api().get<WatchEvent[]>(`${WATCHLIST_PATH}/${userId}/events`)
 
@@ -190,23 +184,9 @@ export const runTest = (text: string, images: string[], flowId?: number) =>
 /** Imports a new-api export (§72.12); preview only counts and validates. */
 export const importConfig = (data: unknown, preview: boolean) => api().post<ImportResult>('/import', { data, preview })
 
-// ---- P2 (§72.13)
-
+// ---- users
 
 export const fetchUserDetail = (userId: number) => api().get<UserDetail>(`/users/${userId}`)
-export const analyzeWatch = (userId: number) => api().post<Watch>(`${WATCHLIST_PATH}/${userId}/analyze`, {})
-export const fetchWatchAnalyses = (userId: number, page = 1, pageSize = 10) =>
-  api().list<Analysis>(`${WATCHLIST_PATH}/${userId}/analyses`, { page, page_size: pageSize })
-export const fetchAnalysis = (id: number) => api().get<AnalysisDetail>(`/analyses/${id}`)
-/** Every user's analyses, newest first; proposal = pending lists the ones waiting for a moderator (prototype). */
-export const fetchAnalyses = (q: { proposal?: 'pending'; page?: number; page_size?: number }) => api().list<AnalysisRow>('/analyses', q)
-/** Applies, rejects or undoes the proposal of an analysis (manage, prototype); answers the analysis. */
-export const decideProposal = (id: number, decision: ProposalDecision) => api().post<Analysis>(`/analyses/${id}/decision`, { decision })
-export const fetchAnalysisPrompt = (q: { group_id?: number; flow_id?: number }) => api().get<AnalysisPrompt>('/analysis/prompt', q)
-export async function fetchAnalysisTools(): Promise<AnalysisTool[]> {
-  const r = await api().get<AnalysisTool[] | { tools: AnalysisTool[] } | null>('/analysis/tools')
-  return Array.isArray(r) ? r : r?.tools || []
-}
 export const fetchUserEvents = (userId: number, source?: SourceFilter | null, pageSize = 50) =>
   api().list<ModEvent>(EVENTS_PATH, { user_id: userId, result: 'suspicious', ...source, page: 1, page_size: pageSize })
 
@@ -248,8 +228,7 @@ async function getWatchList<T>(query: Query): Promise<ListResult<T> & WatchListM
     items,
     page: env.page ?? { page: 1, page_size: items.length, total: items.length },
     paged: !!env.page,
-    counts: env.counts ?? { watching: 0, watching_with_new: 0, blocking: 0 },
-    analysis_every_violations: env.analysis_every_violations ?? 0
+    counts: env.counts ?? { watching: 0, watching_with_new: 0, blocking: 0 }
   }
 }
 
@@ -374,11 +353,4 @@ interface ErrorDetails {
 export function errorDetails<K extends keyof ErrorDetails>(e: unknown, key: K): ErrorDetails[K] {
   const v: unknown = isApiError(e) ? e.details[key] : undefined
   return (Array.isArray(v) ? v : []) as ErrorDetails[K]
-}
-
-/** Queue state of a watch entry: running (claimed), pending (queued) or idle. */
-export function analysisState(w: Watch | null | undefined): 'idle' | 'pending' | 'running' {
-  if (!w) return 'idle'
-  if (w.analysis_running) return 'running'
-  return w.analysis_requested_at ? 'pending' : 'idle'
 }

@@ -6,8 +6,8 @@
     "zh": "提示词审核"
   },
   "description": {
-    "en": "Moderates gateway requests with flows of auditors (OpenAI moderation, TypeSafe Jev, LLM verdict) bound to groups and accounts. Blocklisted users and users at the enforce level are moderated before the upstream call and refused on a hit: a watch-list entry's own level decides, and without an entry the default level does - enforce when the mode is enforce, so then everyone without an entry is moderated first. Allowlisted users and all other requests are moderated in the background. Suspicious users join the watch list automatically; an AI analysis reviews their records and can adjust the watch level; repeated violations can ban them. The cost of every moderation call is shown with the core model prices.",
-    "zh": "按分组、分组下的账号或账号绑定的审核流程（OpenAI 内容审核、TypeSafe Jev、大模型判定）审核网关请求。黑名单用户和拦截级的用户先审后发、命中即拒绝：有名单条目的按条目自己的级别，没有条目的按默认级别——模式为拦截时默认级别就是拦截级，此时所有没有条目的用户都先审。白名单用户和其余请求在后台审核。可疑用户自动进入观察名单，AI 分析复核其记录并可调整名单级别，多次违规可自动封禁。每次审核调用的费用按核心的模型价格展示。"
+    "en": "Moderates gateway requests with flows of auditors (OpenAI moderation, TypeSafe Jev, LLM verdict) bound to groups and accounts. Blocklisted users and users at the enforce level are moderated before the upstream call and refused on a hit: a watch-list entry's own level decides, and without an entry the default level does - enforce when the mode is enforce, so then everyone without an entry is moderated first. Allowlisted users and all other requests are moderated in the background. Suspicious users join the watch list automatically; repeated violations can ban them. The cost of every moderation call is shown with the core model prices.",
+    "zh": "按分组、分组下的账号或账号绑定的审核流程（OpenAI 内容审核、TypeSafe Jev、大模型判定）审核网关请求。黑名单用户和拦截级的用户先审后发、命中即拒绝：有名单条目的按条目自己的级别，没有条目的按默认级别——模式为拦截时默认级别就是拦截级，此时所有没有条目的用户都先审。白名单用户和其余请求在后台审核。可疑用户自动进入观察名单，多次违规可自动封禁。每次审核调用的费用按核心的模型价格展示。"
   },
   "version": "0.9.3",
   "publisher": "sub2api",
@@ -632,30 +632,12 @@
                   "icon": "lock"
                 },
                 {
-                  "key": "ai",
-                  "label": {
-                    "en": "AI review",
-                    "zh": "AI 复核"
-                  },
-                  "icon": "bolt"
-                },
-                {
                   "key": "lists",
                   "label": {
                     "en": "List rules",
                     "zh": "名单规则"
                   },
                   "icon": "user",
-                  "permission": "moderation:manage",
-                  "corePermission": "plugin:manage"
-                },
-                {
-                  "key": "analysis",
-                  "label": {
-                    "en": "AI review settings",
-                    "zh": "AI 复核设置"
-                  },
-                  "icon": "role",
                   "permission": "moderation:manage",
                   "corePermission": "plugin:manage"
                 }

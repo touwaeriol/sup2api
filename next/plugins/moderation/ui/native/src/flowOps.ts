@@ -266,7 +266,7 @@ export function hitOutcome(index: number, reviewCount: number): { key: 'hitSuspi
 
 export type StageRole = 'first' | 'behavior' | 'review' | 'fallback'
 
-/** A fallback stage = fallback (补审); stage 1 = first (初审); a later stage holding a Jev auditor = behavior; else review (analysis_prompt.go stageRole). */
+/** A fallback stage = fallback (补审); stage 1 = first (初审); a later stage holding a Jev auditor = behavior; else review. */
 export function stageRole(index: number, stage: Pick<Stage, 'auditors' | 'fallback'>, typeOf: AuditorTypeOf): StageRole {
   if (stage.fallback) return 'fallback'
   if (index === 0) return 'first'

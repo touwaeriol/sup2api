@@ -32,9 +32,7 @@ export const NAV_GROUPS = [
     items: [
       { key: 'watch', icon: 'eye', access: 'read' },
       { key: 'blocks', icon: 'lock', access: 'read' },
-      { key: 'ai', icon: 'bolt', access: 'read' },
-      { key: 'lists', icon: 'user', access: 'settings' },
-      { key: 'analysis', icon: 'role', access: 'settings' }
+      { key: 'lists', icon: 'user', access: 'settings' }
     ]
   },
   {

@@ -1,26 +1,17 @@
-import { computed, onBeforeUnmount, watch, type Ref } from 'vue'
-import { analysisState, fetchUserDetail, markWatchSeen, useModHost } from './host'
+import { computed, watch, type Ref } from 'vue'
+import { fetchUserDetail, markWatchSeen, useModHost } from './host'
 import type { UserDetail, Watch } from './types'
 import { useAsync } from './useAsync'
 
-const POLL_MS = 5000
-
 /**
- * GET /users/:user_id for an open drawer: loads on open and user change,
- * polls every 5 s while an analysis is queued or running, and reports
- * `finished` when one ends (its card, verdicts and history changed).
+ * GET /users/:user_id for an open drawer: loads on open and user change.
  * Opening also marks the user's new records as seen (manage only).
  */
-export function useUserDetail(
-  open: Ref<boolean>,
-  userId: Ref<number | null>,
-  opts: { manage: Ref<boolean>; changed: (w: Partial<Watch> | null) => void; finished: () => void }
-) {
+export function useUserDetail(open: Ref<boolean>, userId: Ref<number | null>, opts: { manage: Ref<boolean>; changed: (w: Partial<Watch> | null) => void }) {
   const t = useModHost().t
   const detail = useAsync<UserDetail>(() => fetchUserDetail(userId.value!), () => t('watch.loadFailed'))
   const data = detail.data
   const entry = computed(() => data.value?.watch ?? null)
-  const state = computed(() => analysisState(entry.value))
 
   /** Loads the user; the first load of an opening also marks new records as seen. */
   async function load(markSeen = false) {
@@ -44,22 +35,5 @@ export function useUserDetail(
     { immediate: true }
   )
 
-  // One timer, driven by whether polling is needed now.
-  let timer: ReturnType<typeof setInterval> | null = null
-  const stop = () => {
-    if (timer) clearInterval(timer)
-    timer = null
-  }
-  watch(
-    () => [open.value, userId.value, state.value] as const,
-    ([isOpen, id, s], prev) => {
-      stop()
-      if (prev && prev[1] === id && prev[2] !== 'idle' && s === 'idle') opts.finished()
-      if (isOpen && id && s !== 'idle') timer = setInterval(() => void load(), POLL_MS)
-    },
-    { immediate: true }
-  )
-  onBeforeUnmount(stop)
-
-  return { detail: data, loading: detail.loading, error: detail.error, entry, state, reload: () => load() }
+  return { detail: data, loading: detail.loading, error: detail.error, entry, reload: () => load() }
 }

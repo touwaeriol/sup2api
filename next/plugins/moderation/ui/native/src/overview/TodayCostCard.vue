@@ -6,8 +6,8 @@ import { money, num } from '../format'
 import { useModHost } from '../host'
 import type { CostRef, CostSummary, Status } from '../types'
 
-// Today's cost (new-api cost-card): total, by source (moderation / AI
-// analysis / tests, try-outs and simulations), top channels and auditors.
+// Today's cost (new-api cost-card): total, by source (moderation / tests,
+// try-outs and simulations), top channels and auditors.
 // Unpriced calls are counted but not in the amount.
 const props = defineProps<{ costs: Status['costs'] }>()
 const t = useModHost().t
@@ -22,7 +22,7 @@ const top = (rows: CostRef[], name: (id: number) => string) =>
     .slice(0, TOP)
     .map((r) => ({ id: r.id, name: name(r.id), cost: r.cost }))
 
-const sources = computed(() => (['audit', 'analysis', 'manual'] as const).map((k) => ({ key: k, cost: props.costs[k] })))
+const sources = computed(() => (['audit', 'manual'] as const).map((k) => ({ key: k, cost: props.costs[k] })))
 const lists = computed(() => [
   { key: 'byChannel', rows: top(props.costs.channels, catalog.channelName) },
   { key: 'byAuditor', rows: top(props.costs.auditors, catalog.auditorName) }

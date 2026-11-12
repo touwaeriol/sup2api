@@ -19,7 +19,7 @@ import { childUI, orderedKeys, uiGet, type JSONSchema, type UISchema } from '@su
 // not moderate its users at all.
 
 /** Keys with their own editor on the settings tab instead of the schema widget. */
-export const CUSTOM_KEYS = ['analysis_channel_id', 'notify_webhook_url', 'notify_webhook_secret', 'jev_default_set'] as const
+export const CUSTOM_KEYS = ['notify_webhook_url', 'notify_webhook_secret', 'jev_default_set'] as const
 /** The stored 0.1 API key: hidden, but the page offers to clear it (a kept credential makes moderation:manage re-enter it, §75.1). */
 export const LEGACY_KEY = 'api_key'
 
@@ -80,22 +80,6 @@ export const CACHE_DAYS_KEY = 'verdict_cache_days'
 const RETIRED_ALLOWLIST = 'exempt_user_ids'
 const RETIRED_CACHE_TTL = 'cache_ttl_seconds'
 const DAY_SECONDS = 86400
-/**
- * The permission of each change the AI may decide (prototype, design §9, D6:
- * auto = the AI does it, suggest = the AI proposes it, off = not allowed)
- * and the retired switch it replaces. A switch that was on let the AI do the
- * change, one that was off left it to a moderator: on = auto, off = suggest.
- * Never stored, a switch ran on its default, which the new key's schema
- * default repeats (settingsForm.spec keeps the two equal), so every install
- * keeps what it did.
- */
-const EFFECT_KEYS: Record<string, string> = {
-  analysis_upgrade: 'analysis_allow_upgrade',
-  analysis_downgrade: 'analysis_allow_downgrade',
-  analysis_remove: 'analysis_allow_remove'
-}
-/** The permission a retired switch stands for. */
-export const effectOf = (on: boolean) => (on ? 'auto' : 'suggest')
 const CACHE_DAYS_MAX = 30
 
 /** The stored settings turn the verdict cache off: only the retired cache_ttl_seconds = 0 does, until verdict_cache_days is saved. */
@@ -104,8 +88,6 @@ export const verdictCacheOff = (stored: Record<string, unknown>) => stored[CACHE
 /** What the plugin reads for a key never stored whose retired key is: undefined = nothing (the schema default applies). */
 function retiredValue(stored: Record<string, unknown>, k: string): unknown {
   if (k === ALLOWLIST_KEY) return stored[RETIRED_ALLOWLIST]
-  const on = stored[EFFECT_KEYS[k]]
-  if (typeof on === 'boolean') return effectOf(on)
   const ttl = stored[RETIRED_CACHE_TTL]
   if (k !== CACHE_DAYS_KEY || typeof ttl !== 'number' || !(ttl > 0)) return undefined
   return Math.min(CACHE_DAYS_MAX, Math.max(1, Math.ceil(ttl / DAY_SECONDS)))
@@ -171,28 +153,6 @@ export function sentSetting(schema: JSONSchema | undefined, stored: Record<strin
  *   the same allowlist) and the retired key gets it without those users.
  */
 export function withRetiredMirrored(values: Record<string, unknown>, changed: readonly string[]): Record<string, unknown> {
-  return withEffectsMirrored(withAllowlistMirrored(values, changed), changed)
-}
-
-/** A saved effect key also writes its retired switch (on = auto), for nodes that read only the switch. */
-function withEffectsMirrored(values: Record<string, unknown>, changed: readonly string[]): Record<string, unknown> {
-  const saved = Object.entries(EFFECT_KEYS).filter(([k]) => changed.includes(k))
-  if (!saved.length) return values
-  return { ...values, ...Object.fromEntries(saved.map(([k, retired]) => [retired, values[k] === undefined ? undefined : values[k] === 'auto'])) }
-}
-
-/**
- * The effect keys this save changes whose retired switch someone changed
- * since the page loaded (an older console or node): the mirror would
- * overwrite it, so the save asks first, as for a key of the page.
- */
-export function retiredConflicts(changed: readonly string[], loaded: Record<string, unknown>, latest: Record<string, unknown>): string[] {
-  return Object.entries(EFFECT_KEYS)
-    .filter(([k, retired]) => changed.includes(k) && JSON.stringify(loaded[retired]) !== JSON.stringify(latest[retired]))
-    .map(([k]) => k)
-}
-
-function withAllowlistMirrored(values: Record<string, unknown>, changed: readonly string[]): Record<string, unknown> {
   const allowSaved = changed.includes(ALLOWLIST_KEY)
   if (!allowSaved && !changed.includes(BLOCKLIST_KEY)) return values
   const retired = values[RETIRED_ALLOWLIST]

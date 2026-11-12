@@ -260,11 +260,11 @@ func TestSettingsForms(t *testing.T) {
 	// core would no longer mask it) but the settings page does not show
 	// them (§72.15); the keys retired in 0.8.0 (exempt_user_ids, read as the
 	// allowlist, and cache_ttl_seconds, read as verdict_cache_days) are
-	// hidden like them, as are the AI switches the review redesign retires
-	// (analysis_allow_*, read as analysis_upgrade / _downgrade / _remove) and
-	// analysis_concurrency (AI reviews run without a cap);
+	// hidden like them, as are the analysis_* keys of the removed AI analysis
+	// (kept so stored values still validate until the migration drops them);
 	// every other field is shown.
-	legacy := []string{"exempt_user_ids", "cache_ttl_seconds", "analysis_allow_upgrade", "analysis_allow_downgrade", "analysis_allow_remove", "analysis_concurrency", "base_url", "api_key", "model", "system_prompt", "categories", "tool_choice", "max_turns", "temperature",
+	legacy := []string{"exempt_user_ids", "cache_ttl_seconds", "analysis_every_violations", "analysis_channel_id", "analysis_guidelines", "analysis_timeout_ms", "analysis_concurrency",
+		"analysis_context_kb", "analysis_keep_per_user", "analysis_allow_upgrade", "analysis_allow_downgrade", "analysis_allow_remove", "base_url", "api_key", "model", "system_prompt", "categories", "tool_choice", "max_turns", "temperature",
 		"max_tokens", "timeout_ms", "on_error", "sample_rate", "group_ids", "model_patterns", "retention_days"}
 	for _, k := range order {
 		var fu struct {
