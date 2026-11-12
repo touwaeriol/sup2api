@@ -1184,3 +1184,10 @@ p.mod-text-danger {
   text-align: left;
   white-space: normal;
 }
+
+/* The AI's own reason for the change it decided (ProposalBox). */
+.mod-proposal-reason {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: rgb(var(--fg-muted));
+}

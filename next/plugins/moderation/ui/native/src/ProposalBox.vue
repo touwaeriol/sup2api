@@ -7,10 +7,12 @@ import { proposalTone } from './tones'
 import { blockedReason, useProposal, type ProposalUser } from './useProposal'
 import type { Analysis, Proposal } from './types'
 
-// A proposal for a user's watch entry (prototype, design §9.4): the change
-// (from → to), what became of it and, for those who may manage, the action
-// that fits: apply or reject a pending one, undo an applied one. A change
-// the backend would refuse for this user says why instead. Used by the AI
+// The change the AI decided for a user's watch entry (prototype, design §9.4,
+// D6 / D8): the change (from → to) with the AI's reason, what its permission
+// made of it - done by the AI (undoable), proposed (pending), dropped (not
+// allowed) - and, for those who may manage, the action that fits: apply or
+// reject a pending one, undo an applied one. A change the backend would
+// refuse for this user says why instead. Used by the AI
 // review page and the user drawer alike (proposalOf gives the proposal).
 const props = defineProps<{ analysis: Analysis; proposal: Proposal; user: ProposalUser; compact?: boolean }>()
 const emit = defineEmits<{ (e: 'decided'): void; (e: 'open-record', id: number): void }>()
@@ -34,6 +36,8 @@ const run = async (d: 'apply' | 'reject' | 'undo') => (await decide(props.analys
       </span>
       <SBadge :tone="proposalTone(p.status)" dot>{{ enumLabel('ai.status', p.status) }}</SBadge>
     </div>
+    <p v-if="p.reason" class="mod-proposal-reason">{{ t('ai.reasonLabel') }}{{ p.reason }}</p>
+    <SHint v-if="p.status === 'dropped'" size="xs">{{ t('ai.droppedHint') }}</SHint>
     <div v-if="!compact && (p.evidence_ids.length || p.decided_at)" class="mod-proposal-meta">
       <span v-if="p.evidence_ids.length">
         {{ t('ai.evidence', { n: p.evidence_ids.length }) }}:

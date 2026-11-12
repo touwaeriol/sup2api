@@ -21,7 +21,7 @@ describe('settingSections', () => {
       'lists/固定名单',
       'lists/自动观察与封禁',
       'analysis/何时复核',
-      'analysis/结论如何生效',
+      'analysis/AI 的权限',
       'analysis/分析准则',
       'jev/Jev 默认题集',
       'response/拦截响应',
@@ -343,7 +343,7 @@ describe('mergeSettings', () => {
 
 describe('AI review effects (prototype)', () => {
   const keys = ['analysis_upgrade', 'analysis_downgrade', 'analysis_remove']
-  it('shows what the retired switches meant until the new keys are stored: on = automatic, off = proposed', () => {
+  it('shows what the retired switches meant until the new keys are stored: on = the AI decides, off = it proposes', () => {
     const shown = displayValues(schema, { analysis_allow_upgrade: true, analysis_allow_downgrade: false }, keys)
     expect(shown).toEqual({ analysis_upgrade: 'auto', analysis_downgrade: 'suggest', analysis_remove: 'suggest' })
     expect(displayValues(schema, { analysis_upgrade: 'off', analysis_allow_upgrade: true }, ['analysis_upgrade'])).toEqual({ analysis_upgrade: 'off' })
@@ -357,12 +357,12 @@ describe('AI review effects (prototype)', () => {
 })
 
 describe('AI review effects: defaults and conflicts (prototype)', () => {
-  it('shows what the plugin does when nothing is stored: upgrade and downgrade automatic, removal proposed', () => {
-    expect(displayValues(schema, {}, ['analysis_upgrade', 'analysis_downgrade', 'analysis_remove'])).toEqual({
-      analysis_upgrade: 'auto',
-      analysis_downgrade: 'auto',
-      analysis_remove: 'suggest'
-    })
+  const keys = ['analysis_upgrade', 'analysis_downgrade', 'analysis_remove']
+  it('keeps a configured install that never stored the switches on their defaults: on, on, off', () => {
+    expect(displayValues(schema, { mode: 'observe' }, keys)).toEqual({ analysis_upgrade: 'auto', analysis_downgrade: 'auto', analysis_remove: 'suggest' })
+  })
+  it('gives a new install the recommended permissions: the AI raises, and proposes lowering and removal', () => {
+    expect(displayValues(schema, {}, keys)).toEqual({ analysis_upgrade: 'auto', analysis_downgrade: 'suggest', analysis_remove: 'suggest' })
   })
   it('asks before overwriting a retired switch someone else changed', () => {
     expect(retiredConflicts(['analysis_upgrade'], { analysis_allow_upgrade: true }, { analysis_allow_upgrade: false })).toEqual(['analysis_upgrade'])

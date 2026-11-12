@@ -31,9 +31,9 @@
 | D3 | 缓存命中的重放方式 | **`new_content`：只重放命中部分，新内容照常送审** | `whole`：旧行为，整个请求直接按命中处理 |
 | D4 | 审核失败时的处理 | **默认 `open`（放行并记为出错，与现状一致）**，可选 `close_pre`（先审的请求返回 503） | 默认 `close_pre`：更安全，但上游一抖动就会拒绝用户 |
 | D5 | 白名单、黑名单是否并入观察名单 | **本期只改名**（"只后台审核" / "总是先审"），第 4 期再并入观察名单，作为"锁定条目" | 立即合并：要迁移数据，而且 AI 分析和自动观察的规则都要一起改 |
-| D6 | AI 复核的结论默认如何生效（§9） | **升为拦截级：自动执行；降为观察级、移出名单：只给建议，等人确认**。所有自动执行都可以一键撤销 | 全部自动（相当于现状 `allow_downgrade` 开）；或全部只给建议（最稳，但人工负担最大） |
+| D6 | AI 的权限（§9.4）——**用户已确认** | **升级、降级、移出三项各自三档：AI 自主执行 / AI 只给建议 / 不允许**。已有安装沿用原来的 `analysis_allow_*`（开为自主执行，关为只给建议），升级后行为不变，用户的站点三项都是自主执行。新装推荐：升级自主，降级和移出只给建议（理由见 §9.4）。所有执行都可以撤销，并记入名单历史 | （已定） |
 | D7 | AI 复核的触发时机（§9） | **每 N 次违规（observe、enforce 都计）+ 名单到期前一天 + 手动**；同一用户最短间隔 60 分钟，期间的触发顺延而不是丢掉；全站每天上限 200 次 | 维持现状：只按违规次数触发，且只有 observe 级计数（默认级别为拦截时 enforce 级也计）；分析运行期间的触发会丢 |
-| D8 | 模型输出的 `trend` 和 `suggestion` 两个枚举如何处理（§9） | **改为"风险等级 + 建议动作"**：模型只给风险（低 / 中 / 高）和一段总结，建议动作由服务端规则按风险、级别和复核为违规的条数推出；`trend` 保留为说明性标签 | 维持两个枚举，由矩阵组合（现状，很多组合什么也不做、不留痕） |
+| D8 | 由谁决定名单调整（§9.4）——**用户已确认** | **由 AI 自主判断**：AI 在提交里给出它决定的动作和理由，可以附带风险等级作说明。服务端不再按规则推出动作，只按 D6 的授权做闸门：自主执行就执行，只给建议就转成待确认，不允许就丢弃并在复核记录里注明"越权动作已丢弃" | （已定） |
 
 ---
 
@@ -498,12 +498,16 @@ cd next/web && node node_modules/vite/bin/vite.js --mode mock
   - 手动"按 AI 建议执行"。
 
   处置规则写在服务端矩阵里，并且**与给模型的准则互相矛盾**。触发会丢；结论没有"待确认、驳回、撤销"的状态；界面上的信息分散在五处，侧栏里只有一个设置页。
-- **方案：把它重新定位为"AI 复核"。**
-  - 每次复核只给出**一个风险判断**（低 / 中 / 高）和**最多一条名单调整建议**。
-  - 每种调整可以单独设为"自动执行 / 只给建议 / 不提出"，所有自动执行都能撤销，并且在名单历史里可追溯。
+- **方案：把它重新定位为"AI 复核"（D6、D8 用户已确认）。**
+  - **由 AI 自己决定**要不要调整名单：每次复核最多一个动作（升级、降级、移出），附上理由，可以附带风险等级作说明。
+  - **服务端只按授权做闸门：** 升级、降级、移出各自三档，"AI 自主执行 / AI 只给建议 / 不允许"。
+    - 自主执行：直接执行；
+    - 只给建议：转成待确认；
+    - 不允许：丢弃，并注明"越权已丢弃"。
+  - 所有执行都可以撤销，并在名单历史里关联 `analysis_id`。
   - 侧栏"名单与处置"下新增"AI 复核"视图（待确认的建议 + 最近的复核）；用户详情抽屉的第一张卡片就是该用户的复核结论；设置拆成"AI 复核设置"和"高级 / AI 复核资源"。
 - **原型已经实现上述界面**，后端用 mock；截图是 `design/shots/ai-*.png`。
-- **待确认的决策点是 D6–D8**，见 §0 的表。D1–D5 还在等回复，所以本节只做原型。
+- **决策点** D6、D8 用户已确认；D7 和 D1–D5 还在等回复，所以本节只做原型。
 
 ### 9.1 "AI 趋势分析"具体指什么
 
@@ -598,26 +602,53 @@ cd next/web && node node_modules/vite/bin/vite.js --mode mock
 
 ### 9.4 方案
 
-**定位：AI 复核 = 对名单用户的二次判断 + 一条可执行、可撤销的名单调整建议。** 逐条结论（`ai_*`）照旧写进记录，作为人工复核的参考。
+**定位：AI 复核 = 对名单用户的二次判断，由 AI 决定名单调整，服务端按授权执行。** 逐条结论（`ai_*`）照旧写进记录，作为人工复核的参考。
 
-**输出模型**（D8）
+**谁来决定**（D8，用户已确认）
 
-- 模型只提交 `risk`（low / medium / high）、`summary`、`main_problems` 和逐条结论；`trend` 保留为说明性标签。
-- **建议动作由服务端按固定规则推出**，规则写在一处，界面上可以看到。原则是：
-  - 风险高且有复核为违规的记录：升为拦截级；
-  - 风险低、没有复核为违规的记录、近期没有高严重度记录：enforce 级降为观察级，observe 级移出名单；
-  - 其余情况：不调整。
-- 系统提示词里**不再写后果**（解决 A2）。
+- `submit_analysis` 增加两个字段：
+  - `action`：`none`，或授权给 AI 的动作之一；
+  - `reason`：AI 自己的理由。
+- 可以附带 `risk`（低 / 中 / 高）作说明；`summary`、`main_problems`、逐条结论照旧；`trend` 保留为说明性标签。
+- 服务端**不再按规则推出动作**，删除 `escalationOf` 矩阵（`M/analysis_queue.go:219-252`）。
+- 服务端只保留**与 AI 无关的硬性约束**，作为闸门：
+  - 两个名单：只后台审核的用户不升级；总是先审的用户不降级、不移出；
+  - 动作要与当前级别相符：enforce 级不能"移出"，只能"降级"；
+  - 原有的"近期有高严重度记录时不移出"保留为硬性检查（`M/analysis_queue.go:379-391`）。
 
-**生效方式**（D6）
+**授权闸门**（D6，用户已确认）
 
-- 每种调整（升级、降级、移出）各有一个设置：`auto`（自动执行）、`suggest`（只给建议）、`off`（不提出）。
-  - 推荐值：升级 `auto`，降级和移出 `suggest`。
-  - 两个名单的限制保留：只后台审核的用户不升级，总是先审的用户不降级、不移出。
-- 建议的状态：`pending`、`applied`、`auto_applied`、`rejected`、`expired`（名单在此期间被人工改过，即原来的 stale）、`undone`。
-- `pending` 可以采纳或驳回；`applied` 和 `auto_applied` 可以撤销。撤销恢复原级别和有效期。
-- 每个动作写 `watch_events`，带上 `analysis_id` 和操作人，名单历史里可以追溯。
-- AI 升级不再设为永久：沿用 `watch_days`，与人工规则一致（A5）。
+- 升级、降级、移出各有一个设置，三档：
+  - `auto`：AI 自主执行，复核结束即执行，之后可以撤销；
+  - `suggest`：AI 只给建议，转成 `pending`，在"AI 复核"页和用户抽屉里等人采纳或驳回；
+  - `off`：不允许。这个动作不会出现在提示词和 `submit_analysis` 的枚举里。万一 AI 仍然提交了它，服务端丢弃，状态记为 `dropped`，复核记录里注明"越权已丢弃"，名单不变。
+- 动作的状态：`pending`、`applied`（人工采纳）、`auto_applied`（AI 已执行）、`rejected`、`expired`（名单在此期间被人工改过，即原来的 stale）、`undone`、`dropped`。
+- `pending` 可以采纳或驳回；`applied` 和 `auto_applied` **随时可以撤销**，撤销恢复原级别和有效期。
+- 每个动作写 `watch_events`，带上 `analysis_id` 和操作人（AI 执行时操作人为空），名单历史里可以追溯。
+- AI 升级按 `watch_days` 到期，不再永久（A5）。
+
+**默认值**
+
+- **已有安装**（设置里存过任何值）：沿用 `analysis_allow_*`，开着的为 `auto`，关着的为 `suggest`，升级后行为不变。
+  - 从未单独存过某个开关的，按插件原来的默认值：升级开、降级开、**移出关**（0.6.0 起 `analysis_allow_remove` 默认为 false，CONTRACTS.md:5663）。所以移出默认为"只给建议"。
+  - 用户的站点三项都开着，所以三项都是 AI 自主执行。
+- **新装**（设置为空）推荐：升级 `auto`，降级 `suggest`，移出 `suggest`。理由：
+  - 升级是收紧的方向，用户原文即使诱导模型给出升级，对攻击者也没有好处；而且晚一步升级，就会多放过几次实时请求；升级可以撤销。
+  - 降级和移出是放宽的方向，被复核的恰恰是可能带注入的用户原文，所以放宽由人确认更稳。
+- 实现上，后端解码时：新键没存时读旧开关；旧开关也没存时，按"设置是否为空"区分已有安装和新装（原型 `UI/settingsForm.ts` 的 `EFFECT_KEYS.wasOn` 与之一致，并有单测）。
+
+**提示词**
+
+- 只列出授权为 `auto` 或 `suggest` 的动作，说明每个动作的准确含义（与代码一致）：
+  - `upgrade`：观察级升为拦截级，之后先审后发、命中即拒绝，观察期重新计算；
+  - `downgrade`：拦截级降为观察级，之后后台审核、只记录；
+  - `remove`：从观察名单移出，只适用于观察级用户；
+  - 以及哪些用户不适用。
+- 同时注明该动作会直接执行还是作为建议。
+- 删除内置准则里错误的"观察级、拦截级都一样直接移出"（`M/analysis_guidelines.go:46`，A2）。原型 mock 的提示词预览已按此生成。
+- **取舍**：之前（D8 定稿前）的方案是"不把后果写给模型"，以减少用户原文诱导模型去追求某个后果。
+  - 现在 AI 是决策者，必须知道每个动作的含义，否则它的决定就没有意义。
+  - 由此带来的偏差靠三道兜底：授权闸门（放宽的动作可以只给建议或不允许）、硬性约束（名单、级别、高严重度）、撤销和审计（名单历史关联 `analysis_id`）。
 
 **触发**（D7）
 
@@ -633,18 +664,18 @@ cd next/web && node node_modules/vite/bin/vite.js --mode mock
 
 - **侧栏"名单与处置 / AI 复核"**（`?tab=ai`，读权限）：
   - 顶部 3 个统计：待确认的建议数、今日复核次数（含失败数）、今日分析 token；
-  - "待确认的建议"表：用户和当前级别、风险和趋势、总结（点开看分析过程）、建议框（采纳 / 驳回）；
-  - "最近的复核"表：所有用户的结果、费用和时间。
-  - 手机上建议框直接显示在卡片里，不收进"详情"。
+  - "待确认的建议"表：用户和当前级别、风险和趋势、总结（点开看分析过程）、动作框（AI 的理由，采纳 / 驳回）；
+  - "最近的复核"表：所有用户的结果、费用和时间，结果分为"AI 已执行（可撤销）""AI 建议（待确认）""越权已丢弃"等。
+  - 手机上动作框直接显示在卡片里，不收进"详情"。
 - **用户抽屉**：
-  - 第一张卡片是"AI 复核"：风险、趋势、总结、建议框（采纳 / 驳回 / 撤销，以及依据的记录链接）、下次触发条件、"重新复核"按钮；
+  - 第一张卡片是"AI 复核"：风险、趋势、总结、动作框（AI 的理由、状态、采纳 / 驳回 / 撤销、依据的记录链接）、下次触发条件、"重新复核"按钮；
   - 下方标签页改为"可疑记录"优先，其次是"分析记录"和"名单历史"；
-  - 原来的 `UserAnalysisBar.vue`（"按 AI 建议执行"）已删除，由建议框取代。
+  - 原来的 `UserAnalysisBar.vue`（"按 AI 建议执行"）已删除，由动作框取代。
 - **设置**：
-  - "AI 复核设置"页分三节：何时复核 / 结论如何生效 / 分析准则（折叠）；
+  - "AI 复核设置"页分三节：何时复核 / AI 的权限 / 分析准则（折叠）；
   - 资源类设置移到"高级 / AI 复核资源"（折叠）。
 - 新增 `?tab=watch&user=<id>` 深链。
-- 组件复用：建议框 `ProposalBox.vue` 和决策逻辑 `useProposal.ts` 由"AI 复核"页和抽屉共用；风险和建议状态的颜色在 `tones.ts` 中统一定义。
+- 组件复用：动作框 `ProposalBox.vue` 和决策逻辑 `useProposal.ts` 由"AI 复核"页和抽屉共用；风险和建议状态的颜色在 `tones.ts` 中统一定义。
 
 **`analysis_*` 设置项去向**
 
@@ -655,11 +686,11 @@ cd next/web && node node_modules/vite/bin/vite.js --mode mock
 | `analysis_review_before_expiry` | — | AI 复核设置 / 何时复核 | **新增** | true |
 | `analysis_cooldown_minutes` | — | AI 复核设置 / 何时复核 | **新增** | 60 |
 | `analysis_daily_limit` | — | AI 复核设置 / 何时复核 | **新增**（0 = 不限） | 200 |
-| `analysis_upgrade` | — | AI 复核设置 / 结论如何生效 | **新增**，取代 `analysis_allow_upgrade` | auto |
-| `analysis_downgrade` | — | 同上 | **新增**，取代 `analysis_allow_downgrade` | auto（与现状一致；D6 推荐第 3 期改为 suggest） |
-| `analysis_remove` | — | 同上 | **新增**，取代 `analysis_allow_remove` | suggest |
-| `analysis_allow_upgrade`、`analysis_allow_downgrade`、`analysis_allow_remove` | AI 分析 | 隐藏 | **退役**，第 4 期删除（原型 `UI/settingsForm.ts` 的 `EFFECT_KEYS`）：<br>· 新键没保存过时按旧值显示（true 为 auto，false 为 suggest）；<br>· 保存新键时同步写回旧键（auto 为 true，否则 false），供混跑期间的旧节点读取；<br>· 若旧键在此期间被别人改过，保存前先确认（`retiredConflicts`）；<br>· 旧节点上"不提出"按"只给建议"处理，设置页已说明 | — |
-| `analysis_guidelines` | AI 分析 | AI 复核设置 / 分析准则（折叠） | 保留；内置准则删去"后果"一段（A2） | "" |
+| `analysis_upgrade` | — | AI 复核设置 / AI 的权限 | **新增**，取代 `analysis_allow_upgrade`；AI 自主执行 / AI 只给建议 / 不允许（D6） | 已有安装沿用旧开关（未存过为 auto）；新装 auto |
+| `analysis_downgrade` | — | 同上 | **新增**，取代 `analysis_allow_downgrade` | 已有安装沿用旧开关（未存过为 auto）；新装 suggest |
+| `analysis_remove` | — | 同上 | **新增**，取代 `analysis_allow_remove` | 已有安装沿用旧开关（未存过为 suggest，因为旧默认为 false）；新装 suggest |
+| `analysis_allow_upgrade`、`analysis_allow_downgrade`、`analysis_allow_remove` | AI 分析 | 隐藏 | **退役**，第 4 期删除（原型 `UI/settingsForm.ts` 的 `EFFECT_KEYS`）：<br>· 新键没保存过时按旧值显示（true 为 auto，false 为 suggest）；<br>· 保存新键时同步写回旧键（auto 为 true，否则 false），供混跑期间的旧节点读取；<br>· 若旧键在此期间被别人改过，保存前先确认（`retiredConflicts`）；<br>· 旧节点上"不允许"按"只给建议"处理，设置页已说明 | — |
+| `analysis_guidelines` | AI 分析 | AI 复核设置 / 分析准则（折叠） | 保留；内置准则改正动作含义，授权的动作由系统追加（见"提示词"） | "" |
 | `analysis_timeout_ms`、`analysis_concurrency`、`analysis_context_kb`、`analysis_keep_per_user` | AI 分析 | 高级 / AI 复核资源（折叠） | 保留（资源类，很少改动） | 60000 / 2 / 64 / 20 |
 
 **后端改动点与迁移**
@@ -668,13 +699,17 @@ cd next/web && node node_modules/vite/bin/vite.js --mode mock
   - 设置：`M/settings.go` 解码新键，并兼容旧的 `allow_*`；
   - 触发：`M/store.go:313-368` 去掉"只有 observe 级计数"；运行期间的触发改为设置"待补跑"标记；
   - `M/analysis_queue.go:351` 在有"待补跑"时不清掉排队；
-  - 准则：`M/analysis_guidelines.go`；
+  - 准则与提示词：`M/analysis_guidelines.go` 改正动作含义；`M/analysis_prompt.go:340-370` 按授权追加"你可以决定的名单调整"一段；
   - 轮数上限：`M/analysis.go:300`。
-- `user_analyses` 加列 `risk`、`proposal_action`、`proposal_from`、`proposal_to`、`proposal_status`、`proposal_evidence`、`decided_by`、`decided_at`；`watchlist` 加"待补跑"的时间列。这些**需要迁移**，属于加列，按约定走 maintenance。
+- `user_analyses` 加列 `risk`、`proposal_action`、`proposal_from`、`proposal_to`、`proposal_status`、`proposal_reason`、`proposal_evidence`、`decided_by`、`decided_at`；`watchlist` 加"待补跑"的时间列。这些**需要迁移**，属于加列，按约定走 maintenance。
 - 新接口：
   - `GET /analyses?proposal=pending`（read）；
   - `POST /analyses/:id/decision {apply|reject|undo}`（manage），在 `block_subjects` 锁内校验状态和当前级别，写 `watch_events`。
-- `escalateWatch` 改为"建议生成加按设置执行"：同一份规则产出 `proposal`，`auto` 直接执行，`suggest` 写入 `pending`（`M/analysis_queue.go:376-427`）。
+- 删除 `escalationOf` 和 `decideEscalation`（`M/analysis_queue.go:219-273`）。`escalateWatch` 改为"闸门"：
+  - 读取 AI 提交的 `action` 和 `reason`；
+  - 先做硬性约束检查；
+  - 再按授权执行：`auto` 执行，`suggest` 写入 `pending`，`off` 写入 `dropped`（`M/analysis_queue.go:376-427`）。
+- `submit_analysis` 的参数 schema 按授权生成 `action` 枚举（`M/analysis.go:53-72`、`M/analysis_tools.go:38-87`）。
 - 发版顺序（rolling 时的注意）：新节点写 `proposal_*` 时，旧节点只是读不到，没有坏处。
 - **能力开关：** 状态接口的 `runtime.features` 列出全部节点都已实现的能力（原型 `UI/types.ts` `Runtime.features`）：
   - `analyses_list`：跨用户的复核列表；
@@ -693,20 +728,20 @@ cd next/web && node node_modules/vite/bin/vite.js --mode mock
 - **第 1 期（无迁移）：**
   - 新增只读接口 `GET /analyses`（read，跨用户、可分页），并加上能力 `analyses_list`；
   - 侧栏"AI 复核"视图先只读，展示最近的复核，用现有的 `user_analyses` 数据；
-  - 抽屉里的建议框兼容旧的 `suggestion`（见上文"与当前后端兼容"）；
+  - 抽屉里的动作框兼容旧的 `suggestion`（见上文"与当前后端兼容"）；
   - 抽屉卡片调整顺序；
   - 设置拆分并改文案；
   - `?user=` 深链；
-  - 准则去掉"后果"一段；
+  - 改正内置准则里错误的动作含义（"拦截级直接移出"）；
   - 修复手动接口的 202 / 409 不一致。
-- **第 3 期（与 events 加列放在同一个 maintenance 窗口）：** 建议模型（`proposal_*` 列、决策接口、撤销）、新的触发方式与上限、`allow_*` 退役。
+- **第 3 期（与 events 加列放在同一个 maintenance 窗口）：** 由 AI 决定动作加授权闸门（`submit_analysis` 的 `action` 和 `reason`、`proposal_*` 列、决策接口、撤销、`dropped` 状态）、按授权生成提示词、新的触发方式与上限、`allow_*` 退役。默认值按上文"默认值"执行，已有安装的行为不变。
 
 ### 9.5 原型与截图
 
 - 新增文件：
   - `UI/AiReviewTab.vue`：AI 复核页；
   - `UI/UserAiReview.vue`：抽屉卡片；
-  - `UI/ProposalBox.vue`：建议框；
+  - `UI/ProposalBox.vue`：动作框（AI 决定的动作、理由与状态）；
   - `UI/useProposal.ts`：决策逻辑。
 - 修改的文件：
   - `UI/types.ts`：`Risk`、`Proposal`、`AnalysisRow`；
@@ -725,7 +760,7 @@ cd next/web && node node_modules/vite/bin/vite.js --mode mock
 | 复核结果与待确认建议 | `ai-desktop-review` | `ai-dark-review` | `ai-mobile-review` |
 | 采纳的确认框 | `ai-desktop-apply-confirm` | — | — |
 | 用户详情里的复核卡片（待确认） | `ai-desktop-user-pending` | `ai-dark-user-pending` | `ai-mobile-user-pending` |
-| 用户详情（已自动执行，可撤销） | `ai-desktop-user-auto-applied` | — | — |
+| 用户详情（AI 已执行，可撤销） | `ai-desktop-user-auto-applied` | — | — |
 | 用户详情（排队中 + 重新复核入口） | `ai-desktop-user-queued` | — | — |
 | AI 复核设置 | `ai-desktop-settings` | `ai-dark-settings` | `ai-mobile-settings` |
 | 高级 / AI 复核资源 | `ai-desktop-advanced-resources` | — | — |
@@ -743,7 +778,7 @@ cd next/web && node node_modules/vite/bin/vite.js --mode mock
 | 高 | 新增的 `?user=` 写回会与切换分节的 push 竞争，导致导航被取消（例如抽屉里"查看记录"、从 AI 复核页打开用户时） | 已修：抽屉完全由地址驱动（`?tab=watch&user=`），打开和关闭都只改地址；`useSection` 在真正切换分节时去掉 `user` 和 `record`，`?user=` 链接默认打开观察名单；删除 `preset` 通道；补了测试 |
 | 高 | 当前后端的分析没有 `proposal`，抽屉对每次分析都显示"无需调整"，原来的"按 AI 建议执行"也没了 | 已修：`proposalOf()` 把旧的 `suggestion` 转成可采纳的建议，经名单接口执行（截图 `ai-desktop-user-legacy`） |
 | 高 | 当前后端没有 `GET /analyses`，AI 复核页对所有人报错 | 已修：按能力 `analyses_list` 开放，没有时显示说明（`ai-desktop-unsupported`）；设计在第 1 期加入该接口 |
-| 中 | 没保存过旧开关时，降级显示为"只给建议"，实际节点却会自动执行 | 已修：`analysis_downgrade` 的 schema 默认值改为 auto，与 Go 默认一致；D6 的改动推迟到第 3 期 |
+| 中 | 没保存过旧开关时，降级显示为"只给建议"，实际节点却会自动执行 | 已修：`analysis_downgrade` 的 schema 默认值改为 auto，与 Go 默认一致（D6 定稿后即为最终方案：默认沿用旧开关） |
 | 中 | 写回旧开关时，会无提示地覆盖别人同时做的修改；"不提出"在旧节点上会退化 | 已修：新增 `retiredConflicts` 进入确认流程；设置页说明了退化 |
 | 中 | 新的触发设置在当前后端上不生效，抽屉却总显示"到期前复核" | 已修：设置页注明需要新版本；抽屉只显示后端给出的 `review_at` |
 | 中 | 在一处做出决定后，另一处的列表（观察名单行、AI 复核页）不刷新 | 已修：共享的 `proposalsVersion`，各视图收到后重载 |

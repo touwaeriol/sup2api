@@ -1087,13 +1087,13 @@
   "analysis_upgrade": {
     "ui:section": {
       "title": {
-        "en": "How conclusions take effect",
-        "zh": "结论如何生效"
+        "en": "What the AI may do",
+        "zh": "AI 的权限"
       },
       "page": "analysis",
       "description": {
-        "en": "Each kind of change can be applied automatically, proposed for a moderator (decided on the AI review page) or not proposed. Every automatic change can be undone. Nodes not yet upgraded only know automatic or not: there, Off works like Propose.",
-        "zh": "每种名单调整可以自动执行、只给建议（在“AI 复核”页等你采纳或驳回），或不提出。自动执行的调整都可以撤销。尚未升级的节点只认“自动执行”与否：“不提出”在那里按“只给建议”处理。"
+        "en": "During a review the AI itself decides whether to change the watch list, and says why. Here you set its permission for each change: AI decides (it changes the list; undo any time), AI proposes (decided on the AI review page) or Not allowed (the AI is not offered it; should it still ask, the request is dropped and the review says so). Every change goes into the watch history. Existing sites keep their three former switches: on means AI decides, off means AI proposes. Nodes not yet upgraded only know whether the AI decides: there, Not allowed works like AI proposes.",
+        "zh": "复核时由 AI 自己判断要不要调整名单，并给出理由。这里决定它对每种调整的权限：AI 自主执行（直接调整，可随时撤销）、AI 只给建议（在“AI 复核”页等你采纳或驳回）、不允许（AI 看不到这个选项；万一提出也会丢弃，并在复核记录里注明）。每次调整都记入名单历史。已有站点沿用原来的三个开关：开着的是 AI 自主执行，关着的是 AI 只给建议。尚未升级的节点只认是否自主执行：“不允许”在那里按“只给建议”处理。"
       }
     },
     "ui:widget": "segmented",
@@ -1103,21 +1103,21 @@
     },
     "ui:enumNames": [
       {
-        "en": "Automatic",
-        "zh": "自动执行"
+        "en": "AI decides",
+        "zh": "AI 自主执行"
       },
       {
-        "en": "Propose",
-        "zh": "只给建议"
+        "en": "AI proposes",
+        "zh": "AI 只给建议"
       },
       {
-        "en": "Off",
-        "zh": "不提出"
+        "en": "Not allowed",
+        "zh": "不允许"
       }
     ],
     "ui:help": {
-      "en": "Users on the background-only list are never raised.",
-      "zh": "“只后台审核”名单里的用户不会被升级。"
+      "en": "Users on the background-only list are never raised. Entries the AI raises expire after the watch period.",
+      "zh": "“只后台审核”名单里的用户不会被升级。AI 升级的条目按观察期到期。"
     }
   },
   "analysis_downgrade": {
@@ -1128,21 +1128,21 @@
     },
     "ui:enumNames": [
       {
-        "en": "Automatic",
-        "zh": "自动执行"
+        "en": "AI decides",
+        "zh": "AI 自主执行"
       },
       {
-        "en": "Propose",
-        "zh": "只给建议"
+        "en": "AI proposes",
+        "zh": "AI 只给建议"
       },
       {
-        "en": "Off",
-        "zh": "不提出"
+        "en": "Not allowed",
+        "zh": "不允许"
       }
     ],
     "ui:help": {
-      "en": "Users on the always-check-first list are never lowered. The reviewed records are user text that may talk the model into leniency, so proposing is recommended.",
-      "zh": "“总是先审”名单里的用户不会被降级。被复核的记录是用户原文，可能诱导模型给出宽松结论，推荐只给建议。"
+      "en": "Users on the always-check-first list are never lowered.",
+      "zh": "“总是先审”名单里的用户不会被降级。"
     }
   },
   "analysis_remove": {
@@ -1153,21 +1153,21 @@
     },
     "ui:enumNames": [
       {
-        "en": "Automatic",
-        "zh": "自动执行"
+        "en": "AI decides",
+        "zh": "AI 自主执行"
       },
       {
-        "en": "Propose",
-        "zh": "只给建议"
+        "en": "AI proposes",
+        "zh": "AI 只给建议"
       },
       {
-        "en": "Off",
-        "zh": "不提出"
+        "en": "Not allowed",
+        "zh": "不允许"
       }
     ],
     "ui:help": {
-      "en": "Users at the enforce level are only proposed a downgrade; nothing is proposed while they have recent high-severity records.",
-      "zh": "拦截级用户只会被建议降级，不会直接移出；近期有高严重度记录时不提出。"
+      "en": "Users on the always-check-first list are never taken off.",
+      "zh": "“总是先审”名单里的用户不会被移出。"
     }
   },
   "analysis_review_before_expiry": {

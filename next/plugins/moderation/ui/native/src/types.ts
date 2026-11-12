@@ -726,16 +726,17 @@ export interface Analysis {
 }
 
 /**
- * The AI review redesign (prototype, design §9): an analysis ends in at most
- * one proposal for the user's watch entry. Each kind of change is applied
- * automatically, waits for a moderator, or is not proposed at all
- * (analysis_upgrade / _downgrade / _remove); every applied change can be
- * undone, and the watch history links it to the analysis.
+ * The AI review redesign (prototype, design §9, D6 / D8 confirmed): the AI
+ * decides at most one change to the user's watch entry and says why. The
+ * permission of that kind of change (analysis_upgrade / _downgrade /
+ * _remove: auto | suggest | off) gates it: auto applies it (undoable),
+ * suggest waits for a moderator, off drops it and the review says so
+ * (dropped). The watch history links every change to the analysis.
  */
 export type Risk = 'low' | 'medium' | 'high'
 export const PROPOSAL_ACTIONS = ['upgrade', 'downgrade', 'remove'] as const
 export type ProposalAction = (typeof PROPOSAL_ACTIONS)[number]
-export type ProposalStatus = 'pending' | 'applied' | 'auto_applied' | 'rejected' | 'expired' | 'undone'
+export type ProposalStatus = 'pending' | 'applied' | 'auto_applied' | 'rejected' | 'expired' | 'undone' | 'dropped'
 export interface Proposal {
   action: ProposalAction
   /** null = off the watch list */
@@ -744,6 +745,8 @@ export interface Proposal {
   status: ProposalStatus
   /** records the proposal rests on (the AI's violations) */
   evidence_ids: number[]
+  /** why the AI decides this change (its own words) */
+  reason?: string
   decided_by?: number | null
   decided_at?: string | null
   /** Made in the console from a suggestion of a backend without proposals: applied through the watch list API, never rejected or undone. */

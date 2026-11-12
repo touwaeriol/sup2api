@@ -560,7 +560,7 @@
     },
     "analysis_upgrade": {
       "type": "string",
-      "title": "AI upgrade",
+      "title": "AI may raise to enforce",
       "enum": [
         "auto",
         "suggest",
@@ -570,17 +570,17 @@
     },
     "analysis_downgrade": {
       "type": "string",
-      "title": "AI downgrade",
+      "title": "AI may lower to observe",
       "enum": [
         "auto",
         "suggest",
         "off"
       ],
-      "default": "auto"
+      "default": "suggest"
     },
     "analysis_remove": {
       "type": "string",
-      "title": "AI removal",
+      "title": "AI may take off the watch list",
       "enum": [
         "auto",
         "suggest",
