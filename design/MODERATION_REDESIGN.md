@@ -32,7 +32,7 @@
 | D4 | 审核失败时的处理 | **默认 `open`（放行并记为出错，与现状一致）**，可选 `close_pre`（先审的请求返回 503） | 默认 `close_pre`：更安全，但上游一抖动就会拒绝用户 |
 | D5 | 白名单、黑名单是否并入观察名单 | **本期只改名**（"只后台审核" / "总是先审"），第 4 期再并入观察名单，作为"锁定条目" | 立即合并：要迁移数据，而且 AI 分析和自动观察的规则都要一起改 |
 | D6 | AI 的权限（§9.4）——**用户已确认** | **升级、降级、移出三项各自三档：AI 自主执行 / AI 只给建议 / 不允许**。已有安装沿用原来的 `analysis_allow_*`（开为自主执行，关为只给建议），升级后行为不变，用户的站点三项都是自主执行。新装推荐：升级自主，降级和移出只给建议（理由见 §9.4）。所有执行都可以撤销，并记入名单历史 | （已定） |
-| D7 | AI 复核的触发时机（§9） | **每 N 次违规（observe、enforce 都计）+ 名单到期前一天 + 手动**；同一用户最短间隔 60 分钟，期间的触发顺延而不是丢掉；全站每天上限 200 次 | 维持现状：只按违规次数触发，且只有 observe 级计数（默认级别为拦截时 enforce 级也计）；分析运行期间的触发会丢 |
+| D7 | AI 复核的触发与数量限制（§9.4）——**用户已确认：AI 复核不设数量限制** | 触发：每 N 次违规（observe、enforce 都计）+ 名单到期前一天 + 手动。**不设**同一用户最短间隔、每日上限和分析并发上限（`analysis_concurrency` 退役）。保留两条正确性规则：同一用户同一时刻只跑一次；运行期间来的触发合并，跑完立刻补跑一次。成本由每 N 次违规这个触发频率决定 | （已定） |
 | D8 | 由谁决定名单调整（§9.4）——**用户已确认** | **由 AI 自主判断**：AI 在提交里给出它决定的动作和理由，可以附带风险等级作说明。服务端不再按规则推出动作，只按 D6 的授权做闸门：自主执行就执行，只给建议就转成待确认，不允许就丢弃并在复核记录里注明"越权已丢弃" | （已定） |
 
 ---
@@ -371,6 +371,37 @@
 
 ---
 
+### 4.9 可选后续：审核本身的 `max_concurrency` 是否也默认不限（未改，待定）
+
+D7 只针对 AI 复核。审核本身的并发设置 `max_concurrency` 这次**不改**，这里只列出风险，供以后决定。
+
+**现状**（行号指 `ed988819c`）
+
+- `max_concurrency`（默认 16，解码时夹到 1–256，`M/settings.go:365`）同时决定两件事：
+  - 后台审核的工作协程数，即 post 池（`M/plugin.go:207`、:451-459）；
+  - 每个节点同时进行的审核器调用名额（`M/plugin.go:166`）。
+- 先审另有名额 `max(64, 4×max_concurrency)`（`M/plugin.go:167`、:420）。
+- 每次审核器调用都要先拿到名额（`M/engine.go:278`）；在渠道超时内等不到，这个审核器就记为超时出错（:279-281）。
+- 内存保护与此独立：
+  - `max_inflight_mb`：处理中的请求超过这个字节数时，先审的请求返回 503，后台审核的请求直接放行（`M/hook.go:130-139`）；
+  - `queue_size`：后台队列满时丢弃并放行（`M/hook.go:149-151`）。
+
+**如果改为 0 = 不限**
+
+- 改动点：
+  - `acquire` 在不限时直接返回（`M/plugin.go:428-441`）；
+  - post 池改为每个任务一个 goroutine，正在运行加排队的总数仍由 `queue_size` 封顶（`M/plugin.go:451-459`）；
+  - 解码时允许 0（`M/settings.go:365`）；
+  - 不限时先审也不再有单独的名额。
+- 风险：
+  - **上游限流**：审核器调用**没有任何重试**。429 会直接成为出错（`M/upstream.go:98` 的 `ErrType`）。这一级记为失败并跳过，结果是失败放行（§4.6）。不限之后，突发流量会把审核器渠道打满，**放行的请求随之增多**。这是最大的风险。
+  - **内存**：`max_inflight_mb` 和 `queue_size` 仍然有效，必须保留，它们才是内存的真正保护。
+  - **goroutine 数量**：
+    - 先审的 goroutine 数等于网关的并发请求数，本来就由网关控制；
+    - 后台审核的 goroutine 数由 `queue_size` 封顶；
+    - 每个任务还会对每个审核器各开一个 goroutine（`M/flow.go:494-496`），这个数量不变。
+- 建议：如果要改，先给审核器调用加上与 AI 复核相同的 429 重试（按 `Retry-After`），或者在渠道层面加限流，然后再把默认值改为不限。
+
 ## 5. 分期实施计划
 
 每期都可以独立上线。
@@ -507,7 +538,7 @@ cd next/web && node node_modules/vite/bin/vite.js --mode mock
   - 所有执行都可以撤销，并在名单历史里关联 `analysis_id`。
   - 侧栏"名单与处置"下新增"AI 复核"视图（待确认的建议 + 最近的复核）；用户详情抽屉的第一张卡片就是该用户的复核结论；设置拆成"AI 复核设置"和"高级 / AI 复核资源"。
 - **原型已经实现上述界面**，后端用 mock；截图是 `design/shots/ai-*.png`。
-- **决策点** D6、D8 用户已确认；D7 和 D1–D5 还在等回复，所以本节只做原型。
+- **决策点** D6、D7、D8 用户已确认；D1–D5 还在等回复，所以本节只做原型。
 
 ### 9.1 "AI 趋势分析"具体指什么
 
@@ -595,7 +626,7 @@ cd next/web && node node_modules/vite/bin/vite.js --mode mock
 | A3 | **触发会丢、会偏**：分析运行期间到达的触发被合并后清掉；失败不重试，计数却已清零；手动排队也清零自动计数；enforce 级条目的误报撤不回计数；新进名单、到期前都不复核 | `M/store.go:362-364`、`M/analysis_queue.go:351`、:454-455、`M/routes.go:707` |
 | A4 | **结论不可执行、不可追溯**：没有"待确认"状态和驳回动作；自动动作无法一键撤销；跳过的动作（`*_skipped`、`auto_not_allowed`）只在名单历史里留一行 | `M/analysis_queue.go:201-208`；CONTRACTS.md:5659 |
 | A5 | **与名单、封禁规则重叠**：AI 升级会变成永久 enforce，与人工有期限的规则不同；AI 判误报不影响封禁和违规计数；白名单用户被分析却只能降级 | `M/analysis_queue.go:396-406`、`M/store.go:443` |
-| A6 | **成本没有上限**：没有轮数上限，没有每日上限，没有同一用户的最短间隔 | `M/analysis.go:300` |
+| A6 | **单次运行没有轮数上限**，只受超时约束（D7 定稿后，数量类限制按用户要求不设，见 §9.4"触发"） | `M/analysis.go:300` |
 | A7 | **界面信息层级混乱**：结论分散在五处；抽屉里最重要的"建议"夹在概况和标签页之间；侧栏的"名单与处置 / AI 分析"只是一个设置页，没有可查看结论的视图 | §9.2 界面 |
 | A8 | **与新信息架构不契合**：新侧栏把"名单与处置"作为处理人的地方，AI 分析却只占一个设置页；三个 `allow_*` 布尔开关与两个名单的交互，在"名单规则"页和"AI 分析"页两处都要理解 | §1.1、§3 |
 | A9 | **小问题**：手动接口在"已排队"时返回 202 但什么也不做，CONTRACTS 写的是 409；分析被裁剪后记录上的 `ai_analysis_id` 悬空；不再拥有认领的节点也会写入分析行 | `M/analysis_queue.go:455`、:499；CONTRACTS.md:5633；`M/analysis_queue.go:304`、:329 |
@@ -660,13 +691,32 @@ cd next/web && node node_modules/vite/bin/vite.js --mode mock
 
 **触发**（D7）
 
-- 每 N 次违规触发，observe 和 enforce 级都计数。
-- 名单到期前一天复核一次，决定是到期移出还是延长。
-- 手动触发；在"AI 复核"页上可以批量触发（后续）。
-- 同一用户最短间隔 `analysis_cooldown_minutes`（默认 60）。**间隔期内到达的触发记为"待补跑"，不清零、不丢**（A3）。
-- 失败后按退避重试 1 次。
-- 全站每天自动复核上限 `analysis_daily_limit`（默认 200）。
-- 运行时设轮数上限（固定 12 轮），解决 A6。
+**用户已确认：AI 复核不设数量限制。** 原则是能删就删。
+
+- **触发条件**：
+  - 每 N 次违规，observe 和 enforce 级都计数；
+  - 名单到期前一天复核一次，决定是到期移出还是延长；
+  - 手动触发；在"AI 复核"页上可以批量触发（后续）。
+- **不设数量限制**：
+  - 不新增"同一用户最短间隔"和"每日上限"；
+  - 现有的分析并发上限 `analysis_concurrency`（每个节点 2 个，`M/analysis_queue.go:85`）退役，排队的复核立即开跑；
+  - 没有单独的分析队列上限：排队记录就在名单行上，每个用户最多一条，所以队列天然不会超过名单人数。
+- **保留两条正确性规则**（去重，不是限流，触发不会因此等待）：
+  1. 同一用户同一时刻只跑一次：沿用名单行上的认领和令牌（`M/analysis_queue.go:123-158`）。
+  2. 运行期间来的触发合并为一次"待补跑"，跑完立刻再跑一次，不丢。这修复了 A3：现在运行中的触发会在结束时被清掉（`M/store.go:362-364`、`M/analysis_queue.go:351`）。
+- 失败后按退避重试 1 次，失败本身不清零违规计数（A3）。
+- **单次运行的轮数上限：保留为不可配置的内部常量 `maxSteps = 12`，界面不展示。** 它不是限流，是防止 agent 死循环的健壮性兜底。
+  - 只靠超时（默认 60 s）不够：一个很快的模型如果一直调工具，60 秒里可以调用几十次，而且每一步都要重发不断变长的上下文（最多 `analysis_context_kb`）。
+  - 正常的复核用 3–8 步（例如 trace 里的 5 步），12 步留有余量。
+  - 达到上限时，与上下文超出预算时一样，强制下一步提交（`M/analysis.go:306-307` 已有这个机制）。
+
+**不限之后的风险与兜底**
+
+- **成本**：由触发频率决定。每 N 次违规才触发一次（`analysis_every_violations`，默认 30），名单到期前最多再触发一次，加上手动触发。同一用户永远不会并行跑两次，运行期间的触发也只合并成一次补跑。所以复核次数的上限大约是"违规数 / N + 名单人数 + 手动次数"。想降低成本就调大 N，或者关掉"到期前复核"。
+- **上游 429 和 5xx**：现有逻辑是单步重试 1 次，优先按 `Retry-After` 等待（`M/analysis.go:247-280`）。仍然失败时，这次复核记为失败，按上一条退避重试 1 次，再失败就等下一次触发。
+  - 突发时，例如渠道恢复后大量排队的复核同时开跑，可能连续遇到 429。之后由每次复核自己的重试错开，不会丢失触发，计数也不清零。
+  - 如果以后发现某个渠道经常被打满，优先在渠道层面限流（渠道属于共享资源，限流放在那里，审核器也能受益），而不是恢复一个复核专用的并发数。
+- **内存和 goroutine**：每个运行中的复核是一个 goroutine，加上一份最多 `analysis_context_kb`（默认 64 KB）的上下文；名单 1 000 人全部同时运行时约 64 MB。实际同时运行数不会超过名单人数（每人最多一次）。
 
 **界面**（原型已实现）
 
@@ -692,14 +742,14 @@ cd next/web && node node_modules/vite/bin/vite.js --mode mock
 | `analysis_channel_id` | AI 分析 | AI 复核设置 / 何时复核 | 保留（文案"AI 分析渠道"） | 0 |
 | `analysis_every_violations` | AI 分析 | AI 复核设置 / 何时复核 | 保留，改名"每多少次违规复核一次"；observe 和 enforce 都计数（后端） | 30 |
 | `analysis_review_before_expiry` | — | AI 复核设置 / 何时复核 | **新增** | true |
-| `analysis_cooldown_minutes` | — | AI 复核设置 / 何时复核 | **新增** | 60 |
-| `analysis_daily_limit` | — | AI 复核设置 / 何时复核 | **新增**（0 = 不限） | 200 |
+| `analysis_cooldown_minutes`、`analysis_daily_limit` | — | — | **不新增**（D7：不设数量限制） | — |
 | `analysis_upgrade` | — | AI 复核设置 / AI 的权限 | **新增**，取代 `analysis_allow_upgrade`；AI 自主执行 / AI 只给建议 / 不允许（D6） | 已有安装沿用旧开关（未存过为 auto）；新装 auto |
 | `analysis_downgrade` | — | 同上 | **新增**，取代 `analysis_allow_downgrade` | 已有安装沿用旧开关（未存过为 auto）；新装 suggest |
 | `analysis_remove` | — | 同上 | **新增**，取代 `analysis_allow_remove` | 已有安装沿用旧开关（未存过为 suggest，因为旧默认为 false）；新装 suggest |
 | `analysis_allow_upgrade`、`analysis_allow_downgrade`、`analysis_allow_remove` | AI 分析 | 隐藏 | **退役**，第 4 期删除（原型 `UI/settingsForm.ts` 的 `EFFECT_KEYS`）：<br>· 新键没保存过时按旧值显示（true 为 auto，false 为 suggest）；<br>· 保存新键时同步写回旧键（auto 为 true，否则 false），供混跑期间的旧节点读取；<br>· 若旧键在此期间被别人改过，保存前先确认（`retiredConflicts`）；<br>· 旧节点上"不允许"按"只给建议"处理，设置页已说明 | — |
 | `analysis_guidelines` | AI 分析 | AI 复核设置 / 分析准则（折叠） | 保留；内置准则改正动作含义，授权的动作由系统追加（见"提示词"） | "" |
-| `analysis_timeout_ms`、`analysis_concurrency`、`analysis_context_kb`、`analysis_keep_per_user` | AI 分析 | 高级 / AI 复核资源（折叠） | 保留（资源类，很少改动） | 60000 / 2 / 64 / 20 |
+| `analysis_concurrency` | AI 分析 | 隐藏 | **退役**（D7：不设并发上限）。schema 中保留为隐藏键，只是为了让已存的值仍能通过核心的校验；第 4 期删除 | — |
+| `analysis_timeout_ms`、`analysis_context_kb`、`analysis_keep_per_user` | AI 分析 | 高级 / AI 复核资源（折叠） | 保留：超时与上下文预算是单次运行的健壮性设置，保留条数是存储设置，都不是数量限制 | 60000 / 64 / 20 |
 
 **后端改动点与迁移**
 
@@ -708,8 +758,9 @@ cd next/web && node node_modules/vite/bin/vite.js --mode mock
   - 触发：`M/store.go:313-368` 去掉"只有 observe 级计数"；运行期间的触发改为设置"待补跑"标记；
   - `M/analysis_queue.go:351` 在有"待补跑"时不清掉排队；
   - 准则与提示词：`M/analysis_guidelines.go` 改正动作含义；`M/analysis_prompt.go:340-370` 按授权追加"你可以决定的名单调整"一段；
-  - 轮数上限：`M/analysis.go:300`。
-- `user_analyses` 加列 `risk`、`proposal_action`、`proposal_from`、`proposal_to`、`proposal_status`、`proposal_reason`、`proposal_evidence`、`decided_by`、`decided_at`；`watchlist` 加"待补跑"的时间列。这些**需要迁移**，属于加列，按约定走 maintenance。
+  - 轮数上限：`M/analysis.go:300` 的循环加上内部常量 `maxSteps = 12`，达到上限时强制提交；
+  - 不设并发：`M/analysis_queue.go:85` 的 `free` 计算去掉 `AnalysisConcurrency`，认领到的都立即运行；`M/settings.go:418` 不再解码 `analysis_concurrency`。
+- `user_analyses` 加列 `risk`、`proposal_action`、`proposal_from`、`proposal_to`、`proposal_status`、`proposal_reason`、`proposal_evidence`、`decided_by`、`decided_at`；`watchlist` 加"待补跑"标记列（运行期间来的触发写这一列，跑完若有就立刻再排一次）。这些**需要迁移**，属于加列，按约定走 maintenance。
 - 新接口：
   - `GET /analyses?proposal=pending`（read）；
   - `POST /analyses/:id/decision {apply|reject|undo}`（manage），在 `block_subjects` 锁内校验状态和当前级别，写 `watch_events`。
@@ -741,8 +792,9 @@ cd next/web && node node_modules/vite/bin/vite.js --mode mock
   - 设置拆分并改文案；
   - `?user=` 深链；
   - 改正内置准则里错误的动作含义（"拦截级直接移出"）；
-  - 修复手动接口的 202 / 409 不一致。
-- **第 3 期（与 events 加列放在同一个 maintenance 窗口）：** 由 AI 决定动作加授权闸门（`submit_analysis` 的 `action` 和 `reason`、`proposal_*` 列、决策接口、撤销、`dropped` 状态）、按授权生成提示词、新的触发方式与上限、`allow_*` 退役。默认值按上文"默认值"执行，已有安装的行为不变。
+  - 修复手动接口的 202 / 409 不一致；
+  - 去掉分析并发上限，加上内部轮数上限（都不需要迁移）。
+- **第 3 期（与 events 加列放在同一个 maintenance 窗口）：** 由 AI 决定动作加授权闸门（`submit_analysis` 的 `action` 和 `reason`、`proposal_*` 列、决策接口、撤销、`dropped` 状态）、按授权生成提示词、新的触发方式（到期前复核、待补跑）、`allow_*` 和 `analysis_concurrency` 退役。默认值按上文"默认值"执行，已有安装的行为不变。
 
 ### 9.5 原型与截图
 
@@ -830,3 +882,14 @@ cd next/web && node node_modules/vite/bin/vite.js --mode mock
 | 低 | `wasOn` 重复了默认值 | 已删除，改用 schema 默认值，单测检查新旧一致；mock 的 `permission()` 注明与设置页同一规则 |
 | 低 | "越权已丢弃"与驳回、撤销同色 | 已改为 danger 色 |
 | 低 | 界面上看不到推荐值 | 每一项的说明都写了推荐和理由 |
+
+### 9.8 D7 定稿（AI 复核不设数量限制）
+
+- **删除**：原型里新加的"同一用户最短间隔"和"每日上限"（设置页控件、schema、文档）都删掉，不作为"0 = 不限"的选项保留。
+- **退役**：`analysis_concurrency` 改为隐藏，已存的值仍能通过校验，后端不再读取。
+- **保留**：单次超时、上下文预算和保留条数，这些都不是数量限制。
+- **正确性规则保留**：同一用户同一时刻只跑一次；运行期间的触发合并，跑完立刻补跑一次。
+- **内部常量**：单次运行的轮数上限 12 作为不可配置的内部常量（理由见 §9.4"触发"）。
+- **审核本身的 `max_concurrency` 未改**，列为可选后续，风险评估见 §4.9。
+- **审查**：本次只改了设置表单、Go 和 TS 测试里的隐藏键清单、文档和截图，没有业务逻辑或 Go 代码改动，所以只做了自审。
+- **重拍的截图**：`ai-desktop-settings`、`ai-mobile-settings`、`ai-dark-settings`、`ai-desktop-advanced-resources`、`desktop-settings-advanced`。整页截图时让底部的保存栏放到页面末尾，不再盖住内容。

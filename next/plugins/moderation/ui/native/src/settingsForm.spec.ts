@@ -7,7 +7,7 @@ import { mergeSettings, type PageValues } from './settingsMerge'
 
 const MASK = '******'
 /** The converted 0.1 fields and the keys retired in 0.8.0: in the schema (the core validates and masks them), never on the page. */
-const LEGACY = ['base_url', 'api_key', 'model', 'system_prompt', 'categories', 'tool_choice', 'max_turns', 'temperature', 'max_tokens', 'timeout_ms', 'on_error', 'sample_rate', 'group_ids', 'model_patterns', 'retention_days', 'exempt_user_ids', 'cache_ttl_seconds', 'analysis_allow_upgrade', 'analysis_allow_downgrade', 'analysis_allow_remove']
+const LEGACY = ['base_url', 'api_key', 'model', 'system_prompt', 'categories', 'tool_choice', 'max_turns', 'temperature', 'max_tokens', 'timeout_ms', 'on_error', 'sample_rate', 'group_ids', 'model_patterns', 'retention_days', 'exempt_user_ids', 'cache_ttl_seconds', 'analysis_allow_upgrade', 'analysis_allow_downgrade', 'analysis_allow_remove', 'analysis_concurrency']
 
 const sections = settingSections(schema, ui)
 const zh = (v: unknown) => (v as { zh: string }).zh

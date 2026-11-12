@@ -592,20 +592,6 @@
       "type": "boolean",
       "title": "Review before expiry",
       "default": true
-    },
-    "analysis_cooldown_minutes": {
-      "type": "integer",
-      "title": "Review cooldown (minutes)",
-      "minimum": 0,
-      "maximum": 1440,
-      "default": 60
-    },
-    "analysis_daily_limit": {
-      "type": "integer",
-      "title": "Reviews per day",
-      "minimum": 0,
-      "maximum": 100000,
-      "default": 200
     }
   }
 }

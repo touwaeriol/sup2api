@@ -20,8 +20,6 @@
     "analysis_channel_id",
     "analysis_every_violations",
     "analysis_review_before_expiry",
-    "analysis_cooldown_minutes",
-    "analysis_daily_limit",
     "analysis_upgrade",
     "analysis_downgrade",
     "analysis_remove",
@@ -45,12 +43,12 @@
     "max_inflight_mb",
     "ttft_timeout_ms",
     "analysis_timeout_ms",
-    "analysis_concurrency",
     "analysis_context_kb",
     "analysis_keep_per_user",
     "error_rate_alert_percent",
     "notify_webhook_url",
     "notify_webhook_secret",
+    "analysis_concurrency",
     "analysis_allow_upgrade",
     "analysis_allow_downgrade",
     "analysis_allow_remove",
@@ -218,8 +216,8 @@
       "zh": "每多少次违规复核一次"
     },
     "ui:help": {
-      "en": "Violations of an observe-level user (one per request) that queue an AI analysis; the count then restarts. With enforce as the default level, enforce-level users count too. 0 = only manual analyses.",
-      "zh": "观察级用户每累计这么多次违规（同一请求只计一次）就自动排队分析一次，然后重新计数。默认级别为拦截时，拦截级用户也计数。0 表示只手动分析。"
+      "zh": "名单用户（观察级、拦截级都计）每累计这么多次违规（同一请求只计一次）就复核一次，然后重新计数。0 表示只手动复核。拦截级也计数需要新版本插件（设计第 3 期）。",
+      "en": "A watched user (observe or enforce) is reviewed after this many violations (one per request), then the count starts again. 0 = manual reviews only. Counting at the enforce level needs a newer plugin (design phase 3)."
     },
     "ui:options": {
       "unit": {
@@ -282,8 +280,8 @@
       },
       "page": "analysis",
       "description": {
-        "en": "Only users on the watch list are reviewed. Each review calls the analysis channel; its cost counts as analysis. Review before expiry, the interval and the daily limit need a newer plugin (design phase 3).",
-        "zh": "复核只针对观察名单上的用户。每次复核会调用一次分析渠道，费用计入“分析”。到期前复核、最短间隔和每日上限需要新版本插件（设计第 3 期）才生效。"
+        "en": "Only users on the watch list are reviewed, with no limit on how many: a user has one review at a time, triggers that arrive meanwhile are merged and run right after it. Each review calls the analysis channel and its cost counts as analysis; the triggers below decide how often. Review before expiry needs a newer plugin (design phase 3).",
+        "zh": "复核只针对观察名单上的用户，不设数量上限：同一用户同一时刻只跑一次，期间来的触发合并，跑完立刻补跑一次。每次复核会调用分析渠道，费用计入“分析”，多少由下面的触发条件决定。到期前复核需要新版本插件（设计第 3 期）才生效。"
       }
     }
   },
@@ -917,9 +915,10 @@
     }
   },
   "analysis_concurrency": {
+    "ui:widget": "hidden",
     "ui:title": {
-      "en": "Concurrent analyses per node",
-      "zh": "每个节点同时分析数"
+      "en": "Analyses per node (retired)",
+      "zh": "每个节点同时分析数（已停用）"
     }
   },
   "analysis_context_kb": {
@@ -1179,32 +1178,6 @@
     "ui:help": {
       "en": "Review an entry one day before it expires, to let it expire or extend it.",
       "zh": "名单条目到期前一天复核一次，决定是到期移出还是延长。"
-    }
-  },
-  "analysis_cooldown_minutes": {
-    "ui:title": {
-      "en": "Minimum interval per user",
-      "zh": "同一用户最短间隔"
-    },
-    "ui:help": {
-      "en": "Two automatic reviews of a user are at least this far apart; a trigger in between runs after it instead of being lost.",
-      "zh": "同一用户两次自动复核至少相隔这么久；期间达到触发条件的会在间隔后补跑，不会丢。"
-    },
-    "ui:options": {
-      "unit": {
-        "en": "min",
-        "zh": "分钟"
-      }
-    }
-  },
-  "analysis_daily_limit": {
-    "ui:title": {
-      "en": "Reviews per day",
-      "zh": "每天最多复核次数"
-    },
-    "ui:help": {
-      "en": "Automatic reviews per day across the site; 0 = no limit. Manual reviews are not limited.",
-      "zh": "全站每天自动复核的上限，0 = 不限。手动复核不受限制。"
     }
   }
 }

@@ -19,7 +19,7 @@ const SHOTS = [
   ['desktop-settings-jev', 'tab=jev', {}],
   ['desktop-settings-response', 'tab=response', {}],
   ['desktop-settings-records', 'tab=records', {}],
-  ['desktop-settings-advanced', 'tab=advanced', {}],
+  ['desktop-settings-advanced', 'tab=advanced', { full: true }],
   ['desktop-legacy-tab-settings', 'tab=settings', {}],
   ['dark-overview-sidebar', 'tab=overview', { theme: 'dark' }],
   ['dark-settings-policy', 'tab=policy', { theme: 'dark' }],
@@ -39,10 +39,10 @@ const SHOTS = [
   ['ai-desktop-user-auto-applied', 'tab=watch&user=7', { wait: '[data-testid="mod-user-ai"]' }],
   ['ai-desktop-user-queued', 'tab=watch&user=12', { wait: '[data-testid="mod-user-ai"]' }],
   ['ai-desktop-settings', 'tab=analysis', { full: true }],
-  ['ai-desktop-advanced-resources', 'tab=advanced', { scrollTo: 'text=AI 复核资源' }],
+  ['ai-desktop-advanced-resources', 'tab=advanced', { click: 'text=AI 复核资源', full: true }],
   ['ai-dark-review', 'tab=ai', { theme: 'dark', wait: '[data-testid="mod-ai-pending"]' }],
   ['ai-dark-user-pending', 'tab=watch&user=44', { theme: 'dark', wait: '[data-testid="mod-user-ai"]' }],
-  ['ai-dark-settings', 'tab=analysis', { theme: 'dark' }],
+  ['ai-dark-settings', 'tab=analysis', { theme: 'dark', full: true }],
   ['ai-mobile-review', 'tab=ai', { mobile: true, wait: '[data-testid="mod-ai-pending"]', full: true }],
   ['ai-mobile-user-pending', 'tab=watch&user=44', { mobile: true, wait: '[data-testid="mod-user-ai"]' }],
   ['ai-mobile-settings', 'tab=analysis', { mobile: true, full: true }],
@@ -57,8 +57,9 @@ const login = await (await fetch(`${BASE}/api/v1/auth/login`, { method: 'POST', 
 const tok = login.data ?? login
 const session = { access_token: tok.access_token, refresh_token: tok.refresh_token, expires_at: Date.now() + 7200e3 }
 
-// ONLY=<prefix> takes only the shots whose name starts with it.
-for (const [file, q, o] of SHOTS.filter(([f]) => !process.env.ONLY || f.startsWith(process.env.ONLY))) {
+// ONLY=<prefix>[,<prefix>...] takes only the shots whose name starts with one of them.
+const only = process.env.ONLY?.split(',') ?? []
+for (const [file, q, o] of SHOTS.filter(([f]) => !only.length || only.some((x) => f.startsWith(x)))) {
   const ctx = await browser.newContext(
     o.mobile
       ? { viewport: { width: 390, height: 844 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true, colorScheme: o.theme || 'light' }
@@ -107,6 +108,8 @@ for (const [file, q, o] of SHOTS.filter(([f]) => !process.env.ONLY || f.startsWi
     await p.locator(o.click).first().click()
     await p.waitForTimeout(500)
   }
+  // A full-page shot lays the sticky save bar over the page: let it flow at the end instead.
+  if (o.full) await p.addStyleTag({ content: '.mod-editor-footer { position: static !important; }' })
   if (o.scrollTo) await p.locator(o.scrollTo).first().scrollIntoViewIfNeeded()
   await p.screenshot({ path: `${OUT}/${file}.png`, fullPage: !!o.full })
   console.log(file, errors.length ? 'ERR ' + errors.join(' | ') : 'ok')
