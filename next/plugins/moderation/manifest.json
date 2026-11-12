@@ -526,7 +526,209 @@
           "en": "Prompt Moderation",
           "zh": "提示词审核"
         },
-        "component": "ModerationDashboard"
+        "component": "ModerationDashboard",
+        "nav": {
+          "groups": [
+            {
+              "key": "monitor",
+              "label": {
+                "en": "Monitor",
+                "zh": "运行"
+              },
+              "items": [
+                {
+                  "key": "overview",
+                  "label": {
+                    "en": "Overview",
+                    "zh": "概览"
+                  },
+                  "icon": "dashboard"
+                },
+                {
+                  "key": "events",
+                  "label": {
+                    "en": "Records",
+                    "zh": "审核记录"
+                  },
+                  "icon": "list"
+                },
+                {
+                  "key": "test",
+                  "label": {
+                    "en": "Playground",
+                    "zh": "在线测试"
+                  },
+                  "icon": "play",
+                  "permission": "moderation:manage"
+                }
+              ]
+            },
+            {
+              "key": "policy",
+              "label": {
+                "en": "Policy",
+                "zh": "策略"
+              },
+              "items": [
+                {
+                  "key": "flows",
+                  "label": {
+                    "en": "Flows",
+                    "zh": "审核流程"
+                  },
+                  "icon": "node"
+                },
+                {
+                  "key": "bindings",
+                  "label": {
+                    "en": "Bindings",
+                    "zh": "流程绑定"
+                  },
+                  "icon": "link"
+                },
+                {
+                  "key": "policy",
+                  "label": {
+                    "en": "Execution policy",
+                    "zh": "执行策略"
+                  },
+                  "icon": "shield",
+                  "permission": "moderation:manage",
+                  "corePermission": "plugin:manage"
+                },
+                {
+                  "key": "cache",
+                  "label": {
+                    "en": "Cache and input",
+                    "zh": "缓存与输入"
+                  },
+                  "icon": "clock",
+                  "permission": "moderation:manage",
+                  "corePermission": "plugin:manage"
+                }
+              ]
+            },
+            {
+              "key": "users",
+              "label": {
+                "en": "Users and actions",
+                "zh": "名单与处置"
+              },
+              "items": [
+                {
+                  "key": "watch",
+                  "label": {
+                    "en": "Watch list",
+                    "zh": "观察名单"
+                  },
+                  "icon": "eye"
+                },
+                {
+                  "key": "blocks",
+                  "label": {
+                    "en": "Banned users",
+                    "zh": "封禁用户"
+                  },
+                  "icon": "lock"
+                },
+                {
+                  "key": "lists",
+                  "label": {
+                    "en": "List rules",
+                    "zh": "名单规则"
+                  },
+                  "icon": "user",
+                  "permission": "moderation:manage",
+                  "corePermission": "plugin:manage"
+                },
+                {
+                  "key": "analysis",
+                  "label": {
+                    "en": "AI analysis",
+                    "zh": "AI 分析"
+                  },
+                  "icon": "bolt",
+                  "permission": "moderation:manage",
+                  "corePermission": "plugin:manage"
+                }
+              ]
+            },
+            {
+              "key": "resources",
+              "label": {
+                "en": "Resources",
+                "zh": "资源"
+              },
+              "items": [
+                {
+                  "key": "auditors",
+                  "label": {
+                    "en": "Auditors",
+                    "zh": "审核器"
+                  },
+                  "icon": "filter"
+                },
+                {
+                  "key": "channels",
+                  "label": {
+                    "en": "Channels",
+                    "zh": "渠道"
+                  },
+                  "icon": "globe"
+                },
+                {
+                  "key": "jev",
+                  "label": {
+                    "en": "Jev questions",
+                    "zh": "Jev 默认题集"
+                  },
+                  "icon": "edit",
+                  "permission": "moderation:manage",
+                  "corePermission": "plugin:manage"
+                }
+              ]
+            },
+            {
+              "key": "system",
+              "label": {
+                "en": "System",
+                "zh": "系统"
+              },
+              "items": [
+                {
+                  "key": "response",
+                  "label": {
+                    "en": "Block response",
+                    "zh": "拦截提示"
+                  },
+                  "icon": "warning",
+                  "permission": "moderation:manage",
+                  "corePermission": "plugin:manage"
+                },
+                {
+                  "key": "records",
+                  "label": {
+                    "en": "Records and retention",
+                    "zh": "记录与保留"
+                  },
+                  "icon": "ledger",
+                  "permission": "moderation:manage",
+                  "corePermission": "plugin:manage"
+                },
+                {
+                  "key": "advanced",
+                  "label": {
+                    "en": "Advanced",
+                    "zh": "高级"
+                  },
+                  "icon": "settings",
+                  "permission": "moderation:manage",
+                  "corePermission": "plugin:manage"
+                }
+              ]
+            }
+          ]
+        }
       }
     },
     "native": {

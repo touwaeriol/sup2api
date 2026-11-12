@@ -387,3 +387,22 @@ const { EntityMultiPicker } = host.components
 - 每个 `cell-<key>` 插槽多两个参数：`expanded`（该行是否展开）和 `toggleExpand()`（展开或收起该行，照常触发 `expand` 事件），需要 `expandable`（不可展开的表格里 `expanded` 恒为 `false`，`toggleExpand()` 什么也不做：不改展开状态、不触发 `expand`）；手机卡片里的单元格插槽同样有，与 `#card` 插槽的同名参数一致。
 - `:expand-toggle="false"` 去掉行首的箭头列，只由单元格打开；手机卡片仍保留“详情”折叠。默认 `true`，与以前一样。
 - `expand-single`：展开一行时收起其它行。默认关闭。被它收起的每一行也触发 `expand`（`row, false`），在新展开那一行的 `expand`（`row, true`）之前；依赖 `expand` 事件记录展开状态的页面因此不会留下已收起的行。
+
+## 插件页的侧栏子导航（UI SDK 3.14）
+
+原生插件页可以在 manifest 的 `ui.pages.<page>.nav` 里声明分组和条目，控制台打开这个页时，左侧侧栏换成这些条目（与“系统设置”的侧栏视图同一机制，CONTRACTS §90.7），点条目打开同一页的 `?tab=<key>`。插件只声明，不渲染侧栏；页面读 `?tab=` 决定显示哪一节，没有或不认识时显示第一个可见条目。核心按条目的 `permission`（插件权限）或 `corePermission`（核心权限）过滤。旧控制台忽略这个声明，所以插件应保留页内标签作为回退（用 `satisfiesRange(host.version, '>=3.14.0')` 判断），这时 `hostUICompat` 仍可以是 `^3.12` 等旧范围；只有页面离不开侧栏时才声明 `hostUICompat: "^3.14"`，`hostCompat` 要求核心 `>=0.1.284`（0.1.283 是最后一个带 UI 3.13 的核心）。
+
+```json
+"pages": {
+  "dashboard": {
+    "type": "native",
+    "component": "Dashboard",
+    "nav": {
+      "groups": [
+        { "key": "monitor", "label": { "en": "Monitor", "zh": "运行" },
+          "items": [{ "key": "overview", "label": { "en": "Overview", "zh": "概览" }, "icon": "dashboard" }] }
+      ]
+    }
+  }
+}
+```

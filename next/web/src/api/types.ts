@@ -1456,6 +1456,29 @@ export interface UIPluginPage {
    * Page.Create). The core drops it for callers without its permission.
    */
   create?: { page: string; permission?: string }
+  /**
+   * The page's sections, shown in the sidebar while the page is open
+   * (manifest Page.Nav, UI 3.14): each item opens `?tab=<key>`. The core has
+   * already dropped the items the caller may not see.
+   */
+  nav?: UIPageNav
+}
+
+/** A page's sidebar sections (manifest Page.Nav). */
+export interface UIPageNav {
+  groups: UIPageNavGroup[]
+}
+
+export interface UIPageNavGroup {
+  key: string
+  label: LText
+  items: UIPageNavItem[]
+}
+
+export interface UIPageNavItem {
+  key: string
+  label: LText
+  icon?: string
 }
 
 /**

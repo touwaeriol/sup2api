@@ -2,15 +2,17 @@ import { computed, ref, watchEffect, type ComputedRef, type Ref } from 'vue'
 import { useRoute, useRouter, type RouteLocationNormalizedLoaded } from 'vue-router'
 import { useAppStore, type NavItem, type NavSection } from '@/stores/app'
 import { SETTINGS_PAGE, useSettingsMenu } from '@/views/settings/settingsNav'
+import { usePluginPageView } from './pluginNav'
 import { useRouteLineage } from './useActiveMenu'
 
 /**
  * A sidebar view (CONTRACTS §90): the same sidebar showing another menu. On a
  * page of a view the console menu gives way to the view's own, under a row
  * that leads back. A route joins a view with `meta.sidebar`, as do the pages
- * below it (meta.parent); a new view is one more row of SIDEBAR_VIEWS.
+ * below it (meta.parent); a new view is one more row of SIDEBAR_VIEWS. A
+ * plugin page that declares sections opens in a view of its own (pluginNav.ts).
  */
-export type SidebarViewKey = 'settings'
+export type SidebarViewKey = 'settings' | `plugin:${string}`
 
 /** A row of a view's menu. `item.path` may carry a query (e.g. /settings?tab=sticky). */
 export interface ViewLink {
@@ -59,9 +61,10 @@ export function useSidebarView(): ComputedRef<SidebarView | undefined> {
   const app = useAppStore()
   const router = useRouter()
   const lineage = useRouteLineage()
+  const pluginView = usePluginPageView()
   return computed(() => {
     const key = lineage.value.map(p => router.resolve(p).meta.sidebar).find(Boolean)
-    const view = SIDEBAR_VIEWS.find(v => v.key === key)
+    const view = SIDEBAR_VIEWS.find(v => v.key === key) ?? pluginView.value
     return view && (!app.menusLoaded || view.entry(app.menus)) ? view : undefined
   })
 }

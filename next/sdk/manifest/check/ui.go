@@ -275,6 +275,69 @@ func (v *validator) uiPages(u *manifest.UI) {
 		}
 		v.pageSearch(f+".search", pg)
 		v.pageCreate(f+".create", u, pg)
+		v.pageNav(f+".nav", pg)
+	}
+}
+
+// navKeyRe is what a nav group or item key may look like. An item key is
+// sent as ?tab=<key>, so it stays short, lower-case and URL-safe.
+var navKeyRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
+
+// pageNav validates a page's sub-navigation (UI 3.14). Only a native page
+// can switch sections by ?tab=: a table, form or iframe page would draw
+// sidebar entries that all show the same thing.
+func (v *validator) pageNav(f string, pg manifest.Page) {
+	if pg.Nav == nil {
+		return
+	}
+	if pg.Type != "native" {
+		v.add(f, "unsupported", "nav is only honoured on native pages (this page is %q)", pg.Type)
+		return
+	}
+	if len(pg.Nav.Groups) == 0 {
+		v.add(f+".groups", "required", "nav needs at least one group")
+		return
+	}
+	groups := map[string]bool{}
+	// Item keys are unique across the whole page, not per group: ?tab= names
+	// one section and does not say which group it belongs to.
+	items := map[string]bool{}
+	for i, g := range pg.Nav.Groups {
+		gf := fmt.Sprintf("%s.groups[%d]", f, i)
+		if !navKeyRe.MatchString(g.Key) {
+			v.add(gf+".key", "invalid_format", "group key %q must match %s", g.Key, navKeyRe.String())
+		} else if groups[g.Key] {
+			v.add(gf+".key", "duplicate", "group %q declared twice", g.Key)
+		}
+		groups[g.Key] = true
+		if firstText(g.Label) == "" {
+			v.add(gf+".label", "required", "label is required")
+		}
+		if len(g.Items) == 0 {
+			v.add(gf+".items", "required", "a group needs at least one item")
+		}
+		for j, it := range g.Items {
+			itf := fmt.Sprintf("%s.items[%d]", gf, j)
+			if !navKeyRe.MatchString(it.Key) {
+				v.add(itf+".key", "invalid_format", "item key %q must match %s", it.Key, navKeyRe.String())
+			} else if items[it.Key] {
+				v.add(itf+".key", "duplicate", "item %q declared twice in this page", it.Key)
+			}
+			items[it.Key] = true
+			if firstText(it.Label) == "" {
+				v.add(itf+".label", "required", "label is required")
+			}
+			v.menuIcon(itf+".icon", it.Icon)
+			if it.Permission != "" && !v.userPerm(it.Permission) {
+				v.add(itf+".permission", "unknown", "permission %q is not declared in userPermissions", it.Permission)
+			}
+			// Core permission keys are not known to the SDK, so only a blank
+			// one is caught here: it would read as "no permission" and show
+			// the item to everyone.
+			if it.CorePermission != "" && strings.TrimSpace(it.CorePermission) == "" {
+				v.add(itf+".corePermission", "invalid", "corePermission must not be blank")
+			}
+		}
 	}
 }
 
@@ -450,9 +513,13 @@ type uiFloor struct {
 // last with UI 3.9 (3.10 starts at 0.1.277); 0.1.278 is the last with UI
 // 3.10 (3.11 starts at 0.1.279); 0.1.279 is the last with UI 3.11 (3.12
 // starts at 0.1.280); 0.1.280 is the last with UI 3.12 (3.13 starts at
-// 0.1.281). 3.10 to 3.13 add components and props, no manifest declaration,
-// so only hostUICompat asks for them.
+// 0.1.281); 0.1.283 is the last with UI 3.13 (3.14 starts at 0.1.284).
+// 3.10 to 3.13 add components and props, no manifest declaration, so only
+// hostUICompat asks for them. 3.14 adds ui.pages.<page>.nav, but it needs
+// no floor of its own either: an older console ignores nav and the page
+// keeps its in-page section switcher, so the plugin still works there.
 var uiFloors = []uiFloor{
+	{minor: 14, lastUI: "3.13.0", lastCore: "0.1.283", firstCore: "0.1.284"},
 	{minor: 13, lastUI: "3.12.0", lastCore: "0.1.280", firstCore: "0.1.281"},
 	{minor: 12, lastUI: "3.11.0", lastCore: "0.1.279", firstCore: "0.1.280"},
 	{minor: 11, lastUI: "3.10.0", lastCore: "0.1.278", firstCore: "0.1.279"},

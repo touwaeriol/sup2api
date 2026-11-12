@@ -54,6 +54,8 @@ export interface Runtime {
 /** Record filters a record detail can set (click-to-filter). */
 export type EventFilter = { endpoint?: string; session_fp?: string; request_id?: string }
 
+export type FlowSource = 'group' | 'account' | 'account_any' | 'default' | 'fallback'
+
 export interface ModEvent {
   id: number
   created_at: string
@@ -72,6 +74,16 @@ export interface ModEvent {
   result: Result | ''
   flow_id: number
   flow_version: number
+  /** How the request found its flow (prototype): a binding, the default flow, or the default flow after a binding stopped applying. */
+  flow_source?: FlowSource
+  /** flow_source fallback: the bound flow and why it no longer applies. */
+  flow_fallback?: { flow_id: number; reason: 'disabled' | 'unpublished' | 'deleted' }
+  /** What decided checking first or in the background (prototype). */
+  level_source?: 'blocklist' | 'allowlist' | 'watch' | 'default'
+  /** The level that applied: enforce = checked first. */
+  level?: 'observe' | 'enforce'
+  /** The scope of the flow version that ran (prototype; none = all). */
+  scope?: Scope
   severity: string
   hit_categories: string[]
   highest_category: string
@@ -837,8 +849,19 @@ export interface Stage {
   fallback?: boolean
 }
 
+/**
+ * What of a request a flow moderates (prototype, CONTRACTS §72.4): input =
+ * system and user text with the user's images and documents; tools adds the
+ * tool results; all_but_own adds the assistant turns except those the
+ * gateway answered itself; all = everything the client sent (before the
+ * field existed every flow did, so a spec without it means all).
+ */
+export const SCOPES = ['input', 'tools', 'all_but_own', 'all'] as const
+export type Scope = (typeof SCOPES)[number]
+
 export interface Spec {
   model_filter: { type: 'all' | 'only' | 'exclude'; models: string[] }
+  scope?: Scope
   sample_rate: number
   total_timeout_ms: number
   stages: Stage[]
@@ -1064,4 +1087,4 @@ export interface ImportResult {
 // ---- page
 
 /** Tabs of the moderation page (?tab=). */
-export type TabKey = 'overview' | 'events' | 'watch' | 'blocks' | 'flows' | 'bindings' | 'auditors' | 'channels' | 'test' | 'settings'
+export type { SectionKey as TabKey } from './nav'

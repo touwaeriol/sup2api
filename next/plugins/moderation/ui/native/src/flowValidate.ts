@@ -1,5 +1,5 @@
 import { isAuditorType, MAX_STAGE_AUDITORS, MAX_STAGES, TOTAL_TIMEOUT_MAX_MS, TOTAL_TIMEOUT_MIN_MS, type AuditorTypeOf } from './flowOps'
-import type { Spec, Stage } from './types'
+import { SCOPES, type Spec, type Stage } from './types'
 
 // Validation of a flow draft before it is published (CONTRACTS §72.7),
 // mirroring ParseSpec + Spec.Validate of internal/moderation/flow.go (ported
@@ -11,6 +11,7 @@ type SpecIssueCode =
   | 'invalid_model_filter'
   | 'models_required'
   | 'invalid_sample_rate'
+  | 'invalid_scope'
   | 'invalid_total_timeout'
   | 'no_stages'
   | 'too_many_stages'
@@ -32,7 +33,7 @@ export interface SpecIssue {
   field?: string
 }
 
-const SPEC_KEYS = ['model_filter', 'sample_rate', 'total_timeout_ms', 'stages']
+const SPEC_KEYS = ['model_filter', 'scope', 'sample_rate', 'total_timeout_ms', 'stages']
 const MODEL_FILTER_KEYS = ['type', 'models']
 const STAGE_KEYS = ['auditors', 'combine', 'n', 'fallback']
 const MODEL_FILTER_TYPES = new Set(['all', 'only', 'exclude'])
@@ -50,6 +51,8 @@ export function validateSpec(spec: Spec, typeOf: AuditorTypeOf): SpecIssue[] {
   const models = filter.models ?? []
   if (!MODEL_FILTER_TYPES.has(filter.type) || !Array.isArray(models)) issues.push({ code: 'invalid_model_filter' })
   else if (filter.type !== 'all' && !models.length) issues.push({ code: 'models_required' })
+
+  if (spec.scope !== undefined && !(SCOPES as readonly string[]).includes(spec.scope)) issues.push({ code: 'invalid_scope' })
 
   const rate = spec.sample_rate ?? 0
   if (typeof rate !== 'number' || !(rate >= 0 && rate <= 100)) issues.push({ code: 'invalid_sample_rate' })

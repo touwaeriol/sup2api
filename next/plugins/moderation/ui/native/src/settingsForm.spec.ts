@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import schema from '../../../forms/settings.schema.json'
 import ui from '../../../forms/settings.ui.json'
-import { CUSTOM_KEYS, displayValues, editableKeys, LEGACY_KEY, schemaKeys, sentSetting, settingSections, settingsKey, verdictCacheOff, withRetiredMirrored } from './settingsForm'
+import { CUSTOM_KEYS, displayValues, editableKeys, LEGACY_KEY, schemaKeys, sectionsOf, sentSetting, settingSections, settingsKey, verdictCacheOff, withRetiredMirrored } from './settingsForm'
+import { NAV_GROUPS } from './nav'
 import { mergeSettings, type PageValues } from './settingsMerge'
 
 const MASK = '******'
@@ -13,16 +14,37 @@ const zh = (v: unknown) => (v as { zh: string }).zh
 
 describe('settingSections', () => {
   it('groups every field but the 0.1 and retired ones by ui:section, in ui:order', () => {
-    expect(sections.map((g) => zh(g.title))).toEqual(['运行模式与用户名单', '拦截响应', '观察名单与封禁', 'AI 分析', '记录与保留', '性能与缓存', '输入范围', '告警与通知', 'Jev 默认题集'])
+    expect(sections.map((g) => `${g.page}/${zh(g.title)}`)).toEqual([
+      'policy/执行方式',
+      'cache/判定缓存与重放',
+      'cache/送审输入上限',
+      'lists/固定名单',
+      'lists/自动观察与封禁',
+      'analysis/AI 分析',
+      'analysis/分析资源',
+      'jev/Jev 默认题集',
+      'response/拦截响应',
+      'records/记录内容',
+      'records/保留期',
+      'advanced/性能',
+      'advanced/告警与通知'
+    ])
     const shown = sections.flatMap((g) => g.keys)
     expect(shown).toEqual(ui['ui:order'].filter((k) => !LEGACY.includes(k)))
     expect(new Set(shown).size).toBe(shown.length)
     expect(Object.keys(schema.properties).filter((k) => !shown.includes(k)).sort()).toEqual([...LEGACY].sort())
-    expect(sections.filter((g) => g.collapsed).map((g) => g.id)).toEqual(['max_concurrency', 'min_chars'])
+    expect(sections.filter((g) => g.collapsed).map((g) => g.id)).toEqual(['analysis_timeout_ms'])
+  })
+
+  it('puts every section on a settings page of the sidebar, and every such page has a section', () => {
+    const pages = NAV_GROUPS.flatMap((g) => g.items.filter((i) => i.access === 'settings').map((i) => i.key as string))
+    expect([...new Set(sections.map((g) => g.page))].sort()).toEqual([...pages].sort())
+    for (const p of pages) expect(sectionsOf(sections, p).length).toBeGreaterThan(0)
   })
 
   it('shows the 0.8.0 settings where the design puts them', () => {
-    expect(sections[0].keys).toEqual(['mode', 'allowlist_user_ids', 'blocklist_user_ids'])
+    expect(sections[0].keys).toEqual(['mode', 'fail_policy'])
+    expect(sectionsOf(sections, 'lists')[0].keys).toEqual(['allowlist_user_ids', 'blocklist_user_ids'])
     const shown = sections.flatMap((g) => g.keys)
     expect(shown[shown.indexOf('store_text') + 1]).toBe('record_pass_input_message')
     expect(sections.find((g) => g.keys.includes('verdict_cache_days'))?.keys).toContain('cache_entries')
@@ -35,8 +57,8 @@ describe('settingSections', () => {
   it('leaves out fields before any section only when hidden, and groups without visible fields', () => {
     const s = { properties: { a: {}, b: {}, c: {} } }
     expect(settingSections(s, { 'ui:order': ['a', 'b', 'c'], b: { 'ui:section': 'B' }, c: { 'ui:widget': 'hidden' } })).toEqual([
-      { id: '', title: '', description: '', collapsed: false, keys: ['a'] },
-      { id: 'b', title: 'B', description: '', collapsed: false, keys: ['b'] }
+      { id: '', page: '', title: '', description: '', collapsed: false, keys: ['a'] },
+      { id: 'b', page: '', title: 'B', description: '', collapsed: false, keys: ['b'] }
     ])
     expect(settingSections(s, { a: { 'ui:widget': 'hidden' }, b: { 'ui:widget': 'hidden' }, c: { 'ui:section': { title: 'C', collapsed: true }, 'ui:widget': 'hidden' } })).toEqual([])
     expect(settingSections(null, ui)).toEqual([])

@@ -15,8 +15,8 @@ import UserStateSection from './UserStateSection.vue'
 import { useCatalog } from './catalog'
 import { categoryLabel, dt, enumLabel, idText, isSuspicious, ms, num } from './format'
 import { canManage, deleteEvent, fetchEvent, reviewDoneText, reviewEvents, toastError, useModHost } from './host'
-import { aiVerdictTone, modeTone, severityTone } from './tones'
-import type { EventFilter, ModEventDetail, ReviewStatus, Watch } from './types'
+import { aiVerdictTone, severityTone } from './tones'
+import type { EventFilter, ModEvent, ModEventDetail, ReviewStatus, Watch } from './types'
 import { useAsync } from './useAsync'
 
 // Record detail (GET /events/:id, new-api record-detail-drawer): result, the
@@ -135,6 +135,19 @@ function openRecord(id: number) {
   currentId.value = id
 }
 
+/** How the flow was found; records written before it was kept show nothing. */
+function matchText(e: ModEvent): string {
+  if (!e.flow_source) return ''
+  const reason = e.flow_fallback ? t(`detail.match.reason.${e.flow_fallback.reason}`) : ''
+  return t(`detail.match.${e.flow_source}`, { reason })
+}
+
+/** Checked first or in the background, and what decided it (the record's mode alone said neither). */
+function handlingText(e: ModEvent): string {
+  if (!e.level_source || !e.level) return ''
+  return t(`detail.level.${e.level_source === 'watch' || e.level_source === 'default' ? `${e.level_source}_${e.level}` : e.level_source}`)
+}
+
 const fields = computed<DescItem[]>(() => {
   const e = ev.value
   if (!e) return []
@@ -146,6 +159,9 @@ const fields = computed<DescItem[]>(() => {
     { key: 'key', label: t('detail.f.key'), value: idText(e.api_key_id) },
     { key: 'group', label: t('detail.f.group'), value: catalog.groupName(e.group_id) },
     { key: 'flow', label: t('detail.f.flow') },
+    { key: 'match', label: t('detail.f.match'), value: matchText(e) },
+    { key: 'handling', label: t('detail.f.handling'), value: handlingText(e) },
+    { key: 'scope', label: t('detail.f.scope'), value: e.scope ? enumLabel('flows.scope', e.scope) : '' },
     { key: 'model', label: t('detail.f.model'), value: e.model || '' },
     { key: 'protocol', label: t('detail.f.protocol'), value: e.protocol || '' },
     { key: 'endpoint', label: t('detail.f.endpoint'), value: e.endpoint || '', mono: true },
@@ -170,11 +186,13 @@ const fields = computed<DescItem[]>(() => {
         <ReplayBadge v-if="ev.replayed" />
         <VerdictBadge :event="ev" />
         <SBadge v-if="ev.timing">{{ enumLabel('timing', ev.timing) }}</SBadge>
-        <SBadge v-if="ev.mode" :tone="modeTone(ev.mode)">{{ enumLabel('mode', ev.mode) }}</SBadge>
         <SBadge v-if="ev.severity" :tone="severityTone(ev.severity)">{{ t('detail.f.severity') }}: {{ enumLabel('severity', ev.severity) }}</SBadge>
         <SHint inline size="xs" class="mod-detail-time">{{ dt(ev.created_at) }}</SHint>
       </div>
 
+      <SAlert v-if="ev.flow_fallback" tone="warning" data-testid="mod-match-fallback">
+        {{ t('detail.matchFallbackHint', { id: ev.flow_fallback.flow_id, reason: t(`detail.match.reason.${ev.flow_fallback.reason}`) }) }}
+      </SAlert>
       <SAlert v-if="ev.reason" tone="neutral" :icon="false" :title="t('detail.f.reason')">{{ ev.reason }}</SAlert>
       <SAlert v-if="ev.error" tone="danger" :title="t('detail.f.error')"><span class="mod-prewrap">{{ ev.error }}</span></SAlert>
 

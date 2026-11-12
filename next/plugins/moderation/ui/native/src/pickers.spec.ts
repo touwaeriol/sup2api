@@ -430,7 +430,7 @@ describe('the user lists of the settings', () => {
 
   it("render the console's widget and save what it picks, with the retired list kept in line", async () => {
     stored = { mode: 'observe', allowlist_user_ids: ['8'], blocklist_user_ids: [] }
-    const w = mount(SettingsTab, { attachTo: document.body, global: { provide: { [SCHEMA_WIDGETS_KEY as symbol]: { 'entity-select': EntitySelect } } } })
+    const w = mount(SettingsTab, { attachTo: document.body, props: { page: 'lists' }, global: { provide: { [SCHEMA_WIDGETS_KEY as symbol]: { 'entity-select': EntitySelect } } } })
     await flushPromises()
     const [allow, block] = w.findAllComponents(EntitySelect)
     expect([allow.props('modelValue'), allow.props('multiple')]).toEqual([['8'], true])
@@ -448,7 +448,7 @@ describe('the user lists of the settings', () => {
 
   it('refuse more than 1000 users before anything is sent', async () => {
     stored = { mode: 'observe' }
-    const w = mount(SettingsTab, { attachTo: document.body, global: { provide: { [SCHEMA_WIDGETS_KEY as symbol]: { 'entity-select': EntitySelect } } } })
+    const w = mount(SettingsTab, { attachTo: document.body, props: { page: 'lists' }, global: { provide: { [SCHEMA_WIDGETS_KEY as symbol]: { 'entity-select': EntitySelect } } } })
     await flushPromises()
     w.findAllComponents(EntitySelect)[0].vm.$emit('update:modelValue', Array.from({ length: 1001 }, (_, i) => String(i + 1)))
     await flushPromises()

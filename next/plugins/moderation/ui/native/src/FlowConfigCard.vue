@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { SBadge, SCard, SField, SHint, SInput, SLink, SSelect, SSwitch, STagInput } from '@sub2api/ui'
+import { SAlert, SBadge, SCard, SField, SHint, SInput, SLink, SSelect, SSwitch, STagInput } from '@sub2api/ui'
 import FlowTimeoutField from './FlowTimeoutField.vue'
 import { enumOptions } from './format'
 import { useModHost } from './host'
-import type { Spec } from './types'
+import { SCOPES, type Scope, type Spec } from './types'
 import { NAME_MAX } from './flowOps'
 
 // Name, enabled switch, bound groups (read-only, with the count of account
-// bindings), sample rate, model scope and total timeout of a flow (new-api
+// bindings), sample rate, model scope, moderated scope and total timeout of a flow (new-api
 // flow-config-card.tsx). The enabled switch is its own column here (not in
 // the spec) and saves at once.
 const props = defineProps<{
@@ -33,6 +33,9 @@ const emit = defineEmits<{
 const t = useModHost().t
 
 const filterOptions = computed(() => enumOptions('modelFilter', ['all', 'only', 'exclude']))
+const scopeOptions = computed(() => enumOptions('flows.scope', SCOPES))
+/** A spec saved before the scope existed moderates everything. */
+const scope = computed<Scope>(() => props.draft.scope ?? 'all')
 const patch = (p: Partial<Spec>) => emit('update:draft', { ...props.draft, ...p })
 const setFilter = (p: Partial<Spec['model_filter']>) => patch({ model_filter: { ...props.draft.model_filter, ...p } })
 
@@ -94,6 +97,13 @@ function setRate(v: unknown) {
             class="mod-grow"
             @update:model-value="setFilter({ models: $event })"
           />
+        </div>
+      </SField>
+
+      <SField :label="t('flows.scopeTitle')" :hint="t('flows.scopeHint')" class="mod-config-wide" data-testid="mod-flow-scope">
+        <div class="mod-form">
+          <SSelect :model-value="scope" :options="scopeOptions" :disabled="disabled" :aria-label="t('flows.scopeTitle')" @update:model-value="patch({ scope: $event as Scope })" />
+          <SAlert v-if="scope === 'all' || scope === 'all_but_own'" tone="warning">{{ t('flows.scopeWarn') }}</SAlert>
         </div>
       </SField>
 

@@ -423,6 +423,10 @@ func TestHostUICompatNeedsMatchingHostCompat(t *testing.T) {
 		{"^3.13", ">=0.1.279 <0.2.0", true},
 		{"^3.13", ">=0.1.280 <0.2.0", true},
 		{"^3.13", ">=0.1.281 <0.2.0", false},
+		// UI 3.14 starts at core 0.1.284; 0.1.283 is the last core with 3.13.
+		{"^3.14", ">=0.1.281 <0.2.0", true},
+		{"^3.14", ">=0.1.283 <0.2.0", true},
+		{"^3.14", ">=0.1.284 <0.2.0", false},
 	}
 	for _, tc := range cases {
 		c := uiCodes(uiNativeManifest(tc.ui, tc.host))
@@ -726,6 +730,70 @@ func TestPageSearchDeclaration(t *testing.T) {
 	c := codes(Validate(m, map[string][]byte{"forms/new.schema.json": []byte("{}")}, ValidateOptions{Tooling: true}))
 	if c["ui.pages.new.search"] != "unsupported" {
 		t.Fatalf("search on a form page must be rejected: %v", c)
+	}
+}
+
+// A native page may list its sections for the console's sidebar (UI 3.14).
+func TestPageNav(t *testing.T) {
+	label := manifest.LocalizedText{"en": "x"}
+	valid := func() *manifest.PageNav {
+		return &manifest.PageNav{Groups: []manifest.NavGroup{
+			{Key: "rules", Label: label, Items: []manifest.NavItem{
+				{Key: "words", Label: label, Icon: "inbox", Permission: "assets:read"},
+				{Key: "models", Label: label, CorePermission: "settings:read"},
+			}},
+			{Key: "logs", Label: label, Items: []manifest.NavItem{{Key: "hits", Label: label}}},
+		}}
+	}
+	cases := []struct {
+		name   string
+		typ    string
+		mutate func(*manifest.PageNav)
+		field  string // "" means the manifest is valid
+		code   string
+	}{
+		{name: "valid nav", typ: "native"},
+		{name: "nav on a table page", typ: "table", field: "ui.pages.panel.nav", code: "unsupported"},
+		{name: "no groups", typ: "native", mutate: func(n *manifest.PageNav) { n.Groups = nil },
+			field: "ui.pages.panel.nav.groups", code: "required"},
+		{name: "item key repeated in another group", typ: "native",
+			mutate: func(n *manifest.PageNav) { n.Groups[1].Items[0].Key = "words" },
+			field:  "ui.pages.panel.nav.groups[1].items[0].key", code: "duplicate"},
+		{name: "bad item key", typ: "native", mutate: func(n *manifest.PageNav) { n.Groups[0].Items[0].Key = "Words" },
+			field: "ui.pages.panel.nav.groups[0].items[0].key", code: "invalid_format"},
+		{name: "unknown permission", typ: "native", mutate: func(n *manifest.PageNav) { n.Groups[0].Items[0].Permission = "assets:write" },
+			field: "ui.pages.panel.nav.groups[0].items[0].permission", code: "unknown"},
+		{name: "blank core permission", typ: "native", mutate: func(n *manifest.PageNav) { n.Groups[0].Items[1].CorePermission = " " },
+			field: "ui.pages.panel.nav.groups[0].items[1].corePermission", code: "invalid"},
+		{name: "unknown icon", typ: "native", mutate: func(n *manifest.PageNav) { n.Groups[0].Items[0].Icon = "inbocks" },
+			field: "ui.pages.panel.nav.groups[0].items[0].icon", code: "unknown_icon"},
+		{name: "missing group label", typ: "native", mutate: func(n *manifest.PageNav) { n.Groups[0].Label = nil },
+			field: "ui.pages.panel.nav.groups[0].label", code: "required"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := uiNativeManifest("^3.14", ">=0.1.284 <0.2.0")
+			nav := valid()
+			if tc.mutate != nil {
+				tc.mutate(nav)
+			}
+			pg := manifest.Page{Type: "native", Component: "Panel", Nav: nav}
+			if tc.typ == "table" {
+				pg = m.UI.Pages["assets"]
+				pg.Nav = nav
+			}
+			m.UI.Pages["panel"] = pg
+			c := uiCodes(m)
+			if tc.field == "" {
+				if len(c) > 0 {
+					t.Fatalf("must be valid: %v", c)
+				}
+				return
+			}
+			if c[tc.field] != tc.code {
+				t.Fatalf("%s = %q, want %q (%v)", tc.field, c[tc.field], tc.code, c)
+			}
+		})
 	}
 }
 

@@ -12,7 +12,7 @@ export * from './bridge-protocol'
 export { useList, type UseListOptions, type UseListResult } from './useList'
 
 /** Version of the host UI contract; plugins declare hostUICompat against it. */
-export const HOST_UI_VERSION = '3.13.0'
+export const HOST_UI_VERSION = '3.14.0'
 
 /**
  * Accounts per plugin account action request and per `GET /accounts?ids=`

@@ -958,6 +958,40 @@ type Page struct {
 	// the plugin (a form page), so a create form needs no sidebar entry of
 	// its own. The button is shown only to callers holding Permission.
 	Create *PageLink `json:"create,omitempty"`
+	// Nav lists the sections of a native page so the console can draw them
+	// in its left sidebar, the way it draws the core system settings
+	// (UI 3.14). The page shows the section named by ?tab=<item key>, and
+	// the first item the caller may see is the default. An older console
+	// ignores it, so the page must keep an in-page way to switch sections.
+	Nav *PageNav `json:"nav,omitempty"`
+}
+
+// PageNav is a page's sub-navigation: groups of items, in order.
+type PageNav struct {
+	Groups []NavGroup `json:"groups"`
+}
+
+// NavGroup is one labelled group of a page's sub-navigation.
+type NavGroup struct {
+	Key   string        `json:"key"`
+	Label LocalizedText `json:"label"`
+	Items []NavItem     `json:"items"`
+}
+
+// NavItem is one section of a page. The core drops the items the caller may
+// not see before the console gets the manifest, so the sidebar never offers
+// a section whose routes would refuse the caller anyway.
+type NavItem struct {
+	Key   string        `json:"key"`
+	Label LocalizedText `json:"label"`
+	Icon  string        `json:"icon,omitempty"`
+	// Permission is a plugin permission key (userPermissions).
+	Permission string `json:"permission,omitempty"`
+	// CorePermission is a core permission key. A section can be meant for
+	// the people who manage the matching core area as well as for holders
+	// of the plugin's own permission, so the item shows when the caller
+	// holds either; with neither set it shows to everyone who sees the page.
+	CorePermission string `json:"corePermission,omitempty"`
 }
 
 // PageLink points at another page of the same plugin.

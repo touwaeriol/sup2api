@@ -58,7 +58,7 @@ const cat = {
 export default {
   zh: {
     title: '提示词审核',
-    subtitle: '按绑定到分组或账号的审核流程审核网关请求；黑名单用户和拦截级的用户先审后发（默认级别为拦截时，没有名单条目的用户也是），其余请求在后台审核。',
+    subtitle: '按绑定到分组或账号的审核流程审核网关请求；“总是先审”名单里的用户和拦截级的用户先审后发（默认级别为拦截时，没有名单条目的用户也是），其余请求在后台审核。',
     refresh: '刷新',
     filter: '筛选',
     settings: '设置',
@@ -82,7 +82,36 @@ export default {
     listSep: '、',
     clauseSep: '；',
     ms: '{n} 毫秒',
-    mode: { off: '关闭', observe: '默认观察', enforce: '默认拦截' },
+    mode: { off: '审核关闭', observe: '默认后台审核', enforce: '默认先审' },
+    nav: {
+      groups: { monitor: '运行', policy: '策略', users: '名单与处置', resources: '资源', system: '系统' },
+      items: {
+        overview: '概览', events: '审核记录', test: '在线测试',
+        flows: '审核流程', bindings: '流程绑定', policy: '执行策略', cache: '缓存与输入',
+        watch: '观察名单', blocks: '封禁用户', lists: '名单规则', analysis: 'AI 分析',
+        auditors: '审核器', channels: '渠道', jev: 'Jev 默认题集',
+        response: '拦截提示', records: '记录与保留', advanced: '高级'
+      },
+      desc: {
+        overview: '今日审核量、命中与出错，以及需要处理的事项。',
+        events: '每一次审核的结论、逐级过程和送审内容。',
+        test: '用任意文本试跑流程或单个审核器。',
+        flows: '审什么（审核范围、模型）、怎么判（复核链与补审）。',
+        bindings: '哪个分组或账号使用哪个流程；失效的绑定会在这里标出。',
+        policy: '先审后发还是后台审核，以及审核失败时的处理。',
+        cache: '判定缓存、命中重放和每个请求的送审上限。',
+        watch: '观察级的用户后台审核，拦截级的用户先审后发。',
+        blocks: '被封禁的用户的所有请求都会被拒绝。',
+        lists: '固定名单、自动加入观察名单和自动封禁。',
+        analysis: 'AI 复核可疑用户的记录并调整名单级别。',
+        auditors: '审核器 = 类型 + 渠道 + 题目、类别或阈值。',
+        channels: '审核器和 AI 分析调用的上游。',
+        jev: '没有自定义题目的审核器使用的默认题集。',
+        response: '请求被拦截时客户端收到的状态码和提示。',
+        records: '记录哪些审核、保存多少内容、保留多久。',
+        advanced: '并发、队列、超时与告警，一般无需调整。'
+      }
+    },
     tabs: { overview: '概览', events: '审核记录', watch: '观察名单', blocks: '封禁用户', flows: '流程', bindings: '绑定', auditors: '审核器', channels: '渠道', test: '在线测试', settings: '设置' },
     result: { block: '已拦截', hit: '命中', overturned: '被推翻', error: '出错', pass: '通过' },
     timing: { pre: '先审后发', post: '后台审核' },
@@ -293,6 +322,23 @@ export default {
     },
     detail: {
       title: '审核详情',
+      match: {
+        group: '分组绑定',
+        account: '账号绑定（分组内）',
+        account_any: '账号绑定（任意分组）',
+        default: '默认流程（分组未绑定）',
+        fallback: '默认流程（回退：分组绑定的流程{reason}）',
+        reason: { disabled: '已停用', unpublished: '未发布', deleted: '已删除' }
+      },
+      level: {
+        blocklist: '先审 · 来自“总是先审”名单',
+        allowlist: '后台 · 来自“只后台审核”名单',
+        watch_enforce: '先审 · 观察名单拦截级',
+        watch_observe: '后台 · 观察名单观察级',
+        default_enforce: '先审 · 全局默认处理',
+        default_observe: '后台 · 全局默认处理'
+      },
+      matchFallbackHint: '该分组绑定了流程 #{id}，但它{reason}，请求静默落到了默认流程。到“流程绑定”处理。',
       sessionRecords: '该会话的全部记录',
       endpointRecords: '只看该端点的记录',
       trace: '逐级审核',
@@ -308,6 +354,9 @@ export default {
       deleted: '记录已删除',
       loadFailed: '加载审核详情失败',
       f: {
+        match: '匹配来源',
+        handling: '处理方式',
+        scope: '审核范围',
         id: '记录 ID',
         request: '请求 ID',
         severity: '严重度',
@@ -365,7 +414,7 @@ export default {
       empty: '没有审核调用'
     },
     watch: {
-      hint: '观察级：请求照常放行，后台审核并计违规次数。拦截级：请求先审核，命中就拒绝。首次出现可疑记录的用户会自动以默认级别加入（可在设置中关闭）。白名单用户只在放行后审核，名单级别不会让他们被拦截；黑名单用户总是先审。管理员不会加入名单。',
+      hint: '观察级：请求照常放行，后台审核并计违规次数。拦截级：请求先审核，命中就拒绝。首次出现可疑记录的用户会自动以默认级别加入（可在设置中关闭）。“只后台审核”名单里的用户只在放行后审核，名单级别不会让他们被拦截；“总是先审”名单里的用户总是先审。管理员不会加入名单。',
       add: '加入名单',
       editTitle: '编辑用户 #{id}',
       levelHint: '拦截级的用户每个请求都先审核，命中即拒绝。',
@@ -556,6 +605,15 @@ export default {
       deleteConfirm: '确定删除流程 {name} 吗？它的分组和账号绑定一并删除，这些请求改按优先级更低的绑定审核。',
       move: '改绑',
       modelFilter: '模型范围',
+      scopeTitle: '审核范围',
+      scopeHint: '送审请求里的哪些内容。只审用户输入时，模型自己的回复和工具输出不会被送审。',
+      scope: {
+        input: '只审用户输入（system + user，含图片、文档）',
+        tools: '用户输入 + 工具结果',
+        all_but_own: '全部，但跳过网关自己返回过的 AI 回复',
+        all: '全部内容（含 AI 回复与工具调用，旧行为）'
+      },
+      scopeWarn: '审核 AI 回复与工具输出会显著增加误报、成本和延迟：编码代理每次工具调用都会触发一次审核。',
       models: '模型',
       modelsHint: '按客户端模型匹配，支持 * 和 ? 通配。',
       sampleRate: '抽样比例（%）',
@@ -645,7 +703,8 @@ export default {
         invalid_field: '流程里有不合法的字段',
         invalid_model_filter: '模型范围不合法',
         models_required: '这个模型范围至少要选一个模型',
-        invalid_sample_rate: '采样率必须在 0–100 之间',
+        invalid_sample_rate: '抽样比例必须在 0–100 之间',
+        invalid_scope: '审核范围无效',
         invalid_total_timeout: '总超时必须为 0（自动）或 1–120 秒',
         no_stages: '至少添加一级',
         too_many_stages: '最多 8 级',
@@ -667,7 +726,7 @@ export default {
       enabledOff: '已停用：配置和绑定都保留，但流程不运行；它的分组和账号按更宽的绑定审核。',
       enabledSaved: '已保存启用状态',
       timingTitle: '审核时机',
-      timingDesc: '流程没有模式，先审还是后审取决于用户：① 黑名单用户总是先审后发；② 白名单用户只在后台审核，永不拦截；③ 观察名单里的用户按条目的级别，拦截级先审、观察级后审；④ 其余用户按设置里的默认级别。先审的请求命中即拒绝；某一级出错时保留前面的命中，没有任何一级判定时放行。先审和后审执行同样的各级。',
+      timingDesc: '流程没有模式，先审还是后审取决于用户：① “总是先审”名单里的用户总是先审后发；② “只后台审核”名单里的用户只在后台审核，永不拦截；③ 观察名单里的用户按条目的级别，拦截级先审、观察级后审；④ 其余用户按设置里的默认级别。先审的请求命中即拒绝；某一级出错时保留前面的命中，没有任何一级判定时放行。先审和后审执行同样的各级。',
       boundGroups: '已绑定分组',
       noGroupsNew: '保存流程后到流程列表绑定分组',
       noGroupsWarn: '没有分组时这条流程不会审核任何请求',
@@ -682,7 +741,7 @@ export default {
       timeoutSecondsAria: '总超时（秒）',
       timeoutInvalid: '手动超时须大于 0（1–120 秒）；没有保存这个值，离开输入框后恢复为 {value} 秒。要按自动计算请选"自动"。',
       timeoutTruncate: '小于自动值（{value}）：后面的级可能来不及运行，这时保留前面的命中。',
-      timeoutHint: '流程超时时，没跑完的级没有结论并被跳过：前面的命中保留；没有任何一级判定时请求放行，记为出错。单次调用的超时在渠道里设置。',
+      timeoutHint: '流程超时时，没跑完的级没有结论并被跳过：前面的命中保留；没有任何一级判定时按“执行策略”里的失败处理。先审后发的请求最多等 29 秒，超过的部分只对后台审核有效。单次调用的超时在渠道里设置。',
       // canvas
       templateLabel: '模板：',
       template: { first_behavior: '初审（OpenAI）→ 行为审查（Jev）', single: '单个审核器' },
@@ -744,7 +803,7 @@ export default {
       pubNoGroups: '（未绑定，不审核任何请求）',
       pubAccountsOnly: '（没有分组绑定；只审核发往 {n} 个已绑定账号的请求）',
       pubGroupsNote: '分组保存即生效，不随发布变化',
-      pubTiming: '时机：黑名单和拦截级用户先审后发（命中即拒绝），白名单和观察级用户后台审核（只记录），其余用户按默认级别。',
+      pubTiming: '时机：“总是先审”名单和拦截级用户先审后发（命中即拒绝），“只后台审核”名单和观察级用户后台审核（只记录），其余用户按默认级别。',
       pubStage: '第 {n} 级 · {role}：{auditors}',
       pubFallback: '命中 → 最终命中（前置：拒绝） · 通过或失败 → 下一个补审级，都没有命中则放行',
       pubNote: '各节点几秒内生效；可从版本历史回滚。',
@@ -1198,12 +1257,12 @@ export default {
       count: '重放 {n}'
     },
     lists: {
-      allow: '白名单',
-      block: '黑名单',
+      allow: '只后台审核',
+      block: '总是先审',
       allowHint: '只后审，永不拦截',
       blockHint: '总是先审',
-      allowOnlyObserve: '白名单用户只能设为观察',
-      blockAlwaysPre: '黑名单用户总是先审，名单级别不影响时机'
+      allowOnlyObserve: '“只后台审核”名单里的用户只能设为观察',
+      blockAlwaysPre: '“总是先审”名单里的用户总是先审，名单级别不影响时机'
     },
     settingsTab: {
       loadFailed: '设置加载失败',
@@ -1267,7 +1326,36 @@ export default {
     listSep: ', ',
     clauseSep: '; ',
     ms: '{n} ms',
-    mode: { off: 'Off', observe: 'Observe by default', enforce: 'Enforce by default' },
+    mode: { off: 'Moderation off', observe: 'Background by default', enforce: 'Check first by default' },
+    nav: {
+      groups: { monitor: 'Monitor', policy: 'Policy', users: 'Users and actions', resources: 'Resources', system: 'System' },
+      items: {
+        overview: 'Overview', events: 'Records', test: 'Playground',
+        flows: 'Flows', bindings: 'Bindings', policy: 'Execution policy', cache: 'Cache and input',
+        watch: 'Watch list', blocks: 'Banned users', lists: 'List rules', analysis: 'AI analysis',
+        auditors: 'Auditors', channels: 'Channels', jev: 'Jev questions',
+        response: 'Block response', records: 'Records and retention', advanced: 'Advanced'
+      },
+      desc: {
+        overview: 'Today\'s volume, hits and errors, and what needs attention.',
+        events: 'The verdict, stages and moderated content of every run.',
+        test: 'Run a flow or an auditor on any text.',
+        flows: 'What is moderated (scope, models) and how it is judged (review chain and fallback).',
+        bindings: 'Which group or account uses which flow; bindings that no longer apply are flagged here.',
+        policy: 'Check first or in the background, and what happens when moderation fails.',
+        cache: 'Verdict cache, hit replay and how much of a request is moderated.',
+        watch: 'Users at the observe level are moderated in the background; at the enforce level, first.',
+        blocks: 'Every request of a banned user is refused.',
+        lists: 'Fixed lists, automatic watch and automatic bans.',
+        analysis: 'The AI reviews suspicious users and adjusts their level.',
+        auditors: 'An auditor = a type + a channel + questions, categories or thresholds.',
+        channels: 'The upstreams the auditors and the AI analysis call.',
+        jev: 'The default questions of auditors without their own.',
+        response: 'What a client gets when its request is refused.',
+        records: 'Which runs are recorded, how much is kept and for how long.',
+        advanced: 'Concurrency, queue, timeouts and alerts; rarely changed.'
+      }
+    },
     tabs: { overview: 'Overview', events: 'Records', watch: 'Watch list', blocks: 'Banned users', flows: 'Flows', bindings: 'Bindings', auditors: 'Auditors', channels: 'Channels', test: 'Playground', settings: 'Settings' },
     result: { block: 'Blocked', hit: 'Hit', overturned: 'Overturned', error: 'Error', pass: 'Pass' },
     timing: { pre: 'Before upstream', post: 'Background' },
@@ -1465,6 +1553,23 @@ export default {
     },
     detail: {
       title: 'Record',
+      match: {
+        group: 'Group binding',
+        account: 'Account binding (in the group)',
+        account_any: 'Account binding (any group)',
+        default: 'Default flow (group not bound)',
+        fallback: 'Default flow (fallback: the bound flow is {reason})',
+        reason: { disabled: 'disabled', unpublished: 'unpublished', deleted: 'deleted' }
+      },
+      level: {
+        blocklist: 'Checked first · always-check-first list',
+        allowlist: 'Background · background-only list',
+        watch_enforce: 'Checked first · watch list, enforce level',
+        watch_observe: 'Background · watch list, observe level',
+        default_enforce: 'Checked first · default handling',
+        default_observe: 'Background · default handling'
+      },
+      matchFallbackHint: 'The group is bound to flow #{id}, but it is {reason}, so the request fell back to the default flow. See Bindings.',
       sessionRecords: 'Every record of this session',
       endpointRecords: 'Only this endpoint',
       trace: 'Stages',
@@ -1480,6 +1585,9 @@ export default {
       deleted: 'Record deleted',
       loadFailed: 'Failed to load the record',
       f: {
+        match: 'Matched by',
+        handling: 'Handling',
+        scope: 'Scope',
         id: 'Record ID',
         request: 'Request ID',
         severity: 'Severity',
@@ -1537,7 +1645,7 @@ export default {
       empty: 'No auditor calls'
     },
     watch: {
-      hint: 'Observe: requests pass and are moderated in the background, violations are counted. Enforce: requests are moderated first and refused on a hit. Users with a first suspicious record join at the default level (configurable). Allowlisted users are only moderated after their requests, whatever their level; blocklisted users are always moderated first. Staff never join the list.',
+      hint: 'Observe: requests pass and are moderated in the background, violations are counted. Enforce: requests are moderated first and refused on a hit. Users with a first suspicious record join at the default level (configurable). users on the background-only list are only moderated after their requests, whatever their level; users on the always-check-first list are always moderated first. Staff never join the list.',
       add: 'Add user',
       editTitle: 'Edit user #{id}',
       levelHint: 'Every request of an enforce-level user is moderated first and refused on a hit.',
@@ -1708,6 +1816,15 @@ export default {
       deleteConfirm: 'Delete flow {name}? Its group and account bindings go with it; their requests then go by a less specific binding.',
       move: 'Move',
       modelFilter: 'Models',
+      scopeTitle: 'Scope',
+      scopeHint: 'Which parts of a request are moderated. With user input only, the model\'s own replies and tool output are not sent.',
+      scope: {
+        input: 'User input only (system + user, with images and documents)',
+        tools: 'User input + tool results',
+        all_but_own: 'Everything except replies the gateway returned itself',
+        all: 'Everything, AI replies and tool calls included (old behaviour)'
+      },
+      scopeWarn: 'Moderating AI replies and tool output adds false positives, cost and latency: a coding agent triggers a run on every tool call.',
       models: 'Model patterns',
       modelsHint: 'Client model, * and ? wildcards.',
       sampleRate: 'Sample rate (%)',
@@ -1798,6 +1915,7 @@ export default {
         invalid_model_filter: 'Invalid model scope',
         models_required: 'Pick at least one model for this model scope',
         invalid_sample_rate: 'The sample rate must be 0–100',
+        invalid_scope: 'Unknown scope',
         invalid_total_timeout: 'The total timeout must be 0 (automatic) or 1–120 s',
         no_stages: 'Add at least one stage',
         too_many_stages: 'At most 8 stages',
@@ -1819,7 +1937,7 @@ export default {
       enabledOff: 'Disabled: configuration and bindings are kept, but the flow does not run; its groups and accounts go by wider bindings.',
       enabledSaved: 'Enabled state saved',
       timingTitle: 'Moderation timing',
-      timingDesc: 'Flows have no mode; pre or post depends on the user: (1) blocklisted users are always moderated first; (2) allowlisted users only in the background, never refused; (3) users on the watch list go by the level of their entry, enforce first and observe in the background; (4) everyone else by the default level of the settings. A request moderated first is refused on a hit; when a stage errors earlier hits stand, and when no stage reaches a verdict the request is allowed. Both timings run the same stages.',
+      timingDesc: 'Flows have no mode; pre or post depends on the user: (1) users on the always-check-first list are always moderated first; (2) users on the background-only list only in the background, never refused; (3) users on the watch list go by the level of their entry, enforce first and observe in the background; (4) everyone else by the default level of the settings. A request moderated first is refused on a hit; when a stage errors earlier hits stand, and when no stage reaches a verdict the request is allowed. Both timings run the same stages.',
       boundGroups: 'Bound groups',
       noGroupsNew: 'Save the flow, then bind groups in the flow list',
       noGroupsWarn: 'No group bound: this flow moderates no request',
@@ -1834,7 +1952,7 @@ export default {
       timeoutSecondsAria: 'Total timeout (seconds)',
       timeoutInvalid: 'A manual timeout must be above 0 (1–120 s). This value was not kept; leaving the box shows {value} s again. Choose "Automatic" for the computed value.',
       timeoutTruncate: 'Less than the automatic value ({value}): later stages may not get to run; earlier hits then stand.',
-      timeoutHint: 'When the flow runs out of time, the stages left have no verdict and are passed over: earlier hits stand, and when no stage reached a verdict the request is allowed and recorded as an error. The single-call timeout is set per channel.',
+      timeoutHint: 'When the flow runs out of time, the stages left have no verdict and are passed over: earlier hits stand, and when no stage reached a verdict the failure handling of the execution policy applies. A request checked first waits at most 29 s; beyond that only background moderation uses the time. The single-call timeout is set per channel.',
       // canvas
       templateLabel: 'Template:',
       template: { first_behavior: 'First review (OpenAI) → Behavior review (Jev)', single: 'Single auditor' },
@@ -2350,8 +2468,8 @@ export default {
       count: '{n} replayed'
     },
     lists: {
-      allow: 'Allowlist',
-      block: 'Blocklist',
+      allow: 'Background only',
+      block: 'Always check first',
       allowHint: 'Only moderated after the request, never refused',
       blockHint: 'Always moderated first',
       allowOnlyObserve: 'Allowlisted users can only be observed',

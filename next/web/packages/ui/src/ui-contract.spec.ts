@@ -14,7 +14,7 @@ describe('host UI 3 contract', () => {
     expect('TabBar' in ui).toBe(false)
   })
   it('rejects unported UI 1 plugins and accepts the migrated compatibility range', () => {
-    expect(HOST_UI_VERSION).toBe('3.13.0')
+    expect(HOST_UI_VERSION).toBe('3.14.0')
     expect(satisfiesRange(HOST_UI_VERSION, '^1.0')).toBe(false)
     expect(satisfiesRange(HOST_UI_VERSION, '^2.0')).toBe(false)
     expect(satisfiesRange(HOST_UI_VERSION, '^3.0')).toBe(true)
@@ -43,13 +43,15 @@ describe('host UI 3 contract', () => {
     expect(satisfiesRange('3.11.0', '^3.12')).toBe(false)
     expect(satisfiesRange(HOST_UI_VERSION, '^3.13')).toBe(true)
     expect(satisfiesRange('3.12.0', '^3.13')).toBe(false)
+    expect(satisfiesRange(HOST_UI_VERSION, '^3.14')).toBe(true)
+    expect(satisfiesRange('3.13.0', '^3.14')).toBe(false)
   })
   it('declares in each README section of UI 3.N the range ^3.N and the UI it follows', () => {
     const sections = readme.split(/^## /m).flatMap((body) => {
       const minor = /^[^\n]*（UI SDK 3\.(\d+)）/.exec(body)?.[1]
       return minor ? [{ minor: Number(minor), body }] : []
     })
-    expect(sections.map((s) => s.minor)).toContain(13)
+    expect(sections.map((s) => s.minor)).toContain(14)
     for (const { minor, body } of sections) {
       for (const m of body.matchAll(/hostUICompat: "\^3\.(\d+)"/g)) expect(Number(m[1]), `UI 3.${minor}`).toBe(minor)
       for (const m of body.matchAll(/(?:与 3\.(\d+) 相同|最后一个带 UI 3\.(\d+) 的核心)/g)) expect(Number(m[1] ?? m[2]), `UI 3.${minor}`).toBe(minor - 1)

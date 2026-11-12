@@ -13,7 +13,7 @@ import { mountPinned } from '@sub2api/ui/testing'
 
 const api = vi.hoisted(() => ({ get: vi.fn(), list: vi.fn() }))
 vi.mock('@sub2api/host', async original => ({ ...(await original<object>()), api }))
-vi.mock('@/stores/plugins', () => ({ usePluginStore: () => ({ refresh: () => Promise.resolve() }) }))
+vi.mock('@/stores/plugins', () => ({ usePluginStore: () => ({ refresh: () => Promise.resolve(), page: () => null }) }))
 const denied = vi.hoisted(() => new Set<string>())
 vi.mock('@/stores/auth', () => ({
   useAuthStore: () => ({

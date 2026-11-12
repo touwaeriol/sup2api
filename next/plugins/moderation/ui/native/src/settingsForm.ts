@@ -23,9 +23,10 @@ export const CUSTOM_KEYS = ['analysis_channel_id', 'notify_webhook_url', 'notify
 /** The stored 0.1 API key: hidden, but the page offers to clear it (a kept credential makes moderation:manage re-enter it, §75.1). */
 export const LEGACY_KEY = 'api_key'
 
-/** A ui:section group of visible fields; title / description are LocalizedText. */
+/** A ui:section group of visible fields; title / description are LocalizedText; page = the settings page showing it (nav.ts). */
 export interface SettingSection {
   id: string
+  page: string
   title: unknown
   description: unknown
   collapsed: boolean
@@ -42,13 +43,13 @@ export const isHidden = (ui: UISchema | null | undefined, key: string) => uiGet(
 export function settingSections(schema: JSONSchema | null | undefined, ui: UISchema | null | undefined): SettingSection[] {
   if (!schema?.properties) return []
   const out: SettingSection[] = []
-  let cur: SettingSection = { id: '', title: '', description: '', collapsed: false, keys: [] }
+  let cur: SettingSection = { id: '', page: '', title: '', description: '', collapsed: false, keys: [] }
   for (const k of orderedKeys(schema, ui || undefined)) {
     const s = childUI(ui || undefined, k)?.['ui:section']
     if (s) {
       out.push(cur)
       const obj = typeof s === 'object' && !Array.isArray(s) && 'title' in s
-      cur = { id: k, title: obj ? s.title : s, description: obj ? s.description || '' : '', collapsed: obj && s.collapsed === true, keys: [] }
+      cur = { id: k, page: obj ? String(s.page || '') : '', title: obj ? s.title : s, description: obj ? s.description || '' : '', collapsed: obj && s.collapsed === true, keys: [] }
     }
     if (!isHidden(ui, k)) cur.keys.push(k)
   }
@@ -56,10 +57,16 @@ export function settingSections(schema: JSONSchema | null | undefined, ui: UISch
   return out.filter((g) => g.keys.length)
 }
 
-/** The keys this page edits: every visible field, and the 0.1 API key while one is stored (to clear it). */
-export function editableKeys(sections: SettingSection[], stored: Record<string, unknown>): string[] {
+/** The page that offers to clear a stored 0.1 API key. */
+export const LEGACY_KEY_PAGE = 'policy'
+
+/** The sections of one settings page. */
+export const sectionsOf = (sections: SettingSection[], page: string) => sections.filter((g) => g.page === page)
+
+/** The keys a page edits: its visible fields, and on LEGACY_KEY_PAGE the 0.1 API key while one is stored (to clear it). */
+export function editableKeys(sections: SettingSection[], stored: Record<string, unknown>, page = LEGACY_KEY_PAGE): string[] {
   const keys = sections.flatMap((g) => g.keys)
-  return stored[LEGACY_KEY] ? [...keys, LEGACY_KEY] : keys
+  return stored[LEGACY_KEY] && page === LEGACY_KEY_PAGE ? [...keys, LEGACY_KEY] : keys
 }
 
 /** The keys rendered by the schema widgets (editable keys without a custom editor). */

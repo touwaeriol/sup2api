@@ -26,15 +26,16 @@ import { useCatalog } from './catalog'
 import { enumOptions, joinList } from './format'
 import { applyErrorsOrToast, clearErrors, type FieldErrors } from './forms'
 import { mergeSettings, type PageValues } from './settingsMerge'
-import { CACHE_DAYS_KEY, displayValues, editableKeys, LEGACY_KEY, schemaKeys, sentSetting, settingSections, settingsKey, verdictCacheOff, withRetiredMirrored, type SettingSection } from './settingsForm'
+import { CACHE_DAYS_KEY, displayValues, editableKeys, LEGACY_KEY, schemaKeys, sectionsOf, sentSetting, settingSections, settingsKey, verdictCacheOff, withRetiredMirrored, type SettingSection } from './settingsForm'
+import type { SectionKey } from './nav'
 import { useAsync } from './useAsync'
 import { fetchDefaults, fetchPluginSettings, jevPayload, savePluginSettings, SETTINGS_MASK, useModHost } from './host'
 import type { JevQuestions } from './types'
 
-// All the moderation settings (CONTRACTS §72.15; the plugin page is where
-// they are edited, ui.settings mode native, §75.5): the fields of
+// One page of the moderation settings (CONTRACTS §72.15; the plugin page is
+// where they are edited, ui.settings mode native, §75.5): the fields of
 // forms/settings.schema.json in the ui:section groups of
-// forms/settings.ui.json, rendered by the schema widgets (the console's own
+// forms/settings.ui.json whose page is this one (nav.ts), rendered by the schema widgets (the console's own
 // among them: the allowlist and the blocklist pick their users with
 // entity-select), except a few with their own editor here: the block
 // response preview per API format, the AI analysis channel picker, the
@@ -57,6 +58,7 @@ import type { JevQuestions } from './types'
 // settings API has no version to compare). A key someone else changed that
 // this page changed too is confirmed first, then this page's value wins. A
 // number left empty is not stored, so the schema default applies.
+const props = defineProps<{ page: SectionKey }>()
 const host = useModHost()
 const t = host.t
 const text = (v: unknown) => (v ? host.i18n.text(v as never) : '')
@@ -92,9 +94,9 @@ const settings = computed(() => data.value?.[0] ?? null)
 const defaults = computed(() => data.value?.[1] ?? null)
 const schema = computed(() => settings.value?.schema ?? null)
 const ui = computed(() => settings.value?.ui_schema ?? null)
-const sections = computed<SettingSection[]>(() => settingSections(schema.value, ui.value))
-/** The keys of this page (errors on other keys are toasted). */
-const keys = computed(() => editableKeys(sections.value, settings.value?.values || {}))
+const sections = computed<SettingSection[]>(() => sectionsOf(settingSections(schema.value, ui.value), props.page))
+/** The keys of this page (errors on other keys are toasted; the other pages' keys go back as stored). */
+const keys = computed(() => editableKeys(sections.value, settings.value?.values || {}, props.page))
 const widgetKeys = computed(() => schemaKeys(keys.value))
 
 const prop = (k: string) => schema.value?.properties?.[k] ?? {}

@@ -15,7 +15,7 @@ import vue from '@vitejs/plugin-vue'
 export const SHARED_MODULES = ['vue', 'vue-router', 'pinia', 'vue-i18n', '@sub2api/ui', '@sub2api/host']
 
 /** Host UI contract version the preset targets (manifest hostUICompat). */
-export const HOST_UI_VERSION = '3.13.0'
+export const HOST_UI_VERSION = '3.14.0'
 
 function isShared(id) {
   return SHARED_MODULES.some(m => id === m || id.startsWith(m + '/'))

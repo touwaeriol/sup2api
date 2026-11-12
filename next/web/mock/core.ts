@@ -376,7 +376,10 @@ const MENUS = [
   {
     section: 'security',
     label: L('Security', '安全'),
-    items: [{ id: 'guard:guard', label: L('Guard', '请求守卫'), icon: 'shield', path: '/p/guard/dashboard', plugin_key: 'guard' }]
+    items: [
+      { id: 'guard:guard', label: L('Guard', '请求守卫'), icon: 'shield', path: '/p/guard/dashboard', plugin_key: 'guard' },
+      { id: 'moderation:moderation', label: L('Prompt Moderation', '提示词审核'), icon: 'shield', path: '/p/moderation/dashboard', plugin_key: 'moderation' }
+    ]
   },
   {
     section: 'users',

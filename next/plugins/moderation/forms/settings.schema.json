@@ -249,7 +249,7 @@
     "verdict_cache_days": {
       "type": "integer",
       "title": "Verdict cache (days)",
-      "minimum": 1,
+      "minimum": 0,
       "maximum": 30,
       "default": 7
     },
@@ -539,6 +539,24 @@
       "minimum": 0,
       "maximum": 604800,
       "default": 86400
+    },
+    "fail_policy": {
+      "type": "string",
+      "title": "When moderation fails",
+      "enum": [
+        "open",
+        "close_pre"
+      ],
+      "default": "open"
+    },
+    "hit_replay": {
+      "type": "string",
+      "title": "Cached hit replay",
+      "enum": [
+        "new_content",
+        "whole"
+      ],
+      "default": "new_content"
     }
   }
 }
