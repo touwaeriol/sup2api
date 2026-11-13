@@ -19,3 +19,14 @@ Playwright (chromium) against the web mock (`npx vite --mode mock`), code at fea
 | 13-phone-record-error-detail | 390 phone: record err_detail |
 | 14-dark-jev-default-questions-shown | dark: editor |
 | 15-dark-view-default-questions | dark: default questions drawer |
+
+## Review fixes (feat/moderation-0.11.2 4eaf7c417f)
+
+| file | what |
+|---|---|
+| 16-readonly-editor-view-default-enabled | read user (moderation:read only): editor read only, "查看默认题目" enabled, "恢复为默认" disabled |
+| 17-readonly-view-default-questions | read user: default questions drawer, no restore button |
+| 18-llm-questions-default-table | new llm_questions auditor: default table shown, thresholds hidden |
+| 19-llm-questions-view-default-no-threshold-diff | its drawer: rows "与当前相同" (thresholds not compared) |
+
+09/10/13 predate the fix: err_detail is now written without the "network: " prefix.
