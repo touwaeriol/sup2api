@@ -79,11 +79,13 @@ type Env struct {
 }
 
 // Close stops what Prepare started in this process (miniredis). The local
-// PostgreSQL server keeps running, like after tests.
+// PostgreSQL server keeps running, like after tests. Calling it again does
+// nothing.
 func (e *Env) Close() {
 	if e.redis != nil {
 		e.stopClock()
 		e.redis.Close()
+		e.redis = nil
 	}
 }
 
