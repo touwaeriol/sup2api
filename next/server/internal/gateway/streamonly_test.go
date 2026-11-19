@@ -41,8 +41,9 @@ type responsesUpstream struct {
 	// output_item.done events out of order.
 	emptyOutput bool
 	// terminal replaces the last event: "incomplete", "failed", "error429",
-	// "error_flat", "none" (the stream just ends).
+	// "error_flat", "event" (errEvent), "none" (the stream just ends).
 	terminal string
+	errEvent map[string]any
 	// linger, when set, keeps the stream open after the last event until the
 	// request is canceled, which it is then told.
 	linger chan struct{}
@@ -76,7 +77,7 @@ func (u *responsesUpstream) handle(w http.ResponseWriter, r *http.Request) {
 	raw, _ := io.ReadAll(r.Body)
 	u.mu.Lock()
 	u.bodies = append(u.bodies, raw)
-	streamOnly, empty, terminal, linger := u.streamOnly, u.emptyOutput, u.terminal, u.linger
+	streamOnly, empty, terminal, errEvent, linger := u.streamOnly, u.emptyOutput, u.terminal, u.errEvent, u.linger
 	u.mu.Unlock()
 	if linger != nil {
 		defer func() {
@@ -127,6 +128,8 @@ func (u *responsesUpstream) handle(w http.ResponseWriter, r *http.Request) {
 		send(map[string]any{"type": "error", "status": 429, "error": map[string]any{"type": "usage_limit_reached", "message": "limit reached", "resets_at": 1999999999}})
 	case "error_flat":
 		send(map[string]any{"type": "error", "code": "bad_thing", "message": "flat error", "param": nil, "sequence_number": 4})
+	case "event":
+		send(errEvent)
 	default:
 		send(map[string]any{"type": "response.completed", "response": soResponse("completed", output)})
 	}
@@ -535,11 +538,86 @@ func TestStreamOnlyErrorShapes(t *testing.T) {
 		{"error", `{"type":"error","status":401,"error":{"message":"m"}}`, 401, `{"error":{"message":"m"}}`},
 		{"error", `{"type":"error","status":200,"error":"plain"}`, 502, `{"error":{"message":"plain"}}`},
 		{"error", `{"type":"error","code":"c","message":"m","param":null}`, 502, `{"error":{"code":"c","message":"m","param":null}}`},
+		// invalid_request_error without a status rejects the request: 400.
+		{"error", `{"type":"error","error":{"type":"invalid_request_error","code":null,"message":"m"}}`, 400, `{"error":{"type":"invalid_request_error","code":null,"message":"m"}}`},
+		{"error", `{"type":"invalid_request_error","code":"c","message":"m"}`, 400, `{"error":{"type":"invalid_request_error","code":"c","message":"m"}}`},
+		{"response.failed", `{"type":"response.failed","response":{"error":{"type":"invalid_request_error","message":"m"}}}`, 400, `{"error":{"type":"invalid_request_error","message":"m"}}`},
+		// A status wins; a code naming the account stays a 502; other types stay 502.
+		{"error", `{"type":"error","status":429,"error":{"type":"invalid_request_error","message":"m"}}`, 429, `{"error":{"type":"invalid_request_error","message":"m"}}`},
+		{"error", `{"type":"error","error":{"type":"invalid_request_error","code":"account_deactivated","message":"m"}}`, 502, `{"error":{"type":"invalid_request_error","code":"account_deactivated","message":"m"}}`},
+		{"error", `{"type":"error","error":{"type":"server_error","message":"m"}}`, 502, `{"error":{"type":"server_error","message":"m"}}`},
 	} {
 		status, body := streamOnlyError(tc.name, []byte(tc.data))
 		if status != tc.status || string(body) != tc.body {
 			t.Errorf("%s %s: %d %s", tc.name, tc.data, status, body)
 		}
+	}
+}
+
+// jsonWordEvent is the error event the Codex backend sends, inside a 200
+// stream and without a status, when text.format is json_object and the input
+// messages lack the word "json".
+func jsonWordEvent(errType, code, msg string) map[string]any {
+	return map[string]any{"type": "error", "sequence_number": 2,
+		"error": map[string]any{"type": errType, "code": code, "message": msg, "param": nil}}
+}
+
+// A chat json_object request keeps its system message in the input, and an
+// invalid_request_error event without a status goes back to the client as a
+// 400 from the first account: the request would fail the same way on any
+// other. A code naming the account, or an auto-disable keyword, still moves
+// to the next account.
+func TestStreamOnlyRequestErrorNoFailover(t *testing.T) {
+	const jsonWord = "Response input messages must contain the word 'json' in some form to use 'text.format' of type 'json_object'."
+	for _, tc := range []struct {
+		name, errType, code, msg string
+		status, bodies           int
+		disabled                 bool
+	}{
+		{"request error", "invalid_request_error", "", jsonWord, 400, 1, false},
+		{"account code", "invalid_request_error", "account_deactivated", "deactivated", 200, 2, false},
+		{"auto-disable keyword", "invalid_request_error", "", "Your credit balance is too low", 200, 2, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e, plat, up := sameChatEnv(t, openAIStreamOnly())
+			e.accounts.addTyped(testGroup, 11, 90, "codex-11", "codexlike", "chatgpt")
+			e.accounts.groups[testGroup] = []int64{10, 11}
+			up.terminal, up.errEvent = "event", jsonWordEvent(tc.errType, tc.code, tc.msg)
+			// The second account answers normally.
+			plat.classifyHook = func(*pluginv1.ClassifyErrorRequest, *pluginv1.ClassifyErrorResponse) {
+				up.mu.Lock()
+				up.terminal = ""
+				up.mu.Unlock()
+			}
+			b := map[string]any{"model": testModel, "response_format": map[string]any{"type": "json_object"},
+				"messages": []any{map[string]any{"role": "system", "content": "Reply in JSON."}, map[string]any{"role": "user", "content": "hi"}}}
+			r := e.do("/v1/chat/completions", b, map[string]string{"authorization": "Bearer " + testKey, "x-api-key": ""})
+			if r.status != tc.status {
+				t.Fatalf("response: %d %s", r.status, r.body)
+			}
+			if tc.status == 400 && !strings.Contains(r.json().Get("error.message").String(), "the word 'json'") {
+				t.Fatalf("response: %d %s", r.status, r.body)
+			}
+			up.mu.Lock()
+			bodies := up.bodies
+			up.mu.Unlock()
+			if len(bodies) != tc.bodies || len(plat.classify) != 1 || int(plat.classify[0].GetStatus()) != map[bool]int{true: 400, false: 502}[tc.code == ""] {
+				t.Fatalf("upstream calls %d, classify %+v", len(bodies), plat.classify)
+			}
+			wire := gjson.ParseBytes(bodies[0])
+			if wire.Get("instructions").Exists() || wire.Get("text.format.type").String() != "json_object" ||
+				wire.Get("input.0.role").String() != "developer" || wire.Get("input.0.content.0.text").String() != "Reply in JSON." ||
+				wire.Get("input.1.role").String() != "user" {
+				t.Fatalf("upstream body %s", bodies[0])
+			}
+			if _, dis := e.accounts.disabled[10]; dis != tc.disabled {
+				t.Fatalf("disabled %v", e.accounts.disabled)
+			}
+			if tc.status == 400 && len(e.accounts.cooldowns) != 0 {
+				t.Fatalf("cooldowns %v", e.accounts.cooldowns)
+			}
+			e.record()
+		})
 	}
 }
 

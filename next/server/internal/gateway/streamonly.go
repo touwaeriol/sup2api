@@ -166,19 +166,22 @@ func fillStreamOnlyOutput(body []byte, items map[int64][]byte) []byte {
 	return body
 }
 
-// streamOnlyError turns an error event into the HTTP status it carries (502
-// when none) and the body a non-streaming upstream would have answered with:
-// {"error": <the event's error object>}.
+// streamOnlyError turns an error event into the HTTP status it carries and
+// the body a non-streaming upstream would have answered with:
+// {"error": <the event's error object>}. Without a status the event is a 502,
+// unless it is a request error (streamOnlyRequestError): a 400.
 func streamOnlyError(name string, data []byte) (int, []byte) {
-	status := http.StatusBadGateway
-	if s := gjson.GetBytes(data, "status"); s.Type == gjson.Number && s.Int() >= 400 && s.Int() <= 599 {
-		status = int(s.Int())
-	}
 	path := "error"
 	if name == "response.failed" {
 		path = "response.error"
 	}
 	detail := gjson.GetBytes(data, path)
+	status := http.StatusBadGateway
+	if s := gjson.GetBytes(data, "status"); s.Type == gjson.Number && s.Int() >= 400 && s.Int() <= 599 {
+		status = int(s.Int())
+	} else if streamOnlyRequestError(data, detail) {
+		status = http.StatusBadRequest
+	}
 	switch {
 	case detail.IsObject():
 		return status, append(append([]byte(`{"error":`), detail.Raw...), '}')
@@ -203,6 +206,29 @@ func streamOnlyError(name string, data []byte) (int, []byte) {
 		out, _ = sjson.SetBytes(out, "error.message", msg)
 	}
 	return status, out
+}
+
+// streamOnlyAccountCodes are error codes OpenAI sends with the type
+// invalid_request_error that blame the credential or the account, not the
+// request (over HTTP they come with a 401 or 403): such an event stays a 502
+// and the attempt moves to another account.
+var streamOnlyAccountCodes = map[string]bool{
+	"invalid_api_key": true, "account_deactivated": true, "invalid_organization": true,
+	"organization_deactivated": true, "unsupported_country_region_territory": true,
+}
+
+// streamOnlyRequestError reports whether an error event without a status
+// rejects the request itself: its type (error.type, response.error.type or
+// the event's own type) is invalid_request_error and its code does not name
+// the account. Upstreams answer such a request the same way on every account
+// (for example text.format json_object without the word "json" in the
+// input), so it goes back to the client as a 400 instead of failing over.
+func streamOnlyRequestError(data []byte, detail gjson.Result) bool {
+	typ, code := gjson.GetBytes(data, "type"), gjson.GetBytes(data, "code")
+	if detail.IsObject() {
+		typ, code = detail.Get("type"), detail.Get("code")
+	}
+	return typ.Str == "invalid_request_error" && !streamOnlyAccountCodes[code.Str]
 }
 
 // collectStreamOnly reads the SSE answer of a stream-only upstream and either
