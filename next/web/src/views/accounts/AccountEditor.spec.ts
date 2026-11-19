@@ -15,12 +15,15 @@ import ParamOverrideField from './paramOverride/ParamOverrideField.vue'
 import HeaderOverrideField from './headerOverride/HeaderOverrideField.vue'
 import AccountUsageLimitCard from './AccountUsageLimitCard.vue'
 import RateLimitEditor from './controls/RateLimitEditor.vue'
+import ModelProtocolsCard from './protocols/ModelProtocolsCard.vue'
+import OwnProtocolsField from './protocols/OwnProtocolsField.vue'
+import { codex, openai } from './protocols/fixtures'
 
 const mocks = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), patch: vi.fn(), put: vi.fn(), list: vi.fn().mockResolvedValue({ items: [] }), toast: vi.fn() }))
 vi.mock('@sub2api/host', async (original) => ({ ...await original<object>(), api: mocks }))
 vi.mock('@sub2api/ui', async (original) => ({ ...await original<typeof import('@sub2api/ui')>(), toast: mocks.toast }))
 const ownership = vi.hoisted(() => ({ scope: 'all' as 'all' | 'own' }))
-const pluginStore = vi.hoisted(() => ({ listed: true, pending: {} as Record<string, boolean>, errors: {} as Record<string, string>, plugin: () => null, component: (() => null) as (key: string, name?: string) => unknown, slotEntries: (() => []) as (slot: string) => unknown[] }))
+const pluginStore = vi.hoisted(() => ({ listed: true, pending: {} as Record<string, boolean>, errors: {} as Record<string, string>, plugin: () => null, component: (() => null) as (key: string, name?: string) => unknown, slotEntries: (() => []) as (slot: string) => unknown[], refresh: vi.fn() }))
 vi.mock('@/stores/plugins', () => ({ usePluginStore: () => pluginStore, assetURL: () => '' }))
 const perms = vi.hoisted(() => ({ denied: [] as string[] }))
 // Keys compare in their canonical spelling (CONTRACTS §21).
@@ -33,7 +36,12 @@ vi.mock('@/composables/useScope', async original => ({ ...await original<typeof 
 vi.mock('@/composables/lookups', async (original) => ({ ...await original<object>(), useProxiesLookup: () => ({}) }))
 
 enableAutoUnmount(afterEach)
-const accountType = { plugin_key: 'claude', type: 'apikey', creation_group: 'claude', form: { mode: 'schema' }, platforms: [], default_models: [], default_model_mapping: {} } as unknown as AccountType
+// The plugin's native credentials form; each test starts with it registered.
+const KeyForm = { name: 'KeyForm', template: '<div />' }
+beforeEach(() => {
+  Object.assign(pluginStore, { listed: true, pending: {}, errors: {}, component: () => KeyForm })
+})
+const accountType = { plugin_key: 'claude', type: 'apikey', creation_group: 'claude', form: { mode: 'native', component: 'KeyForm' }, platforms: [], default_models: [], default_model_mapping: {} } as unknown as AccountType
 
 function render(account?: Account, realSelect = false, type: AccountType = accountType) {
   return shallowMount(AccountEditor, { props: { accountType: type, account }, global: { plugins: [i18n], stubs: {
@@ -51,7 +59,10 @@ function render(account?: Account, realSelect = false, type: AccountType = accou
     SSelect: realSelect ? false : { props: ['modelValue', 'options', 'disabled', 'searchable'], emits: ['update:modelValue'], template: '<input :value="modelValue" :disabled="disabled" @input="$emit(\'update:modelValue\', $event.target.value)" />' },
     // Like SInput, type="number" emits a number (null when empty).
     SInput: { props: ['modelValue', 'type'], emits: ['update:modelValue'], template: '<input :type="type" :value="modelValue" @input="$emit(\'update:modelValue\', type === \'number\' ? ($event.target.value === \'\' ? null : Number($event.target.value)) : $event.target.value)" />' },
-    SchemaForm: { template: '<div />', methods: { validate: () => true } },
+    // Mounts a native form the way plugin pages do: rendered for real.
+    PluginComponent: false,
+    // A native form whose expose (validate) the editor calls.
+    ValidatingForm: false,
   } } })
 }
 
@@ -64,11 +75,32 @@ async function chooseProxy(w: ReturnType<typeof render>, id: number | null) {
   await flushPromises()
 }
 
+describe('a form mode this console does not render', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    i18n.global.locale.value = 'zh'
+    mocks.get.mockResolvedValue({ enabled: true })
+    mocks.patch.mockResolvedValue(savedAccount())
+  })
+
+  // An older package's form mode (no native or iframe form): the editor asks
+  // to upgrade the plugin and sends the credentials back unchanged.
+  const oldType = { ...accountType, form: { mode: 'schema' } } as unknown as AccountType
+
+  it('asks to upgrade the plugin and saves the other sections with the credentials as they were', async () => {
+    const w = render({ ...savedAccount(), credentials: { api_key: '******' } } as unknown as Account, false, oldType)
+    await flushPromises()
+    expect(w.find('[data-testid="form-unavailable-old"]').exists()).toBe(true)
+    await w.get('form').trigger('submit'); await flushPromises()
+    expect(mocks.patch).toHaveBeenCalledWith('/accounts/1', expect.objectContaining({ credentials: { api_key: '******' } }))
+  })
+})
+
 describe('account forwarding and proxy', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     i18n.global.locale.value = 'zh'
-    mocks.get.mockImplementation((path: string) => Promise.resolve(path === '/accounts/auto-disable' ? { enabled: true } : path.endsWith('/form') ? { schema: { type: 'object' } } : {}))
+    mocks.get.mockImplementation((path: string) => Promise.resolve(path === '/accounts/auto-disable' ? { enabled: true } : {}))
     mocks.patch.mockResolvedValue(savedAccount())
     mocks.post.mockResolvedValue(savedAccount())
   })
@@ -126,7 +158,8 @@ describe('account forwarding and proxy', () => {
   })
 
   it('loads, explains and saves the conversion loss policy (CONVERT-MATRIX §6.3)', async () => {
-    const w = render({ ...savedAccount(), group_ids: [1, 2] } as Account)
+    // A Codex account adapts chat to Responses: something may be lost, so the policy applies.
+    const w = render({ ...savedAccount(), group_ids: [1, 2] } as Account, false, { ...accountType, ...codex })
     await flushPromises()
     const { groups } = useGroupsLookup()
     const hint = () => w.get('[data-testid="account-conversion-policy-hint"]').text()
@@ -178,17 +211,18 @@ describe('account forwarding and proxy', () => {
 
 // A plugin's native account form (form.mode "native", e.g. codex's
 // CodexAuthForm) comes from the plugin store: wait while the plugin list or
-// the plugin's module loads, then show the component or why it is missing.
+// the plugin's module loads, then show the component or why it is missing
+// (with Retry); the rest of the editor stays usable either way.
 describe('native plugin account form', () => {
   const nativeType = { ...accountType, plugin_key: 'codex', type: 'codex_device', creation_group: 'codex', form: { mode: 'native', component: 'CodexAuthForm' } } as unknown as AccountType
   const CodexAuthForm = { name: 'CodexAuthForm', props: ['mode'], template: '<div />' }
-  const unavailable = () => i18n.global.t('accounts.formUnavailable')
+  const unavailable = () => i18n.global.t('pluginHost.nativeMissing', { component: 'CodexAuthForm' })
 
   beforeEach(() => {
     vi.clearAllMocks()
     i18n.global.locale.value = 'zh'
     mocks.get.mockResolvedValue({ enabled: true })
-    Object.assign(pluginStore, { listed: true, pending: {}, errors: {}, component: () => null })
+    pluginStore.component = () => null
   })
 
   it('waits for the plugin list and the plugin module instead of reporting the form unavailable', async () => {
@@ -222,13 +256,66 @@ describe('native plugin account form', () => {
     await flushPromises()
     expect(w.text()).toContain('entry does not export register(host)')
   })
+
+  it('offers Retry when the plugin module failed, and still saves the other sections with the credentials as they were', async () => {
+    pluginStore.errors = { codex: 'Failed to fetch dynamically imported module' }
+    mocks.patch.mockResolvedValue(savedAccount())
+    const w = render({ ...savedAccount(), type: 'codex_device', credentials: { access_token: '******' } } as unknown as Account, false, nativeType)
+    await flushPromises()
+    await w.get('[data-testid="plugin-component-retry"]').trigger('click')
+    expect(pluginStore.refresh).toHaveBeenCalledTimes(1)
+    await w.getComponent(ProxyPicker).vm.$emit('update:modelValue', 7)
+    await w.get('form').trigger('submit'); await flushPromises()
+    expect(mocks.patch).toHaveBeenCalledWith('/accounts/1', expect.objectContaining({ proxy_id: 7, credentials: { access_token: '******' } }))
+  })
+
+  it('does not save while the native form says its value is invalid (expose validate, §23.5)', async () => {
+    let valid = false
+    pluginStore.component = () => ({ name: 'ValidatingForm', template: '<div />', setup: (_: unknown, { expose }: { expose: (e: object) => void }) => expose({ validate: async () => valid }) })
+    const w = render({ ...savedAccount(), type: 'codex_device' } as unknown as Account, false, nativeType)
+    await flushPromises()
+    await w.get('form').trigger('submit'); await flushPromises()
+    expect(mocks.patch).not.toHaveBeenCalled()
+    valid = true
+    await w.get('form').trigger('submit'); await flushPromises()
+    expect(mocks.patch).toHaveBeenCalledWith('/accounts/1', expect.anything())
+  })
+
+  // The form's proxy choice reaches an authorization flow as a proxy ticket
+  // (CONTRACTS §117): whatever the proxy field holds when the flow asks.
+  it('hands the native form a proxy ticket of the current proxy choice: an existing proxy, a pasted one or none', async () => {
+    const Form = { name: 'NativeForm', props: ['proxyTicket'], template: '<div />' }
+    pluginStore.component = () => Form
+    const w = render(undefined, false, nativeType)
+    await flushPromises()
+    const ticket = () => (w.getComponent(Form).props('proxyTicket') as () => Promise<string>)()
+    const url = '/account-types/codex/codex_device/proxy-ticket'
+    mocks.post.mockResolvedValue({ ticket: 'sealed' })
+
+    expect(await ticket()).toBe('sealed')
+    expect(mocks.post).toHaveBeenLastCalledWith(url, { proxy_id: null })
+    await chooseProxy(w, 7)
+    await ticket()
+    expect(mocks.post).toHaveBeenLastCalledWith(url, { proxy_id: 7 })
+    await w.get('[data-testid="proxy-mode"] input[value="url"]').setValue(true)
+    await w.get('[data-testid="proxy-url"]').setValue(' socks5://u:p@h:1080 ')
+    await ticket()
+    expect(mocks.post).toHaveBeenLastCalledWith(url, { proxy_url: 'socks5://u:p@h:1080' })
+
+    // A refused choice shows under the proxy field and goes back to the form.
+    const refused = new ApiError(400, { code: 'invalid_argument', message: 'invalid', details: { fields: [{ field: 'proxy_url', code: 'invalid', message: 'invalid proxy URL: missing port' }] } })
+    mocks.post.mockRejectedValueOnce(refused)
+    await expect(ticket()).rejects.toBe(refused)
+    await flushPromises()
+    expect(w.get('[data-testid="proxy-field"]').text()).toContain('invalid proxy URL: missing port')
+  })
 })
 
 describe('account model limits', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     i18n.global.locale.value = 'zh'
-    mocks.get.mockImplementation((path: string) => Promise.resolve(path === '/accounts/auto-disable' ? { enabled: true } : path.endsWith('/form') ? { schema: { type: 'object' } } : {}))
+    mocks.get.mockImplementation((path: string) => Promise.resolve(path === '/accounts/auto-disable' ? { enabled: true } : {}))
     mocks.patch.mockResolvedValue(savedAccount())
   })
 
@@ -361,7 +448,7 @@ describe('account usage limit', () => {
     i18n.global.locale.value = 'zh'
     limitGet = () => Promise.resolve(saved)
     mocks.get.mockImplementation((path: string) =>
-      path.endsWith('/usage-limit') ? limitGet() : Promise.resolve(path === '/accounts/auto-disable' ? { enabled: true } : path.endsWith('/form') ? { schema: { type: 'object' } } : {})
+      path.endsWith('/usage-limit') ? limitGet() : Promise.resolve(path === '/accounts/auto-disable' ? { enabled: true } : {})
     )
     mocks.patch.mockResolvedValue(savedAccount())
     mocks.put.mockResolvedValue({})
@@ -519,7 +606,7 @@ describe('common controls of the account type (docs/COMMON-CONTROLS.md §2)', ()
   beforeEach(() => {
     vi.clearAllMocks()
     i18n.global.locale.value = 'zh'
-    mocks.get.mockImplementation((path: string) => Promise.resolve(path === '/accounts/auto-disable' ? { enabled: true } : path.endsWith('/form') ? { schema: { type: 'object' } } : {}))
+    mocks.get.mockImplementation((path: string) => Promise.resolve(path === '/accounts/auto-disable' ? { enabled: true } : {}))
     mocks.post.mockResolvedValue(savedAccount())
     mocks.patch.mockResolvedValue(savedAccount())
   })
@@ -598,7 +685,7 @@ describe('plugin sections (account.editor.section)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     i18n.global.locale.value = 'zh'
-    mocks.get.mockImplementation((path: string) => Promise.resolve(path === '/accounts/auto-disable' ? { enabled: true } : path.endsWith('/form') ? { schema: { type: 'object' } } : {}))
+    mocks.get.mockImplementation((path: string) => Promise.resolve(path === '/accounts/auto-disable' ? { enabled: true } : {}))
     pluginStore.slotEntries = (slot: string) => (slot === 'account.editor.section' ? entries : [])
   })
   afterEach(() => {
@@ -634,7 +721,7 @@ describe('account field permissions', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     i18n.global.locale.value = 'zh'
-    mocks.get.mockImplementation((path: string) => Promise.resolve(path === '/accounts/auto-disable' ? { enabled: true } : path.endsWith('/form') ? { schema: { type: 'object' } } : {}))
+    mocks.get.mockImplementation((path: string) => Promise.resolve(path === '/accounts/auto-disable' ? { enabled: true } : {}))
     mocks.patch.mockResolvedValue(savedAccount())
     mocks.post.mockResolvedValue(savedAccount())
   })
@@ -692,5 +779,159 @@ describe('account field permissions', () => {
     expect(w.find('[data-testid="guarded-settings-hint"]').exists()).toBe(true)
     perms.denied = []
     expect(render(savedAccount(), false, guarded).find('[data-testid="guarded-settings-hint"]').exists()).toBe(false)
+  })
+})
+
+describe('account protocols (DESIGN-2026-11-17-PROTOCOL-BINDING §5.1)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    i18n.global.locale.value = 'zh'
+    mocks.get.mockImplementation((path: string) => Promise.resolve(path === '/accounts/auto-disable' ? { enabled: true } : {}))
+    mocks.patch.mockResolvedValue(savedAccount())
+    mocks.post.mockResolvedValue(savedAccount())
+  })
+  const openaiType = { ...accountType, ...openai } as AccountType
+  const bound = () => ({ ...savedAccount(), models: ['gpt-5.6', 'claude-sonnet-4-5'], protocols: ['openai.chat', 'openai.responses'], model_protocols: [{ models: ['claude-sonnet-4-5'], protocols: ['anthropic.messages'] }] }) as Account
+  const nav = (w: ReturnType<typeof render>) => w.getComponent(AccountEditorNav)
+  const section = (w: ReturnType<typeof render>) => nav(w).props('sections').find(s => s.key === 'models')!
+  const editorOf = (w: ReturnType<typeof render>) => w.getComponent(OwnProtocolsField).props('editor')
+  const policy = (w: ReturnType<typeof render>) => w.get('[data-testid="account-conversion-policy-select"]')
+
+  it('names the section "protocols and models" and orders its cards: own protocols, models and mapping, protocols per model', async () => {
+    const w = render(bound(), false, openaiType)
+    await flushPromises()
+    expect(section(w).label).toBe('协议与模型')
+    const cards = [...w.get('[data-editor-section="models"]').element.children].map(c => c.getAttribute('data-testid') || c.tagName.toLowerCase())
+    expect(cards).toEqual(['own-protocols-card', 'div', 'model-protocols-card-stub'])
+    expect(w.get('[data-testid="own-protocols-card"]').findComponent(OwnProtocolsField).exists()).toBe(true)
+    // Both cards work on one state; the matrix gets the model list and the mapping.
+    const card = w.getComponent(ModelProtocolsCard)
+    expect(card.props('editor')).toBe(editorOf(w))
+    expect([card.props('models'), card.props('mapping')]).toEqual([['gpt-5.6', 'claude-sonnet-4-5'], {}])
+  })
+
+  it('loads the binding of the account, sums it up in the navigation and saves both fields', async () => {
+    const w = render(bound(), false, openaiType)
+    await flushPromises()
+    expect(section(w).summary).toBe('协议 2/4 · 限定 1 个模型 · 转换 1 个 · 2 个模型')
+    const editor = editorOf(w)
+    editor.setMode('all')
+    editor.rules.value = { ...editor.rules.value, 'gpt-5.6': ['openai.chat'] }
+    await flushPromises()
+    expect(section(w).summary).toBe('协议 4/4 · 限定 2 个模型 · 转换 1 个 · 2 个模型')
+    await w.get('form').trigger('submit'); await flushPromises()
+    expect(mocks.patch).toHaveBeenCalledWith('/accounts/1', expect.objectContaining({
+      protocols: null,
+      model_protocols: [{ models: ['claude-sonnet-4-5'], protocols: ['anthropic.messages'] }, { models: ['gpt-5.6'], protocols: ['openai.chat'] }]
+    }))
+  })
+
+  it('creates an account on every own protocol and without conversion unless told otherwise', async () => {
+    const w = render(undefined, false, openaiType)
+    await flushPromises()
+    expect(section(w).summary).toBe('协议 4/4 · 不转换 · 全部模型')
+    await w.get('input').setValue('new')
+    await w.get('form').trigger('submit'); await flushPromises()
+    expect(mocks.post).toHaveBeenCalledWith('/accounts', expect.objectContaining({ protocols: null, model_protocols: [] }))
+  })
+
+  it('leaves the protocols of an account whose type is gone out of the request', async () => {
+    const w = shallowMount(AccountEditor, { props: { accountType: null, account: { ...bound(), orphaned: true } as Account }, global: { plugins: [i18n] } })
+    await flushPromises()
+    expect(w.findComponent(OwnProtocolsField).exists()).toBe(false)
+    expect(w.findComponent(ModelProtocolsCard).exists()).toBe(false)
+    await w.get('form').trigger('submit'); await flushPromises()
+    const body = mocks.patch.mock.calls[0][1]
+    expect(body).not.toHaveProperty('protocols')
+    expect(body).not.toHaveProperty('model_protocols')
+  })
+
+  it('does not save while a model has no protocol or the account opens none, and shows the section', async () => {
+    const w = render({ ...bound(), model_protocols: [{ models: ['gpt-5.6'], protocols: [] }] } as Account, false, openaiType)
+    await flushPromises()
+    expect(nav(w).props('errors')).toMatchObject({ models: true })
+    await w.get('form').trigger('submit'); await flushPromises()
+    expect(mocks.patch).not.toHaveBeenCalled()
+    expect(nav(w).props('modelValue')).toBe('models')
+    const editor = editorOf(w)
+    editor.rules.value = {}
+    await flushPromises()
+    expect(nav(w).props('errors')).toMatchObject({ models: false })
+    // Every own protocol closed and nothing converted.
+    editor.setMode('custom')
+    for (const c of editor.columns.value.own) if (editor.protocols.value!.includes(c.key)) editor.toggleOwn(c)
+    await w.get('form').trigger('submit'); await flushPromises()
+    expect(mocks.patch).not.toHaveBeenCalled()
+    editor.rules.value = { 'gpt-5.6': ['anthropic.messages'] }
+    await w.get('form').trigger('submit'); await flushPromises()
+    expect(mocks.patch).toHaveBeenCalledWith('/accounts/1', expect.objectContaining({ protocols: [], model_protocols: [{ models: ['gpt-5.6'], protocols: ['anthropic.messages'] }] }))
+  })
+
+  it('does not save while the JSON view holds a text it cannot take', async () => {
+    const w = render(bound(), false, openaiType)
+    await flushPromises()
+    const editor = editorOf(w)
+    editor.setView('json')
+    editor.text.value = '{"model_protocols": 1}'
+    await w.get('form').trigger('submit'); await flushPromises()
+    expect(mocks.patch).not.toHaveBeenCalled()
+    expect(nav(w).props('modelValue')).toBe('models')
+    editor.text.value = '{"protocols": ["openai.chat"]}'
+    await w.get('form').trigger('submit'); await flushPromises()
+    expect(mocks.patch).toHaveBeenCalledWith('/accounts/1', expect.objectContaining({ protocols: ['openai.chat'], model_protocols: [] }))
+  })
+
+  it('shows the server errors of the two fields in their cards and marks the section', async () => {
+    mocks.patch.mockRejectedValueOnce(new ApiError(400, { code: 'invalid_argument', message: 'invalid', details: { fields: [
+      { field: 'protocols[1]', code: 'invalid', message: '不是本平台协议' },
+      { field: 'model_protocols[0].protocols[0]', code: 'invalid', message: '不能服务此协议' }
+    ] } }))
+    const w = render(bound(), false, openaiType)
+    await flushPromises()
+    await w.get('form').trigger('submit'); await flushPromises()
+    expect(nav(w).props('modelValue')).toBe('models')
+    expect(nav(w).props('errors')).toMatchObject({ models: true })
+    expect(w.getComponent(OwnProtocolsField).props('errors')).toEqual(['openai.responses: 不是本平台协议'])
+    expect(w.getComponent(ModelProtocolsCard).props('errors')).toMatchObject({ 'model_protocols[0].protocols[0]': '不能服务此协议' })
+  })
+
+  it('greys the conversion loss policy while no model is converted and no protocol adapted', async () => {
+    const hint = (w: ReturnType<typeof render>) => w.get('[data-testid="account-conversion-policy-hint"]').text()
+    const plain = render({ ...savedAccount(), conversion_loss_policy: 'safe' } as Account, false, openaiType)
+    await flushPromises()
+    expect(policy(plain).attributes('disabled')).toBeDefined()
+    expect(hint(plain)).toBe('未开启协议转换：没有模型开了转换，也没有开放需要适配的协议')
+    // The saved policy is kept and sent as it is.
+    await plain.get('form').trigger('submit'); await flushPromises()
+    expect(mocks.patch).toHaveBeenCalledWith('/accounts/1', expect.objectContaining({ conversion_loss_policy: 'safe' }))
+    // A model with a conversion turns it on.
+    editorOf(plain).rules.value = { 'gpt-5.6': ['openai.chat', 'anthropic.messages'] }
+    await flushPromises()
+    expect(policy(plain).attributes('disabled')).toBeUndefined()
+    expect(hint(plain)).toBe('生效：安全（覆盖分组设置）')
+    // So does an adapted own protocol (Codex chat), until the account closes it.
+    const adapted = render(savedAccount(), false, { ...accountType, ...codex } as AccountType)
+    await flushPromises()
+    expect(policy(adapted).attributes('disabled')).toBeUndefined()
+    const editor = editorOf(adapted)
+    editor.setMode('custom')
+    editor.toggleOwn(editor.columns.value.own.find(c => c.via === 'adapted')!)
+    await flushPromises()
+    expect(policy(adapted).attributes('disabled')).toBeDefined()
+  })
+
+  it('keeps what was ticked when the auth method changes to a type with the same protocols, and starts over otherwise', async () => {
+    const device = { ...openaiType, type: 'device', creation_group: 'g' } as AccountType
+    const oauth = { ...openaiType, type: 'oauth', creation_group: 'g' } as AccountType
+    const other = { ...accountType, ...codex, type: 'codex', creation_group: 'g' } as AccountType
+    const w = render(undefined, false, device)
+    await flushPromises()
+    const editor = editorOf(w)
+    editor.setMode('custom')
+    editor.toggleOwn(editor.columns.value.own[0])
+    await w.setProps({ accountType: oauth })
+    expect(editor.binding().protocols).toEqual(['openai.responses', 'openai.responses_ws', 'openai.embeddings'])
+    await w.setProps({ accountType: other })
+    expect(editor.binding()).toEqual({ protocols: null, model_protocols: [] })
   })
 })

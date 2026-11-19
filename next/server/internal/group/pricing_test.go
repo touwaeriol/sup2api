@@ -85,7 +85,10 @@ func TestGroupPricingSummary(t *testing.T) {
 
 	code, out := e.do(e.admin, "GET", fmt.Sprintf("/groups/%d", private), nil)
 	require.Equal(t, 200, code)
-	require.Equal(t, rows["private"], out["data"], "one group reads as its row in the list")
+	detail := out["data"].(map[string]any)
+	require.Equal(t, []any{}, detail["served_protocols"], "only the detail lists the protocols")
+	delete(detail, "served_protocols")
+	require.Equal(t, rows["private"], detail, "one group otherwise reads as its row in the list")
 
 	// Grants, rates and price rules go with the group.
 	code, _ = e.do(e.admin, "DELETE", fmt.Sprintf("/groups/%d", private), nil)

@@ -21,7 +21,8 @@ import (
 // stream_options.include_usage so streamed chat completions are billed, and
 // Gemini output tokens include the thinking tokens (candidatesTokenCount +
 // thoughtsTokenCount). A key whose group only has anthropic accounts gets
-// 503 from the openai endpoints.
+// 404 from the openai endpoints: protocol conversion is off until an
+// account enables it for the model (CONTRACTS 110).
 func TestAC20_OpenAIGeminiAPIKeys(t *testing.T) {
 	e := Setup(t)
 	admin := e.Admin()
@@ -30,9 +31,9 @@ func TestAC20_OpenAIGeminiAPIKeys(t *testing.T) {
 	// 1. Built in, enabled, account types registered for their platforms.
 	types := admin.OK(t, http.MethodGet, "/account-types", nil).Array()
 	platforms := e.Platforms(admin)
-	for _, pl := range []struct{ plugin, platform, endpoint string }{
-		{OpenAIPlugin, "openai", "/v1/chat/completions"},
-		{GeminiPlugin, "gemini", "generateContent"},
+	for _, pl := range []struct{ plugin, platform, endpoint, form string }{
+		{OpenAIPlugin, "openai", "/v1/chat/completions", "OpenAIKeyForm"},
+		{GeminiPlugin, "gemini", "generateContent", "GeminiKeyForm"},
 	} {
 		d := e.WaitPlugin(admin, pl.plugin, "enabled", "")
 		if !d.Get("builtin").Bool() {
@@ -52,12 +53,7 @@ func TestAC20_OpenAIGeminiAPIKeys(t *testing.T) {
 		if !found {
 			t.Fatalf("%s/%s lacks native endpoint %s: %s", pl.plugin, APIKeyType, pl.endpoint, at.Get("endpoints").Raw)
 		}
-		form := admin.OK(t, http.MethodGet, "/account-types/"+pl.plugin+"/"+APIKeyType+"/form", nil)
-		for _, f := range []string{"api_key", "base_url"} {
-			if !form.Get("schema.properties." + f).Exists() {
-				t.Fatalf("%s form lacks %s: %s", pl.plugin, f, form.Raw)
-			}
-		}
+		ExpectNativeForm(t, admin.Client, at, pl.form)
 		p, _ := Find(platforms, "id", pl.platform)
 		if _, ok := PlatformAccountType(p, pl.plugin, APIKeyType); !ok {
 			t.Fatalf("/platforms %s lacks %s/%s: %s", pl.platform, pl.plugin, APIKeyType, p.Get("account_types").Raw)
@@ -68,10 +64,7 @@ func TestAC20_OpenAIGeminiAPIKeys(t *testing.T) {
 	// exist (built in) but nothing can serve them.
 	tn := e.NewTenant(admin, TenantOpts{Balance: "20"})
 	mark := m.Mark(t)
-	if g := e.OpenAI(tn.APIKey, "/v1/chat/completions", ChatBody(tn.Model, "anthropic only", false)); g.Status != http.StatusServiceUnavailable ||
-		g.JSON().Get("error.code").String() != "no_available_account" {
-		t.Fatalf("/v1/chat/completions with only anthropic accounts: HTTP %d %s (want 503 no_available_account)", g.Status, g.Body)
-	}
+	expectNotServed(t, e.OpenAI(tn.APIKey, "/v1/chat/completions", ChatBody(tn.Model, "anthropic only", false)), "openai")
 	for _, k := range KeysUsed(m.Since(t, mark), "") {
 		if tn.AccountKeys()[k] {
 			t.Fatalf("an upstream was called with anthropic account key %s", k)
@@ -261,9 +254,7 @@ func TestAC20_OpenAIGeminiAPIKeys(t *testing.T) {
 	}
 
 	// 11. The anthropic endpoint is not served by this group.
-	if g := e.Messages(key, MessagesBody(tn.Model, "no anthropic here", false), nil); g.Status != http.StatusServiceUnavailable {
-		t.Fatalf("/v1/messages on an openai+gemini group: HTTP %d %s (want 503)", g.Status, g.Body)
-	}
+	expectNotServed(t, e.Messages(key, MessagesBody(tn.Model, "no anthropic here", false), nil), "anthropic")
 
 	// 12. Upstream errors in each API's format: an OpenAI 400 is returned
 	// as-is; a Gemini 429 cools the account down and, with no other

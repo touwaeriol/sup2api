@@ -17,9 +17,9 @@ const (
 )
 
 // PriceModelUsage prices token usage of a model with the price table, as
-// settlement would before the group multiplier (CONTRACTS §72.13.1). Unlike
-// Resolve it ignores the missing-price policy: a model without a price is
-// reported as not priced, never as free. Only a database failure is an error.
+// settlement would before the group multiplier (CONTRACTS §72.13.1). A model
+// without a price is reported as not priced, never as free. Only a database
+// failure is an error.
 func (s *Service) PriceModelUsage(ctx context.Context, model, semantics string, t expr.Tokens) (priced bool, cost decimal.Decimal, reason string, err error) {
 	snap, err := s.snapshot(ctx)
 	if err != nil {
@@ -37,8 +37,7 @@ func (s *Service) PriceModelUsage(ctx context.Context, model, semantics string, 
 	}
 	cost, err = s.Quote(ctx, core.QuoteInputs{
 		Expression: rule.Expression, UsageSemantics: semantics, RateMultiplier: decimal.NewFromInt(1),
-		Tokens: core.UsageTokens{Input: t.Input, Output: t.Output, CacheRead: t.CacheRead,
-			CacheCreation: t.CacheCreation, CacheCreation1h: t.CacheCreation1h},
+		Tokens: core.UsageTokens(t),
 	})
 	if err != nil {
 		return false, decimal.Zero, UnpricedEvalError, nil

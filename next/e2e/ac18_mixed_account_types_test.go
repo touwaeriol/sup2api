@@ -65,12 +65,7 @@ func TestAC18_MixedAccountTypesServeOneEndpoint(t *testing.T) {
 	if !sensitive {
 		t.Fatalf("relay_key api_key must be sensitive: %s", rt.Raw)
 	}
-	form := admin.OK(t, http.MethodGet, "/account-types/"+RelayPlugin+"/"+RelayKey+"/form", nil)
-	for _, f := range []string{"base_url", "api_key"} {
-		if !form.Get("schema.properties." + f).Exists() {
-			t.Fatalf("relay form schema lacks %s: %s", f, form.Raw)
-		}
-	}
+	ExpectNativeForm(t, admin.Client, rt, "RelayKeyForm")
 
 	// One group, two account types: anthropic/apikey (priority 50) and
 	// relay/relay_key (priority 1), both backed by the mock upstream.

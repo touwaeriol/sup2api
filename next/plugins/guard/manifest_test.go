@@ -10,7 +10,6 @@ import (
 
 	"github.com/Sub2API-Devs/sup2api/next/plugins/guard/internal/guard"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
-	"github.com/Sub2API-Devs/sup2api/next/sdk/pluginsdk"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/pluginsdk/pluginsdktest"
 )
 
@@ -18,7 +17,7 @@ import (
 // checks the declared capabilities (app.broadcast.v1 needs OnBroadcast and
 // the host permission "broadcast") and reports them.
 func TestManifestServes(t *testing.T) {
-	h := pluginsdktest.Start(t, guard.New(), pluginsdktest.Options{SDK: []pluginsdk.Option{pluginsdk.WithManifest(manifestJSON)}})
+	h := pluginsdktest.Start(t, guard.New(), pluginsdktest.Options{Manifest: manifestJSON})
 	if !slices.Contains(h.Info.GetCapabilities(), manifest.CapAppBroadcast) {
 		t.Fatalf("capabilities = %v", h.Info.GetCapabilities())
 	}
@@ -33,7 +32,7 @@ func TestManifest(t *testing.T) {
 	if err := dec.Decode(&m); err != nil {
 		t.Fatalf("manifest.json: %v", err)
 	}
-	if m.Key != "guard" || m.Version != "0.2.10" || m.HostUICompat == "" || m.UI == nil || m.UI.Native == nil {
+	if m.Key != "guard" || m.Version != "0.2.11" || m.HostUICompat == "" || m.UI == nil || m.UI.Native == nil {
 		t.Fatalf("manifest = %+v", m)
 	}
 	perms := map[string]bool{}
@@ -69,12 +68,13 @@ func TestManifest(t *testing.T) {
 	if !hasBroadcast {
 		t.Error("guard must declare capability app.broadcast.v1 (rules.changed)")
 	}
-	for _, p := range []string{m.UI.Settings.Schema, m.UI.Settings.UISchema} {
-		b, err := os.ReadFile(filepath.FromSlash(p))
-		if err != nil || !json.Valid(b) {
-			t.Errorf("settings form %s: %v", p, err)
-		}
+	// The settings are the native GuardSettings form and hold no secret
+	// (webhook_url included), so ui.settings.secrets is written out empty:
+	// without the key the core masks every setting.
+	if st := m.UI.Settings; st == nil || st.Mode != "native" || st.Component != "GuardSettings" || st.Page != "" {
+		t.Errorf("ui.settings = %+v", st)
 	}
+	pluginsdktest.SettingsSecrets(t, manifestJSON)
 	var patch map[string]any
 	b, err := os.ReadFile(filepath.Join("testdata", "guardtest", "manifest.patch.json"))
 	if err != nil || json.Unmarshal(b, &patch) != nil || patch["version"] != m.Version+"-test" {

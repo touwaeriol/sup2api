@@ -998,8 +998,7 @@ func TestPostgresPeerAuthorizationClassifiesFailures(t *testing.T) {
 		{"primary to follower", a.Node.ID, "boot", b.Node.ID, "forward", "", peer.ErrForbidden},
 		{"unapproved artifact", b.Node.ID, "boot", a.Node.ID, "core-artifact", target.Digest, peer.ErrForbidden},
 		{"unknown scope", b.Node.ID, "boot", a.Node.ID, "admin", "", peer.ErrForbidden},
-		{"follower stores upload on primary", b.Node.ID, "boot", a.Node.ID, "plugin-upload", target.Digest, nil},
-		{"primary pushes upload to follower", a.Node.ID, "boot", b.Node.ID, "plugin-upload", target.Digest, peer.ErrForbidden},
+		{"no node pushes packages to another", b.Node.ID, "boot", a.Node.ID, "plugin-upload", target.Digest, peer.ErrForbidden},
 		{"unreferenced plugin package", b.Node.ID, "boot", a.Node.ID, "plugin-artifact", target.Digest, peer.ErrForbidden},
 	} {
 		err := s.AuthorizePeer(ctx, c.source, c.boot, c.dest, c.scope, c.d)

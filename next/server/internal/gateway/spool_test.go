@@ -40,7 +40,7 @@ func TestResponseSpoolSpillsAndRemovesPrivateFile(t *testing.T) {
 func TestResponseSpoolFailureIsNoHangUp(t *testing.T) {
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 	spool := newBufferedResponse(ctx.Writer)
-	spool.size = spoolTotalLimit
+	spool.err = errSpool // the temp file failed
 	var canceled error
 	d := &upstreamDrain{cancel: func(err error) { canceled = err }, keep: true}
 	d.arm()

@@ -646,9 +646,9 @@ func TestPluginDetailRejectsNonObjects(t *testing.T) {
 	if got := string(pluginDetailJSON(core.RawJSON(`{"a":1}`))); got != `{"a":1}` {
 		t.Errorf("object dropped: %s", got)
 	}
-	big := core.RawJSON(`{"pad":"` + strings.Repeat("x", core.MaxPluginDetailBytes) + `"}`)
-	if got := string(pluginDetailJSON(big)); got != "{}" {
-		t.Errorf("oversized document stored: %d bytes", len(got))
+	big := core.RawJSON(`{"pad":"` + strings.Repeat("x", 64<<10) + `"}`)
+	if got := string(pluginDetailJSON(big)); got != string(big) {
+		t.Errorf("large document not stored whole: %d bytes", len(got))
 	}
 }
 

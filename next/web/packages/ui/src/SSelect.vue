@@ -60,7 +60,7 @@ const props = withDefaults(
 const emit = defineEmits<{ (e: 'update:modelValue', v: SelectOption['value']): void; (e: 'search', query: string): void }>()
 const attrs = useAttrs()
 const t = useUiT()
-const { id, a11y, invalid, size } = useFieldControl(props)
+const { id, a11y, invalid, size, blur } = useFieldControl(props)
 
 interface Choice extends SelectOption {
   group?: string
@@ -257,7 +257,7 @@ const control = computed(() =>
       onClick: show,
       onInput: search,
       onKeydown: onKey,
-      onBlur: () => sheet.value || hide()
+      onBlur: () => sheet.value || (hide(), blur())
     },
     parts.value.control,
     a11y.value
@@ -422,6 +422,7 @@ const control = computed(() =>
     :aria-label="ariaLabel"
     v-bind="{ ...attrs, ...a11y }"
     @change="onChange"
+    @blur="blur"
   >
     <option v-if="placeholder !== undefined" :value="-1">{{ placeholder }}</option>
     <template v-for="(r, i) in rows" :key="i">

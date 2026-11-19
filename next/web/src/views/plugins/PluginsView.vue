@@ -14,7 +14,7 @@ import { consentPath, putReview } from './reviewCache'
 import PluginAvatar from './parts/PluginAvatar.vue'
 import RetiredKeys from './parts/RetiredKeys.vue'
 import TrustBadge from './parts/TrustBadge.vue'
-import { conflictLines, consoleSettingsPath, shownStatus } from './pluginUtil'
+import { conflictLines, consoleSettingsPath, refusalText, shownStatus } from './pluginUtil'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -47,6 +47,8 @@ const rows = computed(() => {
     return p.key.toLowerCase().includes(kw) || lt(p.name).toLowerCase().includes(kw) || (p.publisher || '').toLowerCase().includes(kw)
   })
 })
+/** The text of each refused plugin's refusal, by key: shown and as the tooltip. */
+const refusals = computed(() => Object.fromEntries(items.value.flatMap((p) => (p.refusal ? [[p.key, refusalText(t, p.key, p.refusal)]] : []))))
 
 async function load() {
   loading.value = true
@@ -165,6 +167,9 @@ onMounted(load)
           </SHint>
           <SHint v-if="row.role_grants_to_review?.length" inline size="xs" tone="warning" data-testid="plugin-role-grants">
             {{ t('plugins.roleGrants.short', { n: row.role_grants_to_review.length }, row.role_grants_to_review.length) }}
+          </SHint>
+          <SHint v-if="row.refusal" inline size="xs" tone="danger" class="max-w-[16rem] truncate" :title="refusals[row.key]" data-testid="plugin-refusal">
+            {{ refusals[row.key] }}
           </SHint>
           <SHint v-if="row.status_reason" inline size="xs" tone="danger" class="max-w-[16rem] truncate" :title="row.status_reason">{{ row.status_reason }}</SHint>
         </div>

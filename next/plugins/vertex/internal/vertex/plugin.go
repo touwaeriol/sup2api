@@ -10,9 +10,12 @@
 //     refresh token;
 //   - vertex_apikey: a Vertex AI API key, sent as it is.
 //
-// The plugin does no network I/O. It describes the upstream request and the
-// token exchange; the core sends both through the account's proxy and renews
-// the token before it expires (CONTRACTS §48).
+// The plugin does no network I/O. Execute builds the final upstream request
+// (the client's Gemini body unchanged, the credential as an authoritative
+// header) and relays it through the core without waiting; the core sends it
+// through the account's proxy and reads the usage. The token exchange is
+// described the same way and the core renews the token before it expires
+// (CONTRACTS §48).
 //
 // Never log a key file, a private key, a refresh token, an access token or
 // an API key.
@@ -34,7 +37,7 @@ const (
 
 	// PlatformID is the built-in platform every type serves.
 	PlatformID = "gemini"
-	// Upstream protocols BuildUpstreamRequest speaks (the endpoints of the
+	// Upstream protocols Execute speaks (the endpoints of the
 	// gemini platform, sdk/platforms/gemini.json).
 	ProtocolGenerate       = "gemini.generate"
 	ProtocolStreamGenerate = "gemini.stream_generate"
@@ -64,9 +67,9 @@ type Endpoints struct {
 	API string
 }
 
-// Plugin is the vertex plugin. It implements pluginsdk.Platform and
-// CredentialRefresher. It lists no models: the console keeps the manifest
-// defaults.
+// Plugin is the vertex plugin. It implements pluginsdk.Platform,
+// UpstreamBuilder and CredentialRefresher. It lists no models: the console
+// keeps the manifest defaults.
 type Plugin struct {
 	ep  Endpoints
 	now func() time.Time

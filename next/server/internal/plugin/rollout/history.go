@@ -7,6 +7,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store/model"
 )
@@ -16,13 +17,13 @@ type historyState struct {
 	RolloutID                                  int64
 }
 
-func historySignature(s NodePluginState) historyState {
+func historySignature(s core.PluginNodeState) historyState {
 	return historyState{s.State, s.Serving, s.Standby, s.Fallback, s.Rollout, s.RolloutID}
 }
 
 // Called under recMu, after each completed reconcile. Error text alone does
 // not trigger a new row, avoiding an unbounded stream on repeated retries.
-func (c *Controller) recordNodeHistory(ctx context.Context, key string, s NodePluginState) {
+func (c *Controller) recordNodeHistory(ctx context.Context, key string, s core.PluginNodeState) {
 	signature := historySignature(s)
 	if previous, ok := c.history[key]; ok && previous == signature {
 		return
@@ -41,7 +42,7 @@ func (c *Controller) recordNodeHistory(ctx context.Context, key string, s NodePl
 
 // historyRow is the plugin_history row of a node state; rollout 0 is none
 // (NULL).
-func historyRow(key string, s NodePluginState, nodeID, bootID, message string) *model.PluginHistory {
+func historyRow(key string, s core.PluginNodeState, nodeID, bootID, message string) *model.PluginHistory {
 	row := &model.PluginHistory{PluginKey: key, NodeID: nodeID, BootID: bootID, State: s.State, Version: s.Serving, Message: message}
 	if s.RolloutID != 0 {
 		row.RolloutID = &s.RolloutID

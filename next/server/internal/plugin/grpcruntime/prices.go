@@ -30,8 +30,8 @@ func (h *hostServer) PriceUsage(ctx context.Context, in *pluginv1.PriceUsageRequ
 	if p == nil {
 		return nil, status.Error(codes.Unavailable, "pricing is not available")
 	}
-	if in.GetModel() == "" || len(in.GetModel()) > 256 {
-		return nil, status.Error(codes.InvalidArgument, "model must be 1 to 256 bytes")
+	if in.GetModel() == "" {
+		return nil, status.Error(codes.InvalidArgument, "model is required")
 	}
 	switch in.GetSemantics() {
 	case "", expr.SemanticsInclusive, expr.SemanticsExclusive:

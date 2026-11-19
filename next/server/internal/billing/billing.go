@@ -133,14 +133,7 @@ func (s *Service) Quote(ctx context.Context, in core.QuoteInputs) (decimal.Decim
 	if err != nil {
 		return decimal.Zero, fmt.Errorf("compile price expression: %w", err)
 	}
-	t := in.Tokens
-	vars := expr.Normalize(in.UsageSemantics, expr.Tokens{
-		Input:           t.Input,
-		Output:          t.Output,
-		CacheRead:       t.CacheRead,
-		CacheCreation:   t.CacheCreation,
-		CacheCreation1h: t.CacheCreation1h,
-	}, p.Uses)
+	vars := expr.Normalize(in.UsageSemantics, expr.Tokens(in.Tokens), p.Uses)
 	at := in.CreatedAt
 	if at.IsZero() {
 		at = time.Now()

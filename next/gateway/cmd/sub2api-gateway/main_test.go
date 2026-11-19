@@ -61,8 +61,8 @@ func TestConfigPropagatesResolvedClusterStoresToCore(t *testing.T) {
 			t.Fatalf("plugin Landlock is not on by default: %+v", effective)
 		}
 		got.PluginLandlockDisabled = true
-		if _, set := envMap(got.coreEnvironment())[pluginLandlockEnv]; set {
-			t.Fatal("plugin_landlock_disabled did not remove the default")
+		if envMap(got.coreEnvironment())[pluginLandlockEnv] != "false" {
+			t.Fatal("plugin_landlock_disabled did not turn Landlock off")
 		}
 		got.PluginLandlockDisabled = false
 		t.Setenv(pluginLandlockEnv, "false")

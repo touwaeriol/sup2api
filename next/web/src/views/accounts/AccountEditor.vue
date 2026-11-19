@@ -1,21 +1,22 @@
 <script setup lang="ts">
 // Step 2 of "new account" and the edit form (wireframe A.4, CONTRACTS §18.4):
-// connection (basic info, proxy, plugin credentials) / models and mapping /
-// scheduling and limits. A new account starts from the plugin's default models
-// and mapping (§41); so does an existing account saved without either (see
-// shouldPrefillOnEdit).
+// connection (basic info, proxy, plugin credentials) / protocols and models
+// (own protocols, model list, mapping, protocols per model:
+// DESIGN-2026-11-17-PROTOCOL-BINDING §5.1) / scheduling and limits. A new
+// account starts from the plugin's default models and mapping (§41); so does
+// an existing account saved without either (see shouldPrefillOnEdit).
 // Every core field follows the account type's common controls (hidden, fixed,
 // a default, a required proxy: commonControls.ts); plugin sections declared
 // for the type (account.editor.section) come after the core ones.
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '@sub2api/host'
-import { SAlert, SBadge, SButton, SCard, SchemaForm, SChoiceCards, SField, SHint, SIcon, SInput, SLink, SSegmented, SSelect, SSettingRow, SSettingsGroup, SSpinner, SSwitch, toast } from '@sub2api/ui'
+import { SAlert, SBadge, SButton, SCard, SChoiceCards, SField, SHint, SIcon, SInput, SLink, SSegmented, SSelect, SSettingRow, SSettingsGroup, SSpinner, SSwitch, toast } from '@sub2api/ui'
 import type { Account, AccountType, ConversionLossPolicy, EnvironmentValues, ProxyProbeResult } from '@/api/types'
 import EnvironmentEditor from '@/components/environment/EnvironmentEditor.vue'
-import { schemaWidgets } from '@/components/schema/widgets'
 import PluginIframe from '@/components/plugin/PluginIframe.vue'
 import PluginSlot from '@/components/plugin/PluginSlot.vue'
+import PluginComponent from '@/components/plugin/PluginComponent.vue'
 import { forAccountType, slotKey } from '@/components/plugin/slots'
 import GroupPicker from '@/components/GroupPicker.vue'
 import ProxyPicker from '@/components/ProxyPicker.vue'
@@ -24,7 +25,7 @@ import { assetURL, usePluginStore } from '@/stores/plugins'
 import { useEnvironmentLayer, useGroupsWith, useProxiesLookup } from '@/composables/lookups'
 import { ACCOUNT_ACTIONS, useScope } from '@/composables/useScope'
 import { useAccountCaps } from '@/composables/useAccountCaps'
-import { errorMessage, fieldErrors, notifyError } from '@/utils/errors'
+import { fieldErrors, notifyError } from '@/utils/errors'
 import { looksLikeProxyURL, parseProxyURL } from '@/utils/proxyUrl'
 import { groupPolicies, policyLabel, policyOptions, policySourceHint } from '@/utils/conversion'
 import AccountEditorNav from './AccountEditorNav.vue'
@@ -47,7 +48,12 @@ import { newAccountConcurrency } from './accountLimits'
 import { shouldPrefillOnEdit } from './modelDefaults'
 import { useModelEdit } from './useModelEdit'
 import { useAccountSave } from './useAccountSave'
-import { CONNECTION_FIELDS, isAdvancedField, isSchedulingField, LIMIT_ROWS, mappingErrorText, modelsErrorText, pluginSection, SCHEDULING_ROWS, SECTION_CONTROLS, splitFieldErrors, type EditorSection } from './editorErrors'
+import { CONNECTION_FIELDS, isAdvancedField, isProtocolField, isSchedulingField, LIMIT_ROWS, mappingErrorText, modelsErrorText, pluginSection, protocolsErrorTexts, SCHEDULING_ROWS, SECTION_CONTROLS, splitFieldErrors, type EditorSection } from './editorErrors'
+import ModelProtocolsCard from './protocols/ModelProtocolsCard.vue'
+import OwnProtocolsField from './protocols/OwnProtocolsField.vue'
+import { sameProtocolColumns } from './protocols/protocolBinding'
+import { useProtocolLabels } from './protocols/protocolLabels'
+import { useProtocolEdit } from './protocols/useProtocolEdit'
 
 const props = defineProps<{ accountType: AccountType | null; accountTypeOptions?: AccountType[]; account?: Account | null }>()
 const emit = defineEmits<{ (e: 'change-type', at: AccountType): void; (e: 'saved', a: Account): void; (e: 'cancel'): void; (e: 'back'): void; (e: 'test', a: Account): void }>()
@@ -58,7 +64,7 @@ const scope = useScope()
 const editing = computed(() => !!props.account?.id)
 const caps = useAccountCaps(editing)
 
-const mode = computed(() => props.accountType?.form.mode || 'schema')
+const mode = computed(() => props.accountType?.form.mode)
 // Row-level rights (CONTRACTS §21): editing an account needs a scope of
 // account:update that reaches it.
 const canEditAccount = computed(() => editing.value && scope.can(props.account, ACCOUNT_ACTIONS.update))
@@ -93,23 +99,17 @@ const basic = reactive({
 /** 指定模型限速 (CONTRACTS §68), edited as cards and saved as one entry per list. */
 const modelLimitCards = ref<ModelLimitCard[]>([])
 const credentials = ref<Record<string, unknown>>({})
-const schema = ref<Record<string, any> | null>(null)
-const uiSchema = ref<Record<string, any> | null>(null)
-const formLoading = ref(false)
-const formError = ref('')
 const errors = ref<Record<string, string>>({})
 const credErrors = ref<Record<string, string>>({})
 const saving = ref(false)
 
-const schemaForm = ref<InstanceType<typeof SchemaForm>>()
 const iframe = ref<InstanceType<typeof PluginIframe>>()
 const nativeRef = ref<{ validate?: () => boolean | Promise<boolean> }>()
 const uiPlugin = computed(() => (props.accountType ? plugins.plugin(props.accountType.plugin_key) : undefined))
 const iframeSrc = computed(() => (uiPlugin.value && props.accountType?.form.page ? assetURL(uiPlugin.value, props.accountType.form.page) : ''))
-const nativeComponent = computed(() => (props.accountType ? plugins.component(props.accountType.plugin_key, props.accountType.form.component) : undefined))
-// The plugin list (iframe, native) or the plugin's native module is still
-// loading: show a spinner, not "form unavailable" (as PluginPageView does).
-const pluginFormWaiting = computed(() => !plugins.listed || (props.accountType?.form.mode === 'native' && !!plugins.pending[props.accountType.plugin_key]))
+// The plugin list is still loading: show a spinner, not "form unavailable"
+// (a native form waits for its plugin's module too, in PluginComponent).
+const pluginFormWaiting = computed(() => !plugins.listed)
 
 // ---------------------------------------------------------------- common controls (docs/COMMON-CONTROLS.md §2)
 
@@ -174,6 +174,23 @@ const mergeModels = (ids: string[]) => editorModels.mergeModels(ids)
 /** Models and mappings of the section summary (the cards render their own counts). */
 const mappingCount = computed(() => Object.keys(mapping.value).length)
 
+// Protocol binding (DESIGN-2026-11-17-PROTOCOL-BINDING §5.1): the own protocols the account opens, the protocols of chosen models.
+const protocolEdit = useProtocolEdit(() => props.accountType, () => models.value)
+const protocolLabels = useProtocolLabels()
+const ownProtocolsTitle = computed(() => {
+  const names = protocolLabels.platformsName(props.accountType?.platforms ?? [])
+  return names ? t('accounts.protocols.own.titleOf', { platforms: names }) : t('accounts.protocols.own.title')
+})
+/** "Protocols 4/4 · 2 models limited · 1 converted", ahead of the models of the section summary. */
+const protocolSummary = computed(() => {
+  const { open, total, limited, converting } = protocolEdit.summary.value
+  return [
+    t('accounts.protocols.summary.open', { open, total }),
+    ...(limited ? [t('accounts.protocols.summary.limited', { n: limited })] : []),
+    converting ? t('accounts.protocols.summary.converting', { n: converting }) : t('accounts.protocols.summary.noConversion')
+  ]
+})
+
 /** Summary parts of the shown controls (falsy parts dropped). */
 const summaryOf = (parts: Array<[CommonControlName, string | number | false]>) => parts.filter(([n, v]) => v && controls.value[n].visible).map(([, v]) => v)
 
@@ -201,6 +218,8 @@ const forwardingSummary = computed(() => {
 const groupList = useGroupsWith(() => basic.group_ids)
 const conversionOptions = computed(() => policyOptions(t, t('accounts.conversion.inherit')))
 const conversionHint = computed(() => policySourceHint(t, basic.conversion_loss_policy, groupPolicies(basic.group_ids, groupList.value)))
+/** Without a model converted or a protocol adapted nothing can be lost: the policy is greyed (an account whose type is gone keeps it editable). */
+const conversionUsed = computed(() => !props.accountType || protocolEdit.conversionUsed.value)
 
 /** Plugin sections declared for this account type (docs/COMMON-CONTROLS.md §4). */
 const pluginSections = computed(() => plugins.slotEntries('account.editor.section').filter(e => forAccountType(e, props.accountType)))
@@ -212,6 +231,7 @@ const editorSections = computed(() => [
     icon: 'cpu',
     label: t('accounts.editorUi.models'),
     summary: [
+      ...(props.accountType ? protocolSummary.value : []),
       models.value.length ? t('accounts.editorUi.modelsSummary', { n: models.value.length }) : t('accounts.editorUi.allModels'),
       ...summaryOf([['model_mapping', mappingCount.value && t('accounts.editorUi.mappingSummary', { n: mappingCount.value })]])
     ].join(' · ')
@@ -251,10 +271,11 @@ const schedulingFields = computed(() =>
 /** Server field errors of the model list / mapping, shown under the editor. */
 const serverModelsError = computed(() => modelsErrorText(errors.value))
 const serverMappingError = computed(() => mappingErrorText(errors.value))
+const serverProtocolErrors = computed(() => protocolsErrorTexts(errors.value, protocolEdit.protocols.value))
 /** Sections holding an error, marked in the navigation. */
 const sectionErrors = computed<Partial<Record<EditorSection, boolean>>>(() => ({
   connection: CONNECTION_FIELDS.some((k) => errors.value[k]) || Object.keys(credErrors.value).length > 0,
-  models: !!(modelsError.value || serverModelsError.value || mappingError.value || serverMappingError.value),
+  models: !!(modelsError.value || serverModelsError.value || mappingError.value || serverMappingError.value) || Object.keys(errors.value).some(isProtocolField) || protocolEdit.issues.value.some(i => i.level === 'error'),
   scheduling: Object.keys(errors.value).some(isSchedulingField) || Object.keys(usageLimitErrors.value).length > 0,
   advanced: Object.keys(errors.value).some(isAdvancedField)
 }))
@@ -277,6 +298,31 @@ watch(caps.proxyByURL, (ok) => {
 })
 /** The proxy_url that will be sent, or '' (existing mode / empty input). */
 const proxyUrlToSend = computed(() => (proxyMode.value === 'url' ? proxyUrl.value.trim() : ''))
+/**
+ * The form's proxy choice as the core takes it for an account not saved yet
+ * (models/fetch, proxy-ticket): a pasted proxy_url is only parsed and used,
+ * no proxy is looked up or created (CONTRACTS §21.2); proxy_id null is none.
+ */
+const proxyChoice = () => (proxyUrlToSend.value ? { proxy_url: proxyUrlToSend.value } : { proxy_id: basic.proxy_id })
+
+/**
+ * The native form's `proxyTicket` (CONTRACTS §23.5, §117): a proxy ticket of
+ * the form's current proxy choice, taken by an authorization flow for every
+ * call it makes to its plugin before the account exists. A refused choice is
+ * shown under the proxy field too, and the error goes back to the form.
+ */
+async function proxyTicket(): Promise<string> {
+  const at = props.accountType!
+  try {
+    const r = await api.post<{ ticket: string }>(`/account-types/${encodeURIComponent(at.plugin_key)}/${encodeURIComponent(at.type)}/proxy-ticket`, proxyChoice())
+    return r.ticket
+  } catch (e) {
+    const fe = fieldErrors(e)
+    const field = fe.proxy_url ? 'proxy_url' : fe.proxy_id ? 'proxy_id' : ''
+    if (field) errors.value = { ...errors.value, [field]: fe[field] }
+    throw e
+  }
+}
 const proxyError = computed(() => (proxyMode.value === 'url' ? errors.value.proxy_url : errors.value.proxy_id))
 /** Shape hint only (the server validates): shown while the pasted text does not look like scheme://host:port. */
 const proxyUrlHint = computed(() => {
@@ -357,12 +403,9 @@ async function fetchModels() {
   }
   fetching.value = true
   try {
-    // New account: the pasted proxy_url is only parsed and used for this
-    // request (CONTRACTS §21.2), no proxy is looked up or created.
-    const proxy = proxyUrlToSend.value ? { proxy_url: proxyUrlToSend.value } : { proxy_id: basic.proxy_id }
     const r = editing.value
       ? await api.post<{ models: string[]; skipped: number }>(`/accounts/${props.account!.id}/models/fetch`, { credentials: creds })
-      : await api.post<{ models: string[]; skipped: number }>(`/account-types/${encodeURIComponent(at.plugin_key)}/${encodeURIComponent(at.type)}/models/fetch`, { credentials: creds, ...proxy })
+      : await api.post<{ models: string[]; skipped: number }>(`/account-types/${encodeURIComponent(at.plugin_key)}/${encodeURIComponent(at.type)}/models/fetch`, { credentials: creds, ...proxyChoice() })
     fetched.value = { models: r.models || [], skipped: r.skipped || 0 }
     if (fetched.value.models.length) fetchOpen.value = true
     else toast(t('accounts.fetchEmpty'), 'warning')
@@ -403,6 +446,8 @@ function fillForm(a: Account | null | undefined, at: AccountType | null) {
   basic.conversion_loss_policy = a?.conversion_loss_policy ?? null
   if (a) editorModels.setSaved(a.models, a.model_mapping)
   if (!a || shouldPrefillOnEdit(a, at)) editorModels.applyDefaults(at)
+  // After the models: the matrix view needs the model list.
+  protocolEdit.setSaved(a)
   applyValues(a ? savedAccountValues(a, coreValues()) : newAccountValues(at, coreValues(), ownCaller()))
 }
 
@@ -432,31 +477,12 @@ function applyValues(values: ControlValues) {
 /** Switching the auth method of a new account: untouched defaults and fixed controls follow the type. */
 function switchAuth(at: AccountType | null, previous: AccountType | null | undefined) {
   if (editorModels.sameDefaults(previous)) editorModels.applyDefaults(at)
+  // What was ticked only carries over to a type offering the same protocols.
+  if (!sameProtocolColumns(at, previous)) protocolEdit.setSaved(null)
   const before = newAccountValues(previous, coreValues(), ownCaller())
   const untouched = (name: string) => name in basic && sameControlValue(basic[name as keyof typeof basic], before[name as CommonControlName])
   const follows = ([name]: [string, unknown]) => !accountControl(at, name as CommonControlName).configurable || untouched(name)
   applyValues(Object.fromEntries(Object.entries(newAccountValues(at, coreValues(), ownCaller())).filter(follows)))
-}
-
-/** The plugin's credential form (schema mode). */
-let formRequest = 0
-async function loadCredentialForm(at: AccountType | null) {
-  const request = ++formRequest
-  schema.value = null
-  uiSchema.value = null
-  formError.value = ''
-  formLoading.value = at?.form.mode === 'schema'
-  if (!at || !formLoading.value) return
-  try {
-    const f = await api.get<{ schema: Record<string, any>; ui_schema?: Record<string, any> }>(`/account-types/${encodeURIComponent(at.plugin_key)}/${encodeURIComponent(at.type)}/form`)
-    if (request !== formRequest) return
-    schema.value = f.schema
-    uiSchema.value = f.ui_schema || null
-  } catch (e) {
-    if (request === formRequest) formError.value = errorMessage(e)
-  } finally {
-    if (request === formRequest) formLoading.value = false
-  }
 }
 
 watch(
@@ -469,7 +495,6 @@ watch(
     if (!a && !previous?.[0] && sameCreationGroup(at, previous?.[1])) switchAuth(at, previous?.[1])
     else fillForm(a, at)
     credentials.value = { ...(a?.credentials || {}) }
-    void loadCredentialForm(at)
   },
   { immediate: true }
 )
@@ -483,7 +508,6 @@ watch(credentials, () => {
 
 async function collectCredentials(): Promise<Record<string, unknown> | null> {
   if (!props.accountType) return credentials.value
-  if (mode.value === 'schema') return schemaForm.value?.validate() ? credentials.value : null
   if (mode.value === 'native') {
     const validate = nativeRef.value?.validate
     return typeof validate === 'function' && !(await validate()) ? null : credentials.value
@@ -511,6 +535,7 @@ const { save } = useAccountSave({
   saving,
   activeSection,
   models: editorModels,
+  protocols: protocolEdit,
   autoDisableEnabled,
   proxyUrlToSend,
   collectCredentials,
@@ -582,12 +607,6 @@ const { save } = useAccountSave({
 
             <SHint v-if="settingsGuarded" size="xs" class="mb-3" data-testid="guarded-settings-hint">{{ t('accounts.guardedSettingsHint') }}</SHint>
             <SAlert v-if="account?.orphaned || !accountType" tone="warning">{{ t('accounts.orphanedEdit') }}</SAlert>
-            <template v-else-if="mode === 'schema'">
-              <SSpinner v-if="formLoading" block />
-              <SHint v-else-if="formError" tone="danger">{{ formError }}</SHint>
-              <SchemaForm v-else-if="schema" ref="schemaForm" v-model="credentials" :schema="schema" :ui-schema="uiSchema" :errors="credErrors" :widgets="schemaWidgets" />
-              <SAlert v-if="schema && !formLoading && !Object.keys(schema.properties || {}).length" tone="neutral">{{ t('accounts.editorUi.noCredentials') }}</SAlert>
-            </template>
             <template v-else-if="mode === 'iframe'">
               <PluginIframe
                 v-if="iframeSrc"
@@ -604,10 +623,12 @@ const { save } = useAccountSave({
               <SHint v-else tone="danger">{{ t('accounts.formUnavailable') }}</SHint>
             </template>
             <template v-else-if="mode === 'native'">
-              <component :is="nativeComponent" v-if="nativeComponent" ref="nativeRef" v-model="credentials" :mode="editing ? 'edit' : 'create'" :account="account" :account-type="accountType" :errors="credErrors" />
-              <div v-else-if="pluginFormWaiting" class="flex justify-center py-6"><SSpinner /></div>
-              <SHint v-else tone="danger">{{ plugins.errors[accountType.plugin_key] || t('accounts.formUnavailable') }}</SHint>
+              <PluginComponent v-slot="{ component }" :plugin-key="accountType.plugin_key" :name="accountType.form.component">
+                <component :is="component" ref="nativeRef" v-model="credentials" :mode="editing ? 'edit' : 'create'" :account="account" :account-type="accountType" :errors="credErrors" :proxy-ticket="proxyTicket" />
+              </PluginComponent>
             </template>
+            <!-- An older package's form mode: the credentials are sent back unchanged. -->
+            <SAlert v-else tone="warning" data-testid="form-unavailable-old">{{ t('accounts.formUnavailableOld') }}</SAlert>
 
             <div class="mt-4 space-y-3 empty:hidden">
               <PluginSlot name="account.form.widgets" :props="{ account, accountType, credentials }" />
@@ -617,6 +638,10 @@ const { save } = useAccountSave({
 
         <!-- ============================================================ models -->
         <div v-show="activeSection === 'models'" data-editor-section="models" class="space-y-4">
+          <SCard v-if="accountType" :title="ownProtocolsTitle" :subtitle="t('accounts.protocols.own.subtitle')" data-testid="own-protocols-card">
+            <OwnProtocolsField :editor="protocolEdit" :errors="serverProtocolErrors" :disabled="saving" />
+            <SAlert tone="neutral" dense class="mt-3">{{ t('accounts.protocols.own.crossHint') }}</SAlert>
+          </SCard>
           <AccountModelsCard
             :editor="editorModels"
             :editing="editing"
@@ -627,6 +652,7 @@ const { save } = useAccountSave({
             :mapping-control="controls.model_mapping"
             @fetch="fetchModels"
           />
+          <ModelProtocolsCard v-if="accountType" :editor="protocolEdit" :models="models" :mapping="mapping" :options="modelLimitOptions" :errors="errors" :disabled="saving" />
         </div>
 
         <!-- ============================================================ scheduling and limits -->
@@ -679,8 +705,8 @@ const { save } = useAccountSave({
             <ParamOverrideField v-if="controls.param_override.visible" v-model="basic.param_override" :models="models" :error="errors.param_override" :disabled="controls.param_override.disabled || saving" :reason="controls.param_override.reason" :header-override="basic.header_override" />
             <SSettingRow :label="t('accounts.conversion.title')" :description="t('accounts.conversion.hint')" :error="errors.conversion_loss_policy" data-testid="account-conversion-policy">
               <div class="w-full space-y-1 sm:w-64">
-                <SSelect v-model="basic.conversion_loss_policy" :options="conversionOptions" :disabled="saving" data-testid="account-conversion-policy-select" />
-                <SHint size="xs" data-testid="account-conversion-policy-hint">{{ conversionHint }}</SHint>
+                <SSelect v-model="basic.conversion_loss_policy" :options="conversionOptions" :disabled="saving || !conversionUsed" data-testid="account-conversion-policy-select" />
+                <SHint size="xs" data-testid="account-conversion-policy-hint">{{ conversionUsed ? conversionHint : t('accounts.protocols.conversionOff') }}</SHint>
               </div>
             </SSettingRow>
             <template v-if="showEnvironment && controls.environment.visible">
@@ -709,7 +735,7 @@ const { save } = useAccountSave({
         <SLink as="button" class="text-xs" @click="clearPrefill">{{ t('accounts.editorUi.clearModels') }}</SLink>
       </SHint>
       <SButton @click="emit('cancel')">{{ t('common.cancel') }}</SButton>
-      <SButton type="submit" variant="primary" :loading="saving" :disabled="formLoading || !!formError" data-testid="account-save">{{ editing ? t('common.save') : t('accounts.editorUi.create') }}</SButton>
+      <SButton type="submit" variant="primary" :loading="saving" data-testid="account-save">{{ editing ? t('common.save') : t('accounts.editorUi.create') }}</SButton>
     </div>
   </form>
 </template>

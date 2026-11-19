@@ -19,7 +19,7 @@ export const moderationUIPlugin = {
   slots: [],
   native_entry: 'ui/native/entry.js',
   trust: 'official',
-  host_ui_compat: '^3.0'
+  host_ui_compat: '^4.0'
 }
 
 export function moderationAsset(path: string): { type: string; body: Buffer } | null {
@@ -440,25 +440,27 @@ on('GET', '/p/moderation/stats/categories', () => ({
 
 // GET/PUT /plugins/moderation/settings: registered before the generic plugin
 // routes of plugins.ts; secrets come back masked, the mask keeps them.
-const SETTINGS_SCHEMA_FILE = fileURLToPath(new URL('../../plugins/moderation/forms/settings.schema.json', import.meta.url))
-const settingsSchema = existsSync(SETTINGS_SCHEMA_FILE) ? JSON.parse(readFileSync(SETTINGS_SCHEMA_FILE, 'utf8')) : null
-const SETTINGS_UI_FILE = fileURLToPath(new URL('../../plugins/moderation/forms/settings.ui.json', import.meta.url))
-const settingsUI = existsSync(SETTINGS_UI_FILE) ? JSON.parse(readFileSync(SETTINGS_UI_FILE, 'utf8')) : null
+// The keys the plugin accepts (its CheckSettings; ui/native settingsForm.ts SETTINGS).
+const SETTINGS_KEYS = [
+  'mode', 'fail_policy', 'block_status', 'block_message', 'auto_watch', 'watch_days', 'escalate_violations', 'escalate_window_seconds', 'ban_threshold',
+  'ban_window_seconds', 'ban_duration_hours', 'error_rate_alert_percent', 'notify_webhook_url', 'notify_webhook_secret', 'record_pass', 'record_overturned',
+  'record_errors', 'store_text', 'record_pass_input_message', 'hit_retention_days', 'overturned_retention_days', 'error_retention_days', 'pass_retention_days',
+  'stats_retention_days', 'max_concurrency', 'queue_size', 'ttft_timeout_ms', 'verdict_cache_days', 'hit_replay', 'cache_entries', 'input_max_chars',
+  'input_max_chunks', 'input_overflow', 'input_max_images', 'max_inflight_mb', 'error_text_max_chars', 'min_chars', 'jev_default_set', 'api_key'
+]
 // Native settings edited on the plugin's own page (CONTRACTS §75.5).
 const settingsView = () => ({
   mode: 'native',
   page: 'dashboard',
-  schema: settingsSchema,
-  ui_schema: settingsUI,
   values: Object.fromEntries(Object.entries(settings).map(([k, v]) => [k, SECRET_SETTINGS.includes(k) && v ? MASK : v])),
   secret_fields: SECRET_SETTINGS
 })
 on('GET', '/plugins/moderation/settings', settingsView)
-/** The core's schema error of the keys the schema does not declare (additionalProperties: false). */
+/** The plugin's ValidateSettings error of the keys it does not accept (code unknown). */
 function undeclaredError(values: Record<string, unknown>) {
-  const keys = settingsSchema ? Object.keys(values).filter((k) => !(k in settingsSchema.properties)) : []
+  const keys = Object.keys(values).filter((k) => !SETTINGS_KEYS.includes(k))
   if (!keys.length) return null
-  return fail(400, 'invalid_argument', 'invalid settings', { fields: [{ field: 'values', code: 'schema', message: `additional properties ${keys.map((k) => `'${k}'`).join(', ')} not allowed` }] })
+  return fail(400, 'invalid_argument', 'invalid settings', { fields: keys.map((k) => ({ field: `values/${k}`, code: 'unknown', message: `${k} is not a known field / ${k} 不是可识别的字段` })) })
 }
 on('PUT', '/plugins/moderation/settings', (req) => {
   const values = { ...(req.body?.values || {}) }

@@ -1,0 +1,8 @@
+{
+  "options": {
+    "model": "gpt-image-2",
+    "stream": false,
+    "adapt_model": "gpt-6-luna"
+  },
+  "note": "the upstream returns base64 only and the gateway keeps no images: response_format url is refused"
+}

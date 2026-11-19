@@ -12,9 +12,18 @@ import (
 // of CONTRACTS §25.4 is the other), and two copies of this check would be one
 // copy too many.
 
-// checkUpstreamURL validates a URL returned by BuildUpstreamRequest: http(s),
-// a host, and (unless AllowPrivateUpstream) only public addresses. Proxied
-// requests are resolved by the proxy; the check still applies to the name.
-func (g *Gateway) checkUpstreamURL(ctx context.Context, raw string) (*url.URL, error) {
-	return netguard.CheckURL(ctx, raw, g.allowPrivate, g.lookupIP)
+// checkUpstream validates the URL of a plugin's relay, handshake or fetch:
+// http(s), a host, and (unless AllowPrivateUpstream) a public target. A
+// direct request checks the addresses the name resolves to; a proxied one
+// (the account has a proxy) is resolved by the proxy, so only a literal
+// private address is refused and nothing is resolved here
+// (netguard.CheckHostVia).
+func (g *Gateway) checkUpstream(ctx context.Context, raw string, proxied bool) (*url.URL, error) {
+	return netguard.CheckURLVia(ctx, raw, g.allowPrivate, proxied, g.lookupIP)
+}
+
+// checkURL is checkUpstream for a request of x, made through its account's
+// proxy when it has one (x.egress).
+func (x *execution) checkURL(ctx context.Context, raw string) (*url.URL, error) {
+	return x.c.g.checkUpstream(ctx, raw, x.egress.Proxied)
 }

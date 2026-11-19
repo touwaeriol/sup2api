@@ -1,4 +1,0 @@
--- sql
-SELECT migration_id, checksum FROM public.plugin_migrations_applied($1) AS m
--- vars
-$1 string "demo"

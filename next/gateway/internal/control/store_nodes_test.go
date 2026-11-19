@@ -6,17 +6,20 @@ import (
 	"testing"
 )
 
-// remove-node, set-primary and the plugin package fallback used tables that
+// remove-node, set-primary and the plugin package sources used tables that
 // the gateway schema never created (updater.node_artifacts,
 // updater.node_plugin_packages); each failed with "relation does not exist".
+// Package sources are the other enabled nodes, whatever the primary is.
 func TestPostgresRemoveNodeSetPrimaryAndPackageFallback(t *testing.T) {
 	s, a, b, _ := setupEngines(t)
 	ctx := context.Background()
 	s.RevokePeer = func(context.Context, string) error { return nil }
 
-	nodes, err := s.NodesWithPackage(ctx, strings.Repeat("a", 64))
-	if err != nil || len(nodes) != 2 {
-		t.Fatalf("package fallback candidates: %v %v", nodes, err)
+	for self, other := range map[string]string{a.Node.ID: b.Node.ID, b.Node.ID: a.Node.ID} {
+		peers, err := packagePeers(ctx, s, self)
+		if err != nil || len(peers) != 1 || peers[0].ID != other || peers[0].PeerURL == "" {
+			t.Fatalf("package sources of %s: %v %v", self, peers, err)
+		}
 	}
 
 	if err := s.SetPrimary(ctx, b.Node.ID); err != nil {
@@ -41,8 +44,8 @@ func TestPostgresRemoveNodeSetPrimaryAndPackageFallback(t *testing.T) {
 	if err := s.SetPrimary(ctx, b.Node.ID); err == nil {
 		t.Fatal("disabled node became primary")
 	}
-	if nodes, _ := s.NodesWithPackage(ctx, strings.Repeat("a", 64)); len(nodes) != 1 || nodes[0].ID != a.Node.ID {
-		t.Fatalf("disabled node offered as package source: %v", nodes)
+	if peers, _ := packagePeers(ctx, s, a.Node.ID); len(peers) != 0 {
+		t.Fatalf("disabled node offered as package source: %v", peers)
 	}
 	if err := s.RemoveNode(ctx, b.Node.ID); err != nil {
 		t.Fatalf("remove-node: %v", err)

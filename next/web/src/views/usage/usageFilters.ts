@@ -170,16 +170,19 @@ const LABEL_KEYS: Record<string, string> = { success: 'common.status', billing_s
  * holds the choices of those picked from a list (the empty first choice names
  * the filter, as the fields carry no labels), `valueLabel` reads a set value
  * as the page shows it: a picked entity as "name #id" (looked up among the
- * caller's own with `mine`), a listed choice by its label. `protocolOptions`
- * (the request types under the search) fill the type list; a type already set
- * stays listed.
+ * caller's own with `mine`), a listed choice by its label, an error type the
+ * console words (usage.errors) by its words. `suggestions` are the values a
+ * text field offers as it is typed in: the error types the console words, such
+ * as usage_unreported (the plugin reported no usage). `protocolOptions` (the
+ * request types under the search) fill the type list; a type already set stays
+ * listed.
  */
 export function useUsageSearchLabels(
   protocolOptions: MaybeRefOrGetter<string[]>,
   protocol: MaybeRefOrGetter<string>,
   mine: MaybeRefOrGetter<boolean> = false
 ) {
-  const { t } = useI18n()
+  const { t, te, tm } = useI18n()
   const names = useEntityNames({ mine })
   const label = (key: string) => t(LABEL_KEYS[key] ?? `usage.search.${key}`)
   const choices = (key: string, list: Array<{ value: string; label: string }>) => [{ value: '', label: label(key) }, ...list]
@@ -195,10 +198,14 @@ export function useUsageSearchLabels(
       stream: choices('stream', [{ value: 'true', label: t('usage.stream') }, { value: 'false', label: t('usage.nonStream') }])
     }
   })
+  const suggestions = computed<Record<string, Array<{ value: string; label: string }>>>(() => ({
+    error_type: Object.keys(tm('usage.errors')).map(v => ({ value: v, label: t(`usage.errors.${v}`) }))
+  }))
   function valueLabel(key: string, value: string) {
     const kind = ID_PARAM_KINDS[key]
     if (kind) return names.label(kind, value)
+    if (key === 'error_type' && te(`usage.errors.${value}`)) return t(`usage.errors.${value}`)
     return options.value[key]?.find(o => o.value === value && value !== '')?.label ?? value
   }
-  return { label, options, valueLabel }
+  return { label, options, suggestions, valueLabel }
 }

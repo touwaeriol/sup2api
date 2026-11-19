@@ -53,7 +53,7 @@ const emit = defineEmits<{ (e: 'update:modelValue', v: string | number | FileLis
 const attrs = useAttrs()
 const slots = useSlots()
 const t = useUiT()
-const { id, a11y, invalid, size } = useFieldControl(props)
+const { id, a11y, invalid, size, blur } = useFieldControl(props)
 const input = ref<HTMLInputElement>()
 const reveal = ref(false)
 
@@ -109,6 +109,7 @@ defineExpose({ focus: () => input.value?.focus(), el: input })
     v-bind="{ ...inputProps, ...attrs, ...a11y }"
     @input="lazy ? undefined : onInput($event)"
     @change="lazy || type === 'file' ? onInput($event) : undefined"
+    @blur="blur"
   />
   <div v-else class="input input-group" :class="[size === 'sm' ? 'input-sm' : '', invalid ? 'input-error' : '', disabled ? 'input-group-disabled' : '']" v-bind="parts.wrap">
     <slot name="prefix"><SIcon v-if="icon" :name="icon" class="h-4 w-4 shrink-0 text-fg-subtle" /></slot>
@@ -118,6 +119,7 @@ defineExpose({ focus: () => input.value?.focus(), el: input })
       v-bind="{ ...inputProps, ...parts.control, ...a11y }"
       @input="lazy ? undefined : onInput($event)"
       @change="lazy || type === 'file' ? onInput($event) : undefined"
+      @blur="blur"
     />
     <button
       v-if="clearable && hasValue && !disabled && !readonly"

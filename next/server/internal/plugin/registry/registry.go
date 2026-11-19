@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"mime"
 	"path"
 	"slices"
@@ -18,10 +19,8 @@ import (
 	"sync/atomic"
 
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
-	"github.com/Sub2API-Devs/sup2api/next/sdk/upstream"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/platforms"
-	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/declarative"
 	pluginpkg "github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/pkg"
 )
 
@@ -85,17 +84,31 @@ func Info(p *Package) core.PluginInfo {
 
 // Registry implements core.PluginRegistry.
 type Registry struct {
-	cur atomic.Pointer[generation]
-	seq atomic.Uint64
+	cur  atomic.Pointer[generation]
+	seq  atomic.Uint64
+	conv core.ProtocolConverters
 
 	mu        sync.Mutex // serializes Publish and listener changes
 	listeners map[int]func(core.Generation)
 	nextID    int
 }
 
-func New() *Registry {
+// Option configures a Registry.
+type Option func(*Registry)
+
+// WithConverters gives the registry the core's protocol converters, which
+// an account type's adapted endpoints must have (CONTRACTS §121.1). Without
+// them no account type listing adapted endpoints is bound.
+func WithConverters(conv core.ProtocolConverters) Option {
+	return func(r *Registry) { r.conv = conv }
+}
+
+func New(opts ...Option) *Registry {
 	r := &Registry{listeners: map[int]func(core.Generation){}}
-	r.cur.Store(build(0, nil))
+	for _, o := range opts {
+		o(r)
+	}
+	r.cur.Store(build(0, nil, r.conv))
 	return r
 }
 
@@ -119,7 +132,7 @@ func (r *Registry) OnChange(fn func(core.Generation)) (cancel func()) {
 func (r *Registry) Publish(exts []Extension) core.Generation {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	g := build(r.seq.Add(1), exts)
+	g := build(r.seq.Add(1), exts, r.conv)
 	r.cur.Store(g)
 	ids := make([]int, 0, len(r.listeners))
 	for id := range r.listeners {
@@ -152,10 +165,14 @@ type generation struct {
 	routes    map[string][]core.RouteBinding
 	jobs      []core.JobBinding
 	runners   map[string]core.AppPlugin
+	settings  map[string]core.SettingsValidator
 	subs      []core.SubscriptionBinding
 	observers []core.ObservationBinding
 	channels  []core.NotificationChannelBinding
 	assets    sync.Map // key + "\x00" + path -> asset
+	// conv are the core's converters an account type's adapted endpoints
+	// need (unservedAdapted).
+	conv core.ProtocolConverters
 }
 
 func (g *generation) Observers() []core.ObservationBinding { return g.observers }
@@ -255,9 +272,10 @@ func hasCapability(m *manifest.Manifest, capID string) bool {
 	return false
 }
 
-func build(number uint64, exts []Extension) *generation {
+func build(number uint64, exts []Extension, conv core.ProtocolConverters) *generation {
 	g := &generation{
 		number:   number,
+		conv:     conv,
 		byKey:    map[string]core.PluginInfo{},
 		packages: map[string]*Package{},
 		platByID: map[string]core.PlatformBinding{},
@@ -267,6 +285,7 @@ func build(number uint64, exts []Extension) *generation {
 		hooks:    map[string][]core.HookBinding{},
 		scheds:   map[string]core.SchedulerPlugin{},
 		routes:   map[string][]core.RouteBinding{},
+		settings: map[string]core.SettingsValidator{},
 	}
 	// Built-in platforms always exist (ARCHITECTURE 6.6).
 	for _, p := range platforms.Builtin() {
@@ -320,12 +339,13 @@ func (g *generation) registerPlugin(ext Extension, pkg *Package) {
 
 	pf := ext.Platform()
 	conflicts := g.addPluginPlatforms(info, pkg, pf)
-	g.addAccountTypes(info, pkg, pf, grants)
+	g.addAccountTypes(info, pkg, pf)
 	g.addHooks(ext, info, m, grants)
 	g.addRanker(ext, info, pkg, m)
 	g.addRoutes(ext, info, pkg, grants)
 	g.addObserver(ext, info, m, grants)
 	g.addJobsAndEvents(ext, info, m, grants)
+	g.addSettingsValidator(ext, info)
 	conflicts = append(conflicts, g.addNotificationChannels(ext, info, m)...)
 	if len(conflicts) > 0 {
 		info.Conflicts = conflicts
@@ -352,60 +372,23 @@ func (g *generation) addPluginPlatforms(info core.PluginInfo, pkg *Package, pf c
 	return conflicts
 }
 
-// addAccountTypes registers the account types the plugin declares. A type
-// without an upstream declaration is served by the declaring plugin, which
-// must implement platform.adapter.v1 (ARCHITECTURE 6.6) and hold the
-// accounts.credentials grant: without it the plugin never receives
-// credentials, so its account types are not offered or scheduled. A type
-// declaring its upstream is served by the core (bindDeclared) and needs
-// neither, unless it extends: the plugin then amends every request it builds.
-func (g *generation) addAccountTypes(info core.PluginInfo, pkg *Package, pf core.PlatformPlugin, grants Grants) {
-	if !grants.Has("accounts.credentials") {
-		pf = nil
-	}
+// addAccountTypes registers the account types the plugin declares. Each is
+// served by the declaring plugin, which implements platform.adapter.v1
+// (ARCHITECTURE 6.6) and receives the accounts of its types (CONTRACTS
+// §124); without a platform client they are not offered or scheduled.
+func (g *generation) addAccountTypes(info core.PluginInfo, pkg *Package, pf core.PlatformPlugin) {
 	for i, at := range pkg.Manifest.AccountTypes {
 		key := core.AccountTypeKey{PluginKey: pkg.Key, Type: at.ID}
 		if _, dup := g.atByKey[key]; dup {
 			continue
 		}
-		if pf == nil && (at.Upstream == nil || at.Upstream.Extend) {
+		if pf == nil {
 			continue
 		}
-		// A declared type's Client is the plugin (or nil) until bindDeclared
-		// wraps it, once every platform it serves is registered.
 		atb := core.AccountTypeBinding{Plugin: info, Type: at, DeclIndex: i, Client: pf}
-		if at.Form.Mode == "schema" {
-			atb.FormSchema = readJSON(pkg, at.Form.Schema)
-			atb.FormUI = readJSON(pkg, at.Form.UISchema)
-		}
 		g.atByKey[key] = atb
 		g.accTypes = append(g.accTypes, atb)
 	}
-}
-
-// bindDeclared gives each account type declaring its upstream its
-// declarative client (docs/UPSTREAM-DECLARATIVE.md §4.1). It runs after
-// every plugin is added because the declaration reads the client headers of
-// the platforms the type serves, which another plugin may declare. A type
-// whose declaration no longer resolves (it was checked at install; a newer
-// core may judge it differently) is dropped like a type without a client.
-func (g *generation) bindDeclared() {
-	kept := g.accTypes[:0]
-	for _, atb := range g.accTypes {
-		if atb.Type.Upstream != nil {
-			profile, err := upstream.Resolve(&atb.Type, atb.PassHeaders(g.Platform))
-			if err != nil {
-				slog.Error("plugin registry: account type skipped, its upstream declaration does not resolve",
-					"plugin", atb.Plugin.Key, "version", atb.Plugin.Version, "accountType", atb.Type.ID, "err", err)
-				delete(g.atByKey, atb.Key())
-				continue
-			}
-			atb.Client = declarative.New(profile, atb.Client)
-			g.atByKey[atb.Key()] = atb
-		}
-		kept = append(kept, atb)
-	}
-	g.accTypes = kept
 }
 
 // addHooks registers the plugin's hooks, restricted to the granted points and
@@ -507,6 +490,15 @@ func (g *generation) addNotificationChannels(ext Extension, info core.PluginInfo
 	return conflicts
 }
 
+// addSettingsValidator registers the plugin's check of its settings: every
+// plugin process serves PluginService, so the extension offers it whether
+// or not the plugin implements the call.
+func (g *generation) addSettingsValidator(ext Extension, info core.PluginInfo) {
+	if source, ok := ext.(interface{ SettingsValidator() core.SettingsValidator }); ok {
+		g.settings[info.Key] = source.SettingsValidator()
+	}
+}
+
 // addJobsAndEvents registers the plugin's jobs and event subscriptions, each
 // restricted to the granted scope.
 func (g *generation) addJobsAndEvents(ext Extension, info core.PluginInfo, m *manifest.Manifest, grants Grants) {
@@ -543,7 +535,6 @@ func (g *generation) addJobsAndEvents(ext Extension, info core.PluginInfo, m *ma
 // finish sorts the collections and warns about declarations that name
 // resources no plugin of this generation provides.
 func (g *generation) finish() {
-	g.bindDeclared()
 	for point, hs := range g.hooks {
 		sort.SliceStable(hs, func(i, j int) bool {
 			if hs[i].Hook.Order != hs[j].Hook.Order {
@@ -584,9 +575,69 @@ func (g *generation) finish() {
 		}
 		return a.DeclIndex < b.DeclIndex
 	})
+	kept := g.accTypes[:0]
 	for _, atb := range g.accTypes {
+		atb = g.withoutForeignFacts(atb)
+		if id := g.unservedAdapted(atb); id != "" {
+			slog.Error("plugin registry: account type skipped, the core converts no adapted endpoint to its endpoints",
+				"plugin", atb.Plugin.Key, "accountType", atb.Type.ID, "endpoint", id)
+			delete(g.atByKey, atb.Key())
+			continue
+		}
+		kept = append(kept, atb)
+		g.atByKey[atb.Key()] = atb
 		g.indexAccountType(atb)
 	}
+	g.accTypes = kept
+}
+
+// unservedAdapted is the first endpoint an account type lists in adapted
+// (manifest.AccountPlatform.Adapted) that no core conversion serves with an
+// endpoint of its subset on the same platform, "" when there is none. The
+// endpoints of a platform this generation lacks are not judged: the type
+// serves nothing there.
+func (g *generation) unservedAdapted(atb core.AccountTypeBinding) string {
+	for _, ap := range atb.Type.Platforms {
+		pb, ok := g.platByID[ap.Platform]
+		if !ok {
+			continue
+		}
+		for _, id := range slices.Sorted(maps.Keys(ap.Adapted)) {
+			i := slices.IndexFunc(pb.Platform.Endpoints, func(e manifest.Endpoint) bool { return e.ID == id })
+			if i < 0 {
+				return id
+			}
+			if _, ok := core.BestConvertTarget(g, atb, g.conv, pb.Platform.Endpoints[i].Protocol, func(p manifest.AccountPlatform, _ manifest.Endpoint) bool {
+				return p.Platform == ap.Platform
+			}); !ok {
+				return id
+			}
+		}
+	}
+	return ""
+}
+
+// withoutForeignFacts drops from the type's platforms each one whose usage
+// or task facts another plugin states (manifest.AccountPlatform.
+// ServesPluginFacts; a built-in platform is no plugin's): the binding is then
+// the one definition of the platforms the type serves, so routing, the
+// cross-platform judgement of a protocol binding and the served protocols
+// all read the platforms the registry binds (forwarding v2, design 4.3).
+func (g *generation) withoutForeignFacts(atb core.AccountTypeBinding) core.AccountTypeBinding {
+	kept := make([]manifest.AccountPlatform, 0, len(atb.Type.Platforms))
+	for _, ap := range atb.Type.Platforms {
+		pb, ok := g.platByID[ap.Platform]
+		if ok && !pb.Builtin && pb.Plugin.Key != atb.Plugin.Key && ap.ServesPluginFacts(pb.Platform) {
+			slog.Error("plugin registry: account type skipped on a platform whose usage or task facts another plugin states",
+				"plugin", atb.Plugin.Key, "accountType", atb.Type.ID, "platform", ap.Platform, "platformPlugin", pb.Plugin.Key)
+			continue
+		}
+		kept = append(kept, ap)
+	}
+	if len(kept) < len(atb.Type.Platforms) {
+		atb.Type.Platforms = kept
+	}
+	return atb
 }
 
 // indexAccountType maps an account type under every platform it serves.
@@ -624,6 +675,11 @@ func (g *generation) Subscriptions() []core.SubscriptionBinding { return g.subs 
 func (g *generation) JobRunner(key string) (core.AppPlugin, bool) {
 	app, ok := g.runners[key]
 	return app, ok
+}
+
+func (g *generation) SettingsValidator(key string) (core.SettingsValidator, bool) {
+	v, ok := g.settings[key]
+	return v, ok
 }
 
 func (g *generation) Plugin(key string) (core.PluginInfo, bool) {
@@ -737,17 +793,6 @@ func ContentType(name string) string {
 		return ct
 	}
 	return "application/octet-stream"
-}
-
-func readJSON(pkg *Package, name string) json.RawMessage {
-	if name == "" {
-		return nil
-	}
-	data, err := pkg.ReadFile(name)
-	if err != nil || !json.Valid(data) {
-		return nil
-	}
-	return json.RawMessage(data)
 }
 
 func contains(list []string, s string) bool {

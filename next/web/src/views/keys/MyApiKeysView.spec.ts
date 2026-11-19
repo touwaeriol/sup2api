@@ -35,7 +35,7 @@ vi.mock('@/stores/auth', () => ({ useAuthStore: () => ({ has: (p: string) => moc
 vi.mock('@/stores/app', () => ({ useAppStore: () => ({ theme: 'light' }) }))
 vi.mock('@/composables/lookups', () => ({ fetchMyGroups: async () => GROUPS }))
 vi.mock('@/composables/platforms', () => ({
-  usePlatforms: () => ({ platforms: { value: [] }, load: vi.fn(), label: (value: string) => value, endpointsOf: () => [] })
+  usePlatforms: () => ({ platforms: { value: [] }, load: vi.fn(), label: (value: string) => value })
 }))
 vi.mock('@/utils/errors', () => ({ fieldErrors: () => ({}), errorMessage: (e: Error) => e.message, notifyError: mocks.notifyError }))
 vi.mock('@/utils/format', async original => ({ ...(await original<typeof import('@/utils/format')>()), copyText: mocks.copyText }))
@@ -43,7 +43,7 @@ enableAutoUnmount(afterEach)
 
 const GROUPS = [
   { id: 1, name: 'default', rate_multiplier: '1', platforms: ['anthropic'], model_allowlist: [] },
-  { id: 2, name: 'vip', rate_multiplier: '0.8', effective_rate: '0.72', exclusive: true, platforms: ['anthropic', 'openai'], model_allowlist: ['claude-sonnet-4-5'] }
+  { id: 2, name: 'vip', rate_multiplier: '0.8', effective_rate: '0.72', exclusive: true, platforms: ['anthropic', 'openai'], served_protocols: [{ protocol: 'anthropic.messages' }, { protocol: 'openai.chat' }], model_allowlist: ['claude-sonnet-4-5'] }
 ]
 const key = (k: Partial<ApiKey> = {}): ApiKey => ({
   id: 7,
@@ -100,8 +100,8 @@ const stubs = {
     template: '<button data-testid="key-quick-setup" :data-platforms="(platforms || []).join()" @click="$emit(\'guide\')" />'
   },
   KeyUseGuide: {
-    props: ['apiKey', 'platforms'],
-    template: '<i v-if="apiKey" data-testid="key-use-guide" :data-key="apiKey.id" :data-platforms="(platforms || []).join()" />'
+    props: ['apiKey', 'platforms', 'served'],
+    template: '<i v-if="apiKey" data-testid="key-use-guide" :data-key="apiKey.id" :data-platforms="(platforms || []).join()" :data-served="(served || []).map(s => s.protocol).join()" />'
   }
 }
 const options = { global: { plugins: [i18n], stubs } }
@@ -558,13 +558,13 @@ describe('API key row actions', () => {
     expect(w.find(tid('key-bulk-bar')).exists()).toBe(false)
   })
 
-  it('hands the quick setup the platforms the key reaches and opens the manual guide for it', async () => {
+  it('hands the quick setup the platforms the key reaches and opens the manual guide for it, with what its group serves', async () => {
     const w = await render()
     const setup = rowOf(w, 'ci-runner').get(tid('key-quick-setup'))
     expect(setup.attributes('data-platforms')).toBe('anthropic,openai')
     expect(w.find(tid('key-use-guide')).exists()).toBe(false)
     await setup.trigger('click')
-    expect(w.get(tid('key-use-guide')).attributes()).toMatchObject({ 'data-key': '8', 'data-platforms': 'anthropic,openai' })
+    expect(w.get(tid('key-use-guide')).attributes()).toMatchObject({ 'data-key': '8', 'data-platforms': 'anthropic,openai', 'data-served': 'anthropic.messages,openai.chat' })
   })
 })
 

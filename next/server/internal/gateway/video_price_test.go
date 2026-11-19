@@ -3,8 +3,6 @@ package gateway
 import (
 	"strings"
 	"testing"
-
-	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest/check"
 )
 
 func TestVideoPriceRejectsTextEndpoint(t *testing.T) {
@@ -24,12 +22,12 @@ func TestVideoPriceRejectsTextEndpoint(t *testing.T) {
 }
 
 func TestVideoContentTypesSurviveLargeInput(t *testing.T) {
-	body := []byte(`{"content":[{"type":"text","text":"` + strings.Repeat("x", check.MaxUsageRequestFieldBytes+1) + `"},{"type":"image_url","image_url":{"url":"data:image/png;base64,` + strings.Repeat("A", check.MaxUsageRequestFieldBytes+1) + `"}},{"type":"video_url","video_url":{"url":"asset://video"}}]}`)
-	fields, omitted := usageRequestFields([]string{"content.#.type", "content.0.text"}, body)
+	body := []byte(`{"content":[{"type":"text","text":"` + strings.Repeat("x", 4<<10+1) + `"},{"type":"image_url","image_url":{"url":"data:image/png;base64,` + strings.Repeat("A", 4<<10+1) + `"}},{"type":"video_url","video_url":{"url":"asset://video"}}]}`)
+	fields := usageRequestFields([]string{"content.#.type", "content.0.text"}, body)
 	if fields["content.#.type"] != `["text","image_url","video_url"]` {
 		t.Fatalf("types: %v", fields)
 	}
-	if len(omitted) != 1 || omitted[0] != "content.0.text" {
-		t.Fatalf("omitted: %v", omitted)
+	if len(fields["content.0.text"]) != 4<<10+3 {
+		t.Fatalf("large text: %d bytes", len(fields["content.0.text"]))
 	}
 }

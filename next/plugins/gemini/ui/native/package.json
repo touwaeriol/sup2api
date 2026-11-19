@@ -1,0 +1,12 @@
+{
+  "name": "@sub2api-plugin/gemini-ui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Native console UI of the gemini plugin: the API key account form (built to dist/entry.js, packed as ui/native/).",
+  "scripts": {
+    "build": "node ../../../../web/node_modules/vite/bin/vite.js build --config ../../../../web/packages/vite-preset/vite.plugin.config.js",
+    "typecheck": "node ../../../../web/node_modules/vue-tsc/bin/vue-tsc.js -p tsconfig.json --noEmit",
+    "test": "node ../../../../web/node_modules/vitest/vitest.mjs run --root . --config ../../../../web/vitest.config.ts"
+  }
+}

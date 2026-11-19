@@ -205,12 +205,17 @@ func (p *Plugin) Init(_ context.Context, h pluginsdk.Host) error {
 	return nil
 }
 
-// Configure implements pluginsdk.Configurer. It is lenient: the console
-// validates against the schema, odd values are clamped here.
+// Configure implements pluginsdk.Configurer. Saved settings passed
+// ValidateSettings; stored settings it would refuse now (retired keys,
+// values of older bounds) are applied as DecodeSettings reads them, odd
+// values clamped, and what CheckSettings refuses is logged (parseSettings).
 func (p *Plugin) Configure(_ context.Context, cfg pluginsdk.Config) error {
-	s, err := DecodeSettings(cfg.JSON)
+	s, refused, err := parseSettings(cfg.JSON)
 	if err != nil {
 		return pluginsdk.FieldErrors{}.Add("", "invalid_json", "settings must be a JSON object / 设置必须是 JSON 对象").Err()
+	}
+	if len(refused) > 0 {
+		p.log.Warn("moderation: stored settings the settings check refuses are applied as read", "error", refused.Error())
 	}
 	c := compile(s)
 	c.settingsHash = settingsDigest(cfg.JSON)

@@ -53,12 +53,6 @@ func TestResolveExactModel(t *testing.T) {
 	if len(bodies) != 1 || bodies[0] != "service_tier" || len(headers) != 1 || headers[0] != "anthropic-beta" {
 		t.Fatalf("inputs %v %v", bodies, headers)
 	}
-	// Free policy.
-	e.exec(`INSERT INTO settings (key, value) VALUES ('billing', '{"missing_price_policy":"free"}')`)
-	e.svc.invalidate()
-	if r, err := e.svc.Resolve(ctx, core.PriceQuery{Model: "gemini-2.5-pro"}); r != nil || err != nil {
-		t.Fatalf("free policy: %v %v", r, err)
-	}
 }
 
 // fakeGen implements the parts of core.Generation used by declaredFacts.
@@ -203,7 +197,7 @@ func TestSettingsDefaultsAndCache(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
 	st, err := e.svc.Settings(ctx)
-	if err != nil || st.MissingPricePolicy != PolicyReject || !st.MinBalance.IsZero() || !st.BigCostWarningUSD.Equal(decimal.NewFromInt(10)) {
+	if err != nil || !st.MinBalance.IsZero() || !st.BigCostWarningUSD.Equal(decimal.NewFromInt(10)) {
 		t.Fatalf("defaults %+v %v", st, err)
 	}
 	e.svc.cacheTTL = time.Hour
@@ -214,7 +208,7 @@ func TestSettingsDefaultsAndCache(t *testing.T) {
 	}
 	_ = e.bus.Publish(ctx, core.ChannelConfigChanged, nil)
 	st, _ = e.svc.Settings(ctx)
-	if !st.BigCostWarningUSD.Equal(decimal.NewFromInt(50)) || st.MissingPricePolicy != PolicyReject {
+	if !st.BigCostWarningUSD.Equal(decimal.NewFromInt(50)) {
 		t.Fatalf("after invalidation %+v", st)
 	}
 }

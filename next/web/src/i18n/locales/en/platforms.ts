@@ -10,6 +10,7 @@ export default {
   keyNoPlatforms: 'This group cannot serve requests yet (no usable accounts).',
   moreEndpoints: '+{n} more',
   unknownEndpoints: 'The endpoints of this platform are not available right now.',
-  converted: 'via protocol conversion',
-  convertedAlso: 'Also reachable via protocol conversion: {platforms}'
+  servedAccounts: '{n} account(s)',
+  servedNone: 'The member accounts open no protocol: requests get a 404.',
+  servedHint: 'Counted from the protocols the member accounts open (conversions turned on for chosen models included); an endpoint not listed is served by no account and answers 404.'
 }

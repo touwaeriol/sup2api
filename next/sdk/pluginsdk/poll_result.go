@@ -21,12 +21,9 @@ func TaskNotFound(reason string) *pluginv1.ReconcileResult {
 // Nil means the plugin must parse the complete 2xx response. Providers whose
 // 404 does not mean a missing task should apply their own interpretation.
 // Reasons deliberately omit response bodies and credentials.
-func ClassifyPollResponse(status int32, transportError string, truncated bool) *pluginv1.ReconcileResult {
+func ClassifyPollResponse(status int32, transportError string) *pluginv1.ReconcileResult {
 	if transportError != "" {
 		return PollFailure("poll transport error")
-	}
-	if truncated {
-		return PollFailure("poll response incomplete")
 	}
 	if status == 404 || status == 410 {
 		return TaskNotFound(fmt.Sprintf("upstream task not found (HTTP %d)", status))

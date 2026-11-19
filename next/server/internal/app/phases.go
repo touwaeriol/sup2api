@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -108,7 +109,12 @@ func (b *boot) openStorage() error {
 
 // startCluster joins the node registry and heartbeat.
 func (b *boot) startCluster() error {
-	b.cl = cluster.New(b.rdb, b.db, cluster.Options{NodeID: b.cfg.NodeID, Addr: b.cfg.PublicURL, HostVersion: b.version, Logger: b.log, Managed: b.cfg.Managed.Enabled, CoreBootID: b.cfg.Managed.BootID})
+	// What the plugin sandbox enforces on this kernel: logged once and shown
+	// on the nodes page (CONTRACTS §43.8).
+	pc := b.cfg.Plugins
+	sb := sandbox.ProbeStatus(runtime.GOOS == "linux" && !pc.DevMode, pc.Landlock, pc.StrictNetwork)
+	sandbox.LogStatus(b.log, sb)
+	b.cl = cluster.New(b.rdb, b.db, cluster.Options{NodeID: b.cfg.NodeID, Addr: b.cfg.PublicURL, HostVersion: b.version, Logger: b.log, Managed: b.cfg.Managed.Enabled, CoreBootID: b.cfg.Managed.BootID, PluginSandbox: &sb})
 	if err := b.cl.Start(b.ctx); err != nil {
 		return fmt.Errorf("cluster: %w", err)
 	}
@@ -123,7 +129,11 @@ func (b *boot) startCluster() error {
 func (b *boot) buildCoreServices() (*pkg.TrustStore, error) {
 	cfg := b.cfg
 	b.events = event.NewPublisher(b.db)
-	b.reg = registry.New()
+	// One converter registry for the gateway (conversion), the account
+	// module (endpoints an account type can serve) and the plugin registry
+	// (adapted endpoints need one), ARCHITECTURE 6.6.
+	b.converters = convert.Default()
+	b.reg = registry.New(registry.WithConverters(b.converters))
 	trust, err := pkg.NewTrustStore(cfg.Plugins.OfficialRootKeys, cfg.Plugins.AllowUnsigned)
 	if err != nil {
 		return nil, fmt.Errorf("plugin trust: %w", err)
@@ -132,9 +142,10 @@ func (b *boot) buildCoreServices() (*pkg.TrustStore, error) {
 		trust.SetVerifySignatures(false)
 		b.log.Warn("plugin signature verification is disabled (SUB2API_PLUGIN_VERIFY_SIGNATURES=false)")
 	}
-	// Package bytes are not in PostgreSQL. Under the shell they are kept by
-	// the primary and fetched over the node network; market packages are
-	// downloaded by each node. Without a shell only one node is supported.
+	// Package bytes are not in PostgreSQL. Under the shell every node keeps
+	// the packages it stored or used and fetches a missing one from any online
+	// node over the node network; market packages are downloaded by each
+	// node. Without a shell only one node is supported.
 	packageStore := blobs.Store(blobs.Dir(filepath.Join(cfg.Plugins.DataDir, "blobs")))
 	if cfg.Managed.UpdaterSocket != "" {
 		packageStore = blobs.NewShell(cfg.Managed.UpdaterSocket, cfg.Managed.UpdaterToken, cfg.Plugins.MaxPackageBytes)
@@ -209,16 +220,16 @@ func (b *boot) buildCoreServices() (*pkg.TrustStore, error) {
 	b.keys.Windows, b.keys.Slots = ratelimit.NewMinute(b.rdb, "apikey"), b.cl.Slots
 	b.keys.Balances = b.bill
 	b.prx = proxy.New(b.db, b.cipher, b.cl.Bus, proxy.Options{AllowPrivate: cfg.AllowPrivateUpstream, Registry: b.reg, Events: b.events, ScopeGrants: az})
-	// One converter registry for the gateway (conversion) and the account
-	// module (endpoints an account type can serve), ARCHITECTURE 6.6.
-	b.converters = convert.Default()
 	// Per-account rpm/tpm limits (CONTRACTS §18).
 	b.limiter = account.NewLimiter(b.rdb)
 	b.stats = account.NewStats(b.rdb, b.db, b.cl.Slots, b.cl.Bus)
 	b.stats.Start()
 	b.stopper.add("account-stats", b.stats.Close)
+	if err := b.startEgress(); err != nil {
+		return nil, err
+	}
 	b.acc = account.New(account.Deps{
-		DB: b.db, Redis: b.rdb, Cipher: b.cipher, Registry: b.reg, Proxies: b.prx, Events: b.events,
+		DB: b.db, Redis: b.rdb, Cipher: b.cipher, Registry: b.reg, Proxies: b.prx, NetworkAccess: b.egress, Events: b.events,
 		Slots: b.cl.Slots, Limiter: b.limiter, Stats: b.stats, Bus: b.cl.Bus, AllowPrivateUpstream: cfg.AllowPrivateUpstream, Converters: b.converters,
 		// Ownership checks and proxy_url resolution (CONTRACTS §21).
 		Authorizer: az, Resolver: b.prx, ScopeGrants: az,
@@ -226,8 +237,8 @@ func (b *boot) buildCoreServices() (*pkg.TrustStore, error) {
 		// sweeping node, only once admitted (CONTRACTS §48).
 		Locker: b.cl.Locker, CanWork: b.canWork,
 	})
-	// Register balance providers (CONTRACTS §51).
-	b.acc.RegisterClaudeOAuthBalanceProvider()
+	// The group page lists the protocols the accounts of a group serve.
+	b.grp.Protocols = b.acc
 	// Price sync sources (upstream API keys encrypted) and GET /key/prices for
 	// downstream sup2api instances (CONTRACTS §17).
 	b.bill.SetSyncDeps(billing.SyncDeps{Cipher: b.cipher, Keys: b.keys})
@@ -246,7 +257,7 @@ func (b *boot) buildCoreServices() (*pkg.TrustStore, error) {
 	// its own. The sweep is core.usage.reconcile (one node at a time).
 	b.settler.StartReconcile(b.ctx, usage.ReconcileDeps{
 		Executor: b.work,
-		Registry: b.reg, Accounts: b.acc, Proxies: b.prx,
+		Registry: b.reg, Accounts: b.acc,
 		Slots: b.cl.Slots, Limiter: b.limiter,
 		AllowPrivateUpstream: cfg.AllowPrivateUpstream, NodeID: cfg.NodeID, Logger: b.log,
 	})
@@ -256,10 +267,12 @@ func (b *boot) buildCoreServices() (*pkg.TrustStore, error) {
 	return trust, nil
 }
 
-// startPluginRuntime builds egress, the plugin runtime, the resource stores,
-// the gateway and the install/rollout services, and starts their loops. trust
-// comes from buildCoreServices: it is not boot state.
-func (b *boot) startPluginRuntime(trust *pkg.TrustStore) error {
+// startEgress builds the plugin database schemas and the egress tunnel. It
+// runs before the account module is built: the administrator's plugin
+// network access, which the tunnel serves, rules the requests the account
+// module, the gateway and the runtime send for plugins as well (CONTRACTS
+// §113).
+func (b *boot) startEgress() error {
 	cfg := b.cfg
 	pgAddr, err := databaseAddr(cfg.DatabaseURL)
 	if err != nil {
@@ -275,14 +288,28 @@ func (b *boot) startPluginRuntime(trust *pkg.TrustStore) error {
 	if cfg.Plugins.EgressAllowPrivate {
 		b.log.Warn("plugins may reach private network addresses (SUB2API_PLUGIN_EGRESS_ALLOW_PRIVATE=true); tests and development only")
 	}
-	egress := egress.New(b.db, egress.Options{NodeID: cfg.NodeID, DatabaseAddrs: []string{pgAddr}, CoreAddrs: coreAddrs,
-		AllowPrivate: cfg.Plugins.EgressAllowPrivate, Events: b.events, Logger: b.log})
+	schemas := dbschema.New(b.db, cfg.DatabaseURL, b.log)
+	// Roles of the per-plugin database user model (removed) are taken back once
+	// at start; Ensure retries the ones left (docs/DESIGN-2026-11-18-PLUGIN-DB-CORE-USER.md).
+	schemas.ConvertLegacyRoles(b.ctx)
+	egress := egress.New(b.db, egress.Options{NodeID: cfg.NodeID, DatabaseAddrs: []string{pgAddr}, DatabaseProxy: schemas.ServeTunnel, CoreAddrs: coreAddrs,
+		AllowPrivate: cfg.Plugins.EgressAllowPrivate, Events: b.events, Bus: b.cl.Bus, Logger: b.log})
+	b.schemas, b.egress = schemas, egress
 	b.stopper.add("egress", func(context.Context) { egress.Close() })
 	if err := b.tasks.Register(egress.LogsPruneTaskSpec()); err != nil {
 		return fmt.Errorf("egress log prune task: %w", err)
 	}
+	return nil
+}
+
+// startPluginRuntime builds the plugin runtime (on the egress of
+// startEgress), the resource stores, the gateway and the install/rollout
+// services, and starts their loops. trust comes from buildCoreServices: it
+// is not boot state.
+func (b *boot) startPluginRuntime(trust *pkg.TrustStore) error {
+	cfg := b.cfg
+	schemas, egress := b.schemas, b.egress
 	launcher := sandbox.NewLauncher(sandbox.LauncherOptions{DisableWrap: cfg.Plugins.DevMode, Landlock: cfg.Plugins.Landlock, Logger: b.log})
-	schemas := dbschema.New(b.db, cfg.DatabaseURL, cfg.MasterKey, cfg.Plugins.DBRoleIsolation)
 	settings, err := settingsReaders(b.bill.SettingsReaders(), gateway.SettingsReaders(b.db), b.env.SettingsReaders())
 	if err != nil {
 		return err
@@ -290,7 +317,7 @@ func (b *boot) startPluginRuntime(trust *pkg.TrustStore) error {
 
 	rt, err := grpcruntime.New(grpcruntime.Options{
 		DB: b.db, Redis: b.rdb, Bus: b.cl.Bus, Locker: b.cl.Locker, Cipher: b.cipher, Node: b.cl.Registry, Launcher: launcher,
-		Egress: egress, Authorizer: b.az, Ledger: b.bill, Prices: b.bill, Schemas: schemas, Accounts: b.acc, Sticky: gateway.NewStickyClearer(b.rdb), Environment: b.env, Notifier: b.ntf, Users: b.idm,
+		Egress: egress, NetworkAccess: egress, Authorizer: b.az, Ledger: b.bill, Prices: b.bill, Schemas: schemas, Accounts: b.acc, Sticky: gateway.NewStickyClearer(b.rdb), Environment: b.env, Notifier: b.ntf, Users: b.idm,
 		Settings: settings, Tasks: b.jobBridge(),
 		HostVersion: b.version, DataDir: cfg.Plugins.DataDir, RunDir: cfg.Plugins.RunDir,
 		StrictNetwork: cfg.Plugins.StrictNetwork, Seccomp: cfg.Plugins.Seccomp, MaxMemoryMB: cfg.Plugins.MaxMemoryMB,
@@ -313,7 +340,7 @@ func (b *boot) startPluginRuntime(trust *pkg.TrustStore) error {
 		DB: b.db, Redis: b.rdb, Bus: b.cl.Bus, Node: b.cl.Registry, Registry: b.reg, Events: b.events,
 		Auth: b.keys, Pricer: b.bill, Balance: b.bill, Slots: b.cl.Slots,
 		Environment: b.env,
-		Accounts:    b.acc, Proxies: b.prx, Settler: b.settler, Observations: observations, Tasks: b.settler, Limiter: b.limiter, KeyWindows: b.keys.Windows, KeyUsage: b.keys, Quota: b.acc, Config: cfg, Converters: b.converters,
+		Accounts:    b.acc, NetworkAccess: egress, Settler: b.settler, Observations: observations, Tasks: b.settler, Limiter: b.limiter, KeyWindows: b.keys.Windows, KeyUsage: b.keys, Quota: b.acc, Config: cfg, Converters: b.converters,
 		Draining: b.gate.isDraining,
 	})
 
@@ -524,6 +551,7 @@ func (b *boot) registerRoutes(r *httpapi.Router) {
 	pr.RegisterRoutes(r)
 	pr.RegisterAssets(b.engine)
 	b.gw.RegisterRoutes(r)
+	b.egress.RegisterRoutes(r)
 }
 
 // buildEngine creates the gin engine with the shared middleware and the health

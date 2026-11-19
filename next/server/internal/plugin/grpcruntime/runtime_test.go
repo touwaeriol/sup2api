@@ -17,6 +17,7 @@ import (
 
 	"github.com/Sub2API-Devs/sup2api/next/runtime-contract/secret"
 	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
+	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/cluster"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/dbschema"
@@ -84,6 +85,13 @@ type env struct {
 
 func setup(t *testing.T, grants map[string]string) *env {
 	t.Helper()
+	return setupPackage(t, grants, registrytest.TestPlugin(t), nil)
+}
+
+// setupPackage is setup with the plugin binary bin and the manifest changed
+// by mod.
+func setupPackage(t *testing.T, grants map[string]string, bin []byte, mod func(*manifest.Manifest)) *env {
+	t.Helper()
 	db := testutil.DB(t)
 	mr := miniredis.RunT(t)
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
@@ -97,11 +105,14 @@ func setup(t *testing.T, grants map[string]string) *env {
 	key := randKey("rt")
 	m := registrytest.Manifest(key, "1.0.0")
 	m.HostPermissions = registrytest.Declare(grants)
-	pkg := registrytest.Package(t, m, registrytest.TestPlugin(t), map[string][]byte{
+	if mod != nil {
+		mod(m)
+	}
+	pkg := registrytest.Package(t, m, bin, map[string][]byte{
 		"migrations/0001_init.sql": []byte(`CREATE TABLE items (id int PRIMARY KEY);`),
 	})
 	registrytest.Install(t, db, m, pkg, grants, "enabled")
-	schemas := dbschema.New(db, testutil.DSN(db), mk, true)
+	schemas := dbschema.New(db, testutil.DSN(db), nil)
 	t.Cleanup(func() { _ = schemas.Drop(context.Background(), key) })
 	pkgs := registry.NewPackages(db, t.TempDir(), registry.WithSource(registrytest.Source()))
 	t.Cleanup(pkgs.Close)
@@ -176,13 +187,22 @@ func waitFor(t *testing.T, what string, d time.Duration, fn func() bool) {
 	t.Fatalf("timed out waiting for %s", what)
 }
 
-func build(t *testing.T, inst *grpcruntime.Instance) *pluginv1.BuildUpstreamRequestResponse {
+// build runs one Execute of the test plugin's default flow and returns the
+// request it relayed without waiting.
+func build(t *testing.T, inst *grpcruntime.Instance) *pluginv1.UpstreamRequest {
 	t.Helper()
-	resp, err := inst.Platform().BuildUpstreamRequest(context.Background(), &pluginv1.BuildUpstreamRequestRequest{})
+	res, err := execute(inst, &pluginv1.ExecuteRequest{}, core.ExecutionClient{})
 	if err != nil {
-		t.Fatalf("BuildUpstreamRequest: %v", err)
+		t.Fatalf("Execute: %v", err)
 	}
-	return resp
+	if res.Relay == nil {
+		t.Fatalf("Execute relayed nothing: %v", res.Response)
+	}
+	return res.Relay
+}
+
+func execute(inst *grpcruntime.Instance, in *pluginv1.ExecuteRequest, client core.ExecutionClient) (core.ExecutionResult, error) {
+	return inst.Platform().Execute(context.Background(), in, client)
 }
 
 func httpCall(t *testing.T, inst *grpcruntime.Instance, req *pluginv1.HTTPRequest) (map[string]any, error) {
@@ -345,7 +365,7 @@ func TestHostServiceRequiresGrants(t *testing.T) {
 	e := setup(t, grants)
 	inst := e.load(t, e.runtime(t, nil))
 
-	_, err := inst.Platform().BuildUpstreamRequest(context.Background(), &pluginv1.BuildUpstreamRequestRequest{})
+	_, err := execute(inst, &pluginv1.ExecuteRequest{}, core.ExecutionClient{})
 	if core.AsError(err).Code != "permission_denied" {
 		t.Fatalf("kv without grant: %v", err)
 	}

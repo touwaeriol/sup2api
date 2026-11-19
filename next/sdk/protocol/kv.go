@@ -34,8 +34,9 @@ const (
 	KVBatchMaxKeys = 512
 	// KVBatchMaxBytes caps the payload of one batch call: the keys plus the
 	// values of a KVSetMany request, and the values of a KVGetMany answer.
-	// It stays under the 4 MiB a host accepts in one HostService request
-	// (the default gRPC receive limit of the broker server).
+	// It is KV's own storage rule, as KVMaxValueBytes is for one value: the
+	// HostService call that carries the batch has no smaller bound (the
+	// broker receives up to gRPC's math.MaxInt32).
 	KVBatchMaxBytes = 3 << 20
 )
 

@@ -12,7 +12,6 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/plugins/payment/internal/payment"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest/check"
-	"github.com/Sub2API-Devs/sup2api/next/sdk/pluginsdk"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/pluginsdk/pluginsdktest"
 )
 
@@ -79,7 +78,7 @@ func TestRoutesHaveHandlers(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := pluginsdktest.Start(t, payment.New(), pluginsdktest.Options{
-		SDK: []pluginsdk.Option{pluginsdk.WithManifest(manifestJSON)},
+		Manifest: manifestJSON,
 	})
 	for _, r := range m.Routes {
 		path := strings.ReplaceAll(strings.ReplaceAll(r.Path, ":provider", "stripe"), ":id", "1")

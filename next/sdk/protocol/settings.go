@@ -39,8 +39,6 @@ type SettingsValues interface {
 
 // BillingSettings is the "billing" section.
 type BillingSettings struct {
-	// MissingPricePolicy: "reject" or "free" for a model without a price.
-	MissingPricePolicy string `json:"missing_price_policy"`
 	// MinBalance is the balance (USD, decimal string) a request needs.
 	MinBalance string `json:"min_balance"`
 	// BigCostWarningUSD (decimal string) flags expensive price rules.
@@ -69,6 +67,9 @@ type GatewaySettings struct {
 	QueueFallbackMaxWaiting  int `json:"queue_fallback_max_waiting"`
 	QueueFallbackWaitSeconds int `json:"queue_fallback_wait_seconds"`
 	MediaDownloadMaxMB       int `json:"media_download_max_mb"`
+	// MaxRequestBodyMB is the largest client request body (and WebSocket
+	// message) the gateway accepts; no other layer sets one.
+	MaxRequestBodyMB int `json:"max_request_body_mb"`
 	// ClaudeMaxTokens is the built-in max_tokens override of the attempts
 	// sent to Anthropic (CONTRACTS §84.1).
 	ClaudeMaxTokens ClaudeMaxTokens `json:"claude_max_tokens"`

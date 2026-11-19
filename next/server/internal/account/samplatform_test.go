@@ -35,7 +35,8 @@ func TestServedEndpointsSamePlatformConversion(t *testing.T) {
 		}
 	}
 	b := core.AccountTypeBinding{Plugin: core.PluginInfo{Key: "codex"}, Type: manifest.AccountType{ID: "chatgpt",
-		Platforms: []manifest.AccountPlatform{{Platform: "openai", Endpoints: []string{"responses"}}}}}
+		Platforms: []manifest.AccountPlatform{{Platform: "openai", Endpoints: []string{"responses"},
+			Adapted: map[string]manifest.AdaptOptions{"chat_completions": {}}}}}}
 	want := "POST /v1/responses openai native; POST /v1/chat/completions openai fair"
 	if got := endpointList(servedEndpoints(g, b, chatResponsesConverters{})); got != want {
 		t.Fatalf("endpoints:\n got %s\nwant %s", got, want)
@@ -43,6 +44,12 @@ func TestServedEndpointsSamePlatformConversion(t *testing.T) {
 	// No converter: only the subset.
 	if got := endpointList(servedEndpoints(g, b, nil)); got != "POST /v1/responses openai native" {
 		t.Fatalf("without converters: %s", got)
+	}
+	// Not declared in adapted: only the subset (CONTRACTS §83.3).
+	undeclared := b
+	undeclared.Type.Platforms = []manifest.AccountPlatform{{Platform: "openai", Endpoints: []string{"responses"}}}
+	if got := endpointList(servedEndpoints(g, undeclared, chatResponsesConverters{})); got != "POST /v1/responses openai native" {
+		t.Fatalf("not adapted: %s", got)
 	}
 	// A type serving chat natively lists it once, natively.
 	b.Type.Platforms[0].Endpoints = nil

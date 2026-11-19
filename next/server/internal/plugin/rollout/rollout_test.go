@@ -225,7 +225,7 @@ func (h *harness) node(name, boot string, adjust ...func(*rollout.Options)) *nod
 	nd.Heartbeat(context.Background())
 	opts := rollout.Options{
 		DB: h.db, Node: nd, Bus: registrytest.Bus{RDB: h.rdb}, Packages: pkgs, Registry: reg, Runtime: rt,
-		Schemas:  dbschema.New(h.db, testutil.DSN(h.db), make([]byte, 32), false),
+		Schemas:  dbschema.New(h.db, testutil.DSN(h.db), nil),
 		Defaults: h.rec, Perms: h.rec, Events: h.rec,
 		ReconcileInterval: 150 * time.Millisecond,
 		LeaseTTL:          8 * time.Second,
@@ -289,7 +289,7 @@ func TestTwoNodeRollout(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 	registrytest.Install(t, h.db, h.manifest("1.0.0"), h.pkg("1.0.0", `CREATE TABLE a (id int);`), map[string]string{"db.schema": "{}"}, "installed")
-	t.Cleanup(func() { _ = dbschema.New(h.db, "", nil, false).Drop(context.Background(), h.key) })
+	t.Cleanup(func() { _ = dbschema.New(h.db, "", nil).Drop(context.Background(), h.key) })
 
 	a := h.node("node-a", "boot-a")
 	b := h.node("node-b", "boot-b")
@@ -533,7 +533,7 @@ func TestRolloutDoesNotWaitForAStuckNode(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 	registrytest.Install(t, h.db, h.manifest("1.0.0"), h.pkg("1.0.0"), map[string]string{"db.schema": "{}"}, "installed")
-	t.Cleanup(func() { _ = dbschema.New(h.db, "", nil, false).Drop(context.Background(), h.key) })
+	t.Cleanup(func() { _ = dbschema.New(h.db, "", nil).Drop(context.Background(), h.key) })
 	short := func(o *rollout.Options) { o.PrepareTimeout, o.ActivateTimeout = 3*time.Second, 2*time.Second }
 	a := h.node("node-a", "boot-a", short)
 	b := h.node("node-b", "boot-b", short)
@@ -565,7 +565,7 @@ func TestRolloutTakeoverAndLateJoiner(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 	registrytest.Install(t, h.db, h.manifest("1.0.0"), h.pkg("1.0.0"), map[string]string{"db.schema": "{}"}, "installed")
-	t.Cleanup(func() { _ = dbschema.New(h.db, "", nil, false).Drop(context.Background(), h.key) })
+	t.Cleanup(func() { _ = dbschema.New(h.db, "", nil).Drop(context.Background(), h.key) })
 
 	a := h.node("node-a", "boot-a")
 	b := h.node("node-b", "boot-b")

@@ -26,12 +26,39 @@ var goldenRequired = []struct {
 	{"impossible", ""},
 }
 
+// goldenImagesRequired are the samples of the image pairs (CONVERT-MATRIX
+// §9.9): the image API has no conversation, tools or reasoning to sample.
+var goldenImagesRequired = []struct {
+	name     string
+	upstream string
+}{
+	{"text_basic", "both"},
+	{"no_instructions", ""},
+	{"two_images", "any"},
+	{"partial_image", "sse"},
+	{"no_image", "both"},
+	{"image_failed", "both"},
+	{"image_and_failed", "both"},
+	{"no_usage", "any"},
+	{"error_event", "sse"},
+	{"error_midstream", "sse"},
+	{"lossy", ""},
+	{"impossible", ""},
+}
+
+// imagePair reports an image pair (imagesResponses).
+func imagePair(p PairInfo) bool { return p.From == protocolImages || p.From == protocolImagesEdit }
+
 // goldenSpecs lists the required samples of a pair: pairs to Anthropic
 // also need max_tokens_default and thinking_tool_loop, compositions
 // compose_equals_chain.
 func goldenSpecs(p PairInfo) map[string]string {
 	out := map[string]string{}
-	for _, c := range goldenRequired {
+	required := goldenRequired
+	if imagePair(p) {
+		required = goldenImagesRequired
+	}
+	for _, c := range required {
 		out[c.name] = c.upstream
 	}
 	if p.To == "anthropic.messages" {
@@ -50,7 +77,7 @@ func TestGoldenCoverage(t *testing.T) {
 		known[pair] = true
 		for name, up := range goldenSpecs(p) {
 			dir := filepath.Join("testdata", "golden", pair, name)
-			for _, problem := range caseProblems(t, dir, name, up) {
+			for _, problem := range caseProblems(t, dir, name, up, lossyCategories(p)) {
 				t.Errorf("%s/%s: %s", pair, name, problem)
 			}
 		}
@@ -64,7 +91,7 @@ func TestGoldenCoverage(t *testing.T) {
 }
 
 // caseProblems lists what a required sample lacks.
-func caseProblems(t *testing.T, dir, name, upstream string) []string {
+func caseProblems(t *testing.T, dir, name, upstream string, lossy []LossCategory) []string {
 	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
 		return []string{"missing"}
 	}
@@ -94,13 +121,23 @@ func caseProblems(t *testing.T, dir, name, upstream string) []string {
 		out = append(out, "needs upstream reply: "+upstream)
 	}
 	if name == "lossy" {
-		out = append(out, lossyProblems(dir)...)
+		out = append(out, lossyProblems(dir, lossy)...)
 	}
 	return out
 }
 
-// lossyProblems checks the lossy sample loses something of every category.
-func lossyProblems(dir string) []string {
+// lossyCategories are the loss categories the lossy sample of a pair must
+// show: every one, but only other for an image pair (an image request has
+// no tools, reasoning or input images to lose).
+func lossyCategories(p PairInfo) []LossCategory {
+	if imagePair(p) {
+		return []LossCategory{LossOther}
+	}
+	return []LossCategory{LossTool, LossReasoning, LossImage, LossOther}
+}
+
+// lossyProblems checks the lossy sample loses something of each category.
+func lossyProblems(dir string, categories []LossCategory) []string {
 	got := map[LossCategory][]string{}
 	for _, f := range []string{"want.losses.json", "want.response_losses.json"} {
 		var m map[LossCategory][]string
@@ -111,7 +148,7 @@ func lossyProblems(dir string) []string {
 		}
 	}
 	var out []string
-	for _, c := range []LossCategory{LossTool, LossReasoning, LossImage, LossOther} {
+	for _, c := range categories {
 		if len(got[c]) == 0 {
 			out = append(out, "lossy loses nothing of category "+string(c))
 		}

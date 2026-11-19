@@ -8,12 +8,17 @@ import (
 func TestGroupEnvironment(t *testing.T) {
 	e := setup(t)
 	code, out := e.do(e.admin, "POST", "/groups", map[string]any{"name": "Env",
-		"environment": map[string]int64{"relay_timeout_seconds": 90, "stream_idle": 0, "max_request_body_mb": 0}})
+		"environment": map[string]int64{"relay_timeout_seconds": 90, "stream_idle": 0}})
 	if code != 400 {
 		t.Fatalf("unknown key: %d %v", code, out)
 	}
+	// The request body limit is a gateway setting, not a group variable.
+	if code, out = e.do(e.admin, "POST", "/groups", map[string]any{"name": "Env",
+		"environment": map[string]int64{"max_request_body_mb": 64}}); code != 400 {
+		t.Fatalf("removed variable: %d %v", code, out)
+	}
 	code, out = e.do(e.admin, "POST", "/groups", map[string]any{"name": "Env",
-		"environment": map[string]int64{"relay_timeout_seconds": 90, "max_request_body_mb": 0}})
+		"environment": map[string]int64{"relay_timeout_seconds": 90, "task_timeout_minutes": 0}})
 	if code != 201 {
 		t.Fatalf("create: %d %v", code, out)
 	}

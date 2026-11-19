@@ -30,9 +30,9 @@
 
 - Go 1.27；`next/go.work` 包含 `server`、`gateway`、`runtime-contract`、`sdk`、`tools/sub2api-plugin`、`e2e`、`deploy/mock-upstream`、`protocol-codec`（`next/` 里已没有模块 import 它，只剩根目录旧版 `backend/` 经 `replace` 依赖它）、每个 `plugins/<name>`；新增的 Go module（插件、工具）加入 `go.work`，并在自己的 `go.mod` 里 `replace github.com/Sub2API-Devs/sup2api/next/sdk => ../../sdk` 和 `replace github.com/Sub2API-Devs/sup2api/next/runtime-contract => ../../runtime-contract`（按相对路径；SDK 从 0.1.290 起依赖 runtime-contract，`GOWORK=off` 构建缺了后一条会找不到它）
 - 下载依赖：`GOPROXY=https://goproxy.cn,direct`（只在命令里临时设置）；整理依赖用 `GOWORK=off go mod tidy`
-- 重新生成 proto：`cd sdk && buf generate`（工具在 `go env GOBIN`）
+- 重新生成 proto：`cd sdk && buf generate`（工具在 `go env GOBIN`；版本 buf 1.47.2、protoc-gen-go v1.31.0、protoc-gen-go-grpc v1.2.0，输出与提交的生成代码逐字节相同，生成后 `git status --short gen` 应当没有意外的差异）
 - 每个模块完成时必须通过：`gofmt -l .` 无输出、`go vet ./...`、`go build ./...`、本模块的 `go test ./...`（工作区模式，不设 `GOWORK`）。CI（`.github/workflows/next-ci.yml`）对每个模块跑的就是这四条，脚本是 `.github/next-ci/next-check-module.sh`，可在仓库根本地执行（`sh .github/next-ci/next-check-module.sh next/server`）；`e2e` 只编译不运行（`--no-test`）。核心另在 CI 里交叉编译 `GOOS=linux/windows/darwin go build ./...`，并跑 `go test -race ./gateway/... ./runtime-contract/... ./server/internal/app/... ./server/internal/background/...`（在 `next/` 下）；`next-sums-clean.sh` 检查 `go.sum`/`go.work.sum` 没有未提交的改动
-- **插件数据库**（2026-11-15，2026-11-16 改为目录比对、共用 `runtime-contract/gormpg`；插件 SDK 0.2.0）：插件用 `Host.DB` 返回的 `*gorm.DB`（`sdk/pgdb`），插件、SDK、网关和工具都不 import pgx（`sdk/pgdb` 的 `TestNoPgxImports` 检查，测试文件也算；核心是 gormguard `[pgx-import]`）。连接的打开由 `runtime-contract/gormpg` 一处实现，核心、网关、SDK 共用：pgx 解析 DSN（URL 或 key=value），连接池大小由调用方给定（`gormpg.Settings`：核心默认 20 个、`SUB2API_PG_MAX_CONNS` 可改，网关默认 8 个、`SUB2API_GATEWAY_POOL_MAX_CONNS` 可改，插件按 `pgdb.Options`），DSN 不带 `pool_*` 参数（带了 `gormpg.ParseConfig` 启动即报错，只列参数名，见 §101.2），固定 `datestyle=ISO`、`intervalstyle=postgres`，`stdlib.OpenDB` 交给 database/sql 池，GORM 跑在 `sqlpool` 上；拨号钩子（严格网络模式的出口隧道）装在它解析出的驱动配置上；数组参数类型 `gormpg.Array`（`pgdb.Array`、`store.Array` 是它的别名）和 PostgreSQL 错误的读取（`IsNoRows`、`IsUniqueViolation`、`IsForeignKeyViolation`、`IsDeadlock`、`SQLState`、`ConstraintName`、`Hint`，核心经 `store` 的同名函数）也在这里，它是唯一 import pgx 的包。句柄绑定调用时的 ctx，每次调用重新取（连接共享，开销很小），不要缓存（例如在 Init 里取了交给后台任务）：ctx 结束后缓存的句柄每条语句都报错，语句不执行，错误包装 ctx 的错误（`context.Canceled` 或 `context.DeadlineExceeded`），并提示缓存的句柄是可能的原因（正常的取消、超时也是这条错误，提示写成条件句）。连接池默认每节点每插件 4 个（`pgdb.DefaultMaxConns`，`pluginsdk.WithDBPoolSize` 可改），插件角色 `CONNECTION LIMIT 20` 含宿主迁移的那 1 个，4 个节点以内不会超限。表结构以插件 `internal/model` 包的 GORM 模型为唯一描述（导出 `func All() []any`；迁移里有模型描述不了的函数、视图、序列、触发器、类型时再导出 `func Unmanaged() []string`，如 `"function touch()"`、`"trigger t.t_touch"`、`"view v"`），宿主仍只执行 `migrations/*.sql`，运行时不跑 AutoMigrate。`sub2api-plugin db diff|check` 在比对库的一个事务里完成全部工作，结束时回滚（中断也不留下 schema 或角色，见 `sdk/pgdb/pgdbtool`）：以一个只拥有临时 schema 的临时角色执行迁移（与宿主用插件角色执行一致，需要更多权限的迁移在这里同样失败；建到 schema 之外的对象列为差异），在另一个空 schema 上对模型跑 AutoMigrate，比较两边的系统目录：表；每列的 `format_type`、NOT NULL、默认值（按值比较，`0` 与 `'0'::numeric` 相同）；主键；索引与约束按定义（`pg_get_indexdef`、`pg_get_constraintdef`，与名字无关，唯一约束与同列唯一索引视为相同）。模型的 `TableName` 不得带 schema。`db diff` 把 AutoMigrate 在迁移 schema 上执行的 DDL（改写成可重复执行）写成下一个编号的迁移（编号位数沿用已有文件），写之前在临时 schema 上把它连跑两次并确认再无差异；无变化时提示；改列类型、删除、`SET NOT NULL`、无默认值的 `NOT NULL` 新列、给已有表加 CHECK/唯一/外键约束或唯一索引（标 `!`），AutoMigrate 不处理的差异（给已有列加 NOT NULL、改主键、同名索引或约束改定义），以及库里有而模型里没有的表、列、索引、约束、未声明为 Unmanaged 的视图、序列、函数、触发器、类型只打印、不生成。`db check` 有任何差异就失败，`pack` 自动执行（含 `--overlay` 的迁移；插件没有 `internal/model` 或 manifest 没有 `database` 时跳过；没设 `TEST_DATABASE_URL` 时启动本机 testpg 服务器，由它启动且没有其他程序在用时在结束时停掉；`--skip-db-check` 关闭，镜像构建用它，CI 由 `tools/sub2api-plugin` 的 `TestDBCheck` 检查所有带模型的内置插件）。说明见 `sdk/pluginsdk/doc.go` 的 Database 一节。插件和 SDK 的语句（2026-11-16 起）全部由 GORM 按模型生成（`Model`/`Table`、`Where`、`Select`、`Create`、`Updates`、`Delete`、`clause.OnConflict`、`clause.Returning`），不手写整条 SQL：`Raw`/`Exec` 只组合已生成的查询（`(?) UNION ALL (?)`、`pgdb.Exists`、`pgdb.InsertSelect`），序列和锁走 `pgdb.NextIDs`、`pgdb.LockTable`、`pgdb.TryXactLock`（键为 `hashtextextended(名字 || ':' || current_schema(), 0)`）；`Exists`、`InsertSelect`、`NextIDs`、`TryXactLock` 是 `runtime-contract/gormpg` 同名组合器的转交，核心和网关用的是同一份。SQL 文本的规则与核心相同（见下条“核心的 SQL”，同一个检查器 `runtime-contract/gormpg/sqlcheck`）：必须是常量或只由常量拼成，值只走 `?` 参数，请求选择的列和排序经固定白名单进 `clause.Column`/`clause.OrderByColumn`；`pgdb.SQL` 标记交给辅助函数的 SQL 片段（只有常量能隐式转换）。`sdk/pgdb` 的 `TestNoRawSQL` 检查 SDK、仓库里全部插件和 `tools` 的非测试代码（`[raw-sql]`、`[sql-const]`，以及不经 gorm 的 `ConnPool` 或 `(*gorm.DB).DB()` 拿连接、`*sql.DB` 执行语句的 `[gorm-instance]`；GORM 的泛型 API `gorm.G` 不许用，它的方法检查器看不到），例外按声明（`包.函数`）登记原因，目前只有 `pgdbtool` 的系统目录读取、迁移执行与 DDL（标识符经 `clause.Table` 引用）和 `pgdb.LockTable`，连接池上只有 `pgdb.Close`、testpg 的探测和 `hierarchy.requireTx`（只看句柄是否在事务里）。插件要在自己的表上存树（层级）用 `sdk/hierarchy`（0.1.292，核心的用户上级是它的第一个使用者，§103.2）：表按约定有 `id`、`parent_id`（无 ON DELETE）、`path bigint[] NOT NULL DEFAULT '{}'`（祖先，自顶向下到父节点，GIN 索引）和 `CHECK (path[cardinality(path)] IS NOT DISTINCT FROM parent_id)`，`hierarchy.New(table, maxDepth)` 给出 `Tree`（列名不同时直接填 `Tree` 的字段）；新行作为根插入，同一事务里 `Move` 放到父节点下，`Move` 是父列与路径的唯一写入者
+- **插件数据库**（2026-11-15，2026-11-16 改为目录比对、共用 `runtime-contract/gormpg`；插件 SDK 0.2.0）：插件用 `Host.DB` 返回的 `*gorm.DB`（`sdk/pgdb`），插件、SDK、网关和工具都不 import pgx（`sdk/pgdb` 的 `TestNoPgxImports` 检查，测试文件也算；核心是 gormguard `[pgx-import]`）。连接的打开由 `runtime-contract/gormpg` 一处实现，核心、网关、SDK 共用：pgx 解析 DSN（URL 或 key=value），连接池大小由调用方给定（`gormpg.Settings`：核心默认 20 个、`SUB2API_PG_MAX_CONNS` 可改，网关默认 8 个、`SUB2API_GATEWAY_POOL_MAX_CONNS` 可改，插件按 `pgdb.Options`），DSN 不带 `pool_*` 参数（带了 `gormpg.ParseConfig` 启动即报错，只列参数名，见 §101.2），固定 `datestyle=ISO`、`intervalstyle=postgres`，`stdlib.OpenDB` 交给 database/sql 池，GORM 跑在 `sqlpool` 上；拨号钩子（严格网络模式的出口隧道）装在它解析出的驱动配置上；数组参数类型 `gormpg.Array`（`pgdb.Array`、`store.Array` 是它的别名）和 PostgreSQL 错误的读取（`IsNoRows`、`IsUniqueViolation`、`IsForeignKeyViolation`、`IsDeadlock`、`SQLState`、`ConstraintName`、`Hint`，核心经 `store` 的同名函数）也在这里，它是唯一 import pgx 的包。句柄绑定调用时的 ctx，每次调用重新取（连接共享，开销很小），不要缓存（例如在 Init 里取了交给后台任务）：ctx 结束后缓存的句柄每条语句都报错，语句不执行，错误包装 ctx 的错误（`context.Canceled` 或 `context.DeadlineExceeded`），并提示缓存的句柄是可能的原因（正常的取消、超时也是这条错误，提示写成条件句）。连接池默认每节点每插件 4 个（`pgdb.DefaultMaxConns`，`pluginsdk.WithDBPoolSize` 可改）；插件的连接由核心代为登录、用核心的数据库用户（§115），这些连接与核心自己的连接池一起计入数据库的连接上限，规划 `max_connections` 时按“节点数 ×（核心池 + 每个用数据库的插件 4 个）”算。表结构以插件 `internal/model` 包的 GORM 模型为唯一描述（导出 `func All() []any`；迁移里有模型描述不了的函数、视图、序列、触发器、类型时再导出 `func Unmanaged() []string`，如 `"function touch()"`、`"trigger t.t_touch"`、`"view v"`），宿主仍只执行 `migrations/*.sql`，运行时不跑 AutoMigrate。`sub2api-plugin db diff|check` 在比对库的一个事务里完成全部工作，结束时回滚（中断也不留下 schema，见 `sdk/pgdb/pgdbtool`）：以连接的用户执行迁移、只把 `search_path` 设为临时 schema（与宿主一致：宿主 2026-11-18 起以核心的用户执行，§115；此前用一个只拥有临时 schema 的临时角色，比宿主严），迁移在 schema 之外建立或改动的表、函数、类型、schema 和扩展（本事务写过的系统目录行）列为差异，在另一个空 schema 上对模型跑 AutoMigrate，比较两边的系统目录：表；每列的 `format_type`、NOT NULL、默认值（按值比较，`0` 与 `'0'::numeric` 相同）；主键；索引与约束按定义（`pg_get_indexdef`、`pg_get_constraintdef`，与名字无关，唯一约束与同列唯一索引视为相同）。模型的 `TableName` 不得带 schema。`db diff` 把 AutoMigrate 在迁移 schema 上执行的 DDL（改写成可重复执行）写成下一个编号的迁移（编号位数沿用已有文件），写之前在临时 schema 上把它连跑两次并确认再无差异；无变化时提示；改列类型、删除、`SET NOT NULL`、无默认值的 `NOT NULL` 新列、给已有表加 CHECK/唯一/外键约束或唯一索引（标 `!`），AutoMigrate 不处理的差异（给已有列加 NOT NULL、改主键、同名索引或约束改定义），以及库里有而模型里没有的表、列、索引、约束、未声明为 Unmanaged 的视图、序列、函数、触发器、类型只打印、不生成。`db check` 有任何差异就失败，`pack` 自动执行（含 `--overlay` 的迁移；插件没有 `internal/model` 或 manifest 没有 `database` 时跳过；没设 `TEST_DATABASE_URL` 时启动本机 testpg 服务器，由它启动且没有其他程序在用时在结束时停掉；`--skip-db-check` 关闭，镜像构建用它，CI 由 `tools/sub2api-plugin` 的 `TestDBCheck` 检查所有带模型的内置插件）。说明见 `sdk/pluginsdk/doc.go` 的 Database 一节。插件和 SDK 的语句（2026-11-16 起）全部由 GORM 按模型生成（`Model`/`Table`、`Where`、`Select`、`Create`、`Updates`、`Delete`、`clause.OnConflict`、`clause.Returning`），不手写整条 SQL：`Raw`/`Exec` 只组合已生成的查询（`(?) UNION ALL (?)`、`pgdb.Exists`、`pgdb.InsertSelect`），序列和锁走 `pgdb.NextIDs`、`pgdb.LockTable`、`pgdb.TryXactLock`（键为 `hashtextextended(名字 || ':' || current_schema(), 0)`）；`Exists`、`InsertSelect`、`NextIDs`、`TryXactLock` 是 `runtime-contract/gormpg` 同名组合器的转交，核心和网关用的是同一份。SQL 文本的规则与核心相同（见下条“核心的 SQL”，同一个检查器 `runtime-contract/gormpg/sqlcheck`）：必须是常量或只由常量拼成，值只走 `?` 参数，请求选择的列和排序经固定白名单进 `clause.Column`/`clause.OrderByColumn`；`pgdb.SQL` 标记交给辅助函数的 SQL 片段（只有常量能隐式转换）。`sdk/pgdb` 的 `TestNoRawSQL` 检查 SDK、仓库里全部插件和 `tools` 的非测试代码（`[raw-sql]`、`[sql-const]`，以及不经 gorm 的 `ConnPool` 或 `(*gorm.DB).DB()` 拿连接、`*sql.DB` 执行语句的 `[gorm-instance]`；GORM 的泛型 API `gorm.G` 不许用，它的方法检查器看不到），例外按声明（`包.函数`）登记原因，目前只有 `pgdbtool` 的系统目录读取、迁移执行与 DDL（标识符经 `clause.Table` 引用）和 `pgdb.LockTable`，连接池上只有 `pgdb.Close`、testpg 的探测和 `hierarchy.requireTx`（只看句柄是否在事务里）。插件要在自己的表上存树（层级）用 `sdk/hierarchy`（0.1.292，核心的用户上级是它的第一个使用者，§103.2）：表按约定有 `id`、`parent_id`（无 ON DELETE）、`path bigint[] NOT NULL DEFAULT '{}'`（祖先，自顶向下到父节点，GIN 索引）和 `CHECK (path[cardinality(path)] IS NOT DISTINCT FROM parent_id)`，`hierarchy.New(table, maxDepth)` 给出 `Tree`（列名不同时直接填 `Tree` 的字段）；新行作为根插入，同一事务里 `Move` 放到父节点下，`Move` 是父列与路径的唯一写入者
 - **核心的 SQL**（raw-SQL 策略，2026-11-16，0.1.290；gormguard `[raw-sql]`、`[sql-const]`，规则在 `runtime-contract/gormpg/sqlcheck`，允许列表在 `server/internal/store/gormguard/rawsql_test.go`）：核心的语句一律由 GORM 的模型与查询构造器生成（`Create`、`Updates`、`clause.OnConflict`、`clause.Returning`、`store.ForUpdate()`，统计用 `Select`/`Group` 里的表达式，子查询与 `UNION ALL` 用 `(?)` 组合构造器查询），多行插入一次 `Create` 一个切片，需要按顺序拿 id 时先 `gormpg.NextIDs`，行数随批次变化的写入按 `store.InsertChunk` 行一条（`CreateInBatches`，满条的文本相同）。插入的行用类型化的行结构体（带 `TableName`，只含要写的列，没有默认值标签，所以不读回；数据库时钟的列用 `store.DBNow`，值是其他 SQL 表达式（子查询、时钟加间隔）的列用 `store.ExprValue`），行从查询里来的用 `gormpg.InsertSelect`；不用没有 `Model` 的列映射（GORM 每次把映射当模型解析，失败后把整个映射格式化进丢弃的错误）。整条手写的语句只留在允许列表里按名字（`包.函数`）登记、写明理由的地方：账本的 data-modifying CTE（预扣、结算、释放、退款）、`store/system.go` 里非数据语句的小助手（事务级 advisory 锁 `XactLock`/`TryXactLock`（按名字，`hashtextextended`）与 `XactLockID`（按 id，只用于要与同 id 的迁移会话锁互斥的插件迁移锁）、`SetLocal`（`set_config(名, 值, true)`，只在事务里）、`ClockTimestamp`、`CurrentSnapshot`、`CurrentDatabase`）、`DDL`、迁移执行器、开发工具 `modelgen`，以及插件迁移记录的 SECURITY DEFINER 函数调用；核心、网关、SDK 共用的组合器 `runtime-contract/gormpg` 的 `ExistsQuery`/`Exists`、`InsertSelect`、`NextIDs`（核对取到的个数）、`RelationExists`、`TryXactLock` 在那个模块登记；只由 `(?)`（或 `?`）与集合运算组成的组合文本自动放行。交给 GORM 的 SQL 文本必须由常量构成，值只走 `?` 参数：`Raw`、`Exec`、`Where`、`Not`、`Or`、`Having`、`Order`、`Group`、`Joins`、`InnerJoins`、`Table`、`Pluck` 的第一个参数，`Select`/`Distinct` 的全部参数（字符串或 `[]string`），`Find`/`First`/`Take`/`Last`/`Delete`/`FirstOrInit`/`FirstOrCreate`/`Preload` 的内联条件，`gorm.Expr`、`clause.Expr`/`NamedExpr` 的 SQL（含给 `.SQL` 字段赋值），`Raw: true` 的 `clause.Column`/`clause.Table` 的名字（字面量之外给 `Name`/`Table`/`Alias` 赋值一律要常量，`Raw` 只能在字面量里设），经 `WriteString`/`WriteByte` 等直接写进语句的文本（`gorm.Statement`、它的 `SQL`、`clause.Builder`/`Writer`），放进 `any` 参数的字符串，登记为 SQL 文本的函数（`store.Conds.And`、`UpdateFrom`、`NewNumbered`，`DDL` 按签名取第一个字符串参数即格式串）；经接口、方法值或方法表达式调用的同名方法同样检查，把这些方法当值用（不调用）直接失败。常量跟踪是保守的，只认：常量及其 `+`、`strings.Join`/`fmt.Sprintf`/`Repeat`/修剪、`append`/`slices.Concat`；本包里每个取值（声明、赋值、`range`、`v, ok := m[k]`）都是常量、没有被取地址或交给可能改写它的函数的局部变量、未导出的包变量和未导出字段；本包未导出、无接收者、只被直接调用的函数的参数（每个调用都传常量）；本包函数的返回值（多返回值也算）。其余一律当未知：导出的包变量（别的包能改）、导出函数和方法的参数、接收者、函数字面量的参数、type switch 的绑定。GORM 的泛型 API `gorm.G` 不许用（`[raw-sql]`）；gorm 的 `ConnPool`（读或写）和 `(*gorm.DB).DB()` 只在允许列表 `Pool` 登记的声明里出现（`[gorm-instance]`，核心是 `store` 的 `WithConn`、`SQLTx`、`InTx`、迁移执行器和测试设施）；运行时选的列名经固定映射变成 `clause.Column`/`clause.OrderByColumn`，不拼进文本；检查跟不出的（如账本 CTE 的拼接、统计的度量表）在允许列表 `Dynamic` 里登记理由。允许列表（`Raw`、`Dynamic`、`Quoting` 等）里没有命中的条目也算失败（名字写错、函数已删除都会报）。规则实现在 `runtime-contract/gormpg/sqlcheck`，核心、网关（§39）、SDK 与插件共用，各模块只保留自己的允许列表（核心是 `server/internal/store/gormguard/rawsql_test.go` 的 `sqlPolicy`）。
 - **数据库测试**：核心用 `testutil.DB(t)`，插件用 `pluginsdktest.NewSchema(t, …)`，两者都从 `sdk/testpg` 拿库：
   - 设置了 `TEST_DATABASE_URL`（超级用户 DSN，如 CI）就用它；
@@ -57,7 +57,7 @@
 | 失败 | HTTP 状态码 + `{"error": {"code": "...", "message": "...", "details": {...}}}` |
 | 字段校验失败 | `invalid_argument`，`details.fields = [{"field","code","message"}]` |
 
-错误码（`core/errors.go`）：`invalid_argument` 400、`unauthenticated` 401、`permission_denied` 403、`verification_required` 403（缺少或无效的二次验证 proof，`details {scope, context, methods, password_required}`，§80.2，2026-11-13）、`not_found` 404、`conflict` 409、`insufficient_balance` 402、`model_price_not_configured` 403、`model_not_allowed` 403、`group_deleted` / `group_disabled` / `group_not_allowed` 403（API Key 所属分组已删除 / 已停用 / 不再对其所有者开放，§15.1）、`rate_limited` 429、`no_available_account` 503（网关 `anthropic` 格式渲染为 529 `overloaded_error`，§11.6）、`plugin_unavailable` 503、`package_gone` 410（插件版本记录在、安装包已不在任何节点上，§5.7）、`unavailable` 503、`internal` 500。（原 `step_up_required` 已随 2026-10 的二次验证一起删除，§3.3；2026-11-13 的新二次验证用 `verification_required`，§80.2。）
+错误码（`core/errors.go`）：`invalid_argument` 400、`unauthenticated` 401、`permission_denied` 403、`verification_required` 403（缺少或无效的二次验证 proof，`details {scope, context, methods, password_required}`，§80.2，2026-11-13）、`not_found` 404、`conflict` 409、`cluster_change_busy` 409（另一项集群变更——插件变更或核心升级计划——正在提交、占着集群变更锁，稍后重试即可；定义在 `core.ErrClusterChangeBusy`。上传插件时同一个插件的首次上传恰好被另一处抢先建了插件行（不取集群变更锁的内置插件首次安装）也回这个码，信息是 `the plugin is being uploaded concurrently; retry`，重试即成功，此前是 `conflict`。“核心升级进行中或已暂停”仍是 `conflict`，要先完成或取消升级，2026-11-18）、`insufficient_balance` 402、`model_price_not_configured` 403、`model_not_allowed` 403、`group_deleted` / `group_disabled` / `group_not_allowed` 403（API Key 所属分组已删除 / 已停用 / 不再对其所有者开放，§15.1）、`rate_limited` 429、`no_available_account` 503（网关 `anthropic` 格式渲染为 529 `overloaded_error`，§11.6）、`plugin_unavailable` 503、`package_gone` 410（插件版本记录在、没有在线节点持有它的安装包，§5.7、§114）、`unavailable` 503、`internal` 500。（原 `step_up_required` 已随 2026-10 的二次验证一起删除，§3.3；2026-11-13 的新二次验证用 `verification_required`，§80.2。）
 
 ### 3.2 数据格式
 
@@ -111,7 +111,7 @@
 | settings | `settings:read` `settings:manage`🔐🔑 |
 | system_update | `system:update:read` `system:update:execute`🔐🔑👑 `system:update:recover`🔐🔑👑 |
 
-内置角色：`super_admin`（superuser，等同 `*`，含以后新增的权限，名称、描述、权限都不可编辑，不可重置或删除；0.1.290 起是唯一能带 superuser 标志的角色，授予存为 `casbin_rule` 的 `p, r:super_admin, *, *`，§99.1）、`admin`（除超管专属 👑 以外的全部核心权限）、`operator`（运维，2026-11-12 起为显式白名单，决策 D3：`user:read` `user:create` `user:update`、`role:read` `role:assign`、`group:read` `group:manage`、`segment:read` `segment:manage`、`account:read` `account:create` `account:update` `account:delete` `account:test`、`proxy:read` `proxy:manage`、`price:read`、`balance:all:read`、`usage:all:read`、`usage:account:read`（0.1.292）、`node:read`、`audit:read`、`task:read` `task:run`，加上 `account:credential:view:own` 与 `user` 角色的默认权限（全量 key 蕴含 own 范围，因此能授出 supplier）；不含 `role:define`、`balance:adjust`、`usage:settle`、`user:delete`、`user:password:reset`、`account:credential:view`、`account:settings:custom`、`account:group:bind`、`account:relay`、`price:manage`、`task:manage` 以及 sticky、settings、plugin、publisher、system_update 各模块；以后新增的核心权限不会自动进入，要加进白名单）、`supplier`（供应商，2026-11-12；`account:read:own` `account:create:own` `account:update:own` `account:delete:own` `account:test:own` `account:credential:view:own` `proxy:read:own` `proxy:manage:own`，2026-11-13 加 `usage:self:read`（看自己的用量），0.1.292 加 `usage:account:read:own`（自己账号的使用记录，`rev` 2），核心默认权限只有这些（插件权限按 manifest `defaults` 授予，payment 的 `recharge:use`、growth 的 `growth:use` 列了 supplier），暂不含 `account:group:bind`；附加型角色，供应商用户同时持有 `user` 与 `supplier`，控制台新建用户勾选 supplier 时自动勾上 user，§21）、`supplier_agent`（代理供应商，0.1.292：user 与 supplier 的默认权限加下级的账号与使用记录只读、下级用户的读建改与角色分配，可分配 supplier、supplier_agent，§103.1）、`user`（`apikey:self:manage` `balance:self:read` `usage:self:read` `gateway:use`）。六个内置角色开箱即有，默认权限与可分配清单只在代码里定义一处（`authz/catalog.go` `builtinRoles`），新库同步后的结果（各角色存下的权限、可分配清单、单独持有时可见的核心菜单）由 `authz/testdata/builtin_roles.golden` 固定（`TestBuiltinRolesGolden`；有意改动后 `UPDATE_GOLDEN=1` 重写，并同步本段与 §103.1），新库由启动同步 `SyncCore` 直接写入，升级时的重置、补缺与恢复默认都用它（2026-11-13，用户要求“新系统自带的角色，可以进行修改、重置”）。除 `super_admin` 外，内置角色的名称、描述、权限、可分配清单可以修改：有 `role:define`、角色在操作者的可分配清单内、且角色当前的授予不超出操作者（与有持有者的自定义角色同一口径，§43.6 角色写入口），新增部分仍须在操作者之内；按默认清单 admin 能改 operator、supplier、supplier_agent、user，不能改 admin（超管都能改）。内置角色不能删除（409），key 不能改（没有改 key 的接口，PATCH `/roles/:id` 带不同的 `key` 400 `immutable`，§15.7）。`POST /roles/:id/reset` 恢复默认（§15.7，权限检查同修改，另须覆盖全部默认值）。新增的核心权限只自动授予默认集合包含它的内置角色。**默认值在升级时只应用一次**（`roles.defaults_rev`，迁移 0097 加列，存量为 0）：内置角色（`super_admin` 除外）的 `defaults_rev` 落后于代码里该角色的 `rev`（升级到 0.1.286，或以后某个已有权限、角色加入了默认值、代码提升了 `rev`）时，`SyncCore` 按角色有没有持有者（`casbin_rule` 里有该角色的 g 行、且未软删除的用户，即角色的 `user_count`）处理：**无人持有**的整体重置为默认值，与恢复默认同一套写入：核心权限（含范围权限）、可分配清单与 `assign_custom` 按默认值写入，默认值以外的核心授予删除，角色上的插件权限不动，名称、描述不改，审计一条 `role.reset`（系统操作者，`detail.via = "sync"`、`defaults_rev`、`before`、`after`）；**有人持有**的只补缺不覆盖：把默认值里缺的权限（含范围默认值，已有同动作全量 key 时不补 own 范围）、可分配角色与 `assign_custom` 补上，不删除角色上已有的其他授予，每项写审计 `authz.sync.grant`（`detail.defaults_rev`）。两种都把 `defaults_rev` 置为 `rev`；之后重启不再处理，管理员之后的修改（含删掉的默认权限）不会被改回来。恢复默认同样把 `defaults_rev` 置为当前 `rev`。新用户默认分配 `user` 角色。插件权限的 key 为 `plugin.<插件key>:<插件内 key>`，模块为 `plugin.<插件key>`。插件权限的状态跟随插件：新登记的权限在插件运行中（`plugins.status` 为 `enabled`、`upgrading`）时为 `active`，否则为 `disabled`，每次激活（启用或升级提交）整体置为 `active`、禁用时整体置为 `disabled`；已有的行在同步时不改状态（2026-11-12 权限加固 W4-P8）。升级失败时，同意新版本时登记的新权限保留到激活另一个版本时再按其 manifest 清理（W4-P9）。新登记的权限授予哪些角色、移除与复活、风险等级见下文“插件权限”。
+内置角色：`super_admin`（superuser，等同 `*`，含以后新增的权限，名称、描述、权限都不可编辑，不可重置或删除；0.1.290 起是唯一能带 superuser 标志的角色，授予存为 `casbin_rule` 的 `p, r:super_admin, *, *`，§99.1）、`admin`（除超管专属 👑 以外的全部核心权限）、`operator`（运维，2026-11-12 起为显式白名单，决策 D3：`user:read` `user:create` `user:update`、`role:read` `role:assign`、`group:read` `group:manage`、`segment:read` `segment:manage`、`account:read` `account:create` `account:update` `account:delete` `account:test`、`proxy:read` `proxy:manage`、`price:read`、`balance:all:read`、`usage:all:read`、`usage:account:read`（0.1.292）、`node:read`、`audit:read`、`task:read` `task:run`，加上 `account:credential:view:own` 与 `user` 角色的默认权限（全量 key 蕴含 own 范围，因此能授出 supplier）；不含 `role:define`、`balance:adjust`、`usage:settle`、`user:delete`、`user:password:reset`、`account:credential:view`、`account:settings:custom`、`account:group:bind`、`account:relay`、`price:manage`、`task:manage` 以及 sticky、settings、plugin、publisher、system_update 各模块；以后新增的核心权限不会自动进入，要加进白名单）、`supplier`（供应商，2026-11-12；`account:read:own` `account:create:own` `account:update:own` `account:delete:own` `account:test:own` `account:credential:view:own` `proxy:read:own` `proxy:manage:own`，2026-11-13 加 `usage:self:read`（看自己的用量），0.1.292 加 `usage:account:read:own`（自己账号的使用记录，`rev` 2），核心默认权限只有这些（插件权限按 manifest `defaults` 授予，payment 的 `recharge:use` 列了 supplier），暂不含 `account:group:bind`；附加型角色，供应商用户同时持有 `user` 与 `supplier`，控制台新建用户勾选 supplier 时自动勾上 user，§21）、`supplier_agent`（代理供应商，0.1.292：user 与 supplier 的默认权限加下级的账号与使用记录只读、下级用户的读建改与角色分配，可分配 supplier、supplier_agent，§103.1）、`user`（`apikey:self:manage` `balance:self:read` `usage:self:read` `gateway:use`）。六个内置角色开箱即有，默认权限与可分配清单只在代码里定义一处（`authz/catalog.go` `builtinRoles`），新库同步后的结果（各角色存下的权限、可分配清单、单独持有时可见的核心菜单）由 `authz/testdata/builtin_roles.golden` 固定（`TestBuiltinRolesGolden`；有意改动后 `UPDATE_GOLDEN=1` 重写，并同步本段与 §103.1），新库由启动同步 `SyncCore` 直接写入，升级时的重置、补缺与恢复默认都用它（2026-11-13，用户要求“新系统自带的角色，可以进行修改、重置”）。除 `super_admin` 外，内置角色的名称、描述、权限、可分配清单可以修改：有 `role:define`、角色在操作者的可分配清单内、且角色当前的授予不超出操作者（与有持有者的自定义角色同一口径，§43.6 角色写入口），新增部分仍须在操作者之内；按默认清单 admin 能改 operator、supplier、supplier_agent、user，不能改 admin（超管都能改）。内置角色不能删除（409），key 不能改（没有改 key 的接口，PATCH `/roles/:id` 带不同的 `key` 400 `immutable`，§15.7）。`POST /roles/:id/reset` 恢复默认（§15.7，权限检查同修改，另须覆盖全部默认值）。新增的核心权限只自动授予默认集合包含它的内置角色。**默认值在升级时只应用一次**（`roles.defaults_rev`，迁移 0097 加列，存量为 0）：内置角色（`super_admin` 除外）的 `defaults_rev` 落后于代码里该角色的 `rev`（升级到 0.1.286，或以后某个已有权限、角色加入了默认值、代码提升了 `rev`）时，`SyncCore` 按角色有没有持有者（`casbin_rule` 里有该角色的 g 行、且未软删除的用户，即角色的 `user_count`）处理：**无人持有**的整体重置为默认值，与恢复默认同一套写入：核心权限（含范围权限）、可分配清单与 `assign_custom` 按默认值写入，默认值以外的核心授予删除，角色上的插件权限不动，名称、描述不改，审计一条 `role.reset`（系统操作者，`detail.via = "sync"`、`defaults_rev`、`before`、`after`）；**有人持有**的只补缺不覆盖：把默认值里缺的权限（含范围默认值，已有同动作全量 key 时不补 own 范围）、可分配角色与 `assign_custom` 补上，不删除角色上已有的其他授予，每项写审计 `authz.sync.grant`（`detail.defaults_rev`）。两种都把 `defaults_rev` 置为 `rev`；之后重启不再处理，管理员之后的修改（含删掉的默认权限）不会被改回来。恢复默认同样把 `defaults_rev` 置为当前 `rev`。新用户默认分配 `user` 角色。插件权限的 key 为 `plugin.<插件key>:<插件内 key>`，模块为 `plugin.<插件key>`。插件权限的状态跟随插件：新登记的权限在插件运行中（`plugins.status` 为 `enabled`、`upgrading`）时为 `active`，否则为 `disabled`，每次激活（启用或升级提交）整体置为 `active`、禁用时整体置为 `disabled`；已有的行在同步时不改状态（2026-11-12 权限加固 W4-P8）。升级失败时，同意新版本时登记的新权限保留到激活另一个版本时再按其 manifest 清理（W4-P9）。新登记的权限授予哪些角色、移除与复活、风险等级见下文“插件权限”。
 
 插件权限（2026-11-15 0.1.290，设计 `docs/plugin-permissions/`；manifest 字段见 §5.8 与 §21.0“插件资源范围”）：
 
@@ -185,15 +185,16 @@
 
 | 方法 路径 | 权限 | 说明 |
 |---|---|---|
-| GET `/account-types` | `account:read` | `[{plugin_key, plugin_name, plugin_version, asset_base, platform, type, label, description, form:{mode, page?, component?}, sensitive_fields, guarded_settings:[{field, allowed[]}], custom_upstream}]`（`guarded_settings` 来自 manifest `guardedSettings`，§21.3；未声明时为 `[]`；`custom_upstream` 见 §21.3） |
-| GET `/account-types/:platform/:type/form` | `account:read` | `{schema, ui_schema}` |
+| GET `/account-types` | `account:read` | `[{plugin_key, plugin_name, plugin_version, asset_base, platform, type, label, description, form:{mode, page?, component?}, sensitive_fields, guarded_settings:[{field, allowed[], versions?[]}], custom_upstream}]`（`guarded_settings` 来自 manifest `guardedSettings`，§21.3；未声明时为 `[]`；`custom_upstream` 见 §21.3） |
+| ~~GET `/account-types/:platform/:type/form`~~ | | 已删除（2026-11-19，插件界面只用代码写）：账号表单是插件的 native 组件，核心不再提供表单 schema |
 | GET `/accounts`（`?plugin_key=&type=&group_id=&status=&q=&model=&created_by=&mine=&orphaned=`） | `account:read` | 列表含 `in_use`（实时并发）、`cooldown_until`、`orphaned`、`rate_usage`（§18）、`created_by`、`created_by_email`（§21）。**默认不列出孤立账号**（所属插件已禁用/卸载，数据仍在）；`orphaned=true` 只列孤立的，`orphaned=all` 都列；详情 `GET /accounts/:id` 不受影响 |
 | GET `/accounts/summary` | `account:read` 的任意范围 | 调用者 `account:read` 范围内未删除账号的状态计数 `{total, available, auto_disabled, disabled}`，口径同 `GET /usage/overview` 的 `accounts`（`available` = active 且可调度；`auto_disabled` 含 active 但不可调度；不区分孤立账号）；供应商仪表盘账号状态卡片（T81，2026-11-13 权限加固期 4 P4F5） |
 | POST `/accounts` | `account:create` | `{name, plugin_key, type, group_ids[], proxy_id \| proxy_url, priority, weight, max_concurrency, schedulable, auto_disable, models[], model_mapping{}, rpm_limit, tpm_limit, credentials:{...}}`（§18、§21.4、§42.3）；响应另带 `proxy_created` |
 | GET/PATCH `/accounts/:id` | `account:read` / `account:update` | 凭证中的敏感字段返回 `"******"`；PATCH 时敏感字段传 `"******"` 表示不修改 |
 | DELETE `/accounts/:id` | `account:delete` | |
-| POST `/accounts/:id/test` | `account:test` | `{model?}` → TestResult `{ok, status, latency_ms, message, model, requested_model, upstream, body, usage, reason, effect}`（§15.9、§50）；结果记入账号的 `last_test` |
+| POST `/accounts/:id/test` | `account:test` | `{model?}` → TestResult `{ok, status, latency_ms, message, model, requested_model, protocol, upstream, body, usage, reason, effect}`（§15.9、§50、§122）；结果记入账号的 `last_test` |
 | POST `/accounts/:id/models/fetch`、POST `/account-types/:plugin_key/:type/models/fetch` | `account:test` / `account:create` | 从上游拉取模型列表（§19） |
+| POST `/account-types/:plugin_key/:type/proxy-ticket` | `account:create` / `account:update`（任意范围） | 账号表单的代理选择（`proxy_id` / `proxy_url` / 都不给）按上一行同样检查后加密成代理票据，给建账号之前的授权流程用（§117） |
 | POST `/accounts/:id/credentials/reveal` | `account:credential:view` | 明文凭证 |
 
 ### 5.5 计费（B）
@@ -212,7 +213,7 @@
 | POST `/users/:id/balance/adjust` `{amount, credit:bool, note}`，支持请求头 `Idempotency-Key` | `balance:adjust`（访问密钥须显式带它）；目标须是操作者可管理的用户（可管理目标，§43.6），本人也按此判断：超管可以给自己和任何人调，admin 不能给自己、其他 admin、超管调；不可管理 → 403 `details.reason = not_manageable`。目标还持有 `user` 以外的角色（operator、supplier、自定义角色）时，操作者的角色还要有 `balance:adjust:any`（超管专属；经访问密钥时密钥也须显式带它，与 `balance:adjust` 相同），否则 403 `details = {reason: "not_plain_user", role, missing: ["balance:adjust:any"]}`；所以按默认值 admin 只能给普通用户调（2026-11-13，用户要求） |
 | GET `/me/usage`，GET `/me/usage/:id`，GET `/usage`，GET `/usage/:id`（筛选参数见 §15.2；`/me/usage` 不支持 `user_id`、`account_id`、`account_type`） | `usage:self:read` / `usage:all:read` |
 | GET `/usage/summary`（`/usage` 的全部筛选参数，加 `group_by=day\|model\|user\|ip`）；GET `/me/usage/summary`（限定当前用户，`group_by=day\|model\|ip`） | `usage:all:read` / `usage:self:read` |
-| GET/PUT `/settings/billing` `{missing_price_policy: reject\|free, min_balance, big_cost_warning_usd}` | `settings:read` / `settings:manage` |
+| GET/PUT `/settings/billing` `{min_balance, big_cost_warning_usd}`（`missing_price_policy` 2026-11-19 删除，§17.3） | `settings:read` / `settings:manage` |
 
 价格表达式校验失败时 `details.fields[].message` 为 `{en, zh}`；表达式错误额外带 `detail`（位置信息）。结算时捕获的参数、请求头和 usage 口径存在 `usage_logs.billing_detail.inputs`。
 
@@ -238,7 +239,7 @@
 | GET `/plugins/:key` | `plugin:read` | 详情：manifest 摘要、授权、节点状态、钩子统计、任务、事件游标、资源 |
 | POST `/plugins/upload`（multipart `file`） | `plugin:install` | → 安装审查信息 `review`（见下） |
 | POST `/plugins/install-from-market` `{source_id, key, version}` | `plugin:install` | → `review` |
-| GET `/plugins/:key/versions/:version/review` | `plugin:read` | 重新获取待确认版本的 `review`；版本不存在 404 `not_found`；版本记录在、但没有节点还持有它的安装包（例如升级失败后包被清理）410 `package_gone`（此前 500 `internal`），重新上传或从市场安装该版本即可（2026-11-14 0.1.286 候选）。之前读过、在进程内缓存了解包结果的版本也一样：每次先确认包存储里还有这个包（`blobs.Store.Has`：本地目录看文件，托管部署向外壳要第 1 个字节），没有就丢掉该版本的缓存、按未缓存重新取包（市场版本可再从市场下载），取不到即 410，不必等核心重启（此前一直返回缓存的 200，2026-11-14 0.1.287 候选） |
+| GET `/plugins/:key/versions/:version/review` | `plugin:read` | 重新获取待确认版本的 `review`；版本不存在 404 `not_found`；版本记录在、但没有在线节点持有它的安装包（持有它的节点都离线，或升级失败后包被清理）410 `package_gone`（此前 500 `internal`），让持有它的节点恢复在线、重新上传或从市场安装该版本即可（2026-11-14 0.1.286 候选；“在线”见 §114）。之前读过、在进程内缓存了解包结果的版本也一样：每次先确认包存储里还有这个包（`blobs.Store.Has`：本地目录看文件，托管部署向外壳要第 1 个字节），没有就丢掉该版本的缓存、按未缓存重新取包（市场版本可再从市场下载），取不到即 410，不必等核心重启（此前一直返回缓存的 200，2026-11-14 0.1.287 候选） |
 | POST `/plugins/:key/versions/:version/consent` `{grants:[{permission, scope?}], denied:[permission], new_permission_roles?:{<本地 key>:{<角色 key>: true \| [范围]}}}`（新权限的角色覆盖，0.1.290起取代旧的数组写法（现在 400 `invalid_argument`）与 `role_keys_for_new_permissions`（不再读取）：`true` 为全部行，`false`/`[]` 为不授予；范围接受清单写法 `*`、`own`、枚举 key，也接受规范后缀 `value/<k>`、`<资源>/<id>`；出现的本地 key 对同意者能指定的角色整体替换默认值（未列出的这些角色不授予，`{}` 一个也不授予），不能指定的角色上的默认值照常挂起；没出现的 key 按 manifest `defaults` 与 `inheritFrom`；出现的 key 对能指定的角色同样替换继承（0.1.290二审 C2，此前继承一律照常）；只对本次新建的权限生效。未声明的本地 key 400 `new_permission_roles.<本地 key>` `unknown`，权限不接受的范围 400 `new_permission_roles.<本地 key>.<角色>` `invalid`；§4“插件权限”） | `plugin:install` + 按风险 `plugin:grant:high`/`plugin:grant:critical`（升级时沿用的已授予宿主权限不要）；升级时 `new_role_grants` 里需要同意的授予（`needs_consent`），另需与 `role-grants/confirm` 相同的资格（`role:define` + `CanGrantToRoles` 覆盖这些授予的每个角色，2026-11-13 权限加固期 4 收尾） | 确认授权。版本的安装包已不在（判断与 review 相同）时 410 `package_gone`，不批准一个取不到的包，且先于版本状态检查（已批准、已拒绝的版本包不在时也是 410 而不是 409，2026-11-14 0.1.287 候选；此前同意只读数据库里的 manifest，包不在也能批准） |
 | POST `/plugins/:key/versions/:version/reject` | `plugin:install` | |
 | POST `/plugins/:key/versions/:version/role-grants/confirm`、`/role-grants/reject` | `plugin:install`，另需与同意页显式指定角色相同的资格（`role:define` + `CanGrantToRoles`）；confirm 每次二次验证 `plugin.grant`（与同意页相同，期 4 整合审查），reject 不需要 | 确认（写入）或全部拒绝内置插件自动升级暂缓的角色授予 → `{grants:[RoleGrant], confirmed}`；该版本没有待确认项 404；拒绝的每个 (permission, role) 也清除此前其他版本暂缓的同一授予（2026-11-13 权限加固期 4 P4C、P4CFIX） |
@@ -250,8 +251,9 @@
 | GET `/plugins/:key/grants`，DELETE `/plugins/:key/grants/:permission` | `plugin:read` / `plugin:manage` | |
 | PUT `/plugins/:key/grants/:permission` `{scope?}` | `plugin:manage`，每次二次验证 `plugin.grant`（与同意相同）；重新授予另须 `plugin:install`（与同意相同，二审 security #2；否则 403 `details.permission`），并按同意的检查（`checkGrantRights`：按风险 `plugin:grant:high`/`plugin:grant:critical`，db.schema 可能还要 `plugin:grant:db_schema_unconfined`） | 设置激活版本对一个宿主权限的授予，返回该授予（`Grant`）（0.1.290，A7）。`scope` 省略为清单申请的范围（请求体总是读取，不看 `Content-Length`，分块传输的收窄请求不会被当成省略）；比申请的宽 400 `invalid_argument` `details.fields[{field:"scope", code:"scope_too_wide"}]`；当前版本清单不申请该权限 404；插件还在 `awaiting_consent` 409。当前已授予且新范围在现有范围之内是**收窄**：只要 `plugin:manage`，各版本待生效授予里更宽的同一权限一并收窄，审计 `plugin.grant.narrow`；其余（已撤销、被拒、放宽）是**重新授予**：各版本待生效授予里该权限的撤销在其版本申请的范围不窄于它时解除，审计 `plugin.grant.regrant`。审计 `detail {permission, version, scope, previous?: {status, scope}}`。控制台只对数组型范围提供收窄 |
 | GET `/plugins/:key/scope-options?permission=<本地 key>&q=&ids=&limit=` | `role:read` 或 `plugin:read`（A1） | 带范围的插件权限的候选（角色编辑器、矩阵选范围用，0.1.290）：形状同 GET `/lookup`（§96，参数与上限相同）但 id 为字符串，`{items:[{id, name, hint?, status?}], more}`；只列调用者自己在该权限上能达到的（全部、列出的值；own 时由插件按自己的 `created_by` 过滤）。枚举（`scope.values`）由核心按当前版本清单回答，插件没运行也可用，`name` 为当前语言的 label；资源（`scope.options`）转发给运行中插件的 options 路由（§21.0），插件没运行、路由不存在、回非 200 或格式不对 503 `plugin_unavailable`，核心再过滤一遍（id 须是合法范围值且在调用者范围内、`name` 非空，文本截断）。权限未声明 404，不带范围 400 |
-| PUT `/plugins/:key/resources` `{memory_mb, cpu, max_threads, max_open_files}` | `plugin:manage` | |
-| PUT `/plugins/:key/egress-policy` `{policy}` | `plugin:manage` | |
+| PUT `/plugins/:key/resources` `{memory_mb, cpu, max_threads, max_open_files}` | `plugin:manage` | `memory_mb` 是插件内存的唯一上限来源之一（另一个是节点封顶），0 为不设；默认不限，见 §111.5 |
+| PUT `/plugins/:key/egress-policy` `{policy}` | `plugin:manage` | 本插件的出口策略 `allow_all` \| `allowlist`；与全局的“插件联网”同时生效，见 §113 |
+| GET/PUT `/settings/plugin-egress` `{mode?, blocked_domains?, allowed_domains?}` | `settings:read` / `settings:manage` | 插件联网（全局），见 §113 |
 | GET `/plugins/:key/egress`（`?from=&to=`） | `plugin:egress:read` | 按域名汇总 + 明细 |
 | GET `/plugins/:key/jobs`，POST `/plugins/:key/jobs/:job_id/run` | `plugin:read` / `task:run`🔐 | 手动运行与 POST `/system/tasks/:name/run` 同口径（2026-11-12 权限加固 W4-A4，此前为 `plugin:manage`）；审计动作仍是 `plugin.job.run` |
 | GET `/plugins/:key/events` | `plugin:read` | 游标、积压、死信 |
@@ -273,7 +275,7 @@
 - **撤销过的宿主权限不自动恢复**（2026-11-14 0.1.287 候选，无迁移）：`DELETE /plugins/:key/grants/:permission` 撤销的权限，此后的同意（`decide`）不再按“低风险默认授予”给回，也不算沿用；只有同意请求的 `grants` 里显式列出才恢复（低风险不要授予权限，高风险、极高风险照旧按风险要 `plugin:grant:high`/`plugin:grant:critical`）。必需的未列出 400 `consent_required`（`permission %q was revoked and must be granted explicitly`），列在 `denied` 400 `required`（不变）；可选的未列出或列在 `denied` 时记为 `revoked`（不是 `denied`），撤销一直保持到有人显式授予。“撤销过”由 `grants.Revoked` 判断：插件授予表与各版本待生效授予里，该权限最新（`granted_at` 最大，相同时撤销优先）的一行是 `revoked`；所以一次显式授予（写在待生效授予里也算）之后，旧的待生效集合里残留的 `revoked` 不再生效。为让撤销跨版本保留：激活一个不再申请该权限的版本时 `ApplyDefaults` 不删 `revoked` 行（其他照旧删除）；升级失败或取消撤回待生效授予（`grants.Withdraw`）时，集合里 `revoked` 的行在插件授予表没有该权限的行时移入插件授予表。因此插件详情与 `GET /plugins/:key/grants` 可能列出当前版本不再申请、状态为 `revoked` 的权限（不授予任何实例：实例只拿 manifest 声明的、`granted` 的权限）。申请了撤销过的权限的升级包不会上传即沿用（diff 里它算新增），`review.host_permissions[].revoked` 为 `true`（上传返回的 review 与 GET review 都带）；同意页把这类低风险权限从“自动”改为默认不勾选、标“已撤销，勾选才重新授予”，必需的必须勾选才能提交。审计不变：`plugin.consent` 的 `decisions[]` 如实记录 `granted`/`revoked` 与 `carried`。内置插件随镜像升级时系统同意照旧显式授予全部宿主权限（见上面“内置插件”），不受此限。
 - 升级包的宿主权限没有新增或扩大时，上传即沿用原授权（版本直接为 `approved`）；否则进入 `awaiting_consent`，旧版本继续运行。另一个例外（2026-11-13 权限加固期 4 P4C）：新版本新建的插件权限经 `defaults` 或 `inheritFrom` 授予角色时，只要其中有风险不是 `low` 的权限，或授予对象不是内置 `admin`、`operator`、`supplier`（如 `user`、自定义角色），就不沿用，留在 `awaiting_consent` 由人在同意页确认；同意者不能指定的角色（§4“能否指定角色”）上的这些授予挂起待复核（D2，0.1.290起，此前 403），其余照常写入；沿用时上传者不能指定的角色上的授予同样挂起；否则沿用并写 `plugin.consent.auto` 审计（`detail`：`version`、`granted`、`pending: []`、`review_required: false`；每条授予照常有 `authz.sync.grant`）。`review` 增加 `new_role_grants: [RoleGrant]`（不覆盖角色时这次同意会做的授予，按查看者标 `nameable`、`withheld`）与 `role_grants_need_consent`；另有 `needs_db_schema_unconfined`（同意会授予 db.schema 且需要 `plugin:grant:db_schema_unconfined`：未启用角色隔离、不是官方发布者，与同意时的检查同一函数）和 `user_permissions[].new`（目录里还没有、这次同意才登记的权限；`new_permission_roles` 只对它们生效）（期 4 T82）。`RoleGrant` = `{version?, permission（完整 key）, role, scope（规范后缀，`""` 为全部行）, risk, via: default|override|inherit, needs_consent, nameable（同意者能指定该角色）, withheld（挂起待复核）}`（0.1.290起，去掉 `sensitive`）。同意返回 `ConsentResult` 另含 `withheld: [RoleGrant]`（本次挂起的授予）。操作者同意的 `plugin.consent` 审计另记 `role_grants`（计划）、`pending`（挂起）、`inherit_skipped`；系统与沿用的同意写 `plugin.consent.auto`（`granted`、`pending`、`review_required`、`inherit_skipped`）
 - 内置插件自动升级（系统同意，节点就绪与托管升级提交需要版本 `approved`）同样判断，但需要同意的授予不写入，记在 `plugin.consent.auto` 审计的 `pending` 里（`review_required: true`），其余照常写入；插件列表与详情的 `role_grants_to_review: [RoleGrant]` 列出各版本仍待确认的授予（读 `plugin.consent.auto`、`plugin.consent` 与 `plugin.role_grants.carry`（§4 改名继承）的 `pending`，按 (permission, role, scope) 去重，`risk` 取目录；权限仍是本插件的、存在且不是 removed、当前声明仍接受该范围、角色仍存在且尚未持有该范围，且该版本之后没有 `plugin.role_grants.confirm`/`plugin.role_grants.reject` 审计），由上面的 confirm/reject 处理（两者要求相同资格；只计插件本次安装之后的审计）；继承与默认值一样在同意时按计划算好（§4），激活时才新建的权限不授予任何角色（也不继承）；confirm 经权限目录 `GrantPluginPermission` 写入（带范围，critical 只有超管能确认），`authz.sync.grant` 的 `via` 为 `review`
-- 插件设置：GET `/plugins/:key/settings` → `{mode, schema, ui_schema, values, page, component, secret_fields}`（`schema` 在非 schema 模式为 `null`）；PUT 请求体 `{values:{...}}`，整体替换（§15.8）
+- 插件设置：GET `/plugins/:key/settings` → `{mode, values, page, component, secret_fields, permission}`（2026-11-19 起不再有 `schema`、`ui_schema`）；PUT 请求体 `{values:{...}}`，整体替换（§15.8）
 - `/ui/plugins` 每项另含 `name`、`host_ui_compat`
 
 `review` 结构：`{plugin_key, version, name, publisher, trust, signature_status, host_compat_ok, capabilities[], gateway_endpoints:[{id, platform, method, path, protocol, billing}], platforms:[{id, label, endpoints:[{method, path, protocol, billing}], sticky_rules}], account_types:[{id, label, platforms, form_mode}], hooks[], jobs[], events[], routes[], menus[], user_permissions[], permission_groups[], role_columns[], removed_user_permissions[], database:{schema, migrations[]}, resources, external_services[], host_permissions:[{id, risk, scope, reason, optional, requires:"plugin:grant:high|critical", current_status?, current_scope?, revoked}], diff?:{added[], widened[], removed[]}}`；`diff` 的每项为 `{id, risk, scope?, previous_scope?}`（`previous_scope` 只在 widened、removed）。
@@ -282,9 +284,9 @@
 
 ### 5.8 插件自己的接口与静态资源（C）
 
-- `ANY /api/v1/p/:key/*path`：按 manifest `routes` 匹配；`scope=admin|user` 需要登录（会话或访问密钥）并检查 `plugin.<key>:<permission>`（访问密钥按其权限收窄，须勾选该插件权限，2026-11-13 期 4 S4；此前访问密钥一律 403；插件拿到的仍是用户 id，不知道经由密钥；未声明 permission 的路由对所有人 403，2026-11-12 权限加固 W5-A1/W1-F15）；`webhook` 和 `public` 不鉴权；转发给插件 `HTTPService.HandleHTTP`。admin/user 路由可声明 `accounts: {action: read|update|test, from?: ["path:<参数>"|"query:<名>"|"body:<顶层字段>"]}`（`manifest.RouteAccounts`，只有这三种前缀，`path:` 必须是该路由的参数）声明它作用的账号；被 `ui.accountActions` 指向的路由未声明时推断为 `{update（指向它的操作都是 visibleFor=all 时 read）, ["body:account_ids"]}`，显式声明则必须含 `body:account_ids`（校验码 `accounts_mismatch`），见 `manifest.EffectiveRouteAccounts`。核心转发前按 `core.AuthorizeAccounts` 检查：全部范围的 `account:<action>` 放行；只有更窄的范围（own、分组、指定账号，§21.0）时请求须带账号 id 且全部落在范围内（否则 404，不带 id 403）；任何范围都没有 403。（核心 0.1.286 起）。id 取自 from 指向的 path 参数、query 参数（全部取值）或 JSON 顶层字段（字段名大小写不敏感），可以是数字、数字数组或逗号分隔字符串，格式不对 400，去重后超过 `MaxAccountBatch` 400；未接入账号检查的节点对这些路由一律 503（2026-11-12 权限加固 M1）。manifest 说不出账号 id 的路由（id 在请求体深处、来自插件自己的表）由插件自己问核心：`HostService.AccountScopeCheck{user_id, action, account_ids≤500}` → `{all, allowed_ids}`（需要宿主授权 `accounts.read`，且 `user_id` 必须是该插件此刻正在处理的某个 `HandleHTTP` 请求的 `Caller.user_id`——宿主在转发请求期间按实例记下调用者，请求结束即失效，所以只能在处理请求的过程中调用，不能在后台任务里或替别的用户问；两条任一不满足 `PERMISSION_DENIED`，不进入账号模块。通过后转给 `core.AccountAccess`，错误码与其他核心错误同一映射：任何范围都没有 `PERMISSION_DENIED`，未知 action `INVALID_ARGUMENT`）；SDK `pluginsdk.ResolveAccountScope`（得到 `AccountScope`，`Allows`/`Filter`，用于列表过滤）与 `pluginsdk.RequireAccounts`（与核心同样的回答：无登录 401，任何范围都没有 403，只有窄范围时不带 id 403，含范围外的账号 404；未知 action 或非正数 id 400，宿主答不了 503）。插件没有 `accounts.read` 或请求已结束时 `RequireAccounts` 同样回 403（失败收紧）。另有 `pluginsdk.RequirePermission(host, perm, next)` 给单个路由追加权限检查（401/403/503）（2026-11-12 权限加固 M1-b）。`webhook`/`public` 路由不带调用者，声明 `permission` 或 `accounts` 打包校验报 `unsupported`（2026-11-12 权限加固 W5-C6）
+- `ANY /api/v1/p/:key/*path`：按 manifest `routes` 匹配；`scope=admin|user` 需要登录（会话或访问密钥）并检查 `plugin.<key>:<permission>`（访问密钥按其权限收窄，须勾选该插件权限，2026-11-13 期 4 S4；此前访问密钥一律 403；插件拿到的仍是用户 id，不知道经由密钥；未声明 permission 的路由对所有人 403，2026-11-12 权限加固 W5-A1/W1-F15）；`webhook` 和 `public` 不鉴权；转发给插件 `HTTPService.HandleHTTP`。admin/user 路由可声明 `accounts: {action: read|update|test, from?: ["path:<参数>"|"query:<名>"|"body:<顶层字段>"]}`（`manifest.RouteAccounts`，只有这三种前缀，`path:` 必须是该路由的参数）声明它作用的账号；被 `ui.accountActions` 指向的路由未声明时推断为 `{update（指向它的操作都是 visibleFor=all 时 read）, ["body:account_ids"]}`，显式声明则必须含 `body:account_ids`（校验码 `accounts_mismatch`），见 `manifest.EffectiveRouteAccounts`。核心转发前按 `core.AuthorizeAccounts` 检查：全部范围的 `account:<action>` 放行；只有更窄的范围（own、分组、指定账号，§21.0）时请求须带账号 id 且全部落在范围内（否则 404，不带 id 403）；任何范围都没有 403。（核心 0.1.286 起）。id 取自 from 指向的 path 参数、query 参数（全部取值）或 JSON 顶层字段（字段名大小写不敏感），可以是数字、数字数组或逗号分隔字符串，格式不对 400，去重后超过 `MaxAccountBatch` 400；未接入账号检查的节点对这些路由一律 503（2026-11-12 权限加固 M1）。manifest 说不出账号 id 的路由（id 在请求体深处、来自插件自己的表）由插件自己问核心：`HostService.AccountScopeCheck{user_id, action, account_ids≤500}` → `{all, allowed_ids}`（不需要宿主授权（§124 起；此前要 `accounts.read`），`user_id` 必须是该插件此刻正在处理的某个 `HandleHTTP` 请求的 `Caller.user_id`——宿主在转发请求期间按实例记下调用者，请求结束即失效，所以只能在处理请求的过程中调用，不能在后台任务里或替别的用户问；不满足 `PERMISSION_DENIED`，不进入账号模块。通过后转给 `core.AccountAccess`，错误码与其他核心错误同一映射：任何范围都没有 `PERMISSION_DENIED`，未知 action `INVALID_ARGUMENT`）；SDK `pluginsdk.ResolveAccountScope`（得到 `AccountScope`，`Allows`/`Filter`，用于列表过滤）与 `pluginsdk.RequireAccounts`（与核心同样的回答：无登录 401，任何范围都没有 403，只有窄范围时不带 id 403，含范围外的账号 404；未知 action 或非正数 id 400，宿主答不了 503）。请求已结束时 `RequireAccounts` 同样回 403（失败收紧）。另有 `pluginsdk.RequirePermission(host, perm, next)` 给单个路由追加权限检查（401/403/503）（2026-11-12 权限加固 M1-b）。`webhook`/`public` 路由不带调用者，声明 `permission` 或 `accounts` 打包校验报 `unsupported`（2026-11-12 权限加固 W5-C6）
 - **插件资源范围**（0.1.290，§21.0“插件资源范围”）：路由的 `permission` 若声明了 `scope`，持有它的**任意范围**即放行（`PermissionSet.HasSome`；全部范围照旧记入 `Granted`），核心把调用者在该权限上的范围随请求交给插件（`HTTPRequest.action_scope`）。admin/user 路由可声明 `scopeFrom: "path:<参数>"|"query:<名>"|"body:<顶层字段>"`（与 `accounts.from` 同一写法，`manifest.ParseAccountsFrom`；只能用在 permission 声明了 scope 的路由上，否则 `unsupported`；`path:` 必须是该路由的参数，否则 `unknown_param`；webhook/public 路由声明报 `unsupported`），核心转发前按 `core.AuthorizePluginScope` 判它指向的值：全部范围放行；否则请求须带值（不带 403 `details.permission`），持有 own 时一律放行、由插件按 `created_by` 判，只有列出的值时每个值都须在其中（否则 404）。值可以是字符串、数字、它们的数组或逗号分隔串；query 参数名与 body 顶层字段名都不分大小写匹配（与插件用 encoding/json 解码一致），query 的每个值都校验，body 同名字段（不分大小写）出现多次 400 `duplicate`（`accounts.from` 同样，二审 security #1/#3）；每个须是合法范围值（`[A-Za-z0-9_.-]{1,64}`，否则 400），去重后至多 `MaxAccountBatch` 个。不带值就只有全部范围能过，所以**列表路由不要声明 `scopeFrom`**，应读 `action_scope` 自己过滤（check 不猜哪些是列表路由）。反过来，permission 声明了 scope 的非 GET 路由必须写 `scopeFrom`（check 报 `required`）：任意范围都能进来，不写就只能靠插件拦住只持有一行的人改所有行；不针对具体行的写路由（如新建）改用不带 scope 的权限。这些声明（`userPermissions[].group/risk/requires/scope/defaults`、`permissionGroups`、`routes[].scopeFrom`）与 UI 3.16、3.17 都随核心 0.1.290 发布（0.1.289 没有发布）
-- `GET /plugin-ui/:key/:version_hash/*path`：插件包内 `ui/`、`forms/`、`i18n/` 下的文件；带长缓存头
+- `GET /plugin-ui/:key/:version_hash/*path`：插件包内 `ui/`、`i18n/` 下的文件；带长缓存头（2026-11-19 起不再提供 `forms/`，请求它返回 404）
 
 ### 5.9 网关端点（G）
 
@@ -296,7 +298,7 @@
 
 | 类型 | payload | 写入方 |
 |---|---|---|
-| `usage.recorded` | `{request_id, user_id, api_key_id, group_id, account_id, plugin_key, platform, protocol, model, success, status_code, error_type, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, cache_creation_1h_tokens, total_cost, billing_status, latency_ms, created_at}` | B（结算后） |
+| `usage.recorded` | `{request_id, user_id, api_key_id, group_id, account_id, plugin_key, platform, protocol, model, success, status_code, error_type, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, cache_creation_1h_tokens, image_input_tokens, image_output_tokens, total_cost, billing_status, latency_ms, created_at}`（两个图片字段见 §118） | B（结算后） |
 | `account.created` / `account.updated` / `account.deleted` | `{account_id, plugin_key, platform, type, name}` | A |
 | `account.status_changed` | `{account_id, platform, status, reason, cooldown_until?}`；status 含 `cooldown` | A |
 | `user.created` / `user.updated` | `{user_id, email, status}` | A |
@@ -341,9 +343,9 @@
 
 | key | 值 | 默认 |
 |---|---|---|
-| `billing` | `{missing_price_policy, min_balance, big_cost_warning_usd, client_disconnect_policy}`（最后一项见 §25.8；`client_disconnect_wait_seconds` 2026-11-14 删除，已存的值忽略） | `reject`、`"0"`、`"10"`、`continue` |
+| `billing` | `{min_balance, big_cost_warning_usd, client_disconnect_policy}`（最后一项见 §25.8；`client_disconnect_wait_seconds` 2026-11-14 删除、`missing_price_policy` 2026-11-19 删除（§17.3），已存的值忽略） | `"0"`、`"10"`、`continue` |
 | `sticky` | `{enabled, default_ttl_seconds, keep_on_account_disabled}` | `true`、3600、`false` |
-| `gateway` | `{max_attempts, platform_call_timeout_ms, default_hook_timeout_ms}` | 3、2000、300 |
+| `gateway` | `{max_attempts, platform_call_timeout_ms, default_hook_timeout_ms}`；后来加的字段见 §78、§84.1、§88、§111（`max_request_body_mb`，默认 128） | 3、2000、300 |
 | `auto_disable` | `{enabled, status_codes, keywords}`（§42.2） | `true`、`"401"`、new-api 的 7 条关键词 |
 
 上表只列最初的字段，后加的字段见各节。插件经 `HostService.GetSettings` 只读地读取的分组与完整字段见 §107.2。
@@ -399,7 +401,7 @@ func Install(client pluginv1.EgressServiceClient) error
 func DialContext(ctx context.Context, network, address string) (net.Conn, error)
 ```
 
-插件的 PostgreSQL 连接（受限 DSN）必须使用 `DialContext`。`Host.DB` 返回的 GORM 句柄已经这样拨号（`sdk/pgdb`，2026-11-15 起），插件用它就不必自己连库。
+插件的 PostgreSQL 连接（`GetDSN` 的 DSN，§115）必须使用 `DialContext`。`Host.DB` 返回的 GORM 句柄已经这样拨号（`sdk/pgdb`，2026-11-15 起），插件用它就不必自己连库。
 
 **插件 SDK 0.2.0 的不兼容改动**（`pluginsdk.SDKVersion`，随 `GetInfoResponse.sdk_version` 上报）：`Host.DB(ctx)` 从返回 `*pgxpool.Pool` 改为返回绑定 ctx 的 `*gorm.DB`。第三方插件把 `next/sdk` 升到 0.2.0 后，`h.DB(ctx)` 的调用点和自己实现的 `pluginsdk.Host` 测试替身编译不过：改用 GORM 的模型与查询构建器（§2“插件数据库”，数组参数与数组列用 `pgdb.Array`），测试替身用 `pgdb.Open` 返回句柄；句柄每次调用重新取，不要跨调用缓存（见上文“插件数据库”）。已编译的旧插件不受影响：gRPC 协议没变。
 
@@ -422,8 +424,8 @@ Anthropic 的 `cache_creation_input_tokens` 是总量（含 1 小时缓存）。
 - 错误格式：`plain` 即核心 REST 格式 `{"error":{code,message}}`；`anthropic` 格式在 `error` 中额外带 `code`（如钩子拒绝时的 `guard_blocked`）
 - 所有尝试都失败时：最后一次是上游错误则返回该错误（按 ClassifyError 的状态码与类型）；是插件或账号问题返回 503 `no_available_account`；有账号但并发槽位全满返回 429
 - **`anthropic` 格式下没有可用账号按官方"过载"返回**（2026-10-10）：HTTP 529，`{"type":"error","error":{"type":"overloaded_error","message":"Overloaded","code":"no_available_account"}}`，与官方 API 的过载一致，Claude Code 与 SDK 会退避重试（`gateway/errors.go` `clientError`）。使用记录的 `status_code` 为 529，`error_type` 仍为 `no_account`，`error_message` 保留核心原因（如 `no available account`）。其他格式（`openai`、`gemini`、`plain`）仍是 503；上游原样透传的错误体不受影响。
-- **模型名不合法时返回 400**（2026-11-02）：从请求取到的模型名含空白或控制字符、超过 256 字节或不是合法 UTF-8 时，在选号前返回 400 `invalid_request_error`，使用记录 `error_type` 为 `invalid_request`。此前只靠插件的可用性检查拦截，返回 503（§44.7）。
-- **分组里根本没有能服务该端点的账号时返回 404**（2026-10-11，用户决定）：没有任何已启用的账号类型声明该端点，或调用方分组里没有这些类型的账号（不论账号状态，已删除的除外；`AccountDirectory.GroupHasType`），返回 404 `not_found_error`「no account in this group serves this endpoint」，`code` 为 `not_found`。客户端不会重试 404。使用记录的 `error_type` 为 `no_account`，`status_code` 为 404。分组里有这种账号、只是全部被禁用、冷却或占满时，仍按上一条返回 529/503。例：一个只有不声明 `count_tokens` 的账号类型的分组，调计数接口会得到 404（CCGateway 2026-11-04 起声明）。
+- **模型名不合法时返回 400**（2026-11-02）：从请求取到的模型名含空白或控制字符或不是合法 UTF-8 时，在选号前返回 400 `invalid_request_error`，使用记录 `error_type` 为 `invalid_request`。此前只靠插件的可用性检查拦截，返回 503（§44.7）。模型名不限长度（转发 V2 收尾起；此前超过 256 字节也返回 400，使用记录把模型名截到 200 字节；迁移 0108 把存模型名的列改成 `text`，见 §112.16）。
+- **分组里根本没有能服务该端点的账号时返回 404**（2026-10-11，用户决定）：没有任何已启用的账号类型声明该端点，或调用方分组里没有这些类型的账号（不论账号状态，已删除的除外；`AccountDirectory.GroupHasType`），返回 404 `not_found_error`「no account in this group serves this endpoint」，`code` 为 `not_found`。客户端不会重试 404。使用记录的 `error_type` 为 `no_account`，`status_code` 为 404。分组里有这种账号、只是全部被禁用、冷却或占满时，仍按上一条返回 529/503。例：一个只有不声明 `count_tokens` 的账号类型的分组，调计数接口会得到 404（CCGateway 2026-11-04 起声明）。§110 起另有一种 404：分组里有这类账号，但提供给本次请求的候选账号全部被账号的协议绑定过滤（没有账号在这个端点上提供这个模型，含跨平台转换没有开启），消息为 `no account in this group serves this model on this endpoint`，条件见 §110.5。
 
 **token 计数不占资源**（2026-11-04，用户决定）：`*.count_tokens` 不占 API Key 和账号的并发，不计 Key 和账号的 RPM、TPM，不扣额度也不查余额。计数失败可以换账号，但不改变账号状态：不冷却、不自动禁用、不观测额度，失败策略规则也不参与。仍要通过鉴权，已冷却或禁用的账号不会被选中，使用记录照常写一条不计费的记录。粘性会话：计数与粘性无关，按权重随机选账号，不读也不写绑定（2026-11-04，用户决定）。映射：参数错误 400 `invalid_request_error`（上游 4xx 原样透传，不冷却账号）、鉴权 401/403、真正的上游故障 5xx
 - `usage_logs.error_type` 取值另含 `model_not_allowed`、`price_not_configured`、`rate_limited`、`invalid_request`、`plugin_unavailable`、`blocked_by_hook`
@@ -445,7 +447,7 @@ compose 里的 `mock-upstream` 服务模拟 Anthropic `/v1/messages` 与 `/v1/me
 
 本节优先于前文中与之冲突的描述。
 
-**manifest**：`accountTypes` 移到顶层（任何插件都可声明），每个账号类型有 `protocols: [{protocol, requestFields?, passHeaders?, usage?}]`，列出上游原生支持的协议；`platform` 不再含 `accountTypes`；`pricing[]` 不再有 `platform`。声明账号类型需要 capability `platform.adapter.v1` 和宿主权限 `platform.register`。
+**manifest**：`accountTypes` 移到顶层（任何插件都可声明），每个账号类型有 `protocols: [{protocol, passHeaders?, usage?}]`，列出上游原生支持的协议；`platform` 不再含 `accountTypes`；`pricing[]` 不再有 `platform`。声明账号类型需要 capability `platform.adapter.v1` 和宿主权限 `platform.register`。
 
 **core**：`AccountTypeKey{PluginKey, Type}`；`ProtocolConverters.CanConvert(clientProtocol, upstreamProtocol)`（网关实现，账号模块用来列出经转换可服务的端点）；`AccountTypeBinding{Plugin, Type, FormSchema, FormUI, Client}`（`Client` 为声明插件）；`Generation.AccountType(pluginKey, typeID)`、`AccountTypesForProtocol(protocol)`；`AccountRef` 去掉 `Platform`；`AccountDirectory.Candidates(ctx, groupID, []AccountTypeKey)`；`Pricer.Resolve(ctx, model)`（§97 起为 `Resolve(ctx, core.PriceQuery{Model, GroupID, SegmentID})`）；`PriceCatalog.SyncPluginDefaults(ctx, tx, pluginKey, entries)`；`UsageRecord` 新增 `AccountType`、`UpstreamProtocol`，`Platform`/`Protocol` 为客户端端点的平台和协议，`PluginKey` 为账号类型所属插件。
 
@@ -453,18 +455,18 @@ compose 里的 `mock-upstream` 服务模拟 Anthropic `/v1/messages` 与 `/v1/me
 
 **数据库（0005）**：`accounts.platform` 删除（账号类型 = `plugin_key` + `type`）；`model_prices.platform` 删除，唯一约束改为：管理员价格每个模型一条，插件默认价格每个 `(plugin_key, 模型)` 一条（0007 起列名为 `model`）；`usage_logs` 新增 `account_type`、`upstream_protocol`。
 
-**调度**：端点协议 P → 候选账号类型 = 原生支持 P 的，加上支持 Q 且核心有 `P→Q` 转换器的（转换目标、等级与同一优先级内的先后见 §88）→ 分组内这些类型的账号。请求由账号类型所属插件构造；需转换时核心转换请求体和响应（含 SSE）。用量规则：账号类型为该协议声明的 `usage`，否则取声明该协议端点的平台的 `usage`；`requestFields`、`passHeaders` 同理。错误格式始终是端点的 `errorFormat`。
+**调度**：端点协议 P → 候选账号类型 = 原生支持 P 的，加上支持 Q 且核心有 `P→Q` 转换器的（转换目标、等级与同一优先级内的先后见 §88）→ 分组内这些类型的账号（§110 起：其中的跨平台转换默认关闭，账号要在 `model_protocols` 里为模型开启才参与）。请求由账号类型所属插件构造；需转换时核心转换请求体和响应（含 SSE）。用量规则：账号类型为该协议声明的 `usage`，否则取声明该协议端点的平台的 `usage`；`passHeaders` 同理（请求体整个交给插件，§112）。错误格式始终是端点的 `errorFormat`。
 
 **计费**：`Resolve(model)` 只按模型匹配：管理员价格优先，其次插件默认价格；按完整模型 ID 精确匹配（0007 起不支持通配符，见 §16），同一模型有多个插件默认价格时取最早安装的插件（插件默认价格已由 §17 取消，每个模型只有一条全局价）。§97 起，全局价之上还有两层按分组设置的标价，`Resolve(ctx, PriceQuery{Model, GroupID, SegmentID})` 按“专属价（用户组 × 分组 × 模型）→ 分组内定价（分组 × 模型）→ 全局价”取先命中的一条；模型没有启用的全局价时不能计费，规则不生效。费用 = 表达式结果 × 倍率。这里的倍率是 Key 所有者在该分组的**实际倍率**（专属倍率 → 分组默认倍率 × 用户组的全场折扣 → 分组默认倍率，先命中者生效，鉴权时算出），不再一律是分组倍率；命中按倍数的规则时另乘规则倍数，两个数只在 `PriceRule.Multiplier` 相乘（§97.3）。
 
-**凭证授权**：`accounts.credentials` 的范围为 `{"types": "own"}`：插件只能拿到自己声明的账号类型的账号凭证。
+**账号归属**：插件只拿得到自己声明的账号类型的账号（凭证、代理等全部信息），不需要宿主授权（§124；此前是 `accounts.credentials {"types": "own"}`）。
 
 **REST 变更**
 
 | 接口 | 变更 |
 |---|---|
 | GET `/account-types` | 每项 `{plugin_key, plugin_name, plugin_version, asset_base, trust, type, label, description, form, sensitive_fields, protocols:[protocol], endpoints:[{method, path, protocol, platform, native}]}`；`endpoints` 为该类型当前可服务的已启用端点（`native=false` 表示经核心转换） |
-| GET `/account-types/:plugin_key/:type/form` | 取代 `/:platform/:type/form` |
+| GET `/account-types/:plugin_key/:type/form` | 取代 `/:platform/:type/form`（2026-11-19 删除，见 §21.3） |
 | GET `/accounts` | 筛选参数 `?plugin_key=&type=&group_id=&status=&q=`（去掉 `platform`）；每项返回 `plugin_key`、`type`、`type_label`，不再有 `platform` |
 | POST `/accounts` | `{name, plugin_key, type, group_ids[], proxy_id, priority, max_concurrency, schedulable, credentials}` |
 | GET/POST `/prices`、preview、validate | 去掉 `platform`（请求与响应） |
@@ -486,13 +488,13 @@ compose 里的 `mock-upstream` 服务模拟 Anthropic `/v1/messages` 与 `/v1/me
 
 **概念**：平台声明端点；账号类型声明支持的平台；账号属于账号类型；分组是一组账号（可混放类型）；API Key 只绑定一个分组。核心内置平台 `anthropic`、`openai`、`gemini`（`sdk/platforms`，嵌入的 JSON，格式同 manifest `Platform`；任何模块都可以 import，和 `core` 一样）。
 
-**manifest**：删除顶层 `gateway`、`platform`；新增 `platforms: [Platform]`（插件自己的新平台）：`{id, label, endpoints:[Endpoint], requestFields, passHeaders, usage, stickyRules}`，平台协议由端点推出（`Platform.Protocols()`）。`Endpoint` 新增 `usage`（覆盖平台用量规则）、`request.modelParam`（模型取自路径参数）、`request.stream`（端点固定为流式）；路径段可以是 `:param` 或 `:param:suffix`（如 `/v1beta/models/:model:generateContent`）。端点协议必须是 `<平台 id>.<名称>`。`AccountType.protocols` 改为 `platforms: [{platform, requestFields?, passHeaders?, usage?: {<protocol>: UsageRules}}]`。
+**manifest**：删除顶层 `gateway`、`platform`；新增 `platforms: [Platform]`（插件自己的新平台）：`{id, label, endpoints:[Endpoint], passHeaders, usage, stickyRules}`，平台协议由端点推出（`Platform.Protocols()`）。`Endpoint` 新增 `usage`（覆盖平台用量规则）、`request.modelParam`（模型取自路径参数）、`request.stream`（端点固定为流式）；路径段可以是 `:param` 或 `:param:suffix`（如 `/v1beta/models/:model:generateContent`）。端点协议必须是 `<平台 id>.<名称>`。`AccountType.protocols` 改为 `platforms: [{platform, passHeaders?, usage?: {<protocol>: UsageRules}}]`。
 
-**校验与冲突**：插件平台 id 不能是内置 id，也不能与其他已安装插件的平台 id 重复；插件平台的端点（method + 路径模式重叠）不能与内置平台或其他插件平台冲突；声明平台需要 `gateway.endpoint`、`platform.register`；声明账号类型需要 `platform.adapter.v1`、`platform.register`、`accounts.credentials {"types":"own"}`；账号类型的 `platforms` 非空，引用的平台可以是内置平台、本插件平台或其他插件平台（未启用时该类型暂时不服务它）。
+**校验与冲突**：插件平台 id 不能是内置 id，也不能与其他已安装插件的平台 id 重复；插件平台的端点（method + 路径模式重叠）不能与内置平台或其他插件平台冲突；声明平台需要 `gateway.endpoint`、`platform.register`；声明账号类型需要 `platform.adapter.v1`、`platform.register`（§124 起不再需要 `accounts.credentials`）；账号类型的 `platforms` 非空，引用的平台可以是内置平台、本插件平台或其他插件平台（未启用时该类型暂时不服务它）。
 
 **core**：`EndpointBinding{Plugin, Platform, Endpoint}`；`PlatformBinding{Plugin, Builtin, Platform}`（去掉 `Client`）；`Generation.Platforms()`、`Platform(id)`、`PlatformForProtocol(protocol)`、`AccountTypesForPlatform(platformID)`（取代 `PlatformsForProtocol`、`AccountTypesForProtocol`）；`AccountTypeBinding.Supports(platformID)`（取代 `Protocol()`）。`Generation.Endpoints()` 包含内置平台和已启用插件平台的端点。
 
-**调度**：端点 → 平台 P、协议 X；候选账号类型 = `AccountTypesForPlatform(P)`（原生），加上支持其他平台 Q、且 Q 的某个协议 Y 满足 `CanConvert(X, Y)` 的类型（2026-11-08 起，支持 P 但端点子集不含该端点的类型可转换到 P 上子集内的协议，见 §83.3）；候选账号 = API Key 所属分组中这些类型的账号。requestFields / passHeaders：账号类型对该平台的覆盖 → 平台默认。用量规则：账号类型 `usage[协议]` → 端点 `usage` → 平台 `usage`（需转换时按上游协议 Y 所属平台和端点取）。内置平台的默认粘性规则写入 `sticky_rules`，`source='builtin'`、`plugin_key` 为空，除名称外都可修改，改过的定义升级不覆盖、可恢复默认（§15.5）。
+**调度**：端点 → 平台 P、协议 X；候选账号类型 = `AccountTypesForPlatform(P)`（原生），加上支持其他平台 Q、且 Q 的某个协议 Y 满足 `CanConvert(X, Y)` 的类型（2026-11-08 起，支持 P 但端点子集不含该端点的类型可转换到 P 上子集内的协议，见 §83.3）；候选账号 = API Key 所属分组中这些类型的账号（§110 起还要过账号的协议绑定：转换到其他平台 Q 的账号只对开启了该协议的模型参与，本平台协议可以在账号上关闭）。passHeaders：账号类型对该平台的覆盖 → 平台默认。用量规则：账号类型 `usage[协议]` → 端点 `usage` → 平台 `usage`（需转换时按上游协议 Y 所属平台和端点取）。内置平台的默认粘性规则写入 `sticky_rules`，`source='builtin'`、`plugin_key` 为空，除名称外都可修改，改过的定义升级不覆盖、可恢复默认（§15.5）。
 
 **REST 变更**
 
@@ -542,7 +544,7 @@ compose 里的 `mock-upstream` 服务模拟 Anthropic `/v1/messages` 与 `/v1/me
 ### 14.4 接口收尾
 
 - **客户端请求 ID**：网关把客户端 `X-Request-Id`（截断到 128 字符）写入 `UsageRecord.ClientRequestID`；`usage_logs.client_request_id`；管理员使用记录列表/详情返回 `client_request_id`，支持 `?client_request_id=` 精确筛选（只比客户端请求 ID）。`?request_id=` 同时匹配我方请求 ID 和客户端请求 ID（`u.request_id = v OR u.client_request_id = v`，核心 0.1.277 起，§95.4；此前只比我方请求 ID）：使用记录列表、汇总、导出都经 `usage/api.go` 的 `parseFilter`，`/usage` 与 `/me/usage` 相同，自助视图仍限定本人。`client_request_id` 不唯一，一个值可以匹配多行；该列没有索引，所以 `request_id` 只在带 `from` 时才加上客户端请求 ID 那一半（按时间范围扫描，与其它无索引筛选相同）；不带 `from` 时只比我方请求 ID（走唯一索引）。控制台的时间范围总会带 `from`。
-- **`GET/PUT /settings/gateway`**（`settings:read` / `settings:manage`，网关负责）：`{max_attempts, platform_call_timeout_ms, default_hook_timeout_ms}`，校验范围 1–10、100–30000、50–2000。自动禁用设置是独立接口 `/settings/auto-disable`，见 §42.2。
+- **`GET/PUT /settings/gateway`**（`settings:read` / `settings:manage`，网关负责）：`{max_attempts, platform_call_timeout_ms, default_hook_timeout_ms}`，校验范围 1–10、100–30000、50–2000。发布失败策略后 `max_attempts` 由失败策略接管：写入与当前值不同时 409，相同（GET 的结果原样写回）照常保存（§58）。`max_request_body_mb`（请求体上限，1–1024，默认 128）与“平台调用超时”的含义见 §111。自动禁用设置是独立接口 `/settings/auto-disable`，见 §42.2。
 - 前端此前提出的缺失接口说明见 §15（按后端现状整理）。
 
 ## 15. 接口细节补充（按 2026-09-25 代码现状）
@@ -594,7 +596,7 @@ POST `/me/api-keys/:id/rotate` 强制匹配当前登录用户 ID，不设管理�
 |---|---|---|---|---|
 | GET `/users` | 分页 | `q`（邮箱或显示名 ILIKE）、`status`（`active`\|`disabled`）、`role`（角色 key）、`segment`（用户组 id，或 `personal` 表示所有个人专属的用户，§97.6）、`owner_id`（用户 id 或 `none`）、`direct`（§103.3） | `id` 升序 | `iam/users.go` |
 | GET `/groups` | 分页 | `q`（名称 ILIKE）、`status`、`model`（只留提供该模型的分组，§97.6） | `id` 升序 | `group/group.go` |
-| GET `/me/groups` | 不分页 | 无（只返回 `active` 且对当前用户可用的分组，可用性按调用者所在的用户组，§97；字段 `{id, name, description, rate_multiplier, model_allowlist, model_filter_mode, platforms, effective_rate, rate_source, exclusive}`，后三项见 §97.6，`rate_multiplier` 仍是分组默认倍率） | `id` 升序 | `group/group.go` |
+| GET `/me/groups` | 不分页 | 无（只返回 `active` 且对当前用户可用的分组，可用性按调用者所在的用户组，§97；字段 `{id, name, description, rate_multiplier, model_allowlist, model_filter_mode, platforms, served_protocols, effective_rate, rate_source, exclusive}`，后三项见 §97.6，`rate_multiplier` 仍是分组默认倍率；`served_protocols` 见 §110.7） | `id` 升序 | `group/group.go` |
 | GET `/me/api-keys` | 分页 | 限定当前用户；`q`（名称 ILIKE；以 `sk-s2a-` 开头时也按 `key_prefix` 开头匹配）、`status`（`active`\|`disabled`\|`expired`，按状态与过期时间推导）、`group_id`（正整数）；见 §92.1 | `id` 倒序 | `apikey/apikey.go` |
 | GET `/accounts` | 分页 | `plugin_key`、`type`、`status`、`group_id`（整数）、`q`（名称 ILIKE）、`mine`、`created_by`、`owner_id`、`subordinates`（§103.4） | `created_at` 倒序，再 `id` 倒序（§18.3；与调度顺序无关） | `account/handlers.go` |
 | GET `/proxies` | 分页 | `q`（名称或主机 ILIKE）、`status` | `id` 升序 | `proxy/proxy.go` |
@@ -611,8 +613,8 @@ POST `/me/api-keys/:id/rotate` 强制匹配当前登录用户 ID，不设管理�
 | GET `/plugins/:key/egress` | 明细分页 | `from`、`to`（默认最近 24 小时） | 汇总按连接数倒序（最多 200 条）；明细按 `started_at` 倒序 | `plugin/api/ops.go` |
 
 响应字段补充：
-- `/usage`、`/me/usage` 列表项：`id, request_id, created_at, user_id, user_email?, api_key_id, api_key_name?, group_id, group_name?, account_id, account_name?, plugin_key, platform, protocol, account_type, upstream_protocol, endpoint, model, upstream_model, stream, status_code, success, error_type, error_message, attempts, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, cache_creation_1h_tokens, total_cost, rate_multiplier, billing_status, billing_mode, matched_tier, latency_ms, first_token_ms, sticky_hit, client_ip`（`?` 为空串时省略）。`/me/usage`（列表与详情）把 `account_id` 置 `null`，`account_name`、`account_type`、`upstream_protocol`、`upstream_model`（账号的模型映射）置空，详情另把 `node_id` 置空；`error_message` 原样返回，5xx 也不清空（2026-11-02，用户规则：自助视图只隐藏字段，不改字段值；此前按审计 SEC-L3 清空 5xx 消息）。`/usage`（列表、详情、导出）对没有 `account:read` 的管理员同样把 `account_id` 置 `null`、`account_name` 置空，导出不含"账号 ID""账号"两列；这样的调用者带 `account_id` 或 `account_name` 筛选（列表、汇总、导出）返回 403 `permission_denied`（2026-11-02，用户决定：没有账号查看权限的管理员看不到使用记录里的账号）。控制台同样只对有 `account:read` 的管理员显示账号列和账号筛选。详情里结算条目的 `settlement.account_id`、`POST /usage/:id/reconcile` 返回的结算条目的 `account_id` 同样置 `null`。已删除插件（如 0.1.290 删除的 CCGateway）的行照常读出，`plugin_key` 保持写入时的值。详情的 `anomalies`（2026-11-02）：`/me/usage` 不返回；没有 `account:read` 的管理员，`anomalies.availability` 的样例与执行前检查记录、`anomalies.failure_policy[]` 都去掉 `account_id`（此前 `failure_policy` 的账号 id 会漏给这类管理员）；有 `account:read` 时 `availability` 样例补上 `account_name`。
-- `/usage/:id`、`/me/usage/:id` 详情另含：`plugin_version, metrics, sticky_rule, hook_decisions, price_id, price?:{id, model, source, plugin_key}, expr_hash, billing_detail, ledger_id, client_ip, user_agent, node_id`。`/me/usage/:id` 访问他人记录返回 404。`/me/usage/:id` 是本人视图（`Detail.redactForSelf`，2026-11-12）：除列表已隐藏的上游字段外，`plugin_version`、`sticky_rule`、`expr_hash`、`node_id` 为空，`plugin_detail`、`anomalies`、`settlement`、`request_log_account_id` 不返回；`metrics`（计价用的用量事实）、`hook_decisions`、`price_id`/`price`、`billing_detail`、`ledger_id` 照常返回，但 `billing_detail` 里的计价表达式与哈希去掉（`inputs.pricing.base.{expression,expr_hash}`、`additional[]/replacement[].expression_hash`、`inputs.additional[]/replacement[].Price`；`base` 保留为空对象，金额、档位、参数与各组件的 token 不动）。`hook_decisions` 各项的 `account_id`（`gateway.attempt` 钩子的尝试账号，§85）只给有 `account:read` 的 `/usage/:id`：本人视图和没有 `account:read` 的运营视图里都去掉（`Detail.hideAccounts`，与记录的 `account_id`、`settlement.account_id` 一起）。§97 起，倍率不是分组默认倍率或命中了定价规则的记录，`billing_detail` 多出 `inputs.pricing`（97.4），命中规则时另有 `list_cost`（97.5）；列表与详情的 `rate_multiplier` 是这次请求实际生效的倍率，不含规则倍数。
+- `/usage`、`/me/usage` 列表项：`id, request_id, created_at, user_id, user_email?, api_key_id, api_key_name?, group_id, group_name?, account_id, account_name?, plugin_key, platform, protocol, account_type, upstream_protocol, endpoint, model, upstream_model, stream, status_code, success, error_type, error_message, attempts, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, cache_creation_1h_tokens, image_input_tokens, image_output_tokens, total_cost, rate_multiplier, billing_status, billing_mode, matched_tier, latency_ms, first_token_ms, sticky_hit, client_ip`（`?` 为空串时省略；两个图片字段是输入、输出里图片的部分，§118）。`/me/usage`（列表与详情）把 `account_id` 置 `null`，`account_name`、`account_type`、`upstream_protocol`、`upstream_model`（账号的模型映射）置空，详情另把 `node_id` 置空；`error_message` 原样返回，5xx 也不清空（2026-11-02，用户规则：自助视图只隐藏字段，不改字段值；此前按审计 SEC-L3 清空 5xx 消息）。`/usage`（列表、详情、导出）对没有 `account:read` 的管理员同样把 `account_id` 置 `null`、`account_name` 置空，导出不含"账号 ID""账号"两列；这样的调用者带 `account_id` 或 `account_name` 筛选（列表、汇总、导出）返回 403 `permission_denied`（2026-11-02，用户决定：没有账号查看权限的管理员看不到使用记录里的账号）。控制台同样只对有 `account:read` 的管理员显示账号列和账号筛选。详情里结算条目的 `settlement.account_id`、`POST /usage/:id/reconcile` 返回的结算条目的 `account_id` 同样置 `null`。已删除插件（如 0.1.290 删除的 CCGateway）的行照常读出，`plugin_key` 保持写入时的值。详情的 `anomalies`（2026-11-02）：`/me/usage` 不返回；没有 `account:read` 的管理员，`anomalies.availability` 的样例与执行前检查记录、`anomalies.failure_policy[]` 都去掉 `account_id`（此前 `failure_policy` 的账号 id 会漏给这类管理员）；有 `account:read` 时 `availability` 样例补上 `account_name`。
+- `/usage/:id`、`/me/usage/:id` 详情另含：`plugin_version, metrics, sticky_rule, hook_decisions, price_id, price?:{id, model, source, plugin_key}, expr_hash, billing_detail, ledger_id, client_ip, user_agent, node_id`。`/me/usage/:id` 访问他人记录返回 404。`/me/usage/:id` 是本人视图（`Detail.redactForSelf`，2026-11-12）：除列表已隐藏的上游字段外，`plugin_version`、`sticky_rule`、`expr_hash`、`node_id` 为空，`plugin_detail`、`anomalies`、`settlement`、`request_log_account_id` 不返回；`metrics`（计价用的用量事实）、`hook_decisions`、`price_id`/`price`、`billing_detail`、`ledger_id` 照常返回，但 `billing_detail` 里的计价表达式与哈希去掉（`inputs.pricing.base.{expression,expr_hash}`、`additional[]/replacement[].expression_hash` 与 `additional[]/replacement[].detail.inputs.pricing.base.{expression,expr_hash}`、`inputs.additional[]/replacement[].Price`；`base` 保留为空对象，金额、档位、参数与各组件的 token 不动）。`hook_decisions` 各项的 `account_id`（`gateway.attempt` 钩子的尝试账号，§85）只给有 `account:read` 的 `/usage/:id`：本人视图和没有 `account:read` 的运营视图里都去掉（`Detail.hideAccounts`，与记录的 `account_id`、`settlement.account_id` 一起）。§97 起，倍率不是分组默认倍率或命中了定价规则的记录，`billing_detail` 多出 `inputs.pricing`（97.4），命中规则时另有 `list_cost`（97.5）；列表与详情的 `rate_multiplier` 是这次请求实际生效的倍率，不含规则倍数。
 - `usage_logs` 还有一列 `sched_decisions`（jsonb，迁移 0011，记录 `scheduler.rank` 插件对本次调度的改写，格式与语义见 §24.5），**接口不返回它**：它不在上面的详情字段里，`hook_decisions` 暴露而它不暴露是当前有意的取舍，排查请直接查库。
 - `/usage/summary` 每项：`{key, user_email?, requests, success, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, prompt_tokens, total_cost}`；`group_by=day` 时 `key` 为 UTC 日期 `YYYY-MM-DD`，`user` 时为用户 id 字符串并带 `user_email`；`ip` 时为调用 IP（没记录到 IP 的请求归入空串）并带该 IP 最近一次请求的时间 `last_at`；`cache_creation_tokens` 为 5 分钟与 1 小时缓存写入之和。`prompt_tokens` 按各请求保存的 usage semantics 归一化：inclusive 使用原始输入，exclusive 将输入、缓存读和两类缓存写入相加，再汇总；缓存命中率为 `cache_read_tokens / prompt_tokens`。历史记录若有缓存用量但缺少 semantics，所在汇总项的 `prompt_tokens` 返回 `null`，界面显示“—”，不按客户端协议猜测。新免费记录也保存 semantics，但不额外保存定价请求头或参数。
 - `/ledger`、`/me/ledger` 列表项：`{id, user_id, user_email?, user_name?, delta, balance_after, kind, ref_type, ref_id, idempotency_key, operator_id, plugin_key, note, created_at}`（金额为字符串）。
@@ -749,17 +751,15 @@ GET `/plugins/:key/settings`（`plugin:read` 或插件的设置权限；路由�
 
 | 字段 | 说明 |
 |---|---|
-| `mode` | `schema` \| `iframe` \| `native` \| `none`（manifest 未声明 `ui.settings` 时为 `none`） |
-| `schema` | `mode=schema` 时为包内 JSON Schema 文件的**内容**（JSON），否则 `null` |
-| `ui_schema` | `mode=schema` 且声明了 `uiSchema` 时为其内容，否则 `null` |
+| `mode` | `iframe` \| `native` \| `none`（manifest 未声明 `ui.settings` 时为 `none`）；已装旧包可能仍报 `schema`（2026-11-19 起不再支持，值全部遮蔽） |
 | `page` | `mode=iframe` 的入口（省略表示无） |
 | `component` | `mode=native` 的组件名（省略表示无） |
 | `values` | 当前配置值（解密后）；敏感字段非空时为 `"******"` |
-| `secret_fields` | 敏感字段名（Schema 顶层属性中 `writeOnly: true`、`format: "password"` 或 `x-sensitive: true` 的），排序 |
+| `secret_fields` | 遮蔽的字段（值下面的 JSON 指针），来自 `ui.settings.secrets`；native/iframe 没写 `secrets` 键、或模式不认识（旧包的 schema）时全部顶层字段都遮蔽，排序 |
 
 PUT `/plugins/:key/settings`（`plugin:manage` 或插件的设置权限；路由本身要 `self:plugin_ui`，§80.1）请求 `{values:{...}}`：
 - `values` 是**完整**配置，整体替换（省略的键会被删除）；敏感字段传 `"******"` 表示保留原值。
-- `mode=schema` 时按 Schema 校验，失败返回 `invalid_argument`，`details.fields[].field` 为 `values` + JSON Pointer（如 `values/api_key`），`code` 为 `schema`。
+- 保存前由插件校验（`PluginService.ValidateSettings`，可选，§75.1）：插件返回字段错误时为 `invalid_argument`，`details.fields[].field` 为 `values` + 插件给的 JSON Pointer（如 `values/api_key`），`code` 是插件给的错误码；插件返回归一化后的设置时存它。插件没实现这个调用、或不在当前 generation（未启用）时不校验，照常保存（启用时 `Configure` 读到已存的值自己检查）。核心不再按 JSON Schema 校验（2026-11-19 起，此前 `mode=schema` 按 schema 校验，`code` 为 `schema`）。
 - 成功后返回与 GET 相同的结构；审计只记录变更的键名；并在 `plugin:events` 广播配置变更。
 - 插件没有可用版本时 GET/PUT 都返回 404（`plugin has no version`）。
 
@@ -771,7 +771,7 @@ GET `/ui/plugins`（`self:plugin_ui`，会话天然持有，§80.1）→ 不分�
 | `name` | `{en, zh}` |
 | `asset_base` | `/plugin-ui/{key}/{version_hash}`，拼接包内相对路径加载资源 |
 | `menus` | `[{id, section, label, icon?, page, permission?, order?}]`；按调用者权限过滤（`permission` 为插件内 key，检查 `plugin.<key>:<permission>`）；`section` 为 manifest 原值（§22） |
-| `pages` | `{<page_id>: {type, title?, source?, columns?, schema?, submit?, src?, component?, search?, create?}}`；只被无权限菜单引用的页面被去掉；`create` 的权限调用者没有时，去掉该链接以及只靠它到达的表单页（§22.1） |
+| `pages` | `{<page_id>: {type, title?, src?, component?, nav?}}`（`type` 为 `iframe` 或 `native`）；只被无权限菜单引用的页面被去掉，`nav` 里调用者看不到的条目去掉（§22.1）。2026-11-19 起没有 `source`、`columns`、`schema`、`submit`、`search`、`create`（声明式表格、表单页已删除） |
 | `slots` | `[{slot, component, permission?, label?, icon?, accountTypes?}]`，按权限过滤，字段原样下发（`accountTypes` 缺省不补；UI 3.8 起 `account.detail.tabs`、`account.list.quota` 也可带，按账号类型匹配在控制台，见 §91b） |
 | `account_actions` | manifest `ui.accountActions` `[{id, label, icon?, permission, route, bulk?, confirm?, danger?, visibleFor?, accountTypes?}]`，按 `permission` 过滤，字段原样下发（`visibleFor`、`accountTypes` 缺省不补，前端按缺省 `editable`、所有类型处理）；每批大小不由插件声明，固定为 `manifest.MaxAccountBatch`（500；2026-11-08 决定）（UI 3.6，§23.3；`accountTypes` 是 UI 3.8，§91b） |
 | `native_entry` | 仅 `trust` 为 `official`/`verified` 时返回 manifest `ui.native.entry`，否则空串；加载方式与插件可用的共享库见 §23 |
@@ -812,11 +812,12 @@ GET `/ui/plugins`（`self:plugin_ui`，会话天然持有，§80.1）→ 不分�
 - POST `/accounts/:id/credentials/reveal`（`account:credential:view` / `account:own:credential:view`）：→ `{credentials:{...}}`（合并后的明文），写审计日志 `account.credentials.reveal`。
 
 POST `/accounts/:id/test`（`account:test` / `account:own:test`）：
-- 请求体可省略或为空；可选 `{model}`（交给插件 `BuildTestRequest`，为空时由插件选默认模型）。
+- 请求体可省略或为空；可选 `{model}`（交给插件 `BuildTestRequest`）。为空时核心按账号自己的配置选：账号有模型列表时取列表第一个，没有列表但有模型映射时取映射里按字典序最小的请求模型，两者都没有才交空模型、由插件选默认模型（2026-11-18 起；此前一律由插件选，会测到账号列表里没有的模型）。2026-11-19 起跳过下一条去掉协议后已无协议可测的模型（§122.2）。选出的模型同样经映射，`requested_model` 仍是调用方给的（这时为空串）。
+- 交给插件的 `protocols`（2026-11-18 起，§52 同批）：账号在本平台上原生开放的协议，按类型 `platforms` 与平台端点的声明顺序，去掉 WebSocket 与计数协议；测试有模型（调用方给的，或上一条按账号配置选的，映射之前）时只留账号协议绑定里服务这个模型的（`ProtocolRules.Serves`）。插件取第一个它有测试的协议，在 `usage_protocol` 回报实际用的；测试失败时核心把它作为 `ClassifyError` 的 `meta.protocol`，“效果”提示按这个协议的失败规则判断。列表为空表示没有偏好（只在没有被测模型时出现）。2026-11-19 起（§122）：去掉端点 `test` 为 `never` 的协议，不带 `model` 时再去掉 `explicit` 的；模型在 `model_protocols` 里有条目时按条目的协议顺序排；不带 `model` 时默认模型取第一个仍有协议可测的；被测模型没有可测协议时不调用插件，回 400 `no_testable_protocol`；结果带 `protocol`。
 - 响应 `{ok, status, latency_ms, message}`：由声明插件构造测试请求，核心经账号的代理（或直连）发出；`ok` = 上游 2xx；`status` 为上游状态码（未发出或网络错误时为 0）；失败时 `message` 为上游响应体前 1 KB（为空时为状态行）或错误信息，成功时为空串。整个测试（含插件构造请求）超时 30 秒。
-- 测试失败（包括上游地址为内网/回环被拒、代理被禁用）仍返回 HTTP 200、`ok:false`；只有插件未启用（503 `plugin_unavailable`）、账号不存在（404）、插件调用出错时返回错误状态。
-- 直连时目标地址为回环、私有、链路本地等地址会被拒绝（`SUB2API_GATEWAY_ALLOW_PRIVATE_UPSTREAM=true` 时放行）；经代理且本地无法解析的域名交给代理。
-- 2026-10-05 起：响应另含 `model`（实际请求的模型：插件报告的，否则为映射后的模型）、`requested_model`（调用方选的模型、映射前；未给时为空串，字段总在）、`upstream`、`body`、`usage`、`reason`、`effect`；每次测试结束写入账号的 `last_test`（§50）。测试仍**不改变账号状态**（不冷却、不禁用、不改 `updated_at`）。
+- 测试失败（包括上游地址为内网/回环被拒、代理被禁用）仍返回 HTTP 200、`ok:false`；只有插件未启用（503 `plugin_unavailable`）、账号不存在（404）、插件调用出错、被测模型没有可测协议（400 `no_testable_protocol`，§122.2）时返回错误状态。
+- 直连时目标地址为回环、私有、链路本地等地址会被拒绝（`SUB2API_GATEWAY_ALLOW_PRIVATE_UPSTREAM=true` 时放行）；经代理时域名交给代理解析，本机不解析，只拒绝字面的私网地址和 `localhost`（与网关同一条规则 `netguard.CheckHostVia`，§43.4）。
+- 2026-10-05 起：响应另含 `model`（实际请求的模型：插件报告的，否则为映射后的模型）、`requested_model`（调用方选的模型、映射前；未给时为空串，字段总在）、`upstream`、`body`、`usage`、`reason`、`effect`（2026-11-19 起另有 `protocol`，§122.4）；每次测试结束写入账号的 `last_test`（§50）。测试仍**不改变账号状态**（不冷却、不禁用、不改 `updated_at`）。
 
 ### 15.10 与前文不一致的裁定（2026-09-25）
 
@@ -842,7 +843,7 @@ POST `/accounts/:id/test`（`account:test` / `account:own:test`）：
 本节优先于前文中关于价格"模式""通配符"的描述。
 
 - **匹配**：价格按完整模型 ID 精确匹配，**禁止通配符**。别名与带日期的 ID 是不同的模型，需要分别定价（如 `claude-sonnet-4-5` 与 `claude-sonnet-4-5-20250929`）。同一模型：管理员价格优先，其次是最早安装的插件的默认价格。
-- **模型 ID 格式**：1–200 个字符，只能是字母、数字和 `. _ : / @ + -`（`manifest.ValidModelID`）。以下几处都按这条规则校验：
+- **模型 ID 格式**：至少 1 个字符，只能是字母、数字和 `. _ : / @ + -`（`manifest.ValidModelID`）。不限长度（转发 V2 收尾起，此前最多 200 个字符，§112.16）；但价格的模型列上仍有唯一 btree 索引，超过约 2.7 KB 的模型 ID 写入时报错（不截断）。以下几处都按这条规则校验：
   - `POST/PATCH /prices`：不合格时返回 400，`details.fields[{field:"model", code:"invalid"}]`，缺失时 `code` 为 `required`。
   - manifest `pricing[].model`：服务端校验和 `sub2api-plugin` 都会拒绝通配符和重复模型。
   - 数据库：`model_prices_model_id_chk` 约束。
@@ -870,7 +871,7 @@ POST `/accounts/:id/test`（`account:test` / `account:own:test`）：
   - `POST /prices/:id/override` 已删除；同一模型重复录入返回 409；
   - 修改同步价格的 model、mode、config 或 expression 后，它会变成 `manual`，`sync_source_id` 清空；只改 enabled 或 note 时保持 `sync`；
   - 使用记录详情的 `price` 为 `{id, model, source}`。
-- **匹配**：按完整模型 ID 精确匹配，只看启用的价格。找不到价格时按 `/settings/billing` 的 `missing_price_policy` 处理。这里的价格是全局价；§97 起，找到全局价之后还要按请求的分组和调用者所在的用户组取分组内定价或专属价（§97.3），没有全局价的模型仍按本条处理，规则不生效。
+- **匹配**：按完整模型 ID 精确匹配，只看启用的价格。找不到价格时请求被拒，403 `model_price_not_configured`（§17.3）。这里的价格是全局价；§97 起，找到全局价之后还要按请求的分组和调用者所在的用户组取分组内定价或专属价（§97.3），没有全局价的模型仍按本条处理，规则不生效。
 - **迁移 0008**：
   - 删除插件默认价格，原来的管理员价格改为 `manual`；
   - 加唯一索引 `model_prices_model_uq`，以及约束 `source IN ('manual','sync')`；
@@ -901,6 +902,24 @@ POST `/accounts/:id/test`（`account:test` / `account:own:test`）：
 
 同步只能由管理员手动触发（先预览再应用），没有定时自动覆盖。
 
+### 17.2 一条请求一个计价模型（2026-11-18，所有者规则）
+
+- 一条请求只按一个模型计价：**客户请求的模型**（端点 `request.modelPath` / `modelParam` / 插件 `ResolveModel` 给出的、钩子改写之后的模型，`usage_logs.model`）。预扣与最终扣费都按它的价格；账号的模型映射、参数覆盖（§84）、插件自报的上游模型都不改变计价模型。使用记录的 `price_id`（详情的 `price.model`）就是它的价格。
+- **绝不按上游返回的任何东西取价**：应答里回显的模型名只记进 `upstream_model`，应答里的工具信息不读；只有 token 数（及声明的用量事实）取自上游应答。
+- 一条请求里各部分的 token 都是这条请求的用量，按这一个价格算；例如 Responses 里生图工具的 token（§118.10）。§120 的附加用量（Anthropic `usage.iterations` 的 `advisor` 等，按请求里声明、调度前准入的引用模型计价）是早已有的机制，本次没有改动。
+- 模型找不到价格时，请求被拒（§17.3）；没有默认模型名、兜底模型或改用别的价格。
+- **账号测试**（`POST /accounts/:id/test`）不查价格、不计费，被测模型有没有价格都可以测（2026-11-19 所有者：“测试账号还是不要计费吧，放着就行了。”；2026-11-18 加的价格检查已撤掉）。
+
+### 17.3 没有价格一律拒绝（2026-11-19，所有者决定）
+
+所有者原话："删除。不要免费提供。"；此前的规则："如果模型找不到用量配置就报错。"
+
+- 模型没有启用的全局价格时一律报错，403 `model_price_not_configured`，没有任何放行途径。适用于：请求的主模型（调度前拒绝，不选账号、不发上游）；请求里经 `request.modelReferences` 声明的引用模型（§120，调度前拒绝）。账号测试不查价格、不计费（§17.2）。
+- `/settings/billing` 的 `missing_price_policy`（`reject` / `free`）整项删除：接口不再返回、`PUT` 时这个字段被忽略；插件读到的 `protocol.BillingSettings` 没有 `MissingPricePolicy`（§107.2）；控制台的设置项删除。数据库里已存的值不迁移、读取时忽略，下次保存计费设置时随整份文档重写而消失（与 §8 的 `client_disconnect_wait_seconds` 相同）。
+- `core.Pricer.Resolve` 要么返回价格、要么返回错误（找不到价格时是 `ErrPriceNotConfigured`），不再返回 `(nil, nil)`。所以计费的请求一定带着主模型的价格：预扣、结算里"主价格为空即免费"的分支删除；结算时主用量的价格表达式在价格历史里找不到，这条记录结算失败，不再按免费处理。升级前在免费放行下写入、还没结算完的记录（`usage_logs.billing_status` 为 `pending` / `failed` 且 `expr_hash = ''`）同样结算失败：价格为空的附加或替换分项报错，计入重试次数，用完后停在 `failed`，由管理员处理。
+- **价格为 0** 是管理员录入的价格，不受影响：请求照常转发、按 0 计费（记录为 `billed`，金额 0）。
+- 不变：`billing: "free"` 的端点（如 `count_tokens`）不取价、不计费；插件报的免费尝试（`Free` + `BillingReason`）；客户端断开策略的 `free`（§25.8）。
+
 ## 18. 账号的模型列表与模型映射、优先级与权重、RPM/TPM 限流（2026-09-25，ARCHITECTURE 4.3 / 6.2）
 
 本节优先于前文中与之冲突的描述（§5.4、§15.9、ARCHITECTURE A.4 里的"模型映射 [插件]"）。
@@ -912,7 +931,7 @@ POST `/accounts/:id/test`（`account:test` / `account:own:test`）：
 | 字段 | 类型 / 校验 | 说明 |
 |---|---|---|
 | `models` | `string[]`，每项是完整模型 ID（§16 规则，禁止通配符），去重，最多 500 项；默认 `[]` | 账号可服务的模型；**空表示所有模型**。调度时请求模型（映射前的客户端模型）不在列表里的账号不作为候选 |
-| `model_mapping` | `{from: to}`，键和值都是完整模型 ID，最多 500 项；默认 `{}` | 请求模型 → 上游模型。核心在调用插件 `BuildUpstreamRequest` **之前**改写请求（body 的 `request.modelPath`、路径参数 `request.modelParam`、`RequestMeta.model` 都换成映射后的模型），`usage_logs.upstream_model` 记录映射后的模型；计费、分组白名单、粘性会话、钩子都按映射前的客户端模型 |
+| `model_mapping` | `{from: to}`，键和值都是完整模型 ID，最多 500 项；默认 `{}` | 请求模型 → 上游模型。核心在调用插件 `Execute` **之前**改写请求（body 的 `request.modelPath`、路径参数 `request.modelParam`、`RequestMeta.model` 都换成映射后的模型），`usage_logs.upstream_model` 记录映射后的模型；计费、分组白名单、粘性会话、钩子都按映射前的客户端模型 |
 | `priority` | 0–1000000，默认 10 | **数值越大越先用**（2026-11-09 起，用户要求，与 new-api 一致；此前是越小越先用）；只有更大优先级的账号都不可用（无空闲并发、限流、冷却、失败切换）时才轮到下一级。插件可为单次请求临时改写（§24） |
 | `weight` | 1–1000，默认 1 | 同一优先级内按权重加权随机排序（不放回的加权抽样：权重 3 的账号被先选中的概率是权重 1 的三倍）。插件可为单次请求临时改写（§24） |
 | `rpm_limit` | 0–10000000，默认 0 | 每分钟请求数上限，0 = 不限。每次在该账号上准入一次尝试计 1 次（切换到别的账号时各账号各计各的）。在 `TryHit` 时计入，之后的本地失败（读账号、路由、协议转换）没有发到上游也不退（§78.1） |
@@ -927,7 +946,7 @@ POST `/accounts/:id/test`（`account:test` / `account:own:test`）：
 
 ### 18.2 调度顺序（ARCHITECTURE 6.2 更新）
 
-候选账号 = 分组内 `active` 且 `schedulable` 的账号 ∩ 账号类型能服务该端点（原生或经转换） ∩ `models` 为空或含请求模型 ∩ 未冷却 ∩ 未达 rpm/tpm/spm 上限（含模型列表，§68.2、§71.3）。粘性绑定的账号仍然优先；其余按 `priority` 降序（数值大的先用），同优先级按 `weight` 加权随机；逐个获取并发槽位，失败切换时跳过已试过的账号。
+候选账号 = 分组内 `active` 且 `schedulable` 的账号 ∩ 账号类型能服务该端点（原生或经转换） ∩ 账号在该入站协议下提供请求的模型（§110 起：跨平台转换默认关闭，按模型开启；本平台协议可按账号、按模型关闭） ∩ `models` 为空或含请求模型 ∩ 未冷却 ∩ 未达 rpm/tpm/spm 上限（含模型列表，§68.2、§71.3）。粘性绑定的账号仍然优先；其余按 `priority` 降序（数值大的先用），同优先级按 `weight` 加权随机；逐个获取并发槽位，失败切换时跳过已试过的账号。
 
 排序用的 `priority` / `weight` **可能已被插件为本次请求改写**（§24：粘性绑定不服务的挑选（未命中，或绑定账号失败后的切换）会先过一遍 `SchedulerService.RankAccounts`，`weight=0` 的账号本次不用）。候选集合的筛选、并发槽位、限流、冷却仍完全由核心把关，插件改不到。
 
@@ -958,7 +977,7 @@ POST `/accounts/:id/test`（`account:test` / `account:own:test`）：
 
 | 方法 路径 | 权限 | 说明 |
 |---|---|---|
-| POST `/account-types/:plugin_key/:type/models/fetch` | `account:create` | `{credentials, proxy_id?}`：表单里填的凭证（先按表单 Schema 和插件 `ValidateCredentials` 校验，错误格式同创建账号），账号还没保存时用 |
+| POST `/account-types/:plugin_key/:type/models/fetch` | `account:create` | `{credentials, proxy_id?}`：表单里填的凭证（先由插件 `ValidateCredentials` 校验，错误格式同创建账号；2026-11-19 前还先按表单 Schema 校验），账号还没保存时用 |
 | POST `/accounts/:id/models/fetch` | `account:test` | 可选 `{credentials}` 覆盖已保存的凭证（敏感字段传 `"******"` 保留原值），编辑表单里改了 Key 还没保存时用 |
 
 响应 `{models:[...], skipped, status}`：`models` 去重、按字母排序、只含合法的完整模型 ID（§16），最多 5000 条；`skipped` 是被丢弃的非法 ID 数；`status` 是上游状态码。错误：插件不支持返回 501 `unsupported`；上游非 2xx 返回 503 `unavailable`，`details.status` 为上游状态码、message 含响应片段；网络错误、内网地址被拒同样是 503 `unavailable`；插件未启用 503 `plugin_unavailable`。整个拉取超时 30 秒，响应体最多读 8 MiB。
@@ -983,16 +1002,16 @@ POST `/accounts/:id/test`（`account:test` / `account:own:test`）：
 - 任务：`cleanup`（`0 4 * * *`，按 `retention_days` 删旧记录、删已过期的封禁）。
 - 权限 `userPermissions`：`moderation:read`（查看概览、记录、封禁列表）、`moderation:manage`（删除记录、封禁/解封、在线测试）；下表"read/manage"即指这两个。另有 `moderation:exempt`（免于审核观察与封禁，不守任何路由或菜单，2026-11-12 权限加固 T60），工作人员判定看它。0.1.290起它是 `risk: "critical"`（A4）：不写 `defaults`、去掉 `inheritFrom`，新部署只有超管持有，由超管授给角色（§4“插件权限”）；线上已有的持有者保留（同步只更新 `risk` 列，不撤销）。同时 `moderation:read`（能看到被审核的原文）提为 `sensitive`；默认角色不变（read、manage 给 admin）。
 - 宿主权限：`kv`、`db.schema`、`gateway.hook`（上面的 fields）、`jobs`、`broadcast`、`routes.admin`、`ui.menu`、`ui.native`、`net`（`domains:["*"]`，optional）。
-- 界面：菜单"提示词审核"（section `plugins`，icon `shield`，permission `moderation:read`），native 页面 `ModerationDashboard`；设置用 schema 表单（插件详情"设置"页）。
+- 界面：菜单"提示词审核"（section `plugins`，icon `shield`，permission `moderation:read`），native 页面 `ModerationDashboard`；设置当时用 schema 表单（插件详情"设置"页）。现行：设置在 native 页面里编辑，清单声明 `ui.settings.secrets`，由插件 `ValidateSettings` 校验（§72.10、§72.15、§75.5）。
 - 内置：`deploy/docker/build-go.sh` 的 `BUILTIN_PLUGINS` 默认加 `moderation`；首次安装即启用，但 `mode` 默认 `off`，不配置时钩子直接放行。
 
-### 20.3 设置（`forms/settings.schema.json`，`additionalProperties:false`）
+### 20.3 设置（0.1 的设置；当时写在 `forms/settings.schema.json`，`additionalProperties:false`。该文件已在 0.12.2 删除，现行设置与校验见 §72.10）
 
 | 字段 | 类型/范围 | 默认 | 说明 |
 |---|---|---|---|
 | `mode` | `off` \| `observe` \| `enforce` | `off` | observe：放行请求，异步审核并记录；enforce：同步审核，结论为 block 就拒绝 |
 | `base_url` | string，`^(https?://\S+)?$` | `""` | 以 `/v1` 结尾时直接拼 `/chat/completions`，否则拼 `/v1/chat/completions` |
-| `api_key` | string，`writeOnly`（secret） | `""` | 以 `Authorization: Bearer` 发送 |
+| `api_key` | string，密钥（当时 schema 写 `writeOnly`；现在是 `ui.settings.secrets` 里的凭据） | `""` | 以 `Authorization: Bearer` 发送 |
 | `model` | string ≤200 | `""` | base_url、api_key、model 任一为空时视同 `off` |
 | `system_prompt` | string ≤20000（textarea） | `""` | 空则用内置提示词；`{{categories}}` 替换为分类列表（每行 `- id：说明`） |
 | `categories` | `[{id:^[a-z0-9_]{1,32}$, description ≤500}]`，≤50 | `[]` | 空则用内置 12 类（见 20.5） |
@@ -1020,7 +1039,7 @@ POST `/accounts/:id/test`（`account:test` / `account:own:test`）：
 | `ban_window_hours` | 1–8760 | 24 | |
 | `ban_duration_hours` | 0–87600 | 24 | 0 = 直到手动解封 |
 
-策略版本 = sha256(model、展开后的系统提示词、分类、tool_choice)，参与缓存键；改了这些设置旧缓存自然失效。`Configure` 宽松：校验交给 Schema，异常值夹到范围内。
+策略版本 = sha256(model、展开后的系统提示词、分类、tool_choice)，参与缓存键；改了这些设置旧缓存自然失效。`Configure` 宽松：校验交给 Schema（现在保存时由插件 `ValidateSettings` 按同样的约束拒绝，§72.10），异常值夹到范围内。
 
 ### 20.4 钩子流程
 
@@ -1182,7 +1201,7 @@ mock-upstream：`/v1/chat/completions` 请求里带名为 `submit_verdict` 的�
 | POST `/accounts/:id/test`、POST `/accounts/:id/models/fetch` | `account:test` / `account:own:test` | |
 | POST `/account-types/:plugin_key/:type/models/fetch` | `account:create` / `account:own:create` | 可带 `proxy_url`：只解析、临时用它发请求，**不查找不创建**代理、不需要代理权限；与 `proxy_id` 同时给出 400 `fields[{proxy_url, conflict}]`；`proxy_id` 的可见性规则同 POST `/accounts` |
 | POST `/accounts/:id/credentials/reveal` | `account:credential:view`🔐🔑 / `account:own:credential:view`🔐🔑 | 二次验证 `credential.reveal`（§80.2） |
-| GET `/account-types`、GET `/account-types/:p/:t/form`、GET `/platforms` | `account:read` / `account:own:read` / `account:own:create` | form 按调用者权限改写（§21.3） |
+| GET `/account-types`、GET `/platforms` | `account:read` / `account:own:read` / `account:own:create` | 受限设置见 `guarded_settings`（§21.3） |
 | GET `/proxies`、GET `/proxies/:id` | `proxy:read` 的任意范围 | 只返回范围内的；筛选 `created_by=<id>`（在范围内收窄，期 4 R4 起；此前自己级下忽略；非正整数 400 `fields[{field:"created_by", code:"invalid"}]`）、`mine=true`（`strconv.ParseBool`） |
 | POST `/proxies` | `proxy:manage` / `proxy:own:manage` | `created_by` = 调用者 |
 | PATCH/DELETE `/proxies/:id`、POST `/proxies/:id/test` | `proxy:manage` / `proxy:own:manage` | 范围外（含 `created_by` 为空的历史行）一律 404，**先判可见再判占用**；自己级下删除时 409 的 `account_count` 仍是引用它的全部账号数；自己级下 PATCH 改了连接字段（`protocol`、`host`、`port`、`username`、`password` 任一与现值不同，原样带回不算，`host` 只有大小写不同也不算且不写入）而代理正被他人创建的账号（含 `created_by` 为空的）使用时，返回 409 `proxy_in_use`，`details.account_count` 为这些账号的数量（2026-11-12 权限加固 T31）；改名称、状态不受限，`proxy:manage` 不受限 |
@@ -1193,15 +1212,15 @@ mock-upstream：`/v1/chat/completions` 请求里带名为 `submit_verdict` 的�
 
 ### 21.3 受限设置（base_url 只能用官方地址）
 
-manifest `accountTypes[].guardedSettings`（可选）：`[{field, allowed:[...]}]`。`field` 必须在 `settingsFields` 中；`allowed` 非空、每项为绝对 `http(s)` URL。三个内置账号类型插件声明 `[{field:"base_url", allowed:["https://api.anthropic.com"]}]`（openai `https://api.openai.com`，gemini `https://generativelanguage.googleapis.com`）；relay 不声明（它本来就是自定义地址），没声明的类型不受限。
+manifest `accountTypes[].guardedSettings`（可选）：`[{field, allowed:[...], versions?:[...]}]`。`field` 必须在 `settingsFields` 中；`allowed` 非空、每项为绝对 `http(s)` URL；`versions`（可选，2026-11-20 起）是该字段的值末尾可以带的版本段，每项非空、以 `/` 开头、不以 `/` 结尾、不重复（如 `["/v1"]`），应与插件 `apikey.Spec.Versions` 一致。三个内置账号类型插件声明 `[{field:"base_url", allowed:["https://api.anthropic.com"]}]`（openai `https://api.openai.com`，gemini `https://generativelanguage.googleapis.com`）；relay 不声明（它本来就是自定义地址），没声明的类型不受限。
 
-manifest `accountTypes[].upstreamFields`（可选）：决定请求发往哪里的顶层凭证/设置字段（`base_url`、各类 endpoint）。未声明时由声明式 `upstream` 推出（`base_url`），也推不出则按旧规则；`[]` 表示调用者无法设置地址（OAuth、managed 类型）。校验：非空串、不重复；schema 表单里出现 `base_url` 或 `*_endpoint` 却未声明也推不出时，打包工具给警告（`check.Warnings`），不阻止安装。`manifest.AccountType.CustomUpstream()`：地址字段已知时，存在未被 `guardedSettings` 钉住的地址字段即为 true；未知时沿用旧规则（未声明 `guardedSettings` 即为 true）。`GET /account-types` 的 `custom_upstream` 就是它的结果。
+manifest `accountTypes[].upstreamFields`（可选）：决定请求发往哪里的顶层凭证/设置字段（`base_url`、各类 endpoint）。未声明时地址字段未知，按旧规则处理（原来还能由声明式 `upstream` 推出 `base_url`，声明式上游已在转发 V2 删除，§112.1）；`[]` 表示调用者无法设置地址（OAuth、managed 类型）。校验：非空串、不重复（原来对 schema 表单的打包警告 `check.Warnings` 已随 schema 表单在 2026-11-19 删除）。`manifest.AccountType.CustomUpstream()`：地址字段已知时，存在未被 `guardedSettings` 钉住的地址字段即为 true；未知时沿用旧规则（未声明 `guardedSettings` 即为 true）。`GET /account-types` 的 `custom_upstream` 就是它的结果。
 
-校验（`account/creds.go` `prepare`，在插件 `ValidateCredentials` 归一化**之后**；`prepare` 的每个调用方都会做，所以 POST/PATCH `/accounts` 和两个 `models/fetch` 接口里带的 `credentials` 都受限）：调用者没有 `account:settings:custom` 且类型声明了 guard 时，每个受限字段的值必须满足其一：为空/缺省/`null`（由插件归一化为默认）；等于 `allowed` 之一；PATCH（以及 `/accounts/:id/models/fetch`）时等于该账号原来的值（管理员建的自定义地址，供应商编辑其他字段不被卡死）。比较前两边都做：去首尾空白、去尾部 `/`（全部）、值能按绝对 URL 解析（有 scheme 和 host）时 scheme 与 host 小写，否则原样比；非字符串值（数字、对象）一律不满足。不满足返回 400 `invalid_argument`，`details.fields[{field:"credentials.base_url", code:"forbidden"}]`。
+校验（`account/creds.go` `prepare`，在插件 `ValidateCredentials` 归一化**之后**；`prepare` 的每个调用方都会做，所以 POST/PATCH `/accounts` 和两个 `models/fetch` 接口里带的 `credentials` 都受限）：调用者没有 `account:settings:custom` 且类型声明了 guard 时，每个受限字段的值必须满足其一：为空/缺省/`null`（由插件归一化为默认）；等于 `allowed` 之一；PATCH（以及 `/accounts/:id/models/fetch`）时等于该账号原来的值（管理员建的自定义地址，供应商编辑其他字段不被卡死）。比较前两边都做：去首尾空白、去尾部 `/`（全部）、值能按绝对 URL 解析（有 scheme 和 host）时 scheme 与 host 小写，否则原样比；非字符串值（数字、对象）一律不满足。声明了 `versions` 时，在上面的规范化之后再从路径末尾去掉至多一个版本段，提交值、`allowed` 各项、账号原值都这样做：在**转义形式**的路径上找能作为后缀的项，取最长的一个，整段匹配、区分大小写（`…/a%2Fv1` 不算以 `/v1` 结尾，`…/V1` 不算 `/v1`，`…/v1/v1` 只去一段）。所以 `https://API.openai.com/v1/` 与 `https://api.openai.com` 等价；PATCH 时原值带版本、新值不带（或反过来）也算等于原值。去掉版本段后再去掉剩下的末尾 `/`，所以 `https://api.openai.com//v1` 也与 `https://api.openai.com` 等价。这条规则与插件 SDK `apikey.Spec.Versions` 在请求时算"根"的规则相同，核心与 SDK 都调 `manifest.TrimVersion`，只作用在路径上，不碰 scheme 和主机（`http://v1` 不会被当成以 `/v1` 结尾；§127.3）。没有 `versions` 的受限设置不受影响。判断地址是否改动（`account/creds.go` 的 `addressValue`：改了地址时被遮蔽的密钥要重新输入，以及 §21.3.1 第 3 条的 `account:relay`）不认版本段：只差一个版本段（如 `https://x` 改成 `https://x/v1`）也算改了地址。旧核心不认识 `versions`（清单解码不严格）会忽略它，只是带版本的官方地址被拒，所以用到它的插件要提高 `hostCompat` 下限。不满足返回 400 `invalid_argument`，`details.fields[{field:"credentials.base_url", code:"forbidden"}]`。
 
-**默认地址由插件自己提示**：三个内置账号类型的表单不再给 `base_url` 设 `default`（不预填），`pattern` 允许空串，`ui:placeholder` 写"留空使用默认地址 …"；空值由插件 `ValidateCredentials` 归一化为默认地址。核心不为 base_url 做特判；控制台清空 `url-presets` 输入即不发该键；锁定（只读）时只显示"由管理员设置"，不再拼插件的帮助文案。
+**默认地址由插件自己提示**：三个内置账号类型的表单不给 `base_url` 预填默认值，空值允许，占位符写"留空使用默认地址 …"；空值由插件 `ValidateCredentials` 归一化为默认地址。核心不为 base_url 做特判。表单是插件的 native 组件（`createApiKeyForm` 的 `baseUrl`，`SUrlPresetInput`）：清空输入即不发该键；锁定（只读）时只显示"由管理员设置"。（2026-11-19 前这些写在表单 schema 里：不设 `default`、`pattern` 允许空串、`ui:placeholder`，控件是 `url-presets`。）
 
-`GET /account-types/:p/:t/form`：调用者没有 `account:settings:custom` 时，对每个受限字段把 `schema.properties.<field>.enum` 设为 `allowed`（`properties` 或该字段不存在时创建），`allowed` 只有一项时再加 `ui_schema.<field>["ui:readonly"] = true`（`ui_schema` 为 `null` 时创建对象，已有的其他 `ui:*` 键保留）；改写在解码后的副本上做，缓存的原件不变；前端 `url-presets` 组件遇到 `enum` 只允许从预设里选。iframe/native 表单模式不改写，只靠服务端校验。
+界面提示（2026-11-19 起）：`GET /account-types/:p/:t/form` 已删除，账号表单是插件的 native 组件，按 `GET /account-types` 的 `guarded_settings` 和调用者的 `account:settings:custom` 显示（`@sub2api/host` 的 `useGuardedSettings`）；服务端校验不变。
 
 ### 21.3.1 own 级用户的账号创建限制
 
@@ -1254,7 +1273,7 @@ type ProxyResolver interface {
 - 角色页与访问密钥（R8）：`scope_type` 非空的动作勾选后展开范围选择（全部 / 自己创建的 / 指定分组 / 指定账号或代理 / 分组内的指定账号，可叠加；选全部时其余置灰；`account:create` 不指定账号，只有全部 / 自己创建的 / 指定分组），提交规范 key；候选按操作者（密钥为用户自己）的范围裁剪；id 经 `/lookup/*` 显示名称，已删除显示“#id（已删除）”。用户页角色徽章的提示为该角色的范围摘要。
 - 账号表单代理字段二选一：**选择已有**（`ProxyPicker`，列表来自 `/proxies`，后端已按范围过滤）| **粘贴代理串**（`proxy_url`，placeholder `socks5://user:pass@host:port`，前端只做形状提示）；保存后刷新代理缓存；`proxy_url` 的字段错误显示在该输入下。
 - 代理页表单加"粘贴代理串自动填充"（前端解析填到各字段，不依赖后端）。
-- `url-presets` 组件：schema 有 `enum` 时只能选预设；只读时显示"由管理员设置"提示。
+- 基础地址输入（`@sub2api/ui` 的 `SUrlPresetInput`；2026-11-19 前是 schema 部件 `url-presets`）：受限设置给出允许值时只能从中选（已存的、不在列表里的值也保留为可选项），只有一个允许值时只读并提示"由管理员设置"。
 - 角色页：见上文 R8 的范围选择（新 key 由 `/permissions` 带 label 与 `scope_type` 下发）。
 - 角色页“从角色复制”（0.1.293 起，0.1.294 改为合并/覆盖，只在控制台）：编辑器里按来源角色（不含超管角色、未读到权限的角色）改勾选，点保存才写入，保存走同一个 PUT `/roles/:id/permissions` 与风险确认。两种方式（`web/src/authz/copyGrants.ts`，按动作比较范围）：**合并**保留当前勾选，加上来源有、当前未蕴含的范围（同一动作留较宽的）；**覆盖**勾选变成和来源一样，当前蕴含的来源范围直接取（可以收窄，例如 `account:read` 覆盖成 `account:read:own`）；来源的某个范围勾不上时，保留当前被它蕴含的范围（来源 `account:read` 授不出时当前的 `account:read:own` 留着）。来源里已移除或目录里没有的、操作者不能授出的和关键（critical，操作者能授出的也与整组勾选一样只能单独勾）权限不勾，三类分别列在编辑器提示里；已移除或目录里没有的动作保留当前角色原有的 key（编辑器看不到也改不了）。
 
@@ -1284,11 +1303,11 @@ type ProxyResolver interface {
 | overview 概览（§90 起叫“控制台”） | 100 | 仪表盘（§90 起还有 API 密钥、模型与价格、用量概览、使用日志、全站概览、全站日志；§103 起还有账号用量概览、账号日志） | |
 | gateway 网关 | 200 | 分组、账号、平台、代理、模型价格（§90 起使用记录移到控制台；§90 第四版起只剩账号、代理） | 模型目录（anthropic 0.2.9–0.3.0，0.3.1 删除）、动态权重（dynweight；只有 0.5.4 在 `system` 区） |
 | security 安全 | 300 | 无（空区不返回） | 请求守卫（guard 0.2.7）、提示词审核（moderation 0.6.2） |
-| finance 财务 | 400 | 余额流水 `/ledger`（`balance:all:read`；§90 第四版取消、2026-11-13 T80 恢复） | 增长管理（growth 0.1.5，去掉了自己的 growth 区） |
+| finance 财务 | 400 | 余额流水 `/ledger`（`balance:all:read`；§90 第四版取消、2026-11-13 T80 恢复） | ~~增长管理（growth 0.1.5，去掉了自己的 growth 区）~~（growth 0.1.304 删除，§125） |
 | users 用户与权限（§90 起叫“用户”） | 500 | 用户、角色与权限 | |
 | plugins 插件 | 600 | 已安装插件、插件市场、发布者；`section:"plugins"` 的插件菜单接在后面 | |
 | system 系统 | 700 | 集群节点、定时任务、核心升级、审计日志、设置（§90 起设置排在最后，侧栏单独显示为“系统设置”，分组、模型价格从它进入） | 动态权重（只有 dynweight 0.5.4） |
-| me 我的账户（§90 起叫“个人中心”） | 800 | API 密钥、使用记录（§90 起只剩钱包、个人设置） | 我的邀请、每日签到 |
+| me 我的账户（§90 起叫“个人中心”） | 800 | API 密钥、使用记录（§90 起只剩钱包、个人设置） | ~~我的邀请、每日签到~~（growth 0.1.304 删除，§125） |
 
 - ~~只有概览和我的账户的用户，控制台把"我的账户"排到仪表盘之后并且不画它的标题~~（§90 起所有人都按三组显示）。
 - 侧栏收起时分区标题隐藏，各区之间画一条分隔线（§90 起分隔线画在三组之间）。
@@ -1297,7 +1316,7 @@ type ProxyResolver interface {
 - 用其他 id 声明的旧自有区不受影响，仍作为插件自己的区显示，例如 moderation 0.1.1–0.6.1 的 `safety`（order 350，排在 security 与 finance 之间，区名取声明的 label）；升级到 moderation 0.6.2 后它的菜单进入核心 `security` 区。
 - 核心区的 id 与 order 只有一处定义：`sdk/manifest` 的 `CoreMenuSections()`（另有 `PluginMenuSectionOrder` = 650）；manifest 校验（`sdk/manifest/check`）和 `GET /me/menus`（`server/internal/authz/menus.go`，`coreMenus` 只补标签和核心项，测试保证与 SDK 列表同序同 id）都读它。
 
-**表格页的"新建"按钮**：manifest `ui.pages.<id>.create: {page, permission?}` 只能写在 `type:"table"` 的页面上，`page` 必须是同一插件的 `type:"form"` 页面，`permission` 是 `userPermissions` 里的 key。控制台在表格上方画一个主按钮，文字取目标页的 `title`，点击打开 `/p/<插件>/<page>`。`GET /ui/plugins` 对没有该权限的调用者去掉 `create`，表单页如果没有可见菜单指向它也一并去掉；表格页本身因菜单权限对调用者不可见时，它的 `create` 链接同样不算可用，只靠这条链接到达的表单页也去掉（即使链接不要求权限）。校验错误：`ui.pages.<id>.create` invalid（非表格页）、`.create.page` unknown / invalid（不存在 / 不是表单）、`.create.permission` unknown。volcengine 0.12.6 用它替代了"新建素材组""新建素材"两个菜单项，需要核心 0.1.229。
+**表格页的"新建"按钮**（已删除，0.1.304）：原来 manifest `ui.pages.<id>.create: {page, permission?}` 在 `type:"table"` 页面上画一个打开 `type:"form"` 页面的按钮（volcengine 0.12.6 起用过）。声明式表格、表单页在 2026-11-19 删除（插件界面只用代码写），`create` 随之删除，上传时报 unknown field；volcengine 的新建改为原生列表页里的弹窗（`PLUGIN-VOLCENGINE-ARK.md` §19）。`GET /ui/plugins` 现在只按菜单权限去掉页面、按条目权限裁剪 `nav`（§15.8）。
 
 **控制台布局**：路由 `meta.parent` 指向上级页面，顶栏在标题前显示面包屑（价格详情、价格同步源、同步预览、插件详情、发布进度、安装授权、插件设置）。设置页改为左侧二级导航（网关 / 计费 / 通知 / 系统 / 插件设置），页面仍用 `?tab=` 选择；"插件设置"列出已启用且有设置表单的插件，选中为 `?tab=plugin:<key>`，内容即插件设置页。（§90 起二级导航改为侧栏的系统设置视图；插件设置不在其中，从已安装插件列表的“设置”按钮打开，`?tab=plugin:<key>` 跳到 `/plugins/<key>/settings`，见 90.2、90.4。）
 
@@ -1307,11 +1326,12 @@ type ProxyResolver interface {
 
 ### 23.1 加载方式与 import map
 
-- 控制台 `GET /ui/plugins` 后（`web/src/stores/plugins.ts`），对 `native_entry` 非空、`trust` 为 `official`/`verified`、且 `host_ui_compat` 匹配 `HOST_UI_VERSION`（当前 `3.19.0`，§90.7、§21；`satisfiesRange` 支持 `^1.0`、`~1.2`、`>=1.0.0 <2.0.0`、`1.x`、`*`、`||`）的插件执行 `import(asset_base + native_entry)`，调用模块导出的 `register(host)`；插件被禁用或 `native_entry` 的 URL 变化（版本升级）时调用 `unregister?()` 并丢弃已注册组件。不满足条件或 `register` 抛错的记在 `errors[key]`，页面显示原因。列表一到就置 `listed`（只要列表的地方看 `listed`，不等模块；菜单来自 `GET /me/menus`，不等插件）；各插件模块并行加载，`pending[key]` 标记仍在加载的插件，插件页只等自己插件的模块；`refresh()` 在本次启动的模块都加载或失败后返回，重叠的 `refresh()` 不重复加载仍在 `pending` 的插件。所有原生入口在控制台启动时都会加载，所以插件**页面**组件应在 `register` 里以 `defineAsyncComponent(() => import('./Page.vue'))` 注册（`@sub2api/ui` 导出的 `lazyPage`（UI 3.4，manifest 声明 `hostUICompat: "^3.4"`）封装了这一步，带加载占位和两次重试（间隔 500ms、1000ms；每次挂载重新计数，所以插件页的"重试"按钮和再次进入页面都会重新走完两次重试）），入口只保留 slot 组件、文案和 `register` 需要的代码。核心按 `hostCompat` 安装插件，不看 `hostUICompat`；核心 0.1.228 是最后一个带 UI 3.3 的版本，UI 3.4 从核心 0.1.229 起。（dynweight 0.4.1、growth 0.1.6 因此声明 `hostCompat >=0.1.229`）。
+- 控制台 `GET /ui/plugins` 后（`web/src/stores/plugins.ts`），对 `native_entry` 非空、`trust` 为 `official`/`verified`、且 `host_ui_compat` 匹配 `HOST_UI_VERSION`（当前 `4.0.0`，§90.7、§21；`satisfiesRange` 支持 `^1.0`、`~1.2`、`>=1.0.0 <2.0.0`、`1.x`、`*`、`||`）的插件执行 `import(asset_base + native_entry)`，调用模块导出的 `register(host)`；插件被禁用或 `native_entry` 的 URL 变化（版本升级）时调用 `unregister?()` 并丢弃已注册组件。不满足条件或 `register` 抛错的记在 `errors[key]`，页面显示原因。列表一到就置 `listed`（只要列表的地方看 `listed`，不等模块；菜单来自 `GET /me/menus`，不等插件）；各插件模块并行加载，`pending[key]` 标记仍在加载的插件，插件页只等自己插件的模块；`refresh()` 在本次启动的模块都加载或失败后返回，重叠的 `refresh()` 不重复加载仍在 `pending` 的插件。所有原生入口在控制台启动时都会加载，所以插件**页面**组件应在 `register` 里以 `defineAsyncComponent(() => import('./Page.vue'))` 注册（`@sub2api/ui` 导出的 `lazyPage`（UI 3.4，manifest 声明 `hostUICompat: "^3.4"`）封装了这一步，带加载占位和两次重试（间隔 500ms、1000ms；每次挂载重新计数，所以插件页的"重试"按钮和再次进入页面都会重新走完两次重试）），入口只保留 slot 组件、文案和 `register` 需要的代码。核心按 `hostCompat` 安装插件，不看 `hostUICompat`；核心 0.1.228 是最后一个带 UI 3.3 的版本，UI 3.4 从核心 0.1.229 起。（dynweight 0.4.1、growth 0.1.6 因此声明 `hostCompat >=0.1.229`）。
 - `entry.js` 的形状是 `NativePluginModule`：`register(host: PluginHost): void | Promise<void>`、`unregister?(): void | Promise<void>`。`register` 里用 `host.registerComponent(name, comp)` 注册 manifest `ui.pages[].component`、`ui.slots[].component` 引用的组件名，用 `host.addMessages({en, zh})` 注册文案；`unregister` 释放模块级状态（moderation 的 `entry.ts` 是最小样例）。
 - **import map**：控制台 `index.html` 注入 `<script type="importmap">`，把 `vue`、`vue-router`、`pinia`、`vue-i18n`、`@sub2api/ui`、`@sub2api/host` 映射到控制台自己构建出的 chunk（`web/vite.config.ts` 的 `SHARED`，`preserveEntrySignatures: 'strict'`，所有导出都保留；dev 下映射到源码，复用同样的预打包依赖）。插件用 `@sub2api/vite-preset` 构建时这些模块（`SHARED_MODULES`，前缀匹配 `vue/*` 之类的子路径）全部 external，**不得打进插件包**，否则页面里会出现第二份 Vue 运行时和第二套组件/状态：`toast`、`confirm`、i18n、路由、`theme` 都不再与控制台共享，组件的 `provide/inject` 也会失效。
-- 构建：`vite.config.ts` 写 `export default defineConfig(sub2apiPlugin({ entry: 'src/entry.ts' }))`；选项 `entry`（默认 `src/entry.ts`）、`outDir`（默认 `dist`）、`vue`（透传 `@vitejs/plugin-vue`）、`minify`（默认 true）。输出 `dist/entry.js`（ES module，target es2022）、`dist/entry.css`（有样式时；`entry.js` 头部自动按自身 URL 插一条 `<link rel="stylesheet">`，同源，CSP 不用改）、`dist/chunks/*`、`dist/assets/*`。打包成插件时放到 manifest `ui.native.entry` 指向的位置（moderation：`ui/native/entry.js`）。preset 也导出 `HOST_UI_VERSION`，manifest `hostUICompat` 按它声明（官方插件 growth、guard 用 `^3.4`，因为它们用到 3.4 的 `lazyPage`；dynweight 0.5.7、moderation 0.9.1 起用 `^3.11`，因为它们用到 `host.components.EntityPicker`（§96.6）；moderation 0.9.2 起用 `^3.12`（§96.7）；`sdk/manifest`：声明了 `ui.native` 时必填）。
+- 构建：`vite.config.ts` 写 `export default defineConfig(sub2apiPlugin({ entry: 'src/entry.ts' }))`；选项 `entry`（默认 `src/entry.ts`）、`outDir`（默认 `dist`）、`vue`（透传 `@vitejs/plugin-vue`）、`minify`（默认 true）。输出 `dist/entry.js`（ES module，target es2022）、`dist/entry.css`（有样式时；`entry.js` 头部自动按自身 URL 插一条 `<link rel="stylesheet">`，同源，CSP 不用改）、`dist/chunks/*`、`dist/assets/*`。打包成插件时放到 manifest `ui.native.entry` 指向的位置（moderation：`ui/native/entry.js`）。preset 也导出 `HOST_UI_VERSION`，manifest `hostUICompat` 按它声明（`sdk/manifest`：声明了 `ui.native` 时必填）。4.0.0 删掉了 schema 表单的导出（§23.3），所以 0.1.304 起全部带界面的官方插件（16 个，payment 没有界面）都声明 `^4.0`；此前按用到的最高小版本声明（guard 用 3.4 的 `lazyPage` 写 `^3.4`，dynweight 0.5.7、moderation 0.9.1 用 `host.components.EntityPicker` 写 `^3.11`（§96.6），moderation 0.9.2 写 `^3.12`（§96.7），用代理票据的写 `^3.20`（§117））。
 - 插件的 `package.json` 只需 devDependencies：`@sub2api/vite-preset`、`@vitejs/plugin-vue`、`vite`、`vue`（类型用）；`@sub2api/ui`、`@sub2api/host` 通过 import map 在运行时解析，本地开发用 tsconfig `paths` 指到 `web/packages/*/src` 取类型。
+- 本仓库 `plugins/*/ui/native` 的工程没有自己的依赖和 lockfile，也不安装依赖：`build`、`typecheck`、`test` 都用控制台（`web/`，先 `npm ci`）的 vite、vue-tsc、vitest；`tsconfig.json` 继承 `web/packages/vite-preset/tsconfig.plugin.json`（只写 `include`），构建用 `web/packages/vite-preset/vite.plugin.config.js`，spec 用 `web/vitest.config.ts`（脚本照 `plugins/codex/ui/native/package.json`）。这两个预设文件指向本仓库的目录结构，不在 preset 的 `files` 里。自带依赖的工程照上一条写 `package.json` 并提交 `package-lock.json`（preset 按 `file:` 依赖时 `.npmrc` 写 `install-links=true`：npm 把它复制进 `node_modules`，它的 import 才会按插件自己的依赖解析），镜像构建（`deploy/docker/build-ui.sh`）和 CI（`.github/next-ci/next-check-plugin-ui.sh`）有 lockfile 时先 `npm ci`。
 
 ### 23.2 `@sub2api/host`
 
@@ -1440,21 +1460,18 @@ type ProxyResolver interface {
 
 图标：`ICON_NAMES`（全部可用名字，已排序；manifest `ui.menus[].icon` 的权威词表，Go 侧 `sdk/manifest/check/icons.json` 由 `npm run icons:json` 从 `icons.ts` 生成）、`ICON_PATHS`、`hasIcon(name)`、`iconPaths(name, context?)`。
 
-JSON Schema 表单（`schema/`；账号凭据、插件设置、声明式表单页都用它，插件的原生 UI 也可以直接用）：
+表单（`form/`，UI 4.0；完整说明见 `web/packages/ui/README.md`“表单校验框架（UI SDK 4.0）”“组合组件（UI SDK 4.0）”“测试辅助”）。4.0 删除了 JSON Schema 表单（`SchemaForm`、`SchemaField`、`SCHEMA_WIDGETS_KEY`、`BUILTIN_WIDGETS` 和 `schema.ts` 的辅助函数、类型 `JSONSchema`/`UISchema`/`EnumOption`/`ValidateMessages`、文案 `ui.schema.*`；`localizedText`、`SECRET_MASK` 保留），账号表单、插件设置和插件页面都用下面的导出写成代码：
 
-| 组件 | 用途 | props（默认值） | emits / expose |
-|---|---|---|---|
-| `SchemaForm` | 按 JSON Schema（object）渲染整张表单，`v-model` 为对象值；schema 变化时按 `default` 补齐缺省值 | `schema: JSONSchema`（必填）、`uiSchema: UISchema \| null`（§21.3 的 uiSchema：`ui:order` `ui:widget` `ui:title` `ui:help` `ui:details` `ui:placeholder` `ui:options` `ui:enumNames` `ui:visibleWhen` `ui:section`（§41.3）`ui:errorMessages` `ui:readonly`）、`modelValue: Record<string, any> \| null`（必填）、`errors: Record<string, string>`（服务端字段错误，路径 → 文案，`a.b.0.c` 形式）、`disabled`、`widgets: Record<string, Component>`（与注入的宿主 widgets 合并，同名以 prop 为准）、`layout`（`stacked`/`settings`，stacked）、`fields`（别名 `only`；`string[]`，只渲染并校验这些顶层字段，其余值原样保留） | emits `update:modelValue`；expose `validate(): boolean`（校验可见字段：required / minLength / maxLength / pattern / format uri·email / minimum / maximum / integer / minItems / maxItems；pattern 与 uri 同时检查；文案在 `ui.schema.v.*`，`ui:errorMessages` 可按字段覆盖，失败时显示在字段下） |
-| `SchemaField` | 单个字段（`SchemaForm` 内部递归使用；一般不直接用） | `name`、`path`（点号路径，错误按它查 `errors`）、`schema`、`ui`、`modelValue`、`root`（整张表单的值，`ui:visibleWhen` 按它判断）、`errors`（必填）、`required`、`disabled`、`bare`（不画 label：数组项、根对象）、`widgets`、`layout` | emits `update:modelValue` |
+| 导出 | 用途 |
+|---|---|
+| `useForm({model, update, rules?, defaults?, serverErrors?})` + `SForm` | 表单状态与即时校验。规则是 async-validator 风格（`required` `whitespace` `type` `min` `max` `len` `pattern` `enum` `validator` `message` `trigger` `when`），键是点分路径、`*` 表示数组每一项；值为 `SECRET_MASK` 时只算 `required` 通过、其余跳过；先惰性（失焦或 `validate()` 后）再积极。返回 `value` `get` `set` `bind` `bindNumber` `validate` `validateField` `clearValidate` `error` `errors` `unclaimed` `required`。`SField` / `SSettingRow` 的 `prop` 显示该路径的错误与必填星号。内置文案 `ui.form.v.*` |
+| `useCredentialForm(props, emit, {rules, defaults?})` + `SCredentialForm`、`nativeAccountFormProps` | 原生账号表单（§23.5）：`props.errors` 作为服务端错误，`defaults` 只在新建时填，顶部列出没有字段认领的错误 |
+| `createApiKeyForm(spec)` | API Key 加基础地址一类账号类型的整个表单组件。`api_key` 默认只要求非空（去掉首尾空白后不为空，与插件后端一致，§127），`spec.apiKey.min`/`max`/`pattern` 写了才检查；`spec.baseUrl`（`false` 为没有）没有 `account:settings:custom` 时按 `guarded_settings` 只给官方值；`spec.extra` 加其它字段（`text` `secret` `url` `select` `textarea` `date-time` `switch`，可分节） |
+| `usePluginSettings({pluginKey, api, rules, defaults?})` + `SSettingsPage` | 插件设置（`GET/PUT /plugins/:key/settings`）：读入时填默认值、整份 PUT、保存后重读，字段错误显示在对应行，`reenter` 时提示重新填写密钥；自带保存栏与离开确认 |
+| `SSecretInput`、`SUrlPresetInput`、`SFormSection`、`SDateTimeInput`、`SResourcePage` | 密钥输入（`******` 表示沿用，`clearable` 清除已存值，`plain` 用于敏感地址）、基础地址（预设或受限设置的允许值）、表单分节（可折叠，有值或有错误时展开）、RFC 3339 时间输入、插件列表页（列表、搜索、新建弹窗） |
+| `@sub2api/ui/testing` | 只能在 spec 里引用的测试辅助：`fakeHost`、`mountAccountForm`、`fillControls`、`keyAndUrlCases`、`fakeCore`、`mountSettings`、`checkMessages`、`cleanup` |
 
-- **布局**：`layout="stacked"` 为原样式（标签在上）。`layout="settings"`：根对象的每个 `ui:section`（以及第一个 section 之前的字段）渲染成一个 `SSettingsGroup`（`collapsed: true` 的 section 可折叠，有值或有错误时自动展开），每个字段渲染成 `SSettingRow`：`switch` `select` `segmented` `number` `text` `secret` `date-time` 等放在右侧（宽 `sm:w-64`），`textarea` `tags` `key-value` `model-mapping` `object-list` `multi-select` `json` `url-presets` `radio` 与嵌套对象放在标题下方；宿主 widget 默认放下方，`ui:options.stacked: false` 放右侧。
-- **内置 widget**：`text`（`format: email/uri` 用对应 type）`secret`（`******` 表示保留已存值，带显示/隐藏按钮）`textarea` `select`（`SSelect`，10 个及以上选项自动 `searchable`，`ui:options.searchable` 可强制开关）`segmented` `radio` `switch` `number`（`SInput type=number`，`minimum`/`maximum` → `min`/`max`）`date-time`（RFC 3339 ↔ 本地时间）`date` `time`（`format: date-time/date/time` 自动选用）`url-presets`（`schema.enum` 存在时只能选）`key-value` `model-mapping` `tags` `multi-select`（`SCheckbox` 组）`object-list`（每项带标题、上移/下移/删除按钮，`maxItems` 到上限时禁用添加）`json`（等宽；外部值变化时同步文本）`hidden`。
-- **`ui:options`**：`rows`（textarea/json）、`mono`（textarea/text 等宽；textarea 默认不再等宽）、`unit`（LocalizedText，数字/文本框右侧单位）、`presets`（url-presets）、`keyLabel` / `valueLabel` / `keyPlaceholder` / `valuePlaceholder`（key-value、model-mapping；model-mapping 不再内置具体模型名作占位）、`itemTitle`（object-list 每项标题，LocalizedText，`{n}` = 从 1 开始的序号，默认 `ui.item`）、`searchable`（select）、`inline`（radio 横排）、`stacked`（settings 布局下宿主 widget 的位置）。
-- **`ui:details`**：LocalizedText，字段的长说明，收在「查看说明」后。**`ui:errorMessages`**：`{required|minLength|maxLength|pattern|format|minimum|maximum|minItems|maxItems: LocalizedText}`。
-- **只读**：`schema.readOnly: true` 或 `ui:readonly: true` 时，文本类控件用 `readonly`（可选中复制），选择类控件禁用；`disabled` prop 禁用全部。
-- **宿主 widget**：`ui:widget` 命中 widgets（`SCHEMA_WIDGETS_KEY` 注入的 + `widgets` prop）时渲染该组件（包在 `SField`/`SSettingRow` 里，传 `modelValue`、`schema`、`ui`、`multiple`（schema 为 array）、`disabled`，组件要 emit `update:modelValue`）。控制台在启动时 `app.provide(SCHEMA_WIDGETS_KEY, schemaWidgets)` 注入 `proxy-select` / `group-select` / `entity-select`（后者 UI 3.12，§96.7），原生插件里的 `SchemaForm` 因此也能用；插件可再用 `widgets` prop 加自己的控件。**不认识的 widget 名**按 schema 类型推断（开发模式下控制台警告一次），不再一律退回文本框。
-
-`schema.ts` 的辅助导出：`type JSONSchema` / `UISchema`（都是 `Record<string, any>`）、`EnumOption {value, label}`、`ValidateMessages`（`required` `minLength(n)` `maxLength(n)` `pattern` `minimum(n)` `maximum(n)` `integer` `url`，可选 `email` `minItems(n)` `maxItems(n)` `text(v)`（解析 `ui:errorMessages`））、`SECRET_MASK`（`'******'`）、`BUILTIN_WIDGETS`、`SCHEMA_WIDGETS_KEY`、`localizedText(v, locale = 'en')`（`{en, zh}` 或字符串取 `locale`，回退 en；和 `host.i18n.text` 同义但显式传 locale）、`uiGet(ui, key)`（`ui:key` 或 `key`）、`childUI(ui, key)`、`schemaType(s)`、`isSecret(s, ui?)`、`enumOptions(s, ui?, locale?)`、`resolveWidget(s, ui?, known?)`（给了 `known` 时 `ui:widget` 不在其中就按类型推断）、`fieldLabel(key, s, ui?, locale?)`、`fieldHelp(s, ui?, locale?)`、`orderedKeys(s, ui?)`、`getPath(obj, 'a.b')`、`isVisible(ui, root)`、`schemaWithDefaults(s, value)`（递归补 `default`）、`validateSchema(s, ui, value, msgs) → {path: message}`。文案键 `ui.schema.secretKeep` `ui.schema.presets` `ui.schema.setByAdmin` `ui.schema.mappingFrom` `ui.schema.mappingTo` `ui.schema.invalidJSON` 及 `ui.schema.v.{required,minLength,maxLength,pattern,minimum,maximum,integer,url,email,minItems,maxItems}` 在 `uiMessages` 里。
+`@sub2api/host` 配套导出 `useGuardedSettings(accountType)`、`toFieldPath`、`settingsFieldErrors`、`errorMessage`、`isSilentError`。宿主控件改用 `host.components` 的 `ProxyPicker`、`EntityPicker`、`EntityMultiPicker`、`HeaderOverrideEditor`（原来的 schema 部件 `proxy-select`、`group-select`、`entity-select`、`header-override` 随 `SchemaForm` 删除）。表单校验只为即时提示，保存时的最终校验在插件后端（账号凭证 `ValidateCredentials`，插件设置 `ValidateSettings`，§75.1）。
 
 反馈与文案：
 
@@ -1489,7 +1506,7 @@ JSON Schema 表单（`schema/`；账号凭据、插件设置、声明式表单�
 
 账号页的扩展点（含今后再开的）按三条判据验收（2026-11-08 决定）：① **核心不被插件阻断**——核心的保存、删除、测试、列表加载等流程里没有同步等待插件返回值的点，插件请求失败只影响插件自己那块界面；② **插件不写核心数据**——插件只读写自己的接口，需要核心数据时由核心以 props 传入，或按公开接口只读；③ **插件输入进核心必有上限与钳制**——插件交给核心的数据（`setIds` 的 id 列表、声明里的文案与路由）由核心校验、截断或拒绝。
 
-控制台账号列表用它做批量操作：勾选在翻页后保留，改筛选条件清空；「选择全部 N 项」按当前筛选以每页 200 条拉取全部账号。批量编辑（优先级、权重、并发、TPM、RPM、分组〔替换／追加／移除〕、代理、允许自动禁用，只改勾选的字段）、启用／停用、重置状态、删除、测试都对每个账号调用现有单条接口（`PATCH /accounts/:id`、`POST /accounts/:id/reset-status`、`DELETE /accounts/:id`、`POST /accounts/:id/test`），最多 4 个（测试 3 个）同时进行，可中途停止；权限、插件生命周期钩子、审计与单条操作完全相同，没有新增服务端接口。每项操作只作用于所选账号中适用的那部分（按钮显示数量）；与账号现值相同的字段不发送，没有变化的账号不发请求；类型固定了「自动禁用」的账号跳过该项；删除时「保留资源」只对声明了保留天数的类型生效。
+控制台账号列表用它做批量操作：勾选在翻页后保留，改筛选条件清空；「选择全部 N 项」按当前筛选以每页 200 条拉取全部账号。批量编辑（优先级、权重、并发、TPM、RPM、分组〔替换／追加／移除〕、代理、允许自动禁用，只改勾选的字段；§110 起加“本平台协议”“模型的协议限定”两项，都是替换，只在所选账号属于同一账号类型时可用）、启用／停用、重置状态、删除、测试都对每个账号调用现有单条接口（`PATCH /accounts/:id`、`POST /accounts/:id/reset-status`、`DELETE /accounts/:id`、`POST /accounts/:id/test`），最多 4 个（测试 3 个）同时进行，可中途停止；权限、插件生命周期钩子、审计与单条操作完全相同，没有新增服务端接口。每项操作只作用于所选账号中适用的那部分（按钮显示数量）；与账号现值相同的字段不发送，没有变化的账号不发请求；类型固定了「自动禁用」的账号跳过该项；删除时「保留资源」只对声明了保留天数的类型生效。
 
 **UI 3.16 插件权限范围（0.1.290）。** 新导出 `useScrollClip(scroller, content): Ref<boolean>`：`scroller` 是 `overflow-x: auto` 的容器、`content` 是其中的表格（都是 `Ref<HTMLElement | undefined>`），内容被裁到右侧之外时为 `true`（随尺寸变化与滚动更新，挂载前为 `false`），用来在可横向滚动的表格右缘画渐隐或“还有列”的提示；核心的 `STable` 与权限矩阵用的就是它（`web/packages/ui/README.md`“插件权限的范围（UI SDK 3.16）”，`ui-contract.spec.ts` 锁定导出）。用到它的插件声明 `hostUICompat: "^3.16"`。
 
@@ -1513,15 +1530,17 @@ JSON Schema 表单（`schema/`；账号凭据、插件设置、声明式表单�
 
 | prop / 事件 | 类型 / 说明 |
 |---|---|
-| `v-model`（`modelValue` + `update:modelValue`） | 凭证对象 `Record<string, any>`（`credentials`）。新建时为空对象，编辑时为 `account.credentials` 的浅拷贝（与 schema 表单拿到的相同）。组件通过 `update:modelValue` 交回要保存的完整凭证对象 |
+| `v-model`（`modelValue` + `update:modelValue`） | 凭证对象 `Record<string, any>`（`credentials`）。新建时为空对象，编辑时为 `account.credentials` 的浅拷贝（敏感字段为 `"******"`，原样交回表示不修改）。组件通过 `update:modelValue` 交回要保存的完整凭证对象 |
 | `mode` | `'create'` \| `'edit'` |
 | `account` | 编辑时为账号对象（含 `id`、`type`、`credentials` 等）；新建时为 `null` / 未传 |
 | `accountType` | 正在录入或编辑的账号类型（`GET /account-types` 的一项，含 `plugin_key`、`type`、`label`、`form` 等）。同一插件把多个账号类型指向同一个组件时（如 codex 的 `codex_device` 与 `codex_oauth`），靠 `accountType.type` 区分 |
+| `proxyTicket` | `ProxyTicketSource`（`() => Promise<string>`，UI 3.20，§117）：按表单**当前**的代理选择（已有代理、粘贴的代理串、不用代理）向核心要一张代理票据。在账号建好之前要访问外部服务的授权流程，**每次**调用自己插件的路由（开始、每次轮询、换令牌）之前都调用它，把这次的票据交给路由；插件这次调用的取回带上它，核心从这个代理发出，所以授权开始后改了代理，下一次调用就走新代理（§117.2）。要不到时以核心的 `ApiError` 拒绝，编辑器同时把字段错误显示在代理输入下。对所有原生表单都传 |
 | `errors` | `Record<string, string>`：保存或拉取模型被服务端拒绝时，`invalid_argument` 的 `details.fields[]`（§3.1）中 `credentials.<字段>` 的那些，键去掉 `credentials.` 前缀（`web/src/views/accounts/editorErrors.ts` `splitFieldErrors`）；用户再改凭证即清空。组件应显示在对应输入旁 |
 
 - **expose**（可选）：组件可以 `defineExpose({ validate })`，`validate(): boolean | Promise<boolean>`。保存时编辑器先调用它，返回 `false` 则不保存（组件自己显示原因）；没有暴露 `validate` 时直接取 `v-model` 的值保存。
 - **兼容**：`accountType` 是后加的 prop（与 codex 内置插件同批加入，未提升 `HOST_UI_VERSION`），旧控制台不传。插件读账号类型时应写成 `accountType?.type || account?.type`：编辑时旧控制台下退回 `account.type`；新建时旧控制台两者都没有，插件需要有不依赖类型的默认行为（或只把该组件用于一个账号类型）。codex 的 `ui/native/src/flow.ts` `typeOf` 即按此实现。
 - 组件同样遵守 §23.4 的约定（用 `@sub2api/ui` 组件、`SField` 显示 `errors` 等）。
+- 这些 props 由 `@sub2api/ui` 的运行时对象 `nativeAccountFormProps` 声明（`defineProps(nativeAccountFormProps)`；默认值：`modelValue` `{}`、`mode` `'create'`、`account` / `accountType` `null`），类型是 `NativeAccountFormProps`。插件工程里写 `defineProps<NativeAccountFormProps>()` 编译不了（SFC 编译器解析不了别的包导出的类型）（2026-11-19 U3a）。
 
 ## 24. 插件改写候选账号的调度参数（priority / weight）（2026-09-29，用户要求）
 
@@ -1633,7 +1652,7 @@ message RankedAccount {
 ```
 
 - **何时写**：① 请求最终以 `error_type = no_account` 结束（`outcome` 为 `none`，429 时为 `busy`）——必写；② 请求选到了账号，但途中有账号因**当时的状态**被跳过（限流、并发满、排队、尝试失败后切换、失败策略收窄重试范围），`outcome = picked`。只因配置或请求形态不合格（模型列表不含该模型等）而选到了别的账号的请求**不写**：那是每个请求都一样的事实，写了只是噪声。
-- `candidates`：分组内可调度、且账号类型能服务该端点的账号数（`AccountDirectory.Candidates` 的结果）；`eligible`：其中能服务**本请求**的账号数（过了模型列表、引用模型、用量计量、资源绑定和模型可用性预检）。
+- `candidates`：分组内可调度、且账号类型能服务该端点的账号数（`AccountDirectory.Candidates` 的结果）；`eligible`：其中能服务**本请求**的账号数（过了协议绑定〔§110 起〕、模型列表、引用模型、用量计量、资源绑定和模型可用性预检）。
 - `skipped`：每个账号每种原因一条，最多 40 条，超出的计入 `omitted`；`counts` 按原因计数，最多 16 个键。`detail` 是原因的对象（模型名、用量种类、账号状态），最长 100 字节；`until` 是定时停用或冷却的结束时间（unix 秒）。
 - **原因码**：
 
@@ -1641,6 +1660,9 @@ message RankedAccount {
 |---|---|---|
 | `not_schedulable` | 账号在分组里，但当前不参与调度。只在 `no_account` 时读取（`AccountDirectory.Unschedulable`，失败路径上的一次查库） | `disabled` / `unschedulable` / `auto_disabled` / `cooldown`；请求期间退出调度而尚未读到状态时为 `left` |
 | `no_route` | 账号类型没有该端点的路由 | `插件/类型` |
+| `protocol_closed` | §110 起：入站协议是账号的本平台协议，但账号的 `protocols` 没有开放它 | 入站协议 |
+| `conversion_not_enabled` | §110 起：请求要经跨平台转换才能到这个账号，账号没有为该模型开启 | 模型名 |
+| `model_protocol_closed` | §110 起：模型在账号的 `model_protocols` 里有条目，条目不含入站协议 | 模型名 |
 | `model_not_served` | 账号模型列表不含请求的模型 | 模型名 |
 | `referenced_model_not_served` | 请求引用了第二个模型（`fallbacks`、advisor 工具，§13 `modelReferences`），账号模型列表不含它 | 模型名 |
 | `usage_unsupported` | 账号类型无法计量请求要求的用量 | `additional` / `attempts` / 引用的用量种类 |
@@ -1655,8 +1677,9 @@ message RankedAccount {
 | `attempt_failed` | 在该账号上的一次尝试失败，请求切到下一个账号 | `状态码 error_type` |
 
 - **节点日志**：`no_account` 的请求另打一行 WARN `gateway: no account for the request`，带 `request_id`、`group`、`model`、`protocol`、`outcome`、`candidates`、`eligible` 和 `skipped`（`账号:原因[:对象]`，空格分隔）。
+- **§110 起**：候选账号全部因 `protocol_closed`、`conversion_not_enabled`、`model_protocol_closed` 被过滤、且组内冷却中或限时停用的账号也都是因这三个原因不能服务时，请求以 404 结束（§110.5），调度记录照常写（`error_type = no_account`，`outcome = none`）。这三个原因的判断排在 `model_not_served` 之前。
 - **接口**：随 `anomalies` 在管理端 `GET /usage/:id` 返回（§15.2；`/me/usage` 不返回 `anomalies`，用户看不到这条）。有 `account:read` 时每条 `skipped` 补上 `account_name`；没有时去掉 `account_id`，原因保留；解析不了的记录对无权限者整个丢弃。它是调度轨迹，不是记录的异常：统计里的"异常行"不计它。
-- **不记的**：请求体不落库，所以 `detail` 只有模型名这类已经过校验的字段；HTTP 与 WebSocket 首轮（`connect`）走同一套记录。由插件执行并在尝试内提交用量的请求不带这条。
+- **不记的**：请求体不落库，所以 `detail` 只有模型名这类已经过校验的字段；HTTP 与 WebSocket 首轮（`connect`）走同一套记录。以等待形式在尝试内提交用量的请求（§112.7）不带这条。
 
 
 
@@ -1668,6 +1691,8 @@ message RankedAccount {
 
 分 A / B / C / D 四期落地，本节按期补写。
 
+声明式用量规则里的**附加用量**（`usage.additional`：按请求里声明、调度前准入的引用模型计价的用量）见 §120。
+
 ### 25.1 A 期：请求上下文与平台插件句柄（已实现）
 
 **`RequestMeta` 新增两个字段**（`sdk/proto/sub2api/plugin/v1/common.proto`）：
@@ -1675,16 +1700,16 @@ message RankedAccount {
 | 字段 | 说明 |
 |---|---|
 | `path_params` (10) | 匹配到的端点路径参数，如 `/v1beta/models/:model:generateContent` 的 `model` |
-| `query` (11) | **占位，核心恒不填**。将来只填端点在 `request.queryParams` 里显式声明过的参数（B 期），语义与 `requestFields` 同构，`auth.query` 自动排除 |
+| `query` (11) | **占位，核心恒不填**。将来只填端点在 `request.queryParams` 里显式声明过的参数（B 期），只给声明过的，`auth.query` 自动排除 |
 
 `query` 一开始的设计是「整个 query 兜给插件 + 黑名单挡凭证」，实现时否掉了：黑名单永远在错的一侧（既误杀 `key_field` 这类无辜参数，又漏掉将来某厂商新发明的凭证参数名），且与本文件开头「插件声明它需要哪些字段，主机只给这些」的契约不一致。**趁零消费者时改成声明式**，避免以后收紧成破坏性变更。
 
-**上限与净化**（核心保证，插件可依赖）：
+**净化**（核心保证，插件可依赖）：
 
-- 路径参数最多 32 个键；超出时按键名排序取前 32，保证稳定
-- 键最长 64 字节、值最长 512 字节，按 UTF-8 边界截断
+- 客户端发了什么就给什么，不限个数和长度（转发 V2 收尾起；此前最多 32 个键、键 64 字节、值 512 字节，超出截断，§112.16）
+- 键和值里不合法的 UTF-8 字节被去掉（`strings.ToValidUTF8`；proto3 的字符串必须是合法 UTF-8）
 - 为空时字段是 nil，不是空 map
-- **非法 UTF-8 一律剔除**（`strings.ToValidUTF8`）：这两个 map 的内容直接来自 URL，客户端可以塞 `%FF`；proto3 的 string 字段强制 UTF-8，不净化的话 `proto.Marshal` 会失败，该请求的每一次插件调用都挂，`BuildUpstreamRequest` 挂了就是 5xx——**一个 curl 就能稳定打出 500**。
+- **非法 UTF-8 一律剔除**（`strings.ToValidUTF8`）：这两个 map 的内容直接来自 URL，客户端可以塞 `%FF`；proto3 的 string 字段强制 UTF-8，不净化的话 `proto.Marshal` 会失败，该请求的每一次插件调用都挂，`Execute` 挂了就是 5xx——**一个 curl 就能稳定打出 500**。
   > **通用规则**：今后任何把客户端原始字节放进 proto `string` 字段的地方，都必须过同一道净化。
 
 **2026-10-31 再新增两个字段**（钩子和插件可以按端点、按会话区分请求，§72.14）：
@@ -1694,7 +1719,7 @@ message RankedAccount {
 | `endpoint` (13) | 匹配到的客户端端点的路径模式，如 `/v1/messages`、`/v1beta/models/:model:generateContent`，与使用记录的 `endpoint` 相同。每次调用都带 |
 | `session_fingerprint` (14) | 请求所属粘性会话的不透明标识：第一条命中且取到会话值的粘性规则算出的粘性键（`sticky:{rule}:{group}:{model}:{sha256(value)}`）再做 HMAC-SHA-256，小写 hex。HMAC 的密钥由主密钥（`SUB2API_MASTER_KEY`）派生（`HMAC-SHA-256(master_key, "session-fingerprint")`），所以不同安装的指纹不同，拿到指纹的插件也无法用猜测的会话值验证；更换主密钥后指纹随之改变。同一会话的请求相同，原始会话值不出核心。在钩子之前算一次（钩子改写请求体不影响它），与粘性路由是否开启无关；没有规则取到会话值时为空 |
 
-受益的是**五个已有调用点**，它们本来就带 `RequestMeta`，无需各自改动：`BuildUpstreamRequest`、`ClassifyError`、`OnGatewayRequest`、`RankAccounts`（当时还有 `ResolveAffinityKey`，2026-10-10 已删除）。
+受益的是带 `RequestMeta` 的调用点，无需各自改动：`Execute`（§112）、`ClassifyError`、`OnGatewayRequest`、`RankAccounts`。
 
 **`core.PlatformBinding` 增加 `Client PlatformPlugin`**，覆盖 §13 中「`PlatformBinding{Plugin, Builtin, Platform}`（去掉 `Client`）」的表述。
 
@@ -1751,7 +1776,7 @@ message RankedAccount {
 | HTTP method 大小写 | `ToUpper` 后比较 | 精确比较 → `"post"` 被 CLI 拒、核心接受 |
 | catch-all `*rest` | 支持尾段 | 见 `*` 一律拒 |
 | 路径重叠算法 | 支持 catch-all、TrimSuffix `/` | 要求段数相同、不 trim → `/v1/a` vs `/v1/a/` 结论相反 |
-| `accounts.credentials` scope | 深度等于 `{"types":"own"}` | 只看 `["types"]=="own"`，允许多余 key |
+| `accounts.credentials` scope（§124 起该授权已删除） | 深度等于 `{"types":"own"}` | 只看 `["types"]=="own"`，允许多余 key |
 | `billing` 空串 | 放行 | 报错（方向相反） |
 | `/healthz` | 拒绝 | **放行**（CLI 拦的是 `/health` 前缀，而 `/healthz` 既不等于也不以 `/health/` 开头） |
 | 账号类型 id / 端点 id / protocol 字符集 | 有正则 | 只查空与重复 |
@@ -1760,7 +1785,7 @@ message RankedAccount {
 
 最后两行是要点：**CLI 打包绿灯 ≠ 能装进核心**，反过来也有漏。最讽刺的是「CLI 比核心严」这个印象在唯一真实存在的那条核心路由（`/healthz`）上恰好是反的。
 
-实证：切到共享实现后，CLI 自己的三个测试 fixture 立刻被判非法（声明 `ui.native` 却没有对应权限和 `hostUICompat`、`database` 没有 `db.schema` 权限、`form.mode:"schema"` 没有 `schema` 字段）——这些 manifest 打包一直是绿的，装进核心必然失败。
+实证：切到共享实现后，CLI 自己的三个测试 fixture 立刻被判非法（声明 `ui.native` 却没有对应权限和 `hostUICompat`、`database` 没有 `db.schema` 权限、`form.mode:"schema"` 没有 `schema` 字段；schema 模式已在 2026-11-19 删除，现在上传即报 `unsupported`）——这些 manifest 打包一直是绿的，装进核心必然失败。
 
 ### 26.4 顺带修掉的静默跳过
 
@@ -1776,7 +1801,7 @@ message RankedAccount {
 |---|---|
 | 调用者 | 声明该平台的插件（`PlatformBinding.Client`），不是账号类型所属插件 |
 | 时机 | 钩子匹配 / 分组白名单 / 定价 / 候选账号 `models` 过滤**之前**。未声明 `modelSource` 的端点一次都不调 |
-| `fields` | **平台级 `requestFields` + `passHeaders`**。`Endpoint` 上没有 `requestFields`，且此时还没选账号，账号类型那层的覆盖不可用 |
+| 入参 | `meta`（路径参数与声明的查询参数）和平台 `passHeaders` 里的客户端请求头（`inbound_headers`）。此时还没选账号，账号类型那层的覆盖不可用。不给请求体字段（字段 2 已删除，§112.1） |
 | 每请求次数 | 1 次。`checkModel()` 一次请求跑两次，结果缓存在 `call.modelResolved`；唯一失效点是钩子的 `setBody()`——钩子改了 body 才重问 |
 | 失败 | 超时 / 出错 / `Unimplemented` / nil / 空 model 一律 **400**。模型取不到就没法定价和限额，放行等于免费 |
 | `Client == nil` | **500** + `slog.Error`（带 platform/plugin/endpoint/protocol/builtin）。校验层已要求声明 `platform.adapter.v1`，运行时仍做 nil 检查 |
@@ -1794,15 +1819,15 @@ message RankedAccount {
 - 白名单匹配也 `EqualFold`（否则 `?Alt=sse` 取不到）
 - 校验层保证：名字格式 `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`；**忽略大小写不得自我重复**（`["alt","ALT"]` 会抢同一个参数）；**不得与 `auth.query` 忽略大小写相等**
 - **客户端同时发 `?Alt=1&alt=2` 时按 key 排序取最小的**。不定这条的话结果取决于 map 迭代顺序，同一次请求在不同节点可能不同，插件行为不可复现
-- 上限、截断、`ToValidUTF8` 净化与 `path_params` 同
+- 净化与 `path_params` 同（不限个数和长度，只去掉不合法的 UTF-8）
 
-**`usage.facts` 的键**：`^[a-z][a-z0-9_]{0,63}$`，且不得与 6 个标准 usage 字段同名。这个键同时是价格表达式里 `u("…")` 的字面量和 `usage_logs.metrics` 的 JSON 键，撞名会制造混淆。全仓只有 `gemini.json` 的 `thoughts_tokens` 和 volcengine 的 `images` 两处 facts，零误伤。
+**`usage.facts` 的键**：`^[a-z][a-z0-9_]{0,63}$`，且不得与标准 usage 字段（`check.UsageFields`；写这段时 6 个，§118 起 8 个）同名。这个键同时是价格表达式里 `u("…")` 的字面量和 `usage_logs.metrics` 的 JSON 键，撞名会制造混淆。全仓只有 `gemini.json` 的 `thoughts_tokens` 和 volcengine 的 `images` 两处 facts，零误伤。
 
 **`CheckPlatform` 的陷阱（新出现，已局部处理）**：`CheckPlatform(p)` 用的是空 `manifest.Manifest{}`，没有 capabilities。把 `needCap(platform.adapter.v1)` 无条件放进 `endpoint()`，会让一个**确实声明了该能力**的插件调 SDK 的 `CheckPlatform` 自检时被误报。现用 `validator.standalone` 只在该调用点关掉这条。
 
 > 这正是 §26 校验收敛之后新出现的一类坑，而且在收敛后的**第一个**新规则上就撞到了：`endpoint()` 里任何依赖 `v.m` 的检查，在内置平台和 `CheckPlatform` 路径上都没有 manifest 可读。今后往 `endpoint()` 加规则必须先问一句「它读 `v.m` 吗」。
 
-**待办**：`default_hook_timeout_ms` 现在同时控制一个不是钩子的热路径 RPC。管理员为某个慢钩子放宽到 2000ms 会连带放宽 `ResolveModel`，反之亦然，两者没有理由同步。C 期的 `ExtractUsage` 也会要超时——**建议 C 期之前加独立设置**（`resolve_model_timeout_ms`，或更通用的 `platform_hotpath_timeout_ms`）。
+**超时**：后来拆出独立设置 `platform_hotpath_timeout_ms`（§25.3），`ResolveModel` 与 `EstimateUsage` 用它，不再挪用 `default_hook_timeout_ms`。
 
 ### 26.5 `endpoint.response` 生效与用量运行时修补（2026-09-29）
 
@@ -1844,9 +1869,11 @@ message RankedAccount {
 
 #### 2. `HostService.ListAccounts` / `GetAccountCredentials`
 
+> §124 起：`GetAccountCredentials` 换成 `GetAccount`（返回与平台调用相同的完整 `Account`，含代理），审计 action 改为 `plugin.account.read`；`accounts.read`、`accounts.credentials` 两个授权删除，三个账号接口都不检查授权。下文是当时的记录。
+
 插件的 HTTP 路由只拿到 `Caller`，`HostService` 里没有任何账号接口，所以插件做不了「账号相关的管理界面」（第一个真实需求是火山方舟素材库要用账号上的 AK/SK 做 V4 签名）。
 
-**为什么可以开**：插件在每一次 `BuildUpstreamRequest` 里本来就收到解密后的凭证。拉取式不增加信息暴露面，只改变访问时机。新增的面是「可以在没有流量时批量读」，由下面四条收住：
+**为什么可以开**：插件在每一次 `Execute` 里本来就收到解密后的凭证。拉取式不增加信息暴露面，只改变访问时机。新增的面是「可以在没有流量时批量读」，由下面四条收住：
 
 | 约束 | 落法 |
 |---|---|
@@ -1873,65 +1900,47 @@ message RankedAccount {
 
 前置检查结果：三个内置平台 + 七个插件全部原样通过，零误伤。
 
-### 25.3 C 期：插件返回用量、核心记录（已实现）
+### 25.3 C 期：插件返回用量、核心记录（已实现；转发 V2 起用量只在 `Execute` 的返回值里，§112）
 
-端点声明 `usage.source: "plugin"` 时，核心在响应结束后调 `PlatformService.ExtractUsage`，拿 `UsageReport` 里的 token 与 facts 跑**管理员配置的价格表**。**声明式规则（`source: "rules"`）仍是默认，不是被取代。**
+端点声明 `usageSource: "plugin"` 时，用量由声明该平台的插件读：核心在 `ExecuteRequest` 上置 `extract_usage`，插件用等待形式中继（`RelayAndWait`），从核心交还的观察里读出用量，在 `Execute` 的返回值里给 `usage`；核心拿 `UsageReport` 里的 token 与 facts 跑**管理员配置的价格表**。**声明式规则（`usageSource` 缺省，即 `rules`）仍是默认。** 只有声明平台的插件自己的账号类型能服务这类端点（§112.8）；WebSocket 端点不能声明它。
 
-#### 「转发完之后调用」是不够的——这是设计稿写错的一条
+#### 观察：核心缓冲了什么
 
-响应没有 `Content-Length`（chunked / SSE），**终止分块要等 gin handler 返回**。所以「字节发完」≠「客户端看到响应结束」：把 `ExtractUsage` 留在 handler 里调，客户端会实打实多等一个插件往返（实测插件 sleep 150ms → 客户端 151.6ms）。
+热路径不搬运整个响应体。流式回答每个事件转发完就丢，只对端点声明过的名字（`usageStreamEvents`）留一份拷贝。
 
-落法：`forward()` 末尾只**装配**（把需要的东西从池化的 gin context 里拷出来），真正的调用在结算提交阶段 `go` 出去，handler 立刻返回。测试用「客户端耗时 < 插件 sleep」钉住。
-
-连带：TPM/TPD 的 token 计数原本紧跟 `forward()`，会用插件还没上报的（往往是 0 的）数字记限流，已抽成 `countTokens()`，plugin-usage 端点等异步完成后才计。粘性绑定与 `TouchLastUsed` 仍用插件之前的成功状态——那是调度关注点，一个已交付的 200 在那里算成功更合理。
-
-#### 流式：核心到底缓冲了什么
-
-热路径不搬运整个响应体这条契约没有破。`forwardSSE` 里**每个事件转发完就丢**，只对端点声明过的名字留一份拷贝（转发缓冲会复用，必须 copy，有测试钉住）。三重上限：
-
-| 上限 | 值 |
+| 界限 | 值 |
 |---|---|
-| `usage.streamEvents` 白名单 | 校验层最多 8 个事件名 |
-| `usage.maxBytes` 字节预算 | 默认 256 KiB，可声明 1 KiB–1 MiB |
-| 核心常量 `maxUsageStreamEvents` | 64 条 |
+| `usageStreamEvents` 白名单 | 清单检查最多 8 个事件名（`check.MaxUsageStreamEvents`） |
+| 字节预算 | 没有：列出的事件一条不漏、非流式的整个回答体都交给插件 |
 
-任一触顶 → 此后一个事件都不再看，`UsageReport` 请求里的 **`truncated`** 告诉插件（设计稿漏了这个字段：没有它，插件无法区分「事件就这么多」和「核心到上限停了」，会把前缀算出的数当总量上报）。事件名的解析用 `usagerules.EventName`，与声明式 sse 规则**同一套**，插件和规则看到同一批事件同一个名字。
+（转发 V2 收尾起，§112.16。此前默认预算 256 KiB、可声明 1 KiB–1 MiB，另有 64 条事件的核心常量；之后端点还可以自己声明 `usageMaxBytes`，超出时流式停止收集并置 `ExtractUsageRequest.truncated`、非流式不给 body。没有插件声明过它，清单字段 `usageMaxBytes` 与观察的 `truncated`（字段 7，`reserved`）随之删除，见 §112.12。）事件名的解析用 `usagerules.EventName`，与声明式 sse 规则同一套。
 
-非流式给整个 body，**超过 `maxBytes` 直接不调**而不是截断——半个 JSON 文档解出来的是错数字，比没有更糟。这条不对称是刻意的：事件是列表，前缀有意义；body 是一个文档。
+非流式给整个 body。观察里还有端点 `usageRequestFields` 声明的请求字段（§25.6）和不带凭证的账号。
 
-未声明 `usage.source` 的端点：热路径上一次比较、一次分配都没有。
+#### 读不出用量 = 采用核心的读数，并且标出来
 
-#### 插件失败 = 退回声明式规则
-
-出错 / 超时 / `Unimplemented` / nil / `Client` 为 nil / body 超限 → 保留转发时声明式规则算出的用量，请求仍是 200。字节已发完、上游成本已产生，事后把成功的请求改成错误谁也不受益。
-
-**代价**：选了 `source: "plugin"` 的端点通常**没有**可用的 gjson 规则（那正是它选这个源的原因），所以 fallback 往往计 0，即静默少计费。用两件事去掉「静默」：每次 warn 指名插件与原因；`billing_detail.usage_extract = "fallback"` 落库，可以据此告警或在控制台标出「按声明式规则计费，插件未应答」。
+插件读不出用量时返回 `host_usage`（SDK 的 `ExecuteDefault` 在插件没有 `UsageExtractor`、它出错或返回空时这样做），核心按声明式规则的读数计费并记 `anomalies.usage_extract = "fallback"`。核心的读数完全为空（没有 token、计量、附加项或替换项）时不按 0 计费，按“未上报”处理（§112.7、§112.16）。**代价**：选了 `plugin` 的端点通常**没有**可用的 gjson 规则，fallback 往往计 0；`usage_extract` 标记让它不静默。插件什么都不返回（或报错、崩溃）是“未上报”：零费用记录，核心不补记（§112.7）。
 
 #### 边界：插件填事实，核心补齐并覆盖
 
 `UsageReport` 里**根本没有**归属与费用字段，所以这条边界是结构性的而非代码检查。插件唯一的旁门是 `facts`（塞一个 `total_cost` 键）和 `detail_json`：未声明的 fact 一律丢弃 + warn，类型/enum 不符也丢弃；`detail_json` 原样存但没有任何东西读它。
 
-`detail_json` **超限不能截断**——`plugin_detail` 是 jsonb，截断出来不是 JSON，insert 失败会拖垮整批。超 4 KiB → 存 `{"_truncated":true,"_bytes":N}` + warn；非 object / 非法 JSON → `{}` + warn。
+`detail_json` 不截断——`plugin_detail` 是 jsonb，截断出来不是 JSON，insert 失败会拖垮整批。整份原样存，不限大小（转发 V2 收尾起；此前超 4 KiB 存 `{"_truncated":true,"_bytes":N}`）；非 object / 非法 JSON → `{}` + warn。
 
 #### 其他
 
 - 迁移 `0012`：`usage_logs.plugin_detail jsonb NOT NULL DEFAULT '{}'`。self 视图隐藏它（插件往里写什么核心不知道，可能带上游账号线索）
-- `ExtractUsage` 的 `Account` **永不带凭证**；要凭证走 §26.6 的 `GetAccountCredentials`（有审计）
-- 热路径超时拆出独立设置 **`platform_hotpath_timeout_ms`**（默认 300，50–2000），`ResolveModel` 与 `ExtractUsage` 共用，不再挪用 `default_hook_timeout_ms`
-- §26.6 第 3 条（流式 + 计费 ⇒ 必须有非空 sse 规则）对 `source: "plugin"` 豁免——不豁免等于禁用这个特性。这重新打开「流式计 0」的洞，但只在 fallback 路径上，由 `usage_extract` 标记兜住
-- `usage.facts` 在 `source == "plugin"` 时允许空 `path`（path 对插件上报毫无意义），但 `type` 仍必填——它是 `u()` 键存在的依据，也是核心对插件上报值做类型校验的依据
-
-#### 两个待办
-
-1. **`usage.source` 放错了层。** 它现在在 `UsageRules` 上，于是跟着 §13 的覆盖链走，而 `AccountPlatform.usage[protocol]` 属于**第三个插件**。现在靠「禁止账号类型覆盖里出现 `usage.source`」这条禁令 + 注释堵住，但**遗留一个洞**：账号类型的覆盖是整块替换 `UsageRules` 的，所以一个不写 source 的覆盖会**静默把端点切回声明式规则**。正确的位置是 `Endpoint` 上（与 B 期的 `request.modelSource` 对称），那样「谁来答」没有第二种读法。零消费者，现在改代价最小。
-2. **`billing_detail` 到期了。** §26.5 自己写的「再有第二条纯可观测标记时，正确的形状是 `usage_logs` 加 `anomalies jsonb`」——`usage_extract` 就是第二条（第一条是 `response_mismatch`）。
+- 观察里的 `Account` **不带凭证**；插件在 `Execute` 的入参里已经有本次账号的凭证
+- 热路径超时是独立设置 **`platform_hotpath_timeout_ms`**（默认 300，50–2000），`ResolveModel`、`EstimateUsage` 用它，不挪用 `default_hook_timeout_ms`
+- §26.6 第 3 条（流式 + 计费 ⇒ 必须有非空 sse 规则）对 `usageSource: "plugin"` 豁免——不豁免等于禁用这个特性。这重新打开「流式计 0」的洞，但只在 fallback 路径上，由 `usage_extract` 标记兜住
+- `usage.facts` 在用量由插件读时允许空 `path`（path 对插件上报毫无意义），但 `type` 仍必填——它是 `u()` 键存在的依据，也是核心对插件上报值做类型校验的依据
 
 ### 25.4 D 期：预扣费 + 核心驱动的核对循环（已实现）
 
 声明了 `Reservation` 的插件（视频等异步任务的第一个用户是火山方舟五期）：提交请求时核心按预估用量**预扣**，之后由核心驱动的核对循环拿真实用量补扣或退回。全部复用已有机制（价格表、`balance_ledger` 的 `usage`/`refund` kind、幂等键）。
 
 **先还的两笔 C 期债**：
-- `usage.source` 从 `UsageRules` 挪到 `Endpoint`（`usageSource` / `usageStreamEvents` / `usageMaxBytes`），与 B 期的 `request.modelSource` 对称，不再跟着 §13 覆盖链走。那条「禁止账号类型覆盖里写 source」的禁令**变成不可表达的问题**（`UsageRules` 里根本没这个字段了），删除。
+- `usage.source` 从 `UsageRules` 挪到 `Endpoint`（`usageSource` / `usageStreamEvents` / `usageMaxBytes`，最后一个已在转发 V2 收尾删除），与 B 期的 `request.modelSource` 对称，不再跟着 §13 覆盖链走。那条「禁止账号类型覆盖里写 source」的禁令**变成不可表达的问题**（`UsageRules` 里根本没这个字段了），删除。
 - `usage_logs` 新增 `anomalies jsonb`（迁移 0013），`response_mismatch`（§26.5）与 `usage_extract`（§25.3）两个纯可观测标记从 `billing_detail` 搬过来。搬完更干净：新列**只在 insert 写一次**，settle / retry / markFailed 三段自动全通，不再需要在各处搬运。
 
 **旧结算队列核对超时保留预扣，且绝不写 `failed`**（托管任务的当前超时退款策略见 §32）（§3.4 定的陷阱，已钉死）：放弃时 `billing_status='billed'`、钱不动、`anomalies` 记 `reconcile=abandoned`，`pending_settlements.state='abandoned'`。测试 `TestAbandonKeepsTheChargeAndStaysOutOfTheRetryLoop` **真的跑一遍 `RetryPending`** 断言这一行不会被结算重试循环再捞到（返回 0 行、余额不变、`usage_logs WHERE billing_status IN ('pending','failed')` 计数为 0——直接断言那条部分索引的谓词）。
@@ -1945,7 +1954,7 @@ message RankedAccount {
 #### D 期实现里推翻/修正的指令
 
 1. **重复 `ref_id` 的 `ON CONFLICT DO NOTHING` 是和 `failed` 同类的洞。** 我给的 DDL 让插件复用 ref_id 时第二条静默丢弃，于是那一行 `reserved`、钱已扣、**两个循环都看不见它**。改成 `RETURNING id`，`IsNoRows` 时当场按放弃路径收尾（`closeUnreconcilable()`）。
-2. **凭证只在平台插件 == 账号类型所属插件时下发。** 设计稿说「核对时把 Account 含凭证传给插件，授权模型不变」——这只在两者同一个插件时成立。§13 允许「平台由 X 声明、账号类型由 Y 声明」，那种情况给 X 凭证是**全新暴露面**。已限制为 `acc.PluginKey == e.pluginKey` 才下发（与 C 期 `ExtractUsage` 同规则）。代价：只声明平台、靠别人账号类型的插件无法核对——安全的默认，但是个没人决定过的功能限制。
+2. **凭证只在平台插件 == 账号类型所属插件时下发。** 设计稿说「核对时把 Account 含凭证传给插件，授权模型不变」——这只在两者同一个插件时成立。§13 允许「平台由 X 声明、账号类型由 Y 声明」，那种情况给 X 凭证是**全新暴露面**。已限制为 `acc.PluginKey == e.pluginKey` 才下发。代价：只声明平台、靠别人账号类型的插件无法核对——安全的默认，但是个没人决定过的功能限制。
 3. **退避「之后固定 15m」没照做。** 7 天 deadline × 15 分钟 = 单任务约 672 次上游请求。改成：插件给了 `next_check_after_sec` 就以它为准（夹 5s–6h），只在插件不表态时用退避梯子。「插件陈述上游事实、核心做主」用在节奏上——插件是唯一知道这个上游多久出结果的一方。
 4. **`Reservation.tokens/facts` 是唯一真值源**：预扣存在时它替换记录自己的 tokens/metrics，核对成功前预估**就是**这次请求的用量。`core.UsageReservation` 故意不带 Tokens/Facts 避免分叉。
 
@@ -1961,21 +1970,17 @@ message RankedAccount {
 
 ### 25.5 第一个用满四个口子的插件暴露的契约缺口（2026-09-30，**已全部修复**）
 
-火山方舟五期（Seedance 视频）是第一个同时用上 `ResolveModel`(B) + `ExtractUsage`(C) + `Reservation`/核对循环(D) 的插件。它撞到三处口子之间对不齐的地方，**都还没修**。
+火山方舟五期（Seedance 视频）是第一个同时用上 `ResolveModel`(B) + 插件解析用量(C) + `Reservation`/核对循环(D) 的插件。它撞到三处口子之间对不齐的地方，修法见 §25.6。
 
-#### 1. `ExtractUsageRequest` 拿不到请求体，异步提交类端点没法精确预估
+#### 1. 用量观察拿不到请求体，异步提交类端点没法精确预估
 
-提交请求里明明有 `resolution` / `duration` / `content`，但 `ExtractUsageRequest` 只给 `meta / account / status / headers / body(响应)`，**不给请求字段**。而 Ark 的提交响应只有 `{"id": "..."}`。于是预扣的预估用量只能靠 `meta.model` + 保守常量猜。
-
-这是 B 期与 C 期的直接不对齐：`ResolveModel` 有 `fields`（平台级 `requestFields`），`ExtractUsage` 没有。
-
-**建议**：给 `ExtractUsageRequest` 加一个同构的、受声明式白名单约束的请求字段视图。在那之前，异步端点只能高估兜底（火山插件取「该 model 的最高分辨率档 + 保守秒数」，宁可短暂高估也不让 $0 余额者用低价压 4k 任务）。
+提交请求里明明有 `resolution` / `duration` / `content`，但用量观察（`ExtractUsageRequest`）当时只给 `meta / account / status / headers / body(响应)`，**不给请求字段**。而 Ark 的提交响应只有 `{"id": "..."}`。于是预扣的预估用量只能靠 `meta.model` + 保守常量猜。修法：端点级白名单 `usageRequestFields`，观察里带 `fields`（§25.6 第 1 条）。
 
 #### 2. `ReconcileResult` 无法表达「成功了，但上游没给用量，按预估结算」
 
 `SETTLED` 强制带 tokens。上游 succeeded 却没返回 `usage` 时，返回 0 会把预扣**全额退掉**——等于白送一次视频。
 
-火山插件的绕法是自己在 `video_tasks` 里存一列 `est_tokens`，Parse 时回退到它。**每个插件都要自建这张估值表，这是核心该提供的语义。**
+火山插件的绕法是自己在 `video_tasks` 里存一列 `est_tokens`，Parse 时回退到它。**每个插件都要自建这张估值表，这是核心该提供的语义。**（后来由 `ReconcileResult_SETTLED_ESTIMATE` 解决；`video_tasks` 表在火山插件 0.13.0 删除，插件迁移 `0003_drop_video_tasks.sql`。）
 
 **建议**：`ReconcileResult` 加一个「保留预扣」的表达（如 `keep_estimate bool`）。
 
@@ -2034,19 +2039,19 @@ Linux 上 `go test -v ./...`（`next/server`）共 **599 个 `=== RUN`，只有 
 
 §25.5 那三条「建议」里**有两条我写错了方向**，实现时都改了；另外顺手修掉一处 A 期 §25.1 明文规则被既有代码违反的地方。
 
-#### 1. `Endpoint.usageRequestFields`：白名单在**端点**层，不复用 `requestFields`
+#### 1. `Endpoint.usageRequestFields`：白名单在**端点**层
 
 ```jsonc
 "usageRequestFields": ["resolution", "duration", "ratio"]   // 仅 usageSource: "plugin" 下有效
 ```
 
-`ExtractUsageRequest` 新增 `fields`（map）与 **`fields_omitted`**（repeated string）。
+`ExtractUsageRequest` 新增 `fields`（map）与 **`fields_omitted`**（repeated string）。`fields_omitted` 已从协议删除（`EstimateUsageRequest` 字段 3、`ExtractUsageRequest` 字段 9 改为 `reserved`，见下）。
 
-**为什么不复用平台级 `requestFields`**（§25.5 把这个当成一个开放选项，其实它是错的）：`requestFields` 是给 `BuildUpstreamRequest` 用的，而且会被**账号类型层 `AccountPlatform.requestFields` 整块覆盖**。`ExtractUsage` 的被调方是**平台插件**，让第三个插件（账号类型的提供者）决定平台插件能看到什么，正是 §25.3 待办 1「`usage.source` 放错层」的同一个错误再犯一次。端点级声明还保证**只有声明了的端点付代价**（未声明 → 直接返回，零分配）。
+**为什么在端点层**：读用量的是**平台插件**，白名单要是放在账号类型层，就成了第三个插件（账号类型的提供者）决定平台插件能看到什么。端点级声明还保证**只有声明了的端点付代价**（未声明 → 直接返回，零分配）。同一份字段也是 `EstimateUsageRequest.fields`。
 
-三重上限（常量在 `sdk/manifest/check`，主机与工具共用一份）：**16 条路径** / 单值 **4 KiB** / 总量 **32 KiB**。取值来源是**发往上游的 body**（转换后、插件 patch 前），与 `BuildUpstreamRequest.fields` 读的是同一份文档，在 `armUsageExtraction` 里算（handler 内），goroutine 只拿到小 map。
+上限只有清单的 **16 条路径**（`check.MaxUsageRequestFields`，主机与工具共用）。单值 4 KiB、总量 32 KiB 的预算在转发 V2 收尾时删除（§112.16）：声明的字段值整个交给插件，没有被略去的值，所以 `fields_omitted` 随之删除（两个消息里都改为 `reserved`，编号不复用）；唯一读过它的火山插件已不再读。取值来源是**交给插件 `Execute` 的 body**（核心的改写之后），在 `armUsageExtraction` 里算（handler 内），只拿到小 map。
 
-**超限的值整个不给，不截断** —— 与 C 期「body 超 `maxBytes` 不给」同理：半个 JSON 值解出来是**错数**，不是没数。被去掉的路径名进 `fields_omitted`：**没有这个字段，插件分不清「客户端没发 `resolution`」和「主机没搬过来」**，会按最便宜的默认档位低估。预算按**声明顺序**消耗，各节点结果一致。
+（以下是有预算时的设计，留作记录。）**超限的值整个不给，不截断** —— 与 C 期「body 超 `maxBytes` 不给」同理：半个 JSON 值解出来是**错数**，不是没数。被去掉的路径名进 `fields_omitted`：**没有这个字段，插件分不清「客户端没发 `resolution`」和「主机没搬过来」**，会按最便宜的默认档位低估。预算按**声明顺序**消耗，各节点结果一致。
 
 #### 2. 「多留一份请求体拷贝」这个顾虑不成立，真实开销早就存在
 
@@ -2071,7 +2076,7 @@ Linux 上 `go test -v ./...`（`next/server`）共 **599 个 `=== RUN`，只有 
 
 **代价写在规则旁边**：「免费端点只想用插件算 token 做统计」也被拒了 —— 主机为每个请求付一次热路径 RPC，换一堆永远不参与定价的数字，这个组合本身就该重新想。前置关卡：三个内置平台 + 七个插件**原样通过**，全仓只有 volcengine 一个端点用 plugin 源且已是 `billing:"usage"`，零误伤。
 
-运行时补一道 `dropReservation()`：判出不可计费而插件确实返回了 `Reservation` 时，**warn 指名 plugin / platform / endpoint / protocol / request_id / ref_id / billing / reason**，并写 `usage_logs.anomalies` 的 `reservation` / `reservation_error`。三种原因分开记：端点 `free` / 没解析到价格 / **预估既无 token 又无 facts 且价格不是 per_request**（第三种是插件 bug，以前同样静默）。
+运行时补一道 `dropReservation()`：判出不可计费而插件确实返回了 `Reservation` 时，**warn 指名 plugin / platform / endpoint / protocol / request_id / ref_id / billing / reason**，并写 `usage_logs.anomalies` 的 `reservation` / `reservation_error`。两种原因分开记：端点 `free` / **预估既无 token 又无 facts 且价格不是 per_request**（后者是插件 bug，以前同样静默）。原来的第三种"没解析到价格"随 §17.3（2026-11-19）删除：计费端点上一定有价格。
 
 #### 5. `/usage/summary` 三列 + `max_reconcile_age_sec` 默认 7 天
 
@@ -2089,23 +2094,17 @@ Linux 上 `go test -v ./...`（`next/server`）共 **599 个 `=== RUN`，只有 
 
 `readBody` 只跑 `gjson.ValidBytes`，而 **gjson 不检查 UTF-8**（实测 `{"model":"a\xffb"}` → `valid=true`）。RFC 8259 §8.1 要求 JSON 必须是 UTF-8，所以这本来就不是合法 JSON。
 
-后果：这个字节串会进 `RequestMeta.model`（`request.modelPath`）、`BuildUpstreamRequest.fields`、`ResolveModel.fields`、`PriceParams`，而 **`proto.Marshal` 拒绝非法 UTF-8** → 该请求的**每一次**插件调用都失败 → failover 全挂 → **稳定 5xx**，而且 `usage_logs.model` 也会被 PostgreSQL 拒。
+后果：这个字节串会进 `RequestMeta.model`（`request.modelPath`）、交给插件的请求、`PriceParams`，而 **`proto.Marshal` 拒绝非法 UTF-8** → 该请求的**每一次**插件调用都失败 → failover 全挂 → **稳定 5xx**，而且 `usage_logs.model` 也会被 PostgreSQL 拒。
 
 这是 A 期 §25.1 已经写明的规则（「净化不是可选项」）被既有代码违反。修法是在 `readBody` 加 `utf8.Valid` → 400 `request body is not valid JSON`，**一处堵住整类**，不必在五个下游各自净化。
 
 ### 25.7 第一个真实消费者用完 E 期之后（2026-09-30）
 
-火山方舟 0.5.0 是 `usageRequestFields` / `SETTLED_ESTIMATE` 的第一个真实使用者。E 期实现本身**没有发现 bug**，但用满之后暴露三条契约面的问题，**都还没修**。
+火山方舟 0.5.0 是 `usageRequestFields` / `SETTLED_ESTIMATE` 的第一个真实使用者。E 期实现本身**没有发现 bug**，但用满之后暴露三条契约面的问题。
 
-#### 1. `ParseReconcileResponseRequest` 缺 `truncated`，而 body 是被静默截断的
+#### 1. 核对的回答被静默截断（已修）
 
-`reconcile.go` 用 `io.ReadAll(io.LimitReader(resp.Body, 256KiB))` 读核对响应，**插件收到半个 JSON 文档而且无从得知**。
-
-这与 §25.3 给 `ExtractUsage` 定的规则**正好相反**：那里「非流式 body 超 `maxBytes` 就不给」，理由写得很明白 ——「半个 JSON 值解出来是错数，不是没数」。C 期给 `ExtractUsage` 加 `truncated`、E 期给它加 `fields_omitted`，都是为了同一件事，而核对这条路上两个都没有。
-
-后果具体化：被截断的状态文档里 `status` 在前会读出 `succeeded`，`usage` 在后被切掉读成 0 → 插件答 `SETTLED` 带 0 → **全额退款**。（火山插件现在会答 `SETTLED_ESTIMATE`，方向是安全的，但真实用量高于预估时仍然静默少收。）
-
-**建议**：给 `ParseReconcileResponseRequest` 加 `truncated`，或者干脆照 `ExtractUsage` 的规矩——超限就不给。
+当时核对读上游回答用 `io.ReadAll(io.LimitReader(resp.Body, 256KiB))`，**插件收到半个 JSON 文档而且无从得知**：被截断的状态文档里 `status` 在前会读出 `succeeded`，`usage` 在后被切掉读成 0 → 插件答 `SETTLED` 带 0 → **全额退款**。现在任务观察只经取回（§112.6、§112.9）：回答整份交还（转发 V2 收尾起；此前超过 8 MiB 截断并置 `ExecutionHTTPResponse.truncated`，该字段已删除），读不完整是传输错误；宿主另外记录这次取回是否完整，不完整的回答不能确认终态。
 
 #### 2. `usageRequestFields` 表达不了「数组里任意位置的某个字段」
 
@@ -2117,7 +2116,7 @@ Linux 上 `go test -v ./...`（`next/server`）共 **599 个 `=== RUN`，只有 
 
 实现取的是 `gjson.Result.Raw`（核心另外做了 `strings.ToValidUTF8`）。这是对的也是必要的——数字、布尔、对象都要能表达——但插件侧极容易写成直接当字符串用。**契约正文里要明写这一句**，省掉下一个插件作者一轮调试。
 
-#### 落地经验（写给下一个用 `fields_omitted` 的人）
+#### 落地经验（写给下一个用 `fields_omitted` 的人；该字段已删除，留作记录）
 
 火山插件第一版在这里写错过，是测试抓出来的：**只 bound 了 duration，没 bound resolution**，于是「全部 absent」和「全部 omitted」估出完全相同的数字。两条经验：
 
@@ -2131,7 +2130,7 @@ Linux 上 `go test -v ./...`（`next/server`）共 **599 个 `=== RUN`，只有 
 `store/migrate.go` 对每个迁移文件算 sha256 并与 `plugin_migrations.checksum` 比对，**改动已应用的迁移文件会让整个安装/升级中止**。所以：
 
 - 列的增删一律新写迁移文件，已应用的一个字节都不能动
-- **迁移文件里不要写「这一列为什么存在」**——那种注释会随语义变化而失效，而且**无法修改**。`0002_video_tasks.sql` 里关于 `est_tokens` 的那段注释就是现存的一处。语义变了只能靠后续迁移的 `COMMENT ON COLUMN` 追平
+- **迁移文件里不要写「这一列为什么存在」**——那种注释会随语义变化而失效，而且**无法修改**。`0002_video_tasks.sql` 里关于 `est_tokens` 的那段注释就是一处（那张表在火山插件 0.13.0 由 `0003_drop_video_tasks.sql` 删除）。语义变了只能靠后续迁移的 `COMMENT ON COLUMN` 追平
 
 ### 25.8 并发透支防护：输出费用预留与插件 EstimateUsage Unimplemented 处理（2026-10-04）
 
@@ -2193,11 +2192,11 @@ Linux 上 `go test -v ./...`（`next/server`）共 **599 个 `=== RUN`，只有 
 
 - **估算与已报告用量的合并改为分侧取值**，取代上一段的「每项取较大值」：输入侧四项（`input`、`cache_read`、`cache_creation`、`cache_creation_1h`）只要响应报告过任意一项就整体采用响应的数，否则整体采用估算；输出取两者较大值。原因：估算把整段提示算作输入，响应把同一段提示的缓存部分算在缓存项下，逐项取较大值在输入不含缓存的协议（Anthropic）上把提示计了两遍。实现 `gateway/pipeline.go` 的 `canceledTokens`。
 - **`continue` 不另设等待上限**（2026-11-14 用户决定：与请求本身的超时保持一致，不单独配置）：续读只受这次上游交换原有的超时约束，即环境变量 `relay_timeout_seconds`（上游整体超时）和 `streaming_idle_timeout_seconds`（流式空闲超时，§74.3），与客户端还在时相同（`relay_timeout_seconds` 未设置即不限，这时非流式响应读正文没有上限，流式只受空闲超时约束）；到时上游被取消，按 `precharge` 处理。原设置 `client_disconnect_wait_seconds`（5–1800，默认 120）删除，接口不再返回、PUT 不再接受，已存的值留在行里但不读；滚动期间旧核心仍按它等待。读取期间请求不退出，账号与 API Key 的并发名额照常占用。
-- **上游请求的 context 不再派生自客户端请求**（`gateway/dispatch.go` 的 `forwardBuilt`）：由 `gateway/disconnect.go` 的 `upstreamDrain` 在客户端 context 结束时取消它，`continue` 且 `forward` 正在转发成功响应时不取消，读到结束或被上游超时取消。
-- **`continue` 只覆盖由核心 `forward()` 中继的响应**（`forwardSSE`、`forwardJSON`、`forwardJSONConverted`）。`task.submit`、资源与额度流、WebSocket 不续读，按 `precharge` 处理。插件 `Execute` 执行的请求经 `ForwardUpstream` 交给宿主转发时（如 `pluginsdk.ExecuteDefault`：codex，以及 volcengine 的非任务请求），上游同样由 `forwardBuilt` 发出、`forward()` 中继和记用量，**核心 0.1.301 起同样续读**（此前一律按 `precharge` 处理，系统设置里的“读完再计费”对它们不生效）：插件在 `ForwardUpstream` 里等待没有期限（`grpcruntime` 在转发开始时停掉准备计时，结束后才开始 `FinishTimeout`），续读结束后照常 `RecordUsage`，提交的记录按上游报告的用量计费。插件放弃这次 `ForwardUpstream`（被终止、超时）不算客户端断开：转发观察的客户端 context 只取自请求本身（`gatewayExecution.network`），插件的调用结束时 `forwardBuilt` 以 `errExecutionAborted` 取消上游，记为上游中断；非流式应答先写进暂存（`spool.go`），暂存写失败（超过 64 MiB、临时文件出错）记为内部错误，同样不算客户端断开。插件自己结算的部分不受影响：`Reservation` 只出现在 `task.submit`（仍不续读），`Replacement` 由 `settleCanceled` 原样保留。实现：`gateway/dispatch.go` 的 `watchClient(ctx, ucancel, !c.ep.TaskSubmit())`。
+- **上游请求的 context 不再派生自客户端请求**（`gateway/dispatch.go` 的 `send`）：由 `gateway/disconnect.go` 的 `upstreamDrain` 在客户端 context 结束时取消它，`continue` 且 `forward` 正在转发成功响应时不取消，读到结束或被上游超时取消。
+- **`continue` 只覆盖由核心 `forward()` 中继的响应**（`forwardSSE`、`forwardJSON`、`forwardJSONConverted`）。`task.submit`、资源与额度流、WebSocket 不续读，按 `precharge` 处理。转发 V2（§112）起每个请求都经插件的 `Execute`：不等待的中继由核心在 `Execute` 返回后发出、`forward()` 中继和记用量，与上面相同；等待形式（插件解析用量的端点）同样续读，续读结束后插件才拿到观察、返回事实。等待形式下插件放弃这次中继调用（被终止、进程退出）不算客户端断开：客户端 context 只取自请求本身，插件的调用结束时网关以 `errExecutionAborted` 取消上游，记为上游中断；非流式应答先写进暂存（`spool.go`），暂存写失败（临时文件建不了或写不进；暂存不限大小，§112.16）记为内部错误，同样不算客户端断开。插件自己结算的部分不受影响：`Reservation` 只出现在 `task.submit`（仍不续读），`Replacement` 由 `settleCanceled` 原样保留。实现：`gateway/dispatch.go` 的 `watchClient(ctx, ucancel, !c.ep.TaskSubmit())`。
 - 旧的 `billing` 行没有这个字段，读出默认值，**所以升级后既有部署即按 `continue` 运行**；存储值不在取值集合内时策略取默认值。设置读取失败时网关按 `precharge` 处理。
 - **什么算「读完」**：有输出因客户端已离开而被丢弃，且上游正常结束、没有以流内错误事件收尾。客户端收完最后一个字节才断开的请求没有丢输出，照常记为成功。关停不再等待在途请求时调用 `Gateway.AbandonReads()`（`app/phases.go` 的 `cancelRequests`），续读立即中止，按 `precharge` 处理。
-- **终止用量送达后才断开的请求算已服务**（核心 0.1.301）：流里的终止用量事件已经转发给客户端（转发时客户端还在、此前没有丢过输出），之后客户端在上游关流前断开的请求，记为成功（状态码取上游的），按上游报告的用量计费，三种策略都不适用，也不再续读（`continue` 下同样立即取消上游）；之后上游流空闲超时同样记成功，账号统计不计为取消（`pipeline.go` 的 `statsCanceled`）。核心直接转发和插件 `Execute` 执行的 HTTP 请求都适用（判定在 `forward()`，`upstreamDrain.serve`/`served`）。**终止用量事件**由 manifest 的 usage 规则判定，不按协议写死（`usagerules.Acc.Final`）：`usage.sse` 里**指名事件**（`event` 非空）且映射了 `output_tokens` 的规则命中、并且该事件里输出数存在且不为 null。输出数只有应答结束时才知道，所以声明它的具名事件就是最终用量：Anthropic `message_delta`（`message_start` 只报输入侧，不映射输出，不算）、OpenAI Responses（HTTP 流）`response.completed` / `response.incomplete`。规则匹配任意事件（`"event": ""`）的协议（OpenAI Chat Completions 末尾的 usage chunk、Gemini 每个 chunk 的 `usageMetadata`）没有可判定的终止事件（Gemini 与部分 OpenAI 兼容上游每个 chunk 都带累计用量），仍以读到上游结束为准；非流式 JSON 读完才提取用量，同样不变。终止用量事件之前断开的，行为不变。WebSocket 轮次本来就在终止事件写给客户端后结束（`websocket.go` 的 `observe`），客户端之后断开不影响已结束的轮次，无需改动。测试：`gateway/disconnect_test.go`（终止用量后断开记成功，含转换路由与插件执行的 Responses `response.completed`；之前断开仍是 499 加预扣补齐；插件执行路径两种情况；插件放弃转发不算断开）、`usagerules/final_test.go`。
+- **终止用量送达后才断开的请求算已服务**（核心 0.1.301）：流里的终止用量事件已经转发给客户端（转发时客户端还在、此前没有丢过输出），之后客户端在上游关流前断开的请求，记为成功（状态码取上游的），按上游报告的用量计费，三种策略都不适用，也不再续读（`continue` 下同样立即取消上游）；之后上游流空闲超时同样记成功，账号统计不计为取消（`pipeline.go` 的 `statsCanceled`）。不等待与等待两种中继形式的 HTTP 请求都适用（判定在 `forward()`，`upstreamDrain.serve`/`served`）。**终止用量事件**由 manifest 的 usage 规则判定，不按协议写死（`usagerules.Acc.Final`）：`usage.sse` 里**指名事件**（`event` 非空）且映射了 `output_tokens` 的规则命中、并且该事件里输出数存在且不为 null。输出数只有应答结束时才知道，所以声明它的具名事件就是最终用量：Anthropic `message_delta`（`message_start` 只报输入侧，不映射输出，不算）、OpenAI Responses（HTTP 流）`response.completed` / `response.incomplete`。规则匹配任意事件（`"event": ""`）的协议（OpenAI Chat Completions 末尾的 usage chunk、Gemini 每个 chunk 的 `usageMetadata`）没有可判定的终止事件（Gemini 与部分 OpenAI 兼容上游每个 chunk 都带累计用量），仍以读到上游结束为准；非流式 JSON 读完才提取用量，同样不变。终止用量事件之前断开的，行为不变。WebSocket 轮次本来就在终止事件写给客户端后结束（`websocket.go` 的 `observe`），客户端之后断开不影响已结束的轮次，无需改动。测试：`gateway/disconnect_test.go`（终止用量后断开记成功，含转换路由与插件执行的 Responses `response.completed`；之前断开仍是 499 加预扣补齐；插件执行路径两种情况；插件放弃转发不算断开）、`usagerules/final_test.go`。
 - 策略经 `core.ClientDisconnectSource.ClientDisconnectPolicy` 读取，`billing.Service` 实现；网关拿不到时按 `precharge` 处理。网关包的测试环境同样默认 `precharge`，只有针对 `continue` 的用例显式开启。
 - 测试：`gateway/disconnect_test.go`（三种策略、续读被上游整体超时结束、续读中关停的端到端，`canceledTokens`）、`e2e/ac26_client_disconnect_test.go`（整机验收）、`gateway/precharge_cancel_test.go`（判定）、`billing/settings_disconnect_test.go`（设置读写与校验）。
 
@@ -2229,15 +2228,15 @@ Linux 上 `go test -v ./...`（`next/server`）共 **599 个 `=== RUN`，只有 
 | 列表 | 默认值 | 含义 |
 |---|---|---|
 | `BUILTIN_PLUGINS` | `anthropic openai gemini moderation codex` | 安装，首次安装即启用 |
-| `BUILTIN_PLUGINS_INSTALL_ONLY` | `volcengine mailer dynweight` | 安装，**保持未启用**，由管理员在配置好之后手动启用 |
+| `BUILTIN_PLUGINS_INSTALL_ONLY` | `volcengine mailer dynweight newapi sub2api typesafe` | 安装，**保持未启用**，由管理员在配置好之后手动启用 |
 
-（默认值为 `build-go.sh` 的现值：本节写成时两份列表分别是 `anthropic openai gemini moderation` 与 `volcengine`，`codex` 见 §83，其余只安装插件见各自章节；`custom` 在 0.1.301 删除，见 §106。）
+（默认值为 `build-go.sh` 的现值：本节写成时两份列表分别是 `anthropic openai gemini moderation` 与 `volcengine`，`codex` 见 §83，其余只安装插件见各自章节，`newapi`、`sub2api`、`typesafe` 见 §119；`custom` 在 0.1.301 删除，见 §106。）
 
 同一个插件同时出现在两份列表里时构建失败。第二份列表写进内建目录的 **`install-only.txt`**（每行一个 key，`#` 注释、空行、CRLF 都容忍），核心的 `EnsureBuiltin`（`server/internal/plugin/install/builtin.go`）读它。
 
 **语义**（都有测试钉住，`builtin_test.go`）：
 
-- 只安装类与另一类的**唯一区别是首次安装后不调用 `Enable`**。上传、自动授予全部宿主权限（含高危的 `platform.register` / `accounts.credentials`）、`builtin = true`、不能卸载，全部相同。所以管理员启用时**不需要再走授权**。
+- 只安装类与另一类的**唯一区别是首次安装后不调用 `Enable`**。上传、自动授予全部宿主权限（含高危的 `platform.register`；`accounts.credentials` 已由 §124 删除）、`builtin = true`、不能卸载，全部相同。所以管理员启用时**不需要再走授权**。
 - 这份列表**只管从未启用过的插件**（`status = installed` 且 `active_version IS NULL`）。管理员一旦启用或禁用过，以后每次启动都不再改动它；把一个 key 从只安装挪到启用列表，会在下次启动时启用（因为它仍是「从未启用」）。
 - 从未启用过的只安装插件，镜像带来新版本时**不走升级**（没有在跑的版本可升）。管理员启用时 `Rollout.Enable` 取最新一个已批准的版本，所以拿到的就是镜像里的新版本。
 - **`install-only.txt` 读不出来 ≠ 空列表**：读失败时 `EnsureBuiltin` 报错并**一个内建插件都不装**。当成空列表的后果是每个部署都把本该关着的插件启用了。文件**不存在**才等于空（兼容没有这个文件的旧镜像）。注意 `app.go` 调用处丢弃了返回的错误，只有 ERROR 日志可见。
@@ -2367,15 +2366,15 @@ sub2api 按多节点部署设计，**插件的每个实例都跑在每个节点�
 | `Publish` 是 **best effort**：无确认、无顺序、无重放，**发布者所在节点自己收不到** | 缓存失效要「**本节点直接生效 + 广播通知其他节点 + 短周期轮询兜底**」三件都做：只广播，本节点不会失效；只靠广播，丢一条消息某个节点就一直是旧的 | `sdk/pluginsdk/host.go`（`Host.Publish` 注释），`server/internal/plugin/rollout/broadcast.go`（`broadcastHub.handle` 跳过 `SourceBootID` 为本节点的消息），`server/internal/core/ports_cluster.go`（`Bus` 注释「every consumer must also reconcile periodically」），§14.3 |
 | `OnEvents` **至少一次**：确认之前的批次会重投，持锁节点切换时也可能重投 | 按事件 `id` 去重（例如在自己的 schema 里对事件 id 建唯一索引） | `server/internal/event/delivery/delivery.go`（包注释），§11.7 |
 | `MigrateData` 在发布协调者被接管后**可能重复执行** | 必须幂等：重跑一遍得到同样的结果 | `server/internal/plugin/rollout/coordinator.go`（`takeOver`、`migrateData`），§11.7 |
-| 插件自己的并发、队列、内存限流等设置**按节点计**：集群总量 = 设置值 × 节点数 | 在设置说明里写明「每个节点」；需要全集群上限的，用数据库或 `lock` 协调，不要用进程内计数 | 例：`plugins/moderation/forms/settings.ui.json` 的 `max_concurrency`、`queue_size`（说明均为「每个节点」） |
+| 插件自己的并发、队列、内存限流等设置**按节点计**：集群总量 = 设置值 × 节点数 | 在设置说明里写明「每个节点」；需要全集群上限的，用数据库或 `lock` 协调，不要用进程内计数 | 例：moderation 设置页（`plugins/moderation/ui/native/src/messages.ts`）的 `max_concurrency`、`queue_size`（说明均为「每个节点」） |
 
 ## 28. 核心托管异步任务（2026-10-01）
 
-本节定义显式声明 `endpoint.task` 的端点。插件陈述上游事实，核心决定身份、执行权、调度与账务，不在核心增加视频厂商字段。最新插件驱动执行与主动上报接口见 §31；§25 的异步 ExtractUsage 时序仅保留在兼容路径。
+本节定义显式声明 `endpoint.task` 的端点。插件陈述上游事实，核心决定身份、执行权、调度与账务，不在核心增加视频厂商字段。提交走 `Execute` 的等待形式、观察走 `Monitor`，接口见 §112.2、§112.7、§112.9。
 
 ### 28.1 声明与插件接口
 
-插件必须同时声明 `platform.adapter.v1` 和 `platform.tasks.v1`，实现 Platform、TaskSubmissionParser。最新实现另加 Executor / TaskMonitor，见 §31；Poller 和旧 Reconciler 的两阶段接口保留兼容。宿主 API 当前为 4，gRPC/进程协议仍为 1；原托管任务要求 API 2，Poll 要求 API 3，Execute / Monitor 要求 API 4。SDK 在连接宿主和执行初始化之前拒绝不满足最低版本的核心。只有上传时的 capability 校验不够：其他节点可能直接从共享 PG 加载已批准包，必须保留这道进程握手检查。
+插件必须同时声明 `platform.adapter.v1`、`platform.monitor.v1` 和 `platform.tasks.v1`，实现 `Platform`、`TaskSubmissionParser`、`TaskMonitor`（SDK 的 `Serve` 在启动时检查）。插件线协议版本由 go-plugin 握手检查（现为 2，§112.10）：只有上传时的校验不够，其他节点可能直接从共享 PG 加载已批准包，必须保留这道进程握手检查。
 
 同一插件内每个 `task.kind` 必须有且仅有一个 submit 和一个 query：
 
@@ -2386,11 +2385,11 @@ sub2api 按多节点部署设计，**插件的每个实例都跑在每个节点�
 
 - submit 是 POST，query 是 GET 且 `billing: "free"`；都只支持非流式 JSON。query 不声明 `modelPath`、`modelParam`、`modelSource`，模型从核心记录取得。
 - `idPaths` 为 1–8 个简单 JSON 对象路径，不支持通配、数组搜索或表达式。所有存在的声明 ID 都必须匹配上游引用，且至少命中一个。响应和快照不超过 256 KiB。
-- submit 实现可选 `pluginsdk.TaskSubmissionParser.ParseTaskSubmission(ExtractUsageRequest) -> TaskSubmission`。只拿白名单请求字段、完整有界响应和不含凭证的账号；返回 `upstream_ref_id`、完整初始查询快照 `snapshot_json`、可选 `usage`、首查间隔和上游保留期限。
+- submit 走 `Execute` 的等待形式（§112.2）：插件 `RelayAndWait` 后在返回值里给 `task`；SDK 的 `ExecuteDefault` 为此调 `TaskSubmissionParser.ParseTaskSubmission(ExtractUsageRequest) -> TaskSubmission`。观察里只有白名单请求字段（`usageRequestFields`）、完整有界响应和不含凭证的账号；返回 `upstream_ref_id`、完整初始查询快照 `snapshot_json`、可选 `usage`、首查间隔和上游保留期限。
 - 初始快照必须是上游查询协议的完整 JSON 对象，例如 `{"id":"上游ID","status":"queued"}`，不能把未知字段的提交响应当成任意查询协议。
 - 免费任务无需 Reservation。按用量计费的任务仍可返回估计和 Reservation，`reserve.ref_id` 必须等于 `upstream_ref_id`，宿主持久化时换成自己的公开 ID。已有 `billing:free + usageSource:plugin` 禁止规则不变。
-- 轮询使用 `Poll(PollRequest) -> ReconcileResult`。插件通过 `pluginsdk.ExecuteHTTP(ctx, request)` 发起本次查询，再解析响应并返回结果；核心提供原账号代理、限额、超时和网络检查。`ReconcileEntry` 包含 `task_kind`、`model`、`protocol`；其 `ref_id` 始终是上游 ID。插件返回完整的 `task_snapshot_json`，宿主再替换公开 ID；暂未观测到结果时留空，不能抹掉旧快照。未声明新能力的旧插件继续使用 `BuildReconcileRequest` / `ParseReconcileResponse`。
-- `ExecutionHTTPResponse.truncated`（旧接口为 `ParseReconcileResponseRequest.truncated`）表示超过宿主响应上限或读取不完整。截断数据不能用于确认终态或结算。托管任务的终态必须带有效、ID 匹配的快照，否则重试。新 Poll 的宿主还独立记录本次 HTTP 结果，插件忽略截断或传输错误也不能据此提交终态。
+- 观察使用 `Monitor(PollRequest)`，结果在 `MonitorResponse.result`（`ReconcileResult`，§112.9）。插件通过 `pluginsdk.Fetch(ctx, request)`（`HostService.ExecuteHTTP`）发起本次查询，再解析响应并返回结果；核心提供原账号代理、限额、超时和网络检查。`ReconcileEntry` 包含 `task_kind`、`model`、`protocol`；其 `ref_id` 始终是上游 ID。插件返回完整的 `task_snapshot_json`，宿主再替换公开 ID；暂未观测到结果时留空，不能抹掉旧快照。
+- `ExecutionHTTPResponse.truncated` 已删除（字段 5 `reserved`）：`ExecuteHTTP` 的回答整份交还（转发 V2 收尾起，§112.16），读不完整是传输错误；`SendAccountRequest` 的回答也不再截断（此前超过 64 KiB 截断并置位，§112.17）。不完整的数据不能用于确认终态或结算。托管任务的终态必须带有效、ID 匹配的快照，否则重试。宿主还独立记录本次调用里的取回结果，插件忽略传输错误也不能据此提交终态。
 
 ### 28.2 核心职责
 
@@ -2399,7 +2398,7 @@ sub2api 按多节点部署设计，**插件的每个实例都跑在每个节点�
 | 提交 | 选定账号后记录提交意图；上游成功响应在解析/登记成功之前不返回给客户端。任务身份、初始快照、使用记录及可选预扣在同一 PG 事务中持久化，随后替换响应 ID |
 | 身份 | 核心生成 `s2task_` 公开 ID；用户、API Key、分组、插件、任务种类、模型、原账号及上游引用来自已认证请求与实际执行结果，插件不能指定归属 |
 | 唯一性 | 上游 ID 以插件、任务种类和账号隔离；重号不得覆盖已有任务的用户或账号 |
-| 查询 | 认证后校验同一用户、同一分组及当前模型权限；允许更换同组有效 API Key。读取共享快照不依赖原账号仍可调度；不进入账号排名、粘性、普通转发或失败换号路径 |
+| 查询 | 认证后校验同一用户、同一分组及当前模型权限；允许更换同组有效 API Key。读取共享快照不依赖原账号仍可调度；不进入账号排名、粘性、网关转发或失败换号路径 |
 | 轮询 | 核心协调循环按 PG claim token 和有限租约领取任务；节点故障后可接管；旧持有者的迟到结果被条件写入拒绝 |
 | 账号 | 始终用提交账号、对应代理及宿主 SSRF/超时策略；不可用时等待/明确失败，不改用别的账号。托管提交当前要求本插件账号及原协议，避免提交后才发现插件无法取得轮询凭证 |
 | 结果与账务 | 快照终态和账务在同一事务校验执行权、锁行并提交；账本保留幂等键。客户端查询不会重复请求上游，也不会重复扣款 |
@@ -2438,7 +2437,7 @@ sub2api 按多节点部署设计，**插件的每个实例都跑在每个节点�
 
 核心没有准入看门狗（2026-11-08 起）。PG 的 `updater.node_admissions` 只在外壳向核心发 `/v1/admission` 时核对一次（`verifyAdmission`）；之后停核心只由外壳发起，撤销准入的每条路（升级 `stop` 步骤、禁用节点、身份撤销）都由外壳直接向核心发排空，不依赖核心自己发现；外壳死了，Caddy 的 `/readyz` 把流量切走。历史：此前核心每秒查一次该行、1 秒超时、失败一次就停内核且不留日志，2026-11-08 使 sup2api-ccp 一天自停 16 次（见 `deploy/gateway/clicodeplus/README.md`）；同日先改为只报告不自停，随后按用户决定整个去掉（连同它的专用连接 `store.OpenSingle` 与 `verifyLiveAdmission`）。外壳侧同日补齐：`Work`/`Coordinate` 的错误不再丢弃（同一错误 5 分钟记一次 WARN，恢复记 INFO），`Work` 因本机核心不就绪而走 `Recover` 重拉时记 WARN 并带核心的 mode、boot 与 blockers。
 
-内置插件安装在锁竞争或单个包失败后持续重试。就绪检查要求镜像所需版本已获批准，数据库 active 版本和本地已发布的服务实例均已获批准且不低于镜像要求；没有本地实例、版本过低或授权无效时不就绪。正常升级期间允许旧实例继续服务，不要求本地版本在每个瞬间都与数据库 active 版本相等，具体目标版本的收敛由 rollout 状态表示。管理员主动禁用的插件、尚未启用的 install-only 插件不阻断整节点就绪。进程的 Configure 只有成功应答后才记为已应用，失败会重试；权限撤销的宿主侧检查立即采用新授权，不能因插件 Configure 失败继续使用旧权限。
+内置插件安装在锁竞争或单个包失败后持续重试。就绪检查要求镜像所需版本已获批准，数据库 active 版本和本地已发布的服务实例均已获批准且不低于镜像要求；没有本地实例、版本过低或授权无效时不就绪。正常升级期间允许旧实例继续服务，不要求本地版本在每个瞬间都与数据库 active 版本相等，具体目标版本的收敛由 rollout 状态表示。管理员主动禁用的插件、尚未启用的 install-only 插件不阻断整节点就绪。这项检查只决定节点启动后何时第一次就绪，通过后不再撤回（2026-11-18）：之后内置插件的发布（启用 install-only 插件或重新启用时的 `enabling`、本机实例切换、禁用）改的是各节点共读的插件行，检查会在所有节点上同时不通过，`/healthz` 一起变成 503，负载均衡把全部请求答成 503，而每个节点其实仍在服务其他一切；这类发布中某个插件的不可用只体现在该插件的请求上（`plugin_unavailable`），收敛循环照常继续安装与重试（`app.builtinConvergence`）。收敛循环只在内置插件“未装好”时跑 `EnsureBuiltin`（`install.BuiltinsInstalled`，按 `EnsureBuiltin` 实际会做什么判断）：没有内置行或镜像版本未存或未批准、`installed` 且从未启用且不是 install-only、`enabled` 但低于镜像版本时未装好；`enabling`、`upgrading`（发布进行中，交给发布控制器）、`disabled`（含卸载等待中）、install-only 的 `installed`、不低于镜像版本的 `enabled`、`awaiting_consent` 都算装好。此前发布中的内置插件被当成未装好，某个节点每 5 秒跑一整轮 `EnsureBuiltin`（逐个上传 8 个包，每次占集群变更锁），管理员这时提交插件变更会收到 409 `cluster_change_busy`（2026-11-18）。进程的 Configure 只有成功应答后才记为已应用，失败会重试；权限撤销的宿主侧检查立即采用新授权，不能因插件 Configure 失败继续使用旧权限。
 
 ### 29.2 卸载屏障与异常节点恢复
 
@@ -2461,7 +2460,7 @@ sub2api 按多节点部署设计，**插件的每个实例都跑在每个节点�
 
 构建默认每 30 秒续期，租约 2 分钟；就绪期限扣除发布/续期耗时，暂停到期后必须先重新收敛。GC 同时保护有效租约、最近 7 天仍被看到的构建及最近 3 个发布构建，只删除无引用资源。默认单文件 16 MiB、单构建 128 MiB、总资源 1 GiB、最多 64 个构建和 65,536 个资源；容量不足时拒绝新构建就绪，不驱逐仍需保留的版本。过了保留期且完成 GC 的 URL 不保留永久墓碑，也不保证多年打开的旧页面继续加载其懒加载资源。
 
-## 30. 统一后台执行与单次 Poll（2026-10-01）
+## 30. 统一后台执行与单次任务观察（2026-10-01；观察接口在转发 V2 改为 `Monitor`，§112.9）
 
 ### 30.1 调度与业务职责
 
@@ -2471,56 +2470,30 @@ sub2api 按多节点部署设计，**插件的每个实例都跑在每个节点�
 
 轮询保留每轮由一个核心节点取得集群锁处理批次、节点内部有限并发的策略。Executor 上限按节点计，Redis 的账号并发槽和限额继续按全集群计。在线请求的选账号、粘性和 failover 仍在网关执行；SDK 历史名称 `Scheduler`/`AccountRanker` 是同步策略扩展，不负责后台任务或节点选择。插件的本地缓存刷新、批写和单次调用内的业务步骤不强行迁入后台队列。
 
-### 30.2 单次 Poll 与受控 HTTP
+### 30.2 单次观察与受控 HTTP
 
-新插件声明 `platform.poll.v1`，实现 `Poll(ctx, *PollRequest) (*ReconcileResult, error)`。核心固定原账号后调用一次 Poll；插件构造并发起一次查询、解释厂商状态和用量，返回下次查询建议。实际执行时间、跨次重试、结果写入和结算仍由核心决定。
+声明 `platform.monitor.v1` 的插件实现 `Monitor(ctx, *PollRequest) (*ReconcileResult, error)`（§112.9）。核心固定原账号后调用一次 Monitor；插件查询上游、解释厂商状态和用量，返回下次查询建议。实际执行时间、跨次重试、结果写入和结算仍由核心决定。
 
-`PollRequest` 含 `entry`、`account` 和一次调用的 `execution_token`。SDK 把 token 和当前宿主 client 放入这次 Poll 的 context，插件通过 `pluginsdk.ExecuteHTTP(ctx, *ExecutionHTTPRequest)` 发起查询，不手动保存 token，也不在 Poll 内启动持续轮询。请求提供 method、URL、headers、body；核心 `HostService.ExecuteHTTP` 执行有界的 HTTP 交换并返回 status、headers、body、transport_error、truncated。
+`PollRequest` 含 `entry`、`account` 和一次调用的 `execution_token`。SDK 把 token 和当前宿主 client 放入这次调用的 context，插件通过 `pluginsdk.Fetch(ctx, *ExecutionHTTPRequest)` 发起查询，不手动保存 token，也不在 Monitor 内启动持续轮询。请求提供 method、URL、headers、body、options；核心 `HostService.ExecuteHTTP` 执行一次 HTTP 交换并返回 status、headers、整份 body、transport_error（`truncated` 不置，§112.6）。
 
 执行约束：
 
-- token 为随机 256 bit，仅存在于提供本次调用的具体插件进程及其 broker；不能用于同插件另一个进程或重启后的实例。
-- 每次 Poll 最多一次 ExecuteHTTP。token 在 Poll 返回时撤销；取消在途 HTTP 并等待其结束后，才释放账号执行资源。SDK 也取消已返回调用的 context。
-- 账号、代理及限额由核心捕获，插件请求没有可更换的账号/代理字段。每次实际发送前执行原账号的原子限额检查。
-- 使用核心 SSRF 检查，禁用自动重定向，不做应用层自动重试（Go transport 仍可能按标准规则重试可重放请求）。URL 最多 8 KiB，请求/响应 body 最多 256 KiB，headers 最多 64 个、累计 32 KiB；禁止 Host、代理认证及 hop-by-hop 等传输控制头。
-- 宿主独立记录 HTTP 是否已完成、是否传输失败或截断。无有效网络观测不能提交终态，即便插件错误地声称成功。任务快照 ID 校验、执行权 fencing 与账务事务保持 §28 的约束。
+- token 为随机 256 bit，仅存在于提供本次调用的具体插件进程及其 broker；不能用于同插件另一个进程或重启后的实例。token 在 Monitor 返回时撤销；取消在途 HTTP 并等待其结束后，才释放账号执行资源。
+- 取回次数不限（转发 V2 收尾起；此前每次 Monitor 最多 8 次）；主机必须在清单 `externalServices` 内或是账号自己的上游地址（§112.6）。账号、代理及限额由核心捕获，插件请求没有可更换的账号/代理字段。每次实际发送前执行原账号的原子限额检查。
+- 使用核心 SSRF 检查，禁用自动重定向，不做应用层自动重试（Go transport 仍可能按标准规则重试可重放请求）。禁止 Host、代理认证及 hop-by-hop 等传输控制头和不是 HTTP 的头。URL、请求头、请求体、回答都不限大小，方法也不按名单检查（转发 V2 收尾起，此前 URL 8 KiB、请求头 64 个 / 32 KiB、请求体不超过请求体上限、回答 8 MiB 截断；§112.16）。Monitor 的取回整个交换 20 秒（`reconcileHTTPTimeout`）；插件不能设超时（`ExecutionHTTPRequest.options` 已从协议删除，字段 6 `reserved`）；实现与网关的取回是同一份 `internal/execfetch`。
+- 宿主独立记录这次调用里有没有一次完整、成功的取回（拿到 HTTP 状态、没有传输错误）。无有效网络观测不能提交终态，即便插件错误地声称成功。任务快照 ID 校验、执行权 fencing 与账务事务保持 §28 的约束。
 
-这项能力不要求插件新增通用 `net` 或账号枚举权限。它约束的是本次受调度执行的专用 HTTP 通道；插件既有的通用 Egress 权限仍独立存在，不能据此声称任意恶意插件的所有出网都会自动使用任务账号限额。内置 volcengine 的 Poll 只使用 ExecuteHTTP，素材管理继续使用其已授权的通用出口。
+这项能力不要求插件新增通用 `net` 或账号枚举权限。它约束的是本次受调度执行的专用 HTTP 通道；插件既有的通用 Egress 权限仍独立存在，不能据此声称任意恶意插件的所有出网都会自动使用任务账号限额。内置 volcengine 的 Monitor 只使用取回，素材管理继续使用其已授权的通用出口。
 
-旧插件的 `BuildReconcileRequest` / `ParseReconcileResponse` 保留兼容；声明 Poll 能力的插件走单次 Poll，不在新接口失败后重复调用旧接口。Poll 要求 Host API 3，旧普通插件无需因此重新编译。最新普通请求执行与主动上报契约在 §31。
+## 31. 插件执行（2026-10-01；转发 V2 改写，§112）
 
-## 31. 插件驱动执行与 SDK 主动上报（2026-10-01）
+2026-10-01 引入的插件执行与回调上报已被转发 V2 取代：每个平台插件只有 `Execute` 一条请求路径，事实只在返回值里，见 §112。本节只保留仍然有效的约束。
 
-### 31.1 请求执行
-
-核心继续负责认证、价格、账号选择、限额与并发；选定账号后调用声明 `platform.execute.v1` 的插件 `Execute`。SDK 的 `ExecuteDefault` 在插件进程里依次构造请求、调用 `ForwardUpstream`、解释用量/任务、调用 `RecordUsage` 或 `ReserveAndWatch`。插件可实现自己的 Execute，但不能跳过宿主的执行和记录确认。
-
-`ForwardUpstream` 是本次请求的代理通道：完整请求体留在核心，插件只给 URL、headers 和已有 BodyPatch；核心仍做协议转换、账号代理、SSRF 与超时控制。返回给插件的是有界用量观察，不搬运整条 SSE。声明式用量继续由核心按当前生效的规则在线累计；`RecordUsage(ctx, nil)` 确认这些事实，不会用一个截断响应重新计算总用量。需要插件解析的用量在插件本地调用 ExtractUsage，失败时显式采用核心规则并记录 fallback。
-
-上游错误通过 ForwardUpstream 返回给插件本地 ClassifyError，Execute 将分类返回核心；换号、冷却和能否重试仍由核心裁决。避免在一次占用执行并发位的 RPC 内再次等待同一插件的普通 RPC。用量解析属于另一插件的跨平台特殊路由保留旧执行路径，不能由账号插件擅自替换其解析器。
-
-新路径按用户要求在记录确认后返回。非流式成功响应先暂存，记录成功后发布；内存暂存上限 1 MiB，超过后使用仅本进程用户可读的临时文件，总上限 64 MiB，用完删除。SSE 继续及时逐块转发，结束时等待有界记录收尾。这明确改变了 §25 旧路径的“插件提取不延迟 EOF”约束。客户端断连取消上游读取，已取得的用量仍进入独立有界的记录收尾。不能把已发出的流式字节撤回，也不承诺 PG 持续不可用时仍完成实时记账；已开始的流若最终未获记录确认，中断连接，不伪造干净 EOF。
-
-### 31.2 异步提交与监控
-
-`ReserveAndWatch(ctx, TaskSubmission)` 把已接受任务的使用记录、可选估计预扣和监控登记作为一个事务。核心保留原账号、认证归属与公开 ID，提交响应在确认后发布。这里的预扣发生在上游接受提交之后、客户端取得成功响应之前；不是发送上游前的严格余额预留，不提供并发请求绝不透支的保证。
-
-声明 `platform.monitor.v1` 的插件实现 `Monitor(ctx, PollRequest) error`。核心沿用 §28/§30 的共享调度、任务租约与原账号约束，选定一个节点调用一次 Monitor。插件通过 ExecuteHTTP 观察一次，再调用 `ReportTaskProgress(ctx, ReconcileResult)`：pending 保存快照与下一次建议；终态在同一事务保存快照、结算/退款并结束监控。插件不创建轮询定时器，不决定执行节点，不直接写核心账务表。
-
-`ReportTaskProgress` 确认表示事务已经提交；Monitor 返回本身不触发第二次结算。超时、不可用、额度不足及未上报结果由核心安排后续处理。每次终态上报仍需完整网络证据、匹配的任务快照和有效执行权，不能用失效租约覆盖其他节点的结果。
-
-### 31.3 权限、幂等与兼容
-
-所有回调使用核心为具体插件进程签发的随机执行 token，SDK 自动从本次 context 注入。token 不授予任意账号或任意用户的记账权；上报字段只有上游事实，价格、金额、归属和账本幂等键都由核心决定。调用返回后撤销权限，并等待已准入的回调结束。相同操作和相同事实的重试读取已提交回执，冲突事实被拒绝。
-
-迁移 `0019_plugin_executions.sql` 保存执行意图与事务回执。网络前记录不含账号凭证的执行基线；网络后保存可信用量事实与受限诊断摘要，成功提交后清除重复内容。核心只自动恢复已持久化观察的同步用量，不重放网络请求；异步提交不因任务 receipt 被清理而改按同步请求收费。若硬崩发生在上游已经处理、观察尚未落库之间，只能保留未确定意图，不能承诺跨 HTTP/PG 精确补账。回执在 7 天后具备回收资格，按有时间预算的批次清理；该期限不是清理积压时的硬存储上限。
-
-同一次执行已收到有效 Record/Watch 事实但事务确认失败时，核心在有界收尾期间优先重试相同事实和 digest，包括任务登记；不重新请求上游，也不把已有插件事实换成规则用量。只有尚未收到可提交的插件事实时才使用同步用量的规则 fallback。恢复扫描中的单条永久错误会退后重试，不能阻塞其他记录。
-
-宿主 API 4 是 Execute / Monitor 的最低版本；SDK 初始化前做门禁，普通旧插件仍走原接口。内置 anthropic/openai/gemini/relay 0.2.0 和 volcengine 0.10.0 使用 Execute；volcengine 使用 Monitor。guard/moderation 的 hook、定时任务及事件处理不伪装成平台 Execute。Poll 与两阶段 Build/Parse 仅作为未声明 Monitor 的兼容通路，新接口失败不会偷偷再次执行旧通路。
-
-执行上下文只约束这些专用通道。插件另有权限使用通用 Egress 时，仍服从那个通道自身的策略，不能据此声称所有插件出网都继承本次账号限额。升级与回退继续遵守 §28.4 的全节点要求。
-
+- **执行令牌**：所有宿主调用（`RelayUpstream`、`ExecuteHTTP`）使用核心为具体插件进程签发的随机执行 token，SDK 自动从本次 context 注入。token 不授予任意账号或任意用户的记账权；返回的事实只有上游事实，价格、金额、归属和账本幂等键都由核心决定。调用返回后撤销权限，并等待已准入的宿主调用结束。
+- **等待形式的发布时机**：非流式成功响应先暂存，事实提交后发布；内存里留 1 MiB，超过后使用仅本进程用户可读的临时文件，不限大小（转发 V2 收尾起；此前总上限 64 MiB），这次尝试结束时删除。SSE 继续及时逐块转发，结束时等待有界的提交收尾。已开始的流若最终未获提交确认，中断连接，不伪造干净 EOF。不等待形式（绝大多数端点）不暂存。
+- **执行记录**：迁移 `0019_plugin_executions.sql` 保存等待形式的执行意图、观察与提交（状态与按续期判断的恢复见 §112.7）。网络前记录不含账号凭证的执行基线；网络后保存核心的读数与受限诊断摘要。核心不重放网络请求；若硬崩发生在上游已经处理、观察尚未落库之间，只能保留未确定意图，不能承诺跨 HTTP/PG 精确补账。执行行在 7 天后具备回收资格，按有时间预算的批次清理；该期限不是清理积压时的硬存储上限。
+- **提交重试**：同一次执行的事实提交失败时，核心在 15 秒收尾时限内重试相同事实和 digest，包括任务登记；不重新请求上游，也不把插件的事实换成核心读数。恢复扫描中的单条永久错误会退后重试，不能阻塞其他记录。
+- **专用通道**：执行上下文只约束这些宿主调用。插件另有权限使用通用 Egress 时，仍服从那个通道自身的策略，不能据此声称所有插件出网都继承本次账号限额。guard、moderation 的钩子、定时任务及事件处理不是平台 `Execute`。升级与回退遵守 §112.11。
 
 ## 32. 异步查询失败与任务不存在（2026-10-01）
 
@@ -2531,9 +2504,9 @@ sub2api 按多节点部署设计，**插件的每个实例都跑在每个节点�
 - `POLL_FAILED`：本次查询失败（网络、鉴权、限流、服务端错误、无法解析等），`reason` 说明原因；保持旧快照，增加连续失败计数，核心按退避继续查询。
 - `SETTLED`、`SETTLED_ESTIMATE`、`FAILED` 的现有成功/估算/上游失败结算语义不变。
 
-SDK 提供 `pluginsdk.TaskNotFound(reason)`、`pluginsdk.PollFailure(reason)` 以及可选的 `ClassifyPollResponse(status, transportError, truncated)`。默认分类把完整 404/410 视作 NOT_FOUND，其他非 2xx 以及不完整响应视作 POLL_FAILED；HTTP 200 返回业务错误的服务由插件根据供应商契约解释。任务不存在是领域结果，不使用 gRPC NotFound 代替。网络不完整时宿主允许报告 POLL_FAILED，但仍禁止据此报告成功或 NOT_FOUND。
+SDK 提供 `pluginsdk.TaskNotFound(reason)`、`pluginsdk.PollFailure(reason)` 以及可选的 `ClassifyPollResponse(status, transportError)`（转发 V2 收尾起两个参数：取回的回答不再截断，`truncated` 参数随之删除；读不完整是传输错误）。默认分类把 404/410 视作 NOT_FOUND，其他非 2xx 以及传输错误视作 POLL_FAILED；HTTP 200 返回业务错误的服务由插件根据供应商契约解释。任务不存在是领域结果，不使用 gRPC NotFound 代替。网络不完整时宿主允许报告 POLL_FAILED，但仍禁止据此报告成功或 NOT_FOUND。
 
-`settings.reconcile.max_poll_failures` 默认 20，允许 0–1000，0 关闭连续失败次数限制。第 20 次失败与停止任务、退款在原有账务事务中一同提交；配置为其他正数时按配置执行。`poll_failures` 存于 PG，换节点与重启不会清零；旧记录导入托管任务时继承计数。账号忙、冷却、限额暂缓及核心调用取消不计失败。Monitor 回报重试使用原有 receipt 去重，不能重复累计或退款。
+`settings.reconcile.max_poll_failures` 默认 20，允许 0–1000，0 关闭连续失败次数限制。第 20 次失败与停止任务、退款在原有账务事务中一同提交；配置为其他正数时按配置执行。`poll_failures` 存于 PG，换节点与重启不会清零；旧记录导入托管任务时继承计数。账号忙、冷却、限额暂缓及核心调用取消不计失败。Monitor 结果的提交带这次观察的标识和结果摘要（`core.FactDigest`），不能重复累计或退款。
 
 托管任务不再用 `max_reconcile_attempts` 限制正常进度查询，总尝试次数仅作记录；旧结算队列保留原总次数上限。托管任务仍使用插件期限与 `max_reconcile_age_sec` 的较小值（默认最大 7 天），到期后以 `task_timeout` 结束并退回尚未结算的预扣费用。已经确认成功、后由管理员重新对账的任务不会因查询失败推翻已确认结果，仍保留原估算结算语义。
 
@@ -2577,7 +2550,7 @@ SDK 提供 `pluginsdk.TaskNotFound(reason)`、`pluginsdk.PollFailure(reason)` �
 
 **插件互斥。** 核心计划与插件安装/批准/启用/升级/停用/卸载通过 Redis 锁 `system:cluster-change` 串行提交（25 秒提交上下文），running/paused 计划存在时插件变更被拒绝；紧急撤权例外。大包解包与哈希在取锁前完成。rollout 进入终态后，每个可能仍有旧实例的 boot 在 `plugin_rollout_cleanup`（迁移 0021）记录清理屏障 `cleanup_pending → cleaned`，`plugin_rollout_nodes` 保留各节点 active/failed 结果；未清理完成会阻止新核心计划；运行中的核心在本机旧实例排空后自行确认，已退出核心的 boot 只有网关确认进程组退出后才标为 `cleaned`，存活过期不算证据。
 
-**插件包分发（2026-10-02 补充）。** 插件包字节不再存 PG：迁移 0022 删除 `plugin_versions.package`，新增 `package_url`。市场版本由每个节点按 `package_url` 自行下载；上传和首装的包由主节点网关保存，从节点经节点网络拉取。核心通过 `blobs.Source` 取包（市场优先，失败或摘要不符时回退到存储），存储在网关托管下是本机管理 socket 上的 `/system/plugin-blobs/<sha256>`，没有网关时是本机目录（只支持单节点）。节点间新增两个范围：`plugin-upload`（`PUT /internal/plugin-blobs/`，从节点→主节点）与 `plugin-artifact`（`GET /internal/plugin-blobs/`，摘要须被某个版本引用）。所有写入校验 sha256 与大小上限（网关 `plugin_max_bytes` / 核心 `SUB2API_PLUGIN_MAX_PACKAGE_BYTES`，默认 64 MiB；解包另限 256 MiB、2000 个文件，打包工具同样执行。三者统一定义在 `runtime-contract`（`PluginPackageMaxBytes` 等），0.1.290 起按当时最大的内置插件包（moderation，压缩约 16 MiB、解包约 45 MiB）约 4 倍取整，此前为 1 GiB / 2 GiB；包下载、经外壳的传输与外壳从其他节点拉包的超时都是 10 分钟（`PluginPackageTransferTimeout`））；上传在主节点确认保存后才写入版本行。细节见 [规约 §6.2](MULTINODE-SYNC-PROTOCOL.md)。
+**插件包分发（2026-10-02 补充）。** 插件包字节不再存 PG：迁移 0022 删除 `plugin_versions.package`，新增 `package_url`。市场版本由每个节点按 `package_url` 自行下载；上传和首装的包由主节点网关保存，从节点经节点网络拉取（2026-11-18 起改为每个节点保存自己存过、用过的包，缺包时向任一在线持有者取，不再依赖主节点，见 §114）。核心通过 `blobs.Source` 取包（市场优先，失败或摘要不符时回退到存储），存储在网关托管下是本机管理 socket 上的 `/system/plugin-blobs/<sha256>`，没有网关时是本机目录（只支持单节点）。节点间新增两个范围：`plugin-upload`（`PUT /internal/plugin-blobs/`，从节点→主节点，2026-11-18 删除，§114）与 `plugin-artifact`（`GET /internal/plugin-blobs/`，摘要须被某个版本引用）。所有写入校验 sha256 与大小上限（网关 `plugin_max_bytes` / 核心 `SUB2API_PLUGIN_MAX_PACKAGE_BYTES`，默认 64 MiB；解包另限 256 MiB、2000 个文件，打包工具同样执行。三者统一定义在 `runtime-contract`（`PluginPackageMaxBytes` 等），0.1.290 起按当时最大的内置插件包（moderation，压缩约 16 MiB、解包约 45 MiB）约 4 倍取整，此前为 1 GiB / 2 GiB；包下载、经外壳的传输与外壳从其他节点拉包的超时都是 10 分钟（`PluginPackageTransferTimeout`））；上传在包存好之后才写入版本行（2026-11-18 起只存在接到上传的节点上，§114）。细节见 [规约 §6.2](MULTINODE-SYNC-PROTOCOL.md)。
 
 **CPU 保护（2026-10-02 补充）。** 管理员在系统设置的“CPU 保护”页开关并设定阈值（`GET/PUT /api/v1/system/offload`，`settings:read` / `settings:manage`，经核心转给本机网关；未托管节点返回 503 `updater_unavailable`）。设置存于 `updater.clusters.offload_enabled/offload_cpu_percent`，默认关闭、阈值 80，取值 50–95。每个网关每秒采样 CPU，取本节点 cgroup（相对其可用 CPU）与整机两者较高者，按最近 10 秒平均；实时心跳保存到 Redis，（最新规则见 CONTRACTS §39；未测得为未知）。本地服务的节点平均值达到阈值后，把新的公网请求轮流交给其他节点：目标须启用、本地服务就绪、同一核心版本、心跳 20 秒内、自身未在转移且 CPU 低于阈值减 10；没有目标就留在本节点。低于阈值减 10 才停止。网关先在 PG 写入 `offloading=true` 再开始转移，先停止转移再清除标记；接收端只接受带标记的来源的 `forward`，因此转移可以从主节点到从节点。转移不续期 10 秒后自动失效。转移的请求走现有 `/internal/forward`，接收端只交给本地核心，不再转发；进行中的请求不迁移，业务请求不重放，目标路由变化时该请求得到 503。细节见 [规约 §5.1](MULTINODE-SYNC-PROTOCOL.md)。
 
@@ -2585,9 +2558,9 @@ SDK 提供 `pluginsdk.TaskNotFound(reason)`、`pluginsdk.PollFailure(reason)` �
 
 依据 [Responses WebSocket 设计](OPENAI-RESPONSES-WEBSOCKET.md)；验收见 [验证记录](audits/2026-10-02/MULTINODE-VALIDATION.md) 第 14 节。
 
-**清单。** `Endpoint.Kind` 新增 `websocket`：必须 `GET`、`response.stream` 为 `websocket`、无 `response.nonStream`/`request.stream`/`request.streamPath`/`modelParam`/`modelSource`/`usageSource: plugin`/`task`，模型只从每条消息的 `request.modelPath` 读；`billing: usage` 时需要非空 `usage.sse`，规则按消息 `type` 匹配。新能力 `platform.websocket.v1`（需 `platform.adapter.v1`）表示插件的 `BuildUpstreamRequest` 能为本平台 WebSocket 协议返回 `GET ws(s)://…` 握手；SDK 在清单声明它时上报该能力。内置 openai 平台新增端点 `GET /v1/responses`，协议 `openai.responses_ws`，用量规则读取 `response.completed`/`response.incomplete`/`response.failed`，粘性规则 `openai-prompt-cache-key` 也匹配该协议。openai 插件 0.3.0 声明该能力，握手带 `OpenAI-Beta: responses_websockets=2026-02-06`（客户端自带版本时保留）。
+**清单。** `Endpoint.Kind` 新增 `websocket`：必须 `GET`、`response.stream` 为 `websocket`、无 `response.nonStream`/`request.stream`/`request.streamPath`/`modelParam`/`modelSource`/`usageSource: plugin`/`task`，模型只从每条消息的 `request.modelPath` 读；`billing: usage` 时需要非空 `usage.sse`，规则按消息 `type` 匹配。新能力 `platform.websocket.v1`（需 `platform.adapter.v1`）表示插件的 `Execute` 能为本平台 WebSocket 协议的每一轮给出 `GET ws(s)://…` 握手和这一轮的消息（§83.6、§112.2）；SDK 在清单声明它时上报该能力。内置 openai 平台新增端点 `GET /v1/responses`，协议 `openai.responses_ws`，用量规则读取 `response.completed`/`response.incomplete`/`response.failed`，粘性规则 `openai-prompt-cache-key` 也匹配该协议。openai 插件 0.3.0 声明该能力，握手带 `OpenAI-Beta: responses_websockets=2026-02-06`（客户端自带版本时保留）。
 
-**会话。** 升级前完成鉴权与连接数限制（每个 API Key 集群范围 64 条，Redis 并发位 `ws:<key id>`）；排空中的节点不接受新会话。每条能开始一轮的客户端消息（格式检查通过的 `response.create`）在开始之前用握手时的 API Key 与客户端地址重新鉴权一次（与握手同一路径，单次最多 10 s），这一轮按新的 principal 运行（2026-11-12 权限加固 M4）：401/403（密钥被撤销、禁用、过期，用户被禁用，IP 不在白名单）→ 发 `error` 事件并以 **1008** 关闭，客户端不应重连；首轮之后密钥换了分组 → 409 `api_key_group_changed` 并以 **1012** 关闭，客户端应重连；其他鉴权错误（存储暂不可用、超时）只让这一轮失败，会话保留。在这一步被拒的轮次不写使用记录；格式不对的消息直接 400，不触发鉴权；进行中的一轮不被打断，空闲会话不定时复检。每条 `response.create` 是一轮：新请求 ID、模型白名单、钩子、价格与余额、API Key 并发位与限速；首轮按 HTTP 规则调度账号并建立上游连接，握手失败交给插件分类并换号；后续轮次复用同一账号与连接，账号并发位或限额最多等 10 s。每轮消息在钩子与模型映射之后应用插件 `BuildUpstreamRequest` 返回的 body patch（首轮取握手那次调用的，后续轮每轮调用一次只取 patch，2026-11-08 起，见 §83.6）。只路由到声明了 `platform.websocket.v1` 的插件的原生账号类型，不做协议转换。每轮一条使用记录（`protocol=openai.responses_ws`、`stream=true`）与一次结算，轮次结束即释放 API Key 与账号并发位。带 HTTP 状态的上游 `error` 事件交给插件分类以冷却或禁用账号，连接保持。会话不设空闲超时（2026-11-08 起；此前首条消息 30 s 以 1008、轮间空闲 300 s 以 1000 关闭），保持到客户端断开；核心每 30 s 向客户端与上游各发 ping，30 s 无 pong 即关闭该连接；上游断开以 1011 关闭客户端连接。节点排空时空闲会话立即以 1012 关闭，进行中的一轮最多再等 30 s；核心经 `gateway.Deps.Draining` 观察请求闸门，因为 `http.Server.Shutdown` 不跟踪已升级连接。
+**会话。** 升级前完成鉴权与连接计数（Redis 并发位 `ws:<key id>`；每个 API Key 的会话数不设上限，转发 V2 收尾起，§112.16；此前集群范围 64 条，第 65 条 429）；排空中的节点不接受新会话。每条能开始一轮的客户端消息（格式检查通过的 `response.create`）在开始之前用握手时的 API Key 与客户端地址重新鉴权一次（与握手同一路径，单次最多 10 s），这一轮按新的 principal 运行（2026-11-12 权限加固 M4）：401/403（密钥被撤销、禁用、过期，用户被禁用，IP 不在白名单）→ 发 `error` 事件并以 **1008** 关闭，客户端不应重连；首轮之后密钥换了分组 → 409 `api_key_group_changed` 并以 **1012** 关闭，客户端应重连；其他鉴权错误（存储暂不可用、超时）只让这一轮失败，会话保留。在这一步被拒的轮次不写使用记录；格式不对的消息直接 400，不触发鉴权；进行中的一轮不被打断，空闲会话不定时复检。每条 `response.create` 是一轮：新请求 ID、模型白名单、钩子、价格与余额、API Key 并发位与限速；首轮按 HTTP 规则调度账号并建立上游连接，握手失败交给插件分类并换号；后续轮次复用同一账号与连接，账号并发位或限额最多等 10 s。每轮消息在钩子与模型映射之后交给插件的 `Execute`，插件交回这一轮的最终消息（首轮的那次调用同时给出握手，§83.6）。只路由到声明了 `platform.websocket.v1` 的插件的原生账号类型，不做协议转换。每轮一条使用记录（`protocol=openai.responses_ws`、`stream=true`）与一次结算，轮次结束即释放 API Key 与账号并发位。带 HTTP 状态的上游 `error` 事件交给插件分类以冷却或禁用账号，连接保持。会话不设空闲超时（2026-11-08 起；此前首条消息 30 s 以 1008、轮间空闲 300 s 以 1000 关闭），保持到客户端断开；核心每 30 s 向客户端与上游各发 ping，30 s 无 pong 即关闭该连接；上游断开以 1011 关闭客户端连接。节点排空时空闲会话立即以 1012 关闭，进行中的一轮最多再等 30 s；核心经 `gateway.Deps.Draining` 观察请求闸门，因为 `http.Server.Shutdown` 不跟踪已升级连接。
 
 **不在范围。** ChatGPT OAuth/Codex 账号、上游连接池与预热、断线后 `previous_response_id` 恢复和 HTTP 桥接回退未移植；上游断开时由客户端重连。
 
@@ -2597,7 +2570,7 @@ SDK 提供 `pluginsdk.TaskNotFound(reason)`、`pluginsdk.PollFailure(reason)` �
 
 **流程。** 管理员发起启用或升级后：
 1. 协调节点（核心）在插件迁移锁内执行目标版本的 `migrations/*.sql`。每个文件在独立事务中执行，并记录在 `plugin_migrations`，已记录且内容未变的文件不再执行。
-2. 每个节点各自同步插件包（上传和首装的包从主节点取，市场包从市场下载）、校验，在旧版本继续服务的同时启动新版本待命。
+2. 每个节点各自同步插件包（上传和首装的包向持有它的任一在线节点取，§114；市场包从市场下载）、校验，在旧版本继续服务的同时启动新版本待命。
 3. 声明了 `migration.data.v1` 的插件，由协调节点调用本机新版本的 `MigrateData`。每次发布只调用一次，完成后记为 `plugin_migrations` 中的 `data:rollout-<id>:<from>-><to>`，协调节点被接管时不再重复调用。协调节点自己的新版本启动失败时，把协调权交给已就绪的节点。
 4. 至少一个节点的新版本就绪，并且其余存活节点都已就绪或失败，或者准备期（默认 120 秒）已满，就提交新版本。只有没有任何节点能就绪（全部失败，或准备期满仍无就绪），或迁移失败时，发布才失败，所有节点继续使用旧版本。
 5. 提交后每个节点自行切换：新版本就绪即切换并排空旧版本；未就绪（仍在启动或失败）则继续用已在运行的旧版本服务，按 `LoadRetry`（默认 30 秒）重试，成功后自行切换，不等待其他节点，也不需要再发起发布。节点上报 `fallback` 字段，说明它仍在用哪个版本。重启后没有旧版本可用的节点，在新版本就绪前该插件在本节点不可用。
@@ -2685,7 +2658,7 @@ SDK 提供 `pluginsdk.TaskNotFound(reason)`、`pluginsdk.PollFailure(reason)` �
 - 模型区按钮："填入预设模型（N）"（合并，已有的保留）、"从上游获取"（§19）、复制（逗号分隔）、清空（= 所有模型）。配置了映射的模型标签用紫色标出，悬停显示目标模型。
 - 映射区：表格编辑（请求模型 → 上游模型，输入时提示已知模型 ID）或 JSON 编辑；"填入预设映射（N）"合并映射（已有的请求模型不覆盖），模型列表非空时同时把这些请求模型加入列表。模型列表非空、而映射的请求模型不在其中时给出警告和"加入模型列表"。
 - 编辑器仍分"接入配置 / 模型配置 / 调度与限流"三块。左侧导航显示每块摘要（名称；模型与映射数量；优先级 · 权重 · 并发）和错误标记，上方展示账号类型（图标、插件与版本、平台）。同一 `creationGroup` 的认证方式改为单选卡片；限流输入框带单位；没有凭证字段的类型显示说明，不留空白。切换分块时回到顶部。
-- `SchemaForm` 新增 uiSchema 关键字 `ui:section`：值为 LocalizedText，或 `{title, description?, collapsed?}`。从该字段开始到下一个带 `ui:section` 的字段为一组，组前画标题；`collapsed: true` 的组默认折叠，组内任一字段有值或有错误时自动展开。只认带 `ui:` 前缀的写法（不带前缀的 `section` 可能是同名子字段）。旧控制台忽略该关键字，字段照常显示。
+- 表单分节：当时 `SchemaForm` 新增 uiSchema 关键字 `ui:section`（值为 LocalizedText 或 `{title, description?, collapsed?}`，`collapsed` 的组默认折叠，组内有值或有错误时自动展开）。UI 4.0 随 `SchemaForm` 删除（2026-11-19），同样的分节在原生表单里用 `@sub2api/ui` 的 `SFormSection`（`createApiKeyForm` 的 `section: {title, help?, collapsed?}`，§23.3）。
 
 ### 41.4 内置插件预设
 
@@ -2694,7 +2667,6 @@ SDK 提供 `pluginsdk.TaskNotFound(reason)`、`pluginsdk.PollFailure(reason)` �
 | 插件（版本） | 账号类型 | 预设模型 | 预设映射 |
 |---|---|---|---|
 | anthropic 0.2.5 | `apikey` | Claude 现行与仍可用的模型（别名与带日期 ID），不含已退役模型 | 无 |
-| claude-oauth 0.2.1 | `claude_oauth`、`claude_setup_token` | 同 anthropic | 无 |
 | relay 0.2.2 | `relay_key` | 同 anthropic | 无（由中转站自己决定模型） |
 | openai 0.3.4 | `apikey` | new-api OpenAI 列表中走 chat / responses / embeddings 的模型（不含本平台没有端点的音频、图片、实时、视频模型，也不含 `gpt-4.5-preview*`、`o1-preview`、`o1-mini` 等已退役模型） | 无 |
 | gemini 0.2.4 | `apikey` | new-api Gemini 列表中走 generateContent 的模型（不含 imagen、veo、TTS、原生音频，也不含 `gemini-1.5-*` 与旧 2.5 预览版） | 无 |
@@ -2702,7 +2674,7 @@ SDK 提供 `pluginsdk.TaskNotFound(reason)`、`pluginsdk.PollFailure(reason)` �
 
 `defaultModelMapping` 字段与校验（41.1）、`default_model_mapping` 接口字段（41.2）和控制台的"填入预设映射"（41.3）都保留，供 volcengine 与第三方插件使用；预设映射为空时控制台不显示该按钮的数量提示即可。已经按旧预设建好的账号，映射仍保存在账号上，不受插件升级影响（§41 开头：预设与账号再无关联）。
 
-volcengine 0.12.2 的两个表单同时用 `ui:section` 把素材库字段归入"素材库（可选）"，`relay` 的旧前缀字段归入默认折叠的"兼容配置"。
+volcengine 0.12.2 的两个表单同时用 `ui:section` 把素材库字段归入"素材库（可选）"，`relay` 的旧前缀字段归入默认折叠的"兼容配置"（0.13.0 起表单是原生组件，同样的分节用 `SFormSection`，兼容配置仍默认折叠）。
 
 计费、分组白名单、粘性会话仍按**映射前**的请求模型（§18）：客户端使用映射里的别名时，需要为别名配置价格。
 
@@ -2768,12 +2740,13 @@ PUT 是补丁语义（省略的字段不变），响应为保存后的完整设�
 
 | 类别 | 默认上限 | 包含的调用 |
 |---|---|---|
-| Hot | 64 | 网关请求路径：模型解析、预估、钩子、调度、`BuildUpstreamRequest`、`ClassifyError`、用量提取 |
+| Hot | 64 | 网关请求路径：模型解析、预估、钩子、调度、`ClassifyError` |
 | Console | 16 | 凭证校验、测试请求、拉取模型、额度查询、插件 HTTP 路由 |
-| Background | 8 | 任务、事件、广播、Poll、监控、对账、数据迁移 |
-| Execute | 1024 | 插件驱动执行（§31）的 `Execute`，整个上游交换期间一直占用；真正的并发由核心的账号与 API Key 槽位限制，这里只是兜底 |
+| Background | 8 | 任务、事件、广播、任务观察（`Monitor`）、凭证续期、数据迁移 |
 
-满了的调用排队等待，直到拿到槽位或调用方 ctx 到期，到期时返回 `plugin <key>: waiting for a free call slot: context deadline exceeded`。目的：长流式 `Execute` 和后台任务不会占满请求路径需要的调用槽位。
+满了的调用排队等待，直到拿到槽位或调用方 ctx 到期，到期时返回 `plugin <key>: waiting for a free call slot: context deadline exceeded`。目的：后台任务不会占满请求路径需要的调用槽位。
+
+网关请求的 `Execute`（§112）不属于任何类别、不限并发（转发 V2 收尾起；此前另有 Execute 类，每实例 1024，满了 503）：真正的并发由核心的账号与 API Key 槽位限制。`Execute` 照样计入在途调用，换代或停机排空实例时照旧等它们结束。
 
 ### 43.2 改密、禁用后旧令牌失效
 
@@ -2799,12 +2772,12 @@ PUT 是补丁语义（省略的字段不变），响应为保存后的完整设�
 
 - URL 必须是绝对 http(s)，不能带用户名密码；
 - 不走代理时，主机名解析出的地址不能是私网、回环或链路本地，IP 字面量直接判断；
-- 经代理时不检查目标地址，由代理检查（43.3）兜底；
+- 经代理时本机不解析目标域名（名字交给代理，本机的 DNS 既不参与判断也不得知这个名字），只拒绝字面的私网、回环、链路本地地址和 `localhost`，其余由代理检查（43.3）兜底。规则只有一处 `netguard.CheckHostVia`，网关的中继与 WebSocket 握手、`Monitor` 的取回、控制台的测试 / 拉取模型 / 额度查询都用它（转发 V2 收尾起；此前网关经代理时也在本机解析，本机 DNS 失败会拒绝所有经代理的账号，控制台经代理时完全不检查）；
 - `SUB2API_GATEWAY_ALLOW_PRIVATE_UPSTREAM=true` 时不检查。控制台三处（测试、拉取模型、额度查询）此前忽略了这个开关，2026-10-05 修正（`account.Service.guardUpstream`）。
 
 插件出站隧道（`plugin/egress`）的规则：
 
-- 先按插件的出站策略过滤域名，再解析主机名，检查每个解析结果。
+- 先按插件的出站策略过滤域名，再按管理员的“插件联网”设置过滤（§113），再解析主机名，检查每个解析结果。
 - 解析结果是私网地址时拒绝。例外：策略为 `allow_all`；目标是插件数据库地址（`PGAddrs`）；目标在 `AlwaysAllow` 里（核心把自己的 PG 地址放在这里）。
 - 注意：`allowlist` 里明确列出的域名如果解析到私网，同样会被拒绝，只有 `allow_all` 能连私网。
 - 2026-10-05 修正：检查通过后**直接连检查过的那几个地址**（按解析顺序，按 `tcp4`/`tcp6` 过滤），不再用主机名重新解析。之前两次解析之间 DNS 答案可以变（DNS rebinding），第二次解析到私网也会连上。例外目标仍按名字连接。
@@ -2816,7 +2789,7 @@ PUT 是补丁语义（省略的字段不变），响应为保存后的完整设�
 - 把账号绑定到分组需要 `group:manage` 或 `account:group:bind`；
 - `priority` 只能 0–100，`weight` 只能 1–100，`max_concurrency` 只能 1–1000，超出返回字段错误 `restricted`；
 - 管理员禁用的账号（`admin_locked`，§15.9、§21.3.1）不能自行启用或重置状态，403 `account_locked_by_admin`；
-- 账号类型**没有声明 `guardedSettings`** 时（relay 这类可以自填上游地址的类型；核心内置类型同样算），创建或修改需要 `account:relay`，否则 403，`details.required_permission = "account:relay"`。注意判断条件是"没有声明受限设置"，不是"类型叫 relay"：上游地址固定、不需要受限设置的类型（如 `claude_oauth`）目前也要求这个权限。
+- 账号类型**没有声明 `guardedSettings`** 时（relay 这类可以自填上游地址的类型；核心内置类型同样算），创建或修改需要 `account:relay`，否则 403，`details.required_permission = "account:relay"`。注意判断条件是"没有声明受限设置"，不是"类型叫 relay"：上游地址固定、不需要受限设置的类型（如 codex 的 `codex_oauth`）目前也要求这个权限。
 
 ### 43.6 授予与操作他人的权限检查
 
@@ -2855,24 +2828,40 @@ PUT 是补丁语义（省略的字段不变），响应为保存后的完整设�
 
 已部署的 `0046_proxy_real_ip.sql` 遗漏了 `ADD COLUMN IF NOT EXISTS`，不能通过修改历史文件或数据库校验和来修复，否则会破坏托管升级的 schema contract。核心 `CoreTracker` 仅在文件名和原始 SHA-256 `1b0719bb3a07caa74ca6ad5d92e8c605e9c4f0ebea3097b96a1226ef99c4897f` 同时匹配时，把执行语句中的两个 `ADD COLUMN` 转为 `ADD COLUMN IF NOT EXISTS`。校验、迁移记录和 schema contract 仍使用原文件字节；该兼容不作用于插件、其他文件或其他校验和。直接手工执行旧 SQL 不受此兼容保护；新迁移仍必须原生幂等。
 
-### 43.8 Landlock 文件系统限制（默认关闭）
+### 43.8 Landlock：插件的文件、unix socket、信号（2026-11-18 起 Linux 上默认开启）
 
-审计加的 Landlock（`sandbox/landlock_linux.go`）合并时**在 Linux 上编译不过**：它调用了 x/sys 并不存在的包装函数。因为本机是 Windows，CI 又先在 gofmt 一步失败，所以一直没被发现。2026-10-05 改为直接调用三个系统调用。
+插件进程与核心、网关外壳是同一个系统用户（容器里 uid 1000），文件权限和 socket 的属主分不开它们。Landlock 是这一层的隔离：`plugin-exec` 在 `execve` 插件之前给自己建一个 Landlock 规则集，插件继承它（`sandbox/landlock_linux.go`）。设计与取舍见 `docs/DESIGN-2026-11-18-PLUGIN-SANDBOX-FS.md`。
 
-- 开关：`SUB2API_PLUGIN_LANDLOCK`，**默认 false**。打开后 plugin-exec 带 `--landlock`，只在 Linux 5.13+ 生效；内核不支持时什么也不做。
-- 受限的权限：读文件、读目录、执行、写文件、建文件、建目录、删文件、删目录。socket、fifo、符号链接、设备不受限。
-- 放行的路径：
+- **开关**：`SUB2API_PLUGIN_LANDLOCK`，Linux 上**默认 true**（0.1.304 起；此前默认 false，只有网关托管的核心由网关打开）。`false` 回到不限制（只剩 seccomp、rlimit），开发模式（`SUB2API_PLUGIN_DEV_MODE=true`）不经过 `plugin-exec`，同样不限制。网关仍给它托管的核心写 `SUB2API_PLUGIN_LANDLOCK=true`（为了它可能启动的旧核心），`plugin_landlock_disabled: true` 写 `false`；`core_env` 或网关自身环境里的显式值优先。
+- **尽力而为**：规则集处理内核 Landlock 版本支持的**全部**权限（`landlockHandled`），比内核新的位自动去掉，只对下面的白名单放行需要的几项。各层与内核：
 
-  | 路径 | 权限 |
-  |---|---|
-  | 插件二进制 | 读、执行 |
-  | 插件工作目录与数据目录 | 读写 |
-  | 临时目录（go-plugin 在这里建 unix socket） | 读写 |
-  | `/dev/null` | 读写 |
-  | CA 证书、`/usr/share/zoneinfo`、`/etc/localtime`、`/etc/resolv.conf`、`/etc/hosts`、`/etc/nsswitch.conf`、`/etc/services`、`/dev/urandom` | 只读，存在时才放行 |
+  | 层（节点页与日志里的名字） | Landlock ABI | 内核 | 限住什么 |
+  |---|---|---|---|
+  | 文件 `fs` | 1 | 5.13 | 读写执行文件、列目录、建删文件与目录、建 socket/fifo/符号链接/设备节点；第 2 版（5.19）起跨目录移动（refer），第 5 版（6.10）起设备 ioctl |
+  | 截断 `fs_truncate` | 3 | 6.2 | `truncate(2)`、`O_TRUNC`（第 3 版之前，插件能按路径截断同用户可写的任何文件） |
+  | TCP `tcp` | 4 | 6.7 | 只在严格网络下处理：不放行任何端口（seccomp 之下的第二道） |
+  | 作用域 `scope` | 6 | 6.12 | 连到沙箱外创建的抽象 unix socket（EPERM）、给沙箱外的进程发信号（EPERM） |
+  | 路径型 socket `unix` | 9 | 7.1 | `connect` / 带地址的 `sendmsg` 到沙箱外创建的路径型 unix socket（EACCES），只放行插件自己的 socket 目录 |
+  | UDP `udp` | 10 | 7.2 | 只在严格网络下处理：不放行任何端口 |
 
-- **默认关闭的原因**：还没有在真实插件上跑过。原稿只放行二进制和工作目录，打开后每个插件都会启动失败（go-plugin 要在 `/tmp` 建文件），也读不到证书和时区。要打开，先在 Linux 上让全部内置插件（含出网和时区相关功能）在开启状态下跑通。
-- **2026-10-29 线上两节点已打开**（同时打开插件签名校验，见 `deploy/gateway/ovh/README.md`）。6 个线上插件在 `plugin-exec --landlock --seccomp --strict-network` 下启动、握手正常；账号请求经两个节点都返回 200。代码默认值仍为 false。
+  第 7、8、11 版（日志、多线程同步、`no_new_privs` 标志）不涉及限制范围；第 12 版的命名空间与 capability 权限不处理（seccomp 已拒绝 `unshare`、`setns`，插件没有 capability）。抽象 socket 和信号作用域没有放行项：go-plugin、Go 运行时、SDK 都不给别的进程发信号（运行时只给自己的线程发），也不用抽象 socket。
+- **白名单**（`landlockRules`，路径不存在时跳过）：
+
+  | 路径 | 权限 | 谁有 | 为什么 |
+  |---|---|---|---|
+  | 插件二进制 | 读、执行 | 全部 | `plugin-exec` 在限制自己之后 `execve` 它。插件必须静态链接（`sub2api-plugin build` 用 `CGO_ENABLED=0`），没有放行动态链接器和库 |
+  | go-plugin 的 socket 目录（`PLUGIN_UNIX_SOCKET_DIR`，私有运行目录下的 `plugin-dir*`） | 读写文件、建文件、删文件、建 socket、连路径型 socket | 全部 | 插件在这里用 `os.CreateTemp` 占一个名字（建一个普通文件再删掉）、监听自己的 socket，并连核心在同一目录建的 broker socket（HostService、出口隧道） |
+  | `/dev/null` | 读写 | 全部 | 标准描述符被关掉时 Go 运行时打开它 |
+  | `/usr/share/zoneinfo`、`/etc/localtime` | 只读 | 全部 | `time.Local` 读 `/etc/localtime`；`time.LoadLocation` 读时区库（不内嵌 `time/tzdata` 的插件） |
+  | 本插件的数据目录 `<SUB2API_PLUGIN_DIR>/<key>/work` | 读写文件与目录、截断、目录内移动；不能建 socket、fifo、链接、设备 | 获授 `fs.data` | 见下面的宿主权限 |
+  | CA 证书：`/etc/ssl/certs`、`/etc/ssl/cert.pem`、`/etc/ssl/ca-bundle.pem`、`/etc/pki/tls`、`/etc/pki/ca-trust/extracted`、`/usr/share/ca-certificates`、`/usr/local/share/ca-certificates`，以及 `SSL_CERT_FILE` 和 `SSL_CERT_DIR` 的每一项 | 只读 | 获授 `net` | 插件经出口隧道自己做 TLS，`crypto/x509` 读系统根证书（列表照它在 Linux 上的 `certFiles`、`certDirectories`，加上发行版链接到的信任库） |
+
+  不放行：私有运行目录本身和其中的 `tmp/`（插件的 `TMPDIR`：没有插件写临时文件；`os.CreateTemp("")` 得到 EACCES）、共享临时目录、其他插件的任何目录、`/proc`（包括其他进程）、`/etc` 的其余文件、`/dev/urandom`（Go 用 `getrandom(2)`）。比原来的白名单去掉了 `/etc/resolv.conf`、`/etc/hosts`、`/etc/nsswitch.conf`、`/etc/services`（严格网络下 SDK 把 `net.DefaultResolver` 换成经隧道的解析，读不到这些文件时 Go 用默认值，拨号的主机名由核心解析；端口名 Go 有内置表）和 `/etc/ca-certificates`（配置目录，不是证书）。
+- **宿主权限 `fs.data`**（风险中，`sdk/manifest.HostPermissionRisk`；需要管理员在安装审查时同意，中风险不会自动授予）：读写核心分给本插件的数据目录（只在本节点，不跨节点同步）。只有获授它的插件，核心才创建这个目录、以 `SUB2API_PLUGIN_DATA_DIR` 交给插件、让插件在里面运行（工作目录），Landlock 才放行它；没有它的插件不再收到 `SUB2API_PLUGIN_DATA_DIR`，工作目录是私有运行目录，读写一律被拒。授予或撤销 `fs.data`、`net` 会重启插件进程（它们和资源上限一样在启动时固定，`LimitsStale`）。现有插件都不读写文件，没有一个申请它；以前留在磁盘上的 `work` 目录不动也不再交给插件。审查页文案：“读写本插件的数据目录” / “读写核心分给本插件的数据目录里的文件（只在本节点）。不授予时插件不能读写任何文件。”
+- **内核不支持时**：照常启动插件，不拒绝。核心在启动时（每个节点每次启动一次，`sandbox.ProbeStatus` + `LogStatus`，与 `plugin-exec` 同一内核、同一规则集）记日志：全部生效记一条 INFO `plugin sandbox: every Landlock layer in force`；否则记一条 INFO 列出生效的层，再给每个缺的层记一条 WARN `plugin sandbox: Landlock layer not in force`，带 `layer`、`consequence`（缺了会怎样）、`needs`（需要的内核与 ABI），关掉 Landlock 或开发模式时带 `reason`。没有 Landlock（内核太老、LSM 列表里没有 `landlock`、或容器的 seccomp 配置拦了这三个系统调用）时 `plugin-exec` 不限制。节点心跳带 `plugin_sandbox`（`core.PluginSandboxStatus`：`wrapped`、`landlock`、`landlock_abi`、`active`、`missing`），`GET /nodes` 原样返回，控制台节点页“插件沙箱”一列显示全部生效、缺几层（悬停列出各层和所需内核）或未开启；旧核心不报这个字段（显示“—”）。
+- **Docker**：Landlock 的三个系统调用在 Docker 20.10 以后的默认 seccomp 配置里是放行的（本仓库测试用的 Docker 29 实测可用）；自定义 seccomp 配置要放行 `landlock_create_ruleset`、`landlock_add_rule`、`landlock_restrict_self`。`no-new-privileges`、`cap_drop: [ALL]` 不影响它。
+- **测试**：`sandbox` 包的测试起受限子进程逐项尝试（`landlock_linux_test.go`、`goplugin_linux_test.go`：文件、socket、信号、TCP/UDP、真实的 go-plugin 握手与 broker 回调）；内核低于某层的 ABI 时，该项断言“仍放行”并记日志说明，不当作已限制。`next/deploy/ci/sandbox-kernel.sh` 在 QEMU 里用发行版内核包跑同一套测试，用来验证本机内核没有的层。
+- **历史**：审计加的 Landlock 合并时在 Linux 上编译不过（调了 x/sys 没有的包装函数），2026-10-05 改为直接调用系统调用、默认关闭；2026-10-29 线上两节点打开（网关注入）；2026-11-18 起默认开启并扩展为上面的规则集。
 
 ## 44. 订阅账号套餐额度：被动采样、主动查询与重置状态（2026-10-05，用户要求）
 
@@ -2916,17 +2905,17 @@ PUT 是补丁语义（省略的字段不变），响应为保存后的完整设�
 
 ### 44.3 被动采样（主要数据来源，零额外上游请求）
 
-- 网关在**每次上游响应**返回响应头后（HTTP 转发、插件驱动执行 §31 共用 `forwardBuilt`；WebSocket 握手响应同样处理）对声明了 `quota.headers` 的账号类型调用 `core.QuotaObserver.ObserveQuotaHeaders`；未声明的类型只多一次 nil 判断。观察者只接受 2xx、429 与 101（WebSocket 握手），其余状态码忽略。
+- 网关在**每次上游响应**返回响应头后（HTTP 请求的两种中继形式共用 `send`，§112；WebSocket 握手响应同样处理）对声明了 `quota.headers` 的账号类型调用 `core.QuotaObserver.ObserveQuotaHeaders`；未声明的类型只多一次 nil 判断。观察者只接受 2xx、429 与 101（WebSocket 握手），其余状态码忽略。
 - 解析只读声明的几个头，结果交给账号模块的异步写入器，不阻塞热路径。写库按账号限频：同一节点每账号至少间隔 30 秒（`quotaPassiveInterval`）；任一窗口的 `status` 与上次所见不同（如 `allowed` → `rejected`，或恢复）立即写；间隔内的样本合并，由后台每 5 秒的刷新补写最后一个值，进程退出时全部写出。多节点各自限频（N 个节点最多 N 次 / 30 秒）。
 - 写入 `source = passive`、清空 `error`、更新 `updated_at` 与 `last_passive_at`。
 
 ### 44.4 主动查询（插件描述、核心发送）
 
-`PlatformService` 删除 `QuerySubscriptionLimits`（从未发布），新增两个可选 RPC，模式同 `BuildTestRequest` / `BuildReconcileRequest`：
+`PlatformService` 删除 `QuerySubscriptionLimits`（从未发布），新增两个可选 RPC，模式同 `BuildTestRequest`（插件描述请求、核心发送）：
 
 - `BuildQuotaRequest(BuildQuotaRequestRequest{account})` → `{method（默认 GET）, url, headers, body_json}`。账号带解密凭证（调用对象总是账号类型的声明插件）。
-- 核心经账号代理发送（直连时过 netguard，`SUB2API_GATEWAY_ALLOW_PRIVATE_UPSTREAM` 放开同网关），响应体上限 64 KiB，超出置 `truncated`。
-- `ParseQuotaResponse(ParseQuotaResponseRequest{account, status, headers（小写）, body, transport_error, truncated})` → `QuotaResult{windows[], error_type, error_message}`。`QuotaWindow{key, utilization（百分比）, resets_at_unix（0 = 未知）, status, used, limit}`；`utilization` 为 0 且 `limit > 0` 时核心按 `used / limit` 计算。`error_type`：`ERROR_TYPE_UNSPECIFIED`（成功）、`ERROR_TYPE_AUTH_REJECTED`（凭证被拒）、`ERROR_TYPE_TRANSIENT`（其他）。错误只记录到快照（截断 512 字节），**不**冷却、不禁用账号——那是网关分类（§42）的职责。
+- 核心经账号代理发送（直连时过 netguard，`SUB2API_GATEWAY_ALLOW_PRIVATE_UPSTREAM` 放开同网关），响应体整份交给插件（转发 V2 收尾起，§112.17；此前上限 64 KiB，超出置 `truncated`，该字段已删除）。
+- `ParseQuotaResponse(ParseQuotaResponseRequest{account, status, headers（小写）, body, transport_error})`（字段 6 `truncated` 已删除并 `reserved`） → `QuotaResult{windows[], error_type, error_message}`。`QuotaWindow{key, utilization（百分比）, resets_at_unix（0 = 未知）, status, used, limit}`；`utilization` 为 0 且 `limit > 0` 时核心按 `used / limit` 计算。`error_type`：`ERROR_TYPE_UNSPECIFIED`（成功）、`ERROR_TYPE_AUTH_REJECTED`（凭证被拒）、`ERROR_TYPE_TRANSIENT`（其他）。错误只记录到快照（截断 512 字节），**不**冷却、不禁用账号——那是网关分类（§42）的职责。
 - 只有声明了 `quota.query` 的类型才会被调用；插件回 `Unimplemented` 视为只支持被动（不记错误）。SDK：`pluginsdk.QuotaReader` 接口，未实现时自动回 `Unimplemented`。
 
 ### 44.5 接口
@@ -2959,12 +2948,9 @@ QuotaSnapshot = { supported: boolean, source: "passive"|"active"|"", updated_at:
 
 旧路由 `GET /accounts/:id/subscription/limits`、`POST /accounts/:id/subscription/limits/reset` 删除（从未发布）。
 
-### 44.6 claude-oauth 插件（0.1.1）
+### 44.6 claude-oauth 插件（已删除）
 
-- `claude_oauth` 与 `claude_setup_token` 都声明被动采样：`5h` / `7d` / `7d_fable` ← `anthropic-ratelimit-unified-{5h,7d,7d_oi}-{utilization,reset,status}`（utilization 为 0–1 小数、reset 为 Unix 秒，见 sub2api `ratelimit_service.go` `samplePassiveUsageFromHeaders` 与 `account_usage_service.go` `buildPassiveUsageWindow` 的 `util * 100`）。
-- `claude_oauth` 声明 `query: true`：`GET https://api.anthropic.com/api/oauth/usage`，头部 `Accept: application/json, text/plain, */*`、`Content-Type: application/json`、`Authorization: Bearer <access_token>`、`anthropic-beta: oauth-2025-04-20`、`User-Agent: claude-code/2.1.7`（同 sub2api `claude_usage_service.go`）。响应 `five_hour` → `5h`（总是返回），`seven_day` → `7d`、`seven_day_sonnet` → `7d_sonnet`、`seven_day_overage_included`（缺失时取 `limits[]` 中 Fable 的 `weekly_scoped`）→ `7d_fable`（仅当带 `resets_at` 时返回，同 sub2api `buildUsageInfo`）；`utilization` 已是百分比。401/403 → `auth_rejected`，其他失败 → `transient`。
-- `claude_setup_token` 没有 profile 权限，`BuildQuotaRequest` 回 `Unimplemented`，只靠响应头（同 sub2api `estimateSetupTokenUsage`）。
-- manifest 同时补齐安装校验要求的 `platform.register` 权限与 `accounts.credentials` 的 `{"types": "own"}` scope。
+0.1.304 删除了 claude-oauth 插件（§116）。本节原文见 `git show 77158211c:next/docs/CONTRACTS.md`。
 
 ### 44.7 插件模型可用性与自动配额查询
 
@@ -2982,84 +2968,9 @@ QuotaSnapshot = { supported: boolean, source: "passive"|"active"|"", updated_at:
 - **快照读取（2026-11-02 起）**：预检与执行前检查读的是每个节点的额度快照内存镜像（`account/quota_mirror.go`），请求路径不查 PG。镜像按账号失效：写额度的节点立即失效本机，其他节点收到 `account:changed` 后失效（额度写入发 `{"account_id":id,"kind":"quota"}`，只失效镜像，不清分组快照；不带 `account_id` 的消息全部失效），总线重连、插件代次切换时全部失效。失效后保留旧值并在后台回填（独立 3 s 时限，不受请求时限影响）；请求遇到旧值最多等 40 ms，之后用旧值（标为旧值，见上一条的执行前检查规则）；没有任何值时等到读快照时限，之后按「快照缺失」放行。数据库出错时旧值最多再用 10 分钟。每 60 s 全量重载一次作为兜底，节点启动时预热。单行无效只跳过这一个账号。§51.3 的 Redis 缓存只服务控制台。
 - **可观测性（2026-11-02 起）**：有账号被拦或检查失败放行时，使用记录的 `anomalies.availability`（JSON 字符串，与 `failure_policy` 同构）记下结论：`outcome`（`blocked_all`/`partial`/`fail_open`）、候选数、放行数、按原因计数、最早可重试时刻、最多 20 个账号样例（账号、模型、拦截或放行、原因码、重试时刻）及执行前检查的拦截。全部放行时不记。全部候选被拦时 `account_id` 仍为空（它表示服务或尝试过的账号），账号在样例里。日志：全部被拦与失败放行记 WARN，按原因每 60 s 合并一行并带被压掉的条数；部分拦截记 DEBUG。汇总统计不把 `availability` 算作异常。
 
-## 45. 增长插件 growth：邀请返利与每日签到（0.1.0，2026-10-04 合并，2026-10-05 按代码补记）
+## 45. 增长插件 growth：邀请返利与每日签到（已删除）
 
-原稿 `docs/audits/2026-10-04/CONTRACTS-section-growth.md` 与实现有多处不符（路由、权限、表结构、默认值），本节按 `next/plugins/growth/` 重写。余额变动只走核心账本 `ledger.credit`（§25），插件不改核心表。
-
-### 45.1 manifest
-
-- 能力：`app.events.v1`、`app.jobs.v1`、`http.routes.v1`；原生 UI（`ui/native/entry.js`）。
-- 订阅事件：`user.created`、`usage.recorded`、`balance.changed`，每批 50 条。
-- 任务：`cleanup`，`0 3 * * *`，删除 90 天前的签到记录。
-- 数据库：`plg_growth`，迁移 `migrations/0001_init.sql`（全部 `IF NOT EXISTS`）。
-- 用户权限（2026-11-12 权限加固 T60 改名，`inheritFrom` 保留存量授权）：`growth:use`（我的邀请、签到；`defaults` user/supplier/operator/admin，继承 `growth:read`），`growth:stats:read`（“查看增长后台”，`risk: "sensitive"`；继承 `growth:manage`）。旧的 `growth:read`、`growth:manage` 在同步后删除（0.1.290起改为标 removed，授予保留不生效，§4）。
-- host 权限：`db.schema`、`events`（scope 同上三种事件）、`jobs`、`routes.user`、`routes.admin`、`ui.menu`、`ui.native`、`ledger.credit`（`{"maxPerTx": "10", "maxPerDay": "100"}`）。
-- 菜单：`me` 区的"我的邀请""每日签到"（`growth:use`），插件自己的 `growth` 区里的"增长管理"（`growth:stats:read`）。
-
-### 45.2 表
-
-| 表 | 内容 |
-|---|---|
-| `referral_codes` | 每个用户一行：`code`（8 位大写字母数字，唯一）、`inviter_user_id`（NULL = 没有邀请人）、`bound_at` |
-| `commissions` | 每笔返利一行：邀请人、被邀请人、`event_type` + `event_id`（来源事件）、`base_amount`、`rate_percent`、`commission`、`ledger_id`（唯一） |
-| `checkins` | 每人每天一行：`checkin_date`（按配置时区的日期）、`quota_awarded`、`ledger_id`（唯一），`(user_id, checkin_date)` 唯一 |
-
-### 45.3 接口（`/api/v1/p/growth`）
-
-| 方法 | 路径 | 权限 | 说明 |
-|---|---|---|---|
-| GET | `/me/referral` | `growth:use` | 我的邀请码（没有就生成）、邀请人、邀请人数、累计返利、返利最多的被邀请人、最近返利 |
-| POST | `/me/referral/bind` | `growth:use` | `{code}` 绑定邀请人；只能绑一次 |
-| GET | `/me/checkin/status` | `growth:use` | 今天是否已签到、今日奖励、连续天数、累计次数与金额、最近记录 |
-| POST | `/me/checkin` | `growth:use` | 签到 |
-| GET | `/admin/referrals`、`/admin/referrals/:user_id` | `growth:stats:read` | 邀请关系列表、单个用户详情 |
-| GET | `/admin/commissions`、`/admin/checkins` | `growth:stats:read` | 返利、签到记录 |
-| GET | `/admin/stats` | `growth:stats:read` | 汇总 |
-
-绑定的规则：
-- 不能绑自己；
-- 不能绑自己邀请的人，否则两人会互相返利；
-- 已绑定再绑返回 400。
-
-没有自己邀请码的老用户（插件启用前注册、没打开过邀请页）绑定时会先生成一行。2026-10-05 修正：之前这种情况返回"already bound"。
-
-### 45.4 返利
-
-- **来源**：
-  - `usage.recorded` 且 `billing_status = billed`：按 `total_cost` 计算；
-  - `balance.changed` 且 `delta > 0`、`kind` 不是 `usage`、`plugin_credit`、`plugin_debit`、`refund`：按 `delta` 计算。实际上就是管理员调整余额。插件入账（包括 payment 的兑换码，以及 growth 自己的返利和签到）都是 `plugin_credit`，不会触发返利。
-- **金额**：`base × rate_percent / 100`，保留 8 位。
-  - 每个被邀请人累计返利不超过 `referral_max_per_invitee`，超过的部分截掉；
-  - `referral_duration_days > 0` 时，只算**绑定后** N 天内的事件。
-- **入账**：`LedgerCredit`，幂等键 `commission:<event_type>:<event_id>`（核心再加前缀 `plugin:growth:`），`ref_type = referral`。同一事件只记一次：
-  - 先查 `commissions` 里是否已有这个事件；
-  - 账本幂等键兜底；
-  - 账本已有（Duplicate）也补写 `commissions` 行，否则上限会少算。2026-10-05 修正。
-- **失败处理**（2026-10-05 修正：之前不管成败都确认整批，失败的返利就永久丢了）：
-  - 数据库或账本暂时不可用：这一条和之后的事件不确认，前面成功的照常确认，核心按 §6 退避重投，一直失败就进死信。
-  - 账本按授权范围拒绝（`PermissionDenied`、`InvalidArgument`，即单笔超过 `maxPerTx` $10、插件当天入账超过 `maxPerDay` $100）：记错误日志，跳过这一条。重试改变不了结果，还会堵住后面的事件。**这笔返利不发**，见 45.7。
-  - payload 解析不了：记警告，跳过。
-
-### 45.5 签到
-
-- 每人每天一次，日期按 `checkin_timezone`；奖励在 `[checkin_min_quota, checkin_max_quota]` 之间随机。
-- `LedgerCredit`，幂等键 `checkin:<user_id>:<YYYY-MM-DD>`，`ref_type = checkin`。重复签到返回错误。
-- 连续天数从昨天往前数，不含今天（今天签了要到明天才计入），最多查 365 天，每天一次查询。
-
-### 45.6 设置（`forms/settings.schema.json`）
-
-`referral_enabled`、`referral_rate_percent`（0–100）、`referral_max_per_invitee`（0 = 不限）、`referral_duration_days`（0 = 永久）、`checkin_enabled`、`checkin_min_quota`、`checkin_max_quota`（≥ min）、`checkin_timezone`（IANA 名，默认 UTC）。
-
-注意两处默认值不一致：
-- 表单里 `referral_max_per_invitee` 默认 0（不限）；
-- 管理员从没保存过设置时，插件内置默认是返利比例 10%、每个被邀请人上限 $100、签到 $0.01–0.05。
-
-### 45.7 已知缺口
-
-1. **授权上限偏小**：`ledger.credit` 只有单笔 $10、整个插件每天 $100（UTC 日，所有用户合计），超出的返利和签到都不发。用户多了很快就会触顶。需要按运营规模调大 scope，或者把大额返利拆成多笔。
-2. **注册归因**：没有"注册时带邀请码"的入口。任何已登录用户随时都能绑定一次邀请人，不限于新用户。
-3. **默认可见性**：2026-11-12 起新装时 `growth:use` 默认授予 user、supplier、operator、admin（manifest `defaults`，此前为 `defaultRoles`）；此前普通用户角色默认没有 `growth:read`，需要管理员授予后才能看到菜单。升级到带 `growth:use` 的版本时它是 `growth:read` 的改名：只授予存量 `growth:read` 的持有者，不叠加 `defaults`（§4）。
-4. 原生 UI 的 `dist/` 不在仓库里，打包前要先构建 `ui/native`。
+0.1.304 删除了 growth 插件（§125）。本节原文见 `git show d466a6daa:next/docs/CONTRACTS.md`，插件最后的源码见 `git show d466a6daa:next/plugins/growth/manifest.json`。
 
 ## 46. 充值支付与兑换码插件 payment（0.1.0，2026-10-04 起草，2026-10-05 按合并后实现修正）
 
@@ -3267,7 +3178,7 @@ claude-oauth 插件原来有个每 30 分钟跑一次的 `refresh_tokens` 任务
 ### 48.1 manifest
 
 ```json
-"accountTypes": [{ "id": "claude_oauth", "refresh": { "expiresAtField": "expires_at", "beforeExpirySec": 1800 } }]
+"accountTypes": [{ "id": "codex_oauth", "refresh": { "expiresAtField": "expires_at", "beforeExpirySec": 1800 } }]
 ```
 
 - `refresh` 存在即表示这个类型的凭证会过期，插件实现了下面两个 RPC。`{}` 使用默认值。
@@ -3279,11 +3190,11 @@ claude-oauth 插件原来有个每 30 分钟跑一次的 `refresh_tokens` 任务
 ### 48.2 插件接口（`PlatformService`）
 
 - `BuildRefreshRequest(account)` → `{method（默认 POST）, url, headers, body_json}`。
-  - 核心经账号代理发送，受 netguard 限制（同 §43.4），响应体最多读 64 KiB。
+  - 核心经账号代理发送，受 netguard 限制（同 §43.4），响应体整份读（转发 V2 收尾起，§112.17；此前最多读 64 KiB）。
   - `body_json` 虽然叫这个名字，核心并不解析也不改写它，原样作为请求体发送（`account/quota.go` `sendPluginCall`，额度查询 §44 共用）：`headers` 里设置了 `Content-Type`（不区分大小写，如 OAuth 令牌端点要的 `application/x-www-form-urlencoded`，codex 插件即如此）时按插件给的发送；没有设置且 `body_json` 非空时核心补 `Content-Type: application/json`；`body_json` 为空时不发请求体，也不补 `Content-Type`。
   - 凭证根本无法续期（例如没有 refresh token）时返回 `FAILED_PRECONDITION`，核心按 `auth_rejected` 处理。
   - 返回 `UNIMPLEMENTED` 表示不支持，记为 `transient`。
-- `ParseRefreshResponse(account, status, headers, body, transport_error, truncated)` → `RefreshResult`：
+- `ParseRefreshResponse(account, status, headers, body, transport_error)` → `RefreshResult`（字段 6 `truncated` 已删除并 `reserved`）：
   - 成功时 `credentials_patch_json` 是要合并进凭证的字段：列出的键覆盖，值为 null 的键删除，没列出的键保留。settings 字段不受影响，出现在补丁里会被忽略并记警告。
   - `ERROR_TYPE_AUTH_REJECTED`：refresh token 已失效（`invalid_grant`、401、403），重试没有用。
   - `ERROR_TYPE_TRANSIENT`：其他所有失败，下一轮再试。
@@ -3321,19 +3232,9 @@ claude-oauth 插件原来有个每 30 分钟跑一次的 `refresh_tokens` 任务
   - 类型不支持时返回 400。
 - 控制台：账号详情新增"令牌"一行，显示过期时间、上次刷新时间和错误（`auth_rejected` 提示重新授权），旁边有"立即刷新令牌"；行操作菜单里也有同一个入口。
 
-### 48.5 claude-oauth 0.2.0
+### 48.5 claude-oauth 0.2.0（已删除）
 
-- `claude_oauth` 与 `claude_setup_token` 都声明 `"refresh": {}`。
-- **请求**（同 sub2api `claude_oauth_service.go` `RefreshToken`）：
-  - `POST https://platform.claude.com/v1/oauth/token`；
-  - body `{"grant_type":"refresh_token","refresh_token":…,"client_id":"9d1c250a-…"}`；
-  - `User-Agent: axios/1.13.6`。
-- **保存的字段**：`access_token`、`expires_at`（现在 + `expires_in`）。回包带了 `refresh_token`（轮换）或 `scope` 时一并保存，没带就保留原值。
-- **错误判断**：400 且包含 `invalid_grant`、401、403 记为 `auth_rejected`，其他记为 `transient`。没有 refresh token 的 setup token 返回 `FAILED_PRECONDITION`。
-- **删掉的东西**：空壳任务 `refresh_tokens`、`app.jobs.v1` 能力、`jobs` 权限。`BuildUpstreamRequest` 里只打日志的"即将过期"检查也删了。
-- **兼容**：`credentials.expires_at` 改用 `json.Number`，数字字符串也能解析。
-- 网关请求路径上不做同步续期。sub2api 在请求时剩余不到 3 分钟会先刷新再转发；这里靠 30 分钟提前量的定时扫描兜住，未做同步续期。
-- `net` 权限保留，只用于授权时用授权码换令牌。
+0.1.304 删除了 claude-oauth 插件（§116）。本节原文见 `git show 77158211c:next/docs/CONTRACTS.md`。
 
 ## 49. CCGateway 账号（已删除）
 
@@ -3348,204 +3249,109 @@ new-api 的渠道测试（`controller/channel-test.go`）每次测试后写渠�
   - `ok`、`latency_ms` 同 TestResult；`model` 为 TestResult 的 `model`（实际请求的模型，映射后）；
   - `message`：成功为空串；失败时为插件的 `reason` 加上游返回（`reason: message`，两者相同或缺一则只取有的那个；只有 reason 会看不到真实原因，2026-10-05 改），按字节截到 512（不截断半个字符）。控制台模型测试的"结果"列同样先显示 reason，再显示上游返回的错误内容。
   - 写入不改 `updated_at`、不发 `account:changed` / 事件、不影响调度；写入失败只记日志，不影响测试响应。
-- 账号 JSON（`GET /accounts` 列表与 `GET /accounts/:id`、创建/修改的响应）新增 `last_test`：从未测试时为 `null`，否则 `{at, ok, latency_ms, model, message}`（`at` 为 RFC 3339）。
-- TestResult 新增 `requested_model`（映射前用户选的模型；未给时为空串，字段总在），`model` 仍为实际请求的模型。
+- 账号 JSON（`GET /accounts` 列表与 `GET /accounts/:id`、创建/修改的响应）新增 `last_test`：从未测试时为 `null`，否则 `{at, ok, latency_ms, model, message}`（`at` 为 RFC 3339；2026-11-19 起另有 `protocol`，§122.4）。
+- TestResult 新增 `requested_model`（映射前用户选的模型；未给时为空串，字段总在），`model` 仍为实际请求的模型。2026-11-19 起另有 `protocol`（插件报的 `usage_protocol`，§122.4）。
 - 2026-10-11 错误诊断：TestResult 返回 `error_code` 与 `error_source`（`gateway` 网关/运行环境、`transport` 传输失败、`response` 实际 HTTP 响应、`plugin` 插件构建失败）。`status` 始终保留实际收到的 HTTP 状态，未收到响应为 0，不把本地拒绝伪造为上游 401。响应体的 `error.code` 优先，其次 `error.type` / `code`，没有机器码时用 `http_<status>`。
 - 迁移 `0050_account_test_diagnostics.sql` 新增可空的 `last_test_status/last_test_error_code/last_test_error_source`，新测试保存上述诊断并通过 `last_test` 返回。旧记录不猜测 HTTP 状态；完整原因已包含返回消息时不重复拼接。界面直接显示错误代码与来源，HTTP 0 显示无响应提示，重新授权清空整组最近测试字段。
 - "测试全部模型""批量测试账号"由控制台并发调用单模型测试实现，后端不提供批量接口；同一账号并发测试时 `last_test` 为最后写入的那次。
 - 控制台（前端实现）：账号的"测试"打开模型测试弹窗，可选一个模型测试，也可"测试全部 / 所选"模型（逐个模型并发调用本接口，显示每个模型的结果、延迟与失败原因）；账号列表可勾选多个账号"批量测试"（每个账号测默认模型）。列表显示 `last_test`（上次测试时间、结果、延迟）。测试不改变账号状态。
-- 流式测试本轮不做：`BuildTestRequest` 没有 stream 参数，加参数要改 proto 并动所有插件。
+- `BuildTestRequest` 没有 stream 参数；是否流式由插件按协议定：2026-11-19 起（§122）账号对某模型只开放 Gemini 流式生成时，gemini 预设走 `streamGenerateContent?alt=sse` 测，codex 一直发流式 Responses。
+- 2026-11-18 加过的价格检查（被测模型没有价格时回 403）已于 2026-11-19 撤掉：账号测试不查价格、不计费（§17.2）。
+- 2026-11-19 按协议测（§122）：TestResult 与 `last_test` 加 `protocol`（插件报的 `usage_protocol`），迁移 0115 加列 `last_test_protocol`。
 
 ## 51. CCGateway 订阅用量（已删除）
 
 0.1.290 删除了 CCGateway（CHANGELOG 0.1.290，迁移 0102）。本节原文见 `git show 317b0c331:next/docs/CONTRACTS.md`。
 
-## 52. 账号余额展示与刷新（2026-10-05）
+## 52. 账号余额：插件描述、核心经账号代理查询、只显示（2026-10-05；2026-11-18 重写并接通，核心 0.1.304，迁移 0113；同日改为不做任何换算，迁移 0114；设计见 [DESIGN-2026-11-18-UPSTREAM-PLUGINS-AND-BALANCE.md](DESIGN-2026-11-18-UPSTREAM-PLUGINS-AND-BALANCE.md) 3.1）
 
-与 §44 订阅配额并行，账号类型可以声明 `balance`（账号余额），插件实现余额查询，核心定期或按需查询并缓存结果（PG + Redis），前端显示余额和"刷新余额"按钮。
+**余额是上游返回的数字本身，单位是上游给的原文，不做任何换算。** 2026-11-18 所有者原话："我现在给你明确，不要去折算，上游返回多少我们就是多少，我们不要做任何折算，就算数字不对也不管，汇率不对也不管。"——插件不做单位换算、汇率换算，不替上游补单位；上游没给单位就没有单位（界面只显示数字）；核心不校验单位的格式。这推翻了设计的 D3（统一折成美元）与 D6（New API 用 `quota_per_unit` 换算）。字段名仍叫 `currency`（proto、数据库列、接口），语义是"上游给的单位，可以没有"。
 
-### 52.1 manifest 账号类型声明 `balance`
+账号类型可以声明余额（上游报告的剩余额度），照额度主动查询（§44.4）的路走：插件描述请求，核心检查目标、经账号代理发出，插件解析应答。核心按清单的间隔定时查，管理员随时手动刷新。**余额只显示**：不停用账号、不影响调度、不告警（设计 D1）。此前核心从不调用两个 RPC，余额只来自核心里按账号类型注册的查询器（`BalanceProvider`），唯一的查询器随 claude-oauth 删除（§116）；0.1.304 删掉注册表，改为调插件。
 
-账号类型的 `balance` 字段（可选）：
-
-```json
-{
-  "accountTypes": [{
-    "id": "oauth",
-    "balance": {
-      "currency": "USD"
-    }
-  }]
-}
-```
-
-- `currency`（必需）：货币代码，ISO 4217 三字母大写（USD、CNY、EUR 等）。
-- manifest check（`next/sdk/manifest/check/validate.go`）校验：`currency` 必须是 3 个大写字母，匹配 `^[A-Z]{3}$`。
-
-### 52.2 插件实现余额查询（gRPC）
-
-账号类型声明 `balance` 后，插件必须实现 `BuildBalanceRequest` 和 `ParseBalanceResponse`（与 §44.4 的 quota 查询类似）：
-
-```go
-// BuildBalanceRequest: 核心调用，插件返回查询余额的 HTTP 请求
-func (s *Service) BuildBalanceRequest(
-    ctx context.Context,
-    req *pluginv1.BuildBalanceRequestRequest,
-) (*pluginv1.BuildBalanceRequestResponse, error)
-
-// ParseBalanceResponse: 核心调用，插件解析上游响应并返回余额
-func (s *Service) ParseBalanceResponse(
-    ctx context.Context,
-    req *pluginv1.ParseBalanceResponseRequest,
-) (*pluginv1.ParseBalanceResponseResponse, error)
-```
-
-**请求/响应结构**（`next/sdk/gen/pluginv1/plugin.proto`）：
-
-- `BuildBalanceRequestRequest`：包含 `account_id`、插件凭证 JSON。
-- `BuildBalanceRequestResponse`：返回 `method`、`url`、`headers`、`body`（与 BuildQuotaRequest 相同结构）。
-- `ParseBalanceResponseRequest`：包含 `account_id`、`status_code`、`headers`、`body`。
-- `ParseBalanceResponseResponse`：返回 `result`（oneof）：
-  - `ok`：`amount_micros`（int64，微单位，如美分 × 10000）、`currency`（三字母代码）
-  - `error`：`code`（枚举：`auth_rejected`、`rate_limited`、`transient`、`unsupported`）、`message`
-
-**错误码语义**（与 quota 一致）：
-- `auth_rejected`：凭证失效，核心自动禁用账号（§42.2）。
-- `rate_limited`：查询过于频繁，核心延长下次查询间隔。
-- `transient`：临时失败（网络、上游超时），核心重试。
-- `unsupported`：账号类型不支持余额查询（manifest 声明错误）。
-
-### 52.3 核心：账号余额查询与快照存储
-
-**数据模型**（`next/migrations/0034_account_balances.sql`）：
-
-```sql
-CREATE TABLE IF NOT EXISTS account_balances (
-  account_id       BIGINT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
-  amount_micros    BIGINT NOT NULL,
-  currency         VARCHAR(3) NOT NULL,
-  source           VARCHAR(20) NOT NULL,
-  updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  error            TEXT,
-  error_at         TIMESTAMPTZ
-);
-CREATE INDEX IF NOT EXISTS idx_account_balances_updated_at ON account_balances(updated_at);
-```
-
-- `amount_micros`：余额微单位（如 USD: 1.23 → 12300000，即美分 × 10000）。
-- `source`：查询来源（`"active"` 主动查询、`""` 被动查询，目前余额只有主动查询）。
-- `error`：最近一次查询失败时的错误信息（成功时为 NULL）。
-- `error_at`：最近一次查询失败的时间（成功时为 NULL）。
-
-**核心逻辑**（`next/server/internal/account/balance.go`）：
-
-- 账号 View 增加 `Balance *BalanceView` 字段（`view.go`）：
-  ```go
-  type BalanceView struct {
-      Amount    string `json:"amount"`     // "1.23"
-      Currency  string `json:"currency"`   // "USD"
-      UpdatedAt string `json:"updated_at"` // ISO 8601
-      Source    string `json:"source"`     // "active"|""
-      Error     string `json:"error,omitempty"`
-  }
-  ```
-
-- 账号类型声明 `balance` 时，核心调用插件的 `BuildBalanceRequest` 和 `ParseBalanceResponse`，执行 HTTP 请求并解析结果。
-
-- 查询触发时机：
-  - **主动查询**：`GET /api/v1/accounts/:id/balance` 或 `POST /api/v1/accounts/:id/refresh-balance`（前端"刷新余额"按钮）。
-  - **查询间隔**：成功后 3 分钟内不重复查询（快照新鲜度）；失败后根据错误码决定间隔（`auth_rejected` 不再查、`rate_limited` 延长到 10 分钟、`transient` 1 分钟后重试）。
-  - 查询下限：每个账号 2 秒内最多查询一次（防止前端重复点击）。
-
-- 快照写入：查询成功后写入 `account_balances`，同时写穿到 Redis（见 §52.4）。
-
-### 52.4 余额快照 Redis 缓存
-
-与 §51.3 配额缓存并行实现（`next/server/internal/account/balance_cache.go`）：
-
-- **键格式**：`account:balance:<id>`
-- **值**：JSON `{"mtime":<pg_updated_at_nanos>,"snap":<BalanceSnapshot>}`
-  - `mtime`：PG `updated_at` 的 Unix 纳秒（用于判断新旧）
-  - `snap`：`{amount_micros, currency, source, updated_at, error, error_at}`
-- **TTL**：10 分钟（与 quota 一致）
-
-**读取流程**（`cachedAccountBalances(ids []int64)`）：
-1. 批量 MGET Redis 键（`account:balance:1`, `account:balance:2`, ...）
-2. 未命中：查 PG 并异步回填 Redis
-3. 命中但 `mtime` 早于 PG：以 PG 为准（避免延迟写入的旧值覆盖新值）
-4. Redis 不可用：退回 PG（不报错，日志 WARN）
-
-**写入流程**（`writeAccountBalance`）：
-1. 写入 PG `account_balances`（INSERT ... ON CONFLICT UPDATE）
-2. 写穿到 Redis SET `account:balance:<id>`，TTL 10 分钟
-3. Redis 写入失败不影响 PG 写入
-
-**一致性维护**（多节点环境）：
-- `POST /accounts/:id/reset-status`：DEL `account:balance:<id>`
-- 重新授权清空（§49.17）：DEL `account:balance:<id>`
-- 删除账号：DEL `account:balance:<id>`（CASCADE 会删 PG 行）
-- 每个节点独立写/删 Redis，PG `updated_at` 为权威时间戳
-
-**测试**（`balance_cache_test.go`）：写穿、批量读、PG fallback、mtime 排序、驱逐、损坏条目。
-
-### 52.5 路由与前端集成
-
-**核心路由**（`next/server/internal/account/handlers.go`）：
-
-- `GET /api/v1/accounts/:id/balance`：返回余额快照（有缓存返回缓存，否则主动查询）
-- `POST /api/v1/accounts/:id/refresh-balance`：强制刷新（忽略新鲜度，但仍受 2 秒查询下限约束）
-
-**账号列表/详情**：
-- `GET /api/v1/accounts`：列表加载时批量读取 balance 快照（Redis MGET + PG fallback），有数据的账号返回 `balance` 字段。
-- `GET /api/v1/accounts/:id`：详情同样返回 `balance`。
-
-**前端改动**（由主控或 web agent 完成）：
-1. 账号列表（`AccountsView.vue`）：支持 `balance` 的账号显示"余额"列（格式化为 `$1.23` / `¥1.23`）。
-2. 账号详情面板：账号状态区增加"余额"一行、"刷新余额"按钮（或与"刷新配额"合并为"刷新状态"按钮）。
-3. i18n（zh/en）：余额标签、货币格式化。
-4. types.ts：`Account.balance?: Money`（移除 `// assumed` 注释）。
-
-### 52.6 claude-oauth 插件实现（版本 0.2.1）
-
-**manifest 变更**（`next/plugins/claude-oauth/manifest.json`）：
+### 52.1 清单：`accountTypes[].balance`
 
 ```json
-{
-  "version": "0.2.1",
-  "accountTypes": [{
-    "id": "oauth",
-    "balance": {
-      "currency": "USD"
-    },
-    "quota": { ... }
-  }]
-}
+"balance": {"updateInterval": 600}
 ```
 
-**实现**（`next/plugins/claude-oauth/balance.go`）：
+- `"balance": {}` 就是完整的声明。`updateInterval`：秒，60–86400；0 或不写用核心的缺省值 **180 秒**（缺省值只在核心 `account.defaultBalanceInterval` 一处）。成功、失败都按同一间隔再查；管理员的手动刷新不受它限制。
+- 没有 `currency`：单位由插件按账号在每次结果里给（上游答什么就是什么，可以没有）。还写着 `currency` 的清单严格解码时报未知字段。
+- 校验在 `sdk/manifest/check/balance.go`（只查间隔的范围）。声明了 `balance` 的类型，插件应实现下面两个 RPC（SDK `pluginsdk.BalanceReader`；没实现时回 `UNIMPLEMENTED`，核心当作这个类型没有余额）。
 
-- `BuildBalanceRequest`：返回与 quota 查询相同的请求（`GET https://api.anthropic.com/v1/organization/usage/subscription`，带 OAuth access token）。
-- `ParseBalanceResponse`：解析响应 JSON 的 `account_balance` 字段（与 `usage_windows` 并列）：
-  ```json
-  {
-    "account_balance": {
-      "amount_micros": 12345678,
-      "currency": "USD"
-    },
-    "usage_windows": [...]
-  }
-  ```
-  - `amount_micros` 已经是微单位，直接返回。
-  - 上游未返回 `account_balance` → `unsupported`（旧 API 版本或账号类型不支持）。
+### 52.2 插件 RPC（`platform.proto`）
 
-**测试**（`balance_test.go`）：解析成功、解析失败、账号余额字段缺失。
+- `BuildBalanceRequest({account})` → `{requests[]}`：一次查询可以有**多个**请求，按顺序发出，至少一个（空列表按插件错误记）。`BalanceRequest{method（缺省 GET）, url, headers, body_json}`。账号带解密的凭证，`platform` 为空。头原样发出；**公开接口的请求不带凭证头，核心不自己加任何凭证**。有请求体而头里没有 `Content-Type` 时核心补 `application/json`。
+- `ParseBalanceResponse({account, answers[]})` → `{result}`：每个请求一个 `BalanceAnswer{status, headers（小写，取第一个值）, body（整份）, transport_error}`，顺序与请求相同；**每个请求都发**，前一个失败后面的照发。读不完整的应答按传输错误交给插件（`status` 0）。
+- `BalanceResult{amount_micros, currency, error_type, error_message, unlimited}`：`amount_micros` 是上游的数字本身、以百万分之一为单位传（1.23 → 1230000，1250000 → 1250000000000，可以为负；这是表示形式，不是换算，第七位小数起四舍五入，SDK `standard.Micros`）；`currency` 是上游随数字给的单位原文（如 `USD`，也可以是任何文字），**没有单位时为空**，核心不校验格式、原样保存原样显示（此前要求 `^[A-Z]{3}$`，2026-11-18 删除）；`unlimited` 为真表示上游报告这个账号不限额度，金额和单位忽略。`error_type`：`UNSPECIFIED` 成功；`AUTH_REJECTED` 凭证被拒——**只记在快照上，不停用、不冷却账号**（那是网关失败分类的事）；`TRANSIENT` 其他失败。`error_message` 去控制字符、合并空白，最多 256 字节（与额度相同，`quotaErrorDetail`）。
+- 两个 RPC 在运行时走控制台的预算（`classConsole`，每次 10 秒，与额度查询相同）。只加字段、改了从未被调用的消息，Host API 仍是 10，插件协议仍是 2。
 
-### 52.7 测试覆盖
+### 52.3 核心：一次查询（`server/internal/account/balance.go`）
 
-- **SDK**：`manifest/check/balance_test.go`（manifest 校验、货币代码格式）。
-- **核心**：`account/balance_test.go`（查询流程、错误处理、新鲜度）、`account/balance_cache_test.go`（Redis 缓存）。
-- **claude-oauth**：`balance_test.go`（解析响应、错误情况）。
-- **集成**：PG 表迁移幂等性（`0034_account_balances.sql`）、账号列表/详情返回 balance。
+1. 插件 `BuildBalanceRequest`。
+2. **发出任何请求之前**，对每个 URL 调 `core.CheckPluginUpstream`：先是清单与账号的主机规则（§112.17：`externalServices` 或账号 `upstreamFields` 里的地址），再是管理员的插件联网（§113.3）。**任一被拒，一个都不发**，也不调 `ParseBalanceResponse`，快照记 `transient: <拒绝信息>`（如 `plugin newapi: host "x" is neither in the manifest's externalServices nor an upstream address of the account`、`plugin newapi: <host> is on the blocked list of plugin network access`）。插件联网的拒绝照常写进插件的出口日志（`denied`）。
+3. 逐个经 `sendPluginCall` 发出：账号代理（代理被停用是传输错误 `proxy disabled`，不会改成直连）、直连时的内网地址保护（`netguard`，`SUB2API_GATEWAY_ALLOW_PRIVATE_UPSTREAM` 放开）、`guardUpstream` 里再过一次插件联网，**不跟随重定向**（3xx 原样交给插件，带 `location`；否则重定向能把带 Key 的请求带到主机规则之外，设计 D9）。
+4. 插件 `ParseBalanceResponse`，核心归一化（只看 `error_type` 与 `unlimited`，金额与单位原样）后写库并写穿 Redis。
+- 整次查询（插件调用与全部请求）限时 `balanceQueryTimeout` 20 秒，与额度查询相同，没有新的时限、次数或大小上限。
+- 同一节点上同一账号的查询经 `singleflight` 合并（手动刷新与定时任务共用），合并的调用方等同一个结果，不随第一个调用方取消。跨节点不加租约：定时任务同一时刻只在一个节点跑，重复的只可能是“某节点的手动刷新 + 任务”，代价是上游多一次只读请求（设计 D10）。
+- 插件回 `UNIMPLEMENTED`：不写库，`GET /balance` 回 404 `unsupported`。
+- 写库失败返回 500（不再吞掉）。
+
+**表 `account_balances`**（迁移 0034 建，0113、0114 改）：每个账号一行。
+
+| 列 | 说明 |
+|---|---|
+| `account_id` | 主键，删账号级联 |
+| `amount_micros`、`currency` | 最近一次成功查询的金额与单位（上游原文，`text`，0114 起；此前 `VARCHAR(3)`）；上游没给单位、不限或从未成功时单位为 `''`，不限或从未成功时金额为 0 |
+| `unlimited` | 最近一次成功查询报告不限额度（0113 加） |
+| `updated_at` | 最近一次成功查询的时间；**从未成功时为 NULL**（0113 起可空，此前首次失败违反 NOT NULL、错误被吞） |
+| `error`、`error_at` | 最近一次失败：`auth_rejected: …` / `transient: …`（最多 512 字节）与时间；成功时清空 |
+
+失败时保留上次成功的金额、单位、`unlimited` 与 `updated_at`，只更新 `error`、`error_at`。`source` 列（只有 `active` 一种取值，没人读）由 0113 删除。GORM 模型由迁移生成（`model.AccountBalance`）；读写在 `store/account_balance.go`。
+
+**改凭证、设置或代理时**：`PATCH /accounts/:id` 带了凭证（含重新授权）、扩展设置或换了代理，在同一事务里删掉这一行，提交后删 Redis 键；下一次查询（定时任务把它当作从未查过）重新开始。只改名称、分组等不删。
+
+### 52.4 Redis 缓存与定时任务
+
+- 缓存键 `account:balance:<id>`，值是快照的 JSON（`{account_id, amount_micros, currency, unlimited, updated_at, error, error_at}`），TTL 10 分钟；每次写库后写穿，读不到时回 PG 并回填；Redis 不可用时读 PG、只记 WARN。删账号、重置状态（§44.5）、改凭证 / 设置 / 代理时删键。
+- **到期**：距最近一次查询（`updated_at` 与 `error_at` 的较晚者）达到类型的间隔；没有快照也算到期。非强制的 `GET /balance` 与定时任务都按它判断。
+- **集群任务 `core.account.balance_sweep`**（§77，`Every` 1 分钟，`Timeout` 15 分钟）：对每个声明了 `balance`、插件已加载的类型，选一页（64 个，`quotaSweepPage`）到期的账号逐个查询，最久没查的在前；没轮到的下一轮仍然到期。选法：未删除，且**可调度或从未查过**（没有快照行）；停用、关了调度的账号只在管理员手动刷新时查。
+
+### 52.5 接口
+
+**`GET /api/v1/accounts/:id/balance[?force=true]`**（`account:read` / `account:own:read`，范围外 404）：到期或 `force=true` 时先查一次，返回：
+
+```
+BalanceView = { supported: true, amount?: string, currency?: string, unlimited?: true,
+                updated_at?: string, error?: string, error_at?: string }
+```
+
+- `amount` 是六位小数的十进制串（`"12.500000"`），只在有成功查询且不是 `unlimited` 时出现；`currency` 是上游给的单位原文，上游没给时不出现；`unlimited` 只在为真时出现；`updated_at` 是最近一次成功的时间。
+- 上游或插件失败不让接口失败：200，`error` 说明原因，旧金额照常返回。
+- 类型没有声明 `balance`、插件未加载或回 `UNIMPLEMENTED`：404 `unsupported`。
+
+**账号列表与详情**（`GET /accounts`、`GET /accounts/:id` 等返回账号视图的接口）：声明了 `balance` 的类型每项带 `balance: BalanceView`（一次批量读 Redis / PG，**从不**请求上游；从未查过时是 `{supported: true}`）；其他类型没有这个字段。
+
+### 52.6 控制台
+
+账号列表“余额”列（与额度窗口同一格，`accounts.balance.column`）和账号详情的“账户余额”用同一个组件 `views/accounts/AccountBalanceCell.vue`：
+
+| 状态 | 判断 | 显示 |
+|---|---|---|
+| 不支持 | 没有 `balance` 字段 | 不出现 |
+| 支持、未查 | 没有 `updated_at`、没有 `error` | “未查询” + “刷新余额” |
+| 有余额 | 有 `amount` | 数字加上游给的单位原文（`formatBalance`：千分位，去掉末尾无意义的零、不四舍五入，如 `7.5 USD`、`1,250,000`；不把 `USD`、`CNY` 换成符号，不替上游解释单位），“更新于 x 前” |
+| 不限 | `unlimited` | “不限”，提示“上游报告此 Key 不限额度” |
+| 查询失败 | 有 `error` | 红色徽标“查询失败”，提示里是 `error` 与 `error_at`；有旧金额（或旧的“不限”）时照常显示并标“旧值” |
+
+“刷新余额”调 `GET /balance?force=true`，与额度刷新相同：进行中的重复点击合并，没有冷却（此前前端有 2 秒的点击间隔，已删除）。没有颜色阈值、没有告警。类型在 `web/src/api/types.ts` 的 `AccountBalance`，mock 在 `web/mock/accounts.ts`（relay 类型与 demo token 带余额）。
+
+### 52.7 测试
+
+- 核心 `account/balance_test.go`：单个与多个请求（第二个不带凭证、按序、一个失败其余照发、传输错误也是回答）、不跟随重定向、主机规则与插件联网拒绝时一个都不发、经账号代理与代理停用、`unlimited`、没有单位与任意文字的单位原样保存、`AUTH_REJECTED` 不动账号、首次失败入库、失败保留旧值、`singleflight`、`UNIMPLEMENTED`、定时任务按间隔只查到期的（含从未查过的停用账号，不含查过的停用账号与已删账号）、手动刷新不受间隔限制、改凭证 / 代理后删除快照与缓存；`balance_cache_test.go`；`store/account_balance_test.go`；迁移 `TestMigration0113AccountBalanceUnlimited`、`TestMigration0114AccountBalanceUnitText`。
+- 运行时 `grpcruntime` 的 `TestBalanceAcrossProcess`：经真实 gRPC 的测试插件（`testdata/testplugin`），请求与回答逐字段往返，`UNIMPLEMENTED` 经运行时的错误仍能被识别。
+- 控制台 `AccountBalanceCell.spec.ts`（五种状态，有单位与没有单位）、`utils/format.spec.ts`（`formatBalance` 的千分位、小数位与大数）。
+- 插件：`plugins/newapi`、`plugins/sub2api` 的 `platform_test.go`（每个分支、大数与带小数的数）；SDK `standard/balance_test.go`（两种示例读法与 `Micros`）。
 
 ### 49.17 CCGateway 容器地址池（已删除）
 
@@ -3570,9 +3376,9 @@ GET `/groups/:id/models`（`group:read`）返回所有未删除成员账号的�
 - **私有 run 目录 + 双向 TLS**：每个插件进程一个 `<SUB2API_PLUGIN_RUN_DIR>/<key>-<随机>/`（0700，默认 `<插件数据目录>/.run`；路径对 unix socket 过长时退回 `/tmp/sub2api-<uid>`，须是本用户 0700 的真目录），go-plugin 的两个 socket 和插件的 `TMPDIR` 都在里面，进程结束即删除。核心与插件之间所有连接（插件服务端、核心 broker 上的 HostService/EgressService）都是 go-plugin AutoMTLS，一次性证书，其他进程无法连入或冒充该插件。
 - **核心**：读完配置后从进程环境删除秘密（`DATABASE_URL`、`REDIS_URL`、`SUB2API_MASTER_KEY`、引导管理员密码、控制令牌等，并清空 `/proc/<pid>/environ` 的初始块），Linux 上 `PR_SET_DUMPABLE=0`。外壳同样 `PR_SET_DUMPABLE=0`。
 - **出站隧道**：没有 `net` 授权的插件什么都连不了，只有声明了 `database` 且获授 `db.schema` 的插件可按配置的名字连 PostgreSQL。任何策略（含 `allow_all`）都拒绝私网/回环/链路本地等非公网地址与核心的 Redis/PostgreSQL（按解析后的地址比对，按检查过的地址拨号防 DNS 重绑定）；`dns.sub2api` 不返回非公网地址。`SUB2API_PLUGIN_EGRESS_ALLOW_PRIVATE=true` 只用于测试/开发，Redis/PG 仍拒绝。没有 `net` 也没有数据库的插件不注册隧道服务。
-- **数据库角色隔离不再降级**：开启隔离（默认）但核心角色没有 CREATEROLE 时，授予 `db.schema` 与 `Ensure` 都失败，`409 plugin_db_isolation_unavailable`（运维可显式 `SUB2API_PLUGIN_DB_ROLE_ISOLATION=false`）；已存在且不是本库为该插件建的同名角色不接管，`409 plugin_db_role_conflict`。角色加注释 `sub2api plugin role; database=<库>; plugin=<key>` 作归属标记，删除插件时只删自己的角色。
+- ~~**数据库角色隔离不再降级**~~：每个插件一个数据库角色的做法已在 2026-11-18 删除，插件用核心的数据库用户，`plugin_db_isolation_unavailable`、`plugin_db_role_conflict`、`SUB2API_PLUGIN_DB_ROLE_ISOLATION` 都不再存在，见 §115。
 - **外壳管理 socket 令牌**：外壳每次启动生成 32 字节随机令牌写入 `management_token_file`（默认管理 socket 旁的 `shell.token`，0600），所有管理请求须带 `Authorization: Bearer <64 hex>`，否则 `401 updater_unauthorized`。核心只拿到文件路径 `SUB2API_UPDATER_TOKEN_FILE`，转发升级接口与插件包读写时带上；托管核心（`SUB2API_MANAGED=true`）没有这个变量、文件读不到或内容不是 64 位十六进制时启动失败，非托管核心不读它。不带令牌的请求一律拒绝：迁移开关 `allow_tokenless_management` / `SUB2API_ALLOW_TOKENLESS_MANAGEMENT` 及其指标、preflight `warnings` 已随 0.1.286 删除（自 2026-10 起所有核心都带令牌；新外壳读到旧配置键或环境变量时忽略）。`sub2api-gateway status/pause/...` 本地命令读同一文件。
-- **核心环境白名单**：外壳只把进程基础变量与核心实际读取的配置变量（`supervisor.inheritedEnv`）传给核心，另加 `core_env_inherit` 列出的名字；`SUB2API_PEER_AUTH_KEY` 无论如何不传。
+- **核心环境白名单**：外壳只把进程基础变量与核心实际读取的配置变量（`supervisor.inheritedEnv`）传给核心，另加 `core_env_inherit` 列出的名字；`SUB2API_PEER_AUTH_KEY` 无论如何不传。进程基础变量含 `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY` 及小写写法，核心里用到它们的是到 Gemini 的媒体下载（§88.5）和插件市场、插件包下载。
 - **部署**：Redis/Valkey 必须 `requirepass`，`REDIS_URL` 带密码（建议十六进制密码免转义）；网关容器 `no-new-privileges`、`cap_drop: [ALL]`。迁移顺序见 `deploy/gateway/ovh/README.md`。
 
 ## 55. 插件独享资源的分配与归属 P1（2026-10-10，审查 `docs/audits/2026-10-09-plugin-resources.md` 的 P1）
@@ -3615,7 +3421,7 @@ GET `/groups/:id/models`（`group:read`）返回所有未删除成员账号的�
 ### 56.3 内置指标与查询
 
 - 内置消费者只处理 `usage_finalized`，成功且未取消时贡献 `success_requests=1`；`success_tokens` 使用核心接受的最终组合用量（Replacement 替代主用量，再加 Additional）。RPM/TPM 都是窗口合计折算成每分钟，不是限流计数。
-- 尚待确认的预估用量只增加 `pending_usage`，不当成实际 Token；普通插件异步 ExtractUsage 完成后才发出最终用量观测。后台 reconciliation 修订及异步任务暂未接入本通道。
+- 尚待确认的预估用量只增加 `pending_usage`，不当成实际 Token；插件解析用量的端点在插件返回用量、事实提交后才发出最终用量观测。后台 reconciliation 修订及异步任务暂未接入本通道。
 - 实时并发直接读取共享 Slots；准入与释放仍由核心负责，观测器及插件不能修改槽位。
 - 窗口为 5～3600 秒，默认 60 秒，按秒桶近似滑动，时间基于 Redis；窗口配置不改变限流。快照状态为 `ok`、`warming`、`incomplete` 或 `unavailable`；存储失败不伪装为正常零值。它仍是尽力观测，不能视为计费账本或无损历史。
 - 控制台：`GET/PUT /api/v1/settings/account-stats`（`settings:read/manage`）；`GET /api/v1/accounts/stats?ids=...`、`GET /api/v1/accounts/:id/stats`（账号读取权限及创建者范围）。每批至多 200 个账号，可选 `window_seconds`；账号页面尚未接入。
@@ -3628,13 +3434,14 @@ GET `/groups/:id/models`（`group:read`）返回所有未删除成员账号的�
 
 ## 58. 核心通用失败处理
 
-- 核心提供 `/api/v1/settings/failure-policy` GET/PUT、`/preview` POST、`/history` GET，使用 `settings:read/manage`。PUT 携带 `expected_revision`，并发修改返回 409；最近 10 份历史与新配置原子保存。首次发布前保留旧行为；发布后旧重试/禁用写接口拒绝覆盖新策略。
+- 核心提供 `/api/v1/settings/failure-policy` GET/PUT、`/preview` POST、`/history` GET，使用 `settings:read/manage`。PUT 携带 `expected_revision`，并发修改返回 409；最近 10 份历史与新配置原子保存。首次发布前保留旧行为；发布后旧重试/禁用写接口拒绝覆盖新策略：`/settings/gateway` 的 `max_attempts` 与当前值不同时返回 409，相同（GET 的结果原样 PUT 回去）照常保存；`/settings/auto-disable` 的任何写入返回 409。
 - 新策略直接匹配核心错误事实，不使用插件 `ClassifyError` 的重试、冷却、禁用建议，不新增插件接口。每次请求固定策略版本，配置读取/校验失败拒绝业务请求。（2026-10-30 起例外：插件给出的带解除时间的自动禁用和配额观测照样执行，见 §69。）
 - 重试规则表和账号处理表独立首条命中。HTTP 状态码支持 400–599 和区间；关键词可空，此时仅按状态码。都填写时显式 AND/OR；传输错误没有 HTTP 状态码。只匹配前 4 KiB 错误文本。
 - 请求动作：返回、同账号重试、换号保留绑定、换号重置绑定。额外重试上限 0–9，所有动作共享预算；同账号重试耗尽后的动作必须明确配置。账号处理：不改变、定时冷却、自动禁用。自动禁用还需账号允许；禁用关闭或失败不隐式转成冷却，也不强制换号。
 - 重置仅改变路由绑定，按账号原子比较：只解除指向失败账号的绑定，旧请求不能覆盖新绑定（2026-11-04 起绑定在选中账号时写入，不再带代数，见 §18）。软粘性失败动作由新策略接管，账号资源归属不可绕过。
 - 换号支持同一代理、仅代理账号或各账号原配置三种出口约束；默认同一代理，后续规则不能放宽已生效限制。没有合格账号即失败，不修改代理或增加直连兜底。
 - 响应已提交、WebSocket 已升级、任务/辅助操作不可重放、传输结果不确定、账号资源硬绑定、预算或期限耗尽时不自动重放。内层 SDK/CLI 请求不属于核心尝试计数。
+- 与账号健康无关、由核心自己判定的失败不交给两张规则表（`gwError.NeutralReason`，`gateway/failure_policy_runtime.go` 的 `planAvailabilityFailure`）：模型可用性的执行前检查（§44.7）、账号参数覆盖拦下的请求（§84）、插件不可用（`Execute` 报错或崩溃、中继被核心拒绝，§112.2、§112.5）、SSRF 拒绝的目标地址（`upstream_address_rejected`）、不被允许的目标主机（`upstream_host_not_allowed`，§112.17）。这些失败直接换号，不执行账号规则（不冷却、不禁用），决策记录写对应的原因；尝试次数用尽时结果与没有发布策略时相同：请求自己的失败（可用性拒绝、覆盖的应答）原样返回，其余是 503 `no_available_account`（Anthropic 格式 529）。（转发 V2 收尾起；此前插件不可用、被拒的中继和地址在策略下按核心的 503 处理：一次尝试后回 503 `plugin_unavailable`，命中核心来源的账号规则还会冷却或禁用账号。）
 - 决策记录保存到 `usage_logs.anomalies.failure_policy`，用量详情显示，统计时不把该过程记录本身算作异常。界面复用公共设置卡片、保存条、表格、菜单、弹窗和描述组件。详见 [设计与实现](GATEWAY-FAILURE-POLICY-DESIGN.md)。
 - 默认账号规则（`loginAccountRules`，迁移草稿用同一组）：`login-invalid` = 401 + 登录失效关键词（Anthropic API 的 `oauth access token has been revoked`、`oauth token has been revoked`、`invalid x-api-key`、`invalid bearer token`，new-api 关键词里的 `the security token included in the request is invalid`、`your account is not authorized`），`account-on-hold` = 403 + Anthropic API 的 `oauth authentication is currently not allowed for this organization`，动作都是自动禁用。插件把 401/403 判为禁用，但没有命中关键词时核心只冷却（§42、§69），所以上游新的登录失败文字必须同时加进这两条规则。已发布的策略由迁移 0072/0074 写入这两条，当时还带着只有 CCGateway 会回的关键词（CLI/Worker 错误码 `oauth_refresh_dead`、`not_logged_in`、`oauth_account_on_hold`，引擎消息 `has cleared its stored login`，CC 客户端自己的 `oauth refresh token is no longer valid`），迁移 0075（2026-11-02，CLI v44）又给两条各追加了 `stored_login_refused_restart_needed`、`stored_login_refused_admin`。0.1.290 删除 CCGateway：代码默认值去掉这些关键词，迁移 0102 从已发布的策略里去掉（条件见 §101.5）。
 
@@ -3993,7 +3800,7 @@ GET `/groups/:id/models`（`group:read`）返回所有未删除成员账号的�
 问题：线上发布了故障策略（§ 自动重试与禁用的 `failure_policy`）。原先有策略时核心完全不调用插件 `ClassifyError`，插件给 429 设的"禁用到重置时刻"根本没执行；策略里 429 的冷却为 0，额度用满的账号每个请求都会被先试一次。
 
 规则：
-- 上游返回 HTTP 错误（`status > 0`，不含传输错误）时，即使发布了故障策略，核心也调用插件 `ClassifyError`（`platform.execute` 插件则用 Execute 返回的分类；核心 0.1.301 前代码没有做到：发布故障策略后 `forwardCallback` 对任何上游失败都向插件返回错误，插件的 `ClassifyError` 不运行，下面两项对 codex、volcengine 等插件执行的请求都不生效。现在只有传输错误这样处理，与 `classify` 一致），并执行其中两项：
+- 上游返回 HTTP 错误（`status > 0`，不含传输错误）时，即使发布了故障策略，核心也调用插件 `ClassifyError`（等待形式的中继则用 `Execute` 返回的分类，§112.2；传输错误不问插件，与 `classify` 一致），并执行其中两项：
   1. `quota`：配额观测照常保存（§44）。
   2. `automatic_state` 为 `DISABLE` 且带解除时间（`until_unix` 在未来，或 `duration_seconds` > 0，最长 366 天）：账号立即设为 `auto_disabled`，`auto_disabled_until` = 解除时间，原因用插件给的 `reason`。解除时间一过调度即可再选中它（惰性过期），核心的低频巡检随后把状态写回 `active`。
 - 其余仍由策略决定：是否重试、同账号重试次数、换号、冷却、返回给客户端的内容。插件的 `action`、`account_effect`、`cooldown_until_unix` 不采用。
@@ -4124,9 +3931,9 @@ GET `/groups/:id/models`（`group:read`）返回所有未删除成员账号的�
 - **一次性导入**：0.11.0 在 Configure 收到真实设置后的第一次刷新里（任一节点）把设置里的名单写成锁定条目：`allowlist_user_ids`（没有这个键时用 `exempt_user_ids`）和 `blocklist_user_ids`（黑名单优先）上的每个用户，没有锁定条目、级别不对或有过期时间的，改成对应的锁定条目（不过期，`source = manual`，级别变了开新计数窗口），每改一条写一条历史 `lock`（无操作人，reason 写"从设置导入…名单"）和一行日志（用户、名单、原来的条目），最后一行汇总日志；不在名单上的锁定条目（0.10.0 还没来得及对账的）解锁删除，同样写历史 `unlock` 和日志，导入后锁定条目与名单逐条一致。每个用户一个事务、先取用户锁，几个节点同时导入也只改一次；全部完成后置 `config_state.lists_imported = true`，失败的话下次刷新重试。之后插件不再读设置里的名单。`GET /status` 带 `lists_imported`；为 false 时控制台不允许保存设置（提示名单导入尚未完成），否则保存会去掉名单键、名单就丢了。同一处：`legacy_converted = false` 而设置里有 0.1 的 `base_url` 和 `model` 时记一条错误日志（"upgrade through moderation <= 0.10 first"）：0.1 的一次性转换（`legacy.go`）已删除。
 - **新接口（`moderation:manage`）**：`PUT /watchlist/:user_id/lock`，body `{"list": "allowlist" | "blocklist"}`：把用户的条目（或新建一条）改成该名单的锁定条目，不过期，`source = manual`，历史 `lock`（from 原级别或空，to 名单级别，reason 写名单名，`operator_id` = 调用者）；已经是该名单的锁定条目时不改、不写历史；返回条目（`Watch`，带 `locked: true`、`lock`）。字段错误 400：`list` / `enum`，版主 `user_id` / `staff`（与加入名单相同）；核心没有该用户 404 `user_not_found`。`DELETE /watchlist/:user_id/lock`：删除锁定条目，历史 `unlock`（from 原级别，`operator_id` = 调用者），返回 `{"user_id", "removed": true}`；用户没有锁定条目时 404 `not_locked`。`POST /watchlist`、`PATCH`/`DELETE /watchlist/:user_id` 对锁定条目照旧 409 `locked`。条目 JSON 照旧带 `locked` 和 `lock`（由级别得出，锁定条目总有）。自动升级的基线照旧把 `lock` / `unlock` 历史算作人工决定。
 - **`ban_window_seconds`**（1–31536000，默认 86400）取代 `ban_window_hours`；封禁原因按能整除的最大单位写窗口，与自动升级相同（`24h / 24 小时`、`10m / 10 分钟`、`90s / 90 秒`）。
-- **设置清理**：schema 和解码删除 `analysis_*`（10 个）、`on_error`、0.1 的 `base_url`、`model`、`system_prompt`、`categories`、`tool_choice`、`max_turns`、`temperature`、`max_tokens`、`timeout_ms`、`sample_rate`、`group_ids`、`model_patterns`、`retention_days`，以及 `exempt_user_ids`、`cache_ttl_seconds`、`allowlist_user_ids`、`blocklist_user_ids`、`ban_window_hours`。例外：`api_key` 留在 schema 里（隐藏、`writeOnly`，不解码），否则核心不再遮蔽，`GET` 设置会明文返回库里存着的 0.1 密钥。核心只在保存时按 schema 校验、用提交的文档整体替换（`plugin/api/settings.go` `putSettings`），插件写不了设置，所以：控制台保存时去掉 schema 没声明的键，并把旧值折算进新键；插件在保存之前仍按一张表（`settings.go` `retiredKeys`）读这几个旧键，新键在时不读：`cache_ttl_seconds` → `verdict_cache_days`（0 = 关，否则向上取整到天，最多 7）、`ban_window_hours` → `ban_window_seconds`（× 3600）、`retention_days` → `hit_retention_days`（与 0.10.0 相同：取 180 和它的较大值）、名单（只给一次性导入用）。其余旧键一概不读。控制台的折算表（`settingsForm.ts` `RETIRED`）与它相同。
+- **设置清理**：schema 和解码删除 `analysis_*`（10 个）、`on_error`、0.1 的 `base_url`、`model`、`system_prompt`、`categories`、`tool_choice`、`max_turns`、`temperature`、`max_tokens`、`timeout_ms`、`sample_rate`、`group_ids`、`model_patterns`、`retention_days`，以及 `exempt_user_ids`、`cache_ttl_seconds`、`allowlist_user_ids`、`blocklist_user_ids`、`ban_window_hours`。例外：`api_key` 留在 schema 里（隐藏、`writeOnly`，不解码），否则核心不再遮蔽，`GET` 设置会明文返回库里存着的 0.1 密钥（0.12.2 起没有 schema：`api_key` 写在清单 `ui.settings.secrets` 里，照样遮蔽，`ValidateSettings` 接受它、不解码，§72.10）。核心只在保存时按 schema 校验（0.12.2 起由插件 `ValidateSettings` 校验）、用提交的文档整体替换（`plugin/api/settings.go` `putSettings`），插件写不了设置，所以：控制台保存时去掉 schema 没声明的键，并把旧值折算进新键；插件在保存之前仍按一张表（`settings.go` `retiredKeys`）读这几个旧键，新键在时不读：`cache_ttl_seconds` → `verdict_cache_days`（0 = 关，否则向上取整到天，最多 7）、`ban_window_hours` → `ban_window_seconds`（× 3600）、`retention_days` → `hit_retention_days`（与 0.10.0 相同：取 180 和它的较大值）、名单（只给一次性导入用）。其余旧键一概不读。控制台的折算表（`settingsForm.ts` `RETIRED`）与它相同。
 - **rolling**：插件靠内置同步全集群切换，0.10.0 会在 0.11.0 的库上跑几秒：照常工作，它不碰删掉的对象。导入写的锁定条目与 0.10.0 对账的结果相同，0.10.0 节点不会再改。**rollout 期间不要保存设置，也不要用锁定接口**：保存后的设置没有名单，0.10.0 节点会把所有锁定条目解锁删除，0.11.0 不会再导入（已导入），名单就丢了；锁定接口改的条目 0.10.0 节点按它的名单改回去；0.11.0 节点导入完成之前（启动后几秒）锁定接口改的条目也会被导入按设置里的名单改回。
-- **发布步骤**：全部节点到 0.11.0 后，保存一次设置，库里就不再有旧键：控制台任一设置页保存，或 `python3 next/plugins/moderation/tools/settings_cleanup.py clean --base <核心> --token <管理员 token>`（先 `--dry-run` 看要去掉和折算的键）。它与控制台做同样的事：`GET /plugins/moderation/settings`，保留 schema 声明的键（去掉 `api_key`），把 `cache_ttl_seconds`、`ban_window_hours`、`retention_days` 折算进新键（新键没存过时），`PUT` 整体替换，再 `GET` 核对旧键已消失、其余值不变。
+- **发布步骤**：全部节点到 0.11.0 后，保存一次设置，库里就不再有旧键：控制台任一设置页保存（去掉不再接受的键和 `api_key`，把 `cache_ttl_seconds`、`ban_window_hours`、`retention_days` 折算进新键）。原来另有 `settings_cleanup.py clean` 做同样的事，它按 schema 声明的键保留设置，0.12.2 起插件没有 schema，它会存下空设置，已删除（2026-11-19）。
 - **回滚到 0.10.0**：库结构可以直接回滚（0.10.0 不碰删掉的对象，0013 已记录、不会撤销）。两处要处理：0.10.0 按设置里的名单决定并对账（一启动就把不在名单上的锁定条目解锁删除），而 0.11.0 的 schema 不声明名单键，回滚前写不进去；0.11.0 保存过的设置里有 `ban_window_seconds`、没有 `ban_window_hours`，0.10.0 的 schema 不认识前者（之后 0.10.0 下每次保存都会被核心拒绝），封禁窗口也会回到默认的 24 小时。用同一个工具：
   1. 0.11.0 下：`settings_cleanup.py rollback-prepare --export locks.json --base … --token …`：逐页导出锁定条目，再把每个改成同级别、不过期的普通条目（`DELETE …/lock` + `POST /watchlist {"user_id", "level", "days": 0}`），0.10.0 不会删它们，决定不变（只后台审核的用户在这段时间可能被封禁或升级，所以第 2、3 步要紧接着做）。
   2. 回滚插件到 0.10.0。
@@ -4172,7 +3979,7 @@ GET `/groups/:id/models`（`group:read`）返回所有未删除成员账号的�
 
 1. **取结尾的消息不改核心**：gjson 自带的多路径写法 `messages|@reverse|[0,1,…,15]` 就能取到倒数 16 条（倒序；数组不足 16 条时缺的位置自动跳过，2026-10-30 用 gjson v1.19.0 实测）。插件把结果倒回正序，再算出结尾连续的 user 消息，不必把整段历史传过去。下文用 `TAIL16` 代指 `|@reverse|[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]`。**0.6.0 起作废**：插件要审整个请求，`needs` 改为各顶层字段整体（`messages|@this` 等，72.3），核心把整段历史传给插件。
 2. **宿主调用 `SecretSeal` / `SecretOpen`**（HostService，宿主权限 `secrets`，风险 low，即无需管理员额外同意，插件升级时自动授予）：用核心的主密钥做 AES-256-GCM（`secret.Cipher`），AAD = `plugin-secret:{插件 key}:{context}`，context 由插件指定（≤128 字节，例如 `channel:3`），明文 ≤64 KiB。插件 A 封存的数据插件 B 解不开，同一插件换了 context 也解不开；解不开时一律返回 `InvalidArgument "ciphertext does not open"`，不区分原因。SDK：`Host.SealSecret` / `Host.OpenSecret`；`pluginsdktest.FakeHost` 用公开的测试密钥实现同样的绑定。审核渠道的 API Key 和代理地址密文存在插件表里（new-api 存明文；我们的账号凭证都加密，这里不降级）。旧核心没有这两个调用，返回 Unimplemented。
-3. **钩子请求的消息大小**：插件侧 gRPC 默认只收 4 MiB，带图片的请求会超过。SDK 加选项 `pluginsdk.WithMaxRecvMsgSize(n)`（编译进插件），moderation 设 64 MiB（`main.go` 的 `maxRecvMsgSize`），覆盖正常的请求（上游自己也限制请求大小，原先固定的请求体上限是 32 MiB）。核心作为客户端的发送上限是 gRPC 默认值（不限），钩子字段只是请求体的片段。§74.3 的 `max_request_body_mb` 允许管理员把请求体调大，个别请求可能超过插件的接收上限：这样的调用以 `RESOURCE_EXHAUSTED` 失败，核心按该钩子的 failure 处理这一次，**但熔断不理会它**（2026-10-31，`hooks.go` `requestTooLarge`）：只有同时满足三条才算超大请求——状态码 `RESOURCE_EXHAUSTED`、消息以 grpc-go 接收端自己的 `grpc: received message larger than max` 开头、请求本身（`proto.Size(request)`）超过 4 MiB（gRPC 默认接收上限）；超大请求既不计为失败，也不重置连续失败计数。插件自己因过载返回 `RESOURCE_EXHAUSTED`（消息是插件自己的）时，即使请求很大也计为失败（2026-10-31 修订，原先只看状态码和大小，会把过载误判成超大请求）。插件是健康的，不能因为个别超大请求让整个集群暂停审核。（原先这里写"插件的响应超大仍计为失败"：核心的接收上限是 MaxInt32，这个分支实际碰不到，已删去。）
+3. **钩子请求的消息大小**：插件侧 gRPC 服务端的接收上限由 SDK 固定为传输层最大值（转发 V2，§112.1），插件不能也不用调；核心作为客户端的发送上限也不限。所以请求体上限（网关设置 `max_request_body_mb`，§111）以内的任何钩子请求都不会因消息大小失败。钩子字段只是请求体的片段。
    - **内存与 failure=open 的后果（0.6.0，2026-10-31 团队审核 P1-7）**：插件内存上限 1024 MB（0.8.0 起，此前 512 MB；下面的预算是按 512 MB 定的，没有改），一个钩子请求在插件里会被解码、规范化、分块，峰值占用是请求字段的数倍；几个大请求同时到达就可能让插件被内存上限杀掉。0.6.0 的做法：钩子入口按请求字段的字节数做并发准入（`max_inflight_mb`，默认 128 MiB；一个请求单独到达时不论多大都接收），超出时立即回答——本应先审的请求返回 503 `moderation_busy`，其余放行（note `moderation: busy`），0.8.0 的规则见 72.5 第 4 步的"准入"；被封禁用户在准入之前就拒绝。图片最多审 `input_max_images` 张（默认 8），单张 base64 超过约 22 MiB（解码后约 16 MiB）的不审；OpenAI 审核器只为选中的那一张图拼 data URL；排队的 post 任务只保留分块后的文字和图片，不持有整个钩子请求。
    - **failure=open 的后果，如实写明**：两个钩子都是 `failure: open`。插件进程不可用、超时、连续失败 10 次触发熔断（30 秒）时，核心不经插件直接放行，**本应先审的用户（72.5 第 6 步）和被封禁用户在这段时间里也会被放行**。核心在插件不可用时无法询问插件，封禁名单也只在插件里，所以插件侧做不到"不可用时拒绝被封禁用户"。改成 `failure: closed` 会在插件故障时拒绝所有用户的请求，代价过大，不改。需要硬性封禁时，应在核心停用该用户或其 API Key（核心鉴权阶段就拒绝，不依赖插件）。
 4. `moderation` 的 `hostCompat` 改为 `>=` 本次核心版本（因为要用 `secrets`）；**发布顺序是先核心、后插件**。
@@ -4204,6 +4011,7 @@ GET `/groups/:id/models`（`group:read`）返回所有未删除成员账号的�
 - **0.11.1**：版本 0.11.1，无迁移。没设范围的流程按 `input` 审、LLM 理由上限 2000 字（超出以“…”结尾）、逐级审核的理由整段显示，见 72 节开头"0.11.1"。封禁用户表的原因从单元格展开行，用到 UI 3.13，**`hostUICompat` 改为 `^3.13`，`hostCompat` 抬到 `>=0.1.281 <0.2.0`**。接口、能力、宿主权限、设置 schema 都不变，升级不需要管理员重新批准。
 - **0.11.2**：版本 0.11.2，无迁移。审核器编辑直接显示默认内容并可查看、恢复，内置 Jev 题集换成线上 9 题，失败调用的 trace 带脱敏错误摘要 `err_detail`，连接阶段网络错误重试一次，见 72 节开头"0.11.2"。没有用到新的平台能力，`hostCompat`、`hostUICompat`、接口、能力、宿主权限、设置 schema 都不变，升级不需要管理员重新批准。
 - **0.12.1（2026-11-15）**：插件 SDK 改用 GORM，功能不变。表结构以 `internal/model` 的 GORM 模型为唯一描述（`model.All()`，16 张表），与 `migrations/0001`–`0013` 建出的表完全一致（`sub2api-plugin db check` 通过，2026-11-16 起按系统目录比对列类型、NOT NULL、默认值、主键和索引、约束定义）；全部 pgx 调用改为 GORM（`Host.DB` 返回 `*gorm.DB`），语句的条件、锁、`ON CONFLICT`、`RETURNING` 都不变：占位符从 `$n` 换成 `?`，重复的参数按出现次数传（只在类型推断会变的地方加 `::bigint`），引用审核器的 JSON path 改为参数传入（GORM 会把其中的 `?`、`@` 当占位符），数组参数按 `pgdb.Array` 传。原来 `pgx.Batch` 的两处批量写入改为一个事务里的多行 `INSERT`（每条至多 1000 行，仍按键排序，全成或全不成）：审核记录按模型写入并只 `RETURNING id`，统计（`stats_hourly`、`costs`、`user_daily`）的累加改为 `INSERT … ON CONFLICT DO UPDATE` 的同一组累加表达式；保留期清理的 advisory 锁仍是事务级的 `pg_try_advisory_xact_lock`（2026-11-16 起经 `pgdb.TryXactLock` 取，键不变，新旧节点混跑时仍互斥）。2026-11-16 起语句全部由 GORM 按模型生成（§2“插件数据库”），去掉了模仿 pgx 的 `queryRow`/`collect`/`eachRow` 等封装；到期封禁的“删除并记为解封”从一条数据修改 CTE 改为同一事务里的 `DELETE … RETURNING` 加 `INSERT … ON CONFLICT`（用户已先加锁，结果相同），批量清理按 `ctid` 的子查询由 GORM 生成。能力、授权、接口、设置 schema 都不变，没有新迁移；`hostUICompat` 不变（`^3.15`）。线上跑的 0.12.0 是 0.1.286 打的包（`hostCompat >=0.1.286`），develop 上的 0.12.0 之后又改了清单（`risk`/`defaults`，§4“插件权限”，`hostCompat >=0.1.289`），0.12.1 把 `hostCompat` 改为 `>=0.1.290 <0.2.0`（0.1.289 不单独发布）：**不能在线上的 0.1.288 上单独升级**，随核心 0.1.290 一起发布。
+- **0.12.2（0.1.304 批次，插件界面只用代码写）**：删掉 `forms/settings.schema.json`、`forms/settings.ui.json`；`ui.settings` 改为 `{"mode":"native","page":"dashboard","permission":"moderation:manage","secrets":[{"path":"api_key"},{"path":"notify_webhook_secret"},{"path":"notify_webhook_url","sensitive":true}]}`（§75.1、§75.5），保存时由插件 `ValidateSettings` 校验（§72.10）。**`hostUICompat` 改为 `^4.0`，`hostCompat` 是 `>=0.1.304 <0.2.0`**（与这一批全部插件相同）。能力、钩子、任务、路由、宿主权限不变。
 
 ### 72.4 抽取
 
@@ -4534,8 +4342,9 @@ GET `/groups/:id/models`（`group:read`）返回所有未删除成员账号的�
   - **以 KV 为准**：KV 同步写，用批量调用（先删或写命中条目，再读出、修改、写回片段键），**没有预算（0.8.1）**：同步用处理请求自己的 ctx，请求结束时停下，没写的不写、对应记录不计入 `cache_synced`。本节点先给这些键立不设期限的墓碑，等到轮到它改这些键（正在写这些键的运行先写完），写 KV，再把墓碑的期限定为此后 4 秒，然后才让出；收到广播 `verdict.changed` 的其他节点把这些键从内存里删掉并立 4 秒墓碑。墓碑期内查询读到的旧值和刚结束的运行都不能把旧结论放回内存或写回 KV；读 KV 用了比墓碑更久、期间又有键被立过墓碑的那次读，读到的值一个都不放进内存；运行的写同理按"它的请求问缓存的时刻"算——问缓存已超过 4 秒、期间本节点立过墓碑的运行什么都不写（规则和它的代价在 72.5 第 8 步的"写"）。之后都从 KV 重新读。响应的 `cache_synced` 是缓存改动全部写成功的记录数；写失败的不计入（各节点一致地沿用旧结论），再处理一次会重做。广播是尽力而为的。**漏收的节点（0.8.1）**继续按内存里的旧值回答——例如继续重放已被标为误报的命中——没有时限（72.5 第 8 步"其他节点何时看到一个新命中"），做处理的节点自己立即生效；清空缓存可以兜底（72.11）。同步里失败的批量调用各计一次 `runtime.kv_errors`；因为请求结束而停下的不计。
 - **最终结论只在前端计算**：有人工结论用人工结论；否则用 AI 结论，AI 判 unsure 时显示"待复核"；同时标注来源是人工还是 AI。
 
-### 72.10 设置（`forms/settings.schema.json` 改动）
+### 72.10 设置（0.12.2 起由插件 `ValidateSettings` 校验；此前是 `forms/settings.schema.json` 的改动）
 
+- **0.12.2（现行）**：`forms/settings.schema.json`、`forms/settings.ui.json` 删除，核心不再按 schema 校验。设置的键、类型、范围、选项、长度写在插件 `internal/moderation/settings_check.go` 的 `settingsRules`（`fieldcheck.Fields`，照原 schema 逐条搬过来），保存时由 `ValidateSettings` 检查：没列出的键一律拒绝（`unknown`，退役键也是，设置页保存前会去掉它们），各字段越界报 `minimum`/`maximum` 等 `fieldcheck` 错误码，路径为 `values/<键>`（§15.8）。0.1 的 `api_key` 不再读，只为让核心继续遮蔽而保留在规则和 `ui.settings.secrets` 里。`Configure`（`parseSettings`）对已存值保持宽松：越界值夹回范围、退役键只记不含值的警告，所以库里已存的越界值照常运行，但之后在任何设置页保存都会被拒，直到把它改回范围内。密钥：`api_key`、`notify_webhook_secret` 是凭据，`notify_webhook_url` 是敏感地址（§75.1）。下文 0.11.0 及以前各条里的"schema"指当时的 `forms/settings.schema.json`。
 - **0.11.0**：下面标退役、隐藏的旧键和 `ban_window_hours` 已从 schema 删除（`api_key` 除外），新增 `ban_window_seconds`，见 72 节开头"0.11.0（contract）"；本小节其余内容是 0.10.0 及以前的规则。
 - **保留**：`mode`、`exempt_user_ids`（0.8.0 退役，见下）、`input_max_chars`（默认改为 12000）、`min_chars`、`cache_ttl_seconds`（0.8.0 退役，见下）、`block_status`（沿用 400–599，默认 403；没有收窄，免得 0.1 的旧值升级后存不了）、`block_message`、`record_pass`、`store_text`、`max_concurrency`、`queue_size`、`ban_*`。
 - **新增**：
@@ -4553,6 +4362,8 @@ GET `/groups/:id/models`（`group:read`）返回所有未删除成员账号的�
 | `error_retention_days` | 7 |
 | `pass_retention_days` | 3（上限 3） |
 | `jev_default_set` | null，是 Jev 审核器的默认题集 |
+
+- `jev_default_set` 的校验（0.12.2）：保存时（`ValidateSettings`）除各字段的上下限外，还拒绝 `JevQuestions.Validate` 不接受的表（类别重复报 `items/<i>/category` `duplicate`，自定义类别没填名称报 `items/<i>/label` `required`，问题只有空白报 `items/<i>/question` `required`），名称与问题两条与运行时共用 `engine.go` 的函数（`jevLabelMissing`、`jevQuestionBlank`），三条与 `JevQuestions.Validate` 的等价由测试保证；运行时（`Configure`）遇到这样的已存表照旧改用内置题集、只记不含值的警告。库里存着这样的表时，之后任何设置页的保存都会被拒，直到把题集改对；设置页这时用 toast 点名被拒的已存设置（键不在本页时，`settingsTab.storedInvalid`），本页的键照旧显示在各自那一行。设置页的题集规则按格子写（`settingsForm.ts` `jevRules`：`jev_default_set` 题数，`.preamble`，`.items.*.<字段>`），`JevQuestionsEditor` 的 `prop` 让每格显示自己路径的错误，服务端指针 `values/jev_default_set/items/<i>/<字段>` 原样落到该格；跨格的提示（另一题的重复、改了类别后名称是否必填）到提交或该格失焦才刷新。
 
 - **0.6.0 新增**（2026-10-31 团队审核后，用户要求；都在插件详情页的通用设置表单里）：
 
@@ -4655,7 +4466,7 @@ GET `/groups/:id/models`（`group:read`）返回所有未删除成员账号的�
 
 - 宿主调用 `PriceUsage`（权限 `prices`，风险 low，插件升级时自动授予）：请求 `{model, semantics: inclusive|exclusive, input, output, cache_read, cache_creation, cache_creation_1h}`，响应 `{priced, cost, reason}`。
   - `cost` 是十进制字符串（美元，8 位小数），按核心模型价格表（`model_prices`，只看完整模型名）和网关结算同一套表达式计算，不乘分组倍率。
-  - `reason` 取值：`no_price`（没有启用的价格；与"缺价格时按免费"的全局设置无关）、`video_only`（视频价格不能按 token 计）、`eval_error`。`priced=false` 时 `cost` 为空。
+  - `reason` 取值：`no_price`（没有启用的价格）、`video_only`（视频价格不能按 token 计）、`eval_error`。`priced=false` 时 `cost` 为空。
   - 只读，不扣费、不写用量记录。SDK：`Host.PriceUsage`；`FakeHost` 用可注入的价格表实现。
 - 内置插件目录换成 moderation 0.3.0。
 
@@ -4813,7 +4624,7 @@ GET `/groups/:id/models`（`group:read`）返回所有未删除成员账号的�
   - **0.8.0**：异常率的分子是流程行的 `errors`，定义如上（有级失败的运行都算）。同样的阈值下告警会比 0.7.2 更容易触发；升级后按新的数值重新看一下阈值。
   - 告警状态的 KV 命名空间仍是 `pass`（0.7.x 的缓存也用过这个命名空间；0.8.0 的判定缓存改用 `verdict`，告警状态不跟着换）：滚动升级期间新旧节点共用同一份状态，正在持续的告警不会重发。
 - AI 分析自动调整名单级别时也会发通知。
-- 通知发到 `notify_webhook_url`：JSON POST，中英双语，可以用 `notify_webhook_secret` 做 HMAC 签名（请求头 `X-Signature: sha256=…`）。通知里不带被审核的原文。设置表单里，密钥是 `writeOnly`，URL 是 `x-sensitive`。
+- 通知发到 `notify_webhook_url`：JSON POST，中英双语，可以用 `notify_webhook_secret` 做 HMAC 签名（请求头 `X-Signature: sha256=…`）。通知里不带被审核的原文。清单 `ui.settings.secrets` 里密钥是凭据、URL 是敏感地址（`sensitive: true`，§75.1；0.12.2 之前在设置 schema 里分别标 `writeOnly`、`x-sensitive`）。
 - 核心现在有通知（§74.4 `Notify`），但它按"渠道 + 接收人"发送，不按权限找管理员。是否把 moderation 的签名 webhook 迁到核心通知，等用户决定；在此之前继续用 webhook。
 
 **用户信息**：
@@ -4884,16 +4695,16 @@ GET `/groups/:id/models`（`group:read`）返回所有未删除成员账号的�
 
 **标签页**：概览、记录、观察名单、封禁、流程、绑定（0.7.0，72.17）、审核器、渠道、测试、设置。设置标签页对核心 `plugin:manage` 或 `moderation:manage`（§75.1）可见，没有设置权限的人看不到设置入口（标签页、概览里的设置链接都不显示）。设置标签页是表单页，自己限宽（约 56rem），页头的模式徽标放在 `#filters`，不用 `#title-extra`（后者会让页面说明留在页内）。
 
-**设置全部在这里编辑**（0.6.1 起，2026-10-31 用户要求；manifest `ui.settings` 为 `{"mode":"native","page":"dashboard",…}` 并带 schema 和 uiSchema，§75.5）。插件详情页不再有设置标签，`/plugins/moderation/settings` 转到本页 `?tab=settings`；插件页也不再有"完整设置"按钮或链接。存储不变：仍是核心的 `GET/PUT /plugins/moderation/settings`（核心加密保存、按 schema 校验并掩码密钥、改动后通知插件）。
+**设置全部在这里编辑**（0.6.1 起，2026-10-31 用户要求；manifest `ui.settings` 为 `{"mode":"native","page":"dashboard",…}`，§75.5；0.12.2 起不带 schema，改为声明 `secrets`）。插件详情页不再有设置标签，`/plugins/moderation/settings` 转到本页 `?tab=settings`；插件页也不再有"完整设置"按钮或链接。存储不变：仍是核心的 `GET/PUT /plugins/moderation/settings`（核心加密保存、按 `ui.settings.secrets` 掩码密钥、保存前交插件 `ValidateSettings` 校验、改动后通知插件）。
 
-- **分组**：按 `forms/settings.ui.json` 的 `ui:order` 和 `ui:section` 分成：运行模式与用户名单（0.8.0；此前叫"运行模式与豁免"）、拦截响应、观察名单与封禁、AI 分析、记录与保留、性能与缓存（默认折叠）、输入范围（默认折叠）、告警与通知、Jev 默认题集。每组一个 `SSettingsGroup`，每项一个 `SSettingRow`；有错误的折叠组自动展开。
-- **渲染**：一般的项用 `@sub2api/ui` 的 `SchemaField`（settings 布局）按 schema / uiSchema 渲染，显示值为已存值，没有存过的显示 schema 默认值。以下几项用本页自己的编辑器：拦截提示下面的拦截响应预览（OpenAI / Claude / Gemini 三种格式）、AI 分析渠道（只能选大模型渠道的下拉框，已存渠道不是可用的大模型渠道时提示）、通知 Webhook 地址和签名密钥（已设置时显示"已设置，留空保持不变"，可单独清除）、Jev 默认题集（内置 / 自定义，题集编辑器）。
+- **分组**（0.12.2 起）：设置分在页面侧栏的七个设置页里（`ui/native/src/settingsForm.ts` 的 `SECTIONS` 与 `nav.ts`）：执行策略（`mode`、`fail_policy`）、缓存与输入、名单规则（观察名单与封禁）、Jev 默认题集、拦截提示、记录与保留、高级（性能、告警与通知）。每组一个 `SSettingsGroup`，每项一个 `SSettingRow`。（0.12.2 之前按 `forms/settings.ui.json` 的 `ui:order`、`ui:section` 分组。）
+- **渲染**（0.12.2 起）：每项按 `SETTINGS` 里的种类（整数、时长、枚举、开关、文本、地址、密钥、题集）用 `@sub2api/ui` 的控件写成代码（`useForm`、`SForm`、`SSecretInput` 等），显示值为已存值，没有存过的显示默认值。以下几项用本页自己的编辑器：拦截提示下面的拦截响应预览（OpenAI / Claude / Gemini 三种格式）、判定缓存天数下的"清空判定缓存"、Jev 默认题集（内置 / 自定义，题集编辑器）。（0.12.2 之前一般的项用 `SchemaField` 按 schema / uiSchema 渲染。）
 - **0.8.0 的设置项**：第一组是 `mode`（标题"审核与默认级别"，选项"关闭 / 开启 · 默认观察 / 开启 · 默认拦截"）、白名单、黑名单；"记录与保留"组在 `store_text` 之后是 `record_pass_input_message`；"性能与缓存"组用 `verdict_cache_days` 取代 `cache_ttl_seconds`，下面有"清空判定缓存"按钮（只对 `moderation:manage` 显示，先确认）。退役的 `exempt_user_ids`、`cache_ttl_seconds` 隐藏。
   - 白名单的初始值：已存的 `allowlist_user_ids`，没有这个键时取已存的 `exempt_user_ids`（与后端读法一致）；白名单或黑名单有改动的保存同时把 `exempt_user_ids` 写成"白名单减去黑名单"（镜像；只改黑名单的保存也重写）。只保存黑名单而新键还从没存过、旧键里又有被加进黑名单的用户时，把旧键原样存成 `allowlist_user_ids`，旧键去掉这些用户。把白名单清空而旧键里还有用户时，写入空数组而不是删掉新键（旧键也写成空数组）。
   - 缓存天数的初始值：已存的 `verdict_cache_days`，没有时由 `cache_ttl_seconds` 换算（0 显示为关闭）；清空天数而旧键还在时写入默认值 7。
-- **0.1 旧字段**（`base_url`、`api_key`、`model`、`system_prompt`、`categories`、`tool_choice`、`max_turns`、`temperature`、`max_tokens`、`timeout_ms`、`on_error`、`sample_rate`、`group_ids`、`model_patterns`、`retention_days`）在 uiSchema 里是 `ui:widget: hidden`，不在界面出现，但留在 schema 里（`api_key` 必须留，否则核心不再把它当密钥掩码），保存时原样回传。仍存着 0.1 的 `api_key` 时页面顶部提示并提供"清除"（只持有 `moderation:manage` 的人在它存在时任何保存都会被要求重填它，§75.1，而它已无法重填）。
-- **密钥**：Webhook 地址（`x-sensitive`）和签名密钥（`writeOnly`）读到 `******`；输入框留空回传 `******` 表示沿用，点清除后回传时去掉该键；核心要求重填已存密钥（字段错误码 `reenter`）时在对应输入框下提示。
-- **校验与错误**：保存前按 schema 校验本页改过的项；核心返回的字段错误（`values/<key>/…`）显示在该项下面，不属于本页任何项的错误弹提示。数字项清空表示不保存，用 schema 默认值。
+- **0.1 旧字段与退役键**（0.12.2 起）：页面先把已存设置换成现行的键（`settingsForm.ts` 的 `currentSettings`）：退役键的值折算进取代它的键（新键没存过时），`SETTINGS` 没列的键和 0.1 的 `api_key` 在保存时去掉（`ValidateSettings` 会拒绝前者）。（0.12.2 之前 0.1 旧字段在 uiSchema 里隐藏、留在 schema 里原样回传，存着 `api_key` 时页面顶部提示并提供"清除"。）
+- **密钥**：Webhook 地址（`ui.settings.secrets` 里的敏感地址，`SSecretInput plain`）和签名密钥（凭据，`SSecretInput`）读到 `******`；输入框留空回传 `******` 表示沿用，点清除后回传 `''` 清掉已存值；核心要求重填已存密钥（字段错误码 `reenter`）时在对应输入框下提示。（0.12.2 之前这两项在 schema 里分别标 `x-sensitive`、`writeOnly`。）
+- **校验与错误**：输入时按 `settingsForm.ts` 的规则即时提示（与插件 `settings_check.go` 的上下限相同），保存时由插件 `ValidateSettings` 做最终校验；核心返回的字段错误（`values/<key>/…`）显示在该项下面，不属于本页任何项的错误弹提示。数字项清空表示不保存，用默认值。
 
 **设置的保存**（核心设置接口没有版本号，PUT 整体替换 values）：页面加载时记下已存的值和本页各项的初始值；保存时重新读取已存的设置，只把本页**相对加载时改过的项**写进最新值再写回，本页没动过的项（包括本页显示的项、隐藏的 0.1 旧字段）和其他设置都保持最新值，不会被打开页面时的旧值覆盖。没有改动时不发请求；有未保存的改动时保存栏提示。本页改过的项如果别人在此期间也改过（加载时的值 ≠ 最新值），先确认，确认后以本页的值为准，只覆盖这些项。限制：密钥类的项读到的是掩码，别人改了密钥看不出来；两次读取之间仍有很短的竞争窗口，要彻底解决需要核心设置接口支持版本号或按键 PATCH。
 
@@ -5120,14 +4931,14 @@ new-api 的动态权重做在核心的渠道模型里（`model/channel_dynamic_w
 - **值的来源**：按 账号 → 分组 → 全局设置 → 进程环境变量 的顺序取，0 或没设置就看下一层。
 - **已声明的变量**（定义见 `core/environment.go`）：
   - `relay_timeout_seconds`、`response_header_timeout_seconds`、`streaming_idle_timeout_seconds`
-  - `max_request_body_mb`：没有账号层，因为选账号之前就要用到。端点声明了 `request.maxBodyBytes` 时，生效值取两者中较大的那个（只放宽，不收紧端点自己要的上限）；端点没有声明时直接用它，所以运营方仍可把默认的 128 MB 调小。未设置：端点声明的值，否则 128 MB（2026-11-08 起，原为 32 MB；Anthropic 官方 Messages API 仍限 32 MB）。
+  - 请求体上限不是环境变量：它是网关设置 `max_request_body_mb`（§111），没有分组层、账号层和进程环境变量。同名的环境变量 2026-11-18 删除。
   - `task_timeout_minutes`、`task_poll_max_failures`：只有分组层和账号层，全局层就是对账设置（§8 的 `max_reconcile_age_sec`、`max_poll_failures`），没有进程环境变量。只作用于异步任务；普通预扣条目只按对账设置。`task_timeout_minutes` 在任务登记时折算成截止时间，之后修改不影响已登记的任务；例外是管理员手动重新对账（`POST /usage/:id/reconcile`）：截止时间从重试时刻起、按任务所在分组和账号**当前**的变量重新计算。`task_poll_max_failures` 每次查询失败时重新解析。
-  - `relay_timeout_seconds`、`response_header_timeout_seconds` 只作用于 HTTP 转发（含插件 `Execute` 经宿主转发的请求）；WebSocket 会话是长连接，不用这两个（握手固定 30 s），每一轮等待上游消息的空闲上限用 `streaming_idle_timeout_seconds`（`websocket.go` 的 `upstreamIdle`，超时以 504 结束该轮并关闭连接），请求体上限作为单条消息的上限。
-  - 资源请求（Files API 等，`resource_http.go`）不受 `max_request_body_mb` 和三个超时约束，用自己的上限（文件 512 MB、JSON 16 KB）和期限。
+  - `relay_timeout_seconds`、`response_header_timeout_seconds` 只作用于 HTTP 请求（插件中继、核心发出的上游请求；插件不能设超时，`UpstreamOptions` 已从协议删除）；WebSocket 会话是长连接，不用这两个（握手没有固定时限，转发 V2 收尾前是 30 秒；握手随客户端离开而结束），每一轮等待上游消息的空闲上限用 `streaming_idle_timeout_seconds`（`websocket.go` 的 `upstreamIdle`，超时以 504 结束该轮并关闭连接），请求体上限作为单条消息的上限（§111）。
   - `relay_timeout_seconds` 从发出上游请求时起算，与 `response_header_timeout_seconds` 同时开始；之前的本地准备（资源与额度请求头、辅助历史包装、可用性检查、任务登记）不计入。`streaming_idle_timeout_seconds` 只在核心等待上游数据（读响应体）时计时，客户端读得慢不算上游空闲。
   - 账号层取本次尝试重新加载的账号，不取挑选候选时的快照。
   - `relay_timeout_seconds` 或 `streaming_idle_timeout_seconds` 中途切断流式响应时，使用记录的错误信息写明是哪一个（`upstream stream interrupted: upstream request exceeded relay_timeout_seconds` / `… upstream stream exceeded streaming_idle_timeout_seconds`），不再只是 `context canceled`。
-  - 平台插件 `Execute` 调用的总时限是 6 小时加上本次尝试的 `relay_timeout_seconds`，所以设得再长（最大 86400 秒）也不会先被这个上限截断。
+  - `Execute` 调用没有总时限，插件在 `Execute` 里自己的工作也不计时（转发 V2 收尾起；此前等待形式有 6 小时加 `relay_timeout_seconds` 的总时限，另有按段的平台调用超时，§112.16）：等待形式的交换只受这里的上游超时、客户端离开和插件进程本身约束。
+  - `relay_timeout_seconds` 未设置时没有整体超时，插件的取回（§112.6）也一样（此前取回在未设置时有 5 分钟默认）；响应头超时照常适用。
   - 进程环境变量（`SUB2API_RELAY_TIMEOUT_SECONDS` 等，见声明的 `process_env`）由 `config.Load` 解析，作为全局层的回退；非法（非数字或超出范围）时启动失败。
 - **核心接口**：
   - `GET /environment/variables`：声明和进程层。
@@ -5358,18 +5169,35 @@ new-api 的动态权重做在核心的渠道模型里（`model/channel_dynamic_w
   - `PUT`：`plugin:manage` **或** `plugin.<key>:<permission>`。
   - 都没有时 403 `permission_denied`，`details.permission` 为核心权限。权限先于其他检查：插件不存在时，没有核心权限的人同样得到 403（不暴露插件是否存在），有核心权限的人得到 404；`PUT` 的请求体也在权限检查之后才读。
   - 取的是插件当前版本的 manifest；插件没写这个字段时与以前相同。
-  - **掩码字段分两类**（2026-10-31 修订，原规则把 `x-sensitive` 地址也当密钥，持插件权限的人可以把 webhook 地址改成自己的，同时用掩码沿用原签名密钥）：
-    - **凭据**：`writeOnly: true` 或 `format: "password"`（同时写了 `x-sensitive` 也算凭据）。插件拿它向别人证明身份（签名密钥、API Key、SMTP 密码）。
-    - **敏感地址**：只有 `x-sensitive: true`。webhook、`base_url` 这类本身可能带令牌的地址，`GET` 时同样掩码，但不是凭据。
-    - 嵌套对象里的属性同样识别（沿 `properties` 往下，最多 8 层），掩码和校验都按完整路径。`GET` 回答的 `secret_fields` 是相对 `values` 的 JSON 指针（`upstream/api_key`；名字里的 `~`、`/` 按 RFC 6901 转义成 `~0`、`~1`），顶层字段与以前相同。
+  - **掩码字段分两类**（2026-10-31 修订，原规则把敏感地址也当密钥，持插件权限的人可以把 webhook 地址改成自己的，同时用掩码沿用原签名密钥）：
+    - **凭据**：`ui.settings.secrets` 里没写 `sensitive` 的项。插件拿它向别人证明身份（签名密钥、API Key、SMTP 密码）。
+    - **敏感地址**：`sensitive: true` 的项。webhook、`base_url` 这类本身可能带令牌的地址，`GET` 时同样掩码，但不是凭据。
+    - 嵌套对象里的属性可以单独声明（最多 8 层），掩码按完整路径。`GET` 回答的 `secret_fields` 是相对 `values` 的 JSON 指针（`upstream/api_key`；名字里的 `~`、`/` 按 RFC 6901 转义成 `~0`、`~1`），顶层字段与以前相同。
+    - 2026-11-19 之前这两类由设置的 JSON Schema 标记（凭据是 `writeOnly: true` 或 `format: "password"`，敏感地址是只有 `x-sensitive: true`）；schema 表单删除后只认清单的 `ui.settings.secrets`（下文）。
     - 回传掩码 `******` 表示沿用原值；原来没有值时该字段删去。
   - **只凭插件权限（没有 `plugin:manage`）修改时，凭据不能沿用**：本次只要有任何字段改变（普通字段、敏感地址、另一个凭据，或删掉了某个字段），所有回传掩码的凭据都不再沿用，回答 400 `invalid_argument`，`details.fields` 里每个这样的凭据一项（`field = "values/<路径>"`，`code = "reenter"`），要求重新填写。改的是敏感地址时也一样：新地址必须配上重新填写的凭据，否则持有插件权限的人可以把 webhook 或 `base_url` 改到自己的地址，让插件把保存的凭据发过去。
     - 什么都没改时照常沿用。
     - 回传掩码的敏感地址不受此限：它沿用原值，地址没有变，凭据也不会被发到别处；所以"凭据全部重填、地址保持掩码"可以保存。
     - `plugin:manage` 不受此限制。
-    - 实现：`sdk/manifest` `SettingsSecrets`（标记的唯一读法，打包校验与核心共用）、`plugin/api/settings.go` `schemaSecrets`、`mergeSettings`。
-  - **标记只能写在能掩码的位置**（2026-11-12）：只有沿 `properties` 嵌套对象能到达的属性（最多 8 层）能单独掩码；被标记的属性整体掩码，其下不再细分。`items`、`additionalProperties`、`patternProperties`、`allOf`/`anyOf`/`oneOf`、`if`/`then`/`else`、嵌套的 `$defs` 等其他位置的标记、超过 8 层的标记，打包校验报 `ui.settings.schema` `unmaskable_secret`。同文档的本地引用 `"$ref": "#/$defs/<名>"` 或 `"#/definitions/<名>"`（指向根上的 `$defs`/`definitions`，名字是一个 RFC 6901 记号，`~0` `~1` 解码，不接受百分号编码）按“目标写在引用处”处理：目标自身被标记则引用处的属性整体掩码，目标的 `properties` 接在引用处的路径下（同样最多 8 层）；根上的 `$defs`/`definitions` 只经引用读取，没被引用的定义不检查。引用成环、互相嵌套超过 32 层、全部展开累计超过 10000 个节点，或者从 `items` 等到不了的位置引用带标记的定义，都报错，位置写在引用下（如 `/properties/a/$ref/items`）。schema 里只要有任何标记，其他引用（`$dynamicRef`、`$recursiveRef`、外部引用、锚点、其他指针、嵌套 `$id` 之下的引用）照旧报错（2026-11-12 权限加固 FU4，此前任何引用都报错）；schema 文件不是 JSON 对象同样报错。校验之前已安装的包：含这类标记的顶层设置整块按凭据掩码；标记不属于某一个顶层设置时（根上的 `allOf`、`additionalProperties`、`$ref` 等），或 schema 文件不是 JSON 对象时，全部顶层设置按凭据掩码。
-  - **没有 schema 的设置**（没有 `ui.settings`、iframe 或不带 schema 的 native，或包里缺 schema 文件）：已存值的每个顶层键都按凭据掩码，`secret_fields` 列出它们，回传掩码沿用原值，上面的重填规则同样适用。
+    - 实现：`manifest.Form.SecretFields`（`ui.settings.secrets` 的唯一读法，打包校验与核心共用）、`plugin/api/settings.go` 的 `mergeSettings`。
+  - **设置的密钥在清单里声明**（2026-11-19，插件界面只用代码写，设计见 [DESIGN-2026-11-19-PLUGIN-UI-CODE-ONLY.md](DESIGN-2026-11-19-PLUGIN-UI-CODE-ONLY.md) 6.1）：`ui.settings.secrets` 是 `[{path, sensitive?}]`。
+    - `path` 是相对 `values` 的 JSON 指针，写法与 `secret_fields` 相同（`upstream/api_key`，`~0`、`~1` 转义）；`sensitive: true` 是敏感地址，否则是凭据。
+    - 范围：嵌套对象的属性，最多 8 层；被列出的字段整体掩码。数组元素不能单独声明：路径中途遇到数组（或任何不是对象的值）时，那个值整体按密钥处理，`GET` 时整块掩码、`secret_fields` 列出它，回传掩码时整块沿用原值（与列出的对象、数组值同一套逻辑，`settings.go` `wholeAtNonObjects`）。建议直接声明数组本身。
+    - **键在不在有区别**（2026-11-19，K1 审查 M1）：写了列表按列表掩码；写成 `[]` 表示没有密钥，什么都不掩码；**没有 `secrets` 键**表示不知道哪些是密钥，每个顶层键都按凭据掩码（同下文"不知道哪些是密钥的设置"）。清单以原始 JSON 存在 `plugin_versions.manifest`（jsonb），解码后键不存在是 `nil`、`[]` 是空切片；`Form.Secrets` 的 JSON 标签是 `omitzero`，Go 里构造的清单也保留 `[]`。
+    - 掩码、回传 `******` 沿用原值、只凭插件权限时的重填、字段错误的写法见上文。实现：`manifest.Form.SecretFields`（返回 `[]SecretField`）。
+    - `manifest/check`：native / iframe 设置必须写 `secrets`（可以是 `[]`），缺了报 `ui.settings.secrets` `required`；只有 `ui.settings` 可以写（账号类型写了报 `unsupported`，账号的密钥用 `sensitiveFields`）；`form.mode: "schema"` 上传时报 `ui.settings.mode` `unsupported`（2026-11-19 起）；每个 `path` 由非空的名字组成、`~` 只能是 `~0`/`~1`、不超过 8 层（`manifest.SecretPath`，否则 `invalid`）；不能重复，也不能一个在另一个之下（`duplicate`）。native 设置要有 `component` 或 `page`（`ui.settings.component` `required`）。这些检查只在上传时做，已装的包照常加载（缺 `secrets` 的按上一条全部掩码）。
+  - **插件校验设置**（2026-11-19）：`PUT` 在换回保留的密钥之后、写库之前，调用插件的 `PluginService.ValidateSettings`（`config_json` 是换回密钥后的完整设置）。
+    - 请求的 `grants` 是插件当前的授权，与 `Configure` 下发的同源（2026-11-19，K1 审查 S7；此前为空）。
+    - 回答的 `errors` 非空时 400 `invalid_argument`，每项 `field` 是相对设置的 JSON 指针（`a/b`），核心写成 `values/a/b`，空串写成 `values`；`code`、`message` 原样返回给控制台，所以 **`message` 不得包含字段的值**（值可能是密钥）。`normalized_config_json` 非空时存它而不是提交的值（必须是 JSON 对象，否则 503 `plugin_unavailable`），`changed_keys`、重填规则都按它算。
+    - 可选：插件没实现（SDK 默认回 `UNIMPLEMENTED`，旧插件对未知方法同样回它）视为接受。插件没启用（不在当前代里）时不调用，直接保存，加载时由 `Configure` 检查（与账号凭证相同）。插件已启用但运行不起来（进程起不来、崩溃）时调用失败，保存回答 503 `plugin_unavailable`，不当成接受：要改设置先停用插件。走控制台调用槽位和 `TimeoutPlatformConsole`（10 秒）。
+    - 调用发生在锁住插件行（`SELECT … FOR UPDATE`）的事务里：这是取舍，保证校验的是与写入同一份已存值（换回的密钥、`changed_keys`、重填规则都基于它），代价是校验期间同一插件的启用、停用、升级等要锁这一行的操作要等校验返回（最长到上面的超时）。
+    - 核心自己不校验设置的内容（2026-11-19 前带 schema 的设置先按 schema 校验，再调用插件）。
+    - 插件线协议（2）和 Host API（10）都不变：新增的是可选 RPC，`HostService` 没改。
+    - SDK：插件实现 `pluginsdk.SettingsValidator`（`ValidateSettings(ctx, Config) (normalized json.RawMessage, err error)`，错误用 `FieldErrors`，`Config.Grants` 是当前授权），把 `Configure` 里的解码、默认值和检查拆成纯函数两边共用，保证存进去的值能 `Configure` 成功。`pluginsdk/fieldcheck` 是 Go 侧的规则（必填、按字符数的长度、pattern、上下限、枚举、嵌套对象），并拒绝没有列出的键（`code: "unknown"`，即原 schema 的 `additionalProperties:false`）。`fieldcheck` 与 JSON Schema 的差别：`Required()` 拒绝 `null` 和空字符串（比 schema 的 `required` 严）；`Integer()` 不配 `Range` 时不检查大小，超出 Go 整型范围的值要到 `Configure` 解码才失败；`OneOf`、`Pattern` 只用于 `String()`，用在别的类型上构造规则时 panic。测试用 `pluginsdktest.Harness.ValidateSettings(config, grants)`。
+    - 账号表单的同一条规则（拒绝未知键）：`apikey.Spec.Fields`（`fieldcheck.Fields`）列出 `api_key`、`base_url` 之外表单会发的键和各自的规则（只要允许、不检查的写 `fieldcheck.Any()`），按规则检查它们（先读凭证、再读设置）并拒绝凭证和设置里其他的键（`code: "unknown"`），`nil` 等同空 map（2026-11-19 D1 起总是检查，此前 `nil` 不检查）；没有 `base_url` 的类型设 `Spec.NoBaseURL`，`base_url` 也按未知键拒绝（vertex_apikey）；也可以给 `api_key`、`base_url` 加规则，只在 Spec 自己的检查通过后运行，看到的是 Validate 将要保存的值（key 去掉首尾空白，base_url 经规范化（不去版本段，§127），只替换对象里本来有这个键的地方，读取顺序与 Spec 自己相同），同一字段只报一个错误（2026-11-19 U3a；此前是只列键名的 `[]string`，插件要另包一层 `Platform` 改写 `ValidateCredentials` 才能加规则）。自己实现表单的插件用 `accountform.Form.Only(keys...)`。
+    - 测试辅助（2026-11-19 U3a）：`fieldcheck.DecodeSettings(cfg, fields, &out)` 是 `ValidateSettings` 与 `Configure` 共用的"解码成对象 → `fieldcheck.Check` → 解码进带默认值的结构体"三步，不是对象报 `""` `invalid_json`；`apikey/apikeytest` 的 `Form.Cases()` 是 api_key + base_url 类型共有的 `ValidateCredentials` 用例（只有空白的 api_key 被拒，带空格、非 ASCII、4096 位的接受；各种被拒的 base_url；表单不会发的键报 `unknown`；带 `/v1`、带 `%2F` 的地址原样保存；去空白与 scheme 转小写；§127），`Run(t, ValidateCredentials, cases)` 逐条断言；`pluginsdktest.SettingsSecrets(t, manifestJSON, want...)` 断言清单写出了 `ui.settings.secrets` 且正好声明 `want`。
+  - **标记只能写在能掩码的位置**（2026-11-12；已删除，0.1.304）：原来是对设置 schema 里密钥标记位置的打包检查（`ui.settings.schema` `unmaskable_secret`，含 `$ref` 展开的规则），随 schema 表单删除。现在密钥只在 `ui.settings.secrets` 里按路径声明，路径的检查见上文（`manifest.SecretPath`）。原文见 `git show 99bc835a7:next/docs/CONTRACTS.md`。
+  - **不知道哪些是密钥的设置**（没有 `ui.settings`；模式是本核心不认识的值，包括已装旧包的 `schema`；native / iframe 设置没有 `secrets` 键）：已存值的每个顶层键都按凭据掩码，`secret_fields` 列出它们，回传掩码沿用原值，上面的重填规则同样适用。native / iframe 设置写了 `secrets`（包括 `[]`）时按它掩码（上文）。
   - `GET` 的回答多一个 `permission`：完整的 RBAC key（`plugin.<key>:<permission>`），没有声明时省略。
 - **审计**：设置修改照旧写 `plugin.settings.update`（`changed_keys`，不记值），现在多记 `request_id`；用户是谁看 `user_id`。
 - **控制台**：
@@ -5426,14 +5254,15 @@ new-api 的动态权重做在核心的渠道模型里（`model/channel_dynamic_w
 
 插件通过 `app.events.v1` 订阅即可收到，载荷是 `{account_id, plugin_key, type, name, status（新状态）, reason, cooldown_until?, auto_disabled_until?}`。载荷里没有旧状态。
 
-### 75.5 插件自己页面里编辑的设置（`ui.settings.mode = "native"` 带 schema）
+### 75.5 插件自己页面里编辑的设置（`ui.settings.mode = "native"`）
 
 2026-10-31 用户要求：提示词审核的设置全部放到插件自己的「设置」标签里，插件详情页不再有设置。
 
-- manifest：`ui.settings` 写 `{"mode":"native","page":"<ui.pages 中的 native 页面>","schema":"…","uiSchema":"…","permission":"…"}`。`schema` / `uiSchema` 只有 `ui.settings` 在 native 模式下可以带，其它表单带了报 `unsupported`；`page` 必须是 `ui.pages` 里的 native 页面。
-- 核心：只要表单带 schema，不论模式，`GET/PUT /plugins/:key/settings` 都按它掩码密钥（§75.1）并校验；存储、通知插件、权限都与 schema 模式相同。不带 schema 的 native/iframe 设置仍不掩码，所以有密钥的插件必须带 schema。
-- 控制台：插件详情页只在 `mode` 为 `schema` 时显示设置标签；`/plugins/:key/settings`（只有插件权限的人用）遇到 native 设置时转到 `/p/:key/<page>?tab=settings`。插件页面自己用 `GET/PUT /plugins/:key/settings` 读写，回传 `******` 表示沿用密钥。
-- 兼容：0.1.222 及更早的核心对 native 设置不读 schema，GET 会把密钥明文返回，所以用这种写法的插件 `hostCompat` 要求 ≥ 0.1.223（moderation 0.6.1 起）。
+- manifest：`ui.settings` 写 `{"mode":"native","page":"<ui.pages 中的 native 页面>","secrets":[…],"permission":"…"}`，或者不写 `page`、写 `component`（插件注册的设置组件，控制台放在插件详情页的设置标签里）；两者至少一个（`ui.settings.component` `required`）。`page` 必须是 `ui.pages` 里的 native 页面。`secrets` 必写（可以是 `[]`，§75.1）。2026-11-19 前这种设置另带 `schema`、`uiSchema`（核心按它掩码、校验），schema 表单删除后不再接受，旧字段 `sub2api-plugin` 报 unknown field。
+- 核心：`GET/PUT /plugins/:key/settings` 按 `ui.settings.secrets` 掩码（没有列出的不掩码，写成 `[]` 什么都不掩码，没有 `secrets` 键时每个顶层键都按凭据掩码），保存前交插件 `ValidateSettings`（§75.1）；存储、通知插件、权限与 iframe 设置相同。已装的 native 带 schema 的旧包（moderation 0.12.2 之前）被读成"native、没有 `secrets`"，全部掩码，不会明文读回。
+- `GET /plugins` 的 `has_settings`（2026-11-19 起）：当前版本的 `ui.settings` 是 `native` 模式时为 true（最初只认 `schema`，过渡期认 `schema` 或 `native`，D1 删掉 schema 后只认 `native`）；`iframe` 模式控制台不打开，已装旧包的 `schema` 模式控制台不再渲染，都为 false。
+- 控制台：插件详情页只在 native 设置写了 `component`、没写 `page` 时显示设置标签（`pluginUtil.ts` 的 `consoleSettings`）；写了 `page` 时 `?tab=settings` 与 `/plugins/:key/settings`（只有插件权限的人用）转到 `/p/:key/<page>?tab=settings`（`nativeSettingsPath`）。插件页面自己用 `GET/PUT /plugins/:key/settings` 读写（`@sub2api/ui` 的 `usePluginSettings`，§23.3），回传 `******` 表示沿用密钥。
+- 兼容：0.1.222 及更早的核心对 native 设置不读 schema，GET 会把密钥明文返回，所以当时用这种写法的插件 `hostCompat` 要求 ≥ 0.1.223（moderation 0.6.1 起）。
 
 ## 76. CCGateway guard 与 compose 部署（已删除）
 
@@ -5669,7 +5498,7 @@ node 任务（可工作节点各跑，`RequireWork`）：
 - **不排队的请求**：WebSocket、免费端点（如 `count_tokens`）、正在排空的节点。
 - **排队计数**：`slot:account-wait:{账号 id}`，复用槽位，节点死亡后一样回收。账号视图新增 `waiting`。重试节奏 100ms 起，×1.5，上限 2 秒，±20% 抖动。
 - **设置**：`GET/PUT /settings/gateway` 新增 `queue_sticky_max_waiting`（0–10000，默认 3）、`queue_sticky_wait_seconds`（0–600，默认 120）、`queue_fallback_max_waiting`（0–10000，默认 100）、`queue_fallback_wait_seconds`（0–600，默认 30）。任一项为 0 关闭对应的排队。
-- **卡死兜底**：流式空闲超时未设置时默认 180 秒，WebSocket 进行中的一轮也受它约束（超时以 1013 关闭）。每次写客户端最长 60 秒，超时按客户端断开处理。
+- **卡死兜底**：流式空闲超时未设置时默认 180 秒，WebSocket 进行中的一轮也受它约束（超时以 1013 关闭）。写客户端没有时限（转发 V2 收尾起；此前每次写最长 60 秒）：客户端连着但不读时，这个请求一直占着账号和 API Key 的槽位，直到连接断开；WebSocket 上不读的一方由没有应答的心跳 ping 结束。
 
 ## 79. 用户的账号安全、钱包和模型价格（2026-11-05，用户要求，参考 new-api；迁移 0087）
 
@@ -5786,7 +5615,7 @@ PATCH `/users/:id` 只有改密码、邮箱时要 proof；PUT `/me/password` 先
 起因：经 new-api → sup2api 转到 vm2api/sakura 的 Claude Code 请求，`x-claude-code-agent-id` 等头被逐层白名单丢掉，下游无法按子代理拆会话，子代理全部排在主会话后面（首字 15–130 秒）。
 
 - **字段**：`accounts.header_passthrough text[]`（默认空），接口字段 `header_passthrough`（列表、详情返回，`POST`/`PATCH /accounts` 整体替换）。规则三种：`*`（全部）、`regex:<正则>` 或 `re:<正则>`（按请求头名称匹配，不区分大小写，存成 `regex:` 前缀）、其他按名称精确匹配（存小写）。最多 32 条，每条最多 256 字符；去重、去空白。正则编译失败、名称不是合法字段名报 `invalid`，精确名称落在下面的禁止列表报 `blocked`，超过 32 条报 `too_many`。
-- **生效位置**：核心按插件构造的请求发往上游时（`forwardBuilt`，含插件经核心转发的执行请求），把匹配规则的客户端请求头补到上游请求上，所有值原样带上。**插件已设置的头优先**（例如账号自己的 `x-api-key`），核心随后设置的资源头、额度头也会覆盖它。不影响插件收到的 `InboundHeaders`（仍按平台 / 账号类型的 `passHeaders`）。
+- **生效位置**：核心按插件中继的请求发往上游时（`upstreamRequest`，§112.4），把匹配规则的客户端请求头补到上游请求上，所有值原样带上，**只补没有的**：插件的默认头已有的不替换，插件的权威头写在最后（例如账号自己的 `x-api-key`）。不影响插件收到的 `InboundHeaders`（仍按平台 / 账号类型的 `passHeaders`）。
 - **禁止列表**（任何规则都不透传，`core.HeaderPassthroughBlocked`）：逐跳和分帧头（connection、keep-alive、te、trailer、transfer-encoding、upgrade、expect、host、content-length、content-encoding、accept-encoding），凭证（authorization、x-api-key、x-goog-api-key、api-key、cookie），客户端地址和代理痕迹（x-forwarded-for、x-forwarded-host、x-forwarded-proto、x-forwarded-port、x-real-ip、forwarded、via、cf-connecting-ip、true-client-ip、x-client-ip、x-cluster-client-ip），以及前缀 `proxy-`、`sec-websocket-`、`x-sub2api-`（本网关内部头）、`x-kin-`（vm2api/sakura 的控制头，例如 `x-kin-debug` 会让下游写调试日志并回传槽位和账号）。比 new-api 的跳过列表多了客户端地址和网关控制头，避免客户端伪造 IP 或操控下游。
 - 控制台：账号编辑页“高级”分区（左侧导航第 4 项）的“请求转发”组：请求头透传（标签输入，一条一个规则）和账号层环境变量（各项超时，从“调度与限流”移来）。导航摘要如“透传 * · 超时跟随”，都没配时“全部跟随默认”；`header_passthrough`、`environment.*` 的字段错误定位到这个分区。这一组也放请求参数覆盖（§84）。
 - 未做：分组 / 全局层的透传、WebSocket 端点（`websocket.go`）的透传。
@@ -5844,16 +5673,16 @@ PATCH `/users/:id` 只有改密码、邮箱时要 proof；PUT `/me/password` 先
 - 每项必须是该平台的端点协议，且该端点在账号类型的 `endpoints` 子集内（§13），否则 `unknown_protocol`；这样的端点里至少一个是 `kind: "proxy"`、`response.stream: "sse"` 且声明了 `request.streamPath`（核心要把它置 true），否则 `not_streamable`（WebSocket 端点、只有 JSON 的端点、`request.stream` 固定流式而没有 `streamPath` 的端点都不行）。
 - 平台未安装时 `unknown_platform`；离线打包解析不到外部平台时只核对协议属于 `<平台 id>.`，留到安装时再校验。
 
-**生效条件**（每次尝试按选中的账号判断，`gateway/streamonly.go` `forcesStream`）：账号类型的路由对本次**上游协议**声明了 `streamOnly`（经核心转换时按转换后的上游协议，即 `RequestMeta.protocol` / `usage_logs.upstream_protocol`，不是客户端端点的协议），且客户端非流式（`usage_logs.stream = false`），且不是 WebSocket 端点或异步任务提交端点。原生转发与 `platform.execute.v1`（插件 `Execute` → `ForwardUpstream` 经核心转发）两条路径都生效。流式客户端不受影响，照旧逐条转发。
+**生效条件**（每次尝试按选中的账号判断，`gateway/streamonly.go` `forcesStream`）：账号类型的路由对本次**上游协议**声明了 `streamOnly`（经核心转换时按转换后的上游协议，即 `RequestMeta.protocol` / `usage_logs.upstream_protocol`，不是客户端端点的协议），且客户端非流式（`usage_logs.stream = false`），且不是 WebSocket 端点或异步任务提交端点。不等待与等待两种中继形式都生效（§112.2）。流式客户端不受影响，照旧逐条转发。
 
 **请求**：
 
-- 核心在协议转换、账号模型映射、模型与资源引用映射之后，调用 `BuildUpstreamRequest` 之前，把上游请求体的 `request.streamPath`（上游端点的，如 `stream`）置为 `true`：插件在 `fields` 里读到的、`patches` 作用的都是要发往上游的样子。
-- 应用插件 `patches` 之后核心再强制一次 `true`，插件改不回去，最终发往上游的一定是 `true`。
+- 核心在协议转换、账号模型映射、模型与资源引用映射之后，调用插件的 `Execute` 之前，把上游请求体的 `request.streamPath`（上游端点的，如 `stream`）置为 `true`：插件拿到的就是要发往上游的样子。
+- 插件交回的请求体是最终字节，核心不再强制第二次（§112.3）；保持 `true` 是插件的责任，由一致性套件第 3 条检查（交入时流式为真，交回时仍为真）。
 - `RequestMeta.stream` 仍是客户端视角（`false`），插件凭自己账号类型的声明就知道上游会流式。
 - 等待响应头的超时按流式取，响应体套用流式空闲超时（环境变量 `streaming_idle_timeout_seconds`，§74.3）。
 
-**响应**：非 2xx 与以前完全相同（原样错误正文，§26.6 2026-10-19 规则）。2xx 且 `Content-Type: text/event-stream` 时，核心在写给客户端任何字节之前读完整个 SSE（复用网关的 SSE 行读取；只保留终止事件的 `response` 对象和沿途 `response.output_item.done` 的 `item`，合计上限 32 MiB，不缓存整条流）：
+**响应**：非 2xx 与以前完全相同（原样错误正文，§26.6 2026-10-19 规则）。2xx 且 `Content-Type: text/event-stream` 时，核心在写给客户端任何字节之前读完整个 SSE（复用网关的 SSE 行读取；只保留终止事件的 `response` 对象和沿途 `response.output_item.done` 的 `item`，不缓存整条流；保留的内容不限大小，转发 V2 收尾前超过 32 MiB 回 502）：
 
 | 事件 | 处理 |
 |---|---|
@@ -5861,11 +5690,10 @@ PATCH `/users/:id` 只有改密码、邮箱时要 proof；PUT `/me/password` 先
 | `response.failed`、`error` | 当作上游错误：状态码取事件顶层的数值 `status`（400–599）；没有时，错误类型（`error.type` / `response.error.type`，错误对象缺失时取事件顶层 `type`）为 `invalid_request_error` 且 `code` 不是账号或凭证类（`invalid_api_key`、`account_deactivated`、`invalid_organization`、`organization_deactivated`、`unsupported_country_region_territory`，`streamonly.go` `streamOnlyAccountCodes`）时为 400，其余 502（2026-11-19：Codex 后端在 200 的流里不带 status 报请求错误，例如 `json_object` 缺 “json” 字样，此前按 502 换号重试、每个账号都同样失败；400 交给插件分类后按请求错误返回，codex 不冷却不换号，自动停用的关键字规则不看状态码，照常停用并换号）；正文改写成 `{"error": <错误对象>}`（`response.failed` 取 `response.error`；`error` 事件取 `error`，是字符串时为 `{"message": ...}`，没有时取顶层的 `type`/`code`/`message`/`param`），`Content-Type` 改为 `application/json`。之后与 HTTP 错误完全相同：交给插件 `ClassifyError`（执行路径由插件在 `Execute` 里分类），按结果冷却、禁用、换号或返回；故障策略（§58、§69）同样适用；返回客户端时状态码与上述正文原样给出 |
 | 终止事件里没有 `response` 对象 | 按上面的上游错误处理，502 |
 | 没有终止事件流就结束、读取出错、空闲或总超时 | 按传输错误交给插件分类（`status = 0`，`transport_error` 为原因，如 `upstream stream ended before response.completed`、`upstream stream exceeded streaming_idle_timeout_seconds`），与连接失败相同 |
-| 保留内容超过 32 MiB | 502 `upstream_error`，不换号 |
 
 上游虽然被要求流式却回了 JSON，照常按 JSON 处理。
 
-**之后**完全走原有非流式路径：按上游协议的 `usage.json` 规则读用量（内置 `openai.responses` 的 `usage.input_tokens` 等，§26.5 响应形态比对按 JSON 计，不会记 `ResponseMismatch`）；经转换的路由由转换器的 `Response` 把 JSON 转成客户端协议（如 chat completion JSON）；插件用量源（`usageSource: "plugin"`）收到的是这份 JSON 正文；使用记录 `stream = false`、`first_token_ms = 0`；按 JSON 用量计费、预扣结算与 TPM 结算不变；执行路径同样先提交记录再把缓冲的 JSON 发给客户端（§31）。
+**之后**完全走原有非流式路径：按上游协议的 `usage.json` 规则读用量（内置 `openai.responses` 的 `usage.input_tokens` 等，§26.5 响应形态比对按 JSON 计，不会记 `ResponseMismatch`）；经转换的路由由转换器的 `Response` 把 JSON 转成客户端协议（如 chat completion JSON）；插件用量源（`usageSource: "plugin"`）收到的是这份 JSON 正文；使用记录 `stream = false`、`first_token_ms = 0`；按 JSON 用量计费、预扣结算与 TPM 结算不变；等待形式同样先提交事实再把缓冲的 JSON 发给客户端（§112.7）。
 
 **未覆盖**：账号“测试”（`BuildTestRequest`）不经过本节，插件应自己构造流式测试请求（核心只对 JSON 测试响应读用量）；WebSocket 端点本来就是流式。
 
@@ -5925,13 +5753,14 @@ PATCH `/users/:id` 只有改密码、邮箱时要 proof；PUT `/me/password` 先
 
 ### 83.3 同平台转换的调度
 
-§13 的调度原来只把端点协议转换到**其他平台**的协议，支持端点所属平台 P 的账号类型从不转换。现在：账号类型支持 P、但它在 P 上的 `endpoints` 子集不含客户端端点时，若核心有“客户端协议 → P 上子集内某端点协议”的转换器，该类型经转换服务这个端点（`gateway/routing.go` `planRoutes` / `addConvertedRoute(…, samePlatform)`；账号模块 `servedEndpoints` 在 `/account-types` 里把它列为 `native: false`，与网关一致）。
+§13 的调度原来只把端点协议转换到**其他平台**的协议，支持端点所属平台 P 的账号类型从不转换。现在：账号类型支持 P、但它在 P 上的 `endpoints` 子集不含客户端端点时，若类型在 `adapted` 里列出这个端点（§121.1，2026-11-19 起必须显式声明，此前对所有类型自动生效）且核心有“客户端协议 → P 上子集内某端点协议”的转换器，该类型经转换服务这个端点（`gateway/routing.go` `planRoutes` / `addConvertedRoute(…, samePlatform)`；账号模块 `servedEndpoints` 在 `/account-types` 里把它列为 `native: false`，与网关一致）。
 
 - 原生优先：子集含该端点时照旧原生转发，不转换。
 - 这类类型只在 P 内转换，不会因此转到它的其他平台（原来不服务，现在也不经其他平台服务）；不支持 P 的类型的跨平台转换不变。
 - WebSocket 与异步任务端点仍不转换（§35、§28）。
-- 目前唯一的同平台转换器是 `openai.chat → openai.responses`：codex 账号类型（子集 `responses`、`responses_websocket`）因此服务 `/v1/chat/completions`；非流式 chat 经 83.1 走流式上游再合成 JSON、转回 chat JSON。
-- 使用记录 `protocol = openai.chat`、`upstream_protocol = openai.responses`，用量规则取上游 `openai.responses` 端点的（`usage.json` / `usage.sse` 的 `response.completed` 规则，`inclusive`），计费照常。插件 `BuildUpstreamRequest` 的 `meta.protocol` 为 `openai.responses`、`meta.client_protocol` 为 `openai.chat`。
+- §110 起：同平台转换不算“协议转换”，默认仍对所有账号、所有模型生效，可以在账号的 `protocols` 里去掉对应的本平台协议关闭（§110.2）；不支持 P 的类型的跨平台转换默认关闭，要在账号上按模型开启。
+- 同平台转换器有 `openai.chat → openai.responses`、`openai.responses → openai.chat` 与生图两对（§121.2）：codex 账号类型（子集 `responses`、`responses_websocket`，`adapted` 列 `chat_completions`）因此服务 `/v1/chat/completions`，非流式 chat 经 83.1 走流式上游再合成 JSON、转回 chat JSON；azure-openai `azure_deployment`（子集 chat、embeddings，`adapted` 列 `responses`）服务 `/v1/responses`。
+- 使用记录 `protocol = openai.chat`、`upstream_protocol = openai.responses`，用量规则取上游 `openai.responses` 端点的（`usage.json` / `usage.sse` 的 `response.completed` 规则，`inclusive`），计费照常。插件 `Execute` 的 `meta.protocol` 为 `openai.responses`、`meta.client_protocol` 为 `openai.chat`。
 
 ### 83.4 版本
 
@@ -5939,30 +5768,20 @@ PATCH `/users/:id` 只有改密码、邮箱时要 proof；PUT `/me/password` 先
 
 ### 83.5 测试
 
-`sdk/manifest/check/streamonly_test.go`（各类合法/非法声明）；`server/internal/gateway/convert/openai_chat_responses_test.go`（请求映射、`json_object` 时开头 system/developer 留在 input、旧式 functions、custom 工具与 allowed_tools、web_search_options、共有参数与 cache breakpoint、各类丢弃及 Dropped 列表、各类拒绝、JSON 与 SSE 响应含 custom 调用、跨部件注解、被忽略与无法表示的输出项、未知 incomplete 原因为 length）；`server/internal/account/samplatform_test.go`（`/account-types` 的可服务端点）；`server/internal/gateway/streamonly_test.go`：Responses 非流式（上游收到 `stream:true`、JSON 正文、用量、记录 `stream=false`）、插件 patch 改回 false 被覆盖、`response.incomplete`、`output` 按 `output_index` 补齐、流式客户端不受影响、未声明 `streamOnly` 或声明了其他协议时不变、`response.failed`（502、插件分类、冷却）、带 `status` 的 `error` 事件（429）与扁平 `error` 事件、不带 status 的 `invalid_request_error`（400、只调用一个账号；账号类 code 与自动停用关键字仍换号）、无终止事件、经转换的 chat 非流式与流式、`platform.execute.v1` 路径的成功与错误事件、SSE 帧解析与错误正文形状。；同平台转换：非流式 chat 经流式上游合成 JSON 再转回 chat（记录 `openai.chat`/`openai.responses`、用量与计费）、流式 chat（含末块 usage、`[DONE]`）、未声明 `streamOnly` 时直接转换、无法转换的字段（`n: 2`）400 不发往上游、可丢弃字段（`stop`、`seed`、罚分、冲突的 `max_tokens`、消息 `name`、未知字段）在非流式与流式下都被丢弃且返回 200、原生优先与转换范围（不转到其他平台、无转换器不服务）。
+`sdk/manifest/check/streamonly_test.go`（各类合法/非法声明）；`server/internal/gateway/convert/openai_chat_responses_test.go`（请求映射、`json_object` 时开头 system/developer 留在 input、旧式 functions、custom 工具与 allowed_tools、web_search_options、共有参数与 cache breakpoint、各类丢弃及 Dropped 列表、各类拒绝、JSON 与 SSE 响应含 custom 调用、跨部件注解、被忽略与无法表示的输出项、未知 incomplete 原因为 length）；`server/internal/account/samplatform_test.go`（`/account-types` 的可服务端点）；`server/internal/gateway/streamonly_test.go`：Responses 非流式（上游收到 `stream:true`、JSON 正文、用量、记录 `stream=false`）、插件 patch 改回 false 被覆盖、`response.incomplete`、`output` 按 `output_index` 补齐、流式客户端不受影响、未声明 `streamOnly` 或声明了其他协议时不变、`response.failed`（502、插件分类、冷却）、带 `status` 的 `error` 事件（429）与扁平 `error` 事件、不带 status 的 `invalid_request_error`（400、只调用一个账号；账号类 code 与自动停用关键字仍换号）、无终止事件、经转换的 chat 非流式与流式、插件执行的请求的成功与错误事件、SSE 帧解析与错误正文形状。；同平台转换：非流式 chat 经流式上游合成 JSON 再转回 chat（记录 `openai.chat`/`openai.responses`、用量与计费）、流式 chat（含末块 usage、`[DONE]`）、未声明 `streamOnly` 时直接转换、无法转换的字段（`n: 2`）400 不发往上游、可丢弃字段（`stop`、`seed`、罚分、冲突的 `max_tokens`、消息 `name`、未知字段）在非流式与流式下都被丢弃且返回 200、原生优先与转换范围（不转到其他平台、无转换器不服务）。
 
-### 83.6 WebSocket 每轮消息的插件 body patch（2026-11-08，用户要求兼容层兜住客户端差异；codex 插件 0.1.1）
+### 83.6 WebSocket 每一轮经插件的 `Execute`（2026-11-08 起每轮经插件；转发 V2 改为每轮一次 `Execute`，§112.2）
 
-起因：§35 的 WebSocket 模式只在首轮握手时调用插件 `BuildUpstreamRequest`，取 URL 与头；每轮 `response.create` 消息由核心原样（钩子改写、模型映射后）发往上游，插件返回的 `patches` 被忽略。codex 的两种上游要求 `store:false`、`input` 为数组、不带若干字段（`codex_device` 还要求有 `instructions`），客户端只能自己带齐。现在核心对每一轮都取插件的 body patch。
+客户端在 Responses WebSocket 会话里发的每一轮 `response.create` 消息，在钩子改写（§20）、账号模型映射（§18）与引用模型映射之后、和 HTTP 请求一样的改写（参数覆盖、`claude_max_tokens`）之后交给该账号类型插件的 `Execute`：`body` 是这一轮的消息，`meta.protocol = openai.responses_ws`、`meta.stream = true`、`meta.model` 为映射后的模型、`attempt` 为该轮的尝试序号，两个标志恒为假。插件不等待地中继，给出握手地址（`ws(s)://` 或 `http(s)://`，方法 GET）、握手头和这一轮的最终消息，返回 `host_usage`。WebSocket 不做协议转换、资源引用映射，也没有 `streamPath`。
 
-**核心**（`gateway/websocket.go`）：
+- **首轮**：选号时的那次 `Execute` 既用于握手（URL、头按 §112.4 分层但不套透传；建连失败交给插件分类并换号），它交回的消息也是首轮发往上游的消息；不为首轮再调用一次。
+- **后续轮次**：沿用首轮的账号、连接和建连时加载的账号对象，每轮调用一次 `Execute`，只用交回的消息（以及 `upstream_model`）；URL、方法、头一律忽略，返回的 URL 与握手不同也**不**重连。
+- **失败**：后续轮的 `Execute` 失败或没有中继时，本轮回一条错误事件、记为失败，不发往上游，连接保持，下一轮照常。
+- 不能给 `response_stream`，没有等待形式（WebSocket 端点不能声明 `usageSource: "plugin"`）。消息大小只受请求体上限约束（网关设置 `max_request_body_mb`，§111，作为单条消息上限）。
 
-- 每一轮的消息在钩子改写（§20）、账号模型映射（§18）与引用模型映射之后，按该轮消息读出路由的 `requestFields`（与 HTTP 相同：账号类型对平台的覆盖 → 平台默认；每项是 gjson 路径或查询，取原始 JSON，缺失则不放），调用该账号类型插件的 `BuildUpstreamRequest`（`meta.protocol = openai.responses_ws`、`meta.stream = true`、`meta.model` 为映射后的模型、`attempt` 为该轮的尝试序号），把返回的 `patches` 应用到消息上再发往上游。顺序与 HTTP 路径一致（钩子 → 模型映射 → 插件 patch → 发送）；WebSocket 不做协议转换、资源引用映射，也没有 `streamPath`，这几步不适用。
-- **首轮**：选号时的那次调用（§35）既用于握手（URL、头、建连失败分类与换号照旧），它的 `patches` 也用于首轮消息；为此其 `requestFields` 现在也在引用模型映射之后读取（映射失败仍由该轮报错，不影响换号）。不为首轮再调用一次。
-- **后续轮次**：沿用首轮的账号、连接和建连时加载的账号对象，每轮调用一次，只取 `patches`（以及 `upstream_model`，仅在本轮记录尚未有上游模型时写入记录）；URL、方法、头一律忽略，返回的 URL 与握手不同也**不**重连。
-- **性能**：插件返回空 `patches` 时消息字节不变、不解析、不复制（`applyPatches` 直接返回原切片）；只有非空且确实改变了字节时才对比模型引用。没有 `requestFields` 的路由传空 `fields`。
-- **失败**：后续轮调用失败（gRPC 错误、空响应）或任一轮的 patch 无法应用（`value_json` 非法、路径非法等，全部或全不）时，本轮回一条错误事件（503 `plugin_unavailable`，记录 `error_type = plugin_unavailable`），释放该轮的并发位与预占，连接保持，下一轮照常；首轮在建连成功之后才失败的，上游连接同样保留给下一轮。patch 改动了模型引用（端点与路由的 `modelReferences`，与 HTTP `validatePatches` 相同的检查）时本轮以模型引用错误失败。调用受 `platform_call_timeout_ms` 约束。
-- **兼容**：旧插件（WebSocket 协议返回空 `patches`，如 openai 插件 0.3.x）发往上游的消息与以前逐字节相同，只是每个后续轮多一次 `BuildUpstreamRequest` 调用（它与握手时的调用相同，确定性地成功）。没有 manifest 字段或能力变化，随核心 0.1.257 发布。
+**codex 插件**：WebSocket 一轮的消息与 HTTP 请求体做同样的改写（`store=false`；字符串 `input` 转成一条 user 消息的数组；`role:"system"` 的 input 项改成 `role:"developer"`；缺 `instructions` 时补 `""`；删除上游不接受的字段；WebSocket 下不碰 stream 相关字段），在插件的 `BuildUpstream` 里用 `jsonedit` 一次改完（[PLUGIN-CODEX.md](PLUGIN-CODEX.md)）。
 
-**`requestFields` 的取值与大小**：HTTP（`dispatch.go` `attempt`）与 WebSocket（首轮 `dial`、后续轮 `turnPatches`）都经同一个函数 `requestFieldValues`（`gateway/util.go`）读取，取值方式相同。核心对单个字段和字段总和都不设上限，只受请求体/消息大小上限（`maxBodyBytes`，默认 128 MiB，WebSocket 为单条消息）和插件 gRPC 接收上限（默认 4 MiB，`pluginsdk.WithMaxRecvMsgSize` 可调；超过时该次调用失败，HTTP 换号、WebSocket 首轮换号、后续轮报该轮错误）约束。插件应使用只返回所需信息的 gjson 查询，不要索取大字段。
-
-**codex 插件 0.1.1**：
-
-- WebSocket 协议返回与 HTTP 相同的 body patch：`store=false`；字符串 `input` 转成一条 user 消息的数组（空白字符串，即空串或只含空白字符的串，转 `[]`）；`role:"system"` 的 input 项改成 `role:"developer"`（见下）；`codex_device` 缺 `instructions` 时补 `""`；删除上游不接受的字段。WebSocket 下不包含 stream 相关字段（不删 `stream_options`，也从不设置 `stream`），`chatgpt_siwc` 不删 `previous_response_id`（同一上游连接内可续接；该账号类型已于 2026-11-17 删除，见 PLUGIN-CODEX.md §14）。
-- system → developer（两种账号类型、HTTP 与 WebSocket）：Sign in with ChatGPT 上游拒绝 `role:"system"` 的 input 项。manifest `requestFields` 增加查询 `input.#.[role].#(=="system")#`：`input` 是数组时按项序返回 `["system"]`（角色恰为 `"system"`）或 `[]`（其他角色、无角色、非对象），每项约 3 字节，从不回显其他内容；`input` 是字符串或缺失时字段不存在（字符串由上一条转换成 user 消息，无需改角色）；`input` 是对象时为 `[]`。插件据此为每个 system 项生成 `input.<i>.role` = `"developer"` 的 `OP_SET`，每个请求最多 256 个（每个 patch 在核心是一次整体复制），超出的项保持原样由上游报错。
-- 已知限制：字符串 `input` 的字段 `[input]|#(%"*")` 会回显整段字符串，超过插件 gRPC 接收上限（4 MiB）的字符串输入会使调用失败。
-
-**测试**：`server/internal/gateway/websocket_test.go`——空 patch 时两轮消息逐字节不变且每轮都调用插件；首轮用握手调用的 patch、后续轮各自调用（按该轮 `requestFields`，`instructions` 有无不同、模型映射之后、`meta.protocol = openai.responses_ws`），后续轮返回不同 URL 不重连；首轮 patch 非法与后续轮插件报错都回 503 `plugin_unavailable` 错误事件、记为失败、不发往上游、连接保持且下一轮成功、并发位已释放。`plugins/codex`——WebSocket 两种账号类型的 patch（含 `instructions`、无 stream 字段、保留 `previous_response_id`）、system → developer（HTTP/WS × 两种类型，查询结果经 sjson 应用后的 input、上限 256、各种无需改写的输入）、manifest 的查询结果。
+**测试**：`server/internal/gateway/websocket_test.go`（每轮都调 `Execute`、首轮用握手那次调用的消息、后续轮返回不同 URL 不重连、后续轮失败只影响该轮）；`plugins/codex` 的执行测试（两种账号类型、HTTP 与 WebSocket 的改写）。
 
 
 ## 84. 账号请求参数覆盖（2026-11-08，用户要求，格式兼容 new-api 渠道的 `param_override`；迁移 0091）
@@ -5981,22 +5800,22 @@ PATCH `/users/:id` 只有改密码、邮箱时要 proof；PUT `/me/password` 先
   - `sync_fields`、`prune_objects`（2026-11-17 补齐，见 §108.4）。未知模式报 `unsupported`。
 - **条件**：`full`（null 只等于 null，布尔按布尔比较，其余类型不同是运行失败）、`prefix`、`suffix`、`contains`（按字符串）、`regex`（Go 正则，值须是字符串，保存时编译，§108.4）、`gt`、`gte`、`lt`、`lte`（两边都须是数字，否则运行失败）；`invert` 取反；路径取不到时结果就是 `pass_missing_key`（不取反）。条件路径先在请求体里找，找不到再到上下文对象里找。
 - **上下文键**：`model`、`upstream_model`（账号模型映射后的上游模型）、`original_model`（客户端模型）、`request_path`、`request_headers.<小写头名>`（客户端请求头，多个值用 `, ` 连接；禁止列表里的头不出现）、`header_override.<头名>`（账号请求头覆盖 §108 与前面的头操作已设置的值）、`retry_index`、`is_retry`、`retry.index`、`retry.is_retry`、`user_id`、`group`（分组名）、`using_group`（同 `group`，§108.4）、`account_id`、`stream`（含 streamOnly 强制的流式）。构造在 `core.ParamOverrideContext`，网关和预览共用。
-- **生效位置**（§86.5）：每次尝试执行一次，在模型映射、`mapReferencedModels`、`mapResourceReferences`、`forceStreamPath`、声明式上游的过滤字段与清单 paramOverride **之后**，取 `requestFields` 和 BuildUpstreamRequest / `platform.execute.v1` 的 Execute **之前**（`gateway/param_override.go` `rewriteBody`）。插件看到的就是覆盖后的请求体，`meta.model` 是覆盖后的模型，插件的 patch 还可以再改覆盖的结果：插件改写是插件自己的内部特殊逻辑，插件知道前面已经执行过账号参数覆盖，所以排在覆盖之后，看到覆盖结果再改（用户 2026-11-09 定）。WebSocket 每轮 `response.create` 同样在插件 patch 之前执行请求体部分。`forwardBuilt` 在插件 patch 之后仍重新强制 stream。
-- **请求头优先级**（`forwardBuilt`，含插件经核心转发的执行请求，后面的盖前面的）：声明构造的头（inbound、预设、清单、路由）和声明的 paramOverride 头 → 账号透传（§81）、请求头覆盖的透传键（§108）和粘性规则透传（只补没有的）→ 请求头覆盖的设值和删除（§108）→ **参数覆盖的设置和删除** → 插件的头（老插件构造的头、extend 追加的头；理由同请求体）→ 声明式类型的鉴权头重写（§86.5）→ 核心的资源头、额度头（仍然最后设置、最优先）。WebSocket 握手同样分层（没有透传）。头名须是合法字段名；落在 §81 禁止列表（`core.HeaderPassthroughBlocked`）里的头，不论作为目标还是 copy/move/pass 的源，都报 `blocked`。
-- **模型**：覆盖改了请求体的模型字段（平台的 `modelPath`）时，上游模型以覆盖结果为准：`meta.model`、使用记录的 `upstream_model`、上游用量的主模型身份都用它，`forwardBuilt` 的模型可用性一致性检查也以它为期望值，不会因此报 `upstream_model_mismatch`。计费仍按客户端模型；可用性预检仍按映射后的模型。
+- **生效位置**（§86.5）：每次尝试执行一次，在模型映射、`mapReferencedModels`、`mapResourceReferences`、`forceStreamPath` **之后**、插件的 `Execute` **之前**（`gateway/param_override.go` `rewriteBody`）。插件拿到的就是覆盖后的请求体，`meta.model` 是覆盖后的模型；插件在其后的改写（过滤字段、厂商清洗）还可以再改覆盖的结果：插件改写是插件自己的内部特殊逻辑，插件知道前面已经执行过账号参数覆盖，所以排在覆盖之后，看到覆盖结果再改（用户 2026-11-09 定；原来声明式类型的过滤字段在覆盖之前，转发 V2 起也在之后，§112.14）。WebSocket 每轮 `response.create` 同样在插件之前执行请求体部分。插件交回的请求体是最终字节，核心不再强制 stream。
+- **请求头优先级**（`upstreamRequest`，后面的盖前面的；§86.5、§112.4）：插件的默认头 → 账号透传（§81）、请求头覆盖的透传键（§108）和粘性规则透传（只补没有的）→ 请求头覆盖的设值和删除（§108）→ **参数覆盖的设置和删除** → 插件的权威头（理由同请求体）→ 没有 Content-Type 时补 `application/json`。WebSocket 握手同样分层（没有透传）。头名须是合法字段名；落在 §81 禁止列表（`core.HeaderPassthroughBlocked`）里的头，不论作为目标还是 copy/move/pass 的源，都报 `blocked`。
+- **模型**：覆盖改了请求体的模型字段（平台的 `modelPath`）时，上游模型以覆盖结果为准：`meta.model`、使用记录的 `upstream_model`、上游用量的主模型身份都用它，中继前的模型可用性一致性检查（插件给的 `upstream_model`）也以它为期望值，不会因此报 `upstream_model_mismatch`。计费仍按客户端模型；可用性预检仍按映射后的模型。
 - **return_error**：`value` 为消息字符串，或 `{message|msg, status_code|status, code, type, skip_retry}`；默认 400、`invalid_request`、`invalid_request_error`、`skip_retry: true`，状态码须在 100–599。`skip_retry: true` 直接回给客户端（记录类型 `invalid_request`），false 换下一个账号（所有账号都这样时把最后一个错误回给客户端）。不冷却、不惩罚账号；有失败策略时也不跑账号规则（与可用性拒绝相同）。
 - **运行失败**（类型不符、源路径不存在、条件比较的类型不符等）：WARN 日志带账号 ID，本次尝试换账号（`param_override_failed`，记录类型 `internal`，全都失败时客户端看到“无可用账号”），同样不惩罚账号。
 - **预览**：`POST /accounts/param-override/preview`（权限同建 / 改账号：`account:create`、`account:own:create`、`account:update`、`account:own:update` 任一），请求 `{"param_override": {...}, "body": {...}, "model": "...", "headers": {"名称": "值"}}`。`body` 缺省为 `{}`、须是对象；`model` 缺省取 body 的 `model`，同时作为上下文的 `model`、`upstream_model`、`original_model`；`user_id` 为调用者，`stream` 取 body 的。校验不过照常回 400 字段错误（`param_override`、`body`）；否则 200 `{"body": 结果对象, "set_headers": {...}, "delete_headers": [...], "return_error": null | {"status", "code", "type", "message", "skip_retry"}, "error": null | "运行失败原因"}`，有 `return_error` 或 `error` 时 `body` 为 null。与网关用同一个引擎和上下文构造，不保存任何东西。
 - **控制台**：账号编辑页“高级 › 请求转发”组，请求头透传之后一行“请求参数覆盖”：摘要（“N 条操作 · 含 M 条请求头操作”和前 3 条的说明）、“编辑”和“清空”；导航摘要加“覆盖 N 条”。编辑弹窗（`web/src/views/accounts/paramOverride/`）沿用 new-api 与动态权重调整项编辑器的布局：左侧操作列表（圆点区分请求体 / 请求头 / 返回错误，带条件的有漏斗、有错的红点，可搜索、上下移、复制、删除，6 个模板），右侧“就”（操作、路径或 from/to、值、keep_origin）与“当”（条件、满足任一 / 全部、取反、缺失视为满足）；“JSON”视图编辑整个覆盖（new-api 旧格式的顶层键读成字面路径的 `set` 操作，写回时统一成 `operations`）；“试运行”视图调用预览接口。“应用”只改账号表单，保存账号才生效。
 - **未覆盖**：账号测试请求（`BuildTestRequest`）、WebSocket 端点的请求头、分组 / 全局层的覆盖、批量编辑。
-- 代码：`sdk/paramoverride`（校验、编译、执行，2026-11-09 从 core 迁出，供清单校验共用；`core/param_override.go` 保留别名）、`gateway/param_override.go`（挂接点）、`account/param_override_preview.go`。测试：`core/param_override_test.go`、`account/account_test.go`（`TestAccountParamOverride*`）、`gateway/param_override_test.go`（请求体和头到达上游、改模型不触发可用性不一致、return_error、运行失败换账号、执行路径）。
+- 代码：`sdk/paramoverride`（校验、编译、执行，2026-11-09 从 core 迁出，供清单校验共用；`core/param_override.go` 保留别名）、`gateway/param_override.go`（挂接点）、`account/param_override_preview.go`。测试：`core/param_override_test.go`、`account/account_test.go`（`TestAccountParamOverride*`）、`gateway/param_override_test.go`（请求体和头到达上游、改模型不触发可用性不一致、return_error、运行失败换账号）。
 
 ### 84.1 内置参数覆盖：Claude 默认 `max_tokens`（2026-11-14，用户要求）
 
 用户原话要点：默认 max_tokens “不应该是必填，而应该是可以打开的参数覆盖功能……打开之后相当于每一个 Anthropic 账号的调用都加上了一个参数覆盖”。取代 §88 的 `claude_default_max_tokens`（必填 `default`、强制生效）。
 
 - **设置**：网关设置行 `gateway` 的 `claude_max_tokens`：`{"enabled": bool, "models": {"<客户端模型名>": 整数, "default": 整数}}`，默认 `{"enabled": false, "models": {"default": 8192}}`（行里没有这一项时 `models` 给出 `default` 8192 作为建议值，关闭时不生效）。`PUT /settings/gateway` 整体替换；`models` 最多 100 项（每项一条覆盖操作，同 §84 上限），模型名 1–200 个字符（按 Unicode 字符计，不按字节）且首尾无空格，值 1–1048576，`default` 可有可无，编译出的覆盖不得超过 §84 的 64 KiB；错误在字段 `claude_max_tokens`（`too_many`、`invalid_model`、`out_of_range`、`too_large`，控制台按这个字段名精确匹配）。存储值 ≤ 0 的项读时丢弃，超上限的夹到上限。旧键 `claude_default_max_tokens` 不再读写，保存设置后从行里消失；滚动期间旧核心读不到它时按 `{"default": 8192}` 运行。
-- **执行**：开启时编译成一个 §84 格式的覆盖（`gateway/claude_max_tokens.go`）：每个模型一条 `{"mode":"set","path":"max_tokens","value":N,"keep_origin":true,"conditions":[{"path":"original_model","mode":"full","value":"<模型>"}]}`，按模型名排序，最后一条不带条件的 `default`。与账号覆盖同一个引擎、同一个挂接点（`rewriteBody`），在声明式上游的部分之后、**账号自己的覆盖之前**执行，所以账号覆盖可以再改它；只作用于上游协议为 `anthropic.messages` 的尝试（含插件 Execute 路径），不设置请求头，运行失败按 §84 的运行失败处理（名称 `built-in request parameter override`）。客户端带了 `max_tokens` 不改；没有匹配的模型、也没有 `default` 时不补。
+- **执行**：开启时编译成一个 §84 格式的覆盖（`gateway/claude_max_tokens.go`）：每个模型一条 `{"mode":"set","path":"max_tokens","value":N,"keep_origin":true,"conditions":[{"path":"original_model","mode":"full","value":"<模型>"}]}`，按模型名排序，最后一条不带条件的 `default`。与账号覆盖同一个引擎、同一个挂接点（`rewriteBody`），在**账号自己的覆盖之前**执行，所以账号覆盖可以再改它；只作用于上游协议为 `anthropic.messages` 的尝试，不设置请求头，运行失败按 §84 的运行失败处理（名称 `built-in request parameter override`）。客户端带了 `max_tokens` 不改；没有匹配的模型、也没有 `default` 时不补。
 - **转换请求**：转换到 Anthropic 的请求，`max_tokens` 是 Anthropic 必填字段，客户端没给输出上限时转换器必须写（CONVERT-MATRIX D5）：规则开启且有值时用规则的值，否则用转换器的兜底 8192；开 thinking 时的抬高规则不变。规则随后看到的已经是带 `max_tokens` 的请求体，不会重复写。
 - **关闭时**：原生 Anthropic 请求原样转发；转换请求按上一条兜底。
 - 控制台：网关设置“Claude 默认 max_tokens”一行改为开关，开启后才编辑模型表。
@@ -6022,61 +5841,28 @@ PATCH `/users/:id` 只有改密码、邮箱时要 proof；PUT `/me/password` 先
 - **代价**：没有插件声明这个点时没有任何开销。声明了的插件每次尝试多一次 RPC，在钩子内同步执行期间占着账号的并发名额，所以插件应该尽量用 `skip_attempt_hooks` 在请求钩子里结束。
 - 测试：`gateway/attempt_hook_test.go`（每次尝试都调用并带账号、拒绝不换账号、`skip_attempt_hooks` 只跳过本插件、补丁被拒、WebSocket 每条消息）、`sdk/manifest/check/attempt_hook_test.go`。
 
-## 86. 声明式上游、只有清单的插件与自定义上游（自定义上游已在 0.1.301 删除，§106；2026-11-09，用户要求，设计见“sup2api 核心通用协议层设计”第 1 期，规格见 [UPSTREAM-DECLARATIVE.md](UPSTREAM-DECLARATIVE.md)）
+## 86. 请求构造的分工与顺序（2026-11-09 起；当时引入的声明式上游与只有清单的插件已由转发 V2 删除，§112；自定义上游已在 0.1.301 删除，§106）
 
-起因：三个 API Key 插件和 relay 的代码几乎是同一套模板（上游路径、鉴权头、固定头、base_url 规范化、错误归类各写一遍）；接一个兼容站点也得写插件。改为核心按清单声明构造上游请求，并新增不用写插件的“自定义上游”账号类型。
+起因：三个 API Key 插件和 relay 的代码几乎是同一套模板（上游路径、鉴权头、固定头、base_url 规范化、错误归类各写一遍）。2026-11-09 改成核心按清单声明构造上游请求；转发 V2（§112）又把它改回插件代码，公共部分做成插件链接的 Go 库。本节只写仍然有效的约定。
 
-### 86.1 上游声明
+### 86.1 API Key 类账号类型
 
-- manifest `accountTypes[].upstream`（`sdk/manifest/upstream.go`）：`preset`（`openai`/`anthropic`/`gemini`，预设在 `sdk/platforms/upstream/*.json`）、`extend`、`baseURL{default,required,stripSuffixes}`、`credentials{keyValidator,texts,fields}`、`auth{type: header|query|none, name, value}`、`headers`（头名 → `{set|default|append: 模板}`）、`routes`（上游协议 → `{method, path, transport, headers, patches, model}`）、`defaultProtocol`、`filterFields`、`paramOverride`（§84 格式）、`classify`（`openai`/`anthropic`/`gemini`）、`test`、`models{path, idPath, stripPrefix}`。
-- 合并：预设 → 清单，按 JSON merge patch，`headers` 按头名、`routes` 按协议合并，`null` 删除；未知字段拒绝。
-- 模板变量：`{api_key}`（只能在 auth 值和路径查询串）、`{base_url}`（auth 和请求头）、`{model}`（映射和账号参数覆盖之后的上游模型；插件 patch 改了模型时只重算 URL，请求头和查询值不变）、`{credentials.<k>}`（k 须在 `credentials.fields`，不能是 api_key/base_url）、`{client_header.<名>}`（须在该类型的 passHeaders 里、不在 §81 禁止列表，只能用在普通请求头）。
-- `auth.name` 只能是凭证头（authorization、x-api-key、x-goog-api-key、api-key、cookie）或普通头名，不能是逐跳、分帧、客户端地址或网关控制头。
+- “API Key + 基础地址、按上游协议选路由、Key 在请求头或查询串”的账号类型由插件用 `sdk/pluginsdk/standard` 实现，厂商预设在 `sdk/pluginsdk/providers/{openai,anthropic,gemini}`（`APIKey(id)`）。openai、gemini、relay、azure_openai 和 anthropic 的 `apikey` 都是这样；原清单声明的每一项在库里的对应见 [PLUGIN-DEVELOPMENT.md](PLUGIN-DEVELOPMENT.md) 第 3 节。账号类型 ID、凭证字段从声明式时起没有变过（表单 2026-11-19 起是插件的 native 组件），账号数据不迁移。
+- 密钥与基础地址的规则见 §127（2026-11-20 起；此前保存时就去掉类型声明的路径后缀，密钥按各类型的格式检查）：`api_key` 只要求是非空字符串；基础地址经 `apikey.NormalizeBaseURL` 规范化后**按填写的保存**（去首尾空白、scheme 转小写、路径保留转义形式并去掉末尾的 `/`，不去任何后缀；去掉首尾空白后仍含空白字符（`unicode.IsSpace`）、`?`、`#`、userinfo，或不是绝对 http(s) 地址的拒绝），请求时 `Spec.FromAccount` 从存值末尾至多去掉一个类型声明的版本段（`Spec.Versions`）得到根，再接上路由的完整路径。
+- 原声明式引擎的 1498 条录制样例冻结在 `sdk/pluginsdk/standard/goldentest`，用 `standard` 写的插件逐条回放一致。
 - passHeaders：账号类型 `platforms[]` 的列表为空（缺省或空数组）时用平台的（`manifest.AccountType.PassHeaders`，核心、校验、网关共用）。
-- 可服务的端点 = routes 列出的协议（须与 `platforms[].endpoints` 一致）加核心能转换到它们的协议；调度不变。
-- 校验：`sdk/manifest/check/upstream.go`（打包、安装、核心加载共用）；引擎 `sdk/upstream`（`Resolve` → `Profile.Validate/Build/URL/Test/Models/Classify/AuthHeader/PrepareBody`）。
-
-### 86.2 核心
-
-- `server/internal/plugin/declarative`：声明了 upstream 的账号类型由核心本地实现校验凭证、构造请求、错误归类、测试请求、模型列表，不走 gRPC。不实现 `core.ExecutePlugin`，走 BuildUpstreamRequest + `forwardBuilt`。账号生命周期、模型可用性等可选接口在插件实现时转给插件，否则 Unimplemented。
-- 网关只通过可选接口 `core.DeclaredUpstream`（`PrepareBody`、`UpstreamURL`、`SplitHeaders`、`AuthHeader`）感知声明式类型。
-- `registry.addAccountTypes`：声明了 upstream 的类型绑定声明式客户端，不再要求插件实现 platform adapter，也不要求 `accounts.credentials` 授权（凭证只在核心内使用）；`extend` 仍要求两者。声明解析失败的类型丢弃并记 ERROR。
-- `extend: true`：核心先按声明构造，再调插件 BuildUpstreamRequest，请求带 `base`（`BuildUpstreamRequestRequest` 字段 6）；插件的头覆盖声明的头（鉴权头除外），patches 接在声明的之后，url、upstream_model 非空时替换。
-
-### 86.3 只有清单的插件（`runtime: "none"`）
-
-- 包里没有 runtimes、没有 entry；能力只允许 `platform.adapter.v1`、`platform.websocket.v1`，其余（钩子、路由、任务、调度、观测、通知、数据库、生命周期、额度、余额、刷新、没有 upstream 的账号类型、extend 等）报 `needs_runtime`。
-- 核心加载为常驻 ready 的静态实例（`grpcruntime/static.go`），读授权方式与 gRPC 实例相同，迁移、drain、stop 为空操作；`PUT /plugins/:key/resources` 对它返回 400（字段 `runtime`、`unsupported`）。
-- grpc 插件的账号类型全部声明 upstream 且不 extend、自己也不声明平台时，进程不需要报告 `platform.adapter.v1`（anthropic 0.3.0）。
-
-### 86.4 插件
-
-| 插件 | 版本 | 变化 |
-|---|---|---|
-| openai | 0.4.0 | runtime none，`{"preset":"openai","filterFields":[]}` |
-| gemini | 0.3.0 | runtime none，`{"preset":"gemini","filterFields":[]}` |
-| relay | 0.3.0 | runtime none，preset anthropic、base_url 必填、不设默认协议 |
-| anthropic | 0.3.0 | 账号类型声明 preset anthropic；只保留模型目录（/models 路由、插件库） |
-| custom（新，0.1.301 删除，§106） | 0.1.0 | runtime none，内置启用；自定义上游账号类型 |
-
-- 四个老插件的行为由黄金样例保证（`sdk/upstream/testdata/golden`，旧插件代码对约 1500 个输入采集，新引擎逐项回放一致）。样例已冻结，旧代码和采集器已删除，不再重新生成。唯一差异：relay 的测试请求现在带 `model` 和 `usage_protocol`。
+- 可服务的端点 = 账号类型 `platforms[].endpoints` 覆盖到的协议加核心能转换到它们的协议（§110 起：跨平台转换到的端点要在账号上按模型开启才提供）。
 
 ### 86.5 请求构造顺序
 
-原则：账号参数覆盖（§84）先执行，插件在它之后。插件改写是插件自己的内部特殊逻辑，插件知道前面已经执行过账号参数覆盖，所以排在覆盖之后，看到覆盖结果再改；请求体和请求头一致，鉴权头除外（用户 2026-11-09 定）。
+原则：核心的改写先执行，插件在它之后。插件改写是插件自己的内部特殊逻辑，插件知道前面已经执行过账号参数覆盖，所以排在覆盖之后，看到覆盖结果再改；请求体和请求头一致（用户 2026-11-09 定）。
 
-- 请求体：模型映射、引用与资源映射、强制流式 → 协议转换 → 过滤字段 → 预设和清单的 paramOverride → **账号参数覆盖（§84）** → BuildUpstreamRequest（`meta.model` 为覆盖后的模型）：路由 patches、插件（extend、老插件、执行路径转发）的 patch → 插件 patch 改了模型时声明式类型按最终请求体的模型重算 URL → 再次强制 stream。普通转发、插件执行路径、WebSocket 每轮一致。
-- 请求头（后面的盖前面的）：声明构造的头（inbound 按 passHeaders 过滤、预设、清单、路由）→ 声明的 paramOverride 头 → 账号透传与粘性透传（只补没有的）→ 账号参数覆盖的头 → 插件的头（老插件构造的、extend 追加的，`core.DeclaredUpstream.SplitHeaders` 区分）→ **鉴权头按 auth 模板重写**（声明不产生值时删除）→ 核心资源头、额度头。WebSocket 握手同样分层（没有透传）。鉴权头只能由 auth 模板写，请求头覆盖、透传、插件头都改不了它。
+- 请求体：协议转换 → 账号模型映射、引用与资源映射、强制流式 → `claude_max_tokens`（§84.1）→ **账号参数覆盖（§84）** → 插件的 `Execute`（`meta.model` 为覆盖后的模型）：过滤字段、路由改写、厂商清洗、签名，交回最终字节 → 核心原样发送。HTTP、WebSocket 每轮一致。
+- 请求头（后面的盖前面的）：插件的默认头 → 账号透传、请求头覆盖的透传键与粘性透传（只补没有的）→ 请求头覆盖与账号参数覆盖的设值和删除 → 插件的权威头 → 没有 Content-Type 时补 `application/json`。WebSocket 握手同样分层（没有透传）。插件把鉴权头和签名头放在权威头里，运营方的请求头设置改不了它们（§112.4）。
 
 ### 86.6 控制台
 
 - 请求参数覆盖的提示文字为“在模型映射之后、插件改写之前执行，插件还可以再改”。
-
-### 86.7 兼容与上线
-
-- 账号类型 id、plugin_key 不变，现有账号和数据不迁移；没声明 upstream 的插件不受影响。
-- 参数覆盖的请求体位置与 0.1.262 之前相同（插件之前）；请求头改为插件的头盖过参数覆盖的头：老插件自己构造的头（如 codex 的头、代码插件转发的客户端头）不能再被账号参数覆盖改掉，声明式类型的头仍可以。
-- 第一个带本节功能的核心是 0.1.262，openai 0.4.0、gemini/relay/anthropic 0.3.0、custom 0.1.0 随它一起发布；内置插件在核心计划完成、所有节点都换上新核心后才升级（§37）。
 
 ## 87. 账号通用配置项按类型声明、核心编辑器开放给插件（2026-11-09，用户要求，设计见“sup2api 核心通用协议层设计”第 2 期，规格见 [COMMON-CONTROLS.md](COMMON-CONTROLS.md)；核心 0.1.262）
 
@@ -6101,7 +5887,7 @@ PATCH `/users/:id` 只有改密码、邮箱时要 proof；PUT `/me/password` 先
 ### 87.3 核心编辑器开放给插件（UI 3.7）
 
 - `HOST_UI_VERSION` 3.7.0；`host.components`（只读）：`ParamOverrideEditor`、`RateLimitEditor`（`{rpm_limit, tpm_limit, spm_limit}`）、`ModelLimitsEditor`、`HeaderPassthroughEditor`、`ProxyPicker`、`ModelMappingEditor`（另有 `UpstreamEditor`，UI 3.18 删除，§106.4；UI 3.19 加 `HeaderOverrideEditor`，§108.3），v-model 即账号接口字段，都接受 `disabled`；较重的编辑器首次使用时加载。用到的插件声明 `hostUICompat: "^3.7"`，核心下限 ≥0.1.262（0.1.261 是最后一个带 UI 3.6 的核心）。
-- schema 表单控件：`param-override`、`header-passthrough`、`rate-limits`、`model-limits`、`model-mapping`（另有 `proxy-select`；UI 3.19 加 `header-override`，§108.3）。数据格式即核心执行格式，插件在自己的设置接口里用 SDK 同一套规则校验。
+- schema 表单控件（UI 4.0 随 `SchemaForm` 删除）：`param-override`、`header-passthrough`、`rate-limits`、`model-limits`、`model-mapping`（另有 `proxy-select`；UI 3.19 加 `header-override`，§108.3）。4.0 起原生表单直接用上面的 `host.components`。数据格式即核心执行格式，插件在自己的设置接口里用 SDK 同一套规则校验。
 - `SModal` / `SFormModal` 新增 `fixed`（只是新增属性，更早的核心忽略、平稳降级，见 §23 组件表）。
 
 ### 87.4 编辑页分区插槽 `account.editor.section`
@@ -6113,16 +5899,18 @@ PATCH `/users/:id` 只有改密码、邮箱时要 proof；PUT `/me/password` 先
 
 起因：四种文本协议（`openai.chat`、`openai.responses`、`anthropic.messages`、`gemini.generate`/`gemini.stream_generate`）两两互转，原生与转换由管理员用优先级控制，转换的损失由账号或分组的策略决定能否接受。§83.2 的 chat → Responses 转换器保留（丢弃改为带类别的损失）；原来 chat/Responses → Anthropic 的严格转换改为宽松（D1）。
 
+**§110 起（2026-11-17）**：跨平台转换默认关闭。本节的转换器、路由、等级排序、丢失策略、使用记录都不变，但“所有账号类型都参与转换、没有退出机制”（CONVERT-MATRIX D3）不再成立：账号只对在 `model_protocols` 里开了该入站协议的模型接受跨平台转换，没开的账号在转换之前就被过滤（跳过原因 `conversion_not_enabled`），候选账号全部如此时返回 404（§110.5），不是 88.4 的 400 `unsupported_conversion`。同平台转换（§83.3）默认照常，可在账号上关闭。下文凡说“其他账号类型经转换服务”“经转换的候选”，都以账号开启为前提。
+
 ### 88.1 转换器与注册表（`server/internal/gateway/convert`）
 
-- `Converter`：`From`、`To`、`Grade`（good / fair / discouraged）、`Prepare(body, Options)` 返回绑定本请求的转换器与上游请求体、`Response`、`NewStream`。`Options`：`Ctx`、`Model`（客户端模型）、`Stream`、`Fetch`（媒体下载，网关提供）、`ClaudeDefaultMaxTokens`。
+- `Converter`：`From`、`To`、`Grade`（good / fair / discouraged）、`Prepare(body, Options)` 返回绑定本请求的转换器与上游请求体、`Response`、`NewStream`。`Options`：`Ctx`、`Model`（客户端模型）、`Stream`、`Fetch`（媒体下载，网关提供）、`ClaudeDefaultMaxTokens`、`AdaptModel`（路由的适配选项，§121.3）。可选接口 `ModelLocator`（客户端模型在上游请求体里的位置）与 `ResponseModelLocator`（上游应答里服务了它的模型的位置），§121.4。
 - 转换器不判断策略：每个请求成员要么映射，要么记一条 `Loss{Category, Path, Hop}`（类别 `tool`、`reasoning`、`image`、`other`，判定规则见 CONVERT-MATRIX §2.3），要么返回 `RequestError`（请求无法表达）。绑定的转换器实现 `LossReporter`：Prepare 后列请求侧损失，Response / 流 Flush 后追加响应侧损失（路径以 `response.` 开头）。
-- 注册表 `Resolve(from, to)`：有直接转换器就用它，否则 `from → openai.responses` 与 `openai.responses → to` 都有时用二者的组合（`compose.go`）：等级 discouraged，`Hops` 为三项，第二跳的损失 `Hop = 1`，任一跳的 `RequestError` 原样返回，流式逐事件串接。两端属于同一平台（协议名第一个 `.` 之前相同，如 `gemini.generate` 与 `gemini.stream_generate`）时不组合。组合在注册时生成；`Pairs()` 含组合。
+- 注册表 `Resolve(from, to)`：有直接转换器就用它，否则 `from → openai.responses` 与 `openai.responses → to` 都有时用二者的组合（`compose.go`）：等级 discouraged，`Hops` 为三项，第二跳的损失 `Hop = 1`，任一跳的 `RequestError` 原样返回，流式逐事件串接。两端属于同一平台（协议名第一个 `.` 之前相同，如 `gemini.generate` 与 `gemini.stream_generate`）时不组合；生图两对（§121.2）不作第一跳。组合在注册时生成；`Pairs()` 含组合。
 - `core.ProtocolConverters.Conversion(client, upstream)` 返回 `core.Conversion{Rank, Grade, Hops}`（取代 `CanConvert`）。
 
 ### 88.2 路由
 
-- 原生路由不变。其他账号类型：`core.BestConvertTarget` 在类型子集内可接收转换的端点（proxy、非计数端点）中取 (等级, 跳数, 声明顺序) 最小者；声明顺序为类型的 `platforms` 顺序、平台的 `endpoints` 顺序（等级相同即原来的“第一个匹配”）。支持端点平台但子集不含该端点的类型只看同平台子集内的端点（§83.3 不变）。
+- 原生路由不变。其他账号类型：`core.BestConvertTarget` 在类型子集内可接收转换的端点（proxy、非计数端点）中取 (等级, 跳数, 声明顺序) 最小者；声明顺序为类型的 `platforms` 顺序、平台的 `endpoints` 顺序（等级相同即原来的“第一个匹配”）。支持端点平台但子集不含该端点的类型只看同平台子集内的端点，且只在 `adapted` 列出该端点时（§83.3、§121.1）。
 - 流式相容：客户端流式要求端点 `response.stream = "sse"`；非流式要求 `request.stream` 不为 true 且 `response.nonStream = "json"`，或类型对该协议声明了 `streamOnly`（§83.1）。所以 chat 流式到 Gemini 走 `gemini.stream_generate`，非流式走 `gemini.generate`。
 - 计数端点（`*.count_tokens`）从不转换。没有原生计数路由、但能服务同族生成协议（`anthropic.count_tokens` → `anthropic.messages`，`gemini.count_tokens` → `gemini.generate`，原生或经转换）的类型得到一条 `local` 路由：选中该类型的账号时不发上游，由核心本地估算（CONVERT-MATRIX §8；`gateway/count_local.go`），使用记录 `upstream_protocol = "local"`。
 - WebSocket、异步任务提交端点仍只走原生。
@@ -6145,6 +5933,7 @@ PATCH `/users/:id` 只有改密码、邮箱时要 proof；PUT `/me/password` 先
 - `GET/POST/PATCH /accounts`、`/accounts/:id` 与 `/groups`、`/groups/:id`：`conversion_loss_policy`：`"allow"|"safe"|"strict"|null`；PATCH 缺省保持、null 清除；非法值 400 `invalid_argument`，`details.fields[{field: "conversion_loss_policy", code: "invalid"}]`。权限与该资源的其他字段相同。账号的策略经调度快照（`core.AccountRef`）、分组的经 API Key 认证（`core.GroupInfo`）到达网关，随既有缓存失效。
 - `GET /account-types`：`endpoints[]` 增加 `grade`（native / good / fair / discouraged / local）与 `via`（经过的协议，客户端在前；组合时三项；原生与 local 省略）；`native` 保留（等于 grade 为 native）。按 88.2 计算，不区分流式（同等级的兄弟端点由网关按请求选）。
 - `GET/PUT /settings/gateway`：`claude_max_tokens`（2026-11-14 取代 `claude_default_max_tokens`，见 §84.1）；`media_download_max_mb`（1–1024，默认 64）——转换到 Gemini 时下载单个媒体文件的上限（D6）。
+- 到 Gemini 的媒体下载（`gateway/convert_media.go`）不走账号代理。核心进程环境里有 `HTTP_PROXY` / `HTTPS_PROXY`（或小写写法）、且目标不在 `NO_PROXY` / `no_proxy` 里时经这个环境代理下载，否则直连；取哪个代理按 Go `http.ProxyFromEnvironment` 的规则（`http://` 目标看 `HTTP_PROXY`，`https://` 看 `HTTPS_PROXY`；`localhost` 与回环地址从不经代理），进程内只读一次，在第一次下载时（2026-11-19，所有者：“图片直连下载（或者环境http代理）”）。SSRF 检查（`netguard`）：直连时照旧（URL 检查、对解析出的地址检查、拨号时检查）；经环境代理时与经账号代理同一条规则 `netguard.CheckHostVia(proxied)`（§43.4）：本机不解析目标，只拒绝字面私网地址与 `localhost`；到代理本身的连接不做私网检查（代理是运营方配的，同管理员保存的 `allow_private` 账号代理）。每跳重定向按该跳自己走直连还是代理重新检查。经环境代理时本机只能拦字面私网地址，域名（包括 `10.1`、`0x0a000001`、十进制整数这类非规范的 IPv4 写法）交给代理解析：**环境代理应当自行拒绝访问内网地址；这一层核心无法检查**。经环境代理的一跳出现网络错误时，给 API 客户的原因只写 `connection through the proxy failed`（底层错误含代理的地址），原始错误记在服务端日志 `gateway: media download through the environment's proxy failed`；直连的错误文字不变。核心里其他读这些变量的只有插件市场与插件包下载（默认 Transport）；账号代理客户端（直连与经账号代理）、`netguard` 的其他客户端、插件进程都不读（插件进程的环境是白名单，不含这些变量）。
 - 使用记录列表与详情：`conversion`（`/me/usage` 为 null，与 `upstream_protocol` 一致）；筛选 `conversion=native|converted|good|fair|discouraged|local|lossy`（`native` 含 NULL 与 grade native；`converted` 为三个转换等级；`lossy` 为有请求或响应侧损失），只对管理员视图。
 
 ### 88.6 使用记录 `conversion`
@@ -6337,17 +6126,17 @@ codex 插件要接入 OpenAI 官方的“用量重置次数”：插件要能用
 
 ### 91.1 `HostService.SendAccountRequest`
 
-宿主替插件为它**自己的某个账号**发一次有上限的 HTTP 请求，走该账号的代理，和插件描述的配额查询、凭证刷新请求同一条发送路径。
+宿主替插件为它**自己的某个账号**发一次 HTTP 请求，走该账号的代理，和插件描述的配额查询、凭证刷新请求同一条发送路径。使用者：codex 的重置次数、volcengine 的素材库（0.13.0 起，插件签名后交给它发出，插件不再申请 `net`，[PLUGIN-VOLCENGINE-ARK.md](PLUGIN-VOLCENGINE-ARK.md) §17）。
 
 | 项 | 约定 |
 | --- | --- |
-| 授权 | 与 `GetAccountCredentials` 相同（§26.6）：`accounts.credentials`，scope 必须恰好是 `{"types":"own"}`，调用时用 PG 复核授权行（`requireOwnCredentials`）。这类请求带的就是插件用 `GetAccountCredentials` 读到的凭证，所以不另设授权。不满足 → `PERMISSION_DENIED` |
-| 参数 | `account_id > 0`；`url` 非空且不超过 8 KiB；`method` 不超过 16 字节（空 = `GET`，大小写不敏感）；`body` 不超过 64 KiB。不满足或 URL 解析不了 → `INVALID_ARGUMENT` |
-| 允许的主机 | scheme 必须是 `http` 或 `https`；主机名（去端口、不分大小写）必须等于 manifest `externalServices` 的某一项，或者是它的子域（以 `.` + 该项结尾）。项也去首尾空白、去端口后比较；端口不限制。否则 → `PERMISSION_DENIED`。`externalServices` 原来只用于展示，安装审阅时列给管理员看（`install/review.go` 的 `external_services`），现在它也是这条 RPC 的允许名单：没有声明 `externalServices` 的插件用不了这条 RPC |
+| 授权 | 不检查宿主授权（§124 起；此前与 `GetAccountCredentials` 相同，要 `accounts.credentials {"types":"own"}`）：账号的归属由下面“账号”一行的 SQL 保证 |
+| 参数 | `account_id > 0`；`url` 非空；`method` 空 = `GET`，大小写不敏感；URL、方法、`body` 不限大小（转发 V2 收尾起，§112.17；此前 8 KiB、16 字节、64 KiB）。不满足或 URL 解析不了 → `INVALID_ARGUMENT` |
+| 允许的主机 | scheme 必须是 `http` 或 `https`，否则 `PERMISSION_DENIED`。主机按中继的同一条规则（`core.CheckPluginUpstream`，§112.17）：manifest `externalServices` 的某一项或它的子域，或者是这个账号自己的上游地址（类型 `upstreamFields` 声明的字段，从账号的设置和凭证里读）的主机，并且管理员的插件联网设置允许插件访问它（§113.3）；账号模块读出账号后判断，否则 → `PERMISSION_DENIED`，不发送、不写审计（此前只认 `externalServices`，在读账号之前判断） |
 | 账号 | account 模块按 `id`、`plugin_key`、未删除查询（`SendPluginAccountRequest`，可选接口 `core.PluginAccountRequester`）。别的插件的账号和不存在的 id 一样回 `NOT_FOUND`，不泄露 id 是否存在。账号状态不限：停用、`auto_disabled` 的账号也能发（重置次数正是给被停用的账号用的） |
-| 发送 | 复用配额查询、凭证刷新的 `sendPluginCall`：账号有 `proxy_id` 就走该代理（代理停用或不存在 → `transport_error`，不会回退直连）；直连时经 netguard 拒绝私网地址（`AllowPrivateUpstream` 除外）。`body` 原样发送，请求头里没有 `Content-Type` 时默认 `application/json`。**不跟随重定向**，3xx 原样返回（配额、刷新路径照旧跟随，行为不变）。响应体最多 64 KiB，超出部分截掉并置 `truncated`；响应头名转小写，只取第一个值 |
+| 发送 | 复用配额查询、凭证刷新的 `sendPluginCall`：账号有 `proxy_id` 就走该代理（代理停用或不存在 → `transport_error`，不会回退直连）；目标按 `netguard.CheckHostVia`（§43.4）检查：直连时拒绝解析到私网的地址，经代理时本机不解析、只拒绝字面的私网地址和 `localhost`（`AllowPrivateUpstream` 时都不检查）。`body` 原样发送，请求头里没有 `Content-Type` 时默认 `application/json`。**不跟随重定向**，3xx 原样返回（配额、刷新路径照旧跟随，行为不变）。响应体整份交还（此前截到 64 KiB 并置 `truncated`，§112.17；该字段已删除），读不完整（例如连接中途断开）按传输错误交给插件：`status` 0、`transport_error`，不交出半截响应体；响应头名转小写，只取第一个值 |
 | 上限 | 单次 30 s（`refreshTimeout`），调用方 ctx 取消时立即中止；不另设并发上限 |
-| 传输失败 | 不是 RPC 错误：返回 `status` 0 和 `transport_error`（DNS、连接、超时、代理不可用、netguard 拒绝），和 `sendPluginCall` 一致 |
+| 传输失败 | 不是 RPC 错误：返回 `status` 0 和 `transport_error`（DNS、连接、超时、代理不可用、netguard 拒绝、响应体读不完整），和 `sendPluginCall` 一致 |
 | 审计 | 通过账号校验、真正发出的每次请求写一条 `audit_logs`：action `plugin.account_request`，target `account` / `<id>`，`user_id` 为空（执行者是插件），detail 只有 `plugin_key`、`method`、`host`（含端口）、`path`、`status`、`via: "host.SendAccountRequest"`。**不记 query、请求头、请求体、响应头和响应体**，因为这些地方带着凭证。审计在请求之后写，这样才能记下状态码。写入失败只记 WARN 日志，调用照常返回。这里和凭证读取不同（凭证读取先写审计，写不进去就整个调用失败）：这条 RPC 不会交出插件手里还没有的秘密。被拒的调用（授权、参数、主机、`NOT_FOUND`）不写审计 |
 
 ### 91.2 `SetAccountAutomaticState` 的 CLEAR 顺带清冷却
@@ -6449,7 +6238,7 @@ codex 插件要给 `codex_device` 账号加一个详情标签页、一个行操�
 
 - 点应用项时先 `reveal` 取明文，再把页面地址设为该链接；1.5 秒后页面仍有焦点就提示“没有打开？请先安装客户端”。明文只进这个自定义协议链接，不进任何 HTTP 请求的查询串。
 - 只保存了哈希的旧 Key：应用项全部禁用，菜单头部说明原因，仍可打开手动配置说明（说明里用前缀占位，含占位密钥的代码块不可复制，没有导入按钮）。
-- 应用清单和客户端页签不含经协议转换可达的平台（92.5）：协议能转换不等于模型可用，给 Claude 分组的 Key 生成 Codex 配置会因模型名对不上而失败。接入地址的展示才包含转换端点。
+- 应用清单和客户端页签不含经协议转换可达的平台（92.5）：协议能转换不等于模型可用，给 Claude 分组的 Key 生成 Codex 配置会因模型名对不上而失败。接入地址的展示才包含转换端点（§110 起接入地址也不再包含，见 92.5）。
 - 手动配置说明（`KeyUseGuide.vue`）在各客户端页签之后多一个 Magpie 页签，逐项列出 API 密钥、各协议地址、余额查询地址（`/v1/usage`）和余额字段（`remaining`）。字段名照 Magpie 自定义供应商表单的界面文案（`internal/gui/assets/app.js`、`i18n.js`，2026-11-10 核对）：API key / API 密钥、Anthropic URL / Anthropic 地址、OpenAI URL / OpenAI 地址（Chat Completions）、Responses URL / Responses 地址、Gemini URL / Gemini 地址、Balance URL / 余额查询地址、Balance field / 余额字段；表单的“Base URL”一栏填所选协议的地址，其余协议地址在“更多端点”里，余额两项在“高级”里。说明末尾的“可调用的接口”包含经协议转换可达的端点（92.5）。
 
 ### 92.4 平台品牌色（控制台 `web/src/components/platform/`）
@@ -6462,9 +6251,10 @@ codex 插件要给 `codex_device` 账号加一个详情标签页、一个行操�
 
 ### 92.5 分组页
 
-- 列表、编辑窗口、详情都不再显示“可服务的平台”：核心对四种文本协议互转（§88），一个分组能接哪些协议不取决于它的账号属于哪个平台。`Group.platforms` 字段照常返回，控制台只用它给分组徽章着色和算接入地址。“有账号但不支持任何已启用平台”的警告随之取消。
+- 列表、编辑窗口、详情都不再显示“可服务的平台”：核心对四种文本协议互转（§88），一个分组能接哪些协议不取决于它的账号属于哪个平台。`Group.platforms` 字段照常返回，控制台只用它给分组徽章着色和算接入地址。“有账号但不支持任何已启用平台”的警告随之取消。§110 起：一个分组能接哪些协议取决于成员账号开放的协议（跨平台转换要在账号上按模型开启），分组详情的“端点”一栏按 `GET /groups/:id` 的 `served_protocols` 显示（§110.9）；列表和编辑窗口仍不显示。
 - 没有账号的分组在“账号数”前显示警告图标（`ProblemIcon`，`data-testid="group-no-accounts"`），列表、手机卡片和详情都有。
 - 接入地址（`views/platforms/PlatformEndpointsPreview.vue`：分组详情、密钥页的手动配置说明、密钥编辑窗口里的分组说明）一律包含经协议转换可达的端点（`views/platforms/convertedEndpoints.ts`）：分组自己的平台里只要有一个文本协议端点（`anthropic.messages`、`openai.chat`、`openai.responses`、`gemini.generate`、`gemini.stream_generate`），就额外列出其它平台上这些协议以及两个 count_tokens 的端点，标“经协议转换”；embeddings、视频等不可转换的端点只列在自己平台下。这是按平台级端点做的近似，不看各账号类型声明的端点子集；这张协议清单与 `server/internal/convert` 的内置转换对一致，新增转换对时两处一起改。密钥编辑窗口里的分组说明（`KeyGroupDetails.vue`）是个小框：每个平台最多列 3 个端点，转换端点收在“经协议转换还可调用：<平台名>”的展开项里（`fold`），默认收起；另两处直接列出。
+- **§110 起（取代上一条的转换部分）**：`convertedEndpoints.ts` 已删除，控制台不再推算“经协议转换可达”的端点。分组详情改用 `served_protocols`（`views/groups/GroupServedProtocols.vue`：按平台列出成员账号实际开放的端点，每个端点带提供它的账号数；没有账号开放任何协议时给警告）；密钥页的手动配置说明和密钥编辑窗口里的分组说明用 `PlatformEndpointsPreview`，2026-11-18 起按 `GET /me/groups` 每行的 `served_protocols` 列端点，与分组详情同源（§110.10 第 5 条）。
 
 ### 92.6 兼容与混跑
 
@@ -6510,7 +6300,7 @@ codex 插件要给 `codex_device` 账号加一个详情标签页、一个行操�
 | 每次调用的键数 | 不超过 512（`KVBatchMaxKeys`） |
 | 每次调用的数据量 | 不超过 3 MiB（`KVBatchMaxBytes`）。`KVSetMany` 算请求里所有键和值的长度之和；`KVGetMany` 算读到的所有值的长度之和。满长的值（64 KiB）一次最多写 47 个、读 48 个 |
 
-- 3 MiB 是按连接的消息上限定的。插件调用 `HostService` 走 go-plugin broker 上的 gRPC 服务端（`serveHostBroker` 里的 `grpc.NewServer`），它用 gRPC 默认的接收上限 **4 MiB（4194304 字节）**；宿主发送和插件接收的上限都是 `MaxInt32`（go-plugin 的 `dialGRPCConn`）。请求里 3 MiB 的键和值加上 protobuf 的开销总能送到；超过 4 MiB 的请求由 gRPC 自己以 `RESOURCE_EXHAUSTED` 拒绝，到不了核心的处理函数。
+- 3 MiB 当初是按连接的消息上限定的（插件调 `HostService` 的 broker 服务端曾用 gRPC 默认的 4 MiB 接收上限）。转发 V2 收尾起 broker 的接收上限是 gRPC 自己的 `MaxInt32`，宿主调用不再有 4 MiB 的界限（§112.16）；3 MiB 现在是 KV 自己的存储规则（与单个值 64 KiB 一样），由核心的处理函数检查。
 - 校验顺序，三个调用和 SDK 都一样：授权（只在核心）→ namespace → 键数 → 按请求顺序逐项（每一项先 key，再 value，再 ttl）→ 数据量。报告的是第一个不合规则的项，错误信息带下标，如 `items[2]: value exceeds 65536 bytes`、`keys[3]: key must be 1..512 bytes`。（核心 0.1.275 起。0.1.274 的 `KVSetMany` 先查完所有项的 key，再逐项查 value 和 ttl，所以两项都不合规则时报的可能是另一项；规则本身相同。）
 - 这些规则只写在一处（核心 0.1.275 和随它构建的 SDK 起；0.1.274 里核心和 SDK 各写了一遍，SDK 对负的 TTL 另有自己的一句 `ttl must not be negative`），`sdk/protocol/kv.go`：常量 `KVMaxNamespaceBytes`、`KVMaxKeyBytes`、`KVMaxValueBytes`、`KVMaxTTLSeconds`、`KVBatchMaxKeys`、`KVBatchMaxBytes`，和直接返回 gRPC 状态的函数 `CheckKVNamespace`、`CheckKVKey`、`CheckKVValue`、`CheckKVTTL`、`CheckKVBatchKeys`、`CheckKVBatchItems`、`CheckKVBatchAnswer`。核心的单键和批量处理函数、SDK（93.6）和 `pluginsdktest.FakeHost` 的单键和批量调用都调用这些函数，所以三处对同一个不合规则的请求给出同一个下标和同一句话。核心自己只留列表的上限 `KVMaxListLimit`。
 - `KVGetMany` 的数据量在读完之后才算得出来：一次调用最坏会让核心从 Redis 读入 512 × 64 KiB = 32 MiB。核心按顺序累计，在让合计超过上限的那个值处拒绝，其余的值不再复制进回答（0.1.275 起；0.1.274 全部复制完才算合计）。
@@ -6538,7 +6328,6 @@ codex 插件要给 `codex_device` 账号加一个详情标签页、一个行操�
 | namespace、key、value、ttl 不合规则；键数超过 512；`KVSetMany` 的数据量超过 3 MiB | `INVALID_ARGUMENT`，信息指出是哪条规则，逐项的带下标（93.2） |
 | 单键 `KVSet` 的 `ttl_seconds` 为负或超过 9223372036 | `INVALID_ARGUMENT`（`ttl_seconds must be 0..9223372036`）。核心 0.1.275 起；0.1.274 及以前负值的信息是 `ttl_seconds must be >= 0`，过大的值不报错 |
 | `KVGetMany` 读到的值合计超过 3 MiB | `RESOURCE_EXHAUSTED`，调用方减少每次的键数重试 |
-| 请求超过连接的 4 MiB 上限 | `RESOURCE_EXHAUSTED`（gRPC 返回，不是核心） |
 | Redis 失败（连不上、超时、脚本出错） | `UNAVAILABLE`（`kv unavailable`），与单键调用相同 |
 | 核心没有这三个 RPC（已发布的核心里：早于 0.1.274） | `UNIMPLEMENTED`（93.7） |
 
@@ -6728,11 +6517,11 @@ kind: users | groups | api-keys | accounts | models | proxies
   - `EntityPicker`（多选里的“添加”选择器同）放在带标签的表单项（`SField` / `SSettingRow`）里时不再把占位文字设成 aria-label，可访问名称来自表单项的标签；不在表单项里时不变。空列表的“没有匹配的…”写实体名，不写占位文字。
   - `EntityPicker` 退化成的文本框（没有查找权限）在没绑 `text` 时，输入不是 id 的内容会清空已选（发 `update:id ''` 和 `change`，框清空），不再悄悄还原成原来的 id：表单不会按一个已经被改掉的 id 提交。绑了 `text` 时不变（其它输入是名称搜索）。
   - `HOST_COMPONENT_NAMES` 新增 `EntityMultiPicker`（`web/src/components/EntityMultiPicker.vue`）：`kind`、`v-model:ids`（`string[]`，添加顺序）、`placeholder?`、`size?`、`mine?`、`scope?`、`extra?`、`disabled?`、`max?`；事件 `update:ids`，随后 `change(ids)`（只在用户添加或移除后）。已选项是可关闭的标签，后面是只绑 id、排除已选的 `EntityPicker`；没有查找权限时那是个文本框，输入 id 回车追加（这个回车不提交外层表单）。粘贴一串 id（逗号、空白或换行分隔）一次全部追加。
-  - schema 部件 `entity-select`：`{ "ui:widget": "entity-select", "ui:options": { "kind": "user", "mine"?: true, "max"?: 3 } }`。schema 是 `array` → 多选，否则单选；值按 schema 的类型读写（`integer` / `number` → 数字，否则字符串；单选未选写 `null` 或 `''`，读时 `null`、`''`、`0` 都算未选）。
-- `GroupPicker`、`ProxyPicker`（后者也是宿主组件）和 `group-select` / `proxy-select` 部件对外不变，内部改成上面这套：候选和名称来自查找接口，不再只取 `/groups`、`/proxies` 的前 200 条；`ProxyPicker` 的 `null` 仍是“不使用代理”（占位文案不变，点 × 清除），调用者看不到的已选代理仍显示 `#id` 并保持选中。提交给后端的字段名、类型、空值都不变。接入处：账号编辑器（分组、代理）、批量编辑账号（分组、代理）、用户的“分配分组”、价格试算的分组。删除带 API Key 的分组时“迁移到哪个分组”也改成 `EntityPicker`（排除被删的分组自己，仍提交 `move_keys_to=<数字 id>`；“有没有别的分组可迁”仍看分组列表的第一页）。
+  - schema 部件 `entity-select`（UI 4.0 随 `SchemaForm` 删除，原生表单用 `EntityPicker` / `EntityMultiPicker`）：`{ "ui:widget": "entity-select", "ui:options": { "kind": "user", "mine"?: true, "max"?: 3 } }`。schema 是 `array` → 多选，否则单选；值按 schema 的类型读写（`integer` / `number` → 数字，否则字符串；单选未选写 `null` 或 `''`，读时 `null`、`''`、`0` 都算未选）。
+- `GroupPicker`、`ProxyPicker`（后者也是宿主组件）和 `group-select` / `proxy-select` 部件（部件在 UI 4.0 删除）对外不变，内部改成上面这套：候选和名称来自查找接口，不再只取 `/groups`、`/proxies` 的前 200 条；`ProxyPicker` 的 `null` 仍是“不使用代理”（占位文案不变，点 × 清除），调用者看不到的已选代理仍显示 `#id` 并保持选中。提交给后端的字段名、类型、空值都不变。接入处：账号编辑器（分组、代理）、批量编辑账号（分组、代理）、用户的“分配分组”、价格试算的分组。删除带 API Key 的分组时“迁移到哪个分组”也改成 `EntityPicker`（排除被删的分组自己，仍提交 `move_keys_to=<数字 id>`；“有没有别的分组可迁”仍看分组列表的第一页）。
 - 查找权限：分组要 `group:read`，代理要 `proxy:read` 或 `proxy:own:read`（§96.2）。没有权限、或核心没有这条路由（滚动更新中的旧核心返回 404）时是文本框，直接输入 id；改造前这种情况下拉是空的，只能保留或清除已有值。
 - 页面改了分组或代理后（`useGroupsLookup(true)` / `useProxiesLookup(true)`），选择器缓存的这类实体名称一并作废（`forgetEntityNames`），再显示时重新反查。
-- 原生插件用到 3.12 任一项时声明 `hostUICompat: "^3.12"`，`hostCompat` 要求核心 `>=0.1.280`（0.1.279 是最后一个带 UI 3.11 的核心）。moderation 0.9.2 是第一个使用者（`hostUICompat: "^3.12"`、`hostCompat: ">=0.1.280 <0.2.0"`；设置表单用到 `entity-select`，见 §72 的版本记录）。`sdk/manifest/check` 不校验 `ui:widget` 的名字；UI 3.11 及更早的控制台遇到 `entity-select` 按 schema 类型推断控件（整数 → 数字框，字符串 → 文本框，数组 → 标签输入框，后者写字符串），所以用它的插件靠 `hostCompat` 下限挡住旧核心。
+- 原生插件用到 3.12 任一项时声明 `hostUICompat: "^3.12"`，`hostCompat` 要求核心 `>=0.1.280`（0.1.279 是最后一个带 UI 3.11 的核心）。moderation 0.9.2 是第一个使用者（`hostUICompat: "^3.12"`、`hostCompat: ">=0.1.280 <0.2.0"`；设置表单用到 `entity-select`，见 §72 的版本记录）。`sdk/manifest/check` 不校验 `ui:widget` 的名字；UI 3.11 及更早的控制台遇到 `entity-select` 按 schema 类型推断控件（整数 → 数字框，字符串 → 文本框，数组 → 标签输入框，后者写字符串），所以用它的插件靠 `hostCompat` 下限挡住旧核心。（UI 4.0 起 schema 部件都已删除，这一条只是当时的记录。）
 - 回滚顺序：核心退回 0.1.279 之前先把 moderation 退回 0.9.1。
 
 
@@ -6783,7 +6572,7 @@ kind: users | groups | api-keys | accounts | models | proxies
 | 按倍数 `multiplier` | 标价 = 全局价 × N，全局价变化时跟着变 | N 不小于 0、小于 1000000、最多 4 位小数。0 表示免费。1 也合法：专属价设成 ×1 表示“这个用户组按全局价，不吃分组内定价” |
 | 自定义价 `custom` | 一个固定的价格，不随全局价变化 | 沿用全局价的计费方式：按 token（`p`、`c`、`cr`、`cc`、`cc1h`，其中 `p`、`c` 必填）或按次（`price`）。全局价是表达式计费的模型只能用按倍数的规则 |
 
-- 规则建立在全局价之上。模型没有启用的全局价时不能计费，规则不生效，照旧按 `missing_price_policy` 处理（§17）。
+- 规则建立在全局价之上。模型没有启用的全局价时不能计费，规则不生效，请求被拒（§17.3）。
 - 自定义价的计费方式与全局价**现在的**计费方式不同时（规则保存之后，全局价被改成了另一种方式），这条规则**失效**：解析时跳过它，往下一层找。规则不会被删除，接口里它带 `inactive: true`（97.6）。
 - 规则只能设在分组提供的模型上；删除规则不受这个限制。
 
@@ -6801,7 +6590,7 @@ kind: users | groups | api-keys | accounts | models | proxies
 |---|---|
 | `segments` | `kind`（`named` \| `personal`，默认 `named`）；`name varchar(100)`（个人专属存空串，接口里给成员的邮箱）；`description`；`discount numeric(10,4)`（默认 1，CHECK `> 0`）；`is_default`；`user_id`（个人专属的唯一成员，引用 `users`，`ON DELETE CASCADE`）；`origin_id`（个人专属原来所在的用户组，`ON DELETE SET NULL`）；`created_at`、`updated_at`。约束 `segments_personal_user`（`kind = 'personal'` 当且仅当 `user_id` 非空）、`segments_default_named`（默认用户组必须是命名用户组）。唯一索引 `segments_name_uq`（`lower(name)`，只对命名用户组）、`segments_user_uq`（`user_id`，只对个人专属：每个用户至多一个）、`segments_default_uq`（至多一个默认用户组） |
 | `segment_groups` | 主键 `(segment_id, group_id)`，两列都 `ON DELETE CASCADE`；`granted`（授权，只对私有分组有意义）；`rate_override numeric(10,4)`（专属倍率，NULL = 跟随，CHECK `>= 0`）；`updated_at`。索引 `segment_groups_group_idx (group_id)`。既没有授权也没有专属倍率的行不保留 |
-| `price_rules` | `group_id`（`ON DELETE CASCADE`）；`segment_id`（NULL = 分组内定价，非空 = 专属价，`ON DELETE CASCADE`）；`model varchar(200)`；`kind`（`multiplier` \| `custom`）；`multiplier numeric(10,4)`（CHECK `>= 0`）；`mode`（`per_token` \| `per_request`）、`config jsonb`、`expression`、`expr_hash`（自定义价的表达式，保存规则时由 `expr.Generate(mode, config)` 生成）；`updated_by`、`updated_at`。约束 `price_rules_kind`：按倍数的规则只有 `multiplier`，自定义价只有 `mode`、`config` 和非空的 `expression`。唯一索引 `price_rules_group_uq (group_id, model) WHERE segment_id IS NULL`（部分索引）、`price_rules_segment_uq (group_id, segment_id, model)`（不带条件；NULL 互不相等，所以只约束专属价，同时是按分组查规则的索引）；索引 `price_rules_segment_idx (segment_id)` |
+| `price_rules` | `group_id`（`ON DELETE CASCADE`）；`segment_id`（NULL = 分组内定价，非空 = 专属价，`ON DELETE CASCADE`）；`model text`（迁移 0108 前是 `varchar(200)`）；`kind`（`multiplier` \| `custom`）；`multiplier numeric(10,4)`（CHECK `>= 0`）；`mode`（`per_token` \| `per_request`）、`config jsonb`、`expression`、`expr_hash`（自定义价的表达式，保存规则时由 `expr.Generate(mode, config)` 生成）；`updated_by`、`updated_at`。约束 `price_rules_kind`：按倍数的规则只有 `multiplier`，自定义价只有 `mode`、`config` 和非空的 `expression`。唯一索引 `price_rules_group_uq (group_id, model) WHERE segment_id IS NULL`（部分索引）、`price_rules_segment_uq (group_id, segment_id, model)`（不带条件；NULL 互不相等，所以只约束专属价，同时是按分组查规则的索引）；索引 `price_rules_segment_idx (segment_id)` |
 | `users.segment_id` | 非空，引用 `segments`，默认值 `default_segment_id()`（返回默认用户组的 id）：任何不写这一列的 `INSERT INTO users`（旧二进制、插件、测试）都进默认用户组。索引 `users_segment_idx`。这个外键没有级联，有成员的用户组在库里删不掉，删除接口先把成员移回默认用户组。“默认用户组不能删”是应用层的规则，数据库层只有这个外键挡着：成员全部移走之后，手工 `DELETE` 是删得掉的，之后 `default_segment_id()` 返回 NULL，新用户插不进去。手工改库不要删它 |
 | `usage_logs.base_cost` | `numeric(20,8)`，可空、没有默认值（不重写表）：原价（97.5）。0096 之前的行是 NULL |
 
@@ -6829,7 +6618,7 @@ kind: users | groups | api-keys | accounts | models | proxies
 
 **标价**由 `core.Pricer.Resolve(ctx, core.PriceQuery{Model, GroupID, SegmentID})` 给出。`billing` 的价格快照同时载入 `price_rules`，与全局价用同一个 TTL、同一个 `config:changed` 失效。解析顺序：
 
-1. 模型没有启用的全局价：与之前相同，`missing_price_policy` 为 `reject` 时返回 `ErrPriceNotConfigured`，为 `free` 时返回 `(nil, nil)`；这时不看规则。
+1. 模型没有启用的全局价：返回 `ErrPriceNotConfigured`（§17.3）；这时不看规则。
 2. 取 `(分组, 用户组, 模型)` 的规则；没有或已失效，再取 `(分组, NULL, 模型)` 的规则；都没有就是全局价。
 3. `GroupID`、`SegmentID` 为 0 时只取全局价。
 
@@ -7599,7 +7388,7 @@ type GatewayManifest struct {
 - 信任：发布不签名，网关信任配置的更新源：`github` 经 HTTPS 访问 `api.github.com` 上的该仓库，`url` 是配置的 HTTPS 目录（§102.3 的连接规则不变）。离线导入（`init/import -manifest`）信任 `release_origin`。没有信任公钥，配置不再有 `trusted_keys`（写了也不读）。
 - 摘要：发布摘要 = 清单原始字节的 sha256。网关只登记、保存（PG `updater.releases.manifest`、节点 `<root>/manifests/<digest>`）并使用这份原文，每次用前核对摘要。清单校验通过之前不下载任何摘要包或归档；之后每个安装物都按清单声明的大小与 sha256 校验，网关二进制再核对 `binary_digest`，核心包逐文件核对摘要、大小与权限。
 - 防护范围：防的是下载途中或镜像、缓存、磁盘上损坏、截断或被替换的内容，以及登记后被改动的清单和安装物。不防仓库、GitHub 账号、流水线或配置的 `url` 来源本身被攻破：来源发布什么，网关就认什么。所以更新源只填受信任的仓库或地址；改来源要 `settings:manage` 与二次验证（§102.6），改来源本身不升级任何节点，每次升级都要管理员一键更新或建计划。
-- 内置插件仍签名：内置插件包导入集群插件库后，各节点（包括回滚到的旧核心）按 sha256 从主节点取包，加载时重新验签（§14.3 `VerifyInstalled`），`official` 信任级别、发布者归属与保留键也都来自签名；核心摘要只覆盖安装包本身，不覆盖这些之后的加载。不签内置插件就要给插件信任模型另加一种持久化的信任来源，并且 0.1.291 及更早的核心不认无签名包，回滚后这些插件会失效。所以核心发布流水线保留插件密钥（§102.1），重签内置插件并写 `builtin/trust.pub`。
+- 内置插件仍签名：内置插件包导入集群插件库后，各节点（包括回滚到的旧核心）按 sha256 向持有它的节点取包（§114），加载时重新验签（§14.3 `VerifyInstalled`），`official` 信任级别、发布者归属与保留键也都来自签名；核心摘要只覆盖安装包本身，不覆盖这些之后的加载。不签内置插件就要给插件信任模型另加一种持久化的信任来源，并且 0.1.291 及更早的核心不认无签名包，回滚后这些插件会失效。所以核心发布流水线保留插件密钥（§102.1），重签内置插件并写 `builtin/trust.pub`。
 - 来源密钥只写不读、AES-GCM 加密存储，只发往 `api.github.com` 或配置的源站，从不随跨源跳转发出（§102.3、§102.4）。
 - 插件签名私钥只在 GitHub 环境 `release` 的 Secrets 里（§102.1），不进仓库、节点和日志。
 - `sub2api-release mirror --github owner/repo | --url <目录> [--token-env VAR] (--tags … | --latest N) --out DIR`：用网关同一套来源实现，把若干稳定版原样（清单字节不变，摘要也不变）下载成 `<line>/<version>/<资产>` 加 `releases.json`；再次运行合并索引、跳过已完整的资产。这是运维工具，允许内网来源。其他子命令：`pack`（`--platform os/arch=DIR` 可重复，多平台一个清单）、`pack-gateway`、`pubkey`（打印插件私钥对应的 base64 公钥，核心流水线用它写 `builtin/trust.pub`）。
@@ -7746,34 +7535,26 @@ type Error string                           // ErrSelf, ErrCycle, ErrTooDeep, Er
 
 ## 106. 删除内置插件 custom 与账号上游层（2026-11-17，用户要求；迁移 0104，核心 0.1.301）
 
-用户决定删除内置插件 `custom`（“自定义上游（OpenAI/Anthropic/Gemini 兼容）”，§86.4）：内置 openai、anthropic、gemini 插件的 API Key 账号已经能填 Base URL 接兼容端点，协议转换由平台做（§88），不在账号层做。`custom` 是唯一声明账号上游层的插件，这一层（账号 settings 字段 `upstream` 覆盖鉴权方式、追加请求头、改各协议路径、放开默认过滤字段）随它整体删除，不留兼容代码。最后的源码是 `845d9aa47`（`git show 845d9aa47:next/plugins/custom/manifest.json`）。§86 里关于自定义上游与账号层的内容已删去，UPSTREAM-DECLARATIVE.md §5 只留一段说明。
+用户决定删除内置插件 `custom`（“自定义上游（OpenAI/Anthropic/Gemini 兼容）”）：内置 openai、anthropic、gemini 插件的 API Key 账号已经能填 Base URL 接兼容端点，协议转换由平台做（§88），不在账号层做。`custom` 是唯一声明账号上游层的插件，这一层（账号 settings 字段 `upstream` 覆盖鉴权方式、追加请求头、改各协议路径、放开默认过滤字段）随它整体删除，不留兼容代码。最后的源码是 `845d9aa47`（`git show 845d9aa47:next/plugins/custom/manifest.json`）。§86 里关于自定义上游与账号层的内容已删去。
 
 ### 106.1 插件
 
 - `next/plugins/custom` 删除（`go.work`、`plugins/released.json`、`deploy/docker/build-go.sh` 的 `BUILTIN_PLUGINS` 随之去掉）。它的 `custom_*` 账号类型不再存在。
 - 插件键 `custom` 从保留的官方插件名移到已删除插件键（`install/reserved.go` 的 `removedKeys`，记 0.1.301）：任何来源、任何签名的包都不能安装，返回 403 `plugin_key_reserved`，错误信息指向 CHANGELOG 0.1.301。`TestReservedCoverRepo` 双向核对：仓库里的插件都保留、保留的键都在仓库里、已删除的键不在仓库里。
 
-### 106.2 SDK 与清单（改契约）
+### 106.2 SDK、清单与核心（改契约）
 
-- `manifest.Upstream` 删除 `accountConfig`。清单再写它就是未知字段，`upstream.Resolve` 拒绝，校验报在 `accountTypes[i].upstream`；`sdk/manifest/check` 删除它的两条检查（必须是 schema 表单、`settingsFields` 必须含 `upstream`）。
-- `manifest.AccountType.AddressFields()`：声明式类型只推出 `base_url`。
-- `sdk/upstream`：删除 `SettingsField`、`Profile.ForAccount` 与账号层的合并、形状检查；`Resolve(at, passHeaders)` 去掉账号参数，`Profile.AuthHeader()`、`Profile.PrepareBody(body, ctx)` 去掉账号参数（只为账号层能改鉴权头名、放开过滤字段而带），`Profile.Validate` 只做 `apikey.Spec` 校验，`filterFields` 总是删除。插件测试里的 `upstream.Resolve(&at, nil, nil)` 改为两个参数；测试文件不进插件包，内置插件不升版本。
-
-### 106.3 核心
-
-- `plugin/declarative`：每个入口都用账号类型自己的 Profile，删除按账号缓存的 Profile（§86.2）。
-- `core.DeclaredUpstream` 删除 `Upstream()`（只给控制台上游编辑器取默认值），`PrepareBody(body, in)`、`AuthHeader()` 去掉账号参数；网关的 `rewriteBody`、`rewriteTurn`、`writeDeclaredAuth` 随之不再传插件账号。
-- `GET /account-types` 不再返回 `upstream` 与 `pass_headers`（两者只给上游编辑器用）。
-- 账号 settings 里的 `upstream` 键不再被读取。
+- 账号 settings 里的 `upstream` 键不再被读取；`GET /account-types` 不再返回 `upstream` 与 `pass_headers`（两者只给上游编辑器用）。
+- 当时为账号层保留的声明式上游接口随之收窄；声明式上游本身在转发 V2 整个删除（§112.1），账号类型的地址字段只认清单的 `upstreamFields`（§112.12）。
 
 ### 106.4 控制台（UI 3.18）
 
-- `@sub2api/ui`、`@sub2api/host`、`@sub2api/vite-preset` 3.18.0，`HOST_UI_VERSION` 3.18.0。`host.components` 与 `HOST_COMPONENT_NAMES` 不再有 `UpstreamEditor`（§87.3），schema 表单控件 `upstream-editor` 删除，账号类型的 API 类型去掉 `upstream`、`pass_headers`。3.18 删除了一个导出，不是只加不改；内置插件都没有用过它。
+- `@sub2api/ui`、`@sub2api/host`、`@sub2api/vite-preset` 3.18.0，`HOST_UI_VERSION` 3.18.0。`host.components` 与 `HOST_COMPONENT_NAMES` 不再有 `UpstreamEditor`（§87.3），schema 表单控件 `upstream-editor` 删除（其余 schema 控件随 UI 4.0 删除），账号类型的 API 类型去掉 `upstream`、`pass_headers`。3.18 删除了一个导出，不是只加不改；内置插件都没有用过它。
 - 新建账号不再有“自定义上游”一组；接兼容端点用 openai、anthropic、gemini 的 API Key 类型并填 Base URL。
 
 ### 106.5 数据库与升级
 
-- 迁移 0104（`0104_drop_custom_plugin.sql`）按 `install.Uninstall`（purge）卸载 `custom`：键记入 `plugin_key_retirements`，删除插件行（级联版本、暂存授权、宿主权限授权、rollout、运行节点与卸载屏障）和 `plugin_egress_domains`。`custom` 是 runtime none，没有声明过用户权限、数据库权限或任务，所以没有权限与授予（授权策略不变、`authz_meta` 不升）、schema、角色、插件迁移记录与定时任务要删。重跑不变。
+- 迁移 0104（`0104_drop_custom_plugin.sql`）按 `install.Uninstall`（purge）卸载 `custom`：键记入 `plugin_key_retirements`，删除插件行（级联版本、暂存授权、宿主权限授权、rollout、运行节点与卸载屏障）和 `plugin_egress_domains`。`custom` 是只有清单、没有进程的插件，没有声明过用户权限、数据库权限或任务，所以没有权限与授予（授权策略不变、`authz_meta` 不升）、schema、角色、插件迁移记录与定时任务要删。重跑不变。
 - `plugin_key = 'custom'` 的账号保留，在控制台显示为插件已卸载，由管理员删除；CHANGELOG 0.1.301 要求升级前先在控制台删除这些账号。使用记录、账本与审计保留。
 - 有迁移，按主节点优先（`primary-first-v1`）发布；单向，回退只能用升级前的备份。
 
@@ -7802,8 +7583,8 @@ type Error string                           // ErrSelf, ErrCycle, ErrTooDeep, Er
 
 | 分组 | 类型 | 字段 |
 | --- | --- | --- |
-| `billing` | `BillingSettings` | `missing_price_policy`（`reject` / `free`）、`min_balance`（十进制字符串，美元）、`big_cost_warning_usd`（十进制字符串）、`pre_consume_tokens`、`output_reserve_tokens`（§25.8）、`client_disconnect_policy`（`continue` / `precharge` / `free`，§25.8） |
-| `gateway` | `GatewaySettings` | `max_attempts`、`platform_call_timeout_ms`、`default_hook_timeout_ms`、`platform_hotpath_timeout_ms`、`queue_sticky_max_waiting`、`queue_sticky_wait_seconds`、`queue_fallback_max_waiting`、`queue_fallback_wait_seconds`（§78）、`media_download_max_mb`（§88）、`claude_max_tokens{enabled, models}`（§84.1，`models` 含 `default`） |
+| `billing` | `BillingSettings` | `min_balance`（十进制字符串，美元）、`big_cost_warning_usd`（十进制字符串）、`pre_consume_tokens`、`output_reserve_tokens`（§25.8）、`client_disconnect_policy`（`continue` / `precharge` / `free`，§25.8） |
+| `gateway` | `GatewaySettings` | `max_attempts`、`platform_call_timeout_ms`、`default_hook_timeout_ms`、`platform_hotpath_timeout_ms`、`queue_sticky_max_waiting`、`queue_sticky_wait_seconds`、`queue_fallback_max_waiting`、`queue_fallback_wait_seconds`（§78）、`media_download_max_mb`（§88）、`max_request_body_mb`（§111）、`claude_max_tokens{enabled, models}`（§84.1，`models` 含 `default`） |
 | `scheduling` | `SchedulingSettings` | `metric`（`sessions` / `rpm` / `tpm` / `concurrency`）、`limit_load`、`model_limits`（§89） |
 | `sticky` | `StickySettings` | `enabled`（false 时核心既不绑定会话也不读绑定）、`default_ttl_seconds`、`keep_on_account_disabled`（§15.5） |
 | `auto_disable` | `AutoDisableSettings` | `enabled`、`status_codes`、`keywords`（§42.2）；发布了故障策略时由策略的账号规则决定，开关看 `failure_policy.account_enabled` |
@@ -7869,16 +7650,16 @@ type Error string                           // ErrSelf, ErrCycle, ErrTooDeep, Er
 
 ### 108.2 生效位置
 
-- 请求头分层（§84、§86.5）：声明构造的头 → 透传（只补没有的：账号 §81 规则、**本字段的透传键**、粘性规则）→ **本字段的设值和 `{unset}`** → 账号参数覆盖（§84）的设置和删除 → 插件的头 → 声明式鉴权头 → 核心资源头、额度头。
+- 请求头分层（§84、§86.5、§112.4）：插件的默认头 → 透传（只补没有的：账号 §81 规则、**本字段的透传键**、粘性规则）→ **本字段的设值和 `{unset}`** → 账号参数覆盖（§84）的设置和删除 → 插件的权威头 → 没有 Content-Type 时补默认值。
 - 参数覆盖以本字段解析出的结果为初始请求头状态（同 new-api）：条件可读 `header_override.<名>`，`set_header` 的 `keep_origin` 不覆盖它设的头，`copy_header`、`pass_headers`、`sync_fields` 的 `header:` 源先取它的值再取客户端的，参数覆盖可以再改、再删它设的头。
-- WebSocket 握手同样应用设值和删除，透传键不生效（同 §81）。请求头覆盖与首条消息的请求体改写分开解析：改写失败时（由这一轮报告）握手仍带请求头覆盖的决定；解析失败时这个账号换号，同 HTTP。
+- WebSocket 握手同样应用设值和删除，透传键不生效（同 §81）。首轮的请求头覆盖和请求体改写在调用 `Execute` 之前一起完成（`gateway/dispatch.go` 的 `upstreamBody`，握手和首条消息都来自这一次 `Execute`，§112.2）：解析或改写失败时与 HTTP 相同，这个账号换号（`return_error` 带 `skip_retry` 时把错误回给客户端），不发起握手，不冷却账号（转发 V2 起；此前两者分开解析，改写失败由这一轮报告、握手仍带请求头覆盖的决定）。
 - 预览 `POST /accounts/param-override/preview` 可带 `header_override`，结果的 `set_headers`、`delete_headers` 包含它的决定。
 
 ### 108.3 通用配置项与控制台
 
 - 通用配置项（§87）新增 `header_override`（kind `header_override`，默认值是对象，清单检查用同一个编译器）。
 - 控制台：账号编辑页“高级 › 请求转发”组，请求头透传与请求参数覆盖之间一行“请求头覆盖”，编辑弹窗为键值表格（值旁有占位符快捷项）和 JSON 文本两种模式，可直接粘贴 new-api 的配置；导航摘要加“请求头覆盖 N 项”。
-- UI 3.19（`@sub2api/ui`、`@sub2api/host`、`@sub2api/vite-preset` 3.19.0，`HOST_UI_VERSION` 3.19.0，只加不改）：宿主组件 `HeaderOverrideEditor`（v-model 为 `header_override` 对象或 `null`，接受 `disabled`）、schema 控件 `header-override`；`ParamOverrideEditor` 另收可选的 `headerOverride`，试运行从它的结果开始。用到的插件声明 `hostUICompat: "^3.19"`，`hostCompat` 高于 0.1.302（最后一个带 UI 3.18 的核心）。
+- UI 3.19（`@sub2api/ui`、`@sub2api/host`、`@sub2api/vite-preset` 3.19.0，`HOST_UI_VERSION` 3.19.0，只加不改）：宿主组件 `HeaderOverrideEditor`（v-model 为 `header_override` 对象或 `null`，接受 `disabled`）、schema 控件 `header-override`（UI 4.0 随 `SchemaForm` 删除）；`ParamOverrideEditor` 另收可选的 `headerOverride`，试运行从它的结果开始。用到的插件声明 `hostUICompat: "^3.19"`，`hostCompat` 高于 0.1.302（最后一个带 UI 3.18 的核心）。
 
 ### 108.4 参数覆盖（§84）补齐
 
@@ -7889,16 +7670,14 @@ type Error string                           // ErrSelf, ErrCycle, ErrTooDeep, Er
 - `pass_headers` 的值另收对象 `{headers | names | header}` 和 JSON 字符串。
 - 上下文增加 `using_group`（同 `group`）。new-api 的 `user_group`、`token_group`、`last_error*`、`is_channel_test` 不提供，按缺失处理。
 
-## 109. 云厂商上游：请求签名、响应流格式、保存后续期，Azure OpenAI / Vertex AI / Bedrock 插件（2026-11-17，用户要求；无迁移；Host API 仍是 9；设计与实现差异见 [DESIGN-2026-11-17-CLOUD-PROVIDERS.md](DESIGN-2026-11-17-CLOUD-PROVIDERS.md)，操作说明见 [PLUGIN-CLOUD-PROVIDERS.md](PLUGIN-CLOUD-PROVIDERS.md)）
+## 109. 云厂商上游：请求签名、响应流格式、保存后续期，Azure OpenAI / Vertex AI / Bedrock 插件（2026-11-17，用户要求；无迁移；签名在转发 V2 改由插件自己做，§112；设计与实现差异见 [DESIGN-2026-11-17-CLOUD-PROVIDERS.md](DESIGN-2026-11-17-CLOUD-PROVIDERS.md)，操作说明见 [PLUGIN-CLOUD-PROVIDERS.md](PLUGIN-CLOUD-PROVIDERS.md)）
 
-`BuildUpstreamRequestResponse` 新增两个可选字段，核心按名字查表执行，不含厂商判断；插件不填时行为不变。清单没有新字段：要不要签名、响应是什么格式取决于这一次请求（鉴权方式、是不是流式）。
+上游要对整个请求签名，或流式回答不是 SSE 时：签名由插件用 `sdk/reqsign` 自己做（插件拿到完整请求体，构造的就是最终请求，§112）；响应流格式由插件在 `UpstreamRequest.response_stream` 里说明、核心按名字查表解码，不含厂商判断。清单没有新字段：要不要签名、响应是什么格式取决于这一次请求（鉴权方式、是不是流式）。
 
-### 109.1 `signing`（字段 6，`RequestSigning`）：核心对最终请求签名
+### 109.1 签名：`sdk/reqsign`，插件自己签
 
-- 消息 `RequestSigning{scheme, region, service, access_key_id, secret_access_key, session_token}`（`sdk/proto/.../common.proto`）。只有 `scheme` 是通用的；其余字段是“访问密钥 HMAC”一族方案（AWS SigV4 及仿它的方案）的输入。别的族（RSA 密钥、证书）要加新字段，不重新解释这些字段。
-- 方案按名字在 `sdk/reqsign` 查表（`reqsign.Sign`、`reqsign.Known`）。现有 `aws-sigv4`（`reqsign.SchemeAWSSigV4`）：AWS Signature Version 4，请求头鉴权，非 S3 规则（规范路径二次转义、总是对请求体取哈希）。
-- **为什么由核心签**：签名覆盖请求体，而插件只收到清单声明的 `requestFields`，看不到整个请求体；请求体在插件返回之后还会被补丁和强制流式改写。
-- **位置**（`forwardBuilt` → `signUpstreamRequest`，`gateway/upstream_ext.go`）：请求体定稿（§86.5 的全部步骤，含插件 patch 和再次强制 stream）、§86.5 的请求头各层（声明、透传、请求头覆盖与参数覆盖、插件的头、声明式鉴权头）以及缺省的 `Content-Type: application/json` 都写完之后，发送之前。普通转发和插件执行路径（`ForwardUpstream`）都经过这里。
+- `reqsign.SignAWSSigV4(req, payload, creds, now)` 对插件构造的 `*http.Request` 原地签名，`reqsign.AWSCredentials{Region, Service, AccessKeyID, SecretAccessKey, SessionToken}` 是它的输入：AWS Signature Version 4，请求头鉴权，非 S3 规则（规范路径二次转义、总是对请求体取哈希）。包里只有这一种签名，没有按名字查的方案表（转发 V2 收尾起；此前是 `reqsign.Sign(req, payload, directive, now)` 加 `Directive{Scheme, …}`、`reqsign.Known`、`SchemeAWSSigV4` 这张只有一项的表）。以后要别的签名，加一个新函数。
+- **交给核心**：插件把签过的 URL 交给中继，把 `reqsign.AWSSigV4Headers(req)`（签名写入或覆盖的头：`Authorization`、`X-Amz-Date`、有会话令牌时的 `X-Amz-Security-Token`、被签名的 `Content-Type`）作为权威头（§112.4），运营方的请求头设置改不了它们；其余头是默认头，不在签名范围内。核心不改请求体，发送前重新解析 URL（所以路径要写成线上的样子）。
 - **每次尝试各签一次**：换号重试时对新的构造结果、用当时的时间重新签名，不复用上一次的签名。
 - `aws-sigv4` 由官方签名器生成（`github.com/aws/aws-sdk-go-v2/aws/signer/v4`，只用签名器，不用服务客户端；每次签名新建一个，不共用它的派生密钥缓存）。规则（黄金样例：AWS 公布的测试套件，加 aws-sdk-go-v2 签名器录下的 Bedrock 形状请求，`sdk/reqsign/testdata`）：
   - 签名的头只有 `host`、`x-amz-date`，以及存在时的 `content-type`、`x-amz-security-token`。其他头不签，所以其他层加的、改的头不影响签名。官方签名器本身会签请求上的所有头，所以交给它的是只带 `Content-Type` 的请求副本，签完把 `Authorization`、`X-Amz-Date`、`X-Amz-Security-Token` 抄回原请求。
@@ -7908,10 +7687,9 @@ type Error string                           // ErrSelf, ErrCycle, ErrTooDeep, Er
   - **主机**取 `req.Host`，为空取 URL 的主机，去掉协议的默认端口（https `:443`、http `:80`）后写回，所以发出的 Host 头就是被签名的主机。（IPv6 字面量去掉默认端口时方括号也被去掉。）
   - GET、HEAD 不带请求体，按空负载签名。
   - `region`、`service`、`access_key_id`、`secret_access_key` 缺任何一个，签名失败。
-- **失败**：方案名核心不认识，或签名失败：这次尝试按插件不可用换号（`plugin_unavailable`，不惩罚账号），**没有请求发出**，绝不发出未签名的请求。
-- **保密**：`signing` 带着密钥。核心只用于这一次请求，不保存、不写日志、不进使用记录和回给客户端的错误；错误信息只提方案名。`reqsign.Directive` 的 `String`、`GoString`、`LogValue` 不输出密钥和会话令牌。插件同样不得把它写进日志。
-- **旧核心**不认识这个字段，会把请求不签名就发出去。设置它的插件必须用 `hostCompat` 要求带本节的核心（bedrock：`>=0.1.304 <0.2.0`）。不加能力 ID，Host API 版本不变。
-- 账号测试的请求体是插件自己给的、核心原样发送，所以测试请求由插件在 `BuildTestRequest` 里调 `reqsign.Sign` 自己签，账号测试的代码没有改。
+- **失败**：签名失败（缺输入、查询串解析不了）：`BuildUpstream` 返回错误，这次尝试按插件不可用换号（`plugin_unavailable`，不惩罚账号），**没有请求发出**。
+- **保密**：`AWSCredentials` 带着密钥，不写日志。它的 `String`、`GoString`、`LogValue` 不输出密钥和会话令牌。
+- 账号测试的请求体是插件自己给的、核心原样发送，测试请求由插件在 `BuildTestRequest` 里同样调 `reqsign.SignAWSSigV4` 签。
 
 ### 109.2 `response_stream`（字段 7）：把非 SSE 的响应流转成 SSE
 
@@ -7921,19 +7699,16 @@ type Error string                           // ErrSelf, ErrCycle, ErrTooDeep, Er
   - `exception` 或 `error` 消息：输出 `event: error`，`data: {"type":"error","error":{"type":<异常类型>,"message":<消息>}}`，然后流结束。这是 Anthropic 流错误的形状，用量规则把它记为上游流错误并交给故障策略。
   - 其他消息、没有 `bytes` 的事件跳过。
   - 消息由官方库解码（`github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream`）；帧头由 `awseventstream` 自己读，长度在读取和分配之前检查（官方解码器不限制长度）。一条消息里头名不重复：带同名头的消息（不论值的类型）算帧损坏，所以 `:message-type`、`:event-type`、`:exception-type` 各只有一个值（官方解码器对同名的头只留最后一个，AWS 不发同名的头）。
-  - 帧损坏（长度不合法、两处 CRC 任一不对、头块格式错、头名重复）、截断，或单条消息超过 4 MiB（`MaxChunkMessageSize`；格式自己的上限是 16 MiB）：读取出错，按上游流中断处理。
+  - 帧损坏（长度不合法、超过格式自己的上限 16 MiB、两处 CRC 任一不对、头块格式错、头名重复）或截断：读取出错，按上游流中断处理。格式允许的任何长度的消息整条读出，缓冲随到达的字节增长，不按声明的长度预先分配（转发 V2 收尾起；此前适配器在单条消息超过 4 MiB（`MaxChunkMessageSize`）时切断流）。
   - 解码器的负载缓冲随收到的字节成倍增长，帧头声明的长度不预留内存；超过 256 KiB 的缓冲不留给下一条消息。
   - 别的事件形状（如 ConverseStream）不在这个名字之内，要另起格式名、另写适配器；`awseventstream.Decoder` 只管分帧，可以共用。
 - **位置**（`adaptResponseStream`）：上游回答 2xx 之后、流的内容类型嗅探（§104）之前。回答的 `Content-Type` 正好是该格式的媒体类型时，把响应体换成适配器、`Content-Type` 改成 `text/event-stream`、去掉 `Content-Length`。此后的中继、用量规则、协议转换、首 token 计时、空闲超时、断开计费看到的都是普通 SSE。
 - 内容类型对不上（上游回了 JSON 或普通 SSE）时不处理，照原样走。非 2xx 的回答不适配，照常进错误分类。
-- **未知格式名**：与未知签名方案一起在发送前检查（`checkUpstreamExt`），这次尝试按插件不可用换号，没有请求发出。
-- 旧核心会忽略这个字段，把二进制流原样转给客户端，所以同样要靠 `hostCompat`。
+- **未知格式名**：中继时检查（§112.5），这次尝试按插件不可用换号，没有请求发出。
 
-### 109.3 两个字段的共同规则
+### 109.3 WebSocket
 
-- **WebSocket**：握手的构造结果带了 `signing` 或 `response_stream`，这次握手按插件不可用换号，握手不会不签名就发出去（`unsupportedOnWebSocket`）。两者只在 HTTP 路径上执行。
-- **声明式扩展模式**（§86.2 `extend: true`）：`declarative.merge` 把插件修改结果里的 `signing`、`response_stream` 带进最终结果；声明本身没有这两项。
-- 不带这两个字段的构造结果不经过上述任何一段代码。
+WebSocket 轮次上给了 `response_stream` 的中继被拒绝（按插件不可用换号）；签名的插件没有 WebSocket 端点。
 
 ### 109.4 保存后续期
 
@@ -7945,21 +7720,1233 @@ type Error string                           // ErrSelf, ErrCycle, ErrTooDeep, Er
 
 ### 109.6 插件
 
-三个新插件只进市场，不内置；账号表单都是 schema 表单，同一插件的类型用 `creationGroup` 合成一项、按鉴权方式切换。各字段的含义和填法见 [PLUGIN-CLOUD-PROVIDERS.md](PLUGIN-CLOUD-PROVIDERS.md)。
+三个新插件只进市场，不内置；账号表单首发时是 schema 表单，0.1.304 批次里改为插件自带的 native 组件（azure-openai 用 `createApiKeyForm`，vertex 的 `VertexKeyFileForm`、`VertexApiKeyForm`，bedrock 的 `BedrockAccountForm`；`hostUICompat ^4.0`），同一插件的类型用 `creationGroup` 合成一项、按鉴权方式切换。各字段的含义和填法见 [PLUGIN-CLOUD-PROVIDERS.md](PLUGIN-CLOUD-PROVIDERS.md)。
 
 | 插件（键） | 版本 | 形态 | `hostCompat` | 账号类型 | 平台与端点 |
 |---|---|---|---|---|---|
-| `openai` | 0.4.4 | 只有清单 | `>=0.1.290` | `apikey` 加设置 `organization`、`project` | 不变 |
-| `azure_openai`（目录 `plugins/azure-openai`） | 0.1.0 | 只有清单 | `>=0.1.290` | `azure_v1`、`azure_deployment` | openai：v1 类型 chat_completions、responses、embeddings；经典类型 chat_completions、embeddings |
-| `vertex` | 0.1.0 | gRPC | `>=0.1.290` | `vertex_sa`、`vertex_authorized_user`、`vertex_apikey` | gemini：generate_content、stream_generate_content、count_tokens |
+| `openai` | 0.5.0 | gRPC（`standard` 库） | `>=0.1.304` | `apikey` 加设置 `organization`、`project` | 不变 |
+| `azure_openai`（目录 `plugins/azure-openai`） | 0.1.0 | gRPC（`standard` 库） | `>=0.1.304` | `azure_v1`、`azure_deployment` | openai：v1 类型 chat_completions、responses、embeddings；经典类型 chat_completions、embeddings |
+| `vertex` | 0.1.0 | gRPC | `>=0.1.304` | `vertex_sa`、`vertex_authorized_user`、`vertex_apikey` | gemini：generate_content、stream_generate_content、count_tokens |
 | `bedrock` | 0.1.0 | gRPC | `>=0.1.304` | `bedrock_apikey`、`bedrock_aksk`、`bedrock_sts` | anthropic：messages |
 
-`hostCompat` 的上限都是 `<0.2.0`。核心 0.1.303 不含本节，第一个带本节的核心是 0.1.304。
+`hostCompat` 的上限都是 `<0.2.0`。版本是转发 V2 改写后的（openai 0.4.4、三个新插件的首个版本都没有发布过）；核心 0.1.303 不含本节。
 
-**没有新增分类策略**：azure_openai 的两个类型用预设的 `openai` 策略，`classify` 的取值仍是 `openai`、`anthropic`、`gemini`（§86）。404 `DeploymentNotFound` 按该策略原样回客户端；要换号由管理员在失败策略（§69）里配重试规则（上游 HTTP 响应、404、关键词 `DeploymentNotFound` / `model_not_found`），不配账号规则则账号不动。失败策略发布后请求动作只由它决定，插件分类的 action 不参与。
+**没有新增分类策略**：azure_openai 的两个类型用 openai 预设的分类策略。404 `DeploymentNotFound` 按该策略原样回客户端；要换号由管理员在失败策略（§69）里配重试规则（上游 HTTP 响应、404、关键词 `DeploymentNotFound` / `model_not_found`），不配账号规则则账号不动。失败策略发布后请求动作只由它决定，插件分类的 action 不参与。
 
-- **openai 0.4.4**：账号设置 `organization`、`project` 非空时以 `OpenAI-Organization`、`OpenAI-Project` 发送并覆盖客户端带的；留空时这次写入整个跳过，客户端经 passHeaders 带来的头保持原样（与 0.4.3 逐字节相同）。写在 openai 插件的清单里，不在 `openai` 预设里。WebSocket 握手同样带上。
-- **azure_openai**：`preset: openai`；`baseURL` 必填、无默认值，保存时去掉末尾的 `/openai/v1`、`/openai`；鉴权头 `api-key: {api_key}`，key 不要求前缀；`models: null`（不拉模型列表）；`openai.responses_ws` 为 `null`。类型自己的 `passHeaders` 是 openai 平台的列表去掉 `openai-organization`、`openai-project`；没有写 `filterFields`，所以预设的 `service_tier`、`safety_identifier` 过滤生效。经典类型的路径是 `/openai/deployments/{model}/…?api-version={credentials.api_version}`，`{model}` 是映射后的模型（部署名），`openai.responses` 为 `null`（这类账号的 `/v1/responses` 请求由核心转成 chat）。分类用预设的 `openai` 策略（见上）：404 `DeploymentNotFound` 原样回客户端，要换号由失败策略的重试规则决定。没有 `guardedSettings`，所以 own 级用户建这类账号需要 `account:relay`（§21.3.1）。
-- **vertex**：插件不联网，只描述上游请求和令牌请求。两个带密钥文件的类型声明 `"refresh": {}`；密钥文件由插件用 `encoding/json` 解析一次，检查和使用读同一份值；服务账号的断言用 `github.com/golang-jwt/jwt/v5` 以 RS256 签名（没有用 Google 的库：它没有只签断言、不发请求的公开接口，能单独签名的 `golang.org/x/oauth2/jws` 标着 Deprecated；见设计文档 16.10）。`token_uri` 只接受 `https://oauth2.googleapis.com/token`（请求由核心代发，粘贴的文件不能把它指到别处）：按解析后生效的值判断（键名不分大小写、重复的键取最后一个），这个值只检查，请求和断言的 `aud` 用常量。校验时归一化：项目取密钥文件里的、区域缺省 `global`；令牌缺失、不属于当前密钥（`token_for` 指纹不同）或读不出过期时间时去掉令牌并写 `expires_at: 1`，由 §48.3 第 5 条或下一轮扫描换第一枚令牌。没有可用令牌（没有或已过期）时 `BuildUpstreamRequest` 回 `FAILED_PRECONDITION`，换号、不惩罚。用户凭证类型的请求带 `x-goog-user-project`。令牌端点的回答：400 `invalid_grant` / `invalid_client`、401、403 是 `AUTH_REJECTED`，但 `invalid_grant` 的说明指向断言时间戳（节点时钟）时是 `TRANSIENT`。
-- **bedrock**：插件不联网。`bedrock_apikey` 发 `Authorization: Bearer`；另两个类型的构造结果带 `signing{scheme: aws-sigv4, service: bedrock}`。`anthropic.messages` 走 InvokeModel：路径 `/model/{模型 ID}/invoke` 或 `/invoke-with-response-stream`，请求体补丁只动顶层字段：删 `model`、`stream`，设 `anthropic_version: bedrock-2023-05-31`，删 `metadata`、`provider`；把客户端 `anthropic-beta` 头和请求体自带的 `anthropic_beta`（清单声明的请求字段）里 Bedrock 支持的项写进 `anthropic_beta`（别名改名、不支持的丢弃、去重，tool search 带上 tool examples；白名单 15 项，不分模型，设计文档 16.7 第 6 条），一项都不剩而请求体有这个字段时删掉它；结果里没有 `context-management-2025-06-27` 时删 `context_management`。`output_config`、`output_format` 保留。流式时 `response_stream: aws-eventstream-chunk`。**只服务 anthropic 平台**：没有类型声明 openai 平台，Bedrock 的 OpenAI 兼容接口（`/openai/v1`）不用；OpenAI 协议的请求由核心转换成 Messages 请求后走同一条 InvokeModel 路，`BuildUpstreamRequest` 收到其他协议回 `INVALID_ARGUMENT`。模型 ID 前按账号设置加跨区域推理前缀（`us`、`eu`、`apac`、`jp`、`au`、`in`、`global`）；已带这些前缀之一或 `us-gov.` 的 ID 和 ARN 原样发送。区域 `cn-*` 和隔离分区（第二段以 `iso` 开头）保存时报 `region:unsupported`，已存的这类账号回 `FAILED_PRECONDITION`、换号；`us-gov-*` 接受。`externalServices` 是 `amazonaws.com`。没有自动续期。分类是插件自带的策略（设计文档 9.4）。账号表单的解码与归一化用 `sdk/pluginsdk/accountform`（vertex 也用），补丁用 `pluginsdk.SetPatch` / `DeletePatch` 构造。
+- **openai**：账号设置 `organization`、`project` 非空时以 `OpenAI-Organization`、`OpenAI-Project` 发送并覆盖客户端带的（默认头，运营方的请求头覆盖仍可改）；留空时不写，客户端经 passHeaders 带来的头保持原样。写在 openai 插件的类型里（`standard.Set(..., standard.Field(...))`），不在 `openai` 预设里。WebSocket 握手同样带上。
+- **azure_openai**（`plugins/azure-openai/internal/azureopenai`）：两个类型都从 openai 预设出发；基础地址必填、无默认值，按填写的保存（2026-11-20 起；此前保存时去掉末尾的 `/openai/v1`、`/openai`），请求时末尾的 `/openai/v1` 或 `/openai` 当作版本段去掉一段再拼路由（§127；项目名恰好是 `openai` 的 Foundry 地址会因此少一段，与此前相同）；鉴权头 `api-key`，key 不限格式；不拉模型列表；没有 `openai.responses_ws`。类型自己的 `PassHeaders` 是 openai 平台的列表去掉 `openai-organization`、`openai-project`；保留预设的过滤字段 `service_tier`、`safety_identifier`（在运营方改写之后执行，§112.14）。经典类型的路径是 `/openai/deployments/<部署名>/…?api-version=<设置 api_version>`，部署名是映射后的模型，没有 `openai.responses`（这类账号的 `/v1/responses` 请求由核心转成 chat）。分类用 openai 预设的策略：404 `DeploymentNotFound` 原样回客户端，换号靠失败策略的重试规则（见上）。没有 `guardedSettings`，所以 own 级用户建这类账号需要 `account:relay`（§21.3.1）。
+- **vertex**：插件不联网，只描述上游请求和令牌请求。两个带密钥文件的类型声明 `"refresh": {}`；密钥文件由插件用 `encoding/json` 解析一次，检查和使用读同一份值；服务账号的断言用 `github.com/golang-jwt/jwt/v5` 以 RS256 签名（没有用 Google 的库：它没有只签断言、不发请求的公开接口，能单独签名的 `golang.org/x/oauth2/jws` 标着 Deprecated；见设计文档 16.10）。`token_uri` 只接受 `https://oauth2.googleapis.com/token`（请求由核心代发，粘贴的文件不能把它指到别处）：按解析后生效的值判断（键名不分大小写、重复的键取最后一个），这个值只检查，请求和断言的 `aud` 用常量。校验时归一化：项目取密钥文件里的、区域缺省 `global`；令牌缺失、不属于当前密钥（`token_for` 指纹不同）或读不出过期时间时去掉令牌并写 `expires_at: 1`，由 §48.3 第 5 条或下一轮扫描换第一枚令牌。没有可用令牌（没有或已过期）时 `BuildUpstream` 回 `FAILED_PRECONDITION`，换号、不惩罚。用户凭证类型的请求带 `x-goog-user-project`。令牌端点的回答：400 `invalid_grant` / `invalid_client`、401、403 是 `AUTH_REJECTED`，但 `invalid_grant` 的说明指向断言时间戳（节点时钟）时是 `TRANSIENT`。
+- **bedrock**：插件不联网（`Fetch` 也不用）。`bedrock_apikey` 发 `Authorization: Bearer`；另两个类型由插件做 SigV4 签名（`service: bedrock`）。`anthropic.messages` 走 InvokeModel：路径 `/model/{模型 ID}/invoke` 或 `/invoke-with-response-stream`；请求体用 `jsonedit` 一次改完：删 `model`、`stream`，设 `anthropic_version: bedrock-2023-05-31`，删 `metadata`、`provider`；把客户端 `anthropic-beta` 头和请求体自带的 `anthropic_beta` 里 Bedrock 支持的项写进 `anthropic_beta`（别名改名、不支持的丢弃、去重，tool search 带上 tool examples；白名单 15 项，不分模型，设计文档 16.7 第 6 条），一项都不剩而请求体有这个字段时删掉它；结果里没有 `context-management-2025-06-27` 时删 `context_management`；清洗 Claude Code 写在深处、InvokeModel 不接受的内容（工具定义里的 `custom`、`cache_control` 的 `scope` 和模型不接受的 `ttl`、工具调用 ID 里的非法字符、模型不接受的 thinking 设置）。`output_config`、`output_format` 保留。流式时 `response_stream: aws-eventstream-chunk`。**只服务 anthropic 平台**：没有类型声明 openai 平台，Bedrock 的 OpenAI 兼容接口（`/openai/v1`）不用；OpenAI 协议的请求由核心转换成 Messages 请求后走同一条 InvokeModel 路，`BuildUpstream` 收到其他协议回 `INVALID_ARGUMENT`。模型 ID 前按账号设置加跨区域推理前缀（`us`、`eu`、`apac`、`jp`、`au`、`in`、`global`）；已带这些前缀之一或 `us-gov.` 的 ID 和 ARN 原样发送。区域 `cn-*` 和隔离分区（第二段以 `iso` 开头）保存时报 `region:unsupported`，已存的这类账号回 `FAILED_PRECONDITION`、换号；`us-gov-*` 接受。`externalServices` 是 `amazonaws.com`。没有自动续期。分类是插件自带的策略（设计文档 9.4）。账号表单的解码与归一化用 `sdk/pluginsdk/accountform`（vertex 也用）。
 
+## 110. 账号协议绑定、模型的协议限定、显式协议转换（2026-11-17，用户要求“在账号上可以进行协议绑定；某个模型只在某个协议上提供服务；协议转换默认不支持，需要显式开启”；迁移 0106；设计与实现差异见 [DESIGN-2026-11-17-PROTOCOL-BINDING.md](DESIGN-2026-11-17-PROTOCOL-BINDING.md)，升级手册见 `next/deploy/rollback/protocol-binding-release.md`）
+
+本节优先于前文中与之冲突的描述。§12、§13、§18.2、§83.3、§88 里“账号类型能服务（原生或经转换）就参与调度”的规则，自本节起还要过账号的协议绑定；CONVERT-MATRIX 的 D3（“所有账号类型自然接受转换，没有任何退出机制”）和风险第 11 条由本节修订。
+
+默认行为：**客户用什么协议访问什么模型，就按这个协议转发**。账号只服务它的类型声明过的平台的协议；跨平台协议转换默认关闭，要在账号上为具体的模型开启。**这是行为变化**：本节之前，跨平台转换对所有账号、所有模型一律开启（110.10 第 1 条）。
+
+### 110.1 定义
+
+| 名称 | 定义 | 例子 |
+|---|---|---|
+| 本平台协议 | 入站端点所属的平台是账号类型声明过的平台（`AccountTypeBinding.Supports`）。包括原生和同平台适配（§83.3，类型在 `adapted` 里列出的端点，§121.1）两种路由 | OpenAI 账号的 chat、responses；codex 账号的 chat、生图（适配到 responses） |
+| 跨平台协议转换（下称“转换”） | 入站端点所属的平台，账号类型没有声明 | OpenAI 账号服务 `anthropic.messages`、`gemini.generate`；Claude 账号服务 `openai.chat`；Bedrock 账号服务 `openai.chat` |
+
+- 只看账号类型的声明，与具体请求无关。网关在路由上记 `typeRoute.cross`（`gateway/routing.go`），只有一种算法：`crossPlatform`，即类型不声明入站端点的平台（`!AccountTypeBinding.Supports(入站平台)`），普通路由（`addRoute`）和 count_tokens 的本地估算路由（§88.2，`addLocalCountRoute`）都用它；账号模块校验和 `served_protocols` 用的 `typeProtocols` 也是同一个 `Supports`。选路逻辑本身没有改。
+- `Supports` 读的是注册表绑定后的账号类型。别的插件声明的平台上有“插件解析用量”或任务提交的端点时，跨插件规则（转发 V2 设计 4.3，清单检查 `foreign_facts`）让注册表不把类型绑到这个平台，并把它从绑定的 `Type.Platforms` 里去掉（`registry.withoutForeignFacts`，2026-11-18 合并两个分支时加）：这个平台对该类型既不是本平台，也没有原生路由；网关选路、`crossPlatform`、账号模块的 `typeProtocols` 和 `served_protocols` 读的是同一份平台列表。
+- 同时声明多个平台的类型（如 volcengine 声明 openai、anthropic、volcengine），这些平台的协议都是本平台协议；Gemini 请求打到它才算转换。
+- 同平台适配不算转换，默认照常工作，可以用 `protocols` 关掉。
+
+### 110.2 字段与默认值
+
+迁移 `0106_account_protocols.sql`，两列都不回填：
+
+```sql
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS protocols       text[];                      -- NULL = 本平台协议全部开放
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS model_protocols jsonb NOT NULL DEFAULT '[]';
+```
+
+**`protocols`**：账号对哪些本平台协议提供服务。
+
+- `null`（默认）：账号类型能服务的本平台协议全部开放，包括类型以后新增的。
+- 数组：只开放列出的协议；类型以后新增的端点不会自动开放。可以是空数组，表示本平台协议全部关闭，此时 `model_protocols` 里必须至少有一个转换协议（110.6）；要停用账号用“参与调度”开关。
+- 它只管本平台协议，不影响转换。
+
+**`model_protocols`**：`[{models: [模型…], protocols: [协议…]}]`，默认 `[]`。选中模型，指定它在哪些入站协议下提供；转换也在这里开。
+
+```json
+[
+  {"models": ["claude-sonnet-4-5"],      "protocols": ["anthropic.messages"]},
+  {"models": ["gpt-5.6"],                "protocols": ["openai.chat", "openai.responses", "anthropic.messages"]},
+  {"models": ["text-embedding-3-large"], "protocols": ["openai.embeddings"]},
+  {"models": ["*"],                      "protocols": ["openai.chat", "openai.responses"]}
+]
+```
+
+（一个 OpenAI 账号：`claude-sonnet-4-5` 是经模型映射指到 GPT 的名字，只在 Messages 协议下经转换提供；`gpt-5.6` 原生加 Messages 转换；向量模型只走 embeddings；其余模型只走 chat 和 responses。）
+
+- **被列到的模型**只在这一条列出的协议下提供。协议可以是本平台的，也可以是跨平台的；列了跨平台协议就是为这个模型开了转换。
+- **没被列到的模型**在账号开放的全部本平台协议下提供，**不做转换**。
+- `"*"`（`core.OtherModels`）是唯一的通配，表示“其余模型”，只能单独成一条、最多一条。
+- 模型按**映射前的客户端模型**精确匹配，协议按**入站协议**匹配（与 `models`、`model_limits`、计费一致）。一个模型只能出现在一条里。模型不要求在账号的 `models` 白名单里；白名单照旧生效（不在白名单的模型，列进来也不提供）。
+- 条目里的本平台协议实际生效的是它与 `protocols` 的交集；列了账号没开放的本平台协议不报错（控制台给警告）。条目里的跨平台协议不受 `protocols` 影响。
+- 丢失策略不变（§88.4）：模型开了转换之后，照旧按账号 > 分组 > allow 判定有损转换能否接受。
+
+**count_tokens**：`anthropic.count_tokens`、`gemini.count_tokens` 不出现在这两个字段里，跟随同族的生成协议（`core.CountTokensFamily`：`anthropic.messages`、`gemini.generate`）。模型在生成协议下提供，计数就提供（原生转发或本地估算，§88.2）；生成协议关了，计数也关。
+
+### 110.3 判定规则与顺序
+
+两个字段在建分组调度快照和载入单个账号（`AccountDirectory.Load`）时编译成 `core.ProtocolRules`（`core/protocol_rules.go`，`NewProtocolRules(protocols, rules)`），挂在 `core.AccountRef.ProtocolRules` 上；两个字段都是默认值的账号为 nil。判定只有一处定义：
+
+`(*ProtocolRules).Serves(model, protocol string, cross bool) (reason string, ok bool)`
+
+`(*ProtocolRules).ServesOthers(protocol string, cross bool)` 是同一判定对“没有被任何条目点名的模型”的问法（下面第 3 步直接取 `"*"` 条目），给 `served_protocols` 这类不针对具体模型的视图用；`Serves` 在模型没有被点名时就是调用它。
+
+`model` 是映射前的客户端模型，`protocol` 是入站协议，`cross` 是路由的 `cross`（110.1）。按顺序：
+
+1. 没有配置（nil）：`cross` 时不提供（`conversion_not_enabled`），否则提供。
+2. 入站协议是 count_tokens 时，换成同族的生成协议再判断。
+3. 找模型的条目：先按模型名精确找，没有再用 `"*"` 条目。
+4. 模型有条目，而条目不含该协议 → `model_protocol_closed`。
+5. 模型没有条目，且 `cross` → `conversion_not_enabled`。
+6. 不是 `cross`，`protocols` 非 null 且不含该协议 → `protocol_closed`。
+7. 其余情况提供。
+
+所以：有条目的模型，本平台协议要同时过第 4、6 步（条目列了、账号也开放了）；跨平台协议只过第 4 步。
+
+### 110.4 生效位置
+
+- **一个判断**：`gateway/sched_trace.go` 的 `ineligibleReason` 是“账号能否服务这个请求”的唯一判断，HTTP 首次挑选、WebSocket 首轮（`connect`）、故障策略刷新的快照、WebSocket 后续轮次（`candidateEligible`）都走它。原来重复这段判断的 `servesAllModels` 已删除。
+- **顺序**：路由（`no_route`）→ **协议绑定**（`protocolClosedReason`）→ 模型白名单（`model_not_served`）→ 用量计量 → 引用模型。协议绑定对请求的主模型和每个引用模型（`fallbacks`、advisor 工具等，§13 `modelReferences`）各判断一次，第一个不提供的给出原因。它排在模型白名单之前：带白名单的 OpenAI 账号收到 `/v1/messages`，原因是 `conversion_not_enabled`，不是 `model_not_served`。
+- **被过滤的账号**只做了内存比较：不转换请求、不下载媒体、不做模型可用性预检、不参与粘性绑定、不取并发槽、不计尝试次数。调度记录里 `candidates` 计入它，`eligible` 不计入。
+- **粘性会话**：绑定的账号不再提供该协议或模型时，按“绑定账号已不在候选里”处理（§18.1），会话改绑到这次选中的账号。
+- **WebSocket**：首轮与 HTTP 相同；`openai.responses_ws` 是一个可以单独关闭的本平台协议。已建立的连接上，后续轮次换成该账号在这个协议下不提供的模型，返回现有的 400 `the account of this connection does not serve model …; open a new connection for it`，不是 404。
+- **不经调度的端点**：异步任务的查询端点（如 `volcengine.video_query`）不选账号，协议绑定对它不生效；校验和 `served_protocols` 仍把它当普通本平台协议。
+- 优先级、等级排序（§88.3）、丢失策略、故障策略、均衡负载都不变。没有配置这两个字段、请求走本平台协议的账号，行为与本节之前相同。
+
+**调度跳过原因**（§24.6 的表同步增加这三项，`core/ports_billing.go`）：
+
+| `reason` | 常量 | 含义 | `detail` |
+|---|---|---|---|
+| `protocol_closed` | `core.SchedProtocolClosed` | 入站协议是账号的本平台协议，但账号的 `protocols` 没有开放它 | 入站协议。count_tokens 请求填的是计数协议本身，实际被关的是它跟随的生成协议 |
+| `conversion_not_enabled` | `core.SchedConversionNotEnabled` | 请求要经跨平台转换才能到这个账号，而账号没有为该模型开启 | 模型名（主模型或引用模型） |
+| `model_protocol_closed` | `core.SchedModelProtocolClosed` | 模型在 `model_protocols` 里有条目，条目不含入站协议 | 模型名 |
+
+这三项属于“配置不合格”：请求被别的账号服务时不单独写调度记录（§24.6“何时写”）。
+
+### 110.5 全部未开放时的 404
+
+组内提供给本次请求的候选账号（`AccountDirectory.Candidates` 的结果，即可调度、未冷却、类型有路由的账号）**全部**因上面三个原因被过滤，且组内**暂时退出**的账号（见下）也都是因这三个原因不能服务时，请求以 404 结束：
+
+- HTTP 404，`code` 为 `not_found`，消息 `no account in this group serves this model on this endpoint`（`gateway/errors.go` `errProtocolNotServed`）。与 §11 的“分组里没有能服务该端点的账号”同一类错误，客户端不会当成过载重试；`anthropic` 格式也不改写成 529。
+- 使用记录：`status_code` 404，`error_type` 为 `no_account`，`attempts` 为 0，没有 `account_id`、`upstream_protocol`、`conversion`；`anomalies.scheduling` 的 `outcome` 为 `none`，`eligible` 为 0，`skipped` 里是每个候选账号的原因，冷却、停用的账号照 §24.6 记为 `not_schedulable`。
+- 没有请求被转换、构建或发往上游。WebSocket 首轮同样处理，错误以该连接的错误事件返回（`status` 404）。
+
+**暂时退出的账号**（`AccountDirectory.Resting(ctx, groupID, types)`）：分组调度快照里类型有路由、但 `Candidates` 现在不给的账号，即冷却中的和限时自动停用还没到期的。候选全部被协议绑定过滤时，网关对它们跑同一个 `ineligibleReason`（`gateway/sched_trace.go` `protocolNotServed`）：
+
+- 其中有一个不是因这三个原因被过滤（它能服务这个请求，或是因模型白名单、用量等别的原因不能）→ 不返回 404，按暂时缺账号处理：它回来后可能服务这个请求。
+- 它们也都被协议绑定过滤 → 404。所以一个没开转换的账号在冷却，不会把 404 变成可重试的 503/529。
+- 永久停用、关闭调度的账号不在快照里，不算“会回来”，不妨碍 404。
+- 读取失败（读不到冷却状态）→ 不返回 404。
+
+`Resting` 读的是 `Candidates` 用的同一份快照（内存，30 秒，过期时与 `Candidates` 一样读一次库）加一次 Redis 管道查冷却，**不查数据库**，也没有账号数上限；只有候选全部被协议绑定过滤的请求才调用，有账号能服务的请求不调用。调度记录在“无账号”时的那次查库（§24.6 `not_schedulable`，`AccountDirectory.Unschedulable`，最多列 200 个账号）照旧，只用于记录，不参与 404 的判断。
+
+**不返回 404、仍按现有规则（503，`anthropic` 格式 529；全部忙或限流时 429）的其他情况**：
+
+- 候选里有账号是因别的原因没选上（模型白名单、用量、限流、并发满等）。
+- 没有候选账号（全部禁用、冷却等）：与本节之前相同。
+
+### 110.6 校验与错误码
+
+字段错误是 400 `invalid_argument`，`details.fields[{field, code, message}]`。校验对照账号类型能服务的协议（`account/protocols.go` `typeProtocols`：与 `GET /account-types` 的 `endpoints` 同源，另外去掉非原生的 WebSocket 与任务提交端点）。
+
+| 字段路径 | `code` | 条件 |
+|---|---|---|
+| `protocols[i]` | `invalid` | 是 count_tokens 协议（它跟随生成协议，不单独列） |
+| `protocols[i]` | `unsupported` | 该账号类型不能服务这个协议 |
+| `protocols[i]` | `cross_platform` | 是其他平台的协议（转换要在 `model_protocols` 里按模型开） |
+| `protocols` | `no_protocol` | `protocols` 是空数组，且 `model_protocols` 里没有任何跨平台协议（账号没有开放任何协议） |
+| `model_protocols` | `too_many` | 超过 50 条 |
+| `model_protocols[i].models` | `required` | 这一条没有模型 |
+| `model_protocols[i].models` | `invalid` | `"*"` 与其他模型写在同一条 |
+| `model_protocols[i].models` | `too_many` | 超过 500 个模型 |
+| `model_protocols[i].models[j]` | `invalid` | 不是完整的模型 ID（通配只有单独的 `*`） |
+| `model_protocols[i].models[j]` | `duplicate` | 模型已在另一条里（含第二个 `"*"` 条目） |
+| `model_protocols[i].protocols` | `required` | 这一条没有协议 |
+| `model_protocols[i].protocols[j]` | `invalid` | 是 count_tokens 协议 |
+| `model_protocols[i].protocols[j]` | `unsupported` | 该账号类型不能服务这个协议（原生、同平台适配、经转换都不行）。WebSocket 与异步任务提交端点只走原生，所以跨平台或经适配的这类协议也是这个错误 |
+
+- `i`、`j` 是请求里数组的下标。保存前归一化：去掉首尾空白，丢弃空串和同一数组里的重复项。
+- `no_protocol` 在其他字段都没有错误时才判断。PATCH 只带两个字段之一时，另一个取库里的值（在锁定的行上判断）。校验只拦“本平台全关且没有转换”这一种；其他把自己配成不服务任何请求的组合不拦。
+- 没有模型的条目报 `required`，不像 `model_limits` 那样静默丢弃。
+- 账号类型的插件未启用时，PATCH 带这两个字段返回 503 `plugin_unavailable`（不知道该类型能服务哪些协议，与改凭证时相同）；不带时照常保存其他字段。
+- 权限同账号其他字段（`account:create` / `account:update`）。审计的变更字段里记 `protocols`、`model_protocols`。
+
+### 110.7 接口
+
+| 接口 | 字段 |
+|---|---|
+| `GET /accounts`、`GET /accounts/:id` | `protocols`: `string[] \| null`；`model_protocols`: `[{models, protocols}]`，从不为 null |
+| `POST /accounts`、`PATCH /accounts/:id` | 同上两个字段。各自**整体替换**；PATCH 不带时保持原值；`protocols: null` 存为 NULL（全部），`[]` 表示全关 |
+| `GET /accounts/:id`，以及 POST、PATCH 的返回 | 另带只读的 `served_protocols`；列表不带 |
+| `GET /groups/:id` | 另带只读的 `served_protocols`，从不为 null；分组列表和写接口的返回不带 |
+| `GET /me/groups` | 每行带只读的 `served_protocols`：`[{protocol}]`，与分组详情同一计算、同一顺序，但不带 `accounts`（普通用户不看分组里有几个账号）；从不为 null（2026-11-18） |
+| `GET /account-types` | 不变：`endpoints` 仍列出该类型原生、适配、经转换能服务的全部端点（§88.5），是“能配置什么”，不是“账号开放了什么” |
+
+- **没有批量接口**。控制台的批量编辑对每个账号调 `PATCH /accounts/:id`（§23.3 账号列表的批量操作），只带变化的字段。
+- **没有按协议筛选账号的列表参数**。
+- 变更经现有的 `account:changed` 广播失效各节点的调度快照，保存后立即生效。
+
+**账号的 `served_protocols`**：`[{protocol, via, grade, hops?, models}]`，账号现在实际开放的协议，由两个字段和账号类型算出，与 `Serves` 的判定一致。
+
+- `via`：`native`（类型的端点子集直接说这个协议）、`adapted`（同平台的另一个端点服务它）、`converted`（跨平台转换）。顺序是 native、adapted、converted，各自按类型端点的顺序。
+- `grade`、`hops`：类型端点的等级与经过的协议（同 `GET /account-types` 的 `grade`、`via`）。
+- `models`：`null` 表示“没有被 `model_protocols` 的条目点名的所有模型”在该协议下提供（账号有模型白名单时即白名单内没被点名的那些）；被点名的模型里不在该协议下提供的不在其内，这个结构不表达排除。账号有模型白名单、且白名单里的模型全部被条目点了名时，没有“其余模型”，不用 `null`。否则是在该协议下提供的模型，已按账号的 `models` 白名单过滤、排序。一个模型都不提供的协议不列出：例如白名单是 `["claude-sonnet-4-5"]`、该模型只限定到 `anthropic.messages` 的 OpenAI 账号，只列出 Messages 和它的 count_tokens，不列 OpenAI 的协议。
+- 每个模型的判定都调用编译后的 `ProtocolRules`（被点名的模型用 `Serves`，其余模型用 `ServesOthers`），不另写一遍规则；`account/protocols_test.go` 的 `TestServedProtocolsMatchScheduling` 用随机配置逐模型对拍。
+- count_tokens 协议跟随生成协议列出：`grade` 为 `local`（本地估算）时，类型声明了该平台记 `adapted`，没声明记 `converted`。
+- 账号类型未注册（插件未启用）时为 `[]`。
+
+**分组的 `served_protocols`**：`[{protocol, accounts}]`，组内账号开放的协议的并集，`accounts` 是对至少一个模型开放该协议的账号数，按端点声明的顺序。统计组内未删除的账号，不看状态和是否参与调度；类型未注册的账号不计。分组模块经 `core.GroupProtocols`（账号模块实现）取，不跨模块 import；在 `internal/app/phases.go` 里账号模块建好后赋给 `group.Service.Protocols`。`GroupServedProtocols(ctx, groupIDs)` 一次查询算出多个分组（返回按分组 id 的 map，每个问到的分组都有、列表不为 nil）：分组详情问一个，`GET /me/groups` 对整页问一次，不按行查询（2026-11-18 起；此前只接受一个分组）。
+
+### 110.8 性能约束
+
+分组快照缓存在每个节点的内存里（30 秒，账号变更经 `account:changed` 立即失效）；每个请求从快照取候选，对每个候选跑 `ineligibleReason`。本节不给这条路径加任何数据库或 Redis 访问：
+
+1. **解析只在建快照时做一次**。`readGroupSnap` 多读两列，`model_protocols` 为 `[]` 时在 SQL 里取成 NULL（`NULLIF(a.model_protocols, '[]'::jsonb)`），不传输、不解析。
+2. **`AccountRef` 只多一个指针**。没有配置的账号为 nil；`ProtocolRules` 建好后不再改，快照内共享，请求按值拷贝 `AccountRef` 时只多 8 字节。
+3. **`Serves` 不分配内存，开销不随规则数增长**：nil 判断 → 一次 map 查找 → 在个位数的协议切片里比较。`core` 的 `TestProtocolRulesServesDoesNotAllocate` 和网关的 `TestIneligibleReasonBindingDoesNotAllocate` 断言为 0 次分配；后者同时断言有规则与无配置时 `ineligibleReason` 的分配数相等。
+4. **跨平台请求比以前便宜**：没开转换的账号在转换请求体、下载媒体之前就被过滤。
+5. **内存上限**：单账号最多 50 条 × 500 个模型；账号在多个分组时每个分组快照各持一份（与 `models`、`model_mapping` 相同）。
+6. 改 `readGroupSnap`、`ineligibleReason`、`Serves` 时重跑基准：`go test -run '^$' -bench ProtocolRulesServes -benchmem ./internal/core/`、`go test -run '^$' -bench IneligibleReason -benchmem ./internal/gateway/`（各 500 个候选一轮）。
+
+实现时的读数（2026-11-17，开发机，只作量级参考）：`Serves` 500 个候选一轮，无配置 3.3–5.4 µs，50 条规则 17–35 µs，都是 0 allocs/op。`ineligibleReason` 500 个候选一轮：被协议绑定过滤的账号 0 allocs/op；能服务的账号无配置与 50 条规则都是 1500 allocs/op（每候选 3 次、约 1 KB，来自原有的用量检查 `routeHasRequiredPrimaryUsageFor`、`declaredAttemptRules`，不是协议判断，本次没有动）。分组快照读取（10 个无配置账号）改前 424 allocs/op、改后 399：为了多读两列不增加分配，`readGroupSnap` 把逐行的扫描临时变量改成整次读取共用一份。这组快照读数来自按旧 `HotGroupSnapshot` 基准临时重写的文件，没有提交（该基准已在 `fcc847b62` 删除，`store/gormtest/BASELINE.md` 现在没有这条路径的基线）。
+
+### 110.9 控制台
+
+可点击的示意图：[mockups/protocol-binding.html](mockups/protocol-binding.html)（实现与它的差异见设计文档“实现记录”）。只改了 `next/web/src`，`@sub2api/ui`、`@sub2api/host` 的公开接口和版本没有变。
+
+- **账号编辑器**：“模型配置”分区改名“协议与模型”，卡片顺序是 本平台协议 → 模型列表 → 模型映射 → 模型的协议限定。
+  - “本平台协议”：全部 / 指定两种模式（全部 = `null`）；指定后逐个勾选，适配的协议标“适配 → 目标”；提示其他平台的协议要在下面按模型开启。
+  - “模型的协议限定”：矩阵、列表、JSON 三种视图。矩阵的行是账号的模型加一行“其余模型”，列是账号开放的本平台协议加该类型经转换能到的协议；账号模型列表为空或窄屏时默认列表视图。没有单独指定的行按 110.3 的判定显示（浅色）：“其余模型”一行有指定时显示那一行的协议，行尾写“跟随其余模型”；否则显示默认（开放的本平台协议、不转换），行尾写“默认”。点任一格，这一行变成“已指定”，从它原来显示的协议开始改；可以多选几行一次指定。保存时勾选相同的模型合并成一条，没有单独指定的行不写。Gemini 的 `generate` 和 `stream_generate` 合成一列，一起勾选，存储仍是两个协议 id。
+  - 列表视图的每张卡在编辑期间保持各自的身份：两张卡的协议改成一样时不合并，只在保存的数据里合成一条；往卡里加减模型不重建卡片。JSON 视图里解析不了的文本保留给用户修改，期间“本平台协议”卡的改动不改写文本。
+  - 提示：`protocols` 里有类型已不服务的协议（“本平台协议”卡里显示成只能移除的警告项，保存会被拒）、条目里有账号没开放的本平台协议（警告，不生效）、类型不能服务的协议（警告，保存会被拒）、给“其余模型”开了转换（警告）、两跳转换（说明）。条目没有协议、账号没有开放任何协议时点保存不发请求，跳到这个分区显示错误。服务端的字段错误按 110.6 的路径定位到卡片。
+  - 导航摘要：`协议 开放数/总数 · 限定 n 个模型 · 转换 n 个`。“高级 › 请求转发”的丢失策略在账号没有任何模型开转换、也没有开放需要适配的协议时置灰，提示“未开启协议转换”。
+  - 账号类型已不存在（插件未启用）的账号不显示这两张卡，保存请求不带这两个字段。
+- **账号列表**：名称下方的平台图标按账号实际开放的协议显示；有模型开了转换的平台图标带“转”角标，本平台协议被限定时标“部分 开放数/总数”，悬停列出协议和模型。**没有“开放协议”筛选**（后端没有这个参数）。
+- **账号详情**：“可服务的端点”按 `served_protocols` 显示，转换项列出模型；类型能服务而账号没开放的置灰标“未开放”。
+- **新建账号的类型选择**：端点列表里跨平台的项标“需在账号上为模型开启”。
+- **批量编辑**：加“本平台协议”“模型的协议限定”两项，都是替换；只有所选账号属于同一个账号类型（且插件已启用）时可用。
+- **分组详情**：“端点”一栏改用 `served_protocols`，按平台列出端点和提供它的账号数；没有列出的端点请求返回 404。前端按“所有类型都能转换”推算转换端点的 `views/platforms/convertedEndpoints.ts` 已删除（§92.5 相应修订）。
+- **使用记录详情**：调度记录里三个新原因的文案是“账号未开放该协议”“模型未开启协议转换”“模型在该协议下不提供”，后面接 `detail`。
+- i18n zh/en；`web/src/api/types.ts` 加 `Account.protocols`、`model_protocols`、`served_protocols`，`Group.served_protocols`。
+
+### 110.10 升级影响与已知限制
+
+1. **升级后存量的跨平台转换流量直接 404**（用户 2026-11-17 决定：不回填，存量默认 404）。字段升级后才存在，没法提前配好；从升级完成到在账号上配好之间，依赖转换的客户端收到 110.5 的 404。升级手册（`next/deploy/rollback/protocol-binding-release.md`）有一条只读查询，列出近 30 天实际发生过转换的账号、入站协议、模型和请求数，升级前导出，升级后照着配置。同平台适配（codex 账号接 chat 请求等）不受影响。
+2. **模型列表接口不分协议**。`/v1/models` 和分组的模型列表仍按分组和账号的模型返回，客户端可能看到一个在当前协议下调不通（404）的模型。
+3. **给“其余模型”开转换要谨慎**。账号模型列表为空（= 全部模型）时，Anthropic 客户端发来的 `claude-*` 模型名会原样（或经映射）发给 OpenAI 上游，上游报模型不存在，按故障策略可能冷却账号。转换只开给明确列出的、有映射的模型。
+4. **粘性会话**：升级后，已绑定到某账号的转换会话因该账号不再提供转换而改绑或 404（110.4）。
+5. ~~API Key 页的端点预览不看协议绑定~~（2026-11-18 已解决）：`GET /me/groups` 每行带 `served_protocols`（110.7），密钥页的手动配置说明和密钥编辑窗口里的分组说明改用它列端点，与分组详情同源（`PlatformEndpointsPreview` 改收 `served`，`usePlatforms().endpointsOf` 删除）。快速配置菜单和各客户端的配置片段仍按 `platforms` 选客户端。
+6. **冷却中的账号可能推迟 404**（110.5）：组内有冷却中或限时停用、且自己能服务这个请求（或因协议绑定以外的原因不能）的账号时，请求得到 503/529 而不是 404，客户端会重试；这类账号也被协议绑定过滤时仍是 404。
+7. **协议绑定对不经调度的端点不生效**（110.4，异步任务查询）。
+8. **控制台识别不了“只走原生”的端点**。`GET /account-types` 的 `endpoints` 没有标出 WebSocket、任务提交端点；控制台的候选列是从它推出来的，如果某个类型的 `endpoints` 里出现经转换或适配的这类端点，界面会列出来，保存时被服务端以 `unsupported` 拒绝。
+9. **不做**：分组级、全局级的转换开关；插件经通用配置项（§87）给这两个字段声明默认值或锁定；`/v1/models` 按入站协议过滤；协议 id 通配（`openai.*`）。
+10. 验收用例 `next/e2e/ac19_builtin_platforms_test.go` 已按本节改写：Anthropic 账号的分组请求 `/v1/chat/completions` 先断言 404，给账号的 `model_protocols` 为该模型开 `openai.chat` 后断言 200。e2e 不在 CI 里运行；这个用例随整套 e2e（49 个用例）在与转发 V2 合并后的代码上运行并通过。
+11. 控制台的开发 mock（`web/mock/protocols.ts`）按 110.3、110.6、110.7 实现判定、字段路径和错误码（插件未启用时 503），不校验模型 ID 是否完整。
+
+### 110.11 测试
+
+- `core/protocol_rules_test.go`：`Serves` 的全部分支、nil 接收者、count_tokens 跟随、`ServesOthers`、不分配内存；基准 `BenchmarkProtocolRulesServes`。
+- `account/protocols_test.go`：类型能服务的协议、两个字段的归一化与每个错误码、`no_protocol`（含 PATCH 只带一个字段）、`served_protocols`（含白名单内模型全部被点名的情况，以及与 `Serves` 的随机对拍 `TestServedProtocolsMatchScheduling`）、接口读写往返（`TestAccountProtocolBinding`）、快照有配置与无配置（`TestGroupSnapshotProtocolRules`）、分组统计。`account/automatic_expiry_test.go` 的 `TestRestingAccounts`：暂时退出的账号。`group/served_protocols_test.go`：`GET /groups/:id`。
+- `gateway/protocol_binding_test.go`：路由的 `cross`、`ineligibleReason` 各原因与详情、404 的每个条件（含冷却的账号能服务与不能服务、永久停用、读取失败）、端到端（转换默认关闭、按模型开启、本平台协议、模型限定、其余模型、count_tokens 跟随、无配置账号不变、有原生账号时由它服务）、粘性会话、WebSocket 首轮与后续轮次、不分配内存；基准 `BenchmarkIneligibleReason`。
+- 原有的网关测试里依赖默认转换的夹具改成显式开启（`env_test.go` 的 `serveOn`、`openAIClients`），断言没有改。
+- 控制台：`protocolBinding.spec.ts`、`useProtocolEdit.spec.ts`、两张卡与矩阵、列表视图的 spec，以及 `AccountEditor`、`AccountBulkDialogs`、`bulkEdit`、`editorErrors`、`GroupsView`、`UsageSchedulingTrace` 里的用例。
+
+## 111. 请求体上限是网关设置，“平台调用超时”的新含义（2026-11-18，用户要求“系统设置-网关设置里面配置就行了，其他地方不要限制”；迁移 0107；设计见 [DESIGN-2026-11-18-PLUGIN-FORWARDING-V2.md](DESIGN-2026-11-18-PLUGIN-FORWARDING-V2.md) 第 8 节）
+
+项目在开发期，不做兼容：旧的做法在同一次改动里删除。全局层存着的旧值由迁移搬到新设置里，分组层的值丢弃（§111.3）。
+
+### 111.1 设置
+
+- **字段**：`settings` 表 `gateway` 行的 `max_request_body_mb`（`gateway.GatewaySettings.MaxRequestBodyMB`），单位 MB，整数，默认 128，范围 1–1024。接口仍是 `GET/PUT /settings/gateway`（§14.4）：`PUT` 里不带这个字段就保持原值，超出范围回 400、字段错误 `max_request_body_mb` / `out_of_range`。已存的行里没有这个字段时读作 128，超出范围的值读取时收进范围。
+- **生效**：保存的节点立即丢弃设置缓存并广播 `config:changed`（`settings.gateway`），其他节点收到后重读；没收到广播的节点最迟 10 秒后（设置缓存的有效期）读到新值。只影响之后到达的请求和之后建立的 WebSocket 连接。
+- **控制台**：系统设置 → 网关设置里的“请求体上限”一行（`GatewaySettingsCard.vue`）。“环境变量”页和分组编辑器里不再有它。
+- **插件**：`GetSettings("gateway")` 的 `protocol.GatewaySettings` 多了 `MaxRequestBodyMB`（§107.2），变更通知沿用 `gateway` 分组。
+
+### 111.2 它是唯一的请求大小上限
+
+- 网关请求路径上限制客户端请求大小的地方只有两处，都读这个设置（`gateway/pipeline.go` 的 `bodyLimit`）：读 HTTP 请求体时的 `http.MaxBytesReader`（超出回 413 `request_too_large`），和 WebSocket 连接的单条消息上限（超出以 1009 关闭连接）。
+- **删除**：
+  - 环境变量 `max_request_body_mb`（§74.3）连同它的全局层、分组层和进程环境变量 `SUB2API_MAX_REQUEST_BODY_MB`；`sdk/protocol` 的常量 `EnvVarMaxRequestBodyMB`、`core.Environment.Bytes` 和变量单位 `mb` 一并删除。带这个键的 `PUT /settings/environment`、分组或账号的 `environment` 现在按未知变量拒绝（400）。启动时仍设置了 `SUB2API_MAX_REQUEST_BODY_MB` 的进程不报错，这个变量不再被读取。
+  - 端点清单的 `request.maxBodyBytes`：核心不再读它（字段本身由 `sdk/manifest` 的改动删除，没有清单用过它）。
+  - `gateway/hooks.go` 的 `grpcDefaultMaxRecv`、`grpcRecvTooLarge`、`requestTooLarge`：钩子调用因“请求超过插件 gRPC 接收上限”失败时不计入熔断的特例。插件的接收上限本身由 SDK 固定为传输层最大值（§112.1），这种失败不再发生；万一发生，它和其他失败一样计入熔断。
+- **只管网关读客户端请求的地方**：`GatewaySettings.MaxRequestBodyBytes()` 给出字节数（未设置时按默认值），只有上面两处读它。核心与插件之间不由它推出任何上限（转发 V2 收尾起，§112.16）：交给插件的请求体、插件交回的中继请求体、取回的请求体都不检查大小，broker 的接收上限是 gRPC 自己的 `MaxInt32`；`core.RequestBodyLimit`、`grpcruntime.Options.RequestBodyLimit`、`(*gateway.Gateway).MaxRequestBodyBytes(ctx)` 已删除。插件进程的内存上限与它无关（§111.5）。
+- **不属于请求大小上限、保持原样的常量**：到 Gemini 的媒体下载上限 `media_download_max_mb`（核心主动下载的文件，§88）；预扣时本地分词统计的提示文本 32 MiB（`tokenizer.MaxTextBytes`，只截断统计，不拒绝请求，§25.8）和传给插件估算的 1 MiB；上游一侧原有的读取上限（WebSocket 上游消息 64 MiB、SSE 单行 16 MiB、非流式回答的缓冲）在转发 V2 收尾时删除（§112.16）；插件路由 `/api/v1/p/:key/*` 的 1 MiB 和控制台接口各自的上限（不是网关请求）。
+
+### 111.3 迁移 0107
+
+`0107_request_body_limit_setting.sql`，只改数据，不改表结构，可重复执行：
+
+1. 全局层（`settings` 的 `environment` 行）设过值的，写进 `gateway` 行的 `max_request_body_mb`，该行其他字段不动；没有 `gateway` 行就建一行只含这个键的（其余字段读取时取默认值）。只搬 1–1024 的整数（环境变量原来接受的值），其他值丢弃。
+2. 从 `environment` 行删掉这个键。
+3. 从每个分组的 `groups.environment` 删掉这个键。**分组层的值丢弃**，上限不再有分组层。升级前先查哪些分组设过：`SELECT id, name, environment->'max_request_body_mb' FROM groups WHERE environment ? 'max_request_body_mb'`，确认全局值够用。
+4. `accounts.environment` 里的这个键也删。账号层从不接受它，只有绕过接口写入的行才会有，删除的理由与 3 相同。
+
+必须删的原因：读取时未声明的键被忽略，但保存时会被拒绝，而控制台把整层的值原样回传，所以设过这个变量的实例升级后“环境变量”页和那些分组会保存不了。只在进程环境变量 `SUB2API_MAX_REQUEST_BODY_MB` 里设过上限的实例迁移不到，升级后是默认的 128 MB。
+
+### 111.4 “平台调用超时”的含义
+
+`platform_call_timeout_ms`（默认 2000，范围 100–30000，都不变）只管两件事（转发 V2 收尾起，所有者决定，§112.16）：不等待形式下上游出错后的 `ClassifyError` 调用，和读客户端断开策略（`gateway/settings.go` 的 `platformTimeout`）。`Execute` 不计时，插件在 `Execute` 里自己的工作没有时限：挂住的插件由客户端离开、上游超时或它的进程结束收场。控制台提示（`web/src/i18n/locales/{zh,en}/settings.ts`）已按这个含义改写。
+
+历史：转发 V2 起初把它定义为“插件每一段自己的处理时间的上限”（`core.ExecutionClient.SegmentTimeout`，超时以 `plugin_unavailable` / `segment_timeout` 换号），等待形式另有 6 小时加整体超时的总时限；两者都已删除，`segment_timeout` 这个原因不再出现。
+
+### 111.5 插件进程的内存：默认不限，只有管理员设置的上限
+
+用户决定（设计 D23：“默认插件内存上限不限制！！除非管理员手动限制！！”）。适用于所有有进程的插件，平台插件和其他插件一样。
+
+- **默认不限**：什么都没设置时，插件进程没有内存上限：不设 `GOMEMLIMIT`，看门狗不按内存重启（内存方面没有 rlimit）。**后果**：默认情况下没有任何东西阻止插件进程一直长到节点内存耗尽（比如几个大请求体同时到达）。要界限的管理员按下面两条设置。
+- **管理员给插件设的上限**：`PUT /plugins/:key/resources` 的 `memory_mb`（存在 `plugins.resource_limits`），大于 0 时原样生效，核心不抬高也不压低；0 表示不设。
+- **节点封顶** `SUB2API_PLUGIN_MAX_MEMORY_MB`：默认 0，不封顶（此前默认 1024）。管理员设了时照旧：没有插件上限的插件用它作上限，插件上限超过它时取它；`PUT /plugins/:key/resources` 仍拒绝超过它的 `memory_mb`。
+- **清单的 `resources.memoryMB`**：不是上限，只是插件自述的需要，安装审查（`review.resources`）和插件详情的 `resources.requested` 里照常展示，可作管理员设置上限时的参考。字段与校验不变（设了封顶时仍不能超过封顶）。`cpu`、`maxThreads`、`maxOpenFiles` 不在本节范围，照旧生效。
+- **与请求体上限无关**：不按请求体上限推下限；改 `max_request_body_mb` 不会让任何插件进程过期或被替换。管理员改了插件上限或封顶后，进程按“资源限制过期”由对账循环平滑替换（与以前相同）。交给插件的请求体不做在途字节准入（`ErrPluginUnavailable` 的 `inflight_bytes` 原因删除）。
+- **给平台插件设上限时**：平台插件持有完整请求体，一个 N 字节的请求在插件里的峰值约 3N 到 4N。每个同时处理的大请求按“3 × 请求体上限 + 64 MB”留量；默认请求体上限 128 MB 时约 450 MB 一个。网关设置里不再有内存警告。
+
+
+## 112. 平台插件转发 V2：一条请求路径、核心的 HTTP 客户端、事实只在返回值里（2026-11-18，用户要求；插件协议 2、Host API 10；迁移 0108（模型名的列，§112.16）、0109（§112.10 的拒绝原因），同批的请求体上限见 §111；设计见 [DESIGN-2026-11-18-PLUGIN-FORWARDING-V2.md](DESIGN-2026-11-18-PLUGIN-FORWARDING-V2.md)，插件写法见 [PLUGIN-DEVELOPMENT.md](PLUGIN-DEVELOPMENT.md)）
+
+本节优先于前文中与之冲突的描述。项目在开发期，不做兼容：旧机制在同一次改动里删除，核心与全部第一方插件从同一个提交构建、一起发布，旧插件包被拒绝（§112.10）。
+
+### 112.1 删除了什么
+
+- **只有清单、没有进程的插件**（`runtime: "none"`）和**声明式上游**（清单 `accountTypes[].upstream`、引擎 `sdk/upstream`、预设 `sdk/platforms/upstream`、核心的 `plugin/declarative`、`core.DeclaredUpstream`、`StaticInstance` / `LoadStatic`）。每个插件都是 `runtime: "grpc"`。原来声明式的五个账号类型（openai、gemini、relay、azure_openai、anthropic 的 `apikey`）改成链接 `sdk/pluginsdk/standard` 的代码插件，账号类型 ID、表单、凭证字段不变，账号数据不迁移。
+- **“声明字段加补丁”的请求构造**：`PlatformService.BuildUpstreamRequest`（`BuildUpstreamRequestRequest`、`BuildUpstreamRequestResponse` 及其 `patches`、`base`）、清单 `requestFields`（平台级和账号类型级，含 `sdk/platforms/*.json` 里的）、`ResolveModelRequest.fields`、SDK 的 `SetPatch` / `DeletePatch`。`BodyPatch` 消息保留，只有网关钩子用（§20、§85）。
+- **核心替插件签名**：`RequestSigning`（`signing`）删除，插件用 `sdk/reqsign` 自己签（§112.6）。`response_stream` 保留，在 `UpstreamRequest` 上。
+- **上报回调与事后提取**：`HostService.ForwardUpstream`、`RecordUsage`、`ReserveAndWatch`、`ReportTaskProgress`、`ExecutionReceipt`；`PlatformService.ExtractUsage`、`ParseTaskSubmission` 作为核心调用的入口（核心不再在响应结束后调它们；`ExtractUsageRequest`、`UsageReport`、`TaskSubmission` 消息保留）；`Execute` 没有上报时核心按自己的读数补记的兜底，以及后台恢复按核心读数提交的扫描。
+- **旧的任务观察**：`PlatformService.Poll`（`platform.poll.v1`）和两阶段的 `BuildReconcileRequest` / `ParseReconcileResponse`（及其消息）。任务观察只有 `Monitor`（§112.9）。
+- **能力 ID** `platform.execute.v1`、`platform.poll.v1`。`platform.adapter.v1` 的含义是“实现 `Execute` 的平台插件”；`platform.monitor.v1`、`platform.tasks.v1`、`platform.websocket.v1` 不变。
+- **清单** `endpoints[].request.maxBodyBytes`（§111）；SDK 的 `WithMaxRecvMsgSize`（插件 gRPC 服务端的接收上限固定为传输层最大值）。
+
+### 112.2 `PlatformService.Execute`：唯一的请求路径
+
+每次尝试（一个账号一次，换号后从头构造）核心调账号类型所属插件的 `Execute`，WebSocket 会话每一轮消息调一次。核心在调用之前做完协议转换（`internal/gateway/convert`）、账号模型映射、引用模型映射、强制流式（§83）、`claude_max_tokens`（§84.1）和账号参数覆盖的请求体部分（§84），以及模型可用性预检。两处覆盖改动了请求体时（`gateway/dispatch.go` 的 `upstreamBody`），核心在结果上**再强制一次流式**（覆盖不能把只流式上游的 `stream` 改回假），再按账号的用量规则检查一次能否计量（`meterable`，与调度时对客户端请求体的检查相同：主用量与尝试次数），不能计量的这次尝试换号（例如覆盖加了用量规则计不了的操作）。插件交回的请求体仍不检查（§112.5）。
+
+`ExecuteRequest`（字段 1 `request` 删除并 `reserved`）：
+
+| 字段 | 内容 |
+|---|---|
+| `execution_token` (2) | 本次调用的宿主调用凭证，SDK 绑定在调用的 context 上；调用返回即失效 |
+| `meta` (3) | `RequestMeta`；`model` 是映射后的上游模型 |
+| `account` (4) | 本次尝试的账号，含凭证 |
+| `body` (5) | 完整请求体，上游协议，核心的改写都已做完；WebSocket 端点是这一轮的消息。客户端请求过了请求体上限（§111）；核心自己的改写（转换内联的媒体、钩子补丁、参数覆盖）可能让它更大，不因此拒绝，交给插件时也不再检查大小 |
+| `inbound_headers` (6) | 白名单（`passHeaders`）内的客户端请求头，小写名 |
+| `attempt` (7) | 0 起，换号加一 |
+| `extract_usage` (8) | 端点的用量由本插件解析（`usageSource: "plugin"`，WebSocket 轮次恒为假） |
+| `task_submission` (9) | 端点是任务提交（`endpoint.task.action: "submit"`） |
+
+`ExecuteResponse`：`classification`（1，插件看到的上游错误：等待形式的中继，或中继之前失败的取回）和 `oneof report { UsageReport usage = 2; HostUsage host_usage = 3; TaskSubmission task = 4; }`。`HostUsage` 是空消息，意思是“采用核心按清单规则读到的用量”。
+
+| 端点 | 插件的中继 | 合法的返回 |
+|---|---|---|
+| 两个标志都为假 | 不等待 | `host_usage`；中继之前取回失败时 `classification` |
+| `extract_usage` | 等待 | `usage`；读不出用量时 `host_usage`（核心记 `anomalies.usage_extract = "fallback"`）；上游出错时 `classification` |
+| `task_submission` | 等待 | `task`；上游出错时 `classification` |
+
+核心对结果的处理：
+
+- 不等待的中继，且返回 `host_usage`：核心在 `Execute` **返回之后**发送、中继、按规则读用量，`submit()` 结算，不写执行记录；非流式回答照旧分块透传，不缓冲。插件之后崩溃、重启、换代都不影响这次交换。
+- 不等待的中继但返回了别的、或报错、崩溃：请求不发出，按插件不可用换号，账号不受罚（发布了失败策略时同样，不执行账号规则，§58）。`Execute` 不计时（§111.4）：插件挂住时这次尝试一直等，直到客户端离开或插件进程结束。插件没有中继而返回 `classification`：先看客户端是否已经离开（离开了按客户端断开结束，不采用这个分类，被客户端离开切断的取回不会让账号冷却），否则按这个分类裁决（发生在主请求之前，可以安全换号）；什么都没有：按插件不可用换号。
+- 客户端离开：`Execute` 在客户端的 context 下调用。等待形式（插件解析用量、任务提交）的调用在**中继开始发送之前**随客户端离开取消（什么都没发出，不计费、不写执行记录，槽位释放）；中继开始发送起不再随客户端取消（`execution.run` / `detach`）：上游交换按客户端断开的计费策略处理（§25.8 的 `client_disconnect_policy`，`gateway/disconnect.go`；回答可能继续读完用于计费），插件在观察之后的工作也不取消，因为事实还要提交。插件在转发的观察之后挂住时，这次执行只会随插件进程退出而结束；客户端离开不会结束它，因为事实还要提交。客户端离开之后插件才要求的等待中继不发送。
+- 带标志的执行上插件却用了不等待的中继并返回 `host_usage`：任务提交不发送（按插件失败换号）；插件解析用量的端点照常发送，按核心读数计费并记 `usage_extract = "fallback"`。核心的读数完全为空（没有 token、计量、附加项或替换项）时不按 0 计费：客户端已经拿到回答，核心写一条零费用的 `usage_unreported` 记录、释放预扣、记 ERROR 日志（与等待形式的未上报相同的记录，§112.7）。
+- 等待形式：见 §112.7。
+
+上游错误：不等待形式下核心读错误体、调 `ClassifyError`（平台调用超时，失败用默认分类），按故障策略裁决；等待形式下用 `Execute` 返回的 `classification`，没有就用默认分类。故障策略下传输错误完全由策略决定。插件不重试、不换号。
+
+### 112.3 `HostService.RelayUpstream`：把最终请求交给核心
+
+```protobuf
+rpc RelayUpstream(RelayUpstreamRequest) returns (RelayUpstreamResponse);
+message RelayUpstreamRequest { string execution_token = 1; UpstreamRequest request = 2; bool wait = 3; }
+message RelayUpstreamResponse { ExtractUsageRequest observation = 1; ClassifyErrorRequest error = 2; } // 不等待时为空；等待时恰好一个
+message UpstreamRequest {
+  string method = 1;                        // 空为 POST
+  string url = 2;                           // 绝对 http(s) 地址；WebSocket 轮次是握手地址（ws(s) 或 http(s)）
+  map<string, string> headers = 3;          // 权威头
+  map<string, string> default_headers = 4;  // 默认头
+  bytes body = 5;                           // 最终字节；WebSocket 轮次是这一轮的消息
+  string upstream_model = 6;                // 记入使用记录；类型声明了模型可用性时核对
+  string response_stream = 7;               // 如 "aws-eventstream-chunk"
+  reserved 8; reserved "options";          // 原 UpstreamOptions（只能收紧超时），转发 V2 收尾删除：超时只归核心
+}
+```
+
+- 一次执行最多一个中继，第二个 `FAILED_PRECONDITION`。被运行时或网关拒绝的请求是 `INVALID_ARGUMENT`，不算已中继，插件可以改了再交。同一次执行的宿主调用串行，前一个没结束时来第二个是 `FAILED_PRECONDITION`。
+- `wait = false`：核心只校验（运行时的检查加网关的检查，§112.5）就立即回空响应，请求挂在这次执行上，等 `Execute` 返回 `host_usage` 才发。
+- `wait = true`：只允许用在 `extract_usage` 或 `task_submission` 为真的执行上，否则 `FAILED_PRECONDITION`。核心立即发送、中继，结束后回 2xx 的观察（非流式是整个回答体；流式只有 `usageStreamEvents` 列出的事件，不限条数和大小）或错误事实（非 2xx 或传输错误）。回答本身由核心中继给客户端，不经插件。
+- 请求体：不限大小（转发 V2 收尾起，§112.16；此前不超过 max(交给插件的请求体, 请求体上限) + 1 MiB）。请求体上限只管网关读客户端的请求（§111.2），插件把它变成什么是插件的事。宿主的 broker 对所有宿主调用的接收上限都是 gRPC 自己的 `MaxInt32`（此前小调用 4 MiB）。
+- 核心发送时不改请求体、不重新强制流式。代理、TLS、重定向、重试不归插件：有代理的账号一律经代理，不跟随重定向，核心不重试。
+
+### 112.4 请求头
+
+- 两个 map 的键都小写；`host`、`content-length`、`accept-encoding`、`connection`、`transfer-encoding` 归传输层，出现即拒绝（`Host` 永远是 URL 的主机，§112.17）；同名时权威头生效；名或值不合法拒绝。
+- 发送时自下而上（§86.5）：插件的**默认头** → 透传（账号 `header_passthrough` §81、`header_override` 的透传键 §108、粘性规则，**只补没有的**，不替换默认头）→ `header_override` 与 `param_override` 的请求头部分（可以设值或删除默认头）→ 插件的**权威头**（运营方改不掉；值为空表示删掉同名的头、不发，§112.17）→ 没有 Content-Type 时补 `application/json`。WebSocket 握手同样分层但不套透传。
+- 放哪一类是插件的约定，核心不判断：鉴权头和签名写入或覆盖的头（含签名用的 Content-Type）放权威头，其余放默认头。例外由所有者定：已发布过的代码插件（codex、volcengine）改写后保持全部头为权威头（与改写前一样，运营方的透传和覆盖改不了它们；codex 的 `User-Agent`、`originator` 改为在账号凭证或插件设置里自定义，见 [PLUGIN-CODEX.md](PLUGIN-CODEX.md) 第 20 节）；原来声明式的五个类型只有鉴权头是权威头（与声明式时一样）。一致性套件第 4 条检查“声明的集合”：权威头的名字必须在插件声明的 `Credentials` 与 `Authoritative` 之内。
+- 插件交回的权威头能盖掉运营方设置的同名头，这是代码插件一直以来的行为，签名需要它。
+
+### 112.5 发送前的检查
+
+运行时：令牌有效、请求非空、URL 非空、没有传输层的头名（请求体不检查大小）。网关（`gateway/relay_check.go`）：
+
+- 请求头的名和值能被传输层发送；方法合法。
+- `response_stream` 是核心认识的格式（现有 `aws-eventstream-chunk`，§109.2）；WebSocket 轮次上给了任何格式都拒绝。
+- 类型声明了模型可用性时，`upstream_model`（非空时）必须等于核心算的上游模型，不一致按模型可用性的失配处理。
+- URL 的主机必须是清单 `externalServices` 之一（含子域）或账号自己的上游地址的主机（`manifest.UpstreamHostAllowed`，§112.17），之后过 SSRF 规则（§43.4 的 `netguard.CheckHostVia`：直连检查解析出的地址；经代理时本机不解析，只拒绝字面的私网地址和 `localhost`；“允许私网”按账号所在范围）。WebSocket 的握手必须是 GET，地址是 `ws(s)://` 或 `http(s)://`；之后的轮次不用 URL 和头。
+- **不检查请求体**：核心不再解析插件交回的字节，不比较模型引用、流式标志或可计量性。这些是插件的责任，由一致性套件第 3 条检查（模型引用与交入的一致、交入时流式为真交回仍为真、合法 JSON、没有重复键）。
+
+网关拒绝的请求在插件一侧是 `INVALID_ARGUMENT`，`Execute` 若随后失败，这次尝试按插件不可用换号，什么都没发出。
+
+### 112.6 `HostService.ExecuteHTTP`：取回
+
+SDK 名 `pluginsdk.Fetch`。一个有界、非流式的请求，回答交还插件；在 `Execute`（辅助请求：换令牌、上传、预检）和 `Monitor`（任务查询）期间可用。控制台路由调用里也可用，但必须带账号表单的代理票据，见 §117。
+
+- 主机：清单 `externalServices` 之一或其子域，**或者是这次调用的账号自己的上游地址的主机**（账号类型 `upstreamFields` 声明的字段，从账号的设置和凭证里读；只比主机名，不比端口，不含子域）。其他主机 `PERMISSION_DENIED`。
+- 主机规则是 `manifest.Manifest.UpstreamHostAllowed`（中继与 `SendAccountRequest` 用同一个，§112.17），核心（`grpcruntime/execute.go` 的 `requireFetchHost`）和 SDK 的假宿主共用。
+- 核心经账号代理、过 SSRF（账号地址指向私网时按账号所在范围的“允许私网”判断）、不跟随重定向、不重试；**不套**运营方的透传和覆盖；拒绝 `Host`、hop-by-hop、代理认证头和不是 HTTP 的头名或值。超时：`Execute` 期间是这次尝试的响应头超时和 `relay_timeout_seconds`（未设置时没有整体超时，此前默认 5 分钟），`Monitor` 期间 20 秒；插件不能设超时（`ExecutionHTTPRequest.options` 字段 6 与 `UpstreamOptions` 已删除，`reserved`）。网关和用量模块的取回是同一份实现 `internal/execfetch`（此前两份各自漂移：`Execute` 的取回允许插件设 `Host`、把传输错误原文交给插件）；传输失败的文字固定为 `execution HTTP request failed`，原因只进核心日志。
+- 不限次数、不限大小（转发 V2 收尾起，所有者决定，§112.16）：一次调用取回多少次都行，回答整份交还（读不完整是传输错误；`ExecutionHTTPResponse.truncated` 已删除）；请求体、URL、请求头不限大小，方法不按名单检查（`net/http` 自己拒绝不合法的方法）。此前每次调用最多 8 个、回答 8 MiB 截断、请求体不超过请求体上限、URL 8 KiB、请求头 64 个 / 32 KiB、回答头截到 64 个 / 32 KiB，`pluginsdk.FetchLimit`、`FetchResponseLimit` 已删除。传输失败回 `status = 0` 加 `transport_error`，不是 RPC 错误。不需要 `net` 授权。
+- 签名：`sdk/reqsign.SignAWSSigV4` 对插件构造的 `*http.Request` 签名，`reqsign.AWSSigV4Headers(req)` 给出签名写入或覆盖的头（`Authorization`、`X-Amz-Date`、有会话令牌时的 `X-Amz-Security-Token`、被签名的 `Content-Type`），插件把它们作为权威头、把签过的 URL 交给中继。核心发送前重新解析 URL，路径要写成线上的样子。
+
+### 112.7 等待形式的事实、执行记录与未上报
+
+只有等待形式写 `plugin_executions`（`intent` → `observed` → `committed` 或 `unreported`；`state` 是无 CHECK 的文本列，新值不需要改表）：
+
+1. 发送前 `BeginExecution`（意图：执行、请求、插件、账号和尝试的标识，`record` 为空；此前还写入请求前的使用记录，但没有任何地方读它，转发 V2 收尾删除了 `core.ExecutionIntent.Record`）；交换结束后 `ObserveExecution` 存核心的读数和观察（不限大小：`record` 是 jsonb、`observation` 是 bytea，大的值由 PostgreSQL 压缩、行外存放；此前超过 512 KiB 拒绝，请求以 503 和零费用记录结束）；非 SSE 的 2xx 回答先缓冲（内存 1 MiB，超出落临时文件，不限大小，此前最多 64 MiB），事实提交后才发布。临时文件建不了或写不进时，在任何提交之前按 3 关闭为未上报。
+2. `Execute` 返回后，核心校验返回的种类：`usage` 和 `host_usage` 只在插件解析用量的端点合法（`host_usage` 记 `usage_extract = "fallback"`，核心的读数完全为空时不是事实，按 3 处理），`task` 只在任务提交端点合法；任务提交上返回 `usage` 或 `host_usage` 不是事实。合法时 `CommitExecution{Operation, Digest}`（`usage` / `host_usage` 的操作是 `usage`，`task` 是 `watch`；摘要是事实的确定性编码的 SHA-256，`host_usage` 为空串的摘要）。同一执行、相同操作和摘要重复提交是无操作，不同的是 `ErrConflict`。提交失败在 15 秒内（`core.ExecutionFinishTimeout`）用同一份提交重试，不落库重试；冲突（`ErrConflict`）和确定性的拒绝（`core.ErrExecutionRefused`：提交与执行不符、身份不符、观察没有落库、已有使用记录）不重试，立即按失败处理（此前除冲突外都重试满 15 秒）。任务提交的提交窗口用完时，核心先尝试关闭执行：关闭遇到冲突说明提交其实已经落库，任务照常交付；关闭成功才报提交失败、写零费用记录（此前直接报失败，最后一次重试晚到落库时任务已登记、预留已扣，客户端却拿到 503）。任务在同一个事务里登记，`task.usage.reserve` 原子地替换请求前的预扣；插件拿不到任务 ID 和回执。
+3. **没有合法事实**（没填、种类不对、`host_usage` 而核心读数完全为空、`Execute` 报错、插件崩溃，或一直提交不上）而观察已落库：
+   - 同步请求：`CloseExecutionUnreported` 在一个事务里写一条零费用记录（`success = false`、`error_type = usage_unreported`、token 与计量清零、计费状态免费、`anomalies.usage_extract = "unreported"`），释放预扣，执行行改 `unreported`（`record`、`observation` 保留），每次写一条 ERROR 日志（请求 ID、执行 ID、插件、账号、原因）。缓冲的非流式回答不发出、回 503；已开始的流异常结束。核心不按自己的读数补记。`CloseExecutionUnreported` 对已有使用记录的请求只关执行行、不再写一条（观察落了库但确认丢失时，恢复扫描不会每轮失败）。
+   - 观察没能落库（`ObserveExecution` 失败，行还在 `intent`）：这个请求自己的零费用记录照常经 `submit()` 写下，预扣立即释放（此前什么都不写，预扣挂到 24 小时到期）。
+   - 回答是否交给客户端只看转发本身有没有完成（核心在插件报告之前的读数），不看插件在 2xx 回答里读出的业务错误：插件在 `UsageReport` 里报了 `error_type` 的请求照常计费、照常发出上游的回答（此前计费之后回 503）。
+   - 任务提交：任务不登记，客户端报错，预扣释放，回执记下原因（`gateway/tasks.go` 的 `taskFailure`）。这次请求的使用记录按 `core.UsageRecord.SetUnreported` 清零（零费用、预扣释放、`anomalies.usage_extract = "unreported"`）：未上报记录只有这一个定义，网关的同步请求、任务提交失败和用量模块的 `CloseExecutionUnreported` 都调它（此前三处各写一份，任务提交失败只部分清零、不带 `usage_extract`）。但任务提交失败随后经 `fail()` 结束，`error_type` 被改写成返回给客户端的错误的类型（上游错误），不是 `usage_unreported`。
+4. 等待期间插件崩溃或放弃调用：中继调用的 context 结束，核心切断上游交换（记为上游中断，不是客户端断开），随后按 3 处理，这个请求不计费。
+5. 恢复按存活判断，不按时长（转发 V2 收尾起）：网关从观察落库起每 `core.ExecutionRenewInterval`（15 秒）续一次执行行（`ExecutionRecords.RenewExecution`，对仍是 `observed` 的行更新一次 `updated_at`），直到这次尝试结束；续期发现行已提交或已关闭就停。恢复扫描只关闭超过 `core.ExecutionStaleAfter`（2 分钟，八个间隔）没有续期的 `observed` 行（任务提交除外），按 3 关闭为未上报。所以活着的执行不会因为时间长被关掉，没有时长上限；崩溃的节点留下的预扣约 3 分钟内释放。`intent` 行不写任何东西，预扣由到期清扫释放。（此前扫描关闭停在 `observed` 超过 1 分钟的行，中间版本按约 46 分钟的年龄关闭并由网关在约 44.5 分钟时切断 `Execute`，都已删除。）
+6. 没有实现的缓解：“每个插件 10 分钟内 20 次未上报就通知运营方”没有做（核心没有运营方告警渠道的设置），目前只有每次的 ERROR 日志。
+
+### 112.8 跨插件的规则
+
+端点的用量由声明平台的插件解析（`usageSource: "plugin"`），或端点是那个插件的任务提交时，只有那个插件自己的账号类型能服务它（别的插件的 `Execute` 替它给不出事实）。
+
+- 判断只有一处：`manifest.AccountPlatform.ServesPluginFacts(platform)`（账号类型在这个平台上服务的端点里有没有这样的端点，`endpoints` 子集照算），清单检查和注册表共用。
+- 清单检查：账号类型的 `platforms[j].platform` 引用了这样的非内置平台，且被引用的平台可见（已安装，或检查时传入），报 `foreign_facts`。内置平台不由任何插件声明，两处都跳过。
+- 注册表绑定时（`registry.withoutForeignFacts`）：别的插件的账号类型声明了这样的平台，这个平台从被绑定的类型的平台里去掉（记日志），调度、可服务的端点、协议绑定读到的都是去掉之后的。内置平台不受影响。
+- 事后调 `ExtractUsage`、`ParseTaskSubmission` 的代码随之删除。
+
+### 112.9 `PlatformService.Monitor`：任务观察
+
+核心认领到期任务后调 `Monitor(PollRequest) returns (MonitorResponse)`，`MonitorResponse.result`（`ReconcileResult`）就是这次观察的结果，核心在一个事务里重排或结算（租约、调度、原账号、快照、账务都归核心，§28）。
+
+- 插件只能经 `ExecuteHTTP` 查上游，不能中继。
+- 没有结果、或报错：算一次查询失败。终态（`PENDING`、`POLL_FAILED` 以外）必须伴随这次调用里一次完整、成功的取回（拿到 HTTP 状态、没有传输错误），否则同样算一次查询失败。结果的大小不限（此前超过 512 KiB 算一次查询失败）：事实照常校验，按摘要提交。
+- 整个调用 30 秒，调用方的 context 更短时取更短的；每次取回 20 秒。
+- 原账号永远问不了（没有记录账号、账号已删除、账号属于别的插件）算一次查询失败，消耗失败次数，最终退款（`errTaskAccountGone`；此前和账号冷却一样延后到期限，到期按估算扣费）；冷却、槽位满、限流、查询账号出错仍然延后。
+- SDK：`TaskMonitor.Monitor(ctx, *PollRequest) (*ReconcileResult, error)`；`PollFailure`、`TaskNotFound` 不变；`ClassifyPollResponse(status, transportError)` 去掉了 `truncated` 参数（§32）。
+
+### 112.10 旧契约的插件包
+
+- 版本：插件线协议 `sdk/protocol.ProtocolVersion` 1 → 2（go-plugin 握手和 `GetInfoResponse.protocol_version`），Host API 9 → 10（`runtime-contract.HostAPIVersion`；`sdk/protocol.HostAPIVersion` 定义为它，两者恒等）。
+- 清单检查报 `outdated_contract`（`check.CodeOutdatedContract`，`check.OutdatedContract(err)`）：`runtime: "none"`；声明 `platform.execute.v1` 或 `platform.poll.v1`；清单原文里有 `accountTypes[].upstream`、`requestFields`、`request.maxBodyBytes`（这几个字段已不在类型里，从包里的 `manifest.json` 原文读）。
+- 判断只有一处：`check.OutdatedPackage(manifest, manifestJSON, hostVersion)` 只读清单，返回信息；运行时、上传安装和 CLI 各自包成自己的错误类型。
+- 上传、安装（`pkg.Validate`）和加载（`grpcruntime.Runtime.Load`：清单检查不过时不启动进程；握手协议不符；`GetInfo` 报的协议版本不符）都以同一条信息拒绝：`protocol.OutdatedContractMessage(key, version, hostVersion)`，即 `plugin <key>@<version> was built for an older plugin protocol and cannot be loaded by this core (<host>, plugin protocol 2); install a version built for core <first> or later`，`<first>` 是本插件协议的第一个核心版本 `protocol.FirstCoreVersion`（`0.1.304`；为它构建的插件能在之后同一协议的每个核心上加载，所以不要求为当前核心构建）；`errors.Is(err, grpcruntime.ErrOutdatedContract)` 为真。CLI 的测试要求每个平台插件的 `hostCompat` 下限等于它。
+- 加载失败时节点在实例状态里记结构化的 `code: "outdated_contract"`（`errors.Is(err, grpcruntime.ErrOutdatedContract)` 时），`error` 仍是显示的文字；接口按 `code` 判断，不比较文字（此前比较文字，而 rollout 把错误截到 500 字符，包装或长版本号会让拒绝悄悄丢失）。`GET /plugins` 的每项带 `refusal`（`{code: "outdated_contract", version, host_version, protocol_version, first_core_version, message}`），有节点以这条信息拒绝加载时非空，`GET /plugins/:key` 同样带它。节点的实例状态只在实例条目还在时报告这个代码；发布结束时它随各节点的结果写进 `plugin_rollout_nodes.code`（迁移 0109），所以首次启用就被拒、发布在准备阶段失败、节点不再有这个实例之后，`refusal` 取自该插件最近一次发布里带这个代码的节点结果（`version` 为发布的目标版本，`host_version` 为应答的核心版本，`message` 为该节点的错误）；有节点正在报告时以节点报告为准。控制台的文字以“请安装为核心 {first} 及以上构建的版本”结尾。
+- 旧包装在新核心上没有降级服务，也没有“加载但不执行”。新包装在旧核心上由 `hostCompat`（第一方插件 `>=0.1.304`）拒绝。
+
+### 112.11 升级
+
+- 核心与**全部**第一方插件一起换：升级后还是旧包的插件被拒绝加载，它的账号不可用，直到装上新版本。第三方平台插件要由作者用新 SDK 重新构建。
+- Host API 变了，网关外壳不允许新旧核心滚动并存；托管升级在这次升级上走不通（节点就绪检查要求每个已启用的插件都已加载，而内置插件在升级计划完成后才升级，§37）。已有部署要停机，用新核心和新插件集重新部署，再把非内置插件逐个装上新版本。
+- 安装与升级的审查（`review.request_access`）对声明账号类型的插件固定显示一句：插件会收到经它的账号发出的每个请求的完整内容和与响应有关的数据，并决定请求发往哪个地址；不是权限，不能取消。§124 起这句还写明插件收到这些账号的全部信息（含代理的地址、用户名和密码），以及请求都由核心发出、插件自己不联网。
+- 插件进程的内存默认不限，只有管理员设置的上限生效（§111.5）；请求体上限只在网关设置里（§111）。
+
+### 112.12 清单
+
+- `runtime` 只有 `grpc`（`js` 仍是保留值）；`manifest.RuntimeGRPC` 在 `manifest.go`（没有使用者的 `TransportHTTP`、`TransportWebSocket` 已删除）。
+- 账号类型在某个平台上的 `passHeaders`：**没写**（解码后为 nil）取平台的列表；**写成 `[]`** 表示不交给插件任何客户端请求头；非空按写的用（`AccountPlatform.ClientHeaders`）。此前空列表也回落到平台的列表，清单没法说“一个都不要”。字段的 JSON 标签是 `omitzero`，重新编码时“没写”和“空”仍然分得开。codex 的两个类型写的是 `[]`。
+- 声明了账号类型就必须有 `accounts.credentials {"types": "own"}`（原来声明式类型可以没有）。§124 起这个授权删除，清单里再写它按旧契约拒绝。
+- `AccountType.AddressFields()` 只认 `upstreamFields`：原来声明了 `upstream` 的类型自动得到 `["base_url"]`，现在要在清单里写出（五个改写的插件都写了）。它决定账号的自定义上游判断（§21）和取回允许的账号地址（§112.6）。
+- `usageSource: "plugin"`、`usageStreamEvents`、`usageRequestFields`（`EstimateUsage` 的入参，预扣不变，§25.8）、`endpoint.task` 不变（`usageMaxBytes` 在转发 V2 收尾删除：没有插件声明过它，见下一条）：`extract_usage` 来自端点的 `PluginUsage()`，`task_submission` 来自 `TaskSubmit()`。
+- 端点的 `usageMaxBytes`（读用量的观察的字节预算，以及任务提交时的上限检查）删除：没有插件声明过它，核心按它截停的分支、清单检查（下限 1 KiB、任务提交不超过 256 KiB）和观察的 `ExtractUsageRequest.truncated`（字段 7，`reserved`）一起去掉，观察总是整份。旧清单里还写着它时：核心解码清单时忽略未知字段（`pkg.ParseManifest`），上传、安装、加载都照常，这个值不起作用（等于不设预算）；`sub2api-plugin` 严格解码（`DisallowUnknownFields`），`build`、`pack`、`sign`、`verify`、`index`、`dev` 报 `manifest.json: json: unknown field "usageMaxBytes"`。它不是旧插件协议的标志，所以不报 `outdated_contract`。
+
+### 112.13 SDK
+
+| 包 | 内容 |
+|---|---|
+| `sdk/pluginsdk` | `Platform`（`ClassifyError` + `ValidateCredentials` + `BuildTestRequest`）加 `UpstreamBuilder`（`BuildUpstream`）：SDK 替它跑 `ExecuteDefault`；`Executor`（自己的 `Execute`）可选，实现了就用它，两者都没有时注册失败（转发 V2 收尾起；此前 `Platform` 必须实现 `Execute`，多数插件写一行转给 `ExecuteDefault`）；`UsageExtractor`、`TaskSubmissionParser`、`TaskMonitor` 是 `ExecuteDefault` 和 `Monitor` 在插件进程内调用的接口；`Relay`、`RelayAndWait`、`Fetch`（不限次数和大小，`FetchLimit`、`FetchResponseLimit` 已删除）；`ValidateUpstreamRequest`（与宿主同一套判断：方法和请求头按 `httpguts`）；`WithManifest`（清单原文，`pluginsdk.ManifestOf` 已删除）；`NewUpstream`（构造器，`Header*` 权威、`DefaultHeader*` 默认、`RemoveHeader` 不发某个头，§112.17）；`ReportHostUsage`、`ReportUsage`、`ReportTask`、`ReportClassification`、`Classified`；`RequestModel`、`RequestStream`（`meta.stream`，或请求体里的 `stream` 为真）。能力推断只给 `platform.adapter.v1`（`Platform`）和 `platform.monitor.v1`（`TaskMonitor`）。可选接口 `BalanceReader`（`BuildBalanceRequest` / `ParseBalanceResponse`，§52）照 `QuotaReader` 的方式按类型断言发现，没实现的回 `UNIMPLEMENTED` |
+| `sdk/pluginsdk/standard`、`providers/{openai,anthropic,gemini,typesafe}` | API Key 加基础地址一类账号类型的公共实现与厂商预设（`APIKey(id)`），取代声明式上游。路由可以有自己的鉴权（`Route.Auth`）和失败分类（`Route.Classify`，`ClassifyError` 按 `meta.protocol` 找路由，没有就用类型的）；`Merge(id, spec, parts...)` 把几份预设合成一个多平台类型（每条路由保留自己那份的鉴权、请求头和分类；模型列表、余额、默认测试取第一份；同一协议出现两次或某份有 `FilterFields` 时 panic）；`Type.Tests` 是按协议的测试请求，`BuildTestRequest` 取 `BuildTestRequestRequest.protocols` 里第一个有测试的协议，列表为空时用 `Test`，列表不空而都没有测试时回 `FailedPrecondition`（§122.3）；`Type.Balance`（`Requests` 是基础地址上的 GET，`BalanceRequest.Auth` 为 `&Auth{}` 时不带 Key，`Read` 读按顺序的回答）使 `Platform` 实现 `BalanceReader`，回答数与请求数不符时按 TRANSIENT 记，辅助函数 `BalanceFailure`、`Micros`（上游的十进制数换成百万分之一，不是换算）。`providers/typesafe` 是 TypeSafe 平台定义的唯一来源（`Platform()`，嵌入的 JSON）与它的预设、失败分类 |
+| `sdk/pluginsdk/jsonedit` | 唯一的请求体改写工具：按路径改，未动的字节原样保留，一批改写拷贝一次；同一成员上的改写按调用顺序生效（先 `Set` 后 `Delete` 就是删掉）；插件不写自己的 JSON 编辑器 |
+| `sdk/reqsign`、`sdk/awseventstream` | 插件自己签名；响应流格式的解码（核心中继时用） |
+| `sdk/pluginsdk/pluginsdktest` | 假宿主：`Harness.Execute` / `Harness.Monitor`、`FakeHost.Begin` / `BeginMonitor`、`Execution`、`RelayFunc`、`ExecuteHTTPFunc`、`Manifest`（来自 `pluginsdktest.Options{Manifest: manifestJSON}`，Harness 同时用它 `WithManifest` 启动插件；按 `manifest.UpstreamHostAllowed` 决定中继和取回能到的主机，§112.17）、`ExternalServices`（替换清单的）、`ExpireExecutions`、`Harness.Balance`（一次余额查询：先对每个请求按 `UpstreamHostAllowed` 判断，有一个不行就都不发、`PERMISSION_DENIED`；每个请求都交给测试的回答函数，不跟随重定向；回答按顺序交给 `ParseBalanceResponse`；单位照插件给的原样，可以为空，与核心相同）。和宿主一样不限中继和取回的请求体、不数取回、不截回答；`Monitor` 的终态要有这次调用里一次完整、成功的取回。仍与宿主不同的地方写在 `FakeHost` 的注释里 |
+| `sdk/pluginsdk/pluginsdktest/conformance` | 一致性套件，12 条检查，九个平台插件都在自己的测试里调 `conformance.Run`（`Plugin.Manifest` 必填；HTTP 协议的形式从端点定义读出；WebSocket 协议只在第 11 条；`Plugin.Platforms` 是别的插件声明、本插件类型服务的平台；`12_balance`：声明 `balance` 的类型必须读得出余额，无法读的回答给错误结果，没声明的回 `UNIMPLEMENTED`） |
+| `sdk/pluginsdk/standard/goldentest` | 原声明式引擎的 1498 条录制样例，转换后冻结。`Select`、`Forwarded`、`Case.BaseURL` 让别的实现（例如 `Merge` 出的中转站类型）只回放它必须答得一样的用例 |
+
+插件和核心不用厂商的 SDK 客户端，只用 AWS 的 `aws/signer/v4`、`aws/protocol/eventstream` 和 Vertex 断言用的 `golang-jwt/jwt/v5`；OpenAI、Anthropic 的官方 SDK 只允许用作 e2e 测试的客户端（e2e 的 AC36 用 openai-go 和 anthropic-sdk-go 驱动网关）。
+
+### 112.14 顺序变化：过滤字段在运营方改写之后（azure_openai）
+
+以前声明式类型的过滤字段（和清单里的固定改写）在核心里执行，排在 `claude_max_tokens` 与账号参数覆盖**之前**；现在过滤字段和路由改写在插件里，排在它们**之后**。运营方在账号参数覆盖里写了一个被过滤的字段时，以前发给上游，现在被插件删掉。三个预设和五份清单里没有一处声明清单固定改写；anthropic、openai、gemini、relay 把过滤字段清空了；只有 azure_openai 的两个类型保留 openai 预设的 `service_tier`、`safety_identifier`，所以这处变化只在 azure_openai 上可见。
+
+这里说的只是原来声明式的类型。本来就是代码插件的类型删字段一直在插件里、排在运营方改写之后，顺序没有变；运营方在参数覆盖里写了这些字段同样会被删掉。例如 bedrock 总是删请求体顶层的 `model`、`stream`、`metadata`、`provider`、`service_tier`、`inference_geo`、`speed`（`plugins/bedrock/internal/bedrock/body.go` 的 `droppedFields`），总是删 `cache_control.scope`，只在认出模型版本且早于 4.5（或值不被接受）时删缓存 `ttl`（认不出版本的模型，例如应用推理配置的 ARN，保留 `ttl`），并按请求里的工具自动加 computer-use、tool-search、tool-examples 的 beta（`beta.go`）；它按 `meta.stream` 而不是请求体的 `stream` 决定是否走流式接口，所以运营方的参数覆盖给非流式请求加 `stream: true` 不会把它变成流式。
+
+### 112.15 不在本次范围
+
+- 经核心、套账号代理的 TCP 连接（插件自己读上游的流）是以后的阶段；UDP 不做（`EgressService.Dial` 只转发 TCP，未改）。
+- 未上报的阈值通知（§112.7 第 6 条）。
+
+### 112.16 去掉写死的超时与限制（转发 V2 收尾，所有者决定）
+
+所有者的决定（原话：“超时、限制都去掉”；设计 D34）：一次请求上留下的界限只有管理员配置的，加上安全、钱算对和防止进程崩溃所需的检查。代码里写死的超时、大小和次数上限，凡是只为“防一个没人见过的负载”而设的，全部删除。代价是：以前带着明确错误被拒绝的东西，现在表现为内存占用、存储增长或一个一直等着的请求。
+
+**删除了什么，没有它的代价**
+
+| 删除的界限 | 以前 | 没有它的代价 |
+|---|---|---|
+| 插件在 `Execute` 里自己的工作按段计时（`core.ExecutionClient.SegmentTimeout`，`plugin_unavailable` / `segment_timeout`） | 每段超过平台调用超时就换号 | 挂住的插件不再在几秒后换号：这次尝试一直等到客户端离开、上游超时或插件进程结束，期间占着账号和 API Key 的槽位 |
+| 网关在观察之后约 44.5 分钟切断等待形式的 `Execute`（`ExecutionFactsTimeout`） | 切断后按未上报关闭 | 插件在观察之后挂住时，执行行一直被续期、预扣一直占着，直到客户端离开或插件进程结束（节点崩溃时约 3 分钟内释放，§112.7） |
+| 等待形式的 `Execute` 总时限 6 小时加 `relay_timeout_seconds` | 到时切断上游、按未上报关闭 | 交换只受管理员配置的上游超时约束；没有配置 `relay_timeout_seconds` 的部署里，一个不停的上游流会一直进行 |
+| 等待形式缓冲的非流式回答 64 MiB | 超过就回 503 | 大回答落临时文件占磁盘，每个在途请求一个，这次尝试结束即删 |
+| 取回：每次调用 8 个、回答 8 MiB 截断（`truncated`）、URL 8 KiB、请求头 64 个 / 32 KiB、方法名单、回答头截到 64 个 / 32 KiB、请求体不超过请求体上限 | `RESOURCE_EXHAUSTED`、截断或拒绝 | 有缺陷的插件可以在一次调用里不停地取回（每次都经账号代理、记日志）；回答、URL 和头整份进核心和插件的内存 |
+| `relay_timeout_seconds` 未设置时取回的 5 分钟默认总时限（`core.ExecutionHTTPDefaultTimeout`） | 5 分钟后传输错误 | 没配整体超时时，取回只受响应头超时约束，回答体读得慢就一直读 |
+| `Monitor` 结果 512 KiB | 算一次查询失败 | 大结果整份校验、整份入库 |
+| `ObserveExecution` 存的读数和观察 512 KiB | 请求以 503 和零费用记录结束（白送） | 整份存进 `plugin_executions`（jsonb / bytea，PostgreSQL 压缩、行外存放），表随之变大 |
+| 宿主调用 4 MiB（中继和取回以外）、broker 接收上限由最大请求体推出、中继请求体不超过 max(交给插件的, 请求体上限) + 1 MiB | `RESOURCE_EXHAUSTED` / `INVALID_ARGUMENT` | 有缺陷的插件可以让核心为一次 `KVSet`、`Publish`、`Log` 或一个中继请求分配到 gRPC 的上限（约 2 GiB） |
+| WebSocket：上游单条消息 64 MiB；每个 API Key 64 个会话（第 65 个 429）；上游握手 30 秒；写客户端和写上游 1 分钟 | 关闭连接或拒绝升级 | 超大的上游消息整条进内存；一个 Key 能开任意多会话（仍计入 `ws` 槽位，Redis 出错时照样拒绝升级）；握手挂住时等到客户端离开；不读的一方由没有应答的心跳 ping 结束 |
+| HTTP 写客户端 60 秒 | 按客户端断开处理 | 客户端连着但不读时，请求一直占着账号和 API Key 的槽位，直到连接断开 |
+| 代理传输的拨号 15 秒、TLS 握手 15 秒 | 传输错误 | 由操作系统的连接超时约束；网关的响应头计时从拨号之前开始，仍然管住挂住的拨号或握手；额度、续期、模型列表、测试、探测、`Monitor` 取回这些用同一客户端的地方各有自己的 context 时限 |
+| 每个插件实例 1024 个并发 `Execute` | 等不到槽位 503 | 没有兜底：并发只由账号和 API Key 的槽位限制 |
+| `RequestMeta.path_params`、`query` 32 个、名 64 字节、值 512 字节 | 截断 | 客户端发的大参数整份交给插件 |
+| SSE 单行 16 MiB | 切断流 | 超长的一行整行进内存 |
+| Bedrock 回答流（AWS event stream）单条消息 4 MiB（`awseventstream.MaxChunkMessageSize`，连同 `WithMaxMessageSize`、`ErrTooLarge`） | 切断流 | 一条消息最多到格式自己的 16 MiB 整条进内存；长度和 CRC 的一致性检查是协议本身的，保留 |
+| 协议转换读的非流式回答 32 MiB；只流式上游攒下的内容 32 MiB | 502 | 整份进内存 |
+| 非流式 JSON 回答读用量的缓冲 32 MiB | 超过的部分读不到用量，**按 0 计费** | 按整个回答计费（钱算对了）；回答在读完用量之前整份留在内存里一次 |
+| 读用量插件看到的观察：默认 256 KiB、64 条事件、请求字段单值 4 KiB / 总量 32 KiB、`detail_json` 4 KiB | 不给、略去或存 `{"_truncated":true}` | 插件拿到整份回答、全部列出的事件和整个字段值，gRPC 消息和插件内存随之变大；清单的 `usageMaxBytes`（曾让端点自己设预算）没有插件用过，随后删除（§112.12） |
+| 模型名长度（客户端 256 字节、使用记录 200、观察 256、价格模型 ID 和分组模型名单 200、模型引用 200、`PriceUsage` 等 256） | 400 或截断 | 超长的模型名整份进使用记录和日志；价格表上的唯一 btree 索引仍在，超过约 2.7 KB 的模型 ID 写价格时报错（不截断） |
+| `SendAccountRequest` 的请求体 64 KiB、URL 8 KiB、方法 16 字节，它与配额查询、凭证续期的回答截到 64 KiB（`truncated`） | `INVALID_ARGUMENT`；截断，素材列表一页就超过 | 回答整份进核心和插件的内存（§112.17） |
+| `core.RequestBodyLimit`、`grpcruntime.Options.RequestBodyLimit` 及其接线、`(*gateway.Gateway).MaxRequestBodyBytes(ctx)` | 核心与插件之间的若干检查读请求体上限 | 请求体上限只管网关读客户端请求的地方（§111.2） |
+
+迁移 `0108_model_name_text.sql` 把 `usage_logs.model` / `upstream_model`、`usage_hourly.model` / `upstream_model`、`price_rules.model`、`model_prices.model` 改成 `text`（二进制兼容，不重写表、不重建索引，每张表一次短暂的 ACCESS EXCLUSIVE 锁，`lock_timeout` 10 秒，拿不到锁迁移失败），重建挡住类型修改的触发器 `usage_hourly_mark_update`，`model_prices_model_id_chk` 只留字符集。
+
+**现在还限制一次请求的东西（完整列表）**
+
+| 界限 | 为什么留下 |
+|---|---|
+| 请求体是合法 JSON（合法 UTF-8、没有重复键），嵌套深度 10000（`gateway/jsonscan.go`） | 更深的输入会让进程崩溃 |
+| `max_request_body_mb`（§111） | 管理员配置；只管网关读客户端的 HTTP 请求体和 WebSocket 单条消息 |
+| 上游的响应头超时、流式空闲超时（未设置时 180 秒）、`relay_timeout_seconds`（环境变量，§74.3） | 管理员配置（插件不能改；能收紧它们的 `UpstreamRequest.options` 已删除） |
+| 平台调用超时（只管 `ClassifyError` 和读断开策略，§111.4）、钩子超时、平台热路径超时（`ResolveModel`、`EstimateUsage`） | 系统设置，管理员配置 |
+| `Monitor`：整个调用 30 秒（每条任务的处理预算）、每次取回 20 秒；后台结算的查询失败次数（`max_poll_failures`）和任务期限 | 后台工作的轮次要结束才能处理下一批；失败次数和期限决定退款 |
+| 事实的提交重试窗口 15 秒（`core.ExecutionFinishTimeout`） | 钱：窗口之后按未上报关闭，不让请求无限挂着 |
+| WebSocket 心跳 ping 30 秒间隔、30 秒应答，排空宽限 30 秒，后续轮次等账号 10 秒，重新鉴权 10 秒 | 发现死掉的对端；节点停机时有界地排空；调度而不是上限 |
+| SSRF 规则、中继 / 取回 / `SendAccountRequest` 的主机规则（`manifest.UpstreamHostAllowed`，§112.17）、拒绝 `Host` 和 hop-by-hop 头、不跟随重定向、执行令牌的范围 | 安全 |
+| 任务快照 256 KiB（`protocol.MaxTaskSnapshotBytes`）、清单的计数（`usageStreamEvents` 8 个、`usageRequestFields` 16 条）、KV 自己的规则（单值 64 KiB、一次批量 3 MiB） | 存储格式和清单的规则，不是请求路径的上限 |
+
+代码里还有几处不拒绝请求、只截断**派生副本**的常量，不在上表：交给钩子的 `prompt_text`（默认 32 KiB，清单可调）、交给 `EstimateUsage` 的提示文本 1 MiB、本地分词统计 32 MiB（§25.8）、上游的 HTTP 错误体在内存里只留前 64 KiB（`maxErrorBody`，`gateway/upstream_error.go`；更长的部分落临时文件，整份转给客户端，WebSocket 握手失败的错误体只读前 64 KiB），其中前 4 KiB 交给 `ClassifyError`（`core.ClassifyPrefixBytes`，`ClassifyErrorRequest.body_prefix`）与故障策略的关键词匹配（§58）。（`sdk/awseventstream` 的单条消息上限 4 MiB 已按上表删除。）
+
+**同批的修正**（钱与正确性，各节已写）：等待形式的发布只看转发本身是否完成（§112.7）；观察没能落库时写零费用记录并立即释放预扣，`CloseExecutionUnreported` 对已有记录的请求幂等（§112.7）；任务提交报失败之前先确认提交是否已落库（§112.7）；原账号永远问不了的任务消耗失败次数而不是延后到期限（§112.9）；`usage.source: plugin` 的端点上插件选了核心读数而读数完全为空时按未上报处理（§112.2、§112.7）；WebSocket 第一轮可重试的 `return_error` 和 HTTP 一样转给客户端（此前变成 503 `no_available_account`）；网关和用量的取回是同一份实现（§112.6）；执行按存活恢复（§112.7）。
+
+### 112.17 核心代发请求的目标主机与 `Host`；空值的权威头表示删除（转发 V2 收尾，所有者决定“修”）
+
+转发 V2 之后，平台插件决定请求发往哪个地址、带哪些头，核心用账号的凭证和代理把它发出。审查发现两个安全问题：插件能用 `Host` 头把请求指向 URL 之外的虚拟主机（SSRF 检查、代理选择只看 URL）；主请求的目标主机除 SSRF 外没有任何约束，插件能把带着账号凭证的请求发到任意公网主机。所有者决定修（设计 D35、D36）。同批放开了 `SendAccountRequest` 的主机与大小（D37），并让空值的权威头表示删除（D38）。
+
+**1. `Host` 只来自 URL。** 插件交回的请求不能设 `Host`：中继（`UpstreamRequest` 的 `headers` 与 `default_headers`，HTTP 与 WebSocket 握手、等待与不等待都一样）里出现 `host` 与 `content-length` 一样按传输层的头拒绝（运行时 `INVALID_ARGUMENT`，`execfetch.RelayTransportHeaders`；SDK 的 `Build` 同样报错）；取回一直拒绝 `Host`（§112.6）。请求发往、并以之为 `Host` 的永远是检查过的 URL 的主机（网关 `layerHeaders` 不再处理 `host`，WebSocket 握手同样）。运营方也设不了 `Host`：账号的请求头透传、请求头覆盖（§108）、参数覆盖的请求头操作（§84）共用的阻止列表（`paramoverride.HeaderBlocked`）本来就有 `host`，所以没有任何设置能改 `Host`。查证：九个平台插件、`sdk/pluginsdk/standard`、`sdk/reqsign` 都没有设 `Host`；SigV4 签的 `host` 就是 URL 的主机（插件按 URL 建 `http.Request`，`reqsign` 签 `req.Host`），bedrock 的签名往返测试照常通过。
+
+**2. 目标主机必须是声明过的或账号配置的。** 规则只有一处：`manifest.Manifest.UpstreamHostAllowed(host, accountType, settingsJSON, credentialsJSON)`（原名 `FetchHostAllowed`），主机（不分大小写、不含端口）满足其一即可：
+
+- 清单的 `externalServices` 之一或其子域（`manifest.ExternalServiceHost`）：安装、升级时管理员审查过；
+- 这个账号自己的上游地址的主机：账号类型在清单 `upstreamFields` 里声明的字段，从账号的设置和凭证里取字符串值（URL 或 `host[:port]`），只比主机名、不含子域（`AccountType.AddressHosts`）：运营方填的。
+
+清单没有“默认上游地址”字段：插件代码里写死的默认地址（如 `api.openai.com`）要写进 `externalServices`，九个官方平台插件里 openai、anthropic、gemini、codex、volcengine 本来就写了；bedrock 加了 `amazonaws.com`（各区域的 `bedrock-runtime.<region>.amazonaws.com`），vertex 加了 `googleapis.com`（全局与各区域的 `<region>-aiplatform.googleapis.com` 不是同一个域的子域，只能写到公共的上一级）；relay、azure_openai 的地址都来自账号的 `base_url`（`upstreamFields`）。
+
+为什么用 `upstreamFields` 识别“运营方填的上游地址”：它已经存在、按账号类型声明，账号的自定义上游判断（§21）和取回（§112.6）早就用它，不加新的清单字段；第三方插件作者只需要把写死的主机写进 `externalServices`、把让运营方填地址的字段写进 `upstreamFields`。没有采用“账号配置里所有形如 http(s) URL 的值”：设置和凭证里常有不是上游的 URL（vertex 的服务账号密钥文件里有 `auth_uri`、`token_uri`、`client_x509_cert_url` 等），它们是上传的内容而不是运营方填的地址，会放开没人审查过的主机。
+
+**3. 还要通过管理员的插件联网设置**（2026-11-18 起，§113.3）。通过上面规则的主机，还必须是管理员在“系统设置 → 插件联网”里允许插件访问的：两道都过才发。两道检查是核心里的一次调用 `core.CheckPluginUpstream`（先清单与账号的规则，再 `core.CheckPluginNetwork`），各调用点不另写判断；清单的规则拒绝时不再问管理员的设置。被拒的 `*core.Error` 是 `ErrPermissionDenied`，`details.reason` 为 `upstream_host_not_allowed`（清单与账号的规则）或 `upstream_host_blocked`（插件联网）。
+
+用在四处，都是核心用账号凭证代发的请求：
+
+| 请求 | 判断的地方 | 被拒时 |
+|---|---|---|
+| 中继：HTTP（不等待、等待）与 WebSocket 握手（`ws(s)` 按同名主机判断） | 网关 `relay_check.go` 的 `allowHost`，在 SSRF 检查之前 | 与网关拒绝的其他中继一样（§112.5）：插件一侧 `INVALID_ARGUMENT`，什么都没发出；这次尝试按插件不可用换号（记录类型 `plugin_unavailable`，`NeutralReason` 为 `upstream_host_not_allowed` 或 `upstream_host_blocked`），账号不冷却、不禁用；信息写明主机与插件（进使用记录的尝试轨迹，管理员可见）；WARN 日志 `gateway: upstream host not allowed` 带请求 ID、插件 key、账号、主机、`reason`。所有账号都被拒时与其他核心拒绝的尝试一样，客户端得到 503 `no_available_account`（Anthropic 格式 529 `overloaded_error`），信息里没有主机 |
+| 取回（`ExecuteHTTP`，`Execute` 与 `Monitor` 里，以及路由调用里带代理票据的取回，§117） | 运行时 `requireFetchHost`（§112.6） | `PERMISSION_DENIED` |
+| `SendAccountRequest`（§91） | 账号模块读出账号（类型、设置、解密的凭证）后判断 | `PERMISSION_DENIED`，什么都没发、不写审计 |
+| 余额查询（§52，0.1.304 起） | 账号模块拿到插件的全部请求后、发出第一个之前，逐个判断 | 一个都不发、不调 `ParseBalanceResponse`，快照记 `transient: <拒绝信息>` |
+
+假宿主（`pluginsdktest.FakeHost`）对中继和取回执行同一条规则（中继 `INVALID_ARGUMENT`，取回 `PERMISSION_DENIED`）；它不知道清单时什么主机都不放行（`FakeHost.ExternalServices` 可以替换清单的）。`standardtest.Run` 回放黄金样例时同样检查每个请求的主机。九个平台插件的测试、一致性套件和 1498 条黄金样例都在这条规则下通过。
+
+不在清单与账号的规则里的核心代发请求：配额查询（§44）、凭证续期（§48）、账号测试与模型列表（§19）由插件描述、核心发送，不受清单与账号的规则约束；它们的目标同样由插件决定，所以要过管理员的插件联网设置（§113.3）和 SSRF 检查。
+
+**4. `SendAccountRequest` 的主机与大小。** 主机按上面的规则（此前只认 `externalServices`，账号自己的上游地址被拒，例如中转账号按自己的 `base_url` 解析的素材接口、正式账号的 `asset_base_url`）。请求体、URL、方法不限大小（此前 64 KiB、8 KiB、16 字节，超出 `INVALID_ARGUMENT`）；回答整份交还（此前截到 64 KiB 并置 `truncated`，素材列表一页就会超过，解析失败）。配额查询、凭证续期与它共用发送路径（`sendPluginCall`），回答同样不再截断：`ExecutionHTTPResponse.truncated`（5）、`ParseQuotaResponseRequest.truncated`（6）、`ParseRefreshResponseRequest.truncated`（6）核心都不再设置，随后从协议删除（`reserved`），连同从没有核心调用方的 `ParseBalanceResponseRequest.truncated`（6）；codex、vertex 对它的处理已删除。单次 30 秒（`refreshTimeout`）不变。
+
+**5. 空值的权威头表示删除。** 请求头分层（§112.4）里插件的权威头是最后一层；权威头的值为空表示“这个头不发”：核心删掉前面各层（插件的默认头、透传的客户端头、运营方的请求头覆盖和参数覆盖）设置的同名头，HTTP 与 WebSocket 握手相同（网关 `layerHeaders`）。默认头的空值照旧写成空值的头。proto 不变（`map<string,string>` 本来就能表达空串）。SDK：`Upstream.RemoveHeader(name)` 写入空值的权威头（`Header(name, "")` 仍然什么都不写）；名字要在一致性第 4 条声明的集合里。bedrock 用它：签名里没有会话令牌（Access Key、API Key 账号）时删除 `x-amz-security-token`，运营方经请求头覆盖加的会话令牌不会到达 AWS 让签名校验失败；账号测试请求没有运营方的层，空值的头直接不发。
+
+## 113. 插件联网：管理员指定插件可访问、不可访问的域名（2026-11-18，所有者决定“默认放行，可以指定域名就行了”；无迁移；设计见 [DESIGN-2026-11-18-PLUGIN-NETWORK-ACCESS.md](DESIGN-2026-11-18-PLUGIN-NETWORK-ACCESS.md)）
+
+### 113.1 设置
+
+- 一项全局系统设置，`settings` 表 `plugin_egress` 行：`{mode, blocked_domains, allowed_domains}`。`mode` 为 `allow_all`（默认：允许所有域名，`blocked_domains` 里的除外）或 `block_all`（屏蔽所有域名，只允许 `allowed_domains` 里的）。两个列表分开保存，切换模式不清空另一个。没有这一行时为默认值（`allow_all`、两个列表为空），与之前的行为相同。
+- `GET /settings/plugin-egress`（`settings:read`）→ 整份设置。`PUT /settings/plugin-egress`（`settings:manage`）：字段都可省略，省略的保持原值，列表整体替换；返回保存后的整份设置。`mode` 只能是两个取值之一（字段错误 `mode` `invalid`）。列表项按 `egress.NormalizeDomain` 规范化：去首尾空白和末尾的点、小写、国际化域名转 punycode、IPv6 写成 `[addr]`；必须是主机名（每段 1–63 个字母数字或连字符，不以连字符开头结尾，总长 ≤253）或 IP 字面量；带协议、路径、端口、通配符、空白的报字段错误 `blocked_domains.<序号>` / `allowed_domains.<序号>` `invalid`，整次不保存。重复项去掉。不限条数。
+- 写入与审计 `settings.plugin_egress.update`（`target_type = settings`，`target_id = plugin_egress`，`detail` 为保存后的整份设置）在同一事务；提交后本节点缓存失效并广播 `config:changed {"key":"settings.plugin_egress"}`。不是插件可读的设置段（§107），不发 `settings.changed`。
+
+### 113.2 出口隧道的判断
+
+- 每个节点缓存设置 10 秒（与网关设置相同）；收到上述广播立即失效，过期时先用旧值、后台重读。读失败沿用上次的值；本节点从未读成功时拒绝连接（`plugin network access settings could not be read`），不按默认放行。
+- 新连接的检查顺序（`Provider.check`）：数据库例外（核心 DSN 里的真实地址，只给有 Database 的插件；严格网络下插件拿到的是虚拟地址 `db.sub2api:5432`，用到它的只有在不要求严格网络的核心上用 `pluginsdk.WithStrictNetwork(StrictAlways)` 自己装隧道的插件，§115）→ `net` 授权 → 本插件的出口策略（`allowlist` 时只能去 `net` 授权的域名）→ **插件联网** → 核心服务地址 → 解析结果必须是公网地址。目标要同时通过插件自己的授权、策略和管理员的设置；管理员的允许列表不放宽任何插件的授权。数据库例外不受插件联网影响。
+- 插件的 DNS 查询（`dns.sub2api`）同样过插件联网，被拒回 REFUSED。
+- 匹配用 `manifest.ExternalServiceHost`：列出的域名匹配自己和所有子域名，不区分大小写；比较插件拨号或查询用的名字（解析之前），插件直接拨 IP 时按该 IP 比较，列表里的 IP 只匹配它自己；端口不参与。
+- 被拒的连接照常写 `plugin_egress_logs`，`result = denied`，`error` 为 `<host> is on the blocked list of plugin network access`（`allow_all`）或 `<host> is not on the allowed list of plugin network access`（`block_all`），在 `GET /plugins/:key/egress` 的明细、汇总与访问过的域名里可见。
+- **局限**（所有者接受）：
+  - `allow_all` 下屏蔽的是名字：插件直接拨 IP 字面量时按 IP 比较，屏蔽某个域名挡不住插件直接拨它解析出的 IP。要彻底限住插件能去哪里，用 `block_all`。
+  - 设置只管新建的连接和 DNS 查询：已建立的连接不断开，插件已有的空闲保活连接会继续被复用，要等它自己关闭（Go HTTP 客户端默认空闲 90 秒）后新设置才管到这个目标。
+  - 多节点下保存的节点立即生效，其他节点收到 `config:changed` 广播才生效（漏收时最多 10 秒），中间有一小段仍按旧设置判断。
+
+### 113.3 核心替插件发出的请求（2026-11-18 补，所有者决定）
+
+所有者原话：“插件本身是不允许任何直连的，它的所有网络都需要通过核心发出。限制的域名也是核心必须通过，也是插件必须通过核心发出，然后这时候来进行域名限制。”所以这项设置管插件经核心发出的**全部**网络，不只是出口隧道：凡是目标地址由插件决定（或由插件清单、账号配置决定）、由核心替插件发出的请求，都要过它。
+
+- **范围**：中继（HTTP 等待与不等待、WebSocket 握手）、取回（`Execute`、`Monitor` 里的，路由调用里带代理票据的）、`SendAccountRequest`、余额查询（§52）、配额查询、凭证续期、账号测试、拉取模型列表。前四类先过清单与账号的规则（§112.17），后四类没有那道规则，只过这项设置。不在范围内的是核心自己的请求：价格同步、插件市场与插件包下载、代理检测、协议转换时下载客户端给的媒体 URL、节点间通信，以及 `Notify`（发往管理员配置的通知渠道）。
+- **判断**：与出口隧道是同一个判断（`hostPolicies` 的缓存与 `HostPolicy.refusal`，匹配同 113.2，比较 URL 的主机名，端口不参与），经 `core.PluginNetworkAccess`（由 `egress.Provider` 实现，在 `internal/app` 里注入账号模块、网关和插件运行时）。缓存、失效、读失败沿用上次值、从未读成功时拒绝都与 113.2 相同；请求路径上不读数据库。插件自己的 `net` 授权与按插件的出口策略只管出口隧道，与这些请求无关（平台插件没有 `net`）。平台插件随 `Account` 收到的代理详情（§124）只是数据，不用于自行联网：账号的请求只经这些核心发出的请求出去，核心强制账号代理。
+- **被拒时**：中继、取回、`SendAccountRequest` 见 §112.17 的表（`details.reason` / `NeutralReason` 为 `upstream_host_blocked`，信息为 `plugin <key>: <host> is on the blocked list of plugin network access` 或 `... is not on the allowed list ...`）。账号测试：测试结果失败，信息写明原因，什么都没发出；拉取模型列表：错误写明原因；配额查询、凭证续期：插件拿到的是传输错误（`status` 0、`transport_error` 写明原因），按插件对传输错误的处理（续期一般是暂时失败，凭证不变）；余额查询：发出前就逐个判断，一个被拒就都不发，快照记 `transient: <拒绝信息>`（§52.3）。
+- **记录**：每个被这项设置拒绝的请求在该插件的出口日志里写一行（`plugin_egress_logs`，`result = denied`，`error` 为原因，`network` 为 URL 的协议 `https`/`http`，以区别于隧道的 `tcp`，`host`、`port` 为 URL 的），与隧道的拒绝一样经批量异步的日志写入器（满了丢弃，不阻塞请求），管理员在插件详情“外部访问”页的明细和按目标汇总里看到。放行的请求不写（那是使用记录的事）；被拒的请求不计入访问过的域名（`plugin_egress_domains`），不发新域名事件。中继被拒另有网关的 WARN 日志和使用记录里的尝试轨迹。
+- **“屏蔽所有域名”的后果**：允许列表里没有某个平台的上游域名（如 `api.anthropic.com`、`chatgpt.com`、`googleapis.com`，或账号上自定义上游地址的域名），这个平台的全部请求被拒。控制台在切换到“屏蔽所有域名”前要求确认，选中时显示警告。
+
+### 113.4 控制台
+
+“系统设置 → 运行环境 → 插件联网”（`/settings?tab=plugin-egress`）：说明文字写明它管插件的全部对外访问（插件自己的连接和平台插件发往上游的请求）；默认设置下拉框（允许所有域名 / 屏蔽所有域名），切换到“屏蔽所有域名”前弹确认对话框（说明平台插件的上游同样受限），选中时显示警告提示；随模式变化的提示与一张列表（已屏蔽的域名 / 已允许的域名），添加对话框支持多行与批量（每行一个，逐行报错），每项可移除；每次改动立即保存。插件详情“外部访问”页有一行链接到这里，并说明被它拒绝的上游请求也记在该页明细里。
+
+### 113.5 验收
+
+`next/e2e/ac37_plugin_network_access_test.go`（`TestAC37_PluginNetworkAccess`）用 guard 的 webhook 告警验收：默认设置下送达 mock；把 mock 的主机加进屏蔽列表后连接被拒，出口日志有 `denied` 且原因是屏蔽列表；切到“屏蔽所有域名”、允许列表里没有它时被拒（原因是允许列表）；加进允许列表后送达。设置只对新连接生效，所以用例在默认阶段之后先等 guard 到 mock 的长连接关闭（出口日志里它的行不再是 `open`，空闲连接 90 秒后关闭）。guard 的告警冷却设为 0（默认 60 秒，被拒的告警也占用冷却期，会挡住下一阶段的告警）。设置的保存和触发告警的请求都固定发到节点 1：保存的节点在应答前丢掉缓存，另一个节点要等广播，中间有几十毫秒仍按旧设置判断（实测见过）。用例结束（含失败）经 `t.Cleanup` 把插件联网恢复成默认、清空 guard 规则、guard 设置恢复默认冷却。
+
+`TestAC37_PluginNetworkAccessCoversUpstreamRequests` 验收 113.3：anthropic 账号的上游地址（`base_url`）是 mock 的主机；默认设置下请求到达 mock；把它加进屏蔽列表后经网关的请求不到达 mock，客户端得到 5xx 且正文里没有主机名，anthropic 插件的出口日志里有 `denied` 行、原因是屏蔽列表；移出后恢复；“屏蔽所有域名”而允许列表里没有它（账号自己配置的主机同样被拒）时同样被拒、原因是允许列表；加进允许列表后恢复。保存与请求都发到节点 1，结束时恢复默认。
+
+## 114. 插件包不再依赖主节点：每个节点留一份，缺包时向任一持有者取（2026-11-18，所有者决定“每个节点都要安装，保留插件吧?”，“并不需要做分布式一致性”；无迁移；只改网关二进制和核心的错误文案；设计见 [DESIGN-2026-11-18-PLUGIN-PACKAGE-ANY-NODE.md](DESIGN-2026-11-18-PLUGIN-PACKAGE-ANY-NODE.md)）
+
+取代 §34“插件包分发”里“上传和首装的包由主节点网关保存”与 `plugin-upload` 范围，以及 [规约 §6.2](MULTINODE-SYNC-PROTOCOL.md) 的旧写法。
+
+- **存放**：每个节点的网关在 `<root>/plugin-blobs/<前两位>/<sha256>` 保存本节点存过、用过的包；PG 仍只记 `package_sha256` 与市场的 `package_url`。核心经本机管理 socket `PUT/GET /system/plugin-blobs/<sha256>`（`blobs.Shell`）存取，没有网关时用本机目录（只支持单节点）。
+- **写**：`install.Upload`（上传、市场安装、内置插件导入）把包写进接到请求的那个节点的网关就返回，再写版本行；不推给其他节点。存不进去时 503 `unavailable`，信息 `store the plugin package on this node`。节点间 `PUT /internal/plugin-blobs/`、范围 `plugin-upload`、每个来源节点 2 个并发上传的限制一并删除；`plugin_store_max_bytes` 总量上限保留，对本机上传和从别的节点取来的包都生效。
+- **读**：本机没有的包，网关逐个问其他启用的节点 `GET /internal/plugin-blobs/<sha256>`（范围 `plugin-artifact`，任意两个启用节点之间，摘要须被某个版本引用），心跳新鲜（`Node.Fresh`，与路由、准入同一个存活判断）的先问，不新鲜的后问：心跳只排顺序，不排除节点（集群冷启动、从节点在主节点的心跳循环开始前加入、主节点刚恢复时，持有包的节点心跳还没写或已过期，2026-11-18 修正）。第一个给出摘要与大小都正确的字节的节点胜出，取到的包留在本机。对方 404 表示它没有；连不上记为“连不上”；摘要不符、出错就记下并问下一个。不另设超时与重试，连一个已经宕机的节点只受已有的传输超时约束，新鲜的节点在前，常见路径不等它。不登记谁持有哪个包，主节点没有特殊地位，`set-primary` 与插件包无关。
+- **取不到**：每个启用节点都问过，各自答没有或连不上时，管理 socket 返回 404，正文是 `no reachable node holds the plugin package (<节点>: not held; <节点>: unreachable: <原因>)`，只有本节点时是 `(no other node to ask)`；核心得到 `blobs.ErrNotFound`（带这段正文），审查、同意接口 410 `package_gone`（信息 `no reachable node holds the package of this version; bring a node that holds it back online, or upload it again`，控制台“没有能连上的节点持有这个安装包”），节点加载失败的错误文本（节点页、`plugin_rollout_nodes.error`）带上这段原因。有节点答了别的（摘要不符、错误状态）、且没人给出正确的包时返回 502，逐个列出错误，核心按一般错误处理，不当作包不存在。
+- **取舍**：上传后、其他节点取走之前，包只在接到上传的节点上；它永久丢失就要重新上传。持有某个包的节点都连不上时，需要这个包的安装、升级、新节点加载都做不了，直到其中一个回来。
+- **升级**：没有迁移。旧主节点上已有的包原地保留，和其他节点一样被问到。网关滚动更新期间，旧网关节点上的上传仍要推给主节点；主节点换成新网关后不再接受（403），在旧网关节点上上传会失败；旧网关的主节点自己缺包时不问别人，在新网关节点上传的包它取不到。换完网关再上传、启用即可。
+
+## 115. 插件数据库只用核心的数据库用户（2026-11-18，所有者决定“它访问数据库都是通过核心的数据库配置来访问，而不需要任何新数据库用户”；迁移 0110；设计见 [DESIGN-2026-11-18-PLUGIN-DB-CORE-USER.md](DESIGN-2026-11-18-PLUGIN-DB-CORE-USER.md)）
+
+取代 §54 的“数据库角色隔离不再降级”、§5.6 的角色隔离和 0003/0023 的迁移记录函数。
+
+- **一个数据库用户**：核心不建、不改任何数据库角色，核心的用户不需要 `CREATEROLE`。持有 `db.schema` 的插件有 schema `plg_<key>`（属主是核心的用户，`dbschema.Manager.Ensure` 按需 `CREATE SCHEMA IF NOT EXISTS`）。
+- **迁移**：插件的 `migrations/*.sql` 由核心以自己的用户执行，每个文件一个事务，`SET LOCAL search_path TO plg_<key>`，按插件的 advisory 锁串行；记录直接 upsert `public.plugin_migrations`。迁移 0110 删除 `plugin_migrations_applied`、`plugin_migration_record`。
+- **`GetDSN`**（所有者补充“数据库直接委托给核心来代理”）：严格网络下返回 `postgres://plugin@db.sub2api:5432/plg_<key>?sslmode=disable`，没有任何凭据；`schema` 为 `plg_<key>`；`role_isolated`（字段 3）已删除并 `reserved`，SDK 的 `DSNInfo.RoleIsolated` 随之删除。没有出口隧道时（严格网络关闭：开发、非 Linux）返回核心的 DSN 加 `options=-c search_path=plg_<key>`。
+- **核心代理**：出口隧道只对策略有 Database 的插件接受 `db.sub2api:5432`（否则拒绝 `egress: the plugin has no database`），交给 `dbschema.Manager.ServeTunnel` → `runtime-contract/gormpg/pgproxy`：插件侧 SSL/GSS 请求回 `N`，启动消息的 `user`、`database`、`options`、`replication`、`_pq_.*` 忽略，其余运行参数带上；核心用自己的数据库配置（同一 DSN 解析，含 TLS、SCRAM/MD5）登录，固定 `search_path=plg_<key>`、`application_name=sub2api plugin <key>`，协议版本与插件请求的一致；回插件 `AuthenticationOk`、服务器的全部 `ParameterStatus`、服务器的 `BackendKeyData`、`ReadyForQuery`，之后两向原样转发。连不上时回 `FATAL`：服务器的 PgError 原样，其他只说 `the host could not open the database connection`。插件的 CancelRequest（pgx 在 ctx 结束时经同一隧道发出）按进程号与密钥找到该插件自己的会话，按会话的加密方式转发给服务器；其他忽略。每条插件连接是核心对 PostgreSQL 的一条连接，不在核心池里，不设上限，数量由插件的池决定（默认每节点每插件 4 个）。
+- **数据库连接不是外部访问**：经 `db.sub2api:5432` 的连接（含没有 Database 被拒绝的）不计入插件的外部主机名单 `plugin_egress_domains`，不记“新外部主机”的 WARN、不发 `plugin.egress_new_domain`，`GET /plugins/:key/egress` 的 `domains` 里没有它。出口日志 `plugin_egress_logs` 照旧每条连接一行（主机 `db.sub2api`，也进按目标汇总 `summary`），与改造前插件经隧道直连真实数据库地址时一样。判断只在隧道的 `Dial` 一处（虚拟地址）；`StrictAlways` 插件在非严格核心上拨真实数据库地址（`Options.DatabaseAddrs`）仍按普通连接计入名单。
+- **清除数据**：`DROP SCHEMA plg_<key> CASCADE` 并删除迁移记录（`DropTx`，与插件行的删除同一事务）。
+- **隔离**：插件拿不到数据库密码（严格网络下），但能执行核心的用户能执行的任何 SQL，能访问全部表并能写入，插件之间、插件与核心之间的分隔只靠约定和安装时对 `db.schema`（high）的同意，PostgreSQL 不再强制。主密钥加密的列（账号凭据、代理密码、`api_keys.key_cipher`、TOTP、插件加密设置与 secrets、价格同步源密钥）读不出明文，API Key、访问密钥、用户密码只存哈希；其余数据可读，所有表可写（例如 `accounts`、`proxies` 的非加密列，含代理的 host、port、username；凭证明文与代理密码只有声明该账号类型的插件经 `Account` 拿得到，§124）。非官方插件授予 `db.schema` 一律要求 `plugin:grant:db_schema_unconfined`（`needs_db_schema_unconfined` 同步），官方插件不要求。
+- **旧角色的转换**：核心启动时一次（`ConvertLegacyRoles`），以及每次 Ensure/DropTx 某插件时，对本库为该插件建的旧角色 `plg_<key>`（注释等于 `sub2api plugin role; database=<本库>; plugin=<key>`，或拥有本库的 `plg_<key>` schema）在插件的 schema 锁里执行 `REASSIGN OWNED BY … TO CURRENT_USER`、`DROP OWNED BY …`、`DROP ROLE …`，不同插件之间另取全局锁 `plugin-role-conversion`。依赖核心对该角色的成员关系与 `CREATEROLE`（旧代码建角色时已具备），不需要超级用户。角色在 `pg_stat_activity` 里还有会话时整个跳过并记一次警告，下次 Ensure 或启动再试；转换失败只记日志，不阻止启动。其他库或运维自建的同名角色不动。没有角色（新库、不带属主的恢复）时什么也不做。
+- **打包工具**：`sub2api-plugin db diff|check`（`sdk/pgdb/pgdbtool.Drift`）不再建临时角色，像宿主一样以连接的用户、只设 `search_path` 在临时 schema 里执行迁移（整个事务回滚）；迁移在插件 schema 之外建立或改动的表、函数、类型、schema、扩展照旧列为差异（看本事务写过的系统目录行，以前靠临时角色的属主判断）。以前因为临时角色没有权限而在工具里失败、宿主却能执行的迁移（例如 `CREATE EXTENSION`），现在工具里也能执行，在 schema 之外建的对象列为差异。
+- **单向**：0110 之后旧核心无法再给插件建角色（授予已删除的函数失败），回退只能连同数据库回到升级前的备份。
+- **网关外壳仍传 `SUB2API_PLUGIN_DB_ROLE_ISOLATION`**：核心不再读它，但外壳与核心分开换，先换外壳的集群在新外壳下继续运行 0.1.303 核心，直到核心重新部署；设成 `false` 的部署（数据库用户没有 `CREATEROLE`）若拿不到它，旧核心按默认打开角色隔离，持有 `db.schema` 的插件起不来。所以它留在 `supervisor.legacyCoreEnv`（`allowlist_test.go` 只按这份名单接受核心不读的 `SUB2API_` 名字，核心又读它时报错），全部集群运行 0.1.304 或更新的核心后，在下一个外壳版本删除。
+
+## 116. 删除 Claude OAuth 插件（2026-11-18，所有者决定“删除掉！”；迁移 0111，核心 0.1.304）
+
+插件 `claude_oauth`（目录 `next/plugins/claude-oauth`，账号类型 `claude_oauth`、`claude_setup_token`）整体删除，不留兼容。线上没有安装它，也没有这两种类型的账号。最后的源码是 `77158211c`（`git show 77158211c:next/plugins/claude-oauth/manifest.json`）。§44.6、§48.5、§52.6 只留标题。
+
+### 116.1 删除了什么
+
+- 插件目录、`plugins/released.json` 里它那一条、`go.work` 的模块。CI、镜像构建和市场打包都按 `plugins/*` 发现插件，不用改。
+- 核心里只为它存在的代码：写死在核心的余额查询器 `account/balance_claudeoauth.go`（向 `api.anthropic.com/api/oauth/usage` 读 `account_balance`）和它在 `app` 里的注册。
+- 插件键 `claude_oauth` 从保留的官方插件名移到已删除插件键（`install/reserved.go` 的 `removedKeys`，记 0.1.304）：任何来源、任何签名的包都不能安装，返回 403 `plugin_key_reserved`，错误信息指向 CHANGELOG 0.1.304。已签名的 claude-oauth 0.3.0 包的 `hostCompat` 落在 0.1.304 范围内，没有这一条就能装上。
+- e2e：AC30 的平台插件矩阵去掉它那一行，变成九个插件；e2e 栈里只为它存在的 mock 主机别名 `api.anthropic.com` 删除。
+- 控制台：mock 里的两种类型和四个示例账号（示例账号改成 Anthropic API Key）、请求头覆盖提示里点它名字的句子。
+
+### 116.2 数据库：迁移 0111
+
+`0111_drop_claude_oauth_plugin.sql` 照 0102（§101.5）、0104（§106）的先例，像带 purge 的 `install.Uninstall` 那样卸载它（不走节点屏障：发布迁移时所有节点都已停下），可以重跑：
+
+- 它任务的 `scheduled_tasks` 行（这张表没有到 `plugins` 的外键）；
+- 它的权限 `plugin.claude_oauth:claude_oauth:manage` 和这条权限的授予（`casbin_rule` 按键引用权限，没有外键级联；持有它的角色升 `revision`），插件存在时 `authz_meta` 的两个版本各加一；
+- 键记入 `plugin_key_retirements`（归原发布者）；
+- 插件行，级联删除版本（含暂存的授予）、宿主权限授予、事件游标与死信、任务运行、发布状态（`plugin_rollouts`，连同节点结果和清理屏障）、运行节点、卸载屏障和粘性规则；`plugin_egress_domains` 没有外键，单独删除（`plugin_migrations` 自 0002 起也没有外键，它没有数据库，所以没有这种记录；§125 的 0117 单独删除）；
+- 它没有申请数据库权限，所以没有 `plg_claude_oauth` schema 和角色；迁移仍然 `DROP SCHEMA IF EXISTS plg_claude_oauth CASCADE`，角色只在带着核心的标记时删除（同 `dbschema.DropTx`），只为手工建过的情况。
+
+保留：`plugin_key = 'claude_oauth'` 的账号（连同分组关系、使用记录、账本、余额快照），在控制台显示为插件已卸载，由管理员删除；`usage_logs`、`balance_ledger`、`audit_logs`；`plugin_executions`、`plugin_history`、`plugin_egress_logs`。它在 Valkey 里的 KV（OAuth 授权会话）不在数据库里，30 分钟内自己过期。
+
+### 116.3 删掉它以后没有使用者、暂时保留的能力
+
+下面这些是给第三方插件作者的通用契约，删掉它们会改清单格式或插件协议，所以保留（账号余额后来由所有者决定接通）：
+
+- **账号余额（§52）**：0.1.304 起已接通（核心调插件的 `BuildBalanceRequest` / `ParseBalanceResponse`，定时任务 `core.account.balance_sweep`），`BalanceProvider` 注册表已删除，见 §52。
+- **额度主动查询（§44）**：清单 `quota.query`、`quota.autoRefresh`，`PlatformService.BuildQuotaRequest` / `ParseQuotaResponse`（`pluginsdk.QuotaReader`），核心的主动查询与自动复查。现在没有第一方插件声明 `query`（codex 只用响应头被动采样），机制本身完整可用。
+
+仍在用、保留的：账号类型平台上的 `"passHeaders": []`（codex）、`"upstreamFields": []`（codex）、`refresh`（codex、vertex）、`pluginsdk.SaveCallerSession` / `LoadCallerSession`（codex）、`providers/anthropic`（bedrock、vertex、volcengine 等）。
+
+## 117. 代理票据：建账号之前的授权流程走账号表单选的代理（2026-11-18，所有者要求“账号授权时的第一次换令牌不走代理：修复bug”“在创建账号的时候通过代理获取授权”“如果是粘贴的代理串呢？”；无迁移；Host API 仍是 10；UI 3.20；设计见 [DESIGN-2026-11-18-ACCOUNT-PROXY-TICKET.md](DESIGN-2026-11-18-ACCOUNT-PROXY-TICKET.md)）
+
+账号建好以后，上游请求、令牌刷新、额度和 `SendAccountRequest` 都由核心经账号代理发出。建账号**之前**的授权（设备码、OAuth 换令牌）此前由插件在管理路由里自己联网，账号表单上选的代理用不上。本节让核心按账号表单的代理选择替插件发这些请求，插件看不到票据里的代理地址和密码（账号建好以后插件随 `Account` 收到代理详情；建账号之前按表单拉模型时 `Account` 带表单填的代理，§124.2），也换不了代理。通用能力，不限于 codex。
+
+### 117.1 发票据：`POST /account-types/:plugin_key/:type/proxy-ticket`
+
+- 权限：`account:create` 或 `account:update` 的任意范围（新建与重新授权）。请求体就是“拉取模型列表”的代理部分：`proxy_id`（`null` 或不给为不用代理）、`proxy_url`（去首尾空白后为空视同不给）；两者同时给出 400 `fields[{proxy_url, conflict}]`。
+- 校验与 `POST /account-types/:p/:t/models/fetch` **同一段代码**（`account.ProxyChoice` 的 `checkChoice`）：`proxy_id` 按 §21.2 的可见范围（`core.ProxyRefScope`，账号动作取调用者持有的 `account:create`，没有则 `account:update`），看不到为 `proxy_id/not_found`；`proxy_url` 要 `proxy:manage` 的任意范围（否则 403，`details.permission = proxy:manage:own`），解析规则与错误同 §21.4（不回显原串）。粘贴的代理串只解析，**不查找也不建代理记录**。账号类型不存在或插件未启用 400 `fields[{type, unknown}]`。
+- 回答 `{"ticket": "<不透明字符串>"}`：`base64url(AES-256-GCM(主密钥, {"u": 用户, "proxy_id"?, "proxy_url"?}, AAD = "proxy-ticket:<插件键>"))`，与账号凭据、代理密码同一套加密（`runtime-contract/secret`）。核心不存票据；票据没有过期时间，每次使用都按当时的权限重新检查（117.3）。
+
+### 117.2 交给插件：路由调用的取回
+
+- `HTTPRequest.execution_token`（字段 10）：核心给每个**有登录用户**的插件路由调用（`scope` 为 `admin` / `user`）登记一个调用范围（与 `Execute`、`Monitor` 的执行令牌同一套），调用返回即失效。公开路由和 Webhook 没有。SDK 把它绑在路由处理函数的 context 上，`pluginsdk.Fetch` 在路由里可用。
+- `ExecutionHTTPRequest.proxy_ticket`（字段 7）：路由调用里的取回**必须**带票据，`Execute`、`Monitor` 里的取回**不能**带（它们走账号自己的代理）；不符 `PERMISSION_DENIED`。路由调用里不能中继（`RelayUpstream` 仍只属于 `Execute`）。
+- 主机：与取回相同的规则 `core.CheckPluginUpstream`（§112.17）（`grpcruntime.requireFetchHost`）。路由调用没有账号，所以只能到清单 `externalServices` 之一或其子域，还要过管理员的插件联网设置（§113.3），否则 `PERMISSION_DENIED`。
+- 控制台把票据来源交给插件的原生界面（§23.5 的 `proxyTicket`）。插件界面**每次**调用自己的授权路由（开始、每次轮询、换令牌、粘贴回调）之前都按表单当前的代理选择现取一张票据，放进请求体（约定字段名 `proxy_ticket`）；插件用**这次调用**带来的票据发这次调用里的取回（`pluginsdk.RouteProxyTicket` 读字段，缺了 400 `fields[{proxy_ticket, required}]`），不把票据存进授权会话沿用。所以授权开始后管理员改了代理，不用重新授权，后续每个请求都从新选的代理发出（2026-11-19，所有者：“代理修改了，后面的请求都用新的代理走就行了呀，重新授权干嘛呢？”）。界面不监听代理是否变化，每次都取新的。界面取了票据之后、这次调用的请求发出之前管理员又改了选择，这一次仍按取票据时的选择发出，下一次调用才用新的。
+- 核心拒绝发送（117.3 的 `PERMISSION_DENIED`、`INVALID_ARGUMENT` 等 RPC 错误）时请求没有发出，插件**不结束**授权会话（设备码、授权码都没用掉）：管理员把表单的代理改好后，下一次调用带着新票据就能继续。上游的回答（设备码过期、授权码无效等）照插件原来的规则处理。codex 回 400 `proxy_refused`（开始、换令牌）或轮询 `pending` 带拒绝原因，会话保留；设备码界面把原因显示为提示并照常轮询，表单代理要不到票据时同样显示原因、继续轮询（PLUGIN-CODEX.md 第 19 节）。
+
+### 117.3 核心发送（`account.FetchWithProxyTicket`，`core.ProxyTicketFetcher`）
+
+- 用插件键解开票据（别的插件的票据、改过的、编造的都解不开），票据里的用户必须等于**这次路由调用的用户**（核心从调用的上下文读，不信插件）；否则 `PERMISSION_DENIED`。所以别的管理员拿到会话 id 或票据也用不了。
+- 按这个用户**此刻**的权限（含访问密钥的收窄）重新做 117.1 的检查：不再能新建或修改账号、不再有 `proxy:manage`（粘贴的代理串）、代理已删或已不可见，这张票据随即不能用，错误照常交给插件（`PERMISSION_DENIED` 或 `INVALID_ARGUMENT`）。
+- 发送用取回的同一份实现 `execfetch.Do`：已有代理用代理服务缓存的客户端，粘贴的代理串用临时客户端（用完关闭空闲连接），不用代理时直连；直连过 SSRF 检查，经代理时本机不解析、只拒绝字面的私网地址和 `localhost`（`netguard.CheckURLVia`，§43.4；“允许私网”同 `AllowPrivateUpstream`）。不跟随重定向、不重试、回答整份交还；**没有自己的超时**，由路由调用的期限（`TimeoutHTTP`）约束。传输失败是回答的 `transport_error`，不是 RPC 错误。不写审计行（路由调用本身已有 `plugin.route.write`，取回从来不审计）；粘贴的代理串不进日志、审计和代理表。
+
+### 117.4 版本与兼容
+
+- Host API 不升，仍是 10（照 §91.3：只加字段和形式，升版会让 rolling-v1 不可用）。旧核心不给路由调用发执行令牌，插件在路由里 `Fetch` 得到 `FAILED_PRECONDITION`；依赖本节的插件靠 `hostCompat` 要求核心 ≥0.1.304（与转发 V2 同批）。
+- UI 3.20（`@sub2api/ui`、`@sub2api/host`、`@sub2api/vite-preset` 3.20.0，`HOST_UI_VERSION` 3.20.0，只加不改）：`@sub2api/host` 导出类型 `ProxyTicketSource`，原生账号表单多一个 prop `proxyTicket`。用到的插件声明 `hostUICompat: "^3.20"`，`hostCompat` 高于 0.1.303（最后一个带 UI 3.19 的核心）。
+- codex 0.2.0：四类授权请求（申请设备码、轮询、两种换令牌）改为带票据的取回，清单去掉 `net`，开始、轮询、换令牌路由都要 `proxy_ticket`，每次调用一张（PLUGIN-CODEX.md 第 19 节）。没有别的插件在建账号前联网。
+
+### 117.5 测试
+
+核心：`account/proxyticket_test.go`（已有代理、粘贴的代理串、不用代理三种选择分别经哪个测试代理到达授权服务器；无代理权限、看不到的代理、冲突、解析错误、既不能新建也不能修改账号的用户；别的用户、没有用户、别的插件、篡改、编造、缺票据都 `PERMISSION_DENIED`；权限收回后票据失效；粘贴的代理串不落代理表、不进审计和日志）、`plugin/grpcruntime/route_fetch_internal_test.go`（路由调用的令牌、带票据才能取回、清单以外的主机、不能中继、调用返回后失效、没有用户没有令牌、`Execute` 的取回不能带票据）。SDK：`pluginsdk/route_fetch_test.go`、假宿主（`Harness.DoAs` 发令牌，`FakeHost.BeginRoute`，路由取回必须带票据）。控制台：`AccountEditor.spec.ts`（三种选择交给原生表单，拒绝时显示在代理输入下）。e2e：`next/e2e/ac38_codex_auth_proxy_test.go`（`TestAC38_CodexAuthorizationThroughFormProxy`）：已有代理、粘贴的代理串、不用代理三种选择下，codex 设备码登录的每个请求经代理（或直连）到达 mock 扮演的 `auth.openai.com`，粘贴的代理串不留代理记录，建成的账号经网关可用并计费；Sign in with Codex 的换令牌同样经代理。mock 为此提供授权服务器的接口和 HTTPS 的 `CONNECT` 代理（`next/deploy/e2e/README.md`）。
+
+## 118. OpenAI 生图：`/v1/images/generations`、`/v1/images/edits`（JSON），图片 token 计费（2026-11-18，所有者要求“支持 openai 生图模型的计费”；迁移 0112；核心 0.1.304 批次；设计见 [DESIGN-2026-11-18-UPSTREAM-PLUGINS-AND-BALANCE.md](DESIGN-2026-11-18-UPSTREAM-PLUGINS-AND-BALANCE.md) 3.4，取代 [DESIGN-2026-11-17-OPENAI-IMAGE-BILLING.md](DESIGN-2026-11-17-OPENAI-IMAGE-BILLING.md) 的 3.1、3.2）
+
+内置 `openai` 平台多了两个端点；用量规则新增两个标准字段，接到早已存在、一直恒为 0 的表达式变量 `img`、`img_o`；`usage_logs` 加两列保存它们。
+
+### 118.1 端点（`sdk/platforms/openai.json`）
+
+| id | 方法 路径 | 协议 | request | response |
+|---|---|---|---|---|
+| `images_generations` | `POST /v1/images/generations` | `openai.images` | `modelPath: model`、`streamPath: stream`、`promptTextPaths: ["prompt"]` | `stream: sse`、`nonStream: json` |
+| `images_edits` | `POST /v1/images/edits` | `openai.images_edit` | 同上 | 同上 |
+
+- 两个都是 `kind: proxy`、`auth.headers: ["authorization"]`、`errorFormat: openai`、`billing: usage`、`billingTypes: ["per_request","per_token","expression"]`。官方接口要求显式给 `model`，没给时网关照常回 400“model is required”。不带 `/v1` 的 `POST /images/generations`、`/images/edits` 按 §104.2 改写。
+- **只收 JSON 请求体**。官方 edits 也接受 JSON（`images: [{image_url | file_id}]`，`mask` 同理），这一形式与 generations 一样原样转发。**表单上传（`multipart/form-data`）形式暂不支持**：网关读完请求体后的第一道检查（`gateway/pipeline.go` 的 `checkBodyJSON`，§25.9）就回 400 `invalid_argument`，信息 `request body is not valid JSON`（OpenAI 错误形状里 `type` 为 `invalid_request_error`），不选账号、不预扣、不调插件、不发上游；与其它不是 JSON 的请求体一样留一条免费的使用记录，`error_type = invalid_request`、没有账号、token 为 0（鉴权失败时没有记录）。网关要收 multipart，得改读请求体、取模型和审核取提示词，放在以后。
+- 插件侧：`sdk/pluginsdk/providers/openai` 的预设加 `ProtocolImages`、`ProtocolImagesEdit` 两条路由（`/v1/images/generations`、`/v1/images/edits`，Bearer、`content-type: application/json`，请求体原样，流式也**不**加 `stream_options`：图片流不需要它就带用量）。openai 插件因此服务这两个协议（插件内容同批升到 0.5.0，默认模型加 `gpt-image-2`、`gpt-image-1.5`、`gpt-image-1-mini`，不加 2026-12-01 下线的 `chatgpt-image-latest`）。
+
+### 118.2 用量字段与规则
+
+- 标准用量字段（`check.UsageFields`）加 `image_input_tokens`、`image_output_tokens`（`manifest.UsageImageInputTokens` / `UsageImageOutputTokens`）：输入、输出 token 里图片的部分，**是 `input_tokens` / `output_tokens` 的一部分，不另外相加**，与规则的 `semantics` 无关。`usagerules.Acc` 把它们读进 `core.UsageTokens.ImageInput` / `ImageOutput`（与其它 token 字段同样：不是数字时记 0 并警告一次，负数记 0），不再落进 `usage_logs.metrics`。`UsageTokens.Total`、`Throughput`（TPM、实时 token 统计）、账号用量触发器、`usage_hourly` 和用量汇总都不另外计它们。
+- 两个端点的规则（`semantics: inclusive`；edits 只把事件名换成 `image_edit.completed`）：
+
+```json
+"json": {"map": {"model": "model", "input_tokens": "usage.input_tokens", "output_tokens": "usage.output_tokens",
+                 "image_input_tokens": "usage.input_tokens_details.image_tokens",
+                 "image_output_tokens": "usage.output_tokens_details.image_tokens"}},
+"sse": [{"event": "image_generation.completed",
+         "map": {"input_tokens": "usage.input_tokens", "output_tokens": "usage.output_tokens",
+                 "image_input_tokens": "usage.input_tokens_details.image_tokens",
+                 "image_output_tokens": "usage.output_tokens"}}]
+```
+
+- 非流式按官方字段读；应答不带 `output_tokens_details` 时图片输出读成 0，整个输出留在 `c` 里。官方应答目前没有顶层 `model`，规则映射它只为上游以后带上；没有时上游模型照旧取请求的模型。
+- 流式：只有 completed 事件带 `usage`（`partial_image` 事件没有，不列），官方参考里它的 usage 没有 `output_tokens_details`，所以**图片输出取整个 `output_tokens`**（这个端点的输出几乎全是图片；若有文字输出 token，按图片输出价计，略多收）。规则按事件名匹配（`event:` 行，没有时读 `data.type`，§25）；completed 事件给出 `output_tokens`，所以流在这里算“最终用量已到”（§25.8）。以后用真实流式应答核对到事件里有明细，就把这一条改成与 JSON 相同的路径。
+- 插件自报的用量（`pluginv1.UsageTokens`，`usageSource: "plugin"`、核对、`EstimateUsage`）和宿主调用 `PriceUsage`（§72.13）没有图片字段：现在没有插件自己解析生图用量，以后需要时另加。
+
+### 118.3 计费变量 `img`、`img_o`
+
+- 变量早已在 `billing/expr` 里（`TokenVars`、`Vars`），表达式里写它们校验能过；这一版给它们接上数据：`expr.Tokens` 加 `ImageInput`、`ImageOutput`（字段与 `core.UsageTokens` 一一对应，两处互相转换），结算（`usage/settler.go` 的 `priceOne`、`evaluate`）、`billing.Quote`、价格试算都带上。
+- `expr.Normalize` 的规则与缓存写入在 `inclusive` 下的做法一致（§104.3），**两种语义都适用**：
+  - 表达式用到 `img` 时 `img = ImageInput`，`p` 再扣掉它；用到 `img_o` 时 `img_o = ImageOutput`，`c` 扣掉它；`p`、`c` 都不小于 0。
+  - 没用到时图片 token 留在 `p`、`c` 里按文字价算——**不会变成免费，也不会重复计**。
+  - `len`（分档用的完整上下文）不受扣除影响，含图片输入。
+- 例（`gpt-image-1.5` 的参考价，见 118.6；输入 1000 其中图片 600、缓存读 100，输出 4200 其中图片 4000）：`p*5 + cr*1.25 + img*8 + img_o*32 + c*10` 计 300×5 + 100×1.25 + 600×8 + 4000×32 + 200×10 = 136 425 微美元；只有文字价的 `p*5 + cr*1.25 + c*10` 计 900×5 + 100×1.25 + 4200×10 = 46 625 微美元（`billing/image_tokens_test.go`、`usage/image_tokens_db_test.go`）。
+- `POST /prices/preview` 的 `usage` 多两个可选字段 `img`、`img_o`。`usage` 是“分开”的形式：`p` 不含缓存和图片输入、`c` 不含图片输出；核心把 `p + img`、`c + img_o` 当作输入、输出总量，按结算同样的规则归一化，所以没计价的图片 token 按 `p`、`c` 的价算。`len` 缺省为 `p + cr + cc + cc1h + img`。`POST /pricing/quote`（§97）的用量不变（没有图片字段）。
+- 价格页的结构化分档编辑器、按 token 计价的 `config`（`p`、`c`、`cr`、`cc`、`cc1h`）不变：要单独给图片定价就写表达式价格。
+
+### 118.4 存储与接口（迁移 0112）
+
+```sql
+SET LOCAL lock_timeout = '10s';
+ALTER TABLE usage_logs
+    ADD COLUMN IF NOT EXISTS image_input_tokens  bigint NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS image_output_tokens bigint NOT NULL DEFAULT 0;
+```
+
+- 常量默认值的 `ADD COLUMN` 只改目录、不重写表；拿不到锁 10 秒后迁移失败，重试即可（0108 的先例）。旧行读出 0。旧核心忽略这两列。`internal/store/model` 由 `gen-models` 重新生成。
+- 使用记录写这两列（`usage/settler.go` 的 `usageLogRow`），待结算重读（`pendingColumns`）也带上。
+- `/usage`、`/me/usage` 的列表与详情多 `image_input_tokens`、`image_output_tokens`（§15.2 的列表字段）；`usage.recorded` 事件同样多这两个键（§6 的事件表）。账号侧视图 `/account-usage`（§103.5 的允许字段）、导出、用量汇总、`usage_hourly` 不变。
+- `core.UsageTokens` 的两个新字段在 JSON 里为 0 时省略（`json:",omitempty"`）：`billing_detail.inputs` 里保存的附加 / 替换用量（`PricedUsage`）对其它请求逐字节不变。
+
+### 118.5 哪些账号类型服务这两个端点（§110）
+
+新端点是 `openai` 平台的本平台协议。账号类型在 `openai` 平台上不写 `endpoints` 子集就服务该平台的全部端点，包括新加的；写了子集就只服务子集。
+
+| 账号类型 | 平台上的端点 | 生图 |
+|---|---|---|
+| openai `apikey` | 不写子集 | **服务**（预设有两条路由） |
+| codex `codex_oauth`、`codex_device` | `responses`、`responses_websocket`，`adapted` 列两个生图端点 | **经适配服务**：核心转成带 `image_generation` 工具的 Responses 请求，应答转回生图接口的形状（§121）。没有声明适配的同样子集的类型不是候选（`gateway/images_test.go` 的 `TestOpenAIImages`） |
+| azure-openai `azure_v1`（chat、responses、embeddings）、`azure_deployment`（chat、embeddings，`adapted` 只列 `responses`） | 写了子集 | 不服务；插件的路由表也没有这两个协议，`adapted` 也不列它们（§121.1） |
+| volcengine `apikey`、`relay` | 本批改为显式 `chat_completions`、`responses`、`responses_websocket`、`embeddings`（与之前实际服务的相同） | 不服务：方舟的生图（Seedream）在插件自己的 `volcengine` 平台上（`volcengine.images`），形状不同；不写子集的话调度会把 OpenAI 生图请求交给它，插件没有这条路由而报 `unsupported upstream protocol` |
+| relay、anthropic、gemini、vertex、bedrock 的类型 | 不在 `openai` 平台上 | 不受影响 |
+
+- 账号层面：`protocols` 为 `null`（默认）的 OpenAI API Key 账号升级后**自动**开放 `openai.images`、`openai.images_edit`；`protocols` “指定”过的账号不会自动开放（§110.2 的既定行为），要的话运营方在“协议与模型”里勾上。`model_protocols` 照常可以把生图模型限定到这两个协议。
+- 第三方插件的账号类型在 `openai` 平台上没写子集时同样自动得到这两个端点；插件没有这两个协议的路由时，请求得到 `unsupported upstream protocol`（换号），这样的插件应写明子集。
+
+### 118.6 价格：管理员要做什么
+
+插件和核心都**不预置价格**（插件清单写 `pricing` 校验失败，§17）。
+
+- **没有价格时**：与其它模型相同，请求在调度前被拒，403 `model_price_not_configured`（§17.3）。
+- **要按图片 token 正确计费**：在价格页给生图模型录**表达式价格**（单位与其它表达式相同，美元 / 百万 token）。参考价（来源：OpenAI 官方价格页与 Images API 参考 `developers.openai.com/api/reference/resources/images`，标准档，2026-11-18 抓取；录入前以官方为准，模型名录入前核对拼写）：
+
+| 模型 | 文字输入 `p` | 缓存输入 `cr` | 图片输入 `img` | 图片输出 `img_o` | 文字输出 `c` | 表达式 |
+|---|---|---|---|---|---|---|
+| `gpt-image-2`，`gpt-image-2.5-sunburst`、`-2.5-flare`、`-2.6-sunburst`、`-2.6-flare` | 5.00 | 1.25 | 8.00 | 30.00 | 无（写 30） | `p*5 + cr*1.25 + img*8 + img_o*30 + c*30` |
+| `gpt-image-1.5`（`chatgpt-image-latest` 同价，2026-12-01 下线） | 5.00 | 1.25 | 8.00 | 32.00 | 10.00 | `p*5 + cr*1.25 + img*8 + img_o*32 + c*10` |
+| `gpt-image-1-mini` | 2.00 | 0.20 | 2.50 | 8.00 | 无（写 8） | `p*2 + cr*0.2 + img*2.5 + img_o*8 + c*8` |
+
+  - 没有文字输出价的模型把 `c` 写成图片输出价：上游不给输出明细时 `c` 里其实就是图片输出，这样两种情况都算对。
+  - 缓存的图片输入（官方 2.00 / 0.25）没有单独变量，并入 `cr` 按文字缓存价算，略少收。
+  - `gpt-image-1`（2026-10-23 下线）、`dall-e-2/3`（2026-05-12 下线）不用录；官方已没有按张计价的表；应答里的 `svg_usage` 计费方式未查到，这一版不读。
+- **价格同步源**（§17.1）这一版不映射图片价：LiteLLM 源只导入 chat、completion、responses、embedding 模式，`image_generation` 模式的条目被跳过；models.dev 源只有 `cost.input` / `output` / `cache_read`，导入的生图模型价格是只有文字价的 `per_token`（旧设计稿实测 `gpt-image-1.5` 为 `{p:5, c:10, cr:1.25}`）。这样的价格不计 `img`、`img_o`，图片 token 按文字价算，**少收**（图片输出官方价是文字输出的数倍），管理员应把它改成上表的表达式价格（改过的同步价格变成 `manual`，下次同步不会覆盖）。
+
+### 118.7 控制台
+
+- 使用记录详情（`UsageTokenFacts.vue`）在图片 token 非 0 时多两行“图片输入”“图片输出”；价格试算面板多 `img`、`img_o` 两个输入；计费明细的条目名、协议绑定界面的协议名（“Images”“Image Edits”）有中英文。内置平台的备用目录（`composables/platforms.ts`）加这两个端点。
+
+### 118.8 测试
+
+- 核心：`usagerules/image_tokens_test.go`（两个字段进 `Tokens` 不进 `metrics`、非数字与负数；两个端点的规则对 JSON 带 / 不带输出明细、流式按文档与带明细、未命名事件）；`billing/expr` 的 `TestNormalizeImageTokens`（用到 / 没用到 `img`、`img_o` 时 `p`、`c` 的扣减、不为负，两种语义）；`billing/image_tokens_test.go`（两种表达式写法与流式的金额）；`billing` 的 `TestPriceAPI`（试算的 `img`、`img_o`）；`usage/image_tokens_db_test.go`（写两列、结算金额、事件、`/usage` 与 `/me/usage` 的列表和详情、其它请求的 `billing_detail` 不变）；`usage` 的 `TestInsertBatchMatchesValuesInsert`（两列逐列一致）；`gateway/images_test.go`（JSON 与流式、codex 子集不是候选、multipart 的 edits 在调度前 400 且只有免费的 `invalid_request` 记录）；迁移 `TestMigration0112UsageImageTokens`。
+- SDK 与插件：`sdk/platforms` 的协议表；openai 插件的合规套件覆盖两个新协议（非流式、流式），`TestImages` 钉住两条路由发给上游的字节，现有四个协议的黄金样例逐字节照旧；volcengine 的清单测试钉住 `openai` 平台上的端点子集。
+- e2e（P9）：mock 上游的两个接口与 AC40，见设计文档 6。
+
+### 118.9 以后
+
+- `/v1/images/edits` 的 multipart 形式（118.1）。
+- 缓存的图片输入单独计价、价格同步源导入图片 token 价、结构化分档编辑器里的图片价、统计页汇总图片 token、插件自报用量里的图片字段。
+
+### 118.10 Responses 里的生图工具（2026-11-18，§17.2）
+
+`/v1/responses`（HTTP 流式、非流式）与 `responses_websocket` 的请求带 `tools: [{"type":"image_generation", …}]` 时，上游在同一个应答里给出对话的用量（`usage`）和生图工具的用量（`tool_usage.image_gen`，形状同 118.2 的 `usage`，多次调用是各次之和）。两者都是**这条请求自己的用量**，按客户请求的模型的价格算（§17.2）：`sdk/platforms/openai.json` 里这两个端点的用量规则用 `+` 求和——
+
+| 字段 | 非流式（JSON） | 流式、WebSocket（`response.completed` / `.incomplete`，WebSocket 另有 `.failed`） |
+|---|---|---|
+| `input_tokens` | `usage.input_tokens+tool_usage.image_gen.input_tokens` | 同左，加 `response.` 前缀 |
+| `output_tokens` | `usage.output_tokens+tool_usage.image_gen.output_tokens` | 同上 |
+| `image_input_tokens` | `tool_usage.image_gen.input_tokens_details.image_tokens` | 同上 |
+| `image_output_tokens` | `tool_usage.image_gen.output_tokens_details.image_tokens` | 同上 |
+
+缓存字段照旧只读 `usage`。图片 token 是输入、输出的一部分（118.2）：请求模型的价格表达式写了 `img` / `img_o` 时按图片价，没写留在 `p` / `c` 按文字价。应答 `tools` 回显里的生图模型（Codex 后端恒为 `gpt-image-2-codex`）和请求里工具的 `model` 都不参与计价，不需要价格。实测（2026-11-18，设备码账号经 Codex 后端）：对话 2304 / 52 token，生图输入 39、图片输出 515，记录为输入 2343、输出 567、图片输出 515。
+
+- 服务的账号：openai `apikey`、codex 两种类型，以及服务内置 `openai` 平台 `responses` 端点的其它插件（New API、Sub2API 中转等），用的是同一份平台规则；插件不用改。
+- 管理员要做什么：请求用到生图工具的模型，价格表达式按需要写 `img` / `img_o`（118.3、118.6）。
+- `/v1/chat/completions` 转成 Responses 时（`convert/req_responses.go`）丢掉 `image_generation` 工具（已知的转换损失），所以经 Chat Completions 的请求不会生图。
+- 官方 Codex 客户端 2026-07 起改用 Codex 后端的 `/images/generations` 专用接口生图；网关没有这个端点（已知限制，不在本节范围）。
+- `/v1/images/generations`、`/v1/images/edits` 经转换由 Responses 服务时（§121）用的就是这份规则，只是 `model` 读应答回显的生图模型（§121.4、§121.5）。
+
+## 119. 上游插件 newapi、sub2api、typesafe（2026-11-18，所有者要求接入 New API、Sub2API 站点和 TypeSafe；无核心迁移；核心 0.1.304 批次；设计见 [DESIGN-2026-11-18-UPSTREAM-PLUGINS-AND-BALANCE.md](DESIGN-2026-11-18-UPSTREAM-PLUGINS-AND-BALANCE.md) 3.5、3.6 与 D6–D8、D11–D15、D20–D22；使用说明见 [PLUGIN-NEWAPI.md](PLUGIN-NEWAPI.md)、[PLUGIN-SUB2API.md](PLUGIN-SUB2API.md)、[PLUGIN-TYPESAFE.md](PLUGIN-TYPESAFE.md)）
+
+三个官方平台插件，都是 `0.1.0`、`hostCompat >=0.1.304 <0.2.0`、用 SDK 的 `standard` 库写成（newapi、sub2api 用 `standard.Merge` 把几份厂商预设合成一个账号类型，typesafe 用预设 `providers/typesafe`）。插件只构造请求，由核心发送（§112）。
+
+### 119.1 账号类型与字段
+
+| 插件 | 账号类型 | 字段 | 地址 |
+|---|---|---|---|
+| `newapi` | `apikey`（"New API"） | `base_url`（必填）、`api_key`（敏感，任意非空字符串，§127；2026-11-20 前要求 8–512 个不含空格的可见字符） | 运营方填站点根地址；按填写的保存，请求时末尾的 `/v1beta` 或 `/v1` 当作版本段去掉一段、各协议从根拼官方路径（填 `/v1` 时 Gemini 协议请求 `…/v1beta/…`，余额也从根拼），§127。不声明 `guardedSettings`、`externalServices`：转发和余额请求只能发往账号自己的 `base_url` 主机（§112.17）。可自定义上游：own 级用户新建或改地址要 `account:relay`（§21.3.1） |
+| `sub2api` | `apikey`（"Sub2API"） | 同上 | 同上 |
+| `typesafe` | `apikey`（"TypeSafe"） | `api_key`（必填，同上）、`base_url`（可选，缺省 `https://api.typesafe.ai`；按填写的保存，请求时末尾的 `/v1` 当作版本段去掉，§127） | `guardedSettings` 只许官方地址（`versions: ["/v1"]`，带 `/v1` 的官方地址也算官方，§21.3）、`externalServices: ["api.typesafe.ai"]`：没有 `account:settings:custom` 的人只能用官方地址，改成别的地址照 §21.3 需要 `account:relay` |
+
+- 默认模型：newapi、sub2api 不写（账号服务所有模型；"拉取模型"读站点 `GET /v1/models` 的 `data[].id`）；typesafe 是 `jev-latest`、`jev-1.14.0`、`jev-1.13.0`、`jev-preview`（"拉取模型"读 `GET /v1/models` 的 `models[].name`）。
+- 账号测试按绑定的协议测（§122）：核心按账号开放、绑定的协议给出顺序（`BuildTestRequestRequest.protocols`），插件取第一个有测试请求的；newapi、sub2api 用 `standard.Merge` 收集各份预设的全部测试（§122.3 的 OpenAI、Gemini 各协议，Messages `claude-haiku-4-5`），newapi 另有 systemone（`jev-latest`）；typesafe 发一条 `noul` 问题。账号测试不查价、不计费。
+
+### 119.2 服务的平台与协议
+
+| 账号类型 | 平台：端点 |
+|---|---|
+| newapi `apikey` | `openai`：全部（含 Responses WebSocket 与 §118 的生图两条）；`anthropic`：全部；`gemini`：`generate_content`、`stream_generate_content`（不含 `countTokens`，由核心本地估算，§88.2）；`typesafe`：全部（平台由 typesafe 插件声明，§119.3） |
+| sub2api `apikey` | `openai`、`anthropic`、`gemini`：全部 |
+| typesafe `apikey` | `typesafe`：`systemone` |
+
+- **同协议原样转发**，不做协议转换（跨平台转换按 §110 默认关闭）：请求体不改，OpenAI Chat 流式照 openai 预设补 `stream_options.include_usage`。每个协议用自己官方的鉴权头（路由级 `Auth`，§112.13）：OpenAI 系与 TypeSafe `Authorization: Bearer`，Anthropic `x-api-key`（没带 `anthropic-version` 时补默认值），Gemini 只用 `x-goog-api-key`。
+- 新建账号 `protocols` 为 `null`，上表的协议全部开放；上游 Key 只开通了部分协议时由运营方在协议绑定里收窄（§110.4）。上游不支持某协议时按该协议预设的失败分类（D20）：400 / 404 原样返回、5xx 换号并冷却、401 / 403 停用账号。
+- 能力：newapi、sub2api 是 `platform.adapter.v1`、`platform.websocket.v1`；typesafe 只有 `platform.adapter.v1`。
+
+### 119.3 typesafe 平台
+
+- 平台 `typesafe` 由 typesafe 插件声明，定义的唯一来源是 SDK 的 `providers/typesafe.Platform()`（清单与它逐字段相同，插件的清单测试钉住）：端点 `systemone` = `POST /v1/systemone`，协议 `typesafe.systemone`，只有非流式（`response.nonStream: json`），`errorFormat: openai`（网关自己的错误；上游错误原样透传），`billing: usage`，用量 `semantics: exclusive`、读 `usage.input_tokens`、`usage.output_tokens` 与上游模型 `model`。`passHeaders` 放行 `typesafe-danger-zone-images`、`typesafe-danger-zone-long-context`，值不改。钩子读 `state` 作提示词。
+- 平台 id `typesafe` 归 typesafe 插件所有（`reserved.go` 的 `reservedPlatforms`）。typesafe 插件没启用时这个平台和端点不存在：`/v1/systemone` 404，newapi 账号类型声明的 `typesafe` 平台每次注册表换代记一条警告。
+- 失败分类（`providers/typesafe.Policy`）：401、403 停用账号；429 按 `Retry-After` / `retry-after-ms` 冷却；529 与其它 5xx 短暂冷却并换号；400、413、415、422 原样返回、账号不动。
+- multipart 形式的请求在网关就以 400 拒绝（§25.9），只能用 JSON 里的 `assets[].data_base64`。
+- 价格不随插件带来：管理员按模型录 `per_token`（参考输入 $0.042 / 百万 token、输出 0）。经 newapi 账号转发 Jev 时按同一模型名计价。
+
+### 119.4 余额（§52）
+
+| 账号类型 | 请求（都在账号的 `base_url` 上，经账号代理，`updateInterval` 600 秒） | 结果 |
+|---|---|---|
+| newapi | `GET /api/usage/token/`（带 Bearer），只这一个请求 | 站点的额度点数 `data.total_available` 原样，**没有单位**；带 `user_quota.total_available` 时取两者较小；令牌不限额时取用户额度，没有用户额度时为不限。`code` 不为真为暂时失败 |
+| sub2api | `GET /v1/usage`（带 Bearer） | 金额依次读 `remaining`、`balance`、`quota.remaining`，`-1` 为不限；单位是 `unit` 原样，没有 `unit` 时没有单位；`isValid: false` 为认证被拒（D8）；三个都没有为暂时失败 |
+| typesafe | 不声明 `balance` | TypeSafe 没有余额接口，控制台不查不显示 |
+
+- **余额显示上游返回的数字和单位本身，不做任何换算**（所有者 2026-11-18：“上游返回多少我们就是多少”）：不折算美元、不换汇率，数字或单位不对也照样显示。New API 显示的是站点的额度点数，没有单位。
+
+- 核心先对请求的目标过主机规则与插件联网（§113），被拒就不发，记暂时失败，插件出口日志记 `denied`；不跟随重定向。401 / 403 记认证被拒（`auth_rejected:`），不改账号状态，不影响调度。余额只显示，不停用、不告警（D1）。
+
+### 119.5 权限与沙箱
+
+- 宿主权限：三个插件都有 `platform.register`（`accounts.credentials` 已由 §124 删除）；typesafe 另有 `gateway.endpoint`（`/v1/systemone`）。**都不申请 `net`、`fs.data`、`db.schema`**：插件不联网（请求由核心发出），在默认开启的文件沙箱（Landlock，§43.8）、seccomp 下运行；资源 64 MB、0.1 CPU、32 线程、64 个文件。
+- 清单里不写价格（§17）。
+
+### 119.6 内置方式
+
+- 三个都在 `BUILTIN_PLUGINS_INSTALL_ONLY`（§26.8）：随镜像安装、批准、标为内置、不能卸载，**默认不启用**。现有部署升级后什么都不发生；管理员在插件页启用后才能建这些账号（typesafe 启用后各节点多一个端点）。key `newapi`、`sub2api`、`typesafe` 与平台 id `typesafe` 保留给官方插件（`server/internal/plugin/install/reserved.go`，`TestReservedCoverRepo` 对照 `next/plugins`），手动上传的包要官方签名。
+- 未发布：不在 `plugins/released.json`，发布后按 `TestReleasedPluginsBumped` 的说明写进去。
+
+### 119.7 已知限制
+
+- 都没有对真实站点或真实 TypeSafe 账号验证过；站点接口形状来自官方文档与源码行为。
+- newapi：余额是站点的额度点数，不是钱，不同站点的点数不可比；令牌不限额且站点没开"允许查询用户额度"时显示不限，看不到用户真实余额；Gemini `countTokens` 不转发；New API 对"分组里没有这个模型"回的状态码未核实，回 403 时会误停用账号（先用协议绑定或故障策略 §58 处理）。
+- sub2api：上游 Key 能用哪些协议取决于它在站点上的分组，插件看不出来，要运营方按分组收窄协议；旧版只配了速率限制、没配总额度的 Key 在 `/v1/usage` 里没有金额字段，余额显示为暂时失败；`rate_limits` 不读。
+- 生图只收 JSON 请求体（§118.1）。typesafe 的转发要本平台启用 typesafe 插件；经 newapi 转发还要上游站点装了 TypeSafe 扩展。
+
+## 120. 附加用量（2026-11-18 整理；同日加入的“对象形式、模型取自应答”已删除，见 120.2；无迁移；Host API 仍是 10；插件协议仍是 2）
+
+附加用量（`UsageRules.additional`，`manifest.AdditionalUsageRule`）是一条请求里按请求中**声明并在调度前准入**的模型计价的用量：它不计进主用量（`usage_logs` 的 token 列是主用量），在 `usage_logs.billing_detail` 里单独保存和计价，记录的 `total_cost` 是主用量与全部附加用量之和（§97.6 的三个数都累加）。
+
+### 120.1 规则
+
+- `jsonPath` / `ssePath`（`sseEvent` 限定事件）指向一个数组，每次读到都是**完整快照**（后到的整体替换先到的，不累加）；其中 `typePath` 等于 `typeValue` 的元素各是一条附加用量，模型取元素里的 `modelPath`，`map` 读 token（`input_tokens`、`output_tokens` 必须有；值必须是不超过 10¹² 的非负整数）。例：Anthropic 的 `usage.iterations`（`compaction`、`advisor`）。
+- 模型必须是**调度前准入过的**：`usePrimaryModel` 取请求的主模型（账号映射后），或者请求里经 `request.modelReferences` 声明、同名的引用模型（准入：分组允许、账号服务该模型、调度前取价，没价格的引用模型在调度前 403，§17.3）。应答报了一个没有准入的模型，记录的 `BillingError` 为 `additional usage does not match an admitted model identity`，整条记录不结算（`failed`）。
+- 预扣：引用模型按估算的同一份 token 预扣（`estimatedAdditional`）；结算按实际读数。
+
+### 120.2 已删除：对象形式与按应答取价
+
+2026-11-18 曾加入附加用量的对象形式（`object`、`modelSources`、`defaultModel`），让 Responses 里生图工具的用量按应答回显、工具参数或默认名 `gpt-image-2` 的模型另计，没有价格时记 `additional_unpriced` 异常。所有者否掉了这种做法（§17.2：一条请求一个计价模型，绝不按上游返回取价，没有默认模型名），同日删除：清单字段与校验、`usagerules` 的对象读取与 `Acc.WithRequest`、`core.AdditionalUsage.ResponseModel`、网关的 `priceResponseModel` / `noteUnpriced`、`core.AnomalyAdditionalUnpriced`、WebSocket 每轮记附加用量、控制台使用记录卡片的附加用量列表与警示（列表 2026-11-19 按 §120.3 恢复，警示不恢复）。生图工具的 token 现在计入这条请求自己的用量（§118.10）。这些都没有发布过，没有存量数据要迁移。
+
+### 120.3 明细里的主用量与各项
+
+有附加用量或替代计费用量的记录，`billing_detail` 顶层的 `cost`、`list_cost`、`total_cost` 是主用量与全部分项之和；顶层的 `tier`、`rules`、`breakdown`、`rate_multiplier`、`inputs.pricing` 是主用量的。每一项在 `additional[i]` / `replacement[i]`（`usage.AdditionalBillingDetail`：`kind`、`model`、`price_id`、`expression_hash`、`free`、`billing_reason`）的 `detail` 里有它自己完整的明细（`breakdown`、`rate_multiplier`、`total_cost` 等），token 在 `inputs.additional[i]` / `inputs.replacement[i]` 的 `Tokens`，下标一一对应。免费项的 `detail` 是零值。
+
+主用量计价时（有附加用量、没有替代计费用量），顶层另存主用量自己的三个数（2026-11-19 起；之前结算的记录没有）：
+
+| 字段 | 含义 |
+|---|---|
+| `primary_cost` | 主用量的原价（全局价、倍率前），即主用量单独结算时的 `cost` |
+| `primary_list_cost` | 主用量的标价费用，只在主用量命中定价规则时写 |
+| `primary_total_cost` | 主用量实收，即主用量单独结算时的 `total_cost` |
+
+`primary_total_cost` 加上各项的 `detail.total_cost` 等于顶层 `total_cost`。主用量被替代计费用量替换（不计价）时、没有分项的记录（顶层就是主用量）都不写这三个字段。重试结算与对账走同一个 `priceComponents`，结果相同。三个都是金额，`/me/usage/:id` 照常返回。
+
+控制台使用记录详情：主用量公式以 `primary_total_cost` 结尾（历史记录没有时只显示算式不显示金额，不在前端相减），每一项显示它自己的公式，再列一行“主用量小计 + 各项金额 = 合计”；被替换时不显示主用量公式。替代计费用量的每一项按尝试轮次显示“第 N 轮”（每一轮的 `kind` 都是清单 attempts 规则的名字，主模型那一轮也是）。
+
+## 121. Codex 账号经适配服务 OpenAI 生图，同平台适配改为显式声明（2026-11-19，所有者要求“Codex 要兼容 OpenAI 的生图协议去转成 response 生图”；无迁移；清单加 `accountTypes[].platforms[].adapted`；插件协议仍是 2、Host API 仍是 10；设计见 [DESIGN-2026-11-18-CODEX-IMAGES.md](DESIGN-2026-11-18-CODEX-IMAGES.md) 第 3 节）
+
+客户端调 `POST /v1/images/generations`、`/v1/images/edits`（§118），codex 账号经核心转换成带 `image_generation` 工具的 Responses 请求出图，应答再转回 Images API 的形状。
+
+### 121.1 清单：同平台适配只对 `adapted` 列出的端点（`manifest.AccountPlatform.Adapted`）
+
+```json
+"platforms": [{
+  "platform": "openai",
+  "endpoints": ["responses", "responses_websocket"],
+  "adapted": {
+    "chat_completions":   {},
+    "images_generations": {"model": "gpt-6-luna"},
+    "images_edits":       {"model": "gpt-6-luna"}
+  },
+  "streamOnly": ["openai.responses"]
+}]
+```
+
+- 键是本平台的端点 id，值 `manifest.AdaptOptions`：`model` 是转换器在客户端模型以外要用的上游模型（生图转换里驱动工具调用的对话模型，121.3），不需要时不写。
+- **同平台适配只对列出的端点生效**（§83.3 改写）：类型在平台 P 的子集不含客户端端点时，只有 `adapted` 列出这个端点，才经转换由子集内的端点服务。判断只在 `core.BestConvertTarget` 一处（目标端点与客户端端点同平台时要求 `AccountPlatform.Adapts`），网关 `planRoutes`、账号模块 `servedEndpoints` / `typeProtocols` / `served_protocols`、count_tokens 的本地估算都经它。没列出的端点不服务，不做隐式适配的兼容（第三方插件依赖过隐式适配的要补声明）。
+- 第一方插件补上的声明：codex `codex_device`、`codex_oauth` 列 `chat_completions`、`images_generations`、`images_edits`；azure-openai `azure_deployment`（子集 chat、embeddings）列 `responses`（`/v1/responses` 转成 chat，此前靠隐式适配）。其他第一方类型在自己的平台上不写子集或子集已含所需端点，不受影响。
+- 清单检查（`sdk/manifest/check` `accountAdapted`）：键必须是该平台的端点（`unknown_endpoint`）、不在 `endpoints` 子集里（`native`；不写子集即全部端点都在子集里）、不是 WebSocket 或任务端点（`not_convertible`）；`model` 写了就必须是完整模型 ID（`invalid`）。离线打包解析不了外部平台时只查 `model`，安装时再查。
+- 注册表（`plugin/registry` `unservedAdapted`）：绑定类型时再查核心确实有“该端点协议 → 同平台子集内某端点协议”的转换（同一个 `BestConvertTarget`）；没有就不绑定这个类型，记 ERROR `account type skipped, the core converts no adapted endpoint to its endpoints`。注册表经 `registry.WithConverters` 拿到与网关、账号模块同一个转换器注册表（`app/phases.go`）。
+- 跨平台转换不变（§110，按账号、按模型开）。
+
+### 121.2 请求转换（`convert/openai_images_responses.go`）
+
+`openai.images → openai.responses`、`openai.images_edit → openai.responses` 两对，等级 good，独立实现（不经 IR），**不参与组合**（`compose` 跳过实现 `terminal` 的转换器：`image_generation` 工具只有 Responses 有，不会再转到 Anthropic、Gemini）。
+
+| Images API | Responses | 说明 |
+|---|---|---|
+| — | `model` | 驱动模型 `Options.AdaptModel`（121.3） |
+| `prompt` | `input[0]`：`{"type":"message","role":"user","content":[{"type":"input_text","text":prompt}]}` | 必须是字符串 |
+| `images[i]`（edits） | `input[0].content[1+i]`：`{"type":"input_image", …images[i] 的成员原样}` | `image_url` / `file_id` 原样搬 |
+| `mask`（edits） | `tools[0].input_image_mask` | 原样 |
+| — | `tools[0].type: "image_generation"`、`tools[0].action`（generations `generate`，edits `edit`）、`tool_choice: {"type":"image_generation"}` | 强制调用 |
+| `model` 及其余成员（`size`、`quality`、`background`、`output_format`、`output_compression`、`moderation`、`partial_images`、`input_fidelity`、未知成员……） | `tools[0]` 同名成员 | 原样，值不检查 |
+| `size`、`quality`、`background` 有值时 | `instructions`：`Generate the image with the image_generation tool using size …, quality …, background ….`（只列有的，按这个顺序） | Codex 后端只按 `instructions` 定尺寸；都没有时不写 |
+| `stream` | `stream` | 只流式的类型照常由网关强制为 `true`（§83.1） |
+| `n` | — | 缺省、`null` 或 `1` 照常；其他值 `RequestError`（400 `unsupported_conversion`，`n: only one image per request`） |
+| `response_format` | — | 缺省、`null` 或 `b64_json` 照常；其他值（`url`）400：上游只给 base64，网关不存图 |
+| `user`、`safety_identifier`、`style` | — | 丢弃，记 `other` 损失（`strict` 策略的账号拒绝，§88.4） |
+
+不写 `store`、`parallel_tool_calls`、`reasoning`：由插件和上游决定（codex 插件写 `store: false`）。
+
+### 121.3 驱动模型
+
+- 顶层 `model` 是上游认的对话模型，来自账号类型 `adapted` 选项的 `model`（codex 为 `gpt-6-luna`，插件常量 `ImageChatModel`）。网关在路由上记 `typeRoute.adaptModel`（只在本平台路由上取），`prepareRoute` 在一次请求共享的 `convert.Options` 拷贝上填 `AdaptModel` 再 `Prepare`。
+- 声明了适配却没写 `model`：生图转换器 `Prepare` 返回非 `RequestError` 的错误，这个类型不服务这次请求（`refuseConversion` 记 WARN；全部候选都这样时 400 `unsupported_conversion`）。
+- 驱动模型不经分组白名单、账号模型列表、协议绑定，不映射，不参与计价，不需要价格。账号要换驱动模型时用参数覆盖（§84，条件 `tools.0.type == image_generation`，改 `model`），不另加界面。
+
+### 121.4 模型：客户端模型在工具里
+
+- `convert.ModelLocator`（可选接口，`ModelPath() string`）：转换器把客户端模型放在上游端点 `modelPath` 以外的地方时实现它。生图转换器返回 `tools.0.model`；`addRoute` 在转换路由上用它作 `typeRoute.modelPath`，账号模型映射（`upstreamBody`）因此写进工具，顶层驱动模型不被覆盖。其他转换器不实现，行为不变。
+- 上游模型（所有者 2026-11-19：“上游返回什么就是什么”）：`upstream_model` 记上游应答回显的生图模型（Codex 后端为 `gpt-image-2-codex`）。`convert.ResponseModelLocator`（可选接口，`ResponseModelPaths() (json, sse string)`）说应答里这个模型在哪：生图转换器返回 `tools.0.model`、`response.tools.0.model`。`addRoute` 在转换路由上把上游端点用量规则里 `model` 的路径换成这两个（只换这一项，其余规则与覆盖链不变，规则复制后改，不动平台的），并标记路由 `echoModel`：读到的回显模型覆盖网关按账号映射写的上游模型（`forward`；回显与客户端请求的模型同名时也记回显）。codex 插件在 `meta.client_protocol` 为 `openai.images`、`openai.images_edit` 时不上报上游模型（`UpstreamRequest.upstream_model` 为空），否则请求体顶层的驱动模型会覆盖回显（`dispatch.go` 的 `send`）。应答没有回显时按既有规则落下：账号映射过客户端模型时是映射后的名字，没映射时为空。回显模型只进使用记录与统计，不进任何取价路径（121.6）。
+
+### 121.5 用量：上游 Responses 端点自己的规则
+
+转换路由照常用上游 `openai.responses` 端点的用量规则（§13 的覆盖链，账号类型对 `openai.responses` 的覆盖同样生效），只有 `model` 的路径按 121.4 换成回显的生图模型。这份规则本来就把生图工具的用量加进来（§118.10）：`input_tokens = usage.input_tokens + tool_usage.image_gen.input_tokens`、`output_tokens` 同理、`image_input_tokens` / `image_output_tokens` 取 `tool_usage.image_gen.*_details.image_tokens`、缓存读写取 `usage`，SSE 读 `response.completed` 与 `response.incomplete`。非流式客户端经强制流式聚合后按 `json` 规则读。
+
+设计稿曾让生图端点另声明一份完整的 `convertedUsage` 规则；它取代整条覆盖链、会绕过账号类型的覆盖，实现后审查删除（2026-11-19），没有发布过。现在只换 `model` 一项（121.4）。
+
+### 121.6 计价与使用记录
+
+- 按 §17.2：调度前、预扣、结算都按客户端请求的模型（`gpt-image-2`）的价格；`gpt-image-2-codex`、驱动模型都不参与计价、不需要价格。客户端写别的生图模型名时它要在分组白名单与账号模型列表里、有自己的价格，并按它计价（Codex 后端对任何名字都按 `gpt-image-2-codex` 出图）。
+- 一条记录：`protocol = openai.images`（或 `openai.images_edit`）、`upstream_protocol = openai.responses`、`conversion.hops = [客户端协议, openai.responses]`、`model = gpt-image-2`、`upstream_model = gpt-image-2-codex`（回显）；token 列是生图与对话两部分之和；没有附加项。算例（`p*5 + cr*1.25 + img*8 + img_o*30 + c*30`）：对话 2235 / 69、生图输入 56、图片输出 343 → `p = 2291`、`img_o = 343`、`c = 69` → 23 815 微美元。
+- 应答给客户端的 `usage` 只是生图部分（121.7），扣费里的对话 token 在使用记录的 token 列里。
+
+### 121.7 应答转换
+
+**非流式**：`{"created": response.created_at, "background", "output_format", "quality", "size"（第一张图项的值）, "data": [{"b64_json": result, "revised_prompt"}…], "usage": tool_usage.image_gen 原样（没有时不写）}`。`data` 按 `output` 顺序取每个带 `result` 的 `image_generation_call`（上游给两张就是两项）；其余输出项（assistant 的 `message`、失败的生图项等）不进应答，记应答损失 `response.output[i]`（`other`）。一张图都没有时 `data` 为 `[]`，不写 `background` 等四项。
+
+**流式**（不发 `[DONE]`，每个事件带 `event:` 行；edits 把 `image_generation.` 换成 `image_edit.`）：
+
+| 上游事件 | 客户端事件 |
+|---|---|
+| `response.created` | 不输出，记 `created_at` |
+| `response.image_generation_call.partial_image` | `image_generation.partial_image`：`b64_json`（`partial_image_b64`）、`partial_image_index`、`background`、`output_format`、`quality`、`size`、`created_at`（Codex 后端实测不发） |
+| `response.output_item.done` | 暂存输出项（Codex 后端终态 `output` 为 `[]`） |
+| `response.completed` / `.incomplete` | 终态 `output` 不空时用它，否则用暂存的项：每张图一个 `image_generation.completed`（`b64_json`、`background`、`output_format`、`quality`、`size`、`created_at`），最后一个带 `usage`；没有图时什么都不发，流照常结束（121.8） |
+| `response.failed`、`error` | `error`：`{"type":"error","error":<上游的 error 对象>}` |
+| 其它 | 不输出 |
+
+没有终态就结束的流是转换失败（`Flush` 报错，§12）。
+
+### 121.8 错误：以上游的结果为准
+
+所有者 2026-11-19：“上游返回什么就是什么，成功就是成功，以上游返回状态为主。”核心不自己把上游的成功应答改成错误：
+
+- 上游这次 Responses 调用成功完成（HTTP 2xx，终态 `response.completed` 或 `response.incomplete`，或强制流式聚合出的等价结果）时，请求就是成功：客户端得到 200 和生图接口的形状，有几张图给几张，一张都没有时非流式 `data` 为 `[]`、流式正常结束而没有 `completed` 事件；失败的生图项（`status: failed`，如审核拦截）、assistant 的文字只记应答损失。使用记录 `success = true`、状态码取上游的，用量照读照扣，不计入账号失败。
+- 上游自己报的失败照现有路径处理，不经改写：HTTP 错误原样交给客户端、按故障策略处理；流里的 `response.failed`、`error` 事件——非流式由强制流式聚合处理（§83.1），流式转成客户端的 `error` 事件 `{"type":"error","error":<上游的 error 对象>}`。
+- 只有请求侧仍由核心拒绝：`n` ≠ 1、`response_format` 不是 `b64_json` 时 `RequestError`（400 `unsupported_conversion`，121.2），这是不能表达的客户端请求，不是改写上游的回答。
+- 2026-11-19 曾实现的“没有图回 502 `no_image_generated`、生图项失败回 400 `image_generation_user_error`”（`convert.ClientError`、`StreamFailure`）按这条决定删除，没有发布过。
+
+### 121.9 协议绑定与管理员要做什么
+
+- 声明了适配的端点对该类型是本平台协议（`via: adapted`），`protocols` 为 `null` 的 codex 账号升级后自动开放 `openai.images`、`openai.images_edit`（§110.2）；`/account-types` 的 `endpoints` 多出两项 `native: false`，控制台不用改。
+- 实际调度还要过模型白名单与价格：给 codex 账号的模型列表加 `gpt-image-2`（codex 清单的 `defaultModels` 只加了这一个，新账号预填；列表为空的账号不用加）、给 `gpt-image-2` 录 §118.6 的表达式价格；建议在“模型的协议限定”里把 `gpt-image-2` 限定到两个生图协议。不要把 2.5、2.6 等名字加进 codex 账号（上游只有一个生图模型，别的名字只是别名）。
+- 不想让某个 codex 账号出图：在“本平台协议”里取消这两个协议。
+- 账号测试（§122）：`openai.images` 是 `via: adapted` 的协议，测试带了模型名时纳入（排在原生之后）；codex 插件按 `protocols` 组生图测试请求（§122.3）。
+
+### 121.10 契约与版本
+
+- 改了 `sdk/manifest`（`AccountPlatform.Adapted`、`AdaptOptions`、`AccountPlatform.Adapts` 与检查），没有改 proto、Host API、迁移、`sdk/platforms`。
+- 插件线协议 `sdk/protocol.ProtocolVersion` 仍是 2：同平台适配从隐式改为显式是插件契约的不兼容变化（没声明 `adapted` 的 codex 包不再服务 chat），但它与协议 2 本身同属尚未发布的 0.1.304 批次，没有按协议 2 构建、已经发布的插件包会受影响；codex 仍是 0.2.0（同一批次，`hostCompat >=0.1.304 <0.2.0` 不变），azure-openai 仍是首发的 0.1.0。
+
+### 121.11 测试
+
+- 转换器：黄金样例 `convert/testdata/golden/openai.images~openai.responses/*`、`openai.images_edit~openai.responses/*`（字段映射与 `instructions`、`n` 与 `response_format` 拒绝、损失、一张与两张图、有图同时有失败项、没有用量、partial、只有文字与生图项失败（都是空 `data`）、流中 `response.failed` 与 `error` 事件），覆盖测试登记这两对的样例表（`goldenImagesRequired`）；`TestImagesPairs`（不组合、模型位置）、`TestImagesNeedAdaptModel`。
+- 清单：`check/adapted_test.go`（`adapted` 每个错误码、`Adapts`）；注册表 `TestAdaptedNeedsConverter`。
+- 网关：`gateway/codex_images_test.go`（只流式的类型服务 generations、edits 的非流式与流式，上游请求体、记录的协议、模型、上游模型、token、价格与 hops；账号映射写进工具，上游模型取回显、没回显时落回映射名或空；回显模型有价格也不用于取价；只有文字时 200、空 `data` 或没有 `completed` 事件，记成功、照扣；没写驱动模型时不服务）；`TestSamePlatformConversionScope` 加“没声明适配不服务 chat”；账号模块 `TestServedEndpointsSamePlatformConversion`、`TestAccountTestProtocolsAdapted`。
+- codex 插件：清单测试钉住 `adapted` 与唯一的生图默认模型；`TestExecuteImagesReportNoModel`；`TestBuildTestRequestByProtocol`。azure-openai 清单测试钉住 `azure_deployment` 的 `adapted`。
+- e2e 与测试实例实测留给集成包。
+
+## 122. 账号测试按绑定的协议测（2026-11-19，所有者同意“测试模型的时候就能根据模型协议的绑定去调用对应的协议进行深度测试”；迁移 0115；清单加端点字段 `test`；插件协议仍是 2、Host API 仍是 10；设计见 [DESIGN-2026-11-18-CODEX-IMAGES.md](DESIGN-2026-11-18-CODEX-IMAGES.md) 3.11；同一设计里 Codex 账号经适配服务生图的部分见 §121）
+
+此前 `POST /accounts/:id/test` 已把账号对被测模型开放的协议交给插件（§15.9 的 `protocols`），但预设各只有一个测试请求：只绑了 Responses、Embeddings 或生图协议的模型被拿去测 chat，误报不可用。本节补齐测试请求，并规定哪些协议可以拿来测、按什么顺序。
+
+### 122.1 清单：端点的 `test`
+
+`platforms[].endpoints[].test`（`manifest.Endpoint.Test`）说账号测试什么时候可以用这个端点的协议：
+
+| 值 | 含义 |
+|---|---|
+| 不写 | 普通端点：账号开放就可以测 |
+| `explicit` | 测试要花真钱（生成一张图）：只在请求**带了模型名**（`model`）时才用。控制台的单独测试、“测试所选”“测试全部”都逐个带模型名调用，所以绑了生图协议的模型都会按生图协议测、真实出图（2026-11-19 所有者：“批量也测试啊，又不影响。”）；只有不带模型名的默认测试（账号列表的“批量测试”、“测试账号”）不会选这个协议 |
+| `never` | 测试发不出来（编辑图片要输入图片）：任何时候都不用 |
+
+其他值清单检查报 `endpoints[i].test` `invalid`（`sdk/manifest/check`）。内置 `openai` 平台的 `images_generations` 写 `explicit`、`images_edits` 写 `never`，其余端点不写。
+
+### 122.2 核心：交给插件的协议（`server/internal/account/testreq.go`）
+
+- 候选协议照 §15.9：账号在本平台上原生（`via: native`）开放的协议，按类型 `platforms` 与平台端点的声明顺序，去掉 WebSocket 与计数协议；另外去掉 `test: never` 的协议，请求没带 `model` 时再去掉 `test: explicit` 的协议。同一协议有几个端点时，任一端点这样标就算。经适配（`via: adapted`，§121.1）的协议排在原生之后纳入，由插件自己组那个协议经转换后的请求（codex 的生图测试，122.3）；跨平台转换的协议不纳入：测试请求不经网关的转换层。
+- 测某个模型（调用方给的，或下一条选出的，映射之前）时只留账号协议绑定里服务它的协议（`ProtocolRules.Serves`）；这个模型在 `model_protocols` 里有条目（按名字，否则“其他模型”的条目）时，按**条目里写的协议顺序**排（`ProtocolRules.ModelProtocols`），否则按上一条的顺序。所以要测一个生图模型，管理员把它限定到生图协议，带它的名字测（单独测试、测试所选、测试全部都带）时列表第一个就是 `openai.images`。带名字测一个**没有**在 `model_protocols` 里限定协议的生图模型时，会按端点顺序用排在前面的协议（通常是对话）去测；要测生图，必须先把它限定到生图协议。
+- 被测模型（调用方给的）没有剩下任何可测的协议时（例如只开了 `never` 的编辑图片，或绑的协议账号没有开放），核心**不调用插件、不发上游**，回 400 `no_testable_protocol`（“这个模型在这个账号上没有可测试的协议”，`details.model`），`last_test` 记为失败、`error_source` 为 `gateway`。不会退回插件的默认测试请求：拿对话请求测一个生图模型，成败都说明不了问题。
+- 没带 `model` 时的默认模型：候选模型照 §15.9（账号模型列表，没有列表时是映射里的请求模型按字典序），取第一个**去掉上面这些协议后仍有协议可测**的。例如列表第一个模型只开了生图协议，批量测试就跳过它测下一个。有候选模型而都没有可测协议时，同样回 400 `no_testable_protocol`（`details.model` 为空串）；只有模型列表与映射都为空时，才交空模型和全部候选协议，由插件选默认模型（§15.9）；这时候选协议也为空（账号只开放了 `explicit`、`never` 的协议），同样回 400 `no_testable_protocol`，不交给插件的默认测试。
+
+### 122.3 插件：按协议的测试请求
+
+插件取 `protocols` 里第一个它有测试请求的协议，在 `BuildTestRequestResponse.usage_protocol` 报实际用的（§15.9 不变）。SDK 预设（`sdk/pluginsdk/providers`，`standard.Type.Tests`）的测试请求，都用该协议下最小、最便宜的请求体：
+
+| 预设 | 协议 | 测试请求体 | 不点名时的模型 |
+|---|---|---|---|
+| openai | `openai.chat`（`Type.Test`） | `{"model":m,"max_tokens":1,"messages":[{"role":"user","content":"ping"}]}` | `gpt-4o-mini` |
+| openai | `openai.responses` | `{"model":m,"input":"ping","max_output_tokens":16}`（16 是官方允许的最小值） | `gpt-4o-mini` |
+| openai | `openai.embeddings` | `{"model":m,"input":"ping"}` | `text-embedding-3-small` |
+| openai | `openai.images` | `{"model":m,"prompt":"a small white dot","n":1,"size":"1024x1024","quality":"low"}` | `gpt-image-1-mini`（实际只在请求带了模型名时用到，这时用的是那个模型名）。`size: "1024x1024"`、`quality: "low"` 是 gpt-image 系列的取值，只适用于它们；DALL·E 等其他生图模型不接受这组参数，测试会失败 |
+| gemini | `gemini.generate`（`Type.Test`） | 一个 token 的 generateContent | `gemini-2.5-flash-lite` |
+| gemini | `gemini.stream_generate` | 同一个请求体，走 `streamGenerateContent?alt=sse` | 同上 |
+
+- 没有测试请求的协议（`openai.images_edit` 等）跳过，看下一个；列表不空而都没有测试请求时回 `FailedPrecondition`，**不退回** `Type.Test`；只有空列表（没有偏好）才用 `Type.Test`。
+- 合并多份预设的中转站类型（`standard.Merge`，newapi、sub2api 插件）收集各份的全部测试；azure-openai 只保留它有路由的协议的测试（它不服务 Responses 时不会用 Responses 的测试）。
+- 自己写 `BuildTestRequest` 的插件不受影响。codex 取 `protocols` 里第一个 `openai.responses`、`openai.chat`（经适配，测它转成的 Responses）或 `openai.images`（经适配）：前两者发流式 Responses `ping`；`openai.images` 按 §121.2 的形状组一个最小生图请求——顶层驱动模型 `ImageChatModel`（与清单 `adapted` 里写的同一个）、`tools: [{"type":"image_generation","model":m,"output_format":"png","quality":"low"}]`、强制工具、一条用户消息（Codex 后端要求 `input` 是数组），`usage_protocol` 报 `openai.responses`。列表为空时（没有偏好）发 `ping`；列表不空而没有这三个协议时回 `FailedPrecondition`，与 `standard` 库相同。
+
+### 122.4 结果与最近一次测试
+
+- TestResult 加 `protocol`：插件报的 `usage_protocol`（去首尾空白）；插件没报或构造请求失败时省略。
+- 迁移 0115：`accounts` 加可空列 `last_test_protocol text`（只加列，旧核心跑在新表上不受影响）；每次测试写入，`last_test` 加 `protocol`（未知时省略，迁移之前的记录没有）。
+- 控制台：模型测试弹窗每个模型的结果旁显示所测协议，展开的详情里有“测试协议”；账号列表“最近测试”的提示里同样显示。
+- 已知限制：测试只读应答的前 8 KiB（`maxTestBody`），生图应答的用量在一张 base64 图之后，生图测试的 `usage` 一般为空；状态码与正文前缀足以判断可用，不为此改读取长度。
+
+## 123. 已有账号的出站一律按账号取客户端（2026-11-19，所有者要求“每次都保证最新的代理就行了呀。获取 HTTP 客户端的时候，直接就绑定一个账号呗，用这个账号对应的代理”“用已保存的代理，那就正确应用”“代理配置了就走，没配置就不走，配置了就不要泄露 IP”；无迁移；Host API、插件协议不变）
+
+账号存在以后，核心代表它发出的每个请求都按账号**当前保存的**代理取 HTTP 客户端，调用方不再自己拿着一个 `proxy_id` 传来传去。账号包以外只有一个入口：`core.AccountDirectory.Egress(ctx, accountID) (core.Egress, error)`，调用方给的是“哪个账号”，返回该账号代理的客户端（没有代理是直连客户端）、`Proxied`（SSRF 检查要用：经代理时本机不解析上游域名，§43.4）和 `Proxy`（§124 起：这个客户端走的代理的 id、地址、用户名和密码，与客户端出自代理服务的同一个缓存条目；直连或拿不到客户端时为 nil）。
+
+- 实现：账号包里只有一个由代理 id 构造出口的函数（`account.Service.proxyEgress`，取代理服务缓存的客户端 `ProxyDirectory.HTTPClient`），两种入口共用：
+  - `Egress(ctx, id)`：读 `Load` 的账号快照，再交给 `proxyEgress`。快照在本节点改账号时立即作废；其他节点收到 `account:changed`（`PATCH /accounts/:id` 广播）时作废，bus 断线重连后也整份作废（重连期间的消息可能丢了）；最长 30 秒（`snapshotTTL`）兜底。快照命中时不查数据库。
+  - 账号包里已经握着刚从数据库读出的账号行的路径（账号测试、编辑页“获取模型”（`POST /accounts/:id/models/fetch`）、额度查询、余额、凭证续期、`SendAccountRequest`）直接用这一行的 `proxy_id` 调 `proxyEgress`，不读快照：凭据与代理出自同一行，也不受其他节点丢消息的影响，且不多发查询（`SendAccountRequest` 在读凭据的同一条 SELECT 里带上 `proxy_id`）。
+  - 账号的代理只能经账号接口改（代理在用时不能删除，`proxy_in_use`）。代理本身的改动（地址、停用）照旧由代理服务的客户端缓存按 `updated_at` 复查。
+- 语义不变：账号没绑代理就直连（不强制选代理）；代理停用、不存在时报错，**绝不退回直连**。`Proxied` 在拿不到客户端时也照实给出，请求随之失败；拿不到客户端时先报错，不再做 SSRF 检查（不为一个发不出的请求在本机解析域名）。
+- 走 `Egress` 的路径：
+  - 网关：每次 `Execute` 调用（一次尝试、WebSocket 的一轮）开始时取一次，中继、这次调用里的取回（`pluginsdk.Fetch`）和它们的 SSRF 检查都用这一份，保证检查与发送一致；WebSocket 的握手同样。下一次请求（新的尝试）重新取。一次尝试里网关先 `Load` 账号（换号策略据此判断代理在选号之后是否变了，`account proxy changed during selection`），开始 `Execute` 时再取 `Egress`，两处各读一次快照：通常是同一份；两次读之间账号恰好改了代理、快照被作废时，换号策略看到的是旧代理，请求按新代理发出，不会经账号已经不用的代理发出。
+  - `Monitor`（用量对账、任务查询）：每次取回各取一次。
+  - 网关和对账循环不再依赖 `ProxyDirectory`（`gateway.Deps.Proxies`、`usage.ReconcileDeps.Proxies` 已删）。
+- 已存在的账号**一律用已保存的代理**：编辑页上改了代理但还没保存时，“获取模型”、测试等仍走已保存的代理（表单里未保存的选择只用于建账号之前，§117）。重新授权（编辑页里的原生表单）不经账号，走 §117 的票据，即表单当前的选择。
+- 改代理时已经在进行的请求：
+  - 进行中的 HTTP / SSE 流用已建立的连接走完，下一次请求才用新代理。
+  - 已建立的 WebSocket 上游连接**不断开、不重连**（所有者决定：“不要”断）：它保持建立时的出口直到会话结束。原来直连、后来配了代理，老连接继续直连；换了代理，老连接继续走旧代理。同一会话后续各轮里 `Execute` 的取回（`pluginsdk.Fetch`）按每轮开始时的代理走，所以同一轮里上游连接和取回的出口可能不同；这些轮次交给插件的 `Account.proxy` 是上游连接的代理（§124.2）。新建的 WebSocket 会话按新代理。
+- 测试：`gateway/egress_test.go`（同一账号连发三次，代理改成另一个、再去掉，中继依次走 7、8、直连）、`usage/poll_test.go` `TestPollHTTPFollowsTheAccountsCurrentProxy`（两次 Monitor 取回之间改代理，第二次走新代理）、`account/egress_test.go` `TestEgressFollowsTheAccountsSavedProxy`（真实账号服务：经 `PATCH /accounts/:id` 改代理后 `Egress` 立刻给出新代理的客户端，去掉代理后直连；另一个节点的 bus 丢了 `account:changed` 时仍是快照里的旧代理，bus 重连后即是新代理）、`account/refresh_test.go` `TestCredentialRefreshFollowsTheAccountsProxy`（经控制台改代理后，下一次续期经新代理）、`account/balance_test.go`（停用的代理是传输错误，不直连）。
+
+## 124. 插件按归属收到账号的全部信息（2026-11-19，所有者要求“调度的那个账号 让插件执行，就给哪个账号”“还是要通过核心的 http /socks 客户端去连接，插件严禁联网”“旧的两个权限和旧接口：移除”；迁移 0116；插件协议仍是 2、Host API 仍是 10（都属于未发布的 0.1.304 批次）；设计见 [DESIGN-2026-11-19-PLUGIN-ACCOUNT-CONTEXT.md](DESIGN-2026-11-19-PLUGIN-ACCOUNT-CONTEXT.md)）
+
+### 124.1 规则
+
+- 核心把哪个账号的请求交给插件执行，就把这个账号的全部信息给这个插件：属性、设置、解密的凭证，以及代理的地址、用户名和密码（`Account.proxy`）。收到的插件就是声明该账号类型的插件（“归属”：账号的 `plugin_key` 等于这个插件）。
+- 这次的“全部信息”只在已有的 `Account` 上加代理详情，不扩其它字段。
+- 没有宿主授权：`accounts.credentials`、`accounts.read` 删除，声明账号类型只需要 `platform.adapter.v1` 和 `platform.register`。清单里还写着这两个授权的包按旧契约拒绝（`check.CodeOutdatedContract`，上传、安装、加载同一条 `protocol.OutdatedContractMessage`，§112.10）。迁移 0116 删除 `plugin_permission_grants`、`plugin_staged_grants` 里这两个授权的全部行（含撤销状态和暂存的）。
+- **插件严禁联网**：代理信息只是数据。账号的请求只经核心的客户端发出（`RelayUpstream`；`Execute`/`Monitor` 里的 `Fetch`；路由调用里带代理票据的 `Fetch`；`SendAccountRequest`；核心代发的测试、模型、额度、续期、余额请求），核心强制账号代理，配了代理绝不直连。任何平台插件都不申请 `net`，出口隧道拒绝它们的连接（§113.3）。SDK 不提供把代理变成传输或拨号器的函数。
+
+### 124.2 `Account.proxy`
+
+- `common.proto`：`Account.proxy = 8`（`AccountProxy{id, protocol, host, port, username, password}`），账号没有代理时不设。`AccountProperties.proxy_id`（字段 9）删除，改为 `reserved`：`Account.proxy.id` 是唯一来源。
+- 插件看到的代理就是这次出站用的代理：核心先取出口（`core.Egress`，§123，`Proxy` 与客户端出自同一个缓存条目），再用 `core.(*Account).PluginAccount(platform, eg.Proxy)` 构造 `Account`（转换只有 `core.PluginProxy` 一处）。各路径：
+  - 网关每次尝试、开新上游连接的 WebSocket 轮次（首轮、重连）：开始时取一次出口，同一次调用里的 `Execute`、中继（握手）、取回、`ClassifyError` 和用量观察都用这一份。**取不到出口时不调用 `Execute`**，按出口失败的同一结果失败转移：请求本来发不出去，插件也不会拿到一个缺了代理的账号。
+  - WebSocket 不开新连接的轮次：这一轮的帧经会话已建立的上游连接发出，已建立的连接照 §123 不断开、不重连，所以交给插件的 `Account` 是建连时的那份（`Account.proxy` 是上游连接实际走的代理，建连时直连就为空），会话期间不变。这一轮里 `Execute` 的取回仍按这一轮开始时取到的出口走（账号**当前保存**的代理，§123），取不到时这一轮照旧失败。所以管理员在会话中途改了代理时，`Account.proxy`（连接的代理）与这一轮取回的出口可以不同；新会话三者都按新代理。
+  - `Monitor`：取任务账号时取一次出口放进 `Account`，取不到时推迟（同冷却）；调用里的每次取回仍各取一次出口（§123），两者之间改了代理时插件看到的是调用开始时的代理，请求按新代理发出。
+  - 账号包里握着实时行的路径（测试、编辑页拉模型、额度、余额、续期、`GetAccount`）：先用这一行的 `proxy_id` 取出口，再构造 `Account`，发送用同一份出口。取不到出口时不调用插件：测试记失败（原因写在结果里，`error_source` 为 gateway）；拉模型返回错误；额度、续期记失败（续期按 transient）；余额快照记 `transient: <原因>`；`GetAccount` 返回 `UNAVAILABLE`。`SendAccountRequest` 照旧把代理不可用作为 `transport_error` 交还（它不交出账号）。
+  - 建账号之前按表单拉模型（`POST /account-types/:plugin_key/:type/models/fetch`）：所有者决定“代理这时候已经填进去了就用 没填进去就不用”。表单填了代理（`proxy_id` 或粘贴的 `proxy_url`）时请求经它发出，`Account.proxy` 就是这条代理（`account.Service.egressClient` 给出的 `Egress.Proxy`，同样经 `core.PluginProxy` 转换；粘贴的代理串不入库，`id` 为 0）；没填时直连，`Account.proxy` 不设。填了的代理取不到（停用、不存在）时报错，不直连、不调用插件。授权票据（§117）的路由调用不交 `Account`，插件仍看不到票据里的代理。
+- 用量观察（`ExtractUsageRequest.account`）就是这次 `Execute` 收到的 `Account`（含凭证和代理）：观察只交回执行 `Execute` 的插件。
+- 日志：`core.ProxySpec`、`core.ProxyRef` 的 `String`、`GoString`、`LogValue` 不含密码；核心不打印 `pluginv1.Account`（与凭证同一条约定）。插件用 `pluginsdk.AccountProxyOf(acc)` 读代理，它的 `String`、`GoString`、`Format`、`LogValue` 不含密码；不要打印 `Account` 或 `AccountProxy` 消息本身（protobuf-go 的 `String()` 不支持 `debug_redact`）。
+- 热路径：每次尝试多带一个 `AccountProxy`；缓存命中时不查库、不解密；网关路径照旧不逐条审计（§26.6：随请求下发的不审计，主动读取的审计）。
+
+### 124.3 HostService
+
+- `GetAccount{account_id}` → `{account}`：本插件账号类型的一个账号，与平台调用收到的相同（属性、设置、解密的凭证、代理）。不检查授权；参数非正 `INVALID_ARGUMENT`；别人的账号、已删除的、不存在的一律 `NOT_FOUND`；代理拿不到 `UNAVAILABLE`。每次成功调用先写 `audit_logs`（action `plugin.account.read`，target `account`/`<id>`，`user_id` 为空，detail 只有 `plugin_key`、`account_type`、`account_name`、`via: "host.GetAccount"`，不记任何值），写不进去调用失败。历史的 `plugin.account.credentials.read` 行保留。SDK：`Host.Account(ctx, id) (*pluginv1.Account, error)`；假核心 `pluginsdktest.FakeHost.Accounts`（不在表里 `NOT_FOUND`）、`AccountReads`。
+- `GetAccountCredentials` 和 SDK 的 `Host.AccountCredentials`、`AccountCredentials` 删除，不留兼容。
+- `ListAccounts`、`SendAccountRequest`、`AccountScopeCheck` 不检查授权。前两个按 `plugin_key` 在 SQL 里过滤，不声明账号类型的插件得到空列表 / `NOT_FOUND`。`AccountScopeCheck` 不交出账号的任何字段，只回答调用者（必须是正在处理的请求的调用者）能对哪些账号做某个动作，和 `AuthzCheck` 问本插件自己的权限一样不需要授权。
+- 账号类型注册（`registry.addAccountTypes`）不再看授权。
+
+### 124.4 如实写明的边界
+
+- “只有声明者拿得到”只对凭证明文和代理密码成立：持有 `db.schema` 的插件用核心的数据库用户，能读 `accounts`、`proxies` 的全部非加密列，包括代理的 host、port、username（§115）。安装提示不暗示“其他插件看不到账号信息”。
+- `GetEnvironment` 不检查授权（§74.3“always granted”），返回任意分组和账号的数值环境变量，不存在的返回 `{}`。
+- 安装审核对声明账号类型的包固定显示（`install.requestAccessStatement`）：插件会收到它声明的账号类型下账号的全部信息（设置、解密的凭证、代理的地址、用户名和密码）以及经这些账号发出的每个请求的完整内容和与响应有关的数据，并决定请求发往哪个地址；请求都由核心发出，插件自己不联网；不是权限，不能取消。不按信任级别加限制。
+
+### 124.5 插件与升级
+
+- 12 个声明账号类型的插件（anthropic、azure-openai、bedrock、codex、gemini、newapi、openai、relay、sub2api、typesafe、vertex、volcengine）删掉 `accounts.credentials`，volcengine 另删 `accounts.read`；volcengine 素材库与 codex 重置次数改用 `GetAccount`。codex 删掉没有写入方的 `settingsFields: ["proxy_id"]`（账号的代理是 `accounts.proxy_id` 列）。版本号在这一批未发布的版本上继续累计，`hostCompat` 不动。
+- 0.1.304 本来就是停机、核心和全部插件一起换（§112.11）。按协议 2 构建、调用过 `GetAccountCredentials` 的测试包（只有 volcengine、codex）在新核心上会得到 `UNIMPLEMENTED`，重新装这一批的包即可。
+- 测试：`account/plugins_test.go`（归属、审计、审计失败、代理停用）、`account/testreq_test.go` `TestAccountTestCarriesTheProxy`、`account/models_test.go` `TestTypeModelsFetchCarriesTheFormProxy`（建账号前拉模型：没填直连且为空、已有代理、粘贴的代理串、代理停用不调插件）、`account/refresh_test.go`、`account/balance_test.go`（代理停用时不调 Build）、`gateway/egress_test.go`（每次 `Execute` 的 `Account.proxy` 依次是 7、8、空；`TestNoExecuteWithoutEgress`；`TestWebSocketTurnsKeepTheConnectionsProxy`：建连于代理 7 或直连、改到 8 后下一轮插件仍收到 7 或空、帧经原连接、这一轮的出口是 8，重连后都是 8）、`usage/poll_test.go`（`Monitor` 的账号带代理）、`core/proxyspec_test.go` 与 `pluginsdk/accountproxy_test.go`（遮蔽）、`grpcruntime/host_accounts_internal_test.go`、`check/retired_test.go`、`plugin/api/outdated_contract_test.go`、`migrations` `TestMigration0116DropsAccountGrants`；e2e AC43（`ac43_plugin_account_context_test.go`：volcengine 账号经 mock 代理读上游素材组，审计行不含值，素材请求经代理；带旧授权的包上传被拒）与 AC03（不再出现这两个授予）。
+
+## 125. 删除 growth 插件（2026-11-19，所有者同意删除；迁移 0117，核心 0.1.304）
+
+插件 `growth`（“用户增长”：邀请返利与每日签到，目录 `next/plugins/growth`，非内置的官方插件，未发布的 0.2.2，线上记录的版本 0.2.1）整体删除，不留兼容。它在 2026-10-05 随 claude-oauth、codex-oauth 一起合入，没有需求记录；仓库记录显示线上没有安装过（0.1.288 时没有装，之后没有再核实，发布前要确认）。最后的源码是 `d466a6daa`（`git show d466a6daa:next/plugins/growth/manifest.json`）。§45 只留标题。
+
+### 125.1 删除了什么
+
+- 插件目录、`plugins/released.json` 里它那一条、`go.work` 的模块。CI、镜像构建和市场打包都按 `plugins/*` 发现插件，内置清单（`deploy/docker/build-go.sh` 的 `BUILTIN_PLUGINS`）里本来就没有它，不用改。
+- 插件键 `growth` 从保留的官方插件名移到已删除插件键（`install/reserved.go` 的 `removedKeys`，记 0.1.304）：任何来源、任何签名的包都不能安装，返回 403 `plugin_key_reserved`，错误信息指向 CHANGELOG 0.1.304。
+- 核心里没有只为它存在的代码。读它真实清单的测试改为：`authz.TestSyncPluginSplitsAndRenamesKeys`（真实的 moderation 清单，加一份用 `inheritFrom` 改名的内联清单，覆盖原来由 growth 承担的“改名的新键不从目录得到持有者、旧键标删除并保留授予”），`plugin/api.TestFirstPartyNativeSettingsSecrets` 去掉它那一行。
+- 账本：它声明的 `ledger.credit` 只是宿主权限，核心的入账接口是通用的（§25），不变。
+
+### 125.2 数据库：迁移 0117
+
+`0117_drop_growth_plugin.sql` 照 0111（§116.2）的先例，像带 purge 的 `install.Uninstall` 那样卸载它（不走节点屏障：发布迁移时所有节点都已停下），可以重跑：
+
+- 它任务（`cleanup`）的 `scheduled_tasks` 行；
+- 它的全部权限（`plugin.growth:growth:use`、`plugin.growth:growth:stats:read`，以及 0.1.290 起标为删除、授予保留的 `growth:read`、`growth:manage`）和这些权限的授予，持有者角色升 `revision`，插件存在时 `authz_meta` 的两个版本各加一；
+- 键记入 `plugin_key_retirements`（归原发布者）；
+- 插件行，级联删除版本（含暂存的授予）、宿主权限授予、事件游标与死信、任务运行、发布状态、运行节点、卸载屏障和粘性规则；`plugin_egress_domains` 单独删除；
+- 它申请过数据库权限：`DROP SCHEMA IF EXISTS plg_growth CASCADE`（邀请码、返利记录、签到记录随之删除），`plugin_migrations` 里它的记录单独删除（这张表自 0002 起没有外键，同 `dbschema.DropTx`）；旧的插件角色 `plg_growth` 只在带着核心的标记时删除。
+
+保留：`balance_ledger` 里它记过的返利与签到奖励（`kind = plugin_credit`，`ref_type` 为 `referral`、`checkin`，用户余额不变）、`usage_logs`、`audit_logs`；`plugin_executions`、`plugin_history`、`plugin_egress_logs`。它没有账号类型，没有账号要处理；它不用 KV，`ledger.credit` 每日上限的计数在 Valkey 里，48 小时内自己过期。
+
+### 125.3 装过它的实例
+
+升级到 0.1.304 时迁移 0117 把它卸载干净（上一节），升级后插件列表里没有它，菜单“我的邀请”“每日签到”“增长管理”消失，`/api/v1/p/growth/*` 与任何没有安装的插件一样回 503 `plugin_unavailable`；再上传它的任何包都被 `removedKeys` 拒绝。邀请关系和返利、签到明细只在 `plg_growth` 里，迁移后只能从升级前的备份找回，要保留的在升级前导出。没装过的实例什么都不变。
+
+## 126. 迁移 0118：删掉火山引擎 `apikey` 账号设置里的前缀键（2026-11-19，所有者同意“升级时清理”；迁移 0118，核心 0.1.304；插件、清单、接口不变）
+
+volcengine 的 `apikey` 类型（方舟官方）路径布局固定，`settingsFields` 只有 `base_url`、`asset_base_url`、`asset_region`；`api_prefix`、`video_api_prefix` 只属于 `relay` 类型（[PLUGIN-VOLCENGINE-ARK.md](PLUGIN-VOLCENGINE-ARK.md) 14.2）。拆分类型之前保存的 `apikey` 账号可能在 `settings` 里留着这两个键：插件不读它们（`prefixesOf`），但编辑凭证时它们随已存的字段一起回到校验，不在 `settingsFields` 里的键被插件的 `apikey.Spec.Fields` 按未知键拒绝（`unknown`），界面又没有删掉它们的办法，账号凭证于是改不了。2026-11-19 只读查询线上有 2 个这样的账号（键 `video_api_prefix`）。
+
+`0118_volcengine_apikey_prefix_settings.sql`：`plugin_key = 'volcengine' AND type = 'apikey'` 且 `settings` 含其中任一键的账号（含已软删除的），从 `settings` 删掉 `api_prefix`、`video_api_prefix`，其余键不变；`relay` 账号和别的插件的账号不动；只写命中的行，可以重跑。不改 `updated_at`。请求行为不变：这两个键对 `apikey` 账号本来就不生效。加密的凭证部分迁移读不到，不处理（线上只查过 `settings`）。
+
+测试：`migrations.TestMigration0118DropsVolcengineAPIKeyPrefixes`（两个键删掉、其它键保留；`relay` 与别的插件的账号不变且没有被写；重跑不写任何行）。
+
+## 127. 密钥与基础地址（2026-11-20，所有者要求“密钥不要做任何限制”“地址里的 %2F 一起改了”“我们的插件自己处理兼容，不要去多也不要少”；方案 B；无迁移；插件协议、Host API 不变；清单加 `guardedSettings[].versions`，核心 0.1.304；设计见 [DESIGN-2026-11-20-KEY-AND-BASE-URL-RULES.md](DESIGN-2026-11-20-KEY-AND-BASE-URL-RULES.md)）
+
+适用于用 `sdk/pluginsdk/apikey` 的 `Spec` 写的 API Key 加基础地址一类账号类型（anthropic、openai、gemini、relay、typesafe 的 `apikey`/`relay_key`，newapi、sub2api，azure_openai 的两个类型，volcengine 的 `apikey` 与 `relay`，vertex 的 `vertex_apikey`），以及 bedrock 的 `bedrock_apikey`（自己的代码，密钥规则相同）。本节取代 §86.1 原来的“基础地址的规则”。
+
+### 127.1 密钥
+
+- `api_key` 只要求是非空字符串：先读凭证、再读设置；缺省、`null`、去掉首尾空白后为空报 `required`；不是字符串报 `type`（类型可以用 `Spec.Texts.KeyNotString` 换文案和错误码：anthropic、openai、typesafe 的预设为 `pattern`，为与录制的样例一致）。此外不检查前缀、字符集和长度，保存去掉首尾空白后的值；`Spec.FromAccount` 读取时同样去空白，空值报 `missing api_key`。
+- 删除的：`apikey.Validator`、`Spec.KeyValidator`、`apikey.OpenAI`，各插件各自的长度与字符集检查（原来大多是 8–512 个不含空格的可见字符，openai 不超过 512 个可见 ASCII 字符，bedrock 8–2048 个可见字符）。bedrock 的 AK/SK、会话令牌，vertex 的密钥文件，volcengine 的 AK/SK 规则不变。
+- 控制字符不另外检查：密钥里带 CR、LF 等字符时，SDK、核心与 Go `net/http` 都拒绝把它写进请求头，不会注入；代价是这样的密钥能保存，但每次请求都失败（设计 Q1）。
+- 界面：`@sub2api/ui` 的 `createApiKeyForm` 默认只要求非空（`{required: true, whitespace: true}`），`spec.apiKey.min`/`max`/`pattern` 写了才检查（§23.3）；`@sub2api/ui/testing` 的 `keyAndUrlCases`、SDK 的 `apikey/apikeytest` 都按这条规则（只有空白的拒绝，1 位、4096 位、带空格、非 ASCII 的接受）。
+
+### 127.2 基础地址的保存
+
+`apikey.NormalizeBaseURL(base) (string, error)`（保存时由 `Spec.Validate` 调用，请求时 `FromAccount` 再调用一次）：
+
+1. 去掉首尾空白，空串报 `is required`（没有地址的可选类型取 `DefaultBaseURL`）。
+2. 拒绝：仍含任何空白字符（`unicode.IsSpace`）、含 `?` 或 `#`、解析失败或没有 host、scheme 不是 http/https、含 userinfo。
+3. 输出 = `url.URL{Scheme, Host}.String()`（scheme 小写，host 照写）+ 路径的转义形式（`EscapedPath()`）去掉末尾所有 `/`。用户写的合法转义原样保留（`%2F`、`%7E` 不还原），原样的非 ASCII 字符按 UTF-8 百分号编码。
+4. **不去任何后缀**：存下的就是填的地址（2026-11-20 前保存时去掉类型声明的后缀，并把转义还原成规范形式）。输出再规范化一次结果不变。
+
+`Spec.Fields` 里给 `base_url` 写的规则、azure 的 `EndpointPattern` 看到的都是这个存值（不去版本段），所以 Foundry 项目名里的 `%2F` 现在可以保存、原样发出。
+
+### 127.3 请求时的版本段
+
+`Spec.Versions` 是基础地址末尾可以带的版本段（原 `StripSuffixes` 改名，值不变）。每项以 `/` 开头、不以 `/` 结尾：
+
+| 类型 | `Versions` |
+|---|---|
+| openai、anthropic、relay、typesafe | `/v1` |
+| gemini、newapi、sub2api | `/v1beta`、`/v1` |
+| azure_v1、azure_deployment | `/openai/v1`、`/openai` |
+| volcengine `apikey` | `/api/v3` |
+| volcengine `relay`、vertex_apikey | 无 |
+
+`Spec.FromAccount` 从存值算出“根”放进 `Config.BaseURL`：在存值的转义形式**路径**上找 `Versions` 里能作为后缀的项，取最长的一个，整段匹配、区分大小写，至多去掉一段，再去掉剩下的末尾 `/`；找不到就用存值。scheme 和主机不参与（`http://v1`、`http://api/v3` 的根就是它们本身）；核心比较受限地址用同一个函数 `manifest.TrimVersion`（§21.3）。路由、模型列表、余额的路径照旧完整接在根后面（`standard`、`ModelListRequest`、volcengine 的 `upstreamURL` 的拼接都没有变）。所以：
+
+- 填 `https://x/v1` 与填 `https://x` 请求同样的地址；地址本身以 `/v1` 结尾的站点填 `https://x/v1/v1`，请求发往 `https://x/v1/v1/<路由>`。
+- 带的是另一个版本时按路由的来：gemini、newapi、sub2api 填 `…/v1` 时 Gemini 协议请求 `…/v1beta/…`；newapi、sub2api 的余额也从根拼。
+- `…/a%2Fv1` 不算以 `/v1` 结尾（请求 `…/a%2Fv1/v1/…`），`…/V1`、`…/xv1` 也不算；只认类型自己声明的版本段（智谱 `…/api/paas/v4` 这类仍配不通，与此前相同，设计 Q7）。
+- azure 的 Foundry 项目名恰好是 `openai` 时（`…/api/projects/openai`），末尾被当作版本段 `/openai`，请求少了项目那一段，与此前相同（设计 Q11，接受现状）。
+- volcengine `relay` 的地址规则不变：基础地址是中转站根地址，转义形式的路径以 `/v1` 或 `/api/v3` 结尾的在保存时拒绝（`…/a%2Fv1` 不算）并提示填 `api_prefix`（[PLUGIN-VOLCENGINE-ARK.md](PLUGIN-VOLCENGINE-ARK.md) 14.3）；只是它的密钥也按 127.1 放开。
+
+### 127.4 受限地址
+
+没有 `account:settings:custom` 的人提交带版本段的官方地址（如 `https://api.openai.com/v1`）照样接受：清单 `accountTypes[].guardedSettings[].versions` 写出与 `Spec.Versions` 相同的值，核心比较受限设置前对提交值、`allowed` 各项、账号原值都按 127.3 的规则去掉至多一个版本段（§21.3）。写了 `versions` 的清单：anthropic、openai、typesafe（`["/v1"]`），gemini（`["/v1beta", "/v1"]`），volcengine `apikey` 的 `base_url`（`["/api/v3"]`）；各插件的清单测试断言它与 Go 里的 `Spec.Versions` 一致。旧核心忽略这个字段（只是带版本的官方地址被拒），所以这些插件 `hostCompat` 要求核心 0.1.304 起。
+
+### 127.5 已存账号的等价边界
+
+已存账号的请求地址全部不变，不分类型（设计 6.5）：已存的值都是旧规范化的输出（scheme 小写、路径为规范转义、没有末尾 `/`），新规范化对它们原样返回；同一类型的各个版本段不会同时是同一地址的后缀，所以旧的“按顺序去掉第一个匹配的后缀”与新的“去掉最长的一个”是同一段；路由路径两边都原样接上。SDK 的性质测试 `apikey.TestStoredBaseURLsKeepTheirRequests` 对各类型的版本段和一组输入（含主机名恰好是版本段的 `http://v1`、`http://api` 等）逐一比较改前改后的请求根；路由原样接在根后，根相同请求就相同。
+
+前提是存值经过了插件的保存校验（核心保存账号、两个 `models/fetch` 都先调 `ValidateCredentials`，§21.3 的 `prepare`）。绕过它写入的值（直接改库、导入）里，只有路径带非规范转义（如 `%2F`、`%7E`）的会变：以前解码后发出，现在原样发出。
+
+### 127.6 已知的变化
+
+- 已存的、带其它版本段的地址不受影响（127.5），但**新保存**的地址不再被改写：控制台显示的、`GET /accounts/:id` 读到的就是填写的地址。
+- newapi、sub2api 的密钥不是字符串时错误码由 `pattern` 改为 `type`，文案“api_key 必须是字符串”。
+- 各插件表单的帮助文案改为“地址末尾的版本段在请求时按接口重新拼接”一类说法（各插件 `ui/native/src/messages.ts`）。

@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -28,9 +29,9 @@ func TestPluginMutationsPersistedPlansAndSharedLock(t *testing.T) {
 	if rdb.Exists(ctx, "lock:"+rc.ClusterChangeLock).Val() != 1 {
 		t.Fatal("nested release dropped shared lock")
 	}
-	if _, other, err := g.Begin(ctx); err == nil {
+	if _, other, err := g.Begin(ctx); !errors.Is(err, core.ErrClusterChangeBusy) {
 		other()
-		t.Fatal("parallel mutation accepted")
+		t.Fatalf("parallel mutation: %v", err)
 	}
 	done()
 	if _, err = db.SQL.ExecContext(ctx, `CREATE SCHEMA updater;CREATE TABLE updater.upgrades(status text);INSERT INTO updater.upgrades VALUES('paused')`); err != nil {
@@ -40,9 +41,9 @@ func TestPluginMutationsPersistedPlansAndSharedLock(t *testing.T) {
 		if _, err = db.SQL.ExecContext(ctx, `UPDATE updater.upgrades SET status=$1`, phase); err != nil {
 			t.Fatal(err)
 		}
-		if _, release, err := g.Begin(ctx); err == nil {
+		if _, release, err := g.Begin(ctx); err == nil || core.AsError(err).Code != core.ErrConflict.Code {
 			release()
-			t.Fatalf("%s plan admitted plugin", phase)
+			t.Fatalf("%s plan admitted plugin: %v", phase, err)
 		}
 	}
 	g.AllowBootstrap = func() bool { return true }
@@ -63,9 +64,9 @@ func TestPluginMutationsPersistedPlansAndSharedLock(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatal(ok, err)
 	}
-	if _, release, err := g.Begin(ctx); err == nil {
+	if _, release, err := g.Begin(ctx); !errors.Is(err, core.ErrClusterChangeBusy) {
 		release()
-		t.Fatal("shell submission lock ignored")
+		t.Fatalf("shell submission lock ignored: %v", err)
 	}
 	lk.Release()
 	_, done, err = g.Begin(ctx)

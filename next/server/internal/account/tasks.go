@@ -16,6 +16,7 @@ const (
 	UsageLimitsTask       = "core.account.usage_limits"
 	CredentialRefreshTask = "core.account.credential_refresh"
 	QuotaSweepTask        = "core.account.quota_sweep"
+	BalanceSweepTask      = "core.account.balance_sweep"
 )
 
 // RegisterTasks registers the cluster tasks of the account module and keeps
@@ -69,6 +70,17 @@ func (s *Service) RegisterTasks(tasks core.Tasks) error {
 		Timeout:     5 * time.Minute,
 		RequireWork: true,
 		Handler:     s.quotaSweepTask,
+	}, {
+		Name:  BalanceSweepTask,
+		Title: core.LocalizedText{"en": "Read due account balances", "zh": "查询到期的账号余额"},
+		Description: core.LocalizedText{
+			"en": "Reads the balances of accounts whose type declares one, each at its type's update interval: schedulable accounts, and accounts never read. A disabled account is read only when an administrator refreshes it. The balance is only shown.",
+			"zh": "按账号类型声明的更新间隔查询账号余额：可调度的账号，以及从未查询过的账号。停用的账号只在管理员手动刷新时查询。余额只用于显示。",
+		},
+		Scope:   core.TaskCluster,
+		Every:   time.Minute,
+		Timeout: 15 * time.Minute,
+		Handler: s.balanceSweepTask,
 	}}
 	for _, spec := range specs {
 		if err := tasks.Register(spec); err != nil {
@@ -104,6 +116,11 @@ func (s *Service) credentialRefreshTask(ctx context.Context, _ core.TaskRun) (co
 
 func (s *Service) quotaSweepTask(ctx context.Context, _ core.TaskRun) (core.TaskResult, error) {
 	n, err := s.sweepDueQuotas(ctx)
+	return core.TaskResult{Count: n}, err
+}
+
+func (s *Service) balanceSweepTask(ctx context.Context, _ core.TaskRun) (core.TaskResult, error) {
+	n, err := s.sweepDueBalances(ctx)
 	return core.TaskResult{Count: n}, err
 }
 

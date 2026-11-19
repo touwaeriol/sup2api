@@ -1,0 +1,6 @@
+/* Private styles of the volcengine UI (CONTRACTS §23.4: prefixed with the plugin key). */
+.volcengine-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}

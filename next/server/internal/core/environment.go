@@ -23,7 +23,6 @@ const (
 	EnvVarRelayTimeoutSeconds          = protocol.EnvVarRelayTimeoutSeconds
 	EnvVarResponseHeaderTimeoutSeconds = protocol.EnvVarResponseHeaderTimeoutSeconds
 	EnvVarStreamingIdleTimeoutSeconds  = protocol.EnvVarStreamingIdleTimeoutSeconds
-	EnvVarMaxRequestBodyMB             = protocol.EnvVarMaxRequestBodyMB
 	EnvVarTaskTimeoutMinutes           = protocol.EnvVarTaskTimeoutMinutes
 	EnvVarTaskPollMaxFailures          = protocol.EnvVarTaskPollMaxFailures
 )
@@ -40,13 +39,12 @@ const (
 // EnvironmentVariable declares one variable.
 type EnvironmentVariable struct {
 	Key  string        `json:"key"`
-	Unit string        `json:"unit"` // seconds | minutes | mb | count
+	Unit string        `json:"unit"` // seconds | minutes | count
 	Min  int64         `json:"min"`
 	Max  int64         `json:"max"`
 	Name LocalizedText `json:"name"`
 	Help LocalizedText `json:"help"`
-	// Layers it can be set on. A variable used before the account is chosen
-	// (the request body limit) has no account layer.
+	// Layers it can be set on.
 	Layers []EnvironmentLayer `json:"layers"`
 	// ProcessEnv is the process environment variable the global layer falls
 	// back to; empty without a global layer.
@@ -74,10 +72,6 @@ var EnvironmentVariables = []EnvironmentVariable{
 		Name: LocalizedText{"en": "Stream idle timeout", "zh": "流式空闲超时"},
 		Help: LocalizedText{"en": "Longest gap between two reads of a streamed response. Unset: 180 s.",
 			"zh": "流式响应两次读到数据之间的最长间隔。未设置：180 秒。"}},
-	{Key: EnvVarMaxRequestBodyMB, Unit: "mb", Min: 1, Max: 1024, Layers: []EnvironmentLayer{EnvLayerGlobal, EnvLayerGroup}, ProcessEnv: "SUB2API_MAX_REQUEST_BODY_MB",
-		Name: LocalizedText{"en": "Request body limit", "zh": "请求体上限"},
-		Help: LocalizedText{"en": "Largest client request body. An endpoint that declares its own limit keeps it when that is larger. Unset: the endpoint's limit, else 128 MB.",
-			"zh": "客户端请求体的上限。端点自己声明了更大的上限时以端点为准。未设置：端点声明的值，否则 128 MB。"}},
 	{Key: EnvVarTaskTimeoutMinutes, Unit: "minutes", Min: 1, Max: 43200, Layers: taskLayers,
 		Name: LocalizedText{"en": "Async task timeout", "zh": "异步任务超时"},
 		Help: LocalizedText{"en": "How long the core keeps observing an async task (image, video). Unset: the reconcile settings.",
@@ -168,9 +162,6 @@ func (e Environment) Duration(key string) time.Duration {
 	}
 	return time.Duration(e[key]) * time.Second
 }
-
-// Bytes reads an mb variable; 0 when unset.
-func (e Environment) Bytes(key string) int64 { return e[key] << 20 }
 
 // EnvironmentResolver (owner: environment) resolves the environment of a
 // group and an account outside a gateway request, e.g. for

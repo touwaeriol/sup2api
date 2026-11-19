@@ -7,9 +7,9 @@ import "strings"
 // override §84, the header override §108):
 // credentials (credentialHeaders; an account's own are set by the code
 // building its upstream request), hop-by-hop and framing headers the
-// transport owns, and client addresses a client could forge. Declared
-// upstreams (sdk/upstream) hold their ordinary headers to the same list;
-// only their auth declaration may write a credential header.
+// transport owns, and client addresses a client could forge. The API key
+// account types (sdk/pluginsdk/standard) hold their ordinary headers to the
+// same list; only their Auth may write a credential header.
 var blockedHeaders = map[string]struct{}{
 	// RFC 9110 / 7230 hop-by-hop and framing.
 	"connection":        {},
@@ -38,7 +38,7 @@ var blockedHeaders = map[string]struct{}{
 }
 
 // credentialHeaders are the blocked headers that carry a credential: the
-// only blocked headers a declared upstream's auth may write.
+// only blocked headers the Auth of an API key account type may write.
 var credentialHeaders = map[string]struct{}{
 	"authorization":  {},
 	"x-api-key":      {},

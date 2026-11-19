@@ -1,0 +1,8 @@
+{
+  "options": {
+    "model": "gpt-image-2",
+    "stream": false,
+    "adapt_model": "gpt-6-luna"
+  },
+  "note": "the image call failed (moderation) and nothing else was generated: the upstream succeeded, so the client gets no images; the failed call and the message are response losses"
+}

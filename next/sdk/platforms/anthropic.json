@@ -107,9 +107,6 @@
       "billing": "free"
     }
   ],
-  "requestFields": [
-    "model"
-  ],
   "passHeaders": [
     "anthropic-version",
     "anthropic-beta",

@@ -1,5 +1,5 @@
 -- sql
-INSERT INTO "accounts" ("name","plugin_key","type","credentials_enc","proxy_id","last_used_at","created_by","deleted_at","last_test_at","last_test_ok","last_test_latency_ms","last_test_model","last_test_message","auto_disabled_until","last_test_status","last_test_error_code","last_test_error_source","deferred_auto_disabled_until","param_override","conversion_loss_policy","owner_id","header_override","schedulable","priority") VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,(NULL),$19,$20,(NULL),$21,$22) RETURNING "id","settings","status","status_reason","schedulable","priority","max_concurrency","created_at","updated_at","models","model_mapping","weight","rpm_limit","tpm_limit","tpd_limit","spm_limit","auto_disable","model_limits","environment","auto_disabled_source","deferred_auto_disable","deferred_auto_disable_reason","header_passthrough","spm_window_seconds","admin_locked"
+INSERT INTO "accounts" ("name","plugin_key","type","credentials_enc","proxy_id","last_used_at","created_by","deleted_at","last_test_at","last_test_ok","last_test_latency_ms","last_test_model","last_test_message","auto_disabled_until","last_test_status","last_test_error_code","last_test_error_source","deferred_auto_disabled_until","param_override","conversion_loss_policy","owner_id","header_override","protocols","last_test_protocol","schedulable","priority") VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,(NULL),$19,$20,(NULL),$21,$22,$23,$24) RETURNING "id","settings","status","status_reason","schedulable","priority","max_concurrency","created_at","updated_at","models","model_mapping","weight","rpm_limit","tpm_limit","tpd_limit","spm_limit","auto_disable","model_limits","environment","auto_disabled_source","deferred_auto_disable","deferred_auto_disable_reason","header_passthrough","spm_window_seconds","admin_locked","model_protocols"
 -- vars
 $1 string "a"
 $2 string "p"
@@ -21,5 +21,7 @@ $17 *string nil
 $18 *time.Time nil
 $19 *string nil
 $20 *int64 nil
-$21 *bool false
-$22 *int 0
+$21 *store.Strings nil
+$22 *string nil
+$23 *bool false
+$24 *int 0

@@ -3,6 +3,7 @@ package rollout_test
 import (
 	"context"
 	"errors"
+	goruntime "runtime"
 	"sync"
 	"testing"
 	"time"
@@ -29,8 +30,8 @@ func (allowAll) PermissionSet(context.Context, int64) (core.PermissionSet, error
 }
 func (allowAll) CanGrant(context.Context, int64, []string) error { return nil }
 
-// heldRuntime serves runtime "none" packages for real, except that a version
-// it fails never loads and a version it holds never gets ready.
+// heldRuntime serves the test plugin for real, except that a version it
+// fails never loads and a version it holds never gets ready.
 type heldRuntime struct {
 	rollout.Runtime
 	mu         sync.Mutex
@@ -61,11 +62,12 @@ func (r *heldRuntime) Load(ctx context.Context, p *registry.Package) (rollout.In
 	return notReady{inst}, nil
 }
 
-// stagedEnv is one node running runtime "none" plugins with the real
-// install service, controller and runtime: what a static instance reads as
-// its grants is what a plugin process of that version would get.
+// stagedEnv is one node running the test plugin with the real install
+// service, controller and runtime: what an instance started for a version
+// reads as its grants is what a plugin process of that version gets.
 type stagedEnv struct {
 	h    *harness
+	bin  []byte
 	svc  *install.Service
 	grt  *grpcruntime.Runtime
 	rt   *heldRuntime
@@ -78,7 +80,7 @@ type stagedEnv struct {
 func newStagedEnv(t *testing.T) *stagedEnv {
 	h := newHarness(t)
 	ctx := context.Background()
-	e := &stagedEnv{h: h, reg: registry.New(), root: pkgtest.NewKey("root-1")}
+	e := &stagedEnv{h: h, bin: registrytest.TestPlugin(t), reg: registry.New(), root: pkgtest.NewKey("root-1")}
 	ts, err := pkg.NewTrustStore([]string{e.root.ID + "=" + e.root.PubB64()}, false)
 	if err != nil {
 		t.Fatal(err)
@@ -86,7 +88,7 @@ func newStagedEnv(t *testing.T) *stagedEnv {
 	defaults := install.NewDefaultsApplier(h.rec)
 	e.svc = install.New(install.Deps{DB: h.db, Trust: ts, Authz: allowAll{}, Permissions: h.rec, Defaults: defaults,
 		Packages: registrytest.Source()},
-		install.Options{HostVersion: "0.1.290", Plugins: config.PluginConfig{MaxPackageBytes: 10 << 20, MaxMemoryMB: 1024}})
+		install.Options{HostVersion: "0.1.290", Plugins: config.PluginConfig{MaxPackageBytes: 100 << 20, MaxMemoryMB: 1024}})
 	cipher, _ := secret.New(make([]byte, 32))
 	nd := &registrytest.Node{RDB: h.rdb, ID: "solo", Boot: "boot-solo"}
 	nd.Heartbeat(ctx)
@@ -108,14 +110,21 @@ func newStagedEnv(t *testing.T) *stagedEnv {
 	return e
 }
 
-// manifest is a runtime "none" version asking for platform.register and the
-// extra host permissions.
+// manifest is a version asking for kv and the extra host permissions.
 func (e *stagedEnv) manifest(version string, extra ...string) *manifest.Manifest {
-	m := pkgtest.Declared(e.h.key, version, "sub2api")
+	m := pkgtest.Minimal(e.h.key, version, "sub2api")
 	for _, id := range extra {
 		m.HostPermissions = append(m.HostPermissions, manifest.HostPermission{ID: id})
 	}
 	return m
+}
+
+// build signs a package of m whose binary for this platform is the test
+// plugin.
+func (e *stagedEnv) build(m *manifest.Manifest) []byte {
+	files := pkgtest.Files(m)
+	files["runtimes/"+goruntime.GOOS+"-"+goruntime.GOARCH+"/plugin"] = e.bin
+	return pkgtest.Zip(pkgtest.Sign(files, m.Publisher, e.root))
 }
 
 // approve uploads the version and consents to every permission it asks for.
@@ -123,7 +132,7 @@ func (e *stagedEnv) approve(version string, extra ...string) {
 	e.h.t.Helper()
 	ctx := context.Background()
 	m := e.manifest(version, extra...)
-	if _, err := e.svc.Upload(ctx, pkgtest.Build(m, e.root), 0, install.UploadOptions{}); err != nil {
+	if _, err := e.svc.Upload(ctx, e.build(m), 0, install.UploadOptions{}); err != nil {
 		e.h.t.Fatalf("upload %s: %v", version, err)
 	}
 	e.consent(version, extra...)
@@ -131,7 +140,7 @@ func (e *stagedEnv) approve(version string, extra ...string) {
 
 func (e *stagedEnv) consent(version string, extra ...string) {
 	e.h.t.Helper()
-	req := install.ConsentRequest{Grants: []install.GrantInput{{Permission: "platform.register"}}}
+	req := install.ConsentRequest{Grants: []install.GrantInput{{Permission: "kv"}}}
 	for _, id := range extra {
 		req.Grants = append(req.Grants, install.GrantInput{Permission: id})
 	}
@@ -144,11 +153,13 @@ func (e *stagedEnv) consent(version string, extra ...string) {
 func (e *stagedEnv) grants(version string) registry.Grants {
 	e.h.t.Helper()
 	ctx := context.Background()
-	p, err := e.pkgs.Open(ctx, e.h.key, version)
+	// Held: the controller sweeps the packages nothing holds.
+	p, done, err := e.pkgs.Acquire(ctx, e.h.key, version)
 	if err != nil {
 		e.h.t.Fatal(err)
 	}
-	inst, err := e.grt.LoadStatic(ctx, p)
+	defer done()
+	inst, err := e.grt.Load(ctx, p)
 	if err != nil {
 		e.h.t.Fatal(err)
 	}
@@ -192,13 +203,13 @@ func TestUpgradeConsentWaitsForTheActivation(t *testing.T) {
 	if _, err := e.ctl.Enable(ctx, e.h.key, 0); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "0.1.0 served", e.served("0.1.0", "platform.register"))
+	waitFor(t, "0.1.0 served", e.served("0.1.0", "kv"))
 
 	e.approve("0.2.0", "lock")
-	if g := e.grants("0.1.0"); g.Has("lock") || !g.Has("platform.register") {
+	if g := e.grants("0.1.0"); g.Has("lock") || !g.Has("kv") {
 		t.Fatalf("0.1.0 restarted after the consent to 0.2.0 is granted %v", g)
 	}
-	if g := e.grants("0.2.0"); !g.Has("lock") || !g.Has("platform.register") {
+	if g := e.grants("0.2.0"); !g.Has("lock") || !g.Has("kv") {
 		t.Fatalf("0.2.0 is granted %v before its activation", g)
 	}
 
@@ -206,7 +217,7 @@ func TestUpgradeConsentWaitsForTheActivation(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, "0.2.0 served with lock", e.served("0.2.0", "lock"))
-	if g := e.grants("0.1.0"); g.Has("lock") || !g.Has("platform.register") {
+	if g := e.grants("0.1.0"); g.Has("lock") || !g.Has("kv") {
 		t.Fatalf("0.1.0 is granted %v after 0.2.0 was activated", g)
 	}
 }
@@ -221,15 +232,15 @@ func TestAbandonedUpgradeWithdrawsItsConsent(t *testing.T) {
 	if _, err := e.ctl.Enable(ctx, e.h.key, 0); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "0.1.0 served", e.served("0.1.0", "platform.register"))
+	waitFor(t, "0.1.0 served", e.served("0.1.0", "kv"))
 	e.approve("0.2.0", "lock")
 
 	withdrawn := func(what string, want int) {
 		t.Helper()
-		if g := e.grants("0.2.0"); g.Has("lock") || !g.Has("platform.register") {
+		if g := e.grants("0.2.0"); g.Has("lock") || !g.Has("kv") {
 			t.Fatalf("%s: 0.2.0 is granted %v", what, g)
 		}
-		if g := e.grants("0.1.0"); g.Has("lock") || !g.Has("platform.register") {
+		if g := e.grants("0.1.0"); g.Has("lock") || !g.Has("kv") {
 			t.Fatalf("%s: 0.1.0 is granted %v", what, g)
 		}
 		if s := e.consentStatus("0.2.0"); s != install.ConsentAwaiting {
@@ -280,13 +291,13 @@ func TestConsentDuringAnEnableWaitsForItsVersion(t *testing.T) {
 		t.Helper()
 		m := e.manifest(version)
 		m.HostPermissions = append(m.HostPermissions, manifest.HostPermission{ID: "lock", Optional: true})
-		if _, err := e.svc.Upload(ctx, pkgtest.Build(m, e.root), 0, install.UploadOptions{}); err != nil {
+		if _, err := e.svc.Upload(ctx, e.build(m), 0, install.UploadOptions{}); err != nil {
 			t.Fatalf("upload %s: %v", version, err)
 		}
 	}
 	upload("0.1.0")
 	if _, err := e.svc.Consent(ctx, e.h.key, "0.1.0", install.ConsentRequest{
-		Grants: []install.GrantInput{{Permission: "platform.register"}}, Denied: []string{"lock"}}, 0); err != nil {
+		Grants: []install.GrantInput{{Permission: "kv"}}, Denied: []string{"lock"}}, 0); err != nil {
 		t.Fatal(err)
 	}
 	e.rt.set("0.1.0", false, true)
@@ -300,7 +311,7 @@ func TestConsentDuringAnEnableWaitsForItsVersion(t *testing.T) {
 
 	upload("0.2.0")
 	e.consent("0.2.0", "lock")
-	if g := e.grants("0.1.0"); g.Has("lock") || !g.Has("platform.register") {
+	if g := e.grants("0.1.0"); g.Has("lock") || !g.Has("kv") {
 		t.Fatalf("0.1.0 being enabled is granted %v after the consent to 0.2.0", g)
 	}
 	if g := e.grants("0.2.0"); !g.Has("lock") {

@@ -18,7 +18,8 @@
       "binaries": "runtimes/{os}-{arch}/plugin"
     }
   },
-  "hostCompat": ">=0.1.290 <0.2.0",
+  "hostCompat": ">=0.1.304 <0.2.0",
+  "hostUICompat": "^4.0",
   "capabilities": [
     {
       "id": "platform.adapter.v1"
@@ -37,9 +38,8 @@
         "zh": "Google Cloud 服务账号密钥（JSON）。核心用它换取 1 小时有效的访问令牌并自动续期；请求发往账号填写的项目和区域。"
       },
       "form": {
-        "mode": "schema",
-        "schema": "forms/sa.schema.json",
-        "uiSchema": "forms/sa.ui.json"
+        "mode": "native",
+        "component": "VertexKeyFileForm"
       },
       "creationGroup": "vertex",
       "authMethodLabel": {
@@ -104,9 +104,8 @@
         "zh": "用户的应用默认凭证文件（gcloud auth application-default login 生成）。核心用其中的 refresh token 换取 1 小时有效的访问令牌并自动续期。"
       },
       "form": {
-        "mode": "schema",
-        "schema": "forms/authorized_user.schema.json",
-        "uiSchema": "forms/authorized_user.ui.json"
+        "mode": "native",
+        "component": "VertexKeyFileForm"
       },
       "creationGroup": "vertex",
       "authMethodLabel": {
@@ -171,9 +170,8 @@
         "zh": "Vertex AI 的 API Key。填写项目 ID 和区域时使用带项目的完整地址；两者都留空时使用 express 地址。"
       },
       "form": {
-        "mode": "schema",
-        "schema": "forms/apikey.schema.json",
-        "uiSchema": "forms/apikey.ui.json"
+        "mode": "native",
+        "component": "VertexApiKeyForm"
       },
       "creationGroup": "vertex",
       "authMethodLabel": {
@@ -231,6 +229,11 @@
     "maxThreads": 32,
     "maxOpenFiles": 64
   },
+  "ui": {
+    "native": {
+      "entry": "ui/native/entry.js"
+    }
+  },
   "hostPermissions": [
     {
       "id": "platform.register",
@@ -240,19 +243,12 @@
       }
     },
     {
-      "id": "accounts.credentials",
-      "scope": {
-        "types": "own"
-      },
+      "id": "ui.native",
       "reason": {
-        "en": "Read the key file, access token or API key of its own accounts to build upstream and token requests (the core sends them all)",
-        "zh": "读取本插件账号的密钥文件、访问令牌或 API Key，用于构造上游请求和令牌请求（均由核心发送）"
+        "en": "The account forms (VertexKeyFileForm for the service account and user credentials files, VertexApiKeyForm for API keys) with the project ID and location",
+        "zh": "账号表单（服务账号与用户凭证文件用 VertexKeyFileForm，API Key 用 VertexApiKeyForm），含项目 ID 与区域"
       }
     }
   ],
-  "externalServices": [
-    "oauth2.googleapis.com",
-    "aiplatform.googleapis.com",
-    "googleapis.com"
-  ]
+  "externalServices": ["googleapis.com"]
 }

@@ -62,6 +62,24 @@ func TestValidateCredentialsAccepts(t *testing.T) {
 			}
 		})
 	}
+	// Any non-blank API key is accepted (DESIGN-2026-11-20 §5.1), and the
+	// request carries it trimmed.
+	for name, key := range map[string]string{
+		"1 character":        "k",
+		"4096 characters":    strings.Repeat("k", 4096),
+		"inner space":        "ABSK key with spaces",
+		"not ASCII":          "ABSK-ключ",
+		"surrounding spaces": "  " + testAPIKey + "\n",
+	} {
+		creds := map[string]any{fieldAPIKey: key}
+		if resp, _ := validate(t, TypeAPIKey, creds, nil); len(resp.GetErrors()) != 0 {
+			t.Fatalf("api key %s: errors = %v", name, fieldErrors(resp))
+		}
+		up := build(t, executeRequest(stored(TypeAPIKey, creds, nil), testHaiku, false, claudeBody(testHaiku, false)))
+		if got := up.GetHeaders()["authorization"]; got != "Bearer "+strings.TrimSpace(key) {
+			t.Fatalf("api key %s: Authorization = %q", name, got)
+		}
+	}
 	// The expiry hint of temporary credentials is a date and time.
 	resp, settings := validate(t, TypeSTS, stsCreds, map[string]any{fieldRegion: "us-west-2", fieldSessionExpiresAt: "2026-11-18T08:30:00.000Z"})
 	if len(resp.GetErrors()) != 0 || settings[fieldSessionExpiresAt] != "2026-11-18T08:30:00.000Z" {
@@ -70,7 +88,6 @@ func TestValidateCredentialsAccepts(t *testing.T) {
 }
 
 func TestValidateCredentialsRejects(t *testing.T) {
-	longKey := strings.Repeat("k", 2049)
 	for _, tc := range []struct {
 		name     string
 		typ      string
@@ -83,17 +100,14 @@ func TestValidateCredentialsRejects(t *testing.T) {
 		{"api key missing", TypeAPIKey, map[string]any{}, nil, "api_key:required"},
 		{"api key blank", TypeAPIKey, map[string]any{fieldAPIKey: "   "}, nil, "api_key:required"},
 		{"api key not a string", TypeAPIKey, map[string]any{fieldAPIKey: 12345678}, nil, "api_key:required"},
-		{"api key too short", TypeAPIKey, map[string]any{fieldAPIKey: "short"}, nil, "api_key:pattern"},
-		{"api key too long", TypeAPIKey, map[string]any{fieldAPIKey: longKey}, nil, "api_key:pattern"},
-		{"api key with a space", TypeAPIKey, map[string]any{fieldAPIKey: "ABSK key with spaces"}, nil, "api_key:pattern"},
-		{"api key type given an access key", TypeAPIKey, akskCreds, nil, "api_key:required"},
+		{"api key type given an access key ID: a key its form does not send", TypeAPIKey, map[string]any{fieldAccessKeyID: testAccessKeyID}, nil, "access_key_id:unknown"},
 
 		{"access key id missing", TypeAccessKey, with(akskCreds, map[string]any{fieldAccessKeyID: nil}), nil, "access_key_id:required"},
 		{"access key id lower case", TypeAccessKey, with(akskCreds, map[string]any{fieldAccessKeyID: "akiaiosfodnn7example"}), nil, "access_key_id:pattern"},
 		{"access key id too short", TypeAccessKey, with(akskCreds, map[string]any{fieldAccessKeyID: "AKIA123"}), nil, "access_key_id:pattern"},
 		{"secret missing", TypeAccessKey, with(akskCreds, map[string]any{fieldSecretAccessKey: nil}), nil, "secret_access_key:required"},
 		{"secret with a line break", TypeAccessKey, with(akskCreds, map[string]any{fieldSecretAccessKey: "wJalr\nXUtnFEMI"}), nil, "secret_access_key:pattern"},
-		{"access key type given an api key", TypeAccessKey, apiKeyCreds, nil, "access_key_id:required"},
+		{"access key type given an api key: a key its form does not send", TypeAccessKey, apiKeyCreds, nil, "api_key:unknown"},
 
 		{"sts access key id missing", TypeSTS, with(stsCreds, map[string]any{fieldAccessKeyID: nil}), nil, "access_key_id:required"},
 		{"sts secret missing", TypeSTS, with(stsCreds, map[string]any{fieldSecretAccessKey: nil}), nil, "secret_access_key:required"},
@@ -127,10 +141,10 @@ func TestValidateCredentialsRejects(t *testing.T) {
 				return // the hint is never read once the account is stored
 			}
 			// The same account, had it been stored, serves no request.
-			_, err := newTestPlugin(Endpoints{}).BuildUpstreamRequest(context.Background(),
-				buildRequest(stored(tc.typ, tc.creds, tc.settings), ProtocolMessages, testHaiku, false))
+			_, err := newTestPlugin(Endpoints{}).BuildUpstream(context.Background(),
+				executeRequest(stored(tc.typ, tc.creds, tc.settings), testHaiku, false, claudeBody(testHaiku, false)))
 			if status.Code(err) != codes.FailedPrecondition {
-				t.Fatalf("BuildUpstreamRequest for the refused account: %v", err)
+				t.Fatalf("BuildUpstream for the refused account: %v", err)
 			}
 		})
 	}
@@ -187,8 +201,8 @@ func TestPartitions(t *testing.T) {
 func TestExpiryHintIsOnlyAHint(t *testing.T) {
 	for _, hint := range []string{"tomorrow", "2020-01-01T00:00:00Z", "2999-01-01T00:00:00Z"} {
 		acc := stored(TypeSTS, stsCreds, map[string]any{fieldRegion: "us-west-2", fieldSessionExpiresAt: hint})
-		resp := build(t, buildRequest(acc, ProtocolMessages, testHaiku, false))
-		if resp.GetSigning().GetSessionToken() != testSessionToken {
+		up := build(t, executeRequest(acc, testHaiku, false, claudeBody(testHaiku, false)))
+		if up.GetHeaders()["x-amz-security-token"] != testSessionToken {
 			t.Errorf("hint %q: the request is not signed with the session token", hint)
 		}
 	}

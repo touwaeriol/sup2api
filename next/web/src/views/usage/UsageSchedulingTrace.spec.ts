@@ -52,6 +52,26 @@ describe('UsageSchedulingTrace', () => {
     expect(schedulingTrace(rowWith({ outcome: 'picked', skipped: [{ account_id: 1, reason: 'future_reason', detail: 'x' }] }))?.skipped[0]).toEqual({ account_id: 1, reason: 'future_reason', detail: 'x' })
   })
 
+  it('words the three reasons of the protocol binding, with the protocol or the model they are about', () => {
+    // DESIGN-2026-11-17-PROTOCOL-BINDING §3.4: the account closes the protocol, the model is not converted, the model is served on other protocols.
+    const trace = {
+      v: 1, outcome: 'none', candidates: 3, eligible: 0,
+      counts: { protocol_closed: 1, conversion_not_enabled: 1, model_protocol_closed: 1 },
+      skipped: [
+        { account_id: 1, account_name: 'compat-chat-only', reason: 'protocol_closed', detail: 'openai.responses' },
+        { account_id: 2, account_name: 'openai-main', reason: 'conversion_not_enabled', detail: 'gpt-5.6' },
+        { account_id: 3, account_name: 'openai-cc', reason: 'model_protocol_closed', detail: 'text-embedding-3-large' }
+      ]
+    }
+    const reasons = (locale: 'zh' | 'en') => render(trace, locale).findAll('[data-testid="scheduling-reason"]').map(r => r.text())
+    expect(reasons('zh')).toEqual(['账号未开放该协议：openai.responses', '模型未开启协议转换：gpt-5.6', '模型在该协议下不提供：text-embedding-3-large'])
+    expect(reasons('en')).toEqual([
+      'Account does not open this protocol: openai.responses',
+      'Conversion is not turned on for the model: gpt-5.6',
+      'Model is not served on this protocol: text-embedding-3-large'
+    ])
+  })
+
   it('names no account for a caller without account:read', () => {
     const w = render({ v: 1, outcome: 'busy', candidates: 1, eligible: 1, counts: { rate_limited: 1 }, skipped: [{ reason: 'rate_limited' }] }, 'en')
     expect(w.get('[data-testid="scheduling-hidden-account"]').text()).toBe('No permission to view accounts')

@@ -7,11 +7,14 @@ import { addRoleKeys, bumpAuthz, managesRole } from './resources'
 import { pluginPlatforms } from './platforms'
 import { pluginAccountCount, uninstallPluginAccounts } from './accounts'
 import { invalid } from './resources'
+import { mailerSettings } from './mailer'
 
 type Any = Record<string, any>
 
 /** Version of the mock core, reported as host_version by GET /market/plugins. */
 export const HOST_VERSION = '0.1.5'
+/** First mock core of the current plugin protocol (the refusal's first_core_version). */
+const FIRST_CORE_VERSION = '0.1.4'
 
 interface MockPlugin {
   key: string
@@ -33,6 +36,8 @@ interface MockPlugin {
   settings: Any | null
   /** Exclusive resources the generation did not give the plugin (audit 2026-10-09 P2-2). */
   resource_conflicts?: Array<{ resource: string; id: string; reason: string }>
+  /** Version the nodes refuse to load: built for an older plugin contract. */
+  refused_version?: string
 }
 
 interface MockRollout {
@@ -61,7 +66,7 @@ function guardManifest(version: string): Any {
     capabilities: [{ id: 'gateway.hook.v1' }, { id: 'app.events.v1' }, { id: 'app.jobs.v1' }, { id: 'http.routes.v1' }, { id: 'app.broadcast.v1' }],
     ui: {
       menus: [{ id: 'guard', section: 'plugins', label: { en: 'Guard', zh: '请求守卫' }, page: 'dashboard' }],
-      pages: { dashboard: { type: 'native', component: 'GuardDashboard' }, rules: { type: 'table' } },
+      pages: { dashboard: { type: 'native', component: 'GuardDashboard' } },
       slots: [{ slot: 'dashboard.widgets', component: 'BlockedTodayCard' }]
     },
     resources: { memoryMB: 128, cpu: 0.25, maxProcs: 64, maxOpenFiles: 256 }
@@ -79,7 +84,7 @@ function anthropicManifest(version: string): Any {
     // CONTRACTS §13: no platform of its own; its account type supports the
     // built-in anthropic platform.
     platforms: [],
-    account_types: [{ id: 'apikey', label: { en: 'API key', zh: 'API Key' }, form_mode: 'schema', platforms: ['anthropic'] }],
+    account_types: [{ id: 'apikey', label: { en: 'API key', zh: 'API Key' }, form_mode: 'native', platforms: ['anthropic'] }],
     gateway_endpoints: [],
     resources: { memoryMB: 256, cpu: 0.5, maxProcs: 128, maxOpenFiles: 1024 }
   }
@@ -87,18 +92,6 @@ function anthropicManifest(version: string): Any {
 
 function grant(permission: string, scope: Any | null = null, version = '0.1.0'): Any {
   return { permission, scope, status: 'active', plugin_version: version, granted_by: 1, granted_by_email: 'admin@example.com', granted_at: now(-86400 * 3) }
-}
-
-const guardSettingsSchema = {
-  type: 'object',
-  properties: {
-    mode: { type: 'string', title: 'Mode', enum: ['block', 'log'], default: 'block' },
-    max_prompt_kb: { type: 'integer', title: 'Max prompt size (KB)', minimum: 1, maximum: 256, default: 32 },
-    alert_webhook: { type: 'string', title: 'Alert webhook URL', format: 'uri' },
-    webhook_secret: { type: 'string', title: 'Webhook secret', format: 'password' },
-    notify_on_block: { type: 'boolean', title: 'Notify on block', default: true }
-  },
-  required: ['mode']
 }
 
 const plugins = new Map<string, MockPlugin>()
@@ -133,9 +126,10 @@ plugins.set('guard', {
   ],
   manifest: guardManifest('0.1.0'),
   settings: {
-    schema: guardSettingsSchema,
-    ui_schema: { webhook_secret: { 'ui:widget': 'password' } },
-    values: { mode: 'block', max_prompt_kb: 32, alert_webhook: 'https://hooks.example.com/guard', webhook_secret: '******', notify_on_block: true }
+    mode: 'native',
+    component: 'GuardSettings',
+    secret_fields: [],
+    values: { webhook_url: 'https://hooks.example.com/guard', record_snippets: false, alert_cooldown_sec: 60 }
   }
 })
 
@@ -155,10 +149,40 @@ plugins.set('anthropic', {
     { version: '0.1.0', consent_status: 'approved' },
     { version: '0.2.0', consent_status: 'pending' }
   ],
-  grants: [grant('kv'), grant('platform.register'), grant('accounts.credentials', { types: 'own' }), grant('net')],
+  grants: [grant('kv'), grant('platform.register'), grant('net')],
   manifest: anthropicManifest('0.1.0'),
   settings: null,
   builtin: true
+})
+
+// Settings of its own and nothing else to show: native settings without a
+// page, mounted on the settings tab (mailer.ts has its native module).
+plugins.set('mailer', {
+  key: 'mailer',
+  name: { en: 'Mailer', zh: '邮件' },
+  description: { en: 'Sends notifications by email through an SMTP server.', zh: '通过 SMTP 服务器发送邮件通知。' },
+  status: 'enabled',
+  status_reason: '',
+  builtin: true,
+  active_version: '0.2.0',
+  desired_version: '0.2.0',
+  publisher: 'sub2api',
+  trust: 'official',
+  egress_policy: 'allow_all',
+  resources: { memory_mb: 64, cpu: 0.1 },
+  versions: [{ version: '0.2.0', consent_status: 'approved' }],
+  grants: [grant('net', { domains: ['*'] }, '0.2.0'), grant('ui.native', null, '0.2.0')],
+  manifest: {
+    key: 'mailer',
+    version: '0.2.0',
+    publisher: 'sub2api',
+    description: { en: 'Sends notifications by email through an SMTP server.', zh: '通过 SMTP 服务器发送邮件通知。' },
+    hostCompat: '>=0.1.0 <0.2.0',
+    hostUICompat: '^4.0',
+    capabilities: [{ id: 'notify.channel.v1' }],
+    ui: { native: { entry: 'ui/native/entry.js' }, settings: { mode: 'native', component: 'MailerSettings', secrets: [{ path: 'password' }] } }
+  },
+  settings: mailerSettings
 })
 
 // Built-in openai / gemini plugins (CONTRACTS §14.1): one account type each
@@ -176,7 +200,7 @@ function builtinAdapterManifest(key: 'openai' | 'gemini', version: string): Any 
     hostCompat: '>=0.1.0 <0.2.0',
     capabilities: [{ id: 'platform.adapter.v1' }],
     platforms: [],
-    account_types: [{ id: 'apikey', label: { en: 'API key', zh: 'API Key' }, form_mode: 'schema', platforms: [key] }],
+    account_types: [{ id: 'apikey', label: { en: 'API key', zh: 'API Key' }, form_mode: 'native', platforms: [key] }],
     gateway_endpoints: [],
     resources: { memoryMB: 128, cpu: 0.5, maxProcs: 128, maxOpenFiles: 1024 }
   }
@@ -198,7 +222,7 @@ for (const key of ['openai', 'gemini'] as const) {
     egress_policy: 'allow_all',
     resources: { memory_mb: 128, cpu: 0.5, max_threads: 128, max_open_files: 1024 },
     versions: [{ version: '0.1.0', consent_status: 'approved' }],
-    grants: [grant('kv'), grant('platform.register'), grant('accounts.credentials', { types: 'own' }), grant('net')],
+    grants: [grant('kv'), grant('platform.register'), grant('net')],
     manifest: m,
     settings: null
   })
@@ -237,7 +261,9 @@ plugins.set('relay', {
   egress_policy: 'allow_all',
   resources: { memory_mb: 64, cpu: 0.1 },
   versions: [{ version: '0.3.0', consent_status: 'approved' }],
-  grants: [grant('kv', null, '0.3.0'), grant('platform.register', null, '0.3.0'), grant('accounts.credentials', { types: 'own' }, '0.3.0'), grant('net', null, '0.3.0')],
+  // Built for the older plugin contract: the nodes refuse to load it.
+  refused_version: '0.3.0',
+  grants: [grant('kv', null, '0.3.0'), grant('platform.register', null, '0.3.0'), grant('net', null, '0.3.0')],
   manifest: {
     key: 'relay',
     version: '0.3.0',
@@ -247,7 +273,7 @@ plugins.set('relay', {
     capabilities: [{ id: 'platform.adapter.v1' }],
     platforms: [],
     gateway_endpoints: [],
-    account_types: [{ id: 'relay_key', label: { en: 'Relay key', zh: '中转 Key' }, form_mode: 'schema', platforms: ['anthropic'] }]
+    account_types: [{ id: 'relay_key', label: { en: 'Relay key', zh: '中转 Key' }, form_mode: 'native', platforms: ['anthropic'] }]
   },
   settings: null
 })
@@ -275,7 +301,7 @@ function videogenManifest(version: string): Any {
       { method: 'POST', path: '/v1/video/generations', protocol: 'myvideo.generate' },
       { method: 'GET', path: '/v1/video/generations/:id', protocol: 'myvideo.status' }
     ],
-    account_types: [{ id: 'video_key', label: { en: 'MyVideo key', zh: 'MyVideo Key' }, form_mode: 'schema', platforms: ['myvideo'] }]
+    account_types: [{ id: 'video_key', label: { en: 'MyVideo key', zh: 'MyVideo Key' }, form_mode: 'native', platforms: ['myvideo'] }]
   }
 }
 
@@ -300,7 +326,6 @@ plugins.set('videogen', {
     grant('kv', null, '0.2.0'),
     grant('platform.register', null, '0.2.0'),
     grant('gateway.endpoint', null, '0.2.0'),
-    grant('accounts.credentials', { types: 'own' }, '0.2.0'),
     grant('net', null, '0.2.0')
   ],
   manifest: videogenManifest('0.2.0'),
@@ -451,7 +476,6 @@ function anthropicReview(version: string): Any {
     host_permissions: [
       { id: 'kv', risk: 'low' },
       { id: 'platform.register', risk: 'high', requires: 'plugin:grant:high' },
-      { id: 'accounts.credentials', risk: 'critical', scope: { types: 'own' }, reason: { en: 'Call the upstream API with account keys', zh: '使用账号密钥调用上游接口' }, requires: 'plugin:grant:critical' },
       { id: 'db.schema', risk: 'high', requires: 'plugin:grant:high' },
       { id: 'jobs', risk: 'medium' },
       { id: 'routes.webhook', risk: 'high', scope: { paths: ['/oauth/callback'] }, requires: 'plugin:grant:high' },
@@ -487,7 +511,7 @@ function genericReview(key: string, version: string, name: Any, publisher: strin
     ],
     account_types: [
       // manifest-shaped platform entries are accepted too
-      { id: 'apikey', label: { en: 'API key', zh: 'API Key' }, form_mode: 'schema', platforms: [{ platform: pid, requestFields: ['model'] }, 'openai'] }
+      { id: 'apikey', label: { en: 'API key', zh: 'API Key' }, form_mode: 'native', platforms: [{ platform: pid }, 'openai'] }
     ],
     hooks: [],
     jobs: [],
@@ -503,7 +527,6 @@ function genericReview(key: string, version: string, name: Any, publisher: strin
       { id: 'log', risk: 'low' },
       { id: 'platform.register', risk: 'high', requires: 'plugin:grant:high' },
       { id: 'gateway.endpoint', risk: 'high', requires: 'plugin:grant:high' },
-      { id: 'accounts.credentials', risk: 'critical', scope: { types: 'own' }, requires: 'plugin:grant:critical' },
       { id: 'net', risk: 'high', scope: { domains: ['api.foo.dev'] }, optional: true, requires: 'plugin:grant:high' }
     ]
   }
@@ -809,7 +832,8 @@ function summary(p: MockPlugin): Any {
   const running = p.status === 'enabled' || p.status === 'upgrading'
   return {
     key: p.key,
-    has_settings: !!p.settings?.schema,
+    // Like the server (plugins.go): the manifest declares ui.settings.
+    has_settings: !!p.settings,
     name: p.name,
     description: p.description,
     status: p.status,
@@ -823,8 +847,21 @@ function summary(p: MockPlugin): Any {
     trust: p.trust,
     node_summary: {
       total: NODES.length,
-      states: running ? { active: NODES.length } : { stopped: NODES.length }
-    }
+      states: p.refused_version ? { failed: NODES.length } : running ? { active: NODES.length } : { stopped: NODES.length }
+    },
+    refusal: p.refused_version ? refusalOf(p.key, p.refused_version) : null
+  }
+}
+
+/** The nodes' refusal of a plugin version built for the older plugin contract. */
+function refusalOf(key: string, version: string): Any {
+  return {
+    code: 'outdated_contract',
+    version,
+    host_version: HOST_VERSION,
+    protocol_version: 2,
+    first_core_version: FIRST_CORE_VERSION,
+    message: `plugin ${key}@${version} was built for an older plugin protocol and cannot be loaded by this core (${HOST_VERSION}, plugin protocol 2); install a version built for core ${FIRST_CORE_VERSION} or later`
   }
 }
 
@@ -1042,19 +1079,21 @@ on('POST', '/plugins/:key/rollouts/:id/cancel', (req) => {
 on('GET', '/plugins/:key/settings', (req) => {
   const p = find(req.params.key)
   if (!p) return notFound(req.params.key)
-  return p.settings ?? { schema: null, ui_schema: null, values: {} }
+  return p.settings ?? { mode: 'none', values: {}, secret_fields: [] }
 })
 
 on('PUT', '/plugins/:key/settings', (req) => {
   const p = find(req.params.key)
   if (!p?.settings) return notFound(req.params.key)
   const values = { ...(req.body?.values || {}) }
-  if (values.max_prompt_kb !== undefined && (values.max_prompt_kb < 1 || values.max_prompt_kb > 256)) {
-    return fail(400, 'invalid_argument', 'invalid settings', { fields: [{ field: 'values.max_prompt_kb', code: 'range', message: 'must be between 1 and 256' }] })
+  if (values.alert_cooldown_sec !== undefined && values.alert_cooldown_sec < 0) {
+    return fail(400, 'invalid_argument', 'invalid settings', { fields: [{ field: 'values.alert_cooldown_sec', code: 'range', message: 'must be 0 or more' }] })
   }
-  // "******" keeps the stored secret (the mock stores it masked anyway)
-  if (values.webhook_secret === '******' || values.webhook_secret === undefined) values.webhook_secret = p.settings.values?.webhook_secret
-  else if (values.webhook_secret) values.webhook_secret = '******'
+  // "******" (or no value) keeps the stored secret, '' clears it; the mock stores it masked anyway.
+  for (const k of p.settings.secret_fields ?? []) {
+    if (values[k] === '******' || values[k] === undefined) values[k] = p.settings.values?.[k]
+    else if (values[k]) values[k] = '******'
+  }
   p.settings.values = values
   return p.settings
 })
@@ -1157,6 +1196,14 @@ on('GET', '/plugins/:key/egress', (req) => {
       result: open ? 'open' : i === 5 ? 'error' : result,
       error: i === 5 ? 'dial tcp: i/o timeout' : '',
       closed_at: open ? null : now(-i * 600)
+    })
+  }
+  if (p.key !== 'guard') {
+    // A request the core was to send for the plugin, refused by plugin network access (CONTRACTS §113).
+    items.push({
+      id: 8999, node_id: NODES[0], network: 'https', host: 'relay.example.org', port: 443, started_at: now(-905),
+      duration_ms: 0, bytes_in: 0, bytes_out: 0, result: 'denied', closed_at: null,
+      error: 'relay.example.org is not on the allowed list of plugin network access'
     })
   }
   const from = req.query.from ? new Date(req.query.from).getTime() : 0

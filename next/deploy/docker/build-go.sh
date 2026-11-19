@@ -96,12 +96,13 @@ else
     "$CLI" build --dir "$dir" --out "$TMP/$name"
     # No PostgreSQL in the image build: the GORM models are compared with
     # migrations/ by the sub2api-plugin tests (TestDBCheck) in CI instead.
-    extra="--skip-db-check"
-    if grep -q '"native"' "$dir/manifest.json" && [ ! -d "$dir/ui/native/dist" ]; then
-      extra="$extra --allow-missing-ui"
+    # A plugin's forms and settings pages exist only as its native UI
+    # (build-ui.sh, the ui stage of next/Dockerfile): never pack without it.
+    if grep -q '"native"' "$dir/manifest.json" && [ ! -f "$dir/ui/native/dist/entry.js" ]; then
+      echo "::error::$name: ui/native/dist/entry.js missing; run deploy/docker/build-ui.sh first" >&2
+      exit 1
     fi
-    # shellcheck disable=SC2086
-    "$CLI" pack --dir "$dir" --runtimes "$TMP/$name" --out "$OUT/market/$name-$ver.s2plugin" $extra
+    "$CLI" pack --dir "$dir" --runtimes "$TMP/$name" --out "$OUT/market/$name-$ver.s2plugin" --skip-db-check
     "$CLI" sign --key "$KEYS/$KEY_ID.key" --key-id "$KEY_ID" "$OUT/market/$name-$ver.s2plugin"
     found=1
   done
@@ -143,9 +144,9 @@ ls -l "$OUT/market"
 #
 # The anthropic/openai/gemini platforms and their endpoints are built into the
 # core itself; the anthropic, openai and gemini plugins only add the API key
-# account types of their platform (anthropic also a model catalog; openai and
-# gemini are runtime "none" packages: no binaries, the core serves their
-# declared upstreams, build skips them and pack carries no runtimes).
+# account types of their platform (anthropic also a model catalog). Like
+# every plugin they have a process: build-demo.sh builds binaries for all of
+# them and every package carries its runtimes.
 # moderation is the LLM prompt moderation hook (CONTRACTS §20):
 # enabled at install, but its mode defaults to off until configured.
 # codex adds the ChatGPT subscription account types (Codex device code and
@@ -159,11 +160,19 @@ ls -l "$OUT/market"
 # (CONTRACTS §74.4) and does nothing until an operator sets its SMTP server.
 # dynweight is install-only: once enabled it is called on every scheduled
 # request, so it is enabled on purpose (CONTRACTS §74.5).
+# newapi is install-only: its account type serves the built-in platforms
+# with a site's key and address, so it does nothing until an operator adds
+# an account; enabled on purpose (CONTRACTS §119).
+# sub2api is install-only for the same reason: a Sub2API site's key and
+# address per account (CONTRACTS §119).
+# typesafe is install-only: enabling it adds the typesafe platform and the
+# POST /v1/systemone endpoint to every node, which a deployment opts into
+# (CONTRACTS §119).
 #
 # Intentionally NOT built in: relay (a market-only account type), guard (an
 # optional gateway hook).
 BUILTIN_PLUGINS=${BUILTIN_PLUGINS:-anthropic openai gemini moderation codex}
-BUILTIN_PLUGINS_INSTALL_ONLY=${BUILTIN_PLUGINS_INSTALL_ONLY:-volcengine mailer dynweight}
+BUILTIN_PLUGINS_INSTALL_ONLY=${BUILTIN_PLUGINS_INSTALL_ONLY:-volcengine mailer dynweight newapi sub2api typesafe}
 for name in $BUILTIN_PLUGINS_INSTALL_ONLY; do
   case " $BUILTIN_PLUGINS " in
     *" $name "*)

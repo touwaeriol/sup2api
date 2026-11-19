@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -18,7 +17,6 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest/check"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/platforms"
-	"github.com/Sub2API-Devs/sup2api/next/sdk/pluginsdk"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/pluginsdk/pluginsdktest"
 )
 
@@ -44,7 +42,7 @@ func TestManifest(t *testing.T) {
 	if err := dec.Decode(&m); err != nil {
 		t.Fatalf("manifest.json: %v", err)
 	}
-	if m.Key != "volcengine" || m.Version != "0.12.8" || m.Publisher != "sub2api" || m.APIVersion != manifest.APIVersion {
+	if m.Key != "volcengine" || m.Version != "0.13.0" || m.Publisher != "sub2api" || m.APIVersion != manifest.APIVersion {
 		t.Fatalf("identity = %s %s %s", m.Key, m.Version, m.Publisher)
 	}
 	if m.Name["en"] == "" || m.Name["zh"] == "" || m.Description["en"] == "" || m.Description["zh"] == "" {
@@ -53,23 +51,21 @@ func TestManifest(t *testing.T) {
 	if m.Runtime != "grpc" || m.Entry.GRPC == nil || m.Entry.GRPC.Binaries == "" || m.HostCompat == "" {
 		t.Fatalf("runtime/entry/hostCompat = %s %+v %s", m.Runtime, m.Entry, m.HostCompat)
 	}
-	// Like every plugin built with SDK 0.2.0 it needs core 0.1.290.
-	for version, want := range map[string]bool{"0.1.288": false, "0.1.290": true} {
+	// The forwarding-v2 contract (one Execute path, Monitor returning its
+	// result) ships with core 0.1.304.
+	for version, want := range map[string]bool{"0.1.303": false, "0.1.304": true} {
 		if got, err := check.HostCompatible(m.HostCompat, version); err != nil || got != want {
 			t.Fatalf("host %s compatibility: %v %v", version, got, err)
 		}
 	}
-	// Stages one to three: one account type, the plugin's own volcengine
-	// platform, and the asset library (schema + admin routes + host-rendered
-	// pages). Still no jobs, no hooks and no scheduler extension - and no
-	// hostUICompat, because nothing here is a native page.
-	if len(m.Jobs) != 0 || len(m.Hooks) != 0 || m.Scheduler != nil || m.HostUICompat != "" {
+	// No jobs, no hooks and no scheduler extension.
+	if len(m.Jobs) != 0 || len(m.Hooks) != 0 || m.Scheduler != nil {
 		t.Fatalf("stage three declares no jobs, hooks or scheduler extension: %+v", m)
 	}
 	if m.Database == nil || m.Database.Schema != "plg_volcengine" || m.Database.Migrations != "migrations/" {
 		t.Fatalf("database = %+v", m.Database)
 	}
-	wantCaps := []string{manifest.CapPlatformAdapter, manifest.CapPlatformExecute, manifest.CapPlatformTasks, manifest.CapPlatformPoll, manifest.CapPlatformMonitor, manifest.CapHTTPRoutes}
+	wantCaps := []string{manifest.CapPlatformAdapter, manifest.CapPlatformTasks, manifest.CapPlatformMonitor, manifest.CapHTTPRoutes}
 	gotCaps := make([]string, 0, len(m.Capabilities))
 	for _, c := range m.Capabilities {
 		gotCaps = append(gotCaps, c.ID)
@@ -185,89 +181,21 @@ func TestManifest(t *testing.T) {
 		t.Fatalf("relay guardedSettings = %+v, want none: a relay's address cannot be an allow-list", relay.GuardedSettings)
 	}
 
-	// The form's length limit and the plugin's must agree. They are written in
-	// two languages and nothing links them, so a change to one alone means the
-	// form accepts a value the plugin then refuses on every request.
-	var limits struct {
-		Properties map[string]struct {
-			MaxLength int `json:"maxLength"`
-		} `json:"properties"`
-	}
-	if err := json.Unmarshal(mustJSONFile(t, relay.Form.Schema), &limits); err != nil {
-		t.Fatal(err)
-	}
-	for _, f := range []string{volcengine.FieldAPIPrefix, volcengine.FieldVideoAPIPrefix} {
-		if got := limits.Properties[f].MaxLength; got != volcengine.MaxPrefixLen {
-			t.Errorf("form %s maxLength = %d, plugin MaxPrefixLen = %d", f, got, volcengine.MaxPrefixLen)
-		}
-	}
-
-	// Both forms: the fields each type offers, and what each one requires.
+	// Both forms are native code (ui/native/src): the components entry.ts
+	// registers. What a field may hold is checked by ValidateCredentials
+	// (internal/volcengine/form_constraints_test.go); in particular neither
+	// half of the AK/SK pair is required, since an account without an asset
+	// library is legal.
 	for _, c := range []struct {
-		at       manifest.AccountType
-		required []string
-		fields   []string
-		absent   []string
-	}{
-		{official, []string{"api_key"},
-			[]string{"api_key", "base_url", volcengine.FieldAccessKey, volcengine.FieldSecretKey,
-				volcengine.FieldAssetBaseURL, volcengine.FieldAssetRegion},
-			[]string{volcengine.FieldAPIPrefix, volcengine.FieldVideoAPIPrefix, "video_endpoint", "asset_endpoint", "model_mapping"}},
-		// base_url is required on the relay form because relaySpec has no
-		// default: falling back to Ark's address would send a relay's key to
-		// Ark, which answers 401 - an error that says nothing about the
-		// missing setting.
-		{relay, []string{"api_key", "base_url"},
-			[]string{"api_key", "base_url", "video_endpoint", "asset_endpoint", volcengine.FieldAPIPrefix, volcengine.FieldVideoAPIPrefix,
-				volcengine.FieldAccessKey, volcengine.FieldSecretKey,
-				volcengine.FieldAssetBaseURL, volcengine.FieldAssetRegion},
-			[]string{"model_mapping"}},
-	} {
-		var schema struct {
-			Required   []string                   `json:"required"`
-			Properties map[string]json.RawMessage `json:"properties"`
+		at        manifest.AccountType
+		component string
+	}{{official, "VolcengineKeyForm"}, {relay, "VolcengineRelayForm"}} {
+		if !reflect.DeepEqual(c.at.Form, manifest.Form{Mode: "native", Component: c.component}) {
+			t.Errorf("%s form = %+v, want the native %s", c.at.ID, c.at.Form, c.component)
 		}
-		if err := json.Unmarshal(mustJSONFile(t, c.at.Form.Schema), &schema); err != nil {
-			t.Fatal(err)
-		}
-		mustJSONFile(t, c.at.Form.UISchema)
-		if !slices.Equal(schema.Required, c.required) {
-			t.Fatalf("%s form: required %v, want %v", c.at.ID, schema.Required, c.required)
-		}
-		for _, f := range c.fields {
-			if _, ok := schema.Properties[f]; !ok {
-				t.Fatalf("%s form schema has no %s property", c.at.ID, f)
-			}
-		}
-		for _, f := range c.absent {
-			if _, bad := schema.Properties[f]; bad {
-				t.Fatalf("%s form schema must not declare %s", c.at.ID, f)
-			}
-		}
-		// The asset library is opt-in per account: neither half of the AK/SK
-		// pair may be a required form field, or every account would suddenly
-		// need one.
-		for _, f := range []string{volcengine.FieldAccessKey, volcengine.FieldSecretKey} {
-			if slices.Contains(schema.Required, f) {
-				t.Fatalf("%s: %s must not be required: an account without an asset library is legal", c.at.ID, f)
-			}
-		}
-		// ui:order must list every property, or a field the form offers has no
-		// defined position.
-		var ui struct {
-			Order []string `json:"ui:order"`
-		}
-		if err := json.Unmarshal(mustJSONFile(t, c.at.Form.UISchema), &ui); err != nil {
-			t.Fatal(err)
-		}
-		for f := range schema.Properties {
-			if !slices.Contains(ui.Order, f) {
-				t.Errorf("%s ui:order does not list %s", c.at.ID, f)
-			}
-		}
-		if len(ui.Order) != len(schema.Properties) {
-			t.Errorf("%s ui:order = %v, but the schema has %d properties", c.at.ID, ui.Order, len(schema.Properties))
-		}
+	}
+	if m.UI == nil || m.UI.Native == nil || m.UI.Native.Entry != "ui/native/entry.js" || m.HostUICompat != "^4.0" {
+		t.Fatalf("native UI = %+v, hostUICompat %q", m.UI, m.HostUICompat)
 	}
 
 	// Official Ark now serves Messages through its compatibility API. Existing
@@ -310,22 +238,20 @@ func TestManifest(t *testing.T) {
 	for id, byName := range map[string]map[string]manifest.AccountPlatform{
 		volcengine.AccountTypeAPIKey: officialPlatforms, volcengine.AccountTypeRelay: relayPlatforms} {
 		own := byName[volcengine.PlatformVolcengine]
-		if len(own.PassHeaders) != 0 || len(own.RequestFields) != 0 || len(own.Usage) != 0 {
+		if len(own.PassHeaders) != 0 || len(own.Usage) != 0 {
 			t.Fatalf("%s own platform entry = %+v", id, own)
 		}
 	}
-	// anthropic's passHeaders must be narrowed the same way openai's is, and
-	// must match what upstreamHeaders forwards: passHeaders REPLACES the
-	// platform's list rather than merging, so a header named on one side and
-	// not the other is dropped at whichever side forgot it. anthropic-version
-	// and anthropic-beta are in both because they change how the upstream
-	// reads the body.
+	// anthropic's passHeaders are narrowed the same way openai's is: the
+	// plugin forwards exactly what the core hands over. anthropic-version and
+	// anthropic-beta are in it because they change how the upstream reads the
+	// body.
 	anth := relayPlatforms[volcengine.PlatformAnthropic]
 	if !reflect.DeepEqual(officialPlatforms[volcengine.PlatformAnthropic], anth) {
 		t.Fatal("official and relay Messages must share exclusive usage and header declarations")
 	}
-	if !slices.Equal(anth.PassHeaders, volcengine.AnthropicForwardHeaders()) || len(anth.RequestFields) != 0 {
-		t.Fatalf("anthropic platform entry = %+v, want passHeaders %v", anth, volcengine.AnthropicForwardHeaders())
+	if want := []string{"anthropic-version", "anthropic-beta", "user-agent"}; !slices.Equal(anth.PassHeaders, want) {
+		t.Fatalf("anthropic platform entry = %+v, want passHeaders %v", anth, want)
 	}
 	// The old override existed for ONE measured reason; the platform now
 	// handles it, so the account type must inherit the complete rules.
@@ -362,34 +288,35 @@ func TestManifest(t *testing.T) {
 	}
 	// Ark ignores OpenAI's org/project and x-stainless-* headers, so both
 	// account types narrow the built-in platform's passHeaders; the usage
-	// rules and requestFields are inherited (Ark is OpenAI-compatible and
+	// rules are inherited (Ark is OpenAI-compatible and
 	// its token counts are inclusive, like the built-in platform's).
 	for id, byName := range map[string]map[string]manifest.AccountPlatform{
 		volcengine.AccountTypeAPIKey: officialPlatforms, volcengine.AccountTypeRelay: relayPlatforms} {
 		ap := byName[volcengine.PlatformID]
-		if !slices.Equal(ap.PassHeaders, volcengine.ForwardHeaders()) {
-			t.Errorf("%s openai passHeaders = %v, want %v", id, ap.PassHeaders, volcengine.ForwardHeaders())
+		if want := []string{"user-agent"}; !slices.Equal(ap.PassHeaders, want) {
+			t.Errorf("%s openai passHeaders = %v, want %v", id, ap.PassHeaders, want)
 		}
-		if len(ap.RequestFields) != 0 || len(ap.Usage) != 0 {
-			t.Errorf("%s: requestFields/usage must stay inherited: %+v", id, ap)
+		if len(ap.Usage) != 0 {
+			t.Errorf("%s: usage must stay inherited: %+v", id, ap)
+		}
+		// The endpoints Ark serves on the built-in platform are listed, so an
+		// endpoint the core adds there (OpenAI's image generations and edits)
+		// does not reach Ark; Ark's own images are on the volcengine platform.
+		if want := []string{"chat_completions", "responses", "responses_websocket", "embeddings"}; !slices.Equal(ap.Endpoints, want) {
+			t.Errorf("%s openai endpoints = %v, want %v", id, ap.Endpoints, want)
 		}
 	}
 	if b := builtin(t); b != nil {
 		// WebSocket endpoints are only routed to plugins declaring
 		// platform.websocket.v1, which this one does not.
 		var got []string
-		for _, p := range b.Protocols() {
-			if !slices.ContainsFunc(b.Endpoints, func(e manifest.Endpoint) bool { return e.Protocol == p && e.WebSocket() }) {
-				got = append(got, p)
+		for _, e := range b.Endpoints {
+			if officialPlatforms[volcengine.PlatformID].SupportsEndpoint(e.ID) && !e.WebSocket() {
+				got = append(got, e.Protocol)
 			}
 		}
 		if !slices.Equal(got, volcengine.Protocols) {
-			t.Fatalf("built-in openai protocols %v, implemented %v", got, volcengine.Protocols)
-		}
-		for _, h := range volcengine.ForwardHeaders() {
-			if !slices.Contains(b.PassHeaders, h) {
-				t.Errorf("forwarded header %q is not in the built-in platform's passHeaders %v", h, b.PassHeaders)
-			}
+			t.Fatalf("served built-in openai protocols %v, implemented %v", got, volcengine.Protocols)
 		}
 		if b.Usage.Semantics != "inclusive" {
 			t.Errorf("built-in openai usage semantics = %q; Ark is inclusive too, check the override", b.Usage.Semantics)
@@ -406,13 +333,12 @@ func TestManifest(t *testing.T) {
 		}
 		perms[p.ID] = p
 	}
-	// Stage three adds exactly five permissions, and every one of them is
-	// what the administrator sees on the consent screen. Notably absent:
-	// ui.native (Critical) - the asset pages are rendered by the host from
-	// the manifest instead.
+	// Every permission is what the administrator sees on the consent
+	// screen. ui.native (Critical) is the plugin's own console code (the
+	// account forms). Notably absent: net - the asset library's requests are
+	// sent by the host (SendAccountRequest), the plugin opens no connection.
 	wantPerms := []string{
-		"platform.register", "gateway.endpoint", "accounts.credentials",
-		"accounts.read", "db.schema", "routes.admin", "ui.menu", "net",
+		"platform.register", "gateway.endpoint", "db.schema", "routes.admin", "ui.menu", "ui.native",
 	}
 	if len(perms) != len(wantPerms) {
 		t.Fatalf("host permissions = %v, want %v", perms, wantPerms)
@@ -422,22 +348,11 @@ func TestManifest(t *testing.T) {
 			t.Fatalf("missing host permission %q", id)
 		}
 	}
-	if _, bad := perms["ui.native"]; bad {
-		t.Error("the asset library uses host-rendered pages; ui.native (Critical) must not be requested")
-	}
-	if c, ok := perms["accounts.credentials"]; !ok || c.Scope["types"] != "own" || len(c.Scope) != 1 {
-		t.Fatalf("accounts.credentials scope = %v", c.Scope)
-	}
-	// accounts.read is what lets the plugin list its own accounts without
-	// touching credentials (CONTRACTS §26.6); it carries no scope.
-	if c := perms["accounts.read"]; len(c.Scope) != 0 {
-		t.Errorf("accounts.read scope = %v, want none", c.Scope)
-	}
-	// The net allowlist has to cover the default asset endpoint, or the
-	// asset library is dead on a node whose egress policy is an allowlist.
-	doms, _ := check.StringList(perms["net"].Scope, "domains")
-	if !hostAllowed(doms, hostOf(t, volcengine.DefaultAssetBaseURL)) {
-		t.Errorf("net domains %v do not cover the default asset endpoint %q", doms, volcengine.DefaultAssetBaseURL)
+	// The core sends the asset library's requests only to hosts the
+	// manifest allows: the default asset endpoint has to be an external
+	// service, or an account that leaves asset_base_url empty is refused.
+	if !manifest.ExternalServiceHost(m.ExternalServices, hostOf(t, volcengine.DefaultAssetBaseURL)) {
+		t.Errorf("externalServices %v do not cover the default asset endpoint %q", m.ExternalServices, volcengine.DefaultAssetBaseURL)
 	}
 	// The addresses shown on the consent screen must be the ones the plugin
 	// can actually reach by default - the two API hosts and the asset
@@ -458,24 +373,10 @@ func hostOf(t *testing.T, raw string) string {
 	return u.Host
 }
 
-// hostAllowed mirrors the core's egress allowlist matching (server
-// plugin/egress AllowedHost): an exact host or a "*.suffix" wildcard.
-func hostAllowed(domains []string, host string) bool {
-	for _, d := range domains {
-		if d == "*" || d == host {
-			return true
-		}
-		if suffix, ok := strings.CutPrefix(d, "*."); ok && strings.HasSuffix(host, "."+suffix) {
-			return true
-		}
-	}
-	return false
-}
-
 // TestAssetRoutesAndPages pins the asset library's declared surface: every
 // route is an admin route behind one of the plugin's two permissions and
-// account:read (reads) or account:update (writes), and every host-rendered
-// page reads a route that actually exists. Only the routes naming an account
+// account:read (reads) or account:update (writes), and the two native pages
+// and the routes they use exist. Only the routes naming an account
 // directly pass the own level; the others reach accounts through rows of
 // this plugin, which the core cannot see.
 func TestAssetRoutesAndPages(t *testing.T) {
@@ -513,62 +414,25 @@ func TestAssetRoutesAndPages(t *testing.T) {
 		}
 		declared[r.Method+" "+r.Path] = true
 	}
-	if m.UI == nil || len(m.UI.Pages) == 0 {
-		t.Fatal("stage three declares the asset library pages")
+	// The two list pages are native (ui/native/src/pages.ts): the create
+	// dialogs live inside them, so there are no form pages any more.
+	wantPages := map[string]string{"assets": "VolcengineAssetsPage", "asset_groups": "VolcengineAssetGroupsPage"}
+	if m.UI == nil || len(m.UI.Pages) != len(wantPages) {
+		t.Fatalf("pages = %+v, want %v", m.UI, wantPages)
 	}
-	for id, pg := range m.UI.Pages {
-		switch pg.Type {
-		case "table":
-			if pg.Source == "" {
-				t.Fatalf("page %s has no source", id)
-			}
-			if !declared[pg.Source] {
-				t.Errorf("page %s reads %q, which is not a declared route", id, pg.Source)
-			}
-			if len(pg.Columns) == 0 {
-				t.Errorf("page %s has no columns", id)
-			}
-			// Both index tables are searchable, and the name they declare has
-			// to be the one the route reads. The console renders a search box
-			// only for a page that declares one and sends the text under that
-			// name, so a mismatch here is a box that filters nothing while
-			// looking like it does - which is what these two pages shipped
-			// with, and why the front end deleted the box.
-			if pg.Search != volcengine.SearchParam {
-				t.Errorf("page %s declares search %q, but the route reads %q",
-					id, pg.Search, volcengine.SearchParam)
-			}
-			for _, c := range pg.Columns {
-				switch c.Format {
-				case "text", "number", "datetime", "badge", "currency":
-				default:
-					// The console silently falls back to plain text for an
-					// unknown format, so a typo would never be noticed.
-					t.Errorf("page %s column %s: unsupported format %q", id, c.Key, c.Format)
-				}
-				if c.Label["en"] == "" || c.Label["zh"] == "" {
-					t.Errorf("page %s column %s needs an en and zh label", id, c.Key)
-				}
-			}
-		case "form":
-			if !declared[pg.Submit] {
-				t.Errorf("page %s submits to %q, which is not a declared route", id, pg.Submit)
-			}
-			mustJSONFile(t, pg.Schema)
-			// DeclarativeForm loads "<name>.ui.json" next to the schema.
-			mustJSONFile(t, strings.TrimSuffix(pg.Schema, ".schema.json")+".ui.json")
-		default:
-			t.Errorf("page %s type = %q; stage three only uses host-rendered pages", id, pg.Type)
+	for id, component := range wantPages {
+		pg := m.UI.Pages[id]
+		if pg.Type != "native" || pg.Component != component || pg.Title["en"] == "" || pg.Title["zh"] == "" {
+			t.Errorf("page %s = %+v, want the native %s with a title", id, pg, component)
 		}
 	}
-	// Every menu points at a declared page and carries the permission of the
-	// route behind it. The create forms are opened from their tables' "New"
-	// buttons, which need the manage permission.
-	for id, pg := range m.UI.Pages {
-		if pg.Create != nil && (pg.Create.Permission != volcengine.PermAssetsManage || m.UI.Pages[pg.Create.Page].Type != "form") {
-			t.Errorf("page %s create link = %+v", id, pg.Create)
+	// The routes the pages read and post to.
+	for _, r := range []string{"GET /assets", "POST /assets", "GET /asset-groups", "POST /asset-groups"} {
+		if !declared[r] {
+			t.Errorf("route %s is not declared", r)
 		}
 	}
+	// Every menu points at a declared page and carries the read permission.
 	for _, mn := range m.UI.Menus {
 		if _, ok := m.UI.Pages[mn.Page]; !ok {
 			t.Errorf("menu %s points at unknown page %q", mn.ID, mn.Page)
@@ -581,8 +445,8 @@ func TestAssetRoutesAndPages(t *testing.T) {
 
 // TestManifestServes runs the plugin with its embedded manifest.
 func TestManifestServes(t *testing.T) {
-	h := pluginsdktest.Start(t, volcengine.New(), pluginsdktest.Options{SDK: []pluginsdk.Option{pluginsdk.WithManifest(manifestJSON)}})
-	want := []string{manifest.CapPlatformAdapter, manifest.CapPlatformExecute, manifest.CapPlatformTasks, manifest.CapPlatformPoll, manifest.CapPlatformMonitor, manifest.CapHTTPRoutes}
+	h := pluginsdktest.Start(t, volcengine.New(), pluginsdktest.Options{Manifest: manifestJSON})
+	want := []string{manifest.CapPlatformAdapter, manifest.CapPlatformTasks, manifest.CapPlatformMonitor, manifest.CapHTTPRoutes}
 	got := h.Info.GetCapabilities()
 	slices.Sort(got)
 	slices.Sort(want)
@@ -596,24 +460,18 @@ func TestManifestServes(t *testing.T) {
 // this package, so a rule the core enforces at install time fails here first.
 func TestValidate(t *testing.T) {
 	files := map[string][]byte{
-		"manifest.json":                   manifestJSON,
-		"runtimes/linux-amd64/plugin":     []byte("elf"),
-		"runtimes/linux-arm64/plugin":     []byte("elf"),
-		"forms/apikey.schema.json":        mustJSONFile(t, "forms/apikey.schema.json"),
-		"forms/apikey.ui.json":            mustJSONFile(t, "forms/apikey.ui.json"),
-		"forms/relay.schema.json":         mustJSONFile(t, "forms/relay.schema.json"),
-		"forms/relay.ui.json":             mustJSONFile(t, "forms/relay.ui.json"),
-		"forms/asset-group.schema.json":   mustJSONFile(t, "forms/asset-group.schema.json"),
-		"forms/asset-group.ui.json":       mustJSONFile(t, "forms/asset-group.ui.json"),
-		"forms/asset.schema.json":         mustJSONFile(t, "forms/asset.schema.json"),
-		"forms/asset.ui.json":             mustJSONFile(t, "forms/asset.ui.json"),
-		"migrations/0001_init.sql":        mustFile(t, "migrations/0001_init.sql"),
-		"migrations/0002_video_tasks.sql": mustFile(t, "migrations/0002_video_tasks.sql"),
+		"manifest.json":                        manifestJSON,
+		"runtimes/linux-amd64/plugin":          []byte("elf"),
+		"runtimes/linux-arm64/plugin":          []byte("elf"),
+		"ui/native/entry.js":                   []byte("export function register() {}"),
+		"migrations/0001_init.sql":             mustFile(t, "migrations/0001_init.sql"),
+		"migrations/0002_video_tasks.sql":      mustFile(t, "migrations/0002_video_tasks.sql"),
+		"migrations/0003_drop_video_tasks.sql": mustFile(t, "migrations/0003_drop_video_tasks.sql"),
 	}
 	for _, icon := range []string{"assets/volcengine-color.svg", "assets/doubao-color.svg"} {
 		files[icon] = mustFile(t, icon)
 	}
-	if err := check.Validate(decodeManifest(t), files, check.ValidateOptions{HostVersion: "0.1.290"}); err != nil {
+	if err := check.Validate(decodeManifest(t), files, check.ValidateOptions{HostVersion: "0.1.304"}); err != nil {
 		t.Fatalf("core manifest validation: %v", err)
 	}
 }
@@ -688,6 +546,32 @@ func TestPlatformDeclaration(t *testing.T) {
 					t.Errorf("endpoint %s %s conflicts with built-in %q (%s %s)", ee.Method, ee.Path, bp.ID, be.Method, be.Path)
 				}
 			}
+		}
+	}
+}
+
+// TestAnthropicMessagesOnly: both account types serve only the messages
+// endpoint of the anthropic platform. Without the subset the core would
+// route count_tokens to them natively (and never use its local estimate),
+// and Ark has no token-counting endpoint, so the request could only fail.
+func TestAnthropicMessagesOnly(t *testing.T) {
+	m := decodeManifest(t)
+	if len(m.AccountTypes) != 2 {
+		t.Fatalf("account types = %d, want official and relay", len(m.AccountTypes))
+	}
+	for _, at := range m.AccountTypes {
+		found := false
+		for _, ap := range at.Platforms {
+			if ap.Platform != volcengine.PlatformAnthropic {
+				continue
+			}
+			found = true
+			if !slices.Equal(ap.Endpoints, []string{"messages"}) {
+				t.Errorf("%s: anthropic endpoints = %v, want [messages]", at.ID, ap.Endpoints)
+			}
+		}
+		if !found {
+			t.Errorf("%s: does not serve the anthropic platform", at.ID)
 		}
 	}
 }
@@ -907,15 +791,6 @@ func builtin(t *testing.T) *manifest.Platform {
 	return nil
 }
 
-func mustJSONFile(t *testing.T, p string) []byte {
-	t.Helper()
-	b := mustFile(t, p)
-	if !json.Valid(b) {
-		t.Fatalf("%s is not valid JSON", p)
-	}
-	return b
-}
-
 func mustFile(t *testing.T, p string) []byte {
 	t.Helper()
 	b, err := os.ReadFile(filepath.FromSlash(p))
@@ -940,37 +815,8 @@ func builtinNamed(t *testing.T, id string) *manifest.Platform {
 // New endpoint settings are optional and have no defaults: merely editing an
 // old account must not override its existing video prefix or asset URL.
 func TestEndpointFormsPreserveLegacyAccounts(t *testing.T) {
-	raw := mustJSONFile(t, "forms/relay.schema.json")
-	var schema struct {
-		Properties map[string]struct {
-			Pattern   string          `json:"pattern"`
-			Default   json.RawMessage `json:"default"`
-			MaxLength int             `json:"maxLength"`
-		} `json:"properties"`
-	}
-	if err := json.Unmarshal(raw, &schema); err != nil {
-		t.Fatal(err)
-	}
-	for _, field := range []string{"video_endpoint", "asset_endpoint"} {
-		property, ok := schema.Properties[field]
-		if !ok || len(property.Default) != 0 || property.MaxLength != 2048 {
-			t.Fatalf("%s needs bounded optional endpoint without a default", field)
-		}
-		pattern, err := regexp.Compile(property.Pattern)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, value := range []string{"", "/api/v3/contents/generations/tasks", "/api/support/v1/asset", "https://relay.example.com/tasks", "http://relay.example.com/assets"} {
-			if !pattern.MatchString(value) {
-				t.Errorf("%s rejected %q", field, value)
-			}
-		}
-		for _, value := range []string{"//other.example.com/tasks", "relative/path", "https://relay.example.com/tasks?query=1", "https://relay.example.com/tasks#fragment", "/a b"} {
-			if pattern.MatchString(value) {
-				t.Errorf("%s accepted malformed endpoint %q", field, value)
-			}
-		}
-	}
+	// The endpoint fields themselves are checked by ValidateCredentials
+	// (TestRelayFormConstraints): optional, no default, a URL or a path.
 	m := decodeManifest(t)
 	for _, at := range m.AccountTypes {
 		if at.ID == "apikey" && at.Label["zh"] != "字节火山方舟 · 官方通用" || at.ID == "relay" && at.Label["zh"] != "豆包视频" {
@@ -1027,6 +873,24 @@ func TestV1AliasEndpoints(t *testing.T) {
 		}
 		if a, b := norm(primary), norm(alias); a != b {
 			t.Errorf("v1_%s differs from %s beyond id, path and task kind:\n primary %s\n alias   %s", id, id, a, b)
+		}
+	}
+}
+
+// TestUpstreamFieldsNameTheTaskHosts: Monitor's fetch may reach the hosts of
+// the account's declared upstreamFields besides externalServices, so every
+// field taskQuery takes an address from must be declared: base_url on both
+// types, video_endpoint (an absolute URL is allowed) on the relay type.
+func TestUpstreamFieldsNameTheTaskHosts(t *testing.T) {
+	want := map[string][]string{
+		volcengine.AccountTypeAPIKey: {"base_url"},
+		volcengine.AccountTypeRelay:  {"base_url", volcengine.FieldVideoEndpoint},
+	}
+	for _, at := range decodeManifest(t).AccountTypes {
+		for _, field := range want[at.ID] {
+			if !slices.Contains(at.UpstreamFields, field) {
+				t.Errorf("%s upstreamFields = %v, missing %s", at.ID, at.UpstreamFields, field)
+			}
 		}
 	}
 }

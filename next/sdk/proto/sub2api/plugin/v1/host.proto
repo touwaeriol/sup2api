@@ -4,13 +4,16 @@ package sub2api.plugin.v1;
 
 option go_package = "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1;pluginv1";
 
+import "sub2api/plugin/v1/common.proto";
 import "sub2api/plugin/v1/platform.proto";
 import "sub2api/plugin/v1/observation.proto";
 
 // HostService is served by the host to one plugin instance over the
 // go-plugin broker. The host knows which plugin is calling from the broker
-// connection and checks the matching grant on every call. ExecuteHTTP instead
-// requires the invocation-local authority issued by the host for Poll.
+// connection and checks the matching grant on every call. RelayUpstream and
+// ExecuteHTTP instead require the invocation-local authority (execution
+// token) the host issued for one PlatformService.Execute or Monitor call, or
+// (ExecuteHTTP only) for one console call of HTTPService.HandleHTTP.
 // Calls without the required authority fail with PERMISSION_DENIED.
 service HostService {
   rpc SetAccountAutomaticState(SetAccountAutomaticStateRequest) returns (SetAccountAutomaticStateResponse);
@@ -42,17 +45,33 @@ service HostService {
   rpc Notify(NotifyRequest) returns (NotifyResponse);
   // Pure local tokenization. No upstream traffic and no billing side effects.
   rpc CountTokens(CountTokensRequest) returns (CountTokensResponse);
-  // These callbacks are authorized only by an active Execute/Monitor scope,
-  // bound to the calling process, selected account and immutable attribution.
-  // No monetary amount, user identity or account selector is accepted.
-  rpc ForwardUpstream(ForwardUpstreamRequest) returns (ForwardUpstreamResponse);
-  rpc RecordUsage(RecordUsageRequest) returns (ExecutionReceipt);
-  // Submission usage, optional precharge and the durable polling registration
-  // commit together. Success must precede publishing the submission response.
-  rpc ReserveAndWatch(ReserveAndWatchRequest) returns (ExecutionReceipt);
-  // Atomically persists progress; terminal reports settle/refund and close
-  // monitoring in the same transaction. Repeating the same report is safe.
-  rpc ReportTaskProgress(ReportTaskProgressRequest) returns (ExecutionReceipt);
+  // The host's HTTP client for one PlatformService.Execute call (relay) and
+  // for Execute and Monitor calls (ExecuteHTTP, the fetch form). A plugin
+  // opens no socket: it describes the request and the host sends it under
+  // the account of the call - its proxy, transport, SSRF guard, timeouts
+  // and the operator's header settings. Authority is the call's
+  // execution token, bound to the calling process, the selected account and
+  // immutable attribution, and void once the call returns. No monetary
+  // amount, user identity or account selector is accepted, and the host
+  // never retries: retry and failover are its own decision per attempt.
+  //
+  // RelayUpstream hands over the FINAL upstream request of the execution;
+  // the upstream's answer goes to the client, never to the plugin. At most
+  // one per execution, in one of two forms:
+  //   - wait = false: the host validates the request (URL and its host,
+  //     SSRF name check, headers) and answers at once with an empty
+  //     response. Nothing is sent until Execute returns
+  //     host_usage; the host then sends, relays and reads the usage by the
+  //     declared rules. An Execute that fails or returns anything else
+  //     after this leaves the request unsent.
+  //   - wait = true: the host sends and relays now and answers when the
+  //     exchange has ended, with the observation of a successful answer
+  //     (the whole body, or the listed events of a stream) or the facts of
+  //     a failed one. Only for executions whose
+  //     ExecuteRequest sets extract_usage or task_submission; otherwise
+  //     FAILED_PRECONDITION.
+  // A request the host refuses is INVALID_ARGUMENT and counts as not relayed.
+  rpc RelayUpstream(RelayUpstreamRequest) returns (RelayUpstreamResponse);
   // log (always granted)
   rpc Log(LogRequest) returns (LogResponse);
 
@@ -66,19 +85,19 @@ service HostService {
   // (MGET, one host-owned script, DEL), so the cost does not grow with the
   // number of keys the way N single calls do.
   //
-  //   * Namespace, key, value and ttl rules are those of the single calls.
+  //   - Namespace, key, value and ttl rules are those of the single calls.
   //     At most 512 keys or items per call, and at most 3 MiB of keys plus
   //     values in one KVSetMany; otherwise INVALID_ARGUMENT. A key may
   //     repeat: KVGetMany answers every occurrence, KVSetMany keeps the
   //     last one. No keys is valid and does nothing.
-  //   * KVGetMany answers one item per requested key, in request order.
+  //   - KVGetMany answers one item per requested key, in request order.
   //     When the values found add up to more than 3 MiB the call fails with
   //     RESOURCE_EXHAUSTED and the caller asks for fewer keys (48 keys
   //     always fit).
-  //   * KVSetMany is all or nothing: when any item is invalid nothing is
+  //   - KVSetMany is all or nothing: when any item is invalid nothing is
   //     written, otherwise every item is written with its own ttl in one
   //     atomic step. ttl_seconds is 0 (no expiry) up to 9223372036.
-  //   * The script is the host's own. Plugins cannot submit scripts.
+  //   - The script is the host's own. Plugins cannot submit scripts.
   rpc KVGetMany(KVGetManyRequest) returns (KVGetManyResponse);
   rpc KVSetMany(KVSetManyRequest) returns (KVSetManyResponse);
   rpc KVDeleteMany(KVDeleteManyRequest) returns (KVDeleteManyResponse);
@@ -96,15 +115,19 @@ service HostService {
   // multiplier. Read only: nothing is charged or recorded (CONTRACTS §72.13.1).
   rpc PriceUsage(PriceUsageRequest) returns (PriceUsageResponse);
 
-  // db.schema: restricted DSN for the plugin schema. The connection must go
-  // through EgressService (the SDK dialer does this automatically).
+  // db.schema: the DSN of the plugin schema (CONTRACTS §115). Behind the
+  // egress tunnel it is the virtual address db.sub2api:5432 without
+  // credentials, which the core logs in to as its own database user with
+  // search_path on the schema; without the tunnel (development) it is the
+  // core's DSN with search_path pinned. The SDK dialer goes through
+  // EgressService automatically.
   rpc GetDSN(GetDSNRequest) returns (GetDSNResponse);
 
   // authz: does a console user hold a permission? Own keys always; others
   // need authz.read.
   rpc AuthzCheck(AuthzCheckRequest) returns (AuthzCheckResponse);
 
-  // accounts.read: which accounts may the caller of a request act on? The
+  // Always granted: which accounts may the caller of a request act on? The
   // answer is the core's own account scope rule (CONTRACTS §21.0), so a
   // plugin route applies it instead of deciding by itself. user_id must be
   // the Caller of an HTTPService.HandleHTTP request this plugin is serving
@@ -146,19 +169,19 @@ service HostService {
   // Redis, for work that must not run on two nodes at once. Periodic work
   // belongs in manifest jobs[] instead (each trigger runs once cluster-wide).
   //
-  //   * The host prefixes every name: the Redis key is
+  //   - The host prefixes every name: the Redis key is
   //     lock:plugin:{plugin_key}:{name}, so plugins never see each other's
   //     locks. name must match ^[A-Za-z0-9._:/-]{1,128}$ and ttl_ms must be
   //     1000..300000, otherwise INVALID_ARGUMENT.
-  //   * Validity is reported as a DURATION (valid_ms), counted by the host on
+  //   - Validity is reported as a DURATION (valid_ms), counted by the host on
   //     its own clock from when it took or extended the lock, minus a drift
   //     margin - never as an absolute time, so plugin and host clocks do not
   //     have to agree. The plugin should count it from BEFORE it sent the
   //     request.
-  //   * The locks are NOT fenced: a holder that stalls past its validity may
+  //   - The locks are NOT fenced: a holder that stalls past its validity may
   //     find another node has taken the lock meanwhile, so the guarded work
   //     must still be idempotent.
-  //   * The PLUGIN chooses the owner token: a fresh random value for every
+  //   - The PLUGIN chooses the owner token: a fresh random value for every
   //     LockAcquire (at least 16 random bytes, e.g. from a CSPRNG, encoded
   //     as URL-safe base64 or hex), matching ^[A-Za-z0-9_-]{16,128}$. The
   //     host stores it as the lock's value in Redis. Because the plugin
@@ -166,14 +189,14 @@ service HostService {
   //     unknown (UNAVAILABLE, a deadline, a broken connection) can be undone
   //     with LockRelease(name, token) instead of blocking every other node
   //     until the ttl runs out.
-  //   * Never reuse a token: a LockAcquire with the token of a lock this
+  //   - Never reuse a token: a LockAcquire with the token of a lock this
   //     plugin ALREADY holds under that name fails the SET NX, and the
   //     cleanup of the failed attempt (a compare-and-delete with the same
   //     token) then deletes the held lock. The call answers acquired=false
   //     and nobody holds the lock afterwards.
-  //   * The host keeps no state per lock: when the plugin process dies its
+  //   - The host keeps no state per lock: when the plugin process dies its
   //     locks lapse after their ttl.
-  //   * Errors: no "lock" grant -> PERMISSION_DENIED; bad name, ttl or token
+  //   - Errors: no "lock" grant -> PERMISSION_DENIED; bad name, ttl or token
   //     -> INVALID_ARGUMENT; Redis unavailable or outcome unknown ->
   //     UNAVAILABLE (the lock may or may not be held - treat it as not held;
   //     after a LockAcquire, call LockRelease with the same token).
@@ -193,51 +216,72 @@ service HostService {
 
   // ---------------------------------------------------------------- accounts
   //
-  // The two calls below let a plugin read the accounts of ITS OWN account
-  // types outside a gateway request - a plugin's own HTTP routes get only
+  // The calls below let a plugin reach the accounts of ITS OWN account types
+  // outside a gateway request - a plugin's own HTTP routes get only
   // Caller{user_id, request_id, client_ip, locale}, so without them a console
   // page that has to talk to the upstream with the account's own credentials
   // (the Volcengine Ark asset library signs its OpenAPI calls with the
-  // account's AK/SK) cannot be built at all.
+  // account's AK/SK) cannot be built at all. No grant: a plugin receives the
+  // accounts of the account types it declares (CONTRACTS §124).
   //
-  // They do not widen what a plugin may see: BuildUpstreamRequest already
-  // hands it the decrypted credentials of exactly these accounts on every
-  // single request. What they do change is WHEN it may look - with no traffic,
-  // and for every account at once - so two limits are part of the contract and
-  // not optional:
-  //
-  //   * only accounts whose account type this plugin declares are visible.
-  //     Anything else is reported as NOT_FOUND, never PERMISSION_DENIED: a
-  //     different code would tell the plugin that an account id it may not
-  //     read exists.
-  //   * every GetAccountCredentials call writes an audit_logs row before the
-  //     credentials are returned. A failed audit write fails the call.
+  // Only accounts whose account type this plugin declares are visible.
+  // Anything else is reported as NOT_FOUND, never PERMISSION_DENIED: a
+  // different code would tell the plugin that an account id it may not read
+  // exists.
 
-  // accounts.read (Medium): metadata of the accounts of this plugin's account
-  // types. The response carries no credential field of any kind; it is the
-  // list a plugin needs to offer "pick an account" in its own console page.
-  // Paginated: at most 200 rows per call (100 by default).
+  // Metadata of the accounts of this plugin's account types; a plugin that
+  // declares none gets an empty list. It is the list a plugin needs to offer
+  // "pick an account" in its own console page. Paginated: at most 200 rows
+  // per call (100 by default).
   rpc ListAccounts(ListAccountsRequest) returns (ListAccountsResponse);
 
-  // accounts.credentials {"types":"own"} (Critical): the decrypted credentials
-  // of ONE account of this plugin's account types. Audited on every call.
-  rpc GetAccountCredentials(GetAccountCredentialsRequest) returns (GetAccountCredentialsResponse);
+  // The account of this plugin's own account types, as PlatformService calls
+  // receive it: properties, settings, decrypted credentials and the proxy
+  // (CONTRACTS §124). Another plugin's account, a deleted one or none at all
+  // is NOT_FOUND. Audited on every call: the audit_logs row is written before
+  // the account is returned, and a failed write fails the call. The proxy is
+  // data: the plugin never connects through it itself.
+  rpc GetAccount(GetAccountRequest) returns (GetAccountResponse);
 
-  // One bounded HTTP observation on behalf of an active Poll invocation.
-  // Authority comes from an opaque token bound to this exact plugin process,
-  // account and invocation, not from a generic net/accounts permission.
-  // The host enforces cancellation, the account proxy, limits and SSRF checks.
-  // A token permits at most one HTTP request; redirects are not followed.
+  // The fetch form of the host's HTTP client: one non-streaming
+  // HTTP exchange whose answer goes back to the plugin. For the auxiliary
+  // requests of an Execute call (token exchange, upload, preflight) and the
+  // upstream query of a Monitor call. Authority comes from the call's
+  // execution token, not from a generic net/accounts permission.
+  //
+  // The URL must be http(s). Its host must be one of the manifest's
+  // externalServices (or a subdomain of one), or the host of one of the
+  // call's own account's upstream addresses: the values of the address
+  // fields its account type declares (manifest upstreamFields), so that an
+  // account an operator pointed at a relay can be queried there. No other
+  // host is reachable. In both cases the host sends the request through the
+  // account's proxy behind the SSRF guard - an account address naming a
+  // private target is refused like any other unless the account's scope
+  // allows it -, without the operator's header passthrough and override
+  // (those describe the client's request, which this is not), and does not
+  // follow redirects. The host neither counts the requests of a call nor
+  // cuts their answers: the answer body comes back whole; nor does it bound
+  // the request body (the request body limit applies to the client's
+  // request in the gateway only). A transport
+  // failure is not an RPC error: it comes back in transport_error with
+  // status 0.
+  //
+  // A console route call (HTTPRequest.execution_token) may fetch too, for
+  // the authorization of an account not saved yet: it has no account, so
+  // only externalServices are reachable, and every fetch names the proxy
+  // ticket the console issued (ExecutionHTTPRequest.proxy_ticket, CONTRACTS
+  // §117).
   rpc ExecuteHTTP(ExecutionHTTPRequest) returns (ExecutionHTTPResponse);
 
-  // accounts.credentials {"types":"own"} (Critical): one bounded HTTP request
-  // for ONE account of this plugin's account types, sent by the host through
-  // that account's proxy (behind netguard for a direct connection), the same
-  // way as the quota and refresh requests the plugin describes (CONTRACTS
-  // §91). The URL must be http(s) and its host one of the manifest's
-  // externalServices (or a subdomain of one). Redirects are not followed;
-  // the answer body is capped at 64 KiB (truncated set). A transport failure
-  // is not an RPC error: it comes back in transport_error with status 0.
+  // One HTTP request for ONE account of this plugin's account types, sent
+  // by the host through that account's proxy (behind netguard for a direct
+  // connection), the same way as the quota and refresh requests the plugin
+  // describes (CONTRACTS §91). The URL must be http(s) and its host one of
+  // the manifest's externalServices (or a subdomain of one) or the host of
+  // one of the account's own upstream addresses (manifest upstreamFields;
+  // CONTRACTS §112.17). Redirects are not followed; the answer body comes back whole.
+  // A transport failure is not an RPC error: it comes back in
+  // transport_error with status 0.
   // Audited on every call (account, method, host and path; never headers or
   // bodies).
   rpc SendAccountRequest(SendAccountRequestRequest) returns (ExecutionHTTPResponse);
@@ -249,7 +293,7 @@ message SendAccountRequestRequest {
   string url = 3;
   map<string, string> headers = 4;
   // Sent as is; Content-Type defaults to application/json when a body is
-  // given and the headers set none. At most 64 KiB.
+  // given and the headers set none.
   bytes body = 5;
 }
 
@@ -331,57 +375,114 @@ message CountTokensResponse {
   string encoding = 2;
 }
 
-message ForwardUpstreamRequest {
-  string execution_token = 1;
-  BuildUpstreamRequestResponse request = 2;
+// UpstreamRequest is the final upstream request of one execution, as the
+// plugin built it. The host sends these bytes: it does not patch the body.
+message UpstreamRequest {
+  string method = 1;               // default "POST"
+  // Absolute URL: http(s), or for a websocket turn the URL of the
+  // handshake. The host rejects private/loopback/link-local targets
+  // (SSRF guard) unless the account goes through a proxy or its scope
+  // allows them. The host parses the URL again before sending: write the
+  // path the way it goes on the wire, every segment already percent-encoded.
+  string url = 2;
+  // Authoritative headers: written AFTER the operator's passthrough and
+  // override, so those cannot change them. Only for what must reach the
+  // upstream exactly as built: the credential header and the headers a
+  // signature covers (with a signature, the Content-Type it was computed
+  // with). Everything else belongs in default_headers, except in a plugin
+  // whose released versions sent every header above the operator's
+  // settings and keeps doing so.
+  map<string, string> headers = 3;
+  // Default headers: written BEFORE the operator's settings. A passed
+  // through client header only fills a name these leave unset; the
+  // account's header override and parameter override may replace or
+  // remove them.
+  //
+  // In both maps names are lower-case, and content-length, accept-encoding,
+  // connection and transfer-encoding are the transport's: a request naming
+  // one is refused. A name in both maps takes the authoritative value.
+  map<string, string> default_headers = 4;
+  // The final body bytes; for a websocket turn the message of this turn.
+  // The host does not bound it (the request body limit applies to the
+  // client's request in the gateway only).
+  bytes body = 5;
+  // Upstream model after the plugin's own mapping, recorded in usage logs
+  // (optional).
+  string upstream_model = 6;
+  // Optional: format of the response body when it is not SSE or JSON; the
+  // name covers the framing and the shape of the events in it.
+  // "aws-eventstream-chunk" (sdk/awseventstream.FormatChunk): when the
+  // upstream answers 2xx with the content type
+  // application/vnd.amazon.eventstream, the host decodes the frames into
+  // server-sent events and treats the answer as an ordinary
+  // text/event-stream from then on. It reads "chunk" events only, the ones
+  // of Bedrock's InvokeModelWithResponseStream: the payload
+  // {"bytes": base64} becomes one SSE event carrying the decoded bytes, and
+  // an exception or error frame becomes a final "error" event in the shape
+  // of an Anthropic stream error. Event streams of another shape (Bedrock's
+  // ConverseStream) are not covered by this name. An answer with another
+  // content type is left as it is. An unknown name, or any name on a
+  // websocket turn, is refused.
+  string response_stream = 7;
+  // Timeouts are the host's (the account's and the administrator's
+  // settings); proxy, TLS, redirects and retries are not the plugin's to
+  // choose either.
+  reserved 8;
+  reserved "options";
 }
 
-message ForwardUpstreamResponse {
-  // Bounded usage observation, never the entire request or an unbounded stream.
+message RelayUpstreamRequest {
+  string execution_token = 1;
+  UpstreamRequest request = 2;
+  // false: validate, keep the request for after Execute, answer at once.
+  // true: send and relay now, answer with the observation.
+  bool wait = 3;
+}
+
+// RelayUpstreamResponse is empty unless the relay waited; then exactly one
+// field is set.
+message RelayUpstreamResponse {
+  // A 2xx answer: the usage observation - the whole body of a non-streaming
+  // answer, the events the endpoint lists of a stream, never the stream
+  // itself. The plugin reads it into ExecuteResponse.usage or .task.
   ExtractUsageRequest observation = 1;
-  bool extract_usage = 2;
-  bool task_submission = 3;
-  // The plugin classifies this locally and returns it from Execute; the host
-  // retains the corresponding bytes and decides retry/failover eligibility.
-  ClassifyErrorRequest error = 4;
-}
-
-message RecordUsageRequest {
-  string execution_token = 1;
-  // Absent: acknowledge host-collected declarative usage, including fallback
-  // when plugin extraction failed. The host records that fallback explicitly.
-  UsageReport report = 2;
-}
-
-message ReserveAndWatchRequest {
-  string execution_token = 1;
-  TaskSubmission task = 2;
-}
-
-message ReportTaskProgressRequest {
-  string execution_token = 1;
-  ReconcileResult result = 2;
-}
-
-message ExecutionReceipt {
-  string task_id = 1;
+  // A failed exchange (a non-2xx status or a transport error). The plugin
+  // classifies it locally and returns ExecuteResponse.classification; the
+  // host retains the corresponding bytes and decides retry/failover
+  // eligibility.
+  ClassifyErrorRequest error = 2;
 }
 
 message ExecutionHTTPRequest {
   string execution_token = 1;
-  string method = 2;
+  string method = 2;                   // empty = GET
   string url = 3;
   map<string, string> headers = 4;
+  // Sent as is; Content-Type defaults to application/json when a body is
+  // given and the headers set none.
   bytes body = 5;
+  reserved 6;
+  reserved "options";
+  // Only in a console route call, and required there: the proxy ticket the
+  // console issued for the account being authorized (POST
+  // /account-types/:plugin_key/:type/proxy-ticket, CONTRACTS §117). The host
+  // sends the fetch through the proxy it names - or directly when it names
+  // none - once it has checked that the ticket is this plugin's, was issued
+  // to the user of the call and that the user may still use that proxy. The
+  // plugin never learns the proxy. Refused in Execute and Monitor calls,
+  // whose fetches go through the account's own proxy.
+  string proxy_ticket = 7;
 }
 
 message ExecutionHTTPResponse {
   int32 status = 1;
   map<string, string> headers = 2;
   bytes body = 3;
+  // An ExecuteHTTP answer the host could not read whole comes back with
+  // transport_error set; such an answer never confirms a terminal state.
   string transport_error = 4;
-  // Truncated or incomplete responses must never confirm a terminal state.
-  bool truncated = 5;
+  reserved 5;
+  reserved "truncated";
 }
 
 message ListAccountsRequest {
@@ -405,9 +506,8 @@ message ListAccountsResponse {
   string next_cursor = 2;
 }
 
-// AccountSummary is account metadata WITHOUT credentials. Deliberately no
-// credentials field exists on this message: ListAccounts is authorised by
-// accounts.read, which is not a credential grant.
+// AccountSummary is the metadata of one account in a ListAccounts page; the
+// whole account (credentials, proxy) is GetAccount's.
 message AccountSummary {
   int64 id = 1;
   string name = 2;
@@ -422,15 +522,12 @@ message AccountSummary {
   string settings_json = 6;
 }
 
-message GetAccountCredentialsRequest {
+message GetAccountRequest {
   int64 account_id = 1;
 }
 
-message GetAccountCredentialsResponse {
-  AccountSummary account = 1;
-  // Decrypted credentials (the non-settings part), the same JSON the plugin
-  // receives as Account.credentials_json in BuildUpstreamRequest.
-  string credentials_json = 2;
+message GetAccountResponse {
+  Account account = 1;
 }
 
 message PublishRequest {
@@ -631,11 +728,11 @@ message KVListResponse {
 message GetDSNRequest {}
 
 message GetDSNResponse {
-  // postgres:// DSN with the restricted plg_<key> role (or the host role
-  // with search_path pinned when role isolation is unavailable).
+  // postgres:// DSN of the plugin schema (see GetDSN).
   string dsn = 1;
   string schema = 2;
-  bool role_isolated = 3;
+  reserved 3;
+  reserved "role_isolated";
 }
 
 message AuthzCheckRequest {

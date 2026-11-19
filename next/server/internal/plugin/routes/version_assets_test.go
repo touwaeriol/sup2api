@@ -56,7 +56,7 @@ func TestVersionAssetsRefusedBeforeLoadingThePackage(t *testing.T) {
 		{"ui/", 404, 0},
 		{"ui//", 404, 0},
 		{"ui/main.js", 200, 1},
-		{"forms/settings.schema.json", 200, 1},
+		{"forms/settings.schema.json", 404, 0},
 		{"i18n/zh.json", 200, 1},
 		{"assets/logo.svg", 200, 1},
 		{"assets/type.PNG", 200, 1},

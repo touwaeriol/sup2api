@@ -32,9 +32,13 @@ type PluginServiceClient interface {
 	// SettingsChanged tells the process that sections of the system settings
 	// changed (CONTRACTS §107). The host of every node calls it on the plugins
 	// it serves, best effort, so values cached from HostService.GetSettings
-	// are read again. A plugin built with an older SDK answers UNIMPLEMENTED,
-	// which the host ignores.
+	// are read again.
 	SettingsChanged(ctx context.Context, in *SettingsChangedRequest, opts ...grpc.CallOption) (*SettingsChangedResponse, error)
+	// ValidateSettings checks plugin settings before the host stores them
+	// (PUT /plugins/:key/settings). Optional: UNIMPLEMENTED or no errors means
+	// accepted. It only checks: the settings take effect through Configure
+	// once stored.
+	ValidateSettings(ctx context.Context, in *ValidateSettingsRequest, opts ...grpc.CallOption) (*ValidateSettingsResponse, error)
 }
 
 type pluginServiceClient struct {
@@ -99,6 +103,15 @@ func (c *pluginServiceClient) SettingsChanged(ctx context.Context, in *SettingsC
 	return out, nil
 }
 
+func (c *pluginServiceClient) ValidateSettings(ctx context.Context, in *ValidateSettingsRequest, opts ...grpc.CallOption) (*ValidateSettingsResponse, error) {
+	out := new(ValidateSettingsResponse)
+	err := c.cc.Invoke(ctx, "/sub2api.plugin.v1.PluginService/ValidateSettings", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PluginServiceServer is the server API for PluginService service.
 // All implementations must embed UnimplementedPluginServiceServer
 // for forward compatibility
@@ -113,9 +126,13 @@ type PluginServiceServer interface {
 	// SettingsChanged tells the process that sections of the system settings
 	// changed (CONTRACTS §107). The host of every node calls it on the plugins
 	// it serves, best effort, so values cached from HostService.GetSettings
-	// are read again. A plugin built with an older SDK answers UNIMPLEMENTED,
-	// which the host ignores.
+	// are read again.
 	SettingsChanged(context.Context, *SettingsChangedRequest) (*SettingsChangedResponse, error)
+	// ValidateSettings checks plugin settings before the host stores them
+	// (PUT /plugins/:key/settings). Optional: UNIMPLEMENTED or no errors means
+	// accepted. It only checks: the settings take effect through Configure
+	// once stored.
+	ValidateSettings(context.Context, *ValidateSettingsRequest) (*ValidateSettingsResponse, error)
 	mustEmbedUnimplementedPluginServiceServer()
 }
 
@@ -140,6 +157,9 @@ func (UnimplementedPluginServiceServer) Shutdown(context.Context, *ShutdownReque
 }
 func (UnimplementedPluginServiceServer) SettingsChanged(context.Context, *SettingsChangedRequest) (*SettingsChangedResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SettingsChanged not implemented")
+}
+func (UnimplementedPluginServiceServer) ValidateSettings(context.Context, *ValidateSettingsRequest) (*ValidateSettingsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ValidateSettings not implemented")
 }
 func (UnimplementedPluginServiceServer) mustEmbedUnimplementedPluginServiceServer() {}
 
@@ -262,6 +282,24 @@ func _PluginService_SettingsChanged_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PluginService_ValidateSettings_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ValidateSettingsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PluginServiceServer).ValidateSettings(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/sub2api.plugin.v1.PluginService/ValidateSettings",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PluginServiceServer).ValidateSettings(ctx, req.(*ValidateSettingsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // PluginService_ServiceDesc is the grpc.ServiceDesc for PluginService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -292,6 +330,10 @@ var PluginService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SettingsChanged",
 			Handler:    _PluginService_SettingsChanged_Handler,
+		},
+		{
+			MethodName: "ValidateSettings",
+			Handler:    _PluginService_ValidateSettings_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

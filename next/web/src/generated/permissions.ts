@@ -543,8 +543,8 @@ export const PERMISSIONS: Record<PermKey, PermMeta> = {
     stepUp: true,
     requires: ['plugin:install'],
     description: {
-      en: 'Approve db.schema for a non-official plugin when the database cannot isolate its role.',
-      zh: '数据库无法做角色隔离时，批准非官方插件的 db.schema。'
+      en: "Approve db.schema for a non-official plugin: it uses the core's database user and can reach every table the core can.",
+      zh: '批准非官方插件的 db.schema：插件使用核心的数据库用户，能访问核心能访问的所有表。'
     }
   },
   'plugin:egress:read': {

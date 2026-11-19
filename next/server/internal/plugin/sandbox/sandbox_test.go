@@ -27,7 +27,9 @@ func TestMain(m *testing.M) {
 	if mode := os.Getenv("SANDBOX_TEST_CHILD"); mode != "" {
 		os.Exit(childMain(mode))
 	}
-	os.Exit(m.Run())
+	code := m.Run()
+	cleanupPlatform()
+	os.Exit(code)
 }
 
 // report is printed by the "report" child as JSON.
@@ -85,8 +87,11 @@ func childMain(mode string) int {
 		time.Sleep(30 * time.Second)
 		runtime.KeepAlive(buf)
 		return 0
+	case "sleep":
+		time.Sleep(time.Minute)
+		return 0
 	}
-	return 99
+	return platformChild(mode)
 }
 
 func TestParseExecArgs(t *testing.T) {
@@ -158,9 +163,10 @@ func TestExecArgs(t *testing.T) {
 	if err != nil || o.MemMB != 512 || !o.StrictNetwork || o.Binary != "/p/bin" || o.Landlock {
 		t.Fatalf("round trip %+v %v", o, err)
 	}
-	// Landlock is opt-in (SUB2API_PLUGIN_LANDLOCK).
-	args = execArgs(core.LaunchSpec{BinaryPath: "/p/bin", WorkDir: "/data/p"}, 10, true)
-	if o, err = parseExecArgs(args[1:], os.Stderr); err != nil || !o.Landlock || o.WorkDir != "/data/p" || o.DataDir != "/data/p" {
+	// The data directory and the CA certificates only for a plugin granted
+	// "fs.data" and "net".
+	args = execArgs(core.LaunchSpec{BinaryPath: "/p/bin", DataDir: "/data/p", Net: true}, 10, true)
+	if o, err = parseExecArgs(args[1:], os.Stderr); err != nil || !o.Landlock || o.DataDir != "/data/p" || !o.CACerts {
 		t.Fatalf("landlock round trip %+v %v", o, err)
 	}
 }
@@ -172,7 +178,7 @@ func TestCommandUnwrapped(t *testing.T) {
 	}
 	t.Setenv("SUB2API_MASTER_KEY", "top-secret")
 	cmd, err := l.Command(context.Background(), core.LaunchSpec{
-		PluginKey: "demo", Version: "1.0.0", BinaryPath: "/x/plugin", WorkDir: "/data/demo",
+		PluginKey: "demo", Version: "1.0.0", BinaryPath: "/x/plugin", DataDir: "/data/demo",
 		MemoryMB: 100, CPU: 1.5, StrictNetwork: true, Env: []string{"FOO=bar"},
 	})
 	if err != nil {

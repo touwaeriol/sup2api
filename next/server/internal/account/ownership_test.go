@@ -593,32 +593,19 @@ func TestGuardedSettings(t *testing.T) {
 		t.Fatalf("alice back to official: %d %v", code, out)
 	}
 
-	// The form is rewritten for suppliers only, and the cached original is
-	// untouched.
-	code, out := e.doAs(alice, "GET", "/account-types/anthropic/apikey/form", nil)
+	// The console's form reads the restriction from the type: guarded_settings
+	// on GET /account-types, the same for every caller (whether it applies is
+	// the caller's account:settings:custom, checked on save above).
+	code, out := e.doAs(alice, "GET", "/account-types", nil)
 	raw, _ := json.Marshal(out)
-	if code != 200 || gjson.GetBytes(raw, "data.schema.properties.base_url.enum").Raw != `["`+officialBaseURL+`"]` ||
-		gjson.GetBytes(raw, "data.ui_schema.base_url.ui:readonly").Bool() != true ||
-		gjson.GetBytes(raw, "data.ui_schema.api_key.ui:widget").String() != "password" ||
-		gjson.GetBytes(raw, "data.schema.properties.api_key.minLength").Int() != 8 {
-		t.Fatalf("supplier form: %d %s", code, raw)
-	}
-	_, out = e.doAs(admin, "GET", "/account-types/anthropic/apikey/form", nil)
-	raw, _ = json.Marshal(out)
-	if gjson.GetBytes(raw, "data.schema.properties.base_url.enum").Exists() || gjson.GetBytes(raw, "data.ui_schema.base_url").Exists() {
-		t.Fatalf("admin form rewritten: %s", raw)
-	}
-	if gjson.GetBytes(e.gen.types[0].FormSchema, "properties.base_url.enum").Exists() || gjson.GetBytes(e.gen.types[0].FormUI, "base_url").Exists() {
-		t.Fatal("cached form mutated")
-	}
-	_, out = e.doAs(alice, "GET", "/account-types/relay/relay_key/form", nil)
-	raw, _ = json.Marshal(out)
-	if gjson.GetBytes(raw, "data.schema.properties.base_url.enum").Exists() || gjson.GetBytes(raw, "data.ui_schema").Raw != "null" {
-		t.Fatalf("relay form: %s", raw)
+	if code != 200 || gjson.GetBytes(raw, `data.#(type=="apikey").guarded_settings.0.allowed`).Raw != `["`+officialBaseURL+`"]` ||
+		gjson.GetBytes(raw, `data.#(type=="apikey").guarded_settings.0.field`).String() != "base_url" ||
+		len(gjson.GetBytes(raw, `data.#(type=="relay_key").guarded_settings`).Array()) != 0 {
+		t.Fatalf("guarded settings: %d %s", code, raw)
 	}
 	// Suppliers reach the type endpoints through account:create:own alone.
 	authz.keys[alice] = []string{"account:create:own"}
-	for _, p := range []string{"/platforms", "/account-types", "/account-types/anthropic/apikey/form"} {
+	for _, p := range []string{"/platforms", "/account-types"} {
 		if code, _ := e.doAs(alice, "GET", p, nil); code != 200 {
 			t.Fatalf("own:create %s: %d", p, code)
 		}
@@ -626,6 +613,70 @@ func TestGuardedSettings(t *testing.T) {
 	authz.keys[alice] = nil
 	if code, out := e.doAs(alice, "GET", "/account-types", nil); code != 403 || permission(out) != "account:read" {
 		t.Fatalf("no key: %d %v", code, out)
+	}
+}
+
+// TestGuardedSettingVersions: with versions on the guarded setting, a
+// versioned official address passes for a caller without
+// account:settings:custom, an escaped "/" does not make a version, PATCH
+// compares with the stored value without its version, and GET
+// /account-types shows the versions. Without versions nothing changes.
+func TestGuardedSettingVersions(t *testing.T) {
+	authz := fakeAuthz{keys: map[int64][]string{}}
+	e := setupWith(t, authz)
+	admin := e.uid
+	alice := e.addUser("alice@x.com")
+	authz.keys[admin], authz.keys[alice] = adminKeys, supplierKeys
+	key := "sk-good-key-123"
+	post := func(base string) (int, map[string]any) {
+		t.Helper()
+		return e.doAs(alice, "POST", "/accounts", map[string]any{"name": "g", "plugin_key": "anthropic", "type": "apikey",
+			"credentials": map[string]any{"api_key": key, "base_url": base}})
+	}
+	forbidden := func(code int, out map[string]any) bool {
+		return code == 400 && fmt.Sprint(fieldsOf(out)) == "[credentials.base_url:forbidden]"
+	}
+
+	if code, out := post(officialBaseURL + "/v1"); !forbidden(code, out) {
+		t.Fatalf("versioned official without versions: %d %v", code, out)
+	}
+	e.gen.types[0].Type.GuardedSettings[0].Versions = []string{"/v1"}
+	for _, v := range []string{officialBaseURL + "/v1", " HTTPS://API.Anthropic.COM/v1/ ", officialBaseURL} {
+		if code, out := post(v); code != 201 {
+			t.Fatalf("base_url %q: %d %v", v, code, out)
+		}
+	}
+	for _, v := range []string{officialBaseURL + "/a%2Fv1", officialBaseURL + "/v1/v1", officialBaseURL + "/V1"} {
+		if code, out := post(v); !forbidden(code, out) {
+			t.Fatalf("base_url %q: %d %v", v, code, out)
+		}
+	}
+
+	// PATCH: the stored custom value with or without its version is "no
+	// change"; the stored value is kept as typed.
+	acc := e.createAs(alice, "a", map[string]any{"credentials": map[string]any{"api_key": key, "base_url": officialBaseURL}})
+	path := fmt.Sprintf("/accounts/%d", int64(acc["id"].(float64)))
+	if code, out := e.doAs(admin, "PATCH", path, map[string]any{"credentials": map[string]any{"api_key": Mask, "base_url": "https://custom.example/v1"}}); code != 200 {
+		t.Fatalf("admin custom patch: %d %v", code, out)
+	}
+	patch := func(base string) (int, map[string]any) {
+		t.Helper()
+		return e.doAs(alice, "PATCH", path, map[string]any{"credentials": map[string]any{"api_key": Mask, "base_url": base}})
+	}
+	if code, out := patch("https://custom.example"); code != 200 || data(out)["settings"].(map[string]any)["base_url"] != "https://custom.example" {
+		t.Fatalf("old with version: %d %v", code, out)
+	}
+	if code, out := patch("https://custom.example/v1"); code != 200 {
+		t.Fatalf("new with version: %d %v", code, out)
+	}
+	if code, out := patch("https://custom.example/a%2Fv1"); !forbidden(code, out) {
+		t.Fatalf("escaped slash against old: %d %v", code, out)
+	}
+
+	code, out := e.doAs(alice, "GET", "/account-types", nil)
+	raw, _ := json.Marshal(out)
+	if code != 200 || gjson.GetBytes(raw, `data.#(type=="apikey").guarded_settings.0.versions`).Raw != `["/v1"]` {
+		t.Fatalf("account types: %d %s", code, raw)
 	}
 }
 
@@ -641,8 +692,34 @@ func TestGuardNorm(t *testing.T) {
 		"relative/path/":                   "relative/path",
 		"https://api.anthropic.com:443/":   "https://api.anthropic.com:443",
 	} {
-		if got := guardNorm(in); got != want {
+		if got := guardNorm(in, nil); got != want {
 			t.Errorf("guardNorm(%q) = %q, want %q", in, got, want)
+		}
+	}
+	// With versions: trailing slashes go first, then at most one version
+	// segment of the escaped path, the longest, matched whole and
+	// case-sensitively, and the "/" left before it.
+	versions := []string{"/v1", "/v1beta", "/openai", "/openai/v1"}
+	for in, want := range map[string]string{
+		"https://API.openai.com/v1/":         "https://api.openai.com",
+		"https://api.openai.com/v1":          "https://api.openai.com",
+		"https://x/v1beta":                   "https://x",
+		"https://x/openai/v1":                "https://x",
+		"https://x/openai":                   "https://x",
+		"https://x/v1/v1":                    "https://x/v1",
+		"https://x/p/v1":                     "https://x/p",
+		"https://x/a%2Fv1":                   "https://x/a%2Fv1",
+		"https://x/a%2Fb/v1":                 "https://x/a%2Fb",
+		"https://x/V1":                       "https://x/V1",
+		"https://x/xv1":                      "https://x/xv1",
+		"https://x/v1x":                      "https://x/v1x",
+		"https://x":                          "https://x",
+		"not a url/v1":                       "not a url/v1",
+		"https://api.anthropic.com:443/v1//": "https://api.anthropic.com:443",
+		"https://x//v1":                      "https://x",
+	} {
+		if got := guardNorm(in, versions); got != want {
+			t.Errorf("guardNorm(%q, versions) = %q, want %q", in, got, want)
 		}
 	}
 }
@@ -689,46 +766,32 @@ func TestCheckGuarded(t *testing.T) {
 	if err := checkGuarded(ctx, nil, st(`"https://evil.example"`), nil); err != nil {
 		t.Errorf("no guards: %v", err)
 	}
-}
 
-func TestGuardForm(t *testing.T) {
-	schema := json.RawMessage(`{"type":"object","properties":{"api_key":{"type":"string"},"base_url":{"type":"string","title":"Base URL"}}}`)
-	one := []manifest.GuardedSetting{{Field: "base_url", Allowed: []string{"https://a.example"}}}
-	two := []manifest.GuardedSetting{{Field: "base_url", Allowed: []string{"https://a.example", "https://b.example"}}}
-
-	// null ui_schema becomes an object with the readonly flag.
-	s, u, err := guardForm(schema, json.RawMessage("null"), one)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if gjson.GetBytes(s, "properties.base_url.enum").Raw != `["https://a.example"]` || gjson.GetBytes(s, "properties.base_url.title").String() != "Base URL" ||
-		gjson.GetBytes(s, "properties.api_key.type").String() != "string" || string(u) != `{"base_url":{"ui:readonly":true}}` {
-		t.Fatalf("one allowed: %s %s", s, u)
-	}
-	if strings.Contains(string(schema), "enum") {
-		t.Fatal("input mutated")
-	}
-	// Several allowed values: enum only, ui_schema untouched (still null);
-	// an existing ui entry keeps its other keys.
-	s, u, err = guardForm(schema, json.RawMessage("null"), two)
-	if err != nil || len(gjson.GetBytes(s, "properties.base_url.enum").Array()) != 2 || string(u) != "null" {
-		t.Fatalf("two allowed: %s %s %v", s, u, err)
-	}
-	_, u, err = guardForm(schema, json.RawMessage(`{"base_url":{"ui:widget":"url-presets"},"api_key":{"ui:widget":"password"}}`), one)
-	if err != nil || gjson.GetBytes(u, "base_url.ui:widget").String() != "url-presets" || gjson.GetBytes(u, "base_url.ui:readonly").Bool() != true ||
-		gjson.GetBytes(u, "api_key.ui:widget").String() != "password" {
-		t.Fatalf("merge ui: %s %v", u, err)
-	}
-	// A field missing from the schema is added; a non-object schema is left alone.
-	s, _, err = guardForm(json.RawMessage(`{"type":"object"}`), json.RawMessage("null"), one)
-	if err != nil || gjson.GetBytes(s, "properties.base_url.enum").Raw != `["https://a.example"]` {
-		t.Fatalf("missing property: %s %v", s, err)
-	}
-	if s, u, err = guardForm(json.RawMessage("null"), json.RawMessage("null"), one); err != nil || string(s) != "null" || string(u) != "null" {
-		t.Fatalf("null schema: %s %s %v", s, u, err)
-	}
-	if _, _, err = guardForm(json.RawMessage(`{bad`), json.RawMessage("null"), one); err == nil {
-		t.Fatal("invalid schema accepted")
+	// Versions: the submitted value, the allowed ones and the old value are
+	// all compared without one version segment; without versions a
+	// versioned official address is a custom value.
+	versioned := []manifest.GuardedSetting{{Field: "base_url", Allowed: []string{"https://api.openai.com"}, Versions: []string{"/v1"}}}
+	allowedV1 := []manifest.GuardedSetting{{Field: "base_url", Allowed: []string{"https://api.openai.com/v1"}, Versions: []string{"/v1"}}}
+	for _, c := range []struct {
+		name   string
+		guards []manifest.GuardedSetting
+		st     fields
+		old    []byte
+		want   string
+	}{
+		{"versioned official", versioned, st(`"https://API.openai.com/v1/"`), nil, ""},
+		{"allowed carries the version", allowedV1, st(`"https://api.openai.com"`), nil, ""},
+		{"escaped slash is no version", versioned, st(`"https://api.openai.com/a%2Fv1"`), nil, "credentials.base_url:forbidden"},
+		{"one version only", versioned, st(`"https://api.openai.com/v1/v1"`), nil, "credentials.base_url:forbidden"},
+		{"case-sensitive", versioned, st(`"https://api.openai.com/V1"`), nil, "credentials.base_url:forbidden"},
+		{"old with version", versioned, st(`"https://custom.example"`), []byte(`{"base_url":"https://custom.example/v1"}`), ""},
+		{"new with version", versioned, st(`"https://custom.example/v1"`), []byte(`{"base_url":"https://custom.example"}`), ""},
+		{"old with other path", versioned, st(`"https://custom.example/v1"`), []byte(`{"base_url":"https://custom.example/p"}`), "credentials.base_url:forbidden"},
+		{"no versions", guards, st(`"https://api.anthropic.com/v1"`), nil, "credentials.base_url:forbidden"},
+	} {
+		if got := codes(checkGuarded(ctx, c.guards, c.st, c.old)); got != c.want {
+			t.Errorf("%s: got %q want %q", c.name, got, c.want)
+		}
 	}
 }
 
@@ -832,6 +895,7 @@ func TestMaskedSecretToNewAddress(t *testing.T) {
 func TestAddressChanged(t *testing.T) {
 	declared := manifest.AccountType{UpstreamFields: []string{"endpoint"}}
 	legacy := manifest.AccountType{GuardedSettings: []manifest.GuardedSetting{{Field: "region"}}}
+	versioned := manifest.AccountType{GuardedSettings: []manifest.GuardedSetting{{Field: "base_url", Versions: []string{"/v1"}}}}
 	cases := []struct {
 		at      manifest.AccountType
 		b, old  string
@@ -842,6 +906,8 @@ func TestAddressChanged(t *testing.T) {
 		{legacy, `{"base_url":"https://a","region":"eu"}`, `{"base_url":"https://a","region":"us"}`, true},
 		{legacy, `{"base_url":null}`, `{}`, false},
 		{legacy, `{"base_url":"https://a"}`, ``, true},
+		// Versions are not applied: only a version segment apart is a change.
+		{versioned, `{"base_url":"https://x/v1"}`, `{"base_url":"https://x"}`, true},
 		{manifest.AccountType{UpstreamFields: []string{}}, `{"base_url":"https://b"}`, `{"base_url":"https://a"}`, false},
 		{manifest.AccountType{UpstreamFields: []string{"upstream"}}, `{"upstream":{ "url": "u" }}`, `{"upstream":{"url":"u"}}`, false},
 		{manifest.AccountType{UpstreamFields: []string{"upstream"}}, `{"upstream":{"url":"v"}}`, `{"upstream":{"url":"u"}}`, true},
@@ -918,16 +984,15 @@ func TestOwnCustomUpstream(t *testing.T) {
 	authz.keys[e.uid], authz.keys[alice] = adminKeys, supplierKeys
 	oauth := core.PluginInfo{Key: "oauth", Manifest: &manifest.Manifest{Name: manifest.LocalizedText{"en": "OAuth"}}}
 	e.gen.plugins = append(e.gen.plugins, oauth)
-	for _, id := range []string{"claude_oauth", "managed"} {
+	for _, id := range []string{"codex_oauth", "managed"} {
 		e.gen.types = append(e.gen.types, core.AccountTypeBinding{Plugin: oauth, Client: e.plat,
-			Type:       manifest.AccountType{ID: id, Form: manifest.Form{Mode: "schema"}, UpstreamFields: []string{}},
-			FormSchema: json.RawMessage(`{"type":"object"}`)})
+			Type: manifest.AccountType{ID: id, Form: manifest.Form{Mode: "native", Component: "KeyForm"}, UpstreamFields: []string{}}})
 	}
 	post := func(pk, typ string, creds map[string]any) (int, map[string]any) {
 		t.Helper()
 		return e.doAs(alice, "POST", "/accounts", map[string]any{"name": typ, "plugin_key": pk, "type": typ, "credentials": creds})
 	}
-	for _, typ := range []string{"claude_oauth", "managed"} {
+	for _, typ := range []string{"codex_oauth", "managed"} {
 		if code, out := post("oauth", typ, map[string]any{}); code != 201 {
 			t.Fatalf("create %s: %d %v", typ, code, out)
 		}
@@ -995,11 +1060,10 @@ func TestBuiltinSupplierRole(t *testing.T) {
 	oauth := core.PluginInfo{Key: "oauth", Manifest: &manifest.Manifest{Name: manifest.LocalizedText{"en": "OAuth"}}}
 	e.gen.plugins = append(e.gen.plugins, oauth)
 	e.gen.types = append(e.gen.types, core.AccountTypeBinding{Plugin: oauth, Client: e.plat,
-		Type:       manifest.AccountType{ID: "claude_oauth", Form: manifest.Form{Mode: "schema"}, UpstreamFields: []string{}},
-		FormSchema: json.RawMessage(`{"type":"object"}`)})
-	code, out := e.doAs(alice, "POST", "/accounts", map[string]any{"name": "mine", "plugin_key": "oauth", "type": "claude_oauth", "credentials": map[string]any{}})
+		Type: manifest.AccountType{ID: "codex_oauth", Form: manifest.Form{Mode: "native", Component: "KeyForm"}, UpstreamFields: []string{}}})
+	code, out := e.doAs(alice, "POST", "/accounts", map[string]any{"name": "mine", "plugin_key": "oauth", "type": "codex_oauth", "credentials": map[string]any{}})
 	if code != 201 {
-		t.Fatalf("create claude_oauth: %d %v", code, out)
+		t.Fatalf("create codex_oauth: %d %v", code, out)
 	}
 	mine := fmt.Sprintf("/accounts/%d", int64(data(out)["id"].(float64)))
 	relay := map[string]any{"name": "relay", "plugin_key": "relay", "type": "relay_key",

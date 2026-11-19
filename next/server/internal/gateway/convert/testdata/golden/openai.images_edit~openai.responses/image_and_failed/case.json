@@ -1,0 +1,8 @@
+{
+  "options": {
+    "model": "gpt-image-2",
+    "stream": false,
+    "adapt_model": "gpt-6-luna"
+  },
+  "note": "one image and one failed image call: the image is returned, the failed call is only a response loss"
+}

@@ -11,26 +11,17 @@ export function formatMoney(v: string | number | null | undefined, digits = 4): 
   return (n < 0 ? '-$' : '$') + s
 }
 
-/** Formats account balance with currency symbol (CONTRACTS §52). */
-export function formatBalance(amount: string | number | null | undefined, currency: string): string {
-  if (amount === null || amount === undefined || amount === '') return '—'
-  const n = typeof amount === 'number' ? amount : Number(amount)
-  if (!Number.isFinite(n)) return String(amount)
-
-  const abs = Math.abs(n)
-  const digits = abs !== 0 && abs < 0.01 ? 6 : 2
-  const formatted = abs.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: digits })
-
-  const symbols: Record<string, string> = {
-    'USD': '$',
-    'CNY': '¥',
-    'EUR': '€',
-    'GBP': '£',
-    'JPY': '¥'
-  }
-
-  const symbol = symbols[currency] || currency + ' '
-  return (n < 0 ? '-' : '') + symbol + formatted
+/**
+ * An account balance as the upstream reported it (CONTRACTS §52): the
+ * decimal amount with thousands separators and without trailing zeros
+ * (nothing rounded off, the string is never turned into a float), then the
+ * upstream's unit as it gave it, if any: "7.5 USD", "1,250,000". A unit is
+ * never turned into a symbol: we do not interpret the upstream's units.
+ */
+export function formatBalance(amount: string, unit?: string): string {
+  const m = /^(-?)(\d+)(?:\.(\d*?)0*)?$/.exec(amount)
+  const n = m ? m[1] + m[2].replace(/\B(?=(\d{3})+$)/g, ',') + (m[3] ? '.' + m[3] : '') : amount
+  return unit ? `${n} ${unit}` : n
 }
 
 /** Signed amount for ledger deltas: +12.3400 / -0.0158. */

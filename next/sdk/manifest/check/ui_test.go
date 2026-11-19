@@ -1,6 +1,7 @@
 package check
 
 import (
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -132,23 +133,22 @@ func findRepoFile(t *testing.T, rel string) string {
 
 // ---------------------------------------------------------------- ui rules
 
-// uiManifest is a manifest with one admin route, one table page over it and
-// one menu pointing at the page - the shape the new ui rules act on.
+// uiManifest is a manifest with one admin route, one native page and one menu
+// pointing at the page - the shape the ui rules act on.
 func uiManifest() *manifest.Manifest {
 	m := minimal()
 	m.Capabilities = []manifest.Capability{{ID: manifest.CapHTTPRoutes}}
-	m.HostPermissions = []manifest.HostPermission{{ID: "ui.menu"}, {ID: "routes.admin"}}
+	m.HostPermissions = []manifest.HostPermission{{ID: "ui.menu"}, {ID: "routes.admin"}, {ID: "ui.native"}}
+	m.HostUICompat = "^4.0"
 	m.UserPermissions = []manifest.UserPermission{{Key: "assets:read", Label: manifest.LocalizedText{"en": "Read assets"}}}
 	m.Routes = []manifest.Route{
 		{Method: "GET", Path: "/assets", Scope: "admin", Permission: "assets:read"},
 		{Method: "GET", Path: "/assets/:id", Scope: "admin", Permission: "assets:read"},
 	}
 	m.UI = &manifest.UI{
-		Menus: []manifest.Menu{{ID: "assets", Section: "plugins", Label: manifest.LocalizedText{"en": "Assets"}, Icon: "inbox", Page: "assets"}},
-		Pages: map[string]manifest.Page{
-			"assets": {Type: "table", Title: manifest.LocalizedText{"en": "Assets"}, Source: "GET /assets",
-				Columns: []manifest.Column{{Key: "id", Label: manifest.LocalizedText{"en": "ID"}}}},
-		},
+		Menus:  []manifest.Menu{{ID: "assets", Section: "plugins", Label: manifest.LocalizedText{"en": "Assets"}, Icon: "inbox", Page: "assets"}},
+		Pages:  map[string]manifest.Page{"assets": {Type: "native", Title: manifest.LocalizedText{"en": "Assets"}, Component: "Assets"}},
+		Native: &manifest.NativeUI{Entry: "ui/native/entry.js"},
 	}
 	return m
 }
@@ -228,102 +228,15 @@ func TestMenuSections(t *testing.T) {
 	}
 }
 
-// A table page links its create form with a "New" button instead of a
-// sidebar entry; the link must name a form page and a declared permission.
-func TestPageCreateLink(t *testing.T) {
-	withForm := func() *manifest.Manifest {
+// Declarative pages (table, form) are no longer rendered: a package that
+// declares one is refused as unsupported (DESIGN-2026-11-19-PLUGIN-UI-CODE-ONLY).
+func TestDeclarativePagesUnsupported(t *testing.T) {
+	for _, typ := range []string{"table", "form"} {
 		m := uiManifest()
-		m.Routes = append(m.Routes, manifest.Route{Method: "POST", Path: "/assets", Scope: "admin", Permission: "assets:read"})
-		m.UI.Pages["new_asset"] = manifest.Page{Type: "form", Title: manifest.LocalizedText{"en": "New"}, Schema: "forms/new.json", Submit: "POST /assets"}
-		return m
-	}
-	files := map[string][]byte{"forms/new.json": []byte("{}")}
-	check := func(m *manifest.Manifest) map[string]string {
-		return codes(Validate(m, files, ValidateOptions{Tooling: true}))
-	}
-	set := func(m *manifest.Manifest, link *manifest.PageLink) {
-		pg := m.UI.Pages["assets"]
-		pg.Create = link
-		m.UI.Pages["assets"] = pg
-	}
-	m := withForm()
-	if c := check(m); len(c) > 0 {
-		t.Fatalf("fixture with a form page must validate: %v", c)
-	}
-	set(m, &manifest.PageLink{Page: "new_asset", Permission: "assets:read"})
-	if c := check(m); len(c) > 0 {
-		t.Fatalf("a valid create link was rejected: %v", c)
-	}
-	set(m, &manifest.PageLink{Page: "missing"})
-	if c := check(m); c["ui.pages.assets.create.page"] != "unknown" {
-		t.Fatalf("an unknown create page must be rejected: %v", c)
-	}
-	set(m, &manifest.PageLink{Page: "assets"})
-	if c := check(m); c["ui.pages.assets.create.page"] != "invalid" {
-		t.Fatalf("a create link must open a form page: %v", c)
-	}
-	set(m, &manifest.PageLink{Page: "new_asset", Permission: "assets:write"})
-	if c := check(m); c["ui.pages.assets.create.permission"] != "unknown" {
-		t.Fatalf("an undeclared create permission must be rejected: %v", c)
-	}
-}
-
-// A page's source/submit must name a route the manifest declares. Before this
-// rule the console silently rendered an empty table (parseRouteRef returns
-// null and the load is abandoned) or a Save button that did nothing.
-func TestPageRouteRefsMustBeDeclared(t *testing.T) {
-	m := uiManifest()
-	pg := m.UI.Pages["assets"]
-	pg.Source = "GET /assetz"
-	m.UI.Pages["assets"] = pg
-	if c := uiCodes(m); c["ui.pages.assets.source"] != "unknown_route" {
-		t.Fatalf("undeclared route must be rejected: %v", c)
-	}
-	// The method is part of the identity of a route.
-	pg.Source = "POST /assets"
-	m.UI.Pages["assets"] = pg
-	if c := uiCodes(m); c["ui.pages.assets.source"] != "unknown_route" {
-		t.Fatalf("method mismatch must be rejected: %v", c)
-	}
-	// Not a reference at all.
-	pg.Source = "GET assets"
-	m.UI.Pages["assets"] = pg
-	if c := uiCodes(m); c["ui.pages.assets.source"] != "invalid_route_ref" {
-		t.Fatalf("unparsable reference must be rejected: %v", c)
-	}
-	// The method may be left out (the console defaults source to GET), and a
-	// path parameter matches by position, not by name.
-	pg.Source = "/assets/:asset"
-	m.UI.Pages["assets"] = pg
-	if c := uiCodes(m); len(c) > 0 {
-		t.Fatalf("%q names GET /assets/:id: %v", pg.Source, c)
-	}
-}
-
-// A form page needs a submit route: without it the Save button returns early
-// and reports nothing at all.
-func TestFormPageNeedsSubmit(t *testing.T) {
-	m := uiManifest()
-	m.Routes = append(m.Routes, manifest.Route{Method: "POST", Path: "/assets", Scope: "admin", Permission: "assets:read"})
-	m.UI.Menus[0].Page = "new"
-	m.UI.Pages = map[string]manifest.Page{"new": {Type: "form", Schema: "forms/new.schema.json"}}
-	files := map[string][]byte{"forms/new.schema.json": []byte("{}")}
-	c := codes(Validate(m, files, ValidateOptions{Tooling: true}))
-	if c["ui.pages.new.submit"] != "required" {
-		t.Fatalf("form pages need submit: %v", c)
-	}
-	m.UI.Pages["new"] = manifest.Page{Type: "form", Schema: "forms/new.schema.json", Submit: "POST /nope"}
-	if c := codes(Validate(m, files, ValidateOptions{Tooling: true})); c["ui.pages.new.submit"] != "unknown_route" {
-		t.Fatalf("submit must name a declared route: %v", c)
-	}
-	m.UI.Pages["new"] = manifest.Page{Type: "form", Schema: "forms/new.schema.json", Submit: "POST /assets"}
-	if c := codes(Validate(m, files, ValidateOptions{Tooling: true})); len(c) > 0 {
-		t.Fatalf("a form with a declared submit route is valid: %v", c)
-	}
-	// submit defaults to POST, like the console.
-	m.UI.Pages["new"] = manifest.Page{Type: "form", Schema: "forms/new.schema.json", Submit: "/assets"}
-	if c := codes(Validate(m, files, ValidateOptions{Tooling: true})); len(c) > 0 {
-		t.Fatalf("submit without a method means POST: %v", c)
+		m.UI.Pages["assets"] = manifest.Page{Type: typ, Title: manifest.LocalizedText{"en": "Assets"}}
+		if c := uiCodes(m); c["ui.pages.assets.type"] != "unsupported" || len(c) != 1 {
+			t.Errorf("%s page: %v", typ, c)
+		}
 	}
 }
 
@@ -331,8 +244,8 @@ func TestFormPageNeedsSubmit(t *testing.T) {
 // forms cannot take one (the core only checks it on the settings endpoints).
 func TestSettingsPermission(t *testing.T) {
 	m := uiManifest()
-	files := map[string][]byte{"settings.schema.json": []byte("{}")}
-	m.UI.Settings = &manifest.Form{Mode: "schema", Schema: "settings.schema.json", Permission: "assets:read"}
+	var files map[string][]byte
+	m.UI.Settings = &manifest.Form{Mode: "native", Component: "Settings", Secrets: []manifest.SettingsSecret{}, Permission: "assets:read"}
 	if c := codes(Validate(m, files, ValidateOptions{Tooling: true})); len(c) > 0 {
 		t.Fatalf("a declared permission is valid: %v", c)
 	}
@@ -348,39 +261,39 @@ func TestSettingsPermission(t *testing.T) {
 	}
 	m.UserPermissions[0].Scope = nil
 	m.UI.Settings.Permission = ""
-	m.AccountTypes = []manifest.AccountType{{Form: manifest.Form{Permission: "assets:read"}}}
+	m.AccountTypes = []manifest.AccountType{{Form: manifest.Form{Mode: "native", Component: "X", Permission: "assets:read"}}}
 	if c := codes(Validate(m, files, ValidateOptions{Tooling: true})); c["accountTypes[0].form.permission"] != "unsupported" {
 		t.Fatalf("only ui.settings takes a permission: %v", c)
 	}
 }
 
-// Native settings edited on the plugin's own page may carry the schema the
-// core validates and masks with (CONTRACTS §75.5); other forms may not, and
-// the page must be one of the plugin's native pages.
-func TestNativeSettingsWithSchema(t *testing.T) {
+// Native settings edited on the plugin's own page name one of its native
+// pages.
+func TestNativeSettingsPage(t *testing.T) {
 	m := uiManifest()
-	m.HostPermissions = append(m.HostPermissions, manifest.HostPermission{ID: "ui.native"})
-	m.UI.Native = &manifest.NativeUI{Entry: "ui/native/entry.js"}
-	m.HostUICompat = "^3.3"
-	m.UI.Pages["dash"] = manifest.Page{Type: "native", Component: "Dash"}
-	files := map[string][]byte{"settings.schema.json": []byte("{}"), "ui/native/entry.js": []byte("")}
-	m.UI.Settings = &manifest.Form{Mode: "native", Page: "dash", Schema: "settings.schema.json"}
-	if c := codes(Validate(m, files, ValidateOptions{Tooling: true})); len(c) > 0 {
-		t.Fatalf("native settings with a schema on a native page are valid: %v", c)
+	m.UI.Settings = &manifest.Form{Mode: "native", Page: "assets", Secrets: []manifest.SettingsSecret{}}
+	if c := uiCodes(m); len(c) > 0 {
+		t.Fatalf("native settings on a native page are valid: %v", c)
 	}
-	m.UI.Settings.Schema = "missing.json"
-	if c := codes(Validate(m, files, ValidateOptions{Tooling: true})); c["ui.settings.schema"] == "" {
-		t.Fatalf("the schema file must exist: %v", c)
-	}
-	m.UI.Settings.Schema = "settings.schema.json"
-	m.UI.Settings.Page = "assets"
-	if c := codes(Validate(m, files, ValidateOptions{Tooling: true})); c["ui.settings.page"] != "unknown" {
+	m.UI.Settings.Page = "missing"
+	if c := uiCodes(m); c["ui.settings.page"] != "unknown" {
 		t.Fatalf("the page must be a native page: %v", c)
 	}
-	m.UI.Settings = nil
-	m.AccountTypes = []manifest.AccountType{{Form: manifest.Form{Mode: "native", Component: "X", Schema: "settings.schema.json"}}}
-	if c := codes(Validate(m, files, ValidateOptions{Tooling: true})); c["accountTypes[0].form.schema"] != "unsupported" {
-		t.Fatalf("only ui.settings may carry a schema in native mode: %v", c)
+}
+
+// Schema forms are no longer rendered: an account type or settings form in
+// mode schema is refused as unsupported, so a new package cannot rely on a
+// form the console does not draw (DESIGN-2026-11-19-PLUGIN-UI-CODE-ONLY).
+func TestSchemaFormsUnsupported(t *testing.T) {
+	m := uiManifest()
+	m.UI.Settings = &manifest.Form{Mode: "schema"}
+	if c := uiCodes(m); c["ui.settings.mode"] != "unsupported" || len(c) != 1 {
+		t.Fatalf("schema settings: %v", c)
+	}
+	m = controlsManifest(nil)
+	m.AccountTypes[0].Form = manifest.Form{Mode: "schema"}
+	if c := controlCodes(m); c["accountTypes[0].form.mode"] != "unsupported" || len(c) != 1 {
+		t.Fatalf("schema account form: %v", c)
 	}
 }
 
@@ -388,8 +301,6 @@ func TestNativeSettingsWithSchema(t *testing.T) {
 // and hostCompat, the shape slot declarations need.
 func uiNativeManifest(uiCompat, hostCompat string) *manifest.Manifest {
 	m := uiManifest()
-	m.HostPermissions = append(m.HostPermissions, manifest.HostPermission{ID: "ui.native"})
-	m.UI.Native = &manifest.NativeUI{Entry: "ui/native/entry.js"}
 	m.HostUICompat, m.HostCompat = uiCompat, hostCompat
 	return m
 }
@@ -428,7 +339,6 @@ func TestEditorSectionSlot(t *testing.T) {
 	// accountTypes name the plugin's own types, once each.
 	m = controlsManifest(nil)
 	m.HostUICompat = "^3.7"
-	m.HostPermissions = append(m.HostPermissions, manifest.HostPermission{ID: "ui.native"})
 	section.AccountTypes = []string{"apikey"}
 	m.UI = &manifest.UI{Native: &manifest.NativeUI{Entry: "ui/native/entry.js"}, Slots: []manifest.Slot{section}}
 	if c := controlCodes(m); len(c) > 0 {
@@ -451,7 +361,7 @@ func typedManifest(hostCompat string) *manifest.Manifest {
 	m := controlsManifest(nil)
 	m.HostCompat, m.HostUICompat = hostCompat, "^3.8"
 	m.Capabilities = append(m.Capabilities, manifest.Capability{ID: manifest.CapHTTPRoutes})
-	m.HostPermissions = append(m.HostPermissions, manifest.HostPermission{ID: "ui.native"}, manifest.HostPermission{ID: "routes.admin"})
+	m.HostPermissions = append(m.HostPermissions, manifest.HostPermission{ID: "routes.admin"})
 	m.UserPermissions = []manifest.UserPermission{{Key: "quota:reset", Label: manifest.LocalizedText{"en": "Reset quota"}}}
 	m.Routes = []manifest.Route{{Method: "POST", Path: "/quota/reset", Scope: "admin", Permission: "quota:reset"}}
 	m.UI = &manifest.UI{
@@ -594,53 +504,6 @@ func TestAccountActions(t *testing.T) {
 	}
 }
 
-// page.search is what makes the host render a search box at all.
-func TestPageSearchDeclaration(t *testing.T) {
-	set := func(m *manifest.Manifest, mutate func(*manifest.Page)) {
-		pg := m.UI.Pages["assets"]
-		mutate(&pg)
-		m.UI.Pages["assets"] = pg
-	}
-
-	m := uiManifest()
-	set(m, func(p *manifest.Page) { p.Search = "q" })
-	if c := uiCodes(m); len(c) > 0 {
-		t.Fatalf(`search "q" on a table page is valid: %v`, c)
-	}
-
-	// A name a client could not send, or one the plugin could not read back.
-	for _, bad := range []string{"-q", "a b", "q=1", strings.Repeat("q", 65), "?q"} {
-		m := uiManifest()
-		set(m, func(p *manifest.Page) { p.Search = bad })
-		if c := uiCodes(m); c["ui.pages.assets.search"] != "invalid_format" {
-			t.Errorf("search %q must be rejected: %v", bad, c)
-		}
-	}
-
-	// The table sends page/page_size itself; a search box bound to one of them
-	// would overwrite the page number on every keystroke.
-	for _, reserved := range []string{"page", "page_size", "PAGE_SIZE"} {
-		m := uiManifest()
-		set(m, func(p *manifest.Page) { p.Search = reserved })
-		if c := uiCodes(m); c["ui.pages.assets.search"] != "reserved_param" {
-			t.Errorf("search %q collides with the table's own parameters: %v", reserved, c)
-		}
-	}
-
-	// Only a table page has a search box; anywhere else the declaration would
-	// be read by nobody, which is the shape the field exists to stop.
-	m = uiManifest()
-	m.Routes = append(m.Routes, manifest.Route{Method: "POST", Path: "/assets", Scope: "admin", Permission: "assets:read"})
-	m.UI.Menus[0].Page = "new"
-	m.UI.Pages = map[string]manifest.Page{
-		"new": {Type: "form", Schema: "forms/new.schema.json", Submit: "POST /assets", Search: "q"},
-	}
-	c := codes(Validate(m, map[string][]byte{"forms/new.schema.json": []byte("{}")}, ValidateOptions{Tooling: true}))
-	if c["ui.pages.new.search"] != "unsupported" {
-		t.Fatalf("search on a form page must be rejected: %v", c)
-	}
-}
-
 // A native page may list its sections for the console's sidebar (UI 3.14).
 func TestPageNav(t *testing.T) {
 	label := manifest.LocalizedText{"en": "x"}
@@ -661,7 +524,7 @@ func TestPageNav(t *testing.T) {
 		code   string
 	}{
 		{name: "valid nav", typ: "native"},
-		{name: "nav on a table page", typ: "table", field: "ui.pages.panel.nav", code: "unsupported"},
+		{name: "nav on an iframe page", typ: "iframe", field: "ui.pages.panel.nav", code: "unsupported"},
 		{name: "no groups", typ: "native", mutate: func(n *manifest.PageNav) { n.Groups = nil },
 			field: "ui.pages.panel.nav.groups", code: "required"},
 		{name: "item key repeated in another group", typ: "native",
@@ -686,9 +549,9 @@ func TestPageNav(t *testing.T) {
 				tc.mutate(nav)
 			}
 			pg := manifest.Page{Type: "native", Component: "Panel", Nav: nav}
-			if tc.typ == "table" {
-				pg = m.UI.Pages["assets"]
-				pg.Nav = nav
+			if tc.typ == "iframe" {
+				m.HostPermissions = append(m.HostPermissions, manifest.HostPermission{ID: "ui.iframe"})
+				pg = manifest.Page{Type: "iframe", Src: "ui/panel.html", Nav: nav}
 			}
 			m.UI.Pages["panel"] = pg
 			c := uiCodes(m)
@@ -732,33 +595,70 @@ func TestParseRouteRef(t *testing.T) {
 	}
 }
 
-// A settings schema may only mark secrets where the core can mask them: on
-// properties of nested objects (manifest.SettingsSecrets). Other forms are
-// not settings and are not judged.
-func TestSettingsSecretsMustBeMaskable(t *testing.T) {
+// ui.settings.secrets: only the settings form takes them, each path a
+// maskable pointer, none repeating or inside another.
+func TestSettingsSecretsCheck(t *testing.T) {
 	m := uiManifest()
-	m.UI.Settings = &manifest.Form{Mode: "schema", Schema: "settings.schema.json"}
-	validate := func(schema string) map[string]string {
-		return codes(Validate(m, map[string][]byte{"settings.schema.json": []byte(schema)}, ValidateOptions{Tooling: true}))
+	files := map[string][]byte{"ui/native/entry.js": []byte("")}
+	validate := func() map[string]string { return codes(Validate(m, files, ValidateOptions{Tooling: true})) }
+
+	m.UI.Settings = &manifest.Form{Mode: "native", Component: "Settings", Secrets: []manifest.SettingsSecret{
+		{Path: "password"}, {Path: "notify/url", Sensitive: true}, {Path: "notify/secret"}, {Path: "a~1b"}}}
+	if c := validate(); len(c) > 0 {
+		t.Fatalf("valid secrets: %v", c)
 	}
-	for _, schema := range []string{
-		`{"properties":{"key":{"writeOnly":true},"up":{"properties":{"url":{"x-sensitive":true}}},"tags":{"type":"array","items":{"type":"string"}}}}`,
-		`{"properties":{"a":{"$ref":"#/$defs/s"},"up":{"$ref":"#/definitions/creds"}},"$defs":{"s":{"format":"password"}},
-			"definitions":{"creds":{"properties":{"token":{"writeOnly":true}}}}}`,
-	} {
-		if c := validate(schema); len(c) > 0 {
-			t.Fatalf("maskable secrets are valid: %v", c)
+	m.UI.Settings.Secrets = []manifest.SettingsSecret{{Path: "ok"}, {Path: ""}, {Path: "a//b"}, {Path: "x~2"},
+		{Path: strings.Repeat("p/", manifest.MaxSecretDepth) + "p"}}
+	c := validate()
+	for i := 1; i <= 4; i++ {
+		if f := fmt.Sprintf("ui.settings.secrets[%d].path", i); c[f] != "invalid" {
+			t.Errorf("%s = %q: %v", f, c[f], c)
 		}
 	}
-	for name, schema := range map[string]string{
-		"items":         `{"properties":{"hooks":{"type":"array","items":{"properties":{"token":{"writeOnly":true}}}}}}`,
-		"$ref":          `{"properties":{"a":{"$ref":"#/$defs/s/properties/k"}},"$defs":{"s":{"properties":{"k":{"format":"password"}}}}}`,
-		"recursive":     `{"properties":{"t":{"$ref":"#/$defs/n"}},"$defs":{"n":{"properties":{"k":{"writeOnly":true},"next":{"$ref":"#/$defs/n"}}}}}`,
-		"root allOf":    `{"allOf":[{"properties":{"x":{"x-sensitive":true}}}]}`,
-		"not an object": `true`,
-	} {
-		if c := validate(schema); c["ui.settings.schema"] != "unmaskable_secret" {
-			t.Fatalf("%s: a secret that cannot be masked must be rejected: %v", name, c)
+	m.UI.Settings.Secrets = []manifest.SettingsSecret{{Path: "notify"}, {Path: "other"}, {Path: "notify/url"}, {Path: "other"}}
+	c = validate()
+	if c["ui.settings.secrets[2].path"] != "duplicate" || c["ui.settings.secrets[3].path"] != "duplicate" || c["ui.settings.secrets[1].path"] != "" {
+		t.Fatalf("overlapping paths: %v", c)
+	}
+
+	m.UI.Settings = nil
+	m.AccountTypes = []manifest.AccountType{{Form: manifest.Form{Mode: "native", Component: "X",
+		Secrets: []manifest.SettingsSecret{{Path: "api_key"}}}}}
+	if c := validate(); c["accountTypes[0].form.secrets"] != "unsupported" {
+		t.Fatalf("account types use sensitiveFields: %v", c)
+	}
+}
+
+// Native settings are mounted from a component on the settings tab, or
+// edited on one of the plugin's native pages: one of the two is needed.
+func TestNativeSettingsNeedComponentOrPage(t *testing.T) {
+	m := uiManifest()
+	files := map[string][]byte{"ui/native/entry.js": []byte("")}
+	m.UI.Settings = &manifest.Form{Mode: "native"}
+	if c := codes(Validate(m, files, ValidateOptions{Tooling: true})); c["ui.settings.component"] != "required" {
+		t.Fatalf("neither component nor page: %v", c)
+	}
+	m.UI.Settings.Component, m.UI.Settings.Secrets = "Settings", []manifest.SettingsSecret{}
+	if c := codes(Validate(m, files, ValidateOptions{Tooling: true})); len(c) > 0 {
+		t.Fatalf("a component is enough: %v", c)
+	}
+}
+
+// Native or iframe settings say which settings are secret: without the key
+// the core masks them all, so it is required; [] declares none.
+func TestSettingsSecretsRequired(t *testing.T) {
+	m := uiManifest()
+	m.HostPermissions = append(m.HostPermissions, manifest.HostPermission{ID: "ui.iframe"})
+	files := map[string][]byte{"ui/native/entry.js": []byte(""), "ui/iframe/s.html": []byte("")}
+	validate := func() map[string]string { return codes(Validate(m, files, ValidateOptions{Tooling: true})) }
+	for _, f := range []*manifest.Form{{Mode: "native", Component: "Settings"}, {Mode: "iframe", Page: "ui/iframe/s.html"}} {
+		m.UI.Settings = f
+		if c := validate(); c["ui.settings.secrets"] != "required" {
+			t.Fatalf("%s without secrets: %v", f.Mode, c)
+		}
+		f.Secrets = []manifest.SettingsSecret{}
+		if c := validate(); len(c) > 0 {
+			t.Fatalf("%s with secrets []: %v", f.Mode, c)
 		}
 	}
 }

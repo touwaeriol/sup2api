@@ -11,7 +11,12 @@ const Protocol = 2
 // These describe the persisted business formats this release actually supports.
 const ClusterProtocolVersion = 1
 const TaskProtocolVersion = 1
-const HostAPIVersion = 9
+
+// HostAPIVersion is the version of the plugin Host API (sdk/protocol uses
+// this constant). Releases with different values cannot run side by side.
+// 10: the single Execute path replaced BuildUpstreamRequest and the usage
+// callbacks.
+const HostAPIVersion = 10
 
 // Plugin package limits, applied by the core (unpack, upload, download), the
 // shell's package store and the pack tool alike: about four times the

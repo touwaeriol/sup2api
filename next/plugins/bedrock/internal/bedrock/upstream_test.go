@@ -2,19 +2,17 @@ package bedrock
 
 import (
 	"context"
-	"maps"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
-	"github.com/Sub2API-Devs/sup2api/next/sdk/reqsign"
 )
 
 const (
@@ -67,29 +65,43 @@ func TestInvokeModelURLs(t *testing.T) {
 		{"surrounding space trimmed", "us-east-1", "apac", "  " + testHaiku + " ", false, useast1 + "/model/apac." + haikuSegment + "/invoke", "apac." + testHaiku},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			resp := build(t, buildRequest(stored(TypeAPIKey, apiKeyCreds, settingsOf(tc.region, tc.prefix)), ProtocolMessages, tc.model, tc.stream))
-			if resp.GetMethod() != http.MethodPost || resp.GetUrl() != tc.wantURL || resp.GetUpstreamModel() != tc.wantModel {
-				t.Fatalf("request = %s %s (model %s)\nwant POST %s (model %s)", resp.GetMethod(), resp.GetUrl(), resp.GetUpstreamModel(), tc.wantURL, tc.wantModel)
+			up := build(t, executeRequest(stored(TypeAPIKey, apiKeyCreds, settingsOf(tc.region, tc.prefix)), tc.model, tc.stream, claudeBody(tc.model, tc.stream)))
+			if up.GetMethod() != http.MethodPost || up.GetUrl() != tc.wantURL || up.GetUpstreamModel() != tc.wantModel {
+				t.Fatalf("request = %s %s (model %s)\nwant POST %s (model %s)", up.GetMethod(), up.GetUrl(), up.GetUpstreamModel(), tc.wantURL, tc.wantModel)
 			}
 			wantStream := ""
 			if tc.stream {
 				wantStream = "aws-eventstream-chunk"
 			}
-			if resp.GetResponseStream() != wantStream {
-				t.Fatalf("response_stream = %q, want %q", resp.GetResponseStream(), wantStream)
+			if up.GetResponseStream() != wantStream {
+				t.Fatalf("response_stream = %q, want %q", up.GetResponseStream(), wantStream)
 			}
 			// The model is exactly one path segment: /model/<id>/<action>.
-			path := strings.TrimPrefix(resp.GetUrl(), "https://")
+			path := strings.TrimPrefix(up.GetUrl(), "https://")
 			if n := strings.Count(path[strings.Index(path, "/"):], "/"); n != 3 || strings.Contains(path, ":") {
-				t.Fatalf("path of %s has %d slashes or a raw colon", resp.GetUrl(), n)
+				t.Fatalf("path of %s has %d slashes or a raw colon", up.GetUrl(), n)
+			}
+			// The core parses the URL again before it sends: it must come
+			// out byte for byte, or the signature no longer matches.
+			if u, err := url.Parse(up.GetUrl()); err != nil || u.String() != up.GetUrl() {
+				t.Fatalf("the URL does not survive a parse: %s -> %v (%v)", up.GetUrl(), u, err)
 			}
 		})
 	}
 }
 
+// The client's stream choice (meta.stream) decides the action, not a stream
+// flag an operator's param_override wrote into a non-stream body.
+func TestStreamFollowsMeta(t *testing.T) {
+	up := build(t, executeRequest(stored(TypeAPIKey, apiKeyCreds, settingsOf("us-east-1", NoProfilePrefix)), testHaiku, false, claudeBody(testHaiku, true)))
+	if up.GetUrl() != useast1+"/model/"+haikuSegment+"/invoke" || up.GetResponseStream() != "" {
+		t.Fatalf("a non-stream request with stream:true in its body = %s %q", up.GetUrl(), up.GetResponseStream())
+	}
+}
+
 func TestInvokeModelWithoutModel(t *testing.T) {
-	_, err := newTestPlugin(Endpoints{}).BuildUpstreamRequest(context.Background(),
-		buildRequest(stored(TypeAPIKey, apiKeyCreds, nil), ProtocolMessages, "  ", false))
+	_, err := newTestPlugin(Endpoints{}).BuildUpstream(context.Background(),
+		executeRequest(stored(TypeAPIKey, apiKeyCreds, nil), "  ", false, `{"model":"  ","max_tokens":1,"messages":[]}`))
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("no model: %v", err)
 	}
@@ -100,134 +112,12 @@ func TestInvokeModelWithoutModel(t *testing.T) {
 // into a Messages one instead of asking for an OpenAI route.
 func TestUnsupportedProtocol(t *testing.T) {
 	for _, protocol := range []string{"", "anthropic.count_tokens", "openai.chat", "openai.responses", "openai.embeddings", "openai.responses_ws", "gemini.generate"} {
-		_, err := newTestPlugin(Endpoints{}).BuildUpstreamRequest(context.Background(),
-			buildRequest(stored(TypeAPIKey, apiKeyCreds, nil), protocol, testHaiku, false))
+		in := executeRequest(stored(TypeAPIKey, apiKeyCreds, nil), testHaiku, false, claudeBody(testHaiku, false))
+		in.Meta.Protocol = protocol
+		_, err := newTestPlugin(Endpoints{}).BuildUpstream(context.Background(), in)
 		if status.Code(err) != codes.InvalidArgument {
 			t.Errorf("%q: %v", protocol, err)
 		}
-	}
-}
-
-// The InvokeModel body: the path carries model and stream, so both leave the
-// body; anthropic_version is always set, and the top-level fields InvokeModel
-// has no use for leave. The beta features of the header and of the body's
-// own anthropic_beta are settled together.
-func TestInvokeModelPatches(t *testing.T) {
-	const noContextManagement = "delete context_management"
-	base := []string{"delete model", "delete stream", `set anthropic_version="bedrock-2023-05-31"`, "delete metadata", "delete provider"}
-	for _, tc := range []struct {
-		name string
-		// header and body are the anthropic-beta header and the body's
-		// anthropic_beta as raw JSON; absent tells that the client sent none.
-		header, body string
-		absent       bool
-		want         []string
-	}{
-		// Neither the header nor the body.
-		{name: "no beta header", absent: true, want: []string{noContextManagement}},
-		{name: "empty beta header", header: "  ", want: []string{noContextManagement}},
-
-		// The header only.
-		{name: "supported feature", header: "context-1m-2025-08-07", want: []string{`set anthropic_beta=["context-1m-2025-08-07"]`, noContextManagement}},
-		{name: "several, spaced", header: " context-1m-2025-08-07 ,computer-use-2025-01-24,  compact-2026-01-12",
-			want: []string{`set anthropic_beta=["context-1m-2025-08-07","computer-use-2025-01-24","compact-2026-01-12"]`, noContextManagement}},
-		{name: "unsupported ones dropped; context management keeps its field", header: "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,oauth-2025-04-20",
-			want: []string{`set anthropic_beta=["context-management-2025-06-27"]`}},
-		{name: "only unsupported ones", header: "claude-code-20250219,oauth-2025-04-20,prompt-caching-2024-07-31", want: []string{noContextManagement}},
-		{name: "duplicates once", header: "context-1m-2025-08-07,context-1m-2025-08-07,fine-grained-tool-streaming-2025-05-14",
-			want: []string{`set anthropic_beta=["context-1m-2025-08-07","fine-grained-tool-streaming-2025-05-14"]`, noContextManagement}},
-		{name: "advanced tool use is tool search on Bedrock, with tool examples", header: "advanced-tool-use-2025-11-20",
-			want: []string{`set anthropic_beta=["tool-search-tool-2025-10-19","tool-examples-2025-10-29"]`, noContextManagement}},
-		{name: "tool search brings tool examples", header: "tool-search-tool-2025-10-19,computer-use-2025-11-24",
-			want: []string{`set anthropic_beta=["tool-search-tool-2025-10-19","computer-use-2025-11-24","tool-examples-2025-10-29"]`, noContextManagement}},
-		{name: "tool examples not repeated", header: "tool-examples-2025-10-29,advanced-tool-use-2025-11-20,tool-search-tool-2025-10-19",
-			want: []string{`set anthropic_beta=["tool-examples-2025-10-29","tool-search-tool-2025-10-19"]`, noContextManagement}},
-
-		// The body only: filtered like the header, never sent on as it came.
-		{name: "features of the AWS model cards", header: "compact-2026-09-04,fallback-credit-2026-07-01,thinking-display-updates-2026-08-18,per-turn-control-2026-07-01",
-			want: []string{`set anthropic_beta=["compact-2026-09-04","fallback-credit-2026-07-01","thinking-display-updates-2026-08-18","per-turn-control-2026-07-01"]`, noContextManagement}},
-		{name: "body, supported", absent: true, body: `["context-1m-2025-08-07"]`, want: []string{`set anthropic_beta=["context-1m-2025-08-07"]`, noContextManagement}},
-		{name: "body, unsupported ones dropped", absent: true, body: `["claude-code-20250219","compact-2026-01-12","advanced-tool-use-2025-11-20"]`,
-			want: []string{`set anthropic_beta=["compact-2026-01-12","tool-search-tool-2025-10-19","tool-examples-2025-10-29"]`, noContextManagement}},
-		{name: "body, only unsupported ones: the field leaves", absent: true, body: `["claude-code-20250219"]`, want: []string{"delete anthropic_beta", noContextManagement}},
-		{name: "body, empty array: the field leaves", absent: true, body: `[]`, want: []string{"delete anthropic_beta", noContextManagement}},
-		{name: "body, one string in the header's format", absent: true, body: `"context-1m-2025-08-07, compact-2026-01-12"`,
-			want: []string{`set anthropic_beta=["context-1m-2025-08-07","compact-2026-01-12"]`, noContextManagement}},
-		{name: "body, not a list of names: the field leaves", absent: true, body: `{"context-1m-2025-08-07":true}`, want: []string{"delete anthropic_beta", noContextManagement}},
-		{name: "body, names among other values", absent: true, body: `[1,"context-management-2025-06-27",null]`, want: []string{`set anthropic_beta=["context-management-2025-06-27"]`}},
-
-		// Both: the header's features first, then the body's, each once.
-		{name: "header and body merged", header: "context-1m-2025-08-07,claude-code-20250219", body: `["compact-2026-01-12","context-1m-2025-08-07"]`,
-			want: []string{`set anthropic_beta=["context-1m-2025-08-07","compact-2026-01-12"]`, noContextManagement}},
-		{name: "header and body, nothing usable in either", header: "oauth-2025-04-20", body: `["claude-code-20250219"]`, want: []string{"delete anthropic_beta", noContextManagement}},
-		{name: "header unusable, body usable", header: "oauth-2025-04-20", body: `["context-management-2025-06-27"]`, want: []string{`set anthropic_beta=["context-management-2025-06-27"]`}},
-		{name: "empty header does not hide the body", header: "", body: `["computer-use-2025-11-24"]`, want: []string{`set anthropic_beta=["computer-use-2025-11-24"]`, noContextManagement}},
-	} {
-		for _, stream := range []bool{false, true} {
-			t.Run(tc.name, func(t *testing.T) {
-				in := buildRequest(stored(TypeAccessKey, akskCreds, nil), ProtocolMessages, testHaiku, stream)
-				if !tc.absent {
-					in.InboundHeaders = map[string]string{"anthropic-beta": tc.header, "user-agent": "claude-cli/2.1.90"}
-				}
-				if tc.body != "" {
-					in.Fields[fieldBetas] = tc.body
-				}
-				resp := build(t, in)
-				if got, want := patchList(resp.GetPatches()), append(slices.Clone(base), tc.want...); !slices.Equal(got, want) {
-					t.Fatalf("patches = %v\nwant %v", got, want)
-				}
-				// No client header is forwarded, the beta header included.
-				if want := map[string]string{"content-type": "application/json", "accept": "application/json"}; !maps.Equal(resp.GetHeaders(), want) {
-					t.Fatalf("headers = %v", resp.GetHeaders())
-				}
-			})
-		}
-	}
-}
-
-// The patches applied the way the core applies them (sjson): removing a
-// field the body does not have changes nothing, output_config stays, and
-// the fallbacks the core guards are never touched.
-func TestInvokeModelBody(t *testing.T) {
-	for _, tc := range []struct {
-		name, header, body, want string
-	}{
-		{"a plain request", "",
-			`{"model":"claude-haiku-4-5","max_tokens":8,"messages":[]}`,
-			`{"max_tokens":8,"messages":[],"anthropic_version":"bedrock-2023-05-31"}`},
-		{"what Claude Code sends Anthropic", "claude-code-20250219,context-1m-2025-08-07",
-			`{"model":"claude-haiku-4-5","stream":true,"max_tokens":8,"messages":[],"metadata":{"user_id":"u"},"provider":{"only":["x"]},` +
-				`"context_management":{"edits":[]},"output_config":{"effort":"high"},"fallbacks":[{"model":"claude-opus-4-8"}],"anthropic_beta":["oauth-2025-04-20"]}`,
-			`{"max_tokens":8,"messages":[],"output_config":{"effort":"high"},"fallbacks":[{"model":"claude-opus-4-8"}],"anthropic_beta":["context-1m-2025-08-07"],"anthropic_version":"bedrock-2023-05-31"}`},
-		{"context management with its feature", "context-management-2025-06-27",
-			`{"model":"claude-haiku-4-5","max_tokens":8,"messages":[],"context_management":{"edits":[]}}`,
-			`{"max_tokens":8,"messages":[],"context_management":{"edits":[]},"anthropic_version":"bedrock-2023-05-31","anthropic_beta":["context-management-2025-06-27"]}`},
-		{"a body feature nobody supports", "",
-			`{"model":"claude-haiku-4-5","max_tokens":8,"anthropic_beta":["claude-code-20250219"],"messages":[]}`,
-			`{"max_tokens":8,"messages":[],"anthropic_version":"bedrock-2023-05-31"}`},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			in := buildRequest(stored(TypeAPIKey, apiKeyCreds, nil), ProtocolMessages, testHaiku, false)
-			in.InboundHeaders = map[string]string{"anthropic-beta": tc.header}
-			if betas := gjson.Get(tc.body, fieldBetas); betas.Exists() {
-				in.Fields[fieldBetas] = betas.Raw
-			}
-			body := []byte(tc.body)
-			var err error
-			for _, p := range build(t, in).GetPatches() {
-				if p.GetOp() == pluginv1.BodyPatch_OP_DELETE {
-					body, err = sjson.DeleteBytes(body, p.GetPath())
-				} else {
-					body, err = sjson.SetRawBytes(body, p.GetPath(), []byte(p.GetValueJson()))
-				}
-				if err != nil {
-					t.Fatalf("patch %s: %v", p.GetPath(), err)
-				}
-			}
-			if string(body) != tc.want {
-				t.Fatalf("body = %s\nwant   %s", body, tc.want)
-			}
-		})
 	}
 }
 
@@ -237,10 +127,10 @@ func TestSupportedBetasPass(t *testing.T) {
 	if got := bedrockBetas(headerBetas(strings.Join(supportedBetas, ","))...); !slices.Equal(got, supportedBetas) {
 		t.Fatalf("betas = %v", got)
 	}
-	if got := bedrockBetas(bodyBetas(mustJSON(supportedBetas))...); !slices.Equal(got, supportedBetas) {
+	if got := bedrockBetas(bodyBetas(gjson.Parse(mustJSON(supportedBetas)))...); !slices.Equal(got, supportedBetas) {
 		t.Fatalf("betas = %v", got)
 	}
-	if len(supportedBetas) != 15 || !slices.Contains(supportedBetas, betaAliases["advanced-tool-use-2025-11-20"]) || !slices.Contains(supportedBetas, betaContextManagement) {
+	if len(supportedBetas) != 15 || !slices.Contains(supportedBetas, betaAliases[betaAdvancedToolUse]) || !slices.Contains(supportedBetas, betaContextManagement) {
 		t.Fatalf("supported = %v, aliases = %v", supportedBetas, betaAliases)
 	}
 }
@@ -265,61 +155,6 @@ func TestRegionalPrefixes(t *testing.T) {
 	}
 }
 
-// How a request is authorized, per account type.
-func TestAuthorization(t *testing.T) {
-	for _, tc := range []struct {
-		name     string
-		typ      string
-		creds    map[string]any
-		region   string
-		wantAuth string
-		want     *pluginv1.RequestSigning
-	}{
-		{"api key: bearer header, nothing to sign", TypeAPIKey, apiKeyCreds, "us-east-1", "Bearer " + testAPIKey, nil},
-		{"access key: signed by the core", TypeAccessKey, akskCreds, "us-east-1", "", &pluginv1.RequestSigning{
-			Scheme: "aws-sigv4", Region: "us-east-1", Service: "bedrock", AccessKeyId: testAccessKeyID, SecretAccessKey: mockSecret(testAccessKeyID)}},
-		{"access key: the signing region is the account's", TypeAccessKey, akskCreds, "eu-west-3", "", &pluginv1.RequestSigning{
-			Scheme: "aws-sigv4", Region: "eu-west-3", Service: "bedrock", AccessKeyId: testAccessKeyID, SecretAccessKey: mockSecret(testAccessKeyID)}},
-		{"access key: a stray session token is not used", TypeAccessKey, with(akskCreds, map[string]any{fieldSessionToken: testSessionToken}), "us-east-1", "",
-			&pluginv1.RequestSigning{Scheme: "aws-sigv4", Region: "us-east-1", Service: "bedrock", AccessKeyId: testAccessKeyID, SecretAccessKey: mockSecret(testAccessKeyID)}},
-		{"temporary credentials: signed with the session token", TypeSTS, stsCreds, "us-west-2", "", &pluginv1.RequestSigning{
-			Scheme: "aws-sigv4", Region: "us-west-2", Service: "bedrock", AccessKeyId: testSTSKeyID, SecretAccessKey: mockSecret(testSTSKeyID), SessionToken: testSessionToken}},
-		{"credentials are trimmed", TypeSTS, map[string]any{fieldAccessKeyID: " " + testSTSKeyID, fieldSecretAccessKey: mockSecret(testSTSKeyID) + "\n", fieldSessionToken: "\t" + testSessionToken + " "},
-			"us-west-2", "", &pluginv1.RequestSigning{
-				Scheme: "aws-sigv4", Region: "us-west-2", Service: "bedrock", AccessKeyId: testSTSKeyID, SecretAccessKey: mockSecret(testSTSKeyID), SessionToken: testSessionToken}},
-	} {
-		for _, stream := range []bool{false, true} {
-			t.Run(tc.name, func(t *testing.T) {
-				resp := build(t, buildRequest(stored(tc.typ, tc.creds, settingsOf(tc.region, "")), ProtocolMessages, testHaiku, stream))
-				if got := resp.GetHeaders()["authorization"]; got != tc.wantAuth {
-					t.Fatalf("authorization = %q, want %q", got, tc.wantAuth)
-				}
-				for name := range resp.GetHeaders() {
-					if strings.HasPrefix(name, "x-amz-") {
-						t.Fatalf("the plugin does not sign gateway requests itself: header %s", name)
-					}
-				}
-				got := resp.GetSigning()
-				if (got == nil) != (tc.want == nil) {
-					t.Fatalf("signing = %v, want %v", got != nil, tc.want != nil)
-				}
-				if got == nil {
-					return
-				}
-				if got.GetScheme() != tc.want.GetScheme() || got.GetRegion() != tc.want.GetRegion() || got.GetService() != tc.want.GetService() ||
-					got.GetAccessKeyId() != tc.want.GetAccessKeyId() || got.GetSecretAccessKey() != tc.want.GetSecretAccessKey() || got.GetSessionToken() != tc.want.GetSessionToken() {
-					t.Fatalf("signing = scheme %s region %s service %s key %s, session token set: %v",
-						got.GetScheme(), got.GetRegion(), got.GetService(), got.GetAccessKeyId(), got.GetSessionToken() != "")
-				}
-				// The scheme is one the core's signer knows.
-				if !reqsign.Known(got.GetScheme()) || got.GetScheme() != reqsign.SchemeAWSSigV4 || got.GetService() != SigningService {
-					t.Fatalf("scheme %q / service %q", got.GetScheme(), got.GetService())
-				}
-			})
-		}
-	}
-}
-
 func TestBuildFromBrokenAccount(t *testing.T) {
 	p := newTestPlugin(Endpoints{})
 	for name, tc := range map[string]struct {
@@ -331,8 +166,8 @@ func TestBuildFromBrokenAccount(t *testing.T) {
 		"no credentials":       {&pluginv1.Account{Type: TypeAccessKey}, codes.FailedPrecondition},
 		"another plugin's":     {stored("apikey", apiKeyCreds, nil), codes.FailedPrecondition},
 	} {
-		if _, err := p.BuildUpstreamRequest(context.Background(), buildRequest(tc.acc, ProtocolMessages, testHaiku, false)); status.Code(err) != tc.want {
-			t.Errorf("%s: BuildUpstreamRequest: %v", name, err)
+		if _, err := p.BuildUpstream(context.Background(), executeRequest(tc.acc, testHaiku, false, claudeBody(testHaiku, false))); status.Code(err) != tc.want {
+			t.Errorf("%s: BuildUpstream: %v", name, err)
 		}
 		if _, err := p.BuildTestRequest(context.Background(), &pluginv1.BuildTestRequestRequest{Account: tc.acc}); status.Code(err) != tc.want {
 			t.Errorf("%s: BuildTestRequest: %v", name, err)

@@ -95,10 +95,6 @@ func chunkFrame(t testing.TB, event string) []byte {
 	return mustAppend(t, nil, eventHeaders(), chunkPayload(event))
 }
 
-func exceptionFrame(t testing.TB, typ, message string) []byte {
-	return mustAppend(t, nil, []Header{{HeaderExceptionType, typ}, {HeaderMessageType, MessageTypeException}}, []byte(`{"message":"`+message+`"}`))
-}
-
 // The decoder reads the frames recorded from the official SDK, including
 // header value types it does not return, and the encoder writes the same
 // bytes: the recording pins the wire format across upgrades of the library
@@ -106,7 +102,7 @@ func exceptionFrame(t testing.TB, typ, message string) []byte {
 func TestSDKRecordedFrames(t *testing.T) {
 	for name, v := range sdkVectors(t) {
 		t.Run(name, func(t *testing.T) {
-			d := NewDecoder(bytes.NewReader(v.raw))
+			d := newDecoder(bytes.NewReader(v.raw))
 			msg, err := d.Decode()
 			if err != nil {
 				t.Fatal(err)
@@ -140,7 +136,7 @@ func TestSDKRecordedFrames(t *testing.T) {
 
 func TestRoundTrip(t *testing.T) {
 	big := bytes.Repeat([]byte("x"), 1<<20)
-	msgs := []Message{
+	msgs := []eventMessage{
 		{Headers: eventHeaders(), Payload: chunkPayload(`{"type":"ping"}`)},
 		{},
 		{Payload: big},
@@ -150,7 +146,7 @@ func TestRoundTrip(t *testing.T) {
 	for _, m := range msgs {
 		stream = mustAppend(t, stream, m.Headers, m.Payload)
 	}
-	d := NewDecoder(iotest.OneByteReader(bytes.NewReader(stream)))
+	d := newDecoder(iotest.OneByteReader(bytes.NewReader(stream)))
 	for i, want := range msgs {
 		got, err := d.Decode()
 		if err != nil {
@@ -180,7 +176,7 @@ func TestAppendMessageLimits(t *testing.T) {
 		"long header name":   {headers: []Header{{strings.Repeat("n", 256), "v"}}},
 		"long header value":  {headers: []Header{{"n", strings.Repeat("v", 0x8000)}}},
 		"header block":       {headers: []Header{{"a", strings.Repeat("v", 0x7fff)}, {"b", strings.Repeat("v", 0x7fff)}, {"c", strings.Repeat("v", 0x7fff)}, {"d", strings.Repeat("v", 0x7fff)}}},
-		"message over limit": {payload: MaxMessageSize - minMessageSize + 1},
+		"message over limit": {payload: maxMessageSize - minMessageSize + 1},
 	} {
 		out, err := AppendMessage(prefix, tc.headers, make([]byte, tc.payload))
 		if err == nil || !bytes.Equal(out, prefix) {
@@ -188,8 +184,8 @@ func TestAppendMessageLimits(t *testing.T) {
 		}
 	}
 	// The largest message is written and read back.
-	out := mustAppend(t, nil, nil, make([]byte, MaxMessageSize-minMessageSize))
-	if msg, err := NewDecoder(bytes.NewReader(out)).Decode(); err != nil || len(msg.Payload) != MaxMessageSize-minMessageSize {
+	out := mustAppend(t, nil, nil, make([]byte, maxMessageSize-minMessageSize))
+	if msg, err := newDecoder(bytes.NewReader(out)).Decode(); err != nil || len(msg.Payload) != maxMessageSize-minMessageSize {
 		t.Fatalf("largest message: %v", err)
 	}
 }
@@ -201,13 +197,13 @@ func TestEveryCorruptedByteIsRejected(t *testing.T) {
 		for _, bit := range []byte{0x01, 0x80} {
 			bad := bytes.Clone(frame)
 			bad[i] ^= bit
-			_, err := NewDecoder(bytes.NewReader(bad)).Decode()
+			_, err := newDecoder(bytes.NewReader(bad)).Decode()
 			if err == nil {
 				t.Fatalf("byte %d bit %#x: accepted", i, bit)
 			}
 			// A corrupted length fails the prelude checksum before the
 			// length is used, so this is never a mere "unexpected EOF".
-			if !errors.Is(err, ErrCorrupt) {
+			if !errors.Is(err, errCorrupt) {
 				t.Fatalf("byte %d bit %#x: %v", i, bit, err)
 			}
 		}
@@ -218,17 +214,17 @@ func TestChecksums(t *testing.T) {
 	frame := sdkVectors(t)["chunk-message-start"].raw
 	prelude := bytes.Clone(frame)
 	prelude[9]++
-	if _, err := NewDecoder(bytes.NewReader(prelude)).Decode(); !errors.Is(err, ErrCorrupt) || !strings.Contains(err.Error(), "prelude checksum") {
+	if _, err := newDecoder(bytes.NewReader(prelude)).Decode(); !errors.Is(err, errCorrupt) || !strings.Contains(err.Error(), "prelude checksum") {
 		t.Fatalf("prelude: %v", err)
 	}
 	message := bytes.Clone(frame)
 	message[len(message)-1]++
-	if _, err := NewDecoder(bytes.NewReader(message)).Decode(); !errors.Is(err, ErrCorrupt) || !strings.Contains(err.Error(), "message checksum") {
+	if _, err := newDecoder(bytes.NewReader(message)).Decode(); !errors.Is(err, errCorrupt) || !strings.Contains(err.Error(), "message checksum") {
 		t.Fatalf("message: %v", err)
 	}
 	payload := bytes.Clone(frame)
 	payload[len(payload)-10]++
-	if _, err := NewDecoder(bytes.NewReader(payload)).Decode(); !errors.Is(err, ErrCorrupt) || !strings.Contains(err.Error(), "message checksum") {
+	if _, err := newDecoder(bytes.NewReader(payload)).Decode(); !errors.Is(err, errCorrupt) || !strings.Contains(err.Error(), "message checksum") {
 		t.Fatalf("payload: %v", err)
 	}
 }
@@ -239,7 +235,7 @@ func TestTruncation(t *testing.T) {
 	first, second := chunkFrame(t, `{"type":"a"}`), chunkFrame(t, `{"type":"b"}`)
 	stream := append(bytes.Clone(first), second...)
 	for cut := 0; cut <= len(stream); cut++ {
-		d := NewDecoder(bytes.NewReader(stream[:cut]))
+		d := newDecoder(bytes.NewReader(stream[:cut]))
 		complete := 0
 		var err error
 		for {
@@ -272,13 +268,13 @@ func TestLengthLimits(t *testing.T) {
 	for name, prelude := range map[string][]byte{
 		"shorter than a message": rawPrelude(minMessageSize-1, 0),
 		"zero":                   rawPrelude(0, 0),
-		"over 16 MiB":            rawPrelude(MaxMessageSize+1, 0),
+		"over 16 MiB":            rawPrelude(maxMessageSize+1, 0),
 		"4 GiB":                  rawPrelude(0xffffffff, 0),
 		"headers past the end":   rawPrelude(100, 100-minMessageSize+1),
-		"headers over 128 KiB":   rawPrelude(MaxMessageSize, maxHeadersSize+1),
+		"headers over 128 KiB":   rawPrelude(maxMessageSize, maxHeadersSize+1),
 	} {
-		d := NewDecoder(endless(prelude))
-		if _, err := d.Decode(); !errors.Is(err, ErrCorrupt) {
+		d := newDecoder(endless(prelude))
+		if _, err := d.Decode(); !errors.Is(err, errCorrupt) {
 			t.Errorf("%s: %v", name, err)
 		}
 		if d.buf != nil {
@@ -302,9 +298,9 @@ func allocated(f func()) uint64 {
 // kept.
 func TestBufferFollowsTheData(t *testing.T) {
 	for _, sent := range []int{0, 1000, 64 << 10} {
-		cut := append(rawPrelude(MaxMessageSize, 0), make([]byte, sent)...)
+		cut := append(rawPrelude(maxMessageSize, 0), make([]byte, sent)...)
 		var err error
-		got := allocated(func() { _, err = NewDecoder(bytes.NewReader(cut)).Decode() })
+		got := allocated(func() { _, err = newDecoder(bytes.NewReader(cut)).Decode() })
 		if err != io.ErrUnexpectedEOF {
 			t.Fatalf("cut message: %v", err)
 		}
@@ -312,14 +308,14 @@ func TestBufferFollowsTheData(t *testing.T) {
 		// to what was received (the race detector doubles what a growth
 		// step allocates): far below the 16 MiB announced.
 		if limit := uint64(256<<10 + 12*sent); got > limit {
-			t.Fatalf("%d bytes allocated for %d received of %d announced", got, sent, MaxMessageSize)
+			t.Fatalf("%d bytes allocated for %d received of %d announced", got, sent, maxMessageSize)
 		}
 	}
 
 	big := mustAppend(t, nil, nil, bytes.Repeat([]byte("x"), 3<<20))
 	// A large message is decoded whole, and its buffer goes with the next.
 	small := mustAppend(t, nil, eventHeaders(), []byte("small"))
-	d := NewDecoder(bytes.NewReader(append(bytes.Clone(big), append(bytes.Clone(small), small...)...)))
+	d := newDecoder(bytes.NewReader(append(bytes.Clone(big), append(bytes.Clone(small), small...)...)))
 	if msg, err := d.Decode(); err != nil || len(msg.Payload) != 3<<20 {
 		t.Fatalf("large message: %v", err)
 	}
@@ -337,43 +333,6 @@ func TestBufferFollowsTheData(t *testing.T) {
 			t.Fatal("the small buffer was not reused")
 		}
 		kept = &d.buf[0]
-	}
-}
-
-// A decoder can be given a limit below the format's; a message over it is
-// refused before anything is read for it.
-func TestMaxMessageSizeOption(t *testing.T) {
-	frame := mustAppend(t, nil, nil, make([]byte, 100)) // 116 bytes
-	for name, tc := range map[string]struct {
-		limit int
-		is    error
-	}{
-		"at the limit":        {len(frame), nil},
-		"over the limit":      {len(frame) - 1, ErrTooLarge},
-		"below the format's":  {-1, ErrTooLarge}, // raised to the smallest message
-		"above the format's":  {MaxMessageSize + 1, nil},
-		"the package maximum": {MaxMessageSize, nil},
-	} {
-		d := NewDecoder(io.MultiReader(bytes.NewReader(frame[:preludeSize]), iotest.ErrReader(errors.New("read past the prelude"))), WithMaxMessageSize(tc.limit))
-		_, err := d.Decode()
-		if tc.is == nil {
-			if d.max > MaxMessageSize || err == nil || errors.Is(err, ErrTooLarge) {
-				t.Errorf("%s: limit %d, %v", name, d.max, err)
-			}
-			continue
-		}
-		if !errors.Is(err, tc.is) || errors.Is(err, ErrCorrupt) || d.buf != nil {
-			t.Errorf("%s: %v, %d bytes allocated", name, err, cap(d.buf))
-		}
-	}
-	if d := NewDecoder(bytes.NewReader(frame), WithMaxMessageSize(len(frame))); d.max != uint32(len(frame)) {
-		t.Fatalf("limit %d", d.max)
-	} else if msg, err := d.Decode(); err != nil || len(msg.Payload) != 100 {
-		t.Fatalf("message at the limit: %v", err)
-	}
-	// Beyond the format's own limit a length is still corrupt, whatever the option.
-	if _, err := NewDecoder(bytes.NewReader(rawPrelude(MaxMessageSize+1, 0)), WithMaxMessageSize(1<<10)).Decode(); !errors.Is(err, ErrCorrupt) {
-		t.Fatalf("over 16 MiB: %v", err)
 	}
 }
 
@@ -400,17 +359,17 @@ func TestMalformedHeaders(t *testing.T) {
 		"timestamp cut":          {1, 'a', typeTimestamp, 1, 2, 3},
 		"name fills whole block": {3, 'a', 'b', 'c'},
 	} {
-		if _, err := NewDecoder(bytes.NewReader(rawFrame(headers, []byte("{}")))).Decode(); !errors.Is(err, ErrCorrupt) {
+		if _, err := newDecoder(bytes.NewReader(rawFrame(headers, []byte("{}")))).Decode(); !errors.Is(err, errCorrupt) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
-	msg, err := NewDecoder(bytes.NewReader(rawFrame(append(str("a", ""), good...), nil))).Decode()
+	msg, err := newDecoder(bytes.NewReader(rawFrame(append(str("a", ""), good...), nil))).Decode()
 	if err != nil || len(msg.Headers) != 2 || msg.Header(HeaderMessageType) != "event" || len(msg.Payload) != 0 {
 		t.Fatalf("good block: %v %v", msg, err)
 	}
 	// What the official decoder accepts although no encoder writes it, and
 	// stays accepted: a header without a name.
-	msg, err = NewDecoder(bytes.NewReader(rawFrame(append(str("", "x"), str("a", "1")...), nil))).Decode()
+	msg, err = newDecoder(bytes.NewReader(rawFrame(append(str("", "x"), str("a", "1")...), nil))).Decode()
 	if err != nil || len(msg.Headers) != 2 || msg.Header("") != "x" || msg.Header("a") != "1" {
 		t.Fatalf("lenient block: %v %v", msg, err)
 	}
@@ -433,7 +392,7 @@ func TestRepeatedHeaders(t *testing.T) {
 	event, chunk := str(HeaderMessageType, MessageTypeEvent), str(HeaderEventType, "chunk")
 
 	for name, headers := range map[string][]byte{
-		"string then string":         join(event, chunk, str(HeaderMessageType, MessageTypeException)),
+		"string then string":         join(event, chunk, str(HeaderMessageType, messageTypeException)),
 		"same string twice":          join(event, event),
 		"string then int32":          join(event, chunk, typed(HeaderMessageType, typeInt32, 0, 0, 0, 1)),
 		"string then bool":           join(event, typed(HeaderMessageType, 0)),
@@ -441,8 +400,8 @@ func TestRepeatedHeaders(t *testing.T) {
 		"bool then bool":             join(event, typed("flag", 0), typed("flag", 1)),
 		"event type repeated":        join(event, chunk, str(HeaderEventType, "other")),
 		"event type then uuid":       join(event, chunk, typed(HeaderEventType, typeUUID, make([]byte, 16)...)),
-		"exception type repeated":    join(str(HeaderMessageType, MessageTypeException), str(HeaderExceptionType, "a"), str(HeaderExceptionType, "b")),
-		"exception type then bytes":  join(str(HeaderExceptionType, "a"), typed(HeaderExceptionType, typeBytes, 0, 1, 'x')),
+		"exception type repeated":    join(str(HeaderMessageType, messageTypeException), str(headerExceptionType, "a"), str(headerExceptionType, "b")),
+		"exception type then bytes":  join(str(headerExceptionType, "a"), typed(headerExceptionType, typeBytes, 0, 1, 'x')),
 		"an unrelated header":        join(event, str("x", "1"), chunk, str("x", "2")),
 		"an empty name":              join(str("", "1"), event, str("", "2")),
 		"three of a name":            join(event, event, event),
@@ -450,14 +409,14 @@ func TestRepeatedHeaders(t *testing.T) {
 		"bytes value over the limit": join(event, typed("big", typeBytes, append([]byte{0xff, 0xff}, make([]byte, 1<<16-1)...)...)),
 	} {
 		frame := rawFrame(headers, chunkPayload(evStart))
-		if msg, err := NewDecoder(bytes.NewReader(frame)).Decode(); !errors.Is(err, ErrCorrupt) || len(msg.Headers) != 0 || msg.Payload != nil {
+		if msg, err := newDecoder(bytes.NewReader(frame)).Decode(); !errors.Is(err, errCorrupt) || len(msg.Headers) != 0 || msg.Payload != nil {
 			t.Errorf("%s: decoded %v, err %v", name, msg, err)
 		}
 		// The SSE view delivers what came before the frame and then fails:
 		// the frame is neither skipped nor read as an event or an exception.
 		stream := append(chunkFrame(t, evStop), frame...)
 		got, err := io.ReadAll(NewChunkSSEReader(bytes.NewReader(stream)))
-		if want := "event: message_stop\ndata: " + evStop + "\n\n"; !errors.Is(err, ErrCorrupt) || string(got) != want {
+		if want := "event: message_stop\ndata: " + evStop + "\n\n"; !errors.Is(err, errCorrupt) || string(got) != want {
 			t.Errorf("%s: sse %q, err %v", name, got, err)
 		}
 	}
@@ -466,7 +425,7 @@ func TestRepeatedHeaders(t *testing.T) {
 	// are read as before.
 	block := join(event, chunk, typed("b", 0), typed("B", 1), typed("i", typeInt32, 0, 0, 0, 1), typed("u", typeUUID, make([]byte, 16)...),
 		typed("t", typeTimestamp, make([]byte, 8)...), typed("y", typeBytes, append([]byte{0x7f, 0xff}, make([]byte, 1<<15-1)...)...))
-	msg, err := NewDecoder(bytes.NewReader(rawFrame(block, nil))).Decode()
+	msg, err := newDecoder(bytes.NewReader(rawFrame(block, nil))).Decode()
 	if err != nil || len(msg.Headers) != 2 || msg.Header(HeaderMessageType) != MessageTypeEvent || msg.Header(HeaderEventType) != "chunk" {
 		t.Fatalf("distinct names: %v %v", msg.Headers, err)
 	}
@@ -477,16 +436,16 @@ func FuzzDecoder(f *testing.F) {
 		f.Add(v.raw)
 		f.Add(v.raw[:len(v.raw)/2])
 	}
-	f.Add(rawPrelude(MaxMessageSize, 0))
+	f.Add(rawPrelude(maxMessageSize, 0))
 	f.Add(rawFrame([]byte{1, 'a', 10}, nil))
 	f.Add(rawFrame([]byte{1, 'a', 0, 1, 'a', 1}, nil))
 	f.Fuzz(func(t *testing.T, data []byte) {
-		d := NewDecoder(bytes.NewReader(data))
+		d := newDecoder(bytes.NewReader(data))
 		read := 0
 		for {
 			msg, err := d.Decode()
 			if err != nil {
-				if err != io.EOF && err != io.ErrUnexpectedEOF && !errors.Is(err, ErrCorrupt) {
+				if err != io.EOF && err != io.ErrUnexpectedEOF && !errors.Is(err, errCorrupt) {
 					t.Fatalf("unexpected error %v", err)
 				}
 				break
@@ -499,7 +458,7 @@ func FuzzDecoder(f *testing.F) {
 		}
 		// The SSE view never panics and ends the same way.
 		if _, err := io.Copy(io.Discard, NewChunkSSEReader(bytes.NewReader(data))); err != nil &&
-			err != io.ErrUnexpectedEOF && !errors.Is(err, ErrCorrupt) && !errors.Is(err, ErrTooLarge) {
+			err != io.ErrUnexpectedEOF && !errors.Is(err, errCorrupt) {
 			t.Fatalf("sse: %v", err)
 		}
 	})
@@ -536,8 +495,9 @@ func TestChunkSSEReader(t *testing.T) {
 	if FormatChunk != "aws-eventstream-chunk" {
 		t.Fatalf("the format name is part of the plugin protocol: %q", FormatChunk)
 	}
-	// The largest chunk message passes; other event shapes come out empty.
-	largest := mustAppend(t, nil, nil, make([]byte, MaxChunkMessageSize-minMessageSize))
+	// The largest message the format allows passes; other event shapes come
+	// out empty.
+	largest := mustAppend(t, nil, nil, make([]byte, maxMessageSize-minMessageSize))
 	converse := mustAppend(t, largest, []Header{{HeaderMessageType, MessageTypeEvent}, {HeaderEventType, "contentBlockDelta"}}, []byte(`{"contentBlockIndex":0,"delta":{"text":"x"}}`))
 	if got, err := io.ReadAll(NewChunkSSEReader(bytes.NewReader(converse))); err != nil || len(got) != 0 {
 		t.Fatalf("messages without chunk bytes: %q %v", got, err)
@@ -620,11 +580,11 @@ func TestChunkSSEReaderExceptions(t *testing.T) {
 			`{"type":"error","error":{"type":"throttlingException","message":"Too many requests, please wait before trying again."}}`},
 		"error": {v["error-internal"].raw,
 			`{"type":"error","error":{"type":"InternalFailure","message":"An internal error occurred"}}`},
-		"exception with a plain payload": {mustAppend(t, nil, []Header{{HeaderMessageType, MessageTypeException}, {HeaderExceptionType, "modelStreamErrorException"}}, []byte(" boom \"quoted\"\n")),
+		"exception with a plain payload": {mustAppend(t, nil, []Header{{HeaderMessageType, messageTypeException}, {headerExceptionType, "modelStreamErrorException"}}, []byte(" boom \"quoted\"\n")),
 			`{"type":"error","error":{"type":"modelStreamErrorException","message":"boom \"quoted\""}}`},
-		"exception without details": {mustAppend(t, nil, []Header{{HeaderMessageType, MessageTypeException}}, nil),
+		"exception without details": {mustAppend(t, nil, []Header{{HeaderMessageType, messageTypeException}}, nil),
 			`{"type":"error","error":{"type":"upstream_error","message":"upstream_error"}}`},
-		"error without details": {mustAppend(t, nil, []Header{{HeaderMessageType, MessageTypeError}}, nil),
+		"error without details": {mustAppend(t, nil, []Header{{HeaderMessageType, messageTypeError}}, nil),
 			`{"type":"error","error":{"type":"upstream_error","message":"upstream_error"}}`},
 	} {
 		stream := append(append(chunkFrame(t, evStart), tc.frame...), after...)
@@ -661,12 +621,13 @@ func TestChunkSSEReaderCorruptAndTruncated(t *testing.T) {
 		tail []byte
 		is   error
 	}{
-		"corrupt payload":      {corrupt, ErrCorrupt},
+		"corrupt payload":      {corrupt, errCorrupt},
 		"cut in the prelude":   {bad[:5], io.ErrUnexpectedEOF},
 		"cut in the message":   {bad[:len(bad)-1], io.ErrUnexpectedEOF},
-		"oversized":            {rawPrelude(MaxMessageSize+1, 0), ErrCorrupt},
-		"over the chunk limit": {rawPrelude(MaxChunkMessageSize+1, 0), ErrTooLarge},
-		"garbage":              {[]byte("HTTP/1.1 500 Internal Server Error\r\n\r\n"), ErrCorrupt},
+		"oversized":            {rawPrelude(maxMessageSize+1, 0), errCorrupt},
+		"prelude checksum":     {append(rawPrelude(64, 0)[:11], 0), errCorrupt},
+		"headers past the end": {rawPrelude(64, 64), errCorrupt},
+		"garbage":              {[]byte("HTTP/1.1 500 Internal Server Error\r\n\r\n"), errCorrupt},
 	} {
 		r := NewChunkSSEReader(bytes.NewReader(append(bytes.Clone(good), tc.tail...)))
 		got, err := io.ReadAll(r)
@@ -677,6 +638,24 @@ func TestChunkSSEReaderCorruptAndTruncated(t *testing.T) {
 		if n, again := r.Read(make([]byte, 8)); n != 0 || !errors.Is(again, tc.is) {
 			t.Errorf("%s: second read %d %v", name, n, again)
 		}
+	}
+}
+
+// A chunk event whose message is larger than any fixed cap would allow
+// (here 7 MiB, the adapter used to cut a stream at 4 MiB) comes out whole:
+// only the format's own 16 MiB bounds a message.
+func TestChunkSSEReaderLargeEvent(t *testing.T) {
+	text := strings.Repeat("x", 5<<20)
+	event := `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"` + text + `"}}`
+	frame := chunkFrame(t, event)
+	if len(frame) <= 4<<20 || len(frame) > maxMessageSize {
+		t.Fatalf("frame of %d bytes", len(frame))
+	}
+	stream := append(frame, chunkFrame(t, evStop)...)
+	got, err := io.ReadAll(NewChunkSSEReader(iotest.HalfReader(bytes.NewReader(stream))))
+	want := "event: content_block_delta\ndata: " + event + "\n\nevent: message_stop\ndata: " + evStop + "\n\n"
+	if err != nil || string(got) != want {
+		t.Fatalf("err %v, %d bytes, want %d", err, len(got), len(want))
 	}
 }
 

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { enableAutoUnmount, flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { i18n } from '@/i18n'
-import type { ApiKey } from '@/api/types'
+import type { ApiKey, GroupServedProtocol } from '@/api/types'
 import PlatformEndpointsPreview from '@/views/platforms/PlatformEndpointsPreview.vue'
 import KeyUseGuide from './KeyUseGuide.vue'
 import { gatewayBase } from './keyClients'
@@ -11,14 +11,14 @@ vi.mock('@sub2api/host', () => ({ api: { post } }))
 vi.mock('./openApp', () => ({ useOpenApp: () => open }))
 vi.mock('@/utils/errors', () => ({ notifyError }))
 vi.mock('@/composables/platforms', () => ({
-  usePlatforms: () => ({ platforms: { value: [] }, load: vi.fn(), endpointsOf: () => [], label: (v: string) => v, find: () => undefined })
+  usePlatforms: () => ({ platforms: { value: [] }, load: vi.fn(), label: (v: string) => v, find: () => undefined })
 }))
 enableAutoUnmount(afterEach)
 const key = (k: Partial<ApiKey> = {}) =>
   ({ id: 7, name: 'laptop', group_id: 1, key_prefix: 'sk-s2a-abcd', status: 'active', created_at: '', copyable: true, ...k }) as ApiKey
 const base = gatewayBase()
 
-async function guide(props: { apiKey?: ApiKey; platforms?: string[] | null } = {}) {
+async function guide(props: { apiKey?: ApiKey; platforms?: string[] | null; served?: GroupServedProtocol[] | null } = {}) {
   const w = mount(KeyUseGuide, {
     props: { apiKey: key(), platforms: ['anthropic', 'openai'], ...props },
     global: { plugins: [i18n], stubs: { Teleport: true } }
@@ -111,10 +111,12 @@ describe('API key use guide', () => {
     expect(w.get('[data-testid="key-use-snippet"]').text()).toContain('sk-s2a-abcd…')
     expect(imports(w)).toEqual([])
   })
-  it("lists the endpoints the key can call by its group's platforms, unfolded", async () => {
-    const w = await guide({ platforms: ['anthropic'] })
-    expect(w.getComponent(PlatformEndpointsPreview).props()).toEqual({ ids: ['anthropic'], max: undefined, fold: false })
-    expect((await guide({ platforms: [] })).findComponent(PlatformEndpointsPreview).exists()).toBe(false)
+  it('lists the endpoints the key can call by the protocols its group serves', async () => {
+    const served = [{ protocol: 'anthropic.messages' }]
+    const w = await guide({ platforms: ['anthropic'], served })
+    expect(w.getComponent(PlatformEndpointsPreview).props()).toEqual({ served, max: undefined })
+    expect((await guide({ platforms: ['anthropic'], served: [] })).findComponent(PlatformEndpointsPreview).exists()).toBe(false)
+    expect((await guide({ platforms: ['anthropic'] })).findComponent(PlatformEndpointsPreview).exists()).toBe(false)
   })
   it('has no client or app to set up for other platforms', async () => {
     const w = await guide({ platforms: ['volcengine'] })

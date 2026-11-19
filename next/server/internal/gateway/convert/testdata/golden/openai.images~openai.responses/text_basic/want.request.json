@@ -1,0 +1,34 @@
+{
+  "input": [
+    {
+      "content": [
+        {
+          "text": "A small white dot on a black background",
+          "type": "input_text"
+        }
+      ],
+      "role": "user",
+      "type": "message"
+    }
+  ],
+  "instructions": "Generate the image with the image_generation tool using size 1024x1536, quality low, background opaque.",
+  "model": "gpt-6-luna",
+  "stream": false,
+  "tool_choice": {
+    "type": "image_generation"
+  },
+  "tools": [
+    {
+      "action": "generate",
+      "background": "opaque",
+      "model": "gpt-image-2",
+      "moderation": "auto",
+      "output_compression": 100,
+      "output_format": "png",
+      "partial_images": 0,
+      "quality": "low",
+      "size": "1024x1536",
+      "type": "image_generation"
+    }
+  ]
+}

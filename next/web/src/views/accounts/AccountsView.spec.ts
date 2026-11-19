@@ -186,7 +186,7 @@ describe('account status recovery', () => {
     mocks.findType.mockReset()
     mocks.confirm.mockResolvedValue(true)
     i18n.global.locale.value = 'zh'
-    list.items.value = [{ id: 23, name: 'cc-test', status: 'disabled', status_reason: 'credentials rejected', schedulable: true, auto_disable: true, plugin_key: 'claude-oauth', type: 'oauth', orphaned: false, cooldown_until: null } as Account]
+    list.items.value = [{ id: 23, name: 'cc-test', status: 'disabled', status_reason: 'credentials rejected', schedulable: true, auto_disable: true, plugin_key: 'codex', type: 'codex_oauth', orphaned: false, cooldown_until: null } as Account]
   })
 
   it('locks the enable button according to the plugin declaration', async () => {
@@ -387,7 +387,7 @@ describe('account status recovery', () => {
   })
 
   it('shows a successful model test like new-api: outcome and request time, request id only in the details', async () => {
-    mocks.post.mockResolvedValue({ ok: true, status: 200, latency_ms: 3550, model: 'claude-test', message: 'ok', response_headers: { 'request-id': 'req_ok_1' } })
+    mocks.post.mockResolvedValue({ ok: true, status: 200, latency_ms: 3550, model: 'claude-test', protocol: 'anthropic.messages', message: 'ok', response_headers: { 'request-id': 'req_ok_1' } })
     const w = shallowMount(AccountModelTest, { props: { open: false, account: { ...list.items.value[0], models: ['claude-test'] } }, global: { plugins: [i18n], stubs: {
       SModal: { template: '<div><slot /></div>' },
       STable: { props: ['rows'], template: '<div><div v-for="row in rows" :key="row.model"><slot name="cell-state" :row="row" /><slot name="cell-actions" :row="row" /></div></div>' },
@@ -399,6 +399,8 @@ describe('account status recovery', () => {
     await w.get('[data-testid="model-test-one"]').trigger('click')
     await flushPromises()
     expect(w.get('[data-testid="model-test-duration"]').text()).toBe('请求时长 3.55 s')
+    expect(w.get('[data-testid="model-test-protocol"]').text()).toBe('anthropic.messages')
+    expect(w.emitted('tested')?.[0]?.[1]).toMatchObject({ protocol: 'anthropic.messages' })
     expect(w.find('[data-testid="model-test-request-id"]').exists()).toBe(false)
     expect(w.text()).not.toContain('req_ok_1')
   })
@@ -725,8 +727,8 @@ describe('declared plugin account actions and the toolbar slot (CONTRACTS §23.3
 })
 
 describe('account list layout', () => {
-  const row = (id: number, over: Partial<Account> = {}) => ({ id, name: 'a@example.com', plugin_key: 'claude-oauth', type: 'oauth', status: 'active', schedulable: true, created_by: 1, settings: {}, ...over }) as unknown as Account
-  const renderLayout = () => render({ STable: { props: ['rows', 'columns'], template: '<div><i data-testid="cols">{{ columns.map((c) => c.key).join() }}</i><div v-for="row in rows" :key="row.id"><slot name="cell-name" :row="row" /><slot name="cell-groups" :row="row" /></div></div>' } })
+  const row = (id: number, over: Partial<Account> = {}) => ({ id, name: 'a@example.com', plugin_key: 'codex', type: 'codex_oauth', status: 'active', schedulable: true, created_by: 1, settings: {}, ...over }) as unknown as Account
+  const renderLayout = () => render({ AccountProtocolMarks: false, STable: { props: ['rows', 'columns'], template: '<div><i data-testid="cols">{{ columns.map((c) => c.key).join() }}</i><div v-for="row in rows" :key="row.id"><slot name="cell-name" :row="row" /><slot name="cell-groups" :row="row" /></div></div>' } })
   beforeEach(() => {
     mocks.findType.mockReset()
     mocks.groups = []

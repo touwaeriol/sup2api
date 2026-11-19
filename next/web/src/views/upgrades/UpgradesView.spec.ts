@@ -49,6 +49,16 @@ describe('upgrades view', () => {
     expect(useUpdatesStore().available).toBe(false)
   })
 
+  it('renders on a console opened over plain HTTP (no crypto.randomUUID)', async () => {
+    vi.stubGlobal('crypto', { getRandomValues: crypto.getRandomValues.bind(crypto) })
+    try {
+      await render()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+    expect(api.get).toHaveBeenCalledWith('/system/upgrades')
+  })
+
   it('leaves an update check nobody loaded alone', async () => {
     await render()
     status = 'completed'

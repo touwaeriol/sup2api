@@ -107,7 +107,7 @@ func (c *resetClient) clearCalls() []*pluginv1.SetAccountAutomaticStateRequest {
 type resetHost struct {
 	pluginsdk.Host
 	client   *resetClient
-	accounts map[int64]pluginsdk.AccountCredentials
+	accounts map[int64]*pluginv1.Account
 	kv       pluginsdk.KV
 }
 
@@ -120,12 +120,12 @@ func (h *resetHost) KV() pluginsdk.KV {
 	return h.Host.KV()
 }
 
-func (h *resetHost) AccountCredentials(_ context.Context, id int64) (*pluginsdk.AccountCredentials, error) {
+func (h *resetHost) Account(_ context.Context, id int64) (*pluginv1.Account, error) {
 	a, ok := h.accounts[id]
 	if !ok {
 		return nil, status.Error(codes.NotFound, "account not found")
 	}
-	return &a, nil
+	return a, nil
 }
 
 // resetEnv is a running plugin with a fake chatgpt.com whose answers
@@ -147,7 +147,7 @@ func newResetEnv(t *testing.T) *resetEnv {
 	e.p = p
 	e.h = startPlugin(t, p)
 	e.client = &resetClient{HostServiceClient: p.host.Client()}
-	e.host = &resetHost{Host: p.host, client: e.client, accounts: map[int64]pluginsdk.AccountCredentials{
+	e.host = &resetHost{Host: p.host, client: e.client, accounts: map[int64]*pluginv1.Account{
 		resetDeviceID:  resetAccountRow(resetDeviceID, TypeDevice, `{"access_token":"`+resetToken+`","chatgpt_account_id":"acc-1"}`),
 		resetOAuthID:   resetAccountRow(resetOAuthID, TypeOAuth, `{"access_token":"`+resetToken+`","chatgpt_account_id":"acc-1"}`),
 		resetNoTokenID: resetAccountRow(resetNoTokenID, TypeDevice, `{"refresh_token":"r"}`),
@@ -157,8 +157,8 @@ func newResetEnv(t *testing.T) *resetEnv {
 	return e
 }
 
-func resetAccountRow(id int64, typ, creds string) pluginsdk.AccountCredentials {
-	return pluginsdk.AccountCredentials{AccountSummary: pluginsdk.AccountSummary{ID: id, Type: typ}, CredentialsJSON: creds}
+func resetAccountRow(id int64, typ, creds string) *pluginv1.Account {
+	return &pluginv1.Account{Id: id, Type: typ, CredentialsJson: creds}
 }
 
 func (e *resetEnv) consume(body any) *pluginv1.HTTPResponse {
@@ -174,8 +174,8 @@ func (e *resetEnv) consumeAnswer(status int, body string) {
 	}
 }
 
-// checkHeaders asserts the truthful sup2api identification and the account's
-// bearer token, and that nothing imitates the Codex CLI.
+// checkHeaders asserts the account's client headers (agent.go; built-in
+// here) and bearer token, and that no x-codex-* header is sent.
 func checkHeaders(t *testing.T, h map[string]string) {
 	t.Helper()
 	if h["authorization"] != "Bearer "+resetToken || h["chatgpt-account-id"] != "acc-1" ||

@@ -12,7 +12,10 @@ configuring nodes: [gateway/README.md](gateway/README.md);
 each environment's deployment record: `gateway/<environment>/README.md`.
 One-way releases (migrations that cannot be undone) keep their upgrade and
 rollback runbooks in `rollback/` until the release is live everywhere and
-rollback is no longer possible; then they are deleted (none is open now).
+rollback is no longer possible; then they are deleted. Open now:
+[rollback/protocol-binding-release.md](rollback/protocol-binding-release.md)
+(migration 0106: cross-platform conversion is off until enabled per model on
+an account; export the conversions in use before upgrading).
 
 `single/` runs the core directly, without the gateway (services `app` and
 `app-2` sharing their own PostgreSQL and Valkey). It is no longer the long-running deployment (see the
@@ -33,7 +36,7 @@ deploy/
 ├── single/                # compose.yml + deploy.sh of a core-only stack without the gateway
 ├── e2e/                   # isolated two-node stack + Caddy + opt-in Go test runner
 ├── docker/                # build and entrypoint scripts used by ../Dockerfile
-├── mock-upstream/         # mock Anthropic API (standalone Go module, used by e2e)
+├── mock-upstream/         # mock upstream for every platform plugin, vendor hosts over TLS, forward proxy (standalone Go module, used by e2e)
 └── ci/compose.yml         # Go test runner joined to the sub2api-next-testdb network
 ```
 
@@ -50,7 +53,9 @@ using the dedicated Compose project `sub2api-next-e2e` by default.
   signed with a **dev key** created on the first build and kept in the BuildKit
   cache mount `sub2api-next-devkeys` (stable across rebuilds, never in the
   image). `tools/sub2api-plugin/scripts/build-demo.sh` is used when present;
-  otherwise every `plugins/*/manifest.json` is packed generically.
+  otherwise every `plugins/*/manifest.json` is packed generically. Either way
+  a plugin whose manifest declares a native UI without `ui/native/dist/entry.js`
+  fails the build (the forms and settings pages exist only as that UI).
 - Runtime `debian:trixie-slim`, user `sub2api` (1000), `/usr/local/bin/sub2api`,
   `/usr/local/bin/sub2api-plugin`, `/opt/sub2api/market/`, data in `/var/lib/sub2api`.
 - The entrypoint derives `SUB2API_PLUGIN_OFFICIAL_KEYS=sub2api-dev=<pub>` and
@@ -86,7 +91,9 @@ through the gateway use `/__control` rules or key markers.
 ```bash
 # First start the dedicated stack as documented in e2e/README.md.
 # Run on its Docker host from the full repository checkout; no host Go needed.
-sh next/deploy/e2e/test.sh
+# The full suite takes about 27 minutes: pass -timeout=150m (the script's
+# default -timeout=30m is too short; a later -timeout overrides it).
+sh next/deploy/e2e/test.sh -timeout=150m
 ```
 
 The opt-in runner compiles and executes tests under `/src` with Go 1.27.

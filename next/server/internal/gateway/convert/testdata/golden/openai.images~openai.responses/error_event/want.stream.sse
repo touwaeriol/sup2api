@@ -1,0 +1,3 @@
+event: error
+data: {"error":{"code":"rate_limit_exceeded","message":"Rate limit reached."},"type":"error"}
+

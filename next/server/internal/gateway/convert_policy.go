@@ -94,7 +94,9 @@ func (c *call) prepareRoute(ctx context.Context, rt *typeRoute) bool {
 		p.unbound = rt.conv
 	}
 	*p = preparedConversion{done: true, version: c.bodyVersion, unbound: p.unbound}
-	bound, body, err := p.unbound.Prepare(c.body, c.convertOptions(ctx))
+	opt := c.convertOptions(ctx)
+	opt.AdaptModel = rt.adaptModel
+	bound, body, err := p.unbound.Prepare(c.body, opt)
 	if err == nil && (bound == nil || bound.From() != p.unbound.From() || bound.To() != p.unbound.To()) {
 		err = fmt.Errorf("converter %s -> %s returned a different pair", p.unbound.From(), p.unbound.To())
 	}
@@ -112,7 +114,7 @@ func (c *call) prepareRoute(ctx context.Context, rt *typeRoute) bool {
 }
 
 // convertOptions are the request facts every conversion of the request
-// shares, built once.
+// shares, built once; prepareRoute adds the route's own (AdaptModel).
 func (c *call) convertOptions(ctx context.Context) convert.Options {
 	if c.conversion.opts == nil {
 		c.conversion.opts = &convert.Options{Ctx: ctx, Model: c.model, Stream: c.stream, Fetch: c.mediaFetcher(),

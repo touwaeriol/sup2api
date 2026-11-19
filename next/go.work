@@ -7,17 +7,18 @@ use (
 	./plugins/anthropic
 	./plugins/azure-openai
 	./plugins/bedrock
-	./plugins/claude-oauth
 	./plugins/codex
 	./plugins/dynweight
 	./plugins/gemini
-	./plugins/growth
 	./plugins/guard
 	./plugins/mailer
 	./plugins/moderation
+	./plugins/newapi
 	./plugins/openai
 	./plugins/payment
 	./plugins/relay
+	./plugins/sub2api
+	./plugins/typesafe
 	./plugins/vertex
 	./plugins/volcengine
 	./protocol-codec

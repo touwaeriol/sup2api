@@ -8,10 +8,17 @@ import { useI18n } from 'vue-i18n'
 import { api, MAX_ACCOUNT_BATCH } from '@sub2api/host'
 import { confirm, toast } from '@sub2api/ui'
 import type { Account } from '@/api/types'
-import { parseRouteRef } from '@/components/plugin/declarative'
 import { lt } from '@/i18n'
 import type { PluginAccountActionEntry } from '@/stores/plugins'
 import { bulkToast } from '@/composables/bulkToast'
+
+/** Parses a manifest route reference such as "POST /reset" into method + plugin API path. */
+function parseRouteRef(ref: string | undefined, defMethod = 'GET'): { method: string; path: string } | null {
+  if (!ref) return null
+  const m = /^\s*(?:(GET|POST|PUT|PATCH|DELETE)\s+)?(\/\S*)\s*$/i.exec(ref)
+  if (!m) return null
+  return { method: (m[1] || defMethod).toUpperCase(), path: m[2] }
+}
 
 export function usePluginAccountActions(reload: () => unknown) {
   const { t } = useI18n()

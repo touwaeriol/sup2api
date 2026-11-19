@@ -2,123 +2,96 @@ package bedrock
 
 import (
 	"context"
+	"maps"
 	"net/http"
 	"strings"
 
-	"github.com/tidwall/sjson"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/pluginsdk"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/pluginsdk/providers/anthropic"
-	"github.com/Sub2API-Devs/sup2api/next/sdk/reqsign"
 )
 
-// invokeHeaders are the headers of an InvokeModel request.
-func invokeHeaders() map[string]string {
-	return map[string]string{"content-type": "application/json", "accept": "application/json"}
-}
+// contentJSON is the content type of an InvokeModel request and of the
+// answer asked for (a streamed answer is an event stream whatever Accept
+// says).
+const contentJSON = "application/json"
 
-// droppedFields are top-level fields of Anthropic's own API that InvokeModel
-// has no use for. The previous implementation removed output_config and
-// output_format as well; they stay, because InvokeModel now reads the output
-// format and the effort from output_config (AWS user guide: "Get validated
-// JSON results from models", "Adaptive thinking") and output_format is its
-// deprecated spelling.
-var droppedFields = []string{"metadata", "provider"}
+// sessionTokenHeader carries the session token of temporary credentials,
+// covered by their signature.
+const sessionTokenHeader = "X-Amz-Security-Token"
 
-// invokePatches turn a Messages body into an InvokeModel one. The path names
-// the model and whether the answer streams, so the body loses both fields;
-// it gains the version Bedrock requires, loses droppedFields, and the
-// client's beta features move from the header into the body.
-func invokePatches(in *pluginv1.BuildUpstreamRequestRequest) []*pluginv1.BodyPatch {
-	patches := []*pluginv1.BodyPatch{
-		pluginsdk.DeletePatch("model"), pluginsdk.DeletePatch("stream"),
-		pluginsdk.SetPatch("anthropic_version", AnthropicVersion),
-	}
-	for _, field := range droppedFields {
-		patches = append(patches, pluginsdk.DeletePatch(field))
-	}
-	return append(patches, betaPatches(in.GetInboundHeaders()[betaHeader], in.GetFields()[fieldBetas])...)
-}
-
-// signing is a directive as the core reads it.
-func signing(d reqsign.Directive) *pluginv1.RequestSigning {
-	return &pluginv1.RequestSigning{
-		Scheme: d.Scheme, Region: d.Region, Service: d.Service,
-		AccessKeyId: d.AccessKeyID, SecretAccessKey: d.SecretAccessKey, SessionToken: d.SessionToken,
-	}
-}
-
-// BuildUpstreamRequest implements pluginsdk.Platform: a Claude request for
-// InvokeModel, or InvokeModelWithResponseStream when it streams. An API key
-// account sends its key; for the other types the answer carries a signing
-// directive and the core signs the final request.
-func (p *Plugin) BuildUpstreamRequest(_ context.Context, in *pluginv1.BuildUpstreamRequestRequest) (*pluginv1.BuildUpstreamRequestResponse, error) {
-	meta := in.GetMeta()
-	if protocol := meta.GetProtocol(); protocol != ProtocolMessages {
+// BuildUpstream implements pluginsdk.UpstreamBuilder: a Claude request for
+// InvokeModel, or InvokeModelWithResponseStream when it streams, with the
+// final InvokeModel body (invokeBody), authorized by the account.
+func (p *Plugin) BuildUpstream(_ context.Context, in *pluginv1.ExecuteRequest) (*pluginv1.UpstreamRequest, error) {
+	if protocol := in.GetMeta().GetProtocol(); protocol != ProtocolMessages {
 		return nil, status.Errorf(codes.InvalidArgument, "unsupported upstream protocol %q", protocol)
 	}
 	a, err := readAccount(in.GetAccount())
 	if err != nil {
 		return nil, err
 	}
-	id, err := a.modelID(meta.GetModel())
+	id, err := a.modelID(pluginsdk.RequestModel(in))
 	if err != nil {
 		return nil, err
 	}
-	resp := &pluginv1.BuildUpstreamRequestResponse{
-		Method:        http.MethodPost,
-		Url:           p.apiBase(a.region) + invokePath(id, meta.GetStream()),
-		Headers:       invokeHeaders(),
-		Patches:       invokePatches(in),
-		UpstreamModel: id,
-	}
-	if meta.GetStream() {
-		resp.ResponseStream = ResponseStream
-	}
-	if d, signed := a.authorize(resp.Headers); signed {
-		resp.Signing = signing(d)
-	}
-	return resp, nil
-}
-
-// testBody is the smallest InvokeModel call: the Messages ping without its
-// model, with the version Bedrock requires.
-func testBody() string {
-	body, _ := sjson.Delete(anthropic.MessagesPingBody("", 1), "model")
-	body, _ = sjson.Set(body, "anthropic_version", AnthropicVersion)
-	return body
-}
-
-// signedHeaders are the headers the signature of a request adds.
-var signedHeaders = []string{"Authorization", "X-Amz-Date", "X-Amz-Security-Token"}
-
-// sign adds the SigV4 headers of a POST of body to address with headers. The
-// host sends a test request exactly as described, so the plugin, which wrote
-// the body, signs it itself.
-func (p *Plugin) sign(address string, headers map[string]string, body string, d reqsign.Directive) error {
-	req, err := http.NewRequest(http.MethodPost, address, nil)
+	body, err := invokeBody(in.GetBody(), in.GetInboundHeaders()[betaHeader], id)
 	if err != nil {
-		return status.Error(codes.Internal, "the test request has no valid address")
+		return nil, err
 	}
-	for name, value := range headers {
-		req.Header.Set(name, value)
+	// Whether the answer streams is the client's choice, meta.stream, not
+	// the body's flag (pluginsdk.RequestStream): no Bedrock account type is
+	// stream-only, so the core never forces the flag, and an operator's
+	// param_override adding "stream":true to a non-stream request must not
+	// switch it to invoke-with-response-stream and answer SSE the client did
+	// not ask for. The openai-style plugins read RequestStream on purpose,
+	// for their stream-only types; the two are not to be unified.
+	return p.invoke(a, id, in.GetMeta().GetStream(), body)
+}
+
+// invoke is the InvokeModel request of the account for model id with the
+// final body. Content-Type and Accept are defaults the operator may change;
+// the authorization is authoritative, and with a signature so is the
+// Content-Type it covers. The URL is the one signed. A session token goes
+// only with a signature that covers it: without one (an access key, an API
+// key) X-Amz-Security-Token is removed, so that one the operator's header
+// settings add does not reach AWS and fail the request.
+func (p *Plugin) invoke(a account, id string, stream bool, body []byte) (*pluginv1.UpstreamRequest, error) {
+	req, err := http.NewRequest(http.MethodPost, p.apiBase(a.region)+invokePath(id, stream), nil)
+	if err != nil {
+		return nil, status.Error(codes.FailedPrecondition, "the request has no valid address")
 	}
-	if err := reqsign.Sign(req, []byte(body), d, p.now()); err != nil {
-		return status.Error(codes.FailedPrecondition, err.Error())
+	req.Header.Set("Content-Type", contentJSON)
+	auth, err := a.authorize(req, body, p.now())
+	if err != nil {
+		return nil, err
 	}
-	for _, name := range signedHeaders {
-		if value := req.Header.Get(name); value != "" {
-			headers[strings.ToLower(name)] = value
-		}
+	u := pluginsdk.NewUpstream(req.Method, req.URL.String()).
+		DefaultHeader("content-type", contentJSON).
+		DefaultHeader("accept", contentJSON).
+		Headers(auth).
+		Body(body).
+		Model(id)
+	if auth.Get(sessionTokenHeader) == "" {
+		u.RemoveHeader(sessionTokenHeader)
 	}
-	return nil
+	if stream {
+		u.ResponseStream(ResponseStream)
+	}
+	built, err := u.Build()
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return built, nil
 }
 
 // BuildTestRequest implements pluginsdk.Platform: a non-streaming
-// InvokeModel call. Its usage is read with the anthropic.messages rules.
+// InvokeModel call of the Messages ping. The host sends it as described, so
+// the plugin signs it like a gateway request. Its usage is read with the
+// anthropic.messages rules.
 func (p *Plugin) BuildTestRequest(_ context.Context, in *pluginv1.BuildTestRequestRequest) (*pluginv1.BuildTestRequestResponse, error) {
 	a, err := readAccount(in.GetAccount())
 	if err != nil {
@@ -132,18 +105,21 @@ func (p *Plugin) BuildTestRequest(_ context.Context, in *pluginv1.BuildTestReque
 	if err != nil {
 		return nil, err
 	}
-	resp := &pluginv1.BuildTestRequestResponse{
-		Method:        http.MethodPost,
-		Url:           p.apiBase(a.region) + invokePath(id, false),
-		Headers:       invokeHeaders(),
-		BodyJson:      testBody(),
-		Model:         id,
-		UsageProtocol: ProtocolMessages,
+	body, err := invokeBody([]byte(anthropic.MessagesPingBody("", 1)), "", id)
+	if err != nil {
+		return nil, err
 	}
-	if d, signed := a.authorize(resp.Headers); signed {
-		if err := p.sign(resp.Url, resp.Headers, resp.BodyJson, d); err != nil {
-			return nil, err
-		}
+	up, err := p.invoke(a, id, false, body)
+	if err != nil {
+		return nil, err
 	}
-	return resp, nil
+	// The test request has no lower layers: an authoritative header that
+	// removes one (an empty value) is simply not sent.
+	headers := maps.Clone(up.GetDefaultHeaders())
+	maps.Copy(headers, up.GetHeaders())
+	maps.DeleteFunc(headers, func(_, v string) bool { return v == "" })
+	return &pluginv1.BuildTestRequestResponse{
+		Method: up.GetMethod(), Url: up.GetUrl(), Headers: headers, BodyJson: string(up.GetBody()),
+		Model: id, UsageProtocol: ProtocolMessages,
+	}, nil
 }

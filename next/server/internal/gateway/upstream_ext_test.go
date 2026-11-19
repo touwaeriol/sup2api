@@ -3,70 +3,63 @@ package gateway
 import (
 	"bytes"
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
-	"regexp"
-	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 
 	"github.com/Sub2API-Devs/sup2api/next/sdk/awseventstream"
 	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
-	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
-	"github.com/Sub2API-Devs/sup2api/next/server/internal/gateway/convert"
 )
 
 // ---------------------------------------------------------------- fakes
 
 const (
-	extSecretPrefix = "SECRET-KEY-OF-"
-	extTokenPrefix  = "SESSION-TOKEN-OF-"
-	extInput        = 25
-	extOutput       = 12
+	extInput  = 25
+	extOutput = 12
 )
 
 // extPlatform is a plugin that answers like a Bedrock plugin would: the
-// model in the path, body patches, and the two optional fields.
+// model in the path, a body without model and stream, its own credential
+// header (a plugin signs its requests itself) and, for a streaming client
+// request, the event stream framing in response_stream.
 type extPlatform struct {
 	*fakePlatform
 	// amend edits the built request; nil leaves it as the default below.
-	amend func(in *pluginv1.BuildUpstreamRequestRequest, out *pluginv1.BuildUpstreamRequestResponse)
+	amend func(in *pluginv1.ExecuteRequest, out *pluginv1.UpstreamRequest)
 }
 
-func (p *extPlatform) BuildUpstreamRequest(ctx context.Context, in *pluginv1.BuildUpstreamRequestRequest) (*pluginv1.BuildUpstreamRequestResponse, error) {
-	if _, err := p.fakePlatform.BuildUpstreamRequest(ctx, in); err != nil {
+func (p *extPlatform) Execute(ctx context.Context, in *pluginv1.ExecuteRequest, client core.ExecutionClient) (core.ExecutionResult, error) {
+	return fakeExecute(ctx, p, in, client)
+}
+
+func (p *extPlatform) buildUpstream(ctx context.Context, in *pluginv1.ExecuteRequest) (*pluginv1.UpstreamRequest, error) {
+	// The embedded fake records the call and runs its hook.
+	if _, err := p.fakePlatform.buildUpstream(ctx, in); err != nil {
 		return nil, err
 	}
-	creds := gjson.Parse(in.GetAccount().GetCredentialsJson())
+	stream := gjson.GetBytes(in.GetBody(), "stream").Bool()
+	body, _ := sjson.DeleteBytes(in.GetBody(), "model")
+	body, _ = sjson.DeleteBytes(body, "stream")
+	body, _ = sjson.SetBytes(body, "anthropic_version", "bedrock-2023-05-31")
 	action := "invoke"
-	out := &pluginv1.BuildUpstreamRequestResponse{Method: "POST", Headers: map[string]string{"content-type": "application/json", "accept": "application/json"},
-		Patches: []*pluginv1.BodyPatch{
-			{Op: pluginv1.BodyPatch_OP_DELETE, Path: "model"},
-			{Op: pluginv1.BodyPatch_OP_DELETE, Path: "stream"},
-			{Op: pluginv1.BodyPatch_OP_SET, Path: "anthropic_version", ValueJson: `"bedrock-2023-05-31"`},
-		},
-		Signing: &pluginv1.RequestSigning{Scheme: "aws-sigv4", Region: "us-east-1", Service: "bedrock",
-			AccessKeyId: creds.Get("access_key_id").String(), SecretAccessKey: creds.Get("secret_access_key").String(),
-			SessionToken: creds.Get("session_token").String()},
-	}
-	if in.GetMeta().GetStream() {
+	out := &pluginv1.UpstreamRequest{Method: "POST", Body: body,
+		DefaultHeaders: map[string]string{"accept": "application/json"},
+		Headers: map[string]string{"content-type": "application/json",
+			"authorization": "Bearer " + gjson.Get(in.GetAccount().GetCredentialsJson(), "access_key_id").String()}}
+	if stream {
 		action, out.ResponseStream = "invoke-with-response-stream", awseventstream.FormatChunk
 	}
 	// The model id carries ":" as %3A on the wire, as Bedrock's do.
@@ -83,13 +76,10 @@ type extCall struct {
 	path      string
 	header    http.Header
 	body      []byte
-	// sigErr is the outcome of the upstream's own signature check.
-	sigErr error
 }
 
-// extUpstream is an upstream that checks SigV4 signatures itself and answers
-// InvokeModel with JSON and InvokeModelWithResponseStream with an AWS event
-// stream.
+// extUpstream answers InvokeModel with JSON and InvokeModelWithResponseStream
+// with an AWS event stream.
 type extUpstream struct {
 	srv   *httptest.Server
 	mu    sync.Mutex
@@ -122,89 +112,6 @@ func (u *extUpstream) last(t *testing.T) extCall {
 	return calls[len(calls)-1]
 }
 
-var sigV4Authorization = regexp.MustCompile(`^AWS4-HMAC-SHA256 Credential=([^/ ]+)/(\d{8})/([^/ ]+)/([^/ ]+)/aws4_request, SignedHeaders=([a-z0-9;-]+), Signature=([0-9a-f]{64})$`)
-
-// verifySigV4 recomputes the signature of a received request from what the
-// server saw, following the AWS documentation step by step. It shares no
-// code with sdk/reqsign.
-func verifySigV4(r *http.Request, body []byte) (accessKey string, err error) {
-	m := sigV4Authorization.FindStringSubmatch(r.Header.Get("Authorization"))
-	if m == nil {
-		return "", fmt.Errorf("authorization header %q is not SigV4", r.Header.Get("Authorization"))
-	}
-	accessKey, date, region, service, signedHeaders, signature := m[1], m[2], m[3], m[4], m[5], m[6]
-	amzDate := r.Header.Get("X-Amz-Date")
-	at, perr := time.Parse("20060102T150405Z", amzDate)
-	if perr != nil || !strings.HasPrefix(amzDate, date) {
-		return accessKey, fmt.Errorf("x-amz-date %q does not fit the scope date %s", amzDate, date)
-	}
-	if d := time.Since(at); d < -5*time.Minute || d > 5*time.Minute {
-		return accessKey, fmt.Errorf("signature expired: %s", amzDate)
-	}
-	signed := strings.Split(signedHeaders, ";")
-	if !sort.StringsAreSorted(signed) {
-		return accessKey, errors.New("signed headers are not sorted")
-	}
-	has := map[string]bool{}
-	var headerLines strings.Builder
-	for _, name := range signed {
-		has[name] = true
-		value := strings.Join(r.Header.Values(name), ",")
-		if name == "host" {
-			value = r.Host
-		}
-		headerLines.WriteString(name + ":" + strings.TrimSpace(value) + "\n")
-	}
-	for _, name := range []string{"host", "x-amz-date"} {
-		if !has[name] {
-			return accessKey, fmt.Errorf("%s is not signed", name)
-		}
-	}
-	for _, name := range []string{"content-type", "x-amz-security-token"} {
-		if r.Header.Get(name) != "" && !has[name] {
-			return accessKey, fmt.Errorf("%s is sent but not signed", name)
-		}
-	}
-	segments := strings.Split(r.URL.EscapedPath(), "/")
-	for i, s := range segments {
-		segments[i] = strings.ReplaceAll(url.QueryEscape(s), "+", "%20")
-	}
-	// Sorted by key, then value; a query that does not parse is refused, as
-	// its parameters would not all be covered.
-	query, qerr := url.ParseQuery(r.URL.RawQuery)
-	if qerr != nil {
-		return accessKey, fmt.Errorf("query %q: %w", r.URL.RawQuery, qerr)
-	}
-	keys := make([]string, 0, len(query))
-	for k := range query {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	var pairs []string
-	for _, k := range keys {
-		sort.Strings(query[k])
-		for _, v := range query[k] {
-			pairs = append(pairs, strings.ReplaceAll(url.QueryEscape(k), "+", "%20")+"="+strings.ReplaceAll(url.QueryEscape(v), "+", "%20"))
-		}
-	}
-	sum := func(b []byte) string { h := sha256.Sum256(b); return hex.EncodeToString(h[:]) }
-	canonical := r.Method + "\n" + strings.Join(segments, "/") + "\n" + strings.Join(pairs, "&") + "\n" +
-		headerLines.String() + "\n" + signedHeaders + "\n" + sum(body)
-	scope := date + "/" + region + "/" + service + "/aws4_request"
-	toSign := "AWS4-HMAC-SHA256\n" + amzDate + "\n" + scope + "\n" + sum([]byte(canonical))
-	mac := func(key []byte, s string) []byte {
-		h := hmac.New(sha256.New, key)
-		h.Write([]byte(s))
-		return h.Sum(nil)
-	}
-	// The upstream knows each access key's secret, as AWS does.
-	key := mac(mac(mac(mac([]byte("AWS4"+extSecretPrefix+accessKey), date), region), service), "aws4_request")
-	if want := hex.EncodeToString(mac(key, toSign)); !hmac.Equal([]byte(want), []byte(signature)) {
-		return accessKey, fmt.Errorf("signature mismatch: got %s, want %s for\n%s", signature, want, canonical)
-	}
-	return accessKey, nil
-}
-
 func extEvents() []string {
 	return []string{
 		fmt.Sprintf(`{"type":"message_start","message":{"id":"msg_bdrk_1","type":"message","role":"assistant","model":"claude-up","content":[],"usage":{"input_tokens":%d,"output_tokens":1}}}`, extInput),
@@ -231,16 +138,12 @@ func extChunk(event string) []byte {
 
 func (u *extUpstream) handle(w http.ResponseWriter, r *http.Request) {
 	body, _ := io.ReadAll(r.Body)
-	accessKey, sigErr := verifySigV4(r, body)
+	accessKey := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	u.mu.Lock()
-	u.calls = append(u.calls, extCall{accessKey: accessKey, path: r.URL.EscapedPath(), header: r.Header.Clone(), body: body, sigErr: sigErr})
+	u.calls = append(u.calls, extCall{accessKey: accessKey, path: r.URL.EscapedPath(), header: r.Header.Clone(), body: body})
 	status, exception, plainSSE := u.status[accessKey], u.exception, u.plainSSE
 	u.mu.Unlock()
 	switch {
-	case strings.HasPrefix(r.Header.Get("Authorization"), "AWS4-") && sigErr != nil:
-		w.Header().Set("x-amzn-errortype", "InvalidSignatureException")
-		w.WriteHeader(http.StatusForbidden)
-		_, _ = w.Write([]byte(`{"message":"The request signature we calculated does not match the signature you provided."}`))
 	case status != 0:
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
@@ -271,261 +174,383 @@ func (u *extUpstream) handle(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// syncBuffer is a log sink written from several goroutines.
-type syncBuffer struct {
-	mu sync.Mutex
-	b  bytes.Buffer
-}
-
-func (s *syncBuffer) Write(p []byte) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.b.Write(p)
-}
-
-func (s *syncBuffer) String() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.b.String()
-}
-
 // extEnv is an environment whose anthropic accounts are served by an
-// extPlatform in front of an extUpstream, with every log line captured.
+// extPlatform in front of an extUpstream.
 type extEnv struct {
 	*env
 	up   *extUpstream
 	plat *extPlatform
-	logs *syncBuffer
 }
 
 func newExtEnv(t *testing.T, opts ...envOpt) *extEnv {
 	t.Helper()
-	logs := &syncBuffer{}
-	old := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	t.Cleanup(func() { slog.SetDefault(old) })
-	x := &extEnv{env: newEnv(t, opts...), up: newExtUpstream(t), logs: logs}
+	x := &extEnv{env: newEnv(t, opts...), up: newExtUpstream(t)}
 	x.plat = &extPlatform{fakePlatform: &fakePlatform{base: x.up.srv.URL}}
 	x.gen.accountTypes[0].Client = x.plat
 	for id := int64(1); id <= 3; id++ {
-		x.setCreds(id, false)
+		raw, _ := json.Marshal(map[string]string{"access_key_id": fmt.Sprintf("AK%d", id)})
+		editAccount(x.env, id, func(a *core.Account) { a.Credentials = raw })
 	}
 	return x
 }
 
-// setCreds gives account id the access key "AK<id>", its secret and, with
-// sts, a session token.
-func (x *extEnv) setCreds(id int64, sts bool) {
-	ak := fmt.Sprintf("AK%d", id)
-	creds := map[string]string{"access_key_id": ak, "secret_access_key": extSecretPrefix + ak}
-	if sts {
-		creds["session_token"] = extTokenPrefix + ak
-	}
-	raw, _ := json.Marshal(creds)
-	x.accounts.set(id, func(a *core.Account) { a.Credentials = raw })
+// editAccount changes the stored account id.
+func editAccount(e *env, id int64, fn func(a *core.Account)) {
+	e.accounts.mu.Lock()
+	defer e.accounts.mu.Unlock()
+	fn(e.accounts.accounts[id])
 }
 
-// assertNoSecrets fails when a signing secret or session token shows in the
-// logs or in anything the test hands over (client bodies, usage records).
-func (x *extEnv) assertNoSecrets(t *testing.T, seen ...any) {
+// withParamOverride gives account id the request parameter override raw
+// (CONTRACTS §84).
+func withParamOverride(t *testing.T, e *env, id int64, raw string) {
 	t.Helper()
-	haystack := x.logs.String()
-	for _, v := range seen {
-		raw, err := json.Marshal(v)
-		require.NoError(t, err)
-		haystack += fmt.Sprintf("\n%s\n%+v", raw, v)
-	}
-	for _, secret := range []string{extSecretPrefix, extTokenPrefix} {
-		if i := strings.Index(haystack, secret); i >= 0 {
-			t.Fatalf("secret %q leaked: …%s…", secret, haystack[max(0, i-200):min(len(haystack), i+80)])
-		}
-	}
+	p, errs := core.CompileParamOverride(context.Background(), "param_override", []byte(raw))
+	require.Empty(t, errs)
+	editAccount(e, id, func(a *core.Account) { a.ParamOverride = p })
 }
 
-// ---------------------------------------------------------------- signing
-
-// The request the upstream receives carries a signature the upstream
-// verifies on its own, over the final body: after the plugin's patches, the
-// account's parameter override and the model mapping.
-func TestSignedRequestIsVerifiedByUpstream(t *testing.T) {
-	for name, tc := range map[string]struct {
-		sts      bool
-		override string
-		prepare  func(x *extEnv)
-		check    func(t *testing.T, got extCall)
-	}{
-		"access key": {},
-		"temporary credentials": {sts: true, check: func(t *testing.T, got extCall) {
-			assert.Equal(t, extTokenPrefix+"AK1", got.header.Get("X-Amz-Security-Token"))
-			assert.Contains(t, got.header.Get("Authorization"), "SignedHeaders=content-type;host;x-amz-date;x-amz-security-token,")
-		}},
-		"parameter override rewrote the body and set headers": {
-			override: `{"operations":[{"mode":"set","path":"temperature","value":0.3},
-				{"mode":"append","path":"messages.-1.content","value":"!"},
-				{"mode":"set_header","path":"x-custom","value":"v1"}]}`,
-			check: func(t *testing.T, got extCall) {
-				assert.Equal(t, 0.3, gjson.GetBytes(got.body, "temperature").Float())
-				assert.Equal(t, "hello there!", gjson.GetBytes(got.body, "messages.0.content").String())
-				assert.Equal(t, "v1", got.header.Get("x-custom"), "an unsigned header the override added still goes out")
-			}},
-		"model mapping": {
-			prepare: func(x *extEnv) {
-				x.accounts.set(1, func(a *core.Account) { a.ModelMapping = map[string]string{testModel: "claude-mapped"} })
-			},
-			check: func(t *testing.T, got extCall) {
-				assert.Equal(t, "/model/anthropic.claude-mapped-v1%3A0/invoke", got.path)
-			}},
-		"stale credential headers from a passthrough are replaced": {
-			prepare: func(x *extEnv) {
-				x.accounts.set(1, func(a *core.Account) { a.HeaderPassthrough = []string{"x-amz-*"} })
-			},
-			check: func(t *testing.T, got extCall) {
-				assert.Empty(t, got.header.Get("X-Amz-Security-Token"), "the client's token is not sent for an account without one")
-				assert.NotEqual(t, "20000101T000000Z", got.header.Get("X-Amz-Date"))
-			}},
-	} {
-		t.Run(name, func(t *testing.T) {
-			x := newExtEnv(t)
-			x.setCreds(1, tc.sts)
-			if tc.override != "" {
-				setParamOverride(t, x.env, 1, tc.override)
-			}
-			if tc.prepare != nil {
-				tc.prepare(x)
-			}
-			r := x.do("/v1/messages", body(testModel, false), map[string]string{"X-Amz-Date": "20000101T000000Z", "X-Amz-Security-Token": "client-token"})
-			require.Equal(t, 200, r.status, string(r.body))
-			got := x.up.last(t)
-			require.NoError(t, got.sigErr)
-			assert.Equal(t, "AK1", got.accessKey)
-			assert.Contains(t, got.header.Get("Authorization"), "/us-east-1/bedrock/aws4_request, ")
-			assert.Empty(t, got.header.Get("x-api-key"))
-			assert.False(t, gjson.GetBytes(got.body, "model").Exists(), "the plugin's patches ran before the signature: %s", got.body)
-			assert.Equal(t, "bedrock-2023-05-31", gjson.GetBytes(got.body, "anthropic_version").String())
-			if tc.check != nil {
-				tc.check(t, got)
-			} else {
-				assert.Equal(t, "/model/anthropic."+testModel+"-v1%3A0/invoke", got.path)
-			}
-			// Non-streaming JSON is relayed and metered as ever.
-			assert.Equal(t, "hello", r.json().Get("content.0.text").String())
-			assert.True(t, strings.HasPrefix(r.header.Get("Content-Type"), "application/json"))
-			rec := x.record()
-			assert.True(t, rec.Success)
-			assert.Equal(t, core.UsageTokens{Input: extInput, Output: extOutput}, rec.Tokens)
-			x.assertNoSecrets(t, rec, string(r.body), r.header)
-		})
-	}
+// withHeaderOverride gives account id the request header override raw
+// (CONTRACTS §108).
+func withHeaderOverride(t *testing.T, e *env, id int64, raw string) {
+	t.Helper()
+	h, errs := core.CompileHeaderOverride(context.Background(), "header_override", []byte(raw))
+	require.Empty(t, errs)
+	editAccount(e, id, func(a *core.Account) { a.HeaderOverride = h })
 }
 
-// A stream-only type (CONTRACTS §83) gets stream: true put back after the
-// plugin's patches: the signature covers that final body. (What the client
-// gets is not asserted: collecting a forced stream into JSON only knows the
-// Responses API's events, which is not what this upstream speaks.)
-func TestForcedStreamBodyIsTheOneSigned(t *testing.T) {
+// ---------------------------------------------------------------- the plugin's bytes
+
+// The plugin is handed the body after the core's rewrites (the account's
+// parameter override, the model mapping in meta.model) and the upstream
+// receives exactly the bytes it returned: the core neither inspects nor
+// edits them, and an event stream it did not announce stays binary.
+func TestRelayedBodyIsThePluginsBytes(t *testing.T) {
 	x := newExtEnv(t)
-	typ := &x.gen.accountTypes[0].Type
-	typ.Platforms = append([]manifest.AccountPlatform(nil), typ.Platforms...)
-	typ.Platforms[0].StreamOnly = []string{"anthropic.messages"}
-	x.accounts.groups[testGroup] = []int64{1}
+	withParamOverride(t, x.env, 1, `{"operations":[{"mode":"set","path":"temperature","value":0.3},
+		{"mode":"append","path":"messages.-1.content","value":"!"}]}`)
+	editAccount(x.env, 1, func(a *core.Account) { a.ModelMapping = map[string]string{testModel: "claude-mapped"} })
+	var sent []byte
+	x.plat.amend = func(in *pluginv1.ExecuteRequest, out *pluginv1.UpstreamRequest) {
+		assert.Equal(t, 0.3, gjson.GetBytes(in.GetBody(), "temperature").Float(), "handed after the override")
+		assert.Equal(t, "hello there!", gjson.GetBytes(in.GetBody(), "messages.0.content").String())
+		assert.Equal(t, "claude-mapped", gjson.GetBytes(in.GetBody(), "model").String(), "handed after the model mapping")
+		// Bytes no JSON encoder would write: they must arrive as they are.
+		out.Body = append([]byte("  "), append(out.Body, "\n\t"...)...)
+		sent = out.Body
+	}
 	r := x.messages(body(testModel, false))
+	require.Equal(t, 200, r.status, string(r.body))
 	got := x.up.last(t)
-	require.NoError(t, got.sigErr, "%d %s", r.status, r.body)
-	assert.Equal(t, gjson.True, gjson.GetBytes(got.body, "stream").Type, "forced after the plugin deleted it: %s", got.body)
-	x.assertNoSecrets(t, x.record(), string(r.body))
+	assert.Equal(t, string(sent), string(got.body))
+	assert.Equal(t, "/model/anthropic.claude-mapped-v1%3A0/invoke", got.path)
+	assert.Equal(t, "AK1", got.accessKey)
+	assert.Empty(t, got.header.Get("x-api-key"), "the client's key does not reach the upstream")
+	assert.Equal(t, "hello", r.json().Get("content.0.text").String())
+	rec := x.record()
+	assert.True(t, rec.Success)
+	assert.Equal(t, "claude-mapped", rec.UpstreamModel)
+	assert.Equal(t, core.UsageTokens{Input: extInput, Output: extOutput}, rec.Tokens)
+
+	// An event stream the plugin did not announce stays binary.
+	x.plat.amend = func(_ *pluginv1.ExecuteRequest, out *pluginv1.UpstreamRequest) { out.ResponseStream = "" }
+	r = x.messages(body(testModel, true))
+	assert.False(t, isSSE(r.header.Get("Content-Type")), "%d %s", r.status, r.header.Get("Content-Type"))
+	assert.NotContains(t, string(r.body), "event: message_start")
 }
 
-// A request that fails over is signed again for the next account, with that
-// account's credentials.
-func TestFailoverSignsAgainPerAttempt(t *testing.T) {
+// A request that fails over is executed again for the next account, with
+// that account's credentials.
+func TestFailoverExecutesAgainPerAttempt(t *testing.T) {
 	x := newExtEnv(t)
-	x.setCreds(2, true)
 	x.up.status["AK1"] = 500
 	r := x.messages(body(testModel, false))
 	require.Equal(t, 200, r.status, string(r.body))
 	calls := x.up.all()
 	require.Len(t, calls, 2)
-	for i, want := range []string{"AK1", "AK2"} {
-		require.NoError(t, calls[i].sigErr, "attempt %d", i)
-		assert.Equal(t, want, calls[i].accessKey)
+	assert.Equal(t, "AK1", calls[0].accessKey)
+	assert.Equal(t, "AK2", calls[1].accessKey)
+	builds := x.plat.buildCalls()
+	require.Len(t, builds, 2)
+	for i, want := range []int64{1, 2} {
+		assert.Equal(t, want, builds[i].GetAccount().GetId(), "attempt %d", i)
+		assert.EqualValues(t, i, builds[i].GetAttempt(), "attempt %d", i)
 	}
-	assert.Empty(t, calls[0].header.Get("X-Amz-Security-Token"))
-	assert.Equal(t, extTokenPrefix+"AK2", calls[1].header.Get("X-Amz-Security-Token"))
-	assert.NotEqual(t, calls[0].header.Get("Authorization"), calls[1].header.Get("Authorization"))
 	rec := x.record()
 	assert.True(t, rec.Success)
 	assert.EqualValues(t, 2, *rec.AccountID)
 	assert.Equal(t, 2, rec.Attempts)
-	x.assertNoSecrets(t, rec, string(r.body))
 }
 
-// A signature the upstream rejects is an ordinary upstream error: the secret
-// is in neither the client's answer, the usage record nor the logs.
-func TestRejectedSignatureKeepsTheSecretPrivate(t *testing.T) {
-	x := newExtEnv(t)
-	x.accounts.groups[testGroup] = []int64{1}
-	x.plat.amend = func(_ *pluginv1.BuildUpstreamRequestRequest, out *pluginv1.BuildUpstreamRequestResponse) {
-		out.Signing.SecretAccessKey = extSecretPrefix + "someone-else"
-		out.Signing.SessionToken = extTokenPrefix + "someone-else"
+// ---------------------------------------------------------------- header layers
+
+// wantHeaders is what the upstream must have received: the given headers
+// plus the transport's own (its User-Agent unless h names one).
+func wantHeaders(got extCall, h http.Header) http.Header {
+	h.Set("Content-Length", strconv.Itoa(len(got.body)))
+	h.Set("Accept-Encoding", "gzip")
+	if h.Get("User-Agent") == "" {
+		h.Set("User-Agent", "Go-http-client/1.1")
 	}
-	r := x.messages(body(testModel, false))
-	require.Equal(t, 403, r.status, string(r.body))
-	require.Error(t, x.up.last(t).sigErr)
-	rec := x.record()
-	assert.False(t, rec.Success)
-	x.assertNoSecrets(t, rec, string(r.body), r.header)
+	return h
 }
 
-// What this core cannot carry out fails the attempt as plugin-unavailable
-// before anything is sent, and the next account is tried.
-func TestUnknownSchemeOrFormatSendsNothing(t *testing.T) {
-	for name, amend := range map[string]func(out *pluginv1.BuildUpstreamRequestResponse){
-		"unknown signing scheme":         func(out *pluginv1.BuildUpstreamRequestResponse) { out.Signing.Scheme = "hmac-v9" },
-		"signing without a scheme":       func(out *pluginv1.BuildUpstreamRequestResponse) { out.Signing.Scheme = "" },
-		"signing without a secret":       func(out *pluginv1.BuildUpstreamRequestResponse) { out.Signing.SecretAccessKey = "" },
-		"signing without a region":       func(out *pluginv1.BuildUpstreamRequestResponse) { out.Signing.Region = "" },
-		"unknown response stream format": func(out *pluginv1.BuildUpstreamRequestResponse) { out.ResponseStream = "smithy-v7" },
-		"unknown format on an unsigned request": func(out *pluginv1.BuildUpstreamRequestResponse) {
-			out.Signing, out.ResponseStream = nil, "smithy-v7"
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			x := newExtEnv(t)
-			// Account 1 (first by priority) gets the bad answer.
-			x.plat.amend = func(in *pluginv1.BuildUpstreamRequestRequest, out *pluginv1.BuildUpstreamRequestResponse) {
-				if in.GetAccount().GetId() == 1 {
-					amend(out)
-				}
-			}
-			r := x.messages(body(testModel, true))
-			require.Equal(t, 200, r.status, string(r.body))
-			calls := x.up.all()
-			require.Len(t, calls, 1, "the first attempt sent nothing")
-			assert.Equal(t, "AK2", calls[0].accessKey)
-			require.NoError(t, calls[0].sigErr)
-			rec := x.record()
-			assert.EqualValues(t, 2, *rec.AccountID)
-			assert.Empty(t, x.accounts.disabled, "a plugin failure does not touch the account")
-			x.assertNoSecrets(t, rec, string(r.body))
+// The plugin's default headers yield to the operator: the account's header
+// override replaces or removes them, the passthrough only fills headers
+// that are not set (CONTRACTS §86.5).
+func TestDefaultHeadersYieldToTheOperator(t *testing.T) {
+	x := newExtEnv(t)
+	x.plat.amend = func(_ *pluginv1.ExecuteRequest, out *pluginv1.UpstreamRequest) {
+		out.DefaultHeaders = map[string]string{"accept": "application/json", "x-default-a": "plugin-a", "x-default-b": "plugin-b",
+			"x-default-c": "plugin-c", "x-default-d": "plugin-d", "user-agent": "plugin-ua/1"}
+	}
+	withHeaderOverride(t, x.env, 1, `{"x-default-a":"op-a","x-default-d":"{unset}","user-agent":"op-ua/2"}`)
+	editAccount(x.env, 1, func(a *core.Account) { a.HeaderPassthrough = []string{"x-default-b", "x-client-only"} })
 
-			// With no other account the client gets the plugin failure.
-			x.accounts.groups[testGroup] = []int64{1}
-			r = x.messages(body(testModel, true))
-			assert.GreaterOrEqual(t, r.status, 500, string(r.body))
-			assert.Len(t, x.up.all(), 1, "still nothing sent")
-			rec = x.record()
-			assert.False(t, rec.Success)
-			// A plugin problem surfaces as "no available account" (dispatch).
-			assert.Equal(t, errTypeNoAccount, rec.ErrorType)
-			x.assertNoSecrets(t, rec, string(r.body))
+	r := x.do("/v1/messages", body(testModel, false), map[string]string{"X-Default-A": "client-a", "X-Default-B": "client-b",
+		"X-Default-C": "client-c", "X-Client-Only": "c1"})
+	require.Equal(t, 200, r.status, string(r.body))
+	got := x.up.last(t)
+	assert.Equal(t, wantHeaders(got, http.Header{
+		// Authoritative.
+		"Authorization": {"Bearer AK1"}, "Content-Type": {"application/json"},
+		// Defaults: replaced by the override, kept over a passed-through
+		// client value, kept when nothing touches them.
+		"Accept": {"application/json"}, "X-Default-A": {"op-a"}, "X-Default-B": {"plugin-b"}, "X-Default-C": {"plugin-c"},
+		"User-Agent": {"op-ua/2"},
+		// Filled by the passthrough where the plugin set nothing.
+		"X-Client-Only": {"c1"},
+	}), got.header)
+	assert.Empty(t, got.header.Values("X-Default-D"), "{unset} removes a default header")
+}
+
+// A parameter override's header operations replace and remove default
+// headers like the header override does.
+func TestParamOverrideReplacesDefaultHeaders(t *testing.T) {
+	x := newExtEnv(t)
+	x.plat.amend = func(_ *pluginv1.ExecuteRequest, out *pluginv1.UpstreamRequest) {
+		out.DefaultHeaders = map[string]string{"accept": "application/json", "x-default-a": "plugin-a", "x-default-b": "plugin-b"}
+	}
+	withParamOverride(t, x.env, 1, `{"operations":[{"mode":"set_header","path":"x-default-a","value":"op-a"},
+		{"mode":"delete_header","path":"x-default-b"},{"mode":"set_header","path":"x-new","value":"op-new"}]}`)
+	r := x.messages(body(testModel, false))
+	require.Equal(t, 200, r.status, string(r.body))
+	got := x.up.last(t)
+	assert.Equal(t, wantHeaders(got, http.Header{
+		"Authorization": {"Bearer AK1"}, "Content-Type": {"application/json"}, "Accept": {"application/json"},
+		"X-Default-A": {"op-a"}, "X-New": {"op-new"},
+	}), got.header)
+}
+
+// The plugin's authoritative headers reach the upstream as built: neither
+// the header override nor the parameter override's header operations nor a
+// passed-through client header change or remove them.
+func TestAuthoritativeHeadersCannotBeOverridden(t *testing.T) {
+	x := newExtEnv(t)
+	x.plat.amend = func(_ *pluginv1.ExecuteRequest, out *pluginv1.UpstreamRequest) {
+		out.Headers["x-amz-date"] = "20261118T000000Z"
+		out.Headers["x-plugin-sig"] = "sig-1"
+		out.Headers["anthropic-version"] = "plugin-version"
+		// A name in both maps takes the authoritative value.
+		out.DefaultHeaders["x-plugin-sig"] = "default-sig"
+	}
+	withHeaderOverride(t, x.env, 1, `{"x-plugin-sig":"op-sig","x-amz-date":"{unset}","x-extra":"op-extra"}`)
+	withParamOverride(t, x.env, 1, `{"operations":[{"mode":"delete_header","path":"anthropic-version"},
+		{"mode":"set_header","path":"x-amz-date","value":"19700101T000000Z"},
+		{"mode":"set_header","path":"content-type","value":"text/plain"}]}`)
+	editAccount(x.env, 1, func(a *core.Account) { a.HeaderPassthrough = []string{"*"} })
+
+	r := x.do("/v1/messages", body(testModel, false), map[string]string{"X-Plugin-Sig": "client-sig", "X-Amz-Date": "client-date"})
+	require.Equal(t, 200, r.status, string(r.body))
+	got := x.up.last(t)
+	assert.Equal(t, "Bearer AK1", got.header.Get("Authorization"))
+	assert.Equal(t, []string{"sig-1"}, got.header.Values("X-Plugin-Sig"))
+	assert.Equal(t, []string{"20261118T000000Z"}, got.header.Values("X-Amz-Date"))
+	assert.Equal(t, []string{"plugin-version"}, got.header.Values("Anthropic-Version"))
+	assert.Equal(t, []string{"application/json"}, got.header.Values("Content-Type"))
+	assert.Equal(t, "op-extra", got.header.Get("X-Extra"), "the override still applies to other headers")
+	assert.True(t, x.record().Success)
+}
+
+// An authoritative header with an empty value is not sent at all: it
+// removes what a lower layer set - a default header, a passed-through client
+// header, the operator's header override (CONTRACTS §112.17).
+func TestEmptyAuthoritativeHeaderRemovesIt(t *testing.T) {
+	x := newExtEnv(t)
+	x.plat.amend = func(_ *pluginv1.ExecuteRequest, out *pluginv1.UpstreamRequest) {
+		out.DefaultHeaders["x-default-z"] = "plugin-z"
+		for _, name := range []string{"x-amz-security-token", "x-default-z", "x-client-z", "x-never-set"} {
+			out.Headers[name] = ""
+		}
+	}
+	withHeaderOverride(t, x.env, 1, `{"x-amz-security-token":"op-token","x-extra":"op-extra"}`)
+	editAccount(x.env, 1, func(a *core.Account) { a.HeaderPassthrough = []string{"*"} })
+
+	r := x.do("/v1/messages", body(testModel, false), map[string]string{"X-Client-Z": "client-z"})
+	require.Equal(t, 200, r.status, string(r.body))
+	got := x.up.last(t)
+	for _, name := range []string{"X-Amz-Security-Token", "X-Default-Z", "X-Client-Z", "X-Never-Set"} {
+		_, sent := got.header[name]
+		assert.False(t, sent, "%s was sent: %q", name, got.header.Values(name))
+	}
+	assert.Equal(t, "op-extra", got.header.Get("X-Extra"), "the override still applies to other headers")
+}
+
+// ---------------------------------------------------------------- refused relays
+
+// The core relays only to a host the plugin declared (externalServices) or
+// the account names among its upstream addresses (CONTRACTS §112.17). A
+// relay elsewhere sends nothing: the attempt fails over as the plugin's
+// failure, the account untouched, and the log names the plugin and the
+// host. The test manifest declares 127.0.0.1; localhost reaches the same
+// server under a name it does not declare.
+func TestRelayToUndeclaredHostSendsNothing(t *testing.T) {
+	toLocalhost := func(raw string) string { return strings.Replace(raw, "127.0.0.1", "localhost", 1) }
+	t.Run("neither declared nor configured", func(t *testing.T) {
+		logs := captureWarnings(t)
+		x := newExtEnv(t)
+		x.plat.amend = func(in *pluginv1.ExecuteRequest, out *pluginv1.UpstreamRequest) {
+			if in.GetAccount().GetId() == 1 {
+				out.Url = toLocalhost(out.Url)
+			}
+		}
+		r := x.messages(body(testModel, false))
+		require.Equal(t, 200, r.status, string(r.body))
+		calls := x.up.all()
+		require.Len(t, calls, 1, "the refused relay sent nothing")
+		assert.Equal(t, "AK2", calls[0].accessKey)
+		rec := x.record()
+		assert.EqualValues(t, 2, *rec.AccountID)
+		require.NotNil(t, rec.AttemptTrail)
+		assert.Equal(t, errTypePluginUnavailable, rec.AttemptTrail.Steps[0].ErrorType)
+		assert.Empty(t, x.accounts.cooldowns)
+		assert.Empty(t, x.accounts.disabled)
+		assert.Contains(t, logs.String(), "upstream host not allowed")
+		assert.Contains(t, logs.String(), "plugin=anthropic")
+		assert.Contains(t, logs.String(), "host=localhost")
+	})
+	t.Run("the account's upstream address", func(t *testing.T) {
+		x := newExtEnv(t)
+		x.man.AccountTypes[0].UpstreamFields = []string{"base_url"}
+		x.plat.amend = func(_ *pluginv1.ExecuteRequest, out *pluginv1.UpstreamRequest) { out.Url = toLocalhost(out.Url) }
+		editAccount(x.env, 1, func(a *core.Account) {
+			a.Settings = json.RawMessage(`{"base_url":` + strconvQuote(toLocalhost(x.up.srv.URL)) + `}`)
 		})
+		r := x.messages(body(testModel, false))
+		require.Equal(t, 200, r.status, string(r.body))
+		calls := x.up.all()
+		require.Len(t, calls, 1)
+		assert.Equal(t, "AK1", calls[0].accessKey, "the account naming the host is served")
+		assert.EqualValues(t, 1, *x.record().AccountID)
+
+		// Another account's address does not open the host to this one.
+		x.accounts.groups[testGroup] = []int64{2}
+		r = x.messages(body(testModel, false))
+		assert.GreaterOrEqual(t, r.status, 500, string(r.body))
+		assert.Len(t, x.up.all(), 1, "nothing more sent")
+		assert.Empty(t, x.accounts.cooldowns)
+	})
+}
+
+// A relay to an address the SSRF guard refuses sends nothing: the attempt
+// fails over as the plugin's failure, and no account is cooled down or
+// disabled.
+func TestRelayToRefusedAddressSendsNothing(t *testing.T) {
+	t.Run("scheme", func(t *testing.T) {
+		x := newExtEnv(t)
+		x.plat.amend = func(in *pluginv1.ExecuteRequest, out *pluginv1.UpstreamRequest) {
+			if in.GetAccount().GetId() == 1 {
+				out.Url = "file:///etc/passwd"
+			}
+		}
+		r := x.messages(body(testModel, false))
+		require.Equal(t, 200, r.status, string(r.body))
+		calls := x.up.all()
+		require.Len(t, calls, 1, "the refused relay sent nothing")
+		assert.Equal(t, "AK2", calls[0].accessKey)
+		rec := x.record()
+		assert.EqualValues(t, 2, *rec.AccountID)
+		assert.Equal(t, 2, rec.Attempts)
+		assert.Empty(t, x.accounts.cooldowns)
+		assert.Empty(t, x.accounts.disabled)
+	})
+	t.Run("private address", func(t *testing.T) {
+		x := newExtEnv(t)
+		x.gw.allowPrivate = false // the mock upstream is on loopback
+		r := x.messages(body(testModel, false))
+		assert.GreaterOrEqual(t, r.status, 500, string(r.body))
+		assert.Empty(t, x.up.all(), "nothing reached the private address")
+		assert.Len(t, x.plat.buildCalls(), 3, "every account was tried")
+		rec := x.record()
+		assert.False(t, rec.Success)
+		assert.Equal(t, 3, rec.Attempts)
+		assert.Empty(t, x.accounts.cooldowns)
+		assert.Empty(t, x.accounts.disabled)
+	})
+}
+
+// An unknown response_stream name is refused before anything is sent: the
+// attempt fails over as the plugin's failure, the account untouched.
+func TestUnknownResponseStreamSendsNothing(t *testing.T) {
+	x := newExtEnv(t)
+	// Account 1 (first by priority) gets the bad answer.
+	x.plat.amend = func(in *pluginv1.ExecuteRequest, out *pluginv1.UpstreamRequest) {
+		if in.GetAccount().GetId() == 1 {
+			out.ResponseStream = "smithy-v7"
+		}
+	}
+	r := x.messages(body(testModel, true))
+	require.Equal(t, 200, r.status, string(r.body))
+	calls := x.up.all()
+	require.Len(t, calls, 1, "the first attempt sent nothing")
+	assert.Equal(t, "AK2", calls[0].accessKey)
+	rec := x.record()
+	assert.EqualValues(t, 2, *rec.AccountID)
+	assert.Empty(t, x.accounts.disabled, "a plugin failure does not touch the account")
+	assert.Empty(t, x.accounts.cooldowns)
+
+	// With no other account the client gets the plugin failure.
+	x.accounts.groups[testGroup] = []int64{1}
+	r = x.messages(body(testModel, true))
+	assert.GreaterOrEqual(t, r.status, 500, string(r.body))
+	assert.Len(t, x.up.all(), 1, "still nothing sent")
+	rec = x.record()
+	assert.False(t, rec.Success)
+	assert.Empty(t, x.accounts.cooldowns)
+}
+
+// checkResponseStream accepts no name and the known ones, and refuses an
+// unknown name and any name on a WebSocket turn, as the plugin's failure.
+func TestCheckResponseStream(t *testing.T) {
+	for name, tc := range map[string]struct {
+		format string
+		turn   bool
+		ok     bool
+	}{
+		"none":              {"", false, true},
+		"known":             {awseventstream.FormatChunk, false, true},
+		"unknown":           {"x", false, false},
+		"old name":          {"aws-eventstream", false, false},
+		"none on a turn":    {"", true, true},
+		"known on a turn":   {awseventstream.FormatChunk, true, false},
+		"unknown on a turn": {"x", true, false},
+	} {
+		e := (&execution{turn: tc.turn}).checkResponseStream(tc.format)
+		if tc.ok {
+			assert.Nil(t, e, name)
+			continue
+		}
+		require.NotNil(t, e, name)
+		assert.Equal(t, errTypePluginUnavailable, e.RecordType, name)
 	}
 }
 
 // ---------------------------------------------------------------- response stream
 
-// An AWS event stream answer reaches the client as SSE and is metered by the
-// platform's ordinary usage rules.
+// A Bedrock-style relay - a body without "stream", response_stream set - on
+// a streaming client request is relayed as SSE: whether the request streams
+// is the client's request, not the plugin's body. The answer is metered by
+// the platform's ordinary usage rules.
 func TestEventStreamIsRelayedAsSSEAndBilled(t *testing.T) {
 	x := newExtEnv(t)
 	r := x.messages(body(testModel, true))
@@ -537,29 +562,27 @@ func TestEventStreamIsRelayedAsSSEAndBilled(t *testing.T) {
 	}
 	assert.Equal(t, want.String(), string(r.body))
 	got := x.up.last(t)
-	require.NoError(t, got.sigErr)
 	assert.Equal(t, "/model/anthropic."+testModel+"-v1%3A0/invoke-with-response-stream", got.path)
-	assert.False(t, gjson.GetBytes(got.body, "stream").Exists())
+	assert.False(t, gjson.GetBytes(got.body, "stream").Exists(), "the plugin's body has no stream flag: %s", got.body)
 	rec := x.record()
 	assert.True(t, rec.Success)
 	assert.True(t, rec.Stream)
 	assert.Equal(t, core.UsageTokens{Input: extInput, Output: extOutput}, rec.Tokens)
 	assert.NotZero(t, rec.FirstTokenMs)
 	assert.True(t, rec.Billable)
-	x.assertNoSecrets(t, rec, string(r.body))
 }
 
 // A client speaking another protocol gets the converted stream: conversion
 // sees ordinary Anthropic SSE.
 func TestEventStreamOnAConvertedRoute(t *testing.T) {
-	x := newExtEnv(t, func(e *env) { e.conv = convert.Default() })
+	x := newExtEnv(t, openAIClients)
 	path, input := openAIConversionInput("openai.chat", true)
 	r := x.do(path, input, map[string]string{"authorization": "Bearer " + testKey})
 	require.Equal(t, 200, r.status, string(r.body))
 	assert.True(t, isSSE(r.header.Get("Content-Type")))
 	assert.Contains(t, string(r.body), `"content":"hello"`)
 	assert.Equal(t, 1, strings.Count(string(r.body), "data: [DONE]"), string(r.body))
-	require.NoError(t, x.up.last(t).sigErr)
+	assert.True(t, strings.HasSuffix(x.up.last(t).path, "/invoke-with-response-stream"))
 	rec := x.record()
 	assert.True(t, rec.Success)
 	assert.Equal(t, "openai.chat", rec.Protocol)
@@ -587,7 +610,7 @@ func TestEventStreamExceptionBecomesAnErrorEvent(t *testing.T) {
 // to a non-streaming request, and plain SSE.
 func TestResponseStreamOnlyAdaptsItsOwnContentType(t *testing.T) {
 	x := newExtEnv(t)
-	x.plat.amend = func(_ *pluginv1.BuildUpstreamRequestRequest, out *pluginv1.BuildUpstreamRequestResponse) {
+	x.plat.amend = func(_ *pluginv1.ExecuteRequest, out *pluginv1.UpstreamRequest) {
 		out.ResponseStream = awseventstream.FormatChunk // also on the non-streaming request
 	}
 	r := x.messages(body(testModel, false))
@@ -602,182 +625,19 @@ func TestResponseStreamOnlyAdaptsItsOwnContentType(t *testing.T) {
 	assert.Equal(t, core.UsageTokens{Input: extInput, Output: extOutput}, x.record().Tokens)
 }
 
-// ---------------------------------------------------------------- plugins without the fields
-
-// A plugin that sets neither field gets the request it built, byte for
-// byte: no signing header appears, and an event stream answer it did not
-// announce is not decoded.
-func TestPluginsWithoutTheFieldsAreUntouched(t *testing.T) {
-	x := newExtEnv(t)
-	var sent *pluginv1.BuildUpstreamRequestResponse
-	x.plat.amend = func(_ *pluginv1.BuildUpstreamRequestRequest, out *pluginv1.BuildUpstreamRequestResponse) {
-		out.Signing, out.ResponseStream = nil, ""
-		out.Headers["authorization"] = "Bearer plugin-key"
-		sent = out
-	}
-	in := body(testModel, false)
-	r := x.messages(in)
-	require.Equal(t, 200, r.status, string(r.body))
-	got := x.up.last(t)
-	assert.Equal(t, "Bearer plugin-key", got.header.Get("Authorization"))
-	for name := range got.header {
-		assert.False(t, strings.HasPrefix(strings.ToLower(name), "x-amz-"), "unexpected header %s", name)
-	}
-	want, err := applyPatches(mustJSON(in), sent.GetPatches())
-	require.NoError(t, err)
-	assert.Equal(t, string(want), string(got.body), "the body is the client's with the plugin's patches, nothing else")
-	assert.True(t, x.record().Success)
-
-	// The same exchange through a core without the extension points: the
-	// requests on the wire are identical.
-	before := wireRequest(got)
-	x.gen.accountTypes[0].Client = &legacyPlatform{x.plat}
-	r = x.messages(in)
-	require.Equal(t, 200, r.status, string(r.body))
-	assert.Equal(t, before, wireRequest(x.up.last(t)))
-	assert.True(t, x.record().Success)
-
-	// An event stream the plugin did not announce stays binary.
-	r = x.messages(body(testModel, true))
-	assert.False(t, isSSE(r.header.Get("Content-Type")), "%d %s", r.status, r.header.Get("Content-Type"))
-	assert.NotContains(t, string(r.body), "event: message_start")
-}
-
-// legacyPlatform answers with a message built by a plugin compiled before
-// the fields existed: the response is re-encoded without them.
-type legacyPlatform struct{ *extPlatform }
-
-func (p *legacyPlatform) BuildUpstreamRequest(ctx context.Context, in *pluginv1.BuildUpstreamRequestRequest) (*pluginv1.BuildUpstreamRequestResponse, error) {
-	out, err := p.extPlatform.BuildUpstreamRequest(ctx, in)
-	if err != nil {
-		return nil, err
-	}
-	return &pluginv1.BuildUpstreamRequestResponse{Method: out.GetMethod(), Url: out.GetUrl(), Headers: out.GetHeaders(),
-		Patches: out.GetPatches(), UpstreamModel: out.GetUpstreamModel()}, nil
-}
-
-// wireRequest is what an upstream saw of a request, in a comparable form.
-func wireRequest(c extCall) string {
-	names := make([]string, 0, len(c.header))
-	for name := range c.header {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	var b strings.Builder
-	b.WriteString(c.path + "\n")
-	for _, name := range names {
-		b.WriteString(name + ": " + strings.Join(c.header[name], ",") + "\n")
-	}
-	b.WriteString("\n" + string(c.body))
-	return b.String()
-}
-
-// ---------------------------------------------------------------- units
-
-func TestCheckUpstreamExt(t *testing.T) {
-	sig := func(scheme string) *pluginv1.RequestSigning {
-		return &pluginv1.RequestSigning{Scheme: scheme, SecretAccessKey: extSecretPrefix + "x", SessionToken: extTokenPrefix + "x"}
-	}
-	for name, tc := range map[string]struct {
-		built *pluginv1.BuildUpstreamRequestResponse
-		ok    bool
-	}{
-		"nil":            {nil, true},
-		"neither":        {&pluginv1.BuildUpstreamRequestResponse{}, true},
-		"both known":     {&pluginv1.BuildUpstreamRequestResponse{Signing: sig("aws-sigv4"), ResponseStream: awseventstream.FormatChunk}, true},
-		"unknown scheme": {&pluginv1.BuildUpstreamRequestResponse{Signing: sig("x")}, false},
-		"empty scheme":   {&pluginv1.BuildUpstreamRequestResponse{Signing: sig("")}, false},
-		"unknown format": {&pluginv1.BuildUpstreamRequestResponse{ResponseStream: "x"}, false},
-	} {
-		err := checkUpstreamExt(tc.built)
-		assert.Equal(t, tc.ok, err == nil, "%s: %v", name, err)
-		if err != nil {
-			assert.NotContains(t, err.Error(), extSecretPrefix, name)
-			assert.NotContains(t, err.Error(), extTokenPrefix, name)
-		}
-	}
-	assert.Nil(t, unsupportedOnWebSocket(&pluginv1.BuildUpstreamRequestResponse{}))
-	for _, built := range []*pluginv1.BuildUpstreamRequestResponse{{Signing: sig("aws-sigv4")}, {ResponseStream: awseventstream.FormatChunk}} {
-		res := unsupportedOnWebSocket(built)
-		require.NotNil(t, res)
-		assert.Equal(t, attemptFailover, res.kind)
-		assert.Equal(t, errTypePluginUnavailable, res.err.RecordType)
-	}
-}
-
-// The request leaves as it is signed: the query in canonical order, no
-// default port in Host, and a body-less request over the empty payload even
-// though the caller still holds body bytes.
-func TestSignUpstreamRequest(t *testing.T) {
-	built := &pluginv1.BuildUpstreamRequestResponse{Signing: &pluginv1.RequestSigning{Scheme: "aws-sigv4", Region: "us-east-1", Service: "bedrock",
-		AccessKeyId: "AKIAUNIT", SecretAccessKey: extSecretPrefix + "AKIAUNIT"}}
-	held := []byte(`{"held":"by the caller"}`)
-	for name, tc := range map[string]struct {
-		method, url string
-		sent        []byte
-		query, host string
-	}{
-		"post":             {"POST", "https://bedrock.example.com/model/m%3A0/invoke", held, "", "bedrock.example.com"},
-		"get, no body":     {"GET", "https://bedrock.example.com/foundation-models", nil, "", "bedrock.example.com"},
-		"query reordered":  {"GET", "https://bedrock.example.com/x?b=2&a=2&a=1&c=a+b", nil, "a=1&a=2&b=2&c=a%20b", "bedrock.example.com"},
-		"default port":     {"POST", "https://bedrock.example.com:443/model/m/invoke", held, "", "bedrock.example.com"},
-		"non-default port": {"POST", "https://bedrock.example.com:8443/model/m/invoke", held, "", "bedrock.example.com:8443"},
-	} {
-		var reqBody io.Reader
-		if tc.sent != nil {
-			reqBody = bytes.NewReader(tc.sent)
-		}
-		req, err := http.NewRequest(tc.method, tc.url, reqBody)
-		require.NoError(t, err, name)
-		require.Nil(t, signUpstreamRequest(req, held, built), name)
-		assert.Equal(t, tc.query, req.URL.RawQuery, name)
-		assert.Equal(t, tc.host, req.Host, name)
-		// The upstream sees the body that was sent, not the one held.
-		_, err = verifySigV4(req, tc.sent)
-		assert.NoError(t, err, name)
-	}
-
-	// Nothing asked: the request is left alone.
-	req, _ := http.NewRequest("GET", "https://example.com:443/x?b=2&a=1", nil)
-	require.Nil(t, signUpstreamRequest(req, nil, &pluginv1.BuildUpstreamRequestResponse{}))
-	assert.Equal(t, "b=2&a=1", req.URL.RawQuery)
-	assert.Equal(t, "example.com:443", req.Host)
-	assert.Empty(t, req.Header)
-
-	// What the signer refuses fails the attempt over to the next account and
-	// names no credential.
-	for name, edit := range map[string]func(*http.Request, *pluginv1.BuildUpstreamRequestResponse){
-		"unparsable query": func(r *http.Request, _ *pluginv1.BuildUpstreamRequestResponse) { r.URL.RawQuery = "a=1;b=2" },
-		"unknown scheme":   func(_ *http.Request, b *pluginv1.BuildUpstreamRequestResponse) { b.Signing.Scheme = "x" },
-		"no region":        func(_ *http.Request, b *pluginv1.BuildUpstreamRequestResponse) { b.Signing.Region = "" },
-		"unknown format":   func(_ *http.Request, b *pluginv1.BuildUpstreamRequestResponse) { b.ResponseStream = "aws-eventstream" }, // the name before FormatChunk
-	} {
-		req, _ := http.NewRequest("GET", "https://example.com/x", nil)
-		b := &pluginv1.BuildUpstreamRequestResponse{Signing: &pluginv1.RequestSigning{Scheme: "aws-sigv4", Region: "us-east-1", Service: "bedrock",
-			AccessKeyId: "AKIAUNIT", SecretAccessKey: extSecretPrefix + "AKIAUNIT"}}
-		edit(req, b)
-		res := signUpstreamRequest(req, nil, b)
-		require.NotNil(t, res, name)
-		assert.Equal(t, attemptFailover, res.kind, name)
-		assert.Equal(t, errTypePluginUnavailable, res.err.RecordType, name)
-		assert.NotContains(t, fmt.Sprint(res.err), extSecretPrefix, name)
-		assert.Empty(t, req.Header.Get("Authorization"), name)
-	}
-}
-
 func TestAdaptResponseStream(t *testing.T) {
 	frames := extChunk(`{"type":"ping"}`)
 	for name, tc := range map[string]struct {
 		format, contentType string
 		adapted             bool
 	}{
-		"announced":                {awseventstream.FormatChunk, "application/vnd.amazon.eventstream", true},
-		"announced, with a param":  {awseventstream.FormatChunk, "Application/VND.amazon.eventstream; charset=binary", true},
-		"not announced":            {"", "application/vnd.amazon.eventstream", false},
-		"announced, JSON answer":   {awseventstream.FormatChunk, "application/json", false},
-		"announced, SSE answer":    {awseventstream.FormatChunk, "text/event-stream", false},
-		"announced, no type":       {awseventstream.FormatChunk, "", false},
-		"unknown format (guarded)": {"x", "application/vnd.amazon.eventstream", false},
+		"announced":               {awseventstream.FormatChunk, "application/vnd.amazon.eventstream", true},
+		"announced, with a param": {awseventstream.FormatChunk, "Application/VND.amazon.eventstream; charset=binary", true},
+		"not announced":           {"", "application/vnd.amazon.eventstream", false},
+		"announced, JSON answer":  {awseventstream.FormatChunk, "application/json", false},
+		"announced, SSE answer":   {awseventstream.FormatChunk, "text/event-stream", false},
+		"announced, no type":      {awseventstream.FormatChunk, "", false},
+		"unknown format":          {"x", "application/vnd.amazon.eventstream", false},
 	} {
 		closed := false
 		resp := &http.Response{Header: http.Header{"Content-Length": {"99"}}, ContentLength: 99,

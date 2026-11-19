@@ -4,6 +4,7 @@ export default {
   retry: 'Retry',
   nativeFailed: 'The native UI of this plugin could not be loaded: {reason}',
   nativeMissing: 'The plugin did not register component "{component}".',
+  componentCrashed: 'The plugin UI failed: {reason}',
   unsupported: 'Unsupported page type: {type}',
   frameNotReady: 'The plugin form is not ready yet'
 }

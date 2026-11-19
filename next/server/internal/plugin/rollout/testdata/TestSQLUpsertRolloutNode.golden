@@ -1,8 +1,9 @@
 -- sql
-INSERT INTO "plugin_rollout_nodes" ("rollout_id","node_id","boot_id","state","error") VALUES ($1,$2,$3,$4,$5) ON CONFLICT ("rollout_id","boot_id") DO UPDATE SET "state"="excluded"."state","error"="excluded"."error","updated_at"=now()
+INSERT INTO "plugin_rollout_nodes" ("rollout_id","node_id","boot_id","state","error","code") VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT ("rollout_id","boot_id") DO UPDATE SET "state"="excluded"."state","error"="excluded"."error","code"="excluded"."code","updated_at"=now()
 -- vars
 $1 int64 42
 $2 string "node-a"
 $3 string "boot-a"
 $4 string "failed"
 $5 string "not ready"
+$6 string "outdated_contract"

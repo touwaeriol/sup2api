@@ -52,9 +52,6 @@ func (v *validator) taskEndpoint(f string, e manifest.Endpoint) {
 		if e.Method != "POST" || t.IDParam != "" {
 			v.add(f+".task", "conflict", "task submissions must use POST without idParam")
 		}
-		if e.UsageMaxBytes > protocol.MaxTaskSnapshotBytes {
-			v.add(f+".usageMaxBytes", "out_of_range", "task submission responses are limited to %d bytes", protocol.MaxTaskSnapshotBytes)
-		}
 		if !v.standalone {
 			v.needCap(f+".task", manifest.CapPlatformAdapter)
 		}

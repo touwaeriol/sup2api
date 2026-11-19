@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/Sub2API-Devs/sup2api/next/gateway/internal/pluginblob"
@@ -13,28 +14,35 @@ import (
 
 // PluginBlobs builds the plugin package service of node. Packages live under
 // root/plugin-blobs; client is the authenticated node client that may reach
-// any enabled node (package fetches fall back to the other nodes).
+// any enabled node, since a missing package is fetched from whichever online
+// node holds it.
 func PluginBlobs(store *Store, node, root string, client *http.Client, maxBytes, maxTotalBytes int64) *pluginblob.Service {
 	return &pluginblob.Service{
 		Store:  &pluginblob.Store{Dir: filepath.Join(root, "plugin-blobs"), MaxBytes: maxBytes, MaxTotalBytes: maxTotalBytes},
 		Client: client,
-		Primary: func(ctx context.Context) (bool, string, error) {
-			return store.PrimaryPeer(ctx, node)
-		},
-		NodesWithPackage: func(ctx context.Context, sum string) ([]pluginblob.NodeRef, error) {
-			nodes, err := store.NodesWithPackage(ctx, sum)
-			if err != nil {
-				return nil, err
-			}
-			refs := make([]pluginblob.NodeRef, 0, len(nodes))
-			for _, n := range nodes {
-				if n.ID != node { // this node lacks the package: that is why it asks
-					refs = append(refs, pluginblob.NodeRef{ID: n.ID, PeerURL: n.PeerURL})
-				}
-			}
-			return refs, nil
+		Peers: func(ctx context.Context) ([]pluginblob.NodeRef, error) {
+			return packagePeers(ctx, store, node)
 		},
 	}
+}
+
+// packagePeers lists the enabled nodes other than self, each marked online
+// by its heartbeat (Node.Fresh). Which node holds which package is not
+// recorded: every listed node may be asked, the online ones first, and one
+// without the package answers 404.
+func packagePeers(ctx context.Context, store *Store, self string) ([]pluginblob.NodeRef, error) {
+	nodes, err := store.Nodes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	var refs []pluginblob.NodeRef
+	for _, n := range nodes {
+		if n.Enabled && n.ID != self && n.PeerURL != "" {
+			refs = append(refs, pluginblob.NodeRef{ID: n.ID, PeerURL: strings.TrimRight(n.PeerURL, "/"), Online: n.Fresh(now)})
+		}
+	}
+	return refs, nil
 }
 
 // ManagementHandler serves the local management socket: the updater API and

@@ -1,7 +1,9 @@
 package gateway
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -9,6 +11,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -336,21 +339,48 @@ func TestSSRFCheck(t *testing.T) {
 		"http://169.254.169.254/latest", "http://internal.example/x", "http://mixed.example/x", "http://user:pw@api.example/x",
 		"http://[::ffff:10.0.0.1]/x", "http://100.64.1.1/x", "/relative", ""}
 	for _, u := range bad {
-		if _, err := g.checkUpstreamURL(ctx, u); err == nil {
+		if _, err := g.checkUpstream(ctx, u, false); err == nil {
 			t.Errorf("%q accepted", u)
 		}
 	}
 	for _, u := range []string{"https://api.anthropic.com/v1/messages", "http://8.8.8.8/x"} {
-		if _, err := g.checkUpstreamURL(ctx, u); err != nil {
+		if _, err := g.checkUpstream(ctx, u, false); err != nil {
 			t.Errorf("%q rejected: %v", u, err)
 		}
 	}
 	g.allowPrivate = true
-	if _, err := g.checkUpstreamURL(ctx, "http://127.0.0.1:1/x"); err != nil {
+	if _, err := g.checkUpstream(ctx, "http://127.0.0.1:1/x", false); err != nil {
 		t.Fatalf("allow private: %v", err)
 	}
-	if _, err := g.checkUpstreamURL(ctx, "file:///etc/passwd"); err == nil {
+	if _, err := g.checkUpstream(ctx, "file:///etc/passwd", false); err == nil {
 		t.Fatal("scheme must still be checked")
+	}
+}
+
+// A relay, handshake or fetch of an account with a proxy is resolved by the
+// proxy: the name is not resolved here, so one only the proxy can resolve
+// (or with the node's DNS down) passes, while a literal private address is
+// refused. An account without a proxy is checked as before.
+func TestSSRFCheckFollowsTheAccountProxy(t *testing.T) {
+	var lookups atomic.Int32
+	g := &Gateway{lookupIP: func(context.Context, string) ([]net.IP, error) {
+		lookups.Add(1)
+		return nil, errors.New("no such host")
+	}}
+	c := &call{g: g}
+	proxied := &execution{c: c, egress: core.Egress{Proxied: true}}
+	direct := &execution{c: c}
+	ctx := context.Background()
+	if _, err := proxied.checkURL(ctx, "https://upstream.proxy-side.example/v1"); err != nil || lookups.Load() != 0 {
+		t.Fatalf("proxied name: %v, %d local lookups", err, lookups.Load())
+	}
+	for _, u := range []string{"http://127.0.0.1:8080/v1", "http://10.1.2.3/x", "http://localhost/x", "http://[::1]/x"} {
+		if _, err := proxied.checkURL(ctx, u); err == nil {
+			t.Errorf("proxied %q accepted", u)
+		}
+	}
+	if _, err := direct.checkURL(ctx, "https://upstream.proxy-side.example/v1"); err == nil || lookups.Load() != 1 {
+		t.Fatalf("direct unresolvable name: %v, %d lookups", err, lookups.Load())
 	}
 }
 
@@ -403,37 +433,22 @@ func TestMetaPathParams(t *testing.T) {
 	}
 }
 
-// path_params is bounded in key count, key length and value length, and is
-// nil (not an empty map) when the pattern has no parameters.
-func TestMetaMapsBounded(t *testing.T) {
+// path_params carries what the client sent, every entry of any size (only
+// invalid UTF-8 is dropped), and is nil (not an empty map) when the pattern
+// has no parameters.
+func TestMetaMapsWhole(t *testing.T) {
 	params := map[string]string{}
 	for i := 0; i < 40; i++ {
 		params[fmt.Sprintf("p%02d", i)] = "v"
 	}
 	pp := metaCall(manifest.Endpoint{Protocol: "p.x"}, params, "").meta().GetPathParams()
-	if len(pp) != metaMapMaxKeys {
+	if len(pp) != len(params) {
 		t.Fatalf("size = %d", len(pp))
 	}
-	// The kept keys are the lowest by name, so the choice is stable.
-	if _, ok := pp["p31"]; !ok {
-		t.Fatal("p31 missing")
-	}
-	if _, ok := pp["p32"]; ok {
-		t.Fatal("p32 kept")
-	}
-	// Long keys and values are cut on a UTF-8 boundary.
 	longKey, longVal := strings.Repeat("é", 100), strings.Repeat("ü", 600)
-	got := metaCall(manifest.Endpoint{Protocol: "p.x"}, map[string]string{longKey: longVal}, "").meta().GetPathParams()
-	if len(got) != 1 {
-		t.Fatalf("long: %v", got)
-	}
-	for k, v := range got {
-		if k != truncateUTF8(longKey, metaMapMaxKeyBytes) || len(k) > metaMapMaxKeyBytes {
-			t.Fatalf("key %d bytes", len(k))
-		}
-		if v != truncateUTF8(longVal, metaMapMaxValueBytes) || len(v) > metaMapMaxValueBytes {
-			t.Fatalf("value %d bytes", len(v))
-		}
+	got := metaCall(manifest.Endpoint{Protocol: "p.x"}, map[string]string{longKey: longVal, "bad\xff": "v\xffw"}, "").meta().GetPathParams()
+	if len(got) != 2 || got[longKey] != longVal || got["bad"] != "vw" {
+		t.Fatalf("long and invalid: %v", got)
 	}
 	// No path parameters: the map stays nil.
 	if m := metaCall(manifest.Endpoint{Protocol: "p.x"}, nil, "").meta(); m.GetPathParams() != nil {
@@ -510,8 +525,8 @@ func TestMetaMapsDropInvalidUTF8(t *testing.T) {
 	}
 }
 
-// The query map is bounded exactly like path_params.
-func TestMetaQueryBounded(t *testing.T) {
+// The query map carries the declared parameters whole, like path_params.
+func TestMetaQueryWhole(t *testing.T) {
 	names := make([]string, 0, 40)
 	var raw []string
 	for i := 0; i < 40; i++ {
@@ -521,19 +536,26 @@ func TestMetaQueryBounded(t *testing.T) {
 	}
 	ep := manifest.Endpoint{Protocol: "p.x", Request: manifest.EndpointRequest{QueryParams: names}}
 	q := metaCall(ep, nil, strings.Join(raw, "&")).meta().GetQuery()
-	if len(q) != metaMapMaxKeys {
+	if len(q) != len(names) {
 		t.Fatalf("size = %d", len(q))
-	}
-	if _, ok := q["p31"]; !ok {
-		t.Fatal("p31 missing")
-	}
-	if _, ok := q["p32"]; ok {
-		t.Fatal("p32 kept")
 	}
 	longVal := strings.Repeat("ü", 600)
 	ep2 := manifest.Endpoint{Protocol: "p.x", Request: manifest.EndpointRequest{QueryParams: []string{"alt"}}}
 	q = metaCall(ep2, nil, "alt="+url.QueryEscape(longVal)).meta().GetQuery()
-	if len(q) != 1 || q["alt"] != truncateUTF8(longVal, metaMapMaxValueBytes) || len(q["alt"]) > metaMapMaxValueBytes {
+	if len(q) != 1 || q["alt"] != longVal {
 		t.Fatalf("value %d bytes", len(q["alt"]))
+	}
+}
+
+// An SSE line of any length is read whole, far beyond the reader's buffer.
+func TestReadLineAnyLength(t *testing.T) {
+	long := strings.Repeat("x", 17<<20)
+	br := bufio.NewReaderSize(strings.NewReader("data: "+long+"\nnext\n"), 64<<10)
+	line, err := readLine(br)
+	if err != nil || string(line) != "data: "+long+"\n" {
+		t.Fatalf("long line: %d bytes, %v", len(line), err)
+	}
+	if line, err = readLine(br); err != nil || string(line) != "next\n" {
+		t.Fatalf("next line: %q %v", line, err)
 	}
 }

@@ -17,13 +17,6 @@ func TestReviewNestedReferencesDeclaredLocationsOnly(t *testing.T) {
 	if e != nil || len(got) != 1 {
 		t.Fatalf("%v %v", got, e)
 	}
-	if e = validateModelReferencePatches(raw, []byte(`{"messages":[{"content":[]}]}`), []manifest.RequestModelReference{reviewInlineRule()}); e == nil {
-		t.Fatal("removal after admission accepted")
-	}
-	same := []byte(`{"messages":[{"content":"string shorthand"},{"content":[{"type":"tool_addition","tool":{"definition":{"type":"advisor_20260301","model":"denied"}}}]}]}`)
-	if e = validateModelReferencePatches(raw, same, []manifest.RequestModelReference{reviewInlineRule()}); e == nil {
-		t.Fatal("nested model patch accepted")
-	}
 }
 
 func TestReviewSnapshotCountsModelsNotOverrideFacts(t *testing.T) {

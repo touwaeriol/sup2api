@@ -295,7 +295,7 @@ function remove(k: ApiKey) {
 
     <KeyEditor v-model:open="editorOpen" :api-key="editKey" :groups="groups" @saved="saved" @rotated="rotated" @updated="edited" />
 
-    <KeyUseGuide :api-key="useKey" :platforms="useKey ? platformsOf(useKey) : null" @close="useKey = null" />
+    <KeyUseGuide :api-key="useKey" :platforms="useKey ? platformsOf(useKey) : null" :served="useKey ? groupOf(useKey)?.served_protocols : null" @close="useKey = null" />
 
     <KeyUsageDrawer v-if="canReadUsage && usageKey" :api-key="usageKey" @close="usageKey = null" />
 

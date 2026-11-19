@@ -17,7 +17,7 @@ import (
 //   field errors: details.fields[{field, code}] with field "proxy_url" (conflict|invalid),
 //     "proxy_id" (not_found), "credentials.base_url" (forbidden)
 //   GET /accounts?mine=true|created_by=<id>, GET /proxies?mine=true|created_by=<id>
-//   GET /account-types/:p/:t/form -> schema.properties.base_url.enum / ui_schema.base_url["ui:readonly"]
+//   GET /account-types -> [{..., guarded_settings: [{field, allowed}]}]
 
 // Permission sets of the typical roles of CONTRACTS §21.1.
 var (

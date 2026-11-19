@@ -19,7 +19,7 @@ func ValidatePricedUsage(item PricedUsage) error {
 	if len(item.BillingReason) > 256 || strings.ContainsAny(item.BillingReason, "\r\n\x00") || item.Free && item.BillingReason == "" {
 		return fmt.Errorf("invalid usage billing disposition")
 	}
-	if item.Kind == "" || len(item.Kind) > 64 || item.Model == "" || len(item.Model) > 256 || strings.ContainsAny(item.Model+item.Kind, "\r\n\x00") {
+	if item.Kind == "" || len(item.Kind) > 64 || item.Model == "" || strings.ContainsAny(item.Model+item.Kind, "\r\n\x00") {
 		return fmt.Errorf("invalid additional usage identity")
 	}
 	if item.UsageSemantics != "inclusive" && item.UsageSemantics != "exclusive" {
@@ -28,7 +28,8 @@ func ValidatePricedUsage(item PricedUsage) error {
 	if item.RateMultiplier.IsNegative() {
 		return fmt.Errorf("invalid additional usage rate")
 	}
-	for _, n := range []int64{item.Tokens.Input, item.Tokens.Output, item.Tokens.CacheRead, item.Tokens.CacheCreation, item.Tokens.CacheCreation1h} {
+	t := item.Tokens
+	for _, n := range []int64{t.Input, t.Output, t.CacheRead, t.CacheCreation, t.CacheCreation1h, t.ImageInput, t.ImageOutput} {
 		if !ValidTokenCount(n) {
 			return fmt.Errorf("invalid additional token count")
 		}

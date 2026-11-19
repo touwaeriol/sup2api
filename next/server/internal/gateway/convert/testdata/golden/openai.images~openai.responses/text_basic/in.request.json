@@ -1,0 +1,14 @@
+{
+  "model": "gpt-image-2",
+  "prompt": "A small white dot on a black background",
+  "size": "1024x1536",
+  "quality": "low",
+  "background": "opaque",
+  "output_format": "png",
+  "output_compression": 100,
+  "moderation": "auto",
+  "partial_images": 0,
+  "n": 1,
+  "response_format": "b64_json",
+  "stream": false
+}

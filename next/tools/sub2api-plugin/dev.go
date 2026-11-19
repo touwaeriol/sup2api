@@ -277,11 +277,9 @@ func (d *devSession) packSource(s *devSource, stamp string) (map[string][]byte, 
 	if err := os.RemoveAll(filepath.Join(out, "runtimes")); err != nil {
 		return nil, nil, err
 	}
-	if m.Runtime != manifest.RuntimeNone {
-		local := runtime.GOOS + "/" + runtime.GOARCH
-		if _, err := buildRuntimes(s.dir, out, m.Key, version, []string{local}, d.tags, ".", d.stderr); err != nil {
-			return nil, nil, err
-		}
+	local := runtime.GOOS + "/" + runtime.GOARCH
+	if _, err := buildRuntimes(s.dir, out, m.Key, version, []string{local}, d.tags, ".", d.stderr); err != nil {
+		return nil, nil, err
 	}
 	files, pm, warnings, err := collectPackage(s.dir, out, ov, d.allowMissingUI)
 	if err != nil {

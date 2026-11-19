@@ -52,11 +52,11 @@ func (b *broadcaster) received() []pluginsdk.Broadcast {
 }
 
 func TestBroadcastBetweenTwoNodes(t *testing.T) {
-	opts := []pluginsdk.Option{pluginsdk.WithManifest([]byte(broadcastManifest))}
+	raw := []byte(broadcastManifest)
 	a, b := newBroadcaster(), newBroadcaster()
 	hostA := pluginsdktest.NewFakeHost()
-	ha := pluginsdktest.Start(t, a, pluginsdktest.Options{Host: hostA, SDK: opts})
-	hb := pluginsdktest.Start(t, b, pluginsdktest.Options{SDK: opts})
+	ha := pluginsdktest.Start(t, a, pluginsdktest.Options{Host: hostA, Manifest: raw})
+	hb := pluginsdktest.Start(t, b, pluginsdktest.Options{Manifest: raw})
 	if caps := ha.Info.GetCapabilities(); len(caps) != 1 || caps[0] != manifest.CapAppBroadcast {
 		t.Fatalf("capabilities = %v", caps)
 	}
@@ -110,14 +110,14 @@ func TestBroadcastManifestChecks(t *testing.T) {
 		t.Fatalf("declared without handler: %v", err)
 	}
 	// Implemented but not declared: the capability is not reported.
-	h := pluginsdktest.Start(t, newBroadcaster(), pluginsdktest.Options{SDK: []pluginsdk.Option{pluginsdk.WithManifest([]byte(testManifest))}})
+	h := pluginsdktest.Start(t, newBroadcaster(), pluginsdktest.Options{Manifest: []byte(testManifest)})
 	for _, c := range h.Info.GetCapabilities() {
 		if c == manifest.CapAppBroadcast {
 			t.Fatal("undeclared capability reported")
 		}
 	}
 	// A plugin without a broadcast handler answers Unimplemented.
-	hd := pluginsdktest.Start(t, newDemo(), pluginsdktest.Options{SDK: []pluginsdk.Option{pluginsdk.WithManifest([]byte(testManifest))}})
+	hd := pluginsdktest.Start(t, newDemo(), pluginsdktest.Options{Manifest: []byte(testManifest)})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if _, err := hd.App.OnBroadcast(ctx, &pluginv1.OnBroadcastRequest{Topic: "x"}); status.Code(err) != codes.Unimplemented {

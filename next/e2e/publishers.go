@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -47,6 +48,9 @@ func (e *Env) DerivedGuardPackage(pluginKey string, key *SigningKey, keepNative 
 		if ui, ok := m["ui"].(map[string]any); ok {
 			delete(ui, "native")
 			delete(ui, "slots")
+			if s, ok := ui["settings"].(map[string]any); ok && s["mode"] == "native" {
+				delete(ui, "settings")
+			}
 			pages, _ := ui["pages"].(map[string]any)
 			for id, p := range pages {
 				if pm, ok := p.(map[string]any); ok && pm["type"] == "native" {
@@ -162,14 +166,20 @@ func (e *Env) InstallVersion(admin *Session, pkg Package, newPermissionRoles map
 }
 
 // buildGuardBinary compiles plugins/guard with an overridden plugin key.
-func buildGuardBinary(t testing.TB, goos, goarch, key, version string) []byte {
+// extra adds Go files to the package (file name -> source), through a build
+// overlay: the source tree stays untouched.
+func buildGuardBinary(t testing.TB, goos, goarch, key, version string, extra ...map[string]string) []byte {
 	t.Helper()
 	_, self, _, _ := runtime.Caller(0)
 	dir := filepath.Join(filepath.Dir(self), "..", "plugins", "guard")
 	out := filepath.Join(t.TempDir(), "plugin")
 	sdk := "github.com/Sub2API-Devs/sup2api/next/sdk/pluginsdk"
-	cmd := exec.Command("go", "build", "-trimpath", "-o", out,
-		"-ldflags", fmt.Sprintf("-s -w -X %s.buildKey=%s -X %s.buildVersion=%s", sdk, key, sdk, version), ".")
+	args := []string{"build", "-trimpath", "-o", out,
+		"-ldflags", fmt.Sprintf("-s -w -X %s.buildKey=%s -X %s.buildVersion=%s", sdk, key, sdk, version)}
+	if len(extra) > 0 {
+		args = append(args, "-overlay", buildOverlay(t, dir, extra[0]))
+	}
+	cmd := exec.Command("go", append(args, ".")...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GOOS="+goos, "GOARCH="+goarch, "CGO_ENABLED=0")
 	if b, err := cmd.CombinedOutput(); err != nil {
@@ -180,4 +190,29 @@ func buildGuardBinary(t testing.TB, goos, goarch, key, version string) []byte {
 		t.Fatal(err)
 	}
 	return b
+}
+
+// buildOverlay writes files to a temporary directory and returns a go build
+// -overlay file adding them to dir under their names.
+func buildOverlay(t testing.TB, dir string, files map[string]string) string {
+	t.Helper()
+	tmp := t.TempDir()
+	replace := map[string]string{}
+	for name, src := range files {
+		path := filepath.Join(tmp, name)
+		if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		abs, err := filepath.Abs(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		replace[abs] = path
+	}
+	raw, _ := json.Marshal(map[string]any{"Replace": replace})
+	overlay := filepath.Join(tmp, "overlay.json")
+	if err := os.WriteFile(overlay, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return overlay
 }

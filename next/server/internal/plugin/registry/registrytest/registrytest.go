@@ -6,6 +6,7 @@ package registrytest
 import (
 	"archive/zip"
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -88,7 +89,7 @@ func Manifest(key, version string) *manifest.Manifest {
 		}},
 		AccountTypes: []manifest.AccountType{{
 			ID: "apikey", Label: manifest.LocalizedText{"en": "API key", "zh": "API 密钥"},
-			Form:      manifest.Form{Mode: "schema", Schema: "forms/apikey.schema.json", UISchema: "forms/apikey.ui.json"},
+			Form:      manifest.Form{Mode: "native", Component: "ApiKeyForm"},
 			Platforms: []manifest.AccountPlatform{{Platform: "p_" + key}},
 		}},
 		Hooks:           []manifest.Hook{{Point: "gateway.request", Order: 10, Needs: []string{"model", "prompt_text"}, TimeoutMs: 500}},
@@ -130,36 +131,32 @@ func TestEndpoint(key string) manifest.Endpoint {
 // DefaultGrants approves everything the test manifest asks for.
 func DefaultGrants() map[string]string {
 	return map[string]string{
-		"kv":                   `{}`,
-		"db.schema":            `{}`,
-		"gateway.hook":         `{"points":["gateway.request"],"fields":["model"]}`,
-		"routes.admin":         `{}`,
-		"routes.webhook":       `{}`,
-		"routes.public":        `{}`,
-		"accounts.credentials": `{"types":"own"}`,
-		"gateway.endpoint":     `{}`,
-		"platform.register":    `{}`,
-		"broadcast":            `{}`,
-		"lock":                 `{}`,
+		"kv":                `{}`,
+		"db.schema":         `{}`,
+		"gateway.hook":      `{"points":["gateway.request"],"fields":["model"]}`,
+		"routes.admin":      `{}`,
+		"routes.webhook":    `{}`,
+		"routes.public":     `{}`,
+		"gateway.endpoint":  `{}`,
+		"platform.register": `{}`,
+		"broadcast":         `{}`,
+		"lock":              `{}`,
 	}
 }
 
 // Package builds a .s2plugin zip with the test binary for this platform
-// (none when bin is nil) and the given extra files (migrations, ui ...).
+// and the given extra files (migrations, ui ...).
 func Package(t testing.TB, m *manifest.Manifest, bin []byte, extra map[string][]byte) []byte {
 	t.Helper()
 	files := map[string][]byte{}
 	mj, _ := json.Marshal(m)
 	files["manifest.json"] = mj
-	if bin != nil { // nil: a runtime "none" package carries no runtimes
-		name := "runtimes/" + goruntime.GOOS + "-" + goruntime.GOARCH + "/plugin"
-		if goruntime.GOOS == "windows" {
-			name += ".exe"
-		}
-		files[name] = bin
+	name := "runtimes/" + goruntime.GOOS + "-" + goruntime.GOARCH + "/plugin"
+	if goruntime.GOOS == "windows" {
+		name += ".exe"
 	}
-	files["forms/apikey.schema.json"] = []byte(`{"type":"object","properties":{"api_key":{"type":"string"}}}`)
-	files["forms/apikey.ui.json"] = []byte(`{"api_key":{"ui:widget":"password"}}`)
+	files[name] = bin
+	files["i18n/en.json"] = []byte(`{"hello":"Hello"}`)
 	files["ui/index.html"] = []byte(`<!doctype html><title>t</title>`)
 	files["ui/icon.svg"] = []byte(`<svg xmlns="http://www.w3.org/2000/svg"/>`)
 	files["secret.txt"] = []byte("not an asset")
@@ -245,7 +242,7 @@ func (l *Launcher) Command(_ context.Context, spec core.LaunchSpec) (*exec.Cmd, 
 	l.Commands++
 	l.mu.Unlock()
 	cmd := exec.Command(spec.BinaryPath)
-	cmd.Dir = spec.WorkDir
+	cmd.Dir = cmp.Or(spec.DataDir, spec.RunDir)
 	cmd.Env = append([]string(nil), spec.Env...)
 	return cmd, nil
 }
@@ -460,7 +457,7 @@ var (
 )
 
 // Source is the package source shared by every node of a test process, as
-// the primary's store is in a cluster. AddVersion and uploads put into it.
+// if every node held every package. AddVersion and uploads put into it.
 // Its directory outlives every test, so a package that uses it runs its
 // tests through Main, which removes it.
 func Source() *blobs.Source {

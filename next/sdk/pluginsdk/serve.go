@@ -58,7 +58,6 @@ type options struct {
 	version     string
 	strict      StrictMode
 	poolSize    int32
-	maxRecv     int
 	logger      hclog.Logger
 }
 
@@ -76,12 +75,6 @@ func WithStrictNetwork(m StrictMode) Option { return func(o *options) { o.strict
 
 // WithDBPoolSize sets the maximum number of Host.DB connections (default 4).
 func WithDBPoolSize(n int32) Option { return func(o *options) { o.poolSize = n } }
-
-// WithMaxRecvMsgSize raises the largest host call the plugin accepts (gRPC
-// default 4 MiB), e.g. for a gateway hook that receives request images
-// (CONTRACTS §72.2). A larger call fails with RESOURCE_EXHAUSTED, which the
-// host treats like any other failed call (hook failure policy).
-func WithMaxRecvMsgSize(n int) Option { return func(o *options) { o.maxRecv = n } }
 
 // WithLogger sets the go-plugin logger (stderr JSON by default).
 func WithLogger(l hclog.Logger) Option { return func(o *options) { o.logger = l } }
@@ -107,20 +100,18 @@ func Serve(p any, opts ...Option) {
 	plugin.Serve(&plugin.ServeConfig{
 		HandshakeConfig: protocol.Handshake,
 		Plugins:         protocol.PluginMap(gp),
-		GRPCServer: func(sopts []grpc.ServerOption) *grpc.Server {
-			if o.maxRecv > 0 {
-				sopts = append(sopts, grpc.MaxRecvMsgSize(o.maxRecv))
-			}
-			return NewGRPCServer(sopts)
-		},
-		Logger: logger,
+		GRPCServer:      NewGRPCServer,
+		Logger:          logger,
 	})
 }
 
 // NewGRPCServer builds a gRPC server with the SDK interceptors (panic
-// recovery). Serve uses it; tests and custom hosts may too.
+// recovery) and the receive limit of every plugin: gRPC's maximum. A plugin
+// states no size limit of its own. The one limit on what the host hands
+// over is the gateway's request body limit, a system setting the host
+// enforces before it calls. Serve uses it; tests and custom hosts may too.
 func NewGRPCServer(opts []grpc.ServerOption) *grpc.Server {
-	opts = append(opts, grpc.ChainUnaryInterceptor(recoverUnary))
+	opts = append(opts, grpc.ChainUnaryInterceptor(recoverUnary), grpc.MaxRecvMsgSize(maxMessageBytes))
 	return grpc.NewServer(opts...)
 }
 
@@ -144,7 +135,7 @@ func Register(s grpc.ServiceRegistrar, p any, dial HostDialer, opts ...Option) e
 	}
 	pluginv1.RegisterPluginServiceServer(s, rt)
 	if v, ok := p.(Platform); ok {
-		pluginv1.RegisterPlatformServiceServer(s, platformServer{impl: v, runtime: rt})
+		pluginv1.RegisterPlatformServiceServer(s, platformServer{impl: v, execute: rt.execute, runtime: rt})
 	}
 	if v, ok := p.(Hook); ok {
 		pluginv1.RegisterHookServiceServer(s, hookServer{impl: v})
@@ -159,7 +150,7 @@ func Register(s grpc.ServiceRegistrar, p any, dial HostDialer, opts ...Option) e
 		pluginv1.RegisterAppServiceServer(s, appServer{jobs: jr, events: eh, broadcast: bh})
 	}
 	if v, ok := p.(HTTP); ok {
-		pluginv1.RegisterHTTPServiceServer(s, httpServer{impl: v})
+		pluginv1.RegisterHTTPServiceServer(s, httpServer{impl: v, runtime: rt})
 	}
 	if rk, ok := p.(AccountRanker); ok {
 		pluginv1.RegisterSchedulerServiceServer(s, schedulerServer{rank: rk})
@@ -181,23 +172,17 @@ func buildOptions(opts []Option) options {
 	return o
 }
 
-// Capabilities lists the capability ids p implements.
+// Capabilities lists the capability ids p implements. platform.tasks.v1
+// and platform.websocket.v1 are not among them: they are promises about
+// what Execute does on the endpoints of the manifest, reported when the
+// manifest declares them.
 func Capabilities(p any) []string {
 	var caps []string
-	if _, ok := p.(Executor); ok {
-		caps = append(caps, manifest.CapPlatformExecute)
-	}
-	if _, ok := p.(TaskMonitor); ok {
-		caps = append(caps, manifest.CapPlatformMonitor)
-	}
 	if _, ok := p.(Platform); ok {
 		caps = append(caps, manifest.CapPlatformAdapter)
 	}
-	if _, ok := p.(TaskSubmissionParser); ok {
-		caps = append(caps, manifest.CapPlatformTasks)
-	}
-	if _, ok := p.(Poller); ok {
-		caps = append(caps, manifest.CapPlatformPoll)
+	if _, ok := p.(TaskMonitor); ok {
+		caps = append(caps, manifest.CapPlatformMonitor)
 	}
 	if _, ok := p.(Hook); ok {
 		caps = append(caps, manifest.CapGatewayHook)
@@ -234,12 +219,12 @@ func Capabilities(p any) []string {
 type runtime struct {
 	pluginv1.UnimplementedPluginServiceServer
 
-	p             any
-	opts          options
-	dial          HostDialer
-	key, version  string
-	capabilities  []string
-	taskProtocols map[string]bool
+	p            any
+	execute      Executor // of a Platform
+	opts         options
+	dial         HostDialer
+	key, version string
+	capabilities []string
 
 	mu     sync.Mutex
 	host   *host
@@ -252,6 +237,13 @@ func newRuntime(p any, o options, dial HostDialer) (*runtime, error) {
 		return nil, errors.New("plugin is nil")
 	}
 	rt := &runtime{p: p, opts: o, dial: dial}
+	if platform, ok := p.(Platform); ok {
+		execute, err := executorOf(platform)
+		if err != nil {
+			return nil, err
+		}
+		rt.execute = execute
+	}
 	declared, err := rt.parseManifest()
 	if err != nil {
 		return nil, err
@@ -281,14 +273,6 @@ func (rt *runtime) parseManifest() (map[string]bool, error) {
 		return nil, fmt.Errorf("parse embedded manifest: %w", err)
 	}
 	rt.key, rt.version = m.Key, m.Version
-	rt.taskProtocols = map[string]bool{}
-	for _, platform := range m.Platforms {
-		for _, endpoint := range platform.Endpoints {
-			if endpoint.TaskSubmit() {
-				rt.taskProtocols[endpoint.Protocol] = true
-			}
-		}
-	}
 	declared = map[string]bool{}
 	for _, c := range m.Capabilities {
 		declared[c.ID] = true
@@ -324,23 +308,25 @@ func (rt *runtime) resolveIdentity() {
 // to the ones the manifest declares (all of them when it declares none), and
 // checks that each of them is backed by the interface it promises.
 func (rt *runtime) resolveCapabilities(declared map[string]bool) error {
+	_, platform := rt.p.(Platform)
 	for _, c := range Capabilities(rt.p) {
-		if declared == nil || declared[c] {
-			if c == manifest.CapPlatformExecute || c == manifest.CapPlatformMonitor {
-				if _, ok := rt.p.(Platform); !ok {
-					return fmt.Errorf("%s requires Platform", c)
-				}
-			}
-			rt.capabilities = append(rt.capabilities, c)
+		if declared != nil && !declared[c] {
+			continue
 		}
+		if c == manifest.CapPlatformMonitor && !platform {
+			return fmt.Errorf("%s requires Platform", c)
+		}
+		rt.capabilities = append(rt.capabilities, c)
 	}
-	// platform.websocket.v1 is a promise about BuildUpstreamRequest, not an
-	// extra service, so it is reported when the manifest declares it.
-	if declared[manifest.CapPlatformWebSocket] {
-		if _, ok := rt.p.(Platform); !ok {
-			return fmt.Errorf("%s requires Platform", manifest.CapPlatformWebSocket)
+	// Promises about Execute, not services of their own.
+	for _, c := range []string{manifest.CapPlatformTasks, manifest.CapPlatformWebSocket} {
+		if !declared[c] {
+			continue
 		}
-		rt.capabilities = append(rt.capabilities, manifest.CapPlatformWebSocket)
+		if !platform {
+			return fmt.Errorf("%s requires Platform", c)
+		}
+		rt.capabilities = append(rt.capabilities, c)
 	}
 	return nil
 }
@@ -410,12 +396,30 @@ func (rt *runtime) Configure(ctx context.Context, in *pluginv1.ConfigureRequest)
 		return &pluginv1.ConfigureResponse{}, nil
 	}
 	if err := c.Configure(ctx, configFromProto(in)); err != nil {
-		if fe, ok := AsFieldErrors(err); ok {
-			return &pluginv1.ConfigureResponse{Errors: fe}, nil
-		}
-		return &pluginv1.ConfigureResponse{Errors: []*pluginv1.FieldError{{Field: "", Code: "invalid", Message: err.Error()}}}, nil
+		return &pluginv1.ConfigureResponse{Errors: fieldErrorsOf(err)}, nil
 	}
 	return &pluginv1.ConfigureResponse{}, nil
+}
+
+func (rt *runtime) ValidateSettings(ctx context.Context, in *pluginv1.ValidateSettingsRequest) (*pluginv1.ValidateSettingsResponse, error) {
+	v, ok := rt.p.(SettingsValidator)
+	if !ok {
+		return nil, status.Error(codes.Unimplemented, "plugin does not validate its settings")
+	}
+	normalized, err := v.ValidateSettings(ctx, configFromProto(&pluginv1.ConfigureRequest{ConfigJson: in.GetConfigJson(), Grants: in.GetGrants()}))
+	if err != nil {
+		return &pluginv1.ValidateSettingsResponse{Errors: fieldErrorsOf(err)}, nil
+	}
+	return &pluginv1.ValidateSettingsResponse{NormalizedConfigJson: string(normalized)}, nil
+}
+
+// fieldErrorsOf is err as field errors: a FieldErrors value field by field,
+// any other error on the whole object.
+func fieldErrorsOf(err error) []*pluginv1.FieldError {
+	if fe, ok := AsFieldErrors(err); ok {
+		return fe
+	}
+	return []*pluginv1.FieldError{{Field: "", Code: "invalid", Message: err.Error()}}
 }
 
 func (rt *runtime) Health(ctx context.Context, _ *pluginv1.HealthRequest) (*pluginv1.HealthResponse, error) {
@@ -452,14 +456,12 @@ func (rt *runtime) Shutdown(ctx context.Context, _ *pluginv1.ShutdownRequest) (*
 type platformServer struct {
 	pluginv1.UnimplementedPlatformServiceServer
 	impl    Platform
+	execute Executor
 	runtime *runtime
 }
 
 func (s platformServer) ValidateCredentials(ctx context.Context, in *pluginv1.ValidateCredentialsRequest) (*pluginv1.ValidateCredentialsResponse, error) {
 	return s.impl.ValidateCredentials(ctx, in)
-}
-func (s platformServer) BuildUpstreamRequest(ctx context.Context, in *pluginv1.BuildUpstreamRequestRequest) (*pluginv1.BuildUpstreamRequestResponse, error) {
-	return s.impl.BuildUpstreamRequest(ctx, in)
 }
 func (s platformServer) ClassifyError(ctx context.Context, in *pluginv1.ClassifyErrorRequest) (*pluginv1.ClassifyErrorResponse, error) {
 	return s.impl.ClassifyError(ctx, in)
@@ -479,34 +481,6 @@ func (s platformServer) ResolveModel(ctx context.Context, in *pluginv1.ResolveMo
 		return r.ResolveModel(ctx, in)
 	}
 	return nil, status.Error(codes.Unimplemented, "this platform does not resolve models")
-}
-
-func (s platformServer) ExtractUsage(ctx context.Context, in *pluginv1.ExtractUsageRequest) (*pluginv1.UsageReport, error) {
-	if x, ok := s.impl.(UsageExtractor); ok {
-		return x.ExtractUsage(ctx, in)
-	}
-	return nil, status.Error(codes.Unimplemented, "this platform does not extract usage")
-}
-
-func (s platformServer) ParseTaskSubmission(ctx context.Context, in *pluginv1.ExtractUsageRequest) (*pluginv1.TaskSubmission, error) {
-	if p, ok := s.impl.(TaskSubmissionParser); ok {
-		return p.ParseTaskSubmission(ctx, in)
-	}
-	return nil, status.Error(codes.Unimplemented, "this platform does not parse task submissions")
-}
-
-func (s platformServer) BuildReconcileRequest(ctx context.Context, in *pluginv1.BuildReconcileRequestRequest) (*pluginv1.BuildReconcileRequestResponse, error) {
-	if r, ok := s.impl.(Reconciler); ok {
-		return r.BuildReconcileRequest(ctx, in)
-	}
-	return nil, status.Error(codes.Unimplemented, "this platform does not reconcile pre-charged entries")
-}
-
-func (s platformServer) ParseReconcileResponse(ctx context.Context, in *pluginv1.ParseReconcileResponseRequest) (*pluginv1.ReconcileResult, error) {
-	if r, ok := s.impl.(Reconciler); ok {
-		return r.ParseReconcileResponse(ctx, in)
-	}
-	return nil, status.Error(codes.Unimplemented, "this platform does not reconcile pre-charged entries")
 }
 
 func (s platformServer) BuildQuotaRequest(ctx context.Context, in *pluginv1.BuildQuotaRequestRequest) (*pluginv1.BuildQuotaRequestResponse, error) {
@@ -542,6 +516,20 @@ func (s platformServer) ParseRefreshResponse(ctx context.Context, in *pluginv1.P
 		return r.ParseRefreshResponse(ctx, in)
 	}
 	return nil, status.Error(codes.Unimplemented, "this account type cannot refresh its credentials")
+}
+
+func (s platformServer) BuildBalanceRequest(ctx context.Context, in *pluginv1.BuildBalanceRequestRequest) (*pluginv1.BuildBalanceRequestResponse, error) {
+	if b, ok := s.impl.(BalanceReader); ok {
+		return b.BuildBalanceRequest(ctx, in)
+	}
+	return nil, status.Error(codes.Unimplemented, "this account type cannot read its balance")
+}
+
+func (s platformServer) ParseBalanceResponse(ctx context.Context, in *pluginv1.ParseBalanceResponseRequest) (*pluginv1.ParseBalanceResponseResponse, error) {
+	if b, ok := s.impl.(BalanceReader); ok {
+		return b.ParseBalanceResponse(ctx, in)
+	}
+	return nil, status.Error(codes.Unimplemented, "this account type cannot read its balance")
 }
 
 type hookServer struct {
@@ -582,10 +570,22 @@ func (s appServer) OnEvents(ctx context.Context, in *pluginv1.OnEventsRequest) (
 
 type httpServer struct {
 	pluginv1.UnimplementedHTTPServiceServer
-	impl HTTP
+	impl    HTTP
+	runtime *runtime
 }
 
+// HandleHTTP binds the execution token of a console call to the handler's
+// context, so that Fetch works there (CONTRACTS §117); a call without one
+// (public, webhook) is served as it is.
 func (s httpServer) HandleHTTP(ctx context.Context, in *pluginv1.HTTPRequest) (*pluginv1.HTTPResponse, error) {
+	if in.GetExecutionToken() == "" {
+		return s.impl.HandleHTTP(ctx, in)
+	}
+	ctx, cancel, err := s.runtime.bindExecution(ctx, &execution{token: in.GetExecutionToken(), kind: kindHTTP})
+	if err != nil {
+		return nil, err
+	}
+	defer cancel()
 	return s.impl.HandleHTTP(ctx, in)
 }
 

@@ -25,7 +25,9 @@ export const BUILTIN_PLATFORMS: Platform[] = [
     endpoints: [
       ep('chat_completions', 'POST', '/v1/chat/completions', 'openai.chat'),
       ep('responses', 'POST', '/v1/responses', 'openai.responses'),
-      ep('embeddings', 'POST', '/v1/embeddings', 'openai.embeddings')
+      ep('embeddings', 'POST', '/v1/embeddings', 'openai.embeddings'),
+      ep('images_generations', 'POST', '/v1/images/generations', 'openai.images'),
+      ep('images_edits', 'POST', '/v1/images/edits', 'openai.images_edit')
     ]
   },
   {
@@ -76,13 +78,5 @@ export function usePlatforms() {
     return (p && lt(p.label)) || (fallback ? lt(fallback) : '') || id
   }
 
-  /** Endpoints of the given platforms, grouped by platform, unknown ids kept with no endpoints. */
-  function endpointsOf(ids: string[]): Array<{ id: string; endpoints: PlatformEndpoint[]; known: boolean }> {
-    return ids.map((id) => {
-      const p = find(id)
-      return { id, endpoints: p?.endpoints || [], known: !!p }
-    })
-  }
-
-  return { platforms, loaded, complete, load, find, label, endpointsOf }
+  return { platforms, loaded, complete, load, find, label }
 }

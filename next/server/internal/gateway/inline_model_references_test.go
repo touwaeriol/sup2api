@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/tidwall/gjson"
 )
@@ -29,7 +28,7 @@ func TestInlineAdvisorCoreAuthorizationPriceAndMapping(t *testing.T) {
 		if compacted {
 			label = "signed-compaction"
 		}
-		for _, mode := range []string{"allowed", "group-denied", "missing-price", "account-selection", "mapping", "patch"} {
+		for _, mode := range []string{"allowed", "group-denied", "missing-price", "account-selection", "mapping"} {
 			t.Run(label+"/"+mode, func(t *testing.T) {
 				e := pricedAdvisorEnv(t)
 				b, path := inlineAdvisorBody(compacted)
@@ -46,8 +45,6 @@ func TestInlineAdvisorCoreAuthorizationPriceAndMapping(t *testing.T) {
 					for _, id := range []int64{1, 2, 3} {
 						e.accounts.set(id, func(a *core.Account) { a.ModelMapping = map[string]string{advisorModel: upModel} })
 					}
-				case "patch":
-					e.plat.patches = []*pluginv1.BodyPatch{{Op: pluginv1.BodyPatch_OP_SET, Path: path, ValueJson: `"not-admitted"`}}
 				}
 				fixture, _ := json.Marshal(map[string]any{"id": "inline-model-test", "type": "message", "role": "assistant", "model": testModel, "content": []any{}, "stop_reason": "end_turn", "usage": map[string]any{"input_tokens": 5, "output_tokens": 1, "iterations": []any{map[string]any{"type": "advisor_message", "model": upModel, "input_tokens": 7, "output_tokens": 2}}}})
 				for _, key := range []string{"acc-1", "acc-2", "acc-3"} {
@@ -55,7 +52,7 @@ func TestInlineAdvisorCoreAuthorizationPriceAndMapping(t *testing.T) {
 				}
 				response := e.messages(b)
 				r := e.record()
-				rejected := mode == "group-denied" || mode == "missing-price" || mode == "patch" || mode == "mapping" && compacted
+				rejected := mode == "group-denied" || mode == "missing-price" || mode == "mapping" && compacted
 				if rejected {
 					if response.status == 200 || len(e.up.keys()) > 0 {
 						t.Fatalf("unauthorized inline invocation reached provider: %d %v", response.status, e.up.keys())

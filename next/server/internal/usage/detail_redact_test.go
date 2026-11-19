@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/require"
 
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
@@ -62,6 +63,8 @@ func TestWithoutExpressions(t *testing.T) {
 		`{"additional":[{"kind":"k","model":"m","expression_hash":"h","detail":{"tier":"t"}}],"replacement":[{"expression_hash":"h"},{"model":"m"}],` +
 			`"inputs":{"additional":[{"Kind":"k","Price":{"Expression":"p*2","ExprHash":"h"},"Tokens":{"Input":1},"Metrics":{"x":1}}],"replacement":[{"Price":{"ID":3}},{"Tokens":{}}]}}`: `{"additional":[{"kind":"k","model":"m","detail":{"tier":"t"}}],"replacement":[{},{"model":"m"}],` +
 			`"inputs":{"additional":[{"Kind":"k","Tokens":{"Input":1},"Metrics":{"x":1}}],"replacement":[{},{"Tokens":{}}]}}`,
+		// The detail of a component priced by a custom rule has the global price behind it too.
+		`{"additional":[{"detail":{"tier":"t","inputs":{"pricing":{"price_source":"group","base":{"expression":"p*3","expr_hash":"g"}}}}}],"replacement":[{"detail":{"inputs":{"pricing":{"base":{"expression":"p*4"}}}}}]}`: `{"additional":[{"detail":{"tier":"t","inputs":{"pricing":{"price_source":"group","base":{}}}}}],"replacement":[{"detail":{"inputs":{"pricing":{"base":{}}}}}]}`,
 		// Not JSON: nothing is shown rather than unredacted.
 		`{"inputs":`: ``,
 	} {
@@ -103,6 +106,32 @@ func TestSelfDetailHidesInternals(t *testing.T) {
 	require.Equal(t, d["price_id"], self["price_id"])
 	require.Equal(t, d["ledger_id"], self["ledger_id"])
 	require.Len(t, self["hook_decisions"], 1)
+}
+
+// A component priced by a group's custom rule keeps the global price behind
+// it in its own detail; the owner of the request does not see it.
+func TestSelfDetailHidesComponentGlobalPrice(t *testing.T) {
+	f := newFixture(t)
+	global := `tier("global-advisor-price", p*7)`
+	r := f.record("self-component-price", true)
+	r.Additional = []core.PricedUsage{{Kind: "advisor", Model: "other-model", UsageSemantics: "exclusive", Tokens: core.UsageTokens{Input: 1_000_000}, RateMultiplier: decimal.NewFromInt(1),
+		Price: &core.PriceRule{ID: 9, Expression: `tier("group-advisor-price", p*5)`, Mode: "expression", Source: core.PriceSourceGroup, Base: &core.PriceBase{Expression: global, ExprHash: "global-advisor-hash"}}}}
+	f.svc.process(t.Context(), []*core.UsageRecord{r})
+	id := f.scalar(`SELECT id::text FROM usage_logs WHERE request_id = 'self-component-price'`)
+	detail := func(path string) string {
+		t.Helper()
+		out, err := json.Marshal(f.get(f.user, path, 200)["data"].(map[string]any)["billing_detail"])
+		require.NoError(t, err)
+		return string(out)
+	}
+
+	require.Contains(t, detail("/usage/"+id), "global-advisor-price", "the operator view keeps it")
+	self := detail("/me/usage/" + id)
+	// The component's own breakdown (its tier and terms) stays, as the primary usage's does.
+	for _, hidden := range []string{"global-advisor-price", "global-advisor-hash"} {
+		require.NotContains(t, self, hidden)
+	}
+	require.Contains(t, self, `"total_cost"`, "what the component cost stays")
 }
 
 // redactForSelf also clears what the self branch never loads, so a later

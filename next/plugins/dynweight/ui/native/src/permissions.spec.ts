@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import type { PluginHost } from '@sub2api/host'
+// Compiled here, at collection: the first load of @sub2api/ui compiles its
+// whole source (seconds), which must not count against the timeout of the
+// first test importing a component. The tests still get fresh modules.
+import '@sub2api/ui'
 
 // An own-level viewer (account:read:own with dynweight:read, no group:read
 // or account:read) opens the account list: the plugin asks nothing the core

@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -13,116 +14,71 @@ import (
 	"github.com/stretchr/testify/require"
 
 	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
-	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
-	"github.com/Sub2API-Devs/sup2api/next/server/internal/billing"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
-	"github.com/Sub2API-Devs/sup2api/next/server/internal/testutil"
-	"github.com/Sub2API-Devs/sup2api/next/server/internal/usage"
 )
 
-type executeTestPlatform struct {
-	core.PlatformPlugin
-	beforeRecord func()
-	afterRecord  func(context.Context, core.ExecutionCallbacks, *pluginv1.ForwardUpstreamResponse) error
-	calls        atomic.Int64
-	deadline     atomic.Value // time.Time of the Execute context
-	// abort, closed, cancels the context of the plugin's Forward call, as a
-	// plugin that is killed or drained mid-answer does.
-	abort chan struct{}
+// The single request path (execute.go, waited.go) with fake plugins speaking
+// the Execute contract (fakeexec_test.go). The no-wait rows of the design's
+// gateway matrix (§14.2) that need a held stream are here; the plugin-usage
+// rows are in extractusage_test.go, the header and response framing rows in
+// upstream_ext_test.go, the WebSocket rows in websocket_test.go.
+
+// deadPlatform serves attempts like fakePlatform until dead is set; after
+// that any call into the plugin is a test failure, as for a process gone.
+type deadPlatform struct {
+	*fakePlatform
+	t    *testing.T
+	dead atomic.Bool
 }
 
-func (p *executeTestPlatform) Execute(ctx context.Context, in *pluginv1.ExecuteRequest, cb core.ExecutionCallbacks) (*pluginv1.ExecuteResponse, error) {
-	p.calls.Add(1)
-	if d, ok := ctx.Deadline(); ok {
-		p.deadline.Store(d)
+func (p *deadPlatform) Execute(ctx context.Context, in *pluginv1.ExecuteRequest, client core.ExecutionClient) (core.ExecutionResult, error) {
+	if p.dead.Load() {
+		p.t.Error("Execute called on a dead plugin")
+		return core.ExecutionResult{}, core.ErrPluginUnavailable
 	}
-	built, err := p.BuildUpstreamRequest(ctx, in.Request)
-	if err != nil {
-		return nil, err
-	}
-	fctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	if p.abort != nil {
-		go func() {
-			select {
-			case <-p.abort:
-				cancel()
-			case <-fctx.Done():
-			}
-		}()
-	}
-	out, err := cb.Forward(fctx, &pluginv1.ForwardUpstreamRequest{Request: built})
-	if err != nil {
-		return nil, err
-	}
-	if out.Error != nil {
-		cls, err := p.ClassifyError(ctx, out.Error)
-		return &pluginv1.ExecuteResponse{Classification: cls}, err
-	}
-	if p.beforeRecord != nil {
-		p.beforeRecord()
-	}
-	if out.TaskSubmission {
-		parsed, err := p.ParseTaskSubmission(ctx, out.Observation)
-		if err != nil {
-			return nil, err
-		}
-		_, err = cb.Watch(ctx, &pluginv1.ReserveAndWatchRequest{Task: parsed})
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		var report *pluginv1.UsageReport
-		if out.ExtractUsage {
-			report, err = p.ExtractUsage(ctx, out.Observation)
-			if err != nil {
-				return nil, err
-			}
-		}
-		_, err = cb.Record(ctx, &pluginv1.RecordUsageRequest{Report: report})
-		if err != nil {
-			return nil, err
-		}
-	}
-	if p.afterRecord != nil {
-		if err := p.afterRecord(ctx, cb, out); err != nil {
-			return nil, err
-		}
-	}
-	return &pluginv1.ExecuteResponse{}, nil
+	return fakeExecute(ctx, p.fakePlatform, in, client)
 }
 
-type brokenExecutionCommit struct{ *usage.Service }
-
-func (*brokenExecutionCommit) CommitExecution(context.Context, core.ExecutionCommit) (*pluginv1.ExecutionReceipt, error) {
-	return nil, errors.New("forced commit outage")
+func (p *deadPlatform) ClassifyError(ctx context.Context, in *pluginv1.ClassifyErrorRequest) (*pluginv1.ClassifyErrorResponse, error) {
+	if p.dead.Load() {
+		p.t.Error("ClassifyError called on a dead plugin")
+	}
+	return p.fakePlatform.ClassifyError(ctx, in)
 }
 
-func executeFixture(t *testing.T, svc core.Settler) (*env, *executeTestPlatform) {
-	var p *executeTestPlatform
+// No wait: once Execute returned with host_usage the exchange is the core's
+// alone. The plugin's process going away mid-stream changes nothing: the
+// stream completes, nothing is asked of the plugin, the usage is billed by
+// the rules, and no execution record exists.
+func TestExecuteNoWaitPluginGoneAfterHandOver(t *testing.T) {
+	hold := make(chan struct{})
+	var p *deadPlatform
 	e := newEnv(t, func(e *env) {
-		p = &executeTestPlatform{PlatformPlugin: e.plat}
+		p = &deadPlatform{fakePlatform: e.plat, t: t}
 		e.gen.accountTypes[0].Client = p
-		e.man.Capabilities = append(e.man.Capabilities, manifest.Capability{ID: manifest.CapPlatformExecute})
-		for i := range e.gen.endpoints {
-			e.gen.endpoints[i].Endpoint.Billing = "free"
-		}
 	})
-	e.gw.d.Settler = svc
-	return e, p
+	e.up.set("acc-1", &upstreamRule{hold: hold})
+	br, hangUp := openStream(t, e, "/v1/messages", body(testModel, true), nil, `"type":"message_start"`)
+	defer hangUp()
+	p.dead.Store(true)
+	close(hold)
+	rest, err := io.ReadAll(br)
+	require.NoError(t, err)
+	require.Contains(t, string(rest), "message_stop")
+	rec := e.record()
+	require.True(t, rec.Success)
+	require.EqualValues(t, upOutput, rec.Tokens.Output)
+	require.True(t, rec.Billable)
+	require.Empty(t, e.settler.executionStates(), "the no-wait path writes no execution record")
 }
 
-// Under a failure policy the HTTP error of an executed request is classified
-// by the plugin inside Execute, as ClassifyError is on the forwarding path:
-// the policy still decides retry and failover, and takes the plugin's timed
+// Under a failure policy the HTTP error of a waited relay is classified by
+// the plugin inside Execute, as ClassifyError is on the no-wait path: the
+// policy still decides retry and failover, and takes the plugin's timed
 // disable (CONTRACTS §69).
-func TestFailurePolicyExecuteTakesPluginClassification(t *testing.T) {
-	db := testutil.DB(t)
-	bill := billing.New(db, nil, nil, nil, nil)
-	svc := usage.New(db, bill, bill, nil, usage.Options{})
-	e, p := executeFixture(t, svc)
+func TestFailurePolicyWaitedTakesPluginClassification(t *testing.T) {
+	e, _ := waitedEnv(t, core.DisconnectPrecharge, &upstreamRule{status: 503})
 	e.setFailurePolicy(testFailurePolicy())
-	e.up.set("acc-1", &upstreamRule{status: 503})
 	reset := time.Now().Add(2 * time.Hour).Truncate(time.Second)
 	e.plat.classifyHook = func(_ *pluginv1.ClassifyErrorRequest, out *pluginv1.ClassifyErrorResponse) {
 		out.Action = pluginv1.ClassifyErrorResponse_ACTION_RETURN_TO_CLIENT // not the plugin's to decide
@@ -130,236 +86,271 @@ func TestFailurePolicyExecuteTakesPluginClassification(t *testing.T) {
 			Reason: "quota window full", Release: &pluginv1.AccountAutomaticState_UntilUnix{UntilUnix: reset.Unix()}}
 	}
 	require.Equal(t, 200, e.messages(body(testModel, false)).status)
-	require.Equal(t, int64(2), p.calls.Load())
 	require.Equal(t, []string{"acc-1", "acc-2"}, e.up.keys())
 	require.Len(t, e.plat.classify, 1)
 	require.Equal(t, "quota window full", e.accounts.disabled[1])
 }
 
-// The Execute RPC outlives the longest relay_timeout_seconds an attempt may use.
-func TestExecuteCapFollowsRelayTimeout(t *testing.T) {
-	db := testutil.DB(t)
-	bill := billing.New(db, nil, nil, nil, nil)
-	e, p := executeFixture(t, usage.New(db, bill, bill, nil, usage.Options{}))
+// A waited execution may span the upstream exchange: its context has no
+// deadline at all, whatever relay_timeout_seconds and the platform call
+// timeout say.
+func TestExecuteWaitedHasNoTimeLimit(t *testing.T) {
+	e, p := waitedEnv(t, core.DisconnectPrecharge, &upstreamRule{delay: 300 * time.Millisecond})
 	e.gw.d.Environment = fakeEnvironment{global: core.EnvironmentValues{core.EnvVarRelayTimeoutSeconds: 86400}}
-	start := time.Now()
-	require.Equal(t, 200, e.messages(body(testModel, false)).status)
-	require.WithinDuration(t, start.Add(30*time.Hour), p.deadline.Load().(time.Time), time.Minute)
+	gw := noQueueSettings()
+	gw.PlatformCallTimeoutMs = 100
+	e.setSettings(gw, StickySettings{})
+	r := e.messages(body(testModel, false))
+	require.Equal(t, 200, r.status, string(r.body))
+	require.Nil(t, p.deadline.Load(), "the waited Execute has a deadline")
+	require.True(t, e.record().Success)
 }
 
-func TestExecuteGatewayRecordBeforePublishAndAbortUnconfirmedSSE(t *testing.T) {
-	db := testutil.DB(t)
-	bill := billing.New(db, nil, nil, nil, nil)
-	svc := usage.New(db, bill, bill, nil, usage.Options{})
-	ctx := context.Background()
-	t.Run("non_stream_waits_for_commit", func(t *testing.T) {
-		e, p := executeFixture(t, svc)
-		entered := make(chan struct{})
-		release := make(chan struct{})
-		defer func() {
-			select {
-			case <-release:
-			default:
-				close(release)
-			}
-		}()
-		p.beforeRecord = func() { close(entered); <-release }
-		type response struct {
-			r   *http.Response
-			err error
-		}
-		done := make(chan response, 1)
-		go func() {
-			req, _ := http.NewRequest("POST", e.srv.URL+"/v1/messages", strings.NewReader(`{"model":"`+testModel+`","messages":[]}`))
+// A waited answer that is not an event stream is published only once its
+// facts are committed.
+func TestExecuteWaitedPublishesAfterCommit(t *testing.T) {
+	e, _ := waitedEnv(t, core.DisconnectPrecharge, nil)
+	entered, release := make(chan struct{}), make(chan struct{})
+	e.settler.commitErr = func(core.ExecutionCommit) error { close(entered); <-release; return nil }
+	done := make(chan result, 1)
+	go func() { done <- e.messages(body(testModel, false)) }()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the facts were not committed")
+	}
+	select {
+	case r := <-done:
+		t.Fatalf("published before the commit: %d %s", r.status, r.body)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	r := <-done
+	require.Equal(t, 200, r.status, string(r.body))
+	require.NotEmpty(t, r.json().Get("content.0.text").String())
+	require.True(t, e.record().Success)
+	require.Equal(t, []string{core.ExecutionStateCommitted}, e.settler.executionStates())
+	require.Len(t, e.up.keys(), 1)
+	e.noRecord()
+}
+
+// Facts that never commit leave the execution unreported: the held-back
+// answer is not published (503), a streamed one ends abruptly, the request
+// is not billed and its slots are released.
+func TestExecuteWaitedCommitFailureIsUnreported(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run(map[bool]string{false: "non-stream", true: "stream"}[stream], func(t *testing.T) {
+			e, _ := waitedEnv(t, core.DisconnectPrecharge, nil)
+			var commits atomic.Int64
+			e.settler.commitErr = func(core.ExecutionCommit) error { commits.Add(1); return errors.New("ledger down") }
+			raw, _ := json.Marshal(body(testModel, stream))
+			req, _ := http.NewRequest(http.MethodPost, e.srv.URL+"/v1/messages", strings.NewReader(string(raw)))
 			req.Header.Set("x-api-key", testKey)
-			r, err := http.DefaultClient.Do(req)
-			done <- response{r, err}
-		}()
-		select {
-		case <-entered:
-		case <-time.After(5 * time.Second):
-			t.Fatal("Execute did not reach Record")
-		}
-		select {
-		case r := <-done:
-			if r.r != nil {
-				r.r.Body.Close()
+			resp, err := http.DefaultClient.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			got, readErr := io.ReadAll(resp.Body)
+			if stream {
+				require.Error(t, readErr, "a streamed answer without facts must end abruptly: %s", got)
+			} else {
+				require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode, string(got))
+				require.NotContains(t, string(got), "hello", "the held-back answer was published")
 			}
-			t.Fatal("successful response published before record", r.err)
-		case <-time.After(40 * time.Millisecond):
-		}
-		close(release)
-		r := <-done
-		if r.err != nil {
-			t.Fatal(r.err)
-		}
-		defer r.r.Body.Close()
-		raw, err := io.ReadAll(r.r.Body)
-		if err != nil || r.r.StatusCode != 200 || len(raw) == 0 {
-			t.Fatal(r.r.StatusCode, string(raw), err)
-		}
-		var state string
-		if err = db.SQL.QueryRowContext(ctx, `SELECT state FROM plugin_executions WHERE request_id=$1`, r.r.Header.Get("X-Request-Id")).Scan(&state); err != nil || state != "committed" {
-			t.Fatal(state, err)
-		}
-		if p.calls.Load() != 1 || len(e.up.keys()) != 1 {
-			t.Fatal("execution replayed")
-		}
-		e.noRecord()
-	})
-	t.Run("unconfirmed_sse_aborts_and_releases_slots", func(t *testing.T) {
-		e, p := executeFixture(t, &brokenExecutionCommit{svc})
-		req, _ := http.NewRequest("POST", e.srv.URL+"/v1/messages", strings.NewReader(`{"model":"`+testModel+`","stream":true,"messages":[]}`))
-		req.Header.Set("x-api-key", testKey)
-		r, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer r.Body.Close()
-		raw, err := io.ReadAll(r.Body)
-		if len(raw) == 0 || err == nil {
-			t.Fatalf("unconfirmed SSE ended cleanly: %s / %v", raw, err)
-		}
-		if p.calls.Load() != 1 {
-			t.Fatal("SSE executed again")
-		}
-		e.slots.mu.Lock()
-		for key, n := range e.slots.inUse {
-			if n != 0 {
-				t.Errorf("leaked slot %s=%d", key, n)
+			require.Greater(t, commits.Load(), int64(1), "the commit is retried")
+			rec := e.record()
+			require.False(t, rec.Billable)
+			require.Equal(t, core.UsageErrorUnreported, rec.ErrorType)
+			require.Equal(t, []string{core.ExecutionStateUnreported}, e.settler.executionStates())
+			e.noRecord()
+			e.slots.mu.Lock()
+			defer e.slots.mu.Unlock()
+			for key, n := range e.slots.inUse {
+				require.Zero(t, n, "leaked slot %s", key)
 			}
-		}
-		e.slots.mu.Unlock()
-		var state string
-		if err = db.SQL.QueryRowContext(ctx, `SELECT state FROM plugin_executions WHERE request_id=$1`, r.Header.Get("X-Request-Id")).Scan(&state); err != nil || state != "observed" {
-			t.Fatal(state, err)
-		}
-		e.noRecord()
-	})
-	t.Run("upstream_error_still_classifies_and_fails_over", func(t *testing.T) {
-		e, p := executeFixture(t, svc)
-		e.up.set("acc-1", &upstreamRule{status: 429})
-		out := e.messages(body(testModel, false))
-		if out.status != 200 || p.calls.Load() != 2 || strings.Join(e.up.keys(), ",") != "acc-1,acc-2" {
-			t.Fatal(out.status, p.calls.Load(), e.up.keys())
-		}
-		e.noRecord()
-	})
+		})
+	}
 }
 
-func TestExecuteGatewayTaskUsesSingleWatchAndSharedSnapshot(t *testing.T) {
-	db := testutil.DB(t)
-	bill := billing.New(db, nil, nil, nil, nil)
-	svc := usage.New(db, bill, bill, nil, usage.Options{})
-	e, original := taskDraftEnv(t, svc, false)
-	p := &executeTestPlatform{PlatformPlugin: original}
-	for i := range e.gen.accountTypes {
-		if e.gen.accountTypes[i].Plugin.Key == "task-draft" {
-			e.gen.accountTypes[i].Client = p
-			e.gen.accountTypes[i].Plugin.Manifest.Capabilities = append(e.gen.accountTypes[i].Plugin.Manifest.Capabilities, manifest.Capability{ID: manifest.CapPlatformExecute})
-		}
+// An observation that cannot be stored leaves no execution record to own
+// the usage: the answer is not published, and the request's own free record
+// is submitted - nothing billed, and as a free record it releases the
+// precharge at once instead of at its expiry.
+func TestExecuteWaitedObservationNotStored(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run(map[bool]string{false: "non-stream", true: "stream"}[stream], func(t *testing.T) {
+			e, _ := waitedEnv(t, core.DisconnectPrecharge, nil)
+			e.settler.observeErr = errors.New("database down")
+			r := e.messages(body(testModel, stream))
+			if !stream {
+				require.Equal(t, http.StatusServiceUnavailable, r.status, string(r.body))
+				require.NotContains(t, string(r.body), "hello", "the held-back answer was published")
+			}
+			require.Equal(t, []string{core.ExecutionStateIntent}, e.settler.executionStates())
+			rec := e.record()
+			require.False(t, rec.Success)
+			require.False(t, rec.Billable, "a free record releases the precharge")
+			require.Nil(t, rec.Price)
+			require.Nil(t, rec.Reservation)
+			require.Equal(t, core.UsageTokens{}, rec.Tokens)
+			require.Equal(t, core.UsageErrorUnreported, rec.ErrorType)
+			require.Equal(t, core.UsageExtractUnreported, rec.UsageExtract)
+			e.noRecord()
+		})
 	}
-	e.gw.d.Settler = svc
-	out := e.do("/task-draft/videos", map[string]any{"model": testModel}, nil)
-	if out.status != 200 || !strings.HasPrefix(out.json().Get("id").String(), "s2task_") || p.calls.Load() != 1 {
-		t.Fatal(out.status, string(out.body), p.calls.Load())
-	}
-	bill2 := billing.New(db, nil, nil, nil, nil)
-	other, _ := taskDraftEnv(t, usage.New(db, bill2, bill2, nil, usage.Options{}), true)
-	if got := taskDraftGet(t, other, out.json().Get("id").String(), testKey); got.status != 200 {
-		t.Fatal(got.status, string(got.body))
-	}
-	e.noRecord()
 }
 
-func TestExecuteGatewayLargeCaptureAndRejectedReplayPreserveUsage(t *testing.T) {
-	db := testutil.DB(t)
-	bill := billing.New(db, nil, nil, nil, nil)
-	svc := usage.New(db, bill, bill, nil, usage.Options{})
-	e, original := usageEnvEP(t, pluginUsageRules(), func(ep *manifest.Endpoint) { ep.Billing = "free"; ep.UsageMaxBytes = 1 << 20 })
-	original.extract = func(_ context.Context, in *pluginv1.ExtractUsageRequest) (*pluginv1.UsageReport, error) {
-		if len(in.Body) < 600<<10 {
-			t.Error("valid large capture lost")
-		}
-		return report(100, 200), nil
-	}
-	p := &executeTestPlatform{PlatformPlugin: original}
-	for i := range e.gen.accountTypes {
-		if e.gen.accountTypes[i].Plugin.Key == "pu" {
-			e.gen.accountTypes[i].Client = p
-			e.gen.accountTypes[i].Plugin.Manifest.Capabilities = append(e.gen.accountTypes[i].Plugin.Manifest.Capabilities, manifest.Capability{ID: manifest.CapPlatformExecute})
-		}
-	}
-	p.afterRecord = func(ctx context.Context, cb core.ExecutionCallbacks, _ *pluginv1.ForwardUpstreamResponse) error {
-		if _, err := cb.Record(ctx, &pluginv1.RecordUsageRequest{Report: report(100, 200)}); err != nil {
-			return err
-		}
-		if _, err := cb.Record(ctx, &pluginv1.RecordUsageRequest{Report: report(9000, 9000)}); err == nil {
-			t.Error("conflicting replay accepted")
-		}
-		return nil
-	}
-	e.gw.d.Settler = svc
-	lim := newFakeLimiter()
-	e.gw.d.Limiter = lim
-	e.up.set("pu-9", &upstreamRule{status: 200, body: `{"padding":"` + strings.Repeat("x", 600<<10) + `"}`})
-	out := e.do("/pu/v1/chat", body(testModel, false), nil)
-	if out.status != 200 {
-		t.Fatal(out.status, string(out.body))
-	}
-	lim.mu.Lock()
-	got := lim.tokens[9]
-	lim.mu.Unlock()
-	if got != 300 {
-		t.Fatalf("TPM counted rejected or duplicate facts: %d", got)
-	}
-	var input, output int64
-	if err := db.SQL.QueryRowContext(context.Background(), `SELECT input_tokens,output_tokens FROM usage_logs WHERE request_id=$1`, out.header.Get("X-Request-Id")).Scan(&input, &output); err != nil || input != 100 || output != 200 {
-		t.Fatal(input, output, err)
-	}
-	e.noRecord()
+// A waited upstream error is classified by the plugin and fails over like
+// any other.
+func TestExecuteWaitedUpstreamErrorFailsOver(t *testing.T) {
+	e, _ := waitedEnv(t, core.DisconnectPrecharge, &upstreamRule{status: 429})
+	r := e.messages(body(testModel, false))
+	require.Equal(t, 200, r.status, string(r.body))
+	require.Equal(t, []string{"acc-1", "acc-2"}, e.up.keys())
+	require.Len(t, e.plat.classify, 1)
+	require.Contains(t, e.accounts.cooldowns, int64(1))
+	require.True(t, e.record().Success)
+	require.ElementsMatch(t, []string{core.ExecutionStateCommitted, core.ExecutionStateIntent}, e.settler.executionStates())
 }
 
-type commitCapture struct {
-	statsExecutionStore
-	commits chan *core.UsageRecord
-}
-
-func (s *commitCapture) CommitExecution(_ context.Context, in core.ExecutionCommit) (*pluginv1.ExecutionReceipt, error) {
-	s.commits <- cloneUsage(in.Record)
-	return &pluginv1.ExecutionReceipt{}, nil
-}
-
-// A plugin that executes the request commits usage inside the attempt, before
-// the gateway settles the sticky binding; the committed record still carries
-// the matched rule and the hit.
-func TestExecuteGatewayCommitCarriesSticky(t *testing.T) {
-	svc := &commitCapture{
-		statsExecutionStore: statsExecutionStore{fakeSettler: &fakeSettler{ch: make(chan *core.UsageRecord, 8)}},
-		commits:             make(chan *core.UsageRecord, 8),
-	}
-	e, _ := executeFixture(t, svc)
+// The commit happens inside the attempt, before the gateway settles the
+// sticky binding; the committed record still carries the matched rule and
+// the hit.
+func TestExecuteWaitedCommitCarriesSticky(t *testing.T) {
+	e, _ := waitedEnv(t, core.DisconnectPrecharge, nil)
 	e.enableSticky(onFailureFailover)
 	sess := withSession(body(testModel, false), "user_abc_account__session_exec")
-	next := func() *core.UsageRecord {
-		t.Helper()
-		select {
-		case r := <-svc.commits:
-			return r
-		case <-time.After(5 * time.Second):
-			t.Fatal("no committed usage")
-			return nil
-		}
-	}
 	require.Equal(t, 200, e.messages(sess).status)
-	first := next()
+	first := e.record()
 	require.Equal(t, "claude-code-session", first.StickyRule)
 	require.False(t, first.StickyHit)
 	require.Equal(t, 200, e.messages(sess).status)
-	second := next()
+	second := e.record()
 	require.Equal(t, "claude-code-session", second.StickyRule)
 	require.True(t, second.StickyHit)
 	require.Equal(t, 200, e.messages(body(testModel, false)).status)
-	require.Empty(t, next().StickyRule)
-	require.Empty(t, svc.ch)
+	require.Empty(t, e.record().StickyRule)
+	e.noRecord()
+}
+
+// ---------------------------------------------------------------- task submission
+
+// A task submission waits: the plugin's task is committed with the usage
+// record in one commit (operation watch), and the answer is published with
+// the public id in place of the upstream one.
+func TestExecuteTaskCommitsTheTask(t *testing.T) {
+	tasks := newFakeTasks()
+	e, p := taskDraftEnv(t, tasks, false)
+	r := e.do("/task-draft/videos", map[string]any{"model": testModel}, nil)
+	public := r.json().Get("id").String()
+	require.Equal(t, 200, r.status, string(r.body))
+	require.True(t, strings.HasPrefix(public, "s2task_"))
+	require.Equal(t, public, r.json().Get("data.id").String())
+	require.NotContains(t, string(r.body), "raw-video-id")
+	require.EqualValues(t, 1, p.parseCalls.Load())
+	require.True(t, e.record().Success)
+	e.noRecord()
+	e.settler.mu.Lock()
+	defer e.settler.mu.Unlock()
+	require.Len(t, e.settler.executions, 1)
+	for _, x := range e.settler.executions {
+		require.Equal(t, core.ExecutionStateCommitted, x.state)
+		require.Equal(t, core.ExecutionOpWatch, x.commit.Operation)
+		require.Equal(t, "raw-video-id", x.commit.Task.UpstreamID)
+		require.Equal(t, public, x.commit.Task.PublicID)
+		require.True(t, x.intent.TaskSubmit)
+	}
+}
+
+// Without a task the submission is not registered: the client gets an
+// error, the free record of a task failure is submitted (the execution is
+// left observed, never closed), and the request is never sent again.
+func TestExecuteTaskWithoutFacts(t *testing.T) {
+	for name, fail := range map[string]func(*taskDraftPlatform){
+		"parser error": func(p *taskDraftPlatform) { p.parseError = errors.New("unparseable") },
+		"no task":      func(p *taskDraftPlatform) { p.noTask = true },
+	} {
+		t.Run(name, func(t *testing.T) {
+			tasks := newFakeTasks()
+			e, p := taskDraftEnv(t, tasks, false)
+			fail(p)
+			r := e.do("/task-draft/videos", map[string]any{"model": testModel}, nil)
+			require.Equal(t, http.StatusServiceUnavailable, r.status, string(r.body))
+			require.Len(t, e.up.keys(), 1, "a task submission is never retried")
+			rec := e.record()
+			require.False(t, rec.Billable)
+			require.Nil(t, rec.Reservation)
+			require.Equal(t, []string{core.ExecutionStateObserved}, e.settler.executionStates())
+			e.noRecord()
+		})
+	}
+}
+
+// A task commit whose last try landed after the commit deadline (its answer
+// lost) is found committed before the submission is reported as failed: the
+// client gets the task. One that never landed is closed unreported: 503,
+// the execution's free record, the receipt marked failed.
+func TestExecuteTaskCommitTimeoutIsConfirmed(t *testing.T) {
+	if testing.Short() {
+		t.Skip("waits out the commit deadline")
+	}
+	for _, landed := range []bool{true, false} {
+		t.Run(map[bool]string{true: "landed", false: "lost"}[landed], func(t *testing.T) {
+			t.Parallel()
+			tasks := newFakeTasks()
+			e, _ := taskDraftEnv(t, tasks, false)
+			var calls atomic.Int32
+			e.settler.commitErr = func(core.ExecutionCommit) error {
+				if landed && calls.Add(1) == 1 {
+					return nil
+				}
+				return errors.New("database outage")
+			}
+			e.settler.commitAckLost = func(core.ExecutionCommit) error { return context.DeadlineExceeded }
+			r := e.do("/task-draft/videos", map[string]any{"model": testModel}, nil)
+			rec := e.record()
+			if landed {
+				require.Equal(t, 200, r.status, string(r.body))
+				require.True(t, strings.HasPrefix(r.json().Get("id").String(), "s2task_"), string(r.body))
+				require.True(t, rec.Success)
+				require.Equal(t, []string{core.ExecutionStateCommitted}, e.settler.executionStates())
+			} else {
+				require.Equal(t, http.StatusServiceUnavailable, r.status, string(r.body))
+				require.False(t, rec.Billable)
+				require.Equal(t, core.UsageErrorUnreported, rec.ErrorType)
+				require.Equal(t, []string{core.ExecutionStateUnreported}, e.settler.executionStates())
+			}
+			e.noRecord()
+			tasks.mu.Lock()
+			defer tasks.mu.Unlock()
+			for _, reason := range tasks.receipts {
+				require.Equal(t, !landed, reason != "", "receipt %q", reason)
+			}
+		})
+	}
+}
+
+// A task submission relayed without waiting carries no task: it is not
+// sent, and no account serves the request.
+func TestExecuteTaskRelayedWithoutWaitingIsNotSent(t *testing.T) {
+	e, p := taskDraftEnv(t, newFakeTasks(), false)
+	p.noWait = true
+	r := e.do("/task-draft/videos", map[string]any{"model": testModel}, nil)
+	require.NotEqual(t, 200, r.status, string(r.body))
+	require.Empty(t, e.up.keys())
+	require.Empty(t, e.accounts.cooldowns)
+	require.Empty(t, e.settler.executionStates())
+}
+
+// The upstream refusing the submission is returned to the client, never
+// failed over, with the plugin's classification.
+func TestExecuteTaskUpstreamRefusal(t *testing.T) {
+	e, p := taskDraftEnv(t, newFakeTasks(), false)
+	e.up.set("task-account-9", &upstreamRule{status: 400})
+	r := e.do("/task-draft/videos", map[string]any{"model": testModel}, nil)
+	require.Equal(t, 400, r.status, string(r.body))
+	require.Equal(t, []string{"task-account-9"}, e.up.keys())
+	require.Len(t, p.classify, 1)
+	rec := e.record()
+	require.False(t, rec.Success)
+	require.Equal(t, []string{core.ExecutionStateIntent}, e.settler.executionStates())
 }

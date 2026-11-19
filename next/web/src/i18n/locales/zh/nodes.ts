@@ -18,5 +18,19 @@ export default {
   gatewayVersion: '网关版本',
   unknownVersion: '未知',
   versionCounts: '核心 {core} · 网关 {gateway}',
-  mixedVersions: '各节点版本不一致'
+  mixedVersions: '各节点版本不一致',
+  sandbox: '插件沙箱',
+  sandboxAll: '全部生效',
+  sandboxOff: '未开启',
+  sandboxPartial: '缺 {n} 层',
+  sandboxActive: '生效',
+  sandboxMissing: '缺少',
+  sandboxLayers: {
+    fs: '文件（Linux 5.13）',
+    fs_truncate: '截断文件（Linux 6.2）',
+    tcp: 'TCP（Linux 6.7）',
+    scope: '抽象 unix socket 与信号（Linux 6.12）',
+    unix: '路径型 unix socket（Linux 7.1）',
+    udp: 'UDP（Linux 7.2）'
+  }
 }

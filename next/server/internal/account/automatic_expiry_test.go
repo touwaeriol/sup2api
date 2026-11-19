@@ -6,6 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
+	"github.com/redis/go-redis/v9"
+
 	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 )
@@ -115,4 +118,51 @@ func (e *env) accountStatus(id int64) string {
 		e.t.Fatal(err)
 	}
 	return status
+}
+
+// Resting is what Candidates leaves out for a while, from the same snapshot:
+// the accounts under a timed disable that has not run out and those cooling
+// down, of the types asked for. It reads no database, and fails when the
+// cooldowns cannot be read, where Candidates serves every account.
+func TestRestingAccounts(t *testing.T) {
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr(), MaxRetries: -1})
+	t.Cleanup(func() { _ = rdb.Close() })
+	s := New(Deps{Redis: rdb})
+	ref := func(id int64, typ string) core.AccountRef { return core.AccountRef{ID: id, PluginKey: "p", Type: typ} }
+	s.groups[7] = groupSnap{at: time.Now(), refs: []core.AccountRef{ref(1, "a"), ref(2, "a"), ref(3, "a"), ref(4, "a"), ref(5, "b")},
+		releases: map[int64]time.Time{2: time.Now().Add(time.Hour), 3: time.Now().Add(-time.Second)}}
+	for _, id := range []int64{4, 5} {
+		mr.Set(cooldownKey(id), "fixture")
+		mr.SetTTL(cooldownKey(id), time.Minute)
+	}
+	resting := func(types ...core.AccountTypeKey) []int64 {
+		t.Helper()
+		refs, err := s.Resting(t.Context(), 7, types)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids := make([]int64, len(refs))
+		for i, r := range refs {
+			ids[i] = r.ID
+		}
+		slices.Sort(ids)
+		return ids
+	}
+	if got := resting(); !slices.Equal(got, []int64{2, 4, 5}) {
+		t.Fatalf("resting %v", got)
+	}
+	if got := resting(core.AccountTypeKey{PluginKey: "p", Type: "a"}); !slices.Equal(got, []int64{2, 4}) {
+		t.Fatalf("resting of a type %v", got)
+	}
+	if got := candidateIDs(t, s, 7); !slices.Equal(got, []int64{1, 3}) {
+		t.Fatalf("candidates %v", got)
+	}
+	mr.Close()
+	if refs, err := s.Resting(t.Context(), 7, nil); err == nil {
+		t.Fatalf("resting without the cooldowns: %v", refs)
+	}
+	if got := candidateIDs(t, s, 7); !slices.Equal(got, []int64{1, 3, 4, 5}) {
+		t.Fatalf("candidates without the cooldowns %v", got)
+	}
 }

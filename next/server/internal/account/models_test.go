@@ -5,14 +5,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/tidwall/gjson"
 
+	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/netguard"
 )
@@ -214,9 +218,9 @@ func TestFetchModels(t *testing.T) {
 		out["data"].(map[string]any)["skipped"] != 2.0 {
 		t.Fatalf("type fetch: %d %v", code, out)
 	}
-	// Invalid credentials fail the schema before any upstream call.
+	// Credentials the plugin refuses fail before any upstream call.
 	if code, out = e.do("POST", "/account-types/anthropic/apikey/models/fetch", map[string]any{
-		"credentials": map[string]any{"api_key": "short"}}); code != 400 || fmt.Sprint(fieldsOf(out)) != "[credentials.api_key:minLength]" {
+		"credentials": map[string]any{"api_key": "sk-bad-key"}}); code != 400 || fmt.Sprint(fieldsOf(out)) != "[credentials.api_key:rejected]" {
 		t.Fatalf("type fetch validation: %d %v", code, out)
 	}
 	// Bad key: the upstream answers 401 -> 503 unavailable with the status.
@@ -250,6 +254,73 @@ func TestFetchModels(t *testing.T) {
 	if code, _ = e.do("POST", fmt.Sprintf("/accounts/%d/models/fetch", id), map[string]any{
 		"credentials": map[string]any{"api_key": "sk-wrong-key-123"}}); code != 503 {
 		t.Fatalf("account fetch with wrong key: %d", code)
+	}
+}
+
+// Before the account exists, the plugin's Account.proxy is the proxy the
+// form chose and the models request goes out through (a saved one by id, a
+// pasted URL with id 0), unset when the form chose none and the request goes
+// out directly; a chosen proxy that cannot be had fails before the plugin is
+// called, never going out directly.
+func TestTypeModelsFetchCarriesTheFormProxy(t *testing.T) {
+	e := setup(t)
+	host, port, hits := forwardProxy(t)
+	pid := e.exec1(`INSERT INTO proxies (name, protocol, host, port, username) VALUES ('p', 'http', $1, $2, 'bob') RETURNING id`, host, port)
+	const password = "form-proxy-pass"
+	built := func() []*pluginv1.BuildModelsRequestRequest {
+		e.plat.mu.Lock()
+		defer e.plat.mu.Unlock()
+		return slices.Clone(e.plat.models)
+	}
+	fetch := func(choice map[string]any) (int, *pluginv1.AccountProxy) {
+		t.Helper()
+		body := map[string]any{"credentials": map[string]any{"api_key": "sk-good-key-123"}}
+		maps.Copy(body, choice)
+		before := len(built())
+		code, raw := e.doRaw(e.uid, "POST", "/account-types/anthropic/apikey/models/fetch", body)
+		if strings.Contains(string(raw), password) {
+			t.Fatal("the response shows the proxy password")
+		}
+		calls := built()
+		if code != http.StatusOK {
+			if len(calls) != before {
+				t.Fatalf("plugin called although the fetch failed (%d)", code)
+			}
+			return code, nil
+		}
+		if len(calls) != before+1 || len(gjson.GetBytes(raw, "data.models").Array()) != 2 {
+			t.Fatalf("fetch %v: %d %s (builds %d -> %d)", choice, code, raw, before, len(calls))
+		}
+		return code, calls[len(calls)-1].GetAccount().GetProxy()
+	}
+
+	if _, p := fetch(nil); p != nil || hits.Load() != 0 {
+		t.Fatalf("no proxy chosen: plugin proxy set %t, proxy hits %d", p != nil, hits.Load())
+	}
+	if _, p := fetch(map[string]any{"proxy_id": pid}); p.GetId() != pid || p.GetProtocol() != "http" || p.GetHost() != host ||
+		int(p.GetPort()) != port || p.GetUsername() != "bob" || p.GetPassword() != "" || hits.Load() != 1 {
+		t.Fatalf("saved proxy chosen: plugin proxy id=%d %s:%d user=%q, proxy hits %d", p.GetId(), p.GetHost(), p.GetPort(), p.GetUsername(), hits.Load())
+	}
+	pasted := fmt.Sprintf("http://alice:%s@%s:%d", password, host, port)
+	if _, p := fetch(map[string]any{"proxy_url": pasted}); p == nil || p.GetId() != 0 || p.GetProtocol() != "http" || p.GetHost() != host ||
+		int(p.GetPort()) != port || p.GetUsername() != "alice" || p.GetPassword() != password || hits.Load() != 2 {
+		t.Fatalf("pasted proxy chosen: plugin proxy id=%d %s:%d user=%q password matches %t, proxy hits %d",
+			p.GetId(), p.GetHost(), p.GetPort(), p.GetUsername(), p.GetPassword() == password, hits.Load())
+	}
+
+	if code, _ := fetch(map[string]any{"proxy_url": "ftp://x:1"}); code == http.StatusOK || hits.Load() != 2 {
+		t.Fatalf("invalid pasted proxy: %d, proxy hits %d", code, hits.Load())
+	}
+	if code, _ := fetch(map[string]any{"proxy_id": pid + 1000}); code == http.StatusOK || hits.Load() != 2 {
+		t.Fatalf("missing proxy_id: %d, proxy hits %d", code, hits.Load())
+	}
+
+	if _, err := e.db.SQL.ExecContext(t.Context(), `UPDATE proxies SET status = 'disabled', updated_at = clock_timestamp() WHERE id = $1`, pid); err != nil {
+		t.Fatal(err)
+	}
+	e.prx.Invalidate(pid)
+	if code, _ := fetch(map[string]any{"proxy_id": pid}); code == http.StatusOK || hits.Load() != 2 {
+		t.Fatalf("disabled proxy chosen: %d, proxy hits %d", code, hits.Load())
 	}
 }
 

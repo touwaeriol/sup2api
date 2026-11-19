@@ -1,9 +1,6 @@
 package moderation
 
 import (
-	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -30,22 +27,10 @@ func TestBlockMessageDefault(t *testing.T) {
 	}
 }
 
-// The form shows the schema default (JSON cannot use the Go constant): the two
-// stay the same.
-func TestBlockMessageSchemaDefault(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("..", "..", "forms", "settings.schema.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var schema struct {
-		Properties map[string]struct {
-			Default any `json:"default"`
-		} `json:"properties"`
-	}
-	if err := json.Unmarshal(raw, &schema); err != nil {
-		t.Fatal(err)
-	}
-	if got := schema.Properties["block_message"].Default; got != DefaultBlockMessage {
-		t.Fatalf("schema default = %q, want %q", got, DefaultBlockMessage)
+// The default the settings form showed (forms/settings.schema.json, removed
+// in 0.12.2) and the settings pages show (settingsForm.ts): unchanged.
+func TestBlockMessageFormDefault(t *testing.T) {
+	if DefaultBlockMessage != "Your request was blocked by content moderation. Please revise your input and try again." {
+		t.Fatalf("DefaultBlockMessage = %q", DefaultBlockMessage)
 	}
 }

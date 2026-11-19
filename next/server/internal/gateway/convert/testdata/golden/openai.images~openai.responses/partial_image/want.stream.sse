@@ -1,0 +1,6 @@
+event: image_generation.partial_image
+data: {"b64_json":"cGFydGlhbA==","background":"opaque","created_at":0,"output_format":"png","partial_image_index":0,"quality":"low","size":"1024x1536","type":"image_generation.partial_image"}
+
+event: image_generation.completed
+data: {"b64_json":"iVBORw0KGgoAAAANSUhEUgAAAAE=","background":"opaque","created_at":0,"output_format":"png","quality":"low","size":"1024x1536","type":"image_generation.completed","usage":{"input_tokens":56,"input_tokens_details":{"image_tokens":0,"text_tokens":56},"output_tokens":343,"output_tokens_details":{"image_tokens":343,"text_tokens":0},"total_tokens":399}}
+

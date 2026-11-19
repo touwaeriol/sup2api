@@ -81,7 +81,7 @@ const resourceItems = computed(() => {
   const cpu = pick<number>(r, 'cpu')
   const threads = pick<number>(r, 'maxProcs', 'max_threads', 'maxThreads')
   const files = pick<number>(r, 'maxOpenFiles', 'max_open_files')
-  if (mem !== undefined) out.push({ label: t('plugins.resources.memory'), value: formatBytes(Number(mem) * 1024 * 1024) })
+  if (mem !== undefined) out.push({ label: t('plugins.resources.memorySuggested'), value: formatBytes(Number(mem) * 1024 * 1024) })
   if (cpu !== undefined) out.push({ label: t('plugins.resources.cpu'), value: t('plugins.resources.cores', { n: cpu }) })
   if (threads !== undefined) out.push({ label: t('plugins.resources.threads'), value: String(threads) })
   if (files !== undefined) out.push({ label: t('plugins.resources.files'), value: String(files) })

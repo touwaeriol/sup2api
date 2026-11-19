@@ -1,36 +1,40 @@
 package volcengine
 
 // Upstream calls of the asset library: the Ark control-plane OpenAPI, signed
-// with volcengine V4 (arksign.go) and sent through the host egress tunnel.
+// with volcengine V4 (arksign.go) by the plugin and sent by the core.
 //
 // The official Volcengine Go SDK used to do this and was removed; arksign.go's
 // header says why, and what replaced the assurance it gave.
 //
 // TWO THINGS THIS FILE HAS TO GET RIGHT
 //
-//  1. Egress. A plugin in strict network mode cannot open a socket itself;
-//     every connection has to be dialled through the host tunnel
-//     (sdk/pluginsdk/egress). The client below carries a Transport whose
-//     DialContext is the egress dialler. NOTHING in this file may use
-//     http.DefaultClient or build a Transport of its own.
+//  1. The core sends. The plugin opens no connection: it signs the request
+//     and hands its method, URL, headers and body to
+//     pluginsdk.SendAccountRequest, which sends them as they are for the
+//     account, through the account's proxy (CONTRACTS §91, §112.17). The
+//     URL's host has to be one the manifest allows for the account: the
+//     default control plane is in externalServices, an endpoint the operator
+//     entered is in the type's upstreamFields (asset_base_url, and for a
+//     relay asset_endpoint or the base_url it is resolved against).
+//     NOTHING in this file may open a socket or build an HTTP client.
 //
 //  2. Cancellation. Every request carries the caller's context, so a console
 //     request that goes away takes its upstream call with it. This is the
 //     defect §10.3 recorded against the vendor SDK: universal.DoCall had no
 //     context parameter, so an abandoned request kept a goroutine and a socket
-//     until the client timeout - and this plugin is allowed 128 open files.
+//     until the client timeout.
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
+
+	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
 )
 
 // Actions of the asset library OpenAPI (ServiceName ark, Version
@@ -57,10 +61,6 @@ var AssetActions = []string{
 	ActionCreateAsset, ActionGetAsset, ActionListAssets, ActionUpdateAsset, ActionDeleteAsset,
 }
 
-// assetCallTimeout bounds one upstream Action (all attempts together) when the
-// caller's context has no earlier deadline.
-const assetCallTimeout = 30 * time.Second
-
 // assetMaxAttempts is how many times one Action may be sent. Retries cover a
 // transport error, a 429 and a 5xx; see retryableAction for the Actions that
 // are never retried at all.
@@ -70,55 +70,23 @@ const assetMaxAttempts = 3
 // console request, so the ladder is short on purpose.
 const assetRetryDelay = 200 * time.Millisecond
 
-// assetMaxResponseBody caps what is read back. A control-plane answer is a
-// small JSON document; anything larger is not one, and reading it into the
-// plugin's 64 MiB would be the wrong way to find that out.
-const assetMaxResponseBody = 1 << 20 // 1 MiB
-
 // assetContentType is both sent and signed. The charset is part of it because
 // that is what the value has to be byte-identical to on both sides.
 const assetContentType = "application/json; charset=utf-8"
 
-// DialFunc opens a TCP connection. In production it is egress.DialContext
-// (the host tunnel); tests pass their own.
-type DialFunc func(ctx context.Context, network, address string) (net.Conn, error)
+// sendFunc has the core send one request for an account: in production
+// pluginsdk.SendAccountRequest on the plugin's host.
+type sendFunc func(ctx context.Context, in *pluginv1.SendAccountRequestRequest) (*pluginv1.ExecutionHTTPResponse, error)
 
 // arkAPI calls the asset library OpenAPI. One instance per plugin, the
 // account's credentials are passed per call.
 type arkAPI struct {
-	transport *http.Transport
+	send sendFunc
 	// now is time.Now in production; the signature tests fix it.
 	now func() time.Time
 }
 
-// newArkAPI builds the upstream caller over dial. A nil dial means "no
-// outbound network configured", and every call fails with a clear error
-// rather than falling back to a direct socket the sandbox would kill.
-func newArkAPI(dial DialFunc) *arkAPI {
-	a := &arkAPI{now: time.Now}
-	if dial == nil {
-		return a
-	}
-	a.transport = &http.Transport{
-		// The host resolves names and applies the egress policy, so no proxy
-		// from the environment and no local DNS.
-		Proxy:                 nil,
-		DialContext:           dial,
-		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          8,
-		MaxIdleConnsPerHost:   4,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ExpectContinueTimeout: time.Second,
-	}
-	return a
-}
-
-func (a *arkAPI) close() {
-	if a.transport != nil {
-		a.transport.CloseIdleConnections()
-	}
-}
+func newArkAPI(send sendFunc) *arkAPI { return &arkAPI{send: send, now: time.Now} }
 
 // ArkError is a failed upstream Action. Status is 0 for transport errors;
 // Code and Message come from the volcengine ResponseMetadata.Error.
@@ -194,10 +162,6 @@ func (a *arkAPI) call(ctx context.Context, cfg *AssetConfig, action string, body
 	if !knownAction(action) {
 		return nil, &ArkError{Action: action, Code: "InvalidAction", Message: "unsupported asset library action"}
 	}
-	if a.transport == nil {
-		return nil, &ArkError{Action: action, Code: "EgressUnavailable",
-			Message: "the plugin has no outbound network: the asset library needs the \"net\" grant"}
-	}
 	if err := ctx.Err(); err != nil {
 		return nil, &ArkError{Action: action, Code: "Canceled", Message: err.Error()}
 	}
@@ -205,11 +169,8 @@ func (a *arkAPI) call(ctx context.Context, cfg *AssetConfig, action string, body
 	if err != nil {
 		return nil, &ArkError{Action: action, Code: "InternalError", Message: "cannot encode the request: " + err.Error()}
 	}
-	// One budget for the whole Action, retries included, so a retry ladder can
-	// never outlive the console request that started it.
-	ctx, cancel := context.WithTimeout(ctx, assetCallTimeout)
-	defer cancel()
-
+	// The Action, retries included, ends with the console request that
+	// started it: ctx is that request's context.
 	attempts := 1
 	if retryableAction(action) {
 		attempts = assetMaxAttempts
@@ -252,7 +213,9 @@ func contextError(action string, ctx context.Context, last *ArkError) *ArkError 
 	return &ArkError{Action: action, Code: "Canceled", Message: msg}
 }
 
-// attempt sends the Action once.
+// attempt sends the Action once: signed here, sent by the core for the
+// account. What the core is handed is what goes upstream - it adds no header
+// the signature covers and follows no redirect.
 func (a *arkAPI) attempt(ctx context.Context, cfg *AssetConfig, action string, payload []byte) (map[string]any, *ArkError) {
 	u, err := url.Parse(cfg.BaseURL)
 	if err != nil || u.Scheme == "" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
@@ -262,27 +225,30 @@ func (a *arkAPI) attempt(ctx context.Context, cfg *AssetConfig, action string, p
 		u.Path = "/"
 	}
 	u.RawQuery = url.Values{"Action": {action}, "Version": {AssetAPIVersion}}.Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(payload))
+	req, err := http.NewRequest(http.MethodPost, u.String(), bytes.NewReader(payload))
 	if err != nil {
 		return nil, &ArkError{Action: action, Code: "InternalError", Message: err.Error()}
 	}
 	req.Header.Set("Content-Type", assetContentType)
 	req.Header.Set("Accept", "application/json")
 	signV4(req, payload, cfg.AccessKey, cfg.SecretKey, cfg.Region, AssetServiceName, a.now())
+	headers := make(map[string]string, len(req.Header))
+	for name := range req.Header {
+		headers[name] = req.Header.Get(name)
+	}
 
-	resp, err := (&http.Client{Transport: a.transport}).Do(req)
+	resp, err := a.send(ctx, &pluginv1.SendAccountRequestRequest{
+		AccountId: cfg.AccountID, Method: req.Method, Url: req.URL.String(), Headers: headers, Body: payload,
+	})
+	// Neither text can carry a credential: the AK/SK only ever appear in the
+	// Authorization header, which is in neither.
 	if err != nil {
-		// The error text can carry the URL but never a credential: the AK/SK
-		// only ever appear in the Authorization header, which is not in it.
-		return nil, &ArkError{Action: action, Code: "TransportError", Message: err.Error()}
+		return nil, &ArkError{Action: action, Code: "TransportError", Message: "the host did not send the request: " + err.Error()}
 	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, assetMaxResponseBody))
-	if err != nil {
-		return nil, &ArkError{Action: action, Status: resp.StatusCode, Code: "TransportError",
-			Message: "cannot read the response: " + err.Error()}
+	if msg := resp.GetTransportError(); msg != "" {
+		return nil, &ArkError{Action: action, Code: "TransportError", Message: msg}
 	}
-	return parseArkEnvelope(action, resp.StatusCode, raw)
+	return parseArkEnvelope(action, int(resp.GetStatus()), resp.GetBody())
 }
 
 // parseArkEnvelope reads the {ResponseMetadata, Result} answer.

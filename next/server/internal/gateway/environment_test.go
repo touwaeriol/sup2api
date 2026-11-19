@@ -3,7 +3,6 @@ package gateway
 import (
 	"context"
 	"io"
-	"strings"
 	"testing"
 	"time"
 
@@ -77,29 +76,6 @@ func TestIdleBodyCountsOnlyUpstreamWaits(t *testing.T) {
 	_, err = b.Read(buf) // the upstream sends nothing
 	require.ErrorIs(t, err, errStreamIdleTimeout)
 	require.ErrorIs(t, context.Cause(ctx), errStreamIdleTimeout)
-}
-
-// max_request_body_mb replaces the default of an endpoint that declares no
-// limit, and only raises one the endpoint declares.
-func TestEnvironmentRequestBodyLimit(t *testing.T) {
-	e := newEnv(t, withEnvironment(nil, core.EnvironmentValues{core.EnvVarMaxRequestBodyMB: 1}))
-	big := body(testModel, false, "pad", strings.Repeat("x", 1<<20))
-	r := e.messages(big)
-	require.Equal(t, 413, r.status, "1 MB replaces the 128 MB default: %s", r.body)
-
-	e.gen.endpoints[0].Endpoint.Request.MaxBodyBytes = 64
-	e.gw.table.Store(buildRouteTable(e.gen))
-	r = e.messages(body(testModel, false, "pad", strings.Repeat("x", 200)))
-	require.Equal(t, 200, r.status, "1 MB raises the endpoint's 64 bytes")
-	e.record()
-	r = e.messages(big)
-	require.Equal(t, 413, r.status)
-
-	e.gen.endpoints[0].Endpoint.Request.MaxBodyBytes = 4 << 20
-	e.gw.table.Store(buildRouteTable(e.gen))
-	r = e.messages(big)
-	require.Equal(t, 200, r.status, "1 MB does not lower the endpoint's 4 MB: %s", r.body)
-	e.record()
 }
 
 // A timeout that cuts a stream mid-way is named in the usage record.

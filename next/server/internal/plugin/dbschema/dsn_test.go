@@ -2,27 +2,15 @@ package dbschema
 
 import "testing"
 
-func TestRewriteDSN(t *testing.T) {
-	got, err := rewriteDSN("postgres://host:pw@db:5432/app?sslmode=disable", "plg_x", "p/w+=", "plg_x")
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := "postgres://plg_x:p%2Fw+=@db:5432/app?options=-c%20search_path%3Dplg_x&sslmode=disable"
-	if got != want {
-		t.Fatalf("got %s\nwant %s", got, want)
-	}
-	got, _ = rewriteDSN("host=db user=app password=secret dbname=app", "plg_x", "a'b", "plg_x")
-	want = `host=db user=app password=secret dbname=app user='plg_x' password='a\'b' options='-c search_path=plg_x'`
-	if got != want {
-		t.Fatalf("got %s\nwant %s", got, want)
-	}
-	got, _ = rewriteDSN("postgres://app:secret@db/app", "", "", "plg_x")
-	if got != "postgres://app:secret@db/app?options=-c%20search_path%3Dplg_x" {
-		t.Fatalf("host credentials: %s", got)
-	}
-	// The other parameters stay.
-	got, _ = rewriteDSN("postgres://app:secret@db/app?sslmode=require", "plg_x", "pw", "plg_x")
-	if got != "postgres://plg_x:pw@db/app?options=-c%20search_path%3Dplg_x&sslmode=require" {
-		t.Fatalf("other parameters: %s", got)
+func TestSchemaDSN(t *testing.T) {
+	for dsn, want := range map[string]string{
+		"postgres://app:secret@db:5432/app?sslmode=disable": "postgres://app:secret@db:5432/app?options=-c%20search_path%3Dplg_x&sslmode=disable",
+		"postgres://app:secret@db/app":                      "postgres://app:secret@db/app?options=-c%20search_path%3Dplg_x",
+		"host=db user=app password=secret dbname=app":       "host=db user=app password=secret dbname=app options='-c search_path=plg_x'",
+	} {
+		got, err := schemaDSN(dsn, "plg_x")
+		if err != nil || got != want {
+			t.Fatalf("schemaDSN(%s) = %s, %v\nwant %s", dsn, got, err, want)
+		}
 	}
 }

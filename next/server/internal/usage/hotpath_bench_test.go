@@ -176,7 +176,7 @@ func BenchmarkHotExecution(b *testing.B) {
 	}
 	begin := func(rec *core.UsageRecord) error {
 		return s.svc.BeginExecution(ctx, core.ExecutionIntent{ID: rec.RequestID, RequestID: rec.RequestID,
-			PluginKey: rec.PluginKey, AccountID: *rec.AccountID, Attempt: 1, Record: rec})
+			PluginKey: rec.PluginKey, AccountID: *rec.AccountID, Attempt: 1})
 	}
 	observe := func(rec *core.UsageRecord) error {
 		return s.svc.ObserveExecution(ctx, rec.RequestID, rec, []byte("bounded observation"))
@@ -199,7 +199,7 @@ func BenchmarkHotExecution(b *testing.B) {
 	b.Run("observe", func(b *testing.B) { benchEach(b, then(begin), observe) })
 	b.Run("commit", func(b *testing.B) {
 		benchEach(b, then(begin, observe), func(rec *core.UsageRecord) error {
-			_, err := s.svc.CommitExecution(ctx, core.ExecutionCommit{ID: rec.RequestID, Operation: "usage",
+			err := s.svc.CommitExecution(ctx, core.ExecutionCommit{ID: rec.RequestID, Operation: core.ExecutionOpUsage,
 				Digest: strings.Repeat("0", 64), Record: rec})
 			return err
 		})
@@ -207,8 +207,9 @@ func BenchmarkHotExecution(b *testing.B) {
 }
 
 // The task endpoints: BeginTask's receipt before a submission goes
-// upstream, ReceiveTask's write of the answer, RegisterTask (the usage row
-// and recordTask in one transaction) before the client gets its public ID,
+// upstream, ReceiveTask's write of the answer, the commit of the
+// submission's execution (the usage row and recordTask in one transaction)
+// before the client gets its public ID,
 // and FindTask for every poll of a client.
 func BenchmarkHotTask(b *testing.B) {
 	s := newBenchSettler(b)
@@ -233,7 +234,7 @@ func BenchmarkHotTask(b *testing.B) {
 			return reg
 		}
 	}
-	var publicID string // BeginTask's, which RegisterTask takes
+	var publicID string // BeginTask's, which the commit registers
 	begin := func(reg core.TaskRegistration) (err error) {
 		r := reg.Record
 		publicID, err = s.svc.BeginTask(ctx, core.TaskIntent{RequestID: r.RequestID, PluginKey: r.PluginKey, Kind: reg.Kind,
@@ -243,15 +244,18 @@ func BenchmarkHotTask(b *testing.B) {
 	receive := func(reg core.TaskRegistration) error {
 		return s.svc.ReceiveTask(ctx, reg.Record.RequestID, 200, reg.Snapshot, "")
 	}
-	register := func(reg core.TaskRegistration) error {
+	var commit core.ExecutionCommit // observe's, which register commits
+	observe := func(reg core.TaskRegistration) (err error) {
 		reg.PublicID = publicID
-		return s.svc.RegisterTask(ctx, reg)
+		commit, err = observeTask(s.svc, reg)
+		return err
 	}
+	register := func(core.TaskRegistration) error { return s.svc.CommitExecution(ctx, commit) }
 	b.Run("begin", func(b *testing.B) { benchEach(b, submission(), begin) })
 	b.Run("receive", func(b *testing.B) { benchEach(b, submission(begin), receive) })
-	b.Run("register", func(b *testing.B) { benchEach(b, submission(begin, receive), register) })
+	b.Run("register", func(b *testing.B) { benchEach(b, submission(begin, receive, observe), register) })
 	b.Run("find", func(b *testing.B) {
-		reg := submission(begin, receive, register)(0)
+		reg := submission(begin, receive, observe, register)(0)
 		q := core.TaskQuery{ID: publicID, PluginKey: reg.Record.PluginKey, Kind: reg.Kind, UserID: s.user, GroupID: s.group}
 		benchEach(b, func(int) core.TaskQuery { return q }, func(q core.TaskQuery) error {
 			_, err := s.svc.FindTask(ctx, q)

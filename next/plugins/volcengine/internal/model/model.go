@@ -11,7 +11,7 @@ package model
 import "time"
 
 // All lists every model, for sub2api-plugin db.
-func All() []any { return []any{&AssetGroup{}, &Asset{}, &VideoTask{}} }
+func All() []any { return []any{&AssetGroup{}, &Asset{}} }
 
 // AssetGroup indexes an Ark asset group of an account (upstream is the
 // truth; see migrations/0001_init.sql).
@@ -50,18 +50,3 @@ type Asset struct {
 }
 
 func (Asset) TableName() string { return "assets" }
-
-// VideoTask points a Seedance task id at the account, model and user that
-// created it (see migrations/0002_video_tasks.sql).
-type VideoTask struct {
-	TaskID    string    `gorm:"primaryKey"`
-	AccountID int64     `gorm:"not null"`
-	Model     string    `gorm:"not null;default:''"`
-	UserID    int64     `gorm:"not null;default:0"`
-	State     string    `gorm:"not null;default:'running'"` // running | done | failed
-	EstTokens int64     `gorm:"not null;default:0"`
-	CreatedAt time.Time `gorm:"not null;default:now();autoCreateTime:false"`
-	UpdatedAt time.Time `gorm:"not null;default:now();autoUpdateTime:false"`
-}
-
-func (VideoTask) TableName() string { return "video_tasks" }

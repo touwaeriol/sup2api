@@ -72,13 +72,28 @@ func (c *call) skipAccount(id int64, reason, detail string) {
 	t.skips = append(t.skips, core.SchedulingSkip{AccountID: id, Reason: reason, Detail: truncateUTF8(detail, maxSchedDetail)})
 }
 
-// ineligibleReason says why ref cannot serve this request whatever its load:
-// the reason candidateEligible and creditAccountAllowed refuse it for, in
-// their order. ok is true when neither does.
+// protocolSchedReason reports whether reason is one an account's protocol
+// binding leaves a request out for (core.ProtocolRules.Serves).
+func protocolSchedReason(reason string) bool {
+	switch reason {
+	case core.SchedProtocolClosed, core.SchedConversionNotEnabled, core.SchedModelProtocolClosed:
+		return true
+	}
+	return false
+}
+
+// ineligibleReason says why ref cannot serve this request whatever its load;
+// ok is true when it can. It is the one test of that for the first pick, a
+// refreshed snapshot and a later turn of a WebSocket (candidateEligible), and
+// only compares what the snapshot holds: an account it refuses is not
+// converted for, checked for availability, bound or counted as an attempt.
 func (c *call) ineligibleReason(ref *core.AccountRef) (reason, detail string, ok bool) {
 	rt := c.route(ref)
 	if rt == nil {
 		return core.SchedNoRoute, ref.PluginKey + "/" + ref.Type, false
+	}
+	if reason, detail, ok := c.protocolClosedReason(ref, rt); !ok {
+		return reason, detail, false
 	}
 	if !ref.ServesModel(c.model) {
 		return core.SchedModelNotServed, c.model, false
@@ -98,6 +113,72 @@ func (c *call) ineligibleReason(ref *core.AccountRef) (reason, detail string, ok
 		}
 	}
 	return "", "", true
+}
+
+// protocolClosedReason says why the account's protocol binding leaves the
+// request out: the client endpoint's protocol, reached over rt, is not one
+// the account serves the request's model, or a model it references, on.
+func (c *call) protocolClosedReason(ref *core.AccountRef, rt *typeRoute) (reason, detail string, ok bool) {
+	model := c.model
+	reason, ok = ref.ProtocolRules.Serves(model, c.ep.Protocol, rt.cross)
+	for i := 0; ok && i < len(c.modelRefs); i++ {
+		model = c.modelRefs[i].model
+		reason, ok = ref.ProtocolRules.Serves(model, c.ep.Protocol, rt.cross)
+	}
+	switch {
+	case ok:
+		return "", "", true
+	case reason == core.SchedProtocolClosed:
+		return reason, c.ep.Protocol, false
+	}
+	return reason, model, false
+}
+
+// eligibleAccounts keeps the accounts of all able to serve the request
+// whatever their load, and notes why each of the others is not. closed is
+// set when accounts were offered and every one is left out by its protocol
+// binding.
+func (c *call) eligibleAccounts(all []core.AccountRef) (cands []core.AccountRef, closed bool) {
+	c.sched.candidates = len(all)
+	cands = make([]core.AccountRef, 0, len(all))
+	unserved := 0
+	for i := range all {
+		reason, detail, ok := c.ineligibleReason(&all[i])
+		if ok {
+			cands = append(cands, all[i])
+			continue
+		}
+		c.skipAccount(all[i].ID, reason, detail)
+		if protocolSchedReason(reason) {
+			unserved++
+		}
+	}
+	return cands, unserved > 0 && unserved == len(all)
+}
+
+// protocolNotServed is the answer to a request every account offered is
+// closed to by its protocol binding (closed, from eligibleAccounts): a 404,
+// which clients do not retry, since no account serves the model on the
+// endpoint until one is configured to. The accounts of the group that are
+// only out for a while (cooling down, or disabled until a time) are judged
+// like the offered ones, from the same snapshot: nil when one of them is not
+// closed by its binding, since it may serve the request once back, or when
+// they cannot be read. The request then ends as any passing shortage does.
+func (c *call) protocolNotServed(ctx context.Context, closed bool) *gwError {
+	if !closed {
+		return nil
+	}
+	resting, err := c.g.d.Accounts.Resting(ctx, c.principal.Group.ID, c.routeKeys)
+	if err != nil {
+		slog.WarnContext(ctx, "gateway: read resting accounts", "err", err)
+		return nil
+	}
+	for i := range resting {
+		if reason, _, ok := c.ineligibleReason(&resting[i]); ok || !protocolSchedReason(reason) {
+			return nil
+		}
+	}
+	return errProtocolNotServed
 }
 
 // noteDropped notes the accounts of before that are not in after.

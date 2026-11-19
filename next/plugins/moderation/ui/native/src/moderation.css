@@ -300,14 +300,22 @@ textarea.mod-mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.8125rem;
 }
+/* fields side by side, level at the top: a message or hint under one
+   control leaves the others where they are */
 .mod-form-row {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-end;
+  align-items: flex-start;
   gap: 0.75rem;
 }
 .mod-form-row > * {
   min-width: 9rem;
+}
+/* a control without a label in a row of small fields starts beside their
+   controls, below the labels' line (SField size="sm": a 1rem label line and
+   0.25rem under it) */
+.mod-form-row-unlabeled {
+  margin-top: 1.25rem;
 }
 .mod-question {
   display: flex;

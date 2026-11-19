@@ -18,8 +18,8 @@ const (
 	azureAPIVersion     = "2024-10-21"
 )
 
-// AC 29: Azure OpenAI accounts. azure_openai is a manifest-only market
-// plugin adding two account types to the built-in openai platform: the same
+// AC 29: Azure OpenAI accounts. azure_openai is a market code plugin
+// (its own process, forwarding through Execute) adding two account types to the built-in openai platform: the same
 // resource endpoint and key, served through the v1 API (azure_v1) or the
 // classic per-deployment API (azure_deployment). With the mock upstream as
 // the resource, /v1/chat/completions is answered through both, streaming
@@ -27,7 +27,10 @@ const (
 // api-key, the upstream model is the deployment the account maps the
 // client's model to, the client's OpenAI-Organization / OpenAI-Project and
 // service_tier are not sent, and the usage is billed at the price of the
-// client's model. A pasted request URL is refused as the resource endpoint.
+// client's model. The resource endpoint is saved as written; a trailing
+// version segment (/openai/v1, /openai) is dropped per request, so the
+// request path does not repeat it (CONTRACTS §127). A pasted request URL is
+// refused as the resource endpoint.
 func TestAC29_AzureOpenAI(t *testing.T) {
 	e := Setup(t)
 	admin := e.Admin()
@@ -56,8 +59,10 @@ func TestAC29_AzureOpenAI(t *testing.T) {
 	tn := e.NewTenant(admin, TenantOpts{Balance: "20"})
 	model := e.RunModelOf(admin, "gpt", "azure")
 	type variant struct {
-		typ, baseURL string
-		settings     map[string]any
+		// baseURL is what the account form sends, saved what GET
+		// /accounts/:id returns.
+		typ, baseURL, saved string
+		settings            map[string]any
 		// path and query are where a chat request for deployment goes.
 		path  func(deployment string) string
 		query string
@@ -66,10 +71,12 @@ func TestAC29_AzureOpenAI(t *testing.T) {
 		accountID                       int64
 	}
 	variants := []*variant{
-		// The pasted /openai/v1 suffix is removed when the account is saved.
-		{typ: AzureV1Type, baseURL: e.MockInternalURL + "/openai/v1",
+		// Saved with its /openai/v1; the request does not repeat it.
+		{typ: AzureV1Type, baseURL: e.MockInternalURL + "/openai/v1", saved: e.MockInternalURL + "/openai/v1",
 			path: func(string) string { return "/openai/v1/chat/completions" }},
-		{typ: AzureDeploymentType, baseURL: e.MockInternalURL + "/", settings: map[string]any{"api_version": azureAPIVersion},
+		// Saved without the trailing slash, with its /openai; the request
+		// does not repeat it either.
+		{typ: AzureDeploymentType, baseURL: e.MockInternalURL + "/openai/", saved: e.MockInternalURL + "/openai", settings: map[string]any{"api_version": azureAPIVersion},
 			path:  func(deployment string) string { return "/openai/deployments/" + deployment + "/chat/completions" },
 			query: "api-version=" + azureAPIVersion},
 	}
@@ -84,8 +91,8 @@ func TestAC29_AzureOpenAI(t *testing.T) {
 			PluginKey: AzurePlugin, Type: v.typ, GroupIDs: []int64{gid}, APIKey: v.upstreamKey,
 			BaseURL: v.baseURL, Settings: v.settings, ModelMapping: map[string]string{model: v.deployment},
 		})
-		if got := admin.OK(t, http.MethodGet, fmt.Sprintf("/accounts/%d", v.accountID), nil).Get("credentials.base_url").String(); got != e.MockInternalURL {
-			t.Fatalf("%s: saved base_url %q, want %s", v.typ, got, e.MockInternalURL)
+		if got := admin.OK(t, http.MethodGet, fmt.Sprintf("/accounts/%d", v.accountID), nil).Get("credentials.base_url").String(); got != v.saved {
+			t.Fatalf("%s: saved base_url %q, want %s", v.typ, got, v.saved)
 		}
 	}
 	e.GrantGroups(admin, tn.User.UserID, append([]int64{tn.GroupID}, groups...))
@@ -93,18 +100,20 @@ func TestAC29_AzureOpenAI(t *testing.T) {
 		_, v.apiKey = e.CreateAPIKey(tn.User, groups[i])
 	}
 
-	// 3. A request URL pasted as the resource endpoint is refused.
-	for _, pasted := range []string{
-		"/openai/deployments/gpt-4o",
-		"/openai/deployments/gpt-4o/chat/completions?api-version=" + azureAPIVersion,
-		"/openai/v1/chat/completions",
+	// 3. A request URL pasted as the resource endpoint is refused: a path
+	// that is no endpoint by the plugin's pattern, an address with a query
+	// by the shared base URL rule before that (CONTRACTS §127.2).
+	for pasted, code := range map[string]string{
+		"/openai/deployments/gpt-4o": "pattern",
+		"/openai/deployments/gpt-4o/chat/completions?api-version=" + azureAPIVersion: "format",
+		"/openai/v1/chat/completions": "pattern",
 	} {
 		r := admin.API(t, http.MethodPost, "/accounts", map[string]any{
 			"name": e.Name("acct-azure-bad"), "plugin_key": AzurePlugin, "type": AzureV1Type, "group_ids": groups[:1],
 			"priority": 10, "max_concurrency": 5, "schedulable": true,
 			"credentials": map[string]any{"api_key": variants[0].upstreamKey, "base_url": e.MockInternalURL + pasted},
 		})
-		ExpectFieldError(t, r, "credentials.base_url", "pattern")
+		ExpectFieldError(t, r, "credentials.base_url", code)
 	}
 
 	// 4. Chat completions through each type, non-stream then stream.

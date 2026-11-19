@@ -9,7 +9,7 @@
     "en": "Moderates gateway requests with flows of auditors (OpenAI moderation, TypeSafe Jev, LLM verdict) bound to groups and accounts. Users on the always-check-first list and users at the enforce level are moderated before the upstream call and refused on a hit: a watch-list entry's own level decides, and without an entry the default level does - enforce when the mode is enforce, so then everyone without an entry is moderated first. Users on the background-only list and all other requests are moderated in the background. Suspicious users join the watch list automatically; repeated violations can ban them. The cost of every moderation call is shown with the core model prices.",
     "zh": "按分组、分组下的账号或账号绑定的审核流程（OpenAI 内容审核、TypeSafe Jev、大模型判定）审核网关请求。“总是先审”名单的用户和拦截级的用户先审后发、命中即拒绝：有名单条目的按条目自己的级别，没有条目的按默认级别——模式为拦截时默认级别就是拦截级，此时所有没有条目的用户都先审。“只后台审核”名单的用户和其余请求在后台审核。可疑用户自动进入观察名单，多次违规可自动封禁。每次审核调用的费用按核心的模型价格展示。"
   },
-  "version": "0.12.1",
+  "version": "0.12.2",
   "publisher": "sub2api",
   "icon": "text:M",
   "runtime": "grpc",
@@ -18,8 +18,8 @@
       "binaries": "runtimes/{os}-{arch}/plugin"
     }
   },
-  "hostCompat": ">=0.1.290 <0.2.0",
-  "hostUICompat": "^3.15",
+  "hostCompat": ">=0.1.304 <0.2.0",
+  "hostUICompat": "^4.0",
   "capabilities": [
     {
       "id": "gateway.hook.v1"
@@ -725,9 +725,19 @@
     "settings": {
       "mode": "native",
       "page": "dashboard",
-      "schema": "forms/settings.schema.json",
-      "uiSchema": "forms/settings.ui.json",
-      "permission": "moderation:manage"
+      "permission": "moderation:manage",
+      "secrets": [
+        {
+          "path": "api_key"
+        },
+        {
+          "path": "notify_webhook_secret"
+        },
+        {
+          "path": "notify_webhook_url",
+          "sensitive": true
+        }
+      ]
     }
   },
   "resources": {

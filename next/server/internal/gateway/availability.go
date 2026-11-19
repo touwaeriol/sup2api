@@ -619,15 +619,14 @@ func availabilityReason(code, detail string) string {
 	return code
 }
 
-// maxModelNameBytes bounds a client's model name (CONTRACTS §15.2).
-const maxModelNameBytes = 256
-
-// validModelName: valid UTF-8, at most maxModelNameBytes, no whitespace and
-// no control characters. Before the core checked this the only guard was a
-// plugin's availability check answering UNKNOWN, which now lets a request
-// through.
+// validModelName: valid UTF-8, of any length, no whitespace and no control
+// characters (CONTRACTS §15.2). The name is a key of account selection, the
+// usage record, logs and Redis keys: whitespace or a control character in
+// it would split or forge those, and proto3 requires valid UTF-8. Before the
+// core checked this the only guard was a plugin's availability check
+// answering UNKNOWN, which now lets a request through.
 func validModelName(s string) bool {
-	if len(s) > maxModelNameBytes || !utf8.ValidString(s) {
+	if !utf8.ValidString(s) {
 		return false
 	}
 	for _, r := range s {

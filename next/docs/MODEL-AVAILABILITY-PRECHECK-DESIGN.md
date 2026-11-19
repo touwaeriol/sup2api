@@ -133,7 +133,7 @@ AccountQuotaView(ctx context.Context, ids []int64) (core.QuotaView, error)
 
 - 全部候选被拦只可能是全部 `UNAVAILABLE`，返回 429 `model_quota_exhausted`。所有被拦账号都有未来 retry_at 时带 `Retry-After`（沿用 `:128-131`）。预检本身不再产生 503。
 - `UNKNOWN` 放行的理由：0.1.112 后它只表示核心与插件之间的契约不一致，不反映账号状态。拦下来会让一个 bug 把整个账号类型变成 503。插件要拦必须明确返回 `UNAVAILABLE`。已核对：没有其他插件声明 `modelAvailability`，不存在依赖 `UNKNOWN` 拦截的插件。
-- 模型名校验前移到核心：现在核心对模型名只检查非空（`gateway/pipeline.go:427-434`，参数来源 TrimSpace，JSON 路径来源原样），ccgateway 的 `invalid_candidate` 实际上是唯一拦截空白和控制字符的地方。`UNKNOWN` 放行后，核心在解析请求时对含空白或控制字符、超过 256 字节或非法 UTF-8 的模型名直接回 400 `invalid_request_error`，不进入选号。
+- 模型名校验前移到核心：现在核心对模型名只检查非空（`gateway/pipeline.go:427-434`，参数来源 TrimSpace，JSON 路径来源原样），ccgateway 的 `invalid_candidate` 实际上是唯一拦截空白和控制字符的地方。`UNKNOWN` 放行后，核心在解析请求时对含空白或控制字符、超过 256 字节或非法 UTF-8 的模型名直接回 400 `invalid_request_error`，不进入选号。（256 字节的长度限制在 2026-11-18 转发 V2 收尾时删除，模型名不限长度，CONTRACTS §15.2、§112.16；字符规则照旧。）
 - 客户端断开（父 ctx 结束）时不放行，直接以 canceled 结束，不再走 `admitRate` 占用限速名额。
 
 ### 5.2 时限
@@ -148,7 +148,7 @@ const quotaObservationTimeout     = 2 * time.Second        // applyQuotaObservat
 - 两个预算并列，都从请求 ctx 派生。grpcruntime 自身的 2 s（`adapters.go:27`）仍是上限。
 - 做成 `Gateway` 字段，默认取常量，测试里可改小。
 - 镜像命中时读快照是内存读；插件是本机调用，正常不到 1 ms。
-- 插件出问题时不能让每个 attempt 都再等 1 s（guard 每个 attempt 都执行，`CheckModelAvailability` 还和 `BuildUpstreamRequest`、`ClassifyError` 共用 classHot 并发槽，`adapters.go:205/209/263`）：
+- 插件出问题时不能让每个 attempt 都再等 1 s（guard 每个 attempt 都执行，`CheckModelAvailability` 还和 `ClassifyError` 等热路径调用共用 classHot 并发槽（转发 V2 起构造请求的 `Execute` 走单独的 Execute 类），`adapters.go:205/209/263`）：
   - 同一个请求里插件已经失败放行过的，guard 不再调用插件；
   - 节点级熔断：某插件的可用性调用失败（出错、超时、坏结果）后 10 s 内，本节点对它的可用性检查直接按 `plugin_error` 放行，不发 RPC；10 s 后放一个请求试探，成功即恢复；
   - guard 读快照遇到缺失时不等待，直接沿用准入快照。

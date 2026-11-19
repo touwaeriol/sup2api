@@ -10,10 +10,12 @@
 // follows a `dense` SSettingsGroup); `flush` drops the vertical padding (a
 // single row inside a form or modal). On narrow screens a row whose only
 // control is a switch / checkbox keeps it beside the label; other controls
-// take the full width.
+// take the full width. Inside an SForm, `prop` names the setting's path as
+// SField's does (error, star and blur validation from the form).
 import { computed, useId, useSlots } from 'vue'
 import SDisclosure from './SDisclosure.vue'
 import { provideField, type ControlSize } from './field'
+import { useFormItem } from './form/context'
 import { useSettingsDensity } from './settings'
 
 const props = withDefaults(
@@ -27,20 +29,23 @@ const props = withDefaults(
     error?: string
     required?: boolean
     size?: ControlSize
+    prop?: string
   }>(),
-  { dense: undefined }
+  { dense: undefined, required: undefined }
 )
 const slots = useSlots()
 const uid = useId()
 const groupDense = useSettingsDensity()
 const isDense = computed(() => props.dense ?? groupDense())
 const hasDescription = computed(() => !!props.description || !!slots.description)
+const { error: shownError, required: shownRequired, touch } = useFormItem(props)
 const { labelFor, inlineOnly } = provideField(uid, {
   for: () => props.for,
   labelId: computed(() => `${uid}-label`),
-  describedBy: computed(() => [props.error ? `${uid}-error` : '', hasDescription.value ? `${uid}-desc` : ''].filter(Boolean).join(' ') || undefined),
-  invalid: computed(() => !!props.error),
-  size: computed(() => props.size)
+  describedBy: computed(() => [shownError.value ? `${uid}-error` : '', hasDescription.value ? `${uid}-desc` : ''].filter(Boolean).join(' ') || undefined),
+  invalid: computed(() => !!shownError.value),
+  size: computed(() => props.size),
+  touch
 })
 </script>
 
@@ -55,7 +60,7 @@ const { labelFor, inlineOnly } = provideField(uid, {
   >
     <div class="min-w-0">
       <component :is="labelFor ? 'label' : 'p'" :id="`${uid}-label`" :for="labelFor" class="text-sm font-medium text-fg">
-        <slot name="label">{{ label }}</slot><span v-if="required" class="ml-0.5 text-red-500" aria-hidden="true">*</span>
+        <slot name="label">{{ label }}</slot><span v-if="shownRequired" class="ml-0.5 text-red-500" aria-hidden="true">*</span>
       </component>
       <p v-if="hasDescription" :id="`${uid}-desc`" class="mt-1 max-w-3xl text-xs leading-5 text-fg-muted">
         <slot name="description">{{ description }}</slot>
@@ -64,7 +69,7 @@ const { labelFor, inlineOnly } = provideField(uid, {
     </div>
     <div class="min-w-0" :class="stacked ? '' : 'sm:justify-self-end'">
       <div class="flex min-w-0 flex-wrap items-center gap-2 max-sm:[&>*]:grow" :class="stacked ? '' : 'sm:justify-end'"><slot /></div>
-      <p v-if="error" :id="`${uid}-error`" class="input-error-text" :class="stacked ? '' : 'sm:text-right'">{{ error }}</p>
+      <p v-if="shownError" :id="`${uid}-error`" class="input-error-text" :class="stacked ? '' : 'sm:text-right'">{{ shownError }}</p>
     </div>
   </div>
 </template>

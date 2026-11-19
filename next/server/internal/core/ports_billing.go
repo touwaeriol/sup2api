@@ -7,6 +7,8 @@ import (
 
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
+
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/x"
 )
 
 // ============================================================ billing (owner: B billing)
@@ -65,9 +67,8 @@ func (r *PriceRule) Clone() *PriceRule {
 // expression reads (param()/header()), so they can be captured at request
 // time and evaluated later during settlement.
 type Pricer interface {
-	// Resolve returns the list price q asks for. ErrPriceNotConfigured when
-	// the model has no global price and the missing-price policy is "reject";
-	// (nil, nil) when policy is "free".
+	// Resolve returns the list price q asks for, never nil without an error:
+	// ErrPriceNotConfigured when the model has no global price.
 	Resolve(ctx context.Context, q PriceQuery) (*PriceRule, error)
 	Inputs(rule *PriceRule) (bodyPaths []string, headerNames []string)
 }
@@ -154,12 +155,19 @@ type Ledger interface {
 }
 
 // UsageTokens are normalized token counts (see ARCHITECTURE 7.3).
+// ImageInput and ImageOutput are the image share of Input and Output (an
+// image generation or edit, CONTRACTS §118): part of them, never added to
+// them, so Total and Throughput do not count them again. They are omitted
+// from JSON when 0, so the billing_detail of every other request (which
+// stores PricedUsage) keeps its bytes.
 type UsageTokens struct {
 	Input           int64
 	Output          int64
 	CacheRead       int64
 	CacheCreation   int64
 	CacheCreation1h int64
+	ImageInput      int64 `json:",omitempty"`
+	ImageOutput     int64 `json:",omitempty"`
 }
 
 // UsageRecord is produced by the gateway for every finished request and
@@ -215,18 +223,20 @@ type UsageRecord struct {
 	UsageSemantics string // exclusive | inclusive
 	Tokens         UsageTokens
 	Metrics        map[string]any // plugin usage facts for u("key")
-	// PluginDetail is the free-form JSON object a plugin returned from
-	// PlatformService.ExtractUsage (usage_logs.plugin_detail). It is the only
+	// PluginDetail is the free-form JSON object a plugin returned in the
+	// UsageReport of its Execute call (usage_logs.plugin_detail). It is the only
 	// part of a usage record a plugin writes verbatim, billing never reads
-	// it, and it is capped at 4 KiB. nil = "{}".
+	// it, and it must be a JSON object, of any size. nil = "{}".
 	PluginDetail RawJSON
 	// UsageExtract records how this request's usage was obtained, when that
 	// is worth knowing: empty for the declarative rules (the normal case, and
-	// nothing is stored), UsageExtractPlugin when a plugin's ExtractUsage
-	// answer was used, UsageExtractFallback when the plugin was asked and
-	// could not answer, so the request is billed from whatever the
-	// declarative rules found - possibly nothing at all. The gateway also
-	// warns; this is the part that survives into usage_logs.
+	// nothing is stored), UsageExtractPlugin when the usage the plugin
+	// returned from Execute was used, UsageExtractFallback when the plugin
+	// returned host_usage instead, so the request is billed from what the
+	// declarative rules found, and UsageExtractUnreported when the plugin
+	// stated nothing, or took a host reading that holds no usage, and the
+	// request is not billed. The gateway also warns; this is the part that survives
+	// into usage_logs.
 	UsageExtract  string
 	StickyRule    string
 	StickyHit     bool
@@ -249,14 +259,14 @@ type UsageRecord struct {
 	Reservation *UsageReservation
 	// ReservationDropped says why a Reservation the plugin DID return is not
 	// on this record: the gateway found the record unbillable (the endpoint
-	// bills "free", no price, an empty estimate on a per-token price) and
+	// bills "free", an empty estimate on a per-token price) and
 	// cleared it. Empty in the ordinary case. It is recorded in
 	// usage_logs.anomalies because the alternative - a job that was really
 	// started upstream, never pre-charged, never reconciled, and nothing
 	// anywhere saying so - is the silent kind of wrong (CONTRACTS §25.5).
 	ReservationDropped string
 	Billable           bool              // false for endpoint billing=free or zero usage
-	Price              *PriceRule        // nil when not billable or free policy
+	Price              *PriceRule        // nil when not billable
 	PriceParams        map[string]string // body path -> raw JSON value captured at request time
 	PriceHeaders       map[string]string // lower-case header -> value captured at request time
 	RateMultiplier     decimal.Decimal
@@ -327,15 +337,16 @@ const (
 
 // How a usage record's tokens were obtained, recorded in
 // usage_logs.anomalies ("usage_extract") for the endpoints that declare
-// usage.source "plugin". Endpoints using the declarative rules - every
-// endpoint in the tree today - record nothing.
+// usageSource "plugin". Endpoints using the declarative rules record
+// nothing.
 const (
-	// UsageExtractPlugin: PlatformService.ExtractUsage answered and its
+	// UsageExtractPlugin: the plugin returned ExecuteResponse.usage and that
 	// report is what was billed.
 	UsageExtractPlugin = "plugin"
-	// UsageExtractFallback: the endpoint asked a plugin for its usage and the
-	// plugin could not answer (error, timeout, UNIMPLEMENTED, nil, or a
-	// response the host would not hand over). The request was billed from
+	// UsageExtractFallback: the endpoint's usage is the plugin's to read and
+	// the plugin returned ExecuteResponse.host_usage instead (it could not
+	// read the observation, or the host would not hand one over). The
+	// request was billed from
 	// whatever the declarative rules produced while forwarding, which for an
 	// endpoint that chose usage.source "plugin" is often nothing - it chose
 	// that source precisely because the rules cannot express its usage. This
@@ -348,10 +359,37 @@ const (
 	// by then). The upstream did the work; without this the hold would have
 	// been released and the output given away (CONTRACTS §25.8).
 	UsageExtractPrecharge = "precharge"
+	// UsageExtractUnreported: the upstream answered a relay that waited and
+	// the plugin's Execute returned no valid usage, host_usage or task (it
+	// stated nothing or the wrong kind, failed, timed out or crashed, or the
+	// commit of its facts kept failing); or, on an endpoint whose usage the
+	// plugin reads, it returned host_usage (waited or not) and the host's
+	// reading of the served answer holds no usage. The record is free:
+	// nothing falls back to the host's reading
+	// (ExecutionRecords.CloseExecutionUnreported; the gateway writes the same
+	// record itself for a relay that did not wait).
+	UsageExtractUnreported = "unreported"
 )
 
-// MaxPluginDetailBytes caps UsageReport.detail_json.
-const MaxPluginDetailBytes = 4 << 10
+// UsageErrorUnreported is the ErrorType (usage_logs.error_type) of the free
+// record of an unreported execution.
+const UsageErrorUnreported = "usage_unreported"
+
+// SetUnreported makes r the free record of a request whose plugin stated no
+// usage facts: the host's reading (identity, latency, status, routing)
+// without anything to bill - success false, ErrorType UsageErrorUnreported
+// with reason, no tokens, metrics, additional or replacement usage, price,
+// billing error or reservation, UsageExtract UsageExtractUnreported. It is
+// the one definition of that record: CloseExecutionUnreported writes it, the
+// gateway submits it for an execution without a durable observation, a
+// plugin's host_usage without a reading and a task submission that could not
+// be registered.
+func (r *UsageRecord) SetUnreported(reason string) {
+	r.Success, r.ErrorType, r.ErrorMessage = false, UsageErrorUnreported, x.Truncate(reason, 1000)
+	r.Tokens, r.Metrics, r.Additional, r.Replacement = UsageTokens{}, nil, nil, nil
+	r.Billable, r.Price, r.BillingError, r.Reservation, r.ReservationDropped = false, nil, "", nil, ""
+	r.UsageExtract = UsageExtractUnreported
+}
 
 // Keys of usage_logs.anomalies: facts about how a usage record was produced,
 // never about what it costs. The column exists because billing_detail - whose
@@ -489,6 +527,16 @@ const (
 	// The request does not convert to the account type's protocol, or the
 	// account's loss policy refuses the conversion.
 	SchedConversionRefused = "conversion_refused"
+	// The account's protocol binding leaves out the endpoint's protocol, one
+	// of its type's own platforms (Detail: the protocol).
+	SchedProtocolClosed = "protocol_closed"
+	// The request would reach the account through a cross-platform
+	// conversion, which the account does not enable for the model (Detail:
+	// the model).
+	SchedConversionNotEnabled = "conversion_not_enabled"
+	// The account serves the model on other protocols only (Detail: the
+	// model).
+	SchedModelProtocolClosed = "model_protocol_closed"
 	// A rate limit window of the account is exhausted, or the limiter did
 	// not admit the request.
 	SchedRateLimited = "rate_limited"
@@ -628,8 +676,9 @@ func (r *UsageRecord) Anomalies() map[string]string {
 // the core ever gives up asking.
 type UsageReservation struct {
 	// PluginKey is the plugin the core will ask to reconcile this entry: the
-	// one declaring the platform of the response, i.e. the one that answered
-	// ExtractUsage. Filled by the gateway, never by the plugin.
+	// one whose Execute returned the reservation (the plugin of the account
+	// type, which also declares the platform). Filled by the gateway, never
+	// by the plugin.
 	PluginKey string
 	// RefID is the plugin's own id for the work (a task id). It is unique
 	// per plugin: (plugin_key, ref_id) is the key of pending_settlements.

@@ -15,8 +15,8 @@ type UsageHourly struct {
 	APIKeyID         int64           `gorm:"column:api_key_id"`                      // bigint
 	GroupID          int64           `gorm:"column:group_id"`                        // bigint
 	AccountID        *int64          `gorm:"column:account_id"`                      // bigint
-	Model            string          `gorm:"column:model"`                           // character varying(200)
-	UpstreamModel    string          `gorm:"column:upstream_model"`                  // character varying(200)
+	Model            string          `gorm:"column:model"`                           // text
+	UpstreamModel    string          `gorm:"column:upstream_model"`                  // text
 	Protocol         string          `gorm:"column:protocol"`                        // character varying(100)
 	Platform         string          `gorm:"column:platform"`                        // character varying(50)
 	Requests         int64           `gorm:"column:requests"`                        // bigint

@@ -4,6 +4,7 @@ import (
 	"context"
 	"regexp"
 	"strconv"
+	"unicode/utf8"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -12,6 +13,7 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/pluginsdk/accountform"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/pluginsdk/apikey"
+	"github.com/Sub2API-Devs/sup2api/next/sdk/pluginsdk/fieldcheck"
 )
 
 // Credential and settings fields besides the key file (keyKinds).
@@ -26,6 +28,10 @@ const (
 	fieldLocation = "location"
 )
 
+// maxKeyFileLength bounds the key file of a submitted form, in characters
+// (the bound the account form has always had).
+const maxKeyFileLength = 32768
+
 // expiredAt is the expires_at of an account that has no access token yet: a
 // readable expiry in the past, so the core's next refresh pass fetches the
 // first token (it skips accounts without a readable expiry, CONTRACTS §48.3).
@@ -37,8 +43,11 @@ var (
 )
 
 // apiKeySpec checks the api_key of an API key account the way every API key
-// form does: 8-512 visible characters. The type has no base_url.
-var apiKeySpec = apikey.Spec{AccountType: TypeAPIKey}
+// form does: any non-blank string, saved trimmed. The type has no base_url;
+// project_id and location are its other keys (checked by target), any other
+// is refused.
+var apiKeySpec = apikey.Spec{AccountType: TypeAPIKey, NoBaseURL: true,
+	Fields: fieldcheck.Fields{fieldProject: fieldcheck.Any(), fieldLocation: fieldcheck.Any()}}
 
 // expiry reads expires_at the way the core does.
 var expiry = &manifest.AccountRefresh{}
@@ -113,6 +122,10 @@ func (p *Plugin) ValidateCredentials(_ context.Context, in *pluginv1.ValidateCre
 	if !keyed {
 		return invalid(fieldError("account_type", "unsupported", "unsupported account type "+strconv.Quote(typ)+" / 不支持的账号类型")), nil
 	}
+	// The token state the core writes on renewal comes back with every edit.
+	if refused := form.Only(kind.field, fieldAccessToken, fieldExpiresAt, fieldTokenFor, fieldProject, fieldLocation); refused != nil {
+		return refused, nil
+	}
 	if bad := validateKeyAccount(kind, form.Creds, form.Settings); bad != nil {
 		return invalid(bad), nil
 	}
@@ -123,8 +136,11 @@ func (p *Plugin) ValidateCredentials(_ context.Context, in *pluginv1.ValidateCre
 // implies: the project, the default location and the token state.
 func validateKeyAccount(kind keyKind, creds, settings object) *pluginv1.FieldError {
 	raw := creds.Str(kind.field)
-	if raw == "" {
+	switch {
+	case raw == "":
 		return fieldError(kind.field, "required", "paste the JSON key file / 请粘贴 JSON 密钥文件的内容")
+	case utf8.RuneCountInString(raw) > maxKeyFileLength:
+		return fieldError(kind.field, "too_long", "the key file must be at most "+strconv.Itoa(maxKeyFileLength)+" characters / 密钥文件最多 "+strconv.Itoa(maxKeyFileLength)+" 个字符")
 	}
 	key, err := kind.parse(raw)
 	if err != nil {

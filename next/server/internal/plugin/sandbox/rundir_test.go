@@ -11,13 +11,13 @@ import (
 )
 
 // With a private run directory the plugin gets its own TMPDIR, not the
-// core's, and plugin-exec learns the directory (for Landlock).
+// core's.
 func TestRunDirReplacesSharedTemp(t *testing.T) {
 	t.Setenv("TMPDIR", "/shared/tmp")
 	t.Setenv("TEMP", "/shared/tmp")
 	t.Setenv("TMP", "/shared/tmp")
 	run := "/data/.run/demo-1"
-	spec := core.LaunchSpec{PluginKey: "demo", Version: "1.0.0", BinaryPath: "/x/plugin", WorkDir: "/data/demo", RunDir: run,
+	spec := core.LaunchSpec{PluginKey: "demo", Version: "1.0.0", BinaryPath: "/x/plugin", RunDir: run,
 		Env: []string{"TMPDIR=" + run + "/tmp", "TEMP=" + run + "/tmp", "TMP=" + run + "/tmp"}}
 	for _, wrap := range []bool{false, true} {
 		l := NewLauncher(LauncherOptions{DisableWrap: !wrap, Executable: "/usr/bin/sub2api"})
@@ -34,9 +34,14 @@ func TestRunDirReplacesSharedTemp(t *testing.T) {
 		if !slices.Contains(cmd.Env, "TMPDIR="+run+"/tmp") {
 			t.Fatalf("wrap=%v: env %q", wrap, cmd.Env)
 		}
+		// Without a data directory ("fs.data") it runs in the run directory
+		// and is told of no data directory.
+		if cmd.Dir != run || slices.ContainsFunc(cmd.Env, func(kv string) bool { return strings.HasPrefix(kv, "SUB2API_PLUGIN_DATA_DIR=") }) {
+			t.Fatalf("wrap=%v: dir %q env %q", wrap, cmd.Dir, cmd.Env)
+		}
 		if wrap {
 			o, err := parseExecArgs(cmd.Args[2:], os.Stderr)
-			if err != nil || o.RunDir != run {
+			if err != nil || o.DataDir != "" || o.CACerts {
 				t.Fatalf("plugin-exec args %q: %+v %v", cmd.Args, o, err)
 			}
 		}

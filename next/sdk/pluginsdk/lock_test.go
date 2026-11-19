@@ -39,7 +39,7 @@ func startLocker(t *testing.T, fh *pluginsdktest.FakeHost, validity time.Duratio
 	}
 	fh.Locks.SetValidity(validity)
 	p := &locker{}
-	pluginsdktest.Start(t, p, pluginsdktest.Options{Host: fh, SDK: []pluginsdk.Option{pluginsdk.WithManifest([]byte(lockManifest))}})
+	pluginsdktest.Start(t, p, pluginsdktest.Options{Host: fh, Manifest: []byte(lockManifest)})
 	return p.host.Locks(), fh
 }
 

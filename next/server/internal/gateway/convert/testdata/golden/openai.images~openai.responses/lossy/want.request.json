@@ -1,0 +1,28 @@
+{
+  "input": [
+    {
+      "content": [
+        {
+          "text": "A small white dot on a black background",
+          "type": "input_text"
+        }
+      ],
+      "role": "user",
+      "type": "message"
+    }
+  ],
+  "model": "gpt-6-luna",
+  "tool_choice": {
+    "type": "image_generation"
+  },
+  "tools": [
+    {
+      "action": "generate",
+      "model": "gpt-image-2",
+      "svg": {
+        "precision": 2
+      },
+      "type": "image_generation"
+    }
+  ]
+}

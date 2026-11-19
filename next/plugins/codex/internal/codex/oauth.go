@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -18,6 +17,7 @@ import (
 	"time"
 
 	"github.com/tidwall/gjson"
+	"google.golang.org/grpc/status"
 
 	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/pluginsdk"
@@ -26,8 +26,17 @@ import (
 
 // Authorization routes (manifest routes, scope admin, permission
 // codex:manage). The console's CodexAuthForm drives both logins (device code
-// and Sign in with Codex); every route call sends at most one request to
+// and Sign in with Codex); every route call sends at most two requests to
 // OpenAI and never waits in a loop.
+//
+// The plugin opens no connection of its own: every request to OpenAI is a
+// fetch the core sends (pluginsdk.Fetch) through the proxy the operator
+// chose in the account form. Every route call of a login carries that
+// choice as a proxy ticket the console got from the core for this call
+// (CONTRACTS §117), and the requests of the call carry it, so each leaves
+// through the proxy the form names at that moment; the session keeps no
+// ticket and the plugin never learns the proxy. The call carries the form's
+// User-Agent and originator the same way (routeCall).
 //
 // Sessions live in the plugin KV (shared by every node), keyed by a random
 // session id. Answers follow CONTRACTS §3.1: a success is {"data": ...}
@@ -50,13 +59,9 @@ const (
 	maxInterval     = 60
 	// slowDownStep is added to the interval when the issuer answers 429.
 	slowDownStep = 5
-	// maxAuthBody caps what the plugin reads from the issuer.
-	maxAuthBody = 1 << 20
-	// authTimeout bounds one request to the issuer.
-	authTimeout = 20 * time.Second
 	// pollLockTTL covers one poll under its lock: the status request and the
-	// token exchange, each bounded by authTimeout, plus slack.
-	pollLockTTL = 2*authTimeout + 10*time.Second
+	// token exchange, which the core's bound on the route call ends sooner.
+	pollLockTTL = 50 * time.Second
 	// lockReleaseTimeout bounds giving the poll lock back.
 	lockReleaseTimeout = 5 * time.Second
 )
@@ -95,35 +100,81 @@ type authAnswer struct {
 	body   []byte
 }
 
-// post sends one request to the authorization server.
-func (p *Plugin) post(ctx context.Context, rawURL, contentType string, body []byte) (authAnswer, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rawURL, bytes.NewReader(body))
-	if err != nil {
-		return authAnswer{}, err
-	}
-	req.Header.Set("Content-Type", contentType)
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", UserAgent)
-	req.Header.Set("Originator", Originator)
-	resp, err := p.client.Do(req)
-	if err != nil {
-		return authAnswer{}, err
-	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxAuthBody))
-	if err != nil {
-		return authAnswer{}, err
-	}
-	return authAnswer{status: resp.StatusCode, body: raw}, nil
+// errUnreachable is a request the core sent that failed in transport: a
+// poll asks again. Any other error of post is the core refusing to send it
+// (the proxy ticket, its proxy, the host).
+var errUnreachable = errors.New("cannot reach the OpenAI authorization server / 无法连接 OpenAI 授权服务器")
+
+// routeCall is what the requests of one route call of a login go out with:
+// the proxy ticket and the client headers of the account form at that
+// moment. Neither is kept in a session.
+type routeCall struct {
+	ticket string
+	agent  agent
 }
 
-func (p *Plugin) postJSON(ctx context.Context, rawURL string, v any) (authAnswer, error) {
+// readCall reads the route call of req: its proxy ticket
+// (pluginsdk.RouteProxyTicket) and the form's user_agent / originator ("" or
+// absent for none), checked as ValidateCredentials checks the account's and
+// resolved as an account's (agent).
+func (p *Plugin) readCall(req *pluginv1.HTTPRequest) (routeCall, *pluginv1.HTTPResponse) {
+	ticket, refused := pluginsdk.RouteProxyTicket(req)
+	if refused != nil {
+		return routeCall{}, refused
+	}
+	var m credMap
+	if err := decodeOptional(req, &m); err != nil {
+		return routeCall{}, errInvalidJSON()
+	}
+	m.trimStrings()
+	if k, code, msg := m.agentError(); k != "" {
+		return routeCall{}, pluginsdk.BadRequest(k, code, msg)
+	}
+	ua, _ := m.str("user_agent")
+	originator, _ := m.str("originator")
+	return routeCall{ticket: ticket, agent: p.agent(credentials{UserAgent: ua, Originator: originator})}, nil
+}
+
+// post has the core send one request of call to the authorization server
+// through the proxy of its ticket (pluginsdk.Fetch). The method, headers and
+// body are what the plugin sent itself before.
+func (p *Plugin) post(ctx context.Context, call routeCall, rawURL, contentType string, body []byte) (authAnswer, error) {
+	out, err := pluginsdk.Fetch(ctx, &pluginv1.ExecutionHTTPRequest{
+		Method: http.MethodPost, Url: rawURL, Body: body, ProxyTicket: call.ticket,
+		Headers: map[string]string{"Content-Type": contentType, "Accept": "application/json", "User-Agent": call.agent.UserAgent, "Originator": call.agent.Originator},
+	})
+	if err != nil {
+		return authAnswer{}, err
+	}
+	if out.GetTransportError() != "" {
+		return authAnswer{}, fmt.Errorf("%w: %s", errUnreachable, out.GetTransportError())
+	}
+	return authAnswer{status: int(out.GetStatus()), body: out.GetBody()}, nil
+}
+
+func (p *Plugin) postJSON(ctx context.Context, call routeCall, rawURL string, v any) (authAnswer, error) {
 	b, _ := json.Marshal(v)
-	return p.post(ctx, rawURL, "application/json", b)
+	return p.post(ctx, call, rawURL, "application/json", b)
 }
 
-func (p *Plugin) postForm(ctx context.Context, rawURL string, form url.Values) (authAnswer, error) {
-	return p.post(ctx, rawURL, "application/x-www-form-urlencoded", []byte(form.Encode()))
+func (p *Plugin) postForm(ctx context.Context, call routeCall, rawURL string, form url.Values) (authAnswer, error) {
+	return p.post(ctx, call, rawURL, "application/x-www-form-urlencoded", []byte(form.Encode()))
+}
+
+// sendFailed answers a request post could not make: 502 upstream_unavailable
+// when it failed in transport, 400 proxy_refused when the core refused it.
+func sendFailed(err error) *pluginv1.HTTPResponse {
+	if errors.Is(err, errUnreachable) {
+		return upstreamError("upstream_unavailable", err.Error())
+	}
+	return flowError("proxy_refused", refusedMessage(err))
+}
+
+// refusedMessage is the text of a request that was not sent (the core
+// refused it, or the call to the core failed). Nothing reached OpenAI: the
+// next call, with a fresh ticket of the form's proxy, may go through.
+func refusedMessage(err error) string {
+	return "the request was not sent; check the proxy in the account form and try again / 这次请求没有发出，请检查账号表单里的代理后重试: " + status.Convert(err).Message()
 }
 
 func (a authAnswer) ok() bool { return a.status >= 200 && a.status <= 299 }
@@ -233,6 +284,16 @@ func decodeOptional(req *pluginv1.HTTPRequest, v any) error {
 	return json.Unmarshal(req.GetBody(), v)
 }
 
+// startCall reads the route call a start route needs; the response is set
+// when the request cannot start a login (no caller, no ticket, a client
+// header that cannot be sent).
+func (p *Plugin) startCall(req *pluginv1.HTTPRequest) (routeCall, *pluginv1.HTTPResponse) {
+	if req.GetCaller().GetUserId() <= 0 {
+		return routeCall{}, pluginsdk.Unauthenticated()
+	}
+	return p.readCall(req)
+}
+
 // errInvalidJSON and errNoSession are malformed route requests
 // (pluginsdk.BadRequest: 400 invalid_argument with details.fields).
 func errInvalidJSON() *pluginv1.HTTPResponse {
@@ -308,19 +369,23 @@ func readToken(a authAnswer) (tokenResponse, error) {
 type redeemFailure struct{ code, msg string }
 
 // redeemCode exchanges an authorization code of the Codex client for its
-// tokens (one form POST to the token endpoint), the last step of both
-// logins; login names the flow in the log.
-func (p *Plugin) redeemCode(ctx context.Context, login, code, verifier, redirectURI string) (Credentials, *redeemFailure) {
+// tokens (one form POST to the token endpoint, sent as call), the last step
+// of both logins; login names the flow in the log.
+func (p *Plugin) redeemCode(ctx context.Context, login string, call routeCall, code, verifier, redirectURI string) (Credentials, *redeemFailure) {
 	form := url.Values{}
 	form.Set("grant_type", "authorization_code")
 	form.Set("code", code)
 	form.Set("redirect_uri", redirectURI)
 	form.Set("client_id", CodexClientID)
 	form.Set("code_verifier", verifier)
-	a, err := p.postForm(ctx, p.ep.Auth+"/oauth/token", form)
-	if err != nil {
+	a, err := p.postForm(ctx, call, p.ep.Auth+"/oauth/token", form)
+	if errors.Is(err, errUnreachable) {
 		p.log.Warn("codex: "+login+" token exchange failed", "error", err.Error())
-		return Credentials{}, &redeemFailure{"upstream_unavailable", "cannot reach the OpenAI authorization server, start again / 无法连接 OpenAI 授权服务器，请重新开始: " + err.Error()}
+		return Credentials{}, &redeemFailure{"upstream_unavailable", "start again / 请重新开始: " + err.Error()}
+	}
+	if err != nil {
+		p.log.Warn("codex: "+login+" token exchange refused by the core", "error", status.Convert(err).Message())
+		return Credentials{}, &redeemFailure{"proxy_refused", refusedMessage(err)}
 	}
 	if !a.ok() {
 		p.log.Warn("codex: "+login+" token exchange refused", "status", a.status, "oauth_error", oauthErrorCode(a.body))
@@ -336,7 +401,9 @@ func (p *Plugin) redeemCode(ctx context.Context, login, code, verifier, redirect
 
 // ---------------------------------------------------------------- device code
 
-// deviceSession is the KV state of one device code login.
+// deviceSession is the KV state of one device code login. It keeps no proxy
+// ticket or client headers: each request of the login goes out as its route
+// call says (routeCall), the form's choice at that moment.
 type deviceSession struct {
 	DeviceAuthID string `json:"device_auth_id"`
 	UserCode     string `json:"user_code"`
@@ -381,9 +448,13 @@ func parseInterval(r gjson.Result) int {
 
 // handleDeviceStart asks the issuer for a user code (one request).
 func (p *Plugin) handleDeviceStart(ctx context.Context, req *pluginv1.HTTPRequest) (*pluginv1.HTTPResponse, error) {
-	a, err := p.postJSON(ctx, p.ep.Auth+"/api/accounts/deviceauth/usercode", map[string]string{"client_id": CodexClientID})
+	call, refused := p.startCall(req)
+	if refused != nil {
+		return refused, nil
+	}
+	a, err := p.postJSON(ctx, call, p.ep.Auth+"/api/accounts/deviceauth/usercode", map[string]string{"client_id": CodexClientID})
 	if err != nil {
-		return upstreamError("upstream_unavailable", "cannot reach the OpenAI authorization server / 无法连接 OpenAI 授权服务器: "+err.Error()), nil
+		return sendFailed(err), nil
 	}
 	if a.status == http.StatusNotFound {
 		return flowError("device_auth_disabled", "device code login is not enabled for this ChatGPT account or workspace: turn on Device code authorization in ChatGPT Settings → Security (a workspace admin must allow it) / 该 ChatGPT 账号或工作区未开启设备码登录：请在 ChatGPT 设置 → 安全 中开启“设备码授权”（企业工作区需管理员开启）"), nil
@@ -436,6 +507,10 @@ func (p *Plugin) handleDevicePoll(ctx context.Context, req *pluginv1.HTTPRequest
 	if id == "" {
 		return errNoSession(), nil
 	}
+	call, refused := p.readCall(req)
+	if refused != nil {
+		return refused, nil
+	}
 	if p.host == nil {
 		return errNotReady(), nil
 	}
@@ -455,7 +530,7 @@ func (p *Plugin) handleDevicePoll(ctx context.Context, req *pluginv1.HTTPRequest
 		return pollAnswer(DevicePollResponse{Status: pollPending}), nil
 	}
 	defer p.releaseLock(ctx, lock)
-	return p.pollDevice(ctx, req, id), nil
+	return p.pollDevice(ctx, req, id, call), nil
 }
 
 // Device code poll states (DevicePollResponse.Status).
@@ -500,8 +575,9 @@ func sessionUnreadable(err error) *pluginv1.HTTPResponse {
 	return pluginsdk.Unavailable("read the session / 读取会话失败: " + err.Error())
 }
 
-// pollDevice is one poll of session id of req's caller, under its lock.
-func (p *Plugin) pollDevice(ctx context.Context, req *pluginv1.HTTPRequest, id string) *pluginv1.HTTPResponse {
+// pollDevice is one poll of session id of req's caller, under its lock, sent
+// as call (this poll's).
+func (p *Plugin) pollDevice(ctx context.Context, req *pluginv1.HTTPRequest, id string, call routeCall) *pluginv1.HTTPResponse {
 	var s deviceSession
 	found, err := p.loadSession(ctx, kvDevice, id, req, &s)
 	if err != nil {
@@ -527,11 +603,18 @@ func (p *Plugin) pollDevice(ctx context.Context, req *pluginv1.HTTPRequest, id s
 		return pluginsdk.Unavailable("store the session / 保存会话失败: " + err.Error())
 	}
 
-	a, err := p.postJSON(ctx, p.ep.Auth+"/api/accounts/deviceauth/token", map[string]string{"device_auth_id": s.DeviceAuthID, "user_code": s.UserCode})
-	if err != nil {
+	a, err := p.postJSON(ctx, call, p.ep.Auth+"/api/accounts/deviceauth/token", map[string]string{"device_auth_id": s.DeviceAuthID, "user_code": s.UserCode})
+	if errors.Is(err, errUnreachable) {
 		// A network blip must not end the login: the next poll asks again.
 		p.log.Warn("codex: device code status request failed", "error", err.Error())
 		return pending("cannot reach the OpenAI authorization server, retrying / 暂时无法连接 OpenAI 授权服务器，稍后重试")
+	}
+	if err != nil {
+		// The core would not send it (the form's proxy, the host): nothing
+		// reached OpenAI and the device code is unspent, so the login goes
+		// on; the next poll carries a fresh ticket of the form's proxy.
+		p.log.Warn("codex: device code status request refused by the core", "error", status.Convert(err).Message())
+		return pending(refusedMessage(err))
 	}
 	switch {
 	case a.status == http.StatusForbidden || a.status == http.StatusNotFound:
@@ -549,18 +632,19 @@ func (p *Plugin) pollDevice(ctx context.Context, req *pluginv1.HTTPRequest, id s
 	}
 	// The code is single-use: whatever happens next, this session is done.
 	p.deleteSession(ctx, kvDevice, id)
-	return p.exchangeDeviceCode(ctx, a)
+	return p.exchangeDeviceCode(ctx, call, a)
 }
 
-// exchangeDeviceCode turns an approval answer into credentials (one request).
-func (p *Plugin) exchangeDeviceCode(ctx context.Context, approval authAnswer) *pluginv1.HTTPResponse {
+// exchangeDeviceCode turns an approval answer into credentials (one request,
+// sent as call).
+func (p *Plugin) exchangeDeviceCode(ctx context.Context, call routeCall, approval authAnswer) *pluginv1.HTTPResponse {
 	code := strings.TrimSpace(gjson.GetBytes(approval.body, "authorization_code").String())
 	verifier := strings.TrimSpace(gjson.GetBytes(approval.body, "code_verifier").String())
 	if code == "" || verifier == "" {
 		p.log.Warn("codex: device code approval without authorization_code or code_verifier")
 		return pollFailed("the approval answer has no authorization_code or code_verifier / 授权响应缺少 authorization_code 或 code_verifier")
 	}
-	c, f := p.redeemCode(ctx, "device code", code, verifier, p.ep.Auth+"/deviceauth/callback")
+	c, f := p.redeemCode(ctx, "device code", call, code, verifier, p.ep.Auth+"/deviceauth/callback")
 	if f != nil {
 		return pollFailed(f.msg)
 	}
@@ -581,7 +665,8 @@ type CodexStartResponse struct {
 	AuthorizeURL string `json:"authorize_url"`
 }
 
-// CodexExchangeRequest is the body of POST /auth/codex/exchange.
+// CodexExchangeRequest is the body of POST /auth/codex/exchange, with the
+// route call's proxy ticket and client headers (readCall).
 type CodexExchangeRequest struct {
 	SessionID   string `json:"session_id"`
 	CallbackURL string `json:"callback_url"`
@@ -593,8 +678,12 @@ type CodexExchangeResponse struct {
 }
 
 // handleCodexStart creates the PKCE session and returns the Codex CLI's
-// authorize URL. It sends nothing to OpenAI.
+// authorize URL. It sends nothing to OpenAI; it still reads the route call,
+// as every route of a login does.
 func (p *Plugin) handleCodexStart(ctx context.Context, req *pluginv1.HTTPRequest) (*pluginv1.HTTPResponse, error) {
+	if _, refused := p.startCall(req); refused != nil {
+		return refused, nil
+	}
 	var s codexSession
 	var err error
 	if s.State, err = randomToken(24); err != nil {
@@ -675,7 +764,7 @@ func parseCallback(raw string) (callbackParams, error) {
 }
 
 // handleCodexExchange checks the pasted callback against the session and
-// exchanges the code for tokens (one request).
+// exchanges the code for tokens (one request, sent as the route call).
 func (p *Plugin) handleCodexExchange(ctx context.Context, req *pluginv1.HTTPRequest) (*pluginv1.HTTPResponse, error) {
 	var in CodexExchangeRequest
 	if err := decodeOptional(req, &in); err != nil {
@@ -684,6 +773,10 @@ func (p *Plugin) handleCodexExchange(ctx context.Context, req *pluginv1.HTTPRequ
 	id := strings.TrimSpace(in.SessionID)
 	if id == "" {
 		return errNoSession(), nil
+	}
+	call, refused := p.readCall(req)
+	if refused != nil {
+		return refused, nil
 	}
 	cb, err := parseCallback(in.CallbackURL)
 	if err != nil {
@@ -703,7 +796,12 @@ func (p *Plugin) handleCodexExchange(ctx context.Context, req *pluginv1.HTTPRequ
 	if cb.Error != "" {
 		return p.callbackRefused(ctx, id, cb), nil
 	}
-	c, f := p.redeemCode(ctx, "Sign in with Codex", cb.Code, s.Verifier, CodexRedirectURI)
+	c, f := p.redeemCode(ctx, "Sign in with Codex", call, cb.Code, s.Verifier, CodexRedirectURI)
+	if f != nil && f.code == "proxy_refused" {
+		// Nothing reached OpenAI and the code is unspent: the session stays,
+		// and the next call carries a fresh ticket of the form's proxy.
+		return flowError(f.code, f.msg), nil
+	}
 	if f != nil {
 		return upstreamError(f.code, f.msg), nil
 	}

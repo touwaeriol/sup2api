@@ -26,6 +26,29 @@ export function typeOf(accountType: { type?: string } | null | undefined, accoun
  */
 export const CODEX_FIELDS = ['access_token', 'refresh_token', 'id_token', 'expires_at', 'email', 'chatgpt_account_id', 'plan_type'] as const
 
+/**
+ * Credential keys of the account's own client headers (User-Agent,
+ * originator); "" or absent means the plugin settings' value, else the
+ * built-in one. A re-authorization keeps them.
+ */
+export const AGENT_FIELDS = ['user_agent', 'originator'] as const
+export type AgentField = (typeof AGENT_FIELDS)[number]
+/** The account's own client headers, "" for none. */
+export type FormAgent = Record<AgentField, string>
+
+/** The client headers of creds ("" where it has none or not a string). */
+export function agentOf(creds: Record<string, unknown> | null | undefined): FormAgent {
+  const v = (k: AgentField) => (typeof creds?.[k] === 'string' ? (creds[k] as string) : '')
+  return { user_agent: v('user_agent'), originator: v('originator') }
+}
+
+/** base with the client headers of from (where from has them). */
+export function withAgent(base: Record<string, unknown>, from: Record<string, unknown> | null | undefined): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...base }
+  for (const k of AGENT_FIELDS) if (from && k in from) out[k] = from[k]
+  return out
+}
+
 export function mergeCredentials(current: Record<string, unknown> | null | undefined, fresh: CodexCredentials): Record<string, unknown> {
   const out: Record<string, unknown> = { ...(current || {}) }
   for (const k of CODEX_FIELDS) delete out[k]

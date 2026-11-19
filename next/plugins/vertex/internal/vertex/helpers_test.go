@@ -7,12 +7,18 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"maps"
+	"net"
+	"net/http"
+	"os"
 	"sync"
 	"testing"
 	"time"
 
 	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
+	"github.com/Sub2API-Devs/sup2api/next/sdk/pluginsdk"
+	"github.com/Sub2API-Devs/sup2api/next/sdk/pluginsdk/pluginsdktest"
 )
 
 // testNow is the fixed clock of the tests.
@@ -86,6 +92,31 @@ func newTestPlugin(ep Endpoints) *Plugin {
 	p := NewWithEndpoints(ep)
 	p.now = func() time.Time { return testNow }
 	return p
+}
+
+// startPlugin runs p in the SDK harness: over gRPC, against the fake host,
+// the way the core calls it.
+func startPlugin(t *testing.T, p *Plugin) *pluginsdktest.Harness {
+	t.Helper()
+	m, err := os.ReadFile("../../manifest.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The fake host knows the manifest: it relays only to the hosts the
+	// core would.
+	return pluginsdktest.Start(t, p, pluginsdktest.Options{Manifest: m, SDK: []pluginsdk.Option{pluginsdk.WithInfo("vertex", Version)}})
+}
+
+// noDial fails t when anything dials through the default HTTP transport
+// until t ends: the plugin opens no socket, the core sends every request.
+func noDial(t *testing.T) {
+	t.Helper()
+	saved := http.DefaultTransport
+	http.DefaultTransport = &http.Transport{DialContext: func(_ context.Context, network, address string) (net.Conn, error) {
+		t.Errorf("dialed %s %s", network, address)
+		return nil, errors.New("this test opens no connection")
+	}}
+	t.Cleanup(func() { http.DefaultTransport = saved })
 }
 
 func mustJSON(v any) string {

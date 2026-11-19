@@ -1,0 +1,637 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>账号协议绑定与模型协议限定 · 示意图</title>
+<!-- 示意图：配合 next/docs/DESIGN-2026-11-17-PROTOCOL-BINDING.md。数据为虚构，可点击。
+     样式仿 next/web（teal 主色、rounded-2xl 卡片、slate 深色）。 -->
+<style>
+:root{
+  color-scheme:light;
+  --bg:#f8fafc;--surface:#ffffff;--surface-2:#f8fafc;--line:#e2e8f0;--line-soft:#f1f5f9;
+  --fg:#0f172a;--fg-muted:#64748b;--fg-subtle:#94a3b8;
+  --primary:#14b8a6;--primary-600:#0d9488;--primary-50:#f0fdfa;--primary-700:#0f766e;
+  --tint-primary:#ccfbf1;--tint-info:#e0f2fe;--tint-warning:#fef3c7;--tint-danger:#fee2e2;--tint-accent:#ede9fe;
+  --ink-primary:#0d9488;--ink-info:#0284c7;--ink-warning:#b45309;--ink-danger:#dc2626;--ink-accent:#7c3aed;
+  --shadow:0 1px 3px rgba(0,0,0,.04),0 1px 2px rgba(0,0,0,.06);
+}
+:root[data-theme=dark]{
+  color-scheme:dark;
+  --bg:#020617;--surface:#0f172a;--surface-2:#111c33;--line:#1e293b;--line-soft:#172036;
+  --fg:#e2e8f0;--fg-muted:#94a3b8;--fg-subtle:#64748b;
+  --primary:#2dd4bf;--primary-600:#14b8a6;--primary-50:rgba(20,184,166,.12);--primary-700:#5eead4;
+  --tint-primary:rgba(20,184,166,.15);--tint-info:rgba(14,165,233,.15);--tint-warning:rgba(245,158,11,.15);--tint-danger:rgba(239,68,68,.15);--tint-accent:rgba(139,92,246,.15);
+  --ink-primary:#2dd4bf;--ink-info:#38bdf8;--ink-warning:#fbbf24;--ink-danger:#f87171;--ink-accent:#a78bfa;
+  --shadow:none;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+button,input{font:inherit;color:inherit}
+.mockbar{position:sticky;top:0;z-index:50;display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:8px 12px;background:#0f172a;color:#e2e8f0;font-size:13px}
+.mockbar b{margin-right:4px}
+.mockbar button{border:1px solid #334155;background:#1e293b;border-radius:8px;padding:4px 10px;cursor:pointer}
+.mockbar button.on{background:#14b8a6;border-color:#14b8a6;color:#042f2e}
+.mockbar .sep{width:1px;height:18px;background:#334155;margin:0 4px}
+.mockbar .sp{flex:1}
+.page{max-width:1180px;margin:0 auto;padding:20px 16px 60px}
+.lead{color:var(--fg-muted);font-size:13px;margin:0 0 14px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow)}
+.ch{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:14px 16px 0}
+.ch h3{margin:0;font-size:14px;font-weight:600}
+.ch .sub{color:var(--fg-subtle);font-size:12px}
+.ch .r{margin-left:auto;display:flex;gap:8px;align-items:center}
+.cb{padding:12px 16px 16px}
+.new{font-size:10px;font-weight:600;border-radius:6px;padding:1px 6px;background:var(--tint-accent);color:var(--ink-accent)}
+.badge{display:inline-flex;align-items:center;gap:4px;font-size:11px;border-radius:999px;padding:1px 8px;white-space:nowrap;background:var(--line-soft);color:var(--fg-muted)}
+.badge.native{background:var(--tint-primary);color:var(--ink-primary)}
+.badge.adapt{background:var(--tint-info);color:var(--ink-info)}
+.badge.conv{background:var(--tint-warning);color:var(--ink-warning)}
+.badge.bad{background:var(--tint-danger);color:var(--ink-danger)}
+.btn{border:1px solid var(--line);background:var(--surface);border-radius:10px;padding:5px 12px;cursor:pointer;font-size:13px}
+.btn.sm{padding:2px 8px;font-size:12px;border-radius:8px}
+.btn.pri{background:linear-gradient(135deg,#14b8a6,#0d9488);border-color:transparent;color:#fff}
+.btn.ghost{border-color:transparent;background:transparent;color:var(--fg-muted)}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--surface-2)}
+.seg button{border:0;background:transparent;padding:4px 12px;font-size:12px;cursor:pointer;color:var(--fg-muted)}
+.seg button.on{background:var(--surface);color:var(--primary-700);font-weight:600;box-shadow:var(--shadow)}
+.alert{display:flex;gap:8px;align-items:flex-start;border-radius:12px;padding:8px 12px;font-size:12.5px;margin-top:10px}
+.alert.info{background:var(--line-soft);color:var(--fg-muted)}
+.alert.warn{background:var(--tint-warning);color:var(--ink-warning)}
+.alert.err{background:var(--tint-danger);color:var(--ink-danger)}
+/* modal */
+.modal{border:1px solid var(--line);border-radius:20px;background:var(--bg);overflow:hidden;box-shadow:0 20px 50px rgba(15,23,42,.12)}
+.mhead{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--line);background:var(--surface)}
+.mhead h2{margin:0;font-size:16px}
+.mhead .x{margin-left:auto;color:var(--fg-subtle)}
+.mbody{display:flex;min-height:560px}
+.enav{width:230px;flex:none;border-right:1px solid var(--line);background:var(--surface);padding:14px 10px;display:flex;flex-direction:column;gap:4px}
+.tcard{border:1px solid var(--line);border-radius:12px;padding:10px;margin-bottom:8px;display:flex;gap:10px;align-items:center}
+.tcard b{display:block;font-size:13px}.tcard small{color:var(--fg-subtle)}
+.pico{width:22px;height:22px;border-radius:7px;display:inline-grid;place-items:center;font-size:11px;font-weight:700;color:#fff;flex:none;position:relative}
+.pico.o{background:#10a37f}.pico.a{background:#d97757}.pico.g{background:#4285f4}
+.pico .cv{font-style:normal;position:absolute;right:-6px;top:-6px;font-size:9px;font-weight:700;background:var(--ink-warning);color:#fff;border-radius:6px;padding:0 3px;line-height:14px;border:1px solid var(--surface)}
+.pico.lg{width:32px;height:32px;border-radius:10px;font-size:14px}
+.nitem{display:flex;gap:10px;padding:8px 10px;border-radius:12px;color:var(--fg-muted);cursor:default}
+.nitem.on{background:var(--primary-50);color:var(--primary-700)}
+.nitem .no{width:22px;height:22px;border-radius:50%;border:1px solid currentColor;display:grid;place-items:center;font-size:12px;flex:none}
+.nitem b{display:block;font-size:13px;font-weight:600}
+.nitem small{display:block;font-size:11.5px;color:var(--fg-subtle);line-height:1.35}
+.nitem.on small{color:var(--primary-600)}
+.epane{flex:1;min-width:0;padding:16px;display:flex;flex-direction:column;gap:14px}
+.mfoot{display:flex;align-items:center;gap:8px;padding:12px 18px;border-top:1px solid var(--line);background:var(--surface)}
+.mfoot .sp{flex:1}
+.mfoot .errtxt{color:var(--ink-danger);font-size:12.5px}
+/* protocol rows */
+.radio{display:inline-flex;align-items:center;gap:5px;font-size:13px;cursor:pointer;color:var(--fg-muted)}
+.radio input{accent-color:var(--primary-600)}
+.prow{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:10px;cursor:pointer}
+.prow:hover{background:var(--surface-2)}
+.prow.dis{cursor:default}
+.prow .nm{font-weight:500;min-width:170px}
+.prow .path{color:var(--fg-subtle);font-size:12px;font-family:ui-monospace,Menlo,monospace;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+input[type=checkbox]{width:16px;height:16px;accent-color:var(--primary-600);cursor:pointer;margin:0}
+input[type=checkbox]:disabled{cursor:default}
+/* static cards */
+.tags{display:flex;flex-wrap:wrap;gap:6px}
+.tag{font-size:12px;border:1px solid var(--line);border-radius:8px;padding:2px 8px;background:var(--surface-2);font-family:ui-monospace,Menlo,monospace}
+.tag .to{color:var(--fg-subtle)}
+/* matrix */
+.mxwrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px;margin-top:10px}
+table.mx{border-collapse:separate;border-spacing:0;width:100%;font-size:13px}
+.mx th,.mx td{padding:8px 8px;border-bottom:1px solid var(--line-soft);text-align:center;white-space:nowrap}
+.mx tr:last-child td{border-bottom:0}
+.mx thead th{background:var(--surface-2);font-weight:600;font-size:12px;color:var(--fg-muted);vertical-align:bottom}
+.mx thead tr.grp th{font-size:11px;font-weight:500;padding:5px 10px;border-bottom:0}
+.mx thead tr.grp th.gown{color:var(--ink-primary)}
+.mx thead tr.grp th.gconv{color:var(--ink-warning);border-left:2px solid var(--line)}
+.mx .cfirst{border-left:2px solid var(--line)}
+.mx td.m,.mx th.m{text-align:left;position:sticky;left:0;background:var(--surface);z-index:1}
+.mx thead th.m{background:var(--surface-2)}
+.mx td.m .id{font-family:ui-monospace,Menlo,monospace;font-size:12.5px}
+.mx td.m .map{display:block;font-size:11px;color:var(--fg-subtle)}
+.mx td.sel,.mx th.sel{width:34px;padding-right:0}
+.mx tr.rest td{background:var(--surface-2)}
+.mx tr.rest td.m{background:var(--surface-2);font-weight:500}
+.mx td.cell{cursor:pointer}
+.mx td.cell:hover{background:var(--primary-50)}
+.box{display:inline-grid;place-items:center;vertical-align:middle;overflow:hidden;width:18px;height:18px;border-radius:5px;border:1.5px solid var(--fg-subtle);font-size:12px;line-height:1;color:transparent}
+.box.on{background:var(--primary-600);border-color:var(--primary-600);color:#fff}
+.box.on.cv{background:var(--ink-warning);border-color:var(--ink-warning)}
+.box.def{background:var(--line);border-color:var(--line);color:var(--fg-subtle)}
+.box.defoff{border-style:dashed;border-color:var(--line)}
+.mx td.st{text-align:right;font-size:12px;color:var(--fg-subtle)}
+.mx th .g{display:block;font-weight:400;font-size:10.5px;color:var(--fg-subtle)}
+.bulk{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px;padding:8px 12px;border-radius:12px;background:var(--primary-50);border:1px solid var(--tint-primary);font-size:13px}
+.chipbtn{border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:2px 10px;font-size:12px;cursor:pointer}
+.chipbtn.on{background:var(--primary-600);border-color:var(--primary-600);color:#fff}
+.chipbtn.cv.on{background:var(--ink-warning);border-color:var(--ink-warning)}
+.legend{display:flex;flex-wrap:wrap;gap:14px;margin-top:10px;font-size:12px;color:var(--fg-muted);align-items:center}
+.legend span{display:inline-flex;align-items:center;gap:5px}
+/* list view */
+.rcard{border:1px solid var(--line);border-radius:12px;padding:12px;margin-top:10px}
+.rcard .lbl{font-size:12px;color:var(--fg-subtle);margin:8px 0 4px}
+.rcard .lbl:first-child{margin-top:0}
+.mchip{display:inline-flex;align-items:center;gap:4px;font-size:12px;border-radius:8px;padding:2px 4px 2px 8px;background:var(--tint-primary);color:var(--ink-primary);font-family:ui-monospace,Menlo,monospace}
+.mchip button{border:0;background:transparent;cursor:pointer;color:inherit;padding:0 3px}
+.minput{border:1px solid var(--line);border-radius:8px;padding:2px 8px;font-size:12px;background:var(--surface);width:150px}
+pre.json{margin:10px 0 0;padding:12px;border-radius:12px;background:var(--surface-2);border:1px solid var(--line);font:12.5px/1.55 ui-monospace,Menlo,monospace;overflow:auto;white-space:pre}
+/* other views */
+table.lst{width:100%;border-collapse:collapse;font-size:13px}
+.lst th{font-size:12px;color:var(--fg-muted);font-weight:500;text-align:left;padding:10px 14px;border-bottom:1px solid var(--line);background:var(--surface-2);white-space:nowrap}
+.lst td{padding:10px 14px;border-bottom:1px solid var(--line-soft);vertical-align:middle;white-space:nowrap}
+.lst tr:last-child td{border-bottom:0}
+.lst .nm b{display:block}
+.lst .nm .sub{display:flex;align-items:center;gap:8px;color:var(--fg-subtle);font-size:12px;margin-top:3px}
+.part{font-size:10px;border:1px solid var(--ink-info);color:var(--ink-info);border-radius:6px;padding:0 4px}
+.box,.dot{font-style:normal}.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#10b981;margin-right:6px}
+.eps{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}
+.epbox{border:1px solid var(--line);border-radius:12px;padding:12px}
+.epbox h4{margin:0 0 8px;font-size:13px;display:flex;align-items:center;gap:8px}
+.epl{display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px}
+.epl .cnt{margin-left:auto;color:var(--fg-muted);font-size:12px}
+.note{color:var(--fg-muted);font-size:12.5px;margin:10px 2px 0}
+.kv{display:grid;grid-template-columns:120px 1fr;gap:6px 12px;font-size:13px}
+.kv dt{color:var(--fg-muted)}.kv dd{margin:0}
+code{font-family:ui-monospace,Menlo,monospace;font-size:12px;background:var(--line-soft);border-radius:5px;padding:0 4px}
+.hide{display:none!important}
+@media (max-width:760px){
+  .mbody{flex-direction:column}
+  .enav{width:auto;border-right:0;border-bottom:1px solid var(--line);flex-direction:row;overflow-x:auto}
+  .tcard{display:none}
+  .nitem{flex:none}
+  .nitem small{display:none}
+  .prow{flex-wrap:wrap}
+  .prow .nm{min-width:0}
+  .prow .path{flex-basis:100%;order:5;padding-left:26px}
+}
+</style>
+</head>
+<body>
+<div class="mockbar">
+  <b>示意图</b>
+  <span id="views">
+    <button data-view="editor" class="on">账号编辑器</button>
+    <button data-view="list">账号列表</button>
+    <button data-view="group">分组详情</button>
+    <button data-view="usage">使用记录</button>
+  </span>
+  <span class="sep"></span>
+  <span id="types">
+    <button data-type="openai" class="on">OpenAI API Key 账号</button>
+    <button data-type="codex">Codex 账号</button>
+    <button data-type="anthropic">Claude 账号</button>
+  </span>
+  <span class="sp"></span>
+  <button id="theme">深色</button>
+</div>
+
+<div class="page">
+
+<!-- ============ 账号编辑器 ============ -->
+<section id="v-editor">
+  <p class="lead">编辑账号弹窗的第 2 个分区，原"模型配置"改名"协议与模型"。带 <span class="new">新</span> 的两张卡是新增的，都可以点。顶部可切换账号类型看不同情况。</p>
+  <div class="modal">
+    <div class="mhead"><h2>编辑账号</h2><span class="badge" id="acctName"></span><span class="x">✕</span></div>
+    <div class="mbody">
+      <div class="enav">
+        <div class="tcard"><span class="pico lg" id="tIco"></span><div><b id="tName"></b><small id="tPlat"></small></div></div>
+        <div class="nitem"><span class="no">1</span><div><b>接入配置</b><small>名称、分组与连接凭证</small></div></div>
+        <div class="nitem on"><span class="no">2</span><div><b>协议与模型</b><small id="navSum"></small></div></div>
+        <div class="nitem"><span class="no">3</span><div><b>调度与限流</b><small>优先级 50 · 权重 100</small></div></div>
+        <div class="nitem"><span class="no">4</span><div><b>高级</b><small>请求转发</small></div></div>
+      </div>
+      <div class="epane">
+
+        <div class="card">
+          <div class="ch">
+            <h3>本平台协议</h3><span class="new">新</span>
+            <span class="sub">这个账号接哪些协议的请求</span>
+            <div class="r">
+              <label class="radio"><input type="radio" name="pmode" value="all"> 全部</label>
+              <label class="radio"><input type="radio" name="pmode" value="custom"> 指定</label>
+            </div>
+          </div>
+          <div class="cb">
+            <div id="ownRows"></div>
+            <div class="alert warn hide" id="newProto"></div>
+            <div class="alert info">ⓘ 其他平台的协议默认不提供。需要协议转换时，在下面"模型的协议限定"里选中模型、勾上对应的转换协议。</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="ch"><h3>模型列表</h3><span class="sub">账号可服务的请求模型；留空表示不限制（现有卡片，不变）</span></div>
+          <div class="cb"><div class="tags" id="modelTags"></div></div>
+        </div>
+
+        <div class="card">
+          <div class="ch"><h3>模型映射</h3><span class="sub">把请求模型改写为上游模型（现有卡片，不变）</span></div>
+          <div class="cb"><div class="tags" id="mapTags"></div></div>
+        </div>
+
+        <div class="card">
+          <div class="ch">
+            <h3>模型的协议限定</h3><span class="new">新</span>
+            <span class="sub">选中模型，指定它在哪些协议下提供</span>
+            <div class="r">
+              <div class="seg" id="mview">
+                <button data-mv="matrix" class="on">矩阵</button>
+                <button data-mv="list">列表</button>
+                <button data-mv="json">JSON</button>
+              </div>
+            </div>
+          </div>
+          <div class="cb">
+            <div id="mvMatrix">
+              <div class="bulk hide" id="bulk"></div>
+              <div class="mxwrap"><table class="mx" id="mx"></table></div>
+              <div class="legend">
+                <span><i class="box def">✓</i> 默认：不限定，按客户的协议原样转发</span>
+                <span><i class="box defoff"></i> 默认：不做协议转换</span>
+                <span><i class="box on">✓</i> 指定提供</span>
+                <span><i class="box on cv">✓</i> 指定提供（经转换）</span>
+                <span><i class="box"></i> 指定不提供</span>
+                <button class="btn sm ghost" id="resetAll" style="margin-left:auto">全部恢复默认</button>
+              </div>
+            </div>
+            <div id="mvList" class="hide"></div>
+            <div id="mvJson" class="hide"></div>
+            <div id="warns"></div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+    <div class="mfoot"><span class="errtxt" id="footErr"></span><span class="sp"></span><button class="btn">取消</button><button class="btn pri" id="save">保存</button></div>
+  </div>
+</section>
+
+<!-- ============ 账号列表 ============ -->
+<section id="v-list" class="hide">
+  <p class="lead">账号列表不加新列。名称下方已有的平台图标改为按账号实际开放的协议显示：开了转换的平台带"转"角标，本平台协议被限定的带"部分"标记，悬停看明细。</p>
+  <div class="card" style="overflow-x:auto">
+    <table class="lst">
+      <thead><tr><th>名称 / 接入类型</th><th>分组</th><th>状态</th><th>优先级</th><th>权重</th><th>最近测试</th></tr></thead>
+      <tbody>
+        <tr><td class="nm"><b>openai-main</b><div class="sub"><span class="pico o" title="OpenAI：Chat Completions、Responses、Responses WebSocket、Embeddings">O</span>OpenAI · API Key</div></td><td>default</td><td><i class="dot"></i>启用</td><td>50</td><td>100</td><td>2 分钟前 · 通过</td></tr>
+        <tr><td class="nm"><b>openai-cc</b><div class="sub"><span class="pico o" title="OpenAI：全部本平台协议">O</span><span class="pico a" title="Anthropic Messages（经转换）：1 个模型 claude-sonnet-4-5">A<i class="cv">转</i></span>OpenAI · API Key</div></td><td>claude-code</td><td><i class="dot"></i>启用</td><td>50</td><td>100</td><td>5 分钟前 · 通过</td></tr>
+        <tr><td class="nm"><b>compat-chat-only</b><div class="sub"><span class="pico o" title="OpenAI：只开放 Chat Completions（共 4 个本平台协议）">O</span><span class="part">部分 1/4</span>OpenAI · API Key</div></td><td>default</td><td><i class="dot"></i>启用</td><td>30</td><td>100</td><td>1 小时前 · 通过</td></tr>
+        <tr><td class="nm"><b>codex-team-3</b><div class="sub"><span class="pico o" title="OpenAI：Chat Completions（适配）、Responses、Responses WebSocket">O</span>Codex · ChatGPT 订阅</div></td><td>codex</td><td><i class="dot"></i>启用</td><td>50</td><td>100</td><td>8 分钟前 · 通过</td></tr>
+        <tr><td class="nm"><b>claude-max-1</b><div class="sub"><span class="pico a" title="Anthropic：Messages">A</span>Claude · OAuth</div></td><td>claude-code</td><td><i class="dot"></i>启用</td><td>80</td><td>100</td><td>3 分钟前 · 通过</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">第 2 行：OpenAI 账号给一个模型开了 Anthropic Messages 转换。第 3 行：只有 Chat 的兼容站点，只勾了 Chat Completions。高级筛选里加一项"开放协议"。</p>
+</section>
+
+<!-- ============ 分组详情 ============ -->
+<section id="v-group" class="hide">
+  <p class="lead">分组详情的"可调用端点"改为按成员账号实际开放的协议显示。原来"经协议转换也可调用"的折叠区（按"所有账号都能转换"推算）删除。</p>
+  <div class="card">
+    <div class="ch"><h3>可调用端点</h3><span class="sub">分组 claude-code · 3 个成员账号</span></div>
+    <div class="cb">
+      <div class="eps">
+        <div class="epbox"><h4><span class="pico a">A</span>Anthropic</h4>
+          <div class="epl">Messages<span class="badge native">原生</span><span class="cnt">2 个账号</span></div>
+          <div class="epl">Messages<span class="badge conv">经转换</span><span class="cnt">1 个账号 · 限 1 个模型</span></div>
+          <div class="epl">count_tokens<span class="badge">跟随 Messages</span><span class="cnt">3 个账号</span></div>
+        </div>
+        <div class="epbox"><h4><span class="pico o">O</span>OpenAI</h4>
+          <div class="epl">Chat Completions<span class="badge native">原生</span><span class="cnt">1 个账号</span></div>
+          <div class="epl">Responses<span class="badge native">原生</span><span class="cnt">1 个账号</span></div>
+          <div class="epl">Embeddings<span class="badge native">原生</span><span class="cnt">1 个账号</span></div>
+        </div>
+        <div class="epbox"><h4><span class="pico g">G</span>Gemini</h4>
+          <div class="epl" style="color:var(--fg-subtle)">没有账号提供。请求返回 404。</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 使用记录 ============ -->
+<section id="v-usage" class="hide">
+  <p class="lead">请求因协议绑定没有账号可用时返回 404，使用记录详情的调度记录里写明每个账号为什么没被选。</p>
+  <div class="card">
+    <div class="ch"><h3>使用记录详情</h3><span class="badge bad">404</span></div>
+    <div class="cb">
+      <dl class="kv">
+        <dt>入站协议</dt><dd>anthropic.messages · <code>POST /v1/messages</code></dd>
+        <dt>模型</dt><dd><code>gpt-5.6</code></dd>
+        <dt>分组</dt><dd>default</dd>
+        <dt>结果</dt><dd>no account in this group serves this model on this endpoint · 尝试 0 次</dd>
+      </dl>
+      <div class="mxwrap" style="margin-top:14px"><table class="lst">
+        <thead><tr><th>候选账号</th><th>类型</th><th>没被选的原因</th></tr></thead>
+        <tbody>
+          <tr><td>openai-main</td><td>OpenAI · API Key</td><td><span class="badge conv">模型未开启协议转换</span> <code>conversion_not_enabled</code></td></tr>
+          <tr><td>openai-cc</td><td>OpenAI · API Key</td><td><span class="badge conv">模型未开启协议转换</span> <code>conversion_not_enabled</code>（只给 claude-sonnet-4-5 开了）</td></tr>
+          <tr><td>claude-max-1</td><td>Claude · OAuth</td><td><span class="badge">模型不在账号模型列表</span> <code>model_not_served</code>（现有原因）</td></tr>
+        </tbody>
+      </table></div>
+      <p class="note">另外两个新原因：<span class="badge adapt">协议未开放</span> <code>protocol_closed</code>（账号的本平台协议里没勾）、<span class="badge adapt">模型在该协议下不提供</span> <code>model_protocol_closed</code>（模型指定了协议，但不含这个）。</p>
+    </div>
+  </div>
+</section>
+
+</div>
+
+<script>
+const TYPES = {
+  openai: {
+    acct: 'openai-cc', name: 'OpenAI · API Key', plat: 'OpenAI', ico: 'o', letter: 'O',
+    own: [
+      { id: 'openai.chat', name: 'Chat Completions', short: 'Chat', path: 'POST /v1/chat/completions', via: 'native' },
+      { id: 'openai.responses', name: 'Responses', path: 'POST /v1/responses', via: 'native' },
+      { id: 'openai.responses_ws', name: 'Responses WebSocket', short: 'Responses WS', path: 'GET /v1/responses', via: 'native' },
+      { id: 'openai.embeddings', name: 'Embeddings', path: 'POST /v1/embeddings', via: 'native' },
+    ],
+    conv: [
+      { id: 'anthropic.messages', name: 'Messages', plat: 'Anthropic', grade: '一般', to: 'Chat Completions' },
+      { id: 'gemini.generate', ids: ['gemini.generate', 'gemini.stream_generate'], name: 'generateContent', plat: 'Gemini', grade: '一般', to: 'Chat Completions' },
+    ],
+    models: [{ id: 'gpt-5.6' }, { id: 'gpt-5.6-mini' }, { id: 'text-embedding-3-large' }, { id: 'claude-sonnet-4-5', map: 'gpt-5.6' }],
+    preset: { 'claude-sonnet-4-5': ['anthropic.messages'], 'text-embedding-3-large': ['openai.embeddings'] },
+  },
+  codex: {
+    acct: 'codex-team-3', name: 'Codex · ChatGPT 订阅', plat: 'OpenAI', ico: 'o', letter: 'O',
+    own: [
+      { id: 'openai.chat', name: 'Chat Completions', short: 'Chat', path: 'POST /v1/chat/completions', via: 'adapt', to: 'Responses' },
+      { id: 'openai.responses', name: 'Responses', path: 'POST /v1/responses', via: 'native' },
+      { id: 'openai.responses_ws', name: 'Responses WebSocket', short: 'Responses WS', path: 'GET /v1/responses', via: 'native' },
+    ],
+    conv: [
+      { id: 'anthropic.messages', name: 'Messages', plat: 'Anthropic', grade: '一般', to: 'Responses' },
+      { id: 'gemini.generate', ids: ['gemini.generate', 'gemini.stream_generate'], name: 'generateContent', plat: 'Gemini', grade: '一般', to: 'Responses' },
+    ],
+    models: [{ id: 'gpt-5.6-codex' }, { id: 'gpt-5.6' }],
+    preset: {},
+  },
+  anthropic: {
+    acct: 'claude-max-1', name: 'Claude · OAuth', plat: 'Anthropic', ico: 'a', letter: 'A',
+    own: [
+      { id: 'anthropic.messages', name: 'Messages', path: 'POST /v1/messages', via: 'native' },
+    ],
+    conv: [
+      { id: 'openai.chat', name: 'Chat Completions', short: 'Chat', plat: 'OpenAI', grade: '一般', to: 'Messages' },
+      { id: 'openai.responses', name: 'Responses', plat: 'OpenAI', grade: '一般', to: 'Messages' },
+      { id: 'gemini.generate', ids: ['gemini.generate', 'gemini.stream_generate'], name: 'generateContent', plat: 'Gemini', grade: '不推荐', to: 'Messages（两跳）' },
+    ],
+    models: [],
+    preset: {},
+  },
+}
+const REST = '*'
+const state = {}
+for (const [k, t] of Object.entries(TYPES)) {
+  state[k] = {
+    mode: 'all', open: new Set(t.own.map(p => p.id)),
+    rules: Object.fromEntries(Object.entries(t.preset).map(([m, ps]) => [m, new Set(ps)])),
+    extra: [], sel: new Set(), view: t.models.length && window.innerWidth >= 760 ? 'matrix' : 'list', draft: null,
+  }
+}
+let cur = 'openai'
+const $ = id => document.getElementById(id)
+const T = () => TYPES[cur], S = () => state[cur]
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
+
+const ownCols = () => T().own.filter(p => S().mode === 'all' || S().open.has(p.id))
+const cols = () => [...ownCols().map(p => ({ ...p, cross: false })), ...T().conv.map(p => ({ ...p, cross: true }))]
+const allCols = () => [...T().own.map(p => ({ ...p, cross: false })), ...T().conv.map(p => ({ ...p, cross: true }))]
+const rowModels = () => [...T().models.map(m => m.id), ...S().extra]
+const defaults = () => new Set(ownCols().map(p => p.id))
+const colName = c => (c.cross ? c.plat + ' ' : '') + (c.short || c.name)
+
+function setCell(model, pid) {
+  const s = S()
+  if (!s.rules[model]) s.rules[model] = defaults()
+  s.rules[model].has(pid) ? s.rules[model].delete(pid) : s.rules[model].add(pid)
+}
+
+function viaBadge(p) {
+  if (p.via === 'adapt') return `<span class="badge adapt">适配 → ${esc(p.to)}</span>`
+  return '<span class="badge native">原生</span>'
+}
+
+function renderHead() {
+  const t = T()
+  $('acctName').textContent = t.acct
+  $('tIco').className = 'pico lg ' + t.ico; $('tIco').textContent = t.letter
+  $('tName').textContent = t.name; $('tPlat').textContent = '平台：' + t.plat
+  $('modelTags').innerHTML = t.models.length
+    ? t.models.map(m => `<span class="tag">${esc(m.id)}</span>`).join('')
+    : '<span style="color:var(--fg-subtle);font-size:13px">未限制：账号可服务所有请求模型</span>'
+  const maps = t.models.filter(m => m.map)
+  $('mapTags').innerHTML = maps.length
+    ? maps.map(m => `<span class="tag">${esc(m.id)} <span class="to">→ ${esc(m.map)}</span></span>`).join('')
+    : '<span style="color:var(--fg-subtle);font-size:13px">未配置映射：请求模型原样发往上游</span>'
+}
+
+function renderOwn() {
+  const t = T(), s = S()
+  document.querySelectorAll('input[name=pmode]').forEach(r => { r.checked = r.value === s.mode })
+  $('ownRows').innerHTML = t.own.map(p => `
+    <label class="prow ${s.mode === 'all' ? 'dis' : ''}">
+      <input type="checkbox" data-own="${p.id}" ${s.mode === 'all' || s.open.has(p.id) ? 'checked' : ''} ${s.mode === 'all' ? 'disabled' : ''}>
+      <span class="nm">${esc(p.name)}</span>${viaBadge(p)}<span class="path">${esc(p.path)}</span>
+    </label>`).join('')
+  const closed = t.own.length - ownCols().length
+  $('newProto').classList.toggle('hide', !(s.mode === 'custom' && closed > 0))
+  $('newProto').textContent = `已指定：有 ${closed} 个本平台协议未开放。账号类型以后新增的协议也不会自动开放。`
+}
+
+function box(on, isDefault, cross) {
+  if (isDefault) return on ? '<i class="box def">✓</i>' : '<i class="box defoff"></i>'
+  return on ? `<i class="box on ${cross ? 'cv' : ''}">✓</i>` : '<i class="box"></i>'
+}
+
+function renderMatrix() {
+  const t = T(), s = S(), cs = cols(), own = cs.filter(c => !c.cross), conv = cs.filter(c => c.cross)
+  const def = defaults()
+  const mapOf = Object.fromEntries(t.models.map(m => [m.id, m.map]))
+  const row = (model, label, isRest) => {
+    const rule = s.rules[model]
+    const cells = cs.map((c, i) => {
+      const on = rule ? rule.has(c.id) : def.has(c.id)
+      return `<td class="cell ${c.cross && i === own.length ? 'cfirst' : ''}" data-m="${esc(model)}" data-p="${c.id}" title="${esc(colName(c))}">${box(on, !rule, c.cross)}</td>`
+    }).join('')
+    const st = rule
+      ? `<button class="btn sm ghost" data-reset="${esc(model)}">恢复默认</button>`
+      : '默认'
+    return `<tr class="${isRest ? 'rest' : ''}">
+      <td class="sel">${isRest ? '' : `<input type="checkbox" data-sel="${esc(model)}" ${s.sel.has(model) ? 'checked' : ''}>`}</td>
+      <td class="m"><span class="id">${label}</span>${mapOf[model] ? `<span class="map">映射 → ${esc(mapOf[model])}</span>` : ''}</td>
+      ${cells}<td class="st">${st}</td></tr>`
+  }
+  const models = rowModels()
+  $('mx').innerHTML = `
+    <thead>
+      <tr class="grp"><th class="sel"></th><th class="m"></th>
+        ${own.length ? `<th class="gown" colspan="${own.length}">本平台（${esc(t.plat)}）</th>` : ''}
+        ${conv.length ? `<th class="gconv" colspan="${conv.length}">协议转换（默认不提供）</th>` : ''}<th></th></tr>
+      <tr><th class="sel"><input type="checkbox" id="selAll" ${models.length && models.every(m => s.sel.has(m)) ? 'checked' : ''} ${models.length ? '' : 'disabled'}></th>
+        <th class="m">模型</th>
+        ${cs.map((c, i) => `<th class="${c.cross && i === own.length ? 'cfirst' : ''}">${esc(c.short || c.name)}<span class="g">${c.cross ? esc(c.plat) + ' · ' + esc(c.grade) : (c.via === 'adapt' ? '适配' : '原生')}</span></th>`).join('')}
+        <th></th></tr>
+    </thead>
+    <tbody>
+      ${models.map(m => row(m, esc(m), false)).join('')}
+      ${row(REST, '其余模型', true)}
+    </tbody>`
+  // bulk bar
+  const b = $('bulk')
+  b.classList.toggle('hide', s.sel.size === 0)
+  if (s.sel.size) {
+    if (!s.draft) s.draft = defaults()
+    b.innerHTML = `<b>已选 ${s.sel.size} 个模型</b><span>指定协议：</span>` +
+      cs.map(c => `<button class="chipbtn ${c.cross ? 'cv' : ''} ${s.draft.has(c.id) ? 'on' : ''}" data-draft="${c.id}">${esc(colName(c))}${c.cross ? ' · 转换' : ''}</button>`).join('') +
+      `<span style="flex:1"></span><button class="btn sm pri" id="bulkApply">应用到选中的模型</button><button class="btn sm" id="bulkReset">恢复默认</button><button class="btn sm ghost" id="bulkCancel">取消选择</button>`
+  } else s.draft = null
+}
+
+function groups() {
+  // rules merged by identical protocol set, the rest rule last
+  const s = S(), by = new Map()
+  for (const [m, set] of Object.entries(s.rules)) {
+    if (m === REST) continue
+    const key = [...set].sort().join(',')
+    if (!by.has(key)) by.set(key, { models: [], protocols: set })
+    by.get(key).models.push(m)
+  }
+  const out = [...by.values()]
+  if (s.rules[REST]) out.push({ models: [REST], protocols: s.rules[REST] })
+  return out
+}
+
+function renderList() {
+  const s = S(), cs = allCols(), gs = groups()
+  const chips = (g, gi) => cs.map(c => `<button class="chipbtn ${c.cross ? 'cv' : ''} ${g.protocols.has(c.id) ? 'on' : ''}" data-gp="${gi}" data-p="${c.id}">${esc(colName(c))}${c.cross ? ' · 转换' : ''}</button>`).join(' ')
+  const card = (g, gi) => g.models[0] === REST
+    ? `<div class="rcard"><div class="lbl">模型</div><b>其余模型</b> <span style="color:var(--fg-subtle);font-size:12px">（没有单独列出的全部模型）</span>
+        <div class="lbl">提供的协议</div><div class="tags">${chips(g, gi)}</div>
+        <div style="margin-top:10px"><button class="btn sm ghost" data-gdel="${gi}">删除这一组（恢复默认）</button></div></div>`
+    : `<div class="rcard"><div class="lbl">模型</div>
+        <div class="tags">${g.models.map(m => `<span class="mchip">${esc(m)}<button data-mdel="${esc(m)}" title="移出（恢复默认）">✕</button></span>`).join('')}
+          <input class="minput" placeholder="添加模型，回车确认" data-gadd="${gi}"></div>
+        <div class="lbl">提供的协议</div><div class="tags">${chips(g, gi)}</div>
+        <div style="margin-top:10px"><button class="btn sm ghost" data-gdel="${gi}">删除这一组（恢复默认）</button></div></div>`
+  $('mvList').innerHTML =
+    (gs.length ? gs.map(card).join('') : '<div class="alert info">没有限定：所有模型在账号开放的本平台协议下提供，不做协议转换。</div>') +
+    `<div class="rcard" style="border-style:dashed"><div class="lbl">新增一组</div>
+       <div class="tags"><input class="minput" style="width:220px" placeholder="输入模型 ID，回车新建一组" id="newGroup">
+       ${s.rules[REST] ? '' : '<button class="btn sm" id="addRest">为"其余模型"指定协议</button>'}</div></div>`
+}
+
+function toJSON() {
+  const t = T(), s = S()
+  const expand = ids => t.conv.concat(t.own).flatMap(p => ids.has(p.id) ? (p.ids || [p.id]) : [])
+  const order = [...t.own, ...t.conv].flatMap(p => p.ids || [p.id])
+  const sort = a => a.sort((x, y) => order.indexOf(x) - order.indexOf(y))
+  return {
+    protocols: s.mode === 'all' ? null : t.own.filter(p => s.open.has(p.id)).map(p => p.id),
+    model_protocols: groups().map(g => ({ models: g.models, protocols: sort(expand(g.protocols)) })),
+  }
+}
+
+function renderJson() {
+  const j = toJSON()
+  const mp = j.model_protocols.length
+    ? '[\n' + j.model_protocols.map(r => '    ' + JSON.stringify(r).replace(/","/g, '", "').replace(/":\[/g, '": [').replace(/\],"/g, '], "')).join(',\n') + '\n  ]'
+    : '[]'
+  $('mvJson').innerHTML = `<pre class="json">{\n  "protocols": ${JSON.stringify(j.protocols)},\n  "model_protocols": ${esc(mp)}\n}</pre>
+    <p class="note">可直接编辑或粘贴。<code>protocols</code> 为 <code>null</code> 表示本平台协议全部开放；<code>"*"</code> 表示其余模型。Gemini 的流式和非流式是两个协议 id，界面上合成一列。</p>`
+}
+
+function renderWarns() {
+  const t = T(), s = S(), w = [], e = []
+  const open = defaults(), name = id => { const c = allCols().find(c => c.id === id); return c ? colName(c) : id }
+  const convIds = new Set(t.conv.map(c => c.id))
+  let anyConv = false
+  for (const [m, set] of Object.entries(s.rules)) {
+    const label = m === REST ? '其余模型' : m
+    if (!set.size) e.push(`${label}：至少选一个协议，或恢复默认。`)
+    for (const p of set) {
+      if (convIds.has(p)) anyConv = true
+      else if (!open.has(p)) w.push(`${label} 指定了账号未开放的协议 ${name(p)}，这一项不生效。`)
+      const c = t.conv.find(c => c.id === p)
+      if (c && c.grade === '不推荐') w.push(`${label} → ${name(p)}：要经过两次转换，质量较差。`)
+    }
+    if (m === REST && [...set].some(p => convIds.has(p))) w.push('"其余模型"开了协议转换：所有没有单独列出的模型都会接受转换，上游不认识的模型名可能触发故障策略。建议只给有映射的模型开。')
+  }
+  if (s.mode === 'custom' && !open.size && !anyConv) e.push('账号没有开放任何协议。要停用账号请用"可调度"开关。')
+  $('warns').innerHTML = e.map(x => `<div class="alert err">✕ ${esc(x)}</div>`).join('') + w.map(x => `<div class="alert warn">⚠ ${esc(x)}</div>`).join('')
+  $('footErr').textContent = e.length ? `有 ${e.length} 处需要修正` : ''
+  $('save').disabled = e.length > 0
+  // nav summary
+  const limited = Object.keys(s.rules).length
+  const convModels = Object.entries(s.rules).filter(([, set]) => [...set].some(p => convIds.has(p))).length
+  $('navSum').textContent = `协议 ${open.size}/${t.own.length}` + (limited ? ` · 限定 ${limited} 个模型` : '') + (convModels ? ` · 转换 ${convModels} 个` : ' · 不转换')
+}
+
+function render() {
+  const s = S()
+  renderHead(); renderOwn()
+  document.querySelectorAll('#mview button').forEach(b => b.classList.toggle('on', b.dataset.mv === s.view))
+  $('mvMatrix').classList.toggle('hide', s.view !== 'matrix')
+  $('mvList').classList.toggle('hide', s.view !== 'list')
+  $('mvJson').classList.toggle('hide', s.view !== 'json')
+  renderMatrix(); renderList(); renderJson(); renderWarns()
+}
+
+function addModel(model, protocols) {
+  model = model.trim()
+  if (!model || model === REST) return
+  const s = S()
+  if (!rowModels().includes(model)) s.extra.push(model)
+  s.rules[model] = new Set(protocols)
+}
+
+document.addEventListener('click', ev => {
+  const el = ev.target.closest('button, td.cell')
+  if (!el) return
+  const d = el.dataset, s = S()
+  if (d.view) {
+    document.querySelectorAll('#views button').forEach(b => b.classList.toggle('on', b === el))
+    for (const v of ['editor', 'list', 'group', 'usage']) $('v-' + v).classList.toggle('hide', v !== d.view)
+    $('types').classList.toggle('hide', d.view !== 'editor')
+    return
+  }
+  if (d.type) { cur = d.type; document.querySelectorAll('#types button').forEach(b => b.classList.toggle('on', b === el)) }
+  else if (el.id === 'theme') { const dark = document.documentElement.dataset.theme !== 'dark'; document.documentElement.dataset.theme = dark ? 'dark' : ''; el.textContent = dark ? '浅色' : '深色'; return }
+  else if (d.mv) s.view = d.mv
+  else if (el.matches('td.cell')) setCell(d.m, d.p)
+  else if (d.reset) delete s.rules[d.reset]
+  else if (el.id === 'resetAll') { s.rules = {}; s.sel.clear() }
+  else if (d.draft) s.draft.has(d.draft) ? s.draft.delete(d.draft) : s.draft.add(d.draft)
+  else if (el.id === 'bulkApply') { for (const m of s.sel) s.rules[m] = new Set(s.draft); s.sel.clear() }
+  else if (el.id === 'bulkReset') { for (const m of s.sel) delete s.rules[m]; s.sel.clear() }
+  else if (el.id === 'bulkCancel') s.sel.clear()
+  else if (d.gp !== undefined) { const g = groups()[+d.gp]; const on = g.protocols.has(d.p); for (const m of g.models) on ? s.rules[m].delete(d.p) : s.rules[m].add(d.p) }
+  else if (d.gdel !== undefined) { for (const m of groups()[+d.gdel].models) delete s.rules[m] }
+  else if (d.mdel) delete s.rules[d.mdel]
+  else if (el.id === 'addRest') s.rules[REST] = defaults()
+  else return
+  render()
+})
+document.addEventListener('change', ev => {
+  const el = ev.target, d = el.dataset, s = S()
+  if (el.name === 'pmode') s.mode = el.value
+  else if (d.own) el.checked ? s.open.add(d.own) : s.open.delete(d.own)
+  else if (d.sel) el.checked ? s.sel.add(d.sel) : s.sel.delete(d.sel)
+  else if (el.id === 'selAll') { s.sel = new Set(el.checked ? rowModels() : []) }
+  else return
+  render()
+})
+document.addEventListener('keydown', ev => {
+  if (ev.key !== 'Enter') return
+  const el = ev.target
+  if (el.id === 'newGroup') addModel(el.value, defaults())
+  else if (el.dataset.gadd !== undefined) addModel(el.value, groups()[+el.dataset.gadd].protocols)
+  else return
+  render()
+})
+render()
+</script>
+</body>
+</html>

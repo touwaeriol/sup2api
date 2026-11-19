@@ -7,28 +7,36 @@ const invalid = (fields: { field: string; code?: string; message: string }[]) =>
 
 describe('errorMessage', () => {
   it('words a version whose package is gone (410 package_gone) in both languages', () => {
-    const e = new ApiError(410, { code: 'package_gone', message: 'the package of this version is no longer available; upload it again' })
+    const e = new ApiError(410, { code: 'package_gone', message: 'no reachable node holds the package of this version; bring a node that holds it back online, or upload it again' })
     i18n.global.locale.value = 'zh'
     expect(errorMessage(e)).toBe(i18n.global.t('plugins.errors.packageGone'))
-    expect(errorMessage(e)).toContain('安装包已不在任何节点上')
+    expect(errorMessage(e)).toContain('没有能连上的节点持有该插件版本的安装包')
     i18n.global.locale.value = 'en'
-    expect(errorMessage(e)).toContain('no longer available on any node')
+    expect(errorMessage(e)).toContain('No reachable node holds the package')
+  })
+
+  it('words a busy cluster change (409 cluster_change_busy) in both languages', () => {
+    const e = new ApiError(409, { code: 'cluster_change_busy', message: 'another cluster change is being submitted; retry' })
+    i18n.global.locale.value = 'zh'
+    expect(errorMessage(e)).toContain('请稍后重试')
+    i18n.global.locale.value = 'en'
+    expect(errorMessage(e)).toContain('Try again in a moment')
   })
 })
 
 describe('fieldErrors', () => {
   it('translates the codes a form knows and keeps the server message otherwise', () => {
     const e = invalid([
-      { field: 'values/api_key', code: 'reenter', message: 're-enter this secret to change other settings' },
+      { field: 'values/key', code: 'reserved', message: 'reserved key' },
       { field: 'values/url', code: 'format', message: 'must be a URL' },
       { field: 'name', message: 'required' }
     ])
-    const codes = { reenter: 'plugins.settings.reenter' }
+    const codes = { reserved: 'roles.keyReserved' }
     i18n.global.locale.value = 'zh'
-    expect(fieldErrors(e, undefined, codes)).toEqual({ 'values/api_key': '要修改其他设置，需要重新填写这个密钥', 'values/url': 'must be a URL', name: 'required' })
+    expect(fieldErrors(e, undefined, codes)).toEqual({ 'values/key': '这是内置角色保留的标识，请换一个', 'values/url': 'must be a URL', name: 'required' })
     i18n.global.locale.value = 'en'
-    expect(fieldErrors(e, 'values/', codes)).toEqual({ api_key: 'Re-enter this secret to change other settings', url: 'must be a URL' })
-    expect(fieldErrors(e)).toEqual({ 'values/api_key': 're-enter this secret to change other settings', 'values/url': 'must be a URL', name: 'required' })
+    expect(fieldErrors(e, 'values/', codes)).toEqual({ key: 'This key is reserved for a built-in role; choose another', url: 'must be a URL' })
+    expect(fieldErrors(e)).toEqual({ 'values/key': 'reserved key', 'values/url': 'must be a URL', name: 'required' })
   })
 
   it('maps the notification test codes in both languages, falling back for the old "invalid"', () => {

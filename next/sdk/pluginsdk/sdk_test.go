@@ -2,11 +2,16 @@ package pluginsdk_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"testing"
 	"time"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
@@ -73,9 +78,9 @@ func (d *demo) Shutdown(context.Context) error { d.shutdowns++; return nil }
 func TestHarnessLifecycle(t *testing.T) {
 	d := newDemo()
 	h := pluginsdktest.Start(t, d, pluginsdktest.Options{
-		Config: map[string]string{"name": "world"},
-		Grants: []*pluginv1.Grant{{Permission: "kv", ScopeJson: ""}},
-		SDK:    []pluginsdk.Option{pluginsdk.WithManifest([]byte(testManifest))},
+		Config:   map[string]string{"name": "world"},
+		Grants:   []*pluginv1.Grant{{Permission: "kv", ScopeJson: ""}},
+		Manifest: []byte(testManifest),
 	})
 	if h.Info.GetPluginKey() != "demo" || h.Info.GetVersion() != "1.2.3" {
 		t.Fatalf("info = %v", h.Info)
@@ -131,7 +136,7 @@ func TestHarnessLifecycle(t *testing.T) {
 
 func TestWithInfoOverridesManifest(t *testing.T) {
 	h := pluginsdktest.Start(t, newDemo(), pluginsdktest.Options{
-		SDK: []pluginsdk.Option{pluginsdk.WithManifest([]byte(testManifest)), pluginsdk.WithInfo("demo", "2.0.0")},
+		Manifest: []byte(testManifest), SDK: []pluginsdk.Option{pluginsdk.WithInfo("demo", "2.0.0")},
 	})
 	if h.Info.GetVersion() != "2.0.0" {
 		t.Fatalf("version = %s", h.Info.GetVersion())
@@ -182,5 +187,59 @@ func TestLedgerAndAuthz(t *testing.T) {
 func TestRegisterRequiresInfo(t *testing.T) {
 	if err := pluginsdk.Register(nil, newDemo(), nil); err == nil {
 		t.Fatal("expected error without key/version")
+	}
+}
+
+// validating is demo with settings validation: the name must not be "bad",
+// and "trim" is stored trimmed.
+type validating struct{ *demo }
+
+func (v validating) ValidateSettings(_ context.Context, cfg pluginsdk.Config) (json.RawMessage, error) {
+	var in struct {
+		Name string `json:"name"`
+	}
+	if err := cfg.Decode(&in); err != nil {
+		return nil, err
+	}
+	switch in.Name {
+	case "bad":
+		return nil, pluginsdk.FieldErrors{}.Add("name", "invalid", "bad name").Err()
+	case " trim ":
+		return json.RawMessage(`{"name":"trim"}`), nil
+	case "grants":
+		if len(cfg.Grants) != 1 || string(cfg.Grants[0].Scope) != `{"domains":["a.test"]}` {
+			return nil, fmt.Errorf("grants = %v", cfg.Grants)
+		}
+		return json.RawMessage(`{"name":"` + cfg.Grants[0].Permission + `"}`), nil
+	}
+	return nil, nil
+}
+
+func TestValidateSettings(t *testing.T) {
+	h := pluginsdktest.Start(t, validating{newDemo()}, pluginsdktest.Options{Manifest: []byte(testManifest)})
+	resp, err := h.ValidateSettings(map[string]string{"name": "bad"}, nil)
+	if err != nil || len(resp.GetErrors()) != 1 || resp.GetErrors()[0].GetField() != "name" {
+		t.Fatalf("field errors = %v %v", resp, err)
+	}
+	if resp, err = h.ValidateSettings(`not json`, nil); err != nil || len(resp.GetErrors()) != 1 || resp.GetErrors()[0].GetField() != "" {
+		t.Fatalf("other errors reject the whole object = %v %v", resp, err)
+	}
+	if resp, err = h.ValidateSettings(map[string]string{"name": " trim "}, nil); err != nil || resp.GetNormalizedConfigJson() != `{"name":"trim"}` {
+		t.Fatalf("normalized = %v %v", resp, err)
+	}
+	if resp, err = h.ValidateSettings(nil, nil); err != nil || len(resp.GetErrors()) != 0 || resp.GetNormalizedConfigJson() != "" {
+		t.Fatalf("accepted = %v %v", resp, err)
+	}
+	// The grants reach the plugin as Configure gets them.
+	grants := []*pluginv1.Grant{{Permission: "net", ScopeJson: `{"domains":["a.test"]}`}}
+	if resp, err = h.ValidateSettings(map[string]string{"name": "grants"}, grants); err != nil || resp.GetNormalizedConfigJson() != `{"name":"net"}` {
+		t.Fatalf("grants = %v %v", resp, err)
+	}
+
+	// Without SettingsValidator the call is UNIMPLEMENTED: the host stores
+	// the settings as they are.
+	plain := pluginsdktest.Start(t, newDemo(), pluginsdktest.Options{Manifest: []byte(testManifest)})
+	if _, err := plain.ValidateSettings(nil, nil); status.Code(err) != codes.Unimplemented {
+		t.Fatalf("without a validator = %v", err)
 	}
 }

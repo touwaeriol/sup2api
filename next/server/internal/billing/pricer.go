@@ -122,17 +122,10 @@ func (s *Service) Resolve(ctx context.Context, q core.PriceQuery) (*core.PriceRu
 		}
 		s.mu.Unlock()
 	}
-	if rule != nil {
-		return rule.Clone(), nil
+	if rule == nil {
+		return nil, core.ErrPriceNotConfigured.WithDetails(map[string]any{"model": q.Model})
 	}
-	st, err := s.Settings(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if st.MissingPricePolicy == PolicyFree {
-		return nil, nil
-	}
-	return nil, core.ErrPriceNotConfigured.WithDetails(map[string]any{"model": q.Model})
+	return rule.Clone(), nil
 }
 
 // Inputs implements core.Pricer: the body paths and header names the

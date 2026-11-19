@@ -2,110 +2,195 @@ package vertex
 
 import (
 	"context"
-	"maps"
 	"net/http"
 	"testing"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
+	"github.com/Sub2API-Devs/sup2api/next/sdk/pluginsdk"
+	"github.com/Sub2API-Devs/sup2api/next/sdk/pluginsdk/pluginsdktest"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/pluginsdk/providers/gemini"
 )
 
-func buildRequest(acc *pluginv1.Account, protocol, model string) *pluginv1.BuildUpstreamRequestRequest {
-	return &pluginv1.BuildUpstreamRequestRequest{
-		Account: acc,
-		Meta:    &pluginv1.RequestMeta{Protocol: protocol, Model: model, Stream: protocol == ProtocolStreamGenerate},
+// geminiBody is a client's Gemini body as the core hands it over, with
+// spacing, key order and an escape the plugin must leave alone.
+const geminiBody = "{\"contents\": [{\"role\":\"user\",\"parts\":[{\"text\":\"ping \\u00e9\"}]}],\n \"generationConfig\":{\"temperature\":0.2}}"
+
+// executeRequest is one attempt of a gateway request for acc. It carries a
+// client header the gemini platform passes, which reaches the upstream as a
+// default header.
+func executeRequest(acc *pluginv1.Account, protocol, model string) *pluginv1.ExecuteRequest {
+	return &pluginv1.ExecuteRequest{
+		Account:        acc,
+		Meta:           &pluginv1.RequestMeta{Protocol: protocol, Model: model, Stream: protocol == ProtocolStreamGenerate},
+		Body:           []byte(geminiBody),
+		InboundHeaders: map[string]string{"user-agent": "client/1.0"},
 	}
 }
 
-func TestUpstreamURLs(t *testing.T) {
-	apiKey := map[string]any{fieldAPIKey: "AQ.Ab8RN6-example"}
-	const (
-		regional = "https://us-central1-aiplatform.googleapis.com/v1/projects/my-project-123456/locations/us-central1/publishers/google/models/"
-		global   = "https://aiplatform.googleapis.com/v1/projects/my-project-123456/locations/global/publishers/google/models/"
-		express  = "https://aiplatform.googleapis.com/v1/publishers/google/models/"
-	)
-	globalTarget := map[string]any{fieldProject: testProject, fieldLocation: "global"}
+// executeCase is an Execute input and the one request it must relay.
+type executeCase struct {
+	name string
+	in   *pluginv1.ExecuteRequest
+	// url and model are the address and model id of the request, auth its
+	// authoritative headers.
+	url, model string
+	auth       map[string]string
+}
 
-	for _, tc := range []struct {
-		name     string
-		acc      *pluginv1.Account
-		protocol string
-		model    string
-		wantURL  string
-		wantID   string
+// want is the request tc must relay: the body unchanged, the credential
+// authoritative, the content type and the client header defaults.
+func (tc executeCase) want() *pluginv1.UpstreamRequest {
+	return &pluginv1.UpstreamRequest{
+		Method:         http.MethodPost,
+		Url:            tc.url,
+		Headers:        tc.auth,
+		DefaultHeaders: map[string]string{"content-type": contentType, "user-agent": "client/1.0"},
+		Body:           []byte(geminiBody),
+		UpstreamModel:  tc.model,
+	}
+}
+
+const (
+	testAPIKey   = "AQ.Ab8RN6-example"
+	regionalBase = "https://us-central1-aiplatform.googleapis.com/v1/projects/my-project-123456/locations/us-central1/publishers/google/models/"
+	globalBase   = "https://aiplatform.googleapis.com/v1/projects/my-project-123456/locations/global/publishers/google/models/"
+	expressBase  = "https://aiplatform.googleapis.com/v1/publishers/google/models/"
+)
+
+var globalTarget = map[string]any{fieldProject: testProject, fieldLocation: LocationGlobal}
+
+func userAccount(settings map[string]any) *pluginv1.Account {
+	return stored(TypeAuthorizedUser, map[string]any{"authorized_user_json": userJSON(nil), fieldAccessToken: " ya29.user "}, settings)
+}
+
+func apiKeyAccount(settings map[string]any) *pluginv1.Account {
+	return stored(TypeAPIKey, map[string]any{fieldAPIKey: testAPIKey}, settings)
+}
+
+// executeCases is every account type × regional/global/express address ×
+// protocol, then the edge cases of the model and the credential. It is the
+// input table of the conformance suite as well.
+func executeCases() []executeCase {
+	const model = "gemini-2.5-flash"
+	tokenAuth := map[string]string{"authorization": "Bearer ya29.token"}
+	userAuth := map[string]string{"authorization": "Bearer ya29.user", "x-goog-user-project": testProject}
+	keyAuth := map[string]string{"x-goog-api-key": testAPIKey}
+	accounts := []struct {
+		name string
+		acc  func(map[string]any) *pluginv1.Account
+		auth map[string]string
+		// express: the type may leave project and location empty.
+		express bool
 	}{
-		{"regional generate", saAccount(fullTarget), ProtocolGenerate, "gemini-2.5-flash", regional + "gemini-2.5-flash:generateContent", "gemini-2.5-flash"},
-		{"regional stream", saAccount(fullTarget), ProtocolStreamGenerate, "gemini-2.5-flash", regional + "gemini-2.5-flash:streamGenerateContent?alt=sse", "gemini-2.5-flash"},
-		{"regional countTokens", saAccount(fullTarget), ProtocolCountTokens, "gemini-2.5-flash", regional + "gemini-2.5-flash:countTokens", "gemini-2.5-flash"},
-		{"global generate", saAccount(globalTarget), ProtocolGenerate, "gemini-2.5-pro", global + "gemini-2.5-pro:generateContent", "gemini-2.5-pro"},
-		{"global stream", saAccount(globalTarget), ProtocolStreamGenerate, "gemini-2.5-pro", global + "gemini-2.5-pro:streamGenerateContent?alt=sse", "gemini-2.5-pro"},
-		{"another region", saAccount(map[string]any{fieldProject: testProject, fieldLocation: "europe-west4"}), ProtocolGenerate, "gemini-2.5-pro",
-			"https://europe-west4-aiplatform.googleapis.com/v1/projects/my-project-123456/locations/europe-west4/publishers/google/models/gemini-2.5-pro:generateContent", "gemini-2.5-pro"},
-		{"models/ prefix trimmed", saAccount(fullTarget), ProtocolGenerate, "models/gemini-2.5-flash", regional + "gemini-2.5-flash:generateContent", "gemini-2.5-flash"},
-		{"model escaped as one segment", saAccount(fullTarget), ProtocolGenerate, "tuned/model?x#y", regional + "tuned%2Fmodel%3Fx%23y:generateContent", "tuned/model?x#y"},
-		{"user credentials", stored(TypeAuthorizedUser, map[string]any{"authorized_user_json": userJSON(nil), fieldAccessToken: "ya29.token"}, fullTarget),
-			ProtocolGenerate, "gemini-2.5-flash", regional + "gemini-2.5-flash:generateContent", "gemini-2.5-flash"},
-		{"api key express generate", stored(TypeAPIKey, apiKey, nil), ProtocolGenerate, "gemini-2.5-flash", express + "gemini-2.5-flash:generateContent", "gemini-2.5-flash"},
-		{"api key express stream", stored(TypeAPIKey, apiKey, map[string]any{fieldProject: "", fieldLocation: ""}), ProtocolStreamGenerate, "models/gemini-2.5-flash",
-			express + "gemini-2.5-flash:streamGenerateContent?alt=sse", "gemini-2.5-flash"},
-		{"api key express countTokens", stored(TypeAPIKey, apiKey, nil), ProtocolCountTokens, "gemini-2.5-flash", express + "gemini-2.5-flash:countTokens", "gemini-2.5-flash"},
-		{"api key with project", stored(TypeAPIKey, apiKey, fullTarget), ProtocolGenerate, "gemini-2.5-flash", regional + "gemini-2.5-flash:generateContent", "gemini-2.5-flash"},
-		{"api key with project, global", stored(TypeAPIKey, apiKey, globalTarget), ProtocolStreamGenerate, "gemini-2.5-flash",
-			global + "gemini-2.5-flash:streamGenerateContent?alt=sse", "gemini-2.5-flash"},
-	} {
+		{"service account", saAccount, tokenAuth, false},
+		// User credentials belong to no project: the account's project is
+		// named as the quota project, or aiplatform answers 403.
+		{"user credentials", userAccount, userAuth, false},
+		{"api key", apiKeyAccount, keyAuth, true},
+	}
+	targets := []struct {
+		name     string
+		settings map[string]any
+		base     string
+	}{
+		{"regional", fullTarget, regionalBase},
+		{"global", globalTarget, globalBase},
+		{"express", map[string]any{fieldProject: "", fieldLocation: ""}, expressBase},
+	}
+	var cases []executeCase
+	for _, a := range accounts {
+		for _, tg := range targets {
+			if tg.name == "express" && !a.express {
+				continue
+			}
+			for _, pa := range [][2]string{
+				{ProtocolGenerate, "generateContent"},
+				{ProtocolStreamGenerate, "streamGenerateContent?alt=sse"},
+				{ProtocolCountTokens, "countTokens"},
+			} {
+				cases = append(cases, executeCase{a.name + "/" + tg.name + "/" + pa[0],
+					executeRequest(a.acc(tg.settings), pa[0], model), tg.base + model + ":" + pa[1], model, a.auth})
+			}
+		}
+	}
+	return append(cases,
+		executeCase{"models/ prefix trimmed", executeRequest(saAccount(fullTarget), ProtocolGenerate, "models/"+model),
+			regionalBase + model + ":generateContent", model, tokenAuth},
+		executeCase{"model escaped as one segment", executeRequest(saAccount(fullTarget), ProtocolGenerate, "tuned/model?x#y"),
+			regionalBase + "tuned%2Fmodel%3Fx%23y:generateContent", "tuned/model?x#y", tokenAuth},
+		executeCase{"another region", executeRequest(saAccount(map[string]any{fieldProject: testProject, fieldLocation: "europe-west4"}), ProtocolGenerate, model),
+			"https://europe-west4-aiplatform.googleapis.com/v1/projects/my-project-123456/locations/europe-west4/publishers/google/models/" + model + ":generateContent", model, tokenAuth},
+		executeCase{"api key express without settings", executeRequest(apiKeyAccount(nil), ProtocolStreamGenerate, "models/"+model),
+			expressBase + model + ":streamGenerateContent?alt=sse", model, keyAuth},
+		// A token that has not expired yet is sent.
+		executeCase{"token still valid", executeRequest(stored(TypeServiceAccount, map[string]any{
+			"service_account_json": saJSON(nil), fieldAccessToken: "ya29.token", fieldExpiresAt: testNow.Unix() + 1}, fullTarget), ProtocolGenerate, model),
+			regionalBase + model + ":generateContent", model, tokenAuth},
+		executeCase{"user credentials, the account's own project", executeRequest(userAccount(map[string]any{fieldProject: "another-project-9", fieldLocation: LocationGlobal}), ProtocolGenerate, model),
+			"https://aiplatform.googleapis.com/v1/projects/another-project-9/locations/global/publishers/google/models/" + model + ":generateContent", model,
+			map[string]string{"authorization": "Bearer ya29.user", "x-goog-user-project": "another-project-9"}},
+		// A token left in an API key account is not sent.
+		executeCase{"api key with a stray token", executeRequest(stored(TypeAPIKey, map[string]any{fieldAPIKey: testAPIKey, fieldAccessToken: "ya29.stray"}, fullTarget), ProtocolGenerate, model),
+			regionalBase + model + ":generateContent", model, keyAuth},
+	)
+}
+
+// relayed runs one Execute in the harness and returns the request it
+// relayed, failing t unless it relayed exactly once, without waiting and
+// without a fetch, and answered host_usage.
+func relayed(t *testing.T, h *pluginsdktest.Harness, in *pluginv1.ExecuteRequest) *pluginv1.UpstreamRequest {
+	t.Helper()
+	ex := h.Execute(context.Background(), in)
+	relay := ex.Relayed(t)
+	if relay.Wait || len(ex.Fetches()) != 0 || !proto.Equal(ex.Response, pluginsdk.ReportHostUsage()) {
+		t.Fatalf("wait %v, fetches %d, response %v", relay.Wait, len(ex.Fetches()), ex.Response)
+	}
+	return relay.Request
+}
+
+func TestExecute(t *testing.T) {
+	noDial(t)
+	h := startPlugin(t, newTestPlugin(Endpoints{}))
+	for _, tc := range executeCases() {
 		t.Run(tc.name, func(t *testing.T) {
-			resp, err := newTestPlugin(Endpoints{}).BuildUpstreamRequest(context.Background(), buildRequest(tc.acc, tc.protocol, tc.model))
-			if err != nil {
-				t.Fatalf("BuildUpstreamRequest: %v", err)
-			}
-			if resp.GetMethod() != http.MethodPost || resp.GetUrl() != tc.wantURL || resp.GetUpstreamModel() != tc.wantID {
-				t.Fatalf("request = %s %s (model %s)\nwant POST %s (model %s)", resp.GetMethod(), resp.GetUrl(), resp.GetUpstreamModel(), tc.wantURL, tc.wantID)
-			}
-			// The Gemini body is forwarded as it is.
-			if len(resp.GetPatches()) != 0 {
-				t.Fatalf("patches = %v", resp.GetPatches())
+			if got := relayed(t, h, tc.in); !proto.Equal(got, tc.want()) {
+				t.Fatalf("relayed %v\nwant    %v", got, tc.want())
 			}
 		})
 	}
+	if dials := h.Host.Dials(); len(dials) != 0 {
+		t.Fatalf("egress dials: %v", dials)
+	}
 }
 
-func TestUpstreamHeaders(t *testing.T) {
-	p := newTestPlugin(Endpoints{})
-	for _, tc := range []struct {
-		name string
-		acc  *pluginv1.Account
-		want map[string]string
-	}{
-		{"service account", saAccount(fullTarget), map[string]string{"content-type": "application/json", "authorization": "Bearer ya29.token"}},
-		// A token that has not expired yet is sent.
-		{"service account, token still valid", stored(TypeServiceAccount, map[string]any{
-			"service_account_json": saJSON(nil), fieldAccessToken: "ya29.token", fieldExpiresAt: testNow.Unix() + 1}, fullTarget),
-			map[string]string{"content-type": "application/json", "authorization": "Bearer ya29.token"}},
-		// User credentials belong to no project: the account's project is
-		// named as the quota project, or aiplatform answers 403.
-		{"user credentials", stored(TypeAuthorizedUser, map[string]any{"authorized_user_json": userJSON(nil), fieldAccessToken: " ya29.user "}, fullTarget),
-			map[string]string{"content-type": "application/json", "authorization": "Bearer ya29.user", "x-goog-user-project": testProject}},
-		{"user credentials, the account's own project", stored(TypeAuthorizedUser, map[string]any{"authorized_user_json": userJSON(nil), fieldAccessToken: "ya29.user"},
-			map[string]any{fieldProject: "another-project-9", fieldLocation: "global"}),
-			map[string]string{"content-type": "application/json", "authorization": "Bearer ya29.user", "x-goog-user-project": "another-project-9"}},
-		{"api key", stored(TypeAPIKey, map[string]any{fieldAPIKey: "AQ.Ab8RN6-example"}, nil),
-			map[string]string{"content-type": "application/json", "x-goog-api-key": "AQ.Ab8RN6-example"}},
-		// A token left in an API key account is not sent.
-		{"api key with a stray token", stored(TypeAPIKey, map[string]any{fieldAPIKey: "AQ.Ab8RN6-example", fieldAccessToken: "ya29.stray"}, fullTarget),
-			map[string]string{"content-type": "application/json", "x-goog-api-key": "AQ.Ab8RN6-example"}},
-	} {
-		resp, err := p.BuildUpstreamRequest(context.Background(), buildRequest(tc.acc, ProtocolGenerate, "gemini-2.5-flash"))
-		if err != nil || !maps.Equal(resp.GetHeaders(), tc.want) {
-			t.Errorf("%s: headers = %v, err %v", tc.name, resp.GetHeaders(), err)
+// Every attempt is built from scratch: the same input gives the same request
+// (fixed clock), and an attempt on the next account gives that account's
+// request, whatever was built before.
+func TestExecuteAttempts(t *testing.T) {
+	noDial(t)
+	h := startPlugin(t, newTestPlugin(Endpoints{}))
+	cases := executeCases()
+	for i, tc := range cases {
+		previous := cases[(i+1)%len(cases)]
+		relayed(t, h, previous.in)
+		retry := proto.Clone(tc.in).(*pluginv1.ExecuteRequest)
+		retry.Attempt = 1
+		first, again := relayed(t, h, retry), relayed(t, h, retry)
+		if !proto.Equal(first, tc.want()) || !proto.Equal(again, first) {
+			t.Errorf("%s after %s: relayed %v then %v", tc.name, previous.name, first, again)
 		}
 	}
 }
 
-func TestUpstreamRefusals(t *testing.T) {
-	p := newTestPlugin(Endpoints{})
+// An account that cannot be served fails the attempt before anything is
+// relayed: the gateway moves on to another account.
+func TestExecuteRefusals(t *testing.T) {
+	noDial(t)
+	h := startPlugin(t, newTestPlugin(Endpoints{}))
 	newSA := stored(TypeServiceAccount, map[string]any{"service_account_json": saJSON(nil), fieldExpiresAt: expiredAt}, fullTarget)
 	for _, tc := range []struct {
 		name     string
@@ -129,7 +214,7 @@ func TestUpstreamRefusals(t *testing.T) {
 		{"api key missing", stored(TypeAPIKey, map[string]any{}, nil), ProtocolGenerate, "gemini-2.5-flash", codes.FailedPrecondition},
 		{"service account without project", saAccount(nil), ProtocolGenerate, "gemini-2.5-flash", codes.FailedPrecondition},
 		{"service account without location", saAccount(map[string]any{fieldProject: testProject}), ProtocolGenerate, "gemini-2.5-flash", codes.FailedPrecondition},
-		{"api key with project only", stored(TypeAPIKey, map[string]any{fieldAPIKey: "AQ.Ab8RN6-example"}, map[string]any{fieldProject: testProject}), ProtocolGenerate, "gemini-2.5-flash", codes.FailedPrecondition},
+		{"api key with project only", apiKeyAccount(map[string]any{fieldProject: testProject}), ProtocolGenerate, "gemini-2.5-flash", codes.FailedPrecondition},
 		// The location becomes part of the host: nothing but a location passes.
 		{"location is a host", saAccount(map[string]any{fieldProject: testProject, fieldLocation: "evil.example/x"}), ProtocolGenerate, "gemini-2.5-flash", codes.FailedPrecondition},
 		{"location with userinfo", saAccount(map[string]any{fieldProject: testProject, fieldLocation: "a@evil.example"}), ProtocolGenerate, "gemini-2.5-flash", codes.FailedPrecondition},
@@ -140,9 +225,9 @@ func TestUpstreamRefusals(t *testing.T) {
 		{"only the prefix", saAccount(fullTarget), ProtocolGenerate, "models/", codes.InvalidArgument},
 		{"credentials not JSON", &pluginv1.Account{Type: TypeServiceAccount, CredentialsJson: "{", SettingsJson: mustJSON(fullTarget)}, ProtocolGenerate, "gemini-2.5-flash", codes.InvalidArgument},
 	} {
-		resp, err := p.BuildUpstreamRequest(context.Background(), buildRequest(tc.acc, tc.protocol, tc.model))
-		if status.Code(err) != tc.want || resp != nil {
-			t.Errorf("%s: %v %v, want %s", tc.name, resp, err, tc.want)
+		ex := h.Execute(context.Background(), executeRequest(tc.acc, tc.protocol, tc.model))
+		if status.Code(ex.Err) != tc.want || ex.Response != nil || len(ex.Relays())+len(ex.RelayErrors())+len(ex.Fetches()) != 0 {
+			t.Errorf("%s: %v %v, %d relays, want %s and none", tc.name, ex.Response, ex.Err, len(ex.Relays()), tc.want)
 		}
 	}
 }
@@ -153,19 +238,18 @@ func TestBuildTestRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantURL := "https://us-central1-aiplatform.googleapis.com/v1/projects/my-project-123456/locations/us-central1/publishers/google/models/gemini-2.5-flash:generateContent"
-	if resp.GetMethod() != http.MethodPost || resp.GetUrl() != wantURL || resp.GetModel() != DefaultTestModel ||
+	if resp.GetMethod() != http.MethodPost || resp.GetUrl() != regionalBase+"gemini-2.5-flash:generateContent" || resp.GetModel() != DefaultTestModel ||
 		resp.GetUsageProtocol() != ProtocolGenerate || resp.GetBodyJson() != gemini.GenerateContentPingBody(1) ||
-		resp.GetHeaders()["authorization"] != "Bearer ya29.token" {
+		resp.GetHeaders()["authorization"] != "Bearer ya29.token" || resp.GetHeaders()["content-type"] != contentType {
 		t.Fatalf("test request = %+v", resp)
 	}
 
 	// The model the operator names, on an express API key account.
 	resp, err = p.BuildTestRequest(context.Background(), &pluginv1.BuildTestRequestRequest{
-		Account: stored(TypeAPIKey, map[string]any{fieldAPIKey: "AQ.Ab8RN6-example"}, nil), Model: " models/gemini-2.5-pro ",
+		Account: apiKeyAccount(nil), Model: " models/gemini-2.5-pro ",
 	})
-	if err != nil || resp.GetUrl() != "https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-2.5-pro:generateContent" ||
-		resp.GetModel() != "gemini-2.5-pro" || resp.GetHeaders()["x-goog-api-key"] != "AQ.Ab8RN6-example" {
+	if err != nil || resp.GetUrl() != expressBase+"gemini-2.5-pro:generateContent" ||
+		resp.GetModel() != "gemini-2.5-pro" || resp.GetHeaders()["x-goog-api-key"] != testAPIKey {
 		t.Fatalf("test request = %+v, err %v", resp, err)
 	}
 

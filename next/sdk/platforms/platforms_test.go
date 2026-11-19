@@ -96,12 +96,25 @@ func TestBuiltinEndpointsDoNotConflict(t *testing.T) {
 func TestProtocols(t *testing.T) {
 	want := map[string][]string{
 		"anthropic": {"anthropic.messages", "anthropic.count_tokens"},
-		"openai":    {"openai.chat", "openai.responses", "openai.responses_ws", "openai.embeddings"},
+		"openai":    {"openai.chat", "openai.responses", "openai.responses_ws", "openai.embeddings", "openai.images", "openai.images_edit"},
 		"gemini":    {"gemini.generate", "gemini.stream_generate", "gemini.count_tokens"},
 	}
 	for _, p := range Builtin() {
 		if got := p.Protocols(); !slices.Equal(got, want[p.ID]) {
 			t.Errorf("%s protocols %v, want %v", p.ID, got, want[p.ID])
+		}
+	}
+}
+
+// Only the image endpoints restrict the account test: a generation costs an
+// image (explicit), an edit needs an input image (never).
+func TestEndpointTests(t *testing.T) {
+	want := map[string]string{"openai.images": manifest.EndpointTestExplicit, "openai.images_edit": manifest.EndpointTestNever}
+	for _, p := range Builtin() {
+		for _, e := range p.Endpoints {
+			if e.Test != want[e.Protocol] {
+				t.Errorf("%s: test %q, want %q", e.Protocol, e.Test, want[e.Protocol])
+			}
 		}
 	}
 }

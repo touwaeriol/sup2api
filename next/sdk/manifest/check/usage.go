@@ -32,6 +32,8 @@ var UsageFields = []string{
 	manifest.UsageCacheReadTokens,
 	manifest.UsageCacheCreationTokens,
 	manifest.UsageCacheCreation1h,
+	manifest.UsageImageInputTokens,
+	manifest.UsageImageOutputTokens,
 }
 
 // UsageFactTypes are the fact types usagerules.Acc.setMetric distinguishes;
@@ -43,26 +45,16 @@ var UsageFactTypes = []string{"number", "boolean", "enum", "string"}
 var UsageSources = []string{manifest.UsageSourceRules, manifest.UsageSourcePlugin}
 
 // Bounds on the plugin-source knobs. MaxUsageStreamEvents is the number of
-// distinct event NAMES an endpoint may list, not the number of events the
-// host collects at runtime (that cap lives in the gateway): a declaration
-// naming dozens of event names is asking for the whole stream, which is the
-// one thing this design does not do.
+// distinct event NAMES an endpoint may list; the host collects every event
+// of a listed name at runtime. A declaration naming dozens of event names
+// is asking for the whole stream, which is the one thing this design does
+// not do.
 const (
 	MaxUsageStreamEvents = 8
-	MinUsageMaxBytes     = 1 << 10 // 1 KiB
-	MaxUsageMaxBytes     = 1 << 20 // 1 MiB
 	// MaxUsageRequestFields is how many request body paths an endpoint may
 	// list in usageRequestFields. The list names the few scalars an estimate
 	// is made from; a long one is asking for the request body.
 	MaxUsageRequestFields = 16
-	// MaxUsageRequestFieldBytes caps one value of ExtractUsageRequest.fields
-	// (its raw JSON); MaxUsageRequestFieldsBytes caps all of them together.
-	// The host leaves a value out rather than cutting it - half a JSON value
-	// is not a value - and names the path in fields_omitted. Both are host
-	// constants, not manifest knobs: an author who needs a base64 image in
-	// ExtractUsage is asking for the thing this design does not hand over.
-	MaxUsageRequestFieldBytes  = 4 << 10  // 4 KiB
-	MaxUsageRequestFieldsBytes = 32 << 10 // 32 KiB
 )
 
 // usageEventRe is what an SSE event name may look like. It is the name of an
@@ -116,11 +108,11 @@ func (v *validator) usageRules(field string, u manifest.UsageRules, owner usageO
 	}
 }
 
-// usageSource validates endpoint.usageSource and the three knobs that only
-// mean anything with it, source "plugin": usageStreamEvents, usageMaxBytes
-// and usageRequestFields.
+// usageSource validates endpoint.usageSource and the two knobs that only
+// mean anything with it, source "plugin": usageStreamEvents and
+// usageRequestFields.
 //
-// All three are rejected outside that source rather than ignored. An
+// Both are rejected outside that source rather than ignored. An
 // endpoint that lists usageStreamEvents while the host reads its usage from
 // the declarative rules is a manifest whose author believes something the
 // host does not do - and the symptom (usage counted from the gjson rules, as
@@ -143,10 +135,6 @@ func (v *validator) usageSource(f string, e manifest.Endpoint) {
 			v.add(f+".usageStreamEvents", "unsupported",
 				"usageStreamEvents is only read when usageSource is %q; the declarative sse rules decide which events are read otherwise",
 				manifest.UsageSourcePlugin)
-		}
-		if e.UsageMaxBytes != 0 && !e.TaskSubmit() {
-			v.add(f+".usageMaxBytes", "unsupported",
-				"usageMaxBytes is only read when usageSource is %q", manifest.UsageSourcePlugin)
 		}
 		if len(e.UsageRequestFields) > 0 && !e.TaskSubmit() {
 			v.add(f+".usageRequestFields", "unsupported",
@@ -197,10 +185,6 @@ func (v *validator) usageSource(f string, e manifest.Endpoint) {
 			v.add(ef, "duplicate", "event name %q is declared twice", name)
 		}
 		seen[name] = true
-	}
-	if e.UsageMaxBytes != 0 && (e.UsageMaxBytes < MinUsageMaxBytes || e.UsageMaxBytes > MaxUsageMaxBytes) {
-		v.add(f+".usageMaxBytes", "out_of_range", "usageMaxBytes must be between %d and %d (0 uses the host default)",
-			MinUsageMaxBytes, MaxUsageMaxBytes)
 	}
 	v.usageRequestFields(f, e)
 }

@@ -1,6 +1,6 @@
 // Package blobs keeps plugin package bytes outside PostgreSQL. PostgreSQL
 // records each version's sha256 and, for market installs, its download URL;
-// the bytes come from the market or from the cluster's primary node.
+// the bytes come from the market or from any other node that holds them.
 package blobs
 
 import (
@@ -20,12 +20,14 @@ import (
 	rc "github.com/Sub2API-Devs/sup2api/next/runtime-contract"
 )
 
-// ErrNotFound reports that no reachable store holds the package.
+// ErrNotFound reports that no reachable store holds the package; under the
+// shell, that no node it could reach does (the wrapped text gives each
+// node's answer).
 var ErrNotFound = errors.New("plugin package is not available on this node")
 
-// Store holds packages by lower-case hex sha256. Put returns only after the
-// package is durable where other nodes fetch it from. Has reports whether
-// Get would find the package, without transferring it.
+// Store holds packages by lower-case hex sha256. Put returns once the
+// package is durable on this node, which other nodes fetch it from. Has
+// reports whether Get would find the package, without transferring it.
 type Store interface {
 	Put(ctx context.Context, sum string, data []byte) error
 	Get(ctx context.Context, sum string) ([]byte, error)
@@ -111,9 +113,9 @@ func (d Dir) Has(_ context.Context, sum string) (bool, error) {
 }
 
 // Shell stores packages through the local shell's management socket. The
-// shell keeps them on the primary: a follower's Put is forwarded there before
-// it returns, and a follower's Get is fetched from there over the
-// authenticated node network.
+// shell keeps them on this node; a Get of a package this node lacks is
+// fetched from any other enabled node that holds it over the authenticated node
+// network.
 type Shell struct {
 	socket string
 	token  string // management socket token
@@ -183,11 +185,12 @@ func (s *Shell) Get(ctx context.Context, sum string) ([]byte, error) {
 		return nil, fmt.Errorf("fetch plugin package through the shell: %w", err)
 	}
 	defer res.Body.Close()
-	if res.StatusCode == http.StatusNotFound {
-		return nil, ErrNotFound
-	}
 	if res.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("fetch plugin package through the shell: HTTP %d", res.StatusCode)
+		msg, _ := io.ReadAll(io.LimitReader(res.Body, 2048))
+		if res.StatusCode == http.StatusNotFound {
+			return nil, fmt.Errorf("%w: %s", ErrNotFound, strings.TrimSpace(string(msg)))
+		}
+		return nil, fmt.Errorf("fetch plugin package through the shell: HTTP %d %s", res.StatusCode, strings.TrimSpace(string(msg)))
 	}
 	data, err := io.ReadAll(io.LimitReader(res.Body, s.max+1))
 	if err != nil {
@@ -203,8 +206,8 @@ func (s *Shell) Get(ctx context.Context, sum string) ([]byte, error) {
 }
 
 // Has asks for the first byte only (the shell serves packages with range
-// support and, on a follower, fetches a missing one from the primary
-// first, as Get does).
+// support and fetches a missing one from the other nodes first, as Get
+// does).
 func (s *Shell) Has(ctx context.Context, sum string) (bool, error) {
 	if !validSum(sum) {
 		return false, fmt.Errorf("invalid plugin package sha256 %q", sum)

@@ -97,8 +97,10 @@ services:
       SUB2API_PLUGIN_VERIFY_SIGNATURES: ${SUB2API_PLUGIN_VERIFY_SIGNATURES:-false}
       SUB2API_PLUGIN_STRICT_NETWORK: "true"
       SUB2API_PLUGIN_SECCOMP: "true"
-      SUB2API_PLUGIN_DB_ROLE_ISOLATION: "true"
-      SUB2API_PLUGIN_MAX_MEMORY_MB: ${SUB2API_PLUGIN_MAX_MEMORY_MB:-1024}
+      # Landlock (files, unix sockets, signals of plugins; CONTRACTS §43.8) is
+      # on by default; "false" turns it off.
+      SUB2API_PLUGIN_LANDLOCK: ${SUB2API_PLUGIN_LANDLOCK:-true}
+      SUB2API_PLUGIN_MAX_MEMORY_MB: ${SUB2API_PLUGIN_MAX_MEMORY_MB:-}
       # Empty = trust the signing key generated at image build time and use
       # the bundled market below.
       SUB2API_PLUGIN_OFFICIAL_KEYS: ${SUB2API_PLUGIN_OFFICIAL_KEYS:-}

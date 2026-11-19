@@ -214,18 +214,16 @@ func TestAC23_OwnershipAndProxyURL(t *testing.T) {
 		"credentials": map[string]any{"api_key": "sk-ant-mock-" + e.Name("guard"), "base_url": e.MockInternalURL},
 	})), "credentials.base_url", "forbidden")
 
-	formPath := "/account-types/" + AnthropicPlugin + "/" + AnthropicAPIKey + "/form"
-	form := a.OK(t, http.MethodGet, formPath, nil)
-	enum := form.Get("schema.properties.base_url.enum").Array()
-	if len(enum) != 1 || enum[0].String() != OfficialAnthropicBaseURL {
-		t.Fatalf("vendor form base_url enum: %s", form.Get("schema.properties.base_url").Raw)
-	}
-	if !form.Get(`ui_schema.base_url.ui:readonly`).Bool() {
-		t.Fatalf("vendor form base_url must be readonly: %s", form.Get("ui_schema.base_url").Raw)
-	}
-	adminForm := admin.OK(t, http.MethodGet, formPath, nil)
-	if adminForm.Get("schema.properties.base_url.enum").Exists() || adminForm.Get(`ui_schema.base_url.ui:readonly`).Bool() {
-		t.Fatalf("admin form must not be restricted: %s", adminForm.Raw)
+	// The native form reads the restriction from the account type
+	// (guarded_settings on GET /account-types, the same for every caller);
+	// whether it applies is the caller's account:settings:custom, which the
+	// saves above check.
+	for _, c := range []*Session{a, admin} {
+		at, ok := FindAccountType(c.OK(t, http.MethodGet, "/account-types", nil).Array(), AnthropicPlugin, AnthropicAPIKey)
+		allowed := at.Get(`guarded_settings.#(field=="base_url").allowed`).Array()
+		if !ok || len(allowed) != 1 || allowed[0].String() != OfficialAnthropicBaseURL {
+			t.Fatalf("guarded base_url of %s: %s", c.Email, at.Get("guarded_settings").Raw)
+		}
 	}
 
 	// 5. Viewer: sees everything, changes nothing, no secrets.

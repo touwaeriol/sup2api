@@ -7,7 +7,7 @@ import KeyEditor from './KeyEditor.vue'
 const { post, patch, confirm, notifyError } = vi.hoisted(() => ({ post: vi.fn(), patch: vi.fn(), confirm: vi.fn(), notifyError: vi.fn() }))
 vi.mock('@sub2api/host', () => ({ api: { post, patch } }))
 vi.mock('@sub2api/ui', async (original) => ({ ...await original<typeof import('@sub2api/ui')>(), confirm }))
-vi.mock('@/composables/platforms', () => ({ usePlatforms: () => ({ load: vi.fn(), label: (v: string) => v, endpointsOf: () => [] }) }))
+vi.mock('@/composables/platforms', () => ({ usePlatforms: () => ({ load: vi.fn(), label: (v: string) => v }) }))
 vi.mock('@/utils/errors', () => ({ fieldErrors: (e: { fields?: Record<string, string> }) => e?.fields ?? {}, notifyError }))
 enableAutoUnmount(afterEach)
 

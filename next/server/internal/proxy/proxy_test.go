@@ -244,14 +244,18 @@ func TestProxyCRUDTestAndDirectory(t *testing.T) {
 		t.Fatalf("access key reveal-url (step-up passed): %d %v", code, out)
 	}
 
-	// Directory: cached client per proxy.
-	c1, err := svc.HTTPClient(ctx, &id)
+	// Directory: cached client per proxy, with the proxy it goes through.
+	pc1, err := svc.HTTPClient(ctx, &id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	c2, _ := svc.HTTPClient(ctx, &id)
-	if c1 != c2 {
+	pc2, _ := svc.HTTPClient(ctx, &id)
+	c1 := pc1.Client
+	if c1 != pc2.Client {
 		t.Fatal("client not cached")
+	}
+	if want := (core.ProxyRef{ID: id, ProxySpec: core.ProxySpec{Protocol: "http", Host: host, Port: port, Username: "bob", Password: "s3cret"}}); pc1.Proxy == nil || *pc1.Proxy != want {
+		t.Fatalf("proxy = %#v", pc1.Proxy)
 	}
 	before := hits.Load()
 	resp, err := c1.Get("http://upstream.example.invalid/x")
@@ -263,7 +267,7 @@ func TestProxyCRUDTestAndDirectory(t *testing.T) {
 		t.Fatal("request did not go through proxy")
 	}
 	direct, _ := svc.HTTPClient(ctx, nil)
-	if direct == nil || direct == c1 {
+	if direct.Client == nil || direct.Client == c1 || direct.Proxy != nil {
 		t.Fatal("direct client")
 	}
 
@@ -295,8 +299,8 @@ func TestProxyCRUDTestAndDirectory(t *testing.T) {
 		t.Fatalf("clear password: %d %v", code, out)
 	}
 	c3, _ := svc.HTTPClient(ctx, &id)
-	if c3 == c1 {
-		t.Fatal("client not rebuilt after update")
+	if c3.Client == c1 || c3.Proxy == nil || c3.Proxy.Password != "" || c3.Proxy.Username != "bob" {
+		t.Fatalf("client not rebuilt after update: %v", c3.Proxy)
 	}
 
 	// A change made elsewhere (direct DB write) is picked up after recheck.
@@ -305,8 +309,8 @@ func TestProxyCRUDTestAndDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	time.Sleep(5 * time.Millisecond)
-	if _, err := svc.HTTPClient(ctx, &id); core.AsError(err).Code != "unavailable" {
-		t.Fatalf("disabled proxy: %v", err)
+	if pc, err := svc.HTTPClient(ctx, &id); core.AsError(err).Code != "unavailable" || pc.Client != nil || pc.Proxy != nil {
+		t.Fatalf("disabled proxy: %v %v", pc.Proxy, err)
 	}
 
 	// socks5 transport uses the proxy URL scheme.

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptrace"
+	"net/url"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/Sub2API-Devs/sup2api/next/sdk/observation"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/execfetch"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/gateway/convert"
 )
 
@@ -53,14 +55,13 @@ func (c *call) dispatch(ctx context.Context) {
 			return
 		}
 	}
-	c.sched.candidates = len(all)
-	cands := make([]core.AccountRef, 0, len(all))
-	for i := range all {
-		if reason, detail, ok := c.ineligibleReason(&all[i]); !ok {
-			c.skipAccount(all[i].ID, reason, detail)
-			continue
-		}
-		cands = append(cands, all[i])
+	cands, closed := c.eligibleAccounts(all)
+	// Every account offered is closed to the request by its protocol
+	// binding: a 404 like the one above, before anything is checked, bound
+	// or converted for the request.
+	if e := c.protocolNotServed(ctx, closed); e != nil {
+		c.fail(e)
+		return
 	}
 	eligible := cands
 	cands, availabilityErr := c.filterAvailability(ctx, cands)
@@ -153,14 +154,7 @@ func (c *call) dispatch(ctx context.Context) {
 		}
 		switch res.kind {
 		case attemptDone:
-			// An endpoint whose usage a plugin reports does not know its
-			// token count yet (submit asks after the handler returns), so the
-			// rate-limit window is updated there instead of here.
-			if c.usage != nil {
-				c.usage.accountID = ref.ID
-			} else {
-				c.countTokens(ctx, ref.ID)
-			}
+			c.countTokens(ctx, ref.ID)
 			c.finishSticky(ctx, ref.ID, c.rec.Success)
 			if c.rec.Success {
 				c.g.d.Accounts.TouchLastUsed(context.WithoutCancel(ctx), ref.ID)
@@ -562,8 +556,6 @@ func (c *call) attempt(ctx context.Context, ref *core.AccountRef, n int) attempt
 	if c.rec.UsageSemantics == "" {
 		c.rec.UsageSemantics = "exclusive"
 	}
-	pacct := acc.PluginAccount(c.platform)
-
 	c.serveRoute(rt, ref)
 	if rt.local {
 		return c.countLocally(ctx)
@@ -577,86 +569,107 @@ func (c *call) attempt(ctx context.Context, ref *core.AccountRef, n int) attempt
 		}
 		upBody = rt.body
 	}
+	upBody, upModel, failure := c.upstreamBody(ctx, acc, ref, rt, upBody, n)
+	if failure != nil {
+		return *failure
+	}
+	if failure := c.guardAvailability(ctx, ref); failure != nil {
+		return attemptResult{kind: attemptFailover, err: failure}
+	}
+	return c.execute(ctx, rt, acc, upBody, upModel, n)
+}
 
-	// The account's model mapping rewrites the model sent upstream
-	// (CONTRACTS §18); billing and hooks saw the client model.
+// upstreamBody is body as the plugin receives it for attempt n on ref
+// (design §4.5): the account's model mapping (CONTRACTS §18; billing and
+// hooks saw the client model), the referenced models' mapping, stream: true
+// for an upstream that only streams (§83), then the built-in override
+// (claude_max_tokens, §84.1) and the account's parameter override (§84),
+// which also decide the headers (param_override.go). A body the overrides
+// changed gets the forced stream again and is checked again against the
+// account's usage rules (meterable).
+// It returns the body and the model it goes upstream with, or the
+// attempt's end.
+func (c *call) upstreamBody(ctx context.Context, acc *core.Account, ref *core.AccountRef, rt *typeRoute, body []byte, n int) ([]byte, string, *attemptResult) {
+	var err error
 	upModel := ref.MapModel(c.model)
 	if upModel != c.model {
-		if rt.modelPath != "" && gjson.GetBytes(upBody, rt.modelPath).Exists() {
-			if upBody, err = sjson.SetBytes(upBody, rt.modelPath, upModel); err != nil {
-				return attemptResult{kind: attemptFailover, err: fromCore(core.ErrInternal.WithCause(err), errTypeInternal)}
+		if rt.modelPath != "" && gjson.GetBytes(body, rt.modelPath).Exists() {
+			if body, err = sjson.SetBytes(body, rt.modelPath, upModel); err != nil {
+				return nil, "", &attemptResult{kind: attemptFailover, err: fromCore(core.ErrInternal.WithCause(err), errTypeInternal)}
 			}
 		}
 		c.rec.UpstreamModel = upModel
 	}
-
-	// Build the upstream request (plugin declaring the account type).
-	upBody, err = c.mapReferencedModels(upBody, ref, rt)
-	if err != nil {
-		return attemptResult{kind: attemptFailover, err: invalidModelReference(err.Error())}
+	if body, err = c.mapReferencedModels(body, ref, rt); err != nil {
+		return nil, "", &attemptResult{kind: attemptFailover, err: invalidModelReference(err.Error())}
 	}
-	// An upstream that only streams (CONTRACTS §83) gets stream: true before
-	// the plugin sees the request, so the fields it reads and the body its
-	// patches apply to already say what goes upstream.
-	if c.forcesStream(rt) {
-		// The body here is the core's own (converted and mapped), not yet
-		// touched by the plugin: failing to set the flag is an internal error.
-		if upBody, err = forceStreamPath(upBody, rt.streamPath); err != nil {
-			return attemptResult{kind: attemptFailover, err: fromCore(core.ErrInternal.WithCause(err), errTypeInternal)}
-		}
+	if body, err = c.forceStream(rt, body); err != nil {
+		return nil, "", &attemptResult{kind: attemptFailover, err: fromCore(core.ErrInternal.WithCause(err), errTypeInternal)}
 	}
-	// A declared type's own part of the body, the built-in override
-	// (claude_max_tokens, CONTRACTS §84.1), then the account's request
-	// parameter override (§84) precede the build: the plugin builds from,
-	// and may still patch, what they decided (param_override.go).
-	upBody, upModel, failure := c.rewriteBody(ctx, acc, rt, upBody, upModel, n)
+	rewritten, upModel, failure := c.rewriteBody(ctx, acc, rt, body, upModel, n)
 	if failure != nil {
-		return *failure
+		return nil, "", failure
 	}
-	fields := requestFieldValues(upBody, rt.requestFields)
-	meta := c.metaFor(rt)
-	meta.Model = upModel
-	buildRequest := &pluginv1.BuildUpstreamRequestRequest{Meta: meta, Account: pacct, Fields: fields, InboundHeaders: c.passHeaders(rt.passHeaders), Attempt: int32(n)}
-	if c.canExecute(rt) {
-		if failure := c.guardAvailability(ctx, ref); failure != nil {
-			return attemptResult{kind: attemptFailover, err: failure}
+	if bytes.Equal(rewritten, body) {
+		return body, upModel, nil
+	}
+	// An override may not undo the forced stream; set it again on what the
+	// overrides made of the body.
+	if rewritten, err = c.forceStream(rt, rewritten); err != nil {
+		return nil, "", &attemptResult{kind: attemptFailover, err: fromCore(core.ErrInternal.WithCause(err), errTypeInternal)}
+	}
+	if e := c.meterable(rt, rewritten); e != nil {
+		return nil, "", &attemptResult{kind: attemptFailover, err: e}
+	}
+	return rewritten, upModel, nil
+}
+
+// forceStream sets stream: true on body for an upstream that only streams
+// (forcesStream); any other body is returned as it is.
+func (c *call) forceStream(rt *typeRoute, body []byte) ([]byte, error) {
+	if !c.forcesStream(rt) {
+		return body, nil
+	}
+	return forceStreamPath(body, rt.streamPath)
+}
+
+// meterable refuses a body the overrides rewrote into an operation or
+// attempts the account's usage rules cannot meter, as scheduling refuses
+// the client's (ineligibleReason): the attempt moves to another account.
+// It reads the body the core hands to the plugin, never the plugin's.
+func (c *call) meterable(rt *typeRoute, body []byte) *gwError {
+	switch {
+	case c.ep.Billing == "free":
+	case !c.routeHasRequiredPrimaryUsageFor(rt, body):
+		return invalidModelReference("account usage rules cannot meter the requested operation")
+	case !c.routeHasRequiredAttempts(rt, body):
+		return invalidModelReference("account usage rules cannot meter the requested attempts")
+	}
+	return nil
+}
+
+// layerHeaders writes the headers of a plugin's relay onto h in the layers
+// of CONTRACTS §112.4, each over the one before: the plugin's default
+// headers, then operator (the operator's layers), then its authoritative
+// headers, where an empty value removes the header so that it is not sent
+// at all (§112.17). Names owned reports are left to the transport (nil:
+// none). The transport's own headers, Host among them, never get here: the
+// runtime refuses a relay naming them, so a request always goes to, and
+// names, the host of its checked URL.
+func layerHeaders(h http.Header, req *pluginv1.UpstreamRequest, operator func(http.Header), owned func(name string) bool) {
+	for k, v := range req.GetDefaultHeaders() {
+		if owned == nil || !owned(k) {
+			h.Set(k, v)
 		}
-		return c.executeAttempt(ctx, rt, acc, pacct, upBody, buildRequest)
 	}
-	bctx, cancel := context.WithTimeout(ctx, c.gw.platformTimeout())
-	built, err := rt.binding.Client.BuildUpstreamRequest(bctx, buildRequest)
-	cancel()
-	if ctx.Err() != nil {
-		return attemptResult{kind: attemptCanceled, err: canceledErr()}
-	}
-	if err == nil && built == nil {
-		err = errors.New("empty response")
-	}
-	if err != nil {
-		return attemptResult{kind: attemptFailover, err: fromCore(core.ErrPluginUnavailable.WithCause(err), errTypePluginUnavailable)}
-	}
-	return c.forwardBuilt(ctx, rt, acc, buildRequest, upBody, built, nil)
-}
-
-// splitHeaders separates built's headers into the declaration's and the
-// plugin's; a code plugin's are all its own.
-func splitHeaders(rt *typeRoute, in *pluginv1.BuildUpstreamRequestRequest, built *pluginv1.BuildUpstreamRequestResponse) (declared, plugin map[string]string) {
-	if d, ok := rt.binding.Client.(core.DeclaredUpstream); ok {
-		return d.SplitHeaders(in, built)
-	}
-	return nil, built.GetHeaders()
-}
-
-// setBuiltHeaders writes built headers onto req; host goes to req.Host and
-// the framing headers stay the transport's (transparent gzip, framing).
-func setBuiltHeaders(req *http.Request, h map[string]string) {
-	for k, v := range h {
-		switch strings.ToLower(k) {
-		case "host":
-			req.Host = v
-		case "content-length", "accept-encoding", "connection", "transfer-encoding":
+	operator(h)
+	for k, v := range req.GetHeaders() {
+		switch {
+		case owned != nil && owned(k):
+		case v == "":
+			h.Del(k)
 		default:
-			req.Header.Set(k, v)
+			h.Set(k, v)
 		}
 	}
 }
@@ -685,198 +698,85 @@ func (c *call) passthroughHeaders(h http.Header, acc *core.Account) {
 	}
 }
 
-// writeDeclaredAuth writes a declared account type's auth header once more,
-// last of the request's own headers (docs/UPSTREAM-DECLARATIVE.md §4.3): only
-// the declaration decides the credential the upstream receives, so neither
-// the plugin (extend), the passthrough (§81) nor the account's override
-// (§84) can replace or remove it under a custom header name.
-func writeDeclaredAuth(h http.Header, rt *typeRoute, built *pluginv1.BuildUpstreamRequestResponse) {
-	d, ok := rt.binding.Client.(core.DeclaredUpstream)
-	if !ok {
-		return
+// upstreamRequest is the plugin's relay as it goes upstream, the body its
+// bytes as they are. Headers in layers (CONTRACTS §86.5, layerHeaders):
+// the plugin's default headers; the client headers passed through, which
+// only fill what is unset; the account's header override (§108) and
+// parameter override (§84), which may replace or remove; the plugin's
+// authoritative headers, which always win (an empty one removes); then a
+// Content-Type when none.
+func (c *call) upstreamRequest(ctx context.Context, req *pluginv1.UpstreamRequest, target *url.URL, acc *core.Account) (*http.Request, error) {
+	method := cmp.Or(strings.ToUpper(req.GetMethod()), http.MethodPost)
+	var body io.Reader
+	if method != http.MethodGet && method != http.MethodHead {
+		body = bytes.NewReader(req.GetBody())
 	}
-	name := d.AuthHeader()
-	if name == "" {
-		return
+	r, err := http.NewRequestWithContext(ctx, method, target.String(), body)
+	if err != nil {
+		return nil, err
 	}
-	if v := built.GetHeaders()[name]; v != "" {
-		h.Set(name, v)
-	} else {
-		h.Del(name)
+	layerHeaders(r.Header, req, func(h http.Header) {
+		c.passthroughHeaders(h, acc)
+		c.paramOverride.headers.Apply(h)
+	}, nil)
+	if r.Header.Get("Content-Type") == "" && body != nil {
+		r.Header.Set("Content-Type", "application/json")
 	}
+	return r, nil
 }
 
-// validatePatches runs the guards that a plugin-built upstream request must
-// pass before it is sent: the plugin's patches (upBody to body) must keep
-// the model references consistent with the original body, and the account's
-// usage rules must be able to meter the operation and attempts of body, the
-// one that goes upstream. A failed guard fails over.
-func (c *call) validatePatches(rt *typeRoute, upBody, body []byte) (attemptKind, *gwError) {
-	// applyPatches returns upBody itself when the plugin asked for no patch,
-	// and then the comparisons below compare the request with itself: they
-	// cannot fail, yet each walks the whole body. Compare the bytes instead — never with a substring pre-check,
-	// which a \u escape would defeat — and run the guards only when they differ.
-	if !bytes.Equal(upBody, body) {
-		// The body is the one this call already parsed; the patched copy is
-		// parsed once and both rule sets read it.
-		before, after := c.rootFor(upBody), c.rootFor(body)
-		if err := modelReferencePatches(before, after, c.ep.Request.ModelReferences); err != nil {
-			return attemptFailover, invalidModelReference(err.Error())
-		}
-		if err := modelReferencePatches(before, after, rt.modelReferences); err != nil {
-			return attemptFailover, invalidModelReference(err.Error())
-		}
+// send makes the request the plugin relayed for x: after Execute returned,
+// or inside the plugin's call for a relay that waits (x.waited).
+func (c *call) send(ctx context.Context, x *execution, req *pluginv1.UpstreamRequest) attemptResult {
+	rt, acc := x.rt, x.acc
+	if m := req.GetUpstreamModel(); m != "" {
+		c.rec.UpstreamModel = m
 	}
-	if c.ep.Billing != "free" && !c.routeHasRequiredPrimaryUsageFor(rt, body) {
-		return attemptFailover, invalidModelReference("account usage rules cannot meter the requested operation")
+	target, refused := x.targetOf(ctx, req)
+	if refused != nil {
+		return attemptResult{kind: attemptFailover, err: refused}
 	}
-	if c.ep.Billing != "free" && !c.routeHasRequiredAttempts(rt, body) {
-		return attemptFailover, invalidModelReference("account usage rules cannot meter the requested attempts")
-	}
-	return attemptDone, nil
-}
+	client := x.egress.Client
 
-// forwardBuilt sends built, the plugin's answer to request (from
-// BuildUpstreamRequest, or forwarded by a plugin executing request,
-// execution set), with upBody, the body the plugin built from (already
-// rewritten by the declaration and the account's override): its patches
-// apply to upBody.
-func (c *call) forwardBuilt(ctx context.Context, rt *typeRoute, acc *core.Account, request *pluginv1.BuildUpstreamRequestRequest, upBody []byte, built *pluginv1.BuildUpstreamRequestResponse, execution *gatewayExecution) attemptResult {
-	pacct := request.GetAccount()
-	prepareCtx := ctx
-	if execution != nil {
-		var cancel context.CancelFunc
-		prepareCtx, cancel = context.WithTimeout(ctx, 15*time.Second)
-		defer cancel()
-	}
-	if built.GetUpstreamModel() != "" {
-		c.rec.UpstreamModel = built.GetUpstreamModel()
-	}
-	patched, err := applyPatches(upBody, built.GetPatches())
-	if err != nil {
-		return attemptResult{kind: attemptFailover, err: fromCore(core.ErrPluginUnavailable.WithCause(err), errTypePluginUnavailable)}
-	}
-	body, builtModel := patched, built.GetUpstreamModel()
-	rawURL, failure := c.declaredTarget(rt, request, built, body)
-	if failure != nil {
-		return *failure
-	}
-	target, err := c.g.checkUpstreamURL(prepareCtx, rawURL)
-	if err != nil {
-		slog.WarnContext(ctx, "gateway: upstream url rejected", "plugin", rt.binding.Plugin.Key, "account", acc.ID, "err", err)
-		return attemptResult{kind: attemptFailover, err: fromCore(core.ErrUnavailable.WithMessage("upstream address rejected"), errTypeInternal)}
-	}
-	// Whatever the plugin patched, a stream-only upstream gets stream: true.
-	// The body is the plugin's patched one now: when the flag cannot be set
-	// on it (a patch replaced the parent of streamPath with a non-object),
-	// the plugin produced the invalid body, so it is charged to the plugin
-	// like a patch that cannot be applied, unlike the ErrInternal before
-	// BuildUpstreamRequest in attempt.
-	forced := c.forcesStream(rt)
-	if forced {
-		if body, err = forceStreamPath(body, rt.streamPath); err != nil {
-			return attemptResult{kind: attemptFailover, err: fromCore(core.ErrPluginUnavailable.WithCause(err), errTypePluginUnavailable)}
-		}
-	}
-	if kind, err := c.validatePatches(rt, upBody, body); err != nil {
-		return attemptResult{kind: kind, err: err}
-	}
-	client, err := c.g.d.Proxies.HTTPClient(prepareCtx, acc.ProxyID)
-	if err != nil || client == nil {
-		return attemptResult{kind: attemptFailover, err: fromCore(core.ErrUnavailable.WithCause(err), errTypeInternal)}
-	}
-
-	// Send. The upstream request does not hang off ctx: when the client goes
-	// the watcher cancels it - at once, or not at all when the answer is
-	// being read to its end for billing, within the timeouts below
-	// (disconnect.go). A plugin execution forwarding through here is relayed
-	// and metered by forward like any other answer, so it is kept alike; the
-	// plugin abandoning its forward cuts the exchange as an upstream
-	// interruption, never as a hang-up. Task submissions settle on their own
-	// and are never kept.
+	// The upstream request does not hang off ctx: when the client goes the
+	// watcher cancels it - at once, or not at all when the answer is being
+	// read to its end for billing, within the timeouts below
+	// (disconnect.go). A relay that waits is kept alike; the plugin giving
+	// up its call cuts the exchange as an upstream interruption, never as a
+	// hang-up. Task submissions settle on their own and are never kept.
 	// The cause names what cut the request (forward records it).
 	uctx, ucancel := context.WithCancelCause(context.WithoutCancel(ctx))
 	defer ucancel(nil)
 	c.drain = c.watchClient(ctx, ucancel, !c.ep.TaskSubmit())
 	defer c.drain.stop()
-	if execution != nil {
-		stop := context.AfterFunc(execution.callback, func() { ucancel(errExecutionAborted) })
+	if w := x.waited; w != nil {
+		stop := context.AfterFunc(w.ctx, func() { ucancel(errExecutionAborted) })
 		defer stop()
 	}
-	method := strings.ToUpper(built.GetMethod())
-	if method == "" {
-		method = http.MethodPost
-	}
-	var reqBody io.Reader
-	if method != http.MethodGet && method != http.MethodHead {
-		reqBody = bytes.NewReader(body)
-	}
-	req, err := http.NewRequestWithContext(uctx, method, target.String(), reqBody)
+	hreq, err := c.upstreamRequest(uctx, req, target, acc)
 	if err != nil {
 		return attemptResult{kind: attemptFailover, err: fromCore(core.ErrInternal.WithCause(err), errTypeInternal)}
 	}
-	// Headers in layers (CONTRACTS §86.5), each over the one before: the
-	// declaration's and its paramOverride's, the passthrough (fills only
-	// what is unset), the account's header override (§108) and parameter
-	// override (one result, param_override.go), the plugin's (it
-	// knows the override ran and may change its result), then the declared
-	// auth header and the core's own below.
-	declared, plugin := splitHeaders(rt, request, built)
-	setBuiltHeaders(req, declared)
-	c.paramOverride.declared.Apply(req.Header)
-	c.passthroughHeaders(req.Header, acc)
-	c.paramOverride.headers.Apply(req.Header)
-	setBuiltHeaders(req, plugin)
-	writeDeclaredAuth(req.Header, rt, built)
-	if req.Header.Get("Content-Type") == "" && reqBody != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	if failure := signUpstreamRequest(req, body, built); failure != nil {
-		return *failure
-	}
-	if failure := c.guardAvailability(prepareCtx, &acc.AccountRef); failure != nil {
-		return attemptResult{kind: attemptFailover, err: failure}
-	}
-	if rt.binding.Type.ModelAvailability {
-		expected := c.upstreamModel(acc)
-		if builtModel != "" && builtModel != expected {
-			return attemptResult{kind: attemptFailover, err: c.availabilityMismatch(ctx, &acc.AccountRef, expected, builtModel)}
-		}
-		if rt.modelPath != "" {
-			actual := gjson.GetBytes(body, rt.modelPath)
-			if (actual.Exists() || gjson.GetBytes(upBody, rt.modelPath).Exists()) && (actual.Type != gjson.String || actual.Str != expected) {
-				return attemptResult{kind: attemptFailover, err: c.availabilityMismatch(ctx, &acc.AccountRef, expected, actual.String())}
-			}
-		}
-	}
-	hc := *client
-	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	hc.Timeout = 0
 	if c.ep.TaskSubmit() {
-		if err := c.beginTask(prepareCtx); err != nil {
+		if err := c.beginTask(ctx); err != nil {
 			return attemptResult{kind: attemptReturn, err: fromCore(core.ErrUnavailable.WithMessage("task registration unavailable").WithCause(err), errTypeInternal)}
 		}
 	}
 
-	headerWait := c.g.headerWait(c.stream || forced)
-	if d := c.env.Duration(core.EnvVarResponseHeaderTimeoutSeconds); d > 0 {
-		headerWait = d
-	}
+	forced := c.forcesStream(rt)
+	headerWait, total := c.upstreamTimeouts(c.stream || forced)
 	// The relay timeout covers the upstream exchange, not the local
 	// preparation above, so it starts with the header timer.
-	if total := c.env.Duration(core.EnvVarRelayTimeoutSeconds); total > 0 {
+	if total > 0 {
 		relayTimer := time.AfterFunc(total, func() { ucancel(errRelayTimeout) })
 		defer relayTimer.Stop()
 	}
 	timer := time.AfterFunc(headerWait, func() { ucancel(errHeaderTimeout) })
-	if execution != nil {
-		execution.sent = true
-	}
 	var requestWritten atomic.Bool
 	if c.failurePolicy != nil {
-		req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{WroteRequest: func(httptrace.WroteRequestInfo) { requestWritten.Store(true) }}))
+		hreq = hreq.WithContext(httptrace.WithClientTrace(hreq.Context(), &httptrace.ClientTrace{WroteRequest: func(httptrace.WroteRequestInfo) { requestWritten.Store(true) }}))
 	}
-	resp, err := hc.Do(req)
+	resp, err := execfetch.NoRedirects(client).Do(hreq)
 	timer.Stop()
 	if err != nil {
 		if c.failurePolicy != nil {
@@ -892,10 +792,7 @@ func (c *call) forwardBuilt(ctx context.Context, rt *typeRoute, acc *core.Accoun
 		if cause := context.Cause(uctx); errors.Is(cause, errRelayTimeout) || errors.Is(cause, errHeaderTimeout) || errors.Is(cause, errExecutionAborted) {
 			msg = cause.Error()
 		}
-		if execution != nil {
-			return execution.classify(ctx, 0, nil, nil, msg)
-		}
-		return c.classify(ctx, rt, pacct, 0, nil, nil, msg)
+		return c.classifyUpstream(ctx, x, 0, nil, nil, msg)
 	}
 	if c.stream || forced {
 		resp.Body = newIdleBody(resp.Body, c.streamIdle(), ucancel)
@@ -914,53 +811,53 @@ func (c *call) forwardBuilt(ctx context.Context, rt *typeRoute, acc *core.Accoun
 			if ctx.Err() != nil {
 				return attemptResult{kind: attemptCanceled, err: canceledErr()}
 			}
-			e := &gwError{Status: http.StatusBadGateway, Code: "upstream_response_incomplete", RecordType: errTypeUpstream, Message: "Could not read the complete upstream error response"}
-			if execution != nil {
-				execution.unclassified = e
-			}
-			return attemptResult{kind: attemptReturn, err: e}
+			return attemptResult{kind: attemptReturn, err: &gwError{Status: http.StatusBadGateway, Code: "upstream_response_incomplete",
+				RecordType: errTypeUpstream, Message: "Could not read the complete upstream error response"}}
 		}
-		return c.upstreamFailure(ctx, rt, acc, pacct, execution, resp.StatusCode, resp.Header, body)
+		return c.upstreamFailure(ctx, x, resp.StatusCode, resp.Header, body)
 	}
-	adaptResponseStream(resp, built.GetResponseStream())
+	adaptResponseStream(resp, req.GetResponseStream())
 	if c.stream || forced {
 		sniffEventStream(resp)
 	}
 	if forced {
-		if res, failed := c.collectStreamOnly(ctx, uctx, rt, acc, pacct, execution, resp); failed {
+		if res, failed := c.collectStreamOnly(ctx, uctx, x, resp); failed {
 			return res
 		}
 	}
-	if execution != nil {
-		return execution.forward(ctx, resp)
+	if w := x.waited; w != nil {
+		return w.answer(ctx, resp)
 	}
-	if c.ep.TaskSubmit() {
-		return c.forwardTask(ctx, rt, pacct, resp, upBody)
+	return c.forward(ctx, rt, x.acct, resp, x.body, nil)
+}
+
+// classifyUpstream decides what an upstream failure of x means: the
+// plugin's ClassifyError now, or for a relay that waits the plugin's
+// classification in Execute's return value (waitedRelay.fail).
+func (c *call) classifyUpstream(ctx context.Context, x *execution, status int, header http.Header, body []byte, transportErr string) attemptResult {
+	if w := x.waited; w != nil {
+		return w.fail(status, header, body, transportErr)
 	}
-	return c.forward(ctx, rt, pacct, resp, upBody)
+	return c.classify(ctx, x.rt, x.acct, status, header, body, transportErr)
 }
 
 // upstreamFailure classifies an upstream error answer - an HTTP error status,
 // or the error event of a stream-only upstream (CONTRACTS §83) - and keeps
 // its body for the client.
-func (c *call) upstreamFailure(ctx context.Context, rt *typeRoute, acc *core.Account, pacct *pluginv1.Account, execution *gatewayExecution,
-	status int, header http.Header, body *upstreamErrorBody) attemptResult {
+func (c *call) upstreamFailure(ctx context.Context, x *execution, status int, header http.Header, body *upstreamErrorBody) attemptResult {
 	raw := body.prefix
 	ct := header.Get("Content-Type")
 	if status >= 500 {
 		// A server error names no cause in the usage log; who answered
 		// (a proxy on the way or the upstream itself) is in these.
-		slog.WarnContext(ctx, "gateway: upstream server error", "request_id", c.rid, "plugin", rt.binding.Plugin.Key,
-			"account", acc.ID, "status", status, "content_type", ct, "server", header.Get("Server"),
+		slog.WarnContext(ctx, "gateway: upstream server error", "request_id", c.rid, "plugin", x.rt.binding.Plugin.Key,
+			"account", x.acc.ID, "status", status, "content_type", ct, "server", header.Get("Server"),
 			"upstream_request_id", header.Get("Request-Id"), "body", truncateUTF8(string(raw), 300))
 	}
-	var res attemptResult
-	if execution != nil {
-		execution.errorBody = body
-		res = execution.classify(ctx, status, header, raw, "")
-	} else {
-		res = c.classify(ctx, rt, pacct, status, header, raw, "")
+	if w := x.waited; w != nil {
+		w.errorBody = body
 	}
+	res := c.classifyUpstream(ctx, x, status, header, raw, "")
 	if c.ep.TaskSubmit() {
 		c.recordTaskFailure(ctx, status, raw, "upstream rejected task submission")
 		res.kind = attemptReturn
@@ -988,7 +885,6 @@ func canceledErr() *gwError {
 
 const (
 	maxErrorBody    = 64 << 10
-	classifyPrefix  = 4 << 10
 	defaultCooldown = 60 * time.Second
 )
 
@@ -1008,16 +904,8 @@ func (c *call) classify(ctx context.Context, rt *typeRoute, acct *pluginv1.Accou
 // means; defaults when the call fails.
 func (c *call) classifyWithPlugin(ctx context.Context, rt *typeRoute, acct *pluginv1.Account,
 	status int, header http.Header, body []byte, transportErr string) *pluginv1.ClassifyErrorResponse {
-	headers := map[string]string{}
-	for k, v := range header {
-		if len(v) > 0 {
-			headers[strings.ToLower(k)] = v[0]
-		}
-	}
-	prefix := body
-	if len(prefix) > classifyPrefix {
-		prefix = prefix[:classifyPrefix]
-	}
+	headers := execfetch.FirstHeaderValues(header)
+	prefix := core.ClassifyPrefix(body)
 	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.gw.platformTimeout())
 	cls, err := rt.binding.Client.ClassifyError(cctx, &pluginv1.ClassifyErrorRequest{
 		Meta: c.metaFor(rt), Account: acct, Status: int32(status), Headers: headers, BodyPrefix: prefix, TransportError: transportErr,

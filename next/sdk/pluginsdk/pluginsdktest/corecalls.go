@@ -6,6 +6,7 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
@@ -73,6 +74,23 @@ func (f *FakeHost) AccountScopeCheck(_ context.Context, in *pluginv1.AccountScop
 		return nil, err
 	}
 	return &pluginv1.AccountScopeCheckResponse{All: all, AllowedIds: allowed}, nil
+}
+
+// GetAccount answers from FakeHost.Accounts and records the call in
+// AccountReads; an id not there is NOT_FOUND, as the host answers for an
+// account of another plugin.
+func (f *FakeHost) GetAccount(_ context.Context, in *pluginv1.GetAccountRequest) (*pluginv1.GetAccountResponse, error) {
+	if in.GetAccountId() <= 0 {
+		return nil, status.Error(codes.InvalidArgument, "account_id is required")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.AccountReads = append(f.AccountReads, in.GetAccountId())
+	acc, ok := f.Accounts[in.GetAccountId()]
+	if !ok {
+		return nil, status.Error(codes.NotFound, "account not found")
+	}
+	return &pluginv1.GetAccountResponse{Account: proto.Clone(acc).(*pluginv1.Account)}, nil
 }
 
 func (f *FakeHost) GetUsers(_ context.Context, in *pluginv1.GetUsersRequest) (*pluginv1.GetUsersResponse, error) {

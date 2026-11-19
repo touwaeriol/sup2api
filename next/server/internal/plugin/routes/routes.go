@@ -425,7 +425,7 @@ func assetAllowed(info core.PluginInfo, name string) bool {
 // prefixAllowed reports whether name is a file below a public package
 // directory. It needs no manifest.
 func prefixAllowed(name string) bool {
-	for _, prefix := range []string{"ui/", "forms/", "i18n/"} {
+	for _, prefix := range []string{"ui/", "i18n/"} {
 		if strings.HasPrefix(name, prefix) && len(name) > len(prefix) {
 			return true
 		}

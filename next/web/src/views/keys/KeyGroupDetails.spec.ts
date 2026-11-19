@@ -17,14 +17,15 @@ const render = (group: Partial<Group>) => {
 }
 
 describe('API key group details', () => {
-  it('lists a few endpoints of each platform of the group, the converted ones folded away', () => {
-    const w = render({ platforms: ['anthropic'] })
+  it('lists a few endpoints of each protocol the group serves, not every endpoint of its platforms', () => {
+    const served = [{ protocol: 'anthropic.messages' }]
+    const w = render({ platforms: ['anthropic', 'openai'], served_protocols: served })
     expect(w.text()).toContain('此分组的 Key 可以调用')
-    expect(w.getComponent(PlatformEndpointsPreview).props()).toEqual({ ids: ['anthropic'], max: 3, fold: true })
+    expect(w.getComponent(PlatformEndpointsPreview).props()).toEqual({ served, max: 3 })
   })
 
-  it('warns instead when the group has no platform to serve', () => {
-    const w = render({ platforms: [] })
+  it('warns instead when the group serves no protocol', () => {
+    const w = render({ platforms: ['anthropic'], served_protocols: [] })
     expect(w.text()).toContain('该分组暂时无法提供服务')
     expect(w.findComponent(PlatformEndpointsPreview).exists()).toBe(false)
   })

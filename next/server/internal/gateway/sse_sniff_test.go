@@ -81,7 +81,7 @@ func siwcUpstream(t *testing.T) *httptest.Server {
 func TestMislabeledEventStreamIsRelayedAndBilled(t *testing.T) {
 	up := siwcUpstream(t)
 	e := newEnv(t)
-	plat := &fakePlatform{route: func(*pluginv1.BuildUpstreamRequestRequest) string { return up.URL + "/v1/responses" }}
+	plat := &fakePlatform{route: func(*pluginv1.ExecuteRequest) string { return up.URL + "/v1/responses" }}
 	e.addAccountType("codexlike", "chatgpt", plat, manifest.AccountPlatform{Platform: manifest.PlatformOpenAI, Endpoints: []string{"responses"}})
 	e.accounts.addTyped(testGroup, 10, 100, "codex-10", "codexlike", "chatgpt")
 	e.accounts.groups[testGroup] = []int64{10}

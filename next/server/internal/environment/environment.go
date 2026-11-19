@@ -61,8 +61,8 @@ type Service struct {
 	mu sync.Mutex
 	// last is the global layer over the process layer from the last read
 	// that succeeded, nil before the first one. A failed read never
-	// replaces it: a database hiccup must not put max_request_body_mb or
-	// the timeouts back to their defaults.
+	// replaces it: a database hiccup must not put the timeouts
+	// back to their defaults.
 	last core.EnvironmentValues
 	// lastAt is when last was read; zero once invalidate marked it outdated,
 	// which makes the next caller wait for a read (a PUT is seen at once).

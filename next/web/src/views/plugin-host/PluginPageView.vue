@@ -5,8 +5,6 @@ import { useRoute } from 'vue-router'
 import { SButton, SCard, SEmpty, SHint, SPageHeader, SSpinner } from '@sub2api/ui'
 import { usePluginStore, assetURL } from '@/stores/plugins'
 import { lt } from '@/i18n'
-import DeclarativeTable from '@/components/plugin/DeclarativeTable.vue'
-import DeclarativeForm from '@/components/plugin/DeclarativeForm.vue'
 import PluginIframe from '@/components/plugin/PluginIframe.vue'
 
 const route = useRoute()
@@ -65,10 +63,8 @@ onErrorCaptured((err) => {
       </SEmpty>
     </SCard>
     <div v-else :key="attempt">
-      <DeclarativeTable v-if="found.page.type === 'table'" :plugin="found.plugin" :page="found.page" />
-      <DeclarativeForm v-else-if="found.page.type === 'form'" :plugin="found.plugin" :page="found.page" />
       <PluginIframe
-        v-else-if="found.page.type === 'iframe' && found.page.src"
+        v-if="found.page.type === 'iframe' && found.page.src"
         :plugin-key="found.plugin.key"
         :page="pageId"
         :src="assetURL(found.plugin, found.page.src)"

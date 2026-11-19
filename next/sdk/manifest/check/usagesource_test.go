@@ -20,7 +20,6 @@ func pluginSourcePlatform() manifest.Platform {
 	p := validPlatform()
 	p.Endpoints[0].UsageSource = manifest.UsageSourcePlugin
 	p.Endpoints[0].UsageStreamEvents = []string{"message_delta"}
-	p.Endpoints[0].UsageMaxBytes = 1 << 18
 	p.Usage = manifest.UsageRules{
 		Semantics: "inclusive",
 		Facts:     map[string]manifest.UsageFact{"images": {Type: "number", Unit: "image"}},
@@ -47,19 +46,13 @@ func TestUsageSourcePlugin(t *testing.T) {
 	}{
 		{"unknown source", func(e *manifest.Endpoint) { e.UsageSource = "gjson" },
 			"endpoints[0].usageSource", "invalid"},
-		// usageStreamEvents and usageMaxBytes are rejected, not ignored,
+		// usageStreamEvents is rejected, not ignored,
 		// outside the plugin source: the author believes something the host
 		// does not do and the symptom looks exactly like success.
 		{"usageStreamEvents without the plugin source", func(e *manifest.Endpoint) {
 			e.UsageSource = ""
-			e.UsageMaxBytes = 0
 			e.UsageStreamEvents = []string{"message_delta"}
 		}, "endpoints[0].usageStreamEvents", "unsupported"},
-		{"usageMaxBytes without the plugin source", func(e *manifest.Endpoint) {
-			e.UsageSource = ""
-			e.UsageStreamEvents = nil
-			e.UsageMaxBytes = 1 << 12
-		}, "endpoints[0].usageMaxBytes", "unsupported"},
 		{"too many events", func(e *manifest.Endpoint) {
 			e.UsageStreamEvents = nil
 			for i := range MaxUsageStreamEvents + 1 {
@@ -71,10 +64,6 @@ func TestUsageSourcePlugin(t *testing.T) {
 		{"duplicate event name", func(e *manifest.Endpoint) {
 			e.UsageStreamEvents = []string{"message_delta", "message_delta"}
 		}, "endpoints[0].usageStreamEvents[1]", "duplicate"},
-		{"usageMaxBytes too small", func(e *manifest.Endpoint) { e.UsageMaxBytes = 10 },
-			"endpoints[0].usageMaxBytes", "out_of_range"},
-		{"usageMaxBytes too large", func(e *manifest.Endpoint) { e.UsageMaxBytes = MaxUsageMaxBytes + 1 },
-			"endpoints[0].usageMaxBytes", "out_of_range"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -139,7 +128,7 @@ func TestStreamingEndpointWithPluginUsageNeedsNoSSERules(t *testing.T) {
 	}
 	// Dropping back to the declarative source puts the requirement back.
 	p.Endpoints[0].UsageSource = ""
-	p.Endpoints[0].UsageStreamEvents, p.Endpoints[0].UsageMaxBytes = nil, 0
+	p.Endpoints[0].UsageStreamEvents = nil
 	if got := platformCodes(p); got["endpoints[0].usage.sse"] != "required" {
 		t.Fatalf("codes = %v", got)
 	}
@@ -164,7 +153,7 @@ func TestUsageRequestFields(t *testing.T) {
 		// believes a plugin will see these and none is ever asked.
 		{"without the plugin source", func(e *manifest.Endpoint) {
 			e.UsageSource = ""
-			e.UsageStreamEvents, e.UsageMaxBytes = nil, 0
+			e.UsageStreamEvents = nil
 			e.UsageRequestFields = []string{"resolution"}
 		}, "endpoints[0].usageRequestFields", "unsupported"},
 		{"too many", func(e *manifest.Endpoint) {
@@ -270,19 +259,18 @@ func TestAccountTypeOverrideCannotReachUsageSource(t *testing.T) {
 	m.Capabilities = []manifest.Capability{{ID: manifest.CapPlatformAdapter}}
 	m.HostPermissions = []manifest.HostPermission{
 		{ID: "gateway.endpoint"}, {ID: "platform.register"},
-		{ID: "accounts.credentials", Scope: map[string]any{"types": "own"}},
 	}
 	m.Platforms = []manifest.Platform{pluginSourcePlatform()}
 	m.AccountTypes = []manifest.AccountType{{
 		ID: "apikey", Label: manifest.LocalizedText{"en": "Key"},
-		Form: manifest.Form{Mode: "schema", Schema: "forms/k.json"},
+		Form: keyForm(m),
 		Platforms: []manifest.AccountPlatform{{Platform: "video", Usage: map[string]manifest.UsageRules{
 			// No source to write here, and the fact it declares needs no path
 			// because the endpoint it overrides is answered by the plugin.
 			"video.gen": {Facts: map[string]manifest.UsageFact{"images": {Type: "number"}}},
 		}}},
 	}}
-	files := map[string][]byte{"forms/k.json": []byte(`{}`)}
+	files := map[string][]byte{}
 	if err := Validate(m, files, ValidateOptions{Tooling: true}); err != nil {
 		t.Fatalf("account type override rejected: %v", codes(err))
 	}

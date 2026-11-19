@@ -674,17 +674,16 @@ func (qs *JevQuestions) Validate() error {
 	}
 	seen := map[string]bool{}
 	for _, q := range qs.Items {
-		custom := !slices.Contains(OpenAICategories, q.Category)
 		switch {
 		case !jevCategoryRe.MatchString(q.Category):
 			return fmt.Errorf("invalid category code %q", q.Category)
 		case seen[q.Category]:
 			return fmt.Errorf("duplicate category code %q", q.Category)
-		case custom && strings.TrimSpace(q.Label) == "":
+		case jevLabelMissing(q.Category, q.Label):
 			return fmt.Errorf("custom category %q needs a label", q.Category)
 		case utf8.RuneCountInString(q.Label) > maxJevLabelRunes:
 			return fmt.Errorf("label of %q must not exceed %d characters", q.Category, maxJevLabelRunes)
-		case strings.TrimSpace(q.Question) == "":
+		case jevQuestionBlank(q.Question):
 			return fmt.Errorf("question of %q is empty", q.Category)
 		case utf8.RuneCountInString(q.Question) > maxJevQuestionRunes:
 			return fmt.Errorf("question of %q must not exceed %d characters", q.Category, maxJevQuestionRunes)
@@ -697,6 +696,16 @@ func (qs *JevQuestions) Validate() error {
 	}
 	return nil
 }
+
+// jevLabelMissing and jevQuestionBlank are the rules of a row beyond the
+// bounds of its fields, shared by Validate and the settings check
+// (checkJevRow): a custom category (not one of OpenAI's) needs a label, and
+// a question of only white space is empty.
+func jevLabelMissing(category, label string) bool {
+	return !slices.Contains(OpenAICategories, category) && strings.TrimSpace(label) == ""
+}
+
+func jevQuestionBlank(question string) bool { return strings.TrimSpace(question) == "" }
 
 // RulesVersionOf: a table whose wire content is a built-in set (the current
 // one or a removed one) keeps that version, others are custom-<sha256[:8]>

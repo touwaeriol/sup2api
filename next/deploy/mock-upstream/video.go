@@ -83,6 +83,18 @@ func (s *server) submitVideo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	recordID := s.record(r, body, in.Model, false, "")
+	// The generic behaviour rules (delay, injected status) apply to the
+	// submission too, so a test can hold it while the gateway waits.
+	b := s.resolve(r, nil)
+	if !sleep(r, b.delay) {
+		s.setStatus(recordID, 499)
+		return
+	}
+	if b.status >= 400 {
+		s.setStatus(recordID, b.status)
+		writeOpenAIMockError(w, b.status)
+		return
+	}
 	v := s.video
 	v.mu.Lock()
 	v.seq++

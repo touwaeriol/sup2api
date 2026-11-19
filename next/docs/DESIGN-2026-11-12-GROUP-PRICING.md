@@ -3,6 +3,7 @@
 > 日期：2026-11-12。状态：已实现，实现后的审查发现正在修复（第 13 节）；尚未发布。设计经过独立审核并按结论修改（第 12 节）。分支：`claude/project-thread-27oe9k`。迁移 0095、0096。契约在 CONTRACTS §97，本文与它不一致时以它为准。
 > 界面先按模拟数据做完并经用户确认，后端照 `next/web/src/api/pricing.ts`（类型）和 `next/web/mock/pricing.ts`、`next/web/mock/pricingStore.ts`（行为）实现。实现之后的口径以后端为准，mock、前端和文档跟随（第 13 节列出了与 mock 原来不同的地方）。
 > 路径省略前缀 `next/`；Go 文件省略 `server/internal/`。
+> 2026-11-19 修订（所有者决定）：`missing_price_policy` 删除，没有价格的模型一律拒绝（403 `model_price_not_configured`），没有免费放行；下文提到它的地方以 CONTRACTS §17.3 为准。
 
 ---
 

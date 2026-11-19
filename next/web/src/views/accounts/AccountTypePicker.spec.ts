@@ -15,7 +15,7 @@ import AccountTypePicker from './AccountTypePicker.vue'
 
 describe('AccountTypePicker', () => {
   it('greys out a custom-upstream type for an own-level caller without account:relay', async () => {
-    const base = { plugin_key: 'p', plugin_name: 'P', label: 'L', form: { mode: 'schema' }, platforms: [], endpoints: [], sensitive_fields: [] }
+    const base = { plugin_key: 'p', plugin_name: 'P', label: 'L', form: { mode: 'native', component: 'Form' }, platforms: [], endpoints: [], sensitive_fields: [] }
     types.list = [{ ...base, type: 'official', custom_upstream: false }, { ...base, type: 'relay', custom_upstream: true }] as unknown as AccountType[]
     const w = mount(AccountTypePicker, { global: { plugins: [i18n], stubs: { PluginAvatar: true, TrustBadge: true, AccountTypePlatforms: true, AccountTypeEndpoints: true } } })
     await flushPromises()
@@ -29,7 +29,7 @@ describe('AccountTypePicker', () => {
   })
 
   it('opens a creation group on its first type the caller can create', async () => {
-    const base = { plugin_key: 'q', plugin_name: 'Q', label: 'L', form: { mode: 'schema' }, platforms: [], endpoints: [], sensitive_fields: [], creation_group: 'g' }
+    const base = { plugin_key: 'q', plugin_name: 'Q', label: 'L', form: { mode: 'native', component: 'Form' }, platforms: [], endpoints: [], sensitive_fields: [], creation_group: 'g' }
     types.list = [{ ...base, type: 'custom', custom_upstream: true }, { ...base, type: 'official', custom_upstream: false }] as unknown as AccountType[]
     const w = mount(AccountTypePicker, { global: { plugins: [i18n], stubs: { PluginAvatar: true, TrustBadge: true, AccountTypePlatforms: true, AccountTypeEndpoints: true } } })
     await flushPromises()

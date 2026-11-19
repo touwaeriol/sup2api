@@ -54,7 +54,7 @@ beforeEach(() => {
   api.list.mockResolvedValue({ items: [], total: 0 })
   api.put.mockImplementation((_path, body) => Promise.resolve(body))
   api.get.mockImplementation(path => Promise.resolve({
-    '/settings/billing': { pre_consume_tokens: 500, missing_price_policy: 'reject', min_balance: '0', big_cost_warning_usd: '10' },
+    '/settings/billing': { pre_consume_tokens: 500, min_balance: '0', big_cost_warning_usd: '10' },
     '/settings/gateway': { max_attempts: 3, platform_call_timeout_ms: 30000, default_hook_timeout_ms: 30000, platform_hotpath_timeout_ms: 30000 },
     '/settings/sticky': { enabled: true, default_ttl_seconds: 3600, keep_on_account_disabled: false },
     '/sticky-rules/stats': [],
@@ -109,7 +109,6 @@ describe('the settings page', () => {
         path === '/settings/billing'
           ? {
               pre_consume_tokens: 500,
-              missing_price_policy: 'reject',
               min_balance: '0',
               big_cost_warning_usd: '10',
               client_disconnect_policy: 'continue'
@@ -126,6 +125,8 @@ describe('the settings page', () => {
     const body = api.put.mock.calls.find(([path]) => path === '/settings/billing')?.[1] as Record<string, unknown>
     expect(body).toMatchObject({ pre_consume_tokens: 502, client_disconnect_policy: 'continue' })
     expect(body).not.toHaveProperty('client_disconnect_wait_seconds')
+    expect(body).not.toHaveProperty('missing_price_policy')
+    expect(wrapper.find('[data-testid="missing-price-policy"]').exists()).toBe(false)
     wrapper.unmount()
   })
 
@@ -146,7 +147,7 @@ describe('the settings page', () => {
 })
 
 describe('useSettingsNav', () => {
-  it('knows the eight configuration pages', () => {
+  it('knows the nine configuration pages', () => {
     const { pages } = setupOf(useSettingsNav)
     expect(pages.value.map(p => p.tab)).toEqual([
       'gateway',
@@ -156,7 +157,8 @@ describe('useSettingsNav', () => {
       'billing',
       'notifications',
       'updates',
-      'environment'
+      'environment',
+      'plugin-egress'
     ])
   })
 
@@ -180,13 +182,13 @@ describe('useSettingsNav', () => {
 })
 
 describe('useSettingsMenu', () => {
-  it('lists the eight configuration pages, groups and model prices in four groups', () => {
+  it('lists the nine configuration pages, groups and model prices in four groups', () => {
     const groups = setupOf(useSettingsMenu)
     expect(shape(groups.value)).toEqual([
       ['网关', ['gateway', 'failure', 'sticky', 'offload']],
       ['分组与定价', ['/groups', '/prices']],
       ['计费与通知', ['billing', 'notifications']],
-      ['运行环境', ['updates', 'environment']]
+      ['运行环境', ['updates', 'environment', 'plugin-egress']]
     ])
     expect(groups.value[0].links[2]).toEqual({
       key: 'sticky',
@@ -203,8 +205,8 @@ describe('useSettingsMenu', () => {
 
   it('gives every page an icon of its own that SIcon can draw', () => {
     const icons = setupOf(useSettingsMenu).value.flatMap(g => g.links.map(l => l.item.icon!))
-    expect(icons.filter(hasIcon)).toHaveLength(10)
-    expect(new Set(icons).size).toBe(10)
+    expect(icons.filter(hasIcon)).toHaveLength(11)
+    expect(new Set(icons).size).toBe(11)
   })
 
   it('leaves out the pages the caller may not open and the groups left empty', () => {

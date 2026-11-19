@@ -266,22 +266,32 @@ func TestPortHint(t *testing.T) {
 	}
 }
 
+// TestConfigure: absent keys take the defaults the console form fills
+// (host "", port 587, starttls, from name Sub2API, 20 s); a refused value
+// leaves the previous settings in place.
 func TestConfigure(t *testing.T) {
 	p := New()
-	for name, raw := range map[string]string{
-		"from":     `{"host":"smtp.example.com","from_address":"Ops <ops@example.com>"}`,
-		"security": `{"host":"smtp.example.com","from_address":"ops@example.com","security":"ssl"}`,
-		"port":     `{"port":0}`,
-	} {
-		if _, ok := pluginsdk.AsFieldErrors(p.Configure(context.Background(), pluginsdk.Config{JSON: json.RawMessage(raw)})); !ok {
-			t.Errorf("%s accepted", name)
-		}
-	}
-	if err := p.Configure(context.Background(), pluginsdk.Config{JSON: json.RawMessage(`{"timeout_seconds":1000}`)}); err != nil {
+	if err := p.Configure(context.Background(), pluginsdk.Config{JSON: json.RawMessage(`{}`)}); err != nil {
 		t.Fatal(err)
 	}
-	if s := p.cfg.Load(); s.TimeoutSeconds != maxTimeoutSeconds || s.Port != 587 || s.Security != SecuritySTARTTLS || s.Host != "" {
+	want := Settings{Port: 587, Security: SecuritySTARTTLS, FromName: "Sub2API", TimeoutSeconds: 20}
+	if s := p.cfg.Load(); *s != want {
 		t.Fatalf("defaults: %+v", s)
+	}
+	if err := p.Configure(context.Background(), pluginsdk.Config{}); err != nil || *p.cfg.Load() != want {
+		t.Fatalf("unset settings: %v %+v", err, p.cfg.Load())
+	}
+	if _, ok := pluginsdk.AsFieldErrors(p.Configure(context.Background(), pluginsdk.Config{JSON: json.RawMessage(`{"timeout_seconds":1000}`)})); !ok {
+		t.Fatal("timeout of 1000 s accepted")
+	}
+	if *p.cfg.Load() != want {
+		t.Fatalf("a refused configuration replaced the settings: %+v", p.cfg.Load())
+	}
+	if err := p.Configure(context.Background(), pluginsdk.Config{JSON: json.RawMessage(`{"host":" smtp.example.com ","from_address":" ops@example.com "}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if s := p.cfg.Load(); s.Host != "smtp.example.com" || s.FromAddress != "ops@example.com" {
+		t.Fatalf("trimmed: %+v", s)
 	}
 }
 

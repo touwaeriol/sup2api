@@ -131,9 +131,28 @@ func mustJSON(t testing.TB, v any) []byte {
 // send performs one request.
 func (c *Client) send(t testing.TB, method, path string, rd io.Reader, ctype string, opts []ReqOpt) *Resp {
 	t.Helper()
+	r, err := c.roundTrip(method, path, rd, ctype, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+// Try performs one request with a JSON body (no step-up) and returns the
+// failure instead of failing the test: for a goroutine, which must not
+// call t.Fatal.
+func (c *Client) Try(method, path string, body any, opts ...ReqOpt) (*Resp, error) {
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	return c.roundTrip(method, path, bytes.NewReader(payload), "application/json", opts)
+}
+
+func (c *Client) roundTrip(method, path string, rd io.Reader, ctype string, opts []ReqOpt) (*Resp, error) {
 	req, err := http.NewRequest(method, c.Base+path, rd)
 	if err != nil {
-		t.Fatalf("new request: %v", err)
+		return nil, fmt.Errorf("new request: %w", err)
 	}
 	if ctype != "" {
 		req.Header.Set("Content-Type", ctype)
@@ -146,14 +165,14 @@ func (c *Client) send(t testing.TB, method, path string, rd io.Reader, ctype str
 	}
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		t.Fatalf("%s %s: %v", method, path, err)
+		return nil, fmt.Errorf("%s %s: %w", method, path, err)
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		t.Fatalf("%s %s: read body: %v", method, path, err)
+		return nil, fmt.Errorf("%s %s: read body: %w", method, path, err)
 	}
-	return &Resp{Method: method, Path: req.URL.RequestURI(), Status: resp.StatusCode, Header: resp.Header, Body: raw}
+	return &Resp{Method: method, Path: req.URL.RequestURI(), Status: resp.StatusCode, Header: resp.Header, Body: raw}, nil
 }
 
 // API performs a console request against /api/v1 + path.

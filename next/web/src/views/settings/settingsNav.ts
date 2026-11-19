@@ -73,7 +73,8 @@ const LAYOUT: Group[] = [
     key: 'runtime',
     pages: [
       page('updates', 'settings:read', 'coreUpdates.sourceTitle', 'download'),
-      page('environment', 'settings:read', 'settings.tabs.environment', 'code')
+      page('environment', 'settings:read', 'settings.tabs.environment', 'code'),
+      page('plugin-egress', 'settings:read', 'pluginEgress.title', 'globe')
     ]
   }
 ]

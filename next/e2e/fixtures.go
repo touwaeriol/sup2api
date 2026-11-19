@@ -47,24 +47,43 @@ func (e *Env) NewTenant(admin *Session, o TenantOpts) *Tenant {
 		o.Rate = 1
 	}
 	e.EnsurePlugin(admin, "anthropic", "")
-	tn := &Tenant{Model: e.RunModel(admin, "sonnet")}
-	tn.GroupID = e.CreateGroup(admin, e.Name("grp"), "restricted", o.Rate, nil)
+	tn := e.newTenantShell(admin, e.Name("grp"), o.Rate, o.Balance)
+	tn.Model = e.RunModel(admin, "sonnet")
 	for i := 0; i < o.Accounts; i++ {
 		prio := 10
 		if i < len(o.Priorities) {
 			prio = o.Priorities[i]
 		}
 		key := fmt.Sprintf("sk-ant-mock-%s-%d", e.RunID, nextSeq())
-		id := e.CreateAccount(admin, AccountSpec{GroupIDs: []int64{tn.GroupID}, APIKey: key, Priority: prio})
-		tn.Accounts = append(tn.Accounts, TenantAccount{ID: id, Key: key})
+		tn.addAccount(e, admin, AccountSpec{APIKey: key, Priority: prio}, key)
 	}
+	return tn
+}
+
+// newTenantShell creates a tenant without accounts: a restricted group
+// named groupName with rate, a user allowed to use it with credit balance
+// ("0" = none) and a key of the group. The caller adds the accounts
+// (addAccount) and sets Model.
+func (e *Env) newTenantShell(admin *Session, groupName string, rate float64, balance string) *Tenant {
+	e.T.Helper()
+	tn := &Tenant{GroupID: e.CreateGroup(admin, groupName, "restricted", rate, nil)}
 	tn.User = e.CreateUser(admin, UserSpec{})
 	e.GrantGroups(admin, tn.User.UserID, []int64{tn.GroupID})
-	if o.Balance != "0" {
-		e.AdjustBalance(admin, tn.User.UserID, o.Balance, true, "e2e initial credit")
+	if balance != "0" {
+		e.AdjustBalance(admin, tn.User.UserID, balance, true, "e2e initial credit")
 	}
 	tn.KeyID, tn.APIKey = e.CreateAPIKey(tn.User, tn.GroupID)
 	return tn
+}
+
+// addAccount creates spec in the tenant's group; key is the upstream key
+// the mock records for it (the one spec carries). It returns the account.
+func (tn *Tenant) addAccount(e *Env, admin *Session, spec AccountSpec, key string) TenantAccount {
+	e.T.Helper()
+	spec.GroupIDs = []int64{tn.GroupID}
+	a := TenantAccount{ID: e.CreateAccount(admin, spec), Key: key}
+	tn.Accounts = append(tn.Accounts, a)
+	return a
 }
 
 // AccountKeys returns the upstream keys of the tenant's accounts.

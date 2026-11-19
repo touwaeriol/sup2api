@@ -13,9 +13,11 @@ package volcengine
 // upstream's traffic.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -40,13 +42,15 @@ func jsonStr(s string) string {
 	return `"` + strings.ReplaceAll(s, `"`, `\"`) + `"`
 }
 
-func buildFor(t *testing.T, acc *pluginv1.Account, meta *pluginv1.RequestMeta) (*pluginv1.BuildUpstreamRequestResponse, error) {
+func buildFor(t *testing.T, acc *pluginv1.Account, meta *pluginv1.RequestMeta) (*pluginv1.UpstreamRequest, error) {
 	t.Helper()
-	return New().BuildUpstreamRequest(context.Background(), &pluginv1.BuildUpstreamRequestRequest{
-		Meta: meta, Account: acc,
-		Fields: map[string]string{"model": `"` + meta.GetModel() + `"`},
+	return New().BuildUpstream(context.Background(), &pluginv1.ExecuteRequest{
+		Meta: meta, Account: acc, Body: modelBody(meta.GetModel()),
 	})
 }
+
+// modelBody is the smallest request body naming model.
+func modelBody(model string) []byte { return []byte(`{"model":` + jsonStr(model) + `}`) }
 
 // TestPrefixCannotLeaveTheHost is the point of upstreamURL. Each of these
 // values, appended to a base URL, parses as a DIFFERENT origin - "@evil.com"
@@ -96,6 +100,11 @@ func TestPrefixCannotLeaveTheHost(t *testing.T) {
 func TestLayoutFollowsTheAccountType(t *testing.T) {
 	official := account(testKey, `{}`)                                 // empty base_url -> the official default
 	byteplus := account(testKey, `{"base_url":"`+BytePlusBaseURL+`"}`) // Ark's overseas endpoint, NOT a relay
+	// The Ark SDK base URL as pasted: its /api/v3 is left out for the root, so
+	// the Ark paths are not doubled and Messages goes to the root's
+	// /api/compatible/v1. Only one is left out of a doubled /api/v3.
+	pasted := account(testKey, `{"base_url":"`+DefaultBaseURL+`/api/v3"}`)
+	doubled := account(testKey, `{"base_url":"`+DefaultBaseURL+`/api/v3/api/v3"}`)
 	relay := relayAccount("", "")
 	for _, c := range []struct {
 		name     string
@@ -109,6 +118,12 @@ func TestLayoutFollowsTheAccountType(t *testing.T) {
 		{"official images", official, ProtocolImages, DefaultBaseURL + "/api/v3/images/generations"},
 		{"official video", official, ProtocolVideoSubmit, DefaultBaseURL + "/api/v3/contents/generations/tasks"},
 		{"byteplus chat", byteplus, ProtocolChat, BytePlusBaseURL + "/api/v3/chat/completions"},
+		{"pasted chat", pasted, ProtocolChat, DefaultBaseURL + "/api/v3/chat/completions"},
+		{"pasted images", pasted, ProtocolImages, DefaultBaseURL + "/api/v3/images/generations"},
+		{"pasted video", pasted, ProtocolVideoSubmit, DefaultBaseURL + "/api/v3/contents/generations/tasks"},
+		{"pasted messages", pasted, ProtocolMessages, DefaultBaseURL + "/api/compatible/v1/messages"},
+		{"doubled chat", doubled, ProtocolChat, DefaultBaseURL + "/api/v3/api/v3/chat/completions"},
+		{"doubled messages", doubled, ProtocolMessages, DefaultBaseURL + "/api/v3/api/compatible/v1/messages"},
 
 		{"relay chat", relay, ProtocolChat, "https://relay.test/v1/chat/completions"},
 		{"relay responses", relay, ProtocolResponses, "https://relay.test/v1/responses"},
@@ -126,9 +141,11 @@ func TestLayoutFollowsTheAccountType(t *testing.T) {
 
 func TestOfficialNativeAnthropicMessages(t *testing.T) {
 	for _, stream := range []bool{false, true} {
-		r, err := New().BuildUpstreamRequest(context.Background(), &pluginv1.BuildUpstreamRequestRequest{
+		body := []byte(`{"model":"m","stream":` + strconv.FormatBool(stream) + `,"max_tokens":8,"messages":[]}`)
+		r, err := New().BuildUpstream(context.Background(), &pluginv1.ExecuteRequest{
 			Account: account(testKey, `{}`), Meta: &pluginv1.RequestMeta{Protocol: ProtocolMessages, Model: "m", Stream: stream},
-			InboundHeaders: map[string]string{"anthropic-version": "2023-06-01", "anthropic-beta": "test-beta", "x-api-key": "caller-key", "authorization": "Bearer caller"},
+			InboundHeaders: map[string]string{"anthropic-version": "2023-06-01", "anthropic-beta": "test-beta"},
+			Body:           body,
 		})
 		if err != nil || r.GetUrl() != DefaultBaseURL+"/api/compatible/v1/messages" {
 			t.Fatalf("stream=%v: %v %v", stream, r, err)
@@ -136,10 +153,10 @@ func TestOfficialNativeAnthropicMessages(t *testing.T) {
 		if r.Headers["x-api-key"] != "11111111-2222-3333-4444-555555555555" {
 			t.Fatal("wrong upstream API key")
 		}
-		if r.Headers["x-api-key"] == "caller-key" || r.Headers["authorization"] != "" {
-			t.Fatal("caller credential leaked or wrong auth scheme")
+		if r.Headers["authorization"] != "" || len(r.DefaultHeaders) != 0 {
+			t.Fatal("wrong auth scheme")
 		}
-		if r.Headers["anthropic-version"] != "2023-06-01" || r.Headers["anthropic-beta"] != "test-beta" || len(r.Patches) != 0 {
+		if r.Headers["anthropic-version"] != "2023-06-01" || r.Headers["anthropic-beta"] != "test-beta" || !bytes.Equal(r.Body, body) {
 			t.Fatalf("Anthropic wire was altered: %+v", r)
 		}
 	}
@@ -229,19 +246,12 @@ func TestVideoPrefixIsIndependent(t *testing.T) {
 	if err != nil || r.GetUrl() != "https://relay.test/doubao/api/v3/contents/generations/tasks" {
 		t.Fatalf("submit: %q %v", r.GetUrl(), err)
 	}
-	r, err = buildFor(t, acc, &pluginv1.RequestMeta{
-		Protocol: ProtocolVideoQuery, Model: "m", PathParams: map[string]string{TaskIDParam: "task_1"}})
-	if err != nil || r.GetUrl() != "https://relay.test/doubao/api/v3/contents/generations/tasks/task_1" {
-		t.Fatalf("query: %q %v", r.GetUrl(), err)
-	}
 	// The reconcile poll is the third caller and the one that would go
 	// unnoticed: it runs offline, and a poll built against the wrong path
 	// answers 404 for every entry, which the core reads as "still pending"
 	// until the deadline and then keeps the estimate - the account is charged
 	// its pre-charge for work that really finished and reported real usage.
-	rr, err := New().BuildReconcileRequest(context.Background(), &pluginv1.BuildReconcileRequestRequest{
-		Account: acc, Entry: &pluginv1.ReconcileEntry{RefId: "task_1"},
-	})
+	rr, err := taskQuery(&pluginv1.ReconcileEntry{RefId: "task_1"}, acc)
 	if err != nil || rr.GetUrl() != "https://relay.test/doubao/api/v3/contents/generations/tasks/task_1" {
 		t.Fatalf("reconcile: %q %v", rr.GetUrl(), err)
 	}
@@ -253,15 +263,13 @@ func TestVideoPrefixIsIndependent(t *testing.T) {
 	}
 	// And an official account's reconcile poll uses Ark's own path, reading no
 	// setting at all.
-	rr, err = New().BuildReconcileRequest(context.Background(), &pluginv1.BuildReconcileRequestRequest{
-		Account: account(testKey, `{}`), Entry: &pluginv1.ReconcileEntry{RefId: "task_1"},
-	})
+	rr, err = taskQuery(&pluginv1.ReconcileEntry{RefId: "task_1"}, account(testKey, `{}`))
 	if err != nil || rr.GetUrl() != DefaultBaseURL+"/api/v3/contents/generations/tasks/task_1" {
 		t.Fatalf("official reconcile: %q %v", rr.GetUrl(), err)
 	}
 }
 
-func TestVideoEndpointUsedBySubmissionQueryAndPoll(t *testing.T) {
+func TestVideoEndpointUsedBySubmissionAndPoll(t *testing.T) {
 	for _, endpoint := range []string{"/doubao/api/v3/contents/generations/tasks", "https://video.example/custom/tasks"} {
 		settings, _ := json.Marshal(map[string]any{"base_url": "https://relay.test", "api_prefix": "/v1", "video_api_prefix": "/legacy", "video_endpoint": endpoint})
 		acc := account(testKey, string(settings))
@@ -275,13 +283,9 @@ func TestVideoEndpointUsedBySubmissionQueryAndPoll(t *testing.T) {
 			t.Fatalf("submit %s: %+v %v", endpoint, created, err)
 		}
 		id := "task/a?x#y"
-		query, err := buildFor(t, acc, &pluginv1.RequestMeta{Protocol: ProtocolVideoQuery, PathParams: map[string]string{TaskIDParam: id}})
-		if err != nil || query.Url != want+"/"+url.PathEscape(id) || query.Method != "GET" {
-			t.Fatalf("query: %+v %v", query, err)
-		}
-		poll, err := New().BuildReconcileRequest(context.Background(), &pluginv1.BuildReconcileRequestRequest{Account: acc, Entry: &pluginv1.ReconcileEntry{RefId: id}})
-		if err != nil || poll.Url != query.Url || poll.Method != "GET" {
-			t.Fatalf("poll disagrees with query: %+v %v", poll, err)
+		poll, err := taskQuery(&pluginv1.ReconcileEntry{RefId: id}, acc)
+		if err != nil || poll.Url != want+"/"+url.PathEscape(id) || poll.Method != "GET" {
+			t.Fatalf("poll: %+v %v", poll, err)
 		}
 		chat, err := buildFor(t, acc, &pluginv1.RequestMeta{Protocol: ProtocolChat, Model: "m"})
 		if err != nil || chat.Url != "https://relay.test/v1/chat/completions" {
@@ -324,20 +328,6 @@ func TestEndpointRejectsAmbiguousURLsAtSaveAndRuntime(t *testing.T) {
 	}
 }
 
-// TestCountTokensIsRefusedByName documents the cost of the relay type
-// declaring the anthropic platform: it declares two endpoints and
-// AccountPlatform cannot select one, so the type is offered count_tokens
-// whether it can serve it or not.
-func TestCountTokensIsRefusedByName(t *testing.T) {
-	_, err := buildFor(t, relayAccount("/v1", ""), &pluginv1.RequestMeta{Protocol: ProtocolCountTokens, Model: "m"})
-	if err == nil {
-		t.Fatal("count_tokens must not be sent anywhere")
-	}
-	if !strings.Contains(err.Error(), "count_tokens") {
-		t.Errorf("the error must name the protocol, or the log does not explain itself: %v", err)
-	}
-}
-
 // TestUnknownAccountTypeIsRefused: the plugin now has two types and picks the
 // credential spec by name, so an unknown one must fail loudly instead of
 // silently getting the official layout.
@@ -353,23 +343,20 @@ func TestUnknownAccountTypeIsRefused(t *testing.T) {
 // one is supplied - but never in place of the client's own, which tells the
 // upstream which shape the body is in.
 func TestAnthropicHeaders(t *testing.T) {
-	h := upstreamHeaders(ProtocolMessages, "k", nil)
+	h := upstreamHeaders(AccountTypeRelay, ProtocolMessages, "k", nil)
 	if h["anthropic-version"] != DefaultAnthropicVersion {
 		t.Errorf("version = %q, want the default %q", h["anthropic-version"], DefaultAnthropicVersion)
 	}
-	h = upstreamHeaders(ProtocolMessages, "k", map[string]string{
-		"anthropic-version": "2026-01-01", "anthropic-beta": "x-1", "user-agent": "ua", "x-stainless-lang": "go"})
+	h = upstreamHeaders(AccountTypeRelay, ProtocolMessages, "k", map[string]string{
+		"anthropic-version": "2026-01-01", "anthropic-beta": "x-1", "user-agent": "ua"})
 	if h["anthropic-version"] != "2026-01-01" {
 		t.Errorf("the client's version must win: %q", h["anthropic-version"])
 	}
 	if h["anthropic-beta"] != "x-1" {
 		t.Errorf("anthropic-beta must be forwarded: %q", h["anthropic-beta"])
 	}
-	if _, ok := h["x-stainless-lang"]; ok {
-		t.Error("only the declared headers are forwarded")
-	}
 	// The OpenAI surface is unchanged: no version header appears there.
-	if _, ok := upstreamHeaders(ProtocolChat, "k", nil)["anthropic-version"]; ok {
+	if _, ok := upstreamHeaders(AccountTypeRelay, ProtocolChat, "k", nil)["anthropic-version"]; ok {
 		t.Error("the openai surface must not grow an anthropic header")
 	}
 }
@@ -446,6 +433,28 @@ func TestNormalizePrefix(t *testing.T) {
 	}
 }
 
+// TestStoredPrefixWithSpaceKeepsWorking: whitespace inside a prefix is
+// refused on save (validatePrefixFields), not on the request path. A prefix
+// stored before that rule (with a vertical tab or a no-break space) still
+// reads, and the request is built as before; only upstreamURL's own checks
+// apply to it.
+func TestStoredPrefixWithSpaceKeepsWorking(t *testing.T) {
+	for _, prefix := range []string{"/v1\vx", "/v1\u00a0x"} {
+		quoted, _ := json.Marshal(prefix)
+		settings := `{"base_url":"https://relay.test","api_prefix":` + string(quoted) + `}`
+		if got, err := prefixesOf(AccountTypeRelay, settings); err != nil || got.api != prefix {
+			t.Errorf("prefixesOf(%q) = %q, %v; want it as stored", prefix, got.api, err)
+		}
+		if errs := validatePrefixFields(nil, settings); len(errs) != 1 || errs[0].GetField() != FieldAPIPrefix || errs[0].GetCode() != "pattern" {
+			t.Errorf("saving %q: errors = %v, want api_prefix:pattern", prefix, errs)
+		}
+	}
+	r, err := buildFor(t, relayAccount("/v1\u00a0x", ""), &pluginv1.RequestMeta{Protocol: ProtocolChat, Model: "m"})
+	if err != nil || r.GetUrl() != "https://relay.test/v1\u00a0x/chat/completions" {
+		t.Fatalf("url = %q (%v)", r.GetUrl(), err)
+	}
+}
+
 // TestValidateRelayBaseURL covers the save-time guard on the relay base URL.
 // The prefixes are what express a path, and a base URL that already carries one
 // would double it - loudly on text, but on video the poll 404s forever and the
@@ -474,9 +483,13 @@ func TestValidateRelayBaseURL(t *testing.T) {
 	if errs := validate(`{"base_url":"https://relay.test","video_api_prefix":"/doubao/api/v3"}`); len(errs) != 0 {
 		t.Errorf("the verified configuration must be accepted: %v", errs)
 	}
+	// An escaped slash stays escaped (saved and sent so): the path does not end in a /v1 segment.
+	if errs := validate(`{"base_url":"https://relay.test/a%2Fv1"}`); len(errs) != 0 {
+		t.Errorf("https://relay.test/a%%2Fv1 must be accepted: %v", errs)
+	}
 	// The official type keeps its own rules: base_url is optional there, and
 	// "https://ark.cn-beijing.volces.com/api/v3" is a paste of the SDK base URL
-	// that spec.StripSuffixes exists to accept.
+	// that spec.Versions exists to accept.
 	official := New().validateWithAssets(&pluginv1.ValidateCredentialsRequest{
 		AccountType: AccountTypeAPIKey, CredentialsJson: testKey,
 		SettingsJson: `{"base_url":"` + DefaultBaseURL + `/api/v3"}`,

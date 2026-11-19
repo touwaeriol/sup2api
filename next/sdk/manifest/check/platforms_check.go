@@ -103,6 +103,10 @@ func (v *validator) endpointConflicts(ef string, e manifest.Endpoint, own *[]own
 	}
 }
 
+// EndpointTests are the accepted values of endpoint.test ("" means the
+// protocol is tested like any other).
+var EndpointTests = []string{manifest.EndpointTestExplicit, manifest.EndpointTestNever}
+
 // endpoint validates one endpoint of platform p; ok=false when its
 // method or path is malformed (no conflict checks then).
 func (v *validator) endpoint(f string, p manifest.Platform, e manifest.Endpoint) (ok bool) {
@@ -172,6 +176,9 @@ func (v *validator) endpoint(f string, p manifest.Platform, e manifest.Endpoint)
 	}
 	if len(e.Auth.Headers) == 0 && e.Auth.Query == "" {
 		v.add(f+".auth", "required", "auth.headers or auth.query is required")
+	}
+	if e.Test != "" && !slices.Contains(EndpointTests, e.Test) {
+		v.add(f+".test", "invalid", "test must be one of %s (or absent)", strings.Join(EndpointTests, ", "))
 	}
 	switch {
 	case e.Request.ModelPath == "" && e.Request.ModelParam == "" && e.Request.ModelSource == "" && !e.TaskQuery():

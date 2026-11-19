@@ -85,3 +85,26 @@ func TestDecodeAccount(t *testing.T) {
 		}
 	}
 }
+
+// Only refuses keys outside the list in either object.
+func TestOnly(t *testing.T) {
+	f, bad := DecodeForm(&pluginv1.ValidateCredentialsRequest{
+		CredentialsJson: `{"access_key_id":"A","token_for":"x"}`, SettingsJson: `{"region":"r","proxy":1}`})
+	if bad != nil {
+		t.Fatal(bad)
+	}
+	if resp := f.Only("access_key_id", "token_for", "region", "proxy"); resp != nil {
+		t.Fatalf("all known = %v", resp)
+	}
+	resp := f.Only("access_key_id", "region")
+	var got []string
+	for _, e := range resp.GetErrors() {
+		if e.GetCode() != "unknown" {
+			t.Errorf("code = %q", e.GetCode())
+		}
+		got = append(got, e.GetField())
+	}
+	if !slices.Equal(got, []string{"proxy", "token_for"}) {
+		t.Fatalf("unknown = %v", got)
+	}
+}

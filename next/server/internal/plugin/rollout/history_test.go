@@ -7,6 +7,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/audit"
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/testutil"
 )
@@ -82,7 +83,7 @@ func TestNodeHistoryDeduplicatesAndRetriesFailedWrites(t *testing.T) {
 	c := newTestController(t, &stubRuntime{}, nil, t.TempDir())
 	c.o.DB = testutil.DB(t)
 	ctx := context.Background()
-	s := NodePluginState{State: "failed", Serving: "1.0.0", Standby: "2.0.0", Fallback: "1.0.0", RolloutID: 42, Error: "first failure"}
+	s := core.PluginNodeState{State: "failed", Serving: "1.0.0", Standby: "2.0.0", Fallback: "1.0.0", RolloutID: 42, Error: "first failure"}
 	c.recordNodeHistory(ctx, "history", s)
 	s.Error = "different text"
 	c.recordNodeHistory(ctx, "history", s)

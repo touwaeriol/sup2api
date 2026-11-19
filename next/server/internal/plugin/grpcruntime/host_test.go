@@ -41,7 +41,7 @@ func hostEnv(t *testing.T, o Options, grants registry.Grants) *hostServer {
 	}
 	t.Cleanup(func() { _ = pkg.Close() })
 	o.Node, o.DataDir = staticNode{"n", "b"}, t.TempDir()
-	o.Concurrency = Concurrency{Hot: 4, Console: 4, Background: 4, Execute: 4}
+	o.Concurrency = Concurrency{Hot: 4, Console: 4, Background: 4}
 	rt := &Runtime{o: o, log: slog.Default()}
 	return &hostServer{i: newInstance(rt, pkg, "", "", &settings{configJSON: "{}", grants: grants})}
 }
@@ -122,11 +122,11 @@ func (a *scopedAccounts) AccountsInScope(_ context.Context, uid int64, action st
 	return a.all, a.allowed, a.err
 }
 
-// scopeEnv is hostEnv with the "accounts.read" grant, serving a request of
-// user 7 until the test ends.
+// scopeEnv is hostEnv without any grant (AccountScopeCheck needs none),
+// serving a request of user 7 until the test ends.
 func scopeEnv(t *testing.T, o Options) *hostServer {
 	t.Helper()
-	h := hostEnv(t, o, registry.Grants{"accounts.read": json.RawMessage(`{}`)})
+	h := hostEnv(t, o, registry.Grants{})
 	t.Cleanup(h.i.callers.enter(context.Background(), 7))
 	return h
 }
@@ -165,19 +165,10 @@ func TestHostAccountScopeCheckForwards(t *testing.T) {
 	}
 }
 
-// A plugin without the "accounts.read" grant is refused, and so is a
-// user_id that is not the caller of a request the plugin is serving: neither
-// reaches the account module.
-func TestHostAccountScopeCheckNeedsGrantAndCaller(t *testing.T) {
-	in := &pluginv1.AccountScopeCheckRequest{UserId: 7, Action: "read", AccountIds: []int64{1}}
+// A user_id that is not the caller of a request the plugin is serving is
+// refused and does not reach the account module; no grant is needed.
+func TestHostAccountScopeCheckNeedsCaller(t *testing.T) {
 	acc := &scopedAccounts{fakeAccounts: &fakeAccounts{}, all: true}
-
-	ungranted := hostEnv(t, Options{Accounts: acc}, registry.Grants{"authz.read": json.RawMessage(`{}`)})
-	t.Cleanup(ungranted.i.callers.enter(context.Background(), 7))
-	if _, err := ungranted.AccountScopeCheck(t.Context(), in); status.Code(err) != codes.PermissionDenied {
-		t.Fatalf("without accounts.read: %v", err)
-	}
-
 	h := scopeEnv(t, Options{Accounts: acc})
 	if _, err := h.AccountScopeCheck(t.Context(), &pluginv1.AccountScopeCheckRequest{UserId: 8, Action: "read", AccountIds: []int64{1}}); status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("a user the plugin is not serving: %v", err)

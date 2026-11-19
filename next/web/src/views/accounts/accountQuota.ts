@@ -77,20 +77,22 @@ export function useQuotaClock(): Readonly<Ref<number>> {
 
 export type RefreshOutcome = 'ok' | 'busy' | 'throttled' | 'error'
 
-export interface QuotaRefreshOptions {
+export interface RefreshOptions<T> {
   /** A fresh snapshot for the account. */
-  onSnapshot: (id: number, snapshot: QuotaSnapshot) => void
+  onSnapshot: (id: number, snapshot: T) => void
   onError?: (id: number, e: unknown) => void
   /** Injected in tests. */
-  fetcher?: (id: number) => Promise<QuotaSnapshot>
+  fetcher?: (id: number) => Promise<T>
 }
 
+export type QuotaRefreshOptions = RefreshOptions<QuotaSnapshot>
+
 /**
- * Manual "refresh usage" without a cooldown after completion. While a request
- * runs the account is in `refreshing` and duplicate clicks are ignored.
+ * Manual refresh of one account's snapshot without a cooldown after
+ * completion. While a request runs the account is in `refreshing` and
+ * duplicate clicks are ignored.
  */
-export function useQuotaRefresh(opts: QuotaRefreshOptions) {
-  const fetcher = opts.fetcher ?? ((id: number) => fetchAccountQuota(id, true))
+function useRefresh<T>(fetcher: (id: number) => Promise<T>, opts: RefreshOptions<T>) {
   const refreshing = reactive(new Set<number>())
   async function refresh(id: number): Promise<RefreshOutcome> {
     if (refreshing.has(id)) return 'busy'
@@ -109,6 +111,11 @@ export function useQuotaRefresh(opts: QuotaRefreshOptions) {
   return { refreshing, refresh }
 }
 
+/** Manual "refresh usage" (GET /accounts/:id/quota?force=true). */
+export function useQuotaRefresh(opts: QuotaRefreshOptions) {
+  return useRefresh(opts.fetcher ?? ((id: number) => fetchAccountQuota(id, true)), opts)
+}
+
 /** POST /accounts/:id/refresh-credentials — renews the credentials now (CONTRACTS §48). */
 export function refreshAccountCredentials(id: number): Promise<CredentialRefreshOutcome> {
   return api.post<CredentialRefreshOutcome>(`/accounts/${id}/refresh-credentials`)
@@ -116,69 +123,19 @@ export function refreshAccountCredentials(id: number): Promise<CredentialRefresh
 
 // ---------------------------------------------------------------- balance (CONTRACTS §52)
 
-/** Whether a balance snapshot exists and should be shown. */
+/** Whether the account type has a balance (the view carries one). */
 export function hasBalance(b: AccountBalance | null | undefined): b is AccountBalance {
   return !!b
 }
 
-/** GET /accounts/:id/balance — returns the cached balance or queries the upstream. */
-export function fetchAccountBalance(id: number): Promise<AccountBalance> {
-  return api.get<AccountBalance>(`/accounts/${id}/balance`)
-}
-
-/** GET /accounts/:id/balance?force=true — force refresh (ignores freshness, subject to 2s rate limit). */
+/** GET /accounts/:id/balance?force=true — reads the balance now. */
 export function refreshAccountBalance(id: number): Promise<AccountBalance> {
   return api.get<AccountBalance>(`/accounts/${id}/balance`, { force: true })
 }
 
-export interface BalanceRefreshOptions {
-  /** A fresh balance snapshot for the account. */
-  onSnapshot: (id: number, snapshot: AccountBalance) => void
-  /** Clicked again too soon; nothing was sent. */
-  onThrottled?: (id: number, waitSeconds: number) => void
-  onError?: (id: number, e: unknown) => void
-  /** Injected in tests. */
-  fetcher?: (id: number) => Promise<AccountBalance>
-  now?: () => number
-}
+export type BalanceRefreshOptions = RefreshOptions<AccountBalance>
 
-/** Manual "refresh balance" with a 2s floor per account (same logic as quota refresh). */
+/** Manual "refresh balance", like the quota's: no cooldown, in-flight clicks coalesced. */
 export function useBalanceRefresh(opts: BalanceRefreshOptions) {
-  const now = opts.now ?? Date.now
-  const fetcher = opts.fetcher ?? refreshAccountBalance
-  const refreshing = reactive(new Set<number>())
-  const lastAt = new Map<number, number>()
-  const MIN_MS = 2_000
-
-  function waitMs(id: number, current?: AccountBalance | null): number {
-    const t = now()
-    let base = lastAt.get(id) ?? 0
-    if (current?.updated_at) {
-      const at = Date.parse(current.updated_at)
-      if (!Number.isNaN(at)) base = Math.max(base, Math.min(at, t))
-    }
-    return Math.max(0, base + MIN_MS - t)
-  }
-
-  async function refresh(id: number, current?: AccountBalance | null): Promise<RefreshOutcome> {
-    if (refreshing.has(id)) return 'busy'
-    const wait = waitMs(id, current)
-    if (wait > 0) {
-      opts.onThrottled?.(id, Math.ceil(wait / 1000))
-      return 'throttled'
-    }
-    refreshing.add(id)
-    lastAt.set(id, now())
-    try {
-      opts.onSnapshot(id, await fetcher(id))
-      return 'ok'
-    } catch (e) {
-      opts.onError?.(id, e)
-      return 'error'
-    } finally {
-      refreshing.delete(id)
-    }
-  }
-
-  return { refreshing, refresh, waitMs }
+  return useRefresh(opts.fetcher ?? refreshAccountBalance, opts)
 }

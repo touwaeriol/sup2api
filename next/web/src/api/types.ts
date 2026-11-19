@@ -251,7 +251,19 @@ export interface Group extends Partial<GroupPricingSummary>, Partial<MyGroupPric
   environment?: EnvironmentValues
   /** Loss policy for its accounts' converted requests; null leaves it to the accounts (effective default allow). */
   conversion_loss_policy?: ConversionLossPolicy | null
+  /**
+   * Read-only, GET /groups/:id and GET /me/groups: the protocols its member accounts serve
+   * (DESIGN-2026-11-17-PROTOCOL-BINDING §4), with how many accounts serve each on GET /groups/:id only.
+   */
+  served_protocols?: GroupServedProtocol[]
   created_at?: string
+}
+
+/** A protocol the member accounts of a group serve. */
+export interface GroupServedProtocol {
+  protocol: string
+  /** Member accounts serving it; absent on GET /me/groups. */
+  accounts?: number
 }
 
 // ------------------------------------------------------------------ protocol conversion (CONVERT-MATRIX §2.3, §2.4, §7)
@@ -304,7 +316,7 @@ export type EnvironmentValues = Record<string, number>
 /** A variable the core declares (GET /environment/variables). */
 export interface EnvironmentVariable {
   key: string
-  unit: 'seconds' | 'minutes' | 'mb' | 'count'
+  unit: 'seconds' | 'minutes' | 'count'
   min: number
   max: number
   name: LText
@@ -430,7 +442,8 @@ export interface ProxyProbeResult {
 // ------------------------------------------------------------------ accounts
 
 export interface AccountFormRef {
-  mode: 'schema' | 'iframe' | 'native'
+  /** An older package may still say "schema": the editor asks to upgrade the plugin. */
+  mode: 'iframe' | 'native'
   page?: string
   component?: string
 }
@@ -493,6 +506,30 @@ export interface AccountType {
   platforms: AccountTypePlatform[]
   /** Endpoints of available supported platforms (native) plus converted ones. */
   endpoints: AccountTypeEndpoint[]
+}
+
+/**
+ * The inbound protocols a list of client models is served on (DESIGN-2026-11-17-PROTOCOL-BINDING §3.2).
+ * `models: ['*']` stands for every model no other entry lists. A protocol of another platform turns the
+ * conversion on for these models.
+ */
+export interface ModelProtocolRule {
+  models: string[]
+  protocols: string[]
+}
+
+/** How an account serves a protocol: natively, adapted to another endpoint of the same platform, or converted to another platform. */
+export type ServedVia = 'native' | 'adapted' | 'converted'
+
+/** A protocol an account serves now (read-only, GET /accounts/:id). */
+export interface AccountServedProtocol {
+  protocol: string
+  via: ServedVia
+  grade: ConversionGrade
+  /** Protocols passed through when adapted or converted, client first. */
+  hops?: string[] | null
+  /** The client models served on it; null = no model restriction. */
+  models: string[] | null
 }
 
 /** Caps of a list of client models on one account; its models share one set of counters, 0 = unlimited (CONTRACTS §68, §71). */
@@ -663,6 +700,12 @@ export interface Account {
   spm_limit: number
   /** Window of spm_limit in seconds, 60–86400; absent = 60. */
   spm_window_seconds?: number
+  /** Protocols of the account type's own platforms the account serves; null = all of them (DESIGN-2026-11-17-PROTOCOL-BINDING §3.1). */
+  protocols?: string[] | null
+  /** Protocols per model list, conversions included; a model in no entry is served on the account's own protocols only (§3.2). */
+  model_protocols?: ModelProtocolRule[]
+  /** Read-only, GET /accounts/:id: what the account serves now. */
+  served_protocols?: AccountServedProtocol[]
   /** Limits of lists of client models on top of the account's own (CONTRACTS §68). */
   model_limits?: ModelLimit[]
   /** The account layer of the environment variables (CONTRACTS §74.3). */
@@ -721,7 +764,7 @@ export interface Account {
   refresh?: AccountRefresh | null
   /** Outcome of the latest test of the account (any model); null when never tested. */
   last_test?: AccountLastTest | null
-  /** Balance of the account (CONTRACTS §52); null when the type does not support balance. */
+  /** Balance of the account (CONTRACTS §52); absent when the type does not support balance. */
   balance?: AccountBalance | null
 }
 
@@ -734,6 +777,8 @@ export interface AccountLastTest {
   ok: boolean
   latency_ms: number
   model: string
+  /** Protocol the test used (CONTRACTS §122); absent for older tests. */
+  protocol?: string
   message: string
 }
 
@@ -749,18 +794,25 @@ export interface AccountRefresh {
   error: string
 }
 
-/** Balance snapshot of an account (CONTRACTS §52). */
+/**
+ * Balance of an account (CONTRACTS §52.5), read through its plugin. Only for
+ * account types that declare one; shown only, never acted on.
+ */
 export interface AccountBalance {
-  /** Decimal amount as a string (e.g., "1.23"). */
-  amount: Money
-  /** ISO 4217 currency code (e.g., "USD", "CNY"). */
-  currency: string
-  /** When the snapshot was taken. */
-  updated_at: string
-  /** Source of the balance: "active" (explicit query) or "" (passive). */
-  source: 'active' | ''
-  /** Last query error message if any. */
+  /** Always true: the account type reads balances. */
+  supported: boolean
+  /** Decimal amount of the last successful read (e.g. "1.230000"); absent before one and when unlimited. */
+  amount?: Money
+  /** The unit the upstream gave with amount, as it gave it (e.g. "USD", any text); absent when it gave none. Never converted. */
+  currency?: string
+  /** The upstream reports no limit for this account. */
+  unlimited?: boolean
+  /** When the last successful read happened; absent before one. */
+  updated_at?: string
+  /** Why the last read failed ("auth_rejected: …" or "transient: …"), cleared by a successful one. */
   error?: string
+  /** When the last read failed. */
+  error_at?: string
 }
 
 /** Answer of POST /accounts/:id/refresh-credentials. */
@@ -826,6 +878,12 @@ export interface AccountTestResult {
   model?: string
   /** The model the caller asked for (before the account's model mapping); '' for the plugin default. */
   requested_model?: string
+  /**
+   * Protocol the plugin tested (CONTRACTS §122): the first of the account's
+   * protocols for the model it has a test for; an image generation only when
+   * a model was named.
+   */
+  protocol?: string
   /** Upstream address: scheme://host + path (the server strips the query). */
   upstream?: string
   /** Snippet of the upstream response, present on success and failure (~4 KiB max). */
@@ -1007,6 +1065,9 @@ export interface UsageLog {
   cache_read_tokens: number
   cache_creation_tokens: number
   cache_creation_1h_tokens?: number
+  /** The image share of input_tokens / output_tokens (image endpoints only, CONTRACTS §118). */
+  image_input_tokens?: number
+  image_output_tokens?: number
   total_cost: Money
   /** The cost at the list price, before the group's rate. */
   standard_cost?: Money
@@ -1092,7 +1153,6 @@ export interface UsageOverview {
 
 export interface BillingSettings {
 	pre_consume_tokens: number
-  missing_price_policy: 'reject' | 'free'
   min_balance: Money
   big_cost_warning_usd: Money
   /** What a request pays when its client hangs up mid-answer (CONTRACTS §25.8). */
@@ -1103,11 +1163,11 @@ export interface BillingSettings {
 export interface GatewaySettings {
   /** Attempts per request incl. failover, 1–10 (default 3). */
   max_attempts: number
-  /** Timeout of platform calls on the request hot path, 100–30000 ms (default 2000). */
+  /** Timeout of one plugin ClassifyError call for a failed upstream request (and of the core's client-disconnect policy lookup); a plugin's work while forwarding is not timed. 100–30000 ms (default 2000). */
   platform_call_timeout_ms: number
   /** Default hook timeout when the manifest sets none, 50–2000 ms (default 300). */
   default_hook_timeout_ms: number
-  /** Timeout of the per-request platform RPCs that are not hooks (ResolveModel, ExtractUsage), 50–2000 ms (default 300). */
+  /** Timeout of the per-request platform RPCs before scheduling that are not hooks (ResolveModel, EstimateUsage for the pre-charge), 50–2000 ms (default 300). */
   platform_hotpath_timeout_ms: number
   /** Requests that may queue for a session's bound account when it is full, 0–10000 (default 3); 0 turns this queue off. */
   queue_sticky_max_waiting: number
@@ -1121,6 +1181,8 @@ export interface GatewaySettings {
   claude_max_tokens: ClaudeMaxTokensRule
   /** Size cap of one http(s) media file downloaded for Gemini, 1–1024 MB (default 64). */
   media_download_max_mb: number
+  /** Largest client request body and WebSocket message, 1–1024 MB (default 128); the only request size limit. */
+  max_request_body_mb: number
 }
 
 /**
@@ -1161,7 +1223,8 @@ export const GATEWAY_SETTINGS_RANGES: Record<GatewayNumberSetting, [number, numb
   queue_sticky_wait_seconds: [0, 600],
   queue_fallback_max_waiting: [0, 10000],
   queue_fallback_wait_seconds: [0, 600],
-  media_download_max_mb: [1, 1024]
+  media_download_max_mb: [1, 1024],
+  max_request_body_mb: [1, 1024]
 }
 
 // ------------------------------------------------------------------ sticky
@@ -1211,6 +1274,7 @@ export interface ResourceConflict {
 }
 
 export interface PluginSummary {
+  /** The manifest declares native ui.settings: the plugins list links to them (consoleSettingsPath). */
   has_settings?: boolean
   /** Role grants an automatic (built-in) upgrade held back for review (CONTRACTS P4C). */
   role_grants_to_review?: PluginRoleGrant[]
@@ -1228,7 +1292,21 @@ export interface PluginSummary {
   trust?: Trust
   /** Live nodes of the cluster; nodes that did not report the plugin count as `absent`. */
   node_summary?: { total: number; states: Record<string, number> }
+  /** Set when nodes refuse to load the plugin (built for an older plugin contract). */
+  refusal?: PluginRefusal | null
   description?: LText
+}
+
+/** Why the nodes refuse to load a plugin version; `message` is the runtime's own text. */
+export interface PluginRefusal {
+  /** `outdated_contract`: built for an older plugin contract. */
+  code: string
+  version: string
+  host_version: string
+  protocol_version: number
+  /** The first core release of the current plugin protocol: a version built for it loads on this core. */
+  first_core_version: string
+  message: string
 }
 
 export interface HostPermissionReview {
@@ -1307,6 +1385,8 @@ export interface PluginReview {
   role_grants_need_consent?: boolean
   /** Granting the db.schema asked for takes plugin:grant:db_schema_unconfined. */
   needs_db_schema_unconfined?: boolean
+  /** Fixed statement for a plugin declaring account types: it receives every request in full. Not a permission. */
+  request_access?: LText
 }
 
 /** A role column of the consent matrix (review role_columns), for the viewer. */
@@ -1420,25 +1500,10 @@ export interface Rollout {
 }
 
 export interface UIPluginPage {
-  type: 'table' | 'form' | 'iframe' | 'native'
+  type: 'iframe' | 'native'
   title?: LText
-  source?: string
-  columns?: Array<{ key: string; label: LText; format?: string }>
-  schema?: string
-  submit?: string
   src?: string
   component?: string
-  /**
-   * Query parameter the `source` route honours as a free-text search (mirrors
-   * manifest.Page.Search). A table page renders a search box only when this is
-   * set; the typed text is sent as `?<search>=…`.
-   */
-  search?: string
-  /**
-   * A table page's "New" button: the form page it opens (manifest
-   * Page.Create). The core drops it for callers without its permission.
-   */
-  create?: { page: string; permission?: string }
   /**
    * The page's sections, shown in the sidebar while the page is open
    * (manifest Page.Nav, UI 3.14): each item opens `?tab=<key>`. The core has
@@ -1524,6 +1589,19 @@ export interface NodeInfo {
   started_at: string
   last_heartbeat: string
   plugins: Record<string, string | Record<string, any>>
+  /** What the node's plugin sandbox enforces (CONTRACTS §43.8); absent from older cores. */
+  plugin_sandbox?: PluginSandboxStatus
+}
+
+export interface PluginSandboxStatus {
+  /** Plugins run under plugin-exec (Linux, not development mode). */
+  wrapped: boolean
+  /** SUB2API_PLUGIN_LANDLOCK. */
+  landlock: boolean
+  landlock_abi: number
+  /** Landlock layers in force: fs, fs_truncate, tcp, scope, unix, udp. */
+  active: string[]
+  missing: string[]
 }
 
 export interface Publisher {

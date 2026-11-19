@@ -382,6 +382,12 @@ func TestFailurePolicyAPI(t *testing.T) {
 	require.Equal(t, 409, code)
 	code, _ = e.api("PUT", "/settings/gateway", map[string]any{"platform_call_timeout_ms": 3000})
 	require.Equal(t, 200, code)
+	// What GET returns saves back unchanged, max_attempts included.
+	code, gw := e.api("GET", "/settings/gateway", nil)
+	require.Equal(t, 200, code)
+	code, v = e.api("PUT", "/settings/gateway", json.RawMessage(gw.Get("data").Raw))
+	require.Equal(t, 200, code, v.Raw)
+	require.Equal(t, gw.Get("data").Raw, v.Get("data").Raw)
 	code, _ = e.api("PUT", "/settings/auto-disable", map[string]any{"enabled": false})
 	require.Equal(t, 409, code)
 	code, v = e.api("POST", "/settings/failure-policy/preview", map[string]any{"policy": p, "facts": FailureFacts{Source: "upstream", Status: 503}})
@@ -418,7 +424,7 @@ func TestFailurePolicyRechecksChangedCandidateModels(t *testing.T) {
 	e := newEnv(t)
 	e.setFailurePolicy(testFailurePolicy())
 	e.up.set("acc-1", &upstreamRule{status: 503})
-	e.plat.buildHook = func(_ context.Context, in *pluginv1.BuildUpstreamRequestRequest) error {
+	e.plat.buildHook = func(_ context.Context, in *pluginv1.ExecuteRequest) error {
 		if in.Account.Id == 1 {
 			e.accounts.mu.Lock()
 			e.accounts.accounts[2].Models = []string{"another-model"}

@@ -5,11 +5,17 @@
 // /auth/codex/exchange → credentials. Re-authorizing runs the same flow.
 // Not a <form>: the panel sits inside the account editor's form.
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { isApiError } from '@sub2api/host'
+import { isApiError, type ProxyTicketSource } from '@sub2api/host'
 import { SAlert, SButton, SCopyButton, SField, SHint, SIcon, SInput, SLink, SSteps } from '@sub2api/ui'
 import { errorMessage, exchangeOAuth, startOAuth, useCodexHost, type CodexCredentials, type OAuthStart } from './host'
-import { callbackShape } from './flow'
+import { callbackShape, type FormAgent } from './flow'
 
+const props = defineProps<{
+  /** A proxy ticket of the account form's current proxy choice (UI 3.20), taken afresh for every call of the login. */
+  proxyTicket: ProxyTicketSource
+  /** The account form's current User-Agent and originator, sent with every call of the login. */
+  agent: FormAgent
+}>()
 const emit = defineEmits<{ (e: 'authorized', creds: CodexCredentials): void; (e: 'busy', busy: boolean): void }>()
 const host = useCodexHost()
 const t = host.t
@@ -21,7 +27,11 @@ const failure = ref('')
 // 'session': the exchange failed because the session is gone (expired, or
 // the consent was denied); only a new link helps.
 const failedStep = ref<'' | 'start' | 'exchange' | 'session'>('')
-/** Exchange refusals that end the session (the plugin's error codes). */
+/**
+ * Exchange refusals that end the session (the plugin's error codes). A
+ * proxy_refused keeps it: completing again sends the next call with a fresh
+ * ticket of the form's proxy.
+ */
 const SESSION_GONE = new Set(['session_expired', 'access_denied'])
 const shape = computed(() => callbackShape(callback.value))
 const shapeHint = computed(() => (shape.value === 'invalid' || shape.value === 'denied' || shape.value === 'no_code' ? t(`oauth.shape.${shape.value}`) : ''))
@@ -51,7 +61,7 @@ async function generate() {
   failedStep.value = ''
   setBusy('start')
   try {
-    const s = await startOAuth()
+    const s = await startOAuth(await props.proxyTicket(), props.agent)
     if (!alive || gen !== generation) return
     session.value = s
     callback.value = ''
@@ -71,7 +81,7 @@ async function complete() {
   failedStep.value = ''
   setBusy('exchange')
   try {
-    const r = await exchangeOAuth(session.value.session_id, callback.value.trim())
+    const r = await exchangeOAuth(session.value.session_id, callback.value.trim(), await props.proxyTicket(), props.agent)
     if (!alive || gen !== generation) return
     session.value = null
     callback.value = ''

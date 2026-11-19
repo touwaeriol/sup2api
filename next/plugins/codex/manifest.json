@@ -3,20 +3,19 @@
   "key": "codex",
   "name": { "en": "ChatGPT (Codex)", "zh": "ChatGPT（Codex）" },
   "description": {
-    "en": "Serves /v1/responses (including its WebSocket mode) and, through the core's conversion, /v1/chat/completions from your own ChatGPT subscription through the Codex CLI's logins: device code or Sign in with Codex. Only for the account owner's own use with their own ChatGPT subscription; do not pool several people's accounts or resell access (this violates OpenAI's terms). Requests identify themselves truthfully as sup2api (originator: sup2api, User-Agent: sup2api-codex/<version>); the plugin does not imitate the Codex CLI and adds no Codex system prompt.",
-    "zh": "用你自己的 ChatGPT 订阅提供 /v1/responses（含 WebSocket 模式），并经核心转换提供 /v1/chat/completions；通过 Codex CLI 的登录方式授权：设备码登录或 Sign in with Codex。仅用于账号所有者用自己的 ChatGPT 订阅自用；不得把多人账号做成号池对外出售（违反 OpenAI 条款）。请求如实标明来源为 sup2api（originator: sup2api，User-Agent: sup2api-codex/<版本>），不伪装 Codex CLI，也不注入 Codex 系统提示词。"
+    "en": "Serves /v1/responses (including its WebSocket mode) and, through the core's conversion, /v1/chat/completions, /v1/images/generations and /v1/images/edits (the Responses image_generation tool; use the image model gpt-image-2) from your own ChatGPT subscription through the Codex CLI's logins: device code or Sign in with Codex. Only for the account owner's own use with their own ChatGPT subscription; do not pool several people's accounts or resell access (this violates OpenAI's terms). By default requests identify themselves truthfully as sup2api (originator: sup2api, User-Agent: sup2api-codex/<version>); both can be set per account or in the plugin settings. The plugin sends no x-codex-* headers, does not imitate the Codex CLI's TLS fingerprint and adds no Codex system prompt.",
+    "zh": "用你自己的 ChatGPT 订阅提供 /v1/responses（含 WebSocket 模式），并经核心转换提供 /v1/chat/completions、/v1/images/generations 和 /v1/images/edits（Responses 的 image_generation 工具；生图模型写 gpt-image-2）；通过 Codex CLI 的登录方式授权：设备码登录或 Sign in with Codex。仅用于账号所有者用自己的 ChatGPT 订阅自用；不得把多人账号做成号池对外出售（违反 OpenAI 条款）。请求默认如实标明来源为 sup2api（originator: sup2api，User-Agent: sup2api-codex/<版本>），两者都可以在账号上或插件设置中自定义。插件不发 x-codex-* 头、不仿 Codex CLI 的 TLS 指纹，也不注入 Codex 系统提示词。"
   },
-  "version": "0.1.11",
+  "version": "0.2.0",
   "publisher": "sub2api",
   "icon": "assets/openai.svg",
   "runtime": "grpc",
   "entry": { "grpc": { "binaries": "runtimes/{os}-{arch}/plugin" } },
-  "hostCompat": ">=0.1.297 <0.2.0",
-  "hostUICompat": "^3.15",
+  "hostCompat": ">=0.1.304 <0.2.0",
+  "hostUICompat": "^4.0",
 
   "capabilities": [
     { "id": "platform.adapter.v1" },
-    { "id": "platform.execute.v1" },
     { "id": "platform.websocket.v1" },
     { "id": "http.routes.v1" }
   ],
@@ -34,7 +33,6 @@
       "creationGroup": "codex",
       "authMethodLabel": { "en": "Device Code", "zh": "设备码" },
       "sensitiveFields": ["access_token", "refresh_token", "id_token"],
-      "settingsFields": ["proxy_id"],
       "refresh": {},
       "quota": {
         "headers": [
@@ -56,13 +54,19 @@
         "gpt-6-luna",
         "gpt-5.6-sol",
         "gpt-5.6-terra",
-        "gpt-5.6-luna"
+        "gpt-5.6-luna",
+        "gpt-image-2"
       ],
       "platforms": [
         {
           "platform": "openai",
           "endpoints": ["responses", "responses_websocket"],
-          "requestFields": ["model", "[instructions]|#", "[input]|#(%\"*\")", "input.#.[role].#(==\"system\")#", "prompt_cache_key"],
+          "adapted": {
+            "chat_completions": {},
+            "images_generations": { "model": "gpt-6-luna" },
+            "images_edits": { "model": "gpt-6-luna" }
+          },
+          "passHeaders": [],
           "streamOnly": ["openai.responses"]
         }
       ]
@@ -79,7 +83,6 @@
       "creationGroup": "codex",
       "authMethodLabel": { "en": "Codex", "zh": "Codex" },
       "sensitiveFields": ["access_token", "refresh_token", "id_token"],
-      "settingsFields": ["proxy_id"],
       "refresh": {},
       "quota": {
         "headers": [
@@ -101,13 +104,19 @@
         "gpt-6-luna",
         "gpt-5.6-sol",
         "gpt-5.6-terra",
-        "gpt-5.6-luna"
+        "gpt-5.6-luna",
+        "gpt-image-2"
       ],
       "platforms": [
         {
           "platform": "openai",
           "endpoints": ["responses", "responses_websocket"],
-          "requestFields": ["model", "[instructions]|#", "[input]|#(%\"*\")", "input.#.[role].#(==\"system\")#", "prompt_cache_key"],
+          "adapted": {
+            "chat_completions": {},
+            "images_generations": { "model": "gpt-6-luna" },
+            "images_edits": { "model": "gpt-6-luna" }
+          },
+          "passHeaders": [],
           "streamOnly": ["openai.responses"]
         }
       ]
@@ -166,7 +175,8 @@
         }
       }
     ],
-    "native": { "entry": "ui/native/entry.js" }
+    "native": { "entry": "ui/native/entry.js" },
+    "settings": { "mode": "native", "component": "CodexSettings", "secrets": [] }
   },
 
   "resources": { "memoryMB": 64, "cpu": 0.1, "maxThreads": 32, "maxOpenFiles": 64 },
@@ -174,20 +184,16 @@
   "hostPermissions": [
     { "id": "platform.register",
       "reason": { "en": "Register the ChatGPT (Codex) account types (device code, Sign in with Codex) for the built-in openai platform", "zh": "为内置 openai 平台注册 ChatGPT（Codex）账号类型（设备码登录、Sign in with Codex）" } },
-    { "id": "accounts.credentials", "scope": { "types": "own" },
-      "reason": { "en": "Read the tokens of its own accounts to build upstream and token refresh requests, and to list and spend the official usage resets through the account's proxy (the core sends them all)", "zh": "读取本插件账号的令牌，用于构造上游和令牌刷新请求，以及查询和使用官方重置次数（经账号代理，均由核心发送）" } },
     { "id": "accounts.auto_state", "scope": { "types": "own" },
       "reason": { "en": "After an official usage reset succeeds, clear the automatic disable and cool-down this plugin set on the account because a usage window was used up", "zh": "官方用量重置成功后，清除本插件因用量窗口用满而对账号设置的自动停用与冷却" } },
     { "id": "kv",
-      "reason": { "en": "Keep the short-lived authorization sessions (device code; Sign in with Codex's PKCE verifier and state) between the console's calls, and cache each account's remaining official usage resets so the account list does not ask ChatGPT on every refresh", "zh": "在控制台的多次调用之间保存短期授权会话（设备码；Sign in with Codex 的 PKCE verifier 与 state），并缓存每个账号剩余的官方用量重置次数，使账号列表刷新时不必每次询问 ChatGPT" } },
+      "reason": { "en": "Keep the short-lived authorization sessions (device code; Sign in with Codex's PKCE verifier and state; the core-sealed proxy ticket of the account form's proxy choice) between the console's calls, cache each account's remaining official usage resets so the account list does not ask ChatGPT on every refresh", "zh": "在控制台的多次调用之间保存短期授权会话（设备码；Sign in with Codex 的 PKCE verifier 与 state；核心加密的账号表单代理选择票据），缓存每个账号剩余的官方用量重置次数，使账号列表刷新时不必每次询问 ChatGPT" } },
     { "id": "lock",
       "reason": { "en": "Let only one device code poll at a time read and update an authorization session, so two concurrent polls (two tabs or two nodes) never both spend the single-use code; likewise let only one usage reset of an account run at a time, so a double click never spends two resets", "zh": "同一时间只允许一次设备码轮询读写授权会话，避免两次并发轮询（两个标签页或两个节点）都去使用一次性授权码；同理同一账号同一时间只允许一次用量重置，避免重复点击消耗两次" } },
     { "id": "routes.admin",
-      "reason": { "en": "Authorization endpoints the account form calls (device code start/poll, Sign in with Codex start/exchange) and the official usage reset endpoints (list, spend, cached counts)", "zh": "账号表单调用的授权端点（设备码开始/轮询、Sign in with Codex 开始/换取）与官方用量重置端点（查询、使用、缓存次数）" } },
-    { "id": "net", "scope": { "domains": ["auth.openai.com"] },
-      "reason": { "en": "Talk to OpenAI's authorization server while an account is authorized (device code, Sign in with Codex token exchange); upstream requests and token refreshes are sent by the core", "zh": "授权账号时访问 OpenAI 授权服务器（设备码、Sign in with Codex 换取令牌）；上游请求与令牌刷新由核心发送" } },
+      "reason": { "en": "Authorization endpoints the account form calls (device code start/poll, Sign in with Codex start/exchange; the core sends their requests to OpenAI through the proxy chosen in the account form) and the official usage reset endpoints (list, spend, cached counts)", "zh": "账号表单调用的授权端点（设备码开始/轮询、Sign in with Codex 开始/换取；它们发往 OpenAI 的请求由核心经账号表单选择的代理发送）与官方用量重置端点（查询、使用、缓存次数）" } },
     { "id": "ui.native",
-      "reason": { "en": "The account form (CodexAuthForm) that runs the device code and Sign in with Codex flows, and the official usage reset decoration and detail tab of the accounts (CodexResetBadge, CodexResetTab)", "zh": "执行设备码登录与 Sign in with Codex 流程的账号表单（CodexAuthForm），以及账号的官方重置次数装饰、详情标签页（CodexResetBadge、CodexResetTab）" } }
+      "reason": { "en": "The account form (CodexAuthForm) that runs the device code and Sign in with Codex flows, the official usage reset decoration and detail tab of the accounts (CodexResetBadge, CodexResetTab), and the settings form (CodexSettings)", "zh": "执行设备码登录与 Sign in with Codex 流程的账号表单（CodexAuthForm），账号的官方重置次数装饰、详情标签页（CodexResetBadge、CodexResetTab），以及设置表单（CodexSettings）" } }
   ],
 
   "externalServices": ["auth.openai.com", "chatgpt.com"]

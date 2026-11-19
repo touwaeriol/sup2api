@@ -17,11 +17,14 @@ import (
 )
 
 // TestRealCorePluginPackagesTravelBetweenNodes checks where plugin package
-// bytes come from on real cores: never PostgreSQL. Bundled and uploaded
-// packages are kept by the primary's shell and pulled by followers over the
-// node network; a market package is downloaded by every node from the market.
-// With the primary down, a follower that has its packages restarts and
-// serves, while a node without them cannot start until the primary is back.
+// bytes come from on real cores: never PostgreSQL, and never only the
+// primary. Bundled and uploaded packages are kept by the node that stored
+// them and pulled by the others from any online node that holds them; a
+// market package is downloaded by every node from the market. With the
+// primary down, a plugin uploaded through a follower is installed on the
+// other follower, and a follower that lost its package copies restarts and
+// fetches them from the other one. A new node still needs the primary for
+// the core release.
 //
 // Besides the real-core variables it needs TEST_UPLOAD_PACKAGE (a signed
 // package that is neither bundled nor in the market), TEST_MARKET_DIR (a
@@ -128,28 +131,7 @@ func TestRealCorePluginPackagesTravelBetweenNodes(t *testing.T) {
 			}
 		}
 	}
-	t.Log("bundled packages: kept by the primary's shell, pulled by both followers over the node network")
-
-	// ---- an upload through a follower is stored on the primary first
-	adminB := newAPIClient(t, c.node("b").public.URL).login(adminEmail, adminPassword)
-	review := adminB.upload("/plugins/upload", filepath.Base(uploadPath), uploaded, nil)
-	if review.status != 200 && review.status != 201 {
-		t.Fatalf("upload through follower b: %s", review)
-	}
-	uploadKey, _ := adminB.consentAll(review)
-	var uploadSum string
-	if err = db.WithContext(ctx).Raw(`SELECT lower(package_sha256) FROM plugin_versions WHERE plugin_key=?`, uploadKey).Row().Scan(&uploadSum); err != nil {
-		t.Fatal(err)
-	}
-	if !held("a", uploadSum) {
-		t.Fatal("follower acknowledged the upload before the primary stored it")
-	}
-	adminB.ok(http.MethodPost, "/plugins/"+uploadKey+"/enable", nil)
-	wait(uploadKey+" enabled on every node", 3*time.Minute, func() bool { return enabledEverywhere(uploadKey) })
-	if !held("c", uploadSum) {
-		t.Fatalf("follower c did not pull the uploaded %s from the primary", uploadKey)
-	}
-	t.Logf("upload %s through follower b: stored on the primary before the response, pulled by c", uploadKey)
+	t.Log("bundled packages: kept by the node that imported them, pulled by the others over the node network")
 
 	// ---- a market package is downloaded by every node from the market
 	adminC := newAPIClient(t, c.node("c").public.URL).login(adminEmail, adminPassword)
@@ -164,7 +146,7 @@ func TestRealCorePluginPackagesTravelBetweenNodes(t *testing.T) {
 	listing := adminC.ok(http.MethodGet, "/market/plugins?source_id="+strconv.FormatInt(sourceID, 10), nil)
 	marketKey2, marketVersion := firstMarketPlugin(t, listing)
 	before := marketPackageGets.Load()
-	review = adminC.ok(http.MethodPost, "/plugins/install-from-market", map[string]any{"source_id": sourceID, "key": marketKey2, "version": marketVersion})
+	review := adminC.ok(http.MethodPost, "/plugins/install-from-market", map[string]any{"source_id": sourceID, "key": marketKey2, "version": marketVersion})
 	adminC.consentAll(review)
 	adminC.ok(http.MethodPost, "/plugins/"+marketKey2+"/enable", nil)
 	wait(marketKey2+" enabled on every node", 3*time.Minute, func() bool { return enabledEverywhere(marketKey2) })
@@ -177,27 +159,72 @@ func TestRealCorePluginPackagesTravelBetweenNodes(t *testing.T) {
 		t.Fatalf("market package must be fetched by the installer and each node: url=%q gets=%d", packageURL, gets)
 	}
 	if held("b", marketSum) {
-		t.Fatal("follower b pulled a market package from the primary instead of the market")
+		t.Fatal("follower b pulled a market package from another node instead of the market")
 	}
-	if !held("a", marketSum) {
-		t.Fatal("the primary keeps no fallback copy of the market package")
+	if !held("c", marketSum) {
+		t.Fatal("the installing node keeps no fallback copy of the market package")
 	}
 	t.Logf("market %s@%s: %d downloads from the market (install + each node); b never used the node network for it", marketKey2, marketVersion, gets)
 
-	// ---- primary down: a follower with its packages restarts and serves
-	bootB := ""
-	if st, _, err := c.node("b").runtime.Status(ctx); err == nil {
-		bootB = st.BootID
-	}
+	// ---- primary down: an upload through a follower is installed on the
+	// other nodes from that follower
 	c.stopShell(c.node("a"))
 	t.Log("primary a stopped")
-	restarted := c.restartShell("b")
-	wait("follower b serving without the primary", 3*time.Minute, func() bool {
-		st, mode, err := restarted.runtime.Status(ctx)
-		return err == nil && st.Ready && mode == "local" && st.BootID != bootB && probe(restarted) == 401
+	// The current core boot of node runs an instance of key.
+	runningOn := func(node, key string) bool {
+		var running int
+		_ = db.WithContext(ctx).Raw(`SELECT count(*) FROM plugin_runtime_nodes r JOIN updater.nodes n ON n.core_boot_id=r.boot_id AND n.cluster_id=? WHERE n.node_id=? AND r.plugin_key=? AND NOT r.stopped`, c.dbname, node, key).Row().Scan(&running)
+		return running > 0
+	}
+	adminB := newAPIClient(t, c.node("b").public.URL).login(adminEmail, adminPassword)
+	review = adminB.upload("/plugins/upload", filepath.Base(uploadPath), uploaded, nil)
+	if review.status != 200 && review.status != 201 {
+		t.Fatalf("upload through follower b with the primary down: %s", review)
+	}
+	uploadKey, _ := adminB.consentAll(review)
+	var uploadSum string
+	if err = db.WithContext(ctx).Raw(`SELECT lower(package_sha256) FROM plugin_versions WHERE plugin_key=?`, uploadKey).Row().Scan(&uploadSum); err != nil {
+		t.Fatal(err)
+	}
+	if !held("b", uploadSum) || held("a", uploadSum) {
+		t.Fatal("an upload is stored on the node that took it and is not pushed to the primary")
+	}
+	adminB.ok(http.MethodPost, "/plugins/"+uploadKey+"/enable", nil)
+	wait(uploadKey+" running on b and c", 3*time.Minute, func() bool { return runningOn("b", uploadKey) && runningOn("c", uploadKey) })
+	if !held("c", uploadSum) {
+		t.Fatalf("follower c runs %s without holding its package", uploadKey)
+	}
+	t.Logf("upload %s through follower b with the primary down: kept by b, pulled by c from b", uploadKey)
+
+	// ---- primary down: a node that lost its package copies fetches them
+	// from the other online node when it restarts
+	// Both copies go: the shell's store and the core's unpacked packages
+	// (SUB2API_PLUGIN_DIR), from which a restarted core would otherwise load
+	// without asking for the package.
+	for _, dir := range []string{"plugin-blobs", "plugins"} {
+		if err = os.RemoveAll(filepath.Join(c.roots["c"], dir)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bootC := ""
+	if st, _, err := c.node("c").runtime.Status(ctx); err == nil {
+		bootC = st.BootID
+	}
+	restartedC := c.restartShell("c")
+	wait("follower c serving without the primary or its package cache", 3*time.Minute, func() bool {
+		st, mode, err := restartedC.runtime.Status(ctx)
+		return err == nil && st.Ready && mode == "local" && st.BootID != bootC && probe(restartedC) == 401
 	})
-	t.Log("follower b restarted with a new core while the primary was down; it serves from its local release and plugin copies")
-	// ---- a node with nothing cached cannot start without the primary
+	wait(uploadKey+" running on the restarted c", 3*time.Minute, func() bool { return runningOn("c", uploadKey) })
+	for _, key := range []string{"anthropic", "volcengine", uploadKey} {
+		if !held("c", digestOf(key)) {
+			t.Fatalf("restarted c did not fetch %s from b", key)
+		}
+	}
+	t.Log("follower c lost its package copies and restarted with the primary down; it fetched bundled and uploaded packages from b")
+
+	// ---- a node with nothing cached cannot start without the primary: the
+	// core release still comes from the primary (plugin packages do not)
 	joined := c.startShell("d")
 	if err = joined.engine.Recover(ctx, false); err == nil {
 		t.Fatal("a node without the release started while the primary was down")
@@ -207,21 +234,26 @@ func TestRealCorePluginPackagesTravelBetweenNodes(t *testing.T) {
 	if joined.supervisor.Status().Running || probe(joined) != 503 {
 		t.Fatal("node d runs a core without the primary")
 	}
-	t.Logf("node d cannot start while the primary is down: %v", err)
-	c.restartShell("a")
+	t.Logf("node d cannot start while the primary is down (core release): %v", err)
+	restartedA := c.restartShell("a")
 	wait("node d serving after the primary returned", 5*time.Minute, func() bool {
 		st, mode, err := joined.runtime.Status(ctx)
 		return err == nil && st.Ready && mode == "local" && probe(joined) == 401
 	})
-	for _, key := range []string{"anthropic", "volcengine", uploadKey} {
-		if !held("d", digestOf(key)) {
-			t.Fatalf("node d did not pull %s from the primary", key)
+	wait("primary a serving again", 5*time.Minute, func() bool {
+		st, mode, err := restartedA.runtime.Status(ctx)
+		return err == nil && st.Ready && mode == "local"
+	})
+	wait(uploadKey+" running on a and d", 3*time.Minute, func() bool { return runningOn("a", uploadKey) && runningOn("d", uploadKey) })
+	for _, id := range []string{"a", "d"} {
+		if !held(id, uploadSum) {
+			t.Fatalf("node %s runs %s without fetching its package from b or c", id, uploadKey)
 		}
 	}
 	if held("d", marketSum) {
-		t.Fatal("node d pulled the market package from the primary instead of the market")
+		t.Fatal("node d pulled the market package from another node instead of the market")
 	}
-	t.Log("node d started after the primary returned, pulling bundled and uploaded packages from it and the market package from the market")
+	t.Log("after the primary returned, d started and both a and d fetched the uploaded package from the nodes that held it; the market package came from the market")
 }
 
 func firstMarketPlugin(t *testing.T, listing apiResponse) (string, string) {

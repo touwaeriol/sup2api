@@ -50,7 +50,6 @@ func TestFreeAsyncTasksCanDescribeSubmissionWithoutReservation(t *testing.T) {
 	p := taskPlatform()
 	p.Endpoints[0].Billing = "free"
 	p.Endpoints[0].BillingTypes = nil
-	p.Endpoints[0].UsageMaxBytes = 65536
 	p.Endpoints[0].UsageRequestFields = []string{"resolution"}
 	if got := platformCodes(p); len(got) != 0 {
 		t.Fatalf("free task should not require plugin usage source or a reservation: %v", got)

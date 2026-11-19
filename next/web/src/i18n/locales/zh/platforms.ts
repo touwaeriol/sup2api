@@ -10,6 +10,7 @@ export default {
   keyNoPlatforms: '该分组暂时无法提供服务（没有可用账号）。',
   moreEndpoints: '另有 {n} 个',
   unknownEndpoints: '暂时无法获取该平台的端点。',
-  converted: '经协议转换',
-  convertedAlso: '经协议转换还可调用：{platforms}'
+  servedAccounts: '{n} 个账号',
+  servedNone: '成员账号没有开放任何协议，请求返回 404。',
+  servedHint: '按成员账号实际开放的协议统计（含对指定模型开启的协议转换）；没有列出的端点没有账号提供，请求返回 404。'
 }

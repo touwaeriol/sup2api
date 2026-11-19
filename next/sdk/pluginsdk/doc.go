@@ -13,10 +13,9 @@
 // Capability interfaces mirror the generated pluginv1.XxxServiceServer
 // interfaces (without the mustEmbed method):
 //
-//	Platform   -> PlatformService   ("platform.adapter.v1")
-//	Executor   -> PlatformService.Execute ("platform.execute.v1")
+//	Platform   -> PlatformService   ("platform.adapter.v1"; Execute from
+//	              its UpstreamBuilder via ExecuteDefault, or its own Executor)
 //	TaskMonitor -> PlatformService.Monitor ("platform.monitor.v1")
-//	Poller     -> PlatformService.Poll ("platform.poll.v1")
 //	Hook       -> HookService       ("gateway.hook.v1")
 //	JobRunner  -> AppService.RunJob ("app.jobs.v1", see JobMux)
 //	EventHandler -> AppService.OnEvents ("app.events.v1")
@@ -25,6 +24,60 @@
 //	AccountRanker -> SchedulerService.RankAccounts ("scheduler.rank.v1")
 //	NotificationChannel -> NotificationService.DeliverNotification ("notify.channel.v1")
 //	Migration  -> MigrationService  ("migration.data.v1")
+//
+// A Platform may also implement the optional PlatformService calls, found
+// by type assertion and answered UNIMPLEMENTED otherwise: ModelLister,
+// ModelResolver, ModelAvailabilityChecker, QuotaReader, CredentialRefresher
+// and BalanceReader. The last three only describe upstream requests and
+// read their answers; the host sends them. Package standard implements
+// ModelLister and BalanceReader for API key account types.
+//
+// "platform.tasks.v1" and "platform.websocket.v1" name no interface: they say
+// what Execute does on the endpoints of the manifest and are reported when
+// the manifest declares them.
+//
+// # The request path
+//
+// A gateway request has one path. For every attempt on an account the host
+// calls Execute with the whole request body, already rewritten by the host
+// (protocol conversion, model mapping, forced streaming, the operator's
+// parameter overrides), the allow-listed client headers, the account with
+// its credentials and the attempt number. The plugin builds the final
+// upstream request (Upstream; it signs it itself with package reqsign when
+// the upstream needs that) and hands it to the host's HTTP client. It opens
+// no socket, sets no size limit, never retries and never picks another
+// account. The client has three calls, all bound to the context of the call
+// they are made in:
+//
+//   - Relay: the answer goes to the client. The host only validates the
+//     request and sends it after Execute returned ReportHostUsage, so the plugin is
+//     not part of the exchange.
+//   - RelayAndWait: for endpoints whose usage the plugin reads (request flag
+//     extract_usage) and task submissions (task_submission). The host sends
+//     now and returns the observation of the answer, which the plugin turns into
+//     ReportUsage or ReportTask, or the facts of a failed exchange, which
+//     it turns into ReportClassification.
+//   - Fetch: a non-streaming exchange whose whole answer comes back to the plugin, for
+//     auxiliary requests before the relay and for the upstream query of
+//     Monitor. Hosts are limited to the manifest's externalServices and the
+//     hosts of the account's own upstream addresses (upstreamFields).
+//
+// Every request the host sends for the plugin goes to a host the manifest
+// declares in externalServices (or a subdomain of one) or that the account
+// names among its upstream addresses (upstreamFields); its Host header is
+// the URL's (manifest.Manifest.UpstreamHostAllowed, CONTRACTS §112.17).
+//
+// An execution relays at most once. Usage and task facts travel only in the
+// value Execute returns; there is no reporting callback and the host does
+// not make up for a response that states nothing. ExecuteDefault does all of
+// this for a platform that implements UpstreamBuilder: it picks the form
+// from the two flags and cannot forget the report. The SDK runs it for a
+// Platform that implements UpstreamBuilder and no Executor; Serve refuses a
+// Platform with neither.
+//
+// A plugin sets no size limit: its gRPC server accepts messages up to gRPC's
+// maximum, and the gateway's request body limit is a system setting the
+// host enforces.
 //
 // The SDK implements PluginService itself. Optional lifecycle interfaces
 // (Initializer, Configurer, HealthChecker, Shutdowner) let the plugin hook
@@ -44,17 +97,16 @@
 //   - Init runs once per process, i.e. on every node, and so does any
 //     goroutine it starts. Declare periodic work as manifest jobs[]: each
 //     trigger runs on one node for the whole cluster.
-//   - Request execution uses Executor and ExecuteDefault: build, forward
-//     through the host, then RecordUsage or ReserveAndWatch before returning.
-//     Prices, attribution and all ledger writes remain host-owned.
-//   - Upstream async work uses endpoint.task + TaskSubmissionParser +
-//     TaskMonitor. The host records owner and original account before success,
-//     coordinates polling and serves shared snapshots on every node. Do not
-//     poll the same task from jobs[], Init or client query handlers.
-//     In Monitor, call ExecuteHTTP and ReportTaskProgress with its context;
-//     the host atomically records progress and settlement, and binds the request
-//     to the account proxy and limits. Generic Egress is a separate permission
-//     and does not inherit the polling execution's account limits.
+//   - Prices, attribution and all ledger writes are the host's: Execute
+//     states upstream facts in its return value and nothing else.
+//   - Upstream async work uses endpoint.task: Execute returns the accepted
+//     Task and TaskMonitor observes it. The host records owner and original
+//     account before success, coordinates the observations and serves shared
+//     snapshots on every node. Do not poll the same task from jobs[], Init
+//     or client query handlers. In Monitor, query the upstream once with
+//     Fetch and return the result; the host records progress and settlement
+//     atomically and binds the request to the account's proxy and limits.
+//     Generic Egress is a separate permission and does not inherit them.
 //   - Host.Locks gives cross-node mutual exclusion for other work. The locks
 //     are not fenced, so the guarded work must still be idempotent.
 //   - KV has no compare-and-set: two nodes doing read-modify-write on one key
@@ -71,8 +123,8 @@
 // A plugin with a database (manifest "database", grant "db.schema") owns one
 // schema, plg_<key>. Host.DB returns a GORM handle on it (package pgdb:
 // search_path on the schema, the egress tunnel in strict network mode), at
-// most 4 connections per node unless WithDBPoolSize says otherwise; the
-// plugin's role allows 20 in all, the host's migration connection included.
+// most 4 connections per node unless WithDBPoolSize says otherwise; the core
+// opens them as its own database user (CONTRACTS §115).
 // The handle is bound to the context Host.DB was called with: ask again for
 // each call (it is cheap, the connections are shared) and never keep one,
 // e.g. from Init for a goroutine; a kept handle fails every statement once
@@ -132,10 +184,11 @@
 //
 // Both compare on the test PostgreSQL (TEST_DATABASE_URL, or the local
 // server of package testpg), in one transaction they roll back
-// (pgdbtool.Drift). They run migrations/ in a scratch schema as a scratch
-// role that owns that schema and nothing else, as the host runs them with
-// the plugin's role: a migration that needs more (CREATE EXTENSION, a table
-// in public, ALTER ROLE) fails here as it would on install. They let
+// (pgdbtool.Drift). They run migrations/ in a scratch schema as the
+// connecting user with search_path on that schema, as the host runs them
+// with the core's user, and list what a migration created or changed
+// outside that schema (a table in public, another schema, an extension) as
+// a difference. They let
 // AutoMigrate build All() in a second, empty schema and compare the two
 // catalogs: the tables; each column's type, NOT NULL and default (by value:
 // '{}' and '{}'::jsonb, 0 and '0'::numeric are the same); primary keys; and
@@ -179,5 +232,8 @@
 // Tests run the real migrations: pluginsdktest.NewSchema and ApplyMigrations.
 //
 // The pluginsdktest sub-package runs a plugin in-process over bufconn with a
-// fake host, for unit tests.
+// fake host, for unit tests: Harness.Execute and Harness.Monitor make the
+// calls the way the host does and return the relays and fetches the plugin
+// made; Harness.Balance makes a balance query, checking the hosts of its
+// requests as the host does.
 package pluginsdk

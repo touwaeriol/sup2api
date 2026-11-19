@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
-	"github.com/Sub2API-Devs/sup2api/next/sdk/pluginsdk"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/pluginsdk/apikey"
 )
 
@@ -136,11 +135,8 @@ func TestAssetFieldsRejected(t *testing.T) {
 
 // TestAssetConfigOf reads an account the way the routes do.
 func TestAssetConfigOf(t *testing.T) {
-	acc := func(creds, settings string) *pluginsdk.AccountCredentials {
-		return &pluginsdk.AccountCredentials{
-			AccountSummary:  pluginsdk.AccountSummary{ID: 3, Name: "a", Type: AccountTypeAPIKey, SettingsJSON: settings},
-			CredentialsJSON: creds,
-		}
+	acc := func(creds, settings string) *pluginv1.Account {
+		return &pluginv1.Account{Id: 3, Name: "a", Type: AccountTypeAPIKey, SettingsJson: settings, CredentialsJson: creds}
 	}
 	// No pair: the asset library is off, and that is not an error.
 	cfg, err := AssetConfigOf(acc(`{"api_key":"ark-key-12345678"}`, `{}`))

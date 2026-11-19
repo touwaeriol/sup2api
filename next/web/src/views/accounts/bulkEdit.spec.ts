@@ -3,8 +3,8 @@ import type { Account } from '@/api/types'
 import { buildBulkPatch, type BulkFields, type BulkFlags } from './bulkEdit'
 
 const account = (over: Partial<Account> = {}) => ({ id: 1, name: 'a', priority: 10, weight: 1, max_concurrency: 10, tpm_limit: 0, rpm_limit: 0, spm_limit: 0, group_ids: [1, 2], proxy_id: null, auto_disable: true, ...over }) as unknown as Account
-const fields = (over: Partial<BulkFields> = {}): BulkFields => ({ priority: 10, weight: 1, max_concurrency: 10, tpm_limit: 0, rpm_limit: 0, spm_limit: 0, spm_window_seconds: 60, group_ids: [], groupMode: 'replace', proxy_id: null, auto_disable: true, ...over })
-const flags = (over: Partial<BulkFlags> = {}): BulkFlags => ({ priority: false, weight: false, max_concurrency: false, tpm_limit: false, rpm_limit: false, spm_limit: false, groups: false, proxy: false, auto_disable: false, ...over })
+const fields = (over: Partial<BulkFields> = {}): BulkFields => ({ priority: 10, weight: 1, max_concurrency: 10, tpm_limit: 0, rpm_limit: 0, spm_limit: 0, spm_window_seconds: 60, group_ids: [], groupMode: 'replace', proxy_id: null, auto_disable: true, protocols: null, model_protocols: [], ...over })
+const flags = (over: Partial<BulkFlags> = {}): BulkFlags => ({ priority: false, weight: false, max_concurrency: false, tpm_limit: false, rpm_limit: false, spm_limit: false, groups: false, proxy: false, auto_disable: false, protocols: false, model_protocols: false, ...over })
 
 describe('bulk account patch', () => {
   it('sends only ticked fields that differ from the account', () => {
@@ -34,5 +34,19 @@ describe('bulk account patch', () => {
     expect(buildBulkPatch(account(), fields({ proxy_id: 4 }), flags({ proxy: true }))).toEqual({ proxy_id: 4 })
     expect(buildBulkPatch(account({ proxy_id: 4 }), fields({ proxy_id: null }), flags({ proxy: true }))).toEqual({ proxy_id: null })
     expect(buildBulkPatch(account(), fields({ auto_disable: false }), flags({ auto_disable: true }))).toEqual({ auto_disable: false })
+  })
+
+  it('replaces the own protocols and the protocols per model of each account, leaving one that already has them', () => {
+    const rules = [{ models: ['gpt-5.6', 'claude-sonnet-4-5'], protocols: ['openai.chat', 'anthropic.messages'] }]
+    const both = flags({ protocols: true, model_protocols: true })
+    expect(buildBulkPatch(account(), fields({ protocols: ['openai.chat'], model_protocols: rules }), both)).toEqual({ protocols: ['openai.chat'], model_protocols: rules })
+    // Back to every own protocol (null) and to no rule.
+    expect(buildBulkPatch(account({ protocols: ['openai.chat'], model_protocols: rules }), fields(), both)).toEqual({ protocols: null, model_protocols: [] })
+    // The same protocols in another order, the same rules split differently: nothing to send.
+    const same = account({ protocols: ['openai.responses', 'openai.chat'], model_protocols: [{ models: ['claude-sonnet-4-5'], protocols: ['anthropic.messages', 'openai.chat'] }, { models: ['gpt-5.6'], protocols: ['openai.chat', 'anthropic.messages'] }] })
+    expect(buildBulkPatch(same, fields({ protocols: ['openai.chat', 'openai.responses'], model_protocols: rules }), both)).toBeNull()
+    // An empty list closes every own protocol, which is not "all".
+    expect(buildBulkPatch(account(), fields({ protocols: [] }), flags({ protocols: true }))).toEqual({ protocols: [] })
+    expect(buildBulkPatch(account(), fields({ protocols: ['openai.chat'], model_protocols: rules }), flags())).toBeNull()
   })
 })

@@ -38,7 +38,7 @@ var policy = classify.Policy{
 		// another account may still have room, and this one is not broken.
 		{When: classify.All(classify.Status(http.StatusBadRequest), awsError("ServiceQuotaExceeded")),
 			Reason: "upstream service quota exceeded (%d)"},
-		// The core signs with the node's clock: a rejected timestamp or a
+		// The plugin signs with the node's clock: a rejected timestamp or a
 		// malformed signature says nothing about the account.
 		{When: classify.Any(awsError("RequestExpired"), classify.All(awsError("InvalidSignature"), clockSkew)),
 			Reason: "upstream rejected the request time (%d): check the node's clock"},

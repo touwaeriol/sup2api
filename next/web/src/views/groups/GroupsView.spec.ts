@@ -5,7 +5,7 @@ import type { Group } from '@/api/types'
 import { i18n } from '@/i18n'
 import { mountPinned } from '@sub2api/ui/testing'
 import GroupsView from './GroupsView.vue'
-import PlatformEndpointsPreview from '@/views/platforms/PlatformEndpointsPreview.vue'
+import GroupServedProtocols from './GroupServedProtocols.vue'
 import PriceSimulatorModal from '@/components/pricing/PriceSimulatorModal.vue'
 
 const { get, denied } = vi.hoisted(() => ({ get: vi.fn(), denied: new Set<string>() }))
@@ -26,6 +26,8 @@ const group = (id: number, name: string, over: Partial<Group> = {}): Group => ({
   ...over
 })
 const items = ref<Group[]>([])
+/** served_protocols of GET /groups/:id, by group id. */
+const served: Record<number, Group['served_protocols']> = { 1: [{ protocol: 'anthropic.messages', accounts: 2 }, { protocol: 'openai.chat', accounts: 1 }] }
 vi.mock('@/composables/useList', () => ({
   useList: () => ({ items, loading: ref(false), error: ref(null), page: ref(1), pageSize: ref(20), total: ref(2), reload: vi.fn() })
 }))
@@ -37,7 +39,7 @@ const options = {
     stubs: {
       Teleport: true,
       ModelBadge: true,
-      PlatformEndpointsPreview: true,
+      GroupServedProtocols: true,
       EnvironmentEditor: true,
       GroupAccountsEditor: true,
       GroupModelPolicyEditor: true,
@@ -63,9 +65,12 @@ describe('groups page', () => {
     denied.clear()
     i18n.global.locale.value = 'zh'
     items.value = [group(1, 'default', { platforms: ['anthropic', 'openai'] }), group(2, 'trial', { account_count: 0, platforms: [] })]
-    get.mockImplementation(async (path: string) =>
-      path.endsWith('/models') ? { models: [], unrestricted_accounts: 0 } : items.value.find(g => path === `/groups/${g.id}`)
-    )
+    // GET /groups/:id adds what the member accounts serve (served_protocols), which the list rows do not carry.
+    get.mockImplementation(async (path: string) => {
+      if (path.endsWith('/models')) return { models: [], unrestricted_accounts: 0 }
+      const g = items.value.find(g => path === `/groups/${g.id}`)
+      return g && { ...g, served_protocols: served[g.id] ?? [] }
+    })
   })
 
   it('lists the groups without the platforms they serve', () => {
@@ -168,7 +173,7 @@ describe('groups page', () => {
     expect(form.find('[data-testid="platform-badge"], [data-platform]').exists()).toBe(false)
   })
 
-  it('shows in the detail what the group serves by its endpoints, conversion included, not by its platforms', async () => {
+  it('shows in the detail the protocols the member accounts serve, as the server reports them, not the platforms', async () => {
     const w = render()
     const detail = await openDetail(w, 0)
     expect(get).toHaveBeenCalledWith('/groups/1')
@@ -176,20 +181,24 @@ describe('groups page', () => {
     expect(detail.get('[data-testid="group-access"]').text()).toBe('所有人')
     expect(detail.get('[data-testid="group-pricing-summary"]').text()).toBe('跟随全局')
     expect(detail.find('[data-testid="group-no-accounts"]').exists()).toBe(false)
-    expect(w.getComponent(PlatformEndpointsPreview).props()).toMatchObject({ ids: ['anthropic', 'openai'] })
+    expect(w.getComponent(GroupServedProtocols).props('served')).toEqual(served[1])
   })
 
   it('shows the warning and no endpoints in the detail of a group without accounts', async () => {
     const w = render()
     const detail = await openDetail(w, 1)
     expect(detail.get('[data-testid="group-no-accounts"]').attributes('aria-label')).toBe('暂无账号，无法提供服务。')
-    expect(w.findComponent(PlatformEndpointsPreview).exists()).toBe(false)
+    expect(w.findComponent(GroupServedProtocols).exists()).toBe(false)
   })
 
-  it('shows no endpoints when the accounts of the group serve no platform', async () => {
-    items.value = [group(1, 'orphans', { platforms: [] })]
+  it('hands over an empty list when the accounts of the group serve nothing, and shows nothing until the detail is loaded', async () => {
+    items.value = [group(3, 'orphans', { platforms: [] })]
     const w = render()
     await openDetail(w, 0)
-    expect(w.findComponent(PlatformEndpointsPreview).exists()).toBe(false)
+    expect(w.getComponent(GroupServedProtocols).props('served')).toEqual([])
+    get.mockRejectedValue(new Error('offline'))
+    const offline = render()
+    await openDetail(offline, 0)
+    expect(offline.findComponent(GroupServedProtocols).exists()).toBe(false)
   })
 })

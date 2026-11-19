@@ -71,7 +71,7 @@ func TestPermissionCatalogFollowsRollouts(t *testing.T) {
 
 	m1, p1 := version("1.0.0", "rules:read")
 	registrytest.Install(t, h.db, m1, p1, map[string]string{"db.schema": "{}"}, "installed")
-	t.Cleanup(func() { _ = dbschema.New(h.db, "", nil, false).Drop(context.Background(), h.key) })
+	t.Cleanup(func() { _ = dbschema.New(h.db, "", nil).Drop(context.Background(), h.key) })
 	// Consent of the first version: the plugin does not run yet.
 	sync(m1)
 	if got := status("rules:read"); got != "disabled" {

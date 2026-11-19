@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/mail"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -26,7 +27,7 @@ type Manifest struct {
 	Version      string        `json:"version"` // semver
 	Publisher    string        `json:"publisher"`
 	Icon         string        `json:"icon,omitempty"` // path inside the package or "text:<label>"
-	Runtime      string        `json:"runtime"`        // RuntimeGRPC or RuntimeNone ("js" reserved)
+	Runtime      string        `json:"runtime"`        // RuntimeGRPC ("js" reserved)
 	Entry        Entry         `json:"entry"`
 	HostCompat   string        `json:"hostCompat"`             // semver range, e.g. ">=0.1.0 <0.2.0"
 	HostUICompat string        `json:"hostUICompat,omitempty"` // required when ui.native is set
@@ -55,7 +56,7 @@ type Manifest struct {
 	Resources        *Resources        `json:"resources,omitempty"`
 
 	HostPermissions  []HostPermission `json:"hostPermissions,omitempty"`
-	ExternalServices []string         `json:"externalServices,omitempty"` // shown at review; the hosts SendAccountRequest may reach (CONTRACTS §91)
+	ExternalServices []string         `json:"externalServices,omitempty"` // shown at review; with the account's upstream addresses, the hosts the core sends to for the plugin (UpstreamHostAllowed, CONTRACTS §112.17)
 }
 
 // Entry locates the runtime artifact inside the package.
@@ -73,12 +74,14 @@ type JSEntry struct {
 	Source string `json:"source"`
 }
 
+// RuntimeGRPC is the only value of Manifest.Runtime: a plugin process
+// speaking the gRPC plugin protocol. Every plugin has a process.
+const RuntimeGRPC = "grpc"
+
 // Capability ids understood by host version 0.1.
 const (
 	CapPlatformAdapter   = "platform.adapter.v1"
 	CapPlatformTasks     = "platform.tasks.v1"
-	CapPlatformPoll      = "platform.poll.v1"
-	CapPlatformExecute   = "platform.execute.v1"
 	CapPlatformMonitor   = "platform.monitor.v1"
 	CapPlatformWebSocket = "platform.websocket.v1" // upstream requests for websocket endpoints
 	CapGatewayHook       = "gateway.hook.v1"
@@ -162,9 +165,7 @@ type Platform struct {
 	Endpoints []Endpoint    `json:"endpoints"`
 	// Defaults for every endpoint of the platform; an endpoint (Usage) or an
 	// account type (AccountPlatform) may override them.
-	// Request body paths sent to BuildUpstreamRequest (never the whole body).
-	RequestFields []string `json:"requestFields,omitempty"`
-	// Client headers the host forwards to BuildUpstreamRequest (lower-case).
+	// Client headers the host forwards to PlatformService.Execute (lower-case).
 	PassHeaders []string   `json:"passHeaders,omitempty"`
 	Usage       UsageRules `json:"usage"`
 	// StickyRules are the core's default sticky rules of a built-in platform
@@ -212,9 +213,9 @@ type Endpoint struct {
 	// UsageSource decides WHO reads the token usage out of this endpoint's
 	// upstream responses: UsageSourceRules (the default, and what "" means)
 	// applies the declarative sse/json maps of the usage rules in effect,
-	// UsageSourcePlugin asks the plugin declaring the endpoint's platform
-	// through PlatformService.ExtractUsage once the response has been
-	// forwarded in full.
+	// UsageSourcePlugin has the plugin declaring the endpoint's platform read
+	// it from the observation of a waited relay and return it from
+	// PlatformService.Execute.
 	//
 	// It sits on the endpoint, beside Request.ModelSource, and deliberately
 	// NOT on UsageRules. The rules follow the override chain of CONTRACTS
@@ -223,38 +224,43 @@ type Endpoint struct {
 	// be redirected by that plugin, and, worse, an override that simply does
 	// not mention it would switch the endpoint back to the declarative rules
 	// without saying anything. On the endpoint there is exactly one reading
-	// of "who answers ExtractUsage", and no ban is needed to keep it.
+	// of "who reads the usage", and no ban is needed to keep it.
 	UsageSource string `json:"usageSource,omitempty"`
-	// UsageStreamEvents are the SSE event names the host collects for
-	// ExtractUsage on a streaming response - and the only ones. The whole
+	// UsageStreamEvents are the SSE event names the host collects into the
+	// observation of a streaming response - and the only ones. The whole
 	// stream is never buffered. Only read with UsageSource
 	// UsageSourcePlugin.
 	UsageStreamEvents []string `json:"usageStreamEvents,omitempty"`
-	// UsageMaxBytes caps what ExtractUsage receives: the non-streaming body,
-	// and the total size of the collected stream events. 0 uses the host
-	// default. Also bounds the synchronous parser on task submissions.
-	UsageMaxBytes int64 `json:"usageMaxBytes,omitempty"`
 	// UsageRequestFields are request body paths (gjson) whose values the host
-	// hands to ExtractUsage in ExtractUsageRequest.fields - and the only ones,
-	// like Platform.RequestFields for BuildUpstreamRequest. They are for
-	// endpoints that only START work: the response is {"id": ...} and the
-	// request is where the resolution and the duration of the job are, which
-	// is what a pre-charge estimate has to be made from.
-	//
-	// Declared on the endpoint, not reused from the platform's RequestFields,
-	// for two reasons. RequestFields serves BuildUpstreamRequest on every
-	// endpoint and is overridden per account type - by a third plugin, which
-	// must not decide what the platform's plugin sees in ExtractUsage. And the
-	// need is per endpoint: the submit endpoint wants "resolution", nothing
-	// else on the platform does, and only the endpoints that ask pay for it.
-	// Values are capped per field and in total (check.MaxUsageRequestField*);
-	// a request body is never handed over whole. Only read with UsageSource
+	// hands to PlatformService.EstimateUsage before an account is chosen, and
+	// repeats in the observation (ExtractUsageRequest.fields) - and the only
+	// ones. They are for endpoints that only START work: the response is
+	// {"id": ...} and the request is where the resolution and the duration
+	// of the job are, which is what a pre-charge estimate has to be made
+	// from. Values travel whole, of any size. Only read with UsageSource
 	// UsageSourcePlugin or TaskSubmit().
 	UsageRequestFields []string `json:"usageRequestFields,omitempty"`
+	// Test says when the console's account test may use this endpoint's
+	// protocol (CONTRACTS §122): "" whenever the account serves it,
+	// EndpointTestExplicit only when the test names a model,
+	// EndpointTestNever not at all.
+	Test string `json:"test,omitempty"`
 }
 
+// Values of Endpoint.Test.
+const (
+	// EndpointTestExplicit is a protocol whose test costs real money (an
+	// image generation): tested only when the test request names the model
+	// (the console's model tests, one, selected or all, each name theirs),
+	// never by a test of the account's default model.
+	EndpointTestExplicit = "explicit"
+	// EndpointTestNever is a protocol a test cannot exercise on its own (an
+	// image edit needs an input image).
+	EndpointTestNever = "never"
+)
+
 // PluginUsage reports whether this endpoint's usage is read by the plugin
-// declaring its platform (PlatformService.ExtractUsage) instead of by the
+// declaring its platform (ExecuteRequest.extract_usage) instead of by the
 // declarative usage rules.
 func (e Endpoint) PluginUsage() bool { return e.UsageSource == UsageSourcePlugin }
 
@@ -301,9 +307,8 @@ type EndpointRequest struct {
 	// Stream marks endpoints that always stream (e.g. streamGenerateContent).
 	Stream          bool     `json:"stream,omitempty"`
 	PromptTextPaths []string `json:"promptTextPaths,omitempty"`
-	MaxBodyBytes    int64    `json:"maxBodyBytes,omitempty"` // 0 = host default
 	// QueryParams are the query parameter names the host puts in
-	// RequestMeta.query, and the only ones - like RequestFields for the body.
+	// RequestMeta.query, and the only ones.
 	// Matched case-insensitively; the endpoint's Auth.Query parameter may not
 	// be listed and is never passed on.
 	QueryParams []string `json:"queryParams,omitempty"`
@@ -342,8 +347,8 @@ type AccountType struct {
 	// declare none are unrestricted.
 	GuardedSettings []GuardedSetting `json:"guardedSettings,omitempty"`
 	// UpstreamFields are the top-level credentials/settings keys that say
-	// where requests go (base_url, endpoints). nil: not declared (derived
-	// from Upstream, otherwise the legacy rule applies); []: the type has no
+	// where requests go (base_url, endpoints). nil: not declared (the legacy
+	// rule applies); []: the type has no
 	// caller-set address (OAuth and managed types). omitzero keeps [] apart
 	// from nil.
 	UpstreamFields []string          `json:"upstreamFields,omitzero"`
@@ -374,30 +379,19 @@ type AccountType struct {
 	// shows nothing for it.
 	Quota *AccountQuota `json:"quota,omitempty"`
 	// Balance declares that accounts of this type have a prepaid balance
-	// (credits) the plugin can query (CONTRACTS §51). nil: the type has no
+	// (credits) the plugin can query (CONTRACTS §52). nil: the type has no
 	// balance or the plugin does not track it; the console shows nothing.
 	Balance *AccountBalance `json:"balance,omitempty"`
 	// Refresh declares that the credentials of this type expire and that the
 	// plugin implements BuildRefreshRequest / ParseRefreshResponse to renew
 	// them (CONTRACTS §48). nil: the host never refreshes them.
 	Refresh *AccountRefresh `json:"refresh,omitempty"`
-	// Upstream declares the upstream so the core builds its requests itself
-	// (docs/UPSTREAM-DECLARATIVE.md). nil: the plugin implements the
-	// platform calls.
-	Upstream *Upstream `json:"upstream,omitempty"`
 }
 
 // AddressFields returns the upstream address fields of the type and whether
-// they are known: declared in UpstreamFields, or derived from a declarative
-// Upstream (the core builds requests from base_url).
+// they are known, that is declared in UpstreamFields.
 func (at AccountType) AddressFields() ([]string, bool) {
-	switch {
-	case at.UpstreamFields != nil:
-		return at.UpstreamFields, true
-	case at.Upstream != nil:
-		return []string{"base_url"}, true
-	}
-	return nil, false
+	return at.UpstreamFields, at.UpstreamFields != nil
 }
 
 // CustomUpstream reports whether a caller without account:settings:custom
@@ -445,16 +439,17 @@ type QuotaWindowDefinition struct {
 	ShortLabel LocalizedText `json:"shortLabel,omitempty"`
 }
 
-// AccountBalance declares that an account type has a prepaid balance and that
-// the host queries it from the plugin (CONTRACTS §51). The host never reads
-// the balance from headers; the plugin must register a BalanceProvider.
+// AccountBalance declares that an account type has a balance the host reads
+// through the plugin's BuildBalanceRequest / ParseBalanceResponse (CONTRACTS
+// §52); "balance": {} is a complete declaration. The host never reads the
+// balance from headers, and only shows it: it does not disable, reschedule or
+// alert on it. The currency is not declared here: the plugin gives it per
+// account in each result (a relay site may count in USD or CNY).
 type AccountBalance struct {
-	// Currency is the ISO 4217 three-letter currency code (e.g. "USD", "EUR").
-	// Required.
-	Currency string `json:"currency"`
-	// UpdateInterval is how often the host queries the balance, in seconds.
-	// 60-86400 (default 180). The host may query sooner when forced or on
-	// state changes.
+	// UpdateInterval is how often the host reads the balance of each
+	// account, in seconds: 60-86400, 0 meaning the host's default (180). A
+	// failed read waits the same interval; an administrator's refresh does
+	// not wait at all.
 	UpdateInterval int `json:"updateInterval,omitempty"`
 }
 
@@ -547,9 +542,31 @@ const MaxAccountBatch = 500
 // compares values after trimming whitespace and a trailing "/" and
 // lower-casing scheme and host; an empty value (the plugin default) and, on
 // update, the account's previous value are always accepted.
+//
+// Versions (optional) are the version segments a value of the field may end
+// with, each starting and not ending with "/" (e.g. "/v1"). Before comparing,
+// the host removes at most one of them from each side: the longest that ends
+// the escaped path, matched whole and case-sensitively, so ".../a%2Fv1" does
+// not end with "/v1" (TrimVersion). It is the rule of the plugin SDK's
+// apikey.Spec.Versions and should list the same segments.
 type GuardedSetting struct {
-	Field   string   `json:"field"`
-	Allowed []string `json:"allowed"`
+	Field    string   `json:"field"`
+	Allowed  []string `json:"allowed"`
+	Versions []string `json:"versions,omitempty"`
+}
+
+// TrimVersion is escapedPath without the longest of versions that ends it, at
+// most one, matched whole and case-sensitively on the escaped form: a version
+// starts with "/", so ".../xv1" and ".../a%2Fv1" do not end with "/v1". It is
+// the one rule behind GuardedSetting.Versions and apikey.Spec.Versions.
+func TrimVersion(escapedPath string, versions []string) string {
+	best := ""
+	for _, v := range versions {
+		if len(v) > len(best) && strings.HasSuffix(escapedPath, v) {
+			best = v
+		}
+	}
+	return strings.TrimSuffix(escapedPath, best)
 }
 
 // AccountPlatform is one platform an account type serves. Empty fields fall
@@ -558,9 +575,13 @@ type AccountPlatform struct {
 	Platform string `json:"platform"`
 	// Endpoints selects endpoint IDs within Platform. Omitted means all endpoints
 	// for compatibility; an explicit empty list is invalid.
-	Endpoints     []string `json:"endpoints,omitempty"`
-	RequestFields []string `json:"requestFields,omitempty"`
-	PassHeaders   []string `json:"passHeaders,omitempty"`
+	Endpoints []string `json:"endpoints,omitempty"`
+	// PassHeaders are the client headers the core hands the plugin for this
+	// account type on Platform (ClientHeaders). Absent means the platform's
+	// list; an explicit empty list means none. omitzero keeps that
+	// difference when the struct is encoded again: a nil list is left out,
+	// an empty one is written as [].
+	PassHeaders []string `json:"passHeaders,omitzero"`
 	// Usage overrides the usage rules per protocol of the platform.
 	Usage map[string]UsageRules `json:"usage,omitempty"`
 	// StreamOnly lists the upstream protocols of Platform whose upstream
@@ -572,6 +593,29 @@ type AccountPlatform struct {
 	// endpoint of Platform the type serves, with response.stream "sse" and a
 	// request.streamPath.
 	StreamOnly []string `json:"streamOnly,omitempty"`
+	// Adapted lists the endpoints of Platform outside Endpoints the account
+	// type serves through a core conversion to an endpoint of its subset,
+	// keyed by endpoint id (CONTRACTS §83.3, §121.1). An endpoint of
+	// Platform neither in the subset nor listed here is not served.
+	Adapted map[string]AdaptOptions `json:"adapted,omitempty"`
+}
+
+// AdaptOptions are an account type's options for the conversion serving
+// an adapted endpoint.
+type AdaptOptions struct {
+	// Model is the upstream model the conversion uses where the client's
+	// model does not go (the chat model driving an image generation tool,
+	// CONTRACTS §121.3); "" when the conversion needs none.
+	Model string `json:"model,omitempty"`
+}
+
+// Adapts reports whether the account type serves the endpoint of p, its
+// platform, speaking protocol through a conversion (Adapted).
+func (a AccountPlatform) Adapts(p *Platform, protocol string) bool {
+	return slices.ContainsFunc(p.Endpoints, func(e Endpoint) bool {
+		_, ok := a.Adapted[e.ID]
+		return ok && e.Protocol == protocol
+	})
 }
 
 // StreamsOnly reports whether the upstream of protocol only accepts
@@ -581,10 +625,11 @@ func (a AccountPlatform) StreamsOnly(protocol string) bool {
 }
 
 // ClientHeaders are the client headers the account type receives on p, the
-// platform of a: its own passHeaders, else p's (nil p: its own only), as the
-// gateway forwards them.
+// platform of a, as the gateway hands them to the plugin: its own
+// passHeaders when the manifest writes the field (an empty list: none),
+// else p's (nil p: none).
 func (a AccountPlatform) ClientHeaders(p *Platform) []string {
-	if len(a.PassHeaders) == 0 && p != nil {
+	if a.PassHeaders == nil && p != nil {
 		return p.PassHeaders
 	}
 	return a.PassHeaders
@@ -619,17 +664,35 @@ func (a AccountPlatform) SupportsEndpoint(id string) bool {
 	return false
 }
 
+// ServesPluginFacts reports whether a serves an endpoint of p whose usage or
+// task facts the plugin declaring p states (usageSource "plugin", a task
+// submission). Those facts come back from the Execute of the plugin serving
+// the account, so an account type of another plugin cannot serve such an
+// endpoint (forwarding v2, design 4.3): the manifest check refuses it and
+// the registry does not bind it. A built-in platform is declared by no
+// plugin and is nobody's to keep: callers ask only for another plugin's
+// platform.
+func (a AccountPlatform) ServesPluginFacts(p Platform) bool {
+	return slices.ContainsFunc(p.Endpoints, func(e Endpoint) bool {
+		return a.SupportsEndpoint(e.ID) && (e.PluginUsage() || e.TaskSubmit())
+	})
+}
+
 // Form describes a console form contributed by a plugin.
 type Form struct {
-	Mode      string `json:"mode"`               // schema | iframe | native
-	Schema    string `json:"schema,omitempty"`   // package path to JSON Schema (mode=schema)
-	UISchema  string `json:"uiSchema,omitempty"` // package path to UI hints (mode=schema)
-	Page      string `json:"page,omitempty"`     // ui/iframe/... entry (mode=iframe)
+	Mode      string `json:"mode"`           // iframe | native
+	Page      string `json:"page,omitempty"` // ui/iframe/... entry (mode=iframe); a native page (native ui.settings)
 	Component string `json:"component,omitempty"`
 	// Permission (ui.settings only) is one of the plugin's own
 	// userPermissions whose holders may read and edit the plugin settings
 	// through the core, besides plugin:read / plugin:manage (CONTRACTS §75.1).
 	Permission string `json:"permission,omitempty"`
+	// Secrets (ui.settings only, native or iframe) are the settings the core
+	// masks (CONTRACTS §75.1); an account type marks its secrets in
+	// sensitiveFields. nil (the key absent) says nothing about which settings
+	// are secret, so the core masks every one; empty ([]) says none is.
+	// omitzero keeps an empty list when a manifest is built in Go.
+	Secrets []SettingsSecret `json:"secrets,omitzero"`
 }
 
 // UsageRules tell the host how to read token usage from upstream responses.
@@ -671,12 +734,13 @@ const (
 	// declarative sse/json maps of the rules in effect. An empty
 	// Endpoint.UsageSource means this.
 	UsageSourceRules = "rules"
-	// UsageSourcePlugin asks PlatformService.ExtractUsage instead.
+	// UsageSourcePlugin has the plugin return the usage from
+	// PlatformService.Execute instead (ExecuteResponse.usage).
 	//
 	// The declarative rules are not replaced by the plugin: the host keeps
-	// applying them while it forwards (they cost nothing extra and detect
-	// stream errors), and falls back to what they produced when the plugin
-	// call fails.
+	// applying them while it relays (they cost nothing extra and detect
+	// stream errors), and uses what they produced when the plugin returns
+	// host_usage.
 	UsageSourcePlugin = "plugin"
 )
 
@@ -699,6 +763,13 @@ const (
 	UsageCacheReadTokens     = "cache_read_tokens"
 	UsageCacheCreationTokens = "cache_creation_tokens"
 	UsageCacheCreation1h     = "cache_creation_1h_tokens"
+	// UsageImageInputTokens and UsageImageOutputTokens are the image tokens
+	// among the input and output tokens (an image generation or edit). They
+	// are part of input_tokens / output_tokens, not added to them, whatever
+	// the rules' semantics; a price expression using img / img_o bills them
+	// at the image price and the rest of p / c at the text price.
+	UsageImageInputTokens  = "image_input_tokens"
+	UsageImageOutputTokens = "image_output_tokens"
 )
 
 type UsageFact struct {
@@ -987,39 +1058,13 @@ type Menu struct {
 	Order      int           `json:"order,omitempty"`
 }
 
-// Page is a plugin page. type=table|form are rendered by the host,
-// type=iframe loads Page.Src in a sandbox, type=native mounts Component.
+// Page is a plugin page: type=iframe loads Page.Src in a sandbox,
+// type=native mounts Component.
 type Page struct {
 	Type      string        `json:"type"`
 	Title     LocalizedText `json:"title,omitempty"`
-	Source    string        `json:"source,omitempty"` // "GET /models" (plugin route)
-	Columns   []Column      `json:"columns,omitempty"`
-	Schema    string        `json:"schema,omitempty"`
-	Submit    string        `json:"submit,omitempty"`
 	Src       string        `json:"src,omitempty"`
 	Component string        `json:"component,omitempty"`
-	// Search names the query parameter the page's Source route honours as a
-	// free-text search, e.g. "q". The host renders a search box on a table
-	// page only when it is set, and sends the typed text as
-	// "?<Search>=<text>" (resetting to page 1). Leaving it out means "this
-	// route cannot search": no box is rendered.
-	//
-	// It is a single parameter name, not a list, because it describes the one
-	// control the host has - one text box over one route. A list would let a
-	// manifest declare a filter set the renderer has no way to draw, which is
-	// the same "declared and nobody honours it" shape this field was added to
-	// close: before it existed the box was always drawn and filtered either
-	// the rows already on screen or nothing at all, depending on how much
-	// data there happened to be. A second parameter is not blocked by this
-	// choice - per-field filters need a label, a type and, for enums, the
-	// options, so they are a different field with a different shape
-	// (filters[]) rather than another string in this one, and adding them
-	// leaves "search" meaning exactly what it means now.
-	Search string `json:"search,omitempty"`
-	// Create puts a "New" button on a table page that opens another page of
-	// the plugin (a form page), so a create form needs no sidebar entry of
-	// its own. The button is shown only to callers holding Permission.
-	Create *PageLink `json:"create,omitempty"`
 	// Nav lists the sections of a native page so the console can draw them
 	// in its left sidebar, the way it draws the core system settings
 	// (UI 3.14). The page shows the section named by ?tab=<item key>, and
@@ -1053,20 +1098,6 @@ type NavItem struct {
 	// of the plugin's own permission, so the item shows when the caller
 	// holds either; with neither set it shows to everyone who sees the page.
 	CorePermission string `json:"corePermission,omitempty"`
-}
-
-// PageLink points at another page of the same plugin.
-type PageLink struct {
-	Page string `json:"page"`
-	// Permission is a plugin permission key (userPermissions) the caller
-	// needs to see the link; empty means everyone who sees the page.
-	Permission string `json:"permission,omitempty"`
-}
-
-type Column struct {
-	Key    string        `json:"key"`
-	Label  LocalizedText `json:"label"`
-	Format string        `json:"format,omitempty"` // text | number | datetime | badge | currency
 }
 
 type Slot struct {
@@ -1146,40 +1177,39 @@ const (
 )
 
 var HostPermissionRisk = map[string]string{
-	"kv":                   RiskLow,
-	"secrets":              RiskLow,
-	"prices":               RiskLow, // read-only pricing of token usage (CONTRACTS §72.13.1)
-	"config":               RiskLow,
-	"log":                  RiskLow,
-	"broadcast":            RiskLow,
-	"routes.admin":         RiskMedium,
-	"routes.user":          RiskMedium,
-	"events":               RiskMedium,
-	"jobs":                 RiskMedium,
-	"ui.menu":              RiskMedium,
-	"ui.iframe":            RiskMedium,
-	"lock":                 RiskMedium, // not low: low is granted without the administrator (install/consent.go)
-	"accounts.read":        RiskMedium,
-	"authz.read":           RiskMedium, // AuthzCheck on keys that are not the plugin's own
-	"accounts.auto_state":  RiskHigh,
-	"db.schema":            RiskHigh,
-	"net":                  RiskHigh,
-	"routes.public":        RiskHigh,
-	"routes.webhook":       RiskHigh,
-	"gateway.hook":         RiskHigh,
-	"gateway.endpoint":     RiskHigh,
-	"platform.register":    RiskHigh,
-	"scheduler.rank":       RiskHigh,
-	"sticky.clear":         RiskHigh,
-	"notify.send":          RiskHigh, // free-form mail from the deployment to any recipient (phishing), even rate limited
-	"gateway.observe":      RiskHigh,
-	"users.read":           RiskHigh,
-	"accounts.credentials": RiskCritical,
-	"ledger.credit":        RiskCritical,
-	"ledger.debit":         RiskCritical,
-	"ui.native":            RiskCritical,
-	"users.write":          RiskCritical,
-	"db.core_views":        RiskCritical,
+	"kv":                  RiskLow,
+	"secrets":             RiskLow,
+	"prices":              RiskLow, // read-only pricing of token usage (CONTRACTS §72.13.1)
+	"config":              RiskLow,
+	"log":                 RiskLow,
+	"broadcast":           RiskLow,
+	"routes.admin":        RiskMedium,
+	"routes.user":         RiskMedium,
+	"events":              RiskMedium,
+	"jobs":                RiskMedium,
+	"ui.menu":             RiskMedium,
+	"ui.iframe":           RiskMedium,
+	"lock":                RiskMedium, // not low: low is granted without the administrator (install/consent.go)
+	"fs.data":             RiskMedium, // read and write the plugin's own data directory (CONTRACTS §43.8)
+	"authz.read":          RiskMedium, // AuthzCheck on keys that are not the plugin's own
+	"accounts.auto_state": RiskHigh,
+	"db.schema":           RiskHigh,
+	"net":                 RiskHigh,
+	"routes.public":       RiskHigh,
+	"routes.webhook":      RiskHigh,
+	"gateway.hook":        RiskHigh,
+	"gateway.endpoint":    RiskHigh,
+	"platform.register":   RiskHigh,
+	"scheduler.rank":      RiskHigh,
+	"sticky.clear":        RiskHigh,
+	"notify.send":         RiskHigh, // free-form mail from the deployment to any recipient (phishing), even rate limited
+	"gateway.observe":     RiskHigh,
+	"users.read":          RiskHigh,
+	"ledger.credit":       RiskCritical,
+	"ledger.debit":        RiskCritical,
+	"ui.native":           RiskCritical,
+	"users.write":         RiskCritical,
+	"db.core_views":       RiskCritical,
 }
 
 // Values of Endpoint.Kind.

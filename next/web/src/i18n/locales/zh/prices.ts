@@ -66,6 +66,8 @@ export default {
     cr: '缓存读',
     cc: '缓存写 5 分钟',
     cc1h: '缓存写 1 小时',
+    img: '图片输入',
+    img_o: '图片输出',
     flat: '固定费'
   },
   unsetPlaceholder: '不收费',
@@ -104,6 +106,8 @@ export default {
     cr: '缓存读',
     cc: '缓存写 5 分钟',
     cc1h: '缓存写 1 小时',
+    img: '图片输入',
+    img_o: '图片输出',
     flat: '固定费',
     other: '其他',
     subtotal: '小计',

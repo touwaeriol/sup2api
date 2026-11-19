@@ -1,19 +1,21 @@
 # 云厂商账号怎么填：Azure OpenAI、Vertex AI、AWS Bedrock，以及 OpenAI 的组织 / 项目
 
-> 状态：2026-11-17，按分支 `feat/cloud-providers` 的代码写成，**未发布**。三家都没有用真实云账号验证过，只对官方文档、黄金样例和模拟上游测试过；没验证的事项见 [DESIGN-2026-11-17-CLOUD-PROVIDERS.md](DESIGN-2026-11-17-CLOUD-PROVIDERS.md) 第 12 节。
+> 状态：2026-11-17 按分支 `feat/cloud-providers` 的代码写成，2026-11-18 按转发 V2（CONTRACTS §112）改写，**未发布**。三家都没有用真实云账号验证过，只对官方文档、黄金样例和模拟上游测试过；没验证的事项见 [DESIGN-2026-11-17-CLOUD-PROVIDERS.md](DESIGN-2026-11-17-CLOUD-PROVIDERS.md) 第 12 节。
 > 给管理员看的填表说明。设计、与设计的差异见上面的设计文档（第 16 节），契约见 CONTRACTS §109。
 
 ## 1. 总览
 
 | 上游 | 插件（键） | 版本 | 最低核心版本 | 服务的平台 | 来源 |
 |---|---|---|---|---|---|
-| OpenAI 组织 / 项目 | `openai` | 0.4.4 | 0.1.290 | openai | 内置 |
-| Azure OpenAI | `azure_openai` | 0.1.0 | 0.1.290 | openai | 市场，自己安装 |
-| Vertex AI（Gemini） | `vertex` | 0.1.0 | 0.1.290 | gemini | 市场，自己安装 |
-| AWS Bedrock | `bedrock` | 0.1.0 | **0.1.304** | anthropic | 市场，自己安装 |
+| OpenAI 组织 / 项目 | `openai` | 0.5.0 | 0.1.304 | openai | 内置 |
+| Azure OpenAI | `azure_openai` | 0.1.0 | 0.1.304 | openai | 市场，自己安装 |
+| Vertex AI（Gemini） | `vertex` | 0.1.0 | 0.1.304 | gemini | 市场，自己安装 |
+| AWS Bedrock | `bedrock` | 0.1.0 | 0.1.304 | anthropic | 市场，自己安装 |
+
+四个插件都是转发 V2 的代码插件（`hostCompat` `>=0.1.304 <0.2.0`），要和核心、其余第一方插件一起升级；按旧插件协议构建的包装不上新核心（CONTRACTS §112.10）。
 
 - 三个新插件装好并启用后，在“新建账号”里各显示为一项，进去后用“鉴权方式”切换具体的账号类型。
-- 客户端用哪种协议访问都可以：账号服务的平台不是客户端用的协议时，核心负责转换（CONVERT-MATRIX）。
+- 客户端用别的平台的协议访问时由核心转换（CONVERT-MATRIX），但带账号协议绑定（CONTRACTS §110）的核心上，**跨平台转换默认关闭**：要在账号编辑页“协议与模型 › 模型的协议限定”里为模型勾上对应的协议，否则这类请求返回 404。同一平台内的转换（如 Azure 经典类型把 `/v1/responses` 转成 chat）不用开。
 - 价格不随插件带来，按客户端请求的模型名在核心的模型价格里配置。
 - “模型映射”在三家都很重要：账号的模型映射把**客户端请求的模型名**（键）换成**发给上游的名字**（值），第 3–5 节分别说明值该填什么。
 
@@ -34,7 +36,7 @@
 
 ## 3. Azure OpenAI
 
-需要核心 0.1.290 或更高（插件的 `hostCompat` 是 `>=0.1.290 <0.2.0`）。
+需要核心 0.1.304 或更高（插件的 `hostCompat` 是 `>=0.1.304 <0.2.0`）。
 
 ### 3.1 选哪种类型
 
@@ -50,12 +52,12 @@
 | 字段 | 含义 | 默认 | 例子 |
 |---|---|---|---|
 | 资源地址（`base_url`） | Azure OpenAI 资源的端点，必填 | 无 | `https://my-resource.openai.azure.com` |
-| API Key（`api_key`） | 资源的 Key，以 `api-key` 请求头发送；加密保存。8–512 个可见字符，不要求前缀 | 无 | Azure 门户“密钥和终结点”里的 KEY 1 |
+| API Key（`api_key`） | 资源的 Key，以 `api-key` 请求头发送；加密保存。不限格式和长度，只要求非空（去掉首尾空白后保存） | 无 | Azure 门户“密钥和终结点”里的 KEY 1 |
 | API 版本（`api_version`，仅经典类型） | 作为查询参数 `api-version` 发送 | `2024-10-21` | `2024-10-21`、`2025-04-01-preview` |
 
 **资源地址贴什么**：Azure 门户里资源的“终结点”，只要协议和主机这一段。
 
-- 可以填：`https://<资源名>.openai.azure.com`、`https://<资源名>.cognitiveservices.azure.com`；末尾带 `/`、`/openai`、`/openai/v1` 也行，保存时会去掉。Foundry 项目地址 `https://<资源名>.services.ai.azure.com/api/projects/<项目名>` 也接受（原样保留；这个域名下的路径没有验证过）。
+- 可以填：`https://<资源名>.openai.azure.com`、`https://<资源名>.cognitiveservices.azure.com`；末尾带 `/`、`/openai`、`/openai/v1` 也行：地址按填写的保存（只去掉末尾的 `/`），末尾的 `/openai/v1` 或 `/openai` 在请求时按接口重新拼接，请求地址与不带时相同。Foundry 项目地址 `https://<资源名>.services.ai.azure.com/api/projects/<项目名>` 也接受（原样保留，项目名里的 `%2F` 也原样保留和发出；这个域名下的路径没有验证过）。项目名恰好是 `openai` 时，末尾的 `/openai` 会被当作后缀，请求里少了项目这一段，这种项目暂不支持。
 - 会被拒绝（提示“只填资源地址，不要带 deployments、chat/completions 或 api-version”）：整条请求地址，例如 `…/openai/deployments/gpt-4o/chat/completions?api-version=2024-10-21`、`…/openai/v1/chat/completions`；带 `?` 查询串或 `#`；地址里带 `用户@`；`/OpenAI/V1` 这样大小写不同的后缀；前后有空格。
 - `http://` 地址目前也能保存（测试环境的模拟上游需要）。正式账号请填 `https://`。
 
@@ -99,6 +101,8 @@ Azure 上的“模型”是你自己起名的**部署**。
 
 ### 4.2 表单字段
 
+表单是插件自己的原生界面（`plugins/vertex/ui/native`：服务账号与用户凭证共用 `VertexKeyFileForm`，API Key 用 `createApiKeyForm` 生成的 `VertexApiKeyForm`）：填写时即时检查下表的格式，保存时以插件的 `ValidateCredentials` 为准（核心不再按 JSON Schema 检查）。核心续期时写回的 `access_token`、`expires_at`、`token_for` 不在表单上显示，保存时原样带回。表单没有的键保存时被拒绝（错误码 `unknown`，同原 schema 的 `additionalProperties:false`）：密钥文件类型允许密钥文件、`project_id`、`location` 和上面三个续期写回的键，`vertex_apikey` 允许 `api_key`、`project_id`、`location`。
+
 服务账号、用户凭证：
 
 | 字段 | 含义 | 默认 | 例子 |
@@ -111,7 +115,7 @@ API Key：
 
 | 字段 | 含义 | 默认 | 例子 |
 |---|---|---|---|
-| API Key（`api_key`） | 以 `x-goog-api-key` 发送；加密保存。8–512 个可见字符 | 无 | Google Cloud 控制台 → Vertex AI → API 密钥 |
+| API Key（`api_key`） | 以 `x-goog-api-key` 发送；加密保存。不能为空，不限格式与长度，保存时去掉首尾空白 | 无 | Google Cloud 控制台 → Vertex AI → API 密钥 |
 | 项目 ID（可选） | 见下 | 空 | `my-project-123456` |
 | 区域（可选） | 见下 | 空 | `us-central1` |
 
@@ -140,6 +144,7 @@ Vertex 上的 Gemini 模型名和 Gemini Developer API 相同（例如 `gemini-2
 
 - 请求体与 Gemini Developer API 相同，原样转发，不做改写。Vertex 对请求体更严格（例如 `contents[].role`），在 Developer API 上能用的请求可能被拒绝。
 - 用户凭证账号的请求会带 `x-goog-user-project: <项目 ID>`（用户凭证不属于任何项目，不带会被拒绝）。
+- 客户端的 `user-agent`、`x-goog-api-client`（gemini 平台交给插件的两个客户端请求头）原样转发，是默认头，运营方的请求头覆盖可以改它们。
 - 错误处理：
   - 服务账号、用户凭证：401 冷却 60 秒、不禁用（多半是令牌问题，等下一次刷新）；403 禁用。
   - API Key：401、403 都禁用。
@@ -148,7 +153,7 @@ Vertex 上的 Gemini 模型名和 Gemini Developer API 相同（例如 `gemini-2
 
 ## 5. AWS Bedrock
 
-**需要核心 0.1.304 或更高**（插件的 `hostCompat` 是 `>=0.1.304 <0.2.0`）：SigV4 签名和二进制响应流的解码都由核心完成，更早的核心装不上这个插件。
+需要核心 0.1.304 或更高（插件的 `hostCompat` 是 `>=0.1.304 <0.2.0`）。SigV4 签名由插件自己做，二进制响应流由核心解码成 SSE（CONTRACTS §109）。
 
 只服务 anthropic 平台，只有一条路：
 
@@ -156,7 +161,7 @@ Vertex 上的 Gemini 模型名和 Gemini Developer API 相同（例如 `gemini-2
 |---|---|---|
 | anthropic | `/v1/messages` | InvokeModel（`/model/<模型 ID>/invoke`），流式是 InvokeModelWithResponseStream |
 
-- **没有 OpenAI 兼容的路由**：Bedrock 自己的 OpenAI 兼容接口（`/openai/v1`）没有接。客户端用 OpenAI 协议（`/v1/chat/completions`、`/v1/responses`）访问时，核心先把请求转换成 Messages 请求，再走上面这条 InvokeModel 路。
+- **没有 OpenAI 兼容的路由**：Bedrock 自己的 OpenAI 兼容接口（`/openai/v1`）没有接。客户端用 OpenAI 协议（`/v1/chat/completions`、`/v1/responses`）访问时，核心先把请求转换成 Messages 请求，再走上面这条 InvokeModel 路。这是跨平台转换：带账号协议绑定（CONTRACTS §110）的核心上默认关闭，要在 Bedrock 账号上为模型勾上 Chat Completions / Responses 才提供。
 - **这一版只支持 Claude**，Bedrock 上 Claude 以外的模型不支持。
 
 ### 5.1 选哪种类型
@@ -164,18 +169,20 @@ Vertex 上的 Gemini 模型名和 Gemini Developer API 相同（例如 `gemini-2
 | 鉴权方式 | 账号类型 | 凭证 | 会过期吗 |
 |---|---|---|---|
 | API Key（默认） | `bedrock_apikey` | Bedrock API Key，以 `Authorization: Bearer` 发送 | 短期 Key 最长 12 小时，且只能用在创建它的区域；长期 Key 按创建时在 AWS 上设定的有效期 |
-| Access Key | `bedrock_aksk` | IAM 用户的长期 Access Key ID + Secret Access Key，核心做 SigV4 签名 | 不过期 |
-| 临时凭证 | `bedrock_sts` | STS 签发的 Access Key ID + Secret Access Key + Session Token，核心做 SigV4 签名 | 会，按签发时的有效期 |
+| Access Key | `bedrock_aksk` | IAM 用户的长期 Access Key ID + Secret Access Key，插件做 SigV4 签名 | 不过期 |
+| 临时凭证 | `bedrock_sts` | STS 签发的 Access Key ID + Secret Access Key + Session Token，插件做 SigV4 签名 | 会，按签发时的有效期 |
 
 **三种都不会自动续期**。短期 Key 或临时凭证到期后上游拒绝请求，账号被禁用或冷却，要在账号上换新凭证并重新启用。
 
 ### 5.2 表单字段
 
+表单是插件自己的原生界面（`plugins/bedrock/ui/native`，三种类型共用 `BedrockAccountForm`）：填写时即时检查下表的格式，保存时以插件的 `ValidateCredentials` 为准（核心不再按 JSON Schema 检查）。表单没有的键保存时被拒绝（错误码 `unknown`，同原 schema 的 `additionalProperties:false`）：三种类型都允许 `region`、`inference_profile_prefix`，另外 `bedrock_apikey` 允许 `api_key`，`bedrock_aksk` 允许 `access_key_id`、`secret_access_key`，`bedrock_sts` 再加 `session_token`、`session_expires_at`。
+
 各类型自己的凭证字段：
 
 | 类型 | 字段 | 含义 | 例子 |
 |---|---|---|---|
-| API Key | API Key（`api_key`） | Bedrock 控制台 → API keys 里生成的 Key；加密保存。8–2048 个可见字符 | — |
+| API Key | API Key（`api_key`） | Bedrock 控制台 → API keys 里生成的 Key；加密保存。不能为空，不限格式与长度，保存时去掉首尾空白 | — |
 | Access Key、临时凭证 | Access Key ID（`access_key_id`） | 16–128 位大写字母和数字；明文显示 | 长期 `AKIA…`，临时 `ASIA…` |
 | Access Key、临时凭证 | Secret Access Key（`secret_access_key`） | 加密保存，只用来签名，不发给上游 | — |
 | 临时凭证 | Session Token（`session_token`） | 与临时凭证一起签发的令牌；加密保存；单行密码框，整段粘贴，不能有空格和换行 | — |
@@ -232,15 +239,16 @@ IAM 权限：Access Key、临时凭证对应的身份要能调用 `bedrock:Invok
 
 ### 5.4 行为与限制
 
-- **Claude Code 的请求体不做深度清洗**（已知限制，表单里也写了）。Claude Code 会在工具定义里带 `custom`，在 `cache_control` 里带 `scope`、`ttl`，Bedrock 不接受这些字段，会回 400。插件只处理请求体顶层的几个字段（见下一条），够不到这些位置。账号要给 Claude Code 用时，在账号的“请求参数覆盖”里删除这些字段（带通配路径的删除，或 `prune_objects`）；这套配置还没有实测过。**Bedrock 账号主要给 Claude Code 用的话，先在测试分组里验证再放量。**
-- 请求体按客户端原样转发，只处理这些顶层字段：
-  - 删除 `model`、`stream`（都移到地址里），写入 `anthropic_version: bedrock-2023-05-31`。
-  - 删除 `metadata`、`provider`。
+- **Claude Code 的请求体会被清洗**：插件拿到完整请求体，删掉 Bedrock 不接受、Claude Code 写在深处的内容：工具定义里的 `custom`，`cache_control` 里的 `scope`（总是删）和模型不接受的 `ttl`（认出模型版本时，只有支持缓存 TTL 的模型保留 `5m`、`1h`；模型 ID 认不出版本时原样保留，以免把一小时的缓存悄悄变成五分钟），工具调用 ID 里 `[a-zA-Z0-9_-]` 以外的字符（换成 `_`），模型不接受的 thinking 设置。这套清洗只对照过旧版的规则和 AWS 文档，**Bedrock 账号主要给 Claude Code 用的话，先在测试分组里验证再放量。**
+- 除上一条的清洗外，请求体按客户端原样转发，顶层只处理这些字段：
+  - 删除 `model`、`stream`（都移到地址里），写入 `anthropic_version: bedrock-2023-05-31`。走不走流式接口只看客户端请求本身是否流式（`meta.stream`），不看请求体里的 `stream`：运营方在参数覆盖里给非流式请求加 `stream: true` 不会把它变成流式。
+  - 删除 `metadata`、`provider`、`service_tier`、`inference_geo`、`speed`：InvokeModel 的请求体没有这些字段；Bedrock 上的数据驻留由推理配置的前缀决定，fast mode 不可用。（此前删的是拼错的 `interface_geo`，真正的 `inference_geo` 会作为未知字段发给 Bedrock。）会悄悄改变回答的字段（`mcp_servers`、`container`、`fallbacks`）不删，交给 Bedrock 拒绝。
   - `anthropic_beta`：见下一条。
   - `context_management`：请求没有带 `context-management-2025-06-27` 这个 beta 时删除。
   - `output_config`、`output_format` **保留**（旧版会删除）：按 AWS 文档，InvokeModel 读 `output_config.format`（结构化输出）和 `output_config.effort`；`output_format` 是已废弃的写法，插件不替客户端转换。
 - `anthropic-beta`：Bedrock 不认这个请求头，beta 要写在请求体的 `anthropic_beta` 里。插件把客户端请求头里的和请求体自带的 `anthropic_beta` 里的合在一起，Bedrock 支持的写进请求体的 `anthropic_beta`，不支持的丢弃、重复的只留一个，请求头本身不发给上游；一个都不剩时请求体里的 `anthropic_beta` 也删掉。支持的名单（15 项，不分模型，某个模型没有的特性由上游拒绝）：`computer-use-2025-01-24`、`computer-use-2025-11-24`、`context-1m-2025-08-07`、`context-management-2025-06-27`、`compact-2026-01-12`、`compact-2026-09-04`、`fallback-credit-2026-07-01`、`thinking-display-updates-2026-08-18`、`mid-conversation-output-config-2026-07-01`、`mid-conversation-effort-2026-08-01`、`per-turn-control-2026-07-01`、`per-message-effort-2026-07-01`、`fine-grained-tool-streaming-2025-05-14`、`tool-search-tool-2025-10-19`、`tool-examples-2025-10-29`（`advanced-tool-use-2025-11-20` 会换成 tool search，并自动带上 tool examples）。前 5 项和最后 3 项抄自旧版，其余 7 项取自 AWS 用户指南（模型卡片和 adaptive thinking 一页）；都没有用真实账号试过。
-- 插件不会根据请求体的内容补 beta（computer use、tool search 等）：请求体用到的特性要客户端自己在 `anthropic-beta` 头或 `anthropic_beta` 里点名。
+- 插件会按请求体里的工具自动补 beta（客户端没点名也补，做法同旧版）：`computer_20250124` 类型的工具补 `computer-use-2025-01-24`，其余 `computer_20…` 补 `computer-use-2025-11-24`；tool search 工具（`tool_search_tool_regex_20251119`、`tool_search_tool_bm25_20251119`，只在认出支持它的模型上）、允许代码执行调用的工具（`allowed_callers` 含 `code_execution_20250825`）和带 `input_examples` 的工具补 `tool-search-tool-2025-10-19`，有它就一并带上 `tool-examples-2025-10-29`（`beta.go` `toolBetas`）。其他特性仍要客户端自己在 `anthropic-beta` 头或 `anthropic_beta` 里点名。
+- 请求头：`Content-Type`、`Accept` 是默认头，运营方的请求头覆盖可以改；鉴权头（API Key 的 `Authorization`，签名类型的签名头）是权威头，运营方改不了。API Key 与 Access Key 类型不带会话令牌，插件把 `X-Amz-Security-Token` 标成“不发”，运营方的请求头设置加的会话令牌不会发到 AWS。
 - `count_tokens` 不发给 Bedrock，由核心本地估算。
 - 错误处理：
 
@@ -263,7 +271,7 @@ IAM 权限：Access Key、临时凭证对应的身份要能调用 `bedrock:Invok
 没有任何真实云账号参与过测试。完整清单在设计文档第 12 节，最要紧的几条：
 
 1. 三家的请求地址、签名、令牌换取、错误码都只对照过文档和模拟上游，第一次接真实账号时要逐项看使用记录和账号状态。
-2. Azure 的验收测试（`next/e2e/ac29_azure_test.go`）已经写好，但还没有在任何 e2e 环境里执行过。
+2. Azure 的验收测试（`next/e2e/ac29_azure_test.go`）只对模拟上游跑过：它随整套 e2e 在 e2e 栈上运行并通过，没有接过真实的 Azure。
 3. 这些新表单没有在控制台里做过界面走查（分组折叠、鉴权方式切换、编辑时隐藏字段的回传、日期时间控件、预填的模型映射）。
 4. Bedrock 预填的模型映射和 beta 名单只对照过 AWS 文档（beta 名单里旧版的 8 项连文档也没对照），没有用真实账号调过；保留 `output_config` / `output_format` 也只有文档依据。
-5. Bedrock + Claude Code 的参数覆盖配置没有实测过。
+5. Bedrock 对 Claude Code 请求体的清洗没有用真实账号实测过。

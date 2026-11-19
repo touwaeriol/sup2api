@@ -3,89 +3,46 @@ package grpcruntime
 import (
 	"context"
 	"errors"
+
 	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/proto"
 )
 
-func (h *hostServer) ReportTaskProgress(ctx context.Context, in *pluginv1.ReportTaskProgressRequest) (out *pluginv1.ExecutionReceipt, err error) {
-	if h.p == nil || len(in.GetExecutionToken()) != 64 {
-		return nil, status.Error(codes.PermissionDenied, "invalid execution token")
+// Monitor runs PlatformService.Monitor once (core.MonitorPlugin): the plugin
+// queries the upstream through fetch and the result is its return value.
+func (a platformAdapter) Monitor(ctx context.Context, in *pluginv1.PollRequest, fetch core.ExecutionHTTP) (result *pluginv1.ReconcileResult, err error) {
+	if !a.i.has(manifest.CapPlatformMonitor) || in == nil || fetch == nil {
+		return nil, errors.New("Monitor requires platform.monitor.v1, an input and a fetch capability")
 	}
-	h.p.polls.mu.Lock()
-	sc := h.p.polls.byToken[in.ExecutionToken]
-	h.p.polls.mu.Unlock()
-	if sc == nil {
-		return nil, status.Error(codes.PermissionDenied, "unknown execution token")
-	}
-	sc.mu.Lock()
-	if sc.closed || sc.ctx.Err() != nil || sc.report == nil {
-		sc.mu.Unlock()
-		return nil, status.Error(codes.PermissionDenied, "expired monitor execution")
-	}
-	if sc.reportBusy || (sc.used && !sc.complete) {
-		sc.mu.Unlock()
-		return nil, status.Error(codes.FailedPrecondition, "report already in progress")
-	}
-	if in.Result == nil {
-		sc.mu.Unlock()
-		return nil, status.Error(codes.InvalidArgument, "missing task result")
-	}
-	if in.Result.State != pluginv1.ReconcileResult_PENDING && in.Result.State != pluginv1.ReconcileResult_POLL_FAILED && !(sc.used && sc.complete && sc.safe) {
-		sc.mu.Unlock()
-		return nil, status.Error(codes.FailedPrecondition, "terminal result has no complete HTTP observation")
-	}
-	sc.reportSealed = true
-	sc.reportBusy = true
-	sc.reportDone = make(chan struct{})
-	sc.mu.Unlock()
-	defer func() {
-		if recover() != nil {
-			out = nil
-			err = status.Error(codes.Internal, "monitor callback failed internally")
-		}
-		sc.mu.Lock()
-		sc.reportBusy = false
-		if err == nil {
-			sc.reported = true
-		}
-		close(sc.reportDone)
-		sc.mu.Unlock()
-	}()
-	cctx, cancel := context.WithCancel(sc.ctx)
-	defer cancel()
-	stop := context.AfterFunc(ctx, cancel)
-	if ctx.Err() != nil {
-		cancel()
-	}
-	defer stop()
-	return sc.report(cctx, in)
-}
-func (a platformAdapter) Monitor(ctx context.Context, in *pluginv1.PollRequest, execute core.ExecutionHTTP, report func(context.Context, *pluginv1.ReportTaskProgressRequest) (*pluginv1.ExecutionReceipt, error)) error {
-	if !a.i.has(manifest.CapPlatformMonitor) || in == nil || report == nil {
-		return errors.New("Monitor requires platform.monitor.v1")
-	}
-	return a.i.call(ctx, classBackground, TimeoutPoll, func(ctx context.Context, p *proc) error {
-		token, sc, err := p.polls.open(ctx, execute)
+	err = a.i.call(ctx, classBackground, TimeoutPoll, func(ctx context.Context, p *proc) error {
+		sc := &callScope{client: core.ExecutionClient{Fetch: fetch}, account: in.GetAccount()}
+		// A fetch finishing after Monitor returned cannot back its result:
+		// that result was produced before its network evidence (withScope).
+		out, err := withScope(ctx, p, sc, func(ctx context.Context, token string) (*pluginv1.MonitorResponse, error) {
+			req := shallowClone(in)
+			req.ExecutionToken = token
+			return p.platform.Monitor(ctx, req)
+		})
 		if err != nil {
 			return err
 		}
-		sc.report = report
-		defer p.polls.close(token, sc)
-		req := proto.Clone(in).(*pluginv1.PollRequest)
-		req.ExecutionToken = token
-		_, err = p.platform.Monitor(ctx, req)
-		sc.mu.Lock()
-		reported := sc.reported
-		sc.mu.Unlock()
-		if err == nil && !reported {
-			return errors.New("Monitor returned without a committed progress report")
+		result = out.GetResult()
+		switch {
+		case result == nil:
+			return errors.New("Monitor returned no result")
+		case terminal(result) && !sc.evidence:
+			result = nil
+			return errors.New("Monitor returned a terminal result without a complete, successful execution HTTP response")
 		}
-		return err
+		return nil
 	})
+	return result, err
+}
+
+// terminal reports whether result ends the observation of its task.
+func terminal(result *pluginv1.ReconcileResult) bool {
+	return result.GetState() != pluginv1.ReconcileResult_PENDING && result.GetState() != pluginv1.ReconcileResult_POLL_FAILED
 }
 
 var _ core.MonitorPlugin = platformAdapter{}

@@ -37,11 +37,8 @@ func FilterUI(ui *UI, allowed, allowedCore func(perm string) bool) VisibleUI {
 }
 
 // visibleMenusAndPages filters the menus and pages for one caller.
-// A page reached only through menus the caller may not see is dropped; so is
-// a table's "New" link the caller may not use, and the form page it opens
-// unless a visible menu or another shown table's usable link reaches it (a
-// table hidden by its menu's permission makes its link unusable). Pages no
-// menu or link names stay (their routes check permissions themselves).
+// A page reached only through menus the caller may not see is dropped. Pages
+// no menu names stay (their routes check permissions themselves).
 // A kept page's nav loses the sections the caller may not see (see
 // visibleNav); allowedCore checks a core permission key.
 func visibleMenusAndPages(ui *UI, allowed, allowedCore func(perm string) bool) ([]Menu, map[string]Page) {
@@ -57,33 +54,9 @@ func visibleMenusAndPages(ui *UI, allowed, allowedCore func(perm string) bool) (
 			hidden[mn.Page] = true
 		}
 	}
-	// A link counts only from a page the menus leave shown: a table the
-	// caller cannot see must not reveal the form it opens.
-	linkVisible := map[string]bool{}
-	linkHidden := map[string]bool{}
 	for id, pg := range ui.Pages {
-		if pg.Create == nil {
+		if hidden[id] && !visible[id] {
 			continue
-		}
-		if (visible[id] || !hidden[id]) && allowed(pg.Create.Permission) {
-			linkVisible[pg.Create.Page] = true
-		} else {
-			linkHidden[pg.Create.Page] = true
-		}
-	}
-	for id := range linkVisible {
-		visible[id] = true
-	}
-	for id := range linkHidden {
-		hidden[id] = true
-	}
-	shown := func(id string) bool { return visible[id] || !hidden[id] }
-	for id, pg := range ui.Pages {
-		if !shown(id) {
-			continue
-		}
-		if pg.Create != nil && (!allowed(pg.Create.Permission) || !shown(pg.Create.Page)) {
-			pg.Create = nil
 		}
 		if pg.Nav != nil {
 			pg.Nav = visibleNav(pg.Nav, allowed, allowedCore)

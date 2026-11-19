@@ -16,7 +16,8 @@ import (
 )
 
 // pluginPromptBytes caps the prompt text a plugin estimator is given (CONTRACTS
-// §63): a gRPC message stays far below its 4 MiB limit.
+// §63): an estimate needs no more, and it keeps the EstimateUsage call small. It
+// cuts a derived copy only; the request itself is not refused.
 const pluginPromptBytes = 1 << 20
 
 // localTokenizerEstimate is the fallback estimate when the plugin does not
@@ -33,10 +34,6 @@ func localTokenizerEstimate(ctx context.Context, prompt string, floor int64) (*p
 // precharge runs only after billing type admission and before scheduling.
 // The plugin reports units; the core owns the price snapshot and ledger.
 func (c *call) precharge(ctx context.Context) error {
-	if c.price == nil && !c.hasReferencedPrice() {
-		// Resolve returns nil only for the explicit missing_price_policy=free.
-		return nil
-	}
 	gate := c.g.d.Balance
 	if gate == nil {
 		return fmt.Errorf("billing precharger unavailable")
@@ -45,12 +42,12 @@ func (c *call) precharge(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	fields, omitted := usageRequestFields(c.ep.UsageRequestFields, c.body)
+	fields := usageRequestFields(c.ep.UsageRequestFields, c.body)
 	var report *pluginv1.UsageReport
 	if pb, exists := c.gen.Platform(c.platform); exists && pb.Client != nil {
 		// The local tokenizer counts the prompt up to tokenizer.MaxTextBytes.
 		prompt := c.promptText(tokenizer.MaxTextBytes)
-		in := &pluginv1.EstimateUsageRequest{Meta: c.meta(), Fields: fields, FieldsOmitted: omitted, PreConsumeTokens: floor, Prompt: truncateUTF8(prompt, pluginPromptBytes)}
+		in := &pluginv1.EstimateUsageRequest{Meta: c.meta(), Fields: fields, PreConsumeTokens: floor, Prompt: truncateUTF8(prompt, pluginPromptBytes)}
 		estimator, ok := pb.Client.(interface {
 			EstimateUsage(context.Context, *pluginv1.EstimateUsageRequest) (*pluginv1.UsageReport, error)
 		})

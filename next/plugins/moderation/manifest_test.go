@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -13,7 +12,6 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/plugins/moderation/internal/moderation"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest/check"
-	"github.com/Sub2API-Devs/sup2api/next/sdk/pluginsdk"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/pluginsdk/pluginsdktest"
 )
 
@@ -21,7 +19,7 @@ import (
 // checks the declared capabilities (app.broadcast.v1 needs OnBroadcast and
 // the host permission "broadcast") and reports them.
 func TestManifestServes(t *testing.T) {
-	h := pluginsdktest.Start(t, moderation.New(), pluginsdktest.Options{SDK: []pluginsdk.Option{pluginsdk.WithManifest(manifestJSON)}})
+	h := pluginsdktest.Start(t, moderation.New(), pluginsdktest.Options{Manifest: manifestJSON})
 	caps := h.Info.GetCapabilities()
 	for _, c := range []string{manifest.CapGatewayHook, manifest.CapAppJobs, manifest.CapAppBroadcast, manifest.CapHTTPRoutes} {
 		if !slices.Contains(caps, c) {
@@ -56,7 +54,7 @@ func TestManifest(t *testing.T) {
 	}
 	// The host's own manifest rules (sdk/manifest/check), as an install runs them.
 	files := map[string][]byte{"manifest.json": manifestJSON}
-	for _, f := range []string{"forms/settings.schema.json", "forms/settings.ui.json", "migrations/0001_init.sql"} {
+	for _, f := range []string{"migrations/0001_init.sql"} {
 		b, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)
@@ -67,9 +65,9 @@ func TestManifest(t *testing.T) {
 		t.Fatalf("manifest check: %+v", fields)
 	}
 	// hostCompat: the core of SDK 0.2.0 and of risk and defaults, 0.1.290.
-	// UI 3.15 (permissions.hasAction, resource scopes; the UI feature-detects
-	// it, so ^3.15 is declared for clarity, not need).
-	if m.Key != "moderation" || m.Version != "0.12.1" || m.HostCompat != ">=0.1.290 <0.2.0" || m.HostUICompat != "^3.15" || m.UI == nil || m.UI.Native == nil ||
+	// UI 4.0: native pages only; the settings pages are written with
+	// useForm, SForm and SSecretInput (DESIGN-2026-11-19-PLUGIN-UI-CODE-ONLY).
+	if m.Key != "moderation" || m.Version != "0.12.2" || m.HostCompat != ">=0.1.304 <0.2.0" || m.HostUICompat != "^4.0" || m.UI == nil || m.UI.Native == nil ||
 		m.UI.Native.Entry != "ui/native/entry.js" || m.Database == nil || m.Database.Schema != "plg_moderation" {
 		t.Fatalf("manifest = %+v", m)
 	}
@@ -154,10 +152,10 @@ func TestManifest(t *testing.T) {
 		t.Error("users.read must be declared and optional")
 	}
 	// moderation:manage may edit the settings (§75.1), all of them on the
-	// plugin's own page (§72.15): native mode on the dashboard, with the
-	// schema the core validates and masks with.
-	if s := m.UI.Settings; s == nil || s.Permission != "moderation:manage" || s.Mode != "native" || s.Page != "dashboard" ||
-		s.Schema != "forms/settings.schema.json" || s.UISchema != "forms/settings.ui.json" {
+	// plugin's own page (§72.15): native mode on the dashboard
+	// (ValidateSettings checks them, ui.settings.secrets says what the core
+	// masks).
+	if s := m.UI.Settings; s == nil || s.Permission != "moderation:manage" || s.Mode != "native" || s.Page != "dashboard" {
 		t.Errorf("ui.settings = %+v", m.UI.Settings)
 	}
 	if len(m.Hooks) != 3 {
@@ -224,92 +222,66 @@ func TestManifest(t *testing.T) {
 	}
 }
 
-// TestSettingsForms checks that the schema and the ui schema cover exactly
-// the same fields and that the schema defaults decode to DefaultSettings.
-func TestSettingsForms(t *testing.T) {
+// TestSettingsSecrets: every field the settings form of
+// forms/settings.schema.json (removed in 0.12.2) marked secret is in
+// ui.settings.secrets, credentials (writeOnly) as credentials and the
+// webhook address (x-sensitive only) as sensitive, so the core keeps masking
+// each of them in GET /settings (secret_fields) - a field left out would be
+// read back in clear.
+func TestSettingsSecrets(t *testing.T) {
 	var m manifest.Manifest
 	if err := json.Unmarshal(manifestJSON, &m); err != nil {
 		t.Fatal(err)
 	}
-	var schema struct {
-		AdditionalProperties *bool                     `json:"additionalProperties"`
-		Properties           map[string]map[string]any `json:"properties"`
-		Required             []string                  `json:"required"`
+	// The schema's secret fields: pointer -> credential.
+	schemaSecrets := map[string]bool{"api_key": true, "notify_webhook_secret": true, "notify_webhook_url": false}
+	got := map[string]bool{}
+	for _, f := range m.UI.Settings.SecretFields() {
+		got[f.Pointer()] = f.Credential
 	}
-	b, err := os.ReadFile(filepath.FromSlash(m.UI.Settings.Schema))
-	if err != nil || json.Unmarshal(b, &schema) != nil {
-		t.Fatalf("schema: %v", err)
+	if !reflect.DeepEqual(got, schemaSecrets) {
+		t.Fatalf("ui.settings.secrets = %v, want %v", got, schemaSecrets)
 	}
-	if schema.AdditionalProperties == nil || *schema.AdditionalProperties || len(schema.Required) != 0 {
-		t.Fatal("schema must set additionalProperties:false and require nothing ({\"mode\":\"off\"} alone is valid)")
-	}
-	var ui map[string]json.RawMessage
-	b, err = os.ReadFile(filepath.FromSlash(m.UI.Settings.UISchema))
-	if err != nil || json.Unmarshal(b, &ui) != nil {
-		t.Fatalf("ui schema: %v", err)
-	}
-	var order []string
-	_ = json.Unmarshal(ui["ui:order"], &order)
-	if len(order) != len(schema.Properties) {
-		t.Fatalf("ui:order has %d fields, schema %d", len(order), len(schema.Properties))
-	}
-	defaults := map[string]any{}
-	for _, k := range order {
-		prop, ok := schema.Properties[k]
-		if !ok {
-			t.Errorf("ui:order field %s not in schema", k)
-			continue
-		}
-		if _, ok := prop["default"]; !ok {
-			t.Errorf("field %s has no default", k)
-		}
-		defaults[k] = prop["default"]
-		var fu map[string]json.RawMessage
-		if json.Unmarshal(ui[k], &fu) != nil || fu["ui:title"] == nil {
-			t.Errorf("field %s has no ui:title", k)
+	// Each one is a setting the plugin accepts.
+	for k := range schemaSecrets {
+		for _, e := range moderation.CheckSettings([]byte(`{"` + k + `":""}`)) {
+			t.Errorf("secret %s: %v", k, e)
 		}
 	}
-	for _, k := range []string{"api_key", "notify_webhook_secret"} {
-		if schema.Properties[k]["writeOnly"] != true {
-			t.Errorf("%s must be writeOnly", k)
-		}
+}
+
+// TestValidateSettings: the plugin answers ValidateSettings with
+// CheckSettings (CONTRACTS §75.1), field errors as JSON pointers.
+func TestValidateSettings(t *testing.T) {
+	h := pluginsdktest.Start(t, moderation.New(), pluginsdktest.Options{Manifest: manifestJSON})
+	resp, err := h.ValidateSettings(map[string]any{"mode": "enforce", "notify_webhook_url": "https://hooks.example/x", "jev_default_set": nil}, nil)
+	if err != nil || len(resp.GetErrors()) != 0 || resp.GetNormalizedConfigJson() != "" {
+		t.Fatalf("valid settings: %v %v", resp, err)
 	}
-	// Of the keys retired in 0.11.0 only api_key stays in the schema (without
-	// it the core would no longer mask a stored 0.1 key), and the settings
-	// page does not show it; every other field is shown.
-	for _, gone := range []string{"allowlist_user_ids", "blocklist_user_ids", "exempt_user_ids", "cache_ttl_seconds", "ban_window_hours",
-		"analysis_channel_id", "on_error", "base_url", "model", "retention_days"} {
-		if _, ok := schema.Properties[gone]; ok {
-			t.Errorf("retired key %s is still declared", gone)
-		}
-	}
-	legacy := []string{"api_key"}
-	for _, k := range order {
-		var fu struct {
-			Widget string `json:"ui:widget"`
-		}
-		_ = json.Unmarshal(ui[k], &fu)
-		if hidden := fu.Widget == "hidden"; hidden != slices.Contains(legacy, k) {
-			t.Errorf("field %s: hidden = %v", k, hidden)
-		}
-	}
-	// The first field carries a section, so no field falls into an untitled group.
-	var first map[string]json.RawMessage
-	if json.Unmarshal(ui[order[0]], &first) != nil || first["ui:section"] == nil {
-		t.Errorf("first field %s starts no ui:section", order[0])
-	}
-	if schema.Properties["notify_webhook_url"]["x-sensitive"] != true {
-		t.Error("notify_webhook_url must be x-sensitive (chat webhooks embed a token)")
-	}
-	raw, _ := json.Marshal(defaults)
-	got, err := moderation.DecodeSettings(raw)
+	resp, err = h.ValidateSettings(`{"mode":"on","watch_days":0,"cache_ttl_seconds":1,"jev_default_set":{"items":[{"category":"a","label":"A","question":"q","threshold":0}]}}`, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := moderation.DefaultSettings()
-	gb, _ := json.Marshal(got)
-	wb, _ := json.Marshal(want)
-	if !bytes.Equal(gb, wb) {
-		t.Fatalf("schema defaults decode to\n%s\nwant\n%s", gb, wb)
+	got := map[string]string{}
+	for _, e := range resp.GetErrors() {
+		got[e.GetField()] = e.GetCode()
+	}
+	want := map[string]string{"mode": "enum", "watch_days": "minimum", "cache_ttl_seconds": "unknown", "jev_default_set/items/0/threshold": "minimum"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("errors = %v, want %v", got, want)
+	}
+}
+
+// TestConfigureAppliesStoredSettings: stored settings that ValidateSettings
+// would refuse - saved before it existed, with retired keys and values of
+// older bounds - still configure (read and clamped), so the plugin starts.
+func TestConfigureAppliesStoredSettings(t *testing.T) {
+	h := pluginsdktest.Start(t, moderation.New(), pluginsdktest.Options{Manifest: manifestJSON})
+	stored := `{"mode":"observe","cache_ttl_seconds":0,"ban_window_hours":2,"allowlist_user_ids":["8"],"base_url":"https://old.example","pass_retention_days":9,"watch_days":0}`
+	if resp, err := h.ValidateSettings(stored, nil); err != nil || len(resp.GetErrors()) == 0 {
+		t.Fatalf("ValidateSettings must refuse them: %v %v", resp, err)
+	}
+	if errs := h.Configure(stored, nil); len(errs) > 0 {
+		t.Fatalf("Configure refused stored settings: %v", errs)
 	}
 }

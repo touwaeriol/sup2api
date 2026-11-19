@@ -168,7 +168,7 @@ func TestLauncherCommandEndToEnd(t *testing.T) {
 	exe, _ := os.Executable()
 	l := NewLauncher(LauncherOptions{Executable: exe})
 	cmd, err := l.Command(context.Background(), core.LaunchSpec{
-		PluginKey: "demo", Version: "0.1.0", BinaryPath: exe, WorkDir: t.TempDir(),
+		PluginKey: "demo", Version: "0.1.0", BinaryPath: exe, DataDir: t.TempDir(),
 		MemoryMB: 128, MaxOpenFiles: 100, StrictNetwork: true, Seccomp: true,
 		Env: []string{"SANDBOX_TEST_CHILD=report", "SANDBOX_TEST_ADDR=" + addr},
 	})

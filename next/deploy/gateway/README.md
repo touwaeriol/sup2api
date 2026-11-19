@@ -50,9 +50,9 @@ sh deploy/gateway/package-release.sh ./stage ./publish v1.1.0 SOURCE_COMMIT SOUR
 - `peer_url` 必须能被另一节点访问，服务器证书DNS SAN必须包含相应主机名并允许ServerAuth。客户端验证CA及主机名，不再要求客户端证书或`allowed_peers`列表。
 - `peer_auth_key` 留空时自动生成节点密钥；也可在配置中指定至少32字节的独立随机密钥。非空的`SUB2API_PEER_AUTH_KEY`环境变量覆盖配置文件，空值视为未设置；Compose分别使用`NODE_A_PEER_AUTH_KEY`与`NODE_B_PEER_AUTH_KEY`，不要给两个节点填写同一个密钥。
 - 心跳只续期Redis登记，不更换密钥。登记丢失时自动模式生成新值，配置模式登记原值，其他节点直接读取新登记。普通缓存过期不重启核心；Redis不可用时拒绝新的节点间请求，已通过鉴权的流式请求按原有生命周期收尾。登记失败（节点被停用、同 ID 实例仍在线或 Redis 不可用）时网关不退出，保持维护态并持续重试。
-- `plugin_max_bytes`（可选，默认 64 MiB，与核心的插件包上限同一常量 `runtimecontract.PluginPackageMaxBytes`）限制网关保存的单个插件包；`plugin_store_max_bytes`（可选，默认 16 GiB）限制整个 `plugin-blobs/` 目录，满了以后上传返回 507，直到 GC 清掉未引用的包。插件包保存在状态卷的 `plugin-blobs/`，主节点保存全部非市场插件包，从节点只缓存自己拉取过的包；节点间上传必须声明 `Content-Length`，每个来源节点最多 2 个并发上传。
+- `plugin_max_bytes`（可选，默认 64 MiB，与核心的插件包上限同一常量 `runtimecontract.PluginPackageMaxBytes`）限制网关保存的单个插件包；`plugin_store_max_bytes`（可选，默认 16 GiB）限制整个 `plugin-blobs/` 目录，满了以后存包失败，直到 GC 清掉未引用的包。插件包保存在状态卷的 `plugin-blobs/`：每个节点保存自己接到的上传和自己用过的包，缺包时向任一在线的持有节点取，节点之间不推送；插件包与主节点无关，`set-primary` 不影响插件的安装与升级。持有某个包的节点都离线时，需要它的节点装不上，控制台显示 `package_gone` 与问过哪些节点（CONTRACTS §114）。
 - Redis 登记只保存节点密钥的 SHA-256（peer 协议 2，2026-11-05 起）。更换网关版本时集群内所有网关必须一起换，期间不要创建核心升级计划；旧网关与新网关互不接受。`REDIS_URL` 走 TCP 时必须带密码，否则网关拒绝启动（`allow_unauthenticated_redis: true` 仅供隔离测试）。
-- 网关默认为其核心设置 `SUB2API_PLUGIN_LANDLOCK=true`（Linux）：管理 socket 令牌文件对同 UID 的插件没有隔离作用，隔离来自 Landlock。`core_env` 里显式给出的值优先；`plugin_landlock_disabled: true` 关闭默认值。
+- 网关默认为其核心设置 `SUB2API_PLUGIN_LANDLOCK=true`（Linux）：管理 socket 令牌文件对同 UID 的插件没有隔离作用，隔离来自 Landlock（CONTRACTS §43.8）。核心 0.1.304 起自己也默认开启；网关仍显式写 `true`，是为了它可能启动的旧核心。`core_env` 里显式给出的值优先；`plugin_landlock_disabled: true` 写 `SUB2API_PLUGIN_LANDLOCK=false` 关闭它。核心启动日志里的 `plugin sandbox:` 几行和控制台节点页的“插件沙箱”一列说明这个节点的内核实际限制到哪一层（文件 5.13、截断 6.2、TCP 6.7、抽象 socket 与信号 6.12、路径型 unix socket 7.1、UDP 7.2），缺的层逐条记 WARN；容器的 seccomp 配置须放行 `landlock_*` 三个系统调用（Docker 默认配置放行）。
 - `release_origin` 下载使用系统根证书及 `ca.crt`，可用公开证书；内容由清单摘要约束，节点密钥不会发往发布源。
 - `trusted_proxies` 默认为空；若前置 TLS 终止代理，填入其实际连接源 CIDR，代理须覆盖客户端带来的转发头。仅这些直接代理的单值 `http` / `https` 协议头可信。
 - 每节点的 `certs/<node>/` 放置 `node.crt`、`node.key` 和 `ca.crt`，权限须允许容器 UID 1000 读取。不要挂载 CA 私钥。
@@ -65,7 +65,7 @@ Compose 仅映射两个回环 HTTP 入口，生产反向代理分别指向 8081/
 
 - **管理 socket 令牌**：网关每次 `serve` 生成 32 字节随机令牌，写入 `management_token_file`（默认管理 socket 旁的 `runtime/shell.token`，0600，目录 0700，原子替换，不跟随符号链接）。管理 socket 上的所有请求（升级 API、插件包、`/metrics`）必须带 `Authorization: Bearer <令牌>`，否则 401。核心只收到令牌文件路径 `SUB2API_UPDATER_TOKEN_FILE`，不收到令牌本身。`status`/`pause`/`resume`/`cancel`/`rollback`/`enable-node`/`disable-node` 自动读同一文件，须以网关用户（UID 1000）在网关运行时执行；`-token-file` 可指定其他路径。令牌每次网关启动更换，旧令牌立即失效。
 - **不带令牌一律拒绝**：曾经的迁移开关 `allow_tokenless_management` / `SUB2API_ALLOW_TOKENLESS_MANAGEMENT` 已删除（核心自 2026-10 起都带令牌）。旧配置里留着这个键或环境变量不影响启动，外壳直接忽略，可以顺手删掉。
-- **核心环境白名单**：网关不再把自己的整份环境传给核心，只传进程基本变量与核心实际读取的配置（`internal/supervisor` 的 `inheritedEnv`，测试会扫描 `server/` 源码确认没有遗漏），再加上网关显式设置的 `DATABASE_URL`、`REDIS_URL` 与托管变量。`SUB2API_PEER_AUTH_KEY`、`SUB2API_GATEWAY_*` 及其他无关变量留在网关。确需额外变量时，在配置中用 `core_env_inherit` 列名或用 `core_env` 显式给值。
+- **核心环境白名单**：网关不再把自己的整份环境传给核心，只传进程基本变量与核心实际读取的配置（`internal/supervisor` 的 `inheritedEnv`，测试会扫描 `server/` 源码确认没有遗漏），再加上网关显式设置的 `DATABASE_URL`、`REDIS_URL` 与托管变量。`SUB2API_PEER_AUTH_KEY`、`SUB2API_GATEWAY_*` 及其他无关变量留在网关。确需额外变量时，在配置中用 `core_env_inherit` 列名或用 `core_env` 显式给值。`HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY`（含小写写法）属于进程基本变量，会传给核心：设了它们，协议转换到 Gemini 时下载客户媒体链接就经这个代理（不设则直连），插件市场与插件包下载也经它；账号的上游请求只走账号自己的代理，不受影响；插件进程拿不到这些变量（CONTRACTS §88.5）。经这个代理下载时核心只能拦字面私网地址，域名由代理解析：环境代理应当自行拒绝访问内网地址；这一层核心无法检查。
 - **网关进程不可转储**：`serve` 启动时设置 `PR_SET_DUMPABLE=0`，同 UID 的进程（插件）不能再读网关的 `/proc/<pid>/environ`、内存和文件描述符。
 - **Redis 密码**：缓存必须开启 `requirepass`，`REDIS_URL` 写成 `redis://:<密码>@host:6379/0`（`valkey://` 同理）。密码用十六进制（`openssl rand -hex 32`），否则须百分号编码。网关检测到无密码 URL 时记警告。go-redis 用 `HELLO 3 AUTH default <密码>` 认证，对尚未设密码的服务器同样成功，因此可以先改客户端、再给服务器设密码。
 - **容器**：节点 `security_opt: no-new-privileges:true`、`cap_drop: [ALL]`，镜像保持 `USER 1000:1000`。
@@ -88,7 +88,7 @@ docker compose exec node-a sub2api-gateway status
 docker compose up -d node-b
 ```
 
-先确认主节点完成首装，再启动从节点。从节点从主节点拉取已校验制品；插件依据共享数据库中的安装状态自行同步，全部就绪后才能准入。
+先确认主节点完成首装，再启动从节点。从节点从主节点拉取已校验的核心制品；插件依据共享数据库中的安装状态自行同步（插件包向持有它的任一在线节点取），全部就绪后才能准入。插件包不再依赖主节点，但**新节点加入（以及从节点的核心升级）仍要主节点在线**：核心发布包只从主节点取（非主节点的准备步骤以主节点的 `<peer_url>/internal/blobs` 为来源，`internal/control/engine.go`），主节点离线时新节点拿不到核心、起不来。
 
 ## 更新源与一键更新
 
@@ -146,6 +146,8 @@ docker compose exec node-a sub2api-gateway import -manifest https://releases.exa
 4. 只在主节点启动目标核心并运行数据库迁移，按已批准版本加载插件。检查通过后恢复主节点服务。
 5. 从节点依次启动同一目标核心、同步插件并通过检查，再恢复本地流量和后台任务；此前继续转发主节点。
 
+带迁移 0106（账号协议绑定，CONTRACTS §110）的核心版本升级后，跨平台协议转换默认关闭，依赖转换的客户端会收到 404，直到在账号上为模型开启。升级前先按 [../rollback/protocol-binding-release.md](../rollback/protocol-binding-release.md) 导出近 30 天实际发生过的转换，升级后照着配置。
+
 核心升级期间，主节点不把流量转发给从节点；正常服务期间的 CPU 保护可将主节点新请求转移到满足条件的从节点。网关执行后台升级，不要求浏览器保持连接。清单不等于启动授权：核心会核对数据库中的本次 boot ID、摘要及准入记录。所有节点完成才提交新集群基线。
 
 管理页面暂时不可用时，仍可从本机 Unix 管理 socket 操作：
@@ -166,6 +168,8 @@ docker compose exec node-a sub2api-gateway enable-node -id node-b
 
 停用节点会持久撤销身份和核心准入，再使Redis登记失效；重新启用只允许它重新登记，仍须完成版本同步、插件加载和准入。主节点停机期间通过本机管理socket执行恢复命令，不依赖控制台在线。
 
+更换主节点用 `sub2api-gateway set-primary -node <节点>`（在集群变更锁内执行；没有进行中的升级计划，新主节点必须已启用且运行当前基线），它只改 PG 里的 `primary_node`。**之后还要把每个节点网关配置（容器里的 `/etc/sub2api/shell.json`，本目录示例是 `config/node-*.json`）里的 `primary_node` 改成新主节点，并逐个重启网关**：升级计划和核心制品来源读 PG，但网关切流的检查读配置文件（`LocalRuntime.PrimaryNode`，`internal/control/runtime.go` 的 `redirectLocked`：主节点不转发给从节点、从节点只转发给“配置的”主节点）。配置不改时，下一次主节点优先升级里从节点转发到新主节点会被拒绝（`followers may redirect only to the configured primary`），升级停在转发步骤。
+
 暂停在步骤边界生效，已开始的排空/替换会安全收尾。仅尚未切流的计划允许 `cancel`。失败后先修复原因再恢复同一计划；从节点更新失败时，已就绪主节点继续服务，从节点继续转发。主节点更新失败时保留维护状态，不擅自启动旧从节点。
 
 `rollback` 仅用于数据库和相关协议契约相同、当前插件仍兼容的版本，回到最近一次全部节点完成的基线。取得协调锁及全部节点操作锁后，以新的主节点优先恢复计划接替原计划，也会产生停机窗口。跨数据库契约或不兼容协议的回退被拒绝；需修复迁移或通过数据库备份恢复。不会直接改软链接、强杀写入进程或自动执行向下迁移。从数据库备份恢复后不需要清理 Valkey：核心 0.1.290 起授权策略只在各节点内存里，Valkey 里没有授权的键（CONTRACTS §99.4）。
@@ -180,4 +184,4 @@ docker compose exec node-a sub2api-gateway enable-node -id node-b
 
 `TEST_SHELL_NODES=3` 可追加三节点验证。设置 `TEST_BUILTIN_DIR`（包含已签名 `.s2plugin`）和 `TEST_BUILTIN_KEY=keyId=base64-public-key` 后，会首装真实插件并验证升级前后插件批准版本/状态不变。`TEST_EXPECT_MIGRATION` 填写只加在 R2 独立源码副本中的测试迁移文件名（该迁移须创建只有一行的 `managed_upgrade_probe` 表），测试会确认它只应用一次。默认保留插件安全隔离；仅在明确不验证沙箱的环境中才使用 `TEST_PLUGIN_DEV_MODE`。再设置 `TEST_MOCK_URL`（用 `deploy/mock-upstream` 启动的模拟上游，核心须能访问）并让 R2 测试迁移包含 `pg_sleep`，会运行 `TestRealCoreFaultsDuringPrimaryFirstUpgrade`：网关重启、新节点加入、迁移中断、Redis 断连、跨停机的异步视频任务与跨登记过期的 SSE。2026-10-02 所用脚本见 [final-check.sh](../../docs/audits/2026-10-02/evidence/final-check.sh)。
 
-全部 `TestRealCore*` 的准备与环境变量以 [check.sh](../ci/check.sh) 的 `plugins`、`realcore` 两步为准：两个核心的版本号（`-X main.Version`）须落在内置插件的 `hostCompat`（`>=0.1.290 <0.2.0`）里，否则核心拒装它们；R2 另带 `TEST_BUILTIN_NEXT_DIR` 里的新版 anthropic；插件包测试还要 `TEST_UPLOAD_PACKAGE`（带原生 UI 的 guard）、`TEST_MARKET_DIR`、`TEST_MARKET_KEY`。测试数据库用户还需 CREATEROLE（插件数据库角色隔离）；测试结束会删掉为测试库建的插件角色。Redis 可带密码（`redis://:密码@主机:端口/0`）。
+全部 `TestRealCore*` 的准备与环境变量以 [check.sh](../ci/check.sh) 的 `plugins`、`realcore` 两步为准：两个核心的版本号（`-X main.Version`）须落在内置插件的 `hostCompat`（`>=0.1.304 <0.2.0`）里，否则核心拒装它们；R2 另带 `TEST_BUILTIN_NEXT_DIR` 里的新版 anthropic；插件包测试还要 `TEST_UPLOAD_PACKAGE`（带原生 UI 的 guard）、`TEST_MARKET_DIR`、`TEST_MARKET_KEY`。测试数据库用户不需要 CREATEROLE（2026-11-18 起核心不给插件建数据库角色，CONTRACTS §115）。Redis 可带密码（`redis://:密码@主机:端口/0`）。

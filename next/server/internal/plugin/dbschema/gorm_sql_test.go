@@ -36,28 +36,8 @@ func TestSQLApplied(t *testing.T) {
 	})
 }
 
-func TestSQLAppliedAsPluginRole(t *testing.T) {
-	gormtest.Assert(t, func(tx *gorm.DB) *gorm.DB {
-		return Tracker{PluginKey: "demo", AsPluginRole: true}.appliedQuery(tx).Scan(&[]migrationRecord{})
-	})
-}
-
 func TestSQLRecord(t *testing.T) {
 	gormtest.Assert(t, func(tx *gorm.DB) *gorm.DB {
 		return Tracker{PluginKey: "demo"}.recordQuery(tx, "0001_init.sql", "abc")
-	})
-}
-
-func TestSQLRecordAsPluginRole(t *testing.T) {
-	gormtest.Assert(t, func(tx *gorm.DB) *gorm.DB {
-		return Tracker{PluginKey: "demo", AsPluginRole: true}.recordQuery(tx, "0001_init.sql", "abc")
-	})
-}
-
-// A statement without arguments reaches the server as written, a "?" or
-// "@name" inside a literal included: DDL is built by quoting, not binding.
-func TestSQLDDLVerbatim(t *testing.T) {
-	gormtest.AssertRun(t, func(tx *gorm.DB) error {
-		return store.DDL(tx, "COMMENT ON ROLE %s IS %s", store.Ident("plg_demo"), store.Literal("database=a?b@c d; it's"))
 	})
 }

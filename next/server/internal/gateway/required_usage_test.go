@@ -1,13 +1,12 @@
 package gateway
 
 import (
-	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
 	"testing"
 )
 
 func TestRequiredPrimaryUsageGateDoesNotAffectPlainRequests(t *testing.T) {
-	for _, kind := range []string{"plain", "null", "compaction", "context", "plugin-add"} {
+	for _, kind := range []string{"plain", "null", "compaction", "context"} {
 		t.Run(kind, func(t *testing.T) {
 			e := newEnv(t)
 			for i := range e.gen.accountTypes {
@@ -23,8 +22,6 @@ func TestRequiredPrimaryUsageGateDoesNotAffectPlainRequests(t *testing.T) {
 				b["compaction"] = map[string]any{"type": "summarize"}
 			case "context":
 				b["context_management"] = map[string]any{"edits": []any{}}
-			case "plugin-add":
-				e.plat.patches = []*pluginv1.BodyPatch{{Op: pluginv1.BodyPatch_OP_SET, Path: "compaction", ValueJson: `{"type":"summarize"}`}}
 			}
 			res := e.messages(b)
 			e.record()

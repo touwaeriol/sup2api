@@ -24,10 +24,15 @@
 8. relaykit（AGPL）只参考行为，不拷代码；sup2api 保持 LGPL-3.0。
 9. 2026-11-09 用户对第 13 节各项的答复（§13“已定决策”）：严格转换改宽松；优先级优先；所有账号类型都接受转换、没有退出机制；chat 客户端输出 `reasoning_content`；D5–D9 参考 new-api。
 
+> **补充（2026-11-19，CONTRACTS §121）**：另有两对同平台的生图转换 `openai.images → openai.responses`、`openai.images_edit → openai.responses`（good，独立实现，不经 IR，不参与组合），把生图接口的请求转成带 `image_generation` 工具的 Responses 请求、把应答转回生图接口的形状（9.9）。同平台适配（含 chat ↔ Responses）改为只对账号类型在 `adapted` 里显式列出的端点生效（5.1）。
+
+> **修订（2026-11-17，用户要求）**：第 9 条里的“所有账号类型都接受转换、没有退出机制”（D3）不再成立。跨平台协议转换默认关闭，要在账号上为具体的模型开启（账号字段 `model_protocols`）；账号还可以用 `protocols` 关掉本平台协议。没开转换的账号在转换之前就被调度过滤，候选账号全部如此时请求返回 404。转换器、等级、调度顺序、丢失策略（第 1–8 条）都不变；同平台转换（chat ↔ Responses）不算协议转换，默认照常。规则见 CONTRACTS §110、[DESIGN-2026-11-17-PROTOCOL-BINDING.md](DESIGN-2026-11-17-PROTOCOL-BINDING.md)。本文以下各节保留当时的决定，受影响处另加修订说明。
+
 本规格定下的实现方式：
 
 - 响应侧统一用一个内部表示（IR）：每个协议一个 reader（上游 → IR）和一个 writer（IR → 客户端），请求侧逐对实现。两跳只在注册表里做通用组合。
 - 转换器不判断策略：只把每个字段归为“映射 / 有损（带类别）/ 不可能”，策略由网关按账号判断。
+- 转换留在核心（`server/internal/gateway/convert`），在交给插件之前完成：转发 V2 起平台插件的 `Execute` 拿到的是已经转换成上游协议、改写完的完整请求体，响应的转换也由核心在中继时做（CONTRACTS §112.2）。
 - 推理内容跨协议只传文本，签名和加密推理状态不跨协议携带（参考 new-api，§3.2）。
 - 现有两个严格转换（chat/responses → anthropic）重写为宽松转换；`protocol-codec`（含 `strict`）在本期末删除。现状（2026-11-16）：`a853227ff` 已删掉 `protocol-codec/strict` 和 `convert/openai_anthropic.go`，`server/go.mod` 不再引用 `protocol-codec`，`next/` 里也没有别的模块 import 它；模块本身和 `go.work` 里的条目仍保留，因为根目录旧版 `backend/` 经 `replace` import 它的根包和 `modelpolicy`（`backend/internal/pkg/apicompat`、`claude`、`openai`），根目录 `Dockerfile`、`deploy/Dockerfile`、`backend/Dockerfile` 也复制它，`backend-ci.yml` 每次推送都会构建。要删它，得先让旧代码不再依赖它（需要用户决定是否动旧代码）。
 
@@ -241,7 +246,7 @@ type Writer interface {
 - 流：`Event(ev)`：`rs := bs.Event(ev)`，对每个 `r` 依次 `out += as.Event(r)`；`Flush`：`bs.Flush()` 的事件喂给 `as.Event`，再加 `as.Flush()`。中间事件的 `Data` 只在本次调用内使用，不需复制。
 - 前提：每个 writer 产出的事件对同协议的 reader 必须是合法输入（responses writer → responses reader）。黄金测试里每个组合对都有专门样例，并断言“组合结果 = 手动两步结果”。
 
-组合在注册时为每个缺直接转换器的对生成（两端属于同一平台时不组合，如 `gemini.generate` ↔ `gemini.stream_generate`），不注册；`Resolve` 返回它，`Pairs()` 列出。
+组合在注册时为每个缺直接转换器的对生成（两端属于同一平台时不组合，如 `gemini.generate` ↔ `gemini.stream_generate`；生图两对实现 `terminal`，不作第一跳：`image_generation` 工具只有 Responses 有），不注册；`Resolve` 返回它，`Pairs()` 列出。
 
 ## 5. 路由与调度
 
@@ -249,14 +254,16 @@ type Writer interface {
 
 对每个启用的账号类型 b（客户端端点平台 P、协议 X）。所有账号类型都参与转换，没有插件、账号类型或分组层面的退出机制（D3）：
 
+> **修订（2026-11-17）**：选路规则（下面 1–7）不变，每个账号类型仍得到一条路由；路由上多记一个 `cross`（b 不支持 P，即第 2 步的“看 b 其他平台”）。退出机制在账号层：`cross` 的路由只对账号在 `model_protocols` 里开启了协议 X 的模型可用，b 支持 P 的路由（原生、同平台转换）可以被账号的 `protocols`、`model_protocols` 关闭。判断在 `ineligibleReason` 里，早于转换和 §5.2 的挑选（CONTRACTS §110、[DESIGN-2026-11-17-PROTOCOL-BINDING.md](DESIGN-2026-11-17-PROTOCOL-BINDING.md)）。
+
 1. 原生：b 支持 P 且子集含该端点 → grade native（不变）。
-2. 否则收集候选端点 e：b 支持 P 但子集不含该端点时只看 P 上子集内的端点（§83.3 规则不变）；b 不支持 P 时看 b 其他平台子集内的端点。跳过 WebSocket、非 proxy 端点、计数端点。
+2. 否则收集候选端点 e：b 支持 P 但子集不含该端点时，只有 b 在 P 的 `adapted` 里列出该端点（CONTRACTS §83.3、§121.1，2026-11-19 起必须显式声明）才看 P 上子集内的端点，否则不服务；b 不支持 P 时看 b 其他平台子集内的端点。跳过 WebSocket、非 proxy 端点、计数端点。判断在 `core.BestConvertTarget` 一处，账号模块的可服务端点与协议用同一个函数。
 3. 对每个 e：`conv, ok := Resolve(X, e.Protocol)`；要求流式相容：
    - 客户端流式：`e.Response.Stream == "sse"`；
    - 客户端非流式：`e.Request.Stream != true` 且 `e.Response.NonStream == "json"`，或 b 对 `e.Protocol` 声明了 streamOnly（§83.1 照旧）。
    所以 chat 流式请求到 Gemini 选 `gemini.stream_generate`，非流式选 `gemini.generate`；Gemini 流式客户端到 chat 上游带 `stream: true`。
 4. 在候选里取 (grade, 跳数, 声明顺序) 最小者；声明顺序 = b 的 `platforms` 顺序，其次平台的 `endpoints` 顺序。完全确定，等级相同时就是今天的“first match”。
-5. `typeRoute` 新增 `grade Grade`、`hops []string`；`rt.upstream` 仍是最后一跳协议（使用记录 `upstream_protocol`、用量规则、`meta.protocol` 都按它）。
+5. `typeRoute` 新增 `grade Grade`、`hops []string`；`rt.upstream` 仍是最后一跳协议（使用记录 `upstream_protocol`、用量规则、`meta.protocol` 都按它）。转换路由另取：转换器的 `ModelLocator.ModelPath()`（有就代替上游端点的 `modelPath`，§121.4）、`ResponseModelLocator.ResponseModelPaths()`（有就把用量规则读 `model` 的路径换成它，读到的模型覆盖账号映射记为 `upstream_model`，§121.4）、本平台路由上 `adapted` 选项的 `model`（`adaptModel`，交给 `Options.AdaptModel`，§121.3）。
 6. WebSocket、异步任务提交端点的过滤不变（只要原生）。
 7. count_tokens 端点另见 §8。
 
@@ -335,7 +342,8 @@ NULL 表示继承：账号 NULL → 分组；分组 NULL → `allow`。三列都
 - 写入条件：最终路由是转换或本地估算，或有 `rejected`。原生且无事发生时为 NULL。
 - 上限：路径合计 40 条、每条 160 字节，超出计入 `omitted`；`rejected` 最多 5 条。组合时路径前加跳标记 `"1:tools[0]"`（第 2 跳的路径是 Responses 请求里的路径）。
 - `policy` 是最终服务账号的生效策略；本地估算为 `{"v":1,"grade":"local","hops":["anthropic.count_tokens"]}`。
-- 用量与计费：照旧由上游端点的用量规则从**上游**响应读取（`routing.go` `usagerules.For` 按最后一跳），转换后给客户端看的 usage 只是换算展示，不参与计费。
+- 用量与计费：照旧由上游端点的用量规则从**上游**响应读取（`routing.go` `usagerules.For` 按最后一跳），转换后给客户端看的 usage 只是换算展示，不参与计费。生图两对也是：Responses 端点的规则本来就把生图工具的用量加进来（CONTRACTS §118.10、§121.5），只有 `model` 的路径换成转换器 `ResponseModelLocator` 给的（回显的生图模型，§121.4）。
+- 生图转换的记录：`hops` 为 `["openai.images", "openai.responses"]`（edits 为 `openai.images_edit`），`grade` good；应答里 assistant 的文字等非图片输出项记 `response_lost.other`（`response.output[i]`）。
 - `dispatch.go` 原来的 debug 日志 `request conversion dropped fields` 换成带类别的同名日志。
 
 ## 8. count_tokens（参考 new-api，D9）
@@ -404,7 +412,7 @@ NULL 表示继承：账号 NULL → 分组；分组 NULL → `allow`。三列都
 | 引用 | `annotations[url_citation]` | `output_text.annotations` | `text.citations`（web_search_result_location 等，转 url_citation；其他丢 other） | `groundingMetadata` → url_citation（无法定位偏移时只给 url，丢 other） |
 | 工具结果里的图片 | 不支持：图片移到紧随其后的 user 消息，加说明文字，丢 other（位置） | `function_call_output.output` 数组里的 `input_image` | `tool_result.content` 里的 image 块 | `functionResponse.parts[].inlineData`（Gemini 3+；更早模型丢 image）；URL 同样下载 |
 
-**到 Gemini 的媒体下载**（D6，参考 new-api `service/file_service.go` `loadFromURL`）：`gateway/convert_media.go` 实现 `MediaFetcher`：只允许 http(s)，经 `internal/netguard` 的 SSRF 检查直连下载（不走账号代理，`SUB2API_GATEWAY_ALLOW_PRIVATE_UPSTREAM` 同样放行私有地址），单个文件不超过 `media_download_max_mb`（默认 64），单个文件 60 秒超时且受请求 ctx 约束；MIME 取响应 `Content-Type`，不可信时按内容嗅探与扩展名；同一请求内按 URL 缓存（多个类型、多次重试只下载一次）。下载失败、超限或 MIME 不在 Gemini 支持的列表（图片 png/jpeg/webp/heic/heif、`application/pdf`、`text/plain`、audio/*、video/*）→ `RequestError`（该类型不可用；没有其他类型时 400 `unsupported_conversion`，消息带 URL 与原因）。到 Anthropic 的 URL 图片保持 `source{type:url}`（Anthropic 原生支持，不下载）。
+**到 Gemini 的媒体下载**（D6，参考 new-api `service/file_service.go` `loadFromURL`）：`gateway/convert_media.go` 实现 `MediaFetcher`：只允许 http(s)，经 `internal/netguard` 的 SSRF 检查下载：不走账号代理，核心进程环境配了 `HTTP_PROXY` / `HTTPS_PROXY`（`NO_PROXY` 除外）时经该代理，否则直连（规则见 CONTRACTS §88.5）；`SUB2API_GATEWAY_ALLOW_PRIVATE_UPSTREAM` 同样放行私有地址，单个文件不超过 `media_download_max_mb`（默认 64），单个文件 60 秒超时且受请求 ctx 约束；MIME 取响应 `Content-Type`，不可信时按内容嗅探与扩展名；同一请求内按 URL 缓存（多个类型、多次重试只下载一次）。下载失败、超限或 MIME 不在 Gemini 支持的列表（图片 png/jpeg/webp/heic/heif、`application/pdf`、`text/plain`、audio/*、video/*）→ `RequestError`（该类型不可用；没有其他类型时 400 `unsupported_conversion`，消息带 URL 与原因）。到 Anthropic 的 URL 图片保持 `source{type:url}`（Anthropic 原生支持，不下载）。
 
 ### 9.3 工具
 
@@ -492,6 +500,7 @@ NULL 表示继承：账号 NULL → 分组；分组 NULL → `allow`。三列都
 - **chat / responses → gemini（fair）**：assistant → role `model`；连续 tool 结果合并为一条 user 内容的多个 `functionResponse`；所有系统消息进 `systemInstruction`；`response_format.json_object` → `responseMimeType` 无 schema；不加 safetySettings；URL 媒体下载内联（9.2）；model 轮次写 thoughtSignature 旁路值（§3.2）。
 - **gemini → chat / responses（fair）**：`contents[].role` `model` → assistant、`user`/`function` → user；`thought:true` 历史部件与 `thoughtSignature` → 丢 reasoning；`fileData` http(s) 图片 → URL 图片，`files/…` URI → 丢 image（非图片丢 other）；`functionResponse` → tool 消息 / `function_call_output`（`tool_call_id` 按 id，没有 id 按同名调用的出现顺序配对）；`toolConfig` 见 9.3。
 - **anthropic ↔ gemini（discouraged）**：组合，损失为两跳之和；无专门映射。
+- **images / images_edit → responses（good，2026-11-19）**：请求、应答、流式事件与错误的映射表见 CONTRACTS §121.2、§121.7、§121.8。要点：顶层 `model` 是账号类型 `adapted` 选项的驱动模型（`Options.AdaptModel`，没有时转换器报配置错误），客户端模型与其余参数原样进 `tools[0]`（`ModelLocator` 指向 `tools.0.model`），`size`、`quality`、`background` 另写进一句 `instructions`；`n` ≠ 1、`response_format` 不是 `b64_json` 为 `RequestError`；`user`、`safety_identifier`、`style` 丢 other。应答以上游的结果为准：有几张图给几张，没有图时 `data` 为空、流里没有 `completed` 事件，失败的生图项与文字只记应答损失；只有上游自己的 `response.failed`、`error` 事件转成客户端的 `error` 事件。`ResponseModelLocator` 把用量规则读 `model` 的路径换成回显的生图模型（`tools.0.model`），记进 `upstream_model`。
 
 ## 10. 测试
 
@@ -512,6 +521,7 @@ testdata/ir/<upstream protocol>/<case>.{json,sse}.txt   reader 输出的 IR 快�
 ```
 
 - 驱动 `golden_test.go`：遍历目录，跑 `Prepare` / `Response` / `NewStream`（逐事件喂），比对；`-update` 重写 `want.*`（人工审阅后提交）。规范化：32 位以上十六进制 id、`created`/`created_at` 等时间戳。媒体下载用 `case.json` 的 `media` 映射到本地文件的假 `MediaFetcher`，不联网。
+- 生图两对的必备样例是另一张表（`goldenImagesRequired`）：`text_basic`、`no_instructions`、`two_images`、`partial_image`、`no_image`、`image_failed`、`image_and_failed`、`no_usage`、`error_midstream`、`error_event`、`lossy`（只要求 other）、`impossible`；`case.json` 的 `options.adapt_model` 给驱动模型。
 - 每对必备样例（缺一项测试失败，由 `golden_coverage_test.go` 按清单检查）：`text_basic`、`image_input`（到 gemini 的对含 URL 图片下载）、`tools_call`（两个并行调用、参数分 ≥3 个增量）、`tool_roundtrip`（历史里有调用和结果）、`reasoning`（请求推理 + 响应推理文本 + 响应侧签名丢失记录 + 历史推理丢弃）、`finish_length`、`usage_cache`、`error_midstream`、`lossy`（每个类别至少一条）、`impossible`。到 anthropic 的对另有 `max_tokens_default`（含 thinking 时抬高）与 `thinking_tool_loop`；组合对另有 `compose_equals_chain`。
 - 录制工具 `next/server/cmd/convert-record`（Go；放在 server 模块里才能引用 `internal/` 包）：按 `recorded/<protocol>/<case>.request.json` 用测试环境账号（环境变量给 base_url/key）请求真实上游，写 `response.json`/`stream.sse`；脱敏 id、签名换成固定假值。手动运行，不进 CI。`-live <from>~<to>` 模式把转换后的请求发给真实上游，只断言 2xx 与流完整：发布前在测试环境跑一遍（尤其 anthropic 工具循环 + thinking、Gemini 3 functionCall 的旁路签名）。
 - strict 等价：`protocol-codec/strict/*_test.go` 里 strict 接受的输入（推理信封相关的除外）全部移植，新 chat/responses → anthropic 在 `strict` 策略下零损失、`want.request.json` 与 strict 输出语义等价（差异逐条写进样例的 `note`）。
@@ -543,7 +553,7 @@ testdata/ir/<upstream protocol>/<case>.{json,sse}.txt   reader 输出的 IR 快�
 
 ## 12. 风险
 
-1. **端点暴露面扩大（已定，D3）**：几乎每个分组都会服务四家协议的全部文本端点（只有 codex 账号的分组开始回答 `/v1/messages` 和 Gemini 端点，Claude 账号开始回答 Gemini 端点），没有退出机制；费用与上游风控（ccgateway、claude-oauth）都要观察。
+1. **端点暴露面扩大（已定，D3）**：几乎每个分组都会服务四家协议的全部文本端点（只有 codex 账号的分组开始回答 `/v1/messages` 和 Gemini 端点，Claude 账号开始回答 Gemini 端点），没有退出机制；费用与上游风控（当时的 ccgateway 等订阅类上游，后来都已删除）都要观察。**修订（2026-11-17）**：这条风险由协议绑定收回，跨平台转换默认关闭，分组只回答成员账号开放的协议，转换要在账号上按模型开启（CONTRACTS §110、[DESIGN-2026-11-17-PROTOCOL-BINDING.md](DESIGN-2026-11-17-PROTOCOL-BINDING.md)）。升级到带协议绑定的版本后，存量的转换流量在配置之前返回 404。
 2. **同 priority 下的分布变化**：同一优先级内原生账号先被用满，转换账号才接流量；需要转换账号分担时管理员要调优先级或权重（D2）。
 3. **推理与签名**：推理状态不跨协议（§3.2），推理模型跨轮次会丢失上下文、质量下降；Anthropic 工具循环靠关 thinking 兜住；对话从转换路由换到原生账号时，客户端带回的无签名 thinking 可能被原生上游 400，只能靠粘性会话避免（与 new-api 相同）。必须用 `-live` 实测 Gemini 3 旁路签名。
 4. **严格转为宽松（已定，D1）**：原来 400 的 chat → anthropic 请求会以有损方式成功；需要原行为的账号/分组设成 strict。
@@ -553,7 +563,7 @@ testdata/ir/<upstream protocol>/<case>.{json,sse}.txt   reader 输出的 IR 快�
 8. **Gemini schema**：直接用 `parametersJsonSchema`/`responseJsonSchema`，Gemini 1.5/2.0 等旧模型可能不支持（备选：清洗为 OpenAPI 子集 `parameters`，有损 other）。
 9. **性能**：转换提前到挑选阶段，按顺序惰性进行；组合对做两次。大请求（多 MB base64 图片）在多次回退时 CPU 增加。
 10. **缓存与费用（D7）**：OpenAI 客户端走 Anthropic 上游没有提示缓存，输入成本明显上升。
-11. **只有 chat 的 OpenAI 兼容站点**：openai 的 API Key 类型声明全部 openai 端点为原生，responses 请求不会走 responses → chat（设计已知，账号级关协议不在本期）。
+11. **只有 chat 的 OpenAI 兼容站点**：openai 的 API Key 类型声明全部 openai 端点为原生，responses 请求不会走 responses → chat（设计已知，账号级关协议不在本期）。**修订（2026-11-17）**：账号级关协议已实现。这类账号把“本平台协议”设成只开放 `openai.chat`（`protocols: ["openai.chat"]`），responses 请求就不会再调度到它（跳过原因 `protocol_closed`），由组内其他账号服务，都不提供时返回 404；它不会因此改走 responses → chat，要这种转换仍得用子集不含 responses 的账号类型（CONTRACTS §110、[DESIGN-2026-11-17-PROTOCOL-BINDING.md](DESIGN-2026-11-17-PROTOCOL-BINDING.md)）。
 12. **第 2 期并行**：`AccountEditor.vue`、`GroupsView.vue`、`GatewaySettingsCard.vue` 可能与第 2 期冲突，合并时手工合并；迁移号与节号按 0093、§88。
 
 ## 13. 已定决策（用户 2026-11-09）
@@ -562,12 +572,14 @@ testdata/ir/<upstream protocol>/<case>.{json,sse}.txt   reader 输出的 IR 快�
 |---|---|---|---|---|
 | D1 | 现有严格转换（chat/responses → anthropic） | 改为宽松，默认 allow；账号/分组可选 safe、strict | — | §1.2、§9.9 重写；strict 用例移植为等价样例 |
 | D2 | 调度顺序 | priority 优先，等级只在同一 priority 内排序；粘性不变 | — | §5.2 |
-| D3 | 账号类型能否拒绝转换 | 全部自然接受转换，没有任何退出机制（同 new-api） | 渠道按格式自动转换 | §5.1 |
+| D3 | 账号类型能否拒绝转换 | 全部自然接受转换，没有任何退出机制（同 new-api）。**2026-11-17 修订，见表后** | 渠道按格式自动转换 | §5.1 |
 | D4 | chat 客户端的推理输出 | 输出 `reasoning_content` | 同（`relaykit/relayconvert/internal/claude_messages/to_oai_chat_resp.go` 等） | §9.8 chat writer；现有 chat → responses 一并输出 |
 | D5 | 到 Anthropic 的 `max_tokens` 缺省 | 参考 new-api | 全局设置 `claude.default_max_tokens`：模型名 → 值的映射，必须有 `default`，默认 `{"default": 8192}`（`setting/model_setting/claude.go`）；转换时客户端没给就按模型取值（`relaykit/relayconvert/internal/oai_chat/to_claude_messages_req.go` 108–113、`oai_responses/to_claude_messages_req.go` 71）；有推理时至少 1280、手动 thinking 抬到 `budget + 1`（`internal/shared/claude/reasoning.go` 92–115）；原生 Claude 请求也补（`relay/channel/claude/adaptor.go` 50–53） | 网关设置 `claude_max_tokens`（2026-11-14 起：可开关的内置参数覆盖，默认关闭，`default` 不必填，CONTRACTS §84.1）：开启时原生请求也补（同 new-api），转换请求客户端没给时用它的值，关闭时转换器兜底 8192；thinking 时抬高规则同 new-api（§6.1、§9.4） |
-| D6 | 到 Gemini 的 http(s) 图片 URL | 参考 new-api | 转 Gemini 时所有媒体都解析为 base64 `inlineData`（`internal/oai_chat/to_gemini_chat_req.go` 330–345、`internal/oai_responses/to_gemini_chat_req.go` 236、365）；URL 由 `service/file_service.go` `loadFromURL` 下载：SSRF 防护客户端（`service/download.go` 52–68），单文件上限 `MAX_FILE_DOWNLOAD_MB` 默认 64（`common/init.go` 193），失败或 MIME 不受 Gemini 支持时整个请求报错；user 文本里的 markdown data URL 图片拆成 `inlineData`（同文件 280–320） | `gateway/convert_media.go`：netguard SSRF 检查、直连、单文件 `media_download_max_mb`（默认 64）、60 秒超时、同请求缓存；失败/超限/MIME 不支持 → `RequestError`（该类型跳过，没有其他类型则 400）；markdown 内联图片同样拆分；到 Anthropic 的 URL 保持 url 源（§9.2） |
+| D6 | 到 Gemini 的 http(s) 图片 URL | 参考 new-api | 转 Gemini 时所有媒体都解析为 base64 `inlineData`（`internal/oai_chat/to_gemini_chat_req.go` 330–345、`internal/oai_responses/to_gemini_chat_req.go` 236、365）；URL 由 `service/file_service.go` `loadFromURL` 下载：SSRF 防护客户端（`service/download.go` 52–68），单文件上限 `MAX_FILE_DOWNLOAD_MB` 默认 64（`common/init.go` 193），失败或 MIME 不受 Gemini 支持时整个请求报错；user 文本里的 markdown data URL 图片拆成 `inlineData`（同文件 280–320） | `gateway/convert_media.go`：netguard SSRF 检查、直连或环境 HTTP 代理（不走账号代理）、单文件 `media_download_max_mb`（默认 64）、60 秒超时、同请求缓存；失败/超限/MIME 不支持 → `RequestError`（该类型跳过，没有其他类型则 400）；markdown 内联图片同样拆分；到 Anthropic 的 URL 保持 url 源（§9.2） |
 | D7 | 提示缓存参数与标记 | 参考 new-api | 不做 OpenAI `prompt_cache_*` 与 Anthropic `cache_control` 的互转；`prompt_cache_key` chat ↔ responses 原样（`internal/oai_chat/to_oai_responses_req.go` 405、`internal/oai_responses/to_oai_chat_req.go` 81、112），Claude → chat 把消息文本块的 `cache_control` 原样带到 chat 文本部件（`internal/claude_messages/to_oai_chat_req.go` 184–189；system 块只对 OpenRouter 的 Claude 带，133–144）；chat → Claude 不带缓存标记 | 同 new-api：§9.1“缓存”行与说明；sup2api 没有 OpenRouter 方言，system 块的 `cache_control` 一律丢 other |
 | D8 | 推理签名跨协议、换到原生上游 | 参考 new-api | 不做任何信封或清理：OpenAI 推理 → Claude thinking 块不带 signature（`internal/oai_chat/to_claude_messages_resp.go` 342–363、461–466）；Claude signature 不传给 OpenAI 客户端（`internal/claude_messages/to_oai_chat_resp.go` 88–90），`redacted_thinking` 记“continuation_state_lost”诊断（`internal/toolconv/response.go` 214–220）；请求转换不搬运别家推理历史；原生 Claude 渠道不清理请求；对话靠渠道亲和留在同一渠道（`service/channel_affinity.go`）；Gemini 转换的 model 轮次第一个 functionCall（或文本）部件写旁路签名 `context_engineering_is_the_way_to_go`，默认开启（`internal/shared/gemini/request.go` 64–95、`setting/model_setting/gemini.go` 53） | §3.2：推理只传文本；签名与加密推理记响应侧 reasoning 损失；请求侧丢弃别家推理；不生成信封（现有 `sup2api-anthropic-thinking-v1:` 停用）；原生路由不清理，靠粘性；Gemini 旁路签名同值；另加 Anthropic 工具循环关 thinking 规则防 400 |
 | D9 | count_tokens 兜底与响应头 | 参考 new-api；不加任意响应头 | `/v1/messages/count_tokens` 照常选渠道（`router/relay-router.go` 106）；选中非 Anthropic 渠道回 404 不估算，Anthropic 渠道按 `claude_count_tokens_mode` 转发上游 / 转发指定渠道 / 本地估算，不占速率、不记用量、失败不重试（`relay/claude_count_tokens.go` 35–60）；本地估算 `service.CountRequestToken`（`service/token_counter.go` 59–170）：tokenizer 计 system、role、文本、tool_use 名与入参、tool_result 文本、工具定义（`relaykit/dto/claude.go` 288–418），图片按 `tokenkit/image.go` 规则（非流式默认不下载，按 1024×1024），文件 4096、音频 256、视频 8192；响应只有 `{"input_tokens": N}`，无额外头；Gemini `:countTokens` 一律 404（`router/relay-router.go` 222–229） | §8：照常挑账号，选中账号的路由决定转发还是本地估算（原生计数账号不可用时自然落到 local 路由的账号）；估算口径与媒体常数照 new-api；响应只有 `input_tokens` / `totalTokens`，不加响应头；与 new-api 的差别：按已批准的设计对没有计数端点的类型估算而不是 404，保留原生 Gemini 计数，不做按账号的计数模式 |
+
+**D3 的修订（2026-11-17，用户要求“协议转换默认不支持，需要显式开启”）**：跨平台协议转换改为默认关闭、在账号上按模型显式开启；“同 new-api”不再适用（new-api 仍是隐式转换）。同平台转换（chat ↔ Responses）不算协议转换，默认照常，可以在账号上关闭。账号类型、插件、分组层面仍然没有开关。存量账号不回填，升级后依赖转换的请求返回 404，直到在账号上配置。规则见 CONTRACTS §110、[DESIGN-2026-11-17-PROTOCOL-BINDING.md](DESIGN-2026-11-17-PROTOCOL-BINDING.md)；D1、D2、D4–D9 不变。
 
 与现有代码行为不同、发布说明里要写明的：转换“不可能”（`RequestError`）时不再立即 400，而是跳过该类型试其他类型，都不行才 400 且 attempts 为 0；`/account-types` 多出 Gemini/Anthropic/Responses 端点的转换项与等级；chat → anthropic 等原来被拒的请求改为有损成功；codex 的 chat 路径响应多出 `reasoning_content`；responses 客户端经 Anthropic 上游不再收到 `sup2api-anthropic-thinking-v1:` 推理信封。

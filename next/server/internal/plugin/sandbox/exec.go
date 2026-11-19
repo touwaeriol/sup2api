@@ -47,10 +47,9 @@ type execOptions struct {
 	KeepEnv       []string
 	Binary        string
 	Args          []string
-	WorkDir       string // plugin working directory (for Landlock)
-	DataDir       string // plugin data directory (for Landlock)
-	RunDir        string // private run directory: sockets and TMPDIR (for Landlock)
-	Landlock      bool   // restrict the file system view with Landlock (Linux)
+	DataDir       string // data directory of a plugin granted "fs.data" (Landlock grants it)
+	CACerts       bool   // the plugin is granted "net": Landlock lets it read the CA certificates
+	Landlock      bool   // restrict files, sockets and signals with Landlock (Linux)
 }
 
 func parseExecArgs(args []string, stderr io.Writer) (*execOptions, error) {
@@ -65,10 +64,9 @@ func parseExecArgs(args []string, stderr io.Writer) (*execOptions, error) {
 	fs.BoolVar(&o.Seccomp, "seccomp", false, "install the seccomp filter (Linux)")
 	fs.IntVar(&o.Nice, "nice", DefaultNice, "added to the nice value")
 	fs.StringVar(&keep, "keep-env", "", "comma separated SUB2API_* variables passed to the plugin")
-	fs.StringVar(&o.WorkDir, "work-dir", "", "plugin working directory (for Landlock)")
-	fs.StringVar(&o.DataDir, "data-dir", "", "plugin data directory (for Landlock)")
-	fs.StringVar(&o.RunDir, "run-dir", "", "private run directory: go-plugin sockets and TMPDIR (for Landlock)")
-	fs.BoolVar(&o.Landlock, "landlock", false, "restrict file system access with Landlock (Linux 5.13+)")
+	fs.StringVar(&o.DataDir, "data-dir", "", "data directory the plugin may read and write (Landlock)")
+	fs.BoolVar(&o.CACerts, "ca-certs", false, "let the plugin read the CA certificates (Landlock)")
+	fs.BoolVar(&o.Landlock, "landlock", false, "restrict files, sockets and signals with Landlock (Linux 5.13+)")
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}

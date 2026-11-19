@@ -5,10 +5,6 @@
       "version": "0.3.4",
       "digest": "sha256:efe2891f6c99d5f82677d1948921c5da958cca165d59e66f74c280be18956ea5"
     },
-    "claude-oauth": {
-      "version": "0.2.5",
-      "digest": "sha256:2344abfaf1b0dfa0fae754d7a40957850f8b28c6cd1add7c171ea1b39a9ba1fe"
-    },
     "codex": {
       "version": "0.1.11",
       "digest": "sha256:b1201427c407c0de6ca6f0bd6ea415a2ebd022c8b8342648b37c4a1f300286c4"
@@ -20,10 +16,6 @@
     "gemini": {
       "version": "0.3.2",
       "digest": "sha256:98ddcb191e4fbc0301f728ad78923f8293e6efebd4c8286f8868b0009c5f2778"
-    },
-    "growth": {
-      "version": "0.2.1",
-      "digest": "sha256:074915610eb632730ec4612837be510bd57aae1667d215bebe8486994c117106"
     },
     "guard": {
       "version": "0.2.10",

@@ -13,7 +13,8 @@ import (
 // "MOD-500" answers 500.
 //
 //	POST /v1/moderations  {model, input}            -> results[0].category_scores
-//	POST /v1/systemone    {model, state, questions} -> answers[q] = {type:"noul", noul}
+//	POST /v1/systemone    {model, state, questions} -> answers[q] = {type:"noul", noul};
+//	                      usage.input_tokens is the behaviour's input (rules apply), output 0
 
 var modHitToken = regexp.MustCompile(`MOD-HIT-([a-z0-9/_-]+)`)
 
@@ -64,7 +65,10 @@ func (s *server) systemOne(w http.ResponseWriter, r *http.Request) {
 		Questions map[string]json.RawMessage `json:"questions"`
 	}
 	_ = json.Unmarshal(body, &req)
-	id := s.record(r, body, req.Model, false, "")
+	id, b, ok := s.begin(w, r, body, req.Model, false, nil, formatOpenAI)
+	if !ok {
+		return
+	}
 	if strings.Contains(string(body), "MOD-500") {
 		s.setStatus(id, 500)
 		writeJSON(w, 500, map[string]any{"error": "mock: systemone failure"})
@@ -76,5 +80,6 @@ func (s *server) systemOne(w http.ResponseWriter, r *http.Request) {
 		answers[q] = map[string]any{"type": "noul", "noul": score(q)}
 	}
 	s.setStatus(id, 200)
-	writeJSON(w, 200, map[string]any{"model": req.Model, "answers": answers, "usage": map[string]int{"input_tokens": len(body) / 4}})
+	// TypeSafe bills the input only: output_tokens is always 0.
+	writeJSON(w, 200, map[string]any{"model": req.Model, "answers": answers, "usage": map[string]int64{"input_tokens": b.usage.InputTokens, "output_tokens": 0}})
 }

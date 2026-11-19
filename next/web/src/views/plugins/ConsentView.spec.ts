@@ -301,6 +301,19 @@ describe('plugin consent page', () => {
     expect(toastState.items.map((x) => x.message)).toContain(i18n.global.t('plugins.matrix.criticalOnly'))
   })
 
+  it('shows the fixed statement that the plugin receives every request in full, without a checkbox', async () => {
+    const statement = { en: 'receives every request', zh: '收到每个请求的完整内容' }
+    const w = render(review({ request_access: statement }))
+    await flushPromises()
+    const alert = w.get('[data-testid="consent-request-access"]')
+    expect(alert.text()).toContain(statement.zh)
+    expect(alert.text()).toContain(i18n.global.t('plugins.consent.requestAccessTitle'))
+    expect(alert.find('input').exists()).toBe(false)
+    const none = render(review())
+    await flushPromises()
+    expect(none.find('[data-testid="consent-request-access"]').exists()).toBe(false)
+  })
+
   it('tells beforehand when db.schema needs the unconfined override the caller lacks', async () => {
     mocks.lacks = new Set(['plugin:grant:db_schema_unconfined'])
     const hp = [{ id: 'db.schema', risk: 'critical' }] as never
@@ -453,7 +466,7 @@ describe('plugin consent page', () => {
 
   it('says the package is gone rather than offering the kept review (410 package_gone)', async () => {
     putReview(review())
-    mocks.get.mockRejectedValue({ status: 410, code: 'package_gone', message: 'the package of this version is no longer available; upload it again', details: {} })
+    mocks.get.mockRejectedValue({ status: 410, code: 'package_gone', message: 'no reachable node holds the package of this version; bring a node that holds it back online, or upload it again', details: {} })
     for (const locale of ['zh', 'en'] as const) {
       i18n.global.locale.value = locale
       const w = mountView()

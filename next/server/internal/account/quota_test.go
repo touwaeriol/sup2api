@@ -536,3 +536,29 @@ func TestAccountResetStatusOwnership(t *testing.T) {
 		t.Fatalf("owner reset: %d %v", code, out)
 	}
 }
+
+// With the account's proxy disabled the quota query asks the plugin nothing
+// and sends nothing; the failure is recorded as transient (CONTRACTS §124).
+func TestQuotaQueryWithoutEgress(t *testing.T) {
+	e := setup(t)
+	up := newQuotaUpstream(t)
+	e.plat.quotaURL = up.srv.URL + "/quota"
+	e.withQuota(&manifest.AccountQuota{Query: true, AutoRefresh: true, Headers: []manifest.QuotaHeader{{Key: "5h", Status: "x-status"}}})
+	id := e.mkRawAccount("anthropic", "apikey", "sub", "sk-good-key-123", true)
+	host, port, hits := forwardProxy(t)
+	pid := e.exec1(`INSERT INTO proxies (name, protocol, host, port, status) VALUES ('off', 'http', $1, $2, 'disabled') RETURNING id`, host, port)
+	if _, err := e.db.SQL.ExecContext(t.Context(), `UPDATE accounts SET proxy_id = $1 WHERE id = $2`, pid, id); err != nil {
+		t.Fatal(err)
+	}
+	code, out := e.do("GET", fmt.Sprintf("/accounts/%d/quota?force=true", id), nil)
+	d, _ := out["data"].(map[string]any)
+	if code != 200 || d["error"] != "transient: proxy disabled" {
+		t.Fatalf("quota without an egress: %d %v", code, out)
+	}
+	e.plat.mu.Lock()
+	builds := e.plat.quotaCalls
+	e.plat.mu.Unlock()
+	if builds != 0 || e.plat.called("ParseQuotaResponse") != 0 || up.calls.Load() != 0 || hits.Load() != 0 {
+		t.Fatalf("plugin or upstream reached: builds %d, parses %d, upstream %d, proxy %d", builds, e.plat.called("ParseQuotaResponse"), up.calls.Load(), hits.Load())
+	}
+}

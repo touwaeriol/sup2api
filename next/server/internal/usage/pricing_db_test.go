@@ -294,7 +294,7 @@ func TestReconcileUsesFrozenPriceRule(t *testing.T) {
 	require.Equal(t, "reserved 0.00450000 0.00900000 1.0000", rf.moneyColumns("res-scale"))
 
 	*rule.Scale = dec("9")
-	rf.plugin.parse = func(*pluginv1.ParseReconcileResponseRequest) (*pluginv1.ReconcileResult, error) {
+	rf.plugin.parse = func(*monitorCall) (*pluginv1.ReconcileResult, error) {
 		return &pluginv1.ReconcileResult{State: pluginv1.ReconcileResult_SETTLED,
 			Tokens: &pluginv1.UsageTokens{InputTokens: 4000, OutputTokens: 400}}, nil
 	}
@@ -319,7 +319,7 @@ func TestReconcileNeedsHistoryOfCustomPrice(t *testing.T) {
 	require.Equal(t, estimate, rf.moneyColumns("res-custom"))
 
 	rf.loseHistory()
-	rf.plugin.parse = func(*pluginv1.ParseReconcileResponseRequest) (*pluginv1.ReconcileResult, error) {
+	rf.plugin.parse = func(*monitorCall) (*pluginv1.ReconcileResult, error) {
 		return &pluginv1.ReconcileResult{State: pluginv1.ReconcileResult_SETTLED,
 			Tokens: &pluginv1.UsageTokens{InputTokens: 4000, OutputTokens: 400}}, nil
 	}
@@ -342,7 +342,7 @@ func TestRefundedRowsHaveNoBaseCost(t *testing.T) {
 	require.Equal(t, "reserved 0.02700000 0.02700000 1.0000", rf.moneyColumns("res-failed"))
 	require.Equal(t, "reserved 0.01800000 0.01800000 1.0000", rf.moneyColumns("res-refunded"))
 
-	rf.plugin.parse = func(in *pluginv1.ParseReconcileResponseRequest) (*pluginv1.ReconcileResult, error) {
+	rf.plugin.parse = func(in *monitorCall) (*pluginv1.ReconcileResult, error) {
 		if in.GetEntry().GetRefId() == "task-failed" {
 			return &pluginv1.ReconcileResult{State: pluginv1.ReconcileResult_FAILED, Reason: "content_filtered"}, nil
 		}

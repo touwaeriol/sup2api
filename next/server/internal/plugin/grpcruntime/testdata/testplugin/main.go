@@ -2,8 +2,20 @@
 // to the host with the protocol package and generated services only.
 //
 // Behaviour switches:
+//   - Execute with a body that is not a script exercises HostService (a KV
+//     counter, a log line) and relays without waiting; a body
+//     {"script":[...],"return":...} runs the steps of script.go, and so does
+//     Monitor with the script in entry.ref_id.
+//   - HTTP POST /replay repeats ExecuteHTTP with the execution token of the
+//     last Execute call, which has returned.
+//   - Built with -ldflags "-X main.handshakeProtocol=1" the binary answers
+//     the go-plugin handshake with that protocol version, with
+//     "-X main.infoProtocol=1" it reports it in GetInfo.
 //   - ValidateCredentials with credentials_json containing "crash" exits.
 //   - BuildTestRequest with model "sleep:<ms>" sleeps before answering.
+//   - BuildBalanceRequest builds a keyed GET of /balance and a public GET of
+//     /status, or answers Unimplemented for account type "none";
+//     ParseBalanceResponse echoes what it got (see ParseBalanceResponse).
 //   - Configure rejects {"reject": true}.
 //   - HTTP POST /publish publishes the body as broadcast topic "t.ping";
 //     OnBroadcast stores "<topic>:<payload>:<source node>" in KV t/broadcast.
@@ -17,6 +29,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -46,6 +59,18 @@ type server struct {
 	host   pluginv1.HostServiceClient
 	config map[string]any
 	grants []string
+	token  string // execution token of the last Execute call
+}
+
+// Set at build time to stand for a binary of another plugin protocol.
+var handshakeProtocol, infoProtocol string
+
+// protocolOr is the protocol version override, or the current version.
+func protocolOr(override string) uint {
+	if n, err := strconv.Atoi(override); err == nil {
+		return uint(n)
+	}
+	return protocol.ProtocolVersion
 }
 
 func (s *server) hostClient() pluginv1.HostServiceClient {
@@ -59,7 +84,7 @@ func (s *server) GetInfo(context.Context, *pluginv1.GetInfoRequest) (*pluginv1.G
 		PluginKey:       os.Getenv(protocol.EnvPluginKey),
 		Version:         os.Getenv(protocol.EnvPluginVersion),
 		SdkVersion:      "test",
-		ProtocolVersion: protocol.ProtocolVersion,
+		ProtocolVersion: int32(protocolOr(infoProtocol)),
 		Capabilities:    []string{"platform.adapter.v1", "http.routes.v1", "gateway.hook.v1", "migration.data.v1", "app.broadcast.v1"},
 	}, nil
 }
@@ -91,6 +116,10 @@ func (s *server) Configure(_ context.Context, in *pluginv1.ConfigureRequest) (*p
 	return &pluginv1.ConfigureResponse{}, nil
 }
 
+func (s *server) SettingsChanged(context.Context, *pluginv1.SettingsChangedRequest) (*pluginv1.SettingsChangedResponse, error) {
+	return &pluginv1.SettingsChangedResponse{}, nil
+}
+
 func (s *server) Health(context.Context, *pluginv1.HealthRequest) (*pluginv1.HealthResponse, error) {
 	return &pluginv1.HealthResponse{Healthy: true}, nil
 }
@@ -106,9 +135,16 @@ func (s *server) ValidateCredentials(_ context.Context, in *pluginv1.ValidateCre
 	return &pluginv1.ValidateCredentialsResponse{}, nil
 }
 
-// BuildUpstreamRequest exercises HostService: it increments a KV counter and
-// echoes the configured greeting.
-func (s *server) BuildUpstreamRequest(ctx context.Context, in *pluginv1.BuildUpstreamRequestRequest) (*pluginv1.BuildUpstreamRequestResponse, error) {
+// Execute runs the script in the body, or by default exercises HostService:
+// it increments a KV counter and relays, without waiting, a request whose
+// headers echo the counter, the configured greeting and the pid.
+func (s *server) Execute(ctx context.Context, in *pluginv1.ExecuteRequest) (*pluginv1.ExecuteResponse, error) {
+	s.mu.Lock()
+	s.token = in.GetExecutionToken()
+	s.mu.Unlock()
+	if sc, ok := parseScript(in.GetBody()); ok {
+		return s.runExecute(ctx, in, sc)
+	}
 	h := s.hostClient()
 	n := 0
 	got, err := h.KVGet(ctx, &pluginv1.KVGetRequest{Namespace: "t", Key: "calls"})
@@ -126,11 +162,16 @@ func (s *server) BuildUpstreamRequest(ctx context.Context, in *pluginv1.BuildUps
 	s.mu.Lock()
 	greeting := fmt.Sprint(s.config["greeting"])
 	s.mu.Unlock()
-	return &pluginv1.BuildUpstreamRequestResponse{
+	_, err = h.RelayUpstream(ctx, &pluginv1.RelayUpstreamRequest{ExecutionToken: in.GetExecutionToken(), Request: &pluginv1.UpstreamRequest{
 		Method:  "POST",
 		Url:     "https://upstream.example.com/v1/messages",
 		Headers: map[string]string{"x-calls": strconv.Itoa(n), "x-greeting": greeting, "x-pid": strconv.Itoa(os.Getpid())},
-	}, nil
+		Body:    in.GetBody(),
+	}})
+	if err != nil {
+		return nil, err
+	}
+	return &pluginv1.ExecuteResponse{Report: &pluginv1.ExecuteResponse_HostUsage{HostUsage: &pluginv1.HostUsage{}}}, nil
 }
 
 func (s *server) ClassifyError(context.Context, *pluginv1.ClassifyErrorRequest) (*pluginv1.ClassifyErrorResponse, error) {
@@ -151,6 +192,31 @@ func (s *server) BuildTestRequest(ctx context.Context, in *pluginv1.BuildTestReq
 		}
 	}
 	return &pluginv1.BuildTestRequestResponse{Method: "POST", Url: "https://upstream.example.com/test", BodyJson: "{}"}, nil
+}
+
+func (s *server) BuildBalanceRequest(_ context.Context, in *pluginv1.BuildBalanceRequestRequest) (*pluginv1.BuildBalanceRequestResponse, error) {
+	if in.GetAccount().GetType() == "none" {
+		return nil, status.Error(codes.Unimplemented, "test plugin reads no balance")
+	}
+	return &pluginv1.BuildBalanceRequestResponse{Requests: []*pluginv1.BalanceRequest{
+		{Url: "https://upstream.example.com/balance", Headers: map[string]string{"authorization": "Bearer " + in.GetAccount().GetCredentialsJson()}},
+		{Method: "POST", Url: "https://upstream.example.com/status", BodyJson: "{}"},
+	}}, nil
+}
+
+// ParseBalanceResponse reads the answers: amount_micros is the first
+// status times 1000 plus the second, currency the first's x-currency header,
+// unlimited a second body "unlimited", and the error message the second's
+// transport error.
+func (s *server) ParseBalanceResponse(_ context.Context, in *pluginv1.ParseBalanceResponseRequest) (*pluginv1.ParseBalanceResponseResponse, error) {
+	a := in.GetAnswers()
+	if len(a) != 2 {
+		return nil, status.Errorf(codes.InvalidArgument, "%d answers", len(a))
+	}
+	return &pluginv1.ParseBalanceResponseResponse{Result: &pluginv1.BalanceResult{
+		AmountMicros: int64(a[0].GetStatus())*1000 + int64(a[1].GetStatus()), Currency: a[0].GetHeaders()["x-currency"],
+		Unlimited: string(a[1].GetBody()) == "unlimited", ErrorMessage: a[1].GetTransportError(),
+	}}, nil
 }
 
 func (s *server) OnGatewayRequest(_ context.Context, in *pluginv1.GatewayRequestHookRequest) (*pluginv1.GatewayRequestHookResponse, error) {
@@ -183,7 +249,7 @@ func (s *server) HandleHTTP(ctx context.Context, in *pluginv1.HTTPRequest) (*plu
 		if err != nil {
 			return nil, err
 		}
-		out["dsn"], out["schema"], out["role_isolated"] = r.GetDsn(), r.GetSchema(), r.GetRoleIsolated()
+		out["dsn"], out["schema"] = r.GetDsn(), r.GetSchema()
 	}
 	if in.GetPath() == "/publish" {
 		if _, err := s.hostClient().Publish(ctx, &pluginv1.PublishRequest{Topic: "t.ping", Payload: in.GetBody()}); err != nil {
@@ -197,6 +263,13 @@ func (s *server) HandleHTTP(ctx context.Context, in *pluginv1.HTTPRequest) (*plu
 			return nil, err
 		}
 		out["ledger_id"], out["balance_after"], out["duplicate"] = r.GetLedgerId(), r.GetBalanceAfter(), r.GetDuplicate()
+	}
+	if in.GetPath() == "/replay" {
+		s.mu.Lock()
+		token := s.token
+		s.mu.Unlock()
+		_, err := s.hostClient().ExecuteHTTP(ctx, &pluginv1.ExecutionHTTPRequest{ExecutionToken: token, Url: string(in.GetBody())})
+		out["code"] = status.Code(err).String()
 	}
 	if in.GetPath() == "/lock" {
 		lockCall(ctx, s.hostClient(), in.GetBody(), out)
@@ -319,8 +392,10 @@ func kvBatchCall(ctx context.Context, h pluginv1.HostServiceClient, body []byte,
 
 func main() {
 	s := &server{}
+	handshake := protocol.Handshake
+	handshake.ProtocolVersion = protocolOr(handshakeProtocol)
 	plugin.Serve(&plugin.ServeConfig{
-		HandshakeConfig: protocol.Handshake,
+		HandshakeConfig: handshake,
 		Plugins: protocol.PluginMap(&protocol.GRPCPlugin{Register: func(g *grpc.Server, broker *plugin.GRPCBroker) error {
 			s.broker = broker
 			pluginv1.RegisterPluginServiceServer(g, s)
@@ -331,6 +406,10 @@ func main() {
 			pluginv1.RegisterAppServiceServer(g, s)
 			return nil
 		}}),
-		GRPCServer: plugin.DefaultGRPCServer,
+		// A platform plugin receives whole request bodies: no receive limit
+		// below the transport's (the SDK does the same).
+		GRPCServer: func(opts []grpc.ServerOption) *grpc.Server {
+			return grpc.NewServer(append(opts, grpc.MaxRecvMsgSize(math.MaxInt32))...)
+		},
 	})
 }

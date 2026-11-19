@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -39,12 +40,19 @@ func init() { gin.SetMode(gin.TestMode) }
 // ---------------------------------------------------------------- test manifest
 
 // testManifestJSON is the anthropic plugin: it declares the "apikey" account
-// type serving the built-in anthropic platform.
+// type serving the built-in anthropic platform. Its relays go to the test
+// servers (testUpstreamHost).
 const testManifestJSON = `{
   "apiVersion": 1, "key": "anthropic", "version": "0.1.0", "publisher": "sub2api", "runtime": "grpc",
-  "accountTypes": [ { "id": "apikey", "label": { "en": "API key" }, "form": { "mode": "schema" },
+  "externalServices": ["127.0.0.1"],
+  "accountTypes": [ { "id": "apikey", "label": { "en": "API key" }, "form": { "mode": "native", "component": "KeyForm" },
     "platforms": [ { "platform": "anthropic" } ] } ]
 }`
+
+// testUpstreamHost is the host of every httptest server: the test plugins
+// declare it in externalServices, so the core may relay to them
+// (manifest.UpstreamHostAllowed).
+const testUpstreamHost = "127.0.0.1"
 
 func testManifest(t testing.TB) *manifest.Manifest {
 	t.Helper()
@@ -242,13 +250,15 @@ type fakePlatform struct {
 	taskSubmission func(context.Context, *pluginv1.ExtractUsageRequest) (*pluginv1.TaskSubmission, error)
 	mu             sync.Mutex
 	base           string
-	buildHook      func(ctx context.Context, in *pluginv1.BuildUpstreamRequestRequest) error
-	patches        []*pluginv1.BodyPatch
-	builds         []*pluginv1.BuildUpstreamRequestRequest
-	classify       []*pluginv1.ClassifyErrorRequest
-	urlFor         func(acct *pluginv1.Account) string
+	buildHook      func(ctx context.Context, in *pluginv1.ExecuteRequest) error
+	// patches are applied to the body the plugin is handed, as a plugin
+	// rewriting its request would.
+	patches  []*pluginv1.BodyPatch
+	builds   []*pluginv1.ExecuteRequest
+	classify []*pluginv1.ClassifyErrorRequest
+	urlFor   func(acct *pluginv1.Account) string
 	// route overrides the upstream URL from the whole request.
-	route func(in *pluginv1.BuildUpstreamRequestRequest) string
+	route func(in *pluginv1.ExecuteRequest) string
 	// resolve answers ResolveModel; nil = UNIMPLEMENTED, like a plugin that
 	// never wrote the optional method. resolves counts every call, so a test
 	// can prove an endpoint without request.modelSource never triggers one.
@@ -305,17 +315,6 @@ func (p *fakePlatform) extractCount() int {
 	return len(p.extracts)
 }
 
-// The reconcile half of PlatformService is never reached from the gateway:
-// the loop that calls it lives in the usage module. Answering UNIMPLEMENTED
-// is what a plugin with no asynchronous work does.
-func (p *fakePlatform) BuildReconcileRequest(context.Context, *pluginv1.BuildReconcileRequestRequest) (*pluginv1.BuildReconcileRequestResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "no")
-}
-
-func (p *fakePlatform) ParseReconcileResponse(context.Context, *pluginv1.ParseReconcileResponseRequest) (*pluginv1.ReconcileResult, error) {
-	return nil, status.Error(codes.Unimplemented, "no")
-}
-
 // lastExtract returns the request of the last ExtractUsage call.
 func (p *fakePlatform) lastExtract() *pluginv1.ExtractUsageRequest {
 	p.mu.Lock()
@@ -330,7 +329,15 @@ func (p *fakePlatform) ValidateCredentials(context.Context, *pluginv1.ValidateCr
 	return &pluginv1.ValidateCredentialsResponse{}, nil
 }
 
-func (p *fakePlatform) BuildUpstreamRequest(ctx context.Context, in *pluginv1.BuildUpstreamRequestRequest) (*pluginv1.BuildUpstreamRequestResponse, error) {
+// Execute serves an attempt as the SDK's ExecuteDefault does (fakeExecute).
+func (p *fakePlatform) Execute(ctx context.Context, in *pluginv1.ExecuteRequest, client core.ExecutionClient) (core.ExecutionResult, error) {
+	return fakeExecute(ctx, p, in, client)
+}
+
+// buildUpstream is the plugin's request: POST to the mock upstream with the
+// account's key and the client headers it was handed, all authoritative,
+// and the body it was handed with p.patches applied.
+func (p *fakePlatform) buildUpstream(ctx context.Context, in *pluginv1.ExecuteRequest) (*pluginv1.UpstreamRequest, error) {
 	p.mu.Lock()
 	p.builds = append(p.builds, in)
 	hook, base, urlFor, patches, route := p.buildHook, p.base, p.urlFor, p.patches, p.route
@@ -355,7 +362,11 @@ func (p *fakePlatform) BuildUpstreamRequest(ctx context.Context, in *pluginv1.Bu
 	for k, v := range in.GetInboundHeaders() {
 		h[k] = v
 	}
-	return &pluginv1.BuildUpstreamRequestResponse{Method: "POST", Url: u, Headers: h, Patches: patches}, nil
+	body, err := applyPatches(in.GetBody(), patches)
+	if err != nil {
+		return nil, err
+	}
+	return &pluginv1.UpstreamRequest{Method: "POST", Url: u, Headers: h, Body: body}, nil
 }
 
 // ClassifyError mimics the anthropic plugin: 429/5xx cool down and fail
@@ -460,7 +471,6 @@ func (a *fakeAuth) Authenticate(_ context.Context, raw string) (*core.APIKeyPrin
 type fakePricer struct {
 	mu      sync.Mutex
 	rules   map[string]*core.PriceRule // model -> rule; missing = not configured
-	free    bool
 	params  []string
 	headers []string
 	calls   int
@@ -474,9 +484,6 @@ func (p *fakePricer) Resolve(_ context.Context, q core.PriceQuery) (*core.PriceR
 	p.queries = append(p.queries, q)
 	if r, ok := p.rules[q.Model]; ok {
 		return r, nil
-	}
-	if p.free {
-		return nil, nil
 	}
 	return nil, core.ErrPriceNotConfigured
 }
@@ -495,6 +502,14 @@ func (p *fakePlatform) ParseQuotaResponse(context.Context, *pluginv1.ParseQuotaR
 	return nil, status.Error(codes.Unimplemented, "no")
 }
 
+func (p *fakePlatform) BuildBalanceRequest(context.Context, *pluginv1.BuildBalanceRequestRequest) (*pluginv1.BuildBalanceRequestResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "no")
+}
+
+func (p *fakePlatform) ParseBalanceResponse(context.Context, *pluginv1.ParseBalanceResponseRequest) (*pluginv1.ParseBalanceResponseResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "no")
+}
+
 type fakeBalance struct {
 	broke map[int64]bool
 	// disconnect is the client_disconnect_policy. Zero is "precharge", not
@@ -503,6 +518,8 @@ type fakeBalance struct {
 	disconnect string
 	// outputReserve is output_reserve_tokens; zero reserves nothing.
 	outputReserve int64
+	// precharged are the prices of the pre-charges made, in order.
+	precharged []*core.PriceRule
 }
 
 func (b *fakeBalance) OutputReserveTokens(context.Context) (int64, error) {
@@ -518,6 +535,7 @@ func (b *fakeBalance) ClientDisconnectPolicy(context.Context) (string, error) {
 
 func (b *fakeBalance) PreConsumeTokens(context.Context) (int64, error) { return 500, nil }
 func (b *fakeBalance) Precharge(ctx context.Context, r *core.UsageRecord) error {
+	b.precharged = append(b.precharged, r.Price)
 	return b.CheckBalance(ctx, r.UserID)
 }
 
@@ -541,6 +559,8 @@ type fakeAccounts struct {
 	lastTypes     []core.AccountTypeKey
 	// releases holds the release time of temporary disables (CONTRACTS §69).
 	releases map[int64]time.Time
+	// proxies hands out the clients of Egress (fakeProxies when nil).
+	proxies core.ProxyDirectory
 }
 
 func newFakeAccounts() *fakeAccounts {
@@ -562,6 +582,39 @@ func (a *fakeAccounts) addTyped(group int64, id int64, priority int, key, plugin
 		Status: "active", Credentials: json.RawMessage(fmt.Sprintf(`{"api_key":%q}`, key)), Settings: json.RawMessage(`{}`),
 	}
 	a.groups[group] = append(a.groups[group], id)
+}
+
+// bind sets the protocol binding of account id as its console fields do:
+// protocols (nil = every protocol of its type's own platforms) and the
+// model_protocols rules (core.ProtocolRules).
+func (a *fakeAccounts) bind(id int64, protocols []string, rules ...core.ModelProtocolRule) {
+	compiled := core.NewProtocolRules(protocols, rules)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.accounts[id].ProtocolRules = compiled
+}
+
+// protocolRule is a model_protocols entry: models are served on protocols
+// only.
+func protocolRule(protocols []string, models ...string) core.ModelProtocolRule {
+	return core.ModelProtocolRule{Models: models, Protocols: protocols}
+}
+
+// serveOn has account id serve every model on protocols and no other: what
+// an operator sets on an account to have it take the requests of a platform
+// its type does not declare, which are converted for no account by default.
+func (a *fakeAccounts) serveOn(id int64, protocols ...string) {
+	a.bind(id, nil, protocolRule(protocols, core.OtherModels))
+}
+
+// openAIClients is the newEnv option of the tests about an OpenAI client on
+// the fixture's Anthropic accounts: the real converters, and the accounts
+// serving the OpenAI protocols next to their own.
+func openAIClients(e *env) {
+	e.conv = convert.Default()
+	for _, id := range []int64{1, 2, 3} {
+		e.accounts.serveOn(id, "anthropic.messages", "openai.chat", "openai.responses")
+	}
 }
 
 func (a *fakeAccounts) GroupHasType(_ context.Context, group int64, types []core.AccountTypeKey) (bool, error) {
@@ -596,22 +649,32 @@ func (a *fakeAccounts) Candidates(_ context.Context, group int64, types []core.A
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.lastTypes = append([]core.AccountTypeKey(nil), types...)
+	return a.members(group, types, false), nil
+}
+
+// Resting is the accounts of types Candidates leaves out while they cool
+// down.
+func (a *fakeAccounts) Resting(_ context.Context, group int64, types []core.AccountTypeKey) ([]core.AccountRef, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.members(group, types, true), nil
+}
+
+// members is the enabled accounts of the group, of types, that are cooling
+// down or not, highest priority first. Callers hold a.mu.
+func (a *fakeAccounts) members(group int64, types []core.AccountTypeKey, cooling bool) []core.AccountRef {
 	var out []core.AccountRef
 	for _, id := range a.groups[group] {
 		acc := a.accounts[id]
-		if _, dis := a.disabled[id]; dis || time.Now().Before(a.cooldown[id]) {
+		if _, dis := a.disabled[id]; dis || time.Now().Before(a.cooldown[id]) != cooling {
 			continue
 		}
-		ok := false
-		for _, k := range types {
-			ok = ok || (k.PluginKey == acc.PluginKey && k.Type == acc.Type)
-		}
-		if ok {
+		if slices.Contains(types, core.AccountTypeKey{PluginKey: acc.PluginKey, Type: acc.Type}) {
 			out = append(out, acc.AccountRef)
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Priority > out[j].Priority })
-	return out, nil
+	return out
 }
 
 func (a *fakeAccounts) Load(_ context.Context, id int64) (*core.Account, error) {
@@ -623,6 +686,22 @@ func (a *fakeAccounts) Load(_ context.Context, id int64) (*core.Account, error) 
 	}
 	cp := *acc
 	return &cp, nil
+}
+
+// Egress is the client of the account's proxy as the fake holds it now.
+func (a *fakeAccounts) Egress(ctx context.Context, id int64) (core.Egress, error) {
+	acc, err := a.Load(ctx, id)
+	if err != nil {
+		return core.Egress{}, err
+	}
+	a.mu.Lock()
+	p := a.proxies
+	a.mu.Unlock()
+	if p == nil {
+		p = fakeProxies{}
+	}
+	pc, err := p.HTTPClient(ctx, acc.ProxyID)
+	return core.Egress{Client: pc.Client, Proxied: acc.ProxyID != nil, Proxy: pc.Proxy}, err
 }
 
 func (a *fakeAccounts) IsCoolingDown(_ context.Context, id int64) (bool, error) {
@@ -714,19 +793,167 @@ func (s *fakeSlots) InUseMany(_ context.Context, kind string, ids []int64) (map[
 
 type fakeProxies struct{}
 
-func (fakeProxies) HTTPClient(context.Context, *int64) (*http.Client, error) {
-	return &http.Client{Transport: http.DefaultTransport.(*http.Transport).Clone()}, nil
+// HTTPClient hands out a direct client; proxy id goes out as fakeProxy(id).
+func (fakeProxies) HTTPClient(_ context.Context, id *int64) (core.ProxyClient, error) {
+	pc := core.ProxyClient{Client: &http.Client{Transport: http.DefaultTransport.(*http.Transport).Clone()}}
+	if id != nil {
+		ref := fakeProxy(*id)
+		pc.Proxy = &ref
+	}
+	return pc, nil
+}
+
+// fakeProxy is the proxy fakeProxies reports for id.
+func fakeProxy(id int64) core.ProxyRef {
+	return core.ProxyRef{ID: id, ProxySpec: core.ProxySpec{Protocol: "socks5", Host: "proxy" + itoa(id) + ".test", Port: 1080, Username: "u" + itoa(id), Password: "pw" + itoa(id)}}
 }
 
 func (fakeProxies) HTTPClientFor(context.Context, core.ProxySpec) (*http.Client, error) {
 	return &http.Client{Transport: http.DefaultTransport.(*http.Transport).Clone()}, nil
 }
 
+// fakeSettler takes the usage records the gateway submits and keeps the
+// execution records of a relay that waits (core.ExecutionRecords) as the
+// usage module does: a committed execution's record, and the free record of
+// one closed unreported, land on ch like a submitted one.
 type fakeSettler struct {
 	ch chan *core.UsageRecord
+
+	mu         sync.Mutex
+	executions map[string]*fakeExecution
+	// commitErr, when set, answers CommitExecution before anything is
+	// stored (an outage); nil lets it through. observeErr fails every
+	// ObserveExecution.
+	commitErr  func(core.ExecutionCommit) error
+	observeErr error
+	// commitAckLost, when set, answers a CommitExecution that was stored
+	// (the commit landed, its answer did not).
+	commitAckLost func(core.ExecutionCommit) error
+	// renewals counts the RenewExecution calls; renewed is called on each.
+	renewals atomic.Int64
+	renewed  func(id string)
+}
+
+// fakeExecution is one plugin_executions row.
+type fakeExecution struct {
+	intent  core.ExecutionIntent
+	state   string
+	reading *core.UsageRecord
+	commit  core.ExecutionCommit
+	reason  string
 }
 
 func (s *fakeSettler) Submit(rec *core.UsageRecord) { s.ch <- rec }
+
+func (s *fakeSettler) BeginExecution(_ context.Context, in core.ExecutionIntent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.executions == nil {
+		s.executions = map[string]*fakeExecution{}
+	}
+	if _, dup := s.executions[in.ID]; dup {
+		return errors.New("execution exists")
+	}
+	s.executions[in.ID] = &fakeExecution{intent: in, state: core.ExecutionStateIntent}
+	return nil
+}
+
+func (s *fakeSettler) ObserveExecution(_ context.Context, id string, rec *core.UsageRecord, _ []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	x := s.executions[id]
+	if s.observeErr != nil {
+		return s.observeErr
+	}
+	if x == nil || x.state != core.ExecutionStateIntent {
+		return errors.New("execution not in intent")
+	}
+	x.state, x.reading = core.ExecutionStateObserved, rec
+	return nil
+}
+
+func (s *fakeSettler) RenewExecution(_ context.Context, id string) error {
+	s.renewals.Add(1)
+	s.mu.Lock()
+	x, hook := s.executions[id], s.renewed
+	alive := x != nil && x.state == core.ExecutionStateObserved
+	s.mu.Unlock()
+	if hook != nil {
+		hook(id)
+	}
+	if !alive {
+		return core.ErrExecutionNotObserved
+	}
+	return nil
+}
+
+func (s *fakeSettler) CommitExecution(_ context.Context, in core.ExecutionCommit) error {
+	s.mu.Lock()
+	x := s.executions[in.ID]
+	commitErr, ackLost := s.commitErr, s.commitAckLost
+	if x != nil && commitErr != nil {
+		if err := commitErr(in); err != nil {
+			s.mu.Unlock()
+			return err
+		}
+	}
+	switch {
+	case x == nil:
+		s.mu.Unlock()
+		return errors.New("no such execution")
+	case x.state == core.ExecutionStateCommitted && x.commit.Operation == in.Operation && x.commit.Digest == in.Digest:
+		s.mu.Unlock()
+		return nil
+	case x.state == core.ExecutionStateCommitted || x.state == core.ExecutionStateUnreported:
+		s.mu.Unlock()
+		return core.ErrConflict
+	case x.state != core.ExecutionStateObserved:
+		s.mu.Unlock()
+		return errors.New("execution not observed")
+	}
+	x.state, x.commit = core.ExecutionStateCommitted, in
+	s.mu.Unlock()
+	s.ch <- in.Record
+	if ackLost != nil {
+		return ackLost(in)
+	}
+	return nil
+}
+
+func (s *fakeSettler) CloseExecutionUnreported(_ context.Context, in core.ExecutionUnreported) error {
+	s.mu.Lock()
+	x := s.executions[in.ID]
+	switch {
+	case x == nil || x.state == core.ExecutionStateIntent:
+		s.mu.Unlock()
+		return errors.New("execution not observed")
+	case x.state == core.ExecutionStateUnreported:
+		s.mu.Unlock()
+		return nil
+	case x.state == core.ExecutionStateCommitted:
+		s.mu.Unlock()
+		return core.ErrConflict
+	}
+	free := *x.reading
+	free.Success, free.ErrorType, free.Tokens, free.Metrics = false, core.UsageErrorUnreported, core.UsageTokens{}, nil
+	free.Billable, free.UsageExtract = false, core.UsageExtractUnreported
+	x.state, x.reason = core.ExecutionStateUnreported, in.Reason
+	s.mu.Unlock()
+	s.ch <- &free
+	return nil
+}
+
+// executionStates are the states of the execution rows, in no order.
+func (s *fakeSettler) executionStates() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []string
+	for _, x := range s.executions {
+		out = append(out, x.state)
+	}
+	sort.Strings(out)
+	return out
+}
 
 type fakeNode struct{}
 
@@ -952,7 +1179,7 @@ func newEnv(t *testing.T, opts ...envOpt) *env {
 	}
 	e.gw = New(Deps{
 		Redis: e.rdb, Registry: e.reg, Node: fakeNode{}, Auth: e.auth, Pricer: e.pricer, Balance: e.balance,
-		Slots: e.slots, Accounts: e.accounts, Proxies: fakeProxies{}, Settler: e.settler,
+		Slots: e.slots, Accounts: e.accounts, Settler: e.settler,
 		KeyWindows: ratelimit.NewMinute(e.rdb, "apikey"),
 		Config:     &config.Config{AllowPrivateUpstream: true}, Converters: e.conv,
 		Environment: fakeEnvironment{global: e.envGlobal},
@@ -1092,3 +1319,9 @@ func (p *fakePlatform) BuildRefreshRequest(context.Context, *pluginv1.BuildRefre
 func (p *fakePlatform) ParseRefreshResponse(context.Context, *pluginv1.ParseRefreshResponseRequest) (*pluginv1.RefreshResult, error) {
 	return nil, status.Error(codes.Unimplemented, "no")
 }
+
+func (*fakePlatform) Monitor(context.Context, *pluginv1.PollRequest, core.ExecutionHTTP) (*pluginv1.ReconcileResult, error) {
+	return nil, errors.New("the fake platform does not monitor tasks")
+}
+
+func (g *fakeGen) SettingsValidator(string) (core.SettingsValidator, bool) { return nil, false }

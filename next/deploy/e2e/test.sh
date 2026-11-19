@@ -40,5 +40,7 @@ test "$edge_owner" = "$project|edge" || fail "edge network belongs to another pr
 
 printf 'Running acceptance tests against dedicated project %s (Go runner, /src source).\n' "$project"
 # Compile here, without -trimpath: runtime.Caller locates guard sources at /src.
-# Extra arguments are go test flags, e.g. -run '^TestAC17'. No services are started.
-compose run --rm --no-deps -T runner -count=1 -timeout=30m -v "$@" ./...
+# Extra arguments are go test flags, e.g. -run '^TestAC17'; a later -timeout
+# overrides the default, which covers a full run (about 27 minutes). No services
+# are started.
+compose run --rm --no-deps -T runner -count=1 -timeout=150m -v "$@" ./...

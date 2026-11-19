@@ -1,0 +1,8 @@
+{
+  "options": {
+    "model": "gpt-image-2",
+    "stream": true,
+    "adapt_model": "gpt-6-luna"
+  },
+  "note": "a partial image is forwarded as it comes (the Codex backend sends none)"
+}

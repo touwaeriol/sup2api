@@ -1,6 +1,0 @@
--- sql
-SELECT public.plugin_migration_record($1, $2, $3)
--- vars
-$1 string "demo"
-$2 string "0001_init.sql"
-$3 string "abc"

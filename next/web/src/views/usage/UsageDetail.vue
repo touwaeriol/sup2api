@@ -103,6 +103,7 @@ const schedulingHint = computed(() => u.value.error_type === 'no_account' && !!s
       <p v-if="u.error_message" class="mt-1 break-words text-sm">{{ u.error_message }}</p>
       <p v-if="availabilityHint" class="mt-1 text-sm" data-testid="usage-availability-hint">{{ t('usage.availability.seeBelow') }}</p>
       <p v-if="schedulingHint" class="mt-1 text-sm" data-testid="usage-scheduling-hint">{{ t('usage.scheduling.seeBelow') }}</p>
+      <p v-if="u.error_type === 'usage_unreported'" class="mt-1 text-sm" data-testid="usage-unreported-hint">{{ t('usage.unreportedHint') }}</p>
     </SAlert>
 
     <SGrid :cols="1" :lg-cols="knownRounds.length || accountView ? 1 : 2" :gap="4" class="items-start" data-testid="usage-detail-primary">

@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '@sub2api/host'
-import { SField, SHint, SInput, SFormModal, SRadioGroup, STextarea, toast, type SelectOption } from '@sub2api/ui'
+import { SField, SHint, SInput, SFormModal, SRadioGroup, STextarea, createItemId, toast, type SelectOption } from '@sub2api/ui'
 import EntityPicker from '@/components/EntityPicker.vue'
 import { useAuthStore } from '@/stores/auth'
 import { applyFormError } from '@/utils/formErrors'
@@ -41,11 +41,6 @@ watch(
 
 const targetUserId = computed<number | null>(() => Number(user.value) || null)
 
-function uuid(): string {
-  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID()
-  return 'adj-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2)
-}
-
 async function submit() {
   errors.value = {}
   if (!targetUserId.value) errors.value.user = t('ledger.adjust.userRequired')
@@ -57,7 +52,7 @@ async function submit() {
     const r = await api.post<{ ledger_id?: number; balance_after?: string; duplicate?: boolean }>(
       `/users/${targetUserId.value}/balance/adjust`,
       { amount: a, credit: credit.value, note: note.value },
-      { headers: { 'Idempotency-Key': uuid() } }
+      { headers: { 'Idempotency-Key': createItemId() } }
     )
     toast(
       r?.duplicate

@@ -1,0 +1,25 @@
+{
+  "id": "typesafe",
+  "label": {"en": "TypeSafe", "zh": "TypeSafe"},
+  "passHeaders": ["typesafe-danger-zone-images", "typesafe-danger-zone-long-context"],
+  "usage": {"semantics": "exclusive"},
+  "endpoints": [
+    {
+      "id": "systemone",
+      "method": "POST",
+      "path": "/v1/systemone",
+      "protocol": "typesafe.systemone",
+      "kind": "proxy",
+      "auth": {"headers": ["authorization"]},
+      "request": {"modelPath": "model", "promptTextPaths": ["state"]},
+      "response": {"nonStream": "json"},
+      "errorFormat": "openai",
+      "billing": "usage",
+      "usage": {
+        "semantics": "exclusive",
+        "json": {"map": {"model": "model", "input_tokens": "usage.input_tokens", "output_tokens": "usage.output_tokens"}}
+      },
+      "billingTypes": ["per_token", "per_request", "expression"]
+    }
+  ]
+}

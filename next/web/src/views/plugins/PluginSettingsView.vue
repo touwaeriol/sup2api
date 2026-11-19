@@ -13,9 +13,9 @@ import SettingsTab from './detail/SettingsTab.vue'
 // A plugin's settings on their own page: the one page for holders of the
 // permission the plugin names for them (manifest ui.settings.permission) who
 // cannot open the plugin detail page (plugin:read), and where old links to
-// plugin settings lead. The core checks the permission. It shows the plugin's
-// schema form, as the detail page's settings tab does; native settings
-// (§75.5) send the user to the plugin page that edits them.
+// plugin settings lead. The core checks the permission. It shows what the
+// detail page's settings tab does (the plugin's settings component); native
+// settings edited on a plugin page (§75.5) send the user to that page.
 const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
@@ -73,6 +73,6 @@ onMounted(load)
         <SButton v-if="error" size="sm" @click="load">{{ t('common.refresh') }}</SButton>
       </SEmpty>
     </SCard>
-    <SettingsTab v-else :plugin-key="key" :settings="settings" @saved="load" />
+    <SettingsTab v-else :plugin-key="key" :settings="settings" />
   </div>
 </template>

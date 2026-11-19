@@ -2,189 +2,277 @@ package pluginsdk
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 
-	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/proto"
+
+	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
 )
 
-// Executor owns one request's execution after the host has selected an account.
-// ExecuteDefault implements the normal Build -> Forward -> Record/Watch flow.
-// Forwarding still uses the host's transport, conversions, limits and proxy.
-// Requires platform.execute.v1.
+// Executor is the one path of a gateway request (PlatformService.Execute),
+// called once per attempt on an account. The host has selected the account
+// and rewritten the body; the plugin receives it whole, builds the final
+// upstream request and hands it to the host with Relay or RelayAndWait, after
+// any auxiliary Fetch. It opens no socket, never retries and never picks
+// another account. Usage and task facts travel only in the response:
+// ReportHostUsage, ReportUsage, ReportTask or ReportClassification.
+//
+// Optional: most platforms implement only UpstreamBuilder, and the SDK runs
+// ExecuteDefault for them. A Platform that implements Executor runs its own.
 type Executor interface {
 	Execute(context.Context, *pluginv1.ExecuteRequest) (*pluginv1.ExecuteResponse, error)
 }
 
-// TaskMonitor observes one task and calls ReportTaskProgress before returning.
-// The host chooses the node, time and original account, and owns retries,
-// leases and atomic financial settlement. No plugin timer is needed.
-// Requires platform.monitor.v1.
+// UpstreamBuilder builds the final upstream request of one attempt from the
+// whole ExecuteRequest: body, inbound headers, account, meta and attempt
+// number. Every attempt is built from scratch. It may call Fetch first; to
+// end the execution with a classification of a failed Fetch, return
+// Classified.
+type UpstreamBuilder interface {
+	BuildUpstream(context.Context, *pluginv1.ExecuteRequest) (*pluginv1.UpstreamRequest, error)
+}
+
+// UsageExtractor reads the usage of an endpoint the manifest rules cannot
+// express (usageSource "plugin") from the observation of a relay that
+// waited. ExecuteDefault calls it in the plugin's process when the request
+// sets extract_usage. It is handed the whole body of a non-streaming answer
+// or, for a stream, only the events the endpoint listed in usageStreamEvents.
+type UsageExtractor interface {
+	ExtractUsage(context.Context, *pluginv1.ExtractUsageRequest) (*pluginv1.UsageReport, error)
+}
+
+// TaskSubmissionParser describes the task an upstream accepted, from the
+// observation of a relay that waited. ExecuteDefault calls it in the
+// plugin's process when the request sets task_submission. The host registers
+// the task before it publishes the submission response; the plugin starts no
+// polling of its own and implements TaskMonitor for the observations.
+type TaskSubmissionParser interface {
+	ParseTaskSubmission(context.Context, *pluginv1.ExtractUsageRequest) (*pluginv1.TaskSubmission, error)
+}
+
+// ErrorClassifier is the ClassifyError half of Platform. ExecuteDefault uses
+// it for the error of a relay that waited.
+type ErrorClassifier interface {
+	ClassifyError(context.Context, *pluginv1.ClassifyErrorRequest) (*pluginv1.ClassifyErrorResponse, error)
+}
+
+// TaskMonitor makes one scheduled observation of a host-managed task
+// (PlatformService.Monitor, "platform.monitor.v1"): query the upstream once
+// with Fetch and return what was read, PENDING or a terminal state. A nil
+// result counts as one failed query; a terminal state is accepted only with
+// a complete, successful Fetch made during the call. The host chooses the
+// node, the time and the original account and owns retries, leases and the
+// settlement. No plugin timer is needed.
 type TaskMonitor interface {
-	Monitor(context.Context, *pluginv1.PollRequest) error
+	Monitor(context.Context, *pluginv1.PollRequest) (*pluginv1.ReconcileResult, error)
 }
 
-func scopedExecution(ctx context.Context, operation, kind string) (executionContext, error) {
-	if err := ctx.Err(); err != nil {
-		return executionContext{}, status.FromContextError(err).Err()
-	}
-	ex, ok := ctx.Value(executionContextKey{}).(executionContext)
-	if !ok || ex.client == nil || ex.token == "" || ex.kind != kind {
-		return executionContext{}, status.Errorf(codes.FailedPrecondition, "%s requires an active %s context", operation, kind)
-	}
-	return ex, nil
+// ReportHostUsage is the answer of every execution that relayed without waiting,
+// and the explicit fallback of one that waited and could not read the
+// observation: the host takes the usage it reads by the declared rules.
+func ReportHostUsage() *pluginv1.ExecuteResponse {
+	return &pluginv1.ExecuteResponse{Report: &pluginv1.ExecuteResponse_HostUsage{HostUsage: &pluginv1.HostUsage{}}}
 }
 
-// ForwardUpstream sends the request through the selected account's host
-// transport. The full body stays in the host. A stream is forwarded as it
-// arrives; only bounded usage observations are returned to the plugin.
-func ForwardUpstream(ctx context.Context, request *pluginv1.BuildUpstreamRequestResponse) (*pluginv1.ForwardUpstreamResponse, error) {
-	ex, err := scopedExecution(ctx, "ForwardUpstream", "Execute")
+// ReportUsage answers an extract_usage execution with the usage the plugin read
+// from the observation.
+func ReportUsage(report *pluginv1.UsageReport) *pluginv1.ExecuteResponse {
+	return &pluginv1.ExecuteResponse{Report: &pluginv1.ExecuteResponse_Usage{Usage: report}}
+}
+
+// ReportTask answers a task_submission execution with the accepted upstream task.
+func ReportTask(task *pluginv1.TaskSubmission) *pluginv1.ExecuteResponse {
+	return &pluginv1.ExecuteResponse{Report: &pluginv1.ExecuteResponse_Task{Task: task}}
+}
+
+// ReportClassification answers an execution whose upstream exchange failed: the
+// error of a relay that waited, or a failed Fetch before the relay. nil
+// leaves the host to its default classification.
+func ReportClassification(c *pluginv1.ClassifyErrorResponse) *pluginv1.ExecuteResponse {
+	return &pluginv1.ExecuteResponse{Classification: c}
+}
+
+// Classified is the error an UpstreamBuilder returns to end the execution
+// with a classification instead of a failure, e.g. after a Fetch the
+// upstream refused. Nothing was relayed, so the host may move on safely.
+func Classified(c *pluginv1.ClassifyErrorResponse) error { return &classifiedError{c} }
+
+type classifiedError struct {
+	classification *pluginv1.ClassifyErrorResponse
+}
+
+func (e *classifiedError) Error() string {
+	return "upstream request failed: " + e.classification.GetReason()
+}
+
+// ExecuteDefault is Execute for a platform that only builds the request: the
+// SDK runs it for a Platform that implements UpstreamBuilder and no Executor.
+// The two flags of the request choose the form of the exchange:
+//
+//   - neither: Relay without waiting and answer host_usage. The request is
+//     sent after Execute returned.
+//   - task_submission: RelayAndWait, then ParseTaskSubmission and answer
+//     task. b must implement TaskSubmissionParser; this is checked before
+//     anything is built or sent.
+//   - extract_usage: RelayAndWait, then ExtractUsage and answer usage. When
+//     the usage cannot be read (b is no UsageExtractor, it fails or returns
+//     nothing) the answer is host_usage, the documented fallback: the host
+//     bills its own reading and records usage_extract=fallback.
+//
+// The error of a relay that waited is answered with the classification of
+// b's ClassifyError when b implements ErrorClassifier (every Platform does),
+// otherwise with none. It relays exactly once and never retries.
+func ExecuteDefault(ctx context.Context, b UpstreamBuilder, in *pluginv1.ExecuteRequest) (*pluginv1.ExecuteResponse, error) {
+	if b == nil || in == nil {
+		return nil, status.Error(codes.InvalidArgument, "upstream builder and execution request are required")
+	}
+	parser, _ := b.(TaskSubmissionParser)
+	if in.GetTaskSubmission() && parser == nil {
+		return nil, status.Error(codes.FailedPrecondition, "a task submission endpoint needs a TaskSubmissionParser")
+	}
+	request, err := b.BuildUpstream(ctx, in)
+	if c := (*classifiedError)(nil); errors.As(err, &c) {
+		return ReportClassification(c.classification), nil
+	}
 	if err != nil {
 		return nil, err
 	}
-	if request == nil {
-		return nil, status.Error(codes.InvalidArgument, "upstream request is required")
+	if !in.GetTaskSubmission() && !in.GetExtractUsage() {
+		if err := Relay(ctx, request); err != nil {
+			return nil, err
+		}
+		return ReportHostUsage(), nil
 	}
-	return ex.client.ForwardUpstream(ctx, &pluginv1.ForwardUpstreamRequest{ExecutionToken: ex.token, Request: proto.Clone(request).(*pluginv1.BuildUpstreamRequestResponse)})
-}
-
-// RecordUsage commits upstream facts against the host's immutable request
-// identity. A nil report acknowledges host-collected declarative usage (or
-// fallback after extraction failed). There are no price or identity inputs.
-// The acknowledgement means persistence succeeded, not just queue admission.
-func RecordUsage(ctx context.Context, report *pluginv1.UsageReport) (*pluginv1.ExecutionReceipt, error) {
-	ex, err := scopedExecution(ctx, "RecordUsage", "Execute")
+	observed, err := RelayAndWait(ctx, request)
 	if err != nil {
 		return nil, err
 	}
-	if report != nil {
-		report = proto.Clone(report).(*pluginv1.UsageReport)
+	if observed.GetError() != nil {
+		return ReportClassification(classifyObserved(ctx, b, observed.GetError())), nil
 	}
-	return ex.client.RecordUsage(ctx, &pluginv1.RecordUsageRequest{ExecutionToken: ex.token, Report: report})
-}
-
-// ReserveAndWatch atomically records an accepted submission, its optional
-// estimated usage/precharge and the host-managed monitoring registration.
-// It never starts a plugin goroutine. Task identity and account come from the
-// active Execute invocation. The same payload may be retried after a lost ACK.
-func ReserveAndWatch(ctx context.Context, task *pluginv1.TaskSubmission) (*pluginv1.ExecutionReceipt, error) {
-	ex, err := scopedExecution(ctx, "ReserveAndWatch", "Execute")
-	if err != nil {
-		return nil, err
-	}
-	if task == nil {
-		return nil, status.Error(codes.InvalidArgument, "task submission is required")
-	}
-	return ex.client.ReserveAndWatch(ctx, &pluginv1.ReserveAndWatchRequest{ExecutionToken: ex.token, Task: proto.Clone(task).(*pluginv1.TaskSubmission)})
-}
-
-// ReportTaskProgress atomically stores one observation. A terminal result
-// settles/refunds and closes monitoring in the same transaction. The host
-// validates the active claim and complete network observation before accepting
-// it. Acknowledgement means committed; retry only the identical payload.
-func ReportTaskProgress(ctx context.Context, result *pluginv1.ReconcileResult) (*pluginv1.ExecutionReceipt, error) {
-	ex, err := scopedExecution(ctx, "ReportTaskProgress", "Monitor")
-	if err != nil {
-		return nil, err
-	}
-	if result == nil {
-		return nil, status.Error(codes.InvalidArgument, "task result is required")
-	}
-	return ex.client.ReportTaskProgress(ctx, &pluginv1.ReportTaskProgressRequest{ExecutionToken: ex.token, Result: proto.Clone(result).(*pluginv1.ReconcileResult)})
-}
-
-// ExecuteDefault is the shared execution algorithm for ordinary platform
-// adapters. Vendor-specific building/classification/parsing stays in p; the
-// host owns forwarding, the effective declarative usage rules and persistence.
-// It never opens a socket or creates its own background work.
-func ExecuteDefault(ctx context.Context, p Platform, in *pluginv1.ExecuteRequest) (*pluginv1.ExecuteResponse, error) {
-	if p == nil || in.GetRequest() == nil {
-		return nil, status.Error(codes.InvalidArgument, "platform and execution request are required")
-	}
-	request, err := p.BuildUpstreamRequest(ctx, in.Request)
-	if err != nil {
-		return nil, err
-	}
-	observed, err := ForwardUpstream(ctx, request)
-	if err != nil {
-		return nil, err
-	}
-	if observed == nil {
-		return nil, status.Error(codes.Internal, "host returned no upstream observation")
-	}
-	if observed.Error != nil {
-		classified, err := p.ClassifyError(ctx, observed.Error)
+	if in.GetTaskSubmission() {
+		task, err := parser.ParseTaskSubmission(ctx, observed.GetObservation())
 		if err != nil {
 			return nil, err
 		}
-		if classified == nil {
-			return nil, status.Error(codes.Internal, "platform returned no error classification")
-		}
-		return &pluginv1.ExecuteResponse{Classification: classified}, nil
+		return ReportTask(task), nil
 	}
-	if observed.TaskSubmission {
-		parser, ok := p.(TaskSubmissionParser)
-		if !ok || observed.Observation == nil {
-			return nil, status.Error(codes.FailedPrecondition, "task submission parser and observation are required")
-		}
-		task, err := parser.ParseTaskSubmission(ctx, observed.Observation)
-		if err != nil {
-			return nil, err
-		}
-		if _, err := ReserveAndWatch(ctx, task); err != nil {
-			return nil, err
-		}
-	} else {
-		var report *pluginv1.UsageReport
-		if observed.ExtractUsage {
-			// Failure explicitly falls back to the host's online accumulator.
-			// The host records that fallback; no second extraction is scheduled.
-			if extractor, ok := p.(UsageExtractor); ok && observed.Observation != nil {
-				report, err = extractor.ExtractUsage(ctx, observed.Observation)
-				if err != nil {
-					slog.Default().Warn("plugin usage extraction failed, falling back to host accumulator", "error", err.Error())
-					report = nil
-				}
-			}
-		}
-		if _, err := RecordUsage(ctx, report); err != nil {
-			return nil, err
-		}
+	if report := extractObserved(ctx, b, observed.GetObservation()); report != nil {
+		return ReportUsage(report), nil
 	}
-	return &pluginv1.ExecuteResponse{}, nil
+	return ReportHostUsage(), nil
 }
 
-func (s platformServer) bindExecution(ctx context.Context, token, kind string) (context.Context, context.CancelFunc, error) {
-	if token == "" {
-		return nil, nil, status.Errorf(codes.InvalidArgument, "%s execution token is required", kind)
+// classifyObserved classifies the error of a waited relay; nil (the host's
+// default classification) when b cannot or fails to.
+func classifyObserved(ctx context.Context, b UpstreamBuilder, failed *pluginv1.ClassifyErrorRequest) *pluginv1.ClassifyErrorResponse {
+	classifier, ok := b.(ErrorClassifier)
+	if !ok {
+		return nil
 	}
-	if s.runtime == nil {
+	classified, err := classifier.ClassifyError(ctx, failed)
+	if err != nil {
+		slog.Default().Warn("classifying the upstream error failed, the host applies its default", "error", err.Error())
+		return nil
+	}
+	return classified
+}
+
+// executorOf is the Execute of a Platform: its own when it implements
+// Executor, otherwise ExecuteDefault over its UpstreamBuilder.
+func executorOf(p Platform) (Executor, error) {
+	if e, ok := p.(Executor); ok {
+		return e, nil
+	}
+	if b, ok := p.(UpstreamBuilder); ok {
+		return defaultExecutor{b}, nil
+	}
+	return nil, errors.New("a Platform must implement UpstreamBuilder or Executor")
+}
+
+// defaultExecutor runs ExecuteDefault over the plugin itself, so that the
+// optional interfaces ExecuteDefault looks for are the plugin's.
+type defaultExecutor struct{ builder UpstreamBuilder }
+
+func (d defaultExecutor) Execute(ctx context.Context, in *pluginv1.ExecuteRequest) (*pluginv1.ExecuteResponse, error) {
+	return ExecuteDefault(ctx, d.builder, in)
+}
+
+// extractObserved reads the usage of a waited relay; nil is the fallback to
+// the host's reading.
+func extractObserved(ctx context.Context, b UpstreamBuilder, observation *pluginv1.ExtractUsageRequest) *pluginv1.UsageReport {
+	extractor, ok := b.(UsageExtractor)
+	if !ok {
+		slog.Default().Warn("extract_usage execution without a UsageExtractor, falling back to the host's usage reading")
+		return nil
+	}
+	report, err := extractor.ExtractUsage(ctx, observation)
+	if err != nil {
+		slog.Default().Warn("plugin usage extraction failed, falling back to the host's usage reading", "error", err.Error())
+		return nil
+	}
+	return report
+}
+
+// checkReport refuses a response whose report contradicts what the execution
+// did, so that the mistake names itself in the plugin instead of surfacing
+// as an unsent or unbilled request in the host.
+func (ex *execution) checkReport(out *pluginv1.ExecuteResponse) error {
+	switch out.GetReport().(type) {
+	case nil:
+		return nil
+	case *pluginv1.ExecuteResponse_HostUsage:
+		if !ex.relayed.Load() {
+			return status.Error(codes.Internal, "Execute answered host_usage without relaying a request")
+		}
+	default:
+		if !ex.waited.Load() {
+			return status.Error(codes.Internal, "Execute answered usage or task without a relay that waited (RelayAndWait)")
+		}
+	}
+	return nil
+}
+
+// bindExecution puts ex, with the host's client, on a context of the call
+// that ends with the returned cancel.
+func (rt *runtime) bindExecution(ctx context.Context, ex *execution) (context.Context, context.CancelFunc, error) {
+	if ex.token == "" {
+		return nil, nil, status.Errorf(codes.InvalidArgument, "%s execution token is required", ex.kind)
+	}
+	if rt == nil {
 		return nil, nil, status.Error(codes.FailedPrecondition, "host is not initialised")
 	}
-	s.runtime.mu.Lock()
-	h := s.runtime.host
-	s.runtime.mu.Unlock()
+	rt.mu.Lock()
+	h := rt.host
+	rt.mu.Unlock()
 	if h == nil {
 		return nil, nil, status.Error(codes.FailedPrecondition, "host is not initialised")
 	}
+	ex.client = h.Client()
 	ctx, cancel := context.WithCancel(ctx)
-	return context.WithValue(ctx, executionContextKey{}, executionContext{client: h.Client(), token: token, kind: kind}), cancel, nil
+	return withExecution(ctx, ex), cancel, nil
 }
 
 func (s platformServer) Execute(ctx context.Context, in *pluginv1.ExecuteRequest) (*pluginv1.ExecuteResponse, error) {
-	p, ok := s.impl.(Executor)
-	if !ok {
-		return nil, status.Error(codes.Unimplemented, "this platform does not implement Execute")
-	}
-	ctx, cancel, err := s.bindExecution(ctx, in.GetExecutionToken(), "Execute")
+	ex := &execution{token: in.GetExecutionToken(), kind: kindExecute, mayWait: in.GetExtractUsage() || in.GetTaskSubmission()}
+	ctx, cancel, err := s.runtime.bindExecution(ctx, ex)
 	if err != nil {
 		return nil, err
 	}
 	defer cancel()
-	return p.Execute(ctx, in)
+	out, err := s.execute.Execute(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	if out == nil {
+		out = &pluginv1.ExecuteResponse{} // states nothing
+	}
+	if err := ex.checkReport(out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (s platformServer) Monitor(ctx context.Context, in *pluginv1.PollRequest) (*pluginv1.MonitorResponse, error) {
@@ -192,13 +280,14 @@ func (s platformServer) Monitor(ctx context.Context, in *pluginv1.PollRequest) (
 	if !ok {
 		return nil, status.Error(codes.Unimplemented, "this platform does not implement Monitor")
 	}
-	ctx, cancel, err := s.bindExecution(ctx, in.GetExecutionToken(), "Monitor")
+	ctx, cancel, err := s.runtime.bindExecution(ctx, &execution{token: in.GetExecutionToken(), kind: kindMonitor})
 	if err != nil {
 		return nil, err
 	}
 	defer cancel()
-	if err := p.Monitor(ctx, in); err != nil {
+	result, err := p.Monitor(ctx, in)
+	if err != nil {
 		return nil, err
 	}
-	return &pluginv1.MonitorResponse{}, nil
+	return &pluginv1.MonitorResponse{Result: result}, nil
 }

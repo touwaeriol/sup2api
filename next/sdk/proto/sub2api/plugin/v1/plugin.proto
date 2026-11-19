@@ -19,9 +19,13 @@ service PluginService {
   // SettingsChanged tells the process that sections of the system settings
   // changed (CONTRACTS §107). The host of every node calls it on the plugins
   // it serves, best effort, so values cached from HostService.GetSettings
-  // are read again. A plugin built with an older SDK answers UNIMPLEMENTED,
-  // which the host ignores.
+  // are read again.
   rpc SettingsChanged(SettingsChangedRequest) returns (SettingsChangedResponse);
+  // ValidateSettings checks plugin settings before the host stores them
+  // (PUT /plugins/:key/settings). Optional: UNIMPLEMENTED or no errors means
+  // accepted. It only checks: the settings take effect through Configure
+  // once stored.
+  rpc ValidateSettings(ValidateSettingsRequest) returns (ValidateSettingsResponse);
 }
 
 message GetInfoRequest {}
@@ -30,7 +34,7 @@ message GetInfoResponse {
   string plugin_key = 1;       // must equal manifest.key
   string version = 2;          // must equal manifest.version
   string sdk_version = 3;
-  int32 protocol_version = 4;  // must equal the host's supported protocol (1)
+  int32 protocol_version = 4;  // must equal the host's supported protocol (2)
   // Capability ids actually implemented, e.g. "platform.adapter.v1".
   repeated string capabilities = 5;
 }
@@ -49,8 +53,8 @@ message InitHostResponse {
 }
 
 message ConfigureRequest {
-  // Plugin settings as edited in the console (validated against
-  // manifest.ui.settings schema by the host), "{}" when unset.
+  // Plugin settings as edited in the console (checked by ValidateSettings
+  // when the plugin implements it), "{}" when unset.
   string config_json = 1;
   // Host permissions the administrator granted, with the approved scope.
   repeated Grant grants = 2;
@@ -85,3 +89,19 @@ message SettingsChangedRequest {
 }
 
 message SettingsChangedResponse {}
+
+message ValidateSettingsRequest {
+  // The submitted settings, masked secrets already replaced by the stored
+  // values.
+  string config_json = 1;
+  // Host permissions the administrator granted, as in ConfigureRequest.
+  repeated Grant grants = 2;
+}
+
+message ValidateSettingsResponse {
+  // Non-empty = rejected. field is a JSON pointer below the settings ("a/b"),
+  // "" for the whole object.
+  repeated FieldError errors = 1;
+  // Optional: stored instead of the submitted settings.
+  string normalized_config_json = 2;
+}

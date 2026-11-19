@@ -25,7 +25,7 @@ type UploadOptions struct {
 	ExpectVersion string
 	Source        string // "upload" | "market:<source id>"
 	// PackageURL is the market download URL; every node fetches the package
-	// from it. Empty for uploads, which nodes fetch from the primary.
+	// from it. Empty for uploads, which nodes fetch from a node holding them.
 	PackageURL string
 }
 
@@ -44,7 +44,7 @@ func (s *Service) Upload(ctx context.Context, data []byte, actorID int64, opt Up
 		return nil, core.ErrUnavailable.WithMessage("plugin package store is not configured")
 	}
 	if err := s.d.Packages.Store.Put(ctx, p.SHA256, p.Raw); err != nil {
-		return nil, core.ErrUnavailable.WithMessage("store the plugin package on the primary node").WithCause(err)
+		return nil, core.ErrUnavailable.WithMessage("store the plugin package on this node").WithCause(err)
 	}
 	ctx, release, guardErr := core.BeginPluginMutation(ctx, s.d.Mutations)
 	if guardErr != nil {
@@ -66,7 +66,11 @@ func (s *Service) Upload(ctx context.Context, data []byte, actorID int64, opt Up
 
 	rec, err := s.recordUpload(ctx, p, actorID, opt)
 	if store.IsUniqueViolation(err, "") {
-		return nil, core.ErrConflict.WithMessage("the plugin is being uploaded concurrently; retry").WithCause(err)
+		// Another first upload of the plugin created its row meanwhile: one
+		// that does not take the change lock (a node's first install of a
+		// built-in plugin). It is another cluster change being submitted, and
+		// the same retry succeeds.
+		return nil, core.ErrClusterChangeBusy.WithMessage("the plugin is being uploaded concurrently; retry").WithCause(err)
 	}
 	if err != nil {
 		return nil, err
@@ -94,7 +98,7 @@ type uploadRecord struct {
 }
 
 // openAndValidate unpacks the package and checks the caller's key/version
-// expectations. Unpacking and hashing a large package depends on nothing
+// expectations and its plugin contract. Unpacking and hashing a large package depends on nothing
 // shared, so it runs before the short cluster change lock.
 func (s *Service) openAndValidate(ctx context.Context, data []byte, opt UploadOptions) (*pkg.Package, error) {
 	p, err := pkg.Open(data, s.Limits())
@@ -107,6 +111,11 @@ func (s *Service) openAndValidate(ctx context.Context, data []byte, opt UploadOp
 	}
 	if opt.ExpectVersion != "" && m.Version != opt.ExpectVersion {
 		return nil, core.ErrInvalidArgument.WithMessage(fmt.Sprintf("package version %q does not match %q", m.Version, opt.ExpectVersion))
+	}
+	// Even a package stored before (whose validation is skipped below) is
+	// refused when it was built for an older plugin contract.
+	if err := pkg.CheckContract(m, p.Files, s.opt.HostVersion); err != nil {
+		return nil, err
 	}
 	return p, nil
 }

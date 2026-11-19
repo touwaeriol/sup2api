@@ -28,9 +28,12 @@ var builtinPairs = []builtinPair{
 	{"gemini.stream_generate", "openai.responses", GradeFair, geminiRequest(buildResponsesRequest)},
 }
 
+// The image pairs (openai.images, openai.images_edit -> openai.responses,
+// CONTRACTS §121) are independent too, and never composed.
+
 // builtinConverters returns new instances of the built-in converters.
 func builtinConverters() []Converter {
-	out := []Converter{&chatResponses{}}
+	out := []Converter{&chatResponses{}, newImagesResponses(protocolImages), newImagesResponses(protocolImagesEdit)}
 	for _, p := range builtinPairs {
 		out = append(out, newPair(p.from, p.to, p.grade, p.req))
 	}

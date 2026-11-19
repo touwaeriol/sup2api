@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"github.com/Sub2API-Devs/sup2api/next/runtime-contract/gormpg"
+	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest/check"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/grpcruntime"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/registry"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store/model"
@@ -33,7 +35,9 @@ type entry struct {
 	inst    Instance // nil when loading failed
 	epoch   int64    // plugins.row_version when (re)created
 	loadErr string
-	failAt  time.Time
+	// loadCode classifies loadErr for the console (core.PluginInstanceState.Code).
+	loadCode string
+	failAt   time.Time
 	// Last failed attempt to replace inst with new resource limits.
 	restartErr    string
 	restartFailAt time.Time
@@ -140,7 +144,7 @@ func (c *Controller) Reconcile(ctx context.Context) {
 	}
 	seen := map[string]bool{}
 	var wg sync.WaitGroup
-	reports := make([]NodePluginState, len(rows))
+	reports := make([]core.PluginNodeState, len(rows))
 	for idx, p := range rows {
 		seen[p.key] = true
 		s := c.slotFor(p.key)
@@ -172,7 +176,7 @@ func (c *Controller) Reconcile(ctx context.Context) {
 		s.entries = map[string]*entry{}
 		s.mu.Unlock()
 		_ = c.o.Node.ReportPlugin(ctx, s.key, "{}")
-		c.recordNodeHistory(ctx, s.key, NodePluginState{State: "uninstalled"})
+		c.recordNodeHistory(ctx, s.key, core.PluginNodeState{State: "uninstalled"})
 	}
 
 	c.republish()
@@ -235,7 +239,7 @@ func desiredVersions(p *pluginRow) (serving, standby, keep string) {
 	return serving, standby, keep
 }
 
-func (c *Controller) reconcileKey(ctx context.Context, s *slot, p *pluginRow) NodePluginState {
+func (c *Controller) reconcileKey(ctx context.Context, s *slot, p *pluginRow) core.PluginNodeState {
 	ro := p.ro
 	serving, standby, keep := desiredVersions(p)
 
@@ -293,7 +297,7 @@ func (c *Controller) reconcileKey(ctx context.Context, s *slot, p *pluginRow) No
 		}
 	}
 	s.serving = serving
-	st := NodePluginState{Serving: serving, Standby: standby, Fallback: fallback}
+	st := core.PluginNodeState{Serving: serving, Standby: standby, Fallback: fallback}
 	var running []Instance
 	var retryOK []bool
 	st.Instances, running, retryOK = collectInstances(s, c.o.LoadRetry)
@@ -357,7 +361,7 @@ func (c *Controller) reconcileKey(ctx context.Context, s *slot, p *pluginRow) No
 // collectInstances returns the per-version instance states of a slot (sorted
 // by version), the running instances and, per running instance, whether a
 // resource restart may be tried now.
-func collectInstances(s *slot, loadRetry time.Duration) (instances []InstanceState, running []Instance, retryOK []bool) {
+func collectInstances(s *slot, loadRetry time.Duration) (instances []core.PluginInstanceState, running []Instance, retryOK []bool) {
 	versions := make([]string, 0, len(s.entries))
 	for v := range s.entries {
 		versions = append(versions, v)
@@ -365,7 +369,7 @@ func collectInstances(s *slot, loadRetry time.Duration) (instances []InstanceSta
 	sort.Strings(versions)
 	for _, v := range versions {
 		e := s.entries[v]
-		is := InstanceState{Version: v}
+		is := core.PluginInstanceState{Version: v}
 		if e.inst != nil {
 			is.State, is.Error = e.inst.State()
 			is.Restarts = e.inst.Restarts()
@@ -375,7 +379,7 @@ func collectInstances(s *slot, loadRetry time.Duration) (instances []InstanceSta
 			running = append(running, e.inst)
 			retryOK = append(retryOK, e.restartErr == "" || time.Since(e.restartFailAt) >= loadRetry)
 		} else {
-			is.State, is.Error = stateFailed, e.loadErr
+			is.State, is.Error, is.Code = stateFailed, e.loadErr, e.loadCode
 		}
 		instances = append(instances, is)
 	}
@@ -404,7 +408,7 @@ func (s *slot) entryState(v string) (string, string) {
 // rolloutNodeState fills st.Rollout and st.Error for an open rollout. A node
 // reports itself ready for the preparing phase once the standby runs (or
 // there is none), and active only when it serves the target version.
-func (s *slot) rolloutNodeState(ro *rolloutRow, st *NodePluginState, want, standby, standbyBlocked string) {
+func (s *slot) rolloutNodeState(ro *rolloutRow, st *core.PluginNodeState, want, standby, standbyBlocked string) {
 	switch ro.phase {
 	case PhasePreparing:
 		switch {
@@ -486,7 +490,7 @@ func (c *Controller) ensure(ctx context.Context, s *slot, version string, epoch 
 	defer s.mu.Unlock()
 	if err != nil {
 		c.log.Error("plugin instance failed to start", "plugin", s.key, "version", version, "err", err)
-		s.entries[version] = &entry{version: version, epoch: epoch, loadErr: truncate(err.Error(), 500), failAt: time.Now()}
+		s.entries[version] = &entry{version: version, epoch: epoch, loadErr: truncate(err.Error(), 500), loadCode: loadCode(err), failAt: time.Now()}
 		return
 	}
 	c.log.Info("plugin instance started", "plugin", s.key, "version", version)
@@ -628,6 +632,16 @@ func (c *Controller) republish() {
 }
 
 func truncate(s string, n int) string { return x.Truncate(s, n) }
+
+// loadCode is the code of a failed load the console acts on:
+// check.CodeOutdatedContract for the runtime's refusal of a package built
+// for an older plugin contract, however the error was wrapped; "" else.
+func loadCode(err error) string {
+	if errors.Is(err, grpcruntime.ErrOutdatedContract) {
+		return check.CodeOutdatedContract
+	}
+	return ""
+}
 
 // entryReady reports a running instance that can serve.
 func entryReady(e *entry) bool {

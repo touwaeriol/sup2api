@@ -7,61 +7,32 @@ import presetPackage from '../../vite-preset/package.json'
 import uiPackage from '../package.json'
 import readme from '../README.md?raw'
 
-describe('host UI 3 contract', () => {
+describe('host UI 4 contract', () => {
   it('exposes only enhanced STabs without layout aliases', () => {
     expect(ui.STabs).toBeDefined()
     expect('STabLayout' in ui).toBe(false)
     expect('TabBar' in ui).toBe(false)
   })
-  it('rejects unported UI 1 plugins and accepts the migrated compatibility range', () => {
-    expect(HOST_UI_VERSION).toBe('3.19.0')
-    expect(satisfiesRange(HOST_UI_VERSION, '^1.0')).toBe(false)
-    expect(satisfiesRange(HOST_UI_VERSION, '^2.0')).toBe(false)
-    expect(satisfiesRange(HOST_UI_VERSION, '^3.0')).toBe(true)
-    expect(satisfiesRange(HOST_UI_VERSION, '^3.1')).toBe(true)
-    expect(satisfiesRange(HOST_UI_VERSION, '^3.2')).toBe(true)
-    expect(satisfiesRange('3.1.0', '^3.2')).toBe(false)
-    expect(satisfiesRange(HOST_UI_VERSION, '^3.3')).toBe(true)
-    expect(satisfiesRange('3.2.0', '^3.3')).toBe(false)
-    expect(satisfiesRange(HOST_UI_VERSION, '^3.4')).toBe(true)
-    expect(satisfiesRange('3.3.0', '^3.4')).toBe(false)
-    expect(satisfiesRange(HOST_UI_VERSION, '^3.5')).toBe(true)
-    expect(satisfiesRange('3.4.0', '^3.5')).toBe(false)
-    expect(satisfiesRange(HOST_UI_VERSION, '^3.6')).toBe(true)
-    expect(satisfiesRange('3.5.0', '^3.6')).toBe(false)
-    expect(satisfiesRange(HOST_UI_VERSION, '^3.7')).toBe(true)
-    expect(satisfiesRange('3.6.0', '^3.7')).toBe(false)
-    expect(satisfiesRange(HOST_UI_VERSION, '^3.8')).toBe(true)
-    expect(satisfiesRange('3.7.0', '^3.8')).toBe(false)
-    expect(satisfiesRange(HOST_UI_VERSION, '^3.9')).toBe(true)
-    expect(satisfiesRange('3.8.0', '^3.9')).toBe(false)
-    expect(satisfiesRange(HOST_UI_VERSION, '^3.10')).toBe(true)
-    expect(satisfiesRange('3.9.0', '^3.10')).toBe(false)
-    expect(satisfiesRange(HOST_UI_VERSION, '^3.11')).toBe(true)
-    expect(satisfiesRange('3.10.0', '^3.11')).toBe(false)
-    expect(satisfiesRange(HOST_UI_VERSION, '^3.12')).toBe(true)
-    expect(satisfiesRange('3.11.0', '^3.12')).toBe(false)
-    expect(satisfiesRange(HOST_UI_VERSION, '^3.13')).toBe(true)
-    expect(satisfiesRange('3.12.0', '^3.13')).toBe(false)
-    expect(satisfiesRange(HOST_UI_VERSION, '^3.14')).toBe(true)
-    expect(satisfiesRange('3.13.0', '^3.14')).toBe(false)
-    expect(satisfiesRange(HOST_UI_VERSION, '^3.15')).toBe(true)
-    expect(satisfiesRange('3.14.0', '^3.15')).toBe(false)
-    expect(satisfiesRange(HOST_UI_VERSION, '^3.16')).toBe(true)
-    expect(satisfiesRange('3.15.0', '^3.16')).toBe(false)
-    expect(satisfiesRange(HOST_UI_VERSION, '^3.17')).toBe(true)
-    expect(satisfiesRange('3.16.0', '^3.17')).toBe(false)
-    expect(satisfiesRange(HOST_UI_VERSION, '^3.18')).toBe(true)
-    expect(satisfiesRange('3.17.0', '^3.18')).toBe(false)
-    expect(satisfiesRange(HOST_UI_VERSION, '^3.19')).toBe(true)
-    expect(satisfiesRange('3.18.0', '^3.19')).toBe(false)
+  it('rejects plugins built for UI 3 or older and accepts ^4.0', () => {
+    expect(HOST_UI_VERSION).toBe('4.0.0')
+    for (const range of ['^1.0', '^2.0', '^3.0', '^3.20']) expect(satisfiesRange(HOST_UI_VERSION, range), range).toBe(false)
+    expect(satisfiesRange(HOST_UI_VERSION, '^4.0')).toBe(true)
+    expect(satisfiesRange('3.20.0', '^4.0')).toBe(false)
+    for (let n = 1; n <= 20; n++) {
+      expect(satisfiesRange(`3.${n}.0`, `^3.${n}`)).toBe(true)
+      expect(satisfiesRange(`3.${n - 1}.0`, `^3.${n}`)).toBe(false)
+    }
+  })
+  it('declares ^4.0 in the README section of UI 4.0', () => {
+    expect(readme).toContain('（UI SDK 4.0）')
+    expect(readme).toContain('hostUICompat: "^4.0"')
   })
   it('declares in each README section of UI 3.N the range ^3.N and the UI it follows', () => {
     const sections = readme.split(/^## /m).flatMap((body) => {
       const minor = /^[^\n]*（UI SDK 3\.(\d+)）/.exec(body)?.[1]
       return minor ? [{ minor: Number(minor), body }] : []
     })
-    expect(sections.map((s) => s.minor)).toContain(19)
+    expect(sections.map((s) => s.minor)).toContain(20)
     for (const { minor, body } of sections) {
       for (const m of body.matchAll(/hostUICompat: "\^3\.(\d+)"/g)) expect(Number(m[1]), `UI 3.${minor}`).toBe(minor)
       for (const m of body.matchAll(/(?:与 3\.(\d+) 相同|最后一个带 UI 3\.(\d+) 的核心)/g)) expect(Number(m[1] ?? m[2]), `UI 3.${minor}`).toBe(minor - 1)
@@ -70,6 +41,31 @@ describe('host UI 3 contract', () => {
   it('keeps the plugin preset and the shared packages on the host UI version', () => {
     expect(PRESET_UI_VERSION).toBe(HOST_UI_VERSION)
     expect([hostPackage.version, uiPackage.version, presetPackage.version]).toEqual([HOST_UI_VERSION, HOST_UI_VERSION, HOST_UI_VERSION])
+  })
+  it('has no JSON Schema form (UI 4.0): plugin UIs are code only', () => {
+    for (const name of ['SchemaForm', 'SchemaField', 'SCHEMA_WIDGETS_KEY', 'validateSchema']) {
+      expect(name in ui, name).toBe(false)
+    }
+    expect(ui.localizedText({ en: 'Name', zh: '名称' }, 'zh')).toBe('名称')
+  })
+  it('exports the form validation framework (UI 4.0)', async () => {
+    for (const name of ['SForm', 'useForm', 'setPath', 'getPath', 'SECRET_MASK'] as const) expect(ui[name]).toBeDefined()
+    expect(ui.SECRET_MASK).toBe('******')
+    expectTypeOf<ui.Trigger>().toEqualTypeOf<'change' | 'blur'>()
+    expectTypeOf<ReturnType<ui.FormApi['validate']>>().toEqualTypeOf<Promise<boolean>>()
+    const host = await import('@sub2api/host')
+    expect(host.toFieldPath('credentials.a.b')).toBe('a.b')
+    expect(host.errorMessage(new TypeError('x'), (k) => k)).toBe('auth.errors.network')
+    expect(host.settingsFieldErrors({ 'values/a/b': 'x', values: 'y' })).toEqual({ fields: { 'a.b': 'x' }, root: ['y'] })
+  })
+  it('exports the form building blocks (UI 4.0)', async () => {
+    for (const name of ['SSecretInput', 'SUrlPresetInput', 'SCredentialForm', 'SFormSection', 'SDateTimeInput', 'useCredentialForm', 'nativeAccountFormProps', 'createApiKeyForm', 'usePluginSettings', 'SSettingsPage', 'SResourcePage'] as const) {
+      expect(ui[name]).toBeDefined()
+    }
+    expect((await import('@sub2api/host')).useGuardedSettings).toBeTypeOf('function')
+    expectTypeOf<ui.NativeAccountFormProps['mode']>().toEqualTypeOf<'create' | 'edit'>()
+    expect(Object.keys(ui.nativeAccountFormProps)).toEqual(['modelValue', 'mode', 'account', 'accountType', 'errors', 'proxyTicket'])
+    expectTypeOf<ReturnType<ui.FormApi['bindNumber']>>().toEqualTypeOf<ReturnType<ui.FormApi['bind']>>()
   })
   it('exports the horizontal clip probe the permission matrix uses (UI 3.16)', () => {
     expect(ui.useScrollClip).toBeDefined()

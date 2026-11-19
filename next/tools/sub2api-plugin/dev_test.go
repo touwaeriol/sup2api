@@ -58,7 +58,8 @@ func TestDevPrepare(t *testing.T) {
 	demoPkg := strings.TrimSpace(runOK(t, "pack", "--dir", demo, "--out-dir", t.TempDir()))
 
 	state := t.TempDir()
-	d := &devSession{state: state, builtin: filepath.Join(state, "builtin"), work: filepath.Join(state, "work"), stderr: io.Discard}
+	// anthropic's native UI is built separately.
+	d := &devSession{state: state, builtin: filepath.Join(state, "builtin"), work: filepath.Join(state, "work"), stderr: io.Discard, allowMissingUI: true}
 	for _, p := range []string{filepath.Join("..", "..", "plugins", "anthropic"), demoPkg} {
 		s, err := newDevSource(p, "")
 		if err != nil {
@@ -152,8 +153,8 @@ func TestDevFingerprint(t *testing.T) {
 	if touch("node_modules/x/index.js", "dep") != base {
 		t.Error("node_modules triggered a rebuild")
 	}
-	if touch("forms/s.json", `{"type":"object"}`) == base {
-		t.Error("form change not detected")
+	if touch("i18n/en.json", `{"title":"Demo"}`) == base {
+		t.Error("package file change not detected")
 	}
 	base = d.fingerprint()
 	if touch("ui/native/dist/entry.js", "export function register() { /* v2 */ }") == base {

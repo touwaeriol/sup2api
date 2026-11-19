@@ -61,7 +61,7 @@ func attemptEntryModel(entry gjson.Result, primary string, defaultPrimary bool) 
 	if (!model.Exists() || model.Type == gjson.Null) && defaultPrimary {
 		model = gjson.Result{Type: gjson.String, Str: primary}
 	}
-	if model.Type != gjson.String || model.Str == "" || len(model.Str) > 256 || !utf8.ValidString(model.Str) || strings.ContainsAny(model.Str, "\r\n\x00") {
+	if model.Type != gjson.String || model.Str == "" || !utf8.ValidString(model.Str) || strings.ContainsAny(model.Str, "\r\n\x00") {
 		return "", fmt.Errorf("missing or invalid attempt model")
 	}
 	return model.Str, nil

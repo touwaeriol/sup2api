@@ -38,7 +38,7 @@ func (g *PluginMutations) Begin(ctx context.Context) (context.Context, func(), e
 		if err != nil {
 			return ctx, noop, err
 		}
-		return ctx, noop, core.ErrConflict.WithMessage("another cluster change is being submitted; retry")
+		return ctx, noop, core.ErrClusterChangeBusy
 	}
 	work, stop := core.KeepLock(work, lk)
 	done := func() { stop(); cancel(); lk.Release() }

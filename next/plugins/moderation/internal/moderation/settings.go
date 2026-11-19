@@ -49,9 +49,9 @@ type Category struct {
 	Description string `json:"description"`
 }
 
-// Settings is the plugin configuration (forms/settings.schema.json, CONTRACTS
-// §72.10). Of the keys retired in 0.11.0 only those of retiredKeys are read,
-// from settings not saved since.
+// Settings is the plugin configuration (CONTRACTS §72.10; the keys and
+// limits CheckSettings accepts). Of the keys retired in 0.11.0 only those of
+// retiredKeys are read, from settings not saved since.
 type Settings struct {
 	Mode string `json:"mode"`
 
@@ -158,7 +158,7 @@ const (
 // of a conversation, mostly - so rewording the new message does not help.
 const MsgHistoryHit = "The conversation history contains content that was already flagged; please clear the context and try again."
 
-// DefaultSettings returns the schema defaults.
+// DefaultSettings returns the defaults of every setting.
 func DefaultSettings() Settings {
 	return Settings{
 		Mode:          ModeOff,
@@ -284,10 +284,10 @@ func (d decoder) userIDs(k string) (ids []int64, invalid int) {
 	return ids, invalid
 }
 
-// retiredKey is a key 0.11.0 removed from the schema that is still read
+// retiredKey is a key 0.11.0 removed from the settings that is still read
 // while its successor is absent ("" = none: always). The core keeps the
 // stored values until the settings are saved again, and the console drops
-// keys the schema does not declare when it saves, so only settings not saved
+// keys the plugin no longer accepts when it saves, so only settings not saved
 // since 0.11.0 hold them (CONTRACTS §72 0.11.0).
 type retiredKey struct {
 	key, successor string
@@ -415,7 +415,7 @@ func (d decoder) notify(s *Settings) {
 	d.str("notify_webhook_url", &s.NotifyWebhookURL)
 	s.NotifyWebhookURL = strings.TrimSpace(s.NotifyWebhookURL)
 	if s.NotifyWebhookURL != "" && (!baseURLRe.MatchString(s.NotifyWebhookURL) || utf8.RuneCountInString(s.NotifyWebhookURL) > 1000) {
-		s.NotifyWebhookURL = "" // the core rejects it on save (schema pattern); a stored bad value turns notices off
+		s.NotifyWebhookURL = "" // ValidateSettings rejects it on save (CheckSettings); a stored bad value turns notices off
 	}
 	d.str("notify_webhook_secret", &s.NotifyWebhookSecret)
 	s.NotifyWebhookSecret = textutil.TruncateRunes(strings.TrimSpace(s.NotifyWebhookSecret), 200)

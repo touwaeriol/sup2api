@@ -1,7 +1,6 @@
 package account
 
 import (
-	"bytes"
 	"encoding/json"
 	"sort"
 
@@ -330,93 +329,6 @@ func myPlatformViews(g core.Generation) []MyPlatformView {
 
 func (s *Service) listMyPlatforms(c *gin.Context) {
 	httpapi.OK(c, myPlatformViews(s.gen()))
-}
-
-func rawOrNull(b json.RawMessage) json.RawMessage {
-	if len(bytes.TrimSpace(b)) == 0 {
-		return json.RawMessage("null")
-	}
-	return b
-}
-
-func (s *Service) typeForm(c *gin.Context) {
-	ctx := c.Request.Context()
-	b, ok := s.accountType(c.Param("plugin_key"), c.Param("type"))
-	if !ok {
-		httpapi.Fail(c, core.ErrNotFound.WithMessage(t(ctx, "account type not found", "账号类型不存在")))
-		return
-	}
-	schema, ui := rawOrNull(b.FormSchema), rawOrNull(b.FormUI)
-	if len(b.Type.GuardedSettings) > 0 {
-		custom, err := s.customSettings(ctx)
-		if err == nil && !custom {
-			if schema, ui, err = guardForm(schema, ui, b.Type.GuardedSettings); err != nil {
-				err = core.ErrPluginUnavailable.WithMessage(t(ctx, "the account form schema of the plugin is invalid",
-					"插件的账号表单 schema 无效")).WithCause(err)
-			}
-		}
-		if err != nil {
-			httpapi.Fail(c, err)
-			return
-		}
-	}
-	httpapi.OK(c, gin.H{"schema": schema, "ui_schema": ui})
-}
-
-// guardForm rewrites a copy of the form for callers without
-// account:settings:custom (CONTRACTS §21.3): every guarded field gets
-// schema.properties.<field>.enum = allowed and, with a single allowed value,
-// ui_schema.<field>["ui:readonly"] = true. The cached originals are not
-// touched: both documents are decoded into fresh maps. A schema that is not
-// an object is left alone.
-func guardForm(schema, ui json.RawMessage, guards []manifest.GuardedSetting) (json.RawMessage, json.RawMessage, error) {
-	var sch map[string]any
-	if err := json.Unmarshal(schema, &sch); err != nil {
-		return nil, nil, err
-	}
-	if sch == nil {
-		return schema, ui, nil
-	}
-	props, _ := sch["properties"].(map[string]any)
-	if props == nil {
-		props = map[string]any{}
-		sch["properties"] = props
-	}
-	var uim map[string]any
-	if err := json.Unmarshal(ui, &uim); err != nil {
-		return nil, nil, err
-	}
-	for _, g := range guards {
-		prop, _ := props[g.Field].(map[string]any)
-		if prop == nil {
-			prop = map[string]any{}
-			props[g.Field] = prop
-		}
-		prop["enum"] = g.Allowed
-		if len(g.Allowed) == 1 {
-			if uim == nil {
-				uim = map[string]any{}
-			}
-			f, _ := uim[g.Field].(map[string]any)
-			if f == nil {
-				f = map[string]any{}
-				uim[g.Field] = f
-			}
-			f["ui:readonly"] = true
-		}
-	}
-	outS, err := json.Marshal(sch)
-	if err != nil {
-		return nil, nil, err
-	}
-	if uim == nil {
-		return outS, ui, nil
-	}
-	outU, err := json.Marshal(uim)
-	if err != nil {
-		return nil, nil, err
-	}
-	return outS, outU, nil
 }
 
 // typeLabel returns the label of an account type, or nil when the type is not

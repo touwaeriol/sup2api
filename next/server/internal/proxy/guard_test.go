@@ -23,7 +23,7 @@ func TestDirectClientGuard(t *testing.T) {
 		t.Fatal(err)
 	}
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
-	if _, err := guarded.Do(req); err == nil {
+	if _, err := guarded.Client.Do(req); err == nil {
 		t.Fatal("loopback upstream reached through the guarded direct client")
 	}
 
@@ -32,7 +32,7 @@ func TestDirectClientGuard(t *testing.T) {
 		t.Fatal(err)
 	}
 	req, _ = http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
-	resp, err := open.Do(req)
+	resp, err := open.Client.Do(req)
 	if err != nil {
 		t.Fatalf("AllowPrivate: %v", err)
 	}

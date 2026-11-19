@@ -15,6 +15,7 @@ package volcengine
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -109,7 +110,7 @@ func prefixesOf(accountType, settingsJSON string) (prefixes, error) {
 // prefix, and refuses a missing one.
 //
 // Both halves exist because of the same failure, which is a billing failure
-// rather than a 404. relaySpec strips nothing (see its comment), so a base URL
+// rather than a 404. relaySpec has no Versions (see its comment), so a base URL
 // of "https://r/v1" with the default prefix yields "https://r/v1/v1/...". On
 // the text surface that is a loud 404. On the video surface the submit 404s,
 // but if a relay instead answers 200 for the submit and 404 for the poll - or
@@ -143,7 +144,8 @@ func validateRelayBaseURL(errs pluginsdk.FieldErrors, credentialsJSON, settingsJ
 		// apikey.Spec.Validate has already reported this shape.
 		return errs
 	}
-	p := strings.TrimRight(u.Path, "/")
+	// The escaped path, as the address is saved and sent: "a%2Fv1" does not end in a /v1 segment.
+	p := strings.TrimRight(u.EscapedPath(), "/")
 	for _, known := range []string{RelayAPIPrefix, APIPrefix} {
 		if !strings.HasSuffix(p, known) {
 			continue
@@ -161,9 +163,13 @@ func validateRelayBaseURL(errs pluginsdk.FieldErrors, credentialsJSON, settingsJ
 //
 // This is not a blocklist of dangerous characters - those are always on the
 // wrong side, and CONTRACTS §25.1 already records what that costs. It is a
-// whitelist of one shape: a rooted path. The guarantee that a prefix cannot
-// move the request to another host is enforced separately and unconditionally,
-// by sameHost below, because this function only runs when an account is saved.
+// whitelist of one shape: a rooted path. It runs when an account is saved
+// and on every request (prefixesOf), so a rule added here also refuses
+// stored accounts on the request path; a save-only rule belongs in
+// validatePrefixFields. The guarantee that a prefix cannot move the request
+// to another host is enforced separately and unconditionally, by upstreamURL
+// below: a stored value need not have passed today's rules (an older
+// version wrote it, a backup restored it).
 func normalizePrefix(raw string) (string, error) {
 	p := strings.TrimSpace(raw)
 	if p == "" {
@@ -193,7 +199,8 @@ func normalizePrefix(raw string) (string, error) {
 
 // validatePrefixFields reports the prefix settings an operator cannot have
 // meant. It is the friendly half of the guarantee - the binding half is
-// upstreamURL, which runs on every request.
+// upstreamURL, which runs on every request. Whitespace inside a prefix is
+// refused here only, on save: a stored prefix holding some keeps working.
 func validatePrefixFields(errs pluginsdk.FieldErrors, settingsJSON string) pluginsdk.FieldErrors {
 	obj, err := apikey.DecodeObject(settingsJSON)
 	if err != nil {
@@ -209,7 +216,11 @@ func validatePrefixFields(errs pluginsdk.FieldErrors, settingsJSON string) plugi
 			errs = errs.Add(f, "type", f+" must be a string / "+f+" 必须是字符串")
 			continue
 		}
-		if _, err := normalizePrefix(s); err != nil {
+		_, err := normalizePrefix(s)
+		if err == nil && hasSpace(strings.TrimSpace(s)) {
+			err = errors.New("must not contain whitespace")
+		}
+		if err != nil {
 			errs = errs.Add(f, "pattern", fmt.Sprintf(
 				"%s %s / %s 必须是以 / 开头的路径前缀（如 /api/v3），留空表示使用默认值", f, err, f))
 		}

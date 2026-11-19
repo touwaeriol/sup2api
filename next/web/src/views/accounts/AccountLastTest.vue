@@ -14,7 +14,7 @@ const { t } = useI18n()
 const title = computed(() => {
   const l = props.last
   if (!l) return ''
-  return [`${t('accounts.lastTest.model')}: ${l.model || '—'}`, l.status !== undefined ? (l.status > 0 ? `HTTP ${l.status}` : t('accounts.testNoHTTPResponse')) : '', l.error_code ? `${t('accounts.testErrorCode')}: ${l.error_code}` : '', l.error_source ? `${t('accounts.testErrorSource')}: ${t(`accounts.testErrorSources.${l.error_source}`)}` : '', l.message ? `${t('accounts.message')}: ${l.message}` : '', formatDateTime(l.at)].filter(Boolean).join('\n')
+  return [`${t('accounts.lastTest.model')}: ${l.model || '—'}`, l.protocol ? `${t('accounts.testProtocol')}: ${l.protocol}` : '', l.status !== undefined ? (l.status > 0 ? `HTTP ${l.status}` : t('accounts.testNoHTTPResponse')) : '', l.error_code ? `${t('accounts.testErrorCode')}: ${l.error_code}` : '', l.error_source ? `${t('accounts.testErrorSource')}: ${t(`accounts.testErrorSources.${l.error_source}`)}` : '', l.message ? `${t('accounts.message')}: ${l.message}` : '', formatDateTime(l.at)].filter(Boolean).join('\n')
 })
 </script>
 

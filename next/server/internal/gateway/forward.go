@@ -21,13 +21,6 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/usagerules"
 )
 
-const (
-	maxSSELine      = 16 << 20
-	maxUsageJSONBuf = 32 << 20
-)
-
-var errLineTooLong = errors.New("sse line too long")
-
 // convertError is a failure converting the upstream response to the client
 // protocol.
 type convertError struct{ err error }
@@ -40,20 +33,20 @@ func (e *convertError) Unwrap() error { return e.err }
 // route the response is converted to the endpoint protocol; usage is always
 // read from the upstream response with the upstream protocol's rules.
 //
-// The declarative rules run here in every case. When the endpoint declares
-// usage.source "plugin" they are joined by a capture (see usageplugin.go)
-// that keeps the few bytes PlatformService.ExtractUsage will be shown, and
-// the plugin is asked once the last byte has left - never before. upBody is
-// the request as it went upstream; only its declared usageRequestFields are
-// read from it, at the end, and the body itself is not kept.
-func (c *call) forward(ctx context.Context, rt *typeRoute, acct *pluginv1.Account, resp *http.Response, upBody []byte) attemptResult {
-	defer c.limitClientWrites()()
+// The declarative rules run here in every case. A relay that waits passes
+// a capture (newUsageCapture; nil when the endpoint's usage is the core's)
+// that keeps what its observation shows the plugin; the plugin reads it in
+// the answer to its RelayUpstream call once forward has returned
+// (waited.go) - never before. A relay that does not wait passes nil: no
+// plugin reads its answer. upBody is the request as it went upstream; only
+// its declared usageRequestFields are read from it, at the end, and the
+// body itself is not kept.
+func (c *call) forward(ctx context.Context, rt *typeRoute, acct *pluginv1.Account, resp *http.Response, upBody []byte, cap *usageCapture) attemptResult {
 	core.ApplyProviderHeaders(c.c.Writer.Header(), resp.Header)
 	u := newUsageAcc(rt.usage).WithLog("request_id", c.rid, "plugin", rt.binding.Plugin.Key,
 		"platform", rt.platform, "protocol", rt.upstream)
 	u.WithPrimaryModel(c.upstreamPrimaryModel)
 	u.WithAttemptAccounting(c.hasRequestedAttemptUsage(rt, upBody))
-	cap := newUsageCapture(rt)
 	c.upstreamResponded = true
 	c.rec.StatusCode = resp.StatusCode
 	c.rec.Success = true
@@ -94,7 +87,7 @@ func (c *call) forward(ctx context.Context, rt *typeRoute, acct *pluginv1.Accoun
 	if len(u.Metrics) > 0 {
 		c.rec.Metrics = u.Metrics
 	}
-	if c.rec.UpstreamModel == "" && u.Model != "" && u.Model != c.model {
+	if u.Model != "" && (rt.echoModel || c.rec.UpstreamModel == "" && u.Model != c.model) {
 		c.rec.UpstreamModel = u.Model
 	}
 	var cerr *convertError
@@ -137,8 +130,9 @@ func (c *call) forward(ctx context.Context, rt *typeRoute, acct *pluginv1.Accoun
 		c.rec.ErrorMessage = truncateUTF8("upstream stream interrupted: "+err.Error(), 1000)
 		slog.WarnContext(ctx, "gateway: upstream response interrupted", "request_id", c.rid, "err", err)
 	}
-	// The client has its bytes. The plugin, if any, is asked in submit -
-	// after the handler returns, so the response is terminated first.
+	// The answer is written (or, for a relay that waits, held back until
+	// its facts commit: waited.go). The plugin reading the usage is handed
+	// the observation armed below only after forward returned.
 	if u.StreamError != "" {
 		c.recordStreamFailure(ctx, acct.GetId(), u.StreamError)
 	}
@@ -269,6 +263,10 @@ func (c *call) checkResponseShape(ctx context.Context, rt *typeRoute, resp *http
 		"declared_stream", rt.resp.Stream, "declared_non_stream", rt.resp.NonStream)
 }
 
+// forwardJSON relays a JSON answer as it arrives and keeps all of it, so
+// the usage is read from the whole answer whatever its size. The answer is
+// held once, in buf, until the usage is read; the plugin's capture keeps a
+// reference to it.
 func (c *call) forwardJSON(resp *http.Response, u *usageAcc, cap *usageCapture) error {
 	w := c.relayWriter()
 	ct := resp.Header.Get("Content-Type")
@@ -278,7 +276,6 @@ func (c *call) forwardJSON(resp *http.Response, u *usageAcc, cap *usageCapture) 
 	w.Header().Set("Content-Type", ct)
 	w.WriteHeader(resp.StatusCode)
 	var buf bytes.Buffer
-	overflow := false
 	chunk := make([]byte, 32<<10)
 	for {
 		n, rerr := resp.Body.Read(chunk)
@@ -286,14 +283,7 @@ func (c *call) forwardJSON(resp *http.Response, u *usageAcc, cap *usageCapture) 
 			if _, werr := w.Write(chunk[:n]); werr != nil {
 				return relayWriteError(werr)
 			}
-			if !overflow {
-				if buf.Len()+n > maxUsageJSONBuf {
-					overflow = true
-					buf = bytes.Buffer{}
-				} else {
-					buf.Write(chunk[:n])
-				}
-			}
+			buf.Write(chunk[:n])
 		}
 		if rerr == io.EOF {
 			break
@@ -306,11 +296,6 @@ func (c *call) forwardJSON(resp *http.Response, u *usageAcc, cap *usageCapture) 
 		}
 	}
 	w.Flush()
-	if overflow {
-		slog.Warn("gateway: response too large for usage extraction", "request_id", c.rid)
-		cap.dropBody()
-		return nil
-	}
 	u.ApplyJSON(buf.Bytes())
 	cap.setBody(buf.Bytes())
 	return nil
@@ -320,12 +305,9 @@ func (c *call) forwardJSON(resp *http.Response, u *usageAcc, cap *usageCapture) 
 // from it (upstream rules) and writes the converted body. Nothing is written
 // when reading or converting fails.
 func (c *call) forwardJSONConverted(resp *http.Response, u *usageAcc, cap *usageCapture, conv convert.Converter) error {
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxUsageJSONBuf+1))
+	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return err
-	}
-	if len(raw) > maxUsageJSONBuf {
-		return &convertError{err: errors.New("upstream response too large")}
 	}
 	u.ApplyJSON(raw)
 	cap.setBody(raw)
@@ -435,7 +417,7 @@ func (c *call) forwardSSE(ctx context.Context, resp *http.Response, u *usageAcc,
 		return err
 	}
 	for {
-		line, rerr := readLine(br, maxSSELine)
+		line, rerr := readLine(br)
 		if len(line) > 0 {
 			if passthrough {
 				if _, werr := w.Write(line); werr != nil {
@@ -523,8 +505,9 @@ func (c *call) jsonArrayStream() bool {
 const protocolGeminiStream = manifest.PlatformGemini + ".stream_generate"
 
 // readLine returns the next line including its '\n' (the last line may lack
-// it). The slice is only valid until the next read.
-func readLine(br *bufio.Reader, limit int) ([]byte, error) {
+// it), of any length: one longer than br's buffer is gathered into a slice
+// that grows. The slice is only valid until the next read.
+func readLine(br *bufio.Reader) ([]byte, error) {
 	line, err := br.ReadSlice('\n')
 	if !errors.Is(err, bufio.ErrBufferFull) {
 		return line, err
@@ -533,9 +516,6 @@ func readLine(br *bufio.Reader, limit int) ([]byte, error) {
 	for {
 		line, err = br.ReadSlice('\n')
 		buf = append(buf, line...)
-		if len(buf) > limit {
-			return buf, errLineTooLong
-		}
 		if !errors.Is(err, bufio.ErrBufferFull) {
 			return buf, err
 		}

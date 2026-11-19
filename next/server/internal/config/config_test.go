@@ -151,6 +151,14 @@ func TestPluginRunDirAndEgressDefaults(t *testing.T) {
 	if cfg.Plugins.EgressAllowPrivate {
 		t.Fatal("private egress allowed by default")
 	}
+	// The sandbox is on unless configured otherwise (CONTRACTS §43.8).
+	if p := cfg.Plugins; !p.StrictNetwork || !p.Seccomp || !p.Landlock || p.DevMode {
+		t.Fatalf("sandbox defaults %+v", p)
+	}
+	t.Setenv("SUB2API_PLUGIN_LANDLOCK", "false")
+	if cfg, err = config.Load("linux"); err != nil || cfg.Plugins.Landlock {
+		t.Fatalf("Landlock not turned off: %+v %v", cfg.Plugins, err)
+	}
 	t.Setenv("SUB2API_PLUGIN_RUN_DIR", "/run/s2p")
 	t.Setenv("SUB2API_PLUGIN_EGRESS_ALLOW_PRIVATE", "true")
 	if cfg, err = config.Load("linux"); err != nil || cfg.Plugins.RunDir != "/run/s2p" || !cfg.Plugins.EgressAllowPrivate {
@@ -211,8 +219,8 @@ func TestEnvironmentProcessLayer(t *testing.T) {
 	if fmt.Sprint(cfg.Environment) != "map[relay_timeout_seconds:300]" {
 		t.Fatalf("environment: %v", cfg.Environment)
 	}
-	t.Setenv("SUB2API_MAX_REQUEST_BODY_MB", "4096")
-	if _, err := config.Load("linux"); err == nil || !strings.Contains(err.Error(), "SUB2API_MAX_REQUEST_BODY_MB") {
+	t.Setenv("SUB2API_STREAMING_IDLE_TIMEOUT_SECONDS", "86401")
+	if _, err := config.Load("linux"); err == nil || !strings.Contains(err.Error(), "SUB2API_STREAMING_IDLE_TIMEOUT_SECONDS") {
 		t.Fatalf("out of range: %v", err)
 	}
 }

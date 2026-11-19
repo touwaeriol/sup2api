@@ -93,10 +93,10 @@ export default {
     jobs: '后台任务',
     ui_menu: '控制台菜单',
     ui_iframe: '沙箱 iframe 页面',
-    accounts_read: '读取账号',
     authz_read: '查询用户的核心与其他插件权限',
     accounts_auto_state: '修改账号自动状态',
     lock: '跨节点锁',
+    fs_data: '读写本插件的数据目录',
     db_schema: '独立数据库 schema',
     net: '外部网络访问',
     routes_public: '公开接口',
@@ -109,7 +109,6 @@ export default {
     sticky_clear: '清除粘性会话绑定',
     gateway_observe: '观测网关请求',
     users_read: '读取用户',
-    accounts_credentials: '账号凭证',
     ledger_credit: '余额入账',
     ledger_debit: '余额扣款',
     ui_native: '原生界面',
@@ -118,13 +117,13 @@ export default {
   },
 
   hpDesc: {
+    fs_data: '读写核心分给本插件的数据目录里的文件（只在本节点）。不授予时插件不能读写任何文件。',
     broadcast: '向其他节点上的本插件实例广播消息（例如规则修改后让各节点立即重载）。',
     lock: '让不同节点上的本插件实例不同时做同一件事（例如定时同步）。它的锁对其他插件不可见。'
   },
 
   hpWarn: {
     ui_native: '插件代码将以你的登录身份在控制台中运行。',
-    accounts_credentials: '插件可以读取其自己声明的账号类型下上游账号的密钥（API Key、Token）。',
     ledger_credit: '插件可以给用户增加余额。',
     ledger_debit: '插件可以扣减用户余额。',
     users_write: '插件可以创建和修改用户。',
@@ -187,12 +186,13 @@ export default {
     titleInstall: '安装插件',
     titleUpgrade: '升级插件',
     notFound: '没有找到该版本的审查信息。请重新上传插件包或从插件市场安装。',
-    packageGone: '版本 {version} 的安装包已不在任何节点上（可能在升级失败后被清理），无法审查或批准。请重新上传插件包或从插件市场安装。',
+    packageGone: '没有能连上的节点持有版本 {version} 的安装包（持有它的节点可能离线，或它在升级失败后被清理），无法审查或批准。请让持有它的节点恢复在线，或重新上传插件包、从插件市场安装。',
     fromCache: '显示的是上传时返回的审查信息。',
     signature: '签名',
     hostCompat: '兼容核心',
     incompatibleTitle: '该插件与当前核心版本不兼容',
     incompatibleBody: '插件要求核心版本 {range}，无法安装。',
+    requestAccessTitle: '此插件会收到的内容',
     signatureWarnTitle: '签名：{status}',
     signatureWarnBody: '无法用受信任的发布者密钥验证该插件包。只有在确认来源可信时才继续。',
     diffTitle: '本版本的权限变化',
@@ -250,6 +250,10 @@ export default {
 
   resources: {
     memory: '内存',
+    memorySuggested: '建议内存',
+    unlimited: '不限',
+    memoryLimit: '插件建议 {value}，这不是限制。当前限制：{limit}。留空或填 0 表示不限。',
+    platformMemoryHint: '平台插件每个并发的大请求约需 3 × 请求体上限 + 64 MB。',
     memoryMB: '内存（MB）',
     cpu: 'CPU',
     cores: '{n} 核',
@@ -259,7 +263,7 @@ export default {
     invalid: '请输入非负数',
     saved: '资源限制已保存，已通知各节点按新限制重启插件实例。',
     restartHint: '保存后各节点会用新限制逐个重启该插件实例（先启动新实例再排空旧实例）。',
-    hint: '留空表示使用 manifest 中的申请值；不能超过全局上限。',
+    hint: '留空表示使用 manifest 中的申请值；内存除非在这里设置或节点设了上限，否则不限。设置了节点上限时不能超过它。',
     requestedValue: 'manifest 申请值：{value}'
   },
 
@@ -470,11 +474,9 @@ export default {
   },
 
   settings: {
-    unsaved: '有未保存的修改',
     pageHint: '本插件的设置。插件声明的权限允许你的角色编辑这些设置。',
     denied: '你无权打开本插件的设置。',
-    none: '本插件没有设置。',
-    reenter: '要修改其他设置，需要重新填写这个密钥'
+    none: '本插件没有设置。'
   },
 
   retired: {
@@ -552,12 +554,16 @@ export default {
       rolled_back: '发布已回滚到 v{version}。'
     }
   },
+  refusal: {
+    outdated_contract: "插件 {key}{'@'}{version} 是按旧的插件协议构建的，本核心（{host}，插件协议 {protocol}）不能加载它。请安装为核心 {first} 及以上构建的版本。"
+  },
   conflicts: {
     short: '{n} 项资源未分配',
     title: '资源未分配',
     hint: '这些资源已被先占用的插件或核心持有（例如核心升级后新增了保留路径或内置平台），本插件在没有它们的情况下运行，下列端点不会生效。请停用或卸载冲突的插件，或升级本插件后重新启用。'
   },
   errors: {
-    packageGone: '该插件版本的安装包已不在任何节点上（可能在升级失败后被清理）。请重新上传插件包或从插件市场安装。'
+    packageGone: '没有能连上的节点持有该插件版本的安装包（持有它的节点可能离线，或它在升级失败后被清理）。请让持有它的节点恢复在线，或重新上传插件包、从插件市场安装。',
+    clusterChangeBusy: '另一项集群变更（插件或核心变更）正在提交，请稍后重试。'
   }
 }

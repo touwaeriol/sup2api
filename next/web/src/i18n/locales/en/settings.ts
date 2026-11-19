@@ -93,7 +93,7 @@ export default {
     processUnset: 'The process environment variable {name} is the fallback.',
     follow: 'Follow',
     followValue: 'Follow ({value})',
-    units: { seconds: 's', minutes: 'min', mb: 'MB', count: 'times' }
+    units: { seconds: 's', minutes: 'min', count: 'times' }
   },
   gateway: {
     title: 'Gateway',
@@ -107,6 +107,7 @@ export default {
       queue_sticky_wait_seconds: 'Longest wait for a bound account',
       queue_fallback_max_waiting: 'Max queued per account when all are full',
       queue_fallback_wait_seconds: 'Longest wait when all accounts are full',
+      max_request_body_mb: 'Request body limit',
       media_download_max_mb: 'Media download cap',
       claude_max_tokens: 'Claude default max_tokens (built-in parameter override)'
     },
@@ -116,10 +117,13 @@ export default {
       queue_sticky_wait_seconds: 'Longest wait for the bound account; after it the sticky rule switches account or answers 429. 0 turns this queue off.',
       queue_fallback_max_waiting: 'How many requests per account may queue when every candidate is full. 0 answers 429 at once.',
       queue_fallback_wait_seconds: 'Longest wait when every candidate is full; after it the request gets 429. 0 turns this queue off.',
-      platform_call_timeout_ms: 'Timeout of plugin platform calls on the request path (building the upstream request, parsing usage).',
+      platform_call_timeout_ms:
+        'Timeout of two kinds of single call: a plugin classifying a failed upstream request, and the gateway reading the billing policy "When the client disconnects mid-response" for a request (if it cannot be read in time, the request is billed from the pre-charge). A plugin\'s own processing while forwarding a request has no time limit.',
       default_hook_timeout_ms: 'Used by hooks whose manifest sets no timeout.',
       platform_hotpath_timeout_ms:
-        'Timeout of the per-request platform calls that are not hooks: resolving the model before scheduling, and reading usage after the response was sent.',
+        'Timeout of the per-request platform calls before scheduling that are not hooks: resolving the model, and estimating usage for the pre-charge.',
+      max_request_body_mb:
+        'Largest body of any gateway request (MB); a larger one gets 413, and one WebSocket message is bounded by it too. It is the only request size limit: endpoints, groups and plugins cannot set another.',
       media_download_max_mb: 'Size cap of one http(s) image or other media file downloaded for a request converted to Gemini (MB).',
       claude_max_tokens:
         'On, a request to an Anthropic account without max_tokens gets it from the table below; one that sets it is left as is. Parameter overrides of the account run after it and may change it. Off, only a request converted to Anthropic gets {fallback}, as the protocol requires.'
@@ -147,15 +151,6 @@ export default {
     preConsumeHint: 'Minimum input tokens reserved for text requests, default 500. Larger local estimates take precedence. Zero disables the minimum. Final billing uses actual usage; video uses plugin estimates.',
     preConsumeInvalid: 'Enter an integer from 0 to 100000000',
     title: 'Billing',
-    missingPolicy: 'When a model has no price',
-    policy: {
-      reject: 'Reject the request',
-      free: 'Allow for free'
-    },
-    policyHint: {
-      reject: 'Return 403 model_price_not_configured. Recommended: nothing is served without a price.',
-      free: 'Serve the request and record it with billing status "free".'
-    },
     minBalance: 'Minimum balance',
     minBalanceHint: 'Requests are rejected with 402 when the balance is at or below this value (default 0).',
     bigCost: 'High-cost warning threshold',

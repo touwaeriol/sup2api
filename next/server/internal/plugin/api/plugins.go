@@ -37,12 +37,15 @@ type PluginSummary struct {
 	SignatureStatus string             `json:"signature_status"`
 	PendingVersions []string           `json:"pending_versions"`
 	Nodes           NodeSummary        `json:"node_summary"`
-	EgressPolicy    string             `json:"egress_policy"`
-	InstalledAt     time.Time          `json:"installed_at"`
-	UpdatedAt       time.Time          `json:"updated_at"`
+	// Refusal is set when nodes refuse to load the plugin because it was
+	// built for an older plugin contract (forwarding v2, design 9.2).
+	Refusal      *Refusal  `json:"refusal"`
+	EgressPolicy string    `json:"egress_policy"`
+	InstalledAt  time.Time `json:"installed_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 	// Builtin plugins ship with the image: they can be disabled, not uninstalled.
 	Builtin     bool `json:"builtin"`
-	HasSettings bool `json:"has_settings"`
+	HasSettings bool `json:"has_settings"` // the current version declares native ui.settings (not iframe, not an old package's schema)
 	// ResourceConflicts are the exclusive resources the current generation
 	// of this node could not give the plugin (another plugin claimed them
 	// first, or the core holds them): the console shows the plugin as
@@ -109,13 +112,36 @@ func (a *API) fillSummary(ctx context.Context, s *PluginSummary) error {
 		var sig string
 		var pub string
 		if err := store.G(ctx, a.d.DB.Gorm).Model(&model.PluginVersion{}).
-			Select("signature_status, manifest->>'publisher', COALESCE(manifest->'ui'->'settings'->>'mode' = 'schema', false)").
+			Select("signature_status, manifest->>'publisher', COALESCE(manifest->'ui'->'settings'->>'mode' = 'native', false)").
 			Where("plugin_key = ? AND version = ?", s.Key, v).Row().Scan(&sig, &pub, &s.HasSettings); err != nil {
 			return err
 		}
 		s.SignatureStatus = sig
 		if s.Publisher == "" {
 			s.Publisher = pub
+		}
+	}
+	return nil
+}
+
+// setNodes adds what the live nodes report of each plugin and, for those no
+// node currently refuses, the refusal recorded by their latest rollout
+// (recordedRefusals: one query for all of them).
+func (a *API) setNodes(ctx context.Context, items []*PluginSummary, nodes []core.NodeStatus) error {
+	var unrefused []string
+	for _, s := range items {
+		s.Nodes = summarizeNodes(nodes, s.Key)
+		if s.Refusal = refusal(nodes, s.Key); s.Refusal == nil {
+			unrefused = append(unrefused, s.Key)
+		}
+	}
+	recorded, err := recordedRefusals(ctx, a.d.DB.Gorm, unrefused, a.d.Install.HostVersion())
+	if err != nil {
+		return err
+	}
+	for _, s := range items {
+		if r, ok := recorded[s.Key]; ok {
+			s.Refusal = r
 		}
 	}
 	return nil
@@ -136,17 +162,17 @@ func (a *API) listPlugins(c *gin.Context) {
 		httpapi.Fail(c, err)
 		return
 	}
-	nodes := a.liveNodes(rc)
-	out := make([]*PluginSummary, 0, len(items))
 	for _, s := range items {
 		if err := a.fillSummary(rc, s); err != nil {
 			httpapi.Fail(c, err)
 			return
 		}
-		s.Nodes = summarizeNodes(nodes, s.Key)
-		out = append(out, s)
 	}
-	httpapi.List(c, out, httpapi.Page{Page: page, PageSize: size, Total: total})
+	if err := a.setNodes(rc, items, a.liveNodes(rc)); err != nil {
+		httpapi.Fail(c, err)
+		return
+	}
+	httpapi.List(c, items, httpapi.Page{Page: page, PageSize: size, Total: total})
 }
 
 // PluginDetail is GET /plugins/:key.
@@ -227,7 +253,10 @@ func (a *API) getPlugin(c *gin.Context) {
 		return
 	}
 	nodes := a.liveNodes(rc)
-	s.Nodes = summarizeNodes(nodes, key)
+	if err := a.setNodes(rc, []*PluginSummary{s}, nodes); err != nil {
+		httpapi.Fail(c, err)
+		return
+	}
 	d := PluginDetail{PluginSummary: *s, Grants: []install.Grant{}, NodeList: nodeStates(nodes, key), Hooks: []HookInfo{}, Jobs: []JobInfo{}}
 
 	if s.CurrentVersion != "" {

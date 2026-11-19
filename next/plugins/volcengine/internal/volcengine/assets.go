@@ -144,15 +144,16 @@ func assetFields(credentialsJSON, settingsJSON string) (ak, sk, base, region str
 }
 
 // AssetConfigOf returns the asset library configuration of an account read
-// through Host.AccountCredentials, or (nil, nil) when the account does not
-// take part in the asset library (no access_key and no secret_key).
-func AssetConfigOf(acc *pluginsdk.AccountCredentials) (*AssetConfig, error) {
+// through Host.Account, or (nil, nil) when the account does not take part in
+// the asset library (no access_key and no secret_key).
+func AssetConfigOf(acc *pluginv1.Account) (*AssetConfig, error) {
 	if acc == nil {
 		return nil, fmt.Errorf("no account")
 	}
-	ak, sk, base, region, err := assetFields(acc.CredentialsJSON, acc.SettingsJSON)
+	id, creds, settings := acc.GetId(), acc.GetCredentialsJson(), acc.GetSettingsJson()
+	ak, sk, base, region, err := assetFields(creds, settings)
 	if err != nil {
-		return nil, fmt.Errorf("account %d: %w", acc.ID, err)
+		return nil, fmt.Errorf("account %d: %w", id, err)
 	}
 	if ak == "" && sk == "" {
 		return nil, nil
@@ -160,11 +161,11 @@ func AssetConfigOf(acc *pluginsdk.AccountCredentials) (*AssetConfig, error) {
 	if ak == "" || sk == "" {
 		// Reachable for an account stored before this version, or written
 		// past the form: ValidateCredentials refuses the half-filled pair.
-		return nil, fmt.Errorf("account %d: the asset library needs both access_key and secret_key", acc.ID)
+		return nil, fmt.Errorf("account %d: the asset library needs both access_key and secret_key", id)
 	}
-	url, err := effectiveAssetEndpoint(acc.Type, acc.CredentialsJSON, acc.SettingsJSON, base)
+	url, err := effectiveAssetEndpoint(acc.GetType(), creds, settings, base)
 	if err != nil {
-		return nil, fmt.Errorf("account %d: asset_base_url: %w", acc.ID, err)
+		return nil, fmt.Errorf("account %d: asset_base_url: %w", id, err)
 	}
 	if url == "" {
 		return nil, nil
@@ -173,9 +174,9 @@ func AssetConfigOf(acc *pluginsdk.AccountCredentials) (*AssetConfig, error) {
 		region = DefaultAssetRegion
 	}
 	if !assetRegionOK(region) {
-		return nil, fmt.Errorf("account %d: asset_region %q is not a region id", acc.ID, region)
+		return nil, fmt.Errorf("account %d: asset_region %q is not a region id", id, region)
 	}
-	return &AssetConfig{AccountID: acc.ID, Name: acc.Name, AccessKey: ak, SecretKey: sk, BaseURL: url, Region: region}, nil
+	return &AssetConfig{AccountID: id, Name: acc.GetName(), AccessKey: ak, SecretKey: sk, BaseURL: url, Region: region}, nil
 }
 
 // AssetEnabled reports whether an account's SETTINGS carry asset library
@@ -230,7 +231,7 @@ func effectiveAssetEndpoint(accountType, credentialsJSON, settingsJSON, legacyBa
 	if legacyBase == "" {
 		legacyBase = DefaultAssetBaseURL
 	}
-	return apikey.NormalizeBaseURL(legacyBase, nil)
+	return apikey.NormalizeBaseURL(legacyBase)
 }
 
 // validateAssetFields adds the asset library field errors to errs: the AK/SK
@@ -261,9 +262,9 @@ func validateAssetFields(errs pluginsdk.FieldErrors, credentialsJSON, settingsJS
 		}
 	}
 	if base != "" {
-		if _, err := apikey.NormalizeBaseURL(base, nil); err != nil {
+		if _, err := apikey.NormalizeBaseURL(base); err != nil {
 			errs = errs.Add(FieldAssetBaseURL, "format",
-				"asset_base_url "+err.Error()+" / asset_base_url 必须是不含账号、查询参数的 http(s) 地址")
+				"asset_base_url must be an http(s) URL without credentials, query, fragment or whitespace / asset_base_url 必须是不含账号、查询参数、空白字符的 http(s) 地址")
 		}
 	}
 	if region != "" && !assetRegionOK(region) {
@@ -305,7 +306,7 @@ func normalizeAssetFields(objJSON string) string {
 			// with the default: guardedSettings treats "absent or empty" as
 			// allowed, and an account that never opted in must not end up
 			// carrying an endpoint it did not ask for.
-			if n, err := apikey.NormalizeBaseURL(s, nil); err == nil && strings.TrimSpace(s) != "" {
+			if n, err := apikey.NormalizeBaseURL(s); err == nil && strings.TrimSpace(s) != "" {
 				obj[FieldAssetBaseURL] = n
 			} else {
 				obj[FieldAssetBaseURL] = strings.TrimSpace(s)

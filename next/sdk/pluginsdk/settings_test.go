@@ -22,7 +22,7 @@ func TestSettingsCachedUntilChanged(t *testing.T) {
 	fh.SetSettings(protocol.StickySettings{Enabled: true, DefaultTTLSeconds: 3600})
 	fh.SetSettings(protocol.BillingSettings{MinBalance: "0"})
 	p := &locker{}
-	h := pluginsdktest.Start(t, p, pluginsdktest.Options{Host: fh, SDK: []pluginsdk.Option{pluginsdk.WithManifest([]byte(lockManifest))}})
+	h := pluginsdktest.Start(t, p, pluginsdktest.Options{Host: fh, Manifest: []byte(lockManifest)})
 
 	sticky := func() protocol.StickySettings {
 		t.Helper()
@@ -57,7 +57,7 @@ func TestSettingsHostError(t *testing.T) {
 	ctx := context.Background()
 	fh := pluginsdktest.NewFakeHost()
 	p := &locker{}
-	h := pluginsdktest.Start(t, p, pluginsdktest.Options{Host: fh, SDK: []pluginsdk.Option{pluginsdk.WithManifest([]byte(lockManifest))}})
+	h := pluginsdktest.Start(t, p, pluginsdktest.Options{Host: fh, Manifest: []byte(lockManifest)})
 
 	_, err := pluginsdk.Settings[protocol.FailurePolicySettings](ctx, p.host)
 	require.Equal(t, codes.Unavailable, status.Code(err))

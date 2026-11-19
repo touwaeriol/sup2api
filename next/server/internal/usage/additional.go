@@ -39,16 +39,19 @@ func priceComponents(p *pending, price func(*pending) (amounts, BillingDetail, s
 	var sum amounts
 	detail := BillingDetail{Inputs: p.Inputs, Attempts: p.Attempts + 1}
 	hash := ""
-	// The primary usage is priced unless it is replaced or has no price. A
-	// custom price whose expression the price history no longer has is not
-	// "no price": priceOne refuses it and the row fails, as it does without
-	// items (CONTRACTS §97.4), rather than the primary usage going free.
-	if (p.Expression != "" || p.price().Base != nil) && len(p.Inputs.Replacement) == 0 {
+	// The primary usage is priced unless it is replaced. A price whose
+	// expression the price history no longer has is refused by priceOne and
+	// the row fails, as it does without items (CONTRACTS §97.4).
+	if len(p.Inputs.Replacement) == 0 {
 		var err error
 		sum, detail, hash, err = price(&primary)
 		if err != nil {
 			return amounts{}, BillingDetail{}, "", err
 		}
+		// The top of the detail sums every component below; what the
+		// primary usage itself cost is kept beside it.
+		cost, total := detail.Cost, detail.TotalCost
+		detail.PrimaryCost, detail.PrimaryListCost, detail.PrimaryTotalCost = &cost, detail.ListCost, &total
 	}
 	detail.Inputs = p.Inputs
 	ruled := detail.ListCost != nil
@@ -57,11 +60,13 @@ func priceComponents(p *pending, price func(*pending) (amounts, BillingDetail, s
 		if err := core.ValidatePricedUsage(item); err != nil {
 			return amounts{}, BillingDetail{}, "", err
 		}
-		if item.Price == nil || item.Free {
-			d := AdditionalBillingDetail{Kind: item.Kind, Model: item.Model, Free: item.Free, BillingReason: item.BillingReason}
-			if item.Price != nil {
-				d.PriceID = item.Price.ID
-			}
+		// Only a row written under the removed free missing-price policy
+		// holds an item without a price (CONTRACTS §17.3): it fails.
+		if item.Price == nil {
+			return amounts{}, BillingDetail{}, "", fmt.Errorf("additional usage %s/%s has no price", item.Kind, item.Model)
+		}
+		if item.Free {
+			d := AdditionalBillingDetail{Kind: item.Kind, Model: item.Model, PriceID: item.Price.ID, Free: true, BillingReason: item.BillingReason}
 			if index < len(p.Inputs.Replacement) {
 				detail.Replacement = append(detail.Replacement, d)
 			} else {

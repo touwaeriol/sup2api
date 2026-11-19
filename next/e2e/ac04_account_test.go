@@ -29,15 +29,10 @@ func TestAC04_CreateAnthropicAccount(t *testing.T) {
 		t.Fatalf("api_key must be a sensitive field: %s", at.Raw)
 	}
 
-	// /account-types/:plugin_key/:type/form (CONTRACTS 12).
-	form := admin.OK(t, http.MethodGet, "/account-types/"+AnthropicPlugin+"/"+AnthropicAPIKey+"/form", nil)
-	for _, f := range []string{"api_key", "base_url"} {
-		if !form.Get("schema.properties." + f).Exists() {
-			t.Fatalf("form schema lacks %s: %s", f, form.Raw)
-		}
-	}
+	// The form is the plugin's native component; the core serves no schema.
+	ExpectNativeForm(t, admin.Client, at, "AnthropicKeyForm")
 
-	// Schema validation: missing api_key -> invalid_argument with field details.
+	// The plugin's validation: missing api_key -> invalid_argument with field details.
 	gid := e.CreateGroup(admin, e.Name("grp"), "public", 1, nil)
 	r := admin.API(t, http.MethodPost, "/accounts", map[string]any{
 		"name": e.Name("bad"), "plugin_key": AnthropicPlugin, "type": AnthropicAPIKey, "group_ids": []int64{gid},

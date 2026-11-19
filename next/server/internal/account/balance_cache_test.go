@@ -19,7 +19,7 @@ func testAccountForBalanceCache(t *testing.T, db *store.DB) int64 {
 	t.Helper()
 	var id int64
 	err := db.SQL.QueryRowContext(context.Background(), `INSERT INTO accounts (name, plugin_key, type, credentials_enc)
-		VALUES ($1, 'claude-oauth', 'oauth', $2) RETURNING id`,
+		VALUES ($1, 'codex', 'codex_oauth', $2) RETURNING id`,
 		"balance-cache-test-"+time.Now().Format("150405.000000"), []byte("x")).Scan(&id)
 	require.NoError(t, err)
 	return id
@@ -41,7 +41,6 @@ func TestBalanceCache(t *testing.T) {
 		AccountID:    id,
 		AmountMicros: 1234500,
 		Currency:     "USD",
-		Source:       store.BalanceActive,
 		UpdatedAt:    &now,
 	}
 	err := db.UpsertBalance(ctx, snap)
@@ -60,7 +59,9 @@ func TestBalanceCache(t *testing.T) {
 	require.NotEmpty(t, val)
 }
 
-func TestBalanceCacheMtimeOrdering(t *testing.T) {
+// Every snapshot is cached as stored: a first failed read (no updated_at)
+// and an unlimited balance alike, so the list does not read PG for them.
+func TestBalanceCacheKeepsErrorsAndUnlimited(t *testing.T) {
 	ctx := context.Background()
 	db := testutil.DB(t)
 	mr := miniredis.RunT(t)
@@ -69,41 +70,27 @@ func TestBalanceCacheMtimeOrdering(t *testing.T) {
 	defer rdb.Close()
 	s := &Service{d: Deps{DB: db, Redis: rdb}}
 
-	id := testAccountForBalanceCache(t, db)
-
-	// Save old snapshot to PG
-	oldTime := time.Now().UTC().Add(-10 * time.Minute)
-	oldSnap := &store.BalanceSnapshot{
-		AccountID:    id,
-		AmountMicros: 1000000,
-		Currency:     "USD",
-		Source:       store.BalanceActive,
-		UpdatedAt:    &oldTime,
-	}
-	err := db.UpsertBalance(ctx, oldSnap)
+	failed, unlimited := testAccountForBalanceCache(t, db), testAccountForBalanceCache(t, db)
+	now := time.Now().UTC()
+	require.NoError(t, db.UpsertBalance(ctx, &store.BalanceSnapshot{AccountID: failed, Error: "transient: 503", ErrorAt: &now}))
+	require.NoError(t, db.UpsertBalance(ctx, &store.BalanceSnapshot{AccountID: unlimited, Unlimited: true, UpdatedAt: &now}))
+	_, err := s.cachedAccountBalances(ctx, []int64{failed, unlimited})
 	require.NoError(t, err)
+	require.True(t, mr.Exists(balanceCacheKey(failed)))
 
-	// Manually put newer data in Redis
-	newTime := time.Now().UTC()
-	newSnap := &store.BalanceSnapshot{
-		AccountID:    id,
-		AmountMicros: 2000000,
-		Currency:     "USD",
-		Source:       store.BalanceActive,
-		UpdatedAt:    &newTime,
-	}
-	cached := map[string]any{
-		"mtime": newTime.UnixNano(),
-		"snap":  newSnap,
-	}
-	data, _ := json.Marshal(cached)
-	mr.Set(fmt.Sprintf("account:balance:%d", id), string(data))
-
-	// Read should prefer Redis (newer mtime)
-	result, err := s.cachedAccountBalances(ctx, []int64{id})
+	// Served from Redis now: PG rows gone, the cached ones still read.
+	require.NoError(t, store.DeleteBalance(ctx, db.Gorm, failed))
+	require.NoError(t, store.DeleteBalance(ctx, db.Gorm, unlimited))
+	got, err := s.cachedAccountBalances(ctx, []int64{failed, unlimited})
 	require.NoError(t, err)
-	require.Len(t, result, 1)
-	require.Equal(t, int64(2000000), result[id].AmountMicros)
+	require.Equal(t, "transient: 503", got[failed].Error)
+	require.Nil(t, got[failed].UpdatedAt)
+	require.True(t, got[unlimited].Unlimited)
+
+	var raw map[string]any
+	val, _ := mr.Get(balanceCacheKey(unlimited))
+	require.NoError(t, json.Unmarshal([]byte(val), &raw))
+	require.Equal(t, true, raw["unlimited"])
 }
 
 func TestBalanceCacheEvictOnResetAndReauth(t *testing.T) {
@@ -122,7 +109,6 @@ func TestBalanceCacheEvictOnResetAndReauth(t *testing.T) {
 		AccountID:    id,
 		AmountMicros: 1500000,
 		Currency:     "USD",
-		Source:       store.BalanceActive,
 		UpdatedAt:    &now,
 	}
 	err := db.UpsertBalance(ctx, snap)
@@ -154,7 +140,6 @@ func TestBalanceCacheCorruptEntry(t *testing.T) {
 		AccountID:    id,
 		AmountMicros: 3000000,
 		Currency:     "USD",
-		Source:       store.BalanceActive,
 		UpdatedAt:    &now,
 	}
 	err := db.UpsertBalance(ctx, snap)

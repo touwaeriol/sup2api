@@ -38,7 +38,7 @@ const version = computed(() => String(route.params.version))
 const review = ref<PluginReview | null>(null)
 const loading = ref(true)
 const loadError = ref('')
-/** The version's package is no longer on any node (410 package_gone): nothing to review or approve. */
+/** No reachable node holds the version's package (410 package_gone): nothing to review or approve. */
 const packageGone = ref(false)
 const fromCache = ref(false)
 const submitting = ref(false)
@@ -266,6 +266,9 @@ onMounted(load)
       <!-- warnings -->
       <SAlert v-if="!review.host_compat_ok" tone="danger" icon="x" :title="t('plugins.consent.incompatibleTitle')" class="mt-4">
         {{ t('plugins.consent.incompatibleBody', { range: review.host_compat || '—' }) }}
+      </SAlert>
+      <SAlert v-if="review.request_access" :title="t('plugins.consent.requestAccessTitle')" class="mt-4" data-testid="consent-request-access">
+        {{ lt(review.request_access) }}
       </SAlert>
       <SAlert v-if="!signatureOk" tone="warning" :title="t('plugins.consent.signatureWarnTitle', { status: sigLabel(review.signature_status) })" class="mt-4">
         {{ t('plugins.consent.signatureWarnBody') }}

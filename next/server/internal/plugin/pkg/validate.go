@@ -76,6 +76,19 @@ func Validate(m *manifest.Manifest, files map[string][]byte, opt ValidateOptions
 	return core.InvalidFields(fields...).WithMessage("plugin manifest validation failed")
 }
 
+// CheckContract refuses a package built for an older plugin contract
+// (check.OutdatedPackage: runtime "none", an upstream block, a removed
+// capability or manifest field) with the one message the runtime gives when
+// it refuses to load such a package. It reads the manifest only: a binary
+// of an older protocol shows when it is loaded.
+func CheckContract(m *manifest.Manifest, files map[string][]byte, hostVersion string) error {
+	msg, outdated := check.OutdatedPackage(m, files["manifest.json"], hostVersion)
+	if !outdated {
+		return nil
+	}
+	return core.InvalidFields(core.FieldError{Field: "manifest", Code: check.CodeOutdatedContract, Message: msg}).WithMessage(msg)
+}
+
 // Conflicts reports the platforms, gateway endpoints and notification
 // channels of m that other plugins already hold (check.Conflicts).
 func Conflicts(m *manifest.Manifest, others []PlatformOwner, endpoints []EndpointOwner, channels []ChannelOwner) []core.FieldError {

@@ -309,7 +309,11 @@ func TestValidateConsistency(t *testing.T) {
 		{"native perm", dropPerm("ui.native"), "ui.native", "missing_host_permission"},
 		{"native ui compat", func(m *manifest.Manifest, _ map[string][]byte) { m.HostUICompat = "" }, "hostUICompat", "required"},
 		{"native entry missing", func(_ *manifest.Manifest, f map[string][]byte) { delete(f, "ui/native/entry.js") }, "ui.native.entry", "file_missing"},
-		{"settings schema missing", func(_ *manifest.Manifest, f map[string][]byte) { delete(f, "forms/settings.schema.json") }, "ui.settings.schema", "file_missing"},
+		{"settings secrets missing", func(m *manifest.Manifest, _ map[string][]byte) { m.UI.Settings.Secrets = nil }, "ui.settings.secrets", "required"},
+		{"settings schema mode", func(m *manifest.Manifest, _ map[string][]byte) { m.UI.Settings = &manifest.Form{Mode: "schema"} }, "ui.settings.mode", "unsupported"},
+		{"table page", func(m *manifest.Manifest, _ map[string][]byte) {
+			m.UI.Pages["assets"] = manifest.Page{Type: "table"}
+		}, "ui.pages.assets.type", "unsupported"},
 		{"iframe page", func(m *manifest.Manifest, _ map[string][]byte) {
 			m.UI.Pages["frame"] = manifest.Page{Type: "iframe", Src: "ui/iframe/index.html"}
 		}, "ui.pages.frame", "missing_host_permission"},
@@ -337,15 +341,8 @@ func TestValidateConsistency(t *testing.T) {
 		{"affinity capability", func(m *manifest.Manifest, _ map[string][]byte) {
 			m.Capabilities = append(m.Capabilities, manifest.Capability{ID: "scheduler.affinity.v1"})
 		}, "capabilities[" + strconv.Itoa(len(pkgtest.Guard("guard", "0.1.0", "sub2api").Capabilities)) + "]", "sticky_not_for_plugins"},
-		{"account types need credentials", func(m *manifest.Manifest, _ map[string][]byte) {
-			m.Capabilities = append(m.Capabilities, manifest.Capability{ID: manifest.CapPlatformAdapter})
-			m.HostPermissions = append(m.HostPermissions, manifest.HostPermission{ID: "platform.register"})
-			m.AccountTypes = []manifest.AccountType{{ID: "apikey", Label: manifest.LocalizedText{"en": "API key"},
-				Form: manifest.Form{Mode: "native", Component: "X"}, Platforms: []manifest.AccountPlatform{{Platform: "anthropic"}}}}
-		}, "accountTypes", "missing_host_permission"},
 		{"account types need adapter", func(m *manifest.Manifest, _ map[string][]byte) {
-			m.HostPermissions = append(m.HostPermissions, manifest.HostPermission{ID: "platform.register"},
-				manifest.HostPermission{ID: "accounts.credentials", Scope: map[string]any{"types": "own"}})
+			m.HostPermissions = append(m.HostPermissions, manifest.HostPermission{ID: "platform.register"})
 			m.AccountTypes = []manifest.AccountType{{ID: "apikey", Label: manifest.LocalizedText{"en": "API key"},
 				Form: manifest.Form{Mode: "native", Component: "X"}, Platforms: []manifest.AccountPlatform{{Platform: "anthropic"}}}}
 		}, "accountTypes", "missing_capability"},
@@ -386,6 +383,7 @@ func TestValidatePlatformAndAccountTypes(t *testing.T) {
 	noTypes.AccountTypes = nil
 	noTypes.Capabilities = nil
 	noTypes.HostPermissions = noTypes.HostPermissions[:2]
+	noTypes.UI, noTypes.HostUICompat = nil, ""
 	if err := Validate(noTypes, pkgtest.Files(noTypes), opts()); err != nil {
 		t.Fatalf("platform without account types: %v", fieldCodes(err))
 	}
@@ -440,8 +438,10 @@ func TestValidatePlatformAndAccountTypes(t *testing.T) {
 		{"usage override", func(m *manifest.Manifest, _ map[string][]byte) {
 			m.AccountTypes[0].Platforms[0].Usage = map[string]manifest.UsageRules{"video.generate": {Semantics: "both"}}
 		}, "accountTypes[0].platforms[0].usage.video.generate.semantics", "invalid"},
-		{"form file", func(_ *manifest.Manifest, f map[string][]byte) { delete(f, "forms/apikey.schema.json") }, "accountTypes[0].form.schema", "file_missing"},
-		{"form ui file", func(_ *manifest.Manifest, f map[string][]byte) { delete(f, "forms/apikey.ui.json") }, "accountTypes[0].form.uiSchema", "file_missing"},
+		{"form component", func(m *manifest.Manifest, _ map[string][]byte) { m.AccountTypes[0].Form.Component = "" }, "accountTypes[0].form.component", "required"},
+		{"schema form", func(m *manifest.Manifest, _ map[string][]byte) {
+			m.AccountTypes[0].Form = manifest.Form{Mode: "schema"}
+		}, "accountTypes[0].form.mode", "unsupported"},
 		// Guarded settings (CONTRACTS §21.3).
 		{"guarded field required", func(m *manifest.Manifest, _ map[string][]byte) {
 			m.AccountTypes[0].SettingsFields = []string{"base_url"}
@@ -487,14 +487,11 @@ func TestValidatePlatformAndAccountTypes(t *testing.T) {
 		{"needs platform.register", func(m *manifest.Manifest, _ map[string][]byte) {
 			m.Platforms = nil
 			m.AccountTypes[0].Platforms = []manifest.AccountPlatform{{Platform: "anthropic"}}
-			m.HostPermissions = []manifest.HostPermission{{ID: "accounts.credentials", Scope: map[string]any{"types": "own"}}}
+			m.HostPermissions = nil
 		}, "accountTypes", "missing_host_permission"},
-		{"old credentials scope", func(m *manifest.Manifest, _ map[string][]byte) {
-			m.HostPermissions[2].Scope = map[string]any{"platform": "own"}
-		}, "hostPermissions[2].scope", "invalid"},
-		{"missing credentials scope", func(m *manifest.Manifest, _ map[string][]byte) {
-			m.HostPermissions[2].Scope = nil
-		}, "hostPermissions[2].scope", "invalid"},
+		{"removed account grant", func(m *manifest.Manifest, _ map[string][]byte) {
+			m.HostPermissions = append(m.HostPermissions, manifest.HostPermission{ID: "accounts.credentials", Scope: map[string]any{"types": "own"}})
+		}, "hostPermissions[3].id", "outdated_contract"},
 		// Platforms.
 		{"platform id format", func(m *manifest.Manifest, _ map[string][]byte) { m.Platforms[0].ID = "Video" }, "platforms[0].id", "invalid_format"},
 		{"platform id built-in", func(m *manifest.Manifest, _ map[string][]byte) {
@@ -661,25 +658,6 @@ func TestBuiltinPlatformsValid(t *testing.T) {
 		for _, fe := range check.CheckPlatform(p) {
 			t.Errorf("%s: %s %s %s", p.ID, fe.Field, fe.Code, fe.Message)
 		}
-	}
-}
-
-// A runtime "none" package validates without runtimes or accounts.credentials;
-// carrying a binary, or a capability that needs a process, is rejected.
-func TestValidateRuntimeNone(t *testing.T) {
-	m := pkgtest.Declared("openai", "0.4.0", "sub2api")
-	files := pkgtest.Files(m)
-	if err := Validate(m, files, opts()); err != nil {
-		t.Fatalf("validate: %v %v", err, fieldCodes(err))
-	}
-	files["runtimes/linux-amd64/plugin"] = []byte("\x7fELF amd64")
-	if err := Validate(m, files, opts()); err == nil {
-		t.Fatal("runtime none with a binary validated")
-	}
-	hooked := pkgtest.Declared("openai", "0.4.0", "sub2api")
-	hooked.Capabilities = append(hooked.Capabilities, manifest.Capability{ID: manifest.CapGatewayHook})
-	if err := Validate(hooked, pkgtest.Files(hooked), opts()); err == nil {
-		t.Fatal("runtime none with gateway.hook validated")
 	}
 }
 

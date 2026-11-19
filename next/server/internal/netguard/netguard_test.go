@@ -7,7 +7,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"net/url"
+	"slices"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestBlockedAddr(t *testing.T) {
@@ -161,5 +166,150 @@ func TestClientRefusesPrivateTargetsAndRedirects(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodGet, "http://internal.example/", nil)
 	if err := check(req, []*http.Request{{}}); !errors.Is(err, ErrPrivate) {
 		t.Fatalf("redirect to private name: %v", err)
+	}
+}
+
+// Direct requests check the addresses the name resolves to; proxied ones are
+// resolved by the proxy: nothing is looked up locally, a name only the
+// proxy can resolve passes, and a literal private address (or localhost) is
+// still refused.
+func TestCheckURLVia(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	var lookups int
+	lookup := func(_ context.Context, host string) ([]net.IP, error) {
+		lookups++
+		if host == "inward.example" {
+			return []net.IP{net.ParseIP("10.0.0.5")}, nil
+		}
+		return nil, errors.New("no such host")
+	}
+	for _, raw := range []string{"https://only-the-proxy-resolves.example/v1", "https://inward.example/v1", "https://8.8.8.8/"} {
+		if _, err := CheckURLVia(ctx, raw, false, true, lookup); err != nil {
+			t.Errorf("proxied %s refused: %v", raw, err)
+		}
+	}
+	if lookups != 0 {
+		t.Fatalf("a proxied check resolved %d names locally", lookups)
+	}
+	for _, raw := range []string{"http://127.0.0.1/", "http://[::1]/", "http://10.1.2.3/", "http://localhost/", "http://api.localhost/"} {
+		if _, err := CheckURLVia(ctx, raw, false, true, lookup); !errors.Is(err, ErrPrivate) {
+			t.Errorf("proxied %s: %v, want ErrPrivate", raw, err)
+		}
+	}
+	if _, err := CheckURLVia(ctx, "ftp://x.example/", false, true, lookup); !errors.Is(err, ErrBadURL) {
+		t.Errorf("proxied ftp: %v", err)
+	}
+	// Direct: unchanged.
+	if _, err := CheckURLVia(ctx, "https://only-the-proxy-resolves.example/v1", false, false, lookup); err == nil {
+		t.Error("a direct request to an unresolvable name passed")
+	}
+	if _, err := CheckURL(ctx, "https://inward.example/v1", false, lookup); !errors.Is(err, ErrPrivate) {
+		t.Errorf("direct inward name: %v", err)
+	}
+	if _, err := CheckURLVia(ctx, "http://10.1.2.3/", true, true, lookup); err != nil {
+		t.Errorf("allowPrivate: %v", err)
+	}
+}
+
+// recorder is an HTTP proxy (or server) that records the host and path of
+// every request it gets and answers "ok".
+func recorder(t *testing.T) (*httptest.Server, func() []string) {
+	t.Helper()
+	var mu sync.Mutex
+	var hits []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		hits = append(hits, r.Host+r.URL.Path)
+		mu.Unlock()
+		if r.URL.Path == "/to-private" {
+			http.Redirect(w, r, "http://10.0.0.7/", http.StatusFound)
+			return
+		}
+		_, _ = w.Write([]byte("ok"))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, func() []string { mu.Lock(); defer mu.Unlock(); return slices.Clone(hits) }
+}
+
+func get(c *http.Client, raw string) error {
+	resp, err := c.Get(raw)
+	if err == nil {
+		resp.Body.Close()
+	}
+	return err
+}
+
+// A client with a proxy sends the requests it picks through the proxy -
+// whose own private address is not refused - and refuses a literal private
+// target there, at the first request and at a redirect, without resolving
+// names locally; the requests it does not pick go directly, guarded.
+func TestClientProxy(t *testing.T) {
+	t.Parallel()
+	proxy, hits := recorder(t)
+	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	t.Cleanup(target.Close)
+	pu, _ := url.Parse(proxy.URL)
+	pick := func(u *url.URL) (*url.URL, error) {
+		if u.Hostname() == "127.0.0.1" {
+			return nil, nil
+		}
+		return pu, nil
+	}
+	noLookup := func(context.Context, string) ([]net.IP, error) { return nil, errors.New("resolved locally") }
+	c := NewClient(ClientOptions{Proxy: pick, Lookup: noLookup})
+	if err := get(c, "http://media.example/x"); err != nil {
+		t.Fatalf("proxied: %v", err)
+	}
+	for _, raw := range []string{"http://10.0.0.7/", "http://media.example/to-private", target.URL} {
+		if err := get(c, raw); !errors.Is(err, ErrPrivate) {
+			t.Errorf("%s: %v", raw, err)
+		}
+	}
+	if got, want := hits(), []string{"media.example/x", "media.example/to-private"}; !slices.Equal(got, want) {
+		t.Fatalf("proxy saw %v, want %v", got, want)
+	}
+}
+
+// The environment's proxy variables do not reach a client without Proxy.
+func TestClientIgnoresEnvironmentProxy(t *testing.T) {
+	proxy, hits := recorder(t)
+	for _, k := range []string{"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"} {
+		t.Setenv(k, proxy.URL)
+	}
+	t.Setenv("NO_PROXY", "")
+	t.Setenv("no_proxy", "")
+	c := NewClient(ClientOptions{AllowPrivate: true, Timeout: 5 * time.Second})
+	if tr, ok := c.Transport.(*http.Transport); !ok || tr.Proxy != nil {
+		t.Fatalf("transport %T has a proxy", c.Transport)
+	}
+	if err := get(c, "http://target.invalid/"); err == nil {
+		t.Fatal("reached an unresolvable name")
+	}
+	if got := hits(); len(got) != 0 {
+		t.Fatalf("proxy saw %v", got)
+	}
+}
+
+// A request routed to the proxy never goes direct (its dial would be
+// unguarded), even when the proxy func picks no proxy the second time.
+func TestClientProxyNeverFallsBackToDirect(t *testing.T) {
+	t.Parallel()
+	proxy, proxyHits := recorder(t)
+	target, targetHits := recorder(t)
+	pu, _ := url.Parse(proxy.URL)
+	var calls atomic.Int32
+	fickle := func(*url.URL) (*url.URL, error) {
+		if calls.Add(1) == 1 {
+			return pu, nil
+		}
+		return nil, nil
+	}
+	c := NewClient(ClientOptions{AllowPrivate: true, Proxy: fickle})
+	if err := get(c, target.URL+"/x"); !errors.Is(err, errNoProxy) {
+		t.Fatalf("got %v", err)
+	}
+	if len(targetHits()) != 0 || len(proxyHits()) != 0 {
+		t.Fatalf("target saw %v, proxy saw %v", targetHits(), proxyHits())
 	}
 }

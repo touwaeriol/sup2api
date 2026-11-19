@@ -12,7 +12,6 @@ const { t } = useI18n()
 const auth = useAuthStore()
 const canManage = computed(() => auth.has('settings:manage'))
 const DECIMAL = /^-?\d+(\.\d{1,8})?$/
-const policyOptions = computed<SelectOption[]>(() => (['reject', 'free'] as const).map((p) => ({ value: p, label: t(`settings.billing.policy.${p}`) })))
 // What a request pays when its client hangs up mid-answer (CONTRACTS §25.8).
 const DISCONNECT_POLICIES = ['continue', 'precharge', 'free'] as const
 const disconnectOptions = computed<SelectOption[]>(() => DISCONNECT_POLICIES.map((p) => ({ value: p, label: t(`settings.billing.disconnect.${p}`) })))
@@ -25,14 +24,12 @@ const { form, errors, dirty, saving, loading, isLoaded, load, save, reset } = us
   path: '/settings/billing',
   defaults: {
     pre_consume_tokens: 500,
-    missing_price_policy: 'reject',
     min_balance: '0',
     big_cost_warning_usd: '10',
     client_disconnect_policy: 'continue'
   },
   fromServer: (r) => ({
     pre_consume_tokens: r.pre_consume_tokens ?? 500,
-    missing_price_policy: r.missing_price_policy === 'free' ? 'free' : 'reject',
     min_balance: String(r.min_balance ?? '0'),
     big_cost_warning_usd: String(r.big_cost_warning_usd ?? '10'),
     client_disconnect_policy: DISCONNECT_POLICIES.find(p => p === r.client_disconnect_policy) ?? 'continue'
@@ -46,7 +43,6 @@ const { form, errors, dirty, saving, loading, isLoaded, load, save, reset } = us
     if (!DECIMAL.test(warn) || Number(warn) < 0) errs.big_cost_warning_usd = t('settings.billing.decimalInvalid')
     return {
       pre_consume_tokens: tokens,
-      missing_price_policy: f.missing_price_policy,
       min_balance: min,
       big_cost_warning_usd: warn,
       client_disconnect_policy: f.client_disconnect_policy
@@ -62,17 +58,6 @@ onMounted(load)
     <template v-if="canManage" #actions><SettingsSaveBar :dirty="dirty" :saving="saving" :can-manage="canManage" @save="save" @reset="reset" /></template>
     <SSpinner v-if="loading && !isLoaded" block />
     <template v-else>
-      <SSettingRow :label="t('settings.billing.missingPolicy')" :description="t(`settings.billing.policyHint.${form.missing_price_policy}`)">
-        <SSegmented
-          :model-value="form.missing_price_policy"
-          :options="policyOptions"
-          size="sm"
-          :disabled="!canManage"
-          :aria-label="t('settings.billing.missingPolicy')"
-          data-testid="missing-price-policy"
-          @update:model-value="form.missing_price_policy = $event as BillingSettings['missing_price_policy']"
-        />
-      </SSettingRow>
       <SSettingRow :label="t('settings.billing.preConsumeTokens')" :description="t('settings.billing.preConsumeHint')" :error="errors.pre_consume_tokens">
         <SInput v-model="form.pre_consume_tokens" type="number" min="0" max="100000000" step="1" class="w-full sm:w-48" :disabled="!canManage" />
       </SSettingRow>

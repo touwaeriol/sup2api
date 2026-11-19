@@ -164,6 +164,23 @@ func (s *server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	created := time.Now().Unix()
 	w.Header().Set("x-request-id", fmt.Sprintf("req_mock_%d", id))
 	w.Header().Set("x-mock-request-id", strconv.FormatInt(id, 10))
+	tool, isTool := toolTurnOf(body)
+	if isTool && tool.resultSeen {
+		b.text = "TOOL-RESULT-SEEN " + b.text
+	}
+	callID := fmt.Sprintf("call_mock_%d", id)
+	if !req.Stream && isTool && !tool.resultSeen {
+		writeJSON(w, 200, map[string]any{
+			"id": chatID, "object": "chat.completion", "created": created, "model": req.Model,
+			"choices": []any{map[string]any{
+				"index": 0, "finish_reason": "tool_calls", "logprobs": nil,
+				"message": map[string]any{"role": "assistant", "content": nil, "refusal": nil,
+					"tool_calls": []any{chatToolCall(callID, tool.name, toolInput())}},
+			}},
+			"usage": openaiChatUsage(b.usage),
+		})
+		return
+	}
 	if !req.Stream {
 		if rep, ok := moderationFor(body); ok {
 			writeModeration(w, id, chatID, created, req.Model, rep, b.usage)
@@ -190,15 +207,28 @@ func (s *server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 		return c
 	}
-	if !sw.send("", chunk([]any{map[string]any{"index": 0, "delta": map[string]any{"role": "assistant", "content": ""}, "finish_reason": nil}})) {
-		return
+	// The choice's deltas (the tool call or the text), then one tail.
+	var deltas []map[string]any
+	reason := "stop"
+	if isTool && !tool.resultSeen {
+		deltas = append(deltas, map[string]any{"role": "assistant", "content": nil, "tool_calls": []any{map[string]any{"index": 0, "id": callID, "type": "function",
+			"function": map[string]any{"name": tool.name, "arguments": ""}}}})
+		for _, frag := range toolArguments {
+			deltas = append(deltas, map[string]any{"tool_calls": []any{map[string]any{"index": 0, "function": map[string]any{"arguments": frag}}}})
+		}
+		reason = "tool_calls"
+	} else {
+		deltas = append(deltas, map[string]any{"role": "assistant", "content": ""})
+		for _, part := range chunks(b.text) {
+			deltas = append(deltas, map[string]any{"content": part})
+		}
 	}
-	for _, part := range chunks(b.text) {
-		if !sw.send("", chunk([]any{map[string]any{"index": 0, "delta": map[string]any{"content": part}, "finish_reason": nil}})) {
+	for _, d := range deltas {
+		if !sw.send("", chunk([]any{map[string]any{"index": 0, "delta": d, "finish_reason": nil}})) {
 			return
 		}
 	}
-	if !sw.send("", chunk([]any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": "stop"}})) {
+	if !sw.send("", chunk([]any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": reason}})) {
 		return
 	}
 	if includeUsage {
@@ -232,11 +262,26 @@ func (s *server) responses(w http.ResponseWriter, r *http.Request) {
 	created := time.Now().Unix()
 	w.Header().Set("x-request-id", fmt.Sprintf("req_mock_%d", id))
 	w.Header().Set("x-mock-request-id", strconv.FormatInt(id, 10))
-	final := responsesEnvelope(respID, created, req.Model, "completed",
-		[]any{responsesMessageItem(msgID, "completed", []any{responsesTextPart(b.text)})}, openaiResponsesUsage(b.usage))
+	message := responsesMessageItem(msgID, "completed", []any{responsesTextPart(b.text)})
+	// With the image_generation tool the image call comes first, the
+	// assistant's message after it (the Codex backend's order).
+	tools, image := imageToolOf(body, "ig_"+msgID)
+	output, msgIndex := []any{message}, 0
+	if image != nil {
+		output, msgIndex = []any{image, message}, 1
+	}
+	final := responsesEnvelope(respID, created, req.Model, "completed", output, openaiResponsesUsage(b.usage))
+	if tools != nil {
+		withImageTool(final, tools, image)
+	}
 	if !req.Stream {
 		writeJSON(w, 200, final)
 		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/backend-api/") {
+		// The Codex backend's completed response lists no output: the items
+		// are only in the output_item.done events.
+		final["output"] = []any{}
 	}
 	sw := startSSE(w, r, b.chunkDelay)
 	seq := 0
@@ -247,19 +292,31 @@ func (s *server) responses(w http.ResponseWriter, r *http.Request) {
 		return sw.send(typ, fields)
 	}
 	if !ev("response.created", map[string]any{"response": responsesEnvelope(respID, created, req.Model, "in_progress", []any{}, nil)}) ||
-		!ev("response.in_progress", map[string]any{"response": responsesEnvelope(respID, created, req.Model, "in_progress", []any{}, nil)}) ||
-		!ev("response.output_item.added", map[string]any{"output_index": 0, "item": responsesMessageItem(msgID, "in_progress", []any{})}) ||
-		!ev("response.content_part.added", map[string]any{"item_id": msgID, "output_index": 0, "content_index": 0, "part": responsesTextPart("")}) {
+		!ev("response.in_progress", map[string]any{"response": responsesEnvelope(respID, created, req.Model, "in_progress", []any{}, nil)}) {
 		return
 	}
-	for _, part := range chunks(b.text) {
-		if !ev("response.output_text.delta", map[string]any{"item_id": msgID, "output_index": 0, "content_index": 0, "delta": part}) {
+	if image != nil {
+		callID := image["id"]
+		if !ev("response.output_item.added", map[string]any{"output_index": 0, "item": map[string]any{"type": "image_generation_call", "id": callID, "status": "in_progress"}}) ||
+			!ev("response.image_generation_call.in_progress", map[string]any{"output_index": 0, "item_id": callID}) ||
+			!ev("response.image_generation_call.generating", map[string]any{"output_index": 0, "item_id": callID}) ||
+			!ev("response.image_generation_call.completed", map[string]any{"output_index": 0, "item_id": callID}) ||
+			!ev("response.output_item.done", map[string]any{"output_index": 0, "item": image}) {
 			return
 		}
 	}
-	if !ev("response.output_text.done", map[string]any{"item_id": msgID, "output_index": 0, "content_index": 0, "text": b.text}) ||
-		!ev("response.content_part.done", map[string]any{"item_id": msgID, "output_index": 0, "content_index": 0, "part": responsesTextPart(b.text)}) ||
-		!ev("response.output_item.done", map[string]any{"output_index": 0, "item": responsesMessageItem(msgID, "completed", []any{responsesTextPart(b.text)})}) {
+	if !ev("response.output_item.added", map[string]any{"output_index": msgIndex, "item": responsesMessageItem(msgID, "in_progress", []any{})}) ||
+		!ev("response.content_part.added", map[string]any{"item_id": msgID, "output_index": msgIndex, "content_index": 0, "part": responsesTextPart("")}) {
+		return
+	}
+	for _, part := range chunks(b.text) {
+		if !ev("response.output_text.delta", map[string]any{"item_id": msgID, "output_index": msgIndex, "content_index": 0, "delta": part}) {
+			return
+		}
+	}
+	if !ev("response.output_text.done", map[string]any{"item_id": msgID, "output_index": msgIndex, "content_index": 0, "text": b.text}) ||
+		!ev("response.content_part.done", map[string]any{"item_id": msgID, "output_index": msgIndex, "content_index": 0, "part": responsesTextPart(b.text)}) ||
+		!ev("response.output_item.done", map[string]any{"output_index": msgIndex, "item": message}) {
 		return
 	}
 	ev("response.completed", map[string]any{"response": final})

@@ -66,6 +66,8 @@ export default {
     cr: 'Cache read',
     cc: 'Cache write 5m',
     cc1h: 'Cache write 1h',
+    img: 'Image input',
+    img_o: 'Image output',
     flat: 'Flat fee'
   },
   unsetPlaceholder: 'free',
@@ -104,6 +106,8 @@ export default {
     cr: 'Cache read',
     cc: 'Cache write 5m',
     cc1h: 'Cache write 1h',
+    img: 'Image input',
+    img_o: 'Image output',
     flat: 'Flat fee',
     other: 'Other',
     subtotal: 'Subtotal',

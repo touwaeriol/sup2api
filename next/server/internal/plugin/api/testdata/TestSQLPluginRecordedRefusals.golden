@@ -1,0 +1,5 @@
+-- sql
+SELECT DISTINCT ON (r.plugin_key) r.plugin_key, COALESCE(r.target_version, ''), n.error FROM plugin_rollout_nodes AS n JOIN plugin_rollouts AS r ON r.id = n.rollout_id WHERE n.rollout_id IN (SELECT max(id) FROM "plugin_rollouts" WHERE plugin_key = ANY($1) GROUP BY "plugin_key") AND n.code = $2 ORDER BY r.plugin_key, n.node_id, n.boot_id
+-- vars
+$1 store.Strings [demo video]
+$2 string "outdated_contract"

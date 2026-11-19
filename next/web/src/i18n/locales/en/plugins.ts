@@ -93,10 +93,10 @@ export default {
     jobs: 'Background jobs',
     ui_menu: 'Console menus',
     ui_iframe: 'Sandboxed iframe pages',
-    accounts_read: 'Read accounts',
     authz_read: 'Check users\' core and other plugins\' permissions',
     accounts_auto_state: 'Change account automatic state',
     lock: 'Cross-node lock',
+    fs_data: 'Read and write its data directory',
     db_schema: 'Dedicated database schema',
     net: 'External network access',
     routes_public: 'Public API routes',
@@ -109,7 +109,6 @@ export default {
     sticky_clear: 'Clear sticky session bindings',
     gateway_observe: 'Observe gateway requests',
     users_read: 'Read users',
-    accounts_credentials: 'Account credentials',
     ledger_credit: 'Credit user balances',
     ledger_debit: 'Debit user balances',
     ui_native: 'Native console UI',
@@ -118,13 +117,13 @@ export default {
   },
 
   hpDesc: {
+    fs_data: 'Read and write files in the data directory the core gives this plugin (on this node only). Without it the plugin can read or write no files at all.',
     broadcast: 'Broadcast messages to the instances of this plugin on other nodes (e.g. reload rules right after they change).',
     lock: 'Keep the instances of this plugin on different nodes from doing the same work at the same time (e.g. a scheduled sync). Its locks are invisible to other plugins.'
   },
 
   hpWarn: {
     ui_native: 'The plugin code will run inside the console with your login identity.',
-    accounts_credentials: 'The plugin can read upstream account secrets (API keys, tokens) of the account types it declares.',
     ledger_credit: 'The plugin can add balance to users.',
     ledger_debit: 'The plugin can deduct user balance.',
     users_write: 'The plugin can create and modify users.',
@@ -187,12 +186,13 @@ export default {
     titleInstall: 'Install plugin',
     titleUpgrade: 'Upgrade plugin',
     notFound: 'Review information for this version is not available. Upload the package again or install it from the market.',
-    packageGone: 'The package of version {version} is no longer available on any node (it may have been cleaned up after a failed upgrade), so it cannot be reviewed or approved. Upload the package again or install it from the market.',
+    packageGone: 'No reachable node holds the package of version {version} (the nodes holding it may be down, or it was cleaned up after a failed upgrade), so it cannot be reviewed or approved. Bring a node that holds it back online, upload the package again, or install it from the market.',
     fromCache: 'Showing the review returned at upload time.',
     signature: 'Signature',
     hostCompat: 'Host compat',
     incompatibleTitle: 'This plugin is not compatible with this host',
     incompatibleBody: 'It requires host version {range}. Installation is disabled.',
+    requestAccessTitle: 'What this plugin receives',
     signatureWarnTitle: 'Signature: {status}',
     signatureWarnBody: 'The package could not be verified against a trusted publisher key. Only continue if you trust where this package came from.',
     diffTitle: 'Permission changes in this version',
@@ -250,6 +250,10 @@ export default {
 
   resources: {
     memory: 'Memory',
+    memorySuggested: 'Suggested memory',
+    unlimited: 'Unlimited',
+    memoryLimit: 'The plugin suggests {value}; this is not a limit. Current limit: {limit}. Leave empty or 0 for no limit.',
+    platformMemoryHint: 'A platform plugin needs about 3 × the request body limit + 64 MB for each concurrent large request.',
     memoryMB: 'Memory (MB)',
     cpu: 'CPU',
     cores: '{n} cores',
@@ -259,7 +263,7 @@ export default {
     invalid: 'Enter a non-negative number',
     saved: 'Resource limits saved. All nodes have been notified to restart the plugin instances with the new limits.',
     restartHint: 'Saving restarts the plugin instances on every node one by one (a new instance starts before the old one drains).',
-    hint: 'Leave empty to use the manifest request. Limits cannot exceed the global maximum.',
+    hint: 'Leave empty to use the manifest request; memory is unlimited unless set here or capped for the node. Limits cannot exceed the node maximum when one is set.',
     requestedValue: 'Requested by manifest: {value}'
   },
 
@@ -470,11 +474,9 @@ export default {
   },
 
   settings: {
-    unsaved: 'You have unsaved changes',
     pageHint: 'Settings of this plugin. Your role may edit them through a permission the plugin declares.',
     denied: 'You cannot open the settings of this plugin.',
-    none: 'This plugin has no settings.',
-    reenter: 'Re-enter this secret to change other settings'
+    none: 'This plugin has no settings.'
   },
 
   retired: {
@@ -552,12 +554,16 @@ export default {
       rolled_back: 'Rollout rolled back to v{version}.'
     }
   },
+  refusal: {
+    outdated_contract: "Plugin {key}{'@'}{version} was built for an older plugin protocol and cannot be loaded by this core ({host}, plugin protocol {protocol}). Install a version built for core {first} or later."
+  },
   conflicts: {
     short: '{n} resource(s) not granted',
     title: 'Resources not granted',
     hint: 'Another plugin claimed these first, or the core holds them now (for example after a core upgrade). The plugin runs without them: its endpoints below are not served. Disable or uninstall the conflicting plugin, or upgrade this one, then re-enable it.'
   },
   errors: {
-    packageGone: 'The package of this plugin version is no longer available on any node (it may have been cleaned up after a failed upgrade). Upload it again or install it from the market.'
+    packageGone: 'No reachable node holds the package of this plugin version (the nodes holding it may be down, or it was cleaned up after a failed upgrade). Bring a node that holds it back online, upload it again, or install it from the market.',
+    clusterChangeBusy: 'Another cluster change (a plugin or core change) is being submitted. Try again in a moment.'
   }
 }

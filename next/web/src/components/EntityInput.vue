@@ -3,8 +3,8 @@
 // where the pickers themselves speak in id strings. `multiple` is a list of
 // ids (EntityMultiPicker), else one id (EntityPicker); `numeric` ids are
 // stored as numbers and none as null, else as strings and none as ''. Read,
-// null, '' and 0 are all "none". GroupPicker, ProxyPicker and the
-// `entity-select` schema widget are this with their kind.
+// null, '' and 0 are all "none". GroupPicker and ProxyPicker are this with
+// their kind.
 import { computed } from 'vue'
 import EntityMultiPicker from './EntityMultiPicker.vue'
 import EntityPicker from './EntityPicker.vue'

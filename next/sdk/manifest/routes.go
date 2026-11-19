@@ -131,17 +131,15 @@ func prefixMatches(prefix, segs []string) bool {
 }
 
 // routeRefRe matches a manifest route reference such as "GET /models" or
-// "/models" (method defaulting to the caller's). It is the Go mirror of
-// parseRouteRef() in web/src/components/plugin/declarative.ts, which is what
-// actually turns Page.Source and Page.Submit into requests; the two must agree
-// on what parses, or the host would accept a reference the console cannot
-// call.
+// "/models" (method defaulting to the caller's). It is the Go mirror of the
+// console's parseRouteRef(), which turns an account action's route into the
+// request; the two must agree on what parses, or the host would accept a
+// reference the console cannot call.
 var routeRefRe = regexp.MustCompile(`^\s*(?i:(GET|POST|PUT|PATCH|DELETE)\s+)?(/\S*)\s*$`)
 
 // ParseRouteRef parses a manifest route reference ("GET /models", "/models")
 // into an upper-case method and a path. defaultMethod is used when the
-// reference names none: GET for Page.Source, POST for Page.Submit, matching
-// the console.
+// reference names none (POST for an account action, matching the console).
 func ParseRouteRef(ref, defaultMethod string) (method, path string, ok bool) {
 	m := routeRefRe.FindStringSubmatch(ref)
 	if m == nil {

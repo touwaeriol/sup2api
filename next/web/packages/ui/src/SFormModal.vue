@@ -14,8 +14,11 @@
 // left (a hint, a secondary action). `#header` is SModal's. Other attributes
 // (data-testid, …) land on the <form>.
 // On phones it takes SModal's `mobile` form; Cancel and Submit share the
-// footer width, with #footer-start on its own row above them.
+// footer width, with #footer-start on its own row above them. An SForm in the
+// default slot renders no second <form> (validate it in the submit handler).
+import { provide } from 'vue'
 import { useUiT } from './i18n'
+import { IN_FORM_KEY } from './form/context'
 import SButton from './SButton.vue'
 import SModal from './SModal.vue'
 import type { ModalMobile } from './types'
@@ -53,6 +56,7 @@ function cancel() {
   emit('close')
 }
 const t = useUiT()
+provide(IN_FORM_KEY, true)
 
 function submit() {
   if (props.loading || props.submitDisabled) return

@@ -1,0 +1,8 @@
+{
+  "options": {
+    "model": "gpt-image-2",
+    "stream": false,
+    "adapt_model": "gpt-6-luna"
+  },
+  "note": "size, quality and background go into the tool and the instructions; the image comes back with the image tool's usage"
+}

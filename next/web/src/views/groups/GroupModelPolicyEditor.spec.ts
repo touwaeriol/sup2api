@@ -25,4 +25,12 @@ describe('group model policy editor', () => {
     await w.get('[data-testid="policy-draft"]').trigger('keydown', { key: 'Enter' })
     expect(w.emitted('update:modelValue')?.[0]).toEqual([['claude-haiku-*', 'claude-opus-*', 'gpt-*']])
   })
+  it('accepts a model pattern of any length', async () => {
+    const w = render()
+    const long = 'm'.repeat(300)
+    await w.get('[data-testid="policy-draft"]').setValue(long)
+    await w.get('[data-testid="policy-draft"]').trigger('keydown', { key: 'Enter' })
+    expect(w.emitted('update:modelValue')?.[0]).toEqual([['claude-haiku-*', long]])
+    expect(w.text()).not.toContain('200')
+  })
 })

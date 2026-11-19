@@ -39,17 +39,20 @@ type Deps struct {
 	// Environment supplies the global layer of the environment variables
 	// merged over the process layer (GlobalEnvironment, CONTRACTS §74.3);
 	// nil drops both and leaves only the group and account layers.
-	Environment  core.EnvironmentResolver
-	Registry     core.PluginRegistry
-	Auth         core.APIKeyAuthenticator
-	Pricer       core.Pricer
-	Balance      core.BalanceGate
-	Slots        core.Slots
-	Accounts     core.AccountDirectory
-	Proxies      core.ProxyDirectory
-	Settler      core.Settler
-	Observations core.ObservationPublisher
-	Tasks        core.AsyncTasks
+	Environment core.EnvironmentResolver
+	Registry    core.PluginRegistry
+	Auth        core.APIKeyAuthenticator
+	Pricer      core.Pricer
+	Balance     core.BalanceGate
+	Slots       core.Slots
+	Accounts    core.AccountDirectory
+	// NetworkAccess is the administrator's plugin network access (CONTRACTS
+	// §113), which a relay's host must pass as well (allowHost); nil = no
+	// such setting (tests).
+	NetworkAccess core.PluginNetworkAccess
+	Settler       core.Settler
+	Observations  core.ObservationPublisher
+	Tasks         core.AsyncTasks
 	// Limiter enforces per-account rpm/tpm limits (CONTRACTS §18);
 	// nil = no limits.
 	Limiter core.AccountLimiter
@@ -109,6 +112,8 @@ type Gateway struct {
 	randFloat func() float64
 	// ws holds the WebSocket session limits (websocket.go).
 	ws wsLimits
+	// renewInterval replaces core.ExecutionRenewInterval in tests (waited.go).
+	renewInterval time.Duration
 
 	// Model availability precheck budgets (availability.go); zero = the
 	// package constants. Overridable in tests.

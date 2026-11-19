@@ -1,0 +1,8 @@
+{
+  "options": {
+    "model": "gpt-image-2",
+    "stream": true,
+    "adapt_model": "gpt-6-luna"
+  },
+  "note": "an error event ends the stream with an error event carrying the upstream's error"
+}

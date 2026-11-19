@@ -25,19 +25,39 @@ type PlatformServiceClient interface {
 	// Pre-upstream metering estimate. The host checks endpoint billing types
 	// first and prices the report itself; plugins never specify an amount.
 	EstimateUsage(ctx context.Context, in *EstimateUsageRequest, opts ...grpc.CallOption) (*UsageReport, error)
-	// Plugin-driven request execution. The host selected the account and owns
-	// the request body. The plugin builds and forwards it through the scoped
-	// host API, then records usage or atomically reserves and registers a task.
-	// Requires platform.execute.v1.
+	// The one path of a gateway request, called once per attempt on an
+	// account. The host selected the account and has already rewritten the
+	// body (protocol conversion, model mapping, forced streaming, the
+	// operator's parameter overrides); the plugin receives that body WHOLE,
+	// builds the final upstream request - signing it itself when the upstream
+	// needs that - and hands it to the host's HTTP client with
+	// HostService.RelayUpstream. It may first make auxiliary requests with
+	// HostService.ExecuteHTTP. It opens no socket, never retries and never
+	// picks another account.
+	//
+	// Usage and task facts travel only in the response. Which form the
+	// exchange takes follows the two flags of the request:
+	//   - neither flag: relay without waiting and return host_usage. The
+	//     request is sent only after this call returned, so the plugin is not
+	//     part of the exchange: an error, a timeout or a crash before the
+	//     return leaves nothing sent and the host moves to another account.
+	//   - extract_usage or task_submission: relay and wait, read the
+	//     observation and return usage or task (host_usage when the usage
+	//     cannot be read; classification for an upstream error).
+	// The host does not time the plugin's own work in this call: it ends with
+	// the client leaving, the upstream's timeouts on a relay, or the plugin's
+	// process.
 	Execute(ctx context.Context, in *ExecuteRequest, opts ...grpc.CallOption) (*ExecuteResponse, error)
-	// One scheduled observation, completed by ReportTaskProgress. Scheduling,
-	// fencing, snapshots and financial transactions remain host-owned.
+	// One scheduled observation of a host-managed asynchronous task. The
+	// plugin queries the upstream once through HostService.ExecuteHTTP and
+	// returns what it read; the host reschedules or settles in one
+	// transaction. Scheduling, fencing, snapshots and financial transactions
+	// remain host-owned: the plugin needs no timer and no net grant.
 	// Requires platform.monitor.v1.
 	Monitor(ctx context.Context, in *PollRequest, opts ...grpc.CallOption) (*MonitorResponse, error)
 	ValidateCredentials(ctx context.Context, in *ValidateCredentialsRequest, opts ...grpc.CallOption) (*ValidateCredentialsResponse, error)
-	// Hot path: called once per upstream attempt. Keep it fast (< 2s timeout).
-	BuildUpstreamRequest(ctx context.Context, in *BuildUpstreamRequestRequest, opts ...grpc.CallOption) (*BuildUpstreamRequestResponse, error)
-	// Called once per failed upstream attempt.
+	// Called once per failed upstream attempt. A relay that waited is the
+	// exception: the plugin classifies that error in ExecuteResponse.
 	ClassifyError(ctx context.Context, in *ClassifyErrorRequest, opts ...grpc.CallOption) (*ClassifyErrorResponse, error)
 	// Builds a minimal request used by the console "test account" button.
 	BuildTestRequest(ctx context.Context, in *BuildTestRequestRequest, opts ...grpc.CallOption) (*BuildTestRequestResponse, error)
@@ -65,87 +85,10 @@ type PlatformServiceClient interface {
 	// model the host cannot price or limit the request, so serving it would
 	// serve it for free.
 	ResolveModel(ctx context.Context, in *ResolveModelRequest, opts ...grpc.CallOption) (*ResolveModelResponse, error)
-	// Reads the token usage of one finished upstream response for endpoints
-	// whose usage the declarative rules cannot express (manifest
-	// usage.source: "plugin").
-	//
-	// Implemented by the plugin declaring the PLATFORM of the upstream
-	// response, like ResolveModel - the response shape belongs to the platform,
-	// not to the account type that happened to serve it. A plugin whose
-	// platform or endpoint declares usage.source "plugin" must also declare
-	// capability "platform.adapter.v1" (install-time check).
-	//
-	// Called AFTER the response has been forwarded in full, so it costs the
-	// client nothing: it only delays the usage record, which is written
-	// asynchronously anyway. It must never be moved before forwarding.
-	//
-	// What it receives depends on the response shape, and in neither case is
-	// it the whole stream:
-	//   - non-streaming: the whole body, but only while the body fits in
-	//     usage.maxBytes; a larger body is not handed over at all (half a JSON
-	//     document parses into wrong numbers, which is worse than none);
-	//   - streaming: only the events whose name the endpoint listed in
-	//     usage.streamEvents, in arrival order, bounded by a host event count
-	//     cap and by usage.maxBytes. Collection stops at the cap and
-	//     `truncated` says so; the host never buffers the whole stream.
-	//   - either way, the request fields the endpoint listed in
-	//     usageRequestFields (`fields`), for endpoints whose response does not
-	//     say how big the work is. Never the whole request body.
-	//
-	// Optional: answer UNIMPLEMENTED when no endpoint needs it. Failure is
-	// NEVER fatal to the request - the response already reached the client. On
-	// an error, a timeout, an UNIMPLEMENTED or a nil answer the host falls
-	// back to the declarative rules it ran while forwarding and marks the
-	// usage record so the silence is visible.
-	ExtractUsage(ctx context.Context, in *ExtractUsageRequest, opts ...grpc.CallOption) (*UsageReport, error)
-	// Opt-in asynchronous task submissions only (endpoint.task.action=submit).
-	// Unlike ExtractUsage, this runs BEFORE forwarding the bounded JSON success
-	// response. The host persists identity, initial snapshot and optional usage
-	// atomically, then replaces declared task ID fields with its public ID.
-	// Attribution and account ownership are always determined by the host.
-	// Ordinary endpoints retain ExtractUsage's asynchronous contract above.
-	ParseTaskSubmission(ctx context.Context, in *ExtractUsageRequest, opts ...grpc.CallOption) (*TaskSubmission, error)
-	// Executes one observation. The host owns scheduling, account selection,
-	// leases and persistence; the plugin initiates its HTTP request through
-	// HostService.ExecuteHTTP using the invocation's short-lived permission.
-	// Requires platform.poll.v1. No plugin timer or net grant.
-	Poll(ctx context.Context, in *PollRequest, opts ...grpc.CallOption) (*ReconcileResult, error)
-	// Builds the request that observes a pre-charged entry or a host-managed
-	// asynchronous task. Legacy endpoints arm it through Reservation; task
-	// endpoints declare endpoint.task and may be free (no reservation needed).
-	//
-	// This is BuildTestRequest / BuildModelsRequest's shape, and it is the
-	// shape on purpose. The plugin only DESCRIBES the request and READS the
-	// answer; the host is what sends it, through the account's proxy, behind
-	// the SSRF guard, under the host's timeout. Which means a plugin that
-	// reconciles asynchronous work needs:
-	//   - no "net" host permission: it never opens a socket;
-	//   - no way to list accounts: the host hands it the one that served the
-	//     request, credentials included, exactly as BuildUpstreamRequest does;
-	//   - no "app.jobs.v1" timer of its own: the host drives the schedule,
-	//     with the backoff, the deadline and the multi-node locking that a
-	//     plugin would otherwise each have to reinvent.
-	//
-	// Legacy compatibility path. New plugins use Poll and the host's scoped
-	// ExecuteHTTP callback, which preserves these account/network constraints.
-	//
-	// Optional: answer UNIMPLEMENTED when no endpoint reserves or declares tasks. A plugin that
-	// returns a Reservation and then cannot build the request has its entries
-	// retried until the deadline and then abandoned - the estimate stands as
-	// the final charge.
-	BuildReconcileRequest(ctx context.Context, in *BuildReconcileRequestRequest, opts ...grpc.CallOption) (*BuildReconcileRequestResponse, error)
-	// Reads the upstream's answer to the request above and says whether the
-	// work is still running, finished (with its REAL usage) or failed. The
-	// host prices, charges the difference or refunds, and closes the usage row.
-	//
-	// Like every other call in this file it states upstream facts only: there
-	// is no field here for an amount, and the tokens it reports are priced by
-	// the administrator's price table exactly like a live request's.
-	ParseReconcileResponse(ctx context.Context, in *ParseReconcileResponseRequest, opts ...grpc.CallOption) (*ReconcileResult, error)
 	// Builds the request that reads the subscription quota of one account
 	// (5-hour / weekly windows and the like, CONTRACTS §44), for account types
 	// declaring manifest accountTypes[].quota.query. Same division of labour
-	// as BuildTestRequest and BuildReconcileRequest: the plugin DESCRIBES the
+	// as BuildTestRequest and BuildModelsRequest: the plugin DESCRIBES the
 	// request, the host sends it through the account's proxy, behind its SSRF
 	// guard and timeout, and hands the answer to ParseQuotaResponse. The host
 	// decides when to ask - at most once per account every 30 seconds, and
@@ -183,18 +126,26 @@ type PlatformServiceClient interface {
 	// credentials (other fields are kept), encrypts and saves them, and only if
 	// nobody changed the account in the meantime.
 	ParseRefreshResponse(ctx context.Context, in *ParseRefreshResponseRequest, opts ...grpc.CallOption) (*RefreshResult, error)
-	// Builds the request that queries the account balance, for account types
-	// declaring manifest accountTypes[].balance. Same division of labour as
-	// BuildQuotaRequest: the plugin DESCRIBES the request, the host sends it
-	// through the account's proxy, and hands the answer to ParseBalanceResponse.
-	// The host decides when: on demand (GET /accounts/:id/balance) and
-	// periodically if the manifest declares update_interval.
+	// Builds the requests that read the balance of one account (CONTRACTS
+	// §52), for account types declaring manifest accountTypes[].balance. Same
+	// division of labour as BuildQuotaRequest: the plugin DESCRIBES the
+	// requests, the host sends them and hands all the answers to
+	// ParseBalanceResponse. A balance may take several requests (the key's
+	// quota, then the site's unit of account); the host checks every URL
+	// against the manifest's upstream host rules before it sends any, then
+	// sends them one after the other, in order, through the account's proxy,
+	// behind its SSRF guard and without following redirects. The host decides
+	// when: when an administrator asks (GET /accounts/:id/balance) and every
+	// manifest balance.updateInterval seconds, so the plugin needs no "net"
+	// permission and no cache of its own.
 	//
 	// Called on the plugin declaring the account type; the account carries its
-	// credentials. Optional: answer UNIMPLEMENTED and the host returns
-	// "unsupported".
+	// credentials as in BuildTestRequest. Optional: answer UNIMPLEMENTED and
+	// the host treats the account type as having no balance.
 	BuildBalanceRequest(ctx context.Context, in *BuildBalanceRequestRequest, opts ...grpc.CallOption) (*BuildBalanceRequestResponse, error)
-	// Reads the upstream's answer to the request above into a balance amount.
+	// Reads the upstream's answers to the requests above into a balance. It
+	// states upstream facts only; the host stores and shows them, and never
+	// acts on them (no disabling, no scheduling change, no alert).
 	ParseBalanceResponse(ctx context.Context, in *ParseBalanceResponseRequest, opts ...grpc.CallOption) (*ParseBalanceResponseResponse, error)
 }
 
@@ -242,15 +193,6 @@ func (c *platformServiceClient) ValidateCredentials(ctx context.Context, in *Val
 	return out, nil
 }
 
-func (c *platformServiceClient) BuildUpstreamRequest(ctx context.Context, in *BuildUpstreamRequestRequest, opts ...grpc.CallOption) (*BuildUpstreamRequestResponse, error) {
-	out := new(BuildUpstreamRequestResponse)
-	err := c.cc.Invoke(ctx, "/sub2api.plugin.v1.PlatformService/BuildUpstreamRequest", in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *platformServiceClient) ClassifyError(ctx context.Context, in *ClassifyErrorRequest, opts ...grpc.CallOption) (*ClassifyErrorResponse, error) {
 	out := new(ClassifyErrorResponse)
 	err := c.cc.Invoke(ctx, "/sub2api.plugin.v1.PlatformService/ClassifyError", in, out, opts...)
@@ -281,51 +223,6 @@ func (c *platformServiceClient) BuildModelsRequest(ctx context.Context, in *Buil
 func (c *platformServiceClient) ResolveModel(ctx context.Context, in *ResolveModelRequest, opts ...grpc.CallOption) (*ResolveModelResponse, error) {
 	out := new(ResolveModelResponse)
 	err := c.cc.Invoke(ctx, "/sub2api.plugin.v1.PlatformService/ResolveModel", in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *platformServiceClient) ExtractUsage(ctx context.Context, in *ExtractUsageRequest, opts ...grpc.CallOption) (*UsageReport, error) {
-	out := new(UsageReport)
-	err := c.cc.Invoke(ctx, "/sub2api.plugin.v1.PlatformService/ExtractUsage", in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *platformServiceClient) ParseTaskSubmission(ctx context.Context, in *ExtractUsageRequest, opts ...grpc.CallOption) (*TaskSubmission, error) {
-	out := new(TaskSubmission)
-	err := c.cc.Invoke(ctx, "/sub2api.plugin.v1.PlatformService/ParseTaskSubmission", in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *platformServiceClient) Poll(ctx context.Context, in *PollRequest, opts ...grpc.CallOption) (*ReconcileResult, error) {
-	out := new(ReconcileResult)
-	err := c.cc.Invoke(ctx, "/sub2api.plugin.v1.PlatformService/Poll", in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *platformServiceClient) BuildReconcileRequest(ctx context.Context, in *BuildReconcileRequestRequest, opts ...grpc.CallOption) (*BuildReconcileRequestResponse, error) {
-	out := new(BuildReconcileRequestResponse)
-	err := c.cc.Invoke(ctx, "/sub2api.plugin.v1.PlatformService/BuildReconcileRequest", in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *platformServiceClient) ParseReconcileResponse(ctx context.Context, in *ParseReconcileResponseRequest, opts ...grpc.CallOption) (*ReconcileResult, error) {
-	out := new(ReconcileResult)
-	err := c.cc.Invoke(ctx, "/sub2api.plugin.v1.PlatformService/ParseReconcileResponse", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -402,19 +299,39 @@ type PlatformServiceServer interface {
 	// Pre-upstream metering estimate. The host checks endpoint billing types
 	// first and prices the report itself; plugins never specify an amount.
 	EstimateUsage(context.Context, *EstimateUsageRequest) (*UsageReport, error)
-	// Plugin-driven request execution. The host selected the account and owns
-	// the request body. The plugin builds and forwards it through the scoped
-	// host API, then records usage or atomically reserves and registers a task.
-	// Requires platform.execute.v1.
+	// The one path of a gateway request, called once per attempt on an
+	// account. The host selected the account and has already rewritten the
+	// body (protocol conversion, model mapping, forced streaming, the
+	// operator's parameter overrides); the plugin receives that body WHOLE,
+	// builds the final upstream request - signing it itself when the upstream
+	// needs that - and hands it to the host's HTTP client with
+	// HostService.RelayUpstream. It may first make auxiliary requests with
+	// HostService.ExecuteHTTP. It opens no socket, never retries and never
+	// picks another account.
+	//
+	// Usage and task facts travel only in the response. Which form the
+	// exchange takes follows the two flags of the request:
+	//   - neither flag: relay without waiting and return host_usage. The
+	//     request is sent only after this call returned, so the plugin is not
+	//     part of the exchange: an error, a timeout or a crash before the
+	//     return leaves nothing sent and the host moves to another account.
+	//   - extract_usage or task_submission: relay and wait, read the
+	//     observation and return usage or task (host_usage when the usage
+	//     cannot be read; classification for an upstream error).
+	// The host does not time the plugin's own work in this call: it ends with
+	// the client leaving, the upstream's timeouts on a relay, or the plugin's
+	// process.
 	Execute(context.Context, *ExecuteRequest) (*ExecuteResponse, error)
-	// One scheduled observation, completed by ReportTaskProgress. Scheduling,
-	// fencing, snapshots and financial transactions remain host-owned.
+	// One scheduled observation of a host-managed asynchronous task. The
+	// plugin queries the upstream once through HostService.ExecuteHTTP and
+	// returns what it read; the host reschedules or settles in one
+	// transaction. Scheduling, fencing, snapshots and financial transactions
+	// remain host-owned: the plugin needs no timer and no net grant.
 	// Requires platform.monitor.v1.
 	Monitor(context.Context, *PollRequest) (*MonitorResponse, error)
 	ValidateCredentials(context.Context, *ValidateCredentialsRequest) (*ValidateCredentialsResponse, error)
-	// Hot path: called once per upstream attempt. Keep it fast (< 2s timeout).
-	BuildUpstreamRequest(context.Context, *BuildUpstreamRequestRequest) (*BuildUpstreamRequestResponse, error)
-	// Called once per failed upstream attempt.
+	// Called once per failed upstream attempt. A relay that waited is the
+	// exception: the plugin classifies that error in ExecuteResponse.
 	ClassifyError(context.Context, *ClassifyErrorRequest) (*ClassifyErrorResponse, error)
 	// Builds a minimal request used by the console "test account" button.
 	BuildTestRequest(context.Context, *BuildTestRequestRequest) (*BuildTestRequestResponse, error)
@@ -442,87 +359,10 @@ type PlatformServiceServer interface {
 	// model the host cannot price or limit the request, so serving it would
 	// serve it for free.
 	ResolveModel(context.Context, *ResolveModelRequest) (*ResolveModelResponse, error)
-	// Reads the token usage of one finished upstream response for endpoints
-	// whose usage the declarative rules cannot express (manifest
-	// usage.source: "plugin").
-	//
-	// Implemented by the plugin declaring the PLATFORM of the upstream
-	// response, like ResolveModel - the response shape belongs to the platform,
-	// not to the account type that happened to serve it. A plugin whose
-	// platform or endpoint declares usage.source "plugin" must also declare
-	// capability "platform.adapter.v1" (install-time check).
-	//
-	// Called AFTER the response has been forwarded in full, so it costs the
-	// client nothing: it only delays the usage record, which is written
-	// asynchronously anyway. It must never be moved before forwarding.
-	//
-	// What it receives depends on the response shape, and in neither case is
-	// it the whole stream:
-	//   - non-streaming: the whole body, but only while the body fits in
-	//     usage.maxBytes; a larger body is not handed over at all (half a JSON
-	//     document parses into wrong numbers, which is worse than none);
-	//   - streaming: only the events whose name the endpoint listed in
-	//     usage.streamEvents, in arrival order, bounded by a host event count
-	//     cap and by usage.maxBytes. Collection stops at the cap and
-	//     `truncated` says so; the host never buffers the whole stream.
-	//   - either way, the request fields the endpoint listed in
-	//     usageRequestFields (`fields`), for endpoints whose response does not
-	//     say how big the work is. Never the whole request body.
-	//
-	// Optional: answer UNIMPLEMENTED when no endpoint needs it. Failure is
-	// NEVER fatal to the request - the response already reached the client. On
-	// an error, a timeout, an UNIMPLEMENTED or a nil answer the host falls
-	// back to the declarative rules it ran while forwarding and marks the
-	// usage record so the silence is visible.
-	ExtractUsage(context.Context, *ExtractUsageRequest) (*UsageReport, error)
-	// Opt-in asynchronous task submissions only (endpoint.task.action=submit).
-	// Unlike ExtractUsage, this runs BEFORE forwarding the bounded JSON success
-	// response. The host persists identity, initial snapshot and optional usage
-	// atomically, then replaces declared task ID fields with its public ID.
-	// Attribution and account ownership are always determined by the host.
-	// Ordinary endpoints retain ExtractUsage's asynchronous contract above.
-	ParseTaskSubmission(context.Context, *ExtractUsageRequest) (*TaskSubmission, error)
-	// Executes one observation. The host owns scheduling, account selection,
-	// leases and persistence; the plugin initiates its HTTP request through
-	// HostService.ExecuteHTTP using the invocation's short-lived permission.
-	// Requires platform.poll.v1. No plugin timer or net grant.
-	Poll(context.Context, *PollRequest) (*ReconcileResult, error)
-	// Builds the request that observes a pre-charged entry or a host-managed
-	// asynchronous task. Legacy endpoints arm it through Reservation; task
-	// endpoints declare endpoint.task and may be free (no reservation needed).
-	//
-	// This is BuildTestRequest / BuildModelsRequest's shape, and it is the
-	// shape on purpose. The plugin only DESCRIBES the request and READS the
-	// answer; the host is what sends it, through the account's proxy, behind
-	// the SSRF guard, under the host's timeout. Which means a plugin that
-	// reconciles asynchronous work needs:
-	//   - no "net" host permission: it never opens a socket;
-	//   - no way to list accounts: the host hands it the one that served the
-	//     request, credentials included, exactly as BuildUpstreamRequest does;
-	//   - no "app.jobs.v1" timer of its own: the host drives the schedule,
-	//     with the backoff, the deadline and the multi-node locking that a
-	//     plugin would otherwise each have to reinvent.
-	//
-	// Legacy compatibility path. New plugins use Poll and the host's scoped
-	// ExecuteHTTP callback, which preserves these account/network constraints.
-	//
-	// Optional: answer UNIMPLEMENTED when no endpoint reserves or declares tasks. A plugin that
-	// returns a Reservation and then cannot build the request has its entries
-	// retried until the deadline and then abandoned - the estimate stands as
-	// the final charge.
-	BuildReconcileRequest(context.Context, *BuildReconcileRequestRequest) (*BuildReconcileRequestResponse, error)
-	// Reads the upstream's answer to the request above and says whether the
-	// work is still running, finished (with its REAL usage) or failed. The
-	// host prices, charges the difference or refunds, and closes the usage row.
-	//
-	// Like every other call in this file it states upstream facts only: there
-	// is no field here for an amount, and the tokens it reports are priced by
-	// the administrator's price table exactly like a live request's.
-	ParseReconcileResponse(context.Context, *ParseReconcileResponseRequest) (*ReconcileResult, error)
 	// Builds the request that reads the subscription quota of one account
 	// (5-hour / weekly windows and the like, CONTRACTS §44), for account types
 	// declaring manifest accountTypes[].quota.query. Same division of labour
-	// as BuildTestRequest and BuildReconcileRequest: the plugin DESCRIBES the
+	// as BuildTestRequest and BuildModelsRequest: the plugin DESCRIBES the
 	// request, the host sends it through the account's proxy, behind its SSRF
 	// guard and timeout, and hands the answer to ParseQuotaResponse. The host
 	// decides when to ask - at most once per account every 30 seconds, and
@@ -560,18 +400,26 @@ type PlatformServiceServer interface {
 	// credentials (other fields are kept), encrypts and saves them, and only if
 	// nobody changed the account in the meantime.
 	ParseRefreshResponse(context.Context, *ParseRefreshResponseRequest) (*RefreshResult, error)
-	// Builds the request that queries the account balance, for account types
-	// declaring manifest accountTypes[].balance. Same division of labour as
-	// BuildQuotaRequest: the plugin DESCRIBES the request, the host sends it
-	// through the account's proxy, and hands the answer to ParseBalanceResponse.
-	// The host decides when: on demand (GET /accounts/:id/balance) and
-	// periodically if the manifest declares update_interval.
+	// Builds the requests that read the balance of one account (CONTRACTS
+	// §52), for account types declaring manifest accountTypes[].balance. Same
+	// division of labour as BuildQuotaRequest: the plugin DESCRIBES the
+	// requests, the host sends them and hands all the answers to
+	// ParseBalanceResponse. A balance may take several requests (the key's
+	// quota, then the site's unit of account); the host checks every URL
+	// against the manifest's upstream host rules before it sends any, then
+	// sends them one after the other, in order, through the account's proxy,
+	// behind its SSRF guard and without following redirects. The host decides
+	// when: when an administrator asks (GET /accounts/:id/balance) and every
+	// manifest balance.updateInterval seconds, so the plugin needs no "net"
+	// permission and no cache of its own.
 	//
 	// Called on the plugin declaring the account type; the account carries its
-	// credentials. Optional: answer UNIMPLEMENTED and the host returns
-	// "unsupported".
+	// credentials as in BuildTestRequest. Optional: answer UNIMPLEMENTED and
+	// the host treats the account type as having no balance.
 	BuildBalanceRequest(context.Context, *BuildBalanceRequestRequest) (*BuildBalanceRequestResponse, error)
-	// Reads the upstream's answer to the request above into a balance amount.
+	// Reads the upstream's answers to the requests above into a balance. It
+	// states upstream facts only; the host stores and shows them, and never
+	// acts on them (no disabling, no scheduling change, no alert).
 	ParseBalanceResponse(context.Context, *ParseBalanceResponseRequest) (*ParseBalanceResponseResponse, error)
 	mustEmbedUnimplementedPlatformServiceServer()
 }
@@ -592,9 +440,6 @@ func (UnimplementedPlatformServiceServer) Monitor(context.Context, *PollRequest)
 func (UnimplementedPlatformServiceServer) ValidateCredentials(context.Context, *ValidateCredentialsRequest) (*ValidateCredentialsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ValidateCredentials not implemented")
 }
-func (UnimplementedPlatformServiceServer) BuildUpstreamRequest(context.Context, *BuildUpstreamRequestRequest) (*BuildUpstreamRequestResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method BuildUpstreamRequest not implemented")
-}
 func (UnimplementedPlatformServiceServer) ClassifyError(context.Context, *ClassifyErrorRequest) (*ClassifyErrorResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ClassifyError not implemented")
 }
@@ -606,21 +451,6 @@ func (UnimplementedPlatformServiceServer) BuildModelsRequest(context.Context, *B
 }
 func (UnimplementedPlatformServiceServer) ResolveModel(context.Context, *ResolveModelRequest) (*ResolveModelResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ResolveModel not implemented")
-}
-func (UnimplementedPlatformServiceServer) ExtractUsage(context.Context, *ExtractUsageRequest) (*UsageReport, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ExtractUsage not implemented")
-}
-func (UnimplementedPlatformServiceServer) ParseTaskSubmission(context.Context, *ExtractUsageRequest) (*TaskSubmission, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ParseTaskSubmission not implemented")
-}
-func (UnimplementedPlatformServiceServer) Poll(context.Context, *PollRequest) (*ReconcileResult, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Poll not implemented")
-}
-func (UnimplementedPlatformServiceServer) BuildReconcileRequest(context.Context, *BuildReconcileRequestRequest) (*BuildReconcileRequestResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method BuildReconcileRequest not implemented")
-}
-func (UnimplementedPlatformServiceServer) ParseReconcileResponse(context.Context, *ParseReconcileResponseRequest) (*ReconcileResult, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ParseReconcileResponse not implemented")
 }
 func (UnimplementedPlatformServiceServer) BuildQuotaRequest(context.Context, *BuildQuotaRequestRequest) (*BuildQuotaRequestResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method BuildQuotaRequest not implemented")
@@ -728,24 +558,6 @@ func _PlatformService_ValidateCredentials_Handler(srv interface{}, ctx context.C
 	return interceptor(ctx, in, info, handler)
 }
 
-func _PlatformService_BuildUpstreamRequest_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(BuildUpstreamRequestRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(PlatformServiceServer).BuildUpstreamRequest(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: "/sub2api.plugin.v1.PlatformService/BuildUpstreamRequest",
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PlatformServiceServer).BuildUpstreamRequest(ctx, req.(*BuildUpstreamRequestRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _PlatformService_ClassifyError_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ClassifyErrorRequest)
 	if err := dec(in); err != nil {
@@ -814,96 +626,6 @@ func _PlatformService_ResolveModel_Handler(srv interface{}, ctx context.Context,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(PlatformServiceServer).ResolveModel(ctx, req.(*ResolveModelRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _PlatformService_ExtractUsage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ExtractUsageRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(PlatformServiceServer).ExtractUsage(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: "/sub2api.plugin.v1.PlatformService/ExtractUsage",
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PlatformServiceServer).ExtractUsage(ctx, req.(*ExtractUsageRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _PlatformService_ParseTaskSubmission_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ExtractUsageRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(PlatformServiceServer).ParseTaskSubmission(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: "/sub2api.plugin.v1.PlatformService/ParseTaskSubmission",
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PlatformServiceServer).ParseTaskSubmission(ctx, req.(*ExtractUsageRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _PlatformService_Poll_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(PollRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(PlatformServiceServer).Poll(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: "/sub2api.plugin.v1.PlatformService/Poll",
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PlatformServiceServer).Poll(ctx, req.(*PollRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _PlatformService_BuildReconcileRequest_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(BuildReconcileRequestRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(PlatformServiceServer).BuildReconcileRequest(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: "/sub2api.plugin.v1.PlatformService/BuildReconcileRequest",
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PlatformServiceServer).BuildReconcileRequest(ctx, req.(*BuildReconcileRequestRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _PlatformService_ParseReconcileResponse_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ParseReconcileResponseRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(PlatformServiceServer).ParseReconcileResponse(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: "/sub2api.plugin.v1.PlatformService/ParseReconcileResponse",
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PlatformServiceServer).ParseReconcileResponse(ctx, req.(*ParseReconcileResponseRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1058,10 +780,6 @@ var PlatformService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _PlatformService_ValidateCredentials_Handler,
 		},
 		{
-			MethodName: "BuildUpstreamRequest",
-			Handler:    _PlatformService_BuildUpstreamRequest_Handler,
-		},
-		{
 			MethodName: "ClassifyError",
 			Handler:    _PlatformService_ClassifyError_Handler,
 		},
@@ -1076,26 +794,6 @@ var PlatformService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ResolveModel",
 			Handler:    _PlatformService_ResolveModel_Handler,
-		},
-		{
-			MethodName: "ExtractUsage",
-			Handler:    _PlatformService_ExtractUsage_Handler,
-		},
-		{
-			MethodName: "ParseTaskSubmission",
-			Handler:    _PlatformService_ParseTaskSubmission_Handler,
-		},
-		{
-			MethodName: "Poll",
-			Handler:    _PlatformService_Poll_Handler,
-		},
-		{
-			MethodName: "BuildReconcileRequest",
-			Handler:    _PlatformService_BuildReconcileRequest_Handler,
-		},
-		{
-			MethodName: "ParseReconcileResponse",
-			Handler:    _PlatformService_ParseReconcileResponse_Handler,
 		},
 		{
 			MethodName: "BuildQuotaRequest",

@@ -289,7 +289,8 @@ func TestGatewaySettingsValidation(t *testing.T) {
 	n := GatewaySettings{MaxAttempts: 50, PlatformCallTimeoutMs: 10, DefaultHookTimeoutMs: 9000,
 		PlatformHotpathTimeoutMs: 9000}.normalized()
 	if !reflect.DeepEqual(n, GatewaySettings{MaxAttempts: 10, PlatformCallTimeoutMs: 100, DefaultHookTimeoutMs: 2000,
-		PlatformHotpathTimeoutMs: 2000, ClaudeMaxTokens: ClaudeMaxTokensRule{Models: map[string]int{"default": 8192}}, MediaDownloadMaxMB: 64}) {
+		PlatformHotpathTimeoutMs: 2000, ClaudeMaxTokens: ClaudeMaxTokensRule{Models: map[string]int{"default": 8192}}, MediaDownloadMaxMB: 64,
+		MaxRequestBodyMB: 128}) {
 		t.Fatalf("normalized %+v", n)
 	}
 	// The queue numbers are the exception: 0 turns a queue off, and a stored
@@ -371,7 +372,7 @@ func TestGatewaySettingsAPI(t *testing.T) {
 	}
 	if store.v == nil || !reflect.DeepEqual(*store.v, GatewaySettings{MaxAttempts: 5, PlatformCallTimeoutMs: 2000, DefaultHookTimeoutMs: 800,
 		PlatformHotpathTimeoutMs: 300, QueueStickyMaxWaiting: 8, QueueStickyWaitSeconds: 120,
-		QueueFallbackMaxWaiting: 100, QueueFallbackWaitSecond: 30, MediaDownloadMaxMB: 64}) || store.by != 7 {
+		QueueFallbackMaxWaiting: 100, QueueFallbackWaitSecond: 30, MediaDownloadMaxMB: 64, MaxRequestBodyMB: 128}) || store.by != 7 {
 		t.Fatalf("stored %+v by %d", store.v, store.by)
 	}
 	g.settings.mu.Lock()

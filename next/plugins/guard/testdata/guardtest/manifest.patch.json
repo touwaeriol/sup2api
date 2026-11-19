@@ -1,5 +1,5 @@
 {
-  "version": "0.2.10-test",
+  "version": "0.2.11-test",
   "description": {
     "en": "TEST BUILD of Guard with debug routes (POST /debug/dial, POST /debug/alloc). Do not use in production.",
     "zh": "请求守卫的测试构建，带调试接口（POST /debug/dial、POST /debug/alloc），请勿用于生产。"

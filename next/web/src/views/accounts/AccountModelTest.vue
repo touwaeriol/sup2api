@@ -30,7 +30,7 @@ const { t } = useI18n()
 const scope = useScope()
 
 const rows = ref<TestRow[]>([])
-/** The "plugin default model" probe (no model sent), pinned above the list once run. */
+/** The "default model" probe (no model sent: the server picks the account's first listed model, else the plugin's default), pinned above the list once run. */
 const probe = ref<TestRow | null>(null)
 const selected = reactive(new Set<string>())
 const search = ref('')
@@ -307,6 +307,7 @@ function actualModel(r: TestRow): string {
             <div class="flex items-center gap-2">
               <SBadge :tone="stateBadge(row).tone" dot>{{ stateBadge(row).label }}</SBadge>
               <span v-if="row.result" class="tabular-nums" :class="LATENCY_CLASS[latencyLevel(row.result.latency_ms)]" data-testid="model-test-duration">{{ t('accounts.modelTest.duration', { time: formatLatency(row.result.latency_ms) }) }}</span>
+              <span v-if="row.result?.protocol" class="font-mono text-xxs text-fg-muted" :title="t('accounts.testProtocol')" data-testid="model-test-protocol">{{ row.result.protocol }}</span>
             </div>
             <div v-if="row.error" class="line-clamp-2 break-all text-danger-600 dark:text-danger-400" :title="row.error">{{ row.error }}</div>
             <template v-else-if="row.result && !row.result.ok">
@@ -333,6 +334,7 @@ function actualModel(r: TestRow): string {
             <SDescriptions v-if="row.result" dense label-width="7rem">
               <SDescItem v-if="row.result.requested_model" :label="t('accounts.modelTest.requested')" mono>{{ row.result.requested_model }}</SDescItem>
               <SDescItem v-if="row.result.model" :label="t('accounts.testActualModel')" mono>{{ row.result.model }}</SDescItem>
+              <SDescItem v-if="row.result.protocol" :label="t('accounts.testProtocol')" mono>{{ row.result.protocol }}</SDescItem>
               <SDescItem v-if="row.result.upstream" :label="t('accounts.testUpstream')" mono class="break-all">{{ row.result.upstream }}</SDescItem>
               <SDescItem label="HTTP" mono>{{ row.result.status || t('accounts.testNoHTTPResponse') }}</SDescItem>
               <SDescItem v-if="requestId(row)" label="Request ID" mono class="break-all">

@@ -185,11 +185,13 @@ func TestCanGrantToRoles(t *testing.T) {
 	}
 }
 
-// Syncing the real growth and moderation manifests over their old keys
-// with what a consent decided (activation: nothing): the split keys get no
-// holders from the catalog (the consent resolves inheritance), and the old
-// keys are removed with their grants kept (D6).
-func TestSyncPluginSplitsGrowthAndModeration(t *testing.T) {
+// Syncing manifests over their old keys with what a consent decided
+// (activation: nothing): the real moderation manifest splits its keys, and a
+// manifest renames its keys with inheritFrom (as growth did before its
+// removal, CONTRACTS §125). The split and renamed keys get no holders from
+// the catalog, whatever their defaults (the consent resolves inheritance and
+// defaults), and the old keys are removed with their grants kept (D6).
+func TestSyncPluginSplitsAndRenamesKeys(t *testing.T) {
 	t.Parallel()
 	db := testutil.DB(t)
 	s := newService(t, db, newMemBus(), nil)
@@ -204,33 +206,34 @@ func TestSyncPluginSplitsGrowthAndModeration(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	load := func(key string) *manifest.Manifest {
-		t.Helper()
-		raw, err := os.ReadFile(filepath.Join("..", "..", "..", "plugins", key, "manifest.json"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		var m manifest.Manifest
-		if err := json.Unmarshal(raw, &m); err != nil {
-			t.Fatal(err)
-		}
-		return &m
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "plugins", "moderation", "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, key := range []string{"growth", "moderation"} {
+	var moderation manifest.Manifest
+	if err := json.Unmarshal(raw, &moderation); err != nil {
+		t.Fatal(err)
+	}
+	all := manifest.RoleDefault{Unscoped: true}
+	renamed := &manifest.Manifest{Key: "referral", UserPermissions: []manifest.UserPermission{
+		{Key: "referral:use", Defaults: map[string]manifest.RoleDefault{"user": all, "admin": all}, InheritFrom: []string{"referral:read"}},
+		{Key: "referral:stats:read", Risk: manifest.RiskSensitive, Defaults: map[string]manifest.RoleDefault{"admin": all}, InheritFrom: []string{"referral:manage"}},
+	}}
+	for _, key := range []string{"referral", "moderation"} {
 		if _, err := db.SQL.ExecContext(ctx, `INSERT INTO plugins (key, name, status) VALUES ($1, '{"en":"x"}', 'enabled')`, key); err != nil {
 			t.Fatal(err)
 		}
 	}
-	sync("growth", []core.PermissionDef{{Key: "growth:read", GrantRoles: unscoped(RoleUser, RoleAdmin)}, {Key: "growth:manage", GrantRoles: unscoped(RoleAdmin)}})
+	sync("referral", []core.PermissionDef{{Key: "referral:read", GrantRoles: unscoped(RoleUser, RoleAdmin)}, {Key: "referral:manage", GrantRoles: unscoped(RoleAdmin)}})
 	sync("moderation", []core.PermissionDef{{Key: "moderation:read", GrantRoles: unscoped(RoleAdmin, "moderator")}, {Key: "moderation:manage", GrantRoles: unscoped(RoleAdmin)}})
 
-	sync("growth", install.PermissionDefs(load("growth"), nil))
-	sync("moderation", install.PermissionDefs(load("moderation"), nil))
+	sync("referral", install.PermissionDefs(renamed, nil))
+	sync("moderation", install.PermissionDefs(&moderation, nil))
 	for key, want := range map[string][]string{
-		"plugin.growth:growth:use":            {},
-		"plugin.growth:growth:stats:read":     {},
-		"plugin.growth:growth:read":           {RoleAdmin, RoleUser},
-		"plugin.growth:growth:manage":         {RoleAdmin},
+		"plugin.referral:referral:use":        {},
+		"plugin.referral:referral:stats:read": {},
+		"plugin.referral:referral:read":       {RoleAdmin, RoleUser},
+		"plugin.referral:referral:manage":     {RoleAdmin},
 		"plugin.moderation:moderation:exempt": {},
 		"plugin.moderation:moderation:read":   {RoleAdmin, "moderator"},
 	} {
@@ -238,7 +241,7 @@ func TestSyncPluginSplitsGrowthAndModeration(t *testing.T) {
 			t.Errorf("holders of %s: %v, want %v", key, got, want)
 		}
 	}
-	for _, key := range []string{"plugin.growth:growth:read", "plugin.growth:growth:manage"} {
+	for _, key := range []string{"plugin.referral:referral:read", "plugin.referral:referral:manage"} {
 		if got := permissionStatus(t, db, key); got != "removed" {
 			t.Errorf("%s: %s", key, got)
 		}

@@ -92,7 +92,7 @@ export default {
     processUnset: '可用进程环境变量 {name} 兜底。',
     follow: '跟随',
     followValue: '跟随（{value}）',
-    units: { seconds: '秒', minutes: '分钟', mb: 'MB', count: '次' }
+    units: { seconds: '秒', minutes: '分钟', count: '次' }
   },
   gateway: {
     title: '网关',
@@ -106,6 +106,7 @@ export default {
       queue_sticky_wait_seconds: '粘性账号最长等待',
       queue_fallback_max_waiting: '全部账号满时每账号最多排队数',
       queue_fallback_wait_seconds: '全部账号满时最长等待',
+      max_request_body_mb: '请求体上限',
       media_download_max_mb: '媒体下载上限',
       claude_max_tokens: 'Claude 默认 max_tokens（内置参数覆盖）'
     },
@@ -115,9 +116,12 @@ export default {
       queue_sticky_wait_seconds: '等绑定账号的最长时间，超时后按粘性规则换号或返回 429。0 表示不排队。',
       queue_fallback_max_waiting: '所有候选账号都满时，每个账号最多几个请求排队。0 表示不排队，直接返回 429。',
       queue_fallback_wait_seconds: '所有候选账号都满时的最长等待，超时返回 429。0 表示不排队。',
-      platform_call_timeout_ms: '请求路径上调用插件平台接口（构造上游请求、解析用量）的超时。',
+      platform_call_timeout_ms:
+        '两种单次调用的超时：插件对上游失败做错误分类；网关为请求读取“客户端中途断开时”的计费策略，超时读不到按预扣计费。插件转发请求时自身的处理不限时间。',
       default_hook_timeout_ms: 'manifest 未设置超时的钩子使用此值。',
-      platform_hotpath_timeout_ms: '每个请求中不属于钩子的平台调用超时：调度前解析模型、响应发完后提取用量。',
+      platform_hotpath_timeout_ms: '每个请求在调度前不属于钩子的平台调用超时：解析模型、为预扣估算用量。',
+      max_request_body_mb:
+        '每个网关请求的请求体大小上限（MB），超出返回 413；WebSocket 的单条消息也按它限制。这是唯一的请求大小上限，端点、分组和插件都不能另设。',
       media_download_max_mb: '请求转换到 Gemini 时下载 http(s) 图片等媒体，单个文件的大小上限（MB）。',
       claude_max_tokens:
         '开启后，发往 Anthropic 账号的请求没带 max_tokens 时按下表补上，带了不改；账号自己的参数覆盖在其后执行，可再修改。关闭时只有转换到 Anthropic 的请求按协议要求补 {fallback}。'
@@ -145,15 +149,6 @@ export default {
     preConsumeHint: '文本请求预占的输入 Token 下限，默认 500；本地估算超过此值时使用估算值。0 表示不设下限，最终仍按实际用量结算。视频使用插件自己的用量估算。',
     preConsumeInvalid: '请输入 0 到 100000000 之间的整数',
     title: '计费',
-    missingPolicy: '模型没有配置价格时',
-    policy: {
-      reject: '拒绝请求',
-      free: '免费放行'
-    },
-    policyHint: {
-      reject: '返回 403 model_price_not_configured。推荐：没有价格的模型不对外提供。',
-      free: '照常转发，使用记录的结算状态为"免费"。'
-    },
     minBalance: '最低余额',
     minBalanceHint: '余额不高于该值时，请求返回 402 余额不足（默认 0）。',
     bigCost: '高额费用警告阈值',

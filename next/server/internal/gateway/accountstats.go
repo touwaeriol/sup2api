@@ -26,7 +26,7 @@ func (c *call) publishObservation(phase string, rec *core.UsageRecord, localFail
 		c.observationResponseAt, c.observationUpstreamCode = c.g.now(), rec.StatusCode
 	}
 	v := &pluginv1.RequestObservation{Id: id, RequestId: rec.RequestID, AttemptId: attempt, Phase: phase, AccountId: *rec.AccountID,
-		AccountPluginKey: rec.PluginKey, Model: truncateUTF8(rec.Model, 256), UpstreamModel: truncateUTF8(rec.UpstreamModel, 256), Protocol: rec.Protocol,
+		AccountPluginKey: rec.PluginKey, Model: rec.Model, UpstreamModel: rec.UpstreamModel, Protocol: rec.Protocol,
 		Stream: rec.Stream, OccurredAtUnixMs: c.g.now().UnixMilli(), StartedAtUnixMs: c.start.UnixMilli(), Revision: 1,
 		LocalFailure: localFailure, Success: rec.Success && !c.statsCanceled, Canceled: c.statsCanceled, StatusCode: int32(rec.StatusCode), ErrorType: truncateUTF8(rec.ErrorType, 128), NodeId: rec.NodeID,
 		UsagePending: rec.Reservation != nil || rec.ReservationDropped != "" || (phase != observation.UsageFinalized && c.usage != nil), GroupId: rec.GroupID}

@@ -7,6 +7,7 @@ import EnvironmentSettingsCard from './EnvironmentSettingsCard.vue'
 import GatewaySettingsCard from './GatewaySettingsCard.vue'
 import NotificationsSettingsCard from './NotificationsSettingsCard.vue'
 import OffloadSettingsCard from './OffloadSettingsCard.vue'
+import PluginEgressSettingsCard from './PluginEgressSettingsCard.vue'
 import SchedulingPolicyView from './SchedulingPolicyView.vue'
 import UpdateSourceCard from './UpdateSourceCard.vue'
 import { useSettingsNav } from './settingsNav'
@@ -31,6 +32,7 @@ const { activeTab: active, activeLabel, missing } = useSettingsNav()
       <StickyView v-else-if="active === 'sticky'" />
       <OffloadSettingsCard v-else-if="active === 'offload'" />
       <UpdateSourceCard v-else-if="active === 'updates'" />
+      <PluginEgressSettingsCard v-else-if="active === 'plugin-egress'" />
     </STitleScope>
   </div>
 </template>

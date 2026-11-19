@@ -8,8 +8,10 @@ import (
 	"time"
 )
 
-// AC24 exercises the real Execute -> ReserveAndWatch -> Monitor ->
-// ReportTaskProgress path against two hosts, Redis and PG. No real provider is
+// AC24 exercises the real task path against two hosts, Redis and PG:
+// Execute relays the submission and waits, returns the task as its result
+// (the core registers it and keeps the pre-charge), and Monitor's returned
+// result settles it (success) or refunds it (failure). No real provider is
 // contacted. The tests intentionally use production polling/lease intervals.
 func TestAC24_ManagedVideoAcrossNodes(t *testing.T) {
 	e := Setup(t)
@@ -18,7 +20,7 @@ func TestAC24_ManagedVideoAcrossNodes(t *testing.T) {
 		t.Fatal("AC24 requires exactly two nodes")
 	}
 	admin := e.Admin()
-	e.EnsurePlugin(admin, "volcengine", "0.10.1")
+	e.EnsurePlugin(admin, "volcengine", "")
 	for _, success := range []bool{true, false} {
 		state := "failed"
 		if success {
@@ -97,7 +99,7 @@ func TestAC24_VideoMonitorSIGKILLTakeover(t *testing.T) {
 		t.Fatal("AC24 requires exactly two nodes")
 	}
 	admin := e.Admin()
-	e.EnsurePlugin(admin, "volcengine", "0.10.1")
+	e.EnsurePlugin(admin, "volcengine", "")
 	tn := e.newVideoTenant(admin)
 	v := e.submitVideo(tn)
 	stats := e.waitVideoActive(v)
@@ -139,6 +141,6 @@ func TestAC24_VideoMonitorSIGKILLTakeover(t *testing.T) {
 	}
 	e.assertVideoAccounting(admin, tn, v, true)
 	e.StartNode(killed)
-	e.WaitPlugin(admin, "volcengine", "enabled", "0.10.0")
+	e.WaitPlugin(admin, "volcengine", "enabled", "")
 	e.assertVideoTerminalStable(admin, tn, v, true)
 }

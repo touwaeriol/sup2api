@@ -162,7 +162,6 @@ jobs:
       # generates here; the package job re-signs builtin/ with the plugin key.
       - name: Core, plugin CLI and plugins (linux/amd64)
         env:
-          REQUIRE_UI: '1'
           SKIP_DB_CHECK: '0'
         run: sh next/deploy/docker/build-go.sh "$PWD/next" "$RUNNER_TEMP/out/amd64" "$RUNNER_TEMP/throwaway-key"
       - name: Core and plugin CLI (linux/arm64)

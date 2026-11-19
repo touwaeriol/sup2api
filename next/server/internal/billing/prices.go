@@ -457,16 +457,19 @@ type PreviewRequest struct {
 	GroupID    *int64            `json:"group_id"`
 }
 
-// PreviewUsage holds token counts in the exclusive form (p excludes cache).
-// They are normalized like settlement (expr.Normalize): cache categories the
-// expression does not price are not billed. len defaults to
-// p + cr + cc + cc1h.
+// PreviewUsage holds token counts in the exclusive form (p excludes cache
+// and image input, c image output). They are normalized like settlement
+// (expr.Normalize): cache categories the expression does not price are not
+// billed, image tokens it does not price are billed as p and c. len defaults
+// to p + cr + cc + cc1h + img.
 type PreviewUsage struct {
 	P    float64  `json:"p"`
 	C    float64  `json:"c"`
 	CR   float64  `json:"cr"`
 	CC   float64  `json:"cc"`
 	CC1h float64  `json:"cc1h"`
+	Img  float64  `json:"img"`
+	ImgO float64  `json:"img_o"`
 	Len  *float64 `json:"len"`
 }
 
@@ -518,7 +521,8 @@ func (s *Service) previewPrice(c *gin.Context) {
 	}
 	u := in.Usage
 	vars := expr.Normalize(expr.SemanticsExclusive, expr.Tokens{
-		Input: int64(u.P), Output: int64(u.C), CacheRead: int64(u.CR), CacheCreation: int64(u.CC), CacheCreation1h: int64(u.CC1h),
+		Input: int64(u.P + u.Img), Output: int64(u.C + u.ImgO), CacheRead: int64(u.CR), CacheCreation: int64(u.CC), CacheCreation1h: int64(u.CC1h),
+		ImageInput: int64(u.Img), ImageOutput: int64(u.ImgO),
 	}, prog.Uses)
 	if u.Len != nil {
 		vars.Len = *u.Len

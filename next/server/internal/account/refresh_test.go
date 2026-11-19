@@ -440,3 +440,39 @@ func TestRefreshAfterSaveRecoversPanic(t *testing.T) {
 		t.Fatalf("a save that is not due started a renewal: %q", logs.String())
 	}
 }
+
+// A renewal goes out through the account's proxy as it stands when it runs:
+// a proxy changed in the console carries the next renewal.
+func TestCredentialRefreshFollowsTheAccountsProxy(t *testing.T) {
+	e := setup(t)
+	up := newTokenUpstream(t)
+	e.plat.refreshURL = up.srv.URL + "/token"
+	e.gen.types[0].Type.Refresh = &manifest.AccountRefresh{}
+	id := e.mkOAuthAccount("acc", "rt-1", 10*time.Minute)
+	aHost, aPort, aHits := forwardProxy(t)
+	bHost, bPort, bHits := forwardProxy(t)
+	a := e.exec1(`INSERT INTO proxies (name, protocol, host, port) VALUES ('a', 'http', $1, $2) RETURNING id`, aHost, aPort)
+	b := e.exec1(`INSERT INTO proxies (name, protocol, host, port) VALUES ('b', 'http', $1, $2) RETURNING id`, bHost, bPort)
+	for i, step := range []struct{ proxy, viaA, viaB int64 }{{a, 1, 0}, {b, 1, 1}} {
+		if code, out := e.do("PATCH", fmt.Sprintf("/accounts/%d", id), map[string]any{"proxy_id": step.proxy}); code != http.StatusOK {
+			t.Fatalf("set proxy %d: %d %v", step.proxy, code, out)
+		}
+		if code, out := e.do("POST", fmt.Sprintf("/accounts/%d/refresh-credentials", id), nil); code != http.StatusOK || up.calls.Load() != int32(i+1) {
+			t.Fatalf("renewal %d: %d %v (upstream calls %d)", i+1, code, out, up.calls.Load())
+		}
+		if aHits.Load() != step.viaA || bHits.Load() != step.viaB {
+			t.Fatalf("renewal %d through proxy %d: a=%d b=%d", i+1, step.proxy, aHits.Load(), bHits.Load())
+		}
+	}
+	// With the proxy disabled the plugin is not asked and nothing is sent.
+	if _, err := e.db.SQL.ExecContext(t.Context(), `UPDATE proxies SET status = 'disabled', updated_at = clock_timestamp() WHERE id = $1`, b); err != nil {
+		t.Fatal(err)
+	}
+	e.prx.Invalidate(b)
+	builds, parses := e.plat.called("BuildRefreshRequest"), e.plat.called("ParseRefreshResponse")
+	e.do("POST", fmt.Sprintf("/accounts/%d/refresh-credentials", id), nil)
+	if up.calls.Load() != 2 || bHits.Load() != 1 || e.plat.called("BuildRefreshRequest") != builds || e.plat.called("ParseRefreshResponse") != parses {
+		t.Fatalf("renewal through a disabled proxy: upstream calls %d, proxy hits %d, builds %d -> %d, parses %d -> %d", up.calls.Load(), bHits.Load(),
+			builds, e.plat.called("BuildRefreshRequest"), parses, e.plat.called("ParseRefreshResponse"))
+	}
+}

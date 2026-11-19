@@ -1,6 +1,6 @@
 # 插件执行、核心记录：插件参与计费与使用记录的契约
 
-> 2026-10-01 最新执行契约见 CONTRACTS §31：插件通过 ExecuteDefault 发起核心代理请求，再调用 RecordUsage / ReserveAndWatch；Monitor 中调用 ReportTaskProgress。核心负责身份、调度、价格、幂等事务。新路径按用户要求在记录确认后返回，流式仍逐块转发、EOF 等待记录；本文的“Host.RecordUsage 作废”和“ExtractUsage 永远异步且零 EOF 延迟”仅描述旧路径。托管任务契约见 §28，后台执行器见 §30。
+> **历史设计稿。** 现行契约是 CONTRACTS §112（转发 V2，2026-11-18）：每个平台插件只有 `Execute` 一条请求路径，插件拿到完整请求体、经核心的 HTTP 客户端发出请求，用量与任务事实只在 `Execute` / `Monitor` 的返回值里。本文里的 `BuildUpstreamRequest`、`requestFields`、`ExtractUsage` 事后调用、回调上报、`BuildReconcileRequest` / `ParseReconcileResponse` 都已删除。托管任务契约见 §28，后台执行器见 §30。本文写的大小预算（观察的 `maxBytes` 默认 256 KiB 与 64 条事件、`usageRequestFields` 单值 4 KiB / 总量 32 KiB 与 `fields_omitted`、`detail_json` 4 KiB、`path_params` 的个数和长度）在转发 V2 收尾时按所有者决定删除，默认都不限，见 CONTRACTS §112.16。
 
 > 状态：**已全部实现**（A–D 四期 + E 期收尾，2026-09-30）。落地记录与设计更正在 [CONTRACTS](CONTRACTS.md) §25.1–§25.6 —— **那里才是真相源**，本文是当初的设计稿，正文里有若干条后来被证伪（每条都在 §25 对应小节里点明）。
 > 这份文档讲的是**核心 SDK 契约的扩展**，不是某个插件。第一个用户是 [字节火山方舟 / 豆包插件](PLUGIN-VOLCENGINE-ARK.md)，但每一条都不带厂商语义。
@@ -72,7 +72,7 @@ message ResolveModelResponse {
 manifest：`request.modelSource: "plugin"`，与 `modelPath` / `modelParam` 三选一。
 
 配套：
-- `RequestMeta` 增加 `map<string,string> path_params`。**一处改动，五个已有调用点同时受益**：`BuildUpstreamRequest`、`ClassifyError`、`OnGatewayRequest`、`ResolveAffinityKey`、`RankAccounts`（`ResolveModel` 是 B 期才新增的第六个）。上限、截断与非法 UTF-8 净化见 CONTRACTS §25.1——**净化不是可选项**，不做的话一个带 `%FF` 的 URL 就能稳定打出 500。
+- `RequestMeta` 增加 `map<string,string> path_params`。**一处改动，五个已有调用点同时受益**：`BuildUpstreamRequest`、`ClassifyError`、`OnGatewayRequest`、`ResolveAffinityKey`、`RankAccounts`（`ResolveModel` 是 B 期才新增的第六个）。非法 UTF-8 净化见 CONTRACTS §25.1（个数和长度的上限已删除）——**净化不是可选项**，不做的话一个带 `%FF` 的 URL 就能稳定打出 500。
 - `query` 走**声明式白名单**：端点声明 `request.queryParams: ["alt", "page"]`，核心只填声明过的，`auth.query` 自动排除。**不要**做成「整个 query 兜给插件 + 黑名单挡凭证」——黑名单永远在错的一侧，既误杀 `key_field` 这类无辜参数，又漏掉将来新发明的凭证参数名，而且与 `requestFields` 的既有契约不一致。A 期已把字段占位但恒不填，等 B 期补声明。
 - `core.PlatformBinding` 补 `Client`（A 期已完成）。
 
@@ -135,7 +135,7 @@ message UsageReport {
   string upstream_model = 3;
   string error_type = 4;                // 插件比核心更懂上游错误
   string error_message = 5;
-  string detail_json = 6;               // 插件自定义的一小块，写进 usage_logs.plugin_detail；上限 4 KiB，超出核心截断并记一次 warn
+  string detail_json = 6;               // 插件自定义的一小块，写进 usage_logs.plugin_detail；原设计上限 4 KiB，现不限（CONTRACTS §25.3）
   Reservation reserve = 7;              // 见 3.4，不预扣时留空
 }
 ```

@@ -6,11 +6,13 @@
     "en": "Adds the \"Relay key\" account type: accounts of an Anthropic-compatible relay (your own Base URL and key) that serve the built-in anthropic platform (/v1/messages and /v1/messages/count_tokens) together with the other account types of a group. Declares no platform, no endpoints and no prices.",
     "zh": "新增\"中转 Key\"账号类型：Anthropic 兼容中转站的账号（自定义 Base URL 和 Key），与分组里其他类型的账号一起为内置 anthropic 平台（/v1/messages 和 /v1/messages/count_tokens）提供服务。不声明平台、端点和价格。"
   },
-  "version": "0.3.2",
+  "version": "0.4.0",
   "publisher": "sub2api",
   "icon": "text:R",
-  "runtime": "none",
-  "hostCompat": ">=0.1.290 <0.2.0",
+  "runtime": "grpc",
+  "entry": { "grpc": { "binaries": "runtimes/{os}-{arch}/plugin" } },
+  "hostCompat": ">=0.1.304 <0.2.0",
+  "hostUICompat": "^4.0",
 
   "capabilities": [
     { "id": "platform.adapter.v1" }
@@ -19,16 +21,13 @@
   "accountTypes": [
     {
       "id": "relay_key",
+      "upstreamFields": ["base_url"],
       "label": { "en": "Relay key", "zh": "中转 Key" },
       "description": {
         "en": "Key of an Anthropic-compatible relay. Requests go to <Base URL>/v1/messages with the key in x-api-key.",
         "zh": "Anthropic 兼容中转站的 Key。请求发往 <Base URL>/v1/messages，Key 放在 x-api-key 中。"
       },
-      "form": {
-        "mode": "schema",
-        "schema": "forms/relay_key.schema.json",
-        "uiSchema": "forms/relay_key.ui.json"
-      },
+      "form": { "mode": "native", "component": "RelayKeyForm" },
       "sensitiveFields": ["api_key"],
       "settingsFields": ["base_url"],
       "defaultModels": [
@@ -55,22 +54,22 @@
       "platforms": [
         {
           "platform": "anthropic",
-          "requestFields": ["model"],
           "passHeaders": ["anthropic-version", "anthropic-beta"]
         }
-      ],
-      "upstream": {
-        "preset": "anthropic",
-        "baseURL": { "default": null, "required": true },
-        "credentials": { "texts": { "baseURLRequired": "Base URL of the relay is required / 请填写中转站的 Base URL" } },
-        "defaultProtocol": null,
-        "filterFields": []
-      }
+      ]
     }
   ],
 
+  "resources": { "memoryMB": 64, "cpu": 0.1, "maxThreads": 32, "maxOpenFiles": 64 },
+
+  "ui": {
+    "native": { "entry": "ui/native/entry.js" }
+  },
+
   "hostPermissions": [
     { "id": "platform.register",
-      "reason": { "en": "Register the \"Relay key\" account type for the built-in anthropic platform", "zh": "为内置 anthropic 平台注册\"中转 Key\"账号类型" } }
+      "reason": { "en": "Register the \"Relay key\" account type for the built-in anthropic platform", "zh": "为内置 anthropic 平台注册\"中转 Key\"账号类型" } },
+    { "id": "ui.native",
+      "reason": { "en": "The relay key account form (RelayKeyForm)", "zh": "中转 Key 账号表单（RelayKeyForm）" } }
   ]
 }

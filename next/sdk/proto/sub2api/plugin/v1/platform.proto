@@ -14,19 +14,39 @@ service PlatformService {
   // Pre-upstream metering estimate. The host checks endpoint billing types
   // first and prices the report itself; plugins never specify an amount.
   rpc EstimateUsage(EstimateUsageRequest) returns (UsageReport);
-  // Plugin-driven request execution. The host selected the account and owns
-  // the request body. The plugin builds and forwards it through the scoped
-  // host API, then records usage or atomically reserves and registers a task.
-  // Requires platform.execute.v1.
+  // The one path of a gateway request, called once per attempt on an
+  // account. The host selected the account and has already rewritten the
+  // body (protocol conversion, model mapping, forced streaming, the
+  // operator's parameter overrides); the plugin receives that body WHOLE,
+  // builds the final upstream request - signing it itself when the upstream
+  // needs that - and hands it to the host's HTTP client with
+  // HostService.RelayUpstream. It may first make auxiliary requests with
+  // HostService.ExecuteHTTP. It opens no socket, never retries and never
+  // picks another account.
+  //
+  // Usage and task facts travel only in the response. Which form the
+  // exchange takes follows the two flags of the request:
+  //   - neither flag: relay without waiting and return host_usage. The
+  //     request is sent only after this call returned, so the plugin is not
+  //     part of the exchange: an error, a timeout or a crash before the
+  //     return leaves nothing sent and the host moves to another account.
+  //   - extract_usage or task_submission: relay and wait, read the
+  //     observation and return usage or task (host_usage when the usage
+  //     cannot be read; classification for an upstream error).
+  // The host does not time the plugin's own work in this call: it ends with
+  // the client leaving, the upstream's timeouts on a relay, or the plugin's
+  // process.
   rpc Execute(ExecuteRequest) returns (ExecuteResponse);
-  // One scheduled observation, completed by ReportTaskProgress. Scheduling,
-  // fencing, snapshots and financial transactions remain host-owned.
+  // One scheduled observation of a host-managed asynchronous task. The
+  // plugin queries the upstream once through HostService.ExecuteHTTP and
+  // returns what it read; the host reschedules or settles in one
+  // transaction. Scheduling, fencing, snapshots and financial transactions
+  // remain host-owned: the plugin needs no timer and no net grant.
   // Requires platform.monitor.v1.
   rpc Monitor(PollRequest) returns (MonitorResponse);
   rpc ValidateCredentials(ValidateCredentialsRequest) returns (ValidateCredentialsResponse);
-  // Hot path: called once per upstream attempt. Keep it fast (< 2s timeout).
-  rpc BuildUpstreamRequest(BuildUpstreamRequestRequest) returns (BuildUpstreamRequestResponse);
-  // Called once per failed upstream attempt.
+  // Called once per failed upstream attempt. A relay that waited is the
+  // exception: the plugin classifies that error in ExecuteResponse.
   rpc ClassifyError(ClassifyErrorRequest) returns (ClassifyErrorResponse);
   // Builds a minimal request used by the console "test account" button.
   rpc BuildTestRequest(BuildTestRequestRequest) returns (BuildTestRequestResponse);
@@ -54,86 +74,10 @@ service PlatformService {
   // model the host cannot price or limit the request, so serving it would
   // serve it for free.
   rpc ResolveModel(ResolveModelRequest) returns (ResolveModelResponse);
-  // Reads the token usage of one finished upstream response for endpoints
-  // whose usage the declarative rules cannot express (manifest
-  // usage.source: "plugin").
-  //
-  // Implemented by the plugin declaring the PLATFORM of the upstream
-  // response, like ResolveModel - the response shape belongs to the platform,
-  // not to the account type that happened to serve it. A plugin whose
-  // platform or endpoint declares usage.source "plugin" must also declare
-  // capability "platform.adapter.v1" (install-time check).
-  //
-  // Called AFTER the response has been forwarded in full, so it costs the
-  // client nothing: it only delays the usage record, which is written
-  // asynchronously anyway. It must never be moved before forwarding.
-  //
-  // What it receives depends on the response shape, and in neither case is
-  // it the whole stream:
-  //   - non-streaming: the whole body, but only while the body fits in
-  //     usage.maxBytes; a larger body is not handed over at all (half a JSON
-  //     document parses into wrong numbers, which is worse than none);
-  //   - streaming: only the events whose name the endpoint listed in
-  //     usage.streamEvents, in arrival order, bounded by a host event count
-  //     cap and by usage.maxBytes. Collection stops at the cap and
-  //     `truncated` says so; the host never buffers the whole stream.
-  //   - either way, the request fields the endpoint listed in
-  //     usageRequestFields (`fields`), for endpoints whose response does not
-  //     say how big the work is. Never the whole request body.
-  //
-  // Optional: answer UNIMPLEMENTED when no endpoint needs it. Failure is
-  // NEVER fatal to the request - the response already reached the client. On
-  // an error, a timeout, an UNIMPLEMENTED or a nil answer the host falls
-  // back to the declarative rules it ran while forwarding and marks the
-  // usage record so the silence is visible.
-  rpc ExtractUsage(ExtractUsageRequest) returns (UsageReport);
-  // Opt-in asynchronous task submissions only (endpoint.task.action=submit).
-  // Unlike ExtractUsage, this runs BEFORE forwarding the bounded JSON success
-  // response. The host persists identity, initial snapshot and optional usage
-  // atomically, then replaces declared task ID fields with its public ID.
-  // Attribution and account ownership are always determined by the host.
-  // Ordinary endpoints retain ExtractUsage's asynchronous contract above.
-  rpc ParseTaskSubmission(ExtractUsageRequest) returns (TaskSubmission);
-  // Executes one observation. The host owns scheduling, account selection,
-  // leases and persistence; the plugin initiates its HTTP request through
-  // HostService.ExecuteHTTP using the invocation's short-lived permission.
-  // Requires platform.poll.v1. No plugin timer or net grant.
-  rpc Poll(PollRequest) returns (ReconcileResult);
-  // Builds the request that observes a pre-charged entry or a host-managed
-  // asynchronous task. Legacy endpoints arm it through Reservation; task
-  // endpoints declare endpoint.task and may be free (no reservation needed).
-  //
-  // This is BuildTestRequest / BuildModelsRequest's shape, and it is the
-  // shape on purpose. The plugin only DESCRIBES the request and READS the
-  // answer; the host is what sends it, through the account's proxy, behind
-  // the SSRF guard, under the host's timeout. Which means a plugin that
-  // reconciles asynchronous work needs:
-  //   - no "net" host permission: it never opens a socket;
-  //   - no way to list accounts: the host hands it the one that served the
-  //     request, credentials included, exactly as BuildUpstreamRequest does;
-  //   - no "app.jobs.v1" timer of its own: the host drives the schedule,
-  //     with the backoff, the deadline and the multi-node locking that a
-  //     plugin would otherwise each have to reinvent.
-  // Legacy compatibility path. New plugins use Poll and the host's scoped
-  // ExecuteHTTP callback, which preserves these account/network constraints.
-  //
-  // Optional: answer UNIMPLEMENTED when no endpoint reserves or declares tasks. A plugin that
-  // returns a Reservation and then cannot build the request has its entries
-  // retried until the deadline and then abandoned - the estimate stands as
-  // the final charge.
-  rpc BuildReconcileRequest(BuildReconcileRequestRequest) returns (BuildReconcileRequestResponse);
-  // Reads the upstream's answer to the request above and says whether the
-  // work is still running, finished (with its REAL usage) or failed. The
-  // host prices, charges the difference or refunds, and closes the usage row.
-  //
-  // Like every other call in this file it states upstream facts only: there
-  // is no field here for an amount, and the tokens it reports are priced by
-  // the administrator's price table exactly like a live request's.
-  rpc ParseReconcileResponse(ParseReconcileResponseRequest) returns (ReconcileResult);
   // Builds the request that reads the subscription quota of one account
   // (5-hour / weekly windows and the like, CONTRACTS §44), for account types
   // declaring manifest accountTypes[].quota.query. Same division of labour
-  // as BuildTestRequest and BuildReconcileRequest: the plugin DESCRIBES the
+  // as BuildTestRequest and BuildModelsRequest: the plugin DESCRIBES the
   // request, the host sends it through the account's proxy, behind its SSRF
   // guard and timeout, and hands the answer to ParseQuotaResponse. The host
   // decides when to ask - at most once per account every 30 seconds, and
@@ -171,47 +115,109 @@ service PlatformService {
   // credentials (other fields are kept), encrypts and saves them, and only if
   // nobody changed the account in the meantime.
   rpc ParseRefreshResponse(ParseRefreshResponseRequest) returns (RefreshResult);
-  // Builds the request that queries the account balance, for account types
-  // declaring manifest accountTypes[].balance. Same division of labour as
-  // BuildQuotaRequest: the plugin DESCRIBES the request, the host sends it
-  // through the account's proxy, and hands the answer to ParseBalanceResponse.
-  // The host decides when: on demand (GET /accounts/:id/balance) and
-  // periodically if the manifest declares update_interval.
+  // Builds the requests that read the balance of one account (CONTRACTS
+  // §52), for account types declaring manifest accountTypes[].balance. Same
+  // division of labour as BuildQuotaRequest: the plugin DESCRIBES the
+  // requests, the host sends them and hands all the answers to
+  // ParseBalanceResponse. A balance may take several requests (the key's
+  // quota, then the site's unit of account); the host checks every URL
+  // against the manifest's upstream host rules before it sends any, then
+  // sends them one after the other, in order, through the account's proxy,
+  // behind its SSRF guard and without following redirects. The host decides
+  // when: when an administrator asks (GET /accounts/:id/balance) and every
+  // manifest balance.updateInterval seconds, so the plugin needs no "net"
+  // permission and no cache of its own.
   //
   // Called on the plugin declaring the account type; the account carries its
-  // credentials. Optional: answer UNIMPLEMENTED and the host returns
-  // "unsupported".
+  // credentials as in BuildTestRequest. Optional: answer UNIMPLEMENTED and
+  // the host treats the account type as having no balance.
   rpc BuildBalanceRequest(BuildBalanceRequestRequest) returns (BuildBalanceRequestResponse);
-  // Reads the upstream's answer to the request above into a balance amount.
+  // Reads the upstream's answers to the requests above into a balance. It
+  // states upstream facts only; the host stores and shows them, and never
+  // acts on them (no disabling, no scheduling change, no alert).
   rpc ParseBalanceResponse(ParseBalanceResponseRequest) returns (ParseBalanceResponseResponse);
 }
 
 message EstimateUsageRequest {
   RequestMeta meta = 1;
   map<string, string> fields = 2;
-  repeated string fields_omitted = 3;
+  reserved 3;
+  reserved "fields_omitted";
   int64 pre_consume_tokens = 4;
   string prompt = 5;
 }
 
 message ExecuteRequest {
-  BuildUpstreamRequestRequest request = 1;
+  reserved 1;
+  reserved "request";
+  // Opaque, invocation-local authority for HostService.RelayUpstream and
+  // ExecuteHTTP. The SDK binds it to the call's context. Never persist it or
+  // use it outside the current Execute invocation.
   string execution_token = 2;
+  RequestMeta meta = 3;
+  // The account of this attempt, credentials included.
+  Account account = 4;
+  // The whole request body in the upstream protocol (meta.protocol), after
+  // every rewrite the host owns; on a websocket endpoint the message of
+  // this turn. The client's request passed the gateway's request body
+  // limit; the host's own rewrites may make this larger, and its size is
+  // not checked again.
+  bytes body = 5;
+  // Client headers from the host allow-list (lower-cased names).
+  map<string, string> inbound_headers = 6;
+  // 0 for the first attempt, incremented on failover. Every attempt is
+  // built from scratch.
+  int32 attempt = 7;
+  // The endpoint's usage is read by this plugin (manifest usageSource
+  // "plugin"): relay and wait, return usage.
+  bool extract_usage = 8;
+  // The endpoint submits a host-managed task (endpoint.task.action=submit):
+  // relay and wait, return task.
+  bool task_submission = 9;
 }
 
 message ExecuteResponse {
-  // Only for an upstream error returned by ForwardUpstream. The host still
-  // decides whether another account may be attempted.
+  // An upstream error the plugin saw (a waited relay, or a failed
+  // ExecuteHTTP before the relay). The host still decides whether another
+  // account may be attempted; absent, it applies its default classification.
   ClassifyErrorResponse classification = 1;
+  // What the plugin states about the exchange; at most one. None of them
+  // after a relay that waited: the execution is unreported and not billed.
+  oneof report {
+    // The usage the plugin read from the observation (extract_usage).
+    UsageReport usage = 2;
+    // Take the usage the host reads by the declared rules: the answer of
+    // every relay that did not wait, and the explicit fallback of one that
+    // waited when the plugin could not read the observation.
+    HostUsage host_usage = 3;
+    // The accepted upstream task (task_submission). The host registers it,
+    // replaces the request's precharge with usage.reserve and only then
+    // publishes the submission response.
+    TaskSubmission task = 4;
+  }
 }
 
-message MonitorResponse {}
+// HostUsage is the explicit "use the host's reading", so that it cannot be
+// confused with a response that states nothing. On an endpoint whose usage
+// the plugin reads (usage.source plugin), a reading of a served answer that
+// holds no usage at all is no fact either: the request is unreported (a
+// free usage_unreported record), never billed as zero.
+message HostUsage {}
+
+message MonitorResponse {
+  // PENDING or a terminal state. Unset counts as one failed query. A
+  // terminal state is accepted only with one complete, successful
+  // ExecuteHTTP exchange made during this call.
+  ReconcileResult result = 1;
+}
 
 message PollRequest {
   ReconcileEntry entry = 1;
+  // The account that served the submission, credentials included.
   Account account = 2;
-  // Opaque, invocation-local permission. The SDK binds it to Poll's context.
-  // Never persist it or use it outside the current Poll invocation.
+  // Opaque, invocation-local authority for HostService.ExecuteHTTP. The SDK
+  // binds it to the call's context. Never persist it or use it outside the
+  // current Monitor invocation.
   string execution_token = 3;
 }
 
@@ -226,68 +232,6 @@ message ValidateCredentialsResponse {
   // Optional normalized values the host should store instead of the input.
   string normalized_credentials_json = 2;
   string normalized_settings_json = 3;
-}
-
-message BuildUpstreamRequestRequest {
-  RequestMeta meta = 1;
-  Account account = 2;
-  // Values of the request fields (account type protocol override, else the
-  // platform default), JSON-encoded, keyed by path.
-  map<string, string> fields = 3;
-  // Client headers from the host allow-list (lower-cased names).
-  map<string, string> inbound_headers = 4;
-  // 0 for the first attempt, incremented on failover.
-  int32 attempt = 5;
-  // Extend mode (manifest accountTypes[].upstream.extend,
-  // docs/UPSTREAM-DECLARATIVE.md §4.1): the request the core already built
-  // from the account type's upstream declaration. The plugin only amends
-  // it: the headers it returns are written over base's (except the auth
-  // header, which the declaration alone decides), its patches run after
-  // base's, and a non-empty url replaces base's. Unset for account types
-  // without a declaration.
-  BuildUpstreamRequestResponse base = 6;
-}
-
-message BuildUpstreamRequestResponse {
-  string method = 1;               // default "POST"
-  // Absolute http(s) URL. The host rejects private/loopback/link-local
-  // targets (SSRF guard) unless the account setting explicitly allows it.
-  string url = 2;
-  map<string, string> headers = 3;
-  repeated BodyPatch patches = 4;
-  // Upstream model after mapping, recorded in usage logs (optional).
-  string upstream_model = 5;
-  // Optional: the host signs the final request before sending it (see
-  // RequestSigning). With a scheme the host does not know the attempt fails
-  // as plugin-unavailable and nothing is sent. Hosts older than these fields
-  // ignore them and would send the request unsigned: a plugin setting them
-  // must require a host that has them (manifest hostCompat).
-  //
-  // With signing, url must carry its path the way it goes on the wire, every
-  // segment already percent-encoded: a ":" in a segment as %3A, a "/" inside
-  // one as %2F. The signer does not encode the path for the plugin: it signs
-  // each segment of the path as given escaped once more (%3A is signed as
-  // %253A), so a raw ":" would be sent and signed as a different path than
-  // the one the upstream expects. The query is sent as it is signed: sorted
-  // by key, then value, and re-encoded (a space as %20); a query that cannot
-  // be parsed fails the attempt. A default port in url (:443 for https, :80
-  // for http) is left out of the Host header.
-  RequestSigning signing = 6;
-  // Optional: format of the response body when it is not SSE or JSON; the
-  // name covers the framing and the shape of the events in it.
-  // "aws-eventstream-chunk" (sdk/awseventstream.FormatChunk): when the
-  // upstream answers 2xx with the content type
-  // application/vnd.amazon.eventstream, the host decodes the frames into
-  // server-sent events and treats the answer as an ordinary
-  // text/event-stream from then on. It reads "chunk" events only, the ones
-  // of Bedrock's InvokeModelWithResponseStream: the payload
-  // {"bytes": base64} becomes one SSE event carrying the decoded bytes, and
-  // an exception or error frame becomes a final "error" event in the shape
-  // of an Anthropic stream error. Event streams of another shape (Bedrock's
-  // ConverseStream) are not covered by this name. An answer with another
-  // content type is left as it is. An unknown name fails the attempt as
-  // plugin-unavailable and nothing is sent.
-  string response_stream = 7;
 }
 
 message ClassifyErrorRequest {
@@ -354,6 +298,16 @@ message ClassifyErrorResponse {
 message BuildTestRequestRequest {
   Account account = 1;
   string model = 2;                // optional, plugin default when empty
+  // The protocols this test may use, most preferred first: the account's own
+  // platform protocols it serves (its protocol binding applied, in the order
+  // of the account type's platforms and of their endpoints), without
+  // WebSocket and token-counting protocols, and - when model is set - only
+  // those serving that model. A plugin with one test per protocol picks the
+  // first it has a test for; one with a single test may ignore the list.
+  // Empty: the host has no preference. Report the protocol actually used in
+  // BuildTestRequestResponse.usage_protocol; the host classifies a failed
+  // test with it as meta.protocol.
+  repeated string protocols = 3;
 }
 
 message BuildTestRequestResponse {
@@ -391,10 +345,8 @@ message ResolveModelRequest {
   // meta.model is empty (that is what this call answers); meta.path_params
   // and meta.query carry the parts of the URL the endpoint declared.
   RequestMeta meta = 1;
-  // Values of the platform's request fields, JSON-encoded, keyed by path -
-  // the same map BuildUpstreamRequest receives, read from the client body
-  // before any conversion.
-  map<string, string> fields = 2;
+  reserved 2;
+  reserved "fields";
   // Client headers from the platform's passHeaders allow-list (lower-cased).
   map<string, string> inbound_headers = 3;
 }
@@ -410,7 +362,7 @@ message ResolveModelResponse {
 }
 
 // StreamEvent is one SSE event of an upstream stream that matched the
-// endpoint's usage.streamEvents allow-list.
+// endpoint's usageStreamEvents allow-list.
 message StreamEvent {
   // The event name as the host resolved it: the "event:" line when the
   // upstream sent one, otherwise the "type" field of the data object (the
@@ -422,49 +374,42 @@ message StreamEvent {
   bytes data = 2;
 }
 
+// ExtractUsageRequest is the observation of one successful upstream answer,
+// handed to the plugin by a HostService.RelayUpstream that waited
+// (RelayUpstreamResponse.observation). It is never the whole stream:
+//   - non-streaming: the whole body, of any size;
+//   - streaming: every event whose name the endpoint listed in
+//     usageStreamEvents, in arrival order, of any number and size; the
+//     host never buffers the whole stream.
 message ExtractUsageRequest {
   RequestMeta meta = 1;
-  // The account that served the request. Credentials are NEVER included:
-  // this call reads a response, it does not build one. A plugin that needs
-  // credentials outside a request asks HostService.GetAccountCredentials,
-  // which audits the read (CONTRACTS §26.6). settings_json is present only
-  // when the account type belongs to the plugin being called.
+  // The account that served the request, as in ExecuteRequest.account.
   Account account = 2;
-  // Upstream HTTP status (always 2xx: a failed attempt is classified by
-  // ClassifyError instead and never reaches here).
+  // Upstream HTTP status (always 2xx: a failed exchange comes back as
+  // RelayUpstreamResponse.error instead).
   int32 status = 3;
   // Upstream response headers, lower-cased.
   map<string, string> headers = 4;
-  // Non-streaming: the whole response body. Empty when the body was larger
-  // than usage.maxBytes (the host then skips the call entirely) and when the
-  // response streamed.
+  // Non-streaming: the whole response body. Empty when the response
+  // streamed.
   bytes body = 5;
-  // Streaming: the events matching usage.streamEvents, in arrival order.
+  // Streaming: the events matching usageStreamEvents, in arrival order.
   // Empty for a non-streaming response.
   repeated StreamEvent events = 6;
-  // True when the host stopped collecting events before the stream ended
-  // (the event count cap or usage.maxBytes was reached), so the plugin knows
-  // it is looking at a prefix. Never set for a non-streaming response: an
-  // oversized body is not handed over at all.
-  bool truncated = 7;
+  reserved 7;
+  reserved "truncated";
   // Values of the REQUEST fields the endpoint listed in usageRequestFields,
-  // JSON-encoded and keyed by path - the same shape as ResolveModelRequest
-  // .fields and BuildUpstreamRequest.fields, read from the body that went
-  // upstream (after conversion, before the plugin's own patches). It exists
+  // JSON-encoded and keyed by path - the same map EstimateUsageRequest
+  // carries, read from the body handed to Execute. It exists
   // for endpoints that only START work: their response says {"id": ...} and
   // nothing about the size of the job, while the request carries the
   // resolution and the duration an estimate has to be made from.
   //
-  // Never the whole body, and never a large part of it: only declared paths
-  // travel, a value over the per-value cap is left out, and once the total
-  // budget is spent the remaining declared paths are left out too (both caps
-  // are constants of the SDK, manifest/check). A left-out path is named in
-  // fields_omitted so the plugin can tell "the client did not send it" from
-  // "the host would not carry it" - without that a whitelisted field that
-  // happens to be huge would read as absent and be estimated as the default.
+  // Only declared paths travel, each value whole whatever its size.
   // Empty for endpoints that declare no usageRequestFields.
   map<string, string> fields = 8;
-  repeated string fields_omitted = 9;
+  reserved 9;
+  reserved "fields_omitted";
 }
 
 // UsageReport is what the plugin states about the upstream response. Every
@@ -492,18 +437,13 @@ message UsageReport {
   string error_type = 4;
   string error_message = 5;
   // Free-form JSON object stored in usage_logs.plugin_detail and shown in
-  // the console's usage detail. At most 4 KiB.
-  //
-  // The column is jsonb, so an over-long document cannot be stored as a
-  // prefix - half a JSON document is not a JSON document. The host therefore
-  // replaces it with {"_truncated":true,"_bytes":N} and warns; a document
-  // that is not a JSON object at all becomes {} and warns. Keep it small and
-  // keep it an object.
+  // the console's usage detail, of any size (the column is jsonb). A
+  // document that is not a JSON object becomes {} and warns.
   string detail_json = 6;
   // Set when this request only STARTED work upstream whose real usage is not
   // known yet - a video generation job, say. The host prices the estimate,
   // charges it through the ordinary ledger path, marks the usage row
-  // "reserved" and reconciles it later through the two rpcs below. Leave it
+  // "reserved" and reconciles it later through Monitor. Leave it
   // unset (the case for every endpoint that answers within its response) and
   // nothing about this request changes.
   Reservation reserve = 7;
@@ -573,42 +513,8 @@ message ReconcileEntry {
   string protocol = 8;
 }
 
-message BuildReconcileRequestRequest {
-  ReconcileEntry entry = 1;
-  // The account that served the original request. credentials_json is filled
-  // ONLY when the account's type is declared by the plugin being called -
-  // i.e. only when this plugin already receives the same credentials on every
-  // BuildUpstreamRequest for that account, so nothing new is exposed. When
-  // the platform and the account type come from different plugins the
-  // credentials are withheld and the plugin should answer UNIMPLEMENTED or
-  // build a request that does not need them.
-  Account account = 2;
-}
-
-message BuildReconcileRequestResponse {
-  string method = 1;               // default "GET"
-  // Absolute http(s) URL. The host rejects private/loopback/link-local
-  // targets (SSRF guard) unless the deployment allows them, and sends it
-  // through the account's proxy.
-  string url = 2;
-  map<string, string> headers = 3;
-  string body_json = 4;            // optional
-}
-
-message ParseReconcileResponseRequest {
-  ReconcileEntry entry = 1;
-  Account account = 2;             // credentials as in BuildReconcileRequest
-  // Upstream status, 0 for a transport error (see transport_error).
-  int32 status = 3;
-  map<string, string> headers = 4; // lower-cased
-  bytes body = 5;                  // truncated to the host's reconcile body cap
-  string transport_error = 6;
-  // The response exceeded the host's body cap. Never settle based on a
-  // partial document, even if a permissive parser finds a status/usage field.
-  bool truncated = 7;
-}
-
-// ReconcileResult is what the plugin read out of that answer.
+// ReconcileResult is what the plugin read out of the upstream's answer to its
+// Monitor query.
 message ReconcileResult {
   enum State {
     // Still running. The host reschedules with next_check_after_sec (or its
@@ -691,11 +597,10 @@ message ParseQuotaResponseRequest {
   // Upstream status, 0 for a transport error (see transport_error).
   int32 status = 2;
   map<string, string> headers = 3; // lower-cased
-  bytes body = 4;                  // truncated to the host's body cap (64 KiB)
+  bytes body = 4;                  // the whole answer body
   string transport_error = 5;
-  // The response exceeded the host's body cap; do not trust a partial
-  // document.
-  bool truncated = 6;
+  reserved 6;
+  reserved "truncated";
 }
 
 // QuotaWindow is one usage window of a subscription, e.g. the 5-hour or the
@@ -805,11 +710,10 @@ message ParseRefreshResponseRequest {
   // Upstream status, 0 for a transport error (see transport_error).
   int32 status = 2;
   map<string, string> headers = 3; // lower-cased
-  bytes body = 4;                  // truncated to the host's body cap (64 KiB)
+  bytes body = 4;                  // the whole answer body
   string transport_error = 5;
-  // The response exceeded the host's body cap; do not trust a partial
-  // document.
-  bool truncated = 6;
+  reserved 6;
+  reserved "truncated";
 }
 
 // RefreshResult is what the plugin read out of the refresh answer.
@@ -846,51 +750,84 @@ message BuildBalanceRequestRequest {
 }
 
 message BuildBalanceRequestResponse {
+  reserved 1 to 4;
+  reserved "method", "url", "headers", "body_json";
+  // The requests one balance query takes, sent in this order; at least one.
+  // An answer without requests is a plugin error.
+  repeated BalanceRequest requests = 5;
+}
+
+// BalanceRequest is one upstream request of a balance query.
+message BalanceRequest {
   string method = 1;               // default "GET"
-  // Absolute http(s) URL. The host rejects private/loopback/link-local
-  // targets (SSRF guard) unless the account goes through a proxy, and sends
-  // it through the account's proxy.
+  // Absolute http(s) URL. Its host must pass the manifest's upstream host
+  // rules (externalServices, or an address in the account's upstreamFields)
+  // and the administrator's plugin network policy; if any request of the
+  // query fails them, none is sent. The host rejects private/loopback/
+  // link-local targets (SSRF guard) unless the account goes through a proxy,
+  // sends it through the account's proxy and does not follow redirects (a
+  // 3xx is handed to ParseBalanceResponse as is).
   string url = 2;
+  // Sent as is. Leave the credential out of a request that does not need it
+  // (a public endpoint): the host adds none of its own.
   map<string, string> headers = 3;
-  string body_json = 4;            // optional
+  // Optional request body, sent as is; when headers set no Content-Type and
+  // the body is not empty the host adds Content-Type: application/json.
+  string body_json = 4;
 }
 
 message ParseBalanceResponseRequest {
   Account account = 1;             // as in BuildBalanceRequest
+  reserved 2 to 6;
+  reserved "status", "headers", "body", "transport_error", "truncated";
+  // One answer per request of BuildBalanceRequestResponse, in the same
+  // order. The host sends every request even when an earlier one failed, so
+  // the plugin always sees all of them.
+  repeated BalanceAnswer answers = 7;
+}
+
+// BalanceAnswer is the upstream's answer to one BalanceRequest.
+message BalanceAnswer {
   // Upstream status, 0 for a transport error (see transport_error).
-  int32 status = 2;
-  map<string, string> headers = 3; // lower-cased
-  bytes body = 4;                  // truncated to the host's body cap (64 KiB)
-  string transport_error = 5;
-  // The response exceeded the host's body cap; do not trust a partial
-  // document.
-  bool truncated = 6;
+  int32 status = 1;
+  map<string, string> headers = 2; // lower-cased
+  bytes body = 3;                  // the whole answer body
+  string transport_error = 4;
 }
 
 message ParseBalanceResponseResponse {
   BalanceResult result = 1;
 }
 
-// BalanceResult is what the plugin read out of the balance answer.
+// BalanceResult is what the plugin read out of the balance answers.
 message BalanceResult {
   enum ErrorType {
-    // Success: amount_micros carries the balance.
+    // Success: amount_micros and currency carry the balance, or unlimited
+    // is set.
     ERROR_TYPE_UNSPECIFIED = 0;
-    // The upstream rejected the credentials (401/403, revoked token). The
-    // host records the error on the snapshot; it does NOT disable or cool
-    // down the account - the gateway's own classification does that.
+    // The upstream rejected the credentials (401/403, revoked or expired
+    // key). The host records the error on the snapshot; it does NOT disable
+    // or cool down the account - the gateway's own classification does that.
     ERROR_TYPE_AUTH_REJECTED = 1;
-    // Any other failure: transport error, 429, 5xx, unreadable body. The
-    // host records it and does not ask again for a minute.
+    // Any other failure: transport error, 429, 5xx, unreadable body, a
+    // value the plugin cannot read. The host records it, keeps the last
+    // successful amount (shown as stale) and asks again at the next update
+    // interval.
     ERROR_TYPE_TRANSIENT = 2;
   }
-  // Balance in micro-units (1,000,000 = 1.00 currency unit). For example,
-  // $1.23 USD = 1230000 micros.
+  // The number the upstream reports, in millionths (7.25 = 7250000), as it
+  // is: never converted to another unit or currency. Ignored when
+  // unlimited is set.
   int64 amount_micros = 1;
-  // ISO 4217 currency code (3 uppercase letters), must match the manifest
-  // declaration. Required on success.
+  // The unit the upstream gives with the number, as it gives it (e.g.
+  // "USD"; any text, not checked), empty when it gives none. Stored and
+  // shown as it is. Ignored when unlimited is set.
   string currency = 2;
   ErrorType error_type = 3;
   // Why, shown with the snapshot. At most 512 bytes are kept.
   string error_message = 4;
+  // The upstream reports no limit for this account (an unlimited key): the
+  // console shows "unlimited" instead of an amount. amount_micros and
+  // currency are ignored. Only meaningful on success.
+  bool unlimited = 5;
 }

@@ -2,12 +2,10 @@ import { afterEach, describe, expect, it } from 'vitest'
 import type { PluginHost } from '@sub2api/host'
 import { mount } from '@vue/test-utils'
 import { SInput, SSelect } from '@sub2api/ui'
-import schema from '../../../forms/settings.schema.json'
-import ui from '../../../forms/settings.ui.json'
 import DurationInput from './DurationInput.vue'
 import { joinDuration, splitDuration } from './duration'
 import { setHost } from './host'
-import { sectionsOf, settingSections } from './settingsForm'
+import { pageKeys, settingDefault, specOf } from './settingsForm'
 
 describe('durations in seconds edited as a number and a unit', () => {
   it('shows the largest whole unit', () => {
@@ -47,9 +45,9 @@ describe('durations in seconds edited as a number and a unit', () => {
 
 describe('the escalation settings (D10)', () => {
   it('sit on the list rules page next to the ban threshold, off by default', () => {
-    const keys = sectionsOf(settingSections(schema, ui), 'lists').flatMap((g) => g.keys)
+    const keys = pageKeys('lists')
     expect(keys.slice(keys.indexOf('watch_days') + 1, keys.indexOf('ban_threshold') + 1)).toEqual(['escalate_violations', 'escalate_window_seconds', 'ban_threshold'])
-    expect(schema.properties.escalate_violations.default).toBe(0)
-    expect(ui.escalate_window_seconds['ui:widget']).toBe('duration')
+    expect(settingDefault('escalate_violations')).toBe(0)
+    expect(specOf('escalate_window_seconds').kind).toBe('duration')
   })
 })

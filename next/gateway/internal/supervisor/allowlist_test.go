@@ -83,10 +83,24 @@ func TestInheritedEnvCoversCoreConfiguration(t *testing.T) {
 		t.Fatalf("core reads variables a managed core would not receive; add them to inheritedEnv or coreProvidedEnv:\n%s", strings.Join(missing, "\n"))
 	}
 	// The other way round: a core setting the core no longer reads leaves
-	// the allowlist.
+	// the allowlist, unless legacyCoreEnv keeps it for an older core; a
+	// legacy name the core reads again is a current setting.
 	for _, name := range inheritedEnv {
-		if _, current := read[name]; !current && strings.HasPrefix(name, "SUB2API_") {
-			t.Errorf("%s is no longer read by the core: drop it from inheritedEnv", name)
+		_, current := read[name]
+		switch legacy := slices.Contains(legacyCoreEnv, name); {
+		case legacy && current:
+			t.Errorf("%s is read by the core again: move it from legacyCoreEnv to inheritedEnv", name)
+		case !legacy && !current && strings.HasPrefix(name, "SUB2API_"):
+			t.Errorf("%s is no longer read by the core: drop it, or keep it in legacyCoreEnv while an older core reads it", name)
 		}
+	}
+}
+
+// A 0.1.303 core started by this shell still gets the switch that lets it
+// run on a database user without CREATEROLE.
+func TestLegacyCoreEnvReachesTheCore(t *testing.T) {
+	env := coreEnvironment([]string{"SUB2API_PLUGIN_DB_ROLE_ISOLATION=false"}, nil, nil)
+	if !slices.Equal(env, []string{"SUB2API_PLUGIN_DB_ROLE_ISOLATION=false"}) {
+		t.Fatalf("legacy setting did not reach the core: %v", env)
 	}
 }

@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '@sub2api/host'
-import { SBadge, SButton, SCard, SCode, SHint, SSegmented, SSettingRow, SSettingsGroup, STable, toast, type TableColumn } from '@sub2api/ui'
+import { SBadge, SButton, SCard, SCode, SHint, SLink, SSegmented, SSettingRow, SSettingsGroup, STable, toast, type TableColumn } from '@sub2api/ui'
 import { formatBytes, formatDateTime, formatNumber } from '@/utils/format'
 import { notifyError } from '@/utils/errors'
 import { useAuthStore } from '@/stores/auth'
@@ -42,6 +42,8 @@ const auth = useAuthStore()
 
 const canRead = computed(() => auth.has('plugin:egress:read'))
 const canManage = computed(() => auth.has('plugin:manage'))
+/** The administrator's domains for every plugin (settings, CONTRACTS §113) apply on top of this policy. */
+const canReadNetworkAccess = computed(() => auth.has('settings:read'))
 
 const policy = ref<string>(props.detail.egress_policy || 'allow_all')
 const savingPolicy = ref(false)
@@ -267,6 +269,9 @@ onMounted(load)
           <SCode v-for="d in allowedDomains" :key="d" inline :text="d" />
         </template>
         <SHint v-else inline>{{ t('common.none') }}</SHint>
+      </SSettingRow>
+      <SSettingRow v-if="canReadNetworkAccess" :label="t('pluginEgress.title')" :description="t('pluginEgress.egressTabHint')" dense data-testid="egress-network-access">
+        <SLink to="/settings?tab=plugin-egress">{{ t('pluginEgress.egressTabLink') }}</SLink>
       </SSettingRow>
     </SSettingsGroup>
 

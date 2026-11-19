@@ -39,8 +39,8 @@ func pluginGatewaySettings(ctx context.Context, q *gorm.DB) (protocol.SettingsVa
 		DefaultHookTimeoutMs: v.DefaultHookTimeoutMs, PlatformHotpathTimeoutMs: v.PlatformHotpathTimeoutMs,
 		QueueStickyMaxWaiting: v.QueueStickyMaxWaiting, QueueStickyWaitSeconds: v.QueueStickyWaitSeconds,
 		QueueFallbackMaxWaiting: v.QueueFallbackMaxWaiting, QueueFallbackWaitSeconds: v.QueueFallbackWaitSecond,
-		MediaDownloadMaxMB: v.MediaDownloadMaxMB,
-		ClaudeMaxTokens:    protocol.ClaudeMaxTokens{Enabled: v.ClaudeMaxTokens.Enabled, Models: v.ClaudeMaxTokens.Models},
+		MediaDownloadMaxMB: v.MediaDownloadMaxMB, MaxRequestBodyMB: v.MaxRequestBodyMB,
+		ClaudeMaxTokens: protocol.ClaudeMaxTokens{Enabled: v.ClaudeMaxTokens.Enabled, Models: v.ClaudeMaxTokens.Models},
 	}, nil
 }
 

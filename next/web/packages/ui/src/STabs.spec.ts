@@ -7,7 +7,6 @@ import SPageHeader from './SPageHeader.vue'
 import SSectionTitle from './SSectionTitle.vue'
 import SModal from './SModal.vue'
 import SDrawer from './SDrawer.vue'
-import SchemaForm from './schema/SchemaForm.vue'
 
 enableAutoUnmount(afterEach)
 const tabs = [{ key: 'billing', label: '计费' }, { key: 'other', label: '其他' }]
@@ -68,18 +67,6 @@ describe('platform tab title ownership', () => {
     expect(wrapper.get('h5').text()).toBe('计费')
     expect(wrapper.findComponent(SModal).findAll('h3')).toHaveLength(2)
     expect(wrapper.findComponent(SDrawer).get('h1').text()).toBe('计费')
-  })
-
-  it('applies the same default to plugin schema settings without altering data', () => {
-    const values = { enabled: true }
-    const wrapper = mount(STabs, { props: { tabs, modelValue: 'billing' }, slots: { default: () => h(SchemaForm, {
-      layout: 'settings', modelValue: values,
-      schema: { type: 'object', properties: { enabled: { type: 'boolean', title: '启用' } } },
-      uiSchema: { enabled: { 'ui:section': { title: '计费' } } }
-    }) } })
-    expect(wrapper.find('h5').exists()).toBe(false)
-    expect(wrapper.find('input').exists()).toBe(true)
-    expect(values).toEqual({ enabled: true })
   })
 })
 

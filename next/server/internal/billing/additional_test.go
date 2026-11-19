@@ -14,10 +14,10 @@ func TestAdditionalPrechargeQuotesIndependentComponents(t *testing.T) {
 	if err != nil || !amount.Equal(decimal.NewFromInt(12)) {
 		t.Fatal(amount, err)
 	}
-	r.Price = nil
+	r.Price = &core.PriceRule{Expression: `tier("main",p*0)`}
 	amount, err = quoteRecord(context.Background(), s, r)
 	if err != nil || !amount.Equal(decimal.NewFromInt(10)) {
-		t.Fatal("free main hid extras", amount, err)
+		t.Fatal("zero-priced main hid extras", amount, err)
 	}
 	r.Additional[0].Tokens.Output = -1
 	if _, err := quoteRecord(context.Background(), s, r); err == nil {

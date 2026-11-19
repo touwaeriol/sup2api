@@ -66,15 +66,13 @@ type call struct {
 	prompt *promptCount
 	// bodyVersion counts hook body replacements. scanned/scannedBodyVersion
 	// remember the version whose referenced-model check passed, so the
-	// second checkModel can reuse it; doc and digest cache
-	// the parsed document and the SHA-256 of that same version (body_state.go).
+	// second checkModel can reuse it; doc caches the parsed document of that
+	// same version (body_state.go).
 	bodyVersion        uint64
 	scanned            bool
 	scannedBodyVersion uint64
 	doc                gjson.Result
 	docValid           bool
-	digest             [32]byte
-	digestValid        bool
 
 	// scheduling: account types able to serve the endpoint protocol
 	routes    map[core.AccountTypeKey]*typeRoute
@@ -83,7 +81,7 @@ type call struct {
 	// (convert_policy.go)
 	conversion conversionState
 
-	// billing: the model's global price (nil = free policy or free endpoint)
+	// billing: the model's global price (nil on a free endpoint)
 	price                *core.PriceRule
 	modelRefs            []modelReference
 	upstreamRefs         map[string]core.PricedUsage
@@ -143,11 +141,11 @@ type call struct {
 	// it, so the plugin is asked again exactly when a hook changed the body.
 	modelResolved bool
 
-	// usage is the armed PlatformService.ExtractUsage call for endpoints
-	// declaring usage.source "plugin" (usageplugin.go); nil for every other
-	// endpoint, which is how they pay nothing for the feature. It is filled
-	// at the end of forwarding and consumed by submit, on its own goroutine,
-	// after the handler returned.
+	// usage is what the plugin reading an endpoint's usage (usage.source
+	// "plugin", usageplugin.go) is shown of the answer: filled at the end of
+	// forwarding and taken by the waited relay for its observation
+	// (waited.go); nil for every other endpoint, which is how they pay
+	// nothing for the feature.
 	usage *pendingExtract
 	// Context of the currently selected account's concurrency lease.
 	slotCtx context.Context
@@ -176,7 +174,7 @@ type call struct {
 	drained                  bool
 	task                     *core.TaskSnapshot
 	taskPublicID             string
-	taskPersisted            bool
+	executionOwnsUsage       bool
 	statsCompletedAt         time.Time
 	statsCanceled            bool
 	observationAttemptAt     time.Time
@@ -277,12 +275,7 @@ func (c *call) run(ctx context.Context) {
 		ctx = admitted
 	}
 	// A request that never reaches countTokens gives its reservations back.
-	// With usage still to come, submit counts it after the handler returns.
-	defer func() {
-		if c.usage == nil {
-			c.releaseHolds(ctx)
-		}
-	}()
+	defer c.releaseHolds(ctx)
 
 	// 4. Hooks (may deny or patch the body).
 	c.sessionFP = c.sessionFingerprint(ctx)
@@ -380,19 +373,9 @@ func (c *call) priceQuery(model string) core.PriceQuery {
 	return core.PriceQuery{Model: model, GroupID: c.principal.Group.ID, SegmentID: c.principal.SegmentID}
 }
 
-// bodyLimit is the largest client request body (or WebSocket message).
-// max_request_body_mb may raise what the endpoint declares but not lower it;
-// for an endpoint that declares nothing it replaces the default.
-func (c *call) bodyLimit() int64 {
-	env := c.environment(nil).Bytes(core.EnvVarMaxRequestBodyMB)
-	if c.ep.Request.MaxBodyBytes > 0 {
-		return max(c.ep.Request.MaxBodyBytes, env)
-	}
-	if env > 0 {
-		return env
-	}
-	return defaultMaxBodyBytes
-}
+// bodyLimit is the largest client request body (or WebSocket message): the
+// request body limit of the gateway settings and nothing else.
+func (c *call) bodyLimit() int64 { return c.gw.MaxRequestBodyBytes() }
 
 func (c *call) readBody() *gwError {
 	if c.c.Request.Body != nil {
@@ -419,8 +402,8 @@ func (c *call) readBody() *gwError {
 // JSON text is UTF-8 (RFC 8259 §8.1) and gjson's validator does not check
 // that, so a body with a stray byte inside a string would pass here and
 // then poison every proto string it is copied into - RequestMeta.model
-// from request.modelPath, the fields of BuildUpstreamRequest / ResolveModel
-// / ExtractUsage, price params - and proto.Marshal refuses invalid UTF-8,
+// from request.modelPath, the request fields handed to plugins, price
+// params - and proto.Marshal refuses invalid UTF-8,
 // which makes every plugin call of the request fail: one curl, a stable
 // 5xx, and a usage row PostgreSQL refuses as well (CONTRACTS §25.1). It is
 // not valid JSON; say so, once, here.
@@ -489,7 +472,7 @@ func (c *call) checkModel(ctx context.Context) *gwError {
 	// no model id looks like before any of them sees it (CONTRACTS §15.2).
 	if !c.ep.TaskQuery() && c.model != "" && !validModelName(c.model) {
 		return &gwError{Status: http.StatusBadRequest, Code: core.ErrInvalidArgument.Code,
-			Message: "model must be a model identifier of at most 256 bytes without whitespace or control characters", RecordType: errTypeInvalidRequest}
+			Message: "model must be a model identifier without whitespace or control characters", RecordType: errTypeInvalidRequest}
 	}
 	// request.stream is an endpoint-level fact ("this endpoint only streams")
 	// and always wins, including over a plugin: a plugin answering false would
@@ -550,15 +533,9 @@ func (c *call) resolveModelFromPlugin(ctx context.Context) *gwError {
 			"builtin", pb.Builtin, "found", ok)
 		return fromCore(core.ErrInternal.WithMessage("the platform of this endpoint cannot resolve models"), errTypeInternal)
 	}
-	fields := map[string]string{}
-	for _, p := range c.pf.RequestFields {
-		if r := getJSON(c.body, p); r != "" {
-			fields[p] = r
-		}
-	}
 	rctx, cancel := context.WithTimeout(ctx, c.gw.hotpathTimeout())
 	resp, err := pb.Client.ResolveModel(rctx, &pluginv1.ResolveModelRequest{
-		Meta: c.meta(), Fields: fields, InboundHeaders: c.passHeaders(c.pf.PassHeaders)})
+		Meta: c.meta(), InboundHeaders: c.passHeaders(c.pf.PassHeaders)})
 	cancel()
 	if err != nil || resp.GetModel() == "" {
 		slog.InfoContext(ctx, "gateway: resolve model failed", "plugin", pb.Plugin.Key,
@@ -585,16 +562,14 @@ func (c *call) prepareBilling(ctx context.Context) *gwError {
 		}
 		return fromCore(e, rt)
 	}
-	if rule != nil {
-		kind := rule.Mode
-		if rule.VideoOnly {
-			kind = "video"
-		}
-		if !c.ep.SupportsBillingType(kind) {
-			return &gwError{Status: http.StatusBadRequest, Code: "billing_type_not_supported",
-				Message:    "endpoint " + c.ep.Protocol + " does not support " + kind + " pricing for model " + c.model,
-				RecordType: errTypeInvalidRequest}
-		}
+	kind := rule.Mode
+	if rule.VideoOnly {
+		kind = "video"
+	}
+	if !c.ep.SupportsBillingType(kind) {
+		return &gwError{Status: http.StatusBadRequest, Code: "billing_type_not_supported",
+			Message:    "endpoint " + c.ep.Protocol + " does not support " + kind + " pricing for model " + c.model,
+			RecordType: errTypeInvalidRequest}
 	}
 	c.price = rule
 	c.rec.Price = rule
@@ -666,8 +641,8 @@ func (c *call) priceInputsFrom(rule *core.PriceRule, body []byte) (params map[st
 // upstream protocol and the attempt's environment (metaFor).
 func (c *call) meta() *pluginv1.RequestMeta {
 	if !c.metaMapsDone {
-		c.metaPathParams = boundMeta(c.params)
-		c.metaQuery = boundMeta(c.declaredQuery())
+		c.metaPathParams = validMeta(c.params)
+		c.metaQuery = validMeta(c.declaredQuery())
 		c.metaMapsDone = true
 	}
 	m := &pluginv1.RequestMeta{
@@ -732,41 +707,24 @@ func (c *call) declaredQuery() map[string]string {
 	return out
 }
 
-// metaMapMaxKeys, metaMapMaxKeyBytes and metaMapMaxValueBytes bound the
-// RequestMeta path_params and query maps: both come straight from the client.
-const (
-	metaMapMaxKeys       = 32
-	metaMapMaxKeyBytes   = 64
-	metaMapMaxValueBytes = 512
-)
-
-// boundMeta caps in to metaMapMaxKeys entries (lowest key names first, so the
-// choice is stable) and truncates keys and values on a UTF-8 boundary. It
-// returns nil for an empty map: the field is optional and a nil map costs no
-// allocation on the hot path.
+// validMeta is a RequestMeta path_params or query map as the client sent
+// it, every entry of any size. It returns nil for an empty map: the field
+// is optional and a nil map costs no allocation on the hot path.
 //
-// The map comes straight off the wire, so invalid UTF-8 is dropped first:
-// proto3 string fields must be valid UTF-8 and marshalling a RequestMeta with
-// a stray byte would fail every plugin call of the request.
-func boundMeta(in map[string]string) map[string]string {
+// The map comes straight off the wire, so invalid UTF-8 is dropped: proto3
+// string fields must be valid UTF-8 and marshalling a RequestMeta with a
+// stray byte would fail every plugin call of the request.
+func validMeta(in map[string]string) map[string]string {
 	if len(in) == 0 {
 		return nil
 	}
-	keys := make([]string, 0, len(in))
-	for k := range in {
-		keys = append(keys, k)
-	}
-	if len(keys) > metaMapMaxKeys {
-		sort.Strings(keys)
-		keys = keys[:metaMapMaxKeys]
-	}
-	out := make(map[string]string, len(keys))
-	for _, k := range keys {
-		name := truncateUTF8(strings.ToValidUTF8(k, ""), metaMapMaxKeyBytes)
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		name := strings.ToValidUTF8(k, "")
 		if name == "" {
 			continue
 		}
-		out[name] = truncateUTF8(strings.ToValidUTF8(in[k], ""), metaMapMaxValueBytes)
+		out[name] = strings.ToValidUTF8(v, "")
 	}
 	if len(out) == 0 {
 		return nil
@@ -814,14 +772,9 @@ func (c *call) fail(e *gwError) {
 	writeError(c.c, c.format, e)
 }
 
-// submit finalizes the usage record and hands it to the settler.
-//
-// For an endpoint whose usage a plugin reports, the plugin is asked here
-// rather than in forward(): the handler returns as soon as submit does, so
-// the response is terminated for the client before a remote call is made. The
-// record is finished on that goroutine instead (finishSubmit), which is the
-// one thing that was always allowed to be late - it goes to an asynchronous
-// settler either way.
+// submit finalizes the usage record and hands it to the settler. A request
+// whose usage the records of a waited relay own (executionOwnsUsage) has
+// none to submit.
 func (c *call) submit() {
 	rec := c.rec
 	if rec == nil || c.g.d.Settler == nil {
@@ -835,7 +788,7 @@ func (c *call) submit() {
 	// A client that left once it was served did not cancel anything.
 	c.statsCanceled = c.c.Request.Context().Err() != nil && !rec.Success
 	c.observeRequest(observation.Completed, rec)
-	if c.taskPersisted {
+	if c.executionOwnsUsage {
 		c.observeRequest(observation.UsageFinalized, rec)
 		return
 	}
@@ -843,47 +796,7 @@ func (c *call) submit() {
 	if rec.StatusCode == 0 {
 		rec.StatusCode = c.c.Writer.Status()
 	}
-	// Read off the gin context here: it is pooled and reused once the handler
-	// returns, so nothing below this point may touch it.
-	billing := c.ep.Billing
-	if p := c.usage; p != nil {
-		c.usage = nil
-		// The goroutine below captures c, and with it the request body (and
-		// its converted copies) - possibly megabytes of base64 for exactly
-		// the endpoints this path serves. Nothing after this point reads
-		// them: ExtractUsage was armed with the few request fields it is
-		// shown, so let the body go before the handler returns rather than
-		// keep it for the length of a plugin round trip.
-		c.releaseBodies()
-		// g.wg is the gateway's own group, so Close waits for the extraction
-		// instead of dropping the record. Add is safe here because it happens
-		// inside the handler: app.go shuts the HTTP server down (every handler
-		// returned) before it calls Gateway.Close.
-		c.g.wg.Add(1)
-		go func() {
-			defer c.g.wg.Done()
-			ctx := context.Background()
-			c.extractUsage(ctx, p)
-			// Rate limits count what was really used, so they are updated
-			// with the plugin's answer rather than the rules' guess.
-			c.countTokens(ctx, p.accountID)
-			c.finishSubmit(ctx, rec, billing)
-		}()
-		return
-	}
-	c.finishSubmit(context.Background(), rec, billing)
-}
-
-// releaseBodies drops every reference the call holds to the request body.
-// Only for the asynchronous submit path, once nothing will read them again.
-func (c *call) releaseBodies() {
-	c.body = nil
-	c.promptCache = nil
-	c.doc, c.docValid = gjson.Result{}, false
-	c.digestValid = false
-	for _, rt := range c.routes {
-		rt.body = nil
-	}
+	c.finishSubmit(context.Background(), rec, c.ep.Billing)
 }
 
 func (c *call) finishSubmit(ctx context.Context, rec *core.UsageRecord, billing string) {
@@ -931,7 +844,7 @@ func (c *call) settleCanceled(ctx context.Context, rec *core.UsageRecord, billin
 	if rec.ErrorType != errTypeClientCanceled || !c.upstreamResponded {
 		return false, false
 	}
-	if strings.EqualFold(billing, "free") || rec.Price == nil || rec.Reservation != nil || len(rec.Replacement) > 0 {
+	if strings.EqualFold(billing, "free") || rec.Reservation != nil || len(rec.Replacement) > 0 {
 		return false, false
 	}
 	if c.drained {
@@ -990,9 +903,9 @@ func canceledTokens(reported, est core.UsageTokens) core.UsageTokens {
 // the first plugin to reserve, where the submit endpoint had been marked
 // billing "free" because "the submit itself has no final usage". The manifest
 // check now refuses that combination; this is what stands for packages
-// installed before it did, and for the other two ways here: a price the
-// request did not resolve, and an estimate with no tokens and no facts on a
-// per-token price, which is a plugin bug the plugin author has to hear about.
+// installed before it did, and for the other way here: an estimate with no
+// tokens and no facts on a per-token price, which is a plugin bug the plugin
+// author has to hear about.
 func (c *call) dropReservation(ctx context.Context, rec *core.UsageRecord, billing string, hasUsage bool) {
 	rv := rec.Reservation
 	if rv == nil {
@@ -1002,8 +915,6 @@ func (c *call) dropReservation(ctx context.Context, rec *core.UsageRecord, billi
 	switch {
 	case strings.EqualFold(billing, "free"):
 		why = "endpoint billing is \"free\""
-	case rec.Price == nil:
-		why = "no price was resolved for the request"
 	case !hasUsage:
 		why = "the estimate has no tokens and no facts, and the price is not per-request"
 	default:

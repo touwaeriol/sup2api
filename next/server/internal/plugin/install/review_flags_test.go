@@ -40,24 +40,16 @@ VALUES ('plugin.guard:`+m.UserPermissions[0].Key+`', 'plugin.guard', '{"en":"x"}
 		t.Fatalf("new flags = %+v", r.UserPermissions)
 	}
 
-	// A verified (not official) publisher without role isolation: flagged,
-	// and the consent of a caller without the override is refused.
+	// A verified (not official) publisher: flagged, and the consent of a
+	// caller without the override is refused.
 	if _, err := e.db.SQL.ExecContext(ctx, `UPDATE publishers SET trust_level = 'verified'`); err != nil {
 		t.Fatal(err)
 	}
 	if r := review(); !r.NeedsDBSchemaUnconfined {
-		t.Fatal("verified plugin without role isolation not flagged")
+		t.Fatal("verified plugin not flagged")
 	}
 	_, err := e.svc.Consent(ctx, "guard", "0.1.0", ConsentRequest{Grants: explicitGuardGrants()}, e.admin)
 	if core.AsError(err).Code != core.ErrPermissionDenied.Code {
 		t.Fatalf("consent without the override: %v", err)
-	}
-	// With role isolation neither asks for it.
-	e.svc.opt.Plugins.DBRoleIsolation = true
-	if r := review(); r.NeedsDBSchemaUnconfined {
-		t.Fatal("flagged with role isolation")
-	}
-	if _, err := e.svc.Consent(ctx, "guard", "0.1.0", ConsentRequest{Grants: explicitGuardGrants()}, e.admin); err != nil {
-		t.Fatalf("consent with role isolation: %v", err)
 	}
 }

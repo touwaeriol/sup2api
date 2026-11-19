@@ -95,6 +95,12 @@ message HTTPRequest {
   // values, except those only own may reach (own: the plugin checks). Absent
   // on routes whose permission has no scope.
   ActionScope action_scope = 9;
+  // Set on a call by a console user (scope admin or user): the authority of
+  // the fetches (HostService.ExecuteHTTP) the plugin makes while it serves
+  // this call, void once the call returns. Such a fetch names the proxy
+  // ticket of an account being authorized (ExecutionHTTPRequest.proxy_ticket,
+  // CONTRACTS §117). The SDK binds it to the handler's context.
+  string execution_token = 10;
 }
 
 message HTTPResponse {

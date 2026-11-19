@@ -135,27 +135,27 @@ func TestGlobalLayerRoutes(t *testing.T) {
 	if fmt.Sprint(out["data"]) != "map[values:map[]]" {
 		t.Fatalf("empty: %v", out)
 	}
-	// The global layer holds max_request_body_mb; an unknown key is refused.
+	// An unknown key is refused.
 	if code, out = e.do(e.admin, "PUT", "/settings/environment", map[string]any{"values": map[string]int64{"nope": 1}}); code != 400 {
 		t.Fatalf("unknown: %d %v", code, out)
 	}
-	if got := e.svc.GlobalEnvironment(context.Background()); len(got) != 2 || got[core.EnvVarMaxRequestBodyMB] != 0 {
+	if got := e.svc.GlobalEnvironment(context.Background()); len(got) != 2 || got[core.EnvVarResponseHeaderTimeoutSeconds] != 0 {
 		t.Fatalf("cached before put, the process layer alone: %v", got)
 	}
 	code, out = e.do(e.admin, "PUT", "/settings/environment", map[string]any{"values": map[string]int64{
-		"max_request_body_mb": 64, "relay_timeout_seconds": 0}})
-	if code != 200 || fmt.Sprint(out["data"]) != "map[values:map[max_request_body_mb:64]]" {
+		"response_header_timeout_seconds": 64, "relay_timeout_seconds": 0}})
+	if code != 200 || fmt.Sprint(out["data"]) != "map[values:map[response_header_timeout_seconds:64]]" {
 		t.Fatalf("put: %d %v", code, out)
 	}
 	if len(e.bus.msgs) != 1 || e.bus.msgs[0] != core.ChannelConfigChanged+` {"key":"settings.environment"}` {
 		t.Fatalf("broadcast: %v", e.bus.msgs)
 	}
 	// The put invalidated the cached (empty) layer.
-	if got := e.svc.GlobalEnvironment(context.Background()); got[core.EnvVarMaxRequestBodyMB] != 64 {
+	if got := e.svc.GlobalEnvironment(context.Background()); got[core.EnvVarResponseHeaderTimeoutSeconds] != 64 {
 		t.Fatalf("global: %v", got)
 	}
 	_, out = e.do(e.admin, "GET", "/settings/environment", nil)
-	if fmt.Sprint(out["data"]) != "map[values:map[max_request_body_mb:64]]" {
+	if fmt.Sprint(out["data"]) != "map[values:map[response_header_timeout_seconds:64]]" {
 		t.Fatalf("get: %v", out)
 	}
 }
@@ -164,7 +164,7 @@ func TestResolveEnvironment(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
 	if _, out := e.do(e.admin, "PUT", "/settings/environment", map[string]any{"values": map[string]int64{
-		"relay_timeout_seconds": 300, "max_request_body_mb": 50}}); out["data"] == nil {
+		"relay_timeout_seconds": 300, "response_header_timeout_seconds": 50}}); out["data"] == nil {
 		t.Fatalf("put: %v", out)
 	}
 	var groupID, accountID int64
@@ -180,8 +180,10 @@ func TestResolveEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The account's max_request_body_mb is not on its layer and is skipped.
-	if got[core.EnvVarRelayTimeoutSeconds] != 60 || got[core.EnvVarTaskPollMaxFailures] != 3 || got[core.EnvVarMaxRequestBodyMB] != 50 {
+	// A key that is not declared (max_request_body_mb was, until the request
+	// body limit became a gateway setting) is skipped.
+	if _, stale := got["max_request_body_mb"]; stale || got[core.EnvVarRelayTimeoutSeconds] != 60 || got[core.EnvVarTaskPollMaxFailures] != 3 ||
+		got[core.EnvVarResponseHeaderTimeoutSeconds] != 50 {
 		t.Fatalf("resolved: %v", got)
 	}
 	got, err = e.svc.ResolveEnvironment(ctx, groupID, 0)
@@ -204,15 +206,15 @@ func TestResolveEnvironment(t *testing.T) {
 func TestGlobalEnvironmentIgnoresCallerCancel(t *testing.T) {
 	e := setup(t)
 	if code, out := e.do(e.admin, "PUT", "/settings/environment", map[string]any{"values": map[string]int64{
-		"max_request_body_mb": 64}}); code != 200 {
+		"response_header_timeout_seconds": 64}}); code != 200 {
 		t.Fatalf("put: %d %v", code, out)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if got := e.svc.GlobalEnvironment(ctx); got[core.EnvVarMaxRequestBodyMB] != 64 {
+	if got := e.svc.GlobalEnvironment(ctx); got[core.EnvVarResponseHeaderTimeoutSeconds] != 64 {
 		t.Fatalf("cancelled caller: %v", got)
 	}
-	if got := e.svc.GlobalEnvironment(context.Background()); got[core.EnvVarMaxRequestBodyMB] != 64 {
+	if got := e.svc.GlobalEnvironment(context.Background()); got[core.EnvVarResponseHeaderTimeoutSeconds] != 64 {
 		t.Fatalf("cached after a cancelled caller: %v", got)
 	}
 }
@@ -220,7 +222,7 @@ func TestGlobalEnvironmentIgnoresCallerCancel(t *testing.T) {
 // fakeLoader stands in for the database read of the global layer.
 type fakeLoader struct {
 	mu    sync.Mutex
-	value int64 // max_request_body_mb returned
+	value int64 // response_header_timeout_seconds returned
 	err   error
 	gate  chan struct{} // when set, a read waits for it
 	calls chan struct{} // receives one value per read started
@@ -245,7 +247,7 @@ func (f *fakeLoader) load(ctx context.Context) (core.EnvironmentValues, error) {
 	if err != nil {
 		return nil, err
 	}
-	return core.EnvironmentValues{core.EnvVarMaxRequestBodyMB: value}, nil
+	return core.EnvironmentValues{core.EnvVarResponseHeaderTimeoutSeconds: value}, nil
 }
 
 func (f *fakeLoader) set(value int64, err error, gate chan struct{}) {
@@ -286,40 +288,40 @@ func waitBody(t *testing.T, s *Service, want int64) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		got := s.GlobalEnvironment(context.Background())[core.EnvVarMaxRequestBodyMB]
+		got := s.GlobalEnvironment(context.Background())[core.EnvVarResponseHeaderTimeoutSeconds]
 		if got == want {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("max_request_body_mb = %d, want %d", got, want)
+			t.Fatalf("response_header_timeout_seconds = %d, want %d", got, want)
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
 }
 
 // A failed read past the TTL keeps the last good layer instead of falling
-// back to the process layer (audit 2026-10-31: max_request_body_mb=100 fell
-// back to 32 MB for 2 seconds on a database hiccup), and the database is
+// back to the process layer (audit 2026-10-31: a global value fell back
+// to its default for 2 seconds on a database hiccup), and the database is
 // left alone for errorTTL.
 func TestGlobalEnvironmentKeepsLastGoodOnReadError(t *testing.T) {
 	ctx := context.Background()
 	s := New(nil, nil, core.EnvironmentValues{core.EnvVarRelayTimeoutSeconds: 900})
 	f := newFakeLoader(100)
 	s.load = f.load
-	if got := s.GlobalEnvironment(ctx); got[core.EnvVarMaxRequestBodyMB] != 100 || got[core.EnvVarRelayTimeoutSeconds] != 900 {
+	if got := s.GlobalEnvironment(ctx); got[core.EnvVarResponseHeaderTimeoutSeconds] != 100 || got[core.EnvVarRelayTimeoutSeconds] != 900 {
 		t.Fatalf("first read: %v", got)
 	}
 	f.waitCall(t)
 
 	f.set(0, errors.New("database hiccup"), nil)
 	expire(s)
-	if got := s.GlobalEnvironment(ctx); got[core.EnvVarMaxRequestBodyMB] != 100 {
+	if got := s.GlobalEnvironment(ctx); got[core.EnvVarResponseHeaderTimeoutSeconds] != 100 {
 		t.Fatalf("stale: %v", got)
 	}
 	f.waitCall(t) // the background refresh, which fails
 	waitRetryHold(t, s)
 	for range 3 {
-		if got := s.GlobalEnvironment(ctx); got[core.EnvVarMaxRequestBodyMB] != 100 || got[core.EnvVarRelayTimeoutSeconds] != 900 {
+		if got := s.GlobalEnvironment(ctx); got[core.EnvVarResponseHeaderTimeoutSeconds] != 100 || got[core.EnvVarRelayTimeoutSeconds] != 900 {
 			t.Fatalf("after a failed read: %v", got)
 		}
 	}
@@ -363,7 +365,7 @@ func TestGlobalEnvironmentStaleWhileRevalidate(t *testing.T) {
 	expire(s)
 	start := time.Now()
 	for range 20 {
-		if got := s.GlobalEnvironment(ctx); got[core.EnvVarMaxRequestBodyMB] != 100 {
+		if got := s.GlobalEnvironment(ctx); got[core.EnvVarResponseHeaderTimeoutSeconds] != 100 {
 			t.Fatalf("stale value while the refresh runs: %v", got)
 		}
 	}
@@ -392,7 +394,7 @@ func TestGlobalEnvironmentFirstReadFails(t *testing.T) {
 	f.noCall(t) // held back for errorTTL
 	f.set(64, nil, nil)
 	expire(s)
-	if got := s.GlobalEnvironment(ctx); got[core.EnvVarMaxRequestBodyMB] != 64 {
+	if got := s.GlobalEnvironment(ctx); got[core.EnvVarResponseHeaderTimeoutSeconds] != 64 {
 		t.Fatalf("after recovery: %v", got)
 	}
 }
@@ -409,21 +411,21 @@ func TestGlobalEnvironmentInvalidate(t *testing.T) {
 
 	f.set(64, nil, nil)
 	s.invalidate()
-	if got := s.GlobalEnvironment(ctx); got[core.EnvVarMaxRequestBodyMB] != 64 {
+	if got := s.GlobalEnvironment(ctx); got[core.EnvVarResponseHeaderTimeoutSeconds] != 64 {
 		t.Fatalf("read after invalidate: %v", got)
 	}
 	f.waitCall(t)
 
 	f.set(0, errors.New("down"), nil)
 	s.invalidate()
-	if got := s.GlobalEnvironment(ctx); got[core.EnvVarMaxRequestBodyMB] != 64 {
+	if got := s.GlobalEnvironment(ctx); got[core.EnvVarResponseHeaderTimeoutSeconds] != 64 {
 		t.Fatalf("failed read after invalidate: %v", got)
 	}
 	f.waitCall(t)
 	// Still outdated: the next read after the hold waits again and succeeds.
 	f.set(32, nil, nil)
 	expire(s)
-	if got := s.GlobalEnvironment(ctx); got[core.EnvVarMaxRequestBodyMB] != 32 {
+	if got := s.GlobalEnvironment(ctx); got[core.EnvVarResponseHeaderTimeoutSeconds] != 32 {
 		t.Fatalf("read after the hold: %v", got)
 	}
 }

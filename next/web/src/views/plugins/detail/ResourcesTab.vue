@@ -7,7 +7,7 @@ import { applyFormError } from '@/utils/formErrors'
 import { useAuthStore } from '@/stores/auth'
 import { lt } from '@/i18n'
 import type { LText } from '@/api/types'
-import { pick, type PluginDetail, type PluginResources, type PluginResourcesInfo } from '../pluginUtil'
+import { accountTypesOf, pick, type PluginDetail, type PluginResources, type PluginResourcesInfo } from '../pluginUtil'
 
 const props = defineProps<{ detail: PluginDetail }>()
 const emit = defineEmits<{ (e: 'changed'): void }>()
@@ -17,8 +17,12 @@ const canManage = computed(() => auth.has('plugin:manage'))
 
 type Field = 'memory_mb' | 'cpu' | 'max_threads' | 'max_open_files'
 
-const fields: Array<{ key: Field; label: string; step: string; manifest: string[]; unit?: string }> = [
-  { key: 'memory_mb', label: 'plugins.resources.memoryMB', step: '1', manifest: ['memoryMB', 'memory_mb'], unit: 'MB' },
+/**
+ * limitOnly: only the operator limits it (memory). The manifest figure is the
+ * plugin's suggestion, not prefilled; empty or 0 is unlimited.
+ */
+const fields: Array<{ key: Field; label: string; step: string; manifest: string[]; unit?: string; limitOnly?: boolean }> = [
+  { key: 'memory_mb', label: 'plugins.resources.memoryMB', step: '1', manifest: ['memoryMB', 'memory_mb'], unit: 'MB', limitOnly: true },
   { key: 'cpu', label: 'plugins.resources.cpu', step: '0.05', manifest: ['cpu'] },
   { key: 'max_threads', label: 'plugins.resources.threads', step: '1', manifest: ['maxProcs', 'max_threads', 'maxThreads'] },
   { key: 'max_open_files', label: 'plugins.resources.files', step: '1', manifest: ['maxOpenFiles', 'max_open_files'] }
@@ -47,7 +51,7 @@ function reset() {
   const own: PluginResources = r.overrides || r
   for (const f of fields) {
     const o = own[f.key]
-    const v = o !== undefined && o !== null && Number(o) > 0 ? o : requestedValue(f)
+    const v = o !== undefined && o !== null && Number(o) > 0 ? o : f.limitOnly ? undefined : requestedValue(f)
     form[f.key] = v === undefined || v === null ? '' : String(v)
   }
   errors.value = {}
@@ -59,7 +63,23 @@ function requestedOf(f: (typeof fields)[number]): string {
   return v === undefined ? '—' : `${v}${f.unit ? ' ' + f.unit : ''}`
 }
 
+/** The memory the plugin runs with now: a limit, or unlimited (0). */
+const memoryLimit = computed(() => {
+  const mb = Number(props.detail.resources?.effective?.memory_mb)
+  return mb > 0 ? `${mb} MB` : t('plugins.resources.unlimited')
+})
+
+/** A platform plugin holds the bodies of the requests it serves. */
+const servesRequests = computed(() => accountTypesOf(props.detail.manifest).length > 0)
+
+function description(f: (typeof fields)[number]): string {
+  if (!f.limitOnly) return t('plugins.resources.requestedValue', { value: requestedOf(f) })
+  const text = t('plugins.resources.memoryLimit', { value: requestedOf(f), limit: memoryLimit.value })
+  return servesRequests.value ? `${text} ${t('plugins.resources.platformMemoryHint')}` : text
+}
+
 function differs(f: (typeof fields)[number]): boolean {
+  if (f.limitOnly) return Number(form[f.key]) > 0
   const v = requestedValue(f)
   return v !== undefined && form[f.key] !== '' && form[f.key] !== null && Number(form[f.key]) !== Number(v)
 }
@@ -104,7 +124,7 @@ async function save() {
       v-for="f in fields"
       :key="f.key"
       :label="t(f.label)"
-      :description="t('plugins.resources.requestedValue', { value: requestedOf(f) })"
+      :description="description(f)"
       :for="`plugin-resource-${f.key}`"
     >
       <SField :error="errors[f.key]">
@@ -116,6 +136,7 @@ async function save() {
             type="number"
             min="0"
             :step="f.step"
+            :placeholder="f.limitOnly ? t('plugins.resources.unlimited') : undefined"
             class="w-32"
             :disabled="!canManage"
           />

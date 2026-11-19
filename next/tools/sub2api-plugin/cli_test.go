@@ -54,7 +54,7 @@ const demoManifest = `{
   "hostCompat": ">=0.1.0 <0.2.0", "hostUICompat": ">=0.1.0 <0.2.0", "capabilities": [{"id": "http.routes.v1"}],
   "database": {"schema": "plg_demo", "migrations": "migrations/"},
   "hostPermissions": [{"id": "db.schema"}, {"id": "ui.native"}],
-  "ui": {"native": {"entry": "ui/native/entry.js"}, "settings": {"mode": "schema", "schema": "forms/s.json"}}
+  "ui": {"native": {"entry": "ui/native/entry.js"}, "settings": {"mode": "native", "component": "DemoSettings", "secrets": []}}
 }`
 
 // demoPlugin creates a plugin directory with fake runtimes.
@@ -100,14 +100,14 @@ func TestPackSignVerifyIndex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"assets/brand.svg", "assets/LICENSE.txt", "manifest.json", "forms/s.json", "migrations/0001_init.sql", "ui/native/entry.js",
+	for _, want := range []string{"assets/brand.svg", "assets/LICENSE.txt", "manifest.json", "migrations/0001_init.sql", "ui/native/entry.js",
 		"ui/native/assets/a.css", "ui/iframe/index.html", "i18n/en.json", "runtimes/linux-amd64/plugin", "runtimes/linux-arm64/plugin"} {
 		if _, ok := files[want]; !ok {
 			t.Errorf("missing %s", want)
 		}
 	}
 	for p := range files {
-		if strings.Contains(p, "src/") || strings.Contains(p, ".hidden") || strings.HasPrefix(p, "testdata") || strings.Contains(p, "dist/") {
+		if strings.Contains(p, "src/") || strings.Contains(p, ".hidden") || strings.HasPrefix(p, "testdata") || strings.Contains(p, "dist/") || strings.HasPrefix(p, "forms/") {
 			t.Errorf("unexpected %s", p)
 		}
 	}
@@ -233,36 +233,47 @@ func TestPackChecks(t *testing.T) {
 	runFail(t, "nope")
 }
 
-// Account types are top-level (ARCHITECTURE 6.6): their form files are
-// packed, and they need platforms, the platform adapter capability and the
-// platform.register / accounts.credentials host permissions.
+// Account types are top-level (ARCHITECTURE 6.6): their form is a native
+// component, packed with the native UI, and they need platforms, the platform
+// adapter capability and the platform.register host permission. A schema
+// form is refused.
 func TestPackAccountTypes(t *testing.T) {
 	const m = `{
   "apiVersion": 1, "key": "relayx", "name": {"en": "Relay"}, "version": "0.1.0",
   "publisher": "tester", "runtime": "grpc", "entry": {"grpc": {"binaries": "runtimes/{os}-{arch}/plugin"}},
-  "hostCompat": ">=0.1.0 <0.2.0", "capabilities": [{"id": "platform.adapter.v1"}],
+  "hostCompat": ">=0.1.0 <0.2.0", "hostUICompat": "^4.0", "capabilities": [{"id": "platform.adapter.v1"}],
+  "ui": {"native": {"entry": "ui/native/entry.js"}},
   "accountTypes": [{"id": "relay_key", "label": {"en": "Relay key"},
-    "form": {"mode": "schema", "schema": "forms/k.schema.json", "uiSchema": "forms/k.ui.json"},
+    "form": {"mode": "native", "component": "RelayKeyForm"},
     "sensitiveFields": ["api_key"], "platforms": [{"platform": "anthropic", "passHeaders": ["anthropic-version"]}]}],
-  "hostPermissions": [{"id": "platform.register"}, {"id": "accounts.credentials", "scope": {"types": "own"}}]
+  "hostPermissions": [{"id": "platform.register"}, {"id": "ui.native"}]
 }`
 	dir := t.TempDir()
 	out := t.TempDir()
 	writeFile(t, filepath.Join(dir, "manifest.json"), m)
 	writeFile(t, filepath.Join(dir, "runtimes", "linux-amd64", "plugin"), "ELF-amd64")
 	writeFile(t, filepath.Join(dir, "runtimes", "linux-arm64", "plugin"), "ELF-arm64")
-	if msg := runFail(t, "pack", "--dir", dir, "--out-dir", out); !strings.Contains(msg, "forms/k.schema.json") || !strings.Contains(msg, "forms/k.ui.json") {
+	if msg := runFail(t, "pack", "--dir", dir, "--out-dir", out); !strings.Contains(msg, "build ui/native first") {
 		t.Fatalf("msg = %s", msg)
 	}
-	writeFile(t, filepath.Join(dir, "forms", "k.schema.json"), `{}`)
-	writeFile(t, filepath.Join(dir, "forms", "k.ui.json"), `{}`)
+	writeFile(t, filepath.Join(dir, "ui", "native", "dist", "entry.js"), `export function register() {}`)
 	pkg := strings.TrimSpace(runOK(t, "pack", "--dir", dir, "--out-dir", out))
 	files, err := readPackage(pkg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := files["forms/k.schema.json"]; !ok {
-		t.Fatalf("form not packed: %v", keysOf(files))
+	if _, ok := files["ui/native/entry.js"]; !ok {
+		t.Fatalf("form component not packed: %v", keysOf(files))
+	}
+
+	writeFile(t, filepath.Join(dir, "manifest.json"), strings.Replace(m, `{"mode": "native", "component": "RelayKeyForm"}`, `{"mode": "schema"}`, 1))
+	if msg := runFail(t, "pack", "--dir", dir, "--out-dir", out); !strings.Contains(msg, "form mode schema is no longer supported") {
+		t.Fatalf("msg = %s", msg)
+	}
+	// The CLI reads manifest.json strictly: the old form file keys are gone.
+	writeFile(t, filepath.Join(dir, "manifest.json"), strings.Replace(m, `"component": "RelayKeyForm"`, `"component": "RelayKeyForm", "schema": "forms/k.schema.json"`, 1))
+	if msg := runFail(t, "pack", "--dir", dir, "--out-dir", out); !strings.Contains(msg, `unknown field "schema"`) {
+		t.Fatalf("msg = %s", msg)
 	}
 
 	writeFile(t, filepath.Join(dir, "manifest.json"), strings.Replace(m, `[{"platform": "anthropic", "passHeaders": ["anthropic-version"]}]`, `[]`, 1))
@@ -277,8 +288,8 @@ func TestPackAccountTypes(t *testing.T) {
 	if msg := runFail(t, "pack", "--dir", dir, "--out-dir", out); !strings.Contains(msg, "platform.adapter.v1") {
 		t.Fatalf("msg = %s", msg)
 	}
-	writeFile(t, filepath.Join(dir, "manifest.json"), strings.Replace(m, `{"types": "own"}`, `{"types": "all"}`, 1))
-	if msg := runFail(t, "pack", "--dir", dir, "--out-dir", out); !strings.Contains(msg, "accounts.credentials") {
+	writeFile(t, filepath.Join(dir, "manifest.json"), strings.Replace(m, `{"id": "platform.register"}, `, ``, 1))
+	if msg := runFail(t, "pack", "--dir", dir, "--out-dir", out); !strings.Contains(msg, "platform.register") {
 		t.Fatalf("msg = %s", msg)
 	}
 	// The pre-6.6 layouts (protocols on account types, top-level gateway and
@@ -295,33 +306,43 @@ func TestPackAccountTypes(t *testing.T) {
 	}
 }
 
-// A runtime "none" package (declared upstreams only) builds nothing, packs
-// without runtimes and verifies like any other package; runtimes it would
-// carry are refused.
-func TestRuntimeNone(t *testing.T) {
-	const m = `{
-  "apiVersion": 1, "key": "decl", "name": {"en": "Declared"}, "version": "0.1.0",
-  "publisher": "tester", "runtime": "none", "hostCompat": ">=0.1.262 <0.2.0",
-  "capabilities": [{"id": "platform.adapter.v1"}],
-  "accountTypes": [{"id": "apikey", "label": {"en": "Key"}, "form": {"mode": "schema", "schema": "forms/k.json"},
-    "sensitiveFields": ["api_key"], "settingsFields": ["base_url"], "platforms": [{"platform": "anthropic"}],
-    "upstream": {"preset": "anthropic", "filterFields": []}}],
-  "hostPermissions": [{"id": "platform.register"}]
-}`
-	dir, out, keys := t.TempDir(), t.TempDir(), t.TempDir()
-	writeFile(t, filepath.Join(dir, "manifest.json"), m)
-	writeFile(t, filepath.Join(dir, "forms", "k.json"), `{}`)
-	if got := runOK(t, "build", "--dir", dir); got != "" {
-		t.Fatalf("build printed binaries: %s", got)
-	}
-	pkg := strings.TrimSpace(runOK(t, "pack", "--dir", dir, "--out-dir", out))
-	runOK(t, "keygen", "--key-id", "k1", "--out", keys)
-	runOK(t, "sign", "--key", filepath.Join(keys, "k1.key"), "--key-id", "k1", pkg)
-	runOK(t, "verify", "--pub", filepath.Join(keys, "k1.pub"), pkg)
-
-	writeFile(t, filepath.Join(dir, "runtimes", "linux-amd64", "plugin"), "ELF")
-	if msg := runFail(t, "pack", "--dir", dir, "--out", filepath.Join(out, "x.s2plugin")); !strings.Contains(msg, "carry no runtimes") {
-		t.Fatalf("msg = %s", msg)
+// A manifest of an older plugin contract - runtime "none", a declared
+// upstream, request fields, an endpoint body limit, a removed capability or
+// a removed account grant - gets the host's one outdated-contract message
+// from every command that reads it, not a field or decode error.
+func TestOutdatedContract(t *testing.T) {
+	want := protocol.OutdatedContractMessage("demo", "0.1.0", protocol.FirstCoreVersion)
+	grpc := `"runtime": "grpc"`
+	for name, old := range map[string]string{
+		"runtime none":       strings.Replace(demoManifest, grpc, `"runtime": "none"`, 1),
+		"upstream":           strings.Replace(demoManifest, `"database"`, `"accountTypes": [{"id": "k", "upstream": {"preset": "anthropic"}}], "database"`, 1),
+		"request fields":     strings.Replace(demoManifest, `"database"`, `"platforms": [{"id": "p", "requestFields": ["model"]}], "database"`, 1),
+		"max body bytes":     strings.Replace(demoManifest, `"database"`, `"platforms": [{"id": "p", "endpoints": [{"id": "e", "request": {"maxBodyBytes": 1}}]}], "database"`, 1),
+		"execute capability": strings.Replace(demoManifest, `{"id": "http.routes.v1"}`, `{"id": "platform.execute.v1"}`, 1),
+		"account grant":      strings.Replace(demoManifest, `{"id": "ui.native"}`, `{"id": "ui.native"}, {"id": "accounts.read"}`, 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := demoPlugin(t)
+			writeFile(t, filepath.Join(dir, "manifest.json"), old)
+			for _, args := range [][]string{
+				{"build", "--dir", dir},
+				{"pack", "--dir", dir, "--out-dir", t.TempDir()},
+			} {
+				if msg := runFail(t, args...); !strings.Contains(msg, want) {
+					t.Errorf("%s: %s", args[0], msg)
+				}
+			}
+			// A package packed by an older CLI.
+			pkg := filepath.Join(t.TempDir(), "old.s2plugin")
+			if err := writePackage(pkg, map[string][]byte{"manifest.json": []byte(old)}); err != nil {
+				t.Fatal(err)
+			}
+			keys := t.TempDir()
+			runOK(t, "keygen", "--key-id", "k1", "--out", keys)
+			if msg := runFail(t, "sign", "--key", filepath.Join(keys, "k1.key"), "--key-id", "k1", pkg); !strings.Contains(msg, want) {
+				t.Errorf("sign: %s", msg)
+			}
+		})
 	}
 }
 
@@ -341,14 +362,15 @@ func TestPackPlatforms(t *testing.T) {
        "errorFormat": "plain", "billing":"usage","billingTypes":["per_request","per_token","expression"]}
     ],
     "usage": {"semantics": "inclusive", "json": {"map": {"input_tokens": "usage.input"}}}}],
-  "accountTypes": [{"id": "vkey", "label": {"en": "Key"}, "form": {"mode": "schema", "schema": "forms/v.json"},
+  "hostUICompat": "^4.0", "ui": {"native": {"entry": "ui/native/entry.js"}},
+  "accountTypes": [{"id": "vkey", "label": {"en": "Key"}, "form": {"mode": "native", "component": "VideoKeyForm"},
     "platforms": [{"platform": "myvideo", "usage": {"myvideo.gen": {"semantics": "inclusive"}}}]}],
-  "hostPermissions": [{"id": "gateway.endpoint"}, {"id": "platform.register"}, {"id": "accounts.credentials", "scope": {"types": "own"}}]
+  "hostPermissions": [{"id": "gateway.endpoint"}, {"id": "platform.register"}, {"id": "ui.native"}]
 }`
 	dir := t.TempDir()
 	out := t.TempDir()
 	writeFile(t, filepath.Join(dir, "runtimes", "linux-amd64", "plugin"), "ELF-amd64")
-	writeFile(t, filepath.Join(dir, "forms", "v.json"), `{}`)
+	writeFile(t, filepath.Join(dir, "ui", "native", "dist", "entry.js"), `export function register() {}`)
 	writeFile(t, filepath.Join(dir, "manifest.json"), m)
 	runOK(t, "pack", "--dir", dir, "--out-dir", out)
 
@@ -438,7 +460,7 @@ func TestBuildRealPlugin(t *testing.T) {
 		t.Fatal(err)
 	}
 	info, err := pluginv1.NewPluginServiceClient(raw.(*protocol.Client).Conn).GetInfo(context.Background(), &pluginv1.GetInfoRequest{})
-	if err != nil || info.GetPluginKey() != "anthropic" || info.GetVersion() != "0.3.5-test" {
+	if err != nil || info.GetPluginKey() != "anthropic" || info.GetVersion() != "0.4.1-test" {
 		t.Fatalf("GetInfo = %v %v", info, err)
 	}
 }

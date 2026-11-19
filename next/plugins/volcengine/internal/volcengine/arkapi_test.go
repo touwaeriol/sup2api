@@ -10,13 +10,14 @@ package volcengine
 // service or an empty body.
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -27,6 +28,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
 )
 
 const (
@@ -45,13 +48,13 @@ type capturedRequest struct {
 }
 
 // fakeArk is an httptest server standing in for the Ark asset OpenAPI,
-// reached only through the recording dialler.
+// reached only through send, which plays the core's SendAccountRequest.
 type fakeArk struct {
 	srv *httptest.Server
 
 	mu       sync.Mutex
 	requests []capturedRequest
-	dialed   []string
+	sent     []*pluginv1.SendAccountRequestRequest
 
 	// reply is called for every request; nil means "empty Result".
 	reply func(c capturedRequest) (status int, body string)
@@ -82,16 +85,50 @@ func newFakeArk(t *testing.T) *fakeArk {
 	return f
 }
 
-// dialer records every address and then dials the fake server. In production
-// this function is egress.DialContext, so "every upstream call goes through
-// the dialler the plugin was given" is exactly what the recording proves.
-func (f *fakeArk) dialer() DialFunc {
-	return func(ctx context.Context, network, address string) (net.Conn, error) {
-		f.mu.Lock()
-		f.dialed = append(f.dialed, address)
-		f.mu.Unlock()
-		var d net.Dialer
-		return d.DialContext(ctx, network, address)
+// send records what the plugin handed the host and sends it the way the
+// core's SendAccountRequest does (account sendPluginCall): every header set
+// as given, Content-Type only when none is, no redirect followed, the whole
+// answer back, a transport failure as transport_error. In production this
+// is pluginsdk.SendAccountRequest, so "every upstream call goes through the
+// host" is exactly what the recording proves.
+func (f *fakeArk) send(ctx context.Context, in *pluginv1.SendAccountRequestRequest) (*pluginv1.ExecutionHTTPResponse, error) {
+	f.mu.Lock()
+	f.sent = append(f.sent, in)
+	f.mu.Unlock()
+	return hostSend(f.srv.Listener.Addr().String())(ctx, in)
+}
+
+// hostSend is the core's sending of a SendAccountRequest, with every
+// connection dialled to addr whatever host the URL names.
+func hostSend(addr string) sendFunc {
+	client := &http.Client{
+		Transport: &http.Transport{DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, network, addr)
+		}},
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	return func(ctx context.Context, in *pluginv1.SendAccountRequestRequest) (*pluginv1.ExecutionHTTPResponse, error) {
+		req, err := http.NewRequestWithContext(ctx, in.GetMethod(), in.GetUrl(), bytes.NewReader(in.GetBody()))
+		if err != nil {
+			return nil, err
+		}
+		for k, v := range in.GetHeaders() {
+			req.Header.Set(k, v)
+		}
+		if len(in.GetBody()) > 0 && req.Header.Get("Content-Type") == "" {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err() // the gRPC call ends with its context
+			}
+			return &pluginv1.ExecutionHTTPResponse{TransportError: err.Error()}, nil
+		}
+		defer resp.Body.Close()
+		raw, _ := io.ReadAll(resp.Body)
+		return &pluginv1.ExecutionHTTPResponse{Status: int32(resp.StatusCode), Body: raw}, nil
 	}
 }
 
@@ -219,8 +256,7 @@ func TestSignedCallShape(t *testing.T) {
 	f.reply = func(capturedRequest) (int, string) {
 		return http.StatusOK, `{"ResponseMetadata":{"RequestId":"req-1"},"Result":{"Id":"g-123","Name":"shots"}}`
 	}
-	api := newArkAPI(f.dialer())
-	defer api.close()
+	api := newArkAPI(f.send)
 
 	result, callErr := api.call(context.Background(), f.config(), ActionCreateAssetGroup, map[string]any{
 		"Name": "shots", "GroupType": "AIGC",
@@ -251,20 +287,63 @@ func TestSignedCallShape(t *testing.T) {
 	if body["Name"] != "shots" || body["GroupType"] != "AIGC" {
 		t.Errorf("body = %v", body)
 	}
-	// Everything went through the dialler the plugin was handed - in
-	// production the host egress tunnel.
+	// Everything went through the host, for the account of the config.
 	f.mu.Lock()
-	dialed := append([]string(nil), f.dialed...)
+	sent := append([]*pluginv1.SendAccountRequestRequest(nil), f.sent...)
 	f.mu.Unlock()
-	if len(dialed) == 0 {
-		t.Fatal("the upstream call did not use the injected dialler")
+	if len(sent) != 1 || sent[0].GetAccountId() != f.config().AccountID || !strings.HasPrefix(sent[0].GetUrl(), f.srv.URL+"/?") {
+		t.Fatalf("handed to the host: %v", sent)
 	}
-	wantHost := strings.TrimPrefix(f.srv.URL, "http://")
-	for _, d := range dialed {
-		if d != wantHost {
-			t.Errorf("dialled %q, want %q", d, wantHost)
-		}
+}
+
+// TestRequestIsTheReleasedOne pins what goes upstream to what the released
+// plugin (0.12.8, its own HTTP client over the egress tunnel) sent for the
+// same call at the same instant: method, path, query, every header and the
+// body, byte for byte. The expected values were recorded from that client;
+// the headers net/http adds itself (User-Agent, Accept-Encoding,
+// Content-Length) are the core's client's as they were the plugin's. A
+// signed header the host added or changed would show here and break the
+// signature upstream.
+func TestRequestIsTheReleasedOne(t *testing.T) {
+	f := newFakeArk(t)
+	api := newArkAPI(f.send)
+	api.now = func() time.Time { return time.Date(2026, 11, 18, 10, 0, 0, 0, time.UTC) }
+	cfg := &AssetConfig{AccountID: 7, AccessKey: testAK, SecretKey: testSK,
+		BaseURL: "http://ark.cn-beijing.volcengineapi.com", Region: DefaultAssetRegion}
+	body := map[string]any{"Filter": map[string]any{"GroupIds": []string{"g-1"}}, "PageNumber": 1, "PageSize": 100}
+	if _, err := api.call(context.Background(), cfg, ActionListAssets, body); err != nil {
+		t.Fatal(err)
 	}
+	const (
+		wantBody = `{"Filter":{"GroupIds":["g-1"]},"PageNumber":1,"PageSize":100}`
+		wantAuth = "HMAC-SHA256 Credential=AKLTtest0000000000000000/20261118/cn-beijing/ark/request, " +
+			"SignedHeaders=content-type;host;x-content-sha256;x-date, " +
+			"Signature=2e6fcf2f0e9a22f1b32f09092bd2ba7630fe5f2ecc2e92be5bf969e58316760b"
+	)
+	plugin := map[string]string{
+		"Accept":           "application/json",
+		"Authorization":    wantAuth,
+		"Content-Type":     "application/json; charset=utf-8",
+		"X-Content-Sha256": "9f28663d57d04e7eaf3b3ce542c9c0c425dabb2476a9ce4de3d691ffe29cf78d",
+		"X-Date":           "20261118T100000Z",
+	}
+	in := f.sent[0]
+	if in.GetMethod() != http.MethodPost || in.GetUrl() != "http://ark.cn-beijing.volcengineapi.com/?Action=ListAssets&Version=2024-01-01" ||
+		!maps.Equal(in.GetHeaders(), plugin) || string(in.GetBody()) != wantBody {
+		t.Fatalf("handed to the host: %s %s %v %s", in.GetMethod(), in.GetUrl(), in.GetHeaders(), in.GetBody())
+	}
+	c := f.last(t)
+	wire := map[string]string{"Accept-Encoding": "gzip", "Content-Length": "61", "User-Agent": "Go-http-client/1.1"}
+	maps.Copy(wire, plugin)
+	got := map[string]string{}
+	for k, v := range c.Header {
+		got[k] = strings.Join(v, ",")
+	}
+	if c.Method != http.MethodPost || c.Path != "/" || c.Query.Encode() != "Action=ListAssets&Version=2024-01-01" ||
+		c.Host != "ark.cn-beijing.volcengineapi.com" || !maps.Equal(got, wire) || string(c.Body) != wantBody {
+		t.Fatalf("upstream got %s %s?%s host %s %v %s", c.Method, c.Path, c.Query.Encode(), c.Host, got, c.Body)
+	}
+	verifySignature(t, c, testAK, testSK, DefaultAssetRegion, AssetServiceName)
 }
 
 // TestSignatureBindsSecretRegionAndBody: the signature is not a constant. A
@@ -272,8 +351,7 @@ func TestSignedCallShape(t *testing.T) {
 // change it - which is what makes it a signature and not decoration.
 func TestSignatureBindsSecretRegionAndBody(t *testing.T) {
 	f := newFakeArk(t)
-	api := newArkAPI(f.dialer())
-	defer api.close()
+	api := newArkAPI(f.send)
 	ctx := context.Background()
 
 	sig := func() string {
@@ -319,8 +397,7 @@ func TestSignatureBindsSecretRegionAndBody(t *testing.T) {
 // with its own Action parameter and correctly signed.
 func TestEveryActionIsSigned(t *testing.T) {
 	f := newFakeArk(t)
-	api := newArkAPI(f.dialer())
-	defer api.close()
+	api := newArkAPI(f.send)
 	if len(AssetActions) != 10 {
 		t.Fatalf("AssetActions = %v, want ten (five per resource)", AssetActions)
 	}
@@ -340,8 +417,7 @@ func TestEveryActionIsSigned(t *testing.T) {
 // into signing an arbitrary control-plane call with an account's AK/SK.
 func TestUnknownActionNeverReachesUpstream(t *testing.T) {
 	f := newFakeArk(t)
-	api := newArkAPI(f.dialer())
-	defer api.close()
+	api := newArkAPI(f.send)
 	_, err := api.call(context.Background(), f.config(), "DeleteEndpoint", map[string]any{})
 	if err == nil || err.Code != "InvalidAction" {
 		t.Fatalf("err = %v, want InvalidAction", err)
@@ -351,18 +427,6 @@ func TestUnknownActionNeverReachesUpstream(t *testing.T) {
 	f.mu.Unlock()
 	if n != 0 {
 		t.Fatalf("upstream saw %d requests for an unknown action", n)
-	}
-}
-
-// TestNoDialerNoCall: without an outbound dialler (no "net" grant, or Init
-// never ran) the call fails loudly instead of falling back to a direct
-// socket the sandbox would kill anyway.
-func TestNoDialerNoCall(t *testing.T) {
-	f := newFakeArk(t)
-	api := newArkAPI(nil)
-	_, err := api.call(context.Background(), f.config(), ActionListAssets, nil)
-	if err == nil || err.Code != "EgressUnavailable" {
-		t.Fatalf("err = %v, want EgressUnavailable", err)
 	}
 }
 
@@ -409,8 +473,7 @@ func TestUpstreamErrorClassification(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFakeArk(t)
 			f.reply = func(capturedRequest) (int, string) { return tc.status, tc.body }
-			api := newArkAPI(f.dialer())
-			defer api.close()
+			api := newArkAPI(f.send)
 			_, err := api.call(context.Background(), f.config(), ActionGetAssetGroup, map[string]any{"Id": "g-1"})
 			if err == nil {
 				t.Fatal("want an error")
@@ -442,8 +505,7 @@ func TestUpstreamErrorClassification(t *testing.T) {
 // upstream at all.
 func TestCanceledContextNeverDials(t *testing.T) {
 	f := newFakeArk(t)
-	api := newArkAPI(f.dialer())
-	defer api.close()
+	api := newArkAPI(f.send)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := api.call(ctx, f.config(), ActionListAssets, nil); err == nil || err.Code != "Canceled" {
@@ -489,12 +551,7 @@ func TestCancelAbortsTheCallInFlight(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	dial := func(ctx context.Context, network, _ string) (net.Conn, error) {
-		var d net.Dialer
-		return d.DialContext(ctx, network, srv.Listener.Addr().String())
-	}
-	api := newArkAPI(dial)
-	defer api.close()
+	api := newArkAPI(hostSend(srv.Listener.Addr().String()))
 	cfg := &AssetConfig{
 		AccountID: 7, AccessKey: testAK, SecretKey: testSK,
 		BaseURL: srv.URL, Region: DefaultAssetRegion,
@@ -526,8 +583,8 @@ func TestCancelAbortsTheCallInFlight(t *testing.T) {
 		if got.err == nil || got.err.Code != "Canceled" {
 			t.Fatalf("err = %v, want Canceled", got.err)
 		}
-		// assetCallTimeout is 30s; a call that only stopped because of it is
-		// exactly the old behaviour.
+		// The call has no deadline of its own: only the cancellation can
+		// have ended it.
 		if got.elapsed > 5*time.Second {
 			t.Fatalf("the call took %v to notice the cancellation", got.elapsed)
 		}
@@ -560,8 +617,7 @@ func TestCreateIsNeverRetried(t *testing.T) {
 			f.reply = func(capturedRequest) (int, string) {
 				return http.StatusServiceUnavailable, `{"ResponseMetadata":{"RequestId":"r"}}`
 			}
-			api := newArkAPI(f.dialer())
-			defer api.close()
+			api := newArkAPI(f.send)
 			if _, err := api.call(context.Background(), f.config(), action, map[string]any{"Id": "x"}); err == nil {
 				t.Fatal("want an error")
 			}
@@ -588,8 +644,7 @@ func TestRetryRecoversAndDoesNotRetryAVerdict(t *testing.T) {
 		}
 		return http.StatusOK, `{"ResponseMetadata":{"RequestId":"r"},"Result":{"Id":"g-9"}}`
 	}
-	api := newArkAPI(f.dialer())
-	defer api.close()
+	api := newArkAPI(f.send)
 	result, err := api.call(context.Background(), f.config(), ActionGetAssetGroup, map[string]any{"Id": "g-9"})
 	if err != nil {
 		t.Fatalf("a 502 that cleared on retry surfaced as %v", err)
@@ -602,8 +657,7 @@ func TestRetryRecoversAndDoesNotRetryAVerdict(t *testing.T) {
 	f2.reply = func(capturedRequest) (int, string) {
 		return http.StatusForbidden, `{"ResponseMetadata":{"RequestId":"r","Error":{"Code":"SignatureDoesNotMatch","Message":"no"}}}`
 	}
-	api2 := newArkAPI(f2.dialer())
-	defer api2.close()
+	api2 := newArkAPI(f2.send)
 	if _, err := api2.call(context.Background(), f2.config(), ActionGetAssetGroup, map[string]any{"Id": "g-1"}); err == nil {
 		t.Fatal("want an error")
 	}
@@ -617,9 +671,9 @@ func TestRetryRecoversAndDoesNotRetryAVerdict(t *testing.T) {
 
 // TestNonEnvelopeAnswers: a proxy's HTML error page, an empty body and a JSON
 // document that is not a volcengine envelope each have to become a readable
-// ArkError rather than a panic or an empty success. The plugin's egress goes
-// through a host tunnel, so "something in between answered instead of Ark" is
-// a real case.
+// ArkError rather than a panic or an empty success. The request goes through
+// the host and the account's proxy, so "something in between answered instead
+// of Ark" is a real case.
 func TestNonEnvelopeAnswers(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -638,8 +692,7 @@ func TestNonEnvelopeAnswers(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFakeArk(t)
 			f.reply = func(capturedRequest) (int, string) { return tc.status, tc.body }
-			api := newArkAPI(f.dialer())
-			defer api.close()
+			api := newArkAPI(f.send)
 			// A Create, so the retry ladder does not multiply the assertions.
 			_, err := api.call(context.Background(), f.config(), ActionCreateAsset, map[string]any{"URL": "u"})
 			if err == nil {
@@ -663,8 +716,7 @@ func TestNonEnvelopeAnswers(t *testing.T) {
 	f.reply = func(capturedRequest) (int, string) {
 		return http.StatusOK, `{"ResponseMetadata":{"RequestId":"r"}}`
 	}
-	api := newArkAPI(f.dialer())
-	defer api.close()
+	api := newArkAPI(f.send)
 	result, err := api.call(context.Background(), f.config(), ActionDeleteAsset, map[string]any{"Id": "a-1"})
 	if err != nil {
 		t.Fatalf("a Result-less success surfaced as %v", err)
@@ -679,8 +731,7 @@ func TestNonEnvelopeAnswers(t *testing.T) {
 // sending "null" while signing "{}" (or the reverse) is a 403.
 func TestAnActionWithNoParametersSendsAnObject(t *testing.T) {
 	f := newFakeArk(t)
-	api := newArkAPI(f.dialer())
-	defer api.close()
+	api := newArkAPI(f.send)
 	if _, err := api.call(context.Background(), f.config(), ActionListAssets, nil); err != nil {
 		t.Fatal(err)
 	}

@@ -31,11 +31,10 @@ var sqlPolicy = sqlcheck.Policy{
 	// SELECT, nextval, to_regclass, the try-lock) are gormpg's.
 	Raw: map[string]string{
 		// The ledger: data-modifying CTEs that move money in one statement.
-		"internal/billing.prechargeStmt":               "ledger CTE: precharge (hold the amount, write the ledger row and the request precharge in one statement)",
-		"internal/billing.applyStmt":                   "ledger CTE: apply a charge or credit to user_balances and balance_ledger in one statement",
-		"internal/billing.releaseStmt":                 "ledger CTE: release a request precharge and refund it in one statement",
-		"internal/billing.settleStmt":                  "ledger CTE: settle (release the precharge, apply the charge) in one statement",
-		"internal/plugin/dbschema.Tracker.recordQuery": "call of the void SECURITY DEFINER function plugin_migration_record as the plugin role",
+		"internal/billing.prechargeStmt": "ledger CTE: precharge (hold the amount, write the ledger row and the request precharge in one statement)",
+		"internal/billing.applyStmt":     "ledger CTE: apply a charge or credit to user_balances and balance_ledger in one statement",
+		"internal/billing.releaseStmt":   "ledger CTE: release a request precharge and refund it in one statement",
+		"internal/billing.settleStmt":    "ledger CTE: settle (release the precharge, apply the charge) in one statement",
 		// store: the runners of those statements and the system statements
 		// (system.go, ddl.go).
 		"internal/store.Numbered.Raw":            "runs a NewNumbered statement (the ledger CTEs); the text is checked where NewNumbered is called",

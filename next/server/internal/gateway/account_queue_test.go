@@ -2,13 +2,9 @@ package gateway
 
 import (
 	"context"
-	"net"
-	"net/http"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/gin-gonic/gin"
 
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 )
@@ -249,51 +245,4 @@ func TestLeavingTheQueueWhenTheClientGoes(t *testing.T) {
 		t.Fatal("acquired after the client left")
 	}
 	e.awaitSlots(t, core.AccountWaitSlots+":7", 0)
-}
-
-// A client that stops reading gets its response ended rather than holding the
-// slots; the deadline does not outlive the response on a kept-alive connection.
-func TestClientWriteDeadline(t *testing.T) {
-	saved := clientWriteTimeout
-	clientWriteTimeout = 100 * time.Millisecond
-	t.Cleanup(func() { clientWriteTimeout = saved })
-	gin.SetMode(gin.TestMode)
-	failed := make(chan error, 1)
-	engine := gin.New()
-	engine.GET("/", func(g *gin.Context) {
-		c := &call{c: g}
-		defer c.limitClientWrites()()
-		chunk := make([]byte, 1<<20)
-		for range 200 {
-			if _, err := g.Writer.Write(chunk); err != nil {
-				failed <- err
-				return
-			}
-			g.Writer.Flush()
-		}
-		failed <- nil
-	})
-	srv := &http.Server{Handler: engine}
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	go func() { _ = srv.Serve(ln) }()
-	t.Cleanup(func() { _ = srv.Close() })
-	conn, err := net.Dial("tcp", ln.Addr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
-	if _, err := conn.Write([]byte("GET / HTTP/1.1\r\nHost: x\r\n\r\n")); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case err := <-failed:
-		if err == nil {
-			t.Fatal("wrote everything to a client that reads nothing")
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("write still blocked")
-	}
 }

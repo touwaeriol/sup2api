@@ -2,6 +2,7 @@ package bedrock
 
 import (
 	"context"
+	"net/http"
 	"regexp"
 	"slices"
 	"strconv"
@@ -21,7 +22,7 @@ type object = accountform.Object
 
 var fieldError = accountform.FieldError
 
-// Credential and settings fields (forms/*.schema.json).
+// Credential and settings fields (the account form, ui/native/src/fields.ts).
 const (
 	fieldAPIKey          = "api_key"
 	fieldAccessKeyID     = "access_key_id"
@@ -46,9 +47,9 @@ func visible(min, max int) func(string) bool {
 	return func(s string) bool { return len(s) >= min && len(s) <= max && visiblePattern.MatchString(s) }
 }
 
-// The shapes of the credentials (the same bounds as forms/*.schema.json).
+// The shapes of the signing credentials (the account form checks the same
+// bounds). AWS defines them and they take part in SigV4.
 var (
-	validAPIKey       = visible(8, 2048)
 	validAccessKeyID  = accessKeyIDPattern.MatchString
 	validSecretKey    = visible(1, 1024)
 	validSessionToken = visible(1, 8192)
@@ -86,7 +87,7 @@ var ProfilePrefixes = []string{NoProfilePrefix, "us", "eu", "apac", "jp", "au", 
 
 // auth is how the accounts of a type authorize their requests.
 type auth struct {
-	// signed: the core signs the request with the account's access key
+	// signed: the plugin signs the request with the account's access key
 	// (SigV4). Otherwise the account's API key is sent as a bearer token.
 	signed bool
 	// session: the access key is temporary and comes with a session token.
@@ -97,6 +98,19 @@ var auths = map[string]auth{
 	TypeAPIKey:    {},
 	TypeAccessKey: {signed: true},
 	TypeSTS:       {signed: true, session: true},
+}
+
+// keys are the keys the form of the type sends, credentials and settings;
+// ValidateCredentials refuses any other.
+func (a auth) keys() []string {
+	keys := []string{fieldRegion, fieldProfilePrefix}
+	switch {
+	case !a.signed:
+		return append(keys, fieldAPIKey)
+	case a.session:
+		return append(keys, fieldAccessKeyID, fieldSecretAccessKey, fieldSessionToken, fieldSessionExpiresAt)
+	}
+	return append(keys, fieldAccessKeyID, fieldSecretAccessKey)
 }
 
 // credential checks a credential field that must be present and valid.
@@ -113,8 +127,14 @@ func credential(creds object, field string, valid func(string) bool, required, m
 // checkCredentials checks the credential fields of a type.
 func (a auth) checkCredentials(creds object) *pluginv1.FieldError {
 	if !a.signed {
-		return credential(creds, fieldAPIKey, validAPIKey,
-			"API key is required / 请填写 API Key", "API key must be 8-2048 visible characters / API Key 必须是 8–2048 个可见字符")
+		// Any non-blank key, as apikey.Spec takes an api_key
+		// (DESIGN-2026-11-20 §5.1): it only goes into the Authorization
+		// header, and a value holding control characters is never sent
+		// (the core and net/http refuse such a header).
+		if creds.Str(fieldAPIKey) == "" {
+			return fieldError(fieldAPIKey, "required", "API key is required / 请填写 API Key")
+		}
+		return nil
 	}
 	if bad := credential(creds, fieldAccessKeyID, validAccessKeyID,
 		"access key ID is required / 请填写 Access Key ID", "not an AWS access key ID (16-128 upper-case letters and digits) / 不是合法的 AWS Access Key ID（16–128 位大写字母和数字）"); bad != nil {
@@ -164,18 +184,23 @@ func checkExpiryHint(settings object) *pluginv1.FieldError {
 	return nil
 }
 
-// check validates what requests are built from: the credentials of an
-// account of type typ, its region and its prefix. It is the same for a
-// submitted form and for a stored account about to serve a request.
-func check(typ string, creds, settings object) (auth, *pluginv1.FieldError) {
+// authOf is the auth of an account type, or the error refusing the type.
+func authOf(typ string) (auth, *pluginv1.FieldError) {
 	a, ok := auths[typ]
 	if !ok {
 		return a, fieldError("account_type", "unsupported", "unsupported account type "+strconv.Quote(typ)+" / 不支持的账号类型")
 	}
+	return a, nil
+}
+
+// check validates what requests are built from: the credentials of an
+// account of the type, its region and its prefix. It is the same for a
+// submitted form and for a stored account about to serve a request.
+func (a auth) check(creds, settings object) *pluginv1.FieldError {
 	if bad := a.checkCredentials(creds); bad != nil {
-		return a, bad
+		return bad
 	}
-	return a, checkSettings(settings)
+	return checkSettings(settings)
 }
 
 // ValidateCredentials implements pluginsdk.Platform. An account without a
@@ -185,7 +210,15 @@ func (p *Plugin) ValidateCredentials(_ context.Context, in *pluginv1.ValidateCre
 	if refused != nil {
 		return refused, nil
 	}
-	_, bad := check(in.GetAccountType(), form.Creds, form.Settings)
+	a, bad := authOf(in.GetAccountType())
+	if bad != nil {
+		return accountform.Invalid(bad), nil
+	}
+	// Keys the form does not send are refused (code "unknown").
+	if refused := form.Only(a.keys()...); refused != nil {
+		return refused, nil
+	}
+	bad = a.check(form.Creds, form.Settings)
 	if bad == nil {
 		bad = checkExpiryHint(form.Settings)
 	}
@@ -216,27 +249,34 @@ func readAccount(acc *pluginv1.Account) (account, error) {
 	if err != nil {
 		return account{}, err
 	}
-	a, bad := check(acc.GetType(), creds, settings)
+	a, bad := authOf(acc.GetType())
+	if bad == nil {
+		bad = a.check(creds, settings)
+	}
 	if bad != nil {
 		return account{}, status.Errorf(codes.FailedPrecondition, "account %d: %s: %s", acc.GetId(), bad.GetField(), bad.GetMessage())
 	}
 	return account{auth: a, creds: creds, region: settings.Str(fieldRegion), prefix: settings.Str(fieldProfilePrefix)}, nil
 }
 
-// authorize says how a request of the account is authorized: an API key
-// goes into headers as a bearer token, and the other types return the
-// directive the request is to be signed with (signed).
-func (a account) authorize(headers map[string]string) (d reqsign.Directive, signed bool) {
+// authorize returns the headers that authorize req, a request of the
+// account that will send exactly body: the API key as a bearer token, or
+// the SigV4 signature of req made at now (req's Content-Type included,
+// since it is signed). Signing settles req's URL and host; they must not
+// change afterwards.
+func (a account) authorize(req *http.Request, body []byte, now time.Time) (http.Header, error) {
 	if !a.auth.signed {
-		headers["authorization"] = "Bearer " + a.creds.Str(fieldAPIKey)
-		return d, false
+		return http.Header{"Authorization": {"Bearer " + a.creds.Str(fieldAPIKey)}}, nil
 	}
-	d = reqsign.Directive{
-		Scheme: reqsign.SchemeAWSSigV4, Region: a.region, Service: SigningService,
+	c := reqsign.AWSCredentials{
+		Region: a.region, Service: SigningService,
 		AccessKeyID: a.creds.Str(fieldAccessKeyID), SecretAccessKey: a.creds.Str(fieldSecretAccessKey),
 	}
 	if a.auth.session {
-		d.SessionToken = a.creds.Str(fieldSessionToken)
+		c.SessionToken = a.creds.Str(fieldSessionToken)
 	}
-	return d, true
+	if err := reqsign.SignAWSSigV4(req, body, c, now); err != nil {
+		return nil, status.Error(codes.FailedPrecondition, err.Error())
+	}
+	return reqsign.AWSSigV4Headers(req), nil
 }

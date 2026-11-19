@@ -29,38 +29,93 @@ func (s *Service) Candidates(ctx context.Context, groupID int64, types []core.Ac
 	}
 	now := time.Now()
 	out := make([]core.AccountRef, 0, len(snap.refs))
-	for _, r := range snap.refs {
+	for i := range snap.refs {
 		// A timed automatic disable expires by itself (lazy expiry): the
 		// account serves again once its release time passes, whether or not
 		// the recovery sweep has written it back to active yet.
-		if until, ok := snap.releases[r.ID]; ok && now.Before(until) {
-			continue
-		}
-		if len(types) == 0 || slices.Contains(types, core.AccountTypeKey{PluginKey: r.PluginKey, Type: r.Type}) {
-			out = append(out, r)
+		if r := &snap.refs[i]; !snap.disabledAt(r.ID, now) && ofTypes(r, types) {
+			out = append(out, *r)
 		}
 	}
-	if len(out) == 0 || s.d.Redis == nil {
-		return out, nil
-	}
-	pipe := s.d.Redis.Pipeline()
-	cmds := make([]*redis.IntCmd, len(out))
-	for i, r := range out {
-		cmds[i] = pipe.Exists(ctx, cooldownKey(r.ID))
-	}
-	if _, err := pipe.Exec(ctx); err != nil {
+	cooling, err := s.coolingDown(ctx, out)
+	if err != nil {
 		// Serving a cooling account is better than serving nothing; the
 		// gateway will classify the upstream error again.
 		slog.WarnContext(ctx, "account: read cooldowns", "err", err)
 		return out, nil
 	}
+	if cooling == nil {
+		return out, nil
+	}
 	kept := out[:0]
 	for i, r := range out {
-		if cmds[i].Val() == 0 {
+		if cooling[i].Val() == 0 {
 			kept = append(kept, r)
 		}
 	}
 	return kept, nil
+}
+
+// Resting returns the accounts of the group's snapshot, of types (all types
+// when empty), that Candidates leaves out now: those under a timed automatic
+// disable that has not run out, and those cooling down. Unlike Candidates it
+// fails when the cooldowns cannot be read.
+func (s *Service) Resting(ctx context.Context, groupID int64, types []core.AccountTypeKey) ([]core.AccountRef, error) {
+	snap, err := s.groupSnapshot(ctx, groupID)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	var out, live []core.AccountRef
+	for i := range snap.refs {
+		switch r := &snap.refs[i]; {
+		case !ofTypes(r, types):
+		case snap.disabledAt(r.ID, now):
+			out = append(out, *r)
+		default:
+			live = append(live, *r)
+		}
+	}
+	cooling, err := s.coolingDown(ctx, live)
+	if err != nil {
+		return nil, err
+	}
+	for i := range cooling {
+		if cooling[i].Val() != 0 {
+			out = append(out, live[i])
+		}
+	}
+	return out, nil
+}
+
+// disabledAt reports an account of the snapshot under a timed automatic
+// disable that has not run out at now.
+func (g groupSnap) disabledAt(id int64, now time.Time) bool {
+	until, ok := g.releases[id]
+	return ok && now.Before(until)
+}
+
+// ofTypes reports whether the account type of r is in types; every type is
+// in an empty types.
+func ofTypes(r *core.AccountRef, types []core.AccountTypeKey) bool {
+	return len(types) == 0 || slices.Contains(types, core.AccountTypeKey{PluginKey: r.PluginKey, Type: r.Type})
+}
+
+// coolingDown reads in one pipeline whether each of refs has a cooldown
+// (Val() != 0); nil when there is nothing to read.
+func (s *Service) coolingDown(ctx context.Context, refs []core.AccountRef) ([]*redis.IntCmd, error) {
+	if len(refs) == 0 || s.d.Redis == nil {
+		return nil, nil
+	}
+	pipe := s.d.Redis.Pipeline()
+	cmds := make([]*redis.IntCmd, len(refs))
+	for i := range refs {
+		cmds[i] = pipe.Exists(ctx, cooldownKey(refs[i].ID))
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return nil, err
+	}
+	return cmds, nil
 }
 
 // GroupHasType reports whether the group holds an account of one of types,
@@ -172,31 +227,42 @@ func (s *Service) groupSnapshot(ctx context.Context, groupID int64) (groupSnap, 
 // runs it on a gateway request: its rows are scanned by position.
 func readGroupSnap(db *gorm.DB, groupID int64, now time.Time) (groupSnap, error) {
 	snap := groupSnap{at: now, refs: []core.AccountRef{}}
+	// The columns that are no field of an AccountRef. Every row replaces
+	// them, so one set serves the whole read instead of one per row.
+	var col struct {
+		mapping, limits []byte
+		env             store.JSON[core.EnvironmentValues]
+		until           *time.Time
+		// The protocol binding: NULL, NULL for an account without one, which
+		// is then neither transferred nor parsed.
+		protocols      []string
+		modelProtocols []byte
+	}
 	err := store.EachRow(db.Table("accounts a").Select(`a.id, a.name, a.plugin_key, a.type, a.priority, a.weight,
 			a.max_concurrency, a.proxy_id, a.models, a.model_mapping, a.rpm_limit, a.tpm_limit, a.spm_limit, a.spm_window_seconds, a.model_limits, a.environment,
-			COALESCE(a.conversion_loss_policy, ''), CASE WHEN a.status = 'auto_disabled' THEN a.auto_disabled_until END`).
+			COALESCE(a.conversion_loss_policy, ''), CASE WHEN a.status = 'auto_disabled' THEN a.auto_disabled_until END,
+			a.protocols, NULLIF(a.model_protocols, '[]'::jsonb)`).
 		Joins("JOIN account_groups ag ON ag.account_id = a.id").
 		Where(`ag.group_id = ? AND a.deleted_at IS NULL AND a.schedulable
 			AND (a.status = 'active' OR a.status = 'auto_disabled' AND a.auto_disabled_until IS NOT NULL)`, groupID).
 		Order("a.priority DESC, a.id"), func(rows *sql.Rows) error {
 		var a core.AccountRef
-		var mapping, limits []byte
-		var env store.JSON[core.EnvironmentValues]
-		var until *time.Time
 		if err := rows.Scan(&a.ID, &a.Name, &a.PluginKey, &a.Type, &a.Priority, &a.Weight, &a.MaxConcurrency, &a.ProxyID,
-			(*store.Strings)(&a.Models), &mapping, &a.RPMLimit, &a.TPMLimit, &a.SPMLimit, &a.SPMWindowSeconds, &limits, &env, &a.ConversionLossPolicy, &until); err != nil {
+			(*store.Strings)(&a.Models), &col.mapping, &a.RPMLimit, &a.TPMLimit, &a.SPMLimit, &a.SPMWindowSeconds, &col.limits, &col.env, &a.ConversionLossPolicy, &col.until,
+			(*store.Strings)(&col.protocols), &col.modelProtocols); err != nil {
 			return err
 		}
-		if len(mapping) > 0 {
-			_ = json.Unmarshal(mapping, &a.ModelMapping)
+		if len(col.mapping) > 0 {
+			_ = json.Unmarshal(col.mapping, &a.ModelMapping)
 		}
-		if until != nil {
+		if col.until != nil {
 			if snap.releases == nil {
 				snap.releases = map[int64]time.Time{}
 			}
-			snap.releases[a.ID] = *until
+			snap.releases[a.ID] = *col.until
 		}
-		a.ModelLimits, a.Environment = parseModelLimits(limits), env.V
+		a.ModelLimits, a.Environment = parseModelLimits(col.limits), col.env.V
+		a.ProtocolRules = core.NewProtocolRules(col.protocols, parseModelProtocols(col.modelProtocols))
 		snap.refs = append(snap.refs, a)
 		return nil
 	})
@@ -229,6 +295,27 @@ func (s *Service) Load(ctx context.Context, id int64) (*core.Account, error) {
 	}
 	s.cacheMu.Unlock()
 	return &acc, nil
+}
+
+// Egress implements core.AccountDirectory: the way out of account id as it
+// stands now (Load's snapshot, dropped on account:changed). Paths of this
+// package holding the account's live row take proxyEgress of its proxy_id
+// instead.
+func (s *Service) Egress(ctx context.Context, id int64) (core.Egress, error) {
+	a, err := s.Load(ctx, id)
+	if err != nil {
+		return core.Egress{}, err
+	}
+	return s.proxyEgress(ctx, a.ProxyID)
+}
+
+// proxyEgress is the way out through proxy proxyID: its client (cached by
+// the proxy service) and the proxy itself, the direct client for nil.
+// Proxied holds even when the client cannot be had: the request then fails,
+// never going out directly, and Proxy is nil with the error.
+func (s *Service) proxyEgress(ctx context.Context, proxyID *int64) (core.Egress, error) {
+	pc, err := s.d.Proxies.HTTPClient(ctx, proxyID)
+	return core.Egress{Client: pc.Client, Proxied: proxyID != nil, Proxy: pc.Proxy}, err
 }
 
 // loadLive is loadRow of any live account, unlocked, for Load: a miss of

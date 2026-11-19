@@ -9,7 +9,7 @@
     "en": "Official Volcengine Ark access for OpenAI-compatible APIs, Anthropic Messages, image and video generation. Existing relay text integrations remain compatible. Prices are configured by the administrator.",
     "zh": "提供方舟官方 OpenAI 兼容接口、Anthropic Messages、图片与视频生成。保留既有中转文本接入兼容，不内置价格。"
   },
-  "version": "0.12.8",
+  "version": "0.13.0",
   "publisher": "sub2api",
   "icon": "assets/volcengine-color.svg",
   "runtime": "grpc",
@@ -18,19 +18,14 @@
       "binaries": "runtimes/{os}-{arch}/plugin"
     }
   },
-  "hostCompat": ">=0.1.290 <0.2.0",
+  "hostCompat": ">=0.1.304 <0.2.0",
+  "hostUICompat": "^4.0",
   "capabilities": [
     {
       "id": "platform.adapter.v1"
     },
     {
-      "id": "platform.execute.v1"
-    },
-    {
       "id": "platform.tasks.v1"
-    },
-    {
-      "id": "platform.poll.v1"
     },
     {
       "id": "platform.monitor.v1"
@@ -46,9 +41,6 @@
         "en": "Volcengine Ark",
         "zh": "火山方舟"
       },
-      "requestFields": [
-        "model"
-      ],
       "passHeaders": [
         "user-agent"
       ],
@@ -360,9 +352,8 @@
         "zh": "使用官方方舟 API Key 调用 OpenAI 兼容接口、Anthropic Messages、官方图片与豆包视频。Messages 使用 /api/compatible/v1/messages，暂不支持 count_tokens。选填 AK/SK 可启用官方素材库。"
       },
       "form": {
-        "mode": "schema",
-        "schema": "forms/apikey.schema.json",
-        "uiSchema": "forms/apikey.ui.json"
+        "mode": "native",
+        "component": "VolcengineKeyForm"
       },
       "sensitiveFields": [
         "api_key",
@@ -379,7 +370,8 @@
           "allowed": [
             "https://ark.cn-beijing.volces.com",
             "https://ark.ap-southeast.bytepluses.com"
-          ]
+          ],
+          "versions": ["/api/v3"]
         },
         {
           "field": "asset_base_url",
@@ -429,12 +421,21 @@
       "platforms": [
         {
           "platform": "openai",
+          "endpoints": [
+            "chat_completions",
+            "responses",
+            "responses_websocket",
+            "embeddings"
+          ],
           "passHeaders": [
             "user-agent"
           ]
         },
         {
           "platform": "anthropic",
+          "endpoints": [
+            "messages"
+          ],
           "passHeaders": [
             "anthropic-version",
             "anthropic-beta",
@@ -459,9 +460,8 @@
         "zh": "自定义 Base URL、视频任务集合端点与素材库端点。API Key 与素材库 AK/SK 分开保存。已有 OpenAI、Anthropic 中转接入保持兼容。"
       },
       "form": {
-        "mode": "schema",
-        "schema": "forms/relay.schema.json",
-        "uiSchema": "forms/relay.ui.json"
+        "mode": "native",
+        "component": "VolcengineRelayForm"
       },
       "sensitiveFields": [
         "api_key",
@@ -517,12 +517,21 @@
       "platforms": [
         {
           "platform": "openai",
+          "endpoints": [
+            "chat_completions",
+            "responses",
+            "responses_websocket",
+            "embeddings"
+          ],
           "passHeaders": [
             "user-agent"
           ]
         },
         {
           "platform": "anthropic",
+          "endpoints": [
+            "messages"
+          ],
           "passHeaders": [
             "anthropic-version",
             "anthropic-beta",
@@ -689,6 +698,9 @@
     }
   ],
   "ui": {
+    "native": {
+      "entry": "ui/native/entry.js"
+    },
     "sections": [
       {
         "id": "volcengine",
@@ -727,196 +739,20 @@
     ],
     "pages": {
       "assets": {
-        "type": "table",
+        "type": "native",
         "title": {
           "en": "Ark asset library",
           "zh": "方舟素材库"
         },
-        "source": "GET /assets",
-        "search": "q",
-        "create": {
-          "page": "new_asset",
-          "permission": "assets:manage"
-        },
-        "columns": [
-          {
-            "key": "id",
-            "label": {
-              "en": "#",
-              "zh": "#"
-            },
-            "format": "text"
-          },
-          {
-            "key": "account_name",
-            "label": {
-              "en": "Account",
-              "zh": "账号"
-            },
-            "format": "text"
-          },
-          {
-            "key": "group_name",
-            "label": {
-              "en": "Group",
-              "zh": "素材组"
-            },
-            "format": "text"
-          },
-          {
-            "key": "name",
-            "label": {
-              "en": "Name",
-              "zh": "名称"
-            },
-            "format": "text"
-          },
-          {
-            "key": "asset_type",
-            "label": {
-              "en": "Type",
-              "zh": "类型"
-            },
-            "format": "text"
-          },
-          {
-            "key": "status",
-            "label": {
-              "en": "Upstream status",
-              "zh": "上游状态"
-            },
-            "format": "badge"
-          },
-          {
-            "key": "index_status",
-            "label": {
-              "en": "Index",
-              "zh": "索引"
-            },
-            "format": "badge"
-          },
-          {
-            "key": "upstream_id",
-            "label": {
-              "en": "Ark id",
-              "zh": "方舟 id"
-            },
-            "format": "text"
-          },
-          {
-            "key": "updated_at",
-            "label": {
-              "en": "Updated",
-              "zh": "更新时间"
-            },
-            "format": "datetime"
-          }
-        ]
+        "component": "VolcengineAssetsPage"
       },
       "asset_groups": {
-        "type": "table",
+        "type": "native",
         "title": {
           "en": "Ark asset groups",
           "zh": "方舟素材组"
         },
-        "source": "GET /asset-groups",
-        "search": "q",
-        "create": {
-          "page": "new_asset_group",
-          "permission": "assets:manage"
-        },
-        "columns": [
-          {
-            "key": "id",
-            "label": {
-              "en": "#",
-              "zh": "#"
-            },
-            "format": "text"
-          },
-          {
-            "key": "account_name",
-            "label": {
-              "en": "Account",
-              "zh": "账号"
-            },
-            "format": "text"
-          },
-          {
-            "key": "name",
-            "label": {
-              "en": "Name",
-              "zh": "名称"
-            },
-            "format": "text"
-          },
-          {
-            "key": "title",
-            "label": {
-              "en": "Title",
-              "zh": "标题"
-            },
-            "format": "text"
-          },
-          {
-            "key": "group_type",
-            "label": {
-              "en": "Type",
-              "zh": "类型"
-            },
-            "format": "text"
-          },
-          {
-            "key": "asset_count",
-            "label": {
-              "en": "Assets",
-              "zh": "素材数"
-            },
-            "format": "number"
-          },
-          {
-            "key": "index_status",
-            "label": {
-              "en": "Index",
-              "zh": "索引"
-            },
-            "format": "badge"
-          },
-          {
-            "key": "upstream_id",
-            "label": {
-              "en": "Ark id",
-              "zh": "方舟 id"
-            },
-            "format": "text"
-          },
-          {
-            "key": "updated_at",
-            "label": {
-              "en": "Updated",
-              "zh": "更新时间"
-            },
-            "format": "datetime"
-          }
-        ]
-      },
-      "new_asset_group": {
-        "type": "form",
-        "title": {
-          "en": "New asset group",
-          "zh": "新建素材组"
-        },
-        "schema": "forms/asset-group.schema.json",
-        "submit": "POST /asset-groups"
-      },
-      "new_asset": {
-        "type": "form",
-        "title": {
-          "en": "New asset",
-          "zh": "新建素材"
-        },
-        "schema": "forms/asset.schema.json",
-        "submit": "POST /assets"
+        "component": "VolcengineAssetGroupsPage"
       }
     }
   },
@@ -942,23 +778,6 @@
       }
     },
     {
-      "id": "accounts.credentials",
-      "scope": {
-        "types": "own"
-      },
-      "reason": {
-        "en": "Read the Base URL and API key of Ark API key accounts to build upstream requests, and their asset library access key / secret key to sign asset library calls. Every read of an account's credentials outside gateway traffic is written to the audit log.",
-        "zh": "读取方舟 API Key 账号的 Base URL 与 API Key 以构造上游请求，并读取素材库的 Access Key / Secret Key 为素材库调用签名。网关流量之外的每一次凭证读取都会写入审计日志。"
-      }
-    },
-    {
-      "id": "accounts.read",
-      "reason": {
-        "en": "List this plugin's own Ark accounts (names and settings only, never credentials) so the asset library pages can show which account an asset belongs to and which accounts have an asset endpoint configured",
-        "zh": "列出本插件自己的方舟账号（只有名称与设置，绝不含凭证），素材库页面才能显示素材属于哪个账号、哪些账号配置了素材端点"
-      }
-    },
-    {
       "id": "db.schema",
       "reason": {
         "en": "Keep the local index of asset groups and assets (account id, Ark id, name, type, status, timestamps) in plg_volcengine, so a list page does not need one signed upstream call - and one audited credential read - per account",
@@ -975,22 +794,15 @@
     {
       "id": "ui.menu",
       "reason": {
-        "en": "Add the \"Volcengine Ark\" sidebar group with the asset and asset group pages. These pages are rendered by the console from the manifest (table and form), so the plugin ships no front-end code and does not need ui.native.",
-        "zh": "添加「火山方舟」侧边栏分组与素材、素材组页面。这些页面由控制台按 manifest 渲染（table 与 form），插件不带前端代码，因此不需要 ui.native 权限。"
+        "en": "Add the \"Volcengine Ark\" sidebar group with the asset and asset group pages",
+        "zh": "添加「火山方舟」侧边栏分组与素材、素材组页面"
       }
     },
     {
-      "id": "net",
-      "scope": {
-        "domains": [
-          "ark.cn-beijing.volcengineapi.com",
-          "*.volcengineapi.com"
-        ]
-      },
-      "optional": true,
+      "id": "ui.native",
       "reason": {
-        "en": "Call the Ark asset library OpenAPI at the account's asset endpoint - the Ark control plane, a different host from the API Base URL. Only enforced when the egress policy is an allowlist; an account pointed at any other host then needs that host added.",
-        "zh": "调用账号的素材端点上的方舟素材库 OpenAPI —— 那是方舟控制面，与 API 的 Base URL 不是同一个主机。仅在出口策略为白名单时生效；账号指向其他主机时需要把该主机加进白名单。"
+        "en": "The account forms of the \"Ark API key\" and \"Doubao relay key\" account types (VolcengineKeyForm, VolcengineRelayForm), and the asset and asset group pages with their create dialogs (VolcengineAssetsPage, VolcengineAssetGroupsPage)",
+        "zh": "「方舟 API Key」与「豆包中转 Key」两种账号类型的账号表单（VolcengineKeyForm、VolcengineRelayForm），以及素材、素材组页面和它们的新建弹窗（VolcengineAssetsPage、VolcengineAssetGroupsPage）"
       }
     }
   ],

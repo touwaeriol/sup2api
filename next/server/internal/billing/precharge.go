@@ -35,9 +35,6 @@ func (s *Service) ClientDisconnectPolicy(ctx context.Context) (string, error) {
 }
 
 func (s *Service) Precharge(ctx context.Context, r *core.UsageRecord) error {
-	if r.Price == nil && len(r.Additional) == 0 && r.BillingError == "" {
-		return nil
-	}
 	amount, err := quoteRecord(ctx, s, r)
 	if err != nil {
 		return err

@@ -34,7 +34,7 @@ func TestAC21_FetchUpstreamModels(t *testing.T) {
 		}
 	}
 
-	// Form credentials still go through the schema.
+	// Form credentials still go through the plugin's validation (no api_key).
 	admin.Expect(t, 400, "invalid_argument", http.MethodPost, "/account-types/"+AnthropicPlugin+"/"+APIKeyType+"/models/fetch",
 		map[string]any{"credentials": map[string]any{"base_url": e.MockInternalURL}})
 

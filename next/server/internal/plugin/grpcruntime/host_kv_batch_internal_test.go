@@ -91,7 +91,7 @@ func kvEnv(t *testing.T, key string, grants registry.Grants, rdb redis.Universal
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = pkg.Close() })
-	rt := &Runtime{o: Options{Node: staticNode{"n", "b"}, Concurrency: Concurrency{Hot: 4, Console: 4, Background: 4, Execute: 4},
+	rt := &Runtime{o: Options{Node: staticNode{"n", "b"}, Concurrency: Concurrency{Hot: 4, Console: 4, Background: 4},
 		DataDir: t.TempDir(), Redis: rdb, DB: db}, log: slog.Default()}
 	i := newInstance(rt, pkg, "", "", &settings{configJSON: "{}", grants: grants})
 	return &hostServer{i: i}

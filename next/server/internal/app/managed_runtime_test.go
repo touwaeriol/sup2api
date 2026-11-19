@@ -211,7 +211,7 @@ func testManagedRuntime(t *testing.T, migrate bool) {
 		t.Fatal("admitted HTTP readiness", resp.StatusCode)
 	}
 	// Every module registered its cluster tasks (TASK-FRAMEWORK-DESIGN §14.1).
-	wantTasks := []string{"core.account.automatic_recovery", "core.account.credential_refresh", "core.account.usage_limits",
+	wantTasks := []string{"core.account.automatic_recovery", "core.account.balance_sweep", "core.account.credential_refresh", "core.account.usage_limits",
 		"core.audit.plugin_writes_purge", "core.egress.logs_prune",
 		"core.events.retention", "core.jobs.retention", "core.notify.purge", "core.task.housekeeping", "core.usage.reconcile", "core.usage.rollup"}
 	var gotTasks []string

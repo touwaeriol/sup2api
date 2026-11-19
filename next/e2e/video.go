@@ -66,19 +66,14 @@ func (e *Env) videoTaskStats(id string) videoStats {
 
 func (e *Env) newVideoTenant(admin *Session) *Tenant {
 	e.T.Helper()
-	tn := &Tenant{Model: e.RunModelOf(admin, "doubao-seedance-2-0-mini", e.Name("video"))}
-	tn.GroupID = e.CreateGroup(admin, e.Name("video-group"), "restricted", 1, nil)
+	tn := e.newTenantShell(admin, e.Name("video-group"), 1, "20")
+	tn.Model = e.RunModelOf(admin, "doubao-seedance-2-0-mini", e.Name("video"))
 	for i := 0; i < 2; i++ {
 		key := e.Name("video-account")
-		id := e.CreateAccount(admin, AccountSpec{PluginKey: "volcengine", Type: "relay", GroupIDs: []int64{tn.GroupID}, APIKey: key, MaxConcurrency: 4,
-			Settings: map[string]any{"video_api_prefix": "/api/v3"}})
-		tn.Accounts = append(tn.Accounts, TenantAccount{ID: id, Key: key})
+		tn.addAccount(e, admin, AccountSpec{PluginKey: "volcengine", Type: "relay", APIKey: key, MaxConcurrency: 4,
+			Settings: map[string]any{"video_api_prefix": "/api/v3"}}, key)
 		e.controlVideo(key, "running", true)
 	}
-	tn.User = e.CreateUser(admin, UserSpec{})
-	e.GrantGroups(admin, tn.User.UserID, []int64{tn.GroupID})
-	e.AdjustBalance(admin, tn.User.UserID, "20", true, "video E2E initial credit")
-	tn.KeyID, tn.APIKey = e.CreateAPIKey(tn.User, tn.GroupID)
 	return tn
 }
 
@@ -177,24 +172,22 @@ func (e *Env) assertVideoAccounting(admin *Session, tn *Tenant, v submittedVideo
 	}
 	AssertMoney(e.T, "final video cost", u.Get("total_cost").String(), want)
 	AssertMoney(e.T, "final video balance", e.Balance(tn.User), new(big.Rat).Sub(big.NewRat(20, 1), want))
+	// The request's pre-charge (ref_type precharge, debit and release) is
+	// replaced by the task's reservation when the task is registered; the
+	// reservation (ref_type usage) is settled by one refund adjustment.
 	var entries []gjson.Result
 	net := new(big.Rat)
-	debits, refunds := 0, 0
+	count := map[string]int{}
 	for _, l := range e.Ledger(admin, tn.User.UserID, "") {
 		if l.Get("ref_id").String() != v.RequestID {
 			continue
 		}
 		entries = append(entries, l)
 		net.Add(net, Money(e.T, l.Get("delta").String()))
-		switch l.Get("kind").String() {
-		case "usage":
-			debits++
-		case "refund":
-			refunds++
-		}
+		count[l.Get("ref_type").String()+"/"+l.Get("kind").String()]++
 	}
-	if len(entries) != 2 || debits != 1 || refunds != 1 {
-		e.T.Fatalf("expected one reservation and one refund adjustment: %v", entries)
+	if len(entries) != 4 || count["usage/usage"] != 1 || count["usage/refund"] != 1 || count["precharge/usage"] != 1 || count["precharge/refund"] != 1 {
+		e.T.Fatalf("expected the released pre-charge, one reservation and one refund adjustment: %v", entries)
 	}
 	if net.Cmp(new(big.Rat).Neg(want)) != 0 {
 		e.T.Fatalf("net ledger=%s, final cost=%s", net, want)

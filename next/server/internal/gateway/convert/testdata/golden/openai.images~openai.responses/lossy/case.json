@@ -1,0 +1,8 @@
+{
+  "options": {
+    "model": "gpt-image-2",
+    "stream": false,
+    "adapt_model": "gpt-6-luna"
+  },
+  "note": "user, safety_identifier and style have no place upstream; an unknown member goes into the tool as given"
+}

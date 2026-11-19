@@ -64,8 +64,7 @@ func TestValidateRejects(t *testing.T) {
 		{"user: no project anywhere", TypeAuthorizedUser, map[string]any{"authorized_user_json": userJSON(map[string]any{"quota_project_id": nil})}, nil, "project_id:required"},
 
 		{"apikey: none", TypeAPIKey, map[string]any{}, nil, "api_key:required"},
-		{"apikey: too short", TypeAPIKey, map[string]any{fieldAPIKey: "short"}, nil, "api_key:pattern"},
-		{"apikey: header injection", TypeAPIKey, map[string]any{fieldAPIKey: "AQ.key-value\r\nx-evil: 1"}, nil, "api_key:pattern"},
+		{"apikey: blank", TypeAPIKey, map[string]any{fieldAPIKey: " \t\n"}, nil, "api_key:required"},
 		{"apikey: project only", TypeAPIKey, map[string]any{fieldAPIKey: "AQ.Ab8RN6-example"}, map[string]any{fieldProject: testProject}, "location:required"},
 		{"apikey: location only", TypeAPIKey, map[string]any{fieldAPIKey: "AQ.Ab8RN6-example"}, map[string]any{fieldLocation: "global"}, "project_id:required"},
 		{"apikey: bad location", TypeAPIKey, map[string]any{fieldAPIKey: "AQ.Ab8RN6-example"}, map[string]any{fieldProject: testProject, fieldLocation: "US"}, "location:pattern"},
@@ -316,12 +315,26 @@ func TestValidateAPIKey(t *testing.T) {
 			t.Errorf("%s: %+v", name, resp)
 		}
 	}
-	// The key is checked and trimmed by apikey.Spec, as in every API key form.
-	resp, creds, _ := validate(t, TypeAPIKey, map[string]any{fieldAPIKey: "  AQ.Ab8RN6-example\n"}, nil)
-	if len(resp.GetErrors()) > 0 || creds[fieldAPIKey] != "AQ.Ab8RN6-example" {
-		t.Errorf("trimmed key: %+v %v", resp, creds)
+	// The key is checked and trimmed by apikey.Spec, as in every API key form:
+	// any non-blank string is saved trimmed (DESIGN-2026-11-20 §5.1). That
+	// takes the keys the old 8-512 visible ASCII rule refused and a key
+	// holding CR or LF: the SDK, the core and net/http all refuse to send a
+	// header value with control characters, so such a key fails every
+	// request instead of injecting a header (§3.2, Q1).
+	for name, k := range map[string]string{
+		"trimmed":            "  AQ.Ab8RN6-example\n",
+		"7 characters":       "AQ.1234",
+		"513 characters":     strings.Repeat("k", 513),
+		"inner space":        "AQ.Ab8 RN6",
+		"not ASCII":          "AQ.ключ",
+		"control characters": "AQ.key-value\r\nx-evil: 1",
+	} {
+		resp, creds, _ := validate(t, TypeAPIKey, map[string]any{fieldAPIKey: k}, nil)
+		if len(resp.GetErrors()) > 0 || creds[fieldAPIKey] != strings.TrimSpace(k) {
+			t.Errorf("%s: %+v %v", name, resp, creds)
+		}
 	}
-	resp, _, _ = validate(t, TypeAPIKey, map[string]any{fieldAPIKey: 12345678}, nil)
+	resp, _, _ := validate(t, TypeAPIKey, map[string]any{fieldAPIKey: 12345678}, nil)
 	if got := fieldErrors(resp); !slices.Equal(got, []string{"api_key:type"}) {
 		t.Errorf("key that is not a string: %v", got)
 	}

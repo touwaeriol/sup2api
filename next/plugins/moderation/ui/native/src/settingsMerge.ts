@@ -3,10 +3,10 @@
 // re-reads the stored values and writes back only the keys this page changed
 // since it loaded: a key left alone keeps whatever is stored now, also when
 // another admin changed it meanwhile. loaded and latest are the stored values
-// brought to the current schema (settingsForm.ts currentSettings), so only
-// declared keys go back, retired values folded into their new keys.
+// brought to the current keys (settingsForm.ts currentSettings), so only
+// accepted keys go back, retired values folded into their new keys.
 
-/** A key's value as this page would send it; undefined = removed (its schema default applies). */
+/** A key's value as this page would send it; undefined = removed (its default applies). */
 export type PageValues = Record<string, unknown>
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null)

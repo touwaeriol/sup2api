@@ -3,12 +3,10 @@ package gateway
 import (
 	"context"
 	"errors"
-	"io"
 	"log/slog"
 	"net/http"
 	"time"
 
-	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/protocol"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
@@ -104,78 +102,13 @@ func (c *call) recordTaskFailure(ctx context.Context, status int, body []byte, r
 	}
 }
 
+// taskFailure ends a task submission that could not be registered: its
+// record is the free unreported one (nothing billed, the precharge
+// released), the receipt keeps why.
 func (c *call) taskFailure(ctx context.Context, reason string, err error) attemptResult {
 	c.recordTaskFailure(ctx, c.rec.StatusCode, nil, reason)
 	c.usage = nil
-	c.rec.Reservation = nil
-	c.rec.Price = nil
-	c.rec.Tokens = core.UsageTokens{}
-	c.rec.Metrics = nil
+	c.rec.SetUnreported(reason)
 	slog.WarnContext(ctx, "task submission could not be registered", "request_id", c.rid, "reason", reason, "err", err)
 	return attemptResult{kind: attemptReturn, err: fromCore(core.ErrUnavailable.WithMessage(reason).WithCause(err), errTypeUpstream)}
-}
-
-func (c *call) forwardTask(ctx context.Context, rt *typeRoute, acct *pluginv1.Account, resp *http.Response, upBody []byte) attemptResult {
-	c.rec.StatusCode = resp.StatusCode
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, protocol.MaxTaskSnapshotBytes+1))
-	if err != nil || len(raw) > protocol.MaxTaskSnapshotBytes {
-		return c.taskFailure(ctx, "task submission response is incomplete or too large", err)
-	}
-	// Persist the bounded response before parsing. The receipt remains if the
-	// plugin cannot parse it, or if the final transaction cannot commit.
-	bctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
-	defer cancel()
-	if err = c.g.d.Tasks.ReceiveTask(bctx, c.rid, resp.StatusCode, raw, ""); err != nil {
-		return c.taskFailure(ctx, "task response could not be recorded", err)
-	}
-	query, ok := c.taskPair(true)
-	if !ok {
-		return c.taskFailure(ctx, "task query endpoint unavailable", nil)
-	}
-	c.armUsageExtraction(rt, acct, resp, &usageCapture{body: raw}, upBody)
-	p := c.usage
-	c.usage = nil
-	pb, ok := c.gen.Platform(c.platform)
-	if !ok || pb.Client == nil {
-		return c.taskFailure(ctx, "task parser unavailable", nil)
-	}
-	pctx, pcancel := context.WithTimeout(bctx, c.gw.hotpathTimeout())
-	parsed, err := pb.Client.ParseTaskSubmission(pctx, &pluginv1.ExtractUsageRequest{Meta: p.meta, Account: p.account,
-		Status: int32(p.status), Headers: p.headers, Body: raw, Fields: p.fields, FieldsOmitted: p.fieldsOmitted})
-	pcancel()
-	if err != nil || parsed == nil {
-		return c.taskFailure(ctx, "task response could not be parsed", err)
-	}
-	ref := parsed.GetUpstreamRefId()
-	if !refIDRe.MatchString(ref) {
-		return c.taskFailure(ctx, "invalid upstream task identity", nil)
-	}
-	returned, err := protocol.RewriteTaskID(raw, c.ep.Task.IDPaths, ref, c.taskPublicID)
-	if err != nil {
-		return c.taskFailure(ctx, "task submission identity mismatch", err)
-	}
-	snapshot := []byte(parsed.GetSnapshotJson())
-	if _, err = protocol.RewriteTaskID(snapshot, query.Task.IDPaths, ref, c.taskPublicID); err != nil {
-		return c.taskFailure(ctx, "invalid initial task snapshot", err)
-	}
-	if rv := parsed.GetUsage().GetReserve(); rv != nil && rv.GetRefId() != ref {
-		return c.taskFailure(ctx, "reservation identity mismatch", nil)
-	}
-	c.rec.Success = true
-	c.rec.ErrorType = ""
-	c.rec.ErrorMessage = ""
-	if rep := parsed.GetUsage(); rep != nil {
-		c.applyUsageReport(bctx, rt, c.plugin.Key, rep)
-	}
-	c.finalizeBillability(bctx, c.rec, c.ep.Billing)
-	c.rec.LatencyMs = int(c.g.now().Sub(c.start) / time.Millisecond)
-	err = c.g.d.Tasks.RegisterTask(bctx, core.TaskRegistration{PublicID: c.taskPublicID, UpstreamID: ref, Kind: c.ep.Task.Kind,
-		Snapshot: snapshot, IDPaths: query.Task.IDPaths, NextCheckAfter: time.Duration(parsed.GetNextCheckAfterSec()) * time.Second,
-		Deadline: time.Duration(parsed.GetDeadlineSec()) * time.Second, Record: c.rec})
-	if err != nil {
-		return c.taskFailure(ctx, "task registration could not be committed", err)
-	}
-	c.taskPersisted = true
-	c.c.Data(resp.StatusCode, "application/json", returned)
-	return attemptResult{kind: attemptDone}
 }

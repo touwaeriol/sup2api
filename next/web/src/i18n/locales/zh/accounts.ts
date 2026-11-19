@@ -67,7 +67,7 @@ export default {
     noModelMatch: '没有匹配的模型',
     addModels: '添加',
     groupModelHint: '账号模型与分组白名单分别生效；API Key 所属分组也必须允许请求模型。',
- authMethod: '认证方式', connection: '接入配置', connectionHint: '名称、分组与连接凭证', models: '模型配置', modelsHint: '可用模型与名称映射', scheduling: '调度与限流', schedulingHint: '优先级、并发与用量限制', advanced: '高级', navigation: '账号配置导航', searchTypes: '搜索服务商或账号类型',
+ authMethod: '认证方式', connection: '接入配置', connectionHint: '名称、分组与连接凭证', models: '协议与模型', modelsHint: '开放的协议、可用模型与名称映射', scheduling: '调度与限流', schedulingHint: '优先级、并发与用量限制', advanced: '高级', navigation: '账号配置导航', searchTypes: '搜索服务商或账号类型',
     unnamed: '尚未填写名称', allModels: '全部模型', modelsSummary: '{n} 个模型', mappingSummary: '{n} 条映射', summaryPriority: '优先级 {n}', summaryWeight: '权重 {n}', summaryConcurrency: '并发 {n}', pluginSectionAfterSave: '保存账号后可配置', sectionHasErrors: '此处有待修正的内容',
     basicHint: '账号名称、所属分组与出口代理', namePlaceholder: '例如 claude-main', groupsHint: '未加入分组的账号不会被调度', credentialsHint: '连接凭证由插件「{plugin}」校验与保存',
     modelsCardHint: '账号可服务的请求模型；留空表示不限制', mappingCardHint: '把请求模型改写为上游模型；计费、白名单仍按请求模型', prefilled: '已按插件预设填入 {what}，可直接保存，也可按需增删；清空模型列表表示可服务所有模型。',
@@ -78,7 +78,7 @@ export default {
     schedulingCardHint: '决定账号被选中的先后顺序，以及是否参与调度、出错时是否自动禁用', schedulableHint: '关闭后账号保留，但不再被分配请求', autoDisableHint: '上游返回凭证失效、额度耗尽等错误时自动禁用该账号（规则见 设置 → 调度策略 → 自动禁用）。关闭后只冷却 60 秒，不会禁用', limitsHint: '并发按同时处理的请求数计，RPM、TPM 按近 60 秒统计，会话按所设周期统计；达到任一上限后暂停调度该账号，用量回落后自动恢复；0 表示不限',
     commonControlFixed: '插件将此项设为不可修改，已有账号保留当前设置。', commonControlLocked: '插件将此项固定为预设值，不可修改。', commonControlLockedPending: '插件将此项固定为预设值，保存后改为锁定值 {value}。',
     autoDisableGlobalOff: '全局自动禁用已关闭，此开关暂不生效且不可修改；账号原有设置会保留。', autoDisableUnavailable: '无法读取全局自动禁用设置，暂时无法修改此开关；账号原有设置会保留。',
-    unitConcurrency: '个请求', unitRpm: '次 / 分钟', unitTpm: 'tokens / 分钟', unitTpd: 'tokens / 天', create: '创建账号', noCredentials: '此账号类型没有需要在这里填写的凭证字段。', modelsInputHint: '输入或从下拉中选择模型，回车或逗号添加，可粘贴逗号或换行分隔的列表；点击标签复制，已映射的模型显示 → 目标' },
+    unitConcurrency: '个请求', unitRpm: '次 / 分钟', unitTpm: 'tokens / 分钟', unitTpd: 'tokens / 天', create: '创建账号', modelsInputHint: '输入或从下拉中选择模型，回车或逗号添加，可粘贴逗号或换行分隔的列表；点击标签复制，已映射的模型显示 → 目标' },
   title: '账号',
   subtitle: '网关使用的上游账号。账号类型由插件声明，同一分组可以混放不同类型的账号。',
   new: '新建账号',
@@ -165,9 +165,73 @@ export default {
     convertedGrade: '转换·{grade}',
     categories: { tool: '工具', reasoning: '推理', image: '图片', other: '其他' }
   },
+  protocols: {
+    names: {
+      openai: { chat: 'Chat Completions', responses: 'Responses', responses_ws: 'Responses WebSocket', embeddings: 'Embeddings', images: 'Images', images_edit: 'Image Edits' },
+      anthropic: { messages: 'Messages' },
+      gemini: { generate: 'generateContent', stream_generate: 'streamGenerateContent' }
+    },
+    own: {
+      title: '本平台协议', titleOf: '本平台协议（{platforms}）', subtitle: '这个账号接哪些协议的请求',
+      all: '全部', custom: '指定', modeHint: '“全部”包括账号类型以后新增的协议；“指定”只开放勾选的协议',
+      native: '原生', adapted: '适配 → {target}', adaptedShort: '适配',
+      closed: '已指定：有 {n} 个本平台协议未开放。账号类型以后新增的协议也不会自动开放。',
+      crossHint: '其他平台的协议默认不提供。需要协议转换时，在下面“模型的协议限定”里选中模型、勾上对应的转换协议。',
+      none: '此账号类型当前没有可服务的本平台协议。',
+      unknown: '以下协议不是此账号类型的本平台协议，保存时会被拒绝，请移除：'
+    },
+    rules: {
+      title: '模型的协议限定', subtitle: '选中模型，指定它在哪些协议下提供',
+      views: { matrix: '矩阵', list: '列表', json: 'JSON' },
+      model: '模型', rest: '其余模型', restHint: '没有单独列出的全部模型',
+      groupOwn: '本平台（{platforms}）', groupCross: '协议转换（默认不提供）',
+      default: '默认', followsRest: '跟随其余模型', reset: '恢复默认', resetAll: '全部恢复默认',
+      selectAll: '选择全部模型', selectModel: '选择 {model}', cell: '{model} · {protocol}',
+      selected: '已选 {n} 个模型', assign: '指定协议：', apply: '应用到选中的模型', clearSelection: '取消选择',
+      conversionChip: '{name} · 转换',
+      legendDefault: '浅色 = 默认：不限定，按客户的协议原样转发，不做协议转换', legendExplicit: '深色 = 已指定：只在勾选的协议下提供',
+      legendFollowsRest: '浅色 = 未单独指定：跟随“其余模型”一行，只在它勾选的协议下提供',
+      empty: '没有限定：所有模型在账号开放的本平台协议下提供，不做协议转换。',
+      models: '模型', protocols: '提供的协议', removeEntry: '删除这一组（恢复默认）',
+      add: '新增一组', addPlaceholder: '选择或输入模型，回车新建一组', addRest: '为“其余模型”指定协议',
+      jsonHint: '可直接编辑或粘贴。protocols 为 null 表示本平台协议全部开放；"*" 表示其余模型。Gemini 的流式和非流式是两个协议 id，界面上合成一列。',
+      jsonProblems: {
+        json: 'JSON 格式错误',
+        shape: '需要一个对象：protocols 为 null 或协议数组，model_protocols 为数组，每项含非空的 models 数组和 protocols 数组',
+        star: '"*" 只能单独成一条',
+        duplicate: '模型重复：{model}'
+      },
+      entryError: '第 {n} 条（{models}）：{message}'
+    },
+    issues: {
+      empty_rule: '{model}：至少选一个协议，或恢复默认。',
+      no_protocol: '账号没有开放任何协议。要停用账号请用“参与调度”开关。',
+      closed_protocol: '{model} 指定了账号未开放的协议 {protocol}，这一项不生效。',
+      unknown_protocol: '{model} 指定了此账号类型不能服务的协议 {protocol}，保存时会被拒绝。',
+      rest_conversion: '“其余模型”开了协议转换：所有没有单独列出的模型都会接受转换，上游不认识的模型名可能触发故障策略。建议只给有映射的模型开。',
+      two_hop: '{model} → {protocol}：要经过两次转换，质量较差。'
+    },
+    summary: { open: '协议 {open}/{total}', limited: '限定 {n} 个模型', converting: '转换 {n} 个', noConversion: '不转换' },
+    conversionOff: '未开启协议转换：没有模型开了转换，也没有开放需要适配的协议',
+    marks: {
+      partial: '部分 {open}/{total}', converted: '转',
+      own: '{platform}：{protocols}', ownAll: '{platform}：全部本平台协议（{protocols}）', ownNone: '{platform}：本平台协议均未开放',
+      adapted: '{name}（适配）',
+      conversion: '{platform} {protocols}（经转换）：{n} 个模型 {models}'
+    },
+    served: {
+      closed: '未开放',
+      models: '{n} 个模型：{models}', needsModel: '需在账号上为模型开启'
+    },
+    bulk: {
+      own: '本平台协议', rules: '模型的协议限定',
+      replaceHint: '替换各账号现有的设置',
+      mixedTypes: '所选账号属于不同的账号类型（或类型的插件未启用）：协议随类型而定，只能对同一类型的账号批量修改'
+    }
+  },
   headerOverride: {
     title: '请求头覆盖',
-    hint: "按请求头名设置发往上游的值，格式兼容 new-api 渠道的请求头覆盖，可直接粘贴。值可写固定文本、{'{client_header:名}'}（取客户端的值）、{'{client_header:名:追加值}'}（客户端的值后追加）、{'{unset}'}（删除）；键 * 或 regex:正则 表示透传。在请求头透传之后、请求参数覆盖之前生效。凭证、逐跳、客户端地址和网关控制头不能覆盖，不支持 {'{api_key}'}",
+    hint: "按请求头名设置发往上游的值，格式兼容 new-api 渠道的请求头覆盖，可直接粘贴。值可写固定文本、{'{client_header:名}'}（取客户端的值）、{'{client_header:名:追加值}'}（客户端的值后追加）、{'{unset}'}（删除）；键 * 或 regex:正则 表示透传。在请求头透传之后、请求参数覆盖之前生效。凭证、逐跳、客户端地址和网关控制头不能覆盖，不支持 {'{api_key}'}；插件声明为权威的请求头也不受覆盖影响：Codex 和火山引擎账号是插件设置的全部请求头，其他账号是凭证头（AWS 签名的请求还有签名覆盖的头）",
     none: '未设置',
     count: '{n} 项',
     edit: '编辑',
@@ -446,6 +510,7 @@ export default {
   credentials: '凭证',
   orphanedEdit: '该账号类型所属的插件未启用，无法编辑凭证；基本信息仍可修改。',
   formUnavailable: '无法加载插件表单。',
+  formUnavailableOld: '此插件版本的界面已不受支持，请升级插件',
   noTypes: '没有可用的账号类型，请启用声明了账号类型的插件。',
   servesEndpoints: '可服务的端点',
   endpointCount: '{n} 个端点',
@@ -456,6 +521,7 @@ export default {
   testConnection: '测试连接',
   testActualModel: '实际模型',
   testUpstream: '上游地址',
+  testProtocol: '测试协议',
   testUsage: 'Token 用量',
   testUsageInput: '输入',
   testUsageOutput: '输出',
@@ -481,7 +547,7 @@ export default {
     diagnosisOnly: '测试只做诊断：不会冷却或禁用账号；插件给出的失败原因与建议（冷却 / 禁用）仅供参考。最多同时测试 3 个模型。',
     search: '搜索模型', customPlaceholder: '添加要测试的模型 ID（可用逗号分隔多个）', add: '添加',
     fetch: '从上游获取模型', fetchHint: '用账号已保存的凭证向上游查询可用模型，加入候选列表（不修改账号）', fetchAdded: '已加入 {n} 个上游模型', fetchNothing: '上游没有返回新的模型',
-    probe: '用插件默认模型测试', probeHint: '不指定模型，由插件选择默认测试模型', probeRow: '插件默认模型',
+    probe: '用默认模型测试', probeHint: '不指定模型：账号有模型列表时用列表里第一个，只有模型映射时用映射里的一个，都没有时由插件选择默认测试模型', probeRow: '默认模型',
     selectVisible: '全选（当前 {n} 个）', selectFailed: '选中失败的', selected: '已选 {n} 个',
     noCandidates: '账号没有模型列表，插件也没有预设模型：可添加模型 ID、从上游获取，或用插件默认模型测试。', noMatch: '没有匹配的模型',
     notRun: '尚未测试', requested: '请求模型',
@@ -580,9 +646,15 @@ export default {
     refreshHint: '查询账号当前余额',
     refreshing: '正在查询',
     refreshDone: '余额已刷新',
-    refreshThrottled: '请求过于频繁，请 {n} 秒后再试',
     updatedAt: '更新于 {time}',
-    error: '查询失败：{error}'
+    unread: '未查询',
+    unlimited: '不限',
+    amountHint: '上游返回的数字与单位，原样显示，未做换算',
+    unlimitedHint: '上游报告此 Key 不限额度',
+    failed: '查询失败',
+    errorHint: '{error}（{time}）',
+    stale: '旧值',
+    staleHint: '最近一次查询失败，显示的是上次查到的余额'
   },
   scopeErrors: {
     notInScope: '账号必须绑定到你管理的分组',

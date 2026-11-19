@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"slices"
 	"strings"
 
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
@@ -46,8 +45,8 @@ func (c *call) checkReferencedModels() *gwError {
 			}
 			value := item.Get(rule.ModelPath)
 			path := location.path + "." + rule.ModelPath
-			if value.Type != gjson.String || value.Str == "" || len(value.Str) > 200 || strings.TrimSpace(value.Str) != value.Str || strings.ContainsAny(value.Str, "\r\n\x00") {
-				return invalidModelReference(path + " must be a nonempty model identifier up to 200 bytes")
+			if value.Type != gjson.String || value.Str == "" || strings.TrimSpace(value.Str) != value.Str || strings.ContainsAny(value.Str, "\r\n\x00") {
+				return invalidModelReference(path + " must be a nonempty model identifier")
 			}
 			if !c.principal.Group.AllowsModel(value.Str) {
 				return fromCore(core.ErrModelNotFound.WithDetails(map[string]any{"model": value.Str}), errTypeModelNotAllowed)
@@ -92,7 +91,7 @@ func (c *call) prepareReferencedPrices(ctx context.Context) *gwError {
 		if err != nil {
 			return fromCore(core.AsError(err), errTypePriceNotConfigured)
 		}
-		if rule != nil && (rule.VideoOnly || !c.ep.SupportsBillingType(rule.Mode)) {
+		if rule.VideoOnly || !c.ep.SupportsBillingType(rule.Mode) {
 			return invalidModelReference("referenced model " + ref.model + " has an incompatible billing type")
 		}
 		ref.priced = core.PricedUsage{Kind: ref.kind, Model: ref.model, Price: rule.Clone(),
@@ -104,27 +103,6 @@ func (c *call) prepareReferencedPrices(ctx context.Context) *gwError {
 		ref.priced.PriceParams, ref.priced.PriceHeaders = c.priceInputsFrom(rule, body)
 	}
 	return nil
-}
-
-func (c *call) servesAllModels(ref *core.AccountRef) bool {
-	if !ref.ServesModel(c.model) {
-		return false
-	}
-	if c.ep.Billing != "free" && !c.routeHasRequiredPrimaryUsage(c.route(ref)) {
-		return false
-	}
-	if c.ep.Billing != "free" && !c.routeHasRequiredAttempts(c.route(ref), c.body) {
-		return false
-	}
-	for _, extra := range c.modelRefs {
-		if !ref.ServesModel(extra.model) {
-			return false
-		}
-		if c.ep.Billing != "free" && !routeAccountsFor(c.route(ref), extra.kind) {
-			return false
-		}
-	}
-	return true
 }
 
 func (c *call) routeHasRequiredPrimaryUsage(rt *typeRoute) bool {
@@ -271,15 +249,6 @@ func (c *call) estimatedAdditional(tokens core.UsageTokens, semantics string) []
 	return out
 }
 
-func (c *call) hasReferencedPrice() bool {
-	for _, ref := range c.modelRefs {
-		if ref.priced.Price != nil {
-			return true
-		}
-	}
-	return false
-}
-
 func modelReferenceSnapshot(body []byte, rules []manifest.RequestModelReference) ([]string, error) {
 	if len(rules) == 0 {
 		return nil, nil
@@ -314,29 +283,4 @@ func modelReferenceSnapshotIn(root gjson.Result, rules []manifest.RequestModelRe
 		}
 	}
 	return refs, nil
-}
-
-func validateModelReferencePatches(before, after []byte, rules []manifest.RequestModelReference) error {
-	return modelReferencePatches(gjson.ParseBytes(before), gjson.ParseBytes(after), rules)
-}
-
-// modelReferencePatches is validateModelReferencePatches over parsed roots:
-// plugins may shape transport fields, but may not introduce a new billable
-// model invocation after authorization, account selection and price freezing.
-func modelReferencePatches(before, after gjson.Result, rules []manifest.RequestModelReference) error {
-	if len(rules) == 0 {
-		return nil // nothing is declared, so a patch cannot change a declared reference
-	}
-	want, err := modelReferenceSnapshotIn(before, rules)
-	if err != nil {
-		return err
-	}
-	got, err := modelReferenceSnapshotIn(after, rules)
-	if err != nil {
-		return err
-	}
-	if !slices.Equal(want, got) {
-		return fmt.Errorf("plugin patches cannot change admitted model references")
-	}
-	return nil
 }

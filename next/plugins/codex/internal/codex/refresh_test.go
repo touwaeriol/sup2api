@@ -51,10 +51,10 @@ func TestBuildRefreshRequest(t *testing.T) {
 func TestParseRefreshResponse(t *testing.T) {
 	h := startPlugin(t, newTestPlugin(DefaultEndpoints))
 	ctx := context.Background()
-	parse := func(acc *pluginv1.Account, st int32, body, transport string, truncated bool) *pluginv1.RefreshResult {
+	parse := func(acc *pluginv1.Account, st int32, body, transport string) *pluginv1.RefreshResult {
 		t.Helper()
 		r, err := h.Platform.ParseRefreshResponse(ctx, &pluginv1.ParseRefreshResponseRequest{
-			Account: acc, Status: st, Body: []byte(body), TransportError: transport, Truncated: truncated,
+			Account: acc, Status: st, Body: []byte(body), TransportError: transport,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -66,7 +66,7 @@ func TestParseRefreshResponse(t *testing.T) {
 	tok := idToken("me@example.com", "acct-2", "pro")
 	for _, typ := range accountTypes {
 		r := parse(account(typ, deviceCreds), 200,
-			`{"access_token":"at-new","refresh_token":"rt-new","id_token":"`+tok+`","expires_in":3600,"scope":"openid"}`, "", false)
+			`{"access_token":"at-new","refresh_token":"rt-new","id_token":"`+tok+`","expires_in":3600,"scope":"openid"}`, "")
 		if r.GetErrorType() != pluginv1.RefreshResult_ERROR_TYPE_UNSPECIFIED {
 			t.Fatalf("%s result = %v", typ, r)
 		}
@@ -81,7 +81,7 @@ func TestParseRefreshResponse(t *testing.T) {
 
 	// No rotation: expiry and account id from the access token.
 	at := fakeJWT(map[string]any{"exp": 1800009999, authClaim: map[string]any{"chatgpt_account_id": "acct-x"}})
-	r := parse(account(TypeOAuth, deviceCreds), 200, `{"access_token":"`+at+`"}`, "", false)
+	r := parse(account(TypeOAuth, deviceCreds), 200, `{"access_token":"`+at+`"}`, "")
 	var patch map[string]any
 	mustJSON(t, []byte(r.GetCredentialsPatchJson()), &patch)
 	if patch["access_token"] != at || patch["expires_at"] != float64(1800009999) || patch["chatgpt_account_id"] != "acct-x" || patch["refresh_token"] != nil {
@@ -96,28 +96,26 @@ func TestParseRefreshResponse(t *testing.T) {
 		status    int32
 		body      string
 		transport string
-		truncated bool
 		want      pluginv1.RefreshResult_ErrorType
 		msg       string
 	}{
-		{"oauth invalid_grant", TypeOAuth, 400, `{"error":"invalid_grant","error_description":"revoked"}`, "", false, rejected, "authorize the account again"},
-		{"openai refresh_token_reused", TypeDevice, 401, `{"error":{"code":"refresh_token_reused","message":"already used"}}`, "", false, rejected, "refresh_token_reused"},
-		{"refresh_token_expired", TypeDevice, 400, `{"error":{"message":"x","type":"invalid_request_error","code":"refresh_token_expired"}}`, "", false, rejected, ""},
-		{"refresh_token_invalidated", TypeOAuth, 400, `{"error":"refresh_token_invalidated"}`, "", false, rejected, ""},
-		{"invalid_refresh_token", TypeOAuth, 400, `{"error":"invalid_refresh_token"}`, "", false, rejected, ""},
-		{"token_expired", TypeOAuth, 400, `{"error":"token_expired"}`, "", false, rejected, ""},
-		{"invalid_client", TypeOAuth, 401, `{"error":"invalid_client"}`, "", false, rejected, "configuration error"},
-		{"plain 401", TypeDevice, 401, `{"detail":"nope"}`, "", false, rejected, ""},
-		{"server error", TypeDevice, 503, `upstream down`, "", false, transient, "503"},
-		{"rate limited", TypeOAuth, 429, `{"error":"slow_down"}`, "", false, transient, ""},
-		{"400 other", TypeOAuth, 400, `{"error":"invalid_request"}`, "", false, transient, ""},
-		{"transport", TypeDevice, 0, ``, "dial tcp: timeout", false, transient, "timeout"},
-		{"truncated", TypeDevice, 200, `{"access_token":"x"`, "", true, transient, "too large"},
-		{"unreadable", TypeDevice, 200, `not json`, "", false, transient, "unreadable"},
-		{"no access token", TypeDevice, 200, `{"refresh_token":"r"}`, "", false, transient, "no access_token"},
+		{"oauth invalid_grant", TypeOAuth, 400, `{"error":"invalid_grant","error_description":"revoked"}`, "", rejected, "authorize the account again"},
+		{"openai refresh_token_reused", TypeDevice, 401, `{"error":{"code":"refresh_token_reused","message":"already used"}}`, "", rejected, "refresh_token_reused"},
+		{"refresh_token_expired", TypeDevice, 400, `{"error":{"message":"x","type":"invalid_request_error","code":"refresh_token_expired"}}`, "", rejected, ""},
+		{"refresh_token_invalidated", TypeOAuth, 400, `{"error":"refresh_token_invalidated"}`, "", rejected, ""},
+		{"invalid_refresh_token", TypeOAuth, 400, `{"error":"invalid_refresh_token"}`, "", rejected, ""},
+		{"token_expired", TypeOAuth, 400, `{"error":"token_expired"}`, "", rejected, ""},
+		{"invalid_client", TypeOAuth, 401, `{"error":"invalid_client"}`, "", rejected, "configuration error"},
+		{"plain 401", TypeDevice, 401, `{"detail":"nope"}`, "", rejected, ""},
+		{"server error", TypeDevice, 503, `upstream down`, "", transient, "503"},
+		{"rate limited", TypeOAuth, 429, `{"error":"slow_down"}`, "", transient, ""},
+		{"400 other", TypeOAuth, 400, `{"error":"invalid_request"}`, "", transient, ""},
+		{"transport", TypeDevice, 0, ``, "dial tcp: timeout", transient, "timeout"},
+		{"unreadable", TypeDevice, 200, `not json`, "", transient, "unreadable"},
+		{"no access token", TypeDevice, 200, `{"refresh_token":"r"}`, "", transient, "no access_token"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			r := parse(account(tc.typ, deviceCreds), tc.status, tc.body, tc.transport, tc.truncated)
+			r := parse(account(tc.typ, deviceCreds), tc.status, tc.body, tc.transport)
 			if r.GetErrorType() != tc.want || r.GetCredentialsPatchJson() != "" || !strings.Contains(r.GetErrorMessage(), tc.msg) {
 				t.Fatalf("result = %v, want %v containing %q", r, tc.want, tc.msg)
 			}

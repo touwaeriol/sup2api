@@ -4,9 +4,9 @@
 // passthrough, a header override and a model mapping and needs a proxy; and an editor section
 // (account.editor.section) whose native component edits a value of its own
 // with the host's HeaderPassthroughEditor (host.components, UI 3.7). Its
-// credential form also picks entities with the console's schema widgets
-// (docs/COMMON-CONTROLS.md §6): `entity-select` (one user, up to three
-// groups) and `proxy-select`.
+// native credential form also picks entities with the host's pickers
+// (docs/COMMON-CONTROLS.md §6): EntityPicker (one user), EntityMultiPicker
+// (up to three groups) and ProxyPicker.
 
 export const controlsAccountTypes = [
   {
@@ -18,7 +18,7 @@ export const controlsAccountTypes = [
     type: 'apikey',
     label: { en: 'API Key (declared controls)', zh: 'API Key（声明通用配置）' },
     description: { en: 'Hides, locks and prefills core fields through commonControls', zh: '通过 commonControls 隐藏、锁定、预填核心字段' },
-    form: { mode: 'schema' },
+    form: { mode: 'native', component: 'ControlsDemoForm' },
     sensitive_fields: ['api_key'],
     supports: ['openai'],
     default_limits: { weight: 3, tpm_limit: 100000 },
@@ -34,25 +34,6 @@ export const controlsAccountTypes = [
     }
   }
 ]
-
-export const controlsForm = {
-  schema: {
-    type: 'object',
-    required: ['api_key'],
-    properties: {
-      api_key: { type: 'string', title: 'API Key', writeOnly: true },
-      billing_user_id: { type: ['integer', 'null'] },
-      fallback_group_ids: { type: 'array', items: { type: 'integer' }, maxItems: 3 },
-      probe_proxy_id: { type: ['integer', 'null'] }
-    }
-  },
-  ui_schema: {
-    api_key: { 'ui:widget': 'secret' },
-    billing_user_id: { 'ui:widget': 'entity-select', 'ui:options': { kind: 'user' }, 'ui:title': { en: 'Billed user', zh: '计费用户' }, 'ui:help': { en: 'Usage of this account is billed to this user', zh: '该账号的用量记到这个用户名下' } },
-    fallback_group_ids: { 'ui:widget': 'entity-select', 'ui:options': { kind: 'group', max: 3 }, 'ui:title': { en: 'Fallback groups', zh: '备用分组' }, 'ui:help': { en: 'Up to three', zh: '最多三个' } },
-    probe_proxy_id: { 'ui:widget': 'proxy-select', 'ui:title': { en: 'Probe proxy', zh: '探测代理' } }
-  }
-}
 
 export const controlsUIPlugin = {
   key: 'controls_demo',
@@ -72,13 +53,33 @@ export const controlsUIPlugin = {
   ],
   native_entry: 'ui/native/entry.js',
   trust: 'official',
-  host_ui_compat: '^3.7'
+  host_ui_compat: '^4.0'
 }
 
-// A hand-written native entry (no build step): the section keeps its value in memory.
+// A hand-written native entry (no build step): the section keeps its value in
+// memory; the credential form stores the picked ids as numbers.
 const ENTRY = `
 import { defineComponent, h, ref } from 'vue'
+import { nativeAccountFormProps, SCredentialForm, SField, SSecretInput, useCredentialForm } from '@sub2api/ui'
 export function register(host) {
+  const { EntityPicker, EntityMultiPicker, ProxyPicker } = host.components
+  host.registerComponent('ControlsDemoForm', defineComponent({
+    props: nativeAccountFormProps,
+    emits: ['update:modelValue'],
+    setup(props, { emit, expose }) {
+      const form = useCredentialForm(props, emit, { rules: { api_key: { required: true } } })
+      expose({ validate: form.validate })
+      const num = (id) => (id ? Number(id) : null)
+      return () => h(SCredentialForm, { form }, () => [
+        h(SField, { prop: 'api_key', label: 'API Key' }, () => h(SSecretInput, form.bind('api_key'))),
+        h(SField, { prop: 'billing_user_id', label: 'Billed user', hint: 'Usage of this account is billed to this user' }, () =>
+          h(EntityPicker, { kind: 'user', id: String(form.get('billing_user_id') ?? ''), 'onUpdate:id': (id) => form.set('billing_user_id', num(id)) })),
+        h(SField, { prop: 'fallback_group_ids', label: 'Fallback groups', hint: 'Up to three' }, () =>
+          h(EntityMultiPicker, { kind: 'group', max: 3, ids: (form.get('fallback_group_ids') ?? []).map(String), 'onUpdate:ids': (ids) => form.set('fallback_group_ids', ids.map(Number)) })),
+        h(SField, { prop: 'probe_proxy_id', label: 'Probe proxy' }, () => h(ProxyPicker, form.bind('probe_proxy_id')))
+      ])
+    }
+  }))
   host.registerComponent('ControlsDemoSection', defineComponent({
     props: { account: Object, accountType: Object, readonly: Boolean },
     setup(props) {

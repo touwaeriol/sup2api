@@ -24,9 +24,9 @@
 | `next/plugins/*` | 官方插件，每个是独立 Go 模块；`plugins/released.json` 记录线上版本 |
 | `next/tools/sub2api-plugin` | 插件 CLI：keygen、build、pack、sign、verify、index、`db diff/check`、`dev` |
 | `next/web` | 控制台（Vue 3 + Vite + TS + Pinia + Tailwind），`packages/` 下是共享给插件的 `@sub2api/ui`、`@sub2api/host`、`@sub2api/vite-preset` |
-| `next/deploy` | 镜像构建脚本、网关托管部署（`gateway/`）、单机栈（`single/`）、e2e 栈、单向发布进行中的发布与回退手册（`rollback/`，发布完成、不能再回退后删除，现在没有） |
+| `next/deploy` | 镜像构建脚本、网关托管部署（`gateway/`）、单机栈（`single/`）、e2e 栈、单向发布进行中的发布与回退手册（`rollback/`，发布完成、不能再回退后删除；现在有协议绑定的升级手册 `protocol-binding-release.md` 和它的只读查询 `protocol-binding-conversions.sql`） |
 | `next/e2e` | 验收测试，需要部署好的栈；CI 只编译不运行 |
-| `next/protocol-codec` | 早期为 ccgateway 引入的协议转换库。`next/` 里没有模块 import 它，next CI 也不检查；但根目录旧版 `backend/` 经 `replace` 依赖它（根目录 `Dockerfile` 也复制它），所以暂不能删（CONVERT-MATRIX.md 开头）。不要在新代码里引用 |
+| `next/protocol-codec` | 早期为 ccgateway 引入的协议转换库。`next/` 里没有模块 import 它（next CI 仍按普通模块检查它）；但根目录旧版 `backend/` 经 `replace` 依赖它（根目录 `Dockerfile` 也复制它），所以暂不能删（CONVERT-MATRIX.md 开头）。不要在新代码里引用 |
 | `next/docs` | 契约、架构、设计稿、交接、审计记录 |
 
 CCGateway 插件（Claude Code 托管账号、它的 companions 与 `cli-reverse`、核心里的 `internal/ccgateway` 和只为它服务的 helper history、provider resources、fallback credits）已在 0.1.290 删除，只留在 Git 历史里：最后的源码是 `317b0c331`（`git show 317b0c331:next/plugins/ccgateway/manifest.json`）。迁移 0102 删掉了它的表和插件行（CONTRACTS §101.5）。
@@ -48,7 +48,7 @@ CCGateway 插件（Claude Code 托管账号、它的 companions 与 `cli-reverse
 ### 数据库：PostgreSQL 16 + GORM
 
 - 驱动是 pgx v5 的 `stdlib`，连接池是 `database/sql`，GORM 跑在上面。连接由 `runtime-contract/gormpg` 一处打开，核心、网关、插件 SDK 共用；连接池大小只由环境变量（核心 `SUB2API_PG_MAX_CONNS`、网关 `SUB2API_GATEWAY_POOL_MAX_CONNS`）或默认值决定，DSN 里不写 `pool_*` 参数。PostgreSQL 错误的 SQLSTATE、约束名也只经 `gormpg`（核心经 `store` 的同名函数）读取。
-- **表结构只以 SQL 迁移为准**：核心迁移在 `server/internal/migrations/NNNN_*.sql`（目前到 0104），已应用的文件不许再改。核心的 GORM 模型由迁移生成（`store/modelgen`，加或改迁移后在 `next/server` 下跑 `go run ./cmd/gen-models`），生成的 `internal/store/model` 不手改。运行时不跑 AutoMigrate。
+- **表结构只以 SQL 迁移为准**：核心迁移在 `server/internal/migrations/NNNN_*.sql`（目前到 0118），已应用的文件不许再改。核心的 GORM 模型由迁移生成（`store/modelgen`，加或改迁移后在 `next/server` 下跑 `go run ./cmd/gen-models`），生成的 `internal/store/model` 不手改。运行时不跑 AutoMigrate。
 - **只用 GORM 的模型和查询构造器写语句**（`Create`、`Updates`、`Where`、`clause.OnConflict`、`clause.Returning`、`store.ForUpdate()` 等；子查询和 `UNION ALL` 用 `(?)` 组合）。整条手写的 SQL 只允许出现在允许列表登记过的地方：账本的 4 条 data-modifying CTE（`billing` 的 precharge、apply、release、settle）、`store` 里非数据语句的小助手（事务级 advisory 锁、`SetLocal`、`ClockTimestamp` 等）、`DDL`、迁移执行器、`modelgen`，以及 `gormpg` 的薄组合器（`Exists`、`InsertSelect`、`NextIDs`、`RelationExists`、`TryXactLock`）。
 - 交给 GORM 的 SQL 文本必须由常量构成，**值只走 `?` 参数**；运行时选的列名经固定白名单变成 `clause.Column`/`clause.OrderByColumn`。
 - 这些规则由源码检查强制执行，检查器是 `runtime-contract/gormpg/sqlcheck`，各模块只保留自己的允许列表：核心是 `server/internal/store/gormguard`（`[raw-sql]`、`[sql-const]`、`[tx-lock]`、`[gorm-tx]`、`[pgx-import]`、`[casbin-api]` 等，说明见 `gormguard/doc.go`，允许列表在 `rawsql_test.go`），网关是 `gateway/internal/sqlguard`，SDK 与插件是 `sdk/pgdb` 的 `TestNoRawSQL`、`TestNoPgxImports`。允许列表里没有命中的条目也算失败。
@@ -76,12 +76,14 @@ CCGateway 插件（Claude Code 托管账号、它的 companions 与 `cli-reverse
 
 ### 插件系统（ARCHITECTURE §5，CONTRACTS §26、§36）
 
-- 插件是独立进程，经 hashicorp/go-plugin + gRPC（本机 unix socket）与核心通信；只有 `plugin/grpcruntime` 直接用 go-plugin。Linux 上有 seccomp、rlimit、内存看门狗和出口隧道（插件的对外连接经核心转发）。
-- 插件包：`manifest.json`、`migrations/*.sql`、`forms/`、`i18n/`、`assets/`、`ui/`（schema、iframe 或原生微前端）。包用 Ed25519 签名，市场索引是签名的静态 JSON。
-- 每个插件有自己的 schema `plg_<key>`，有权限时还有同名的受限数据库角色。插件迁移由核心执行一次，脚本必须幂等、对旧版本向后兼容；各节点独立切换版本（CONTRACTS §36）。插件的 GORM 模型放在 `internal/model`，`sub2api-plugin db check` 对照迁移检查，`pack` 会自动执行。
-- 平台插件必须遵守全部系统设置：每项设置在普通转发、插件执行、WebSocket 三条路径上由谁生效、插件要配合什么，见 `next/docs/PLUGIN-DEVELOPMENT.md`，改动相关行为时同步它。
+- 插件是独立进程，经 hashicorp/go-plugin + gRPC（本机 unix socket）与核心通信；只有 `plugin/grpcruntime` 直接用 go-plugin。Linux 上有 Landlock（默认开启：插件不申请 `fs.data` 就读写不了文件，CONTRACTS §43.8）、seccomp、rlimit、内存看门狗（只在管理员给插件设了内存上限或节点封顶时生效，默认不限，CONTRACTS §111.5）和出口隧道（插件的对外连接经核心转发）。
+- 插件包：`manifest.json`、`migrations/*.sql`、`i18n/`、`assets/`、`ui/`（`ui/iframe/` 沙箱页面或 `ui/native/` 原生微前端）。插件界面只用代码写：没有声明式的 schema 表单与表格页，也没有 `forms/`；账号凭证与插件设置只由插件的 `ValidateCredentials`、`ValidateSettings` 把关，设置的密钥在清单 `ui.settings.secrets` 里声明（CONTRACTS §23、§75.1）。包用 Ed25519 签名，市场索引是签名的静态 JSON。
+- 每个插件有自己的 schema `plg_<key>`，插件用核心的数据库用户访问它（没有插件专用的数据库角色，`search_path` 不是边界，CONTRACTS §115）。插件迁移由核心执行一次，脚本必须幂等、对旧版本向后兼容；各节点独立切换版本（CONTRACTS §36）。插件的 GORM 模型放在 `internal/model`，`sub2api-plugin db check` 对照迁移检查，`pack` 会自动执行。
+- 一次请求上的超时和大小上限只有管理员配置的（请求体上限、上游超时、钩子和热路径超时等），加上安全、钱算对和防止崩溃的检查；不要在请求路径上加写死的超时、大小或次数上限（所有者决定，完整列表见 CONTRACTS §112.16）。
+- 平台插件（声明账号类型的插件）都是有进程的代码插件，没有只有清单的插件。每个网关请求只有一条路径（CONTRACTS §112）：核心做完协议转换和运营方的改写，把完整请求体交给账号类型插件的 `PlatformService.Execute`；插件构造最终请求，经 `HostService.RelayUpstream` 交给核心的 HTTP 客户端发出（插件不开套接字，账号代理、SSRF、超时、运营方的请求头设置由核心强制；插件随 `Account` 收到账号的凭证和代理详情，但代理只是数据，不得用于自行联网，CONTRACTS §124）；用量与任务事实只在 `Execute` / `Monitor` 的返回值里。插件写法、`sdk/pluginsdk/standard` 库、`jsonedit`、一致性套件见 `next/docs/PLUGIN-DEVELOPMENT.md`。
+- 平台插件必须遵守全部系统设置：每项设置在 HTTP 与 WebSocket 两种传输上由谁生效、插件要配合什么，见 `next/docs/PLUGIN-DEVELOPMENT.md` 第 5 节，改动相关行为时同步它。
 - 内置插件随核心升级（CONTRACTS §37）。**插件内容变了必须升版本号**：`tools/sub2api-plugin` 的 `TestReleasedPluginsBumped` 对照 `next/plugins/released.json`，内容变了而版本没升就失败；每次发布后按该测试的说明重写这个文件。
-- Host API 版本在 `runtime-contract.HostAPIVersion` 与 `sdk/protocol.HostAPIVersion`，两者必须相等。
+- Host API 版本在 `runtime-contract.HostAPIVersion`（现为 10），`sdk/protocol.HostAPIVersion` 就定义为它。插件线协议是 `sdk/protocol.ProtocolVersion`（现为 2）：改了不兼容的插件契约就升它，旧插件包在握手和清单检查时以同一条信息被拒绝（CONTRACTS §112.10）。
 
 ### 网关与托管升级（CONTRACTS §33、§34、§39、§82、§102）
 
@@ -92,7 +94,7 @@ CCGateway 插件（Claude Code 托管账号、它的 companions 与 `cli-reverse
 ### 前端（`next/web`）
 
 - 控制台构建产物输出到 `server/web/dist`，由核心用 `embed` 嵌入。`server/web/dist/index.html` 是被跟踪的占位文件，本地 `npm run build` 会覆盖它，**提交前 `git checkout` 还原**。
-- 插件的原生界面在各插件的 `ui/native/`，依赖 `@sub2api/ui`、`@sub2api/host`。改这三个包的公开接口要同步升级它们的版本（目前 3.19）和 CONTRACTS §23。
+- 插件的原生界面在各插件的 `ui/native/`，依赖 `@sub2api/ui`、`@sub2api/host`。改这三个包的公开接口要同步升级它们的版本（目前 4.0.0，`HOST_UI_VERSION`；带原生界面的插件声明 `hostUICompat: "^4.0"`）和 CONTRACTS §23、`web/packages/ui/README.md`。表单用 `@sub2api/ui` 的 `useForm`/`SForm`、`createApiKeyForm`、`usePluginSettings` 等写成代码，测试辅助在 `@sub2api/ui/testing`（只能在 spec 里引用）。
 - 插件 UI 与控制台的写法约定见 CONTRACTS §23.4：用 `@sub2api/ui` 组件，不用控制台全局类和 Tailwind 工具类，颜色只用契约里的 8 个 CSS 变量，操作按钮写文字，私有样式以插件 key 为前缀，接口走 `host.api` / `host.pluginApi`（原始字节类请求用 `fetchWithSession`）。
 
 ## 开发规则
@@ -149,9 +151,11 @@ cd next/tools/sub2api-plugin && go test -count=1 ./...   # 含 TestReleasedPlugi
 cd next/plugins/<name> && go test -count=1 ./...
 ```
 
+- 平台插件的测试里调一致性套件 `sdk/pluginsdk/pluginsdktest/conformance`（`conformance.Run`）；它在运行期间替换进程的默认传输和解析器，不要和用网络的测试并行。用 `standard` 库写的插件另跑黄金样例（`sdk/pluginsdk/standard/goldentest`）。
+
 - 插件打包：`sub2api-plugin pack` 默认先跑 `db check`（需要 PostgreSQL，规则同上）。
-- 重新生成 proto：`cd next/sdk && buf generate`。
-- e2e 不在 CI 里运行，需要专用的 e2e 栈，见 `next/deploy/e2e/README.md`。
+- 重新生成 proto：`cd next/sdk && buf generate`（buf 1.47.2、protoc-gen-go v1.31.0、protoc-gen-go-grpc v1.2.0）。
+- e2e 不在 CI 里运行，需要专用的 e2e 栈，见 `next/deploy/e2e/README.md`（建 `.env`、构建镜像、`up -d --wait` 之后在仓库根执行 `sh next/deploy/e2e/test.sh`；只跑几个用例时加 `-run '^TestAC(30|36)'`）。整套约 27 分钟，脚本默认 `-timeout=150m`（直接 `go test` 时自己带上）。AC30–AC36 是转发 V2 的用例（十二个平台插件经 `Execute`、运营方设置、换号与未上报、旧契约被拒、Responses WebSocket、请求体上限、官方 OpenAI / Anthropic Go SDK 作客户端），AC37 是插件联网，AC38 是 codex 授权经账号表单的代理（代理票据），AC39 是账号余额，AC40 是 OpenAI 生图，AC41 是 Responses 生图工具的 token 计入请求模型，AC42 是 Codex 账号经核心转换服务 OpenAI 生图，AC43 是插件账号上下文（`GetAccount` 的审计、账号请求经账号代理、带旧账号授权的包被拒）。mock 按客户端请求的主机名（SNI）用自建 CA 现签证书，厂商主机名只写在 e2e `compose.yml` 的网络别名里。
 
 ### 控制台（`next/web`，Node 24，npm）
 
@@ -164,7 +168,9 @@ npm run lint        # eslint .
 npm run build       # 产物写到 server/web/dist，提交前还原 index.html
 ```
 
-CI 只跑 `npm ci`、`typecheck`、`test`；`lint` 本地也要跑。插件的原生界面在 `plugins/<name>/ui/native` 下各自 `npm ci && npm run build`。
+CI 只跑 `npm ci`、`typecheck`、`test`；`lint` 本地也要跑。
+
+插件的原生界面（`plugins/<name>/ui/native`，每个是独立的 npm 工程，脚本统一为 `typecheck`、`test`、`build`，三个都用控制台 `next/web/node_modules` 里的 vite、vue-tsc、vitest，配置继承 `web/packages/vite-preset` 的 `tsconfig.plugin.json`、`vite.plugin.config.js`；本仓库的工程没有自己的依赖和 lockfile）：先在 `next/web` 下 `npm ci`，再在仓库根执行 `sh .github/next-ci/next-check-plugin-ui.sh`（不带参数检查全部工程，也可以只传一个目录），它对每个工程跑 `typecheck`、`test`、`build`（工程有自己的 `package-lock.json` 时先 `npm ci`），任何一个工程的任何一步失败都以非零退出，CI 的 `plugin UIs` 任务就是它。镜像构建和发布打包要求每个声明了 native 界面的插件都有 `ui/native/dist/entry.js`，缺了直接失败，先跑 `deploy/docker/build-ui.sh`。
 
 ## Git 流程
 
@@ -177,10 +183,10 @@ CI 只跑 `npm ci`、`typecheck`、`test`；`lint` 本地也要跑。插件的�
 
 ## 读代码从哪里开始
 
-- 契约与构建规则：`next/docs/CONTRACTS.md` §1–§3；最近的大改动：§99（Casbin）、§100（会话）、§2 的“核心的 SQL”“插件数据库”。
+- 契约与构建规则：`next/docs/CONTRACTS.md` §1–§3；最近的大改动：§112（平台插件转发 V2）、§113（插件联网）、§114（插件包不依赖主节点）、§115（插件数据库只用核心的用户）、§116（删除 Claude OAuth）、§117（代理票据）、§118（OpenAI 生图）、§119（上游插件 newapi、sub2api、typesafe）、§124（插件按归属收到账号的全部信息）、§125（删除 growth）、§126（迁移 0118 清理火山引擎陈旧键）、§127（密钥与基础地址）、§23 与 §75（插件界面只用代码写、界面包 4.0）、§52（账号余额）、§111（请求体上限、插件内存）、§110（协议绑定）、§99（Casbin）、§100（会话）、§2 的“核心的 SQL”“插件数据库”。
 - 架构与数据模型：`next/docs/ARCHITECTURE.md` §2–§5、§13、§16。
 - 最近发生了什么：`CHANGELOG.md` 的“未发布”与最新几节。
 - 组装入口：`next/server/cmd/sub2api/main.go`、`next/server/internal/app`。
-- 插件开发：`next/sdk/pluginsdk/doc.go`、`next/plugins/guard`（演示插件）、CONTRACTS §26、§47.2。
+- 插件开发：`next/docs/PLUGIN-DEVELOPMENT.md`（平台插件）、`next/sdk/pluginsdk/doc.go`、`next/sdk/pluginsdk/standard/README.md`、`next/plugins/guard`（演示插件）、CONTRACTS §26、§47.2、§112。
 - 多节点与升级：`next/docs/MULTINODE-SYNC-PROTOCOL.md`、`next/docs/GATEWAY-MANAGED-UPDATES.md`、`next/deploy/gateway/README.md`。
 - 交接与审计记录（`HANDOVER*.md`、`HANDOFF-*.md`、`audits/`）是当时的快照，不能代替当前状态。

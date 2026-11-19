@@ -128,10 +128,6 @@ func (e *env) user(email string) int64 {
 	return id
 }
 
-func (e *env) plugin(key string) {
-	e.exec(`INSERT INTO plugins (key, name, status) VALUES ($1, '{"en":"x"}', 'enabled')`, key)
-}
-
 // call performs a request as user uid and decodes the JSON response.
 func (e *env) call(uid int64, method, path string, body any, headers ...string) (int, map[string]any) {
 	e.t.Helper()

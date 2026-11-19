@@ -71,6 +71,61 @@ func (s *Service) BuiltinsCommitted(ctx context.Context, want map[string]Builtin
 	return s.builtinsReady(ctx, want, nil, false)
 }
 
+// BuiltinsInstalled reports that EnsureBuiltin has nothing left to do: for
+// every bundled plugin it would neither upload, approve, enable nor upgrade
+// anything. Per plugin, by what EnsureBuiltin does with it:
+//   - no built-in row, or the bundled version not stored and approved: it
+//     uploads and approves it, so not installed;
+//   - installed and never enabled, not install-only: it enables it, so not
+//     installed;
+//   - enabled below the bundled version: it upgrades it, so not installed;
+//   - enabling or upgrading: a rollout is open and EnsureBuiltin leaves the
+//     plugin to it (Rollout.Current), so installed, whether the rollout was
+//     started by an operator or by EnsureBuiltin itself;
+//   - disabled (also while an uninstall waits for the nodes), installed and
+//     install-only, enabled at or above the bundled version, awaiting
+//     consent of another version: it leaves them as they are, so installed.
+//
+// Unlike BuiltinsReady it asks nothing of the rollout's progress or of this
+// node's instances: whether a node may serve is readiness, not installation.
+func (s *Service) BuiltinsInstalled(ctx context.Context, want map[string]BuiltinRequirement) (bool, error) {
+	g := store.G(ctx, s.d.DB.Gorm)
+	for key, need := range want {
+		var status string
+		var active *string
+		var approved, activeApproved, localApproved bool
+		err := builtinState(g, key, need.Version.Original(), "").
+			Row().Scan(&status, &active, &approved, &activeApproved, &localApproved)
+		if store.IsNoRows(err) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		if !approved {
+			return false, nil
+		}
+		switch status {
+		case StatusInstalled:
+			if active == nil && !need.InstallOnly {
+				return false, nil
+			}
+		case StatusEnabled:
+			if active == nil {
+				continue
+			}
+			v, err := semver.NewVersion(*active)
+			if err != nil {
+				return false, fmt.Errorf("builtin %s active version: %w", key, err)
+			}
+			if v.LessThan(need.Version) {
+				return false, nil
+			}
+		}
+	}
+	return true, nil
+}
+
 func (s *Service) builtinsReady(ctx context.Context, want map[string]BuiltinRequirement, gen core.Generation, checkLocal bool) (bool, error) {
 	g := store.G(ctx, s.d.DB.Gorm)
 	for key, need := range want {

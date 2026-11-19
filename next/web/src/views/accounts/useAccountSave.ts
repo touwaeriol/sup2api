@@ -16,6 +16,7 @@ import type { useModelEdit } from './useModelEdit'
 import { fromCards, repeatedModel, type ModelLimitCard } from './modelLimits'
 import { windowOf } from './spmWindow'
 import { sameSet } from './bulkEdit'
+import type { ProtocolEditor } from './protocols/useProtocolEdit'
 
 /** Field error codes of a save worded by the console: a restricted caller's account out of its groups (CONTRACTS §21). */
 const SCOPE_FIELD_CODES = { not_in_scope: 'accounts.scopeErrors.notInScope' }
@@ -64,6 +65,8 @@ export interface AccountSaveDeps {
   activeSection: Ref<EditorSection>
   /** The model list / mapping editor (useModelEdit). */
   models: ModelEditor
+  /** The protocol cards (useProtocolEdit): `protocols` and `model_protocols`. */
+  protocols: ProtocolEditor
   /** The global auto-disable switch (null while it loads). */
   autoDisableEnabled: Ref<boolean | null>
   /** The proxy_url to send instead of proxy_id ('' sends proxy_id). */
@@ -99,7 +102,7 @@ export function useAccountSave(deps: AccountSaveDeps) {
       return 'native'
     }
     if (!basic.name.trim()) {
-      errors.value = { name: t('ui.schema.v.required') }
+      errors.value = { name: t('ui.form.v.required') }
       return 'connection'
     }
     if (control('proxy').required && basic.proxy_id == null && !proxyUrlToSend.value) {
@@ -114,7 +117,9 @@ export function useAccountSave(deps: AccountSaveDeps) {
     }
     if (deps.usageLimit?.invalid()) return 'scheduling'
     // Pending text-mode edits are committed (and validated) before saving.
-    return models.commitPending() ? null : 'models'
+    if (!models.commitPending() || !deps.protocols.commitPending()) return 'models'
+    // A rule without protocols, an account serving nothing: shown in the protocol cards.
+    return deps.protocols.issues.value.some(i => i.level === 'error') ? 'models' : null
   }
 
   function requestBody(creds: Record<string, unknown>): Record<string, unknown> {
@@ -142,7 +147,8 @@ export function useAccountSave(deps: AccountSaveDeps) {
     // Exactly one of proxy_id / proxy_url (CONTRACTS §21.4: both is a conflict).
     if (proxyUrlToSend.value) body.proxy_url = proxyUrlToSend.value
     else body.proxy_id = basic.proxy_id
-    if (accountType.value && !account.value?.orphaned) body.credentials = creds
+    // The credentials and the protocols depend on the account type: an account whose type is gone keeps what it has.
+    if (accountType.value && !account.value?.orphaned) Object.assign(body, { credentials: creds }, deps.protocols.binding())
     // Fields the type fixes are left to the server (docs/COMMON-CONTROLS.md §1).
     return withoutFixed(body, accountType.value)
   }

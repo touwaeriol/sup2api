@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -437,5 +438,312 @@ func TestUpstreamAddrStripsCredentials(t *testing.T) {
 		if got := upstreamAddr(u); got != tc.want {
 			t.Fatalf("%s: got %s want %s", tc.in, got, tc.want)
 		}
+	}
+}
+
+// TestAccountTestDefaultModel checks the model of a test that names none:
+// the account's own list first, then its mapping, the plugin's default only
+// when the account lists neither.
+func TestAccountTestDefaultModel(t *testing.T) {
+	e := setup(t)
+	up := testUpstream(t)
+	e.plat.testURL = up.URL + "/v1/messages"
+	id := e.mkAccount("sk-good-key-123")
+	asked := func() string {
+		t.Helper()
+		e.plat.mu.Lock()
+		e.plat.tests = nil
+		e.plat.mu.Unlock()
+		if code, raw := e.doRaw(e.uid, "POST", fmt.Sprintf("/accounts/%d/test", id), nil); code != 200 ||
+			gjson.GetBytes(raw, "data.requested_model").String() != "" {
+			t.Fatalf("test: %d %s", code, raw)
+		}
+		e.plat.mu.Lock()
+		defer e.plat.mu.Unlock()
+		return e.plat.tests[len(e.plat.tests)-1].GetModel()
+	}
+	patch := func(body map[string]any) {
+		t.Helper()
+		if code, out := e.do("PATCH", fmt.Sprintf("/accounts/%d", id), body); code != 200 {
+			t.Fatalf("patch: %d %v", code, out)
+		}
+	}
+	if got := asked(); got != "" {
+		t.Fatalf("no list: plugin default expected, got %q", got)
+	}
+	patch(map[string]any{"model_mapping": map[string]string{"claude-z": "up-z", "claude-b": "up-b"}})
+	if got := asked(); got != "up-b" {
+		t.Fatalf("mapping only: %q", got)
+	}
+	patch(map[string]any{"models": []string{"claude-sonnet-4-5", "claude-b"}})
+	if got := asked(); got != "claude-sonnet-4-5" {
+		t.Fatalf("model list: %q", got)
+	}
+}
+
+// A test is offered the protocols the account serves natively on its own
+// platforms, most preferred first and without WebSocket and token-counting
+// protocols; its protocol binding and, for the tested model, its model
+// protocols narrow them. A failed test is classified under the protocol
+// the plugin used.
+func TestAccountTestProtocols(t *testing.T) {
+	e := setup(t)
+	at := &e.gen.types[0]
+	at.Type.Platforms = []manifest.AccountPlatform{{Platform: "anthropic"}, {Platform: "openai"}}
+	openai := &e.gen.plats[1].Platform
+	ws := ep("GET", "/v1/responses", "openai.responses_ws", "usage")
+	ws.Kind = manifest.EndpointKindWebSocket
+	openai.Endpoints = append(openai.Endpoints, ws)
+	e.plat.usageProtocol = "openai.chat"
+	e.plat.classify = &pluginv1.ClassifyErrorResponse{Reason: "rejected"}
+	id := e.mkAccount("sk-wrong-key-1")
+	offered := func(model string) string {
+		t.Helper()
+		if code, raw := e.doRaw(e.uid, "POST", fmt.Sprintf("/accounts/%d/test", id), map[string]any{"model": model}); code != 200 ||
+			gjson.GetBytes(raw, "data.ok").Bool() {
+			t.Fatalf("test: %d %s", code, raw)
+		}
+		e.plat.mu.Lock()
+		defer e.plat.mu.Unlock()
+		return strings.Join(e.plat.tests[len(e.plat.tests)-1].GetProtocols(), ",")
+	}
+	patch := func(body map[string]any) {
+		t.Helper()
+		if code, out := e.do("PATCH", fmt.Sprintf("/accounts/%d", id), body); code != 200 {
+			t.Fatalf("patch: %d %v", code, out)
+		}
+	}
+	if got := offered(""); got != "anthropic.messages,openai.chat,openai.embeddings" {
+		t.Fatalf("default: %s", got)
+	}
+	e.plat.mu.Lock()
+	meta := e.plat.classes[len(e.plat.classes)-1].GetMeta()
+	e.plat.mu.Unlock()
+	if meta.GetProtocol() != "openai.chat" {
+		t.Fatalf("classified under %q", meta.GetProtocol())
+	}
+	patch(map[string]any{"protocols": []string{"openai.embeddings", "openai.chat"}})
+	if got := offered(""); got != "openai.chat,openai.embeddings" {
+		t.Fatalf("bound: %s", got)
+	}
+	patch(map[string]any{"model_protocols": []map[string]any{{"models": []string{"m-embed"}, "protocols": []string{"openai.embeddings"}}}})
+	if got := offered("m-embed"); got != "openai.embeddings" {
+		t.Fatalf("model bound: %s", got)
+	}
+	if got := offered("m-other"); got != "openai.chat,openai.embeddings" {
+		t.Fatalf("other model: %s", got)
+	}
+}
+
+// An image generation (endpoint test "explicit") is only offered when the
+// console names the model, an edit ("never") not at all; a model's
+// model_protocols entry orders its protocols; a test naming no model skips
+// the models left with nothing to test and a model with nothing to test is
+// refused (CONTRACTS §122.2); the result and last_test say which
+// protocol the plugin used (CONTRACTS §122).
+func TestAccountTestProtocolsByEndpointTest(t *testing.T) {
+	e := setup(t)
+	at := &e.gen.types[0]
+	at.Type.Platforms = []manifest.AccountPlatform{{Platform: "anthropic"}, {Platform: "openai"}}
+	openai := &e.gen.plats[1].Platform
+	images := ep("POST", "/v1/images/generations", "openai.images", "usage")
+	images.Test = manifest.EndpointTestExplicit
+	edits := ep("POST", "/v1/images/edits", "openai.images_edit", "usage")
+	edits.Test = manifest.EndpointTestNever
+	openai.Endpoints = append(openai.Endpoints, images, edits)
+	e.plat.usageProtocol = "openai.images"
+	id := e.mkAccount("sk-wrong-key-1")
+	var last []byte
+	test := func(model string) (protocols, asked string) {
+		t.Helper()
+		code, raw := e.doRaw(e.uid, "POST", fmt.Sprintf("/accounts/%d/test", id), map[string]any{"model": model})
+		if code != 200 {
+			t.Fatalf("test: %d %s", code, raw)
+		}
+		last = raw
+		e.plat.mu.Lock()
+		defer e.plat.mu.Unlock()
+		tr := e.plat.tests[len(e.plat.tests)-1]
+		return strings.Join(tr.GetProtocols(), ","), tr.GetModel()
+	}
+	patch := func(body map[string]any) {
+		t.Helper()
+		if code, out := e.do("PATCH", fmt.Sprintf("/accounts/%d", id), body); code != 200 {
+			t.Fatalf("patch: %d %v", code, out)
+		}
+	}
+	if got, _ := test(""); got != "anthropic.messages,openai.chat,openai.embeddings" {
+		t.Fatalf("no model: %s", got)
+	}
+	if got, _ := test("m-any"); got != "anthropic.messages,openai.chat,openai.embeddings,openai.images" {
+		t.Fatalf("named model: %s", got)
+	}
+	if p := gjson.GetBytes(last, "data.protocol").String(); p != "openai.images" {
+		t.Fatalf("result protocol %q: %s", p, last)
+	}
+	_, detail := e.doRaw(e.uid, "GET", fmt.Sprintf("/accounts/%d", id), nil)
+	if p := gjson.GetBytes(detail, "data.last_test.protocol").String(); p != "openai.images" {
+		t.Fatalf("last_test protocol %q: %s", p, detail)
+	}
+	patch(map[string]any{"models": []string{"m-img", "m-order", "m-chat"}, "model_protocols": []map[string]any{
+		{"models": []string{"m-img"}, "protocols": []string{"openai.images", "openai.images_edit"}},
+		{"models": []string{"m-order"}, "protocols": []string{"openai.embeddings", "anthropic.messages", "openai.chat"}},
+	}})
+	if got, _ := test("m-img"); got != "openai.images" {
+		t.Fatalf("image model: %s", got)
+	}
+	if got, _ := test("m-order"); got != "openai.embeddings,anthropic.messages,openai.chat" {
+		t.Fatalf("entry order: %s", got)
+	}
+	// m-img has only an explicit protocol: the default model is the next.
+	if got, model := test(""); model != "m-order" || got != "openai.embeddings,anthropic.messages,openai.chat" {
+		t.Fatalf("default model %q: %s", model, got)
+	}
+	// A model with no protocol to test (an edit only; an image generation
+	// when the model is not named) is refused, never tested with the
+	// plugin's default request: nothing reaches the plugin.
+	refused := func(what string, body map[string]any) {
+		t.Helper()
+		e.plat.mu.Lock()
+		before := len(e.plat.tests)
+		e.plat.mu.Unlock()
+		code, raw := e.doRaw(e.uid, "POST", fmt.Sprintf("/accounts/%d/test", id), body)
+		if code != http.StatusBadRequest || gjson.GetBytes(raw, "error.code").String() != "no_testable_protocol" {
+			t.Fatalf("%s: %d %s", what, code, raw)
+		}
+		e.plat.mu.Lock()
+		after := len(e.plat.tests)
+		e.plat.mu.Unlock()
+		if after != before {
+			t.Fatalf("%s: the plugin built a test request", what)
+		}
+		_, raw = e.doRaw(e.uid, "GET", fmt.Sprintf("/accounts/%d", id), nil)
+		if last := gjson.GetBytes(raw, "data.last_test"); last.Get("ok").Bool() || last.Get("error_source").String() != "gateway" ||
+			last.Get("error_code").String() != "no_testable_protocol" {
+			t.Fatalf("%s: last test %s", what, last)
+		}
+	}
+	patch(map[string]any{"models": []string{"m-img", "m-edit"}, "model_protocols": []map[string]any{
+		{"models": []string{"m-img"}, "protocols": []string{"openai.images"}},
+		{"models": []string{"m-edit"}, "protocols": []string{"openai.images_edit"}},
+	}})
+	refused("an edit only, named", map[string]any{"model": "m-edit"})
+	refused("every model image only, none named", nil)
+}
+
+// A type serving one protocol of a platform (codex: Responses only) is
+// offered that protocol, whatever the model; the image endpoints of the
+// platform are not its own.
+func TestAccountTestProtocolsSubset(t *testing.T) {
+	e := setup(t)
+	openai := &e.gen.plats[1].Platform
+	responses := ep("POST", "/v1/responses", "openai.responses", "usage")
+	responses.ID = "responses"
+	images := ep("POST", "/v1/images/generations", "openai.images", "usage")
+	images.ID, images.Test = "images_generations", manifest.EndpointTestExplicit
+	openai.Endpoints = append(openai.Endpoints, responses, images)
+	e.gen.types[0].Type.Platforms = []manifest.AccountPlatform{{Platform: "openai", Endpoints: []string{"responses"}}}
+	id := e.mkAccount("sk-wrong-key-1")
+	for _, model := range []string{"", "gpt-5", "gpt-image-2"} {
+		if code, raw := e.doRaw(e.uid, "POST", fmt.Sprintf("/accounts/%d/test", id), map[string]any{"model": model}); code != 200 {
+			t.Fatalf("test %q: %d %s", model, code, raw)
+		}
+		e.plat.mu.Lock()
+		got := strings.Join(e.plat.tests[len(e.plat.tests)-1].GetProtocols(), ",")
+		e.plat.mu.Unlock()
+		if got != "openai.responses" {
+			t.Errorf("model %q: %s", model, got)
+		}
+	}
+}
+
+// A protocol the type serves adapted is tested after the native ones, by
+// the plugin (the test does not go through the conversion): an image
+// generation adapted to Responses is offered when the test names the
+// model (CONTRACTS §122.2).
+func TestAccountTestProtocolsAdapted(t *testing.T) {
+	e := setup(t)
+	openai := &e.gen.plats[1].Platform
+	responses := ep("POST", "/v1/responses", "openai.responses", "usage")
+	responses.ID = "responses"
+	images := ep("POST", "/v1/images/generations", "openai.images", "usage")
+	images.ID, images.Test = "images_generations", manifest.EndpointTestExplicit
+	openai.Endpoints = append(openai.Endpoints, responses, images)
+	e.gen.types[0].Type.Platforms = []manifest.AccountPlatform{{Platform: "openai", Endpoints: []string{"responses"},
+		Adapted: map[string]manifest.AdaptOptions{"images_generations": {Model: "gpt-6-luna"}}}}
+	id := e.mkAccount("sk-wrong-key-1")
+	for model, want := range map[string]string{"": "openai.responses", "gpt-image-2": "openai.responses,openai.images"} {
+		if code, raw := e.doRaw(e.uid, "POST", fmt.Sprintf("/accounts/%d/test", id), map[string]any{"model": model}); code != 200 {
+			t.Fatalf("test %q: %d %s", model, code, raw)
+		}
+		e.plat.mu.Lock()
+		got := strings.Join(e.plat.tests[len(e.plat.tests)-1].GetProtocols(), ",")
+		e.plat.mu.Unlock()
+		if got != want {
+			t.Errorf("model %q: %s, want %s", model, got, want)
+		}
+	}
+}
+
+// An account with neither models nor a mapping whose type serves only
+// protocols a test without a model may not use (an image generation, an
+// edit) is refused too: no empty protocol list goes to the plugin's
+// default test (CONTRACTS §122.2).
+func TestAccountTestNoModelsNoTestableProtocol(t *testing.T) {
+	e := setup(t)
+	openai := &e.gen.plats[1].Platform
+	images := ep("POST", "/v1/images/generations", "openai.images", "usage")
+	images.ID, images.Test = "images_generations", manifest.EndpointTestExplicit
+	edits := ep("POST", "/v1/images/edits", "openai.images_edit", "usage")
+	edits.ID, edits.Test = "images_edits", manifest.EndpointTestNever
+	openai.Endpoints = append(openai.Endpoints, images, edits)
+	e.gen.types[0].Type.Platforms = []manifest.AccountPlatform{{Platform: "openai", Endpoints: []string{"images_generations", "images_edits"}}}
+	id := e.mkAccount("sk-wrong-key-1")
+	code, raw := e.doRaw(e.uid, "POST", fmt.Sprintf("/accounts/%d/test", id), nil)
+	if code != http.StatusBadRequest || gjson.GetBytes(raw, "error.code").String() != "no_testable_protocol" {
+		t.Fatalf("test: %d %s", code, raw)
+	}
+	e.plat.mu.Lock()
+	defer e.plat.mu.Unlock()
+	if len(e.plat.tests) != 0 {
+		t.Fatalf("the plugin built a test request: %v", e.plat.tests)
+	}
+}
+
+// The test request's plugin is handed the account with the proxy the test
+// goes out through; with the proxy disabled nothing is built or sent and the
+// result says why (CONTRACTS §124).
+func TestAccountTestCarriesTheProxy(t *testing.T) {
+	e := setup(t)
+	up := testUpstream(t)
+	e.plat.testURL = up.URL + "/v1/messages"
+	id := e.mkAccount("sk-good-key-123")
+	host, port, hits := forwardProxy(t)
+	pid := e.exec1(`INSERT INTO proxies (name, protocol, host, port, username) VALUES ('p', 'http', $1, $2, 'bob') RETURNING id`, host, port)
+	if code, out := e.do("PATCH", fmt.Sprintf("/accounts/%d", id), map[string]any{"proxy_id": pid}); code != http.StatusOK {
+		t.Fatalf("set proxy: %d %v", code, out)
+	}
+	built := func() []*pluginv1.BuildTestRequestRequest {
+		e.plat.mu.Lock()
+		defer e.plat.mu.Unlock()
+		return slices.Clone(e.plat.tests)
+	}
+	code, raw := e.doRaw(e.uid, "POST", fmt.Sprintf("/accounts/%d/test", id), map[string]any{"model": "claude-x"})
+	tests := built()
+	if code != 200 || !gjson.GetBytes(raw, "data.ok").Bool() || len(tests) != 1 || hits.Load() != 1 {
+		t.Fatalf("test through the proxy: %d %s (builds %d, proxy hits %d)", code, raw, len(tests), hits.Load())
+	}
+	if p := tests[0].GetAccount().GetProxy(); p.GetId() != pid || p.GetHost() != host || int(p.GetPort()) != port || p.GetUsername() != "bob" {
+		t.Fatalf("proxy handed to the plugin: %v", p)
+	}
+
+	if _, err := e.db.SQL.ExecContext(t.Context(), `UPDATE proxies SET status = 'disabled', updated_at = clock_timestamp() WHERE id = $1`, pid); err != nil {
+		t.Fatal(err)
+	}
+	e.prx.Invalidate(pid)
+	code, raw = e.doRaw(e.uid, "POST", fmt.Sprintf("/accounts/%d/test", id), map[string]any{"model": "claude-x"})
+	d := gjson.GetBytes(raw, "data")
+	if code != 200 || d.Get("ok").Bool() || d.Get("message").String() != "proxy disabled" || len(built()) != 1 || hits.Load() != 1 {
+		t.Fatalf("test with the proxy disabled: %d %s (builds %d, proxy hits %d)", code, raw, len(built()), hits.Load())
 	}
 }

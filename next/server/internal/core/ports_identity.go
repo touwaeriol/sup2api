@@ -3,7 +3,11 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"hash/fnv"
+	"io"
+	"log/slog"
+	"net"
 	"net/http"
 	"slices"
 	"strconv"
@@ -773,6 +777,10 @@ type AccountRef struct {
 	// ConversionLossPolicy is the account's conversion loss policy (§88), ""
 	// to inherit the group's.
 	ConversionLossPolicy string
+	// ProtocolRules is the account's protocol binding (protocols and
+	// model_protocols), nil without one: ProtocolRules.Serves tells whether
+	// the account serves a model on an inbound protocol.
+	ProtocolRules *ProtocolRules
 }
 
 // ModelLimit caps the requests of a list of models on one account. The
@@ -982,13 +990,25 @@ type Account struct {
 	HeaderOverride *HeaderOverrideRules
 }
 
-func (a *Account) PluginAccount(platform string) *pluginv1.Account {
+// PluginAccount is the account as the plugin of its account type receives
+// it (CONTRACTS §124): proxy is the proxy this call's requests go out
+// through (Egress.Proxy, nil = direct), so what the plugin sees is what the
+// host uses.
+func (a *Account) PluginAccount(platform string, proxy *ProxyRef) *pluginv1.Account {
 	return &pluginv1.Account{Id: a.ID, Name: a.Name, Platform: platform, Type: a.Type, CredentialsJson: string(a.Credentials), SettingsJson: string(a.Settings), Properties: &pluginv1.AccountProperties{
 		Status: a.Status, Schedulable: a.Schedulable, AutoDisable: a.AutoDisable,
 		Priority: int32(a.Priority), Weight: int32(a.Weight), MaxConcurrency: int32(a.MaxConcurrency),
-		RpmLimit: int32(a.RPMLimit), TpmLimit: a.TPMLimit, SpmLimit: int32(a.SPMLimit), ProxyId: a.ProxyID, Models: a.Models, ModelMapping: a.ModelMapping,
+		RpmLimit: int32(a.RPMLimit), TpmLimit: a.TPMLimit, SpmLimit: int32(a.SPMLimit), Models: a.Models, ModelMapping: a.ModelMapping,
 		ModelLimits: PluginModelLimits(a.ModelLimits),
-	}}
+	}, Proxy: PluginProxy(proxy)}
+}
+
+// PluginProxy converts a proxy for the plugin protocol; nil stays nil.
+func PluginProxy(p *ProxyRef) *pluginv1.AccountProxy {
+	if p == nil {
+		return nil
+	}
+	return &pluginv1.AccountProxy{Id: p.ID, Protocol: p.Protocol, Host: p.Host, Port: int32(p.Port), Username: p.Username, Password: p.Password}
 }
 
 // PluginModelLimits converts model limits for the plugin protocol.
@@ -1013,12 +1033,35 @@ type AccountDirectory interface {
 	// whatever its status) of one of types: without one the group cannot serve
 	// the endpoint at all, which is not a passing shortage.
 	GroupHasType(ctx context.Context, groupID int64, types []AccountTypeKey) (bool, error)
+	// Resting returns the accounts of the group, of types, that Candidates
+	// leaves out for a while only: cooling down, or automatically disabled
+	// until a time that has not come. They are read from the snapshot
+	// Candidates is served from, not the database. Only a dispatch whose
+	// every candidate is closed by its protocol binding asks, to tell whether
+	// an account that serves the request will be back.
+	Resting(ctx context.Context, groupID int64, types []AccountTypeKey) ([]AccountRef, error)
 	// Unschedulable lists the accounts of the group (not deleted) that
 	// Candidates does not offer now, with why: disabled, unschedulable,
 	// automatically disabled or cooling down. Only failed dispatches ask.
+	//
+	// Resting and Unschedulable overlap (both name accounts Candidates
+	// leaves out) but answer different questions from different sources.
+	// Resting decides a dispatch: it must agree with the snapshot Candidates
+	// was served from, so it reads that snapshot, keeps the full AccountRef
+	// the gateway judges against the request, and only the accounts that
+	// come back on their own. Unschedulable explains a failed request in its
+	// record: it reads the database, every account type and every reason,
+	// and returns ids with reasons, not refs.
 	Unschedulable(ctx context.Context, groupID int64) ([]UnschedulableAccount, error)
 	// Load returns one account with decrypted credentials.
 	Load(ctx context.Context, id int64) (*Account, error)
+	// Egress is how a request on behalf of account id leaves the core: its
+	// proxy as the account stands when asked (read from the snapshot Load
+	// serves, which account:changed and a reconnected bus invalidate), never
+	// one a caller kept. Every outbound request of an existing account made
+	// outside the account service takes its client here; the service itself
+	// goes by the account row it has just read.
+	Egress(ctx context.Context, id int64) (Egress, error)
 	IsCoolingDown(ctx context.Context, id int64) (bool, error)
 	SetCooldown(ctx context.Context, id int64, until time.Time, reason string) error
 	// AutoDisable sets status=auto_disabled with a reason and emits
@@ -1048,10 +1091,52 @@ type QuotaObserver interface {
 	ObserveQuotaHeaders(accountID int64, headers []manifest.QuotaHeader, status int, h http.Header)
 }
 
+// Egress is the way out of one outbound request: the HTTP client (the
+// proxy's, or the direct one) and whether it goes through a proxy, which
+// the SSRF guard needs (netguard.CheckURLVia). Proxied is set even when the
+// proxy's client cannot be had (disabled, gone): the request then fails, it
+// never goes out directly. Proxy is the proxy the client goes through,
+// password included, from the same cache entry as Client: what a plugin is
+// shown as Account.proxy (CONTRACTS §124). It is nil for a direct
+// connection, and nil whenever the client cannot be had.
+type Egress struct {
+	Client  *http.Client
+	Proxied bool
+	Proxy   *ProxyRef
+}
+
+// ProxyRef is a proxy: its id and address, password included. ID is 0 for a
+// proxy URL an account form pasted, which is not stored.
+type ProxyRef struct {
+	ID int64
+	ProxySpec
+}
+
+// String describes the proxy without its password.
+func (r ProxyRef) String() string { return fmt.Sprintf("proxy %d %s", r.ID, r.ProxySpec) }
+
+// GoString keeps %#v from printing the password.
+func (r ProxyRef) GoString() string { return r.String() }
+
+// Format keeps every verb (%d, %x ...) from printing the password.
+func (r ProxyRef) Format(f fmt.State, _ rune) { _, _ = io.WriteString(f, r.String()) }
+
+// LogValue keeps slog from printing the password.
+func (r ProxyRef) LogValue() slog.Value {
+	return slog.GroupValue(slog.Int64("id", r.ID), slog.Any("spec", r.ProxySpec))
+}
+
+// ProxyClient is the HTTP client of a proxy and the proxy it goes through;
+// Proxy is nil for the direct client.
+type ProxyClient struct {
+	Client *http.Client
+	Proxy  *ProxyRef
+}
+
 // ProxyDirectory hands out HTTP clients per proxy (nil = direct), cached and
 // rebuilt when a proxy changes.
 type ProxyDirectory interface {
-	HTTPClient(ctx context.Context, proxyID *int64) (*http.Client, error)
+	HTTPClient(ctx context.Context, proxyID *int64) (ProxyClient, error)
 	// HTTPClientFor builds a transient client for a proxy that is not (or
 	// not yet) stored, e.g. a proxy_url given to a models/fetch request
 	// (CONTRACTS §21.4). Nothing is cached or written; the caller should
@@ -1062,13 +1147,31 @@ type ProxyDirectory interface {
 
 // ProxySpec is a parsed proxy address (proxy.ParseURL, CONTRACTS §21.4).
 // Protocol is http, https or socks5 (socks5h is normalised to socks5);
-// Host is lower-case without IPv6 brackets.
+// Host is lower-case without IPv6 brackets. String, GoString, Format and
+// LogValue leave the password out, so a logged spec never shows it.
 type ProxySpec struct {
 	Protocol string
 	Host     string
 	Port     int
 	Username string
 	Password string
+}
+
+// String describes the proxy without its password.
+func (s ProxySpec) String() string {
+	return fmt.Sprintf("%s://%s username=%q password=%t", s.Protocol, net.JoinHostPort(s.Host, strconv.Itoa(s.Port)), s.Username, s.Password != "")
+}
+
+// GoString keeps %#v from printing the password.
+func (s ProxySpec) GoString() string { return s.String() }
+
+// Format keeps every verb (%d, %x ...) from printing the password.
+func (s ProxySpec) Format(f fmt.State, _ rune) { _, _ = io.WriteString(f, s.String()) }
+
+// LogValue keeps slog from printing the password.
+func (s ProxySpec) LogValue() slog.Value {
+	return slog.GroupValue(slog.String("protocol", s.Protocol), slog.String("host", s.Host), slog.Int("port", s.Port),
+		slog.String("username", s.Username), slog.Bool("password", s.Password != ""))
 }
 
 // ProxyResolver finds or creates the proxy row matching a parsed proxy URL

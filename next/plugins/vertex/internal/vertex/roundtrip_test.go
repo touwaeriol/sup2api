@@ -19,7 +19,6 @@ import (
 	"google.golang.org/grpc/status"
 
 	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
-	"github.com/Sub2API-Devs/sup2api/next/sdk/pluginsdk"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/pluginsdk/pluginsdktest"
 )
 
@@ -120,15 +119,18 @@ func (g *fakeGoogle) model(w http.ResponseWriter, r *http.Request) {
 }
 
 // coreSend sends a request the plugin described, the way the core does, and
-// returns the status and body.
-func coreSend(t *testing.T, method, address string, headers map[string]string, body string) (int, []byte) {
+// returns the status and body. Each header layer overwrites the ones before
+// it: a relayed request's default headers, then its authoritative ones.
+func coreSend(t *testing.T, method, address string, body []byte, layers ...map[string]string) (int, []byte) {
 	t.Helper()
-	req, err := http.NewRequest(method, address, strings.NewReader(body))
+	req, err := http.NewRequest(method, address, bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for k, v := range headers {
-		req.Header.Set(k, v)
+	for _, headers := range layers {
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -137,6 +139,19 @@ func coreSend(t *testing.T, method, address string, headers map[string]string, b
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
 	return resp.StatusCode, b
+}
+
+// forward is one gateway request for acc: Execute in the harness, then the
+// core's send of the one relayed request.
+func forward(t *testing.T, h *pluginsdktest.Harness, acc *pluginv1.Account, protocol, model string) (int, []byte, error) {
+	t.Helper()
+	ex := h.Execute(context.Background(), executeRequest(acc, protocol, model))
+	if ex.Err != nil {
+		return 0, nil, ex.Err
+	}
+	r := ex.Relayed(t).Request
+	st, body := coreSend(t, r.GetMethod(), r.GetUrl(), r.GetBody(), r.GetDefaultHeaders(), r.GetHeaders())
+	return st, body, nil
 }
 
 // coreAccount is what the core stores for an account and hands back to the
@@ -170,7 +185,7 @@ func (a *coreAccount) refresh(t *testing.T, h *pluginsdktest.Harness) *pluginv1.
 	if err != nil {
 		t.Fatalf("BuildRefreshRequest: %v", err)
 	}
-	st, body := coreSend(t, req.GetMethod(), req.GetUrl(), req.GetHeaders(), req.GetBodyJson())
+	st, body := coreSend(t, req.GetMethod(), req.GetUrl(), []byte(req.GetBodyJson()), req.GetHeaders())
 	res, err := h.Platform.ParseRefreshResponse(ctx, &pluginv1.ParseRefreshResponseRequest{Account: a.proto(), Status: int32(st), Body: body})
 	if err != nil {
 		t.Fatalf("ParseRefreshResponse: %v", err)
@@ -190,20 +205,15 @@ func (a *coreAccount) refresh(t *testing.T, h *pluginsdktest.Harness) *pluginv1.
 // call forwards one gateway request for the account.
 func (a *coreAccount) call(t *testing.T, h *pluginsdktest.Harness, protocol, model string) (int, []byte, error) {
 	t.Helper()
-	built, err := h.Platform.BuildUpstreamRequest(context.Background(), buildRequest(a.proto(), protocol, model))
-	if err != nil {
-		return 0, nil, err
-	}
-	st, body := coreSend(t, built.GetMethod(), built.GetUrl(), built.GetHeaders(), `{"contents":[{"role":"user","parts":[{"text":"ping"}]}]}`)
-	return st, body, nil
+	return forward(t, h, a.proto(), protocol, model)
 }
 
-// startPlugin runs the plugin in the SDK harness (over gRPC, as the core
-// calls it) against the fake Google.
-func startPlugin(t *testing.T, g *fakeGoogle) *pluginsdktest.Harness {
+// startFakeGoogle runs the plugin in the SDK harness against the fake Google.
+func startFakeGoogle(t *testing.T, g *fakeGoogle) *pluginsdktest.Harness {
 	t.Helper()
-	p := newTestPlugin(Endpoints{Token: g.srv.URL + "/token", API: g.srv.URL})
-	return pluginsdktest.Start(t, p, pluginsdktest.Options{SDK: []pluginsdk.Option{pluginsdk.WithInfo("vertex", Version)}})
+	h := startPlugin(t, newTestPlugin(Endpoints{Token: g.srv.URL + "/token", API: g.srv.URL}))
+	h.Host.ExternalServices = []string{"127.0.0.1"} // the fake Google stands in for googleapis.com
+	return h
 }
 
 // TestKeyFileAccountRoundTrip follows a key file account from the form to an
@@ -213,7 +223,7 @@ func TestKeyFileAccountRoundTrip(t *testing.T) {
 	for typ, file := range map[string]string{TypeServiceAccount: saJSON(nil), TypeAuthorizedUser: userJSON(nil)} {
 		t.Run(typ, func(t *testing.T) {
 			g := newFakeGoogle(t)
-			h := startPlugin(t, g)
+			h := startFakeGoogle(t, g)
 			field := keyKinds[typ].field
 			a := &coreAccount{typ: typ}
 
@@ -251,11 +261,10 @@ func TestKeyFileAccountRoundTrip(t *testing.T) {
 			if res := a.refresh(t, h); res.GetErrorType() != pluginv1.RefreshResult_ERROR_TYPE_UNSPECIFIED || a.creds[fieldAccessToken] != "ya29.issued-2" {
 				t.Fatalf("renewal: %s %v", res.GetErrorMessage(), a.creds[fieldAccessToken])
 			}
-			built, err := h.Platform.BuildUpstreamRequest(context.Background(), buildRequest(old, ProtocolGenerate, "gemini-2.5-flash"))
+			st, body, err := forward(t, h, old, ProtocolGenerate, "gemini-2.5-flash")
 			if err != nil {
 				t.Fatal(err)
 			}
-			st, body := coreSend(t, built.GetMethod(), built.GetUrl(), built.GetHeaders(), `{}`)
 			cls, err := h.Platform.ClassifyError(context.Background(), &pluginv1.ClassifyErrorRequest{
 				Meta: &pluginv1.RequestMeta{Protocol: ProtocolGenerate}, Account: old, Status: int32(st), BodyPrefix: body,
 			})
@@ -307,7 +316,7 @@ func TestKeyFileAccountRoundTrip(t *testing.T) {
 // credentials alone.
 func TestRefusedKeyRoundTrip(t *testing.T) {
 	g := newFakeGoogle(t)
-	h := startPlugin(t, g)
+	h := startFakeGoogle(t, g)
 	for typ, file := range map[string]string{
 		TypeServiceAccount: saJSON(map[string]any{"client_email": "deleted@my-project-123456.iam.gserviceaccount.com"}),
 		TypeAuthorizedUser: userJSON(map[string]any{"refresh_token": "1//0revoked"}),
@@ -329,7 +338,7 @@ func TestRefusedKeyRoundTrip(t *testing.T) {
 
 func TestAPIKeyAccountRoundTrip(t *testing.T) {
 	g := newFakeGoogle(t)
-	h := startPlugin(t, g)
+	h := startFakeGoogle(t, g)
 	a := &coreAccount{typ: TypeAPIKey}
 	a.save(t, h, map[string]any{fieldAPIKey: "AQ.Ab8RN6-example"}, nil)
 	if st, _, err := a.call(t, h, ProtocolStreamGenerate, "gemini-2.5-flash"); err != nil || st != http.StatusOK {

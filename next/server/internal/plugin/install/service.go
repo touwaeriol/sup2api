@@ -54,11 +54,12 @@ const (
 	PermGrantCritical = "plugin:grant:critical"
 )
 
-// ErrPackageGone: the version is recorded but no node holds its package any
-// more (a failed upgrade's package, cleaned up, or one removed outside the
-// core), so it cannot be reviewed, approved or run until it is uploaded
-// again (CONTRACTS §5.7).
-var ErrPackageGone = core.NewError(http.StatusGone, "package_gone", "the package of this version is no longer available; upload it again")
+// ErrPackageGone: the version is recorded but no reachable node holds its
+// package (the nodes holding it are down, or it was cleaned up after a
+// failed upgrade or removed outside the core), so it cannot be reviewed,
+// approved or run until such a node is back or it is uploaded again
+// (CONTRACTS §5.7).
+var ErrPackageGone = core.NewError(http.StatusGone, "package_gone", "no reachable node holds the package of this version; bring a node that holds it back online, or upload it again")
 
 // Deps are the collaborators of Service. Bus, Schemas and Accounts may be nil.
 type Deps struct {

@@ -27,9 +27,9 @@ func resolveEnv(t *testing.T, req manifest.EndpointRequest, withClient bool) (*e
 			Request:  req,
 			Response: manifest.EndpointResp{NonStream: "json"}, ErrorFormat: "plain", Billing: "usage", BillingTypes: []string{"per_request", "per_token", "expression"}}
 		pf := manifest.Platform{ID: "rm", Usage: builtinPlatform(t, "anthropic").Usage,
-			RequestFields: []string{"task"}, PassHeaders: []string{"x-rm-hint"},
-			Endpoints: []manifest.Endpoint{ep}}
-		info := e.addAccountType("rm", "rm_key", rp, manifest.AccountPlatform{Platform: "rm", RequestFields: []string{"model"}})
+			PassHeaders: []string{"x-rm-hint"},
+			Endpoints:   []manifest.Endpoint{ep}}
+		info := e.addAccountType("rm", "rm_key", rp, manifest.AccountPlatform{Platform: "rm"})
 		if withClient {
 			e.gen.addPlatform(info, pf, rp)
 		} else {
@@ -75,9 +75,6 @@ func TestResolveModelFromPlugin(t *testing.T) {
 	// The model is what this call answers, so meta.model is still empty.
 	if in.GetMeta().GetModel() != "" || in.GetMeta().GetProtocol() != "rm.gen" {
 		t.Fatalf("meta %+v", in.GetMeta())
-	}
-	if in.GetFields()["task"] != `"t-1"` || len(in.GetFields()) != 1 {
-		t.Fatalf("fields %v", in.GetFields())
 	}
 	if in.GetInboundHeaders()["x-rm-hint"] != "h" {
 		t.Fatalf("inbound headers %v", in.GetInboundHeaders())

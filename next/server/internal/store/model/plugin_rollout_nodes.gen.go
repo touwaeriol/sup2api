@@ -14,6 +14,7 @@ type PluginRolloutNode struct {
 	State     string    `gorm:"column:state"`                                       // character varying(20)
 	Error     string    `gorm:"column:error;default:(-)"`                           // text default ''::text
 	UpdatedAt time.Time `gorm:"column:updated_at;default:(-);autoUpdateTime:false"` // timestamp with time zone default now()
+	Code      string    `gorm:"column:code;default:(-)"`                            // character varying(40) default ''::character varying
 }
 
 // TableName implements gorm's schema.Tabler.

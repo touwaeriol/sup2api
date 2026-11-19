@@ -67,14 +67,14 @@ func TestPermissionDefsSort(t *testing.T) {
 // to drop or withhold ({} included).
 func TestRoleGrantsPriority(t *testing.T) {
 	all := manifest.RoleDefault{Unscoped: true}
-	m := &manifest.Manifest{Key: "growth", UserPermissions: []manifest.UserPermission{
-		{Key: "growth:use", Defaults: map[string]manifest.RoleDefault{"user": all, "admin": all}, InheritFrom: []string{"growth:read"}},
-		{Key: "growth:stats:read"},
+	m := &manifest.Manifest{Key: "referral", UserPermissions: []manifest.UserPermission{
+		{Key: "referral:use", Defaults: map[string]manifest.RoleDefault{"user": all, "admin": all}, InheritFrom: []string{"referral:read"}},
+		{Key: "referral:stats:read"},
 		{Key: "flow:manage", Scope: &manifest.PermissionScope{Resource: "flow", Own: true},
 			Defaults: map[string]manifest.RoleDefault{"admin": {Scopes: []string{"*"}}, "operator": {Scopes: []string{"own"}}}},
 	}}
 	defaults := map[string]map[string][]string{
-		"growth:use": {"admin": {""}, "supplier_agent": {""}, "user": {""}}, "growth:stats:read": {}, "flow:manage": {"admin": {""}, "operator": {"own"}},
+		"referral:use": {"admin": {""}, "supplier_agent": {""}, "user": {""}}, "referral:stats:read": {}, "flow:manage": {"admin": {""}, "operator": {"own"}},
 	}
 	cases := []struct {
 		name      string
@@ -83,16 +83,16 @@ func TestRoleGrantsPriority(t *testing.T) {
 		want      map[string]map[string][]string
 	}{
 		{"manifest", nil, nil, defaults},
-		// growth:use inherits growth:read, which the catalog has.
-		{"rename", nil, catalogPerms{"plugin.growth:growth:read": {}},
-			map[string]map[string][]string{"growth:use": {}, "growth:stats:read": {}, "flow:manage": {"admin": {""}, "operator": {"own"}}}},
-		{"existing and revived", nil, catalogPerms{"plugin.growth:flow:manage": {}},
-			map[string]map[string][]string{"growth:use": {"admin": {""}, "supplier_agent": {""}, "user": {""}}, "growth:stats:read": {}, "flow:manage": {}}},
-		{"override", map[string]map[string][]string{"flow:manage": {"operator": {""}, "auditor": {"flow/3"}}, "growth:stats:read": {}}, nil,
-			map[string]map[string][]string{"growth:use": {"admin": {""}, "supplier_agent": {""}, "user": {""}}, "growth:stats:read": {},
+		// referral:use inherits referral:read, which the catalog has.
+		{"rename", nil, catalogPerms{"plugin.referral:referral:read": {}},
+			map[string]map[string][]string{"referral:use": {}, "referral:stats:read": {}, "flow:manage": {"admin": {""}, "operator": {"own"}}}},
+		{"existing and revived", nil, catalogPerms{"plugin.referral:flow:manage": {}},
+			map[string]map[string][]string{"referral:use": {"admin": {""}, "supplier_agent": {""}, "user": {""}}, "referral:stats:read": {}, "flow:manage": {}}},
+		{"override", map[string]map[string][]string{"flow:manage": {"operator": {""}, "auditor": {"flow/3"}}, "referral:stats:read": {}}, nil,
+			map[string]map[string][]string{"referral:use": {"admin": {""}, "supplier_agent": {""}, "user": {""}}, "referral:stats:read": {},
 				"flow:manage": {"admin": {""}, "operator": {""}, "auditor": {"flow/3"}}}},
-		{"override of a rename", map[string]map[string][]string{"growth:use": {"auditor": {""}}}, catalogPerms{"plugin.growth:growth:read": {}},
-			map[string]map[string][]string{"growth:use": {"auditor": {""}}, "growth:stats:read": {}, "flow:manage": {"admin": {""}, "operator": {"own"}}}},
+		{"override of a rename", map[string]map[string][]string{"referral:use": {"auditor": {""}}}, catalogPerms{"plugin.referral:referral:read": {}},
+			map[string]map[string][]string{"referral:use": {"auditor": {""}}, "referral:stats:read": {}, "flow:manage": {"admin": {""}, "operator": {"own"}}}},
 	}
 	for _, c := range cases {
 		assert.Equal(t, c.want, roleGrants(m, c.overrides, c.existing), c.name)
@@ -150,13 +150,13 @@ func TestOverrideGrants(t *testing.T) {
 // not; one wider than the current grant, or on a first install, is new.
 func TestDecideCarriesCoveredGrants(t *testing.T) {
 	m := &manifest.Manifest{Key: "demo", HostPermissions: []manifest.HostPermission{
-		{ID: "ui.native"}, {ID: "accounts.credentials"},
+		{ID: "ui.native"}, {ID: "users.read"},
 		{ID: "events", Scope: map[string]any{"subscribe": []any{"a", "b"}}},
 	}}
 	current := map[string]Grant{
-		"ui.native":            {Status: GrantGranted},
-		"accounts.credentials": {Status: GrantGranted},
-		"events":               {Status: GrantGranted, Scope: map[string]any{"subscribe": []any{"a"}}},
+		"ui.native":  {Status: GrantGranted},
+		"users.read": {Status: GrantGranted},
+		"events":     {Status: GrantGranted, Scope: map[string]any{"subscribe": []any{"a"}}},
 	}
 	req := ConsentRequest{Grants: []GrantInput{{Permission: "ui.native"}, {Permission: "events"}}}
 	carried := func(ds []decision) map[string]bool {
@@ -167,11 +167,11 @@ func TestDecideCarriesCoveredGrants(t *testing.T) {
 		return out
 	}
 	ds, errs := decide(m, req, current, nil, true)
-	if len(errs) != 0 || fmt.Sprint(carried(ds)) != "map[accounts.credentials:true events:false ui.native:true]" {
+	if len(errs) != 0 || fmt.Sprint(carried(ds)) != "map[events:false ui.native:true users.read:true]" {
 		t.Fatalf("upgrade: %v %+v", carried(ds), errs)
 	}
-	req.Grants = append(req.Grants, GrantInput{Permission: "accounts.credentials"})
-	if ds, _ := decide(m, req, current, nil, false); fmt.Sprint(carried(ds)) != "map[accounts.credentials:false events:false ui.native:false]" {
+	req.Grants = append(req.Grants, GrantInput{Permission: "users.read"})
+	if ds, _ := decide(m, req, current, nil, false); fmt.Sprint(carried(ds)) != "map[events:false ui.native:false users.read:false]" {
 		t.Fatalf("first install: %v", carried(ds))
 	}
 }

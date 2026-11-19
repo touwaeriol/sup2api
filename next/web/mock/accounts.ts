@@ -5,10 +5,11 @@ import { agentUser, caller, filterOwned, hasAction, hasPerm, inScope, ownerScope
 import { resolveProxyURL, validateProxyURL } from './resources'
 import { nextPath } from './paths'
 import { codexAccountTypes, codexCredentialErrors } from './codex'
-import { checkControls, controlsAccountTypes, controlsForm } from './controls'
+import { groupServedProtocols, protocolFieldErrors, servedProtocols, typeEndpoints } from './protocols'
+import { checkControls, controlsAccountTypes } from './controls'
 import { placeholderProblem, rowMeaning } from '../src/views/accounts/headerOverride/model'
 
-// Mock handlers: accounts, account types (form modes schema + iframe) and
+// Mock handlers: accounts, account types (form modes native + iframe) and
 // GET /me/platforms (CONTRACTS §14.1). Scopes (CONTRACTS §21): a narrower
 // scope only reaches the accounts in it (own: those the caller created); sign
 // in as vendor@example.com to try it (see core.ts).
@@ -45,86 +46,6 @@ function checkGuarded(who: Identity, pluginKey: string, creds: Record<string, an
   return fields.length ? fail(400, 'invalid_argument', 'restricted setting', { fields }) : null
 }
 
-/** Rewrites a form for a caller without account:settings:custom: enum (+ ui:readonly when one value). */
-function guardForm(who: Identity, pluginKey: string, form: { schema: Record<string, any>; ui_schema?: Record<string, any> }) {
-  const guards = GUARDED[pluginKey]
-  if (!guards || hasPerm(who, 'account:settings:custom')) return form
-  const schema = JSON.parse(JSON.stringify(form.schema))
-  const ui = JSON.parse(JSON.stringify(form.ui_schema || {}))
-  for (const g of guards) {
-    if (!schema.properties?.[g.field]) continue
-    schema.properties[g.field].enum = [...g.allowed]
-    if (g.allowed.length === 1) ui[g.field] = { ...(ui[g.field] || {}), 'ui:readonly': true }
-  }
-  return { schema, ui_schema: ui }
-}
-
-const anthropicSchema = {
-  type: 'object',
-  required: ['api_key'],
-  properties: {
-    api_key: { type: 'string', title: 'API Key', writeOnly: true, minLength: 10 },
-    base_url: { type: 'string', title: 'Base URL', format: 'uri', default: 'https://api.anthropic.com' },
-    auth_mode: { type: 'string', title: 'Auth header', enum: ['x-api-key', 'bearer'], default: 'x-api-key' },
-    beta_passthrough: { type: 'boolean', title: 'Pass anthropic-beta through', default: true },
-    organization: { type: 'string', title: 'Organization id' }
-  }
-}
-
-const anthropicUI = {
-  'ui:order': ['api_key', 'base_url', 'auth_mode', 'organization', 'beta_passthrough'],
-  api_key: { 'ui:widget': 'secret', 'ui:title': { en: 'API Key', zh: 'API Key' }, 'ui:placeholder': 'sk-ant-...' },
-  base_url: { 'ui:widget': 'url-presets', 'ui:title': { en: 'Base URL', zh: '接口地址' }, 'ui:options': { presets: ['https://api.anthropic.com'] } },
-  auth_mode: { 'ui:enumNames': [{ en: 'x-api-key header', zh: 'x-api-key 请求头' }, { en: 'Authorization: Bearer', zh: 'Authorization: Bearer' }] },
-  organization: { 'ui:visibleWhen': { field: 'auth_mode', equals: 'bearer' }, 'ui:help': { en: 'Only for bearer auth', zh: '仅 Bearer 方式需要' } },
-  beta_passthrough: { 'ui:widget': 'switch', 'ui:title': { en: 'Pass anthropic-beta through', zh: '透传 anthropic-beta' } }
-}
-
-const relaySchema = {
-  type: 'object',
-  required: ['api_key', 'base_url'],
-  properties: {
-    api_key: { type: 'string', title: 'API Key', writeOnly: true, minLength: 10 },
-    base_url: { type: 'string', title: 'Base URL', format: 'uri', default: 'https://relay.example.com/v1' }
-  }
-}
-
-const relayUI = {
-  api_key: { 'ui:widget': 'secret', 'ui:title': { en: 'Relay key', zh: '中转 Key' }, 'ui:placeholder': 'sk-...' },
-  base_url: { 'ui:title': { en: 'Relay base URL', zh: '中转地址' } }
-}
-
-const videoSchema = {
-  type: 'object',
-  required: ['api_key'],
-  properties: {
-    api_key: { type: 'string', title: 'API Key', writeOnly: true, minLength: 10 },
-    region: { type: 'string', title: 'Region', enum: ['us', 'eu', 'ap'], default: 'us' }
-  }
-}
-
-// Built-in openai / gemini plugins (CONTRACTS §14.1): api_key (sensitive) and
-// base_url. Model mapping is a core account field (§18), not a plugin field.
-function apiKeyForm(defaultBase: string, placeholder: string) {
-  return {
-    schema: {
-      type: 'object',
-      required: ['api_key'],
-      properties: {
-        api_key: { type: 'string', title: 'API Key', writeOnly: true, minLength: 10 },
-        base_url: { type: 'string', title: 'Base URL', format: 'uri', default: defaultBase }
-      }
-    },
-    ui_schema: {
-      'ui:order': ['api_key', 'base_url'],
-      api_key: { 'ui:widget': 'secret', 'ui:title': { en: 'API Key', zh: 'API Key' }, 'ui:placeholder': placeholder },
-      base_url: { 'ui:widget': 'url-presets', 'ui:title': { en: 'Base URL', zh: '接口地址' }, 'ui:options': { presets: [defaultBase] } }
-    }
-  }
-}
-const openaiForm = apiKeyForm('https://api.openai.com', 'sk-...')
-const geminiForm = apiKeyForm('https://generativelanguage.googleapis.com', 'AIza...')
-
 interface MockAccountType {
   plugin_key: string
   plugin_name: { en: string; zh: string }
@@ -140,8 +61,8 @@ interface MockAccountType {
   auth_method_label?: { en: string; zh: string }
   /** Declared supported platforms (built-in or plugin platforms). */
   supports: string[]
-  /** Endpoints of other platforms served through a core converter. */
-  converts?: Array<{ platform: string; path: string }>
+  /** Protocols of the supported platforms served natively (absent: all); the other text ones are adapted (mock/protocols.ts). */
+  subset?: string[]
   default_models?: string[]
   default_model_mapping?: Record<string, string>
   extensions_schema?: { type: 'object'; properties: Record<string, unknown> }
@@ -153,7 +74,7 @@ interface MockAccountType {
 
 // Account types (CONTRACTS §13): identified by (plugin_key, type); each
 // declares the platforms it supports. GET /account-types adds `platforms`
-// (with availability) and `endpoints` (native + converted).
+// (with availability) and `endpoints` (native, adapted, converted: mock/protocols.ts).
 const accountTypeDecls: MockAccountType[] = [
   {
     plugin_key: 'anthropic',
@@ -164,11 +85,9 @@ const accountTypeDecls: MockAccountType[] = [
     type: 'apikey',
     label: { en: 'API Key', zh: 'API Key' },
     description: { en: 'Claude API key (x-api-key)', zh: 'Claude API 密钥' },
-    form: { mode: 'schema' },
+    form: { mode: 'native', component: 'AnthropicKeyForm' },
     sensitive_fields: ['api_key'],
-    supports: ['anthropic'],
-    // openai.chat -> anthropic.messages converter of the core
-    converts: [{ platform: 'openai', path: '/v1/chat/completions' }]
+    supports: ['anthropic']
   },
   {
     plugin_key: 'openai',
@@ -179,7 +98,7 @@ const accountTypeDecls: MockAccountType[] = [
     type: 'apikey',
     label: { en: 'API Key', zh: 'API Key' },
     description: { en: 'OpenAI API key (Authorization: Bearer)', zh: 'OpenAI API 密钥' },
-    form: { mode: 'schema' },
+    form: { mode: 'native', component: 'OpenAIKeyForm' },
     sensitive_fields: ['api_key'],
     supports: ['openai']
   },
@@ -192,7 +111,7 @@ const accountTypeDecls: MockAccountType[] = [
     type: 'apikey',
     label: { en: 'API Key', zh: 'API Key' },
     description: { en: 'Google AI Studio API key (x-goog-api-key)', zh: 'Google AI Studio API 密钥' },
-    form: { mode: 'schema' },
+    form: { mode: 'native', component: 'GeminiKeyForm' },
     sensitive_fields: ['api_key'],
     supports: ['gemini']
   },
@@ -205,34 +124,8 @@ const accountTypeDecls: MockAccountType[] = [
     type: 'relay_key',
     label: { en: 'Relay key', zh: '中转 Key' },
     description: { en: 'Key of an Anthropic-compatible relay', zh: 'Anthropic 兼容中转站的 Key' },
-    form: { mode: 'schema' },
+    form: { mode: 'native', component: 'RelayKeyForm' },
     sensitive_fields: ['api_key'],
-    supports: ['anthropic']
-  },
-  {
-    plugin_key: 'claude_oauth',
-    plugin_name: { en: 'Claude OAuth Accounts', zh: 'Claude OAuth 账号' },
-    plugin_version: '0.1.0',
-    asset_base: '/plugin-ui/claude_oauth/0.1.0-dev',
-    trust: 'official',
-    type: 'claude_oauth',
-    label: { en: 'Claude OAuth', zh: 'Claude OAuth' },
-    description: { en: 'Claude subscription (Pro / Max) via OAuth; plan windows are tracked', zh: 'Claude 订阅（Pro / Max）OAuth 授权，记录套餐窗口用量' },
-    form: { mode: 'schema' },
-    sensitive_fields: ['access_token', 'refresh_token'],
-    supports: ['anthropic']
-  },
-  {
-    plugin_key: 'claude_oauth',
-    plugin_name: { en: 'Claude OAuth Accounts', zh: 'Claude OAuth 账号' },
-    plugin_version: '0.1.0',
-    asset_base: '/plugin-ui/claude_oauth/0.1.0-dev',
-    trust: 'official',
-    type: 'claude_setup_token',
-    label: { en: 'Claude Setup Token', zh: 'Claude Setup Token' },
-    description: { en: 'Setup token (inference-only scope)', zh: 'Setup token（仅推理范围）' },
-    form: { mode: 'schema' },
-    sensitive_fields: ['access_token', 'refresh_token'],
     supports: ['anthropic']
   },
   {
@@ -244,7 +137,7 @@ const accountTypeDecls: MockAccountType[] = [
     type: 'video_key',
     label: { en: 'MyVideo key', zh: 'MyVideo Key' },
     description: { en: 'Serves the myvideo platform declared by the same plugin', zh: '服务本插件声明的 myvideo 平台' },
-    form: { mode: 'schema' },
+    form: { mode: 'native', component: 'VideoKeyForm' },
     sensitive_fields: ['api_key'],
     supports: ['myvideo']
   },
@@ -268,21 +161,32 @@ const accountTypeDecls: MockAccountType[] = [
 ]
 
 function accountTypeOut(d: MockAccountType) {
-  const { supports, converts, ...rest } = d
+  const { supports, subset, ...rest } = d
   const defaults = pluginDefaults(d.plugin_key, d.type)
   const platforms = supports.map((id) => {
     const p = platformById(id)
     return { id, label: p?.label ?? platformLabel(id), builtin: p?.builtin ?? false, available: !!p }
   })
-  const endpoints: any[] = []
-  for (const id of supports) {
-    for (const e of platformById(id)?.endpoints || []) endpoints.push({ method: e.method, path: e.path, protocol: e.protocol, platform: id, native: true, grade: 'native' })
-  }
-  for (const c of converts || []) {
-    const e = platformById(c.platform)?.endpoints.find((x) => x.path === c.path)
-    if (e) endpoints.push({ method: e.method, path: e.path, protocol: e.protocol, platform: c.platform, native: false, grade: 'good', via: [e.protocol, platformById(supports[0])?.endpoints[0]?.protocol].filter(Boolean) })
-  }
-  return { ...rest, ...defaults, common_controls: d.common_controls ?? defaults.common_controls, platforms, endpoints }
+  return { ...rest, ...defaults, guarded_settings: GUARDED[d.plugin_key], common_controls: d.common_controls ?? defaults.common_controls, platforms, endpoints: typeEndpoints(supports.filter((id) => platformById(id)), subset) }
+}
+
+/** The type of an account as GET /account-types lists it; undefined for an orphaned account. */
+const typeOutOf = (a: { plugin_key: string; type: string }) => {
+  const d = accountTypeDecls.find((x) => x.plugin_key === a.plugin_key && x.type === a.type)
+  return d && accountTypeOut(d)
+}
+/** served_protocols of an account ([] when its type is gone). */
+const servedOf = (a: any) => {
+  const at = a.orphaned ? undefined : typeOutOf(a)
+  return at ? servedProtocols(a, at) : []
+}
+/** Field errors of the protocol binding a request leaves the account with; null when it sets neither field or they are fine. */
+function validateProtocols(body: Record<string, any>, a: { plugin_key: string; type: string; protocols?: string[] | null; model_protocols?: any[] }) {
+  if (!('protocols' in body) && !('model_protocols' in body)) return null
+  const at = typeOutOf(a)
+  if (!at) return fail(503, 'plugin_unavailable', 'the plugin providing this account type is not enabled; its protocols cannot be changed')
+  const fields = protocolFieldErrors({ protocols: 'protocols' in body ? body.protocols : a.protocols, model_protocols: body.model_protocols ?? a.model_protocols }, at)
+  return fields.length ? fail(400, 'invalid_argument', 'invalid protocols', { fields }) : null
 }
 
 /**
@@ -291,7 +195,7 @@ function accountTypeOut(d: MockAccountType) {
  * without a plugin source in this repository get none.
  */
 function pluginDefaults(pluginKey: string, type: string) {
-  // Plugin directories use dashes where keys use underscores (claude_oauth -> plugins/claude-oauth).
+  // Plugin directories use dashes where keys use underscores (azure_openai -> plugins/azure-openai).
   for (const dir of new Set([pluginKey, pluginKey.replace(/_/g, '-')])) {
     try {
       const m = JSON.parse(readFileSync(nextPath('plugins', dir, 'manifest.json'), 'utf8'))
@@ -326,6 +230,9 @@ const typeLabel = (pluginKey: string, type: string) => accountTypeDecls.find((x)
 
 // claude-main is in three groups (the list shows two and "+1"); with claude-bak
 // it makes haiku-only a group of one platform, whose badge takes the vendor tint.
+// Protocol binding (mock/protocols.ts): openai-main converts one model for
+// Anthropic clients and serves the embedding model on its own protocol only;
+// demo-token, a chat-only compatible site, opens one of its own protocols.
 export const accounts: any[] = [
   { id: 12, name: 'claude-main', header_override: { 'User-Agent': 'claude-cli/2.1.90 (external, cli)', 'anthropic-beta': '{client_header:anthropic-beta:context-1m-2025-08-07}', 'x-trace-id': '{client_header:x-request-id}', 'x-stainless-retry-count': '{unset}' }, param_override: { operations: [
     { description: '固定 temperature', mode: 'set', path: 'temperature', value: 0.7 },
@@ -338,19 +245,22 @@ export const accounts: any[] = [
   { id: 14, name: 'old-key', plugin_key: 'anthropic', type: 'apikey', created_by: 1, group_ids: [1], proxy_id: null, priority: 5, weight: 1, max_concurrency: 10, schedulable: true, models: [], model_mapping: {}, rpm_limit: 0, tpm_limit: 0, status: 'disabled', status_reason: '401 invalid credentials', in_use: 0, cooldown_until: null, orphaned: false, last_used_at: now(-86400), created_at: now(-86400 * 40), credentials: { api_key: '******' } },
   { id: 16, name: 'relay-1', plugin_key: 'relay', type: 'relay_key', created_by: 6, group_ids: [1], proxy_id: null, priority: 3, weight: 1, max_concurrency: 20, schedulable: true, models: [], model_mapping: { 'claude-opus-4-1': 'claude-sonnet-4-5' }, rpm_limit: 120, tpm_limit: 0, spm_limit: 20, spm_window_seconds: 3600, status: 'active', status_reason: '', in_use: 1, cooldown_until: null, orphaned: false, last_used_at: now(-40), created_at: now(-86400 * 2), credentials: { api_key: '******', base_url: 'https://relay.example.com' } },
   { id: 17, name: 'video-1', plugin_key: 'videogen', type: 'video_key', created_by: 1, group_ids: [2], proxy_id: null, priority: 1, weight: 1, max_concurrency: 4, schedulable: true, models: ['myvideo-pro'], model_mapping: {}, rpm_limit: 0, tpm_limit: 0, status: 'active', status_reason: '', in_use: 0, cooldown_until: null, orphaned: false, last_used_at: now(-3600), created_at: now(-86400 * 3), credentials: { api_key: '******', region: 'us' } },
-  { id: 18, name: 'demo-token', plugin_key: 'demo', type: 'token', created_by: 1, group_ids: [1], proxy_id: null, priority: 8, weight: 1, max_concurrency: 2, schedulable: true, models: [], model_mapping: {}, rpm_limit: 0, tpm_limit: 0, status: 'active', status_reason: '', in_use: 0, cooldown_until: null, orphaned: false, last_used_at: null, created_at: now(-86400), credentials: { token: '******' } },
-  { id: 19, name: 'openai-main', plugin_key: 'openai', type: 'apikey', created_by: 1, group_ids: [1, 2], proxy_id: null, priority: 1, weight: 2, max_concurrency: 20, schedulable: true, models: ['gpt-4o', 'gpt-4o-mini'], model_mapping: {}, rpm_limit: 0, tpm_limit: 200000, status: 'active', status_reason: '', in_use: 2, cooldown_until: null, orphaned: false, last_used_at: now(-30), created_at: now(-86400 * 2), credentials: { api_key: '******', base_url: 'https://api.openai.com' } },
+  { id: 18, name: 'demo-token', plugin_key: 'demo', type: 'token', protocols: ['openai.chat'], created_by: 1, group_ids: [1], proxy_id: null, priority: 8, weight: 1, max_concurrency: 2, schedulable: true, models: [], model_mapping: {}, rpm_limit: 0, tpm_limit: 0, status: 'active', status_reason: '', in_use: 0, cooldown_until: null, orphaned: false, last_used_at: null, created_at: now(-86400), credentials: { token: '******' } },
+  { id: 19, name: 'openai-main', plugin_key: 'openai', type: 'apikey', created_by: 1, group_ids: [1, 2], proxy_id: null, priority: 1, weight: 2, max_concurrency: 20, schedulable: true, models: ['gpt-4o', 'gpt-4o-mini', 'text-embedding-3-large', 'claude-sonnet-4-5'], model_mapping: { 'claude-sonnet-4-5': 'gpt-4o' }, model_protocols: [{ models: ['claude-sonnet-4-5'], protocols: ['anthropic.messages'] }, { models: ['text-embedding-3-large'], protocols: ['openai.embeddings'] }], rpm_limit: 0, tpm_limit: 200000, status: 'active', status_reason: '', in_use: 2, cooldown_until: null, orphaned: false, last_used_at: now(-30), created_at: now(-86400 * 2), credentials: { api_key: '******', base_url: 'https://api.openai.com' } },
   { id: 20, name: 'gemini-main', plugin_key: 'gemini', type: 'apikey', created_by: 1, group_ids: [2], proxy_id: null, priority: 1, weight: 1, max_concurrency: 10, schedulable: true, models: [], model_mapping: {}, rpm_limit: 0, tpm_limit: 0, status: 'active', status_reason: '', in_use: 0, cooldown_until: null, orphaned: false, last_used_at: now(-900), created_at: now(-86400), credentials: { api_key: '******', base_url: 'https://generativelanguage.googleapis.com' } },
-  // Claude subscriptions with plan windows (quota seeds below): healthy, rejected + cooling down, nearly used up, no data yet.
-  { id: 21, name: 'claude-max-1', plugin_key: 'claude_oauth', type: 'claude_oauth', created_by: 1, group_ids: [1, 2], proxy_id: 1, priority: 1, weight: 2, max_concurrency: 5, schedulable: true, models: [], model_mapping: {}, rpm_limit: 0, tpm_limit: 0, status: 'active', status_reason: '', in_use: 1, cooldown_until: null, orphaned: false, last_used_at: now(-8), created_at: now(-86400 * 12), credentials: { access_token: '******', refresh_token: '******', email_address: 'max1@example.com' } },
-  { id: 22, name: 'claude-max-2', plugin_key: 'claude_oauth', type: 'claude_oauth', created_by: 1, group_ids: [1], proxy_id: null, priority: 1, weight: 1, max_concurrency: 5, schedulable: true, models: [], model_mapping: {}, rpm_limit: 0, tpm_limit: 0, status: 'active', status_reason: '', in_use: 0, cooldown_until: now(5400), cooldown_reason: '429 rate_limit: 5h window rejected', orphaned: false, last_used_at: now(-600), created_at: now(-86400 * 30), credentials: { access_token: '******', refresh_token: '******', email_address: 'max2@example.com' } },
-  { id: 23, name: 'claude-pro-3', plugin_key: 'claude_oauth', type: 'claude_setup_token', created_by: 6, group_ids: [2], proxy_id: null, priority: 2, weight: 1, max_concurrency: 3, schedulable: true, models: [], model_mapping: {}, rpm_limit: 0, tpm_limit: 0, status: 'active', status_reason: '', in_use: 0, cooldown_until: null, orphaned: false, last_used_at: now(-95), created_at: now(-86400 * 6), credentials: { access_token: '******' } },
-  { id: 24, name: 'claude-max-new', plugin_key: 'claude_oauth', type: 'claude_oauth', created_by: 1, group_ids: [1], proxy_id: null, priority: 3, weight: 1, max_concurrency: 5, schedulable: true, models: [], model_mapping: {}, rpm_limit: 0, tpm_limit: 0, status: 'active', status_reason: '', in_use: 0, cooldown_until: null, orphaned: false, last_used_at: null, created_at: now(-600), credentials: { access_token: '******', refresh_token: '******' } },
+  // More Claude API keys: one cooling down after a 429, one not used yet.
+  { id: 21, name: 'claude-key-1', plugin_key: 'anthropic', type: 'apikey', created_by: 1, group_ids: [1, 2], proxy_id: 1, priority: 1, weight: 2, max_concurrency: 5, schedulable: true, models: [], model_mapping: {}, rpm_limit: 0, tpm_limit: 0, status: 'active', status_reason: '', in_use: 1, cooldown_until: null, orphaned: false, last_used_at: now(-8), created_at: now(-86400 * 12), credentials: { api_key: '******' } },
+  { id: 22, name: 'claude-key-2', plugin_key: 'anthropic', type: 'apikey', created_by: 1, group_ids: [1], proxy_id: null, priority: 1, weight: 1, max_concurrency: 5, schedulable: true, models: [], model_mapping: {}, rpm_limit: 0, tpm_limit: 0, status: 'active', status_reason: '', in_use: 0, cooldown_until: now(5400), cooldown_reason: '429 rate_limit_error', orphaned: false, last_used_at: now(-600), created_at: now(-86400 * 30), credentials: { api_key: '******' } },
+  { id: 23, name: 'claude-key-3', plugin_key: 'anthropic', type: 'apikey', created_by: 6, group_ids: [2], proxy_id: null, priority: 2, weight: 1, max_concurrency: 3, schedulable: true, models: [], model_mapping: {}, rpm_limit: 0, tpm_limit: 0, status: 'active', status_reason: '', in_use: 0, cooldown_until: null, orphaned: false, last_used_at: now(-95), created_at: now(-86400 * 6), credentials: { api_key: '******' } },
+  { id: 24, name: 'claude-key-new', plugin_key: 'anthropic', type: 'apikey', created_by: 1, group_ids: [1], proxy_id: null, priority: 3, weight: 1, max_concurrency: 5, schedulable: true, models: [], model_mapping: {}, rpm_limit: 0, tpm_limit: 0, status: 'active', status_reason: '', in_use: 0, cooldown_until: null, orphaned: false, last_used_at: null, created_at: now(-600), credentials: { api_key: '******' } },
   // ChatGPT subscriptions (codex plugin, native form): device code and Sign in with Codex; edit one to see "Re-authorize".
   { id: 29, name: 'chatgpt-plus', plugin_key: 'codex', type: 'codex_device', created_by: 1, group_ids: [1], proxy_id: 1, priority: 2, weight: 1, max_concurrency: 3, schedulable: true, models: [], model_mapping: {}, rpm_limit: 0, tpm_limit: 0, status: 'auto_disabled', status_reason: 'Codex usage limit reached', auto_disabled_until: now(2 * 3600 + 1200), in_use: 0, cooldown_until: now(2 * 3600 + 1200), orphaned: false, last_used_at: now(-1200), created_at: now(-86400 * 5), credentials: { access_token: '******', refresh_token: '******', id_token: '******', expires_at: Math.floor(Date.now() / 1000) + 2400, email: 'owner@example.com', chatgpt_account_id: '5d1c2b9e-7f3a-4e1b-9a0c-2f6d8e4b1a73', plan_type: 'plus' } },
   { id: 30, name: 'chatgpt-codex', plugin_key: 'codex', type: 'codex_oauth', created_by: 1, group_ids: [1], proxy_id: null, priority: 3, weight: 1, max_concurrency: 3, schedulable: true, models: [], model_mapping: {}, rpm_limit: 0, tpm_limit: 0, status: 'active', status_reason: '', in_use: 0, cooldown_until: null, orphaned: false, last_used_at: null, created_at: now(-86400), credentials: { access_token: '******', refresh_token: '******', id_token: '******', expires_at: Math.floor(Date.now() / 1000) - 600, email: 'owner@example.com', chatgpt_account_id: '8b0e6f2a-1c4d-4e9b-a7f3-5d2c9e1b0a64', plan_type: 'pro' } },
   // Automatically disabled until a release time (yellow badge); the list switch reads off and turning it on enables it by hand.
   { id: 31, name: 'relay-limited', plugin_key: 'relay', type: 'relay_key', created_by: 1, group_ids: [1], proxy_id: null, priority: 4, weight: 1, max_concurrency: 10, schedulable: true, models: [], model_mapping: {}, rpm_limit: 0, tpm_limit: 0, status: 'auto_disabled', status_reason: 'matched auto-disable rule: status 429', auto_disabled_until: now(3 * 3600), in_use: 0, cooldown_until: null, orphaned: false, last_used_at: now(-1800), created_at: now(-86400 * 8), credentials: { api_key: '******', base_url: 'https://relay.example.com' } },
+  // Balance (CONTRACTS §52): relay-new was never read; relay-badkey's first read failed.
+  { id: 32, name: 'relay-new', plugin_key: 'relay', type: 'relay_key', created_by: 1, group_ids: [1], proxy_id: null, priority: 5, weight: 1, max_concurrency: 10, schedulable: true, models: [], model_mapping: {}, rpm_limit: 0, tpm_limit: 0, status: 'active', status_reason: '', in_use: 0, cooldown_until: null, orphaned: false, last_used_at: null, created_at: now(-120), credentials: { api_key: '******', base_url: 'https://relay.example.com' } },
+  { id: 33, name: 'relay-badkey', plugin_key: 'relay', type: 'relay_key', created_by: 1, group_ids: [1], proxy_id: null, priority: 6, weight: 1, max_concurrency: 10, schedulable: true, models: [], model_mapping: {}, rpm_limit: 0, tpm_limit: 0, status: 'active', status_reason: '', in_use: 0, cooldown_until: null, orphaned: false, last_used_at: null, created_at: now(-3600), credentials: { api_key: '******', base_url: 'https://relay.example.com' } },
   // Its plugin was uninstalled without purge_accounts: kept as an orphaned account.
   { id: 15, name: 'legacy-vendor', plugin_key: 'legacy_vendor', type: 'apikey', created_by: null, type_label: { en: 'API key', zh: 'API Key' }, group_ids: [], proxy_id: null, priority: 10, weight: 1, max_concurrency: 5, schedulable: false, models: [], model_mapping: {}, rpm_limit: 0, tpm_limit: 0, status: 'active', status_reason: '', in_use: 0, orphaned: true, created_at: now(-86400 * 90) }
 ]
@@ -375,10 +285,9 @@ seedTest(19, true, 1450, 'gpt-4o-mini', 'model gpt-4o-mini answered', 600)
 // Plan windows of subscription accounts (QuotaSnapshot). Types without plan
 // limits (API keys, relays, ...) report quota = null. A window resets every
 // `period` seconds, first at `firstIn` seconds after the mock started.
-// Only types declaring a usage query are queried on force; codex declares
-// response headers only, so force returns its snapshot (CONTRACTS §44).
-const QUERY_TYPES = new Set(['claude_oauth/claude_oauth', 'claude_oauth/claude_setup_token'])
-const QUOTA_TYPES = new Set([...QUERY_TYPES, 'codex/codex_device', 'codex/codex_oauth'])
+// No type here declares a usage query: codex samples its response headers,
+// so force returns the snapshot (CONTRACTS §44).
+const QUOTA_TYPES = new Set(['codex/codex_device', 'codex/codex_oauth'])
 const MOCK_T0 = Date.now()
 const H = 3600
 const D = 86400
@@ -388,39 +297,14 @@ interface QuotaState {
   updated_at: string | null
   error: string
   windows: QuotaSeed[]
-  /** Last force query (ms), for the 30 s floor. */
-  activeAt: number
 }
-const claudeWindows = (u5h: number, s5h: string, in5h: number, u7d: number, s7d: string, in7d: number, sonnet: number, fable: number): QuotaSeed[] => [
-  { key: '5h', utilization: u5h, status: s5h, firstIn: in5h, period: 5 * H },
-  { key: '7d', utilization: u7d, status: s7d, firstIn: in7d, period: 7 * D },
-  { key: '7d_sonnet', utilization: sonnet, status: 'allowed', firstIn: in7d, period: 7 * D },
-  { key: '7d_fable', utilization: fable, status: 'allowed', firstIn: in7d, period: 7 * D }
-]
 const quotaState = new Map<number, QuotaState>([
-  [21, { source: 'active', updated_at: now(-240), error: '', activeAt: 0, windows: claudeWindows(34, 'allowed', 2 * H + 1500, 61.6, 'allowed', 3 * D + 4 * H, 18, 41) }],
-  // 5h window rejected; the account cools down (see cooldown_until).
-  [22, { source: 'passive', updated_at: now(-600), error: '', activeAt: 0, windows: claudeWindows(100, 'rejected', H + 1800, 81, 'allowed_warning', D + 7 * H, 47, 66) }],
-  // Nearly used up, last active query failed; plus an unknown window key, shown verbatim.
-  [23, {
-    source: 'passive',
-    updated_at: now(-95),
-    error: 'usage query failed: upstream 503',
-    activeAt: 0,
-    windows: [
-      { key: '7d', utilization: 88, status: 'allowed', firstIn: 5 * D, period: 7 * D },
-      { key: '5h', utilization: 93.4, status: 'allowed_warning', firstIn: 2400, period: 5 * H },
-      { key: '7d_opus', utilization: 12, status: '', firstIn: 5 * D, period: 7 * D }
-    ]
-  }],
-  // Never queried yet.
-  [24, { source: '', updated_at: null, error: '', activeAt: 0, windows: [] }],
   // ChatGPT (Codex), sampled from the x-codex-* response headers: #29's 5 h window used up, the account paused until it resets (mock/codex.ts resets it).
-  [29, { source: 'passive', updated_at: now(-300), error: '', activeAt: 0, windows: [
+  [29, { source: 'passive', updated_at: now(-300), error: '', windows: [
     { key: '5h', utilization: 100, status: '', firstIn: 2 * H + 1200, period: 5 * H },
     { key: '7d', utilization: 63, status: '', firstIn: 3 * D + 9 * H, period: 7 * D }
   ] }],
-  [30, { source: 'passive', updated_at: now(-900), error: '', activeAt: 0, windows: [
+  [30, { source: 'passive', updated_at: now(-900), error: '', windows: [
     { key: '5h', utilization: 18, status: '', firstIn: 3 * H + 600, period: 5 * H },
     { key: '7d', utilization: 7.5, status: '', firstIn: 6 * D + 2 * H, period: 7 * D }
   ] }]
@@ -449,7 +333,7 @@ function nextReset(w: QuotaSeed): string {
 function quotaStateOf(a: any): QuotaState | null {
   if (!QUOTA_TYPES.has(`${a.plugin_key}/${a.type}`)) return null
   let st = quotaState.get(a.id)
-  if (!st) quotaState.set(a.id, (st = { source: '', updated_at: null, error: '', windows: [], activeAt: 0 }))
+  if (!st) quotaState.set(a.id, (st = { source: '', updated_at: null, error: '', windows: [] }))
   return st
 }
 
@@ -469,12 +353,10 @@ function quotaOf(a: any) {
 /** Credential refresh state (CONTRACTS §48): OAuth-style types only. */
 function refreshOf(a: any) {
   if (!QUOTA_TYPES.has(`${a.plugin_key}/${a.type}`)) return null
-  // The list strips credentials: setup tokens are the ones without a refresh token.
-  const renews = a.type === 'claude_oauth'
   return a.refresh_state || {
-    expires_at: renews ? now(5 * 3600) : null,
-    last_attempt_at: renews ? now(-3 * 3600) : null,
-    last_success_at: renews ? now(-3 * 3600) : null,
+    expires_at: now(5 * 3600),
+    last_attempt_at: now(-3 * 3600),
+    last_success_at: now(-3 * 3600),
     error_type: '',
     error: ''
   }
@@ -527,6 +409,39 @@ function usageOf(a: any) {
   }
 }
 
+// ---------------------------------------------------------------- balance
+// Balance of the account types that read one (CONTRACTS §52): the relay keys
+// and the demo token here. Types without one have no balance field. A read
+// (forced, or the first) asks the "upstream": relay-badkey's key is rejected,
+// the others succeed. The amount and the unit are the upstream's as they are:
+// relay-1 reads like a New API site (a quota without a unit), relay-limited
+// like a Sub2API one (unit "USD").
+const BALANCE_TYPES = new Set(['relay/relay_key', 'demo/token'])
+interface BalanceState { amount?: string; currency?: string; unlimited?: boolean; updated_at?: string; error?: string; error_at?: string }
+const balanceState = new Map<number, BalanceState>([
+  [16, { amount: '1250000.000000', updated_at: now(-240) }],
+  [18, { unlimited: true, updated_at: now(-90) }],
+  [31, { amount: '7.500000', currency: 'USD', updated_at: now(-7200), error: 'transient: upstream answered 503', error_at: now(-300) }],
+  [33, { error: 'auth_rejected: the upstream rejected the key (401)', error_at: now(-600) }]
+])
+
+/** The account's balance view; undefined when its type reads none. */
+function balanceOf(a: any) {
+  if (!BALANCE_TYPES.has(`${a.plugin_key}/${a.type}`)) return undefined
+  return { supported: true, ...balanceState.get(a.id) }
+}
+
+/** One read of the balance of a: stored on success, the failure on top of the last balance otherwise. */
+function readBalance(a: any) {
+  const st = balanceState.get(a.id) || {}
+  if (a.id === 33) {
+    balanceState.set(a.id, { ...st, error: 'auth_rejected: the upstream rejected the key (401)', error_at: now(0) })
+    return
+  }
+  const amount = st.unlimited ? {} : { amount: (Number(st.amount ?? 20) * 0.98).toFixed(6), currency: st.currency }
+  balanceState.set(a.id, { unlimited: st.unlimited, ...amount, updated_at: now(0) })
+}
+
 const withGroups = (a: any) => ({
   ...a,
   models: a.models || [],
@@ -535,6 +450,8 @@ const withGroups = (a: any) => ({
   spm_limit: a.spm_limit ?? 0,
   spm_window_seconds: a.spm_window_seconds ?? 60,
   header_passthrough: a.header_passthrough ?? [],
+  protocols: a.protocols ?? null,
+  model_protocols: a.model_protocols ?? [],
   header_override: a.header_override ?? null,
   param_override: a.param_override ?? null,
   weight: a.weight ?? 1,
@@ -546,6 +463,7 @@ const withGroups = (a: any) => ({
   outcomes: outcomesOf(a),
   usage: usageOf(a),
   quota: quotaOf(a),
+  balance: balanceOf(a),
   refresh: refreshOf(a),
   last_test: a.last_test ?? null,
   groups: (a.group_ids || []).map((id: number) => ({ id, name: GROUP_NAMES[id] ?? `group-${id}` }))
@@ -566,6 +484,11 @@ export function groupAccountCount(gid: number): number {
 /** Accounts referencing a proxy (every owner, CONTRACTS §21.2). */
 export function proxyAccountCount(pid: number): number {
   return accounts.filter((a) => a.proxy_id === pid).length
+}
+
+/** served_protocols of GET /groups/:id: what the accounts of the group open, with how many serve each protocol. */
+export function groupServed(gid: number) {
+  return groupServedProtocols(accounts.filter((a) => (a.group_ids || []).includes(gid)).map(servedOf))
 }
 
 /** Platforms a group serves: supported by its accounts' types and existing now (sorted). */
@@ -621,26 +544,6 @@ on('PUT', '/settings/auto-disable', (req) => {
 })
 
 on('GET', '/account-types', () => accountTypeDecls.map(accountTypeOut))
-on('GET', '/account-types/:plugin_key/:type/form', (req) => {
-  const who = caller(req)
-  const k = req.params.plugin_key
-  if (k === 'anthropic') return guardForm(who, k, { schema: anthropicSchema, ui_schema: anthropicUI })
-  if (k === 'relay') return { schema: relaySchema, ui_schema: relayUI }
-  if (k === 'videogen') return { schema: videoSchema, ui_schema: { api_key: { 'ui:widget': 'secret' } } }
-  if (k === 'openai') return guardForm(who, k, openaiForm)
-  if (k === 'gemini') return guardForm(who, k, geminiForm)
-  if (k === 'controls_demo') return controlsForm
-  if (k === 'claude_oauth') {
-    // The real plugin form (plugins/claude-oauth/forms).
-    const file = req.params.type === 'claude_setup_token' ? 'setup_token' : 'oauth'
-    try {
-      return { schema: JSON.parse(readFileSync(nextPath('plugins', 'claude-oauth', 'forms', `${file}.schema.json`), 'utf8')), ui_schema: {} }
-    } catch {
-      return { schema: { type: 'object', required: ['access_token'], properties: { access_token: { type: 'string', title: 'Access Token', writeOnly: true } } }, ui_schema: {} }
-    }
-  }
-  return fail(404, 'not_found', 'form not found')
-})
 
 /** A complete model id (CONTRACTS §16): no wildcards. */
 const MODEL_RE = /^[A-Za-z0-9._:/@+-]{1,200}$/
@@ -823,7 +726,8 @@ on('POST', '/accounts/param-override/preview', (req) => {
 })
 on('GET', '/accounts/:id', (req) => {
   const r = scopedAccount(req, 'read')
-  return 'a' in r ? withGroups(r.a) : r
+  // served_protocols comes with a single account only.
+  return 'a' in r ? { ...withGroups(r.a), served_protocols: servedOf(r.a) } : r
 })
 on('POST', '/accounts', (req) => {
   const who = caller(req)
@@ -838,7 +742,7 @@ on('POST', '/accounts', (req) => {
   if ('platform' in b) return fail(400, 'invalid_argument', 'unknown field "platform"')
   const at = accountTypeDecls.find((x) => x.plugin_key === b.plugin_key && x.type === b.type)
   if (!at) return fail(400, 'invalid_argument', 'unknown account type', { fields: [{ field: 'type', code: 'not_found', message: 'Unknown account type' }] })
-  const bad = validateScheduling(b) || validateHeaderOverride(b) || applyCommonControls(at.plugin_key, at.type, b)
+  const bad = validateScheduling(b) || validateHeaderOverride(b) || validateProtocols(b, at) || applyCommonControls(at.plugin_key, at.type, b)
   if (bad) return bad
   if (b.plugin_key === 'codex') {
     const invalid = codexCredentialErrors(b.type, creds)
@@ -887,7 +791,7 @@ on('PATCH', '/accounts/:id', (req) => {
   if (!('a' in r)) return r
   const a = r.a
   const body = req.body || {}
-  const bad = validateScheduling(body) || validateHeaderOverride(body) || applyCommonControls(a.plugin_key, a.type, body, a)
+  const bad = validateScheduling(body) || validateHeaderOverride(body) || validateProtocols(body, a) || applyCommonControls(a.plugin_key, a.type, body, a)
   if (bad) return bad
   const { credentials, platform: _p, plugin_key: _k, type: _t, proxy_id: _pid, proxy_url: _purl, ...rest } = req.body || {}
   const guarded = checkGuarded(caller(req), a.plugin_key, credentials, a.credentials)
@@ -944,7 +848,10 @@ on('POST', '/accounts/:id/test', async (req) => {
   const requested = typeof req.body?.model === 'string' ? req.body.model : ''
   const asked = requested || (a.plugin_key === 'openai' ? 'gpt-4o-mini' : a.plugin_key === 'gemini' ? 'gemini-2.5-flash' : 'claude-haiku-4-5')
   const model = (a.model_mapping || {})[asked] || asked
-  const upstream = `${String(a.credentials?.base_url || 'https://api.anthropic.com').replace(/\/+$/, '')}${a.plugin_key === 'openai' ? '/v1/chat/completions' : '/v1/messages'}`
+  // The protocol the plugin tested (§122): the first of the model's model_protocols entry, else chat / messages.
+  const protocol = (a.model_protocols || []).find((e: { models: string[] }) => e.models.includes(asked))?.protocols[0] || (a.plugin_key === 'openai' ? 'openai.chat' : 'anthropic.messages')
+  const path = ({ 'openai.chat': '/v1/chat/completions', 'openai.responses': '/v1/responses', 'openai.embeddings': '/v1/embeddings', 'openai.images': '/v1/images/generations' } as Record<string, string>)[protocol] || '/v1/messages'
+  const upstream = `${String(a.credentials?.base_url || 'https://api.anthropic.com').replace(/\/+$/, '')}${path}`
   // Mocked outcomes: disabled = 401 (would disable), *opus* = 429 (would cool down),
   // *unknown* / *gpt-5* = 404 model not found, otherwise OK with a random latency.
   const latency = a.status === 'disabled' ? 212 : 300 + Math.round(Math.random() * (model.includes('pro') ? 6000 : 2500))
@@ -968,8 +875,8 @@ on('POST', '/accounts/:id/test', async (req) => {
       body: JSON.stringify({ id: 'msg_mock', type: 'message', role: 'assistant', model, content: [{ type: 'text', text: 'pong' }], stop_reason: 'end_turn', usage: { input_tokens: 12, output_tokens: 8 } })
     }
   }
-  out = { ...out, model, requested_model: requested, upstream }
-  a.last_test = { at: now(), ok: out.ok, latency_ms: latency, model, message: String(out.message || '') }
+  out = { ...out, model, requested_model: requested, protocol, upstream }
+  a.last_test = { at: now(), ok: out.ok, latency_ms: latency, model, protocol, message: String(out.message || '') }
   return out
 })
 // Fetch models from the upstream (CONTRACTS §19). Per plugin a fixed list; a
@@ -998,6 +905,21 @@ on('POST', '/account-types/:plugin_key/:type/models/fetch', (req) => {
     if (err) return err
   }
   return fetchUpstreamModels(req.params.plugin_key, b.credentials)
+})
+// The proxy of a native authorization flow (CONTRACTS §117): checked like
+// models/fetch, sealed by the core; the mock's ticket is opaque base64.
+on('POST', '/account-types/:plugin_key/:type/proxy-ticket', (req) => {
+  const b = req.body || {}
+  const url = typeof b.proxy_url === 'string' ? b.proxy_url.trim() : ''
+  if (url && b.proxy_id != null) {
+    return fail(400, 'invalid_argument', 'proxy_id and proxy_url are exclusive', { fields: [{ field: 'proxy_url', code: 'conflict', message: 'Give proxy_id or proxy_url, not both' }] })
+  }
+  if (url) {
+    const err = validateProxyURL(url)
+    if (err) return err
+  }
+  const choice = url ? { proxy_url: url } : b.proxy_id != null ? { proxy_id: b.proxy_id } : {}
+  return { ticket: Buffer.from(JSON.stringify({ plugin: req.params.plugin_key, ...choice })).toString('base64url') }
 })
 on('POST', '/accounts/:id/models/fetch', (req) => {
   const r = scopedAccount(req, 'test')
@@ -1069,23 +991,18 @@ on('PUT', '/accounts/:id/usage-limit', (req) => {
   return { ...u, last_7_days: usageFigures(r.a, 2), last_30_days: usageFigures(r.a, 7) }
 })
 
-on('GET', '/accounts/:id/quota', async (req) => {
+on('GET', '/accounts/:id/quota', (req) => {
   const r = scopedAccount(req, 'read')
   if (!('a' in r)) return r
-  const st = quotaStateOf(r.a)
-  if (!st) return { supported: false, source: '', updated_at: null, error: '', windows: [] }
-  if (req.query.force === 'true' && QUERY_TYPES.has(`${r.a.plugin_key}/${r.a.type}`)) {
-    await new Promise((ok) => setTimeout(ok, 700))
-    st.activeAt = Date.now()
-    st.source = 'active'
-    st.updated_at = now()
-    st.error = ''
-    if (!st.windows.length) st.windows = claudeWindows(3, 'allowed', 4 * H + 1800, 1, 'allowed', 6 * D, 0, 0)
-    for (const w of st.windows) {
-      if (w.status !== 'rejected') w.utilization = Math.min(100, Math.round((w.utilization + Math.random() * 2) * 10) / 10)
-    }
-  }
-  return quotaOf(r.a)
+  return quotaOf(r.a) || { supported: false, source: '', updated_at: null, error: '', windows: [] }
+})
+on('GET', '/accounts/:id/balance', (req) => {
+  const r = scopedAccount(req, 'read')
+  if (!('a' in r)) return r
+  const b = balanceOf(r.a)
+  if (!b) return fail(404, 'unsupported', 'account type does not support balance')
+  if (req.query.force === 'true' || (!b.updated_at && !b.error)) readBalance(r.a)
+  return balanceOf(r.a)
 })
 // Renews the credentials of an OAuth account now (CONTRACTS §48).
 on('POST', '/accounts/:id/refresh-credentials', (req) => {

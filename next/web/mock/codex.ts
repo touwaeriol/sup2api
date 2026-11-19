@@ -72,7 +72,9 @@ export const codexAccountTypes = (['codex_device', 'codex_oauth'] as const).map(
     auth_method_label: d.authMethodLabel || FALLBACK[type].authMethodLabel,
     form: { mode: d.form?.mode || 'native', component: d.form?.component || 'CodexAuthForm' },
     sensitive_fields: d.sensitiveFields || ['access_token', 'refresh_token', 'id_token'],
-    supports: ['openai']
+    supports: ['openai'],
+    // Codex speaks Responses only: chat requests are adapted to it (CONTRACTS §83.3).
+    subset: ['openai.responses']
   }
 })
 
@@ -128,7 +130,15 @@ const inAnHour = () => Math.floor(Date.now() / 1000) + 3600
 
 const deviceSessions = new Map<string, { polls: number; expires: number }>()
 
-on('POST', '/p/codex/auth/device/start', () => {
+// Both logins start with the proxy ticket of the account form (CONTRACTS §117).
+const noTicket = (req: { body?: any }) =>
+  String(req.body?.proxy_ticket || '').trim()
+    ? null
+    : badRequest('proxy_ticket', 'required', "proxy_ticket is required: the account form's proxy choice / 缺少 proxy_ticket：账号表单的代理选择")
+
+on('POST', '/p/codex/auth/device/start', (req) => {
+  const refused = noTicket(req)
+  if (refused) return refused
   const session_id = randomUUID()
   deviceSessions.set(session_id, { polls: 0, expires: Date.now() + 900_000 })
   const letters = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
@@ -164,7 +174,9 @@ on('POST', '/p/codex/auth/device/poll', (req) => {
 
 const oauthSessions = new Map<string, string>() // session id -> state
 
-on('POST', '/p/codex/auth/codex/start', () => {
+on('POST', '/p/codex/auth/codex/start', (req) => {
+  const refused = noTicket(req)
+  if (refused) return refused
   const state = randomBytes(12).toString('base64url')
   const session_id = randomUUID()
   oauthSessions.set(session_id, state)

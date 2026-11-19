@@ -22,25 +22,32 @@ func TestAccountBalanceRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, b, "no snapshot yet")
 
+	// A first read that fails: no amount, no updated_at.
 	at := time.Now().UTC().Truncate(time.Microsecond)
-	require.NoError(t, db.UpsertBalance(ctx, &store.BalanceSnapshot{AccountID: id, AmountMicros: 5, Currency: "USD",
-		Source: store.BalanceActive, UpdatedAt: &at}))
+	require.NoError(t, db.UpsertBalance(ctx, &store.BalanceSnapshot{AccountID: id, Error: "transient: 503", ErrorAt: &at}))
 	b, err = db.AccountBalance(ctx, id)
 	require.NoError(t, err)
-	require.NotNil(t, b)
+	require.Nil(t, b.UpdatedAt, "a NULL timestamp reads as nil")
+	require.Equal(t, "transient: 503", b.Error)
+	require.Equal(t, "", b.Currency)
+
+	require.NoError(t, db.UpsertBalance(ctx, &store.BalanceSnapshot{AccountID: id, AmountMicros: 5, Currency: "USD", UpdatedAt: &at}))
+	b, err = db.AccountBalance(ctx, id)
+	require.NoError(t, err)
 	require.Equal(t, int64(5), b.AmountMicros)
 	require.True(t, b.UpdatedAt.Equal(at))
-	require.Nil(t, b.ErrorAt, "a NULL timestamp reads as nil")
+	require.Nil(t, b.ErrorAt)
+	require.Equal(t, "", b.Error)
 
-	require.NoError(t, db.UpsertBalance(ctx, &store.BalanceSnapshot{AccountID: id, AmountMicros: 5, Currency: "USD",
-		Source: store.BalanceActive, UpdatedAt: &at, Error: "boom", ErrorAt: &at}))
+	require.NoError(t, db.UpsertBalance(ctx, &store.BalanceSnapshot{AccountID: id, Unlimited: true, UpdatedAt: &at, Error: "boom", ErrorAt: &at}))
 	all, err := db.AccountBalances(ctx, []int64{id, id + 1})
 	require.NoError(t, err)
 	require.Len(t, all, 1)
+	require.True(t, all[id].Unlimited)
 	require.Equal(t, "boom", all[id].Error)
 	require.True(t, all[id].ErrorAt.Equal(at))
 
-	require.NoError(t, db.DeleteBalance(ctx, id))
+	require.NoError(t, store.DeleteBalance(ctx, db.Gorm, id))
 	b, err = db.AccountBalance(ctx, id)
 	require.NoError(t, err)
 	require.Nil(t, b)

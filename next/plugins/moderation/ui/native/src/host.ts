@@ -271,9 +271,6 @@ const settingsApiPath = () => `/plugins/${encodeURIComponent(useModHost().plugin
 export const fetchPluginSettings = () => useModHost().api.get<PluginSettings>(settingsApiPath())
 export const savePluginSettings = (values: Record<string, unknown>) => useModHost().api.put<PluginSettings>(settingsApiPath(), { values })
 
-/** A setting as stored, else its schema default; undefined when neither is known. */
-export const settingValue = (s: PluginSettings | null | undefined, key: string): unknown => s?.values?.[key] ?? s?.schema?.properties?.[key]?.default
-
 /**
  * May read accounts of the console at any scope (all, own, groups, ids): a
  * caller who may not is not sent for a 403. Every console this plugin runs

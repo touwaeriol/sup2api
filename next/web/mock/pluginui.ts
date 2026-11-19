@@ -6,6 +6,9 @@ import { moderationAsset, moderationUIPlugin } from './moderation'
 import { dynweightAsset, dynweightUIPlugin } from './dynweight'
 import { codexAsset, codexUIPlugin } from './codex'
 import { controlsAsset, controlsUIPlugin } from './controls'
+import { mailerAsset, mailerUIPlugin } from './mailer'
+import { apiKeyFormAsset, apiKeyFormUIPlugins, nativeDistAsset } from './apiKeyForms'
+import { volcengineUIPlugins } from './volcengine'
 
 // Mock handlers: GET /ui/plugins, plugin-owned routes (/p/<key>/...) and the
 // /plugin-ui/<key>/<hash>/... static files (guard native UI from its dist
@@ -26,6 +29,9 @@ const uiPlugins = [
   dynweightUIPlugin,
   codexUIPlugin,
   controlsUIPlugin,
+  mailerUIPlugin,
+  ...apiKeyFormUIPlugins,
+  ...volcengineUIPlugins,
   {
     key: 'guard',
     version: '0.1.0',
@@ -36,7 +42,7 @@ const uiPlugins = [
     slots: [{ slot: 'dashboard.widgets', component: 'BlockedTodayCard', permission: 'stats:read' }],
     native_entry: 'ui/native/entry.js',
     trust: 'official',
-    host_ui_compat: '^1.0'
+    host_ui_compat: '^4.0'
   },
   {
     key: 'demo',
@@ -44,12 +50,10 @@ const uiPlugins = [
     name: { en: 'Demo platform', zh: '演示平台' },
     asset_base: '/plugin-ui/demo/0.0.1-dev',
     menus: [
-      { id: 'status', section: 'plugins', label: { en: 'Demo iframe', zh: '演示 iframe' }, page: 'status' },
-      { id: 'settings', section: 'plugins', label: { en: 'Demo form', zh: '演示表单' }, page: 'settings' }
+      { id: 'status', section: 'plugins', label: { en: 'Demo iframe', zh: '演示 iframe' }, page: 'status' }
     ],
     pages: {
-      status: { type: 'iframe', title: { en: 'Demo iframe page', zh: '演示 iframe 页面' }, src: 'ui/iframe/status.html' },
-      settings: { type: 'form', title: { en: 'Demo settings', zh: '演示设置' }, schema: 'forms/settings.schema.json', source: 'GET /settings', submit: 'PUT /settings' }
+      status: { type: 'iframe', title: { en: 'Demo iframe page', zh: '演示 iframe 页面' }, src: 'ui/iframe/status.html' }
     },
     slots: [],
     native_entry: '',
@@ -64,9 +68,6 @@ const hasExtension = (p: MockUIPlugin) =>
   !!(p.menus?.length || Object.keys(p.pages || {}).length || p.slots?.length || p.account_actions?.length || p.native_entry)
 on('GET', '/ui/plugins', () => uiPlugins.filter(hasExtension))
 
-let demoSettings: Record<string, unknown> = { endpoint: 'https://demo.example.com', retries: 3, verbose: false }
-on('GET', '/p/demo/settings', () => demoSettings)
-on('PUT', '/p/demo/settings', (req) => (demoSettings = req.body || {}))
 on('GET', '/p/demo/ping', () => ({ pong: true, at: now() }))
 
 let guardRules = [
@@ -169,17 +170,6 @@ window.onRequest = (method, params) => {
 };
 </script></body></html>`
 
-const DEMO_SETTINGS_SCHEMA = {
-  type: 'object',
-  required: ['endpoint'],
-  properties: {
-    endpoint: { type: 'string', format: 'uri', title: 'Endpoint' },
-    retries: { type: 'integer', minimum: 0, maximum: 10, title: 'Retries' },
-    verbose: { type: 'boolean', title: 'Verbose logging' },
-    tags: { type: 'array', items: { type: 'string' }, title: 'Tags' }
-  }
-}
-
 /** Serves /plugin-ui/<key>/<hash>/<path>; returns null when unknown. */
 export function pluginAsset(pathname: string): { type: string; body: string | Buffer } | null {
   const m = /^\/plugin-ui\/([^/]+)\/[^/]+\/(.+)$/.exec(pathname)
@@ -189,6 +179,9 @@ export function pluginAsset(pathname: string): { type: string; body: string | Bu
   if (key === 'dynweight') return dynweightAsset(path)
   if (key === 'codex') return codexAsset(path)
   if (key === 'controls_demo') return controlsAsset(path)
+  if (key === 'mailer') return mailerAsset(path)
+  if (apiKeyFormUIPlugins.some((p) => p.key === key)) return apiKeyFormAsset(key, path)
+  if (key === 'volcengine') return nativeDistAsset(key, path)
   if (key === 'guard' && path.startsWith('ui/native/')) {
     const rel = normalize(path.slice('ui/native/'.length))
     if (rel.startsWith('..')) return null
@@ -198,9 +191,5 @@ export function pluginAsset(pathname: string): { type: string; body: string | Bu
   }
   if (key === 'demo' && path === 'ui/iframe/status.html') return { type: 'text/html', body: STATUS_PAGE }
   if (key === 'demo' && path === 'ui/iframe/account.html') return { type: 'text/html', body: ACCOUNT_FORM }
-  if (key === 'demo' && path === 'forms/settings.schema.json') return { type: 'application/json', body: JSON.stringify(DEMO_SETTINGS_SCHEMA) }
-  if (key === 'demo' && path === 'forms/settings.ui.json') {
-    return { type: 'application/json', body: JSON.stringify({ endpoint: { 'ui:widget': 'url-presets', 'ui:options': { presets: ['https://demo.example.com'] } } }) }
-  }
   return null
 }
