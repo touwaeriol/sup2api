@@ -94,7 +94,7 @@ func TestAuditConcurrentSettingsPatchesKeepBothFields(t *testing.T) {
 func TestAuditInvalidatedSettingsCannotBeRefilledByOldQuery(t *testing.T) {
 	e := newEnv(t)
 	background := context.Background()
-	e.exec(`INSERT INTO settings(key,value) VALUES('billing','{"missing_price_policy":"reject"}');
+	e.exec(`INSERT INTO settings(key,value) VALUES('billing','{"min_balance":"1"}');
 	ALTER TABLE settings RENAME TO audit_settings_source;
 	CREATE FUNCTION audit_setting_read_barrier(jsonb) RETURNS jsonb LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_advisory_xact_lock(78190003); RETURN $1; END $$;
 	CREATE VIEW settings AS SELECT key,audit_setting_read_barrier(value) AS value,updated_by,updated_at FROM audit_settings_source`)
@@ -111,7 +111,7 @@ func TestAuditInvalidatedSettingsCannotBeRefilledByOldQuery(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { _, err := e.svc.Settings(ctx); done <- err }()
 	auditBillingWaitLocks(t, ctx, e.db, 1)
-	e.exec(`UPDATE audit_settings_source SET value='{"missing_price_policy":"free"}' WHERE key='billing'`)
+	e.exec(`UPDATE audit_settings_source SET value='{"min_balance":"2"}' WHERE key='billing'`)
 	e.svc.invalidate()
 	if err := barrier.Commit().Error; err != nil {
 		t.Fatal(err)
@@ -123,7 +123,7 @@ func TestAuditInvalidatedSettingsCannotBeRefilledByOldQuery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if current.MissingPricePolicy != PolicyFree {
+	if current.MinBalance.String() != "2" {
 		t.Fatalf("stale query refilled invalidated cache: %+v", current)
 	}
 }

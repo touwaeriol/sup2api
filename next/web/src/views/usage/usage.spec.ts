@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { accountPlatform, attemptRuns, attemptTrail, retryCount } from './usage'
+import { accountPlatform, attemptRuns, attemptTrail, knownUsageRounds, retryCount, type UsageRow } from './usage'
 
 describe('accountPlatform', () => {
   it.each([
@@ -101,5 +101,14 @@ describe('retryCount', () => {
     [3, 2]
   ])('is %o attempts less the first: %o', (attempts, n) => {
     expect(retryCount({ attempts })).toBe(n)
+  })
+})
+
+describe('knownUsageRounds', () => {
+  it('reads the image tokens of a recorded round', () => {
+    const row = { success: false, input_tokens: 0, output_tokens: 0,
+      billing_detail: { inputs: { replacement: [{ Tokens: { Input: 40, Output: 520, CacheRead: 0, CacheCreation: 0, CacheCreation1h: 0, ImageInput: 30, ImageOutput: 515 } }] } } } as unknown as UsageRow
+    expect(knownUsageRounds(row)).toEqual([{ round: 1, metrics: undefined,
+      tokens: { input_tokens: 40, output_tokens: 520, cache_read_tokens: 0, cache_creation_tokens: 0, cache_creation_1h_tokens: 0, image_input_tokens: 30, image_output_tokens: 515 } }])
   })
 })

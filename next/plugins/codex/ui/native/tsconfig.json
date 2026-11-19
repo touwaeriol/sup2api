@@ -1,22 +1,4 @@
 {
-  "compilerOptions": {
-    "target": "ES2022",
-    "module": "ESNext",
-    "moduleResolution": "Bundler",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "strict": true,
-    "noEmit": true,
-    "skipLibCheck": true,
-    "isolatedModules": true,
-    "resolveJsonModule": true,
-    "jsx": "preserve",
-    "baseUrl": ".",
-    "paths": {
-      "@sub2api/ui": ["../../../../web/packages/ui/src/index.ts"],
-      "@sub2api/host": ["../../../../web/packages/host/src/index.ts"],
-      "vitest": ["../../../../web/node_modules/vitest"],
-      "@vue/test-utils": ["../../../../web/node_modules/@vue/test-utils"]
-    }
-  },
-  "include": ["src/**/*.ts", "src/**/*.vue", "vite.config.ts"]
+  "extends": "../../../../web/packages/vite-preset/tsconfig.plugin.json",
+  "include": ["src/**/*.ts", "src/**/*.vue"]
 }

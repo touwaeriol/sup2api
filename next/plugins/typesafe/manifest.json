@@ -1,0 +1,94 @@
+{
+  "apiVersion": 1,
+  "key": "typesafe",
+  "name": { "en": "TypeSafe", "zh": "TypeSafe" },
+  "description": {
+    "en": "Adds the typesafe platform (POST /v1/systemone, the TypeSafe Jev API) and its API key account type. Requests are forwarded to TypeSafe as they are; usage is read from each answer's usage. The plugin builds the upstream requests; the core sends them, so the plugin itself makes no network connection. Model prices are set by administrators in the core.",
+    "zh": "新增 typesafe 平台（POST /v1/systemone，TypeSafe 的 Jev 接口）及其 API Key 账号类型。请求原样转发给 TypeSafe，用量取自每次应答的 usage。插件构造上游请求，由核心发送，插件自身不发起任何网络连接。模型价格由管理员在核心中配置。"
+  },
+  "version": "0.1.0",
+  "publisher": "sub2api",
+  "icon": "text:T",
+  "runtime": "grpc",
+  "entry": {
+    "grpc": { "binaries": "runtimes/{os}-{arch}/plugin" }
+  },
+  "hostCompat": ">=0.1.304 <0.2.0",
+  "hostUICompat": "^4.0",
+
+  "capabilities": [
+    { "id": "platform.adapter.v1" }
+  ],
+
+  "platforms": [
+    {
+      "id": "typesafe",
+      "label": {"en": "TypeSafe", "zh": "TypeSafe"},
+      "passHeaders": ["typesafe-danger-zone-images", "typesafe-danger-zone-long-context"],
+      "usage": {"semantics": "exclusive"},
+      "endpoints": [
+        {
+          "id": "systemone",
+          "method": "POST",
+          "path": "/v1/systemone",
+          "protocol": "typesafe.systemone",
+          "kind": "proxy",
+          "auth": {"headers": ["authorization"]},
+          "request": {"modelPath": "model", "promptTextPaths": ["state"]},
+          "response": {"nonStream": "json"},
+          "errorFormat": "openai",
+          "billing": "usage",
+          "usage": {
+            "semantics": "exclusive",
+            "json": {"map": {"model": "model", "input_tokens": "usage.input_tokens", "output_tokens": "usage.output_tokens"}}
+          },
+          "billingTypes": ["per_token", "per_request", "expression"]
+        }
+      ]
+    }
+  ],
+
+  "accountTypes": [
+    {
+      "id": "apikey",
+      "label": { "en": "TypeSafe", "zh": "TypeSafe" },
+      "description": {
+        "en": "A TypeSafe API key. Requests go to <Base URL>/v1/systemone (default https://api.typesafe.ai) with the key in Authorization: Bearer.",
+        "zh": "TypeSafe 的 API Key。请求发往 <Base URL>/v1/systemone（默认 https://api.typesafe.ai），Key 放在 Authorization: Bearer 中。"
+      },
+      "form": { "mode": "native", "component": "TypesafeKeyForm" },
+      "upstreamFields": ["base_url"],
+      "sensitiveFields": ["api_key"],
+      "settingsFields": ["base_url"],
+      "guardedSettings": [
+        { "field": "base_url", "allowed": ["https://api.typesafe.ai"], "versions": ["/v1"] }
+      ],
+      "defaultModels": [
+        "jev-latest",
+        "jev-1.14.0",
+        "jev-1.13.0",
+        "jev-preview"
+      ],
+      "platforms": [
+        { "platform": "typesafe" }
+      ]
+    }
+  ],
+
+  "resources": { "memoryMB": 64, "cpu": 0.1, "maxThreads": 32, "maxOpenFiles": 64 },
+
+  "ui": {
+    "native": { "entry": "ui/native/entry.js" }
+  },
+
+  "hostPermissions": [
+    { "id": "platform.register",
+      "reason": { "en": "Register the typesafe platform and its TypeSafe API key account type", "zh": "注册 typesafe 平台及其 TypeSafe API Key 账号类型" } },
+    { "id": "gateway.endpoint",
+      "reason": { "en": "Serve the TypeSafe Jev API at POST /v1/systemone, the path of the official TypeSafe API", "zh": "在 POST /v1/systemone 上提供 TypeSafe 的 Jev 接口，与 TypeSafe 官方路径一致" } },
+    { "id": "ui.native",
+      "reason": { "en": "The API key account form (TypesafeKeyForm)", "zh": "API Key 账号表单（TypesafeKeyForm）" } }
+  ],
+
+  "externalServices": ["api.typesafe.ai"]
+}

@@ -66,7 +66,7 @@ func TestReconcileTaskWaitsForTheSweep(t *testing.T) {
 	rf := reconcileFixture(t)
 	ctx := context.Background()
 	rf.svc.process(ctx, []*core.UsageRecord{rf.reserved("req-task", "task-task", core.UsageTokens{Input: 1000, Output: 100})})
-	rf.plugin.parse = func(*pluginv1.ParseReconcileResponseRequest) (*pluginv1.ReconcileResult, error) {
+	rf.plugin.parse = func(*monitorCall) (*pluginv1.ReconcileResult, error) {
 		time.Sleep(200 * time.Millisecond)
 		return &pluginv1.ReconcileResult{State: pluginv1.ReconcileResult_SETTLED,
 			Tokens: &pluginv1.UsageTokens{InputTokens: 1000, OutputTokens: 100}}, nil

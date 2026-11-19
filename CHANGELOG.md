@@ -13,19 +13,471 @@
 - `/v1/chat/completions` 带 `response_format: {"type":"json_object"}`、经核心转成 Responses（如 codex 账号）时，开头的 system/developer 消息不再并入 `instructions`，按原位置作为 `role: developer` 的 input 消息发送，也不写 `instructions`。Responses 只在 input 消息里找 “json” 字样，此前 “Reply in JSON.” 之类写在 system 里的请求会被上游拒绝。普通请求和 `json_schema` 请求不变（CONTRACTS §83.2）。
 - 上游只接受流式的账号（codex）在 200 的 SSE 里回 `error` / `response.failed` 事件、不带 `status` 且错误类型是 `invalid_request_error` 时，按 400 交给插件分类并返回客户端，不再按 502 冷却账号、换号重试；code 为账号或凭证类（如 `account_deactivated`、`invalid_api_key`）的仍按 502 换号，自动停用的关键字规则照常生效（CONTRACTS §83.1）。
 
-### 云厂商上游：Azure OpenAI、Vertex AI、AWS Bedrock 三个新插件，OpenAI 账号可填组织与项目（openai 0.4.4、azure_openai 0.1.0、vertex 0.1.0、bedrock 0.1.0；核心加请求签名与响应流格式；无迁移）
+### 插件界面只用代码写：删掉声明式表单与页面，界面契约 4.0（核心、SDK、控制台、全部带界面的第一方插件；无迁移，随 0.1.304 发布；设计见 [DESIGN-2026-11-19-PLUGIN-UI-CODE-ONLY.md](next/docs/DESIGN-2026-11-19-PLUGIN-UI-CODE-ONLY.md)）
 
-分支 `feat/cloud-providers`，未合并。**没有真实云账号，三家的行为都只对文档、黄金样例和模拟上游验证过**；没验证的事项见 [设计文档](next/docs/DESIGN-2026-11-17-CLOUD-PROVIDERS.md) 第 12 节，验证之前不要对外说“已支持”。填法见 [PLUGIN-CLOUD-PROVIDERS.md](next/docs/PLUGIN-CLOUD-PROVIDERS.md)。
+账号表单、插件设置和插件页面只能用代码写：插件自带的原生界面（`ui/native`，受信任发布者，宿主权限 `ui.native`）或 iframe。声明式的 JSON Schema 表单（`form.mode: "schema"`）和表格、表单页面（`type: "table" | "form"`）整个删除，核心不再读、不再校验 JSON Schema 表单。规则见 CONTRACTS §23、§75.1、§75.5。
 
-- **openai 0.4.4**：API Key 账号“高级（可选）”里新增组织 ID、项目 ID，填了就以 `OpenAI-Organization`、`OpenAI-Project` 发送并覆盖客户端自己带的；留空时行为不变。
-- **azure_openai 0.1.0**（新，市场插件，只有清单）：Azure OpenAI 资源地址加 API Key（`api-key` 头）。两种类型：v1 接口（chat、responses、embeddings）和按部署的经典接口（chat、embeddings，带 `api-version`；`/v1/responses` 请求由核心转成 chat）。错误分类与 OpenAI 账号相同（`openai` 策略），最低核心 0.1.290。部署不存在（404 `DeploymentNotFound`）默认原样回给客户端；要换到下一个账号，由管理员在「调度策略」的失败处理里加一条自动重试规则（来源：上游 HTTP 响应；错误码 `404`；关键词 `DeploymentNotFound`、`model_not_found`，一行一个），不配账号规则，账号不受惩罚。上游模型就是部署名，用账号的模型映射对应。客户端的 `OpenAI-Organization` / `OpenAI-Project` 和请求体里的 `service_tier`、`safety_identifier` 不转给 Azure。粘贴带 deployments、chat/completions 或 api-version 的请求地址会在保存时报错。不支持 Entra ID 令牌。
-- **vertex 0.1.0**（新，市场插件）：Vertex AI 上的 Gemini（generateContent、streamGenerateContent、countTokens）。三种鉴权：服务账号 JSON、用户凭证 JSON（`gcloud auth application-default login`）、API Key。访问令牌由核心换取并自动续期（CONTRACTS §48），插件自身不联网。服务账号 JWT 用 `github.com/golang-jwt/jwt/v5` 签名，凭证文件由插件自己解析（Google 的库没有只签断言、不发请求的公开接口，能单独签名的 `golang.org/x/oauth2/jws` 标着 Deprecated）；`token_uri` 必须是 Google 的令牌地址，按解析后生效的值判断。不支持 Vertex 上的 Claude。
-- **bedrock 0.1.0**（新，市场插件，需要核心 0.1.304）：只服务 anthropic 平台，Claude 走 InvokeModel / InvokeModelWithResponseStream。客户端用 OpenAI 协议（chat、responses）访问时由核心先转换成 Messages 请求，走同一条路；Bedrock 自己的 OpenAI 兼容接口（`/openai/v1`）没有接，Claude 以外的 Bedrock 模型这一版不支持。三种鉴权：Bedrock API Key、长期 Access Key、临时凭证（后两种由核心做 SigV4 签名；都不自动续期）。新建账号时预填“Anthropic 模型名 → Bedrock 模型 ID”的映射（ID 按 2026-11-17 的 AWS 模型卡片，含 Fable 5.2、Opus / Sonnet / Haiku 5.5，不含 AWS 已停止服务的 Sonnet 4 和 Opus 4），可选跨区域推理前缀（us、eu、apac、jp、au、in、global）；按 AWS 模型卡片，现行的 Claude 模型几乎都只能经推理配置调用，所以前缀默认是 `global`（预填模型里只有 Opus 4.1 没有全球配置，它的映射直接写 `us.` 开头的 ID），要把请求留在某个地域内就改选地域前缀。账号测试的默认模型是 Haiku 4.5 的全球推理配置。中国区（`cn-*`）和隔离分区的区域在保存时被拒绝。请求体顶层的 `output_config`、`output_format` 保留（旧版会删）；`anthropic_beta` 白名单 15 项。已知限制：不清理 Claude Code 写在请求体深处、Bedrock 不接受的字段，给 Claude Code 用的账号要在参数覆盖里手工删。
-- **核心：请求签名与响应流格式**（CONTRACTS §109）：插件构造上游请求时可以要求核心对最终请求签名（`signing`，现有方案 `aws-sigv4`），或声明响应流的格式（`response_stream`，现有 `aws-eventstream-chunk`，核心解码成 SSE 后照常中继、计量、转换）。核心不认识的方案或格式、以及 WebSocket 握手带了这两项时，这次尝试换号、不发请求。新包 `next/sdk/reqsign`、`next/sdk/awseventstream`，签名和消息编解码用 AWS 的官方库（`aws-sdk-go-v2` 的 `aws/signer/v4`、`aws/protocol/eventstream`；只用这两个包，请求仍由网关自己构造、经账号代理发出）。event stream 里带同名头的消息按帧损坏处理。不用这两项的插件不受影响；节点外壳没有改动。
+**核心与清单**
+
+- 删掉 `GET /account-types/:plugin_key/:type/form`；`GET /plugins/:key/settings` 不再返回 `schema`、`ui_schema`；插件包不再打包、核心不再提供 `forms/`（`/plugin-ui/.../forms/...` 返回 404）。保存账号凭证只由插件的 `ValidateCredentials` 把关，保存插件设置只由插件的 `ValidateSettings`（可选）把关。
+- 插件设置的密钥改在清单 `ui.settings.secrets` 里声明（`[{path, sensitive?}]`）。native、iframe 设置必须写这个键（上传时缺了报 `ui.settings.secrets` `required`）：写了列表只掩码列出的字段，写成 `[]` 不掩码；已装的包没有这个键时，和此前一样每个顶层键都被掩码。路径中途遇到数组时整个数组按密钥掩码和保留（CONTRACTS §75.1、§75.5）。
+- 新增可选的 `PluginService.ValidateSettings`：保存插件设置前由插件校验，可以返回字段错误或归一化后的设置；插件没实现时照常保存，插件已启用但运行不起来时保存失败（`plugin_unavailable`，先停用再改）。请求带插件当前的授权（与 `Configure` 相同）。插件线协议（2）和 Host API（10）不变。
+- `GET /plugins` 的 `has_settings` 只对当前版本是 native 设置的插件为 true（iframe 设置控制台不打开，仍为 false）。
+- 清单检查：账号表单或设置的 `form.mode: "schema"`、页面的 `type: "table" | "form"` 上传时报 `unsupported`；native 设置要有 `component` 或 `page`。`manifest.Form` 删掉 `schema`、`uiSchema`，`manifest.Page` 删掉 `source`、`columns`、`schema`、`submit`、`search`、`create`，`check.Warnings` 删除。`sub2api-plugin` 严格读清单，旧字段报 unknown field。
+
+**SDK**
+
+- 新增 `pluginsdk.SettingsValidator` 和校验辅助包 `pluginsdk/fieldcheck`（`OneOf`、`Pattern` 只能用于 `String()`，用错在构造时 panic；必填字段收到 `null` 报 `required`）、`fieldcheck.DecodeSettings`（设置的“解码 → 检查 → 解码进带默认值的结构体”）；`pluginsdktest.Harness.ValidateSettings` 多一个 `grants` 参数，新增 `pluginsdktest.SettingsSecrets`（清单写出 `ui.settings.secrets` 且正好声明预期的密钥）。
+- `apikey.Spec.Fields` 改为 `fieldcheck.Fields`：一处声明既是允许的键又带规则（也可以给 `api_key`、`base_url` 加规则，只在 Spec 自己的检查通过后、对将要保存的值即去空白的 key 和规范化后的地址运行），插件不必再包一层 `Platform` 改写 `ValidateCredentials`。`Fields` 为 `nil` 时也拒绝 `api_key`、`base_url` 以外的键（此前 `nil` 不检查），代替 schema 的 `additionalProperties:false`；`accountform.Form.Only` 同理。新增 `Spec.NoBaseURL`（vertex_apikey 用它拒绝 `base_url`）。新增测试辅助 `apikey/apikeytest`（api_key + base_url 类型共有的 `ValidateCredentials` 用例）。
+- `apikey.NormalizeBaseURL` 拒绝去掉首尾空白后仍含空白字符（任何 Unicode 空白）、`?` 或 `#` 的基础地址（与原表单 schema 一致；此前路径里的空格被转成 `%20` 保存）。已存的地址都是它的输出，空格与非 ASCII 字节都已百分号转义，请求地址不变。
+
+**界面包与控制台**
+
+- 界面包 `@sub2api/ui`、`@sub2api/host`、`@sub2api/vite-preset` 升到 4.0.0（`HOST_UI_VERSION`），删掉 `SchemaForm`、`SchemaField` 等 schema 导出；控制台删掉声明式表单、表格、表单页的渲染。全部带原生界面的第一方插件（16 个，payment 没有界面）`hostUICompat` 都是 `^4.0`。
+- `@sub2api/ui` 新增：`SFormSection`（表单分节：标题、说明、可折叠，有值或有错误时自动展开；`createApiKeyForm` 的 `section` 可写 `{ title, help, collapsed }`）、`SDateTimeInput`（RFC 3339 的日期时间输入，清空不发该键；`createApiKeyForm` 的 `date-time` 改用它）、`nativeAccountFormProps`（§23.5 props 的运行时对象，插件写 `defineProps(nativeAccountFormProps)`）、`useForm` 的 `bindNumber(path)`（数字框清空时不发该键）、`SSecretInput` 的 `plain`（敏感地址用文本框输入）；`createApiKeyForm` 的额外字段可写 `mono`（`text`、`textarea` 用等宽字体）。`useForm` 的 `get()` 在写入后的同一拍里渲染时不再丢掉对值的依赖（此前 `v-if` 绑在 `get()` 上的字段第二次切换后不再更新）。
+- `@sub2api/ui/testing`：账号表单（`fakeHost`、`mountAccountForm`、`fillControls`、`keyAndUrlCases`）、设置表单（`fakeCore`、`mountSettings`）、文案（`checkMessages`）的测试辅助和 `cleanup`；只能在 spec 里引用，不进 import map。
+- 仓库里的插件界面工程用控制台的 vite、vue-tsc、vitest 构建和测试（`@sub2api/vite-preset` 提供基础 tsconfig 与构建配置），CI 的插件界面检查任何一步失败都报错；工程有自己的 lockfile 时才 `npm ci`。
+
+**各插件**
+
+- API Key 类账号（anthropic、gemini、typesafe、openai、relay、newapi、sub2api、azure-openai）：表单改为插件的 `ui/native`（`createApiKeyForm`），字段名、默认值、文案与原表单相同，编辑时不改密钥仍保留已存的值，Base URL 仍按受限设置只给官方地址；清单改为 `form.mode: "native"`，加 `ui.native`。relay、newapi、sub2api、azure-openai 的表单把站点地址放在 API Key 前面；openai 的组织 ID、项目 ID 放在“高级（可选）”一节下，默认收起，有值或有错误时自动展开。`ValidateCredentials` 拒绝表单不会发的键（`unknown`；openai 只另外允许 `organization`、`project`，`azure_deployment` 只另外允许 `api_version`），基础地址路径里的空格由转成 `%20` 改为拒绝。插件补上原来只写在 schema 里的校验：openai 的组织 ID、项目 ID 不超过 128 个可见 ASCII 字符（错误码随 `fieldcheck`：不是字符串报 `type`、超长报 `maxLength`、字符不对报 `pattern`；为 `null` 时由忽略改为报 `type`）；azure-openai 的资源地址只能是资源根地址（可带 `/openai`、`/openai/v1` 或 Foundry 项目路径），`azure_deployment` 的 `api_version` 必填、须是 `2024-10-21` 或 `2025-04-01-preview` 这样的日期，新建时表单仍预填 `2024-10-21`，编辑已有账号不再补默认值。密钥与地址的规则见下一节。
+- bedrock：三种账号类型的表单改为原生组件 `BedrockAccountForm`，字段、默认值（区域 `us-east-1`、前缀 `global`）和文案不变；编辑已有账号时不再自动补区域和前缀（保存时插件照旧补上）；原 schema 的约束都由 `ValidateCredentials` 检查，拒绝表单没有的键（三种类型各按原 schema 的键）；不认识的账号类型不再当作 `bedrock_apikey` 显示。
+- vertex：表单改为原生组件 `VertexKeyFileForm`（服务账号、用户凭证）和 `VertexApiKeyForm`（直接用 `createApiKeyForm`），字段、默认值（密钥文件类型的区域 `global`）和文案不变；核心续期写回的 `access_token`、`expires_at`、`token_for` 不显示、保存时原样带回；编辑已有账号时不再自动补区域；密钥文件 32768 个字符的上限从 schema 搬进插件。拒绝表单没有声明的键（`unknown`）：密钥文件类型允许密钥文件、`project_id`、`location` 和 `access_token`、`expires_at`、`token_for`，`vertex_apikey` 允许 `api_key`、`project_id`、`location`。
+- volcengine（仍是未发布的 0.13.0）：两个账号表单和素材库两个页面改为原生代码，原来的两个“新建”表单页并进列表页的新建弹窗；原 schema 的约束由插件 Go 保证，并补上了只有 schema 挡住的几条（URL 与路径前缀里的空白、素材库新建路由的长度和地址格式）；两个账号类型拒绝表单没有的键（`unknown`）。`api_prefix`、`video_api_prefix` 里的空白只在保存时拒绝：此前请求时读已存的前缀也查空白，含 `\v`、不换行空格等的已存前缀每次请求都报错。见 `next/docs/PLUGIN-VOLCENGINE-ARK.md` §19。
+- moderation 0.12.2：设置页不再用表单 JSON，改用 `useForm`、`SForm`、`SSecretInput` 写成代码，分区、顺序、文案和保存方式不变；清单 `ui.settings` 声明 `secrets`（`api_key`、`notify_webhook_secret`，`notify_webhook_url` 为敏感地址）；插件实现 `ValidateSettings`，按原 schema 的每条约束校验并拒绝未知键。
+- 插件设置（mailer、codex、guard）改为原生组件，保存前由插件 Go 校验（`ValidateSettings`，与 `Configure` 共用一套规则，拒绝未知键）：mailer 新建界面工程，`timeout_seconds` 超出 5–25 秒改为报错（原来加载时夹到范围内，控制台本就按 schema 拒绝），可以清除已存的 SMTP 密码；codex 的设置（`user_agent`、`originator`）由 `CodexSettings` 显示，校验（只拒绝控制字符）搬到插件；guard 的设置由 `GuardSettings` 显示（webhook 用 `SUrlPresetInput`），webhook 地址格式、冷却时间 0–300 秒和未知键由插件拒绝（冷却时间越界的错误码由 `range` 改为 `minimum`/`maximum`）。四个插件的 `ui.settings.secrets` 都显式写出：mailer 为 `[{path: "password"}]`，moderation 见上，codex、guard 为 `[]`。
+
+#### 升级须知
+
+- **非内置的带界面插件要管理员装上新版本**：relay、guard、azure-openai、vertex、bedrock（payment 没有界面，本节不涉及它，但仍要按 0.1.304 的升级须知重装）。内置插件随核心升级。重装审查多一项“在控制台运行插件界面”（`ui.native`）。
+- **装着旧包也照常加载**（加载时只检查契约版本）：schema 模式的账号类型照常服务，控制台编辑页的凭证部分显示“此插件版本的界面已不受支持，请升级插件”，其它部分照常保存；schema 设置、带 schema 却没写 `secrets` 的 native 设置，值全部遮蔽，控制台不显示设置页；声明式页面显示“不支持的页面类型：{type}”（`table` 或 `form`）。
+- **第三方插件作者**：表单与页面只能用 native（受信任发布者）或 iframe 写，设置的密钥在 `ui.settings.secrets` 里声明。schema 模式的第三方插件升级后没有界面（见上一条），新包上传时报 `unsupported`。直接用 SDK 预设或 `apikey.Spec` 而没写 `Fields` 的插件，用新 SDK 重新编译后保存账号时拒绝 `api_key`、`base_url` 以外的键（`unknown`）；已存账号带其它键的，下次保存会被拒，要在 `Fields` 里列出这些键。
+- **已存的越界设置值让升级后的第一次保存失败**：插件设置的校验从控制台搬到了插件（`ValidateSettings`），库里已存着越界或不合规则的值时（例如 mailer 的 `timeout_seconds`、guard 的冷却时间、moderation 的数值项，以及下面“审核题集”里那几种题集），之后在任何设置页保存都会被拒，直到把那个值改对；审核题集也可以改回用内置题集。请求时的行为不变。
+
+### 密钥与基础地址规则（SDK、核心、带 API Key 的十一个插件、界面包；无迁移，随 0.1.304 发布；设计见 [DESIGN-2026-11-20-KEY-AND-BASE-URL-RULES.md](next/docs/DESIGN-2026-11-20-KEY-AND-BASE-URL-RULES.md) 方案 B）
+
+所有者要求“密钥不要做任何限制”、地址里的 `%2F` 不再被还原、版本后缀“没有就加上，有就不管”。规则见 CONTRACTS §127。
+
+- **密钥不再限制格式和长度**：`apikey.Spec` 管的 `api_key`（anthropic、openai、gemini、typesafe、relay、newapi、sub2api、azure-openai、volcengine 两种类型、vertex_apikey）以及 bedrock 的 `api_key` 只要求是非空字符串，保存去掉首尾空白后的值；不再检查前缀、字符集和长度（原来 8–512 个可见 ASCII 字符，openai 另有 512 上限，bedrock 8–2048）。带 CR、LF 等控制字符的密钥能保存，但每次请求都以“请求头无效”失败，不会注入请求头。`createApiKeyForm` 的 `api_key` 默认规则改为只要求非空（`min`、`max`、`pattern` 仍可按需写）。newapi、sub2api 的密钥不是字符串时错误码由 `pattern` 改为 `type`。bedrock 的 AK/SK/会话令牌、vertex 密钥文件、volcengine AK/SK 不变。
+- **基础地址按填写的保存**：只去首尾空白、scheme 转小写、去掉末尾的 `/`；路径的转义原样保留（`%2F`、`%7E` 不再还原成 `/`、`~`），保存时不再剥掉版本后缀（`/v1`、`/v1beta`、`/openai`、`/openai/v1`、`/api/v3`）。控制台显示的就是填写的地址。
+- **请求时至多去掉一个版本段**：插件按账号类型声明的版本段（`apikey.Spec.Versions`，原 `StripSuffixes`），在地址转义形式的路径末尾整段、区分大小写地去掉最长的一个（scheme 和主机不参与），再把各接口的完整路径接上。所以 `https://x/v1/v1` 现在请求 `https://x/v1/v1/...`（以前少一段 `/v1`，配不通）；`…/a%2Fv1` 不算版本。gemini、newapi、sub2api 的地址带另一个版本时按接口换成它要的版本（如 gemini 填 `…/v1` 请求 `…/v1beta/...`）。volcengine 中转（`relay`）的地址规则不变，带 `/v1`、`/api/v3` 仍在保存时拒绝，也按转义形式判断（`…/a%2Fv1` 接受，此前误拒）。
+- **受限地址比较认版本段**：清单 `accountTypes[].guardedSettings[]` 新增可选的 `versions`（如 `["/v1"]`）：核心比较受限设置时，提交值、`allowed` 各项、账号原值都先按同一规则去掉至多一个版本段，所以没有 `account:settings:custom` 的人填带版本的官方地址（如 `https://api.openai.com/v1`）也能保存。没写 `versions` 的受限设置行为不变。清单检查：每项非空、以 `/` 开头、不以 `/` 结尾、不重复。`GET /account-types` 的 `guarded_settings` 随之带出 `versions`（没写时不出现）。写了它的清单：anthropic、openai、typesafe、gemini、volcengine `apikey`（CONTRACTS §21.3）。
+- azure-openai：资源地址按填写的保存，`/openai`、`/openai/v1` 只在请求时去掉，请求地址不变；Foundry 项目名里转义的斜杠（`/api/projects/a%2Fb`）由拒绝改为接受，作为一段保存和发出。项目名恰好是 `openai` 时，请求仍少掉项目自己那一段（与此前相同）。
+- SDK：删掉 `apikey.Validator`、`Spec.KeyValidator`、`apikey.OpenAI`；`Spec.StripSuffixes` 改名 `Versions`；`NormalizeBaseURL` 去掉第二个参数；`apikeytest` 删掉 `MinKey`，改为接受带空格、非 ASCII、4096 位的密钥，并检查 `/v1`、`%2F` 原样保存。
+- 各插件表单的帮助文案改为“地址末尾的版本段在请求时按接口重新拼接”一类说法。
+
+#### 升级须知
+
+- **已存账号的请求地址全部不变**（SDK 性质测试 `apikey.TestStoredBaseURLsKeepTheirRequests` 逐一比较），不用核查线上数据；只有绕过插件校验直接写进库里、路径带非规范转义的值，会从解码后发出变为原样发出（CONTRACTS §127.5）。
+- 写了 `versions` 的插件要求核心 0.1.304 起（旧核心忽略这个字段，只是带版本的官方地址被拒）。
+- 第三方插件用到 `StripSuffixes`、`KeyValidator`、`apikey.OpenAI`、`NormalizeBaseURL` 的第二个参数或 `apikeytest.MinKey` 的，按上面改名或删掉后重新编译。
+
+### 审核题集：保存时拒绝运行时会丢弃的题集（moderation 0.12.2；无迁移，随 0.1.304 发布）
+
+- moderation 0.12.2：Jev 默认题集（`jev_default_set`）保存时也按运行时的 `JevQuestions.Validate` 拒绝三种表，此前它们能存进去，运行时却被整套丢弃、静默改用内置题集：类别重复（`items/<i>/category` `duplicate`）、自定义类别（不是 OpenAI 的类别）没填名称（`items/<i>/label` `required`）、问题只有空白（`items/<i>/question` `required`）；名称与问题两条与运行时共用 `engine.go` 的函数，三条的等价由测试保证。设置页把错误逐格显示在出错那一题的对应格子里（类别、名称、问题、回答、阈值，开头说明也一样；题数不对、题里有编辑器没有的字段仍显示在题集那一行），服务端拒绝的指针也落到对应格子，改动题集后消失。`Configure` 照旧宽松（已存的这类题集仍改用内置题集，只记一条不含值的警告）。**后果**：库里已存着这类题集时，之后在任何设置页保存都会被拒，直到把题集改对（与已存越界数值的处理一致）；这时别的设置页的提示会点名是哪项已存设置不符合现在的规则、要先到它所在的设置页改对，不再只弹一条 `invalid argument`。只有 `moderation:manage`、没有核心插件管理权限的人存着 Webhook 签名密钥时，核心要求修改设置时重新填写它（`reenter`），而它只在“高级”页：在别的设置页保存时，提示如实说明本页因此无法保存，不再说成那项设置不符合规则（到“高级”页重填也不能让别的页保存，这是原有的限制）。
+
+### 删除 growth 插件（核心；迁移 0117，随 0.1.304 发布）
+
+所有者同意整个删除（原话“同意”），不留兼容。仓库记录显示线上从未安装过它（0.1.288 时没有装，之后没有再核实，**发布前要确认**）。规则见 CONTRACTS §125。
+
+- 插件 `growth`（“用户增长”：邀请返利与每日签到，`next/plugins/growth`）删除，市场里不再有它；它的菜单“我的邀请”“每日签到”“增长管理”随之消失。
+- 插件键 `growth` 列入已删除插件键：任何来源、任何签名的包都不能再安装，返回 403 `plugin_key_reserved`（已签名的 0.2.x 包同样被拒）。
+- **迁移 0117**（`0117_drop_growth_plugin.sql`）：装过它的库像带 purge 的卸载那样删除插件行（连同版本、发布状态、宿主权限授予、事件游标）、它的权限（`growth:use`、`growth:stats:read` 与已标删除的 `growth:read`、`growth:manage`）与授予、出网域名、任务、插件迁移记录和 schema `plg_growth`（邀请码、返利记录、签到记录），键记入 `plugin_key_retirements`；没有它的库什么都不变，可以重跑。它记过的返利和签到奖励作为 `plugin_credit` 留在账本里，余额不变。
+
+**升级须知**：装过 growth 的库升级时会被卸载（同 purge），schema `plg_growth` 连同邀请、返利、签到记录删除；要留这些数据，升级前先备份这个 schema。没装过的库什么都不变。
+
+### 火山引擎方舟 API Key 账号：清掉设置里不属于它的前缀键（核心；迁移 0118，随 0.1.304 发布）
+
+- **迁移 0118**（`0118_volcengine_apikey_prefix_settings.sql`）：volcengine `apikey` 类型账号的 `settings` 里删掉 `api_prefix`、`video_api_prefix`。这两个键只属于中转（`relay`）类型，方舟官方账号不读它们；拆分类型之前保存的账号还留着它们，编辑凭证时被当作未知键拒绝、界面上又删不掉。线上有 2 个这样的账号（键 `video_api_prefix`），迁移后能正常编辑；请求行为不变。`relay` 账号和别的插件的账号不动，可以重跑。CONTRACTS §126。
+
+### 核心 0.1.304 + 全部插件：平台插件转发 V2、账号协议绑定、插件数据库只用核心的数据库用户、删除 Claude OAuth 与 growth、三个云厂商插件、三个上游站点插件、账号余额、OpenAI 生图（插件协议 2、Host API 10；迁移 0106–0118；**停机重新部署，核心和全部插件一起换；单向，回退要连同数据库回到升级前的备份**）
+
+这一批在分支 `feat/forwarding-v2` 上一起发布：核心 0.1.304、全部第一方插件的新版本（`hostCompat` 都是 `>=0.1.304 <0.2.0`）、`@sub2api/ui`、`@sub2api/host`、`@sub2api/vite-preset` 4.0.0，以及一处网关改动。插件线协议从 1 升到 2，Host API 从 9 升到 10；核心迁移 0106–0118（0106 账号的协议绑定，0107 请求体上限搬进网关设置，0108 模型名的列改成 `text`，0109 发布的节点结果加拒绝代码，0110 删除插件迁移记录函数，0111 删除 Claude OAuth 插件，0112 使用记录加图片 token 两列，0113 账号余额表改形，0114 余额单位列改为 `text`，0115 账号记最近一次测试的协议，0116 删除两个账号授权的授予行，0117 删除 growth 插件，0118 删掉火山引擎方舟 API Key 账号设置里的前缀键），插件迁移只有 volcengine 的 0003。
+
+内容：
+
+- **平台插件转发 V2**：每个平台插件都是有进程的代码插件，每个网关请求只有 `Execute` 一条路径，插件拿完整请求体、构造最终请求，由核心发出；请求体上限改到网关设置；插件内存默认不限；请求路径上写死的超时与限制去掉（CONTRACTS §111、§112）。
+- **账号协议绑定**：账号可以限定开放的本平台协议、模型的协议；**跨平台协议转换改为默认关闭**，要在账号上为模型开启（CONTRACTS §110）。
+- **插件数据库只用核心的数据库用户**，不再给插件建数据库角色，核心代理插件的数据库连接（CONTRACTS §115）。
+- **插件联网**：管理员可以指定插件能访问、不能访问的域名，管插件经核心发出的全部网络（插件自己的连接和平台插件发往上游的请求），默认行为不变（CONTRACTS §113）。
+- **插件包不再依赖主节点**（网关；CONTRACTS §114）。
+- **授权请求走账号表单选的代理**（代理票据，codex 0.2.0；CONTRACTS §117）。
+- **代理始终按最新**：已有账号的所有出站请求（转发、取回、Monitor、测试、获取模型、额度、余额、续期、`SendAccountRequest`）都在发出时按账号**当前保存**的代理取客户端，改代理后下一次请求就走新代理（CONTRACTS §123）；建账号前的授权每次调用都取一张新票据，授权中途改代理不用重新授权，后续请求即走新代理（codex 0.2.0；CONTRACTS §117.2）。设备码授权时核心拒绝经表单代理发送、或表单代理暂不可用，界面显示原因并继续轮询，代理改好后同一个设备码接着完成，不用重新开始。
+- **删除 Claude OAuth 插件**及两种账号类型（CONTRACTS §116）。
+- **云厂商上游**：azure_openai、vertex、bedrock 三个新插件（首发 0.1.0），openai 账号可填组织与项目。
+- **上游站点插件**：newapi、sub2api、typesafe 三个新插件（首发 0.1.0，内置、只安装、默认不启用；CONTRACTS §119）。
+- **账号余额接通**：声明了余额的账号类型（目前只有 newapi、sub2api）在账号列表显示上游返回的余额数字和单位本身（不做任何换算），手动刷新加定时刷新，只显示不联动（CONTRACTS §52）。
+- **OpenAI 生图**：内置 openai 平台新增 `/v1/images/generations`、`/v1/images/edits`（JSON），图片 token 单独计价（CONTRACTS §118）。
+- **插件按归属收到账号的全部信息**：插件收到它声明的账号类型下账号的凭证和代理详情（地址、用户名、密码），宿主授权 `accounts.credentials`、`accounts.read` 和 `GetAccountCredentials` 删除，换成 `GetAccount`；代理只是数据，请求仍全部由核心发出，插件不联网（CONTRACTS §124）。
+- **插件界面只用代码写**：声明式 JSON Schema 表单与表格、表单页面删除，界面只能是插件自带的原生代码或 iframe，界面契约 4.0（见上面“插件界面只用代码写”）。
+- **密钥与基础地址规则**：密钥不限格式和长度，地址按填写的保存，请求时至多去掉一个版本段（见上面“密钥与基础地址规则”）。
+- volcengine 0.13.0、协议清理、控制台与若干修正。
+
+#### 升级须知
+
+**部署方式**
+
+- **只能停机重新部署，核心和全部插件一起换。** Host API 变了，节点外壳不允许新旧核心滚动并存；托管升级也走不通（节点就绪要求每个已启用的插件都已加载，而内置插件在升级计划完成后才升级）。做法：停机，用新核心和新的整套插件重新部署，再把非内置插件逐个装上新版本。
+- **旧插件包装不上。** 按旧契约构建的包以同一条信息被拒绝（`plugin <key>@<version> was built for an older plugin protocol ...; install a version built for core 0.1.304 or later`，要求的版本是这个插件协议的第一个核心，不是当前核心；控制台文字以“请安装为核心 0.1.304 及以上构建的版本”结尾），插件列表和插件详情显示拒绝原因（`refusal`）。拒绝发生在两个时点：
+  - 清单里带旧契约标志的包（`runtime: "none"`、`accountTypes[].upstream`、`requestFields`、`request.maxBodyBytes`、能力 `platform.execute.v1` / `platform.poll.v1`）在**上传、安装时**就被拒（`pkg.CheckContract`），也不留版本行；
+  - 清单没有这些标志、只是二进制是旧协议的包（例如旧的 guard、payment），上传时不被发现，到**启用、加载时**握手才被拒（`grpcruntime` 的 `checkContract` 与握手）。已经装着的旧版本就是这种情况。
+- **非内置插件升级后停用，直到装上新版本。** 内置插件随核心镜像升级（anthropic、openai、gemini、moderation、codex 启用；volcengine、mailer、dynweight、newapi、sub2api、typesafe 只安装，见 `deploy/docker/build-go.sh` 的 `BUILTIN_PLUGINS`）。其余插件——relay、guard、payment，以及装过的 azure_openai、vertex、bedrock——的旧版本在新核心上加载被拒，它们的账号不可用、功能不运行，直到逐个装上新版本。**guard 停着期间它的请求检查静默不运行**：没加载的插件不注册钩子，请求照常放行，只有插件列表上能看到拒绝原因。
+- **重装 relay、azure_openai 时审查多一项 `accounts.credentials`**：声明了账号类型就必须申请它（CONTRACTS §112.12）。develop 上这两个插件的清单只有 `platform.register`。内置的 anthropic、openai、gemini 清单同样新增了这一项，由内置同步自动批准；vertex、bedrock、codex、volcengine 原本就有。codex、volcengine 的清单去掉了 `net`，审查里少了这一项。
+- **网关也要换。** 插件包不再依赖主节点是网关二进制的改动，单发核心不会生效（核心只改了 `package_gone` 的文案）。网关滚动更新期间不要上传插件：旧网关节点上的上传仍要推主节点，主节点换新后会被拒；旧网关的主节点取不到在新网关节点上传的包。全部换完再上传、启用。
+
+**回退**
+
+- **单向**：迁移 0110 删除了旧插件角色记录迁移用的两个 SECURITY DEFINER 函数，之后旧核心无法再给插件建角色，持有 `db.schema` 的插件在旧核心上起不来；新核心第一次启动还会收回旧的插件数据库角色。所以回退只能把上一版核心和上一版整套插件一起重新部署，**并连同数据库回到升级前的备份**。
+- 其它迁移各自的说明（原文）：迁移 0107 只改数据，回到旧核心后请求体上限按默认 128 MB，调过的要在“环境变量”页重填；迁移 0108 不用撤，旧核心读写 `text` 列照常（旧核心自己会把模型名截到 200）；迁移 0106 不回填；迁移 0111 只在装过 Claude OAuth 的库上删东西，可以重跑。
+
+**升级前要做的**
+
+- **导出存量的跨平台协议转换**：升级后跨平台转换默认关闭，迁移不回填，依赖它的客户端从升级完成起收到 404 `no account in this group serves this model on this endpoint`，直到管理员在账号上为模型开启；新字段升级后才存在，没法提前配置。升级前按 [升级手册](next/deploy/rollback/protocol-binding-release.md) 跑只读查询 `next/deploy/rollback/protocol-binding-conversions.sql`，导出近 30 天实际发生过转换的账号、入站协议、模型和请求数，升级后照着在控制台配置。受影响的例子：Anthropic 客户端（Claude Code 等）打到只有 OpenAI、codex 账号的分组；OpenAI 协议的客户端打到只有 Claude 账号或 Bedrock 账号的分组；Gemini 客户端打到非 Gemini 账号。原生请求、同一平台内的转换、声明了多个平台的账号类型（volcengine）不受影响。
+- **请求体上限改到“系统设置 → 网关设置”**（`max_request_body_mb`，默认 128 MB，范围 1–1024）。迁移 0107 把全局层的值搬进网关设置，**分组层的值丢弃**；升级前先查哪些分组设过并确认全局值够用：`SELECT id, name, environment->'max_request_body_mb' FROM groups WHERE environment ? 'max_request_body_mb'`。只靠进程环境变量 `SUB2API_MAX_REQUEST_BODY_MB` 设上限的实例迁移不到，升级后是 128 MB，要在网关设置里填；带着这个变量启动不报错，但它不再起作用。
+- **规划数据库连接数**：插件的数据库连接（每节点每个用数据库的插件默认 4 个；现有 6 个官方插件用数据库：anthropic、dynweight、guard、moderation、payment、volcengine）由核心代为打开，计入核心用户和数据库的连接上限，不在核心的连接池里，也不再受插件角色的 `CONNECTION LIMIT 20` 约束；`max_connections` 按“节点数 ×（核心池 + 每个用数据库的插件 4 个）”规划。核心的数据库用户不再需要 `CREATEROLE`。
+- **原来把“模型没有配置价格时”设成“免费放行”的实例，升级前先给要服务的模型补上价格**：这个设置（`missing_price_policy`）已删除，没有价格的模型一律拒绝。升级后这些模型的请求在调度前收到 403 `model_price_not_configured`（请求里声明的引用模型同样）。查当时的设置：`SELECT value->>'missing_price_policy' FROM settings WHERE key = 'billing'`，为 `free` 的就是（CONTRACTS §17.3）。
+- **检查旧策略下留下的未结算记录**（只读）：`SELECT count(*) FROM usage_logs WHERE billing_status IN ('pending','failed') AND expr_hash = '';` 结果不为 0，表示有“免费放行”下留下、还没结算完的记录。升级后它们不会被当作免费：结算报错，计入重试次数，用完重试次数后停在 `failed`，不会自动处理，需要管理员处理。
+- **进行中的 Codex 授权要重来**：codex 0.2.0 的开始路由要 `proxy_ticket`，升级前开始、没完成的设备码或 Sign in with Codex 授权在升级后重新开始。
+
+**升级后要做的、要知道的**
+
+- **在账号上为模型开启需要的协议转换**（照升级前导出的结果）。升级后分组详情和密钥页列出的端点会变少，直到成员账号里有模型开了转换。
+- **插件内存默认不限**：只有管理员设置时才有上限。节点封顶 `SUB2API_PLUGIN_MAX_MEMORY_MB` 的默认值从 1024 改为 0（不封顶），清单里的 `memoryMB` 只作展示；之前靠默认封顶或清单的值限住的插件升级后不再受限，要界限的在插件资源页设上限或设置这个变量。给平台插件设上限时，每个同时处理的大请求按“3 × 请求体上限 + 64 MB”留量（默认约 450 MB）。单机栈 `deploy/single/compose.yml` 不再默认传 1024。
+- **严格控制出网的部署要改“插件联网”设置**：新设置默认“允许所有域名”、列表为空，升级后每个插件能访问的主机、每个平台能发往的上游都与升级前相同。这项设置管插件经核心发出的全部网络，包括平台插件发往上游的请求，所以改为“屏蔽所有域名”之前，**先把各平台的上游域名和账号上自定义的上游地址的域名都列进允许列表**（例如 `api.anthropic.com`、`api.openai.com`、`chatgpt.com`、`auth.openai.com`、`googleapis.com`、`amazonaws.com`、中转账号 `base_url` 的域名），否则这些平台的请求会全部被拒；再列出插件自己的连接要去的域名：mailer 的 SMTP 服务器，guard 的告警地址，moderation 的审核渠道和通知地址。codex 0.2.0 的授权请求和 volcengine 0.13.0 的素材库调用由核心发出，同样要列出它们的域名。改之前先在各插件的“外部访问”里看它们实际访问过哪些域名（平台插件的上游请求被放行时不记在那里，看账号的上游地址和插件清单的外部服务）。
+- **旧清单里的 `usageMaxBytes`**：核心忽略这个未知字段（上传、安装、加载照常）；`sub2api-plugin` 严格解码，`build`、`pack`、`sign`、`verify`、`index`、`dev` 报 `unknown field "usageMaxBytes"`，删掉这一行即可。
+- **azure_openai 和 bedrock 的字段删除在账号参数覆盖之后**：运营方在参数覆盖里写这些字段会被删掉，见下面“云厂商插件”。
+- **发布了失败策略时，插件和核心自己的失败换号、不罚账号**：插件不可用（`Execute` 出错、崩溃）、核心拒绝插件交回的请求、地址被 SSRF 检查拒绝、目标主机不在清单和账号地址之内，都换下一个账号，不匹配账号规则，账号不冷却也不禁用；以前作为普通的核心 503 交给策略，没有规则匹配时第一次尝试后就回客户端 503 `plugin_unavailable`，运营方给核心来源写的规则还可能冷却或禁用账号。尝试次数用尽时结果与没有策略时一致：请求自己的上游失败照常回给客户端，其余回 503 `no_available_account`（Anthropic 格式 529）。
+- **“未上报”的请求不续粘性会话、不刷新账号的最后使用时间**：未上报的记录是失败记录（`success = false`），粘性绑定只在成功时续期，`TouchLastUsed` 也只在成功时调用。
+- **WebSocket 首轮的参数覆盖失败改为换号**：以前握手时忽略参数覆盖的失败、照常在这个账号上建立连接，失败留给这一轮报告；现在首轮与 HTTP 一样在发出前改写，失败时换下一个账号（`return_error` 照常回给客户端）。
+- **经代理的账号不在本机解析上游域名**：只拒字面的私网、回环、链路本地地址和 `localhost`，其余由代理检查。以前本机 DNS 失败会拒绝所有经代理的账号，只有代理能解析的名字能通过账号测试、之后每个请求都失败；账号测试、拉取模型、额度查询以前经代理时完全不检查，现在按同一条规则（`netguard.CheckHostVia`，CONTRACTS §43.4）。
+- **迁移 0112–0115**：0112 给 `usage_logs` 加 `image_input_tokens`、`image_output_tokens` 两列（常量默认值，只改目录；`lock_timeout` 10 秒，拿不到锁迁移失败、重试即可）；0113 改 `account_balances`（`updated_at` 可空、加 `unlimited`、删 `source`；线上这张表是空的）；0114 把 `account_balances.currency` 从 `VARCHAR(3)` 改为 `text`（只改目录）；0115 给 `accounts` 加可空列 `last_test_protocol`（只改目录）。四条都不妨碍旧核心读写，回退仍按上面“单向”的做法。
+- **三个新内置插件默认不启用**：newapi、sub2api、typesafe 随镜像安装、批准，但不启用，升级后什么都不发生；要用时在插件页启用，再建账号（typesafe 启用后各节点多一个 `POST /v1/systemone`）。key `newapi`、`sub2api`、`typesafe` 和平台 id `typesafe` 从此保留给官方插件，没有官方签名的手动上传不能占用。
+- **清单的 `accountTypes[].balance.currency` 删除**：币种由插件每次读余额时给出。核心忽略这个未知字段；`sub2api-plugin` 严格解码，旧清单带它时 `build`、`pack` 等报未知字段，删掉这一行即可。
+- **生图模型要先录价格**：没有价格的生图模型与其他模型一样回 403 `model_price_not_configured`（缺价一律报错，见上面）。Responses 里用生图工具的请求按客户请求的模型计价，生图工具的 token 计入它（CONTRACTS §118.10），应答回显的 `gpt-image-2-codex` 等生图模型不需要价格。要按图片 token 正确计费，给生图模型录表达式价格（变量 `img`、`img_o`，参考价见 CONTRACTS §118.6）；models.dev 同步来的生图价只有文字价，会少收，要改成表达式价格。
+- **协议绑定“指定”过的 OpenAI 账号要手动勾选生图协议**：`protocols` 为空（默认）的 OpenAI API Key 账号升级后自动服务两个生图端点；指定过协议的账号不会自动开放，要的话在“协议与模型”里勾上 `openai.images`、`openai.images_edit`（CONTRACTS §118.5）。volcengine 账号在 openai 平台上改为显式端点子集，不服务 OpenAI 生图。
+- **界面、密钥与地址、审核题集、growth 的升级须知**见上面各自一节：带界面的非内置插件要重装，已存的越界设置值让第一次保存失败，装过的 growth 被卸载并删除 `plg_growth`。
+- 配置 `SUB2API_PLUGIN_DB_ROLE_ISOLATION` 删除（新核心设了也不读；网关外壳仍把它传给 0.1.303 核心，见下文“对运维”）；环境变量 `max_request_body_mb`（全局层、分组层）删除。
+
+#### 插件版本
+
+全部 `hostCompat >=0.1.304 <0.2.0`（以各插件 `manifest.json` 为准；`next/plugins/released.json` 发布后按测试说明重写）：anthropic 0.4.0、openai 0.5.0、gemini 0.4.0、relay 0.4.0、codex 0.2.0、volcengine 0.13.0、azure_openai / vertex / bedrock 0.1.0（首发），newapi / sub2api / typesafe 0.1.0（首发，内置只安装），以及只因 SDK 重新构建的 dynweight 0.5.12、guard 0.2.11、mailer 0.1.5、moderation 0.12.2、payment 0.1.3。codex 发给上游和授权服务器的 `User-Agent` 是 `sup2api-codex/<版本>`，随之从 `sup2api-codex/0.1.11` 变成 `sup2api-codex/0.2.0`。
+
+### 插件按归属收到账号的全部信息，删除两个账号授权（核心、SDK、12 个平台插件、控制台；迁移 0116）
+
+契约见 CONTRACTS §124，设计见 [设计文档](next/docs/DESIGN-2026-11-19-PLUGIN-ACCOUNT-CONTEXT.md)。
+
+- 平台调用（`Execute`、`Monitor`、`ClassifyError`、测试、模型、额度、续期、余额）里的 `Account` 带上这次出站用的代理（`Account.proxy`：id、协议、地址、端口、用户名、密码）；`AccountProperties.proxy_id` 删除。插件看到的代理就是核心这次发请求用的代理；取不到代理（停用、不存在）时核心不调用插件：网关换号，`Monitor` 推迟，测试、额度、余额、续期记失败。
+- 建账号之前在表单里拉模型：表单里填了代理（选已有的或粘贴代理串）就经它发出，插件收到的 `Account.proxy` 就是这条代理（粘贴的 id 为 0）；没填就直连，`Account.proxy` 为空；填了的代理不可用时报错，不直连、不调用插件。授权票据的路由调用不带 `Account`，插件仍看不到票据里的代理。
+- `HostService.GetAccount` 取代 `GetAccountCredentials`：返回与平台调用相同的完整账号，审计 action 改为 `plugin.account.read`（只记插件、类型、账号名）。用量观察里的账号就是 `Execute` 收到的那个（含凭证）。
+- 宿主授权 `accounts.credentials`、`accounts.read` 删除：声明账号类型只需 `platform.register`；`ListAccounts`、`SendAccountRequest`、`AccountScopeCheck` 不再检查授权。清单里还写着这两个授权的包按旧契约拒绝（与协议 1 的包同一条信息）。迁移 0116 删除这两个授权的全部授予行（含撤销的、暂存的）。
+- 安装审核的固定提示改为写明插件收到账号的全部信息（含代理密码）、请求都由核心发出。控制台去掉这两个授权的风险等级与文案。
+- 12 个平台插件的清单去掉这两个授权，volcengine 素材库、codex 重置次数改用 `GetAccount`；codex 去掉没有写入方的 `settingsFields: ["proxy_id"]`。版本在这一批未发布的版本上继续累计。
+- 升级须知：按协议 2 构建、调用过 `GetAccountCredentials` 的测试包（volcengine、codex）在新核心上会得到 `UNIMPLEMENTED`，重新装这一批的包即可；第三方平台插件本来就要用新 SDK 重新构建，清单里删掉这两个授权。
+
+### 平台插件转发 V2：每个平台插件都是代码插件，只有 `Execute` 一条请求路径
+
+分支 `feat/forwarding-v2`。契约见 CONTRACTS §111、§112（去掉的限制与仍然有效的界限在 §112.16），插件写法见 [PLUGIN-DEVELOPMENT.md](next/docs/PLUGIN-DEVELOPMENT.md)，设计与所有者在实现期间的决定见 [设计文档](next/docs/DESIGN-2026-11-18-PLUGIN-FORWARDING-V2.md)。
+
+- 所有平台插件都有进程：openai、gemini、relay、azure_openai 原来只有清单，现在是普通的 gRPC 插件，默认发布包里每个节点多两个进程（openai、gemini）。账号类型、表单、凭证字段不变，账号不用迁移。
+- 插件构造完请求后由核心发送，插件不在流式回答里：插件崩溃、内存超限重启、升级换代不再切断在途的流（以前 codex 会）。codex 请求不再写执行记录（以前每请求三次写入）。
+- 用量由插件解析的端点和任务提交（目前是 volcengine 的视频提交）：插件在交换结束后给出用量或任务；插件什么都没给（报错、崩溃、给错种类）时，同步请求记一条零费用的使用记录（`error_type = usage_unreported`，每次一条 ERROR 日志），核心不再按自己的读数补记；任务提交没有给出任务时，任务不登记、客户端报错、预扣释放。等待期间插件崩溃会切断上游，这个请求不计费。插件选了核心的读数（`host_usage`）而核心一个用量都没读到时，同样记零费用的“未上报”，不按 0 计费（不等待形式下客户端照常拿到回答）。“10 分钟内 20 次未上报就通知”没有做。
+- 使用记录里“未上报”的请求显示为“未上报用量（未计费）”，详情说明插件没有返回用量；失败请求的错误类型筛选能选它。
+- 运营方的请求头设置：插件的头分成默认头和权威头。透传的客户端头只补没有的；请求头覆盖和参数覆盖可以改、删默认头，改不了权威头。openai、gemini、relay、azure_openai、anthropic 的 `apikey` 只有鉴权头是权威头（与以前一样）；codex、volcengine 的头全部是权威头（与以前一样）。
+- “平台调用超时”只管上游出错后的错误分类（`ClassifyError`）和读断开策略，默认值和范围不变；`Execute` 不计时（见下一节）。插件出错、崩溃时请求没有发出，按插件不可用换号，不惩罚账号。设置页的说明已按这个含义改写；“平台热路径超时”的说明改成它实际管的模型解析和预扣估算。
+- 安装与升级的审查页对平台插件固定显示一句：插件会收到经它的账号发出的每个请求的完整内容，并决定请求发往哪个地址（不是权限，不能取消）。
+- 钩子调用因请求超过插件 gRPC 接收上限而失败的情况不再发生（插件的接收上限固定为传输层最大值），`requestTooLarge` 的熔断例外删除。
+- volcengine：在 anthropic 平台上只服务 Messages，`count_tokens` 改由核心本地估算（以前只有 Ark 账号的分组对 `count_tokens` 一律回 503）。
+- vertex：把客户端的 `user-agent`、`x-goog-api-client` 作为默认头转发。
+- **请求体上限**（`max_request_body_mb`，CONTRACTS §111）：每个网关请求的请求体、WebSocket 的单条消息都按网关设置里的值限制，超出回 413（WebSocket 以 1009 关闭），保存后各节点对新请求生效。环境变量 `max_request_body_mb`（全局层、分组层）和进程环境变量 `SUB2API_MAX_REQUEST_BODY_MB` 删除，端点清单的 `request.maxBodyBytes` 删除（没有清单用过）。交给插件的请求体不按字节排队，网关设置里没有内存警告。
+- **插件内存默认不限**（CONTRACTS §111.5）：插件资源页给插件设的内存上限原样生效；节点封顶默认不封顶（见升级须知）。
+- **执行的恢复按存活判断**：插件解析用量的端点和任务提交在观察之后由网关每 15 秒续期，节点崩溃时恢复扫描在 2 分钟没有续期后把它关成零费用的“未上报”、释放预扣（约 3 分钟内），活着的执行不会因为时间长被关掉。
+- **迁移 0107**（`0107_request_body_limit_setting.sql`）：把全局层存着的 `max_request_body_mb` 搬进网关设置，分组层的值丢弃。
+- **迁移 0108**（`0108_model_name_text.sql`）：`usage_logs`、`usage_hourly` 的 `model` / `upstream_model` 和 `price_rules.model`、`model_prices.model` 改成 `text`。类型转换不重写表、不重建索引，每张表只拿一次短暂的排他锁；`lock_timeout` 10 秒，拿不到锁迁移失败，避开业务高峰执行。触发器 `usage_hourly_mark_update` 在同一事务里重建；价格模型 ID 的检查只留字符集。
+- **迁移 0109**（`0109_plugin_rollout_node_code.sql`）：发布的节点结果加 `plugin_rollout_nodes.code`，记每个节点的拒绝代码；旧契约的插件首次启用就被拒、发布在准备阶段失败时，插件列表和详情的 `refusal` 从这里给出。
+
+### 去掉写死的超时与限制
+
+所有者决定“超时、限制都去掉”（CONTRACTS §112.16）：一次请求上留下的界限只有管理员配置的（请求体上限、上游的响应头 / 整体 / 流式空闲超时、钩子和热路径超时、平台调用超时），加上安全、钱算对和防止进程崩溃的检查。以前带着明确错误被拒绝的东西，现在表现为内存占用、存储增长或一个一直等着的请求。删掉的和没有它的代价：
+
+- 插件在 `Execute` 里自己的工作不再计时（以前按段超过平台调用超时就以 `segment_timeout` 换号）：挂住的插件让这次尝试一直等，直到客户端离开、上游超时或插件进程结束，期间占着账号和 API Key 的槽位。等待形式（插件解析用量的端点、任务提交）的 `Execute` 在开始转发之前也随客户端离开取消（见“计费与正确性修正”）。
+- 插件解析用量的端点和任务提交（等待形式）没有总时长（以前 6 小时加 `relay_timeout_seconds`，中间版本还在观察后约 44.5 分钟切断）：没配 `relay_timeout_seconds` 的部署里，一个不停的上游流会一直进行。
+- 等待形式缓冲的非流式回答不限大小（以前 64 MiB 以上回 503）：大回答落临时文件占磁盘，请求结束即删。
+- 插件的辅助请求（取回）不限次数和大小（以前每次调用 8 个、回答截到 8 MiB，URL、请求头、方法也有限制），没设 `relay_timeout_seconds` 时也没有整体超时（以前默认 5 分钟）：有缺陷的插件可以不停地取回，回答整份进内存。
+- 任务观察的结果、等待形式存下的读数和观察不限大小（以前 512 KiB，后者超出时请求 503 且白送）：`plugin_executions` 表会随大回答变大。
+- 插件发给核心的宿主调用不再有 4 MiB 上限，插件交回的请求体也不再有界：有缺陷的插件可以让核心为一次调用分配到约 2 GiB。
+- WebSocket：上游单条消息不限大小（以前 64 MiB）、每个 API Key 的会话数不限（以前 64 个，第 65 个 429）、上游握手和读写没有固定时限（以前 30 秒和 1 分钟）：超大消息整条进内存，一个 Key 能开任意多会话，不读的一方由心跳 ping 结束。
+- 写客户端没有时限（以前每次 60 秒）：客户端连着但不读时，请求一直占着账号和 API Key 的槽位，直到连接断开。
+- 代理的拨号与 TLS 握手没有固定的 15 秒：由操作系统的连接超时和网关的响应头超时管住。
+- 每个插件实例同时进行的 `Execute` 不再限 1024 个（以前满了 503）：并发只由账号和 API Key 的槽位限制。
+- 交给插件的路径参数和查询参数不再截断（以前 32 个、名 64 字节、值 512 字节）；SSE 单行不限长（以前 16 MiB 断流）；Bedrock 回答流的单条 event-stream 消息不再限 4 MiB（以前超过就断流，只剩格式自己的 16 MiB）；协议转换读的回答和只流式上游攒下的内容不限大小（以前 32 MiB 回 502）：都整份进内存。
+- 非流式 JSON 回答按整个回答读用量（以前只读前 32 MiB，超过的回答**按 0 计费**）：这一条是钱的修正，代价是回答在读完用量前整份留在内存里一次。
+- 读用量的插件看到整份回答、全部列出的事件和请求字段的完整值，`detail_json` 不再截断（以前默认 256 KiB、64 条事件、字段 4 KiB / 32 KiB、`detail_json` 4 KiB）：插件内存和消息变大。清单原有的读用量字节预算 `usageMaxBytes` 已删除（见“插件作者须知”）。
+- 模型名不限长度（以前客户端的超过 256 字节回 400，使用记录截到 200，价格模型 ID 和分组的模型名单限 200 字符）：超长的模型名整份进使用记录和日志；价格表上的唯一索引仍在，超过约 2.7 KB 的模型 ID 写价格时报错。
+
+### 安全
+
+收尾审查发现，所有者决定“修”（CONTRACTS §112.17）。
+
+- 核心代发的请求只发往插件清单里声明过的主机（`externalServices`，含子域，安装时管理员审查过）或这个账号自己配置的上游地址（`base_url` 这类在清单 `upstreamFields` 里声明的字段）。以前插件能把带着账号凭证的主请求发到任意公网主机，只受 SSRF 检查约束。主请求（HTTP、WebSocket 握手）发往别的主机时什么都不发出，这次尝试换号、不冷却也不禁用账号，日志 `gateway: upstream host not allowed` 写明插件和主机；插件的辅助请求、`SendAccountRequest` 回 `PERMISSION_DENIED`。九个官方平台插件的正常请求都在范围内。vertex 声明 `externalServices: ["googleapis.com"]`、bedrock 声明 `["amazonaws.com"]`，这是它们的上游所在的域，安装审查时列给管理员看。
+- 插件交回的 `Host` 请求头不再生效（以前会写进请求的 `Host`，把请求指向 URL 之外的虚拟主机，而 SSRF 检查和代理选择只看 URL）：中继里出现即拒绝，请求的 `Host` 永远是 URL 的主机。运营方的请求头设置本来就改不了 `Host`。
+- 配额查询、凭证续期、账号测试与模型列表请求不在这条规则里，只受 SSRF 约束（经代理时的检查见升级须知）和管理员的“插件联网”设置（见“插件联网”一节）。
+- 插件取回在 `Execute` 和任务观察里用同一份实现：以前 `Execute` 里的取回允许插件改写 `Host` 头、把含代理地址的传输错误原文交给插件。
+
+### 计费与正确性修正
+
+审查轮发现，都在发布前修好。
+
+- 核心代发（`SendAccountRequest`，以及共用发送路径的配额查询、凭证续期）读应答体失败（例如连接中途断开）时按传输错误交给插件，不再把半截应答体连同状态码当成完整应答交出，和取回一致。
+- 插件解析用量的端点上，插件在 2xx 回答里读出业务错误时，以前已经计费却回客户端 503；现在照常发出上游的回答。缓冲回答的临时文件真的写不进时，在计费之前就按未上报关闭。
+- 执行的观察没能落库时，以前什么记录都不写、预扣挂到 24 小时后才释放；现在写零费用记录、立即释放。已经有使用记录的请求再被恢复扫描关闭时不再报错。
+- 任务提交的提交在重试窗口末尾才落库时，以前客户端拿到 503 而任务已登记、预留已扣；现在报失败前先确认，落了库就照常交付任务。
+- 记录确定拒绝的提交（提交本身无效、身份不符、没有落库的观察，包装成 `core.ErrExecutionRefused`）不再重试满 15 秒，立即按失败处理；只有冲突以外、非这类拒绝的错误才重试。
+- 任务的原账号已删除或属于别的插件时，以前一直延后到期限、按估算扣费；现在算查询失败，用完失败次数后退款。
+- 零费用的“未上报”记录只有一种写法（`UsageRecord.SetUnreported`）：成功为假、没有用量和价格、不计费、不带预扣，`anomalies.usage_extract = unreported`。任务提交没能登记时的记录现在也是这样（错误类型仍是上游错误），以前只清了用量、价格和预扣，没有这个标记。
+- **参数覆盖改写后的请求体也检查“账号的用量规则能否计量”**：运营方的参数覆盖（或内置覆盖）可能加进账号用量规则计量不了的操作（例如经 `context_management` 的 Anthropic compaction），以前调度只检查客户端的请求体，这样的请求不计量地发往上游；现在改写改变了请求体时，对交给插件的请求体做同样的检查，不通过就换号，和调度时的拒绝一样。插件交回的请求体仍不检查。
+- **强制流式在参数覆盖之后再设一次**：以前强制流式在参数覆盖之前设置，覆盖写 `stream: false` 会把只流式的上游又改回非流式（上游回 400）；现在覆盖改变了请求体时，在结果上重新强制流式。
+- **客户端离开在转发开始前取消等待形式的 `Execute`**：以前等待形式（插件解析用量的端点、任务提交）的 `Execute` 不随客户端取消，在转发前挂住的插件会一直占着账号和 API Key 的槽位直到进程退出。现在核心还没为这次执行发出任何东西时，客户端离开就取消调用；开始转发后不再随客户端取消，上游交换只由断开策略决定，插件在观察之后的工作照常提交它的结果。没有加计时。
+- **插件给了分类而客户端已离开时，先按客户端离开处理**：以前先采用插件不带中继返回的分类，被客户端离开切断、又被插件分类的取回可能让账号冷却；现在先检查客户端是否离开（与 develop 一致）。
+- WebSocket 首轮插件给出可重试的错误回答时，以前客户端收到 503 `no_available_account`；现在和 HTTP 一样收到这个错误。
+- 插件列表的“旧契约被拒”以前靠比较错误文字识别，错误被包装或截断就会丢；现在节点记结构化的代码。插件资源页显示的生效内存上限改用运行时的同一个函数（`EffectiveMemoryMB`），不再各算一份。
+- 旧契约的插件首次启用就被拒、发布在准备阶段失败时，以前插件列表的 `refusal` 是 null（节点删掉了失败的实例，只剩 `status_reason` 的文字）；现在发布结束时把每个节点的拒绝代码记在 `plugin_rollout_nodes.code`（迁移 0109），列表和详情从那里给出 `refusal`。
+- 插件解析用量的端点上，插件选了核心的读数时不再每个请求记一条 WARN（只在规则一个用量都没读到时记）。
+- 启用 install-only 的内置插件（volcengine、mailer、dynweight）、重新启用被禁用的内置插件时，以前所有节点的 `/healthz` 同时变成 503，负载均衡在这段时间（发布期间加最多 5 秒；抢到内置插件安装锁的节点约 20 秒）把全部请求答成空的 503（develop 上同样存在）。内置插件的就绪检查现在只决定节点启动后何时第一次就绪，之后不再撤回（CONTRACTS §29.1）。同一个误判还让一个节点在发布期间每 5 秒跑一整轮内置插件安装，每次上传都占集群变更锁，管理员这时提交插件变更会收到 409；发布进行中的内置插件现在算已装好，不再触发安装。
+- 发布了失败策略时插件和核心自己的失败换号、未上报的请求不续粘性会话、WebSocket 首轮参数覆盖失败换号、经代理的账号不在本机解析域名：见升级须知。
+
+### 计费：一条请求一个计价模型，Responses 生图工具的 token 计入本条请求（核心、SDK 平台规则；无迁移）
+
+- **一条请求只按客户请求的模型计价**，预扣和最终扣费都是它；绝不按上游返回的模型名或工具信息取价（CONTRACTS §17.2）。
+- **Responses 里生图工具的 token 是这条请求自己的用量**：上游在 `tool_usage.image_gen` 里报的输入、输出加进这条请求的输入、输出，其中的图片 token 记为图片输入 / 图片输出（`img` / `img_o`），按客户请求的模型的价格算（CONTRACTS §118.10）。请求所用模型的价格表达式要按图片价计时，写上 `img` / `img_o`。应答回显的生图模型（例如 Codex 后端的 `gpt-image-2-codex`）不需要价格。
+- 同一批里曾加入的“生图部分按另一个模型另计”（附加用量对象形式、按应答回显或默认名 `gpt-image-2` 取价、`additional_unpriced` 异常与控制台警示）在发布前删除（CONTRACTS §120.2）。
+
+### 计费：删除“模型没有配置价格时”设置，没有价格一律拒绝（核心、SDK 设置结构、控制台；无迁移）
+
+- 所有者决定：“删除。不要免费提供。”没有价格的模型一律报错，403 `model_price_not_configured`，没有放行途径：请求的主模型、请求里声明的引用模型都在调度前拒绝（CONTRACTS §17.3）。账号测试不查价格、不计费（所有者：“测试账号还是不要计费吧，放着就行了。”），被测模型有没有价格都可以测。
+- `/settings/billing` 的 `missing_price_policy` 整项删除：接口不再返回，`PUT` 时忽略这个字段；插件读到的 `protocol.BillingSettings` 去掉 `MissingPricePolicy`；控制台“系统设置 → 计费”去掉这一项。数据库里已存的值不迁移，读取时忽略，下次保存计费设置时消失。
+- 价格为 0 不受影响：照常转发，按 0 计费。
+- 结算里“主价格为空即免费”的分支随之删除：带附加用量的记录，主用量的价格表达式在价格历史里找不到时结算失败，不再把主用量当免费。
+- 升级须知见上文“升级前要做的”。
+
+### Codex 账号服务 OpenAI 生图接口；同平台适配改为显式声明（核心、SDK 清单与 openai 平台、codex 0.2.0、azure-openai 0.1.0；无迁移）
+
+- **codex 账号能服务 `/v1/images/generations`、`/v1/images/edits`**：核心把生图请求转成带 `image_generation` 工具的 Responses 请求（顶层是驱动工具的对话模型 `gpt-6-luna`，客户端的生图模型在工具里；`size`、`quality`、`background` 另写进一句 `instructions`，Codex 后端只按它定尺寸），应答转回生图接口的 JSON 或事件流（`image_generation.*` / `image_edit.*`），非流式与流式都支持（CONTRACTS §121）。不支持：`n` 大于 1、`response_format: "url"`（400 `unsupported_conversion`），edits 的 multipart（§118.1）。
+- **计费与记录**：整条请求（对话部分约 2300 输入 token 加生图工具的 token）都按客户端请求的生图模型（`gpt-image-2`）的价格算；使用记录的上游模型记上游回显的生图模型 `gpt-image-2-codex`，它和驱动模型都不参与计价、不需要价格。成败以上游为准：上游成功完成就是成功，没出图时返回 200 和空的 `data`（流式没有 `completed` 事件），审核拦截的生图项也一样，记录成功、用量照扣、不算账号失败；上游自己报的错误照常处理。
+- **管理员要做的**：codex 账号的模型列表加 `gpt-image-2`（新账号默认模型已含它；列表为空的不用加），给 `gpt-image-2` 录表达式价格（CONTRACTS §118.6），建议在“模型的协议限定”里把它限定到两个生图协议。`protocols` 没指定过的 codex 账号升级后自动开放两个生图协议，不想出图的账号在“本平台协议”里取消。账号测试带模型名测 `gpt-image-2` 时会真实出一张图。
+- **同平台适配改为显式声明**：账号类型在平台上写了端点子集时，子集以外的端点只有在清单 `adapted` 里列出才经核心转换服务（此前对所有类型自动生效）。第一方插件已补声明：codex 列 chat 与两个生图端点，azure-openai 的“按部署”类型列 `/v1/responses`；行为与之前相同。**第三方插件**若依赖过隐式适配（子集里没有 chat 却服务 chat 之类），升级后那些端点不再服务，要在清单里补 `adapted`。
+- 清单新字段：`accountTypes[].platforms[].adapted`；插件协议仍是 2。用量照 Responses 端点自己的规则读（它已经把生图工具的 token 加进来）。
+- **模拟上游与 e2e**：mock 的 Responses 对 `image_generation` 工具按 Codex 后端实测的事件序列应答（生图项在前，`image_generation_call.in_progress` / `.generating` / `.completed`，图项带 `action`、`output_format`、`size`、`quality`、`revised_prompt`），提示词带 `MOCK-NO-IMAGE` 时只回文字；新增 AC42（Codex 账号经转换生图，见 `next/deploy/e2e/README.md`）；AC40 的“不服务生图”改为 volcengine 与 Azure 部署账号。
+
+### 账号测试按绑定的协议测（核心、SDK 清单与预设、控制台；迁移 0115）
+
+- **测试用模型绑定的协议的真实请求**：OpenAI 预设补了 Responses、Embeddings、生图的最小测试请求，Gemini 预设补了流式生成；只绑了 Responses 或 Embeddings 的模型不再被拿去测 chat 而误报不可用。用这些预设的 openai、gemini、newapi、sub2api、azure-openai 插件随之生效（CONTRACTS §122）。
+- **生图只在带了模型名时测**：清单端点新字段 `test`，`openai.json` 的生成图片标 `explicit`（会真的出一张图、花钱），编辑图片标 `never`（要输入图片）。“测试模型”里的单独测试、“测试所选”“测试全部”都带模型名，绑了生图协议的模型照常按生图协议测、真实出图；不带模型名的默认测试（账号列表的“批量测试”、“测试账号”）不会选生图协议。
+- 模型在“模型的协议限定”里有条目时按条目里写的协议顺序测；不点名模型时跳过只剩生图协议的模型。
+- **没有可测协议的模型不测**：被测模型在这个账号上没有可测的协议（例如只开了编辑图片）、或不点名时所有模型都没有，回 400 `no_testable_protocol` 并记为失败，不再拿默认的对话请求去测。`standard` 库收到协议列表而一个都没有测试请求时同样报错，不退回默认测试。
+- 测试结果和账号“最近测试”显示实际测的协议（`protocol`；迁移 0115 加列 `accounts.last_test_protocol`，只加可空列）。
+
+### 账号协议绑定与模型的协议限定，跨平台协议转换改为默认关闭（迁移 0106）
+
+分支 `feat/protocol-binding`，已合并进 `feat/forwarding-v2`（合并提交 `6bef447cf`）。规则见 CONTRACTS §110，设计与实现的差异见 [设计文档](next/docs/DESIGN-2026-11-17-PROTOCOL-BINDING.md) 的“实现记录”。这一项本身只改了核心和控制台。升级影响见升级须知。
+
+- **本平台协议**（账号字段 `protocols`）：账号编辑页“协议与模型”里可以把账号开放的本平台协议从“全部”改成“指定”，只勾需要的。例如只有 Chat 没有 Responses 的 OpenAI 兼容站点只勾 Chat Completions；不想让 codex 账号接 chat 请求就去掉 Chat Completions；去掉 Responses WebSocket 就关掉 WebSocket。默认“全部”，旧账号行为不变。指定之后，账号类型以后新增的协议不会自动开放。
+- **模型的协议限定**（账号字段 `model_protocols`）：选中模型，指定它在哪些协议下提供。被列出的模型只在勾选的协议下提供；没列出的模型在账号开放的全部本平台协议下提供、不做转换。**协议转换也在这里开**：给模型勾上其他平台的协议，这个账号才对这个模型做转换。“其余模型”一行代表所有没单独列出的模型；给它开转换等于恢复升级前的行为，不建议（上游不认识的模型名可能触发故障策略冷却账号）。count_tokens 不单独配置，跟随同族的生成协议（Messages、generateContent）。
+- 不受影响：原生请求；同一平台内的转换（codex 账号回答 `/v1/chat/completions`、只有 chat 的 OpenAI 类型回答 `/v1/responses`）；声明了多个平台的账号类型（volcengine）在这些平台上的请求。
+- **全部账号都不提供时返回 404**：分组里提供给请求的账号全部因为“账号未开放该协议”“模型未开启协议转换”“模型在该协议下不提供”被过滤时，请求返回 404（客户端不会当成过载重试），不转换、不发上游、尝试次数为 0。组内冷却中或限时停用的账号按同样的规则判断：其中有一个开了这个协议（或为这个模型开了转换）时，它回来后会服务这个请求，仍按原来的规则返回 503（Anthropic 格式 529）；它们也都没开时照样是 404，不会因为有账号在冷却而变成可重试的错误。这个判断只读调度快照和冷却状态，不查数据库。WebSocket 首轮同样处理；已建立的连接上换成该账号在这个协议下不提供的模型，返回 400，要新建连接。
+- **调度记录**：使用记录详情的调度记录多三个原因：`protocol_closed`（账号未开放该协议）、`conversion_not_enabled`（模型未开启协议转换）、`model_protocol_closed`（模型在该协议下不提供），能看到每个账号为什么没被选。这一判断排在模型白名单之前。
+- **控制台**：
+  - 账号编辑页：“模型配置”改名“协议与模型”，新增“本平台协议”和“模型的协议限定”两张卡；后者有矩阵、列表、JSON 三种视图，可以多选模型一次指定协议。矩阵里没有单独指定的模型，在“其余模型”一行指定了协议之后按那一行显示（标“跟随其余模型”），与网关的判定一致。
+  - 账号列表：平台图标按账号实际开放的协议显示，开了转换的带“转”角标，本平台协议被限定的标“部分”。账号详情的“可服务的端点”按实际开放的显示，没开放的置灰。
+  - 批量编辑加“本平台协议”“模型的协议限定”两项（替换），只对同一账号类型的账号可用。
+  - 分组详情的“端点”改为按成员账号实际开放的协议显示，每个端点带提供它的账号数；原来“经协议转换还可调用”的推算删除。
+  - 新建账号选类型时，跨平台的端点标“需在账号上为模型开启”。
+- **接口**：账号的 GET / POST / PATCH 和列表带 `protocols`（`string[]` 或 `null`）、`model_protocols`（`[{models, protocols}]`），PATCH 各自整体替换；`GET /accounts/:id` 另带只读的 `served_protocols`（账号实际开放的协议、方式和模型；账号有模型白名单时，白名单里一个模型都不提供的协议不列出），`GET /groups/:id` 另带只读的 `served_protocols`（协议和提供它的账号数）。没有新增批量接口，也没有按协议筛选账号的参数。`GET /me/groups` 的 `served_protocols` 见“控制台与小改动”。
+- **迁移 0106**：`accounts` 加 `protocols`（`text[]`，可空，空 = 本平台协议全部开放）和 `model_protocols`（`jsonb`，默认 `[]`）。不回填。
+- **性能**：判断只是调度时的内存比较，不增加数据库和 Redis 访问；没有配置的账号只多一次空指针判断。没开转换的账号在转换请求体、下载媒体之前就被过滤，跨平台请求比以前便宜。
+- **已知限制**：`/v1/models` 不按协议过滤，客户端可能看到当前协议下调不通的模型；账号列表没有“开放协议”筛选。验收用例 `e2e/ac19_builtin_platforms_test.go` 改成先断言默认 404、在账号上为模型开启转换后断言 200，运行情况见“验证状态”。
+
+### 插件沙箱默认开启 Landlock：插件默认读写不了文件，也连不到不属于它的 unix socket（核心、SDK 清单、网关、控制台；无迁移）
+
+分支 `feat/plugin-sandbox-fs`。契约见 CONTRACTS §43.8，设计见 [设计文档](next/docs/DESIGN-2026-11-18-PLUGIN-SANDBOX-FS.md)。
+
+- **`SUB2API_PLUGIN_LANDLOCK` 在 Linux 上默认开启**（此前默认关闭，只有网关托管的核心由网关打开）。规则集按内核的 Landlock 版本处理它支持的全部限制：文件（含建 socket、fifo、链接、设备节点、跨目录移动、截断、设备 ioctl），内核 6.12 起抽象 unix socket 与给沙箱外进程发信号，7.1 起路径型 unix socket（只放行插件自己的 socket 目录），严格网络下 6.7 起 TCP、7.2 起 UDP（seccomp 之下的第二道）。
+- **插件默认没有文件访问**：只放行自己的二进制、go-plugin 的 socket 目录、`/dev/null`、时区文件，获授 `net` 的插件另外能读 CA 证书。去掉了 `/etc/resolv.conf`、`/etc/hosts`、`/etc/nsswitch.conf`、`/etc/services`、`/etc/ca-certificates`、`/dev/urandom`，以及以前放行的工作目录和整个私有运行目录（插件的 `TMPDIR` 不再可写）。同用户的网关管理令牌、其他插件的目录、`/proc` 都读不到（e2e 栈里用探针核对过）。
+- **新宿主权限 `fs.data`**（风险中，审查页“读写本插件的数据目录”）：只有获授它的插件才有数据目录（`<SUB2API_PLUGIN_DIR>/<key>/work`，环境变量 `SUB2API_PLUGIN_DATA_DIR`，也是进程的工作目录）；授予或撤销它会重启插件进程。现有插件都不读写文件，没有插件申请它，插件版本都不变。
+- **内核不支持某一层时照常启动插件**：核心启动时每层记一条 WARN（缺什么、后果、需要的内核），全部生效时记 INFO；控制台节点页新增“插件沙箱”一列（全部生效 / 缺几层 / 未开启），`GET /nodes` 带 `plugin_sandbox`。
+- 网关的 `plugin_landlock_disabled: true` 现在写 `SUB2API_PLUGIN_LANDLOCK=false`（以前只是不写，核心默认开启以后就关不掉了）。
+- `next/deploy/ci/sandbox-kernel.sh`：在 QEMU 里用发行版内核包跑沙箱测试，验证本机内核没有的层。
+
+#### 升级须知
+
+- 升级后 Landlock 默认开启。各层需要的内核：文件 5.13，截断 6.2，TCP 6.7，抽象 socket 与信号 6.12，路径型 unix socket 7.1，UDP 7.2；内核还要在 LSM 列表里启用 landlock（`cat /sys/kernel/security/lsm`），容器的 seccomp 配置要放行 `landlock_*` 系统调用（Docker 默认配置放行）。看核心启动日志里的 `plugin sandbox:` 几行或节点页确认实际生效到哪一层。
+- 网关托管的节点（线上两节点）2026-10-29 起已经开着 Landlock；这次规则收得更紧（去掉工作目录、`TMPDIR`、DNS 配置文件），插件启动失败或行为异常时，先用 `SUB2API_PLUGIN_LANDLOCK=false`（网关：`plugin_landlock_disabled: true` 或 `core_env`）回到原来的不限制，再报告日志。
+- 第三方插件如果读写工作目录、`TMPDIR` 或 `/etc` 下的文件：在清单的 `hostPermissions` 加 `fs.data`、只用 `SUB2API_PLUGIN_DATA_DIR` 下的路径，升版本后重新上传，由管理员同意（中风险，不会自动授予）。插件必须静态链接（`CGO_ENABLED=0`，`sub2api-plugin build` 默认如此）。
+
+### 插件联网：管理员可以指定插件能访问、不能访问的域名（无迁移；默认行为不变）
+
+分支 `feat/fv2-egress`。契约见 CONTRACTS §113，设计见 [设计文档](next/docs/DESIGN-2026-11-18-PLUGIN-NETWORK-ACCESS.md)。
+
+- **新设置“系统设置 → 运行环境 → 插件联网”**：所有域名的默认设置二选一。“允许所有域名”（默认）下维护一张“已屏蔽的域名”，“屏蔽所有域名”下维护一张“已允许的域名”；列出的域名连同它的子域名生效，两张表分开保存，切换模式不会丢。添加对话框可以一次填多个，或批量粘贴（每行一个），格式不对的行逐行提示。保存后各节点对新连接立即生效（漏收广播的节点最多 10 秒），已建立的连接不断开。接口 `GET/PUT /settings/plugin-egress`（`settings:read` / `settings:manage`），每次保存记审计 `settings.plugin_egress.update`。
+- **只收紧，不放宽**：插件仍须持有 `net` 授权；插件详情“外部访问”里设为“仅白名单”的插件仍只能访问它获批的域名，管理员的允许列表不会把别的域名加给它。被拒的连接和 DNS 查询照常记在插件的外部访问日志里，结果“已拒绝”，原因写明是被屏蔽还是不在允许列表里。
+- **管插件经核心发出的全部网络**（所有者决定“插件的所有网络都通过核心发出，这时候来进行域名限制”，CONTRACTS §113.3）：插件自己的连接（出口隧道：Webhook、SMTP、审核渠道等），以及核心替插件发出的请求——转发（含 WebSocket 握手）、取回（含任务轮询和 codex 带代理票据的授权请求）、`SendAccountRequest`、配额查询、凭证续期、账号测试、拉取模型列表。目标主机先过清单与账号地址的规则（§112.17），再过这项设置，两道都过才发。被拒的转发什么都不发出、换下一个账号、不罚账号（原因 `upstream_host_blocked`），所有账号都被拒时客户端得到 `no_available_account`（不含主机名）；取回和 `SendAccountRequest` 回 `PERMISSION_DENIED`；配额与续期的插件看到传输错误；账号测试、模型列表显示原因。每个被拒的请求记在该插件“外部访问”的明细里（结果“已拒绝”，协议 `https`/`http`）。判断与隧道同一份缓存，请求路径上不读数据库。
+- 控制台：说明文字改为覆盖两条路；切换到“屏蔽所有域名”前要确认，选中时显示警告：允许列表里没有的上游域名对应的平台请求会全部被拒。
+- 以前没有全局的插件联网设置，按插件的出口策略（`allow_all` / `allowlist`）保持原样，没有要迁移的旧选项。升级要做的见升级须知。
+- e2e AC37 覆盖屏蔽列表、允许列表对 guard webhook 的效果与出口日志里的拒绝原因，以及对经网关的上游请求（anthropic 账号的 `base_url`）的效果（CONTRACTS §113.5）。
+
+### 插件包不再依赖主节点：每个节点留一份，缺包时向任一持有者取（网关；核心只改错误文案；无迁移）
+
+见 CONTRACTS §114、[设计](next/docs/DESIGN-2026-11-18-PLUGIN-PACKAGE-ANY-NODE.md)。
+
+- 上传、市场安装、内置插件导入只把包存在接到请求的那个节点，不再推给主节点；主节点宕机时，在其他节点上传、安装、升级插件照常进行。
+- 节点缺包（新节点、丢了缓存的节点、主节点自己）时，逐个问其他启用的节点，心跳新鲜的先问、不新鲜的后问（心跳只排顺序，不排除节点：集群冷启动、从节点加入时持有包的节点心跳可能还没写或已过期），第一个给出摘要正确的包的节点胜出；摘要不符的字节被拒，继续问下一个。主节点不再特殊，`set-primary` 与插件包无关。
+- 持有某个包的节点都连不上时装不了：控制台 `package_gone` 的文案改为“没有能连上的节点持有这个安装包”，节点加载失败的错误里逐个写明每个节点的结果（没有这个包，或连不上及原因）。
+- 删除节点间插件包上传（`PUT /internal/plugin-blobs/`、范围 `plugin-upload`、每节点 2 个并发上传的限制）。`plugin_store_max_bytes` 总量上限保留。
+- 升级要换网关二进制，滚动更新期间不要上传插件（见升级须知）。
+
+### 插件数据库只用核心的数据库用户，不再给插件建数据库角色（迁移 0110，**单向**）
+
+所有者决定：“它访问数据库都是通过核心的数据库配置来访问，而不需要任何新数据库用户”。设计见 `next/docs/DESIGN-2026-11-18-PLUGIN-DB-CORE-USER.md`，契约 CONTRACTS §115。
+
+- **对运维**：新版本第一次启动时，核心把旧版本为插件建的登录角色 `plg_<key>`（含已卸载插件留下的）逐个收回：`REASSIGN OWNED` 给核心的用户、`DROP OWNED`、`DROP ROLE`，日志 `converted legacy plugin database role`。多个节点同时启动只转换一次；某个角色还有会话（旧插件进程未退出）时留下并记一次警告 `legacy plugin database role still has sessions`，下次该插件取 DSN、迁移或下次启动时再转换；转换失败只记日志，不阻止启动。核心的数据库用户不再需要 `CREATEROLE`；配置 `SUB2API_PLUGIN_DB_ROLE_ISOLATION` 删除（新核心设了也不读），错误 `plugin_db_isolation_unavailable`、`plugin_db_role_conflict` 不再出现。**设过 `SUB2API_PLUGIN_DB_ROLE_ISOLATION=false` 的部署先别删它**：网关外壳与核心分开换，先换上这一版外壳时它启动的仍是 0.1.303 核心，旧核心没有这个值就重新打开角色隔离，数据库用户没有 `CREATEROLE` 时持有 `db.schema` 的插件起不来；所以外壳继续把它传给核心（`supervisor.legacyCoreEnv`），全部集群换上 0.1.304 之后的下一个外壳版本删除。
+- **备份与恢复不再依赖属主**：插件的 schema 和表都属于核心的用户。不带属主恢复（`--no-owner`）后直接可用；带属主恢复的库有旧角色，启动时照上面转换。
+- **连接数**：见升级须知。
+- **隔离（直说）**：持有 `db.schema` 的插件现在能读写核心的用户能访问的所有表，包括核心自己的表和其他插件的表；分隔只靠约定和安装时对 `db.schema` 的同意，PostgreSQL 不再强制。主密钥加密的列（账号凭据、代理密码、可还原的 API Key、TOTP、插件加密设置）读不出明文，API Key 与用户密码只存哈希，但余额、授权等都能被改写。因此非官方插件授予 `db.schema` 一律要求超管专属的 `plugin:grant:db_schema_unconfined`（以前只在关闭角色隔离时要求），官方插件不变。
+- **迁移 0110**（`0110_drop_plugin_migration_funcs.sql`）删除旧插件角色记录迁移用的两个 SECURITY DEFINER 函数 `plugin_migrations_applied`、`plugin_migration_record`；插件迁移由核心以自己的用户执行并直接记录。之后旧核心无法再给插件建角色，持有 `db.schema` 的插件在旧核心上起不来。
+- **核心代理插件的数据库连接，凭据不进插件**（所有者补充“数据库直接委托给核心来代理就行了”）：沙箱里的插件（严格网络，Linux 默认）从 `GetDSN` 拿到不带密码的虚拟地址 `db.sub2api:5432`，经出口隧道连到核心，核心用自己的数据库配置（含 TLS、SCRAM）代为登录、把 `search_path` 设为插件的 schema 后原样转发协议，取消请求也转给服务器。在 `pg_stat_activity` 里这些连接的 `application_name` 是 `sub2api plugin <key>`。严格网络关闭时（开发、非 Linux）插件仍拿到核心的 DSN 直连。插件代码和 SDK 不用改。所以隔离的准确说法是：插件拿不到数据库密码，但能执行核心的数据库用户能执行的任何 SQL。
+- `sub2api-plugin db diff|check` 不再建临时角色，像宿主一样以连接的用户执行迁移（见“插件作者须知”）。
+
+### 授权请求走账号表单选的代理：代理票据（核心、SDK、UI 3.20、codex 0.2.0；无迁移）
+
+所有者要求“账号授权时的第一次换令牌不走代理：修复bug”，粘贴的代理串也要支持。规则见 CONTRACTS §117，设计见 [DESIGN-2026-11-18-ACCOUNT-PROXY-TICKET.md](next/docs/DESIGN-2026-11-18-ACCOUNT-PROXY-TICKET.md)。
+
+- **修复**：codex 的设备码申请、轮询和两种登录的换令牌以前由插件直连 OpenAI，从服务器本机 IP 出去，账号表单上选的代理不起作用。现在由核心经表单选的代理发出（已有代理、粘贴的代理串、不用代理三种都支持），开始、每次轮询和换令牌都按表单当时的代理选择发出；发给 OpenAI 的方法、路径、请求体不变，请求头除 `User-Agent` 里的插件版本（`sup2api-codex/0.2.0`）外不变。账号建好后的上游、刷新和重置次数本来就走账号代理（codex、vertex 已核对），不变。
+- **核心**：新接口 `POST /account-types/:plugin_key/:type/proxy-ticket`（`account:create` 或 `account:update`）：与“拉取模型列表”同一段代码检查代理选择，加密成只有核心能解开的票据；粘贴的代理串只解析使用，不建代理记录，不进日志和审计。插件路由调用（有登录用户的）带执行令牌，插件在路由里可以 `Fetch`，但必须带票据、只能到清单 `externalServices`；票据只对发它的管理员和这个插件有效，每次使用按该管理员当时的权限复查。
+- **@sub2api/ui、@sub2api/host、@sub2api/vite-preset 3.20**：原生账号表单多一个 prop `proxyTicket`（类型 `ProxyTicketSource`），按表单当前的代理选择要一张票据。只加不改；用到的插件声明 `hostUICompat: "^3.20"`。
+- **codex 0.2.0**：清单去掉 `net`，插件不再联网；开始路由要 `proxy_ticket`；请求没有发出时会话保留（开始、换令牌回 400 `proxy_refused`，轮询回带原因的 `pending`），代理改好后接着完成。进行中的授权在升级后要重新开始。
+- **e2e AC38**：三种代理选择下 codex 设备码登录的全部请求经代理（或直连）到达 mock 扮演的 `auth.openai.com`，粘贴的代理串不留代理记录，令牌建成的账号能经网关用并计费；Sign in with Codex 的换令牌经代理。mock 为此新增授权服务器的三个接口和 HTTPS 的 `CONNECT` 代理（以前 https 地址经代理到不了 mock），e2e 网络给 mock 加别名 `auth.openai.com`。
+
+### codex：上游会话 id 以账号 id 加盐；User-Agent 与 originator 可自定义（codex 0.2.0；无迁移）
+
+审计结论，所有者决定会话 id“加上盐进行适配”、“直接根据账号的 id 来做盐”，以及 User-Agent / originator“账号上可以自定义，然后插件的设置中也可以自定义”。规则见 [PLUGIN-CODEX.md](next/docs/PLUGIN-CODEX.md) 第 20 节。
+
+- **会话 id 以账号 id 加盐**：发给上游的 `session_id` / `conversation_id` 改为 `sha256("<账号 id>:<api_key_id>:<prompt_cache_key>")` 排成的 UUID，账号 id 是核心里的账号编号，不发给上游。**升级后每个会话的上游 session 变一次**，上游提示缓存的落点重来一次；标识随账号不同，同一会话换到另一个 ChatGPT 账号时也会变。
+- **User-Agent 与 originator 可自定义**：账号编辑页 codex 表单新增“客户端标识”两个输入框，插件设置新增同名两项；取值为账号 → 插件设置 → 内置（`sup2api-codex/<版本>`、`sup2api`），留空沿用上一级。用于这个账号发往 OpenAI 的全部请求：转发（HTTP、WebSocket）、账号测试、令牌刷新、重置次数，以及授权（设备码申请、轮询、换令牌）——授权时账号还没保存，每次调用都带上表单此刻填的值。默认值不变，不设就与以前一样。
+
+### 删除 Claude OAuth 插件及两种账号类型（迁移 0111）
+
+所有者决定整个删除（原话“删除掉！”），不留兼容。线上没有安装这个插件，也没有这两种类型的账号。规则见 CONTRACTS §116。
+
+- 插件 `claude_oauth`（`next/plugins/claude-oauth`）与账号类型 `claude_oauth`（Claude OAuth）、`claude_setup_token`（Claude Setup Token）删除，市场里不再有它；核心里写死的 Claude OAuth 余额查询一并删除。平台插件从十个变成九个。
+- 插件键 `claude_oauth` 列入已删除插件键：任何来源、任何签名的包都不能再安装，返回 403 `plugin_key_reserved`（已签名的 0.3.0 包同样被拒）。
+- **迁移 0111**（`0111_drop_claude_oauth_plugin.sql`）：装过它的库（例如测试实例）像带 purge 的卸载那样删除插件行（连同版本、发布状态、宿主权限授予）、它的权限 `claude_oauth:manage` 与授予、出网域名、任务，键记入 `plugin_key_retirements`；没有它的库什么都不变，可以重跑。这两种类型的账号、使用记录、账本保留，控制台显示为插件已卸载，由管理员删除。
+- 删掉它之后没有使用者、暂时保留的通用能力（账号余额、额度主动查询）见 CONTRACTS §116.3。
+- e2e：AC30 的平台插件矩阵变成九个插件。删除后没有重跑 e2e。
+
+### 云厂商上游：Azure OpenAI、Vertex AI、AWS Bedrock 三个新插件，OpenAI 账号可填组织与项目（核心加响应流格式；无迁移）
+
+分支 `feat/cloud-providers`，已在 develop 上，三个插件都已按转发 V2 改写，签名由插件自己做。**没有真实云账号，三家的行为都只对文档、黄金样例和模拟上游验证过**；没验证的事项见 [设计文档](next/docs/DESIGN-2026-11-17-CLOUD-PROVIDERS.md) 第 12 节，验证之前不要对外说“已支持”。填法见 [PLUGIN-CLOUD-PROVIDERS.md](next/docs/PLUGIN-CLOUD-PROVIDERS.md)。三个插件都是市场插件，不内置，线上从未发布过。
+
+- **openai**：API Key 账号“高级（可选）”里新增组织 ID、项目 ID，填了就以 `OpenAI-Organization`、`OpenAI-Project` 发送并覆盖客户端自己带的；留空时行为不变。
+- **azure_openai**（用 `standard` 库的代码插件）：Azure OpenAI 资源地址加 API Key（`api-key` 头）。两种类型：v1 接口（chat、responses、embeddings）和按部署的经典接口（chat、embeddings，带 `api-version`；`/v1/responses` 请求由核心转成 chat）。错误分类与 OpenAI 账号相同（openai 预设的策略）。部署不存在（404 `DeploymentNotFound`）默认原样回给客户端；要换到下一个账号，由管理员在「调度策略」的失败处理里加一条自动重试规则（来源：上游 HTTP 响应；错误码 `404`；关键词 `DeploymentNotFound`、`model_not_found`，一行一个），不配账号规则，账号不受惩罚。上游模型就是部署名，用账号的模型映射对应。客户端的 `OpenAI-Organization` / `OpenAI-Project` 和请求体里的 `service_tier`、`safety_identifier` 不转给 Azure。粘贴带 deployments、chat/completions 或 api-version 的请求地址会在保存时报错。不支持 Entra ID 令牌。
+  - **顺序变化**：这两个过滤字段现在在插件里、排在账号参数覆盖之后删除。运营方在 Azure 账号的参数覆盖里写这两个字段之一时，以前发给上游，现在被删掉。
+- **vertex**：Vertex AI 上的 Gemini（generateContent、streamGenerateContent、countTokens）。三种鉴权：服务账号 JSON、用户凭证 JSON（`gcloud auth application-default login`）、API Key。访问令牌由核心换取并自动续期（CONTRACTS §48），插件自身不联网。服务账号 JWT 用 `github.com/golang-jwt/jwt/v5` 签名，凭证文件由插件自己解析（Google 的库没有只签断言、不发请求的公开接口，能单独签名的 `golang.org/x/oauth2/jws` 标着 Deprecated）；`token_uri` 必须是 Google 的令牌地址，按解析后生效的值判断。不支持 Vertex 上的 Claude。
+- **bedrock**：只服务 anthropic 平台，Claude 走 InvokeModel / InvokeModelWithResponseStream。客户端用 OpenAI 协议（chat、responses）访问时由核心先转换成 Messages 请求，走同一条路（这是跨平台转换，要在 Bedrock 账号上为模型开启）；Bedrock 自己的 OpenAI 兼容接口（`/openai/v1`）没有接，Claude 以外的 Bedrock 模型这一版不支持。三种鉴权：Bedrock API Key、长期 Access Key、临时凭证（后两种由插件用 `sdk/reqsign` 做 SigV4 签名；都不自动续期）。新建账号时预填“Anthropic 模型名 → Bedrock 模型 ID”的映射（ID 按 2026-11-17 的 AWS 模型卡片，含 Fable 5.2、Opus / Sonnet / Haiku 5.5，不含 AWS 已停止服务的 Sonnet 4 和 Opus 4），可选跨区域推理前缀（us、eu、apac、jp、au、in、global）；按 AWS 模型卡片，现行的 Claude 模型几乎都只能经推理配置调用，所以前缀默认是 `global`（预填模型里只有 Opus 4.1 没有全球配置，它的映射直接写 `us.` 开头的 ID），要把请求留在某个地域内就改选地域前缀。账号测试的默认模型是 Haiku 4.5 的全球推理配置。中国区（`cn-*`）和隔离分区的区域在保存时被拒绝。请求体的处理（`internal/bedrock` 的 `body.go`、`beta.go`、`sanitize.go`、`upstream.go`）：
+  - 顶层总是删除 `model`、`stream`、`metadata`、`provider`、`service_tier`、`inference_geo`、`speed`（后三项选的是 Anthropic 自己的服务等级、数据驻留和快速模式，Bedrock 没有，地域由推理配置决定），设上 Bedrock 要求的 `anthropic_version`。顶层的 `output_config`、`output_format` 保留（旧版会删）。
+  - 这些删除都在插件里、在运营方的参数覆盖之后：运营方在参数覆盖里写这些字段会被删掉。develop 上的 bedrock 0.1.0 也是由插件的补丁在参数覆盖之后删（当时只删 `model`、`stream`、`metadata`、`provider`），顺序没有变，删除的字段多了 `service_tier`、`inference_geo`、`speed`。
+  - `anthropic_beta`：取客户端 `anthropic-beta` 头和请求体里要的功能，白名单 15 项（Bedrock 另有名字的改名，不支持的丢掉），再按工具自动加：computer use 工具加对应的 `computer-use-2025-01-24` / `computer-use-2025-11-24`，tool search 工具（在有 tool search 的模型上）、带 `input_examples` 或允许 code execution 调用的工具加 `tool-search-tool-2025-10-19`，有它时同时带 `tool-examples-2025-10-29`。没有对应功能的 `context_management` 删除。
+  - 清洗 Claude Code 写在请求体深处、Bedrock 不接受的字段：工具定义的 `custom`；`cache_control` 的 `scope` 总是删，`ttl` 只在认出模型版本时按模型删（低于 4.5 的删，4.5 及以上只删 `5m`、`1h` 以外的值），**认不出模型版本时 `ttl` 原样保留**（删掉会把一小时缓存静默变成五分钟）；工具调用 ID 的非法字符；模型不接受的 thinking 设置。不用再在参数覆盖里手工删。
+  - 是否流式只看请求的 `meta.stream`（客户端的选择），不看请求体里的 `stream`：运营方的参数覆盖给非流式请求加 `stream: true` 不会把它变成 InvokeModelWithResponseStream。
+  - Access Key、API Key 账号上去掉 `x-amz-security-token`（`RemoveHeader`）：运营方经请求头覆盖加的这个头不再发给 AWS（否则签名校验失败）；临时凭证账号照常带。
+  - 以上都没有用真实账号验证过。
+- **核心：响应流格式**（CONTRACTS §109）：插件构造的上游请求可以声明响应流的格式（`response_stream`，现有 `aws-eventstream-chunk`，核心解码成 SSE 后照常中继、计量、转换）。核心不认识的格式、以及 WebSocket 轮次上给了格式时，这次尝试换号、不发请求。签名由插件用新包 `next/sdk/reqsign` 自己做；event stream 的编解码在新包 `next/sdk/awseventstream`。两个包用 AWS 的官方库（`aws-sdk-go-v2` 的 `aws/signer/v4`、`aws/protocol/eventstream`；只用这两个包，不用服务客户端，请求仍经核心、经账号代理发出）。event stream 里带同名头的消息按帧损坏处理。
 - **核心：保存账号后立即续期到期的凭证**（CONTRACTS §48.3）：新建账号或修改凭证后，类型支持自动续期且凭证已到期时，后台马上续一次，不用等 5 分钟一轮的扫描。Vertex 账号保存后几秒内可用；其他账号类型（凭证没到期）不受影响。
 - **核心**：`azure_openai`、`bedrock`、`vertex` 加入保留的第一方插件键（没有官方签名的手动上传不能占用）。
-- **SDK**：新包 `next/sdk/pluginsdk/accountform`（自带账号表单的插件解码、校验、归一化的公共部分，vertex、bedrock 在用）；`pluginsdk.SetPatch` / `pluginsdk.DeletePatch` 构造请求体补丁。
-- **模拟上游**新增 Azure（v1 与按部署）、Bedrock InvokeModel（含 event stream 和 SigV4 校验）、Vertex 的路径；新增验收 `e2e/ac29_azure_test.go`（**已写，尚未在任何 e2e 栈上执行**）。新表单没有做过控制台界面走查。
+- **SDK**：新包 `next/sdk/pluginsdk/accountform`（自带账号表单的插件解码、校验、归一化的公共部分，vertex、bedrock 在用）。
+- **模拟上游**新增 Azure（v1 与按部署）、Bedrock InvokeModel（含 event stream 和 SigV4 校验）、Vertex 的路径；新增验收 `e2e/ac29_azure_test.go`（运行情况见“验证状态”）。Vertex、Bedrock 没有 docker e2e。新表单没有做过控制台界面走查。
+
+### 上游站点插件：newapi、sub2api、typesafe（首发 0.1.0，内置、只安装；无核心迁移）
+
+分支 `feat/upstream-plugins`。三个插件都**只对文档、单元测试、合规套件、黄金样例和模拟上游验证过，没有接过真实站点或真实 TypeSafe 账号**。契约见 CONTRACTS §119，填法见 [PLUGIN-NEWAPI.md](next/docs/PLUGIN-NEWAPI.md)、[PLUGIN-SUB2API.md](next/docs/PLUGIN-SUB2API.md)、[PLUGIN-TYPESAFE.md](next/docs/PLUGIN-TYPESAFE.md)。
+
+- **newapi**：New API 站点的 Key（站点地址加 Key），一个账号同时服务 openai、anthropic、gemini，以及 typesafe 插件启用时的 typesafe 平台；同协议原样转发、各协议用官方鉴权头（Gemini 只用 `x-goog-api-key`）；Gemini `countTokens` 不转发，由核心本地估算。余额读 `/api/usage/token/`，显示站点的额度点数本身，没有单位（令牌限额、取用户额度、不限三种）。
+- **sub2api**：另一个 Sub2API 站点（旧版或 sub2api-next）的 Key，服务 openai、anthropic、gemini，同协议原样转发；余额读站点的 `/v1/usage`（`remaining`、`balance`、`quota.remaining` 依次取，单位是 `unit` 原样，`-1` 为不限，`isValid: false` 为认证被拒）。上游 Key 能用哪些协议看它在站点上的分组，用协议绑定收窄。
+- **typesafe**：新平台 `typesafe` 与端点 `POST /v1/systemone`（TypeSafe 的 Jev 接口，只有非流式），请求原样转给官方地址（可在有权限时改地址），危险区两个请求头透传，用量读 `usage.input_tokens`。价格由管理员录（参考输入 $0.042 / 百万 token，输出 0）；没有余额接口。
+- 三个插件都不申请 `net`、`fs.data`：请求由核心发出，在默认开启的文件沙箱下运行。
+- **模拟上游与 e2e**：mock 新增两个站点的余额接口、OpenAI 生图接口、TypeSafe 主机名下的模型列表（`api.typesafe.ai` 加进 e2e 网络别名）；AC30 加 newapi、sub2api、typesafe 三行和 New API 账号转发 Jev，新增 AC39（账号余额）、AC40（OpenAI 生图）、AC41（Responses 生图工具的 token 计入请求模型，一条记录、一笔扣费、没有另计分项）；mock 的 Responses 对 `image_generation` 工具回 `tools`（模型 `gpt-image-2-codex`）与 `tool_usage.image_gen`。
+
+### 账号余额接通（核心；迁移 0113、0114）
+
+- 账号余额显示上游返回的数字和单位原文，不做任何单位或汇率换算（2026-11-18 所有者决定，CONTRACTS §52）；上游没给单位时只显示数字，核心不再要求单位是三位大写币种代码。New API 插件余额只请求 `/api/usage/token/`，显示站点的额度点数。Sub2API 插件余额的单位取上游 `unit` 原文，没有时不带单位。
+- 声明了余额的账号类型由插件描述查询（`BuildBalanceRequest` / `ParseBalanceResponse`）、核心经账号代理发出：每个目标先过清单主机规则与插件联网（有一个被拒就一个都不发），不跟随重定向。控制台手动刷新（`GET /accounts/:id/balance?force=true`），集群任务 `core.account.balance_sweep` 每分钟按各类型的 `updateInterval` 读到期的账号（可调度的和从没读过的；停用的只在手动刷新时读）。**只显示，不停用账号、不影响调度、不告警。**
+- 控制台余额格显示未查询、金额、不限、查询失败（带上次的金额）；余额显示为“数字 + 单位”（如 `7.5 USD`、`1,250,000`），不再显示货币符号；前端余额刷新不再有 2 秒冷却。
+- 迁移 0113：`account_balances.updated_at` 可空、加 `unlimited`、删 `source`。清单 `accountTypes[].balance.currency` 删除（见升级须知）。迁移 0114：`account_balances.currency` 从 `VARCHAR(3)` 改为 `text`。
+- 账号测试按账号的协议绑定把开放的协议按顺序传给插件（`BuildTestRequestRequest.protocols`），只开放了某些协议的账号测的是它真正服务的协议。
+
+### OpenAI 生图（核心、openai 0.5.0、volcengine 0.13.0；迁移 0112）
+
+- 内置 openai 平台新增 `POST /v1/images/generations`、`POST /v1/images/edits`（协议 `openai.images`、`openai.images_edit`）。**只收 JSON 请求体**，表单上传（multipart）形式在网关回 400 `request body is not valid JSON`、留一条免费记录，暂不支持。OpenAI API Key 账号可转发；codex、azure_openai、volcengine 的账号不服务这两个端点。
+- 用量记录图片输入 / 输出 token（迁移 0112，`usage_logs` 两列，`/usage` 列表与详情返回），价格表达式变量 `img`、`img_o` 生效：用到时从 `p`、`c` 里扣出，没用到时按文字价算，不会免费也不会重复计。控制台用量详情显示图片 token 行，价格试算可填 `img`、`img_o`。
+- 没有价格的生图模型回 403 `model_price_not_configured`（缺价一律报错，CONTRACTS §17.3）；参考价见 CONTRACTS §118.6，models.dev 同步的生图价只有文字价，会少收。
+- volcengine 账号在 openai 平台上改为显式端点子集（与之前实际服务的相同），不服务 OpenAI 生图。openai 插件默认模型加 gpt-image-2、gpt-image-1.5、gpt-image-1-mini。已经手工指定过协议的 OpenAI 账号升级后要手动勾选两个生图协议。
+- Responses（含 WebSocket）请求使用 `image_generation` 工具时，工具的 token（`tool_usage.image_gen`）计入这条请求的用量，按客户请求的模型计价（见上文“计费：一条请求一个计价模型”，CONTRACTS §118.10）。ChatGPT（Codex 登录）账号经 Responses 的生图工具可以生图（2026-11-18 在设备码账号上实测）。
+
+### volcengine 0.13.0：删除旧的视频任务表，素材库调用改由核心经账号代理发出（插件迁移 0003）
+
+- 插件迁移 `0003_drop_video_tasks.sql` 删除 `plg_volcengine.video_tasks`（`DROP TABLE IF EXISTS`），连同只读它的 `ResolveModel`。转发 V2 之后视频任务的归属、账号、模型和预扣都在核心，这张表没有写入方；唯一的读者 `ResolveModel` 只在端点声明 `request.modelSource: "plugin"` 时被调用，线上的 0.12.8 和之前发布过的清单都没有这样声明，所以还在旧版本上的节点也不会读写它，表直接删除（[设计文档](next/docs/PLUGIN-VOLCENGINE-ARK.md) §5.3）。
+- 素材库的上游调用（分组、素材的增删改查）改由核心经账号代理发出（`SendAccountRequest`）：以前插件用自己的 HTTP 客户端经出口隧道直连火山，账号上配置的代理不起作用。插件照旧用账号的 AK/SK 签名，发给火山的方法、路径、请求头、请求体和签名与 0.12.8 逐字节相同（测试钉住）。每次调用单次 30 秒（核心的时限），随发起它的控制台请求取消；不跟随重定向；回答整份交还（以前读到 1 MiB 为止）；每次发送另写一条审计 `plugin.account_request`。目标主机须是清单允许的：默认控制面在 `externalServices`，账号填的 `asset_base_url`、中转的 `asset_endpoint` / `base_url` 在 `upstreamFields`（清单原本就声明了）。传输错误、429、5xx 的重试（最多 3 次、间隔 200 毫秒，创建不重试）不变。
+- 清单去掉 `net` 权限：插件不再自己联网。升级审查里少了这一项；管理员给它设过的出口白名单不再需要。
+- Chat Completions 的流式判断与 openai 预设一致（`pluginsdk.RequestStream`：`meta.stream` 或请求体的 `stream` 为真）：运营方的参数覆盖给非流式请求加 `stream: true` 时，发往上游的请求体现在会多带 `stream_options.include_usage: true`（以前只看 `meta.stream`，不加）。volcengine 没有只流式的账号类型，核心不会替它强制流式。
+- 任务提交不再检查清单的 `usageMaxBytes`（该字段已删除）。
+
+### 控制台与小改动（无迁移）
+
+- 提交插件变更时，若另一项集群变更（插件变更或核心升级计划）正在提交，返回 409 的错误码从 `conflict` 改为专用的 `cluster_change_busy`（信息不变），控制台显示本地化的“请稍后重试”；e2e 上传插件按这个错误码重试，不再看信息里有没有 retry。上传时同一插件的首次上传恰好与另一处（某节点首次安装内置插件，它不取集群变更锁）同时建插件行的 409（`the plugin is being uploaded concurrently; retry`）也改用 `cluster_change_busy`，同样稍后重试即可。“核心升级进行中或已暂停”仍是 `conflict`。
+- `GET /me/groups` 每行带 `served_protocols`（`[{protocol}]`，与分组详情同一计算，不带账号数，整页一次查询）。密钥页的手动配置说明和密钥编辑窗口里的分组说明改按它列端点，与分组详情一致，不再列出账号没开放、实际会 404 的端点。
+- **网关设置读出来原样保存不再 409**（分支 `feat/fv2-rdfix`，真实数据测试发现）：发布了失败策略后，`PUT /settings/gateway` 带着与当前值相同的 `max_attempts`（例如把 GET 的结果原样写回）照常保存；改成别的值仍返回 409 `managed by settings/failure-policy`（CONTRACTS §58、§14.4）。控制台的网关设置页本来就不提交这个字段，不受影响。
+- **账号测试不指定模型时用账号自己的模型**：以前一律交给插件选默认模型（Anthropic API Key 是 `claude-haiku-4-5`），账号的模型列表里没有它时测试必然失败。现在账号有模型列表时测列表里第一个，没有列表但有模型映射时测映射里按字典序最小的请求模型（再经映射），两者都没有才由插件选（CONTRACTS §15.9）。账号列表的“测试”、批量测试和模型测试对话框里的“用默认模型测试”都按这个规则；对话框里这个按钮改名“用默认模型测试”。
+- **使用记录详情重新逐条显示另算的分项**：计费详情里列出 `billing_detail.additional`（如请求里声明的 advisor 顾问模型）和 `billing_detail.replacement` 的每一项：种类（替代计费项按尝试轮次显示“第 N 轮”）、模型、该项的 token 用量、它自己的计算公式和金额；免费项标“免费”并显示原因。主用量公式以主用量自己的金额结尾，下面一行“主用量小计 + 各项 = 合计”；为此核心在有附加用量的记录明细里另存主用量的 `primary_cost`、`primary_list_cost`、`primary_total_cost`（只是把算出来的数存下，金额不变；之前结算的记录没有，详情里主用量公式只显示算式，CONTRACTS §120.3）。主用量被替代计费用量替换时不再画出“$0 × 0”的主用量公式。数据一直在记录里，之前随“生图另计价”一起删掉了这块显示；没有分项的记录不显示。
+- **`/me/usage` 不再露出分项背后的全局价**：分项按分组自定义价格计价时，它明细里的 `detail.inputs.pricing.base`（全局价表达式与哈希）现在和顶层的一样在普通用户的使用记录详情里删去。
+- **用 http 打开控制台时“系统 → 升级”页不再空白**：页面用了只在 HTTPS / localhost 下才有的 `crypto.randomUUID`。升级页和余额调整的幂等键改用 `@sub2api/ui` 已有的 `createItemId`（`crypto.getRandomValues`，非安全上下文可用），eslint 禁止再直接用 `crypto.randomUUID`。
+
+### 插件作者须知：SDK、清单与 proto 的变化
+
+插件线协议 2、Host API 10。删除的字段编号和名字都写进 `reserved`，不复用（照 §91.3、§117.4 的先例）。
+
+- **删除**：`PlatformService.BuildUpstreamRequest`（声明字段加补丁）、`ExtractUsage`、`ParseTaskSubmission` 作为核心调用、`Poll`、`BuildReconcileRequest` / `ParseReconcileResponse`；`HostService.ForwardUpstream`、`RecordUsage`、`ReserveAndWatch`、`ReportTaskProgress`；`RequestSigning`（核心签名）；清单的 `runtime: "none"`、`accountTypes[].upstream`、`requestFields`、`request.maxBodyBytes`，能力 `platform.execute.v1`、`platform.poll.v1`；SDK 的 `SetPatch` / `DeletePatch`、`WithMaxRecvMsgSize`；`sdk/upstream`、`sdk/platforms/upstream`。
+- **新的写法**：实现 `UpstreamBuilder.BuildUpstream`，让 `Execute` 是 `pluginsdk.ExecuteDefault`。插件拿到完整请求体（转换、模型映射、参数覆盖之后），用 `NewUpstream` 构造最终请求（`Header` 权威、`DefaultHeader` 默认），经 `Relay` / `RelayAndWait` 交给核心（主机必须是清单 `externalServices` 或本账号的上游地址，不许设 `Host`；`RemoveHeader` 表示不发某个头，CONTRACTS §112.17）；辅助请求用 `Fetch`（主机规则同上，`manifest.UpstreamHostAllowed`；不限次数和大小，`FetchLimit`、`FetchResponseLimit` 已删除）；用量与任务只在返回值里（`ReportHostUsage`、`ReportUsage`、`ReportTask`、`ReportClassification`）；任务观察实现 `TaskMonitor.Monitor`，结果是返回值。签名用 `sdk/reqsign` 自己签；改请求体只用 `sdk/pluginsdk/jsonedit`；不开套接字、不用厂商 SDK 客户端、不重试。
+- API Key 加基础地址的账号类型用新库 `sdk/pluginsdk/standard` 和预设 `providers/{openai,anthropic,gemini}.APIKey`；原声明式引擎的 1498 条黄金样例冻结在 `standard/goldentest`。
+- **余额与多平台组合**（上游插件一批）：新增可选接口 `pluginsdk.BalanceReader`；`standard` 库加 `Merge`（几份预设合成一个账号类型）、路由级 `Auth` / `Classify`、`Type.Tests`（按账号的协议选测试请求）、`Type.Balance`（余额请求与读法，带 `BalanceFailure` 与 `Micros(number string) (int64, bool)` 两个辅助）；`pluginsdktest.Harness.Balance` 不要求币种；新预设 `providers/typesafe`（平台定义的唯一来源 `Platform()`）。合规套件新增规则 `12_balance` 和 `Plugin.Platforms`（别的插件声明的平台）。
+- 一致性套件 `sdk/pluginsdk/pluginsdktest/conformance`（11 条检查，上游插件一批加第 12 条余额），十二个平台插件都调用它；`Plugin.Manifest` 必填（交给插件的客户端请求头从清单读），`Plugin.PassHeaders` 删除；每个协议的流式 / 非流式形式由套件从端点定义读出，插件不能声明自己不服务某种形式；WebSocket 协议只归第 11 条。只有 bedrock 有两处例外（InvokeModel 按地址选流式、不收 `anthropic-beta` 头）。
+- 假宿主 `pluginsdktest`：`Harness.Execute` / `Harness.Monitor`，`FakeHost.Begin` / `BeginMonitor`；取回的主机按 `FakeHost.Manifest`（启动时取 `WithManifest`，`pluginsdk.ManifestOf`）判断，不再默认放行所有主机；和宿主一样不限请求体、不数取回、不截回答，`Monitor` 的终态要有一次完整成功的取回。`MaxBodyBytes` 删除。假宿主对中继也执行主机规则（以前只管取回），测试里没给清单或指向 `127.0.0.1` 的假上游要设 `FakeHost.Manifest` / `ExternalServices`；`standardtest.Run` 回放黄金样例时同样检查主机。
+- 清单：账号类型写 `"passHeaders": []` 表示不交给插件任何客户端请求头（以前空列表会回落到平台的列表）；没写仍取平台的。跨插件事实的判断统一为 `AccountPlatform.ServesPluginFacts`，内置平台不参与。没有使用者的 `TransportHTTP`、`TransportWebSocket` 删除。声明了账号类型就必须申请 `accounts.credentials`；类型的地址字段只认清单的 `upstreamFields`（原来声明式类型自动得到 `base_url`）。
+- **清单的 `usageMaxBytes` 删除**（端点读用量的观察的字节预算，没有插件声明过它）：观察总是整份。旧清单写着它时的表现见升级须知。
+- `standard` 库：`Type.PassHeaders`、`PlatformPassHeaders`、`Auth.Query`、`Route.Method` 删除（核心已按清单过滤客户端头，库把交来的都写成默认头；HTTP 路由一律 POST）；`Route.Edit` 改为 `func(*jsonedit.Doc, *Request)`，和过滤字段在同一次改写里；预设不再带过滤字段（azure_openai 自己写）；流式判断用 `Request.Stream`（`pluginsdk.RequestStream`：`meta.stream` 或请求体的 `stream` 为真），只流式类型的非流式请求也会加 `include_usage`（这一处改写抽成 `providers/openai.StreamUsage`，volcengine 也用它）；黄金样例用 `standardtest.Run(t, plugin, p)` 回放。`pluginsdk.WebSocketURL` 是 http 地址换成 ws 地址的唯一实现（codex 和 `standard` 库共用）。
+- `jsonedit`：同一成员上的改写按调用顺序生效（以前先 `Set` 后 `Delete` 会留下这个键）。`ValidateUpstreamRequest` 与宿主用同一套方法和请求头检查。
+- `SendAccountRequest` 能发往账号自己的上游地址（以前只认 `externalServices`），请求体、URL、方法不限大小，回答整份交还（以前截到 64 KiB）；配额查询、凭证续期的回答同样不再截断。
+- **proto 清理**（转发 V2 收尾，删除没有使用者的字段）：
+  - `EstimateUsageRequest.fields_omitted`（3）、`ExtractUsageRequest.fields_omitted`（9）删除。核心自转发 V2 收尾起就不再填它，唯一读过它的火山插件也已不读。
+  - `UpstreamOptions` 消息及 `UpstreamRequest.options`（8）、`ExecutionHTTPRequest.options`（6）删除。它只能收紧核心的响应头超时和整体超时，现在超时只由核心（账号与管理员的设置）决定。核心里对应的 `execfetch.Tighten` 一并删除。
+  - `GetDSNResponse.role_isolated`（3）与 SDK 的 `DSNInfo.RoleIsolated` 删除：没有插件数据库角色以后它恒为 false。`sub2api-plugin db diff|check`（`pgdbtool.Drift`）不再建临时角色，像宿主一样以连接的用户、只设 `search_path` 执行迁移；迁移在插件 schema 之外建立或改动的表、函数、类型、schema、扩展照旧列为差异（以前靠临时角色的属主判断，现在看本事务写过的系统目录行）。以前在工具里因为“临时角色没有权限”失败、而宿主能执行的迁移（例如 `CREATE EXTENSION`），现在工具里也能执行，在 schema 之外建的对象列为差异。
+  - `truncated` 全部删除：`ExecutionHTTPResponse.truncated`（5）、`ParseQuotaResponseRequest.truncated`（6）、`ParseRefreshResponseRequest.truncated`（6）、从没有核心调用方的 `ParseBalanceResponseRequest.truncated`（6）、随 `usageMaxBytes` 删除的 `ExtractUsageRequest.truncated`（7）。回答不再截断，codex、vertex 已不读它们。`ExecuteHTTP` 的回答读不完整时照旧是 `transport_error`。
+  - 代理票据新增 `HTTPRequest.execution_token`（10）、`ExecutionHTTPRequest.proxy_ticket`（7）。SDK：路由处理函数的 context 绑定执行令牌，`pluginsdk.Fetch` 在路由里可用并传 `ProxyTicket`；假宿主的 `Harness.DoAs` 发令牌（`FakeHost.BeginRoute`）。
+
+### 验证状态
+
+- 测试结果以各工作包的交付说明为准。
+- e2e 新增 AC30–AC36（平台插件经 `Execute`、运营方设置、换号与未上报、旧契约的包被拒、Responses WebSocket 逐轮、请求体上限设置、以官方 OpenAI 与 Anthropic Go SDK 为客户端）、AC37（插件联网）、AC38（codex 授权走表单代理）；e2e 栈的部署也按现在的核心和插件改过（两节点共用插件包卷、默认镜像版本 0.1.999、厂商主机由 mock 以别名和自建 CA 扮演），运行方法见 `next/deploy/e2e/README.md`：整套约 27 分钟，要带 `-timeout=150m`。
+- **已经跑过的**：整套 e2e 当时的全部 49 个顶层用例（`next/e2e` 里的全部 `func Test`，含 AC19、AC29、AC30–AC36；当时 AC30 还是十个平台插件）在协议绑定与转发 V2 合并后的代码上运行，全部通过（记录于 `732587ea9`）。
+- **之后没有重跑整套 e2e**：此后的修正（上面“计费与正确性修正”里参数覆盖计量检查、强制流式、客户端离开、确定拒绝不重试、未上报记录、经代理不本机解析、失败策略下换号、客户端离开优先等）、删除 Claude OAuth（AC30 改成九个平台插件；删除后没有重跑 e2e）、新增的 AC37、AC38 都在那次运行之后，没有整套运行的记录，AC37、AC38 也没有单独运行的记录。现在共 51 个顶层用例（其中 43 个 `TestAC*`，编号到 AC38）。
+- 三家云厂商只对文档、黄金样例和模拟上游验证过，没有接过真实账号；新表单没有做过控制台界面走查。
+- 1、8、32、128 MiB 请求体的延迟和内存没有测量，已部署实例的停机升级步骤没有演练过（设计文档第 15 节）。
+
+### 到 Gemini 的媒体下载可经环境 HTTP 代理（核心；无迁移；默认行为不变）
+
+所有者决定“图片直连下载（或者环境http代理）”。规则见 CONTRACTS §88.5。
+
+- 协议转换到 Gemini 时核心下载客户给的媒体链接，以前只直连。现在核心进程环境里配了 `HTTP_PROXY` / `HTTPS_PROXY`（或小写写法）时经这个代理下载，`NO_PROXY` 里的目标仍直连，规则同 Go `http.ProxyFromEnvironment`；没配就和以前一样直连。仍不走账号代理。
+- SSRF 防护：直连照旧；经环境代理时和经账号代理同一条规则——本机不解析目标，字面私网地址与 `localhost` 拒绝，每跳重定向都查；代理自己的地址可以是内网地址。域名（含非规范的 IPv4 写法）由代理解析：环境代理应当自行拒绝访问内网地址；这一层核心无法检查。
+- 经环境代理下载失败时，返回给客户的原因不含代理的地址（原始错误只记在服务端日志）。
+- 这些变量外壳本来就传给核心（进程基本变量），不用改部署；设了它们，插件市场与插件包下载本来也经它。账号上游请求、账号测试、额度查询、价格同步等不读环境代理，插件进程也拿不到这些变量。
 
 ## 2026-11-18
 

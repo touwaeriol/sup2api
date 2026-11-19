@@ -2,11 +2,18 @@ package pluginsdk
 
 import (
 	"context"
+	"encoding/json"
 
 	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
 )
 
-// Platform mirrors pluginv1.PlatformServiceServer ("platform.adapter.v1").
+// Platform is PlatformService ("platform.adapter.v1"): the behaviour of the
+// account types a plugin declares that needs code. Besides it a platform
+// plugin implements the one path of a gateway request, Execute: an
+// UpstreamBuilder, which the SDK runs with ExecuteDefault, or an Executor of
+// its own, which takes precedence; Serve refuses a Platform with neither.
+// Platform itself validates credentials, classifies upstream errors and
+// describes the console's test request.
 //
 // A plugin implements it for the account types it declares in the
 // top-level manifest accountTypes (ARCHITECTURE 6.6). Platforms own the
@@ -19,15 +26,18 @@ import (
 // The host calls it only for accounts of the plugin's own types:
 //   - Account.type is the account type id;
 //   - Account.platform is the platform the client endpoint belongs to;
-//   - RequestMeta.protocol is the upstream protocol BuildUpstreamRequest must
-//     speak, a protocol of one of the platforms the account type serves;
+//   - RequestMeta.protocol is the upstream protocol the request Execute
+//     builds must speak, a protocol of one of the platforms the account type
+//     serves; the body handed to Execute is already in it;
 //   - RequestMeta.client_protocol is the client endpoint's protocol; it
 //     differs from protocol only when the core converts the request and
 //     response between the two.
+//
+// ClassifyError is called by the host for the upstream error of a relay
+// that did not wait; ExecuteDefault calls it in process for one that did.
 type Platform interface {
+	ErrorClassifier
 	ValidateCredentials(context.Context, *pluginv1.ValidateCredentialsRequest) (*pluginv1.ValidateCredentialsResponse, error)
-	BuildUpstreamRequest(context.Context, *pluginv1.BuildUpstreamRequestRequest) (*pluginv1.BuildUpstreamRequestResponse, error)
-	ClassifyError(context.Context, *pluginv1.ClassifyErrorRequest) (*pluginv1.ClassifyErrorResponse, error)
 	BuildTestRequest(context.Context, *pluginv1.BuildTestRequestRequest) (*pluginv1.BuildTestRequestResponse, error)
 }
 
@@ -52,67 +62,6 @@ type ModelResolver interface {
 	ResolveModel(context.Context, *pluginv1.ResolveModelRequest) (*pluginv1.ResolveModelResponse, error)
 }
 
-// TaskSubmissionParser describes a task accepted by an upstream service.
-// Only endpoints declaring task.action "submit" call this synchronous hook:
-// the host persists the task before returning success. Plugins never start a
-// polling goroutine; implement TaskMonitor to perform individual observations.
-// ExecuteDefault invokes this parser locally before ReserveAndWatch.
-type TaskSubmissionParser interface {
-	ParseTaskSubmission(context.Context, *pluginv1.ExtractUsageRequest) (*pluginv1.TaskSubmission, error)
-}
-
-// Poller performs ONE observation when scheduled by the host. Use ExecuteHTTP
-// with the supplied context to send one request through the original account's
-// proxy, limits and host SSRF policy. Return the observed state and a suggested
-// next-check delay; the host owns retries, leases, persistence and billing.
-// The invocation permission expires when Poll returns or its context is
-// cancelled. Never cache the context/token or start a background polling loop.
-// Requires platform.poll.v1.
-type Poller interface {
-	Poll(context.Context, *pluginv1.PollRequest) (*pluginv1.ReconcileResult, error)
-}
-
-// UsageExtractor is implemented by platforms with endpoints whose token usage
-// the declarative manifest rules cannot express (manifest usage.source:
-// "plugin"). Like ModelResolver it is answered by the plugin declaring the
-// PLATFORM. Legacy execution invokes it asynchronously after forwarding.
-// With Executor, ExecuteDefault invokes it locally before RecordUsage and
-// returning: streamed bytes arrive immediately, but EOF waits for recording.
-//
-// It is handed the whole body of a non-streaming response, or - for a stream -
-// only the events the endpoint listed in usage.streamEvents; the host never
-// buffers a whole stream. Optional: a Platform without it answers
-// ExtractUsage with UNIMPLEMENTED, and the host falls back to the declarative
-// rules rather than failing a request whose response already reached the
-// client.
-type UsageExtractor interface {
-	ExtractUsage(context.Context, *pluginv1.ExtractUsageRequest) (*pluginv1.UsageReport, error)
-}
-
-// Reconciler is the legacy two-call observation interface. New plugins use
-// Poller with ExecuteHTTP. It remains supported for existing plugins.
-// It is implemented by platforms whose ExtractUsage returns a
-// Reservation: work that only STARTS during the gateway request and whose
-// real usage arrives later (CONTRACTS §25.4). The host charges the estimate
-// straight away and then drives the checking itself - backoff, deadline,
-// one node at a time - calling these two methods each round.
-//
-// The division of labour is the point. The plugin describes the request and
-// reads the answer; the HOST sends it, through the account's proxy and behind
-// its SSRF guard, with the account (credentials included, when the account
-// type is this plugin's) handed in. A plugin that reconciles therefore needs
-// no "net" permission, no way to enumerate accounts and no scheduled job of
-// its own.
-//
-// Optional: a Platform without it answers both with UNIMPLEMENTED. Returning
-// a Reservation without implementing this leaves the entries to be retried
-// until their deadline and then abandoned, with the estimate as the final
-// charge.
-type Reconciler interface {
-	BuildReconcileRequest(context.Context, *pluginv1.BuildReconcileRequestRequest) (*pluginv1.BuildReconcileRequestResponse, error)
-	ParseReconcileResponse(context.Context, *pluginv1.ParseReconcileResponseRequest) (*pluginv1.ReconcileResult, error)
-}
-
 // QuotaReader is implemented by account types whose upstream can report the
 // subscription quota of an account (5-hour / weekly windows, CONTRACTS §44)
 // and that declare manifest accountTypes[].quota.query. Like ModelLister the
@@ -123,6 +72,20 @@ type Reconciler interface {
 type QuotaReader interface {
 	BuildQuotaRequest(context.Context, *pluginv1.BuildQuotaRequestRequest) (*pluginv1.BuildQuotaRequestResponse, error)
 	ParseQuotaResponse(context.Context, *pluginv1.ParseQuotaResponseRequest) (*pluginv1.QuotaResult, error)
+}
+
+// BalanceReader is implemented by account types whose upstream reports the
+// balance of an account and that declare manifest accountTypes[].balance
+// (CONTRACTS §52). Like QuotaReader the plugin only describes the requests
+// (one or more, sent in order) and reads the answers (one per request, in
+// the same order); the host checks every URL against the manifest's upstream
+// host rules before it sends any, sends them through the account's proxy
+// without following redirects, decides when, and only shows the result.
+// Optional: a Platform without it answers both with UNIMPLEMENTED and the
+// host treats the account type as having no balance.
+type BalanceReader interface {
+	BuildBalanceRequest(context.Context, *pluginv1.BuildBalanceRequestRequest) (*pluginv1.BuildBalanceRequestResponse, error)
+	ParseBalanceResponse(context.Context, *pluginv1.ParseBalanceResponseRequest) (*pluginv1.ParseBalanceResponseResponse, error)
 }
 
 // CredentialRefresher is implemented by account types whose credentials
@@ -201,9 +164,10 @@ type Migration interface {
 // must happen once for the whole cluster does not belong here: declare
 // periodic work as manifest jobs[] (each trigger runs on one node only), and
 // guard other work that must not overlap across nodes with Host.Locks. See
-// CONTRACTS §27.4. For upstream async tasks, declare endpoint.task and
-// implement Executor + TaskSubmissionParser + TaskMonitor: the host persists, schedules and
-// serves shared progress; no plugin timer or task polling job is needed.
+// CONTRACTS §27.4. For upstream async tasks, declare endpoint.task, return
+// the task from Execute and implement TaskMonitor: the host persists,
+// schedules and serves shared progress; no plugin timer or task polling job
+// is needed.
 type Initializer interface {
 	Init(ctx context.Context, host Host) error
 }
@@ -214,6 +178,21 @@ type Initializer interface {
 // field; any other error rejects it as a whole.
 type Configurer interface {
 	Configure(ctx context.Context, cfg Config) error
+}
+
+// SettingsValidator checks plugin settings before the host stores them
+// (PluginService.ValidateSettings, CONTRACTS §75.1). Optional: without it
+// the host stores what the console submits and Configure is the only check.
+// cfg.JSON holds the submitted settings with masked secrets replaced by the
+// stored values; cfg.Grants are the plugin's current grants, as Configure
+// gets them. Return a FieldErrors value (fields are JSON pointers below the
+// settings, "a/b") to reject field by field, any other error to reject the
+// settings as a whole, and a non-empty normalized to store it instead of what
+// was submitted. The console shows error messages as they are, so a message
+// must not hold a field's value (it may be a secret). Share the decoding and
+// checks with Configure so that whatever is stored configures.
+type SettingsValidator interface {
+	ValidateSettings(ctx context.Context, cfg Config) (normalized json.RawMessage, err error)
 }
 
 // HealthChecker overrides the default health report (always healthy once

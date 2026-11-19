@@ -11,6 +11,8 @@ RUN --mount=type=cache,id=sub2api-next-gomod,target=/go/pkg/mod \
 
 FROM debian:trixie-slim
 COPY --from=build /out/mock-upstream /usr/local/bin/mock-upstream
+# MOCK_TLS_DIR: the CA the E2E nodes trust is written here (tls.go).
+RUN mkdir -p /tls && chown 65534:65534 /tls
 USER 65534:65534
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/mock-upstream"]

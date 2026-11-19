@@ -92,15 +92,18 @@ type ConvertTarget struct {
 // accept admits that may receive a converted request at all (a proxy
 // endpoint that neither is a WebSocket nor counts tokens): the lowest rank,
 // then the fewest hops, then the first declared, platforms in the type's
-// order and endpoints in the platform's (CONVERT-MATRIX §5.1).
+// order and endpoints in the platform's (CONVERT-MATRIX §5.1). An endpoint
+// of the client endpoint's own platform is a target only when the type
+// lists the client endpoint in adapted (CONTRACTS §83.3).
 func BestConvertTarget(g Generation, b AccountTypeBinding, conv ProtocolConverters, clientProtocol string,
 	accept func(manifest.AccountPlatform, manifest.Endpoint) bool) (best ConvertTarget, ok bool) {
 	if conv == nil {
 		return best, false
 	}
+	client, _ := g.PlatformForProtocol(clientProtocol)
 	for _, ap := range b.Type.Platforms {
 		pb, found := g.Platform(ap.Platform)
-		if !found {
+		if !found || ap.Platform == client.Platform.ID && !ap.Adapts(&pb.Platform, clientProtocol) {
 			continue
 		}
 		for _, ep := range pb.Platform.Endpoints {

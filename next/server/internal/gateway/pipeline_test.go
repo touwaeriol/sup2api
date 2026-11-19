@@ -316,26 +316,14 @@ func TestNoAccountOtherFormats(t *testing.T) {
 	}
 }
 
-func TestPluginTimeoutTreatsAccountUnavailable(t *testing.T) {
+// A plugin down for every account answers 529 no_available_account. (A
+// plugin's own work is not timed: a hung one ends with the client.)
+func TestPluginDownForEveryAccountIsNoAccount(t *testing.T) {
 	e := newEnv(t)
-	e.setSettings(GatewaySettings{MaxAttempts: 3, PlatformCallTimeoutMs: 100}, StickySettings{})
-	e.plat.buildHook = func(ctx context.Context, in *pluginv1.BuildUpstreamRequestRequest) error {
-		if in.GetAccount().GetId() == 1 {
-			<-ctx.Done()
-			return ctx.Err()
-		}
-		return nil
-	}
-	r := e.messages(body(testModel, false))
-	if r.status != 200 || strings.Join(e.up.keys(), ",") != "acc-2" {
-		t.Fatalf("plugin timeout: %d %v", r.status, e.up.keys())
-	}
-	// Plugin down for every account -> 529 no_available_account.
-	e.plat.buildHook = func(context.Context, *pluginv1.BuildUpstreamRequestRequest) error {
+	e.plat.buildHook = func(context.Context, *pluginv1.ExecuteRequest) error {
 		return core.ErrPluginUnavailable
 	}
-	e.record()
-	r = e.messages(body(testModel, false))
+	r := e.messages(body(testModel, false))
 	if r.status != 529 || r.json().Get("error.code").String() != "no_available_account" {
 		t.Fatalf("plugin down: %d %s", r.status, r.body)
 	}
@@ -464,13 +452,24 @@ func TestPriceNotConfigured403(t *testing.T) {
 	if rec := e.record(); rec.ErrorType != errTypePriceNotConfigured {
 		t.Fatalf("record %+v", rec)
 	}
-	// Free policy: served, not billable.
-	e.pricer.free = true
-	if r := e.messages(body("claude-unknown-1", false)); r.status != 200 {
-		t.Fatalf("free policy: %d", r.status)
+	if len(e.up.keys()) != 0 {
+		t.Fatal("upstream called for a model without a price")
 	}
-	if rec := e.record(); rec.Billable || rec.Price != nil {
-		t.Fatalf("free policy record %+v", rec)
+}
+
+// A price of 0 is a price: the request is served and billed at it.
+func TestZeroPriceServed(t *testing.T) {
+	e := newEnv(t)
+	zero := &core.PriceRule{ID: 31, Model: "claude-zero-1", Mode: "per_token", Expression: `tier("base", p*0)`}
+	e.pricer.rules["claude-zero-1"] = zero
+	if r := e.messages(body("claude-zero-1", false)); r.status != 200 {
+		t.Fatalf("zero price: %d %s", r.status, r.body)
+	}
+	if rec := e.record(); !rec.Billable || rec.Price != zero {
+		t.Fatalf("zero price record %+v", rec)
+	}
+	if len(e.balance.precharged) != 1 || e.balance.precharged[0] != zero {
+		t.Fatalf("zero price precharge %v", e.balance.precharged)
 	}
 }
 
@@ -537,9 +536,8 @@ func TestInvalidBodyAndLimits(t *testing.T) {
 		t.Fatalf("missing model: %d", r.status)
 	}
 	e.record()
-	e.gen.endpoints[0].Endpoint.Request.MaxBodyBytes = 64
-	e.gw.table.Store(buildRouteTable(e.gen))
-	r = e.messages(body(testModel, false, "pad", strings.Repeat("x", 200)))
+	e.setSettings(GatewaySettings{MaxRequestBodyMB: 1}, defaultStickySettings())
+	r = e.messages(body(testModel, false, "pad", strings.Repeat("x", 1<<20)))
 	if r.status != 413 {
 		t.Fatalf("too large: %d %s", r.status, r.body)
 	}
@@ -581,7 +579,9 @@ func TestRouteFallthroughAndGenerationSwitch(t *testing.T) {
 	e.record()
 }
 
-func TestUpstreamPatchesAndFields(t *testing.T) {
+// The upstream receives the plugin's bytes; the plugin is handed the whole
+// body as the client sent it (no mapping here) and the allowed headers.
+func TestUpstreamGetsPluginBodyAndPluginGetsRequest(t *testing.T) {
 	e := newEnv(t)
 	e.plat.patches = []*pluginv1.BodyPatch{{Op: pluginv1.BodyPatch_OP_SET, Path: "model", ValueJson: `"claude-mapped"`}}
 	e.messages(body(testModel, false))
@@ -590,7 +590,7 @@ func TestUpstreamPatchesAndFields(t *testing.T) {
 		t.Fatalf("patched model = %s", m)
 	}
 	b := e.plat.builds[0]
-	if b.GetFields()["model"] != `"`+testModel+`"` || b.GetInboundHeaders()["anthropic-version"] != "2023-06-01" ||
+	if gjson.GetBytes(b.GetBody(), "model").String() != testModel || b.GetInboundHeaders()["anthropic-version"] != "2023-06-01" ||
 		b.GetMeta().GetRequestId() == "" || b.GetAccount().GetCredentialsJson() == "" {
 		t.Fatalf("build request: %+v", b)
 	}
@@ -619,4 +619,27 @@ func TestModelBlacklist(t *testing.T) {
 	if r.status != 200 {
 		t.Fatalf("unmatched model: %d %s", r.status, r.body)
 	}
+}
+
+// A non-streaming JSON answer larger than the 32 MiB the usage buffer once
+// held, with its usage block at the end: the client gets the whole answer
+// and the request is billed from that usage block.
+func TestLargeJSONAnswerBilledFromItsUsage(t *testing.T) {
+	if testing.Short() {
+		t.Skip("relays a 33 MiB answer")
+	}
+	e := newEnv(t)
+	usage, err := json.Marshal(usageJSON(upOutput))
+	require.NoError(t, err)
+	answer := `{"id":"msg_1","type":"message","role":"assistant","model":"` + upModel +
+		`","content":[{"type":"text","text":"` + strings.Repeat("x", 33<<20) + `"}],"usage":` + string(usage) + `}`
+	e.up.set("acc-1", &upstreamRule{status: 200, body: answer})
+	r := e.messages(body(testModel, false))
+	require.Equal(t, 200, r.status)
+	require.Equal(t, len(answer), len(r.body), "the whole answer reaches the client")
+	rec := e.record()
+	require.True(t, rec.Success)
+	require.EqualValues(t, upInput, rec.Tokens.Input)
+	require.EqualValues(t, upOutput, rec.Tokens.Output)
+	require.True(t, rec.Billable)
 }

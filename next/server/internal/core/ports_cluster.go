@@ -23,6 +23,9 @@ type NodeStatus struct {
 	StartedAt     time.Time         `json:"started_at"`
 	LastHeartbeat time.Time         `json:"last_heartbeat"`
 	Plugins       map[string]string `json:"plugins"` // plugin key -> JSON PluginNodeState
+	// PluginSandbox is what the node's plugin sandbox enforces (nil: a core
+	// that does not report it).
+	PluginSandbox *PluginSandboxStatus `json:"plugin_sandbox,omitempty"`
 }
 
 // NodeRegistry manages heartbeats and per-node plugin state.

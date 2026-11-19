@@ -10,7 +10,7 @@ import (
 // ModelPrice is a row of table model_prices.
 type ModelPrice struct {
 	ID           int64           `gorm:"column:id;primaryKey;default:(-)"`                   // bigint default nextval('model_prices_id_seq'::regclass)
-	Model        string          `gorm:"column:model"`                                       // character varying(200)
+	Model        string          `gorm:"column:model"`                                       // text
 	Mode         string          `gorm:"column:mode"`                                        // character varying(20)
 	Config       json.RawMessage `gorm:"column:config;default:(-)"`                          // jsonb default '{}'::jsonb
 	Expression   string          `gorm:"column:expression"`                                  // text

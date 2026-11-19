@@ -21,7 +21,7 @@
   - clicodeplus Caddy 把客户端 IP 写进 `X-Forwarded-For`，3141 跳板原样转发。ovh Caddy 信任 64.186.225.70，取出真实地址后用 `{client_ip}` 传下去。
   - 每个节点的 `trusted_proxies` 只有本机 Docker 网关：sup2api-ccp 是 `10.234.10.1/32`（网络 `sup2api-node` 10.234.10.0/24），sup2api-1 是 `192.168.96.1/32`（`sup2api_default`）。
   - 切换前经 api.prophey.ai 进来的请求，`client_ip` 都记成 clicodeplus 的地址；切换后是真实地址。
-- **主节点** sup2api-1：负责升级协调和插件包存储，发布源 `releases` 也在 ovh。核心与网关的发布与更新见 [网关手册“更新源与一键更新”](../README.md#更新源与一键更新)。从节点 sup2api-ccp 经 7443 从主节点拉取核心和插件包；网关一键更新时它自己经更新源下载网关。
+- **主节点** sup2api-1：负责升级协调和插件包存储（网关换成带 CONTRACTS §114 的版本后，插件包由各节点各自保存、互相取，不再依赖主节点），发布源 `releases` 也在 ovh。核心与网关的发布与更新见 [网关手册“更新源与一键更新”](../README.md#更新源与一键更新)。从节点 sup2api-ccp 经 7443 从主节点拉取核心和插件包；网关一键更新时它自己经更新源下载网关。
 - **Redis**：在 40.160.152.211（`ssh valkey`，经 ovh 跳板）的 `~/valkey-stack`。Valkey 8 不发布端口，Caddy 四层代理在 6380 做 TLS 终结。
   - 白名单在 Caddy 的 layer4 路由里，按来源 IP 匹配，只放行 64.186.225.70 与 15.204.107.38，其他连接直接关闭。443 只用于 Let's Encrypt 续签证书。
   - redis-cli 测试要加 `--sni valkey.prophey.ai`（不带 SNI 时 Caddy 选不到证书）；go-redis 会自动带上。

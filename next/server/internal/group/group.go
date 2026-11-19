@@ -33,6 +33,11 @@ type Service struct {
 	reg core.PluginRegistry   // optional: platforms are [] without it
 	// grants clears the scoped grants naming a deleted group (CONTRACTS §21).
 	grants core.ScopeGrantClearer
+	// Protocols reports the protocols the accounts of a group serve, for
+	// GET /groups/:id and GET /me/groups; optional (served_protocols is []
+	// without it). The account module is built after this one, so it is
+	// set afterwards.
+	Protocols core.GroupProtocols
 }
 
 // New builds the group service. rdb, bus and reg may be nil; reg resolves
@@ -86,6 +91,10 @@ type MyGroup struct {
 	ModelAllowlist  []string `json:"model_allowlist"`
 	ModelFilterMode string   `json:"model_filter_mode"`
 	Platforms       []string `json:"platforms"`
+	// ServedProtocols are the inbound protocols the accounts of the group
+	// serve, as GET /groups/:id reports them but without the number of
+	// accounts serving each: what the caller's keys of the group can call.
+	ServedProtocols []MyServedProtocol `json:"served_protocols"`
 	// EffectiveRate is the rate the caller pays in the group and RateSource
 	// where it comes from (core.SegmentRate); RateMultiplier stays the
 	// group's default.
@@ -254,12 +263,39 @@ func (s *Service) get(c *gin.Context) {
 	if !ok {
 		return
 	}
-	g, err := s.load(c.Request.Context(), id)
+	ctx := c.Request.Context()
+	g, err := s.load(ctx, id)
 	if err != nil {
 		httpapi.Fail(c, err)
 		return
 	}
-	httpapi.OK(c, g)
+	served, err := s.servedProtocols(ctx, []int64{id})
+	if err != nil {
+		httpapi.Fail(c, err)
+		return
+	}
+	httpapi.OK(c, Detail{Group: g, ServedProtocols: served[id]})
+}
+
+// servedProtocols asks the account module what the accounts of the groups
+// serve; every group has a list, empty without the account module.
+func (s *Service) servedProtocols(ctx context.Context, ids []int64) (map[int64][]core.GroupServedProtocol, error) {
+	if s.Protocols != nil {
+		return s.Protocols.GroupServedProtocols(ctx, ids)
+	}
+	out := make(map[int64][]core.GroupServedProtocol, len(ids))
+	for _, id := range ids {
+		out[id] = []core.GroupServedProtocol{}
+	}
+	return out, nil
+}
+
+// Detail is GET /groups/:id: the group and what only its own page shows.
+type Detail struct {
+	*Group
+	// ServedProtocols are the inbound protocols the accounts of the group
+	// serve, each with the number of accounts serving it; read-only.
+	ServedProtocols []core.GroupServedProtocol `json:"served_protocols"`
 }
 
 type groupInput struct {
@@ -317,8 +353,8 @@ func (in *groupInput) validate(ctx context.Context, create bool) error {
 		clean := make([]string, 0, len(*in.ModelAllowlist))
 		for _, m := range *in.ModelAllowlist {
 			m = strings.TrimSpace(m)
-			if m == "" || len(m) > 200 {
-				add("model_allowlist", "invalid", "model patterns must be 1-200 characters", "模型模式长度须为 1-200 个字符")
+			if m == "" {
+				add("model_allowlist", "invalid", "model patterns must not be empty", "模型模式不能为空")
 				break
 			}
 			clean = append(clean, m)
@@ -546,6 +582,11 @@ func (s *Service) myGroups(c *gin.Context) {
 		httpapi.Fail(c, err)
 		return
 	}
+	served, err := s.servedProtocols(ctx, ids)
+	if err != nil {
+		httpapi.Fail(c, err)
+		return
+	}
 	// A group deleted since it was listed has no terms: it is left out.
 	mine := out[:0]
 	for _, g := range out {
@@ -554,10 +595,25 @@ func (s *Service) myGroups(c *gin.Context) {
 			continue
 		}
 		g.Platforms = ps[g.ID]
+		g.ServedProtocols = myServed(served[g.ID])
 		g.EffectiveRate, g.RateSource = tm.Rate, tm.RateSource
 		mine = append(mine, g)
 	}
 	httpapi.OK(c, mine)
+}
+
+// MyServedProtocol is a protocol a group serves as GET /me/groups shows it.
+type MyServedProtocol struct {
+	Protocol string `json:"protocol"`
+}
+
+// myServed drops the account counts of served; never nil.
+func myServed(served []core.GroupServedProtocol) []MyServedProtocol {
+	out := make([]MyServedProtocol, len(served))
+	for i, p := range served {
+		out[i] = MyServedProtocol{Protocol: p.Protocol}
+	}
+	return out
 }
 
 // dropKeyCache deletes cached API key principals ("apikey:{sha256}", see

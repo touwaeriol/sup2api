@@ -77,6 +77,10 @@ jobs:
         run: sh .github/next-ci/next-check-module.sh next/sdk
       - name: gateway/core runtime contract
         run: sh .github/next-ci/next-check-module.sh next/runtime-contract
+      # Imported by no next/ module, only by the legacy root backend/ (via
+      # replace), so it is checked here rather than through a dependent.
+      - name: protocol-codec
+        run: sh .github/next-ci/next-check-module.sh next/protocol-codec
       - name: plugin CLI
         run: sh .github/next-ci/next-check-module.sh next/tools/sub2api-plugin
       - name: mock-upstream
@@ -263,3 +267,32 @@ jobs:
       - name: Unit tests
         working-directory: next/web
         run: npm test
+
+  # -------------------------------------------------------------- plugin UIs
+  # Each plugin's native UI (its account forms and settings pages): types,
+  # specs and the production build the image packs. The projects are
+  # discovered by the script, like the plugin modules above. The repository's
+  # projects take vite, vue-tsc and vitest from the console (build, typecheck
+  # and test alike), hence next/web's install first; npm ci runs only in a
+  # project with its own package-lock.json.
+  plugin-ui:
+    name: plugin UIs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          # next/Dockerfile NODE_IMAGE
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            next/web/package-lock.json
+            next/plugins/*/ui/native/package-lock.json
+      - name: Install the console
+        working-directory: next/web
+        run: npm ci --no-audit --no-fund
+      - name: Check every plugin UI
+        run: sh .github/next-ci/next-check-plugin-ui.sh

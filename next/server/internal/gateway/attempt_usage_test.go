@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 )
@@ -104,7 +103,7 @@ func TestAttemptPriceRequiresAttributedFacts(t *testing.T) {
 }
 
 func TestFallbackGatewayAdmissionAndAttemptContract(t *testing.T) {
-	for _, mode := range []string{"unauthorized", "missing-price", "missing-contract", "empty-contract-gate", "patch-model", "patch-price", "mapping-collision"} {
+	for _, mode := range []string{"unauthorized", "missing-price", "missing-contract", "empty-contract-gate", "mapping-collision"} {
 		t.Run(mode, func(t *testing.T) {
 			e := pricedAdvisorEnv(t)
 			switch mode {
@@ -124,10 +123,6 @@ func TestFallbackGatewayAdmissionAndAttemptContract(t *testing.T) {
 						e.gen.accountTypes[i].Type.Platforms[j].Usage = map[string]manifest.UsageRules{"anthropic.messages": {Semantics: "exclusive", Attempts: &manifest.AttemptUsageRule{Name: "fallback", Adapter: manifest.AttemptAdapterAnthropicFallback}}}
 					}
 				}
-			case "patch-model":
-				e.plat.patches = []*pluginv1.BodyPatch{{Op: pluginv1.BodyPatch_OP_SET, Path: "fallbacks.0.model", ValueJson: `"unadmitted"`}}
-			case "patch-price":
-				e.plat.patches = []*pluginv1.BodyPatch{{Op: pluginv1.BodyPatch_OP_SET, Path: "fallbacks.0.speed", ValueJson: `"standard"`}}
 			case "mapping-collision":
 				for _, id := range []int64{1, 2, 3} {
 					e.accounts.set(id, func(a *core.Account) { a.ModelMapping = map[string]string{testModel: "same", advisorModel: "same"} })

@@ -65,7 +65,7 @@ interface NavItem {
 const GROUPS: ReadonlyArray<{ key: NavGroupKey; items: readonly NavItem[] }> = NAV_GROUPS
 const ITEMS = GROUPS.flatMap((g) => g.items)
 
-/** The settings pages: each shows the ui:section groups of forms/settings.ui.json whose page is its key. */
+/** The settings pages: each shows the sections of settingsForm.ts SECTIONS whose page is its key. */
 export const isSettingsPage = (key: SectionKey) => ITEMS.find((i) => i.key === key)?.access === 'settings'
 
 /** Old links: ?tab=settings opened the one settings tab. */

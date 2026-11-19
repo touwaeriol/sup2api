@@ -62,9 +62,12 @@ func TestAC13_EgressLogAndStrictNetwork(t *testing.T) {
 	})
 }
 
-// AC 14: over-allocating test build is restarted with the reason shown;
-// under container memory pressure the plugin (not the core) is killed;
-// resource requests above the global cap are rejected at install time.
+// AC 14: plugin memory is unlimited unless an administrator limits it
+// (DESIGN-2026-11-18-PLUGIN-FORWARDING-V2 D23): with a per-plugin limit set,
+// an over-allocating test build is restarted with the reason shown; under
+// container memory pressure the plugin (not the core) is killed; a
+// manifest's memoryMB is what the plugin says it needs, not a limit, so
+// without a node cap a large request is accepted at upload.
 func TestAC14_ResourceLimits(t *testing.T) {
 	e := Setup(t)
 	admin := e.Admin()
@@ -72,7 +75,13 @@ func TestAC14_ResourceLimits(t *testing.T) {
 	t.Run("over-limit allocation restarts the plugin", func(t *testing.T) {
 		e := e.With(t)
 		e.EnsureGuardTestBuild(admin)
-		// memoryMB of the test build is 128; allocate well above 110%.
+		// The manifest's 128 MB is no limit: the administrator sets one,
+		// then the test build allocates well above 110% of it.
+		admin.OK(t, http.MethodPut, "/plugins/guard/resources", map[string]any{"memory_mb": 128, "cpu": 0.25, "max_threads": 64, "max_open_files": 256})
+		t.Cleanup(func() {
+			admin.OK(t, http.MethodPut, "/plugins/guard/resources", map[string]any{"memory_mb": 0, "cpu": 0.25, "max_threads": 64, "max_open_files": 256})
+		})
+		e.WaitPlugin(admin, "guard", "enabled", guardTestVersion)
 		r := admin.API(t, http.MethodPost, "/p/guard/debug/alloc", nil, Query("mb", "300"))
 		t.Logf("alloc: %s", r)
 		Eventually(t, 60*time.Second, 2*time.Second, "restart with memory reason", func() bool {
@@ -91,6 +100,9 @@ func TestAC14_ResourceLimits(t *testing.T) {
 		// Raise the plugin's own limit so the watchdog does not act first,
 		// then allocate more than the node container's mem_limit (1g).
 		admin.OK(t, http.MethodPut, "/plugins/guard/resources", map[string]any{"memory_mb": 1024, "cpu": 0.25, "max_threads": 64, "max_open_files": 256})
+		t.Cleanup(func() {
+			admin.OK(t, http.MethodPut, "/plugins/guard/resources", map[string]any{"memory_mb": 0, "cpu": 0.25, "max_threads": 64, "max_open_files": 256})
+		})
 		c := &Client{Base: e.NodeURLs[0], HTTP: &http.Client{Timeout: 30 * time.Second}, Token: admin.Token}
 		c.API(t, http.MethodPost, "/p/guard/debug/alloc", nil, Query("mb", "1500"))
 		time.Sleep(5 * time.Second)
@@ -101,10 +113,9 @@ func TestAC14_ResourceLimits(t *testing.T) {
 		if bootAfter := e.NodeExec(1, "cat /proc/1/stat | cut -d' ' -f22"); bootAfter != bootBefore {
 			t.Fatalf("core process restarted (start time %s -> %s)", bootBefore, bootAfter)
 		}
-		admin.OK(t, http.MethodPut, "/plugins/guard/resources", map[string]any{"memory_mb": 128, "cpu": 0.25, "max_threads": 64, "max_open_files": 256})
 	})
 
-	t.Run("resource request above the global cap is rejected", func(t *testing.T) {
+	t.Run("a large memory request is no limit and is accepted without a node cap", func(t *testing.T) {
 		e := e.With(t)
 		key := NewSigningKey(t, "e2e-verified-"+e.RunID, "e2e-verified-"+e.RunID)
 		pubID := e.RegisterPublisher(admin, key, "verified")
@@ -119,8 +130,11 @@ func TestAC14_ResourceLimits(t *testing.T) {
 			t.Fatalf("upload without a step-up proof: %s", r)
 		}
 		r := e.UploadPlugin(admin, "e2e_res.s2plugin", pkg.Bytes(t))
-		if r.Status != 400 || !strings.Contains(strings.ToLower(string(r.Body)), "memory") {
-			t.Fatalf("over-cap resources accepted or wrong error: %s", r)
+		if r.Status != 200 {
+			t.Fatalf("upload with resources.memoryMB 65536 and no node cap (SUB2API_PLUGIN_MAX_MEMORY_MB unset): %s", r)
+		}
+		if key := reviewOf(e, r.Data()).Get("plugin_key").String(); key != "" {
+			defer e.Uninstall(admin, key, true)
 		}
 	})
 	e.EnsurePlugin(admin, "guard", "")

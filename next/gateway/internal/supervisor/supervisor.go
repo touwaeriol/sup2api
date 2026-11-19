@@ -169,13 +169,14 @@ func (m *Manager) Start(ctx context.Context, s Spec) (State, error) {
 	return m.state, nil
 }
 
-// inheritedEnv lists the shell variables a core inherits: process basics and
+// inheritedEnv lists the shell variables a core inherits: process basics,
 // the configuration the core reads (server/internal/config and the few
-// packages that read the environment directly). Anything else in the shell's
-// environment - its own settings, variables an operator or image added for
-// other tools - stays in the shell. The shell passes DATABASE_URL, REDIS_URL
-// and the managed-mode variables explicitly through Spec.Env.
-var inheritedEnv = []string{
+// packages that read the environment directly) and legacyCoreEnv. Anything
+// else in the shell's environment - its own settings, variables an operator
+// or image added for other tools - stays in the shell. The shell passes
+// DATABASE_URL, REDIS_URL and the managed-mode variables explicitly through
+// Spec.Env.
+var inheritedEnv = append([]string{
 	// Process basics.
 	"PATH", "HOME", "USER", "LANG", "LC_ALL", "TZ", "TMPDIR",
 	"SSL_CERT_FILE", "SSL_CERT_DIR",
@@ -191,9 +192,19 @@ var inheritedEnv = []string{
 	"SUB2API_PLUGIN_DIR", "SUB2API_PLUGIN_DEV_MODE", "SUB2API_PLUGIN_ALLOW_UNSIGNED",
 	"SUB2API_PLUGIN_VERIFY_SIGNATURES", "SUB2API_PLUGIN_OFFICIAL_KEYS", "SUB2API_BUILTIN_TRUST_KEY",
 	"SUB2API_PLUGIN_STRICT_NETWORK", "SUB2API_PLUGIN_SECCOMP", "SUB2API_PLUGIN_LANDLOCK",
-	"SUB2API_PLUGIN_DB_ROLE_ISOLATION", "SUB2API_PLUGIN_MAX_PACKAGE_BYTES", "SUB2API_PLUGIN_MAX_MEMORY_MB",
+	"SUB2API_PLUGIN_MAX_PACKAGE_BYTES", "SUB2API_PLUGIN_MAX_MEMORY_MB",
 	"SUB2API_PLUGIN_EGRESS_ALLOW_PRIVATE", "SUB2API_PLUGIN_RUN_DIR", "SUB2API_MARKET_SOURCES",
-}
+}, legacyCoreEnv...)
+
+// legacyCoreEnv is read only by cores before 0.1.304, which this shell still
+// starts: the shell is replaced independently of the core, so a cluster that
+// takes this shell first keeps running its 0.1.303 core under it until the
+// core is redeployed. SUB2API_PLUGIN_DB_ROLE_ISOLATION=false is how such a
+// core runs on a database user without CREATEROLE; without it the old core
+// turns role isolation back on and its db.schema plugins fail to start
+// (CONTRACTS §115). Delete it in the first shell release after every cluster
+// runs core 0.1.304 or later.
+var legacyCoreEnv = []string{"SUB2API_PLUGIN_DB_ROLE_ISOLATION"}
 
 // coreEnvironment builds a core's environment: the allowlisted part of the
 // inherited environment, then the explicit entries (which win, being last).

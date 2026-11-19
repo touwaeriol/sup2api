@@ -55,6 +55,17 @@ func (c *call) streamIdle() time.Duration {
 	return defaultStreamIdle
 }
 
+// upstreamTimeouts are the response header and total timeouts of an
+// upstream exchange (0 = none): the environment's, the header one else the
+// gateway's wait for a stream or not.
+func (c *call) upstreamTimeouts(stream bool) (header, total time.Duration) {
+	header = c.g.headerWait(stream)
+	if d := c.env.Duration(core.EnvVarResponseHeaderTimeoutSeconds); d > 0 {
+		header = d
+	}
+	return header, c.env.Duration(core.EnvVarRelayTimeoutSeconds)
+}
+
 func newIdleBody(body io.ReadCloser, idle time.Duration, cancel context.CancelCauseFunc) *idleBody {
 	timer := time.AfterFunc(idle, func() { cancel(errStreamIdleTimeout) })
 	timer.Stop()

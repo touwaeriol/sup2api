@@ -35,10 +35,10 @@ func TestSettingsForPlugins(t *testing.T) {
 	if got := values(); len(got) != 2 || got[core.EnvVarRelayTimeoutSeconds] != 900 {
 		t.Fatalf("process layer: %v", got)
 	}
-	if code, out := e.do(e.admin, "PUT", "/settings/environment", map[string]any{"values": map[string]int64{"max_request_body_mb": 64, "relay_timeout_seconds": 300}}); code != 200 {
+	if code, out := e.do(e.admin, "PUT", "/settings/environment", map[string]any{"values": map[string]int64{"response_header_timeout_seconds": 64, "relay_timeout_seconds": 300}}); code != 200 {
 		t.Fatalf("put: %d %v", code, out)
 	}
-	if got := values(); got[core.EnvVarMaxRequestBodyMB] != 64 || got[core.EnvVarRelayTimeoutSeconds] != 300 || got[core.EnvVarStreamingIdleTimeoutSeconds] != 45 {
+	if got := values(); got[core.EnvVarResponseHeaderTimeoutSeconds] != 64 || got[core.EnvVarRelayTimeoutSeconds] != 300 || got[core.EnvVarStreamingIdleTimeoutSeconds] != 45 {
 		t.Fatalf("global over process: %v", got)
 	}
 	if events() != 1 {

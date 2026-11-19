@@ -19,6 +19,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
+	"github.com/Sub2API-Devs/sup2api/next/sdk/pluginsdk/fieldcheck"
 )
 
 // Object is a decoded JSON object. Numbers are kept as written
@@ -89,6 +90,17 @@ func DecodeForm(in *pluginv1.ValidateCredentialsRequest) (*Form, *pluginv1.Valid
 		return nil, Invalid(FieldError("", "invalid", "settings must be a JSON object / 设置必须是 JSON 对象"))
 	}
 	return &Form{Creds: creds, Settings: settings, creds: creds.JSON(), settings: settings.JSON()}, nil
+}
+
+// Only is the answer refusing the form when its credentials or settings hold
+// a key other than keys (code "unknown"), nil when they hold none. Call it
+// before validating the fields: keys a plugin keeps without showing them
+// (tokens it refreshed) belong in keys too.
+func (f *Form) Only(keys ...string) *pluginv1.ValidateCredentialsResponse {
+	if errs := fieldcheck.Unknown(keys, f.Creds, f.Settings); len(errs) > 0 {
+		return &pluginv1.ValidateCredentialsResponse{Errors: errs}
+	}
+	return nil
 }
 
 // Normalized is the answer accepting the form: the JSON of each object

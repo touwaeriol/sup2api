@@ -45,6 +45,7 @@ type Acc struct {
 	rules           manifest.UsageRules
 
 	input, output, cacheRead, cacheCreation, cacheCreation1h int64
+	imageInput, imageOutput                                  int64
 
 	// Model is the upstream model the response reported, when the rules map it.
 	Model string
@@ -101,7 +102,8 @@ func (u *Acc) set(field string, r gjson.Result) {
 	case manifest.UsageModel:
 		u.Model = r.String()
 	case manifest.UsageInputTokens, manifest.UsageOutputTokens, manifest.UsageCacheReadTokens,
-		manifest.UsageCacheCreationTokens, manifest.UsageCacheCreation1h:
+		manifest.UsageCacheCreationTokens, manifest.UsageCacheCreation1h,
+		manifest.UsageImageInputTokens, manifest.UsageImageOutputTokens:
 		// gjson turns anything unparseable into 0, so a standard token field
 		// pointed at a string ("high") or a bool counts nothing and says
 		// nothing - the same silent under-billing as a misspelt path key, one
@@ -122,6 +124,10 @@ func (u *Acc) set(field string, r gjson.Result) {
 			u.cacheCreation = r.Int()
 		case manifest.UsageCacheCreation1h:
 			u.cacheCreation1h = r.Int()
+		case manifest.UsageImageInputTokens:
+			u.imageInput = r.Int()
+		case manifest.UsageImageOutputTokens:
+			u.imageOutput = r.Int()
 		}
 	default:
 		if fact, ok := u.rules.Facts[field]; ok {
@@ -328,8 +334,11 @@ func finalUsage(rule manifest.SSEUsageMap, data []byte) bool {
 // Tokens converts to core.UsageTokens. cache_creation_tokens is the total
 // cache write; known 1h writes and the compatibility default-write bucket are
 // charged separately. Missing TTL classification is recorded in Metrics.
+// The image counts are the image share of input and output (CONTRACTS §118).
 func (u *Acc) Tokens() core.UsageTokens {
-	return Tokens(u.input, u.output, u.cacheRead, u.cacheCreation, u.cacheCreation1h)
+	t := Tokens(u.input, u.output, u.cacheRead, u.cacheCreation, u.cacheCreation1h)
+	t.ImageInput, t.ImageOutput = max(u.imageInput, 0), max(u.imageOutput, 0)
+	return t
 }
 
 // EventName is the name an SSE event is matched by: the "event:" line when

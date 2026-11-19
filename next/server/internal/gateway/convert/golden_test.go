@@ -21,7 +21,7 @@ import (
 // The golden samples (CONVERT-MATRIX §10.1) live in
 // testdata/golden/<from>~<to>/<case>/:
 //
-//	case.json                 {"options": {"model", "stream"}, "upstream": path or [paths],
+//	case.json                 {"options": {"model", "stream", "adapt_model"}, "upstream": path or [paths],
 //	                           "media": {"<url>": "fixtures/x.png"},
 //	                           "claude_default_max_tokens": {"default": 8192, "<model>": n}, "note"}
 //	in.request.json           client request
@@ -44,8 +44,9 @@ var update = flag.Bool("update", false, "rewrite the want files of golden sample
 
 type goldenSpec struct {
 	Options struct {
-		Model  string `json:"model"`
-		Stream bool   `json:"stream"`
+		Model      string `json:"model"`
+		Stream     bool   `json:"stream"`
+		AdaptModel string `json:"adapt_model"`
 	} `json:"options"`
 	Upstream  json.RawMessage   `json:"upstream"`
 	Media     map[string]string `json:"media"`
@@ -163,7 +164,7 @@ func loadCase(t *testing.T, dir string) goldenSpec {
 
 func (gc goldenSpec) options() Options {
 	return Options{Ctx: context.Background(), Model: gc.Options.Model, Stream: gc.Options.Stream,
-		Fetch: fixtureFetcher(gc.Media), ClaudeDefaultMaxTokens: gc.maxTokens}
+		Fetch: fixtureFetcher(gc.Media), ClaudeDefaultMaxTokens: gc.maxTokens, AdaptModel: gc.Options.AdaptModel}
 }
 
 // maxTokens stands for the models of the gateway's claude_max_tokens rule

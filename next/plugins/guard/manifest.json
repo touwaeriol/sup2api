@@ -6,13 +6,13 @@
     "en": "Blocks gateway requests whose prompt matches keyword or regex rules, counts traffic from usage events, and shows a dashboard.",
     "zh": "按关键词或正则规则拦截网关请求，基于用量事件统计流量，并提供统计大盘。"
   },
-  "version": "0.2.10",
+  "version": "0.2.11",
   "publisher": "sub2api",
   "icon": "text:G",
   "runtime": "grpc",
   "entry": { "grpc": { "binaries": "runtimes/{os}-{arch}/plugin" } },
-  "hostCompat": ">=0.1.290 <0.2.0",
-  "hostUICompat": "^3.4",
+  "hostCompat": ">=0.1.304 <0.2.0",
+  "hostUICompat": "^4.0",
 
   "capabilities": [
     { "id": "gateway.hook.v1" },
@@ -79,11 +79,7 @@
       { "slot": "dashboard.widgets", "component": "BlockedTodayCard", "permission": "stats:read" }
     ],
     "native": { "entry": "ui/native/entry.js" },
-    "settings": {
-      "mode": "schema",
-      "schema": "forms/settings.schema.json",
-      "uiSchema": "forms/settings.ui.json"
-    }
+    "settings": { "mode": "native", "component": "GuardSettings", "secrets": [] }
   },
 
   "resources": { "memoryMB": 128, "cpu": 0.25, "maxThreads": 64, "maxOpenFiles": 256 },
@@ -108,7 +104,7 @@
     { "id": "ui.menu",
       "reason": { "en": "Add the \"Guard\" menu", "zh": "添加\"请求守卫\"菜单" } },
     { "id": "ui.native",
-      "reason": { "en": "Provide the statistics dashboard and the home page card", "zh": "提供统计大盘和首页卡片" } },
+      "reason": { "en": "Provide the statistics dashboard, the home page card and the settings form", "zh": "提供统计大盘、首页卡片和设置表单" } },
     { "id": "net",
       "scope": { "domains": ["hooks.example.com"] },
       "optional": true,

@@ -294,10 +294,10 @@ func listAssets(db *gorm.DB, accountID, groupID int64, status, q string, limit, 
 }
 
 // withAccountNames adds account_name to every row, from the id -> name map
-// the caller built with one ListAccounts pass. Accounts live in the core and
-// the plugin role cannot join them, and denormalizing the name into the
-// index would make it go stale on every rename - so it is merged in here, at
-// read time.
+// the caller built with one ListAccounts pass. Accounts live in the core's
+// tables, which a plugin does not read (CONTRACTS §115), and denormalizing
+// the name into the index would make it go stale on every rename - so it is
+// merged in here, at read time.
 //
 // Numbers are decoded as json.Number so a bigint id survives the round trip
 // unrounded.

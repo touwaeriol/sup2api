@@ -6,6 +6,7 @@
 // Every control joins the frame, so the frame knows when its only control is
 // an inline toggle (switch / checkbox) that fits beside the label.
 import { computed, inject, onBeforeUnmount, provide, ref, useAttrs, type ComputedRef, type InjectionKey, type Ref } from 'vue'
+import type { Trigger } from './form/rules'
 
 export type ControlSize = 'sm' | 'md'
 
@@ -24,6 +25,8 @@ export interface FieldContext {
   release(): void
   /** Counts a control in the frame until the returned function runs; `inline` = a switch / checkbox. Optional for contexts provided outside the SDK. */
   join?(inline: boolean): () => void
+  /** The control lost focus ('blur') or changed ('change'). Optional for contexts provided outside the SDK. */
+  touch?(kind: Trigger): void
 }
 
 /** null inside a control: a nested frame's controls are not linked to the outer one. */
@@ -43,6 +46,7 @@ export function provideField(
     describedBy: ComputedRef<string | undefined>
     invalid: ComputedRef<boolean>
     size: ComputedRef<ControlSize | undefined>
+    touch?: (kind: Trigger) => void
   }
 ) {
   const claimed = ref(false)
@@ -75,7 +79,8 @@ export function provideField(
     join(inline: boolean) {
       count(inline, 1)
       return () => count(inline, -1)
-    }
+    },
+    touch: opts.touch
   }
   provide(FIELD_KEY, ctx)
   return {
@@ -90,6 +95,7 @@ export function provideField(
  * `labelable` controls (input, select, textarea, switch) claim the frame id
  * when they have no `id` attr; group controls get aria-labelledby instead.
  * `inline` marks a switch / checkbox (it may sit beside the frame's label).
+ * `blur` goes on the control's blur event (the frame's form validates).
  */
 export function useFieldControl(props: { error?: boolean; size?: string; ariaLabel?: string }, labelable = true, inline = false) {
   const field = inject(FIELD_KEY, null)
@@ -116,7 +122,8 @@ export function useFieldControl(props: { error?: boolean; size?: string; ariaLab
     if (props.ariaLabel) out['aria-label'] = props.ariaLabel
     return out
   })
-  return { id, invalid, size, a11y, field }
+  const blur = () => field?.touch?.('blur')
+  return { id, invalid, size, a11y, field, blur }
 }
 
 /** Splits fallthrough attrs: class/style (and optionally data-* / listeners) for the wrapper, the rest for the control. */

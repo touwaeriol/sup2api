@@ -32,12 +32,12 @@ func (s *Service) location(c *gin.Context) {
 		httpapi.Fail(c, err)
 		return
 	}
-	client, err := s.HTTPClient(ctx, &id)
+	pc, err := s.HTTPClient(ctx, &id)
 	if err != nil {
 		httpapi.Fail(c, core.ErrUnavailable.WithMessage(t(ctx, "Proxy location is unavailable", "无法获取代理地区信息")))
 		return
 	}
-	location, err := s.lookupLocation(ctx, client)
+	location, err := s.lookupLocation(ctx, pc.Client)
 	if err != nil {
 		httpapi.Fail(c, err)
 		return

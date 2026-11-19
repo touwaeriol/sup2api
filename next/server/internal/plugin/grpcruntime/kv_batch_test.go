@@ -74,10 +74,10 @@ func TestKVBatchRealPlugin(t *testing.T) {
 	if out := call("set", "c", keys[:48], size, 0); out["code"] != "InvalidArgument" || e.mr.Exists(rkey("c", keys[0])) {
 		t.Fatalf("set 48 x 64 KiB: %v", out)
 	}
-	// 66 values are 4.1 MiB: the request does not fit the 4 MiB the host's
-	// gRPC server receives, and gRPC itself refuses it.
+	// 66 values are 4.1 MiB: the host's gRPC server receives it (it has no
+	// limit of its own), and the payload limit refuses it.
 	out = call("set", "c", keys, size, 0)
-	if out["code"] != "ResourceExhausted" || !strings.Contains(fmt.Sprint(out["message"]), "4194304") || e.mr.Exists(rkey("c", keys[0])) {
+	if out["code"] != "InvalidArgument" || e.mr.Exists(rkey("c", keys[0])) {
 		t.Fatalf("set 66 x 64 KiB: %v", out)
 	}
 }

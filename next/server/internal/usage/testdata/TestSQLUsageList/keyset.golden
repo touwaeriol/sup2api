@@ -4,7 +4,7 @@ SELECT u.id, u.request_id, u.client_request_id, u.created_at, u.user_id, COALESC
 	u.platform, u.protocol, u.account_type, u.upstream_protocol, u.endpoint, u.model, u.upstream_model, u.stream,
 	u.status_code, u.success,
 	u.error_type, u.error_message, u.attempts, u.input_tokens, u.output_tokens, u.cache_read_tokens,
-	u.cache_creation_tokens, u.cache_creation_1h_tokens, u.total_cost, u.rate_multiplier, u.billing_status,
+	u.cache_creation_tokens, u.cache_creation_1h_tokens, u.image_input_tokens, u.image_output_tokens, u.total_cost, u.rate_multiplier, u.billing_status,
 	u.billing_mode, u.matched_tier, u.latency_ms, u.first_token_ms, u.upload_ms, u.sticky_hit, u.client_ip, u.conversion,
 	CASE WHEN u.attempts > 1 THEN u.anomalies->>'attempts' END, COALESCE(u.base_cost, CASE WHEN u.rate_multiplier > 0 THEN u.total_cost / u.rate_multiplier ELSE u.total_cost END) FROM usage_logs u LEFT JOIN users us ON us.id = u.user_id
 	LEFT JOIN api_keys k ON k.id = u.api_key_id

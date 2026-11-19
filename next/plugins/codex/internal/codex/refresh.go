@@ -51,7 +51,8 @@ func (p *Plugin) BuildRefreshRequest(_ context.Context, in *pluginv1.BuildRefres
 	body, _ := json.Marshal(map[string]string{
 		"client_id": CodexClientID, "grant_type": "refresh_token", "refresh_token": c.RefreshToken, "scope": RefreshScope,
 	})
-	h := map[string]string{"Accept": "application/json", "Content-Type": "application/json", "User-Agent": UserAgent, "Originator": Originator}
+	a := p.agent(c)
+	h := map[string]string{"Accept": "application/json", "Content-Type": "application/json", "User-Agent": a.UserAgent, "Originator": a.Originator}
 	return &pluginv1.BuildRefreshRequestResponse{Method: http.MethodPost, Url: p.ep.Auth + "/oauth/token", Headers: h, BodyJson: string(body)}, nil
 }
 
@@ -94,8 +95,6 @@ func (p *Plugin) ParseRefreshResponse(_ context.Context, in *pluginv1.ParseRefre
 			return refreshError(pluginv1.RefreshResult_ERROR_TYPE_AUTH_REJECTED, "refresh token refused; authorize the account again / 刷新令牌被拒绝，需重新授权: "+msg), nil
 		}
 		return refreshError(pluginv1.RefreshResult_ERROR_TYPE_TRANSIENT, msg), nil
-	case in.GetTruncated():
-		return refreshError(pluginv1.RefreshResult_ERROR_TYPE_TRANSIENT, "token response too large / 令牌响应过大"), nil
 	}
 	var tr tokenResponse
 	if err := json.Unmarshal(in.GetBody(), &tr); err != nil {

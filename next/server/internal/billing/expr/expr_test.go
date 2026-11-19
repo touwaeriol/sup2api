@@ -2,6 +2,7 @@ package expr
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -246,6 +247,40 @@ func TestNormalize(t *testing.T) {
 	// Inclusive totals smaller than the cache counts clamp p at zero.
 	if got := Normalize(SemanticsInclusive, Tokens{Input: 10, CacheRead: 50}, all); got.P != 0 {
 		t.Fatalf("p = %v", got.P)
+	}
+}
+
+// Image tokens are part of input and output (CONTRACTS §118): priced, they
+// leave p and c for img and img_o; unpriced, they stay in p and c. Either
+// way every token is billed once, and p and c never go below 0.
+func TestNormalizeImageTokens(t *testing.T) {
+	only := func(names ...string) func(string) bool {
+		return func(n string) bool { return slices.Contains(names, n) }
+	}
+	tok := Tokens{Input: 1000, Output: 4200, CacheRead: 100, ImageInput: 600, ImageOutput: 4000}
+	for _, tc := range []struct {
+		name string
+		sem  string
+		uses func(string) bool
+		want Vars
+	}{
+		{"inclusive, both priced", SemanticsInclusive, only("p", "c", "cr", "img", "img_o"), Vars{P: 300, C: 200, CR: 100, Img: 600, ImgO: 4000, Len: 1000}},
+		{"inclusive, unpriced images stay text", SemanticsInclusive, only("p", "c", "cr"), Vars{P: 900, C: 4200, CR: 100, Len: 1000}},
+		{"inclusive, only img", SemanticsInclusive, only("p", "c", "img"), Vars{P: 300, C: 4200, Img: 600, Len: 1000}},
+		{"inclusive, only img_o", SemanticsInclusive, only("p", "c", "img_o"), Vars{P: 900, C: 200, ImgO: 4000, Len: 1000}},
+		{"exclusive, both priced", SemanticsExclusive, only("p", "c", "img", "img_o"), Vars{P: 400, C: 200, Img: 600, ImgO: 4000, Len: 1100}},
+		{"exclusive, unpriced images stay text", SemanticsExclusive, only("p", "c"), Vars{P: 1000, C: 4200, Len: 1100}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := Normalize(tc.sem, tok, tc.uses); got != tc.want {
+				t.Fatalf("got %+v want %+v", got, tc.want)
+			}
+		})
+	}
+	// A count above its total clamps p and c at zero.
+	got := Normalize(SemanticsInclusive, Tokens{Input: 10, Output: 5, ImageInput: 50, ImageOutput: 9}, only("img", "img_o"))
+	if got.P != 0 || got.C != 0 || got.Img != 50 || got.ImgO != 9 {
+		t.Fatalf("got %+v", got)
 	}
 }
 

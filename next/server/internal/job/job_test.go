@@ -42,6 +42,7 @@ func (g *fakeGen) JobRunner(key string) (core.AppPlugin, bool) {
 	}
 	return nil, false
 }
+func (g *fakeGen) SettingsValidator(string) (core.SettingsValidator, bool) { return nil, false }
 func (g *fakeGen) Plugin(key string) (core.PluginInfo, bool) {
 	for _, p := range g.plugins {
 		if p.Key == key {

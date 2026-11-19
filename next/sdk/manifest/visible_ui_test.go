@@ -43,86 +43,20 @@ func TestFilterUISlotsAndAccountActions(t *testing.T) {
 	}
 }
 
-// A table's "New" link replaces a sidebar entry for its form page: callers
-// without the link's permission see neither the link nor the form, while a
-// visible menu to the form keeps it.
-func TestFilterUICreateLink(t *testing.T) {
+// A page reached only through menus the caller may not see is dropped; one
+// a visible menu also reaches, or no menu names, stays.
+func TestFilterUIPagesFollowMenus(t *testing.T) {
 	ui := &UI{
-		Menus: []Menu{{ID: "assets", Page: "assets", Permission: "assets:read"}},
-		Pages: map[string]Page{
-			"assets":    {Type: "table", Create: &PageLink{Page: "new_asset", Permission: "assets:manage"}},
-			"new_asset": {Type: "form"},
-			"about":     {Type: "form"},
-		},
+		Menus: []Menu{{ID: "stats", Page: "stats", Permission: "stats:read"},
+			{ID: "rules", Page: "rules", Permission: "rules:read"}, {ID: "rules2", Page: "rules"}},
+		Pages: map[string]Page{"stats": {Type: "native"}, "rules": {Type: "native"}, "about": {Type: "native"}},
 	}
-	can := func(perms ...string) func(string) bool {
-		return func(p string) bool {
-			if p == "" {
-				return true
-			}
-			for _, x := range perms {
-				if x == p {
-					return true
-				}
-			}
-			return false
-		}
+	menus, pages := menusAndPages(ui, func(string) bool { return false }, noCore)
+	if _, ok := pages["stats"]; ok || len(pages) != 2 || len(menus) != 1 || menus[0].ID != "rules2" {
+		t.Fatalf("no permission: menus %v, pages %v", menus, pages)
 	}
-	menus, pages := menusAndPages(ui, can("assets:read", "assets:manage"), noCore)
-	if len(menus) != 1 || pages["assets"].Create == nil || pages["assets"].Create.Page != "new_asset" || len(pages) != 3 {
-		t.Fatalf("manager: menus=%v pages=%v", menus, pages)
-	}
-	_, pages = menusAndPages(ui, can("assets:read"), noCore)
-	if _, ok := pages["new_asset"]; ok || pages["assets"].Create != nil || len(pages) != 2 {
-		t.Fatalf("reader: pages=%v", pages)
-	}
-	if ui.Pages["assets"].Create == nil {
-		t.Fatal("filtering must not change the manifest")
-	}
-	ui.Menus = append(ui.Menus, Menu{ID: "new", Page: "new_asset"})
-	if _, pages = menusAndPages(ui, can("assets:read"), noCore); pages["new_asset"].Type != "form" || pages["assets"].Create != nil {
-		t.Fatalf("a visible menu keeps the form, not the link: %v", pages)
-	}
-}
-
-// Two tables open the same form under different permissions: the link the
-// caller may use keeps the form, whichever table is denied.
-func TestFilterUISharedCreateForm(t *testing.T) {
-	ui := &UI{
-		Pages: map[string]Page{
-			"mine":     {Type: "table", Create: &PageLink{Page: "new_item", Permission: "items:own:create"}},
-			"all":      {Type: "table", Create: &PageLink{Page: "new_item", Permission: "items:manage"}},
-			"new_item": {Type: "form"},
-		},
-	}
-	own := func(p string) bool { return p == "items:own:create" }
-	_, pages := menusAndPages(ui, own, noCore)
-	if _, ok := pages["new_item"]; !ok || pages["mine"].Create == nil || pages["all"].Create != nil {
-		t.Fatalf("own creator: pages=%v", pages)
-	}
-	_, pages = menusAndPages(ui, func(string) bool { return false }, noCore)
-	if _, ok := pages["new_item"]; ok || pages["mine"].Create != nil || pages["all"].Create != nil {
-		t.Fatalf("no create permission: pages=%v", pages)
-	}
-}
-
-// A table hidden by its menu's permission does not reveal the form its
-// "New" link opens, even when the link itself needs no permission.
-func TestFilterUIHiddenTableHidesCreateForm(t *testing.T) {
-	ui := &UI{
-		Menus: []Menu{{ID: "a", Page: "items", Permission: "items:read"}},
-		Pages: map[string]Page{
-			"items":    {Type: "table", Create: &PageLink{Page: "new_item"}},
-			"new_item": {Type: "form"},
-		},
-	}
-	menus, pages := menusAndPages(ui, func(p string) bool { return p == "" }, noCore)
-	if len(menus) != 0 || len(pages) != 0 {
-		t.Fatalf("caller without items:read: menus=%v pages=%v", menus, pages)
-	}
-	_, pages = menusAndPages(ui, func(p string) bool { return p == "" || p == "items:read" }, noCore)
-	if _, ok := pages["new_item"]; !ok || pages["items"].Create == nil {
-		t.Fatalf("reader: pages=%v", pages)
+	if _, pages = menusAndPages(ui, func(p string) bool { return p == "stats:read" }, noCore); len(pages) != 3 {
+		t.Fatalf("stats reader: %v", pages)
 	}
 }
 

@@ -1111,8 +1111,8 @@ for (let i = 0; i < 90; i++) {
       v: 1, outcome: 'blocked_all', candidates: 3, admitted: 0, retry_at: unix(blockedAt, 134),
       counts: { 'unavailable:quota_rejected:7d_fable': 3 },
       samples: [
-        { account_id: 21, account_name: 'claude-max-1', model: 'claude-fable-4', decision: 'block', reason: 'unavailable:quota_rejected:7d_fable', retry_at: unix(blockedAt, 134) },
-        { account_id: 22, account_name: 'claude-max-2', model: 'claude-fable-4', decision: 'block', reason: 'unavailable:quota_rejected:7d_fable', retry_at: unix(blockedAt, 391) },
+        { account_id: 21, account_name: 'claude-key-1', model: 'claude-fable-4', decision: 'block', reason: 'unavailable:quota_rejected:7d_fable', retry_at: unix(blockedAt, 134) },
+        { account_id: 22, account_name: 'claude-key-2', model: 'claude-fable-4', decision: 'block', reason: 'unavailable:quota_rejected:7d_fable', retry_at: unix(blockedAt, 391) },
         { account_id: 24, model: 'claude-fable-4', decision: 'block', reason: 'unavailable:quota_rejected:7d_fable', retry_at: unix(blockedAt, 1450) }
       ]
     }) }
@@ -1120,18 +1120,26 @@ for (let i = 0; i < 90; i++) {
   const partialAt = at(9)
   usageRows.push({
     ...base, id: 4991, request_id: 'req_availability0002', client_request_id: '', created_at: partialAt.toISOString(),
-    account_id: 22, account_name: 'claude-max-2', plugin_key: 'claude_oauth', account_type: 'claude_oauth', upstream_protocol: 'anthropic.messages',
+    account_id: 22, account_name: 'claude-key-2', plugin_key: 'anthropic', account_type: 'apikey', upstream_protocol: 'anthropic.messages',
     status_code: 200, success: true, error_type: '', error_message: '',
     input_tokens: 1200, output_tokens: 300, total_cost: money(0), billing_status: 'free', latency_ms: 3200, first_token_ms: 900,
     _anomalies: { availability: JSON.stringify({
       v: 1, outcome: 'partial', candidates: 3, admitted: 2, retry_at: unix(partialAt, 72),
       counts: { 'unavailable:quota_rejected:7d_fable': 1, snapshot_unavailable: 1 },
       samples: [
-        { account_id: 21, account_name: 'claude-max-1', model: 'claude-fable-4', decision: 'block', reason: 'unavailable:quota_rejected:7d_fable', retry_at: unix(partialAt, 72) },
+        { account_id: 21, account_name: 'claude-key-1', model: 'claude-fable-4', decision: 'block', reason: 'unavailable:quota_rejected:7d_fable', retry_at: unix(partialAt, 72) },
         { account_id: 24, model: 'claude-fable-4', decision: 'fail_open', reason: 'snapshot_unavailable' }
       ],
       guard: [{ account_id: 24, model: 'claude-fable-4', decision: 'block', reason: 'guard_models_changed', attempt: 1 }]
     }) }
+  })  // An unreported execution (design §8.5): the plugin's Execute returned no
+  // usable usage, so the core wrote this free record and released the pre-charge.
+  usageRows.push({
+    ...base, id: 4989, request_id: 'req_unreported0001', client_request_id: '', created_at: at(15).toISOString(),
+    account_id: 16, account_name: 'relay-1', plugin_key: 'relay', account_type: 'relay_key', upstream_protocol: 'anthropic.messages',
+    status_code: 200, success: false, error_type: 'usage_unreported', error_message: 'plugin relay returned no usage for this execution',
+    input_tokens: 0, output_tokens: 0, total_cost: money(0), billing_status: 'free', latency_ms: 2100,
+    _anomalies: { usage_extract: 'unreported' }
   })
 }
 // Four records priced by group pricing, as mock/pricingStore.ts sets it up
@@ -1169,6 +1177,34 @@ for (let i = 0; i < 90; i++) {
       latency_ms: 2600, first_token_ms: 700, upload_ms: 40, sticky_rule: 'claude-code-session', sticky_hit: true, hook_decisions: [],
       _detail: billing.detail, _price: { id: price.id, model: price.model, source: price.source }
     })
+  })
+}
+// A Messages request that declared an advisor model: the conversation at its
+// model's price, the advisor's tokens as additional usage at the advisor
+// model's (12000*1 + 1800*5 = 21000 and 3000*15 + 400*75 = 75000 micro-USD).
+{
+  const at = new Date(Date.now() - 6 * 60000)
+  const chat = { model: 'claude-haiku-4-5', expression: 'p*1 + c*5' }
+  const advisor = { model: 'claude-opus-4-1', expression: 'p*15 + c*75' }
+  const term = (label: string, quantity: number, rate: number, cost: string) => ({ tier: '', label, quantity, rate, expr: `${label}*${rate}`, cost })
+  const advisorTokens = { Input: 3000, Output: 400, CacheRead: 0, CacheCreation: 0, CacheCreation1h: 0 }
+  usageRows.push({
+    id: 4996, request_id: 'req_advisor0001', client_request_id: '', created_at: at.toISOString(),
+    user_id: 1, user_email: USERS[0].email, api_key_id: 1, api_key_name: `${USERS[0].name}-key`, client_ip: CLIENT_IPS[1][0],
+    group_id: GROUPS[0].id, group_name: GROUPS[0].name, account_id: 12, account_name: 'claude-main', plugin_key: 'anthropic', account_type: 'apikey',
+    platform: 'anthropic', protocol: 'anthropic.messages', upstream_protocol: 'anthropic.messages', conversion: null, endpoint: '/v1/messages',
+    model: chat.model, upstream_model: chat.model, stream: true, status_code: 200, success: true, error_type: '', error_message: '',
+    input_tokens: 12000, output_tokens: 1800, cache_read_tokens: 0, cache_creation_tokens: 0, cache_creation_1h_tokens: 0,
+    total_cost: money(0.096), rate_multiplier: '1.00', billing_status: 'billed', billing_mode: 'expression', matched_tier: '',
+    price_id: 2, expr_hash: remember(chat.expression), latency_ms: 18400, first_token_ms: 900, upload_ms: 40,
+    sticky_rule: '', sticky_hit: false, hook_decisions: [],
+    _detail: {
+      expr_version: 1, tier: '', rules: [], breakdown: { vars: { p: 12000, c: 1800, len: 12000 }, items: [term('p', 12000, 1, '0.012'), term('c', 1800, 5, '0.009')], subtotal: '0.021', base: '0.021', rules_multiplier: '1' }, cost: '0.096', rate_multiplier: '1', total_cost: '0.096', primary_cost: '0.021', primary_total_cost: '0.021',
+      additional: [{ kind: 'advisor', model: advisor.model, price_id: 5, expression_hash: remember(advisor.expression),
+        detail: { expr_version: 1, tier: '', rules: [], breakdown: { vars: { p: 3000, c: 400, len: 3000 }, items: [term('p', 3000, 15, '0.045'), term('c', 400, 75, '0.03')], subtotal: '0.075', base: '0.075', rules_multiplier: '1' }, cost: '0.075', rate_multiplier: '1', total_cost: '0.075' } }],
+      inputs: { semantics: 'inclusive', additional: [{ Kind: 'advisor', Model: advisor.model, UsageSemantics: 'inclusive', Tokens: advisorTokens, RateMultiplier: '1' }] }
+    },
+    _price: null
   })
 }
 usageRows.sort((a, b) => b.created_at.localeCompare(a.created_at))
@@ -1627,7 +1663,6 @@ on('GET', '/me/ledger', (req) => paginate(ledgerFilter(ledgerRows.filter((l) => 
 
 const billingSettings = {
   pre_consume_tokens: 500,
-  missing_price_policy: 'reject',
   min_balance: '0',
   big_cost_warning_usd: '10',
   client_disconnect_policy: 'continue'
@@ -1653,15 +1688,12 @@ on('PUT', '/settings/billing', (req) => {
   // A null pointer field binds as left out, as in Go.
   if (b.client_disconnect_policy === null) delete b.client_disconnect_policy
   if (!disconnectBinds(b)) return fail(400, 'invalid_argument', 'invalid request body')
-  if (!['reject', 'free'].includes(b.missing_price_policy)) {
-    return fail(400, 'invalid_argument', 'invalid', { fields: [{ field: 'missing_price_policy', code: 'enum', message: 'must be reject or free' }] })
-  }
   if (!Number.isInteger(b.pre_consume_tokens) || b.pre_consume_tokens < 0 || b.pre_consume_tokens > 100000000) {
     return fail(400, 'invalid_argument', 'invalid', { fields: [{ field: 'pre_consume_tokens', code: 'invalid', message: 'must be an integer from 0 to 100000000' }] })
   }
   const fields = disconnectFields(b)
   if (fields.length) return fail(400, 'invalid_argument', 'invalid', { fields })
-  Object.assign(billingSettings, { pre_consume_tokens: b.pre_consume_tokens, missing_price_policy: b.missing_price_policy, min_balance: String(b.min_balance), big_cost_warning_usd: String(b.big_cost_warning_usd) })
+  Object.assign(billingSettings, { pre_consume_tokens: b.pre_consume_tokens, min_balance: String(b.min_balance), big_cost_warning_usd: String(b.big_cost_warning_usd) })
   if (b.client_disconnect_policy !== undefined) billingSettings.client_disconnect_policy = b.client_disconnect_policy
   return billingSettings
 })
@@ -1679,13 +1711,15 @@ const gatewaySettings = {
   platform_call_timeout_ms: 2000,
   default_hook_timeout_ms: 300,
   platform_hotpath_timeout_ms: 300,
+  max_request_body_mb: 128,
   claude_max_tokens: { enabled: false, models: { default: 8192 } as Record<string, number> }
 }
 const GATEWAY_RANGES: Record<Exclude<keyof typeof gatewaySettings, 'claude_max_tokens'>, [number, number]> = {
   max_attempts: [1, 10],
   platform_call_timeout_ms: [100, 30000],
   default_hook_timeout_ms: [50, 2000],
-  platform_hotpath_timeout_ms: [50, 2000]
+  platform_hotpath_timeout_ms: [50, 2000],
+  max_request_body_mb: [1, 1024]
 }
 
 const CLAUDE_MAX_TOKENS = { models: 100, nameLength: 200, max: 1048576, overrideBytes: 64 << 10 }
@@ -1751,7 +1785,8 @@ on('PUT', '/settings/gateway', (req) => {
     max_attempts: b.max_attempts,
     platform_call_timeout_ms: b.platform_call_timeout_ms,
     default_hook_timeout_ms: b.default_hook_timeout_ms,
-    platform_hotpath_timeout_ms: b.platform_hotpath_timeout_ms
+    platform_hotpath_timeout_ms: b.platform_hotpath_timeout_ms,
+    max_request_body_mb: b.max_request_body_mb
   })
   if (rule) gatewaySettings.claude_max_tokens = rule
   return gatewaySettings

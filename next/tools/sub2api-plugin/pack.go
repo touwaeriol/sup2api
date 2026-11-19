@@ -27,7 +27,7 @@ const PackageExt = ".s2plugin"
 var zipEpoch = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
 // Directories copied verbatim into the package.
-var packDirs = []string{"forms", "migrations", "i18n", "assets"}
+var packDirs = []string{"migrations", "i18n", "assets"}
 
 // cmdPack collects the package files and writes an unsigned .s2plugin.
 func cmdPack(args []string, stdout, stderr io.Writer) error {
@@ -183,40 +183,18 @@ func addTree(files map[string][]byte, root, prefix string, skip func(rel string)
 
 // checkPackage verifies that the files referenced by the manifest exist.
 func checkPackage(files map[string][]byte, m *manifest.Manifest, allowMissingUI bool) ([]string, error) {
-	warnings := manifestWarnings(m, files)
-	var missing []string
-	need := func(p, what string) {
-		if p == "" {
-			return
-		}
-		if _, ok := files[p]; !ok {
-			missing = append(missing, fmt.Sprintf("%s (%s)", p, what))
-		}
-	}
+	var warnings, missing []string
 	// The manifest is held to the rules the installing host applies
 	// (sdk/manifest/check), so a package that packs here also installs.
-	invalid := validateManifest(m, files)
-	for _, at := range m.AccountTypes {
-		if at.Form.Mode == "schema" {
-			need(at.Form.Schema, "account type "+at.ID+" schema")
-			need(at.Form.UISchema, "account type "+at.ID+" uiSchema")
-		}
-	}
-	if len(invalid) > 0 {
+	if invalid := validateManifest(m, files); len(invalid) > 0 {
 		return nil, fmt.Errorf("invalid manifest: %s", strings.Join(invalid, "; "))
 	}
-	if m.UI != nil {
-		if s := m.UI.Settings; s != nil && s.Mode == "schema" {
-			need(s.Schema, "settings schema")
-			need(s.UISchema, "settings uiSchema")
-		}
-		if m.UI.Native != nil {
-			if _, ok := files[m.UI.Native.Entry]; !ok {
-				if !allowMissingUI {
-					return nil, fmt.Errorf("native UI entry %s missing: build ui/native first (dist/) or pass --allow-missing-ui", m.UI.Native.Entry)
-				}
-				warnings = append(warnings, "native UI entry "+m.UI.Native.Entry+" missing (--allow-missing-ui)")
+	if m.UI != nil && m.UI.Native != nil {
+		if _, ok := files[m.UI.Native.Entry]; !ok {
+			if !allowMissingUI {
+				return nil, fmt.Errorf("native UI entry %s missing: build ui/native first (dist/) or pass --allow-missing-ui", m.UI.Native.Entry)
 			}
+			warnings = append(warnings, "native UI entry "+m.UI.Native.Entry+" missing (--allow-missing-ui)")
 		}
 	}
 	if m.Database != nil {
@@ -235,31 +213,26 @@ func checkPackage(files map[string][]byte, m *manifest.Manifest, allowMissingUI 
 		sort.Strings(missing)
 		return nil, fmt.Errorf("missing package files: %s", strings.Join(missing, ", "))
 	}
-	// A runtime "none" package has no binaries; manifest/check rejects any
-	// runtimes/ it would carry.
-	if m.Runtime == manifest.RuntimeGRPC {
-		tmpl := "runtimes/{os}-{arch}/plugin"
-		if m.Entry.GRPC != nil && m.Entry.GRPC.Binaries != "" {
-			tmpl = m.Entry.GRPC.Binaries
+	// Every plugin has a process; the manifest check above requires its
+	// binaries template.
+	tmpl := m.Entry.GRPC.Binaries
+	found := 0
+	for _, plat := range defaultPlatforms {
+		goos, goarch, _ := strings.Cut(plat, "/")
+		p := strings.NewReplacer("{os}", goos, "{arch}", goarch).Replace(tmpl)
+		if _, ok := files[p]; ok {
+			found++
+		} else {
+			warnings = append(warnings, "runtime binary "+p+" missing")
 		}
-		found := 0
-		for _, plat := range defaultPlatforms {
-			goos, goarch, _ := strings.Cut(plat, "/")
-			p := strings.NewReplacer("{os}", goos, "{arch}", goarch).Replace(tmpl)
-			if _, ok := files[p]; ok {
-				found++
-			} else {
-				warnings = append(warnings, "runtime binary "+p+" missing")
-			}
+	}
+	if found == 0 {
+		hasAny := false
+		for p := range files {
+			hasAny = hasAny || strings.HasPrefix(p, "runtimes/")
 		}
-		if found == 0 {
-			hasAny := false
-			for p := range files {
-				hasAny = hasAny || strings.HasPrefix(p, "runtimes/")
-			}
-			if !hasAny {
-				return nil, fmt.Errorf("no runtime binaries: run `sub2api-plugin build` first")
-			}
+		if !hasAny {
+			return nil, fmt.Errorf("no runtime binaries: run `sub2api-plugin build` first")
 		}
 	}
 	return warnings, nil

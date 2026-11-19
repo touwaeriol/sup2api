@@ -60,7 +60,7 @@ func TestSQLQuotaApplyObservation(t *testing.T) {
 }
 
 func TestSQLBalanceUpsert(t *testing.T) {
-	b := &store.BalanceSnapshot{AccountID: 11, AmountMicros: 5, Currency: "USD", Source: store.BalanceActive, UpdatedAt: &snapshotTime}
+	b := &store.BalanceSnapshot{AccountID: 11, AmountMicros: 5, Currency: "USD", UpdatedAt: &snapshotTime}
 	gormtest.Assert(t, func(db *gorm.DB) *gorm.DB { return store.UpsertBalanceSQL(db, b) })
 }
 

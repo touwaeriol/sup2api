@@ -90,5 +90,6 @@ export default {
   secondsAgo: '{n} 秒前',
   minutesAgo: '{n} 分钟前',
   hoursAgo: '{n} 小时前',
-  daysAgo: '{n} 天前'
+  daysAgo: '{n} 天前',
+  noProxy: '不使用代理'
 }

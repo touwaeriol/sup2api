@@ -6,8 +6,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -17,6 +15,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
+	"github.com/Sub2API-Devs/sup2api/next/sdk/pluginsdk"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/pluginsdk/pluginsdktest"
 )
 
@@ -294,9 +293,9 @@ func TestConfigureCooldown(t *testing.T) {
 	for _, tc := range []struct {
 		cfg, code string
 	}{
-		{`{"alert_cooldown_sec":-1}`, "range"},
-		{`{"alert_cooldown_sec":301}`, "range"},
-		{`{"alert_cooldown_sec":86400}`, "range"},
+		{`{"alert_cooldown_sec":-1}`, "minimum"},
+		{`{"alert_cooldown_sec":301}`, "maximum"},
+		{`{"alert_cooldown_sec":86400}`, "maximum"},
 		{`{"alert_cooldown_sec":1.5}`, "type"},
 		{`{"alert_cooldown_sec":"60"}`, "type"},
 	} {
@@ -319,32 +318,51 @@ func TestConfigureCooldown(t *testing.T) {
 	}
 }
 
-// The settings form and Configure agree on the range and the default.
-func TestSettingsSchemaCooldown(t *testing.T) {
-	b, err := os.ReadFile(filepath.Join("..", "..", "forms", "settings.schema.json"))
-	if err != nil {
-		t.Fatal(err)
+// TestValidateSettings: every value the settings JSON Schema refused (one
+// counterexample per constraint, written out here) is still refused, at its
+// field, by ValidateSettings and Configure alike; the plugin's own URL check
+// too; the default set and real settings pass. The console form
+// (ui/native GuardSettings) uses the same bounds: 0-300 s, default 60.
+func TestValidateSettings(t *testing.T) {
+	if maxAlertCooldownSec != 300 || defaultAlertCooldownSec != 60 {
+		t.Fatalf("cooldown bounds %d, default %d: change the settings form too", maxAlertCooldownSec, defaultAlertCooldownSec)
 	}
-	var schema struct {
-		Properties struct {
-			Cooldown struct {
-				Type    string `json:"type"`
-				Minimum *int   `json:"minimum"`
-				Maximum *int   `json:"maximum"`
-				Default *int   `json:"default"`
-			} `json:"alert_cooldown_sec"`
-		} `json:"properties"`
+	h := pluginsdktest.Start(t, New(), pluginsdktest.Options{SDK: sdkOpts()})
+	refused := []struct{ settings, field, code string }{
+		{`{"webhook_url":"ftp://hooks.example.com"}`, "webhook_url", "pattern"},
+		{`{"webhook_url":"https://hooks.example.com/a b"}`, "webhook_url", "pattern"},
+		{`{"webhook_url":7}`, "webhook_url", "type"},
+		{`{"record_snippets":"true"}`, "record_snippets", "type"},
+		{`{"alert_cooldown_sec":-1}`, "alert_cooldown_sec", "minimum"},
+		{`{"alert_cooldown_sec":301}`, "alert_cooldown_sec", "maximum"},
+		{`{"alert_cooldown_sec":1.5}`, "alert_cooldown_sec", "type"},
+		{`{"webhook":"https://hooks.example.com"}`, "webhook", "unknown"},
+		{`[]`, "", "invalid_json"},
+		{`{"webhook_url":"https://"}`, "webhook_url", "pattern"},
+		{`{"webhook_url":"http:///x"}`, "webhook_url", "format"},
 	}
-	if err := json.Unmarshal(b, &schema); err != nil {
-		t.Fatal(err)
+	for _, c := range refused {
+		resp, err := h.ValidateSettings(c.settings, nil)
+		if err != nil {
+			t.Fatalf("%s: %v", c.settings, err)
+		}
+		if errs := resp.GetErrors(); len(errs) != 1 || errs[0].GetField() != c.field || errs[0].GetCode() != c.code {
+			t.Errorf("%s: errors = %v, want %s %s", c.settings, errs, c.field, c.code)
+		}
+		if _, ok := pluginsdk.AsFieldErrors(New().Configure(context.Background(), pluginsdk.Config{JSON: []byte(c.settings)})); !ok {
+			t.Errorf("%s: Configure accepted it", c.settings)
+		}
 	}
-	f := schema.Properties.Cooldown
-	if f.Type != "integer" || f.Minimum == nil || *f.Minimum != 0 || f.Maximum == nil || *f.Maximum != maxAlertCooldownSec ||
-		f.Default == nil || *f.Default != defaultAlertCooldownSec {
-		t.Fatalf("alert_cooldown_sec schema = %+v", f)
-	}
-	ui, err := os.ReadFile(filepath.Join("..", "..", "forms", "settings.ui.json"))
-	if err != nil || !strings.Contains(string(ui), `"alert_cooldown_sec": {`) {
-		t.Fatalf("settings.ui.json: %v", err)
+	for _, ok := range []string{
+		`{}`,
+		// The set the console form saves untouched (its defaults).
+		`{"webhook_url":"","record_snippets":false,"alert_cooldown_sec":60}`,
+		`{"webhook_url":"https://hooks.example.com/guard?token=x","record_snippets":true,"alert_cooldown_sec":0}`,
+		`{"webhook_url":"http://10.0.0.5:8080/hook","alert_cooldown_sec":300}`,
+	} {
+		resp, err := h.ValidateSettings(ok, nil)
+		if err != nil || len(resp.GetErrors()) != 0 || resp.GetNormalizedConfigJson() != "" {
+			t.Errorf("%s: %v %v", ok, resp.GetErrors(), err)
+		}
 	}
 }

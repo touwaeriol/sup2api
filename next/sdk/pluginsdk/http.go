@@ -294,3 +294,24 @@ func Unavailable(msg string) *pluginv1.HTTPResponse {
 func BadRequest(field, code, msg string) *pluginv1.HTTPResponse {
 	return FieldErrorResponse("invalid request / 请求参数不正确", FieldErrors{}.Add(field, code, msg))
 }
+
+// RouteProxyTicket is the proxy ticket a console route call of an
+// authorization flow carries in the conventional body field proxy_ticket
+// (CONTRACTS §117). The console takes a fresh ticket of the account form's
+// current proxy choice for every such call, so a route passes the one of
+// this call to its fetches (ExecutionHTTPRequest.ProxyTicket) instead of
+// keeping one from an earlier call: a proxy the operator changed meanwhile
+// carries the next request. refused is the 400 of a body that is not JSON or
+// has no ticket.
+func RouteProxyTicket(req *pluginv1.HTTPRequest) (ticket string, refused *pluginv1.HTTPResponse) {
+	var in struct {
+		ProxyTicket string `json:"proxy_ticket"`
+	}
+	if body := strings.TrimSpace(string(req.GetBody())); body != "" && json.Unmarshal([]byte(body), &in) != nil {
+		return "", BadRequest("body", "invalid_json", "the request body is not valid JSON / 请求体不是合法 JSON")
+	}
+	if strings.TrimSpace(in.ProxyTicket) == "" {
+		return "", BadRequest("proxy_ticket", "required", "proxy_ticket is required: the account form's proxy choice / 缺少 proxy_ticket：账号表单的代理选择")
+	}
+	return in.ProxyTicket, nil
+}

@@ -1,0 +1,58 @@
+{
+  "apiVersion": 1,
+  "key": "newapi",
+  "name": { "en": "New API", "zh": "New API" },
+  "description": {
+    "en": "Adds the \"New API\" account type: the API key of a New API site (your own Base URL) that serves the built-in openai (chat completions, responses including its WebSocket mode, embeddings, image generations and edits), anthropic (messages, count_tokens) and gemini (generateContent, streamGenerateContent) platforms, and the typesafe platform of the TypeSafe plugin when it is enabled. Requests are forwarded in their own protocol as they are, with each protocol's official auth header; nothing is converted. The key's balance is read from the site and shown as the site's own quota number, without conversion. The plugin builds the upstream requests; the core sends them, so the plugin itself makes no network connection. Model prices are set by administrators in the core.",
+    "zh": "新增\"New API\"账号类型：New API 站点的 API Key（自填 Base URL），服务内置 openai（Chat Completions、Responses（含 WebSocket 模式）、Embeddings、生图与图片编辑）、anthropic（Messages、count_tokens）、gemini（generateContent、streamGenerateContent）平台，TypeSafe 插件启用时还服务它的 typesafe 平台。请求按原协议原样转发，各协议用官方的鉴权头，不做任何转换。从站点读取 Key 的余额，显示站点自己的额度数字，不做换算。插件构造上游请求，由核心发送，插件自身不发起任何网络连接。模型价格由管理员在核心中配置。"
+  },
+  "version": "0.1.0",
+  "publisher": "sub2api",
+  "icon": "text:N",
+  "runtime": "grpc",
+  "entry": {
+    "grpc": { "binaries": "runtimes/{os}-{arch}/plugin" }
+  },
+  "hostCompat": ">=0.1.304 <0.2.0",
+  "hostUICompat": "^4.0",
+
+  "capabilities": [
+    { "id": "platform.adapter.v1" },
+    { "id": "platform.websocket.v1" }
+  ],
+
+  "accountTypes": [
+    {
+      "id": "apikey",
+      "label": { "en": "New API", "zh": "New API" },
+      "description": {
+        "en": "An API key of a New API site. Each protocol goes to <Base URL> with its official path and auth header (OpenAI Authorization: Bearer, Anthropic x-api-key, Gemini x-goog-api-key).",
+        "zh": "New API 站点的 API Key。各协议按官方路径和鉴权头发往 <Base URL>（OpenAI 用 Authorization: Bearer，Anthropic 用 x-api-key，Gemini 用 x-goog-api-key）。"
+      },
+      "form": { "mode": "native", "component": "NewAPIKeyForm" },
+      "upstreamFields": ["base_url"],
+      "sensitiveFields": ["api_key"],
+      "settingsFields": ["base_url"],
+      "balance": { "updateInterval": 600 },
+      "platforms": [
+        { "platform": "openai" },
+        { "platform": "anthropic" },
+        { "platform": "gemini", "endpoints": ["generate_content", "stream_generate_content"] },
+        { "platform": "typesafe" }
+      ]
+    }
+  ],
+
+  "resources": { "memoryMB": 64, "cpu": 0.1, "maxThreads": 32, "maxOpenFiles": 64 },
+
+  "ui": {
+    "native": { "entry": "ui/native/entry.js" }
+  },
+
+  "hostPermissions": [
+    { "id": "platform.register",
+      "reason": { "en": "Register the \"New API\" account type for the built-in openai, anthropic and gemini platforms and the typesafe platform", "zh": "为内置 openai、anthropic、gemini 平台和 typesafe 平台注册\"New API\"账号类型" } },
+    { "id": "ui.native",
+      "reason": { "en": "The API key account form (NewAPIKeyForm)", "zh": "API Key 账号表单（NewAPIKeyForm）" } }
+  ]
+}

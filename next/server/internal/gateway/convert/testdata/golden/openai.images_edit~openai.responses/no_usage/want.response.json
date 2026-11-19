@@ -1,0 +1,13 @@
+{
+  "background": "opaque",
+  "created": 0,
+  "data": [
+    {
+      "b64_json": "iVBORw0KGgoAAAANSUhEUgAAAAE=",
+      "revised_prompt": "A small white dot on a black background"
+    }
+  ],
+  "output_format": "png",
+  "quality": "low",
+  "size": "1024x1536"
+}

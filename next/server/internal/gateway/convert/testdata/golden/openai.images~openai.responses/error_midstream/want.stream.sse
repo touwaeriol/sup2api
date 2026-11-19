@@ -1,0 +1,3 @@
+event: error
+data: {"error":{"code":"server_error","message":"The model failed to generate a response."},"type":"error"}
+

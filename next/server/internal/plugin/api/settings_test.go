@@ -12,35 +12,18 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 )
 
-// The moderation shape: an x-sensitive webhook URL next to its writeOnly
-// signing secret, plus a nested object with its own credential and address.
-const settingsSchema = `{
-  "type": "object",
-  "properties": {
-    "threshold": {"type": "number"},
-    "notify_webhook_url": {"type": "string", "x-sensitive": true},
-    "notify_webhook_secret": {"type": "string", "writeOnly": true},
-    "smtp_password": {"type": "string", "format": "password"},
-    "both": {"type": "string", "writeOnly": true, "x-sensitive": true},
-    "upstream": {
-      "type": "object",
-      "properties": {
-        "base_url": {"type": "string", "x-sensitive": true},
-        "api/key": {"type": "string", "writeOnly": true},
-        "name": {"type": "string"}
-      }
-    }
-  }
-}`
-
-// schemaFields is what the settings form of schema masks.
-func schemaFields(schema string) []manifest.SecretField {
-	fields, _ := schemaSecrets([]byte(schema))
-	return fields
+// declaredFields is the moderation shape as ui.settings.secrets: a sensitive
+// webhook URL next to its signing secret, plus a nested object with its own
+// credential and address.
+func declaredFields() []manifest.SecretField {
+	return manifest.Form{Secrets: []manifest.SettingsSecret{
+		{Path: "notify_webhook_url", Sensitive: true}, {Path: "notify_webhook_secret"}, {Path: "smtp_password"}, {Path: "both"},
+		{Path: "upstream/base_url", Sensitive: true}, {Path: "upstream/api~1key"},
+	}}.SecretFields()
 }
 
 func TestMaskValuesNested(t *testing.T) {
-	fields := schemaFields(settingsSchema)
+	fields := declaredFields()
 	v := map[string]any{
 		"threshold":             3.0,
 		"notify_webhook_url":    "https://hooks.example/x",
@@ -68,7 +51,7 @@ func stored() map[string]any {
 // masked as GET returns them, then applies edits.
 func in(edit func(map[string]any)) map[string]any {
 	v := stored()
-	maskValues(schemaFields(settingsSchema), v)
+	maskValues(declaredFields(), v)
 	if edit != nil {
 		edit(v)
 	}
@@ -89,7 +72,7 @@ func reenterFields(t *testing.T, err error) []string {
 }
 
 func TestMergeSettingsPluginPermission(t *testing.T) {
-	fields := schemaFields(settingsSchema)
+	fields := declaredFields()
 	allCreds := []string{"values/notify_webhook_secret", "values/smtp_password", "values/upstream/api~1key"}
 
 	t.Run("nothing changed keeps everything", func(t *testing.T) {
@@ -104,8 +87,9 @@ func TestMergeSettingsPluginPermission(t *testing.T) {
 		assert.Equal(t, allCreds, reenterFields(t, err))
 	})
 	t.Run("redirecting the webhook needs its secret", func(t *testing.T) {
-		// The reported attack: point the x-sensitive URL elsewhere and keep
-		// the signing secret through the mask.
+		// The reported attack: point the sensitive URL (a secret with
+		// sensitive set) elsewhere and keep the signing secret through the
+		// mask.
 		_, err := mergeSettings(fields, stored(), in(func(v map[string]any) { v["notify_webhook_url"] = "https://evil.example/" }), false, nil)
 		assert.Equal(t, allCreds, reenterFields(t, err))
 	})
@@ -159,7 +143,7 @@ func TestMergeSettingsPluginPermission(t *testing.T) {
 }
 
 func TestMergeSettingsManagerKeepsSecrets(t *testing.T) {
-	fields := schemaFields(settingsSchema)
+	fields := declaredFields()
 	v := in(func(v map[string]any) { v["notify_webhook_url"] = "https://new.example/" })
 	changed, err := mergeSettings(fields, stored(), v, true, nil)
 	require.NoError(t, err)
@@ -169,7 +153,7 @@ func TestMergeSettingsManagerKeepsSecrets(t *testing.T) {
 }
 
 func TestMergeSettingsValidatesResolvedValues(t *testing.T) {
-	fields := schemaFields(settingsSchema)
+	fields := declaredFields()
 	var seen map[string]any
 	_, err := mergeSettings(fields, stored(), in(nil), false, func(v map[string]any) error {
 		b, _ := json.Marshal(v)
@@ -180,54 +164,11 @@ func TestMergeSettingsValidatesResolvedValues(t *testing.T) {
 	assert.Equal(t, "whsec", seen["notify_webhook_secret"], "validation sees stored values, not the mask")
 }
 
-// A schema of a package installed before the packaging check may mark
-// secrets where no value path leads: the top-level settings holding them are
-// masked whole, as credentials.
-func TestSchemaSecretsLegacyUnreachable(t *testing.T) {
-	const legacy = `{"properties":{
-		"threshold":{"type":"number"},
-		"token":{"type":"string","writeOnly":true},
-		"hooks":{"type":"array","items":{"type":"object","properties":{"url":{"type":"string"},"secret":{"type":"string","writeOnly":true}}}},
-		"upstream":{"type":"object","properties":{"key":{"writeOnly":true},"extra":{"additionalProperties":{"x-sensitive":true}}}}}}`
-	fields, maskAll := schemaSecrets([]byte(legacy))
-	require.False(t, maskAll)
-	got := map[string]bool{}
-	for _, f := range fields {
-		got[f.Pointer()] = f.Credential
-	}
-	// upstream/key is covered by the whole of upstream.
-	assert.Equal(t, map[string]bool{"token": true, "hooks": true, "upstream": true}, got)
-
-	hooks := []any{map[string]any{"url": "https://a.example", "secret": "s1"}}
-	old := map[string]any{"threshold": 3.0, "token": "t", "hooks": hooks, "upstream": map[string]any{"key": "k", "extra": map[string]any{"x": "y"}}}
-	shown := map[string]any{"threshold": 3.0, "token": "t", "hooks": hooks, "upstream": map[string]any{"key": "k", "extra": map[string]any{"x": "y"}}}
-	maskValues(fields, shown)
-	assert.Equal(t, map[string]any{"threshold": 3.0, "token": Mask, "hooks": Mask, "upstream": Mask}, shown)
-
-	// Sending the masks back keeps the stored blocks.
-	changed, err := mergeSettings(fields, old, shown, false, nil)
-	require.NoError(t, err)
-	assert.Empty(t, changed)
-	assert.Equal(t, old, shown)
-
-	// A schema that cannot be read as an object masks them all.
-	for _, schema := range []string{`true`, `not json`, `null`, `[]`} {
-		_, maskAll = schemaSecrets([]byte(schema))
-		assert.True(t, maskAll, schema)
-	}
-	// So does a reference at the root of a schema with secrets that is not
-	// followed (a local one to the root's $defs is).
-	_, maskAll = schemaSecrets([]byte(`{"$ref":"#/$defs/s/properties/k","$defs":{"s":{"properties":{"k":{"writeOnly":true}}}}}`))
-	assert.True(t, maskAll)
-
-	// A marker belonging to no single setting masks them all.
-	_, maskAll = schemaSecrets([]byte(`{"properties":{"a":{"type":"string"}},"additionalProperties":{"writeOnly":true}}`))
-	assert.True(t, maskAll)
-}
-
-// Without a schema nothing says which stored values are secret: every
-// top-level setting is a credential, of the stored and of the submitted values.
-func TestSecretsWithoutSchema(t *testing.T) {
+// Without ui.settings.secrets (or for a mode this core does not know, an old
+// package's schema settings) nothing says which stored values are secret:
+// every top-level setting is a credential, of the stored and of the
+// submitted values.
+func TestSecretsUndeclared(t *testing.T) {
 	v := &SettingsView{maskAll: true}
 	old := map[string]any{"api_key": "k", "opts": map[string]any{"a": 1.0}, "empty": ""}
 	fields := v.secrets(old, map[string]any{"api_key": Mask, "fresh": "x"})
@@ -246,26 +187,6 @@ func TestSecretsWithoutSchema(t *testing.T) {
 	_, err := mergeSettings(fields, old, map[string]any{"api_key": Mask, "opts": Mask, "empty": "", "fresh": "x"}, false, nil)
 	assert.ElementsMatch(t, []string{"values/api_key", "values/opts"}, reenterFields(t, err))
 
-	// A schema form keeps to its own fields.
+	// Declared secrets ([] here) keep to their own fields.
 	assert.Empty(t, (&SettingsView{}).secrets(old))
-}
-
-// The writeOnly and x-sensitive fields of a local $defs object a property
-// refers to are masked where the reference stands (FU4).
-func TestMaskValuesThroughLocalRef(t *testing.T) {
-	const schema = `{"properties":{"primary":{"$ref":"#/$defs/upstream"},"backup":{"$ref":"#/$defs/upstream"},"name":{"type":"string"}},
-		"$defs":{"upstream":{"type":"object","properties":{"base_url":{"type":"string","x-sensitive":true},"key":{"type":"string","writeOnly":true},"label":{"type":"string"}}}}}`
-	fields := schemaFields(schema)
-	// The settings validator follows the same reference.
-	require.NoError(t, validateSettings([]byte(schema), map[string]any{"backup": map[string]any{"key": "k"}}))
-	require.Error(t, validateSettings([]byte(schema), map[string]any{"backup": map[string]any{"key": 5}}))
-	v := map[string]any{
-		"name":    "n",
-		"primary": map[string]any{"base_url": "https://a", "key": "k1", "label": "a"},
-		"backup":  map[string]any{"base_url": "https://b", "key": "k2", "label": "b"},
-	}
-	maskValues(fields, v)
-	assert.Equal(t, map[string]any{"base_url": Mask, "key": Mask, "label": "a"}, v["primary"])
-	assert.Equal(t, map[string]any{"base_url": Mask, "key": Mask, "label": "b"}, v["backup"])
-	assert.Equal(t, "n", v["name"])
 }

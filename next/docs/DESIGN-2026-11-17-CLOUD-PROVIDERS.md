@@ -1,12 +1,14 @@
 # 云厂商上游：Vertex AI Gemini、Azure OpenAI、AWS Bedrock，以及 OpenAI 的组织 / 项目参数
 
-2026-11-17，设计稿；**已在分支 `feat/cloud-providers` 上实现，未合并、未发布**。代码依据：develop `10d459e59`（核心最新发布 0.1.302）。文中“核心 0.1.N”指带上第 8 节两个扩展点的下一次核心发布。写完之后核心 0.1.303 已经发布（不含本分支，openai 0.4.3 随它发布），所以第一个带本分支的核心是 0.1.304；bedrock 清单的 `hostCompat` 写的是 `>=0.1.304 <0.2.0`，实际发布号不是 0.1.304 时要改清单和它的测试（azure_openai 不依赖核心改动，是 `>=0.1.290 <0.2.0`）。
+2026-11-17，设计稿；**已在分支 `feat/cloud-providers` 上实现，已合并进 develop（`9a503d974`），未发布**。代码依据：develop `10d459e59`（核心最新发布 0.1.302）。文中“核心 0.1.N”指带上第 8 节两个扩展点的下一次核心发布。写完之后核心 0.1.303 已经发布（不含本分支，openai 0.4.3 随它发布），所以第一个带本分支的核心是 0.1.304；bedrock 清单的 `hostCompat` 写的是 `>=0.1.304 <0.2.0`，实际发布号不是 0.1.304 时要改清单和它的测试（azure_openai 不依赖核心改动，是 `>=0.1.290 <0.2.0`）。
+
+> **2026-11-18 转发 V2（CONTRACTS §112）之后**：核心替插件签名的扩展点（`signing`）删除，签名由插件用 `sdk/reqsign` 自己做；`response_stream` 留在插件交给核心的 `UpstreamRequest` 上；azure_openai 和 openai 改成用 `sdk/pluginsdk/standard` 的代码插件；bedrock 拿到完整请求体后清洗 Claude Code 的深层字段（第 12 节的已知限制已解决）。下文里的 `BuildUpstreamRequest`、补丁、`requestFields`、清单 `upstream` 声明都是当时的接口。现行说明见 CONTRACTS §109、§112 和 [PLUGIN-CLOUD-PROVIDERS.md](PLUGIN-CLOUD-PROVIDERS.md)。
 
 正文第 1–15 节是设计时写的，没有逐句改成实现后的样子；**实现与设计不同的地方都列在第 16 节，以第 16 节和代码为准**。没有任何真实云账号可用，所有厂商行为来自 2026-11 的官方文档，第 12 节列出没有实测过的地方。操作说明见 [PLUGIN-CLOUD-PROVIDERS.md](PLUGIN-CLOUD-PROVIDERS.md)，契约见 CONTRACTS §109。
 
 ## 1. 背景与目标
 
-现在能接的上游是 OpenAI、Anthropic、Gemini 三家的官方接口和它们的兼容中转（openai、anthropic、gemini、relay 四个声明式插件），加上 codex、claude-oauth、volcengine 三个代码插件。三大云上的同一批模型接不进来：
+现在能接的上游是 OpenAI、Anthropic、Gemini 三家的官方接口和它们的兼容中转（openai、anthropic、gemini、relay 四个声明式插件），加上 codex、volcengine 等代码插件。三大云上的同一批模型接不进来：
 
 - Vertex AI 上的 Gemini：地址带项目和区域，鉴权是服务账号换来的 1 小时令牌。
 - Azure OpenAI：资源自己的域名，密钥放在 `api-key` 头，模型名是部署名。
@@ -231,12 +233,12 @@ WebSocket 路由（`openai.responses_ws`）用同一套共用头，握手也会�
 
 `token_uri` 钉死为 Google 官方地址：这个请求由核心替插件发，不能让粘贴进来的 JSON 指到别处。
 
-**第一枚令牌**。codex、claude-oauth 的第一枚令牌是授权流程里插件自己换来的；Vertex 用 schema 表单，没有授权流程。做法：
+**第一枚令牌**。codex 的第一枚令牌是授权流程里插件自己换来的；Vertex 用 schema 表单，没有授权流程。做法：
 
 1. `ValidateCredentials` 算出密钥指纹（`client_email` + `private_key_id` 的 SHA-256；用户凭证是 `client_id` + `refresh_token`）。提交的凭证里没有令牌，或者 `token_for` 和指纹不同（换了密钥），就在归一化结果里去掉旧令牌并写 `expires_at: 1`。
 2. `expires_at: 1` 是一个读得出来的、已经过期的时间，下一轮扫描（最多 5 分钟）就会刷新。不依赖任何核心改动。
 3. 等不及可以在账号详情点“立即刷新令牌”（`POST /accounts/:id/refresh-credentials`，现有功能）。
-4. 核心 0.1.N 顺带加一个小改进（任务包 C2，Vertex 不依赖它）：保存账号后，类型声明了 `refresh` 就异步调一次 `refreshAccount(id, false)`。非强制调用只刷新已到期的，所以对 codex、claude-oauth 没有影响，Vertex 账号则保存后几秒内就有令牌。
+4. 核心 0.1.N 顺带加一个小改进（任务包 C2，Vertex 不依赖它）：保存账号后，类型声明了 `refresh` 就异步调一次 `refreshAccount(id, false)`。非强制调用只刷新已到期的，所以对 codex 没有影响，Vertex 账号则保存后几秒内就有令牌。
 
 没有采用的做法：插件在校验时自己联网换令牌（要给插件 `net` 权限，而且走不了账号代理）。
 
@@ -325,7 +327,7 @@ volcengine 的素材库签名（插件自己发请求、算法细节不同）以
 | `:message-type` = `event`，负载 `{"bytes":"<base64>"}` | 解出 base64 得到模型原生事件 JSON，输出 `event: <JSON 的 type>\ndata: <JSON>\n\n`（没有 `type` 就只有 `data:` 行） |
 | `:message-type` = `exception` 或 `error` | 输出 `event: error\ndata: {"type":"error","error":{"type":"<异常类型>","message":"<消息>"}}\n\n`，然后结束 |
 | 其他事件、没有 `bytes` 的负载 | 跳过 |
-| 帧损坏（长度不合法、校验和不对、超过格式上限 16 MiB），或单条消息超过适配器自己的上限 4 MiB（`MaxChunkMessageSize`） | 读取返回错误，按上游中断处理 |
+| 帧损坏（长度不合法、校验和不对、超过格式上限 16 MiB）或截断（适配器自己的 4 MiB 上限 `MaxChunkMessageSize` 已在转发 V2 收尾时删除，CONTRACTS §112.16） | 读取返回错误，按上游中断处理 |
 
 **挂点**：`dispatch.go:923` 的嗅探之前。插件的构造结果里 `response_stream` 非空、上游状态是 2xx、并且响应的 `Content-Type` 就是该格式的媒体类型时，把 `resp.Body` 换成适配器，把 `Content-Type` 改成 `text/event-stream`。此后的一切（SSE 转发、用量规则、协议转换、首 token 计时、空闲超时、断开计费）都不用改，看到的就是普通 SSE。
 
@@ -507,7 +509,7 @@ Vertex 和 Bedrock 首版没有 docker e2e：那需要一个在生产包里也�
 11. Vertex：用户凭证账号带 `x-goog-user-project` 是否足够、用户在该项目上还需要什么权限；令牌端点对时钟偏差的报错文字是否就是代码里匹配的那两句（`reasonable timeframe`、`short-lived token`）。
 12. Vertex：`defaultModels` 与 gemini 插件的预设列表相同，没有按 Vertex 文档核对哪些模型在 Vertex 上存在、哪些有 `global` 区域。
 13. Azure：404 `DeploymentNotFound` 的换号靠管理员配的失败策略重试规则（16.5 第 5 条）。没有验证的是：Azure 在部署不存在时回的错误码是否就是 `DeploymentNotFound`、v1 接口和经典接口是否相同（规则的关键词同时写 `DeploymentNotFound` 和 `model_not_found`）。
-14. **Azure 的 docker e2e（`e2e/ac29_azure_test.go`）写好了，还没有在任何 e2e 栈上执行过**；CI 只编译 e2e，不运行。
+14. Azure 的 docker e2e（`e2e/ac29_azure_test.go`）已随整套 e2e（49 个用例）在与转发 V2 合并后的代码上运行并通过；CI 只编译 e2e，不运行。
 15. **控制台里的新表单（Azure 两个、Vertex 三个、Bedrock 三个、OpenAI 的“高级”分组）没有做过界面走查**：分组折叠、鉴权方式切换（`creationGroup`）、隐藏字段在编辑时回传、date-time 控件、默认模型映射带进表单，都只有清单测试和单元测试覆盖。
 16. 保存后立即刷新（7.3 第 4 点）只在单元测试里对假令牌端点验证过，没有对 Google 的令牌端点跑过。
 17. 核心两个扩展点对真实上游的表现：真实 Bedrock 流的分帧（消息大小、异常帧的形状）只按旧版的样例和 aws-sdk-go-v2 录下的数据测试过。
@@ -556,7 +558,7 @@ Vertex 和 Bedrock 首版没有 docker e2e：那需要一个在生产包里也�
 ### 16.2 核心扩展点（第 8 节）
 
 1. **格式名**：响应流格式叫 `aws-eventstream-chunk`（常量 `awseventstream.FormatChunk`，适配器 `awseventstream.NewChunkSSEReader`），不是 `aws-eventstream`。名字指“分帧 + 帧里事件的形状”：它只读 InvokeModelWithResponseStream 的 chunk 事件（负载 `{"bytes": base64}`），Converse 流这类别的形状要另起名字、另写适配器；`Decoder` 只管分帧，可以共用。
-2. **单条消息上限**：chunk 适配器只接受 4 MiB 以内的消息（`MaxChunkMessageSize`），超过按流中断处理；格式本身的上限 16 MiB（`MaxMessageSize`）只是解码器的默认值。
+2. **单条消息上限**：只有格式本身的上限 16 MiB（`MaxMessageSize`），超过算帧损坏。原先 chunk 适配器另限 4 MiB（`MaxChunkMessageSize`），转发 V2 收尾时按所有者“超时、限制都去掉”的决定删除（CONTRACTS §112.16）。
 3. **解码器缓冲**：帧头里声明的长度在读取和分配之前先检查（包自己读 12 字节帧头，官方解码器不检查长度）；负载缓冲随实际收到的字节成倍增长，声明的长度本身不预留内存。一条消息用过超过 256 KiB 的缓冲，下一条消息前释放。
 4. **异常帧的输出**固定是 Anthropic 流错误的形状（`event: error`，`{"type":"error","error":{"type","message"}}`），类型为空时写 `upstream_error`。
 5. **签名会改写请求**：签名器把查询串改写成规范形式（先编码，再按键、按值排序，空格写成 `%20`），发出去的就是签的那一份；解析不了的查询串（`;` 分隔、坏的转义）直接报错，不会只签一部分。主机去掉协议的默认端口（https 的 `:443`、http 的 `:80`）后写回 `req.Host`，所以发出的 Host 头就是被签名的主机。设计只写了“主机取 `req.Host`”。
@@ -602,7 +604,7 @@ Vertex 和 Bedrock 首版没有 docker e2e：那需要一个在生产包里也�
 7. **时钟偏差的 `invalid_grant` 算暂时性错误**：400 `invalid_grant` 且 `error_description` 含 `reasonable timeframe` 或 `short-lived token` 时回 `TRANSIENT`（提示检查节点时钟），不是 `AUTH_REJECTED`；否则一个时钟不准的节点会把所有服务账号标成“密钥被拒绝”。
 8. 回答里没有 `expires_in` 时按 3600 秒算。响应被截断、没有 `access_token` 都是 `TRANSIENT`。
 9. **保存时重置令牌的条件**多一条：存着的令牌读不出过期时间也会被丢弃并写 `expires_at: 1`。服务账号、用户凭证账号保存时 `location` 留空会存成 `global`。
-10. **`externalServices`** 列了三项：`oauth2.googleapis.com`、`aiplatform.googleapis.com`、`googleapis.com`。设计没有列。
+10. **`externalServices`** 列了三项：`oauth2.googleapis.com`、`aiplatform.googleapis.com`、`googleapis.com`。设计没有列。（2026-11-18 转发 V2 收尾时删除：核心只在取回和 `SendAccountRequest` 时读 `externalServices`，这个插件两者都不用，令牌和上游请求都由核心发送。）
 11. 错误分类：除 API Key 类型以外的类型（包括未知类型）都按令牌账号处理，401 冷却 60 秒、不禁用；其余沿用 `gemini.Policy`（403 禁用，400 且 key 或区域无效禁用，429 冷却，408 / 5xx 换号不动账号）。
 
 ### 16.7 AWS Bedrock（第 9 节）
@@ -652,7 +654,7 @@ Vertex 和 Bedrock 首版没有 docker e2e：那需要一个在生产包里也�
    | `claude-haiku-4-5`、`claude-haiku-4-5-20251001` | `anthropic.claude-haiku-4-5-20251001-v1:0` |
 
    只对照了文档，没有用真实账号调过（第 12 节第 9 条）；2026-11-17 的核对结果见第 16 条。
-10. **`externalServices`**：`amazonaws.com`（核心匹配等于它或在它之下的主机；请求的主机是 `bedrock-runtime.<区域>.amazonaws.com`）。
+10. **`externalServices`**：`amazonaws.com`（核心匹配等于它或在它之下的主机；请求的主机是 `bedrock-runtime.<区域>.amazonaws.com`）。（2026-11-18 转发 V2 收尾时删除：核心只在取回和 `SendAccountRequest` 时读 `externalServices`，这个插件两者都不用，令牌和上游请求都由核心发送。）
 11. **openai 平台从插件里去掉了**（第 14 节第 4 条的决定）。没有账号类型声明 openai 平台，Bedrock 的 OpenAI 兼容接口（`/openai/v1`）完全不用；`BuildUpstreamRequest` 只接受 `anthropic.messages`。客户端用 OpenAI 协议（chat completions、responses）访问时，核心把请求转换成 Messages 请求，走同一条 InvokeModel 路。原因有两条：这条路依赖的行为没验证的最多（`/openai/v1` 上的 SigV4、`stream_options`、支持哪些模型，第 12 节第 2 条）；AWS 的模型卡片显示 Claude 模型在 bedrock-runtime 上根本不支持 Responses 和 Chat Completions 接口，这条路对 Claude 没有用。后果：Bedrock 账号没有 OpenAI 兼容的路由，Claude 以外的 Bedrock 模型这一版不支持。`response_stream` 只在流式请求上设置。
 12. 表单的“区域与模型”分组说明里写明了 Claude Code 的限制（第 12 节第 7 条），清单测试检查这段文字存在。
 13. **请求体顶层字段的处理**（`upstream.go` 的 `invokePatches`、`droppedFields`）：删 `model`、`stream`，设 `anthropic_version: bedrock-2023-05-31`，删 `metadata`、`provider`，再加第 6 条的 beta 处理。**`output_config`、`output_format` 特意保留**（旧版会删）：AWS 文档写明 InvokeModel 读 `output_config.format`（结构化输出）和 `output_config.effort`（<https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-adaptive-thinking.html>），`output_format` 是它已废弃的写法，插件不替客户端转换。插件仍然不做的（它只看得到清单声明的请求字段）：清理请求体深处的字段（工具定义里的 `custom`，`cache_control` 的 `scope` / `ttl`）；请求体需要某个 beta 而没有点名时替它补上（computer use、tool search）。
@@ -669,7 +671,7 @@ Vertex 和 Bedrock 首版没有 docker e2e：那需要一个在生产包里也�
 ### 16.8 模拟上游与测试
 
 1. 模拟上游（`deploy/mock-upstream/cloud.go`）新增路径：Azure 的 `/openai/v1/{chat/completions,responses,embeddings}`（v1 接口）和 `/openai/deployments/{部署}/{chat/completions,embeddings}`（经典接口）；Bedrock 的 `/model/{id}/invoke`、`/model/{id}/invoke-with-response-stream`；Vertex 的 `/v1/projects/{项目}/locations/{区域}/publishers/google/models/{模型}:{动作}`、`/v1/publishers/google/models/{模型}:{动作}`。`/openai/v1/*` 只是 Azure 的路径，模拟上游从来没有 Bedrock 的 `/openai/v1` 路径，去掉 Bedrock 的 openai 平台时这里没有删东西。Bedrock 路径上带 SigV4 的请求要用密钥 `mock-secret-<access key id>` 签名，模拟上游自己重算。上游 Key 的读取多了 `api-key` 头和 SigV4 `Authorization` 里的 access key id。
-2. `e2e/ac29_azure_test.go` 已写，没有执行过（第 12 节第 14 条）。Vertex、Bedrock 没有 docker e2e，与设计一致。
+2. `e2e/ac29_azure_test.go` 已在 e2e 栈上运行并通过（第 12 节第 14 条）。Vertex、Bedrock 没有 docker e2e，与设计一致。
 
 ### 16.9 SDK 新增的辅助（设计里没有）
 

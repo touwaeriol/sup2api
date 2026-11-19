@@ -45,7 +45,7 @@ func TestSweepKeepsPackageWhileCoordinatorMigrates(t *testing.T) {
 		"migrations/0002.sql": []byte(`CREATE TABLE IF NOT EXISTS b (id int);`),
 	})
 	registrytest.Install(t, db, m, data, map[string]string{"db.schema": "{}"}, "enabled")
-	schemas := dbschema.New(db, testutil.DSN(db), make([]byte, 32), false)
+	schemas := dbschema.New(db, testutil.DSN(db), nil)
 	t.Cleanup(func() { _ = schemas.Drop(context.Background(), key) })
 
 	c := newTestController(t, &stubRuntime{}, nil, t.TempDir())

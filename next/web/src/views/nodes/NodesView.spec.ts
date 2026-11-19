@@ -29,6 +29,15 @@ async function render() {
 const upgradeCalls = () => api.get.mock.calls.filter(([path]) => path === '/system/upgrades').length
 
 describe('nodes view', () => {
+  it('shows what the plugin sandbox of each node enforces', async () => {
+    const partial = { wrapped: true, landlock: true, landlock_abi: 2, active: ['fs'], missing: ['fs_truncate', 'tcp', 'scope', 'unix', 'udp'] }
+    api.list.mockResolvedValue({ items: [{ ...nodes[0], plugin_sandbox: partial }, nodes[1]] })
+    const w = await render()
+    const cells = w.findAll('[data-testid="node-sandbox"]')
+    expect(cells.map(c => c.text())).toEqual(['缺 5 层', '—'])
+    expect(cells[0].attributes('title')).toContain('路径型 unix socket（Linux 7.1）')
+  })
+
   it('counts gateway versions without the nodes that report none', async () => {
     const w = await render()
     expect(w.text()).toContain('核心 1 · 网关 1')

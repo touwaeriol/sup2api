@@ -98,7 +98,7 @@ const isOpen = (at: AccountType) => !!expanded.value[typeKey(at.plugin_key, at.t
             <SIcon name="chevron-down" class="inline h-3.5 w-3.5 transition-transform" :class="isOpen(at) ? 'rotate-180' : ''" />
           </SLink>
           <div v-if="isOpen(at)" class="mt-1.5" @click.stop>
-            <AccountTypeEndpoints :endpoints="at.endpoints" compact />
+            <AccountTypeEndpoints :endpoints="at.endpoints" :platforms="at.platforms.map((p) => p.id)" compact />
           </div>
         </div>
       </div>

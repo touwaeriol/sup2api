@@ -18,13 +18,17 @@ import (
 func (e *Env) scopePlugin(admin *Session) string {
 	e.T.Helper()
 	dp := e.NewDerivedPlugin(admin, "e2esc")
-	e.InstallVersion(admin, dp.Package(e, scopedGuardManifest), nil)
+	pkg := dp.Package(e, scopedGuardManifest)
+	pkg[statsPage] = []byte(`<!doctype html><title>stats</title>`)
+	pkg.Sign(e.T, dp.Signer)
+	e.InstallVersion(admin, pkg, nil)
 	return dp.Key
 }
 
 // scopedGuardManifest gives rules:read and stats:read the values a and b,
-// makes GET /rules name its value in ?set=, and adds a table page for the
-// stats:read menu (DerivedGuardPackage drops the native dashboard).
+// makes GET /rules name its value in ?set=, and adds an iframe page (the
+// package file statsPage) for the stats:read menu (DerivedGuardPackage drops
+// the native dashboard; declarative table pages are gone).
 func scopedGuardManifest(m map[string]any) {
 	values := map[string]any{"values": []any{
 		map[string]any{"key": "a", "label": map[string]any{"en": "Set A", "zh": "A 组"}},
@@ -44,9 +48,13 @@ func scopedGuardManifest(m map[string]any) {
 	}
 	title := map[string]any{"en": "Guard statistics", "zh": "拦截统计"}
 	ui := m["ui"].(map[string]any)
-	ui["pages"] = map[string]any{"stats": map[string]any{"type": "table", "title": title, "source": "GET /stats"}}
+	ui["pages"] = map[string]any{"stats": map[string]any{"type": "iframe", "title": title, "src": statsPage}}
+	m["hostPermissions"] = append(m["hostPermissions"].([]any), map[string]any{"id": "ui.iframe"})
 	ui["menus"] = []any{map[string]any{"id": "stats", "section": "security", "label": title, "icon": "shield", "page": "stats", "permission": "stats:read"}}
 }
+
+// statsPage is the iframe page of the stats:read menu.
+const statsPage = "ui/iframe/stats.html"
 
 func TestPluginScopeRouteE2E(t *testing.T) {
 	e := Setup(t)

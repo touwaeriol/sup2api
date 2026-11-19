@@ -2,7 +2,6 @@ package core
 
 import (
 	"context"
-	"encoding/json"
 
 	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
@@ -15,9 +14,29 @@ import (
 // Implementations apply per-plugin concurrency limits and call timeouts, and
 // return ErrPluginUnavailable when the plugin instance is down.
 
+// ClassifyPrefixBytes is how much of an upstream error body the failure
+// rules read: the prefix handed to ClassifyError, and the text the
+// administrator's failure policy and auto-disable keywords match.
+const ClassifyPrefixBytes = 4 << 10
+
+// ClassifyPrefix is body cut to ClassifyPrefixBytes.
+func ClassifyPrefix(body []byte) []byte {
+	if len(body) > ClassifyPrefixBytes {
+		return body[:ClassifyPrefixBytes]
+	}
+	return body
+}
+
+// PlatformPlugin is the PlatformService of a plugin declaring
+// platform.adapter.v1: Execute, the one path of a gateway request
+// (ExecutePlugin), Monitor (MonitorPlugin), and the calls below.
 type PlatformPlugin interface {
+	ExecutePlugin
+	MonitorPlugin
 	ValidateCredentials(ctx context.Context, in *pluginv1.ValidateCredentialsRequest) (*pluginv1.ValidateCredentialsResponse, error)
-	BuildUpstreamRequest(ctx context.Context, in *pluginv1.BuildUpstreamRequestRequest) (*pluginv1.BuildUpstreamRequestResponse, error)
+	// ClassifyError classifies one failed upstream attempt of a relay that
+	// did not wait (the host read the error). The error of a relay that
+	// waited is classified by the plugin in ExecuteResponse.classification.
 	ClassifyError(ctx context.Context, in *pluginv1.ClassifyErrorRequest) (*pluginv1.ClassifyErrorResponse, error)
 	BuildTestRequest(ctx context.Context, in *pluginv1.BuildTestRequestRequest) (*pluginv1.BuildTestRequestResponse, error)
 	// BuildModelsRequest is optional for plugins: a plugin without it answers
@@ -30,24 +49,6 @@ type PlatformPlugin interface {
 	// plugins: one without it answers gRPC Unimplemented, and the gateway
 	// turns any failure into 400 "model is required".
 	ResolveModel(ctx context.Context, in *pluginv1.ResolveModelRequest) (*pluginv1.ResolveModelResponse, error)
-	// ExtractUsage reads the token usage of a finished upstream response for
-	// endpoints whose usage rules declare usage.source "plugin" (CONTRACTS
-	// §25.3). Like ResolveModel it is called on the PlatformBinding.Client of
-	// the response's platform, but after the response has been forwarded in
-	// full, so it costs the client nothing. Optional for plugins: one without
-	// it answers gRPC Unimplemented, and the gateway then keeps what the
-	// declarative rules produced.
-	ExtractUsage(ctx context.Context, in *pluginv1.ExtractUsageRequest) (*pluginv1.UsageReport, error)
-	ParseTaskSubmission(ctx context.Context, in *pluginv1.ExtractUsageRequest) (*pluginv1.TaskSubmission, error)
-	// BuildReconcileRequest and ParseReconcileResponse check one pre-charged
-	// entry (CONTRACTS §25.4): the plugin describes the request and reads the
-	// answer, the core sends it through the account's proxy behind its SSRF
-	// guard. Called on the PlatformBinding.Client of the platform whose
-	// ExtractUsage returned the Reservation, from the offline reconcile loop.
-	// Optional for plugins: one without them answers gRPC Unimplemented, and
-	// its entries are retried until their deadline and then abandoned.
-	BuildReconcileRequest(ctx context.Context, in *pluginv1.BuildReconcileRequestRequest) (*pluginv1.BuildReconcileRequestResponse, error)
-	ParseReconcileResponse(ctx context.Context, in *pluginv1.ParseReconcileResponseRequest) (*pluginv1.ReconcileResult, error)
 	// QuotaQuery reads the subscription quota of one account (CONTRACTS
 	// §44): the plugin declaring the account type builds the request and
 	// parses the answer, the account module sends it through the account's
@@ -67,41 +68,16 @@ type PlatformPlugin interface {
 	// Unimplemented and nothing is refreshed.
 	BuildRefreshRequest(ctx context.Context, in *pluginv1.BuildRefreshRequestRequest) (*pluginv1.BuildRefreshRequestResponse, error)
 	ParseRefreshResponse(ctx context.Context, in *pluginv1.ParseRefreshResponseRequest) (*pluginv1.RefreshResult, error)
-}
-
-// DeclaredUpstream is implemented by the PlatformPlugin of an account type
-// declaring its upstream (manifest accountTypes[].upstream,
-// docs/UPSTREAM-DECLARATIVE.md §4): the core builds its requests from the
-// declaration, and the gateway takes from it the parts of sending around
-// BuildUpstreamRequest. A code plugin's client does not implement it.
-type DeclaredUpstream interface {
-	// PrepareBody is the declaration's part of the body before
-	// BuildUpstreamRequest: the filtered fields are removed, then the
-	// declared paramOverride runs.
-	PrepareBody(body []byte, in *ParamOverrideContext) (ParamOverrideResult, error)
-	// UpstreamURL is the URL of built once the plugin's patches (extend)
-	// changed the upstream model to model: the declaration's URL rendered
-	// again, so a model in the path follows the model really sent, or
-	// built's own URL when the plugin replaced it.
-	UpstreamURL(in *pluginv1.BuildUpstreamRequestRequest, built *pluginv1.BuildUpstreamRequestResponse, model string) (string, error)
-	// SplitHeaders separates built's headers into the declaration's and the
-	// plugin's (extend), which the gateway layers around the passthrough and
-	// the account's parameter override (§86.5).
-	SplitHeaders(in *pluginv1.BuildUpstreamRequestRequest, built *pluginv1.BuildUpstreamRequestResponse) (declared, plugin map[string]string)
-	// AuthHeader is the lower-case name of the header the declaration
-	// authenticates with (empty for query or no auth). The gateway writes
-	// built's value of it after every other header source.
-	AuthHeader() string
-}
-
-// ExecutionHTTP is the one-request network capability supplied by the current
-// offline execution. The closure binds the account, proxy, limits and lifetime.
-type ExecutionHTTP func(context.Context, *pluginv1.ExecutionHTTPRequest) (*pluginv1.ExecutionHTTPResponse, error)
-
-// PollPlugin is optional and selected only for platform.poll.v1. Runtime
-// adapters bind the callback to the exact process and discard it after Poll.
-type PollPlugin interface {
-	Poll(context.Context, *pluginv1.PollRequest, ExecutionHTTP) (*pluginv1.ReconcileResult, error)
+	// BalanceQuery reads the balance of one account (CONTRACTS §52): the
+	// plugin declaring the account type builds the requests and parses the
+	// answers, the account module checks every target against the upstream
+	// host rules (CheckPluginUpstream) and sends them through the account's
+	// proxy behind netguard without following redirects. Called on the
+	// AccountTypeBinding.Client, only for types declaring manifest balance.
+	// Optional for plugins: one without them answers gRPC Unimplemented and
+	// the type has no balance.
+	BuildBalanceRequest(ctx context.Context, in *pluginv1.BuildBalanceRequestRequest) (*pluginv1.BuildBalanceRequestResponse, error)
+	ParseBalanceResponse(ctx context.Context, in *pluginv1.ParseBalanceResponseRequest) (*pluginv1.ParseBalanceResponseResponse, error)
 }
 
 type HookPlugin interface {
@@ -115,6 +91,13 @@ type AppPlugin interface {
 
 type HTTPPlugin interface {
 	HandleHTTP(ctx context.Context, in *pluginv1.HTTPRequest) (*pluginv1.HTTPResponse, error)
+}
+
+// SettingsValidator is a plugin's check of its own settings before the core
+// stores them (PluginService.ValidateSettings, CONTRACTS §75.1). Optional for
+// plugins: one without it answers UNIMPLEMENTED, which means accepted.
+type SettingsValidator interface {
+	ValidateSettings(ctx context.Context, in *pluginv1.ValidateSettingsRequest) (*pluginv1.ValidateSettingsResponse, error)
 }
 
 // SchedulerPlugin is a plugin's part in scheduling. Plugins take no part in
@@ -178,15 +161,14 @@ type AccountTypeKey struct {
 }
 
 // AccountTypeBinding is one account type of an enabled plugin. Client is the
-// declaring plugin: it validates credentials, builds upstream requests and
-// classifies errors for accounts of this type.
+// declaring plugin, never nil: every account type is served by a plugin
+// process. It validates credentials, executes gateway requests (ExecutePlugin)
+// and classifies errors for accounts of this type.
 type AccountTypeBinding struct {
-	Plugin     PluginInfo
-	Type       manifest.AccountType
-	DeclIndex  int             // index in the plugin's manifest.AccountTypes (preserves declaration order)
-	FormSchema json.RawMessage // resolved from the package when form.mode=schema
-	FormUI     json.RawMessage
-	Client     PlatformPlugin
+	Plugin    PluginInfo
+	Type      manifest.AccountType
+	DeclIndex int // index in the plugin's manifest.AccountTypes (preserves declaration order)
+	Client    PlatformPlugin
 }
 
 // Key returns the account type key.
@@ -281,6 +263,9 @@ type Generation interface {
 	// plugin's runtime tasks (HostService.SyncTasks ...), which no manifest
 	// job describes.
 	JobRunner(pluginKey string) (AppPlugin, bool)
+	// SettingsValidator checks the settings of an enabled plugin before
+	// PUT /plugins/:key/settings stores them.
+	SettingsValidator(pluginKey string) (SettingsValidator, bool)
 	Subscriptions() []SubscriptionBinding
 	// ReadAsset reads a file from the active package of a plugin.
 	ReadAsset(pluginKey, path string) (data []byte, contentType string, err error)

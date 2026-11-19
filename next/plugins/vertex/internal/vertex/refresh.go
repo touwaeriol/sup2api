@@ -71,8 +71,6 @@ func (p *Plugin) ParseRefreshResponse(_ context.Context, in *pluginv1.ParseRefre
 		return transient("cannot reach the token endpoint / 无法连接令牌端点: " + in.GetTransportError()), nil
 	case st < 200 || st > 299:
 		return refusal(st, body), nil
-	case in.GetTruncated():
-		return transient("token response too large / 令牌响应过大"), nil
 	}
 	token := strings.TrimSpace(gjson.GetBytes(body, "access_token").String())
 	if token == "" {

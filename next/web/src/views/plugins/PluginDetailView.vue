@@ -12,7 +12,7 @@ import { useAuthStore } from '@/stores/auth'
 import { refreshShell } from '@/stores/app'
 import { consentPath } from './reviewCache'
 import RoleGrantsReview from './parts/RoleGrantsReview.vue'
-import { compareVersions, conflictLines, consoleSettings, isPendingConsent, shownStatus, tabOf, type PluginDetail, type PluginSettings } from './pluginUtil'
+import { compareVersions, conflictLines, consoleSettings, isPendingConsent, nativeSettingsPath, refusalText, shownStatus, tabOf, type PluginDetail, type PluginSettings } from './pluginUtil'
 import TrustBadge from './parts/TrustBadge.vue'
 import OverviewTab from './detail/OverviewTab.vue'
 import PermissionsTab from './detail/PermissionsTab.vue'
@@ -34,6 +34,8 @@ const auth = useAuthStore()
 const key = computed(() => String(route.params.key))
 const detail = ref<PluginDetail | null>(null)
 const settings = ref<PluginSettings | null>(null)
+/** The plugin page that edits the plugin's settings (§75.5): where ?tab=settings leads. */
+const settingsPage = ref<string | null>(null)
 const loading = ref(true)
 const loadError = ref('')
 const notFound = ref(false)
@@ -77,7 +79,7 @@ const tabs = computed<TabItem[]>(() => {
   ]
   if (auth.has(['plugin:egress:read', 'plugin:manage'])) list.push({ key: 'egress', label: t('plugins.detail.tabs.egress') })
   list.push({ key: 'resources', label: t('plugins.detail.tabs.resources') })
-  if (settings.value?.schema) list.push({ key: 'settings', label: t('plugins.detail.tabs.settings') })
+  if (settings.value) list.push({ key: 'settings', label: t('plugins.detail.tabs.settings') })
   if (auth.has('audit:read')) list.push({ key: 'audit', label: t('plugins.detail.tabs.audit') })
   return list
 })
@@ -106,8 +108,10 @@ async function loadSettings() {
   try {
     const s = await api.get<PluginSettings>(`/plugins/${encodeURIComponent(key.value)}/settings`)
     settings.value = consoleSettings(s)
+    settingsPage.value = nativeSettingsPath(key.value, s)
   } catch {
     settings.value = null
+    settingsPage.value = null
   }
 }
 
@@ -125,7 +129,9 @@ async function load() {
   }
   if (detail.value) {
     await loadSettings()
-    if (!tabs.value.some((x) => x.key === tab.value)) switchTab('overview')
+    // The plugins list links every plugin with settings here (has_settings).
+    if (tab.value === 'settings' && settingsPage.value) router.replace(settingsPage.value)
+    else if (!tabs.value.some((x) => x.key === tab.value)) switchTab('overview')
   }
 }
 
@@ -230,6 +236,7 @@ onMounted(load)
       </SPageHeader>
 
       <SHint v-if="detail.status_reason" tone="danger" class="-mt-3 mb-4">{{ detail.status_reason }}</SHint>
+      <SAlert v-if="detail.refusal" tone="danger" icon="x" class="mb-4" data-testid="plugin-refusal">{{ refusalText(t, detail.key, detail.refusal) }}</SAlert>
 
       <!-- exclusive resources this node's generation could not give the plugin (audit 2026-10-09 P2-2) -->
       <SAlert v-if="detail.resource_conflicts?.length" tone="danger" :title="t('plugins.conflicts.title')" class="mb-4" data-testid="plugin-conflicts">
@@ -280,7 +287,7 @@ onMounted(load)
         <EventsTab v-else-if="tab === 'events'" :detail="detail" />
         <EgressTab v-else-if="tab === 'egress'" :detail="detail" @changed="load" />
         <ResourcesTab v-else-if="tab === 'resources'" :detail="detail" @changed="load" />
-        <SettingsTab v-else-if="tab === 'settings' && settings" :plugin-key="detail.key" :settings="settings" @saved="loadSettings" />
+        <SettingsTab v-else-if="tab === 'settings' && settings" :plugin-key="detail.key" :settings="settings" />
         <div v-else-if="tab === 'audit'" class="space-y-3">
           <SHint>{{ t('plugins.detail.auditHint') }}</SHint>
           <AuditLogTable :query="{ target_type: 'plugin', target_id: detail.key }" hide-target />

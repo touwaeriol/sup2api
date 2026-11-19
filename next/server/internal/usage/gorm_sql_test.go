@@ -82,7 +82,7 @@ func TestSQLInsertUsageRow(t *testing.T) {
 		Tokens: core.UsageTokens{Input: 1200, Output: 800}, RateMultiplier: decimal.NewFromInt(1),
 		Price: &core.PriceRule{ID: 9, Mode: "expression", ExprHash: "hash"}, CreatedAt: snapshotTime}
 	second := *rec
-	second.RequestID, second.AccountID, second.Price = "req-2", nil, nil
+	second.RequestID, second.AccountID, second.Price, second.Billable = "req-2", nil, nil, false
 	t.Run("row", func(t *testing.T) {
 		gormtest.AssertRun(t, func(db *gorm.DB) error {
 			_, err := insertUsageRows(db, []*core.UsageRecord{rec})

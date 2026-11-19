@@ -22,27 +22,23 @@ func randKey() string {
 	return "ds" + hex.EncodeToString(b)
 }
 
-func TestSchemaRoleMigrateDSNDrop(t *testing.T) {
+// The schema belongs to the core's user, the migrations run as it, and the
+// DSN logs in as it with the plugin's schema as search_path.
+func TestSchemaMigrateDSNDrop(t *testing.T) {
 	db := testutil.DB(t)
 	ctx := context.Background()
 	key := randKey()
 	if _, err := db.SQL.ExecContext(ctx, `INSERT INTO plugins (key, name, status) VALUES ($1, '{"en":"x"}', 'installed')`, key); err != nil {
 		t.Fatal(err)
 	}
-	mk := make([]byte, 32)
-	_, _ = rand.Read(mk)
-	m := dbschema.New(db, testutil.DSN(db), mk, true)
+	m := dbschema.New(db, testutil.DSN(db), nil)
 	t.Cleanup(func() { _ = m.Drop(context.Background(), key) })
 
-	st, err := m.Ensure(ctx, key)
-	if err != nil {
+	if err := m.Ensure(ctx, key); err != nil {
 		t.Fatal(err)
 	}
-	if !st.RoleIsolated || st.Role != "plg_"+key || st.Schema != "plg_"+key {
-		t.Fatalf("status = %+v", st)
-	}
 	// Idempotent.
-	if _, err := m.Ensure(ctx, key); err != nil {
+	if err := m.Ensure(ctx, key); err != nil {
 		t.Fatal(err)
 	}
 
@@ -63,53 +59,43 @@ func TestSchemaRoleMigrateDSNDrop(t *testing.T) {
 	if pending, _ := m.Pending(ctx, key, []string{"0001_init.sql", "0002.sql"}); !pending {
 		t.Fatal("0002 should be pending")
 	}
-	var owner string
-	if err := db.SQL.QueryRowContext(ctx, `SELECT tableowner FROM pg_tables WHERE schemaname = $1 AND tablename = 'items'`, "plg_"+key).Scan(&owner); err != nil {
+	var owner, schemaOwner, core string
+	if err := db.SQL.QueryRowContext(ctx, `SELECT t.tableowner, n.nspowner::regrole::text, current_user FROM pg_tables t
+		JOIN pg_namespace n ON n.nspname = t.schemaname WHERE t.schemaname = $1 AND t.tablename = 'items'`, "plg_"+key).Scan(&owner, &schemaOwner, &core); err != nil {
 		t.Fatal(err)
 	}
-	if owner != "plg_"+key {
-		t.Fatalf("items owner = %s", owner)
+	if owner != core || schemaOwner != core {
+		t.Fatalf("items owner = %s, schema owner = %s, core user = %s", owner, schemaOwner, core)
 	}
 	// A script changed after it was applied runs again (scripts are
-	// idempotent) and its record takes the new checksum, through the
-	// definer function of the isolated role.
+	// idempotent) and its record takes the new checksum.
 	fsys["0001_init.sql"] = &fstest.MapFile{Data: []byte(`CREATE TABLE IF NOT EXISTS items (id int PRIMARY KEY);
 		INSERT INTO items VALUES (1), (2) ON CONFLICT DO NOTHING;`)}
 	again, err := m.Migrate(ctx, key, fsys)
 	if err != nil || len(again) != 1 || again[0] != "0001_init.sql" {
 		t.Fatalf("changed script: %v %v", again, err)
 	}
-	var rows int
-	if err := db.SQL.QueryRowContext(ctx, `SELECT count(*) FROM `+store.QuoteIdent("plg_"+key, "items")).Scan(&rows); err != nil || rows != 2 {
-		t.Fatalf("items after the re-run = %d %v", rows, err)
-	}
 	if again, err := m.Migrate(ctx, key, fsys); err != nil || len(again) != 0 {
 		t.Fatalf("the new checksum was not recorded: %v %v", again, err)
 	}
 
-	// The restricted DSN logs in as the plugin role, sees its schema, not core tables.
-	dsn, st2, err := m.DSN(ctx, key)
-	if err != nil || !st2.RoleIsolated {
-		t.Fatalf("dsn: %v %+v", err, st2)
+	// The DSN logs in as the core's user, in the plugin's schema.
+	dsn, schema, err := m.DSN(ctx, key, false)
+	if err != nil || schema != "plg_"+key {
+		t.Fatalf("dsn: %v %s", err, schema)
 	}
 	conn, done, err := testutil.Connect(ctx, dsn)
 	if err != nil {
-		t.Fatalf("connect as plugin role: %v", err)
-	}
-	defer done()
-	var who string
-	var n int
-	if err := conn.QueryRowContext(ctx, `SELECT current_user, (SELECT count(*) FROM items)`).Scan(&who, &n); err != nil {
 		t.Fatal(err)
 	}
-	if who != "plg_"+key || n != 2 {
-		t.Fatalf("who=%s n=%d", who, n)
+	defer done()
+	var who, sp string
+	var n int
+	if err := conn.QueryRowContext(ctx, `SELECT current_user, current_setting('search_path'), (SELECT count(*) FROM items)`).Scan(&who, &sp, &n); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := conn.ExecContext(ctx, `SELECT count(*) FROM public.users`); err == nil || !strings.Contains(err.Error(), "permission denied") {
-		t.Fatalf("plugin role reads core tables: %v", err)
-	}
-	if _, err := conn.ExecContext(ctx, `CREATE TABLE public.evil (id int)`); err == nil {
-		t.Fatal("plugin role can create tables in public")
+	if who != core || sp != "plg_"+key || n != 2 {
+		t.Fatalf("who=%s search_path=%s n=%d", who, sp, n)
 	}
 	done()
 
@@ -118,84 +104,17 @@ func TestSchemaRoleMigrateDSNDrop(t *testing.T) {
 	}
 	var exists bool
 	_ = db.SQL.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = $1)
-		OR EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)
 		OR EXISTS (SELECT 1 FROM plugin_migrations WHERE plugin_key = $2)`, "plg_"+key, key).Scan(&exists)
 	if exists {
-		t.Fatal("schema, role or migration records left after Drop")
+		t.Fatal("schema or migration records left after Drop")
 	}
-}
-
-func TestSchemaWithoutRoleIsolation(t *testing.T) {
-	db := testutil.DB(t)
-	ctx := context.Background()
-	key := randKey()
-	if _, err := db.SQL.ExecContext(ctx, `INSERT INTO plugins (key, name, status) VALUES ($1, '{"en":"x"}', 'installed')`, key); err != nil {
+	// Ensure after Drop creates the schema again (the cache was reset).
+	if err := m.Ensure(ctx, key); err != nil {
 		t.Fatal(err)
 	}
-	m := dbschema.New(db, testutil.DSN(db), make([]byte, 32), false)
-	t.Cleanup(func() { _ = m.Drop(context.Background(), key) })
-	if _, err := m.Migrate(ctx, key, fstest.MapFS{"0001.sql": {Data: []byte(`CREATE TABLE t (id int);`)}}); err != nil {
-		t.Fatal(err)
-	}
-	dsn, st, err := m.DSN(ctx, key)
-	if err != nil || st.RoleIsolated {
-		t.Fatalf("%v %+v", err, st)
-	}
-	conn, done, err := testutil.Connect(ctx, dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer done()
-	var sp string
-	if err := conn.QueryRowContext(ctx, `SHOW search_path`).Scan(&sp); err != nil {
-		t.Fatal(err)
-	}
-	if sp != "plg_"+key {
-		t.Fatalf("search_path = %q", sp)
-	}
-	if _, err := conn.ExecContext(ctx, `SELECT * FROM t`); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// A plugin migration must not escape its role (RESET ROLE was the old hole)
-// nor record migrations for another plugin.
-func TestMigrationCannotEscalate(t *testing.T) {
-	db := testutil.DB(t)
-	ctx := context.Background()
-	key, other := randKey(), randKey()
-	for _, k := range []string{key, other} {
-		if _, err := db.SQL.ExecContext(ctx, `INSERT INTO plugins (key, name, status) VALUES ($1, '{"en":"x"}', 'installed')`, k); err != nil {
-			t.Fatal(err)
-		}
-	}
-	mk := make([]byte, 32)
-	_, _ = rand.Read(mk)
-	m := dbschema.New(db, testutil.DSN(db), mk, true)
-	t.Cleanup(func() { _ = m.Drop(context.Background(), key) })
-
-	cases := map[string]string{
-		"reset_role":   `RESET ROLE; CREATE TABLE public.escalated (id int);`,
-		"core_write":   `UPDATE public.users SET status = 'disabled';`,
-		"other_record": `SELECT public.plugin_migration_record('` + other + `', 'x.sql', 'x');`,
-		"direct_log":   `INSERT INTO public.plugin_migrations (plugin_key, migration_id, checksum) VALUES ('` + other + `', 'x.sql', 'x');`,
-	}
-	for name, sql := range cases {
-		_, err := m.Migrate(ctx, key, fstest.MapFS{"0001_" + name + ".sql": {Data: []byte(sql)}})
-		if err == nil {
-			t.Fatalf("%s: migration succeeded", name)
-		}
-	}
-	var n int
-	if err := db.SQL.QueryRowContext(ctx, `SELECT count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename = 'escalated'`).Scan(&n); err != nil || n != 0 {
-		t.Fatalf("escalated table exists: n=%d err=%v", n, err)
-	}
-	if err := db.SQL.QueryRowContext(ctx, `SELECT count(*) FROM plugin_migrations WHERE plugin_key = $1`, other).Scan(&n); err != nil || n != 0 {
-		t.Fatalf("records for other plugin: n=%d err=%v", n, err)
-	}
-	// A normal migration still works and is recorded under its own key.
-	if applied, err := m.Migrate(ctx, key, fstest.MapFS{"0001_ok.sql": {Data: []byte(`CREATE TABLE ok (id int);`)}}); err != nil || len(applied) != 1 {
-		t.Fatalf("ok migration: %v %v", applied, err)
+	_ = db.SQL.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = $1)`, "plg_"+key).Scan(&exists)
+	if !exists {
+		t.Fatal("schema not recreated after Drop")
 	}
 }
 

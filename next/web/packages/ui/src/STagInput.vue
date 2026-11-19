@@ -16,7 +16,7 @@ const props = withDefaults(
 )
 const emit = defineEmits<{ (e: 'update:modelValue', v: string[]): void }>()
 const t = useUiT()
-const { id, a11y, invalid, size } = useFieldControl(props)
+const { id, a11y, invalid, size, blur } = useFieldControl(props)
 const draft = ref('')
 const box = ref<HTMLInputElement>()
 
@@ -97,7 +97,7 @@ function onKey(e: KeyboardEvent) {
       v-bind="a11y"
       @keydown="onKey"
       @paste="onPaste"
-      @blur="add"
+      @blur="add(), blur()"
     />
   </div>
 </template>

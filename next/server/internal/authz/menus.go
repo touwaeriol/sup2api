@@ -81,7 +81,7 @@ var coreMenus = []coreMenuSection{
 	}},
 	// No core items: request guards and moderation are plugins and join it.
 	{"security", lt("Security", "安全"), nil},
-	// The site-wide balance ledger; plugins (growth, payment) join the section.
+	// The site-wide balance ledger; plugins may join the section.
 	{"finance", lt("Finance", "财务"), []coreMenuItem{
 		{"ledger", lt("Balance ledger", "余额流水"), "balance", "/ledger", []string{"GET /ledger"}},
 	}},

@@ -11,11 +11,11 @@
 // what it resolves for a request is the initial header state of the
 // parameter override's run (Context.InitialHeaders).
 //
-// It lives in the SDK, not in the core, because the same format is also a
-// manifest field (accountTypes[].upstream.paramOverride, see sdk/upstream):
-// manifest/check validates it wherever a manifest is checked - the installing
-// host, the packaging CLI, a plugin's own tests - with the parser the core
-// runs, so a manifest that passes there never fails to compile in the core.
+// It lives in the SDK, not in the core, because a manifest carries the same
+// format as the value of a param_override control: manifest/check checks it
+// wherever a manifest is checked - the installing host, the packaging CLI, a
+// plugin's own tests - with the parser the core runs, so a manifest that
+// passes there never fails to compile in the core.
 package paramoverride
 
 import (

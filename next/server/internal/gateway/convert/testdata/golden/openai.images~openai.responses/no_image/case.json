@@ -1,0 +1,8 @@
+{
+  "options": {
+    "model": "gpt-image-2",
+    "stream": false,
+    "adapt_model": "gpt-6-luna"
+  },
+  "note": "the driving model answered with text only: the upstream succeeded, so the client gets no images (empty data, no completed event) and the message is a response loss"
+}

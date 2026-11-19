@@ -16,20 +16,12 @@ func ParseRouteRef(ref, defaultMethod string) (method, path string, ok bool) {
 	return manifest.ParseRouteRef(ref, defaultMethod)
 }
 
-// routeRef checks one route reference (a page's source or submit, an account
-// action's route) and returns the declared route it names, or nil after
-// recording the error.
-//
-// Until now nothing checked this. A table page whose source did not parse, or
-// named a route that does not exist, rendered an empty table with no error:
-// the console's parseRouteRef returns null and load() returns, and a form page
-// whose submit is missing or unparsable has a Save button that does nothing at
-// all. Both are exactly the "declared and nobody honours it" shape - the page
-// is not visibly broken, it looks like a page with no rows.
+// routeRef checks one route reference (an account action's route) and
+// returns the declared route it names, or nil after recording the error.
 //
 // The route is matched by manifest.RouteSignature, the same signature
 // routes() uses to find duplicates, so "/assets/:id" in routes and
-// "/assets/:asset" in a page reference are the same route (gin binds by
+// "/assets/:asset" in a reference are the same route (gin binds by
 // position, not by name).
 func (v *validator) routeRef(field, ref, defaultMethod string) *manifest.Route {
 	method, path, ok := manifest.ParseRouteRef(ref, defaultMethod)
@@ -46,62 +38,6 @@ func (v *validator) routeRef(field, ref, defaultMethod string) *manifest.Route {
 	}
 	v.add(field, "unknown_route", "route %s %s is not declared in routes", method, path)
 	return nil
-}
-
-// searchParamRe is what a declared search parameter name may look like: the
-// same grammar as a gateway endpoint's request.queryParams (§26.6), because it
-// is the same thing - a query key a client types and a plugin reads.
-var searchParamRe = queryParamRe
-
-// tableQueryParams are the query parameters the host's table page sends on
-// every request by itself (DeclarativeTable). A search parameter may not be
-// one of them: the search box would then overwrite the page number on every
-// keystroke, and it would look like a search that silently resets nothing.
-var tableQueryParams = []string{"page", "page_size"}
-
-// pageSearch validates Page.Search, the declaration that makes the host render
-// a search box (CONTRACTS: manifest.Page.search).
-//
-// There is one name, not a list, so there is nothing to de-duplicate here -
-// see the field's own comment for why a list would be the wrong shape while
-// the host has exactly one text box to draw.
-//
-// The name is compared to the host's own parameters case-insensitively even
-// though the host sends them lower-case and plugins read them exactly. "Page"
-// would not in fact collide today; accepting it would make the rule depend on
-// the case a plugin author happened to type, and on pluginsdk.Query staying
-// case-sensitive forever. The same reasoning is already settled for
-// request.queryParams vs auth.query in §26.6.
-func (v *validator) pageSearch(field string, pg manifest.Page) {
-	if pg.Search == "" {
-		return
-	}
-	// Only a table page has a search box. On a form, iframe or native page the
-	// declaration would be read by nobody, which is the failure this field was
-	// introduced to stop rather than reproduce.
-	if pg.Type != "table" {
-		v.add(field, "unsupported", "search is only honoured on table pages (this page is %q)", pg.Type)
-		return
-	}
-	if !searchParamRe.MatchString(pg.Search) {
-		v.add(field, "invalid_format", "search parameter name %q must match %s", pg.Search, searchParamRe.String())
-		return
-	}
-	for _, p := range tableQueryParams {
-		if strings.EqualFold(pg.Search, p) {
-			v.add(field, "reserved_param",
-				"search parameter %q is sent by the table itself (%s); the search box would overwrite it",
-				pg.Search, strings.Join(tableQueryParams, ", "))
-			return
-		}
-	}
-	// Declaring a search parameter says "the route in source honours it", so
-	// without a source the declaration cannot mean anything. source is already
-	// required for table pages; this keeps the two from being reported as
-	// unrelated problems.
-	if pg.Source == "" {
-		v.add(field, "missing_source", "search needs source: it names a query parameter of that route")
-	}
 }
 
 // menuIcon checks that a menu names an icon the console can actually draw.
@@ -218,27 +154,8 @@ func (v *validator) uiPages(u *manifest.UI) {
 			v.add(f, "invalid_format", "page id %q is invalid", id)
 		}
 		switch pg.Type {
-		case "table":
-			if pg.Source == "" {
-				v.add(f+".source", "required", "table pages require source")
-			} else {
-				v.routeRef(f+".source", pg.Source, "GET")
-			}
-		case "form":
-			v.needFile(f+".schema", pg.Schema)
-			if pg.Source != "" {
-				// Optional on a form: it pre-fills the fields.
-				v.routeRef(f+".source", pg.Source, "GET")
-			}
-			// Without submit the console's Save button does nothing and says
-			// nothing (DeclarativeForm returns early when the reference does
-			// not parse), so a form page without it is a page that cannot be
-			// used, not a read-only one.
-			if pg.Submit == "" {
-				v.add(f+".submit", "required", "form pages require submit (the route the form posts to)")
-			} else {
-				v.routeRef(f+".submit", pg.Submit, "POST")
-			}
+		case "table", "form":
+			v.add(f+".type", "unsupported", "page type %s is no longer supported: write the page as a native component (DESIGN-2026-11-19-PLUGIN-UI-CODE-ONLY)", pg.Type)
 		case "iframe":
 			v.needPerm(f, "ui.iframe", "iframe pages")
 			v.needFile(f+".src", pg.Src)
@@ -251,10 +168,8 @@ func (v *validator) uiPages(u *manifest.UI) {
 				v.add(f, "missing_native_ui", "native pages require ui.native")
 			}
 		default:
-			v.add(f+".type", "invalid", "page type must be table, form, iframe or native")
+			v.add(f+".type", "invalid", "page type must be iframe or native")
 		}
-		v.pageSearch(f+".search", pg)
-		v.pageCreate(f+".create", u, pg)
 		v.pageNav(f+".nav", pg)
 	}
 }
@@ -264,7 +179,7 @@ func (v *validator) uiPages(u *manifest.UI) {
 var navKeyRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
 
 // pageNav validates a page's sub-navigation (UI 3.14). Only a native page
-// can switch sections by ?tab=: a table, form or iframe page would draw
+// can switch sections by ?tab=: an iframe page would draw
 // sidebar entries that all show the same thing.
 func (v *validator) pageNav(f string, pg manifest.Page) {
 	if pg.Nav == nil {
@@ -318,26 +233,6 @@ func (v *validator) pageNav(f string, pg manifest.Page) {
 				v.add(itf+".corePermission", "invalid", "corePermission must not be blank")
 			}
 		}
-	}
-}
-
-// pageCreate validates a table page's "New" link: it must name a form page
-// of the same plugin and, when given, a declared permission.
-func (v *validator) pageCreate(f string, u *manifest.UI, pg manifest.Page) {
-	if pg.Create == nil {
-		return
-	}
-	if pg.Type != "table" {
-		v.add(f, "invalid", "only table pages can link a create page")
-		return
-	}
-	if target, ok := u.Pages[pg.Create.Page]; !ok {
-		v.add(f+".page", "unknown", "page %q is not declared in ui.pages", pg.Create.Page)
-	} else if target.Type != "form" {
-		v.add(f+".page", "invalid", "page %q must be a form page", pg.Create.Page)
-	}
-	if pg.Create.Permission != "" && !v.userPerm(pg.Create.Permission) {
-		v.add(f+".permission", "unknown", "permission %q is not declared in userPermissions", pg.Create.Permission)
 	}
 }
 

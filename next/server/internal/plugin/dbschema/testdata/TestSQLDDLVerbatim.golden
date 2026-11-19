@@ -1,3 +1,0 @@
--- sql
-COMMENT ON ROLE "plg_demo" IS 'database=a?b@c d; it''s'
--- vars

@@ -232,3 +232,14 @@ describe('known partial usage in failed request details', () => {
     }
   })
 })
+
+describe('unreported execution', () => {
+  const unreported = { ...row, status_code: 200, error_type: 'usage_unreported', billing_status: 'free', billing_detail: {},
+    error_message: 'plugin returned no usage' } as unknown as UsageRow
+
+  it('says the plugin reported no usage, so the request was not billed (design §8.5)', () => {
+    const wrapper = render(unreported)
+    expect(wrapper.get('[data-testid="usage-unreported-hint"]').text()).toBe('插件没有返回这次请求的用量（或选用了核心的读数而读数为空），因此未计费。')
+    expect(render({ ...unreported, error_type: 'upstream_error' } as UsageRow).find('[data-testid="usage-unreported-hint"]').exists()).toBe(false)
+  })
+})

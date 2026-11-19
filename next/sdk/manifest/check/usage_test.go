@@ -202,6 +202,19 @@ func TestUsageRules(t *testing.T) {
 	}
 }
 
+// The image token fields are standard fields: a rule may map them, and a fact
+// may not take their names.
+func TestUsageImageTokenFields(t *testing.T) {
+	p := validPlatform()
+	p.Usage.JSON.Map[manifest.UsageImageInputTokens] = "usage.input_tokens_details.image_tokens"
+	p.Usage.SSE[0].Map[manifest.UsageImageOutputTokens] = "usage.output_tokens"
+	require.Empty(t, platformCodes(p))
+
+	p = validPlatform()
+	p.Usage.Facts[manifest.UsageImageOutputTokens] = manifest.UsageFact{Type: "number", Path: "usage.n"}
+	require.Equal(t, "reserved", platformCodes(p)["usage.facts.image_output_tokens"])
+}
+
 // TestStreamingEndpointNeedsSSERules pins the shape that silently swallows
 // usage: response.stream declared, billing not "free", and no non-empty sse
 // rule in the usage rules that are actually in effect for the endpoint.
@@ -284,15 +297,14 @@ func TestAccountTypeUsageOverride(t *testing.T) {
 	m.Capabilities = []manifest.Capability{{ID: manifest.CapPlatformAdapter}}
 	m.HostPermissions = []manifest.HostPermission{
 		{ID: "gateway.endpoint"}, {ID: "platform.register"},
-		{ID: "accounts.credentials", Scope: map[string]any{"types": "own"}},
 	}
 	m.Platforms = []manifest.Platform{validPlatform()}
 	m.AccountTypes = []manifest.AccountType{{
 		ID: "apikey", Label: manifest.LocalizedText{"en": "Key"},
-		Form:      manifest.Form{Mode: "schema", Schema: "forms/k.json"},
+		Form:      keyForm(m),
 		Platforms: []manifest.AccountPlatform{{Platform: "video", Usage: map[string]manifest.UsageRules{"video.gen": {}}}},
 	}}
-	files := map[string][]byte{"forms/k.json": []byte(`{}`)}
+	files := map[string][]byte{}
 	if err := Validate(m, files, ValidateOptions{Tooling: true}); err != nil {
 		t.Fatalf("valid override rejected: %v", codes(err))
 	}
@@ -335,17 +347,16 @@ func TestAccountTypeDefaultModels(t *testing.T) {
 	m.Capabilities = []manifest.Capability{{ID: manifest.CapPlatformAdapter}}
 	m.HostPermissions = []manifest.HostPermission{
 		{ID: "gateway.endpoint"}, {ID: "platform.register"},
-		{ID: "accounts.credentials", Scope: map[string]any{"types": "own"}},
 	}
 	m.Platforms = []manifest.Platform{validPlatform()}
 	m.AccountTypes = []manifest.AccountType{{
 		ID: "apikey", Label: manifest.LocalizedText{"en": "Key"},
-		Form:                manifest.Form{Mode: "schema", Schema: "forms/k.json"},
+		Form:                keyForm(m),
 		Platforms:           []manifest.AccountPlatform{{Platform: "video"}},
 		DefaultModels:       []string{"video-2", "video-2-260101"},
 		DefaultModelMapping: map[string]string{"video-2": "video-2-260101"},
 	}}
-	files := map[string][]byte{"forms/k.json": []byte(`{}`)}
+	files := map[string][]byte{}
 	if err := Validate(m, files, ValidateOptions{Tooling: true}); err != nil {
 		t.Fatalf("valid defaults rejected: %v", codes(err))
 	}
@@ -394,18 +405,17 @@ func TestAccountTypeDefaultLimits(t *testing.T) {
 	m.Capabilities = []manifest.Capability{{ID: manifest.CapPlatformAdapter}}
 	m.HostPermissions = []manifest.HostPermission{
 		{ID: "gateway.endpoint"}, {ID: "platform.register"},
-		{ID: "accounts.credentials", Scope: map[string]any{"types": "own"}},
 	}
 	m.Platforms = []manifest.Platform{validPlatform()}
 	prio, weight, rpm, spm := 5, 20, 60, 3
 	m.AccountTypes = []manifest.AccountType{{
 		ID: "apikey", Label: manifest.LocalizedText{"en": "Key"},
-		Form:      manifest.Form{Mode: "schema", Schema: "forms/k.json"},
+		Form:      keyForm(m),
 		Platforms: []manifest.AccountPlatform{{Platform: "video"}},
 		DefaultLimits: &manifest.AccountDefaultLimits{Priority: &prio, Weight: &weight, RPMLimit: &rpm, SPMLimit: &spm,
 			ModelLimits: []manifest.DefaultModelLimit{{Models: []string{"video-2", "video-3"}, MaxConcurrency: 2, SPMLimit: 1}}},
 	}}
-	files := map[string][]byte{"forms/k.json": []byte(`{}`)}
+	files := map[string][]byte{}
 	if err := Validate(m, files, ValidateOptions{Tooling: true}); err != nil {
 		t.Fatalf("valid default limits rejected: %v", codes(err))
 	}

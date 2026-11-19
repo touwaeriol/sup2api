@@ -122,6 +122,12 @@ func fromCore(e *core.Error, recordType string) *gwError {
 // retry, unlike "no available account", which is a passing shortage.
 var errEndpointNotServed = fromCore(core.ErrNotFound.WithMessage("no account in this group serves this endpoint"), errTypeNoAccount)
 
+// errProtocolNotServed: every account offered for the request is closed to
+// it by its protocol binding (protocolNotServed): none serves the model on
+// this endpoint's protocol, or converts it from that protocol. A 404 for the
+// same reason as errEndpointNotServed.
+var errProtocolNotServed = fromCore(core.ErrNotFound.WithMessage("no account in this group serves this model on this endpoint"), errTypeNoAccount)
+
 // statusOverloaded is Anthropic's "overloaded" status.
 const statusOverloaded = 529
 

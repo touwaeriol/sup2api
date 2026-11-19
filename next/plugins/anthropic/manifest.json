@@ -3,15 +3,16 @@
   "key": "anthropic",
   "name": { "en": "Anthropic", "zh": "Anthropic" },
   "description": {
-    "en": "Anthropic API key account type and a model catalog. The anthropic platform and its endpoints are built into the core; model prices are set by administrators in the core.",
-    "zh": "Anthropic API Key 账号类型与模型目录（anthropic 平台及其端点由核心内置；模型价格由管理员在核心中配置）。"
+    "en": "Anthropic API key account type and a model catalog. The anthropic platform and its endpoints are built into the core; the plugin builds the upstream requests of its accounts and the core sends them. Model prices are set by administrators in the core.",
+    "zh": "Anthropic API Key 账号类型与模型目录（anthropic 平台及其端点由核心内置；插件构造本类型账号的上游请求，由核心发送；模型价格由管理员在核心中配置）。"
   },
-  "version": "0.3.4",
+  "version": "0.4.0",
   "publisher": "sub2api",
   "icon": "assets/anthropic.svg",
   "runtime": "grpc",
   "entry": { "grpc": { "binaries": "runtimes/{os}-{arch}/plugin" } },
-  "hostCompat": ">=0.1.290 <0.2.0",
+  "hostCompat": ">=0.1.304 <0.2.0",
+  "hostUICompat": "^4.0",
 
   "capabilities": [
     { "id": "platform.adapter.v1" },
@@ -26,15 +27,12 @@
         "en": "An Anthropic Console API key, or a key for an Anthropic-compatible endpoint (set Base URL).",
         "zh": "Anthropic 控制台的 API Key，或 Anthropic 兼容端点的 Key（需填写 Base URL）。"
       },
-      "form": {
-        "mode": "schema",
-        "schema": "forms/apikey.schema.json",
-        "uiSchema": "forms/apikey.ui.json"
-      },
+      "form": { "mode": "native", "component": "AnthropicKeyForm" },
       "sensitiveFields": ["api_key"],
       "settingsFields": ["base_url"],
+      "upstreamFields": ["base_url"],
       "guardedSettings": [
-        { "field": "base_url", "allowed": ["https://api.anthropic.com"] }
+        { "field": "base_url", "allowed": ["https://api.anthropic.com"], "versions": ["/v1"] }
       ],
       "defaultModels": [
         "claude-fable-5-2",
@@ -59,8 +57,7 @@
       ],
       "platforms": [
         { "platform": "anthropic" }
-      ],
-      "upstream": { "preset": "anthropic", "filterFields": [] }
+      ]
     }
   ],
 
@@ -79,6 +76,10 @@
     { "method": "GET", "path": "/models", "scope": "admin", "permission": "model_catalog:read" }
   ],
 
+  "ui": {
+    "native": { "entry": "ui/native/entry.js" }
+  },
+
   "resources": { "memoryMB": 64, "cpu": 0.25, "maxThreads": 64, "maxOpenFiles": 256 },
 
   "hostPermissions": [
@@ -89,7 +90,9 @@
     { "id": "routes.admin",
       "reason": { "en": "Serve the model catalog over the admin API", "zh": "通过管理接口提供模型目录" } },
     { "id": "kv",
-      "reason": { "en": "Cache small runtime state", "zh": "缓存少量运行时状态" } }
+      "reason": { "en": "Cache small runtime state", "zh": "缓存少量运行时状态" } },
+    { "id": "ui.native",
+      "reason": { "en": "The API key account form (AnthropicKeyForm)", "zh": "API Key 账号表单（AnthropicKeyForm）" } }
   ],
 
   "externalServices": ["api.anthropic.com"]

@@ -18,7 +18,6 @@ import (
 	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest/check"
-	"github.com/Sub2API-Devs/sup2api/next/sdk/pluginsdk"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/pluginsdk/pluginsdktest"
 )
 
@@ -109,7 +108,7 @@ func TestRouteAccounts(t *testing.T) {
 
 // TestManifestServes starts the plugin with its embedded manifest.
 func TestManifestServes(t *testing.T) {
-	h := pluginsdktest.Start(t, dynweight.New(), pluginsdktest.Options{SDK: []pluginsdk.Option{pluginsdk.WithManifest(manifestJSON)}})
+	h := pluginsdktest.Start(t, dynweight.New(), pluginsdktest.Options{Manifest: manifestJSON})
 	for _, c := range []string{manifest.CapGatewayObserve, manifest.CapSchedulerRank, manifest.CapAppJobs, manifest.CapAppEvents, manifest.CapHTTPRoutes} {
 		if !slices.Contains(h.Info.GetCapabilities(), c) {
 			t.Errorf("capability %s missing from %v", c, h.Info.GetCapabilities())

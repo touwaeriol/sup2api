@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -11,6 +12,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/testutil"
 )
 
@@ -49,7 +51,8 @@ func TestRegistryHeartbeatAndLiveNodes(t *testing.T) {
 	ctx := context.Background()
 	mr, rdb := newRedis(t)
 	c := newClock()
-	a := newReg(rdb, c, "node-a", "boot-a")
+	sandbox := &core.PluginSandboxStatus{Wrapped: true, Landlock: true, ABI: 6, Active: []string{"fs", "scope"}, Missing: []string{"unix"}}
+	a := NewRegistry(rdb, nil, RegistryOptions{NodeID: "node-a", BootID: "boot-a", Addr: "node-a:8080", HostVersion: "0.1.0", Now: c.Now, PluginSandbox: sandbox})
 	b := newReg(rdb, c, "node-b", "boot-b")
 	if a.NodeID() != "node-a" || a.BootID() != "boot-a" {
 		t.Fatal("identity")
@@ -92,6 +95,11 @@ func TestRegistryHeartbeatAndLiveNodes(t *testing.T) {
 			if n.Plugins["guard"] != `{"state":"active"}` {
 				t.Fatalf("plugins: %+v", n.Plugins)
 			}
+			if !reflect.DeepEqual(n.PluginSandbox, sandbox) {
+				t.Fatalf("plugin sandbox: %+v", n.PluginSandbox)
+			}
+		} else if n.PluginSandbox != nil {
+			t.Fatalf("node b reported a sandbox: %+v", n.PluginSandbox)
 		}
 	}
 	// Removing a plugin report.
@@ -427,20 +435,4 @@ func TestClusterStartClose(t *testing.T) {
 	if ok, _ := cl.Registry.IsAlive(ctx, cl.Registry.BootID()); ok {
 		t.Fatal("alive after close")
 	}
-}
-
-func sameSet(got []string, want ...string) bool {
-	if len(got) != len(want) {
-		return false
-	}
-	m := map[string]bool{}
-	for _, g := range got {
-		m[g] = true
-	}
-	for _, w := range want {
-		if !m[w] {
-			return false
-		}
-	}
-	return true
 }

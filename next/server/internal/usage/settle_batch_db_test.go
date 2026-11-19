@@ -151,12 +151,12 @@ const valuesSQL = `
 	INSERT INTO usage_logs (request_id, user_id, api_key_id, group_id, account_id, plugin_key, plugin_version,
 		platform, protocol, endpoint, model, upstream_model, stream, status_code, success, error_type,
 		error_message, attempts, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
-		cache_creation_1h_tokens, metrics, sticky_rule, sticky_hit, hook_decisions, rate_multiplier,
+		cache_creation_1h_tokens, image_input_tokens, image_output_tokens, metrics, sticky_rule, sticky_hit, hook_decisions, rate_multiplier,
 		price_id, expr_hash, billing_mode, billing_detail, billing_status, latency_ms, first_token_ms,
 		client_ip, user_agent, node_id, created_at, account_type, upstream_protocol, client_request_id,
 		sched_decisions, plugin_detail, anomalies, upload_ms, conversion)
 	VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,
-		$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47)
+		$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49)
 	ON CONFLICT (request_id) DO NOTHING
 	RETURNING id`
 
@@ -192,7 +192,7 @@ func valuesArgs(rec *core.UsageRecord) []any {
 		trunc(rec.PluginKey, 30), trunc(rec.PluginVersion, 50), trunc(rec.Platform, 50),
 		trunc(rec.Protocol, 100), trunc(rec.Endpoint, 200), trunc(rec.Model, 200), trunc(rec.UpstreamModel, 200),
 		rec.Stream, rec.StatusCode, rec.Success, trunc(rec.ErrorType, 50), rec.ErrorMessage, attempts,
-		t.Input, t.Output, t.CacheRead, t.CacheCreation, t.CacheCreation1h,
+		t.Input, t.Output, t.CacheRead, t.CacheCreation, t.CacheCreation1h, t.ImageInput, t.ImageOutput,
 		jsonOr(rec.Metrics, "{}"), trunc(rec.StickyRule, 100), rec.StickyHit, jsonOr(rec.HookDecisions, "[]"),
 		rate, priceID, exprHash, mode, detail, status, rec.LatencyMs, rec.FirstTokenMs,
 		trunc(rec.ClientIP, 64), trunc(rec.UserAgent, 500), trunc(rec.NodeID, 100), created,
@@ -216,6 +216,7 @@ func TestInsertBatchMatchesValuesInsert(t *testing.T) {
 		rec.RateMultiplier = decimal.RequireFromString("1.23456")
 		rec.CreatedAt = time.Date(2026, 11, 15, 12, 0, 0, 123456789, time.UTC)
 		rec.Metrics = map[string]any{"seconds": 8.5}
+		rec.Tokens.ImageInput, rec.Tokens.ImageOutput = 30, 1500
 		rec.PluginDetail = core.RawJSON(`{"job":"j-1"}`)
 		rec.Conversion = &core.ConversionTrace{V: 1, Grade: "lossy", Hops: []string{"a", "b"}}
 		return rec

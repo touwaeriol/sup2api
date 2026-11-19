@@ -3,14 +3,18 @@
   "key": "openai",
   "name": { "en": "OpenAI", "zh": "OpenAI" },
   "description": {
-    "en": "OpenAI API key account type. The openai platform and its endpoints (/v1/chat/completions, /v1/responses including its WebSocket mode, /v1/embeddings) are built into the core; model prices are set by administrators in the core.",
-    "zh": "OpenAI API Key 账号类型（openai 平台及其端点 /v1/chat/completions、/v1/responses（含 WebSocket 模式）、/v1/embeddings 由核心内置；模型价格由管理员在核心中配置）。"
+    "en": "OpenAI API key account type for the built-in openai platform (/v1/chat/completions, /v1/responses including its WebSocket mode, /v1/embeddings, /v1/images/generations and the JSON form of /v1/images/edits). The plugin builds the upstream requests; the core sends them, so the plugin itself makes no network connection. Model prices are set by administrators in the core.",
+    "zh": "为内置 openai 平台提供 OpenAI API Key 账号类型（/v1/chat/completions、/v1/responses（含 WebSocket 模式）、/v1/embeddings、/v1/images/generations 和 JSON 形式的 /v1/images/edits）。插件构造上游请求，由核心发送，插件自身不发起任何网络连接。模型价格由管理员在核心中配置。"
   },
-  "version": "0.4.4",
+  "version": "0.5.0",
   "publisher": "sub2api",
   "icon": "assets/openai.svg",
-  "runtime": "none",
-  "hostCompat": ">=0.1.290 <0.2.0",
+  "runtime": "grpc",
+  "entry": {
+    "grpc": { "binaries": "runtimes/{os}-{arch}/plugin" }
+  },
+  "hostCompat": ">=0.1.304 <0.2.0",
+  "hostUICompat": "^4.0",
 
   "capabilities": [
     { "id": "platform.adapter.v1" },
@@ -25,15 +29,12 @@
         "en": "An OpenAI Platform API key, or a key for an OpenAI-compatible endpoint (set Base URL).",
         "zh": "OpenAI 平台的 API Key，或 OpenAI 兼容端点的 Key（需填写 Base URL）。"
       },
-      "form": {
-        "mode": "schema",
-        "schema": "forms/apikey.schema.json",
-        "uiSchema": "forms/apikey.ui.json"
-      },
+      "form": { "mode": "native", "component": "OpenAIKeyForm" },
+      "upstreamFields": ["base_url"],
       "sensitiveFields": ["api_key"],
       "settingsFields": ["base_url", "organization", "project"],
       "guardedSettings": [
-        { "field": "base_url", "allowed": ["https://api.openai.com"] }
+        { "field": "base_url", "allowed": ["https://api.openai.com"], "versions": ["/v1"] }
       ],
       "defaultModels": [
         "gpt-6.2-astra",
@@ -115,26 +116,28 @@
         "computer-use-preview-2025-03-11",
         "text-embedding-3-small",
         "text-embedding-3-large",
-        "text-embedding-ada-002"
+        "text-embedding-ada-002",
+        "gpt-image-2",
+        "gpt-image-1.5",
+        "gpt-image-1-mini"
       ],
       "platforms": [
         { "platform": "openai" }
-      ],
-      "upstream": {
-        "preset": "openai",
-        "filterFields": [],
-        "credentials": { "fields": ["organization", "project"] },
-        "headers": {
-          "openai-organization": { "set": "{credentials.organization}" },
-          "openai-project": { "set": "{credentials.project}" }
-        }
-      }
+      ]
     }
   ],
 
+  "resources": { "memoryMB": 64, "cpu": 0.1, "maxThreads": 32, "maxOpenFiles": 64 },
+
+  "ui": {
+    "native": { "entry": "ui/native/entry.js" }
+  },
+
   "hostPermissions": [
     { "id": "platform.register",
-      "reason": { "en": "Register the OpenAI API key account type for the built-in openai platform", "zh": "为内置 openai 平台注册 OpenAI API Key 账号类型" } }
+      "reason": { "en": "Register the OpenAI API key account type for the built-in openai platform", "zh": "为内置 openai 平台注册 OpenAI API Key 账号类型" } },
+    { "id": "ui.native",
+      "reason": { "en": "The API key account form (OpenAIKeyForm)", "zh": "API Key 账号表单（OpenAIKeyForm）" } }
   ],
 
   "externalServices": ["api.openai.com"]

@@ -10,36 +10,37 @@ import (
 
 	"gorm.io/gorm"
 
-	"github.com/Sub2API-Devs/sup2api/next/runtime-contract/gormpg"
-	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store/model"
 )
 
-var errExecutionDone = errors.New("execution already committed")
+var _ core.ExecutionRecords = (*Service)(nil)
+
+// errExecutionDone ends the transaction of a repeated commit or close
+// without writing anything; the caller reports success.
+var errExecutionDone = errors.New("execution already ended")
 
 func (s *Service) BeginExecution(ctx context.Context, in core.ExecutionIntent) error {
 	if in.ID == "" || in.RequestID == "" || in.AccountID == 0 {
 		return errors.New("invalid execution identity")
 	}
 	return store.G(ctx, s.db.Gorm).Create(&model.PluginExecution{ID: in.ID, RequestID: in.RequestID, PluginKey: in.PluginKey,
-		AccountID: in.AccountID, Attempt: in.Attempt, Record: jsonOr(in.Record, "{}"), TaskSubmit: in.TaskSubmit}).Error
+		AccountID: in.AccountID, Attempt: in.Attempt, TaskSubmit: in.TaskSubmit}).Error
 }
 
 func (s *Service) ObserveExecution(ctx context.Context, id string, rec *core.UsageRecord, observation []byte) error {
-	if rec == nil || len(observation) > 512<<10 {
+	if rec == nil {
 		return errors.New("invalid execution observation")
 	}
+	// Any size is stored: record is jsonb and observation bytea, both
+	// TOASTed (compressed, out of line) when large.
 	raw, err := json.Marshal(rec)
 	if err != nil {
 		return err
 	}
-	if len(raw) > 512<<10 {
-		return errors.New("execution facts exceed limit")
-	}
-	res := execution(store.G(ctx, s.db.Gorm), id).Where("state='intent' AND request_id=? AND account_id=?", rec.RequestID, rec.AccountID).
-		Updates(map[string]any{"state": "observed", "record": store.Bytes(raw), "observation": store.Bytes(observation),
+	res := execution(store.G(ctx, s.db.Gorm), id).Where("state=? AND request_id=? AND account_id=?", core.ExecutionStateIntent, rec.RequestID, rec.AccountID).
+		Updates(map[string]any{"state": core.ExecutionStateObserved, "record": store.Bytes(raw), "observation": store.Bytes(observation),
 			"updated_at": gorm.Expr("clock_timestamp()")})
 	if res.Error == nil && res.RowsAffected != 1 {
 		return errors.New("execution identity or state mismatch")
@@ -47,107 +48,174 @@ func (s *Service) ObserveExecution(ctx context.Context, id string, rec *core.Usa
 	return res.Error
 }
 
-func (s *Service) CommitExecution(ctx context.Context, in core.ExecutionCommit) (*pluginv1.ExecutionReceipt, error) {
-	if in.Record == nil || in.Record.AccountID == nil || len(in.Digest) != 64 || (in.Operation != "usage" && in.Operation != "watch") {
-		return nil, errors.New("invalid execution commit")
+func (s *Service) RenewExecution(ctx context.Context, id string) error {
+	res := execution(store.G(ctx, s.db.Gorm), id).Where("state=?", core.ExecutionStateObserved).
+		Update("updated_at", gorm.Expr("clock_timestamp()"))
+	if res.Error == nil && res.RowsAffected == 0 {
+		return core.ErrExecutionNotObserved
 	}
-	out := &pluginv1.ExecutionReceipt{}
+	return res.Error
+}
+
+func (s *Service) CommitExecution(ctx context.Context, in core.ExecutionCommit) error {
+	task := in.Operation == core.ExecutionOpWatch
+	if in.Record == nil || in.Record.AccountID == nil || len(in.Digest) != 64 || (in.Task != nil) != task ||
+		!task && in.Operation != core.ExecutionOpUsage {
+		return refused("invalid execution commit")
+	}
 	before := func(tx *gorm.DB) error {
-		// The execution row stays locked to the end of the transaction.
-		if err := store.RequireTx(tx); err != nil {
-			return err
-		}
-		var x model.PluginExecution
-		err := execution(store.G(ctx, tx), in.ID).Select("state, operation, digest, task_id, request_id, plugin_key, account_id").
-			Clauses(store.ForUpdate()).Take(&x).Error
+		x, err := lockExecution(ctx, tx, in.ID)
 		if err != nil {
 			return err
 		}
-		out.TaskId = x.TaskID
 		if x.RequestID != in.Record.RequestID || x.PluginKey != in.Record.PluginKey || x.AccountID != *in.Record.AccountID {
-			return errors.New("execution identity mismatch")
+			return refused("execution identity mismatch")
 		}
-		state := core.ValueOr(x.State, "")
-		if state == "committed" {
-			if x.Operation != in.Operation || x.Digest != in.Digest {
-				return core.ErrConflict.WithMessage("execution facts already committed")
+		switch core.ValueOr(x.State, "") {
+		case core.ExecutionStateObserved:
+			return nil
+		case core.ExecutionStateCommitted:
+			if x.Operation == in.Operation && x.Digest == in.Digest {
+				return errExecutionDone
 			}
-			return errExecutionDone
+			return core.ErrConflict.WithMessage("execution facts already committed")
+		case core.ExecutionStateUnreported:
+			return core.ErrConflict.WithMessage("execution closed as unreported")
 		}
-		if state != "observed" {
-			return errors.New("execution has no durable observation")
-		}
-		return nil
+		return refused("execution has no durable observation")
 	}
+	taskID := ""
+	if task {
+		taskID = in.Task.PublicID
+	}
+	// The commit drops the execution's facts.
 	after := func(tx *gorm.DB) error {
-		if in.Task != nil {
-			out.TaskId = in.Task.PublicID
-		}
-		// The commit drops the execution's facts.
-		return execution(store.G(ctx, tx), in.ID).Updates(map[string]any{"state": "committed", "operation": in.Operation,
-			"digest": in.Digest, "task_id": out.TaskId, "record": gorm.Expr("NULL"), "observation": gorm.Expr("NULL"),
+		return execution(store.G(ctx, tx), in.ID).Updates(map[string]any{"state": core.ExecutionStateCommitted, "operation": in.Operation,
+			"digest": in.Digest, "task_id": taskID, "record": gorm.Expr("NULL"), "observation": gorm.Expr("NULL"),
 			"updated_at": gorm.Expr("clock_timestamp()")}).Error
 	}
 	var err error
-	if in.Task != nil {
-		if in.Operation != "watch" {
-			return nil, errors.New("wrong execution operation")
-		}
-		in.Task.Record = in.Record
-		err = s.registerTask(ctx, *in.Task, before, after, true)
+	if task {
+		reg := *in.Task
+		reg.Record = in.Record
+		err = s.registerTask(ctx, reg, before, after)
 	} else {
-		if in.Operation != "usage" {
-			return nil, errors.New("task registration required")
-		}
-		_, err = s.insertAtomic(ctx, []*core.UsageRecord{in.Record}, before, func(tx *gorm.DB, ids map[string]int64) error {
-			if _, ok := ids[in.Record.RequestID]; !ok {
-				return errors.New("usage identity already recorded")
-			}
-			return after(tx)
-		}, true)
+		err = s.insertExecutionRecord(ctx, in.Record, before, after)
 	}
 	if errors.Is(err, errExecutionDone) {
-		err = nil
+		return nil
 	}
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
+	return err
 }
 
-// Recovery never replays network I/O. Only completed host observations may
-// fall back to declarative facts; unobserved intents remain uncertain.
-func (s *Service) recoverExecutions(ctx context.Context) error {
-	g := store.G(ctx, s.db.Gorm)
-	// The oldest observed executions that neither committed nor submitted a
-	// task within a minute.
-	var list []struct {
-		ID     string `gorm:"column:id"`
-		Record []byte `gorm:"column:record"`
-	}
-	if err := g.Model(&model.PluginExecution{}).Select("id, record").
-		Where("state='observed' AND NOT task_submit AND NOT EXISTS(SELECT 1 FROM task_submission_receipts t WHERE t.request_id=plugin_executions.request_id) AND updated_at<clock_timestamp()-interval '1 minute'").
-		Order("updated_at").Limit(100).Scan(&list).Error; err != nil {
+func (s *Service) CloseExecutionUnreported(ctx context.Context, in core.ExecutionUnreported) error {
+	// The stored record is immutable once observed, so it is read before
+	// the transaction; the lock below rechecks the state it was read in.
+	var x model.PluginExecution
+	if err := execution(store.G(ctx, s.db.Gorm), in.ID).Select("state, request_id, plugin_key, account_id, record").Take(&x).Error; err != nil {
 		return err
 	}
-	for _, i := range list {
-		var r core.UsageRecord
-		if err := json.Unmarshal(i.Record, &r); err != nil {
-			s.deferExecutionRecovery(ctx, i.ID, err)
-			continue
-		}
-		// Tasks need their validated parser result; the durable submission
-		// receipt remains available for repair instead of inventing an ID.
-		task, err := gormpg.Exists(g, g.Model(&model.TaskSubmissionReceipt{}).Where("request_id = ?", r.RequestID))
+	if err := closableExecution(x); err != nil {
+		return ignoreDone(err)
+	}
+	var rec core.UsageRecord
+	if err := json.Unmarshal(x.Record, &rec); err != nil {
+		return err
+	}
+	before := func(tx *gorm.DB) error {
+		x, err := lockExecution(ctx, tx, in.ID)
 		if err != nil {
 			return err
 		}
-		if task {
-			continue
+		return closableExecution(x)
+	}
+	after := func(tx *gorm.DB) error {
+		return execution(store.G(ctx, tx), in.ID).Updates(map[string]any{"state": core.ExecutionStateUnreported,
+			"updated_at": gorm.Expr("clock_timestamp()")}).Error
+	}
+	// A request that already has its usage record is closed without another:
+	// the gateway submitted the free record itself when it could not confirm
+	// the observation (stored, but its acknowledgement lost).
+	rec.SetUnreported(in.Reason)
+	free := &rec
+	_, err := s.insertAtomic(ctx, []*core.UsageRecord{free}, before, func(tx *gorm.DB, _ map[string]int64) error { return after(tx) }, true)
+	if err != nil {
+		return ignoreDone(err)
+	}
+	slog.ErrorContext(ctx, "usage: plugin execution closed as unreported, not billed", "request_id", x.RequestID,
+		"execution_id", in.ID, "plugin", x.PluginKey, "account_id", x.AccountID, "reason", in.Reason)
+	return nil
+}
+
+// closableExecution says whether x may be closed as unreported: only an
+// observed execution is; closing one already unreported is done.
+func closableExecution(x model.PluginExecution) error {
+	switch core.ValueOr(x.State, "") {
+	case core.ExecutionStateObserved:
+		return nil
+	case core.ExecutionStateUnreported:
+		return errExecutionDone
+	case core.ExecutionStateCommitted:
+		return core.ErrConflict.WithMessage("execution facts already committed")
+	}
+	return refused("execution has no durable observation")
+}
+
+// refused is a deterministic refusal of an execution write: retrying it
+// changes nothing (core.ErrExecutionRefused).
+func refused(msg string) error {
+	return fmt.Errorf("%w: %s", core.ErrExecutionRefused, msg)
+}
+
+func ignoreDone(err error) error {
+	if errors.Is(err, errExecutionDone) {
+		return nil
+	}
+	return err
+}
+
+// insertExecutionRecord writes the usage record of an execution in one
+// transaction between before and after; inserting it settles it or, free,
+// releases the request's precharge.
+func (s *Service) insertExecutionRecord(ctx context.Context, rec *core.UsageRecord, before func(*gorm.DB) error, after func(*gorm.DB) error) error {
+	_, err := s.insertAtomic(ctx, []*core.UsageRecord{rec}, before, func(tx *gorm.DB, ids map[string]int64) error {
+		if _, ok := ids[rec.RequestID]; !ok {
+			return refused("usage identity already recorded")
 		}
-		_, err = s.CommitExecution(ctx, core.ExecutionCommit{ID: i.ID, Operation: "usage", Digest: fmt.Sprintf("%064x", 0), Record: &r})
-		if err != nil && !errors.Is(err, core.ErrConflict) {
-			s.deferExecutionRecovery(ctx, i.ID, err)
+		return after(tx)
+	}, true)
+	return err
+}
+
+// lockExecution reads the execution row id and keeps it locked to the end
+// of the transaction tx.
+func lockExecution(ctx context.Context, tx *gorm.DB, id string) (model.PluginExecution, error) {
+	var x model.PluginExecution
+	if err := store.RequireTx(tx); err != nil {
+		return x, err
+	}
+	err := execution(store.G(ctx, tx), id).Select("state, operation, digest, request_id, plugin_key, account_id").
+		Clauses(store.ForUpdate()).Take(&x).Error
+	return x, err
+}
+
+// recoverExecutions closes, as unreported, the observed synchronous
+// executions whose gateway is gone: not renewed (RenewExecution, which sets
+// updated_at like ObserveExecution) for core.ExecutionStaleAfter. The host's
+// reading stays as evidence and is never billed. A task submission is left
+// alone; its receipt keeps the upstream answer.
+func (s *Service) recoverExecutions(ctx context.Context) error {
+	var ids []string
+	if err := store.G(ctx, s.db.Gorm).Model(&model.PluginExecution{}).
+		Where("state=? AND NOT task_submit AND updated_at<clock_timestamp()-make_interval(secs=>?)", core.ExecutionStateObserved, core.ExecutionStaleAfter.Seconds()).
+		Order("updated_at").Limit(100).Pluck("id", &ids).Error; err != nil {
+		return err
+	}
+	for _, id := range ids {
+		// A conflict is an execution committed meanwhile: its facts stand.
+		err := s.CloseExecutionUnreported(ctx, core.ExecutionUnreported{ID: id, Reason: "its gateway stopped renewing the observed execution"})
+		if err != nil && core.AsError(err).Code != core.ErrConflict.Code {
+			s.deferExecutionRecovery(ctx, id, err)
 		}
 	}
 	return s.cleanupExecutionReceipts(ctx)
@@ -155,16 +223,16 @@ func (s *Service) recoverExecutions(ctx context.Context) error {
 
 func (s *Service) deferExecutionRecovery(ctx context.Context, id string, cause error) {
 	slog.ErrorContext(ctx, "usage: execution recovery deferred", "execution_id", id, "err", cause)
-	// Rotate failures behind other observations. A permanently unpriceable
-	// record must not monopolize the oldest LIMIT batch on every sweep.
-	_ = execution(store.G(ctx, s.db.Gorm), id).Where("state = 'observed'").
+	// Rotate failures behind other observations. A record that cannot be
+	// written must not monopolize the oldest LIMIT batch on every sweep.
+	_ = execution(store.G(ctx, s.db.Gorm), id).Where("state=?", core.ExecutionStateObserved).
 		Update("updated_at", gorm.Expr("clock_timestamp()")).Error
 }
 
-var _ core.ExecutionRecords = (*Service)(nil)
-
-// Retention eligibility is seven days; bounded batches catch up without
-// monopolizing the settlement retry worker or holding a long transaction.
+// Retention eligibility is seven days, whatever the state: an unreported
+// execution's reading is evidence for that long. Bounded batches catch up
+// without monopolizing the settlement retry worker or holding a long
+// transaction.
 func (s *Service) cleanupExecutionReceipts(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()

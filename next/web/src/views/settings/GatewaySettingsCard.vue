@@ -29,7 +29,8 @@ const DEFAULTS: Omit<GatewaySettings, typeof MAX_TOKENS> = {
   queue_sticky_wait_seconds: 120,
   queue_fallback_max_waiting: 100,
   queue_fallback_wait_seconds: 30,
-  media_download_max_mb: 64
+  media_download_max_mb: 64,
+  max_request_body_mb: 128
 }
 const fields: Array<{ key: Key; unit?: string }> = [
   { key: 'platform_call_timeout_ms', unit: 'ms' },
@@ -39,6 +40,7 @@ const fields: Array<{ key: Key; unit?: string }> = [
   { key: 'queue_sticky_wait_seconds', unit: 's' },
   { key: 'queue_fallback_max_waiting' },
   { key: 'queue_fallback_wait_seconds', unit: 's' },
+  { key: 'max_request_body_mb', unit: 'MB' },
   { key: 'media_download_max_mb', unit: 'MB' }
 ]
 

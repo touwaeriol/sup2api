@@ -1,0 +1,17 @@
+{
+  "model": "gpt-image-2",
+  "prompt": "A small white dot on a black background",
+  "images": [
+    {
+      "image_url": "data:image/png;base64,iVBORw0KGgo="
+    },
+    {
+      "file_id": "file_abc"
+    }
+  ],
+  "mask": {
+    "image_url": "data:image/png;base64,bWFzaw=="
+  },
+  "partial_images": 1,
+  "stream": true
+}

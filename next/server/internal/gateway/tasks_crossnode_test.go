@@ -11,87 +11,10 @@ import (
 	"testing"
 	"time"
 
-	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
-	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/billing"
-	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/testutil"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/usage"
 )
-
-type taskDraftPlatform struct {
-	*fakePlatform
-	parseCalls atomic.Int64
-	parseError error
-}
-
-func (p *taskDraftPlatform) ParseTaskSubmission(_ context.Context, in *pluginv1.ExtractUsageRequest) (*pluginv1.TaskSubmission, error) {
-	p.parseCalls.Add(1)
-	if p.parseError != nil {
-		return nil, p.parseError
-	}
-	return &pluginv1.TaskSubmission{UpstreamRefId: "raw-video-id",
-		SnapshotJson:      `{"id":"raw-video-id","data":{"id":"raw-video-id"},"status":"queued","opaque_number":9007199254740993}`,
-		NextCheckAfterSec: 20, DeadlineSec: 3600}, nil
-}
-
-func taskDraftEnv(t *testing.T, tasks core.AsyncTasks, noAccounts bool) (*env, *taskDraftPlatform) {
-	t.Helper()
-	pp := &taskDraftPlatform{fakePlatform: &fakePlatform{}}
-	e := newEnv(t, func(e *env) {
-		pp.base = e.up.srv.URL
-		submit := manifest.Endpoint{ID: "submit", Method: "POST", Path: "/task-draft/videos", Protocol: "task-draft.submit", Kind: "proxy",
-			Auth: manifest.EndpointAuth{Headers: []string{"x-api-key"}}, Request: manifest.EndpointRequest{ModelPath: "model"},
-			Response: manifest.EndpointResp{NonStream: "json"}, Billing: "free", ErrorFormat: "plain",
-			Task: &manifest.AsyncTaskEndpoint{Action: manifest.TaskActionSubmit, Kind: "video", IDPaths: []string{"id", "data.id"}}}
-		query := manifest.Endpoint{ID: "query", Method: "GET", Path: "/task-draft/videos/:task_id", Protocol: "task-draft.query", Kind: "proxy",
-			Auth: manifest.EndpointAuth{Headers: []string{"x-api-key"}}, Response: manifest.EndpointResp{NonStream: "json"}, Billing: "free", ErrorFormat: "plain",
-			Task: &manifest.AsyncTaskEndpoint{Action: manifest.TaskActionQuery, Kind: "video", IDParam: "task_id", IDPaths: []string{"id", "data.id"}}}
-		pf := manifest.Platform{ID: "task-draft", Endpoints: []manifest.Endpoint{submit, query}}
-		info := e.addAccountType("task-draft", "apikey", pp, manifest.AccountPlatform{Platform: "task-draft"})
-		e.gen.addPlatform(info, pf, pp)
-		e.accounts.addTyped(testGroup, 9, 100, "task-account-9", "task-draft", "apikey")
-		e.accounts.addTyped(testGroup, 10, 99, "task-account-10", "task-draft", "apikey")
-		e.accounts.groups[testGroup] = []int64{9, 10}
-		if noAccounts {
-			e.accounts.groups[testGroup] = nil
-		}
-		for key, change := range map[string]func(*core.APIKeyPrincipal){
-			"same-owner-other-key": func(p *core.APIKeyPrincipal) { p.KeyID++ },
-			"other-user":           func(p *core.APIKeyPrincipal) { p.UserID++ },
-			"other-group":          func(p *core.APIKeyPrincipal) { p.Group.ID++ },
-			"model-denied":         func(p *core.APIKeyPrincipal) { p.Group.ModelAllowlist = []string{"unrelated-model"} },
-		} {
-			principal := *e.auth.keys[testKey]
-			change(&principal)
-			e.auth.keys[key] = &principal
-		}
-	})
-	e.gw.d.Tasks = tasks
-	e.up.set("task-account-9", &upstreamRule{status: 200, body: `{"id":"raw-video-id","data":{"id":"raw-video-id"}}`})
-	e.up.set("task-account-10", &upstreamRule{status: 200, body: `{"id":"raw-video-id","data":{"id":"raw-video-id"}}`})
-	return e, pp
-}
-
-func taskDraftGet(t *testing.T, e *env, id, key string) result {
-	t.Helper()
-	req, err := http.NewRequest(http.MethodGet, e.srv.URL+"/task-draft/videos/"+id, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set("x-api-key", key)
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return result{status: resp.StatusCode, header: resp.Header, body: body}
-}
 
 // The two gateways and services share only durable PG task state. The querying
 // node deliberately has no eligible upstream account, ruling out hidden dispatch.
@@ -102,6 +25,7 @@ func TestTaskGatewayCrossNodeSnapshotAndAuthorization(t *testing.T) {
 	billB := billing.New(db, nil, nil, nil, nil)
 	nodeB := usage.New(db, billB, billB, nil, usage.Options{})
 	a, pa := taskDraftEnv(t, nodeA, false)
+	a.gw.d.Settler = nodeA // its execution records register the task in PostgreSQL
 	b, pb := taskDraftEnv(t, nodeB, true)
 	res := a.do("/task-draft/videos", map[string]any{"model": testModel}, nil)
 	public := res.json().Get("id").String()
@@ -109,7 +33,7 @@ func TestTaskGatewayCrossNodeSnapshotAndAuthorization(t *testing.T) {
 		strings.Contains(string(res.body), "raw-video-id") {
 		t.Fatalf("submit did not return only public IDs: %d %s", res.status, res.body)
 	}
-	a.noRecord() // successful registration already persisted usage synchronously
+	a.noRecord() // the commit persisted the usage with the task
 	for _, key := range []string{testKey, "same-owner-other-key"} {
 		got := taskDraftGet(t, b, public, key)
 		if got.status != 200 || got.json().Get("id").String() != public || got.json().Get("data.id").String() != public ||

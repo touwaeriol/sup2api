@@ -17,7 +17,7 @@ import (
 //   POST /debug/dial {"address"} -> {"ok":false,"error"}; POST /debug/alloc?mb=N[&free=1]
 
 const (
-	guardTestVersion = "0.2.10-test"
+	guardTestVersion = "0.2.11-test"
 	guardTestPath    = "/market/test/guard-" + guardTestVersion + ".s2plugin"
 	guardDenyCode    = "guard_blocked"
 )
@@ -68,7 +68,7 @@ func (e *Env) ForbiddenRule() GuardRule {
 	return GuardRule{Name: "e2e-" + e.RunID, Kind: "keyword", Pattern: e.ForbiddenWord(), Enabled: true}
 }
 
-// EnsureGuardTestBuild makes the guard test build (0.1.1-test) the active
+// EnsureGuardTestBuild makes the guard test build (guardTestVersion) the active
 // guard version: upgrade in place when guard is installed, fresh install
 // otherwise. The package is uploaded (it is not listed in the index).
 func (e *Env) EnsureGuardTestBuild(admin *Session) {

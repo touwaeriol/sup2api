@@ -53,11 +53,6 @@ func TestKVEntryRules(t *testing.T) {
 	if err := CheckKVTTL(int64(time.Duration(math.MaxInt64) / time.Second)); err != nil {
 		t.Errorf("the largest time.Duration is not a valid ttl: %v", err)
 	}
-	// One full batch request must fit the 4 MiB a host receives: the payload
-	// limit plus, for every item, its protobuf framing (under 32 bytes).
-	if KVBatchMaxBytes+KVBatchMaxKeys*32+KVMaxNamespaceBytes+16 >= 4<<20 {
-		t.Error("a batch at the payload limit does not fit a 4 MiB gRPC message")
-	}
 }
 
 type kvTestItem struct {

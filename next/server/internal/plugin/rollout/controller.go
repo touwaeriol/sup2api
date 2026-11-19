@@ -555,7 +555,9 @@ func (c *Controller) get(ctx context.Context, key string, id int64) (*core.Rollo
 	}
 	if r.phase == PhasePreparing || r.phase == PhaseActivating {
 		states, _, _ := c.nodeStates(ctx, r)
-		out.Nodes = states
+		for _, n := range states {
+			out.Nodes = append(out.Nodes, n.RolloutNodeState)
+		}
 	} else if err := store.G(ctx, c.o.DB.Gorm).Model(&model.PluginRolloutNode{}).Select("node_id, boot_id, state, error").
 		Where("rollout_id = ?", id).Order("node_id, boot_id").Scan(&out.Nodes).Error; err != nil {
 		return nil, err
@@ -700,7 +702,7 @@ func (c *Controller) writeNodes(ctx context.Context, tx *gorm.DB, r *rolloutRow)
 				n.Error = "not ready"
 			}
 		}
-		if err := upsertRolloutNode(g, r.id, n.NodeID, n.BootID, st, n.Error).Error; err != nil {
+		if err := upsertRolloutNode(g, r.id, n.NodeID, n.BootID, st, n.Error, n.code).Error; err != nil {
 			return err
 		}
 	}
@@ -708,12 +710,12 @@ func (c *Controller) writeNodes(ctx context.Context, tx *gorm.DB, r *rolloutRow)
 }
 
 // upsertRolloutNode records one node's outcome.
-func upsertRolloutNode(g *gorm.DB, rolloutID int64, nodeID, bootID, state, msg string) *gorm.DB {
+func upsertRolloutNode(g *gorm.DB, rolloutID int64, nodeID, bootID, state, msg, code string) *gorm.DB {
 	return g.Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "rollout_id"}, {Name: "boot_id"}},
-		DoUpdates: append(clause.AssignmentColumns([]string{"state", "error"}),
+		DoUpdates: append(clause.AssignmentColumns([]string{"state", "error", "code"}),
 			clause.Assignment{Column: clause.Column{Name: "updated_at"}, Value: gorm.Expr("now()")}),
-	}).Create(&rolloutNode{RolloutID: rolloutID, NodeID: nodeID, BootID: bootID, State: state, Error: msg})
+	}).Create(&rolloutNode{RolloutID: rolloutID, NodeID: nodeID, BootID: bootID, State: state, Error: msg, Code: code})
 }
 
 // rolloutNode is a plugin_rollout_nodes row, every column written as given;
@@ -724,28 +726,38 @@ type rolloutNode struct {
 	BootID    string `gorm:"column:boot_id"`
 	State     string `gorm:"column:state"`
 	Error     string `gorm:"column:error"`
+	Code      string `gorm:"column:code"`
 }
 
 func (rolloutNode) TableName() string { return model.PluginRolloutNode{}.TableName() }
 
+// nodeState is one live node's report for a rollout, with the code of its
+// failed load of the target version (core.PluginInstanceState.Code), which the node's
+// outcome row keeps once the rollout ends and the instance is gone.
+type nodeState struct {
+	core.RolloutNodeState
+	code string
+}
+
 // nodeStates reads every live node's report for the rollout. selfSeen
 // tells whether this node is among the live nodes (guards against an empty
 // node list when Redis is unreachable).
-func (c *Controller) nodeStates(ctx context.Context, r *rolloutRow) ([]core.RolloutNodeState, bool, error) {
+func (c *Controller) nodeStates(ctx context.Context, r *rolloutRow) ([]nodeState, bool, error) {
 	nodes, err := c.o.Node.LiveNodes(ctx)
 	if err != nil {
 		return nil, false, err
 	}
 	selfSeen := false
-	out := make([]core.RolloutNodeState, 0, len(nodes))
+	out := make([]nodeState, 0, len(nodes))
 	for _, n := range nodes {
 		if n.BootID == c.o.Node.BootID() {
 			selfSeen = true
 		}
-		ns := core.RolloutNodeState{NodeID: n.NodeID, BootID: n.BootID, State: NodePending}
-		if st, ok := parseState(n.Plugins[r.key]); ok && st.RolloutID == r.id && st.Rollout != "" {
+		ns := nodeState{RolloutNodeState: core.RolloutNodeState{NodeID: n.NodeID, BootID: n.BootID, State: NodePending}}
+		if st, ok := core.ParsePluginNodeState(n.Plugins[r.key]); ok && st.RolloutID == r.id && st.Rollout != "" {
 			ns.State = st.Rollout
 			ns.Error = st.Error
+			ns.code = st.InstanceCode(deref(r.target))
 		}
 		out = append(out, ns)
 	}

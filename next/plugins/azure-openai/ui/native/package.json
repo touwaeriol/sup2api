@@ -1,0 +1,12 @@
+{
+  "name": "@sub2api-plugin/azure-openai-ui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Native console UI of the azure-openai plugin: the account forms of the v1 and deployment APIs (built to dist/entry.js, packed as ui/native/).",
+  "scripts": {
+    "build": "node ../../../../web/node_modules/vite/bin/vite.js build --config ../../../../web/packages/vite-preset/vite.plugin.config.js",
+    "typecheck": "node ../../../../web/node_modules/vue-tsc/bin/vue-tsc.js -p tsconfig.json --noEmit",
+    "test": "node ../../../../web/node_modules/vitest/vitest.mjs run --root . --config ../../../../web/vitest.config.ts"
+  }
+}

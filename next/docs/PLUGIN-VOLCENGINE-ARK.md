@@ -1,6 +1,6 @@
 # 插件设计：字节火山方舟 / 豆包（`volcengine`）
 
-> 状态：2026-09-29 调研产出的设计稿，**已实现**（0.5.x）。**2026-09-30 第一次经真实上游跑通视频全链路，见 §12**；正文里与 §12 冲突的数字以 §12 为准。
+> 状态：2026-09-29 调研产出的设计稿，**已实现**（0.5.x）。0.13.0 按转发 V2 改写（CONTRACTS §112，需核心 ≥0.1.304），现状见 §5 与 §17；§3、§4、§9–§16 是各期当时的设计与记录，其中的 `BuildUpstreamRequest`、补丁、`requestFields`、`ExtractUsage` 事后调用、`Poll` 与两阶段核对都已删除。**2026-09-30 第一次经真实上游跑通视频全链路，见 §12**；正文里与 §12 冲突的数字以 §12 为准。
 > 目标：把 new-api 拆成两个渠道类型的「字节火山方舟」和「豆包通用 / 豆包视频」合成 **一个** sup2api 插件，支持自定义 Base URL 与素材库端点。
 > 参考实现：`D:\projects\golang\new-api`（AGPL-3.0，**只读设计、不复制代码**；sup2api 为 LGPL-3.0）。
 
@@ -103,7 +103,7 @@ AssetLibraryRegion   string // 签名区域，空 = cn-beijing；BytePlus 海外
 
 ### 4.2 账号类型
 
-> **已被 §14 取代（0.7.0）。** 这里写的「只有一个账号类型」不再成立：0.7.0 把它拆成 `apikey`（方舟官方）与 `relay`（Ark 兼容中转站），下面这段是一期的原始设计记录。
+> **已被 §14 取代（0.7.0）。** 这里写的「只有一个账号类型」不再成立：0.7.0 把它拆成 `apikey`（方舟官方）与 `relay`（Ark 兼容中转站），下面这段是一期的原始设计记录。其中的 `form`（schema 表单）在 0.13.0 改为原生组件 `{"mode": "native", "component": "VolcengineKeyForm"}`（§19；schema 表单已从平台删除）。
 
 ```jsonc
 {
@@ -197,7 +197,7 @@ DELETE /api/v1/p/volcengine/assets/:id        删除素材
 GET    /api/v1/p/volcengine/asset-groups      素材组
 ```
 
-插件内部用账号上的 `asset_base_url` + `access_key/secret_key` 做火山 V4 HMAC-SHA256 签名调用上游（需要 `net` 权限）。`plg_volcengine` 里存本地索引（账号 id、上游素材 id、名称、类型、状态），控制台出一个 native 页面。
+插件内部用账号上的 `asset_base_url` + `access_key/secret_key` 做火山 V4 HMAC-SHA256 签名调用上游（0.13.0 起由核心经账号代理发出、不需要 `net` 权限，见 §17；此前需要 `net` 权限、经出口隧道直连）。`plg_volcengine` 里存本地索引（账号 id、上游素材 id、名称、类型、状态），控制台出一个 native 页面。
 
 **签名用火山官方 Go SDK，不要手写**（2026-09-29 决定）：`github.com/volcengine/volcengine-go-sdk`（Apache-2.0，与本仓库 LGPL-3.0 兼容），走 `universal.DoCall`，`ServiceName=ark`、`Version=2024-01-01`、`Region` 取账号的 `asset_region`（默认 `cn-beijing`，BytePlus 用 `ap-southeast-1`）。手写 V4 签名是典型的易错活，new-api 也是这么做的（`service/assetlib/upstream.go`）。
 
@@ -235,9 +235,9 @@ rpc GetAccountCredentials(GetAccountCredentialsRequest) returns (GetAccountCrede
 
 ### 4.5.3 火山官方 SDK 用不到的地方（重要）
 
-**代理路径上用不了它。** 在 sup2api 的架构里上游请求是**核心发的**：插件的 `BuildUpstreamRequest` 只返回 `{method, url, headers, patches}`，真正的 HTTP 调用连同账号代理、SSRF 防护、用量提取、失败切换、并发槽位全在核心手里（`gateway/dispatch.go`）。插件改用 Ark SDK 自己发请求，就等于把这一整套全部绕过。
+**代理路径上用不了它。** 在 sup2api 的架构里上游请求是**核心发的**：插件在 `Execute` 里构造最终请求，交给核心的 HTTP 客户端（`RelayUpstream`），真正的 HTTP 调用连同账号代理、SSRF 防护、用量提取、失败切换、并发槽位全在核心手里（CONTRACTS §112）。插件改用 Ark SDK 自己发请求，就等于把这一整套全部绕过。插件和核心都不用厂商的 SDK 客户端。
 
-四期的核对循环使用 `BuildReconcileRequest` → 核心代发 → `ParseReconcileResponse`。后续 Poll 将查询与解析合并；当前 0.10.0 由核心调用一次 `Monitor`，插件通过受执行上下文约束的 `ExecuteHTTP` 查询，再用 `ReportTaskProgress` 提交进度或终态；连接仍由核心代理，沿用原账号的网络与限额约束，账务和结束监控由核心原子提交。
+任务观察由核心调用一次 `Monitor`，插件通过受执行上下文约束的 `ExecuteHTTP`（SDK 的 `Fetch`）查询，把进度或终态放在返回值里；连接仍由核心代理，沿用原账号的网络与限额约束，账务和结束监控由核心原子提交。
 
 所以本插件里火山官方 SDK 的作用域**只有素材库这一处**：它是插件自己的 HTTP 路由 + 自己的出口调用，不经过网关。
 
@@ -247,7 +247,7 @@ rpc GetAccountCredentials(GetAccountCredentialsRequest) returns (GetAccountCrede
 
 - **`bot` 前缀模型走另一条路径**：模型名以 `bot` 开头时是「接入点/智能体」，路径为 `/api/v3/bots/chat/completions`。判据只能是 `strings.HasPrefix(model, "bot")`——上游只给了这一个信号，所以名字里带 bot 但不是接入点的模型（如 `doubao-bot`）会被误判。一期已实现并在测试里钉住了这个边界。
 - **Ark 错误体的 `type` 不是 OpenAI 语义类型**。Ark 返回 `{"error":{code,message,param,type}}`，但 `type` 是 HTTP 短语（`Unauthorized`、`BadRequest`），不是 OpenAI 的 `invalid_request_error` / `rate_limit_error`。**任何「OpenAI 兼容就直接透传 type」的实现都会把 HTTP 短语吐给 OpenAI SDK**。正确做法是按状态码给标准类型，把 Ark 的 `code` 放进 reason。
-- **图片生成的失败可能是 HTTP 200**：整个请求一张也没生成时，Ark 在 200 里放顶层 `error` 对象；组图时 `data[]` 里也可能逐张带 `error`。核心只在非 2xx 才调 `ClassifyError`，所以这两种会被当成功请求记账。目前不会乱收钱（这时 `generated_images` 通常是 0 或缺失，`u("images")` 算出 0），但 `billable` 会因为 `Metrics` 非空而为 true。四期的 `ExtractUsage` 里处理。
+- **图片生成的失败可能是 HTTP 200**：整个请求一张也没生成时，Ark 在 200 里放顶层 `error` 对象；组图时 `data[]` 里也可能逐张带 `error`。核心只在非 2xx 才调 `ClassifyError`，所以这两种会被当成功请求记账。目前不会乱收钱（这时 `generated_images` 通常是 0 或缺失，`u("images")` 算出 0），但 `billable` 会因为 `Metrics` 非空而为 true。
 
 ### 4.7 明确不做
 
@@ -258,26 +258,27 @@ rpc GetAccountCredentials(GetAccountCredentialsRequest) returns (GetAccountCrede
 
 ## 5. 异步任务：插件执行，核心记录
 
-本轮先接入 [CONTRACTS §28](CONTRACTS.md#28-核心托管异步任务2026-10-01) 的核心托管任务，最终 0.10.0 使用 §31 的 Execute / Monitor 和 SDK 主动上报接口。插件负责 Ark/relay 的请求、状态和计量事实；核心提供任务身份、账号约束、统一调度、共享快照和账务。此前“不让核心拥有任何异步任务概念”的方案未能提供跨节点归属和查询协调，本轮用不带厂商字段的通用契约替代。
+本轮先接入 [CONTRACTS §28](CONTRACTS.md#28-核心托管异步任务2026-10-01) 的核心托管任务；0.13.0 起提交走 `Execute` 的等待形式、观察走 `Monitor`，事实都在返回值里（CONTRACTS §112）。插件负责 Ark/relay 的请求、状态和计量事实；核心提供任务身份、账号约束、统一调度、共享快照和账务。此前“不让核心拥有任何异步任务概念”的方案未能提供跨节点归属和查询协调，本轮用不带厂商字段的通用契约替代。
 
-新插件声明 `platform.tasks.v1`、`platform.execute.v1` 和 `platform.monitor.v1`，并在 `InitHost` 要求宿主 API 4，避免旧节点从共享数据库加载新包后缺少执行或记录能力。提交时由插件调用 ReserveAndWatch；后续查询读核心快照，监控由核心回调插件。先停止全部旧核心及其后台对账、升级完整集群，再激活此版本；内置插件自动升级和回退限制见 CONTRACTS §28.4。客户端应把提交响应中的 `s2task_` ID 当作不透明字符串，后续原样传回查询端点。
+插件声明 `platform.adapter.v1`、`platform.tasks.v1` 和 `platform.monitor.v1`；按旧插件协议构建的包被新核心拒绝（CONTRACTS §112.10）。提交时插件在 `Execute` 的返回值里给 `task`；后续查询读核心快照，观察由核心调 `Monitor`。先停止全部旧核心及其后台对账、升级完整集群，再激活此版本；内置插件自动升级和回退限制见 CONTRACTS §28.4。客户端应把提交响应中的 `s2task_` ID 当作不透明字符串，后续原样传回查询端点。
 
 ### 5.1 跑起来是这样
 
 ```
 提交  POST /api/v3/contents/generations/tasks
-      核心鉴权 → 调度选本插件账号 → 持久记录提交意图 → 插件 BuildUpstreamRequest → 请求上游
-      核心收到有界成功 JSON 后同步调 ParseTaskSubmission：
-        插件返回上游 task id、初始 queued 查询快照、按分辨率与时长预估的 Reservation
+      核心鉴权 → 调度选本插件账号 → 插件 Execute（task_submission）
+      插件构造请求，RelayAndWait：核心持久记录提交意图、请求上游、把有界成功 JSON 交还插件
+      插件解析，返回 task：上游 task id、初始 queued 查询快照、按分辨率与时长预估的 Reservation
       核心同事务写任务归属/账号/快照、usage_logs、预扣和 pending_settlements
       核心把提交响应中的上游 ID 换成 s2task_ 公开 ID，再返回客户端
+      （插件没返回 task：任务不登记，客户端报错，预扣释放）
 
 轮询  GET /api/v3/contents/generations/tasks/:task_id      billing: free
       核心鉴权、校验任务所属用户及当前分组的模型权限
       直接返回共享快照；不选账号、不使用 RankAccounts、不访问上游
 
-观测  核心认领到期任务 → Poll（始终使用提交账号）
-      → ExecuteHTTP（核心绑定账号代理和限额）→ 插件解析结果：
+观测  核心认领到期任务 → Monitor（始终使用提交账号）
+      → Fetch（核心绑定账号代理和限额）→ 插件解析结果并返回：
           还在跑    → PENDING + task_snapshot_json + next_check_after_sec
           成功      → SETTLED + 真实用量 + task_snapshot_json；无用量则 SETTLED_ESTIMATE
           上游失败  → FAILED + reason + task_snapshot_json
@@ -289,12 +290,12 @@ rpc GetAccountCredentials(GetAccountCredentialsRequest) returns (GetAccountCrede
 
 - **钱收得到**：客户端提交完再也不回来查是常态，new-api 正是因此用后台轮询（`fetchMode: "per_task"`）而不是依赖客户端。核对由核心驱动，与客户端来不来无关。
 - 提交估计与后续差额结算都由核心事务和幂等账本负责；客户端查询免费，不会触发重复轮询或扣款。
-- 视频链路不需要额外 `net`、`app.jobs.v1`、`lock`、`ledger.debit` 或任务表权限。素材库仍有自己的数据库和出网需求，不能据此删除整个插件的相关权限。
+- 视频链路不需要额外 `net`、`app.jobs.v1`、`lock`、`ledger.debit` 或任务表权限。素材库仍有自己的数据库，0.13.0 起它的上游调用由核心发出，插件不再申请 `net`（§17）。
 - 余额门禁保留现有允许短时超额的契约，不能把异步预扣宣传成严格并发资金预授权。
 
 ### 5.3 历史任务
 
-已应用的 `0002_video_tasks.sql` 及旧表保留，不篡改迁移，也不再向它登记新视频任务。旧裸 ID 的归属只从核心可信账务恢复，不能使用曾按裸 ID 覆盖的插件表授权。
+插件 0.13.0 删除了旧的任务表 `video_tasks`（迁移 `0003_drop_video_tasks.sql`，`DROP TABLE IF EXISTS`；已应用的 `0002_video_tasks.sql` 不改）以及只读它的 `ResolveModel`。转发 V2 之后提交不再写这张表；唯一的读者 `ResolveModel` 只在端点声明 `request.modelSource: "plugin"` 时被核心调用，而线上的 0.12.8 与之前发布过的清单都没有这样声明，所以还在旧版本上的节点也不会读写它，可以直接删表。旧裸 ID 的归属只从核心可信账务恢复。
 
 旧任务首次恢复缺少完整结果时，核心安排统一轮询，查询暂时返回 `task_snapshot_pending`。未知、歧义或其他用户的任务不得退回普通调度；上游结果已超过保留期时明确返回无法继续观测。
 
@@ -510,7 +511,7 @@ Ark 图片响应的 `data[]` 每条带 `size`（如 `"2848x1600"`），**按分�
 
 **2. 「没接后端参数 / 后端不认」两个选项都不对。** 核心是**全量转发** query 给插件的（`plugin/routes/routes.go` 把 `URL.Query()` 整个交出去），`anthropic` 的 `/models` 确实实现了 `?q=`（ILIKE，有测试）。真问题是三个 declarative table 页里**只有一个**认 `q`：volcengine 的 `GET /assets`、`GET /asset-groups` 只认 `index_status` / `group_id`。所以「接通」会让 2/3 的页面**返回全量却显示成搜索结果**——比空白更糟的谎。删掉的理由是这个。
 
-真正的修法（**排期**）：`manifest.Page` 加一条「这个 source 认哪个查询参数」的声明（如 `"search": "q"`），`check` 校验参数名；前端**声明了才渲染搜索框**，输入防抖发 `q=` 并回第 1 页。之后 volcengine 两个 assets 路由要么实现 `q` 要么不声明。顺带 `serverPaged` 也该从启发式改成声明式——服务端分页开没开应来自声明，不该靠比较 `total > len(items)` 猜。
+（2026-11-19：声明式表格页已从平台删除，这条排期作废，见 §19。）真正的修法（**排期**）：`manifest.Page` 加一条「这个 source 认哪个查询参数」的声明（如 `"search": "q"`），`check` 校验参数名；前端**声明了才渲染搜索框**，输入防抖发 `q=` 并回第 1 页。之后 volcengine 两个 assets 路由要么实现 `q` 要么不声明。顺带 `serverPaged` 也该从启发式改成声明式——服务端分页开没开应来自声明，不该靠比较 `total > len(items)` 猜。
 
 **3. 图标名写错的后果比「空白」严重。** 渲染不存在的图标**不空白、不报错、零控制台输出**，画一个 `M5 5h14v14H5z` 的空心方块——和真图标 `stop`（`M6 6h12v12H6z`）几乎一模一样。manifest 里写错名字**不像坏了，像故意的**。现在：名字表抽到 `packages/ui/src/icons.ts`（导出 `ICON_NAMES` / `hasIcon`），兜底换成方框加问号（没有任何真图标长这样），解析不到时 `console.warn` 一次并指名插件与菜单。
 
@@ -530,13 +531,13 @@ Ark 图片响应的 `data[]` 每条带 `size`（如 `"2848x1600"`），**按分�
 
 10 个 Action、13 条 admin 路由、`plg_volcengine` 本地索引、四个宿主渲染页面（2 table + 2 form），版本 0.3.0。**没有 `ui.native`**，所以不需要 `hostUICompat`，也不用付 Critical 权限。
 
-新增权限五条：`accounts.read`(M)、`db.schema`(H)、`routes.admin`(M)、`ui.menu`(M)、`net`(H, optional，`scope.domains` 只到 `*.volcengineapi.com`)。
+新增权限五条：`accounts.read`(M)、`db.schema`(H)、`routes.admin`(M)、`ui.menu`(M)、`net`(H, optional，`scope.domains` 只到 `*.volcengineapi.com`)。（`net` 在 0.13.0 删除，§17。）
 
 ### 10.1 签名是重算验证过的，不是"能编译"
 
 测试从收到的请求**独立重建**火山 V4 canonical request 并自己推 signing key 链，与 `Authorization` 里的 Signature 逐字节比对；再用「换 SK / 换 region / 换 body 签名都必须变」证明它是签名而不是装饰；10 个 Action 全跑一遍都验签。另有 Action 白名单测试：路由无法诱使插件拿账号的 AK/SK 去签任意控制面调用（如 `DeleteEndpoint`），断言上游收到 0 个请求。
 
-出网全程经注入的拨号器（生产里就是 `egress.DialContext`），`dial == nil` 时直接报错，**绝不回落到直连 socket**。
+出网全程经注入的拨号器（生产里就是 `egress.DialContext`），`dial == nil` 时直接报错，**绝不回落到直连 socket**。（0.13.0 起插件不再联网，见 §17。）
 
 ### 10.2 本地索引与上游不一致的处理
 
@@ -569,6 +570,7 @@ Ark 图片响应的 `data[]` 每条带 `size`（如 `"2848x1600"`），**按分�
 
 - **`type: "table"` 的页面是只读的**：`DeclarativeTable.vue` 只有搜索框、刷新、分页，**没有任何行操作**，`manifest.Page` 也没有 `actions` 字段。所以"素材库能在控制台管理"靠 table 做不到，只能再加 `form` 页把创建路径补上。
 - **`form` 页里的关联 id 只能手填数字**：schema 表单没有「选项来自插件路由」的能力，所以 `account_id` / `group_id` 要管理员自己抄。体验很糙。正确答案是给声明式表单加一个「选项来自插件路由」的 widget，或者做 native 页——不是现在这样凑。
+- （0.13.0 已解决：声明式 table、form 页从平台删除，素材库两个页面改为原生页，新建并进列表页的弹窗，§19。）
 
 ### 10.5 又两个"声明了但没人管"的形状
 
@@ -604,17 +606,19 @@ token = **帧数 × 输出宽 × 输出高 / 1024**，固定 24fps。以下每�
 
 原来的 `resolutionPixels` 写死 16:9 且不分代际，所以**两个方向同时错**：对 21:9 低估，对 1.0 系列 720p 高估。
 
-### 11.2 预估的三档语义（`fields_omitted` 的落地）
+### 11.2 预估的语义：缺省、读到、读不全
+
+> 起初是三档（另有“字段在 `fields_omitted`：客户端发了、主机没搬 → 用该模型的最贵档”）。转发 V2 收尾（2026-11-18）起核心把声明的请求字段整个交给插件，不再有单值 4 KiB / 总量 32 KiB 的预算（CONTRACTS §25.6、§112.16），`fields_omitted` 随之从协议删除，那一档不存在了。
 
 | 情况 | 含义 | 做法 |
 |---|---|---|
-| 字段**不在** `fields` 也**不在** `fields_omitted` | 客户端没发 | 用 Ark **文档化的默认值**（这是事实，不是猜） |
-| 字段在 **`fields_omitted`** | 客户端发了、主机没搬 | **绝不用默认档**，用该模型的**最贵档** |
-| 任一 `content.N.text` 被 omit，或 `content.#` > 3 | prompt 没读全 | **四个参数全部作废**，整条按模型最坏情况 |
+| 字段**不在** `fields` | 客户端没发 | 用 Ark **文档化的默认值**（这是事实，不是猜） |
+| 字段在 `fields` 但读不懂（例如不认识的分辨率档位） | 客户端发了、插件不认识 | **绝不用默认档**，用该模型的**最贵档** |
+| `content.#` > 3 | prompt 没读全（第 4 个及以后的元素不在声明的路径里） | **四个参数全部作废**，整条按模型最坏情况 |
 
-第三行最容易漏：因为两种写法没有优先级，**prompt 读不全时连已经读到的结构化字段也不可信**，哪怕它写着 480p。实现第一版就在这里写错过（只 bound 了 duration、让 omitted 的 resolution 掉回默认档），结果「全部 absent」和「全部 omitted」估出完全相同的数字，被测试抓出来。
+第三行最容易漏：因为两种写法没有优先级，**prompt 读不全时连已经读到的结构化字段也不可信**，哪怕它写着 480p。实现第一版就在这里写错过（只 bound 了 duration、让读不到的 resolution 掉回默认档），结果「全部 absent」和「全部读不到」估出完全相同的数字，被测试抓出来。
 
-声明的 8 条路径（**顺序即预算优先级**，四个短标量必须排在 prompt 前面，否则一条 4 KiB 的提示词能把决定价格的字段挤掉）：
+声明的路径（当时的顺序是预算优先级：四个短标量排在 prompt 前面，免得一条 4 KiB 的提示词把决定价格的字段挤掉；预算删除后顺序不再有作用）：
 
 ```json
 "usageRequestFields": ["resolution","ratio","duration","frames","content.#",
@@ -652,6 +656,8 @@ token = **帧数 × 输出宽 × 输出高 / 1024**，固定 24fps。以下每�
 3. **go.mod 少 6 个模块**，含 §10.3 当初为压住歧义导入而 pin 的**单体 `google.golang.org/genproto`**（`go mod why` 确认主模块根本不需要它）。那笔 workspace 污染债一并还清。
 4. 顺带补了非 JSON 响应的处理（中间代理的 HTML 502、空 body、200 里塞数组），旧代码对这些只会给一个含糊的 `InternalError`。
 
+> 0.13.0（转发 V2 收尾）起素材库调用不再有自己的总时限：原来每个 Action（含重试）最多 30 秒（`assetCallTimeout`），传输的 TLS 握手最多 10 秒，现在都随发起它的控制台请求的 context 结束（AGENTS.md、CONTRACTS §112.16 不留写死的超时）；之后改由核心发出（§17），每次发送受核心 `SendAccountRequest` 已有的单次 30 秒约束。重试（传输错误、429、5xx，最多 3 次，间隔 200 毫秒，`Create*` 不重试）不是为配合那个时限而设的，保留。
+
 **正确性风险由 golden vector 消除**：在删掉 SDK **之前**，先用官方 SDK v1.2.54 真的发出两个请求并把整个请求逐字段冻结（含它随机生成的 `X-Sdk-Invocation-Id`），自写签名对同样输入必须产出**逐字节相同**的 `Authorization`。**这批向量一旦需要重新生成，必须再从官方 SDK 取 —— 用 `signV4` 重算会让测试变成同义反复**（测试文件头写明了这一点和抓取方法）。
 
 > 主控独立复核过一次：从 Go 模块缓存取 `volc-sdk-golang@v1.0.23`（SDK 签名的实际实现），用同样输入独立签名，两个签名 `527a9b6e…` / `3d61934c…`、payload hash 与 SignedHeaders 列表与提交的 golden vector **逐字节相同**。向量的出处是真的。
@@ -670,7 +676,7 @@ token = **帧数 × 输出宽 × 输出高 / 1024**，固定 24fps。以下每�
 - 两个 table 页已声明 `"search": "q"`（`manifest.Page.Search`）。核心的 check 能验名字合法、不撞 `page`/`page_size`、`source` 真实存在，但**「路由到底认不认这个名字」只有插件自己的测试能证明** —— `manifest_test.go` 断言声明与 `volcengine.SearchParam` 一致，分叉就红。
 - `est_tokens` **保留列、保留写入、停止读取**。不删是因为插件迁移 checksum 不可变（见 CONTRACTS §25.7 末尾）；不「停止读写」是因为该列 `NOT NULL DEFAULT 0` 没有「未知」值，停写会让每一行新记录都声称预扣 0 —— 那正是「整列变成噪音」。它现在记录的是**从客户端真实请求算出来的**预扣数字，是被质疑计费时第一手的证据。
 - `profileOf` 是子串匹配，Ark 的 Endpoint ID（`ep-...`）会落进 unknown 画像。管理员若用 Endpoint ID 注册模型，估算会退化 —— 但只在请求没写 resolution 时才用到这个默认值。
-- 估算凡是 bound 了东西都会打一条 `assumed` INFO 日志（哪几项被兜底、`fields_omitted` 是什么、算出多少 token）。用户问「为什么扣这么多」时先看这条。
+- 估算凡是 bound 了东西都会打一条 `assumed` INFO 日志（哪几项被兜底、算出多少 token）。用户问「为什么扣这么多」时先看这条。
 - 版本 **0.4.0 → 0.5.0**。
 
 ---
@@ -811,7 +817,7 @@ token = **帧数 × 输出宽 × 输出高 / 1024**，固定 24fps。以下每�
 
 **三处调用点都要用视频前缀**，其中 `BuildReconcileRequest` 最容易漏：它跑在离线循环里，路径错了每次轮询都 404 → 核心读成「仍在进行」→ 到 deadline 放弃 → **保留预扣**。于是一个真的跑完、真的上报了用量的任务，被按预估收费。测试专门钉了这一条。
 
-`spec.StripSuffixes` **保持字面 `/api/v3`，不跟随任何设置**。两者看着像、其实是两件事：它的作用是「撤销一次从 Ark SDK 文档粘贴 base URL 的动作」，与上游实际挂载点无关。
+`spec.Versions` **保持字面 `/api/v3`，不跟随任何设置**。两者看着像、其实是两件事：它的作用是「撤销一次从 Ark SDK 文档粘贴 base URL 的动作」，与上游实际挂载点无关。（2026-11-20 起地址按填写的保存，不再在保存时去掉 `/api/v3`；请求时 `FromAccount` 去掉末尾至多一个 `/api/v3` 得到根，各路径照旧完整接在根上，清单的 `guardedSettings` 写同样的 `versions`，核心按根比较。）
 
 ### 13.3 安全：前缀不能把请求移出 base_url 的主机
 
@@ -961,7 +967,7 @@ new-api 的两个渠道是同一条轴（下表是读代码得到的，不是看
 | `base_url` | 可留空（默认国内），**guarded** 到两个官方地址 | **必填**，**不 guarded**（无法 guard） |
 | 路径布局 | 固定 `/api/v3`，**没有前缀字段** | 默认 `/v1`，`api_prefix` + `video_api_prefix` 可配 |
 | 平台 | `openai` + `volcengine` | `openai` + **`anthropic`** + `volcengine` |
-| `StripSuffixes` | `/api/v3`（撤销粘贴 SDK base URL） | **无**（见 14.3） |
+| `Versions` | `/api/v3`（撤销粘贴 SDK base URL：保存原样，请求时去掉） | **无**（见 14.3） |
 | 素材库 | 官方控制面，`asset_base_url` guarded | 中转站自己的端点，完整地址，不 guarded |
 
 `prefixesOf` 于是只有两个分支，且**官方那支不读任何设置**：前缀不在它的 `settingsFields` 里、不在它的表单里，真被写进去也读不到（会落进加密 blob）。测试钉了这一条 —— 一个「看起来能改、其实改不了」的设置比没有更糟。
@@ -975,9 +981,9 @@ new-api 的两个渠道是同一条轴（下表是读代码得到的，不是看
 
 ### 14.3 中转 `base_url` 的保存期检查（新增）
 
-`relaySpec` 不设 `StripSuffixes`，理由和官方那边设它的理由是同一个：官方那边是「撤销一次从 Ark SDK 文档粘贴 base URL 的动作」，而中转类型的 `base_url` 是**中转站的根**、路径由两个前缀表达 —— 去掉任何后缀都等于**把请求悄悄挪到运维没写的地方**（`https://r/api/v3` 配默认前缀会变成 `https://r/v1/...`）。
+`relaySpec` 不设 `Versions`（原名 `StripSuffixes`，2026-11-20 改名后中转类型的地址规则不变），理由和官方那边设它的理由是同一个：官方那边是「撤销一次从 Ark SDK 文档粘贴 base URL 的动作」，而中转类型的 `base_url` 是**中转站的根**、路径由两个前缀表达 —— 去掉任何后缀都等于**把请求悄悄挪到运维没写的地方**（`https://r/api/v3` 配默认前缀会变成 `https://r/v1/...`）。
 
-所以改成**保存时拒绝**：`base_url` 的路径以 `/v1` 或 `/api/v3` 结尾时报字段错误，并点明「把路径填到 `api_prefix` 里」。
+所以改成**保存时拒绝**：`base_url` 的路径以 `/v1` 或 `/api/v3` 结尾时报字段错误，并点明「把路径填到 `api_prefix` 里」。按转义形式判断（地址就是这样保存和发出的）：`https://r/a%2Fv1` 不以 `/v1` 段结尾，接受。
 
 **为什么值得单独加一道**：文本面上路径错了是响亮的 404，但视频面上 —— 提交 404 而轮询也 404 时，核心把 404 读成「仍在进行」，到 deadline 放弃并**保留预扣**。一个真跑完、真上报了用量的任务被按预估收费。这是 §13.2 已经记过一次的失败形态，端点可配之后它的触发概率变高了，而「base_url 带了前缀」正是最可能的误配。
 
@@ -1054,7 +1060,7 @@ new-api 的两个渠道是同一条轴（下表是读代码得到的，不是看
 
 方舟官方 `apikey` 和豆包视频 `relay` 共用这些计量字段：`resolution`、`video_seconds`、`video_pixels`、`video_width`、`video_height`、`video_input`、`video_draft`、`video_estimated`。提交时 `video_estimated=true`；返回真实 Token 后为 `false`。最终轮询仅覆盖上游实际提供的字段，保留提交时的视频输入与 Draft 标记。若上游给了分辨率但无法确认精确宽高，不沿用旧尺寸覆盖，回退基础价格。
 
-`usageRequestFields` 新增有界数组属性投影，例如 `content.#.type`。只传内容类型，避免长提示词或内联图片挤掉视频输入标记；仍受已有字段数和字节预算约束。插件 0.12.0 需要同时升级本次宿主与 SDK，沿用内置插件随核心打包的升级流程。
+`usageRequestFields` 新增有界数组属性投影，例如 `content.#.type`。只传内容类型，避免长提示词或内联图片挤掉视频输入标记；仍受已有字段数和字节预算约束（字节预算已在转发 V2 收尾删除，见 §11.2；每个端点最多 16 个字段的上限仍在）。插件 0.12.0 需要同时升级本次宿主与 SDK，沿用内置插件随核心打包的升级流程。
 
 管理员可在表达式源码使用 `u("video_draft")` 等字段自定义规则；试算新增插件计量输入及预扣/结算示例。源码表达式的自定义逻辑由管理员维护，视频模板配置则始终由服务器重新生成，防止旧源码覆盖新配置。
 
@@ -1066,10 +1072,43 @@ new-api 的两个渠道是同一条轴（下表是读代码得到的，不是看
 
 核心提供离线 `HostService.CountTokens`，SDK 插件通过 `pluginsdk.CountTokens(ctx, host, text, encoding)` 使用；支持 o200k_base 与 cl100k_base、UTF-8 校验和 1 MiB 文本限制，不访问上游。BPE 文本计数是预估，不能替代视频用量或服务商最终 usage。SDK 默认文本估算器使用该能力，火山插件的视频估算器无需已有 task ID。
 
-预扣与释放接口为核心依赖的编译期必需能力，不再通过可选接口断言静默跳过。任务提交协议必须有插件显式 `UsageEstimator`，否则 SDK 拒绝；普通文本端点仍可使用默认本地分词。管理员明确配置的 `missing_price_policy=free` 是免费定价策略，不属于旧版兼容。
+预扣与释放接口为核心依赖的编译期必需能力，不再通过可选接口断言静默跳过。任务提交协议必须有插件显式 `UsageEstimator`，否则 SDK 拒绝；普通文本端点仍可使用默认本地分词。没有价格的模型一律拒绝（CONTRACTS §17.3）。
 
 表达式条件倍率连乘：两条规则分别命中 ×2、×3 时总倍率为 ×6，再乘分组倍率。使用日志保存并展示各条规则、命中状态、请求条件取值、基础费用、条件总倍率及最终费用；界面直接使用结算快照，不再猜测旧字段、缺失倍率或上下文长度。当前普通 `per_token` 模式没有独立规则配置，需使用表达式配置 Token 单价与条件规则；按上游实际 Fast/Ultrafast 档位修正结算尚未实现。
 
 后续清理修复了版本资源读取时未关闭临时插件包句柄的问题，Windows 的 `TestVersionAssetsReadApprovedPackageWithoutLocalProcess` 已在本地 PostgreSQL 下复测通过。
 
 验证：相关单元测试、前端回读/类型检查/构建通过；另启动独立本地 PostgreSQL 18.3，计费、用量及插件运行时事务测试通过，覆盖并发余额不足、幂等预扣与退款、最终结算、异步任务预扣接续及失败回滚。扩展 registry 测试中的 TestVersionAssetsReadApprovedPackageWithoutLocalProcess 在 Windows 临时文件清理时遇到占用失败，此项未通过。未调用真实付费视频上游，也未部署。
+
+## 17. 0.13.0：转发 V2（2026-11-18，需核心 ≥0.1.304）
+
+核心与全部平台插件改成一条请求路径（CONTRACTS §112），volcengine 随之改写，行为对客户端不变：
+
+- 插件只实现 `BuildUpstream`，`Execute` 由 SDK 的 `ExecuteDefault` 提供：普通端点（chat、embeddings、图片、Anthropic Messages）不等待地中继、返回 `host_usage`，用量由核心按清单规则读；两个视频提交端点是任务提交（也声明了 `usageSource: "plugin"`），等待形式中继、`ParseTaskSubmission` 读观察、返回 `task`（带按请求字段算的预估）。
+- 请求体完整交给插件，原来清单里的 `requestFields` 删除；任务观察只有 `Monitor`（原来的 `Poll` 函数体成为它），两阶段的 `BuildReconcileRequest` / `ParseReconcileResponse` 删除；清单删掉 `platform.execute.v1`、`platform.poll.v1`。
+- 插件的头全部保持权威头，运营方的请求头透传和覆盖改不了它们（与改写前相同）。转发的客户端请求头就是核心交来的那些（核心已按清单的 `passHeaders` 过滤：anthropic 平台的 `messages` 是 `anthropic-version`、`anthropic-beta`、`user-agent`，其余协议只有 `user-agent`），插件不再自己维护两份名单（`apikey.ForwardHeaders`）；上游收到的请求没有变化。
+- 流式 chat 请求加 `stream_options.include_usage = true`，与 openai 预设同一个改写（`openai.StreamUsage`），“流式”的判断也相同：`pluginsdk.RequestStream`，即 `meta.stream` 或请求体的 `stream` 为 `true`。所以运营方在账号的参数覆盖里给非流式请求加了 `stream:true` 时（参数覆盖在 `Execute` 之前执行），插件同样补上 `stream_options.include_usage`，上游会在最后一块报用量；以前只看 `meta.stream`，这种请求拿不到流式用量。volcengine 没有只流式的账号类型，核心不会替它强制流式。
+- 任务提交上插件没有返回 `task`（解析失败）时，任务不登记、客户端报错、预扣释放；等待期间插件崩溃时核心切断上游，这次请求不计费。
+- 两个账号类型在 anthropic 平台上只服务 `messages`（清单 `"endpoints": ["messages"]`）。以前没写端点子集，核心把 `anthropic.count_tokens` 原样路由给它们而不用本地估算，插件又拒绝（Ark 没有计数端点），只有 Ark 账号的分组对 `count_tokens` 一律回 503；现在 `count_tokens` 是核心的本地估算。`ProtocolCountTokens` 及其分支删除，上游收到的请求没有变化（以前计数请求也从未到达上游）。下文 §15 关于“按名字拒绝 `count_tokens`、`AccountPlatform` 没有按端点过滤的能力”的说法到此不再成立。
+- 视频查询由核心从自己的任务快照回答，从不为 `volcengine.video_query` 调 `Execute`：`BuildUpstream` 里查询的 GET 分支删除，每个请求都是 POST；`ExtractUsage` 只剩任务提交解析里用的内部函数 `videoUsage`。
+- **素材库改由核心发出**（转发 V2 收尾）：插件照旧读账号的 AK/SK 签名（`GetAccountCredentials`，每次读写一条审计），签好的方法、地址、请求头、请求体交给 `pluginsdk.SendAccountRequest`，核心为这个账号发出：有代理的账号经代理（此前插件经出口隧道直连，账号代理不起作用），直连时过 SSRF 检查，不跟随重定向（此前插件的客户端会跟随），回答整份交还（此前插件读到 1 MiB 为止），单次 30 秒（核心的 `refreshTimeout`），每次发送另写一条审计（`plugin.account_request`，只记方法、主机、路径和状态）。插件自己的 HTTP 客户端、传输层、拨号器和 1 MiB 上限删除，清单去掉 `net` 权限（插件不再有别的直连）；重试（传输错误、429、5xx，最多 3 次，间隔 200 毫秒，`Create*` 不重试）不变：核心的发送不重试，它仍然有用。
+  - **目标主机**：核心只发往清单允许的主机（`manifest.UpstreamHostAllowed`，CONTRACTS §112.17）。默认的官方控制面 `ark.cn-beijing.volcengineapi.com` 在 `externalServices` 里；运营方填的 `asset_base_url`（两种类型）、中转的 `asset_endpoint`（完整地址）和它所相对的 `base_url` 都在类型的 `upstreamFields` 里（原本就在，没有改清单），所以正式账号指向 BytePlus 等别的控制面、中转按自己的 `base_url` 解析的素材路径都能发出。`asset_endpoints_test.go` 对每种配置断言核心会放行。
+  - **发给上游的内容不变**：`arkapi_test.go` 的 `TestRequestIsTheReleasedOne` 用改写前的插件客户端在固定时刻录下一次 `ListAssets` 的完整请求（方法、路径、查询、全部请求头、请求体、签名），新实现交给核心的内容与之逐字节相同，经仿照核心 `sendPluginCall` 的发送到达假上游后同样逐字节相同（`User-Agent`、`Accept-Encoding`、`Content-Length` 由 Go 的 HTTP 客户端自己加，核心与原插件的传输层设置相同）。核心对 `SendAccountRequest` 只在没有 `Content-Type` 时补 `application/json`（插件总是自己设置并签名），不增改别的头，所以签名有效。其余签名测试（独立重算、换 SK / 区域 / 请求体签名都变、十个 Action 都验签、取消一直传到上游）照旧经这条路径通过。
+- 测试：`internal/volcengine/execute_test.go`（经假宿主的中继形式与返回种类）；测试把 `manifest.json` 交给假宿主（`pluginsdktest.Options{Manifest: ...}`），取回能到的主机按清单判断；`TestConformance` 调一致性套件（chat 流式与非流式、responses、embeddings、两种类型的 messages、图片、视频提交），11 条全部通过，没有例外。
+
+## 18. 账号的全部信息随调用下发，删掉账号授权（2026-11-19，需核心 ≥0.1.304；版本仍是未发布的 0.13.0；契约见 CONTRACTS §124）
+
+- 清单删掉 `accounts.credentials` 和 `accounts.read`：插件收到、列出自己账号类型的账号都不需要授权。前面各节提到这两个授权和 `GetAccountCredentials` 的地方是当时的记录。
+- 素材库读账号改用 `Host.Account`（`HostService.GetAccount`，返回与平台调用相同的 `Account`，含代理；每次一条审计 `plugin.account.read`，审计失败即调用失败；代理拿不到时 `UNAVAILABLE`），`AssetConfigOf` 改为接收 `*pluginv1.Account`。每个请求每个账号仍最多读一次。签名后的请求照旧经 `SendAccountRequest` 由核心经账号代理发出，插件不联网。
+- 测试：`routes_db_test.go` 的假宿主改实现 `Account`；`assets_test.go`、`asset_endpoints_test.go` 改用 `pluginv1.Account`；`manifest_test.go` 的权限列表去掉这两项。e2e AC43 经 mock 的代理读上游素材组。
+
+## 19. 界面只用代码写（DESIGN-2026-11-19-PLUGIN-UI-CODE-ONLY，版本仍是未发布的 0.13.0）
+
+- **账号表单是原生代码**（`ui/native`，清单 `form.mode: "native"`、`ui.native.entry`、`hostUICompat: "^4.0"`（起初 `^3.20`，界面契约 4.0 删除声明式写法后改为 `^4.0`）、宿主权限 `ui.native`）：`apikey` 是 `createApiKeyForm`（`VolcengineKeyForm`；`base_url`、`asset_base_url` 按 `guardedSettings` 只给官方值），`relay` 是自己拼的 `VolcengineRelayForm`（素材库一节；兼容配置一节默认收起，有值或有错时自己展开）。`secret_key` 是可清除的密钥（已存时有“清除已保存的值”）。字段、键名与原 `forms/{apikey,relay}.*.json` 相同，文案只改了一处：视频任务集合端点的帮助里，原来的 `/{task_id}`、`/{任务ID}` 写成 `/task_id`、`/任务ID`（花括号是 vue-i18n 的占位符语法）；原表单删除。两个表单的“素材库（可选）”一节带原来的说明（`SFormSection`）。
+- **原 schema 的约束都由 `ValidateCredentials` 保证**（`internal/volcengine/form_constraints_test.go`，每条约束一个反例，写死在测试里）。表单没有的键保存时被拒绝（错误码 `unknown`，同原 schema 的 `additionalProperties:false`，`apikey.Spec.Fields` 声明）：`apikey` 允许 `api_key`、`base_url` 和素材库四个字段（`access_key`、`secret_key`、`asset_base_url`、`asset_region`），`relay` 再加 `video_endpoint`、`asset_endpoint`、`api_prefix`、`video_api_prefix`。原来只有 schema 挡住、这次补进 Go 的：`base_url`、`asset_base_url` 里不能有空白（`url.Parse` 接受路径里的空格，规范化后存成转义的地址；现在由 SDK 的 `apikey.NormalizeBaseURL` 统一拒绝，插件不再另查），`api_prefix`、`video_api_prefix` 里不能有空白（只在保存时检查，`validatePrefixFields`；请求时读已存的前缀不查空白，已存的值照旧可用）。
+- **素材库两个页面是原生页**（`VolcengineAssetsPage`、`VolcengineAssetGroupsPage`，`SResourcePage`）：列、格式、`q` 搜索、分页与原 table 页相同；原来的两个 form 页并进各自列表页的“新建”弹窗（需要 `assets:manage`），清单删掉这两个页面和 `forms/asset*.json`。新建成功关弹窗、回第一页刷新；路由的字段错误显示在对应字段、弹窗不关。
+- **素材库新建路由自己校验长度和地址**（`route_checks.go`）：`POST /asset-groups` 的 `name` ≤128、`title` ≤256、`description` ≤1024、`group_type` ≤64；`POST /assets` 的 `name` ≤128、`asset_type` ≤64、`url` ≤2048 且是不含空白的 `http(s)://` 或 `tos://` 地址。原来这些只在控制台的 schema 表单里。
+
+## 20. 核心迁移 0118 清理 `apikey` 账号设置里的前缀键（2026-11-19，核心 0.1.304；插件不变；契约见 CONTRACTS §126）
+
+`api_prefix`、`video_api_prefix` 只属于 `relay` 类型（14.2）。线上有 2 个 `apikey` 账号的 `settings` 里还留着 `video_api_prefix`（大概是 14.4 那种原先指向中转站、拆分前保存的账号）：`prefixesOf` 对 `apikey` 不读它，但 19 节起表单没有的键保存时报 `unknown`，于是这两个账号每次编辑凭证都被拒，界面上又删不掉这个键。核心迁移 `0118_volcengine_apikey_prefix_settings.sql` 删掉 `apikey` 账号 `settings` 里的这两个键，其余键和 `relay` 账号不动；请求路径不变。

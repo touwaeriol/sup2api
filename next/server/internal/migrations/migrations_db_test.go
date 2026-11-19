@@ -906,3 +906,450 @@ func TestMigration0104DropsCustomPlugin(t *testing.T) {
 	require.Equal(t, "custom", read(`SELECT string_agg(plugin_key, ' ') FROM plugin_key_retirements`))
 	require.Equal(t, "guard", read(`SELECT string_agg(key, ' ') FROM plugins`))
 }
+
+// 0107 turns the environment variable max_request_body_mb into the gateway
+// setting of the same name (CONTRACTS §111): a valid value of the global
+// layer moves into the gateway row, keeping its other fields (or creating
+// the row), and the key leaves the global layer, the groups and the
+// accounts, every other key staying. A value the variable would not have
+// accepted is dropped, not moved. A rerun changes nothing.
+func TestMigration0107RequestBodyLimitSetting(t *testing.T) {
+	const id = "0107_request_body_limit_setting.sql"
+	const layers = `INSERT INTO groups (name, environment) VALUES
+			('both', '{"max_request_body_mb": 32, "relay_timeout_seconds": 90}'), ('only', '{"max_request_body_mb": 8}'), ('none', '{"task_timeout_minutes": 5}');
+		INSERT INTO accounts (name, plugin_key, type, credentials_enc, environment) VALUES
+			('stale', 'p', 't', '', '{"max_request_body_mb": 10, "relay_timeout_seconds": 60}'), ('plain', 'p', 't', '', '{}')`
+	const layersAfter = ` | both={"relay_timeout_seconds": 90} none={"task_timeout_minutes": 5} only={}` +
+		` | plain={} stale={"relay_timeout_seconds": 60}`
+	for _, tc := range []struct {
+		name, settings, want string
+	}{
+		{"moved into the gateway row", `('environment', '{"max_request_body_mb": 256, "relay_timeout_seconds": 600}'), ('gateway', '{"max_attempts": 4}')`,
+			`environment={"relay_timeout_seconds": 600} gateway={"max_attempts": 4, "max_request_body_mb": 256}`},
+		{"gateway row created", `('environment', '{"max_request_body_mb": 1024}')`,
+			`environment={} gateway={"max_request_body_mb": 1024}`},
+		{"out of range dropped", `('environment', '{"max_request_body_mb": 4096}'), ('gateway', '{"max_attempts": 4}')`,
+			`environment={} gateway={"max_attempts": 4}`},
+		{"fraction dropped", `('environment', '{"max_request_body_mb": 64.5}')`, `environment={}`},
+		{"not a number dropped", `('environment', '{"max_request_body_mb": "64", "relay_timeout_seconds": 600}')`,
+			`environment={"relay_timeout_seconds": 600}`},
+		{"nothing set", `('environment', '{"relay_timeout_seconds": 600}'), ('gateway', '{"max_attempts": 4}')`,
+			`environment={"relay_timeout_seconds": 600} gateway={"max_attempts": 4}`},
+		{"no global layer", `('gateway', '{"max_attempts": 4}')`, `gateway={"max_attempts": 4}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := testutil.DBThrough(t, migrationBefore(t, id))
+			ctx := t.Context()
+			exec := func(sql string) {
+				t.Helper()
+				_, err := db.SQL.ExecContext(ctx, sql)
+				require.NoError(t, err)
+			}
+			migrate := func() []string {
+				t.Helper()
+				done, err := store.Migrate(ctx, db, migrations.FS, store.CoreTracker{}, store.MigrateOptions{LockKey: store.CoreMigrationLockKey})
+				require.NoError(t, err)
+				return done
+			}
+			state := func() (v string) {
+				t.Helper()
+				require.NoError(t, db.SQL.QueryRowContext(ctx, `SELECT concat_ws(' | ',
+					(SELECT string_agg(key || '=' || value::text, ' ' ORDER BY key) FROM settings WHERE key IN ('environment', 'gateway')),
+					(SELECT string_agg(name || '=' || environment::text, ' ' ORDER BY name) FROM groups),
+					(SELECT string_agg(name || '=' || environment::text, ' ' ORDER BY name) FROM accounts))`).Scan(&v))
+				return v
+			}
+			exec(`DELETE FROM settings WHERE key IN ('environment', 'gateway'); INSERT INTO settings (key, value) VALUES ` + tc.settings + `; ` + layers)
+
+			require.Equal(t, migrationsAfter(t, migrationBefore(t, id)), migrate())
+			require.Equal(t, tc.want+layersAfter, state())
+
+			exec(`DELETE FROM schema_migrations WHERE id = '` + id + `'`)
+			require.Equal(t, []string{id}, migrate())
+			require.Equal(t, tc.want+layersAfter, state())
+		})
+	}
+}
+
+// 0108 makes every column that stores a model name text (no length), keeps
+// the character set of a price's model id, and recreates the rollup trigger
+// that names the model columns. A rerun changes nothing.
+func TestMigration0108ModelNameText(t *testing.T) {
+	const id = "0108_model_name_text.sql"
+	db := testutil.DBThrough(t, migrationBefore(t, id))
+	ctx := t.Context()
+	migrate := func() []string {
+		t.Helper()
+		done, err := store.Migrate(ctx, db, migrations.FS, store.CoreTracker{}, store.MigrateOptions{LockKey: store.CoreMigrationLockKey})
+		require.NoError(t, err)
+		return done
+	}
+	read := func(sql string) (v string) {
+		t.Helper()
+		require.NoError(t, db.SQL.QueryRowContext(ctx, sql).Scan(&v))
+		return v
+	}
+	state := func() string {
+		return read(`SELECT string_agg(table_name || '.' || column_name || '=' || data_type, ' ' ORDER BY table_name, column_name)
+			FROM information_schema.columns WHERE table_schema = current_schema()
+			AND (table_name, column_name) IN (('usage_logs', 'model'), ('usage_logs', 'upstream_model'), ('usage_hourly', 'model'),
+				('usage_hourly', 'upstream_model'), ('price_rules', 'model'), ('model_prices', 'model'))`) + " | " +
+			read(`SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'model_prices_model_id_chk'`) + " | " +
+			read(`SELECT count(*)::text FROM pg_trigger WHERE tgname = 'usage_hourly_mark_update'`)
+	}
+	const want = "model_prices.model=text price_rules.model=text usage_hourly.model=text usage_hourly.upstream_model=text" +
+		" usage_logs.model=text usage_logs.upstream_model=text | CHECK ((model ~ '^[A-Za-z0-9._:/@+-]+$'::text)) | 1"
+	require.Equal(t, migrationsAfter(t, migrationBefore(t, id)), migrate())
+	require.Equal(t, want, state())
+	_, err := db.SQL.ExecContext(ctx, `DELETE FROM schema_migrations WHERE id = '`+id+`'`)
+	require.NoError(t, err)
+	require.Equal(t, []string{id}, migrate())
+	require.Equal(t, want, state())
+}
+
+// 0112 adds the two image token columns of usage_logs (CONTRACTS §118):
+// bigint, NOT NULL, 0 on a row written before them; a rerun changes nothing.
+func TestMigration0112UsageImageTokens(t *testing.T) {
+	const id = "0112_usage_image_tokens.sql"
+	db := testutil.DBThrough(t, migrationBefore(t, id))
+	ctx := t.Context()
+	migrate := func() []string {
+		t.Helper()
+		done, err := store.Migrate(ctx, db, migrations.FS, store.CoreTracker{}, store.MigrateOptions{LockKey: store.CoreMigrationLockKey})
+		require.NoError(t, err)
+		return done
+	}
+	_, err := db.SQL.ExecContext(ctx, `INSERT INTO usage_logs (request_id, user_id, api_key_id, group_id, protocol, endpoint, status_code, success, input_tokens, output_tokens)
+		VALUES ('before-0112', 1, 1, 1, 'openai.images', '/v1/images/generations', 200, true, 70, 900)`)
+	require.NoError(t, err)
+	state := func() (cols, row string) {
+		t.Helper()
+		require.NoError(t, db.SQL.QueryRowContext(ctx, `SELECT string_agg(column_name || '=' || data_type || ',' || is_nullable || ',' || column_default, ' ' ORDER BY column_name)
+			FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'usage_logs'
+			AND column_name IN ('image_input_tokens', 'image_output_tokens')`).Scan(&cols))
+		require.NoError(t, db.SQL.QueryRowContext(ctx, `SELECT input_tokens || ' ' || output_tokens || ' ' || image_input_tokens || ' ' || image_output_tokens
+			FROM usage_logs WHERE request_id = 'before-0112'`).Scan(&row))
+		return cols, row
+	}
+	const wantCols = "image_input_tokens=bigint,NO,0 image_output_tokens=bigint,NO,0"
+	require.Equal(t, migrationsAfter(t, migrationBefore(t, id)), migrate())
+	cols, row := state()
+	require.Equal(t, wantCols, cols)
+	require.Equal(t, "70 900 0 0", row)
+	_, err = db.SQL.ExecContext(ctx, `DELETE FROM schema_migrations WHERE id = '`+id+`'`)
+	require.NoError(t, err)
+	require.Equal(t, []string{id}, migrate())
+	cols, row = state()
+	require.Equal(t, wantCols, cols)
+	require.Equal(t, "70 900 0 0", row)
+}
+
+// 0111 removes the claude_oauth plugin (CONTRACTS §116) as an uninstall
+// with purge would: its row (cascading the versions and rollouts), its
+// permission and the grants of it, its egress domains, job tasks and a
+// hand-made schema. Its accounts and the other plugins stay; a rerun
+// changes nothing.
+func TestMigration0111DropsClaudeOAuthPlugin(t *testing.T) {
+	const id = "0111_drop_claude_oauth_plugin.sql"
+	db := testutil.DBThrough(t, migrationBefore(t, id))
+	ctx := t.Context()
+	exec := func(sql string) {
+		t.Helper()
+		_, err := db.SQL.ExecContext(ctx, sql)
+		require.NoError(t, err)
+	}
+	read := func(sql string) (v string) {
+		t.Helper()
+		require.NoError(t, db.SQL.QueryRowContext(ctx, sql).Scan(&v))
+		return v
+	}
+	migrate := func() []string {
+		t.Helper()
+		done, err := store.Migrate(ctx, db, migrations.FS, store.CoreTracker{}, store.MigrateOptions{LockKey: store.CoreMigrationLockKey})
+		require.NoError(t, err)
+		return done
+	}
+	exec(`INSERT INTO roles (key, name, superuser) VALUES ('ops', '{}', false), ('other', '{}', false);
+		INSERT INTO plugins (key, name, status, builtin) VALUES ('claude_oauth', '{"en":"Claude OAuth Accounts"}', 'enabled', false), ('guard', '{"en":"Guard"}', 'enabled', false);
+		INSERT INTO plugin_versions (plugin_key, version, manifest, manifest_hash, package_sha256, package_size, signature_status)
+			VALUES ('claude_oauth', '0.2.5', '{}', 'x', 'x', 1, 'valid'), ('guard', '0.2.10', '{}', 'y', 'y', 1, 'valid');
+		INSERT INTO plugin_rollouts (plugin_key, action, target_version, phase) VALUES ('claude_oauth', 'enable', '0.2.5', 'active');
+		INSERT INTO permissions (key, module, label, source, plugin_key) VALUES
+			('plugin.claude_oauth:claude_oauth:manage', 'claude_oauth', '{}', 'plugin', 'claude_oauth'), ('guard:x', 'guard', '{}', 'plugin', 'guard');
+		INSERT INTO casbin_rule (ptype, v0, v1, v2) VALUES ('p', 'r:ops', 'plugin.claude_oauth:claude_oauth:manage', '*'), ('p', 'r:other', 'guard:x', '*');
+		INSERT INTO plugin_egress_domains (plugin_key, host) VALUES ('claude_oauth', 'platform.claude.com'), ('guard', 'example.com');
+		INSERT INTO scheduled_tasks (name, source, timeout_ms, plugin_key) VALUES ('plugin.claude_oauth.refresh_tokens', 'plugin_manifest', 1000, 'claude_oauth'),
+			('core.usage.rollup', 'core', 1000, NULL);
+		INSERT INTO accounts (name, plugin_key, type, credentials_enc) VALUES ('orphan', 'claude_oauth', 'claude_setup_token', '');
+		CREATE SCHEMA plg_claude_oauth; CREATE TABLE plg_claude_oauth.t (id int)`)
+	revisions := `SELECT string_agg(key || '=' || revision, ' ' ORDER BY key) FROM roles WHERE key IN ('ops', 'other')`
+	before, version := read(revisions), read(`SELECT policy_version::text FROM authz_meta`)
+
+	state := func() string {
+		return read(`SELECT concat_ws(' | ',
+			(SELECT string_agg(key, ' ') FROM plugins),
+			(SELECT string_agg(plugin_key, ' ') FROM plugin_versions),
+			(SELECT count(*)::text FROM plugin_rollouts),
+			(SELECT string_agg(key, ' ') FROM permissions WHERE plugin_key IS NOT NULL),
+			(SELECT string_agg(v0 || ' ' || v1, ' ') FROM casbin_rule),
+			(SELECT string_agg(plugin_key, ' ') FROM plugin_egress_domains),
+			(SELECT string_agg(name, ' ') FROM scheduled_tasks),
+			(SELECT string_agg(plugin_key, ' ') FROM plugin_key_retirements),
+			(SELECT count(*)::text FROM pg_namespace WHERE nspname = 'plg_claude_oauth'),
+			(SELECT string_agg(name, ' ') FROM accounts WHERE plugin_key = 'claude_oauth'))`)
+	}
+	const want = "guard | guard | 0 | guard:x | r:other guard:x | guard | core.usage.rollup | claude_oauth | 0 | orphan"
+	require.Equal(t, migrationsAfter(t, migrationBefore(t, id)), migrate())
+	require.Equal(t, want, state())
+	after := read(revisions)
+	require.NotEqual(t, before, after, "the role that held the permission keeps its revision")
+	require.Equal(t, strings.Split(before, " ")[1], strings.Split(after, " ")[1], "another role moved")
+	require.NotEqual(t, version, read(`SELECT policy_version::text FROM authz_meta`))
+
+	exec(`DELETE FROM schema_migrations WHERE id = '` + id + `'`)
+	version = read(`SELECT policy_version::text FROM authz_meta`)
+	require.Equal(t, []string{id}, migrate())
+	require.Equal(t, want, state())
+	require.Equal(t, version, read(`SELECT policy_version::text FROM authz_meta`), "a rerun moved the policy")
+}
+
+// 0116 deletes every grant of accounts.credentials and accounts.read, granted,
+// revoked or staged, and keeps the others (CONTRACTS §124); a rerun changes
+// nothing.
+func TestMigration0116DropsAccountGrants(t *testing.T) {
+	const id = "0116_drop_account_grants.sql"
+	db := testutil.DBThrough(t, migrationBefore(t, id))
+	ctx := t.Context()
+	exec := func(sql string) {
+		t.Helper()
+		_, err := db.SQL.ExecContext(ctx, sql)
+		require.NoError(t, err)
+	}
+	read := func(sql string) (v string) {
+		t.Helper()
+		require.NoError(t, db.SQL.QueryRowContext(ctx, sql).Scan(&v))
+		return v
+	}
+	migrate := func() []string {
+		t.Helper()
+		done, err := store.Migrate(ctx, db, migrations.FS, store.CoreTracker{}, store.MigrateOptions{LockKey: store.CoreMigrationLockKey})
+		require.NoError(t, err)
+		return done
+	}
+	exec(`INSERT INTO plugins (key, name, status) VALUES ('volcengine', '{"en":"v"}', 'enabled');
+		INSERT INTO plugin_versions (plugin_key, version, manifest, manifest_hash, package_sha256, package_size, signature_status)
+			VALUES ('volcengine', '0.13.0', '{}', 'x', 'x', 1, 'valid');
+		INSERT INTO plugin_permission_grants (plugin_key, permission, scope, status, plugin_version, manifest_hash) VALUES
+			('volcengine', 'accounts.credentials', '{"types":"own"}', 'granted', '0.12.8', 'x'),
+			('volcengine', 'accounts.read', '{}', 'revoked', '0.12.8', 'x'),
+			('volcengine', 'platform.register', '{}', 'granted', '0.12.8', 'x');
+		INSERT INTO plugin_staged_grants (plugin_key, version, permission, scope, status, manifest_hash) VALUES
+			('volcengine', '0.13.0', 'accounts.credentials', '{"types":"own"}', 'granted', 'x'),
+			('volcengine', '0.13.0', 'db.schema', '{}', 'granted', 'x')`)
+	state := func() string {
+		return read(`SELECT concat_ws(' | ',
+			(SELECT string_agg(permission, ' ' ORDER BY permission) FROM plugin_permission_grants),
+			(SELECT string_agg(permission, ' ' ORDER BY permission) FROM plugin_staged_grants))`)
+	}
+	const want = "platform.register | db.schema"
+	require.Equal(t, migrationsAfter(t, migrationBefore(t, id)), migrate())
+	require.Equal(t, want, state())
+	exec(`DELETE FROM schema_migrations WHERE id = '` + id + `'`)
+	require.Equal(t, []string{id}, migrate())
+	require.Equal(t, want, state())
+}
+
+// 0113 lets a balance snapshot have no successful read yet (updated_at
+// NULL), adds unlimited (false for the rows there) and drops source; a
+// rerun changes nothing (CONTRACTS §52.3).
+func TestMigration0113AccountBalanceUnlimited(t *testing.T) {
+	const id = "0113_account_balance_unlimited.sql"
+	db := testutil.DBThrough(t, migrationBefore(t, id))
+	ctx := t.Context()
+	migrate := func() []string {
+		t.Helper()
+		done, err := store.Migrate(ctx, db, migrations.FS, store.CoreTracker{}, store.MigrateOptions{LockKey: store.CoreMigrationLockKey})
+		require.NoError(t, err)
+		return done
+	}
+	read := func(sql string) (v string) {
+		t.Helper()
+		require.NoError(t, db.SQL.QueryRowContext(ctx, sql).Scan(&v))
+		return v
+	}
+	_, err := db.SQL.ExecContext(ctx, `INSERT INTO accounts (name, plugin_key, type, credentials_enc) VALUES ('a', 'p', 't', '');
+		INSERT INTO account_balances (account_id, amount_micros, currency, source, updated_at)
+			SELECT id, 5, 'USD', 'active', now() FROM accounts WHERE name = 'a'`)
+	require.NoError(t, err)
+	state := func() string {
+		return read(`SELECT string_agg(column_name || '=' || is_nullable, ' ' ORDER BY column_name) FROM information_schema.columns
+			WHERE table_schema = current_schema() AND table_name = 'account_balances'`) + " | " +
+			read(`SELECT amount_micros || ' ' || currency || ' ' || unlimited FROM account_balances`)
+	}
+	const want = "account_id=NO amount_micros=NO currency=NO error=YES error_at=YES unlimited=NO updated_at=YES | 5 USD false"
+	require.Equal(t, migrationsAfter(t, migrationBefore(t, id)), migrate())
+	require.Equal(t, want, state())
+	_, err = db.SQL.ExecContext(ctx, `DELETE FROM schema_migrations WHERE id = '`+id+`'`)
+	require.NoError(t, err)
+	require.Equal(t, []string{id}, migrate())
+	require.Equal(t, want, state())
+}
+
+// 0114 widens account_balances.currency to text, keeping the rows there,
+// so a unit of any length is stored as the upstream gave it; a rerun
+// changes nothing (CONTRACTS §52.3).
+func TestMigration0114AccountBalanceUnitText(t *testing.T) {
+	const id = "0114_account_balance_unit_text.sql"
+	db := testutil.DBThrough(t, migrationBefore(t, id))
+	ctx := t.Context()
+	migrate := func() []string {
+		t.Helper()
+		done, err := store.Migrate(ctx, db, migrations.FS, store.CoreTracker{}, store.MigrateOptions{LockKey: store.CoreMigrationLockKey})
+		require.NoError(t, err)
+		return done
+	}
+	read := func(sql string) (v string) {
+		t.Helper()
+		require.NoError(t, db.SQL.QueryRowContext(ctx, sql).Scan(&v))
+		return v
+	}
+	_, err := db.SQL.ExecContext(ctx, `INSERT INTO accounts (name, plugin_key, type, credentials_enc) VALUES ('a', 'p', 't', '');
+		INSERT INTO account_balances (account_id, amount_micros, currency, updated_at) SELECT id, 5, 'USD', now() FROM accounts WHERE name = 'a'`)
+	require.NoError(t, err)
+	const unit = "usd credits / 额度"
+	state := func() string {
+		return read(`SELECT data_type FROM information_schema.columns
+			WHERE table_schema = current_schema() AND table_name = 'account_balances' AND column_name = 'currency'`) + " | " +
+			read(`SELECT string_agg(amount_micros || ' ' || currency, ',' ORDER BY amount_micros) FROM account_balances`)
+	}
+	require.Equal(t, migrationsAfter(t, migrationBefore(t, id)), migrate())
+	require.Equal(t, "text | 5 USD", state())
+	_, err = db.SQL.ExecContext(ctx, `WITH a AS (INSERT INTO accounts (name, plugin_key, type, credentials_enc) VALUES ('b', 'p', 't', '') RETURNING id)
+		INSERT INTO account_balances (account_id, amount_micros, currency, updated_at) SELECT id, 7, $1, now() FROM a`, unit)
+	require.NoError(t, err)
+	_, err = db.SQL.ExecContext(ctx, `DELETE FROM schema_migrations WHERE id = '`+id+`'`)
+	require.NoError(t, err)
+	require.Equal(t, []string{id}, migrate())
+	require.Equal(t, "text | 5 USD,7 "+unit, state())
+}
+
+// 0117 removes the growth plugin (CONTRACTS §125) as an uninstall with
+// purge would: its row (cascading the versions and rollouts), its migration
+// records, its permissions (removed ones included) and their grants, its
+// egress domains, job tasks and its schema. The other plugins stay; a rerun
+// changes nothing.
+func TestMigration0117DropsGrowthPlugin(t *testing.T) {
+	const id = "0117_drop_growth_plugin.sql"
+	db := testutil.DBThrough(t, migrationBefore(t, id))
+	ctx := t.Context()
+	exec := func(sql string) {
+		t.Helper()
+		_, err := db.SQL.ExecContext(ctx, sql)
+		require.NoError(t, err)
+	}
+	read := func(sql string) (v string) {
+		t.Helper()
+		require.NoError(t, db.SQL.QueryRowContext(ctx, sql).Scan(&v))
+		return v
+	}
+	migrate := func() []string {
+		t.Helper()
+		done, err := store.Migrate(ctx, db, migrations.FS, store.CoreTracker{}, store.MigrateOptions{LockKey: store.CoreMigrationLockKey})
+		require.NoError(t, err)
+		return done
+	}
+	exec(`INSERT INTO roles (key, name, superuser) VALUES ('ops', '{}', false), ('other', '{}', false);
+		INSERT INTO plugins (key, name, status, builtin) VALUES ('growth', '{"en":"Growth & Engagement"}', 'enabled', false), ('guard', '{"en":"Guard"}', 'enabled', false);
+		INSERT INTO plugin_versions (plugin_key, version, manifest, manifest_hash, package_sha256, package_size, signature_status)
+			VALUES ('growth', '0.2.2', '{}', 'x', 'x', 1, 'valid'), ('guard', '0.2.10', '{}', 'y', 'y', 1, 'valid');
+		INSERT INTO plugin_rollouts (plugin_key, action, target_version, phase) VALUES ('growth', 'enable', '0.2.2', 'active');
+		INSERT INTO plugin_migrations (plugin_key, migration_id, checksum) VALUES ('growth', '0001_init.sql', 'c');
+		INSERT INTO permissions (key, module, label, source, plugin_key) VALUES
+			('plugin.growth:growth:use', 'growth', '{}', 'plugin', 'growth'), ('plugin.growth:growth:read', 'growth', '{}', 'plugin', 'growth'),
+			('guard:x', 'guard', '{}', 'plugin', 'guard');
+		UPDATE permissions SET status = 'removed' WHERE key = 'plugin.growth:growth:read';
+		INSERT INTO casbin_rule (ptype, v0, v1, v2) VALUES ('p', 'r:ops', 'plugin.growth:growth:use', '*'), ('p', 'r:ops', 'plugin.growth:growth:read', '*'),
+			('p', 'r:other', 'guard:x', '*');
+		INSERT INTO plugin_egress_domains (plugin_key, host) VALUES ('growth', 'example.org'), ('guard', 'example.com');
+		INSERT INTO scheduled_tasks (name, source, timeout_ms, plugin_key) VALUES ('plugin.growth.cleanup', 'plugin_manifest', 1000, 'growth'),
+			('core.usage.rollup', 'core', 1000, NULL);
+		CREATE SCHEMA plg_growth; CREATE TABLE plg_growth.checkins (id int)`)
+	revisions := `SELECT string_agg(key || '=' || revision, ' ' ORDER BY key) FROM roles WHERE key IN ('ops', 'other')`
+	before, version := read(revisions), read(`SELECT policy_version::text FROM authz_meta`)
+
+	state := func() string {
+		return read(`SELECT concat_ws(' | ',
+			(SELECT string_agg(key, ' ') FROM plugins),
+			(SELECT string_agg(plugin_key, ' ') FROM plugin_versions),
+			(SELECT count(*)::text FROM plugin_rollouts),
+			(SELECT count(*)::text FROM plugin_migrations),
+			(SELECT string_agg(key, ' ') FROM permissions WHERE plugin_key IS NOT NULL),
+			(SELECT string_agg(v0 || ' ' || v1, ' ') FROM casbin_rule),
+			(SELECT string_agg(plugin_key, ' ') FROM plugin_egress_domains),
+			(SELECT string_agg(name, ' ') FROM scheduled_tasks),
+			(SELECT string_agg(plugin_key, ' ') FROM plugin_key_retirements),
+			(SELECT count(*)::text FROM pg_namespace WHERE nspname = 'plg_growth'))`)
+	}
+	const want = "guard | guard | 0 | 0 | guard:x | r:other guard:x | guard | core.usage.rollup | growth | 0"
+	require.Equal(t, migrationsAfter(t, migrationBefore(t, id)), migrate())
+	require.Equal(t, want, state())
+	after := read(revisions)
+	require.NotEqual(t, before, after, "the role that held the permissions keeps its revision")
+	require.Equal(t, strings.Split(before, " ")[1], strings.Split(after, " ")[1], "another role moved")
+	require.NotEqual(t, version, read(`SELECT policy_version::text FROM authz_meta`))
+
+	exec(`DELETE FROM schema_migrations WHERE id = '` + id + `'`)
+	version = read(`SELECT policy_version::text FROM authz_meta`)
+	require.Equal(t, []string{id}, migrate())
+	require.Equal(t, want, state())
+	require.Equal(t, version, read(`SELECT policy_version::text FROM authz_meta`), "a rerun moved the policy")
+}
+
+// 0118 drops api_prefix and video_api_prefix from the settings of volcengine
+// apikey accounts and keeps their other keys (CONTRACTS §126); relay
+// accounts, which use both keys, and other plugins' accounts keep theirs. A
+// rerun changes nothing.
+func TestMigration0118DropsVolcengineAPIKeyPrefixes(t *testing.T) {
+	const id = "0118_volcengine_apikey_prefix_settings.sql"
+	db := testutil.DBThrough(t, migrationBefore(t, id))
+	ctx := t.Context()
+	migrate := func() []string {
+		t.Helper()
+		done, err := store.Migrate(ctx, db, migrations.FS, store.CoreTracker{}, store.MigrateOptions{LockKey: store.CoreMigrationLockKey})
+		require.NoError(t, err)
+		return done
+	}
+	_, err := db.SQL.ExecContext(ctx, `INSERT INTO accounts (name, plugin_key, type, credentials_enc, settings) VALUES
+		('ark', 'volcengine', 'apikey', '', '{"base_url": "https://ark.example", "video_api_prefix": "/api/v3", "api_prefix": "/api/v3", "asset_region": "cn-beijing"}'),
+		('ark-video', 'volcengine', 'apikey', '', '{"video_api_prefix": "/api/v3"}'),
+		('ark-clean', 'volcengine', 'apikey', '', '{"base_url": "https://ark.example"}'),
+		('relay', 'volcengine', 'relay', '', '{"base_url": "https://relay.example", "api_prefix": "/v1", "video_api_prefix": "/doubao/api/v3"}'),
+		('other', 'newapi', 'apikey', '', '{"api_prefix": "/x", "video_api_prefix": "/y"}')`)
+	require.NoError(t, err)
+	state := func() string {
+		var v string
+		require.NoError(t, db.SQL.QueryRowContext(ctx, `SELECT string_agg(name || '=' || settings::text, ' ' ORDER BY name) FROM accounts`).Scan(&v))
+		return v
+	}
+	// The row versions show which rows an UPDATE wrote.
+	versions := func(names string) string {
+		var v string
+		require.NoError(t, db.SQL.QueryRowContext(ctx, `SELECT string_agg(xmin::text, ' ' ORDER BY name) FROM accounts WHERE name = ANY(string_to_array($1, ' '))`, names).Scan(&v))
+		return v
+	}
+	const untouched = "ark-clean other relay"
+	const want = `ark={"base_url": "https://ark.example", "asset_region": "cn-beijing"} ark-clean={"base_url": "https://ark.example"} ark-video={} ` +
+		`other={"api_prefix": "/x", "video_api_prefix": "/y"} relay={"base_url": "https://relay.example", "api_prefix": "/v1", "video_api_prefix": "/doubao/api/v3"}`
+	before := versions(untouched)
+	require.Equal(t, migrationsAfter(t, migrationBefore(t, id)), migrate())
+	require.Equal(t, want, state())
+	require.Equal(t, before, versions(untouched), "a row without the keys was written")
+
+	_, err = db.SQL.ExecContext(ctx, `DELETE FROM schema_migrations WHERE id = '`+id+`'`)
+	require.NoError(t, err)
+	all := "ark ark-video " + untouched
+	before = versions(all)
+	require.Equal(t, []string{id}, migrate())
+	require.Equal(t, want, state())
+	require.Equal(t, before, versions(all), "a rerun wrote a row")
+}

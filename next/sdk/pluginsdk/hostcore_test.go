@@ -24,7 +24,7 @@ func TestGetUsersBatches(t *testing.T) {
 	}
 	ids = append(ids, 1, 999999)
 	p := &locker{}
-	pluginsdktest.Start(t, p, pluginsdktest.Options{Host: fh, SDK: []pluginsdk.Option{pluginsdk.WithManifest([]byte(lockManifest))}})
+	pluginsdktest.Start(t, p, pluginsdktest.Options{Host: fh, Manifest: []byte(lockManifest)})
 
 	users, err := pluginsdk.GetUsers(context.Background(), p.host, ids)
 	require.NoError(t, err)

@@ -39,8 +39,6 @@ var (
 var KnownCapabilities = map[string]bool{
 	manifest.CapPlatformAdapter:   true,
 	manifest.CapPlatformTasks:     true,
-	manifest.CapPlatformPoll:      true,
-	manifest.CapPlatformExecute:   true,
 	manifest.CapPlatformMonitor:   true,
 	manifest.CapPlatformWebSocket: true,
 	manifest.CapGatewayHook:       true,
@@ -256,6 +254,7 @@ func Validate(m *manifest.Manifest, files map[string][]byte, opt ValidateOptions
 	v.database()
 	v.userPermissions()
 	v.retiredUserPermissionFields()
+	v.retiredContractFields()
 	v.routes()
 	v.ui()
 	v.resources()
@@ -347,10 +346,10 @@ func (v *validator) basics() {
 		v.add("publisher", "required", "publisher is required")
 	}
 	switch {
-	case m.Runtime == manifest.RuntimeNone:
-		v.runtimeNone()
+	case m.Runtime == retiredRuntimeNone:
+		v.add("runtime", CodeOutdatedContract, "runtime %q is no longer supported: every plugin has a process (runtime %q)", m.Runtime, manifest.RuntimeGRPC)
 	case m.Runtime != manifest.RuntimeGRPC:
-		v.add("runtime", "unsupported", "runtime must be %q or %q", manifest.RuntimeGRPC, manifest.RuntimeNone)
+		v.add("runtime", "unsupported", "runtime must be %q", manifest.RuntimeGRPC)
 	case m.Entry.GRPC == nil || m.Entry.GRPC.Binaries == "":
 		v.add("entry.grpc.binaries", "required", "entry.grpc.binaries is required")
 	case !v.opt.Tooling:
@@ -416,6 +415,9 @@ func (v *validator) hostPermissions() {
 		f := fmt.Sprintf("hostPermissions[%d]", i)
 		if hp.ID == removedAffinityPermission {
 			v.add(f+".id", "sticky_not_for_plugins", "host permission %q was removed: plugins take no part in sticky sessions", hp.ID)
+		} else if retiredAccountPermissions[hp.ID] {
+			v.add(f+".id", CodeOutdatedContract, "host permission %q was removed: a plugin receives the accounts of the account types it declares", hp.ID)
+			continue
 		} else if _, ok := manifest.HostPermissionRisk[hp.ID]; !ok {
 			v.add(f+".id", "unknown", "unknown host permission %q", hp.ID)
 			continue
@@ -425,7 +427,7 @@ func (v *validator) hostPermissions() {
 			continue
 		}
 		v.perms[hp.ID] = hp
-		if (hp.ID == "accounts.credentials" || hp.ID == "accounts.auto_state") && !reflect.DeepEqual(NormalizeScope(hp.Scope), credentialsScopeOwn) {
+		if hp.ID == "accounts.auto_state" && !reflect.DeepEqual(NormalizeScope(hp.Scope), scopeOwn) {
 			v.add(f+".scope", "invalid", `%s scope must be {"types": "own"}`, hp.ID)
 		}
 		if hp.ID == "net" {
@@ -449,6 +451,8 @@ func (v *validator) capabilities() {
 		switch {
 		case c.ID == removedAffinityCapability:
 			v.add(f, "sticky_not_for_plugins", "capability %q was removed: plugins take no part in sticky sessions", c.ID)
+		case retiredCapabilities[c.ID]:
+			v.add(f, CodeOutdatedContract, "capability %q was removed: %s covers Execute and %s is the only task observation", c.ID, manifest.CapPlatformAdapter, manifest.CapPlatformMonitor)
 		case !KnownCapabilities[c.ID]:
 			v.add(f, "unknown", "unknown capability %q", c.ID)
 		}
@@ -456,7 +460,7 @@ func (v *validator) capabilities() {
 			v.add(f, "duplicate", "capability %q declared twice", c.ID)
 		}
 		seen[c.ID] = true
-		if c.ID == manifest.CapPlatformPoll || c.ID == manifest.CapPlatformExecute || c.ID == manifest.CapPlatformMonitor || c.ID == manifest.CapPlatformWebSocket {
+		if c.ID == manifest.CapPlatformMonitor || c.ID == manifest.CapPlatformWebSocket {
 			v.needCap(f, manifest.CapPlatformAdapter)
 		}
 		// Cluster broadcast (HostService.Publish / AppService.OnBroadcast)
@@ -490,25 +494,43 @@ func sortedKeys[V any](m map[string]V) []string {
 	return out
 }
 
-// maskableSecrets refuses a settings schema that marks secrets where the core
-// cannot mask them one by one (manifest.SettingsSecrets). A missing file is
-// reported by needFile.
-func (v *validator) maskableSecrets(field, schema string) {
-	raw, ok := v.files[schema]
-	if !ok {
+// formSecrets validates ui.settings.secrets (manifest.SecretPath): native or
+// iframe settings must write them ([] for none: without the key the core
+// masks every setting), only the settings form takes them, and no path
+// repeats or lies inside another (a secret is masked as a whole).
+func (v *validator) formSecrets(field string, f manifest.Form, settings bool) {
+	switch {
+	case settings && f.Secrets == nil && (f.Mode == "native" || f.Mode == "iframe"):
+		v.add(field, "required", "secrets is required: list the settings to mask, [] for none")
+		return
+	case len(f.Secrets) == 0:
+		return
+	case !settings:
+		v.add(field, "unsupported", "only ui.settings takes secrets; an account type marks its secrets in sensitiveFields")
 		return
 	}
-	_, unreachable := manifest.SettingsSecrets(raw)
-	if len(unreachable) == 0 {
-		return
-	}
-	for i, loc := range unreachable {
-		if loc == "" {
-			unreachable[i] = "(the schema itself, which must be a JSON object without a marker)"
+	seen := map[int][]string{}
+	for i, s := range f.Secrets {
+		path, ok := manifest.SecretPath(s.Path)
+		at := fmt.Sprintf("%s[%d].path", field, i)
+		if !ok {
+			v.add(at, "invalid", "path %q must be a JSON pointer below the values (\"a/b\", \"~0\" and \"~1\" escaped) of non-empty names, at most %d deep",
+				s.Path, manifest.MaxSecretDepth)
+			continue
 		}
+		for j := range i {
+			if p, ok := seen[j]; ok && (isPrefix(p, path) || isPrefix(path, p)) {
+				v.add(at, "duplicate", "path %q repeats or overlaps secrets[%d]: a secret is masked as a whole", s.Path, j)
+				break
+			}
+		}
+		seen[i] = path
 	}
-	v.add(field, "unmaskable_secret", "writeOnly, format password and x-sensitive are only masked on properties of nested objects (at most %d deep), and a schema using them takes no reference other than a local \"#/$defs/<name>\" or \"#/definitions/<name>\" where a value path leads (no cycle, at most %d inside one another); found at %s",
-		manifest.MaxSecretDepth, manifest.MaxSecretRefDepth, strings.Join(unreachable, ", "))
+}
+
+// isPrefix reports whether prefix is the start of path (or path itself).
+func isPrefix(prefix, path []string) bool {
+	return len(prefix) <= len(path) && slices.Equal(prefix, path[:len(prefix)])
 }
 
 // form validates a console form; settings=true for ui.settings.
@@ -522,15 +544,10 @@ func (v *validator) form(field string, f manifest.Form, settings bool) {
 		// whole, so a scope would mean nothing there.
 		v.add(field+".permission", "unsupported", "permission %q declares a scope; settings take an unscoped permission", f.Permission)
 	}
-	if settings {
-		v.maskableSecrets(field+".schema", f.Schema)
-	}
+	v.formSecrets(field+".secrets", f, settings)
 	switch f.Mode {
 	case "schema":
-		v.needFile(field+".schema", f.Schema)
-		if f.UISchema != "" {
-			v.needFile(field+".uiSchema", f.UISchema)
-		}
+		v.add(field+".mode", "unsupported", "form mode schema is no longer supported: write the form as a native component (DESIGN-2026-11-19-PLUGIN-UI-CODE-ONLY)")
 	case "iframe":
 		v.needPerm(field, "ui.iframe", "an iframe form")
 		v.needFile(field+".page", f.Page)
@@ -542,24 +559,14 @@ func (v *validator) form(field string, f manifest.Form, settings bool) {
 		if f.Component == "" && !settings {
 			v.add(field+".component", "required", "component is required for native forms")
 		}
-		// A native settings form may carry the schema: the core validates
-		// and masks the stored values with it while the plugin's own page
-		// edits them (CONTRACTS §75.5).
-		if f.Schema != "" || f.UISchema != "" {
-			if !settings {
-				v.add(field+".schema", "unsupported", "only ui.settings may carry a schema in native mode")
-			} else {
-				v.needFile(field+".schema", f.Schema)
-				if f.UISchema != "" {
-					v.needFile(field+".uiSchema", f.UISchema)
-				}
-			}
+		if settings && f.Component == "" && f.Page == "" {
+			v.add(field+".component", "required", "native settings need a component or a native page")
 		}
 		if settings && f.Page != "" && (v.m.UI == nil || v.m.UI.Pages[f.Page].Type != "native") {
 			v.add(field+".page", "unknown", "page %q is not a native page of ui.pages", f.Page)
 		}
 	default:
-		v.add(field+".mode", "invalid", "form mode must be schema, iframe or native")
+		v.add(field+".mode", "invalid", "form mode must be iframe or native")
 	}
 }
 

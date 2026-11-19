@@ -21,7 +21,7 @@ import ModelBadge from '@/components/platform/ModelBadge.vue'
 import PriceSimulatorModal from '@/components/pricing/PriceSimulatorModal.vue'
 import { rateText } from '@/components/pricing/pricingFormat'
 import { canSimulatePrices } from '@/components/pricing/quoteSubjects'
-import PlatformEndpointsPreview from '@/views/platforms/PlatformEndpointsPreview.vue'
+import GroupServedProtocols from './GroupServedProtocols.vue'
 
 const { t } = useI18n()
 const auth = useAuthStore()
@@ -215,7 +215,8 @@ async function onAction(listed: Group, key: string) {
           <SDescItem :label="t('accounts.conversion.title')"><span data-testid="group-detail-conversion">{{ conversionText(detail) }}</span></SDescItem>
           <SDescItem :label="t('groups.accountCount')"><GroupAccountCount :count="detail.account_count" /></SDescItem>
           <SDescItem :label="t('groups.keyCount')">{{ formatNumber(keyCount(detail)) }}</SDescItem>
-          <SDescItem v-if="detail.platforms?.length && detail.account_count !== 0" :label="t('platforms.endpoints')"><PlatformEndpointsPreview :ids="detail.platforms" /></SDescItem>
+          <!-- From GET /groups/:id: absent on the list row the detail opens with. -->
+          <SDescItem v-if="detail.served_protocols && detail.account_count !== 0" :label="t('platforms.endpoints')"><GroupServedProtocols :served="detail.served_protocols" /></SDescItem>
         </SDescriptions>
       </template>
       <template #footer>

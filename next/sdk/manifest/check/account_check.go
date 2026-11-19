@@ -10,9 +10,9 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/sdk/platforms"
 )
 
-// credentialsScopeOwn is the only accepted scope of accounts.credentials:
-// the plugin reads credentials of its own account types (ARCHITECTURE 6.6).
-var credentialsScopeOwn = map[string]any{"types": "own"}
+// scopeOwn is the only accepted scope of accounts.auto_state: the plugin acts
+// on the accounts of its own account types (ARCHITECTURE 6.6).
+var scopeOwn = map[string]any{"types": "own"}
 
 // accountExtensions validates accountTypes[].extensionsSchema: a bounded,
 // closed object schema whose properties do not shadow core, credential or
@@ -66,9 +66,6 @@ func (v *validator) accountTypes() {
 	}
 	v.needCap("accountTypes", manifest.CapPlatformAdapter)
 	v.needPerm("accountTypes", "platform.register", "account types")
-	if needsCredentials(ats) {
-		v.needPerm("accountTypes", "accounts.credentials", "account types the plugin implements or extends")
-	}
 	ownPlatforms := map[string]*manifest.Platform{}
 	for i := range v.m.Platforms {
 		ownPlatforms[v.m.Platforms[i].ID] = &v.m.Platforms[i]
@@ -98,9 +95,6 @@ func (v *validator) accountTypes() {
 		v.quota(f, at.Quota)
 		v.balance(f, at.Balance)
 		v.refresh(f, at)
-		if at.Upstream != nil {
-			v.upstream(f, at, ownPlatforms)
-		}
 		if len(at.Platforms) == 0 {
 			v.add(f+".platforms", "required", "at least one platform is required")
 		}
@@ -126,7 +120,9 @@ func (v *validator) accountPlatform(pf string, ap manifest.AccountPlatform, seen
 	seen[ap.Platform] = true
 	own := ownPlatforms[ap.Platform]
 	v.accountEndpoints(pf, ap, own)
+	v.foreignFacts(pf, ap, own)
 	v.accountStreamOnly(pf, ap, own)
+	v.accountAdapted(pf, ap, own)
 	for _, proto := range sortedKeys(ap.Usage) {
 		uf := pf + ".usage." + proto
 		if own != nil {
@@ -163,6 +159,19 @@ func (v *validator) accountEndpoints(field string, ap manifest.AccountPlatform, 
 			v.add(f, "unknown_endpoint", "endpoint %q does not belong to platform %q", id, ap.Platform)
 		}
 		seen[id] = true
+	}
+}
+
+// foreignFacts rejects an account type serving, on another plugin's
+// platform, an endpoint whose usage or task facts that plugin states
+// (manifest.AccountPlatform.ServesPluginFacts). A built-in platform is no
+// plugin's: the registry binds it to every type, and so does the check.
+func (v *validator) foreignFacts(pf string, ap manifest.AccountPlatform, own *manifest.Platform) {
+	if own != nil || platforms.IsBuiltin(ap.Platform) {
+		return
+	}
+	if p := v.referencedPlatform(ap.Platform, nil); p != nil && ap.ServesPluginFacts(*p) {
+		v.add(pf+".platform", "foreign_facts", "platform %q has endpoints whose usage or task the plugin declaring it reads; only that plugin's account types may serve them", ap.Platform)
 	}
 }
 
@@ -242,9 +251,43 @@ func (v *validator) accountStreamOnly(field string, ap manifest.AccountPlatform,
 	}
 }
 
+// accountAdapted validates accountTypes[].platforms[].adapted (CONTRACTS
+// §121.1): each key is an endpoint of the platform the account type's
+// subset leaves out that the core may convert at all (neither a WebSocket
+// nor a task endpoint), and a model, when given, is a complete model id.
+// Offline packaging that cannot resolve an external platform checks the
+// models only; the install check resolves it. Whether the core converts the
+// endpoint to one of the subset is the registry's check.
+func (v *validator) accountAdapted(field string, ap manifest.AccountPlatform, own *manifest.Platform) {
+	field += ".adapted"
+	p := v.referencedPlatform(ap.Platform, own)
+	if p == nil && !v.opt.Tooling && len(ap.Adapted) > 0 {
+		v.add(field, "unknown_platform", "platform %q must be installed to validate adapted endpoints", ap.Platform)
+	}
+	for _, id := range sortedKeys(ap.Adapted) {
+		f := field + "." + id
+		if m := ap.Adapted[id].Model; m != "" && !manifest.ValidModelID(m) {
+			v.add(f+".model", "invalid", "%q is not a complete model id", m)
+		}
+		if p == nil {
+			continue
+		}
+		i := slices.IndexFunc(p.Endpoints, func(e manifest.Endpoint) bool { return e.ID == id })
+		switch {
+		case i < 0:
+			v.add(f, "unknown_endpoint", "endpoint %q does not belong to platform %q", id, ap.Platform)
+		case ap.SupportsEndpoint(id):
+			v.add(f, "native", "endpoint %q is in the account type's endpoints; only an endpoint left out is adapted", id)
+		case p.Endpoints[i].WebSocket() || p.Endpoints[i].Task != nil:
+			v.add(f, "not_convertible", "endpoint %q is a WebSocket or task endpoint, which the core never converts", id)
+		}
+	}
+}
+
 // guardedSettings validates accountTypes[].guardedSettings (CONTRACTS §21.3):
-// each field is a distinct settings field of the same account type and its
-// allowed list holds at least one absolute http(s) URL.
+// each field is a distinct settings field of the same account type, its
+// allowed list holds at least one absolute http(s) URL and its versions are
+// distinct segments that start and do not end with "/".
 func (v *validator) guardedSettings(f string, at manifest.AccountType) {
 	seen := map[string]bool{}
 	for i, gs := range at.GuardedSettings {
@@ -266,6 +309,17 @@ func (v *validator) guardedSettings(f string, at manifest.AccountType) {
 				v.add(fmt.Sprintf("%s.allowed[%d]", gf, j), "invalid_url", "%q is not an absolute http(s) URL", raw)
 			}
 		}
+		for j, ver := range gs.Versions {
+			vf := fmt.Sprintf("%s.versions[%d]", gf, j)
+			switch {
+			case ver == "":
+				v.add(vf, "required", "version segment is required")
+			case !strings.HasPrefix(ver, "/") || strings.HasSuffix(ver, "/"):
+				v.add(vf, "invalid", "version segment %q must start and not end with \"/\"", ver)
+			case slices.Contains(gs.Versions[:j], ver):
+				v.add(vf, "duplicate", "version segment %q is listed twice", ver)
+			}
+		}
 	}
 }
 
@@ -283,36 +337,6 @@ func (v *validator) upstreamFields(f string, at manifest.AccountType) {
 		}
 		seen[name] = true
 	}
-}
-
-// Warnings returns manifest findings that do not block installation; the
-// packaging CLI prints them. Today: a schema form editing an address-like
-// field (base_url, *_endpoint) of an account type whose upstreamFields are
-// neither declared nor derivable, so the core keeps the legacy rule for it.
-func Warnings(m *manifest.Manifest, files map[string][]byte) []FieldError {
-	var out []FieldError
-	for i, at := range m.AccountTypes {
-		if _, known := at.AddressFields(); known || at.Form.Mode != "schema" {
-			continue
-		}
-		var schema struct {
-			Properties map[string]json.RawMessage `json:"properties"`
-		}
-		if json.Unmarshal(files[at.Form.Schema], &schema) != nil {
-			continue
-		}
-		var addr []string
-		for _, name := range sortedKeys(schema.Properties) {
-			if name == "base_url" || strings.HasSuffix(name, "_endpoint") {
-				addr = append(addr, name)
-			}
-		}
-		if len(addr) > 0 {
-			out = append(out, FieldError{Field: fmt.Sprintf("accountTypes[%d].upstreamFields", i), Code: "undeclared",
-				Message: fmt.Sprintf("form fields %s look like upstream addresses; declare upstreamFields", strings.Join(addr, ", "))})
-		}
-	}
-	return out
 }
 
 // defaultLimits validates accountTypes[].defaultLimits (CONTRACTS §68.5)

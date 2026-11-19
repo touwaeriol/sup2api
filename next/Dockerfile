@@ -8,7 +8,8 @@
 #   uisrc  - collects only the frontend sources (web/, plugins/*/ui/) so the
 #            npm stage is cached independently of Go changes
 #   ui     - builds web/ -> server/web/dist and plugins/*/ui/native -> dist
-#            (skipped when package.json is missing; the placeholder page stays)
+#            (the plugin UIs build with web/'s toolchain, so web/ must be
+#            there; see deploy/docker/build-ui.sh)
 #   build  - builds server, tools/sub2api-plugin and the plugins; packs and
 #            signs plugins with a dev key and writes the market index
 #   final  - debian:trixie-slim runtime

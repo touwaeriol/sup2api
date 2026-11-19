@@ -75,6 +75,13 @@ func TestSQLPluginEgress(t *testing.T) {
 	})
 }
 
+func TestSQLPluginRecordedRefusals(t *testing.T) {
+	gormtest.Assert(t, func(db *gorm.DB) *gorm.DB {
+		var rows []struct{ Key, Version, Error string }
+		return recordedRefusalRows(db, []string{"demo", "video"}).Scan(&rows)
+	})
+}
+
 func TestSQLPluginRollouts(t *testing.T) {
 	gormtest.Assert(t, func(db *gorm.DB) *gorm.DB {
 		var raw []byte

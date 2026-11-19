@@ -12,7 +12,7 @@ import (
 )
 
 // A fixed submission fee is ordinary usage, not a reservation for future
-// reconciliation. It must take the ordinary immediate settlement path.
+// reconciliation: it settles in the transaction that registers the task.
 func TestTaskImmediateBillingWithoutReservationAndRetry(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
@@ -21,7 +21,7 @@ func TestTaskImmediateBillingWithoutReservationAndRetry(t *testing.T) {
 	if _, err := f.db.SQL.ExecContext(ctx, `INSERT INTO model_price_history(expr_hash,expression,expr_version) VALUES($1,$2,1)`, hash, expression); err != nil {
 		t.Fatal(err)
 	}
-	register := func(request string, free bool) string {
+	submission := func(request string, free bool) core.TaskRegistration {
 		t.Helper()
 		r := f.reserved(request, "raw-"+request, core.UsageTokens{})
 		r.Reservation = nil
@@ -39,13 +39,18 @@ func TestTaskImmediateBillingWithoutReservationAndRetry(t *testing.T) {
 		if err = f.svc.ReceiveTask(ctx, request, 200, body, ""); err != nil {
 			t.Fatal(err)
 		}
-		if err = f.svc.RegisterTask(ctx, core.TaskRegistration{PublicID: id, UpstreamID: "raw-" + request, Kind: "video", Snapshot: body, IDPaths: []string{"id"}, Deadline: time.Hour, Record: r}); err != nil {
-			t.Fatal("registered task must remain successful after a settlement failure", err)
+		return core.TaskRegistration{PublicID: id, UpstreamID: "raw-" + request, Kind: "video", Snapshot: body, IDPaths: []string{"id"}, Deadline: time.Hour, Record: r}
+	}
+	register := func(request string, free bool) string {
+		t.Helper()
+		reg := submission(request, free)
+		if err := commitTask(f.svc, reg); err != nil {
+			t.Fatal(err)
 		}
-		if _, err = f.svc.FindTask(ctx, core.TaskQuery{ID: id, PluginKey: r.PluginKey, Kind: "video", UserID: r.UserID, GroupID: r.GroupID}); err != nil {
+		if _, err := f.svc.FindTask(ctx, core.TaskQuery{ID: reg.PublicID, PluginKey: reg.Record.PluginKey, Kind: "video", UserID: reg.Record.UserID, GroupID: reg.Record.GroupID}); err != nil {
 			t.Fatal("committed task disappeared", err)
 		}
-		return id
+		return reg.PublicID
 	}
 	before := f.balance()
 	id := register("fixed-fee", false)
@@ -60,25 +65,29 @@ func TestTaskImmediateBillingWithoutReservationAndRetry(t *testing.T) {
 		t.Fatal("fixed fee created an unnecessary reservation")
 	}
 
-	// The receipt and task already committed. A temporary settlement error
-	// cannot turn registration into a retryable submission error.
+	// The fee settles in the commit's transaction: a settlement failure
+	// fails the commit and leaves nothing behind, and the gateway's retry of
+	// the same commit registers and charges once.
 	f.ledger.fail.Store(1)
 	before = f.balance()
-	register("retry-fixed-fee", false)
-	if f.ledger.fail.Load() != 0 {
-		t.Fatal("registration bypassed immediate settlement")
+	reg := submission("retry-fixed-fee", false)
+	commit, err := observeTask(f.svc, reg)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if f.scalar(`SELECT billing_status FROM usage_logs WHERE request_id='retry-fixed-fee'`) != StatusFailed {
-		t.Fatal("failed settlement was not queued for retry")
+	if err = f.svc.CommitExecution(ctx, commit); err == nil {
+		t.Fatal("a commit whose settlement failed was acknowledged")
 	}
-	if !f.balance().Equal(before) {
-		t.Fatal("rolled-back settlement charged money")
+	if f.scalar(`SELECT count(*) FROM usage_logs WHERE request_id='retry-fixed-fee'`) != "0" || f.scalar(`SELECT count(*) FROM async_tasks WHERE public_id=$1`, reg.PublicID) != "0" || !f.balance().Equal(before) {
+		t.Fatal("failed commit left a task, a row or a charge")
 	}
-	if n, err := f.svc.RetryPending(ctx); err != nil || n != 1 {
-		t.Fatal("retry failed", n, err)
+	for range 2 {
+		if err = f.svc.CommitExecution(ctx, commit); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if !before.Sub(f.balance()).Equal(fee) {
-		t.Fatal("retry did not charge the fee once")
+	if f.scalar(`SELECT billing_status FROM usage_logs WHERE request_id='retry-fixed-fee'`) != StatusBilled || !before.Sub(f.balance()).Equal(fee) {
+		t.Fatal("retried commit did not charge the fee once")
 	}
 	if n, err := f.svc.RetryPending(ctx); err != nil || n != 0 {
 		t.Fatal("already billed task retried", n, err)

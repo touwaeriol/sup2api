@@ -44,7 +44,7 @@ func scopeHost(t *testing.T) (pluginsdk.Host, *[][]int64) {
 		t.Cleanup(fh.Serve(uid))
 	}
 	p := &locker{}
-	pluginsdktest.Start(t, p, pluginsdktest.Options{Host: fh, SDK: []pluginsdk.Option{pluginsdk.WithManifest([]byte(lockManifest))}})
+	pluginsdktest.Start(t, p, pluginsdktest.Options{Host: fh, Manifest: []byte(lockManifest)})
 	return p.host, &calls
 }
 
@@ -152,7 +152,7 @@ func TestRequirePermission(t *testing.T) {
 		return uid == 1 && perm == "rules:manage"
 	}
 	p := &locker{}
-	pluginsdktest.Start(t, p, pluginsdktest.Options{Host: fh, SDK: []pluginsdk.Option{pluginsdk.WithManifest([]byte(lockManifest))}})
+	pluginsdktest.Start(t, p, pluginsdktest.Options{Host: fh, Manifest: []byte(lockManifest)})
 	ran := 0
 	next := func(context.Context, *pluginv1.HTTPRequest) (*pluginv1.HTTPResponse, error) {
 		ran++

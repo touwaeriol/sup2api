@@ -1,6 +1,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -12,6 +13,8 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
+	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest/check"
+	"github.com/Sub2API-Devs/sup2api/next/sdk/protocol"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/httpapi"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/job"
@@ -53,15 +56,78 @@ func summarizeNodes(nodes []core.NodeStatus, key string) NodeSummary {
 			out.States["absent"]++
 			continue
 		}
-		var st struct {
-			State string `json:"state"`
-		}
-		if json.Unmarshal([]byte(raw), &st) != nil || st.State == "" {
-			st.State = "unknown"
-		}
-		out.States[st.State]++
+		st, _ := core.ParsePluginNodeState(raw)
+		out.States[cmp.Or(st.State, "unknown")]++
 	}
 	return out
+}
+
+// Refusal is why the nodes refuse to load a plugin version: it was built
+// for an older plugin contract (Code check.CodeOutdatedContract). Message
+// is the runtime's refusal, protocol.OutdatedContractMessage;
+// FirstCoreVersion is the oldest core a replacement may be built for.
+type Refusal struct {
+	Code             string `json:"code"`
+	Version          string `json:"version"`
+	HostVersion      string `json:"host_version"`
+	ProtocolVersion  int    `json:"protocol_version"`
+	FirstCoreVersion string `json:"first_core_version"`
+	Message          string `json:"message"`
+}
+
+// outdatedContract is the refusal of version on a core at hostVersion, with
+// the runtime's message.
+func outdatedContract(version, hostVersion, message string) *Refusal {
+	return &Refusal{Code: check.CodeOutdatedContract, Version: version, HostVersion: hostVersion,
+		ProtocolVersion: protocol.ProtocolVersion, FirstCoreVersion: protocol.FirstCoreVersion, Message: message}
+}
+
+// refusal finds a node whose instance of the plugin failed to load with the
+// runtime's refusal of an older plugin contract, which the node records as
+// the instance's code; nil when none did.
+func refusal(nodes []core.NodeStatus, key string) *Refusal {
+	for _, n := range nodes {
+		st, _ := core.ParsePluginNodeState(n.Plugins[key])
+		for _, in := range st.Instances {
+			if in.Code == check.CodeOutdatedContract {
+				return outdatedContract(in.Version, n.HostVersion, in.Error)
+			}
+		}
+	}
+	return nil
+}
+
+// recordedRefusals are the refusals kept with the outcome of each plugin's
+// latest rollout, by plugin key: a node whose load of the target version was
+// refused records the code there (plugin_rollout_nodes.code), which outlives
+// the instance a rollout failing in preparation removes. hostVersion is this
+// core's; a plugin none of whose nodes was refused has no entry. One query
+// for all the keys.
+func recordedRefusals(ctx context.Context, db *gorm.DB, keys []string, hostVersion string) (map[string]*Refusal, error) {
+	out := map[string]*Refusal{}
+	if len(keys) == 0 {
+		return out, nil
+	}
+	err := store.EachRow(recordedRefusalRows(store.G(ctx, db), keys), func(rows *sql.Rows) error {
+		var key, version, msg string
+		if err := rows.Scan(&key, &version, &msg); err != nil {
+			return err
+		}
+		out[key] = outdatedContract(version, hostVersion, msg)
+		return nil
+	})
+	return out, err
+}
+
+// recordedRefusalRows is the first refused node (by node and boot id) of
+// the latest rollout of each of keys: key, target version, error.
+func recordedRefusalRows(g *gorm.DB, keys []string) *gorm.DB {
+	latest := g.Model(&model.PluginRollout{}).Select("max(id)").Where("plugin_key = ANY(?)", store.Strings(keys)).Group("plugin_key")
+	return g.Table("plugin_rollout_nodes AS n").
+		Select("DISTINCT ON (r.plugin_key) r.plugin_key, COALESCE(r.target_version, ''), n.error").
+		Joins("JOIN plugin_rollouts AS r ON r.id = n.rollout_id").
+		Where("n.rollout_id IN (?) AND n.code = ?", latest, check.CodeOutdatedContract).
+		Order("r.plugin_key, n.node_id, n.boot_id")
 }
 
 func nodeStates(nodes []core.NodeStatus, key string) []NodeState {
@@ -85,6 +151,8 @@ type NodeView struct {
 	StartedAt     time.Time                  `json:"started_at"`
 	LastHeartbeat time.Time                  `json:"last_heartbeat"`
 	Plugins       map[string]json.RawMessage `json:"plugins"`
+	// PluginSandbox is what the node's plugin sandbox enforces (CONTRACTS §43.8).
+	PluginSandbox *core.PluginSandboxStatus `json:"plugin_sandbox,omitempty"`
 }
 
 func (a *API) nodes(c *gin.Context) {
@@ -100,7 +168,7 @@ func (a *API) nodes(c *gin.Context) {
 	out := make([]NodeView, 0, len(nodes))
 	for _, n := range nodes {
 		v := NodeView{NodeID: n.NodeID, BootID: n.BootID, Addr: n.Addr, HostVersion: n.HostVersion, StartedAt: n.StartedAt,
-			LastHeartbeat: n.LastHeartbeat, Plugins: map[string]json.RawMessage{}}
+			LastHeartbeat: n.LastHeartbeat, Plugins: map[string]json.RawMessage{}, PluginSandbox: n.PluginSandbox}
 		for k, s := range n.Plugins {
 			v.Plugins[k] = stateJSON(s)
 		}
@@ -378,6 +446,8 @@ type Resources struct {
 }
 
 // ResourcesInfo shows manifest requests, admin overrides and the result.
+// Requested.MemoryMB is the plugin's suggestion; Effective.MemoryMB 0 is
+// unlimited.
 type ResourcesInfo struct {
 	Requested Resources `json:"requested"`
 	Overrides Resources `json:"overrides"`
@@ -396,10 +466,10 @@ func (a *API) resourcesInfo(ctx context.Context, key string, m *manifest.Manifes
 		return ri, err
 	}
 	_ = json.Unmarshal(row.ResourceLimits, &ri.Overrides)
+	// As the runtime launches it: the manifest's memory figure is what the
+	// plugin says it needs, not a limit.
 	ri.Effective = ri.Requested
-	if ri.Overrides.MemoryMB > 0 {
-		ri.Effective.MemoryMB = ri.Overrides.MemoryMB
-	}
+	ri.Effective.MemoryMB = core.EffectiveMemoryMB(ri.Overrides.MemoryMB, ri.MaxMemory)
 	if ri.Overrides.CPU > 0 {
 		ri.Effective.CPU = ri.Overrides.CPU
 	}
@@ -437,11 +507,6 @@ func (a *API) putResources(c *gin.Context) {
 	}
 	m, _, ok := a.currentManifest(c, key)
 	if !ok {
-		return
-	}
-	if m.Runtime == manifest.RuntimeNone {
-		httpapi.Fail(c, core.InvalidFields(core.FieldError{Field: "runtime", Code: "unsupported",
-			Message: "the plugin has runtime \"none\": it runs no process, so resource limits do not apply"}))
 		return
 	}
 	b, _ := json.Marshal(in)

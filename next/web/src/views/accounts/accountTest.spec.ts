@@ -48,6 +48,7 @@ describe('account test helpers', () => {
     expect(lastTestOf(r({ model: 'up', message: 'hi' }), 'req', at)).toEqual({ at: at.toISOString(), ok: true, status: 200, latency_ms: 10, model: 'up', message: 'hi' })
     expect(lastTestOf(r({ ok: false, reason: 'rate_limited' }), 'req', at)).toMatchObject({ ok: false, model: 'req', message: 'rate_limited' })
     expect(lastTestOf(r({ requested_model: 'rq' }), '', at).model).toBe('rq')
+    expect(lastTestOf(r({ protocol: 'openai.responses' }), 'req', at).protocol).toBe('openai.responses')
     expect(lastTestOf(r({ ok: false, status: 0, error_code: 'proxy_unavailable', error_source: 'gateway' }), 'req', at)).toMatchObject({ status: 0, error_code: 'proxy_unavailable', error_source: 'gateway' })
   })
 

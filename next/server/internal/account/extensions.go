@@ -2,6 +2,8 @@ package account
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"slices"
 
@@ -64,6 +66,30 @@ func (s *Service) mergeExtensions(bt core.AccountTypeBinding, base, patch []byte
 		return nil, err
 	}
 	return mustJSON(settings), nil
+}
+
+// compiled is the compiled extensionsSchema, cached by its digest.
+func (s *Service) compiled(schema []byte) (*jsonschema.Schema, error) {
+	sum := sha256.Sum256(schema)
+	key := hex.EncodeToString(sum[:])
+	if v, ok := s.schemas.Load(key); ok {
+		return v.(*jsonschema.Schema), nil
+	}
+	doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(schema))
+	if err != nil {
+		return nil, err
+	}
+	c := jsonschema.NewCompiler()
+	loc := "https://sub2api.invalid/extensions/" + key + ".json"
+	if err := c.AddResource(loc, doc); err != nil {
+		return nil, err
+	}
+	sch, err := c.Compile(loc)
+	if err != nil {
+		return nil, err
+	}
+	s.schemas.Store(key, sch)
+	return sch, nil
 }
 
 func (s *Service) validateExtensions(bt core.AccountTypeBinding, raw []byte) error {

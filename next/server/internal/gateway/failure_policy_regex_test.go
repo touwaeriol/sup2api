@@ -9,6 +9,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 )
 
 func regexTestPolicy(patterns ...string) FailurePolicy {
@@ -35,7 +37,7 @@ func TestFailurePolicyGoRegex(t *testing.T) {
 		{"Go Unicode", []string{`^\p{Han}+$`}, "额度不足", true},
 		{"Go named capture", []string{`(?P<error>quota)\s+\d+`}, "quota 42", true},
 		{"spaces preserved", []string{` quota `}, "quota", false},
-		{"prefix bounded", []string{`quota`}, strings.Repeat("x", classifyPrefix) + "quota", false},
+		{"prefix bounded", []string{`quota`}, strings.Repeat("x", core.ClassifyPrefixBytes) + "quota", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := regexTestPolicy(tc.patterns...)

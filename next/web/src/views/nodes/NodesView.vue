@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '@sub2api/host'
 import { SDateTime, statusTone, useAutoRefresh, SBadge, SButton, SChip, SCode, SGrid, SHint, SLink, SPageHeader, SStatCard, SStatusDot, STable, type TableColumn, type Tone, type StatusTone } from '@sub2api/ui'
-import type { NodeInfo } from '@/api/types'
+import type { NodeInfo, PluginSandboxStatus } from '@/api/types'
 import type { NodePluginState } from '@/api/admin'
 import type { ShellNode } from '@/api/observability'
 import { notifyError } from '@/utils/errors'
@@ -140,6 +140,19 @@ function dotTone(tone: Tone): StatusTone {
 /** Plugin badges per node, built once per load. */
 const badges = computed(() => new Map(nodes.value.map((n) => [n.boot_id, pluginBadges(n)])))
 
+/** The sandbox cell: in force, off, or how many Landlock layers the kernel lacks. */
+function sandboxBadge(sb: PluginSandboxStatus): { text: string; tone: Tone; detail: string } {
+  const names = (ls: string[]) => ls.map((l) => t(`nodes.sandboxLayers.${l}`)).join(', ')
+  const detail = [
+    `Landlock ABI ${sb.landlock_abi}`,
+    sb.active.length ? `${t('nodes.sandboxActive')}: ${names(sb.active)}` : '',
+    sb.missing.length ? `${t('nodes.sandboxMissing')}: ${names(sb.missing)}` : ''
+  ].filter(Boolean).join('\n')
+  if (!sb.wrapped || !sb.landlock) return { text: t('nodes.sandboxOff'), tone: 'danger', detail }
+  if (!sb.missing.length) return { text: t('nodes.sandboxAll'), tone: 'success', detail }
+  return { text: t('nodes.sandboxPartial', { n: sb.missing.length }), tone: 'warning', detail }
+}
+
 // ------------------------------------------------------------------ table
 
 const columns = computed<TableColumn[]>(() => [
@@ -147,6 +160,7 @@ const columns = computed<TableColumn[]>(() => [
   { key: 'addr', label: t('nodes.addr'), mobile: 'subtitle' },
   { key: 'host_version', label: t('nodes.coreVersion'), mobile: 'meta' },
   ...(gatewayVersions.value ? [{ key: 'gateway_version', label: t('nodes.gatewayVersion'), mobile: 'meta' } satisfies TableColumn] : []),
+  { key: 'plugin_sandbox', label: t('nodes.sandbox'), mobile: 'meta' },
   { key: 'started_at', label: t('nodes.uptime'), mobile: 'meta' },
   { key: 'last_heartbeat', label: t('nodes.heartbeat'), mobile: 'meta' },
   { key: 'plugins', label: t('nodes.plugins'), mobile: 'meta', mobileSpan: 2 },
@@ -200,6 +214,12 @@ const versionsText = computed(() => (gatewayVersions.value?.size ? t('nodes.vers
       <template #cell-gateway_version="{ row }">
         <SBadge v-if="gatewayVersions?.get(row.node_id)" tone="gray" data-testid="node-gateway-version">{{ gatewayVersions.get(row.node_id) }}</SBadge>
         <SHint v-else inline data-testid="node-gateway-version">{{ t('nodes.unknownVersion') }}</SHint>
+      </template>
+      <template #cell-plugin_sandbox="{ row }">
+        <SBadge v-if="row.plugin_sandbox" :tone="sandboxBadge(row.plugin_sandbox).tone" :title="sandboxBadge(row.plugin_sandbox).detail" data-testid="node-sandbox">
+          {{ sandboxBadge(row.plugin_sandbox).text }}
+        </SBadge>
+        <SHint v-else inline data-testid="node-sandbox">—</SHint>
       </template>
       <template #cell-started_at="{ row }">
         <SDateTime muted :value="row.started_at" mode="relative" live />

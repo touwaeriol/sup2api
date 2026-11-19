@@ -6,12 +6,13 @@
     "en": "Delivers the core's and other plugins' notifications by email over SMTP (notification channel \"email\").",
     "zh": "通过 SMTP 以邮件发送核心和其他插件的通知（通知渠道「邮件」）。"
   },
-  "version": "0.1.4",
+  "version": "0.1.5",
   "publisher": "sub2api",
   "icon": "text:M",
   "runtime": "grpc",
   "entry": { "grpc": { "binaries": "runtimes/{os}-{arch}/plugin" } },
-  "hostCompat": ">=0.1.290 <0.2.0",
+  "hostCompat": ">=0.1.304 <0.2.0",
+  "hostUICompat": "^4.0",
 
   "capabilities": [
     { "id": "notify.channel.v1" }
@@ -29,10 +30,11 @@
   },
 
   "ui": {
+    "native": { "entry": "ui/native/entry.js" },
     "settings": {
-      "mode": "schema",
-      "schema": "forms/settings.schema.json",
-      "uiSchema": "forms/settings.ui.json"
+      "mode": "native",
+      "component": "MailerSettings",
+      "secrets": [{ "path": "password" }]
     }
   },
 
@@ -41,6 +43,8 @@
   "hostPermissions": [
     { "id": "net",
       "scope": { "domains": ["*"] },
-      "reason": { "en": "Connect to the configured SMTP server (enforced when the egress policy is an allowlist)", "zh": "连接设置中的 SMTP 服务器（出口策略为白名单时生效）" } }
+      "reason": { "en": "Connect to the configured SMTP server (enforced when the egress policy is an allowlist)", "zh": "连接设置中的 SMTP 服务器（出口策略为白名单时生效）" } },
+    { "id": "ui.native",
+      "reason": { "en": "The settings form (MailerSettings): SMTP server, login and sender", "zh": "设置表单（MailerSettings）：SMTP 服务器、登录与发件人" } }
   ]
 }

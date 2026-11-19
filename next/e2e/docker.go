@@ -54,7 +54,13 @@ func (e *Env) StopNode(n int) { e.T.Helper(); e.Docker("stop", e.Container(fmt.S
 // StartNode starts node n and waits until it answers /healthz directly.
 func (e *Env) StartNode(n int) {
 	e.T.Helper()
-	e.Docker("start", e.Container(fmt.Sprintf("node-%d", n)))
+	c := e.Container(fmt.Sprintf("node-%d", n))
+	// A node still draining after SIGTERM (stop grace 180 s) is running:
+	// starting it is a no-op and it exits afterwards. Wait for it to stop.
+	Eventually(e.T, 200*time.Second, time.Second, fmt.Sprintf("node-%d serving or stopped", n), func() bool {
+		return e.NodeHealthy(n) || strings.TrimSpace(e.Docker("inspect", "--format", "{{.State.Running}}", c)) == "false"
+	})
+	e.Docker("start", c)
 	Eventually(e.T, 90*time.Second, time.Second, fmt.Sprintf("node-%d healthy", n), func() bool {
 		return e.NodeHealthy(n)
 	})

@@ -20,7 +20,7 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"],
-      "@sub2api/ui/testing": ["packages/ui/src/testViewport.ts"],
+      "@sub2api/ui/testing": ["packages/ui/src/testing/index.ts"],
       "@sub2api/ui": ["packages/ui/src/index.ts"],
       "@sub2api/host": ["packages/host/src/index.ts"]
     }

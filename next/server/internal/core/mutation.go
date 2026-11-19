@@ -1,6 +1,15 @@
 package core
 
-import "context"
+import (
+	"context"
+	"net/http"
+)
+
+// ErrClusterChangeBusy: another cluster change - a plugin change or a core
+// update plan - is being submitted. It passes soon, so callers may simply
+// retry (CONTRACTS §3.1).
+var ErrClusterChangeBusy = NewError(http.StatusConflict, "cluster_change_busy",
+	"another cluster change is being submitted; retry")
 
 // PluginMutationGate serializes submission against core update plans. Durable
 // rollout/uninstall rows protect work after the short submission lock ends.

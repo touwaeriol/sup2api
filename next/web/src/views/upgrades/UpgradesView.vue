@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from '@sub2api/host'
-import { SDateTime, useAutoRefresh, SAlert, SBadge, SButton, SCard, SCode, SEmpty, SField, SHint, SPageHeader, SSectionTitle, SSelect, STable, confirm, type TableColumn, type Tone } from '@sub2api/ui'
+import { SDateTime, useAutoRefresh, SAlert, SBadge, SButton, SCard, SCode, SEmpty, SField, SHint, SPageHeader, SSectionTitle, SSelect, STable, confirm, createItemId, type TableColumn, type Tone } from '@sub2api/ui'
 import { useAuthStore } from '@/stores/auth'
 import { useUpdatesStore, type UpdateIssue } from '@/stores/updates'
 import { notifyError } from '@/utils/errors'
@@ -24,7 +24,7 @@ const target = ref<string | number | boolean | null>(''), selected = ref<Plan | 
 const loading = ref(true), busy = ref(false), available = ref(false), primary = ref(''), revision = ref(0), stale = ref(false)
 const selectedID = ref(typeof route.query.upgrade === 'string' ? route.query.upgrade : '')
 let inflight = false, disposed = false
-let requestKey = crypto.randomUUID()
+let requestKey = createItemId()
 const canExecute = computed(() => auth.has('system:update:execute'))
 const canRecover = computed(() => auth.has('system:update:recover'))
 const options = computed(() => releases.value.map(r => ({ value: r.digest, label: r.manifest.release_id + ' · ' + r.digest.slice(0, 12) })))
@@ -35,7 +35,7 @@ const readyToCreate = computed(() => canExecute.value && available.value && !sta
 const STATUS_TONE: Record<string, Tone> = { completed: 'success', done: 'success', ready: 'success', failed: 'danger', error: 'danger', paused: 'warning', pending: 'warning', running: 'warning' }
 const tone = (status: string): Tone => STATUS_TONE[status] ?? 'gray'
 function version(digest: string) { return releases.value.find(r => r.digest === digest)?.manifest.release_id || digest.slice(0, 12) || '—' }
-watch(target, () => { preflight.value = null; requestKey = crypto.randomUUID() })
+watch(target, () => { preflight.value = null; requestKey = createItemId() })
 // The update check compares the latest releases with the installed versions,
 // which a plan changes: read it again once the last active plan ends.
 const updates = useUpdatesStore()
@@ -70,7 +70,7 @@ async function create() {
   busy.value = true
   try {
     const plan = await api.post<Plan>('/system/upgrades', { release_digest: preflight.value.release_digest, expected_revision: preflight.value.expected_revision, idempotency_key: requestKey })
-    preflight.value = null; requestKey = crypto.randomUUID(); await selectPlan(plan.id); await load()
+    preflight.value = null; requestKey = createItemId(); await selectPlan(plan.id); await load()
   } catch (e) { notifyError(e) } finally { busy.value = false }
 }
 async function action(kind: 'pause' | 'resume' | 'cancel' | 'rollback') {

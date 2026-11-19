@@ -1,0 +1,10 @@
+{
+  "model": "gpt-image-2",
+  "prompt": "A small white dot on a black background",
+  "user": "u-1",
+  "safety_identifier": "s-1",
+  "style": "vivid",
+  "svg": {
+    "precision": 2
+  }
+}

@@ -80,10 +80,7 @@ func (s AutoDisableSettings) rule(status int, body []byte, transportErr string) 
 	if len(s.Keywords) == 0 {
 		return ""
 	}
-	if len(body) > classifyPrefix {
-		body = body[:classifyPrefix]
-	}
-	text := bytes.ToLower(append(append(append([]byte(nil), body...), '\n'), transportErr...))
+	text := bytes.ToLower(append(append(append([]byte(nil), core.ClassifyPrefix(body)...), '\n'), transportErr...))
 	for _, k := range s.Keywords {
 		if bytes.Contains(text, []byte(k)) {
 			return fmt.Sprintf("matched auto-disable rule: keyword %q", k)

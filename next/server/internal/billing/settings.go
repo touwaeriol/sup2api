@@ -15,12 +15,6 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store"
 )
 
-// Missing-price policies.
-const (
-	PolicyReject = "reject"
-	PolicyFree   = "free"
-)
-
 // settingsKey is the settings row and the plugin-visible section
 // (CONTRACTS §107) of the billing settings.
 const settingsKey = protocol.SettingsBilling
@@ -28,7 +22,6 @@ const settingsKey = protocol.SettingsBilling
 // Settings is the "billing" row of the settings table (CONTRACTS §8).
 type Settings struct {
 	PreConsumeTokens    int64           `json:"pre_consume_tokens"`
-	MissingPricePolicy  string          `json:"missing_price_policy"`
 	MinBalance          decimal.Decimal `json:"min_balance"`
 	BigCostWarningUSD   decimal.Decimal `json:"big_cost_warning_usd"`
 	OutputReserveTokens int64           `json:"output_reserve_tokens"`
@@ -57,7 +50,6 @@ func validDisconnectPolicy(p string) bool {
 func DefaultSettings() Settings {
 	return Settings{
 		PreConsumeTokens:       500,
-		MissingPricePolicy:     PolicyReject,
 		MinBalance:             decimal.Zero,
 		BigCostWarningUSD:      decimal.NewFromInt(10),
 		OutputReserveTokens:    4000,
@@ -111,7 +103,6 @@ func loadSettings(ctx context.Context, q *gorm.DB) (Settings, error) {
 	// Fields absent from the stored document keep their defaults.
 	var partial struct {
 		PreConsumeTokens       *int64           `json:"pre_consume_tokens"`
-		MissingPricePolicy     *string          `json:"missing_price_policy"`
 		MinBalance             *decimal.Decimal `json:"min_balance"`
 		BigCostWarningUSD      *decimal.Decimal `json:"big_cost_warning_usd"`
 		OutputReserveTokens    *int64           `json:"output_reserve_tokens"`
@@ -120,9 +111,6 @@ func loadSettings(ctx context.Context, q *gorm.DB) (Settings, error) {
 	}
 	if err := json.Unmarshal(raw, &partial); err != nil {
 		return v, err
-	}
-	if partial.MissingPricePolicy != nil {
-		v.MissingPricePolicy = *partial.MissingPricePolicy
 	}
 	if partial.PreConsumeTokens != nil {
 		v.PreConsumeTokens = *partial.PreConsumeTokens
@@ -155,7 +143,7 @@ func (s *Service) SettingsReaders() map[string]core.SettingsReader {
 			return nil, err
 		}
 		return protocol.BillingSettings{
-			MissingPricePolicy: v.MissingPricePolicy, MinBalance: v.MinBalance.String(), BigCostWarningUSD: v.BigCostWarningUSD.String(),
+			MinBalance: v.MinBalance.String(), BigCostWarningUSD: v.BigCostWarningUSD.String(),
 			PreConsumeTokens: v.PreConsumeTokens, OutputReserveTokens: v.OutputReserveTokens, ClientDisconnectPolicy: v.ClientDisconnectPolicy,
 		}, nil
 	}}
@@ -180,7 +168,6 @@ func (s *Service) putSettings(c *gin.Context) {
 	cur := DefaultSettings()
 	var in struct {
 		PreConsumeTokens       *int64           `json:"pre_consume_tokens"`
-		MissingPricePolicy     *string          `json:"missing_price_policy"`
 		MinBalance             *decimal.Decimal `json:"min_balance"`
 		BigCostWarningUSD      *decimal.Decimal `json:"big_cost_warning_usd"`
 		ClientDisconnectPolicy *string          `json:"client_disconnect_policy"`
@@ -194,12 +181,6 @@ func (s *Service) putSettings(c *gin.Context) {
 			fields = append(fields, core.FieldError{Field: "pre_consume_tokens", Code: "invalid", Message: "must be an integer from 0 to 100000000"})
 		}
 		cur.PreConsumeTokens = *in.PreConsumeTokens
-	}
-	if in.MissingPricePolicy != nil {
-		if p := *in.MissingPricePolicy; p != PolicyReject && p != PolicyFree {
-			fields = append(fields, core.FieldError{Field: "missing_price_policy", Code: "invalid", Message: "must be reject or free"})
-		}
-		cur.MissingPricePolicy = *in.MissingPricePolicy
 	}
 	if in.MinBalance != nil {
 		cur.MinBalance = *in.MinBalance

@@ -11,11 +11,12 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// spoolMemoryLimit is how much of an answer stays in memory; the rest
+// spills to a temp file. Nothing caps the answer's size.
 const spoolMemoryLimit = 1 << 20
-const spoolTotalLimit = 64 << 20
 
-// errSpool marks a failure of the spool itself (size limit, temp file): a
-// local error, never the client going away.
+// errSpool marks a failure of the spool itself (its temp file): a local
+// error, never the client going away.
 var errSpool = errors.New("response spool failed")
 
 // bufferedResponse keeps a successful non-streaming answer private until its
@@ -63,9 +64,6 @@ func (w *bufferedResponse) Write(p []byte) (int, error) {
 }
 
 func (w *bufferedResponse) write(p []byte) (int, error) {
-	if w.size+len(p) > spoolTotalLimit {
-		return 0, errors.New("response exceeds 64 MiB spool limit")
-	}
 	if w.file == nil && w.size+len(p) > spoolMemoryLimit {
 		f, err := os.CreateTemp("", "sup2api-response-*")
 		if err != nil {
@@ -87,11 +85,14 @@ func (w *bufferedResponse) write(p []byte) (int, error) {
 	w.size += n
 	return n, err
 }
+
+// close removes the temp file, if any; calling it again does nothing.
 func (w *bufferedResponse) close() {
 	if w.file != nil {
 		name := w.file.Name()
 		_ = w.file.Close()
 		_ = os.Remove(name)
+		w.file = nil
 	}
 }
 func (w *bufferedResponse) publish() error {

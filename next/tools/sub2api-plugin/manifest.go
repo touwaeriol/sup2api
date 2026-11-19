@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
+	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest/check"
+	"github.com/Sub2API-Devs/sup2api/next/sdk/protocol"
 )
 
 // Overlay files that change the manifest instead of being packaged.
@@ -65,8 +67,12 @@ func effectiveManifest(dir, overlay string) ([]byte, *manifest.Manifest, error) 
 }
 
 // parseManifest decodes strictly (unknown fields are errors) and checks the
-// basic identity fields.
+// basic identity fields. A manifest of an older plugin contract is reported
+// with the one message the host gives it, not with its field errors.
 func parseManifest(raw []byte) (*manifest.Manifest, error) {
+	if err := outdatedContract(raw); err != nil {
+		return nil, err
+	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	var m manifest.Manifest
@@ -80,6 +86,21 @@ func parseManifest(raw []byte) (*manifest.Manifest, error) {
 		return nil, fmt.Errorf("manifest.json: apiVersion %d unsupported (want %d)", m.APIVersion, manifest.APIVersion)
 	}
 	return &m, nil
+}
+
+// outdatedContract refuses a manifest of an older plugin contract with the
+// one message the host gives it (check.OutdatedPackage); its fields would
+// otherwise fail the strict decode as unknown. The CLI has no core version
+// of its own: the message names the first core of the protocol.
+func outdatedContract(raw []byte) error {
+	var m manifest.Manifest
+	if json.Unmarshal(raw, &m) != nil {
+		return nil
+	}
+	if msg, outdated := check.OutdatedPackage(&m, raw, protocol.FirstCoreVersion); outdated {
+		return errors.New(msg)
+	}
+	return nil
 }
 
 // applyMergePatch applies an RFC 7386 JSON merge patch and re-encodes the

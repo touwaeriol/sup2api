@@ -151,22 +151,6 @@ func pathCovered(p string, allowed []string) bool {
 	return false
 }
 
-// requestFieldValues reads the route's requestFields (gjson paths or
-// queries) from body: the raw JSON of each one present, nothing for the
-// absent ones. HTTP attempts and every WebSocket turn read them through this
-// one function, so a plugin sees the same values either way (CONTRACTS
-// §83.6). The core caps neither a value nor their sum; the request or
-// message size limit and the plugin's gRPC receive limit bound them.
-func requestFieldValues(body []byte, paths []string) map[string]string {
-	fields := make(map[string]string, len(paths))
-	for _, p := range paths {
-		if r := getJSON(body, p); r != "" {
-			fields[p] = r
-		}
-	}
-	return fields
-}
-
 // getJSON returns the raw JSON at path, or "" when absent.
 func getJSON(body []byte, path string) string {
 	if r := gjson.GetBytes(body, path); r.Exists() {

@@ -7,12 +7,13 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
-	"github.com/Sub2API-Devs/sup2api/next/server/internal/gateway/convert"
 )
 
 // hangUpAfterStart sends a streaming request whose upstream holds after
@@ -264,7 +265,7 @@ func TestClientDisconnectAfterFinalUsageIsServed(t *testing.T) {
 // On a converting route the final usage is the upstream's: a chat client of
 // an Anthropic upstream that hangs up on [DONE] was served.
 func TestClientDisconnectAfterFinalUsageIsServedConverted(t *testing.T) {
-	e := newEnv(t, func(e *env) { e.conv = convert.Default() })
+	e := newEnv(t, openAIClients)
 	e.balance.outputReserve = testOutputReserve
 	e.up.set("acc-1", &upstreamRule{linger: true})
 	path, input := openAIConversionInput("openai.chat", true)
@@ -291,84 +292,115 @@ func TestClientDisconnectBeforeFinalUsageBillsReserve(t *testing.T) {
 	wantHangUpBilledReserve(t, e.record())
 }
 
-// A request the plugin executes (platform.execute.v1) through the host's
-// forward follows the same rules, in the record the execution commits: the
-// policy applies to a hang-up before the final usage ("continue" reads the
-// answer on), and one after it was served under every policy.
-func TestClientDisconnectExecutedRequest(t *testing.T) {
+// A relay that waits (an endpoint whose usage the plugin reads) follows the
+// same rules, in the record its execution commits: the policy applies to a
+// hang-up before the final usage ("continue" reads the answer on), and one
+// after it was served under every policy.
+func TestClientDisconnectWaitedRelay(t *testing.T) {
 	for _, policy := range []string{core.DisconnectPrecharge, core.DisconnectContinue} {
 		t.Run("after final usage/"+policy, func(t *testing.T) {
-			e, _, commits := executedEnv(t, policy, &upstreamRule{linger: true})
+			e, _ := waitedEnv(t, policy, &upstreamRule{linger: true})
 			hangUpAfter(t, e, "message_stop")
 			awaitUpstreamCanceled(t, e, "when the served client left")
-			wantServed(t, committed(t, commits))
+			wantServed(t, e.record())
 		})
 	}
 	t.Run("before final usage/precharge", func(t *testing.T) {
 		hold := make(chan struct{})
 		defer close(hold)
-		e, _, commits := executedEnv(t, core.DisconnectPrecharge, &upstreamRule{hold: hold})
+		e, _ := waitedEnv(t, core.DisconnectPrecharge, &upstreamRule{hold: hold})
 		hangUpAfterStart(t, e)
 		awaitUpstreamCanceled(t, e, "when the client left")
-		wantHangUpBilledReserve(t, committed(t, commits))
+		wantHangUpBilledReserve(t, e.record())
 	})
 	t.Run("before final usage/continue", func(t *testing.T) {
 		hold := make(chan struct{})
-		e, _, commits := executedEnv(t, core.DisconnectContinue, &upstreamRule{hold: hold})
+		e, _ := waitedEnv(t, core.DisconnectContinue, &upstreamRule{hold: hold})
 		hangUpAfterStart(t, e)
 		awaitUpstreamKept(t, e)
 		close(hold)
-		wantReadOnBilledReported(t, committed(t, commits))
+		wantReadOnBilledReported(t, e.record())
 	})
 }
 
-// executedEnv is an env whose requests the plugin executes
-// (platform.execute.v1) through the host's forward, under the given
-// disconnect policy; commits are the usage records the executions commit.
-func executedEnv(t *testing.T, policy string, rule *upstreamRule) (_ *env, _ *executeTestPlatform, commits chan *core.UsageRecord) {
+// waitedEnv is an env whose anthropic messages endpoint has its usage read
+// by the anthropic plugin, so every request is relayed in the waiting form,
+// under the given disconnect policy. The plugin reads no usage (its
+// ExtractUsage is unimplemented) and answers host_usage: the core's reading
+// is committed.
+func waitedEnv(t *testing.T, policy string, rule *upstreamRule) (*env, *abortingPlatform) {
 	t.Helper()
-	var p *executeTestPlatform
+	p := &abortingPlatform{}
 	e := newEnv(t, func(e *env) {
-		p = &executeTestPlatform{PlatformPlugin: e.plat}
+		p.fakePlatform = e.plat
 		e.gen.accountTypes[0].Client = p
-		e.man.Capabilities = append(e.man.Capabilities, manifest.Capability{ID: manifest.CapPlatformExecute})
+		for i := range e.gen.platforms {
+			if e.gen.platforms[i].Platform.ID == "anthropic" {
+				e.gen.platforms[i].Plugin, e.gen.platforms[i].Client = e.gen.accountTypes[0].Plugin, p
+			}
+		}
+		for i := range e.gen.endpoints {
+			if ep := &e.gen.endpoints[i].Endpoint; ep.Protocol == "anthropic.messages" {
+				ep.UsageSource, ep.UsageStreamEvents = manifest.UsageSourcePlugin, []string{"message_delta"}
+				e.gen.endpoints[i].Plugin = e.gen.accountTypes[0].Plugin
+			}
+		}
 	})
 	e.up.set("acc-1", rule)
-	return e, p, captureCommits(e, policy)
-}
-
-// captureCommits makes e capture the usage the executions commit, under the
-// given disconnect policy, and returns where it lands.
-func captureCommits(e *env, policy string) chan *core.UsageRecord {
-	svc := &commitCapture{statsExecutionStore: statsExecutionStore{fakeSettler: e.settler}, commits: make(chan *core.UsageRecord, 8)}
-	e.gw.d.Settler = svc
 	e.balance.disconnect = policy
 	e.balance.outputReserve = testOutputReserve
-	return svc.commits
+	return e, p
 }
 
-// committed waits for the next usage record an execution commits.
-func committed(t *testing.T, commits chan *core.UsageRecord) *core.UsageRecord {
-	t.Helper()
-	select {
-	case rec := <-commits:
-		return rec
-	case <-time.After(5 * time.Second):
-		t.Fatal("no committed usage")
-		return nil
+// abortingPlatform executes as fakePlatform does; closing abort ends the
+// context of its waiting relay and fails its Execute, as a plugin process
+// killed or drained during the exchange.
+type abortingPlatform struct {
+	*fakePlatform
+	abort chan struct{}
+	// deadline is the deadline of the last Execute context.
+	deadline atomic.Value
+}
+
+func (p *abortingPlatform) Execute(ctx context.Context, in *pluginv1.ExecuteRequest, client core.ExecutionClient) (core.ExecutionResult, error) {
+	if d, ok := ctx.Deadline(); ok {
+		p.deadline.Store(d)
 	}
+	if p.abort == nil || client.Relay == nil {
+		return fakeExecute(ctx, p.fakePlatform, in, client)
+	}
+	relay := client.Relay
+	client.Relay = func(ctx context.Context, req *pluginv1.UpstreamRequest) (*pluginv1.RelayUpstreamResponse, error) {
+		rctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		go func() {
+			select {
+			case <-p.abort:
+				cancel()
+			case <-rctx.Done():
+			}
+		}()
+		return relay(rctx, req)
+	}
+	res, err := fakeExecute(ctx, p.fakePlatform, in, client)
+	select {
+	case <-p.abort:
+		return core.ExecutionResult{}, core.ErrPluginUnavailable.WithMessage("plugin process exited")
+	default:
+	}
+	return res, err
 }
 
-// A plugin that gives up its forward (killed, drained) while the client is
-// still there is no hang-up, under any policy: the upstream is canceled at
-// once, the client gets the truncated answer and the record says the
-// upstream was interrupted.
+// A plugin that gives up its waiting relay (killed, drained) while the
+// client is still there is no hang-up, under any policy: the upstream is
+// canceled at once, the client gets the truncated answer, and with no facts
+// the execution is closed unreported - a free record, nothing billed.
 func TestClientDisconnectExecutionAbortedIsNoHangUp(t *testing.T) {
 	for _, policy := range []string{core.DisconnectPrecharge, core.DisconnectContinue} {
 		t.Run(policy, func(t *testing.T) {
 			hold := make(chan struct{})
 			defer close(hold)
-			e, p, commits := executedEnv(t, policy, &upstreamRule{hold: hold})
+			e, p := waitedEnv(t, policy, &upstreamRule{hold: hold})
 			p.abort = make(chan struct{})
 
 			br, hangUp := openStream(t, e, "/v1/messages", body(testModel, true), nil, `"type":"message_start"`)
@@ -378,26 +410,27 @@ func TestClientDisconnectExecutionAbortedIsNoHangUp(t *testing.T) {
 			if rest, _ := io.ReadAll(br); strings.Contains(string(rest), "message_stop") {
 				t.Fatalf("the answer was not cut: %s", rest)
 			}
-			rec := committed(t, commits)
-			if rec.Success || rec.ErrorType != errTypeUpstream || rec.StatusCode == statusClientClosed ||
-				!strings.Contains(rec.ErrorMessage, errExecutionAborted.Error()) || rec.UsageExtract == core.UsageExtractPrecharge {
-				t.Fatalf("record: success = %v type = %q status = %d message = %q extract = %q",
-					rec.Success, rec.ErrorType, rec.StatusCode, rec.ErrorMessage, rec.UsageExtract)
+			rec := e.record()
+			if rec.Success || rec.Billable || rec.ErrorType != core.UsageErrorUnreported || rec.UsageExtract != core.UsageExtractUnreported ||
+				rec.Tokens != (core.UsageTokens{}) {
+				t.Fatalf("record: success = %v billable = %v type = %q extract = %q tokens = %+v",
+					rec.Success, rec.Billable, rec.ErrorType, rec.UsageExtract, rec.Tokens)
 			}
+			if got := e.settler.executionStates(); len(got) != 1 || got[0] != core.ExecutionStateUnreported {
+				t.Fatalf("execution states %v", got)
+			}
+			e.noRecord()
 		})
 	}
 }
 
-// The Codex case: an executed Responses request whose client hangs up on
+// The Codex case: a Responses request whose client hangs up on
 // response.completed while the upstream keeps the stream open was served.
 func TestClientDisconnectAfterResponsesCompletedIsServed(t *testing.T) {
 	for _, policy := range []string{core.DisconnectPrecharge, core.DisconnectContinue} {
 		t.Run(policy, func(t *testing.T) {
-			e, plat, up := streamOnlyEnv(t, manifest.AccountPlatform{Platform: manifest.PlatformOpenAI, Endpoints: []string{"responses"}})
-			b := &e.gen.accountTypes[len(e.gen.accountTypes)-1]
-			b.Client = &executeTestPlatform{PlatformPlugin: plat}
-			b.Plugin.Manifest.Capabilities = append(b.Plugin.Manifest.Capabilities, manifest.Capability{ID: manifest.CapPlatformExecute})
-			commits := captureCommits(e, policy)
+			e, _, up := streamOnlyEnv(t, manifest.AccountPlatform{Platform: manifest.PlatformOpenAI, Endpoints: []string{"responses"}})
+			e.balance.disconnect, e.balance.outputReserve = policy, testOutputReserve
 			up.linger = make(chan struct{}, 1)
 
 			_, hangUp := openStream(t, e, "/v1/responses", map[string]any{"model": testModel, "input": "hi", "stream": true},
@@ -408,7 +441,7 @@ func TestClientDisconnectAfterResponsesCompletedIsServed(t *testing.T) {
 			case <-time.After(10 * time.Second):
 				t.Fatal("upstream request was not canceled when the served client left")
 			}
-			rec := committed(t, commits)
+			rec := e.record()
 			if !rec.Success || rec.StatusCode != http.StatusOK || rec.ErrorType != "" || !rec.Billable ||
 				rec.Tokens.Output != soOutput || rec.Tokens.CacheRead != soCached || rec.UsageExtract == core.UsageExtractPrecharge {
 				t.Fatalf("not recorded as served: %+v", rec)

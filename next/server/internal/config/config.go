@@ -118,9 +118,8 @@ type PluginConfig struct {
 	StrictNetwork     bool     // SUB2API_PLUGIN_STRICT_NETWORK, default true on linux
 	Seccomp           bool     // SUB2API_PLUGIN_SECCOMP, default true on linux
 	MaxPackageBytes   int64    // SUB2API_PLUGIN_MAX_PACKAGE_BYTES, default rc.PluginPackageMaxBytes (64 MiB)
-	MaxMemoryMB       int      // SUB2API_PLUGIN_MAX_MEMORY_MB, global cap, default 1024
-	DBRoleIsolation   bool     // SUB2API_PLUGIN_DB_ROLE_ISOLATION, default true
-	Landlock          bool     // SUB2API_PLUGIN_LANDLOCK: Landlock file system restriction, default false (CONTRACTS §43.8)
+	MaxMemoryMB       int      // SUB2API_PLUGIN_MAX_MEMORY_MB, node cap on per-plugin memory; default 0 = no cap
+	Landlock          bool     // SUB2API_PLUGIN_LANDLOCK: Landlock (files, unix sockets, signals), default true on linux (CONTRACTS §43.8)
 	MarketSourcesJSON string   // SUB2API_MARKET_SOURCES: JSON [{name,url,public_key}] seeded at start
 	// BuiltinDir holds the built-in plugin packages installed at startup
 	// (SUB2API_BUILTIN_PLUGIN_DIR, default "/opt/sub2api/builtin").
@@ -212,8 +211,7 @@ func Load(goos string) (*Config, error) {
 	p.VerifySignatures = boolEnv("SUB2API_PLUGIN_VERIFY_SIGNATURES", true)
 	p.StrictNetwork = boolEnv("SUB2API_PLUGIN_STRICT_NETWORK", linux)
 	p.Seccomp = boolEnv("SUB2API_PLUGIN_SECCOMP", linux)
-	p.DBRoleIsolation = boolEnv("SUB2API_PLUGIN_DB_ROLE_ISOLATION", true)
-	p.Landlock = boolEnv("SUB2API_PLUGIN_LANDLOCK", false)
+	p.Landlock = boolEnv("SUB2API_PLUGIN_LANDLOCK", linux)
 	p.RunDir = env("SUB2API_PLUGIN_RUN_DIR", filepath.Join(p.DataDir, ".run"))
 	p.EgressAllowPrivate = boolEnv("SUB2API_PLUGIN_EGRESS_ALLOW_PRIVATE", false)
 	p.MarketSourcesJSON = os.Getenv("SUB2API_MARKET_SOURCES")
@@ -245,7 +243,7 @@ func Load(goos string) (*Config, error) {
 	if p.MaxPackageBytes, err = int64Env("SUB2API_PLUGIN_MAX_PACKAGE_BYTES", rc.PluginPackageMaxBytes); err != nil {
 		return nil, err
 	}
-	mm, err := int64Env("SUB2API_PLUGIN_MAX_MEMORY_MB", 1024)
+	mm, err := int64Env("SUB2API_PLUGIN_MAX_MEMORY_MB", 0)
 	if err != nil {
 		return nil, err
 	}

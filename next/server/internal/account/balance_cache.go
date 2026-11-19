@@ -10,39 +10,24 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store"
 )
 
-// Redis cache for balance snapshots (CONTRACTS §51.3), parallel to quota cache.
+// Redis cache of balance snapshots (CONTRACTS §52.4), parallel to the quota
+// cache: PG is the source of truth, every write goes through to Redis, a
+// read falls back to PG for missing keys and when Redis is down.
 
 const balanceCacheTTL = 10 * time.Minute
 
-type balanceCacheEntry struct {
-	Mtime int64                  `json:"mtime"` // PG updated_at in nanos
-	Snap  *store.BalanceSnapshot `json:"snap"`
-}
-
 func (s *Service) writeBalanceCache(ctx context.Context, snap *store.BalanceSnapshot) {
-	if s.d.Redis == nil || snap.UpdatedAt == nil {
+	if s.d.Redis == nil {
 		return
 	}
-	key := balanceCacheKey(snap.AccountID)
-	entry := balanceCacheEntry{
-		Mtime: snap.UpdatedAt.UnixNano(),
-		Snap:  snap,
-	}
-	data, err := json.Marshal(entry)
+	data, err := json.Marshal(snap)
 	if err != nil {
 		slog.WarnContext(ctx, "account: marshal balance cache", "account", snap.AccountID, "err", err)
 		return
 	}
-	if err := s.d.Redis.Set(ctx, key, data, balanceCacheTTL).Err(); err != nil {
+	if err := s.d.Redis.Set(ctx, balanceCacheKey(snap.AccountID), data, balanceCacheTTL).Err(); err != nil {
 		slog.WarnContext(ctx, "account: write balance cache", "account", snap.AccountID, "err", err)
 	}
-}
-
-func (s *Service) deleteBalanceCache(ctx context.Context, accountID int64) error {
-	if s.d.Redis == nil {
-		return nil
-	}
-	return s.d.Redis.Del(ctx, balanceCacheKey(accountID)).Err()
 }
 
 func (s *Service) evictBalanceCache(ctx context.Context, ids ...int64) {
@@ -93,13 +78,13 @@ func (s *Service) cachedAccountBalances(ctx context.Context, ids []int64) (map[i
 					missing = append(missing, ids[i])
 					continue
 				}
-				var entry balanceCacheEntry
-				if err := json.Unmarshal([]byte(str), &entry); err != nil {
+				var snap store.BalanceSnapshot
+				if err := json.Unmarshal([]byte(str), &snap); err != nil {
 					slog.WarnContext(ctx, "account: corrupt balance cache", "account", ids[i])
 					missing = append(missing, ids[i])
 					continue
 				}
-				cached[ids[i]] = entry.Snap
+				cached[ids[i]] = &snap
 			}
 		}
 	}
@@ -122,7 +107,7 @@ func (s *Service) cachedAccountBalances(ctx context.Context, ids []int64) (map[i
 	// Merge PG results and write back to Redis synchronously
 	for id, snap := range pgSnaps {
 		cached[id] = snap
-		if redisOK && snap.UpdatedAt != nil {
+		if redisOK {
 			s.writeBalanceCache(ctx, snap)
 		}
 	}

@@ -11,7 +11,7 @@ vi.mock('@/stores/plugins', () => ({ usePluginStore: () => ({ plugin: (key: stri
 vi.mock('./detail/SettingsTab.vue', () => ({ default: { name: 'SettingsTab', props: ['pluginKey', 'settings'], template: '<div data-testid="tab">{{ pluginKey }}:{{ settings.values.who }}</div>' } }))
 enableAutoUnmount(afterEach)
 
-const settingsOf = (who: string) => ({ schema: { type: 'object' }, values: { who } })
+const settingsOf = (who: string) => ({ mode: 'native', component: 'Settings', values: { who } })
 
 describe('PluginSettingsView', () => {
   it('ignores a late answer for the plugin it left', async () => {
@@ -32,7 +32,7 @@ describe('PluginSettingsView', () => {
 
   it("sends native settings to the plugin page that edits them", async () => {
     mocks.route = reactive({ params: { key: "moderation" } })
-    mocks.get.mockResolvedValue({ mode: "native", page: "dashboard", schema: { type: "object" }, values: {} })
+    mocks.get.mockResolvedValue({ mode: "native", page: "dashboard", values: {} })
     const w = mount(PluginSettingsView, { global: { plugins: [i18n], stubs: { SPageHeader: true } } })
     await flushPromises()
     expect(mocks.replace).toHaveBeenCalledWith("/p/moderation/dashboard?tab=settings")

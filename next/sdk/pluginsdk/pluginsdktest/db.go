@@ -19,8 +19,7 @@ var schemaSeq atomic.Int64
 
 // NewSchema creates a fresh schema in the test PostgreSQL (testpg.URL:
 // TEST_DATABASE_URL, or a local server started from Go) and returns a DSN
-// whose search_path is pinned to it, mimicking the restricted DSN the host
-// hands out. The schema is dropped on cleanup.
+// whose search_path is pinned to it, like the DSN the host hands out. The schema is dropped on cleanup.
 func NewSchema(t testing.TB, prefix string) (dsn, schema string) {
 	t.Helper()
 	base := testpg.URL(t)

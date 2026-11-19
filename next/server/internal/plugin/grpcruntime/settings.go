@@ -13,6 +13,7 @@ import (
 
 	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/protocol"
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 )
 
 // System settings for plugins (CONTRACTS §107).
@@ -58,16 +59,25 @@ func (h *hostServer) GetSettings(ctx context.Context, in *pluginv1.GetSettingsRe
 	return out, nil
 }
 
+// SettingsValidator is the plugin's check of its own settings; every
+// process serves PluginService (registry.addSettingsValidator).
+func (i *Instance) SettingsValidator() core.SettingsValidator { return settingsAdapter{i} }
+
+type settingsAdapter struct{ i *Instance }
+
+// ValidateSettings runs plugin code for somebody waiting in the console, so
+// it takes the console budget like ValidateCredentials. The plugin gets its
+// current grants, as Configure does.
+func (a settingsAdapter) ValidateSettings(ctx context.Context, in *pluginv1.ValidateSettingsRequest) (*pluginv1.ValidateSettingsResponse, error) {
+	req := &pluginv1.ValidateSettingsRequest{ConfigJson: in.GetConfigJson(), Grants: a.i.settings.Load().protoGrants()}
+	return invoke(a.i, ctx, classConsole, TimeoutPlatformConsole, pluginOf, pluginv1.PluginServiceClient.ValidateSettings, req)
+}
+
 // SettingsChanged tells the plugin process that sections changed. The SDK
-// answers it without plugin code, so it takes no call slot (classControl).
-// A plugin built with an SDK that predates the call answers UNIMPLEMENTED:
-// it caches nothing, so that is not an error.
+// answers it without plugin code, so it takes no call slot (classNoSlot).
 func (i *Instance) SettingsChanged(ctx context.Context, sections []string) error {
-	return i.call(ctx, classControl, SettingsChangedTimeout, func(ctx context.Context, p *proc) error {
+	return i.call(ctx, classNoSlot, SettingsChangedTimeout, func(ctx context.Context, p *proc) error {
 		_, err := p.plugin.SettingsChanged(ctx, &pluginv1.SettingsChangedRequest{Sections: sections})
-		if status.Code(err) == codes.Unimplemented {
-			return nil
-		}
 		return err
 	})
 }

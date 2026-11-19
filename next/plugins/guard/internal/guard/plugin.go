@@ -21,9 +21,10 @@ import (
 	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/pluginsdk"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/pluginsdk/batch"
+	"github.com/Sub2API-Devs/sup2api/next/sdk/pluginsdk/fieldcheck"
 )
 
-// Settings is the plugin configuration (forms/settings.schema.json).
+// Settings is the plugin configuration (settingsRules).
 type Settings struct {
 	WebhookURL     string `json:"webhook_url"`
 	RecordSnippets bool   `json:"record_snippets"`
@@ -43,7 +44,8 @@ func (s *Settings) alertCooldown() time.Duration {
 const TopicRulesChanged = "rules.changed"
 
 // Plugin is the guard plugin. It implements pluginsdk.Hook, pluginsdk.App,
-// pluginsdk.HTTP, pluginsdk.BroadcastHandler and the lifecycle interfaces.
+// pluginsdk.HTTP, pluginsdk.BroadcastHandler, pluginsdk.SettingsValidator
+// and the lifecycle interfaces.
 type Plugin struct {
 	*pluginsdk.Router
 	*pluginsdk.BroadcastMux
@@ -127,27 +129,45 @@ func (p *Plugin) Init(ctx context.Context, h pluginsdk.Host) error {
 
 // Configure implements pluginsdk.Configurer.
 func (p *Plugin) Configure(_ context.Context, cfg pluginsdk.Config) error {
-	s := Settings{AlertCooldownSec: defaultAlertCooldownSec} // kept when the key is absent
-	if err := cfg.Decode(&s); err != nil {
-		var te *json.UnmarshalTypeError
-		if errors.As(err, &te) && te.Field == "alert_cooldown_sec" {
-			return pluginsdk.FieldErrors{}.Add("alert_cooldown_sec", "type", "alert_cooldown_sec must be an integer / 告警冷却时间必须是整数").Err()
-		}
-		return pluginsdk.FieldErrors{}.Add("", "invalid_json", "settings must be a JSON object / 设置必须是 JSON 对象").Err()
+	s, err := parseSettings(cfg)
+	if err != nil {
+		return err
 	}
-	if s.AlertCooldownSec < 0 || s.AlertCooldownSec > maxAlertCooldownSec {
-		return pluginsdk.FieldErrors{}.Add("alert_cooldown_sec", "range",
-			fmt.Sprintf("alert_cooldown_sec must be between 0 and %d / 告警冷却时间须在 0 到 %d 秒之间", maxAlertCooldownSec, maxAlertCooldownSec)).Err()
+	p.settings.Store(s)
+	return nil
+}
+
+// ValidateSettings implements pluginsdk.SettingsValidator: the console's
+// settings are refused before they are stored when Configure would refuse
+// them.
+func (p *Plugin) ValidateSettings(_ context.Context, cfg pluginsdk.Config) (json.RawMessage, error) {
+	_, err := parseSettings(cfg)
+	return nil, err
+}
+
+// settingsRules are the settings the console form edits (ui/native
+// GuardSettings shows the same bounds); every other key is refused.
+var settingsRules = fieldcheck.Fields{
+	"webhook_url":        fieldcheck.String().Pattern(`^(https?://\S+)?$`),
+	"record_snippets":    fieldcheck.Bool(),
+	"alert_cooldown_sec": fieldcheck.Integer().Range(0, float64(maxAlertCooldownSec)),
+}
+
+// parseSettings decodes and checks the settings, an absent cooldown taking
+// its default: the one check of Configure and ValidateSettings.
+func parseSettings(cfg pluginsdk.Config) (*Settings, error) {
+	s := Settings{AlertCooldownSec: defaultAlertCooldownSec} // kept when the key is absent
+	if err := fieldcheck.DecodeSettings(cfg, settingsRules, &s); err != nil {
+		return nil, err
 	}
 	s.WebhookURL = strings.TrimSpace(s.WebhookURL)
 	if s.WebhookURL != "" {
 		u, err := url.Parse(s.WebhookURL)
 		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
-			return pluginsdk.FieldErrors{}.Add("webhook_url", "format", "webhook_url must be an http(s) URL / webhook 地址必须是 http(s) URL").Err()
+			return nil, pluginsdk.FieldErrors{}.Add("webhook_url", "format", "webhook_url must be an http(s) URL / webhook 地址必须是 http(s) URL").Err()
 		}
 	}
-	p.settings.Store(&s)
-	return nil
+	return &s, nil
 }
 
 // Health implements pluginsdk.HealthChecker.

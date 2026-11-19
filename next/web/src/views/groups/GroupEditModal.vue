@@ -201,7 +201,14 @@ const onGroup = (save: (gid: number) => Promise<boolean>) => async () => (curren
 
 /** What Save does, in order: the group first, and its accounts before the prices of the models they provide. */
 const steps: SaveStep<GroupEditTab>[] = [
-  { tab: 'models', save: () => modelPolicyEditor.value?.commit() ?? true },
+  // Adds the drafted model patterns; nothing there can fail.
+  {
+    tab: 'models',
+    save: () => {
+      modelPolicyEditor.value?.commit()
+      return true
+    }
+  },
   // A field error opens the tab of its field; any other failure was shown as a toast.
   { tab: () => tabOfErrors(errors.value) ?? tab.value, save: saveForm },
   { tab: 'accounts', save: onGroup(saveAccounts) },

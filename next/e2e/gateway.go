@@ -122,8 +122,13 @@ func (e *Env) Gateway(t testing.TB, base, path, apiKey string, body any, headers
 }
 
 // GatewayTry is Gateway without testing.TB; safe to use from goroutines.
+// A []byte body is sent as it is (headers may set its Content-Type), any
+// other as JSON.
 func GatewayTry(base, path, apiKey string, body any, headers map[string]string) (*GatewayResult, error) {
-	raw, _ := json.Marshal(body)
+	raw, ok := body.([]byte)
+	if !ok {
+		raw, _ = json.Marshal(body)
+	}
 	req, err := http.NewRequest(http.MethodPost, base+path, bytes.NewReader(raw))
 	if err != nil {
 		return nil, err

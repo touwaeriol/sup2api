@@ -39,7 +39,10 @@ export default [
       // Not a layout rule: catches ASI hazards (`a = b\n(c)`). eslint-config-prettier
       // above only switches it off because its CJS entry bundles it with the
       // formatting rules, so it is turned back on here.
-      'no-unexpected-multiline': 'error'
+      'no-unexpected-multiline': 'error',
+      // crypto.randomUUID exists only in secure contexts: a console opened
+      // over plain HTTP threw on it (the upgrades page rendered blank).
+      'no-restricted-properties': ['error', { object: 'crypto', property: 'randomUUID', message: 'Not available over plain HTTP; use createItemId from @sub2api/ui.' }]
     }
   },
   {

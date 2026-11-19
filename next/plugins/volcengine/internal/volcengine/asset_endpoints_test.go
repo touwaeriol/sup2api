@@ -3,13 +3,22 @@ package volcengine
 import (
 	"context"
 	"encoding/json"
+	"net/url"
 	"testing"
 
 	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
-	"github.com/Sub2API-Devs/sup2api/next/sdk/pluginsdk"
+	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
 )
 
+// Every endpoint the asset library resolves is one the core sends
+// SendAccountRequest to for the account (manifest.UpstreamHostAllowed): the
+// default control plane is in externalServices, the rest come from the
+// type's upstreamFields.
 func TestAssetEndpointSelection(t *testing.T) {
+	var m manifest.Manifest
+	if err := json.Unmarshal(manifestFile(t), &m); err != nil {
+		t.Fatal(err)
+	}
 	credentials := `{"api_key":"test-api-key","access_key":"` + testAK + `","secret_key":"` + testSK + `"}`
 	for _, tc := range []struct{ name, kind, settings, want string }{
 		{"official default", AccountTypeAPIKey, `{}`, DefaultAssetBaseURL},
@@ -18,10 +27,11 @@ func TestAssetEndpointSelection(t *testing.T) {
 		{"relay explicit root", AccountTypeRelay, `{"base_url":"https://relay.example","asset_endpoint":"/"}`, "https://relay.example"},
 		{"relay absolute override", AccountTypeRelay, `{"base_url":"https://relay.example","asset_endpoint":"https://assets.example/custom","asset_base_url":"https://old.example"}`, "https://assets.example/custom"},
 		{"legacy explicit preserved", AccountTypeRelay, `{"base_url":"https://relay.example","asset_base_url":"https://old.example/api/asset"}`, "https://old.example/api/asset"},
+		{"official own endpoint", AccountTypeAPIKey, `{"asset_base_url":"https://ark.ap-southeast-1.byteplusapi.com"}`, "https://ark.ap-southeast-1.byteplusapi.com"},
 		{"official cannot bypass guard with relay field", AccountTypeAPIKey, `{"asset_endpoint":"https://untrusted.example"}`, DefaultAssetBaseURL},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg, err := AssetConfigOf(&pluginsdk.AccountCredentials{AccountSummary: pluginsdk.AccountSummary{ID: 1, Type: tc.kind, SettingsJSON: tc.settings}, CredentialsJSON: credentials})
+			cfg, err := AssetConfigOf(&pluginv1.Account{Id: 1, Type: tc.kind, SettingsJson: tc.settings, CredentialsJson: credentials})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -33,6 +43,10 @@ func TestAssetEndpointSelection(t *testing.T) {
 			}
 			if cfg == nil || cfg.BaseURL != tc.want {
 				t.Fatalf("endpoint: %+v want %s", cfg, tc.want)
+			}
+			u, _ := url.Parse(cfg.BaseURL)
+			if !m.UpstreamHostAllowed(u.Hostname(), tc.kind, tc.settings, credentials) {
+				t.Fatalf("the core would refuse to send to %s for this account", cfg.BaseURL)
 			}
 		})
 	}
@@ -77,8 +91,7 @@ func TestAssetEndpointValidation(t *testing.T) {
 
 func TestAssetEndpointSignsExactConfiguredPath(t *testing.T) {
 	f := newFakeArk(t)
-	api := newArkAPI(f.dialer())
-	defer api.close()
+	api := newArkAPI(f.send)
 	cfg := f.config()
 	cfg.BaseURL = f.srv.URL + "/api/support/v1/asset"
 	if _, err := api.call(context.Background(), cfg, ActionListAssets, map[string]any{}); err != nil {

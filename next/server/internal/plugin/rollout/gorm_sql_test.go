@@ -6,6 +6,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store/gormtest"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store/model"
 )
@@ -117,7 +118,7 @@ func TestSQLRecordDataMigration(t *testing.T) {
 
 func TestSQLUpsertRolloutNode(t *testing.T) {
 	gormtest.Assert(t, func(tx *gorm.DB) *gorm.DB {
-		return upsertRolloutNode(tx, 42, "node-a", "boot-a", NodeFailed, "not ready")
+		return upsertRolloutNode(tx, 42, "node-a", "boot-a", NodeFailed, "not ready", "outdated_contract")
 	})
 }
 
@@ -159,7 +160,7 @@ func TestSQLAckUninstallStop(t *testing.T) {
 // their ” defaults.
 func TestSQLRecordHistory(t *testing.T) {
 	gormtest.Assert(t, func(tx *gorm.DB) *gorm.DB {
-		return tx.Create(historyRow("demo", NodePluginState{State: "active", Serving: "1.1.0"}, "node-a", "boot-a", `{"error":""}`))
+		return tx.Create(historyRow("demo", core.PluginNodeState{State: "active", Serving: "1.1.0"}, "node-a", "boot-a", `{"error":""}`))
 	})
 }
 

@@ -54,7 +54,7 @@ func testInstance(t *testing.T, bus *registrytest.MemBus, caps []string, grants 
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = pkg.Close() })
-	rt := &Runtime{o: Options{Bus: bus, Node: staticNode{"node-a", "boot-a"}, Concurrency: Concurrency{Hot: 4, Console: 4, Background: 4, Execute: 4}, DataDir: t.TempDir()}, log: slog.Default()}
+	rt := &Runtime{o: Options{Bus: bus, Node: staticNode{"node-a", "boot-a"}, Concurrency: Concurrency{Hot: 4, Console: 4, Background: 4}, DataDir: t.TempDir()}, log: slog.Default()}
 	if bus == nil {
 		rt.o.Bus = nil
 	}

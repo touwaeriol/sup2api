@@ -12,9 +12,6 @@ import (
 //go:embed manifest.json
 var manifestJSON []byte
 
-// maxRecvMsgSize lets hook calls carry request images (CONTRACTS §72.2).
-const maxRecvMsgSize = 64 << 20
-
 func main() {
-	pluginsdk.Serve(moderation.New(), pluginsdk.WithManifest(manifestJSON), pluginsdk.WithMaxRecvMsgSize(maxRecvMsgSize))
+	pluginsdk.Serve(moderation.New(), pluginsdk.WithManifest(manifestJSON))
 }

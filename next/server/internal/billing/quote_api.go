@@ -196,9 +196,8 @@ func accessSource(public, granted bool) string {
 // quoteCosts prices usage the way a request is billed at the list price rule
 // (as the snapshot resolves it; nil = the model has no global price): through
 // Quote with the multiplier of the rule. listCost is before the rate and cost
-// after it. Both are zero for a model without a global price, whatever the
-// missing-price policy. A price the usage cannot be evaluated with is an
-// error, as it is for a request.
+// after it. Both are zero for a model without a global price. A price the
+// usage cannot be evaluated with is an error, as it is for a request.
 func (s *Service) quoteCosts(ctx context.Context, rule *core.PriceRule, u QuoteUsage, rate decimal.Decimal) (listCost, cost decimal.Decimal, err error) {
 	if rule == nil {
 		return decimal.Zero, decimal.Zero, nil

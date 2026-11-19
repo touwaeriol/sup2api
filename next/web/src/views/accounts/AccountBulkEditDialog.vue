@@ -7,6 +7,9 @@
 // stay listed in the dialog; the saved rows are reported through `saved`.
 // A field some selected account's type fixes (common controls) is disabled.
 // The session cap and its window are one field (fixed when either is).
+// The own protocols and the protocols per model (DESIGN-2026-11-17-PROTOCOL-BINDING §4)
+// replace each account's; what can be ticked depends on the account type, so
+// they are offered only when every selected account is of one type.
 import { computed, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '@sub2api/host'
@@ -20,6 +23,12 @@ import { errorMessage } from '@/utils/errors'
 import { fixedCount, type CommonControlName } from './commonControls'
 import { todayQuery } from './accountUsage'
 import { buildBulkPatch, BULK_LIMITS, type BulkFields, type GroupMode, type NumberField } from './bulkEdit'
+import { typeKey } from './accountTypes'
+import ModelProtocolList from './protocols/ModelProtocolList.vue'
+import OwnProtocolsField from './protocols/OwnProtocolsField.vue'
+import ProtocolIssues from './protocols/ProtocolIssues.vue'
+import { bindingIssues, sharedOwnProtocols, type ProtocolBinding } from './protocols/protocolBinding'
+import { useProtocolEdit } from './protocols/useProtocolEdit'
 import { SPM_WINDOW_DEFAULT, validWindow } from './spmWindow'
 import SessionLimitInput from './controls/SessionLimitInput.vue'
 
@@ -27,24 +36,55 @@ const props = defineProps<{ open: boolean; accounts: Account[]; typeOf: (a: Acco
 const emit = defineEmits<{ (e: 'update:open', v: boolean): void; (e: 'saved', rows: Account[]): void }>()
 const { t } = useI18n()
 
-const on = reactive({ priority: false, weight: false, max_concurrency: false, tpm_limit: false, rpm_limit: false, spm_limit: false, groups: false, proxy: false, auto_disable: false })
-const initialValues = (): BulkFields => ({ priority: 10, weight: 1, max_concurrency: 10, tpm_limit: 0, rpm_limit: 0, spm_limit: 0, spm_window_seconds: SPM_WINDOW_DEFAULT, group_ids: [], groupMode: 'replace', proxy_id: null, auto_disable: true })
-const values = reactive<BulkFields>(initialValues())
+const on = reactive({ priority: false, weight: false, max_concurrency: false, tpm_limit: false, rpm_limit: false, spm_limit: false, groups: false, proxy: false, auto_disable: false, protocols: false, model_protocols: false })
+/** The fields edited here; the two protocol fields are edited in `protocolEdit`. */
+type Values = Omit<BulkFields, keyof ProtocolBinding>
+const initialValues = (): Values => ({ priority: 10, weight: 1, max_concurrency: 10, tpm_limit: 0, rpm_limit: 0, spm_limit: 0, spm_window_seconds: SPM_WINDOW_DEFAULT, group_ids: [], groupMode: 'replace', proxy_id: null, auto_disable: true })
+const values = reactive<Values>(initialValues())
 const failures = ref<BulkFailure<Account>[]>([])
 /** The fields that are common controls. */
 const FIXABLE = ['auto_disable', ...(Object.keys(BULK_LIMITS) as NumberField[])] as const
 const bulk = useBulkRun(4)
 const caps = useAccountCaps(true)
 
+// ---------------------------------------------------------------- protocols: one account type only
+/** The type every selected account has; null when they differ or the type is gone. */
+const sharedType = computed(() => {
+  const [first, ...rest] = props.accounts
+  const same = first && rest.every((a) => typeKey(a.plugin_key, a.type) === typeKey(first.plugin_key, first.type))
+  return (same && props.typeOf(first)) || null
+})
+const protocolEdit = useProtocolEdit(() => sharedType.value)
+/** Models the protocol entries offer: those of the selected accounts and the type's presets. */
+const protocolModels = computed(() => [...new Set([...props.accounts.flatMap((a) => a.models || []), ...(sharedType.value?.default_models || [])])])
+// Editing either field ticks it (sync, so resetting on open can untick afterwards).
+watch(protocolEdit.protocols, () => (on.protocols = true), { flush: 'sync' })
+watch(protocolEdit.rules, () => (on.model_protocols = true), { flush: 'sync' })
+watch(sharedType, (at) => !at && (on.protocols = on.model_protocols = false))
+/**
+ * Findings of the ticked protocol fields. Whether an account still serves a
+ * protocol takes both fields: with one ticked the other is each account's
+ * own, and the server decides. The rules meet the own protocols set here
+ * when that field is ticked, else each account's: a rule's own protocol is
+ * closed where some selected account does not open it.
+ */
+const protocolIssues = computed(() => {
+  if (!on.model_protocols || !sharedType.value) return []
+  const own = on.protocols ? protocolEdit.protocols.value : sharedOwnProtocols(props.accounts.map((a) => a.protocols))
+  return bindingIssues(own, protocolEdit.rules.value, protocolEdit.columns.value).filter((i) => i.code !== 'no_protocol' || on.protocols)
+})
+const protocolsInvalid = computed(() => protocolIssues.value.some((i) => i.level === 'error'))
+
 watch(() => props.open, (open) => {
   if (!open) return
-  Object.keys(on).forEach((k) => (on[k as keyof typeof on] = false))
   Object.assign(values, initialValues())
+  protocolEdit.setSaved(null)
+  Object.keys(on).forEach((k) => (on[k as keyof typeof on] = false))
   failures.value = []
 })
 
 /** Editing a field ticks it. */
-function set<K extends keyof BulkFields>(key: K, v: BulkFields[K], flag: keyof typeof on) {
+function set<K extends keyof Values>(key: K, v: Values[K], flag: keyof typeof on) {
   values[key] = v
   on[flag] = true
 }
@@ -72,12 +112,13 @@ const fixed = computed(() => Object.fromEntries(FIXABLE.map((k) => [k, fixedCoun
 watch(fixed, (f) => (Object.keys(f) as Array<keyof typeof f>).forEach((k) => f[k] && (on[k] = false)), { immediate: true })
 
 async function apply() {
-  if (!anyOn.value || invalid.value.length || bulk.running.value) return
+  if (!anyOn.value || invalid.value.length || protocolsInvalid.value || bulk.running.value) return
+  const fields: BulkFields = { ...values, ...protocolEdit.binding() }
   failures.value = []
   const saved: Account[] = []
   let unchanged = 0
   const out = await bulk.run(props.accounts, async (a, signal) => {
-    const body = buildBulkPatch(a, values, on)
+    const body = buildBulkPatch(a, fields, on)
     if (!body) {
       unchanged++
       return
@@ -137,6 +178,20 @@ async function apply() {
           <ProxyPicker :model-value="values.proxy_id" @update:model-value="set('proxy_id', $event, 'proxy')" />
           <SHint size="xs">{{ t('accounts.bulk.proxyHint') }}</SHint>
         </div>
+        <div class="space-y-1 sm:col-span-2" data-testid="bulk-field-protocols">
+          <SCheckbox v-model="on.protocols" size="sm" :disabled="!sharedType">{{ t('accounts.protocols.bulk.own') }}</SCheckbox>
+          <SHint v-if="!sharedType" size="xs" tone="warning" data-testid="bulk-protocols-mixed">{{ t('accounts.protocols.bulk.mixedTypes') }}</SHint>
+          <template v-else>
+            <OwnProtocolsField :editor="protocolEdit" :class="on.protocols ? '' : 'opacity-60'" />
+            <SHint size="xs">{{ t('accounts.protocols.bulk.replaceHint') }}</SHint>
+          </template>
+        </div>
+        <div v-if="sharedType" class="space-y-1 sm:col-span-2" data-testid="bulk-field-model_protocols">
+          <SCheckbox v-model="on.model_protocols" size="sm">{{ t('accounts.protocols.bulk.rules') }}</SCheckbox>
+          <ModelProtocolList :editor="protocolEdit" :options="protocolModels" :class="on.model_protocols ? '' : 'opacity-60'" />
+          <ProtocolIssues :issues="protocolIssues" />
+          <SHint size="xs">{{ t('accounts.protocols.bulk.replaceHint') }}</SHint>
+        </div>
       </fieldset>
       <SProgress v-if="bulk.running.value || bulk.done.value" :value="bulk.done.value" :max="bulk.total.value || 1" :label="t('accounts.bulk.progress', { done: bulk.done.value, total: bulk.total.value })" show-value />
       <div v-if="failures.length" class="rounded-lg border border-danger-200 p-3 dark:border-danger-800" data-testid="bulk-failures">
@@ -149,7 +204,7 @@ async function apply() {
     <template #footer>
       <SButton v-if="bulk.running.value" variant="danger" icon="stop" @click="bulk.stop()">{{ t('accounts.modelTest.stop') }}</SButton>
       <SButton v-else @click="emit('update:open', false)">{{ t('common.close') }}</SButton>
-      <SButton variant="primary" :loading="bulk.running.value" :disabled="!anyOn || invalid.length > 0 || !accounts.length" data-testid="bulk-edit-apply" @click="apply">{{ t('accounts.bulk.apply', { n: accounts.length }) }}</SButton>
+      <SButton variant="primary" :loading="bulk.running.value" :disabled="!anyOn || invalid.length > 0 || protocolsInvalid || !accounts.length" data-testid="bulk-edit-apply" @click="apply">{{ t('accounts.bulk.apply', { n: accounts.length }) }}</SButton>
     </template>
   </SModal>
 </template>

@@ -39,23 +39,71 @@ func withSPMWindow(l core.ModelLimit) core.ModelLimit {
 	return l
 }
 
-func parseModelLimits(raw []byte) []core.ModelLimit {
-	out := []core.ModelLimit{}
+// parseList decodes a jsonb column holding a list; never nil.
+func parseList[T any](raw []byte) []T {
+	out := []T{}
 	if len(raw) > 0 {
 		_ = json.Unmarshal(raw, &out)
 	}
+	return out
+}
+
+// listJSON encodes a list for a jsonb column, nil as [].
+func listJSON[T any](in []T) string {
+	if in == nil {
+		in = []T{}
+	}
+	b, _ := json.Marshal(in)
+	return string(b)
+}
+
+func parseModelLimits(raw []byte) []core.ModelLimit {
+	out := parseList[core.ModelLimit](raw)
 	for i := range out {
 		out[i] = withSPMWindow(out[i])
 	}
 	return out
 }
 
-func modelLimitsJSON(in []core.ModelLimit) string {
-	if in == nil {
-		in = []core.ModelLimit{}
+func modelLimitsJSON(in []core.ModelLimit) string { return listJSON(in) }
+
+// entryModels normalizes the model lists of the entries of an account field
+// (model_limits, model_protocols), in which a model belongs to one entry
+// only.
+type entryModels struct {
+	// other is accepted next to the complete model ids: core.OtherModels
+	// where an entry may stand for every other model, else "".
+	other string
+	// invalid and duplicate word (en, zh) a model that is no complete model
+	// id and one another entry lists.
+	invalid, duplicate [2]string
+	// owner is the entry each model seen so far is in.
+	owner map[string]int
+}
+
+// of returns the models of entry i, at field: trimmed, without the blank and
+// the repeated ones, and without those it reports as invalid or duplicate.
+func (e *entryModels) of(ctx context.Context, field string, i int, in []string) ([]string, []core.FieldError) {
+	var fe []core.FieldError
+	refuse := func(j int, code string, msg [2]string) {
+		fe = append(fe, core.FieldError{Field: field + ".models[" + strconv.Itoa(j) + "]", Code: code, Message: t(ctx, msg[0], msg[1])})
 	}
-	b, _ := json.Marshal(in)
-	return string(b)
+	out := make([]string, 0, len(in))
+	for j, m := range in {
+		m = strings.TrimSpace(m)
+		k, owned := e.owner[m]
+		switch {
+		case m == "" || slices.Contains(out, m):
+		case m != e.other && !manifest.ValidModelID(m):
+			refuse(j, "invalid", e.invalid)
+		case owned && k != i:
+			refuse(j, "duplicate", e.duplicate)
+		default:
+			e.owner[m] = i
+			out = append(out, m)
+		}
+	}
+	return out, fe
 }
 
 // normalizeModelLimits trims the model lists, drops repeated models within a
@@ -67,27 +115,13 @@ func normalizeModelLimits(ctx context.Context, in []core.ModelLimit) ([]core.Mod
 		fe = append(fe, core.FieldError{Field: field, Code: code, Message: t(ctx, en, zh)})
 	}
 	out := make([]core.ModelLimit, 0, len(in))
-	owner := map[string]int{}
+	lists := entryModels{owner: map[string]int{},
+		invalid:   [2]string{"not a complete model id (wildcards are not allowed)", "不是完整的模型 ID（不允许通配符）"},
+		duplicate: [2]string{"the model is already limited by another list", "该模型已在另一个列表中限速"}}
 	for i, l := range in {
 		field := "model_limits[" + strconv.Itoa(i) + "]"
-		models := make([]string, 0, len(l.Models))
-		for j, m := range l.Models {
-			m = strings.TrimSpace(m)
-			at := field + ".models[" + strconv.Itoa(j) + "]"
-			switch {
-			case m == "":
-			case !manifest.ValidModelID(m):
-				add(at, "invalid", "not a complete model id (wildcards are not allowed)", "不是完整的模型 ID（不允许通配符）")
-			case slices.Contains(models, m):
-			default:
-				if k, ok := owner[m]; ok && k != i {
-					add(at, "duplicate", "the model is already limited by another list", "该模型已在另一个列表中限速")
-					continue
-				}
-				owner[m] = i
-				models = append(models, m)
-			}
-		}
+		models, errs := lists.of(ctx, field, i, l.Models)
+		fe = append(fe, errs...)
 		if len(models) > maxModels {
 			add(field+".models", "too_many", "at most 500 models per list", "每个列表最多 500 个模型")
 		}

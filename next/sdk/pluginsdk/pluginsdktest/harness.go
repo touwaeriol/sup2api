@@ -1,11 +1,14 @@
 // Package pluginsdktest runs a plugin in-process for unit tests: the plugin
 // services and a FakeHost are served over bufconn, and the harness performs
-// the host handshake (GetInfo -> InitHost -> Configure).
+// the host handshake (GetInfo -> InitHost -> Configure). Harness.Execute and
+// Harness.Monitor then drive a platform plugin the way the host does, with
+// the FakeHost standing in for the host's HTTP client (execution.go).
 package pluginsdktest
 
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"net"
 	"testing"
 	"time"
@@ -15,6 +18,7 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 
 	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
+	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/pluginsdk"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/protocol"
 )
@@ -31,11 +35,18 @@ type Options struct {
 	Config any
 	// Grants passed to Configure.
 	Grants []*pluginv1.Grant
+	// Manifest is the plugin's manifest.json. The plugin is served with it
+	// (pluginsdk.WithManifest) and the fake host knows it (FakeHost.Manifest,
+	// unless already set), as the core knows the package's manifest.
+	Manifest []byte
 	// SDK options passed to pluginsdk.Register, after a default
-	// WithStrictNetwork(StrictNever). Pass WithManifest or WithInfo.
+	// WithStrictNetwork(StrictNever) and WithManifest(Manifest), e.g. WithInfo.
 	SDK []pluginsdk.Option
 	// SkipHandshake leaves InitHost/Configure to the test.
 	SkipHandshake bool
+	// PluginServer are extra options of the plugin's gRPC server, e.g. an
+	// interceptor that sees when a call returns on the plugin's side.
+	PluginServer []grpc.ServerOption
 }
 
 // Harness is a running in-process plugin.
@@ -104,8 +115,16 @@ func startHost(t testing.TB, opts Options) (*FakeHost, *grpc.Server, func(uint32
 	if fh == nil {
 		fh = NewFakeHost()
 	}
+	if fh.Manifest == nil && opts.Manifest != nil {
+		var m manifest.Manifest
+		if json.Unmarshal(opts.Manifest, &m) == nil { // an invalid one fails Register
+			fh.Manifest = &m
+		}
+	}
 	hostLis := bufconn.Listen(1 << 20)
-	hostSrv := grpc.NewServer()
+	// Like the core, the host accepts whole request bodies back from a
+	// platform plugin and bounds none of them.
+	hostSrv := grpc.NewServer(grpc.MaxRecvMsgSize(math.MaxInt32))
 	pluginv1.RegisterHostServiceServer(hostSrv, fh)
 	pluginv1.RegisterEgressServiceServer(hostSrv, fh)
 	go func() { _ = hostSrv.Serve(hostLis) }()
@@ -117,9 +136,13 @@ func startHost(t testing.TB, opts Options) (*FakeHost, *grpc.Server, func(uint32
 // Start so both servers are stopped in one place.
 func startPlugin(t testing.TB, p any, opts Options, fh *FakeHost, dialHost func(uint32) (*grpc.ClientConn, error)) (*grpc.Server, *grpc.ClientConn, *Harness) {
 	t.Helper()
-	sdkOpts := append([]pluginsdk.Option{pluginsdk.WithStrictNetwork(pluginsdk.StrictNever)}, opts.SDK...)
+	sdkOpts := []pluginsdk.Option{pluginsdk.WithStrictNetwork(pluginsdk.StrictNever)}
+	if opts.Manifest != nil {
+		sdkOpts = append(sdkOpts, pluginsdk.WithManifest(opts.Manifest))
+	}
+	sdkOpts = append(sdkOpts, opts.SDK...)
 	plugLis := bufconn.Listen(1 << 20)
-	plugSrv := pluginsdk.NewGRPCServer(nil)
+	plugSrv := pluginsdk.NewGRPCServer(opts.PluginServer)
 	if err := pluginsdk.Register(plugSrv, p, dialHost, sdkOpts...); err != nil {
 		t.Fatalf("pluginsdktest: register: %v", err)
 	}
@@ -146,27 +169,40 @@ func startPlugin(t testing.TB, p any, opts Options, fh *FakeHost, dialHost func(
 // Configure sends a Configure call and returns the field errors.
 func (h *Harness) Configure(config any, grants []*pluginv1.Grant) []*pluginv1.FieldError {
 	h.T.Helper()
-	raw := "{}"
-	switch v := config.(type) {
-	case nil:
-	case string:
-		raw = v
-	case json.RawMessage:
-		raw = string(v)
-	case []byte:
-		raw = string(v)
-	default:
-		b, err := json.Marshal(v)
-		if err != nil {
-			h.T.Fatalf("pluginsdktest: marshal config: %v", err)
-		}
-		raw = string(b)
-	}
-	resp, err := h.Plugin.Configure(context.Background(), &pluginv1.ConfigureRequest{ConfigJson: raw, Grants: grants})
+	resp, err := h.Plugin.Configure(context.Background(), &pluginv1.ConfigureRequest{ConfigJson: h.configJSON(config), Grants: grants})
 	if err != nil {
 		h.T.Fatalf("pluginsdktest: Configure: %v", err)
 	}
 	return resp.GetErrors()
+}
+
+// ValidateSettings sends a ValidateSettings call; config and grants are what
+// Configure takes. A plugin without pluginsdk.SettingsValidator answers
+// UNIMPLEMENTED.
+func (h *Harness) ValidateSettings(config any, grants []*pluginv1.Grant) (*pluginv1.ValidateSettingsResponse, error) {
+	h.T.Helper()
+	return h.Plugin.ValidateSettings(context.Background(), &pluginv1.ValidateSettingsRequest{ConfigJson: h.configJSON(config), Grants: grants})
+}
+
+// configJSON encodes config: nil is "{}", a string, json.RawMessage or
+// []byte is taken as written, anything else is marshaled.
+func (h *Harness) configJSON(config any) string {
+	h.T.Helper()
+	switch v := config.(type) {
+	case nil:
+		return "{}"
+	case string:
+		return v
+	case json.RawMessage:
+		return string(v)
+	case []byte:
+		return string(v)
+	}
+	b, err := json.Marshal(config)
+	if err != nil {
+		h.T.Fatalf("pluginsdktest: marshal config: %v", err)
+	}
+	return string(b)
 }
 
 // Do sends an HTTPService request. body may be nil, []byte, string or any
@@ -177,7 +213,9 @@ func (h *Harness) Do(method, routePath string, query map[string]string, body any
 }
 
 // DoAs is Do as console user userID (Do is user 1; 0 is an unauthenticated
-// caller).
+// caller). As the host does, a call by a user carries an execution token
+// (BeginRoute), void once the call returns, so the handler may Fetch with a
+// proxy ticket.
 func (h *Harness) DoAs(userID int64, method, routePath string, query map[string]string, body any) *pluginv1.HTTPResponse {
 	h.T.Helper()
 	req := &pluginv1.HTTPRequest{
@@ -203,6 +241,9 @@ func (h *Harness) DoAs(userID int64, method, routePath string, query map[string]
 	}
 	if userID > 0 {
 		defer h.Host.Serve(userID)()
+		e := h.Host.BeginRoute()
+		defer e.End()
+		req.ExecutionToken = e.token
 	}
 	resp, err := h.HTTP.HandleHTTP(context.Background(), req)
 	if err != nil {

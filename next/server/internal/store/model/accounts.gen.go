@@ -58,8 +58,11 @@ type Account struct {
 	SpmWindowSeconds          *int            `gorm:"column:spm_window_seconds;default:(-)"`           // integer default 60
 	AdminLocked               bool            `gorm:"column:admin_locked;default:(-)"`                 // boolean default false
 	// 所属: whose account it is for own and team scopes (CONTRACTS §103); starts as created_by, an administrator may move it
-	OwnerID        *int64          `gorm:"column:owner_id"`        // bigint
-	HeaderOverride json.RawMessage `gorm:"column:header_override"` // jsonb
+	OwnerID          *int64          `gorm:"column:owner_id"`                    // bigint
+	HeaderOverride   json.RawMessage `gorm:"column:header_override"`             // jsonb
+	Protocols        *store.Strings  `gorm:"column:protocols"`                   // text[]
+	ModelProtocols   json.RawMessage `gorm:"column:model_protocols;default:(-)"` // jsonb default '[]'::jsonb
+	LastTestProtocol *string         `gorm:"column:last_test_protocol"`          // text
 }
 
 // TableName implements gorm's schema.Tabler.

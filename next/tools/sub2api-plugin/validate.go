@@ -24,12 +24,6 @@ func validateManifest(m *manifest.Manifest, files map[string][]byte) []string {
 	return fieldLines(fields)
 }
 
-// manifestWarnings returns the advisory manifest findings (check.Warnings)
-// as "field: message" lines.
-func manifestWarnings(m *manifest.Manifest, files map[string][]byte) []string {
-	return fieldLines(check.Warnings(m, files))
-}
-
 func fieldLines(fields []check.FieldError) []string {
 	out := make([]string, len(fields))
 	for i, f := range fields {

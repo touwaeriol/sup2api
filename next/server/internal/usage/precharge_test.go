@@ -25,7 +25,7 @@ func TestPrechargeTransitionsToAsyncReservationAndRefund(t *testing.T) {
 	if f.scalar(`SELECT count(*) FROM request_precharges`) != "0" {
 		t.Fatal("precharge not transferred")
 	}
-	f.plugin.parse = func(*pluginv1.ParseReconcileResponseRequest) (*pluginv1.ReconcileResult, error) {
+	f.plugin.parse = func(*monitorCall) (*pluginv1.ReconcileResult, error) {
 		return &pluginv1.ReconcileResult{State: pluginv1.ReconcileResult_FAILED, Reason: "generation failed"}, nil
 	}
 	f.due()

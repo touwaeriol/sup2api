@@ -31,7 +31,10 @@ export const isAdvancedField = fieldOf(['header_passthrough', 'header_override',
 export const isSchedulingField = fieldOf([...SCHEDULING_CONTROLS, 'spm_window_seconds'])
 
 const CREDENTIAL_RE = /^credentials[.[]?(.*?)]?$/
-const isModelsField = fieldOf(['models', 'model_mapping'])
+/** The two protocol fields (DESIGN-2026-11-17-PROTOCOL-BINDING §4): `protocols[i]`, `model_protocols[i].models[j]`, `model_protocols[i].protocols[j]`. */
+export const isProtocolField = fieldOf(['protocols', 'model_protocols'])
+/** The "protocols and models" section: the model list, the mapping and the two protocol fields. */
+const isModelsField = fieldOf(['models', 'model_mapping', 'protocols', 'model_protocols'])
 
 /** The server's error of the model list / mapping, as `field: text` ('' when there is none). */
 export function modelsErrorText(errors: Record<string, string>): string {
@@ -42,6 +45,29 @@ export function modelsErrorText(errors: Record<string, string>): string {
 export function mappingErrorText(errors: Record<string, string>): string {
   for (const [k, v] of Object.entries(errors)) if (/^model_mapping([.[]|$)/.test(k)) return k === 'model_mapping' ? v : `${k}: ${v}`
   return ''
+}
+
+/** The server's errors of `protocols`: an item's is worded with the protocol id that was sent. */
+export function protocolsErrorTexts(errors: Record<string, string>, sent: readonly string[] | null): string[] {
+  const out: string[] = []
+  for (const [k, v] of Object.entries(errors)) {
+    const item = /^protocols\[(\d+)\]$/.exec(k)
+    if (item) out.push(`${sent?.[Number(item[1])] ?? k}: ${v}`)
+    else if (k === 'protocols') out.push(v)
+  }
+  return out
+}
+
+/** The server's errors of `model_protocols`: of the field itself, and of each saved entry (`model_protocols[i]...`) by its index. */
+export function ruleErrors(errors: Record<string, string>): { general: string[]; byEntry: Record<number, string[]> } {
+  const general: string[] = []
+  const byEntry: Record<number, string[]> = {}
+  for (const [k, v] of Object.entries(errors)) {
+    const entry = /^model_protocols\[(\d+)\]/.exec(k)
+    if (entry) (byEntry[Number(entry[1])] ??= []).push(v)
+    else if (k === 'model_protocols') general.push(v)
+  }
+  return { general, byEntry }
 }
 
 /** Splits field errors into the plugin form's (`credentials.x` → `x`) and the editor's own. */

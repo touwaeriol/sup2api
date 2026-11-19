@@ -5,9 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
-	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -84,20 +85,23 @@ type proc struct {
 	limits     specLimits               // resource limits the process was started with
 	failures   int                      // consecutive health failures
 	configured atomic.Pointer[settings] // last configuration acknowledged by this process
-	polls      executionScopes
-	executions onlineScopes
+	scopes     callScopes               // the Execute and Monitor calls in flight
 }
 
-// specLimits are the resource fields of a LaunchSpec.
+// specLimits are the fields of a LaunchSpec fixed for the life of a
+// process: resource limits and what the sandbox grants (a changed or
+// revoked "fs.data" or "net" grant restarts the process, LimitsStale).
 type specLimits struct {
 	MemoryMB     int
 	CPU          float64
 	MaxThreads   int
 	MaxOpenFiles int
+	DataDir      string
+	Net          bool
 }
 
 func limitsOf(s core.LaunchSpec) specLimits {
-	return specLimits{MemoryMB: s.MemoryMB, CPU: s.CPU, MaxThreads: s.MaxThreads, MaxOpenFiles: s.MaxOpenFiles}
+	return specLimits{MemoryMB: s.MemoryMB, CPU: s.CPU, MaxThreads: s.MaxThreads, MaxOpenFiles: s.MaxOpenFiles, DataDir: s.DataDir, Net: s.Net}
 }
 
 func newInstance(rt *Runtime, pkg *registry.Package, binPath, sum string, st *settings) *Instance {
@@ -118,24 +122,8 @@ func newInstance(rt *Runtime, pkg *registry.Package, binPath, sum string, st *se
 	for _, c := range pkg.Manifest.Capabilities {
 		i.caps[c.ID] = true
 	}
-	if !servesPlatform(pkg.Manifest) {
-		delete(i.caps, manifest.CapPlatformAdapter)
-	}
 	i.settings.Store(st)
 	return i
-}
-
-// servesPlatform reports whether the process implements platform.adapter.v1
-// when the manifest declares it: for platforms of its own, or for an account
-// type its upstream declaration does not fully cover (none, or extend). A
-// plugin whose account types all declare their upstream keeps the
-// capability in its manifest (manifest check requires it with account
-// types), but the core serves those types (docs/UPSTREAM-DECLARATIVE.md §6):
-// the process is neither expected to report it nor called for it.
-func servesPlatform(m *manifest.Manifest) bool {
-	return len(m.Platforms) > 0 || slices.ContainsFunc(m.AccountTypes, func(at manifest.AccountType) bool {
-		return at.Upstream == nil || at.Upstream.Extend
-	})
 }
 
 // ------------------------------------------------------------------ accessors
@@ -205,20 +193,23 @@ func (i *Instance) launchSpec() core.LaunchSpec {
 		PluginKey:     i.pkg.Key,
 		Version:       i.pkg.Version,
 		BinaryPath:    i.binPath,
-		WorkDir:       filepath.Join(i.rt.o.DataDir, i.pkg.Key, "work"),
+		Net:           st.grants.Has("net"),
 		StrictNetwork: i.rt.o.StrictNetwork,
 		Seccomp:       i.rt.o.Seccomp,
 	}
+	// Only a plugin granted "fs.data" gets a data directory (CONTRACTS §43.8).
+	if st.grants.Has("fs.data") {
+		spec.DataDir = filepath.Join(i.rt.o.DataDir, i.pkg.Key, "work")
+	}
+	// The manifest's memory figure is what the plugin says it needs, not a
+	// limit: memory is limited only by the operator (core.EffectiveMemoryMB).
 	if m.Resources != nil {
-		spec.MemoryMB = m.Resources.MemoryMB
 		spec.CPU = m.Resources.CPU
 		spec.MaxThreads = m.Resources.MaxThreads
 		spec.MaxOpenFiles = m.Resources.MaxOpenFiles
 	}
 	mergeLimits(&spec, st.limits)
-	if max := i.rt.o.MaxMemoryMB; max > 0 && (spec.MemoryMB == 0 || spec.MemoryMB > max) {
-		spec.MemoryMB = max
-	}
+	spec.MemoryMB = core.EffectiveMemoryMB(st.limits.MemoryMB, i.rt.o.MaxMemoryMB)
 	strict := "0"
 	if spec.StrictNetwork {
 		strict = "1"
@@ -227,17 +218,14 @@ func (i *Instance) launchSpec() core.LaunchSpec {
 		protocol.EnvPluginKey + "=" + i.pkg.Key,
 		protocol.EnvPluginVersion + "=" + i.pkg.Version,
 		protocol.EnvStrictNetwork + "=" + strict,
-		protocol.EnvDataDir + "=" + spec.WorkDir,
 	}
 	return spec
 }
 
 // mergeLimits applies the operator's per-plugin overrides on top of the
-// manifest limits; zero means "keep the manifest value".
+// manifest limits; zero means "keep the manifest value". Memory is
+// core.EffectiveMemoryMB's.
 func mergeLimits(spec *core.LaunchSpec, l resourceLimits) {
-	if l.MemoryMB > 0 {
-		spec.MemoryMB = l.MemoryMB
-	}
 	if l.CPU > 0 {
 		spec.CPU = l.CPU
 	}
@@ -269,8 +257,10 @@ func (i *Instance) startProc(ctx context.Context) (_ *proc, err error) {
 		return nil, err
 	}
 	spec := i.launchSpec()
-	if err := os.MkdirAll(spec.WorkDir, 0o700); err != nil {
-		return nil, err
+	if spec.DataDir != "" {
+		if err := os.MkdirAll(spec.DataDir, 0o700); err != nil {
+			return nil, err
+		}
 	}
 	runDir, err := i.prepareRunDir()
 	if err != nil {
@@ -384,6 +374,9 @@ func (i *Instance) newPluginClient(ctx context.Context, spec core.LaunchSpec, ru
 	}()
 	rpc, err := client.Client()
 	if err != nil {
+		if strings.Contains(err.Error(), handshakeVersionMismatch) {
+			return nil, i.rt.outdatedContract(i.pkg, err)
+		}
 		return nil, fmt.Errorf("start plugin process: %w", err)
 	}
 	raw, err := rpc.Dispense(protocol.PluginName)
@@ -429,7 +422,7 @@ func (i *Instance) verifyInfo(ctx context.Context, p *proc) error {
 			info.GetPluginKey(), info.GetVersion(), i.pkg.Key, i.pkg.Version)
 	}
 	if info.GetProtocolVersion() != protocol.ProtocolVersion {
-		return fmt.Errorf("GetInfo: protocol version %d, host supports %d", info.GetProtocolVersion(), protocol.ProtocolVersion)
+		return i.rt.outdatedContract(i.pkg, fmt.Errorf("GetInfo: protocol version %d, host supports %d", info.GetProtocolVersion(), protocol.ProtocolVersion))
 	}
 	reported := map[string]bool{}
 	for _, c := range info.GetCapabilities() {
@@ -456,7 +449,7 @@ func (i *Instance) serveHostBroker(ctx context.Context, p *proc) error {
 	}
 	brokerID := p.broker.NextId()
 	go p.broker.AcceptAndServe(brokerID, func(opts []grpc.ServerOption) *grpc.Server {
-		s := grpc.NewServer(opts...)
+		s := grpc.NewServer(append(opts, hostServerOptions()...)...)
 		pluginv1.RegisterHostServiceServer(s, host)
 		pluginv1.RegisterEgressServiceServer(s, egress)
 		return s
@@ -478,6 +471,13 @@ func (i *Instance) serveHostBroker(ctx context.Context, p *proc) error {
 	return nil
 }
 
+// hostServerOptions are the options of the broker server besides go-plugin's
+// own: a receive limit of math.MaxInt32, gRPC's own ceiling for one
+// message, not a limit of ours.
+func hostServerOptions() []grpc.ServerOption {
+	return []grpc.ServerOption{grpc.MaxRecvMsgSize(math.MaxInt32)}
+}
+
 // verifyHealth requires a healthy plugin before it is used.
 func verifyHealth(ctx context.Context, p *proc) error {
 	h, err := p.plugin.Health(ctx, &pluginv1.HealthRequest{})
@@ -490,11 +490,18 @@ func verifyHealth(ctx context.Context, p *proc) error {
 	return nil
 }
 
-func (i *Instance) configure(ctx context.Context, p *proc, st *settings) error {
-	req := &pluginv1.ConfigureRequest{ConfigJson: st.configJSON}
+// protoGrants are the grants as the plugin receives them (Configure,
+// ValidateSettings).
+func (st *settings) protoGrants() []*pluginv1.Grant {
+	out := make([]*pluginv1.Grant, 0, len(st.grants))
 	for perm, scope := range st.grants {
-		req.Grants = append(req.Grants, &pluginv1.Grant{Permission: perm, ScopeJson: string(scope)})
+		out = append(out, &pluginv1.Grant{Permission: perm, ScopeJson: string(scope)})
 	}
+	return out
+}
+
+func (i *Instance) configure(ctx context.Context, p *proc, st *settings) error {
+	req := &pluginv1.ConfigureRequest{ConfigJson: st.configJSON, Grants: st.protoGrants()}
 	resp, err := p.plugin.Configure(ctx, req)
 	if err != nil {
 		return fmt.Errorf("Configure: %w", err)
@@ -706,7 +713,8 @@ func (i *Instance) Refresh(ctx context.Context) error {
 }
 
 // LimitsStale reports whether the running process was started with other
-// resource limits than the current settings (as of the last Refresh).
+// resource limits or sandbox grants than the current settings (as of the
+// last Refresh).
 func (i *Instance) LimitsStale() bool {
 	p := i.proc.Load()
 	if p == nil {

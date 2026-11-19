@@ -2,13 +2,11 @@
 """Stored moderation settings across the 0.11.0 contract release (CONTRACTS §72, 0.11.0).
 
 The plugin cannot rewrite its own stored settings, so this does it through the
-core's admin API, the way the console does. Standard library only.
+core's admin API, the way the console does. Standard library only. Only the
+rollback to 0.10.0 is left: the 0.11.0 release step that cleaned the stored
+settings read the keys to keep from the settings schema, which the plugin no
+longer has since 0.12.2 (it would have stored empty settings).
 
-  clean              release step after the rollout to 0.11.0: GET the settings,
-                     keep the keys the schema declares (minus api_key, declared
-                     only so the core keeps masking it), fold the retired values
-                     into their new keys, PUT, then GET again and check that the
-                     retired keys are gone and every other value is unchanged.
   rollback-prepare   before rolling back to 0.10.0 (run under 0.11.0): export the
                      locked entries to --export, then turn each into a plain,
                      non-expiring entry of the same level, so 0.10.0 (which locks
@@ -18,7 +16,7 @@ core's admin API, the way the console does. Standard library only.
                      locks them again) and ban_window_seconds back into
                      ban_window_hours; keys 0.10.0 does not declare are dropped.
 
-usage: settings_cleanup.py clean|rollback-prepare|rollback-settings --base http://<ip>:8080 --token <admin token>
+usage: settings_cleanup.py rollback-prepare|rollback-settings --base http://<ip>:8080 --token <admin token>
        [--export locks.json] [--dry-run]
 Masked secrets go back as the mask, which the core resolves to the stored value.
 Exit code 0 when the step succeeded and was verified.
@@ -32,19 +30,6 @@ import urllib.request
 
 SETTINGS = "/api/v1/plugins/moderation/settings"
 ROUTES = "/api/v1/p/moderation"
-# Declared only so the core keeps masking it; nothing reads it, every save drops it.
-DROPPED_DECLARED = {"api_key"}
-
-# Retired key -> (new key, conversion), folded only when the new key was never
-# stored; the same rules as settings.go retiredKeys and the console's RETIRED.
-FOLDS = {
-    # 0 keeps the cache off; the old maximum was 604800 s (7 days).
-    "cache_ttl_seconds": ("verdict_cache_days", lambda v: 0 if v <= 0 else min(7, math.ceil(min(v, 604800) / 86400))),
-    "ban_window_hours": ("ban_window_seconds", lambda v: min(8760, max(1, v)) * 3600),
-    # 0.1 kept every record retention_days; the hit retention never dropped below it.
-    "retention_days": ("hit_retention_days", lambda v: max(180, min(3650, max(1, v)))),
-}
-
 
 class Api:
     def __init__(self, base, token):
@@ -77,27 +62,12 @@ class Api:
 
 
 def declared(view):
+    """The keys the installed settings schema declares (0.10.0 has one)."""
     return set((view.get("schema") or {}).get("properties") or {})
 
 
 def number(v):
     return isinstance(v, (int, float)) and not isinstance(v, bool)
-
-
-def clean(api, a):
-    view = api.settings()
-    keep, stored = declared(view) - DROPPED_DECLARED, view.get("values") or {}
-    values = {k: v for k, v in stored.items() if k in keep}
-    for old, (new, convert) in FOLDS.items():
-        if new in keep and new not in stored and number(stored.get(old)):
-            values[new] = convert(stored[old])
-    gone = sorted(set(stored) - keep)
-    folded = {k: v for k, v in values.items() if k not in stored}
-    print(f"stored keys {len(stored)}; drop {len(gone)}: {', '.join(gone) or '-'}; fold {folded or '-'}")
-    if not gone and not folded:
-        print("already clean")
-        return 0
-    return 0 if a.dry_run else api.put_verified(values, gone)
 
 
 def locked_entries(api):
@@ -146,13 +116,13 @@ def rollback_settings(api, a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    p.add_argument("step", choices=("clean", "rollback-prepare", "rollback-settings"))
+    p.add_argument("step", choices=("rollback-prepare", "rollback-settings"))
     p.add_argument("--base", required=True, help="core address, e.g. http://10.0.0.5:8080")
     p.add_argument("--token", required=True, help="access token of an administrator (plugin:manage, moderation:manage)")
     p.add_argument("--export", default="moderation-locks.json", help="locked entries file of the rollback steps")
     p.add_argument("--dry-run", action="store_true", help="only print what would change")
     a = p.parse_args()
-    step = {"clean": clean, "rollback-prepare": rollback_prepare, "rollback-settings": rollback_settings}[a.step]
+    step = {"rollback-prepare": rollback_prepare, "rollback-settings": rollback_settings}[a.step]
     return step(Api(a.base, a.token), a)
 
 

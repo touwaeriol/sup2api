@@ -1,0 +1,88 @@
+{
+  "id": "resp_1",
+  "object": "response",
+  "created_at": 1763452800,
+  "status": "completed",
+  "model": "gpt-6-luna",
+  "output": [
+    {
+      "id": "ig_0",
+      "type": "image_generation_call",
+      "status": "completed",
+      "action": "edit",
+      "background": "opaque",
+      "output_format": "png",
+      "quality": "low",
+      "size": "1024x1536",
+      "revised_prompt": "A small white dot on a black background",
+      "result": "iVBORw0KGgoAAAANSUhEUgAAAAE="
+    },
+    {
+      "id": "ig_1",
+      "type": "image_generation_call",
+      "status": "failed",
+      "error": {
+        "code": "moderation_blocked",
+        "message": "Your request was rejected by the safety system.",
+        "moderation_details": {
+          "categories": [
+            "violence"
+          ]
+        }
+      }
+    },
+    {
+      "id": "msg_2",
+      "type": "message",
+      "status": "completed",
+      "role": "assistant",
+      "phase": "final_answer",
+      "content": [
+        {
+          "type": "output_text",
+          "annotations": [],
+          "text": ""
+        }
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "type": "image_generation",
+      "background": "auto",
+      "model": "gpt-image-2-codex",
+      "moderation": "auto",
+      "n": 1,
+      "output_compression": 100,
+      "output_format": "png",
+      "quality": "auto",
+      "size": "auto"
+    }
+  ],
+  "usage": {
+    "input_tokens": 2235,
+    "input_tokens_details": {
+      "cached_tokens": 0
+    },
+    "output_tokens": 69,
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    },
+    "total_tokens": 2304
+  },
+  "tool_usage": {
+    "image_gen": {
+      "input_tokens": 56,
+      "input_tokens_details": {
+        "image_tokens": 0,
+        "text_tokens": 56
+      },
+      "output_tokens": 343,
+      "output_tokens_details": {
+        "image_tokens": 343,
+        "text_tokens": 0
+      },
+      "total_tokens": 399
+    }
+  }
+}

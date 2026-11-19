@@ -4,8 +4,6 @@ import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { ApiError, type PluginHost } from '@sub2api/host'
 import { mountPinned } from '@sub2api/ui/testing'
 import { SAlert, SDropdown, SField, SFormModal, SSegmented } from '@sub2api/ui'
-import schema from '../../../forms/settings.schema.json'
-import ui from '../../../forms/settings.ui.json'
 import BindingEditModal from './BindingEditModal.vue'
 import BindingsTab from './BindingsTab.vue'
 import BlocksTab from './BlocksTab.vue'
@@ -43,10 +41,10 @@ beforeEach(() => {
   bindings = []
   for (const f of [pluginGet, coreGet, post, put, corePut, del]) f.mockReset()
   pluginGet.mockImplementation(async (path) => (path === '/bindings' ? { bindings, account_bindings_active: true } : path === '/jev/default-questions' ? { builtin: { preamble: '', items: [] } } : []))
-  coreGet.mockImplementation(async (path) => (path.startsWith('/lookup/') ? { items: [], more: false } : { values: stored, schema, ui_schema: ui }))
+  coreGet.mockImplementation(async (path) => (path.startsWith('/lookup/') ? { items: [], more: false } : { values: stored }))
   post.mockResolvedValue({})
   put.mockResolvedValue({ bindings: [], account_bindings_active: true })
-  corePut.mockImplementation(async () => ({ values: stored, schema, ui_schema: ui }))
+  corePut.mockImplementation(async () => ({ values: stored }))
   const t = (key: string) => key
   setHost({
     t,
@@ -481,7 +479,7 @@ describe('the user lists', () => {
 })
 
 describe('the save of a settings page', () => {
-  it('stores the settings brought to the current schema: retired keys folded and gone, undeclared keys dropped', async () => {
+  it('stores the settings brought to the current keys: retired keys folded and gone, unknown keys dropped', async () => {
     stored = { mode: 'observe', cache_ttl_seconds: 0, ban_window_hours: 2, allowlist_user_ids: ['8'], analysis_channel_id: 5 }
     const w = mount(SettingsTab, { props: { page: 'policy' } })
     await flushPromises()

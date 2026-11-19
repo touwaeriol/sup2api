@@ -87,8 +87,10 @@ export default {
     internal: 'Internal error',
     rate_limited: 'Rate limited',
     invalid_request: 'Invalid request',
-    model_availability: 'Model temporarily unavailable'
+    model_availability: 'Model temporarily unavailable',
+    usage_unreported: 'Usage not reported (not billed)'
   },
+  unreportedHint: 'The plugin returned no usage for this request (or chose the host\'s reading and it was empty), so it was not billed.',
   cols: {
     timing: 'Timing',
     detail: 'Details',
@@ -162,6 +164,14 @@ export default {
     inputs: 'Billing condition values',
     statusLabel: 'Billing status',
     ledger: 'ledger #{id}',
+    components: {
+      additional: 'Additional usage (each at its own model\'s price, included in the total)',
+      replacement: 'Replacement usage (each attempt round priced on its own, billed instead of the primary usage, included in the total)'
+    },
+    componentKinds: { advisor: 'Advisor model' },
+    componentRound: 'Round {round}',
+    primaryUsage: 'Primary usage',
+    componentsTotal: 'Total',
     freeNote: 'Requests rejected by hooks or failing upstream without usage are not billed.',
     status: {
       billed: 'Billed',
@@ -235,6 +245,9 @@ export default {
       no_route: 'Account type does not serve this endpoint',
       model_not_served: 'Model not in the account\'s model list',
       referenced_model_not_served: 'Referenced model not in the account\'s model list',
+      protocol_closed: 'Account does not open this protocol',
+      conversion_not_enabled: 'Conversion is not turned on for the model',
+      model_protocol_closed: 'Model is not served on this protocol',
       usage_unsupported: 'Account type cannot meter a usage the request asks for',
       bound_elsewhere: 'Request is bound to another account',
       availability_blocked: 'Blocked by the model availability precheck',

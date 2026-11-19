@@ -11,7 +11,6 @@ import (
 	"gorm.io/gorm/clause"
 
 	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
-	"github.com/Sub2API-Devs/sup2api/next/sdk/protocol"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store/model"
@@ -25,7 +24,16 @@ type taskClaim struct {
 	groupID                    int64
 }
 
+// errTaskDeferred is an account that cannot be asked now (cooling down,
+// its slots full, rate limited, a lookup that failed): the query waits
+// without spending the failure budget.
 var errTaskDeferred = errors.New("original task account is unavailable or busy")
+
+// errTaskAccountGone is an account that can never be asked again: none
+// recorded, deleted, or no longer of the reserving plugin. It is a failed
+// query like any other, so the failure budget ends it (a refund) instead of
+// deferring it to the deadline (the estimate kept).
+var errTaskAccountGone = errors.New("original task account no longer exists for its plugin")
 
 func (s *Service) claimTasks(ctx context.Context, limit int) ([]*settleEntry, error) {
 	// The due task observations are leased to a new token (leaving
@@ -65,18 +73,28 @@ var claimedColumns = clause.Returning{Columns: []clause.Column{{Name: "public_id
 	{Name: "attempts"}, {Name: "poll_failures"}, {Name: "created_at"}, {Name: "deadline_at"}, {Name: "group_id"},
 	{Name: `COALESCE((SELECT min(p.id) FROM pending_settlements p WHERE p.task_public_id = async_tasks.public_id), 0) AS entry_id`, Raw: true}}}
 
-func (s *Service) acquireTaskAccount(ctx context.Context, e *settleEntry) (context.Context, *pluginv1.Account, *int64, func(), error) {
+func (s *Service) acquireTaskAccount(ctx context.Context, e *settleEntry) (context.Context, *pluginv1.Account, func(), error) {
 	if e.accountID == nil {
-		return ctx, nil, nil, nil, errTaskDeferred
+		return ctx, nil, nil, errTaskAccountGone
 	}
 	a, err := s.rec.Accounts.Load(ctx, *e.accountID)
 	// A disabled account is only kept out of scheduling: its tasks still settle.
-	if err != nil || a == nil || a.PluginKey != e.pluginKey {
-		return ctx, nil, nil, nil, errTaskDeferred
+	switch {
+	case err != nil && core.AsError(err).Code != core.ErrNotFound.Code:
+		return ctx, nil, nil, errTaskDeferred
+	case err != nil || a == nil || a.PluginKey != e.pluginKey:
+		return ctx, nil, nil, errTaskAccountGone
 	}
 	cooling, err := s.rec.Accounts.IsCoolingDown(ctx, a.ID)
 	if err != nil || cooling {
-		return ctx, nil, nil, nil, errTaskDeferred
+		return ctx, nil, nil, errTaskDeferred
+	}
+	// The plugin is handed the account with its proxy as the call begins
+	// (CONTRACTS §124); each fetch of the call takes the egress again
+	// (poll_http.go). Without one the call waits, as for a cooldown.
+	eg, err := s.rec.Accounts.Egress(ctx, a.ID)
+	if err != nil {
+		return ctx, nil, nil, errTaskDeferred
 	}
 	release := func() {}
 	ok := true
@@ -84,10 +102,10 @@ func (s *Service) acquireTaskAccount(ctx context.Context, e *settleEntry) (conte
 		ctx, release, ok, err = core.AcquireSlot(ctx, s.rec.Slots, "account", a.ID, a.MaxConcurrency, "poll:"+e.pluginKey+":"+e.refID)
 	}
 	if err != nil || !ok {
-		return ctx, nil, nil, nil, errTaskDeferred
+		return ctx, nil, nil, errTaskDeferred
 	}
 	e.account = a.AccountRef
-	return ctx, a.PluginAccount(""), a.ProxyID, release, nil
+	return ctx, a.PluginAccount("", eg.Proxy), release, nil
 }
 
 func (s *Service) reconcileTask(ctx context.Context, e *settleEntry) bool {
@@ -96,61 +114,12 @@ func (s *Service) reconcileTask(ctx context.Context, e *settleEntry) bool {
 		s.rec.log.Error("task usage lookup failed", "task", e.task.id, "err", err)
 		return false
 	}
-	cfg := s.reconcileSettings(ctx)
 	if !time.Now().Before(e.deadlineAt) {
 		keptEstimate := e.task.state == "succeeded" && row.status == StatusReserved
 		s.failObservation(ctx, e, row, "task_timeout", "task observation deadline reached")
 		return keptEstimate
 	}
-	res, err := s.askPlugin(ctx, e, row)
-	if e.reported {
-		return false
-	}
-	if err != nil {
-		s.handlePollError(ctx, e, row, cfg, err)
-		return false
-	}
-	if s.handlePollResult(ctx, e, row, cfg, res) {
-		return false
-	}
-	terminal := res.GetState() != pluginv1.ReconcileResult_PENDING
-	if raw := []byte(res.GetTaskSnapshotJson()); len(raw) > 0 {
-		// Paths are captured from the same generation as the parser call.
-		if _, err = protocol.RewriteTaskID(raw, e.task.paths, e.refID, e.task.id); err == nil {
-			e.task.snapshot = raw
-		}
-	} else if terminal {
-		err = errors.New("terminal task observation is missing its snapshot")
-	}
-	if err != nil {
-		s.handlePollError(ctx, e, row, cfg, err)
-		return false
-	}
-	if !terminal {
-		s.rescheduleTask(ctx, e, cfg, time.Duration(res.GetNextCheckAfterSec())*time.Second, "", true)
-		return false
-	}
-	switch res.GetState() {
-	case pluginv1.ReconcileResult_SETTLED, pluginv1.ReconcileResult_SETTLED_ESTIMATE:
-		e.task.state = "succeeded"
-	case pluginv1.ReconcileResult_FAILED:
-		e.task.state = "failed"
-	default:
-		s.rescheduleTask(ctx, e, cfg, 0, "unknown task result state", true)
-		return false
-	}
-	if row.status != StatusReserved {
-		s.finishTaskOnly(ctx, e, "closed")
-		return false
-	}
-	switch res.GetState() {
-	case pluginv1.ReconcileResult_SETTLED:
-		s.settleReconciled(ctx, e, row, res)
-	case pluginv1.ReconcileResult_SETTLED_ESTIMATE:
-		s.settleEstimate(ctx, e, row, res)
-	case pluginv1.ReconcileResult_FAILED:
-		s.refundFailed(ctx, e, row, res.GetReason())
-	}
+	s.observe(ctx, e, row)
 	return false
 }
 

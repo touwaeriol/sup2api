@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { SAlert, SButton, SCode, SCopyButton, SEmpty, SHint, SModal, SSegmented, SSpinner, STabs } from '@sub2api/ui'
-import type { ApiKey } from '@/api/types'
+import type { ApiKey, GroupServedProtocol } from '@/api/types'
 import { notifyError } from '@/utils/errors'
 import PlatformEndpointsPreview from '@/views/platforms/PlatformEndpointsPreview.vue'
 import { keyAppsFor, magpieFields } from './keyApps'
@@ -13,8 +13,8 @@ import { revealKey } from './reveal'
 // How to use an API key: the configuration of each client of its platforms
 // with the full key filled in (revealed on open; a legacy key shows its
 // prefix), what Magpie's provider editor takes, the one-link imports of the
-// open tab, and the endpoints the key can call.
-const props = defineProps<{ apiKey: ApiKey | null; platforms?: string[] | null }>()
+// open tab, and the endpoints the key can call (those its group serves).
+const props = defineProps<{ apiKey: ApiKey | null; platforms?: string[] | null; served?: GroupServedProtocol[] | null }>()
 const emit = defineEmits<{ (e: 'close'): void }>()
 const { t } = useI18n()
 const openApp = useOpenApp()
@@ -124,9 +124,9 @@ watch(
         </div>
         <SCode :text="usageQuery" :wrap="false" class="text-xs" data-testid="key-usage-query" />
       </div>
-      <div v-if="platforms?.length" class="space-y-2 border-t border-line pt-3">
+      <div v-if="served?.length" class="space-y-2 border-t border-line pt-3">
         <SHint size="xs">{{ t('apikeys.use.endpoints', { base }) }}</SHint>
-        <PlatformEndpointsPreview :ids="platforms" />
+        <PlatformEndpointsPreview :served="served" />
       </div>
     </div>
     <template #footer>

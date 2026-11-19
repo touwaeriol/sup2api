@@ -4,21 +4,30 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
+
+	"github.com/gin-gonic/gin"
 
 	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
-	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest/check"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 )
 
-// Plugin-reported usage: endpoints declaring usage.source "plugin" have their
-// token usage read by PlatformService.ExtractUsage after the response has
-// been forwarded (CONTRACTS §25.3).
+// Plugin-reported usage: an endpoint declaring usage.source "plugin" is
+// served in the wait form of Execute (CONTRACTS §25.3, design §4.3). The
+// plugin relays through ExecutionClient.Relay, which sends the request,
+// relays the answer and hands the plugin the bounded observation; the plugin
+// reads the usage from it inside Execute (here fakeExecute calls the fake's
+// ExtractUsage) and returns it. The gateway commits those facts through
+// core.ExecutionRecords (the committed record lands on e.settler.ch like a
+// submitted one) before a buffered answer is published. A plugin that cannot
+// read the usage answers host_usage: the declarative rules bill it, marked
+// usage_extract=fallback. The other rows of the wait form are in
+// zz_b_waited_test.go.
 
 // ---------------------------------------------------------------- environment
 
@@ -54,7 +63,7 @@ func pluginUsageEndpoint() manifest.Endpoint {
 func pluginUsageRoute() *typeRoute {
 	ep := pluginUsageEndpoint()
 	return &typeRoute{usage: pluginUsageRules(), pluginUsage: ep.PluginUsage(),
-		usageEvents: ep.UsageStreamEvents, usageMaxBytes: ep.UsageMaxBytes}
+		usageEvents: ep.UsageStreamEvents}
 }
 
 // usageEnv adds a plugin "pu" declaring platform "pu" with one endpoint at
@@ -109,14 +118,14 @@ func TestPluginUsageNonStream(t *testing.T) {
 	if res.status != 200 {
 		t.Fatalf("status %d %s", res.status, res.body)
 	}
-	// The record is submitted only once the plugin has answered, so waiting
-	// for it is what makes the call observable.
+	// The record is committed only once Execute returned the plugin's
+	// facts, so waiting for it is what makes the call observable.
 	rec := e.record()
 	if pp.extractCount() != 1 {
 		t.Fatalf("ExtractUsage called %d times", pp.extractCount())
 	}
 	in := pp.lastExtract()
-	if in.GetStatus() != 200 || len(in.GetEvents()) != 0 || in.GetTruncated() {
+	if in.GetStatus() != 200 || len(in.GetEvents()) != 0 {
 		t.Fatalf("request %+v", in)
 	}
 	if !strings.Contains(string(in.GetBody()), upModel) {
@@ -125,16 +134,16 @@ func TestPluginUsageNonStream(t *testing.T) {
 	if ct := in.GetHeaders()["content-type"]; !strings.Contains(ct, "json") {
 		t.Fatalf("headers %v", in.GetHeaders())
 	}
-	// The response is read, not built: no credentials travel.
-	if a := in.GetAccount(); a.GetId() != 9 || a.GetCredentialsJson() != "" || a.GetType() != "pu_key" {
+	// The account is the one Execute was handed (CONTRACTS §124).
+	if a := in.GetAccount(); a.GetId() != 9 || a.GetCredentialsJson() != `{"api_key":"pu-9"}` || a.GetType() != "pu_key" {
 		t.Fatalf("account %+v", in.GetAccount())
 	}
 	if in.GetMeta().GetRequestId() == "" || in.GetMeta().GetProtocol() != "pu.chat" {
 		t.Fatalf("meta %+v", in.GetMeta())
 	}
 	// No usageRequestFields declared: not one request field travels.
-	if len(in.GetFields()) != 0 || len(in.GetFieldsOmitted()) != 0 {
-		t.Fatalf("request fields handed over without a declaration: %v %v", in.GetFields(), in.GetFieldsOmitted())
+	if len(in.GetFields()) != 0 {
+		t.Fatalf("request fields handed over without a declaration: %v", in.GetFields())
 	}
 
 	// cache_creation_tokens is the total, so the 5 minute figure is 12-4.
@@ -158,13 +167,17 @@ func TestPluginUsageNonStream(t *testing.T) {
 	if !rec.Billable || rec.Price == nil || rec.Price.ID != 9 {
 		t.Fatalf("billing %+v %+v", rec.Billable, rec.Price)
 	}
+	// The facts were committed through the execution records.
+	if st := e.settler.executionStates(); len(st) != 1 || st[0] != core.ExecutionStateCommitted {
+		t.Fatalf("execution states %v", st)
+	}
 }
 
 // ---------------------------------------------------------------- streaming
 
 // A streaming response is relayed as it arrives; the host keeps only the
-// events the endpoint named and hands those to the plugin once the stream is
-// over. The upstream sends four events here and exactly one is collected,
+// events the endpoint named and hands those to the plugin in the
+// observation once the stream is over. The upstream sends four events here and exactly one is collected,
 // which is the assertion that matters: the stream is not buffered.
 func TestPluginUsageStreamCollectsOnlyDeclaredEvents(t *testing.T) {
 	e, pp := usageEnv(t, pluginUsageRules())
@@ -176,7 +189,7 @@ func TestPluginUsageStreamCollectsOnlyDeclaredEvents(t *testing.T) {
 		t.Fatalf("status %d %s", res.status, res.body)
 	}
 	// input_tokens echoes how many events the host handed over; the record
-	// arrives only after the plugin answered, so waiting for it orders this.
+	// is committed only after Execute returned, so waiting for it orders this.
 	rec := e.record()
 	in := pp.lastExtract()
 	if len(in.GetEvents()) != 1 {
@@ -186,70 +199,34 @@ func TestPluginUsageStreamCollectsOnlyDeclaredEvents(t *testing.T) {
 	if ev.GetName() != "message_delta" || !strings.Contains(string(ev.GetData()), `"output_tokens":22`) {
 		t.Fatalf("event %s %s", ev.GetName(), ev.GetData())
 	}
-	if len(in.GetBody()) != 0 || in.GetTruncated() {
-		t.Fatalf("body %q truncated %v", in.GetBody(), in.GetTruncated())
+	if len(in.GetBody()) != 0 {
+		t.Fatalf("body %q", in.GetBody())
 	}
 	if rec.Tokens.Input != 1 || rec.Tokens.Output != 77 {
 		t.Fatalf("tokens %+v", rec.Tokens)
 	}
 }
 
-// fatStream answers with n SSE events of roughly size bytes each, all named
-// "message_delta".
-func fatStream(t *testing.T, n, size int) *httptest.Server {
-	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		fl := w.(http.Flusher)
-		pad := strings.Repeat("x", size)
-		for i := range n {
-			fmt.Fprintf(w, "event: message_delta\ndata: {\"type\":\"message_delta\",\"i\":%d,\"pad\":%q}\n\n", i, pad)
-			fl.Flush()
-		}
-	}))
-	t.Cleanup(srv.Close)
-	return srv
-}
-
-// Collection stops at the byte budget: the plugin is told the events are a
-// prefix, and the stream itself was still relayed in full.
-func TestPluginUsageStreamStopsAtByteBudget(t *testing.T) {
-	e, pp := usageEnvEP(t, pluginUsageRules(), func(ep *manifest.Endpoint) { ep.UsageMaxBytes = 1 << 10 })
-	up := fatStream(t, 20, 400)
-	pp.route = func(*pluginv1.BuildUpstreamRequestRequest) string { return up.URL }
-	pp.extract = func(_ context.Context, in *pluginv1.ExtractUsageRequest) (*pluginv1.UsageReport, error) {
-		return report(int64(len(in.GetEvents())), 0), nil
-	}
-	res := e.do("/pu/v1/chat", body(testModel, true), nil)
-	if sent := strings.Count(string(res.body), "event: message_delta"); res.status != 200 || sent != 20 {
-		t.Fatalf("client got %d of 20 events (status %d)", sent, res.status)
-	}
-	rec := e.record()
-	in := pp.lastExtract()
-	if !in.GetTruncated() {
-		t.Fatal("truncated not reported")
-	}
-	if n := len(in.GetEvents()); n == 0 || n >= 20 {
-		t.Fatalf("collected %d of 20 events; the budget should have stopped it well short", n)
-	}
-	if int(rec.Tokens.Input) != len(in.GetEvents()) {
-		t.Fatalf("tokens %+v", rec.Tokens)
-	}
-}
-
-// The event count cap stops collection even when every event is tiny.
-func TestUsageCaptureEventCountCap(t *testing.T) {
+// Every listed event is collected, however many and however large, and so
+// is a non-streaming body of any size.
+func TestUsageCaptureUnbounded(t *testing.T) {
 	cap := newUsageCapture(pluginUsageRoute())
-	for i := range maxUsageStreamEvents + 10 {
+	for i := range 1000 {
 		cap.addEvent("message_delta", fmt.Appendf(nil, `{"i":%d}`, i))
 	}
-	if len(cap.events) != maxUsageStreamEvents || !cap.stopped {
-		t.Fatalf("collected %d events, stopped=%v", len(cap.events), cap.stopped)
+	cap.addEvent("message_delta", []byte(strings.Repeat("x", 2<<20)))
+	if len(cap.events) != 1001 {
+		t.Fatalf("collected %d events", len(cap.events))
 	}
-	// Undeclared events are never collected, whatever the budget.
+	body := newUsageCapture(pluginUsageRoute())
+	body.setBody([]byte(strings.Repeat("x", 2<<20)))
+	if len(body.body) != 2<<20 {
+		t.Fatalf("body: %d bytes", len(body.body))
+	}
+	// Undeclared events are never collected.
 	cap2 := newUsageCapture(pluginUsageRoute())
 	cap2.addEvent("content_block_delta", []byte(`{"a":1}`))
-	if len(cap2.events) != 0 || cap2.stopped {
+	if len(cap2.events) != 0 {
 		t.Fatalf("collected %+v", cap2.events)
 	}
 	// An endpoint on the declarative rules captures nothing at all.
@@ -276,10 +253,8 @@ func TestUsageCaptureCopiesEventData(t *testing.T) {
 
 // An endpoint that only starts a job answers {"id": ...}; the size of the job
 // is in the request. usageRequestFields hands ExtractUsage exactly the
-// declared paths - as raw JSON, keyed by path, like BuildUpstreamRequest's
-// fields - and nothing else of the body. A value over the per-value cap is
-// not cut, it is left out and NAMED, so the plugin can tell "not sent" from
-// "not carried".
+// declared paths in the observation - as raw JSON, keyed by path - and
+// nothing else of the body. Every value travels whole, whatever its size.
 func TestPluginUsageRequestFields(t *testing.T) {
 	e, pp := usageEnvEP(t, pluginUsageRules(), func(ep *manifest.Endpoint) {
 		ep.UsageRequestFields = []string{"resolution", "duration", "options.ratio", "image", "absent"}
@@ -287,7 +262,7 @@ func TestPluginUsageRequestFields(t *testing.T) {
 	pp.extract = func(context.Context, *pluginv1.ExtractUsageRequest) (*pluginv1.UsageReport, error) {
 		return report(1, 1), nil
 	}
-	huge := strings.Repeat("A", check.MaxUsageRequestFieldBytes) // base64-ish, over the cap once quoted
+	huge := strings.Repeat("A", 64<<10) // base64-ish, far over the 4 KiB cap it once had
 	b := body(testModel, false)
 	b["resolution"] = "1080p"
 	b["duration"] = 5
@@ -298,13 +273,10 @@ func TestPluginUsageRequestFields(t *testing.T) {
 	}
 	e.record()
 	in := pp.lastExtract()
-	want := map[string]string{"resolution": `"1080p"`, "duration": `5`, "options.ratio": `"16:9"`}
+	want := map[string]string{"resolution": `"1080p"`, "duration": `5`, "options.ratio": `"16:9"`, "image": `"` + huge + `"`}
 	if got := in.GetFields(); len(got) != len(want) || got["resolution"] != want["resolution"] ||
-		got["duration"] != want["duration"] || got["options.ratio"] != want["options.ratio"] {
-		t.Fatalf("fields = %v, want %v", got, want)
-	}
-	if got := in.GetFieldsOmitted(); len(got) != 1 || got[0] != "image" {
-		t.Fatalf("omitted = %v, want [image]", got)
+		got["duration"] != want["duration"] || got["options.ratio"] != want["options.ratio"] || got["image"] != want["image"] {
+		t.Fatalf("fields = %d entries, want %d", len(got), len(want))
 	}
 	// The body itself never travels: not under a declared key, not anywhere.
 	for k, v := range in.GetFields() {
@@ -314,10 +286,10 @@ func TestPluginUsageRequestFields(t *testing.T) {
 	}
 }
 
-// The total budget is spent in declared order, so which paths make it is the
-// same on every node; the ones past it are named, not silently absent.
-func TestUsageRequestFieldsTotalBudget(t *testing.T) {
-	const each = 3 << 10 // under the per-value cap; ten of them are over the total
+// No total budget: every declared path the client sent travels, whatever
+// they add up to.
+func TestUsageRequestFieldsNoBudget(t *testing.T) {
+	const each = 3 << 10 // twelve of them are over the 32 KiB total it once had
 	var paths []string
 	doc := map[string]string{}
 	for i := range 12 {
@@ -326,33 +298,29 @@ func TestUsageRequestFieldsTotalBudget(t *testing.T) {
 		doc[p] = strings.Repeat("x", each-2) // quoted: exactly `each` bytes of raw JSON
 	}
 	raw, _ := json.Marshal(doc)
-	fields, omitted := usageRequestFields(paths, raw)
-	fit := check.MaxUsageRequestFieldsBytes / each
-	if len(fields) != fit {
-		t.Fatalf("%d fields carried, want the first %d", len(fields), fit)
+	fields := usageRequestFields(paths, raw)
+	if len(fields) != len(paths) {
+		t.Fatalf("%d fields carried", len(fields))
 	}
-	for i := range fit {
-		if len(fields[paths[i]]) != each {
-			t.Fatalf("field %s missing or resized: %d bytes", paths[i], len(fields[paths[i]]))
+	for _, p := range paths {
+		if len(fields[p]) != each {
+			t.Fatalf("field %s missing or resized: %d bytes", p, len(fields[p]))
 		}
 	}
-	if len(omitted) != 12-fit || omitted[0] != paths[fit] {
-		t.Fatalf("omitted = %v", omitted)
-	}
 	// Nothing declared, nothing read - not even an allocation's worth.
-	if f, o := usageRequestFields(nil, raw); f != nil || o != nil {
-		t.Fatalf("read without a declaration: %v %v", f, o)
+	if f := usageRequestFields(nil, raw); f != nil {
+		t.Fatalf("read without a declaration: %v", f)
 	}
-	// A path the client did not send is neither carried nor "omitted".
-	if f, o := usageRequestFields([]string{"nope"}, raw); f != nil || o != nil {
-		t.Fatalf("absent path reported: %v %v", f, o)
+	// A path the client did not send is not carried.
+	if f := usageRequestFields([]string{"nope"}, raw); f != nil {
+		t.Fatalf("absent path reported: %v", f)
 	}
 }
 
 // A body with invalid UTF-8 inside a string is not JSON (RFC 8259 §8.1), and
 // gjson does not check that. Left in, the bytes would be copied into
-// RequestMeta.model and every plugin's fields map, where proto.Marshal refuses
-// them: every plugin call of the request fails, the client gets a 5xx and the
+// RequestMeta.model, where proto.Marshal refuses
+// it: every plugin call of the request fails, the client gets a 5xx and the
 // usage row is refused by PostgreSQL too. It is refused here, as the 400 it
 // is, before anything is asked.
 func TestInvalidUTF8BodyIsRejectedAsInvalidJSON(t *testing.T) {
@@ -435,9 +403,8 @@ func TestPluginUsageDetailJSONLimits(t *testing.T) {
 	}{
 		{"object", `{"a":1}`, `{"a":1}`},
 		{"empty", "", ""},
-		// jsonb cannot hold half a document, so an over-long one becomes a
-		// marker that says how big it was.
-		{"too_large", `{"pad":"` + strings.Repeat("x", core.MaxPluginDetailBytes) + `"}`, ""},
+		// Any size is stored as it is.
+		{"large", `{"pad":"` + strings.Repeat("x", 64<<10) + `"}`, `{"pad":"` + strings.Repeat("x", 64<<10) + `"}`},
 		{"not_an_object", `[1,2,3]`, ""},
 		{"invalid", `{nope`, ""},
 	} {
@@ -451,13 +418,6 @@ func TestPluginUsageDetailJSONLimits(t *testing.T) {
 			e.do("/pu/v1/chat", body(testModel, false), nil)
 			rec := e.record()
 			got := string(rec.PluginDetail)
-			if tc.name == "too_large" {
-				var m map[string]any
-				if err := json.Unmarshal(rec.PluginDetail, &m); err != nil || m["_truncated"] != true {
-					t.Fatalf("marker %s (%v)", got, err)
-				}
-				return
-			}
 			if got != tc.want {
 				t.Fatalf("plugin detail %q, want %q", got, tc.want)
 			}
@@ -467,11 +427,13 @@ func TestPluginUsageDetailJSONLimits(t *testing.T) {
 
 // ---------------------------------------------------------------- failure
 
-// A plugin that cannot answer never turns an already-delivered response into
-// an error. The request keeps its 200, the record is billed from whatever the
-// declarative rules found, and the fallback is recorded so it can be found
-// later - for this endpoint the rules find nothing, which is exactly the case
-// worth alerting on.
+// A plugin that cannot read the usage answers host_usage (the SDK's
+// ExecuteDefault does so when ExtractUsage fails or reports nothing). When
+// the host's reading holds no usage either - these rules declare no json
+// map - there are no facts and the core makes none up: the execution is
+// closed unreported like one that stated nothing (a free usage_unreported
+// record, nothing billed, the held-back answer not published). A reading
+// that holds usage is billed (TestPluginUsageFallbackUsesTheDeclarativeRules).
 func TestPluginUsageFallsBackWhenThePluginFails(t *testing.T) {
 	cases := map[string]func(*fakePlatform){
 		"unimplemented": func(p *fakePlatform) { p.extract = nil },
@@ -485,39 +447,80 @@ func TestPluginUsageFallsBackWhenThePluginFails(t *testing.T) {
 				return nil, nil
 			}
 		},
-		"timeout": func(p *fakePlatform) {
-			p.extract = func(ctx context.Context, _ *pluginv1.ExtractUsageRequest) (*pluginv1.UsageReport, error) {
-				<-ctx.Done()
-				return nil, ctx.Err()
-			}
-		},
 	}
 	for name, setup := range cases {
 		t.Run(name, func(t *testing.T) {
 			e, pp := usageEnv(t, pluginUsageRules())
-			if name == "timeout" {
-				gw := defaultGatewaySettings()
-				gw.PlatformHotpathTimeoutMs = 50
-				e.setSettings(gw, StickySettings{})
-			}
 			setup(pp)
 			res := e.do("/pu/v1/chat", body(testModel, false), nil)
-			if res.status != 200 {
-				t.Fatalf("status %d %s", res.status, res.body)
+			if res.status != 503 || strings.Contains(string(res.body), "hello") {
+				t.Fatalf("held-back answer published: %d %s", res.status, res.body)
 			}
-			rec := e.record()
-			if rec.UsageExtract != core.UsageExtractFallback {
-				t.Fatalf("usage extract %q", rec.UsageExtract)
-			}
-			if !rec.Success {
-				t.Fatalf("a delivered response must stay a success: %+v", rec)
-			}
-			// These rules declare no json map, so the fallback counts zero -
-			// the trade the marker exists to make visible.
-			if rec.Tokens != (core.UsageTokens{}) {
-				t.Fatalf("tokens %+v", rec.Tokens)
-			}
+			assertUnreported(t, e)
 		})
+	}
+}
+
+// A relay that did not wait, on an endpoint whose usage the plugin reads,
+// whose host reading holds no usage: the client keeps the answer it was
+// sent, and the record is the free unreported one, logged at ERROR.
+func TestNoWaitEmptyHostReadingIsUnreported(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		logs := captureWarnings(t)
+		e, _ := scriptedUsageEnv(t, func(ctx context.Context, p *fakePlatform, in *pluginv1.ExecuteRequest, client core.ExecutionClient) (core.ExecutionResult, error) {
+			req, err := p.buildUpstream(ctx, in)
+			if err != nil {
+				return core.ExecutionResult{}, err
+			}
+			if err := client.Check(ctx, req); err != nil {
+				return core.ExecutionResult{}, err
+			}
+			return core.ExecutionResult{Response: &pluginv1.ExecuteResponse{Report: &pluginv1.ExecuteResponse_HostUsage{HostUsage: &pluginv1.HostUsage{}}}, Relay: req}, nil
+		})
+		res := e.do("/pu/v1/chat", body(testModel, stream), nil)
+		if res.status != 200 || len(res.body) == 0 {
+			t.Fatalf("stream %v: the answer did not reach the client: %d %s", stream, res.status, res.body)
+		}
+		rec := e.record()
+		if rec.Success || rec.Billable || rec.ErrorType != core.UsageErrorUnreported || rec.UsageExtract != core.UsageExtractUnreported ||
+			rec.Tokens != (core.UsageTokens{}) || rec.StatusCode != 200 {
+			t.Fatalf("stream %v: free record %+v", stream, rec)
+		}
+		if st := e.settler.executionStates(); len(st) != 0 {
+			t.Fatalf("stream %v: execution states %v", stream, st)
+		}
+		if !strings.Contains(logs.String(), "level=ERROR") || !strings.Contains(logs.String(), "holds no usage") {
+			t.Fatalf("stream %v: logs %s", stream, logs)
+		}
+	}
+}
+
+// Only a relay that waits keeps a copy of the answer for the plugin's
+// observation: one that does not wait is read by no plugin, so forward
+// captures nothing for it even on an endpoint whose usage the plugin reads.
+func TestForwardCapturesOnlyForAWaitingRelay(t *testing.T) {
+	const answer = `{"ok":true}`
+	rt := &typeRoute{platform: "pu", pluginUsage: true}
+	for _, waits := range []bool{false, true} {
+		w := httptest.NewRecorder()
+		gc, _ := gin.CreateTestContext(w)
+		gc.Request = httptest.NewRequest(http.MethodPost, "/pu/v1/chat", nil)
+		c := &call{g: &Gateway{}, c: gc, gen: newFakeGen(), rec: &core.UsageRecord{}}
+		var capture *usageCapture
+		if waits {
+			capture = newUsageCapture(rt)
+		}
+		resp := &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}},
+			Body: io.NopCloser(strings.NewReader(answer)), Request: httptest.NewRequest(http.MethodPost, "/", nil)}
+		if res := c.forward(context.Background(), rt, &pluginv1.Account{Id: 1}, resp, nil, capture); res.kind != attemptDone || w.Body.String() != answer {
+			t.Fatalf("waits %v: forward %+v, client got %q", waits, res, w.Body.String())
+		}
+		switch {
+		case !waits && c.usage != nil:
+			t.Fatalf("a relay that does not wait captured its answer: %+v", c.usage)
+		case waits && (c.usage == nil || string(c.usage.cap.body) != answer):
+			t.Fatalf("a relay that waits kept no observation: %+v", c.usage)
+		}
 	}
 }
 
@@ -529,41 +532,19 @@ func TestPluginUsageFallbackUsesTheDeclarativeRules(t *testing.T) {
 		manifest.UsageInputTokens:  "usage.input_tokens",
 		manifest.UsageOutputTokens: "usage.output_tokens",
 	}}
+	logs := captureWarnings(t)
 	e, _ := usageEnv(t, rules)
 	e.do("/pu/v1/chat", body(testModel, false), nil)
 	rec := e.record()
 	if rec.UsageExtract != core.UsageExtractFallback {
 		t.Fatalf("usage extract %q", rec.UsageExtract)
 	}
-	if rec.Tokens.Input != upInput || rec.Tokens.Output != upOutput {
-		t.Fatalf("tokens %+v", rec.Tokens)
+	if rec.Tokens.Input != upInput || rec.Tokens.Output != upOutput || !rec.Billable {
+		t.Fatalf("tokens %+v billable %v", rec.Tokens, rec.Billable)
 	}
-}
-
-// A platform whose plugin has no PlatformService (declared before the
-// install-time check existed) falls back too, instead of 500-ing a response
-// the client already has.
-func TestPluginUsageWithoutPlatformClient(t *testing.T) {
-	pp := &fakePlatform{}
-	e := newEnv(t, func(e *env) {
-		pp.base = e.up.srv.URL
-		ep := pluginUsageEndpoint()
-		ep.Response = manifest.EndpointResp{NonStream: "json"}
-		pf := manifest.Platform{ID: "pu", Usage: pluginUsageRules(), Endpoints: []manifest.Endpoint{ep}}
-		info := e.addAccountType("pu", "pu_key", pp, manifest.AccountPlatform{Platform: "pu"})
-		e.gen.addPlatform(info, pf) // no client
-		e.accounts.addTyped(testGroup, 9, 100, "pu-9", "pu", "pu_key")
-		e.accounts.groups[testGroup] = []int64{9}
-	})
-	res := e.do("/pu/v1/chat", body(testModel, false), nil)
-	if res.status != 200 {
-		t.Fatalf("status %d %s", res.status, res.body)
-	}
-	if rec := e.record(); rec.UsageExtract != core.UsageExtractFallback {
-		t.Fatalf("usage extract %q", rec.UsageExtract)
-	}
-	if pp.extractCount() != 0 {
-		t.Fatalf("ExtractUsage called %d times without a platform client", pp.extractCount())
+	// The plugin's choice of the host's reading is no failure: no warning.
+	if strings.Contains(logs.String(), "host's reading") || strings.Contains(logs.String(), "usage extraction failed") {
+		t.Fatalf("a deliberate host_usage warned: %s", logs)
 	}
 }
 
@@ -587,35 +568,5 @@ func TestExtractUsageNotCalledWithoutDeclaration(t *testing.T) {
 	}
 	if e.plat.extractCount() != 0 {
 		t.Fatalf("ExtractUsage called %d times", e.plat.extractCount())
-	}
-}
-
-// ---------------------------------------------------------------- latency
-
-// ExtractUsage runs after the last byte reached the client: a plugin that
-// blocks in it delays the usage record, never the response.
-func TestExtractUsageRunsAfterTheResponse(t *testing.T) {
-	e, pp := usageEnv(t, pluginUsageRules())
-	gw := defaultGatewaySettings()
-	gw.PlatformHotpathTimeoutMs = 300
-	e.setSettings(gw, StickySettings{})
-	pp.extract = func(ctx context.Context, _ *pluginv1.ExtractUsageRequest) (*pluginv1.UsageReport, error) {
-		time.Sleep(150 * time.Millisecond)
-		return report(1, 1), nil
-	}
-	start := time.Now()
-	res := e.do("/pu/v1/chat", body(testModel, true), nil)
-	clientDone := time.Since(start)
-	if res.status != 200 {
-		t.Fatalf("status %d", res.status)
-	}
-	rec := e.record()
-	if rec.Tokens.Input != 1 {
-		t.Fatalf("tokens %+v", rec.Tokens)
-	}
-	// The record waited for the plugin; the client did not. Compared against
-	// the sleep so the assertion cannot pass by being slow everywhere.
-	if clientDone >= 150*time.Millisecond {
-		t.Fatalf("client waited %s for a call that must run after its last byte", clientDone)
 	}
 }

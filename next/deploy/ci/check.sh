@@ -10,7 +10,7 @@ cd /src/next
 modules() {
   status=0
   : > "$out/modules.summary"
-  for dir in runtime-contract sdk tools/sub2api-plugin deploy/mock-upstream gateway server plugins/*/; do
+  for dir in runtime-contract sdk protocol-codec tools/sub2api-plugin deploy/mock-upstream gateway server plugins/*/; do
     dir=${dir%/}
     [ -f "$dir/go.mod" ] || continue
     name=$(echo "$dir" | tr '/' '_')
@@ -53,11 +53,19 @@ modules() {
 mutation() {
   tmp=/tmp/s2-mutation
   rm -rf "$tmp" && cp -a /src/next "$tmp" && cd "$tmp"
-  sed -i 's/^\tif err = e.planAuthorizesTx(ctx, tx, digest); err != nil {$/\tif err = error(nil); err != nil {/' gateway/internal/control/engine.go
-  grep -c 'error(nil)' gateway/internal/control/engine.go > "$out/mutation.log"
-  go test -count=1 -v -run 'TestPostgresPauseBetweenAdmissionCheckAndCommitWins|TestPostgresPlanCreatedBeforeBaselineAdmissionCommitWins' ./gateway/internal/control/ >> "$out/mutation.log" 2>&1
-  echo "mutation rc=$? (non-zero expected)" | tee "$out/mutation.summary"
+  sed -i 's/^\t\tif err := e.planAuthorizesTx(ctx, tx, digest); err != nil {$/\t\tif err := error(nil); err != nil {/' gateway/internal/control/engine.go
+  # A pattern that no longer matches would leave the recheck in place and
+  # make the mutation prove nothing.
+  if grep -q 'e.planAuthorizesTx(ctx, tx, digest)' gateway/internal/control/engine.go; then
+    echo "mutation: the recheck call was not removed; update the sed pattern" | tee "$out/mutation.summary"
+    rm -rf "$tmp"
+    return 1
+  fi
+  go test -count=1 -v -run 'TestPostgresPauseBetweenAdmissionCheckAndCommitWins|TestPostgresPlanCreatedBeforeBaselineAdmissionCommitWins' ./gateway/internal/control/ > "$out/mutation.log" 2>&1
+  rc=$?
+  echo "mutation rc=$rc (non-zero expected)" | tee "$out/mutation.summary"
   rm -rf "$tmp"
+  [ "$rc" -ne 0 ]
 }
 
 # Signed test packages for the bundled-plugin bootstrap (anthropic, volcengine).
@@ -67,6 +75,11 @@ plugins() {
   # (anthropic, volcengine, guard) with its migrations, on PostgreSQL: the pg
   # service of isolated-compose.yml, whose DSN the gotest container has. The
   # embedded fallback cannot run here (initdb refuses root).
+  # pack also refuses a plugin whose native UI is not built (every plugin
+  # below has one: account and settings forms are native components), and
+  # this container has no node: on the checkout, with node, run
+  # `sh next/deploy/docker/build-ui.sh next <any out dir>` first; it builds
+  # each plugins/*/ui/native/dist in place, which pack reads.
   : "${TEST_DATABASE_URL:?pack runs sub2api-plugin db check: run this phase in the gotest container of isolated-compose.yml}"
   checks=/src/checks
   mkdir -p "$checks/builtin"
@@ -80,7 +93,7 @@ plugins() {
     pkg=$("$checks/sub2api-plugin" pack --dir "plugins/$p" --runtimes "$checks/$p-runtime" --out-dir "$dest")
     "$checks/sub2api-plugin" sign --key "$checks/keys/managed-test.key" --key-id managed-test --publisher sub2api "$pkg" >> "$out/plugin-build-$p.log"
   done
-  # R2 alone bundles a newer anthropic (the 0.3.5-test overlay, which adds a
+  # R2 alone bundles a newer anthropic (the 0.4.1-test overlay, which adds a
   # migration), so updating the core must update it.
   mkdir -p "$checks/builtin-next"
   "$checks/sub2api-plugin" build --dir plugins/anthropic --overlay testdata/upgrade --out "$checks/anthropic-next-runtime" >> "$out/plugin-build-anthropic.log"
@@ -94,7 +107,7 @@ plugins() {
 realcore() {
   set -e
   checks=/src/checks
-  # Both versions must satisfy the bundled plugins' hostCompat (>=0.1.290
+  # Both versions must satisfy the bundled plugins' hostCompat (>=0.1.304
   # <0.2.0), or the cores refuse them.
   CGO_ENABLED=0 go build -ldflags '-X main.Version=0.1.900' -o "$checks/core-r1" ./server/cmd/sub2api
   # R2 is built from a separate copy with one test-only SQL migration. It is

@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -15,11 +16,11 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 
 	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/observation"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/execfetch"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/httpapi"
 )
 
@@ -30,11 +31,12 @@ import (
 // usage.sse rules (matched by the message "type") and recorded and billed on
 // its own, exactly like a streaming HTTP request.
 //
-// Every turn's message also goes through the account type's
-// BuildUpstreamRequest (CONTRACTS §83.6): the first turn's call opens the
-// upstream connection (URL, headers) and gives that turn's body patches; a
-// later turn's call only gives its patches. They are applied after the hooks
-// and the model mappings, as on HTTP.
+// Every turn's message, after the hooks, the model mappings and the
+// overrides as on HTTP, goes through the account type's Execute (CONTRACTS
+// §83.6, design §4.8): the plugin relays the turn's final message without
+// waiting. The first turn's relay also opens the upstream connection (its
+// URL and handshake headers); a later turn's only gives its message, sent
+// as it is on the open connection.
 
 // wsLimits are the session limits. They are fields only so tests can
 // shorten them. A session has no idle timeout: it stays open, on its account
@@ -46,20 +48,16 @@ type wsLimits struct {
 	idle         time.Duration // end of a turn to the next message; 0 = none
 	ping         time.Duration // keepalive ping interval on both connections; 0 = none
 	pingTimeout  time.Duration // a ping unanswered this long closes that connection
-	maxPerKey    int           // open sessions per API key, cluster-wide
 	slotWait     time.Duration // later turns wait this long for the account
 	auth         time.Duration // re-authenticating the key before a turn
 	drainGrace   time.Duration // a turn in progress when draining starts
-	handshake    time.Duration // upstream dial and handshake
-	writeTimeout time.Duration // one message to a slow peer
-	upstreamRead int64         // largest upstream message
 	drainPoll    time.Duration
 }
 
 func defaultWSLimits() wsLimits {
-	return wsLimits{ping: 30 * time.Second, pingTimeout: 30 * time.Second, maxPerKey: 64, slotWait: 10 * time.Second, auth: 10 * time.Second,
-		drainGrace: 30 * time.Second, handshake: 30 * time.Second, writeTimeout: time.Minute, upstreamRead: 64 << 20,
-		drainPoll: 500 * time.Millisecond}
+	return wsLimits{ping: 30 * time.Second, pingTimeout: 30 * time.Second, slotWait: 10 * time.Second, auth: 10 * time.Second,
+		drainGrace: 30 * time.Second,
+		drainPoll:  500 * time.Millisecond}
 }
 
 // Close codes of the client connection.
@@ -96,14 +94,10 @@ func (g *Gateway) serveWebSocket(ctx context.Context, cl *call) {
 		writeError(cl.c, cl.format, fromCore(core.ErrUnavailable.WithMessage("node is draining"), ""))
 		return
 	}
-	ctx, release, ok, err := core.AcquireSlot(ctx, g.d.Slots, "ws", p.KeyID, g.ws.maxPerKey, cl.rid)
+	// The open sessions of a key are counted cluster-wide, without a limit.
+	ctx, release, _, err := core.AcquireSlot(ctx, g.d.Slots, "ws", p.KeyID, 0, cl.rid)
 	if err != nil {
 		writeError(cl.c, cl.format, fromCore(core.ErrUnavailable.WithCause(err), ""))
-		return
-	}
-	if !ok {
-		cl.c.Header("Retry-After", "5")
-		writeError(cl.c, cl.format, fromCore(core.ErrRateLimited.WithMessage("too many open WebSocket connections for this API key"), ""))
 		return
 	}
 	defer release()
@@ -130,7 +124,10 @@ type wsSession struct {
 	key, ip string
 
 	// The upstream connection and the account the first turn chose; every
-	// later turn of the session uses them.
+	// later turn of the session uses them. pacct is the account as the
+	// plugin was handed it when the connection opened: its proxy is the one
+	// the connection goes through, so every later turn is handed it too
+	// (CONTRACTS §124).
 	up              *websocket.Conn
 	ref             *core.AccountRef
 	acc             *core.Account
@@ -140,10 +137,9 @@ type wsSession struct {
 	session         string
 	upIn            chan wsMessage
 	quotaGeneration int64
-	// handshakePatches are the body patches the handshake's
-	// BuildUpstreamRequest returned for the first turn's message; that turn
-	// takes them, later turns ask the plugin again.
-	handshakePatches []*pluginv1.BodyPatch
+	// opening is the first turn's message as the plugin relayed it with the
+	// handshake; that turn sends it, later turns ask the plugin again.
+	opening []byte
 }
 
 type wsMessage struct {
@@ -366,9 +362,7 @@ func (s *wsSession) keepalive(ctx context.Context, c *websocket.Conn, inFlight *
 }
 
 func (s *wsSession) write(ctx context.Context, typ websocket.MessageType, data []byte) error {
-	wctx, cancel := context.WithTimeout(ctx, s.g.ws.writeTimeout)
-	defer cancel()
-	return s.client.Write(wctx, typ, data)
+	return s.client.Write(ctx, typ, data)
 }
 
 // sendError tells the client that a turn could not run, in the Responses
@@ -532,44 +526,19 @@ func (s *wsSession) begin(ctx context.Context, m wsMessage) (_ *wsTurn, fatal bo
 	}
 	t.usage = newUsageAcc(s.rt.usage).WithLog("request_id", cl.rid, "plugin", s.rt.binding.Plugin.Key,
 		"platform", s.rt.platform, "protocol", s.rt.upstream)
-	payload := cl.body
-	var err error
-	if up := s.ref.MapModel(cl.model); up != cl.model {
-		if payload, err = sjson.SetBytes(payload, s.rt.modelPath, up); err != nil {
-			s.finish(ctx, t, wsOutcome{status: http.StatusInternalServerError, errType: errTypeInternal, msg: err.Error()})
-			s.sendError(ctx, fromCore(core.ErrInternal, errTypeInternal))
-			return nil, false
+	// The message the plugin relayed for this turn: the handshake's for the
+	// turn that opened the connection, a fresh Execute for any other. A turn
+	// it cannot be had for fails on its own.
+	payload := s.opening
+	s.opening = nil
+	if !opensUpstream {
+		_, req, _, res := s.executeTurn(ctx, cl, s.ref, s.acc, s.rt)
+		if req == nil {
+			return reject(cl, res.err)
 		}
-		cl.rec.UpstreamModel = up
+		payload = req.GetBody()
 	}
-	payload, err = cl.mapReferencedModels(payload, s.ref, s.rt)
-	if err != nil {
-		return reject(cl, invalidModelReference(err.Error()))
-	}
-	// The message goes through the rewrites of an HTTP body
-	// (param_override.go) before the plugin's patches.
-	n := max(0, cl.rec.Attempts-1)
-	if payload, e = cl.rewriteTurn(ctx, s.acc, s.rt, payload, n); e != nil {
-		return reject(cl, e)
-	}
-	// The plugin's body patches for this message (CONTRACTS §83.6): the
-	// handshake's for the turn that opened the connection, a fresh call for
-	// any other. A turn they cannot be had or applied for fails on its own.
-	var patches []*pluginv1.BodyPatch
-	if opensUpstream {
-		patches, s.handshakePatches = s.handshakePatches, nil
-	} else if patches, e = s.turnPatches(ctx, cl, payload); e != nil {
-		return reject(cl, e)
-	}
-	if payload, e = cl.applyTurnPatches(s.rt, payload, patches); e != nil {
-		return reject(cl, e)
-	}
-	if failure := cl.guardAvailability(ctx, s.ref); failure != nil {
-		return reject(cl, failure)
-	}
-	wctx, cancel := context.WithTimeout(ctx, s.g.ws.writeTimeout)
-	err = s.up.Write(wctx, websocket.MessageText, payload)
-	cancel()
+	err := s.up.Write(ctx, websocket.MessageText, payload)
 	if err != nil {
 		s.finish(ctx, t, wsOutcome{status: http.StatusBadGateway, errType: errTypeUpstream, msg: "upstream write failed: " + err.Error()})
 		s.sendError(ctx, &gwError{Status: http.StatusBadGateway, Code: codeUpstreamError, Message: "upstream connection failed"})
@@ -591,14 +560,9 @@ func (s *wsSession) connect(ctx context.Context, cl *call) (func(), *gwError) {
 	if err != nil {
 		return nil, fromCore(core.ErrUnavailable.WithCause(err), errTypeInternal)
 	}
-	cl.sched.candidates = len(all)
-	cands := make([]core.AccountRef, 0, len(all))
-	for i := range all {
-		if cl.route(&all[i]) != nil && cl.servesAllModels(&all[i]) {
-			cands = append(cands, all[i])
-		} else if reason, detail, ok := cl.ineligibleReason(&all[i]); !ok {
-			cl.skipAccount(all[i].ID, reason, detail)
-		}
+	cands, closed := cl.eligibleAccounts(all)
+	if e := cl.protocolNotServed(ctx, closed); e != nil {
+		return nil, e
 	}
 	eligible := cands
 	cands, availabilityErr := cl.filterAvailability(ctx, cands)
@@ -676,7 +640,11 @@ func (s *wsSession) connect(ctx context.Context, cl *call) (func(), *gwError) {
 			return nil, res.err
 		}
 	}
-	if last == nil || (last.RecordType != errTypeUpstream && last.RecordType != errTypeModelAvailability && last.Status != http.StatusTooManyRequests) {
+	if last == nil || (last.RecordType != errTypeUpstream && last.RecordType != errTypeInvalidRequest && last.RecordType != errTypeModelAvailability &&
+		last.Status != http.StatusTooManyRequests) {
+		// As on HTTP (dispatch): upstream answers and requests no account
+		// can serve (a return_error that let the attempt move on) are
+		// relayed; plugin or account problems are "no available account".
 		last = fromCore(core.ErrNoAvailableAccount, errTypeNoAccount)
 	}
 	cl.finishSticky(ctx, 0, false)
@@ -699,89 +667,23 @@ func (s *wsSession) dial(ctx context.Context, cl *call, ref *core.AccountRef) at
 		return unavailable("account type not enabled", errors.New(ref.PluginKey+"/"+ref.Type))
 	}
 	s.recordAccount(cl, acc.ID, rt)
-	pacct := acc.PluginAccount(cl.platform)
-	body := cl.body
-	upModel := ref.MapModel(cl.model)
-	if upModel != cl.model && rt.modelPath != "" {
-		body, _ = sjson.SetBytes(body, rt.modelPath, upModel)
-	}
-	// The fields describe the message as it goes upstream, as on HTTP and
-	// in later turns: after the referenced models' mapping too. A mapping
-	// that fails is the turn's to report (begin), not this account's.
-	if mapped, err := cl.mapReferencedModels(body, ref, rt); err == nil {
-		body = mapped
-	}
-	// The account's header override is the handshake's whatever the body:
-	// one that cannot resolve fails this account over, as on HTTP.
-	headers, err := accountHeaders(acc, cl.c.Request.Header)
-	if err != nil {
-		return *cl.paramOverrideFailure(ctx, acc, accountOverride, err)
-	}
-	// And after the rewrites before the plugin (param_override.go), whose
-	// failure is the turn's to report too; the handshake then carries the
-	// header override's decisions alone.
-	if prepared, m, failure := cl.rewriteBody(ctx, acc, rt, body, upModel, max(0, cl.rec.Attempts-1)); failure == nil {
-		body, upModel = prepared, m
-	} else {
-		cl.paramOverride.headers = headers
-	}
-	fields := requestFieldValues(body, rt.requestFields)
 	cl.env = cl.environment(&acc.AccountRef)
-	meta := cl.metaFor(rt)
-	meta.Model = upModel
-	bctx, cancel := context.WithTimeout(ctx, cl.gw.platformTimeout())
-	request := &pluginv1.BuildUpstreamRequestRequest{Meta: meta, Account: pacct,
-		Fields: fields, InboundHeaders: cl.passHeaders(rt.passHeaders), Attempt: int32(cl.rec.Attempts - 1)}
-	built, err := rt.binding.Client.BuildUpstreamRequest(bctx, request)
-	cancel()
-	if err == nil && built == nil {
-		err = errors.New("empty response")
+	x, req, target, res := s.executeTurn(ctx, cl, ref, acc, rt)
+	if req == nil {
+		return res
 	}
-	if err != nil {
-		return attemptResult{kind: attemptFailover, err: fromCore(core.ErrPluginUnavailable.WithCause(err), errTypePluginUnavailable)}
-	}
-	if built.GetUpstreamModel() != "" && built.GetUpstreamModel() != cl.model {
-		cl.rec.UpstreamModel = built.GetUpstreamModel()
-	}
-	if failure := unsupportedOnWebSocket(built); failure != nil {
-		return *failure
-	}
-	target, err := s.checkURL(ctx, built)
-	if err != nil {
-		slog.WarnContext(ctx, "gateway: upstream websocket url rejected", "plugin", rt.binding.Plugin.Key, "account", acc.ID, "err", err)
-		return attemptResult{kind: attemptFailover, err: fromCore(core.ErrUnavailable.WithMessage("upstream address rejected"), errTypeInternal)}
-	}
-	client, err := s.g.d.Proxies.HTTPClient(ctx, acc.ProxyID)
-	if err != nil || client == nil {
-		return attemptResult{kind: attemptFailover, err: fromCore(core.ErrUnavailable.WithCause(err), errTypeInternal)}
-	}
-	hc := *client
-	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	hc.Timeout = 0
-	// The handshake's headers in the layers of an HTTP request (forwardBuilt,
-	// without the passthrough): the declaration's and its paramOverride's,
-	// the account's header override (§108) and parameter override, the
-	// plugin's, then the declared auth.
-	declared, plugin := splitHeaders(rt, request, built)
+	client, pacct := x.egress.Client, x.acct
+	// The handshake's headers in the layers of an HTTP request
+	// (layerHeaders) without the passthrough: the plugin's defaults, the
+	// account's header override (§108) and parameter override, the plugin's
+	// authoritative headers. The handshake ends with ctx (the client
+	// leaving) and has no deadline of its own; its dial context is released
+	// once it is done, so the connection itself lives as long as the session.
 	header := http.Header{}
-	setHandshakeHeaders(header, declared)
-	cl.paramOverride.declared.Apply(header)
-	cl.paramOverride.headers.Apply(header)
-	setHandshakeHeaders(header, plugin)
-	writeDeclaredAuth(header, rt, built)
-	// The handshake gets its own deadline; the connection itself lives as
-	// long as the session.
-	if failure := cl.guardAvailability(ctx, ref); failure != nil {
-		return attemptResult{kind: attemptFailover, err: failure}
-	}
-	if rt.binding.Type.ModelAvailability && built.GetUpstreamModel() != "" && built.GetUpstreamModel() != upModel {
-		return attemptResult{kind: attemptFailover, err: cl.availabilityMismatch(ctx, ref, upModel, built.GetUpstreamModel())}
-	}
-	dctx, dcancel := context.WithTimeout(context.WithoutCancel(ctx), s.g.ws.handshake)
-	stop := context.AfterFunc(ctx, dcancel)
-	up, resp, err := websocket.Dial(dctx, target, &websocket.DialOptions{HTTPClient: &hc, HTTPHeader: header,
+	layerHeaders(header, req, cl.paramOverride.headers.Apply, handshakeOwned)
+	dctx, dcancel := context.WithCancel(ctx)
+	up, resp, err := websocket.Dial(dctx, target.String(), &websocket.DialOptions{HTTPClient: execfetch.NoRedirects(client), HTTPHeader: header,
 		CompressionMode: websocket.CompressionContextTakeover})
-	stop()
 	dcancel()
 	if resp != nil {
 		s.g.observeQuota(rt, acc.ID, resp.StatusCode, resp.Header)
@@ -804,96 +706,53 @@ func (s *wsSession) dial(ctx context.Context, cl *call, ref *core.AccountRef) at
 		}
 		return cl.classify(ctx, rt, pacct, 0, nil, nil, err.Error())
 	}
-	up.SetReadLimit(s.g.ws.upstreamRead)
+	up.SetReadLimit(-1) // an upstream message of any size (the library's default is 32 KiB)
 	s.up, s.acc, s.rt, s.pacct = up, acc, rt, pacct
-	s.handshakePatches = built.GetPatches()
+	s.opening = req.GetBody()
 	s.upIn = make(chan wsMessage, 1)
 	go s.read(ctx, up, s.upIn)
 	return attemptResult{kind: attemptDone}
 }
 
-// turnPatches asks the session's plugin for the body patches of a later
-// turn's message (CONTRACTS §83.6): BuildUpstreamRequest with the turn's
-// request fields, meta.protocol the WebSocket protocol, the account loaded
-// when the connection opened. Only the patches (and the upstream model, for
-// the record) are used; the URL and headers already opened the connection,
-// and a different URL does not open another.
-func (s *wsSession) turnPatches(ctx context.Context, cl *call, payload []byte) ([]*pluginv1.BodyPatch, *gwError) {
-	rt := s.rt
-	if rt.binding.Client == nil {
-		return nil, fromCore(core.ErrPluginUnavailable.WithMessage("account type not enabled"), errTypePluginUnavailable)
+// executeTurn asks the session's plugin for the turn of cl on ref: the
+// message after the rewrites of an HTTP body (upstreamBody), the
+// availability guard, then Execute. It returns the execution, whose egress
+// the handshake goes out by, and the relay with the address check accepted
+// for it (the handshake's, on the turn opening the connection), or, without
+// one, the result saying why.
+func (s *wsSession) executeTurn(ctx context.Context, cl *call, ref *core.AccountRef, acc *core.Account, rt *typeRoute) (*execution, *pluginv1.UpstreamRequest, *url.URL, attemptResult) {
+	n := max(0, cl.rec.Attempts-1)
+	body, upModel, failure := cl.upstreamBody(ctx, acc, ref, rt, cl.body, n)
+	if failure != nil {
+		return nil, nil, nil, *failure
 	}
-	meta := cl.metaFor(rt)
-	meta.Model = s.ref.MapModel(cl.model)
-	bctx, cancel := context.WithTimeout(ctx, cl.gw.platformTimeout())
-	built, err := rt.binding.Client.BuildUpstreamRequest(bctx, &pluginv1.BuildUpstreamRequestRequest{Meta: meta, Account: s.pacct,
-		Fields: requestFieldValues(payload, rt.requestFields), InboundHeaders: cl.passHeaders(rt.passHeaders),
-		Attempt: int32(cl.rec.Attempts - 1)})
-	cancel()
-	if ctx.Err() != nil {
-		return nil, canceledErr()
+	if e := cl.guardAvailability(ctx, ref); e != nil {
+		return nil, nil, nil, attemptResult{kind: attemptFailover, err: e}
 	}
-	if err == nil && built == nil {
-		err = errors.New("empty response")
+	x, failed := cl.newExecution(ctx, rt, acc, body)
+	if failed != nil {
+		return nil, nil, nil, *failed
 	}
-	if err != nil {
-		slog.WarnContext(ctx, "gateway: websocket turn patches failed", "request_id", cl.rid, "plugin", rt.binding.Plugin.Key,
-			"account", s.ref.ID, "err", err)
-		return nil, fromCore(core.ErrPluginUnavailable.WithCause(err), errTypePluginUnavailable)
+	x.turn, x.opens = true, s.up == nil
+	if !x.opens {
+		// The turn's frame goes out over the session's connection: the
+		// plugin is shown the account as it was handed when that opened,
+		// with the proxy the connection goes through. The turn's fetches
+		// still take the account's egress as it stands now (§123).
+		x.acct = s.pacct
 	}
-	if up := built.GetUpstreamModel(); up != "" && up != cl.model && cl.rec.UpstreamModel == "" {
-		cl.rec.UpstreamModel = up
+	res, err := x.run(ctx, upModel, n)
+	if err != nil || res.Relay == nil {
+		return x, nil, nil, x.unrelayed(ctx, res, err)
 	}
-	return built.GetPatches(), nil
-}
-
-// applyTurnPatches applies the plugin's body patches to a turn's message.
-// No patch leaves the message as it is (same bytes, nothing parsed); patches
-// that cannot be applied, or that change a model reference, fail the turn,
-// as they fail an HTTP attempt (validatePatches). WebSocket messages are
-// not converted, so that guard does not apply here.
-func (c *call) applyTurnPatches(rt *typeRoute, payload []byte, patches []*pluginv1.BodyPatch) ([]byte, *gwError) {
-	if len(patches) == 0 {
-		return payload, nil
+	target, refused := x.targetOf(ctx, res.Relay)
+	if refused != nil {
+		return x, nil, nil, attemptResult{kind: attemptFailover, err: refused}
 	}
-	out, err := applyPatches(payload, patches)
-	if err != nil {
-		return nil, fromCore(core.ErrPluginUnavailable.WithCause(err), errTypePluginUnavailable)
+	if m := res.Relay.GetUpstreamModel(); m != "" && m != cl.model {
+		cl.rec.UpstreamModel = m
 	}
-	if bytes.Equal(out, payload) {
-		return payload, nil
-	}
-	before, after := c.rootFor(payload), gjson.ParseBytes(out)
-	if err := modelReferencePatches(before, after, c.ep.Request.ModelReferences); err != nil {
-		return nil, invalidModelReference(err.Error())
-	}
-	if err := modelReferencePatches(before, after, rt.modelReferences); err != nil {
-		return nil, invalidModelReference(err.Error())
-	}
-	return out, nil
-}
-
-// checkURL applies the gateway's SSRF guard to the ws(s) address the plugin
-// returned, judged as the http(s) address the handshake really goes to.
-func (s *wsSession) checkURL(ctx context.Context, built *pluginv1.BuildUpstreamRequestResponse) (string, error) {
-	if m := strings.ToUpper(built.GetMethod()); m != "" && m != http.MethodGet {
-		return "", errors.New("a websocket handshake is a GET, plugin returned " + m)
-	}
-	raw := strings.TrimSpace(built.GetUrl())
-	var httpURL string
-	switch {
-	case strings.HasPrefix(strings.ToLower(raw), "wss://"):
-		httpURL = "https://" + raw[len("wss://"):]
-	case strings.HasPrefix(strings.ToLower(raw), "ws://"):
-		httpURL = "http://" + raw[len("ws://"):]
-	default:
-		return "", errors.New("upstream websocket url must be ws:// or wss://")
-	}
-	u, err := s.g.checkUpstreamURL(ctx, httpURL)
-	if err != nil {
-		return "", err
-	}
-	return u.String(), nil
+	return x, res.Relay, target, attemptResult{}
 }
 
 // reuse admits a later turn on the session's account: it must still serve
@@ -922,7 +781,7 @@ func (s *wsSession) reuse(ctx context.Context, cl *call) (func(), *gwError) {
 		}
 		s.ref = current
 	}
-	if !cl.servesAllModels(s.ref) {
+	if !cl.candidateEligible(s.ref) {
 		return nil, &gwError{Status: http.StatusBadRequest, Code: core.ErrInvalidArgument.Code, RecordType: errTypeInvalidRequest,
 			Message: "the account of this connection does not serve model " + strconvQuote(cl.model) + "; open a new connection for it"}
 	}
@@ -1111,17 +970,14 @@ func strconvQuote(s string) string {
 	return string(bytes.TrimSpace(b))
 }
 
-// setHandshakeHeaders writes built headers onto a WebSocket handshake; the
-// transport owns framing and the WebSocket handshake headers, host is kept.
-func setHandshakeHeaders(h http.Header, m map[string]string) {
-	for k, v := range m {
-		switch strings.ToLower(k) {
-		case "host":
-			h.Set("Host", v)
-		case "content-length", "content-type", "accept-encoding", "connection", "transfer-encoding", "upgrade",
-			"sec-websocket-key", "sec-websocket-version", "sec-websocket-extensions", "sec-websocket-accept":
-		default:
-			h.Set(k, v)
-		}
+// handshakeOwned reports the headers of a WebSocket handshake the transport
+// writes (framing and the WebSocket handshake headers): a plugin's are left
+// out.
+func handshakeOwned(name string) bool {
+	switch strings.ToLower(name) {
+	case "content-length", "content-type", "accept-encoding", "connection", "transfer-encoding", "upgrade",
+		"sec-websocket-key", "sec-websocket-version", "sec-websocket-extensions", "sec-websocket-accept":
+		return true
 	}
+	return false
 }

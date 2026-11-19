@@ -91,7 +91,7 @@ export function withoutModels(models: string[], failed: string[]): string[] | nu
 
 /** The last_test the server records for a result (used to update the list at once). */
 export function lastTestOf(r: AccountTestResult, requested: string, at = new Date()): AccountLastTest {
-  return { at: at.toISOString(), ok: r.ok, status: r.status, error_code: r.error_code, error_source: r.error_source, latency_ms: r.latency_ms, model: r.model || r.requested_model || requested, message: r.message || (r.error_source === 'response' ? '' : r.reason) || '' }
+  return { at: at.toISOString(), ok: r.ok, status: r.status, error_code: r.error_code, error_source: r.error_source, latency_ms: r.latency_ms, model: r.model || r.requested_model || requested, protocol: r.protocol, message: r.message || (r.error_source === 'response' ? '' : r.reason) || '' }
 }
 
 /**

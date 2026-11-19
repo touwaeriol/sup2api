@@ -86,8 +86,10 @@ export default {
     internal: '内部错误',
     rate_limited: '限流',
     invalid_request: '请求无效',
-    model_availability: '模型暂不可用'
+    model_availability: '模型暂不可用',
+    usage_unreported: '未上报用量（未计费）'
   },
+  unreportedHint: '插件没有返回这次请求的用量（或选用了核心的读数而读数为空），因此未计费。',
   cols: {
     timing: '计时',
     detail: '详情',
@@ -161,6 +163,14 @@ export default {
     inputs: '计费条件取值',
     statusLabel: '结算状态',
     ledger: '账本 #{id}',
+    components: {
+      additional: '附加用量（按各自模型的价格计，已计入合计）',
+      replacement: '替代计费用量（按尝试轮次逐轮计价，代替主请求的用量，已计入合计）'
+    },
+    componentKinds: { advisor: '顾问模型' },
+    componentRound: '第 {round} 轮',
+    primaryUsage: '主用量',
+    componentsTotal: '合计',
     freeNote: '被钩子拒绝、上游失败且没有用量的请求不计费。',
     status: {
       billed: '已结算',
@@ -234,6 +244,9 @@ export default {
       no_route: '账号类型不支持该端点',
       model_not_served: '账号模型列表不含请求的模型',
       referenced_model_not_served: '账号模型列表不含请求引用的模型',
+      protocol_closed: '账号未开放该协议',
+      conversion_not_enabled: '模型未开启协议转换',
+      model_protocol_closed: '模型在该协议下不提供',
       usage_unsupported: '账号类型无法计量请求要求的用量',
       bound_elsewhere: '请求绑定了其它账号',
       availability_blocked: '被模型可用性预检拦截',

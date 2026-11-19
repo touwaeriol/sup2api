@@ -26,7 +26,7 @@ import (
 func (e *env) addAccountType(pluginKey, typeID string, client core.PlatformPlugin, platforms ...manifest.AccountPlatform) core.PluginInfo {
 	t := manifest.AccountType{ID: typeID, Label: manifest.LocalizedText{"en": typeID}, Platforms: platforms}
 	info := core.PluginInfo{Key: pluginKey, Version: "1.2.3",
-		Manifest: &manifest.Manifest{Key: pluginKey, AccountTypes: []manifest.AccountType{t}}}
+		Manifest: &manifest.Manifest{Key: pluginKey, ExternalServices: []string{testUpstreamHost}, AccountTypes: []manifest.AccountType{t}}}
 	e.gen.plugins = append(e.gen.plugins, info)
 	e.gen.accountTypes = append(e.gen.accountTypes, core.AccountTypeBinding{Plugin: info, Type: t, Client: client})
 	return info
@@ -64,9 +64,9 @@ func TestMixedAccountTypesServeOneEndpoint(t *testing.T) {
 		b.GetMeta().GetProtocol() != "anthropic.messages" || b.GetMeta().GetClientProtocol() != "anthropic.messages" {
 		t.Fatalf("relay build meta %+v account %+v", b.GetMeta(), b.GetAccount())
 	}
-	// Request fields fall back to the platform; pass headers are overridden.
-	if b.GetFields()["model"] != `"`+testModel+`"` {
-		t.Fatalf("fields %v", b.GetFields())
+	// The plugin is handed the whole body; pass headers are overridden.
+	if m := gjson.GetBytes(b.GetBody(), "model").String(); m != testModel {
+		t.Fatalf("body model %q", m)
 	}
 	if h := b.GetInboundHeaders(); h["x-relay-hint"] != "h1" || h["anthropic-version"] != "" {
 		t.Fatalf("pass headers %v", h)
@@ -141,7 +141,7 @@ func TestPlanRoutes(t *testing.T) {
 	acctUsage := manifest.UsageRules{Semantics: "account"}
 	epUsage := &manifest.UsageRules{Semantics: "endpoint"}
 	// Plugin platform "x": x.up (endpoint usage override) and x.plain.
-	xp := manifest.Platform{ID: "x", RequestFields: []string{"xf"}, PassHeaders: []string{"x-h"},
+	xp := manifest.Platform{ID: "x", PassHeaders: []string{"x-h"},
 		Usage: manifest.UsageRules{Semantics: "platform"},
 		Endpoints: []manifest.Endpoint{
 			{ID: "plain", Method: "POST", Path: "/x/plain", Protocol: "x.plain", Response: sseOrJSON},
@@ -155,7 +155,7 @@ func TestPlanRoutes(t *testing.T) {
 	gen.accountTypes = []core.AccountTypeBinding{
 		mk("a", "native", cl, manifest.AccountPlatform{Platform: "anthropic"}),
 		mk("b", "conv", cl, manifest.AccountPlatform{Platform: "gemini"},
-			manifest.AccountPlatform{Platform: "x", RequestFields: []string{"q"}}),
+			manifest.AccountPlatform{Platform: "x"}),
 		mk("c", "both", cl, manifest.AccountPlatform{Platform: "x"}, manifest.AccountPlatform{Platform: "anthropic",
 			PassHeaders: []string{"h1"}, Usage: map[string]manifest.UsageRules{"anthropic.messages": acctUsage}}),
 		mk("d", "none", cl, manifest.AccountPlatform{Platform: "openai"}),
@@ -174,12 +174,12 @@ func TestPlanRoutes(t *testing.T) {
 	}
 	a := c.routes[core.AccountTypeKey{PluginKey: "a", Type: "native"}]
 	if a == nil || a.conv != nil || a.upstream != "anthropic.messages" || a.platform != "anthropic" ||
-		!slices.Equal(a.requestFields, []string{"model"}) || a.usage.Semantics != "exclusive" ||
+		a.usage.Semantics != "exclusive" ||
 		!slices.Equal(a.passHeaders, anth.PassHeaders) {
 		t.Fatalf("native route %+v", a)
 	}
 	b := c.routes[core.AccountTypeKey{PluginKey: "b", Type: "conv"}]
-	if b == nil || b.conv == nil || b.upstream != "x.up" || b.platform != "x" || !slices.Equal(b.requestFields, []string{"q"}) ||
+	if b == nil || b.conv == nil || b.upstream != "x.up" || b.platform != "x" ||
 		b.usage.Semantics != "endpoint" || !slices.Equal(b.passHeaders, []string{"x-h"}) {
 		t.Fatalf("converting route %+v", b)
 	}
@@ -189,7 +189,7 @@ func TestPlanRoutes(t *testing.T) {
 		t.Fatalf("native must win over conversion: %+v", both)
 	}
 	ca := c.routes[core.AccountTypeKey{PluginKey: "g", Type: "convacct"}]
-	if ca == nil || ca.conv == nil || ca.usage.Semantics != "account" || !slices.Equal(ca.requestFields, []string{"xf"}) {
+	if ca == nil || ca.conv == nil || ca.usage.Semantics != "account" {
 		t.Fatalf("converting route with account usage %+v", ca)
 	}
 	// Native types are listed first.
@@ -295,6 +295,8 @@ type qUpstream struct {
 	mu     sync.Mutex
 	bodies [][]byte
 	status int
+	// text replaces "hello" in a non-streaming answer.
+	text string
 }
 
 func newQUpstream(t *testing.T) *qUpstream {
@@ -303,8 +305,11 @@ func newQUpstream(t *testing.T) *qUpstream {
 		b, _ := io.ReadAll(r.Body)
 		q.mu.Lock()
 		q.bodies = append(q.bodies, b)
-		status := q.status
+		status, text := q.status, q.text
 		q.mu.Unlock()
+		if text == "" {
+			text = "hello"
+		}
 		if status != 0 {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(status)
@@ -313,7 +318,7 @@ func newQUpstream(t *testing.T) *qUpstream {
 		}
 		if !gjson.GetBytes(b, "q_stream").Bool() {
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"q_model":"q-up","q_text":"hello","q_usage":{"in":13,"out":17}}`))
+			_, _ = w.Write([]byte(`{"q_model":"q-up","q_text":"` + text + `","q_usage":{"in":13,"out":17}}`))
 			return
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -341,8 +346,8 @@ var qUsage = &manifest.UsageRules{
 }
 
 // convEnv adds a "qplug" plugin declaring platform "q" (protocol q.chat) and
-// an account type serving it (priority 0, account 6), and a converter
-// anthropic.messages -> q.chat.
+// an account type serving it (priority 0, account 6, which takes Anthropic
+// requests), and a converter anthropic.messages -> q.chat.
 func convEnv(t *testing.T, conv *fakeConv) (*env, *qUpstream, *fakePlatform) {
 	q := newQUpstream(t)
 	qp := &fakePlatform{urlFor: func(*pluginv1.Account) string { return q.srv.URL + "/q" }}
@@ -354,12 +359,13 @@ func convEnv(t *testing.T, conv *fakeConv) (*env, *qUpstream, *fakePlatform) {
 		if err := e.conv.Register(conv); err != nil {
 			t.Fatal(err)
 		}
-		info := e.addAccountType("qplug", "q_key", qp, manifest.AccountPlatform{Platform: "q", RequestFields: []string{"q_model"}})
+		info := e.addAccountType("qplug", "q_key", qp, manifest.AccountPlatform{Platform: "q"})
 		e.gen.addPlatform(info, manifest.Platform{ID: "q", Usage: *qUsage, Endpoints: []manifest.Endpoint{{
 			ID: "chat", Method: "POST", Path: "/q/chat", Protocol: "q.chat", Kind: "proxy", Response: sseOrJSON,
 			Auth: manifest.EndpointAuth{Headers: []string{"x-api-key"}}, Request: manifest.EndpointRequest{ModelPath: "q_model"},
 			ErrorFormat: "plain", Billing: "usage", BillingTypes: []string{"per_request", "per_token", "expression"}}}})
 		e.accounts.addTyped(testGroup, 6, 100, "q-6", "qplug", "q_key")
+		e.accounts.serveOn(6, "anthropic.messages")
 	})
 	return e, q, qp
 }
@@ -384,8 +390,8 @@ func TestConvertedNonStream(t *testing.T) {
 	}
 	b := qp.builds[0]
 	if b.GetMeta().GetProtocol() != "q.chat" || b.GetMeta().GetClientProtocol() != "anthropic.messages" ||
-		b.GetFields()["q_model"] != `"`+testModel+`"` || b.GetAccount().GetPlatform() != "anthropic" || b.GetAccount().GetType() != "q_key" {
-		t.Fatalf("build request meta=%+v fields=%v account=%+v", b.GetMeta(), b.GetFields(), b.GetAccount())
+		gjson.GetBytes(b.GetBody(), "q_model").String() != testModel || b.GetAccount().GetPlatform() != "anthropic" || b.GetAccount().GetType() != "q_key" {
+		t.Fatalf("build request meta=%+v body=%s account=%+v", b.GetMeta(), b.GetBody(), b.GetAccount())
 	}
 	rec := e.record()
 	if rec.Protocol != "anthropic.messages" || rec.UpstreamProtocol != "q.chat" || rec.AccountType != "q_key" ||
@@ -398,6 +404,20 @@ func TestConvertedNonStream(t *testing.T) {
 	}
 	if e.pricer.calls != 1 {
 		t.Fatalf("price resolved %d times", e.pricer.calls)
+	}
+}
+
+// A converted non-streaming answer over 32 MiB (the read cap it once had)
+// is converted whole and billed from its usage.
+func TestConvertedLargeNonStream(t *testing.T) {
+	e, q, _ := convEnv(t, nil)
+	q.text = strings.Repeat("x", 33<<20)
+	r := e.messages(body(testModel, false))
+	if r.status != 200 || len(r.json().Get("content.0.text").String()) != 33<<20 {
+		t.Fatalf("converted response %d, %d bytes", r.status, len(r.body))
+	}
+	if rec := e.record(); !rec.Success || rec.Tokens != (core.UsageTokens{Input: 13, Output: 17}) {
+		t.Fatalf("record %+v", rec)
 	}
 }
 
@@ -468,6 +488,7 @@ func TestConvertedErrors(t *testing.T) {
 func TestConvertRequestFailureSkipsType(t *testing.T) {
 	e, q, qp := convEnv(t, &fakeConv{reqErr: errors.New("unsupported block")})
 	e.accounts.addTyped(testGroup, 7, 100, "q-7", "qplug", "q_key")
+	e.accounts.serveOn(7, "anthropic.messages")
 	if r := e.messages(body(testModel, false)); r.status != 200 || strings.Join(e.up.keys(), ",") != "acc-1" {
 		t.Fatalf("status %d keys %v", r.status, e.up.keys())
 	}
@@ -512,7 +533,7 @@ func TestPluginPlatformEndpoints(t *testing.T) {
 		Auth: manifest.EndpointAuth{Headers: []string{"x-api-key"}}, Request: manifest.EndpointRequest{ModelPath: "model", StreamPath: "stream"},
 		ErrorFormat: "plain", Billing: "usage", BillingTypes: []string{"per_request", "per_token", "expression"}}
 	vp := &fakePlatform{base: e.up.srv.URL}
-	info := e.addAccountType("video", "video_key", vp, manifest.AccountPlatform{Platform: "myvideo", RequestFields: []string{"model"}})
+	info := e.addAccountType("video", "video_key", vp, manifest.AccountPlatform{Platform: "myvideo"})
 	e.gen.addPlatform(info, manifest.Platform{ID: "myvideo", Usage: anth.Usage, Endpoints: []manifest.Endpoint{ep}})
 	e.accounts.addTyped(testGroup, 8, 100, "video-8", "video", "video_key")
 	e.reg.set(e.gen)

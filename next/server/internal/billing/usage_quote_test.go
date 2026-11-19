@@ -12,8 +12,6 @@ func TestPriceModelUsage(t *testing.T) {
 	ctx := context.Background()
 	e.exec(`INSERT INTO model_prices (model, mode, expression, expr_hash, source)
 		VALUES ('deepseek-x', 'per_token', 'tier("base", p*0.14 + c*0.5 + cr*0.035)', 'h1', 'manual')`)
-	// The free policy does not make a missing price "priced".
-	e.exec(`INSERT INTO settings (key, value) VALUES ('billing', '{"missing_price_policy":"free"}')`)
 	e.svc.invalidate()
 	// 1M input of which 200k cached (inclusive), 100k output.
 	ok, cost, reason, err := e.svc.PriceModelUsage(ctx, "deepseek-x", expr.SemanticsInclusive,

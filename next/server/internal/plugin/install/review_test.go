@@ -74,7 +74,7 @@ func TestBuildReviewPlatforms(t *testing.T) {
 		t.Fatalf("account_types = %+v", out.AccountTypes)
 	}
 	at := out.AccountTypes[0]
-	if at.ID != "apikey" || at.Label["en"] != "API Key" || len(at.Platforms) != 1 || at.Platforms[0] != "video" || at.FormMode != "schema" {
+	if at.ID != "apikey" || at.Label["en"] != "API Key" || len(at.Platforms) != 1 || at.Platforms[0] != "video" || at.FormMode != "native" {
 		t.Fatalf("account type = %+v", at)
 	}
 

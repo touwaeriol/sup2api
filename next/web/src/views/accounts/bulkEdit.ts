@@ -1,8 +1,11 @@
 // Bulk edit of account core properties: the PATCH body for one account from
 // the ticked fields. Group changes are relative to the account's own groups
 // (add / remove) or replace them; the session cap applies with its window. An
-// account a change would leave as it is gets no request (null).
+// account a change would leave as it is gets no request (null). The two
+// protocol fields (DESIGN-2026-11-17-PROTOCOL-BINDING §4) replace the
+// account's own.
 import type { Account } from '@/api/types'
+import { sameModelProtocols, sameProtocols, type ProtocolBinding } from './protocols/protocolBinding'
 import { windowOf } from './spmWindow'
 
 export type GroupMode = 'replace' | 'add' | 'remove'
@@ -14,8 +17,8 @@ export type BulkFields = Record<NumberField, number | null> & {
   groupMode: GroupMode
   proxy_id: number | null
   auto_disable: boolean
-}
-export type BulkFlags = Record<NumberField | 'groups' | 'proxy' | 'auto_disable', boolean>
+} & ProtocolBinding
+export type BulkFlags = Record<NumberField | 'groups' | 'proxy' | 'auto_disable' | keyof ProtocolBinding, boolean>
 
 /** [min, max] the core accepts (account input validation). */
 export const BULK_LIMITS = {
@@ -52,5 +55,7 @@ export function buildBulkPatch(a: Account, v: BulkFields, on: BulkFlags): Record
   }
   if (on.proxy && (a.proxy_id ?? null) !== v.proxy_id) body.proxy_id = v.proxy_id
   if (on.auto_disable && (a.auto_disable ?? true) !== v.auto_disable) body.auto_disable = v.auto_disable
+  if (on.protocols && !sameProtocols(a.protocols, v.protocols)) body.protocols = v.protocols
+  if (on.model_protocols && !sameModelProtocols(a.model_protocols, v.model_protocols)) body.model_protocols = v.model_protocols
   return Object.keys(body).length ? body : null
 }

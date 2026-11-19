@@ -20,7 +20,7 @@
 | 9 | 插件网络：出口隧道与严格模式 |
 | 10 | 插件资源限制 |
 | 11 | 插件签名、信任与插件市场 |
-| 12 | 前端：控制台、插件界面（schema / iframe / 原生微前端） |
+| 12 | 前端：控制台、插件界面（iframe / 原生微前端） |
 | 13 | 用户 / 角色 / 权限 |
 | 14 | 其他关键流程：账号录入、插件安装 |
 | 15 | 两个演示插件：anthropic、guard |
@@ -50,10 +50,10 @@
 | | 网关钩子 | 插件可以在请求进入调度之前检查、修改或拒绝请求（用于审核、拦截），支持按协议/模型/分组匹配、超时、失败策略、熔断 |
 | 插件体系 | 运行时 | gRPC 独立进程；上传、授权确认、安装、启用、禁用、升级、卸载；多节点"先准备、再激活"发布 |
 | | 插件能力 | 声明网关端点和协议格式、账号类型和录入界面、粘性会话默认规则、注册用户权限、数据库 schema 和迁移脚本（含数据迁移）、插件接口、菜单和页面、网关钩子、后台任务、事件订阅、默认模型价格 |
-| | 出口隧道 + 严格模式 | 插件的对外连接经过核心转发并记录；Linux 上用 seccomp 保证无法绕过；默认全部放行，可切换为白名单 |
+| | 出口隧道 + 严格模式 | 插件的对外连接经过核心转发并记录；Linux 上用 seccomp 保证无法绕过；默认全部放行，按插件可切换为只去授权的域名；管理员可在“插件联网”里屏蔽域名或只允许列出的域名，同样管核心替插件发出的上游请求、取回和账号请求（CONTRACTS §113） |
 | | 资源限制 | 每个插件的内存、CPU、文件数限制：GOMEMLIMIT + 内存看门狗 + oom_score_adj + nice + rlimit，都不需要特权（cgroup 预留） |
 | | 签名与市场 | Ed25519 发布者签名、信任级别、发布者密钥管理与吊销；从插件市场索引（签名的静态 JSON）浏览、安装、检查更新 |
-| | 前端扩展 | schema 表单、沙箱 iframe、**原生微前端**（受信插件把 Vue 组件挂进控制台） |
+| | 前端扩展 | 沙箱 iframe、**原生微前端**（受信插件把 Vue 组件挂进控制台；2026-11-19 起不再有声明式的 schema 表单与表格页，CONTRACTS §23） |
 | 演示插件 | anthropic | API Key 账号类型 + 默认价格 + 模型目录（内置插件）；另有市场插件 relay（中转 Key 账号类型） |
 | | guard | 网关钩子（关键词拦截）+ 事件订阅 + 后台任务 + 出口访问 + 原生界面 + 资源限制 |
 | 部署 | docker compose | PostgreSQL、Redis、2 个节点、Caddy 负载均衡 |
@@ -142,7 +142,7 @@ flowchart TB
         rt["Runtime 抽象<br/>grpcRuntime（本期）· jsRuntime（预留）"]
         hs["HostService 实现<br/>插件权限检查在这一层"]
         egress["出口隧道<br/>EgressService · DNS · 访问日志"]
-        sandbox["插件启动器<br/>seccomp · rlimit · oom_score_adj · nice · 内存看门狗"]
+        sandbox["插件启动器<br/>Landlock · seccomp · rlimit · oom_score_adj · nice · 内存看门狗"]
       end
 
       agent["节点代理：心跳 · 对账 · 订阅广播"]
@@ -221,16 +221,16 @@ flowchart LR
 | `proxy` / `account` | 代理；通用账号表、凭证加密、状态与冷却 | 核心 |
 | `billing` | 模型价格、余额、账本、余额检查、结算 | 核心 |
 | `usage` | 使用记录、幂等结算、核心托管异步任务的身份/轮询/共享快照（CONTRACTS §28） | 核心 |
-| `gateway` | 网关流水线（协议无关）、动态端点路由、调度、粘性会话、并发、转发、失败切换、钩子执行、用量提取 | 核心 |
+| `gateway` | 网关流水线（协议无关）、动态端点路由、调度、粘性会话、并发、协议转换、发送与中继（插件构造的请求经核心的 HTTP 客户端发出）、失败切换、钩子执行、用量提取 | 核心 |
 | `event` / `job` | 事件 outbox 与投递、任务调度 | 核心 |
 | `cluster` | 节点注册、心跳、广播、分布式锁 | 核心 |
 | `plugin` | 插件包、签名与信任、manifest、授权确认、迁移、注册表、发布、Runtime 抽象、市场索引 | 核心 |
 | `plugin/grpcruntime` | go-plugin 进程管理、HostService、EgressService | 核心 |
-| `plugin/sandbox` | 启动器：seccomp、rlimit、oom_score_adj、nice；内存看门狗 | 核心 |
-| anthropic 插件 | `apikey` 账号类型（支持内置平台 anthropic）：构造请求、错误分类；默认价格、模型目录 | **插件** |
+| `plugin/sandbox` | 启动器：Landlock、seccomp、rlimit、oom_score_adj、nice；内存看门狗 | 核心 |
+| anthropic 插件 | `apikey` 账号类型（支持内置平台 anthropic）：`Execute` 构造上游请求（`sdk/pluginsdk/standard`）、错误分类；默认价格、模型目录 | **插件** |
 | guard 插件 | 请求钩子（关键词拦截）、事件订阅（统计）、后台任务（汇总与清理）、对外告警、原生界面 | **插件** |
 
-**划分原则**：核心负责"数据、钱、安全、调度"，以及内置平台（anthropic、openai、gemini）的端点定义——它们是数据文件（`sdk/platforms/*.json`），流水线代码本身不针对任何平台写死逻辑；插件负责"某种账号怎么对接上游"以及"额外的业务逻辑"。插件**永远不能直接改余额**，只能调用受限的账本接口。
+**划分原则**：核心负责"数据、钱、安全、调度"，以及内置平台（anthropic、openai、gemini）的端点定义——它们是数据文件（`sdk/platforms/*.json`），流水线代码本身不针对任何平台写死逻辑；插件负责"某种账号怎么对接上游"以及"额外的业务逻辑"。平台插件拿到完整请求体，构造最终的上游请求，交给核心的 HTTP 客户端发出（账号代理、SSRF、超时、运营方的请求头设置由核心强制）；用量与任务事实只在插件调用的返回值里（CONTRACTS §112）。插件**永远不能直接改余额**，只能调用受限的账本接口。
 
 ---
 
@@ -422,7 +422,7 @@ erDiagram
 | `credentials_enc` | 凭证整体 AES-256-GCM 加密（主密钥 `MASTER_KEY`）；插件声明的敏感字段接口中永远脱敏 |
 | `settings` | 非敏感配置（base_url 等，由账号类型的 `settingsFields` 决定），明文 JSONB |
 | `proxy_id` / `status` / `schedulable` / `priority` / `weight` / `max_concurrency` | 代理、状态、是否参与调度、优先级（越大越优先，2026-11-09 起）、权重（同优先级内加权随机）、最大并发 |
-| `models` / `model_mapping` | 账号可服务的模型列表（完整模型 ID，空 = 全部）与"客户端模型 → 上游模型"映射；都是核心属性，与插件无关（CONTRACTS §18）。核心在调插件 `BuildUpstreamRequest` 前改写模型。模型列表可从上游拉取：插件 `BuildModelsRequest` 构造请求，核心发出并提取 ID（CONTRACTS §19） |
+| `models` / `model_mapping` | 账号可服务的模型列表（完整模型 ID，空 = 全部）与"客户端模型 → 上游模型"映射；都是核心属性，与插件无关（CONTRACTS §18）。核心在调插件 `Execute` 前改写模型。模型列表可从上游拉取：插件 `BuildModelsRequest` 构造请求，核心发出并提取 ID（CONTRACTS §19） |
 | `rpm_limit` / `tpm_limit` | 每分钟请求数和 token 数上限，0 = 不限；计数在 Redis `rl:account:{id}:*` |
 | 冷却 | Redis `cooldown:account:{id}`，不写 PG |
 
@@ -441,7 +441,6 @@ guard-0.1.0.s2plugin
 ├── runtimes/
 │   ├── linux-amd64/plugin      # 生产环境只需要 Linux 版本
 │   └── linux-arm64/plugin
-├── forms/                      # schema 表单（账号录入、插件设置）
 ├── ui/
 │   ├── iframe/                 # 沙箱 iframe 页面（可选）
 │   └── native/                 # 原生微前端：entry.js + chunks + css（可选，需要受信）
@@ -514,7 +513,7 @@ guard-0.1.0.s2plugin
     "slots": [ { "slot": "dashboard.widgets", "component": "BlockedTodayCard",
                  "permission": "stats:read" } ],
     "native": { "entry": "ui/native/entry.js" },
-    "settings": { "type": "schema", "schema": "forms/settings.schema.json" }
+    "settings": { "mode": "native", "component": "GuardSettings", "secrets": [] }
   },
 
   "resources": { "memoryMB": 128, "cpu": 0.25, "maxProcs": 64, "maxOpenFiles": 256 },
@@ -544,12 +543,12 @@ guard-0.1.0.s2plugin
 flowchart LR
   subgraph host["核心"]
     rt["grpcRuntime"]
-    hs["HostService<br/>Log · KVGet/KVSet/KVDelete/KVList · KVGetMany/KVSetMany/KVDeleteMany（CONTRACTS §93） · GetDSN<br/>AuthzCheck · AccountScopeCheck · LedgerCredit/LedgerDebit · Publish<br/>ListAccounts · GetAccountCredentials<br/>LockAcquire/LockRenew/LockRelease（CONTRACTS §27.3）"]
+    hs["HostService<br/>Log · KVGet/KVSet/KVDelete/KVList · KVGetMany/KVSetMany/KVDeleteMany（CONTRACTS §93） · GetDSN<br/>AuthzCheck · AccountScopeCheck · LedgerCredit/LedgerDebit · Publish<br/>ListAccounts · GetAccount（CONTRACTS §124）<br/>LockAcquire/LockRenew/LockRelease（CONTRACTS §27.3）<br/>RelayUpstream · ExecuteHTTP（CONTRACTS §112）"]
     eg["EgressService<br/>Dial（双向流）"]
   end
   subgraph plugin["插件进程"]
     ps["PluginService<br/>GetInfo · Health · Configure · Shutdown"]
-    pf["PlatformService<br/>ValidateCredentials · BuildUpstreamRequest<br/>ClassifyError · BuildTestRequest<br/>BuildModelsRequest（可选）"]
+    pf["PlatformService<br/>Execute · Monitor（任务）<br/>ValidateCredentials · ClassifyError · BuildTestRequest<br/>BuildModelsRequest（可选）"]
     hk["HookService<br/>OnGatewayRequest"]
     ap["AppService<br/>RunJob · OnEvents"]
     hx["HTTPService<br/>HandleHTTP"]
@@ -565,23 +564,29 @@ proto 设计规则（为以后的 JS 运行方式预留）：
 
 - 除 `EgressService.Dial` 外，所有方法都是"一次请求、一次响应"
 - 不使用 `google.protobuf.Any`；字段按 protojson 规则可以直接映射成 JS 对象
-- 请求体不整体传给插件：插件声明需要的字段，返回"设置/删除"指令，由核心执行
+- 平台插件在 `Execute` 里拿到完整请求体，交回最终字节；网关钩子仍只拿声明的字段，返回"设置/删除"指令（`BodyPatch`），由核心执行
 
 关键消息（示意）：
 
 ```proto
-// 平台插件：构造上游请求
-message BuildUpstreamRequestRequest {
-  string protocol = 1;                       // "anthropic.messages"
-  Account account = 2;                       // 含解密后的凭证和 settings
-  map<string, string> fields = 3;            // requestFields 声明的字段（JSON 字符串）
-  map<string, string> inbound_headers = 4;   // 白名单内的客户端请求头
+// 平台插件：一次尝试（CONTRACTS §112）
+message ExecuteRequest {
+  RequestMeta meta = 3;                      // protocol "anthropic.messages"、model（映射后）……
+  Account account = 4;                       // 含解密后的凭证和 settings
+  bytes body = 5;                            // 完整请求体，核心的改写已做完
+  map<string, string> inbound_headers = 6;   // 清单 passHeaders 内的客户端请求头（写成 [] 时一个都不给）
+  bool extract_usage = 8; bool task_submission = 9;
 }
-message BuildUpstreamRequestResponse {
-  string method = 1;
-  string url = 2;                            // 核心校验：http(s)，不指向内网
-  map<string, string> headers = 3;
-  repeated BodyPatch patches = 4;            // {op: set|delete, path, value_json}
+// 插件在 Execute 里调 HostService.RelayUpstream 交出最终请求
+message UpstreamRequest {
+  string method = 1; string url = 2;         // 核心校验：http(s)，主机须在清单 externalServices 或账号的上游地址里（§112.17），SSRF
+  map<string, string> headers = 3;           // 权威头（鉴权、签名）
+  map<string, string> default_headers = 4;  // 默认头（运营方设置可改）
+  bytes body = 5;                            // 最终字节
+}
+message ExecuteResponse {
+  ClassifyErrorResponse classification = 1;
+  oneof report { UsageReport usage = 2; HostUsage host_usage = 3; TaskSubmission task = 4; }
 }
 
 // 平台插件：错误分类
@@ -656,9 +661,9 @@ stateDiagram-v2
 | 等级 | 权限 |
 |---|---|
 | 🟢 低 | `kv`、`config`、`log`、`broadcast`、`secrets`（§72.2）、`prices`（只读按模型价格试算费用，§72.13.1） |
-| 🟡 中 | `routes.admin`、`routes.user`、`events`、`jobs`、`ui.menu`、`ui.iframe`、`accounts.read`、`authz.read`（`AuthzCheck` 查询非本插件的权限 key）、`lock`（CONTRACTS §27.3） |
+| 🟡 中 | `routes.admin`、`routes.user`、`events`、`jobs`、`ui.menu`、`ui.iframe`、`authz.read`（`AuthzCheck` 查询非本插件的权限 key）、`lock`（CONTRACTS §27.3）、`fs.data`（读写本插件的数据目录，不授予时插件不能读写任何文件，CONTRACTS §43.8） |
 | 🟠 高 | `accounts.auto_state`、`db.schema`、`net`（白名单模式下）、`routes.public`、`routes.webhook`、`gateway.hook`、`gateway.endpoint`、`gateway.observe`、`platform.register`、`scheduler.rank`、`sticky.clear`（§74.2）、`users.read`、`notify.send`（经其他插件的渠道向任意外部地址发通知，核心限速，§74.4） |
-| 🔴 极高 | `accounts.credentials`、`ledger.credit`、`ledger.debit`、`ui.native`、`users.write`、`db.core_views` |
+| 🔴 极高 | `ledger.credit`、`ledger.debit`、`ui.native`、`users.write`、`db.core_views` |
 
 - 高和极高风险需要逐项勾选；极高风险只能由拥有 `plugin:grant:critical` 的用户批准（2026-10-05 起不再要求再次输入密码，CONTRACTS §3.3）
 - 批准结果写入 `plugin_permission_grants(plugin_key, permission, scope, status, plugin_version, manifest_hash, granted_by, granted_at)`；管理员可以把范围改得比申请的更小（比如入账上限）
@@ -670,13 +675,14 @@ stateDiagram-v2
 | 项目 | 做法 |
 |---|---|
 | schema | 首次发布前创建 `plg_<key>` |
-| 隔离 | 数据库账号有 `CREATEROLE` 时创建角色 `plg_<key>`，只授予自己 schema 的权限；插件通过 `HostService.GetDSN` 拿到受限 DSN，连接经出口隧道。没有该权限时退化为"只隔离 schema"，后台提示 |
-| 迁移脚本 | `migrations/*.sql` 按文件名排序，每个文件一个事务，执行前 `SET LOCAL search_path TO plg_<key>` |
-| 迁移记录 | `plugin_migrations(plugin_key, migration_id, checksum, applied_at)`；已执行文件被修改时拒绝发布 |
+| 数据库用户 | 只有核心的用户（2026-11-18 起不再给插件建角色，CONTRACTS §115）。插件通过 `HostService.GetDSN` 拿到不带凭据的虚拟地址 `db.sub2api:5432`，连接经出口隧道到核心，核心用自己的数据库配置代为登录（`search_path` 固定为 `plg_<key>`）后原样转发协议；插件进程里没有数据库密码（严格网络关闭时才直接给核心的 DSN）。schema 只是默认位置，不是边界：持有 `db.schema` 的插件能读写核心的用户能访问的所有表，分隔靠约定和安装时的同意（非官方插件要 `plugin:grant:db_schema_unconfined`） |
+| 迁移脚本 | 核心以自己的用户执行 `migrations/*.sql`，按文件名排序，每个文件一个事务，执行前 `SET LOCAL search_path TO plg_<key>`；对象属于核心的用户 |
+| 迁移记录 | `plugin_migrations(plugin_key, migration_id, checksum, applied_at)`；已执行文件被修改时重新执行并更新校验和（脚本必须幂等，CONTRACTS §36） |
 | 执行时机 | 发布的"准备"阶段、任何节点激活新版本之前；`pg_advisory_lock(hash(plugin_key))` |
 | 数据迁移 | 简单转换写在 SQL 里；复杂转换实现 `MigrationService.MigrateData(from, to)`，在 SQL 之后调用 |
 | 兼容要求 | 升级期间新旧版本同时运行，迁移必须"先扩展、后收缩" |
-| 卸载 | 选择"清除数据"时 `DROP SCHEMA plg_<key> CASCADE`，删除角色和迁移记录 |
+| 卸载 | 选择"清除数据"时 `DROP SCHEMA plg_<key> CASCADE`，删除迁移记录 |
+| 旧角色 | 旧版本建的 `plg_<key>` 登录角色在启动时和 Ensure 时转换：`REASSIGN OWNED` 给核心的用户、`DROP OWNED`、`DROP ROLE`；还有会话的留到下次（CONTRACTS §115） |
 
 ### 5.7 多节点发布（先准备、再激活）
 
@@ -696,7 +702,8 @@ sequenceDiagram
   N2->>PG: 执行插件迁移（advisory lock）
   N2->>R: 广播 plugin:events
   par 所有节点各自准备（包括 node-2）
-    N1->>PG: 读取插件包（本地没有时）
+    N1->>PG: 读取版本的 package_sha256 / package_url
+    N1->>N1: 本机网关没有该包时，从市场下载或向其他在线节点取（任一持有者即可）
     N1->>N1: 校验签名和 sha256 → 启动器启动新版本（受限）→ 健康检查
     N1->>R: 上报 ready
   and
@@ -756,13 +763,14 @@ sequenceDiagram
     GW->>R: 查粘性会话绑定（规则命中时）
     GW->>GW: 绑定的账号可用就直接用；否则选账号：分组内 · 平台插件已启用 · 启用 · 可调度 · 未冷却 · 未排除<br/>按 priority 排序，同优先级按 weight 加权随机<br/>未命中粘性时 priority/weight 可能先被插件改写，见 6.2
     GW->>R: 获取账号并发槽位，原子检查并计入 RPM 和会话，预占 TPM，超限换下一个账号
-    GW->>P: BuildUpstreamRequest
-    P-->>GW: url、headers、patches
+    GW->>P: Execute（完整请求体）
+    P->>GW: RelayUpstream（最终请求，不等待）
+    P-->>GW: host_usage
     GW->>U: 发送请求（经账号代理）
     alt 成功
       U-->>GW: SSE / JSON
       GW-->>C: 边收边转发
-      GW->>GW: 按声明式规则提取用量
+      GW->>GW: 按清单的用量规则提取用量
       GW->>R: 写入或刷新粘性会话绑定
     else 失败
       U-->>GW: 4xx / 5xx
@@ -779,12 +787,14 @@ sequenceDiagram
 说明：
 
 - 流式响应一旦开始输出，就不再失败切换
-- 插件调用超时（平台默认 2 秒）或不可用时，该账号视为不可用；所有账号不可用返回 503
+- 插件在构造请求时出错或不可用时，请求没有发出，换下一个账号、不惩罚账号（发布了故障策略时同样，不执行账号规则，CONTRACTS §58）；所有账号不可用返回 503。`Execute` 不计时（CONTRACTS §112.16）：插件挂住时这次尝试一直等，直到客户端离开或插件进程结束
+- 插件自己解析用量的端点和任务提交用等待形式：插件在 `RelayAndWait` 里等交换结束、读观察，在返回值里给 `usage` 或 `task`（CONTRACTS §112.7）。执行行由网关每 15 秒续期，节点崩溃时恢复扫描在 2 分钟没有续期后把它关成“未上报”、释放预扣
+- 一次请求上的超时和大小上限只有管理员配置的（请求体上限、上游的响应头 / 整体 / 流式空闲超时、钩子和热路径超时），加上安全与防崩溃的检查；完整列表见 CONTRACTS §112.16
 - 客户端断开时取消上游请求、释放槽位；已产生的用量照常结算
 
 ### 6.2 调度
 
-- 候选账号 = API Key 所属分组的账号 ∩ 账号类型能服务该端点（原生或经转换）的账号 ∩ 状态正常 ∩ 参与调度 ∩ `models` 为空或含请求模型 ∩ 未冷却 ∩ 未达 rpm/tpm/spm 上限
+- 候选账号 = API Key 所属分组的账号 ∩ 账号类型能服务该端点（原生或经转换）的账号 ∩ 账号在该入站协议下提供请求的模型（账号的协议绑定，CONTRACTS §110：跨平台转换默认关闭，按模型开启） ∩ 状态正常 ∩ 参与调度 ∩ `models` 为空或含请求模型 ∩ 未冷却 ∩ 未达 rpm/tpm/spm 上限
 - 顺序：粘性绑定的账号优先；其余按 `priority` 升序，同优先级按 `weight` 加权随机（不放回抽样）；逐个获取并发槽位，失败切换时跳过已试过的账号（CONTRACTS §18）。排序用的 `priority` / `weight` 可能已被插件为本次请求改写（见下）
 - **插件改写调度参数（可选扩展点，CONTRACTS §24）**：声明了 `scheduler.rank` 的插件可以为**一次请求**改写候选账号的 `priority` 和 `weight`，核心拿改写后的值跑上面这套算法。只对**未命中粘性绑定**的请求调用，每个请求一次（失败切换复用结果），多个插件按 `order` 串行、后者看到前者的结果；超时、出错或结果非法一律 fail open，退回账号自身的值。候选集的筛选、并发槽位、限流、冷却、端点与模型支持性仍全部由核心把关 —— **核心保留最终调度权**，插件只是临时改写账号本来就有的两个参数，不能凭空加账号，也不写库。本次实际发生的改写记入 `usage_logs.sched_decisions`（jsonb，迁移 0011，接口暂不暴露，CONTRACTS §24.5）
 - 限流：rpm/tpm 逐条记录，判断和展示都是精确的近 60 秒（CONTRACTS §68.3），tpm 设了上限时准入即预占（§78.3）；tpd 已移除；spm 是 60 秒滚动窗口内去重的会话数（会话 = 粘性会话键，无粘性规则时每请求一会话；窗口内已有的会话总是放行）。达到上限的账号在本窗口内不参与调度；全部不可用时返回 429 `rate_limited`
@@ -835,7 +845,7 @@ sequenceDiagram
 | 路由 | 每个 generation 构建一个内层路由表，挂在核心路由之后；插件启用、禁用、升级时随 generation 原子切换（参考 new-api 的 `plugin-router.go`） |
 | 冲突检查 | 安装和启用时检查：不能占用核心路由（`/api`、`/plugin-ui`、`/health` 等）；插件平台的 id 不能与内置平台或其他插件的平台重复，端点不能与任何其他平台的端点冲突 |
 | 协议归属 | 协议由平台的端点定义；账号类型通过 `accountTypes[].platforms` 声明支持哪些平台，从而为这些平台的端点提供服务（见 6.6） |
-| 协议转换 | 核心内置转换器（`gateway/convert`）；端点协议和账号上游协议不同时，核心有对应转换器（或经 `openai.responses` 的两跳组合）就自动转换，没有就只调度原生支持该协议的账号（见 6.6、CONTRACTS §88） |
+| 协议转换 | 核心内置转换器（`gateway/convert`）；端点协议和账号上游协议不同时，核心有对应转换器（或经 `openai.responses` 的两跳组合）就能转换，没有就只调度原生支持该协议的账号（见 6.6、CONTRACTS §88）。同一平台内的转换（chat ↔ Responses）默认生效；转换到账号类型没有声明的平台默认关闭，要在账号上为模型开启（CONTRACTS §110） |
 | 以后的扩展 | `kind: "custom"`：由插件的 HTTPService 处理，但复用核心的 API Key 鉴权和计费（用于异步任务类接口） |
 
 ### 6.5 粘性会话
@@ -913,8 +923,8 @@ flowchart LR
 
 1. 按请求路径匹配端点 → 得到平台 P 和协议
 2. API Key → 分组 G
-3. 候选账号 = G 中账号类型**支持平台 P** 的账号；此外，账号类型支持的其他平台里若有协议能由核心转换器从本端点协议转换过去，这些账号也是候选：每个类型取转换质量最好（等级、跳数、声明顺序）且流式模式相容的端点；计数端点不转换，没有原生计数端点的类型由核心本地估算（CONTRACTS §88.2）
-4. 没有候选账号 → 404/503；有则按粘性会话、优先级（同一优先级内原生 → good → fair → discouraged → local）、并发、失败切换调度
+3. 候选账号 = G 中账号类型**支持平台 P** 的账号；此外，账号类型支持的其他平台里若有协议能由核心转换器从本端点协议转换过去，这些账号也是候选：每个类型取转换质量最好（等级、跳数、声明顺序）且流式模式相容的端点；计数端点不转换，没有原生计数端点的类型由核心本地估算（CONTRACTS §88.2）。这些“其他平台”的账号只对在账号上开启了该入站协议的模型参与（`model_protocols`）；支持平台 P 的账号也可以在账号上关闭某个协议，或限定模型只在某些协议下提供（`protocols`、`model_protocols`，CONTRACTS §110）
+4. 没有候选账号 → 404/503；候选账号全部被账号的协议绑定过滤（没有账号在这个端点上提供这个模型）→ 404（CONTRACTS §110.5）；有则按粘性会话、优先级（同一优先级内原生 → good → fair → discouraged → local）、并发、失败切换调度
 5. 考察到经转换的账号时核心才转换请求（每个类型一次），账号或分组的丢失策略（allow / safe / strict）决定能否接受损失；被拒绝的账号跳过、不计尝试，全部被拒绝时 400 `unsupported_conversion`（CONTRACTS §88.3、§88.4）
 6. 选中账号后由其账号类型所属插件构造上游请求；需转换时由核心转换请求和响应，用量按上游协议读取，转换情况记入使用记录 `conversion`
 
@@ -923,7 +933,7 @@ flowchart LR
 | 平台 | 端点 | 协议 | 错误格式 | 用量口径 |
 |---|---|---|---|---|
 | anthropic | `POST /v1/messages` · `POST /v1/messages/count_tokens`（不计费） | `anthropic.messages` · `anthropic.count_tokens` | anthropic | exclusive |
-| openai | `POST /v1/chat/completions` · `POST /v1/responses` · `POST /v1/embeddings` | `openai.chat` · `openai.responses` · `openai.embeddings` | openai | inclusive |
+| openai | `POST /v1/chat/completions` · `POST /v1/responses` · `POST /v1/embeddings` · `POST /v1/images/generations` · `POST /v1/images/edits`（JSON，CONTRACTS §118） | `openai.chat` · `openai.responses` · `openai.embeddings` · `openai.images` · `openai.images_edit` | openai | inclusive |
 | gemini | `POST /v1beta/models/{model}:generateContent` · `POST /v1beta/models/{model}:streamGenerateContent` · `POST /v1beta/models/{model}:countTokens`（不计费） | `gemini.generate` · `gemini.stream_generate` · `gemini.count_tokens` | gemini | inclusive |
 
 内置平台同时提供：API Key 读取方式（anthropic：`x-api-key`/`Authorization`；openai：`Authorization: Bearer`；gemini：`x-goog-api-key` 或 `?key=`）、模型与流式标志的位置（gemini 的模型在路径里，流式由端点决定）、转发给插件的请求字段和请求头、用量提取规则、默认粘性规则（`source=builtin`）。
@@ -936,19 +946,19 @@ flowchart LR
   "endpoints": [ { "id": "gen", "method": "POST", "path": "/v1/video/generations",
                    "protocol": "myvideo.gen", "auth": {...}, "request": {...}, "response": {...},
                    "errorFormat": "plain", "billing": "usage", "usage": {...} } ],
-  "requestFields": [...], "passHeaders": [...], "usage": {...}   // 没有 stickyRules：插件不声明粘性规则，只能经 ClearStickyBindings 清理绑定（6.5）
+  "passHeaders": [...], "usage": {...}   // 没有 stickyRules：插件不声明粘性规则，只能经 ClearStickyBindings 清理绑定（6.5）
 } ],
 "accountTypes": [ {
   "id": "relay_key", "label": {...}, "form": {...}, "sensitiveFields": ["api_key"],
   "platforms": [ { "platform": "anthropic",           // 内置或插件平台
-                   "requestFields": [...], "passHeaders": [...],   // 可选覆盖
+                   "passHeaders": [...],   // 可选覆盖
                    "usage": { "<protocol>": {...} } } ]            // 可选：按协议覆盖用量规则
 } ]
 ```
 
 顶层 `gateway` 与 `platform` 字段删除（端点归属平台）。
 
-**计费**：全局价只按模型设置，不区分平台和账号类型；全局价之上可以按分组、按用户组另设标价（7.3）。**凭证授权**：`accounts.credentials`（`{"types":"own"}`）授权后，插件的账号类型才注册。**控制台**：账号类型显示支持的平台和可服务的端点；分组可放任意类型账号，并显示分组能服务哪些平台（由其账号类型推出）；API Key 显示所属分组能访问的平台和端点。
+**计费**：全局价只按模型设置，不区分平台和账号类型；全局价之上可以按分组、按用户组另设标价（7.3）。**账号归属**：插件收到它声明的账号类型下账号的全部信息（凭证、代理），不需要宿主授权；账号的请求都由核心发出（CONTRACTS §124，此前要 `accounts.credentials` 授权后账号类型才注册）。**控制台**：账号类型显示支持的平台和可服务的端点；分组可放任意类型账号，并显示分组能服务哪些平台（由其账号类型推出）；API Key 显示所属分组能访问的平台和端点。
 
 
 ---
@@ -1040,7 +1050,7 @@ CREATE TABLE balance_ledger (
 
 | 类别 | 内容 |
 |---|---|
-| token 变量 | `p` 输入（已扣除单独计价的部分）· `c` 输出 · `cr` 缓存读 · `cc` 缓存写（5 分钟）· `cc1h` 缓存写（1 小时）· `len` 完整上下文长度（用于分档判断，不受缓存扣除影响）· 预留 `img` `img_o` `ai` `ao` |
+| token 变量 | `p` 输入（已扣除单独计价的部分）· `c` 输出 · `cr` 缓存读 · `cc` 缓存写（5 分钟）· `cc1h` 缓存写（1 小时）· `img` 图片输入 · `img_o` 图片输出（OpenAI 生图，CONTRACTS §118：图片 token 是输入、输出的一部分，表达式计了它们就从 `p`、`c` 里扣掉，没计就留在 `p`、`c` 里按文字价算）· `len` 完整上下文长度（用于分档判断，不受缓存扣除影响）· 预留 `ai` `ao` |
 | 插件计量值 | `u("key")`：平台插件在 manifest 里声明的其他计量值（张数、秒数等）；保存时校验 key 是否已声明 |
 | 单位约定 | token 系数是**每百万 token 的美元价格**；`flat(x)` 表示 x 美元的固定费用 |
 | 函数 | `tier(名称, 值)` 标记命中的档位 · `param(路径)` 读取请求体字段 · `header(名称)` · `has(字符串, 子串)` · `hour/weekday/day/month(时区)` · `max` `min` `abs` `ceil` `floor` |
@@ -1080,7 +1090,7 @@ tier("base", p*5 + c*25) ||| param("service_tier") == "priority" ? 1.5 : 1 ||| h
 ```sql
 CREATE TABLE model_prices (
   id            bigserial PRIMARY KEY,
-  model         varchar(200) NOT NULL,        -- 完整模型 ID，不允许通配符（CHECK 只允许字母、数字和 . _ : / @ + -）
+  model         text NOT NULL,                -- 完整模型 ID（迁移 0108 起不限长度），不允许通配符（CHECK 只允许字母、数字和 . _ : / @ + -）
   mode          varchar(20)  NOT NULL,        -- per_request / per_token / expression
   config        jsonb        NOT NULL,        -- 可视化编辑的原始值（按次价格、各类 token 单价、分档定义）
   expression    text         NOT NULL,        -- 由 config 生成，或直接编写；计费以它为准
@@ -1109,7 +1119,7 @@ CREATE TABLE model_price_history (
 
 - 匹配：先按完整模型 ID 精确匹配全局价（每个模型只有一条）；再按请求的分组和 Key 所有者所在的用户组取定价规则（专属价 → 分组内定价），没有规则就用全局价
 - 费用 = 表达式结果 × 倍率。倍率是 Key 所有者在该分组的实际倍率，鉴权时算出；命中按倍数的规则时另乘规则倍数，这两个数只在一处相乘（`PriceRule.Multiplier`），预扣和结算用的是同一个乘数。命中自定义价时执行的是规则自己的表达式
-- 找不到全局价：默认拒绝请求（返回 403 `model_price_not_configured`），可配置为免费放行；这时定价规则不生效
+- 找不到全局价：拒绝请求（返回 403 `model_price_not_configured`），没有放行途径（CONTRACTS §17.3）；这时定价规则不生效
 - 编译结果按 `expr_hash` 缓存；价格变更通过 `config:changed` 广播，各节点立即生效。定价规则与全局价在同一个价格快照里，同样失效；授权、全场折扣和专属倍率不经缓存，每个请求鉴权时读库
 - 价格试算接口 `POST /api/prices/preview`：输入用量样本、请求头、请求参数，返回费用、命中档位、加价规则；页面上的计算器和保存前的预览都用它。它试的是一条全局价；“某个用户在某个分组调用某个模型实际付多少”用 `POST /pricing/quote`，它走真实计费的同一条路径（CONTRACTS §97.6）
 
@@ -1208,7 +1218,7 @@ sequenceDiagram
 
 ### 8.2 后台任务
 
-上游异步生成任务使用 `endpoint.task` + `Executor` + `TaskSubmissionParser` + `TaskMonitor`（CONTRACTS §28、§31）。插件通过 SDK 发起核心代理请求，再调用 ReserveAndWatch 原子记录预扣与监控；核心按任务认领并回调一次 Monitor，插件通过 ExecuteHTTP 查询、ReportTaskProgress 上报。核心固定原账号，事务性保存共享快照并结算。Poller 和旧 Reconciler 保留兼容。下表的 `jobs[]` 用于插件普通定时工作，不用于重复实现上游任务轮询；同一触发点去重也不等于不同触发点和手动执行互斥。两类后台工作共用核心执行器，保留各自触发和持久状态规则；SDK 的 `Scheduler` 只是在线请求的粘性/账号排序策略扩展，不创建后台调度器。
+上游异步生成任务使用 `endpoint.task` + `Execute` + `TaskSubmissionParser` + `TaskMonitor`（CONTRACTS §28、§112）。插件在 `Execute` 里以等待形式中继提交请求，在返回值里给 `task`，核心原子登记任务、替换预扣；核心按任务认领并调用一次 `Monitor`，插件经 `ExecuteHTTP`（SDK 的 `Fetch`）查询、把结果放在返回值里。核心固定原账号，事务性保存共享快照并结算。下表的 `jobs[]` 用于插件普通定时工作，不用于重复实现上游任务轮询；同一触发点去重也不等于不同触发点和手动执行互斥。两类后台工作共用核心执行器，保留各自触发和持久状态规则；SDK 的 `Scheduler` 只是在线请求的粘性/账号排序策略扩展，不创建后台调度器。
 
 | 项目 | 设计 |
 |---|---|
@@ -1238,23 +1248,25 @@ http.Get / GORM（Host.DB）/ redis …
 - HTTPS 在插件与目标之间端到端加密，核心只看到域名、端口和流量
 - `plugin_egress_logs(id, plugin_key, node_id, host, port, started_at, duration_ms, bytes_in, bytes_out, result)`，批量写入，保留 7 天；插件详情页按域名汇总展示，出现新域名时告警
 - 出口策略（每个插件单独配置）：`allow_all`（默认，只记录）或 `allowlist`（只允许批准的 `net` 域名）
-- 插件访问核心的 PostgreSQL（受限 DSN）也走隧道
+- 插件访问核心的 PostgreSQL 也走隧道：拨虚拟地址 `db.sub2api:5432`，核心代为登录后转发（CONTRACTS §115）
+- 管理员的“插件联网”设置（全局的屏蔽列表或允许列表，CONTRACTS §113）由 `egress.Provider` 持有和缓存；它既是隧道的一道检查，也经 `core.PluginNetworkAccess` 注入网关、插件运行时和账号模块，管核心替插件发出的中继、取回、`SendAccountRequest`、配额、续期、测试与模型列表请求（§113.3）。被拒的请求同样写进 `plugin_egress_logs`
 
 ### 9.2 严格模式（Linux）
 
 插件由核心二进制的隐藏子命令 `sub2api plugin-exec` 启动，它在 `execve` 插件之前：
 
-1. `prctl(PR_SET_NO_NEW_PRIVS)`
-2. 加载 seccomp 规则：拒绝 `socket(AF_INET / AF_INET6 / AF_PACKET / AF_NETLINK)`、`io_uring_setup`、`ptrace`、`mount` 等；允许 `AF_UNIX`
-3. 设置 rlimit、`oom_score_adj`、nice（见第 10 章）
+1. `prctl(PR_SET_NO_NEW_PRIVS)`，设置 rlimit、`oom_score_adj`、nice（见第 10 章）
+2. Landlock（CONTRACTS §43.8，默认开启）：按内核支持的版本处理全部文件权限、抽象 unix socket 与信号作用域、路径型 unix socket、严格网络下的 TCP/UDP 端口，只放行插件二进制、go-plugin 的 socket 目录、`/dev/null`、时区文件，以及获授 `fs.data` 时的数据目录、获授 `net` 时的 CA 证书
+3. 加载 seccomp 规则：拒绝 `socket(AF_INET / AF_INET6 / AF_PACKET / AF_NETLINK)`、`io_uring_setup`、`ptrace`、`mount` 等；允许 `AF_UNIX`
 4. `execve` 插件二进制
 
-效果：插件只能通过 unix socket 与核心通信，**所有对外连接只能经过出口隧道**，自己建立的 TCP/UDP 连接会被内核拒绝。不需要 root。
+效果：插件只能通过 unix socket 与核心通信，**所有对外连接只能经过出口隧道**，自己建立的 TCP/UDP 连接会被内核拒绝；不申请 `fs.data` 的插件读写不了任何文件（包括同一系统用户的网关管理令牌），内核 6.12 起连不到沙箱外的抽象 socket、发不了信号，7.1 起连不到自己 socket 目录之外的路径型 socket。内核缺的层照常启动插件，核心启动时逐层记 WARN，节点页显示。不需要 root。
 
 | 配置 | 默认值 |
 |---|---|
 | `plugins.sandbox.strict_network` | Linux 上为 `true` |
 | `plugins.sandbox.seccomp` | Linux 上为 `true` |
+| `SUB2API_PLUGIN_LANDLOCK` | Linux 上为 `true` |
 | Windows / macOS | 只能运行在开发模式（`plugins.dev_mode=true`），不做严格模式 |
 
 UDP：严格模式下禁止；插件的 DNS 查询由核心代为解析。
@@ -1276,13 +1288,13 @@ cgroup 可以给每个插件单独设置硬性上限，超出直接被限制，�
 | 资源 | 做法 | 效果 |
 |---|---|---|
 | 内存（防止拖垮核心） | 启动器把插件进程的 `oom_score_adj` 设为 1000（进程提高自己的这个值不需要特权） | 容器内存不足时，内核**优先杀插件**，核心不受影响 |
-| 内存（控制用量） | 启动时设置 `GOMEMLIMIT` 为上限的 90%（Go 运行时会更积极地回收内存）；核心每 5 秒读取 `/proc/<pid>/status` 的 RSS，连续 3 次超过上限的 110% 就重启插件 | 软限制 + 超限重启 |
+| 内存（控制用量） | 只在管理员设了上限时（插件的资源设置或节点封顶 `SUB2API_PLUGIN_MAX_MEMORY_MB`，默认都没有，CONTRACTS §111.5）：启动时设置 `GOMEMLIMIT` 为上限的 90%（Go 运行时会更积极地回收内存）；核心每 5 秒读取 `/proc/<pid>/status` 的 RSS，连续 3 次超过上限的 110% 就重启插件 | 软限制 + 超限重启；默认不限 |
 | CPU | 启动器把插件的 nice 值调高 10（调低优先级不需要特权） | CPU 紧张时核心优先；插件 CPU 使用率会统计展示，持续占满时告警 |
 | 文件数 | `RLIMIT_NOFILE` | 硬限制 |
 | 线程数 | 读取 `/proc/<pid>/status` 的 Threads | 超过申请值时告警 |
 | 调用层面 | 每个插件的并发上限、每次调用的超时、钩子熔断 | 防止插件拖慢请求 |
 
-- 插件在 manifest `resources` 中申请；管理员可以在插件设置里调整；核心有全局上限，超出的申请在安装时被拒绝
+- 插件在 manifest `resources` 中申请；管理员可以在插件设置里调整；设了全局上限时，超出的申请在安装时被拒绝。内存例外：manifest 的 `memoryMB` 只是自述的需要，不是上限，内存只有管理员设置时才受限（CONTRACTS §111.5）
 - 插件崩溃或因超限被重启时按指数退避重启（1s → 60s）；10 分钟内重启超过 5 次，就标记插件在该节点不可用并告警
 - 插件详情页显示每个节点上的内存、CPU、线程数、重启次数和重启原因
 
@@ -1304,7 +1316,7 @@ cgroup 可以给每个插件单独设置硬性上限，超出直接被限制，�
 ```
 
 - 校验：上传时重新计算 digest，用发布者公钥验证签名；插件包内任何文件被改动都会导致校验失败
-- 节点从 PG 取回插件包后，启动前再校验一次
+- 插件包不存 PG（PG 只记 `package_sha256`）：节点从市场或从持有它的其他在线节点取回插件包（MULTINODE-SYNC-PROTOCOL §6.2）后，按 sha256 校验，启动前再验一次签名
 
 ### 11.2 信任体系
 
@@ -1349,11 +1361,12 @@ Vue 3 + Vite + TypeScript + Pinia + Vue Router + Tailwind。菜单、路由权�
 - `GET /api/me/menus`：核心菜单 + 已启用插件的菜单（已按权限过滤）。插件菜单可进共享的"插件"区、追加到某个核心区，或放进插件自己声明的区（manifest `ui.sections`，按 `order` 与核心区穿插；CONTRACTS §22）
 - `GET /api/ui/plugins`：已启用插件的前端扩展声明（页面、插槽、原生入口地址）
 
-### 12.2 插件界面的三种方式
+### 12.2 插件界面的两种方式
+
+（2026-11-19 起，插件界面只用代码写：原来的第三种方式 schema——插件提供 JSON Schema / 表格定义、核心渲染——已删除，账号表单与设置的校验只在插件后端（`ValidateCredentials`、`ValidateSettings`），见 CONTRACTS §23、§75.1。）
 
 | 方式 | 适用 | 安全 | 说明 |
 |---|---|---|---|
-| **schema** | 表单、表格类页面 | 无代码执行 | 插件提供 JSON Schema / 表格定义，核心渲染；风格完全统一 |
 | **iframe** | 复杂但不受信的界面 | 沙箱隔离，拿不到登录态 | `sandbox="allow-scripts"`；通过 Bridge 调用插件接口（核心代为携带会话）、同步主题和语言、路由、提示框 |
 | **原生微前端** | 受信插件的复杂界面、嵌入核心页面 | **无隔离**，只允许 official / verified 且获批 `ui.native` | 插件的 Vue 组件直接挂进控制台 |
 
@@ -1471,18 +1484,14 @@ sequenceDiagram
   FE->>API: GET /api/account-types
   API-->>FE: 已启用插件声明的账号类型
   A->>FE: 选择"Anthropic / API Key"
-  alt form.mode = schema
-    FE->>API: GET /api/account-types/anthropic/apikey/form
-    API-->>FE: JSON Schema + uiSchema
-    FE->>FE: SchemaForm 渲染
-  else form.mode = iframe
+  alt form.mode = iframe
     FE->>FE: 沙箱 iframe 加载插件页面，通过 Bridge 取值和校验
   else form.mode = native（受信插件）
-    FE->>FE: 渲染插件注册到 account.form.widgets 的组件
+    FE->>FE: 渲染插件以 form.component 注册的表单组件（@sub2api/ui 的即时校验）
   end
   A->>FE: 填写并提交（名称、分组、代理、优先级、并发、凭证）
   FE->>API: POST /api/accounts
-  API->>API: 权限检查 account:create → JSON Schema 校验
+  API->>API: 权限检查 account:create
   API->>P: ValidateCredentials
   P-->>API: 通过 / 字段错误
   API->>API: 敏感字段加密
@@ -1507,6 +1516,7 @@ sequenceDiagram
   end
   API->>API: 校验签名、发布者信任级别、吊销状态
   API->>API: 校验 manifest：hostCompat、一致性检查、权限冲突、资源申请上限
+  API->>API: 包存入本节点网关的插件包存储（其他节点用到时向它取）
   API->>PG: 写入 plugin_versions，plugins.status=awaiting_consent
   API-->>A: 确认页（权限分级、账号类型、钩子、任务、订阅、界面、资源、数据库）
   A->>API: 确认授权（勾选高风险项）
@@ -1526,13 +1536,13 @@ anthropic 平台及其端点、用量规则、默认粘性规则由**核心内�
 | 能力 | 内容 |
 |---|---|
 | 账号类型 | `apikey`：支持平台 `anthropic`；字段 `api_key`（敏感）、`base_url`（默认 `https://api.anthropic.com`）、`model_mapping` |
-| 构造请求 | 按 `meta.protocol` 选上游路径：`base_url + /v1/messages` 或 `/v1/messages/count_tokens`；请求头 `x-api-key`、`anthropic-version`（透传，默认 `2023-06-01`）、`anthropic-beta`（透传）；命中模型映射时修改 `model` |
+| 构造请求 | `Execute`（`sdk/pluginsdk/standard` 加 anthropic 预设）：按 `meta.protocol` 选上游路径 `base_url + /v1/messages` 或 `/v1/messages/count_tokens`；`x-api-key` 是权威头，`anthropic-version`（客户端没带时默认 `2023-06-01`）、`anthropic-beta`（透传）是默认头；请求体是核心改写（含模型映射）之后的，原样交回 |
 | 错误分类 | 400 直接返回；401/403 切换并禁用账号；429 切换并冷却到 `retry-after`（默认 60 秒）；529 切换并冷却 30 秒；5xx 切换并冷却 10 秒 |
 | 模型目录 | 自己的 schema `plg_anthropic.model_catalog` + 迁移 `0001_init.sql`；接口 `GET /models`；用户权限 `model_catalog:read`（0.3.1 起没有控制台菜单和页面，CONTRACTS §90） |
 | 升级演示 | 测试用 `0.2.0` 增加 `0002_add_family.sql`（加字段并回填），验证升级迁移和旧数据迁移 |
 | 权限 | `platform.register`、`db.schema`、`routes.admin`、`kv` |
 
-另有市场插件 **relay（Claude 中转）**：只声明账号类型 `relay_key`（支持平台 `anthropic`，按平台覆盖 requestFields/passHeaders），演示多个插件的账号类型在同一分组中共同服务 `/v1/messages`。
+另有市场插件 **relay（Claude 中转）**：只声明账号类型 `relay_key`（支持平台 `anthropic`，按平台覆盖 passHeaders），演示多个插件的账号类型在同一分组中共同服务 `/v1/messages`。
 
 ### 15.2 guard（钩子与应用插件）
 
@@ -1544,7 +1554,7 @@ anthropic 平台及其端点、用量规则、默认粘性规则由**核心内�
 | 后台任务 | `rollup` 每 5 分钟把分钟统计汇总为小时统计；`cleanup` 每天清理 30 天前的数据 |
 | 出口访问 | 命中规则时向配置的 webhook 地址发送告警（`http.Post`，经出口隧道，能在"外部访问"页看到） |
 | 原生界面 | "请求守卫"大盘页面（拦截趋势图、规则命中排行）+ 首页的"今日拦截"卡片 |
-| 设置 | schema 表单：webhook 地址、是否记录命中的文本片段 |
+| 设置 | 原生设置组件 `GuardSettings`（`ui.settings.mode: native`）：webhook 地址、冷却时间等，保存时由插件 `ValidateSettings` 校验 |
 | 资源 | 申请 128MB 内存、0.25 核 |
 | 用户权限 | `rules:read`、`rules:manage`、`stats:read` |
 | 测试用途 | 另有一个测试构建，会尝试直接 `net.Dial` 外部地址和申请超量内存，用来验证严格模式和资源限制 |
@@ -1574,7 +1584,7 @@ next/
 │   │   ├── gateway/               # 流水线、调度、钩子执行、用量提取；convert/ 是协议转换
 │   │   ├── plugin/                # 包、签名与信任、manifest、授权、迁移、注册表、发布、市场
 │   │   │   ├── grpcruntime/       # 唯一允许引用 go-plugin 的包；HostService、EgressService
-│   │   │   └── sandbox/           # seccomp、rlimit、oom_score_adj、nice、看门狗（//go:build linux）
+│   │   │   └── sandbox/           # Landlock、seccomp、rlimit、oom_score_adj、nice、看门狗（//go:build linux）
 │   │   └── httpapi/               # gin 路由、handler、中间件
 │   └── web/                       # 嵌入前端构建产物（dist/index.html 是被跟踪的占位文件）
 ├── gateway/                       # 节点外壳（独立 Go module）
@@ -1589,9 +1599,9 @@ next/
 │   ├── pgdb/                      # 插件的 GORM 句柄、组合器、TestNoRawSQL/TestNoPgxImports
 │   └── testpg/                    # 测试用 PostgreSQL（TEST_DATABASE_URL 或本机 embedded-postgres）
 ├── plugins/                       # 官方插件，每个是独立 Go module；released.json 记录线上版本
-│   ├── anthropic/  openai/  gemini/  volcengine/  relay/  claude-oauth/
+│   ├── anthropic/  openai/  gemini/  volcengine/  relay/
 │   ├── codex/                     # 含 ui/native
-│   ├── dynweight/  growth/  guard/  moderation/   # 含 ui/native
+│   ├── dynweight/  guard/  moderation/   # 含 ui/native
 │   └── mailer/  payment/
 ├── protocol-codec/                # 早期的协议转换库；next/ 内无人引用，只剩旧版 backend/ 依赖
 ├── tools/
@@ -1622,7 +1632,7 @@ next/
 | 插件 | hashicorp/go-plugin + gRPC + protobuf |
 | seccomp | elastic/go-seccomp-bpf（纯 Go，不需要 cgo） |
 | 签名 | crypto/ed25519 |
-| JSON | gjson / sjson；santhosh-tekuri/jsonschema 做 schema 校验 |
+| JSON | gjson / sjson；santhosh-tekuri/jsonschema 只用于校验账号类型的 `extensionsSchema`（`server/internal/account/extensions.go`） |
 | 金额 | numeric(20,8) + shopspring/decimal |
 | 计费表达式 | expr-lang/expr（MIT）；设计参考 new-api 的 billingexpr，代码自行实现（new-api 是 AGPL-3.0，不能直接复制） |
 | 定时任务 | 定时任务框架（CONTRACTS §77）：`node` 任务用 gocron v2，`cluster` 任务用 River（`database/sql` 驱动，只轮询，新任务最多等 1 秒被取走）；robfig/cron v3 只负责解析 cron 表达式 |
@@ -1646,7 +1656,7 @@ flowchart LR
     c["C 插件运行时<br/>包 · 签名信任 · 授权 · 迁移<br/>注册表 · 发布 · 节点 · 市场"]
     d["D 沙箱与网络<br/>启动器 · seccomp · rlimit · oom_score_adj<br/>看门狗 · 出口隧道"]
     e["E SDK 与插件<br/>SDK · anthropic · guard<br/>命令行工具"]
-    f["F 前端<br/>控制台 · SchemaForm · iframe Bridge<br/>共享模块 · 原生加载器"]
+    f["F 前端<br/>控制台 · iframe Bridge<br/>共享模块 · 原生加载器"]
   end
   subgraph p2["阶段 2（并行）"]
     g["G 网关<br/>流水线 · 调度 · 钩子 · 计费接入"]
@@ -1726,7 +1736,7 @@ flowchart LR
 | # | 问题 | 默认做法 |
 |---|---|---|
 | 6 | 计费币种和精度 | USD，`numeric(20,8)` |
-| 7 | 找不到模型价格 | 拒绝请求（可配置为免费放行） |
+| 7 | 找不到模型价格 | 拒绝请求（2026-11-19 起不能再配置为免费放行，CONTRACTS §17.3） |
 | 8 | 最低余额和透支 | 最低余额 0，允许短暂透支（受 API Key 并发上限约束） |
 | 9 | 旧系统数据 | 本期不导入 |
 | 10 | 敏感操作的二次验证 | ~~本期再次输入密码，以后换成 TOTP~~ 已取消（2026-10-05 用户决定）：只看登录态与 RBAC 权限，CONTRACTS §3.3 |
@@ -1823,7 +1833,7 @@ flowchart LR
 │ 凭证                                                      [插件]     │
 │   API Key * [ sk-ant-••••••••••••••••••      ] 👁                     │
 │   Base URL  [ https://api.anthropic.com    ▾ ]                       │
-│   （schema / iframe / 原生组件三种方式之一，由插件决定）              │
+│   （iframe 或原生组件，由插件决定）                                  │
 ├──────────────────────────────────────────────────────────────────────┤
 │                               [ 测试连接 ]  [ 取消 ]  [ 保存 ]       │
 └──────────────────────────────────────────────────────────────────────┘

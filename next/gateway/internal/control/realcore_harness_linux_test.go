@@ -154,14 +154,6 @@ func newRealCluster(t *testing.T, ctx context.Context, options realOptions) *rea
 		cleanup, done := context.WithTimeout(context.Background(), 20*time.Second)
 		defer done()
 		admin.WithContext(cleanup).Exec("DROP DATABASE " + quoted + " WITH (FORCE)")
-		// Plugin roles are cluster-wide and marked with the database that
-		// created them; left behind, the next cluster's core refuses the
-		// same plugin keys with plugin_db_role_conflict.
-		var roles []string
-		admin.WithContext(cleanup).Raw("SELECT rolname FROM pg_roles WHERE starts_with(shobj_description(oid, 'pg_authid'), ?)", "sub2api plugin role; database="+c.dbname+";").Scan(&roles)
-		for _, role := range roles {
-			admin.WithContext(cleanup).Exec("DROP ROLE IF EXISTS " + quoteIdent(role))
-		}
 	})
 	c.coreDSN = dsn + " dbname=" + c.dbname
 	if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
@@ -389,7 +381,12 @@ func (c *realCluster) startShell(id string) *realNode {
 	})
 	rt.Peer = pm
 	rt.PeerArtifactClient = peer.NewClient(peerTransport, time.Minute)
-	blobs := PluginBlobs(store, id, root, rt.PeerArtifactClient, 0, 0)
+	// As under sub2api-gateway serve, package fetches use their own client,
+	// which may reach any enabled node (the release client only the primary).
+	packageClient := peer.NewClient(pm.WrapTransport(proxy.PeerTransport(c.clientTLS), func(ctx context.Context, u *url.URL) error {
+		return store.AuthorizeAnyNodeTarget(ctx, id, u)
+	}), time.Minute)
+	blobs := PluginBlobs(store, id, root, packageClient, 0, 0)
 	rt.PluginBlobs = blobs.Peer()
 	// The core reaches its plugin packages through this socket, as under
 	// sub2api-gateway serve, with a per-boot token.

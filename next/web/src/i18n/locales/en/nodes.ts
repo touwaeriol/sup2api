@@ -18,5 +18,19 @@ export default {
   gatewayVersion: 'Gateway version',
   unknownVersion: 'Unknown',
   versionCounts: 'Core {core} · Gateway {gateway}',
-  mixedVersions: 'Nodes run different versions'
+  mixedVersions: 'Nodes run different versions',
+  sandbox: 'Plugin sandbox',
+  sandboxAll: 'All layers',
+  sandboxOff: 'Off',
+  sandboxPartial: '{n} missing',
+  sandboxActive: 'In force',
+  sandboxMissing: 'Missing',
+  sandboxLayers: {
+    fs: 'Files (Linux 5.13)',
+    fs_truncate: 'File truncation (Linux 6.2)',
+    tcp: 'TCP (Linux 6.7)',
+    scope: 'Abstract unix sockets and signals (Linux 6.12)',
+    unix: 'Path-based unix sockets (Linux 7.1)',
+    udp: 'UDP (Linux 7.2)'
+  }
 }

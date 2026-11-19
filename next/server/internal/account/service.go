@@ -31,8 +31,13 @@ type Deps struct {
 	Cipher   *secret.Cipher
 	Registry core.PluginRegistry
 	Proxies  core.ProxyDirectory
-	Events   core.EventPublisher
-	Slots    core.Slots // optional: in_use column is 0 without it
+	// NetworkAccess is the administrator's plugin network access (CONTRACTS
+	// §113): the host of every request a plugin describes and the core sends
+	// (SendAccountRequest, quota, refresh, test, model list) must pass it;
+	// nil = no such setting (tests).
+	NetworkAccess core.PluginNetworkAccess
+	Events        core.EventPublisher
+	Slots         core.Slots // optional: in_use column is 0 without it
 	// Limiter reports rpm/tpm usage (rate_usage column); optional.
 	Limiter core.AccountLimiter
 	Stats   *Stats
@@ -75,7 +80,7 @@ const (
 type Service struct {
 	d Deps
 
-	schemas sync.Map // sha256(schema) -> *jsonschema.Schema
+	schemas sync.Map // sha256(extensionsSchema) -> *jsonschema.Schema
 
 	sf       singleflight.Group
 	cacheMu  sync.Mutex
@@ -92,6 +97,9 @@ type Service struct {
 	quotaFlight     singleflight.Group
 	quotaSweepMu    sync.Mutex
 	quotaSweepAfter int64
+	// balanceFlight merges the balance reads of one account on this node:
+	// a manual refresh and the sweep (CONTRACTS §52).
+	balanceFlight singleflight.Group
 
 	// quotaMirror is this node's copy of the quota snapshots the model
 	// availability precheck reads (quota_mirror.go); built on first use.
@@ -158,7 +166,6 @@ func (s *Service) RegisterRoutes(r *httpapi.Router) {
 	r.PermScoped("GET", "/platforms", s.listPlatforms, browse...)
 	r.AuthedRead("/me/platforms", s.listMyPlatforms)
 	r.PermScoped("GET", "/account-types", s.listTypes, browse...)
-	r.PermScoped("GET", "/account-types/:plugin_key/:type/form", s.typeForm, browse...).Uses(perm.AccountSettingsCustom)
 	r.PermScoped("GET", "/accounts", s.list, perm.AccountRead)
 	// Group binding, custom upstreams and guarded settings are checked per
 	// field (checkOwnChange, customSettings).
@@ -172,9 +179,11 @@ func (s *Service) RegisterRoutes(r *httpapi.Router) {
 	r.PermScoped("POST", "/accounts/:id/test", s.test, perm.AccountTest)
 	r.PermScoped("POST", "/accounts/:id/models/fetch", s.fetchAccountModels, perm.AccountTest).Uses(perm.AccountRelay)
 	r.PermScoped("POST", "/account-types/:plugin_key/:type/models/fetch", s.fetchTypeModels, perm.AccountCreate).Uses(perm.AccountRelay)
+	// The proxy of an authorization flow before the account exists (CONTRACTS §117).
+	r.PermScoped("POST", "/account-types/:plugin_key/:type/proxy-ticket", s.issueProxyTicket, perm.AccountCreate, perm.AccountUpdate)
 	// Plain-text credentials: a step-up proof each time (CONTRACTS §80.2).
 	r.StepUp(core.StepUpCredentialReveal).PermScoped("POST", "/accounts/:id/credentials/reveal", s.reveal, perm.AccountCredentialView)
-	// Subscription quota and balance (CONTRACTS §44, §51).
+	// Subscription quota and balance (CONTRACTS §44, §52).
 	r.PermScoped("GET", "/accounts/:id/quota", s.getQuota, perm.AccountRead)
 	r.PermScoped("GET", "/accounts/:id/balance", s.getBalance, perm.AccountRead)
 	r.PermScoped("POST", "/accounts/:id/reset-status", s.resetStatus, perm.AccountUpdate)
@@ -221,7 +230,10 @@ func (s *Service) watchChanges(ctx context.Context) (cancel func()) {
 	if s.d.Bus != nil {
 		cancels = append(cancels, s.d.Bus.Subscribe(core.ChannelAccountChanged, s.onAccountChanged))
 		if r, ok := s.d.Bus.(core.BusReconnects); ok {
-			cancels = append(cancels, r.OnReconnect(func() { s.invalidateQuota(0) }))
+			cancels = append(cancels, r.OnReconnect(func() {
+				s.invalidate()
+				s.invalidateQuota(0)
+			}))
 		}
 	}
 	if s.d.Registry != nil {

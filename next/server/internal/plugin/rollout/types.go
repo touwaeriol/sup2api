@@ -6,11 +6,9 @@ package rollout
 
 import (
 	"context"
-	"encoding/json"
 	"io/fs"
 	"time"
 
-	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/grpcruntime"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/registry"
 )
@@ -30,8 +28,7 @@ type Instance interface {
 }
 
 // Runtime starts plugin instances of the package's manifest runtime: a
-// plugin process for "grpc", a static always-ready instance for "none"
-// (grpcruntime.StaticInstance); a JS runtime later.
+// plugin process for "grpc"; a JS runtime later.
 type Runtime interface {
 	Load(ctx context.Context, pkg *registry.Package) (Instance, error)
 }
@@ -47,16 +44,9 @@ func FromGRPC(rt *grpcruntime.Runtime) Runtime { return grpcAdapter{rt} }
 
 type grpcAdapter struct{ rt *grpcruntime.Runtime }
 
-// Load dispatches by manifest.Runtime: a package without a process gets a
-// static instance, any other a plugin process.
+// Load starts the package's plugin process. The explicit nil keeps a failed
+// load from becoming a non-nil Instance holding a nil pointer.
 func (a grpcAdapter) Load(ctx context.Context, pkg *registry.Package) (Instance, error) {
-	if pkg.Manifest != nil && pkg.Manifest.Runtime == manifest.RuntimeNone {
-		inst, err := a.rt.LoadStatic(ctx, pkg)
-		if err != nil {
-			return nil, err
-		}
-		return inst, nil
-	}
 	inst, err := a.rt.Load(ctx, pkg)
 	if err != nil {
 		return nil, err
@@ -89,31 +79,6 @@ const (
 	NodeFailed  = "failed"
 )
 
-// NodePluginState is the JSON document each node reports per plugin through
-// core.NodeRegistry.ReportPlugin.
-type NodePluginState struct {
-	// State summarizes this node for the console (CONTRACTS §5.7): the
-	// rollout state while a rollout is open, else the serving instance as
-	// active | pending | failed, or "stopped" when nothing is served.
-	State     string `json:"state"`
-	Serving   string `json:"serving,omitempty"`
-	Standby   string `json:"standby,omitempty"`
-	RolloutID int64  `json:"rollout_id,omitempty"`
-	Rollout   string `json:"rollout,omitempty"` // pending | ready | active | failed
-	// Fallback is the version this node still serves because the one it
-	// should serve is not ready here yet (starting, or failed and retried).
-	Fallback  string          `json:"fallback,omitempty"`
-	Error     string          `json:"error,omitempty"`
-	Instances []InstanceState `json:"instances,omitempty"`
-}
-
-type InstanceState struct {
-	Version  string `json:"version"`
-	State    string `json:"state"`
-	Error    string `json:"error,omitempty"`
-	Restarts int    `json:"restarts"`
-}
-
 // Message is published on core.ChannelPluginEvents.
 type Message struct {
 	Type      string `json:"type"` // rollout | config | resources
@@ -126,8 +91,7 @@ type Message struct {
 const MessageResources = "resources"
 
 // limitsAware is implemented by instances that can tell whether their
-// process runs with outdated resource limits (grpcruntime.Instance; a
-// grpcruntime.StaticInstance never does).
+// process runs with outdated resource limits (grpcruntime.Instance).
 type limitsAware interface {
 	LimitsStale() bool
 }
@@ -137,12 +101,4 @@ type limitsAware interface {
 type broadcastReceiver interface {
 	HandlesBroadcast() bool
 	OnBroadcast(ctx context.Context, msg grpcruntime.BroadcastMessage) error
-}
-
-func parseState(s string) (NodePluginState, bool) {
-	var st NodePluginState
-	if s == "" || json.Unmarshal([]byte(s), &st) != nil {
-		return st, false
-	}
-	return st, true
 }

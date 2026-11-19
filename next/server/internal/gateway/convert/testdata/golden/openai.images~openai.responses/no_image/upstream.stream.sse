@@ -1,0 +1,30 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_1","object":"response","created_at":1763452800,"status":"in_progress","model":"gpt-6-luna","output":[],"tools":[{"type":"image_generation","background":"auto","model":"gpt-image-2-codex","moderation":"auto","n":1,"output_compression":100,"output_format":"png","quality":"auto","size":"auto"}],"usage":{"input_tokens":2235,"input_tokens_details":{"cached_tokens":0},"output_tokens":69,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":2304}}}
+
+event: response.in_progress
+data: {"type":"response.in_progress","response":{"id":"resp_1","object":"response","created_at":1763452800,"status":"in_progress","model":"gpt-6-luna","output":[],"tools":[{"type":"image_generation","background":"auto","model":"gpt-image-2-codex","moderation":"auto","n":1,"output_compression":100,"output_format":"png","quality":"auto","size":"auto"}],"usage":{"input_tokens":2235,"input_tokens_details":{"cached_tokens":0},"output_tokens":69,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":2304}}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":0,"item":{"id":"msg_0","type":"message","status":"in_progress"}}
+
+event: response.content_part.added
+data: {"type":"response.content_part.added","output_index":0,"item_id":"msg_0","content_index":0,"part":{"type":"output_text","annotations":[],"text":""}}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","output_index":0,"item_id":"msg_0","content_index":0,"delta":"I can't create that image."}
+
+event: response.output_text.done
+data: {"type":"response.output_text.done","output_index":0,"item_id":"msg_0","content_index":0,"text":"I can't create that image."}
+
+event: response.content_part.done
+data: {"type":"response.content_part.done","output_index":0,"item_id":"msg_0","content_index":0,"part":{"type":"output_text","annotations":[],"text":"I can't create that image."}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":0,"item":{"id":"msg_0","type":"message","status":"completed","role":"assistant","phase":"final_answer","content":[{"type":"output_text","annotations":[],"text":"I can't create that image."}]}}
+
+event: response.metadata
+data: {"type":"response.metadata","metadata":{}}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_1","object":"response","created_at":1763452800,"status":"completed","model":"gpt-6-luna","output":[],"tools":[{"type":"image_generation","background":"auto","model":"gpt-image-2-codex","moderation":"auto","n":1,"output_compression":100,"output_format":"png","quality":"auto","size":"auto"}],"usage":{"input_tokens":2235,"input_tokens_details":{"cached_tokens":0},"output_tokens":69,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":2304},"tool_usage":{"image_gen":{"input_tokens":56,"input_tokens_details":{"image_tokens":0,"text_tokens":56},"output_tokens":343,"output_tokens_details":{"image_tokens":343,"text_tokens":0},"total_tokens":399}}}}
+

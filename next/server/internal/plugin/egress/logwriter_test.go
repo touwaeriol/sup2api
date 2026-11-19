@@ -365,6 +365,35 @@ func TestNewDomainDetection(t *testing.T) {
 	}
 }
 
+// The database's virtual address is the core's own service: its connections
+// are logged like any other but are no external host (no domain row, no
+// new-domain event).
+func TestDatabaseNotAnExternalHost(t *testing.T) {
+	st := newMemStore()
+	events := &memEvents{}
+	proxy := func(_ context.Context, conn net.Conn, _ string) {
+		defer conn.Close()
+		_, _ = io.Copy(conn, conn)
+	}
+	e := newEnvStore(t, st, Options{Events: events, DatabaseProxy: proxy})
+	e.policy.set(core.EgressPolicy{Mode: PolicyAllowAll, Net: true, Database: true})
+	c, err := sdkegress.DialContext(context.Background(), "tcp", net.JoinHostPort(DatabaseHost, "5432"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if _, err := c.Write([]byte("ping")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadFull(c, make([]byte, 4)); err != nil {
+		t.Fatal(err)
+	}
+	flushUntil(t, e, "database row", func() bool { return len(st.find(DatabaseHost, "tcp")) == 1 })
+	if st.domain(DatabaseHost) != nil || len(events.list()) != 0 {
+		t.Fatalf("database recorded as an external host: domain %+v, events %+v", st.domain(DatabaseHost), events.list())
+	}
+}
+
 func TestDomainTracker(t *testing.T) {
 	tr := newDomainTracker(time.Minute)
 	t0 := time.Unix(1_700_000_000, 0)

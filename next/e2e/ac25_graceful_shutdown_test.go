@@ -66,12 +66,9 @@ func TestAC25_GracefulShutdownKeepsInflightAccounting(t *testing.T) {
 		t.Fatal("stream did not produce message_start")
 	}
 	accountSlot := fmt.Sprintf("slot:account:%d", acct.ID)
-	userSlot := fmt.Sprintf("slot:user:%d", tn.User.UserID)
+	// (There are no user slots: concurrency is per account, CONTRACTS §78.)
 	if got := e.Redis("ZCARD", accountSlot); got != "1" {
 		t.Fatalf("in-flight stream must hold one account slot, got %q", got)
-	}
-	if got := e.Redis("ZCARD", userSlot); got != "1" {
-		t.Fatalf("in-flight stream must hold one user slot, got %q", got)
 	}
 	select {
 	case result := <-done:
@@ -129,12 +126,17 @@ func TestAC25_GracefulShutdownKeepsInflightAccounting(t *testing.T) {
 	wantCost := ExpectedTokenCost(RunPrice, MockInputTokens, MockOutputTokens, MockCacheReadTokens, MockCacheCreationTokens, 0, 1)
 	assertAccounting := func() {
 		t.Helper()
-		// Check PG immediately after clean EOF, before the API helper's retry:
-		// Execute must acknowledge recording before completing the response.
-		rows := e.SQL(fmt.Sprintf(`SELECT count(*), count(*) FILTER (WHERE request_id=%s AND billing_status='billed') FROM usage_logs WHERE user_id=%d`, sqlText(requestID), tn.User.UserID))
-		if len(rows) != 1 || rows[0] != "1|1" {
-			t.Fatalf("clean EOF requires exactly one committed, billed usage record: %v", rows)
-		}
+		// The draining node commits the record: forwarding v2 sends the usage
+		// of a host_usage request to the asynchronous settlement after the
+		// answer ends (as normal forwarding did), so it lands shortly after
+		// EOF, while the node drains - exactly one, billed.
+		var rows []string
+		Eventually(t, 15*time.Second, 200*time.Millisecond, func() string {
+			return fmt.Sprintf("exactly one committed, billed usage record after clean EOF: %v", rows)
+		}, func() bool {
+			rows = e.SQL(fmt.Sprintf(`SELECT count(*), count(*) FILTER (WHERE request_id=%s AND billing_status='billed') FROM usage_logs WHERE user_id=%d`, sqlText(requestID), tn.User.UserID))
+			return len(rows) == 1 && rows[0] == "1|1"
+		})
 		u := e.UsageByRequest(admin, tn.User.UserID, requestID)
 		if u.Get("billing_status").String() != "billed" || !u.Get("success").Bool() || u.Get("account_id").Int() != acct.ID || u.Get("node_id").String() != "node-2" {
 			t.Fatalf("drained request was not billed successfully by its original node: %s", u.Raw)
@@ -152,7 +154,7 @@ func TestAC25_GracefulShutdownKeepsInflightAccounting(t *testing.T) {
 	}
 	assertAccounting()
 	Eventually(t, 10*time.Second, 200*time.Millisecond, "drained request releases account and user slots", func() bool {
-		return e.Redis("ZCARD", accountSlot) == "0" && e.Redis("ZCARD", userSlot) == "0"
+		return e.Redis("ZCARD", accountSlot) == "0"
 	})
 	// Waiting for stopped state verifies full shutdown, not merely a closed
 	// listener. Exit 0 and OOMKilled=false distinguish it from forced death.

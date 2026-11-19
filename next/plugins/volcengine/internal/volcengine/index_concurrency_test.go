@@ -38,11 +38,9 @@ func TestIndexOperationsKeepUpstreamOrder(t *testing.T) {
 				}
 				// A second process would have its own plugin object, with the same DB.
 				p2 := New()
-				p2.SetDialer(f.dialer())
 				if err := p2.Init(ctx, h); err != nil {
 					t.Fatal(err)
 				}
-				defer p2.Shutdown(context.Background())
 				firstEntered, secondEntered, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
 				var releaseOnce sync.Once
 				unpause := func() { releaseOnce.Do(func() { close(release) }) }

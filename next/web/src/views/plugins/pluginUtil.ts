@@ -1,7 +1,7 @@
 // Shared helpers and DTOs of the plugin pages (list, consent, detail,
 // rollout, market). Shapes not frozen by CONTRACTS.md are typed loosely and
 // read tolerantly (camelCase or snake_case).
-import type { LText, PluginRoleGrant, PluginSummary, Trust, ResourceConflict } from '@/api/types'
+import type { LText, PluginRefusal, PluginRoleGrant, PluginSummary, Trust, ResourceConflict } from '@/api/types'
 import type { Tone } from '@sub2api/ui'
 import { useOptionalT } from '@/composables/optionalText'
 
@@ -21,9 +21,9 @@ export const HOST_PERMISSION_RISK: Record<string, Risk> = {
   jobs: 'medium',
   'ui.menu': 'medium',
   'ui.iframe': 'medium',
-  'accounts.read': 'medium',
   'authz.read': 'medium',
   lock: 'medium',
+  'fs.data': 'medium',
   'db.schema': 'high',
   net: 'high',
   'routes.public': 'high',
@@ -37,7 +37,6 @@ export const HOST_PERMISSION_RISK: Record<string, Risk> = {
   'notify.send': 'high',
   'gateway.observe': 'high',
   'users.read': 'high',
-  'accounts.credentials': 'critical',
   'ledger.credit': 'critical',
   'ledger.debit': 'critical',
   'ui.native': 'critical',
@@ -80,6 +79,12 @@ export function shownStatus(p: { status: string; resource_conflicts?: ResourceCo
 /** One line per conflict: "platform video: <reason>". */
 export function conflictLines(p: { resource_conflicts?: ResourceConflict[] | null }): string[] {
   return (p.resource_conflicts || []).map((c) => `${c.resource} ${c.id}: ${c.reason}`)
+}
+
+/** The refusal to load a plugin, localised when its code is known (the runtime's text otherwise). */
+export function refusalText(t: (key: string, named: Record<string, unknown>) => string, key: string, r: PluginRefusal): string {
+  if (r.code !== 'outdated_contract') return r.message
+  return t('plugins.refusal.outdated_contract', { key, version: r.version, host: r.host_version, protocol: r.protocol_version, first: r.first_core_version })
 }
 
 /**
@@ -178,22 +183,6 @@ export function endpointText(e: Record<string, any>): string {
   return head ? (proto ? `${head} (${proto})` : head) : display(e)
 }
 
-/**
- * Field errors of PUT /plugins/:key/settings -> SchemaForm paths. Schema
- * errors are JSON pointers under "values" (values/a/0/b), plugin errors may
- * be dotted (values.a.0.b); errors of the whole object come back in `root`.
- */
-export function settingsFieldErrors(fields: Record<string, string>): { fields: Record<string, string>; root: string[] } {
-  const out: Record<string, string> = {}
-  const root: string[] = []
-  for (const [k, v] of Object.entries(fields)) {
-    const p = k.replace(/^values(?=[./]|$)/, '').replace(/^[./]/, '').replace(/\//g, '.')
-    if (p) out[p] = v
-    else root.push(v)
-  }
-  return { fields: out, root }
-}
-
 export interface AccountTypeSummary {
   id: string
   label: LText | undefined
@@ -205,7 +194,7 @@ export interface AccountTypeSummary {
 /**
  * Account types declared by a plugin: top-level `account_types` of a review
  * or manifest summary (CONTRACTS §13). Platforms may be ids or manifest
- * objects ({platform, requestFields, ...}).
+ * objects ({platform, endpoints, ...}).
  */
 export function accountTypesOf(o: unknown): AccountTypeSummary[] {
   return asArray<Record<string, any>>(pick(o, 'account_types', 'accountTypes')).map((a) => ({
@@ -397,6 +386,8 @@ export interface PluginDetail {
   /** Ships with the image: can be disabled, not uninstalled. */
   builtin?: boolean
   status_reason?: string
+  /** Set when nodes refuse to load the plugin (built for an older plugin contract). */
+  refusal?: PluginRefusal | null
   active_version?: string | null
   desired_version?: string | null
   publisher?: string
@@ -415,20 +406,21 @@ export interface PluginDetail {
 /**
  * Where the installed plugins list opens a plugin's settings; neither the
  * sidebar nor system settings lists them (CONTRACTS §90): the settings tab of
- * the detail page for the form the console renders (has_settings is false for
- * native settings, §75.5); undefined without one.
+ * the detail page (has_settings: native ui.settings; settings
+ * edited on a plugin page of their own are sent there, nativeSettingsPath);
+ * undefined without settings.
  */
 export function consoleSettingsPath(p: Pick<PluginSummary, 'key' | 'has_settings'>): string | undefined {
   return p.has_settings ? `/plugins/${encodeURIComponent(p.key)}?tab=settings` : undefined
 }
 
 export interface PluginSettings {
-  /** schema: the console renders the form; native: the plugin edits them on its own page (ui.settings.page, §75.5). */
+  /** native: the plugin's component (on the settings tab), or its own page (ui.settings.page, §75.5). */
   mode?: string
   /** The plugin page (ui.pages key) holding native settings. */
   page?: string
-  schema: Record<string, any> | null
-  ui_schema?: Record<string, any> | null
+  /** Native settings without a page: the component the plugin registered for them, shown on the settings tab. */
+  component?: string
   values: Record<string, any> | null
   /** RBAC key of manifest ui.settings.permission: its holders may edit these settings too. */
   permission?: string
@@ -441,9 +433,12 @@ export function isPendingConsent(s: string | undefined): boolean {
   return s === 'pending' || s === 'awaiting_consent' || s === 'awaiting'
 }
 
-/** Settings the console renders as a schema form; native settings, even with a schema, live on the plugin's page (§75.5). */
+/**
+ * Settings the settings tab shows: the component of native settings that have
+ * no page of their own; native settings with a page live on that page (§75.5).
+ */
 export function consoleSettings(s: PluginSettings | null | undefined): PluginSettings | null {
-  return s && s.schema && (s.mode ?? 'schema') === 'schema' ? s : null
+  return s?.mode === 'native' && s.component && !s.page ? s : null
 }
 
 /** A plugin's settings form on a page of its own: for holders of the plugin's settings permission alone, and for old links. */

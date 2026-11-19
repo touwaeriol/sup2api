@@ -19,12 +19,14 @@ const props = defineProps<{
 const { t } = useI18n()
 const auth = useAuthStore()
 const metrics = ref<Record<string, string>>({})
+// The token variables of the price, and the image tokens an expression may price apart (img, img_o; CONTRACTS §118).
+const TRIAL_VARS = [...TOKEN_VARS, 'img', 'img_o'] as const
 function videoSample(estimated: boolean) {
-  Object.assign(usage, { p: 0, c: 100000, cr: 0, cc: 0, cc1h: 0 })
+  Object.assign(usage, { p: 0, c: 100000, cr: 0, cc: 0, cc1h: 0, img: 0, img_o: 0 })
   metrics.value = { video_seconds: '5', video_width: '1280', video_height: '720', video_pixels: '921600', video_input: 'false', video_estimated: String(estimated) }
 }
 
-const usage = reactive<Record<string, number | null>>({ p: 100000, c: 2000, cr: 80000, cc: 0, cc1h: 0 })
+const usage = reactive<Record<string, number | null>>({ p: 100000, c: 2000, cr: 80000, cc: 0, cc1h: 0, img: 0, img_o: 0 })
 const len = ref<number | null>(null)
 const headers = ref<Record<string, string>>({})
 const params = ref<Record<string, string>>({})
@@ -37,7 +39,7 @@ const loading = ref(false)
 let seq = 0
 let timer: ReturnType<typeof setTimeout> | undefined
 
-const defaultLen = computed(() => ['p', 'cr', 'cc', 'cc1h'].reduce((s, k) => s + (Number(usage[k]) || 0), 0))
+const defaultLen = computed(() => ['p', 'cr', 'cc', 'cc1h', 'img'].reduce((s, k) => s + (Number(usage[k]) || 0), 0))
 
 function parseParam(v: string): unknown {
   try {
@@ -54,7 +56,7 @@ async function run() {
   loading.value = true
   error.value = ''
   const u: Record<string, number> = {}
-  for (const k of TOKEN_VARS) u[k] = Number(usage[k]) || 0
+  for (const k of TRIAL_VARS) u[k] = Number(usage[k]) || 0
   if (len.value !== null) u.len = len.value
   const body: Record<string, unknown> = {
     ...props.source,
@@ -96,8 +98,8 @@ const resultLen = computed(() => (result.value?.breakdown as { vars?: { len?: nu
 
 <template>
   <div class="space-y-4">
-    <SGrid :cols-base="2" :cols="3" :lg-cols="6" :gap="3">
-      <label v-for="k in TOKEN_VARS" :key="k" class="text-xs">
+    <SGrid :cols-base="2" :cols="4" :gap="3">
+      <label v-for="k in TRIAL_VARS" :key="k" class="text-xs">
         <SHint inline size="xs">{{ t(`prices.vars.${k}`) }}</SHint>
         <SInput v-model.number="usage[k]" size="sm" type="number" min="0" class="mt-1" />
       </label>

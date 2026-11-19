@@ -254,6 +254,25 @@ describe('shared usage search', () => {
     i18n.global.locale.value = locale
   })
 
+  it('offers the unreported executions (usage_unreported) as an error type and names them on the chip (design §8.5)', async () => {
+    const locale = i18n.global.locale.value
+    i18n.global.locale.value = 'zh'
+    for (const view of ['all', 'self', 'account'] as const) {
+      const w = mount(UsageFilters, { props: { modelValue: { error_type: 'usage_unreported' }, view, logType: 'errors' }, global })
+      const field = w.get('[data-testid="filter-error_type"]')
+      const list = w.get('[data-testid="filter-error_type-suggestions"]')
+      expect(field.attributes('list')).toBe(list.attributes('id'))
+      expect(list.find('option[value="usage_unreported"]').attributes('label')).toBe('未上报用量（未计费）')
+      expect(w.get('[data-filter-key="error_type"]').text()).toContain('错误类型：未上报用量（未计费）')
+      await w.get('form').trigger('submit')
+      expect(applied(w)).toMatchObject({ error_type: 'usage_unreported' })
+    }
+    // a type the console does not word shows as typed
+    const w = mount(UsageFilters, { props: { modelValue: { error_type: 'rate_limit' }, view: 'all', logType: 'errors' }, global })
+    expect(w.get('[data-filter-key="error_type"]').text()).toContain('错误类型：rate_limit')
+    i18n.global.locale.value = locale
+  })
+
   it('selects the request type behind More filters from the types under the search, keeping a preset one', async () => {
     const w = mount(UsageFilters, { props: { view: 'self', modelValue: { protocol: 'vid.gen' }, protocolOptions: ['anthropic.messages', 'openai.chat'] }, global })
     expect(inAdvanced(w, 'protocol')).toBe(true)

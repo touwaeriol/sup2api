@@ -4,15 +4,19 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
+	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest/check"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/platforms"
+	pluginpkg "github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/pkg"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/registry"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/registry/registrytest"
 )
@@ -28,9 +32,6 @@ type stub struct{}
 
 func (stub) ValidateCredentials(context.Context, *pluginv1.ValidateCredentialsRequest) (*pluginv1.ValidateCredentialsResponse, error) {
 	return &pluginv1.ValidateCredentialsResponse{}, nil
-}
-func (stub) BuildUpstreamRequest(context.Context, *pluginv1.BuildUpstreamRequestRequest) (*pluginv1.BuildUpstreamRequestResponse, error) {
-	return nil, nil
 }
 func (stub) ClassifyError(context.Context, *pluginv1.ClassifyErrorRequest) (*pluginv1.ClassifyErrorResponse, error) {
 	return nil, nil
@@ -59,17 +60,6 @@ func (stub) RankAccounts(context.Context, *pluginv1.RankAccountsRequest) (*plugi
 func (stub) ResolveModel(context.Context, *pluginv1.ResolveModelRequest) (*pluginv1.ResolveModelResponse, error) {
 	return nil, nil
 }
-func (stub) ParseTaskSubmission(context.Context, *pluginv1.ExtractUsageRequest) (*pluginv1.TaskSubmission, error) {
-	return nil, nil
-}
-func (stub) ExtractUsage(context.Context, *pluginv1.ExtractUsageRequest) (*pluginv1.UsageReport, error) {
-	return nil, nil
-}
-
-func (stub) BuildReconcileRequest(context.Context, *pluginv1.BuildReconcileRequestRequest) (*pluginv1.BuildReconcileRequestResponse, error) {
-	return nil, nil
-}
-
 func (stub) BuildQuotaRequest(context.Context, *pluginv1.BuildQuotaRequestRequest) (*pluginv1.BuildQuotaRequestResponse, error) {
 	return nil, nil
 }
@@ -78,7 +68,11 @@ func (stub) ParseQuotaResponse(context.Context, *pluginv1.ParseQuotaResponseRequ
 	return nil, nil
 }
 
-func (stub) ParseReconcileResponse(context.Context, *pluginv1.ParseReconcileResponseRequest) (*pluginv1.ReconcileResult, error) {
+func (stub) BuildBalanceRequest(context.Context, *pluginv1.BuildBalanceRequestRequest) (*pluginv1.BuildBalanceRequestResponse, error) {
+	return nil, nil
+}
+
+func (stub) ParseBalanceResponse(context.Context, *pluginv1.ParseBalanceResponseRequest) (*pluginv1.ParseBalanceResponseResponse, error) {
 	return nil, nil
 }
 
@@ -210,12 +204,11 @@ func TestGenerationBuildAndSwitch(t *testing.T) {
 
 	pa, pb := load(t, a), load(t, b)
 	grantsA := registry.Grants{
-		"gateway.hook":         []byte(`{"points":["gateway.request"],"fields":["model"]}`),
-		"routes.admin":         []byte(`{}`),
-		"routes.public":        []byte(`{}`),
-		"jobs":                 []byte(`{}`),
-		"events":               []byte(`{"subscribe":["usage.recorded"]}`),
-		"accounts.credentials": []byte(`{"types":"own"}`),
+		"gateway.hook":  []byte(`{"points":["gateway.request"],"fields":["model"]}`),
+		"routes.admin":  []byte(`{}`),
+		"routes.public": []byte(`{}`),
+		"jobs":          []byte(`{}`),
+		"events":        []byte(`{"subscribe":["usage.recorded"]}`),
 	}
 	g := reg.Publish([]registry.Extension{ext{pkg: pb, grants: registry.Grants{}}, ext{pkg: pa, grants: grantsA}})
 	if g.Number() != 1 || len(seen) != 1 || reg.Current() != g {
@@ -256,7 +249,7 @@ func TestGenerationBuildAndSwitch(t *testing.T) {
 		t.Fatalf("subscriptions = %+v", subs)
 	}
 
-	// Platforms and account types with forms read from the package.
+	// Platforms and account types.
 	for _, key := range []string{"alpha", "beta"} {
 		pb, ok := g.PlatformForProtocol("p_" + key + ".test")
 		if !ok || pb.Builtin || pb.Plugin.Key != key || pb.Platform.ID != "p_"+key {
@@ -264,7 +257,7 @@ func TestGenerationBuildAndSwitch(t *testing.T) {
 		}
 	}
 	at, ok := g.AccountType("alpha", "apikey")
-	if !ok || len(at.FormSchema) == 0 || len(at.FormUI) == 0 || at.Client == nil || at.Key() != (core.AccountTypeKey{PluginKey: "alpha", Type: "apikey"}) {
+	if !ok || at.Client == nil || at.Key() != (core.AccountTypeKey{PluginKey: "alpha", Type: "apikey"}) {
 		t.Fatalf("account type = %+v", at)
 	}
 	if _, ok := g.AccountType("p_alpha", "apikey"); ok {
@@ -317,13 +310,12 @@ func TestAccountTypesManyToMany(t *testing.T) {
 	noAdapter := registrytest.Manifest("noadapter", "1.0.0")
 
 	reg := registry.New()
-	creds := registry.Grants{"accounts.credentials": []byte(`{"types":"own"}`)}
-	// Without the accounts.credentials grant the account types are not
-	// registered either (the plugin would never receive credentials).
+	// No grant is needed: the plugin receives the accounts of the types it
+	// declares (CONTRACTS §124).
 	noGrant := registrytest.Manifest("nogrant", "1.0.0")
 	g := reg.Publish([]registry.Extension{
-		ext{pkg: load(t, relay), grants: creds}, ext{pkg: load(t, noAdapter), noPlatform: true, grants: creds},
-		ext{pkg: load(t, platform), grants: creds}, ext{pkg: load(t, noGrant)},
+		ext{pkg: load(t, relay)}, ext{pkg: load(t, noAdapter), noPlatform: true},
+		ext{pkg: load(t, platform)}, ext{pkg: load(t, noGrant)},
 	})
 
 	var keys []string
@@ -333,14 +325,14 @@ func TestAccountTypesManyToMany(t *testing.T) {
 			t.Fatalf("%v: client is nil", b.Key())
 		}
 	}
-	if want := "anth/apikey anth/oauth relay/zkey relay/akey"; strings.Join(keys, " ") != want {
+	if want := "anth/apikey anth/oauth nogrant/apikey relay/zkey relay/akey"; strings.Join(keys, " ") != want {
 		t.Fatalf("account types = %v, want %s", keys, want)
 	}
 	if _, ok := g.AccountType("noadapter", "apikey"); ok {
 		t.Fatal("account types of a plugin without platform.adapter.v1 must not be registered")
 	}
-	if _, ok := g.AccountType("nogrant", "apikey"); ok {
-		t.Fatal("account types of a plugin without the accounts.credentials grant must not be registered")
+	if _, ok := g.AccountType("nogrant", "apikey"); !ok {
+		t.Fatal("account types of a plugin holding no grant must be registered")
 	}
 	if b, ok := g.AccountType("relay", "zkey"); !ok || b.Plugin.Key != "relay" {
 		t.Fatalf("relay/zkey = %+v %v", b, ok)
@@ -614,7 +606,7 @@ func TestUnknownPlatformOfAccountTypeWarns(t *testing.T) {
 	log := captureWarnings(t)
 	reg := registry.New()
 	g := reg.Publish([]registry.Extension{
-		ext{pkg: load(t, m), grants: registry.Grants{"accounts.credentials": []byte(`{"types":"own"}`)}},
+		ext{pkg: load(t, m)},
 	})
 	// The binding is kept either way: the platform may arrive later.
 	if len(g.AccountTypesForPlatform("volcegnine")) != 1 {
@@ -648,48 +640,162 @@ func (stub) ParseRefreshResponse(context.Context, *pluginv1.ParseRefreshResponse
 	return nil, nil
 }
 
-// An account type declaring its upstream is served by the core: it needs
-// neither platform.adapter.v1 nor the accounts.credentials grant, unless it
-// extends (the plugin then amends each request and sees credentials). A
-// declaration that does not resolve drops the type.
-func TestDeclaredAccountTypes(t *testing.T) {
-	declared := func(key string) *manifest.Manifest {
-		m := registrytest.Manifest(key, "1.0.0")
-		m.Platforms = nil
-		m.AccountTypes = nil
-		for _, at := range []struct {
-			id string
-			up *manifest.Upstream
-		}{
-			{"plain", &manifest.Upstream{Preset: "openai"}},
-			{"extended", &manifest.Upstream{Preset: "openai", Extend: true}},
-			{"broken", &manifest.Upstream{Preset: "nope"}},
-		} {
-			m.AccountTypes = append(m.AccountTypes, manifest.AccountType{ID: at.id, Label: manifest.LocalizedText{"en": at.id},
-				Form: manifest.Form{Mode: "native", Component: "X"}, Upstream: at.up,
-				Platforms: []manifest.AccountPlatform{{Platform: manifest.PlatformOpenAI}}})
-		}
-		return m
-	}
-	creds := registry.Grants{"accounts.credentials": []byte(`{"types":"own"}`)}
+// Another plugin's account type does not serve a platform whose usage or
+// task facts the declaring plugin states (usageSource "plugin", a task
+// submission): only that plugin's Execute can read them (forwarding v2,
+// design 4.3). Its own types and the other platforms it serves stay.
+func TestForeignFactsAccountTypeSkipped(t *testing.T) {
+	video := registrytest.Manifest("video", "1.0.0")
+	video.Platforms[0].Endpoints[0].UsageSource = manifest.UsageSourcePlugin
+	relay := registrytest.Manifest("relay", "1.0.0")
+	relay.AccountTypes[0].Platforms = append(relay.AccountTypes[0].Platforms, manifest.AccountPlatform{Platform: "p_video"})
 	g := registry.New().Publish([]registry.Extension{
-		ext{pkg: load(t, declared("bare")), noPlatform: true},
-		ext{pkg: load(t, declared("full")), grants: creds},
+		ext{pkg: load(t, video)}, ext{pkg: load(t, relay)},
 	})
-	var keys []string
+	typesFor := func(platformID string) (out []string) {
+		for _, b := range g.AccountTypesForPlatform(platformID) {
+			out = append(out, b.Plugin.Key+"/"+b.Type.ID)
+		}
+		return out
+	}
+	if got := typesFor("p_video"); !slices.Equal(got, []string{"video/apikey"}) {
+		t.Fatalf("p_video types = %v", got)
+	}
+	if got := typesFor("p_relay"); !slices.Equal(got, []string{"relay/apikey"}) {
+		t.Fatalf("p_relay types = %v", got)
+	}
+	// The binding itself no longer lists the platform: whoever asks the type
+	// what it serves (routing, the cross-platform judgement of a protocol
+	// binding, the served protocols) reads what the registry bound.
 	for _, b := range g.AccountTypes() {
-		keys = append(keys, b.Plugin.Key+"/"+b.Type.ID)
-		if _, ok := b.Client.(core.DeclaredUpstream); !ok {
-			t.Fatalf("%v: client %T is not the declarative client", b.Key(), b.Client)
-		}
-		if _, ok := b.Client.(core.ExecutePlugin); ok {
-			t.Fatalf("%v: the declarative client must not execute requests", b.Key())
+		if _, ok := b.Supports("p_video"); ok && b.Plugin.Key == "relay" {
+			t.Fatalf("relay/apikey still serves p_video: %+v", b.Type.Platforms)
 		}
 	}
-	if want := "bare/plain full/plain full/extended"; strings.Join(keys, " ") != want {
-		t.Fatalf("account types = %v, want %s", keys, want)
+	if b, _ := g.AccountType("relay", "apikey"); len(b.Type.Platforms) != 1 {
+		t.Fatalf("AccountType keeps p_video: %+v", b.Type.Platforms)
 	}
-	if b, ok := g.AccountType("full", "plain"); !ok || len(g.AccountTypesForPlatform(manifest.PlatformOpenAI)) != 3 || b.Client.(core.DeclaredUpstream).AuthHeader() != "authorization" {
-		t.Fatalf("full/plain = %+v %v", b, ok)
+	if len(relay.AccountTypes[0].Platforms) != 2 {
+		t.Fatal("the manifest was changed")
+	}
+}
+
+func (stub) Execute(context.Context, *pluginv1.ExecuteRequest, core.ExecutionClient) (core.ExecutionResult, error) {
+	return core.ExecutionResult{}, errors.New("stub does not execute requests")
+}
+
+func (stub) Monitor(context.Context, *pluginv1.PollRequest, core.ExecutionHTTP) (*pluginv1.ReconcileResult, error) {
+	return nil, errors.New("stub does not monitor tasks")
+}
+
+// chatToResponses converts openai.chat to openai.responses only.
+type chatToResponses struct{}
+
+func (chatToResponses) Conversion(client, upstream string) (core.Conversion, bool) {
+	return core.Conversion{Rank: 1, Grade: "good", Hops: []string{client, upstream}}, client == "openai.chat" && upstream == "openai.responses"
+}
+
+// An account type's adapted endpoints need a core conversion to an endpoint
+// of its subset: a type listing one the core cannot convert is not bound
+// (CONTRACTS §121.1); without converters none listing any is.
+func TestAdaptedNeedsConverter(t *testing.T) {
+	bound := func(reg *registry.Registry, adapted ...string) bool {
+		m := registrytest.Manifest("cx", "1.0.0")
+		ap := manifest.AccountPlatform{Platform: manifest.PlatformOpenAI, Endpoints: []string{"responses"}, Adapted: map[string]manifest.AdaptOptions{}}
+		for _, id := range adapted {
+			ap.Adapted[id] = manifest.AdaptOptions{}
+		}
+		m.AccountTypes[0].Platforms = []manifest.AccountPlatform{ap}
+		g := reg.Publish([]registry.Extension{ext{pkg: load(t, m)}})
+		_, ok := g.AccountType("cx", m.AccountTypes[0].ID)
+		return ok && len(g.AccountTypesForPlatform(manifest.PlatformOpenAI)) == 1
+	}
+	conv := registry.WithConverters(chatToResponses{})
+	if !bound(registry.New(conv)) || !bound(registry.New(conv), "chat_completions") {
+		t.Fatal("a type whose adapted endpoints convert must be bound")
+	}
+	if bound(registry.New(conv), "chat_completions", "images_generations") {
+		t.Fatal("a type with an adapted endpoint the core does not convert was bound")
+	}
+	if bound(registry.New(), "chat_completions") {
+		t.Fatal("without converters a type listing adapted endpoints was bound")
+	}
+}
+
+// settingsExt is an extension whose process checks settings, as every
+// grpcruntime instance does.
+type settingsExt struct{ ext }
+
+func (settingsExt) SettingsValidator() core.SettingsValidator { return settingsStub{} }
+
+type settingsStub struct{}
+
+func (settingsStub) ValidateSettings(context.Context, *pluginv1.ValidateSettingsRequest) (*pluginv1.ValidateSettingsResponse, error) {
+	return &pluginv1.ValidateSettingsResponse{}, nil
+}
+
+// Every enabled plugin whose extension offers the settings check has it in
+// the generation, whatever its grants or capabilities.
+func TestSettingsValidator(t *testing.T) {
+	m, other := registrytest.Manifest("mailer", "1.0.0"), registrytest.Manifest("plain", "1.0.0")
+	m.Platforms, other.Platforms = nil, nil
+	g := registry.New().Publish([]registry.Extension{settingsExt{ext{pkg: load(t, m)}}, ext{pkg: load(t, other)}})
+	if v, ok := g.SettingsValidator("mailer"); !ok || v == nil {
+		t.Fatalf("mailer = %v %v", v, ok)
+	}
+	if _, ok := g.SettingsValidator("plain"); ok {
+		t.Fatal("an extension without the check has none")
+	}
+	if _, ok := g.SettingsValidator("missing"); ok {
+		t.Fatal("a plugin not in the generation has none")
+	}
+}
+
+// oldUIManifest is an installed package of the contract before the
+// declarative UI was removed: a schema account form, schema settings and
+// table and form pages.
+const oldUIManifest = `{
+  "apiVersion": 1, "key": "oldui", "version": "0.4.0", "publisher": "sub2api", "runtime": "grpc",
+  "entry": {"grpc": {"binaries": "runtimes/{os}-{arch}/plugin"}},
+  "hostCompat": ">=0.1.0",
+  "capabilities": [{"id": "platform.adapter.v1"}],
+  "hostPermissions": [{"id": "platform.register"}],
+  "accountTypes": [{"id": "relay_key", "label": {"en": "Relay key"},
+    "form": {"mode": "schema", "schema": "forms/relay_key.schema.json", "uiSchema": "forms/relay_key.ui.json"},
+    "platforms": [{"platform": "anthropic"}]}],
+  "ui": {
+    "pages": {
+      "assets": {"type": "table", "title": {"en": "Assets"}, "source": "GET /assets",
+        "create": {"page": "new_asset"}, "columns": [{"key": "id", "label": {"en": "#"}, "format": "text"}]},
+      "new_asset": {"type": "form", "title": {"en": "New asset"}, "schema": "forms/asset.schema.json", "submit": "POST /assets"}
+    },
+    "settings": {"mode": "schema", "schema": "forms/settings.schema.json", "uiSchema": "forms/settings.ui.json"}
+  }
+}`
+
+// An installed package with the removed declarative UI still loads: it is
+// not refused as an outdated contract, the core's lenient decoding reads it
+// and it takes part in a generation (only its forms and pages are not
+// rendered).
+func TestOldUIPackageLoads(t *testing.T) {
+	raw := []byte(oldUIManifest)
+	m, err := pluginpkg.ParseManifest(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg, outdated := check.OutdatedPackage(m, raw, "0.1.400"); outdated {
+		t.Fatalf("refused as outdated: %s", msg)
+	}
+	p, err := registry.LoadPackage(t.TempDir(), registrytest.Package(t, m, []byte("bin"), map[string][]byte{"manifest.json": raw}), "sub2api", "official")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+	g := registry.New().Publish([]registry.Extension{ext{pkg: p}})
+	if info, ok := g.Plugin("oldui"); !ok || len(info.Conflicts) != 0 {
+		t.Fatalf("plugin = %+v %v", info, ok)
+	}
+	if b, ok := g.AccountType("oldui", "relay_key"); !ok || b.Type.Form.Mode != "schema" {
+		t.Fatalf("account type = %+v %v", b, ok)
 	}
 }

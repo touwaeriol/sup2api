@@ -49,3 +49,14 @@ export function useUiLocale(): () => string {
     return () => 'en'
   }
 }
+
+/** Picks `locale` from a localized text ({en, zh} or a bare string), falling back to en. */
+export function localizedText(v: unknown, locale = 'en'): string {
+  if (v === null || v === undefined) return ''
+  if (typeof v === 'string') return v
+  if (typeof v === 'object') {
+    const o = v as Record<string, string>
+    return o[locale] || o.en || Object.values(o)[0] || ''
+  }
+  return String(v)
+}

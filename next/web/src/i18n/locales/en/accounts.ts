@@ -68,7 +68,7 @@ export default {
     noModelMatch: 'No matching models',
     addModels: 'Add',
     groupModelHint: 'Account models and group allowlists apply separately. The API Key group must also allow the request model.',
- authMethod: 'Authentication method', connection: 'Connection', connectionHint: 'Name, groups and credentials', models: 'Models', modelsHint: 'Available models and aliases', scheduling: 'Scheduling & limits', schedulingHint: 'Priority, concurrency and usage', advanced: 'Advanced', navigation: 'Account configuration', searchTypes: 'Search providers or account types',
+ authMethod: 'Authentication method', connection: 'Connection', connectionHint: 'Name, groups and credentials', models: 'Protocols & models', modelsHint: 'Protocols served, available models and aliases', scheduling: 'Scheduling & limits', schedulingHint: 'Priority, concurrency and usage', advanced: 'Advanced', navigation: 'Account configuration', searchTypes: 'Search providers or account types',
     unnamed: 'No name yet', allModels: 'All models', modelsSummary: '{n} models', mappingSummary: '{n} mappings', summaryPriority: 'Priority {n}', summaryWeight: 'Weight {n}', summaryConcurrency: 'Concurrency {n}', pluginSectionAfterSave: 'Available after the account is saved', sectionHasErrors: 'Something here needs fixing',
     basicHint: 'Account name, groups and egress proxy', namePlaceholder: 'e.g. claude-main', groupsHint: 'Accounts outside every group are never scheduled', credentialsHint: 'Credentials are validated and stored by the {plugin} plugin',
     modelsCardHint: 'Request models the account serves; empty means no restriction', mappingCardHint: 'Rewrites request models to upstream models; billing and allowlists still use the request model', prefilled: 'Prefilled with the plugin preset: {what}. Save as is or adjust; an empty model list serves every model.',
@@ -79,7 +79,7 @@ export default {
     schedulingCardHint: 'Decides the order accounts are picked in, whether they take requests and whether errors disable them', schedulableHint: 'When off the account is kept but receives no requests', autoDisableHint: 'Disable the account when the upstream reports invalid credentials, exhausted quota and similar errors (rules under Settings → Scheduling policy → Automatic disabling). When off the account is only cooled down for 60 seconds', limitsHint: 'Concurrency counts the requests in progress, RPM and TPM the last 60 seconds, sessions their period: once any limit is reached the account is skipped until its usage falls back; 0 means unlimited',
     commonControlFixed: 'The plugin makes this read-only. Existing accounts keep their current setting.', commonControlLocked: 'The plugin fixes this to its preset value.', commonControlLockedPending: 'The plugin fixes this to its preset value; saving changes it to {value}.',
     autoDisableGlobalOff: 'Automatic disabling is globally off. This switch has no effect and cannot be changed; the account preference is preserved.', autoDisableUnavailable: 'Unable to load the global automatic disabling setting. This switch cannot be changed for now; the account preference is preserved.',
-    unitConcurrency: 'requests', unitRpm: 'req / min', unitTpm: 'tokens / min', unitTpd: 'tokens / day', create: 'Create account', noCredentials: 'This account type has no credential fields to fill in here.', modelsInputHint: 'Type or pick a model, Enter or comma adds it, paste comma or line separated lists; click a tag to copy it, mapped models show → target' },
+    unitConcurrency: 'requests', unitRpm: 'req / min', unitTpm: 'tokens / min', unitTpd: 'tokens / day', create: 'Create account', modelsInputHint: 'Type or pick a model, Enter or comma adds it, paste comma or line separated lists; click a tag to copy it, mapped models show → target' },
   title: 'Accounts',
   subtitle: 'Upstream accounts used by the gateway. Account types are declared by plugins; a group can mix accounts of different types.',
   new: 'New account',
@@ -166,9 +166,73 @@ export default {
     convertedGrade: 'Converted · {grade}',
     categories: { tool: 'Tools', reasoning: 'Reasoning', image: 'Images', other: 'Other' }
   },
+  protocols: {
+    names: {
+      openai: { chat: 'Chat Completions', responses: 'Responses', responses_ws: 'Responses WebSocket', embeddings: 'Embeddings', images: 'Images', images_edit: 'Image Edits' },
+      anthropic: { messages: 'Messages' },
+      gemini: { generate: 'generateContent', stream_generate: 'streamGenerateContent' }
+    },
+    own: {
+      title: 'Own protocols', titleOf: 'Own protocols ({platforms})', subtitle: 'Which protocols this account takes requests on',
+      all: 'All', custom: 'Chosen', modeHint: '"All" includes protocols the account type adds later; "Chosen" opens only the ticked ones',
+      native: 'Native', adapted: 'Adapted → {target}', adaptedShort: 'Adapted',
+      closed: 'Chosen: {n} own protocol(s) are closed. Protocols the account type adds later will not open by themselves either.',
+      crossHint: 'Protocols of other platforms are not served by default. To convert, choose models under "Protocols per model" below and tick the conversion.',
+      none: 'This account type serves no protocol of its own platforms right now.',
+      unknown: 'These are no own protocols of this account type, and saving will be refused; remove them:'
+    },
+    rules: {
+      title: 'Protocols per model', subtitle: 'Choose models and the protocols they are served on',
+      views: { matrix: 'Matrix', list: 'List', json: 'JSON' },
+      model: 'Model', rest: 'Other models', restHint: 'every model not listed on its own',
+      groupOwn: 'Own platform ({platforms})', groupCross: 'Conversion (off by default)',
+      default: 'Default', followsRest: 'Follows other models', reset: 'Restore default', resetAll: 'Restore all defaults',
+      selectAll: 'Select all models', selectModel: 'Select {model}', cell: '{model} · {protocol}',
+      selected: '{n} model(s) selected', assign: 'Protocols:', apply: 'Apply to the selected models', clearSelection: 'Clear selection',
+      conversionChip: '{name} · conversion',
+      legendDefault: 'Light = default: not limited, forwarded on the protocol the client used, never converted', legendExplicit: 'Dark = set: served only on the ticked protocols',
+      legendFollowsRest: 'Light = not set on its own: follows the "Other models" row, served only on the protocols ticked there',
+      empty: 'Nothing limited: every model is served on the own protocols the account opens, without conversion.',
+      models: 'Models', protocols: 'Served on', removeEntry: 'Remove this set (restore default)',
+      add: 'New set', addPlaceholder: 'Pick or type a model, Enter starts a set', addRest: 'Set protocols for the other models',
+      jsonHint: 'Edit or paste. protocols null opens every own protocol; "*" stands for the other models. Gemini streaming and non-streaming are two protocol ids, shown as one column.',
+      jsonProblems: {
+        json: 'Invalid JSON',
+        shape: 'An object is needed: protocols is null or an array of protocols, model_protocols an array whose items hold a non-empty models array and a protocols array',
+        star: '"*" must be an entry of its own',
+        duplicate: 'Model listed twice: {model}'
+      },
+      entryError: 'Entry {n} ({models}): {message}'
+    },
+    issues: {
+      empty_rule: '{model}: tick at least one protocol, or restore the default.',
+      no_protocol: 'The account opens no protocol. To take it out of service use the "Schedulable" switch.',
+      closed_protocol: '{model} lists {protocol}, which the account does not open: it has no effect.',
+      unknown_protocol: '{model} lists {protocol}, which this account type cannot serve: saving will be refused.',
+      rest_conversion: 'The other models are converted: every model not listed on its own accepts the conversion, and a model name the upstream does not know may trigger the failure policy. Convert only models that have a mapping.',
+      two_hop: '{model} → {protocol}: converted twice, with poorer results.'
+    },
+    summary: { open: 'Protocols {open}/{total}', limited: '{n} model(s) limited', converting: '{n} converted', noConversion: 'no conversion' },
+    conversionOff: 'No conversion in use: no model is converted and no adapted protocol is open',
+    marks: {
+      partial: 'Partial {open}/{total}', converted: 'C',
+      own: '{platform}: {protocols}', ownAll: '{platform}: every own protocol ({protocols})', ownNone: '{platform}: no own protocol open',
+      adapted: '{name} (adapted)',
+      conversion: '{platform} {protocols} (converted): {n} model(s) {models}'
+    },
+    served: {
+      closed: 'Closed',
+      models: '{n} model(s): {models}', needsModel: 'Turned on per model on the account'
+    },
+    bulk: {
+      own: 'Own protocols', rules: 'Protocols per model',
+      replaceHint: 'Replaces what each account has',
+      mixedTypes: 'The selected accounts are of different account types (or of a type whose plugin is not enabled): protocols depend on the type, so only accounts of one type can be edited together'
+    }
+  },
   headerOverride: {
     title: 'Request header override',
-    hint: "Sets headers sent upstream by name, in the format of a new-api channel's header override, which can be pasted as is. A value is literal text, {'{client_header:name}'} (the client's value), {'{client_header:name:suffix}'} (the client's value with the suffix appended) or {'{unset}'} (removes it); a key * or regex:<pattern> passes client headers through. Applies after header passthrough and before the parameter override. Credentials, hop-by-hop headers, client addresses and gateway control headers cannot be overridden; {'{api_key}'} is not supported",
+    hint: "Sets headers sent upstream by name, in the format of a new-api channel's header override, which can be pasted as is. A value is literal text, {'{client_header:name}'} (the client's value), {'{client_header:name:suffix}'} (the client's value with the suffix appended) or {'{unset}'} (removes it); a key * or regex:<pattern> passes client headers through. Applies after header passthrough and before the parameter override. Credentials, hop-by-hop headers, client addresses and gateway control headers cannot be overridden; {'{api_key}'} is not supported. Headers a plugin declares authoritative are not affected either: for Codex and Volcengine accounts every header the plugin sets, for the others the credential header (and, on a signed AWS request, the headers the signature covers)",
     none: 'Not set',
     count: '{n} entries',
     edit: 'Edit',
@@ -448,6 +512,7 @@ export default {
   credentials: 'Credentials',
   orphanedEdit: 'The plugin that owns this account type is not enabled, so credentials cannot be edited. Basic information can still be changed.',
   formUnavailable: 'The plugin form could not be loaded.',
+  formUnavailableOld: "This plugin version's form is no longer supported. Upgrade the plugin.",
   noTypes: 'No account type is available. Enable a plugin that declares account types.',
   servesEndpoints: 'Serves endpoints',
   endpointCount: '{n} endpoint(s)',
@@ -458,6 +523,7 @@ export default {
   testConnection: 'Test connection',
   testActualModel: 'Model used',
   testUpstream: 'Upstream',
+  testProtocol: 'Protocol tested',
   testUsage: 'Token usage',
   testUsageInput: 'input',
   testUsageOutput: 'output',
@@ -483,7 +549,7 @@ export default {
     diagnosisOnly: "Tests only diagnose: they never cool down or disable the account; the plugin's failure reason and suggestion (cooldown / disable) are informational. At most 3 models are tested at a time.",
     search: 'Search models', customPlaceholder: 'Add model ids to test (comma separated)', add: 'Add',
     fetch: 'Fetch models from upstream', fetchHint: "Asks the upstream which models the account's saved credentials can use and adds them as candidates (the account is not changed)", fetchAdded: '{n} upstream models added', fetchNothing: 'The upstream returned no new model',
-    probe: 'Test with the plugin default model', probeHint: 'No model is sent; the plugin picks its default test model', probeRow: 'Plugin default model',
+    probe: 'Test with the default model', probeHint: 'No model is sent: the first model of the account\'s list is tested, or one of its mapping; with neither, the plugin picks its default test model', probeRow: 'Default model',
     selectVisible: 'Select all ({n} shown)', selectFailed: 'Select failed', selected: '{n} selected',
     noCandidates: 'The account has no model list and the plugin has no preset: add model ids, fetch them from the upstream, or test with the plugin default model.', noMatch: 'No model matches',
     notRun: 'Not tested yet', requested: 'Requested model',
@@ -589,9 +655,15 @@ export default {
     refreshHint: 'Query the current account balance',
     refreshing: 'Querying',
     refreshDone: 'Balance refreshed',
-    refreshThrottled: 'Too many requests, try again in {n} seconds',
     updatedAt: 'updated {time}',
-    error: 'Query failed: {error}'
+    unread: 'Not read yet',
+    unlimited: 'Unlimited',
+    amountHint: 'The number and unit the upstream returned, shown as they are, not converted',
+    unlimitedHint: 'The upstream reports no limit for this key',
+    failed: 'Query failed',
+    errorHint: '{error} ({time})',
+    stale: 'Stale',
+    staleHint: 'The last query failed; this is the balance read before'
   },
   scopeErrors: {
     notInScope: 'Bind the account to a group you manage',

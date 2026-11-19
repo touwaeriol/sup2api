@@ -139,7 +139,10 @@ describe('the rest of the group pricing mock', () => {
 
   it('gives the caller’s groups the fields of the server, no more', async () => {
     const [first] = (await call('GET', '/me/groups')).body.data
-    expect(Object.keys(first).sort()).toEqual(['description', 'effective_rate', 'exclusive', 'id', 'model_allowlist', 'model_filter_mode', 'name', 'platforms', 'rate_multiplier', 'rate_source'])
+    expect(Object.keys(first).sort()).toEqual(['description', 'effective_rate', 'exclusive', 'id', 'model_allowlist', 'model_filter_mode', 'name', 'platforms', 'rate_multiplier', 'rate_source', 'served_protocols'])
+    // The protocols as the group's detail lists them, without the account counts.
+    expect(first.served_protocols.length).toBeGreaterThan(0)
+    for (const s of first.served_protocols) expect(Object.keys(s)).toEqual(['protocol'])
   })
 
   it('keeps the names of user groups unique without regard to case, and at most 100 characters', async () => {

@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	"github.com/Sub2API-Devs/sup2api/next/sdk/protocol"
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 )
 
 const failurePolicyKey = protocol.SettingsFailurePolicy
@@ -192,10 +193,7 @@ func (m FailureMatch) matches(f FailureFacts) (bool, string) {
 			break
 		}
 	}
-	text := []byte(f.Text)
-	if len(text) > classifyPrefix {
-		text = text[:classifyPrefix]
-	}
+	text := core.ClassifyPrefix([]byte(f.Text))
 	keyword := m.matchedKeyword(text)
 	keywordMatch := keyword != ""
 	if len(m.ranges) == 0 && len(m.Keywords) == 0 {

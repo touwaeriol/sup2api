@@ -1,0 +1,30 @@
+// Base of the plugin UI projects in this repository (plugins/<name>/ui/native):
+// they take vue, the test tools and the @sub2api packages from the console
+// (web/), with no node_modules of their own. A project's tsconfig.json extends
+// this file and sets include.
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "jsx": "preserve",
+    // `/// <reference types="vite/client" />` in specs; nothing else is
+    // included automatically.
+    "typeRoots": ["../../node_modules"],
+    "types": [],
+    "paths": {
+      "@sub2api/ui/testing": ["../ui/src/testing/index.ts"],
+      "@sub2api/ui": ["../ui/src/index.ts"],
+      "@sub2api/host": ["../host/src/index.ts"],
+      "vue": ["../../node_modules/vue"],
+      "vitest": ["../../node_modules/vitest"],
+      "@vue/test-utils": ["../../node_modules/@vue/test-utils"]
+    }
+  }
+}

@@ -1,6 +1,6 @@
 # 核心失败处理设计与实现
 
-> 2026-10-27 清理：文中引用的本机 `artifacts/` 与 ovh 上 `~/sup2api/checks/`、旧 `release-*`、`~/sup2api-managed/{stage,backups,publish,ccgateway-images}/` 下的旧版本原始记录已删除，路径仅作出处；现存位置见 [CLI-TEST-PLAN](../plugins/ccgateway/docs/CLI-TEST-PLAN.md)。
+> 2026-10-27 清理：文中引用的本机 `artifacts/` 与 ovh 上 `~/sup2api/checks/`、旧 `release-*`、`~/sup2api-managed/{stage,backups,publish,ccgateway-images}/` 下的旧版本原始记录已删除，路径仅作出处；当时的现存位置记在 ccgateway 插件的 `docs/CLI-TEST-PLAN.md`（插件已在 0.1.290 删除，原文 `git show 317b0c331:next/plugins/ccgateway/docs/CLI-TEST-PLAN.md`）。
 
 日期：2026-10-15。状态：核心 0.1.154 已部署到生产四节点，UI 合约 3.0.0，只保留增强 STabs 公共组件；STabLayout 无导出、别名或实现。线上 moderation 0.1.11 已完成迁移，管理员既存策略（revision=1）保持原值。
 
@@ -86,6 +86,8 @@
 界面入口为“系统设置 → 失败处理”。保留网关页的通用超时设置；重试和自动禁用在新入口统一管理。
 
 > 2026-11-02：使用记录详情里的决策记录（`anomalies.failure_policy`）对没有 `account:read` 的管理员去掉 `account_id`，此前会漏给这类管理员（CONTRACTS §15.2）。模型可用性的执行前检查拦下账号时，结论不交给失败策略，不冷却、不停用账号，只换号（CONTRACTS §44.7）。
+
+> 2026-11-18（转发 V2 收尾）：插件不可用（`Execute` 报错或崩溃、中继被核心拒绝）、SSRF 拒绝的目标地址、不被允许的目标主机和模型可用性一样走“只换号、不执行账号规则”的路径；尝试次数用尽时结果与没有发布策略时相同（请求自己的失败原样返回，其余 503 `no_available_account`，Anthropic 格式 529）。此前它们在策略下按核心的 503 处理，一次尝试就回 503 `plugin_unavailable`，命中核心来源的账号规则还会冷却或禁用账号（CONTRACTS §58）。
 
 页面分为“自动重试”和“自动禁用”两张独立设置卡片：前者包含重试开关、统一计划和重试规则；后者包含自动禁用开关和禁用规则。两块复用现有公共设置卡片、行和规则表，页面统一保存并检查版本冲突。
 
@@ -211,7 +213,7 @@ Schema 2 新增全局计划，仍兼容执行已保存的 Schema 1。升级程�
 
 各节点复用配置变更广播与现有缓存 TTL，请求开始固定一份策略直到结束。无效已发布配置或读取失败会拒绝业务请求，不退回隐藏默认策略。广播与缓存不保证所有节点同一时刻切换；严格切换须结合现有摘流发布流程。
 
-发布后旧 `/settings/gateway` 的 `max_attempts` 写入、旧 `/settings/auto-disable` 写入返回 409，避免两个入口互相覆盖。网关超时设置仍可单独修改。账号编辑器读取的新全局禁用状态也来自核心失败策略。
+发布后旧 `/settings/gateway` 的 `max_attempts` 改动、旧 `/settings/auto-disable` 写入返回 409，避免两个入口互相覆盖；`/settings/gateway` 的写入带着与当前值相同的 `max_attempts`（例如把 GET 的结果原样 PUT 回去）不算改动，照常保存（2026-11-18 起，此前也返回 409）。网关超时设置仍可单独修改。账号编辑器读取的新全局禁用状态也来自核心失败策略。
 
 ## 迁移与启用
 
@@ -232,7 +234,7 @@ Schema 2 新增全局计划，仍兼容执行已保存的 Schema 1。升级程�
 - Schema 2 回归覆盖 5 次重试按 2 次分配到账号、0 阈值即时换号、关闭换号、9 次上限、禁用/冷却提前换号或停止、跨账号粘性保留/重置，以及两张规则表的仅状态码/仅关键词/AND/OR。前端 31 项相关测试通过，覆盖实时顺序、旧策略迁移草稿、只填关键词发布和统一动作选择。
 
 - 核心 gateway、account、usage、core 四个模块测试通过，含状态码单独匹配、AND/OR、关闭重试、共享预算、独立禁用、并发绑定、禁止放宽出口、传输结果不确定、API 版本与历史。
-- 前端类型检查、生产构建、27 项相关测试通过，覆盖空白/小数预算拒绝、只读完整详情；后端四个相关模块测试和全项目编译检查通过，增加 Execute 不调用插件分类、模型准入刷新、策略快照授权和 null 预算拒绝。
+- 前端类型检查、生产构建、27 项相关测试通过，覆盖空白/小数预算拒绝、只读完整详情；后端四个相关模块测试和全项目编译检查通过，增加当时插件执行路径不调用插件分类的用例（转发 V2 起只有传输错误不问插件，等待形式用 `Execute` 返回的分类，CONTRACTS §69、§112.2）、模型准入刷新、策略快照授权和 null 预算拒绝。
 - 新前端组件 ESLint 检查通过；在隔离浏览器预览中检查了公共卡片、表格与规则编辑弹窗。
 
 生产发布记录：
@@ -336,4 +338,4 @@ Schema 2 新增全局计划，仍兼容执行已保存的 Schema 1。升级程�
 
 - [New API 自动禁用](https://github.com/QuantumNous/new-api/blob/main/service/channel.go)
 - [New API 请求决策记录](https://github.com/QuantumNous/new-api/blob/main/service/request_policy.go)
-- [本项目出口故障审计](CCGATEWAY-EGRESS-FAIL-CLOSED-AUDIT.md)
+- 本项目出口故障审计 `CCGATEWAY-EGRESS-FAIL-CLOSED-AUDIT.md`（随 ccgateway 在 `b7ed61128` 删除，原文 `git show b7ed61128~1:next/docs/CCGATEWAY-EGRESS-FAIL-CLOSED-AUDIT.md`）

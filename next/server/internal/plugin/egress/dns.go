@@ -73,6 +73,9 @@ func (p *Provider) answerDNS(ctx context.Context, pluginKey string, pol core.Egr
 	}
 	var answers []dnsmessage.Resource
 	result, errMsg := ResultOK, ""
+	// The administrator's plugin network access, after the plugin's own
+	// policy as for a connection (a cached read).
+	refusal := p.hostRefusal(ctx, name)
 
 	switch {
 	case q.Class != dnsmessage.ClassINET || (q.Type != dnsmessage.TypeA && q.Type != dnsmessage.TypeAAAA):
@@ -81,6 +84,9 @@ func (p *Provider) answerDNS(ctx context.Context, pluginKey string, pol core.Egr
 	case !AllowedHost(pol, name):
 		hdr.RCode = dnsmessage.RCodeRefused
 		result, errMsg = ResultDenied, "blocked by egress policy"
+	case refusal != "":
+		hdr.RCode = dnsmessage.RCodeRefused
+		result, errMsg = ResultDenied, refusal
 	default:
 		lctx, cancel := context.WithTimeout(ctx, dnsLookupTimeout)
 		ips, err := p.opts.LookupIP(lctx, name)

@@ -325,7 +325,7 @@ func logLost(rec *core.UsageRecord, err error) {
 }
 
 func initialStatus(rec *core.UsageRecord) string {
-	if !rec.Billable || rec.Price == nil && len(rec.Additional) == 0 && len(rec.Replacement) == 0 && rec.BillingError == "" {
+	if !rec.Billable {
 		return StatusFree
 	}
 	// A reservation charges the estimate and then waits: the row is settled
@@ -381,12 +381,12 @@ type pendingDetail struct {
 }
 
 // pluginDetailJSON is what goes into usage_logs.plugin_detail: the plugin's
-// own document when it is a JSON object within the cap, "{}" otherwise. The
-// gateway already applies the cap and warns; this is the last guard, because
-// a non-object (or invalid) document would fail the whole batch insert and
+// own document when it is a JSON object, of any size, "{}" otherwise. The
+// gateway already checks it and warns; this is the last guard, because a
+// non-object (or invalid) document would fail the whole batch insert and
 // take unrelated records down with it.
 func pluginDetailJSON(raw core.RawJSON) []byte {
-	if len(raw) == 0 || len(raw) > core.MaxPluginDetailBytes {
+	if len(raw) == 0 {
 		return []byte("{}")
 	}
 	if !gjson.ValidBytes(raw) || !gjson.ParseBytes(raw).IsObject() {
@@ -562,6 +562,8 @@ type usageLogRow struct {
 	CacheReadTokens       int64           `gorm:"column:cache_read_tokens"`
 	CacheCreationTokens   int64           `gorm:"column:cache_creation_tokens"`
 	CacheCreation1hTokens int64           `gorm:"column:cache_creation_1h_tokens"`
+	ImageInputTokens      int64           `gorm:"column:image_input_tokens"`
+	ImageOutputTokens     int64           `gorm:"column:image_output_tokens"`
 	Metrics               store.Bytes     `gorm:"column:metrics"`
 	StickyRule            string          `gorm:"column:sticky_rule"`
 	StickyHit             bool            `gorm:"column:sticky_hit"`
@@ -651,14 +653,12 @@ func newUsageLogRow(rec *core.UsageRecord) usageLogRow {
 	// Only billable requests retain pricing headers and parameters below.
 	detail := jsonOr(pendingDetail{Inputs: pendingInputs{Semantics: rec.UsageSemantics}}, "{}")
 	if status == StatusPending || status == StatusReserved {
-		if rec.Price != nil {
-			exprHash, mode = rec.Price.ExprHash, rec.Price.Mode
-			if rec.Price.ID > 0 {
-				priceID = &rec.Price.ID
-			}
-			if exprHash == "" {
-				exprHash = expr.Hash(rec.Price.Expression)
-			}
+		exprHash, mode = rec.Price.ExprHash, rec.Price.Mode
+		if rec.Price.ID > 0 {
+			priceID = &rec.Price.ID
+		}
+		if exprHash == "" {
+			exprHash = expr.Hash(rec.Price.Expression)
 		}
 		detail = jsonOr(pendingDetail{Inputs: recordInputs(rec)}, "{}")
 	}
@@ -679,9 +679,10 @@ func newUsageLogRow(rec *core.UsageRecord) usageLogRow {
 	return usageLogRow{
 		RequestID: trunc(rec.RequestID, 64), UserID: rec.UserID, APIKeyID: rec.APIKeyID, GroupID: rec.GroupID, AccountID: rec.AccountID,
 		PluginKey: trunc(rec.PluginKey, 30), PluginVersion: trunc(rec.PluginVersion, 50), Platform: trunc(rec.Platform, 50),
-		Protocol: trunc(rec.Protocol, 100), Endpoint: trunc(rec.Endpoint, 200), Model: trunc(rec.Model, 200), UpstreamModel: trunc(rec.UpstreamModel, 200),
+		Protocol: trunc(rec.Protocol, 100), Endpoint: trunc(rec.Endpoint, 200), Model: rec.Model, UpstreamModel: rec.UpstreamModel,
 		Stream: rec.Stream, StatusCode: rec.StatusCode, Success: rec.Success, ErrorType: trunc(rec.ErrorType, 50), ErrorMessage: rec.ErrorMessage, Attempts: attempts,
 		InputTokens: t.Input, OutputTokens: t.Output, CacheReadTokens: t.CacheRead, CacheCreationTokens: t.CacheCreation, CacheCreation1hTokens: t.CacheCreation1h,
+		ImageInputTokens: t.ImageInput, ImageOutputTokens: t.ImageOutput,
 		Metrics: jsonOr(rec.Metrics, "{}"), StickyRule: trunc(rec.StickyRule, 100), StickyHit: rec.StickyHit, HookDecisions: jsonOr(rec.HookDecisions, "[]"),
 		RateMultiplier: rec.RateMultiplier, PriceID: priceID, ExprHash: exprHash, BillingMode: mode, BillingDetail: detail, BillingStatus: status,
 		LatencyMs: rec.LatencyMs, FirstTokenMs: rec.FirstTokenMs,
@@ -854,9 +855,15 @@ type BillingDetail struct {
 	ListCost       *decimal.Decimal          `json:"list_cost,omitempty"` // at the list price, before the rate; only when a price rule applied
 	RateMultiplier decimal.Decimal           `json:"rate_multiplier"`
 	TotalCost      decimal.Decimal           `json:"total_cost"` // charged
-	LedgerID       *int64                    `json:"ledger_id,omitempty"`
-	Inputs         pendingInputs             `json:"inputs"`
-	Attempts       int                       `json:"attempts"`
+	// The primary usage's own Cost, ListCost and TotalCost, when the record
+	// has additional items and its primary usage is priced (not replaced):
+	// Cost, ListCost and TotalCost above then sum it with every item.
+	PrimaryCost      *decimal.Decimal `json:"primary_cost,omitempty"`
+	PrimaryListCost  *decimal.Decimal `json:"primary_list_cost,omitempty"`
+	PrimaryTotalCost *decimal.Decimal `json:"primary_total_cost,omitempty"`
+	LedgerID         *int64           `json:"ledger_id,omitempty"`
+	Inputs           pendingInputs    `json:"inputs"`
+	Attempts         int              `json:"attempts"`
 }
 
 var errNotPending = errors.New("usage row is not pending")
@@ -893,7 +900,7 @@ func priceOne(ctx context.Context, q core.Quoter, p *pending) (amounts, BillingD
 	amount, err := q.Quote(ctx, core.QuoteInputs{
 		Expression:     p.Expression,
 		UsageSemantics: p.Inputs.Semantics,
-		Tokens:         core.UsageTokens{Input: p.Tokens.Input, Output: p.Tokens.Output, CacheRead: p.Tokens.CacheRead, CacheCreation: p.Tokens.CacheCreation, CacheCreation1h: p.Tokens.CacheCreation1h},
+		Tokens:         p.Tokens,
 		Metrics:        p.Metrics,
 		PriceParams:    params,
 		PriceHeaders:   p.Inputs.Headers,
@@ -942,11 +949,7 @@ func priceOne(ctx context.Context, q core.Quoter, p *pending) (amounts, BillingD
 // evaluate runs prog over the row's usage, normalized for the token classes
 // prog prices.
 func evaluate(prog *expr.Program, p *pending) (*expr.Result, error) {
-	t := p.Tokens
-	vars := expr.Normalize(p.Inputs.Semantics, expr.Tokens{
-		Input: t.Input, Output: t.Output, CacheRead: t.CacheRead,
-		CacheCreation: t.CacheCreation, CacheCreation1h: t.CacheCreation1h,
-	}, prog.Uses)
+	vars := expr.Normalize(p.Inputs.Semantics, expr.Tokens(p.Tokens), prog.Uses)
 	return prog.Eval(expr.Input{Vars: vars, Metrics: p.Metrics, Params: p.Inputs.Params, Headers: p.Inputs.Headers, At: p.CreatedAt})
 }
 
@@ -1012,6 +1015,7 @@ func recordedEvent(p *pending, total decimal.Decimal, status string) core.Event 
 		"model": p.Model, "success": p.Success, "status_code": p.StatusCode, "error_type": p.ErrorType,
 		"input_tokens": t.Input, "output_tokens": t.Output, "cache_read_tokens": t.CacheRead,
 		"cache_creation_tokens": t.CacheCreation, "cache_creation_1h_tokens": t.CacheCreation1h,
+		"image_input_tokens": t.ImageInput, "image_output_tokens": t.ImageOutput,
 		"total_cost": total, "billing_status": status, "latency_ms": p.LatencyMs,
 		"created_at": p.CreatedAt.UTC().Format(time.RFC3339Nano),
 	}}
@@ -1065,7 +1069,7 @@ func frozenPrice(db *gorm.DB, more string) *gorm.DB {
 const pendingColumns = `u.request_id, u.user_id, u.api_key_id, u.group_id, u.account_id, u.plugin_key, u.platform,
 		u.protocol, u.account_type, u.upstream_protocol, u.model, u.success, u.status_code, u.error_type,
 		u.input_tokens, u.output_tokens, u.cache_read_tokens, u.cache_creation_tokens, u.cache_creation_1h_tokens,
-		u.metrics, u.latency_ms, u.created_at, u.rate_multiplier, COALESCE(u.price_id, 0), u.billing_mode, u.billing_detail`
+		u.image_input_tokens, u.image_output_tokens, u.metrics, u.latency_ms, u.created_at, u.rate_multiplier, COALESCE(u.price_id, 0), u.billing_mode, u.billing_detail`
 
 // scanPending reads a frozenPrice row into p: pendingColumns, then more,
 // then the expression.
@@ -1074,7 +1078,7 @@ func scanPending(row store.RowScanner, p *pending, more ...any) error {
 	dest := append([]any{&p.RequestID, &p.UserID, &p.APIKeyID, &p.GroupID, &p.AccountID, &p.PluginKey, &p.Platform,
 		&p.Protocol, &p.AccountType, &p.UpstreamProtocol, &p.Model, &p.Success, &p.StatusCode, &p.ErrorType,
 		&p.Tokens.Input, &p.Tokens.Output, &p.Tokens.CacheRead, &p.Tokens.CacheCreation, &p.Tokens.CacheCreation1h,
-		&metrics, &p.LatencyMs, &p.CreatedAt, &p.Rate, &p.PriceID, &p.Mode, &detail}, more...)
+		&p.Tokens.ImageInput, &p.Tokens.ImageOutput, &metrics, &p.LatencyMs, &p.CreatedAt, &p.Rate, &p.PriceID, &p.Mode, &detail}, more...)
 	if err := row.Scan(append(dest, &p.Expression)...); err != nil {
 		return err
 	}

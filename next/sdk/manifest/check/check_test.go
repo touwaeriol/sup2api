@@ -86,6 +86,15 @@ func minimal() *manifest.Manifest {
 	}
 }
 
+// keyForm is a valid account type form of m: a native one, for which it gives
+// m ui.native, its host permission and hostUICompat.
+func keyForm(m *manifest.Manifest) manifest.Form {
+	m.UI = &manifest.UI{Native: &manifest.NativeUI{Entry: "ui/native/entry.js"}}
+	m.HostUICompat = "^4.0"
+	m.HostPermissions = append(m.HostPermissions, manifest.HostPermission{ID: "ui.native"})
+	return manifest.Form{Mode: "native", Component: "KeyForm"}
+}
+
 func codes(err error) map[string]string {
 	out := map[string]string{}
 	fields, _ := Fields(err)

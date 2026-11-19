@@ -39,7 +39,7 @@ export const dynweightUIPlugin = {
   ],
   native_entry: 'ui/native/entry.js',
   trust: 'official',
-  host_ui_compat: '^3.6'
+  host_ui_compat: '^4.0'
 }
 
 export function dynweightAsset(path: string): { type: string; body: Buffer } | null {

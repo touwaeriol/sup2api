@@ -24,8 +24,8 @@ import (
 
 // Default call timeouts. The caller's context deadline applies when shorter.
 const (
-	TimeoutPlatformHot     = 2 * time.Second  // BuildUpstreamRequest, ClassifyError
-	TimeoutPlatformConsole = 10 * time.Second // ValidateCredentials, BuildTestRequest
+	TimeoutPlatformHot     = 2 * time.Second  // ClassifyError, ResolveModel, EstimateUsage
+	TimeoutPlatformConsole = 10 * time.Second // ValidateCredentials, BuildTestRequest, ValidateSettings
 	TimeoutHookDefault     = 300 * time.Millisecond
 	TimeoutHookMax         = 30 * time.Second // CONTRACTS §20.1
 	TimeoutHTTP            = 30 * time.Second
@@ -45,11 +45,11 @@ const (
 	classHot callClass = iota
 	classConsole
 	classBackground
-	classExecute
-	// classControl is for calls the SDK answers itself without plugin code
-	// (SettingsChanged): they take no slot, so plugin work filling the other
-	// classes never holds them up.
-	classControl
+	// classNoSlot takes no slot: Execute, whose calls are not limited, and
+	// the calls the SDK answers itself without plugin code
+	// (SettingsChanged), which plugin work filling the other classes must
+	// never hold up.
+	classNoSlot
 	numClasses
 )
 
@@ -58,7 +58,6 @@ func newSemaphores(c Concurrency) [numClasses]chan struct{} {
 		classHot:        make(chan struct{}, c.Hot),
 		classConsole:    make(chan struct{}, c.Console),
 		classBackground: make(chan struct{}, c.Background),
-		classExecute:    make(chan struct{}, c.Execute),
 	}
 }
 
@@ -105,6 +104,7 @@ func invoke[C, Req, Resp any](i *Instance, ctx context.Context, class callClass,
 	return
 }
 
+func pluginOf(p *proc) pluginv1.PluginServiceClient     { return p.plugin }
 func platformOf(p *proc) pluginv1.PlatformServiceClient { return p.platform }
 func hookOf(p *proc) pluginv1.HookServiceClient         { return p.hook }
 func appOf(p *proc) pluginv1.AppServiceClient           { return p.app }
@@ -206,10 +206,6 @@ func (a platformAdapter) ValidateCredentials(ctx context.Context, in *pluginv1.V
 	return invoke(a.i, ctx, classConsole, TimeoutPlatformConsole, platformOf, pluginv1.PlatformServiceClient.ValidateCredentials, in)
 }
 
-func (a platformAdapter) BuildUpstreamRequest(ctx context.Context, in *pluginv1.BuildUpstreamRequestRequest) (*pluginv1.BuildUpstreamRequestResponse, error) {
-	return invoke(a.i, ctx, classHot, TimeoutPlatformHot, platformOf, pluginv1.PlatformServiceClient.BuildUpstreamRequest, in)
-}
-
 func (a platformAdapter) ClassifyError(ctx context.Context, in *pluginv1.ClassifyErrorRequest) (*pluginv1.ClassifyErrorResponse, error) {
 	return invoke(a.i, ctx, classHot, TimeoutPlatformHot, platformOf, pluginv1.PlatformServiceClient.ClassifyError, in)
 }
@@ -223,38 +219,15 @@ func (a platformAdapter) BuildModelsRequest(ctx context.Context, in *pluginv1.Bu
 }
 
 // ResolveModel runs on the gateway hot path (before scheduling), so it uses
-// the hot-path timeout like BuildUpstreamRequest; the gateway applies its own,
+// the hot-path timeout like ClassifyError; the gateway applies its own,
 // shorter deadline on top.
 func (a platformAdapter) ResolveModel(ctx context.Context, in *pluginv1.ResolveModelRequest) (*pluginv1.ResolveModelResponse, error) {
 	return invoke(a.i, ctx, classHot, TimeoutPlatformHot, platformOf, pluginv1.PlatformServiceClient.ResolveModel, in)
 }
 
-// ExtractUsage runs after the response reached the client, so it is off the
-// latency path; it still uses the hot-path timeout because it holds a usage
-// record open, and the gateway applies its own, shorter deadline on top.
-func (a platformAdapter) ExtractUsage(ctx context.Context, in *pluginv1.ExtractUsageRequest) (*pluginv1.UsageReport, error) {
-	return invoke(a.i, ctx, classHot, TimeoutPlatformHot, platformOf, pluginv1.PlatformServiceClient.ExtractUsage, in)
-}
-
-func (a platformAdapter) ParseTaskSubmission(ctx context.Context, in *pluginv1.ExtractUsageRequest) (*pluginv1.TaskSubmission, error) {
-	return invoke(a.i, ctx, classHot, TimeoutPlatformHot, platformOf, pluginv1.PlatformServiceClient.ParseTaskSubmission, in)
-}
-
 // EstimateUsage runs before the pre-charge of every priced request.
 func (a platformAdapter) EstimateUsage(ctx context.Context, in *pluginv1.EstimateUsageRequest) (*pluginv1.UsageReport, error) {
 	return invoke(a.i, ctx, classHot, TimeoutPlatformHot, platformOf, pluginv1.PlatformServiceClient.EstimateUsage, in)
-}
-
-// BuildReconcileRequest and ParseReconcileResponse run in the core's offline
-// reconcile loop, not in a request, so they get the console budget rather
-// than the hot-path one: nobody is waiting, and being stingy here only
-// burns an attempt of an entry's limited allowance.
-func (a platformAdapter) BuildReconcileRequest(ctx context.Context, in *pluginv1.BuildReconcileRequestRequest) (*pluginv1.BuildReconcileRequestResponse, error) {
-	return invoke(a.i, ctx, classBackground, TimeoutPlatformConsole, platformOf, pluginv1.PlatformServiceClient.BuildReconcileRequest, in)
-}
-
-func (a platformAdapter) ParseReconcileResponse(ctx context.Context, in *pluginv1.ParseReconcileResponseRequest) (*pluginv1.ReconcileResult, error) {
-	return invoke(a.i, ctx, classBackground, TimeoutPlatformConsole, platformOf, pluginv1.PlatformServiceClient.ParseReconcileResponse, in)
 }
 
 // BuildQuotaRequest and ParseQuotaResponse run in the account module when
@@ -272,6 +245,17 @@ var _ core.AccountModelAvailabilityPlugin = platformAdapter{}
 
 func (a platformAdapter) ParseQuotaResponse(ctx context.Context, in *pluginv1.ParseQuotaResponseRequest) (*pluginv1.QuotaResult, error) {
 	return invoke(a.i, ctx, classConsole, TimeoutPlatformConsole, platformOf, pluginv1.PlatformServiceClient.ParseQuotaResponse, in)
+}
+
+// BuildBalanceRequest and ParseBalanceResponse run in the account module
+// when the console asks for a balance or the balance sweep finds it due
+// (CONTRACTS §52): the console budget, as the quota query.
+func (a platformAdapter) BuildBalanceRequest(ctx context.Context, in *pluginv1.BuildBalanceRequestRequest) (*pluginv1.BuildBalanceRequestResponse, error) {
+	return invoke(a.i, ctx, classConsole, TimeoutPlatformConsole, platformOf, pluginv1.PlatformServiceClient.BuildBalanceRequest, in)
+}
+
+func (a platformAdapter) ParseBalanceResponse(ctx context.Context, in *pluginv1.ParseBalanceResponseRequest) (*pluginv1.ParseBalanceResponseResponse, error) {
+	return invoke(a.i, ctx, classConsole, TimeoutPlatformConsole, platformOf, pluginv1.PlatformServiceClient.ParseBalanceResponse, in)
 }
 
 // BuildRefreshRequest and ParseRefreshResponse run in the account module's
@@ -323,9 +307,35 @@ type httpAdapter struct{ i *Instance }
 // HandleHTTP records the caller, and its access key, for as long as the
 // plugin serves the request: AccountScopeCheck only answers about a user the
 // plugin is serving, and both checks are narrowed by the key (callerSet).
+// A call by a user also gets an execution token for its fetches, which
+// carry the proxy ticket of an account being authorized (CONTRACTS §117).
 func (a httpAdapter) HandleHTTP(ctx context.Context, in *pluginv1.HTTPRequest) (*pluginv1.HTTPResponse, error) {
-	defer a.i.callers.enter(ctx, in.GetCaller().GetUserId())()
-	return invoke(a.i, ctx, classConsole, TimeoutHTTP, httpOf, pluginv1.HTTPServiceClient.HandleHTTP, in)
+	uid := in.GetCaller().GetUserId()
+	defer a.i.callers.enter(ctx, uid)()
+	if uid <= 0 {
+		return invoke(a.i, ctx, classConsole, TimeoutHTTP, httpOf, pluginv1.HTTPServiceClient.HandleHTTP, in)
+	}
+	var out *pluginv1.HTTPResponse
+	err := a.i.call(ctx, classConsole, TimeoutHTTP, func(ctx context.Context, p *proc) (err error) {
+		sc := &callScope{client: core.ExecutionClient{Fetch: a.fetchWithProxyTicket}, route: true}
+		out, err = withScope(ctx, p, sc, func(ctx context.Context, token string) (*pluginv1.HTTPResponse, error) {
+			req := shallowClone(in)
+			req.ExecutionToken = token
+			return p.http.HandleHTTP(ctx, req)
+		})
+		return err
+	})
+	return out, err
+}
+
+// fetchWithProxyTicket is the fetch of a route call: the account module
+// opens the ticket for the call's user (ctx) and sends through its proxy.
+func (a httpAdapter) fetchWithProxyTicket(ctx context.Context, in *pluginv1.ExecutionHTTPRequest) (*pluginv1.ExecutionHTTPResponse, error) {
+	f, ok := a.i.rt.o.Accounts.(core.ProxyTicketFetcher)
+	if !ok {
+		return nil, core.ErrUnavailable.WithMessage("proxy tickets are unavailable")
+	}
+	return f.FetchWithProxyTicket(ctx, a.i.pkg.Key, in)
 }
 
 type schedAdapter struct{ i *Instance }

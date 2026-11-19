@@ -26,11 +26,11 @@ const { t } = useI18n()
       {{ group.model_allowlist?.length ? group.model_allowlist.join(', ') : t('common.unlimited') }}
     </div>
     <div v-if="group.description">{{ group.description }}</div>
-    <template v-if="group.platforms">
-      <SHint v-if="!group.platforms.length" tone="warning" size="xs">{{ t('platforms.keyNoPlatforms') }}</SHint>
+    <template v-if="group.served_protocols">
+      <SHint v-if="!group.served_protocols.length" tone="warning" size="xs">{{ t('platforms.keyNoPlatforms') }}</SHint>
       <div v-else>
         <div class="mb-1">{{ t('platforms.keyEndpoints') }}:</div>
-        <PlatformEndpointsPreview :ids="group.platforms" :max="3" fold />
+        <PlatformEndpointsPreview :served="group.served_protocols" :max="3" />
       </div>
     </template>
   </div>

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -51,10 +52,17 @@ type fakePlatform struct {
 	quotaCalls int
 	// refreshURL is where BuildRefreshRequest points (empty: Unimplemented).
 	refreshURL string
-	mu         sync.Mutex
-	calls      []*pluginv1.ValidateCredentialsRequest
-	tests      []*pluginv1.BuildTestRequestRequest
-	classes    []*pluginv1.ClassifyErrorRequest
+	// pluginCalls counts BuildRefreshRequest, ParseRefreshResponse and
+	// ParseQuotaResponse calls by method name.
+	pluginCalls map[string]int
+	mu          sync.Mutex
+	calls       []*pluginv1.ValidateCredentialsRequest
+	tests       []*pluginv1.BuildTestRequestRequest
+	models      []*pluginv1.BuildModelsRequestRequest
+	classes     []*pluginv1.ClassifyErrorRequest
+	// balance is the balance query's plugin side (balance_test.go); nil
+	// answers Unimplemented.
+	balance *fakeBalance
 }
 
 func (p *fakePlatform) ValidateCredentials(_ context.Context, in *pluginv1.ValidateCredentialsRequest) (*pluginv1.ValidateCredentialsResponse, error) {
@@ -71,26 +79,7 @@ func (p *fakePlatform) ValidateCredentials(_ context.Context, in *pluginv1.Valid
 	return resp, nil
 }
 
-func (*fakePlatform) BuildUpstreamRequest(context.Context, *pluginv1.BuildUpstreamRequestRequest) (*pluginv1.BuildUpstreamRequestResponse, error) {
-	return nil, core.ErrInternal
-}
-
 func (*fakePlatform) ResolveModel(context.Context, *pluginv1.ResolveModelRequest) (*pluginv1.ResolveModelResponse, error) {
-	return nil, core.ErrInternal
-}
-
-func (*fakePlatform) ParseTaskSubmission(context.Context, *pluginv1.ExtractUsageRequest) (*pluginv1.TaskSubmission, error) {
-	return nil, nil
-}
-func (*fakePlatform) ExtractUsage(context.Context, *pluginv1.ExtractUsageRequest) (*pluginv1.UsageReport, error) {
-	return nil, core.ErrInternal
-}
-
-func (*fakePlatform) BuildReconcileRequest(context.Context, *pluginv1.BuildReconcileRequestRequest) (*pluginv1.BuildReconcileRequestResponse, error) {
-	return nil, core.ErrInternal
-}
-
-func (*fakePlatform) ParseReconcileResponse(context.Context, *pluginv1.ParseReconcileResponseRequest) (*pluginv1.ReconcileResult, error) {
 	return nil, core.ErrInternal
 }
 
@@ -112,7 +101,8 @@ func (p *fakePlatform) BuildQuotaRequest(_ context.Context, in *pluginv1.BuildQu
 
 // ParseQuotaResponse reads {"5h": <percent>, "reset": <unix>} and reports a
 // non-200 answer as transient (401 as auth_rejected).
-func (*fakePlatform) ParseQuotaResponse(_ context.Context, in *pluginv1.ParseQuotaResponseRequest) (*pluginv1.QuotaResult, error) {
+func (p *fakePlatform) ParseQuotaResponse(_ context.Context, in *pluginv1.ParseQuotaResponseRequest) (*pluginv1.QuotaResult, error) {
+	p.count("ParseQuotaResponse")
 	switch {
 	case in.GetStatus() == http.StatusUnauthorized:
 		return &pluginv1.QuotaResult{ErrorType: pluginv1.QuotaResult_ERROR_TYPE_AUTH_REJECTED, ErrorMessage: "token revoked"}, nil
@@ -138,6 +128,7 @@ func (p *fakePlatform) ClassifyError(_ context.Context, in *pluginv1.ClassifyErr
 // BuildRefreshRequest posts the account's refresh_token to refreshURL;
 // refreshURL empty answers Unimplemented.
 func (p *fakePlatform) BuildRefreshRequest(_ context.Context, in *pluginv1.BuildRefreshRequestRequest) (*pluginv1.BuildRefreshRequestResponse, error) {
+	p.count("BuildRefreshRequest")
 	p.mu.Lock()
 	u := p.refreshURL
 	p.mu.Unlock()
@@ -150,7 +141,8 @@ func (p *fakePlatform) BuildRefreshRequest(_ context.Context, in *pluginv1.Build
 
 // ParseRefreshResponse reads {"access_token","refresh_token","expires_in"};
 // 400 is auth_rejected (invalid_grant), anything else non-200 transient.
-func (*fakePlatform) ParseRefreshResponse(_ context.Context, in *pluginv1.ParseRefreshResponseRequest) (*pluginv1.RefreshResult, error) {
+func (p *fakePlatform) ParseRefreshResponse(_ context.Context, in *pluginv1.ParseRefreshResponseRequest) (*pluginv1.RefreshResult, error) {
+	p.count("ParseRefreshResponse")
 	switch {
 	case in.GetStatus() == http.StatusBadRequest:
 		return &pluginv1.RefreshResult{ErrorType: pluginv1.RefreshResult_ERROR_TYPE_AUTH_REJECTED, ErrorMessage: "invalid_grant"}, nil
@@ -170,9 +162,29 @@ func (*fakePlatform) ParseRefreshResponse(_ context.Context, in *pluginv1.ParseR
 	return &pluginv1.RefreshResult{CredentialsPatchJson: string(b)}, nil
 }
 
+// count records one call of method.
+func (p *fakePlatform) count(method string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.pluginCalls == nil {
+		p.pluginCalls = map[string]int{}
+	}
+	p.pluginCalls[method]++
+}
+
+// called is the number of calls of method.
+func (p *fakePlatform) called(method string) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.pluginCalls[method]
+}
+
 // BuildModelsRequest lists models from the fake upstream's /v1/models; the
-// "vkey" account type is not a ModelLister.
+// "vkey" account type is not a ModelLister. Each call is kept in models.
 func (p *fakePlatform) BuildModelsRequest(_ context.Context, in *pluginv1.BuildModelsRequestRequest) (*pluginv1.BuildModelsRequestResponse, error) {
+	p.mu.Lock()
+	p.models = append(p.models, in)
+	p.mu.Unlock()
 	if in.GetAccount().GetType() == "vkey" {
 		return nil, status.Error(codes.Unimplemented, "no")
 	}
@@ -388,7 +400,8 @@ func (a fakeAuthz) PermissionSet(ctx context.Context, uid int64) (core.Permissio
 }
 func (fakeAuthz) CanGrant(context.Context, int64, []string) error { return nil }
 
-// fakeConverters converts openai.chat requests to anthropic.messages, and
+// fakeConverters converts openai.chat requests to anthropic.messages,
+// openai.images to openai.responses (for a type declaring it adapted), and
 // (unused, the platform is unavailable) openai.embeddings to ghost.embed.
 type fakeConverters struct{}
 
@@ -398,6 +411,7 @@ func (f fakeConverters) Conversion(client, upstream string) (core.Conversion, bo
 
 func (fakeConverters) canConvert(client, upstream string) bool {
 	return client == "openai.chat" && upstream == "anthropic.messages" ||
+		client == "openai.images" && upstream == "openai.responses" ||
 		client == "openai.embeddings" && upstream == "ghost.embed"
 }
 
@@ -430,26 +444,23 @@ func testGen(plat core.PlatformPlugin) *fakeGen {
 		types: []core.AccountTypeBinding{{
 			Plugin: anthropic,
 			Type: manifest.AccountType{ID: "apikey", Label: manifest.LocalizedText{"en": "API Key", "zh": "API Key"},
-				Form: manifest.Form{Mode: "schema", Schema: "forms/apikey.json"}, SensitiveFields: []string{"api_key"},
+				Form: manifest.Form{Mode: "native", Component: "AnthropicKeyForm"}, SensitiveFields: []string{"api_key"},
 				SettingsFields:  []string{"base_url"},
 				GuardedSettings: []manifest.GuardedSetting{{Field: "base_url", Allowed: []string{officialBaseURL}}},
 				Platforms:       []manifest.AccountPlatform{{Platform: "anthropic"}}},
-			FormSchema: json.RawMessage(formSchema), FormUI: json.RawMessage(`{"api_key":{"ui:widget":"password"}}`),
 			Client: plat,
 		}, {
 			Plugin: relay,
 			Type: manifest.AccountType{ID: "relay_key", Label: manifest.LocalizedText{"en": "Relay key"},
-				Form: manifest.Form{Mode: "schema"}, SensitiveFields: []string{"api_key"},
+				Form: manifest.Form{Mode: "native", Component: "RelayKeyForm"}, SensitiveFields: []string{"api_key"},
 				SettingsFields: []string{"base_url"},
 				Platforms:      []manifest.AccountPlatform{{Platform: "anthropic"}, {Platform: "ghost"}}},
-			FormSchema: json.RawMessage(formSchema),
-			Client:     plat,
+			Client: plat,
 		}, {
 			Plugin: video,
 			Type: manifest.AccountType{ID: "vkey", Label: manifest.LocalizedText{"en": "Video key"},
-				Form: manifest.Form{Mode: "schema"}, Platforms: []manifest.AccountPlatform{{Platform: "aivideo"}}},
-			FormSchema: json.RawMessage(formSchema),
-			Client:     plat,
+				Form: manifest.Form{Mode: "native", Component: "VideoKeyForm"}, Platforms: []manifest.AccountPlatform{{Platform: "aivideo"}}},
+			Client: plat,
 		}},
 		// Plugin platform first: /platforms must still list built-ins first.
 		plats: []core.PlatformBinding{
@@ -674,16 +685,6 @@ func TestPayloads(t *testing.T) {
 
 // ---------------------------------------------------------------- harness
 
-const formSchema = `{
-  "type": "object",
-  "required": ["api_key"],
-  "properties": {
-    "api_key": {"type": "string", "minLength": 8},
-    "base_url": {"type": "string"},
-    "org": {"type": "string"}
-  }
-}`
-
 // officialBaseURL is the only base_url the guarded anthropic/apikey type
 // accepts from callers without account:settings:custom.
 const officialBaseURL = "https://api.anthropic.com"
@@ -848,7 +849,7 @@ func TestAccountTypes(t *testing.T) {
 	}
 	list := out["data"].([]any)
 	ty := list[0].(map[string]any)
-	if len(list) != 3 || ty["plugin_key"] != "anthropic" || ty["type"] != "apikey" || ty["form"].(map[string]any)["mode"] != "schema" ||
+	if len(list) != 3 || ty["plugin_key"] != "anthropic" || ty["type"] != "apikey" || ty["form"].(map[string]any)["mode"] != "native" ||
 		ty["plugin_name"].(map[string]any)["en"] != "Anthropic" || ty["sensitive_fields"].([]any)[0] != "api_key" ||
 		ty["trust"] != "official" || ty["protocols"] != nil || ty["platform"] != nil || ty["custom_upstream"] != false ||
 		ty["platforms"].([]any)[0].(map[string]any)["id"] != "anthropic" {
@@ -862,16 +863,9 @@ func TestAccountTypes(t *testing.T) {
 	if rl := list[1].(map[string]any); rl["plugin_key"] != "relay" || rl["type"] != "relay_key" || rl["custom_upstream"] != true {
 		t.Fatalf("relay type: %v", rl)
 	}
-	code, out = e.do("GET", "/account-types/anthropic/apikey/form", nil)
-	if code != 200 || out["data"].(map[string]any)["schema"].(map[string]any)["type"] != "object" ||
-		out["data"].(map[string]any)["ui_schema"] == nil {
-		t.Fatalf("form: %d %v", code, out)
-	}
-	if code, _ = e.do("GET", "/account-types/anthropic/oauth/form", nil); code != 404 {
-		t.Fatalf("unknown form: %d", code)
-	}
-	if code, _ = e.do("GET", "/account-types/relay/apikey/form", nil); code != 404 {
-		t.Fatalf("type of another plugin: %d", code)
+	// Forms are the plugins' own components: the core serves no form schema.
+	if code, _ = e.do("GET", "/account-types/anthropic/apikey/form", nil); code != 404 {
+		t.Fatalf("form schema endpoint: %d", code)
 	}
 	e.reg.set(nil)
 	if _, out = e.do("GET", "/account-types", nil); len(out["data"].([]any)) != 0 {
@@ -896,17 +890,8 @@ func TestAccountLifecycle(t *testing.T) {
 		return m
 	}
 
-	// Schema violations.
-	code, out := e.do("POST", "/accounts", with(map[string]any{"base_url": "x"}))
-	if code != 400 || fmt.Sprint(fieldsOf(out)) != "[credentials.api_key:required]" {
-		t.Fatalf("schema required: %d %v", code, out)
-	}
-	code, out = e.do("POST", "/accounts", with(map[string]any{"api_key": "short"}))
-	if code != 400 || fmt.Sprint(fieldsOf(out)) != "[credentials.api_key:minLength]" {
-		t.Fatalf("schema minLength: %d %v", code, out)
-	}
-	// Plugin validation.
-	code, out = e.do("POST", "/accounts", with(map[string]any{"api_key": "sk-bad-key"}))
+	// Plugin validation, the only check of the credentials.
+	code, out := e.do("POST", "/accounts", with(map[string]any{"api_key": "sk-bad-key"}))
 	if code != 400 || fmt.Sprint(fieldsOf(out)) != "[credentials.api_key:rejected]" {
 		t.Fatalf("plugin validation: %d %v", code, out)
 	}
@@ -1587,3 +1572,13 @@ func TestAccountConversionLossPolicy(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "", acc.ConversionLossPolicy)
 }
+
+func (*fakePlatform) Execute(context.Context, *pluginv1.ExecuteRequest, core.ExecutionClient) (core.ExecutionResult, error) {
+	return core.ExecutionResult{}, errors.New("the fake platform does not execute requests")
+}
+
+func (*fakePlatform) Monitor(context.Context, *pluginv1.PollRequest, core.ExecutionHTTP) (*pluginv1.ReconcileResult, error) {
+	return nil, errors.New("the fake platform does not monitor tasks")
+}
+
+func (g *fakeGen) SettingsValidator(string) (core.SettingsValidator, bool) { return nil, false }

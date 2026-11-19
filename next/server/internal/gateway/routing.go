@@ -1,6 +1,8 @@
 package gateway
 
 import (
+	"maps"
+
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/gateway/convert"
@@ -31,12 +33,18 @@ type typeRoute struct {
 	hops []string
 	// local answers a count_tokens request without an upstream (§8).
 	local bool
+	// cross is set when the account type does not declare the platform of
+	// the client endpoint: the request reaches its accounts through a
+	// cross-platform conversion, which an account enables per model
+	// (core.ProtocolRules). A type declaring the platform serves the
+	// endpoint as one of its own, natively or adapted to another endpoint of
+	// that platform.
+	cross bool
 
-	requestFields []string
-	passHeaders   []string
-	usage         manifest.UsageRules
-	// pluginUsage, usageEvents and usageMaxBytes are the upstream endpoint's
-	// usageSource / usageStreamEvents / usageMaxBytes (CONTRACTS §25.3).
+	passHeaders []string
+	usage       manifest.UsageRules
+	// pluginUsage and usageEvents are the upstream endpoint's usageSource /
+	// usageStreamEvents (CONTRACTS §25.3).
 	//
 	// They come off the endpoint and NOT off `usage` above, which is the
 	// result of the §13 override chain: its last link,
@@ -45,10 +53,10 @@ type typeRoute struct {
 	// platform's plugin, and that (because an override replaces the whole
 	// block) used to be able to switch the source off just by not mentioning
 	// it. On the endpoint there is one reading and one writer.
-	pluginUsage   bool
-	usageEvents   []string
-	usageMaxBytes int64
-	// usageRequestFields are the request body paths ExtractUsage is shown
+	pluginUsage bool
+	usageEvents []string
+	// usageRequestFields are the request body paths the observation of a
+	// relay that waits carries
 	// (endpoint.usageRequestFields); nil for every endpoint that declares
 	// none, which is how those pay nothing for the feature.
 	usageRequestFields []string
@@ -61,8 +69,17 @@ type typeRoute struct {
 	resp         manifest.EndpointResp
 	respDeclared bool
 	// modelPath is the body path of the model in the upstream protocol
-	// (empty when the model travels in the path).
+	// (empty when the model travels in the path); a converter placing the
+	// client's model elsewhere names its own (convert.ModelLocator).
 	modelPath string
+	// adaptModel is the model the account type declares for the adapted
+	// client endpoint (manifest.AdaptOptions.Model), handed to the
+	// converter (convert.Options.AdaptModel).
+	adaptModel string
+	// echoModel is set when the converter says where the upstream response
+	// names the model that ran (convert.ResponseModelLocator): that model is
+	// the record's upstream_model, over the account's mapping.
+	echoModel bool
 	// streamOnly is set when the account type declares the upstream protocol
 	// in AccountPlatform.streamOnly (CONTRACTS §83): a non-streaming request
 	// is sent upstream with streamPath set to true and its SSE answer is
@@ -88,8 +105,8 @@ const upstreamLocal = "local"
 // supporting the endpoint's platform P (native), then those reaching it
 // through a core converter to a protocol of another platform they support.
 // A type supporting P is converted only when its endpoint subset on P
-// leaves the endpoint out, and then only to another endpoint of P in the
-// subset (CONTRACTS §83.3). A count_tokens request is never converted: the
+// leaves the endpoint out and its adapted entry lists it, and then only to
+// another endpoint of P in the subset (CONTRACTS §83.3). A count_tokens request is never converted: the
 // types without a native route estimate it locally when they serve the
 // generation protocol of its family (CONVERT-MATRIX §8).
 func (c *call) planRoutes() {
@@ -195,14 +212,27 @@ func (c *call) addLocalCountRoute(b core.AccountTypeBinding) {
 	}
 	k := b.Key()
 	c.routes[k] = &typeRoute{binding: b, platform: c.platform, upstream: upstreamLocal, grade: convert.GradeLocal,
-		hops: []string{c.ep.Protocol}, local: true}
+		hops: []string{c.ep.Protocol}, local: true, cross: c.crossPlatform(b)}
 	c.routeKeys = append(c.routeKeys, k)
 }
 
+// crossPlatform reports whether account type b does not declare the platform
+// of the client endpoint: the one definition of a cross-platform route
+// (typeRoute.cross), the same the account module judges a protocol binding
+// by (CONTRACTS §110.1). Supports reads the platforms the registry bound,
+// without those the cross-plugin rule skips (registry.withoutForeignFacts).
+func (c *call) crossPlatform(b core.AccountTypeBinding) bool {
+	_, own := b.Supports(c.platform)
+	return !own
+}
+
 // addRoute records the route of b to upstream protocol y of platform q:
-// request fields and pass headers come from the account type's entry for q,
-// else the platform; usage rules from the account type (per protocol), else
-// the endpoint speaking y, else the platform.
+// pass headers come from the account type's entry for q, else the platform;
+// usage rules from the account type (per protocol), else the endpoint
+// speaking y, else the platform. q is the client endpoint's platform unless
+// b does not declare it (planRoutes). (An endpoint whose usage or task the
+// platform's plugin states reaches only that plugin's account types: the
+// registry binds no other, design §4.3.)
 func (c *call) addRoute(b core.AccountTypeBinding, ap manifest.AccountPlatform, q, y string,
 	ep manifest.Endpoint, pf manifest.Platform, conv convert.Converter) {
 	if !ap.SupportsEndpoint(ep.ID) {
@@ -212,12 +242,11 @@ func (c *call) addRoute(b core.AccountTypeBinding, ap manifest.AccountPlatform, 
 	if _, dup := c.routes[k]; dup {
 		return
 	}
-	rt := &typeRoute{binding: b, platform: q, upstream: y, conv: conv, grade: convert.GradeNative,
-		requestFields: ap.RequestFields, passHeaders: ap.ClientHeaders(&pf),
+	rt := &typeRoute{binding: b, platform: q, upstream: y, conv: conv, grade: convert.GradeNative, cross: c.crossPlatform(b),
+		passHeaders:        ap.ClientHeaders(&pf),
 		usage:              usagerules.For(ap, &ep, &pf, y),
 		pluginUsage:        ep.PluginUsage(),
 		usageEvents:        ep.UsageStreamEvents,
-		usageMaxBytes:      ep.UsageMaxBytes,
 		usageRequestFields: ep.UsageRequestFields,
 		resp:               ep.Response,
 		respDeclared:       ep.Protocol != "",
@@ -231,14 +260,47 @@ func (c *call) addRoute(b core.AccountTypeBinding, ap manifest.AccountPlatform, 
 		rt.requiredAttempts = append(rt.requiredAttempts, ep.Usage.Attempts)
 	}
 	rt.requiredAttempts = append(rt.requiredAttempts, pf.Usage.Attempts)
-	if len(rt.requestFields) == 0 {
-		rt.requestFields = pf.RequestFields
-	}
 	if conv != nil {
 		rt.grade, rt.hops = conv.Grade(), convert.Hops(conv)
+		if ml, ok := conv.(convert.ModelLocator); ok {
+			rt.modelPath = ml.ModelPath()
+		}
+		if rl, ok := conv.(convert.ResponseModelLocator); ok {
+			rt.usage, rt.echoModel = withModelPaths(rt.usage, rl), true
+		}
+		if !rt.cross {
+			rt.adaptModel = ap.Adapted[c.ep.ID].Model
+		}
 	}
 	c.routes[k] = rt
 	c.routeKeys = append(c.routeKeys, k)
+}
+
+// withModelPaths is rules reading the model at the converter's paths; the
+// rest of the rules, the maps of the platform included, stays as it is.
+func withModelPaths(rules manifest.UsageRules, rl convert.ResponseModelLocator) manifest.UsageRules {
+	jsonPath, ssePath := rl.ResponseModelPaths()
+	if rules.JSON != nil {
+		j := *rules.JSON
+		j.Map = withModel(j.Map, jsonPath)
+		rules.JSON = &j
+	}
+	sse := make([]manifest.SSEUsageMap, len(rules.SSE))
+	for i, s := range rules.SSE {
+		s.Map = withModel(s.Map, ssePath)
+		sse[i] = s
+	}
+	rules.SSE = sse
+	return rules
+}
+
+// withModel is a copy of a usage map (nil included) reading the model at
+// path.
+func withModel(m map[string]string, path string) map[string]string {
+	out := make(map[string]string, len(m)+1)
+	maps.Copy(out, m)
+	out[manifest.UsageModel] = path
+	return out
 }
 
 // route returns the route of an account, nil when its type cannot serve

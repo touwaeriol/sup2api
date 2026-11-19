@@ -9,29 +9,23 @@ import (
 
 	"github.com/tidwall/gjson"
 
-	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 )
 
 // Rewrites in the format of the request parameter override (CONTRACTS §84)
-// run before BuildUpstreamRequest (docs/UPSTREAM-DECLARATIVE.md §4.3): the
-// account type's declared upstream first (core.DeclaredUpstream.PrepareBody:
-// filtered fields, the manifest's paramOverride), then the gateway's built-in
-// override (claude_max_tokens.go), then the account's own override. The
-// plugin builds from the result, with meta.model the model the override
-// settled on, and its patches may still change it (user decision,
-// 2026-11-09). The account override's header decisions still apply over the
-// plugin's headers (forwardBuilt). The account's header override (CONTRACTS
-// §108) is the initial header state of its parameter override, so the
-// account override's header decisions are both of theirs.
+// run before Execute (design §4.5): the gateway's built-in override
+// (claude_max_tokens.go), then the account's own override. The plugin is
+// handed the result, with meta.model the model the override settled on, and
+// builds the final bytes from it. The override's header decisions apply to
+// the relayed request between the plugin's default and authoritative headers
+// (upstreamRequest). The account's header override (CONTRACTS §108) is the
+// initial header state of its parameter override, so the account override's
+// header decisions are both of theirs.
 
 // paramOverrideState is what the rewrites decided for the current attempt:
-// the headers forwardBuilt applies and, when a rewrite changed the body's
+// the headers upstreamRequest applies and, when a rewrite changed the body's
 // model, that upstream model.
 type paramOverrideState struct {
-	// declared are the header decisions of the declared paramOverride,
-	// applied with the built headers.
-	declared core.HeaderOverride
 	// headers are the account's header override and parameter override's,
 	// applied after the passthrough.
 	headers core.HeaderOverride
@@ -43,7 +37,7 @@ type overrideRun func(body []byte, in *core.ParamOverrideContext) (core.ParamOve
 
 // overrideBody runs a rewrite on the upstream body of attempt n whose
 // upstream model so far is upModel. When the rewrite itself changes the
-// body's model (a model a plugin patch wrote is not the rewrite's), that
+// body's model, that
 // model goes upstream and is recorded; billing keeps the client's. It
 // returns the body, the upstream model and the header decisions, or the
 // attempt's end; what names the rewrite in errors.
@@ -63,28 +57,12 @@ func (c *call) overrideBody(ctx context.Context, acc *core.Account, rt *typeRout
 	return out.Body, upModel, out.Headers, nil
 }
 
-// prepareDeclared runs the declaration's part of the body of a declared
-// account type before BuildUpstreamRequest; other types are left alone.
-func (c *call) prepareDeclared(ctx context.Context, acc *core.Account, rt *typeRoute, body []byte, upModel string, n int) ([]byte, string, *attemptResult) {
-	c.paramOverride = paramOverrideState{}
-	d, ok := rt.binding.Client.(core.DeclaredUpstream)
-	if !ok {
-		return body, upModel, nil
-	}
-	var failure *attemptResult
-	body, upModel, c.paramOverride.declared, failure = c.overrideBody(ctx, acc, rt, body, upModel, n, d.PrepareBody, "upstream declaration")
-	return body, upModel, failure
-}
-
-// rewriteBody runs the rewrites of an attempt's body before
-// BuildUpstreamRequest: the declaration's part, the built-in override, then
-// the account's override.
+// rewriteBody runs the rewrites of an attempt's body before Execute: the
+// built-in override, then the account's override.
 func (c *call) rewriteBody(ctx context.Context, acc *core.Account, rt *typeRoute, body []byte, upModel string, n int) ([]byte, string, *attemptResult) {
-	body, upModel, failure := c.prepareDeclared(ctx, acc, rt, body, upModel, n)
+	c.paramOverride = paramOverrideState{}
+	body, upModel, failure := c.overrideBuiltin(ctx, acc, rt, body, upModel, n)
 	if failure != nil {
-		return nil, "", failure
-	}
-	if body, upModel, failure = c.overrideBuiltin(ctx, acc, rt, body, upModel, n); failure != nil {
 		return nil, "", failure
 	}
 	return c.overrideAccount(ctx, acc, rt, body, upModel, n)
@@ -103,7 +81,8 @@ func (c *call) overrideBuiltin(ctx context.Context, acc *core.Account, rt *typeR
 
 // overrideAccount runs the account's override on body, from what its header
 // override decided for the client's headers; the header decisions of both
-// are kept for forwardBuilt.
+// are kept for the upstream request (upstreamRequest, and the WebSocket
+// handshake).
 func (c *call) overrideAccount(ctx context.Context, acc *core.Account, rt *typeRoute, body []byte, upModel string, n int) ([]byte, string, *attemptResult) {
 	if acc == nil || (acc.ParamOverride == nil && acc.HeaderOverride == nil) {
 		return body, upModel, nil
@@ -119,44 +98,6 @@ func (c *call) overrideAccount(ctx context.Context, acc *core.Account, rt *typeR
 	return body, upModel, failure
 }
 
-// declaredTarget is the URL to send: a declared type's URL is rendered
-// again when the plugin's patches changed the body's model away from the
-// one it was built for, so a model in the path follows the body; a code
-// plugin's URL is its own.
-func (c *call) declaredTarget(rt *typeRoute, request *pluginv1.BuildUpstreamRequestRequest, built *pluginv1.BuildUpstreamRequestResponse, body []byte) (string, *attemptResult) {
-	d, ok := rt.binding.Client.(core.DeclaredUpstream)
-	if !ok || rt.modelPath == "" {
-		return built.GetUrl(), nil
-	}
-	m := gjson.GetBytes(body, rt.modelPath)
-	if m.Type != gjson.String || m.Str == request.GetMeta().GetModel() {
-		return built.GetUrl(), nil
-	}
-	target, err := d.UpstreamURL(request, built, m.Str)
-	if err != nil {
-		return "", &attemptResult{kind: attemptFailover, err: fromCore(core.ErrPluginUnavailable.WithCause(err), errTypePluginUnavailable)}
-	}
-	return target, nil
-}
-
-// rewriteTurn runs the rewrites of a WebSocket turn's message before the
-// plugin's patches, as on HTTP. The account override's header decisions do
-// not apply: the connection's headers were sent with the handshake.
-func (c *call) rewriteTurn(ctx context.Context, acc *core.Account, rt *typeRoute, payload []byte, n int) ([]byte, *gwError) {
-	if acc == nil {
-		return payload, nil
-	}
-	payload, _, failure := c.rewriteBody(ctx, acc, rt, payload, c.upstreamModel(acc), n)
-	return payload, failureErr(failure)
-}
-
-func failureErr(r *attemptResult) *gwError {
-	if r == nil {
-		return nil
-	}
-	return r.err
-}
-
 // accountOverride, accountHeaderOverride and builtinOverride name the
 // overrides in errors.
 const (
@@ -167,8 +108,7 @@ const (
 
 // accountHeaders is what the account's header override (CONTRACTS §108)
 // decides for the client headers: the initial header state of its parameter
-// override on HTTP, and on a WebSocket also the handshake's when the rewrites
-// of the first message failed. A stored override that no longer compiles
+// override. A stored override that no longer compiles
 // (or a client value that cannot be sent) is an error.
 func accountHeaders(acc *core.Account, client http.Header) (core.HeaderOverride, error) {
 	h, err := acc.HeaderOverride.Resolve(client)

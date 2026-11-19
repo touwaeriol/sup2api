@@ -3,7 +3,6 @@ package usage
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -18,8 +17,8 @@ import (
 var _ core.AsyncTasks = (*Service)(nil)
 
 // The statements of the task endpoints are on the request path: BeginTask,
-// ReceiveTask and registerTask run for every task submission, FindTask for
-// every poll of a client.
+// ReceiveTask and registerTask (through CommitExecution) run for every task
+// submission, FindTask for every poll of a client.
 
 func (s *Service) BeginTask(ctx context.Context, in core.TaskIntent) (string, error) {
 	// The dispatch identity of the submission; the database fills its
@@ -47,19 +46,19 @@ func (s *Service) ReceiveTask(ctx context.Context, requestID string, status int,
 	}).Error
 }
 
-// RegisterTask commits identity, initial observation, usage and optional debit
-// together. The gateway cannot return a public ID before this succeeds.
-func (s *Service) RegisterTask(ctx context.Context, in core.TaskRegistration) error {
-	return s.registerTask(ctx, in, nil, nil, false)
-}
-
-func (s *Service) registerTask(ctx context.Context, in core.TaskRegistration, before func(*gorm.DB) error, after func(*gorm.DB) error, strict bool) error {
+// registerTask writes a submitted task with its usage record in one
+// transaction between before and after (CommitExecution's): the usage row,
+// its reserve or settlement, the task and its monitoring. A registration
+// that cannot be written as it is (malformed, its request already
+// registered, its receipt not matching) is refused
+// (core.ErrExecutionRefused): retrying the same commit changes nothing.
+func (s *Service) registerTask(ctx context.Context, in core.TaskRegistration, before func(*gorm.DB) error, after func(*gorm.DB) error) error {
 	r := in.Record
 	if r == nil || r.AccountID == nil || in.PublicID == "" || in.UpstreamID == "" {
-		return errors.New("invalid task registration")
+		return refused("invalid task registration")
 	}
 	if _, err := protocol.RewriteTaskID(in.Snapshot, in.IDPaths, in.UpstreamID, in.PublicID); err != nil {
-		return err
+		return refused("task snapshot: " + err.Error())
 	}
 	cfg := s.withEnvironment(ctx, s.reconcileSettings(ctx), r.GroupID, r.AccountID)
 	now := time.Now()
@@ -74,28 +73,14 @@ func (s *Service) registerTask(ctx context.Context, in core.TaskRegistration, be
 	_, err := s.insertAtomic(ctx, []*core.UsageRecord{r}, before, func(tx *gorm.DB, ids map[string]int64) error {
 		uid, ok := ids[r.RequestID]
 		if !ok {
-			return errors.New("task request ID already registered")
+			return refused("task request ID already registered")
 		}
-		err := recordTask(ctx, tx, in, uid, next, deadline)
-		if err == nil && after != nil {
-			err = after(tx)
+		if err := recordTask(ctx, tx, in, uid, next, deadline); err != nil {
+			return err
 		}
-		return err
-	}, strict)
-	if err != nil {
-		return err
-	}
-	// A committed task follows the ordinary immediate settlement path when
-	// its submission reported final usage without a reservation. Failure
-	// queues billing for retry; it cannot turn registration into a failed
-	// submission or cause the upstream task to be sent again.
-	if !strict && initialStatus(r) == StatusPending {
-		p := fromRecord(r)
-		if err := s.settle(ctx, p, false); err != nil {
-			s.markFailed(ctx, p, err)
-		}
-	}
-	return nil
+		return after(tx)
+	}, true)
+	return err
 }
 
 // recordTask writes a submitted task in the transaction of its usage row
@@ -116,7 +101,7 @@ func recordTask(ctx context.Context, tx *gorm.DB, in core.TaskRegistration, uid 
 		return err
 	}
 	if !valid {
-		return errors.New("task receipt identity mismatch")
+		return refused("task receipt identity mismatch")
 	}
 	err := g.Create(&model.AsyncTask{PublicID: in.PublicID, PluginKey: r.PluginKey, Kind: in.Kind, UpstreamRefID: in.UpstreamID,
 		UserID: r.UserID, APIKeyID: r.APIKeyID, GroupID: r.GroupID, AccountID: *r.AccountID, Model: r.Model, Protocol: r.Protocol,

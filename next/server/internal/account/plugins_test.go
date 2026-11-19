@@ -10,7 +10,7 @@ import (
 )
 
 // The plugin account reader is the host side of HostService.ListAccounts and
-// GetAccountCredentials. Its whole security boundary is the plugin_key
+// GetAccount. Its whole security boundary is the plugin_key
 // predicate, so the tests below are about what a plugin must NOT be able to
 // see or do, not about the happy path alone.
 
@@ -151,30 +151,50 @@ func TestListPluginAccountsFilters(t *testing.T) {
 	}
 }
 
-func TestReadPluginAccountCredentials(t *testing.T) {
+func TestReadPluginAccount(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
 	mine := e.mkRawAccount("anthropic", "apikey", "mine", "sk-mine", true)
 	other := e.mkRawAccount("relay", "relay_key", "theirs", "sk-theirs", true)
 
-	got, err := e.svc.ReadPluginAccountCredentials(ctx, "anthropic", mine)
+	// The account as PlatformService calls receive it: no proxy, direct.
+	got, err := e.svc.ReadPluginAccount(ctx, "anthropic", mine)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.ID != mine || got.Name != "mine" || got.Type != "apikey" ||
-		string(got.Credentials) != `{"api_key":"sk-mine"}` ||
-		baseURL(got.Settings) != "https://api.example.com" {
-		t.Fatalf("credentials = %+v", got)
+	if got.GetId() != mine || got.GetName() != "mine" || got.GetType() != "apikey" ||
+		got.GetCredentialsJson() != `{"api_key":"sk-mine"}` || baseURL(json.RawMessage(got.GetSettingsJson())) != "https://api.example.com" ||
+		got.GetProperties().GetStatus() != "active" || got.GetProxy() != nil {
+		t.Fatalf("account = %v", got)
+	}
+	// With a proxy, the proxy it goes out through.
+	host, port, _ := forwardProxy(t)
+	pid := e.exec1(`INSERT INTO proxies (name, protocol, host, port, username) VALUES ('p', 'http', $1, $2, 'bob') RETURNING id`, host, port)
+	if _, err := e.db.SQL.ExecContext(ctx, `UPDATE accounts SET proxy_id = $1 WHERE id = $2`, pid, mine); err != nil {
+		t.Fatal(err)
+	}
+	got, err = e.svc.ReadPluginAccount(ctx, "anthropic", mine)
+	if p := got.GetProxy(); err != nil || p.GetId() != pid || p.GetProtocol() != "http" || p.GetHost() != host || int(p.GetPort()) != port || p.GetUsername() != "bob" {
+		t.Fatalf("proxy = %v %v", p, err)
+	}
+	// A proxy that cannot be had: no account without its proxy, no audit.
+	if _, err := e.db.SQL.ExecContext(ctx, `UPDATE proxies SET status = 'disabled', updated_at = clock_timestamp() WHERE id = $1`, pid); err != nil {
+		t.Fatal(err)
+	}
+	e.prx.Invalidate(pid)
+	reads := len(e.auditRows(AuditPluginAccountRead))
+	if _, err := e.svc.ReadPluginAccount(ctx, "anthropic", mine); core.AsError(err).Code != "unavailable" || len(e.auditRows(AuditPluginAccountRead)) != reads {
+		t.Fatalf("disabled proxy read = %v", err)
 	}
 
 	// Another plugin's account is not found, NOT permission denied: a
 	// distinguishable error would confirm the id exists.
-	_, err = e.svc.ReadPluginAccountCredentials(ctx, "anthropic", other)
+	_, err = e.svc.ReadPluginAccount(ctx, "anthropic", other)
 	if core.AsError(err).Code != "not_found" {
 		t.Fatalf("cross-plugin read = %v", err)
 	}
 	// ... and the answer is the same for an id that does not exist at all.
-	_, missing := e.svc.ReadPluginAccountCredentials(ctx, "anthropic", other+10_000)
+	_, missing := e.svc.ReadPluginAccount(ctx, "anthropic", other+10_000)
 	if core.AsError(missing).Code != "not_found" || core.AsError(missing).Message != core.AsError(err).Message {
 		t.Fatalf("existence leak: %v vs %v", err, missing)
 	}
@@ -183,7 +203,7 @@ func TestReadPluginAccountCredentials(t *testing.T) {
 	if _, err := e.db.SQL.ExecContext(ctx, `UPDATE accounts SET deleted_at = now() WHERE id = $1`, mine); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.svc.ReadPluginAccountCredentials(ctx, "anthropic", mine); core.AsError(err).Code != "not_found" {
+	if _, err := e.svc.ReadPluginAccount(ctx, "anthropic", mine); core.AsError(err).Code != "not_found" {
 		t.Fatalf("deleted account read = %v", err)
 	}
 	if got, _ := e.svc.ListPluginAccounts(ctx, "anthropic", core.PluginAccountQuery{IncludeInactive: true}); len(got) != 0 {
@@ -191,20 +211,21 @@ func TestReadPluginAccountCredentials(t *testing.T) {
 	}
 }
 
-// Every successful credential read is audited: that record is the condition
-// the pull-style access is granted under, so it is checked call by call.
-func TestReadPluginAccountCredentialsAudits(t *testing.T) {
+// Every successful read is audited: that record is the condition the
+// pull-style access is granted under, so it is checked call by call, and a
+// read whose row cannot be written hands nothing out.
+func TestReadPluginAccountAudits(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
 	mine := e.mkRawAccount("anthropic", "apikey", "mine", "sk-mine", true)
 	other := e.mkRawAccount("relay", "relay_key", "theirs", "sk-theirs", true)
 
 	for i := 0; i < 3; i++ {
-		if _, err := e.svc.ReadPluginAccountCredentials(ctx, "anthropic", mine); err != nil {
+		if _, err := e.svc.ReadPluginAccount(ctx, "anthropic", mine); err != nil {
 			t.Fatal(err)
 		}
 	}
-	rows := e.auditRows(AuditPluginCredentialsRead)
+	rows := e.auditRows(AuditPluginAccountRead)
 	if len(rows) != 3 {
 		t.Fatalf("audit rows = %d, want one per call", len(rows))
 	}
@@ -218,23 +239,35 @@ func TestReadPluginAccountCredentialsAudits(t *testing.T) {
 	}
 	d := r["detail"].(map[string]any)
 	if d["plugin_key"] != "anthropic" || d["account_type"] != "apikey" || d["account_name"] != "mine" ||
-		d["via"] != "host.GetAccountCredentials" {
+		d["via"] != "host.GetAccount" || len(d) != 4 {
 		t.Fatalf("audit detail: %v", d)
 	}
 
 	// A refused read discloses nothing, so it writes no disclosure record.
-	if _, err := e.svc.ReadPluginAccountCredentials(ctx, "anthropic", other); err == nil {
+	if _, err := e.svc.ReadPluginAccount(ctx, "anthropic", other); err == nil {
 		t.Fatal("cross-plugin read succeeded")
 	}
-	if rows := e.auditRows(AuditPluginCredentialsRead); len(rows) != 3 {
+	if rows := e.auditRows(AuditPluginAccountRead); len(rows) != 3 {
 		t.Fatalf("audit rows after a refused read = %d", len(rows))
+	}
+
+	// An audit row that cannot be written fails the read.
+	if _, err := e.db.SQL.ExecContext(ctx, `CREATE FUNCTION actx_no_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'no audit'; END $$;
+		CREATE TRIGGER actx_no_audit BEFORE INSERT ON audit_logs FOR EACH ROW EXECUTE FUNCTION actx_no_audit()`); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := e.svc.ReadPluginAccount(ctx, "anthropic", mine); err == nil || got != nil {
+		t.Fatalf("read without its audit row = %v %v", got, err)
+	}
+	if _, err := e.db.SQL.ExecContext(ctx, `DROP TRIGGER actx_no_audit ON audit_logs; DROP FUNCTION actx_no_audit()`); err != nil {
+		t.Fatal(err)
 	}
 
 	// Listing metadata is not a disclosure and is not audited as one.
 	if _, err := e.svc.ListPluginAccounts(ctx, "anthropic", core.PluginAccountQuery{}); err != nil {
 		t.Fatal(err)
 	}
-	if rows := e.auditRows(AuditPluginCredentialsRead); len(rows) != 3 {
+	if rows := e.auditRows(AuditPluginAccountRead); len(rows) != 3 {
 		t.Fatalf("ListPluginAccounts wrote an audit row: %d", len(rows))
 	}
 }

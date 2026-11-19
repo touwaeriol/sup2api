@@ -1,99 +1,15 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
-import { useI18n } from 'vue-i18n'
-import { api } from '@sub2api/host'
-import { SchemaForm, SHint, toast } from '@sub2api/ui'
-import SettingsSaveBar from '@/components/SettingsSaveBar.vue'
-import StickyActionBar from '@/components/StickyActionBar.vue'
-import { fieldErrors, notifyError } from '@/utils/errors'
-import { useAuthStore } from '@/stores/auth'
-import { settingsFieldErrors, type PluginSettings } from '../pluginUtil'
-import { P } from '@/generated/permissions'
+import PluginComponent from '@/components/plugin/PluginComponent.vue'
+import type { PluginSettings } from '../pluginUtil'
 
-// Plugin settings rendered from the plugin's JSON Schema in the settings
-// layout (one SSettingsGroup per ui:section, one SSettingRow per field).
-// Secret values come back as "******"; sending "******" keeps the stored value.
-// Host widgets (proxy-select, group-select) are injected app-wide.
-const props = defineProps<{ pluginKey: string; settings: PluginSettings }>()
-const emit = defineEmits<{ (e: 'saved'): void }>()
-/**
- * Field error codes of the core's own settings checks; the schema messages
- * (a plugin's own wording) stay as sent. "reenter": a caller with only the
- * plugin's permission must type a kept secret again to change anything else.
- */
-const SETTINGS_ERROR_CODES = { reenter: 'plugins.settings.reenter' }
-const { t } = useI18n()
-const auth = useAuthStore()
-// The plugin names its own settings permission.
-const canManage = computed(() => auth.has(P.PluginManage) || (!!props.settings.permission && auth.hasDynamic(props.settings.permission)))
-
-const values = ref<Record<string, any>>({})
-const loaded = ref('')
-const errors = ref<Record<string, string>>({})
-const saving = ref(false)
-const form = ref<InstanceType<typeof SchemaForm>>()
-
-watch(
-  () => props.settings,
-  (s) => {
-    values.value = JSON.parse(JSON.stringify(s.values || {}))
-    errors.value = {}
-    loaded.value = ''
-  },
-  { immediate: true }
-)
-
-// The first emitted value (after SchemaForm fills defaults) is the baseline for "unsaved changes".
-watch(
-  values,
-  (v) => {
-    if (!loaded.value) loaded.value = JSON.stringify(v)
-  },
-  { deep: true, flush: 'post' }
-)
-const dirty = computed(() => !!loaded.value && JSON.stringify(values.value) !== loaded.value)
-
-function reset() {
-  values.value = JSON.parse(JSON.stringify(props.settings.values || {}))
-  errors.value = {}
-  loaded.value = ''
-}
-
-async function save() {
-  if (form.value && !form.value.validate()) return
-  saving.value = true
-  errors.value = {}
-  try {
-    await api.put(`/plugins/${encodeURIComponent(props.pluginKey)}/settings`, { values: values.value })
-    toast(t('common.saved'), 'success')
-    loaded.value = JSON.stringify(values.value)
-    emit('saved')
-  } catch (e) {
-    const { fields, root } = settingsFieldErrors(fieldErrors(e, undefined, SETTINGS_ERROR_CODES))
-    errors.value = fields
-    // Errors of the whole object have no field to show at.
-    if (root.length) toast(root.join('; '), 'error')
-    else notifyError(e)
-  } finally {
-    saving.value = false
-  }
-}
+// Native settings without a page of their own: the component the plugin
+// registered for them (ui.settings.component), which reads, checks and saves
+// them itself (SSettingsPage over usePluginSettings, with its own save bar).
+defineProps<{ pluginKey: string; settings: PluginSettings }>()
 </script>
 
 <template>
-  <div class="max-w-4xl space-y-4" data-testid="plugin-settings">
-    <SchemaForm
-      ref="form"
-      v-model="values"
-      :schema="(settings.schema as any)"
-      :ui-schema="(settings.ui_schema as any) || null"
-      :errors="errors"
-      :disabled="!canManage"
-      layout="settings"
-    />
-    <StickyActionBar v-if="canManage">
-      <SHint v-if="dirty" size="xs" tone="warning" data-testid="plugin-settings-dirty">{{ t('plugins.settings.unsaved') }}</SHint>
-      <template #actions><SettingsSaveBar :dirty="dirty" :saving="saving" @save="save" @reset="reset" /></template>
-    </StickyActionBar>
-  </div>
+  <PluginComponent v-slot="{ component }" :plugin-key="pluginKey" :name="settings.component">
+    <component :is="component" />
+  </PluginComponent>
 </template>

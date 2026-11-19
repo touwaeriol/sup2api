@@ -20,7 +20,7 @@ import { hostShowsNav, isSettingsPage, useSection, visibleGroups, type Access, t
 // Prompt moderation page (CONTRACTS §72.15): the sections of nav.ts, in the
 // console's sidebar from UI 3.14 (manifest ui.pages.dashboard.nav) or as tabs
 // here before it. The settings are several short pages, one per nav item of
-// access "settings" (the ui:section page of forms/settings.ui.json), for those
+// access "settings" (the page of settingsForm.ts SECTIONS), for those
 // who may edit them (plugin:manage or moderation:manage, §75.1). The console
 // still sends /plugins/moderation/settings here with ?tab=settings, which
 // opens the first of them (nav.ts RENAMED).

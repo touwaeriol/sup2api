@@ -58,14 +58,12 @@ var unmanagedKinds = []string{"function ", "view ", "materialized view ", "seque
 var errRollback = errors.New("pgdbtool: rollback")
 
 // Drift compares migrations with models on the PostgreSQL server at dsn (a
-// role that may create roles and schemas), in one transaction that it rolls
-// back: an interrupted run leaves nothing behind. It
+// role that may create schemas), in one transaction that it rolls back: an
+// interrupted run leaves nothing behind. It
 //
-//   - runs migrations in a scratch schema as a scratch role that owns the
-//     schema and nothing else, like the host runs them as the plugin's role,
-//     which it makes the owner of plg_<key> (ALTER SCHEMA ... OWNER TO; a
-//     new schema grants PUBLIC nothing, as the host's REVOKE leaves it): a
-//     migration that needs more fails here as it would on install;
+//   - runs migrations in a scratch schema as the connecting user with
+//     search_path on that schema, like the host runs them as the core's user
+//     (CONTRACTS §115), and lists what they created or changed outside it;
 //   - lets AutoMigrate build models in a second, empty schema;
 //   - compares the two schemas' catalogs: tables, each column's type, NOT
 //     NULL and default (by value, so that 0 and '0'::numeric agree), primary
@@ -209,76 +207,59 @@ func searchPath(tx *gorm.DB, schema string) error {
 
 // scratch names what Drift creates in its transaction.
 type scratch struct {
-	role     string // runs the migrations, like the plugin's role
-	migrated string // the migrations' schema, owned by role
+	migrated string // the migrations' schema
 	models   string // AutoMigrate's schema
 }
 
 func newScratch(tx *gorm.DB) (*scratch, error) {
 	base := fmt.Sprintf("sub2api_drift_%d_%d", os.Getpid(), time.Now().UnixNano())
-	s := &scratch{role: base, migrated: base + "_m", models: base + "_g"}
-	role := clause.Table{Name: s.role}
-	// A new role has none of SUPERUSER, CREATEDB, CREATEROLE, REPLICATION
-	// and BYPASSRLS, like the host's plugin roles. Membership lets a
-	// comparison role that is no superuser hand it the schema and SET ROLE
-	// (PostgreSQL 16 does not grant SET on the roles one creates).
-	for _, q := range []struct {
-		sql  string
-		args []any
-	}{
-		{"CREATE ROLE ? NOLOGIN", []any{role}},
-		{"GRANT ? TO CURRENT_USER", []any{role}},
-		{"CREATE SCHEMA ? AUTHORIZATION ?", []any{clause.Table{Name: s.migrated}, role}},
-		{"CREATE SCHEMA ?", []any{clause.Table{Name: s.models}}},
-	} {
-		if err := tx.Exec(q.sql, q.args...).Error; err != nil {
-			return nil, fmt.Errorf("pgdbtool: scratch schemas (the comparison server's role must be able to create roles and schemas): %w", err)
+	s := &scratch{migrated: base + "_m", models: base + "_g"}
+	for _, schema := range []string{s.migrated, s.models} {
+		if err := tx.Exec("CREATE SCHEMA ?", clause.Table{Name: schema}).Error; err != nil {
+			return nil, fmt.Errorf("pgdbtool: scratch schemas (the comparison server's role must be able to create schemas): %w", err)
 		}
 	}
 	return s, nil
 }
 
-// migrate runs migrations in s.migrated as s.role, with search_path on that
-// schema alone: what the host does with the plugin's role and DSN.
+// migrate runs migrations in s.migrated as the connecting user, with
+// search_path on that schema alone: what the host does with the core's user.
 func (s *scratch) migrate(tx *gorm.DB, migrations []Migration) error {
 	for _, m := range migrations {
 		text, err := os.ReadFile(m.Path)
 		if err != nil {
 			return fmt.Errorf("pgdbtool: read %s: %w", m.Name, err)
 		}
-		err = tx.Exec("SET LOCAL ROLE ?", clause.Table{Name: s.role}).Error
-		if err == nil {
-			err = searchPath(tx, s.migrated)
-		}
+		err = searchPath(tx, s.migrated)
 		if err == nil {
 			// No arguments: the driver sends the file as one simple query,
 			// so it may hold several statements.
 			err = tx.Exec(string(text)).Error
 		}
-		if err == nil {
-			err = tx.Exec("RESET ROLE").Error
-		}
 		if err != nil {
-			return fmt.Errorf("pgdbtool: migration %s (run as a role that owns the plugin schema and nothing else, like the host runs it): %w", m.Name, err)
+			return fmt.Errorf("pgdbtool: migration %s: %w", m.Name, err)
 		}
 	}
 	return nil
 }
 
-// outside lists what the migrations created outside their schema, which
-// only s.role can own (its tables' TOAST tables aside). PostgreSQL 14 and
-// older let every role create in public.
+// outside lists what the migrations created or changed outside their schema
+// (its tables' TOAST tables aside): the catalog rows this transaction wrote
+// in another schema, other schemas than the scratch ones, and extensions.
+// The transaction has written nothing else yet.
 func (s *scratch) outside(tx *gorm.DB) ([]string, error) {
 	var out []string
-	err := tx.Raw(`WITH s AS (SELECT ?::regrole AS role, ?::regnamespace AS schema)
+	err := tx.Raw(`WITH s AS (SELECT pg_current_xact_id()::xid AS x, ?::regnamespace AS schema, ?::regnamespace AS models)
 		SELECT 'relation ' || c.oid::regclass::text FROM pg_class c, s
-			WHERE c.relowner = s.role AND c.relnamespace NOT IN (s.schema, 'pg_toast'::regnamespace) AND c.relpersistence <> 't'
+			WHERE c.xmin = s.x AND c.relnamespace NOT IN (s.schema, s.models, 'pg_toast'::regnamespace) AND c.relpersistence <> 't'
 		UNION ALL SELECT 'function ' || p.oid::regprocedure::text FROM pg_proc p, s
-			WHERE p.proowner = s.role AND p.pronamespace <> s.schema
+			WHERE p.xmin = s.x AND p.pronamespace NOT IN (s.schema, s.models)
 		UNION ALL SELECT 'type ' || t.oid::regtype::text FROM pg_type t, s
-			WHERE t.typowner = s.role AND t.typnamespace <> s.schema AND t.typtype IN ('e', 'd', 'r')
+			WHERE t.xmin = s.x AND t.typnamespace NOT IN (s.schema, s.models) AND t.typtype IN ('e', 'd', 'r')
 		UNION ALL SELECT 'schema ' || n.nspname FROM pg_namespace n, s
-			WHERE n.nspowner = s.role AND n.oid <> s.schema`, s.role, s.migrated).Scan(&out).Error
+			WHERE n.xmin = s.x AND n.oid NOT IN (s.schema, s.models)
+		UNION ALL SELECT 'extension ' || e.extname FROM pg_extension e, s
+			WHERE e.xmin = s.x`, s.migrated, s.models).Scan(&out).Error
 	for i := range out {
 		out[i] += " (outside the plugin schema)"
 	}

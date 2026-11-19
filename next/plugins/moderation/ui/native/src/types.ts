@@ -940,10 +940,6 @@ export interface PluginSettings {
   values: Record<string, unknown>
   /** keys whose stored value comes back as SETTINGS_MASK; sending the mask keeps it */
   secret_fields?: string[]
-  /** forms/settings.schema.json (the core validates and masks with it, CONTRACTS §75.5): defaults of keys never stored */
-  schema?: ({ properties?: Record<string, Record<string, any> & { default?: unknown }> } & Record<string, any>) | null
-  /** forms/settings.ui.json: order, ui:section groups, labels, hidden fields */
-  ui_schema?: Record<string, any> | null
 }
 
 // ---- configuration import (§72.12)

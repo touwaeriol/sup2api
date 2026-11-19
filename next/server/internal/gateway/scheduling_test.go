@@ -177,8 +177,8 @@ func TestModelMappingRewritesUpstreamModel(t *testing.T) {
 	if m := gjson.GetBytes(call.body, "model").String(); m != "mapped-model" {
 		t.Fatalf("upstream body model %q", m)
 	}
-	if b := e.plat.builds[0]; b.GetMeta().GetModel() != "mapped-model" || b.GetFields()["model"] != `"mapped-model"` {
-		t.Fatalf("plugin saw meta.model=%q fields=%v", b.GetMeta().GetModel(), b.GetFields())
+	if b := e.plat.builds[0]; b.GetMeta().GetModel() != "mapped-model" || gjson.GetBytes(b.GetBody(), "model").String() != "mapped-model" {
+		t.Fatalf("plugin saw meta.model=%q body=%s", b.GetMeta().GetModel(), b.GetBody())
 	}
 	rec := e.record()
 	if rec.Model != testModel || rec.UpstreamModel != "mapped-model" || rec.Price == nil {

@@ -34,12 +34,37 @@ var Policy = classify.Policy{
 // because the minimum a model accepts differs (1 for OpenAI, 16 for some Ark
 // models). The result is deterministic JSON: encoding/json sorts map keys.
 func ChatPingBody(model string, maxTokens int) string {
-	body, _ := json.Marshal(map[string]any{
+	return pingJSON(map[string]any{
 		"model":      model,
 		"max_tokens": maxTokens,
 		"messages":   []map[string]string{{"role": "user", "content": "ping"}},
 	})
-	return string(body)
+}
+
+// ResponsesPingBody is the body of a minimal response: the input "ping" and
+// 16 output tokens, the least the Responses API accepts.
+func ResponsesPingBody(model string) string {
+	return pingJSON(map[string]any{"model": model, "input": "ping", "max_output_tokens": 16})
+}
+
+// EmbeddingsPingBody is the body of a minimal embedding: one word.
+func EmbeddingsPingBody(model string) string {
+	return pingJSON(map[string]any{"model": model, "input": "ping"})
+}
+
+// ImagesPingBody is the body of the cheapest image generation: one image of
+// the smallest common size at the lowest quality. It generates (and costs)
+// a real image, so the core only offers it when the test names the model
+// (endpoint test "explicit", CONTRACTS §122).
+func ImagesPingBody(model string) string {
+	return pingJSON(map[string]any{"model": model, "prompt": "a small white dot", "n": 1, "size": "1024x1024", "quality": "low"})
+}
+
+// pingJSON is deterministic JSON of a test body: encoding/json sorts map
+// keys.
+func pingJSON(body map[string]any) string {
+	out, _ := json.Marshal(body)
+	return string(out)
 }
 
 func parseError(body []byte) classify.Error {

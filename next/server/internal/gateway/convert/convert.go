@@ -135,6 +135,10 @@ type Options struct {
 	// Anthropic without an output limit (the gateway's claude_max_tokens
 	// rule, CONVERT-MATRIX §9.4); 0 or nil uses the converter's fallback.
 	ClaudeDefaultMaxTokens func(model string) int
+	// AdaptModel is the model of the account type's adapted endpoint the
+	// request is served on (manifest.AdaptOptions.Model): the chat model an
+	// image request is generated with (CONTRACTS §121.3).
+	AdaptModel string
 }
 
 // Converter converts between a client protocol (From) and an upstream
@@ -185,6 +189,30 @@ type LossReporter interface {
 // passes through, client first.
 type HopReporter interface {
 	Hops() []string
+}
+
+// ModelLocator is implemented by a converter whose upstream request carries
+// the client's model elsewhere than the upstream endpoint's model path:
+// ModelPath is its body path, where the gateway writes the account's
+// mapping (CONTRACTS §121.4).
+type ModelLocator interface {
+	ModelPath() string
+}
+
+// ResponseModelLocator is implemented by a converter whose upstream
+// response names the model that served the client's model elsewhere than
+// the upstream endpoint's usage rules read it: the paths in a JSON
+// response and in an SSE event, which replace the rules' model paths
+// (the upstream model recorded, never a price; CONTRACTS §121.4).
+type ResponseModelLocator interface {
+	ResponseModelPaths() (json, sse string)
+}
+
+// terminal is implemented by a converter whose upstream request uses what
+// only its upstream protocol has (the Responses image_generation tool): it
+// is never the first hop of a composition.
+type terminal interface {
+	terminal()
 }
 
 // Losses returns the losses of a bound converter, nil when it reports none.
@@ -332,7 +360,7 @@ func (r *Registry) Pairs() []PairInfo {
 func (r *Registry) compose() {
 	r.composed = map[pair]Converter{}
 	for k1, a := range r.m {
-		if k1.to != relay {
+		if _, last := a.(terminal); k1.to != relay || last {
 			continue
 		}
 		for k2, b := range r.m {

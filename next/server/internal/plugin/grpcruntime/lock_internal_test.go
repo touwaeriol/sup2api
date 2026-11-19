@@ -37,7 +37,7 @@ func lockEnv(t *testing.T, key string, grants registry.Grants, locker core.Token
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = pkg.Close() })
-	rt := &Runtime{o: Options{Node: staticNode{"n", "b"}, Concurrency: Concurrency{Hot: 4, Console: 4, Background: 4, Execute: 4}, DataDir: t.TempDir(), Locker: locker},
+	rt := &Runtime{o: Options{Node: staticNode{"n", "b"}, Concurrency: Concurrency{Hot: 4, Console: 4, Background: 4}, DataDir: t.TempDir(), Locker: locker},
 		log: slog.Default()}
 	i := newInstance(rt, pkg, "", "", &settings{configJSON: "{}", grants: grants})
 	return &hostServer{i: i}

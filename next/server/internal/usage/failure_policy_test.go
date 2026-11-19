@@ -41,17 +41,17 @@ func TestAvailabilityTraceDetailAndRedaction(t *testing.T) {
 	f := newFixture(t)
 	ctx := t.Context()
 	var a1, a2 int64
-	require.NoError(t, f.db.SQL.QueryRowContext(ctx, `INSERT INTO accounts(name,plugin_key,type,credentials_enc) VALUES('Fable One','claude_oauth','oauth','') RETURNING id`).Scan(&a1))
-	require.NoError(t, f.db.SQL.QueryRowContext(ctx, `INSERT INTO accounts(name,plugin_key,type,credentials_enc) VALUES('Fable Two','claude_oauth','oauth','') RETURNING id`).Scan(&a2))
+	require.NoError(t, f.db.SQL.QueryRowContext(ctx, `INSERT INTO accounts(name,plugin_key,type,credentials_enc) VALUES('Fable One','anthropic','apikey','') RETURNING id`).Scan(&a1))
+	require.NoError(t, f.db.SQL.QueryRowContext(ctx, `INSERT INTO accounts(name,plugin_key,type,credentials_enc) VALUES('Fable Two','anthropic','apikey','') RETURNING id`).Scan(&a2))
 	r := f.record("availability-trace", true)
 	r.AccountID = &a2
 	r.Availability = &core.AvailabilityTrace{V: 1, Outcome: core.AvailabilityPartial, Candidates: 3, Admitted: 2,
 		Counts: map[string]int{"unavailable:quota_rejected:7d_fable": 1, "plugin_error": 1}, RetryAt: 1_900_000_000,
 		Samples: []core.AvailabilitySample{
-			{AccountID: a1, Plugin: "claude_oauth", Model: "claude-fable-5", Decision: core.AvailabilityBlock, Reason: "unavailable:quota_rejected:7d_fable", RetryAt: 1_900_000_000},
-			{Plugin: "claude_oauth", Decision: core.AvailabilityFailOpen, Reason: "plugin_error", Batch: true},
+			{AccountID: a1, Plugin: "anthropic", Model: "claude-fable-5", Decision: core.AvailabilityBlock, Reason: "unavailable:quota_rejected:7d_fable", RetryAt: 1_900_000_000},
+			{Plugin: "anthropic", Decision: core.AvailabilityFailOpen, Reason: "plugin_error", Batch: true},
 		},
-		Guard: []core.AvailabilitySample{{AccountID: a2, Plugin: "claude_oauth", Decision: core.AvailabilityBlock, Reason: "guard_identity_changed", Attempt: 1}},
+		Guard: []core.AvailabilitySample{{AccountID: a2, Plugin: "anthropic", Decision: core.AvailabilityBlock, Reason: "guard_identity_changed", Attempt: 1}},
 	}
 	r.FailurePolicy = `[{"revision":1,"attempt":1,"account_id":` + strconv.FormatInt(a2, 10) + `,"source":"core","status":503,"action":"switch","account_action":"none","reason":"model_availability","account_result":"unchanged"}]`
 	f.svc.process(ctx, []*core.UsageRecord{r})

@@ -214,7 +214,7 @@ func TestReadVideoSpecStructuredFields(t *testing.T) {
 		PathDuration:     `7`,
 		PathContentCount: `1`,
 		"content.0.text": `"a cat yawning at the camera"`,
-	}), nil)
+	}))
 	want := videoSpec{Resolution: Res1080, ResolutionStated: true, Ratio: Ratio219, Seconds: 7, PromptFullyRead: true}
 	if spec != want {
 		t.Fatalf("spec = %+v, want %+v", spec, want)
@@ -226,7 +226,7 @@ func TestReadVideoSpecStructuredFields(t *testing.T) {
 	// under-count by half a second every time).
 	spec = readVideoSpec(map[string]string{
 		PathResolution: `"720p"`, PathDuration: `5`, PathFrames: `133`, PathContentCount: `1`,
-	}, nil)
+	})
 	if spec.Frames != 133 || spec.Seconds != 5 {
 		t.Fatalf("frames/seconds = %d/%d", spec.Frames, spec.Seconds)
 	}
@@ -236,24 +236,24 @@ func TestReadVideoSpecStructuredFields(t *testing.T) {
 	}
 
 	// -1 is "the model chooses", not a duration.
-	spec = readVideoSpec(map[string]string{PathResolution: `"720p"`, PathDuration: `-1`, PathContentCount: `1`}, nil)
+	spec = readVideoSpec(map[string]string{PathResolution: `"720p"`, PathDuration: `-1`, PathContentCount: `1`})
 	if spec.Seconds != 0 {
 		t.Fatalf("duration -1 read as %d seconds", spec.Seconds)
 	}
 	// A client that sends a number as a string is still read, rather than
 	// falling through to the model's maximum.
-	spec = readVideoSpec(map[string]string{PathDuration: `"6"`}, nil)
+	spec = readVideoSpec(map[string]string{PathDuration: `"6"`})
 	if spec.Seconds != 6 {
 		t.Fatalf(`duration "6" read as %d`, spec.Seconds)
 	}
 	// An unrecognised tier is not rounded to a neighbour: Ark publishes no
 	// pixel size for "2k", so there is no number to derive.
-	spec = readVideoSpec(map[string]string{PathResolution: `"2k"`}, nil)
+	spec = readVideoSpec(map[string]string{PathResolution: `"2k"`})
 	if spec.Resolution != "" {
 		t.Fatalf(`resolution "2k" read as %q`, spec.Resolution)
 	}
 	// adaptive is a real request value and not a concrete ratio.
-	spec = readVideoSpec(map[string]string{PathRatio: `"adaptive"`}, nil)
+	spec = readVideoSpec(map[string]string{PathRatio: `"adaptive"`})
 	if spec.Ratio != "" {
 		t.Fatalf("adaptive read as ratio %q", spec.Ratio)
 	}
@@ -268,7 +268,7 @@ func TestReadVideoSpecPromptCommands(t *testing.T) {
 	spec := readVideoSpec(map[string]string{
 		PathContentCount: `1`,
 		"content.0.text": `"小猫对着镜头打哈欠 --rs 1080p --rt 16:9 --dur 10 --seed 11 --cf false --wm true"`,
-	}, nil)
+	})
 	want := videoSpec{Resolution: Res1080, Ratio: Ratio169, Seconds: 10, PromptFullyRead: true}
 	if spec != want {
 		t.Fatalf("spec = %+v, want %+v", spec, want)
@@ -280,12 +280,12 @@ func TestReadVideoSpecPromptCommands(t *testing.T) {
 	spec = readVideoSpec(map[string]string{
 		PathContentCount: `1`,
 		"content.0.text": `"a cat --resolution 4k --duration 12 --ratio 4:3"`,
-	}, nil)
+	})
 	if spec.Resolution != Res4K || spec.Seconds != 12 || spec.Ratio != Ratio43 {
 		t.Fatalf("long-form commands: %+v", spec)
 	}
 	// "--flag=value" as well as "--flag value".
-	spec = readVideoSpec(map[string]string{PathContentCount: `1`, "content.0.text": `"x --rs=720p --dur=4"`}, nil)
+	spec = readVideoSpec(map[string]string{PathContentCount: `1`, "content.0.text": `"x --rs=720p --dur=4"`})
 	if spec.Resolution != Res720 || spec.Seconds != 4 {
 		t.Fatalf("equals form: %+v", spec)
 	}
@@ -294,14 +294,14 @@ func TestReadVideoSpecPromptCommands(t *testing.T) {
 	spec = readVideoSpec(map[string]string{
 		PathContentCount: `2`,
 		"content.1.text": `"a cat --rs 1080p --dur 8"`,
-	}, nil)
+	})
 	if spec.Resolution != Res1080 || spec.Seconds != 8 {
 		t.Fatalf("command in content[1]: %+v", spec)
 	}
 	// A prompt that merely contains dashes is not a command.
 	spec = readVideoSpec(map[string]string{
 		PathContentCount: `1`, "content.0.text": `"a well-lit scene -- dramatic, high-contrast"`,
-	}, nil)
+	})
 	if spec.Resolution != "" || spec.Seconds != 0 || spec.Ratio != "" {
 		t.Fatalf("prose read as commands: %+v", spec)
 	}
@@ -315,7 +315,7 @@ func TestTheMoreExpensiveReadingWins(t *testing.T) {
 	spec := readVideoSpec(map[string]string{
 		PathResolution: `"480p"`, PathDuration: `4`, PathContentCount: `1`,
 		"content.0.text": `"a cat --rs 4k --dur 15"`,
-	}, nil)
+	})
 	if spec.Resolution != Res4K {
 		t.Fatalf("resolution = %q, want 4k (the dearer of the two readings)", spec.Resolution)
 	}
@@ -326,7 +326,7 @@ func TestTheMoreExpensiveReadingWins(t *testing.T) {
 	spec = readVideoSpec(map[string]string{
 		PathResolution: `"4k"`, PathDuration: `15`, PathContentCount: `1`,
 		"content.0.text": `"a cat --rs 480p --dur 4"`,
-	}, nil)
+	})
 	if spec.Resolution != Res4K || spec.Seconds != 15 {
 		t.Fatalf("spec = %+v, want the expensive reading either way", spec)
 	}
@@ -335,107 +335,52 @@ func TestTheMoreExpensiveReadingWins(t *testing.T) {
 	// takes the tier's largest area.
 	spec = readVideoSpec(map[string]string{
 		PathRatio: `"1:1"`, PathContentCount: `1`, "content.0.text": `"a cat --rt 21:9"`,
-	}, nil)
+	})
 	if spec.Ratio != "" {
 		t.Fatalf("contradictory ratios read as %q, want unknown", spec.Ratio)
 	}
 }
 
-// TestFieldsOmittedIsNotAbsent is the test CONTRACTS §25.6 asks for by name.
-//
-//	absent  = the client did not send it  -> Ark's documented default applies
-//	omitted = the client SENT it and the host would not carry it -> unknown
-//
-// Reading the second as the first is the "stable under-estimate" §25.6
-// describes: a request that really asked for 4k for 30 seconds gets priced at
-// the model's cheap default, the submit succeeds, and nothing anywhere says
-// the number was made up.
-func TestFieldsOmittedIsNotAbsent(t *testing.T) {
+// TestUnreadableRequestIsBoundedFromAbove: a request that states something
+// this plugin cannot read is priced at the model's maximum, never at its
+// documented default.
+func TestUnreadableRequestIsBoundedFromAbove(t *testing.T) {
 	const model = "doubao-seedance-2-0-260128" // the one 4k model, 15s maximum
 
-	// The baseline: nothing sent at all. The defaults are legitimate here.
-	absent := estimateVideo(model, readVideoSpec(nil, nil))
-	// The same paths declared and sent, but not carried.
-	omitted := estimateVideo(model, readVideoSpec(nil, UsageRequestFields))
-	if omitted.Tokens <= absent.Tokens {
-		t.Fatalf("an omitted request estimated %d tokens, an absent one %d: omitted must never be the cheaper reading",
-			omitted.Tokens, absent.Tokens)
-	}
-
-	// Specifically: an omitted resolution must not be read as the default tier.
-	spec := readVideoSpec(map[string]string{PathDuration: `5`, PathContentCount: `1`,
-		"content.0.text": `"a cat"`}, []string{PathResolution})
-	if spec.Resolution != "" {
-		t.Fatalf("omitted resolution read as %q", spec.Resolution)
-	}
-	if !spec.ResolutionStated {
-		t.Fatal("an omitted resolution WAS stated by the client; the spec has to say so")
-	}
-	// ...and the estimate has to bound it by the model's MAXIMUM tier (4k on
-	// this model), not by its documented default (720p). Priced at the default,
-	// a client asking for 4k with an unreadable resolution pays the 720p rate -
-	// a nine-to-one under-charge, on a request that looks entirely normal.
-	omittedRes := estimateVideo(model, spec)
 	absentRes := estimateVideo(model, readVideoSpec(map[string]string{PathDuration: `5`,
-		PathContentCount: `1`, "content.0.text": `"a cat"`}, nil))
-	if omittedRes.Resolution != Res4K {
-		t.Fatalf("omitted resolution priced at %q, want the model's maximum tier", omittedRes.Resolution)
-	}
+		PathContentCount: `1`, "content.0.text": `"a cat"`}))
 	if absentRes.Resolution != Res720 {
 		t.Fatalf("absent resolution priced at %q, want the model's documented default", absentRes.Resolution)
 	}
-	if omittedRes.Tokens <= absentRes.Tokens {
-		t.Fatalf("omitted resolution estimated %d, absent %d", omittedRes.Tokens, absentRes.Tokens)
-	}
 	// A tier the client stated that this plugin has no pixel size for - "2k",
-	// or whatever Ark adds next - is the same situation: something was asked
-	// for, and there is no cell for it. Ark accepted it (a wrong value never
-	// reaches a 2xx), so it is real, and the bound is the model's maximum.
+	// or whatever Ark adds next: something was asked for, and there is no
+	// cell for it. Ark accepted it (a wrong value never reaches a 2xx), so it
+	// is real, and the bound is the model's maximum.
 	unknownTier := estimateVideo(model, readVideoSpec(map[string]string{
 		PathResolution: `"2k"`, PathDuration: `5`, PathContentCount: `1`, "content.0.text": `"a cat"`,
-	}, nil))
+	}))
 	if unknownTier.Resolution != Res4K {
 		t.Fatalf(`resolution "2k" priced at %q, want the model's maximum tier`, unknownTier.Resolution)
 	}
 
-	// And the case that actually happens: a prompt too long for the per-value
-	// cap. Every parameter can hide in it, so nothing the request said can be
-	// trusted - not even the structured fields, because Ark states no
-	// precedence between the two forms.
-	cheap := map[string]string{
-		PathResolution: `"480p"`, PathRatio: `"1:1"`, PathDuration: `4`, PathContentCount: `1`,
-	}
-	read := estimateVideo(model, readVideoSpec(cheap, nil))
-	blind := estimateVideo(model, readVideoSpec(cheap, []string{"content.0.text"}))
-	if blind.Tokens <= read.Tokens {
-		t.Fatalf("a request whose prompt could not be read estimated %d, one fully read %d: "+
-			"the unreadable one must be bounded from above", blind.Tokens, read.Tokens)
-	}
-	if !hasAssumption(blind.Assumed, assumedPrompt) {
-		t.Fatalf("assumed = %v, want it to name the unread prompt", blind.Assumed)
-	}
-	// It must be the model's worst case, because that is the only bound
-	// available: 15 seconds at 4k.
-	if want := int64(15*videoFPS+1) * tierArea(gen20, Res4K, "") / 1024; blind.Tokens != want {
-		t.Fatalf("unreadable prompt estimated %d, want the model's worst case %d", blind.Tokens, want)
-	}
-
-	// A content array longer than the declared paths is the same blindness by
-	// another route: the fourth element's text is not deliverable at all, so
-	// a command in it would never be seen.
+	// A content array longer than the declared paths: the fourth element's
+	// text is not delivered at all, so a command in it would never be seen,
+	// and nothing the request said can be trusted - not even the structured
+	// fields, because Ark states no precedence between the two forms.
 	longArray := estimateVideo(model, readVideoSpec(map[string]string{
 		PathResolution: `"480p"`, PathDuration: `4`, PathContentCount: `4`,
 		"content.0.text": `"a cat"`,
-	}, nil))
+	}))
 	if !hasAssumption(longArray.Assumed, assumedPrompt) {
 		t.Fatalf("a %d-element content array was treated as fully read: %v", 4, longArray.Assumed)
 	}
-	if longArray.Tokens != blind.Tokens {
-		t.Fatalf("content.# = 4 estimated %d, want the same worst case as an unread prompt %d",
-			longArray.Tokens, blind.Tokens)
+	// It must be the model's worst case, because that is the only bound
+	// available: 15 seconds at 4k.
+	if want := int64(15*videoFPS+1) * tierArea(gen20, Res4K, "") / 1024; longArray.Tokens != want {
+		t.Fatalf("content.# = 4 estimated %d, want the model's worst case %d", longArray.Tokens, want)
 	}
 	// Three elements is exactly what is declared, so it IS fully read.
-	if spec := readVideoSpec(map[string]string{PathContentCount: `3`, "content.0.text": `"a cat"`}, nil); !spec.PromptFullyRead {
+	if spec := readVideoSpec(map[string]string{PathContentCount: `3`, "content.0.text": `"a cat"`}); !spec.PromptFullyRead {
 		t.Fatal("a 3-element content array is fully covered by the declared paths")
 	}
 }
@@ -537,7 +482,7 @@ func TestEstimateVideoExactNumbers(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			est := estimateVideo(tc.model, readVideoSpec(tc.fields, nil))
+			est := estimateVideo(tc.model, readVideoSpec(tc.fields))
 			want := (tc.sec*videoFPS + 1) * tc.w * tc.h / 1024
 			if est.Tokens != want {
 				t.Errorf("tokens = %d, want %d ((%ds x %dfps + 1) x %dx%d / 1024)",
@@ -582,20 +527,18 @@ func TestEstimateIsNeverZero(t *testing.T) {
 	}
 	for _, model := range models {
 		for i, f := range specs {
-			for _, omit := range [][]string{nil, UsageRequestFields} {
-				est := estimateVideo(model, readVideoSpec(f, omit))
-				if est.Tokens <= 0 {
-					t.Errorf("model %q spec #%d omitted=%v estimated %d tokens", model, i, omit != nil, est.Tokens)
-				}
-				if est.Resolution == "" {
-					t.Errorf("model %q spec #%d reported no resolution fact", model, i)
-				}
+			est := estimateVideo(model, readVideoSpec(f))
+			if est.Tokens <= 0 {
+				t.Errorf("model %q spec #%d estimated %d tokens", model, i, est.Tokens)
+			}
+			if est.Resolution == "" {
+				t.Errorf("model %q spec #%d reported no resolution fact", model, i)
 			}
 		}
 	}
 }
 
-// TestFourKAskedOfAModelWithoutIt: a request stating 4k reaches ExtractUsage
+// TestFourKAskedOfAModelWithoutIt: a request stating 4k reaches videoUsage
 // only if Ark accepted it, so the tier is not clamped to the model's table -
 // but if it arrived via the prompt (weak validation, Ark may have ignored it)
 // the estimate still has to produce a number for a generation that publishes
@@ -604,7 +547,7 @@ func TestFourKAskedOfAModelWithoutIt(t *testing.T) {
 	est := estimateVideo("doubao-seedance-2-5-260628", readVideoSpec(map[string]string{
 		PathResolution: `"4k"`, PathRatio: `"16:9"`, PathDuration: `5`,
 		PathContentCount: `1`, "content.0.text": `"a cat"`,
-	}, nil))
+	}))
 	// 2.5 has no 4k row, so the largest 4k area any generation publishes is
 	// used - over, not under.
 	if want := int64(5*videoFPS+1) * pixelArea[gen20][Res4K][Ratio169] / 1024; est.Tokens != want {
@@ -632,7 +575,7 @@ func TestFourKAskedOfAModelWithoutIt(t *testing.T) {
 func TestEstimateMatchesARealArkTask(t *testing.T) {
 	fields := map[string]string{PathResolution: `"480p"`, PathRatio: `"16:9"`, PathDuration: `4`,
 		PathContentCount: `1`, "content.0.text": `"A red ball slowly rolls across a wooden table, soft daylight"`}
-	est := estimateVideo("doubao-seedance-2-0-mini-260615", readVideoSpec(fields, nil))
+	est := estimateVideo("doubao-seedance-2-0-mini-260615", readVideoSpec(fields))
 	if est.Tokens != 40594 || est.Resolution != Res480 || len(est.Assumed) != 0 {
 		t.Fatalf("estimate = %d tokens at %s (assumed %v), want 40594 at 480p with nothing assumed - the completion_tokens Ark really billed",
 			est.Tokens, est.Resolution, est.Assumed)

@@ -25,7 +25,7 @@ func quoteRecord(ctx context.Context, q core.Quoter, r *core.UsageRecord) (decim
 	}
 	total := decimal.Zero
 	for _, item := range items {
-		if item.Price == nil || item.Free {
+		if item.Free {
 			continue
 		}
 		params := map[string]any{}

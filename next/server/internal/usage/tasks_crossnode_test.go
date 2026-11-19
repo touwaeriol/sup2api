@@ -2,6 +2,7 @@ package usage
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -48,7 +49,7 @@ func TestTaskCrossNodeRegistrationIdentityAndDebit(t *testing.T) {
 
 	before := f.balance()
 	first := prepare("managed-first", "same-upstream-id", 7)
-	if err := f.svc.RegisterTask(ctx, first); err != nil {
+	if err := commitTask(f.svc, first); err != nil {
 		t.Fatal(err)
 	}
 	snap, err := nodeB.FindTask(ctx, query(first.PublicID))
@@ -77,8 +78,9 @@ func TestTaskCrossNodeRegistrationIdentityAndDebit(t *testing.T) {
 	}
 
 	chargedBalance := f.balance()
-	if err := nodeB.RegisterTask(ctx, first); err == nil {
-		t.Fatal("duplicate request unexpectedly registered twice")
+	// Deterministic refusals are marked so that the commit is not retried.
+	if err := commitTask(nodeB, first); !errors.Is(err, core.ErrExecutionRefused) {
+		t.Fatalf("duplicate request registered twice or not refused: %v", err)
 	}
 	if !f.balance().Equal(chargedBalance) || f.scalar(`SELECT count(*) FROM async_tasks`) != "1" ||
 		f.scalar(`SELECT count(*) FROM pending_settlements`) != "1" ||
@@ -94,8 +96,8 @@ func TestTaskCrossNodeRegistrationIdentityAndDebit(t *testing.T) {
 	mismatch := prepare("managed-mismatch", "another-upstream-id", 7)
 	wrongAccount := int64(8)
 	mismatch.Record.AccountID = &wrongAccount
-	if err := f.svc.RegisterTask(ctx, mismatch); err == nil {
-		t.Fatal("changed dispatch account accepted")
+	if err := commitTask(f.svc, mismatch); !errors.Is(err, core.ErrExecutionRefused) {
+		t.Fatalf("changed dispatch account accepted or not refused: %v", err)
 	}
 	assertAbsent(query(mismatch.PublicID))
 	if !f.balance().Equal(chargedBalance) || f.scalar(`SELECT count(*) FROM usage_logs`) != "1" {
@@ -105,7 +107,7 @@ func TestTaskCrossNodeRegistrationIdentityAndDebit(t *testing.T) {
 	// Same account/ref cannot overwrite the first owner/record, and a rejected
 	// registration rolls its provisional usage and balance changes back.
 	collision := prepare("managed-collision", first.UpstreamID, 7)
-	if err := f.svc.RegisterTask(ctx, collision); err == nil {
+	if err := commitTask(f.svc, collision); err == nil {
 		t.Fatal("same-account upstream ID collision accepted")
 	}
 	assertAbsent(query(collision.PublicID))
@@ -115,7 +117,7 @@ func TestTaskCrossNodeRegistrationIdentityAndDebit(t *testing.T) {
 
 	// The same raw ID on another upstream account is a separate task.
 	otherAccount := prepare("managed-other-account", first.UpstreamID, 8)
-	if err := nodeB.RegisterTask(ctx, otherAccount); err != nil {
+	if err := commitTask(nodeB, otherAccount); err != nil {
 		t.Fatal(err)
 	}
 	other, err := f.svc.FindTask(ctx, query(otherAccount.PublicID))

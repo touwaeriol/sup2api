@@ -24,8 +24,8 @@ import (
 
 // The reconcile loop closes pre-charged usage rows (CONTRACTS §25.4).
 //
-// Plugins supply upstream facts through Monitor (or the compatible Poll /
-// Build+Parse paths). The host owns account admission, network policy,
+// Plugins supply upstream facts in the result of Monitor, the only
+// observation call. The host owns account admission, network policy,
 // observation fencing, pricing and all financial transactions.
 // core.usage.reconcile runs the sweep on one node at a time, PG claims fence
 // per-task outcomes, and the shared background executor bounds work and
@@ -49,11 +49,8 @@ const (
 	reconcileSweepBudget = 2 * time.Minute
 	// reconcileEntryBudget bounds one observation including network and accounting.
 	reconcileEntryBudget = 30 * time.Second
-	// reconcileHTTPTimeout bounds the upstream request itself.
+	// reconcileHTTPTimeout bounds one fetch of a Monitor call.
 	reconcileHTTPTimeout = 20 * time.Second
-	// maxReconcileBody is how much of the upstream answer the plugin is
-	// shown. A status document is small; anything larger is not one.
-	maxReconcileBody = 256 << 10
 )
 
 // ReconcileDeps are what the sweep needs beyond the settler itself. It does
@@ -65,13 +62,11 @@ type ReconcileDeps struct {
 	Registry core.PluginRegistry
 	// Accounts loads the account that served the original request, with its
 	// credentials - the same account the plugin already saw when it built the
-	// upstream request.
+	// upstream request - and gives its way out (Egress): a reconcile leaves
+	// the deployment through the account's proxy as it stands now.
 	Accounts core.AccountDirectory
-	// Proxies gives the account's HTTP client, so a reconcile leaves the
-	// deployment by the same route the request did.
-	Proxies core.ProxyDirectory
-	Slots   core.Slots
-	Limiter core.AccountLimiter
+	Slots    core.Slots
+	Limiter  core.AccountLimiter
 	// AllowPrivateUpstream mirrors the gateway's setting for the SSRF guard.
 	AllowPrivateUpstream bool
 	NodeID               string
@@ -89,7 +84,7 @@ type reconciler struct {
 // a deployment without a plugin registry has no pre-charged rows to close
 // either.
 func (s *Service) StartReconcile(ctx context.Context, d ReconcileDeps) {
-	if d.Registry == nil || d.Accounts == nil || d.Proxies == nil {
+	if d.Registry == nil || d.Accounts == nil {
 		return
 	}
 	if d.Logger == nil {
@@ -149,8 +144,7 @@ type settleEntry struct {
 	deadlineAt   time.Time
 	task         *taskClaim
 	account      core.AccountRef // the fixed account used by this observation
-	monitor      *monitorOutcome
-	reported     bool
+	monitor      *monitorOutcome // the claim of the Monitor result being applied
 }
 
 // ReconcileDue runs one sweep: claim the due entries and work through them,
@@ -309,39 +303,14 @@ func (s *Service) reconcileOneAdmitted(ctx context.Context, e *settleEntry) bool
 		return true
 	}
 
-	res, err := s.askPlugin(ctx, e, row)
-	if e.reported {
-		return false
-	}
-	if err != nil {
-		// Query failures have a persisted consecutive-failure budget. Local
-		// account deferrals and caller cancellation do not spend that budget.
-		s.handlePollError(ctx, e, row, cfg, err)
-		return false
-	}
-	if s.handlePollResult(ctx, e, row, cfg, res) {
-		return false
-	}
-	switch res.GetState() {
-	case pluginv1.ReconcileResult_SETTLED:
-		s.settleReconciled(ctx, e, row, res)
-	case pluginv1.ReconcileResult_SETTLED_ESTIMATE:
-		s.settleEstimate(ctx, e, row, res)
-	case pluginv1.ReconcileResult_FAILED:
-		s.refundFailed(ctx, e, row, res.GetReason())
-	default:
-		// PENDING is the zero value on purpose: a plugin that cannot tell
-		// yet, and an empty answer, both mean "ask again" - never "settle
-		// for nothing".
-		s.reschedule(ctx, e, cfg, time.Duration(res.GetNextCheckAfterSec())*time.Second, "")
-	}
+	s.observe(ctx, e, row)
 	return false
 }
 
-// askPlugin selects the declared observation contract within one account lease.
+// askPlugin asks the plugin's Monitor about e on its account, held for the
+// call.
 func (s *Service) askPlugin(ctx context.Context, e *settleEntry, row *reservedRowState) (*pluginv1.ReconcileResult, error) {
-	r := s.rec
-	gen := r.Registry.Current()
+	gen := s.rec.Registry.Current()
 	if gen == nil {
 		return nil, errors.New("no plugin generation loaded")
 	}
@@ -349,27 +318,17 @@ func (s *Service) askPlugin(ctx context.Context, e *settleEntry, row *reservedRo
 	if client == nil {
 		return nil, fmt.Errorf("plugin %q has no platform service", e.pluginKey)
 	}
-	poll, monitor := pluginObservationContract(gen, e.pluginKey)
 	if e.task != nil {
 		var err error
-		e.task.paths, err = taskPaths(gen, e)
-		if err != nil {
+		if e.task.paths, err = taskPaths(gen, e); err != nil {
 			return nil, err
 		}
 	}
-	var acct *pluginv1.Account
-	var proxyID *int64
-	if e.task != nil || poll || monitor {
-		var release func()
-		var err error
-		ctx, acct, proxyID, release, err = s.acquireTaskAccount(ctx, e)
-		if err != nil {
-			return nil, err
-		}
-		defer release()
-	} else {
-		acct, proxyID = s.reconcileAccount(ctx, e)
+	ctx, acct, release, err := s.acquireTaskAccount(ctx, e)
+	if err != nil {
+		return nil, err
 	}
+	defer release()
 	entry := &pluginv1.ReconcileEntry{
 		RefId: e.refID, RequestId: row.p.RequestID, Attempts: int32(e.attempts),
 		CreatedAtUnix: e.createdAt.Unix(), DeadlineAtUnix: e.deadlineAt.Unix(),
@@ -378,107 +337,19 @@ func (s *Service) askPlugin(ctx context.Context, e *settleEntry, row *reservedRo
 	if e.task != nil {
 		entry.TaskKind = e.task.kind
 	}
-	call := observationCall{client: client, entry: entry, acct: acct, proxyID: proxyID}
-	if monitor {
-		return s.askMonitor(ctx, e, row, call)
-	}
-	if poll {
-		return s.askPoll(ctx, e, row, call)
-	}
-	return s.buildAndAsk(ctx, e, row, call)
+	return s.askMonitor(ctx, e, observationCall{client: client, entry: entry, acct: acct})
 }
 
 // observationCall is one observation sent to a plugin: the platform client,
-// the entry describing the request, and the account (with the proxy the core's
-// own HTTP request goes through) the plugin may act for.
+// the entry describing the request, and the account the plugin may act for.
 type observationCall struct {
-	client  core.PlatformPlugin
-	entry   *pluginv1.ReconcileEntry
-	acct    *pluginv1.Account
-	proxyID *int64
-}
-
-// pluginObservationContract reports which observation protocols the plugin
-// declaring this entry supports. Monitor wins over poll when it declares both.
-func pluginObservationContract(gen core.Generation, pluginKey string) (poll, monitor bool) {
-	info, ok := gen.Plugin(pluginKey)
-	if !ok || info.Manifest == nil {
-		return false, false
-	}
-	for _, capability := range info.Manifest.Capabilities {
-		switch capability.ID {
-		case manifest.CapPlatformMonitor:
-			monitor = true
-		case manifest.CapPlatformPoll:
-			poll = true
-		}
-	}
-	return poll, monitor
-}
-
-// askPoll asks a platform.poll.v1 plugin. A limiter refusal during a fetch is
-// reported as deferred so the task is requeued rather than billed wrongly.
-func (s *Service) askPoll(ctx context.Context, e *settleEntry, row *reservedRowState, call observationCall) (*pluginv1.ReconcileResult, error) {
-	p, ok := call.client.(core.PollPlugin)
-	if !ok {
-		return nil, errors.New("platform.poll.v1 has no Poll implementation")
-	}
-	r := s.rec
-	var deferred atomic.Bool
-	result, err := p.Poll(ctx, &pluginv1.PollRequest{Entry: call.entry, Account: call.acct}, func(ctx context.Context, in *pluginv1.ExecutionHTTPRequest) (*pluginv1.ExecutionHTTPResponse, error) {
-		return s.fetchExecutionHTTP(ctx, in, call.proxyID, func(ctx context.Context) error {
-			if r.Limiter != nil {
-				ok, err := r.Limiter.TryHit(ctx, e.account, "", "")
-				if err != nil || !ok {
-					deferred.Store(true)
-					return errTaskDeferred
-				}
-			}
-			return nil
-		})
-	})
-	if deferred.Load() {
-		return nil, errTaskDeferred
-	}
-	return result, err
-}
-
-// buildAndAsk asks a plugin through the Build+Parse protocol: the core sends
-// the HTTP request itself and hands the response back for parsing.
-func (s *Service) buildAndAsk(ctx context.Context, e *settleEntry, row *reservedRowState, call observationCall) (*pluginv1.ReconcileResult, error) {
-	r := s.rec
-	built, err := call.client.BuildReconcileRequest(ctx, &pluginv1.BuildReconcileRequestRequest{Entry: call.entry, Account: call.acct})
-	if err != nil {
-		return nil, fmt.Errorf("BuildReconcileRequest: %w", err)
-	}
-	if built == nil {
-		return nil, errors.New("BuildReconcileRequest returned nothing")
-	}
-	if e.task != nil && r.Limiter != nil {
-		ok, err := r.Limiter.TryHit(ctx, e.account, "", "")
-		if err != nil || !ok {
-			return nil, errTaskDeferred
-		}
-	}
-	status, headers, body, transportErr, truncated := s.fetchReconcile(ctx, built, call.proxyID)
-	res, err := call.client.ParseReconcileResponse(ctx, &pluginv1.ParseReconcileResponseRequest{
-		Entry: call.entry, Account: call.acct, Status: int32(status), Headers: headers,
-		Body: body, TransportError: transportErr, Truncated: truncated,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("ParseReconcileResponse: %w", err)
-	}
-	if res == nil {
-		return nil, errors.New("ParseReconcileResponse returned nothing")
-	}
-	if (truncated || transportErr != "" || status < 200 || status > 599) && res.GetState() != pluginv1.ReconcileResult_PENDING && res.GetState() != pluginv1.ReconcileResult_POLL_FAILED {
-		return nil, errors.New("incomplete or failed HTTP response cannot confirm a terminal outcome")
-	}
-	return res, nil
+	client core.PlatformPlugin
+	entry  *pluginv1.ReconcileEntry
+	acct   *pluginv1.Account
 }
 
 // platformClientOf finds the PlatformService of the plugin that declared the
-// platform whose ExtractUsage made the reservation.
+// platform whose reported usage made the reservation.
 func platformClientOf(gen core.Generation, pluginKey string) core.PlatformPlugin {
 	for _, pb := range gen.Platforms() {
 		if pb.Plugin.Key == pluginKey && pb.Client != nil {
@@ -486,43 +357,6 @@ func platformClientOf(gen core.Generation, pluginKey string) core.PlatformPlugin
 		}
 	}
 	return nil
-}
-
-// reconcileAccount loads the account that served the original request.
-//
-// Credentials travel ONLY when the account's type is declared by the plugin
-// being called. That is the same rule ExtractUsage uses for settings, and it
-// has the same justification: such a plugin already receives these exact
-// credentials on every BuildUpstreamRequest for this account, so nothing new
-// is exposed - while a platform plugin that does not own the account type
-// would be seeing a third party's secret for the first time, which is not a
-// decision a reconcile loop gets to make.
-func (s *Service) reconcileAccount(ctx context.Context, e *settleEntry) (*pluginv1.Account, *int64) {
-	if e.accountID == nil {
-		return nil, nil
-	}
-	acc, err := s.rec.Accounts.Load(ctx, *e.accountID)
-	if err != nil || acc == nil {
-		s.rec.log.Warn("reconcile: account unavailable", "entry", e.id, "account_id", *e.accountID, "err", err)
-		return nil, nil
-	}
-	out := &pluginv1.Account{Id: acc.ID, Name: acc.Name, Type: acc.Type}
-	if acc.PluginKey == e.pluginKey {
-		out = acc.PluginAccount("")
-	}
-	return out, acc.ProxyID
-}
-
-// fetchReconcile sends the request the plugin described, through the
-// account's proxy and behind the same SSRF guard the gateway applies. A
-// failure is not an error here: the plugin is shown the transport error and
-// decides what it means, exactly as ClassifyError is shown one.
-func (s *Service) fetchReconcile(ctx context.Context, b *pluginv1.BuildReconcileRequestResponse, proxyID *int64) (int, map[string]string, []byte, string, bool) {
-	out, err := s.fetchExecutionHTTP(ctx, &pluginv1.ExecutionHTTPRequest{Method: b.GetMethod(), Url: b.GetUrl(), Headers: b.GetHeaders(), Body: []byte(b.GetBodyJson())}, proxyID, nil)
-	if err != nil {
-		return 0, nil, nil, err.Error(), false
-	}
-	return int(out.GetStatus()), out.GetHeaders(), out.GetBody(), out.GetTransportError(), out.GetTruncated()
 }
 
 // ---------------------------------------------------------------- outcomes
@@ -613,10 +447,6 @@ func (s *Service) settleReconciled(ctx context.Context, e *settleEntry, row *res
 	}
 	cost, detail, exprHash, err := s.priceOf(ctx, p)
 	if err != nil {
-		if e.monitor != nil {
-			e.monitor.err = err
-			return
-		}
 		s.rec.log.Error("reconcile: price the real usage", "entry", e.id, "err", err)
 		s.reschedule(ctx, e, s.reconcileSettings(ctx), 0, "pricing failed: "+err.Error())
 		return

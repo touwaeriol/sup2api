@@ -21,11 +21,10 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/runtime-contract/gormpg"
 )
 
-// DefaultMaxConns is the connection limit of a handle opened without one:
-// per plugin and node, against the plugin role's CONNECTION LIMIT 20, which
-// the host's migration connection shares. 4 keeps four nodes of any size,
-// with the migration connection, under the role's limit (4 x 4 + 1).
-// pluginsdk.WithDBPoolSize sets another.
+// DefaultMaxConns is the connection limit of a handle opened without one,
+// per plugin and node. The core opens each of them as its own database user
+// (CONTRACTS §115), so they count against the database's limits beside the
+// core's pool. pluginsdk.WithDBPoolSize sets another.
 const DefaultMaxConns = 4
 
 // Options tune Open. The zero value dials directly with the defaults.

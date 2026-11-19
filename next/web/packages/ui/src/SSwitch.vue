@@ -19,7 +19,7 @@ const props = withDefaults(
 )
 const emit = defineEmits<{ (e: 'update:modelValue', v: boolean): void }>()
 const attrs = useAttrs()
-const { id, a11y, size } = useFieldControl(props, true, true)
+const { id, a11y, size, blur } = useFieldControl(props, true, true)
 const input = ref<HTMLInputElement>()
 const parts = computed(() => splitAttrs(attrs))
 const describedBy = computed(() => [props.describedby, a11y.value['aria-describedby']].filter(Boolean).join(' ') || undefined)
@@ -46,6 +46,7 @@ const { onClick, onChange } = useCheckboxModel(props, emit, input)
       :aria-describedby="describedBy"
       @click="onClick"
       @change="onChange"
+      @blur="blur"
     />
     <span v-if="label || $slots.default" class="text-sm text-gray-700 dark:text-gray-300" :class="disabled ? 'opacity-50' : ''"><slot>{{ label }}</slot></span>
   </label>

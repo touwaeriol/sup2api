@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { callbackShape, CODEX_FIELDS, DEFAULT_POLL_MS, flowsFor, formatCountdown, hasAccessToken, mergeCredentials, MIN_POLL_SECONDS, pollDelay, summarize, typeOf } from './flow'
+import { agentOf, callbackShape, CODEX_FIELDS, DEFAULT_POLL_MS, flowsFor, formatCountdown, hasAccessToken, mergeCredentials, MIN_POLL_SECONDS, pollDelay, summarize, typeOf, withAgent } from './flow'
 
 describe('flowsFor / typeOf', () => {
   it('shows only the flow of a known type, both otherwise', () => {
@@ -17,11 +17,30 @@ describe('flowsFor / typeOf', () => {
   })
 })
 
+describe('withAgent', () => {
+  it('takes the client headers the source has and keeps the rest of the base', () => {
+    const base = { access_token: '******', user_agent: 'old-ua', originator: 'old-or' }
+    expect(withAgent(base, { access_token: 'x', user_agent: 'new-ua' })).toEqual({ access_token: '******', user_agent: 'new-ua', originator: 'old-or' })
+    expect(withAgent(base, null)).toEqual(base)
+  })
+
+  it('a re-authorization keeps them', () => {
+    expect(mergeCredentials({ access_token: '******', user_agent: 'ua', originator: 'or' }, { access_token: 'at' })).toEqual({ access_token: 'at', user_agent: 'ua', originator: 'or' })
+  })
+})
+
+describe('agentOf', () => {
+  it('reads the client headers, "" where there is none or not a string', () => {
+    expect(agentOf({ access_token: 'x', user_agent: 'ua', originator: 7 })).toEqual({ user_agent: 'ua', originator: '' })
+    expect(agentOf(null)).toEqual({ user_agent: '', originator: '' })
+  })
+})
+
 describe('mergeCredentials', () => {
   it('replaces every flow field and keeps the others', () => {
-    const current = { access_token: '******', refresh_token: '******', id_token: '******', plan_type: 'plus', chatgpt_account_id: 'acc', proxy_id: 3 }
+    const current = { access_token: '******', refresh_token: '******', id_token: '******', plan_type: 'plus', chatgpt_account_id: 'acc', note: 'kept' }
     const out = mergeCredentials(current, { access_token: 'at', refresh_token: 'rt', expires_at: 100, email: 'a@b.c', chatgpt_account_id: 'acc-2' })
-    expect(out).toEqual({ proxy_id: 3, access_token: 'at', refresh_token: 'rt', expires_at: 100, email: 'a@b.c', chatgpt_account_id: 'acc-2' })
+    expect(out).toEqual({ note: 'kept', access_token: 'at', refresh_token: 'rt', expires_at: 100, email: 'a@b.c', chatgpt_account_id: 'acc-2' })
     // A masked id_token must not survive a login that did not return one.
     expect(out).not.toHaveProperty('id_token')
     expect(current.access_token).toBe('******')

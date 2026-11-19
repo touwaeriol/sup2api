@@ -76,38 +76,33 @@ func settingsOf(region, prefix string) map[string]any {
 	return s
 }
 
-func buildRequest(acc *pluginv1.Account, protocol, model string, stream bool) *pluginv1.BuildUpstreamRequestRequest {
-	return &pluginv1.BuildUpstreamRequestRequest{
+// claudeBody is a Messages request for model as the core hands it over:
+// what Claude Code sends Anthropic, with the top-level fields InvokeModel
+// refuses.
+func claudeBody(model string, stream bool) string {
+	return `{"model":` + mustJSON(model) + `,"max_tokens":64,"stream":` + mustJSON(stream) + `,"messages":[{"role":"user","content":"ping"}],` +
+		`"metadata":{"user_id":"u-1"},"provider":{"order":["bedrock"]},"context_management":{"edits":[]},"output_config":{"effort":"low"},` +
+		`"anthropic_beta":["claude-code-20250219","compact-2026-01-12"]}`
+}
+
+// executeRequest is an Execute call for the account: the core's meta and
+// the whole body.
+func executeRequest(acc *pluginv1.Account, model string, stream bool, body string) *pluginv1.ExecuteRequest {
+	return &pluginv1.ExecuteRequest{
 		Account: acc,
-		Meta:    &pluginv1.RequestMeta{Protocol: protocol, Model: model, Stream: stream},
-		Fields:  map[string]string{"model": mustJSON(model)},
+		Meta:    &pluginv1.RequestMeta{Protocol: ProtocolMessages, Model: model, Stream: stream},
+		Body:    []byte(body),
 	}
 }
 
-// build calls BuildUpstreamRequest of the production plugin.
-func build(t *testing.T, in *pluginv1.BuildUpstreamRequestRequest) *pluginv1.BuildUpstreamRequestResponse {
+// build calls BuildUpstream of the production plugin.
+func build(t *testing.T, in *pluginv1.ExecuteRequest) *pluginv1.UpstreamRequest {
 	t.Helper()
-	resp, err := newTestPlugin(Endpoints{}).BuildUpstreamRequest(context.Background(), in)
+	up, err := newTestPlugin(Endpoints{}).BuildUpstream(context.Background(), in)
 	if err != nil {
-		t.Fatalf("BuildUpstreamRequest: %v", err)
+		t.Fatalf("BuildUpstream: %v", err)
 	}
-	return resp
-}
-
-// patchList renders patches as "set <path>=<json>" and "delete <path>".
-func patchList(patches []*pluginv1.BodyPatch) []string {
-	var out []string
-	for _, p := range patches {
-		switch p.GetOp() {
-		case pluginv1.BodyPatch_OP_SET:
-			out = append(out, "set "+p.GetPath()+"="+p.GetValueJson())
-		case pluginv1.BodyPatch_OP_DELETE:
-			out = append(out, "delete "+p.GetPath())
-		default:
-			out = append(out, "unknown "+p.GetPath())
-		}
-	}
-	return out
+	return up
 }
 
 // fieldErrors renders validation errors as "field:code".

@@ -69,8 +69,26 @@ type Review struct {
 	// NeedsDBSchemaUnconfined: granting the db.schema this version asks for
 	// takes plugin:grant:db_schema_unconfined (dbSchemaUnconfined), so the
 	// console can tell before the consent is sent.
-	NeedsDBSchemaUnconfined bool      `json:"needs_db_schema_unconfined"`
-	UploadedAt              time.Time `json:"uploaded_at"`
+	NeedsDBSchemaUnconfined bool `json:"needs_db_schema_unconfined"`
+	// RequestAccess is the fixed statement shown for a plugin declaring
+	// account types: it receives everything about the accounts of its types
+	// (proxy included) and the whole of every request they serve. It is how
+	// a platform plugin works, not a permission to grant or deny
+	// (forwarding v2, D15; CONTRACTS §124).
+	RequestAccess core.LocalizedText `json:"request_access,omitempty"`
+	UploadedAt    time.Time          `json:"uploaded_at"`
+}
+
+// requestAccessStatement is Review.RequestAccess.
+var requestAccessStatement = core.LocalizedText{
+	"en": "This plugin receives everything about the accounts of the account types it declares — their settings, " +
+		"decrypted credentials and proxy (address, username and password) — and the full content of every request " +
+		"sent through them and the data relevant to their responses, and it decides where each request is sent. " +
+		"The core sends every request; the plugin never connects to the network itself. This is how every platform " +
+		"plugin works; it is not a permission and cannot be turned off.",
+	"zh": "此插件会收到它声明的账号类型下账号的全部信息（设置、解密的凭证、代理的地址、用户名和密码），" +
+		"以及经这些账号发出的每个请求的完整内容和与响应有关的数据，并决定请求发往哪个地址。" +
+		"请求都由核心发出，插件自己不联网。所有平台插件都是这样工作的：这不是一项权限，不能取消。",
 }
 
 // ReviewEndpoint is a gateway endpoint of a declared platform. In
@@ -366,6 +384,9 @@ func buildReview(m *manifest.Manifest, files map[string][]byte, ver *pkg.Verific
 		HostPermissions:        []ReviewHostPerm{},
 	}
 	r.HostCompatOK, _ = pkg.HostCompatible(m.HostCompat, hostVersion)
+	if len(m.AccountTypes) > 0 {
+		r.RequestAccess = requestAccessStatement
+	}
 	for _, c := range m.Capabilities {
 		r.Capabilities = append(r.Capabilities, c.ID)
 	}

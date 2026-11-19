@@ -5,11 +5,13 @@ package egress
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
 	"net"
 	"net/netip"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -52,10 +54,19 @@ const (
 type Options struct {
 	NodeID      string
 	DialTimeout time.Duration // default 10 s
-	// DatabaseAddrs lists the "host:port" of the PostgreSQL server handed out
-	// by HostService.GetDSN. Only a plugin whose policy has Database may
-	// reach it, by exactly this name; it is dialled by name.
+	// DatabaseAddrs lists the "host:port" of the PostgreSQL server in the
+	// DSN HostService.GetDSN hands out without strict network (the core's
+	// DSN; under strict network a plugin gets the virtual address instead,
+	// DatabaseProxy). A plugin reaches it through the tunnel only when it
+	// installs the tunnel on a host that does not require it
+	// (pluginsdk.WithStrictNetwork(StrictAlways)). Only a plugin whose
+	// policy has Database may reach it, by exactly this name; it is dialled
+	// by name.
 	DatabaseAddrs []string
+	// DatabaseProxy serves a connection to DatabaseHost:DatabasePort of a
+	// plugin whose policy has Database (database.go); without it that
+	// address is refused.
+	DatabaseProxy func(ctx context.Context, conn net.Conn, pluginKey string)
 	// CoreAddrs lists "host:port" targets no plugin may reach under any
 	// policy, AllowPrivate included: the core's Redis (and PostgreSQL for
 	// plugins without Database). Names are resolved, so an IP literal or
@@ -80,7 +91,13 @@ type Options struct {
 	// Events receives plugin.egress_new_domain when a plugin connects to a
 	// host for the first time (optional; without it only a WARN is logged).
 	Events core.EventPublisher
-	Logger *slog.Logger
+	// Bus carries config:changed: a save of plugin network access on any
+	// node drops this node's cached copy (optional; single node, tests).
+	Bus core.Bus
+	// LoadHostPolicy overrides how plugin network access is read (tests).
+	// Without it and without a database every host passes it.
+	LoadHostPolicy func(context.Context) (HostPolicy, error)
+	Logger         *slog.Logger
 }
 
 // Provider implements core.EgressProvider.
@@ -90,9 +107,15 @@ type Provider struct {
 	logs     *logWriter
 	database map[string]bool // normalized host:port
 	core     *coreAddrs
+	db       *store.DB     // plugin network access API; nil in unit tests
+	hosts    *hostPolicies // plugin network access, cached
+	unsub    func()
 }
 
-var _ core.EgressProvider = (*Provider)(nil)
+var (
+	_ core.EgressProvider      = (*Provider)(nil)
+	_ core.PluginNetworkAccess = (*Provider)(nil)
+)
 
 // New builds a provider and starts its log writer. db may be nil (logs are
 // discarded). Call Close on shutdown to flush pending logs.
@@ -100,8 +123,13 @@ func New(db *store.DB, opts Options) *Provider {
 	var st logStore
 	if db != nil {
 		st = pgStore{db: db}
+		if opts.LoadHostPolicy == nil {
+			opts.LoadHostPolicy = func(ctx context.Context) (HostPolicy, error) { return loadHostPolicy(ctx, db.Gorm) }
+		}
 	}
-	return newProvider(st, opts)
+	p := newProvider(st, opts)
+	p.db = db
+	return p
 }
 
 func newProvider(st logStore, opts Options) *Provider {
@@ -140,6 +168,19 @@ func newProvider(st logStore, opts Options) *Provider {
 	// Database exception, by its configured name.
 	p.core = newCoreAddrs(append(append([]string(nil), opts.CoreAddrs...), opts.DatabaseAddrs...), opts.LookupIP)
 	p.logs = newLogWriter(st, opts)
+	load := opts.LoadHostPolicy
+	if load == nil {
+		load = func(context.Context) (HostPolicy, error) { return DefaultHostPolicy(), nil }
+	}
+	p.hosts = newHostPolicies(load, opts.Logger)
+	if opts.Bus != nil {
+		p.unsub = opts.Bus.Subscribe(core.ChannelConfigChanged, func(payload []byte) {
+			var msg struct{ Key string }
+			if json.Unmarshal(payload, &msg) == nil && msg.Key == hostConfigKey {
+				p.hosts.invalidate()
+			}
+		})
+	}
 	return p
 }
 
@@ -176,7 +217,12 @@ func addrKey(a string) (string, bool) {
 
 // Close stops the log writer after flushing pending entries; rows of
 // connections still open are marked reset.
-func (p *Provider) Close() { p.logs.shutdown() }
+func (p *Provider) Close() {
+	if p.unsub != nil {
+		p.unsub()
+	}
+	p.logs.shutdown()
+}
 
 // Flush writes pending log entries now.
 func (p *Provider) Flush(ctx context.Context) error { return p.logs.flushNow(ctx) }
@@ -241,9 +287,11 @@ func (s *server) Dial(stream pluginv1.EgressService_DialServer) error {
 	}
 	pol := s.policy()
 	isDNS := host == DNSHost && port == DNSPort
-	if !isDNS {
+	isDB := host == DatabaseHost && port == DatabasePort
+	if !isDNS && !isDB {
 		// Every connection attempt counts for the plugin's domain list
 		// (denied ones included: they show what the plugin tries to reach).
+		// The core's own services are not external hosts.
 		s.p.logs.observe(s.key, entry.Host, port)
 	}
 
@@ -257,6 +305,12 @@ func (s *server) Dial(stream pluginv1.EgressService_DialServer) error {
 		c1, c2 := net.Pipe()
 		go s.p.serveDNS(ctx, c2, s.key, pol)
 		conn = c1
+	} else if isDB {
+		if !pol.Database || s.p.opts.DatabaseProxy == nil {
+			finish(ResultDenied, "no database")
+			return sendResult(stream, false, "egress: the plugin has no database", "")
+		}
+		conn = s.serveDatabase(ctx)
 	} else {
 		resolved, reason, msg := s.p.check(ctx, pol, host, port)
 		if reason != "" {
@@ -422,7 +476,8 @@ func truncate(s string, n int) string { return x.Truncate(s, n) }
 // or a reason ("denied" or "resolve") and a message.
 //
 // Order: the database exception (Database policy, exact configured name);
-// the net grant; the domain policy; then the resolved addresses - every one
+// the net grant; the plugin's domain policy; the administrator's plugin
+// network access (both must pass); then the resolved addresses - every one
 // must be public (unless AllowPrivate) and none may be a core service. The
 // addresses that were checked are the ones dialled: resolving the name again
 // at dial time would let a DNS answer that changes in between (rebinding)
@@ -437,6 +492,9 @@ func (p *Provider) check(ctx context.Context, pol core.EgressPolicy, host string
 	}
 	if !AllowedHost(pol, host) {
 		return nil, ResultDenied, host + " is not allowed by the plugin egress policy"
+	}
+	if msg := p.hostRefusal(ctx, host); msg != "" {
+		return nil, ResultDenied, msg
 	}
 	if p.core.matchName(hp) {
 		return nil, ResultDenied, hp + " is a core service address"
@@ -462,6 +520,38 @@ func (p *Provider) check(ctx context.Context, pol core.EgressPolicy, host string
 		}
 	}
 	return resolved, "", ""
+}
+
+// hostRefusal is why the administrator's plugin network access refuses
+// host, "" when it allows it.
+func (p *Provider) hostRefusal(ctx context.Context, host string) string {
+	h, err := p.hosts.get(ctx)
+	if err != nil {
+		return err.Error()
+	}
+	return h.refusal(host)
+}
+
+// PluginRequestRefusal implements core.PluginNetworkAccess: the tunnel's
+// decision (hostRefusal) for a request the core sends for the plugin. A
+// refusal is queued as a denied row of the plugin's egress log, its network
+// the URL's scheme (a tunnelled connection's is tcp); allowed requests are
+// not logged here (they are the usage records' and the gateway's).
+func (p *Provider) PluginRequestRefusal(ctx context.Context, pluginKey string, target *url.URL) string {
+	host := normalizeHost(target.Hostname())
+	msg := p.hostRefusal(ctx, host)
+	if msg != "" {
+		port, err := strconv.Atoi(target.Port())
+		if err != nil {
+			port = 443
+			if target.Scheme == "http" {
+				port = 80
+			}
+		}
+		p.logs.add(logEntry{PluginKey: pluginKey, NodeID: p.opts.NodeID, Network: target.Scheme, Host: truncate(host, 255),
+			Port: port, StartedAt: time.Now(), Result: ResultDenied, Error: msg})
+	}
+	return msg
 }
 
 // AllowedHost reports whether host may be reached under pol. In allowlist

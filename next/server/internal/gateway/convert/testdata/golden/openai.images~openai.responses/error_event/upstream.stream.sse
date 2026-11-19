@@ -1,0 +1,9 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_1","object":"response","created_at":1763452800,"status":"in_progress","model":"gpt-6-luna","output":[],"tools":[{"type":"image_generation","background":"auto","model":"gpt-image-2-codex","moderation":"auto","n":1,"output_compression":100,"output_format":"png","quality":"auto","size":"auto"}],"usage":{"input_tokens":2235,"input_tokens_details":{"cached_tokens":0},"output_tokens":69,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":2304}}}
+
+event: response.in_progress
+data: {"type":"response.in_progress","response":{"id":"resp_1","object":"response","created_at":1763452800,"status":"in_progress","model":"gpt-6-luna","output":[],"tools":[{"type":"image_generation","background":"auto","model":"gpt-image-2-codex","moderation":"auto","n":1,"output_compression":100,"output_format":"png","quality":"auto","size":"auto"}],"usage":{"input_tokens":2235,"input_tokens_details":{"cached_tokens":0},"output_tokens":69,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":2304}}}
+
+event: error
+data: {"type":"error","code":"rate_limit_exceeded","message":"Rate limit reached.","param":null}
+

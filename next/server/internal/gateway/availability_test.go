@@ -45,6 +45,12 @@ func (p *availabilityPlugin) CheckModelAvailability(ctx context.Context, in *plu
 	return out, nil
 }
 
+// Execute is the wrapped plugin's: the availability methods are the only
+// ones this fake adds.
+func (p *availabilityPlugin) Execute(ctx context.Context, in *pluginv1.ExecuteRequest, client core.ExecutionClient) (core.ExecutionResult, error) {
+	return p.PlatformPlugin.Execute(ctx, in, client)
+}
+
 type availabilitySource struct {
 	mu           sync.Mutex
 	snapshots    map[int64]*pluginv1.AccountQuotaSnapshot
@@ -346,18 +352,16 @@ func TestAvailabilityBatchesByOwnerAndOptionalAccountSource(t *testing.T) {
 	}
 }
 
+// The guard re-checks the chosen account right before Execute: a denial
+// that arrives after the precheck (here while the accounts are ranked)
+// fails the attempt over, or ends the request when every account is denied.
 func TestAvailabilityExecutionGuardAndFailover(t *testing.T) {
 	for _, mode := range []string{"failover", "all"} {
 		t.Run(mode, func(t *testing.T) {
 			all := mode == "all"
 			e := newEnv(t)
 			_, source := enableAvailability(e, 0)
-			e.plat.route = func(in *pluginv1.BuildUpstreamRequestRequest) string {
-				if all || in.Account.Id == 1 {
-					source.deny(in.Account.Id)
-				}
-				return e.up.srv.URL + "/v1/messages"
-			}
+			denyAfterPrecheck(e, source, func(id int64) bool { return all || id == 1 })
 			r := e.messages(body(testModel, false))
 			want := 200
 			if all {
@@ -371,8 +375,26 @@ func TestAvailabilityExecutionGuardAndFailover(t *testing.T) {
 			if all && keys != "" || !all && keys != "acc-2" {
 				t.Fatalf("sent stale admission: %s", keys)
 			}
+			if b := e.plat.builds; all && len(b) != 0 || !all && (len(b) != 1 || b[0].GetAccount().GetId() != 2) {
+				t.Fatalf("plugin asked for a denied account: %d calls", len(b))
+			}
 		})
 	}
+}
+
+// denyAfterPrecheck denies the candidates deny selects once the precheck
+// admitted them: a ranker runs after the precheck and before the guard.
+func denyAfterPrecheck(e *env, source *availabilitySource, deny func(int64) bool) {
+	e.addRanker("deny", manifest.SchedulerRank{}, &fakeRanker{fn: func(_ context.Context, in *pluginv1.RankAccountsRequest) ([]*pluginv1.RankedAccount, error) {
+		var out []*pluginv1.RankedAccount
+		for _, a := range in.Candidates {
+			if deny(a.AccountId) {
+				source.deny(a.AccountId)
+			}
+			out = append(out, rank(a.AccountId, 1, 0))
+		}
+		return out, nil
+	}})
 }
 
 func TestQuotaObservationUnknownUtilization(t *testing.T) {

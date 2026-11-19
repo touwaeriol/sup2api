@@ -33,6 +33,67 @@ type RolloutNodeState struct {
 	Error  string `json:"error"`
 }
 
+// PluginNodeState is the JSON document each node reports per plugin through
+// NodeRegistry.ReportPlugin (NodeStatus.Plugins), written by the rollout
+// reconciler and read by the rollout coordinator and the plugin console.
+type PluginNodeState struct {
+	// State summarizes this node for the console (CONTRACTS §5.7): the
+	// rollout state while a rollout is open, else the serving instance as
+	// active | pending | failed, or "stopped" when nothing is served.
+	State     string `json:"state"`
+	Serving   string `json:"serving,omitempty"`
+	Standby   string `json:"standby,omitempty"`
+	RolloutID int64  `json:"rollout_id,omitempty"`
+	Rollout   string `json:"rollout,omitempty"` // pending | ready | active | failed
+	// Fallback is the version this node still serves because the one it
+	// should serve is not ready here yet (starting, or failed and retried).
+	Fallback  string                `json:"fallback,omitempty"`
+	Error     string                `json:"error,omitempty"`
+	Instances []PluginInstanceState `json:"instances,omitempty"`
+}
+
+type PluginInstanceState struct {
+	Version string `json:"version"`
+	State   string `json:"state"`
+	Error   string `json:"error,omitempty"`
+	// Code classifies a failed load where the console acts on it:
+	// check.CodeOutdatedContract when the runtime refused a package built
+	// for an older plugin contract. Error is the text to show.
+	Code     string `json:"code,omitempty"`
+	Restarts int    `json:"restarts"`
+}
+
+// InstanceCode is the code of the failed load of version reported among the
+// instances, "" when none.
+func (s PluginNodeState) InstanceCode(version string) string {
+	for _, in := range s.Instances {
+		if in.Version == version {
+			return in.Code
+		}
+	}
+	return ""
+}
+
+// ParsePluginNodeState decodes one NodeStatus.Plugins document; false when
+// it is empty or not one.
+func ParsePluginNodeState(s string) (PluginNodeState, bool) {
+	var st PluginNodeState
+	if s == "" || json.Unmarshal([]byte(s), &st) != nil {
+		return PluginNodeState{}, false
+	}
+	return st, true
+}
+
+// EffectiveMemoryMB is a plugin's memory limit in MB, 0 for none: the
+// operator's per-plugin override when set (> 0), else the node's cap; an
+// override above a set cap is the cap.
+func EffectiveMemoryMB(override, capMB int) int {
+	if capMB > 0 && (override <= 0 || override > capMB) {
+		return capMB
+	}
+	return max(override, 0)
+}
+
 // RolloutController (C2) starts and tracks two-phase rollouts.
 type RolloutController interface {
 	Enable(ctx context.Context, pluginKey string, actorID int64) (*Rollout, error)
@@ -65,10 +126,16 @@ type PluginDefaultsApplier interface {
 
 // LaunchSpec describes how to start one plugin process.
 type LaunchSpec struct {
-	PluginKey     string
-	Version       string
-	BinaryPath    string
-	WorkDir       string
+	PluginKey  string
+	Version    string
+	BinaryPath string
+	// DataDir is the plugin's data directory, set only when it is granted
+	// "fs.data": the core creates it, passes it as SUB2API_PLUGIN_DATA_DIR
+	// and Landlock grants it (CONTRACTS §43.8). "" = no file access.
+	DataDir string
+	// Net is set when the plugin is granted "net": Landlock lets it read the
+	// CA certificates for TLS through the egress tunnel.
+	Net           bool
 	Env           []string // extra env, e.g. SUB2API_PLUGIN_KEY
 	MemoryMB      int      // 0 = no limit
 	CPU           float64  // cores, informational without cgroup
@@ -77,9 +144,19 @@ type LaunchSpec struct {
 	StrictNetwork bool // seccomp denies AF_INET/AF_INET6 (Linux only)
 	Seccomp       bool
 	// RunDir is the private 0700 directory of this process: go-plugin
-	// sockets and the plugin's TMPDIR live there. Landlock grants it instead
-	// of the shared temporary directory.
+	// sockets and the plugin's TMPDIR live there. Landlock grants only the
+	// socket directory inside it, never the shared temporary directory.
 	RunDir string
+}
+
+// PluginSandboxStatus is what the plugin sandbox of a node enforces
+// (CONTRACTS §43.8), probed once at startup and shown on the nodes page.
+type PluginSandboxStatus struct {
+	Wrapped  bool     `json:"wrapped"`      // plugins run under plugin-exec (Linux, not development mode)
+	Landlock bool     `json:"landlock"`     // SUB2API_PLUGIN_LANDLOCK
+	ABI      int      `json:"landlock_abi"` // the kernel's Landlock ABI, 0 = none
+	Active   []string `json:"active"`       // Landlock layers in force
+	Missing  []string `json:"missing"`      // layers this kernel or configuration lacks
 }
 
 // ResourceEvent is reported by the watchdog.
@@ -156,22 +233,14 @@ type PluginAccountSummary struct {
 	Settings json.RawMessage
 }
 
-// PluginAccountCredentials is one account with its decrypted credentials.
-type PluginAccountCredentials struct {
-	PluginAccountSummary
-	// Credentials is the decrypted non-settings part of the account, the same
-	// JSON the plugin receives as Account.credentials_json on the gateway path.
-	Credentials json.RawMessage
-}
-
 type AccountAutomaticStateController interface {
 	ApplyAccountAutomaticState(ctx context.Context, id int64, state *pluginv1.AccountAutomaticState) (*pluginv1.SetAccountAutomaticStateResponse, error)
 	ApplyPluginAccountAutomaticState(ctx context.Context, pluginKey string, id int64, state *pluginv1.AccountAutomaticState) (*pluginv1.SetAccountAutomaticStateResponse, error)
 }
 
 // PluginAccountReader (owner: account) serves HostService.ListAccounts and
-// HostService.GetAccountCredentials: it lets a plugin read the accounts of its
-// OWN account types outside a gateway request.
+// HostService.GetAccount: it lets a plugin read the accounts of its OWN
+// account types outside a gateway request (CONTRACTS §124), with no grant.
 //
 // Both methods take the calling plugin's key and filter on accounts.plugin_key
 // in SQL, which is by construction the plugin that declared the account type.
@@ -183,28 +252,50 @@ type PluginAccountReader interface {
 	// ListPluginAccounts returns one page of the plugin's own accounts,
 	// ordered by id. It never returns credentials.
 	ListPluginAccounts(ctx context.Context, pluginKey string, q PluginAccountQuery) ([]PluginAccountSummary, error)
-	// ReadPluginAccountCredentials returns one of the plugin's own accounts
-	// with its decrypted credentials, and writes exactly one audit_logs row
-	// per successful call. An account that exists but belongs to another
-	// plugin's account type is reported as ErrNotFound, like one that does not
-	// exist at all: telling the two apart would leak which account ids exist.
+	// ReadPluginAccount returns one account of pluginKey's own account types
+	// as the plugin sees it on PlatformService calls (credentials, settings,
+	// properties, the saved proxy), after writing the audit row: exactly one
+	// audit_logs row per successful call. An account that exists but belongs
+	// to another plugin's account type is reported as ErrNotFound, like one
+	// that does not exist at all: telling the two apart would leak which
+	// account ids exist. An account whose proxy cannot be had is
+	// ErrUnavailable: it is never handed out without its proxy.
 	//
 	// The audit row is the price of the pull-style access, so it is not best
-	// effort: when it cannot be written the call fails and no credential is
-	// handed out.
-	ReadPluginAccountCredentials(ctx context.Context, pluginKey string, id int64) (*PluginAccountCredentials, error)
+	// effort: when it cannot be written the call fails and nothing is handed
+	// out.
+	ReadPluginAccount(ctx context.Context, pluginKey string, id int64) (*pluginv1.Account, error)
 }
 
 // PluginAccountRequester (owner: account, optional on the PluginAccountReader)
 // serves HostService.SendAccountRequest: one HTTP request a plugin describes
 // for one of its OWN accounts, sent through that account's proxy the way the
-// quota and refresh requests are (CONTRACTS §91). The caller has checked the
-// grant and the URL's host. An account of another plugin's account type is
-// ErrNotFound, as in ReadPluginAccountCredentials. A transport failure is not
-// an error: it is the answer's transport_error with status 0. Every request
+// quota and refresh requests are (CONTRACTS §91). The caller has checked
+// that the URL is http(s) with a host. The host must pass
+// CheckPluginUpstream with the account's type, settings and credentials (the
+// plugin's manifest m and the administrator's plugin network access,
+// CONTRACTS §112.17, §113); another is ErrPermissionDenied and nothing is
+// sent. An account of another
+// plugin's account type is ErrNotFound, as in ReadPluginAccount.
+// A transport failure is not an error: it is the answer's transport_error
+// with status 0. Neither the body nor the answer is bounded. Every request
 // sent is audited (never its headers or bodies).
 type PluginAccountRequester interface {
-	SendPluginAccountRequest(ctx context.Context, pluginKey string, in *pluginv1.SendAccountRequestRequest) (*pluginv1.ExecutionHTTPResponse, error)
+	SendPluginAccountRequest(ctx context.Context, pluginKey string, m *manifest.Manifest, in *pluginv1.SendAccountRequestRequest) (*pluginv1.ExecutionHTTPResponse, error)
+}
+
+// ProxyTicketFetcher (owner: account, optional on the PluginAccountReader)
+// serves the fetches of a plugin's console route calls (HostService.
+// ExecuteHTTP with a proxy ticket, CONTRACTS §117): the authorization of an
+// account not saved yet, sent through the proxy the operator chose in the
+// account form. ctx is the route call's (its user, access key and request);
+// the caller has checked the execution token and the URL's host. The ticket
+// must be one the account module issued for pluginKey to the user of ctx,
+// who must still be allowed to use its proxy; anything else is
+// ErrPermissionDenied (or the error of that check). A transport failure is
+// not an error: it is the answer's transport_error with status 0.
+type ProxyTicketFetcher interface {
+	FetchWithProxyTicket(ctx context.Context, pluginKey string, in *pluginv1.ExecutionHTTPRequest) (*pluginv1.ExecutionHTTPResponse, error)
 }
 
 // StickyClearRequest selects the sticky session bindings HostService.

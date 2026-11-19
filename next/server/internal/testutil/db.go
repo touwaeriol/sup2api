@@ -171,7 +171,7 @@ func checkCasbinOrphans(t testing.TB, dsn string) {
 var dsns sync.Map
 
 // DSN is the connection string of db, a database of DB or DBThrough, for a
-// test that connects to it another way (as a plugin role, a second pool).
+// test that connects to it another way (a second pool).
 func DSN(db *store.DB) string {
 	dsn, ok := dsns.Load(db)
 	if !ok {

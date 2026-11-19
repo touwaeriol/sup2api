@@ -8,7 +8,11 @@ import (
 	"time"
 )
 
-// AC 5: upgrade anthropic from the market's base version to the 0.3.5-test fixture: the migration runs once, old rows are
+// anthropicUpgradeFixture is the market's test build of anthropic that adds
+// a migration (the plugins/anthropic/testdata/upgrade overlay).
+const anthropicUpgradeFixture = "0.4.1-test"
+
+// AC 5: upgrade anthropic from the market's base version to the fixture: the migration runs once, old rows are
 // backfilled and requests keep succeeding on both nodes during the switch.
 func TestAC05_UpgradeAnthropicWithoutDowntime(t *testing.T) {
 	e := Setup(t)
@@ -23,7 +27,7 @@ func TestAC05_UpgradeAnthropicWithoutDowntime(t *testing.T) {
 
 	// Upload the fixture: it adds a migration and asks for no new permission, so it
 	// should not need consent; if it does, approve it.
-	rev := e.InstallFromMarket(admin, "anthropic", "0.3.5-test")
+	rev := e.InstallFromMarket(admin, "anthropic", anthropicUpgradeFixture)
 	if d := rev.Get("diff"); d.Exists() {
 		t.Logf("permission diff: %s", d.Raw)
 	}
@@ -63,7 +67,7 @@ func TestAC05_UpgradeAnthropicWithoutDowntime(t *testing.T) {
 	}
 
 	time.Sleep(2 * time.Second) // baseline traffic before the switch
-	e.Upgrade(admin, "anthropic", "0.3.5-test")
+	e.Upgrade(admin, "anthropic", anthropicUpgradeFixture)
 	time.Sleep(3 * time.Second) // traffic after the switch
 	close(stop)
 	wg.Wait()
@@ -77,8 +81,8 @@ func TestAC05_UpgradeAnthropicWithoutDowntime(t *testing.T) {
 	}
 
 	// Both nodes run the fixture and serve the backfilled catalog.
-	d := e.WaitPlugin(admin, "anthropic", "enabled", "0.3.5-test")
-	if d.Get("desired_version").Exists() && d.Get("desired_version").String() != "0.3.5-test" {
+	d := e.WaitPlugin(admin, "anthropic", "enabled", anthropicUpgradeFixture)
+	if d.Get("desired_version").Exists() && d.Get("desired_version").String() != anthropicUpgradeFixture {
 		t.Fatalf("desired_version: %s", d.Raw)
 	}
 	e.OnEachNode(admin, func(n int, c *Client) {
@@ -113,5 +117,76 @@ func TestAC05_UpgradeAnthropicWithoutDowntime(t *testing.T) {
 		if len(cols) != 1 || cols[0] != "1" {
 			t.Fatalf("family column: %v", cols)
 		}
+	}
+}
+
+// AC 5 (enable): enabling an install-only bundled plugin keeps every node
+// ready and the load balancer serving, and the plugin can be disabled again
+// at once. The bundled plugins gate a node's
+// readiness at start only; before, the plugin's "enabling" row made /healthz
+// answer 503 on both nodes at once (each node re-checks every 5 s) and the
+// load balancer answered every request with an empty 503.
+func TestAC05_EnableBuiltinKeepsNodesServing(t *testing.T) {
+	e := Setup(t)
+	admin := e.Admin()
+	const key = "mailer"
+	if d, ok := e.Plugin(admin, key); !ok || !d.Get("builtin").Bool() {
+		t.Fatalf("%s is not a bundled plugin here: %s", key, d.Raw)
+	} else if d.Get("status").String() == "enabled" {
+		e.Disable(admin, key)
+	}
+
+	var failures []string
+	var mu sync.Mutex
+	var probes atomic.Int64
+	fail := func(f string) {
+		mu.Lock()
+		failures = append(failures, time.Now().Format("15:04:05.000")+" "+f)
+		mu.Unlock()
+	}
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			for n := range e.NodeURLs {
+				if !e.NodeHealthy(n + 1) {
+					fail("node-" + itoa(int64(n+1)) + " /healthz not 200")
+				}
+			}
+			// Without an API key the gateway answers 401; the load balancer
+			// answers 503 when it sees no healthy node.
+			if g, err := GatewayTry(e.BaseURL, "/v1/messages", "", map[string]any{}, nil); err != nil {
+				fail("load balancer: " + err.Error())
+			} else if g.Status >= 500 {
+				fail("load balancer: " + itoa(int64(g.Status)) + " " + string(g.Body))
+			}
+			probes.Add(1)
+			time.Sleep(100 * time.Millisecond)
+		}
+	}()
+
+	time.Sleep(time.Second)
+	e.Enable(admin, key)
+	// An operator's next plugin change is accepted at once: the rollout
+	// starts no round over the bundled plugins holding the cluster change
+	// lock (it answered 409 cluster_change_busy).
+	e.Disable(admin, key)
+	// Past the next readiness check of both nodes and the balancer's health check.
+	time.Sleep(7 * time.Second)
+	close(stop)
+	wg.Wait()
+
+	if len(failures) > 0 {
+		t.Fatalf("%d of %d probes failed while %s was enabled and disabled: %v", len(failures), probes.Load(), key, failures)
+	}
+	if probes.Load() < 20 {
+		t.Fatalf("too few probes: %d", probes.Load())
 	}
 }

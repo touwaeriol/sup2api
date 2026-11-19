@@ -13,8 +13,6 @@ import (
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 
-	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
-	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/usagerules"
 )
 
@@ -22,8 +20,8 @@ import (
 //
 // An account type lists such upstream protocols in
 // AccountPlatform.streamOnly. A non-streaming request routed to one of them is
-// sent upstream with the endpoint's streamPath set to true (attempt, before
-// BuildUpstreamRequest, and again after the plugin's patches in forwardBuilt).
+// sent upstream with the endpoint's streamPath set to true (upstreamBody,
+// before the plugin's Execute; the plugin hands the flag back unchanged).
 // The SSE answer is read here, before anything reaches the client, and turned
 // back into what a non-streaming upstream would have answered: the response
 // object of the terminal event becomes the JSON body and the attempt goes on
@@ -58,8 +56,6 @@ type streamOnlyAnswer struct {
 	errBody []byte
 	// broken is a stream that failed or ended without a terminal event.
 	broken error
-	// tooLarge is an answer beyond what the gateway keeps in memory.
-	tooLarge bool
 }
 
 var errStreamOnlyUnfinished = errors.New("upstream stream ended before response.completed")
@@ -72,14 +68,13 @@ func readStreamOnly(r io.Reader) streamOnlyAnswer {
 	var event string
 	var data []byte
 	items := map[int64][]byte{}
-	kept := 0
 	var ans streamOnlyAnswer
 	for {
-		line, rerr := readLine(br, maxSSELine)
+		line, rerr := readLine(br)
 		t := bytes.TrimRight(line, "\r\n")
 		switch {
 		case len(line) > 0 && len(t) == 0:
-			if streamOnlyEvent(event, data, items, &kept, &ans) {
+			if streamOnlyEvent(event, data, items, &ans) {
 				return finishStreamOnly(ans, items)
 			}
 			event, data = "", data[:0]
@@ -97,7 +92,7 @@ func readStreamOnly(r io.Reader) streamOnlyAnswer {
 		}
 		if rerr != nil {
 			// The last event may lack its blank line.
-			if rerr == io.EOF && streamOnlyEvent(event, data, items, &kept, &ans) {
+			if rerr == io.EOF && streamOnlyEvent(event, data, items, &ans) {
 				return finishStreamOnly(ans, items)
 			}
 			if rerr == io.EOF {
@@ -116,7 +111,7 @@ func finishStreamOnly(ans streamOnlyAnswer, items map[int64][]byte) streamOnlyAn
 }
 
 // streamOnlyEvent records one event and reports whether it ends the answer.
-func streamOnlyEvent(event string, data []byte, items map[int64][]byte, kept *int, ans *streamOnlyAnswer) bool {
+func streamOnlyEvent(event string, data []byte, items map[int64][]byte, ans *streamOnlyAnswer) bool {
 	if event == "" && len(data) == 0 {
 		return false
 	}
@@ -127,19 +122,11 @@ func streamOnlyEvent(event string, data []byte, items map[int64][]byte, kept *in
 		if idx.Type != gjson.Number || !item.IsObject() {
 			return false
 		}
-		if *kept += len(item.Raw); *kept > maxUsageJSONBuf {
-			ans.tooLarge = true
-			return true
-		}
 		items[idx.Int()] = []byte(item.Raw)
 	case streamOnlyTerminal[name]:
 		resp := gjson.GetBytes(data, "response")
 		if !resp.IsObject() {
 			ans.status, ans.errBody = http.StatusBadGateway, []byte(`{"error":{"message":"upstream terminal event carries no response object"}}`)
-			return true
-		}
-		if *kept += len(resp.Raw); *kept > maxUsageJSONBuf {
-			ans.tooLarge = true
 			return true
 		}
 		ans.body = []byte(resp.Raw)
@@ -248,8 +235,7 @@ func streamOnlyRequestError(data []byte, detail gjson.Result) bool {
 // replaces resp with the JSON answer for the non-streaming path (failed
 // false) or returns the attempt's result (failed true). An upstream that
 // answered JSON after all is left untouched.
-func (c *call) collectStreamOnly(ctx, uctx context.Context, rt *typeRoute, acc *core.Account, pacct *pluginv1.Account,
-	execution *gatewayExecution, resp *http.Response) (res attemptResult, failed bool) {
+func (c *call) collectStreamOnly(ctx, uctx context.Context, x *execution, resp *http.Response) (res attemptResult, failed bool) {
 	if !isSSE(resp.Header.Get("Content-Type")) {
 		return attemptResult{}, false
 	}
@@ -263,22 +249,12 @@ func (c *call) collectStreamOnly(ctx, uctx context.Context, rt *typeRoute, acc *
 		if cause := context.Cause(uctx); errors.Is(cause, errRelayTimeout) || errors.Is(cause, errStreamIdleTimeout) {
 			msg = cause.Error()
 		}
-		if execution != nil {
-			return execution.classify(ctx, 0, nil, nil, msg), true
-		}
-		return c.classify(ctx, rt, pacct, 0, nil, nil, msg), true
-	case ans.tooLarge:
-		e := &gwError{Status: http.StatusBadGateway, Code: codeUpstreamError, RecordType: errTypeUpstream,
-			Message: "upstream response too large"}
-		if execution != nil {
-			execution.unclassified = e
-		}
-		return attemptResult{kind: attemptReturn, err: e}, true
+		return c.classifyUpstream(ctx, x, 0, nil, nil, msg), true
 	case ans.errBody != nil:
 		h := resp.Header.Clone()
 		h.Set("Content-Type", "application/json")
 		h.Del("Content-Length")
-		return c.upstreamFailure(ctx, rt, acc, pacct, execution, ans.status, h, &upstreamErrorBody{prefix: ans.errBody}), true
+		return c.upstreamFailure(ctx, x, ans.status, h, &upstreamErrorBody{prefix: ans.errBody}), true
 	}
 	h := resp.Header.Clone()
 	h.Set("Content-Type", "application/json")

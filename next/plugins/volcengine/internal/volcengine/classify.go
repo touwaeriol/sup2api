@@ -9,8 +9,7 @@ import (
 
 // ClassifyError implements pluginsdk.Platform.
 func (p *Plugin) ClassifyError(_ context.Context, in *pluginv1.ClassifyErrorRequest) (*pluginv1.ClassifyErrorResponse, error) {
-	protocol := in.GetMeta().GetProtocol()
-	if protocol == volcengine.ProtocolMessages || protocol == volcengine.ProtocolCountTokens {
+	if in.GetMeta().GetProtocol() == volcengine.ProtocolMessages {
 		return volcengine.PolicyAnthropic.Classify(p.now(), in), nil
 	}
 	return volcengine.Policy.Classify(p.now(), in), nil

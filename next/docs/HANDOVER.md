@@ -422,7 +422,7 @@ CI 有三个 job：`server (with PostgreSQL and Redis)` / `sdk, tools and e2e` /
 
 ## 10. 核心契约速查（A→E 五期的产出）
 
-改插件或改核心前，先知道有哪些口子可用：
+改插件或改核心前，先知道有哪些口子可用（2026-09-30 的快照。转发 V2 之后的现状以 CONTRACTS §112 为准：`ExtractUsage`、预扣回调、核对循环都已删除；下表的大小上限——观察的默认 256 KiB 与 64 条、`detail_json` 4 KiB、请求字段单值 4 KiB / 总量 32 KiB 与 `fields_omitted`——在 2026-11-18 转发 V2 收尾时删除，默认都不限，见 §112.16）：
 
 | 能力 | 怎么用 | 期 |
 |---|---|---|
@@ -497,7 +497,7 @@ platforms/                   三个内置平台的 JSON（Builtin() 每次重新
 
 ## 12. 插件开发工作流
 
-标准 API Key 类账号类型不用写代码：在清单里声明 `upstream`（引用 openai/anthropic/gemini 预设并覆盖少数参数），可以是只有清单的插件（`runtime: "none"`），见 [UPSTREAM-DECLARATIVE.md](UPSTREAM-DECLARATIVE.md) 和 CONTRACTS §86；有私有逻辑的再写代码，或用 `extend` 在声明结果上追加。
+平台插件都是代码插件，经 `PlatformService.Execute` 构造请求、交给核心的 HTTP 客户端（转发 V2，CONTRACTS §112）。标准 API Key 类账号类型用 `sdk/pluginsdk/standard` 库加厂商预设写，只需几行 Go，见 [PLUGIN-DEVELOPMENT.md](PLUGIN-DEVELOPMENT.md) 第 3 节；有私有逻辑的自己实现 `BuildUpstream`。（2026-11-09 到转发 V2 之间有过清单声明的上游和只有清单的插件，已删除。）
 
 开发工具是 `next/tools/sub2api-plugin`（自己的 Go 模块）：
 

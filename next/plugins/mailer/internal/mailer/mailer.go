@@ -5,6 +5,7 @@ package mailer
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -19,6 +20,7 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/pluginsdk"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/pluginsdk/egress"
+	"github.com/Sub2API-Devs/sup2api/next/sdk/pluginsdk/fieldcheck"
 )
 
 // Channel is the notification channel the plugin declares.
@@ -34,7 +36,7 @@ const (
 	SecurityNone     = "none"
 )
 
-// Settings are the plugin settings (forms/settings.schema.json).
+// Settings are the plugin settings (settingsRules).
 type Settings struct {
 	Host           string `json:"host"`
 	Port           int    `json:"port"`
@@ -46,7 +48,8 @@ type Settings struct {
 	TimeoutSeconds int    `json:"timeout_seconds"`
 }
 
-// Plugin implements pluginsdk.NotificationChannel and pluginsdk.Configurer.
+// Plugin implements pluginsdk.NotificationChannel, pluginsdk.Configurer and
+// pluginsdk.SettingsValidator.
 type Plugin struct {
 	cfg atomic.Pointer[Settings]
 	// dial opens the TCP connection and lookup resolves a host name (through
@@ -76,27 +79,47 @@ func dialEgress(ctx context.Context, address string) (net.Conn, error) {
 
 // Configure implements pluginsdk.Configurer.
 func (p *Plugin) Configure(_ context.Context, cfg pluginsdk.Config) error {
+	s, err := parseSettings(cfg)
+	if err != nil {
+		return err
+	}
+	p.cfg.Store(s)
+	return nil
+}
+
+// ValidateSettings implements pluginsdk.SettingsValidator: the console's
+// settings are refused before they are stored when Configure would refuse
+// them.
+func (p *Plugin) ValidateSettings(_ context.Context, cfg pluginsdk.Config) (json.RawMessage, error) {
+	_, err := parseSettings(cfg)
+	return nil, err
+}
+
+// settingsRules are the settings the console form edits (ui/native
+// MailerSettings shows the same bounds); every other key is refused.
+var settingsRules = fieldcheck.Fields{
+	"host":            fieldcheck.String().MaxLen(253),
+	"port":            fieldcheck.Integer().Range(1, 65535),
+	"security":        fieldcheck.String().OneOf(SecuritySTARTTLS, SecurityTLS, SecurityNone),
+	"username":        fieldcheck.String().MaxLen(320),
+	"password":        fieldcheck.String().MaxLen(1000),
+	"from_address":    fieldcheck.String().MaxLen(320),
+	"from_name":       fieldcheck.String().MaxLen(100),
+	"timeout_seconds": fieldcheck.Integer().Range(5, maxTimeoutSeconds),
+}
+
+// parseSettings decodes and checks the settings, absent keys taking their
+// defaults: the one check of Configure and ValidateSettings.
+func parseSettings(cfg pluginsdk.Config) (*Settings, error) {
 	s := Settings{Port: 587, Security: SecuritySTARTTLS, FromName: "Sub2API", TimeoutSeconds: 20}
-	if err := cfg.Decode(&s); err != nil {
-		return pluginsdk.FieldErrors{}.Add("", "invalid_json", "settings must be a JSON object / 设置必须是 JSON 对象").Err()
+	if err := fieldcheck.DecodeSettings(cfg, settingsRules, &s); err != nil {
+		return nil, err
 	}
 	s.Host, s.FromAddress = strings.TrimSpace(s.Host), strings.TrimSpace(s.FromAddress)
-	fe := pluginsdk.FieldErrors{}
 	if s.Host != "" && !manifest.ValidRecipient(manifest.RecipientEmail, s.FromAddress) {
-		fe = fe.Add("from_address", "invalid", "a plain address such as noreply@example.com / 请填写发件地址，例如 noreply@example.com")
+		return nil, pluginsdk.FieldErrors{}.Add("from_address", "invalid", "a plain address such as noreply@example.com / 请填写发件地址，例如 noreply@example.com").Err()
 	}
-	if s.Security != SecuritySTARTTLS && s.Security != SecurityTLS && s.Security != SecurityNone {
-		fe = fe.Add("security", "invalid", "starttls, tls or none")
-	}
-	if s.Port < 1 || s.Port > 65535 {
-		fe = fe.Add("port", "invalid", "1-65535")
-	}
-	if len(fe) > 0 {
-		return fe.Err()
-	}
-	s.TimeoutSeconds = min(max(s.TimeoutSeconds, 5), maxTimeoutSeconds)
-	p.cfg.Store(&s)
-	return nil
+	return &s, nil
 }
 
 // DeliverNotification implements pluginsdk.NotificationChannel. A refusal

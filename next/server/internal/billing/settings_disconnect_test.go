@@ -36,7 +36,7 @@ func TestClientDisconnectSettings(t *testing.T) {
 
 	// A row written before the field existed reads as the default too; one
 	// still holding the removed wait (core 0.1.284) is read without it.
-	e.exec(`INSERT INTO settings (key, value) VALUES ('billing', '{"missing_price_policy":"reject","min_balance":"1","client_disconnect_wait_seconds":30}')
+	e.exec(`INSERT INTO settings (key, value) VALUES ('billing', '{"min_balance":"1","client_disconnect_wait_seconds":30}')
 		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`)
 	if got := policy(); got != core.DisconnectContinue {
 		t.Fatalf("policy of a row without the field: %q", got)

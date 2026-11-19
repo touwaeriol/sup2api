@@ -3,7 +3,8 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import en from '@/i18n/locales/en/plugins'
 import zh from '@/i18n/locales/zh/plugins'
-import { HOST_PERMISSION_RISK, accountTypesOf, consoleSettings, consoleSettingsPath, endpointText, hpKey, isPluginKey, nativeSettingsPath, platformsOf, pluginSettingsPath, pluginStatusTone, settingsFieldErrors } from './pluginUtil'
+import { i18n } from '@/i18n'
+import { HOST_PERMISSION_RISK, accountTypesOf, consoleSettings, consoleSettingsPath, endpointText, hpKey, isPluginKey, nativeSettingsPath, platformsOf, pluginSettingsPath, pluginStatusTone, refusalText } from './pluginUtil'
 
 describe('plugin endpoint declarations', () => {
   it('preserves the same subset in manifests and installation reviews', () => {
@@ -28,15 +29,6 @@ describe('plugin endpoint declarations', () => {
         platforms: [{ id: 'video', endpoints: [{ id: 'generate', method: 'POST', path: '/video', protocol: 'video.generate' }] }]
       })[0].endpoints[0].id
     ).toBe('generate')
-  })
-})
-
-describe('settingsFieldErrors', () => {
-  it('maps JSON pointer and dotted paths under values, root errors apart', () => {
-    expect(settingsFieldErrors({ 'values/a/0/b': 'x', 'values.c': 'y', values: 'missing property d' })).toEqual({
-      fields: { 'a.0.b': 'x', c: 'y' },
-      root: ['missing property d']
-    })
   })
 })
 
@@ -67,22 +59,23 @@ describe('HOST_PERMISSION_RISK', () => {
 })
 
 describe('settings modes (§75.5)', () => {
-  const schema = { type: 'object' }
-  it('renders only schema settings in the console', () => {
-    expect(consoleSettings({ schema, values: {} })).not.toBeNull()
-    expect(consoleSettings({ mode: 'schema', schema, values: {} })).not.toBeNull()
-    expect(consoleSettings({ mode: 'native', page: 'dashboard', schema, values: {} })).toBeNull()
-    expect(consoleSettings({ mode: 'schema', schema: null, values: {} })).toBeNull()
+  it('shows native settings without a page on the settings tab', () => {
+    expect(consoleSettings({ mode: 'native', component: 'MailerSettings', values: {} })).not.toBeNull()
+    expect(consoleSettings({ mode: 'native', page: 'dashboard', values: {} })).toBeNull()
+    expect(consoleSettings({ mode: 'native', page: 'dashboard', component: 'X', values: {} })).toBeNull()
+    expect(consoleSettings({ mode: 'native', values: {} })).toBeNull()
+    expect(consoleSettings({ mode: 'iframe', component: 'X', values: {} })).toBeNull()
+    expect(consoleSettings({ mode: 'none', values: {} })).toBeNull()
   })
   it('points native settings to the plugin page', () => {
-    expect(nativeSettingsPath('moderation', { mode: 'native', page: 'dashboard', schema, values: {} })).toBe('/p/moderation/dashboard?tab=settings')
-    expect(nativeSettingsPath('moderation', { mode: 'native', schema, values: {} })).toBeNull()
-    expect(nativeSettingsPath('guard', { mode: 'schema', schema, values: {} })).toBeNull()
+    expect(nativeSettingsPath('moderation', { mode: 'native', page: 'dashboard', values: {} })).toBe('/p/moderation/dashboard?tab=settings')
+    expect(nativeSettingsPath('moderation', { mode: 'native', values: {} })).toBeNull()
+    expect(nativeSettingsPath('guard', { mode: 'iframe', page: 'x', values: {} })).toBeNull()
   })
 })
 
 describe('where the installed plugins list opens settings', () => {
-  it('is the settings tab of the detail page for a plugin with a form', () => {
+  it('is the settings tab of the detail page for a plugin with settings', () => {
     expect(consoleSettingsPath({ key: 'mailer', has_settings: true })).toBe('/plugins/mailer?tab=settings')
     expect(consoleSettingsPath({ key: 'relay' })).toBeUndefined()
   })
@@ -98,7 +91,7 @@ describe('isPluginKey', () => {
   it('is the key rule of sdk/manifest/check', () => {
     const rule = readFileSync('../sdk/manifest/check/validate.go', 'utf8').match(/\bkeyRe\s*=\s*regexp\.MustCompile\(`([^`]+)`\)/)?.[1]
     expect(rule).toBe('^[a-z][a-z0-9_]{1,29}$')
-    for (const key of ['mailer', 'claude_oauth', 'a1']) expect([key, isPluginKey(key)]).toEqual([key, true])
+    for (const key of ['mailer', 'azure_openai', 'a1']) expect([key, isPluginKey(key)]).toEqual([key, true])
     for (const key of ['', 'a', '..', 'a/b', 'Mailer', 'guard-on', '1st', 'x'.repeat(31)]) expect([key, isPluginKey(key)]).toEqual([key, false])
   })
 })
@@ -114,5 +107,20 @@ describe('plugin status tones', () => {
     }
     for (const [status, tone] of Object.entries(expected)) expect([status, pluginStatusTone(status)]).toEqual([status, tone])
     expect(pluginStatusTone(null)).toBe('gray')
+  })
+})
+
+describe('refusalText', () => {
+  const refusal = { code: 'outdated_contract', version: '0.1.0', host_version: '0.2.3', protocol_version: 2, first_core_version: '0.2.0', message: 'plugin video@0.1.0 was built for an older plugin protocol' }
+  it('localises a refusal of the older plugin contract', () => {
+    i18n.global.locale.value = 'zh'
+    expect(refusalText(i18n.global.t, 'video', refusal)).toBe('插件 video@0.1.0 是按旧的插件协议构建的，本核心（0.2.3，插件协议 2）不能加载它。请安装为核心 0.2.0 及以上构建的版本。')
+    i18n.global.locale.value = 'en'
+    expect(refusalText(i18n.global.t, 'video', refusal)).toBe(
+      'Plugin video@0.1.0 was built for an older plugin protocol and cannot be loaded by this core (0.2.3, plugin protocol 2). Install a version built for core 0.2.0 or later.'
+    )
+  })
+  it('shows the runtime text of a refusal it does not know', () => {
+    expect(refusalText(i18n.global.t, 'video', { ...refusal, code: 'other' })).toBe(refusal.message)
   })
 })

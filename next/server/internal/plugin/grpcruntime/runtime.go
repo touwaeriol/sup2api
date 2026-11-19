@@ -18,22 +18,24 @@ import (
 
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest/check"
+	"github.com/Sub2API-Devs/sup2api/next/sdk/protocol"
 
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 
 	"github.com/Sub2API-Devs/sup2api/next/runtime-contract/secret"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
-	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/dbschema"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/grants"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/registry"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store/model"
 )
 
-// SchemaDSN hands out restricted plugin DSNs (implemented by dbschema.Manager).
+// SchemaDSN hands out plugin DSNs (implemented by dbschema.Manager);
+// tunnelled is set when the plugin's connections go through the egress
+// tunnel (strict network), which then carries no database credential.
 type SchemaDSN interface {
-	DSN(ctx context.Context, pluginKey string) (string, dbschema.Status, error)
+	DSN(ctx context.Context, pluginKey string, tunnelled bool) (dsn, schema string, err error)
 }
 
 // Options configures the runtime. DB, Redis, Cipher, Node and Launcher are
@@ -46,13 +48,17 @@ type Options struct {
 	Node     core.Node
 	Launcher core.PluginLauncher
 
-	Egress     core.EgressProvider
-	Authorizer core.Authorizer
-	Ledger     core.Ledger
+	Egress core.EgressProvider
+	// NetworkAccess is the administrator's plugin network access (CONTRACTS
+	// §113), which a fetch's host must pass as well (requireFetchHost); nil
+	// = no such setting (tests).
+	NetworkAccess core.PluginNetworkAccess
+	Authorizer    core.Authorizer
+	Ledger        core.Ledger
 	// Prices serves HostService.PriceUsage; nil makes it fail with UNAVAILABLE.
 	Prices  UsagePricer
 	Schemas SchemaDSN
-	// Accounts serves HostService.ListAccounts / GetAccountCredentials: the
+	// Accounts serves HostService.ListAccounts / GetAccount: the
 	// accounts of the calling plugin's own account types.
 	// Nil makes both calls fail with UNAVAILABLE.
 	Accounts core.PluginAccountReader
@@ -84,7 +90,7 @@ type Options struct {
 	DataDir       string // plugin work directories live under DataDir/<key>/work
 	StrictNetwork bool
 	Seccomp       bool
-	MaxMemoryMB   int // global cap on per-plugin memory (0 = none)
+	MaxMemoryMB   int // node cap on per-plugin memory (0 = none, the default)
 	// RunDir holds one private 0700 directory per plugin process (go-plugin
 	// sockets, the plugin's TMPDIR); default DataDir/.run. Keep it short:
 	// unix socket paths are limited to ~107 bytes.
@@ -114,18 +120,17 @@ type Options struct {
 // never for the slots of the request path.
 type Concurrency struct {
 	// Hot: RPCs on the gateway request path (resolve, estimate, hooks,
-	// scheduler, build, classify, extract). Default 64.
+	// scheduler, classify). Default 64.
 	Hot int
 	// Console: credential checks, test and model requests, plugin HTTP
 	// routes. Default 16.
 	Console int
-	// Background: jobs, events, broadcasts, polls, monitors, reconcile and
-	// data migrations. Default 8.
+	// Background: jobs, events, broadcasts, monitors, refresh and data
+	// migrations. Default 8.
 	Background int
-	// Execute: platform Execute, held for the whole upstream exchange. The
-	// account and API key slots of the core bound real concurrency; this is
-	// only a safety cap. Default 1024.
-	Execute int
+	// Platform Execute calls have no class limit: the account and API key
+	// slots of the core bound their concurrency. They are still counted in
+	// flight, so a drain waits for them.
 }
 
 func (c Concurrency) withDefaults() Concurrency {
@@ -137,7 +142,6 @@ func (c Concurrency) withDefaults() Concurrency {
 	def(&c.Hot, 64)
 	def(&c.Console, 16)
 	def(&c.Background, 8)
-	def(&c.Execute, 1024)
 	return c
 }
 
@@ -182,6 +186,9 @@ func New(o Options) (*Runtime, error) {
 func (r *Runtime) Load(ctx context.Context, pkg *registry.Package) (*Instance, error) {
 	// Validate before ExtractBinary/Init: an incompatible plugin may already
 	// have side effects by the time a post-start health check rejects it.
+	if err := r.checkContract(pkg); err != nil {
+		return nil, err
+	}
 	if err := r.checkHostCompat(pkg); err != nil {
 		return nil, err
 	}
@@ -200,6 +207,45 @@ func (r *Runtime) Load(ctx context.Context, pkg *registry.Package) (*Instance, e
 	}
 	go inst.supervise()
 	return inst, nil
+}
+
+// ErrOutdatedContract marks the refusal of a package built for an older
+// plugin contract; the error's text is protocol.OutdatedContractMessage.
+var ErrOutdatedContract = errors.New("plugin built for an older plugin contract")
+
+// handshakeVersionMismatch is how go-plugin words a handshake with another
+// protocol version (Client.checkProtoVersion); it has no error value for it.
+const handshakeVersionMismatch = "incompatible API version with plugin"
+
+type outdatedContractError struct {
+	msg   string
+	cause error
+}
+
+func (e *outdatedContractError) Error() string        { return e.msg }
+func (e *outdatedContractError) Unwrap() error        { return e.cause }
+func (e *outdatedContractError) Is(target error) bool { return target == ErrOutdatedContract }
+
+// outdatedContract is the one answer to a package of an older plugin
+// contract, whatever gave it away (cause): its manifest, the handshake of
+// its binary or the protocol version it reports.
+func (r *Runtime) outdatedContract(pkg *registry.Package, cause error) error {
+	return &outdatedContractError{msg: protocol.OutdatedContractMessage(pkg.Key, pkg.Version, r.o.HostVersion), cause: cause}
+}
+
+// checkContract rejects a package whose manifest is of an older plugin
+// contract (check.OutdatedPackage), before anything of it runs. Other
+// manifest problems are not this check's: the package passed them when it
+// was installed.
+func (r *Runtime) checkContract(pkg *registry.Package) error {
+	if pkg.Manifest == nil {
+		return nil
+	}
+	raw, _ := pkg.ReadFile("manifest.json")
+	if msg, outdated := check.OutdatedPackage(pkg.Manifest, raw, r.o.HostVersion); outdated {
+		return &outdatedContractError{msg: msg}
+	}
+	return nil
 }
 
 // checkHostCompat rejects a package whose hostCompat excludes this host.

@@ -1,5 +1,5 @@
 // Value helpers shared by the display components (STable, SDescItem,
-// SCopyButton, SInput) and the schema form.
+// SCopyButton, SInput) and the forms.
 
 /** True for undefined, null, '' and an empty array. */
 export function isBlank(v: unknown): boolean {

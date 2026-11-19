@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"slices"
 	"testing"
@@ -84,8 +85,8 @@ func (p *settingsPlugin) SettingsChanged(_ context.Context, in *pluginv1.Setting
 	return &pluginv1.SettingsChangedResponse{}, p.err
 }
 
-// A plugin built before SettingsChanged existed answers UNIMPLEMENTED, which
-// is not a failure; any other error is.
+// Every plugin of this protocol answers SettingsChanged: an error, whatever
+// its code, is a failure.
 func TestInstanceSettingsChanged(t *testing.T) {
 	ctx := context.Background()
 	i, _ := testInstance(t, nil, nil, registry.Grants{})
@@ -96,13 +97,11 @@ func TestInstanceSettingsChanged(t *testing.T) {
 	if err := i.SettingsChanged(ctx, []string{protocol.SettingsSticky}); err != nil || len(sp.got) != 1 || sp.got[0][0] != protocol.SettingsSticky {
 		t.Fatalf("delivered %v %v", sp.got, err)
 	}
-	sp.err = status.Error(codes.Unimplemented, "old sdk")
-	if err := i.SettingsChanged(ctx, nil); err != nil {
-		t.Fatalf("unimplemented: %v", err)
-	}
-	sp.err = status.Error(codes.Internal, "boom")
-	if err := i.SettingsChanged(ctx, nil); err == nil {
-		t.Fatalf("failure: %v", err)
+	for _, code := range []codes.Code{codes.Unimplemented, codes.Internal} {
+		sp.err = status.Error(code, "boom")
+		if err := i.SettingsChanged(ctx, nil); err == nil {
+			t.Fatalf("%s: no failure", code)
+		}
 	}
 
 	// Background work holding every slot does not hold the call up.
@@ -115,5 +114,35 @@ func TestInstanceSettingsChanged(t *testing.T) {
 	defer cancel()
 	if err := i.SettingsChanged(short, nil); err != nil {
 		t.Fatalf("with the background slots taken: %v", err)
+	}
+}
+
+func (p *settingsPlugin) ValidateSettings(_ context.Context, in *pluginv1.ValidateSettingsRequest, _ ...grpc.CallOption) (*pluginv1.ValidateSettingsResponse, error) {
+	got := []string{in.GetConfigJson()}
+	for _, g := range in.GetGrants() {
+		got = append(got, g.GetPermission()+"="+g.GetScopeJson())
+	}
+	p.got = append(p.got, got)
+	return &pluginv1.ValidateSettingsResponse{Errors: []*pluginv1.FieldError{{Field: "a"}}}, p.err
+}
+
+// ValidateSettings reaches the plugin's PluginService; its status keeps its
+// code through the core error, so UNIMPLEMENTED (an older plugin, or one
+// without SettingsValidator) is told apart. The plugin's grants go with it,
+// as with Configure.
+func TestInstanceValidateSettings(t *testing.T) {
+	ctx := context.Background()
+	i, _ := testInstance(t, nil, nil, registry.Grants{"net": json.RawMessage(`{"domains":["a.test"]}`)})
+	sp := &settingsPlugin{}
+	p := *i.proc.Load()
+	p.plugin = sp
+	i.proc.Store(&p)
+	resp, err := i.SettingsValidator().ValidateSettings(ctx, &pluginv1.ValidateSettingsRequest{ConfigJson: `{"a":1}`})
+	if err != nil || len(resp.GetErrors()) != 1 || len(sp.got) != 1 || !slices.Equal(sp.got[0], []string{`{"a":1}`, `net={"domains":["a.test"]}`}) {
+		t.Fatalf("validate = %v %v %v", resp, err, sp.got)
+	}
+	sp.err = status.Error(codes.Unimplemented, "no")
+	if _, err := i.SettingsValidator().ValidateSettings(ctx, &pluginv1.ValidateSettingsRequest{}); status.Code(err) != codes.Unimplemented {
+		t.Fatalf("unimplemented = %v", err)
 	}
 }

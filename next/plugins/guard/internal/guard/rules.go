@@ -246,8 +246,8 @@ func (p *Plugin) putRules(ctx context.Context, req *pluginv1.HTTPRequest) (*plug
 // survive (or the two DELETEs deadlock on each other's rows). SHARE ROW
 // EXCLUSIVE conflicts with itself and with row writes, not with plain
 // SELECTs, so rule reloads and GET /rules are not blocked. Taking it needs
-// UPDATE/DELETE on rules, which this handler needs anyway; the plugin role
-// owns the table.
+// UPDATE/DELETE on rules, which this handler needs anyway; the core's
+// database user, which the plugin's connections log in as, owns the table.
 //
 // A table lock rather than a cluster lock (host "lock" permission): those live
 // in Redis, are not fenced and are not part of this transaction - a holder

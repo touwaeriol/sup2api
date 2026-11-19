@@ -34,7 +34,7 @@ type LocalRuntime struct {
 	Peer                                                *peer.Manager
 	PeerArtifactClient                                  *http.Client
 	AuthorizePeer                                       func(context.Context, peer.Identity, string, string) error
-	// PluginBlobs serves /internal/plugin-blobs/ to authorized followers.
+	// PluginBlobs serves /internal/plugin-blobs/ to the other enabled nodes.
 	PluginBlobs http.Handler
 	// SourceAsset opens an asset of a release imported from the update
 	// source (Store.OpenSourceAsset).
@@ -502,25 +502,13 @@ func (r *LocalRuntime) PrivateHandler() http.Handler {
 			scope = "core-artifact"
 			digest = strings.TrimPrefix(escaped, "/internal/releases/")
 		case strings.HasPrefix(escaped, "/internal/plugin-blobs/") && r.PluginBlobs != nil:
+			scope = "plugin-artifact"
 			digest = strings.TrimPrefix(escaped, "/internal/plugin-blobs/")
-			switch q.Method {
-			case http.MethodGet, http.MethodHead:
-				scope = "plugin-artifact"
-			case http.MethodPut:
-				scope = "plugin-upload"
-			default:
-				peer.Failure(w, 403)
-				return
-			}
-			if !release.ValidDigest(digest) {
-				peer.Failure(w, 403)
-				return
-			}
 		default:
 			peer.Failure(w, 403)
 			return
 		}
-		if scope == "core-artifact" && (!release.ValidDigest(digest) || (q.Method != "GET" && q.Method != "HEAD")) {
+		if scope != "forward" && (!release.ValidDigest(digest) || (q.Method != "GET" && q.Method != "HEAD")) {
 			peer.Failure(w, 403)
 			return
 		}
@@ -532,7 +520,7 @@ func (r *LocalRuntime) PrivateHandler() http.Handler {
 		switch scope {
 		case "forward":
 			r.Router.Private().ServeHTTP(w, q)
-		case "plugin-artifact", "plugin-upload":
+		case "plugin-artifact":
 			r.PluginBlobs.ServeHTTP(w, q)
 		default:
 			r.Releases.BlobHandler().ServeHTTP(w, q)

@@ -16,12 +16,11 @@ import (
 // RequestMeta.protocol against the SDK provider constants. "anthropic-messages"
 // used to be declared there, which made PolicyAnthropic unreachable.
 func TestAnthropicSurfaceProtocolIDs(t *testing.T) {
-	if ProtocolMessages != sdkvolcengine.ProtocolMessages || ProtocolCountTokens != sdkvolcengine.ProtocolCountTokens {
-		t.Fatalf("plugin protocols = %q/%q, SDK provider = %q/%q",
-			ProtocolMessages, ProtocolCountTokens, sdkvolcengine.ProtocolMessages, sdkvolcengine.ProtocolCountTokens)
+	if ProtocolMessages != sdkvolcengine.ProtocolMessages {
+		t.Fatalf("plugin protocol = %q, SDK provider = %q", ProtocolMessages, sdkvolcengine.ProtocolMessages)
 	}
-	if ProtocolMessages != "anthropic.messages" || ProtocolCountTokens != "anthropic.count_tokens" {
-		t.Fatalf("protocol ids = %q/%q", ProtocolMessages, ProtocolCountTokens)
+	if ProtocolMessages != "anthropic.messages" {
+		t.Fatalf("protocol id = %q", ProtocolMessages)
 	}
 }
 
@@ -55,9 +54,6 @@ func TestClassifyErrorAnthropicSurface(t *testing.T) {
 		if got := cls(ProtocolMessages, tc.status).GetClientErrorType(); got != tc.wantType {
 			t.Errorf("anthropic surface %d: client error type = %q, want %q", tc.status, got, tc.wantType)
 		}
-	}
-	if got := cls(ProtocolCountTokens, http.StatusNotFound).GetClientErrorType(); got != "not_found_error" {
-		t.Errorf("count_tokens surface 404: client error type = %q, want not_found_error", got)
 	}
 
 	// The OpenAI surface (no protocol, or an OpenAI one) folds 404 into

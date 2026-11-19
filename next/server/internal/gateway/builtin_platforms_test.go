@@ -101,6 +101,8 @@ func (u *apiUpstream) handle(w http.ResponseWriter, r *http.Request) {
 		sseData(w, "response.created", `{"type":"response.created","response":{"model":"gpt-5","usage":null}}`)
 		sseData(w, "response.output_text.delta", `{"type":"response.output_text.delta","delta":"hello"}`)
 		sseData(w, "response.completed", `{"type":"response.completed","response":{"model":"gpt-5","usage":{"input_tokens":40,"output_tokens":9,"input_tokens_details":{"cached_tokens":8}}}}`)
+	case r.URL.Path == "/v1/images/generations" || r.URL.Path == "/v1/images/edits":
+		imageAnswer(w, r.URL.Path, stream)
 	case r.URL.Path == "/v1/embeddings":
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"object":"list","data":[{"embedding":[0.1]}],"model":"text-embedding-3-small","usage":{"prompt_tokens":5,"total_tokens":5}}`))
@@ -128,7 +130,7 @@ func (u *apiUpstream) handle(w http.ResponseWriter, r *http.Request) {
 // OpenAI protocols map to their path, Gemini ones to
 // /v1beta/models/{meta.model}:{method} (streaming with alt=sse).
 func apiPlatform(u *apiUpstream) *fakePlatform {
-	return &fakePlatform{route: func(in *pluginv1.BuildUpstreamRequestRequest) string {
+	return &fakePlatform{route: func(in *pluginv1.ExecuteRequest) string {
 		m := in.GetMeta()
 		switch m.GetProtocol() {
 		case "openai.chat":
@@ -137,6 +139,10 @@ func apiPlatform(u *apiUpstream) *fakePlatform {
 			return u.srv.URL + "/v1/responses"
 		case "openai.embeddings":
 			return u.srv.URL + "/v1/embeddings"
+		case "openai.images":
+			return u.srv.URL + "/v1/images/generations"
+		case "openai.images_edit":
+			return u.srv.URL + "/v1/images/edits"
 		case "gemini.generate":
 			return u.srv.URL + "/v1beta/models/" + m.GetModel() + ":generateContent"
 		case "gemini.stream_generate":
@@ -198,7 +204,7 @@ func TestOpenAIChatUsage(t *testing.T) {
 	}
 	b := op.builds[0]
 	if b.GetMeta().GetProtocol() != "openai.chat" || b.GetMeta().GetModel() != "gpt-4o" || b.GetMeta().GetStream() ||
-		b.GetAccount().GetPlatform() != "openai" || b.GetFields()["model"] != `"gpt-4o"` ||
+		b.GetAccount().GetPlatform() != "openai" || gjson.GetBytes(b.GetBody(), "model").String() != "gpt-4o" ||
 		b.GetInboundHeaders()["openai-organization"] != "org-1" {
 		t.Fatalf("build %+v", b)
 	}
@@ -269,7 +275,7 @@ func TestMixedPluginTypesServeBuiltinEndpoint(t *testing.T) {
 	e, u, op, _ := apiEnv(t)
 	relay := apiPlatform(u)
 	openaiRoute := relay.route
-	relay.route = func(in *pluginv1.BuildUpstreamRequestRequest) string {
+	relay.route = func(in *pluginv1.ExecuteRequest) string {
 		if in.GetMeta().GetProtocol() == "anthropic.messages" {
 			return e.up.srv.URL + "/v1/messages"
 		}

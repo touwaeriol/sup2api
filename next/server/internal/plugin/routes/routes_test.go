@@ -300,7 +300,7 @@ func TestPluginAssets(t *testing.T) {
 		!strings.Contains(w.Header().Get("Cache-Control"), "immutable") {
 		t.Fatalf("headers %v", w.Header())
 	}
-	w = do(e, "GET", base+"/forms/apikey.schema.json", "", "")
+	w = do(e, "GET", base+"/i18n/en.json", "", "")
 	body, _ := io.ReadAll(w.Body)
 	if w.Code != 200 || !strings.HasPrefix(w.Header().Get("Content-Type"), "application/json") || !json.Valid(body) {
 		t.Fatalf("json asset: %d", w.Code)
@@ -308,7 +308,7 @@ func TestPluginAssets(t *testing.T) {
 	if w := do(e, "GET", base+"/ui/icon.svg", "", ""); w.Code != 200 || w.Header().Get("Content-Type") != "image/svg+xml" {
 		t.Fatalf("icon: %d", w.Code)
 	}
-	for _, p := range []string{"/secret.txt", "/manifest.json", "/ui/../secret.txt", "/runtimes/x/plugin"} {
+	for _, p := range []string{"/secret.txt", "/manifest.json", "/ui/../secret.txt", "/runtimes/x/plugin", "/forms/apikey.schema.json"} {
 		if w := do(e, "GET", base+p, "", ""); w.Code != http.StatusNotFound {
 			t.Fatalf("%s: %d", p, w.Code)
 		}

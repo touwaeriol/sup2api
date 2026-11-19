@@ -3,7 +3,7 @@
 import { SCOPABLE, canonicalPermission, parsePermission, permissionIndex } from '../src/authz/implies'
 import { fail, nextId, noContent, now, on, paginate, type MockRequest } from './router'
 import { ALL_PERMISSIONS, MANAGER_PLUGIN_KEYS, SUPER_ONLY_KEYS, SUPPLIER_AGENT_KEYS, SUPPLIER_KEYS, USER_KEYS, agentUser, caller, filterOwned, hasPerm, inScope, moderatorUser, ownerScope, pricerUser, readonlyUser, resolveTeams, stepUp, stepUpRequired, userEmail, vendorUser, type Identity } from './core'
-import { accounts, groupAccountCount, groupPlatforms, proxyAccountCount } from './accounts'
+import { accounts, groupAccountCount, groupPlatforms, groupServed, proxyAccountCount } from './accounts'
 import { pricedModels } from './billing'
 import { accessOf, findSegment, forgetGroup, forgetUser, groupAccess, moveUser, rateOf, rulesWhere, segmentOfUser, segmentRef, type RuleRow } from './pricingStore'
 
@@ -92,7 +92,7 @@ const MODULES: ModuleDef[] = [
     { key: 'plugin:manage', label: L('Manage', '管理') }, { key: 'plugin:uninstall', label: L('Uninstall', '卸载'), risk: 'sensitive' },
     { key: 'plugin:grant:high', label: L('Grant high risk', '授予高风险权限') },
     { key: 'plugin:grant:critical', label: L('Grant critical risk', '授予极高风险权限'), risk: 'sensitive' },
-    { key: 'plugin:grant:db_schema_unconfined', label: L('Grant db.schema without role isolation', '无角色隔离时授予 db.schema'), risk: 'sensitive' },
+    { key: 'plugin:grant:db_schema_unconfined', label: L('Grant db.schema to non-official plugins', '授予非官方插件 db.schema'), risk: 'sensitive' },
     { key: 'plugin:egress:read', label: L('View egress', '查看出口流量') }, { key: 'plugin:market:read', label: L('Browse market', '浏览市场') }] },
   { module: 'publisher', label: L('Publishers', '发布者'), source: 'core', status: 'active', permissions: [
     { key: 'publisher:read', label: L('View', '查看') }, { key: 'publisher:manage', label: L('Manage', '管理'), risk: 'sensitive' }] },
@@ -603,7 +603,8 @@ on('GET', '/groups/:id/models', req => {
 })
 on('GET', '/groups/:id', (req) => {
   const g = groups.find((x) => x.id === Number(req.params.id))
-  return g ? groupOut(g) : fail(404, 'not_found', 'group not found')
+  // served_protocols comes with a single group only.
+  return g ? { ...groupOut(g), served_protocols: groupServed(g.id) } : fail(404, 'not_found', 'group not found')
 })
 on('POST', '/groups', (req) => {
   const b = req.body || {}
@@ -928,10 +929,11 @@ export function myGroups(userId: number) {
     })
 }
 
-/** A row of GET /me/groups: the fields the server's group.MyGroup has, no more. */
+/** A row of GET /me/groups: the fields the server's group.MyGroup has, no more; served_protocols without the account counts. */
 function myGroupOut(g: ReturnType<typeof myGroups>[number]) {
   const { id, name, description, rate_multiplier, model_allowlist, model_filter_mode, platforms, effective_rate, rate_source, exclusive } = g
-  return { id, name, description, rate_multiplier, model_allowlist, model_filter_mode, platforms, effective_rate, rate_source, exclusive }
+  const served_protocols = groupServed(id).map(({ protocol }) => ({ protocol }))
+  return { id, name, description, rate_multiplier, model_allowlist, model_filter_mode, platforms, served_protocols, effective_rate, rate_source, exclusive }
 }
 on('GET', '/me/groups', (req) => myGroups(caller(req).id).map(myGroupOut))
 /** A key under the status filter: one that is switched off is "disabled" even past its expiry. */

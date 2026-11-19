@@ -409,25 +409,26 @@ func TestDriftLeavesNothing(t *testing.T) {
 	}
 	defer pgdb.Close(db) //nolint:errcheck
 	var left []string
-	err = db.Raw(`SELECT nspname FROM pg_namespace WHERE nspname LIKE ?
-		UNION ALL SELECT rolname FROM pg_roles WHERE rolname LIKE ?`,
-		fmt.Sprintf("sub2api_drift_%d_%%", os.Getpid()), fmt.Sprintf("sub2api_drift_%d_%%", os.Getpid())).Scan(&left).Error
+	err = db.Raw(`SELECT nspname FROM pg_namespace WHERE nspname LIKE ?`,
+		fmt.Sprintf("sub2api_drift_%d_%%", os.Getpid())).Scan(&left).Error
 	if err != nil || len(left) != 0 {
 		t.Fatalf("left behind: %q (%v)", left, err)
 	}
 }
 
-// Migrations run as a role that owns the plugin schema and nothing else.
-func TestDriftRunsMigrationsAsPluginRole(t *testing.T) {
-	for _, sql := range []string{
-		`CREATE TABLE public.drift_escape (id int)`,
-		`CREATE EXTENSION IF NOT EXISTS pgcrypto`,
-		`ALTER ROLE CURRENT_USER CREATEDB`,
+// Migrations run as the connecting user, like the host runs them as the
+// core's; what they create or change outside the plugin schema is listed.
+func TestDriftListsWhatMigrationsTouchOutsideTheSchema(t *testing.T) {
+	for sql, want := range map[string]string{
+		`CREATE TABLE public.drift_escape (id int)`:                                      "relation public.drift_escape",
+		`CREATE SCHEMA drift_other`:                                                      "schema drift_other",
+		`CREATE FUNCTION public.drift_f() RETURNS int LANGUAGE sql AS 'SELECT 1'`:        "function public.drift_f()",
+		`CREATE TYPE public.drift_mood AS ENUM ('ok')`:                                   "type public.drift_mood",
+		`CREATE TABLE drift_inside (id int); ALTER TABLE drift_inside SET SCHEMA public`: "relation public.drift_inside",
 	} {
 		r, err := pgdbtool.Drift(context.Background(), testpg.URL(t), migrate(t, sql), nil, nil)
-		// PostgreSQL 14 and older let every role create in public.
-		if err == nil && !slices.ContainsFunc(r.Unmapped, func(u string) bool { return strings.Contains(u, "outside the plugin schema") }) {
-			t.Errorf("%s: drift = %+v", sql, r)
+		if err != nil || !slices.Contains(r.Unmapped, want+" (outside the plugin schema)") {
+			t.Errorf("%s: drift = %+v, %v", sql, r, err)
 		}
 	}
 }

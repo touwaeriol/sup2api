@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"testing"
 	"time"
 
 	"github.com/tidwall/gjson"
@@ -150,6 +151,13 @@ const (
 	OpenAIPlugin = "openai"
 	GeminiPlugin = "gemini"
 	APIKeyType   = "apikey"
+	// Built-in, install-only upstream plugins (CONTRACTS §119), each with
+	// an "apikey" account type: New API and Sub2API sites serve the
+	// built-in platforms (api_key, base_url); typesafe adds its own
+	// platform (api_key, base_url defaulting to the official address).
+	NewAPIPlugin   = "newapi"
+	Sub2APIPlugin  = "sub2api"
+	TypeSafePlugin = "typesafe"
 )
 
 // AccountSpec describes an account pointing at the mock. The default type
@@ -167,6 +175,11 @@ type AccountSpec struct {
 	MaxConcurrency int
 	ModelMapping   map[string]string
 	Settings       map[string]any // non-secret form fields; the host splits them from credentials
+	// Credentials, when set, is the whole credentials object (instead of
+	// api_key + base_url + Settings), for types with other fields.
+	Credentials map[string]any
+	// Extra fields of the POST /accounts body (header_override, proxy_url ...).
+	Extra map[string]any
 }
 
 // CreateAccount creates an account (POST /accounts with plugin_key + type).
@@ -194,6 +207,9 @@ func (e *Env) CreateAccount(admin *Session, a AccountSpec) int64 {
 	for key, value := range a.Settings {
 		creds[key] = value
 	}
+	if a.Credentials != nil {
+		creds = a.Credentials
+	}
 	body := map[string]any{
 		"name": a.Name, "plugin_key": a.PluginKey, "type": a.Type, "group_ids": a.GroupIDs,
 		"proxy_id": nil, "priority": a.Priority, "max_concurrency": a.MaxConcurrency,
@@ -201,6 +217,12 @@ func (e *Env) CreateAccount(admin *Session, a AccountSpec) int64 {
 	}
 	if a.ModelMapping != nil {
 		body["model_mapping"] = a.ModelMapping
+	}
+	for k, v := range a.Extra {
+		body[k] = v
+	}
+	if _, ok := a.Extra["proxy_url"]; ok {
+		delete(body, "proxy_id") // the two cannot both be given
 	}
 	d := admin.OK(e.T, http.MethodPost, "/accounts", body)
 	id := d.Get("id").Int()
@@ -221,6 +243,19 @@ func FindAccountType(items []gjson.Result, pluginKey, typ string) (gjson.Result,
 		}
 	}
 	return gjson.Result{}, false
+}
+
+// ExpectNativeForm fails t unless the account type (an item of GET
+// /account-types) is entered through the plugin's own native component and
+// the core serves no form schema for it (DESIGN-2026-11-19-PLUGIN-UI-CODE-ONLY).
+func ExpectNativeForm(t testing.TB, c *Client, at gjson.Result, component string) {
+	t.Helper()
+	if at.Get("form.mode").String() != "native" || at.Get("form.component").String() != component {
+		t.Fatalf("%s/%s form = %s, want native %s", at.Get("plugin_key"), at.Get("type"), at.Get("form").Raw, component)
+	}
+	if r := c.API(t, http.MethodGet, "/account-types/"+at.Get("plugin_key").String()+"/"+at.Get("type").String()+"/form", nil); r.Status != http.StatusNotFound {
+		t.Fatalf("the form schema endpoint must be gone: %s", r)
+	}
 }
 
 // AccountTypeEndpoint returns the entry of an account type's "endpoints"

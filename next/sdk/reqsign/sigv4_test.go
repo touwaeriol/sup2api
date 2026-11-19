@@ -3,7 +3,6 @@ package reqsign
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -32,14 +31,14 @@ func (l *signingLog) Logf(_ logging.Classification, format string, v ...any) {
 	}
 }
 
-// signTraced signs with Sign and returns what was signed, which the signer
+// signTraced signs with SignAWSSigV4 and returns what was signed, which the signer
 // logs when sigV4SignerOptions asks it to.
-func signTraced(t *testing.T, req *http.Request, payload []byte, d Directive, now time.Time) signingLog {
+func signTraced(t *testing.T, req *http.Request, payload []byte, c AWSCredentials, now time.Time) signingLog {
 	t.Helper()
 	var log signingLog
 	sigV4SignerOptions = []func(*v4.SignerOptions){func(o *v4.SignerOptions) { o.Logger, o.LogSigning = &log, true }}
 	defer func() { sigV4SignerOptions = nil }()
-	if err := Sign(req, payload, d, now); err != nil {
+	if err := SignAWSSigV4(req, payload, c, now); err != nil {
 		t.Fatal(err)
 	}
 	if log.canonical == "" || log.stringToSign == "" {
@@ -97,7 +96,7 @@ func TestOfficialSuite(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			file := func(ext string) string { return readFile(t, filepath.Join(dir, name+"."+ext)) }
 			req, payload, token := suiteRequest(t, file("req"))
-			d := Directive{Scheme: SchemeAWSSigV4, Region: "us-east-1", Service: "service",
+			d := AWSCredentials{Region: "us-east-1", Service: "service",
 				AccessKeyID: suiteAccessKey, SecretAccessKey: suiteSecretKey, SessionToken: token}
 			log := signTraced(t, req, payload, d, now)
 			if want := file("creq"); log.canonical != want {
@@ -153,8 +152,8 @@ func (v sdkVector) request(t *testing.T) *http.Request {
 	return req
 }
 
-func (v sdkVector) directive() Directive {
-	return Directive{Scheme: SchemeAWSSigV4, Region: v.Region, Service: v.Service,
+func (v sdkVector) credentials() AWSCredentials {
+	return AWSCredentials{Region: v.Region, Service: v.Service,
 		AccessKeyID: v.AccessKeyID, SecretAccessKey: v.SecretKey, SessionToken: v.SessionToken}
 }
 
@@ -164,7 +163,7 @@ func TestSDKRecordings(t *testing.T) {
 	for _, v := range sdkVectors(t) {
 		t.Run(v.Name, func(t *testing.T) {
 			req := v.request(t)
-			log := signTraced(t, req, []byte(v.Body), v.directive(), v.Time)
+			log := signTraced(t, req, []byte(v.Body), v.credentials(), v.Time)
 			if got := req.Header.Get("Authorization"); got != v.Authorization {
 				t.Errorf("authorization\n got: %s\nwant: %s\ncanonical request:\n%s", got, v.Authorization, log.canonical)
 			}
@@ -179,7 +178,7 @@ func TestSDKRecordings(t *testing.T) {
 func TestCanonicalPathIsEscapedTwice(t *testing.T) {
 	v := sdkVectors(t)[0]
 	req, _ := http.NewRequest(http.MethodPost, "https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-v1%3A0/invoke", nil)
-	log := signTraced(t, req, nil, v.directive(), v.Time)
+	log := signTraced(t, req, nil, v.credentials(), v.Time)
 	if got := strings.Split(log.canonical, "\n")[1]; got != "/model/anthropic.claude-v1%253A0/invoke" {
 		t.Fatalf("canonical path %q", got)
 	}
@@ -204,7 +203,7 @@ func TestCanonicalQuery(t *testing.T) {
 		"v=a-b&v=a/b":              "v=a%2Fb&v=a-b", // sorted after encoding: "%" < "-" < "/"
 	} {
 		req, _ := http.NewRequest(http.MethodGet, "https://example.amazonaws.com/?"+raw, nil)
-		log := signTraced(t, req, nil, v.directive(), v.Time)
+		log := signTraced(t, req, nil, v.credentials(), v.Time)
 		if got := strings.Split(log.canonical, "\n")[2]; got != want || req.URL.RawQuery != want {
 			t.Errorf("%q: signed %q, sent %q, want %q", raw, got, req.URL.RawQuery, want)
 		}
@@ -217,7 +216,7 @@ func TestCanonicalQuery(t *testing.T) {
 	for _, raw := range []string{"a=1;b=2", "a=1&b=%zz", "%=1", "a=%2"} {
 		req, _ := http.NewRequest(http.MethodGet, "https://example.amazonaws.com/", nil)
 		req.URL.RawQuery = raw
-		err := Sign(req, nil, v.directive(), v.Time)
+		err := SignAWSSigV4(req, nil, v.credentials(), v.Time)
 		if err == nil {
 			t.Errorf("%q: signed", raw)
 		}
@@ -247,7 +246,7 @@ func TestHostSentIsHostSigned(t *testing.T) {
 	} {
 		req, _ := http.NewRequest(http.MethodGet, tc.url, nil)
 		req.Host = tc.host
-		log := signTraced(t, req, nil, v.directive(), v.Time)
+		log := signTraced(t, req, nil, v.credentials(), v.Time)
 		if !strings.Contains(log.canonical, "\nhost:"+tc.want+"\n") {
 			t.Errorf("%s: signed\n%s", tc.url, log.canonical)
 		}
@@ -265,13 +264,13 @@ func TestHostSentIsHostSigned(t *testing.T) {
 	}
 }
 
-func signed(t *testing.T, v sdkVector, edit func(*http.Request, *[]byte, *Directive, *time.Time)) string {
+func signed(t *testing.T, v sdkVector, edit func(*http.Request, *[]byte, *AWSCredentials, *time.Time)) string {
 	t.Helper()
-	req, payload, d, now := v.request(t), []byte(v.Body), v.directive(), v.Time
+	req, payload, d, now := v.request(t), []byte(v.Body), v.credentials(), v.Time
 	if edit != nil {
 		edit(req, &payload, &d, &now)
 	}
-	if err := Sign(req, payload, d, now); err != nil {
+	if err := SignAWSSigV4(req, payload, d, now); err != nil {
 		t.Fatal(err)
 	}
 	return req.Header.Get("Authorization")
@@ -284,33 +283,33 @@ func TestSignatureCoverage(t *testing.T) {
 	if base != v.Authorization {
 		t.Fatalf("base %s", base)
 	}
-	changes := map[string]func(*http.Request, *[]byte, *Directive, *time.Time){
-		"one body byte": func(_ *http.Request, p *[]byte, _ *Directive, _ *time.Time) { (*p)[len(*p)-1] ^= 1 },
-		"empty body":    func(_ *http.Request, p *[]byte, _ *Directive, _ *time.Time) { *p = nil },
-		"content-type": func(r *http.Request, _ *[]byte, _ *Directive, _ *time.Time) {
+	changes := map[string]func(*http.Request, *[]byte, *AWSCredentials, *time.Time){
+		"one body byte": func(_ *http.Request, p *[]byte, _ *AWSCredentials, _ *time.Time) { (*p)[len(*p)-1] ^= 1 },
+		"empty body":    func(_ *http.Request, p *[]byte, _ *AWSCredentials, _ *time.Time) { *p = nil },
+		"content-type": func(r *http.Request, _ *[]byte, _ *AWSCredentials, _ *time.Time) {
 			r.Header.Set("Content-Type", "text/plain")
 		},
-		"host": func(r *http.Request, _ *[]byte, _ *Directive, _ *time.Time) { r.Host = "other.example.com" },
-		"path": func(r *http.Request, _ *[]byte, _ *Directive, _ *time.Time) {
+		"host": func(r *http.Request, _ *[]byte, _ *AWSCredentials, _ *time.Time) { r.Host = "other.example.com" },
+		"path": func(r *http.Request, _ *[]byte, _ *AWSCredentials, _ *time.Time) {
 			r.URL.Path, r.URL.RawPath = "/model/x/invoke", ""
 		},
-		"query":            func(r *http.Request, _ *[]byte, _ *Directive, _ *time.Time) { r.URL.RawQuery = "a=1" },
-		"method":           func(r *http.Request, _ *[]byte, _ *Directive, _ *time.Time) { r.Method = http.MethodPut },
-		"time":             func(_ *http.Request, _ *[]byte, _ *Directive, n *time.Time) { *n = n.Add(time.Second) },
-		"region":           func(_ *http.Request, _ *[]byte, d *Directive, _ *time.Time) { d.Region = "eu-west-1" },
-		"service":          func(_ *http.Request, _ *[]byte, d *Directive, _ *time.Time) { d.Service = "s3" },
-		"secret":           func(_ *http.Request, _ *[]byte, d *Directive, _ *time.Time) { d.SecretAccessKey += "x" },
-		"session token":    func(_ *http.Request, _ *[]byte, d *Directive, _ *time.Time) { d.SessionToken = "tok" },
-		"request.Host set": func(r *http.Request, _ *[]byte, _ *Directive, _ *time.Time) { r.Host = "h.example.com:8443" },
+		"query":            func(r *http.Request, _ *[]byte, _ *AWSCredentials, _ *time.Time) { r.URL.RawQuery = "a=1" },
+		"method":           func(r *http.Request, _ *[]byte, _ *AWSCredentials, _ *time.Time) { r.Method = http.MethodPut },
+		"time":             func(_ *http.Request, _ *[]byte, _ *AWSCredentials, n *time.Time) { *n = n.Add(time.Second) },
+		"region":           func(_ *http.Request, _ *[]byte, d *AWSCredentials, _ *time.Time) { d.Region = "eu-west-1" },
+		"service":          func(_ *http.Request, _ *[]byte, d *AWSCredentials, _ *time.Time) { d.Service = "s3" },
+		"secret":           func(_ *http.Request, _ *[]byte, d *AWSCredentials, _ *time.Time) { d.SecretAccessKey += "x" },
+		"session token":    func(_ *http.Request, _ *[]byte, d *AWSCredentials, _ *time.Time) { d.SessionToken = "tok" },
+		"request.Host set": func(r *http.Request, _ *[]byte, _ *AWSCredentials, _ *time.Time) { r.Host = "h.example.com:8443" },
 	}
 	for name, edit := range changes {
 		if got := signed(t, v, edit); got == base {
 			t.Errorf("%s: signature unchanged", name)
 		}
 	}
-	same := map[string]func(*http.Request, *[]byte, *Directive, *time.Time){
+	same := map[string]func(*http.Request, *[]byte, *AWSCredentials, *time.Time){
 		// Headers the SDK signer would sign if it were handed them.
-		"unsigned headers": func(r *http.Request, _ *[]byte, _ *Directive, _ *time.Time) {
+		"unsigned headers": func(r *http.Request, _ *[]byte, _ *AWSCredentials, _ *time.Time) {
 			r.Header.Set("Accept", "application/json")
 			r.Header.Set("User-Agent", "x")
 			r.Header.Set("X-Amzn-Bedrock-Trace", "ENABLED")
@@ -319,15 +318,15 @@ func TestSignatureCoverage(t *testing.T) {
 			r.Header.Set("Accept-Encoding", "gzip")
 			r.ContentLength = 7
 		},
-		"stale credential headers": func(r *http.Request, _ *[]byte, _ *Directive, _ *time.Time) {
+		"stale credential headers": func(r *http.Request, _ *[]byte, _ *AWSCredentials, _ *time.Time) {
 			r.Header.Set("Authorization", "Bearer stale")
 			r.Header.Set("X-Amz-Date", "20000101T000000Z")
 			r.Header.Set("X-Amz-Security-Token", "stale")
 		},
-		"header value spacing": func(r *http.Request, _ *[]byte, _ *Directive, _ *time.Time) {
+		"header value spacing": func(r *http.Request, _ *[]byte, _ *AWSCredentials, _ *time.Time) {
 			r.Header.Set("Content-Type", "  application/json ")
 		},
-		"local time zone": func(_ *http.Request, _ *[]byte, _ *Directive, n *time.Time) {
+		"local time zone": func(_ *http.Request, _ *[]byte, _ *AWSCredentials, n *time.Time) {
 			*n = n.In(time.FixedZone("x", 8*3600))
 		},
 	}
@@ -338,14 +337,14 @@ func TestSignatureCoverage(t *testing.T) {
 	}
 }
 
-// Sign replaces credentials an earlier layer wrote and removes a session
-// token header the directive does not carry.
+// SignAWSSigV4 replaces credentials an earlier layer wrote and removes a session
+// token header the credentials do not carry.
 func TestSignReplacesCredentialHeaders(t *testing.T) {
 	v := sdkVectors(t)[0]
 	req := v.request(t)
 	req.Header.Set("Authorization", "Bearer stale")
 	req.Header.Set("X-Amz-Security-Token", "stale")
-	if err := Sign(req, []byte(v.Body), v.directive(), v.Time); err != nil {
+	if err := SignAWSSigV4(req, []byte(v.Body), v.credentials(), v.Time); err != nil {
 		t.Fatal(err)
 	}
 	if len(req.Header.Values("Authorization")) != 1 || !strings.HasPrefix(req.Header.Get("Authorization"), "AWS4-HMAC-SHA256 ") ||
@@ -354,20 +353,44 @@ func TestSignReplacesCredentialHeaders(t *testing.T) {
 	}
 }
 
+// AWSSigV4Headers returns what the signature wrote or covers, nothing else
+// the request carries.
+func TestAWSSigV4Headers(t *testing.T) {
+	v := sdkVectors(t)[0]
+	d := v.credentials()
+	d.SessionToken = "session"
+	req := v.request(t)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("X-Client", "c")
+	if err := SignAWSSigV4(req, []byte(v.Body), d, v.Time); err != nil {
+		t.Fatal(err)
+	}
+	got := AWSSigV4Headers(req)
+	want := http.Header{"Content-Type": {"application/json"}, "Authorization": req.Header.Values("Authorization"),
+		"X-Amz-Date": req.Header.Values("X-Amz-Date"), "X-Amz-Security-Token": {"session"}}
+	if fmt.Sprint(got) != fmt.Sprint(want) || len(got["Authorization"]) != 1 {
+		t.Fatalf("AWSSigV4Headers = %v\nwant %v", got, want)
+	}
+	req.Header.Del("Content-Type")
+	req.Header.Del("X-Amz-Security-Token")
+	if got := AWSSigV4Headers(req); len(got) != 2 {
+		t.Fatalf("without content type and token: %v", got)
+	}
+}
+
 func TestSignErrors(t *testing.T) {
 	v := sdkVectors(t)[0]
 	const secret, token = "s3cr3t-value", "t0ken-value"
-	for name, d := range map[string]Directive{
-		"unknown scheme": {Scheme: "hmac-v9", Region: "r", Service: "s", AccessKeyID: "AK", SecretAccessKey: secret, SessionToken: token},
-		"empty scheme":   {Region: "r", Service: "s", AccessKeyID: "AK", SecretAccessKey: secret, SessionToken: token},
-		"no region":      {Scheme: SchemeAWSSigV4, Service: "s", AccessKeyID: "AK", SecretAccessKey: secret, SessionToken: token},
-		"no service":     {Scheme: SchemeAWSSigV4, Region: "r", AccessKeyID: "AK", SecretAccessKey: secret, SessionToken: token},
-		"no access key":  {Scheme: SchemeAWSSigV4, Region: "r", Service: "s", SecretAccessKey: secret, SessionToken: token},
-		"no secret":      {Scheme: SchemeAWSSigV4, Region: "r", Service: "s", AccessKeyID: "AK", SessionToken: token},
+	for name, d := range map[string]AWSCredentials{
+		"no region":     {Service: "s", AccessKeyID: "AK", SecretAccessKey: secret, SessionToken: token},
+		"no service":    {Region: "r", AccessKeyID: "AK", SecretAccessKey: secret, SessionToken: token},
+		"no access key": {Region: "r", Service: "s", SecretAccessKey: secret, SessionToken: token},
+		"no secret":     {Region: "r", Service: "s", AccessKeyID: "AK", SessionToken: token},
 	} {
 		req := v.request(t)
 		req.Header.Set("Authorization", "Bearer kept")
-		err := Sign(req, []byte(v.Body), d, v.Time)
+		err := SignAWSSigV4(req, []byte(v.Body), d, v.Time)
 		if err == nil {
 			t.Errorf("%s: signed", name)
 			continue
@@ -378,26 +401,20 @@ func TestSignErrors(t *testing.T) {
 		if req.Header.Get("Authorization") != "Bearer kept" || req.Header.Get("X-Amz-Date") != "" {
 			t.Errorf("%s: request touched: %v", name, req.Header)
 		}
-		if unknown := strings.HasSuffix(name, "scheme"); errors.Is(err, ErrUnknownScheme) != unknown {
-			t.Errorf("%s: %v", name, err)
-		}
 	}
-	if err := Sign(nil, nil, v.directive(), v.Time); err == nil {
+	if err := SignAWSSigV4(nil, nil, v.credentials(), v.Time); err == nil {
 		t.Error("nil request signed")
-	}
-	if !Known(SchemeAWSSigV4) || Known("") || Known("hmac-v9") {
-		t.Error("Known")
 	}
 }
 
-// A directive that ends up in a log line or an error by accident shows
+// Credentials that end up in a log line or an error by accident show
 // neither the secret nor the session token.
-func TestDirectiveIsRedacted(t *testing.T) {
-	d := Directive{Scheme: SchemeAWSSigV4, Region: "us-east-1", Service: "bedrock", AccessKeyID: "AKIDEXAMPLE",
+func TestCredentialsAreRedacted(t *testing.T) {
+	d := AWSCredentials{Region: "us-east-1", Service: "bedrock", AccessKeyID: "AKIDEXAMPLE",
 		SecretAccessKey: "s3cr3t-value", SessionToken: "t0ken-value"}
 	var buf strings.Builder
 	log := slog.New(slog.NewJSONHandler(&buf, nil))
-	log.Info("x", "directive", d, "pointer", &d)
+	log.Info("x", "credentials", d, "pointer", &d)
 	out := buf.String() + fmt.Sprintf("%v %+v %#v %s %v", d, d, d, d, &d) + fmt.Errorf("wrap: %v", d).Error()
 	if strings.Contains(out, "s3cr3t-value") || strings.Contains(out, "t0ken-value") {
 		t.Fatalf("leak: %s", out)

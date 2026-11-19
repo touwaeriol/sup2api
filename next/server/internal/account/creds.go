@@ -3,21 +3,14 @@ package account
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"net/url"
 	"slices"
 	"strconv"
 	"strings"
 
-	"github.com/santhosh-tekuri/jsonschema/v6"
-	"github.com/santhosh-tekuri/jsonschema/v6/kind"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
-	"golang.org/x/text/language"
-	"golang.org/x/text/message"
 
 	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
@@ -164,10 +157,12 @@ func addressChanged(b, old []byte, at manifest.AccountType) bool {
 
 // addressValue is the comparison form of field f of b: strings after
 // guardNorm, other values compacted; absent, null and "" are all "".
+// Versions are not applied: a value differing only by a version segment is a
+// changed address.
 func addressValue(b []byte, f string) string {
 	r := gjson.GetBytes(b, f)
 	if r.Type != gjson.JSON {
-		return guardNorm(r.String())
+		return guardNorm(r.String(), nil)
 	}
 	var buf bytes.Buffer
 	if json.Compact(&buf, []byte(r.Raw)) != nil {
@@ -185,92 +180,6 @@ func reenterRequired(ctx context.Context, restored []string) error {
 			Message: t(ctx, "enter this secret again when changing the upstream address", "修改上游地址时需要重新输入该密钥")}
 	}
 	return core.InvalidFields(fe...)
-}
-
-// ---------------------------------------------------------------- JSON Schema
-
-var printer = message.NewPrinter(language.English)
-
-func (s *Service) compiled(schema []byte) (*jsonschema.Schema, error) {
-	sum := sha256.Sum256(schema)
-	key := hex.EncodeToString(sum[:])
-	if v, ok := s.schemas.Load(key); ok {
-		return v.(*jsonschema.Schema), nil
-	}
-	doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(schema))
-	if err != nil {
-		return nil, err
-	}
-	c := jsonschema.NewCompiler()
-	loc := "https://sub2api.invalid/forms/" + key + ".json"
-	if err := c.AddResource(loc, doc); err != nil {
-		return nil, err
-	}
-	sch, err := c.Compile(loc)
-	if err != nil {
-		return nil, err
-	}
-	s.schemas.Store(key, sch)
-	return sch, nil
-}
-
-// validateSchema checks credentials against the account type's form schema.
-func (s *Service) validateSchema(ctx context.Context, bt core.AccountTypeBinding, creds []byte) error {
-	if bt.Type.Form.Mode != "schema" || len(bytes.TrimSpace(bt.FormSchema)) == 0 {
-		return nil
-	}
-	sch, err := s.compiled(bt.FormSchema)
-	if err != nil {
-		return core.ErrPluginUnavailable.WithMessage(t(ctx, "the account form schema of the plugin is invalid",
-			"插件的账号表单 schema 无效")).WithCause(err)
-	}
-	inst, err := jsonschema.UnmarshalJSON(bytes.NewReader(creds))
-	if err != nil {
-		return core.ErrInvalidArgument.WithMessage("invalid credentials JSON")
-	}
-	err = sch.Validate(inst)
-	if err == nil {
-		return nil
-	}
-	var ve *jsonschema.ValidationError
-	if !errors.As(err, &ve) {
-		return core.ErrInvalidArgument.WithMessage(err.Error())
-	}
-	var fe []core.FieldError
-	collect(ve, &fe)
-	if len(fe) == 0 {
-		fe = append(fe, core.FieldError{Field: "credentials", Code: "invalid", Message: ve.Error()})
-	}
-	return core.InvalidFields(fe...)
-}
-
-func collect(ve *jsonschema.ValidationError, out *[]core.FieldError) {
-	if len(ve.Causes) > 0 {
-		for _, c := range ve.Causes {
-			collect(c, out)
-		}
-		return
-	}
-	loc := ve.InstanceLocation
-	code := "invalid"
-	if kp := ve.ErrorKind.KeywordPath(); len(kp) > 0 {
-		code = kp[0]
-	}
-	msg := ve.ErrorKind.LocalizedString(printer)
-	if r, ok := ve.ErrorKind.(*kind.Required); ok && len(r.Missing) > 0 {
-		for _, m := range r.Missing {
-			*out = append(*out, core.FieldError{Field: credField(append(slices.Clone(loc), m)), Code: "required", Message: msg})
-		}
-		return
-	}
-	*out = append(*out, core.FieldError{Field: credField(loc), Code: code, Message: msg})
-}
-
-func credField(path []string) string {
-	if len(path) == 0 {
-		return "credentials"
-	}
-	return "credentials." + strings.Join(path, ".")
 }
 
 // ---------------------------------------------------------------- preparation
@@ -315,7 +224,7 @@ func (s *Service) credBase(ctx context.Context, a *row) (*credBase, error) {
 	return &credBase{secret: plain, old: mustJSON(all), reveal: reveal}, nil
 }
 
-// prepare validates credentials (schema, then plugin, then the guarded
+// prepare validates credentials (the plugin, then the guarded
 // settings without account:settings:custom) and encrypts the non-settings
 // part. base is the stored account (nil on create): Mask values are replaced
 // from it, guarded fields equal to their old value pass, and restoring a
@@ -349,9 +258,6 @@ func (s *Service) prepare(ctx context.Context, bt core.AccountTypeBinding, raw j
 			delete(all, key)
 		}
 		b = mustJSON(all)
-	}
-	if err := s.validateSchema(ctx, bt, b); err != nil {
-		return nil, err
 	}
 	all, err := parseObject(b)
 	if err != nil {
@@ -429,7 +335,7 @@ func (s *Service) prepare(ctx context.Context, bt core.AccountTypeBinding, raw j
 // normalized settings of a caller without account:settings:custom: each
 // guarded field must be empty/absent, one of the allowed values or (on
 // update) the value the account already had. Values are compared after
-// guardNorm. Violations are invalid_argument with
+// guardNorm with the setting's versions. Violations are invalid_argument with
 // fields[{credentials.<field>, forbidden}].
 func checkGuarded(ctx context.Context, guards []manifest.GuardedSetting, settings fields, old []byte) error {
 	var fe []core.FieldError
@@ -450,12 +356,12 @@ func checkGuarded(ctx context.Context, guards []manifest.GuardedSetting, setting
 		if strings.TrimSpace(v) == "" {
 			continue
 		}
-		want := guardNorm(v)
-		if slices.ContainsFunc(g.Allowed, func(a string) bool { return guardNorm(a) == want }) {
+		want := guardNorm(v, g.Versions)
+		if slices.ContainsFunc(g.Allowed, func(a string) bool { return guardNorm(a, g.Versions) == want }) {
 			continue
 		}
 		if old != nil {
-			if prev := gjson.GetBytes(old, g.Field); prev.Type == gjson.String && guardNorm(prev.Str) == want {
+			if prev := gjson.GetBytes(old, g.Field); prev.Type == gjson.String && guardNorm(prev.Str, g.Versions) == want {
 				continue
 			}
 		}
@@ -470,12 +376,22 @@ func checkGuarded(ctx context.Context, guards []manifest.GuardedSetting, setting
 
 // guardNorm is the comparison form of a guarded value: trimmed, without
 // trailing slashes, and (when it parses as an absolute URL) with lower-case
-// scheme and host.
-func guardNorm(v string) string {
+// scheme and host and without one of versions ending the path
+// (manifest.TrimVersion) and the "/" left before it, as the SDK's request
+// root.
+// The version is looked for after the trailing slashes are gone, so
+// "https://API.example.com/v1/" compares as "https://api.example.com", and
+// "https://x//v1" as "https://x".
+func guardNorm(v string, versions []string) string {
 	v = strings.TrimRight(strings.TrimSpace(v), "/")
 	if u, err := url.Parse(v); err == nil && u.Scheme != "" && u.Host != "" {
 		u.Scheme = strings.ToLower(u.Scheme)
 		u.Host = strings.ToLower(u.Host)
+		esc := u.EscapedPath()
+		if p := manifest.TrimVersion(esc, versions); p != esc {
+			u.RawPath = strings.TrimRight(p, "/")
+			u.Path, _ = url.PathUnescape(u.RawPath) // a prefix of a valid escaped path
+		}
 		return u.String()
 	}
 	return v

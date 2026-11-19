@@ -4,9 +4,9 @@ package volcengine
 // (manifest routes, scope admin). These routes are NOT gateway traffic: the
 // core only tells the plugin who the caller is, so the plugin reads the
 // accounts of its own account type through HostService.ListAccounts and
-// their credentials through GetAccountCredentials (CONTRACTS §26.6).
+// each account through GetAccount (CONTRACTS §124).
 //
-// CREDENTIAL READS ARE AUDITED. Every GetAccountCredentials call writes an
+// ACCOUNT READS ARE AUDITED. Every GetAccount call writes an
 // audit row in the core, on purpose: reading a secret without upstream
 // traffic to justify it is exactly what an administrator must be able to
 // review afterwards. Consequence for this file: credentials are fetched at
@@ -150,7 +150,7 @@ func (c *creds) config(ctx context.Context, accountID int64) (*AssetConfig, *plu
 		}
 		return cfg, nil
 	}
-	acc, err := c.p.host.AccountCredentials(ctx, accountID)
+	acc, err := c.p.host.Account(ctx, accountID)
 	if err != nil {
 		// The host answers NOT_FOUND both for "no such account" and for "an
 		// account of another plugin's account type", deliberately, so this
@@ -364,14 +364,11 @@ func (p *Plugin) listGroupIndex(ctx context.Context, req *pluginv1.HTTPRequest) 
 	return pluginsdk.ListResponse(items, pluginsdk.Page{Page: page, PageSize: size, Total: res.Total}), nil
 }
 
-// searchQuery reads the console table's search box.
+// searchQuery reads the asset pages' search box.
 //
-// The parameter name is this plugin's own choice, declared as
-// ui.pages.<page>.search in manifest.json; the console renders a search box
-// only for a page that declares one, and sends the typed text under that name.
-// So the constant below and the manifest have to agree - and if the manifest
-// ever drops the declaration, this code stops being reached rather than
-// quietly returning unfiltered rows.
+// The parameter name is this plugin's own choice: the native list pages
+// (ui/native/src/IndexPage.vue, SResourcePage's `search`) send the typed text
+// under it, so the constant below and the pages have to agree.
 //
 // That is the second half of the fix. These two routes shipped reading only
 // index_status and group_id, while the console drew a search box on every
@@ -414,6 +411,9 @@ func (p *Plugin) createGroup(ctx context.Context, req *pluginv1.HTTPRequest) (*p
 	}
 	if in.Name == "" {
 		return badRequest("name", "required", "name is required / 请填写素材组名称"), nil
+	}
+	if errs := in.check(); len(errs) > 0 {
+		return pluginsdk.FieldErrorResponse("invalid request / 请求参数不正确", errs), nil
 	}
 	db, bad := p.db(ctx)
 	if bad != nil {
@@ -637,6 +637,9 @@ func (p *Plugin) createAsset(ctx context.Context, req *pluginv1.HTTPRequest) (*p
 	}
 	if in.URL == "" {
 		return badRequest("url", "required", "url is required / 请填写素材地址"), nil
+	}
+	if errs := in.check(); len(errs) > 0 {
+		return pluginsdk.FieldErrorResponse("invalid request / 请求参数不正确", errs), nil
 	}
 	db, bad := p.db(ctx)
 	if bad != nil {

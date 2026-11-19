@@ -18,10 +18,8 @@ func resolveEndpoint(base, configured string) (string, error) {
 		if raw == "" || len(raw) > 2048 || strings.ContainsAny(raw, "?#\\") {
 			return nil, fmt.Errorf("endpoint must be a non-empty URL or path without query, fragment or backslash")
 		}
-		for _, r := range raw {
-			if unicode.IsSpace(r) || unicode.IsControl(r) {
-				return nil, fmt.Errorf("endpoint must not contain whitespace or control characters")
-			}
+		if hasSpace(raw) {
+			return nil, fmt.Errorf("endpoint must not contain whitespace or control characters")
 		}
 		u, err := url.Parse(raw)
 		if err != nil || u.User != nil || u.Opaque != "" || u.ForceQuery {
@@ -71,4 +69,12 @@ func resolveEndpoint(base, configured string) (string, error) {
 		return "", fmt.Errorf("base_url: %w", err)
 	}
 	return strings.TrimRight(base, "/") + strings.TrimRight(configured, "/"), nil
+}
+
+// hasSpace reports whether s holds whitespace or a control character. A
+// URL or path setting with one is refused when the account is saved: url.Parse
+// takes a space in a path, and the request would then go to an escaped
+// address the operator never typed.
+func hasSpace(s string) bool {
+	return strings.IndexFunc(s, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) >= 0
 }

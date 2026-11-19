@@ -16,6 +16,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
+	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/protocol"
 )
 
@@ -33,7 +34,8 @@ type LedgerEntry struct {
 	ID     int64
 }
 
-// FakeHost is an in-memory HostService + EgressService for plugin tests.
+// FakeHost is an in-memory HostService + EgressService for plugin tests;
+// the comment of its HTTP client fields says where it differs from the host.
 // Zero value is not usable; use NewFakeHost.
 type FakeHost struct {
 	pluginv1.UnimplementedHostServiceServer
@@ -54,22 +56,59 @@ type FakeHost struct {
 	// (known action, positive ids, batch size) before it is called. As on
 	// the host, the call is PERMISSION_DENIED unless the user is the caller
 	// of a request in flight: Harness.Do and DoAs see to that, a test that
-	// calls a handler by itself uses Serve. The fake has no grants, so the
-	// "accounts.read" grant the host also asks for is not simulated.
+	// calls a handler by itself uses Serve.
 	AccountScope func(userID int64, action string, ids []int64) (all bool, allowed []int64, err error)
 	// DialFunc is used by EgressService.Dial (default net.Dialer).
 	DialFunc func(ctx context.Context, network, address string) (net.Conn, error)
-	// ExecuteHTTPFunc handles scoped Poll requests. Set it before Start.
-	// No real network is used by default; nil returns UNIMPLEMENTED. The fake
-	// forwards the SDK-injected token so tests can assert invocation isolation;
-	// real token admission, proxy and lease enforcement belong to host tests.
+	// The host's HTTP client (execution.go). A relay or fetch is accepted
+	// only with the token of a live Execution, as Harness.Execute and
+	// Harness.Monitor issue them; the fake applies the checks of the host
+	// that need no network and records what it accepted. No real network is
+	// used. Set these before Start.
+	//
+	// The checks are the host's: a relay or a fetch may reach the hosts the
+	// manifest allows for the call's account (manifest.Manifest.
+	// UpstreamHostAllowed: externalServices, or the hosts of the account's
+	// upstreamFields; a relay to another host is refused with
+	// INVALID_ARGUMENT, a fetch with PERMISSION_DENIED, as the host does), a
+	// relay's method and headers are judged as the gateway judges them, and
+	// Harness.Monitor refuses a terminal result without one complete,
+	// successful fetch in the call (an HTTP status, no transport error).
+	// Like the host, the fake bounds neither a relayed nor a fetched body,
+	// does not count the fetches of a call and does not cut their answers. Where the
+	// fake still differs from the host:
+	//   - It cannot always tell a WebSocket turn from an HTTP request (the
+	//     ExecuteRequest does not say): it refuses a ws(s) URL only when
+	//     meta.protocol is a protocol it knows (the manifest's platforms or
+	//     the built-in ones) with no WebSocket endpoint, and accepts one for
+	//     an unknown protocol, which the host may refuse.
+	//   - It makes no network check: the SSRF policy and the gateway's
+	//     checks that need the account's binding (model availability, the
+	//     response stream formats it decodes) are not simulated.
+	//
+	// RelayFunc scripts the upstream for an accepted relay. For one that
+	// waits it returns the answer: Observed, UpstreamFailed or anything else
+	// a test wants the plugin to cope with; nil answers UNIMPLEMENTED. For one
+	// that does not wait only its error matters (nil accepts). An
+	// INVALID_ARGUMENT error is a refusal: the request counts as not relayed.
+	RelayFunc func(context.Context, *pluginv1.UpstreamRequest) (*pluginv1.RelayUpstreamResponse, error)
+	// ExecuteHTTPFunc answers a fetch; nil answers UNIMPLEMENTED. The answer
+	// is returned whole, as the host does; a test may set transport_error
+	// itself. A fetch of a route call
+	// (Harness.DoAs) must carry a proxy ticket and one of an Execute or
+	// Monitor call must not, as on the host; the fake cannot open a ticket
+	// (the core seals it), so it takes any and the test sees it here.
 	ExecuteHTTPFunc func(context.Context, *pluginv1.ExecutionHTTPRequest) (*pluginv1.ExecutionHTTPResponse, error)
-	// Execution callbacks do not simulate real host authority or transactions.
-	// Set before Start; nil returns UNIMPLEMENTED.
-	ForwardUpstreamFunc    func(context.Context, *pluginv1.ForwardUpstreamRequest) (*pluginv1.ForwardUpstreamResponse, error)
-	RecordUsageFunc        func(context.Context, *pluginv1.RecordUsageRequest) (*pluginv1.ExecutionReceipt, error)
-	ReserveAndWatchFunc    func(context.Context, *pluginv1.ReserveAndWatchRequest) (*pluginv1.ExecutionReceipt, error)
-	ReportTaskProgressFunc func(context.Context, *pluginv1.ReportTaskProgressRequest) (*pluginv1.ExecutionReceipt, error)
+	// Manifest is the plugin's manifest as the host knows it, which decides
+	// the hosts a relay or a fetch may reach and the protocols that are HTTP
+	// routes. Start sets it from Options.Manifest when it is nil.
+	// Without a manifest no relay or fetch is allowed unless
+	// ExternalServices says so, and no account has upstream addresses.
+	Manifest *manifest.Manifest
+	// ExternalServices, when not nil, replaces the manifest's
+	// externalServices (a subdomain of one matches), e.g. for a test that
+	// runs the plugin without its manifest.
+	ExternalServices []string
 	// PriceUsageFunc answers PriceUsage; nil answers every model as not
 	// priced ("no_price"). Set it before Start.
 	PriceUsageFunc func(context.Context, *pluginv1.PriceUsageRequest) (*pluginv1.PriceUsageResponse, error)
@@ -82,6 +121,12 @@ type FakeHost struct {
 	// Users answers GetUsers: the users among the requested ids, once each,
 	// in request order. Set it before Start.
 	Users map[int64]*pluginv1.UserInfo
+	// Accounts answers GetAccount: the plugin's own accounts by id, as the
+	// host returns them (credentials, settings, properties, proxy); any other
+	// id is NOT_FOUND, as on the host. Each call is recorded in AccountReads,
+	// the calls the host would audit. Set it before Start.
+	Accounts     map[int64]*pluginv1.Account
+	AccountReads []int64
 	// OnPublish, when set, is called (outside the lock) for every accepted
 	// Publish, e.g. to relay it to another Harness with Harness.Deliver and
 	// simulate a second node. PublishErr, when set, fails every Publish.
@@ -117,6 +162,8 @@ type FakeHost struct {
 	// settings: section -> values JSON (SetSettings).
 	settings      map[string]string
 	settingsReads int
+	// executions: token -> the call it was issued for (execution.go).
+	executions map[string]*Execution
 }
 
 // PublishedMessage is one broadcast received through HostService.Publish.
@@ -133,13 +180,6 @@ type kvItem struct {
 // NewFakeHost returns an empty fake host.
 func NewFakeHost() *FakeHost {
 	return &FakeHost{kv: map[string]kvItem{}, kvCalls: map[string]int{}, ledgerBy: map[string]LedgerEntry{}, Locks: NewLockTable()}
-}
-
-func (f *FakeHost) ExecuteHTTP(ctx context.Context, in *pluginv1.ExecutionHTTPRequest) (*pluginv1.ExecutionHTTPResponse, error) {
-	if f.ExecuteHTTPFunc == nil {
-		return nil, status.Error(codes.Unimplemented, "set FakeHost.ExecuteHTTPFunc for polling HTTP")
-	}
-	return f.ExecuteHTTPFunc(ctx, in)
 }
 
 // Logs returns a copy of the received log records.

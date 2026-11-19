@@ -15,9 +15,6 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/proto"
 
 	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
@@ -167,31 +164,6 @@ func (h *hookRuntime) recordResult(ctx context.Context, k hookKey, failed bool) 
 	if err := h.rdb.Set(rctx, breakerKey(k), strconv.FormatInt(until.UnixMilli(), 10), breakerOpenFor).Err(); err != nil {
 		slog.WarnContext(ctx, "gateway: store hook breaker", "err", err)
 	}
-}
-
-// grpcDefaultMaxRecv is the gRPC receive limit a plugin serves with unless it
-// raised it (pluginsdk.WithMaxRecvMsgSize). The host's own send and receive
-// limits are MaxInt32 (go-plugin), so a RESOURCE_EXHAUSTED on a request above
-// this size is the plugin refusing our request.
-const grpcDefaultMaxRecv = 4 << 20
-
-// grpcRecvTooLarge starts the status message grpc-go's server answers with
-// when a request is above its receive limit (rpc_util.go recv). A plugin
-// shedding load with RESOURCE_EXHAUSTED of its own says something else.
-const grpcRecvTooLarge = "grpc: received message larger than max"
-
-// requestTooLarge tells whether a hook call failed because the request was
-// above the plugin's receive limit. That says nothing about the plugin's
-// health, so it is neither a failure nor a success for the breaker. It
-// needs all three: RESOURCE_EXHAUSTED, grpc-go's own message for it, and a
-// request actually above the default limit. A plugin overloaded and
-// answering RESOURCE_EXHAUSTED itself, even to a large request, still
-// counts as failed.
-func requestTooLarge(req proto.Message, err error) bool {
-	st, ok := status.FromError(err)
-	return ok && st.Code() == codes.ResourceExhausted &&
-		strings.HasPrefix(st.Message(), grpcRecvTooLarge) &&
-		proto.Size(req) > grpcDefaultMaxRecv
 }
 
 type hookOutcome int
@@ -531,9 +503,7 @@ func (c *call) runHook(ctx context.Context, hb core.HookBinding, ref *core.Accou
 			o, note = outcomeTimeout, fmt.Sprintf("timeout after %s", timeout)
 		}
 		g.hooks.observe(k, hb.Hook.Point, o, latency)
-		if !requestTooLarge(req, err) {
-			g.hooks.recordResult(ctx, k, true)
-		}
+		g.hooks.recordResult(ctx, k, true)
 		return failed(note)
 	}
 
@@ -689,8 +659,7 @@ func (c *call) setBody(b []byte) {
 	// the new one, so the next checkModel asks again (endpoints with
 	// request.modelSource "plugin" only).
 	c.modelResolved = false
-	// The reference scans and the SHA-256 belong to the old bytes (body_state.go).
+	// The reference scans belong to the old bytes (body_state.go).
 	c.bodyVersion++
 	c.doc, c.docValid = gjson.Result{}, false
-	c.digestValid = false
 }

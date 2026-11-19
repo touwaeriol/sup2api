@@ -48,7 +48,7 @@ func TestManagedTaskFencingAndFreePolling(t *testing.T) {
 		if err = f.svc.ReceiveTask(ctx, request, 200, body, ""); err != nil {
 			t.Fatal(err)
 		}
-		if err = f.svc.RegisterTask(ctx, core.TaskRegistration{PublicID: id, UpstreamID: ref, Kind: "video", Snapshot: body, IDPaths: []string{"id"}, Deadline: time.Hour, Record: r}); err != nil {
+		if err = commitTask(f.svc, core.TaskRegistration{PublicID: id, UpstreamID: ref, Kind: "video", Snapshot: body, IDPaths: []string{"id"}, Deadline: time.Hour, Record: r}); err != nil {
 			t.Fatal(err)
 		}
 		return id
@@ -122,7 +122,7 @@ func TestManagedTaskFencingAndFreePolling(t *testing.T) {
 	}
 	due(id)
 	newer = claim()
-	rf.plugin.parse = func(in *pluginv1.ParseReconcileResponseRequest) (*pluginv1.ReconcileResult, error) {
+	rf.plugin.parse = func(in *monitorCall) (*pluginv1.ReconcileResult, error) {
 		if in.Entry.RefId != "up-fence" || in.Account.Id != 7 || in.Entry.TaskKind != "video" {
 			t.Fatalf("poll identity: %+v", in)
 		}
@@ -149,7 +149,7 @@ func TestManagedTaskFencingAndFreePolling(t *testing.T) {
 	}
 	slots.allow = true
 	due(freeID)
-	rf.plugin.parse = func(*pluginv1.ParseReconcileResponseRequest) (*pluginv1.ReconcileResult, error) {
+	rf.plugin.parse = func(*monitorCall) (*pluginv1.ReconcileResult, error) {
 		return &pluginv1.ReconcileResult{State: pluginv1.ReconcileResult_FAILED}, nil
 	}
 	f.svc.reconcileTask(ctx, claim())
@@ -157,7 +157,7 @@ func TestManagedTaskFencingAndFreePolling(t *testing.T) {
 		t.Fatal("terminal result without snapshot closed a task")
 	}
 	due(freeID)
-	rf.plugin.parse = func(*pluginv1.ParseReconcileResponseRequest) (*pluginv1.ReconcileResult, error) {
+	rf.plugin.parse = func(*monitorCall) (*pluginv1.ReconcileResult, error) {
 		return &pluginv1.ReconcileResult{State: pluginv1.ReconcileResult_SETTLED, TaskSnapshotJson: `{"id":"up-free","status":"succeeded"}`}, nil
 	}
 	f.svc.reconcileTask(ctx, claim())

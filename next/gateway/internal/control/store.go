@@ -234,27 +234,6 @@ func (s *Store) Nodes(ctx context.Context) ([]Node, error) {
 	return out, s.RefreshTelemetry(ctx, out)
 }
 
-// NodesWithPackage returns the enabled nodes that may hold the given plugin
-// package, most recently seen first. Which node holds which package is not
-// recorded in PG, so these are all enabled nodes: the caller asks each one,
-// and a node without the package answers 404 (pluginblob.Service.fetch).
-func (s *Store) NodesWithPackage(ctx context.Context, _ string) ([]Node, error) {
-	rows, err := s.nodes(s.db(ctx)).Select("node_id,peer_url,shell_boot_id,core_boot_id,ready,last_seen,enabled").Where("enabled = true").Order("last_seen DESC").Rows()
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []Node
-	for rows.Next() {
-		var n Node
-		if err = rows.Scan(&n.ID, &n.PeerURL, &n.ShellBootID, &n.CoreBootID, &n.Ready, &n.LastSeen, &n.Enabled); err != nil {
-			return nil, err
-		}
-		out = append(out, n)
-	}
-	return out, rows.Err()
-}
-
 // NodeDirectory returns the most recent heartbeat snapshot. Authorization and
 // routing use this cached view; revocation (DisableNode) and the upgrade
 // checks (Preflight, baseline recovery, the migration barrier) read PG.
@@ -1064,9 +1043,8 @@ func (s *Store) AuthorizePeer(ctx context.Context, source, boot, target, scope, 
 	}
 	if enabled && source != target && scope == "plugin-artifact" {
 		// A package a node lacks may be read from any enabled node that holds
-		// it, the old primary after a primary change among them. Packages are
-		// digest-addressed and verified by the reader; only referenced ones
-		// are served.
+		// it; no node is special. Packages are digest-addressed and verified
+		// by the reader; only referenced ones are served.
 		referenced, err := s.packageReferenced(ctx, digest)
 		if err != nil {
 			return peer.ErrUnavailable
@@ -1080,13 +1058,6 @@ func (s *Store) AuthorizePeer(ctx context.Context, source, boot, target, scope, 
 		return fmt.Errorf("%w: peer direction is not permitted", peer.ErrForbidden)
 	}
 	if scope == "forward" {
-		return nil
-	}
-	switch scope {
-	case "plugin-upload":
-		// A follower's core stores an upload on the primary before any row
-		// names it; size, digest, per-node concurrency and the store's total
-		// size are checked while writing.
 		return nil
 	}
 	if scope != "core-artifact" {
@@ -1367,27 +1338,6 @@ func (s *Store) ReferencedPackages(ctx context.Context) (map[string]bool, error)
 	return out, nil
 }
 
-// PrimaryPeer reports whether self is the primary and the primary's peer URL.
-func (s *Store) PrimaryPeer(ctx context.Context, self string) (bool, string, error) {
-	primary, _, _, err := s.ClusterState(ctx)
-	if err != nil {
-		return false, "", err
-	}
-	if primary == self {
-		return true, "", nil
-	}
-	nodes, err := s.Nodes(ctx)
-	if err != nil {
-		return false, "", err
-	}
-	for _, n := range nodes {
-		if n.ID == primary && n.Enabled && n.PeerURL != "" {
-			return false, strings.TrimRight(n.PeerURL, "/"), nil
-		}
-	}
-	return false, "", errors.New("primary node is not registered")
-}
-
 // SetPrimary designates a new primary node. Must run under cluster-change lock
 // with no active upgrade plan. Validates that the target node is enabled and
 // has the current baseline artifacts.
@@ -1420,9 +1370,8 @@ func (s *Store) SetPrimary(ctx context.Context, node string) error {
 				return fmt.Errorf("node %q is not on baseline %s", node, baseline)
 			}
 			// The node runs the baseline (release_digest above), so it holds that
-			// release. Which node holds which plugin package is not recorded in
-			// PG: a package the new primary lacks is fetched on demand from the
-			// other enabled nodes, the old primary among them (NodesWithPackage).
+			// release. Plugin packages do not depend on the primary: every node
+			// fetches a missing one from the online nodes (PluginBlobs).
 			return s.clusterRow(tx).Update("primary_node", node).Error
 		}); err != nil {
 			return err

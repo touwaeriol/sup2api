@@ -13,18 +13,19 @@
 // The types differ only in how a request is authorized:
 //
 //   - bedrock_apikey: a Bedrock API key, sent as a bearer token;
-//   - bedrock_aksk: a long-term access key. The plugin hands the core a
-//     signing directive and the core signs the final request (SigV4);
+//   - bedrock_aksk: a long-term access key. The plugin signs the final
+//     request (SigV4) and hands the core the signature as authoritative
+//     headers;
 //   - bedrock_sts: temporary credentials, the same with a session token.
 //     Nothing renews them: once they expire the upstream refuses the account
 //     and an administrator replaces them.
 //
-// The plugin does no network I/O: it describes the request and the core
-// sends it. It never sees the whole request body, only the fields its
-// manifest declares, so it cannot remove the fields Claude Code adds deep
-// inside it (tool "custom", cache_control "scope" / "ttl") nor add the beta
-// features a body needs without naming them; the account's parameter
-// override is the place for that.
+// The plugin does no network I/O. Execute is given the whole request body,
+// builds the final InvokeModel request from it (invokeBody: the top-level
+// fields, the beta features, and what Claude Code adds deep inside the body
+// that Bedrock refuses) and relays it through the core's HTTP client
+// without waiting; the core sends it, decodes the event stream and reads
+// the usage.
 //
 // Never log an API key, a secret access key or a session token.
 package bedrock
@@ -46,7 +47,7 @@ const (
 	TypeAccessKey = "bedrock_aksk"
 	TypeSTS       = "bedrock_sts"
 
-	// ProtocolMessages is the upstream protocol BuildUpstreamRequest speaks:
+	// ProtocolMessages is the upstream protocol BuildUpstream speaks:
 	// the messages endpoint of the built-in anthropic platform.
 	ProtocolMessages = anthropic.ProtocolMessages
 
@@ -58,7 +59,7 @@ const (
 	// Claude request body.
 	AnthropicVersion = "bedrock-2023-05-31"
 	// ResponseStream names the framing of a streamed InvokeModel answer
-	// (BuildUpstreamRequestResponse.response_stream).
+	// (UpstreamRequest.response_stream).
 	ResponseStream = awseventstream.FormatChunk
 
 	// DefaultTestModel is the Bedrock model id BuildTestRequest invokes when
@@ -80,7 +81,8 @@ type Endpoints struct {
 	API string
 }
 
-// Plugin is the bedrock plugin. It implements pluginsdk.Platform. It lists
+// Plugin is the bedrock plugin. It implements pluginsdk.Platform and
+// pluginsdk.UpstreamBuilder. It lists
 // no models: the console keeps the manifest defaults.
 type Plugin struct {
 	ep  Endpoints
@@ -96,9 +98,7 @@ func NewWithEndpoints(ep Endpoints) *Plugin {
 	return &Plugin{ep: ep, now: time.Now}
 }
 
-// ServiceDomain is the domain of every host the plugin builds requests for
-// (manifest externalServices: the core matches a host equal to an entry or
-// under it).
+// ServiceDomain is the domain of every host the plugin builds requests for.
 const ServiceDomain = "amazonaws.com"
 
 // RuntimeHost is the Bedrock runtime host of a region.

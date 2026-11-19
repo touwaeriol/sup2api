@@ -199,7 +199,8 @@ func WithVerifier(v PackageVerifier) PackagesOption {
 	return func(s *Packages) { s.verifier = v }
 }
 
-// WithSource sets where package bytes come from (the market or the primary).
+// WithSource sets where package bytes come from (the market or the nodes
+// holding them).
 func WithSource(src *blobs.Source) PackagesOption {
 	return func(s *Packages) { s.source = src }
 }
@@ -233,7 +234,7 @@ func NewPackages(db *store.DB, dataDir string, opts ...PackagesOption) *Packages
 func (s *Packages) DataDir() string { return s.dataDir }
 
 // Open returns the verified package of key@version, downloading it from the
-// market or the primary when it is not cached on disk yet. The package is
+// market or another node when it is not cached on disk yet. The package is
 // not held: Release may close it at any time, so a caller that reads its
 // files outside a running instance uses Acquire.
 func (s *Packages) Open(ctx context.Context, key, version string) (*Package, error) {

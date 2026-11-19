@@ -38,15 +38,10 @@ const (
 	// uses AccountsDefaultListLimit.
 	AccountsMaxListLimit     = 200
 	AccountsDefaultListLimit = 100
-	// ClearStickyBindings bounds its model and salt.
-	ClearStickyBindingsMaxModel = 256
-	ClearStickyBindingsMaxSalt  = 128
+	// ClearStickyBindings bounds its salt; its model has any length.
+	ClearStickyBindingsMaxSalt = 128
 	// GetUsersMaxIDs caps the ids of one GetUsers call.
 	GetUsersMaxIDs = protocol.GetUsersMaxIDs
-	// SendAccountRequest bounds its body, URL and method.
-	AccountRequestMaxBody   = 64 << 10
-	AccountRequestMaxURL    = 8 << 10
-	AccountRequestMaxMethod = 16
 )
 
 // hostServer serves HostService to exactly one plugin instance, so the
@@ -367,12 +362,12 @@ func (h *hostServer) GetDSN(ctx context.Context, _ *pluginv1.GetDSNRequest) (*pl
 	if h.i.rt.o.Schemas == nil {
 		return nil, status.Error(codes.Unavailable, "database schemas unavailable")
 	}
-	dsn, st, err := h.i.rt.o.Schemas.DSN(ctx, h.key())
+	dsn, schema, err := h.i.rt.o.Schemas.DSN(ctx, h.key(), h.i.rt.o.StrictNetwork)
 	if err != nil {
 		h.i.log.Error("GetDSN failed", "err", err)
 		return nil, status.Error(codes.Unavailable, "database schema unavailable")
 	}
-	return &pluginv1.GetDSNResponse{Dsn: dsn, Schema: st.Schema, RoleIsolated: st.RoleIsolated}, nil
+	return &pluginv1.GetDSNResponse{Dsn: dsn, Schema: schema}, nil
 }
 
 // ------------------------------------------------------------------ authz
@@ -402,13 +397,12 @@ func (h *hostServer) AuthzCheck(ctx context.Context, in *pluginv1.AuthzCheckRequ
 
 // AccountScopeCheck answers which accounts the caller of a request may act
 // on: core.AccountAccess, the rule the core proxy enforces on plugin routes,
-// with its errors mapped like every other core error. It needs the
-// "accounts.read" grant, and user_id must be the caller of an HTTP request
-// this plugin is serving right now, so a plugin cannot survey other users.
+// with its errors mapped like every other core error. It needs no grant: it
+// hands out no field of any account, only which of the caller's own view
+// the caller may act on, as AuthzCheck answers for the plugin's own keys.
+// user_id must be the caller of an HTTP request this plugin is serving right
+// now, so a plugin cannot survey other users.
 func (h *hostServer) AccountScopeCheck(ctx context.Context, in *pluginv1.AccountScopeCheckRequest) (*pluginv1.AccountScopeCheckResponse, error) {
-	if err := h.require(ctx, "accounts.read"); err != nil {
-		return nil, err
-	}
 	ids := in.GetAccountIds()
 	if in.GetUserId() <= 0 || in.GetAction() == "" || len(ids) > manifest.MaxAccountBatch ||
 		slices.ContainsFunc(ids, func(id int64) bool { return id <= 0 }) {
@@ -539,28 +533,15 @@ func (h *hostServer) ledger(ctx context.Context, in *pluginv1.LedgerChangeReques
 
 // ------------------------------------------------------------------ accounts
 
-// accountsScopeOwn is the only approved scope of accounts.credentials: the
-// plugin's own account types. Validate rejects any other scope at install
-// time; this re-checks it at call time so a grant row edited or migrated into
-// something else cannot silently widen the call.
-func (h *hostServer) requireOwnCredentials(ctx context.Context) error {
-	if err := h.require(ctx, "accounts.credentials"); err != nil {
-		return err
-	}
-	if v, _ := h.i.Grants().Scope("accounts.credentials")["types"].(string); v != "own" {
-		return status.Errorf(codes.PermissionDenied,
-			`plugin %s: accounts.credentials scope must be {"types":"own"}`, h.key())
-	}
-	return nil
-}
+// The account calls need no grant: a plugin receives the accounts of the
+// account types it declares (CONTRACTS §124). The account module filters by
+// plugin key in SQL, so a plugin declaring none gets nothing, and an account
+// of another plugin is NOT_FOUND, not PERMISSION_DENIED: these calls cannot
+// be used to probe which ids exist.
 
 // ListAccounts returns the metadata of the accounts of this plugin's own
-// account types. The response has no credential field: this call is authorised
-// by accounts.read, which is not a credential grant.
+// account types.
 func (h *hostServer) ListAccounts(ctx context.Context, in *pluginv1.ListAccountsRequest) (*pluginv1.ListAccountsResponse, error) {
-	if err := h.require(ctx, "accounts.read"); err != nil {
-		return nil, err
-	}
 	if h.i.rt.o.Accounts == nil {
 		return nil, status.Error(codes.Unavailable, "accounts unavailable")
 	}
@@ -595,82 +576,61 @@ func (h *hostServer) ListAccounts(ctx context.Context, in *pluginv1.ListAccounts
 	return out, nil
 }
 
-// GetAccountCredentials returns the decrypted credentials of one account of
-// this plugin's own account types. The account module filters by plugin key in
-// SQL and writes the audit row; an account of another plugin is NOT_FOUND, not
-// PERMISSION_DENIED, so this call cannot be used to probe which ids exist.
-func (h *hostServer) GetAccountCredentials(ctx context.Context, in *pluginv1.GetAccountCredentialsRequest) (*pluginv1.GetAccountCredentialsResponse, error) {
-	if err := h.requireOwnCredentials(ctx); err != nil {
-		return nil, err
-	}
+// GetAccount returns one account of this plugin's own account types as
+// PlatformService calls receive it, proxy included; the account module
+// writes the audit row first.
+func (h *hostServer) GetAccount(ctx context.Context, in *pluginv1.GetAccountRequest) (*pluginv1.GetAccountResponse, error) {
 	if h.i.rt.o.Accounts == nil {
 		return nil, status.Error(codes.Unavailable, "accounts unavailable")
 	}
 	if in.GetAccountId() <= 0 {
 		return nil, status.Error(codes.InvalidArgument, "account_id is required")
 	}
-	a, err := h.i.rt.o.Accounts.ReadPluginAccountCredentials(ctx, h.key(), in.GetAccountId())
+	a, err := h.i.rt.o.Accounts.ReadPluginAccount(ctx, h.key(), in.GetAccountId())
 	if err != nil {
 		return nil, toStatus(err)
 	}
-	return &pluginv1.GetAccountCredentialsResponse{
-		Account:         accountSummary(a.PluginAccountSummary),
-		CredentialsJson: string(a.Credentials),
-	}, nil
+	return &pluginv1.GetAccountResponse{Account: a}, nil
 }
 
 // SendAccountRequest has the account module send one request for one account
 // of this plugin's own account types through that account's proxy (CONTRACTS
-// §91). It is authorised by the credential grant, since such a request is
-// made with what GetAccountCredentials hands out, and only reaches the hosts
-// the manifest names in externalServices, which the operator reviewed at
-// install.
+// §91), and reaches only the hosts
+// a relay of the account may (core.CheckPluginUpstream, §112.17, §113): the
+// manifest's externalServices, which the operator reviewed at install, or
+// the account's own upstream addresses, which the account module reads with
+// the account, and only those the administrator's plugin network access
+// lets the plugin reach. Neither the body nor the answer is bounded.
 func (h *hostServer) SendAccountRequest(ctx context.Context, in *pluginv1.SendAccountRequestRequest) (*pluginv1.ExecutionHTTPResponse, error) {
-	if err := h.requireOwnCredentials(ctx); err != nil {
-		return nil, err
+	if in.GetAccountId() <= 0 || in.GetUrl() == "" {
+		return nil, status.Error(codes.InvalidArgument, "account_id and url are required")
 	}
-	if in.GetAccountId() <= 0 || in.GetUrl() == "" || len(in.GetUrl()) > AccountRequestMaxURL || len(in.GetMethod()) > AccountRequestMaxMethod {
-		return nil, status.Errorf(codes.InvalidArgument, "account_id and url (at most %d bytes) are required; method is at most %d bytes",
-			AccountRequestMaxURL, AccountRequestMaxMethod)
-	}
-	if len(in.GetBody()) > AccountRequestMaxBody {
-		return nil, status.Errorf(codes.InvalidArgument, "body is at most %d bytes", AccountRequestMaxBody)
-	}
-	if err := h.requireExternalService(in.GetUrl()); err != nil {
+	if _, err := httpHost(in.GetUrl()); err != nil {
 		return nil, err
 	}
 	requester, ok := h.i.rt.o.Accounts.(core.PluginAccountRequester)
 	if !ok {
 		return nil, status.Error(codes.Unavailable, "account requests unavailable")
 	}
-	out, err := requester.SendPluginAccountRequest(ctx, h.key(), in)
+	out, err := requester.SendPluginAccountRequest(ctx, h.key(), h.i.pkg.Manifest, in)
 	if err != nil {
 		return nil, toStatus(err)
 	}
 	return out, nil
 }
 
-// requireExternalService accepts an http(s) URL whose host is one of the
-// manifest's externalServices or a subdomain of one, compared without case
-// or port.
-func (h *hostServer) requireExternalService(raw string) error {
+// httpHost is the lower-case host name of the http(s) URL raw, without its
+// port.
+func httpHost(raw string) (string, error) {
 	u, err := url.Parse(raw)
 	if err != nil {
-		return status.Error(codes.InvalidArgument, "invalid url")
+		return "", status.Error(codes.InvalidArgument, "invalid url")
 	}
-	denied := status.Errorf(codes.PermissionDenied, "plugin %s: url must be http(s) on a host of the manifest's externalServices", h.key())
 	host := strings.ToLower(u.Hostname())
 	if (u.Scheme != "http" && u.Scheme != "https") || host == "" {
-		return denied
+		return "", status.Error(codes.PermissionDenied, "url must be http(s) with a host")
 	}
-	for _, svc := range h.i.pkg.Manifest.ExternalServices {
-		// An entry written with a port matches its host on any port.
-		svc = strings.ToLower((&url.URL{Host: strings.TrimSpace(svc)}).Hostname())
-		if svc != "" && (host == svc || strings.HasSuffix(host, "."+svc)) {
-			return nil
-		}
-	}
-	return denied
+	return host, nil
 }
 
 func (h *hostServer) SetAccountAutomaticState(ctx context.Context, in *pluginv1.SetAccountAutomaticStateRequest) (*pluginv1.SetAccountAutomaticStateResponse, error) {
@@ -699,10 +659,10 @@ func (h *hostServer) ClearStickyBindings(ctx context.Context, in *pluginv1.Clear
 	if err := h.require(ctx, "sticky.clear"); err != nil {
 		return nil, err
 	}
-	if in.GetAccountId() <= 0 || in.GetGroupId() <= 0 || in.GetModel() == "" || len(in.GetModel()) > ClearStickyBindingsMaxModel ||
+	if in.GetAccountId() <= 0 || in.GetGroupId() <= 0 || in.GetModel() == "" ||
 		in.GetPercent() < 1 || in.GetPercent() > 100 || len(in.GetSalt()) > ClearStickyBindingsMaxSalt {
-		return nil, status.Errorf(codes.InvalidArgument, "account_id, group_id, model (1..%d bytes) and percent (1..100) are required; salt is at most %d bytes",
-			ClearStickyBindingsMaxModel, ClearStickyBindingsMaxSalt)
+		return nil, status.Errorf(codes.InvalidArgument, "account_id, group_id, model and percent (1..100) are required; salt is at most %d bytes",
+			ClearStickyBindingsMaxSalt)
 	}
 	if h.i.rt.o.Sticky == nil {
 		return nil, status.Error(codes.Unavailable, "sticky bindings unavailable")

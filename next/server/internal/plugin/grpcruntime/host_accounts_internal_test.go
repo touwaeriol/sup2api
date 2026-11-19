@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
+	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/registry"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/registry/registrytest"
@@ -25,10 +26,12 @@ type fakeAccounts struct {
 	creds map[int64]string
 	// calls records "<method>:<pluginKey>" in order.
 	calls []string
+	// manifest is the manifest the last SendPluginAccountRequest was given.
+	manifest *manifest.Manifest
 	// lastQuery is the query of the last ListPluginAccounts call.
 	lastQuery core.PluginAccountQuery
-	// audits counts ReadPluginAccountCredentials calls that returned a
-	// credential (the real implementation writes one audit row per such call).
+	// audits counts ReadPluginAccount calls that returned an account (the
+	// real implementation writes one audit row per such call).
 	audits int
 }
 
@@ -42,13 +45,13 @@ func (f *fakeAccounts) ListPluginAccounts(_ context.Context, key string, q core.
 	return rows, nil
 }
 
-func (f *fakeAccounts) ReadPluginAccountCredentials(_ context.Context, key string, id int64) (*core.PluginAccountCredentials, error) {
+func (f *fakeAccounts) ReadPluginAccount(_ context.Context, key string, id int64) (*pluginv1.Account, error) {
 	f.calls = append(f.calls, "read:"+key)
 	for _, a := range f.rows[key] {
 		if a.ID == id {
 			f.audits++
-			return &core.PluginAccountCredentials{PluginAccountSummary: a,
-				Credentials: json.RawMessage(f.creds[id])}, nil
+			return &pluginv1.Account{Id: a.ID, Name: a.Name, Type: a.Type, CredentialsJson: f.creds[id], SettingsJson: string(a.Settings),
+				Proxy: &pluginv1.AccountProxy{Id: 3, Protocol: "socks5", Host: "proxy.test", Port: 1080, Username: "u", Password: "pw"}}, nil
 		}
 	}
 	return nil, core.ErrNotFound.WithMessage("account not found")
@@ -114,26 +117,17 @@ func accountsEnv(t *testing.T, grants registry.Grants) (*hostServer, *fakeAccoun
 		},
 		creds: map[int64]string{1: `{"access_key":"AK","secret_key":"SK"}`, 9: `{"api_key":"theirs"}`},
 	}
-	rt := &Runtime{o: Options{Node: staticNode{"n", "b"}, Concurrency: Concurrency{Hot: 4, Console: 4, Background: 4, Execute: 4}, DataDir: t.TempDir(), Accounts: acc},
+	rt := &Runtime{o: Options{Node: staticNode{"n", "b"}, Concurrency: Concurrency{Hot: 4, Console: 4, Background: 4}, DataDir: t.TempDir(), Accounts: acc},
 		log: slog.Default()}
 	i := newInstance(rt, pkg, "", "", &settings{configJSON: "{}", grants: grants})
 	return &hostServer{i: i}, acc
 }
 
-func TestHostListAccountsNeedsGrant(t *testing.T) {
-	ctx := context.Background()
-	h, acc := accountsEnv(t, registry.Grants{})
-	if _, err := h.ListAccounts(ctx, &pluginv1.ListAccountsRequest{}); status.Code(err) != codes.PermissionDenied {
-		t.Fatalf("list without accounts.read: %v", err)
-	}
-	if len(acc.calls) != 0 {
-		t.Fatalf("the account module was reached without a grant: %v", acc.calls)
-	}
-}
-
+// The account calls need no grant (CONTRACTS §124): the account module
+// answers with the plugin's own accounts only.
 func TestHostListAccounts(t *testing.T) {
 	ctx := context.Background()
-	h, acc := accountsEnv(t, registry.Grants{"accounts.read": json.RawMessage(`{}`)})
+	h, acc := accountsEnv(t, registry.Grants{})
 
 	out, err := h.ListAccounts(ctx, &pluginv1.ListAccountsRequest{})
 	if err != nil {
@@ -192,44 +186,29 @@ func TestHostListAccounts(t *testing.T) {
 	}
 }
 
-func TestHostGetAccountCredentials(t *testing.T) {
+func TestHostGetAccount(t *testing.T) {
 	ctx := context.Background()
-
-	// No grant at all.
-	h, acc := accountsEnv(t, registry.Grants{"accounts.read": json.RawMessage(`{}`)})
-	if _, err := h.GetAccountCredentials(ctx, &pluginv1.GetAccountCredentialsRequest{AccountId: 1}); status.Code(err) != codes.PermissionDenied {
-		t.Fatalf("read without accounts.credentials: %v", err)
-	}
-	if acc.audits != 0 || len(acc.calls) != 0 {
-		t.Fatalf("account module reached without a grant: %v", acc.calls)
-	}
-
-	// The grant exists but with a scope that was never approved.
-	h, _ = accountsEnv(t, registry.Grants{"accounts.credentials": json.RawMessage(`{"types":"all"}`)})
-	if _, err := h.GetAccountCredentials(ctx, &pluginv1.GetAccountCredentialsRequest{AccountId: 1}); status.Code(err) != codes.PermissionDenied {
-		t.Fatalf("read with a widened scope: %v", err)
-	}
-
-	h, acc = accountsEnv(t, registry.Grants{"accounts.credentials": json.RawMessage(`{"types":"own"}`)})
-	out, err := h.GetAccountCredentials(ctx, &pluginv1.GetAccountCredentialsRequest{AccountId: 1})
+	h, acc := accountsEnv(t, registry.Grants{})
+	out, err := h.GetAccount(ctx, &pluginv1.GetAccountRequest{AccountId: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out.GetCredentialsJson() != `{"access_key":"AK","secret_key":"SK"}` || out.GetAccount().GetId() != 1 {
-		t.Fatalf("credentials = %v", out)
+	a := out.GetAccount()
+	if a.GetId() != 1 || a.GetCredentialsJson() != `{"access_key":"AK","secret_key":"SK"}` || a.GetProxy().GetPassword() != "pw" {
+		t.Fatalf("account = %v", a)
 	}
-	if acc.audits != 1 {
-		t.Fatalf("audits = %d", acc.audits)
+	if acc.audits != 1 || len(acc.calls) != 1 || acc.calls[0] != "read:volc" {
+		t.Fatalf("audits = %d, calls = %v", acc.audits, acc.calls)
 	}
 
 	// An account of another plugin's account type is NOT_FOUND, never
 	// PERMISSION_DENIED: the two must be indistinguishable to the caller, or
 	// the call becomes an account-id oracle.
-	_, err = h.GetAccountCredentials(ctx, &pluginv1.GetAccountCredentialsRequest{AccountId: 9})
+	_, err = h.GetAccount(ctx, &pluginv1.GetAccountRequest{AccountId: 9})
 	if status.Code(err) != codes.NotFound {
 		t.Fatalf("other plugin's account: %v (%v)", status.Code(err), err)
 	}
-	_, missing := h.GetAccountCredentials(ctx, &pluginv1.GetAccountCredentialsRequest{AccountId: 4242})
+	_, missing := h.GetAccount(ctx, &pluginv1.GetAccountRequest{AccountId: 4242})
 	if status.Code(missing) != codes.NotFound || missing.Error() != err.Error() {
 		t.Fatalf("existence leak: %v vs %v", err, missing)
 	}
@@ -237,7 +216,7 @@ func TestHostGetAccountCredentials(t *testing.T) {
 		t.Fatalf("a refused read was audited as a disclosure: %d", acc.audits)
 	}
 
-	if _, err := h.GetAccountCredentials(ctx, &pluginv1.GetAccountCredentialsRequest{}); status.Code(err) != codes.InvalidArgument {
+	if _, err := h.GetAccount(ctx, &pluginv1.GetAccountRequest{}); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("missing account id: %v", err)
 	}
 }
@@ -245,15 +224,12 @@ func TestHostGetAccountCredentials(t *testing.T) {
 // Without an account module wired in, both calls fail closed.
 func TestHostAccountsUnavailable(t *testing.T) {
 	ctx := context.Background()
-	h, _ := accountsEnv(t, registry.Grants{
-		"accounts.read":        json.RawMessage(`{}`),
-		"accounts.credentials": json.RawMessage(`{"types":"own"}`),
-	})
+	h, _ := accountsEnv(t, registry.Grants{})
 	h.i.rt.o.Accounts = nil
 	if _, err := h.ListAccounts(ctx, &pluginv1.ListAccountsRequest{}); status.Code(err) != codes.Unavailable {
 		t.Fatalf("list: %v", err)
 	}
-	if _, err := h.GetAccountCredentials(ctx, &pluginv1.GetAccountCredentialsRequest{AccountId: 1}); status.Code(err) != codes.Unavailable {
+	if _, err := h.GetAccount(ctx, &pluginv1.GetAccountRequest{AccountId: 1}); status.Code(err) != codes.Unavailable {
 		t.Fatalf("read: %v", err)
 	}
 }

@@ -1,15 +1,21 @@
 package volcengine
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/tidwall/gjson"
+
 	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
+	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/pluginsdk"
+	"github.com/Sub2API-Devs/sup2api/next/sdk/pluginsdk/apikey/apikeytest"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/pluginsdk/classify"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/pluginsdk/pluginsdktest"
 )
@@ -31,12 +37,12 @@ const (
 	maxCooldown              = classify.MaxCooldown
 )
 
-// TestCapabilities: stage three serves the asset library over the plugin's
-// own HTTP routes, so the SDK reports http.routes.v1 next to the platform
-// adapter.
+// TestCapabilities: what the SDK infers from the code alone - the platform
+// (Execute) and the task monitor - plus http.routes.v1 for the asset library.
+// platform.tasks.v1 comes only from the manifest (TestManifestServes).
 func TestCapabilities(t *testing.T) {
 	h := start(t)
-	if got := strings.Join(h.Info.GetCapabilities(), ","); got != "platform.execute.v1,platform.monitor.v1,platform.adapter.v1,platform.tasks.v1,platform.poll.v1,http.routes.v1" {
+	if got := strings.Join(h.Info.GetCapabilities(), ","); got != "platform.adapter.v1,platform.monitor.v1,http.routes.v1" {
 		t.Fatalf("capabilities = %s", got)
 	}
 }
@@ -57,13 +63,16 @@ func TestValidateCredentials(t *testing.T) {
 		t.Fatalf("normalized = %s %s", r.GetNormalizedCredentialsJson(), r.GetNormalizedSettingsJson())
 	}
 
-	// The Ark SDK base URL and trailing slashes are normalized away, so the
-	// value matches guardedSettings (CONTRACTS §21.3) again.
-	for _, in := range []string{
-		DefaultBaseURL + "/api/v3",
-		DefaultBaseURL + "/api/v3/",
-		DefaultBaseURL + "/",
-		" " + DefaultBaseURL + " ",
+	// The base URL is saved as written, only trimmed and without trailing
+	// slashes: a pasted Ark SDK base URL keeps its /api/v3 (requests leave
+	// it out, TestLayoutFollowsTheAccountType; the core compares it with
+	// guardedSettings without it, CONTRACTS §21.3), BytePlus too.
+	for in, want := range map[string]string{
+		DefaultBaseURL + "/api/v3":  DefaultBaseURL + "/api/v3",
+		DefaultBaseURL + "/api/v3/": DefaultBaseURL + "/api/v3",
+		DefaultBaseURL + "/":        DefaultBaseURL,
+		" " + DefaultBaseURL + " ":  DefaultBaseURL,
+		BytePlusBaseURL + "/api/v3": BytePlusBaseURL + "/api/v3",
 	} {
 		r, err := h.Platform.ValidateCredentials(ctx, &pluginv1.ValidateCredentialsRequest{
 			AccountType: AccountTypeAPIKey, CredentialsJson: testKey, SettingsJson: `{"base_url":"` + in + `"}`,
@@ -71,17 +80,9 @@ func TestValidateCredentials(t *testing.T) {
 		if err != nil || len(r.GetErrors()) != 0 {
 			t.Fatalf("%q: %v %v", in, r, err)
 		}
-		if r.GetNormalizedSettingsJson() != `{"base_url":"`+DefaultBaseURL+`"}` {
-			t.Fatalf("%q normalized to %s", in, r.GetNormalizedSettingsJson())
+		if r.GetNormalizedSettingsJson() != `{"base_url":"`+want+`"}` {
+			t.Fatalf("%q normalized to %s, want %s", in, r.GetNormalizedSettingsJson(), want)
 		}
-	}
-
-	// BytePlus, the other allowed address, survives untouched.
-	r, _ = h.Platform.ValidateCredentials(ctx, &pluginv1.ValidateCredentialsRequest{
-		AccountType: AccountTypeAPIKey, CredentialsJson: testKey, SettingsJson: `{"base_url":"` + BytePlusBaseURL + `/api/v3"}`,
-	})
-	if len(r.GetErrors()) != 0 || r.GetNormalizedSettingsJson() != `{"base_url":"`+BytePlusBaseURL+`"}` {
-		t.Fatalf("byteplus: %v %s", r.GetErrors(), r.GetNormalizedSettingsJson())
 	}
 
 	// Errors: missing key, relative base_url, wrong account type.
@@ -101,51 +102,50 @@ func TestValidateCredentials(t *testing.T) {
 	}
 }
 
-func patches(r *pluginv1.BuildUpstreamRequestResponse) map[string]string {
-	out := map[string]string{}
-	for _, p := range r.GetPatches() {
-		if p.GetOp() == pluginv1.BodyPatch_OP_SET {
-			out[p.GetPath()] = p.GetValueJson()
-		}
+// chatBody is a chat completions request body naming model; stream adds the
+// stream flag the way a client sends it.
+func chatBody(model string, stream bool) []byte {
+	b := `{"model":` + jsonStr(model) + `,"messages":[{"role":"user","content":"hi"}]`
+	if stream {
+		b += `,"stream":true`
 	}
-	return out
+	return []byte(b + `}`)
 }
 
-func TestBuildUpstreamRequest(t *testing.T) {
-	h := start(t)
+func TestBuildUpstream(t *testing.T) {
+	p := New()
 	ctx := context.Background()
-	build := func(meta *pluginv1.RequestMeta, acc *pluginv1.Account, inbound map[string]string) (*pluginv1.BuildUpstreamRequestResponse, error) {
-		return h.Platform.BuildUpstreamRequest(ctx, &pluginv1.BuildUpstreamRequestRequest{
-			Meta: meta, Account: acc, Fields: map[string]string{"model": `"` + meta.GetModel() + `"`}, InboundHeaders: inbound,
+	build := func(meta *pluginv1.RequestMeta, acc *pluginv1.Account, inbound map[string]string) (*pluginv1.UpstreamRequest, error) {
+		return p.BuildUpstream(ctx, &pluginv1.ExecuteRequest{
+			Meta: meta, Account: acc, Body: chatBody(meta.GetModel(), meta.GetStream()), InboundHeaders: inbound,
 		})
 	}
 
 	// Streaming chat on the default base URL: Ark's /api/v3 prefix, bearer
-	// key, include_usage forced, only the user agent forwarded.
+	// key, include_usage forced, the user agent (the one client header the
+	// core hands over on this surface) forwarded.
 	r, err := build(&pluginv1.RequestMeta{Protocol: ProtocolChat, Model: "doubao-seed-1-6-250615", Stream: true},
 		account(testKey, ""),
-		map[string]string{"user-agent": "OpenAI/Python 1.0", "openai-organization": "org-1", "cookie": "no"})
+		map[string]string{"user-agent": "OpenAI/Python 1.0"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	hd := r.GetHeaders()
-	if r.GetMethod() != "POST" || r.GetUrl() != DefaultBaseURL+"/api/v3/chat/completions" ||
-		hd["authorization"] != "Bearer 11111111-2222-3333-4444-555555555555" ||
-		hd["content-type"] != "application/json" || hd["user-agent"] != "OpenAI/Python 1.0" {
-		t.Fatalf("request = %s %s %v", r.GetMethod(), r.GetUrl(), hd)
+	if r.GetMethod() != "POST" || r.GetUrl() != DefaultBaseURL+"/api/v3/chat/completions" {
+		t.Fatalf("request = %s %s", r.GetMethod(), r.GetUrl())
 	}
-	for _, name := range []string{"cookie", "openai-organization"} {
-		if _, ok := hd[name]; ok {
-			t.Fatalf("%s must not be forwarded", name)
-		}
+	// Every header is authoritative, as it was before forwarding v2.
+	if want := map[string]string{"authorization": "Bearer 11111111-2222-3333-4444-555555555555",
+		"content-type": "application/json", "user-agent": "OpenAI/Python 1.0"}; !maps.Equal(r.GetHeaders(), want) || len(r.GetDefaultHeaders()) != 0 {
+		t.Fatalf("headers = %v / default %v, want all of %v authoritative", r.GetHeaders(), r.GetDefaultHeaders(), want)
 	}
-	if p := patches(r); len(p) != 1 || p["stream_options.include_usage"] != "true" || r.GetUpstreamModel() != "doubao-seed-1-6-250615" {
-		t.Fatalf("patches = %v upstream = %s", r.GetPatches(), r.GetUpstreamModel())
+	if want := `{"model":"doubao-seed-1-6-250615","messages":[{"role":"user","content":"hi"}],"stream":true,"stream_options":{"include_usage":true}}`; string(r.GetBody()) != want ||
+		r.GetUpstreamModel() != "doubao-seed-1-6-250615" {
+		t.Fatalf("body = %s upstream = %s", r.GetBody(), r.GetUpstreamModel())
 	}
 
-	// Non-streaming chat: no stream_options patch.
+	// Non-streaming chat: the body goes up as it came, byte for byte.
 	r, err = build(&pluginv1.RequestMeta{Protocol: ProtocolChat, Model: "doubao-seed-1-6-250615"}, account(testKey, ""), nil)
-	if err != nil || len(r.GetPatches()) != 0 {
+	if err != nil || !bytes.Equal(r.GetBody(), chatBody("doubao-seed-1-6-250615", false)) {
 		t.Fatalf("non-stream chat: %v %v", r, err)
 	}
 
@@ -162,7 +162,8 @@ func TestBuildUpstreamRequest(t *testing.T) {
 	}
 
 	// A custom base URL with a trailing slash and the /api/v3 the operator
-	// pasted from the Ark SDK docs; responses never uses the bots path.
+	// pasted from the Ark SDK docs; responses never uses the bots path and
+	// never gets the chat-only stream_options edit.
 	//
 	// mock-upstream speaks Ark's own paths while not being an Ark host, which
 	// is exactly the case the derived layout gets wrong and api_prefix exists
@@ -170,30 +171,30 @@ func TestBuildUpstreamRequest(t *testing.T) {
 	// asked for /v1/responses.
 	acc := account(testKey, `{"base_url":"http://mock-upstream:8080/api/v3/","api_prefix":"/api/v3"}`)
 	r, err = build(&pluginv1.RequestMeta{Protocol: ProtocolResponses, Model: "bot-1", Stream: true}, acc, nil)
-	if err != nil || r.GetUrl() != "http://mock-upstream:8080/api/v3/responses" || len(r.GetPatches()) != 0 {
+	if err != nil || r.GetUrl() != "http://mock-upstream:8080/api/v3/responses" || !bytes.Equal(r.GetBody(), chatBody("bot-1", true)) {
 		t.Fatalf("responses: %v %v", r, err)
 	}
 
 	// Embeddings on the BytePlus address.
 	r, err = build(&pluginv1.RequestMeta{Protocol: ProtocolEmbeddings, Model: "doubao-embedding-text-240715"},
 		account(testKey, `{"base_url":"`+BytePlusBaseURL+`"}`), nil)
-	if err != nil || r.GetUrl() != BytePlusBaseURL+"/api/v3/embeddings" || len(r.GetPatches()) != 0 {
+	if err != nil || r.GetUrl() != BytePlusBaseURL+"/api/v3/embeddings" || !bytes.Equal(r.GetBody(), chatBody("doubao-embedding-text-240715", false)) {
 		t.Fatalf("embeddings: %v %v", r, err)
 	}
 
-	// fields["model"] wins over meta.model, including for the bots path.
-	r, err = h.Platform.BuildUpstreamRequest(ctx, &pluginv1.BuildUpstreamRequestRequest{
+	// The body's model wins over meta.model, including for the bots path.
+	r, err = p.BuildUpstream(ctx, &pluginv1.ExecuteRequest{
 		Meta:    &pluginv1.RequestMeta{Protocol: ProtocolChat, Model: "doubao-seed-1-6-250615"},
-		Account: account(testKey, ""), Fields: map[string]string{"model": `"bot-7"`},
+		Account: account(testKey, ""), Body: chatBody("bot-7", false),
 	})
 	if err != nil || r.GetUpstreamModel() != "bot-7" || r.GetUrl() != DefaultBaseURL+"/api/v3/bots/chat/completions" {
-		t.Fatalf("fields model: %v %v", r, err)
+		t.Fatalf("body model: %v %v", r, err)
 	}
 
 	// Converted request (the client spoke anthropic.messages): the path and
-	// the include_usage patch follow meta.protocol.
+	// the include_usage edit follow meta.protocol.
 	r, err = build(&pluginv1.RequestMeta{Protocol: ProtocolChat, ClientProtocol: "anthropic.messages", Model: "doubao-seed-1-6-250615", Stream: true}, account(testKey, ""), nil)
-	if err != nil || r.GetUrl() != DefaultBaseURL+"/api/v3/chat/completions" || patches(r)["stream_options.include_usage"] != "true" {
+	if err != nil || r.GetUrl() != DefaultBaseURL+"/api/v3/chat/completions" || !gjson.GetBytes(r.GetBody(), "stream_options.include_usage").Bool() {
 		t.Fatalf("converted: %v %v", r, err)
 	}
 
@@ -211,31 +212,52 @@ func TestBuildUpstreamRequest(t *testing.T) {
 	}
 }
 
-// TestBuildUpstreamRequestImages covers the volcengine platform's own
-// endpoint: the client calls /api/v3/images/generations (or the
-// /doubao/api/v3 alias), the upstream is the account's own prefix.
-func TestBuildUpstreamRequestImages(t *testing.T) {
-	h := start(t)
+// TestIncludeUsageIsATargetedEdit: the one body edit touches its own path and
+// nothing else - key order, spacing, numbers written as the client wrote
+// them, unknown fields and even a duplicate key survive, which a
+// decode-and-encode of the document would not keep.
+func TestIncludeUsageIsATargetedEdit(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{`{"stream":true, "model":"m","n":1.50,"x":{"b":2,"a":1},"x":3}`,
+			`{"stream":true, "model":"m","n":1.50,"x":{"b":2,"a":1},"x":3,"stream_options":{"include_usage":true}}`},
+		{`{"model":"m","stream_options":{"include_usage":false,"z":1},"stream":true}`,
+			`{"model":"m","stream_options":{"include_usage":true,"z":1},"stream":true}`},
+		{`{"model":"m","stream_options":{"z":1},"stream":true}`,
+			`{"model":"m","stream_options":{"z":1,"include_usage":true},"stream":true}`},
+	} {
+		r, err := New().BuildUpstream(context.Background(), &pluginv1.ExecuteRequest{
+			Meta: &pluginv1.RequestMeta{Protocol: ProtocolChat, Model: "m", Stream: true}, Account: account(testKey, ""), Body: []byte(tc.in),
+		})
+		if err != nil || string(r.GetBody()) != tc.want {
+			t.Errorf("%s\n got %s (%v)\nwant %s", tc.in, r.GetBody(), err, tc.want)
+		}
+	}
+}
+
+// TestBuildUpstreamImages covers the volcengine platform's own endpoint: the
+// client calls /api/v3/images/generations (or the /doubao/api/v3 alias), the
+// upstream is the account's own prefix.
+func TestBuildUpstreamImages(t *testing.T) {
+	p := New()
 	ctx := context.Background()
-	build := func(meta *pluginv1.RequestMeta, acc *pluginv1.Account, inbound map[string]string) (*pluginv1.BuildUpstreamRequestResponse, error) {
-		return h.Platform.BuildUpstreamRequest(ctx, &pluginv1.BuildUpstreamRequestRequest{
-			Meta: meta, Account: acc, Fields: map[string]string{"model": `"` + meta.GetModel() + `"`}, InboundHeaders: inbound,
+	imageBody := func(model string) []byte {
+		return []byte(`{"model":` + jsonStr(model) + `,"prompt":"a red fox","size":"2K","stream":true}`)
+	}
+	build := func(meta *pluginv1.RequestMeta, acc *pluginv1.Account, inbound map[string]string) (*pluginv1.UpstreamRequest, error) {
+		return p.BuildUpstream(ctx, &pluginv1.ExecuteRequest{
+			Meta: meta, Account: acc, Body: imageBody(meta.GetModel()), InboundHeaders: inbound,
 		})
 	}
 
 	r, err := build(&pluginv1.RequestMeta{Protocol: ProtocolImages, Model: "doubao-seedream-4-0-250828"},
-		account(testKey, ""), map[string]string{"user-agent": "Ark/Python 1.0", "cookie": "no"})
+		account(testKey, ""), map[string]string{"user-agent": "Ark/Python 1.0"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	hd := r.GetHeaders()
 	if r.GetMethod() != "POST" || r.GetUrl() != DefaultBaseURL+"/api/v3/images/generations" ||
-		hd["authorization"] != "Bearer 11111111-2222-3333-4444-555555555555" ||
-		hd["content-type"] != "application/json" || hd["user-agent"] != "Ark/Python 1.0" {
-		t.Fatalf("images = %s %s %v", r.GetMethod(), r.GetUrl(), hd)
-	}
-	if _, ok := hd["cookie"]; ok {
-		t.Fatal("cookie must not be forwarded")
+		r.GetHeaders()["authorization"] != "Bearer 11111111-2222-3333-4444-555555555555" ||
+		r.GetHeaders()["content-type"] != "application/json" || r.GetHeaders()["user-agent"] != "Ark/Python 1.0" {
+		t.Fatalf("images = %s %s %v", r.GetMethod(), r.GetUrl(), r.GetHeaders())
 	}
 	if r.GetUpstreamModel() != "doubao-seedream-4-0-250828" {
 		t.Fatalf("upstream model = %q", r.GetUpstreamModel())
@@ -249,12 +271,12 @@ func TestBuildUpstreamRequestImages(t *testing.T) {
 		t.Fatalf("byteplus images: %v %v", r, err)
 	}
 
-	// stream_options.include_usage is a chat-completions field: never patched
-	// onto an image request, even when the client asked for a stream.
+	// stream_options.include_usage is a chat-completions field: never added
+	// to an image request, even when the client asked for a stream.
 	r, err = build(&pluginv1.RequestMeta{Protocol: ProtocolImages, Model: "doubao-seedream-4-0-250828", Stream: true},
 		account(testKey, ""), nil)
-	if err != nil || len(r.GetPatches()) != 0 {
-		t.Fatalf("streaming images: %v %v", r.GetPatches(), err)
+	if err != nil || !bytes.Equal(r.GetBody(), imageBody("doubao-seedream-4-0-250828")) {
+		t.Fatalf("streaming images: %s %v", r.GetBody(), err)
 	}
 
 	// A model starting with "bot" does not divert the image path.
@@ -424,4 +446,21 @@ func TestClassifyError(t *testing.T) {
 	// The shared decisions still apply on the image endpoint.
 	check("images 404 model not open", cls(404, nil, arkErr("ModelNotOpen", "model not open"), ""), failover, none, 0, "invalid_request_error")
 	check("images 429 overloaded", cls(429, nil, arkErr("ServerOverloaded", "busy"), ""), failover, cool, transientCooldown, "rate_limit_error")
+}
+
+// TestManifestVersions: the versions the core leaves out of a guarded
+// base_url before comparing it (manifest guardedSettings[].versions) are the
+// ones requests leave out (Spec.Versions), on each type.
+func TestManifestVersions(t *testing.T) {
+	var m manifest.Manifest
+	if err := json.Unmarshal(manifestFile(t), &m); err != nil {
+		t.Fatal(err)
+	}
+	for _, at := range m.AccountTypes {
+		sp, err := specFor(at.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		apikeytest.GuardedVersions(t, at, sp)
+	}
 }

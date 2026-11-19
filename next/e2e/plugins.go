@@ -83,10 +83,18 @@ func (e *Env) InstallFromMarket(admin *Session, key, version string) gjson.Resul
 	return reviewOf(e, d)
 }
 
-// UploadPlugin uploads a package and returns the raw response.
+// UploadPlugin uploads a package and returns the raw response. A 409
+// cluster_change_busy (another cluster change, such as the previous test's
+// uninstall, is being submitted) is retried for a while.
 func (e *Env) UploadPlugin(admin *Session, filename string, data []byte) *Resp {
 	e.T.Helper()
-	return admin.Upload(e.T, "/plugins/upload", "file", filename, data)
+	var r *Resp
+	for deadline := time.Now().Add(20 * time.Second); ; time.Sleep(time.Second) {
+		r = admin.Upload(e.T, "/plugins/upload", "file", filename, data)
+		if r.ErrCode() != "cluster_change_busy" || time.Now().After(deadline) {
+			return r
+		}
+	}
 }
 
 func reviewOf(e *Env, d gjson.Result) gjson.Result {

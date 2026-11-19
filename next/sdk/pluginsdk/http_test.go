@@ -2,6 +2,7 @@ package pluginsdk
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
@@ -192,5 +193,25 @@ func TestRouterZeroValue(t *testing.T) {
 	}
 	if got := string(resp.GetBody()); got != `{"data":"x"}` {
 		t.Fatalf("body = %s", got)
+	}
+}
+
+// The ticket of a route call is read from its own body: a call without one,
+// or with a body that is not JSON, is refused.
+func TestRouteProxyTicket(t *testing.T) {
+	for _, tc := range []struct{ body, ticket, field string }{
+		{`{"proxy_ticket":"t-1","session_id":"s"}`, "t-1", ""},
+		{`{"session_id":"s"}`, "", "proxy_ticket"},
+		{`{"proxy_ticket":"  "}`, "", "proxy_ticket"},
+		{``, "", "proxy_ticket"},
+		{`{`, "", "body"},
+	} {
+		ticket, refused := RouteProxyTicket(&pluginv1.HTTPRequest{Body: []byte(tc.body)})
+		switch {
+		case tc.field == "" && (refused != nil || ticket != tc.ticket):
+			t.Errorf("%q: ticket %q, refused %v", tc.body, ticket, refused)
+		case tc.field != "" && (refused == nil || refused.GetStatus() != 400 || !strings.Contains(string(refused.GetBody()), `"field":"`+tc.field+`"`)):
+			t.Errorf("%q: want a 400 on %s, got %v", tc.body, tc.field, refused)
+		}
 	}
 }

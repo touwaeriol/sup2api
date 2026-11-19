@@ -52,7 +52,7 @@ manifest `accountTypes[].commonControls`：键 = 通用项名，值 = 声明。
 - `@sub2api/host`：`HOST_UI_VERSION` 3.6.0 → 3.7.0；`PluginHost.components`（只读对象）提供 `ParamOverrideEditor`、`RateLimitEditor`（rpm/tpm/spm，2026-11-11 起会话数一行带会话周期 `spm_window_seconds`，只在给过或改过时出现在 v-model 里）、`ModelLimitsEditor`、`HeaderPassthroughEditor`、`ProxyPicker`、`ModelMappingEditor`（3.7 另有账号上游编辑器 `UpstreamEditor`，UI 3.18 随内置插件 custom 删除，CONTRACTS §106），props 与 v-model 形状和账号接口字段一致；用到的插件声明 `hostUICompat: "^3.7"`（sdk/manifest check 按 3.7 要求核心下限为本期核心版本）。
 - UI 3.11 起 `PluginHost.components` 另有 `EntityPicker`（按名称或 ID 选用户、分组、API Key、账号、模型、代理），见 §6。
 - UI 3.19 起另有 `HeaderOverrideEditor`（v-model 为 `header_override` 对象或 `null`，接受 `disabled`），`ParamOverrideEditor` 另收可选的 `headerOverride`（试运行的初始请求头）；用到的插件声明 `hostUICompat: "^3.19"`，`hostCompat` 高于 0.1.302（CONTRACTS §108.3）。
-- schema 表单控件（`web/src/components/schema/widgets.ts`）：新增 `param-override`、`header-passthrough`、`rate-limits`、`model-limits`、`model-mapping`（`proxy-select` 已有；UI 3.19 另有 `header-override`），插件设置和账号凭证表单都能用；数据格式即核心执行格式，校验在插件自己的设置接口里用 SDK 同一套规则（`sdk/paramoverride` 等）。
+- schema 表单控件（当时在 `web/src/components/schema/widgets.ts`）：`param-override`、`header-passthrough`、`rate-limits`、`model-limits`、`model-mapping`（另有 `proxy-select`；UI 3.19 另有 `header-override`）。UI 4.0 删除 `SchemaForm` 时随之删除（2026-11-19，插件界面只用代码写），原生表单直接用上面的 `host.components`。数据格式即核心执行格式，校验在插件自己的接口里用 SDK 同一套规则（`sdk/paramoverride` 等）。
 - 规则：组件产出的格式就是核心执行的格式，插件不自己解释；凭证头、逐跳头仍在 §81 禁止列表。
 
 ## 4. 编辑页分区插槽
@@ -143,7 +143,7 @@ name('user', 7)       // 'zhangsan@example.com' | undefined
 - `disabled` 时标签不能关闭、没有选择器；此时一个都没选显示“—”。
 - 没有查找权限时“添加”选择器是 `EntityPicker` 退化成的文本框：输入 id 后回车或离开即追加，框清空。这个回车不会提交外层的 `<form>`（框是空的时候回车照常交给表单）。
 - 粘贴一串 id（逗号、空白或换行分隔，两个以上）一次全部追加：已选的、重复的、不是 id 的跳过，到 `max` 为止；两种形态都支持（它替换的标签输入框能这样批量维护名单）。只粘贴一个词时交给选择器，当作搜索词。
-- 宽度随所在位置（最窄 12rem），标签和选择器放不下就换行；它不会把窄表单（手机）撑宽。**直接把单选的 `EntityPicker` 放进表单网格时**要自己保证这一点：它是带图标、`#id`、× 的文本框，选中后的自然宽度有三百多像素，放在没有 `min-w-0` / `grid-cols-1` 的网格格子里会把一列撑出手机屏幕。表单里优先用下面的 `EntityInput` 或 schema 部件，它们已经处理了。
+- 宽度随所在位置（最窄 12rem），标签和选择器放不下就换行；它不会把窄表单（手机）撑宽。**直接把单选的 `EntityPicker` 放进表单网格时**要自己保证这一点：它是带图标、`#id`、× 的文本框，选中后的自然宽度有三百多像素，放在没有 `min-w-0` / `grid-cols-1` 的网格格子里会把一列撑出手机屏幕。控制台的表单里优先用下面的 `EntityInput`，它已经处理了（原来的 schema 部件在 UI 4.0 删除，§6.3）。
 
 ### 6.2 表单里的值：EntityInput、GroupPicker、ProxyPicker
 
@@ -153,27 +153,12 @@ name('user', 7)       // 'zhangsan@example.com' | undefined
 |---|---|---|
 | `EntityInput` | `kind` + `v-model`；`multiple` 时是数组，否则是一个 id；`numeric` 时 id 存成数字、未选是 `null`，否则存字符串、未选是 `''` | 读的时候 `null`、`''`、`0` 都算未选；另有 `placeholder`、`mine`、`max`、`disabled` |
 | `GroupPicker` | `number[]`（`multiple`）或 `number \| null` | `kind="group"`；对外用法与改造前相同 |
-| `ProxyPicker`（也是 `host.components.ProxyPicker`） | `number \| null`，`null` = 不使用代理 | `kind="proxy"`，占位“不使用代理”（`schema.noProxy`），点 × 回到不使用代理；调用者看不到的已选代理显示成 `#id` 并保持选中 |
+| `ProxyPicker`（也是 `host.components.ProxyPicker`） | `number \| null`，`null` = 不使用代理 | `kind="proxy"`，占位“不使用代理”（`common.noProxy`），点 × 回到不使用代理；调用者看不到的已选代理显示成 `#id` 并保持选中 |
 
 2026-11（核心 0.1.280）起 `GroupPicker`、`ProxyPicker` 不再各自拉 `/groups`、`/proxies` 的前 200 条拼下拉，候选和名称都来自查找接口，所以分组、代理再多也能搜到。`composables/lookups.ts` 的 `useGroupsLookup` / `useProxiesLookup` 还在，给需要整行数据（分组的转换策略、代理的地址）的页面用；它们被强制刷新（页面改了分组或代理之后）时，会顺带丢掉选择器缓存的这类实体的名称（`forgetEntityNames(kind)`），改名后标签不会停在旧名字上。
 
 弹窗（`SModal`）打开时会聚焦第一个控件，而可搜索选择器一聚焦就展开列表。弹窗的第一个控件是选择器时，在调用处给别的控件加 `data-autofocus`（用户的“分配分组”弹窗把它放在“取消”上；调整余额弹窗在已带用户时放在金额上）。
 
-### 6.3 schema 部件：`entity-select`、`group-select`、`proxy-select`
+### 6.3 schema 部件：`entity-select`、`group-select`、`proxy-select`（已删除，UI 4.0）
 
-`web/src/components/schema/widgets.ts` 注册，启动时注入所有 `SchemaForm`（账号凭据 schema、插件设置、声明式表单页、原生插件自己的 `SchemaForm`）。
-
-```json
-{
-  "owner_id":  { "ui:widget": "entity-select", "ui:options": { "kind": "user" } },
-  "group_ids": { "ui:widget": "entity-select", "ui:options": { "kind": "group", "max": 3 } },
-  "model":     { "ui:widget": "entity-select", "ui:options": { "kind": "model", "mine": true } }
-}
-```
-
-- `entity-select`（UI 3.12）：`ui:options.kind` 是上表的 kind。schema 是 `array` → 多选（`EntityMultiPicker`），否则 → 单选（`EntityPicker`，只绑 id）。
-- 值的类型跟随 schema：`items.type`（数组）或字段自己的 `type` 是 `integer` / `number` 时读写数字，否则读写字符串（`["integer", "null"]` 这类可空写法按非空的那个算）。单选未选时写 `null`（数字）或 `''`（字符串）；读的时候 `null`、`''`、`0` 都当未选。
-- `ui:options` 还可带 `mine: true`、`max`（多选上限；它只管界面，`maxItems` 仍由 schema 校验）。字段的 `readOnly` / `ui:readonly` 即禁用。
-- `kind` 缺失或不是上表之一时不渲染控件（只剩标签）。
-- `group-select`、`proxy-select` 是固定 kind 的同一个东西（`GroupPicker`、`ProxyPicker`），值分别是 `number[]`（或单个 `number | null`）和 `number | null`。
-- **旧核心**（UI 3.11 及更早，没有 `entity-select`）遇到不认识的部件名时 `SchemaForm` 按 schema 类型推断控件（开发模式下控制台警告一次）：整数字段是数字框，字符串字段是文本框，数组字段是标签输入框——标签输入框写的是字符串，对整数数组会写出 `["3"]`。用这个部件的插件把 `hostCompat` 下限定在 `>=0.1.280` 就不会落到这条路径。`sdk/manifest/check` 不校验 `ui:widget` 的名字（没有白名单）。
+UI 4.0（核心 0.1.304，插件界面只用代码写）删除了 `SchemaForm`，这三个部件和 `web/src/components/schema/widgets.ts` 一起删除。插件的原生表单直接用 `host.components` 的 `EntityPicker`（单选，选分组写 `kind="group"`）、`EntityMultiPicker`（多选）、`ProxyPicker`；控制台自己的表单用 `EntityInput`、`GroupPicker`、`ProxyPicker`（§6.1、§6.2）。本节原文见 `git show 99bc835a7:next/docs/COMMON-CONTROLS.md`。

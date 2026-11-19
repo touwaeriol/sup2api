@@ -51,17 +51,33 @@ type HostServiceClient interface {
 	Notify(ctx context.Context, in *NotifyRequest, opts ...grpc.CallOption) (*NotifyResponse, error)
 	// Pure local tokenization. No upstream traffic and no billing side effects.
 	CountTokens(ctx context.Context, in *CountTokensRequest, opts ...grpc.CallOption) (*CountTokensResponse, error)
-	// These callbacks are authorized only by an active Execute/Monitor scope,
-	// bound to the calling process, selected account and immutable attribution.
-	// No monetary amount, user identity or account selector is accepted.
-	ForwardUpstream(ctx context.Context, in *ForwardUpstreamRequest, opts ...grpc.CallOption) (*ForwardUpstreamResponse, error)
-	RecordUsage(ctx context.Context, in *RecordUsageRequest, opts ...grpc.CallOption) (*ExecutionReceipt, error)
-	// Submission usage, optional precharge and the durable polling registration
-	// commit together. Success must precede publishing the submission response.
-	ReserveAndWatch(ctx context.Context, in *ReserveAndWatchRequest, opts ...grpc.CallOption) (*ExecutionReceipt, error)
-	// Atomically persists progress; terminal reports settle/refund and close
-	// monitoring in the same transaction. Repeating the same report is safe.
-	ReportTaskProgress(ctx context.Context, in *ReportTaskProgressRequest, opts ...grpc.CallOption) (*ExecutionReceipt, error)
+	// The host's HTTP client for one PlatformService.Execute call (relay) and
+	// for Execute and Monitor calls (ExecuteHTTP, the fetch form). A plugin
+	// opens no socket: it describes the request and the host sends it under
+	// the account of the call - its proxy, transport, SSRF guard, timeouts
+	// and the operator's header settings. Authority is the call's
+	// execution token, bound to the calling process, the selected account and
+	// immutable attribution, and void once the call returns. No monetary
+	// amount, user identity or account selector is accepted, and the host
+	// never retries: retry and failover are its own decision per attempt.
+	//
+	// RelayUpstream hands over the FINAL upstream request of the execution;
+	// the upstream's answer goes to the client, never to the plugin. At most
+	// one per execution, in one of two forms:
+	//   - wait = false: the host validates the request (URL and its host,
+	//     SSRF name check, headers) and answers at once with an empty
+	//     response. Nothing is sent until Execute returns
+	//     host_usage; the host then sends, relays and reads the usage by the
+	//     declared rules. An Execute that fails or returns anything else
+	//     after this leaves the request unsent.
+	//   - wait = true: the host sends and relays now and answers when the
+	//     exchange has ended, with the observation of a successful answer
+	//     (the whole body, or the listed events of a stream) or the facts of
+	//     a failed one. Only for executions whose
+	//     ExecuteRequest sets extract_usage or task_submission; otherwise
+	//     FAILED_PRECONDITION.
+	// A request the host refuses is INVALID_ARGUMENT and counts as not relayed.
+	RelayUpstream(ctx context.Context, in *RelayUpstreamRequest, opts ...grpc.CallOption) (*RelayUpstreamResponse, error)
 	// log (always granted)
 	Log(ctx context.Context, in *LogRequest, opts ...grpc.CallOption) (*LogResponse, error)
 	// kv (grant "kv"): Redis-backed, namespaced per plugin.
@@ -101,13 +117,17 @@ type HostServiceClient interface {
 	// model price table, exactly as gateway settlement would before the group
 	// multiplier. Read only: nothing is charged or recorded (CONTRACTS §72.13.1).
 	PriceUsage(ctx context.Context, in *PriceUsageRequest, opts ...grpc.CallOption) (*PriceUsageResponse, error)
-	// db.schema: restricted DSN for the plugin schema. The connection must go
-	// through EgressService (the SDK dialer does this automatically).
+	// db.schema: the DSN of the plugin schema (CONTRACTS §115). Behind the
+	// egress tunnel it is the virtual address db.sub2api:5432 without
+	// credentials, which the core logs in to as its own database user with
+	// search_path on the schema; without the tunnel (development) it is the
+	// core's DSN with search_path pinned. The SDK dialer goes through
+	// EgressService automatically.
 	GetDSN(ctx context.Context, in *GetDSNRequest, opts ...grpc.CallOption) (*GetDSNResponse, error)
 	// authz: does a console user hold a permission? Own keys always; others
 	// need authz.read.
 	AuthzCheck(ctx context.Context, in *AuthzCheckRequest, opts ...grpc.CallOption) (*AuthzCheckResponse, error)
-	// accounts.read: which accounts may the caller of a request act on? The
+	// Always granted: which accounts may the caller of a request act on? The
 	// answer is the core's own account scope rule (CONTRACTS §21.0), so a
 	// plugin route applies it instead of deciding by itself. user_id must be
 	// the Caller of an HTTPService.HandleHTTP request this plugin is serving
@@ -189,28 +209,56 @@ type HostServiceClient interface {
 	// never taken is not an error. UNAVAILABLE means the host could not tell
 	// whether it was released; it then lapses after its ttl (or retry).
 	LockRelease(ctx context.Context, in *LockReleaseRequest, opts ...grpc.CallOption) (*LockReleaseResponse, error)
-	// accounts.read (Medium): metadata of the accounts of this plugin's account
-	// types. The response carries no credential field of any kind; it is the
-	// list a plugin needs to offer "pick an account" in its own console page.
-	// Paginated: at most 200 rows per call (100 by default).
+	// Metadata of the accounts of this plugin's account types; a plugin that
+	// declares none gets an empty list. It is the list a plugin needs to offer
+	// "pick an account" in its own console page. Paginated: at most 200 rows
+	// per call (100 by default).
 	ListAccounts(ctx context.Context, in *ListAccountsRequest, opts ...grpc.CallOption) (*ListAccountsResponse, error)
-	// accounts.credentials {"types":"own"} (Critical): the decrypted credentials
-	// of ONE account of this plugin's account types. Audited on every call.
-	GetAccountCredentials(ctx context.Context, in *GetAccountCredentialsRequest, opts ...grpc.CallOption) (*GetAccountCredentialsResponse, error)
-	// One bounded HTTP observation on behalf of an active Poll invocation.
-	// Authority comes from an opaque token bound to this exact plugin process,
-	// account and invocation, not from a generic net/accounts permission.
-	// The host enforces cancellation, the account proxy, limits and SSRF checks.
-	// A token permits at most one HTTP request; redirects are not followed.
+	// The account of this plugin's own account types, as PlatformService calls
+	// receive it: properties, settings, decrypted credentials and the proxy
+	// (CONTRACTS §124). Another plugin's account, a deleted one or none at all
+	// is NOT_FOUND. Audited on every call: the audit_logs row is written before
+	// the account is returned, and a failed write fails the call. The proxy is
+	// data: the plugin never connects through it itself.
+	GetAccount(ctx context.Context, in *GetAccountRequest, opts ...grpc.CallOption) (*GetAccountResponse, error)
+	// The fetch form of the host's HTTP client: one non-streaming
+	// HTTP exchange whose answer goes back to the plugin. For the auxiliary
+	// requests of an Execute call (token exchange, upload, preflight) and the
+	// upstream query of a Monitor call. Authority comes from the call's
+	// execution token, not from a generic net/accounts permission.
+	//
+	// The URL must be http(s). Its host must be one of the manifest's
+	// externalServices (or a subdomain of one), or the host of one of the
+	// call's own account's upstream addresses: the values of the address
+	// fields its account type declares (manifest upstreamFields), so that an
+	// account an operator pointed at a relay can be queried there. No other
+	// host is reachable. In both cases the host sends the request through the
+	// account's proxy behind the SSRF guard - an account address naming a
+	// private target is refused like any other unless the account's scope
+	// allows it -, without the operator's header passthrough and override
+	// (those describe the client's request, which this is not), and does not
+	// follow redirects. The host neither counts the requests of a call nor
+	// cuts their answers: the answer body comes back whole; nor does it bound
+	// the request body (the request body limit applies to the client's
+	// request in the gateway only). A transport
+	// failure is not an RPC error: it comes back in transport_error with
+	// status 0.
+	//
+	// A console route call (HTTPRequest.execution_token) may fetch too, for
+	// the authorization of an account not saved yet: it has no account, so
+	// only externalServices are reachable, and every fetch names the proxy
+	// ticket the console issued (ExecutionHTTPRequest.proxy_ticket, CONTRACTS
+	// §117).
 	ExecuteHTTP(ctx context.Context, in *ExecutionHTTPRequest, opts ...grpc.CallOption) (*ExecutionHTTPResponse, error)
-	// accounts.credentials {"types":"own"} (Critical): one bounded HTTP request
-	// for ONE account of this plugin's account types, sent by the host through
-	// that account's proxy (behind netguard for a direct connection), the same
-	// way as the quota and refresh requests the plugin describes (CONTRACTS
-	// §91). The URL must be http(s) and its host one of the manifest's
-	// externalServices (or a subdomain of one). Redirects are not followed;
-	// the answer body is capped at 64 KiB (truncated set). A transport failure
-	// is not an RPC error: it comes back in transport_error with status 0.
+	// One HTTP request for ONE account of this plugin's account types, sent
+	// by the host through that account's proxy (behind netguard for a direct
+	// connection), the same way as the quota and refresh requests the plugin
+	// describes (CONTRACTS §91). The URL must be http(s) and its host one of
+	// the manifest's externalServices (or a subdomain of one) or the host of
+	// one of the account's own upstream addresses (manifest upstreamFields;
+	// CONTRACTS §112.17). Redirects are not followed; the answer body comes back whole.
+	// A transport failure is not an RPC error: it comes back in
+	// transport_error with status 0.
 	// Audited on every call (account, method, host and path; never headers or
 	// bodies).
 	SendAccountRequest(ctx context.Context, in *SendAccountRequestRequest, opts ...grpc.CallOption) (*ExecutionHTTPResponse, error)
@@ -305,36 +353,9 @@ func (c *hostServiceClient) CountTokens(ctx context.Context, in *CountTokensRequ
 	return out, nil
 }
 
-func (c *hostServiceClient) ForwardUpstream(ctx context.Context, in *ForwardUpstreamRequest, opts ...grpc.CallOption) (*ForwardUpstreamResponse, error) {
-	out := new(ForwardUpstreamResponse)
-	err := c.cc.Invoke(ctx, "/sub2api.plugin.v1.HostService/ForwardUpstream", in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *hostServiceClient) RecordUsage(ctx context.Context, in *RecordUsageRequest, opts ...grpc.CallOption) (*ExecutionReceipt, error) {
-	out := new(ExecutionReceipt)
-	err := c.cc.Invoke(ctx, "/sub2api.plugin.v1.HostService/RecordUsage", in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *hostServiceClient) ReserveAndWatch(ctx context.Context, in *ReserveAndWatchRequest, opts ...grpc.CallOption) (*ExecutionReceipt, error) {
-	out := new(ExecutionReceipt)
-	err := c.cc.Invoke(ctx, "/sub2api.plugin.v1.HostService/ReserveAndWatch", in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *hostServiceClient) ReportTaskProgress(ctx context.Context, in *ReportTaskProgressRequest, opts ...grpc.CallOption) (*ExecutionReceipt, error) {
-	out := new(ExecutionReceipt)
-	err := c.cc.Invoke(ctx, "/sub2api.plugin.v1.HostService/ReportTaskProgress", in, out, opts...)
+func (c *hostServiceClient) RelayUpstream(ctx context.Context, in *RelayUpstreamRequest, opts ...grpc.CallOption) (*RelayUpstreamResponse, error) {
+	out := new(RelayUpstreamResponse)
+	err := c.cc.Invoke(ctx, "/sub2api.plugin.v1.HostService/RelayUpstream", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -575,9 +596,9 @@ func (c *hostServiceClient) ListAccounts(ctx context.Context, in *ListAccountsRe
 	return out, nil
 }
 
-func (c *hostServiceClient) GetAccountCredentials(ctx context.Context, in *GetAccountCredentialsRequest, opts ...grpc.CallOption) (*GetAccountCredentialsResponse, error) {
-	out := new(GetAccountCredentialsResponse)
-	err := c.cc.Invoke(ctx, "/sub2api.plugin.v1.HostService/GetAccountCredentials", in, out, opts...)
+func (c *hostServiceClient) GetAccount(ctx context.Context, in *GetAccountRequest, opts ...grpc.CallOption) (*GetAccountResponse, error) {
+	out := new(GetAccountResponse)
+	err := c.cc.Invoke(ctx, "/sub2api.plugin.v1.HostService/GetAccount", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -635,17 +656,33 @@ type HostServiceServer interface {
 	Notify(context.Context, *NotifyRequest) (*NotifyResponse, error)
 	// Pure local tokenization. No upstream traffic and no billing side effects.
 	CountTokens(context.Context, *CountTokensRequest) (*CountTokensResponse, error)
-	// These callbacks are authorized only by an active Execute/Monitor scope,
-	// bound to the calling process, selected account and immutable attribution.
-	// No monetary amount, user identity or account selector is accepted.
-	ForwardUpstream(context.Context, *ForwardUpstreamRequest) (*ForwardUpstreamResponse, error)
-	RecordUsage(context.Context, *RecordUsageRequest) (*ExecutionReceipt, error)
-	// Submission usage, optional precharge and the durable polling registration
-	// commit together. Success must precede publishing the submission response.
-	ReserveAndWatch(context.Context, *ReserveAndWatchRequest) (*ExecutionReceipt, error)
-	// Atomically persists progress; terminal reports settle/refund and close
-	// monitoring in the same transaction. Repeating the same report is safe.
-	ReportTaskProgress(context.Context, *ReportTaskProgressRequest) (*ExecutionReceipt, error)
+	// The host's HTTP client for one PlatformService.Execute call (relay) and
+	// for Execute and Monitor calls (ExecuteHTTP, the fetch form). A plugin
+	// opens no socket: it describes the request and the host sends it under
+	// the account of the call - its proxy, transport, SSRF guard, timeouts
+	// and the operator's header settings. Authority is the call's
+	// execution token, bound to the calling process, the selected account and
+	// immutable attribution, and void once the call returns. No monetary
+	// amount, user identity or account selector is accepted, and the host
+	// never retries: retry and failover are its own decision per attempt.
+	//
+	// RelayUpstream hands over the FINAL upstream request of the execution;
+	// the upstream's answer goes to the client, never to the plugin. At most
+	// one per execution, in one of two forms:
+	//   - wait = false: the host validates the request (URL and its host,
+	//     SSRF name check, headers) and answers at once with an empty
+	//     response. Nothing is sent until Execute returns
+	//     host_usage; the host then sends, relays and reads the usage by the
+	//     declared rules. An Execute that fails or returns anything else
+	//     after this leaves the request unsent.
+	//   - wait = true: the host sends and relays now and answers when the
+	//     exchange has ended, with the observation of a successful answer
+	//     (the whole body, or the listed events of a stream) or the facts of
+	//     a failed one. Only for executions whose
+	//     ExecuteRequest sets extract_usage or task_submission; otherwise
+	//     FAILED_PRECONDITION.
+	// A request the host refuses is INVALID_ARGUMENT and counts as not relayed.
+	RelayUpstream(context.Context, *RelayUpstreamRequest) (*RelayUpstreamResponse, error)
 	// log (always granted)
 	Log(context.Context, *LogRequest) (*LogResponse, error)
 	// kv (grant "kv"): Redis-backed, namespaced per plugin.
@@ -685,13 +722,17 @@ type HostServiceServer interface {
 	// model price table, exactly as gateway settlement would before the group
 	// multiplier. Read only: nothing is charged or recorded (CONTRACTS §72.13.1).
 	PriceUsage(context.Context, *PriceUsageRequest) (*PriceUsageResponse, error)
-	// db.schema: restricted DSN for the plugin schema. The connection must go
-	// through EgressService (the SDK dialer does this automatically).
+	// db.schema: the DSN of the plugin schema (CONTRACTS §115). Behind the
+	// egress tunnel it is the virtual address db.sub2api:5432 without
+	// credentials, which the core logs in to as its own database user with
+	// search_path on the schema; without the tunnel (development) it is the
+	// core's DSN with search_path pinned. The SDK dialer goes through
+	// EgressService automatically.
 	GetDSN(context.Context, *GetDSNRequest) (*GetDSNResponse, error)
 	// authz: does a console user hold a permission? Own keys always; others
 	// need authz.read.
 	AuthzCheck(context.Context, *AuthzCheckRequest) (*AuthzCheckResponse, error)
-	// accounts.read: which accounts may the caller of a request act on? The
+	// Always granted: which accounts may the caller of a request act on? The
 	// answer is the core's own account scope rule (CONTRACTS §21.0), so a
 	// plugin route applies it instead of deciding by itself. user_id must be
 	// the Caller of an HTTPService.HandleHTTP request this plugin is serving
@@ -773,28 +814,56 @@ type HostServiceServer interface {
 	// never taken is not an error. UNAVAILABLE means the host could not tell
 	// whether it was released; it then lapses after its ttl (or retry).
 	LockRelease(context.Context, *LockReleaseRequest) (*LockReleaseResponse, error)
-	// accounts.read (Medium): metadata of the accounts of this plugin's account
-	// types. The response carries no credential field of any kind; it is the
-	// list a plugin needs to offer "pick an account" in its own console page.
-	// Paginated: at most 200 rows per call (100 by default).
+	// Metadata of the accounts of this plugin's account types; a plugin that
+	// declares none gets an empty list. It is the list a plugin needs to offer
+	// "pick an account" in its own console page. Paginated: at most 200 rows
+	// per call (100 by default).
 	ListAccounts(context.Context, *ListAccountsRequest) (*ListAccountsResponse, error)
-	// accounts.credentials {"types":"own"} (Critical): the decrypted credentials
-	// of ONE account of this plugin's account types. Audited on every call.
-	GetAccountCredentials(context.Context, *GetAccountCredentialsRequest) (*GetAccountCredentialsResponse, error)
-	// One bounded HTTP observation on behalf of an active Poll invocation.
-	// Authority comes from an opaque token bound to this exact plugin process,
-	// account and invocation, not from a generic net/accounts permission.
-	// The host enforces cancellation, the account proxy, limits and SSRF checks.
-	// A token permits at most one HTTP request; redirects are not followed.
+	// The account of this plugin's own account types, as PlatformService calls
+	// receive it: properties, settings, decrypted credentials and the proxy
+	// (CONTRACTS §124). Another plugin's account, a deleted one or none at all
+	// is NOT_FOUND. Audited on every call: the audit_logs row is written before
+	// the account is returned, and a failed write fails the call. The proxy is
+	// data: the plugin never connects through it itself.
+	GetAccount(context.Context, *GetAccountRequest) (*GetAccountResponse, error)
+	// The fetch form of the host's HTTP client: one non-streaming
+	// HTTP exchange whose answer goes back to the plugin. For the auxiliary
+	// requests of an Execute call (token exchange, upload, preflight) and the
+	// upstream query of a Monitor call. Authority comes from the call's
+	// execution token, not from a generic net/accounts permission.
+	//
+	// The URL must be http(s). Its host must be one of the manifest's
+	// externalServices (or a subdomain of one), or the host of one of the
+	// call's own account's upstream addresses: the values of the address
+	// fields its account type declares (manifest upstreamFields), so that an
+	// account an operator pointed at a relay can be queried there. No other
+	// host is reachable. In both cases the host sends the request through the
+	// account's proxy behind the SSRF guard - an account address naming a
+	// private target is refused like any other unless the account's scope
+	// allows it -, without the operator's header passthrough and override
+	// (those describe the client's request, which this is not), and does not
+	// follow redirects. The host neither counts the requests of a call nor
+	// cuts their answers: the answer body comes back whole; nor does it bound
+	// the request body (the request body limit applies to the client's
+	// request in the gateway only). A transport
+	// failure is not an RPC error: it comes back in transport_error with
+	// status 0.
+	//
+	// A console route call (HTTPRequest.execution_token) may fetch too, for
+	// the authorization of an account not saved yet: it has no account, so
+	// only externalServices are reachable, and every fetch names the proxy
+	// ticket the console issued (ExecutionHTTPRequest.proxy_ticket, CONTRACTS
+	// §117).
 	ExecuteHTTP(context.Context, *ExecutionHTTPRequest) (*ExecutionHTTPResponse, error)
-	// accounts.credentials {"types":"own"} (Critical): one bounded HTTP request
-	// for ONE account of this plugin's account types, sent by the host through
-	// that account's proxy (behind netguard for a direct connection), the same
-	// way as the quota and refresh requests the plugin describes (CONTRACTS
-	// §91). The URL must be http(s) and its host one of the manifest's
-	// externalServices (or a subdomain of one). Redirects are not followed;
-	// the answer body is capped at 64 KiB (truncated set). A transport failure
-	// is not an RPC error: it comes back in transport_error with status 0.
+	// One HTTP request for ONE account of this plugin's account types, sent
+	// by the host through that account's proxy (behind netguard for a direct
+	// connection), the same way as the quota and refresh requests the plugin
+	// describes (CONTRACTS §91). The URL must be http(s) and its host one of
+	// the manifest's externalServices (or a subdomain of one) or the host of
+	// one of the account's own upstream addresses (manifest upstreamFields;
+	// CONTRACTS §112.17). Redirects are not followed; the answer body comes back whole.
+	// A transport failure is not an RPC error: it comes back in
+	// transport_error with status 0.
 	// Audited on every call (account, method, host and path; never headers or
 	// bodies).
 	SendAccountRequest(context.Context, *SendAccountRequestRequest) (*ExecutionHTTPResponse, error)
@@ -832,17 +901,8 @@ func (UnimplementedHostServiceServer) Notify(context.Context, *NotifyRequest) (*
 func (UnimplementedHostServiceServer) CountTokens(context.Context, *CountTokensRequest) (*CountTokensResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CountTokens not implemented")
 }
-func (UnimplementedHostServiceServer) ForwardUpstream(context.Context, *ForwardUpstreamRequest) (*ForwardUpstreamResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ForwardUpstream not implemented")
-}
-func (UnimplementedHostServiceServer) RecordUsage(context.Context, *RecordUsageRequest) (*ExecutionReceipt, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method RecordUsage not implemented")
-}
-func (UnimplementedHostServiceServer) ReserveAndWatch(context.Context, *ReserveAndWatchRequest) (*ExecutionReceipt, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ReserveAndWatch not implemented")
-}
-func (UnimplementedHostServiceServer) ReportTaskProgress(context.Context, *ReportTaskProgressRequest) (*ExecutionReceipt, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ReportTaskProgress not implemented")
+func (UnimplementedHostServiceServer) RelayUpstream(context.Context, *RelayUpstreamRequest) (*RelayUpstreamResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RelayUpstream not implemented")
 }
 func (UnimplementedHostServiceServer) Log(context.Context, *LogRequest) (*LogResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Log not implemented")
@@ -922,8 +982,8 @@ func (UnimplementedHostServiceServer) LockRelease(context.Context, *LockReleaseR
 func (UnimplementedHostServiceServer) ListAccounts(context.Context, *ListAccountsRequest) (*ListAccountsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListAccounts not implemented")
 }
-func (UnimplementedHostServiceServer) GetAccountCredentials(context.Context, *GetAccountCredentialsRequest) (*GetAccountCredentialsResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetAccountCredentials not implemented")
+func (UnimplementedHostServiceServer) GetAccount(context.Context, *GetAccountRequest) (*GetAccountResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetAccount not implemented")
 }
 func (UnimplementedHostServiceServer) ExecuteHTTP(context.Context, *ExecutionHTTPRequest) (*ExecutionHTTPResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ExecuteHTTP not implemented")
@@ -1106,74 +1166,20 @@ func _HostService_CountTokens_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
-func _HostService_ForwardUpstream_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ForwardUpstreamRequest)
+func _HostService_RelayUpstream_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RelayUpstreamRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(HostServiceServer).ForwardUpstream(ctx, in)
+		return srv.(HostServiceServer).RelayUpstream(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/sub2api.plugin.v1.HostService/ForwardUpstream",
+		FullMethod: "/sub2api.plugin.v1.HostService/RelayUpstream",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(HostServiceServer).ForwardUpstream(ctx, req.(*ForwardUpstreamRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _HostService_RecordUsage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RecordUsageRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(HostServiceServer).RecordUsage(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: "/sub2api.plugin.v1.HostService/RecordUsage",
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(HostServiceServer).RecordUsage(ctx, req.(*RecordUsageRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _HostService_ReserveAndWatch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ReserveAndWatchRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(HostServiceServer).ReserveAndWatch(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: "/sub2api.plugin.v1.HostService/ReserveAndWatch",
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(HostServiceServer).ReserveAndWatch(ctx, req.(*ReserveAndWatchRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _HostService_ReportTaskProgress_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ReportTaskProgressRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(HostServiceServer).ReportTaskProgress(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: "/sub2api.plugin.v1.HostService/ReportTaskProgress",
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(HostServiceServer).ReportTaskProgress(ctx, req.(*ReportTaskProgressRequest))
+		return srv.(HostServiceServer).RelayUpstream(ctx, req.(*RelayUpstreamRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1646,20 +1652,20 @@ func _HostService_ListAccounts_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
-func _HostService_GetAccountCredentials_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetAccountCredentialsRequest)
+func _HostService_GetAccount_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetAccountRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(HostServiceServer).GetAccountCredentials(ctx, in)
+		return srv.(HostServiceServer).GetAccount(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/sub2api.plugin.v1.HostService/GetAccountCredentials",
+		FullMethod: "/sub2api.plugin.v1.HostService/GetAccount",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(HostServiceServer).GetAccountCredentials(ctx, req.(*GetAccountCredentialsRequest))
+		return srv.(HostServiceServer).GetAccount(ctx, req.(*GetAccountRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1744,20 +1750,8 @@ var HostService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _HostService_CountTokens_Handler,
 		},
 		{
-			MethodName: "ForwardUpstream",
-			Handler:    _HostService_ForwardUpstream_Handler,
-		},
-		{
-			MethodName: "RecordUsage",
-			Handler:    _HostService_RecordUsage_Handler,
-		},
-		{
-			MethodName: "ReserveAndWatch",
-			Handler:    _HostService_ReserveAndWatch_Handler,
-		},
-		{
-			MethodName: "ReportTaskProgress",
-			Handler:    _HostService_ReportTaskProgress_Handler,
+			MethodName: "RelayUpstream",
+			Handler:    _HostService_RelayUpstream_Handler,
 		},
 		{
 			MethodName: "Log",
@@ -1864,8 +1858,8 @@ var HostService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _HostService_ListAccounts_Handler,
 		},
 		{
-			MethodName: "GetAccountCredentials",
-			Handler:    _HostService_GetAccountCredentials_Handler,
+			MethodName: "GetAccount",
+			Handler:    _HostService_GetAccount_Handler,
 		},
 		{
 			MethodName: "ExecuteHTTP",

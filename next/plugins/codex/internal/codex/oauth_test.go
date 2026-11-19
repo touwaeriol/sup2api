@@ -134,7 +134,7 @@ func TestDeviceFlow(t *testing.T) {
 		}
 		reply(200, `{"device_auth_id":"dev-1","usercode":"ABCD-1234","interval":"5"}`)(w, body)
 	})
-	r := h.Do("POST", "/auth/device/start", nil, map[string]any{})
+	r := h.Do("POST", "/auth/device/start", nil, startBody)
 	if r.GetStatus() != 200 {
 		t.Fatalf("start = %d %s", r.GetStatus(), r.GetBody())
 	}
@@ -149,7 +149,7 @@ func TestDeviceFlow(t *testing.T) {
 	}
 	poll := func() DevicePollResponse {
 		t.Helper()
-		r := h.Do("POST", "/auth/device/poll", nil, map[string]string{"session_id": start.SessionID})
+		r := h.Do("POST", "/auth/device/poll", nil, map[string]string{"proxy_ticket": testTicket, "session_id": start.SessionID})
 		if r.GetStatus() != 200 {
 			t.Fatalf("poll = %d %s", r.GetStatus(), r.GetBody())
 		}
@@ -227,21 +227,21 @@ func TestDeviceStartErrors(t *testing.T) {
 	iss := newFakeIssuer(t)
 	h := startPlugin(t, newTestPlugin(testEndpoints(iss.srv.URL)))
 	iss.on(pathUserCode, reply(404, `{"detail":"Not Found"}`))
-	r := h.Do("POST", "/auth/device/start", nil, nil)
+	r := h.Do("POST", "/auth/device/start", nil, startBody)
 	if r.GetStatus() != 400 || decodeError(t, r).Error.Code != "device_auth_disabled" || !strings.Contains(string(r.GetBody()), "Device code authorization") {
 		t.Fatalf("404 = %d %s", r.GetStatus(), r.GetBody())
 	}
 	iss.on(pathUserCode, reply(500, `{"error":{"message":"boom"}}`))
-	if r := h.Do("POST", "/auth/device/start", nil, nil); r.GetStatus() != 502 || decodeError(t, r).Error.Code != "upstream_error" {
+	if r := h.Do("POST", "/auth/device/start", nil, startBody); r.GetStatus() != 502 || decodeError(t, r).Error.Code != "upstream_error" {
 		t.Fatalf("500 = %d %s", r.GetStatus(), r.GetBody())
 	}
 	iss.on(pathUserCode, reply(200, `{"interval":"5"}`))
-	if r := h.Do("POST", "/auth/device/start", nil, nil); r.GetStatus() != 502 {
+	if r := h.Do("POST", "/auth/device/start", nil, startBody); r.GetStatus() != 502 {
 		t.Fatalf("incomplete = %d %s", r.GetStatus(), r.GetBody())
 	}
 	// A numeric interval and user_code are read too, and clamped.
 	iss.on(pathUserCode, reply(200, `{"device_auth_id":"d","user_code":"WXYZ","interval":600}`))
-	r = h.Do("POST", "/auth/device/start", nil, nil)
+	r = h.Do("POST", "/auth/device/start", nil, startBody)
 	var start DeviceStartResponse
 	mustData(t, r.GetBody(), &start)
 	if start.UserCode != "WXYZ" || start.Interval != maxInterval {
@@ -249,7 +249,7 @@ func TestDeviceStartErrors(t *testing.T) {
 	}
 	// The issuer cannot be reached.
 	iss.srv.Close()
-	if r := h.Do("POST", "/auth/device/start", nil, nil); r.GetStatus() != 502 || decodeError(t, r).Error.Code != "upstream_unavailable" {
+	if r := h.Do("POST", "/auth/device/start", nil, startBody); r.GetStatus() != 502 || decodeError(t, r).Error.Code != "upstream_unavailable" {
 		t.Fatalf("down = %d %s", r.GetStatus(), r.GetBody())
 	}
 }
@@ -262,7 +262,7 @@ func TestDevicePollStates(t *testing.T) {
 	h := startPlugin(t, p)
 	iss.on(pathUserCode, reply(200, `{"device_auth_id":"dev-1","user_code":"ABCD","interval":"5"}`))
 	start := func() string {
-		r := h.Do("POST", "/auth/device/start", nil, nil)
+		r := h.Do("POST", "/auth/device/start", nil, startBody)
 		var s DeviceStartResponse
 		mustData(t, r.GetBody(), &s)
 		return s.SessionID
@@ -270,7 +270,7 @@ func TestDevicePollStates(t *testing.T) {
 	poll := func(id string) DevicePollResponse {
 		t.Helper()
 		var out DevicePollResponse
-		mustData(t, h.Do("POST", "/auth/device/poll", nil, map[string]string{"session_id": id}).GetBody(), &out)
+		mustData(t, h.Do("POST", "/auth/device/poll", nil, map[string]string{"proxy_ticket": testTicket, "session_id": id}).GetBody(), &out)
 		return out
 	}
 
@@ -343,7 +343,7 @@ func TestRouteRequestErrors(t *testing.T) {
 		code  string
 	}{
 		{"/auth/device/poll", map[string]string{}, "session_id", "required"},
-		{"/auth/device/poll", map[string]string{"session_id": "  "}, "session_id", "required"},
+		{"/auth/device/poll", map[string]string{"proxy_ticket": testTicket, "session_id": "  "}, "session_id", "required"},
 		{"/auth/device/poll", "{not json", "body", "invalid_json"},
 		{"/auth/codex/exchange", map[string]string{"callback_url": "?code=x"}, "session_id", "required"},
 		{"/auth/codex/exchange", "{not json", "body", "invalid_json"},
@@ -368,11 +368,11 @@ func TestDevicePollLocked(t *testing.T) {
 	iss.on(pathDeviceToken, reply(200, `{"authorization_code":"code-1","code_verifier":"ver-1"}`))
 	iss.on(pathOAuthToken, reply(200, `{"access_token":"at-1","refresh_token":"rt-1","expires_in":60}`))
 	var start DeviceStartResponse
-	mustData(t, h.Do("POST", "/auth/device/start", nil, nil).GetBody(), &start)
+	mustData(t, h.Do("POST", "/auth/device/start", nil, startBody).GetBody(), &start)
 	poll := func() DevicePollResponse {
 		t.Helper()
 		var out DevicePollResponse
-		mustData(t, h.Do("POST", "/auth/device/poll", nil, map[string]string{"session_id": start.SessionID}).GetBody(), &out)
+		mustData(t, h.Do("POST", "/auth/device/poll", nil, map[string]string{"proxy_ticket": testTicket, "session_id": start.SessionID}).GetBody(), &out)
 		return out
 	}
 
@@ -402,7 +402,7 @@ func TestDevicePollLocked(t *testing.T) {
 
 func TestCodexStart(t *testing.T) {
 	h := startPlugin(t, newTestPlugin(testEndpoints("https://auth.example")))
-	r := h.Do("POST", "/auth/codex/start", nil, nil)
+	r := h.Do("POST", "/auth/codex/start", nil, startBody)
 	if r.GetStatus() != 200 {
 		t.Fatalf("start = %d %s", r.GetStatus(), r.GetBody())
 	}
@@ -450,12 +450,12 @@ func TestCodexExchange(t *testing.T) {
 	start := func() (string, url.Values) {
 		t.Helper()
 		var s CodexStartResponse
-		mustData(t, h.Do("POST", "/auth/codex/start", nil, nil).GetBody(), &s)
+		mustData(t, h.Do("POST", "/auth/codex/start", nil, startBody).GetBody(), &s)
 		u, _ := url.Parse(s.AuthorizeURL)
 		return s.SessionID, u.Query()
 	}
 	exchange := func(id, cb string) *pluginv1.HTTPResponse {
-		return h.Do("POST", "/auth/codex/exchange", nil, map[string]string{"session_id": id, "callback_url": cb})
+		return h.Do("POST", "/auth/codex/exchange", nil, map[string]string{"proxy_ticket": testTicket, "session_id": id, "callback_url": cb})
 	}
 	tok := idToken("me@example.com", "acct-1", "plus")
 	iss.on(pathOAuthToken, func(w http.ResponseWriter, body []byte) {
@@ -613,9 +613,9 @@ func TestSessionsBelongToTheirCaller(t *testing.T) {
 		reply(403, `{}`)(w, body)
 	})
 	var device DeviceStartResponse
-	mustData(t, h.Do("POST", "/auth/device/start", nil, map[string]any{}).GetBody(), &device)
+	mustData(t, h.Do("POST", "/auth/device/start", nil, startBody).GetBody(), &device)
 	var codex CodexStartResponse
-	mustData(t, h.Do("POST", "/auth/codex/start", nil, nil).GetBody(), &codex)
+	mustData(t, h.Do("POST", "/auth/codex/start", nil, startBody).GetBody(), &codex)
 	stored := func(ns, id string) bool {
 		kv, _ := h.Host.KVGet(context.Background(), &pluginv1.KVGetRequest{Namespace: ns, Key: id})
 		return kv.GetFound()
@@ -624,7 +624,7 @@ func TestSessionsBelongToTheirCaller(t *testing.T) {
 	for _, uid := range []int64{2, 0} {
 		for _, id := range []string{device.SessionID, "no-such-session"} {
 			var out DevicePollResponse
-			r := h.DoAs(uid, "POST", "/auth/device/poll", nil, map[string]string{"session_id": id})
+			r := h.DoAs(uid, "POST", "/auth/device/poll", nil, map[string]string{"proxy_ticket": testTicket, "session_id": id})
 			mustData(t, r.GetBody(), &out)
 			if r.GetStatus() != 200 || out.Status != pollExpired {
 				t.Fatalf("user %d poll of %q = %d %s, want expired", uid, id, r.GetStatus(), r.GetBody())
@@ -633,7 +633,7 @@ func TestSessionsBelongToTheirCaller(t *testing.T) {
 		u, _ := url.Parse(codex.AuthorizeURL)
 		cb := "?code=code-1&state=" + u.Query().Get("state")
 		for _, id := range []string{codex.SessionID, "no-such-session"} {
-			r := h.DoAs(uid, "POST", "/auth/codex/exchange", nil, map[string]string{"session_id": id, "callback_url": cb})
+			r := h.DoAs(uid, "POST", "/auth/codex/exchange", nil, map[string]string{"proxy_ticket": testTicket, "session_id": id, "callback_url": cb})
 			if r.GetStatus() != 404 || decodeError(t, r).Error.Code != "session_expired" {
 				t.Fatalf("user %d exchange of %q = %d %s, want 404 session_expired", uid, id, r.GetStatus(), r.GetBody())
 			}
@@ -650,7 +650,7 @@ func TestSessionsBelongToTheirCaller(t *testing.T) {
 		t.Fatalf("hold the lock: %v %v", r, err)
 	}
 	var locked DevicePollResponse
-	mustData(t, h.DoAs(2, "POST", "/auth/device/poll", nil, map[string]string{"session_id": device.SessionID}).GetBody(), &locked)
+	mustData(t, h.DoAs(2, "POST", "/auth/device/poll", nil, map[string]string{"proxy_ticket": testTicket, "session_id": device.SessionID}).GetBody(), &locked)
 	if locked.Status != pollExpired {
 		t.Fatalf("another user's poll of a locked session = %+v, want expired", locked)
 	}
@@ -660,7 +660,7 @@ func TestSessionsBelongToTheirCaller(t *testing.T) {
 
 	// A flow cannot be started without a caller.
 	for _, path := range []string{"/auth/device/start", "/auth/codex/start"} {
-		if r := h.DoAs(0, "POST", path, nil, map[string]any{}); r.GetStatus() != 401 {
+		if r := h.DoAs(0, "POST", path, nil, startBody); r.GetStatus() != 401 {
 			t.Fatalf("%s without a caller = %d %s", path, r.GetStatus(), r.GetBody())
 		}
 	}
@@ -668,7 +668,7 @@ func TestSessionsBelongToTheirCaller(t *testing.T) {
 	// The owner goes on as if nothing happened.
 	iss.on(pathDeviceToken, reply(403, `{"error":"authorization_pending"}`))
 	var out DevicePollResponse
-	mustData(t, h.Do("POST", "/auth/device/poll", nil, map[string]string{"session_id": device.SessionID}).GetBody(), &out)
+	mustData(t, h.Do("POST", "/auth/device/poll", nil, map[string]string{"proxy_ticket": testTicket, "session_id": device.SessionID}).GetBody(), &out)
 	if out.Status != pollPending {
 		t.Fatalf("owner poll after foreign attempts = %+v", out)
 	}

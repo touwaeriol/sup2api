@@ -318,68 +318,23 @@ func TestHookBreaker(t *testing.T) {
 	}
 }
 
-// A request above the plugin's receive limit leaves the breaker's failure
-// streak as it was; an oversize answer (small request) is the plugin's fault.
-func TestHookTooLargeRequestLeavesBreakerAlone(t *testing.T) {
+// A hook call the plugin's gRPC server refuses as too large is a failure like
+// any other: nothing about the size of a request is left out of the breaker
+// (the request body limit of the gateway settings is the only size limit).
+func TestHookReceiveLimitFailureCountsTowardBreaker(t *testing.T) {
 	e := newEnv(t)
 	h := &fakeHook{fn: func(context.Context, *pluginv1.GatewayRequestHookRequest) (*pluginv1.GatewayRequestHookResponse, error) {
-		return nil, status.Error(codes.ResourceExhausted, "grpc: received message larger than max")
+		return nil, status.Error(codes.ResourceExhausted, "grpc: received message larger than max (5000000 vs. 4194304)")
 	}}
 	e.addHook(guardHook(300, "open"), []string{"messages"}, h)
-	send := func(text string) {
+	for i := 0; i < breakerThreshold; i++ {
 		b := body(testModel, false)
-		b["messages"] = []any{map[string]any{"role": "user", "content": text}}
-		r := e.messages(b)
-		require.Equal(t, 200, r.status, "fail open")
+		b["messages"] = []any{map[string]any{"role": "user", "content": strings.Repeat("x", 5<<20)}}
+		require.Equal(t, 200, e.messages(b).status, "fail open")
 		assert.Equal(t, decisionErrorOpen, e.record().HookDecisions[0].Decision)
 	}
-	for i := 0; i < breakerThreshold-1; i++ {
-		send("small")
-	}
-	big := strings.Repeat("x", grpcDefaultMaxRecv)
-	for i := 0; i < 3; i++ {
-		send(big)
-	}
-	require.False(t, e.mr.Exists("hook:breaker:guard:prompt-rules"), "oversize requests counted as failures")
-	send("small")
-	require.True(t, e.mr.Exists("hook:breaker:guard:prompt-rules"), "oversize requests reset the failure streak")
-	assert.Equal(t, breakerThreshold+3, h.count())
-}
-
-// RESOURCE_EXHAUSTED from the plugin itself (shedding load) is a failure
-// even when the request is large: only grpc-go's receive-limit status is not.
-func TestHookOverloadedOnLargeRequestCountsAsFailure(t *testing.T) {
-	assert.True(t, requestTooLarge(&pluginv1.GatewayRequestHookRequest{Fields: map[string]string{"x": strings.Repeat("x", grpcDefaultMaxRecv)}},
-		status.Error(codes.ResourceExhausted, "grpc: received message larger than max (5000000 vs. 4194304)")))
-	big := &pluginv1.GatewayRequestHookRequest{Fields: map[string]string{"x": strings.Repeat("x", grpcDefaultMaxRecv)}}
-	for _, err := range []error{
-		status.Error(codes.ResourceExhausted, "moderation: too many concurrent reviews"),
-		status.Error(codes.ResourceExhausted, ""),
-		status.Error(codes.Unavailable, "grpc: received message larger than max (5000000 vs. 4194304)"),
-		errors.New("grpc: received message larger than max"),
-	} {
-		assert.False(t, requestTooLarge(big, err), "%v", err)
-	}
-	assert.False(t, requestTooLarge(&pluginv1.GatewayRequestHookRequest{},
-		status.Error(codes.ResourceExhausted, "grpc: received message larger than max (5000000 vs. 4194304)")), "small request")
-
-	e := newEnv(t)
-	e.addHook(guardHook(300, "open"), []string{"messages"}, &fakeHook{fn: func(context.Context, *pluginv1.GatewayRequestHookRequest) (*pluginv1.GatewayRequestHookResponse, error) {
-		return nil, status.Error(codes.ResourceExhausted, "plugin overloaded")
-	}})
-	// breakerThreshold-1 small failures, then one large: the breaker opens
-	// only if the large one counts.
-	for i := 0; i < breakerThreshold; i++ {
-		text := "small"
-		if i == breakerThreshold-1 {
-			text = strings.Repeat("x", grpcDefaultMaxRecv)
-		}
-		b := body(testModel, false)
-		b["messages"] = []any{map[string]any{"role": "user", "content": text}}
-		require.Equal(t, 200, e.messages(b).status, "fail open")
-		e.record()
-	}
-	require.True(t, e.mr.Exists("hook:breaker:guard:prompt-rules"), "overload on large requests must count toward the breaker")
+	require.True(t, e.mr.Exists("hook:breaker:guard:prompt-rules"))
+	assert.Equal(t, breakerThreshold, h.count())
 }
 
 func TestHookStatsCountsDeniesAndTimeouts(t *testing.T) {

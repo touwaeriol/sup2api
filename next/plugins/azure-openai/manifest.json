@@ -3,14 +3,17 @@
   "key": "azure_openai",
   "name": { "en": "Azure OpenAI", "zh": "Azure OpenAI" },
   "description": {
-    "en": "Adds Azure OpenAI account types for the built-in openai platform: a resource endpoint with its API key, served through the v1 API or the classic per-deployment API. The upstream model is the deployment name; map client model names to deployments on the account. Declares no platform, no endpoints and no prices.",
-    "zh": "为内置 openai 平台新增 Azure OpenAI 账号类型：资源地址加 API Key，走 v1 接口或按部署的经典接口。上游的模型就是部署名，在账号上把客户端的模型名映射到部署名。不声明平台、端点和价格。"
+    "en": "Adds Azure OpenAI account types for the built-in openai platform: a resource endpoint with its API key, served through the v1 API or the classic per-deployment API. The upstream model is the deployment name; map client model names to deployments on the account. The plugin builds each request and the core sends it; the plugin itself makes no network connection. Declares no platform, no endpoints and no prices.",
+    "zh": "为内置 openai 平台新增 Azure OpenAI 账号类型：资源地址加 API Key，走 v1 接口或按部署的经典接口。上游的模型就是部署名，在账号上把客户端的模型名映射到部署名。插件构造每个请求、由核心发送，插件自身不发起任何网络连接。不声明平台、端点和价格。"
   },
   "version": "0.1.0",
   "publisher": "sub2api",
   "icon": "assets/azure-color.svg",
-  "runtime": "none",
-  "hostCompat": ">=0.1.290 <0.2.0",
+  "runtime": "grpc",
+  "entry": { "grpc": { "binaries": "runtimes/{os}-{arch}/plugin" } },
+  "hostCompat": ">=0.1.304 <0.2.0",
+  "hostUICompat": "^4.0",
+  "resources": { "memoryMB": 64, "cpu": 0.1, "maxThreads": 32, "maxOpenFiles": 64 },
 
   "capabilities": [
     { "id": "platform.adapter.v1" }
@@ -19,16 +22,13 @@
   "accountTypes": [
     {
       "id": "azure_v1",
+      "upstreamFields": ["base_url"],
       "label": { "en": "Azure OpenAI · v1 API", "zh": "Azure OpenAI · v1 接口" },
       "description": {
         "en": "An Azure OpenAI resource and its API key. Requests go to <resource endpoint>/openai/v1/chat/completions, /responses and /embeddings with the key in api-key.",
         "zh": "Azure OpenAI 资源及其 API Key。请求发往 <资源地址>/openai/v1/chat/completions、/responses、/embeddings，Key 放在 api-key 中。"
       },
-      "form": {
-        "mode": "schema",
-        "schema": "forms/azure_v1.schema.json",
-        "uiSchema": "forms/azure_v1.ui.json"
-      },
+      "form": { "mode": "native", "component": "AzureV1Form" },
       "creationGroup": "azure-openai",
       "authMethodLabel": { "en": "v1 API", "zh": "v1 接口" },
       "sensitiveFields": ["api_key"],
@@ -39,36 +39,17 @@
           "endpoints": ["chat_completions", "responses", "embeddings"],
           "passHeaders": ["openai-beta", "user-agent", "x-stainless-arch", "x-stainless-lang", "x-stainless-os", "x-stainless-package-version", "x-stainless-retry-count", "x-stainless-runtime", "x-stainless-runtime-version", "x-stainless-timeout"]
         }
-      ],
-      "upstream": {
-        "preset": "openai",
-        "baseURL": { "default": null, "required": true, "stripSuffixes": ["/openai/v1", "/openai"] },
-        "credentials": {
-          "keyValidator": null,
-          "texts": { "baseURLRequired": "Resource endpoint is required / 请填写资源地址" }
-        },
-        "auth": { "type": "header", "name": "api-key", "value": "{api_key}" },
-        "routes": {
-          "openai.chat": { "path": "/openai/v1/chat/completions" },
-          "openai.responses": { "path": "/openai/v1/responses" },
-          "openai.embeddings": { "path": "/openai/v1/embeddings" },
-          "openai.responses_ws": null
-        },
-        "models": null
-      }
+      ]
     },
     {
       "id": "azure_deployment",
+      "upstreamFields": ["base_url"],
       "label": { "en": "Azure OpenAI · Deployments (classic)", "zh": "Azure OpenAI · 按部署（经典）" },
       "description": {
         "en": "An Azure OpenAI resource and its API key, served through the classic per-deployment API. Requests go to <resource endpoint>/openai/deployments/<deployment>/chat/completions and /embeddings with an api-version and the key in api-key; /v1/responses requests are converted to chat completions.",
         "zh": "Azure OpenAI 资源及其 API Key，走按部署的经典接口。请求发往 <资源地址>/openai/deployments/<部署名>/chat/completions、/embeddings，带 api-version，Key 放在 api-key 中；/v1/responses 请求会转成 chat completions 再发。"
       },
-      "form": {
-        "mode": "schema",
-        "schema": "forms/azure_deployment.schema.json",
-        "uiSchema": "forms/azure_deployment.ui.json"
-      },
+      "form": { "mode": "native", "component": "AzureDeploymentForm" },
       "creationGroup": "azure-openai",
       "authMethodLabel": { "en": "Deployments (classic)", "zh": "按部署（经典）" },
       "sensitiveFields": ["api_key"],
@@ -77,37 +58,21 @@
         {
           "platform": "openai",
           "endpoints": ["chat_completions", "embeddings"],
+          "adapted": { "responses": {} },
           "passHeaders": ["openai-beta", "user-agent", "x-stainless-arch", "x-stainless-lang", "x-stainless-os", "x-stainless-package-version", "x-stainless-retry-count", "x-stainless-runtime", "x-stainless-runtime-version", "x-stainless-timeout"]
         }
-      ],
-      "upstream": {
-        "preset": "openai",
-        "baseURL": { "default": null, "required": true, "stripSuffixes": ["/openai/v1", "/openai"] },
-        "credentials": {
-          "keyValidator": null,
-          "texts": { "baseURLRequired": "Resource endpoint is required / 请填写资源地址" },
-          "fields": ["api_version"]
-        },
-        "auth": { "type": "header", "name": "api-key", "value": "{api_key}" },
-        "routes": {
-          "openai.chat": {
-            "path": "/openai/deployments/{model}/chat/completions?api-version={credentials.api_version}",
-            "model": { "required": true }
-          },
-          "openai.embeddings": {
-            "path": "/openai/deployments/{model}/embeddings?api-version={credentials.api_version}",
-            "model": { "required": true }
-          },
-          "openai.responses": null,
-          "openai.responses_ws": null
-        },
-        "models": null
-      }
+      ]
     }
   ],
 
+  "ui": {
+    "native": { "entry": "ui/native/entry.js" }
+  },
+
   "hostPermissions": [
     { "id": "platform.register",
-      "reason": { "en": "Register the Azure OpenAI account types for the built-in openai platform", "zh": "为内置 openai 平台注册 Azure OpenAI 账号类型" } }
+      "reason": { "en": "Register the Azure OpenAI account types for the built-in openai platform", "zh": "为内置 openai 平台注册 Azure OpenAI 账号类型" } },
+    { "id": "ui.native",
+      "reason": { "en": "The account forms of the v1 and deployment APIs (AzureV1Form, AzureDeploymentForm)", "zh": "v1 接口与按部署两种账号表单（AzureV1Form、AzureDeploymentForm）" } }
   ]
 }

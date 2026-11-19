@@ -6,12 +6,12 @@
     "en": "Online recharge orders, redeem codes and promo codes. Balance is credited through the host ledger.",
     "zh": "在线充值订单、兑换码与优惠码，余额通过核心账本入账。"
   },
-  "version": "0.1.2",
+  "version": "0.1.3",
   "publisher": "sub2api",
   "icon": "text:P",
   "runtime": "grpc",
   "entry": { "grpc": { "binaries": "runtimes/{os}-{arch}/plugin" } },
-  "hostCompat": ">=0.1.290 <0.2.0",
+  "hostCompat": ">=0.1.304 <0.2.0",
 
   "capabilities": [
     { "id": "http.routes.v1" }

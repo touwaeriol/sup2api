@@ -7,6 +7,9 @@ import ProxyPicker from '@/components/ProxyPicker.vue'
 import { i18n } from '@/i18n'
 import AccountBulkEditDialog from './AccountBulkEditDialog.vue'
 import AccountBulkDeleteDialog from './AccountBulkDeleteDialog.vue'
+import ModelTagSelect from '@/components/models/ModelTagSelect.vue'
+import OwnProtocolsField from './protocols/OwnProtocolsField.vue'
+import { openai } from './protocols/fixtures'
 
 const mocks = vi.hoisted(() => ({ patch: vi.fn(), del: vi.fn(), toast: vi.fn() }))
 // The group and proxy pickers look entities up; nothing answers here.
@@ -137,6 +140,112 @@ describe('bulk account dialogs', () => {
     })
     const disabled = (k: string) => w.get(`[data-testid="bulk-field-${k}"] input[type="number"]`).attributes('disabled') !== undefined
     expect(['priority', 'weight', 'max_concurrency', 'rpm_limit', 'tpm_limit', 'spm_limit'].filter(disabled)).toEqual(['weight', 'rpm_limit'])
+  })
+
+  it('replaces the own protocols and the protocols per model of accounts of one type (DESIGN-2026-11-17-PROTOCOL-BINDING §4)', async () => {
+    mocks.patch.mockImplementation(async (path: string, body: object) => ({ id: Number(path.split('/')[2]), ...body }))
+    const rules = [{ models: ['claude-sonnet-4-5'], protocols: ['anthropic.messages'] }]
+    const w = mount(AccountBulkEditDialog, {
+      props: { open: false, accounts: [acc(1, { models: ['gpt-5.6'] }), acc(2, { protocols: ['openai.chat'], model_protocols: rules })], typeOf: () => openai },
+      global: { plugins: [i18n], stubs: { SModal } }
+    })
+    await w.setProps({ open: true })
+    const own = w.get('[data-testid="bulk-field-protocols"]')
+    const perModel = w.get('[data-testid="bulk-field-model_protocols"]')
+    const ticked = (field: typeof own) => (field.get('input[type="checkbox"]').element as HTMLInputElement).checked
+    expect([ticked(own), ticked(perModel)]).toEqual([false, false])
+    expect(w.get('[data-testid="bulk-edit-apply"]').attributes('disabled')).toBeDefined()
+
+    // Choosing the own protocols ticks the field; the rules start empty and are edited as a list.
+    const editor = w.getComponent(OwnProtocolsField).props('editor')
+    editor.setMode('custom')
+    editor.toggleOwn(editor.columns.value.own[3])
+    editor.toggleOwn(editor.columns.value.own[2])
+    editor.toggleOwn(editor.columns.value.own[1])
+    await flushPromises()
+    expect([ticked(own), ticked(perModel)]).toEqual([true, false])
+    expect(perModel.find('[data-testid="protocol-list"]').exists()).toBe(true)
+    perModel.get('[data-testid="protocol-entry-add"]').getComponent(ModelTagSelect).vm.$emit('update:modelValue', ['claude-sonnet-4-5'])
+    await flushPromises()
+    expect(ticked(perModel)).toBe(true)
+    // The new entry starts from the default (the one own protocol left open): make it the conversion only.
+    editor.rules.value = { 'claude-sonnet-4-5': ['anthropic.messages'] }
+    await flushPromises()
+    await w.get('[data-testid="bulk-edit-apply"]').trigger('click')
+    await flushPromises()
+    // Account 2 already has both: no request.
+    expect(mocks.patch.mock.calls.map((c) => [c[0], c[1]])).toEqual([['/accounts/1', { protocols: ['openai.chat'], model_protocols: rules }]])
+    expect(mocks.toast).toHaveBeenCalledWith('已更新 1 个账号（1 个无需修改）', 'success')
+  })
+
+  it('refuses a rule without protocols, and leaves "serves nothing" to the server unless both fields are ticked', async () => {
+    const w = mount(AccountBulkEditDialog, { props: { open: false, accounts: [acc(1)], typeOf: () => openai }, global: { plugins: [i18n], stubs: { SModal } } })
+    await w.setProps({ open: true })
+    const editor = w.getComponent(OwnProtocolsField).props('editor')
+    const apply = () => w.get('[data-testid="bulk-edit-apply"]').attributes('disabled')
+    // Only the own protocols ticked, all closed: each account's own rules decide.
+    editor.setMode('custom')
+    for (const c of [...editor.columns.value.own]) editor.toggleOwn(c)
+    await flushPromises()
+    expect(w.find('[data-issue]').exists()).toBe(false)
+    expect(apply()).toBeUndefined()
+    // Both ticked: nothing would be served.
+    editor.rules.value = { a: ['openai.chat'] }
+    await flushPromises()
+    expect(w.findAll('[data-issue]').map(i => i.attributes('data-issue'))).toEqual(['no_protocol', 'closed_protocol'])
+    expect(apply()).toBeDefined()
+    editor.rules.value = { a: [] }
+    await flushPromises()
+    expect(w.findAll('[data-issue]').map(i => i.attributes('data-issue'))).toEqual(['empty_rule', 'no_protocol'])
+    editor.rules.value = { a: ['anthropic.messages'] }
+    await flushPromises()
+    expect(apply()).toBeUndefined()
+  })
+
+  it('checks the rules against each account\'s own protocols while the own protocols are not ticked', async () => {
+    const w = mount(AccountBulkEditDialog, {
+      props: { open: false, accounts: [acc(1, { protocols: null }), acc(2, { protocols: ['openai.chat', 'openai.responses'] })], typeOf: () => openai },
+      global: { plugins: [i18n], stubs: { SModal } }
+    })
+    await w.setProps({ open: true })
+    const editor = w.getComponent(OwnProtocolsField).props('editor')
+    const issues = () => w.findAll('[data-issue]').map(i => i.attributes('data-issue'))
+    // Closed here, then left unticked: the dialog's own protocols do not apply.
+    editor.setMode('custom')
+    editor.toggleOwn(editor.columns.value.own[0])
+    await flushPromises()
+    await w.get('[data-testid="bulk-field-protocols"] input[type="checkbox"]').setValue(false)
+    editor.rules.value = { a: ['openai.chat'] }
+    await flushPromises()
+    expect(issues()).toEqual([])
+    // Account 2 does not open embeddings: the rule's protocol is closed there.
+    editor.rules.value = { a: ['openai.embeddings'] }
+    await flushPromises()
+    expect(issues()).toEqual(['closed_protocol'])
+  })
+
+  it('offers the protocol fields only for accounts of one known type, and starts them over each time it opens', async () => {
+    const mixed = mount(AccountBulkEditDialog, { props: { open: true, accounts: [acc(1), acc(2, { type: 'other' })], typeOf: () => openai }, global: { plugins: [i18n], stubs: { SModal } } })
+    expect(mixed.get('[data-testid="bulk-protocols-mixed"]').text()).toContain('只能对同一类型的账号批量修改')
+    expect(mixed.get('[data-testid="bulk-field-protocols"] input[type="checkbox"]').attributes('disabled')).toBeDefined()
+    expect(mixed.find('[data-testid="bulk-field-model_protocols"]').exists()).toBe(false)
+    // One type, but its plugin is not enabled: the protocols are unknown.
+    const gone = mount(AccountBulkEditDialog, { props: { open: true, accounts: [acc(1), acc(2)], typeOf: () => undefined }, global: { plugins: [i18n], stubs: { SModal } } })
+    expect(gone.find('[data-testid="bulk-protocols-mixed"]').exists()).toBe(true)
+
+    const w = mount(AccountBulkEditDialog, { props: { open: false, accounts: [acc(1)], typeOf: () => openai }, global: { plugins: [i18n], stubs: { SModal } } })
+    await w.setProps({ open: true })
+    const editor = w.getComponent(OwnProtocolsField).props('editor')
+    editor.setMode('custom')
+    editor.rules.value = { a: ['openai.chat'] }
+    await flushPromises()
+    expect(w.get('[data-testid="bulk-edit-apply"]').attributes('disabled')).toBeUndefined()
+    await w.setProps({ open: false })
+    await w.setProps({ open: true })
+    expect(editor.binding()).toEqual({ protocols: null, model_protocols: [] })
+    const ticked = (field: string) => (w.get(`[data-testid="bulk-field-${field}"] input[type="checkbox"]`).element as HTMLInputElement).checked
+    expect([ticked('protocols'), ticked('model_protocols')]).toEqual([false, false])
+    expect(w.get('[data-testid="bulk-edit-apply"]').attributes('disabled')).toBeDefined()
   })
 
   it('deletes every selected account', async () => {

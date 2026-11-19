@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -38,8 +39,8 @@ type LauncherOptions struct {
 	WatchInterval time.Duration
 	// DisableWrap starts plugins directly even on Linux (no sandbox).
 	DisableWrap bool
-	// Landlock restricts the file system view of wrapped plugins
-	// (SUB2API_PLUGIN_LANDLOCK, off by default; CONTRACTS §43.8).
+	// Landlock restricts files, unix sockets and signals of wrapped plugins
+	// (SUB2API_PLUGIN_LANDLOCK, on by default on Linux; CONTRACTS §43.8).
 	Landlock bool
 	Logger   *slog.Logger
 }
@@ -94,7 +95,8 @@ func (l *Launcher) Command(_ context.Context, spec core.LaunchSpec) (*exec.Cmd, 
 			env = append(env, "GOMEMLIMIT="+goMemLimit(spec.MemoryMB))
 		}
 	}
-	cmd.Dir = spec.WorkDir
+	// A plugin without a data directory runs in its run directory.
+	cmd.Dir = cmp.Or(spec.DataDir, spec.RunDir)
 	cmd.Env = env
 	return cmd, nil
 }
@@ -110,11 +112,11 @@ func execArgs(spec core.LaunchSpec, nice int, landlock bool) []string {
 		"--seccomp=" + strconv.FormatBool(spec.Seccomp),
 		"--nice=" + strconv.Itoa(nice),
 	}
-	if spec.WorkDir != "" {
-		args = append(args, "--work-dir="+spec.WorkDir, "--data-dir="+spec.WorkDir)
+	if spec.DataDir != "" {
+		args = append(args, "--data-dir="+spec.DataDir)
 	}
-	if spec.RunDir != "" {
-		args = append(args, "--run-dir="+spec.RunDir)
+	if spec.Net {
+		args = append(args, "--ca-certs")
 	}
 	if landlock {
 		args = append(args, "--landlock")
@@ -162,8 +164,8 @@ func (l *Launcher) commandEnv(spec core.LaunchSpec) []string {
 		protocol.EnvPluginVersion+"="+spec.Version,
 		protocol.EnvStrictNetwork+"="+strict,
 	)
-	if spec.WorkDir != "" {
-		env = append(env, protocol.EnvDataDir+"="+spec.WorkDir)
+	if spec.DataDir != "" {
+		env = append(env, protocol.EnvDataDir+"="+spec.DataDir)
 	}
 	if spec.CPU > 0 {
 		env = append(env, "GOMAXPROCS="+strconv.Itoa(int(math.Ceil(spec.CPU))))

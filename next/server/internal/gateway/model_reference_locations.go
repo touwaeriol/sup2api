@@ -13,16 +13,11 @@ type modelReferenceLocation struct {
 	item gjson.Result
 }
 
-// Only declared array hops are followed. Tool input, prompt text, and arbitrary
-// object trees are never searched for keys named "model".
-func modelReferenceLocations(body []byte, arrayPath string) ([]modelReferenceLocation, error) {
-	// Parsing a body copies it (gjson keeps the document as a string), so the
-	// request path parses once per body version (call.bodyRoot) and hands the
-	// root in; the rules of a request would otherwise copy a megabyte each.
-	return modelReferenceLocationsIn(gjson.ParseBytes(body), arrayPath)
-}
-
-// modelReferenceLocationsIn is modelReferenceLocations over a parsed root.
+// modelReferenceLocationsIn finds the model references of one rule in a parsed
+// body. Only declared array hops are followed. Tool input, prompt text, and
+// arbitrary object trees are never searched for keys named "model". The
+// request path parses once per body version (call.bodyRoot) and hands the root
+// in: parsing copies the body, and a request runs several rules.
 func modelReferenceLocationsIn(root gjson.Result, arrayPath string) ([]modelReferenceLocation, error) {
 	nodes := []modelReferenceLocation{{item: root}}
 	parts := strings.Split(arrayPath, ".")

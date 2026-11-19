@@ -37,7 +37,22 @@ export default {
     },
     loadFailed: 'Failed to load guard statistics',
     refresh: 'Refresh',
-    openDashboard: 'Open the request guard dashboard'
+    openDashboard: 'Open the request guard dashboard',
+    settings: {
+      webhookUrl: {
+        label: 'Webhook URL',
+        help: 'A JSON POST is sent here whenever a rule blocks a request. Leave empty to disable. With an allowlist egress policy the domain must be approved under the "net" permission.'
+      },
+      cooldown: {
+        label: 'Alert cooldown',
+        unit: 's',
+        help: 'Send at most one alert per rule within this many seconds, across all nodes (0–300). Requests are still blocked and logged during the cooldown, just not alerted. 0 sends an alert for every blocked request. Cluster-wide throttling needs the optional "lock" permission; without it each node throttles on its own, up to one alert per node.'
+      },
+      snippets: {
+        label: 'Record matched snippets',
+        help: 'Store about 120 characters around the match in the block log and alerts. May contain user data.'
+      }
+    }
   },
   zh: {
     title: '请求守卫',
@@ -76,6 +91,21 @@ export default {
     },
     loadFailed: '加载拦截统计失败',
     refresh: '刷新',
-    openDashboard: '打开请求守卫面板'
+    openDashboard: '打开请求守卫面板',
+    settings: {
+      webhookUrl: {
+        label: 'Webhook 地址',
+        help: '规则拦截请求时向该地址发送 JSON POST，留空则不发送。出口策略为白名单时，域名需在 net 权限中获批。'
+      },
+      cooldown: {
+        label: '告警冷却时间',
+        unit: '秒',
+        help: '同一条规则在这段时间内全集群最多发送一次告警（0–300 秒）。冷却期内请求照常拦截和记录，只是不再告警。0 表示每次拦截都发送。全集群节流需要可选的 lock 权限；未授权时各节点各自节流，每个节点最多各发一次。'
+      },
+      snippets: {
+        label: '记录命中的文本片段',
+        help: '在拦截记录和告警中保存命中位置附近约 120 个字符，可能包含用户数据。'
+      }
+    }
   }
 }

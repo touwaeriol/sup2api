@@ -197,6 +197,15 @@ describe('usage records layout', () => {
     expect(w.text()).not.toContain('model_not_allowed')
     expect(w.get('p').attributes('title')).toContain('model not allowed for this group')
   })
+  it('names an unreported execution (usage_unreported) in both languages (design §8.5)', () => {
+    const unreported = { ...row, status_code: 200, error_type: 'usage_unreported', error_message: 'plugin returned no usage' }
+    const locale = i18n.global.locale.value
+    for (const [lang, text] of [['zh', '未上报用量（未计费）'], ['en', 'Usage not reported (not billed)']]) {
+      i18n.global.locale.value = lang
+      expect(mount(UsageError, { props: { row: unreported }, global }).text()).toBe(text)
+    }
+    i18n.global.locale.value = locale
+  })
   it('shows a failed request as "status_code=…, message" in the detail column, whole text on hover', async () => {
     const w = mount(UsageTable, { props: { view: 'all', rows: [row, { ...row, id: 2, success: true, status_code: 200, matched_tier: 'tier-a' }] }, global, attachTo: document.body })
     const texts = w.findAll('[data-testid="usage-error-text"]')

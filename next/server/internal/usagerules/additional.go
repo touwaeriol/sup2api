@@ -68,7 +68,7 @@ func (u *Acc) applyAdditional(event string, body []byte, stream bool) {
 				}
 				model = gjson.Result{Type: gjson.String, Str: u.primaryModel}
 			}
-			if model.Type != gjson.String || len(model.Str) == 0 || len(model.Str) > 256 || !utf8.ValidString(model.Str) || strings.ContainsAny(model.Str, "\r\n\x00") {
+			if model.Type != gjson.String || len(model.Str) == 0 || !utf8.ValidString(model.Str) || strings.ContainsAny(model.Str, "\r\n\x00") {
 				fail(fmt.Errorf("invalid model"))
 				valid = false
 				break

@@ -18,6 +18,7 @@ export { default as SChoiceCards } from './SChoiceCards.vue'
 export { default as SConfirmHost } from './SConfirmHost.vue'
 export { default as SCopyButton } from './SCopyButton.vue'
 export { default as SDateTime } from './SDateTime.vue'
+export { default as SDateTimeInput } from './SDateTimeInput.vue'
 export { default as SDescriptions } from './SDescriptions.vue'
 export { default as SDescItem } from './SDescItem.vue'
 export { default as SDisclosure } from './SDisclosure.vue'
@@ -108,28 +109,27 @@ export type {
 // Form-item context (custom controls that want SField / SSettingRow ids).
 export { FIELD_KEY, useFieldControl } from './field'
 export type { FieldContext, ControlSize } from './field'
-// JSON Schema form (console: account credentials, plugin settings, declarative
-// plugin pages; plugins: any schema-driven form)
-export { default as SchemaForm } from './schema/SchemaForm.vue'
-export { default as SchemaField } from './schema/SchemaField.vue'
-export { SCHEMA_WIDGETS_KEY } from './schema/widgets'
-export {
-  SECRET_MASK,
-  BUILTIN_WIDGETS,
-  localizedText,
-  uiGet,
-  childUI,
-  schemaType,
-  isSecret,
-  enumOptions,
-  resolveWidget,
-  fieldLabel,
-  fieldHelp,
-  orderedKeys,
-  getPath,
-  isVisible,
-  withDefaults as schemaWithDefaults,
-  validate as validateSchema
-} from './schema/schema'
-export type { JSONSchema, UISchema, EnumOption, ValidateMessages } from './schema/schema'
+// Form validation (rules in the async-validator style, useForm over a
+// v-model, SForm; SField / SSettingRow take `prop`).
+export { default as SForm } from './form/SForm.vue'
+export { useForm } from './form/useForm'
+export type { FormApi, UseFormOptions } from './form/useForm'
+export { SECRET_MASK } from './form/rules'
+export type { Rule, Rules, RuleContext, RuleMessage, RuleType, Trigger } from './form/rules'
+export { getPath, setPath } from './form/path'
+// Form building blocks over useForm (native account forms, plugin settings, list pages).
+export { default as SSecretInput } from './SSecretInput.vue'
+export { default as SUrlPresetInput } from './SUrlPresetInput.vue'
+export { default as SCredentialForm } from './form/SCredentialForm.vue'
+export { default as SFormSection } from './form/SFormSection.vue'
+export { useCredentialForm, nativeAccountFormProps } from './form/credential'
+export type { NativeAccountFormProps } from './form/credential'
+export { createApiKeyForm } from './form/apiKeyForm'
+export type { ApiKeyFormSpec, ExtraField, FieldSection } from './form/apiKeyForm'
+export { usePluginSettings } from './form/pluginSettings'
+export type { PluginSettingsForm } from './form/pluginSettings'
+export { default as SSettingsPage } from './form/SSettingsPage.vue'
+export { default as SResourcePage } from './SResourcePage.vue'
+// LocalizedText ({en, zh} or a bare string) of the core's payloads.
+export { localizedText } from './i18n'
 export { useScrollClip } from './scrollClip'

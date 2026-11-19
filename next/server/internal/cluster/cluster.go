@@ -74,6 +74,8 @@ type Options struct {
 	Addr        string // advertised address, informational (e.g. public URL)
 	HostVersion string
 	Logger      *slog.Logger
+	// PluginSandbox is what the plugin sandbox enforces on this node.
+	PluginSandbox *core.PluginSandboxStatus
 }
 
 // Cluster bundles the four cluster services that share one Redis client.
@@ -104,6 +106,7 @@ func New(rdb redis.UniversalClient, db *store.DB, opts Options) *Cluster {
 	}
 	reg := NewRegistry(rdb, pinger, RegistryOptions{
 		NodeID: opts.NodeID, Addr: opts.Addr, HostVersion: opts.HostVersion, Logger: opts.Logger, Managed: opts.Managed, CoreBootID: opts.CoreBootID,
+		PluginSandbox: opts.PluginSandbox,
 	})
 	if opts.Managed {
 		reg.opts.BootID = opts.CoreBootID

@@ -11,10 +11,7 @@ import (
 	"github.com/tidwall/gjson"
 
 	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
-	"github.com/Sub2API-Devs/sup2api/next/server/internal/billing"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
-	"github.com/Sub2API-Devs/sup2api/next/server/internal/testutil"
-	"github.com/Sub2API-Devs/sup2api/next/server/internal/usage"
 )
 
 func setParamOverride(t *testing.T, e *env, id int64, raw string) {
@@ -98,26 +95,24 @@ func TestAccountParamOverrideStops(t *testing.T) {
 	}
 }
 
-// A plugin's Execute forwards through the core as well: there too the
-// plugin builds from the overridden body, with the override's model, and
-// its patches and headers come after the override.
-func TestAccountParamOverrideExecutePath(t *testing.T) {
-	db := testutil.DB(t)
-	bill := billing.New(db, nil, nil, nil, nil)
-	e, p := executeFixture(t, usage.New(db, bill, bill, nil, usage.Options{}))
+// The plugin is handed the overridden body, with the override's model, and
+// what it relays goes upstream as it is: here its own rewrite of a field the
+// override set wins, and the override's headers still apply.
+func TestAccountParamOverrideBeforeThePlugin(t *testing.T) {
+	e := newEnv(t)
 	e.plat.patches = []*pluginv1.BodyPatch{{Op: pluginv1.BodyPatch_OP_SET, Path: "temperature", ValueJson: "0.9"}}
 	setParamOverride(t, e, 1, `{"operations":[{"mode":"set","path":"temperature","value":0.3},{"mode":"set","path":"top_k","value":4},
 		{"mode":"set_header","path":"x-custom","value":"v1"},{"mode":"set","path":"model","value":"claude-override"}]}`)
 	require.Equal(t, 200, e.messages(body(testModel, false)).status)
-	require.Equal(t, int64(1), p.calls.Load())
 	got := e.up.last()
-	assert.Equal(t, 0.9, gjson.GetBytes(got.body, "temperature").Float(), "the plugin's patch wins over the override")
+	assert.Equal(t, 0.9, gjson.GetBytes(got.body, "temperature").Float(), "the plugin's rewrite wins over the override")
 	assert.Equal(t, int64(4), gjson.GetBytes(got.body, "top_k").Int())
 	assert.Equal(t, "claude-override", gjson.GetBytes(got.body, "model").String())
 	assert.Equal(t, "v1", got.header.Get("X-Custom"))
 	b := e.plat.builds[0]
 	assert.Equal(t, "claude-override", b.GetMeta().GetModel())
-	assert.Equal(t, `"claude-override"`, b.GetFields()["model"])
+	assert.Equal(t, 0.3, gjson.GetBytes(b.GetBody(), "temperature").Float(), "the plugin is handed the overridden body")
+	assert.Equal(t, "claude-override", gjson.GetBytes(b.GetBody(), "model").String())
 }
 
 // The built-in claude_max_tokens override (CONTRACTS §84.1): off, nothing is
@@ -289,9 +284,11 @@ func TestWebSocketHandshakeHeaderOverride(t *testing.T) {
 	assert.Empty(t, h.Get("X-Other"), "no passthrough on a WebSocket")
 }
 
-// On a WebSocket the header override resolves on its own: when the first
-// message's rewrites fail (the turn reports it) the handshake still carries
-// it, and a stored one that no longer compiles fails the account over.
+// On a WebSocket the first turn's rewrites run before its Execute, as on
+// HTTP: when they fail on an account the turn moves to the next one without
+// blaming it, and the handshake made there carries none of the failed
+// account's headers. A stored header override that no longer compiles fails
+// the account over too.
 func TestWebSocketHeaderOverrideIndependentOfTheBody(t *testing.T) {
 	t.Run("rewrite fails", func(t *testing.T) {
 		e := newWSEnv(t)
@@ -300,18 +297,17 @@ func TestWebSocketHeaderOverrideIndependentOfTheBody(t *testing.T) {
 			{"mode":"set_header","path":"x-op","value":"op"}]}`)
 		c := e.mustDial()
 		c.send(create(wsModel, "first"))
-		ev := c.until("error")
-		assert.Equal(t, "param_override_failed", ev[0].Get("error.code").String(), "%v", ev)
-		e.record()
-		c.send(create(wsModel, "second"))
 		c.until("response.completed")
-		e.record()
+		r := e.record()
+		require.NotNil(t, r.AccountID)
+		assert.NotEqual(t, int64(11), *r.AccountID)
+		assert.Empty(t, e.accounts.cooldowns)
 		e.wsUp.mu.Lock()
 		headers := e.wsUp.headers
 		e.wsUp.mu.Unlock()
 		require.Len(t, headers, 1)
-		assert.Equal(t, "static-1", headers[0].Get("X-Static"))
-		assert.Empty(t, headers[0].Get("X-Op"), "the failed rewrite's headers are not the handshake's")
+		assert.Empty(t, headers[0].Get("X-Static"))
+		assert.Empty(t, headers[0].Get("X-Op"))
 	})
 	t.Run("broken", func(t *testing.T) {
 		e := newWSEnv(t)

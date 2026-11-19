@@ -197,7 +197,7 @@ const kvManifest = `{
 func TestFakeHostKVBatchThroughTheSDK(t *testing.T) {
 	fh := NewFakeHost()
 	p := &kvPlugin{}
-	Start(t, p, Options{Host: fh, SDK: []pluginsdk.Option{pluginsdk.WithManifest([]byte(kvManifest))}})
+	Start(t, p, Options{Host: fh, Manifest: []byte(kvManifest)})
 	ctx, kv := context.Background(), p.host.KV()
 
 	keys := fakeKeys(64)

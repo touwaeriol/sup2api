@@ -2,7 +2,7 @@ package volcengine
 
 // What a Seedance submit will cost, read out of the submit request.
 //
-// The reservation ExtractUsage returns is a real charge against a real
+// The reservation videoUsage returns is a real charge against a real
 // balance, so the number below has to be defensible in both directions: too
 // low and a $0 balance queues expensive work (the pre-charge exists to stop
 // exactly that), too high and a legitimate 5-second clip is refused for want
@@ -24,7 +24,7 @@ package volcengine
 //
 // Ark calls its own formula an estimate and names usage.completion_tokens as
 // the authority. That is exactly the division of labour here: this file
-// reserves, Poll reports completion_tokens for the core to settle.
+// reserves, Monitor reports completion_tokens for the core to settle.
 //
 // THREE THINGS THE ESTIMATE CANNOT SEE, each bounded rather than guessed:
 //
@@ -34,9 +34,9 @@ package volcengine
 //     validated form Ark documents as equivalent to the structured field,
 //     with NO documented precedence between the two. So the prompt is read
 //     too, and where the readings disagree the more expensive one wins. Where
-//     the prompt could not be read at all (longer than the host's per-value
-//     cap, or in a content element past the declared paths) every parameter it
-//     could have carried is treated as unknown - not as absent.
+//     the prompt could not be read at all (in a content element past the
+//     declared paths) every parameter it could have carried is treated as
+//     unknown - not as absent.
 //  2. "The model decides". duration -1 means Ark picks a length inside the
 //     model's range, and -1 is the documented default for Seedance 2.5. Ark
 //     documents no default at all for the 2.0 and 1.0 families and does not
@@ -265,10 +265,8 @@ func largestIn(row map[string]int64, ratio string) int64 {
 // ---------------------------------------------------------------- the declaration
 
 // The request paths manifest.json declares in usageRequestFields, in the order
-// it lists them. That order is load-bearing: the host spends the total byte
-// budget in DECLARATION ORDER (CONTRACTS §25.6), so the four scalars that
-// decide the price come first and a four-kilobyte prompt can never starve
-// them.
+// it lists them. The host hands every declared value over whole (CONTRACTS
+// §25.6), so the order no longer matters to what arrives.
 const (
 	PathResolution   = "resolution"
 	PathRatio        = "ratio"
@@ -303,8 +301,8 @@ type videoSpec struct {
 	// Resolution is a tier from VideoResolutions, "" when not determinable.
 	Resolution string
 	// ResolutionStated is true when the client sent a resolution, whether or
-	// not it could be read: the host would not carry it, or it names a tier
-	// this plugin has no pixel size for.
+	// not it could be read: it may name a tier this plugin has no pixel size
+	// for.
 	//
 	// It exists because "" alone is two different situations with two
 	// different safe answers. An ABSENT resolution is a known quantity - Ark
@@ -332,46 +330,24 @@ type videoSpec struct {
 	PromptFullyRead bool
 }
 
-// readVideoSpec reads the declared request fields the host delivered.
-//
-// fields holds the raw JSON of each declared path that fitted; omitted names
-// the declared paths the client DID send but the host would not carry (a value
-// over the per-value cap, or a total budget already spent). The two are not
-// interchangeable, and telling them apart is the whole reason
-// ExtractUsageRequest carries the second list:
-//
-//	absent  -> the client left it out, so Ark's documented default applies
-//	omitted -> the client stated something and nobody here knows what
-//
-// Reading the second as the first is a STABLE UNDER-ESTIMATE - the one failure
-// mode a pre-charge must not have, because it is invisible: the request
-// succeeds, the reservation is small, and only the reconcile (days later, for
-// a video task) puts the real number on the row.
-func readVideoSpec(fields map[string]string, omitted []string) videoSpec {
-	gone := map[string]bool{}
-	for _, p := range omitted {
-		gone[p] = true
-	}
+// readVideoSpec reads the declared request fields the host delivered: fields
+// holds the raw JSON of each declared path the request carries. A path that
+// is absent means the client left it out, so Ark's documented default
+// applies.
+func readVideoSpec(fields map[string]string) videoSpec {
 	spec := videoSpec{PromptFullyRead: true}
 
 	// The prompt first: whether it was read in full decides what the rest is
 	// worth.
 	texts := make([]string, 0, len(ContentTextPaths))
 	for _, p := range ContentTextPaths {
-		if gone[p] {
-			spec.PromptFullyRead = false
-			continue
-		}
 		if raw, ok := fields[p]; ok {
 			texts = append(texts, gjson.Parse(raw).String())
 		}
 	}
 	// content.# is the element count. Absent means the body has no content
-	// array at all, hence no prompt to hide anything in; omitted means the
-	// count itself did not survive the budget, which is not an answer.
-	if gone[PathContentCount] {
-		spec.PromptFullyRead = false
-	} else if n, ok := jsonInt(fields[PathContentCount]); ok && n > int64(len(ContentTextPaths)) {
+	// array at all, hence no prompt to hide anything in.
+	if n, ok := jsonInt(fields[PathContentCount]); ok && n > int64(len(ContentTextPaths)) {
 		spec.PromptFullyRead = false
 	}
 
@@ -384,12 +360,12 @@ func readVideoSpec(fields map[string]string, omitted []string) videoSpec {
 		resolutions, ratios []string
 		durations, frames   []int64
 	)
-	resolutions, spec.ResolutionStated = readCandidates(PathResolution, gone, fields, "",
+	resolutions, spec.ResolutionStated = readCandidates(PathResolution, fields,
 		func(raw string) (string, bool) { return normalizeResolution(gjson.Parse(raw).String()) })
-	ratios, _ = readCandidates(PathRatio, gone, fields, "",
+	ratios, _ = readCandidates(PathRatio, fields,
 		func(raw string) (string, bool) { return normalizeRatio(gjson.Parse(raw).String()) })
-	durations, _ = readCandidates(PathDuration, gone, fields, int64(0), jsonInt)
-	frames, _ = readCandidates(PathFrames, gone, fields, int64(0), jsonInt)
+	durations, _ = readCandidates(PathDuration, fields, jsonInt)
+	frames, _ = readCandidates(PathFrames, fields, jsonInt)
 
 	for _, text := range texts {
 		for key, v := range parsePromptCommands(text) {
@@ -422,21 +398,10 @@ func readVideoSpec(fields map[string]string, omitted []string) videoSpec {
 }
 
 // readCandidates reads one declared field of the video request as a list of
-// candidate values, which is how the three states of a field are kept apart:
-//
-//   - omitted (in gone): the client stated a value the host would not carry,
-//     so one zero-value candidate goes in, which every combiner treats as
-//     "unknown" ("" for a resolution or ratio, 0 for a duration or a count);
-//   - present: the value is normalized and appended when it parses, and
-//     nothing is appended when it does not;
-//   - absent: neither, so the field contributes no candidate at all.
-//
-// stated reports whether the client said anything at all (omitted or present),
-// which only the resolution needs.
-func readCandidates[T any](path string, gone map[string]bool, fields map[string]string, zero T, normalize func(string) (T, bool)) (vals []T, stated bool) {
-	if gone[path] {
-		return []T{zero}, true
-	}
+// candidate values: when present, the value is normalized and appended if it
+// parses; when absent, the field contributes no candidate at all. stated
+// reports whether the client sent the field, which only the resolution needs.
+func readCandidates[T any](path string, fields map[string]string, normalize func(string) (T, bool)) (vals []T, stated bool) {
 	raw, ok := fields[path]
 	if !ok {
 		return nil, false
@@ -461,19 +426,11 @@ func jsonInt(raw string) (int64, bool) {
 	return r.Int(), true
 }
 
-// mostExpensiveResolution picks between contradictory readings. One empty
-// candidate - a value the client stated and the host would not carry - makes
-// the whole answer unknown: something was asked for and nobody knows what.
+// mostExpensiveResolution picks between contradictory readings.
 func mostExpensiveResolution(candidates []string) string {
-	if len(candidates) == 0 {
-		return ""
-	}
 	best := ""
 	var bestArea int64
 	for _, tier := range candidates {
-		if tier == "" {
-			return ""
-		}
 		// Ranked by the largest area any generation gives the tier, so the
 		// ranking comes from the table rather than from a hand-written
 		// 480<720<1080<4k list a new tier would silently fall off.
@@ -611,9 +568,8 @@ func estimateVideo(model string, spec videoSpec) videoEstimate {
 	if !spec.PromptFullyRead {
 		// All four could have been set in text that was not delivered, and Ark
 		// names no precedence between the two forms - so none of them can be
-		// trusted and all four are bounded. This is the case CONTRACTS §25.6
-		// added fields_omitted for: reading it as "the client sent nothing"
-		// would bound nothing and under-charge every time.
+		// trusted and all four are bounded: reading unread text as "the client
+		// sent nothing" would bound nothing and under-charge every time.
 		tier, ratio, frames, seconds = "", "", 0, 0
 		est.Assumed = append(est.Assumed, assumedPrompt)
 	}

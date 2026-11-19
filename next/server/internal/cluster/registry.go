@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -32,6 +33,9 @@ type RegistryOptions struct {
 	TTL         time.Duration    // liveness window, default 15 s
 	Now         func() time.Time // tests only: override the shared Redis clock and local health clock
 	Logger      *slog.Logger
+	// PluginSandbox is what the plugin sandbox enforces on this node,
+	// published for the nodes page (nil: not reported).
+	PluginSandbox *core.PluginSandboxStatus
 }
 
 // Registry implements core.NodeRegistry. Heartbeats write node:live,
@@ -45,6 +49,8 @@ type Registry struct {
 	nowFn  func() time.Time
 	lastRS atomic.Int64 // unix nanos of last successful Redis round trip
 	lastPG atomic.Int64 // unix nanos of last successful PG ping
+
+	sandbox string // JSON of opts.PluginSandbox, "" when not reported
 
 	mu      sync.Mutex
 	plugins map[string]string // plugin key -> state JSON, re-sent on every heartbeat
@@ -66,10 +72,15 @@ func NewRegistry(rdb redis.UniversalClient, pg Pinger, opts RegistryOptions) *Re
 	if now == nil {
 		now = time.Now
 	}
-	return &Registry{
+	r := &Registry{
 		rdb: rdb, pg: pg, opts: opts, log: orDefault(opts.Logger),
 		nowFn: now, start: now(), plugins: map[string]string{},
 	}
+	if opts.PluginSandbox != nil {
+		b, _ := json.Marshal(opts.PluginSandbox)
+		r.sandbox = string(b)
+	}
+	return r
 }
 
 func (r *Registry) NodeID() string { return r.opts.NodeID }
@@ -85,9 +96,9 @@ local ttl = tonumber(ARGV[2])
 redis.call('ZADD',KEYS[1],now,ARGV[3])
 redis.call('ZREMRANGEBYSCORE',KEYS[1],'-inf','('..tostring(now-ttl))
 redis.call('HSET',KEYS[2],'node_id',ARGV[4],'addr',ARGV[5],'host_version',ARGV[6],
-  'started_at',ARGV[7],'last_heartbeat',tostring(now),'managed',ARGV[8],'core_boot_id',ARGV[9])
+  'started_at',ARGV[7],'last_heartbeat',tostring(now),'managed',ARGV[8],'core_boot_id',ARGV[9],'plugin_sandbox',ARGV[10])
 redis.call('PEXPIRE',KEYS[2],ttl)
-if #ARGV > 9 then redis.call('HSET',KEYS[3],unpack(ARGV,10)) end
+if #ARGV > 10 then redis.call('HSET',KEYS[3],unpack(ARGV,11)) end
 redis.call('PEXPIRE',KEYS[3],ttl)
 return 1`)
 
@@ -139,7 +150,7 @@ func (r *Registry) Heartbeat(ctx context.Context) error {
 	}
 	r.mu.Unlock()
 
-	args := []any{sharedClockOverride(r.opts.Now), ttl.Milliseconds(), boot, r.opts.NodeID, r.opts.Addr, r.opts.HostVersion, r.start.UTC().Format(time.RFC3339Nano), strconv.FormatBool(r.opts.Managed), r.opts.CoreBootID}
+	args := []any{sharedClockOverride(r.opts.Now), ttl.Milliseconds(), boot, r.opts.NodeID, r.opts.Addr, r.opts.HostVersion, r.start.UTC().Format(time.RFC3339Nano), strconv.FormatBool(r.opts.Managed), r.opts.CoreBootID, r.sandbox}
 	args = append(args, plugins...)
 	_, err := heartbeatScript.Run(ctx, r.rdb, []string{keyNodeLive, infoKey, plugKey}, args...).Result()
 	if err != nil {
@@ -210,6 +221,12 @@ func (r *Registry) LiveNodes(ctx context.Context) ([]core.NodeStatus, error) {
 		}
 		if t, err := time.Parse(time.RFC3339Nano, info["started_at"]); err == nil {
 			st.StartedAt = t
+		}
+		if raw := info["plugin_sandbox"]; raw != "" {
+			var sb core.PluginSandboxStatus
+			if json.Unmarshal([]byte(raw), &sb) == nil {
+				st.PluginSandbox = &sb
+			}
 		}
 		out = append(out, st)
 	}

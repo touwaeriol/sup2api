@@ -204,36 +204,3 @@ func TestEnsureBuiltinUnreadableInstallOnlyInstallsNothing(t *testing.T) {
 		t.Fatalf("installed %d, enabled %v with an unreadable list", n, e.rollout.enabled)
 	}
 }
-
-// A built-in of runtime "none" (an account type declaring its upstream,
-// docs/UPSTREAM-DECLARATIVE.md §4.2) carries no runtimes and asks for no
-// accounts.credentials: it is installed, granted and enabled like any other.
-func TestEnsureBuiltinInstallsRuntimeNonePackage(t *testing.T) {
-	e := newEnv(t)
-	ctx := context.Background()
-	dir := t.TempDir()
-	m := pkgtest.Declared("openai", "0.4.0", "sub2api")
-	if err := os.WriteFile(filepath.Join(dir, "openai-0.4.0.s2plugin"), pkgtest.Build(m, e.root), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := e.svc.EnsureBuiltin(ctx, dir, testLogger(t)); err != nil {
-		t.Fatal(err)
-	}
-	var status string
-	var builtin bool
-	var active *string
-	if err := e.db.SQL.QueryRowContext(ctx, `SELECT status, builtin, active_version FROM plugins WHERE key = 'openai'`).
-		Scan(&status, &builtin, &active); err != nil {
-		t.Fatal(err)
-	}
-	if !builtin || status != StatusEnabled || active == nil || *active != "0.4.0" || len(e.rollout.enabled) != 1 {
-		t.Fatalf("after ensure: status=%s builtin=%v active=%v enabled=%v", status, builtin, active, e.rollout.enabled)
-	}
-	grants, err := LoadGrants(ctx, e.db.Gorm, "openai")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if g, ok := grants["platform.register"]; !ok || g.Status != GrantGranted {
-		t.Fatalf("grant platform.register = %+v", g)
-	}
-}

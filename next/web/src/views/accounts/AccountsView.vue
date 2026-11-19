@@ -18,10 +18,10 @@ import { useAccountTypes, typeKey } from './accountTypes'
 import AccountTypePicker from './AccountTypePicker.vue'
 import AccountTypeEndpoints from './AccountTypeEndpoints.vue'
 import AccountTypePlatforms from './AccountTypePlatforms.vue'
-import PlatformIcon from '@/components/platform/PlatformIcon.vue'
 import EntityPicker from '@/components/EntityPicker.vue'
 import UserRef from '@/components/entity/UserRef.vue'
 import AccountGroupsCell from './AccountGroupsCell.vue'
+import AccountProtocolMarks from './AccountProtocolMarks.vue'
 import AccountEditor from './AccountEditor.vue'
 import AccountNumberCell from './AccountNumberCell.vue'
 import PluginSlot from '@/components/plugin/PluginSlot.vue'
@@ -169,8 +169,6 @@ function groupNames(ids: number[] | undefined, refs?: Array<{ id: number; name: 
   return ids?.length ? ids.map((id) => groupName(id, refs)).join(', ') : '—'
 }
 const groupTags = (a: Account) => (a.group_ids || []).map((id) => ({ id, name: groupName(id, a.groups), platforms: lookupGroup(id)?.platforms }))
-/** Platforms the account's type serves now: their marks lead its type line. */
-const rowPlatforms = (a: Account) => (typeOf(a)?.platforms ?? []).filter((p) => p.available !== false).map((p) => p.id)
 
 /** Applies a server change to the list row and the open detail of the same account. */
 function patchAccount(id: number, patch: Partial<Account>) {
@@ -436,7 +434,6 @@ const quotaRefresh = useQuotaRefresh({
 // Similar to quota refresh, but for account balance (CONTRACTS §52).
 const balanceRefresh = useBalanceRefresh({
   onSnapshot: (id, balance) => patchAccount(id, { balance }),
-  onThrottled: (_id, n) => toast(t('accounts.balance.refreshThrottled', { n }), 'info'),
   onError: (_id, e) => notifyError(e)
 })
 
@@ -668,7 +665,7 @@ function resetFilters() {
       <template #cell-name="{ row }">
         <div class="min-w-56 max-w-[17rem] space-y-0.5">
           <div class="flex items-center gap-2"><span class="shrink-0 font-mono text-xxs text-fg-subtle">#{{ row.id }}</span><SLink as="button" class="min-w-0 truncate font-semibold" :title="row.name" @click="openDetail(row)">{{ row.name }}</SLink></div>
-          <div class="flex items-center gap-1.5 whitespace-nowrap text-xs text-fg-muted"><span v-if="rowPlatforms(row).length" class="inline-flex shrink-0 items-center gap-0.5" data-testid="account-platforms"><PlatformIcon v-for="p in rowPlatforms(row)" :id="p" :key="p" /></span><span :title="row.plugin_key">{{ accountTypes.pluginName(row.plugin_key) }}</span><span aria-hidden="true">/</span><span class="truncate" :title="accountTypes.typeLabel(row.plugin_key, row.type, row.type_label)">{{ accountTypes.typeLabel(row.plugin_key, row.type, row.type_label) }}</span><span v-if="row.last_used_at" class="shrink-0 text-xxs text-fg-subtle">· {{ formatRelative(row.last_used_at, t) }}</span></div>
+          <div class="flex items-center gap-1.5 whitespace-nowrap text-xs text-fg-muted"><AccountProtocolMarks :account="row" :account-type="typeOf(row)" /><span :title="row.plugin_key">{{ accountTypes.pluginName(row.plugin_key) }}</span><span aria-hidden="true">/</span><span class="truncate" :title="accountTypes.typeLabel(row.plugin_key, row.type, row.type_label)">{{ accountTypes.typeLabel(row.plugin_key, row.type, row.type_label) }}</span><span v-if="row.last_used_at" class="shrink-0 text-xxs text-fg-subtle">· {{ formatRelative(row.last_used_at, t) }}</span></div>
         </div>
       </template>
       <template #cell-groups="{ row }"><AccountGroupsCell :groups="groupTags(row)" /></template>
@@ -707,7 +704,7 @@ function resetFilters() {
       <template #cell-quota="{ row }">
         <div v-if="hasQuotaCell(row)" class="space-y-2">
           <AccountQuotaCell v-if="hasQuota(row.quota)" compact :quota="row.quota" :refreshing="quotaRefresh.refreshing.has(row.id)" @refresh="quotaRefresh.refresh(row.id)" />
-          <AccountBalanceCell v-if="hasBalance(row.balance)" :balance="row.balance" :refreshing="balanceRefresh.refreshing.has(row.id)" @refresh="balanceRefresh.refresh(row.id, row.balance)" />
+          <AccountBalanceCell v-if="hasBalance(row.balance)" :balance="row.balance" :refreshing="balanceRefresh.refreshing.has(row.id)" @refresh="balanceRefresh.refresh(row.id)" />
           <!-- Plugin decorations share one line under the windows, so a decorated row grows by one line at most. -->
           <div v-if="quotaSlotFor(row)" class="flex items-center gap-1.5">
             <PluginSlot name="account.list.quota" :props="{ account: row }" :only="(e) => forAccountType(e, row)" item-class="flex shrink-0 items-center" />
@@ -786,7 +783,7 @@ function resetFilters() {
               </SDescItem>
               <SDescItem v-if="detailType" :label="t('platforms.supported')"><AccountTypePlatforms :items="detailType.platforms" /></SDescItem>
               <SDescItem :label="t('accounts.servesEndpoints')">
-                <AccountTypeEndpoints v-if="detailType" :endpoints="detailType.endpoints" />
+                <AccountTypeEndpoints v-if="detailType" :endpoints="detailType.endpoints" :platforms="detailType.platforms.map((p) => p.id)" :served="detail.served_protocols" />
                 <SHint v-else inline size="xs">{{ t('accounts.typeUnavailable') }}</SHint>
               </SDescItem>
               <SDescItem :label="t('common.status')">
@@ -805,7 +802,7 @@ function resetFilters() {
               </SDescItem>
               <SDescItem :label="t('accounts.usage.column')"><AccountUsageCell :account-id="detail.id" :usage="detail.usage" /></SDescItem>
               <SDescItem v-if="hasQuota(detail.quota)" :label="t('accounts.quota.column')"><AccountQuotaCell :quota="detail.quota" :refreshing="quotaRefresh.refreshing.has(detail.id)" @refresh="quotaRefresh.refresh(detail.id)" /></SDescItem>
-              <SDescItem v-if="hasBalance(detail.balance)" :label="t('accounts.balance.accountLabel')"><AccountBalanceCell :balance="detail.balance" :refreshing="balanceRefresh.refreshing.has(detail.id)" @refresh="balanceRefresh.refresh(detail.id, detail.balance)" /></SDescItem>
+              <SDescItem v-if="hasBalance(detail.balance)" :label="t('accounts.balance.accountLabel')"><AccountBalanceCell :balance="detail.balance" :refreshing="balanceRefresh.refreshing.has(detail.id)" @refresh="balanceRefresh.refresh(detail.id)" /></SDescItem>
               <SDescItem :label="t('accounts.models')">
                 <span v-if="detail.models?.length" class="flex flex-wrap gap-1">
                   <SBadge v-for="m in detail.models" :key="m" tone="gray"><span class="font-mono">{{ m }}</span></SBadge>

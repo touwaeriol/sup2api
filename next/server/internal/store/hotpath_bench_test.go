@@ -46,7 +46,7 @@ func hotFixture(b *testing.B) (*store.DB, *store.QuotaSnapshot) {
 	}
 	now := time.Now()
 	if err := db.UpsertBalance(ctx, &store.BalanceSnapshot{AccountID: id, AmountMicros: 1_000_000, Currency: "USD",
-		Source: store.BalanceActive, UpdatedAt: &now}); err != nil {
+		UpdatedAt: &now}); err != nil {
 		b.Fatal(err)
 	}
 	q, err := db.AccountQuota(ctx, id)
@@ -131,7 +131,7 @@ func BenchmarkHotAccountBalances(b *testing.B) {
 	ctx := context.Background()
 	ids := []int64{q.AccountID}
 	benchPaths(b, func() error {
-		rows, err := db.SQL.QueryContext(ctx, `SELECT account_id, amount_micros, currency, source, updated_at, error, error_at
+		rows, err := db.SQL.QueryContext(ctx, `SELECT account_id, amount_micros, currency, unlimited, updated_at, error, error_at
 	FROM account_balances WHERE account_id = ANY($1)`, ids)
 		if err != nil {
 			return err
@@ -140,7 +140,7 @@ func BenchmarkHotAccountBalances(b *testing.B) {
 		out := map[int64]*store.BalanceSnapshot{}
 		for rows.Next() {
 			var b store.BalanceSnapshot
-			if err := rows.Scan(&b.AccountID, &b.AmountMicros, &b.Currency, &b.Source, &b.UpdatedAt, &b.Error, &b.ErrorAt); err != nil {
+			if err := rows.Scan(&b.AccountID, &b.AmountMicros, &b.Currency, &b.Unlimited, &b.UpdatedAt, &b.Error, &b.ErrorAt); err != nil {
 				return err
 			}
 			out[b.AccountID] = &b

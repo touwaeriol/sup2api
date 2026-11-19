@@ -1,8 +1,8 @@
-// Package pluginblob keeps plugin packages for the cores of a cluster. The
-// primary's shell holds every package that is not downloaded from a market;
-// a follower's shell fetches from the primary over the authenticated node
-// network and pushes uploads to it. Packages are addressed by sha256 and
-// verified on every write.
+// Package pluginblob keeps plugin packages for the cores of a cluster. Each
+// node's shell keeps the packages its core stored or used; a package a node
+// lacks is fetched from any other enabled node that holds it over the
+// authenticated node network. Packages are addressed by sha256 and verified
+// on every write.
 package pluginblob
 
 import (
@@ -15,12 +15,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
-	"github.com/Sub2API-Devs/sup2api/next/gateway/internal/peer"
 	rc "github.com/Sub2API-Devs/sup2api/next/runtime-contract"
 )
 
@@ -201,30 +200,25 @@ func (s *Store) GC(referenced map[string]bool, grace time.Duration) (int, error)
 	return removed, err
 }
 
-// uploadsPerNode bounds concurrent peer uploads from one node; uploads
-// beyond it wait on the sender. Local core uploads are not limited.
-const uploadsPerNode = 2
-
-// Service answers the local core and, on the primary, the other nodes.
+// Service answers the local core and the other nodes. A package is kept by
+// every node that stored or fetched it; no node is special.
 type Service struct {
 	Store *Store
-	// uploading counts the peer uploads in flight per source node.
-	uploading sync.Map // node id -> *int32
-	// Primary reports whether this node is the primary and the primary's
-	// HTTPS peer origin.
-	Primary func(context.Context) (self bool, peerURL string, err error)
-	// NodesWithPackage returns the other enabled nodes that may hold the
-	// package digest; each is asked in turn and one without it answers 404.
-	NodesWithPackage func(context.Context, string) ([]NodeRef, error)
-	// Client is the authenticated node client; it may reach any enabled
-	// node (uploads go to the primary, fetches to whichever node holds it).
+	// Peers lists the other enabled nodes, each marked online when its
+	// heartbeat is fresh; a missing package is asked from all of them, the
+	// online ones first.
+	Peers func(context.Context) ([]NodeRef, error)
+	// Client is the authenticated node client; it may reach any enabled node.
 	Client *http.Client
 }
 
-// NodeRef identifies a peer node for package fallback.
+// NodeRef identifies a peer node a package may be fetched from.
 type NodeRef struct {
 	ID      string
 	PeerURL string
+	// Online reports a fresh heartbeat; it orders the nodes asked, it does
+	// not exclude any.
+	Online bool
 }
 
 func sumFrom(path, prefix string) (string, bool) {
@@ -246,7 +240,7 @@ func (s *Service) Local() http.Handler {
 			if !s.Store.Has(sum) {
 				if err := s.pull(r.Context(), sum); err != nil {
 					if errors.Is(err, errNotFound) {
-						http.NotFound(w, r)
+						http.Error(w, err.Error(), http.StatusNotFound)
 						return
 					}
 					http.Error(w, err.Error(), http.StatusBadGateway)
@@ -259,10 +253,6 @@ func (s *Service) Local() http.Handler {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
-			if err := s.push(r.Context(), sum); err != nil {
-				http.Error(w, err.Error(), http.StatusBadGateway)
-				return
-			}
 			w.WriteHeader(http.StatusNoContent)
 		default:
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -270,9 +260,8 @@ func (s *Service) Local() http.Handler {
 	})
 }
 
-// Peer serves the private endpoint /internal/plugin-blobs/<sha256> after
-// node authentication and authorization (the primary for uploads, any
-// enabled node for reads).
+// Peer serves GET /internal/plugin-blobs/<sha256> to the other nodes after
+// node authentication and authorization; it serves only this node's store.
 func (s *Service) Peer() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sum, ok := sumFrom(r.URL.Path, "/internal/plugin-blobs/")
@@ -280,94 +269,69 @@ func (s *Service) Peer() http.Handler {
 			http.NotFound(w, r)
 			return
 		}
-		switch r.Method {
-		case http.MethodGet, http.MethodHead:
-			s.Store.serve(w, r, sum)
-		case http.MethodPut:
-			id, ok := peer.FromContext(r.Context())
-			if !ok {
-				peer.Failure(w, 401)
-				return
-			}
-			if r.ContentLength < 0 || r.ContentLength > s.Store.max() {
-				http.Error(w, "upload must declare a Content-Length within the package limit", http.StatusRequestEntityTooLarge)
-				return
-			}
-			release, ok := s.admitUpload(id.NodeID)
-			if !ok {
-				w.Header().Set("Retry-After", "5")
-				http.Error(w, "too many concurrent uploads from this node", http.StatusTooManyRequests)
-				return
-			}
-			defer release()
-			if err := s.Store.Write(sum, r.Body); err != nil {
-				status := http.StatusBadRequest
-				if errors.Is(err, ErrStoreFull) {
-					status = http.StatusInsufficientStorage
-				}
-				http.Error(w, err.Error(), status)
-				return
-			}
-			w.WriteHeader(http.StatusNoContent)
-		default:
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
 		}
+		s.Store.serve(w, r, sum)
 	})
 }
 
-// admitUpload reserves one of node's concurrent upload slots.
-func (s *Service) admitUpload(node string) (release func(), ok bool) {
-	v, _ := s.uploading.LoadOrStore(node, new(int32))
-	n := v.(*int32)
-	if atomic.AddInt32(n, 1) > uploadsPerNode {
-		atomic.AddInt32(n, -1)
-		return nil, false
-	}
-	return func() { atomic.AddInt32(n, -1) }, true
-}
+var errNotFound = errors.New("no reachable node holds the plugin package")
 
-var errNotFound = errors.New("package not found on the primary")
+// errUnreachable marks a peer the request never reached.
+var errUnreachable = errors.New("unreachable")
 
+// pull fetches a package this node lacks from the other enabled nodes, one
+// after the other, until one serves bytes matching its digest. Nodes with a
+// fresh heartbeat are asked first; a stale heartbeat does not exclude a node,
+// since one that is starting, or has not run its heartbeat yet, still holds
+// its packages. It reports errNotFound, naming each node and its answer,
+// when every node either does not hold the package or cannot be reached; a
+// node that answers with anything else (bytes that fail the digest, an error
+// status) fails the pull.
 func (s *Service) pull(ctx context.Context, sum string) error {
-	self, origin, err := s.Primary(ctx)
+	nodes, err := s.Peers(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("list the nodes to fetch the package from: %w", err)
 	}
-	if self {
-		return errNotFound
-	}
-	found, err := s.fetch(ctx, origin, sum)
-	if found {
-		return err
-	}
-	if err == nil {
-		err = errNotFound
-	}
-	// The primary failed or lacks the package (it was uploaded on a node
-	// that has since lost the primary role): try the nodes that hold it.
-	if s.NodesWithPackage == nil {
-		return err
-	}
-	nodes, listErr := s.NodesWithPackage(ctx, sum)
-	if listErr != nil {
-		return fmt.Errorf("%w; list nodes holding the package: %w", err, listErr)
-	}
+	slices.SortStableFunc(nodes, func(a, b NodeRef) int {
+		if a.Online == b.Online {
+			return 0
+		}
+		if a.Online {
+			return -1
+		}
+		return 1
+	})
+	var answers []string
+	var failures []error
 	for _, node := range nodes {
-		found, fetchErr := s.fetch(ctx, node.PeerURL, sum)
-		if found {
-			return fetchErr
-		}
-		if fetchErr != nil {
-			err = fetchErr
+		found, err := s.fetch(ctx, node.PeerURL, sum)
+		switch {
+		case err == nil && found:
+			return nil
+		case errors.Is(err, errUnreachable):
+			answers = append(answers, node.ID+": "+err.Error())
+		case err != nil:
+			failures = append(failures, fmt.Errorf("node %s: %w", node.ID, err))
+		default:
+			answers = append(answers, node.ID+": not held")
 		}
 	}
-	return err
+	if len(failures) > 0 {
+		return errors.Join(failures...)
+	}
+	if len(answers) == 0 {
+		answers = []string{"no other node to ask"}
+	}
+	return fmt.Errorf("%w (%s)", errNotFound, strings.Join(answers, "; "))
 }
 
-// fetch downloads the package from one peer. found reports whether the peer
-// answered with the package (err then reports storing it); a peer that does
-// not have it returns found=false, err=nil; any other failure returns
-// found=false with the error.
+// fetch downloads the package from one peer and stores it. A peer that does
+// not hold it returns found=false, err=nil; one the request does not reach
+// returns errUnreachable; bytes that fail the digest or size checks, and any
+// other failure, return the error.
 func (s *Service) fetch(ctx context.Context, origin, sum string) (found bool, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, origin+"/internal/plugin-blobs/"+sum, nil)
 	if err != nil {
@@ -375,7 +339,7 @@ func (s *Service) fetch(ctx context.Context, origin, sum string) (found bool, er
 	}
 	res, err := s.Client.Do(req)
 	if err != nil {
-		return false, fmt.Errorf("fetch package from %s: %w", origin, err)
+		return false, fmt.Errorf("%w: fetch package from %s: %w", errUnreachable, origin, err)
 	}
 	defer res.Body.Close()
 	switch {
@@ -386,40 +350,4 @@ func (s *Service) fetch(ctx context.Context, origin, sum string) (found bool, er
 	default:
 		return false, fmt.Errorf("fetch package from %s: HTTP %d", origin, res.StatusCode)
 	}
-}
-
-// push stores an upload on the primary before the upload is acknowledged:
-// a follower may disappear right after answering, and every other node
-// fetches packages from the primary.
-func (s *Service) push(ctx context.Context, sum string) error {
-	self, origin, err := s.Primary(ctx)
-	if err != nil {
-		return err
-	}
-	if self {
-		return nil
-	}
-	f, err := os.Open(s.Store.path(sum))
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	st, err := f.Stat()
-	if err != nil {
-		return err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, origin+"/internal/plugin-blobs/"+sum, f)
-	if err != nil {
-		return err
-	}
-	req.ContentLength = st.Size()
-	res, err := s.Client.Do(req)
-	if err != nil {
-		return fmt.Errorf("store package on the primary: %w", err)
-	}
-	defer res.Body.Close()
-	if res.StatusCode/100 != 2 {
-		return fmt.Errorf("store package on the primary: HTTP %d", res.StatusCode)
-	}
-	return nil
 }

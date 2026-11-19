@@ -31,15 +31,15 @@ func TestSettingsForPlugins(t *testing.T) {
 	}
 
 	d := DefaultSettings()
-	if got := settings(); got != (protocol.BillingSettings{MissingPricePolicy: d.MissingPricePolicy, MinBalance: "0", BigCostWarningUSD: "10",
+	if got := settings(); got != (protocol.BillingSettings{MinBalance: "0", BigCostWarningUSD: "10",
 		PreConsumeTokens: d.PreConsumeTokens, OutputReserveTokens: d.OutputReserveTokens, ClientDisconnectPolicy: d.ClientDisconnectPolicy}) {
 		t.Fatalf("defaults: %+v", got)
 	}
-	e.mustCall(admin, 200, "PUT", "/settings/billing", map[string]any{"missing_price_policy": "free", "min_balance": "1.5"})
-	if got := settings(); got.MissingPricePolicy != PolicyFree || got.MinBalance != "1.5" || events() != 1 {
+	e.mustCall(admin, 200, "PUT", "/settings/billing", map[string]any{"min_balance": "1.5"})
+	if got := settings(); got.MinBalance != "1.5" || events() != 1 {
 		t.Fatalf("saved: %+v, events %d", got, events())
 	}
-	e.mustCall(admin, 400, "PUT", "/settings/billing", map[string]any{"missing_price_policy": "maybe"})
+	e.mustCall(admin, 400, "PUT", "/settings/billing", map[string]any{"big_cost_warning_usd": "0"})
 	if events() != 1 {
 		t.Fatal("a refused save recorded settings.changed")
 	}

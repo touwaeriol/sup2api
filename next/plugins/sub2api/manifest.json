@@ -1,0 +1,57 @@
+{
+  "apiVersion": 1,
+  "key": "sub2api",
+  "name": { "en": "Sub2API", "zh": "Sub2API" },
+  "description": {
+    "en": "Adds the \"Sub2API\" account type: the API key of another Sub2API site (the legacy release or sub2api-next, your own Base URL) that serves the built-in openai (chat completions, responses including its WebSocket mode, embeddings, image generations and edits), anthropic (messages, count_tokens) and gemini (generateContent, streamGenerateContent, countTokens) platforms. Requests are forwarded in their own protocol as they are, with each protocol's official auth header; nothing is converted. The key's balance is read from the site's GET /v1/usage. The plugin builds the upstream requests; the core sends them, so the plugin itself makes no network connection. Model prices are set by administrators in the core.",
+    "zh": "新增\"Sub2API\"账号类型：另一个 Sub2API 站点（旧版或 sub2api-next，自填 Base URL）的 API Key，服务内置 openai（Chat Completions、Responses（含 WebSocket 模式）、Embeddings、生图与图片编辑）、anthropic（Messages、count_tokens）、gemini（generateContent、streamGenerateContent、countTokens）平台。请求按原协议原样转发，各协议用官方的鉴权头，不做任何转换。从站点的 GET /v1/usage 读取 Key 的余额。插件构造上游请求，由核心发送，插件自身不发起任何网络连接。模型价格由管理员在核心中配置。"
+  },
+  "version": "0.1.0",
+  "publisher": "sub2api",
+  "icon": "text:S",
+  "runtime": "grpc",
+  "entry": {
+    "grpc": { "binaries": "runtimes/{os}-{arch}/plugin" }
+  },
+  "hostCompat": ">=0.1.304 <0.2.0",
+  "hostUICompat": "^4.0",
+
+  "capabilities": [
+    { "id": "platform.adapter.v1" },
+    { "id": "platform.websocket.v1" }
+  ],
+
+  "accountTypes": [
+    {
+      "id": "apikey",
+      "label": { "en": "Sub2API", "zh": "Sub2API" },
+      "description": {
+        "en": "An API key of a Sub2API site. Each protocol goes to <Base URL> with its official path and auth header (OpenAI Authorization: Bearer, Anthropic x-api-key, Gemini x-goog-api-key). Which protocols a key serves depends on its group on the site.",
+        "zh": "Sub2API 站点的 API Key。各协议按官方路径和鉴权头发往 <Base URL>（OpenAI 用 Authorization: Bearer，Anthropic 用 x-api-key，Gemini 用 x-goog-api-key）。Key 能用哪些协议取决于它在站点上所属的分组。"
+      },
+      "form": { "mode": "native", "component": "Sub2APIKeyForm" },
+      "upstreamFields": ["base_url"],
+      "sensitiveFields": ["api_key"],
+      "settingsFields": ["base_url"],
+      "balance": { "updateInterval": 600 },
+      "platforms": [
+        { "platform": "openai" },
+        { "platform": "anthropic" },
+        { "platform": "gemini" }
+      ]
+    }
+  ],
+
+  "resources": { "memoryMB": 64, "cpu": 0.1, "maxThreads": 32, "maxOpenFiles": 64 },
+
+  "ui": {
+    "native": { "entry": "ui/native/entry.js" }
+  },
+
+  "hostPermissions": [
+    { "id": "platform.register",
+      "reason": { "en": "Register the \"Sub2API\" account type for the built-in openai, anthropic and gemini platforms", "zh": "为内置 openai、anthropic、gemini 平台注册\"Sub2API\"账号类型" } },
+    { "id": "ui.native",
+      "reason": { "en": "The API key account form (Sub2APIKeyForm)", "zh": "API Key 账号表单（Sub2APIKeyForm）" } }
+  ]
+}

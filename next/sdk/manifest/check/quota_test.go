@@ -12,12 +12,11 @@ func TestAccountTypeQuota(t *testing.T) {
 	m.Capabilities = []manifest.Capability{{ID: manifest.CapPlatformAdapter}}
 	m.HostPermissions = []manifest.HostPermission{
 		{ID: "gateway.endpoint"}, {ID: "platform.register"},
-		{ID: "accounts.credentials", Scope: map[string]any{"types": "own"}},
 	}
 	m.Platforms = []manifest.Platform{validPlatform()}
 	m.AccountTypes = []manifest.AccountType{{
 		ID: "oauth", Label: manifest.LocalizedText{"en": "OAuth"},
-		Form:      manifest.Form{Mode: "schema", Schema: "forms/k.json"},
+		Form:      keyForm(m),
 		Platforms: []manifest.AccountPlatform{{Platform: "video"}},
 		Quota: &manifest.AccountQuota{Query: true, Headers: []manifest.QuotaHeader{
 			{Key: "5h", Utilization: "anthropic-ratelimit-unified-5h-utilization",
@@ -25,7 +24,7 @@ func TestAccountTypeQuota(t *testing.T) {
 			{Key: "7d_fable", Utilization: "x-fable", UtilizationUnit: "percent", Reset: "x-fable-reset", ResetFormat: "rfc3339"},
 		}},
 	}}
-	files := map[string][]byte{"forms/k.json": []byte(`{}`)}
+	files := map[string][]byte{}
 	if err := Validate(m, files, ValidateOptions{Tooling: true}); err != nil {
 		t.Fatalf("valid quota rejected: %v", codes(err))
 	}
@@ -99,17 +98,16 @@ func TestAccountTypeRefresh(t *testing.T) {
 	m.Capabilities = []manifest.Capability{{ID: manifest.CapPlatformAdapter}}
 	m.HostPermissions = []manifest.HostPermission{
 		{ID: "gateway.endpoint"}, {ID: "platform.register"},
-		{ID: "accounts.credentials", Scope: map[string]any{"types": "own"}},
 	}
 	m.Platforms = []manifest.Platform{validPlatform()}
 	m.AccountTypes = []manifest.AccountType{{
 		ID: "oauth", Label: manifest.LocalizedText{"en": "OAuth"},
-		Form:           manifest.Form{Mode: "schema", Schema: "forms/k.json"},
+		Form:           keyForm(m),
 		Platforms:      []manifest.AccountPlatform{{Platform: "video"}},
 		SettingsFields: []string{"region"},
 		Refresh:        &manifest.AccountRefresh{},
 	}}
-	files := map[string][]byte{"forms/k.json": []byte(`{}`)}
+	files := map[string][]byte{}
 	if err := Validate(m, files, ValidateOptions{Tooling: true}); err != nil {
 		t.Fatalf("default refresh rejected: %v", codes(err))
 	}

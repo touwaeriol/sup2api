@@ -23,7 +23,7 @@ const props = withDefaults(
 )
 const emit = defineEmits<{ (e: 'update:modelValue', v: string): void }>()
 const attrs = useAttrs()
-const { id, a11y, invalid, size } = useFieldControl(props)
+const { id, a11y, invalid, size, blur } = useFieldControl(props)
 </script>
 
 <template>
@@ -39,5 +39,6 @@ const { id, a11y, invalid, size } = useFieldControl(props)
     :id="id"
     v-bind="{ ...attrs, ...a11y }"
     @input="emit('update:modelValue', ($event.target as HTMLTextAreaElement).value)"
+    @blur="blur"
   />
 </template>

@@ -55,25 +55,41 @@ import (
 // values.
 var sigV4ResultHeaders = []string{"Authorization", "X-Amz-Date", "X-Amz-Security-Token"}
 
+// sigV4SignedHeaders are what AWSSigV4Headers returns: the result headers
+// and the Content-Type the signature covers.
+var sigV4SignedHeaders = append([]string{"Content-Type"}, sigV4ResultHeaders...)
+
 // sigV4SignerOptions adjust the SDK signer. Production sets none; the tests
 // have the signer log the canonical request it signed (sigv4_test.go).
 var sigV4SignerOptions []func(*v4.SignerOptions)
 
-func signAWSSigV4(req *http.Request, payload []byte, d Directive, now time.Time) error {
-	if d.AccessKeyID == "" || d.SecretAccessKey == "" || d.Region == "" || d.Service == "" {
+// SignAWSSigV4 signs req in place. payload must be the exact bytes req sends
+// as its body (nil or empty for none): it is hashed into the signature, which
+// is why it is a parameter rather than read back from req.Body. It must run
+// after the URL, the host and every header it signs are final; headers it
+// does not sign may still change afterwards.
+//
+// Credentials it cannot use return an error and leave the request unsigned:
+// the caller must not send it. Errors never contain the secret or the
+// session token.
+func SignAWSSigV4(req *http.Request, payload []byte, c AWSCredentials, now time.Time) error {
+	if req == nil || req.URL == nil {
+		return errors.New("reqsign: no request to sign")
+	}
+	if c.AccessKeyID == "" || c.SecretAccessKey == "" || c.Region == "" || c.Service == "" {
 		return errors.New("reqsign: aws-sigv4 needs region, service, access key id and secret access key")
 	}
 	if _, err := url.ParseQuery(req.URL.RawQuery); err != nil {
 		return fmt.Errorf("reqsign: aws-sigv4 cannot parse the query string: %w", err)
 	}
 	bare := sigV4BareRequest(req)
-	creds := aws.Credentials{AccessKeyID: d.AccessKeyID, SecretAccessKey: d.SecretAccessKey, SessionToken: d.SessionToken}
+	creds := aws.Credentials{AccessKeyID: c.AccessKeyID, SecretAccessKey: c.SecretAccessKey, SessionToken: c.SessionToken}
 	sum := sha256.Sum256(payload)
 	// A signer of its own for every signature: a shared one caches the
 	// derived key per region and service under the access key id alone, and
 	// would keep signing with the old secret after an account's secret was
 	// corrected.
-	if err := v4.NewSigner(sigV4SignerOptions...).SignHTTP(context.Background(), creds, bare, hex.EncodeToString(sum[:]), d.Service, d.Region, now); err != nil {
+	if err := v4.NewSigner(sigV4SignerOptions...).SignHTTP(context.Background(), creds, bare, hex.EncodeToString(sum[:]), c.Service, c.Region, now); err != nil {
 		// The signer's own text is left out: nothing here vouches for what
 		// it quotes.
 		return errors.New("reqsign: aws-sigv4 signing failed")
@@ -87,6 +103,22 @@ func signAWSSigV4(req *http.Request, payload []byte, d Directive, now time.Time)
 		}
 	}
 	return nil
+}
+
+// AWSSigV4Headers returns the headers of req, signed by SignAWSSigV4, that
+// the signature wrote or covers, those present: Authorization, X-Amz-Date,
+// X-Amz-Security-Token and Content-Type. A plugin hands them to the host as
+// authoritative headers so that no later layer changes them. The host is
+// not among them (the URL carries it); every other header of req stays the
+// plugin's to classify.
+func AWSSigV4Headers(req *http.Request) http.Header {
+	out := http.Header{}
+	for _, name := range sigV4SignedHeaders {
+		if values := req.Header.Values(name); len(values) > 0 {
+			out[http.CanonicalHeaderKey(name)] = values
+		}
+	}
+	return out
 }
 
 // sigV4BareRequest is the part of req the signature covers besides the

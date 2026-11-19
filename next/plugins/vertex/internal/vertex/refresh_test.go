@@ -189,7 +189,6 @@ func TestParseRefreshResponse(t *testing.T) {
 		{"token without expires_in", &pluginv1.ParseRefreshResponseRequest{Status: 200, Body: []byte(`{"access_token":"ya29.new"}`)}, ok, 3600},
 		{"200 without token", &pluginv1.ParseRefreshResponseRequest{Status: 200, Body: []byte(`{"token_type":"Bearer"}`)}, transient, 0},
 		{"200 not JSON", &pluginv1.ParseRefreshResponseRequest{Status: 200, Body: []byte(`<html>`)}, transient, 0},
-		{"200 truncated", &pluginv1.ParseRefreshResponseRequest{Status: 200, Body: []byte(`{"access_token":"ya29.new"`), Truncated: true}, transient, 0},
 		{"transport error", &pluginv1.ParseRefreshResponseRequest{TransportError: "dial tcp: i/o timeout"}, transient, 0},
 
 		{"invalid_grant: key deleted", &pluginv1.ParseRefreshResponseRequest{Status: 400,
@@ -220,7 +219,7 @@ func TestParseRefreshResponse(t *testing.T) {
 			t.Run(tc.name+"/"+typ, func(t *testing.T) {
 				res, err := newTestPlugin(Endpoints{}).ParseRefreshResponse(context.Background(), &pluginv1.ParseRefreshResponseRequest{
 					Account: acc, Status: tc.in.GetStatus(), Body: tc.in.GetBody(),
-					TransportError: tc.in.GetTransportError(), Truncated: tc.in.GetTruncated(),
+					TransportError: tc.in.GetTransportError(),
 				})
 				if err != nil {
 					t.Fatalf("ParseRefreshResponse: %v", err)

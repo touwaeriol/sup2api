@@ -588,31 +588,19 @@ func (s *Service) consent(ctx context.Context, key, version string, req ConsentR
 }
 
 // dbSchemaUnconfined reports that granting db.schema takes
-// plugin:grant:db_schema_unconfined: schemas are managed, without role
-// isolation, for a plugin not from an official publisher. The consent check
-// and the review (Review.NeedsDBSchemaUnconfined) both ask it.
+// plugin:grant:db_schema_unconfined: schemas are managed and the plugin is
+// not from an official publisher. A plugin with db.schema uses the core's
+// database user, so it can reach every table the core can. The consent
+// check and the review (Review.NeedsDBSchemaUnconfined) both ask it.
 func (s *Service) dbSchemaUnconfined(official bool) bool {
-	return s.d.Schemas != nil && !s.opt.Plugins.DBRoleIsolation && !official
+	return s.d.Schemas != nil && !official
 }
 
 // checkGrantRights verifies the operator may approve every newly granted
 // high/critical permission (carried-over grants were approved before).
-// For db.schema: without role isolation, non-official plugins are rejected
-// unless the operator explicitly has plugin:grant:db_schema_unconfined.
+// For db.schema: non-official plugins are rejected unless the operator
+// explicitly has plugin:grant:db_schema_unconfined.
 func (s *Service) checkGrantRights(ctx context.Context, actorID int64, ds []decision, trust string, hasPub bool) error {
-	// Role isolation cannot be provided (no CREATEROLE): granting db.schema
-	// is refused for every plugin, built-in ones included, instead of
-	// running it with the core's database role (audit 2026-10-09 P1-7).
-	for _, d := range ds {
-		if d.permission == "db.schema" && d.status == GrantGranted {
-			if c, ok := s.d.Schemas.(interface{ CheckIsolation(context.Context) error }); ok {
-				if err := c.CheckIsolation(ctx); err != nil {
-					return err
-				}
-			}
-			break
-		}
-	}
 	if isSystem(ctx) {
 		return nil // built-in plugins ship with the image
 	}
@@ -630,7 +618,7 @@ func (s *Service) checkGrantRights(ctx context.Context, actorID int64, ds []deci
 		}
 	}
 
-	// PL-P0-5: db.schema requires role isolation OR official trust OR explicit override
+	// PL-P0-5: db.schema requires official trust OR the explicit override
 	if needsDBSchema {
 		if s.dbSchemaUnconfined(hasPub && trust == pkg.TrustOfficial) {
 			// Require explicit override permission
@@ -639,7 +627,7 @@ func (s *Service) checkGrantRights(ctx context.Context, actorID int64, ds []deci
 				return err
 			}
 			if !ok {
-				return core.ErrPermissionDenied.WithMessage("granting db.schema to non-official plugins without role isolation requires plugin:grant:db_schema_unconfined")
+				return core.ErrPermissionDenied.WithMessage("granting db.schema to non-official plugins requires plugin:grant:db_schema_unconfined")
 			}
 		}
 	}

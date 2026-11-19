@@ -2,7 +2,7 @@
 // The search fields of UsageFilters, for the first row and for More filters:
 // an EntityPicker for each of `fields` that picks an entity (ENTITY_FIELDS), a
 // select for those picked from a list (see useUsageSearchLabels), a text box
-// for the rest. They show the search draft `values` and report each change
+// for the rest, offering its suggestions (a <datalist>) where it has any. They show the search draft `values` and report each change
 // with the parameters it sets: a pick (a picker's, a select's) as `pick`,
 // which the search applies at once, typed text as `update`, which waits for
 // Search. The pickers follow the draft too: the API keys are those of the
@@ -11,7 +11,7 @@
 // for a layout that gives it the room to show its name. Without `textSearch`
 // an entity is picked only, never searched by name (the account view,
 // CONTRACTS §103.5).
-import { computed } from 'vue'
+import { computed, useId } from 'vue'
 import { SInput, SSelect } from '@sub2api/ui'
 import EntityPicker from '@/components/EntityPicker.vue'
 import { ENTITY_FIELDS, entityPatch, fieldParams, useUsageSearchLabels } from './usageFilters'
@@ -30,7 +30,8 @@ const props = withDefaults(
   { mine: false, protocolOptions: () => [], modelOptions: () => [], textSearch: true }
 )
 const emit = defineEmits<{ update: [patch: Record<string, string>]; pick: [patch: Record<string, string>] }>()
-const { label, options } = useUsageSearchLabels(() => props.protocolOptions, () => props.values.protocol ?? '')
+const { label, options, suggestions } = useUsageSearchLabels(() => props.protocolOptions, () => props.values.protocol ?? '')
+const listId = `usage-filter-${useId()}`
 const rows = computed(() =>
   props.fields.map(field => ({ field, entity: ENTITY_FIELDS[field], set: fieldParams(field).some(param => !!props.values[param]) }))
 )
@@ -79,8 +80,12 @@ const extras = computed<Record<string, Array<{ id: string; name: string }>>>(() 
       :aria-label="label(field)"
       :maxlength="256"
       :mono="field === 'client_ip'"
+      :list="suggestions[field] ? `${listId}-${field}` : undefined"
       :data-testid="`filter-${field}`"
       @update:model-value="emit('update', { [field]: String($event ?? '') })"
     />
+    <datalist v-if="!entity && !options[field] && suggestions[field]" :id="`${listId}-${field}`" :data-testid="`filter-${field}-suggestions`">
+      <option v-for="o in suggestions[field]" :key="o.value" :value="o.value" :label="o.label" />
+    </datalist>
   </template>
 </template>
