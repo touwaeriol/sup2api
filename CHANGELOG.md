@@ -8,6 +8,11 @@
 
 开发完成、尚未上线的改动。发布时改成发布日期的一节，补上提交、实际版本号和发布过程。
 
+### 核心：chat `json_object` 请求转 Responses 时 system 留在 input；流内不带 status 的 `invalid_request_error` 按 400 返回、不换号（无迁移）
+
+- `/v1/chat/completions` 带 `response_format: {"type":"json_object"}`、经核心转成 Responses（如 codex 账号）时，开头的 system/developer 消息不再并入 `instructions`，按原位置作为 `role: developer` 的 input 消息发送，也不写 `instructions`。Responses 只在 input 消息里找 “json” 字样，此前 “Reply in JSON.” 之类写在 system 里的请求会被上游拒绝。普通请求和 `json_schema` 请求不变（CONTRACTS §83.2）。
+- 上游只接受流式的账号（codex）在 200 的 SSE 里回 `error` / `response.failed` 事件、不带 `status` 且错误类型是 `invalid_request_error` 时，按 400 交给插件分类并返回客户端，不再按 502 冷却账号、换号重试；code 为账号或凭证类（如 `account_deactivated`、`invalid_api_key`）的仍按 502 换号，自动停用的关键字规则照常生效（CONTRACTS §83.1）。
+
 ### 云厂商上游：Azure OpenAI、Vertex AI、AWS Bedrock 三个新插件，OpenAI 账号可填组织与项目（openai 0.4.4、azure_openai 0.1.0、vertex 0.1.0、bedrock 0.1.0；核心加请求签名与响应流格式；无迁移）
 
 分支 `feat/cloud-providers`，未合并。**没有真实云账号，三家的行为都只对文档、黄金样例和模拟上游验证过**；没验证的事项见 [设计文档](next/docs/DESIGN-2026-11-17-CLOUD-PROVIDERS.md) 第 12 节，验证之前不要对外说“已支持”。填法见 [PLUGIN-CLOUD-PROVIDERS.md](next/docs/PLUGIN-CLOUD-PROVIDERS.md)。
