@@ -763,6 +763,10 @@ type legacyCall struct{ name, id string }
 // chatMessages maps messages to instructions and input. The system and
 // developer messages before the first other message become instructions
 // (joined by a blank line); later ones become developer input messages.
+// With text.format json_object the leading ones stay developer input
+// messages too: Responses requires the word "json" in the input messages
+// for that format and does not look at instructions, while Chat
+// Completions accepts it in the system message.
 func (c *chatResponses) chatMessages(in, out jobject) error {
 	msgs, err := jlist(in["messages"], "messages")
 	if err != nil {
@@ -774,7 +778,7 @@ func (c *chatResponses) chatMessages(in, out jobject) error {
 	conv := &chatConversation{callKinds: map[string]string{}}
 	input := []any{}
 	var instructions []string
-	leading := true
+	leading := !jsonObjectFormat(out)
 	for i, m := range msgs {
 		path := jpos("messages", i)
 		msg, err := jobj(m, path)
@@ -810,6 +814,14 @@ func (c *chatResponses) chatMessages(in, out jobject) error {
 	}
 	out["input"] = input
 	return nil
+}
+
+// jsonObjectFormat reports whether the converted body asks for text.format
+// json_object.
+func jsonObjectFormat(out jobject) bool {
+	text, _ := out["text"].(jobject)
+	format, _ := text["format"].(jobject)
+	return format["type"] == "json_object"
 }
 
 // instructionText joins the text parts of a leading system or developer

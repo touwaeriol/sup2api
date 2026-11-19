@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -96,6 +97,38 @@ func TestChatResponsesRequestDefaults(t *testing.T) {
 		j.Get("instructions").Exists() || j.Get("stream").Exists() || j.Get("max_output_tokens").Exists() ||
 		j.Get("stream_options.include_obfuscation").Raw != "false" {
 		t.Fatalf("defaults: %s", out)
+	}
+}
+
+// TestChatResponsesJSONObjectSystem: with response_format json_object the
+// leading system and developer messages stay developer input messages (the
+// Responses check for the word "json" reads input, not instructions); plain
+// and json_schema requests still turn them into instructions.
+func TestChatResponsesJSONObjectSystem(t *testing.T) {
+	const msgs = `"messages":[{"role":"system","content":"Reply in JSON."},{"role":"developer","content":[{"type":"text","text":"be brief"}]},{"role":"user","content":"hi"}]`
+	_, out := chatResponsesPrepared(t, `{"model":"m","response_format":{"type":"json_object"},`+msgs+`}`)
+	j := gjson.Parse(out)
+	if j.Get("instructions").Exists() || j.Get("text.format.type").String() != "json_object" || j.Get("input.#").Int() != 3 {
+		t.Fatalf("json_object: %s", out)
+	}
+	for i, want := range []string{"Reply in JSON.", "be brief"} {
+		item := j.Get("input." + strconv.Itoa(i))
+		if item.Get("type").String() != "message" || item.Get("role").String() != "developer" ||
+			item.Get("content.#").Int() != 1 || item.Get("content.0.type").String() != "input_text" || item.Get("content.0.text").String() != want {
+			t.Errorf("json_object input.%d = %s", i, item.Raw)
+		}
+	}
+	if j.Get("input.2.role").String() != "user" {
+		t.Errorf("json_object input.2 = %s", j.Get("input.2").Raw)
+	}
+
+	for _, rf := range []string{``, `"response_format":{"type":"text"},`,
+		`"response_format":{"type":"json_schema","json_schema":{"name":"o","schema":{"type":"object"}}},`} {
+		_, out := chatResponsesPrepared(t, `{"model":"m",`+rf+msgs+`}`)
+		j := gjson.Parse(out)
+		if j.Get("instructions").String() != "Reply in JSON.\n\nbe brief" || j.Get("input.#").Int() != 1 || j.Get("input.0.role").String() != "user" {
+			t.Errorf("%s: %s", rf, out)
+		}
 	}
 }
 
