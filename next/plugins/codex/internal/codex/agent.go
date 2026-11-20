@@ -27,6 +27,14 @@ type agent struct {
 	Originator string
 }
 
+// setHeaders writes a's headers into h as the authorization and refresh
+// requests spell them ("User-Agent", "Originator") and returns h.
+func (a agent) setHeaders(h map[string]string) map[string]string {
+	h["User-Agent"] = a.UserAgent
+	h["Originator"] = a.Originator
+	return h
+}
+
 // agent resolves the client headers of the account with credentials c (for
 // an authorization, the form's values).
 func (p *Plugin) agent(c credentials) agent {

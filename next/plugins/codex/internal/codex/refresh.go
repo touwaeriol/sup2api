@@ -51,8 +51,7 @@ func (p *Plugin) BuildRefreshRequest(_ context.Context, in *pluginv1.BuildRefres
 	body, _ := json.Marshal(map[string]string{
 		"client_id": CodexClientID, "grant_type": "refresh_token", "refresh_token": c.RefreshToken, "scope": RefreshScope,
 	})
-	a := p.agent(c)
-	h := map[string]string{"Accept": "application/json", "Content-Type": "application/json", "User-Agent": a.UserAgent, "Originator": a.Originator}
+	h := p.agent(c).setHeaders(map[string]string{"Accept": "application/json", "Content-Type": "application/json"})
 	return &pluginv1.BuildRefreshRequestResponse{Method: http.MethodPost, Url: p.ep.Auth + "/oauth/token", Headers: h, BodyJson: string(body)}, nil
 }
 
