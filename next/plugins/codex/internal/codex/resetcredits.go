@@ -167,7 +167,7 @@ func (p *Plugin) handleResetConsume(ctx context.Context, req *pluginv1.HTTPReque
 	}
 	// A credit was (or, for an unknown code, may have been) spent: the
 	// cached count is stale until the next list writes it.
-	p.deleteSession(ctx, kvResetCount, resetCountKey(id))
+	p.deleteCached(ctx, kvResetCount, resetCountKey(id))
 	if outcome != outcomeReset && outcome != outcomeAlreadyRedeemed {
 		return upstreamError("upstream_error", "unknown reset outcome / 未知的重置结果: "+strconv.Quote(textutil.Clip(outcome, 64))), nil
 	}
