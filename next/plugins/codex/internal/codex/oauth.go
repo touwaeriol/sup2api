@@ -139,7 +139,7 @@ func (p *Plugin) readCall(req *pluginv1.HTTPRequest) (routeCall, *pluginv1.HTTPR
 func (p *Plugin) post(ctx context.Context, call routeCall, rawURL, contentType string, body []byte) (authAnswer, error) {
 	out, err := pluginsdk.Fetch(ctx, &pluginv1.ExecutionHTTPRequest{
 		Method: http.MethodPost, Url: rawURL, Body: body, ProxyTicket: call.ticket,
-		Headers: map[string]string{"Content-Type": contentType, "Accept": "application/json", "User-Agent": call.agent.UserAgent, "Originator": call.agent.Originator},
+		Headers: call.agent.setHeaders(map[string]string{"Content-Type": contentType, "Accept": "application/json"}),
 	})
 	if err != nil {
 		return authAnswer{}, err
@@ -159,20 +159,41 @@ func (p *Plugin) postForm(ctx context.Context, call routeCall, rawURL string, fo
 	return p.post(ctx, call, rawURL, "application/x-www-form-urlencoded", []byte(form.Encode()))
 }
 
-// sendFailed answers a request post could not make: 502 upstream_unavailable
-// when it failed in transport, 400 proxy_refused when the core refused it.
-func sendFailed(err error) *pluginv1.HTTPResponse {
+// Route error codes of a request post could not make.
+const (
+	// codeUpstreamUnavailable: the core sent it and it failed in transport.
+	codeUpstreamUnavailable = "upstream_unavailable"
+	// codeProxyRefused: the core refused to send it (the proxy ticket, its
+	// proxy, the host), or the call to the core failed; nothing reached
+	// OpenAI.
+	codeProxyRefused = "proxy_refused"
+)
+
+// sendFailure classifies an error of post: its route error code and the
+// detail of a message, the transport error for codeUpstreamUnavailable and
+// the core's reason for codeProxyRefused.
+func sendFailure(err error) (code, detail string) {
 	if errors.Is(err, errUnreachable) {
-		return upstreamError("upstream_unavailable", err.Error())
+		return codeUpstreamUnavailable, err.Error()
 	}
-	return flowError("proxy_refused", refusedMessage(err))
+	return codeProxyRefused, status.Convert(err).Message()
 }
 
-// refusedMessage is the text of a request that was not sent (the core
-// refused it, or the call to the core failed). Nothing reached OpenAI: the
-// next call, with a fresh ticket of the form's proxy, may go through.
-func refusedMessage(err error) string {
-	return "the request was not sent; check the proxy in the account form and try again / 这次请求没有发出，请检查账号表单里的代理后重试: " + status.Convert(err).Message()
+// sendFailed answers a request post could not make: 502
+// upstream_unavailable, or 400 proxy_refused.
+func sendFailed(err error) *pluginv1.HTTPResponse {
+	code, detail := sendFailure(err)
+	if code == codeProxyRefused {
+		return flowError(code, refusedMessage(detail))
+	}
+	return upstreamError(code, detail)
+}
+
+// refusedMessage is the text of a request the core did not send, with its
+// reason. The login goes on: the next call, with a fresh ticket of the
+// form's proxy, may go through.
+func refusedMessage(reason string) string {
+	return "the request was not sent; check the proxy in the account form and try again / 这次请求没有发出，请检查账号表单里的代理后重试: " + reason
 }
 
 func (a authAnswer) ok() bool { return a.status >= 200 && a.status <= 299 }
@@ -343,9 +364,20 @@ func readToken(a authAnswer) (tokenResponse, error) {
 }
 
 // redeemFailure is why redeemCode got no tokens: the route error code
-// (upstream_unavailable, token_exchange_failed) and an "English / 中文"
-// message.
+// (codeProxyRefused, codeUpstreamUnavailable, token_exchange_failed) and an
+// "English / 中文" message.
 type redeemFailure struct{ code, msg string }
+
+// redeemNotSent is the failure of a token exchange post could not make.
+func (p *Plugin) redeemNotSent(login string, err error) *redeemFailure {
+	code, detail := sendFailure(err)
+	if code == codeProxyRefused {
+		p.log.Warn("codex: "+login+" token exchange refused by the core", "error", detail)
+		return &redeemFailure{code, refusedMessage(detail)}
+	}
+	p.log.Warn("codex: "+login+" token exchange failed", "error", detail)
+	return &redeemFailure{code, "start again / 请重新开始: " + detail}
+}
 
 // redeemCode exchanges an authorization code of the Codex client for its
 // tokens (one form POST to the token endpoint, sent as call), the last step
@@ -358,13 +390,8 @@ func (p *Plugin) redeemCode(ctx context.Context, login string, call routeCall, c
 	form.Set("client_id", CodexClientID)
 	form.Set("code_verifier", verifier)
 	a, err := p.postForm(ctx, call, p.ep.Auth+"/oauth/token", form)
-	if errors.Is(err, errUnreachable) {
-		p.log.Warn("codex: "+login+" token exchange failed", "error", err.Error())
-		return Credentials{}, &redeemFailure{"upstream_unavailable", "start again / 请重新开始: " + err.Error()}
-	}
 	if err != nil {
-		p.log.Warn("codex: "+login+" token exchange refused by the core", "error", status.Convert(err).Message())
-		return Credentials{}, &redeemFailure{"proxy_refused", refusedMessage(err)}
+		return Credentials{}, p.redeemNotSent(login, err)
 	}
 	if !a.ok() {
 		p.log.Warn("codex: "+login+" token exchange refused", "status", a.status, "oauth_error", oauthErrorCode(a.body))
@@ -583,17 +610,17 @@ func (p *Plugin) pollDevice(ctx context.Context, req *pluginv1.HTTPRequest, id s
 	}
 
 	a, err := p.postJSON(ctx, call, p.ep.Auth+"/api/accounts/deviceauth/token", map[string]string{"device_auth_id": s.DeviceAuthID, "user_code": s.UserCode})
-	if errors.Is(err, errUnreachable) {
-		// A network blip must not end the login: the next poll asks again.
-		p.log.Warn("codex: device code status request failed", "error", err.Error())
-		return pending("cannot reach the OpenAI authorization server, retrying / 暂时无法连接 OpenAI 授权服务器，稍后重试")
-	}
 	if err != nil {
-		// The core would not send it (the form's proxy, the host): nothing
-		// reached OpenAI and the device code is unspent, so the login goes
-		// on; the next poll carries a fresh ticket of the form's proxy.
-		p.log.Warn("codex: device code status request refused by the core", "error", status.Convert(err).Message())
-		return pending(refusedMessage(err))
+		// Nothing ended the login: a network blip, or a request the core
+		// would not send (the device code is unspent). The next poll asks
+		// again, with a fresh ticket of the form's proxy.
+		code, detail := sendFailure(err)
+		if code == codeProxyRefused {
+			p.log.Warn("codex: device code status request refused by the core", "error", detail)
+			return pending(refusedMessage(detail))
+		}
+		p.log.Warn("codex: device code status request failed", "error", detail)
+		return pending("cannot reach the OpenAI authorization server, retrying / 暂时无法连接 OpenAI 授权服务器，稍后重试")
 	}
 	switch {
 	case a.status == http.StatusForbidden || a.status == http.StatusNotFound:
@@ -769,7 +796,7 @@ func (p *Plugin) handleCodexExchange(ctx context.Context, req *pluginv1.HTTPRequ
 		return p.callbackRefused(ctx, id, cb), nil
 	}
 	c, f := p.redeemCode(ctx, "Sign in with Codex", call, cb.Code, s.Verifier, CodexRedirectURI)
-	if f != nil && f.code == "proxy_refused" {
+	if f != nil && f.code == codeProxyRefused {
 		// Nothing reached OpenAI and the code is unspent: the session stays,
 		// and the next call carries a fresh ticket of the form's proxy.
 		return flowError(f.code, f.msg), nil
