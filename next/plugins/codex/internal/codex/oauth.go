@@ -1,7 +1,6 @@
 package codex
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -62,8 +61,6 @@ const (
 	// pollLockTTL covers one poll under its lock: the status request and the
 	// token exchange, which the core's bound on the route call ends sooner.
 	pollLockTTL = 50 * time.Second
-	// lockReleaseTimeout bounds giving the poll lock back.
-	lockReleaseTimeout = 5 * time.Second
 )
 
 // ---------------------------------------------------------------- helpers
@@ -131,6 +128,16 @@ func (p *Plugin) readCall(req *pluginv1.HTTPRequest) (routeCall, *pluginv1.HTTPR
 	ua, _ := m.str("user_agent")
 	originator, _ := m.str("originator")
 	return routeCall{ticket: ticket, agent: p.agent(credentials{UserAgent: ua, Originator: originator})}, nil
+}
+
+// startCall reads the route call a start route needs; the response is set
+// when the request cannot start a login (no caller, no ticket, a client
+// header that cannot be sent).
+func (p *Plugin) startCall(req *pluginv1.HTTPRequest) (routeCall, *pluginv1.HTTPResponse) {
+	if req.GetCaller().GetUserId() <= 0 {
+		return routeCall{}, pluginsdk.Unauthenticated()
+	}
+	return p.readCall(req)
 }
 
 // post has the core send one request of call to the authorization server
@@ -217,119 +224,6 @@ func (a authAnswer) describe() string {
 		detail = textutil.Clip(strings.TrimSpace(string(a.body)), 200)
 	}
 	return fmt.Sprintf("status %d: %s", a.status, textutil.Clip(detail, 300))
-}
-
-func (p *Plugin) kv() (pluginsdk.KV, error) {
-	if p.host == nil {
-		return nil, pluginsdk.ErrHostNotReady
-	}
-	return p.host.KV(), nil
-}
-
-// Authorization sessions are caller sessions (pluginsdk.SaveCallerSession):
-// only the console user who started one can continue it, and to anyone else
-// it looks expired.
-
-// loadSession reads session id of req's caller.
-func (p *Plugin) loadSession(ctx context.Context, ns, id string, req *pluginv1.HTTPRequest, v any) (bool, error) {
-	kv, err := p.kv()
-	if err != nil {
-		return false, err
-	}
-	return pluginsdk.LoadCallerSession(ctx, kv, ns, id, req, v)
-}
-
-// newSession stores v as a new session of req's caller and returns its id.
-func (p *Plugin) newSession(ctx context.Context, ns string, req *pluginv1.HTTPRequest, v any, ttl time.Duration) (string, error) {
-	kv, err := p.kv()
-	if err != nil {
-		return "", err
-	}
-	return pluginsdk.SaveCallerSession(ctx, kv, ns, req, v, ttl)
-}
-
-// sessionNotStored answers a failed newSession: 401 without a caller, else
-// the store is unavailable.
-func sessionNotStored(err error) *pluginv1.HTTPResponse {
-	if errors.Is(err, pluginsdk.ErrNoCaller) {
-		return pluginsdk.Unauthenticated()
-	}
-	return pluginsdk.Unavailable("store the session / 保存会话失败: " + err.Error())
-}
-
-// saveSession rewrites the session loadSession returned for req.
-func (p *Plugin) saveSession(ctx context.Context, ns, id string, req *pluginv1.HTTPRequest, v any, ttl time.Duration) error {
-	kv, err := p.kv()
-	if err != nil {
-		return err
-	}
-	return pluginsdk.UpdateCallerSession(ctx, kv, ns, id, req, v, ttl)
-}
-
-// saveCached keeps plugin-wide JSON in the KV (the reset count cache):
-// unlike a session it belongs to no caller.
-func (p *Plugin) saveCached(ctx context.Context, ns, id string, v any, ttl time.Duration) error {
-	kv, err := p.kv()
-	if err != nil {
-		return err
-	}
-	b, _ := json.Marshal(v)
-	return kv.Set(ctx, ns, id, b, ttl)
-}
-
-// deleteSession deletes a KV entry (an authorization session or a cached
-// reset count). A failure is only logged: the entry expires with its ttl,
-// every code is single-use on OpenAI's side, and a stale count is only shown.
-func (p *Plugin) deleteSession(ctx context.Context, ns, id string) {
-	kv, err := p.kv()
-	if err == nil {
-		err = kv.Delete(ctx, ns, id)
-	}
-	if err != nil {
-		p.log.Warn("codex: delete a KV entry", "namespace", ns, "error", err.Error())
-	}
-}
-
-// decodeOptional reads an optional JSON body ("" or {} are both fine).
-func decodeOptional(req *pluginv1.HTTPRequest, v any) error {
-	if len(bytes.TrimSpace(req.GetBody())) == 0 {
-		return nil
-	}
-	return json.Unmarshal(req.GetBody(), v)
-}
-
-// startCall reads the route call a start route needs; the response is set
-// when the request cannot start a login (no caller, no ticket, a client
-// header that cannot be sent).
-func (p *Plugin) startCall(req *pluginv1.HTTPRequest) (routeCall, *pluginv1.HTTPResponse) {
-	if req.GetCaller().GetUserId() <= 0 {
-		return routeCall{}, pluginsdk.Unauthenticated()
-	}
-	return p.readCall(req)
-}
-
-// errInvalidJSON and errNoSession are malformed route requests
-// (pluginsdk.BadRequest: 400 invalid_argument with details.fields).
-func errInvalidJSON() *pluginv1.HTTPResponse {
-	return pluginsdk.BadRequest("body", "invalid_json", "the request body is not valid JSON / 请求体不是合法 JSON")
-}
-
-func errNoSession() *pluginv1.HTTPResponse {
-	return pluginsdk.BadRequest("session_id", "required", "session_id is required / 缺少 session_id")
-}
-
-// errNotReady is a 503 for a route called before Init.
-func errNotReady() *pluginv1.HTTPResponse {
-	return pluginsdk.Unavailable("the plugin is not ready / 插件尚未就绪: " + pluginsdk.ErrHostNotReady.Error())
-}
-
-// flowError is a 400 refusal of the authorization flow with its own code.
-func flowError(code, msg string) *pluginv1.HTTPResponse {
-	return pluginsdk.ErrorResponse(http.StatusBadRequest, code, msg)
-}
-
-func upstreamError(code, msg string) *pluginv1.HTTPResponse {
-	return pluginsdk.ErrorResponse(http.StatusBadGateway, code, msg)
 }
 
 // ---------------------------------------------------------------- credentials
@@ -566,16 +460,6 @@ func pollFailed(msg string) *pluginv1.HTTPResponse {
 func pollLockName(sessionID string) string {
 	sum := sha256.Sum256([]byte(sessionID))
 	return "device_poll:" + hex.EncodeToString(sum[:16])
-}
-
-// releaseLock gives a lock back, even when ctx has ended; a failure is
-// logged and the lock lapses after its ttl.
-func (p *Plugin) releaseLock(ctx context.Context, l *pluginsdk.Lock) {
-	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), lockReleaseTimeout)
-	defer cancel()
-	if err := l.Release(rctx); err != nil {
-		p.log.Warn("codex: release a lock", "lock", l.Name(), "error", err.Error())
-	}
 }
 
 // deviceExpired is the poll answer of a session that is over, was never there
