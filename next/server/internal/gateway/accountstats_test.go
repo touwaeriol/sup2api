@@ -52,7 +52,7 @@ func TestAccountStatsAdmissionPanicReleasesSlots(t *testing.T) {
 		pf := builtinPlatform(t, "openai")
 		base := &call{g: e.gw, c: c, gen: e.gen, ep: endpointOf(t, pf, "openai.responses_ws"), platform: "openai", pf: pf,
 			principal: e.auth.keys[testKey], gw: defaultGatewaySettings(), autoDisable: defaultAutoDisableSettings()}
-		s := &wsSession{g: e.gw, base: base, id: "panic-session"}
+		s := &wsSession{g: e.gw, base: base, present: context.Background(), id: "panic-session"}
 		raw, err := json.Marshal(create(wsModel, "hello"))
 		require.NoError(t, err)
 		require.Panics(t, func() { _, _ = s.begin(context.Background(), wsMessage{data: raw}) })
