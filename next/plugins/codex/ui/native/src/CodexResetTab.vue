@@ -118,7 +118,7 @@ watch(
         <span v-for="w in usage" :key="w.key" class="cx-reset-window">
           <span class="cx-muted">{{ t(`reset.window${w.key}`) }}</span>
           <SBadge size="xs" :tone="w.full ? 'danger' : 'gray'" class="cx-num">{{ w.percent ?? '?' }}%</SBadge>
-          <span v-if="w.resetsAt" class="cx-muted cx-reset-at">
+          <span v-if="w.resetsAt" class="cx-muted">
             {{ t('reset.resetsAt') }} <SDateTime :value="w.resetsAt" mode="absolute" />
           </span>
         </span>

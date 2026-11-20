@@ -43,12 +43,10 @@ watch(callback, () => {
   }
 })
 
+// Each call gets a generation; a reply of an older one (after another call
+// or unmount) is dropped.
 let generation = 0
-let alive = true
-onBeforeUnmount(() => {
-  alive = false
-  generation++
-})
+onBeforeUnmount(() => generation++)
 
 function setBusy(b: '' | 'start' | 'exchange') {
   busy.value = b
@@ -62,15 +60,15 @@ async function generate() {
   setBusy('start')
   try {
     const s = await startOAuth(await props.proxyTicket(), props.agent)
-    if (!alive || gen !== generation) return
+    if (gen !== generation) return
     session.value = s
     callback.value = ''
   } catch (e) {
-    if (!alive || gen !== generation) return
+    if (gen !== generation) return
     failure.value = errorMessage(e, t('actionFailed'))
     failedStep.value = 'start'
   } finally {
-    if (alive && gen === generation) setBusy('')
+    if (gen === generation) setBusy('')
   }
 }
 
@@ -82,28 +80,18 @@ async function complete() {
   setBusy('exchange')
   try {
     const r = await exchangeOAuth(session.value.session_id, callback.value.trim(), await props.proxyTicket(), props.agent)
-    if (!alive || gen !== generation) return
+    if (gen !== generation) return
     session.value = null
     callback.value = ''
     setBusy('')
     emit('authorized', r.credentials)
   } catch (e) {
-    if (!alive || gen !== generation) return
+    if (gen !== generation) return
     failure.value = errorMessage(e, t('actionFailed'))
     failedStep.value = isApiError(e) && SESSION_GONE.has(e.code) ? 'session' : 'exchange'
     setBusy('')
   }
 }
-
-function reset() {
-  generation++
-  session.value = null
-  callback.value = ''
-  failure.value = ''
-  failedStep.value = ''
-  setBusy('')
-}
-defineExpose({ reset })
 
 const steps = computed(() => [
   { key: 'open', title: t('oauth.step1') },

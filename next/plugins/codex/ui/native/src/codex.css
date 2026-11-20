@@ -4,7 +4,6 @@
  * semantic variables, which follow the light/dark theme.
  */
 
-.cx-form,
 .cx-flow,
 .cx-step-body {
   display: flex;
@@ -120,14 +119,6 @@
 }
 .cx-break {
   overflow-wrap: anywhere;
-}
-.cx-list {
-  margin: 0;
-  padding-left: 1rem;
-  list-style: disc;
-}
-.cx-field {
-  font-size: 0.75rem;
 }
 
 /* ---- official usage resets (CodexResetTab) */

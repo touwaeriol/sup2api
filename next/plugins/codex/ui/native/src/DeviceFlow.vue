@@ -4,7 +4,7 @@
 // /auth/device/poll every `interval` seconds until done / expired / error.
 // A poll that could not ask OpenAI (the form's proxy refused or unusable, the
 // network) shows why and polls on. Polling stops when the code expires, the
-// component unmounts or reset() is called.
+// operator cancels or the component unmounts.
 import { computed, onBeforeUnmount, ref } from 'vue'
 import { SAlert, SButton, SCopyButton, SHint, SIcon, SLink, SSpinner, SSteps, useNow } from '@sub2api/ui'
 import type { ProxyTicketSource } from '@sub2api/host'
@@ -31,7 +31,7 @@ const notice = ref('')
 const now = useNow(() => (phase.value === 'waiting' ? COUNTDOWN_TICK_MS : 0))
 const left = computed(() => Math.max(0, Math.round((expiresAt.value - now.value) / 1000)))
 
-// Each start gets a generation; a reply of an older one (after reset,
+// Each start gets a generation; a reply of an older one (after cancel,
 // restart or unmount) is dropped.
 let generation = 0
 let timer: ReturnType<typeof setTimeout> | null = null
@@ -135,7 +135,6 @@ function cancel() {
 }
 
 onBeforeUnmount(stop)
-defineExpose({ reset: cancel })
 
 const steps = computed(() => [
   { key: 'open', title: t('device.step1') },

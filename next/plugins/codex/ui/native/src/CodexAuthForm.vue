@@ -1,8 +1,7 @@
 <script setup lang="ts">
 // Native account form of the codex plugin (manifest accountTypes[].form
 // {mode: "native", component: "CodexAuthForm"}). The account editor mounts it
-// as <component v-model="credentials" :mode :account :errors> (plus
-// :account-type and :proxy-ticket) and calls validate() before
+// with the §23.5 props (nativeAccountFormProps) and calls validate() before
 // saving. Every call of a login (start, each poll, the exchange) asks
 // proxyTicket for the form's current proxy choice, so each request to OpenAI
 // leaves through the proxy the form names at that moment.
@@ -18,33 +17,27 @@
 //   across re-authorizations. Every call of a login sends their current
 //   values too, so the authorization requests already use them. A value the
 //   plugin refuses (the settings' rule) shows at its field and fails validate().
+// - A field error of the server shows at its field when the form has one
+//   (the client headers), else in the list above the form (SCredentialForm).
 import { computed, nextTick, ref, watch } from 'vue'
-import { SAlert, SBadge, SButton, SDescItem, SDescriptions, SField, SHint, SInput } from '@sub2api/ui'
-import type { ProxyTicketSource } from '@sub2api/host'
+import { nativeAccountFormProps, SAlert, SBadge, SButton, SCredentialForm, SDescItem, SDescriptions, SField, SHint, SInput, useCredentialForm, type Rule } from '@sub2api/ui'
 import { useCodexHost, type CodexCredentials } from './host'
-import { AGENT_FIELDS, agentOf, FLOW_OF, hasAccessToken, KNOWN_PLANS, mergeCredentials, summarize, withAgent, type AgentField } from './flow'
+import { AGENT_FIELDS, agentOf, FLOW_OF, hasAccessToken, KNOWN_PLANS, mergeCredentials, summarize, withAgent } from './flow'
 import { HEADER_VALUE } from './settings'
 import DeviceFlow from './DeviceFlow.vue'
 import OAuthFlow from './OAuthFlow.vue'
 
-const props = withDefaults(
-  defineProps<{
-    modelValue: Record<string, unknown> | null | undefined
-    mode?: 'create' | 'edit'
-    account?: ({ id?: number; type?: string } & Record<string, unknown>) | null
-    errors?: Record<string, string>
-    /** The editor's account type (the auth method picked when creating). */
-    accountType: { type: string }
-    /** A proxy ticket of the editor's current proxy choice (CONTRACTS §117). */
-    proxyTicket: ProxyTicketSource
-  }>(),
-  { mode: 'create', account: null, errors: () => ({}) }
-)
+const props = defineProps(nativeAccountFormProps)
 const emit = defineEmits<{ (e: 'update:modelValue', value: Record<string, unknown>): void }>()
 const host = useCodexHost()
 const t = host.t
 
-const type = computed(() => props.accountType.type)
+/** A client header the plugin would refuse: a control character but tab. */
+const agentRule: Rule = { pattern: HEADER_VALUE, message: () => t('agent.invalid') }
+const form = useCredentialForm(props, emit, { rules: Object.fromEntries(AGENT_FIELDS.map((k) => [k, agentRule])) })
+
+// CONTRACTS §23.5: the editor always passes accountType and proxyTicket.
+const type = computed(() => props.accountType!.type)
 const flow = computed(() => FLOW_OF[type.value])
 const editing = computed(() => props.mode === 'edit')
 
@@ -67,6 +60,7 @@ watch(
     reauthOpen.value = false
     flowBusy.value = false
     localError.value = ''
+    form.clearValidate()
   }
 )
 // The editor cleared the credentials under us (e.g. reopened for a new account).
@@ -82,7 +76,6 @@ const hasCurrent = computed(() => editing.value && hasAccessToken(original.value
 /** The flow is shown: creating without fresh tokens, or re-authorizing. */
 const showFlow = computed(() => !fresh.value && (!hasCurrent.value || reauthOpen.value))
 const freshSummary = computed(() => summarize(fresh.value as Record<string, unknown> | null))
-const errorList = computed(() => Object.entries(props.errors || {}).filter(([, v]) => !!v))
 
 function planLabel(plan: string): string {
   if (!plan) return ''
@@ -116,12 +109,6 @@ function again() {
 
 /** The account's own client headers as the form holds them now. */
 const agent = computed(() => agentOf(props.modelValue))
-/** The message of a client header the plugin would refuse, '' when it takes it. */
-const agentError = (k: AgentField) => (HEADER_VALUE.test(agent.value[k]) ? '' : t('agent.invalid'))
-
-function setAgent(k: AgentField, v: string) {
-  emit('update:modelValue', { ...(props.modelValue || {}), [k]: v })
-}
 
 function openReauth() {
   reauthOpen.value = true
@@ -136,7 +123,7 @@ function cancelReauth() {
 async function validate(): Promise<boolean> {
   if (hasAccessToken(props.modelValue)) {
     localError.value = ''
-    return AGENT_FIELDS.every((k) => !agentError(k))
+    return form.validate()
   }
   localError.value = t(flowBusy.value ? 'validate.inProgress' : 'validate.required')
   await nextTick()
@@ -148,62 +135,57 @@ defineExpose({ validate })
 </script>
 
 <template>
-  <div ref="root" class="cx-form" data-testid="codex-auth-form" :data-type="type" :data-mode="mode">
-    <!-- Editing: what the account holds now -->
-    <div v-if="hasCurrent && !fresh" class="cx-panel" data-testid="codex-current">
-      <div class="cx-panel-head">
-        <span class="cx-title">{{ t('current.title') }}</span>
-        <SBadge v-if="current.plan" tone="accent" size="xs">{{ planLabel(current.plan) }}</SBadge>
+  <div ref="root" data-testid="codex-auth-form" :data-type="type" :data-mode="mode">
+    <SCredentialForm :form="form">
+      <!-- Editing: what the account holds now -->
+      <div v-if="hasCurrent && !fresh" class="cx-panel" data-testid="codex-current">
+        <div class="cx-panel-head">
+          <span class="cx-title">{{ t('current.title') }}</span>
+          <SBadge v-if="current.plan" tone="accent" size="xs">{{ planLabel(current.plan) }}</SBadge>
+        </div>
+        <SDescriptions dense label-width="8rem">
+          <SDescItem :label="t('current.email')" :value="current.email || t('current.unknown')" />
+          <SDescItem :label="t('current.expires')">
+            <span class="cx-num">{{ formatTime(current.expiresAt) }}</span>
+            <span v-if="current.expiresAt && current.expiresAt < Date.now()" class="cx-muted cx-ml">{{ t('current.expired') }}</span>
+          </SDescItem>
+          <SDescItem v-if="current.accountId" :label="t('current.accountId')" :value="current.accountId" mono />
+        </SDescriptions>
+        <div class="cx-actions">
+          <SButton v-if="!reauthOpen" size="sm" icon="refresh" data-testid="codex-reauth" @click="openReauth">{{ t('current.reauth') }}</SButton>
+          <SButton v-else size="sm" variant="ghost" data-testid="codex-reauth-cancel" @click="cancelReauth">{{ t('current.cancelReauth') }}</SButton>
+        </div>
+        <SHint size="xs">{{ reauthOpen ? t('current.reauthHint') : t('current.kept') }}</SHint>
       </div>
-      <SDescriptions dense label-width="8rem">
-        <SDescItem :label="t('current.email')" :value="current.email || t('current.unknown')" />
-        <SDescItem :label="t('current.expires')">
-          <span class="cx-num">{{ formatTime(current.expiresAt) }}</span>
-          <span v-if="current.expiresAt && current.expiresAt < Date.now()" class="cx-muted cx-ml">{{ t('current.expired') }}</span>
-        </SDescItem>
-        <SDescItem v-if="current.accountId" :label="t('current.accountId')" :value="current.accountId" mono />
-      </SDescriptions>
-      <div class="cx-actions">
-        <SButton v-if="!reauthOpen" size="sm" icon="refresh" data-testid="codex-reauth" @click="openReauth">{{ t('current.reauth') }}</SButton>
-        <SButton v-else size="sm" variant="ghost" data-testid="codex-reauth-cancel" @click="cancelReauth">{{ t('current.cancelReauth') }}</SButton>
-      </div>
-      <SHint size="xs">{{ reauthOpen ? t('current.reauthHint') : t('current.kept') }}</SHint>
-    </div>
 
-    <!-- A flow finished: the new tokens are in v-model -->
-    <SAlert v-if="fresh" tone="success" :title="hasCurrent ? t('done.titleReauth') : t('done.title')" data-testid="codex-authorized">
-      <span v-if="freshSummary.email" class="cx-break" data-testid="codex-authorized-email">{{ freshSummary.plan ? t('done.detail', { email: freshSummary.email, plan: planLabel(freshSummary.plan) }) : freshSummary.email }}</span>
-      <span v-else>{{ t('done.noEmail') }}</span>
-      <span v-if="freshSummary.expiresAt" class="cx-sub cx-num">{{ t('current.expires') }}: {{ formatTime(freshSummary.expiresAt) }}</span>
-      <template #actions>
-        <SButton size="sm" variant="ghost" icon="refresh" data-testid="codex-again" @click="again">{{ t('done.again') }}</SButton>
+      <!-- A flow finished: the new tokens are in v-model -->
+      <SAlert v-if="fresh" tone="success" :title="hasCurrent ? t('done.titleReauth') : t('done.title')" data-testid="codex-authorized">
+        <span v-if="freshSummary.email" class="cx-break" data-testid="codex-authorized-email">{{ freshSummary.plan ? t('done.detail', { email: freshSummary.email, plan: planLabel(freshSummary.plan) }) : freshSummary.email }}</span>
+        <span v-else>{{ t('done.noEmail') }}</span>
+        <span v-if="freshSummary.expiresAt" class="cx-sub cx-num">{{ t('current.expires') }}: {{ formatTime(freshSummary.expiresAt) }}</span>
+        <template #actions>
+          <SButton size="sm" variant="ghost" icon="refresh" data-testid="codex-again" @click="again">{{ t('done.again') }}</SButton>
+        </template>
+      </SAlert>
+
+      <!-- The flow: creating, or re-authorizing -->
+      <template v-if="showFlow">
+        <DeviceFlow v-if="flow === 'device'" :key="`device-${type}`" :proxy-ticket="proxyTicket!" :agent="agent" @authorized="onAuthorized" @busy="onBusy" />
+        <OAuthFlow v-else-if="flow === 'oauth'" :key="`oauth-${type}`" :proxy-ticket="proxyTicket!" :agent="agent" @authorized="onAuthorized" @busy="onBusy" />
       </template>
-    </SAlert>
 
-    <!-- The flow: creating, or re-authorizing -->
-    <template v-if="showFlow">
-      <DeviceFlow v-if="flow === 'device'" :key="`device-${type}`" :proxy-ticket="proxyTicket" :agent="agent" @authorized="onAuthorized" @busy="onBusy" />
-      <OAuthFlow v-else-if="flow === 'oauth'" :key="`oauth-${type}`" :proxy-ticket="proxyTicket" :agent="agent" @authorized="onAuthorized" @busy="onBusy" />
-    </template>
+      <!-- The account's own client headers -->
+      <div class="cx-panel" data-testid="codex-agent">
+        <span class="cx-title">{{ t('agent.title') }}</span>
+        <SField prop="user_agent" :label="t('agent.userAgent')" :hint="t('agent.userAgentHint')" size="sm">
+          <SInput v-bind="form.bind('user_agent')" mono autocomplete="off" spellcheck="false" placeholder="sup2api-codex/<version>" data-testid="codex-user-agent" />
+        </SField>
+        <SField prop="originator" :label="t('agent.originator')" :hint="t('agent.originatorHint')" size="sm">
+          <SInput v-bind="form.bind('originator')" mono autocomplete="off" spellcheck="false" placeholder="sup2api" data-testid="codex-originator" />
+        </SField>
+      </div>
 
-    <!-- The account's own client headers -->
-    <div class="cx-panel" data-testid="codex-agent">
-      <span class="cx-title">{{ t('agent.title') }}</span>
-      <SField :label="t('agent.userAgent')" :hint="t('agent.userAgentHint')" :error="agentError('user_agent')" size="sm">
-        <SInput :model-value="agent.user_agent" mono autocomplete="off" spellcheck="false" placeholder="sup2api-codex/<version>" data-testid="codex-user-agent" @update:model-value="setAgent('user_agent', String($event ?? ''))" />
-      </SField>
-      <SField :label="t('agent.originator')" :hint="t('agent.originatorHint')" :error="agentError('originator')" size="sm">
-        <SInput :model-value="agent.originator" mono autocomplete="off" spellcheck="false" placeholder="sup2api" data-testid="codex-originator" @update:model-value="setAgent('originator', String($event ?? ''))" />
-      </SField>
-    </div>
-
-    <SAlert v-if="localError" tone="danger" dense data-testid="codex-validate-error">{{ localError }}</SAlert>
-    <SAlert v-if="errorList.length" tone="danger" dense :title="t('serverErrors')" data-testid="codex-server-errors">
-      <ul class="cx-list">
-        <li v-for="[field, message] in errorList" :key="field">
-          <code class="cx-field">{{ field }}</code> {{ message }}
-        </li>
-      </ul>
-    </SAlert>
+      <SAlert v-if="localError" tone="danger" dense data-testid="codex-validate-error">{{ localError }}</SAlert>
+    </SCredentialForm>
   </div>
 </template>
