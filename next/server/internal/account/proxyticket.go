@@ -193,15 +193,18 @@ func (s *Service) FetchWithProxyTicket(ctx context.Context, pluginKey string, in
 	if err != nil {
 		return nil, err
 	}
+	// A proxy that cannot be used (disabled since the ticket was issued) is
+	// a refusal like the checks above: nothing was sent.
 	eg, release, err := s.egressClient(ctx, e)
-	if err == nil {
-		defer release()
+	if err != nil {
+		return nil, err
 	}
+	defer release()
 	return execfetch.Do(ctx, in, execfetch.Binding{
 		CheckURL: func(ctx context.Context, raw string) (*url.URL, error) {
 			return netguard.CheckURLVia(ctx, raw, s.d.AllowPrivateUpstream, eg.Proxied, netguard.DefaultLookup)
 		},
-		Client: func(context.Context) (*http.Client, error) { return eg.Client, err },
+		Client: func(context.Context) (*http.Client, error) { return eg.Client, nil },
 	})
 }
 
