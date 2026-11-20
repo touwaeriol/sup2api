@@ -158,10 +158,10 @@ func TestAgentAuthorizationRefusesBadValues(t *testing.T) {
 	}
 }
 
-// TestValidateSettings: every value the settings JSON Schema refused (one
-// counterexample per constraint, written out here) is still refused, at its
-// field, by ValidateSettings and Configure alike; the default set (both
-// empty) and real values pass.
+// TestValidateSettings: every value the settings rules refuse (one
+// counterexample per constraint) is refused, at its field, by
+// ValidateSettings and Configure alike; the default set (both empty) and
+// real values pass, stored trimmed when trimming changed one.
 func TestValidateSettings(t *testing.T) {
 	h := startPlugin(t, mustPlugin(DefaultEndpoints))
 	refused := []struct{ settings, field, code string }{
@@ -186,10 +186,15 @@ func TestValidateSettings(t *testing.T) {
 			t.Errorf("%s: Configure accepted it", c.settings)
 		}
 	}
-	// Values are trimmed before the check, as an account's own are.
-	for _, ok := range []string{`{}`, `{"user_agent":"","originator":""}`, `{"user_agent":"sup2api-codex/0.2.0\tx","originator":"codex_cli_rs"}`, `{"user_agent":"UA/1\n","originator":" o\r\n"}`} {
-		if resp, err := h.ValidateSettings(ok, nil); err != nil || len(resp.GetErrors()) != 0 || resp.GetNormalizedConfigJson() != "" {
-			t.Errorf("%s: %v %v", ok, resp.GetErrors(), err)
+	// Values are trimmed before the check, as an account's own are, and the
+	// trimmed settings are what the core stores.
+	for ok, normalized := range map[string]string{
+		`{}`: "", `{"user_agent":"","originator":""}`: "", `{"user_agent":"sup2api-codex/0.2.0\tx","originator":"codex_cli_rs"}`: "",
+		`{"user_agent":"UA/1\n","originator":" o\r\n"}`: `{"originator":"o","user_agent":"UA/1"}`,
+		`{"user_agent":" "}`:                            `{"user_agent":""}`,
+	} {
+		if resp, err := h.ValidateSettings(ok, nil); err != nil || len(resp.GetErrors()) != 0 || resp.GetNormalizedConfigJson() != normalized {
+			t.Errorf("%s: %v %q %v, want normalized %q", ok, resp.GetErrors(), resp.GetNormalizedConfigJson(), err, normalized)
 		}
 	}
 	p := mustPlugin(DefaultEndpoints)
