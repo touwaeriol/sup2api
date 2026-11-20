@@ -16,6 +16,7 @@ import (
 	"github.com/tidwall/gjson"
 
 	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
+	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 )
 
@@ -202,6 +203,24 @@ func TestNoWaitUpstreamErrorClassification(t *testing.T) {
 				t.Fatalf("cooldowns %v", e.accounts.cooldowns)
 			}
 		})
+	}
+}
+
+// Every upstream answer of a relay reaches the quota observer once, with the
+// account it came from: the one that fails over and the one that serves.
+func TestNoWaitSamplesQuotaHeaders(t *testing.T) {
+	e := newEnv(t)
+	obs := &fakeQuotaObserver{}
+	e.gw.d.Quota = obs
+	e.gen.accountTypes[0].Type.Quota = &manifest.AccountQuota{Headers: []manifest.QuotaHeader{{
+		WindowMinutes: "x-codex-primary-window-minutes", Utilization: "x-codex-primary-used-percent"}}}
+	e.up.set("acc-1", &upstreamRule{status: 429})
+	if r := e.messages(body(testModel, false)); r.status != 200 || strings.Join(e.up.keys(), ",") != "acc-1,acc-2" {
+		t.Fatalf("failover: %d %v %s", r.status, e.up.keys(), r.body)
+	}
+	e.record()
+	if want := []quotaCall{{1, 1, 429}, {2, 1, 200}}; !slices.Equal(obs.calls, want) {
+		t.Fatalf("quota calls = %+v, want %+v", obs.calls, want)
 	}
 }
 

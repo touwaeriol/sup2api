@@ -513,6 +513,9 @@ func TestWebSocketErrorEventHeadersAreResponseHeaders(t *testing.T) {
 	c.until("response.completed")
 	e.record()
 	n := len(obs.calls)
+	if n != 1 || obs.calls[0] != (quotaCall{11, 1, http.StatusSwitchingProtocols}) {
+		t.Fatalf("quota calls of the handshake = %+v", obs.calls)
+	}
 	got := turn(c, "usage-limit", "error")
 	if len(obs.calls) != n+1 || obs.calls[n] != (quotaCall{11, 1, 429}) {
 		t.Fatalf("quota calls = %+v", obs.calls)
@@ -923,6 +926,78 @@ func TestWebSocketUnansweredPingEndsTheSession(t *testing.T) {
 	_ = e.mustDial() // never reads, so it never answers a ping
 	waitFor(t, func() bool { n, _ := e.slots.InUse(context.Background(), "ws", 5); return n == 1 })
 	waitFor(t, func() bool { n, _ := e.slots.InUse(context.Background(), "ws", 5); return n == 0 })
+}
+
+// A client that stops reading in the middle of a turn blocks the session's
+// write to it: the keepalive ping still goes unanswered, which ends the
+// session and frees its slots.
+func TestWebSocketClientNotReadingEndsTheSession(t *testing.T) {
+	e := newWSEnv(t)
+	e.gw.ws.ping = 100 * time.Millisecond
+	e.gw.ws.pingTimeout = 200 * time.Millisecond
+	flood := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.CloseNow() }()
+		ctx := r.Context()
+		if _, _, err := conn.Read(ctx); err != nil {
+			return
+		}
+		go func() { // answers the gateway's pings
+			for {
+				if _, _, err := conn.Read(ctx); err != nil {
+					return
+				}
+			}
+		}()
+		chunk := []byte(`{"type":"response.output_text.delta","delta":"` + strings.Repeat("x", 1<<20) + `"}`)
+		for conn.Write(ctx, websocket.MessageText, chunk) == nil {
+		}
+	}))
+	defer flood.Close()
+	e.wsPlat.amend = func(_ int, _ *pluginv1.ExecuteRequest, out *pluginv1.UpstreamRequest) error {
+		out.Url = "ws" + strings.TrimPrefix(flood.URL, "http") + "/v1/responses"
+		return nil
+	}
+	c := e.mustDial()
+	c.send(create(wsModel, "flood")) // and never reads: no message taken, no ping answered
+	waitFor(t, func() bool { n, _ := e.slots.InUse(context.Background(), "account", 11); return n == 1 })
+	waitFor(t, func() bool {
+		ws, _ := e.slots.InUse(context.Background(), "ws", 5)
+		account, _ := e.slots.InUse(context.Background(), "account", 11)
+		return ws == 0 && account == 0
+	})
+	if r := e.record(); r.Success || r.StatusCode != statusClientClosed {
+		t.Fatalf("record of the turn the client stopped reading: %+v", r)
+	}
+}
+
+// The upstream handshake ends when the client leaves: an upstream that never
+// answers it does not hold the session and its slots.
+func TestWebSocketHandshakeEndsWhenTheClientLeaves(t *testing.T) {
+	e := newWSEnv(t)
+	release := make(chan struct{})
+	hung := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-release }))
+	defer hung.Close()
+	defer close(release)
+	e.wsPlat.amend = func(_ int, _ *pluginv1.ExecuteRequest, out *pluginv1.UpstreamRequest) error {
+		out.Url = "ws" + strings.TrimPrefix(hung.URL, "http") + "/v1/responses"
+		return nil
+	}
+	c := e.mustDial()
+	c.send(create(wsModel, "hello"))
+	waitFor(t, func() bool { n, _ := e.slots.InUse(context.Background(), "account", 11); return n == 1 })
+	_ = c.conn.CloseNow()
+	waitFor(t, func() bool {
+		ws, _ := e.slots.InUse(context.Background(), "ws", 5)
+		account, _ := e.slots.InUse(context.Background(), "account", 11)
+		return ws == 0 && account == 0
+	})
+	if r := e.record(); r.Success || r.StatusCode != statusClientClosed || r.Attempts != 1 {
+		t.Fatalf("record of the handshake the client left: %+v", r)
+	}
 }
 
 // A connection without a sticky session is one session however many turns
