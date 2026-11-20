@@ -1,6 +1,6 @@
 # codex 插件：ChatGPT 账号（Codex 设备码 / Sign in with Codex）
 
-日期：2026-11-08（额度窗口 2026-11-09，官方用量重置次数 2026-11-10）。状态：已实现（插件 0.1.1 已上线；0.1.2 增加 `codex_device` 的 5h / 周额度窗口，见第 9 节，需核心 ≥0.1.257；0.1.3 接入官方用量重置次数，见第 10 节，需核心 ≥0.1.269；0.1.4 随权限加固发布，只改授权相关行为，见第 11 节，需核心 ≥0.1.286；0.1.7 的用量窗口只取自响应头，见第 13 节，同版新增 Sign in with Codex（`codex_oauth`）并删除 Sign in with ChatGPT（`chatgpt_siwc`），见第 14 节，需核心 ≥0.1.297）。0.1.11 是线上最后发布的版本。下一个发布版本是 0.2.0（未发布，需核心 ≥0.1.304、UI 3.20）：按转发 V2 改写（第 18 节；开发中曾编号 0.1.12，从未发布，因为是不兼容的契约变化，与其他平台插件一样升次版本号），并且授权请求由核心经账号表单选的代理发出，插件不再联网（第 19 节，CONTRACTS §117），以及经核心转换服务 OpenAI 生图接口（第 21 节，CONTRACTS §121）。核心契约见 CONTRACTS §83、§112（WebSocket 每轮见 §83.6），额度见 §44、§69。第 4 节按现状写；第 6–17 节是各版本当时的记录，其中的 `BuildUpstreamRequest`、补丁、`requestFields` 都已被第 18 节取代。
+日期：2026-11-08（额度窗口 2026-11-09，官方用量重置次数 2026-11-10）。状态：已实现（插件 0.1.1 已上线；0.1.2 增加 `codex_device` 的 5h / 周额度窗口，见第 9 节，需核心 ≥0.1.257；0.1.3 接入官方用量重置次数，见第 10 节，需核心 ≥0.1.269；0.1.4 随权限加固发布，只改授权相关行为，见第 11 节，需核心 ≥0.1.286；0.1.7 的用量窗口只取自响应头，见第 13 节，同版新增 Sign in with Codex（`codex_oauth`）并删除 Sign in with ChatGPT（`chatgpt_siwc`），见第 14 节，需核心 ≥0.1.297）。0.1.11 是线上最后发布的版本。下一个发布版本是 0.2.0（未发布，需核心 ≥0.1.304、界面包 4.0（`hostUICompat` `^4.0`））：按转发 V2 改写（第 18 节；开发中曾编号 0.1.12，从未发布，因为是不兼容的契约变化，与其他平台插件一样升次版本号），并且授权请求由核心经账号表单选的代理发出，插件不再联网（第 19 节，CONTRACTS §117），以及经核心转换服务 OpenAI 生图接口（第 21 节，CONTRACTS §121）。核心契约见 CONTRACTS §83、§112（WebSocket 每轮见 §83.6），额度见 §44、§69。第 4 节按现状写；第 6–17 节是各版本当时的记录，其中的 `BuildUpstreamRequest`、补丁、`requestFields` 都已被第 18 节取代。
 
 ## 1. 目标与边界
 
@@ -24,7 +24,7 @@
 2. 展示验证地址 `https://auth.openai.com/codex/device` 和 `user_code`，15 分钟有效。
 3. 轮询 `POST https://auth.openai.com/api/accounts/deviceauth/token`，JSON `{"device_auth_id", "user_code"}`：403/404 = 尚未授权，按 interval 继续；2xx → `{"authorization_code", "code_challenge", "code_verifier"}`；其他状态 = 失败。
 4. 换令牌：`POST https://auth.openai.com/oauth/token`，form：`grant_type=authorization_code`、`code`、`redirect_uri=https://auth.openai.com/deviceauth/callback`、`client_id`、`code_verifier` → `{id_token, access_token, refresh_token, expires_in}`。
-5. 刷新：`POST https://auth.openai.com/oauth/token`，JSON `{"client_id", "grant_type":"refresh_token", "refresh_token", "scope":"openid profile email"}`（与旧版 `backend/internal/pkg/openai/oauth.go` 一致）；refresh token 会轮换。
+5. 刷新：`POST https://auth.openai.com/oauth/token`，JSON `{"client_id", "grant_type":"refresh_token", "refresh_token", "scope":"openid profile email"}`（URL、`client_id`、`grant_type`、`scope` 与旧版 `backend/internal/pkg/openai/oauth.go` 相同；旧版用表单编码发送，插件按 Codex 客户端用 JSON）；refresh token 会轮换。
 6. 身份：id_token 的 `https://api.openai.com/auth` 声明里有 `chatgpt_account_id`、`chatgpt_plan_type`；`email` 在顶层。
 7. 上游：`POST https://chatgpt.com/backend-api/codex/responses`，头 `authorization: Bearer <access_token>`、`chatgpt-account-id`、`originator`、`user-agent`（取值见第 20 节，默认 `sup2api` 与 `sup2api-codex/<版本>`）、`accept: text/event-stream`，请求体带 `prompt_cache_key` 时另加 `session_id` / `conversation_id`（§16）；请求体须 `store:false`、`stream:true`、带 `instructions` 字段（缺省时补空串）。WebSocket：`wss://chatgpt.com/backend-api/codex/responses` + `openai-beta: responses_websockets=2026-02-06`。
 
@@ -163,8 +163,8 @@
 
 ### 10.2 发送方式
 
-- 插件不直连 `chatgpt.com`（`net` 仍只有 `auth.openai.com`）：两个请求都经 `pluginsdk.SendAccountRequest` 由核心通过账号代理发出（CONTRACTS §91，URL 主机须在 `externalServices`，`chatgpt.com` 已在；核心 0.1.269 起提供，旧核心答 `Unimplemented`，路由回 503 并提示需要的核心版本）。
-- 头为 `backendHeaders`（0.1.2–0.1.6 额度查询用的同一组）：`authorization: Bearer <access_token>`、`chatgpt-account-id`（有时）、`originator: sup2api`、`user-agent: sup2api-codex/0.1.3`、`accept: application/json`，consume 另加 `content-type: application/json`。不发 `x-codex-*` 或任何伪装 Codex CLI 的头。
+- 插件不联网（清单没有 `net`）：两个请求都经 `pluginsdk.SendAccountRequest` 由核心通过账号代理发出（CONTRACTS §91，URL 主机须在 `externalServices`，`chatgpt.com` 已在）。
+- 头为 `backendHeaders`（`resetcredits.go`，即账号头 `accountHeaders` 加 `accept`）：`authorization: Bearer <access_token>`、`chatgpt-account-id`（凭证里有时）、`originator`、`user-agent`（账号的客户端标识，取值见第 20.2 节，默认 `sup2api` 与 `sup2api-codex/<版本>`）、`accept: application/json`，consume 另加 `content-type: application/json`。不发 `x-codex-*` 或任何伪装 Codex CLI 的头。
 
 ### 10.3 路由（`scope: admin`，新权限 `codex:reset`）
 
@@ -177,7 +177,7 @@
   - `reset` / `already_redeemed` → 200 `{"outcome": "reset"|"already_redeemed", "windows_reset": n, "account_restored": bool}`。随后调用 `SetAccountAutomaticState(CLEAR)` 清除账号的自动停用与冷却（§9.4 窗口用满时设置的，核心本版起 CLEAR 也清冷却）；CLEAR 失败只记 warn，请求仍为 200，`account_restored: false`（状态到窗口重置时刻自然解除）。
   - `nothing_to_reset` → 409 `nothing_to_reset`（未消耗次数）；`no_credit` → 409 `no_credit`。
 - `POST /reset-credits/summary`，body `{"account_ids": [int, ...]}` → `{"accounts": {"29": {"available_count": 2, "updated_at": 1793491200}}}`（键为账号 id 字符串，`updated_at` 为写入缓存的 Unix 秒）。只读插件 KV、不访问 ChatGPT、不读凭证；没有缓存的账号不出现在结果里（结果可以是 `{}`）。`account_ids` 先只留正整数并去重，之后超过 `manifest.MaxAccountBatch`（500）→ 400（field `account_ids`，code `max`）。供账号列表的次数装饰器使用（列表每 10 秒刷新）。
-- list / consume 共同的错误：账号不存在或不属于本插件 → 404 `account_not_found`；~~账号类型不是 `codex_device` → 400 `unsupported_account_type`~~（0.1.7 起两种类型都适用，不再有这个错误）；凭证无 `access_token` 或不是 JSON → 409 `not_authorized`（提示重新授权）；上游 401/403 → 409 `auth_rejected`（提示重新授权）；连接失败、其他非 2xx、响应过大、未知 `code` → 502 `upstream_error`（带状态码和截断到 200 字节的响应片段；片段中出现的 access token 替换为 `[redacted]`，绝不回显令牌）；读账号或发请求的宿主调用失败 → 503 `unavailable`（只有 `Unimplemented` 才提示需要核心 0.1.269）。
+- list / consume 共同的错误：账号不存在或不属于本插件 → 404 `account_not_found`；~~账号类型不是 `codex_device` → 400 `unsupported_account_type`~~（0.1.7 起两种类型都适用，不再有这个错误）；凭证无 `access_token` 或不是 JSON → 409 `not_authorized`（提示重新授权）；上游 401/403 → 409 `auth_rejected`（提示重新授权）；连接失败、其他非 2xx、未知 `code` → 502 `upstream_error`（带状态码和截断到 200 字节的响应片段；片段中出现的 access token 替换为 `[redacted]`，绝不回显令牌）；读账号（`Host.Account`）或发请求的宿主调用失败 → 503 `unavailable`，message 带核心给的原因。账号的代理不可用时（`GetAccount` 取不到账号的出口）也是读账号失败：回 503 `unavailable`，consume 不加锁，两个路由都不发请求。
 
 ### 10.4 锁与幂等
 
@@ -189,7 +189,7 @@
 
 - `version` 0.1.3，`hostCompat` `>=0.1.269 <0.2.0`（`SendAccountRequest`）。
 - 新增 userPermission `codex:reset`（说明写明会消耗账号由 OpenAI 发放的重置次数、不可撤回），三条路由（list、consume、summary）都用它，与授权用的 `codex:manage` 分开。
-- 新增宿主权限 `accounts.auto_state`（`types: own`，用于成功后 CLEAR）；`accounts.credentials`、`kv`（次数缓存）、`lock`、`routes.admin` 的 reason 补上本功能。控制台入口（UI 3.8，CONTRACTS §91b，`hostUICompat` `^3.8`）：`account.list.quota` 次数装饰 `CodexResetBadge`、`account.detail.tabs` 标签页 `CodexResetTab`、行操作 `reset-credit`（`POST /reset-credits/consume`，`danger`、带确认、不设 `bulk`），都要 `codex:reset` 且只对 `codex_device` 显示（0.1.7 起两种类型都适用）。
+- 新增宿主权限 `accounts.auto_state`（`types: own`，用于成功后 CLEAR）；`kv`（次数缓存）、`lock`、`routes.admin` 的 reason 补上本功能。读账号不需要宿主权限（插件收到自己类型的账号，§22、CONTRACTS §124；本功能最初用 `accounts.credentials`，0.2.0 删除）。控制台入口（UI 3.8，CONTRACTS §91b，`hostUICompat` `^3.8`）：`account.list.quota` 次数装饰 `CodexResetBadge`、`account.detail.tabs` 标签页 `CodexResetTab`、行操作 `reset-credit`（`POST /reset-credits/consume`，`danger`、带确认、不设 `bulk`），都要 `codex:reset` 且只对 `codex_device` 显示（0.1.7 起两种类型都适用）。
 - 守线：只由管理员对单个账号手动触发，插件从不自动消耗重置次数；请求如实标 sup2api；只用于账号主人自己的订阅。
 - 测试：`resetcredits_test.go`（假 chatgpt.com + 包一层 harness 宿主 fake `AccountCredentials` / `SendAccountRequest` / `SetAccountAutomaticState`）：list 解析与排序、各 `code` 与状态码的映射、传输失败重试复用同一 `redeem_request_id` 且最多两次、锁被占回 409 且不发请求、SIWC / 无令牌 / 未知账号、`account_ids` 数量不对、reset 后 CLEAR 及 CLEAR 失败仍 200、请求头含 `originator: sup2api` 且无 `x-codex-*`、错误不回显令牌、旧核心回 503；`manifest_test.go`（新权限、路由与权限对应、`accounts.auto_state` 范围）。
 
@@ -295,9 +295,9 @@
 - 不再写执行记录：以前每个 codex 请求在 `plugin_executions` 写三次、插件崩溃会切断在途的流；现在核心在 `Execute` 返回后才发请求，插件崩溃或重启不影响在途的流。
 - 插件的头全部保持权威头，运营方的请求头透传和覆盖改不了它们（与改写前相同）。
 - 两个账号类型在清单里写 `"passHeaders": []`：核心不交给插件任何客户端请求头（插件本来就丢弃它们、自己写出发送的每个头）。以前没写这个字段，核心把 openai 平台的整份列表交给插件；中间版本只列 `user-agent`。上游收到的请求没有变化。
-- 测试：`internal/codex/execute_test.go`（两种类型、HTTP 与 WebSocket 的改写，经假宿主的一次中继），`upstream_test.go`（会话头），`TestConformance` 调一致性套件（两种类型的 HTTP 请求、WebSocket 一轮，以及核心对只流式类型发出的非流式形式：`meta.stream` 为假、请求体的 `stream` 为真）。`authorization`、`chatgpt-account-id` 是凭证头，其余头按已发布插件的约定声明为权威头；11 条全部通过，没有例外。
+- 测试：`internal/codex/execute_test.go`（两种类型、HTTP 与 WebSocket 的改写，经假宿主的一次中继），`execute_test.go` 的 `TestExecuteSession`（会话头），`TestConformance` 调一致性套件（两种类型的 HTTP 请求、WebSocket 一轮，以及核心对只流式类型发出的非流式形式：`meta.stream` 为假、请求体的 `stream` 为真）。`authorization`、`chatgpt-account-id` 是凭证头，其余头按已发布插件的约定声明为权威头；11 条全部通过，没有例外。
 
-## 19. 0.2.0：授权请求走账号表单选的代理（2026-11-18，所有者要求“账号授权时的第一次换令牌不走代理：修复bug”，需核心 ≥0.1.304、UI 3.20）
+## 19. 0.2.0：授权请求走账号表单选的代理（2026-11-18，所有者要求“账号授权时的第一次换令牌不走代理：修复bug”，需核心 ≥0.1.304、界面包 4.0（`hostUICompat` `^4.0`））
 
 通用机制见 CONTRACTS §117 与 [DESIGN-2026-11-18-ACCOUNT-PROXY-TICKET.md](DESIGN-2026-11-18-ACCOUNT-PROXY-TICKET.md)。
 
