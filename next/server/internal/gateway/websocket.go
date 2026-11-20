@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -116,7 +115,11 @@ type wsSession struct {
 	g      *Gateway
 	base   *call // the upgrade request: endpoint, headers; its principal is refreshed every turn
 	client *websocket.Conn
-	id     string
+	// present ends when the client is gone. What a turn only waits for on
+	// the client's behalf (the upstream handshake) ends with it; recording
+	// the turn goes on under the session's context.
+	present context.Context
+	id      string
 	// key and ip are the upgrade request's API key and client address; every
 	// turn authenticates with them again (refresh).
 	key, ip string
@@ -157,8 +160,12 @@ type wsTurn struct {
 func (s *wsSession) run(ctx context.Context) {
 	sctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancel()
+	present, left := context.WithCancel(sctx)
+	defer left()
+	s.present = present
 	in := make(chan wsMessage, 1)
-	go s.read(sctx, s.client, in)
+	go s.read(sctx, s.client, in, left)
+	go s.heartbeat(sctx, s.client)
 	defer func() {
 		if s.up != nil {
 			_ = s.up.CloseNow()
@@ -172,13 +179,6 @@ func (s *wsSession) run(ctx context.Context) {
 			turn.release()
 		}
 	}()
-	var keepalive <-chan time.Time
-	if s.g.ws.ping > 0 {
-		t := time.NewTicker(s.g.ws.ping)
-		defer t.Stop()
-		keepalive = t.C
-	}
-	var clientPing, upPing atomic.Bool // a ping in flight on that connection
 	poll := time.NewTicker(s.g.ws.drainPoll)
 	defer poll.Stop()
 	var drainDeadline time.Time
@@ -277,11 +277,6 @@ func (s *wsSession) run(ctx context.Context) {
 			s.finish(sctx, turn, wsOutcome{status: http.StatusGatewayTimeout, errType: errTypeUpstream, msg: errStreamIdleTimeout.Error()})
 			end(websocket.StatusTryAgainLater, "upstream went silent; reconnect")
 			return
-		case <-keepalive:
-			s.keepalive(sctx, s.client, &clientPing)
-			if s.up != nil {
-				s.keepalive(sctx, s.up, &upPing)
-			}
 		case <-poll.C:
 			if !s.g.draining() && ctx.Err() == nil {
 				continue
@@ -301,10 +296,14 @@ func (s *wsSession) run(ctx context.Context) {
 	}
 }
 
-// read pumps one connection into ch until it fails.
-func (s *wsSession) read(ctx context.Context, conn *websocket.Conn, ch chan<- wsMessage) {
+// read pumps one connection into ch until it fails; failed is called as soon
+// as it does, before the session loop gets to hear of it.
+func (s *wsSession) read(ctx context.Context, conn *websocket.Conn, ch chan<- wsMessage, failed func()) {
 	for {
 		typ, data, err := conn.Read(ctx)
+		if err != nil {
+			failed()
+		}
 		select {
 		case ch <- wsMessage{typ: typ, data: data, err: err}:
 		case <-ctx.Done():
@@ -316,21 +315,33 @@ func (s *wsSession) read(ctx context.Context, conn *websocket.Conn, ch chan<- ws
 	}
 }
 
-// keepalive pings c in the background unless a ping is already in flight. A
-// ping that fails or goes unanswered for pingTimeout closes c; its reader then
-// reports the error and the session ends the way it does for a disconnect.
-func (s *wsSession) keepalive(ctx context.Context, c *websocket.Conn, inFlight *atomic.Bool) {
-	if !inFlight.CompareAndSwap(false, true) {
+// heartbeat pings c every ping interval until the session ends, on a
+// goroutine of its own: a session loop blocked writing to a peer that stopped
+// reading does not answer for that peer. A ping that fails or goes unanswered
+// for pingTimeout closes c; its reader and any write to it then report the
+// error and the session ends the way it does for a disconnect.
+func (s *wsSession) heartbeat(ctx context.Context, c *websocket.Conn) {
+	if s.g.ws.ping <= 0 {
 		return
 	}
-	go func() {
-		defer inFlight.Store(false)
-		pctx, cancel := context.WithTimeout(ctx, s.g.ws.pingTimeout)
-		defer cancel()
-		if err := c.Ping(pctx); err != nil && ctx.Err() == nil {
-			_ = c.CloseNow()
+	t := time.NewTicker(s.g.ws.ping)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
 		}
-	}()
+		pctx, cancel := context.WithTimeout(ctx, s.g.ws.pingTimeout)
+		err := c.Ping(pctx)
+		cancel()
+		if err != nil {
+			if ctx.Err() == nil {
+				_ = c.CloseNow()
+			}
+			return
+		}
+	}
 }
 
 func (s *wsSession) write(ctx context.Context, typ websocket.MessageType, data []byte) error {
@@ -651,12 +662,12 @@ func (s *wsSession) dial(ctx context.Context, cl *call, ref *core.AccountRef) at
 	// The handshake's headers in the layers of an HTTP request
 	// (layerHeaders) without the passthrough: the plugin's defaults, the
 	// account's header override (§108) and parameter override, the plugin's
-	// authoritative headers. The handshake ends with ctx (the client
-	// leaving) and has no deadline of its own; its dial context is released
+	// authoritative headers. The handshake ends with the client leaving
+	// (present) and has no deadline of its own; its dial context is released
 	// once it is done, so the connection itself lives as long as the session.
 	header := http.Header{}
 	layerHeaders(header, req, cl.paramOverride.headers.Apply, handshakeOwned)
-	dctx, dcancel := context.WithCancel(ctx)
+	dctx, dcancel := context.WithCancel(s.present)
 	up, resp, err := websocket.Dial(dctx, target.String(), &websocket.DialOptions{HTTPClient: execfetch.NoRedirects(client), HTTPHeader: header,
 		CompressionMode: websocket.CompressionContextTakeover})
 	dcancel()
@@ -664,7 +675,7 @@ func (s *wsSession) dial(ctx context.Context, cl *call, ref *core.AccountRef) at
 		s.g.observeQuota(rt, acc.ID, resp.StatusCode, resp.Header)
 	}
 	if err != nil {
-		if ctx.Err() != nil {
+		if s.present.Err() != nil {
 			return attemptResult{kind: attemptCanceled, err: canceledErr()}
 		}
 		if resp != nil && resp.StatusCode != http.StatusSwitchingProtocols {
@@ -685,7 +696,8 @@ func (s *wsSession) dial(ctx context.Context, cl *call, ref *core.AccountRef) at
 	s.up, s.acc, s.rt, s.pacct = up, acc, rt, pacct
 	s.opening = req.GetBody()
 	s.upIn = make(chan wsMessage, 1)
-	go s.read(ctx, up, s.upIn)
+	go s.read(ctx, up, s.upIn, func() {})
+	go s.heartbeat(ctx, up)
 	return attemptResult{kind: attemptDone}
 }
 
