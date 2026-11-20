@@ -40,6 +40,8 @@ func flowError(code, msg string) *pluginv1.HTTPResponse {
 	return pluginsdk.ErrorResponse(http.StatusBadRequest, code, msg)
 }
 
+// upstreamError is a 502 for an answer of OpenAI or ChatGPT the route cannot
+// use, with its own code.
 func upstreamError(code, msg string) *pluginv1.HTTPResponse {
 	return pluginsdk.ErrorResponse(http.StatusBadGateway, code, msg)
 }

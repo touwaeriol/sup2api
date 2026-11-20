@@ -16,6 +16,7 @@ import (
 // lockReleaseTimeout bounds giving a lock back.
 const lockReleaseTimeout = 5 * time.Second
 
+// kv is the plugin KV of the host, ErrHostNotReady before Init.
 func (p *Plugin) kv() (pluginsdk.KV, error) {
 	if p.host == nil {
 		return nil, pluginsdk.ErrHostNotReady
