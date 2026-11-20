@@ -8,6 +8,18 @@
 
 开发完成、尚未上线的改动。发布时改成发布日期的一节，补上提交、实际版本号和发布过程。
 
+### codex 迁移一致性审核后的修复（核心、codex 0.2.0；无迁移）
+
+把待发布的 codex 0.2.0 与核心逐模块对照线上的 codex 0.1.11 + 核心 0.1.303（请求构造、WebSocket 与计费收尾、登录与刷新、用量窗口与 429、重置次数、清单与设置）：发给 OpenAI 的请求、用量窗口与 429 规则、重置次数、令牌刷新与线上等价，差别只有本文件已经记录的那些。查出并修掉的：
+
+- **Responses WebSocket 会话可能永久占住账号并发位**（核心；2026-11-18 去掉写超时和握手超时之后才有，线上的 0.1.303 没有）：客户端在一轮中途不再读取时，会话循环阻塞在写给它的那一步，而保活 ping 正是由这个循环发起的，所以发不出去，会话和它占的账号并发位、密钥会话数、预扣一直留着。现在每条连接的 ping 由自己的协程发出，写不出去或 30 秒没有回应就关闭连接，这一轮记为客户端取消；上游不再读取时同样处理。上游握手迟迟不回、客户端又已离开时，握手现在随客户端离开而结束（记 499，不算账号失败），以前会一直等。没有新增任何超时，间隔仍是原来的 30 秒 ping、30 秒无响应（OPENAI-RESPONSES-WEBSOCKET.md 第 4 节）。
+- **授权时表单选的代理被停用，被报成“连不上 OpenAI”**（核心）：票据发出后代理被停用，取回以前按传输失败交还，codex 的开始回 502、轮询一直提示连不上直到设备码过期。现在与其他拒绝一样以 `UNAVAILABLE` 交给插件，界面显示核心给出的原因（代理已停用）并保留登录（CONTRACTS §117.3）。
+- **设备码批准后换令牌被核心拒发**（codex）：这时会话已经结束，提示却是“检查代理后重试”；改为“检查账号表单里的代理后重新开始”。
+- **插件设置保存的是去掉首尾空白后的值**（codex）：经接口存入 `"UA/1\n"` 以前原样入库（生效值本来就是裁剪后的），之后界面会拒绝这个已存值。
+- **账号表单**（codex 界面）：服务端对 User-Agent、originator 的报错显示在对应输入框下（以前只在底部列表里）；没有对应输入框的报错显示在表单顶部，与 vertex、bedrock 的表单一致；本地格式错误改为失焦或保存时提示。
+- 清理（行为不变）：删无调用者的 `loadCached`、不会发生的随机数错误分支、界面里多余的 `alive` 标志与没人用的 `defineExpose`；客户端标识写请求头、“请求没发出”的分类各收敛到一处；`oauth.go` 里与登录无关的 KV、路由应答、凭证校验搬到各自的文件；注释和 PLUGIN-CODEX.md 改成与代码一致。
+- 补测试：被动采样用量窗口（HTTP 的 200 与 429、WebSocket 握手）、缓存的重置次数解不开、`input` 不是数组时不改角色、两种登录方式的默认模型相同。
+
 ## 2026-11-21
 
 ### 审核插件删掉更早版本的升级代码（moderation 0.13.0；无迁移，随 0.1.304 发布）
@@ -377,7 +389,7 @@
 
 - **codex 账号能服务 `/v1/images/generations`、`/v1/images/edits`**：核心把生图请求转成带 `image_generation` 工具的 Responses 请求（顶层是驱动工具的对话模型 `gpt-6-luna`，客户端的生图模型在工具里；`size`、`quality`、`background` 另写进一句 `instructions`，Codex 后端只按它定尺寸），应答转回生图接口的 JSON 或事件流（`image_generation.*` / `image_edit.*`），非流式与流式都支持（CONTRACTS §121）。不支持：`n` 大于 1、`response_format: "url"`（400 `unsupported_conversion`），edits 的 multipart（§118.1）。
 - **计费与记录**：整条请求（对话部分约 2300 输入 token 加生图工具的 token）都按客户端请求的生图模型（`gpt-image-2`）的价格算；使用记录的上游模型记上游回显的生图模型 `gpt-image-2-codex`，它和驱动模型都不参与计价、不需要价格。成败以上游为准：上游成功完成就是成功，没出图时返回 200 和空的 `data`（流式没有 `completed` 事件），审核拦截的生图项也一样，记录成功、用量照扣、不算账号失败；上游自己报的错误照常处理。
-- **管理员要做的**：codex 账号的模型列表加 `gpt-image-2`（新账号默认模型已含它；列表为空的不用加），给 `gpt-image-2` 录表达式价格（CONTRACTS §118.6），建议在“模型的协议限定”里把它限定到两个生图协议。`protocols` 没指定过的 codex 账号升级后自动开放两个生图协议，不想出图的账号在“本平台协议”里取消。账号测试带模型名测 `gpt-image-2` 时会真实出一张图。
+- **管理员要做的**：codex 账号的模型列表加 `gpt-image-2`（新账号默认模型已含它；列表为空的不用加），给 `gpt-image-2` 录表达式价格（CONTRACTS §118.6），建议在“模型的协议限定”里把它限定到两个生图协议。`protocols` 没指定过的 codex 账号升级后自动开放两个生图协议，不想出图的账号在“本平台协议”里取消。账号测试带模型名测 `gpt-image-2` 时，若它已限定到生图协议，会真实出一张图。
 - **同平台适配改为显式声明**：账号类型在平台上写了端点子集时，子集以外的端点只有在清单 `adapted` 里列出才经核心转换服务（此前对所有类型自动生效）。第一方插件已补声明：codex 列 chat 与两个生图端点，azure-openai 的“按部署”类型列 `/v1/responses`；行为与之前相同。**第三方插件**若依赖过隐式适配（子集里没有 chat 却服务 chat 之类），升级后那些端点不再服务，要在清单里补 `adapted`。
 - 清单新字段：`accountTypes[].platforms[].adapted`；插件协议仍是 2。用量照 Responses 端点自己的规则读（它已经把生图工具的 token 加进来）。
 - **模拟上游与 e2e**：mock 的 Responses 对 `image_generation` 工具按 Codex 后端实测的事件序列应答（生图项在前，`image_generation_call.in_progress` / `.generating` / `.completed`，图项带 `action`、`output_format`、`size`、`quality`、`revised_prompt`），提示词带 `MOCK-NO-IMAGE` 时只回文字；新增 AC42（Codex 账号经转换生图，见 `next/deploy/e2e/README.md`）；AC40 的“不服务生图”改为 Azure 部署账号。mock 的 Codex 后端（`/backend-api/codex/responses`）像真实上游一样以 400 `{"detail": ...}` 拒绝没有 `store: false` 或不是流式的请求（此前照收，回归只能靠用例自己查请求体）；AC41 的 codex 用例也检查到达 Codex 后端的请求是 `stream: true`、`store: false`。
@@ -523,7 +535,7 @@
 
 ### OpenAI 生图（核心、openai 0.5.0；迁移 0112）
 
-- 内置 openai 平台新增 `POST /v1/images/generations`、`POST /v1/images/edits`（协议 `openai.images`、`openai.images_edit`）。**只收 JSON 请求体**，表单上传（multipart）形式在网关回 400 `request body is not valid JSON`、留一条免费记录，暂不支持。OpenAI API Key 账号可转发；codex、azure_openai 的账号不服务这两个端点。
+- 内置 openai 平台新增 `POST /v1/images/generations`、`POST /v1/images/edits`（协议 `openai.images`、`openai.images_edit`）。**只收 JSON 请求体**，表单上传（multipart）形式在网关回 400 `request body is not valid JSON`、留一条免费记录，暂不支持。OpenAI API Key 账号可转发；azure_openai 的账号不服务这两个端点（codex 账号经核心转换服务，见上面“Codex 账号服务 OpenAI 生图接口”一节）。
 - 用量记录图片输入 / 输出 token（迁移 0112，`usage_logs` 两列，`/usage` 列表与详情返回），价格表达式变量 `img`、`img_o` 生效：用到时从 `p`、`c` 里扣出，没用到时按文字价算，不会免费也不会重复计。控制台用量详情显示图片 token 行，价格试算可填 `img`、`img_o`。
 - 没有价格的生图模型回 403 `model_price_not_configured`（缺价一律报错，CONTRACTS §17.3）；参考价见 CONTRACTS §118.6，models.dev 同步的生图价只有文字价，会少收。
 - openai 插件默认模型加 gpt-image-2、gpt-image-1.5、gpt-image-1-mini。已经手工指定过协议的 OpenAI 账号升级后要手动勾选两个生图协议。
