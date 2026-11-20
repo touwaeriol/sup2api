@@ -68,12 +68,12 @@ const (
 
 // ---------------------------------------------------------------- helpers
 
-func randomToken(n int) (string, error) {
+// randomToken returns n random bytes as unpadded URL-safe base64.
+// crypto/rand.Read never fails (it crashes the program instead).
+func randomToken(n int) string {
 	b := make([]byte, n)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(b), nil
+	_, _ = rand.Read(b)
+	return base64.RawURLEncoding.EncodeToString(b)
 }
 
 // pkceChallenge is the S256 code challenge of verifier.
@@ -83,15 +83,13 @@ func pkceChallenge(verifier string) string {
 }
 
 // newUUID returns a random UUIDv4 (a reset's redeem_request_id).
-func newUUID() (string, error) {
+func newUUID() string {
 	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "", err
-	}
+	_, _ = rand.Read(b[:])
 	b[6] = b[6]&0x0f | 0x40
 	b[8] = b[8]&0x3f | 0x80
 	h := hex.EncodeToString(b[:])
-	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:], nil
+	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:]
 }
 
 // authAnswer is one response of the authorization server.
@@ -240,20 +238,8 @@ func (p *Plugin) saveSession(ctx context.Context, ns, id string, req *pluginv1.H
 	return pluginsdk.UpdateCallerSession(ctx, kv, ns, id, req, v, ttl)
 }
 
-// loadCached and saveCached keep plugin-wide JSON in the KV (the reset count
-// cache): unlike a session it belongs to no caller.
-func (p *Plugin) loadCached(ctx context.Context, ns, id string, v any) (bool, error) {
-	kv, err := p.kv()
-	if err != nil {
-		return false, err
-	}
-	raw, found, err := kv.Get(ctx, ns, id)
-	if err != nil || !found {
-		return false, err
-	}
-	return true, json.Unmarshal(raw, v)
-}
-
+// saveCached keeps plugin-wide JSON in the KV (the reset count cache):
+// unlike a session it belongs to no caller.
 func (p *Plugin) saveCached(ctx context.Context, ns, id string, v any, ttl time.Duration) error {
 	kv, err := p.kv()
 	if err != nil {
@@ -317,13 +303,6 @@ func flowError(code, msg string) *pluginv1.HTTPResponse {
 func upstreamError(code, msg string) *pluginv1.HTTPResponse {
 	return pluginsdk.ErrorResponse(http.StatusBadGateway, code, msg)
 }
-
-// internalError is a 500 for a local failure; msg is "English / 中文".
-func internalError(msg string, err error) *pluginv1.HTTPResponse {
-	return pluginsdk.ErrorResponse(http.StatusInternalServerError, "internal", msg+": "+err.Error())
-}
-
-const msgRandom = "cannot generate random values / 无法生成随机数"
 
 // ---------------------------------------------------------------- credentials
 
@@ -684,14 +663,7 @@ func (p *Plugin) handleCodexStart(ctx context.Context, req *pluginv1.HTTPRequest
 	if _, refused := p.startCall(req); refused != nil {
 		return refused, nil
 	}
-	var s codexSession
-	var err error
-	if s.State, err = randomToken(24); err != nil {
-		return internalError(msgRandom, err), nil
-	}
-	if s.Verifier, err = randomToken(48); err != nil { // 64 characters
-		return internalError(msgRandom, err), nil
-	}
+	s := codexSession{State: randomToken(24), Verifier: randomToken(48)} // the verifier has 64 characters
 	sessionID, err := p.newSession(ctx, kvCodex, req, s, codexTTL)
 	if err != nil {
 		return sessionNotStored(err), nil

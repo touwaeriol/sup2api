@@ -178,11 +178,7 @@ func (p *Plugin) handleResetConsume(ctx context.Context, req *pluginv1.HTTPReque
 // is retried once with the same redeem_request_id, so the backend spends at
 // most one credit whichever attempt reached it.
 func (p *Plugin) consumeReset(ctx context.Context, id int64, c credentials, creditID string) (outcome string, windows int, bad *pluginv1.HTTPResponse) {
-	rid, err := newUUID()
-	if err != nil {
-		return "", 0, internalError(msgRandom, err)
-	}
-	body, _ := json.Marshal(consumeBody{RedeemRequestID: rid, CreditID: creditID})
+	body, _ := json.Marshal(consumeBody{RedeemRequestID: newUUID(), CreditID: creditID})
 	r, bad := p.sendBackend(ctx, id, c, http.MethodPost, resetConsumePath, body)
 	if r != nil && r.GetStatus() == 0 {
 		p.log.Warn("codex: reset consume transport failure, retrying once", "account_id", id, "error", r.GetTransportError())
