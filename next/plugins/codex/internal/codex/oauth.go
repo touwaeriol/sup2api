@@ -196,6 +196,13 @@ func refusedMessage(reason string) string {
 	return "the request was not sent; check the proxy in the account form and try again / 这次请求没有发出，请检查账号表单里的代理后重试: " + reason
 }
 
+// refusedRestartMessage is the text of a refused request whose login cannot
+// go on: the device code login's token exchange, whose session ended with
+// the approval.
+func refusedRestartMessage(reason string) string {
+	return "the request was not sent; check the proxy in the account form and start again / 这次请求没有发出，请检查账号表单里的代理后重新开始: " + reason
+}
+
 func (a authAnswer) ok() bool { return a.status >= 200 && a.status <= 299 }
 
 // describe is a short "status N: <error>" for messages.
@@ -364,19 +371,19 @@ func readToken(a authAnswer) (tokenResponse, error) {
 }
 
 // redeemFailure is why redeemCode got no tokens: the route error code
-// (codeProxyRefused, codeUpstreamUnavailable, token_exchange_failed) and an
-// "English / 中文" message.
-type redeemFailure struct{ code, msg string }
+// (codeProxyRefused, codeUpstreamUnavailable, token_exchange_failed), an
+// "English / 中文" message and, for codeProxyRefused, the core's reason.
+type redeemFailure struct{ code, msg, reason string }
 
 // redeemNotSent is the failure of a token exchange post could not make.
 func (p *Plugin) redeemNotSent(login string, err error) *redeemFailure {
 	code, detail := sendFailure(err)
 	if code == codeProxyRefused {
 		p.log.Warn("codex: "+login+" token exchange refused by the core", "error", detail)
-		return &redeemFailure{code, refusedMessage(detail)}
+		return &redeemFailure{code: code, msg: refusedMessage(detail), reason: detail}
 	}
 	p.log.Warn("codex: "+login+" token exchange failed", "error", detail)
-	return &redeemFailure{code, "start again / 请重新开始: " + detail}
+	return &redeemFailure{code: code, msg: "start again / 请重新开始: " + detail}
 }
 
 // redeemCode exchanges an authorization code of the Codex client for its
@@ -395,12 +402,12 @@ func (p *Plugin) redeemCode(ctx context.Context, login string, call routeCall, c
 	}
 	if !a.ok() {
 		p.log.Warn("codex: "+login+" token exchange refused", "status", a.status, "oauth_error", oauthErrorCode(a.body))
-		return Credentials{}, &redeemFailure{"token_exchange_failed", "token exchange failed, start again / 换取令牌失败，请重新开始 (" + a.describe() + ")"}
+		return Credentials{}, &redeemFailure{code: "token_exchange_failed", msg: "token exchange failed, start again / 换取令牌失败，请重新开始 (" + a.describe() + ")"}
 	}
 	tr, err := readToken(a)
 	if err != nil {
 		p.log.Warn("codex: "+login+" token answer unusable", "error", err.Error())
-		return Credentials{}, &redeemFailure{"token_exchange_failed", err.Error()}
+		return Credentials{}, &redeemFailure{code: "token_exchange_failed", msg: err.Error()}
 	}
 	return p.credentialsFrom(tr), nil
 }
@@ -651,10 +658,14 @@ func (p *Plugin) exchangeDeviceCode(ctx context.Context, call routeCall, approva
 		return pollFailed("the approval answer has no authorization_code or code_verifier / 授权响应缺少 authorization_code 或 code_verifier")
 	}
 	c, f := p.redeemCode(ctx, "device code", call, code, verifier, p.ep.Auth+"/deviceauth/callback")
-	if f != nil {
-		return pollFailed(f.msg)
+	switch {
+	case f == nil:
+		return pollAnswer(DevicePollResponse{Status: pollDone, Credentials: &c})
+	case f.code == codeProxyRefused:
+		// The session is gone: another poll would only find it expired.
+		return pollFailed(refusedRestartMessage(f.reason))
 	}
-	return pollAnswer(DevicePollResponse{Status: pollDone, Credentials: &c})
+	return pollFailed(f.msg)
 }
 
 // ---------------------------------------------------------------- Sign in with Codex

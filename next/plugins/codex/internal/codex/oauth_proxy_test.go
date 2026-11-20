@@ -147,3 +147,38 @@ func TestAuthProxyRefused(t *testing.T) {
 		t.Fatalf("exchange after a refusal = %d %s", r.GetStatus(), r.GetBody())
 	}
 }
+
+// The approval ends the device code session before the token exchange: when
+// the core refuses to send that exchange, no later poll can retry it, so the
+// poll fails and tells the operator to fix the proxy and start again.
+func TestDeviceExchangeRefusedAfterApproval(t *testing.T) {
+	iss := newFakeIssuer(t)
+	h := startPlugin(t, newTestPlugin(testEndpoints(iss.srv.URL)))
+	iss.on(pathUserCode, reply(200, `{"device_auth_id":"dev-1","user_code":"ABCD","interval":"5"}`))
+	iss.on(pathDeviceToken, reply(200, `{"authorization_code":"code-1","code_verifier":"ver-1"}`))
+	h.Host.ExecuteHTTPFunc = func(ctx context.Context, in *pluginv1.ExecutionHTTPRequest) (*pluginv1.ExecutionHTTPResponse, error) {
+		if strings.HasSuffix(in.GetUrl(), pathOAuthToken) {
+			return nil, status.Error(codes.PermissionDenied, "the proxy is disabled")
+		}
+		return sendFetch(ctx, in)
+	}
+	var device DeviceStartResponse
+	mustData(t, h.Do("POST", "/auth/device/start", nil, startBody).GetBody(), &device)
+	poll := func() DevicePollResponse {
+		t.Helper()
+		var r DevicePollResponse
+		mustData(t, h.Do("POST", "/auth/device/poll", nil, map[string]string{"proxy_ticket": testTicket, "session_id": device.SessionID}).GetBody(), &r)
+		return r
+	}
+	got := poll()
+	if got.Status != pollError || !strings.Contains(got.Message, "start again") || !strings.Contains(got.Message, "重新开始") ||
+		strings.Contains(got.Message, "try again") || !strings.Contains(got.Message, "the proxy is disabled") {
+		t.Fatalf("refused exchange after approval = %+v", got)
+	}
+	if got := poll(); got.Status != pollExpired {
+		t.Fatalf("poll after the refused exchange = %+v", got)
+	}
+	if n := iss.count(pathOAuthToken); n != 0 {
+		t.Fatalf("%d refused exchanges reached OpenAI", n)
+	}
+}
