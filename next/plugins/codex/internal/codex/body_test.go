@@ -60,6 +60,16 @@ func TestSystemItemsBecomeDeveloper(t *testing.T) {
 			t.Fatalf("ws=%v:\n got %s (%v)\nwant %s", ws, out, err, want)
 		}
 	}
+	// Only items of an input array change: an object input is left as it is,
+	// and a string input becomes one user message.
+	for in, want := range map[string]string{
+		`{"instructions":"","store":false,"input":{"role":"system"}}`: `{"instructions":"","store":false,"input":{"role":"system"}}`,
+		`{"instructions":"","store":false,"input":"system"}`:          `{"instructions":"","store":false,"input":[{"content":[{"text":"system","type":"input_text"}],"role":"user","type":"message"}]}`,
+	} {
+		if out, err := codexBody([]byte(in), false); err != nil || string(out) != want {
+			t.Errorf("%s:\n got %s (%v)\nwant %s", in, out, err, want)
+		}
+	}
 	// No cap: the edits cost no copy each.
 	many := `{"instructions":"","store":false,"input":[` + strings.TrimSuffix(strings.Repeat(`{"role":"system"},`, 1000), ",") + `]}`
 	if out, _ := codexBody([]byte(many), false); string(out) != strings.ReplaceAll(many, `"system"`, `"developer"`) {

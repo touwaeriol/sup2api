@@ -200,7 +200,7 @@
 - 失效：consume 得到 `reset` / `already_redeemed` 或未知 `code`（可能已扣）后**删除**该账号的缓存键，而不是写“原数 − 1”（原数可能已过时，`already_redeemed` 也未必是这次扣的），也不为此再调一次 list（多一次上游请求）。装饰器在下次打开明细（list）后恢复显示。`nothing_to_reset` / `no_credit` 不动缓存。
 - KV 读写失败一律只记 warn：不让 list / consume 失败；summary 中读失败的账号视为没有缓存（一次请求只记一条 warn，带失败个数）。
 - summary 一次批量读（`pluginsdk.KVGetMany`，CONTRACTS §93）取全部账号的缓存；一次至多 500 个账号，在批量读 512 个键的上限内。批量读失败时全部视为没有缓存，单个值解不开的只略过该账号。
-- 测试：`resetcache_test.go`：summary（去重与非正整数过滤、缺失账号不出现、500 个通过、501 个 400、坏 JSON、一次 summary 只有一次批量读、KV 失败仍 200、不发上游请求）、list 写入与 consume 后删除（拒绝的 consume 不删，KV 失败不影响 consume）。
+- 测试：`resetcache_test.go`：summary（去重与非正整数过滤、缺失账号不出现、500 个通过、501 个 400、请求体不是 JSON、一次 summary 只有一次批量读、缓存值解不开时只略过该账号、KV 失败仍 200、不发上游请求）、list 写入与 consume 后删除（拒绝的 consume 不删，KV 失败不影响 consume）。
 
 ## 11. 0.1.4：权限加固（2026-11-13，随核心权限加固发布）
 

@@ -106,6 +106,15 @@ func TestResetSummary(t *testing.T) {
 		t.Fatalf("summary made %d batch and %d single reads, want 1 and 0", kv.getManys.Load(), kv.gets.Load())
 	}
 
+	// A value that does not decode leaves its account out; the others stay.
+	e.host.kv = kv.KV
+	if err := kv.Set(ctx, kvResetCount, resetCountKey(31), []byte("{not json"), time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.summary(t, 29, 31, 30); len(got) != 2 || got["29"].AvailableCount != 2 || got["30"].UpdatedAt != testNow.Unix() {
+		t.Fatalf("summary with an undecodable value = %+v", got)
+	}
+
 	// An unreadable KV leaves the accounts out; the route still answers.
 	e.host.kv = failingKV{}
 	if got := e.summary(t, 29); len(got) != 0 {

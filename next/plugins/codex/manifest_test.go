@@ -101,8 +101,8 @@ func TestManifestShape(t *testing.T) {
 		if at.Refresh == nil {
 			t.Errorf("%s must declare refresh", at.ID)
 		}
-		if len(at.DefaultModels) == 0 {
-			t.Errorf("%s has no default models", at.ID)
+		if len(at.DefaultModels) == 0 || !slices.Equal(at.DefaultModels, m.AccountTypes[0].DefaultModels) {
+			t.Errorf("%s default models = %v, want the same non-empty list for both types", at.ID, at.DefaultModels)
 		}
 		// Usage windows come from the x-codex-* headers of every answer,
 		// named by window length (docs/PLUGIN-CODEX.md §13): no usage query.
