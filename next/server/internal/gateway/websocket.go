@@ -317,9 +317,11 @@ func (s *wsSession) read(ctx context.Context, conn *websocket.Conn, ch chan<- ws
 
 // heartbeat pings c every ping interval until the session ends, on a
 // goroutine of its own: a session loop blocked writing to a peer that stopped
-// reading does not answer for that peer. A ping that fails or goes unanswered
-// for pingTimeout closes c; its reader and any write to it then report the
-// error and the session ends the way it does for a disconnect.
+// reading does not answer for that peer. A ping that fails, or is not written
+// and answered within pingTimeout, closes c; its reader and any write to it
+// then report the error and the session ends the way it does for a
+// disconnect. A ping waits for the message being written, so pingTimeout is
+// also how long a peer may take to read the rest of one message.
 func (s *wsSession) heartbeat(ctx context.Context, c *websocket.Conn) {
 	if s.g.ws.ping <= 0 {
 		return
@@ -333,13 +335,27 @@ func (s *wsSession) heartbeat(ctx context.Context, c *websocket.Conn) {
 		case <-t.C:
 		}
 		pctx, cancel := context.WithTimeout(ctx, s.g.ws.pingTimeout)
-		err := c.Ping(pctx)
+		err := ping(pctx, c)
 		cancel()
 		if err != nil {
 			if ctx.Err() == nil {
 				_ = c.CloseNow()
 			}
 			return
+		}
+	}
+}
+
+// ping pings c and waits for the pong until ctx ends. The library gives a
+// control frame five seconds to be written, the wait for the message being
+// written included: a ping that ran out of them while ctx has time left is
+// sent again, so a peer slowly reading one large message has all of ctx, as
+// one slow to answer has.
+func ping(ctx context.Context, c *websocket.Conn) error {
+	for {
+		err := c.Ping(ctx)
+		if err == nil || ctx.Err() != nil || !errors.Is(err, context.DeadlineExceeded) {
+			return err
 		}
 	}
 }

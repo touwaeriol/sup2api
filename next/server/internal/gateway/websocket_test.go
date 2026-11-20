@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -971,6 +972,64 @@ func TestWebSocketClientNotReadingEndsTheSession(t *testing.T) {
 	})
 	if r := e.record(); r.Success || r.StatusCode != statusClientClosed {
 		t.Fatalf("record of the turn the client stopped reading: %+v", r)
+	}
+}
+
+// A client slowly reading one large message keeps the write to it, and so
+// the ping behind it, waiting longer than the library gives a control frame:
+// the ping has all of pingTimeout and the session goes on.
+func TestWebSocketSlowReaderOfALargeMessageIsNotCut(t *testing.T) {
+	e := newWSEnv(t)
+	// The first ping finds the write of the message under way.
+	e.gw.ws.ping = time.Second
+	const size = 40 << 20
+	large := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.CloseNow() }()
+		ctx := r.Context()
+		if _, _, err := conn.Read(ctx); err != nil {
+			return
+		}
+		go func() { // answers the gateway's pings
+			for {
+				if _, _, err := conn.Read(ctx); err != nil {
+					return
+				}
+			}
+		}()
+		_ = conn.Write(ctx, websocket.MessageText, []byte(`{"type":"response.output_text.delta","delta":"`+strings.Repeat("x", size)+`"}`))
+		_ = conn.Write(ctx, websocket.MessageText, []byte(`{"type":"response.completed","response":{"usage":{"input_tokens":1,"output_tokens":1}}}`))
+		<-ctx.Done()
+	}))
+	defer large.Close()
+	e.wsPlat.amend = func(_ int, _ *pluginv1.ExecuteRequest, out *pluginv1.UpstreamRequest) error {
+		out.Url = "ws" + strings.TrimPrefix(large.URL, "http") + "/v1/responses"
+		return nil
+	}
+	c := e.mustDial()
+	c.conn.SetReadLimit(-1)
+	c.send(create(wsModel, "large"))
+	_, r, err := c.conn.Reader(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// About 4 MiB a second: ten seconds for the message.
+	buf, n := make([]byte, 400<<10), 0
+	for err == nil {
+		var m int
+		m, err = r.Read(buf)
+		n += m
+		time.Sleep(100 * time.Millisecond)
+	}
+	if !errors.Is(err, io.EOF) || n < size {
+		t.Fatalf("read %d of %d bytes: %v", n, size, err)
+	}
+	c.until("response.completed")
+	if rec := e.record(); !rec.Success {
+		t.Fatalf("record of the slowly read turn: %+v", rec)
 	}
 }
 
