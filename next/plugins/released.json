@@ -14,8 +14,8 @@
       "digest": "sha256:a1ebcf2a58e5929dc650d7f85669ba199e93dab3df776aacb9cab9b792d4e628"
     },
     "codex": {
-      "version": "0.2.0",
-      "digest": "sha256:78edbfe5e88103bb691434135355c1e49cf8687547d79e55f3a1d3ed051ad240"
+      "version": "0.2.1",
+      "digest": "sha256:edca24070a4012a7c23ef992762578efc3cbac90ab28e38cc2836aac358c621a"
     },
     "dynweight": {
       "version": "0.6.0",
