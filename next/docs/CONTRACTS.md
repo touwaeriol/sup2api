@@ -8416,7 +8416,7 @@ SDK 名 `pluginsdk.Fetch`。一个有界、非流式的请求，回答交还插�
 ### 117.3 核心发送（`account.FetchWithProxyTicket`，`core.ProxyTicketFetcher`）
 
 - 用插件键解开票据（别的插件的票据、改过的、编造的都解不开），票据里的用户必须等于**这次路由调用的用户**（核心从调用的上下文读，不信插件）；否则 `PERMISSION_DENIED`。所以别的管理员拿到会话 id 或票据也用不了。
-- 按这个用户**此刻**的权限（含访问密钥的收窄）重新做 117.1 的检查：不再能新建或修改账号、不再有 `proxy:manage`（粘贴的代理串）、代理已删或已不可见，这张票据随即不能用，错误照常交给插件（`PERMISSION_DENIED` 或 `INVALID_ARGUMENT`）。
+- 按这个用户**此刻**的权限（含访问密钥的收窄）重新做 117.1 的检查：不再能新建或修改账号、不再有 `proxy:manage`（粘贴的代理串）、代理已删或已不可见，这张票据随即不能用，错误照常交给插件（`PERMISSION_DENIED` 或 `INVALID_ARGUMENT`）。票据发出后代理被停用也一样：取不到出口就不发送，以 `UNAVAILABLE` 交给插件，不算传输失败。
 - 发送用取回的同一份实现 `execfetch.Do`：已有代理用代理服务缓存的客户端，粘贴的代理串用临时客户端（用完关闭空闲连接），不用代理时直连；直连过 SSRF 检查，经代理时本机不解析、只拒绝字面的私网地址和 `localhost`（`netguard.CheckURLVia`，§43.4；“允许私网”同 `AllowPrivateUpstream`）。不跟随重定向、不重试、回答整份交还；**没有自己的超时**，由路由调用的期限（`TimeoutHTTP`）约束。传输失败是回答的 `transport_error`，不是 RPC 错误。不写审计行（路由调用本身已有 `plugin.route.write`，取回从来不审计）；粘贴的代理串不进日志、审计和代理表。
 
 ### 117.4 版本与兼容

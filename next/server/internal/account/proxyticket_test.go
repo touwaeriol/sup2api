@@ -161,6 +161,18 @@ func TestProxyTicket(t *testing.T) {
 		t.Fatalf("refused fetches reached the issuer: %d", issuer.Load()-i0)
 	}
 
+	// A proxy disabled after its ticket was issued refuses the fetch like a
+	// revoked permission does: an error of the call, not a transport failure
+	// of a request that was never sent.
+	az.keys[admin] = adminKeys
+	if _, err := e.db.SQL.ExecContext(ctx, `UPDATE proxies SET status = 'disabled', updated_at = clock_timestamp() WHERE id = $1`, savedID); err != nil {
+		t.Fatal(err)
+	}
+	e.prx.Invalidate(savedID)
+	if out, err := fetch(admin, "anthropic", byID); err == nil || core.AsError(err).Code != core.ErrUnavailable.Code || issuer.Load() != i0 {
+		t.Fatalf("fetch through a disabled proxy: %v %v (issuer hits %d)", out, err, issuer.Load()-i0)
+	}
+
 	// The pasted proxy was only used.
 	if proxies() != before {
 		t.Fatalf("a pasted proxy was stored: %d -> %d proxies", before, proxies())
