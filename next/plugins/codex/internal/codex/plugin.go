@@ -31,6 +31,7 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/paramoverride"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/pluginsdk"
+	"github.com/Sub2API-Devs/sup2api/next/sdk/pluginsdk/accountform"
 )
 
 const (
@@ -349,8 +350,9 @@ func (m credMap) fillIdentity() bool {
 	return changed
 }
 
+// invalid is the ValidateCredentials answer refusing field.
 func invalid(field, code, msg string) *pluginv1.ValidateCredentialsResponse {
-	return &pluginv1.ValidateCredentialsResponse{Errors: []*pluginv1.FieldError{{Field: field, Code: code, Message: msg}}}
+	return accountform.Invalid(accountform.FieldError(field, code, msg))
 }
 
 func orEmptyObject(s string) string {
