@@ -265,16 +265,17 @@ func readToken(a authAnswer) (tokenResponse, error) {
 }
 
 // redeemFailure is why redeemCode got no tokens: the route error code
-// (codeProxyRefused, codeUpstreamUnavailable, token_exchange_failed), an
-// "English / 中文" message and, for codeProxyRefused, the core's reason.
-type redeemFailure struct{ code, msg, reason string }
+// (codeProxyRefused, codeUpstreamUnavailable, token_exchange_failed) and an
+// "English / 中文" message; for codeProxyRefused msg is the core's reason,
+// which the caller words as its login can go on or not.
+type redeemFailure struct{ code, msg string }
 
 // redeemNotSent is the failure of a token exchange post could not make.
 func (p *Plugin) redeemNotSent(login string, err error) *redeemFailure {
 	code, detail := sendFailure(err)
 	if code == codeProxyRefused {
 		p.log.Warn("codex: "+login+" token exchange refused by the core", "error", detail)
-		return &redeemFailure{code: code, msg: refusedMessage(detail), reason: detail}
+		return &redeemFailure{code: code, msg: detail}
 	}
 	p.log.Warn("codex: "+login+" token exchange failed", "error", detail)
 	return &redeemFailure{code: code, msg: "start again / 请重新开始: " + detail}
@@ -546,7 +547,7 @@ func (p *Plugin) exchangeDeviceCode(ctx context.Context, call routeCall, approva
 		return pollAnswer(DevicePollResponse{Status: pollDone, Credentials: &c})
 	case f.code == codeProxyRefused:
 		// The session is gone: another poll would only find it expired.
-		return pollFailed(refusedRestartMessage(f.reason))
+		return pollFailed(refusedRestartMessage(f.msg))
 	}
 	return pollFailed(f.msg)
 }
@@ -693,7 +694,7 @@ func (p *Plugin) handleCodexExchange(ctx context.Context, req *pluginv1.HTTPRequ
 	if f != nil && f.code == codeProxyRefused {
 		// Nothing reached OpenAI and the code is unspent: the session stays,
 		// and the next call carries a fresh ticket of the form's proxy.
-		return flowError(f.code, f.msg), nil
+		return flowError(f.code, refusedMessage(f.msg)), nil
 	}
 	if f != nil {
 		return upstreamError(f.code, f.msg), nil
