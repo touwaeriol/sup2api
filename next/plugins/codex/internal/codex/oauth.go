@@ -141,8 +141,8 @@ func (p *Plugin) startCall(req *pluginv1.HTTPRequest) (routeCall, *pluginv1.HTTP
 }
 
 // post has the core send one request of call to the authorization server
-// through the proxy of its ticket (pluginsdk.Fetch). The method, headers and
-// body are what the plugin sent itself before.
+// through the proxy of its ticket (pluginsdk.Fetch): a POST with the
+// content type, Accept: application/json and the call's client headers.
 func (p *Plugin) post(ctx context.Context, call routeCall, rawURL, contentType string, body []byte) (authAnswer, error) {
 	out, err := pluginsdk.Fetch(ctx, &pluginv1.ExecutionHTTPRequest{
 		Method: http.MethodPost, Url: rawURL, Body: body, ProxyTicket: call.ticket,
@@ -455,8 +455,7 @@ func pollFailed(msg string) *pluginv1.HTTPResponse {
 }
 
 // pollLockName is the lock of one device code session. The session id is
-// hashed: it is a secret, and base64url ids carry "_", which lock names do
-// not allow.
+// hashed: it is a secret, and lock names are visible to the host.
 func pollLockName(sessionID string) string {
 	sum := sha256.Sum256([]byte(sessionID))
 	return "device_poll:" + hex.EncodeToString(sum[:16])

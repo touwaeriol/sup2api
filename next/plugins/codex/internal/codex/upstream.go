@@ -46,9 +46,8 @@ func removedFields(ws bool) []string {
 // accountHeaders are the bearer token, the ChatGPT account it acts for and
 // the account's client headers (agent). Every header of the plugin
 // (these, httpHeaders, the WebSocket beta and the session) is authoritative,
-// written after the operator's header settings, as every header of a code
-// plugin was before forwarding v2: no passthrough or override changes what
-// the plugin sends. No client header is forwarded.
+// written after the operator's header settings: no passthrough or override
+// changes what the plugin sends. No client header is forwarded.
 func (p *Plugin) accountHeaders(c credentials) map[string]string {
 	a := p.agent(c)
 	h := map[string]string{

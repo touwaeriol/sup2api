@@ -65,8 +65,8 @@ func TestManifestShape(t *testing.T) {
 	if m.UI == nil || m.UI.Native == nil || m.UI.Native.Entry != "ui/native/entry.js" {
 		t.Fatalf("ui.native = %+v", m.UI)
 	}
-	// The settings (user_agent, originator) hold no secret: the JSON Schema
-	// form marked none, so ui.settings.secrets masks nothing.
+	// The settings (user_agent, originator) hold no secret, so
+	// ui.settings.secrets masks nothing.
 	pluginsdktest.SettingsSecrets(t, manifestJSON)
 	if st := m.UI.Settings; st == nil || st.Mode != "native" || st.Component != "CodexSettings" || st.Page != "" {
 		t.Fatalf("ui.settings = %+v", st)
@@ -125,7 +125,7 @@ func TestManifestShape(t *testing.T) {
 		// The plugin forwards no client header: it identifies itself and
 		// writes every header it sends. "passHeaders": [] tells the core to
 		// hand it none (absent would mean the openai platform's list).
-		if ap.Platform != codex.PlatformID || !slices.Equal(ap.Endpoints, []string{"responses", "responses_websocket"}) ||
+		if ap.Platform != "openai" || !slices.Equal(ap.Endpoints, []string{"responses", "responses_websocket"}) ||
 			!slices.Equal(ap.StreamOnly, []string{codex.ProtocolResponses}) || ap.PassHeaders == nil || len(ap.PassHeaders) != 0 {
 			t.Errorf("%s platform = %+v", at.ID, ap)
 		}

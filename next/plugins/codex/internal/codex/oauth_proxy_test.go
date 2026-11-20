@@ -19,7 +19,7 @@ import (
 // account form's proxy (CONTRACTS §117): each carries the ticket of its own
 // route call, so a proxy the operator changed after the login started
 // carries the next request, and the method, URL, headers and body are
-// exactly those the plugin sent itself before.
+// exactly the ones listed below.
 func TestAuthRequestsCarryTheTicket(t *testing.T) {
 	iss := newFakeIssuer(t)
 	h := startPlugin(t, newTestPlugin(testEndpoints(iss.srv.URL)))

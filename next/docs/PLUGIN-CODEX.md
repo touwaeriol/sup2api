@@ -55,7 +55,7 @@
 - 目录 `next/plugins/codex`，key `codex`，runtime grpc，能力 `platform.adapter.v1`、`platform.websocket.v1`、`http.routes.v1`。
 - 两个账号类型都挂内置 `openai` 平台，`endpoints: ["responses", "responses_websocket"]`（chat 由核心转换成 Responses；0.2.0 起要在 `adapted` 里显式列出 `chat_completions` 和两个生图端点，第 21 节），`streamOnly: ["openai.responses"]`，`refresh: {}`，`sensitiveFields: ["access_token","refresh_token","id_token"]`（没有 `settingsFields`：账号的代理是账号的 `proxy_id` 列，原来写的 `settingsFields: ["proxy_id"]` 没有写入方，已删，第 22 节），表单 `mode: "native"`、组件 `CodexAuthForm`。
 - 插件只实现 `BuildUpstream`，`Execute` 由 SDK 的 `ExecuteDefault` 提供（不等待地中继，返回 `host_usage`，用量由核心按 `openai.responses` 规则读）；`BuildUpstream` 两种类型完全相同，上游是 `chatgpt.com/backend-api/codex/responses`（§2.1 第 7 条的 URL 与头）；请求体用 `jsonedit` 一次改完：`store=false`；字符串 `input` 转数组（空白字符串转 `[]`，其余包成一条 user 消息）；`role:"system"` 的 input 项改成 `developer`；缺 `instructions` 或为 `null` 时补空串（与旧版后端一致；其他值原样转发）；删除不支持字段；WebSocket 协议换成 `wss` + `GET` + `openai-beta`，每轮 `response.create` 消息同样改写（不碰 stream 相关字段；核心每轮调一次 `Execute`，CONTRACTS §83.6）。插件的头全部是权威头（与转发 V2 之前一样，运营方的透传和覆盖改不了），不转发任何客户端头；请求体里有非空字符串 `prompt_cache_key` 时加 `session_id` 和 `conversation_id`（第 16 节）。
-- `ClassifyError`：reason 一律纯英文（与 SDK `classify` 一致）；401 → 冷却并提示重新授权（刷新由核心按 `refresh` 声明处理）；429 且响应头显示某个用量窗口 ≥100% 并给出重置时刻 → 自动禁用到最晚的重置时刻（0.1.7 起只看响应头，见第 13 节；0.1.2–0.1.6 见第 9 节）；其他 429 原样返回客户端、不冷却不禁用（0.1.2 起；0.1.1 为冷却）；其他 403 → 禁用；400 原样返回。
+- `ClassifyError`：reason 一律纯英文（与 SDK `classify` 一致）；401 → 冷却 5 分钟（`authCooldown`）并提示重新授权（刷新由核心按 `refresh` 声明处理）；408、5xx 与传输错误 → 冷却 10 秒（`serverErrorCooldown`）；429 且响应头显示某个用量窗口 ≥100% 并给出重置时刻 → 自动禁用到最晚的重置时刻（0.1.7 起只看响应头，见第 13 节；0.1.2–0.1.6 见第 9 节）；其他 429 原样返回客户端、不冷却不禁用（0.1.2 起；0.1.1 为冷却）；其他 403 → 禁用；400 原样返回。
 - 刷新：`BuildRefreshRequest` / `ParseRefreshResponse`，两种类型相同（Codex 客户端的 `POST /oauth/token` JSON，§2.1 第 5 条）；轮换后的 refresh token 一并保存。
 - 管理路由（`scope: admin`，权限 `codex:manage`）。响应按 CONTRACTS §3.1：成功为 `{"data": ...}`（`pluginsdk.DataResponse`，下面写的是 `data` 的内容，控制台 `pluginApi` 自动解包）；请求本身不合法（缺 `session_id`、请求体不是合法 JSON）为 400 `invalid_argument`，`details.fields = [{field, code, message}]`（`pluginsdk.BadRequest`；field 为 `session_id` / `body`，code 为 `required` / `invalid_json`）；授权流程本身的拒绝保留各自的错误码（`device_auth_disabled`、`invalid_callback`、`state_mismatch`、`access_denied`、`authorization_failed` 为 400，`session_expired` 为 404，`upstream_unavailable` / `upstream_error` / `token_exchange_failed` 为 502）。所有 message 为“English / 中文”双语（CONTRACTS §10）。
   - `POST /auth/device/start` `{proxy_ticket}` → `{session_id, verification_url, user_code, interval, expires_in}`；会话存 KV（含 device_auth_id，15 分钟过期）。
@@ -181,7 +181,7 @@
 
 ### 10.4 锁与幂等
 
-- consume 在每账号一把集群锁下进行（`Host.Locks`，锁名 `codex-reset:<account_id>`，ttl 90 秒（两次各至多 30 秒的发送加余量，确保重试仍在进行时锁不会过期），结束即释放，释放失败等 ttl 过期）：双击或两个节点同时提交时，拿不到锁的一方回 409 `busy`，不发请求。锁服务不可用 → 503 `unavailable`。
+- consume 在每账号一把集群锁下进行（`Host.Locks`，锁名 `codex-reset:<account_id>`，ttl 90 秒（按两次发送各自的 30 秒上限再加余量；实际上核心对整个路由调用的上限也是 30 秒，两次发送都在其中结束，所以重试进行时锁不会过期），结束即释放，释放失败等 ttl 过期）：双击或两个节点同时提交时，拿不到锁的一方回 409 `busy`，不发请求。锁服务不可用 → 503 `unavailable`。
 - 每次 consume 新生成一个 UUIDv4 作 `redeem_request_id`；传输失败（status 0）时用**同一个** id 重试一次，所以即使第一次其实已到达后端也只扣一次（后端答 `already_redeemed`，按成功处理）。再失败回 502，不再重试；非 0 状态码不重试。
 - list 只读，不加锁、不重试。
 

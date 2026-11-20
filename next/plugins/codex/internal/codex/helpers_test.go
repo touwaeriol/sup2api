@@ -107,7 +107,7 @@ func newTestPlugin(ep Endpoints) *Plugin {
 }
 
 func account(typ, creds string) *pluginv1.Account {
-	return &pluginv1.Account{Id: 7, Platform: PlatformID, Type: typ, CredentialsJson: creds}
+	return &pluginv1.Account{Id: 7, Platform: "openai", Type: typ, CredentialsJson: creds}
 }
 
 func mustJSON(t *testing.T, raw []byte, v any) {
