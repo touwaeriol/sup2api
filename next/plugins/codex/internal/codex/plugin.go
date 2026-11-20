@@ -41,8 +41,6 @@ const (
 	TypeDevice = "codex_device"
 	TypeOAuth  = "codex_oauth"
 
-	// PlatformID is the built-in platform both types serve.
-	PlatformID = "openai"
 	// Upstream protocols BuildUpstream speaks (manifest endpoints
 	// "responses" and "responses_websocket"; chat completions reach the
 	// plugin converted to Responses by the core).

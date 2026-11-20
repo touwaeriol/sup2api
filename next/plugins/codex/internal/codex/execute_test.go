@@ -54,13 +54,12 @@ func executeCases() []executeCase {
 }
 
 // keptAbove is why each non-credential header is authoritative.
-const keptAbove = "written above operator settings before forwarding v2; behaviour kept"
+const keptAbove = "the plugin's own header, written above the operator's header settings"
 
 // authoritativeHeaders are the headers the plugin writes authoritatively,
 // name -> reason: the credential headers, and every other header of the
-// plugin, because all of them were written above the operator's settings
-// before forwarding v2 (a released plugin keeps that). The conformance
-// suite takes this table with executeCases.
+// plugin, all of which the operator's header settings leave as the plugin
+// writes them. The conformance suite takes this table with executeCases.
 var authoritativeHeaders = map[string]string{
 	"authorization":      "credential",
 	"chatgpt-account-id": "credential: the ChatGPT account the token acts for",

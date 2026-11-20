@@ -39,12 +39,14 @@ const (
 	resetConsumePath = resetCreditsPath + "/consume"
 
 	// accountRequestTimeout is the core's bound on one SendAccountRequest
-	// (CONTRACTS §91.1).
+	// (CONTRACTS §91.1). The core bounds the whole route call by the same
+	// 30 seconds, so a consume's sends, its retry included, end within it.
 	accountRequestTimeout = 30 * time.Second
 	// resetLockTTL covers one consume under its lock: the request and its
-	// single retry, then CLEAR and the cache drop. It must outlast both sends,
-	// or a second click could start a consume with a new redeem_request_id
-	// while the retry is still in flight.
+	// single retry, each at its own bound, then CLEAR and the cache drop; the
+	// route call's bound ends them sooner. It must outlast the sends, or a
+	// second click could start a consume with a new redeem_request_id while
+	// the retry is still in flight.
 	resetLockTTL = 2*accountRequestTimeout + 30*time.Second
 	// maxSnippet bounds the upstream text an error message carries.
 	maxSnippet = 200
