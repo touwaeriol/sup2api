@@ -483,7 +483,7 @@ func (p *Plugin) pollDevice(ctx context.Context, req *pluginv1.HTTPRequest, id s
 	now := p.now()
 	if !found || now.Unix() >= s.ExpiresAt {
 		if found {
-			p.deleteSession(ctx, kvDevice, id)
+			p.deleteEntry(ctx, kvDevice, id)
 		}
 		return deviceExpired()
 	}
@@ -523,12 +523,12 @@ func (p *Plugin) pollDevice(ctx context.Context, req *pluginv1.HTTPRequest, id s
 		}
 		return pending("")
 	case !a.ok():
-		p.deleteSession(ctx, kvDevice, id)
+		p.deleteEntry(ctx, kvDevice, id)
 		p.log.Warn("codex: device code login refused", "status", a.status, "oauth_error", oauthErrorCode(a.body))
 		return pollFailed("device code login failed / 设备码登录失败 (" + a.describe() + ")")
 	}
 	// The code is single-use: whatever happens next, this session is done.
-	p.deleteSession(ctx, kvDevice, id)
+	p.deleteEntry(ctx, kvDevice, id)
 	return p.exchangeDeviceCode(ctx, call, a)
 }
 
@@ -699,7 +699,7 @@ func (p *Plugin) handleCodexExchange(ctx context.Context, req *pluginv1.HTTPRequ
 	if f != nil {
 		return upstreamError(f.code, f.msg), nil
 	}
-	p.deleteSession(ctx, kvCodex, id)
+	p.deleteEntry(ctx, kvCodex, id)
 	return pluginsdk.DataResponse(CodexExchangeResponse{Credentials: c}), nil
 }
 
@@ -712,7 +712,7 @@ func (p *Plugin) callbackRefused(ctx context.Context, id string, cb callbackPara
 	}
 	p.log.Warn("codex: Sign in with Codex authorization failed", "oauth_error", textutil.Clip(cb.Error, 64))
 	if cb.Error == "access_denied" {
-		p.deleteSession(ctx, kvCodex, id)
+		p.deleteEntry(ctx, kvCodex, id)
 		return flowError("access_denied", "authorization was denied / 授权被拒绝 ("+msg+")")
 	}
 	return flowError("authorization_failed", "authorization failed / 授权失败 ("+msg+")")
