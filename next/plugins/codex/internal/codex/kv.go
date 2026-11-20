@@ -75,16 +75,9 @@ func (p *Plugin) saveCached(ctx context.Context, ns, id string, v any, ttl time.
 	return kv.Set(ctx, ns, id, b, ttl)
 }
 
-// deleteSession deletes an authorization session. A failure is only
-// logged: the session expires with its ttl, and every code is single-use on
-// OpenAI's side.
-func (p *Plugin) deleteSession(ctx context.Context, ns, id string) { p.deleteEntry(ctx, ns, id) }
-
-// deleteCached deletes JSON saveCached kept. A failure is only logged: the
-// entry expires with its ttl, and a stale reset count is only shown.
-func (p *Plugin) deleteCached(ctx context.Context, ns, id string) { p.deleteEntry(ctx, ns, id) }
-
-// deleteEntry deletes a KV entry, logging a failure.
+// deleteEntry deletes a session or a cached entry. A failure is only logged:
+// the entry expires with its ttl, a session's code is single-use on OpenAI's
+// side and a stale reset count is only shown.
 func (p *Plugin) deleteEntry(ctx context.Context, ns, id string) {
 	kv, err := p.kv()
 	if err == nil {
