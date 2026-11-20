@@ -3,7 +3,7 @@ import type { ResetCredit, ResetCredits } from './host'
 // Pure helpers of the official usage reset tab (CodexResetTab).
 
 /** The usage windows the tab shows, in this order (the plugin's quota keys). */
-export const USAGE_KEYS = ['5h', '7d'] as const
+const USAGE_KEYS = ['5h', '7d'] as const
 
 /** The part of the core's quota snapshot the tab reads (GET /accounts/:id/quota). */
 export interface QuotaLike {

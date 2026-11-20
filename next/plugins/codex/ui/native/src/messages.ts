@@ -125,7 +125,6 @@ const zh = {
     badgeTitle: '官方重置次数 {n}，点开查看明细',
     modalTitle: '官方重置 · {name}'
   },
-  serverErrors: '凭证校验失败',
   actionFailed: '操作失败'
 }
 
@@ -255,7 +254,6 @@ const en: Messages = {
     badgeTitle: '{n} official reset(s): open for the details',
     modalTitle: 'Official resets · {name}'
   },
-  serverErrors: 'Credential check failed',
   actionFailed: 'Action failed'
 }
 

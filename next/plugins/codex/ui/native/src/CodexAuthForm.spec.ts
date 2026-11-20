@@ -39,7 +39,7 @@ let proxyTicket: ReturnType<typeof vi.fn<() => Promise<string>>>
 
 let wrapper: VueWrapper | null = null
 function mountForm(props: { accountType: { type: string } } & Record<string, unknown>) {
-  wrapper = mount(CodexAuthForm, { props: { modelValue: {}, mode: 'create', proxyTicket, ...props }, attachTo: document.body })
+  wrapper = mount(CodexAuthForm, { props: { modelValue: {}, mode: 'create', proxyTicket, ...props, accountType: { plugin_key: 'codex', ...props.accountType } }, attachTo: document.body })
   return wrapper
 }
 /** The last v-model value the form emitted. */
@@ -407,6 +407,45 @@ describe('CodexAuthForm: editing', () => {
     expect(lastValue(w)).toEqual({ ...masked, proxy_note: 'kept', originator: 'or-acct' })
   })
 
+  // Cancelling unmounts the flow; the answer of its call in flight is dropped.
+  it('drops a device poll answered after the re-authorization was cancelled', async () => {
+    let reply!: (v: unknown) => void
+    answer = (path) => {
+      if (path === '/auth/device/start') return { session_id: 's1', verification_url: 'https://x', user_code: 'C', interval: 5, expires_in: 900 }
+      return new Promise((resolve) => (reply = resolve))
+    }
+    const w = mountForm({ mode: 'edit', account: { id: 7, type: 'codex_device' }, accountType: { type: 'codex_device' }, modelValue: { ...masked } })
+    await w.get('[data-testid="codex-reauth"]').trigger('click')
+    await w.get('[data-testid="codex-device-start"]').trigger('click')
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(5000)
+    await w.get('[data-testid="codex-reauth-cancel"]').trigger('click')
+    reply({ status: 'done', credentials: DEVICE_CREDS })
+    await flushPromises()
+    expect(lastValue(w)).toBeUndefined()
+    expect(w.find('[data-testid="codex-authorized"]').exists()).toBe(false)
+  })
+
+  it('drops a sign-in exchange answered after the re-authorization was cancelled', async () => {
+    let reply!: (v: unknown) => void
+    answer = (path) => {
+      if (path === '/auth/codex/start') return { session_id: 'w1', authorize_url: 'https://auth.openai.com/a' }
+      return new Promise((resolve) => (reply = resolve))
+    }
+    const w = mountForm({ mode: 'edit', account: { id: 7, type: 'codex_oauth' }, accountType: { type: 'codex_oauth' }, modelValue: { ...masked } })
+    await w.get('[data-testid="codex-reauth"]').trigger('click')
+    await w.get('[data-testid="codex-oauth-start"]').trigger('click')
+    await flushPromises()
+    await w.get('[data-testid="codex-oauth-callback"]').setValue(`${CALLBACK}?code=c&state=s`)
+    await w.get('[data-testid="codex-oauth-complete"]').trigger('click')
+    await flushPromises()
+    await w.get('[data-testid="codex-reauth-cancel"]').trigger('click')
+    reply({ credentials: OAUTH_CREDS })
+    await flushPromises()
+    expect(lastValue(w)).toBeUndefined()
+    expect(w.find('[data-testid="codex-authorized"]').exists()).toBe(false)
+  })
+
   it('cancelling a re-authorization hides the flow', async () => {
     const w = mountForm({ mode: 'edit', account: { id: 7, type: 'codex_device' }, accountType: { type: 'codex_device' }, modelValue: { ...masked } })
     await w.get('[data-testid="codex-reauth"]').trigger('click')
@@ -440,9 +479,18 @@ describe('CodexAuthForm: validate()', () => {
     expect(await (w.vm as unknown as { validate: () => Promise<boolean> }).validate()).toBe(true)
   })
 
-  it('shows server field errors', () => {
+  it('lists a server field error without a field of the form above it', () => {
     const w = mountForm({ accountType: { type: 'codex_device' }, errors: { access_token: 'token rejected' } })
-    expect(w.get('[data-testid="codex-server-errors"]').text()).toContain('token rejected')
+    expect(w.get('[data-testid="credential-form-errors"]').text()).toContain('token rejected')
+  })
+
+  it('shows a server error of a client header at its field', async () => {
+    const w = mountForm({ accountType: { type: 'codex_device' }, errors: { user_agent: 'bad user agent' } })
+    await flushPromises()
+    const input = w.get('[data-testid="codex-user-agent"]')
+    expect(input.attributes('aria-invalid')).toBe('true')
+    expect(document.getElementById(input.attributes('aria-describedby')!)?.textContent).toBe('bad user agent')
+    expect(w.find('[data-testid="credential-form-errors"]').exists()).toBe(false)
   })
 })
 
