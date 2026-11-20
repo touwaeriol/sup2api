@@ -64,10 +64,13 @@ func (p *Plugin) Configure(_ context.Context, cfg pluginsdk.Config) error {
 
 // ValidateSettings implements pluginsdk.SettingsValidator: the console's
 // settings are refused before they are stored when Configure would refuse
-// them.
+// them, and stored trimmed when trimming changed a value.
 func (p *Plugin) ValidateSettings(_ context.Context, cfg pluginsdk.Config) (json.RawMessage, error) {
-	_, err := parseSettings(cfg)
-	return nil, err
+	m, trimmed, err := checkSettings(cfg)
+	if err != nil || !trimmed {
+		return nil, err
+	}
+	return json.Marshal(m)
 }
 
 // settingsRules are the keys of the settings (the console form,
@@ -78,17 +81,25 @@ var settingsRules = fieldcheck.Fields{
 	"originator": fieldcheck.String(),
 }
 
-// parseSettings decodes and checks the settings: the one check of Configure
-// and ValidateSettings. Like an account's own values, a value is trimmed
-// before it is checked.
-func parseSettings(cfg pluginsdk.Config) (*Settings, error) {
-	var m credMap
+// checkSettings decodes, trims and checks the settings: the one check of
+// Configure and ValidateSettings. Like an account's own values, a value is
+// trimmed before it is checked; trimmed reports whether that changed one.
+func checkSettings(cfg pluginsdk.Config) (m credMap, trimmed bool, err error) {
 	if err := fieldcheck.DecodeSettings(cfg, settingsRules, &m); err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	m.trimStrings()
+	trimmed = m.trimStrings()
 	if k, code, msg := m.agentError(); k != "" {
-		return nil, pluginsdk.FieldErrors{}.Add(k, code, msg).Err()
+		return nil, false, pluginsdk.FieldErrors{}.Add(k, code, msg).Err()
+	}
+	return m, trimmed, nil
+}
+
+// parseSettings is the settings Configure applies.
+func parseSettings(cfg pluginsdk.Config) (*Settings, error) {
+	m, _, err := checkSettings(cfg)
+	if err != nil {
+		return nil, err
 	}
 	ua, _ := m.str("user_agent")
 	originator, _ := m.str("originator")
