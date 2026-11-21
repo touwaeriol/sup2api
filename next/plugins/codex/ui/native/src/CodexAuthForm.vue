@@ -7,7 +7,8 @@
 // leaves through the proxy the form names at that moment.
 //
 // - The flow of the account type is shown (codex_device: device code,
-//   codex_oauth: Sign in with Codex).
+//   codex_oauth: Sign in with Codex), under the personal-use notice
+//   (UsageNotice: own use only, with links to OpenAI's terms).
 // - A finished flow writes the credentials it returned into v-model.
 // - Editing: the current email / plan / expiry and "Re-authorize". Until a
 //   re-authorization finishes v-model is left as loaded, so the masked
@@ -26,6 +27,7 @@ import { AGENT_FIELDS, agentOf, FLOW_OF, hasAccessToken, KNOWN_PLANS, mergeCrede
 import { HEADER_VALUE } from './settings'
 import DeviceFlow from './DeviceFlow.vue'
 import OAuthFlow from './OAuthFlow.vue'
+import UsageNotice from './UsageNotice.vue'
 
 const props = defineProps(nativeAccountFormProps)
 const emit = defineEmits<{ (e: 'update:modelValue', value: Record<string, unknown>): void }>()
@@ -170,6 +172,7 @@ defineExpose({ validate })
 
       <!-- The flow: creating, or re-authorizing -->
       <template v-if="showFlow">
+        <UsageNotice />
         <DeviceFlow v-if="flow === 'device'" :key="`device-${type}`" :proxy-ticket="proxyTicket!" :agent="agent" @authorized="onAuthorized" @busy="onBusy" />
         <OAuthFlow v-else-if="flow === 'oauth'" :key="`oauth-${type}`" :proxy-ticket="proxyTicket!" :agent="agent" @authorized="onAuthorized" @busy="onBusy" />
       </template>
