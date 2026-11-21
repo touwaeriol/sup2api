@@ -12,11 +12,11 @@
 
 - 用户组（含个人专属）只能定制倍率：全场折扣、各分组的授权和专属倍率。分组可以定制倍率，也可以给模型定价（按倍数，或可视化 / 表达式的自定义价）。实付 = 模型价格（分组内定价 → 全局价）× 倍率（专属倍率 → 分组默认倍率 × 全场折扣 → 分组默认倍率）。见 CONTRACTS §97.10。
 - **迁移 0123 删除全部用户组专属价**（`price_rules` 里 `segment_id` 非空的行），删掉 `segment_id` 列，规则按（分组, 模型）唯一。个人专属复制设置不再复制规则。命中过专属价的历史使用记录照常显示、重试和对账（价格已随记录冻结）。
-- 接口：定价表、试算、`/me/prices`、`/key/prices` 里不再有用户组这一层（`segment_rule`、`segment_rule_count`、`price_levels.segment`、`?segment_id=`、来源 `segment`）；用户组和分组设置不再带 `price_rule_count`，`GET /groups` 不再带 `segment_rule_count`。
+- 接口：定价表、试算、`/me/prices`、`/key/prices` 里不再有用户组这一层（`segment_rule`、`segment_rule_count`、`price_levels.segment`、`?segment_id=`、来源 `segment`）；用户组和分组设置不再带 `price_rule_count`，`GET /groups` 不再带 `segment_rule_count`；用户组的 `rate_override_count` 换成 `rate_overrides`（`[{id, name, rate}]`，各分组的专属倍率）。`PUT /groups/:id/model-prices` 带 `?segment_id=` 或项里有未知字段（如旧控制台的 `segment_id`）回 400，不会被当成分组内定价写入。
 - 分组定价可以先给分组还不提供的模型定价（模型要有启用的全局价）：定价表列出分组提供的模型和有规则的模型，每行带 `offered`；`GET /groups` 的规则条数不再只算提供的模型。新增 `GET /pricing/catalog`（`group:read`），给定价页列全部启用的全局价。`GET /segments?kind=all` 一次列出命名用户组和个人专属。
 - 定价表、`/me/prices?group_id=`、`/key/prices` 改读本节点计费用的价格快照，与实际扣费同源；价格试算对停用的分组显示“不可用”（`access_source: disabled`）；价格快照的并发载入合并成一次读库；网关鉴权缓存里的倍率直接存数值，不再有解析失败时按 ×1 计费的路径。
-- 发布前对线上库只读跑 §97.10 的查询，列出将被删除的专属价报给所有者。迁移后旧二进制读不了 `price_rules`，按停机维护一次升级全部节点；回退要连同数据库回到升级前的备份。控制台页面由另行重写的页面跟进，本次只改了接口类型和 mock。
-
+- 发布前对线上库只读跑 §97.10 的查询，列出将被删除的专属价报给所有者。迁移后旧二进制读不了 `price_rules`，按停机维护一次升级全部节点；回退要连同数据库回到升级前的备份。
+- 控制台：分组编辑把分组倍率和模型价格放进“价格”页，模型价格按“原价 / 原价 × N / 自定义价格”设，可从全部原价里添加模型；用户组列表同时列出命名用户组和个人，用户组只设折扣、可用的私有分组和各分组倍率；新建分组、用户组时各页都能先填，点“新建”按顺序保存。界面用词统一为原价、分组价、模型价格、分组倍率、倍率 / 实付倍率、折扣、可用。
 
 ### 按 token 的阶梯条件照 new-api（核心；迁移 0122，单向）
 

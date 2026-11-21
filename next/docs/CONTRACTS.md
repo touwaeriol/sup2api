@@ -6811,7 +6811,7 @@ kind: users | groups | api-keys | accounts | models | proxies
 - 分组一侧的授权、专属倍率和模型定价（`/groups/:id/segments`、`/groups/:id/model-prices`），以及定价页用的全局价目录（GET `/pricing/catalog`，`group:read`），沿用 `group:read` / `group:manage`；价格试算接口和控制台的试算入口要求相同：`price:read` 和 `group:read`，按用户试算还要 `user:read`，按用户组试算还要 `segment:read`（97.6）；成员列表要 `segment:read` 和 `user:read`；新建用户时指定用户组要 `segment:manage`。
 - 菜单（`authz/menus.go`，§90.1）：`users` 区加一项，id `segments`，标签“用户组 / User groups”，图标 `publisher`，地址 `/segments`，持有 `segment:read` 才返回；排在“用户”之后、“角色与权限”之前。
 - 控制台新增页面根 `/segments`，`manifest.ConsoleSegments` 加 `segments`：插件的 GET / HEAD 网关端点不能以它开头（§55）。
-- 新建分组时，分组编辑窗口的“授权与倍率”标签页要读 `GET /segments`，没有 `segment:read` 的角色不显示这个标签页；编辑已有分组时它读 `GET /groups/:id/segments`（`group:read`），照常显示。
+- 新建分组时，分组编辑窗口的“授权与倍率”标签页要读 `GET /segments`，没有 `segment:read` 的角色不显示这个标签页；编辑已有分组时它读 `GET /groups/:id/segments`（`group:read`），照常显示。反过来，新建用户组时用户组编辑窗口的“分组倍率”标签页要读 `GET /groups`，没有 `group:read` 的角色不显示这个标签页；编辑已有用户组时它读 `GET /segments/:id/groups`（`segment:read`），照常显示。
 
 ### 97.8 兼容、升级顺序与回滚
 
@@ -6931,10 +6931,10 @@ WHERE s.kind = 'personal' AND u.deleted_at IS NOT NULL;
 
 **接口变化**（类型见 `web/src/api/pricing.ts`）：
 
-- 删掉：GET `/groups/:id/model-prices` 的 `?segment_id=`、行里的 `segment_rule` 和 `segment_rule_count`、响应的 `segment`；PUT 的 `?segment_id=` 和 `items[].segment_id`；试算的 `price_levels.segment`；`Segment`、`SegmentGroupSetting` 的 `price_rule_count`；GET `/groups` 的 `segment_rule_count`。`source`、`price_source` 只有 `group` 和 `global`。个人专属复制设置不再复制规则。
+- 删掉：GET `/groups/:id/model-prices` 的 `?segment_id=`、行里的 `segment_rule` 和 `segment_rule_count`、响应的 `segment`；PUT 的 `?segment_id=` 和 `items[].segment_id`；试算的 `price_levels.segment`；`Segment`、`SegmentGroupSetting` 的 `price_rule_count`；`Segment.rate_override_count`（换成 `rate_overrides: [{id, name, rate}]`）；GET `/groups` 的 `segment_rule_count`。`source`、`price_source` 只有 `group` 和 `global`。个人专属复制设置不再复制规则。
 - 同时改的：保存规则只要求模型有启用的全局价，定价表并上分组有规则的模型并带 `offered`，`price_rule_count` 不再按分组提供的模型过滤（97.1、97.6）；新增 GET `/pricing/catalog`；GET `/segments?kind=all`；定价表、`/me/prices?group_id=`、`/key/prices` 读价格快照，与计费同源；试算对停用的分组回答 `accessible: false`、`access_source: "disabled"`；价格快照的并发载入合并成一次（97.3）。
 - 网关鉴权缓存里的实际倍率直接存十进制数（`core.SegmentRate` 算出的那个），不再存字符串、读时解析；原来解析失败时静默按 ×1 计费，现在没有这条路径。
-- 请求体不拒收未知字段，旧控制台发来带 `segment_id` 的项会被当成分组内定价写入。控制台随核心一起发布，升级后刷新页面即可；脚本按新形状发。
+- PUT `/groups/:id/model-prices` 带 `?segment_id=` 或请求体里有未知字段（如旧控制台项里的 `segment_id`）回 400 `invalid_argument`，不会被当成分组内定价写入。控制台随核心一起发布，升级后刷新页面即可；脚本按新形状发。
 
 **历史使用记录**：0123 之前命中专属价的记录，`billing_detail.inputs.pricing.price_source` 是 `"segment"`，表达式在 `model_price_history`，`scale`、`base` 在 `inputs.pricing`。结算重试和对账不重新解析规则（97.4），这些记录照常读、照常结算；使用记录详情照常显示标价来源。代码里不再有 `segment` 这个来源的常量，这个值只出现在旧数据里。
 

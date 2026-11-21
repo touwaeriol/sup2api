@@ -327,8 +327,9 @@ func updateSegment(db *gorm.DB, id int64, in *segmentInput) *gorm.DB {
 	return db.Model(&model.Segment{}).Where("id = ?", id).Updates(in.columns())
 }
 
-// delete removes a named segment with its grants and rates (they cascade). Its members fall back to the default segment. A personal
-// segment only goes this way once its user is deleted (requireOrphan).
+// delete removes a named segment with its grants and rates (they cascade).
+// Its members fall back to the default segment. A personal segment only goes
+// this way once its user is deleted (requireOrphan).
 func (s *Service) delete(c *gin.Context) {
 	ctx := c.Request.Context()
 	id, ok := httpapi.PathID(c, "id")

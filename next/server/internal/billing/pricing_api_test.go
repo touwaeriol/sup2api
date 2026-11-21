@@ -220,6 +220,12 @@ func TestGroupModelPrices(t *testing.T) {
 	e.mustCall(e.admin, 404, "GET", "/groups/999999/model-prices", nil)
 	e.mustCall(e.admin, 400, "GET", "/groups/open/model-prices", nil)
 	e.mustCall(e.admin, 404, "PUT", "/groups/999999/model-prices", map[string]any{"items": []any{}})
+
+	// The old console's user group prices fail instead of pricing the group.
+	path := "/groups/" + itoa(e.open) + "/model-prices"
+	e.mustCall(e.admin, 400, "PUT", path+"?segment_id=1", map[string]any{"items": []any{patch("web-search", multiplier("0.9"))}})
+	e.mustCall(e.admin, 400, "PUT", path, map[string]any{"items": []any{map[string]any{"model": "web-search", "segment_id": 1, "rule": multiplier("0.9")}}})
+	require.Zero(t, e.one(`SELECT count(*) FROM price_rules WHERE model = 'web-search'`))
 }
 
 func TestGroupModelPricesValidation(t *testing.T) {

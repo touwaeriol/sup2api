@@ -136,8 +136,8 @@ func offeredModels(ctx context.Context, q *gorm.DB, groups []pricedGroup, prices
 	return group.OfferedModels(ctx, q, infos, prices.models())
 }
 
-// groupPrices is a group with the models it provides (sorted) when prices
-// are the global prices.
+// groupPrices is a group with the models it provides (sorted), worked out
+// over the models that have a global price.
 type groupPrices struct {
 	group  pricedGroup
 	models []string
@@ -292,10 +292,16 @@ func (s *Service) saveGroupPrices(c *gin.Context) {
 	if !ok {
 		return
 	}
+	// User groups no longer price models: a segment_id of the old console
+	// must fail, not price the whole group.
+	if _, set := c.GetQuery("segment_id"); set {
+		httpapi.Fail(c, core.ErrInvalidArgument.WithMessage("segment_id is not accepted: user groups set rates only"))
+		return
+	}
 	var in struct {
 		Items []rulePatch `json:"items"`
 	}
-	if !httpapi.BindJSON(c, &in) {
+	if !httpapi.BindStrictJSON(c, &in) {
 		return
 	}
 	uid, _ := core.UserID(ctx)
