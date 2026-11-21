@@ -21,6 +21,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/blobs"
 	pluginpkg "github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/pkg"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store"
@@ -56,7 +57,7 @@ func (p *Package) Hash8() string { return p.SHA256[:8] }
 func (p *Package) VersionHash() string { return p.Version + "-" + p.Hash8() }
 
 // AssetBase is the public URL prefix for package assets.
-func (p *Package) AssetBase() string { return "/plugin-ui/" + p.Key + "/" + p.VersionHash() }
+func (p *Package) AssetBase() string { return core.PluginAssetBase(p.Key, p.VersionHash()) }
 
 // FS exposes the package content (zip) as a read-only file system.
 func (p *Package) FS() fs.FS { return p.zr }

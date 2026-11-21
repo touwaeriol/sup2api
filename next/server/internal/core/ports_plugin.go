@@ -105,6 +105,14 @@ type SchedulerPlugin interface {
 	RankAccounts(ctx context.Context, in *pluginv1.RankAccountsRequest) (*pluginv1.RankAccountsResponse, error)
 }
 
+// PluginAssetBase is the public URL prefix of the assets of a plugin package,
+// e.g. "/plugin-ui/guard/0.1.0-3fa9c1d2". versionHash is the version plus the
+// first 8 hex digits of the package sha256, so the URL never changes content
+// and assets are cached for good.
+func PluginAssetBase(key, versionHash string) string {
+	return "/" + manifest.RoutePluginUI + "/" + key + "/" + versionHash
+}
+
 // PluginInfo identifies one active plugin version on this node.
 type PluginInfo struct {
 	// GrantedPermissions is the local generation's authority snapshot. It is
@@ -115,8 +123,7 @@ type PluginInfo struct {
 	Manifest           *manifest.Manifest
 	Publisher          string
 	Trust              string // official | verified | community | unsigned
-	// AssetBase is the public URL prefix for package assets, e.g.
-	// "/plugin-ui/guard/0.1.0-3fa9c1" (version + package hash for caching).
+	// AssetBase is the public URL prefix for package assets (PluginAssetBase).
 	AssetBase string
 	// Conflicts lists the exclusive resources this generation could not give
 	// the plugin (another plugin claimed them first, or the core holds them);

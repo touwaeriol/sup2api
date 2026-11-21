@@ -396,7 +396,7 @@ CI 有三个 job：`server (with PostgreSQL and Redis)` / `sdk, tools and e2e` /
 
 ### 9.6 两个 `icon` 字段是两套词汇表
 
-- 顶层 `manifest.icon` → 插件头像，语法是 `text:<1-2字>` / 包内相对路径 / 绝对 URL / `data:`。**不是 SIcon 名字**，已有兜底（取首字母），七个插件全是 `text:X`
+- 顶层 `manifest.icon` → 插件头像，语法是 `text:<1-2字>` / 包内相对路径 / 绝对 URL / `data:`。**不是 SIcon 名字**，已有兜底（取首字母）；有对应厂商的插件带 `assets/` 下的 logo 文件，其余是 `text:X`
 - `ui.menus[].icon` → SIcon 名字，**只有这个**该对 `ICON_NAMES` 校验
 
 拼写一样、含义不同。校验层别搞混。

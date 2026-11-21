@@ -2,6 +2,7 @@ package registry_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -33,5 +34,24 @@ func TestVersionAssetsReadApprovedPackageWithoutLocalProcess(t *testing.T) {
 	}
 	if _, _, _, err := packages.ReadVersionAsset(ctx, "assets", vh, "ui/main.js"); err == nil {
 		t.Fatal("unapproved package exposed")
+	}
+}
+
+// A plugin that is installed but does not run serves its icon and nothing
+// else: the plugins list shows it with its logo.
+func TestVersionAssetsServeOnlyTheIconWhileNotRunning(t *testing.T) {
+	db := testutil.DB(t)
+	ctx := context.Background()
+	m := registrytest.Manifest("idle", "1.0.0")
+	raw := registrytest.Package(t, m, []byte("bin"), nil)
+	registrytest.Install(t, db, m, raw, nil, "disabled")
+	packages := registry.NewPackages(db, t.TempDir(), registry.WithSource(registrytest.Source()))
+	defer packages.Close()
+	vh := "1.0.0-" + pluginpkg.SHA256Hex(raw)[:8]
+	if _, data, ct, err := packages.ReadVersionAsset(ctx, "idle", vh, m.Icon); err != nil || len(data) == 0 || ct != "image/svg+xml" {
+		t.Fatalf("icon of a disabled plugin: %q %s %v", data, ct, err)
+	}
+	if _, _, _, err := packages.ReadVersionAsset(ctx, "idle", vh, "ui/index.html"); !errors.Is(err, registry.ErrAssetNotFound) {
+		t.Fatalf("a disabled plugin served its UI: %v", err)
 	}
 }

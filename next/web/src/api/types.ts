@@ -1294,6 +1294,9 @@ export interface PluginSummary {
   /** Set when nodes refuse to load the plugin (built for an older plugin contract). */
   refusal?: PluginRefusal | null
   description?: LText
+  /** Manifest icon of the current version: `text:<label>` or a package path below `asset_base`. */
+  icon?: string
+  asset_base?: string
 }
 
 /** Why the nodes refuse to load a plugin version; `message` is the runtime's own text. */

@@ -351,7 +351,7 @@ func (h *Handler) serveAsset(c *gin.Context) {
 	key, vh := c.Param("key"), c.Param("vh")
 	gen := h.reg.Current()
 	info, ok := gen.Plugin(key)
-	current := ok && info.AssetBase == "/plugin-ui/"+key+"/"+vh
+	current := ok && info.AssetBase == core.PluginAssetBase(key, vh)
 	raw := c.Param("path")
 	if strings.Contains(raw, "..") || strings.Contains(raw, "\\") {
 		c.AbortWithStatus(http.StatusNotFound)

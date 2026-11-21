@@ -144,7 +144,7 @@ onMounted(load)
       </template>
       <template #cell-name="{ row }">
         <div class="flex items-center gap-3">
-          <PluginAvatar :name="lt(row.name)" :plugin-key="row.key" :icon="(row as any).icon" />
+          <PluginAvatar :name="lt(row.name)" :plugin-key="row.key" :icon="row.icon" :asset-base="row.asset_base" />
           <div class="min-w-0">
             <div class="truncate font-medium text-gray-900 dark:text-white">{{ lt(row.name) || row.key }}</div>
             <SHint size="xs" class="truncate font-mono">{{ row.key }}</SHint>

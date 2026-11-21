@@ -1,5 +1,6 @@
 -- sql
-SELECT v.version, v.package_sha256, v.package_url FROM plugin_versions AS v JOIN plugins p ON p.key = v.plugin_key WHERE (p.key = $1 AND v.version || '-' || left(v.package_sha256, 8) = $2) AND (p.status IN ('enabled', 'enabling', 'upgrading') AND v.consent_status = 'approved' AND v.signature_status <> 'revoked') AND NOT EXISTS (SELECT 1 FROM "plugin_uninstalls" WHERE plugin_uninstalls.plugin_key = p.key)
+SELECT v.version, v.package_sha256, v.package_url FROM plugin_versions AS v JOIN plugins p ON p.key = v.plugin_key WHERE (p.key = $1 AND v.version || '-' || left(v.package_sha256, 8) = $2) AND (v.consent_status = 'approved' AND v.signature_status <> 'revoked') AND (p.status IN ('enabled', 'enabling', 'upgrading') OR v.manifest->>'icon' = $3) AND NOT EXISTS (SELECT 1 FROM "plugin_uninstalls" WHERE plugin_uninstalls.plugin_key = p.key)
 -- vars
 $1 string "demo"
 $2 string "1.2.0-0123abcd"
+$3 string "assets/icon.svg"

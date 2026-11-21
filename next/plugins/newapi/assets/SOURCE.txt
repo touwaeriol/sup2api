@@ -1,0 +1,4 @@
+Brand artwork from @lobehub/icons-static-svg 1.104.0
+https://github.com/lobehub/lobe-icons
+https://registry.npmjs.org/@lobehub/icons-static-svg/-/icons-static-svg-1.104.0.tgz
+MIT licensed; brand trademarks belong to their respective owners.

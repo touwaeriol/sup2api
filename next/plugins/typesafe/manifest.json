@@ -6,9 +6,9 @@
     "en": "Adds the typesafe platform (POST /v1/systemone, the TypeSafe Jev API) and its API key account type. Requests are forwarded to TypeSafe as they are; usage is read from each answer's usage. The plugin builds the upstream requests; the core sends them, so the plugin itself makes no network connection. Model prices are set by administrators in the core.",
     "zh": "新增 typesafe 平台（POST /v1/systemone，TypeSafe 的 Jev 接口）及其 API Key 账号类型。请求原样转发给 TypeSafe，用量取自每次应答的 usage。插件构造上游请求，由核心发送，插件自身不发起任何网络连接。模型价格由管理员在核心中配置。"
   },
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "sub2api",
-  "icon": "text:T",
+  "icon": "assets/typesafeai.svg",
   "runtime": "grpc",
   "entry": {
     "grpc": { "binaries": "runtimes/{os}-{arch}/plugin" }

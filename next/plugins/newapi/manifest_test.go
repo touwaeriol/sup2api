@@ -19,7 +19,7 @@ import (
 
 const (
 	key     = "newapi"
-	version = "0.1.0"
+	version = "0.1.1"
 )
 
 // TestManifest runs manifest.json through the checks the core runs before
@@ -32,7 +32,7 @@ const (
 // only its own accounts and opens no connection.
 func TestManifest(t *testing.T) {
 	m := load(t)
-	if m.Key != key || m.Version != version || m.Publisher != "sub2api" || m.Runtime != manifest.RuntimeGRPC || m.Icon != "text:N" {
+	if m.Key != key || m.Version != version || m.Publisher != "sub2api" || m.Runtime != manifest.RuntimeGRPC || m.Icon != "assets/newapi-color.svg" {
 		t.Fatalf("identity = %s %s %s %s %s", m.Key, m.Version, m.Publisher, m.Runtime, m.Icon)
 	}
 	if m.Entry.GRPC == nil || m.Entry.GRPC.Binaries == "" || m.HostCompat != ">=0.1.304 <0.2.0" {

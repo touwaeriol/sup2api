@@ -664,6 +664,26 @@ func TestResourceConflictsInSummary(t *testing.T) {
 	}
 }
 
+// The summary carries the manifest icon of the current version and the asset
+// base it resolves against, whether or not the plugin runs: the plugins list
+// draws the logo from them.
+func TestSummaryIcon(t *testing.T) {
+	h, root := newHarness(t)
+	guard := pkgtest.Guard("guard", "0.1.0", "sub2api")
+	guard.Icon = "assets/logo.svg"
+	files := pkgtest.Files(guard)
+	files[guard.Icon] = []byte(`<svg xmlns="http://www.w3.org/2000/svg"/>`)
+	raw := pkgtest.Zip(pkgtest.Sign(files, guard.Publisher, root))
+	if code, out := h.do("POST", "/plugins/upload", "admin", fileBody(t, raw)); code != 200 {
+		t.Fatalf("upload = %d %v", code, out)
+	}
+	code, out := h.do("GET", "/plugins/guard", "admin", nil)
+	want := core.PluginAssetBase("guard", "0.1.0-"+pkg.SHA256Hex(raw)[:8])
+	if code != 200 || data(out)["icon"] != guard.Icon || data(out)["asset_base"] != want {
+		t.Fatalf("detail = %d icon %v asset_base %v (want %s)", code, data(out)["icon"], data(out)["asset_base"], want)
+	}
+}
+
 // Enable and upgrade check the version's resources again: a newer core may
 // have reserved a path since it was approved (audit 2026-10-09 P2-2).
 func TestEnableAndUpgradeRecheckResources(t *testing.T) {
