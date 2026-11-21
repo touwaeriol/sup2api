@@ -23,13 +23,18 @@ import (
 // unpriced, which the fixture's global price charges for.
 const customExpr = `tier("custom", p*1 + c*2)`
 
+// segmentSource is the price source of a record priced by a user group's
+// rule, frozen before core migration 0123 removed those rules: such records
+// still settle, retry and reconcile by their scale and base.
+const segmentSource = "segment"
+
 // scaled is the fixture's record under a multiplier rule of the user's
-// segment, at the segment's discounted rate. At the global price the usage
-// costs 0.708.
+// segment (segmentSource), at the segment's discounted rate. At the global
+// price the usage costs 0.708.
 func (f *fixture) scaled(id, scale string) *core.UsageRecord {
 	rec := f.record(id, true)
 	rule := *f.price
-	rule.Source, rule.Scale = core.PriceSourceSegment, decPtr(scale)
+	rule.Source, rule.Scale = segmentSource, decPtr(scale)
 	rec.Price, rec.SegmentID, rec.RateSource, rec.RateMultiplier = &rule, 12, core.RateSourceDiscount, dec("1.2")
 	return rec
 }

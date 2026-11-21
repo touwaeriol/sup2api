@@ -13,7 +13,6 @@ import (
 type PriceRule struct {
 	ID         int64            `gorm:"column:id;primaryKey;default:(-)"`                   // bigint default nextval('price_rules_id_seq'::regclass)
 	GroupID    int64            `gorm:"column:group_id"`                                    // bigint
-	SegmentID  *int64           `gorm:"column:segment_id"`                                  // bigint
 	Model      string           `gorm:"column:model"`                                       // text
 	Kind       string           `gorm:"column:kind"`                                        // character varying(20)
 	Multiplier *decimal.Decimal `gorm:"column:multiplier"`                                  // numeric(10,4)

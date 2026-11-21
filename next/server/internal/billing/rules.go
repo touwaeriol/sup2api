@@ -18,8 +18,8 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store/model"
 )
 
-// Rule is a model price of a group, or of a segment in a group, as the API
-// reads and writes it (CONTRACTS §97).
+// Rule is a model price of a group as the API reads and writes it (CONTRACTS
+// §97).
 type Rule struct {
 	Kind string `json:"kind"`
 	// Multiplier (kind multiplier), a decimal: the list price is the global
@@ -59,16 +59,16 @@ func (r *storedRule) view() *Rule {
 	return &out
 }
 
-// price returns the list price the rule makes of the global one, with where
-// the rule is from: a multiplier leaves the expression and sets Scale; a
-// custom price puts its own expression, and what it tells, in and keeps the
-// global one as Base. ID is always the global price's. A nil rule is the
-// global price as it is, its Source left empty (core.PriceRule.Source).
-func (r *storedRule) price(global core.PriceRule, source string) *core.PriceRule {
+// price returns the list price the rule makes of the global one: a
+// multiplier leaves the expression and sets Scale; a custom price puts its
+// own expression, and what it tells, in and keeps the global one as Base. ID
+// is always the global price's. A nil rule is the global price as it is, its
+// Source left empty (core.PriceRule.Source).
+func (r *storedRule) price(global core.PriceRule) *core.PriceRule {
 	if r == nil {
 		return &global
 	}
-	global.Source = source
+	global.Source = core.PriceSourceGroup
 	if r.Kind == core.PriceRuleMultiplier {
 		scale := r.scale
 		global.Scale = &scale
@@ -80,45 +80,23 @@ func (r *storedRule) price(global core.PriceRule, source string) *core.PriceRule
 	return &global
 }
 
-// ruleLevels are the rules on one model in one group: that of a segment and
-// the group's own.
-type ruleLevels struct{ segment, group *storedRule }
-
-// applied returns the first rule there is, the segment's before the
-// group's, and where the list price then comes from. It is the one place the
-// levels are ordered.
-func (l ruleLevels) applied() (*storedRule, string) {
-	switch {
-	case l.segment != nil:
-		return l.segment, core.PriceSourceSegment
-	case l.group != nil:
-		return l.group, core.PriceSourceGroup
+// source is where the list price comes from under the rule (nil = none).
+func (r *storedRule) source() string {
+	if r == nil {
+		return core.PriceSourceGlobal
 	}
-	return nil, core.PriceSourceGlobal
+	return core.PriceSourceGroup
 }
 
-// ruleSet is price rules by what they are on; SegmentID 0 is the group's own
-// rule on the model.
-type ruleSet map[core.PriceQuery]*storedRule
+// ruleSet is the price rules of groups, by group id and then model.
+type ruleSet map[int64]map[string]*storedRule
 
-// levels returns the rules that may price q.
-func (rs ruleSet) levels(q core.PriceQuery) ruleLevels {
-	l := ruleLevels{group: rs[core.PriceQuery{Model: q.Model, GroupID: q.GroupID}]}
-	if q.SegmentID != 0 {
-		l.segment = rs[q]
-	}
-	return l
-}
+// of returns the rule on the model of q in its group; nil without one.
+func (rs ruleSet) of(q core.PriceQuery) *storedRule { return rs[q.GroupID][q.Model] }
 
-// rulesFor selects the rules that may price the models of a group for a
-// segment: the segment's own and the group's. It takes the group's id, then
-// the segment's twice.
-const rulesFor = `group_id = ? AND COALESCE(segment_id, ?) = ?`
-
-// ruleRow is a row of priceRules.
+// ruleRow is a row of price_rules as loadRules reads it.
 type ruleRow struct {
 	GroupID    int64
-	SegmentID  int64
 	Model      string
 	Kind       string
 	Multiplier *decimal.Decimal
@@ -128,25 +106,23 @@ type ruleRow struct {
 	ExprHash   string
 }
 
-// loadRules reads the price rules cond selects ("" for all of them).
-func loadRules(ctx context.Context, q *gorm.DB, cond string, args ...any) (ruleSet, error) {
-	db := store.G(ctx, q).Model(&model.PriceRule{}).Select(`group_id, COALESCE(segment_id, 0) AS segment_id, model, kind, multiplier,
-		COALESCE(mode, '') AS mode, config, expression, expr_hash`)
-	if cond != "" {
-		db = db.Where(cond, args...)
-	}
+// loadRules reads every price rule.
+func loadRules(ctx context.Context, q *gorm.DB) (ruleSet, error) {
 	var rows []ruleRow
-	if err := db.Scan(&rows).Error; err != nil {
+	if err := store.G(ctx, q).Model(&model.PriceRule{}).Select(`group_id, model, kind, multiplier,
+		COALESCE(mode, '') AS mode, config, expression, expr_hash`).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
-	out := make(ruleSet, len(rows))
+	out := ruleSet{}
 	for _, row := range rows {
-		on := core.PriceQuery{GroupID: row.GroupID, SegmentID: row.SegmentID, Model: row.Model}
 		r := &storedRule{Rule: Rule{Kind: row.Kind, Mode: row.Mode, Config: row.Config}, exprHash: row.ExprHash}
 		if row.Multiplier != nil {
 			r.setScale(*row.Multiplier)
 		}
-		out[on] = r
+		if out[row.GroupID] == nil {
+			out[row.GroupID] = map[string]*storedRule{}
+		}
+		out[row.GroupID][row.Model] = r
 		// Only a custom price has an expression of its own.
 		if r.Kind != core.PriceRuleCustom {
 			continue
@@ -212,20 +188,18 @@ func checkCustom(ctx context.Context, in Rule, facts map[string]bool) (*storedRu
 // changed rule, in the order of the changes: the expressions for the
 // history, the key of every changed rule and of those removed (a delete
 // came before the last change or is the last one), and the rows of those
-// saved (the last change saves), the group's own rules and the segments'
-// apart. A key is what ruleKeys matches: group, segment (0 = the group's
-// own) and model.
+// saved (the last change saves). A key is what ruleKeys matches: group and
+// model.
 type ruleWrites struct {
 	history          []*expr.Program
 	changed, removed []any
-	saved            [2][]ruleRecord // the group's own rules, the segments'
+	saved            []ruleRecord
 }
 
 // ruleRecord is the columns of price_rules a saved rule writes: id and
 // updated_at take their defaults, and nothing is read back.
 type ruleRecord struct {
 	GroupID    int64
-	SegmentID  *int64
 	Model      string
 	Kind       string
 	Multiplier *decimal.Decimal
@@ -253,17 +227,17 @@ func (w *ruleWrites) addHistory(r *storedRule) error {
 
 // addRule adds the rule on on: removed first when removed, then saved as r
 // by updatedBy when r is not nil.
-func (w *ruleWrites) addRule(on core.PriceQuery, removed bool, r *storedRule, updatedBy int64) error {
-	key := []any{on.GroupID, on.SegmentID, on.Model}
+func (w *ruleWrites) addRule(on core.PriceQuery, removed bool, r *storedRule, updatedBy int64) {
+	key := []any{on.GroupID, on.Model}
 	w.changed = append(w.changed, key)
 	if removed {
 		w.removed = append(w.removed, key)
 	}
 	if r == nil {
-		return nil
+		return
 	}
-	row := ruleRecord{GroupID: on.GroupID, SegmentID: nullID(on.SegmentID), Model: on.Model, Kind: r.Kind,
-		Expression: r.Expression, ExprHash: r.exprHash, UpdatedBy: nullID(updatedBy)}
+	row := ruleRecord{GroupID: on.GroupID, Model: on.Model, Kind: r.Kind, Expression: r.Expression, ExprHash: r.exprHash,
+		UpdatedBy: nullID(updatedBy)}
 	if r.Multiplier != nil {
 		row.Multiplier = &r.scale
 	}
@@ -273,46 +247,35 @@ func (w *ruleWrites) addRule(on core.PriceQuery, removed bool, r *storedRule, up
 	if r.Config != nil {
 		row.Config = store.Bytes(r.Config)
 	}
-	level := 0
-	if on.SegmentID != 0 {
-		level = 1
-	}
-	w.saved[level] = append(w.saved[level], row)
-	return nil
+	w.saved = append(w.saved, row)
 }
 
 // ruleKeys matches the rules of keys (ruleWrites).
 func ruleKeys(keys []any) clause.IN {
-	return clause.IN{Column: []clause.Column{{Name: "group_id"}, {Name: "COALESCE(segment_id, 0)", Raw: true}, {Name: "model"}}, Values: keys}
+	return clause.IN{Column: []clause.Column{{Name: "group_id"}, {Name: "model"}}, Values: keys}
 }
 
-// ruleConflict is the upsert of the saved rules of a level (0 the group's
-// own, 1 a segment's) on the partial unique index of that level: the rule
-// over the one there, if any, by its user, updated_at moved.
-func ruleConflict(level int) clause.OnConflict {
-	target, where := []clause.Column{{Name: "group_id"}, {Name: "model"}}, "segment_id IS NULL"
-	if level == 1 {
-		target, where = []clause.Column{{Name: "group_id"}, {Name: "segment_id"}, {Name: "model"}}, "segment_id IS NOT NULL"
-	}
+// ruleConflict is the upsert of the saved rules on price_rules_group_model_uq:
+// the rule over the one there, if any, by its user, updated_at moved.
+func ruleConflict() clause.OnConflict {
 	set := clause.AssignmentColumns([]string{"kind", "multiplier", "mode", "config", "expression", "expr_hash", "updated_by"})
-	return clause.OnConflict{Columns: target, TargetWhere: clause.Where{Exprs: []clause.Expression{clause.Expr{SQL: where}}},
+	return clause.OnConflict{Columns: []clause.Column{{Name: "group_id"}, {Name: "model"}},
 		DoUpdates: append(set, clause.Assignment{Column: clause.Column{Name: "updated_at"}, Value: clause.Expr{SQL: "now()"}})}
 }
 
 // writeRules writes w in tx, as the statements of each change did one after
 // the other: a rule removed is deleted where it is, a rule saved is upserted
-// on the partial unique index of its level, and the expression of a custom
-// price also goes to model_price_history, as a global price's does: a
-// settlement retry reads it back by expr_hash on any node. Deleting and then
-// inserting a rule leaves a new row.
+// on its group and model, and the expression of a custom price also goes to
+// model_price_history, as a global price's does: a settlement retry reads it
+// back by expr_hash on any node. Deleting and then inserting a rule leaves a
+// new row.
 //
 // The history goes in the order of its hashes, and the existing rows of
 // every changed rule are locked FOR UPDATE in the order of their keys
 // before anything is deleted or saved; the saved rows go in the order of
-// the changes (that of applyChanges), the group's own before the
-// segments'. Two requests that change the same rules then lock them and
-// insert the same new ones in one order, and neither waits for the other
-// in a circle.
+// the changes (that of applyChanges). Two requests that change the same
+// rules then lock them and insert the same new ones in one order, and
+// neither waits for the other in a circle.
 func writeRules(ctx context.Context, tx *gorm.DB, w *ruleWrites) error {
 	if err := store.RequireTx(tx); err != nil {
 		return err
@@ -323,7 +286,7 @@ func writeRules(ctx context.Context, tx *gorm.DB, w *ruleWrites) error {
 	}
 	g := store.G(ctx, tx)
 	var locked []int64
-	if err := g.Model(&model.PriceRule{}).Where(ruleKeys(w.changed)).Order("group_id, segment_id NULLS FIRST, model").
+	if err := g.Model(&model.PriceRule{}).Where(ruleKeys(w.changed)).Order("group_id, model").
 		Clauses(store.ForUpdate()).Pluck("id", &locked).Error; err != nil {
 		return err
 	}
@@ -332,13 +295,8 @@ func writeRules(ctx context.Context, tx *gorm.DB, w *ruleWrites) error {
 			return err
 		}
 	}
-	for level, rows := range w.saved {
-		if len(rows) == 0 {
-			continue
-		}
-		if err := g.Clauses(ruleConflict(level)).Create(&rows).Error; err != nil {
-			return err
-		}
+	if len(w.saved) == 0 {
+		return nil
 	}
-	return nil
+	return g.Clauses(ruleConflict()).Create(&w.saved).Error
 }

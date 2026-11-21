@@ -35,8 +35,8 @@ func TestPriceOneAmounts(t *testing.T) {
 		{"the segment's rate alone", global, &core.PricingTrace{SegmentID: 4, RateSource: core.RateSourceDiscount, PriceSource: core.PriceSourceGlobal},
 			"13", "13", "19.5", false, "global"},
 		{"multiplier", global, &core.PricingTrace{PriceSource: core.PriceSourceGroup, Scale: decPtr("0.8")}, "13", "10.4", "15.6", true, "global"},
-		{"multiplier 0", global, &core.PricingTrace{PriceSource: core.PriceSourceSegment, Scale: decPtr("0")}, "13", "0", "0", true, "global"},
-		{"multiplier 1", global, &core.PricingTrace{PriceSource: core.PriceSourceSegment, Scale: decPtr("1")}, "13", "13", "19.5", true, "global"},
+		{"multiplier 0", global, &core.PricingTrace{PriceSource: segmentSource, Scale: decPtr("0")}, "13", "0", "0", true, "global"},
+		{"multiplier 1", global, &core.PricingTrace{PriceSource: segmentSource, Scale: decPtr("1")}, "13", "13", "19.5", true, "global"},
 		{"custom", custom, &core.PricingTrace{PriceSource: core.PriceSourceGroup, Base: &core.PriceBase{Expression: global}}, "13", "6", "9", true, "custom"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -92,7 +92,7 @@ func TestPriceComponentsSumAmounts(t *testing.T) {
 	p := &pending{
 		Expression: `tier("main", p*2 + c*4)`, Rate: dec("2"), Tokens: core.UsageTokens{Input: 1_000_000, Output: 500_000}, // base 4, list 2, total 4
 		Inputs: pendingInputs{Semantics: "exclusive", Additional: []core.PricedUsage{referenced, plain},
-			Pricing: &core.PricingTrace{SegmentID: 4, RateSource: core.RateSourceSegment, PriceSource: core.PriceSourceSegment, Scale: decPtr("0.5")}},
+			Pricing: &core.PricingTrace{SegmentID: 4, RateSource: core.RateSourceSegment, PriceSource: segmentSource, Scale: decPtr("0.5")}},
 	}
 	check := func(stage, base, list, total string) BillingDetail {
 		t.Helper()
@@ -120,7 +120,7 @@ func TestPriceComponentsSumAmounts(t *testing.T) {
 	free := core.PricedUsage{Kind: "attempt", Model: "refused", UsageSemantics: "exclusive", Tokens: million, RateMultiplier: dec("2"),
 		Free: true, BillingReason: "refusal_before_output", Price: &core.PriceRule{Expression: `tier("refused", p*100)`, Scale: decPtr("7")}}
 	fallback := core.PricedUsage{Kind: "attempt", Model: "fallback", UsageSemantics: "exclusive", Tokens: million, RateMultiplier: dec("2"),
-		Price: &core.PriceRule{Expression: `tier("fallback", p*3)`, Source: core.PriceSourceSegment, Scale: decPtr("2")}} // base 3, list 6, total 12
+		Price: &core.PriceRule{Expression: `tier("fallback", p*3)`, Source: segmentSource, Scale: decPtr("2")}} // base 3, list 6, total 12
 	p.Inputs.Replacement = []core.PricedUsage{free, fallback}
 	detail = check("replacement", "38", "21", "52")
 	require.Len(t, detail.Replacement, 2)
@@ -159,8 +159,8 @@ func TestPricingTrace(t *testing.T) {
 		{"the segment's rate without a price", nil, 4, core.RateSourceSegment, &core.PricingTrace{SegmentID: 4, RateSource: core.RateSourceSegment}},
 		{"multiplier 0", &core.PriceRule{ID: 1, Source: core.PriceSourceGroup, Scale: decPtr("0")}, 4, core.RateSourceGroup,
 			&core.PricingTrace{SegmentID: 4, RateSource: core.RateSourceGroup, PriceSource: core.PriceSourceGroup, Scale: decPtr("0")}},
-		{"custom", &core.PriceRule{ID: 1, Source: core.PriceSourceSegment, Base: base}, 4, "",
-			&core.PricingTrace{SegmentID: 4, PriceSource: core.PriceSourceSegment, Base: base}},
+		{"custom", &core.PriceRule{ID: 1, Source: segmentSource, Base: base}, 4, "",
+			&core.PricingTrace{SegmentID: 4, PriceSource: segmentSource, Base: base}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := pricingTrace(tc.price, tc.segmentID, tc.rateSource)

@@ -233,18 +233,18 @@ func TestParseSup2APIScalesExpressionWithoutConfig(t *testing.T) {
 	}
 }
 
-// fakeKeys authenticates "sk-good" into a group with multiplier 2. Group and
-// Segment, when set, are the group of the key and the segment of its owner.
+// fakeKeys authenticates "sk-good" into a group with multiplier 2. Group,
+// when set, is the group of the key.
 type fakeKeys struct {
-	Mode           string
-	Group, Segment int64
+	Mode  string
+	Group int64
 }
 
 func (f fakeKeys) Authenticate(_ context.Context, raw string) (*core.APIKeyPrincipal, error) {
 	if raw != "sk-good" {
 		return nil, core.ErrUnauthenticated
 	}
-	pr := &core.APIKeyPrincipal{KeyID: 1, UserID: 1, SegmentID: f.Segment, Group: core.GroupInfo{ID: 7, Name: "vip",
+	pr := &core.APIKeyPrincipal{KeyID: 1, UserID: 1, Group: core.GroupInfo{ID: 7, Name: "vip",
 		RateMultiplier: decimal.NewFromInt(2), ModelAllowlist: []string{"claude-*"}, ModelFilterMode: f.Mode}}
 	if f.Group != 0 {
 		pr.Group.ID = f.Group

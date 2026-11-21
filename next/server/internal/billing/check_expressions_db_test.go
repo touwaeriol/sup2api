@@ -66,7 +66,7 @@ func TestCheckStoredExpressions(t *testing.T) {
 	}
 	var group int64
 	require.NoError(t, db.SQL.QueryRowContext(ctx, `SELECT id FROM groups WHERE name = 'check'`).Scan(&group))
-	rule := fmt.Sprintf("%d/-/ok ", group)
+	rule := fmt.Sprintf("%d/ok ", group)
 	// After migration 0121 an expression is checked as it is: "|||" no longer compiles.
 	require.Equal(t, map[string]string{"model_prices": "drift negative old-form old-tiers-drift ", "price_rules": rule, "model_price_history": "old "}, sortedRefs(problems()))
 	// Before it, an expression is checked as the migration will rewrite it

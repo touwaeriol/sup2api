@@ -97,58 +97,58 @@ func TestExportPrice(t *testing.T) {
 	perRequest := customRule(`tier("base", flat(1))`)
 	perRequest.Config = json.RawMessage(`{"tiers": [{"name": "base", "unit": "request", "price": 1}]}`)
 
-	p, err := exportPrice("m", handWritten, ruleLevels{group: times("1.2")})
+	p, err := exportPrice("m", handWritten, times("1.2"))
 	require.NoError(t, err)
 	require.Equal(t, syncPrice{Model: "m", Mode: "expression", Config: json.RawMessage(`{}`), Expression: `(tier("base", p*3 + c*15)) * 1.2`}, p)
 	require.NoError(t, p.compile())
 
-	p, err = exportPrice("m", perTokenPrice, ruleLevels{segment: times("0.5"), group: times("1.2")})
+	p, err = exportPrice("m", perTokenPrice, times("0.5"))
 	require.NoError(t, err)
 	require.Equal(t, `tier("base", p*0.5 + c*2.5)`, p.Expression)
 	require.JSONEq(t, `{"tiers": [{"name": "base", "p": 0.5, "c": 2.5}], "rules": []}`, string(p.Config))
 
 	// A custom price goes out as it is, whatever the global price.
-	p, err = exportPrice("m", perTokenPrice, ruleLevels{segment: perRequest})
+	p, err = exportPrice("m", perTokenPrice, perRequest)
 	require.NoError(t, err)
 	require.Equal(t, syncPrice{Model: "m", Mode: "visual", Config: perRequest.Config, Expression: perRequest.Expression}, p)
 
 	// Free: the expression times 0.
-	p, err = exportPrice("m", handWritten, ruleLevels{group: times("0")})
+	p, err = exportPrice("m", handWritten, times("0"))
 	require.NoError(t, err)
 	require.Equal(t, `(tier("base", p*3 + c*15)) * 0`, p.Expression)
 	require.Equal(t, "18", costOf(t, handWritten.Expression))
 	require.Equal(t, "0", costOf(t, p.Expression))
 
 	// A multiplier of 1 changes nothing.
-	p, err = exportPrice("m", handWritten, ruleLevels{group: times("1.0")})
+	p, err = exportPrice("m", handWritten, times("1.0"))
 	require.NoError(t, err)
 	require.Equal(t, syncPrice{Model: "m", Mode: handWritten.Mode, Config: handWritten.Config, Expression: handWritten.Expression}, p)
 
 	// Tiers are scaled in the config, request rules are not, and the
 	// expression is generated from it.
-	p, err = exportPrice("m", tieredPrice, ruleLevels{group: times("0.5")})
+	p, err = exportPrice("m", tieredPrice, times("0.5"))
 	require.NoError(t, err)
 	require.JSONEq(t, `{"tiers": [{"name": "standard", "when": {"var": "len", "op": "<=", "value": 200000}, "p": 1.5, "c": 7.5}, {"name": "long", "p": 3, "c": 11.25}],
 		"rules": [{"multiplier": 2, "conds": [{"source": "param", "key": "fast", "op": "eq", "value": true}]}]}`, string(p.Config))
 	require.Equal(t, `(len <= 200000 ? tier("standard", p*1.5 + c*7.5) : tier("long", p*3 + c*11.25)) * (param("fast") == true ? 2 : 1)`, p.Expression)
 
 	// A unit=request tier and a per-request price scale their price.
-	p, err = exportPrice("m", PriceDef{Mode: "visual", Config: json.RawMessage(`{"tiers": [{"name": "bulk", "unit": "request", "price": 0.05}]}`)}, ruleLevels{group: times("2")})
+	p, err = exportPrice("m", PriceDef{Mode: "visual", Config: json.RawMessage(`{"tiers": [{"name": "bulk", "unit": "request", "price": 0.05}]}`)}, times("2"))
 	require.NoError(t, err)
 	require.Equal(t, `tier("bulk", flat(0.1))`, p.Expression)
-	p, err = exportPrice("m", PriceDef{Mode: "visual", Config: json.RawMessage(`{"tiers": [{"name": "base", "unit": "request", "price": 0.05}]}`)}, ruleLevels{group: times("3")})
+	p, err = exportPrice("m", PriceDef{Mode: "visual", Config: json.RawMessage(`{"tiers": [{"name": "base", "unit": "request", "price": 0.05}]}`)}, times("3"))
 	require.NoError(t, err)
 	require.Equal(t, `tier("base", flat(0.15))`, p.Expression)
 
 	// A line comment ends before the ")".
 	for _, comment := range []string{`// don't`, `// 3" display`, "// a `tick", `// list`} {
 		quoted := PriceDef{Mode: "expression", Config: json.RawMessage(`{}`), Expression: `tier("base", p*3 + c*15) ` + comment}
-		p, err = exportPrice("m", quoted, ruleLevels{group: times("2")})
+		p, err = exportPrice("m", quoted, times("2"))
 		require.NoError(t, err, comment)
 		require.Equal(t, "36", costOf(t, p.Expression))
 	}
 	// An expression that does not compile cannot carry the multiplier.
 	_, err = exportPrice("m", PriceDef{Mode: "expression", Config: json.RawMessage(`{}`), Expression: `tier("base", p*3 + c*15) /* open`},
-		ruleLevels{group: times("2")})
+		times("2"))
 	require.Error(t, err)
 }

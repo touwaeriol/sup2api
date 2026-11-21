@@ -31,11 +31,11 @@ type MyPrices struct {
 	Prices         []MyPriceRow    `json:"prices"`
 }
 
-// myPrices answers GET /me/prices?group_id= (CONTRACTS §79.5). Without a
-// group it is every model at its global price, with the caller's groups that
-// provide it. With one it is the models that group provides and can bill, at
-// the list price and the rate the caller gets there. A group the caller
-// cannot use is a 404.
+// myPrices answers GET /me/prices?group_id= (CONTRACTS §79.5) from the price
+// snapshot requests are billed by. Without a group it is every model at its
+// global price, with the caller's groups that provide it. With one it is the
+// models that group provides and can bill, at the list price and the rate
+// the caller gets there. A group the caller cannot use is a 404.
 func (s *Service) myPrices(c *gin.Context) {
 	ctx := c.Request.Context()
 	uid, _ := core.UserID(ctx)
@@ -68,21 +68,21 @@ const usableBy = segment.UsableGroup
 // pricesOfGroups lists every model with a global price, at that price, with
 // the groups of the user that provide it.
 func (s *Service) pricesOfGroups(ctx context.Context, uid int64) (*MyPrices, error) {
+	snap, err := s.snapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
 	groups, err := loadGroups(ctx, s.db.Gorm, usableBy, uid)
 	if err != nil {
 		return nil, err
 	}
-	prices, err := loadCatalog(ctx, s.db.Gorm)
-	if err != nil {
-		return nil, err
-	}
-	offered, err := offeredModels(ctx, s.db.Gorm, groups, prices)
+	offered, err := offeredModels(ctx, s.db.Gorm, groups, snap.bases)
 	if err != nil {
 		return nil, err
 	}
 	out := &MyPrices{RateMultiplier: decimal.NewFromInt(1), Prices: []MyPriceRow{}}
-	for _, model := range prices.models() {
-		row := MyPriceRow{Model: model, PriceDef: prices[model], Groups: []core.GroupRef{}}
+	for _, model := range snap.bases.models() {
+		row := MyPriceRow{Model: model, PriceDef: snap.bases[model], Groups: []core.GroupRef{}}
 		for _, g := range groups {
 			if _, ok := slices.BinarySearch(offered[g.ID], model); ok {
 				row.Groups = append(row.Groups, g.ref())
@@ -96,7 +96,11 @@ func (s *Service) pricesOfGroups(ctx context.Context, uid int64) (*MyPrices, err
 // pricesInGroup lists the models one of the user's groups provides and can
 // bill, at the list price and the rate the user gets there.
 func (s *Service) pricesInGroup(ctx context.Context, uid, groupID int64) (*MyPrices, error) {
-	gp, err := loadGroupPrices(ctx, s.db.Gorm, usableBy+" AND g.id = ?", uid, groupID)
+	snap, err := s.snapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	gp, err := loadGroupPrices(ctx, s.db.Gorm, snap.bases, usableBy+" AND g.id = ?", uid, groupID)
 	if err != nil {
 		return nil, err
 	}
@@ -110,9 +114,8 @@ func (s *Service) pricesInGroup(ctx context.Context, uid, groupID int64) (*MyPri
 	}
 	group := gp.group.ref()
 	out := &MyPrices{Group: &group, RateMultiplier: t.Rate, RateSource: t.RateSource, Prices: []MyPriceRow{}}
-	err = eachPrice(ctx, s.db.Gorm, gp.prices, gp.models, gp.group.ID, t.SegmentID, func(model string, base PriceDef, levels ruleLevels) {
-		price, source := levels.listPrice(base)
-		out.Prices = append(out.Prices, MyPriceRow{Model: model, PriceDef: price, Source: source})
+	snap.each(groupID, gp.models, func(model string, base PriceDef, rule *storedRule) {
+		out.Prices = append(out.Prices, MyPriceRow{Model: model, PriceDef: listPrice(base, rule), Source: rule.source()})
 	})
-	return out, err
+	return out, nil
 }

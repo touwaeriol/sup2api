@@ -3,6 +3,7 @@ package billing
 import (
 	"context"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,7 +25,7 @@ type priceSnapshot struct {
 	at      time.Time
 	byModel map[string]core.PriceRule // one price per complete model id
 	bases   catalog                   // the same prices as the pricing endpoints show them
-	rules   ruleSet                   // price rules of groups and segments
+	rules   ruleSet                   // price rules of groups
 }
 
 // priceTraits is what the expression of a price tells of the requests it
@@ -47,22 +48,42 @@ type resolved struct {
 	rule *core.PriceRule // nil = no match
 }
 
+// snapshot returns the prices requests are billed by: the cached snapshot
+// while younger than cacheTTL, else a new one. One load serves every caller
+// that finds the snapshot stale in an epoch; it is detached from theirs, so
+// a caller that goes away fails it for no one, and a caller after
+// invalidate never joins a load that started before.
 func (s *Service) snapshot(ctx context.Context) (*priceSnapshot, error) {
 	s.mu.Lock()
-	snap := s.prices
-	epoch := s.epoch
+	snap, epoch := s.prices, s.epoch
 	s.mu.Unlock()
 	if snap != nil && time.Since(snap.at) < s.cacheTTL {
 		return snap, nil
 	}
-	// A snapshot lives for cacheTTL: requests read it, not the table.
+	load := s.loads.DoChan(strconv.FormatUint(epoch, 10), func() (any, error) {
+		return s.loadSnapshot(context.WithoutCancel(ctx), epoch)
+	})
+	select {
+	case r := <-load:
+		if r.Err != nil {
+			return nil, r.Err
+		}
+		return r.Val.(*priceSnapshot), nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// loadSnapshot reads the enabled global prices and the price rules, and
+// keeps them as the snapshot unless invalidate came since epoch.
+func (s *Service) loadSnapshot(ctx context.Context, epoch uint64) (*priceSnapshot, error) {
 	var rows []model.ModelPrice
 	err := enabledPrices(store.G(ctx, s.db.Gorm), "id", "model", "mode", "expression", "expr_version", "expr_hash", "config").
 		Find(&rows).Error
 	if err != nil {
 		return nil, err
 	}
-	snap = &priceSnapshot{at: time.Now(), byModel: map[string]core.PriceRule{}, bases: catalog{}}
+	snap := &priceSnapshot{at: time.Now(), byModel: map[string]core.PriceRule{}, bases: catalog{}}
 	for _, row := range rows {
 		r := core.PriceRule{ID: row.ID, Model: row.Model, Mode: row.Mode, Expression: row.Expression,
 			ExprVersion: core.ValueOr(row.ExprVersion, 0), ExprHash: row.ExprHash}
@@ -72,7 +93,7 @@ func (s *Service) snapshot(ctx context.Context) (*priceSnapshot, error) {
 		snap.byModel[r.Model] = r
 		snap.bases[r.Model] = PriceDef{Mode: r.Mode, Config: row.Config, Expression: r.Expression}
 	}
-	if snap.rules, err = loadRules(ctx, s.db.Gorm, ""); err != nil {
+	if snap.rules, err = loadRules(ctx, s.db.Gorm); err != nil {
 		return nil, err
 	}
 	s.mu.Lock()
@@ -94,21 +115,20 @@ func (snap *priceSnapshot) match(model string) *core.PriceRule {
 }
 
 // resolve returns the list price q asks for, or nil when the model has no
-// global price: the first price rule that applies to the group and segment of
-// q, else the global price (CONTRACTS §97).
+// global price: the group's price rule on the model, else the global price
+// (CONTRACTS §97).
 func (snap *priceSnapshot) resolve(q core.PriceQuery) *core.PriceRule {
 	global := snap.match(q.Model)
 	if global == nil {
 		return nil
 	}
-	rule, source := snap.rules.levels(q).applied()
-	return rule.price(*global, source)
+	return snap.rules.of(q).price(*global)
 }
 
 // Resolve implements core.Pricer. Prices are global per model: the platform
 // and account type serving the request do not matter (ARCHITECTURE 7.3). A
-// price rule of the caller's group or segment may replace or scale the
-// global price; without a global price no rule applies.
+// price rule of the caller's group may replace or scale the global price;
+// without a global price no rule applies.
 func (s *Service) Resolve(ctx context.Context, q core.PriceQuery) (*core.PriceRule, error) {
 	s.mu.Lock()
 	hit, ok := s.resolved[q]

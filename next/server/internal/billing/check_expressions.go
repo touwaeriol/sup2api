@@ -17,7 +17,7 @@ import (
 // (after migration 0121) a config that does not generate its expression.
 type ExpressionProblem struct {
 	Table string // model_prices, price_rules or model_price_history
-	Ref   string // the model, "group/segment/model" or the hash
+	Ref   string // the model, "group/model" or the hash
 	Error string
 }
 
@@ -38,7 +38,7 @@ func CheckStoredExpressions(ctx context.Context, db *gorm.DB) ([]ExpressionProbl
 	if err := g.Select("model", "mode", "config", "expression", "expr_hash").Find(&prices).Error; err != nil {
 		return nil, err
 	}
-	if err := g.Select("group_id", "segment_id", "model", "mode", "config", "expression", "expr_hash").Where("kind = ?", core.PriceRuleCustom).Find(&rules).Error; err != nil {
+	if err := g.Select("group_id", "model", "mode", "config", "expression", "expr_hash").Where("kind = ?", core.PriceRuleCustom).Find(&rules).Error; err != nil {
 		return nil, err
 	}
 	if err := g.Select("expr_hash", "expression").Find(&history).Error; err != nil {
@@ -82,11 +82,7 @@ func CheckStoredExpressions(ctx context.Context, db *gorm.DB) ([]ExpressionProbl
 		generated("model_prices", p.Model, p.Mode, p.Config, p.ExprHash)
 	}
 	for _, r := range rules {
-		segment := "-"
-		if r.SegmentID != nil {
-			segment = fmt.Sprint(*r.SegmentID)
-		}
-		ref := fmt.Sprintf("%d/%s/%s", r.GroupID, segment, r.Model)
+		ref := fmt.Sprintf("%d/%s", r.GroupID, r.Model)
 		check("price_rules", ref, r.Expression)
 		if r.Mode != nil {
 			generated("price_rules", ref, *r.Mode, r.Config, r.ExprHash)

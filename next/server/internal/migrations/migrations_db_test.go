@@ -1459,3 +1459,59 @@ func TestMigration0120DropsAnthropicModelCatalog(t *testing.T) {
 	require.Equal(t, want, state())
 	require.Equal(t, version, read(`SELECT policy_version::text FROM authz_meta`), "a rerun moved the policy")
 }
+
+// 0123 deletes the model prices of user groups and drops price_rules.
+// segment_id with its indexes (CONTRACTS §97): the group's own rules stay, a
+// rule is unique by group and model, deleting a segment no longer touches
+// price_rules. A rerun changes nothing.
+func TestMigration0123DropsSegmentPriceRules(t *testing.T) {
+	const id = "0123_drop_segment_price_rules.sql"
+	db := testutil.DBThrough(t, migrationBefore(t, id))
+	ctx := t.Context()
+	exec := func(sql string) error {
+		t.Helper()
+		_, err := db.SQL.ExecContext(ctx, sql)
+		return err
+	}
+	read := func(sql string) (v string) {
+		t.Helper()
+		require.NoError(t, db.SQL.QueryRowContext(ctx, sql).Scan(&v))
+		return v
+	}
+	migrate := func() []string {
+		t.Helper()
+		done, err := store.Migrate(ctx, db, migrations.FS, store.CoreTracker{}, store.MigrateOptions{LockKey: store.CoreMigrationLockKey})
+		require.NoError(t, err)
+		return done
+	}
+	require.NoError(t, exec(`INSERT INTO groups (name) VALUES ('g1'), ('g2');
+		INSERT INTO segments (name) VALUES ('vip');
+		INSERT INTO price_rules (group_id, segment_id, model, kind, multiplier)
+			SELECT g.id, NULL::bigint, 'm1', 'multiplier', 1.2 FROM groups g WHERE g.name = 'g1'
+			UNION ALL SELECT g.id, NULL, 'm2', 'multiplier', 0 FROM groups g WHERE g.name = 'g2'
+			UNION ALL SELECT g.id, s.id, m, 'multiplier', 0.5 FROM groups g, segments s, unnest(ARRAY['m1', 'm3']) m WHERE s.name = 'vip'`))
+	require.Equal(t, "6", read(`SELECT count(*)::text FROM price_rules`))
+
+	state := func() string {
+		return read(`SELECT concat_ws(' | ',
+			(SELECT string_agg(g.name || ' ' || r.model || ' ' || r.multiplier, ', ' ORDER BY g.name, r.model)
+				FROM price_rules r JOIN groups g ON g.id = r.group_id),
+			(SELECT count(*)::text FROM information_schema.columns
+				WHERE table_schema = current_schema() AND table_name = 'price_rules' AND column_name = 'segment_id'),
+			(SELECT string_agg(replace(indexdef, schemaname || '.', ''), '; ' ORDER BY indexname) FROM pg_indexes
+				WHERE schemaname = current_schema() AND tablename = 'price_rules' AND indexname <> 'price_rules_pkey'))`)
+	}
+	const want = "g1 m1 1.2000, g2 m2 0.0000 | 0 | " +
+		"CREATE UNIQUE INDEX price_rules_group_model_uq ON price_rules USING btree (group_id, model)"
+	require.Equal(t, migrationsAfter(t, migrationBefore(t, id)), migrate())
+	require.Equal(t, want, state())
+
+	// One rule per group and model; a segment goes without price rules.
+	require.ErrorContains(t, exec(`INSERT INTO price_rules (group_id, model, kind, multiplier)
+		SELECT id, 'm1', 'multiplier', 2 FROM groups WHERE name = 'g1'`), "price_rules_group_model_uq")
+	require.NoError(t, exec(`DELETE FROM segments WHERE name = 'vip'`))
+
+	require.NoError(t, exec(`DELETE FROM schema_migrations WHERE id = '`+id+`'`))
+	require.Equal(t, []string{id}, migrate())
+	require.Equal(t, want, state())
+}

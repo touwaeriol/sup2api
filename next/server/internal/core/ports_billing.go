@@ -32,7 +32,9 @@ type PriceRule struct {
 	// per_request (BillingType). The effective expression's, like VideoOnly.
 	PerRequest bool `json:",omitempty"`
 	// Source is where the list price comes from (PriceSource*); "" on prices
-	// stored before price rules existed, which were all global.
+	// stored before price rules existed, which were all global. Prices
+	// frozen before core migration 0123 may say "segment" (a user group's
+	// rule, since removed): they settle as any other rule, by Scale and Base.
 	Source string `json:",omitempty"`
 	// Scale is the multiplier of a multiplier rule: the list price is the
 	// expression times it. nil = none.

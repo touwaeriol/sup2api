@@ -36,10 +36,3 @@ func listPrice(base PriceDef, rule *storedRule) PriceDef {
 	base.Multiplier = &scale
 	return base
 }
-
-// listPrice returns the list price the first rule that applies makes of the
-// global price base, and where it comes from.
-func (l ruleLevels) listPrice(base PriceDef) (PriceDef, string) {
-	rule, source := l.applied()
-	return listPrice(base, rule), source
-}
