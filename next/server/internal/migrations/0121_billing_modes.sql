@@ -35,6 +35,8 @@
 -- pricing inputs change. Usage rows are reached by id (their partial index,
 -- or the ids settlements and tasks hold), never by a scan of the table.
 
+SET LOCAL lock_timeout = '10s';
+
 -- A number given as a numeric string, as a JSON number; anything else as it is.
 CREATE FUNCTION billing_modes_num(v jsonb) RETURNS jsonb LANGUAGE sql IMMUTABLE AS $$
     SELECT CASE WHEN jsonb_typeof(v) = 'string' AND btrim(v #>> '{}', E' \t\r\n') ~ '^[+-]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]{1,3})?$'
