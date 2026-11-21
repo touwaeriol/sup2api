@@ -9230,5 +9230,4 @@ Go 类型是 `expr.TokenConfig`、`TierConfig`、`TokenPrices`、`RuleConfig`、
 
 - 迁移 2 按 `config` 判断，不看表达式：可视化配置与手改过的表达式不一致的旧行（原来就以表达式计费）会被转成 `per_token`，计费仍按存下的表达式，但价格页显示的是配置；再保存一次时按配置重新生成。SQL 里分辨不出这种情况。
 - 规则不再分段求值、按十进制相乘，而是整个程序一次浮点计算，结果可能在最后一位（1e-8 美元）与旧引擎不同。
-- e2e（`next/e2e/ac08_billing_test.go`）还写着 `|||` 的价格，需要改成乘积写法。
 - 不在本次：OpenAI / Codex 应答里的 `service_tier` 报成用量字段；按次带加价规则。

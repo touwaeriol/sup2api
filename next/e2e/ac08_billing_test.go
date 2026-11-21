@@ -21,7 +21,7 @@ func TestAC08_BillingModes(t *testing.T) {
 	base := fmt.Sprintf("claude-e2e-%s-bill", e.RunID)
 
 	const exprText = `(len <= 200000 ? tier("standard", p*3 + c*15) : tier("long_context", p*6 + c*22.5))` +
-		` ||| has(header("anthropic-beta"), "e2e-surcharge") ? 2 : 1`
+		` * (has(header("anthropic-beta"), "e2e-surcharge") ? 2 : 1)`
 
 	cases := []struct {
 		name    string
@@ -43,7 +43,7 @@ func TestAC08_BillingModes(t *testing.T) {
 		{
 			name:  "per_token",
 			model: base + "-token",
-			price: map[string]any{"mode": "per_token", "config": RunPrice},
+			price: map[string]any{"mode": "per_token", "config": RunPriceConfig()},
 			tier:  "base",
 			want:  ExpectedTokenCost(RunPrice, MockInputTokens, MockOutputTokens, MockCacheReadTokens, MockCacheCreationTokens, 0, 1),
 		},
