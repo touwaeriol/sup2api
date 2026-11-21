@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import type { Group } from '@/api/types'
 import type { Segment, SegmentGroupSetting } from '@/api/pricing'
-import { blankSetting, draftedSetting, mergeSettingDraft, settingPatches, validOverride, type SettingDraft, type SettingDrafts } from './accessRateDrafts'
+import { blankGroupSetting, blankSetting, draftedSetting, mergeSettingDraft, settingPatches, validOverride, type SettingDraft, type SettingDrafts } from './accessRateDrafts'
 import { effectiveRate } from './pricingFormat'
 
 function setting(group: number, over: Partial<SegmentGroupSetting> = {}, visibility: 'public' | 'restricted' = 'public'): SegmentGroupSetting {
@@ -11,7 +12,6 @@ function setting(group: number, over: Partial<SegmentGroupSetting> = {}, visibil
     granted: false,
     rate_override: null,
     rate: { value: '1.08', source: 'discount', group_default: '1.2', discount: '0.9' },
-    price_rule_count: 0,
     ...over
   }
 }
@@ -101,10 +101,21 @@ describe('the drafts', () => {
 
 describe('a group not created yet', () => {
   it('starts every segment with nothing set, at its own discount', () => {
-    const personal = { id: 104, kind: 'personal', name: 'a@b.c', user_id: 9, discount: '0.9', member_count: 1, price_rule_count: 4 } as Segment
+    const personal = { id: 104, kind: 'personal', name: 'a@b.c', user_id: 9, discount: '0.9', member_count: 1 } as Segment
     const blank = blankSetting(personal)
-    expect(blank).toMatchObject({ segment: { id: 104, kind: 'personal', name: 'a@b.c', user_id: 9 }, granted: false, rate_override: null, price_rule_count: 0, member_count: 1 })
+    expect(blank).toMatchObject({ segment: { id: 104, kind: 'personal', name: 'a@b.c', user_id: 9 }, granted: false, rate_override: null, member_count: 1 })
     // The group's side comes from its form.
     expect(draftedSetting('segment', blank, undefined, { visibility: 'restricted', groupDefault: '0.8' })).toMatchObject({ id: 104, accessible: false, rate: { value: '0.72', source: 'discount' } })
+  })
+})
+
+describe('a segment not created yet', () => {
+  it('starts every group with nothing set, at the discount of its form', () => {
+    const group = { id: 5, name: 'Claude', description: '', status: 'active', visibility: 'restricted', rate_multiplier: 1.2, model_allowlist: [] } as Group
+    const blank = blankGroupSetting(group)
+    expect(blank).toMatchObject({ group: { id: 5, name: 'Claude', visibility: 'restricted', rate_multiplier: '1.2' }, accessible: false, granted: false, rate_override: null })
+    expect(draftedSetting('group', blank, undefined, { discount: '0.9' })).toMatchObject({ id: 5, accessible: false, rate: { value: '1.08', source: 'discount' } })
+    expect(draftedSetting('group', blank, { granted: true }).accessible).toBe(true)
+    expect(blankGroupSetting({ ...group, visibility: 'public' }).accessible).toBe(true)
   })
 })

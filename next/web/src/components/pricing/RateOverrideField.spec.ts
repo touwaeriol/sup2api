@@ -7,31 +7,28 @@ i18n.global.locale.value = 'en'
 
 function render(modelValue: string | null, rate = { group_default: '1.2', discount: '0.9' }) {
   const w = mount(RateOverrideField, { props: { modelValue, rate }, global: { plugins: [i18n] } })
-  return { w, input: w.get('[data-testid="rate-override-input"]'), source: () => w.get('[data-testid="rate-override-source"]').text() }
+  return { w, input: w.get('[data-testid="rate-override-input"]') }
 }
 
 describe('rate override field', () => {
-  it('follows the group default times the discount while empty', () => {
-    const { input, source } = render(null)
-    expect(input.attributes('placeholder')).toBe('Follows ×1.08')
-    expect(source()).toBe('Group default ×1.2 × discount ×0.9')
+  it('says what an empty field follows: the group rate times the discount', () => {
+    const { w, input } = render(null)
+    expect(input.attributes('placeholder')).toBe('Follows 1.08')
     expect(input.attributes('aria-invalid')).toBeUndefined()
-  })
-  it('names the group default alone without a discount', () => {
-    expect(render(null, { group_default: '1.2', discount: '1' }).source()).toBe('Group default ×1.2')
+    expect(w.find('[data-testid="rate-override-invalid"]').exists()).toBe(false)
+    expect(render(null, { group_default: '1.2', discount: '1' }).input.attributes('placeholder')).toBe('Follows 1.2')
   })
   it('emits the typed rate, and null again once cleared', async () => {
     const { w, input } = render(null)
     await input.setValue(' 0.85 ')
     expect(w.emitted('update:modelValue')?.[0]).toEqual(['0.85'])
     await w.setProps({ modelValue: '0.85' })
-    expect(w.get('[data-testid="rate-override-source"]').text()).toBe('Own rate, no longer follows ×1.08')
     await w.get('button').trigger('click')
     expect(w.emitted('update:modelValue')?.[1]).toEqual([null])
   })
   it('marks a value that is not a rate', () => {
-    const { input, source } = render('abc')
+    const { w, input } = render('abc')
     expect(input.attributes('aria-invalid')).toBe('true')
-    expect(source()).toBe('Enter a number from 0 to below 1000000, up to 4 decimals')
+    expect(w.get('[data-testid="rate-override-invalid"]').text()).toBe('Enter a number from 0 to 999999.9999, up to 4 decimals')
   })
 })

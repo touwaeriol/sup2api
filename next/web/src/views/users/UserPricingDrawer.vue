@@ -16,7 +16,7 @@ import SegmentGroupsEditor from '@/components/pricing/SegmentGroupsEditor.vue'
 import { validDiscount } from '@/components/pricing/segmentForm'
 import UserSegmentPanel from './UserSegmentPanel.vue'
 
-// Groups and pricing of one user: the segment he belongs to and what it gives
+// The group rates of one user: the segment he belongs to and what it gives
 // him in every group. The settings of a named segment are every member's, so
 // they are shown read-only; those of a personal segment are edited here and
 // saved with the button in the footer; closing with something not saved asks

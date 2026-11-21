@@ -1,16 +1,13 @@
 export default {
   segment: {
-    personal: '个人专属',
-    personalOf: '个人专属 · {name}'
+    personal: '个人',
+    personalOf: '个人 · {name}'
   },
   exclusive: '专属',
   rate: {
-    label: '专属倍率',
+    label: '倍率',
     follow: '跟随 {rate}',
-    groupDefault: '分组默认 {group}',
-    discounted: '分组默认 {group} × 全场折扣 {discount}',
-    override: '专属倍率，不再跟随 {rate}',
-    invalid: '请输入不小于 0、小于 1000000 的数字，最多 4 位小数'
+    invalid: '填 0 到 999999.9999 之间的数字，最多 4 位小数'
   },
   rule: {
     mode: '定价方式',

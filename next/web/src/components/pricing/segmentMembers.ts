@@ -1,4 +1,5 @@
 import { api } from '@sub2api/host'
+import type { PersonalDialogUser, Segment } from '@/api/pricing'
 import { useAuthStore } from '@/stores/auth'
 
 /**
@@ -17,4 +18,14 @@ export function canListMembers(auth = useAuthStore()): boolean {
  */
 export function moveToSegment(segmentId: number, userIds: number[]) {
   return api.post<{ moved: number }>(`/segments/${segmentId}/members`, { user_ids: userIds })
+}
+
+/**
+ * The member of a personal segment, as the personal dialogs take a user. A
+ * caller who does not read users is told no `user`: the member's id and the
+ * segment's name ("#id" to him) stand in, which is all moving him back takes.
+ */
+export function personalUserOf(s: Segment | null): PersonalDialogUser | null {
+  if (!s || s.user_id === undefined) return null
+  return { id: s.user_id, email: s.user?.email ?? s.name, display_name: s.user?.display_name ?? '', segment: s }
 }

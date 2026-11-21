@@ -5,12 +5,9 @@ export default {
   },
   exclusive: 'Exclusive',
   rate: {
-    label: 'Own rate',
+    label: 'Rate',
     follow: 'Follows {rate}',
-    groupDefault: 'Group default {group}',
-    discounted: 'Group default {group} × discount {discount}',
-    override: 'Own rate, no longer follows {rate}',
-    invalid: 'Enter a number from 0 to below 1000000, up to 4 decimals'
+    invalid: 'Enter a number from 0 to 999999.9999, up to 4 decimals'
   },
   rule: {
     mode: 'Pricing',

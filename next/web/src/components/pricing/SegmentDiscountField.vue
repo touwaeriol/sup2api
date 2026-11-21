@@ -5,13 +5,13 @@ import { SField, SHint, SInput } from '@sub2api/ui'
 import { inheritedRate, rateText } from '@/components/pricing/pricingFormat'
 import { validDiscount } from './segmentForm'
 
-// The discount of a segment: one number on the default rate of every group.
+// The discount of a segment: one number on the group rate of every group.
 // The example beside it follows what is typed.
 const props = defineProps<{ modelValue: string; error?: string; disabled?: boolean }>()
 const emit = defineEmits<{ (e: 'update:modelValue', v: string): void }>()
 const { t } = useI18n()
 
-/** The default rate of the group in the example. */
+/** The group rate in the example. */
 const EXAMPLE_RATE = '1.2'
 
 const example = computed(() => {

@@ -9,7 +9,7 @@ import SegmentSelect from './SegmentSelect.vue'
 import { useSegmentsLookup } from './segmentLookup'
 
 // Moves a user out of his personal segment into a named one
-// (DELETE /users/:id/personal-segment?to=): the personal settings go with it.
+// (DELETE /users/:id/personal-segment?to=): his own grants and rates go with it.
 // `origin` is the segment he was in before, offered first.
 const props = defineProps<{ open: boolean; user: PersonalDialogUser | null; origin?: SegmentRef | null }>()
 const emit = defineEmits<{ (e: 'update:open', v: boolean): void; (e: 'done'): void }>()
@@ -43,7 +43,7 @@ async function submit() {
   busy.value = true
   try {
     await api.del(`/users/${user.id}/personal-segment`, { to: to.id })
-    toast(t('pricingTools.remove.done', { name: user.email, segment: to.name }), 'success')
+    toast(t('segments.remove.done', { name: user.email, segment: to.name }), 'success')
     emit('done')
     emit('update:open', false)
   } catch (e) {
@@ -57,9 +57,9 @@ async function submit() {
 <template>
   <SFormModal
     :open="open"
-    :title="t('pricingTools.remove.title', { name: user?.email || '' })"
+    :title="t('segments.remove.title', { name: user?.email || '' })"
     :loading="busy"
-    :submit-text="t('pricingTools.remove.submit')"
+    :submit-text="t('segments.remove.submit')"
     submit-variant="danger"
     :submit-disabled="target === null"
     :submit-attrs="{ 'data-testid': 'personal-remove-submit' }"
@@ -68,9 +68,9 @@ async function submit() {
     @update:open="emit('update:open', $event)"
     @submit="submit"
   >
-    <SField :label="t('pricingTools.remove.target')">
+    <SField :label="t('segments.remove.target')">
       <SegmentSelect v-model="target" data-testid="personal-remove-target" />
     </SField>
-    <SAlert tone="danger">{{ t('pricingTools.remove.warning') }}</SAlert>
+    <SAlert tone="danger">{{ t('segments.remove.warning') }}</SAlert>
   </SFormModal>
 </template>

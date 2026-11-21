@@ -10,7 +10,7 @@ import UserSegmentMoveDialog from './UserSegmentMoveDialog.vue'
 const mocks = vi.hoisted(() => ({ post: vi.fn(), toast: vi.fn() }))
 vi.mock('@sub2api/host', async (original) => ({ ...(await original<object>()), api: { post: mocks.post } }))
 vi.mock('@sub2api/ui', async (original) => ({ ...(await original<object>()), toast: (...a: unknown[]) => mocks.toast(...a) }))
-const named = (id: number, name: string): Segment => ({ id, kind: 'named', name, description: '', discount: '1', is_default: id === 1, member_count: 1, granted_groups: [], rate_override_count: 0, price_rule_count: 0 })
+const named = (id: number, name: string): Segment => ({ id, kind: 'named', name, description: '', discount: '1', is_default: id === 1, member_count: 1, granted_groups: [], rate_override_count: 0 })
 vi.mock('@/components/pricing/segmentLookup', () => ({ useSegmentsLookup: () => ({ segments: ref([named(1, '默认'), named(2, 'VIP')]) }) }))
 enableAutoUnmount(afterEach)
 
@@ -44,7 +44,7 @@ describe('moving users to a user group', () => {
 
     await choose(2)
     expect(text('user-move-impact')).toBe('2 位用户将移到「VIP」。1 位已在「VIP」，不受影响。')
-    expect(text('user-move-personal')).toBe('包含 1 位个人专属用户，移动后个人专属设置会被删除。')
+    expect(text('user-move-personal')).toBe('包含 1 位个人用户，移动后他们单独设的开通和倍率会被删除。')
 
     submitButton().click()
     await flushPromises()

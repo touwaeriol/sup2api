@@ -1,37 +1,26 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { SField } from '@sub2api/ui'
-import type { User } from '@/api/types'
+import { useI18n } from 'vue-i18n'
+import { SButton } from '@sub2api/ui'
 import type { SegmentRef } from '@/api/pricing'
 import { useAuthStore } from '@/stores/auth'
 import PersonalConvertDialog from './PersonalConvertDialog.vue'
-import UserPick from './UserPick.vue'
 
-// Picks one user to price on his own and answers with his personal segment:
-// the one he has, or the one the convert dialog gives him when he is still in
-// a named segment (`created` true: there is one more of them now). Renders
-// nothing for a caller who may not do that.
-defineProps<{ label?: string; hint?: string; disabled?: boolean }>()
+// A button that sets one user's rates apart: the convert dialog asks whom and
+// answers with his personal segment, the one he has or the one it made for
+// him (`created` true: there is one more of them now). Renders nothing for a
+// caller who may not do that.
+withDefaults(defineProps<{ label?: string; size?: 'sm' | 'md'; disabled?: boolean }>(), { label: undefined, size: 'md' })
 const emit = defineEmits<{ (e: 'select', segment: SegmentRef, created: boolean): void }>()
+const { t } = useI18n()
 const auth = useAuthStore()
 const allowed = computed(() => auth.has('user:read') && auth.has('segment:manage'))
-
-/** The user the convert dialog asks about. */
-const converting = ref<User | null>(null)
-const convertOpen = ref(false)
-
-function pick(user: User) {
-  if (user.segment?.kind === 'personal') return emit('select', user.segment, false)
-  converting.value = user
-  convertOpen.value = true
-}
+const open = ref(false)
 </script>
 
 <template>
-  <div v-if="allowed" data-testid="personal-segment-picker">
-    <SField :label="label" :hint="hint">
-      <UserPick :disabled="disabled" @select="pick" />
-    </SField>
-    <PersonalConvertDialog v-model:open="convertOpen" :user="converting" @done="emit('select', $event, true)" />
-  </div>
+  <template v-if="allowed">
+    <SButton :size="size" icon="plus" :disabled="disabled" data-testid="personal-segment-picker" @click="open = true">{{ label ?? t('segments.convert.pick') }}</SButton>
+    <PersonalConvertDialog v-model:open="open" :user="null" @done="(segment, created) => emit('select', segment, created)" />
+  </template>
 </template>
