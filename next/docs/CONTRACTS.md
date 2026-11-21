@@ -203,7 +203,7 @@
 |---|---|
 | GET/POST `/prices`（`?mode=&source=&plugin_key=&enabled=&q=`），GET/PATCH/DELETE `/prices/:id`；详情返回 `analysis`（表达式读取的参数、请求头、指标） | `price:read` / `price:manage` |
 | POST `/prices/validate` `{mode, config?, expression?}` → `{ok, expression, expr_hash?, errors[], warnings[], samples, cost_per_million_input?, analysis?}`，`errors[]`、`warnings[]` 的每项是 Issue（见表下） | `price:read` |
-| POST `/prices/preview` `{price_id? \| mode+config/expression, usage:{p,c,cr,cc,cc1h,len?}, metrics:{}, headers:{}, params:{}, at?, group_id?}` → `{cost, base_cost, rate_multiplier, expression, expr_hash, tier, rules:[{cond,multiplier,matched}], breakdown:{...}}` | `price:read` |
+| POST `/prices/preview` `{price_id? \| mode+config/expression, usage:{p,c,cr,cc,cc1h,img?,img_o?,len?}, metrics:{}, headers:{}, params:{}, at?, group_id?}` → `{cost, base_cost, rate_multiplier, expression, expr_hash, tier, rules:[{cond,multiplier,matched}], breakdown:{...}}` | `price:read` |
 | POST `/prices/:id/override`（复制插件默认价格为管理员价格） | `price:manage` |
 | GET `/groups/:id/model-prices`（`?segment_id=`），PUT `/groups/:id/model-prices` `{items:[{segment_id, model, rule}]}` | `group:read` / `group:manage`；分组内定价与用户组专属价（§97.6） |
 | POST `/pricing/quote` `{user_id? \| segment_id?, group_id, model, usage:{p,c,cr?,cc?,cc1h?}}` | `price:read`；某个用户或用户组在某个分组调用某个模型的标价、倍率与费用；`user_id` 与 `segment_id` 必须恰好给一个（§97.6） |
@@ -216,8 +216,8 @@
 | GET/PUT `/settings/billing` `{min_balance, big_cost_warning_usd}`（`missing_price_policy` 2026-11-19 删除，§17.3） | `settings:read` / `settings:manage` |
 
 价格表达式校验失败时 `details.fields[].message` 为 `{en, zh}`。表达式的问题（`/prices/validate` 的 `errors[]`、`warnings[]`，保存与试算失败时的 `details.errors`）是 Issue `{code, message: {en, zh}, detail?, line?, column?}`（`billing/expr.Issue`）：
-- `line`、`column` 从 1 开始，列按字符（Unicode 码点）计，相对于交给校验的表达式原文（含 `v1:` 前缀；保存、校验接口先去掉首尾空白）；问题没有位置时两个字段都不出现。语法错误用 expr-lang 报错的位置，括号不配对用那个括号的位置，`negative_multiplier` 指向倍数，`literal_argument_required`、`invalid_timezone` 指向那次函数调用，`unknown_usage_fact` 指向这个键第一次出现的 `u(...)`；冒烟测试、运行时错误、大额警告没有位置。
-- `syntax_error` 的 `detail` 是中文：多了右括号是 `多了一个右括号`，左括号没配对是 `这个左括号没有配对的右括号`（括号按 expr-lang 的词法找，字符串和注释里的不算）；不认识的名字是 `不认识的名字 X`，在表达式可用的变量和函数（`expr` 求值环境 `env` 的名字加启用的内置函数，不含 `__rule`）里有编辑距离不超过 2 且小于 X 的字符数的名字时加 `，是不是 Y？`（取最近的，同样近取前面的）；其他错误是 `表达式写法不对：` 加 expr-lang 的英文原文。其他 code 的 `detail` 不变。
+- `line`、`column` 从 1 开始，列按字符（Unicode 码点）计，相对于提交的表达式原文（不去首尾空白，`v1:` 前缀也算在内，所以与编辑器里的位置一致）；保存时存的是去掉首尾空白后的文本；问题没有位置时两个字段都不出现。语法错误用 expr-lang 报错的位置，括号不配对用那个括号的位置，`negative_multiplier` 指向倍数，`literal_argument_required`、`invalid_timezone` 指向那次函数调用，`unknown_usage_fact` 指向这个键第一次出现的 `u(...)`；冒烟测试、运行时错误、大额警告没有位置。
+- `syntax_error` 的 `detail` 是中文：多了右括号是 `多了一个右括号`，左括号没配对是 `这个左括号没有配对的右括号`（括号按 expr-lang 的词法找，字符串和注释里的不算）；保留名字 `__rule`、`$env` 是 `不能使用保留名字 X`；不认识的名字是 `不认识的名字 X`，在表达式可用的变量和函数（`expr` 求值环境 `env` 的名字加启用的内置函数，不含 `__rule`）里有编辑距离不超过 2 且小于 X 的字符数的名字时加 `，是不是 Y？`（取最近的，同样近取前面的）；其他错误是 `表达式写法不对：` 加 expr-lang 的英文原文。其他 code 的 `detail` 不变。
 
 结算时捕获的参数、请求头和 usage 口径存在 `usage_logs.billing_detail.inputs`。
 
@@ -9199,6 +9199,7 @@ Go 类型是 `expr.TokenConfig`、`TierConfig`、`TokenPrices`、`RuleConfig`、
   - 条件的值是 `nil`（`param("fast") ? 2 : 1` 而请求里没有 `fast`）时算不命中，与旧引擎相同；是字符串、数字等其它非布尔值时求值出错，也与旧引擎相同。
   - `breakdown.base` 是所有规则都不命中时的值（有规则命中时再算一次，每条规则都取 `: 1`；这一次算不出来时 `base` 取费用本身）；`breakdown.rules_multiplier` 是费用 ÷ `base`（原始值相除，保留 8 位小数；`base` 为 0 时是 1）。规则都是顶层因子时它等于命中规则倍数之积；规则只乘在某一项上时，它是对整个价格的实际倍数。
   - 被追踪的规则倍数不能为负（`negative_multiplier`）。
+  - 这样的三元式出现在任何位置都算规则（包括加、减、除的一边），报告的倍数就是字面量本身；只有作为乘数时它才真的是对价格的倍数，`rules_multiplier` 反映实际效果。
   - 不符合上面形状的三元式（命中分支不是字面量、否则分支不是 1、条件不读请求信息）是普通算术，不报告。
 - 原来依赖“基础部分 / 规则部分”切分的地方都改为对整个程序做。
 - 价格同步按倍数缩放表达式价格时写成 `(原表达式) * m`（`expr.Times`；原表达式含行注释时右括号另起一行），`mode` 为 `expression`、`config` 为 `{}`。
@@ -9206,7 +9207,7 @@ Go 类型是 `expr.TokenConfig`、`TierConfig`、`TokenPrices`、`RuleConfig`、
 ### 131.4 分组 / 用户组的自定义价（§97）
 
 - 能不能设自定义价由全局价决定（`billing.PriceDef.customMode`，`billing/list_price.go`）：全局价是**没有规则的** `per_request` → 自定义价必须是不带规则的 `per_request`；全局价是 `per_token` 且**只有一档、没有规则、`unit` 为 `token`** → 自定义价必须是这样的 `per_token`；其余（表达式、分档、带规则的按 token 或按次、按次计的档位）只能用按倍数的规则。
-- 保存时：全局价不允许自定义价 400，“表达式计费、分档或带加价规则的按 token 计费只能用倍数规则” / “an expression price, or a per-token price with tiers or rules, takes a multiplier only”；`mode` 与全局价不同照旧；`config` 生成失败 400，“自定义价无效：…” / “invalid custom price: …”；按 token 的自定义价本身也必须是一档、按 token 计、写出 `p` 和 `c`、没有规则（防止多档、按次档、带规则的自定义价，以及只有档名、`p*0 + c*0` 的“免费分组”），否则 400，“按 token 的自定义价只能是一档、按 token 计、带输入和输出价、没有加价规则” / “a per-token custom price is one tier priced by the token, with p and c, and no rules”。`config` 原样存下。
+- 保存时：全局价不允许自定义价 400，“表达式计费、分档或带加价规则的价格只能用倍数规则” / “an expression price, or a price with tiers or rules, takes a multiplier only”；`mode` 与全局价不同照旧；按次的自定义价带 `rules` 400，“按次的自定义价只有一个单价，不能带加价规则” / “a per-request custom price is one price, without rules”；这一条在生成之前检查，先于“自定义价无效”报出；`config` 生成失败 400，“自定义价无效：…” / “invalid custom price: …”；按 token 的自定义价本身也必须是一档、按 token 计、写出 `p` 和 `c`、没有规则（防止多档、按次档、带规则的自定义价，以及只有档名、`p*0 + c*0` 的“免费分组”），否则 400，“按 token 的自定义价只能是一档、按 token 计、带输入和输出价、没有加价规则” / “a per-token custom price is one tier priced by the token, with p and c, and no rules”。`config` 原样存下。
 - 解析时同一个判断决定规则是否失效（97.1）：全局价后来改成分档或加了规则，原来的自定义价带 `inactive: true`、解析时跳过，与改了计费方式相同。网关解析时用价格快照里算好的结果（`priceSnapshot.custom`，每次刷新快照解码一次全局价的 config），不在每个请求里解码。
 - 控制台的自定义价编辑器仍是一行单价，存成单档 `{"tiers":[{"name":"base","max_len":null,"unit":"token",…}],"rules":[]}`。
 
@@ -9214,7 +9215,8 @@ Go 类型是 `expr.TokenConfig`、`TierConfig`、`TokenPrices`、`RuleConfig`、
 
 - LiteLLM、models.dev 产出的价格一律是 `per_token`：一个价格档是单档 `base`；带 200K 档的是两档 `standard`（`max_len` 200000）和 `long_context`；更多档时第二档起叫 `over_<上一档上限>`。每档 `unit: token`，`rules: []`。同步预览的“有无变化”按新形状比较。
 - sup2api（`apply_multiplier`）与 `GET /key/prices` 折进倍数时：`per_request` 缩放 `price`；`per_token` 缩放每档的 `expr.PriceKeys`，规则倍数不变，再重新生成表达式；数字字符串的价格同样缩放（写回数字）；`expression` 写成 `(原表达式) * m`（131.3）。
-- 上游 sup2api 早于迁移 0121 时，导入前先照迁移的做法改成新形状（`billing.upgradeLegacy`）：旧的按 token 五个单价变成单档；表达式价格的 `config` 一律改成 `{}`（上游的可视化或视频配置不写进本地，表达式就是价格）；`A ||| B` 改写为 `(A) * (B)`（`expr.LegacyProduct`，与迁移的 SQL 切分规则相同，测试对照）。改写后编译不通过的照旧计入 `skipped`。
+- 上游 sup2api 早于迁移 0121 时，导入前先照迁移的做法改成新形状（`billing.upgradeLegacy`）：旧的按 token 五个单价变成单档；表达式价格的 `config` 一律改成 `{}`（上游的可视化或视频配置不写进本地，表达式就是价格）；原文用新引擎编译不过时才把 `A ||| B` 改写为 `(A) * (B)`（`expr.LegacyProduct`，与迁移的 SQL 切分规则相同，测试对照）——新上游的合法表达式（例如行注释里出现 `|||`）原样导入。改写后编译不通过的照旧计入 `skipped`。
+- `per_request`、`per_token` 的 `config` 都严格解码：多出的键（如把 `rules` 拼成 `rule`）400 / 同步时计入 `skipped`，不会被悄悄丢掉。
 
 ### 131.6 迁移 0121（单向）
 
@@ -9239,5 +9241,5 @@ Go 类型是 `expr.TokenConfig`、`TierConfig`、`TokenPrices`、`RuleConfig`、
 
 - 迁移 2 按 `config` 判断，不看表达式：可视化配置与手改过的表达式不一致的旧行（原来就以表达式计费）会被转成 `per_token`，计费仍按存下的表达式，但价格页显示的是配置；再保存一次时按配置重新生成。SQL 里分辨不出这种情况。
 - 规则不再分段求值、按十进制相乘，而是整个程序一次浮点计算，结果可能在最后一位（1e-8 美元）与旧引擎不同。
-- **发布检查**：新引擎比旧引擎严格的地方——表达式里出现 `__rule`、`$env`，基础表达式里出现读了请求信息、命中分支是负数的三元式（现在算一条规则，倍数不能为负）——会让已存的价格编译不过。发布前对线上库（升级前的库即可，只读、不需要新 schema）运行 `sub2api admin check-prices`（`billing.CheckStoredExpressions`）：它把 `model_prices`、`price_rules`（自定义价）、`model_price_history` 里的每条表达式按迁移 0121 的写法改写后用新引擎编译，列出编译不过的（表、模型或哈希、错误），全部通过时退出码 0。有输出就先改那些价格再升级。未结算使用记录里携带的表达式不单独检查：它们在保存价格时已写进历史表，随历史表一起检查。
+- **发布检查**：新引擎比旧引擎严格的地方——表达式里出现 `__rule`、`$env`，基础表达式里出现读了请求信息、命中分支是负数的三元式（现在算一条规则，倍数不能为负）——会让已存的价格编译不过。发布前对线上库（升级前的库即可，只读、不需要新 schema）运行 `sub2api admin check-prices`（`billing.CheckStoredExpressions`）：它把 `model_prices`、`price_rules`（自定义价）、`model_price_history` 里的每条表达式用新引擎编译；库里还没跑迁移 0121（`schema_migrations` 没有 `0121_billing_modes.sql`）时先按迁移的写法改写再编译，跑过之后原样编译，列出编译不过的（表、模型或哈希、错误），全部通过时退出码 0。有输出就先改那些价格再升级。未结算使用记录里携带的表达式不单独检查：它们在保存价格时已写进历史表，随历史表一起检查。
 - 不在本次：OpenAI / Codex 应答里的 `service_tier` 报成用量字段。按次带加价规则已随 131.1 的 `per_request` `rules` 补上。

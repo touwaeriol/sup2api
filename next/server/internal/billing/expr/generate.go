@@ -136,8 +136,8 @@ func Generate(mode string, config json.RawMessage) (string, error) {
 	switch mode {
 	case ModePerRequest:
 		var c PerRequestConfig
-		if err := json.Unmarshal(config, &c); err != nil {
-			return "", cfgErr("config", "%v", err)
+		if err := decodeStrict(config, &c); err != nil {
+			return "", err
 		}
 		if c.Price == nil {
 			return "", cfgErr("config.price", "required")
@@ -147,12 +147,9 @@ func Generate(mode string, config json.RawMessage) (string, error) {
 		}
 		return withRules(fmt.Sprintf(`tier("base", flat(%s))`, fmtNum(float64(*c.Price))), c.Rules)
 	case ModePerToken:
-		// Strict: a misspelt or old key (prices, flat) would be a free price.
 		var c TokenConfig
-		dec := json.NewDecoder(bytes.NewReader(config))
-		dec.DisallowUnknownFields()
-		if err := dec.Decode(&c); err != nil {
-			return "", cfgErr("config", "%v", err)
+		if err := decodeStrict(config, &c); err != nil {
+			return "", err
 		}
 		return generateTokens(c)
 	case ModeExpression:
@@ -163,6 +160,17 @@ func Generate(mode string, config json.RawMessage) (string, error) {
 		return "", nil
 	}
 	return "", cfgErr("mode", "unknown mode %q", mode)
+}
+
+// decodeStrict decodes a config refusing unknown keys: a misspelt or old key
+// (rule, prices, flat) would silently drop a charge.
+func decodeStrict(config json.RawMessage, v any) *ConfigError {
+	dec := json.NewDecoder(bytes.NewReader(config))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		return cfgErr("config", "%v", err)
+	}
+	return nil
 }
 
 func checkNum(field string, f float64) *ConfigError {

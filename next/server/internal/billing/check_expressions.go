@@ -39,9 +39,13 @@ func CheckStoredExpressions(ctx context.Context, db *gorm.DB) ([]ExpressionProbl
 	if err := g.Select("expr_hash", "expression").Find(&history).Error; err != nil {
 		return nil, err
 	}
+	legacy, err := beforeBillingModes(ctx, db)
+	if err != nil {
+		return nil, err
+	}
 	var out []ExpressionProblem
 	check := func(table, ref, src string) {
-		if product, ok := expr.LegacyProduct(src); ok {
+		if product, ok := expr.LegacyProduct(src); ok && legacy {
 			src = product
 		}
 		if _, err := expr.Compile(src); err != nil {
@@ -62,4 +66,15 @@ func CheckStoredExpressions(ctx context.Context, db *gorm.DB) ([]ExpressionProbl
 		check("model_price_history", h.ExprHash, h.Expression)
 	}
 	return out, nil
+}
+
+// billingModesMigration is the core migration that rewrote "|||" rules.
+const billingModesMigration = "0121_billing_modes.sql"
+
+// beforeBillingModes reports whether the database has not run core
+// migration 0121 yet: its expressions are still in the old rule syntax.
+func beforeBillingModes(ctx context.Context, db *gorm.DB) (bool, error) {
+	var n int64
+	err := store.G(ctx, db).Table("schema_migrations").Where("id = ?", billingModesMigration).Count(&n).Error
+	return n == 0, err
 }

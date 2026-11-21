@@ -37,23 +37,33 @@ func runAdmin(args []string) int {
 	return 2
 }
 
+// openAdminDB loads the configuration and opens the database for an admin
+// command. done is nil when that fails, and code is then the exit code.
+func openAdminDB() (ctx context.Context, cfg *config.Config, db *store.DB, done func(), code int) {
+	cfg, err := config.Load(runtime.GOOS)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "sub2api admin: config:", err)
+		return nil, nil, nil, nil, 2
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	db, err = store.Open(ctx, cfg.DatabaseURL)
+	if err != nil {
+		stop()
+		fmt.Fprintln(os.Stderr, "sub2api admin: database:", err)
+		return nil, nil, nil, nil, 1
+	}
+	return ctx, cfg, db, func() { db.Close(); stop() }, 0
+}
+
 // runCheckPrices compiles every stored price expression with this version's
 // engine (billing.CheckStoredExpressions). It only reads and does not need
 // this version's schema: run it against the database before an upgrade.
 func runCheckPrices() int {
-	cfg, err := config.Load(runtime.GOOS)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "sub2api admin: config:", err)
-		return 2
+	ctx, _, db, done, code := openAdminDB()
+	if done == nil {
+		return code
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	db, err := store.Open(ctx, cfg.DatabaseURL)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "sub2api admin: database:", err)
-		return 1
-	}
-	defer db.Close()
+	defer done()
 	problems, err := billing.CheckStoredExpressions(ctx, db.Gorm)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "sub2api admin:", err)
@@ -84,19 +94,11 @@ func runRecoverSuperAdmin(args []string) int {
 		fmt.Fprintln(os.Stderr, adminUsage)
 		return 2
 	}
-	cfg, err := config.Load(runtime.GOOS)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "sub2api admin: config:", err)
-		return 2
+	ctx, cfg, db, done, code := openAdminDB()
+	if done == nil {
+		return code
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	db, err := store.Open(ctx, cfg.DatabaseURL)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "sub2api admin: database:", err)
-		return 1
-	}
-	defer db.Close()
+	defer done()
 	if err := app.VerifyCoreSchema(ctx, db); err != nil {
 		fmt.Fprintln(os.Stderr, "sub2api admin: the database is not at this version's schema:", err)
 		return 1

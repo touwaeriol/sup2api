@@ -223,8 +223,6 @@ func newEnv(in *Input, st *evalState) *env {
 			case cond == nil: // an absent param, as the old engine read it
 			case !ok:
 				return false, fmt.Errorf("rule condition is %T, not a boolean", cond)
-			case st == nil:
-				return b, nil
 			case st.noRules:
 				return false, nil
 			}

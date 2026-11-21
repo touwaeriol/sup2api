@@ -205,12 +205,14 @@ func checkCustom(ctx context.Context, in Rule, base PriceDef) (*storedRule, erro
 	if in.Mode != mode {
 		return nil, fmt.Errorf(core.Text(ctx, "a custom price is %s, as the global price", "自定义价的计费方式须与全局价相同：%s"), mode)
 	}
+	// Rules on a per-request custom price are refused before generation, so
+	// the answer names them rather than a field inside them.
+	if mode == expr.ModePerRequest && hasRules(in.Config) {
+		return nil, errors.New(core.Text(ctx, "a per-request custom price is one price, without rules", "按次的自定义价只有一个单价，不能带加价规则"))
+	}
 	src, err := expr.Generate(mode, in.Config)
 	if err != nil {
 		return nil, fmt.Errorf(core.Text(ctx, "invalid custom price: %v", "自定义价无效：%v"), err)
-	}
-	if mode == expr.ModePerRequest && hasRules(in.Config) {
-		return nil, errors.New(core.Text(ctx, "a per-request custom price is one price, without rules", "按次的自定义价只有一个单价，不能带加价规则"))
 	}
 	if mode == expr.ModePerToken {
 		if t, ok := singleTokenTier(in.Config); !ok || t.P == nil || t.C == nil {

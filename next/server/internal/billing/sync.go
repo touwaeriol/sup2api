@@ -769,11 +769,15 @@ func parseSup2API(body []byte, apply bool) (*fetched, error) {
 // to the current shapes, as that migration did to stored prices: a flat
 // per_token config becomes one tier, an expression price has config {} (a
 // visual or video config there is gone; the expression is the price) and
-// "A ||| B" rules become "(A) * (B)".
+// "A ||| B" rules become "(A) * (B)". An expression this engine compiles is
+// already of a current upstream and stays as it is (a "|||" in a comment).
 func upgradeLegacy(p *syncPrice) {
 	switch p.Mode {
 	case expr.ModeExpression:
 		p.Config = json.RawMessage("{}")
+		if _, err := expr.CompileCached(p.Expression); err == nil {
+			return
+		}
 		if src, ok := expr.LegacyProduct(p.Expression); ok {
 			p.Expression = src
 		}
@@ -849,13 +853,6 @@ func scalePrice(p *syncPrice, m decimal.Decimal) error {
 // scaleAsExpression rewrites a price as the expression price
 // "(expression) * m".
 func scaleAsExpression(p *syncPrice, m decimal.Decimal) error {
-	if p.Expression == "" {
-		src, err := expressionFor(p.Mode, p.Config, "")
-		if err != nil {
-			return err
-		}
-		p.Expression = src
-	}
 	src, err := expr.Times(p.Expression, m.String())
 	if err != nil {
 		return err

@@ -27,7 +27,7 @@ func TestIssuePositions(t *testing.T) {
 		{name: "other expr-lang error", src: `tier("a", p * * 2)`, code: CodeSyntax, detail: `表达式写法不对：unexpected token Operator("*")`, line: 1, column: 15},
 		{name: "error without position", src: `header("a") == "b"`, code: CodeSyntax, detail: "表达式写法不对：expected float64, but got bool"},
 		{name: "term that is not a number", src: `tier("a", p) + tier("b", "x")`, code: CodeSyntax, detail: "表达式写法不对：expected float64, but got string", line: 1, column: 26},
-		{name: "reserved name", src: `tier("a", p) * (__rule(0, true) ? 2 : 1)`, code: CodeSyntax, detail: "不认识的名字 __rule", line: 1, column: 17},
+		{name: "reserved name", src: `tier("a", p) * (__rule(0, true) ? 2 : 1)`, code: CodeSyntax, detail: "不能使用保留名字 __rule", line: 1, column: 17},
 		{name: "negative multiplier", src: "tier(\"a\", p)\n* (header(\"x\") == \"y\" ? -2 : 1)", code: CodeNegativeMultiplier, detail: `header("x") == "y" ? -2 : 1`, line: 2, column: 25},
 		{name: "time zone", src: `tier("a", p) * (hour("Mars/Olympus") > 3 ? 1 : 2)`, code: CodeTimezone, detail: `hour("Mars/Olympus"): unknown time zone Mars/Olympus`, line: 1, column: 17},
 		{name: "unknown fact", src: "tier(\"a\",\n  flat(u(\"secs\") * 0.1) + flat(u(\"secs\")))", opts: facts, code: CodeUnknownFact, detail: "secs", line: 2, column: 8},

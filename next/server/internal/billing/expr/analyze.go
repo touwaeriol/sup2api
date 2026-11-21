@@ -71,7 +71,7 @@ func (v *visitor) Visit(node *ast.Node) {
 			a.p.used[n.Value] = true
 		}
 		if n.Value == traceFunc || n.Value == "$env" {
-			v.fail(n, CodeSyntax, unknownName(n.Value))
+			v.fail(n, CodeSyntax, "不能使用保留名字 "+n.Value)
 		}
 	case *ast.ConditionalNode:
 		mult, ok := traced(n)
