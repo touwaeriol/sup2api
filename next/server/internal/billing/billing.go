@@ -154,5 +154,5 @@ func (s *Service) Quote(ctx context.Context, in core.QuoteInputs) (decimal.Decim
 	if err != nil {
 		return decimal.Zero, err
 	}
-	return result.Cost.Mul(in.RateMultiplier).Round(8), nil
+	return FinalCost(result.Cost, in.RateMultiplier), nil
 }

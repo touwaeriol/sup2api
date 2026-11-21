@@ -570,10 +570,13 @@ func (s *Service) previewPrice(c *gin.Context) {
 	})
 }
 
-// FinalCost applies the group multiplier and rounds to the 8 decimal places
-// stored in the database.
+// FinalCost applies the group multiplier and rounds up to the 8 decimal
+// places stored in the database: a charge is never below its price. The
+// expression runs in float64, so the product is first rounded to 12 places
+// to drop float noise (0.1*3 = 0.30000000000000004) that would otherwise
+// add 1e-8 to an exact amount.
 func FinalCost(cost, rateMultiplier decimal.Decimal) decimal.Decimal {
-	return cost.Mul(rateMultiplier).Round(8)
+	return cost.Mul(rateMultiplier).Round(12).RoundCeil(8)
 }
 
 func deref[T any](p *T) T {
