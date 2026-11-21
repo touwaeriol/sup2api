@@ -4,7 +4,7 @@
 // converted to an upstream protocol first (within the platform or from
 // another one). A row per protocol; its models open under it as chips.
 import { computed, ref } from 'vue'
-import { SButton, SCard, SCheckbox, SChip, SHint, SIcon, SSegmented } from '@sub2api/ui'
+import { SBadge, SButton, SCard, SCheckbox, SChip, SHint, SIcon, SSegmented } from '@sub2api/ui'
 import ConversionGradeBadge from '@/components/ConversionGradeBadge.vue'
 import ModelTagSelect from '@/components/models/ModelTagSelect.vue'
 import ProtocolIssues from './ProtocolIssues.vue'
@@ -64,9 +64,21 @@ const toggleOpen = (k: string) => (opened.value = opened.value.includes(k) ? ope
 
 const all = computed(() => allColumns(columns.value))
 const groups = computed(() => [
-  { key: 'native', title: '协议绑定', tone: 'text-primary-600 dark:text-primary-300', hint: '账号原生支持的协议：客户端用什么协议，就按什么协议发给上游', list: all.value.filter(c => c.via === 'native') },
-  { key: 'converted', title: '协议转换', tone: 'text-warning-600 dark:text-warning-400', hint: '先把客户端的协议转换成上游协议，再发给上游', list: all.value.filter(c => c.via !== 'native') }
+  {
+    key: 'native', title: '协议绑定', tone: 'text-primary-600 dark:text-primary-300', hint: '账号原生支持的协议：客户端用什么协议，就按什么协议发给上游',
+    sections: [{ key: 'native', label: '', note: '', list: all.value.filter(c => c.via === 'native') }]
+  },
+  {
+    key: 'converted', title: '协议转换', tone: 'text-warning-600 dark:text-warning-400', hint: '先把客户端的协议转换成上游协议，再发给上游',
+    sections: [{ key: 'converted', label: '', note: '', list: all.value.filter(c => c.via !== 'native') }]
+  }
 ])
+/** Anything set away from the defaults: an own protocol closed, a model with its own protocols. */
+const changed = computed(() => mode.value === 'custom' || Object.keys(rules.value).length > 0)
+function restoreDefaults() {
+  props.editor.setMode('all')
+  rules.value = {}
+}
 </script>
 
 <template>
@@ -78,9 +90,13 @@ const groups = computed(() => [
           <span class="text-sm font-semibold" :class="g.tone">{{ g.title }}</span>
           <span class="text-xs text-fg-subtle">{{ g.hint }}</span>
         </div>
-        <SHint v-if="!g.list.length" size="xs">{{ g.key === 'native' ? '此账号类型没有原生协议。' : '此账号类型没有可转换的协议。' }}</SHint>
-        <ul v-else class="divide-y divide-line overflow-hidden rounded-xl border border-line">
-          <li v-for="c in g.list" :key="c.key" :data-protocol="c.key">
+        <div v-for="sec in g.sections" :key="sec.key" class="overflow-hidden rounded-xl border border-line" :data-section="sec.key">
+          <div v-if="sec.label" class="flex flex-wrap items-center gap-x-2 gap-y-0.5 border-b border-line bg-surface-2 px-3 py-1.5 text-xs">
+            <SBadge :tone="sec.key === 'auto' ? 'success' : 'neutral'">{{ sec.label }}</SBadge>
+            <span class="text-fg-muted">{{ sec.note }}</span>
+          </div>
+        <ul class="divide-y divide-line">
+          <li v-for="c in sec.list" :key="c.key" :data-protocol="c.key">
             <div class="flex items-center gap-3 px-3 py-2">
               <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1">
                 <SCheckbox :model-value="accepts(c)" :label="labels.columnName(c)" class="font-medium md:min-w-[12.5rem]" data-testid="b-accept" @update:model-value="setAccepts(c, $event)" />
@@ -114,10 +130,11 @@ const groups = computed(() => [
             </div>
           </li>
         </ul>
+        </div>
       </div>
-      <div v-if="mode === 'custom'" class="flex flex-wrap items-center gap-2" data-testid="b-custom">
-        <SHint size="xs" class="min-w-0 flex-1">已指定开放的协议：账号类型以后新增的协议不会自动开放。</SHint>
-        <SButton size="xs" variant="ghost" @click="editor.setMode('all')">恢复全部开放</SButton>
+      <div class="flex flex-wrap items-center gap-2" data-testid="b-footer">
+        <SHint size="xs" class="min-w-0 flex-1">{{ !changed ? '当前是默认配置。' : mode === 'custom' ? '已改动默认配置：有协议被关闭，账号类型以后新增的协议也不会自动开放。' : '已改动默认配置。' }}</SHint>
+        <SButton size="xs" variant="ghost" :disabled="!changed" data-testid="b-restore" @click="restoreDefaults">恢复默认配置</SButton>
       </div>
       <ProtocolIssues :issues="issues" />
     </div>
