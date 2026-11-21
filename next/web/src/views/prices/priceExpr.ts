@@ -200,7 +200,7 @@ export function tokenPricesOf(t: VisualTier | undefined): TokenPrices {
   return Object.fromEntries(TOKEN_VARS.map(k => [k, isSet(t?.[k]) ? num(t?.[k]) : null])) as TokenPrices
 }
 
-/** A config of one token tier and no rules: a custom price rule priced by tokens. */
+/** A config of one token tier and no rules. */
 export function singleTier(prices: Partial<Record<PriceKey, number | null>>): VisualConfig {
   return {
     tiers: [{ name: 'base', unit: 'token', ...Object.fromEntries(pricedKeys(prices).map(k => [k, prices[k] ?? null])) }],
@@ -208,20 +208,9 @@ export function singleTier(prices: Partial<Record<PriceKey, number | null>>): Vi
   }
 }
 
-/** A config of one request tier and no rules: a custom price rule priced by the request. */
+/** A config of one request tier and no rules. */
 export function requestTier(price: number | null): VisualConfig {
   return { tiers: [{ name: 'base', unit: 'request', price }], rules: [] }
-}
-
-/** The tier of a config with one tier (by tokens or by the request) and no rules; null for any other. */
-export function simpleTier(config: unknown): VisualTier | null {
-  const c = asVisualConfig(config)
-  return c.tiers.length === 1 && !c.rules.length ? c.tiers[0] : null
-}
-
-/** Whether a price takes a custom price of a group or user group: a visual one of one tier and no rules. */
-export function takesCustomPrice(mode: PriceMode, config: unknown): boolean {
-  return mode === 'visual' && simpleTier(config) !== null
 }
 
 // ------------------------------------------------------------------ config as saved

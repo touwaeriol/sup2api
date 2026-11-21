@@ -22,7 +22,7 @@ const prices = [
   { model: 'custom', mode: 'expression', config: {}, expression: 'p * 2 + unknown(1)', groups: [] }
 ]
 const everyGroup = { group: null, rate_multiplier: '1', prices }
-const inVip = { group: vip, rate_multiplier: '1.5', rate_source: 'segment', prices: [{ ...prices[0], groups: undefined, source: 'segment' }] }
+const inVip = { group: vip, rate_multiplier: '1.5', rate_source: 'segment', prices: [{ ...prices[0], groups: undefined, source: 'group' }] }
 
 /** The prices are asked for a tick after the choice: only the latest choice counts. */
 async function settle() {
@@ -71,12 +71,12 @@ describe('models and prices', () => {
     expect(badges.every((b) => b.classes().includes('brand-tint'))).toBe(true)
   })
 
-  it('opens on every group: the base prices, and which of the groups provide each model', async () => {
+  it('opens on every group: the original prices, and which of the groups provide each model', async () => {
     const { w, router } = await render()
     expect(get).toHaveBeenLastCalledWith('/me/prices', {})
-    expect(w.get('[data-testid="models-group"]').findAll('option').map((o) => o.text())).toEqual(['全部分组 · 基础价', 'default · ×0.9', 'vip · ×1.5 · 专属'])
+    expect(w.get('[data-testid="models-group"]').findAll('option').map((o) => o.text())).toEqual(['全部分组 · 原价', 'default · ×0.9', 'vip · ×1.5 · 专属'])
     expect(w.find('[data-testid="models-base-note"]').exists()).toBe(true)
-    expect(unit(w)).toContain('基础价')
+    expect(unit(w)).toContain('原价，未乘倍率')
     expect(row(w, 'tokens').findAll('[data-testid="models-row-group"]').map((c) => c.text())).toEqual(['default', 'vip'])
     expect(row(w, 'custom').text()).toContain('暂无分组提供')
 
@@ -94,9 +94,8 @@ describe('models and prices', () => {
     expect(router.currentRoute.value.query).toEqual({ group: '2' })
     expect(get).toHaveBeenLastCalledWith('/me/prices', { group_id: '2' })
     expect(row(w, 'tokens').text()).toContain('$4.5')
-    expect(row(w, 'tokens').get('[data-testid="models-own-price"]').text()).toBe('专属价')
     expect(unit(w)).toContain('×1.5')
-    expect(unit(w)).toContain('你在该分组有专属倍率')
+    expect(unit(w)).toContain('你在该分组有单独设的倍率')
     expect(w.text()).not.toContain('one-shot')
     // One group: no base price note, no column of groups.
     expect(w.find('[data-testid="models-base-note"]').exists()).toBe(false)
@@ -118,7 +117,7 @@ describe('models and prices', () => {
       rate_source: 'group',
       prices: [
         { ...prices[0], groups: undefined, multiplier: '0.8', source: 'group' },
-        { ...prices[1], groups: undefined, multiplier: '0', source: 'segment' },
+        { ...prices[1], groups: undefined, multiplier: '0', source: 'group' },
         { ...prices[3], groups: undefined, multiplier: '1.5', source: 'group' }
       ]
     }

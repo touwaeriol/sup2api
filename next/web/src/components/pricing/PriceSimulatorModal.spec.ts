@@ -39,7 +39,13 @@ describe('price simulator', () => {
     vi.clearAllMocks()
     denied.clear()
     api.list.mockImplementation(async (_path: string, q: { model?: string }) => ({ items: GROUPS.filter((g) => !q.model || g.models.includes(q.model)) }))
-    api.get.mockImplementation(async (path: string) => ({ models: GROUPS.find((g) => path === `/groups/${g.id}/model-prices`)!.models.map((model) => ({ model })) }))
+    // A group prices a model before it provides it: such a row is not offered.
+    api.get.mockImplementation(async (path: string) => ({ models: [...GROUPS.find((g) => path === `/groups/${g.id}/model-prices`)!.models.map((model) => ({ model, offered: true })), { model: 'gpt-5', offered: false }] }))
+  })
+
+  it('lists the models the group provides, not those it only prices', async () => {
+    const w = await open({ groupId: 2 })
+    expect(w.getComponent<typeof SSelect>('[data-testid="price-sim-model"]').props('options').map((o: { value: unknown }) => o.value)).toEqual(['claude-haiku-4-5', 'gpt-4o'])
   })
 
   it('opens a model named without a group in the first group that provides it', async () => {
@@ -114,7 +120,7 @@ describe('price simulator', () => {
   })
 
   it('quotes for whole numbers of tokens from 0 to 10^12 only', async () => {
-    api.get.mockImplementation(async (path: string) => (path.startsWith('/users/') ? { id: 7, email: 'a@x', segment: { id: 2, kind: 'named', name: 'VIP' } } : { models: [{ model: 'gpt-4o' }] }))
+    api.get.mockImplementation(async (path: string) => (path.startsWith('/users/') ? { id: 7, email: 'a@x', segment: { id: 2, kind: 'named', name: 'VIP' } } : { models: [{ model: 'gpt-4o', offered: true }] }))
     api.post.mockResolvedValue(null)
     const w = await open({ userId: 7, groupId: 1, model: 'gpt-4o' })
     await new Promise((r) => setTimeout(r, 450))

@@ -13,16 +13,18 @@ export default {
   emptyPolicy: '名单为空：不限制模型',
 
   title: '分组',
-  description: '分组是一组一起提供服务的账号（可混放不同类型），每个 API Key 只绑定一个分组。分组决定费率倍率和可用模型。',
+  description: '分组是一组一起提供服务的账号（可混放不同类型），每个 API Key 只绑定一个分组。分组决定可用模型、模型价格和分组倍率。',
   create: '新建分组',
   editTitle: '编辑分组 {name}',
   visibility: '可见性',
   public: '公开',
   restricted: '私有',
   publicHint: '所有用户都能用。',
-  restrictedHint: '只有被授权的用户组和个人专属能用，在“授权与倍率”里授权。',
-  rateMultiplier: '默认倍率',
-  multiplierHint: '实付 = 标价 × 倍率，例如 0.8 表示八折。没有专属倍率的用户组按它乘全场折扣计费。',
+  restrictedHint: '只有开通的用户组和个人能用，在“用户组”里开通。',
+  rateMultiplier: '分组倍率',
+  multiplierHint: '0.8 就是八折。用户组没单独设倍率时按它算（再乘用户组折扣）。',
+  saveHint: '改动点“保存”后一起生效',
+  createHint: '还没保存：点“新建”时一起保存',
   conversionDefault: '默认（允许）',
   conversionHint: '本组账号的请求经协议转换会丢失内容时如何处理；账号自己的设置优先。允许：照常服务并记录丢失；安全：工具会丢失时跳过账号；严格：有任何丢失都跳过账号。',
   multiplierInvalid: '请输入非负数，小于 1000000，最多 4 位小数',
@@ -53,47 +55,33 @@ export default {
     notEditable: '没有修改该账号的权限（只能修改属于自己的账号）'
   },
   whoCanUse: '谁能用',
-  modelPricing: '模型定价',
+  modelPricing: '模型价格',
   modelCount: '提供 {n} 个模型',
-  pickUser: '指定用户单独定价',
-  pricingTitle: '{name} 的授权与定价',
-  viewPricing: '查看授权与定价',
-  deleteWithPricing: '该分组上的授权、专属倍率和模型定价会一并删除。',
+  pricingTitle: '{name} 的价格与用户组',
+  viewPricing: '查看价格与用户组',
+  deleteWithPricing: '该分组的模型价格，以及各用户组在它上面的开通和倍率，会一并删除。',
   tabs: {
     basic: '基本信息',
-    segments: '授权与倍率',
-    pricing: '模型定价',
-    models: '模型名单',
     accounts: '账号',
+    models: '模型名单',
+    pricing: '价格',
+    segments: '用户组',
     advanced: '高级'
   },
   access: {
     everyone: '所有人',
-    nobody: '还没授权给任何人',
-    personal: '{n} 位个人专属'
+    nobody: '还没开通给任何人',
+    personal: '{n} 个人'
   },
   pricingSummary: {
-    global: '跟随全局',
-    models: '{n} 个模型单独定价',
-    segments: '{n} 条用户组专属价'
-  },
-  segments: {
-    hint: '每个用户组在这个分组能不能用、按几倍计费。专属倍率留空就跟随分组默认倍率 × 该用户组的全场折扣；填了就按填的算，不再乘折扣。要给某个用户单独设置，用“指定用户单独定价”搜索他：他会作为个人专属加进表格，还在用户组里的会先让你确认。',
-    nobody: '这个私有分组还没有授权给任何人，现在没有人能用。',
-    nobodyHint: '打开下面“能否使用”的开关来授权。',
-    members: '{n} 人'
+    base: '全部用原价',
+    models: '{n} 个模型改过价'
   },
   pricing: {
-    target: '给谁定价',
-    groupTarget: '分组内定价（所有人）',
-    namedTargets: '用户组',
-    notGrantedOption: '{name}（未授权）',
-    groupScope: '分组内定价对所有使用这个分组的人生效，没单独定价的模型跟随全局价。实付 = 标价 × 各自的倍率（分组默认 {rate}）。',
-    segmentScope: '正在给「{name}」定专属价：只对它生效，没设的模型跟随分组内定价。',
-    segmentScopeReadonly: '「{name}」的专属价：只对它生效，没设的模型跟随分组内定价。',
-    segmentRate: '它在本分组的实际倍率是 {rate}，实付 = 标价 {rate}。',
-    segmentNotGranted: '它还没被授权使用这个私有分组，专属价要等授权后才用得上。',
-    emptyNew: '先保存分组并加入账号后再定价。',
-    unsavedSave: '保存并切换'
+    payer: '实付按',
+    payerAll: '所有人（分组倍率）{rate}',
+    payerSegments: '用户组',
+    payerPersonal: '个人',
+    notAccessible: '未开通'
   }
 }

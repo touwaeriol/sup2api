@@ -31,12 +31,12 @@ const ledgerId = computed(() => props.u.ledger_id ?? bd.value.ledger_id ?? null)
 const rate = computed(() => bd.value.rate_multiplier ?? props.u.rate_multiplier ?? null)
 // Group pricing (inputs.pricing, list_cost): a record at the global price and the group's default rate has neither.
 const pricing = computed<UsagePricing>(() => pricingOf(bd.value))
-/** The rule that gave the list price, when one did: whose it is and what it makes of the global price. */
+/** The price that replaced the original price, when one did: whose it is (a user group's only on records before they were removed) and what it made of the original price. */
 const listRule = computed(() => {
   const { price_source: source, scale, base } = pricing.value
-  if (!source || source === 'global') return null
+  if (!source) return null
   const multiplier = scale === undefined ? '' : ruleText(t, { kind: 'multiplier', multiplier: scale })
-  return { source, text: base ? t('pricing.rule.custom') : multiplier }
+  return { source, text: base ? t('pricing.rule.customText') : multiplier }
 })
 // Items priced separately from the primary usage, such as an advisor model at its own price.
 const components = computed(() => (['additional', 'replacement'] as const)
@@ -116,7 +116,7 @@ function label(prefix: string, value: string) {
       </SDescItem>
 
       <SDescItem v-if="listRule" :label="t('usage.billing.listPrice')"><div class="flex flex-wrap items-center gap-2" data-testid="usage-list-price">
-        <SBadge :tone="listRule.source === 'segment' ? 'primary' : 'info'">{{ label('pricing.source', listRule.source) }}</SBadge>
+        <SBadge :tone="listRule.source === 'segment' ? 'gray' : 'info'">{{ label('pricing.source', listRule.source) }}</SBadge>
         <span>{{ listRule.text }}</span>
       </div></SDescItem>
 

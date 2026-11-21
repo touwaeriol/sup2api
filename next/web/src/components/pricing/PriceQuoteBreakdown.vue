@@ -10,14 +10,13 @@ import { priceLevels, rateLevels, type LevelState, type QuoteLevel } from './quo
 import { priceLabel, ruleText } from './ruleText'
 
 // A quote (POST /pricing/quote) read as one sum: whether the segment may use
-// the group, the list price and the rate level by level (the one that applies
-// stands out, the ones under it are greyed), and list cost × rate = paid.
-// A segment without the grant still gets its price: what it would pay. A
-// rule the server skips is marked as the model price table marks it. A
-// tiered price shows its rest (the last tier) while the cost follows the tier of the
-// usage, which a note under the list price says. A model without a list
-// price (it has no global price) cannot be billed: the sum gives way to
-// saying so.
+// the group, the model price and the rate level by level (the one that
+// applies stands out, the ones under it are greyed), and model price cost ×
+// rate = paid. A segment that may not use the group (not granted, or the
+// group is disabled) still gets its price: what it would pay. A tiered price
+// shows its rest (the last tier) while the cost follows the tier of the
+// usage, which a note under the model price says. A model without an
+// original price cannot be billed: the sum gives way to saying so.
 const props = defineProps<{ quote: PricingQuote; groupName?: string }>()
 const { t } = useI18n()
 
@@ -35,11 +34,11 @@ interface Chain {
   note?: string
 }
 
-/** A level of the list price: the global price itself, or a rule of the segment or of the group; a multiplier comes with the price it makes of the global one. */
+/** A level of the model price: the original price itself, or the group's price with the price it comes to; a multiplier of an expression the console cannot break down is the multiplier alone. */
 function priceLevelText(v: PriceRule | PriceDef): string {
   if (!('kind' in v)) return priceLabel(t, v)
-  const price = v.kind === 'multiplier' ? applyRule(props.quote.base, v) : null
-  return priceBrief(price) ? `${ruleText(t, v)} = ${priceLabel(t, price)}` : ruleText(t, v)
+  const price = applyRule(props.quote.base, v)
+  return v.kind === 'multiplier' && !priceBrief(price) ? ruleText(t, v) : `${ruleText(t, v)} = ${priceLabel(t, price)}`
 }
 
 /** What a level without a setting says. A discount of 1 is no discount: "not set" would read as something left undone. */
@@ -73,7 +72,7 @@ const ROW_CLASS: Record<LevelState, string> = {
       <h4 class="mr-1 font-semibold text-fg">{{ t('pricingTools.quote.access.title') }}</h4>
       <SegmentBadge :segment="quote.segment" with-name />
       <SBadge :tone="quote.accessible ? 'success' : 'danger'">{{ t(`pricingTools.quote.access.${quote.access_source}`) }}</SBadge>
-      <SHint v-if="!quote.accessible" inline tone="danger" data-testid="price-quote-denied">{{ t('pricingTools.quote.denied') }}</SHint>
+      <SHint v-if="!quote.accessible" inline tone="danger" data-testid="price-quote-denied">{{ t(`pricingTools.quote.denied.${quote.access_source}`) }}</SHint>
     </div>
 
     <SGrid :cols="1" :lg-cols="2">
@@ -102,7 +101,7 @@ const ROW_CLASS: Record<LevelState, string> = {
 
     <SAlert v-if="!quote.list_price" tone="warning" data-testid="price-quote-unpriced">{{ t('pricingTools.quote.unpriced') }}</SAlert>
     <div v-else class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-t border-line pt-4" data-testid="price-quote-paid">
-      <h4 class="font-semibold text-fg">{{ t(quote.accessible ? 'pricingTools.quote.paid' : 'pricingTools.quote.paidIfGranted') }}</h4>
+      <h4 class="font-semibold text-fg">{{ t(quote.accessible ? 'pricingTools.quote.paid' : `pricingTools.quote.paidIf.${quote.access_source}`) }}</h4>
       <p class="flex flex-wrap items-baseline gap-x-2 gap-y-1">
         <SHint inline>{{ t('pricingTools.quote.listCost') }}</SHint>
         <span class="font-mono text-fg">{{ formatMoney(quote.list_cost, 6) }}</span>

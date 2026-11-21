@@ -11,20 +11,19 @@ export default {
   },
   rule: {
     mode: '定价方式',
-    multiplier: '按倍数',
-    custom: '自定义价格',
-    multiplierText: '全局 {rate}',
-    customText: '自定义 {price}',
-    applied: '套用后 {price}，全局价变化时跟着变',
-    appliedOpaque: '各项价格同乘该倍数，全局价变化时跟着变',
+    kind: {
+      none: '用原价',
+      multiplier: '原价 × N',
+      custom: '自定义价格'
+    },
+    multiplierText: '原价 × {rate}',
+    customText: '自定义',
+    timesPrefix: '原价 ×',
+    multiplierHint: '原价变了跟着变',
+    customHint: '和“模型价格”页同一个编辑器：可以分档、按次或写表达式。原价变了不跟着变。',
+    preview: '模型价格 {price}，乘倍率 {rate} 后实付 {paid}',
     multiplierInvalid: '请输入不小于 0、小于 1000000 的数字，最多 4 位小数',
-    tokenUnit: '固定价格，不随全局价变化。单位：$ / 1M tokens',
-    requestUnit: '固定价格，不随全局价变化。单位：$ / 次',
-    tokenInvalid: '输入、输出价格必填，各项都不能为负数',
-    requestInvalid: '请填写不小于 0 的单价',
-    multiplierOnly: '该模型的全局价不是只有一档、没有加价规则的可视化价格（按表达式计费，或分了多档、带加价规则），只能按倍数调整。',
-    noBase: '该模型还没有全局价，请先到“模型价格”里设置。',
-    requestPrice: '单价'
+    noBase: '这个模型还没有原价，先到“模型价格”页设置。'
   },
   price: {
     perRequest: '{price} / 次',
@@ -34,29 +33,36 @@ export default {
     tiered: '{n} 档，显示兜底档位'
   },
   source: {
-    segment: '专属价',
-    group: '分组内定价',
-    global: '全局'
+    group: '分组价',
+    segment: '用户组价（已停用的功能）'
   },
   table: {
-    base: '全局价',
-    groupRule: '分组内定价',
-    segmentRule: '专属价',
-    listPrice: '标价',
-    followGlobal: '跟随全局',
-    followGroup: '跟随分组内定价',
-    segmentRules: '另有 {n} 个用户组有专属价',
-    set: '设置',
+    title: '模型价格',
+    count: '{n} 个模型',
+    ruled: '{n} 个改过价',
+    base: '原价',
+    group: '分组价',
+    paid: '实付（{rate}）',
+    useBase: '用原价',
+    notOffered: '账号暂未提供',
+    notOfferedHint: '分组里的账号还没有这个模型，价格先存着',
+    editing: '{model} 在本分组的价格',
+    set: '改价',
     done: '完成',
     clear: '清除',
+    clearHint: '“清除”= 恢复用原价',
+    add: '添加模型',
+    addNone: '没有可添加的模型',
+    addFooter: '只能添加在“模型价格”页定了原价的模型',
     unsaved: '未保存',
     unsavedCount: '{n} 项改动未保存',
     search: '搜索模型',
-    onlyRuled: '只看已单独定价',
-    unit: '单位：$ / 1M tokens（输入 / 输出）；按次计费的模型为每次价格。',
-    emptyNew: '保存分组并加入账号后，这里会列出分组提供的模型。',
-    emptyModels: '该分组还没有可提供的模型。模型来自分组内账号声明的模型，并经分组模型名单过滤。',
+    onlyRuled: '只看改过价的',
+    unit: '单位：$ / 百万 token（输入 / 输出）；按次计费的模型是每次价格。',
+    emptyNew: '在“账号”里加入账号后，账号提供的模型会自动列在这里；也可以先“添加模型”定价。',
+    noAccounts: '在“账号”里加入账号后，账号提供的模型会自动列在这里。',
+    emptyModels: '分组还没有提供模型：模型来自分组里账号的模型，经“模型名单”过滤。可以先“添加模型”定价。',
     emptyFiltered: '没有符合条件的模型',
-    invalid: '{model} 的定价没有填完整，请先改正。'
+    invalid: '{model} 的价格没有填完整，请先改正。'
   }
 }

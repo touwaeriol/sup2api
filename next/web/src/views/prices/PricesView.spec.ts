@@ -68,9 +68,9 @@ describe('model prices list', () => {
     expect(rows[0].text()).toContain('negotiated')
   })
 
-  it('says that these are the base prices and links to where a group or a user group prices on its own', async () => {
+  it('says that these are the original prices and links to where a group prices a model and a user group sets rates', async () => {
     const note = (await render()).get('[data-testid="price-scope-note"]')
-    expect(note.text()).toContain('实付 = 标价 × 倍率')
+    expect(note.text()).toContain('实付 = 模型价格 × 倍率')
     expect(note.findAll('a').map(a => a.attributes('href'))).toEqual(['/groups', '/segments'])
   })
 

@@ -6,12 +6,10 @@ import {
   condExpr,
   checkPrice,
   requestTier,
-  takesCustomPrice,
   whenExpr,
   fmt,
   goQuote,
   priceExpression,
-  simpleTier,
   singleTier,
   summarize,
   visualExpr,
@@ -225,19 +223,12 @@ describe('the config the editor saves', () => {
       ]
     })
   })
-  it('is one tier for a set of prices or a price per request, and only that shape is simple', () => {
+  it('is one tier for a set of prices or a price per request', () => {
     expect(singleTier({ p: 1, c: 2, cr: null, cc: 0 })).toEqual({
       tiers: [{ name: 'base', unit: 'token', p: 1, c: 2, cc: 0 }],
       rules: []
     })
     expect(requestTier(0.5)).toEqual({ tiers: [{ name: 'base', unit: 'request', price: 0.5 }], rules: [] })
-    expect(simpleTier(singleTier({ p: 1, c: 2 }))).toMatchObject({ p: 1 })
-    expect(simpleTier(requestTier(1))).toMatchObject({ unit: 'request', price: 1 })
-    expect(simpleTier(cfg([STANDARD, LONG]))).toBeNull()
-    expect(simpleTier(cfg([tier('base', null)], [rule(2, { source: 'header', key: 'x', op: 'exists' })]))).toBeNull()
-    expect(takesCustomPrice('visual', requestTier(1))).toBe(true)
-    expect(takesCustomPrice('visual', cfg([STANDARD, LONG]))).toBe(false)
-    expect(takesCustomPrice('expression', {})).toBe(false)
   })
 })
 
@@ -340,10 +331,9 @@ describe('the summary of a price', () => {
     expect(summarize('expression', {})).toEqual({ kind: 'expression' })
   })
 
-  it('a price per request takes rules as a price by tokens does, and then no custom price', () => {
+  it('a price per request takes rules as a price by tokens does', () => {
     const rules = [rule(2, { source: 'param', key: 'quality', op: 'eq', value: 'hd' })]
     const c = { ...requestTier(0.04), rules }
     expect(priceExpression('visual', c)).toBe('(tier("base", flat(0.04))) * (param("quality") == "hd" ? 2 : 1)')
-    expect(takesCustomPrice('visual', c)).toBe(false)
   })
 })
