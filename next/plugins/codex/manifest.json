@@ -6,7 +6,7 @@
     "en": "Serves /v1/responses (including its WebSocket mode) and, through the core's conversion, /v1/chat/completions, /v1/images/generations and /v1/images/edits (the Responses image_generation tool; use the image model gpt-image-2) from your own ChatGPT subscription through the Codex CLI's logins: device code or Sign in with Codex. Only for the account owner's own use with their own ChatGPT subscription; do not pool several people's accounts or resell access (this violates OpenAI's terms). By default requests identify themselves truthfully as sup2api (originator: sup2api, User-Agent: sup2api-codex/<version>); both can be set per account or in the plugin settings. The plugin sends no x-codex-* headers, does not imitate the Codex CLI's TLS fingerprint and adds no Codex system prompt.",
     "zh": "用你自己的 ChatGPT 订阅提供 /v1/responses（含 WebSocket 模式），并经核心转换提供 /v1/chat/completions、/v1/images/generations 和 /v1/images/edits（Responses 的 image_generation 工具；生图模型写 gpt-image-2）；通过 Codex CLI 的登录方式授权：设备码登录或 Sign in with Codex。仅用于账号所有者用自己的 ChatGPT 订阅自用；不得把多人账号做成号池对外出售（违反 OpenAI 条款）。请求默认如实标明来源为 sup2api（originator: sup2api，User-Agent: sup2api-codex/<版本>），两者都可以在账号上或插件设置中自定义。插件不发 x-codex-* 头、不仿 Codex CLI 的 TLS 指纹，也不注入 Codex 系统提示词。"
   },
-  "version": "0.2.1",
+  "version": "0.2.2",
   "publisher": "sub2api",
   "icon": "assets/openai.svg",
   "runtime": "grpc",

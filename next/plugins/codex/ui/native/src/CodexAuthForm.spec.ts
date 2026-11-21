@@ -77,6 +77,28 @@ describe('CodexAuthForm: flows by account type', () => {
   })
 })
 
+describe('CodexAuthForm: personal-use notice', () => {
+  const links = (w: VueWrapper) => ['terms', 'sharing'].map((k) => w.get(`[data-testid="codex-notice-${k}"]`).attributes('href'))
+
+  it.each(['codex_device', 'codex_oauth'])('shows the notice and OpenAI\'s statements above the %s flow', (type) => {
+    const w = mountForm({ accountType: { type } })
+    const notice = w.get('[data-testid="codex-notice"]')
+    expect(notice.text()).toContain('notice.title')
+    const flow = w.get(`[data-testid="${type === 'codex_device' ? 'codex-device-flow' : 'codex-oauth-flow'}"]`)
+    expect(notice.element.compareDocumentPosition(flow.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(links(w)).toEqual(['https://openai.com/policies/row-terms-of-use/', 'https://help.openai.com/en/articles/10471989-openai-account-sharing-policy'])
+  })
+
+  it('shows it for an authorized account only while re-authorizing', async () => {
+    const w = mountForm({ accountType: { type: 'codex_device' }, mode: 'edit', account: { id: 7 }, modelValue: { ...DEVICE_CREDS, access_token: '******' } })
+    expect(w.find('[data-testid="codex-notice"]').exists()).toBe(false)
+    await w.get('[data-testid="codex-reauth"]').trigger('click')
+    expect(w.find('[data-testid="codex-notice"]').exists()).toBe(true)
+    await w.get('[data-testid="codex-reauth-cancel"]').trigger('click')
+    expect(w.find('[data-testid="codex-notice"]').exists()).toBe(false)
+  })
+})
+
 describe('CodexAuthForm: client headers', () => {
   it('edits the account\'s own User-Agent and originator in the credentials', async () => {
     const loaded = { access_token: '******', email: 'me@example.com', originator: 'or-acct' }
@@ -169,6 +191,7 @@ describe('CodexAuthForm: device code', () => {
     expect(lastValue(w)).toEqual(DEVICE_CREDS)
     expect(w.get('[data-testid="codex-authorized"]').text()).toContain('done.detail')
     expect(w.find('[data-testid="codex-device-flow"]').exists()).toBe(false)
+    expect(w.find('[data-testid="codex-notice"]').exists()).toBe(false)
 
     // Nothing polls after done.
     const n = calls.length

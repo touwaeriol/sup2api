@@ -1,6 +1,6 @@
 # codex 插件：ChatGPT 账号（Codex 设备码 / Sign in with Codex）
 
-日期：2026-11-08（额度窗口 2026-11-09，官方用量重置次数 2026-11-10）。状态：已实现（插件 0.1.1 已上线；0.1.2 增加 `codex_device` 的 5h / 周额度窗口，见第 9 节，需核心 ≥0.1.257；0.1.3 接入官方用量重置次数，见第 10 节，需核心 ≥0.1.269；0.1.4 随权限加固发布，只改授权相关行为，见第 11 节，需核心 ≥0.1.286；0.1.7 的用量窗口只取自响应头，见第 13 节，同版新增 Sign in with Codex（`codex_oauth`）并删除 Sign in with ChatGPT（`chatgpt_siwc`），见第 14 节，需核心 ≥0.1.297）。0.2.0 是线上最后发布的版本（2026-11-21 随核心 0.1.304 发布，需核心 ≥0.1.304、界面包 4.0（`hostUICompat` `^4.0`））；0.2.1（未发布）是迁移一致性审核后的修复，见 CHANGELOG。0.2.0：按转发 V2 改写（第 18 节；开发中曾编号 0.1.12，从未发布，因为是不兼容的契约变化，与其他平台插件一样升次版本号），并且授权请求由核心经账号表单选的代理发出，插件不再联网（第 19 节，CONTRACTS §117），以及经核心转换服务 OpenAI 生图接口（第 21 节，CONTRACTS §121）。核心契约见 CONTRACTS §83、§112（WebSocket 每轮见 §83.6），额度见 §44、§69。第 4 节按现状写；第 6–17 节是各版本当时的记录，其中的 `BuildUpstreamRequest`、补丁、`requestFields` 都已被第 18 节取代。
+日期：2026-11-08（额度窗口 2026-11-09，官方用量重置次数 2026-11-10）。状态：已实现（插件 0.1.1 已上线；0.1.2 增加 `codex_device` 的 5h / 周额度窗口，见第 9 节，需核心 ≥0.1.257；0.1.3 接入官方用量重置次数，见第 10 节，需核心 ≥0.1.269；0.1.4 随权限加固发布，只改授权相关行为，见第 11 节，需核心 ≥0.1.286；0.1.7 的用量窗口只取自响应头，见第 13 节，同版新增 Sign in with Codex（`codex_oauth`）并删除 Sign in with ChatGPT（`chatgpt_siwc`），见第 14 节，需核心 ≥0.1.297）。0.2.1 是线上最后发布的版本（2026-11-21 随核心 0.1.305 发布，迁移一致性审核后的修复，见 CHANGELOG；0.2.0 同日随核心 0.1.304 发布，需核心 ≥0.1.304、界面包 4.0（`hostUICompat` `^4.0`））；0.2.2（未发布）在授权处加个人使用提示，见第 23 节。0.2.0：按转发 V2 改写（第 18 节；开发中曾编号 0.1.12，从未发布，因为是不兼容的契约变化，与其他平台插件一样升次版本号），并且授权请求由核心经账号表单选的代理发出，插件不再联网（第 19 节，CONTRACTS §117），以及经核心转换服务 OpenAI 生图接口（第 21 节，CONTRACTS §121）。核心契约见 CONTRACTS §83、§112（WebSocket 每轮见 §83.6），额度见 §44、§69。第 4 节按现状写；第 6–17 节是各版本当时的记录，其中的 `BuildUpstreamRequest`、补丁、`requestFields` 都已被第 18 节取代。
 
 ## 1. 目标与边界
 
@@ -359,4 +359,14 @@
 - 重置次数的路由读账号改用 `Host.Account`（`HostService.GetAccount`，每次一条审计 `plugin.account.read`），取代 `GetAccountCredentials`；请求照旧经 `SendAccountRequest` 由核心经账号代理发出，插件不联网。
 - 删掉两个账号类型的 `settingsFields: ["proxy_id"]`：代理是账号的 `proxy_id` 列，Go 代码和界面都没有写入它；`flow.spec.ts` 的样例改用别的普通键。
 - 测试：`resetcredits_test.go` 的假宿主改实现 `Account`；`manifest_test.go` 断言没有 `accounts.credentials`、没有 `settingsFields`。
+
+## 23. 0.2.2：授权处的个人使用提示（2026-11-21，所有者要求“授权那里对用户进行提示，仅限于个人使用，不得用于分发、API 转卖”“提示就行了，然后将相关的官方说明位置给它”；只改界面，无迁移，不改契约）
+
+- 账号表单（`CodexAuthForm.vue`）在授权流程上方显示一条警示色提示（`UsageNotice.vue`；只要显示授权流程就显示，授权完成后随流程收起）：这里接入的是授权人自己的 ChatGPT 订阅，只能本人和自己的应用使用，不得共享、对外分发或包装成 API 转售，否则违反 OpenAI 使用条款、账号可能被限制或封停。两种账号类型（设备码、Codex）都显示；编辑已授权的账号时只在点了“重新授权”后显示。
+- 只提示，不拦截：没有勾选确认，不记录，不影响授权步骤（所有者定）。
+- 提示下方两条外链，地址在 `flow.ts` 的 `USAGE_POLICY_LINKS`，只是页面上的链接，插件不请求它们，不进 `externalServices`：
+  - OpenAI 使用条款 `https://openai.com/policies/row-terms-of-use/`（2026-01-01 生效版：Registration and access 一节“You may not share your account credentials or make your account available to anyone else”，Using our Services 一节不得“Modify, copy, lease, sell or distribute any of our Services”；2026-11-21 核对过原文）。
+  - OpenAI 帮助中心的账号共享政策 `https://help.openai.com/en/articles/10471989-openai-account-sharing-policy`（2026-11-21 只确认了页面存在和标题，开发环境读不到正文）。
+- 文案在 `messages.ts` 的 `notice.*`（中英文）。
+- 测试：`CodexAuthForm.spec.ts`“personal-use notice”（两种类型都在流程上方显示提示和两条链接；已授权账号只在重新授权时显示；授权完成后收起）；`messages.spec.ts`（每条链接都有中英文名称）。
 

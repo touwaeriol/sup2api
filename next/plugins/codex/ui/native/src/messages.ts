@@ -40,6 +40,11 @@ const zh = {
     noEmail: '已获取令牌',
     again: '重新授权'
   },
+  notice: {
+    title: '仅限本人使用',
+    body: '这里接入的是你自己的 ChatGPT 订阅，只能给你本人和你自己的应用使用。请不要共享给他人、对外分发，或包装成 API 转售。这类用法违反 OpenAI 的使用条款，账号可能被限制或封停。',
+    links: { terms: 'OpenAI 使用条款', sharing: 'OpenAI 账号共享政策' }
+  },
   device: {
     start: '开始',
     step1: '打开验证页面',
@@ -168,6 +173,11 @@ const en: Messages = {
     detail: '{email} · {plan}',
     noEmail: 'Tokens received',
     again: 'Authorize again'
+  },
+  notice: {
+    title: 'For your own use only',
+    body: "You are connecting your own ChatGPT subscription. Use it only for yourself and your own apps. Do not share it with other people, distribute access, or resell it as an API. That breaks OpenAI's terms of use and can get the account restricted or banned.",
+    links: { terms: 'OpenAI Terms of Use', sharing: 'OpenAI account sharing policy' }
   },
   device: {
     start: 'Start',
