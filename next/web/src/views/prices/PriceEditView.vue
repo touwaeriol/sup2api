@@ -42,6 +42,7 @@ import {
   compactPerRequest,
   perRequestExpr,
   perRequestRules as rulesOf,
+  PRICE_MODES,
   type MarkupRule,
   tokenExpr,
   type PriceMode,
@@ -81,14 +82,7 @@ function guideReplace(src: string) {
 }
 
 const readonly = computed(() => !auth.has('price:manage'))
-const MODES = ['per_request', 'per_token', 'expression'] as const
-const modeOptions = computed(() => MODES.map(m => ({ value: m, label: t(`prices.mode.${m}`) })))
-const MODE_HINT: Record<PriceMode, string> = {
-  per_token: '按 token 计价，可按上下文长度分档，再按请求参数、请求头、用量字段或时间加价。',
-  per_request: '每次请求一个价，不看 token 数；可按请求参数、请求头、用量字段或时间加价。',
-  expression: '界面写不了的复杂计费用表达式，字段和按 token 相同，另外能读时间。'
-}
-const modeHint = computed(() => MODE_HINT[mode.value])
+const modeOptions = computed(() => PRICE_MODES.map(m => ({ value: m, label: t(`prices.mode.${m}`) })))
 const isSynced = computed(() => price.value?.source === 'sync')
 const syncedNotice = computed(() => {
   const p = price.value
@@ -251,9 +245,9 @@ watch(priceId, load, { immediate: true })
 
 <template>
   <div class="space-y-4">
-    <SPageHeader title="模型定价">
+    <SPageHeader :title="t('prices.title')">
       <template #actions>
-        <SButton v-if="!readonly" size="sm" variant="ghost" @click="router.push('/prices')">返回列表</SButton>
+        <SButton v-if="!readonly" size="sm" variant="ghost" @click="router.push('/prices')">{{ t('prices.edit.backToList') }}</SButton>
       </template>
     </SPageHeader>
 
@@ -262,7 +256,7 @@ watch(priceId, load, { immediate: true })
 
       <div class="min-w-0 rounded-xl border border-line bg-surface" data-testid="price-edit-panel">
         <div class="flex flex-wrap items-center gap-2 border-b border-line px-4 py-3 sm:px-5">
-          <h2 class="text-base font-semibold text-fg">{{ priceId ? '编辑模型定价' : '添加模型定价' }}</h2>
+          <h2 class="text-base font-semibold text-fg">{{ t(priceId ? 'prices.editTitleShort' : 'prices.newTitle') }}</h2>
           <SBadge v-if="price" :tone="isSynced ? 'info' : 'gray'" size="sm" data-testid="price-edit-source">
             {{ isSynced && price.sync_source_name ? t('prices.sourceSync', { name: price.sync_source_name }) : t(`prices.source.${isSynced ? 'sync' : 'manual'}`) }}
           </SBadge>
@@ -273,15 +267,15 @@ watch(priceId, load, { immediate: true })
         <div v-else class="space-y-5 px-4 py-4 sm:px-5">
           <SAlert v-if="syncedNotice" tone="info" dense data-testid="price-synced-notice">{{ syncedNotice }}</SAlert>
 
-          <SField :label="t('prices.model')" :error="errors.model" required hint="API 请求中使用的完整模型 ID，不支持通配符。">
+          <SField :label="t('prices.model')" :error="errors.model" required :hint="t('prices.modelHint')">
             <SInput v-model.trim="form.model" mono placeholder="claude-sonnet-4-5" :disabled="readonly" />
           </SField>
           <div class="grid gap-x-4 gap-y-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
             <SField :label="t('common.note')" :error="errors.note">
-              <SInput v-model="form.note" :disabled="readonly" placeholder="可选" />
+              <SInput v-model="form.note" :disabled="readonly" :placeholder="t('common.optional')" />
             </SField>
             <div class="flex h-9 items-center">
-              <SSwitch v-model="form.enabled" :disabled="readonly" :label="form.enabled ? '启用' : '停用'" />
+              <SSwitch v-model="form.enabled" :disabled="readonly" :label="t(form.enabled ? 'common.enabled' : 'common.disabled')" />
             </div>
           </div>
 
@@ -295,7 +289,7 @@ watch(priceId, load, { immediate: true })
               data-testid="price-mode"
               @update:model-value="mode = $event as PriceMode"
             />
-            <p class="mt-1.5 text-xs text-fg-muted">{{ modeHint }}</p>
+            <p class="mt-1.5 text-xs text-fg-muted">{{ t(`prices.edit.modeHint.${mode}`) }}</p>
           </div>
 
           <PerRequestEditor
@@ -329,25 +323,25 @@ watch(priceId, load, { immediate: true })
           <PriceEstimator :source="previewSource" :per-request="mode === 'per_request'" />
 
           <section class="rounded-xl border border-line" data-testid="price-preview">
-            <div class="border-b border-line px-3 py-2 text-sm font-medium text-fg sm:px-4">预览</div>
+            <div class="border-b border-line px-3 py-2 text-sm font-medium text-fg sm:px-4">{{ t('prices.edit.preview') }}</div>
             <div class="border-b border-line px-3 py-2 sm:px-4">
-              <div class="text-xs text-fg-muted">定价</div>
+              <div class="text-xs text-fg-muted">{{ t('prices.edit.previewMode') }}</div>
               <div class="text-sm text-fg">{{ t(`prices.mode.${mode}`) }}</div>
             </div>
             <div class="px-3 py-2 sm:px-4">
               <div class="flex items-center gap-2 text-xs text-fg-muted">
-                计费表达式（USD）
+                {{ t('prices.edit.previewExpr') }}
                 <SLink
                   v-if="mode !== 'expression' && !readonly && !localIssues.length"
                   as="button"
                   class="ml-auto text-xs"
                   data-testid="price-to-expression"
                   @click="editAsExpression"
-                  >改用表达式编辑</SLink
+                  >{{ t('prices.toExpression') }}</SLink
                 >
               </div>
               <pre v-if="mode !== 'expression'" class="mt-1 whitespace-pre-wrap break-all font-mono text-xs leading-5 text-fg" data-testid="price-generated">{{ previewText || '—' }}</pre>
-              <div v-else class="mt-1 text-xs text-fg-muted">即上方编辑框里的表达式。</div>
+              <div v-else class="mt-1 text-xs text-fg-muted">{{ t('prices.edit.previewSame') }}</div>
               <template v-if="serverExpr && mode !== 'expression'">
                 <div class="mt-2 text-xs text-fg-muted">{{ t('prices.serverGenerated') }}</div>
                 <pre class="mt-1 whitespace-pre-wrap break-all font-mono text-xs leading-5 text-fg">{{ serverExpr }}</pre>
@@ -358,18 +352,18 @@ watch(priceId, load, { immediate: true })
 
         <div v-if="!loading" class="bottom-0 z-10 flex sm:sticky flex-wrap items-center gap-3 rounded-b-xl border-t border-line bg-surface/95 px-4 py-3 backdrop-blur sm:px-5">
           <span v-if="price" class="text-xs text-fg-subtle">
-            表达式 <span class="font-mono">{{ (price.expr_hash || '').slice(0, 12) }}</span>
-            <template v-if="price.updated_at"> · 更新于 {{ formatDateTime(price.updated_at) }}</template>
+            {{ t('prices.expression') }} <span class="font-mono">{{ (price.expr_hash || '').slice(0, 12) }}</span>
+            <template v-if="price.updated_at"> · {{ t('prices.edit.updatedAt', { time: formatDateTime(price.updated_at) }) }}</template>
           </span>
           <div v-if="!readonly" class="ml-auto flex items-center gap-2">
             <SButton @click="router.push('/prices')">{{ t('common.cancel') }}</SButton>
-            <SButton variant="primary" icon="check" :loading="saving" data-testid="price-save" @click="save">保存模型价格</SButton>
+            <SButton variant="primary" icon="check" :loading="saving" data-testid="price-save" @click="save">{{ t('prices.edit.save') }}</SButton>
           </div>
         </div>
       </div>
     </div>
 
-    <SDrawer v-model:open="guideOpen" title="表达式使用说明" width="lg">
+    <SDrawer v-model:open="guideOpen" :title="t('prices.edit.guide')" width="lg">
       <ExprGuide @insert="(s, c) => exprEditor?.insert(s, c)" @replace="guideReplace" />
     </SDrawer>
     <ExprHistoryModal v-model:open="historyOpen" :hash="price?.expr_hash" />

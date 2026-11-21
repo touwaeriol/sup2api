@@ -87,7 +87,7 @@ func Validate(src string, opts ValidateOptions) *Report {
 	if opts.Facts != nil {
 		for _, f := range p.facts {
 			if !opts.Facts[f] {
-				r.Errors = append(r.Errors, newIssue(CodeUnknownFact, f))
+				r.Errors = append(r.Errors, newIssue(CodeUnknownFact, f).placed(src, p.factAt[f]))
 			}
 		}
 	}

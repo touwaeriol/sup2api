@@ -35,7 +35,7 @@ describe('the per-token editor', () => {
         .findAll('input[type="number"][data-testid^="tier-"]')
         .map(i => i.attributes('data-testid'))
     ).toEqual(['p', 'c', 'cr', 'cc', 'cc1h'].map(k => `tier-${k}`))
-    expect(tiers()[0].text()).toContain('缓存写 1h: $6')
+    expect(tiers()[0].text()).toContain('缓存写 1 小时: $6')
   })
 
   it('loads tiers in the order they match, the last one the rest, and a time window in full', () => {
@@ -95,15 +95,15 @@ describe('the per-token editor', () => {
   it('charges a price whose box is ticked: unticking 1 h cache writes drops cc1h, ticking images keeps img', async () => {
     const { w, model } = render(claude())
     const box = (label: string) => w.findAll('label').find(l => l.text() === label)!.get('input[type="checkbox"]')
-    await box('1 小时缓存写入价格').setValue(false)
+    await box('缓存写 1 小时').setValue(false)
     expect('cc1h' in model.value.tiers[0]).toBe(false)
     expect(w.get('[data-testid="tier-cc1h"]').attributes('disabled')).toBeDefined()
     // Input and output are always charged.
-    await box('输入价格').setValue(false)
+    await box('输入').setValue(false)
     expect(model.value.tiers[0].p).toBe(3)
     await w.findAll('button').find(b => b.text() === '媒体定价')!.trigger('click')
     expect(w.get('[data-testid="tier-img"]').attributes('placeholder')).toBe('不勾选按输入价')
-    await box('图片输入价格').setValue(true)
+    await box('图片输入').setValue(true)
     expect(model.value.tiers[0]).toMatchObject({ img: null })
     expect('img_o' in model.value.tiers[0]).toBe(false)
   })

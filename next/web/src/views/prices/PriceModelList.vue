@@ -1,33 +1,32 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { SButton, SInput, SPagination, SSelect, SSpinner } from '@sub2api/ui'
 import type { Price } from '@/api/types'
 import { useList } from '@/composables/useList'
-import { summarize } from './priceExpr'
+import { PRICE_MODES, summarize } from './priceExpr'
 
 // The prices beside the editor: search, mode filter and one row per model,
 // the one being edited marked. Picking a row opens it in the editor.
-// PROTOTYPE: new texts are Chinese literals until adopted.
 const props = defineProps<{ current: number | null; canManage: boolean }>()
 const router = useRouter()
+const { t } = useI18n()
 
 const { items, loading, page, pageSize, total, filters } = useList<Price>('/prices', { q: '', mode: '' }, { pageSize: 20 })
-const modeOptions = [
-  { value: '', label: '全部方式' },
-  { value: 'per_token', label: '按 token' },
-  { value: 'per_request', label: '按次' },
-  { value: 'expression', label: '表达式' }
-]
+const modeOptions = computed(() => [{ value: '', label: t('common.all') }, ...PRICE_MODES.map(m => ({ value: m, label: t(`prices.mode.${m}`) }))])
 
 const usd = (n: number) => `$${+n.toFixed(4)}`
+/** A price at a glance: "$3 / $15 · 2 tiers · 1 rule", or "$0.01 / request · 1 rule". */
 function brief(p: Price): string {
   const s = summarize(p.mode, p.config)
-  if (s.kind === 'per_request') return `按次 ${usd(s.price)}${s.rules ? ` · ${s.rules} 条规则` : ''}`
-  if (s.kind === 'expression') return '表达式'
-  if (s.first.unit === 'request') return `按次 ${usd(Number(s.first.price) || 0)}${s.tiers > 1 ? ` · ${s.tiers} 档` : ''}`
-  const head = `${usd(Number(s.first.p) || 0)} / ${usd(Number(s.first.c) || 0)}`
-  return [head, s.tiers > 1 ? `${s.tiers} 档` : '', s.rules ? `${s.rules} 条规则` : ''].filter(Boolean).join(' · ')
+  if (s.kind === 'expression') return t('prices.mode.expression')
+  const perCall = (price: number) => t('prices.summary.perRequest', { price: usd(price) })
+  const rules = s.rules ? t('prices.summary.rules', { n: s.rules }) : ''
+  if (s.kind === 'per_request') return [perCall(s.price), rules].filter(Boolean).join(' · ')
+  const { first } = s
+  const head = first.unit === 'request' ? perCall(Number(first.price) || 0) : `${usd(Number(first.p) || 0)} / ${usd(Number(first.c) || 0)}`
+  return [head, s.tiers > 1 ? t('prices.summary.tiers', { n: s.tiers }) : '', rules].filter(Boolean).join(' · ')
 }
 const rows = computed(() => items.value.map(p => ({ p, brief: brief(p) })))
 </script>
@@ -35,10 +34,10 @@ const rows = computed(() => items.value.map(p => ({ p, brief: brief(p) })))
 <template>
   <aside class="flex min-h-0 flex-col rounded-xl border border-line bg-surface" data-testid="price-model-list">
     <div class="space-y-2 border-b border-line p-3">
-      <SInput v-model="filters.q" size="sm" icon="search" placeholder="搜索模型…" aria-label="搜索模型" />
+      <SInput v-model="filters.q" size="sm" icon="search" :placeholder="t('prices.sync.searchPlaceholder')" :aria-label="t('common.search')" />
       <div class="flex items-center gap-2">
-        <SSelect v-model="filters.mode" size="sm" class="min-w-0 flex-1" :options="modeOptions" aria-label="计费方式" />
-        <SButton v-if="canManage" size="sm" variant="primary" icon="plus" @click="router.push('/prices/new')">添加模型</SButton>
+        <SSelect v-model="filters.mode" size="sm" class="min-w-0 flex-1" :options="modeOptions" :aria-label="t('prices.billingMode')" />
+        <SButton v-if="canManage" size="sm" variant="primary" icon="plus" @click="router.push('/prices/new')">{{ t('prices.new') }}</SButton>
       </div>
     </div>
     <div class="min-h-0 flex-1 overflow-y-auto">
@@ -60,10 +59,10 @@ const rows = computed(() => items.value.map(p => ({ p, brief: brief(p) })))
               >
               <span class="block truncate text-[11px] text-fg-muted">{{ r.brief }}</span>
             </span>
-            <span v-if="!r.p.enabled" class="shrink-0 rounded bg-surface-2 px-1.5 text-[10px] text-fg-subtle">停用</span>
+            <span v-if="!r.p.enabled" class="shrink-0 rounded bg-surface-2 px-1.5 text-[10px] text-fg-subtle">{{ t('common.disabled') }}</span>
           </button>
         </li>
-        <li v-if="!rows.length" class="px-3 py-8 text-center text-xs text-fg-muted">没有匹配的模型</li>
+        <li v-if="!rows.length" class="px-3 py-8 text-center text-xs text-fg-muted">{{ t('ui.noResults') }}</li>
       </ul>
     </div>
     <div class="border-t border-line px-2 py-2">

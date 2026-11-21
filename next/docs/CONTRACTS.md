@@ -202,7 +202,7 @@
 | 方法 路径 | 权限 |
 |---|---|
 | GET/POST `/prices`（`?mode=&source=&plugin_key=&enabled=&q=`），GET/PATCH/DELETE `/prices/:id`；详情返回 `analysis`（表达式读取的参数、请求头、指标） | `price:read` / `price:manage` |
-| POST `/prices/validate` `{mode, config?, expression?, platform?}` → `{ok, expression, errors[], warnings[]}` | `price:read` |
+| POST `/prices/validate` `{mode, config?, expression?}` → `{ok, expression, expr_hash?, errors[], warnings[], samples, cost_per_million_input?, analysis?}`，`errors[]`、`warnings[]` 的每项是 Issue（见表下） | `price:read` |
 | POST `/prices/preview` `{price_id? \| mode+config/expression, usage:{p,c,cr,cc,cc1h,len?}, metrics:{}, headers:{}, params:{}, at?, group_id?}` → `{cost, base_cost, rate_multiplier, expression, expr_hash, tier, rules:[{cond,multiplier,matched}], breakdown:{...}}` | `price:read` |
 | POST `/prices/:id/override`（复制插件默认价格为管理员价格） | `price:manage` |
 | GET `/groups/:id/model-prices`（`?segment_id=`），PUT `/groups/:id/model-prices` `{items:[{segment_id, model, rule}]}` | `group:read` / `group:manage`；分组内定价与用户组专属价（§97.6） |
@@ -215,7 +215,11 @@
 | GET `/usage/summary`（`/usage` 的全部筛选参数，加 `group_by=day\|model\|user\|ip`）；GET `/me/usage/summary`（限定当前用户，`group_by=day\|model\|ip`） | `usage:all:read` / `usage:self:read` |
 | GET/PUT `/settings/billing` `{min_balance, big_cost_warning_usd}`（`missing_price_policy` 2026-11-19 删除，§17.3） | `settings:read` / `settings:manage` |
 
-价格表达式校验失败时 `details.fields[].message` 为 `{en, zh}`；表达式错误额外带 `detail`（位置信息）。结算时捕获的参数、请求头和 usage 口径存在 `usage_logs.billing_detail.inputs`。
+价格表达式校验失败时 `details.fields[].message` 为 `{en, zh}`。表达式的问题（`/prices/validate` 的 `errors[]`、`warnings[]`，保存与试算失败时的 `details.errors`）是 Issue `{code, message: {en, zh}, detail?, line?, column?}`（`billing/expr.Issue`）：
+- `line`、`column` 从 1 开始，列按字符（Unicode 码点）计，相对于交给校验的表达式原文（含 `v1:` 前缀；保存、校验接口先去掉首尾空白）；问题没有位置时两个字段都不出现。语法错误用 expr-lang 报错的位置，括号不配对用那个括号的位置，`negative_multiplier` 指向倍数，`literal_argument_required`、`invalid_timezone` 指向那次函数调用，`unknown_usage_fact` 指向这个键第一次出现的 `u(...)`；冒烟测试、运行时错误、大额警告没有位置。
+- `syntax_error` 的 `detail` 是中文：多了右括号是 `多了一个右括号`，左括号没配对是 `这个左括号没有配对的右括号`（括号按 expr-lang 的词法找，字符串和注释里的不算）；不认识的名字是 `不认识的名字 X`，在表达式可用的变量和函数（`expr` 求值环境 `env` 的名字加启用的内置函数，不含 `__rule`）里有编辑距离不超过 2 且小于 X 的字符数的名字时加 `，是不是 Y？`（取最近的，同样近取前面的）；其他错误是 `表达式写法不对：` 加 expr-lang 的英文原文。其他 code 的 `detail` 不变。
+
+结算时捕获的参数、请求头和 usage 口径存在 `usage_logs.billing_detail.inputs`。
 
 - `/prices/preview` 的 `usage` 是按 exclusive 口径填写的 token 数（`p` 不含缓存），服务端按结算同样的规则归一化（ARCHITECTURE §7.3），所以试算结果与实际扣费一致。它试的是全局价：`group_id` 只取该分组的默认倍率，不看用户组、专属倍率和定价规则；某个用户实际付多少用 `POST /pricing/quote`（§97.6）
 - 保存价格时，若表达式触发大额费用警告（`big_cost_warning_usd`），返回 400 `invalid_argument` 且 `details.confirmation_required=true`（附 `warnings`），前端二次确认后带 `confirm:true` 重新提交
@@ -9236,4 +9240,4 @@ Go 类型是 `expr.TokenConfig`、`TierConfig`、`TokenPrices`、`RuleConfig`、
 - 迁移 2 按 `config` 判断，不看表达式：可视化配置与手改过的表达式不一致的旧行（原来就以表达式计费）会被转成 `per_token`，计费仍按存下的表达式，但价格页显示的是配置；再保存一次时按配置重新生成。SQL 里分辨不出这种情况。
 - 规则不再分段求值、按十进制相乘，而是整个程序一次浮点计算，结果可能在最后一位（1e-8 美元）与旧引擎不同。
 - **发布检查**：新引擎比旧引擎严格的地方——表达式里出现 `__rule`、`$env`，基础表达式里出现读了请求信息、命中分支是负数的三元式（现在算一条规则，倍数不能为负）——会让已存的价格编译不过。发布前对线上库（升级前的库即可，只读、不需要新 schema）运行 `sub2api admin check-prices`（`billing.CheckStoredExpressions`）：它把 `model_prices`、`price_rules`（自定义价）、`model_price_history` 里的每条表达式按迁移 0121 的写法改写后用新引擎编译，列出编译不过的（表、模型或哈希、错误），全部通过时退出码 0。有输出就先改那些价格再升级。未结算使用记录里携带的表达式不单独检查：它们在保存价格时已写进历史表，随历史表一起检查。
-- 不在本次：OpenAI / Codex 应答里的 `service_tier` 报成用量字段；按次带加价规则。
+- 不在本次：OpenAI / Codex 应答里的 `service_tier` 报成用量字段。按次带加价规则已随 131.1 的 `per_request` `rules` 补上。

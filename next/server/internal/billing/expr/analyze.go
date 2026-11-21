@@ -17,7 +17,7 @@ type analyzer struct {
 	p        *Program
 	params   map[string]bool
 	headers  map[string]bool
-	facts    map[string]bool
+	facts    map[string]int // first u() of each key, as a character offset
 	bounds   map[float64]bool
 	tierSeen map[string]bool
 }
@@ -27,7 +27,7 @@ func newAnalyzer(p *Program) *analyzer {
 		p:        p,
 		params:   map[string]bool{},
 		headers:  map[string]bool{},
-		facts:    map[string]bool{},
+		facts:    map[string]int{},
 		bounds:   map[float64]bool{},
 		tierSeen: map[string]bool{},
 	}
@@ -46,7 +46,7 @@ var isVar = func() map[string]bool {
 func parse(src string) (ast.Node, *CompileError) {
 	tree, err := parser.Parse(src)
 	if err != nil {
-		return nil, compileErr(CodeSyntax, err.Error())
+		return nil, syntaxErr(src, err)
 	}
 	return tree.Node, nil
 }
@@ -57,9 +57,9 @@ type visitor struct {
 	err *CompileError
 }
 
-func (v *visitor) fail(code, detail string) {
+func (v *visitor) fail(n ast.Node, code, detail string) {
 	if v.err == nil {
-		v.err = compileErr(code, detail)
+		v.err = compileErrAt(code, detail, n.Location().From)
 	}
 }
 
@@ -71,7 +71,7 @@ func (v *visitor) Visit(node *ast.Node) {
 			a.p.used[n.Value] = true
 		}
 		if n.Value == traceFunc || n.Value == "$env" {
-			v.fail(CodeSyntax, n.Value+" is reserved")
+			v.fail(n, CodeSyntax, unknownName(n.Value))
 		}
 	case *ast.ConditionalNode:
 		mult, ok := traced(n)
@@ -79,7 +79,7 @@ func (v *visitor) Visit(node *ast.Node) {
 			return
 		}
 		if mult < 0 {
-			v.fail(CodeNegativeMultiplier, n.String())
+			v.fail(n.Exp1, CodeNegativeMultiplier, n.String())
 			return
 		}
 		a.p.rules = append(a.p.rules, &rule{cond: n.Cond.String(), mult: mult})
@@ -112,36 +112,38 @@ func (v *visitor) Visit(node *ast.Node) {
 		case name == "param":
 			s, ok := lit()
 			if !ok || s == "" {
-				v.fail(CodeLiteralArg, "param() needs a string literal path")
+				v.fail(n, CodeLiteralArg, "param() needs a string literal path")
 				return
 			}
 			a.params[s] = true
 		case name == "header":
 			s, ok := lit()
 			if !ok || s == "" {
-				v.fail(CodeLiteralArg, "header() needs a string literal name")
+				v.fail(n, CodeLiteralArg, "header() needs a string literal name")
 				return
 			}
 			a.headers[strings.ToLower(s)] = true
 		case name == "u":
 			s, ok := lit()
 			if !ok || s == "" {
-				v.fail(CodeLiteralArg, "u() needs a string literal key")
+				v.fail(n, CodeLiteralArg, "u() needs a string literal key")
 				return
 			}
-			a.facts[s] = true
+			if _, seen := a.facts[s]; !seen {
+				a.facts[s] = n.Location().From
+			}
 		case name == "tier":
 			if _, ok := lit(); !ok {
-				v.fail(CodeLiteralArg, "tier() needs a string literal name")
+				v.fail(n, CodeLiteralArg, "tier() needs a string literal name")
 			}
 		case timeFuncs[name]:
 			s, ok := lit()
 			if !ok {
-				v.fail(CodeLiteralArg, name+"() needs a string literal time zone")
+				v.fail(n, CodeLiteralArg, name+"() needs a string literal time zone")
 				return
 			}
 			if _, err := loadLocation(s); err != nil {
-				v.fail(CodeTimezone, fmt.Sprintf("%s(%q): %v", name, s, err))
+				v.fail(n, CodeTimezone, fmt.Sprintf("%s(%q): %v", name, s, err))
 			}
 		}
 	}
@@ -293,7 +295,9 @@ func buildTerm(n ast.Node) (*term, *CompileError) {
 	src := n.String()
 	prog, err := expr.Compile(src, options(expr.AsFloat64())...)
 	if err != nil {
-		return nil, compileErr(CodeSyntax, err.Error())
+		cerr := syntaxErr(src, err)
+		cerr.at = n.Location().From // src is the term alone: point at the term
+		return nil, cerr
 	}
 	t := &term{expr: src, prog: prog, label: "other"}
 	rc := &refCollector{vars: map[string]bool{}, facts: map[string]bool{}}
@@ -385,6 +389,7 @@ func (a *analyzer) finish() {
 	a.p.params = sortedKeys(a.params)
 	a.p.headers = sortedKeys(a.headers)
 	a.p.facts = sortedKeys(a.facts)
+	a.p.factAt = a.facts
 	for b := range a.bounds {
 		a.p.lenBounds = append(a.p.lenBounds, b)
 	}
@@ -394,7 +399,7 @@ func (a *analyzer) finish() {
 	}
 }
 
-func sortedKeys(m map[string]bool) []string {
+func sortedKeys[V any](m map[string]V) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
 		out = append(out, k)

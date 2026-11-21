@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { SIcon, SLink, SSpinner } from '@sub2api/ui'
 import { formatMoney } from '@/utils/format'
 import { issueText, type Issue } from './issues'
@@ -8,9 +9,9 @@ import type { PriceValidation } from './usePriceValidation'
 // The check result as one line under the editor: passed (with the cost of
 // one million input tokens), or each problem on a line of its own with its
 // position.
-// PROTOTYPE: new texts are Chinese literals until adopted.
 const props = defineProps<{ localIssues: string[]; validation: PriceValidation | null; error: string; validating: boolean; mode: string }>()
 const emit = defineEmits<{ (e: 'locate', line: number, column: number): void }>()
+const { t } = useI18n()
 
 type Obj = Exclude<Issue, string>
 type Line = { text: string; detail?: string; line?: number; column?: number }
@@ -36,19 +37,19 @@ const cost = computed(() => {
   <div class="rounded-lg border px-3 py-2 text-sm" :class="problems.length ? 'border-danger-200 bg-danger-50/60 dark:border-danger-900 dark:bg-danger-950/30' : 'border-line bg-surface-2'" data-testid="price-check">
     <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
       <SSpinner v-if="validating" size="sm" />
-      <span v-else-if="ok" class="inline-flex items-center gap-1 text-success-700 dark:text-success-400"><SIcon name="check" class="h-4 w-4" />检查通过</span>
+      <span v-else-if="ok" class="inline-flex items-center gap-1 text-success-700 dark:text-success-400"><SIcon name="check" class="h-4 w-4" />{{ t('prices.check.ok') }}</span>
       <span v-else-if="problems.length" class="inline-flex items-center gap-1 font-medium text-danger-700 dark:text-danger-300"
-        ><SIcon name="x" class="h-4 w-4" />{{ problems.length === 1 ? '有 1 个问题，不能保存' : `有 ${problems.length} 个问题，不能保存` }}</span
+        ><SIcon name="x" class="h-4 w-4" />{{ t('prices.check.problems', { n: problems.length }) }}</span
       >
-      <span v-else class="text-fg-muted">检查中…</span>
-      <span v-if="cost" class="text-xs text-fg-muted">100 万输入 token 一次 <b class="font-mono text-fg">{{ cost }}</b></span>
+      <span v-else class="text-fg-muted">{{ t('prices.check.checking') }}</span>
+      <span v-if="cost" class="text-xs text-fg-muted">{{ t('prices.check.costPerMillion', { cost }) }}</span>
     </div>
     <ul v-if="problems.length" class="mt-1.5 space-y-1">
       <li v-for="(p, i) in problems" :key="i" class="flex flex-wrap items-baseline gap-x-2 text-xs text-danger-700 dark:text-danger-300">
-        <span v-if="p.line" class="font-medium">第 {{ p.line }} 行第 {{ p.column }} 列</span>
+        <span v-if="p.line" class="font-medium">{{ t('prices.check.position', { line: p.line, column: p.column }) }}</span>
         <span>{{ p.text }}</span>
         <span v-if="p.detail" class="font-mono text-danger-600/90 dark:text-danger-400/90">{{ p.detail }}</span>
-        <SLink v-if="p.line" as="button" class="text-xs" @click="emit('locate', p.line!, p.column!)">定位</SLink>
+        <SLink v-if="p.line" as="button" class="text-xs" @click="emit('locate', p.line!, p.column!)">{{ t('prices.check.locate') }}</SLink>
       </li>
     </ul>
     <ul v-if="warnings.length" class="mt-1.5 space-y-1">

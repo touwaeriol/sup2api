@@ -23,7 +23,7 @@ describe('image tokens', () => {
 
   it('lets the trial calculation enter img and img_o', async () => {
     vi.useFakeTimers()
-    i18n.global.locale.value = 'en'
+    i18n.global.locale.value = 'zh'
     api.post.mockResolvedValue({ cost: '0.1363', tier: '', rules: [], breakdown: {} })
     const wrapper = mount(PriceEstimator, { props: { source: { mode: 'expression', expression: 'p*5 + img*8 + img_o*32 + c*10' } }, global: { plugins: [i18n] } })
     await wrapper.findAll('button').find(b => b.text().includes('更多用量'))!.trigger('click')

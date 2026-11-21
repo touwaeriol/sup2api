@@ -83,6 +83,7 @@ type Program struct {
 	params    []string
 	headers   []string
 	facts     []string
+	factAt    map[string]int // character offset of each fact's first u() in the body
 	lenBounds []float64
 	issues    []Issue // non-fatal findings (warnings) from analysis
 }
@@ -178,6 +179,7 @@ func options(extra ...expr.Option) []expr.Option {
 // CompileError describes why an expression failed to compile.
 type CompileError struct {
 	Issue Issue
+	at    int // character offset of the problem in the body; -1 when unknown
 }
 
 func (e *CompileError) Error() string {
@@ -188,12 +190,25 @@ func (e *CompileError) Error() string {
 }
 
 func compileErr(code, detail string) *CompileError {
-	return &CompileError{Issue: newIssue(code, detail)}
+	return compileErrAt(code, detail, -1)
+}
+
+func compileErrAt(code, detail string, at int) *CompileError {
+	return &CompileError{Issue: newIssue(code, detail), at: at}
 }
 
 // Compile parses, checks and analyses an expression. Errors are
-// *CompileError.
+// *CompileError, located in src when the problem has a position.
 func Compile(src string) (*Program, error) {
+	p, cerr := compile(src)
+	if cerr != nil {
+		cerr.Issue = cerr.Issue.placed(src, cerr.at)
+		return nil, cerr
+	}
+	return p, nil
+}
+
+func compile(src string) (*Program, *CompileError) {
 	version, body, err := splitVersion(src)
 	if err != nil {
 		return nil, compileErr(CodeVersion, err.Error())
@@ -209,7 +224,7 @@ func Compile(src string) (*Program, error) {
 	p.hash = Hash(p.source)
 	tracer := &ruleTracer{}
 	if p.prog, err = expr.Compile(body, options(expr.AsFloat64(), expr.Patch(tracer))...); err != nil {
-		return nil, compileErr(CodeSyntax, err.Error())
+		return nil, syntaxErr(body, err)
 	}
 	if err := newAnalyzer(p).analyze(body); err != nil {
 		return nil, err

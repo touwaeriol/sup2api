@@ -2,13 +2,11 @@ export default {
   title: '模型价格',
   description: '按模型配置计费表达式。价格由管理员维护：手动填写，或从同步源导入。',
   scopeNote: '这里是全局价。分组可以对模型单独定价，用户组可以有专属价和专属倍率；实付 = 标价 × 倍率。',
-  scopeNoteEdit: '价格按模型全局设置，与由哪个端点、哪种账号类型提供服务无关。这里填的是全局价：分组和用户组可以在它之上单独定价，实付 = 标价 × 倍率。',
   scopeLinks: { groups: '分组', segments: '用户组' },
   simulate: '价格试算',
   simulateModel: '试算这个模型',
   new: '新增价格',
   newTitle: '新增价格',
-  editTitle: '编辑价格 · {name}',
   editTitleShort: '编辑价格',
   source: {
     manual: '手动',
@@ -21,10 +19,9 @@ export default {
   viewSources: '同步源',
   syncedNotice: '从 {source} 同步于 {time}；修改价格后会变成手动价格，之后同步不会再自动覆盖（除非在同步预览中勾选）。',
   syncedNoticeDeleted: '已删除的同步源',
-  basic: '基本信息',
   model: '模型',
-  modelHint: '完整的模型 ID，如 claude-sonnet-4-5（不支持通配符；别名和带日期的 ID 需分别定价）',
-  modelInvalid: '请填写完整的模型 ID：只能包含字母、数字和 . _ : / @ + -，不能有通配符或空格',
+  modelHint: 'API 请求中使用的完整模型 ID，不支持通配符。',
+  modelInvalid: "请填写完整的模型 ID：只能包含字母、数字和 . _ : / {'@'} + -，不能有通配符或空格",
   modeCol: '方式',
   summaryCol: '摘要',
   searchPlaceholder: '模型、备注…',
@@ -37,13 +34,11 @@ export default {
     per_token: '按 token',
     expression: '表达式'
   },
-  modeDesc: {
-    per_request: '每次请求固定价',
-    per_token: '按 token 单价，可分档加价',
-    expression: '手写表达式，配按 token 写不了的'
-  },
   perRequestPrice: '每次价格',
-  perRequestUnit: '美元 / 次',
+  per: {
+    request: '/次',
+    token: '/1M token'
+  },
   vars: {
     p: '输入',
     c: '输出',
@@ -54,31 +49,262 @@ export default {
     img_o: '图片输出'
   },
   unsetPlaceholder: '不收费',
-  generatedShow: '查看生成的表达式',
-  generatedHide: '收起表达式',
   toExpression: '改用表达式编辑',
   serverGenerated: '服务端生成的表达式',
-  validate: {
-    title: '校验',
-    ok: '编译通过，冒烟测试通过',
-    pending: '等待输入…',
-    warnTitle: '确认高额费用',
-    warnConfirm: '服务端提示：{list}。仍然保存？',
+  edit: {
+    backToList: '返回列表',
+    modeHint: {
+      per_token: '按 token 计价，可按上下文长度分档，再按请求参数、请求头、用量字段或时间加价。',
+      per_request: '每次请求一个价，不看 token 数；可按请求参数、请求头、用量字段或时间加价。',
+      expression: '界面写不了的复杂计费用表达式，字段和按 token 相同，另外能读时间。'
+    },
+    preview: '预览',
+    previewMode: '定价',
+    previewExpr: '计费表达式（USD）',
+    previewSame: '即上方编辑框里的表达式。',
+    updatedAt: '更新于 {time}',
+    save: '保存模型价格',
+    guide: '表达式使用说明'
+  },
+  presets: {
+    title: '预设模板',
+    group: {
+      fixed: '固定价格',
+      tiered: '阶梯',
+      advanced: '进阶'
+    },
+    item: {
+      single: '单一价格',
+      claude: 'Claude（含缓存）',
+      image: '图片模型',
+      claudeLong: 'Claude 长上下文',
+      gptLong: 'GPT 长上下文',
+      three: '三档',
+      priority: 'priority 整单 ×2',
+      night: '夜间五折',
+      minimum: '最低收 $0.001'
+    }
+  },
+  tier: {
+    listHint: '按顺序匹配档位，第一个满足条件的档位决定价格；最后一档兜底。',
+    add: '添加档位',
+    matchOnly: '始终匹配（只有这一个档位）',
+    matchRest: '前面的档位都没命中（len > {lower}）',
+    matchFirst: '完整输入长度 len ≤ {max}',
+    matchBetween: 'len > {lower} 且 ≤ {max}',
+    unnamed: '未命名',
+    restBadge: '兜底档位',
+    remove: '删除这个档位',
+    condition: '阶梯条件',
+    onlyHint: '只有一个档位，所有请求都按它算。加档位后，这一档变成兜底。',
+    restHint: '兜底：前面的档位都没命中时按这一档算，不用设条件。',
+    len: '完整输入长度',
+    maxLen: '上下文长度上限',
+    lenHint: 'len = 输入 + 缓存读写 + 图片输入',
+    badge: '档位',
+    name: '档位名称',
+    unit: '这一档的计价方式',
+    requestHint: '命中这一档的请求按次收费，不看 token 数。',
+    tokenPrices: 'Token 价格',
+    media: '媒体定价',
+    fallback: {
+      cc1h: '不勾选按缓存写 5 分钟价',
+      img: '不勾选按输入价',
+      img_o: '不勾选按输出价'
+    }
+  },
+  perRequest: {
+    common: '常用',
+    hint: '每次成功的请求收这个价，不看 token 数。',
+    volume: {
+      thousand: '1,000 次',
+      hundredThousand: '10 万次',
+      million: '100 万次'
+    },
+    toTokenAsk: '要短请求按次、长请求按 token？',
+    toToken: '改用按 token，保留单价和规则'
+  },
+  rules: {
+    title: '请求规则计费',
+    hint: '条件满足时，最终价格乘以倍率；多组命中时倍率相乘；小于 1 的倍率为折扣。',
+    group: '规则组 #{n}',
+    defaultName: '规则组 {n}',
+    name: '规则组名称',
+    namePlaceholder: '名称（可选）',
+    remove: '删除规则组',
+    condSource: '条件来源',
+    source: {
+      param: '请求体参数',
+      header: '请求头',
+      usage: '用量字段',
+      time: '时间'
+    },
+    tz: '时区',
+    fromHour: '开始',
+    toHour: '结束',
+    to: '到',
+    field: '字段',
+    op: '比较',
+    ops: {
+      eq: '等于',
+      ne: '不等于',
+      contains: '包含',
+      exists: '存在',
+      gt: '>',
+      gte: '≥',
+      lt: '<',
+      lte: '≤'
+    },
+    value: '值',
+    removeCond: '删除条件',
+    addField: '新增参数 / 请求头',
+    addTime: '新增时间条件',
+    multiplier: '倍率',
+    multiplierHint: '条件全部满足时，最终费用 = 基础费用 × 倍率',
+    add: '新增规则组',
+    common: '常用规则',
+    preset: {
+      priority: 'OpenAI priority ×2（请求体 service_tier）',
+      flex: 'OpenAI flex ×0.5',
+      fast: 'Claude fast mode ×2（请求头）',
+      night: '夜间 0–8 点 ×0.8（上海时间）'
+    }
+  },
+  estimator: {
+    title: 'Token 估算器',
+    titleRequest: '费用估算',
+    hint: '输入 token 数量预览费用（不含分组倍率）。',
+    hintRequest: '一次请求的费用（不含分组倍率）；在请求模拟里填参数、请求头或时间，看规则是否命中。',
+    more: '更多用量（1 小时缓存、图片）',
+    len: '指定输入上下文总长度',
+    lenPlaceholder: '使用现有 token 总长度（{n}）',
+    fixFirst: '先修好上面的问题再估算。',
+    cost: '预计成本：',
+    tier: '命中档位：',
+    rule: '规则 ×{m}',
+    detail: '明细',
+    hideDetail: '收起明细',
+    simulate: '请求模拟',
+    simulateHint: '请求体参数、请求头、用量字段、时间',
+    paramsHint: '值按 JSON 读，读不了按文本',
+    at: '请求时间',
+    atHint: '空着按现在'
+  },
+  check: {
+    ok: '检查通过',
+    checking: '检查中…',
+    problems: '有 {n} 个问题，不能保存',
+    position: '第 {line} 行第 {column} 列',
+    locate: '定位',
     costPerMillion: '100 万输入 token 的费用：{cost}'
   },
-  trial: {
-    title: '价格试算',
-    len: 'len（上下文长度）',
-    more: '请求头、请求参数、用量字段、时间、分组',
-    headers: '请求头',
-    params: '请求参数',
-    metrics: '用量字段 u()',
-    paramsHint: '值能按 JSON 解析时按 JSON 发送（1.5、true、"x"），否则作为字符串。',
-    at: '时间',
-    group: '分组（倍率）',
-    fixFirst: '请先修正价格定义。',
-    tier: '档位',
-    empty: '输入用量后试算。'
+  validate: {
+    warnTitle: '确认高额费用',
+    warnConfirm: '服务端提示：{list}。仍然保存？'
+  },
+  exprEditor: {
+    vars: '变量：',
+    fns: '函数：',
+    fnList: 'tier(name, 费用), flat(美元), param(path), header(name), u(name), has(文本, 片段), hour(tz), weekday(tz), max, min, ceil, floor, abs',
+    note: '单价按美元 / 百万 token 写，`flat(0.01)` 是每次 0.01 美元；取不到的 token 数和用量字段按 0 算。',
+    guide: '完整说明',
+    label: '计费表达式',
+    format: '格式化'
+  },
+  // Texts of the expression guide (ExprGuide) may mark `code` and **bold** (GuideText).
+  guide: {
+    nav: {
+      basics: '基本写法',
+      vars: '变量',
+      ops: '运算符',
+      fns: '函数',
+      tiers: '档位',
+      rules: '加价规则',
+      examples: '例子',
+      check: '检查'
+    },
+    insert: '插入',
+    fill: '填入',
+    basics: {
+      cost: '表达式算出这一次请求的费用。token 变量是这次用掉的 token 数，单价按**美元 / 百万 token**写：`p*3` 就是输入每百万 3 美元。',
+      flat: '`flat(0.05)` 是直接加 0.05 美元，不按百万换算。',
+      round: '结果不能是负数。最终金额 = 结果 × 分组倍率，**进一到 8 位小数**（只会多扣，不会少扣）。',
+      layout: '可以随意换行和加空格；“格式化”会把每个乘数排成一行。',
+      generated: '按 token 和按次生成的也是表达式，在“预览”里可以“改用表达式编辑”接着改。'
+    },
+    var: {
+      p: '输入 token，不含缓存读写，也不含单独计价的图片输入',
+      c: '输出 token，不含单独计价的图片输出',
+      cr: '缓存读 token',
+      cc: '缓存写 token（5 分钟）。表达式没写 cc1h 时，1 小时的缓存写也算在这里',
+      cc1h: '缓存写 token（1 小时）',
+      img: '图片输入 token',
+      img_o: '图片输出 token',
+      len: '完整上下文长度 = 输入 + 缓存读写 + 图片输入，分档时用'
+    },
+    varsNote: '表达式里没写到的缓存类别不收费；没写 img、img_o 时图片 token 留在 p、c 里按文字价算。',
+    ternary: '条件 ? 甲 : 乙',
+    op: {
+      arith: '加减乘除、取余',
+      compare: '比较',
+      logic: '且、或、非（也可写 and、or、not）',
+      ternary: '条件成立取甲，否则取乙，可以连着写',
+      coalesce: 'a 是空（nil）时取 b，常用于 param() 读不到的情况',
+      paren: '括号改变先后顺序'
+    },
+    opsNote: '字符串用双引号；比较字符串区分大小写。',
+    fnGroup: {
+      tier: '档位与固定价',
+      read: '读请求和用量',
+      time: '时间（按请求开始的时刻）',
+      math: '数学'
+    },
+    fn: {
+      tier: { sig: 'tier("名称", 费用)', desc: '返回费用本身，并把这次请求记为命中这个档位（使用记录里会显示）' },
+      flat: { sig: 'flat(美元)', desc: '固定金额，直接按美元计，不用除以百万' },
+      param: { sig: 'param("路径")', desc: '读请求体里的字段，路径用点分隔，如 "reasoning.effort"；"messages.#" 是消息条数。读不到时是 nil' },
+      header: { sig: 'header("名称")', desc: '读请求头，名称不分大小写；没有这个头时是空字符串 ""' },
+      u: { sig: 'u("字段")', desc: '读插件报的用量字段（应答里来的，如服务等级、生成秒数）；没报时是 0。字段名必须是插件声明过的' },
+      has: { sig: 'has(文本, "片段")', desc: '文本里含有这个片段时为真，如 has(header("anthropic-beta"), "context-1m")' },
+      hour: { sig: 'hour("时区")', desc: '0–23 点' },
+      minute: { sig: 'minute("时区")', desc: '0–59 分' },
+      weekday: { sig: 'weekday("时区")', desc: '星期，0 是星期日，1–6 是星期一到六' },
+      day: { sig: 'day("时区")', desc: '几号，1–31' },
+      month: { sig: 'month("时区")', desc: '几月，1–12' },
+      maxMin: { sig: 'max(a, b)  min(a, b)', desc: '取大、取小，可用来设最低收费或封顶' },
+      rounding: { sig: 'ceil(x)  floor(x)  abs(x)', desc: '向上取整、向下取整、绝对值' }
+    },
+    fnsNote: 'param、header、u、tier 和时间函数的参数必须直接写成字符串（如 "Asia/Shanghai"），不能是算出来的值。',
+    tiers: {
+      wrap: '用 `tier("名称", 费用)` 包住每一档的费用，名称只能用字母、数字和 `_ . -`，同一个表达式里不能重名。',
+      len: '按上下文分档就用 `len <= 上限 ? … : …` 连着写，从小到大，最后一档不写条件。',
+      any: '不只是 len，任何条件都能分档：请求参数、请求头、时间都可以。',
+      record: '命中的档位会写进使用记录，估算里也会显示。'
+    },
+    rules: {
+      intro: '在基础费用后面乘上 `(条件 ? 倍数 : 1)`，几条规则就乘几个：',
+      trace: '写成“条件 ? 数字 : 1”、条件里读了请求、用量或时间的，都算一条规则，使用记录里会写明哪条命中、乘了多少。',
+      negative: '倍数不能是负数；小于 1 就是打折。',
+      nil: '条件读到 nil（如请求里没有这个参数）按不命中算。'
+    },
+    example: {
+      single: { title: '单一价格', desc: '输入每百万 3 美元，输出 15 美元，缓存读 0.3 美元。' },
+      longContext: { title: '长上下文两档', desc: '上下文不超过 20 万按标准价，超过后整单按长上下文价。' },
+      priority: { title: 'priority 整单两倍', desc: '请求里写了 service_tier=priority 时整单 ×2。' },
+      serviceTier: { title: '按应答的服务等级', desc: '用插件报的实际等级计费，比只看请求更准。' },
+      night: { title: '夜间五折', desc: '上海时间 0 点到 8 点半价。' },
+      weekend: { title: '周末八折', desc: '星期六、星期日打八折。' },
+      minimum: { title: '最低收费', desc: '每次至少收 0.001 美元。' },
+      flatFee: { title: '按 token 加每次固定费', desc: '每次另收 0.002 美元。' },
+      effort: { title: '按推理强度分价', desc: 'reasoning.effort 为 high 时输出价更高。' }
+    },
+    check: {
+      intro: '编辑时会自动检查，结果显示在编辑框下方，有错误时不能保存：',
+      syntax: '**语法**：能不能编译，写错的地方会标出行号和列号。',
+      fields: '**字段**：函数参数是不是字符串、时区对不对、u() 的字段有没有插件声明、档位有没有重名。',
+      smoke: '**试跑**：拿几十组用量（全 0、每个变量单独 1 / 1,000 / 1,000,000、档位边界上下）各算一遍，算不出数或算出负数都算失败。',
+      cost: '**金额提醒**：100 万输入 token 一次超过设置的阈值时提醒你确认，不阻止保存。'
+    }
   },
   items: {
     p: '输入',
@@ -122,105 +348,6 @@ export default {
   history: {
     title: '表达式历史',
     notFound: '该 hash 下没有保存的表达式。'
-  },
-  token: {
-    tiers: '价格档位',
-    tiersHint: '按上下文长度 len（含缓存）从上往下匹配，第一个满足的生效。单位：美元 / 百万 token。',
-    fromPreset: '从模板开始',
-    preset: {
-      single: '单档',
-      claude: 'Claude（含 5 分钟 / 1 小时缓存写）',
-      claudeLong: 'Claude 长上下文（200K 分两档）',
-      gptLong: 'GPT 长上下文（272K 分两档）',
-      three: '三档（32K / 128K）',
-      image: '图片模型（图片输入 / 输出）'
-    },
-    tierName: '档位名称',
-    all: '所有请求',
-    context: '上下文',
-    maxLen: '上限',
-    otherwise: '（以上都不满足时）',
-    unitLabel: '这一档的计价方式',
-    unit: {
-      token: '按 token',
-      request: '按次'
-    },
-    removeTier: '删除档位',
-    addTier: '添加档位',
-    cacheWrite: '缓存写',
-    cacheOne: '一种价',
-    cacheSplit: '分 5 分钟 / 1 小时（Claude）',
-    images: '图片单独计价',
-    byInput: '按输入价',
-    byOutput: '按输出价',
-    rules: '加价规则',
-    rulesHint: '规则里的条件全部满足才命中；命中的规则倍数相乘后整单乘上去。',
-    noRules: '没有加价规则。',
-    addRule: '添加规则',
-    ruleName: '规则名称',
-    ruleDefault: '规则 {n}',
-    hitTimes: '命中后 ×',
-    multiplier: '倍数',
-    removeRule: '删除规则',
-    when: '当',
-    and: '且',
-    condSource: '条件来源',
-    condKey: '名称',
-    condOp: '比较',
-    source: {
-      param: '请求参数',
-      header: '请求头',
-      usage: '用量字段',
-      time: '时段'
-    },
-    op: {
-      eq: '等于',
-      ne: '不等于',
-      contains: '包含',
-      exists: '存在',
-      gt: '>',
-      gte: '≥',
-      lt: '<',
-      lte: '≤'
-    },
-    value: '值',
-    tz: '时区',
-    from: '从',
-    to: '到',
-    hour: '{h}:00',
-    addCond: '添加条件',
-    removeCond: '删除条件'
-  },
-  expr: {
-    hint: '结果是美元 / 百万 token 的系数：p*3 即输入每百万 3 美元。整单加价规则乘在后面，写成 * (条件 ? 倍数 : 1)。',
-    examples: '示例（点击填入）',
-    example: {
-      tiers: '长上下文两档',
-      priority: 'priority 整单 ×2',
-      minimum: '最低收 0.01'
-    },
-    vars: '变量',
-    var: {
-      p: '输入 token（不含缓存）',
-      c: '输出 token',
-      cr: '缓存读 token',
-      cc: '缓存写 token（5 分钟）',
-      cc1h: '缓存写 token（1 小时）',
-      img: '图片输入 token',
-      img_o: '图片输出 token',
-      len: '完整上下文长度（判断档位用）'
-    },
-    fns: '函数',
-    fn: {
-      tier: '标出命中的档位',
-      flat: '每次固定价',
-      param: '请求体字段',
-      header: '请求头',
-      u: '插件报的用量字段',
-      has: 'a 包含 b',
-      hour: '小时；另有 weekday 等',
-      math: '数学'
-    }
   },
   def: {
     perRequest: '{price} / 次',

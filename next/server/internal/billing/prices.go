@@ -186,7 +186,9 @@ func (s *Service) check(ctx context.Context, q *gorm.DB, mode string, config jso
 	if !json.Valid(config) {
 		return nil, core.InvalidFields(core.FieldError{Field: "config", Code: "invalid", Message: "must be a JSON object"})
 	}
-	src, err := expressionFor(mode, config, strings.TrimSpace(expression))
+	// Validate reads the text as typed, so issue positions match the editor;
+	// the price keeps it trimmed.
+	raw, err := expressionFor(mode, config, expression)
 	if err != nil {
 		if ce, ok := err.(*expr.ConfigError); ok {
 			return nil, core.ErrInvalidArgument.WithMessage(ce.Error()).WithDetails(map[string]any{
@@ -197,7 +199,8 @@ func (s *Service) check(ctx context.Context, q *gorm.DB, mode string, config jso
 		return nil, core.InvalidFields(core.FieldError{Field: "mode", Code: "invalid", Message: err.Error()})
 	}
 	st, _ := s.settingsIn(ctx, q)
-	rep := expr.Validate(src, expr.ValidateOptions{Facts: s.factsFor(), BigCostUSD: st.BigCostWarningUSD})
+	rep := expr.Validate(raw, expr.ValidateOptions{Facts: s.factsFor(), BigCostUSD: st.BigCostWarningUSD})
+	src := strings.TrimSpace(raw)
 	if !rep.OK {
 		return nil, core.ErrInvalidArgument.WithMessage("invalid price expression").WithDetails(map[string]any{
 			"expression": src, "errors": rep.Errors, "warnings": rep.Warnings,
@@ -427,7 +430,8 @@ func (s *Service) validatePrice(c *gin.Context) {
 	if len(in.Config) == 0 || string(in.Config) == "null" {
 		in.Config = json.RawMessage("{}")
 	}
-	src, err := expressionFor(in.Mode, in.Config, strings.TrimSpace(in.Expression))
+	// Untrimmed, so issue positions match the editor.
+	src, err := expressionFor(in.Mode, in.Config, in.Expression)
 	if err != nil {
 		issue := expr.Issue{Code: expr.CodeConfig, Message: map[string]string{"en": err.Error(), "zh": err.Error()}}
 		if ce, ok := err.(*expr.ConfigError); ok {

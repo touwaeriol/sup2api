@@ -1,13 +1,22 @@
 package expr
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+	"unicode"
+	"unicode/utf8"
+)
 
 // Issue is a validation finding shown to administrators. Message holds
 // {"en","zh"}; Detail carries technical context (compiler output, sample).
+// Line and Column (from 1, counted in characters) locate the problem in the
+// expression as submitted; zero when the issue has no position.
 type Issue struct {
 	Code    string            `json:"code"`
 	Message map[string]string `json:"message"`
 	Detail  string            `json:"detail,omitempty"`
+	Line    int               `json:"line,omitempty"`
+	Column  int               `json:"column,omitempty"`
 }
 
 // Issue codes.
@@ -55,4 +64,25 @@ func newIssue(code, detail string) Issue {
 
 func issuef(code, format string, args ...any) Issue {
 	return newIssue(code, fmt.Sprintf(format, args...))
+}
+
+// placed returns i located at character offset at of the body of src (src
+// without its version prefix and surrounding space). A negative offset
+// leaves i unplaced.
+func (i Issue) placed(src string, at int) Issue {
+	if at < 0 {
+		return i
+	}
+	_, body, _ := splitVersion(src)
+	start := len(strings.TrimRightFunc(src, unicode.IsSpace)) - len(body)
+	end := start
+	for ; at > 0 && end < start+len(body); at-- {
+		_, n := utf8.DecodeRuneInString(src[end:])
+		end += n
+	}
+	before := src[:end]
+	lineStart := strings.LastIndexByte(before, '\n') + 1
+	i.Line = strings.Count(before, "\n") + 1
+	i.Column = utf8.RuneCountInString(before[lineStart:]) + 1
+	return i
 }

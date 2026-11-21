@@ -415,10 +415,15 @@ function editDistance(a: string, b: string): number {
   return d[b.length]
 }
 
-/** First syntax problem the mock can place: an unbalanced bracket or an unknown name. */
-function syntaxIssue(src: string) {
+/**
+ * First syntax problem the mock can place: an unbalanced bracket or an
+ * unknown name. `src` is the body of `submitted` (no version prefix or
+ * surrounding space); the position is in `submitted`, as the server places it.
+ */
+function syntaxIssue(src: string, submitted: string) {
   const bare = src.replace(STR, (m) => '"' + ' '.repeat(m.length - 2) + '"')
-  const syntax = (at: number, detail: string) => ({ ...lineCol(src, at), code: 'syntax_error', message: msg('syntax error', '语法错误'), detail })
+  const start = submitted.trimEnd().length - src.length
+  const syntax = (at: number, detail: string) => ({ ...lineCol(submitted, start + at), code: 'syntax_error', message: msg('syntax error', '语法错误'), detail })
   const open: number[] = []
   for (let i = 0; i < bare.length; i++) {
     if (bare[i] === '(') open.push(i)
@@ -470,7 +475,7 @@ function validate(body: any) {
   let perMillion = 0
   let analysis: ReturnType<typeof analyze> | undefined
   const src = expression.trim().replace(/^v1\s*:/, '')
-  const syn = issue || !src ? null : syntaxIssue(src)
+  const syn = issue || !src ? null : syntaxIssue(src, expression)
   if (issue) errors.push({ code: 'invalid_config', message: msg(issue, `价格配置无效：${issue}`) })
   else if (!src) errors.push({ code: 'empty_expression', message: msg('expression is empty', '表达式为空') })
   else if (syn) errors.push(syn)

@@ -25,7 +25,7 @@ export function tokenTier(name: string, maxLen: number | null, prices: Prices): 
   return { name, max_len: maxLen, unit: 'token', ...prices }
 }
 
-/** Templates by i18n key (prices.token.preset.<key>); each makes fresh tiers. */
+/** Templates by key (named by prices.presets.item.<key>); each makes fresh tiers. */
 export const PRESETS: Record<string, () => TokenTier[]> = {
   single: () => [tokenTier('base', null, { p: 3, c: 15 })],
   claude: () => [tokenTier('base', null, { p: 3, c: 15, cr: 0.3, cc: 3.75, cc1h: 6 })],
@@ -41,6 +41,13 @@ export const PRESETS: Record<string, () => TokenTier[]> = {
   ],
   image: () => [tokenTier('base', null, { p: 5, c: 40, cr: 1.25, img: 10, img_o: 40 })]
 }
+
+/** Templates in labelled groups (prices.presets.group.<key>), as PricePresets shows them. */
+export type PresetGroup = { key: string; items: string[] }
+export const TIER_PRESET_GROUPS: PresetGroup[] = [
+  { key: 'fixed', items: ['single', 'claude', 'image'] },
+  { key: 'tiered', items: ['claudeLong', 'gptLong', 'three'] }
+]
 
 export function defaultTokenConfig(): TokenConfig {
   return { tiers: PRESETS.claude(), rules: [] }

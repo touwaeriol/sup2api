@@ -2,7 +2,9 @@
 // 2026-11-21 §2). The generator matches the server's (billing/expr) byte for
 // byte: the console shows what the server will store. Pure TS without imports.
 
-export type PriceMode = 'per_request' | 'per_token' | 'expression'
+/** The billing modes, in the order the console lists them. */
+export const PRICE_MODES = ['per_request', 'per_token', 'expression'] as const
+export type PriceMode = (typeof PRICE_MODES)[number]
 
 /** The token variables a price table shows. */
 export const TOKEN_VARS = ['p', 'c', 'cr', 'cc', 'cc1h'] as const

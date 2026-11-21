@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { api } from '@sub2api/host'
 import { SField, SIcon, SInput, SKeyValue, SSpinner } from '@sub2api/ui'
 import type { PricePreviewResult } from '@/api/types'
@@ -8,12 +9,12 @@ import { errorMessage } from '@/utils/errors'
 import { PRICE_KEYS } from './priceExpr'
 import BillingBreakdown from './BillingBreakdown.vue'
 
-// Token 估算器: token counts in, the cost of the price being edited out
+// The estimator: token counts in, the cost of the price being edited out
 // (POST /prices/preview, 600 ms after each change), with the tier it hit and
-// the rule groups that matched. 请求模拟 adds request parameters, headers,
-// usage fields and a time, for the rules that read them.
-// PROTOTYPE: new texts are Chinese literals until adopted.
+// the rule groups that matched. The request simulation adds request
+// parameters, headers, usage fields and a time, for the rules that read them.
 const props = defineProps<{ source: Record<string, unknown> | null; perRequest?: boolean }>()
+const { t } = useI18n()
 
 const usage = reactive<Record<string, number | null>>({ p: 100000, c: 2000, cr: 0, cc: 0, cc1h: 0, img: 0, img_o: 0 })
 const len = ref<number | null>(null)
@@ -73,45 +74,36 @@ watch(
 onBeforeUnmount(() => clearTimeout(timer))
 
 const matched = computed(() => (result.value?.rules || []).filter(r => r.matched))
-const MORE = [
-  { k: 'cc1h', label: '缓存写入（1 小时）' },
-  { k: 'img', label: '图片输入' },
-  { k: 'img_o', label: '图片输出' }
-]
+/** The token counts entered: the four common ones, all of them under "more". */
+const usageKeys = computed(() => (moreOpen.value ? PRICE_KEYS : PRICE_KEYS.slice(0, 4)))
 </script>
 
 <template>
   <section class="rounded-xl border border-line p-3 sm:p-4" data-testid="price-estimator">
-    <div class="text-sm font-medium text-fg">{{ perRequest ? '费用估算' : 'Token 估算器' }}</div>
-    <p class="mt-0.5 text-xs text-fg-muted">{{ perRequest ? '一次请求的费用（不含分组倍率）；在请求模拟里填参数、请求头或时间，看规则是否命中。' : '输入 token 数量预览费用（不含分组倍率）。' }}</p>
+    <div class="text-sm font-medium text-fg">{{ t(perRequest ? 'prices.estimator.titleRequest' : 'prices.estimator.title') }}</div>
+    <p class="mt-0.5 text-xs text-fg-muted">{{ t(perRequest ? 'prices.estimator.hintRequest' : 'prices.estimator.hint') }}</p>
 
     <template v-if="!perRequest">
-    <div class="mt-3 grid grid-cols-2 gap-x-3 gap-y-2.5">
-      <SField size="sm" label="输入 token"><SInput v-model="usage.p" size="sm" type="number" min="0" /></SField>
-      <SField size="sm" label="输出 token"><SInput v-model="usage.c" size="sm" type="number" min="0" /></SField>
-      <SField size="sm" label="缓存读取"><SInput v-model="usage.cr" size="sm" type="number" min="0" /></SField>
-      <SField size="sm" label="缓存写入"><SInput v-model="usage.cc" size="sm" type="number" min="0" /></SField>
-      <template v-if="moreOpen">
-        <SField v-for="m in MORE" :key="m.k" size="sm" :label="m.label"><SInput v-model="usage[m.k]" size="sm" type="number" min="0" /></SField>
-      </template>
-    </div>
-    <button type="button" class="mt-2 text-xs text-fg-muted hover:text-fg" @click="moreOpen = !moreOpen">{{ moreOpen ? '收起' : '更多用量（1 小时缓存、图片）' }}</button>
+      <div class="mt-3 grid grid-cols-2 gap-x-3 gap-y-2.5">
+        <SField v-for="k in usageKeys" :key="k" size="sm" :label="t(`prices.vars.${k}`)"><SInput v-model="usage[k]" size="sm" type="number" min="0" /></SField>
+      </div>
+      <button type="button" class="mt-2 text-xs text-fg-muted hover:text-fg" @click="moreOpen = !moreOpen">{{ moreOpen ? t('ui.collapse') : t('prices.estimator.more') }}</button>
 
-    <SField size="sm" label="指定输入上下文总长度" class="mt-2.5">
-      <SInput v-model="len" size="sm" type="number" min="0" :placeholder="`使用现有 token 总长度（${formatNumber(defaultLen)}）`" />
-    </SField>
+      <SField size="sm" :label="t('prices.estimator.len')" class="mt-2.5">
+        <SInput v-model="len" size="sm" type="number" min="0" :placeholder="t('prices.estimator.lenPlaceholder', { n: formatNumber(defaultLen) })" />
+      </SField>
     </template>
 
     <div class="mt-3 rounded-lg border border-info-200 bg-info-50/70 px-3 py-2.5 dark:border-info-900 dark:bg-info-950/30" data-testid="price-trial-result">
-      <div v-if="!source" class="text-xs text-fg-muted">先修好上面的问题再估算。</div>
+      <div v-if="!source" class="text-xs text-fg-muted">{{ t('prices.estimator.fixFirst') }}</div>
       <div v-else-if="error" class="text-xs text-danger-700 dark:text-danger-300">{{ error }}</div>
       <template v-else>
         <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
-          <span class="text-sm text-fg">预计成本：<b class="font-mono text-base">{{ result ? formatMoney(result.cost, 6) : '—' }}</b></span>
-          <span v-if="result?.tier" class="rounded-md bg-surface/80 px-1.5 py-0.5 text-xs text-fg-muted ring-1 ring-line">命中档位：<span class="font-mono text-fg">{{ result.tier }}</span></span>
-          <span v-for="(r, i) in matched" :key="i" class="rounded-md bg-surface/80 px-1.5 py-0.5 text-xs text-fg-muted ring-1 ring-line">规则 ×{{ r.multiplier }}</span>
+          <span class="text-sm text-fg">{{ t('prices.estimator.cost') }}<b class="font-mono text-base">{{ result ? formatMoney(result.cost, 6) : '—' }}</b></span>
+          <span v-if="result?.tier" class="rounded-md bg-surface/80 px-1.5 py-0.5 text-xs text-fg-muted ring-1 ring-line">{{ t('prices.estimator.tier') }}<span class="font-mono text-fg">{{ result.tier }}</span></span>
+          <span v-for="(r, i) in matched" :key="i" class="rounded-md bg-surface/80 px-1.5 py-0.5 text-xs text-fg-muted ring-1 ring-line">{{ t('prices.estimator.rule', { m: r.multiplier }) }}</span>
           <SSpinner v-if="loading" size="sm" class="ml-auto" />
-          <button v-else-if="result" type="button" class="ml-auto text-xs text-fg-muted hover:text-fg" @click="detailOpen = !detailOpen">{{ detailOpen ? '收起明细' : '明细' }}</button>
+          <button v-else-if="result" type="button" class="ml-auto text-xs text-fg-muted hover:text-fg" @click="detailOpen = !detailOpen">{{ t(detailOpen ? 'prices.estimator.hideDetail' : 'prices.estimator.detail') }}</button>
         </div>
         <BillingBreakdown v-if="result && detailOpen" class="mt-2" :breakdown="result.breakdown" :total="result.cost" :rules="result.rules" />
       </template>
@@ -119,14 +111,14 @@ const MORE = [
 
     <div class="mt-3 rounded-lg border border-line">
       <button type="button" class="flex w-full items-center gap-1.5 px-3 py-2 text-left text-sm text-fg" :aria-expanded="simOpen" @click="simOpen = !simOpen">
-        <SIcon :name="simOpen ? 'chevron-down' : 'chevron-right'" class="h-3.5 w-3.5 text-fg-muted" />请求模拟
-        <span class="text-xs text-fg-muted">请求体参数、请求头、用量字段、时间</span>
+        <SIcon :name="simOpen ? 'chevron-down' : 'chevron-right'" class="h-3.5 w-3.5 text-fg-muted" />{{ t('prices.estimator.simulate') }}
+        <span class="text-xs text-fg-muted">{{ t('prices.estimator.simulateHint') }}</span>
       </button>
       <div v-if="simOpen" class="space-y-3 border-t border-line px-3 py-3">
-        <SField size="sm" label="请求体参数" hint="值按 JSON 读，读不了按文本"><SKeyValue v-model="params" key-placeholder="service_tier" value-placeholder="priority" /></SField>
-        <SField size="sm" label="请求头"><SKeyValue v-model="headers" key-placeholder="anthropic-beta" value-placeholder="fast-mode" /></SField>
-        <SField size="sm" label="用量字段"><SKeyValue v-model="metrics" key-placeholder="service_tier" value-placeholder="priority" /></SField>
-        <SField size="sm" label="请求时间" hint="空着按现在"><SInput v-model="at" size="sm" type="datetime-local" /></SField>
+        <SField size="sm" :label="t('prices.rules.source.param')" :hint="t('prices.estimator.paramsHint')"><SKeyValue v-model="params" key-placeholder="service_tier" value-placeholder="priority" /></SField>
+        <SField size="sm" :label="t('prices.rules.source.header')"><SKeyValue v-model="headers" key-placeholder="anthropic-beta" value-placeholder="fast-mode" /></SField>
+        <SField size="sm" :label="t('prices.rules.source.usage')"><SKeyValue v-model="metrics" key-placeholder="service_tier" value-placeholder="priority" /></SField>
+        <SField size="sm" :label="t('prices.estimator.at')" :hint="t('prices.estimator.atHint')"><SInput v-model="at" size="sm" type="datetime-local" /></SField>
       </div>
     </div>
   </section>
