@@ -1,7 +1,7 @@
 // Price rules while they are edited: the rule a mode starts from, whether a
 // rule may be saved, and the unsaved rules of a model price table: what its
 // rows show meanwhile and what saving sends.
-import type { ListedPriceRule, ModelPriceRow, PriceDef, PriceRule, PriceRulePatch, PriceSource } from '@/api/pricing'
+import type { ModelPriceRow, PriceDef, PriceRule, PriceRulePatch, PriceSource } from '@/api/pricing'
 import { PRICE_KEYS, isSet, num, requestTier, simpleTier, singleTier, takesCustomPrice, type TierUnit } from '@/views/prices/priceExpr'
 import { applyRule, priceCells, sameRate, validRate } from './pricingFormat'
 import { withDraft } from './drafts'
@@ -9,7 +9,7 @@ import { withDraft } from './drafts'
 /** The rule of a row a table edits: the group's own, or that of the segment asked for. */
 export type RuleScope = 'group' | 'segment'
 
-export const ruleOf = (row: ModelPriceRow, scope: RuleScope): ListedPriceRule | null => (scope === 'segment' ? row.segment_rule : row.group_rule) ?? null
+export const ruleOf = (row: ModelPriceRow, scope: RuleScope): PriceRule | null => (scope === 'segment' ? row.segment_rule : row.group_rule) ?? null
 
 export type CustomRule = Extract<PriceRule, { kind: 'custom' }>
 
@@ -79,13 +79,13 @@ export function sameRule(a: PriceRule | null, b: PriceRule | null): boolean {
 
 /**
  * A row as it reads with `rule` in `scope`: the list price and its source
- * follow the first rule in effect, as the server resolves them. An inactive
- * rule is skipped, and without a global price no rule applies.
+ * follow the first rule there is, as the server resolves them; without a
+ * global price no rule applies.
  */
 export function withRule(row: ModelPriceRow, scope: RuleScope, rule: PriceRule | null): ModelPriceRow {
   const next: ModelPriceRow = scope === 'segment' ? { ...row, segment_rule: rule } : { ...row, group_rule: rule }
-  const levels: Array<[PriceSource, ListedPriceRule | null | undefined]> = row.base ? [['segment', next.segment_rule], ['group', next.group_rule]] : []
-  const [source, applied] = levels.find(([, r]) => r && !r.inactive) ?? ['global', null]
+  const levels: Array<[PriceSource, PriceRule | null | undefined]> = row.base ? [['segment', next.segment_rule], ['group', next.group_rule]] : []
+  const [source, applied] = levels.find(([, r]) => r) ?? ['global', null]
   return { ...next, list_price: applyRule(row.base, applied ?? null), source }
 }
 

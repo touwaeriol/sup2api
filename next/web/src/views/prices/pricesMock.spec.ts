@@ -107,10 +107,12 @@ describe('prices in the mock', () => {
     expect(await tierAt('2026-01-01T15:30:00Z', 1000)).toBe('base')
   })
 
-  it('leave a custom price to a visual price of one tier without rules, priced as the global one is', async () => {
-    const save = (model: string, config: unknown) =>
-      call('PUT', '/groups/1/model-prices', { items: [{ model, rule: { kind: 'custom', mode: 'visual', config } }] })
-    expect((await save('gpt-4o', singleTier({ p: 1, c: 2 }))).status).toBe(200)
-    expect((await save('gpt-4o', { tiers: [{ name: 'a', unit: 'request', price: 1 }], rules: [] })).status).toBe(400)
+  it('take a custom price of any shape, visual or expression, checked as a global price is', async () => {
+    const save = (rule: Record<string, unknown>) => call('PUT', '/groups/1/model-prices', { items: [{ model: 'gpt-4o', rule: { kind: 'custom', ...rule } }] })
+    expect((await save({ mode: 'visual', config: singleTier({ p: 1, c: 2 }) })).status).toBe(200)
+    expect((await save({ mode: 'visual', config: { tiers: [{ name: 'a', unit: 'request', price: 1 }], rules: [] } })).status).toBe(200)
+    expect((await save({ mode: 'expression', expression: 'tier("base", p*2 + c*4)' })).status).toBe(200)
+    expect((await save({ mode: 'expression', expression: 'tier("base", p*' })).status).toBe(400)
+    expect((await save({ mode: 'per_token', config: {} })).status).toBe(400)
   })
 })

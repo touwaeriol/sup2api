@@ -3,7 +3,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { i18n } from '@/i18n'
 import type { GroupModelPrices, ModelPriceRow, PriceDef, SegmentRef } from '@/api/pricing'
 import ModelPriceTable from './ModelPriceTable.vue'
-import { requestTier, singleTier } from '@/views/prices/priceExpr'
+import { singleTier } from '@/views/prices/priceExpr'
 
 const mocks = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn(), toast: vi.fn() }))
 vi.mock('@sub2api/host', async (original) => ({ ...(await original<typeof import('@sub2api/host')>()), api: { get: mocks.get, put: mocks.put } }))
@@ -163,17 +163,6 @@ describe('model price table', () => {
     await w.vm.save()
     expect(mocks.put.mock.calls[0][1].items).toMatchObject([{ segment_id: 7, model: 'gpt-4o', rule: { kind: 'custom', mode: 'visual', config: singleTier({ p: 1, c: 15 }) } }])
     expect(mocks.put.mock.calls[0][2]).toEqual({ query: { segment_id: 7 } })
-  })
-
-  it('marks a rule the server skips because the billing mode of the global price changed', async () => {
-    const stale = { kind: 'custom', mode: 'visual', config: requestTier(0.002), inactive: true } as const
-    mocks.get.mockResolvedValue(prices([...groupView().models, { model: 'gemini', base: price(0.3, 2.5), group_rule: stale, segment_rule_count: 0, list_price: price(0.3, 2.5), source: 'global' }]))
-    const { w, row } = await render({ groupId: 3, editable: true })
-    const mark = row('gemini').get('[data-testid="model-price-inactive"]')
-    expect(mark.text()).toBe('Not in effect')
-    expect(mark.attributes('title')).toContain('The billing mode changed')
-    expect(row('gemini').get('[data-testid="model-price-source"]').text()).toBe('Global')
-    expect(w.findAll('[data-testid="model-price-inactive"]')).toHaveLength(1)
   })
 
   it('explains itself instead of loading for a group not saved yet, or one without models', async () => {

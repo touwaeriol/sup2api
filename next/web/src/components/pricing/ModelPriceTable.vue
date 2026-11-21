@@ -6,7 +6,6 @@ import { SBadge, SEmpty, SField, SHint, SInput, SRowAction, SSwitch, STable, typ
 import type { GroupModelPrices, ModelPriceRow, PriceRule, PriceSource, SegmentRef } from '@/api/pricing'
 import ModelBadge from '@/components/platform/ModelBadge.vue'
 import PriceRuleEditor from './PriceRuleEditor.vue'
-import RuleInactiveBadge from './RuleInactiveBadge.vue'
 import { priceCells } from './pricingFormat'
 import { draftedRow, ruleOf, rulePatches, setRuleDraft, validRule, type DraftedRow, type RuleScope } from './ruleDrafts'
 import { priceLabel, ruleText } from './ruleText'
@@ -51,14 +50,13 @@ watch([() => props.groupId, () => props.segment?.id], load, { immediate: true })
 
 function viewRow(saved: ModelPriceRow) {
   const row = draftedRow(saved, scope.value, drafts.value)
-  // Inactive: a rule the server skips, a custom price in another mode than the global price has now.
-  return { ...row, tiers: priceCells(row.base).tiers, invalid: row.dirty && !validRule(ruleOf(row, scope.value)), inactive: !!(row.group_rule?.inactive || row.segment_rule?.inactive) }
+  return { ...row, tiers: priceCells(row.base).tiers, invalid: row.dirty && !validRule(ruleOf(row, scope.value)) }
 }
 const rows = computed(() => (data.value?.models ?? []).map(viewRow))
 const shown = computed(() => {
   const s = q.value.trim().toLowerCase()
-  // A rule being removed keeps its row in sight until it is saved; so does one that is not in effect.
-  return rows.value.filter((r) => (!s || r.model.toLowerCase().includes(s)) && (!onlyRuled.value || r.source !== 'global' || r.dirty || r.inactive))
+  // A rule being removed keeps its row in sight until it is saved.
+  return rows.value.filter((r) => (!s || r.model.toLowerCase().includes(s)) && (!onlyRuled.value || r.source !== 'global' || r.dirty))
 })
 
 /** The rule columns, and what a model without a rule of that level follows. */
@@ -157,7 +155,6 @@ defineExpose({ save, dirty })
         <template v-for="level in levels" :key="level.scope" #[`cell-${level.scope}`]="{ row }">
           <template v-if="ruleOf(row, level.scope)">
             <span class="text-xs" :data-testid="`model-price-${level.scope}-rule`">{{ ruleText(t, ruleOf(row, level.scope)) }}</span>
-            <RuleInactiveBadge v-if="ruleOf(row, level.scope)?.inactive" class="ml-1.5" data-testid="model-price-inactive" />
           </template>
           <span v-else class="text-xs text-fg-muted" :data-testid="`model-price-${level.scope}-rule`">{{ level.follows }}</span>
           <SHint v-if="!segment && row.segment_rule_count" size="xs" data-testid="model-price-segment-rules">{{ t('pricing.table.segmentRules', row.segment_rule_count) }}</SHint>

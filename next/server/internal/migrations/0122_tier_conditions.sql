@@ -9,7 +9,8 @@
 --   2. per_request prices {price, rules?} become visual with one request
 --      tier: {"tiers": [{"name": "base", "unit": "request", "price": price}],
 --      "rules": rules, or []};
---   3. price_rules.mode may be visual only.
+--   3. price_rules.mode may be visual or expression, as a global price (a
+--      custom price is written as one, CONTRACTS §97).
 --
 -- expression and expr_hash stay: the new configs generate the same text
 -- (expr.Generate, tested). A second run writes nothing: no price is
@@ -47,7 +48,7 @@ UPDATE model_prices SET mode = 'visual', config = tier_conditions_visual(mode, c
 -- 3, with 1 and 2 for custom prices.
 ALTER TABLE price_rules DROP CONSTRAINT IF EXISTS price_rules_mode_check;
 UPDATE price_rules SET mode = 'visual', config = tier_conditions_visual(mode, config) WHERE mode IN ('per_token', 'per_request');
-ALTER TABLE price_rules ADD CONSTRAINT price_rules_mode_check CHECK (mode IN ('visual'));
+ALTER TABLE price_rules ADD CONSTRAINT price_rules_mode_check CHECK (mode IN ('visual', 'expression'));
 
 DROP FUNCTION tier_conditions_visual(text, jsonb);
 DROP FUNCTION tier_conditions_tiers(jsonb);

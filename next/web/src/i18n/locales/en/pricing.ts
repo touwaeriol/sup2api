@@ -27,8 +27,6 @@ export default {
     requestInvalid: 'Enter a price of 0 or more',
     multiplierOnly: 'The global price of this model is not a visual price of one tier without surcharge rules (it is an expression, or has several tiers or surcharge rules): only a multiplier applies.',
     noBase: 'This model has no global price yet. Set one under Model prices first.',
-    inactive: 'Not in effect',
-    inactiveHint: 'The billing mode changed, so this rule is not in effect: the global price is billed another way now and this custom price no longer fits it. Set the rule again or clear it.',
     requestPrice: 'Price'
   },
   price: {

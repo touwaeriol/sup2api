@@ -6,8 +6,8 @@
 import { fail, noContent, on, paginate, type MockHandler, type MockRequest, type MockResult } from './router'
 import { caller, hasPerm } from './core'
 import { groupPlatforms } from './accounts'
-import { globalPrice, money, priceCost, pricedModels, type PriceDef } from './billing'
-import { PRICE_KEYS, compactTokenConfig, simpleTier, takesCustomPrice } from '../src/views/prices/priceExpr'
+import { configPrice, globalPrice, money, priceCost, pricedModels, validate, type PriceDef } from './billing'
+import { compactTokenConfig } from '../src/views/prices/priceExpr'
 import { groupModels, groups, invalid, match, myGroups, offeredRules, userOut, users, type MockGroup, type MockUser } from './resources'
 import {
   accessOf,
@@ -246,31 +246,14 @@ route('PUT', '/groups/:id/segments', 'group:manage', onGroup((g, req) => {
 
 // ------------------------------------------------------------------ model prices
 
-/**
- * The prices a custom rule may set by the unit of its one tier; the first
- * `required` of them must be set. The console checks a rule by the same
- * table before it saves (customFields in src/components/pricing/ruleDrafts.ts):
- * keep the two alike.
- */
-const CUSTOM_PRICES = {
-  request: { keys: ['price'], required: 1 },
-  token: { keys: PRICE_KEYS, required: 2 }
-}
-
-/** Why a rule cannot be saved over the global price `base`; null when it can. */
+/** Why a rule cannot be saved over the global price `base`; null when it can. A custom price is checked as a global price is, whatever `base` is. */
 function ruleError(rule: any, base: PriceDef | null): string | null {
   if (!base) return 'the model has no global price'
   if (rule?.kind === 'multiplier') return validRate(rule.multiplier) ? null : `multiplier must be 0 or more and ${RATE_LIMITS}`
   if (rule?.kind !== 'custom') return 'rule must be a multiplier or a custom price'
-  if (!takesCustomPrice(base.mode, base.config)) return 'an expression price, or a price with tiers or rules, takes a multiplier only'
-  const row = rule.mode === 'visual' ? simpleTier(rule.config) : null
-  if (!row) return 'a custom price is a visual price of one tier without rules'
-  const unit = row.unit === 'request' ? 'request' : 'token'
-  if (unit !== (simpleTier(base.config)?.unit ?? 'token')) return 'a custom price is priced as the global price: by tokens or by the request'
-  const { keys, required } = CUSTOM_PRICES[unit]
-  const price = (k: string) => (row as Record<string, any>)[k] ?? null
-  if (keys.some((k) => price(k) !== null && !(Number.isFinite(price(k)) && price(k) >= 0))) return 'prices must be non-negative numbers'
-  return keys.slice(0, required).every((k) => price(k) !== null) ? null : `${keys.slice(0, required).join(', ')} required`
+  if (rule.mode !== 'visual' && rule.mode !== 'expression') return 'a custom price is visual or expression'
+  const v = validate(rule)
+  return v.errors.length ? `invalid custom price: ${v.errors[0].message.en}` : null
 }
 
 /** Why an item of PUT /groups/:id/model-prices cannot be saved; removing a rule always can. */
@@ -281,11 +264,13 @@ function rulePatchError(g: MockGroup, item: any): string | null {
   return ruleError(item.rule, globalPrice(item.model))
 }
 
-/** A rule as it is stored: a decimal string, or the prices of its mode only. */
+/** A rule as it is stored: a decimal string, or a price with its expression (generated from the config of a visual one). */
 function storedRule(rule: any): PriceRule | null {
   if (rule == null) return null
   if (rule.kind === 'multiplier') return { kind: 'multiplier', multiplier: String(rule.multiplier) }
-  return { kind: 'custom', mode: 'visual', config: compactTokenConfig(rule.config) }
+  if (rule.mode === 'expression') return { kind: 'custom', mode: 'expression', config: {}, expression: String(rule.expression).trim() }
+  const config = compactTokenConfig(rule.config)
+  return { kind: 'custom', mode: 'visual', config, expression: configPrice('visual', config).expression }
 }
 
 /** A handler of /groups/:id/model-prices[?segment_id=]: `s` is the segment asked for (null without one); 400 when segment_id is no positive integer, 404 when it does not exist. */

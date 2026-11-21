@@ -5,7 +5,6 @@ import (
 
 	"github.com/shopspring/decimal"
 
-	"github.com/Sub2API-Devs/sup2api/next/server/internal/billing/expr"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 )
 
@@ -31,7 +30,7 @@ func listPrice(base PriceDef, rule *storedRule) PriceDef {
 	case rule == nil:
 		return base
 	case rule.Kind == core.PriceRuleCustom:
-		return PriceDef{Mode: rule.Mode, Config: rule.Config, Expression: rule.expression}
+		return PriceDef{Mode: rule.Mode, Config: rule.Config, Expression: rule.Expression}
 	}
 	scale := rule.scale
 	base.Multiplier = &scale
@@ -41,34 +40,6 @@ func listPrice(base PriceDef, rule *storedRule) PriceDef {
 // listPrice returns the list price the first rule that applies makes of the
 // global price base, and where it comes from.
 func (l ruleLevels) listPrice(base PriceDef) (PriceDef, string) {
-	rule, source := l.applied(base.customShape())
+	rule, source := l.applied()
 	return listPrice(base, rule), source
-}
-
-// customShape is the shape of the custom price a price rule may set over p:
-// the unit (token or request) of a visual price of one tier without a
-// condition and without rules. It is "" when only a multiplier applies: an
-// expression price, or a price with several tiers or rules (CONTRACTS §131.4).
-func (p PriceDef) customShape() string {
-	if p.Mode != expr.ModeVisual {
-		return ""
-	}
-	t, ok := singleTier(p.Config)
-	switch {
-	case !ok:
-		return ""
-	case t.Unit == "":
-		return expr.UnitToken
-	}
-	return t.Unit
-}
-
-// singleTier returns the tier of a visual config that has one tier, without
-// a condition, and no rules.
-func singleTier(config json.RawMessage) (expr.TierConfig, bool) {
-	var c expr.VisualConfig
-	if json.Unmarshal(config, &c) != nil || len(c.Tiers) != 1 || len(c.Rules) != 0 || c.Tiers[0].When != nil {
-		return expr.TierConfig{}, false
-	}
-	return c.Tiers[0], true
 }

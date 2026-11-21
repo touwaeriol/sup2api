@@ -2,9 +2,8 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { SAlert, SBadge, SGrid, SHint } from '@sub2api/ui'
-import type { ListedPriceRule, PriceDef, PricingQuote } from '@/api/pricing'
+import type { PriceDef, PriceRule, PricingQuote } from '@/api/pricing'
 import { formatMoney } from '@/utils/format'
-import RuleInactiveBadge from './RuleInactiveBadge.vue'
 import SegmentBadge from './SegmentBadge.vue'
 import { applyRule, priceBrief, priceCells, rateText } from './pricingFormat'
 import { priceLevels, rateLevels, type LevelState, type QuoteLevel } from './quoteLevels'
@@ -28,8 +27,6 @@ interface LevelRow {
   /** What the level is set to, or what it says of having no setting. */
   text: string
   state: LevelState
-  /** A rule that is set but not in effect. */
-  inactive?: boolean
 }
 interface Chain {
   key: 'price' | 'rate'
@@ -39,7 +36,7 @@ interface Chain {
 }
 
 /** A level of the list price: the global price itself, or a rule of the segment or of the group; a multiplier comes with the price it makes of the global one. */
-function priceLevelText(v: ListedPriceRule | PriceDef): string {
+function priceLevelText(v: PriceRule | PriceDef): string {
   if (!('kind' in v)) return priceLabel(t, v)
   const price = v.kind === 'multiplier' ? applyRule(props.quote.base, v) : null
   return priceBrief(price) ? `${ruleText(t, v)} = ${priceLabel(t, price)}` : ruleText(t, v)
@@ -57,7 +54,7 @@ const names = computed(() => ({
 
 function chain<V>(key: Chain['key'], levels: QuoteLevel<string, V>[], text: (v: V) => string, note?: string): Chain {
   const unset = (level: string) => t(UNSET[`${key}.${level}`] ?? 'pricingTools.quote.unset')
-  const rows = levels.map((l) => ({ key: l.key, state: l.state, inactive: l.inactive, label: t(`pricingTools.quote.${key}.${l.key}`, names.value), text: l.value === null ? unset(l.key) : text(l.value) }))
+  const rows = levels.map((l) => ({ key: l.key, state: l.state, label: t(`pricingTools.quote.${key}.${l.key}`, names.value), text: l.value === null ? unset(l.key) : text(l.value) }))
   return { key, rows, note }
 }
 const tieredNote = computed(() => (priceCells(props.quote.list_price).tiers > 1 ? t('pricingTools.quote.price.tiered') : undefined))
@@ -95,7 +92,6 @@ const ROW_CLASS: Record<LevelState, string> = {
             <span class="min-w-0 truncate" :title="row.label">{{ row.label }}</span>
             <span class="flex shrink-0 items-center gap-2">
               <span :class="row.state === 'unset' ? '' : 'font-mono'">{{ row.text }}</span>
-              <RuleInactiveBadge v-if="row.inactive" data-testid="price-quote-inactive" />
               <SBadge v-if="row.state === 'applies'" tone="primary" size="xs">{{ t('pricingTools.quote.applies') }}</SBadge>
             </span>
           </li>

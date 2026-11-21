@@ -6580,10 +6580,10 @@ kind: users | groups | api-keys | accounts | models | proxies
 | 规则 | 含义 | 约束 |
 |---|---|---|
 | 按倍数 `multiplier` | 标价 = 全局价 × N，全局价变化时跟着变 | N 不小于 0、小于 1000000、最多 4 位小数。0 表示免费。1 也合法：专属价设成 ×1 表示“这个用户组按全局价，不吃分组内定价” |
-| 自定义价 `custom` | 一个固定的价格，不随全局价变化 | 沿用全局价的计费方式：按 token（单档，`p`、`c`、`cr`、`cc`、`cc1h`，其中 `p`、`c` 必填）或按次（`price`）。全局价是表达式计费、或分档 / 带加价规则 / 按次计的档位的按 token 计费的模型只能用按倍数的规则（§131） |
+| 自定义价 `custom` | 一个自己的价格，取代全局价，不随全局价变化 | 和全局价一样写（可视化或表达式，任意档位、条件、加价规则），校验也与全局价相同；与全局价是什么形状无关（§131.4） |
 
 - 规则建立在全局价之上。模型没有启用的全局价时不能计费，规则不生效，请求被拒（§17.3）。
-- 自定义价的计费方式与全局价**现在的**计费方式不同时（规则保存之后，全局价被改成了另一种方式），这条规则**失效**：解析时跳过它，往下一层找。规则不会被删除，接口里它带 `inactive: true`（97.6）。
+- 规则没有失效一说：全局价之后怎么改，自定义价照样取代它，按倍数的规则照样乘在它上面（2026-11-22 起；之前计费方式不同的自定义价会失效、带 `inactive`）。
 - 规则只能设在分组提供的模型上；删除规则不受这个限制。
 
 **分组提供的模型**：分组内未删除的账号声明的模型；只要有一个账号没有声明模型（不限模型），再加上全部已启用全局价的模型；最后经分组的模型名单（白名单或黑名单）过滤。定价表、`GET /groups` 的 `model_count` 和 `?model=`、价格试算、`GET /me/prices?group_id=` 用的都是这个范围。
@@ -6600,7 +6600,7 @@ kind: users | groups | api-keys | accounts | models | proxies
 |---|---|
 | `segments` | `kind`（`named` \| `personal`，默认 `named`）；`name varchar(100)`（个人专属存空串，接口里给成员的邮箱）；`description`；`discount numeric(10,4)`（默认 1，CHECK `> 0`）；`is_default`；`user_id`（个人专属的唯一成员，引用 `users`，`ON DELETE CASCADE`）；`origin_id`（个人专属原来所在的用户组，`ON DELETE SET NULL`）；`created_at`、`updated_at`。约束 `segments_personal_user`（`kind = 'personal'` 当且仅当 `user_id` 非空）、`segments_default_named`（默认用户组必须是命名用户组）。唯一索引 `segments_name_uq`（`lower(name)`，只对命名用户组）、`segments_user_uq`（`user_id`，只对个人专属：每个用户至多一个）、`segments_default_uq`（至多一个默认用户组） |
 | `segment_groups` | 主键 `(segment_id, group_id)`，两列都 `ON DELETE CASCADE`；`granted`（授权，只对私有分组有意义）；`rate_override numeric(10,4)`（专属倍率，NULL = 跟随，CHECK `>= 0`）；`updated_at`。索引 `segment_groups_group_idx (group_id)`。既没有授权也没有专属倍率的行不保留 |
-| `price_rules` | `group_id`（`ON DELETE CASCADE`）；`segment_id`（NULL = 分组内定价，非空 = 专属价，`ON DELETE CASCADE`）；`model text`（迁移 0108 前是 `varchar(200)`）；`kind`（`multiplier` \| `custom`）；`multiplier numeric(10,4)`（CHECK `>= 0`）；`mode`（`visual`，迁移 0122 前是 `per_token` \| `per_request`）、`config jsonb`、`expression`、`expr_hash`（自定义价的表达式，保存规则时由 `expr.Generate(mode, config)` 生成）；`updated_by`、`updated_at`。约束 `price_rules_kind`：按倍数的规则只有 `multiplier`，自定义价只有 `mode`、`config` 和非空的 `expression`。唯一索引 `price_rules_group_uq (group_id, model) WHERE segment_id IS NULL`（部分索引）、`price_rules_segment_uq (group_id, segment_id, model)`（不带条件；NULL 互不相等，所以只约束专属价，同时是按分组查规则的索引）；索引 `price_rules_segment_idx (segment_id)` |
+| `price_rules` | `group_id`（`ON DELETE CASCADE`）；`segment_id`（NULL = 分组内定价，非空 = 专属价，`ON DELETE CASCADE`）；`model text`（迁移 0108 前是 `varchar(200)`）；`kind`（`multiplier` \| `custom`）；`multiplier numeric(10,4)`（CHECK `>= 0`）；`mode`（`visual` \| `expression`，与全局价相同；迁移 0122 前是 `per_token` \| `per_request`）、`config jsonb`、`expression`、`expr_hash`（自定义价的表达式：可视化的保存规则时由 `expr.Generate(mode, config)` 生成，表达式的是手写的原文去掉首尾空白，`config` 为 `{}`）；`updated_by`、`updated_at`。约束 `price_rules_kind`：按倍数的规则只有 `multiplier`，自定义价只有 `mode`、`config` 和非空的 `expression`。唯一索引 `price_rules_group_uq (group_id, model) WHERE segment_id IS NULL`（部分索引）、`price_rules_segment_uq (group_id, segment_id, model)`（不带条件；NULL 互不相等，所以只约束专属价，同时是按分组查规则的索引）；索引 `price_rules_segment_idx (segment_id)` |
 | `users.segment_id` | 非空，引用 `segments`，默认值 `default_segment_id()`（返回默认用户组的 id）：任何不写这一列的 `INSERT INTO users`（旧二进制、插件、测试）都进默认用户组。索引 `users_segment_idx`。这个外键没有级联，有成员的用户组在库里删不掉，删除接口先把成员移回默认用户组。“默认用户组不能删”是应用层的规则，数据库层只有这个外键挡着：成员全部移走之后，手工 `DELETE` 是删得掉的，之后 `default_segment_id()` 返回 NULL，新用户插不进去。手工改库不要删它 |
 | `usage_logs.base_cost` | `numeric(20,8)`，可空、没有默认值（不重写表）：原价（97.5）。0096 之前的行是 NULL |
 
@@ -6641,9 +6641,9 @@ kind: users | groups | api-keys | accounts | models | proxies
 | 自定义价 | `group` 或 `segment` | 规则自己的（保存规则时生成并存下，同时写进 `model_price_history`） | nil | 全局价的 `{Expression, ExprHash}`，用来算原价 |
 
 - `Source` 为空就是全局价，常量 `core.PriceSourceGlobal`（`global`）只用在给人看的接口里：定价表的 `source`、试算的 `price_source`、`/me/prices?group_id=` 的 `source` 在全局价时输出 `global`；冻结到使用记录时这个字段省略（97.4）。
-- `ID` 和 `VideoOnly` 始终取全局价的，`usage_logs.price_id` 一直指向全局价那一行。命中自定义价的记录，`usage_logs.expr_hash` 是规则表达式的哈希，在 `model_price_history` 里查得到。
+- `ID` 始终取全局价的，`usage_logs.price_id` 一直指向全局价那一行。`VideoOnly`、`PerRequest` 取生效表达式的：命中自定义价时按规则自己的表达式算（`billing.traitsOf`，读规则时算一次），按倍数的规则不改变它们。命中自定义价的记录，`usage_logs.expr_hash` 是规则表达式的哈希，在 `model_price_history` 里查得到。
 - **规则倍数与倍率只在一处相乘**：`func (r *PriceRule) Multiplier(rate decimal.Decimal) decimal.Decimal`（`rate × Scale`，`r` 或 `Scale` 为 nil 时就是 `rate`）。传给 `Quote` 的 `RateMultiplier` 都经过它：预扣（`billing/additional.go` 的 `quoteRecord`）和结算、预留、对账（`usage/settler.go` 的 `priceOne`）。
-- 网关：主模型和引用模型（`prepareBilling`、`prepareReferencedPrices`）的 `Resolve` 都带分组和用户组；写使用记录时把 `SegmentID`、`RateSource` 记到 `core.UsageRecord`。计费方式准入和价格入参的捕获不变，它们只看 `Mode`、`VideoOnly` 和 `Expression`。自定义价只存在于按 token 或按次的全局价之上，这两种全局价的表达式不读请求参数，所以 `Base` 不需要另外捕获入参。
+- 网关：主模型和引用模型（`prepareBilling`、`prepareReferencedPrices`）的 `Resolve` 都带分组和用户组；写使用记录时把 `SegmentID`、`RateSource` 记到 `core.UsageRecord`。计费方式准入看 `BillingType()`（`Mode`、`VideoOnly`、`PerRequest`）。价格入参的捕获（`Pricer.Inputs`）取生效表达式和 `Base` 两条表达式读的请求参数、请求头的并集：自定义价可以取代任何全局价，结算时还要用同一份入参再算一次全局价得出原价。原价只用于展示：全局价表达式算不出（编译或求值出错）时原价记成标价费用、打一条警告日志，照常扣费，不让记录进 `failed`（`usage/settler.go` 的 `priceOne`）。
 - 插件的只读报价 `PriceModelUsage`（`billing/usage_quote.go`）仍按全局价、倍率 1。`POST /prices/preview` 的 `group_id` 保持原意，只取分组默认倍率。
 - WebSocket 连接在整个生命周期里复用升级时的鉴权结果（分组倍率原来也是这样）：连接期间用户组或倍率设置变了，倍率要到重连才变；标价每一轮重新解析。
 
@@ -6709,9 +6709,9 @@ kind: users | groups | api-keys | accounts | models | proxies
 | `Segment` | `SegmentRef` 加 `description`、`discount`（全场折扣，`"1"` = 没有）、`is_default`、`member_count`、`granted_groups: [{id, name}]`（被授权的私有分组）、`rate_override_count`（设了专属倍率的分组数）、`price_rule_count`（专属价的条数，所有分组合计；只算各分组现在提供的模型上的，口径见下面 GET `/groups` 一行）、`created_at`；个人专属另有 `user: {id, email, display_name}` 和 `origin: SegmentRef \| null`（原来所在的用户组，已被删除时为 `null`） |
 | `EffectiveRate` | `{value, source, group_default, discount}`：实际倍率、它的来源（`segment` \| `discount` \| `group`），以及算它用到的分组默认倍率和全场折扣 |
 | `SegmentGroupSetting` | 一个用户组在一个分组的设置：`segment: SegmentRef`、`group: {id, name, description, status, visibility, rate_multiplier, platforms?}`、`accessible`（公开或已授权）、`granted`（显式的授权，只对私有分组有意义）、`rate_override`（专属倍率，`null` = 跟随）、`rate: EffectiveRate`、`price_rule_count`（这个用户组在这个分组的专属价条数，只算分组现在提供的模型上的）、`member_count`（用户组的成员数，个人专属是 1） |
-| `PriceRule` | `{kind: "multiplier", multiplier}` 或 `{kind: "custom", mode, config}`（`mode` 是 `visual`；`config` 是一档、没有条件和规则、计价方式与全局价那一档相同的 `{tiers, rules}`：按 token 的带 `p` 和 `c`，按次的带 `price`，§131.4）；规则失效（97.1）时另有 `inactive: true` |
+| `PriceRule` | `{kind: "multiplier", multiplier}` 或 `{kind: "custom", mode, config, expression}`：自定义价与 `/prices` 的同名字段写法相同（`mode` 是 `visual` 或 `expression`；可视化的 `config` 是任意 `{tiers, rules}`，`expression` 不读、返回时是生成的那条；表达式的 `config` 省略或 `{}`，`expression` 必填），§131.4。返回时 `expression` 总在 |
 | `PriceDef` | `{mode, config, expression, multiplier?}`：一个价格。前三个字段与 `/prices` 的同名字段相同。`multiplier`（十进制字符串）只在“这个标价来自按倍数的规则”时出现，规则是 ×0、×1 时也照常出现，含义是：标价 = 这个价格 × `multiplier`。全局价（`base`）和自定义价给出的标价不带它 |
-| `ModelPriceRow` | 分组提供的一个模型：`model`、`base: PriceDef \| null`（全局价，`null` = 没有，不能计费）、`group_rule: PriceRule \| null`（分组内定价）、`segment_rule`（带 `segment_id` 查询时：该用户组的专属价）或 `segment_rule_count`（不带时：在这个模型上有专属价的用户组数）、`list_price: PriceDef \| null`（先命中的那条规则作用后的标价，见下）、`source`（`segment` \| `group` \| `global`）。模型没有全局价时 `list_price` 为 `null`、`source` 为 `global`，两条规则仍照配置返回，不带 `inactive`（失效是对着全局价现在的计费方式判断的） |
+| `ModelPriceRow` | 分组提供的一个模型：`model`、`base: PriceDef \| null`（全局价，`null` = 没有，不能计费）、`group_rule: PriceRule \| null`（分组内定价）、`segment_rule`（带 `segment_id` 查询时：该用户组的专属价）或 `segment_rule_count`（不带时：在这个模型上有专属价的用户组数）、`list_price: PriceDef \| null`（先命中的那条规则作用后的标价，见下）、`source`（`segment` \| `group` \| `global`）。模型没有全局价时 `list_price` 为 `null`、`source` 为 `global`，两条规则仍照配置返回 |
 | `GroupModelPrices` | `{group: {id, name}, segment?: SegmentRef, rate: EffectiveRate, models: ModelPriceRow[]}`；`rate` 是所查用户组在该分组的倍率，没带用户组时是分组默认倍率 |
 
 `list_price` 是给人看的标价，由 `billing` 里的一个函数（`listPrice`）从全局价和先命中的那条规则得出。三种情况：
@@ -6755,7 +6755,7 @@ kind: users | groups | api-keys | accounts | models | proxies
 | PUT `/groups/:id/model-prices?segment_id=` `{items: [{segment_id, model, rule}]}` | `group:manage` | 每项写一条规则：`segment_id` 为 `null` 是分组内定价，否则是该用户组的专属价；`rule` 为 `null` 删除这条规则。整批一个事务，任何一项不合法整批不改（400，字段 `items.<i>`）；返回最新的 `GroupModelPrices`（查询串的 `segment_id` 只决定返回哪个视图）。校验见下；调用者本人在该用户组内（默认用户组除外）409，超管例外（见表后“自己所在用户组的设置”） |
 | POST `/pricing/quote` | `price:read` 且 `group:read`；带 `user_id` 还要 `user:read`，带 `segment_id` 还要 `segment:read` | 试算一个用户（或一个用户组的任何成员）在某个分组调用某个模型要付多少，见下。响应里有分组和用户组的规则与倍率、用户所在的用户组，所以接口要求的权限与控制台试算入口的相同（选分组、选用户、选用户组各自的权限）；缺哪一项回 403 `permission_denied`，`details.permission` 是缺的那一项。这个检查在请求体的其它校验之前：没有 `user:read` 的调用者分不出某个用户 id 存不存在 |
 
-规则的校验（删除规则总是允许）：用户组必须存在；分组必须提供这个模型；模型必须有启用的全局价；`rule.kind` 是 `multiplier` 或 `custom`；倍数不小于 0、小于 1000000、最多 4 位小数；自定义价只能设在按次、或只有一档、没有规则、按 token 计的按 token 全局价上（§131），`mode` 必须与全局价相同，`config` 必须能生成表达式（价格字段是非负数，按次必须有 `price`），按 token 的 `config` 只能有一档、按 token 计、写出 `p` 和 `c`、没有规则（§131.4）。保存自定义价时，核心由 `mode` 和 `config` 生成表达式存下，并写进 `model_price_history`（97.4）。
+规则的校验（删除规则总是允许）：用户组必须存在；分组必须提供这个模型；模型必须有启用的全局价；`rule.kind` 是 `multiplier` 或 `custom`；倍数不小于 0、小于 1000000、最多 4 位小数；自定义价与全局价同样校验（`mode` 是 `visual` 或 `expression`，配置能生成表达式、表达式能通过 `expr.Validate`），不看全局价的形状（§131.4）。保存自定义价时，核心存下生成的（或手写的）表达式，并写进 `model_price_history`（97.4）。
 
 `POST /pricing/quote`：
 
@@ -6769,7 +6769,7 @@ kind: users | groups | api-keys | accounts | models | proxies
 | `accessible`、`access_source` | 该用户组能不能用这个分组，以及原因：`public`（公开分组）\| `grant`（私有分组，已授权）\| `none`（私有分组，没有授权）。不能用时照样给出价格和费用 |
 | `base`、`list_price` | 全局价和标价（`PriceDef`，`list_price` 的形状见上）；没有全局价时都是 `null` |
 | `price_source` | 标价来源：`segment` \| `group` \| `global`；没有全局价时是 `global` |
-| `price_levels` | `{segment: PriceRule \| null, group: PriceRule \| null}`：两层规则各自的配置，生效的是 `price_source` 那一层；失效的规则带 `inactive: true` |
+| `price_levels` | `{segment: PriceRule \| null, group: PriceRule \| null}`：两层规则各自的配置，生效的是 `price_source` 那一层 |
 | `rate`、`rate_override` | `EffectiveRate`，以及这个用户组在这个分组的专属倍率（没有为 `null`） |
 | `list_cost`、`cost` | 标价费用（标价 × 用量）和实付（标价费用 × 倍率）；没有全局价时都是 `"0"` |
 
@@ -9152,7 +9152,7 @@ anthropic 插件自带的模型目录（插件接口 `GET /api/v1/p/anthropic/mo
 - 0122 起没有 `per_token`、`per_request`：`per_token` 改名 `visual`（档位从 `max_len` 换成条件，131.2）；`per_request` 删除，原按次价 `{price, rules?}` 就是可视化的单个按次档 `{"tiers":[{"name":"base","unit":"request","price":P}],"rules":<原规则>}`，生成的表达式与原按次逐字节相同（`tier("base", flat(P))`，有规则时照 131.3 乘在外面）。写入旧方式名 400（字段 `mode`，`unknown mode "per_token"`），旧形状的 config（`max_len`、顶层 `price`）400（`unknown field`）。不留兼容。
 - 删掉（0121）：视频计费模板（`expr.VideoConfig`、`generateVideo`）和表达式的可视化配置（`expression` 下的 `config.tiers`、`config.rules`、`config.video`）。视频价格写成读 `u("video_*")` 的表达式。
 - `VideoOnly`（§97.3、§72.13.1 的 `video_only`）只看表达式读到的用量事实：读了 `video_` 开头的 `u(...)` 就是只能用于视频的价格（`billing/pricer.go`）。
-- **按次计的价格**（`core.PriceRule.PerRequest`，价格快照里每个价格算一次）：`visual` 且生成的表达式不读任何 token 变量（`p`、`c`、`cr`、`cc`、`cc1h`、`img`、`img_o`、`ai`、`ao`、`len`）。它取代原来的 `mode == "per_request"`：上游完成了工作（应答了，或客户端在应答途中离开、按断开策略仍要付钱，§25.8）时没有用量也计费（`gateway.usageOf`）。原按次价迁移后都是这样的价格；原按 token 价里只有按次档的单档价也算（它本来就是每次请求一个价）。自定义价、倍数规则不改变它（与 `VideoOnly` 一样取全局价的）。
+- **按次计的价格**（`core.PriceRule.PerRequest`，价格快照里每个价格算一次）：`visual` 且生成的表达式不读任何 token 变量（`p`、`c`、`cr`、`cc`、`cc1h`、`img`、`img_o`、`ai`、`ao`、`len`）。它取代原来的 `mode == "per_request"`：上游完成了工作（应答了，或客户端在应答途中离开、按断开策略仍要付钱，§25.8）时没有用量也计费（`gateway.usageOf`）。原按次价迁移后都是这样的价格；原按 token 价里只有按次档的单档价也算（它本来就是每次请求一个价）。倍数规则不改变它；命中自定义价时按规则自己的表达式算（与 `VideoOnly` 一样取生效表达式的，131.4）。
 - **端点准入**：插件清单 `billingTypes` 的词表不变（`per_request`、`per_token`、`expression`、`video`，§26），价格按 `core.PriceRule.BillingType()` 对照：`VideoOnly` → `video`；`expression` → `expression`；`visual` 按 `PerRequest` 是 `per_request` 或 `per_token`。内置平台的计费端点都声明了这三种，准入结果不变。
 - `POST /prices`、`PATCH /prices/:id`、`POST /prices/validate` 的形状不变；生成失败按字段报错，字段是 config 里的路径，例如 `config.tiers[0].c`、`config.tiers[1].when.and[0].value`、`config.rules[1].conds[0].value`；错误文本以字段开头，只出现一次（`expr.ConfigError`）。`GET /prices` 的 `mode` 筛选取 `visual`、`expression`。
 
@@ -9243,10 +9243,11 @@ Go 类型是 `expr.VisualConfig`、`TierConfig`、`TierCond`、`TokenPrices`、`
 
 ### 131.4 分组 / 用户组的自定义价（§97）
 
-- 能不能设自定义价由全局价决定（`billing.PriceDef.customShape`，`billing/list_price.go`）：全局价是 `visual`、**只有一档、这一档没有 `when`、没有规则**时可以，结果是这一档的计价方式（`token` 或 `request`）；其余（表达式、多档、带规则）只能用按倍数的规则。自定义价本身也必须是这样的形状，**计价方式与全局价那一档相同**：按 token 的写出 `p` 和 `c`（防止只有档名、`p*0 + c*0` 的“免费分组”），按次的有 `price`。原来“按次全局价 → 按次自定义价、按 token 全局价 → 按 token 自定义价”的对应就是这一条。
-- 保存时：全局价不允许自定义价 400，“表达式计费、多档或带条件、加价规则的价格只能用倍数规则” / “an expression price, or a price with several tiers, conditions or rules, takes a multiplier only”；`mode` 不是 `visual` 400，“自定义价的计费方式须与全局价相同：visual” / “a custom price is visual, as the global price”；`config` 生成失败 400，“自定义价无效：…” / “invalid custom price: …”；形状或计价方式不对（多档、有条件、有规则、按 token 却缺 `p` 或 `c`、计价方式与全局价不同）400，“自定义价只能是一档、计价方式与全局价相同（按 token 须带输入和输出价，或按次）、没有条件和加价规则” / “a custom price is one tier priced as the global price (by the token, with p and c, or by the request), with no condition and no rules”。`config` 原样存下。
-- 解析时同一个判断决定规则是否失效（97.1）：读规则时按它自己的 config 算出形状（`storedRule.shape`），与全局价的形状不同（全局价改成多档、加了条件或规则、换了计价方式、改成表达式）就带 `inactive: true`、解析时跳过。网关解析时用价格快照里算好的结果（`priceSnapshot.custom`，每次刷新快照解码一次全局价的 config），不在每个请求里解码。
-- 控制台的自定义价编辑器仍是一行单价，存成单档 `{"tiers":[{"name":"base","unit":"token",…}],"rules":[]}` 或 `{"tiers":[{"name":"base","unit":"request","price":…}],"rules":[]}`。
+- 2026-11-22 所有者定：自定义基础价格和自定义倍率是两件事。分组可以设倍率，也可以给模型设自己的基础价格，**想怎么改就怎么改**：自定义价和全局价一样写（可视化任意档位、条件、加价规则，或表达式），与全局价是什么形状无关。（用户组只能设倍率，用户组的模型价格规则由分组定价那边另行删除。）
+- 保存时（`billing.checkCustom`）：`mode` 不是 `visual` 或 `expression` 400，“自定义价的计费方式须是可视化或表达式” / “a custom price is visual or expression”；配置生成失败或表达式校验不过（`expr.Validate`，用量事实按当前代际声明的检查）400，“自定义价无效：…” / “invalid custom price: …”。可视化的 `config` 原样存下；表达式的 `config` 存 `{}`，表达式去掉首尾空白存下。没有大额确认（规则接口不带 `confirm`）。
+- 没有失效判定：原来的 `customShape`、`storedRule.shape`、`priceSnapshot.custom`、接口里的 `inactive` 都删了。
+- 生效表达式决定 `VideoOnly`、`PerRequest`（97.3）：例如按 token 的全局价上设一个按次的自定义价，命中它的请求按次计、上游完成就收费；视频全局价上设一个不读视频用量的自定义价，命中它的请求不再限于视频端点。
+- 控制台的自定义价编辑器还是一行单价（只编辑单档），换成完整的价格编辑器由分组定价改造负责；接口已经接受任意形状。
 
 ### 131.5 价格同步（§17）
 
@@ -9271,9 +9272,9 @@ Go 类型是 `expr.VisualConfig`、`TierConfig`、`TierCond`、`TokenPrices`、`
 ### 131.7 测试
 
 - `billing/expr`：`TestGenerateMatchesOldGenerator`（12 组原生成器的输出，配置是迁移 0122 之后的形状：没有规则的逐字节相同，有规则的等于乘积写法、追踪到的规则数等于原 `|||` 个数；另有两组原按次价迁移成单个按次档后的输出）、`TestGenerate`（各字段与校验错误：旧 `max_len`、旧方式名、旧按次形状、档位数上限、缺 `when` 与最后一档带 `when`、未知键、混合形态、空节点、`null`、非对象、空组、非数组的组、变量、比较符、缺值、非数字的值、时区、各时间量的范围、小数、深度 5 与 6、比较 20 与 21 个、上限按档计）、`TestTierConditionsEvaluate`（按顺序第一个成立的档位、北京时间的夜间与凌晨、`not`、`p`/`c`、`==`/`!=`、单子节点组保留括号）、`TestGenerateGolden`（`testdata/generate_golden.json`：与 TS 共用的 17 组样例，含 `and`/`or` 嵌套、`not`、单子节点组、各时间量带时区与空时区、`p`/`c` 条件与规则、三档、四档、六档链、`==` 与 `!=`、数字字符串的值）、`TestGeneratedRulesEvaluate`、`TestRuleTracing`、`TestCompileErrors`（`|||`、`__rule`、`$env`）、`TestLegacyProduct`。
-- `billing`：`TestCheckRule`（自定义价的形状与计价方式、多档、带条件、带规则、没有价格、按次档没有价格）、`TestRuleInactive`（按 token 与按次自定义价的失效、读规则时算形状）、`TestResolveExactModel`（`PerRequest`）、`TestExportPrice`、`TestParseSup2APIMultiplierOnTiers`、`TestParseSup2APIFromOldUpstream`（旧上游的五个单价、`max_len` 分档、按次价与按次带规则、可视化与视频配置、`|||`、数字字符串缩放）、同步各源的 `visual` 期望、`TestCheckStoredExpressions`（数据库测试，131.8 的发布检查，含未跑 0122 的 `per_token`、`per_request` 行）。
+- `billing`：`TestCheckRule`（自定义价任意形状：按次、多档带条件、带规则、表达式、与全局价形状无关；旧计费方式、表达式编译不过、按次档没有价格被拒；生效表达式的 `PerRequest`）、`TestSnapshotResolve`（自定义价取代任何全局价，`VideoOnly`、`PerRequest` 跟着自定义价）、`billing_test` 的 `Inputs`（自定义价时两条表达式入参的并集）、`usage` 的 `TestPriceOneBaseExpressionErrors`（原价算不出时记成标价费用、照常扣费）、`TestResolveExactModel`（`PerRequest`）、`TestExportPrice`、`TestParseSup2APIMultiplierOnTiers`、`TestParseSup2APIFromOldUpstream`（旧上游的五个单价、`max_len` 分档、按次价与按次带规则、可视化与视频配置、`|||`、数字字符串缩放）、同步各源的 `visual` 期望、`TestCheckStoredExpressions`（数据库测试，131.8 的发布检查，含未跑 0122 的 `per_token`、`per_request` 行）。
 - `core`：`TestPriceRuleBillingType`。`gateway`：断开与完成时按次价照样计费（`PerRequest`）。
-- `migrations`：`TestMigration0121BillingModes`（数据库测试：表达式全局价上的自定义价被删，各类旧行迁移后的 mode、config、表达式（检查的是 0121 及之后的迁移都跑完的状态），数字字符串改成数字，SQL 改写等于 `expr.LegacyProduct`、SQL 哈希等于 `expr.Hash`，config 重新生成得到同一哈希，规则求值与命中，条件为 `nil` 的规则，历史表新旧哈希，`pending`、`failed`、`reserved` 与已结算的使用记录，生成器不接受的可视化配置保留表达式，`additional`/`replacement` 非数组不中止，`|||` 切分的边界，挂在估价结算上的 `billed` 行与只有任务观察的 `reserved` 行，重跑四张表无写入，使用记录语句走主键）；`TestMigration0122TierConditions`（数据库测试：单档只去掉 `max_len`、没有 `max_len` 键的单档、两档、乱序四档带数字字符串上限与按次档和规则按原顺序排好、按次价与按次带规则、表达式价不动、自定义价的两种；每行 mode、config、表达式与哈希不变、config 生成的哈希等于所存；`price_rules` 只接受 `visual`；重跑两张表每行内容与 `xmin` 不变；临时函数已删）。
+- `migrations`：`TestMigration0121BillingModes`（数据库测试：表达式全局价上的自定义价被删，各类旧行迁移后的 mode、config、表达式（检查的是 0121 及之后的迁移都跑完的状态），数字字符串改成数字，SQL 改写等于 `expr.LegacyProduct`、SQL 哈希等于 `expr.Hash`，config 重新生成得到同一哈希，规则求值与命中，条件为 `nil` 的规则，历史表新旧哈希，`pending`、`failed`、`reserved` 与已结算的使用记录，生成器不接受的可视化配置保留表达式，`additional`/`replacement` 非数组不中止，`|||` 切分的边界，挂在估价结算上的 `billed` 行与只有任务观察的 `reserved` 行，重跑四张表无写入，使用记录语句走主键）；`TestMigration0122TierConditions`（数据库测试：单档只去掉 `max_len`、没有 `max_len` 键的单档、两档、乱序四档带数字字符串上限与按次档和规则按原顺序排好、按次价与按次带规则、表达式价不动、自定义价的两种；每行 mode、config、表达式与哈希不变、config 生成的哈希等于所存；`price_rules` 只接受 `visual`、`expression`；重跑两张表每行内容与 `xmin` 不变；临时函数已删）。
 
 ### 131.8 如实写明的边界
 

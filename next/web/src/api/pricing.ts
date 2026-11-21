@@ -114,17 +114,12 @@ export type PriceRule =
   /** The global price times `multiplier`; follows the global price when it changes. */
   | { kind: 'multiplier'; multiplier: Money }
   /**
-   * A price of its own: a visual price of one tier (by tokens or by the
-   * request) and no rules. Only a global price of that shape takes it; any
-   * other takes a multiplier only.
+   * A price of its own, written as a global price is (visual or expression),
+   * whatever the global price is. `expression` is read of an expression price
+   * only; the server always returns it, generated from `config` for a visual one.
    */
-  | { kind: 'custom'; mode: 'visual'; config: VisualConfig }
-
-/** A rule as a row of model prices carries it. */
-export type ListedPriceRule = PriceRule & {
-  /** A custom price the global price no longer takes (another mode, or tiers or rules now): it is skipped, and the next level prices the model. */
-  inactive?: boolean
-}
+  | { kind: 'custom'; mode: 'visual'; config: VisualConfig; expression?: string }
+  | { kind: 'custom'; mode: 'expression'; config?: Record<string, never>; expression: string }
 
 export interface PriceDef {
   mode: PriceMode
@@ -143,9 +138,9 @@ export interface ModelPriceRow {
   model: string
   /** The global price; null = the model has none and cannot be billed. */
   base: PriceDef | null
-  group_rule: ListedPriceRule | null
+  group_rule: PriceRule | null
   /** Only when a segment was asked for. */
-  segment_rule?: ListedPriceRule | null
+  segment_rule?: PriceRule | null
   /** Segments with a rule of their own on this model (asked without a segment). */
   segment_rule_count?: number
   /** The price after the first rule in effect (a multiplier rule: the global price with `multiplier`); null without a global price. */
@@ -189,7 +184,7 @@ export interface PricingQuote {
   list_price: PriceDef | null
   price_source: PriceSource
   /** The two rule levels of the list price, as configured; the one in `price_source` applies, the global price when it says so. */
-  price_levels: { segment: ListedPriceRule | null; group: ListedPriceRule | null }
+  price_levels: { segment: PriceRule | null; group: PriceRule | null }
   rate: EffectiveRate
   /** The override of this segment in this group, if any. */
   rate_override: Money | null

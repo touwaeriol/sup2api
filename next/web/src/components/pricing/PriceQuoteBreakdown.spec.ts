@@ -3,7 +3,7 @@ import { mount } from '@vue/test-utils'
 import { i18n } from '@/i18n'
 import type { PricingQuote } from '@/api/pricing'
 import PriceQuoteBreakdown from './PriceQuoteBreakdown.vue'
-import { requestTier, singleTier } from '@/views/prices/priceExpr'
+import { singleTier } from '@/views/prices/priceExpr'
 
 const price = { mode: 'visual' as const, config: singleTier({ p: 3, c: 15 }), expression: '' }
 const quote: PricingQuote = {
@@ -39,16 +39,6 @@ describe('price quote breakdown', () => {
     expect(level('rate', 'discount').text()).toContain('没有全场折扣')
     expect(level('rate', 'discount').attributes('data-state')).toBe('unset')
     expect(level('rate', 'segment').text()).toContain('未设置')
-  })
-
-  it('marks a rule that is not in effect as the model price table does', () => {
-    const stale = { kind: 'custom', mode: 'visual', config: requestTier(0.002), inactive: true } as const
-    const w = render({ price_levels: { segment: null, group: stale } })
-    const group = w.get('[data-testid="price-quote-price"] [data-level="group"]')
-    expect(group.attributes('data-state')).toBe('shadowed')
-    expect(group.get('[data-testid="price-quote-inactive"]').text()).toBe('规则未生效')
-    expect(group.get('[data-testid="price-quote-inactive"]').attributes('title')).toContain('计费方式已变')
-    expect(w.findAll('[data-testid="price-quote-inactive"]')).toHaveLength(1)
   })
 
   it('shows a multiplier over an expression it cannot break down as the rule alone, the list price with the multiplier beside it', () => {

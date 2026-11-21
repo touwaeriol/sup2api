@@ -74,6 +74,18 @@ func custom(mode string, config map[string]any) map[string]any {
 	return map[string]any{"kind": "custom", "mode": mode, "config": config}
 }
 
+// written is a custom price written as an expression.
+func written(expression string) map[string]any {
+	return map[string]any{"kind": "custom", "mode": "expression", "expression": expression}
+}
+
+// shown is a custom price as the API shows it: with its expression.
+func shown(rule map[string]any, expression string) map[string]any {
+	out := maps.Clone(rule)
+	out["expression"] = expression
+	return out
+}
+
 // timesPrice is a price as the API shows it under a multiplier rule: as it is,
 // with the multiplier beside it.
 func timesPrice(price any, n string) map[string]any {
@@ -159,7 +171,7 @@ func TestGroupModelPrices(t *testing.T) {
 	require.Equal(t, timesPrice(haiku, "1.2"), row["list_price"])
 	require.Equal(t, haiku, row["base"])
 	row = rows["web-search"]
-	require.Equal(t, custom("visual", requestTier(0.008)), row["group_rule"])
+	require.Equal(t, shown(custom("visual", requestTier(0.008)), `tier("base", flat(0.008))`), row["group_rule"])
 	require.Equal(t, map[string]any{"mode": "visual", "config": requestTier(0.008), "expression": `tier("base", flat(0.008))`}, row["list_price"])
 	require.Equal(t, "global", rows["claude-sonnet-4-5"]["source"])
 	require.Equal(t, 1.0, rows["claude-sonnet-4-5"]["segment_rule_count"])
@@ -179,7 +191,7 @@ func TestGroupModelPrices(t *testing.T) {
 	require.Equal(t, map[string]any{"value": "1.2", "source": "discount", "group_default": "1.5", "discount": "0.8"}, out["rate"])
 	row = rows["claude-haiku-4-5"]
 	own := oneTierConfig(map[string]any{"p": 0.8, "c": 4.0})
-	require.Equal(t, custom("visual", own), row["segment_rule"])
+	require.Equal(t, shown(custom("visual", own), `tier("base", p*0.8 + c*4)`), row["segment_rule"])
 	require.Equal(t, map[string]any{"kind": "multiplier", "multiplier": "1.2"}, row["group_rule"])
 	require.NotContains(t, row, "segment_rule_count")
 	require.Equal(t, "segment", row["source"])
@@ -207,21 +219,21 @@ func TestGroupModelPrices(t *testing.T) {
 	require.Equal(t, "global", rows["claude-sonnet-4-5"]["source"])
 	require.Equal(t, 3, int(e.one(`SELECT count(*) FROM price_rules`)))
 
-	// The global price changes its mode: the custom price of the old mode is
-	// inactive and the next level prices the model.
+	// The global price changes its shape: the custom price still replaces
+	// it, and is due by the token although the global price is by the request.
 	haikuID := e.one(`SELECT id FROM model_prices WHERE model = 'claude-haiku-4-5'`)
 	e.mustCall(e.admin, 200, "PATCH", "/prices/"+itoa(haikuID), map[string]any{"mode": "visual", "config": requestTier(1)})
 	_, rows = e.modelPrices(e.open, e.vip)
 	row = rows["claude-haiku-4-5"]
-	require.Equal(t, map[string]any{"kind": "custom", "mode": "visual", "config": own, "inactive": true}, row["segment_rule"])
-	require.Equal(t, "group", row["source"])
-	require.Equal(t, map[string]any{"mode": "visual", "config": requestTier(1.0), "expression": `tier("base", flat(1))`,
-		"multiplier": "2"}, row["list_price"])
+	require.Equal(t, shown(custom("visual", own), `tier("base", p*0.8 + c*4)`), row["segment_rule"])
+	require.Equal(t, "segment", row["source"])
+	require.Equal(t, map[string]any{"mode": "visual", "config": own, "expression": `tier("base", p*0.8 + c*4)`}, row["list_price"])
 	r, err := e.svc.Resolve(ctx, core.PriceQuery{Model: "claude-haiku-4-5", GroupID: e.open, SegmentID: e.vip})
 	require.NoError(t, err)
-	require.Equal(t, core.PriceSourceGroup, r.Source)
-	require.Nil(t, r.Base)
-	require.Equal(t, "2", r.Scale.String())
+	require.Equal(t, core.PriceSourceSegment, r.Source)
+	require.Equal(t, `tier("base", flat(1))`, r.Base.Expression)
+	require.False(t, r.PerRequest)
+	require.Nil(t, r.Scale)
 
 	// Not found and malformed.
 	e.mustCall(e.admin, 404, "GET", "/groups/999999/model-prices", nil)
@@ -249,8 +261,9 @@ func TestGroupModelPricesValidation(t *testing.T) {
 		{"multiplier too large", patch(0, "claude-haiku-4-5", multiplier("1000000")), "below 1000000"},
 		{"multiplier too fine", patch(0, "claude-haiku-4-5", multiplier("0.00001")), "at most 4 decimals"},
 		{"multiplier that is no number", patch(0, "claude-haiku-4-5", multiplier("much")), "multiplier must be"},
-		{"custom over an expression", patch(0, "claude-sonnet-4-5", custom("visual", oneTierConfig(map[string]any{"p": 1, "c": 2}))), "multiplier only"},
-		{"custom in another mode", patch(0, "claude-haiku-4-5", custom("visual", requestTier(1))), "priced as the global price"},
+		{"custom in an old mode", patch(0, "claude-haiku-4-5", custom("per_request", map[string]any{"price": 1})), "visual or expression"},
+		{"custom expression that does not compile", patch(0, "claude-haiku-4-5", written(`tier("base", p*`)), "invalid custom price"},
+		{"custom expression of an unknown variable", patch(0, "claude-haiku-4-5", written(`tier("base", nope*2)`)), "invalid custom price"},
 		{"negative price", patch(0, "claude-haiku-4-5", custom("visual", oneTierConfig(map[string]any{"p": 1, "c": -2}))), "config.tiers[0].c"},
 		{"old flat prices", patch(0, "claude-haiku-4-5", custom("visual", map[string]any{"p": 1, "c": 2})), `unknown field`},
 	}
@@ -265,8 +278,16 @@ func TestGroupModelPricesValidation(t *testing.T) {
 			require.Zero(t, e.one(`SELECT count(*) FROM price_rules`))
 		})
 	}
+	// A custom price of any shape replaces a global price of any shape.
+	_, rows := e.modelPrices(e.open, 0,
+		patch(0, "claude-sonnet-4-5", custom("visual", requestTier(1))),
+		patch(0, "claude-haiku-4-5", written(" tier(\"base\", p*2 + c*4)\n")))
+	require.Equal(t, shown(custom("visual", requestTier(1.0)), `tier("base", flat(1))`), rows["claude-sonnet-4-5"]["group_rule"])
+	require.Equal(t, map[string]any{"kind": "custom", "mode": "expression", "config": map[string]any{}, "expression": `tier("base", p*2 + c*4)`},
+		rows["claude-haiku-4-5"]["group_rule"])
+	e.mustCall(e.admin, 200, "PUT", path, map[string]any{"items": []any{patch(0, "claude-sonnet-4-5", nil), patch(0, "claude-haiku-4-5", nil)}})
 	// 0 and 1 are multipliers like any other.
-	_, rows := e.modelPrices(e.open, e.vip, patch(0, "claude-haiku-4-5", multiplier("0")), patch(e.vip, "claude-haiku-4-5", multiplier("1")))
+	_, rows = e.modelPrices(e.open, e.vip, patch(0, "claude-haiku-4-5", multiplier("0")), patch(e.vip, "claude-haiku-4-5", multiplier("1")))
 	require.Equal(t, "segment", rows["claude-haiku-4-5"]["source"])
 	require.Equal(t, map[string]any{"kind": "multiplier", "multiplier": "0"}, rows["claude-haiku-4-5"]["group_rule"])
 }
@@ -464,7 +485,7 @@ func TestPricingQuote(t *testing.T) {
 	// The same for the segment itself; its own price applies per request.
 	out = quote("segment_id", e.vip, e.private, "web-search")
 	require.Equal(t, "segment", out["price_source"])
-	require.Equal(t, map[string]any{"segment": custom("visual", requestTier(0.008)), "group": nil}, out["price_levels"])
+	require.Equal(t, map[string]any{"segment": shown(custom("visual", requestTier(0.008)), `tier("base", flat(0.008))`), "group": nil}, out["price_levels"])
 	require.Equal(t, []any{"0.008", "0.004"}, []any{out["list_cost"], out["cost"]})
 	require.Equal(t, requestTier(0.01), out["base"].(map[string]any)["config"])
 	require.Equal(t, requestTier(0.008), out["list_price"].(map[string]any)["config"])

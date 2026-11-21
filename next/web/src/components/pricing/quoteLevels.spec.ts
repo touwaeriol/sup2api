@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { EffectiveRate, PriceDef, PriceRule } from '@/api/pricing'
 import { priceLevels, rateLevels } from './quoteLevels'
-import { requestTier, singleTier } from '@/views/prices/priceExpr'
+import { singleTier } from '@/views/prices/priceExpr'
 
 const base: PriceDef = { mode: 'visual', config: singleTier({ p: 3, c: 15 }), expression: '' }
 const half: PriceRule = { kind: 'multiplier', multiplier: '0.5' }
@@ -19,16 +19,6 @@ describe('quote levels', () => {
 
     expect(states(priceLevels({ price_levels: { segment: null, group: half }, base, price_source: 'group' }))).toEqual({ segment: 'unset', group: 'applies', global: 'shadowed' })
     expect(states(priceLevels({ price_levels: { segment: null, group: null }, base, price_source: 'global' }))).toEqual({ segment: 'unset', group: 'unset', global: 'applies' })
-  })
-
-  it('marks a rule that is set but not in effect, which leaves the level under it to apply', () => {
-    const stale = { kind: 'custom', mode: 'visual', config: requestTier(0.002), inactive: true } as const
-    const levels = priceLevels({ price_levels: { segment: null, group: stale }, base, price_source: 'global' })
-    expect(levels.map((l) => [l.key, l.state, !!l.inactive])).toEqual([
-      ['segment', 'unset', false],
-      ['group', 'shadowed', true],
-      ['global', 'applies', false]
-    ])
   })
 
   it('leaves every list price level unset for a model without a global price', () => {

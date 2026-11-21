@@ -94,11 +94,7 @@ describe('a row under a rule', () => {
     expect(withRule(own, 'segment', null)).toMatchObject({ source: 'group', list_price: { ...perToken, multiplier: '2' } })
     expect(withRule(group, 'group', null)).toMatchObject({ source: 'global', list_price: perToken })
   })
-  it('skips a rule that is not in effect, and takes no rule without a global price', () => {
-    const stale = { ...custom({ p: 1, c: 8 }), inactive: true }
-    const skipped = withRule(row({ segment_rule: stale }), 'group', times('2'))
-    expect(skipped).toMatchObject({ source: 'group', segment_rule: stale, list_price: { ...perToken, multiplier: '2' } })
-    expect(withRule(row({ group_rule: stale }), 'segment', null)).toMatchObject({ source: 'global', list_price: perToken })
+  it('takes no rule without a global price', () => {
     expect(withRule(row({ base: null, group_rule: times('2'), list_price: null }), 'segment', null)).toMatchObject({ source: 'global', list_price: null })
   })
   it('shows its draft and remembers the saved rule', () => {

@@ -58,7 +58,7 @@ export function effectiveRate(base: Pick<EffectiveRate, 'group_default' | 'disco
  */
 export function applyRule(base: PriceDef | null, rule: PriceRule | null): PriceDef | null {
   if (!rule) return base
-  if (rule.kind === 'custom') return { mode: rule.mode, config: rule.config, expression: '' }
+  if (rule.kind === 'custom') return { mode: rule.mode, config: rule.config ?? {}, expression: rule.expression ?? '' }
   return base && validRate(rule.multiplier) ? { ...base, multiplier: rule.multiplier } : base
 }
 

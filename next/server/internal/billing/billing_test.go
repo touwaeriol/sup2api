@@ -3,6 +3,7 @@ package billing
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -59,6 +60,12 @@ func TestResolveExactModel(t *testing.T) {
 	bodies, headers := e.svc.Inputs(&core.PriceRule{Expression: `(tier("b", p)) * (param("service_tier") == "x" ? 2 : 1) * (has(header("Anthropic-Beta"), "f") ? 2 : 1)`})
 	if len(bodies) != 1 || bodies[0] != "service_tier" || len(headers) != 1 || headers[0] != "anthropic-beta" {
 		t.Fatalf("inputs %v %v", bodies, headers)
+	}
+	// Under a custom rule the global price is evaluated too, for the base cost.
+	bodies, headers = e.svc.Inputs(&core.PriceRule{Expression: `tier("b", p) * (param("speed") == "fast" ? 2 : 1)`,
+		Base: &core.PriceBase{Expression: `tier("g", p) * (param("speed") == "fast" ? 3 : 1) * (header("X-Tier") == "a" ? 2 : 1)`}})
+	if !slices.Equal(bodies, []string{"speed"}) || !slices.Equal(headers, []string{"x-tier"}) {
+		t.Fatalf("inputs under a custom rule %v %v", bodies, headers)
 	}
 }
 

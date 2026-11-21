@@ -65,12 +65,17 @@ func TestPriceOneAmounts(t *testing.T) {
 	}
 }
 
+// The base cost is shown only: a global price that cannot be evaluated
+// leaves it at the list cost, and the row is charged as usual.
 func TestPriceOneBaseExpressionErrors(t *testing.T) {
-	p := &pending{Expression: `tier("custom", p*1)`, Rate: dec("1"), Tokens: core.UsageTokens{Input: 1},
+	p := &pending{Expression: `tier("custom", p*1)`, Rate: dec("2"), Tokens: core.UsageTokens{Input: 1_000_000},
 		Inputs: pendingInputs{Semantics: "exclusive", Pricing: &core.PricingTrace{Base: &core.PriceBase{Expression: "invalid ("}}}}
-	cost, _, _, err := priceAmounts(p)
-	require.ErrorContains(t, err, "compile base price expression")
-	require.True(t, cost.total.IsZero())
+	cost, detail, _, err := priceAmounts(p)
+	require.NoError(t, err)
+	requireDec(t, "1", cost.base, "base")
+	requireDec(t, "1", cost.list, "list")
+	requireDec(t, "2", cost.total, "total")
+	requireDec(t, "1", detail.Cost, "billing_detail.cost")
 }
 
 // The primary usage, a referenced model under another rule, an item at the

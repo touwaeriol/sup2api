@@ -37,7 +37,7 @@ func sequentialRuleChanges(ctx context.Context, tx *gorm.DB, changes []ruleChang
 			continue
 		}
 		if r.Kind == core.PriceRuleCustom {
-			prog, err := expr.CompileCached(r.expression)
+			prog, err := expr.CompileCached(r.Expression)
 			if err != nil {
 				return err
 			}
@@ -56,7 +56,7 @@ func sequentialRuleChanges(ctx context.Context, tx *gorm.DB, changes []ruleChang
 			ON CONFLICT `+target+` DO UPDATE SET kind = EXCLUDED.kind, multiplier = EXCLUDED.multiplier,
 				mode = EXCLUDED.mode, config = EXCLUDED.config, expression = EXCLUDED.expression,
 				expr_hash = EXCLUDED.expr_hash, updated_by = EXCLUDED.updated_by, updated_at = now()`,
-			on.GroupID, nullID(on.SegmentID), on.Model, r.Kind, r.Multiplier, r.Mode, r.Config, r.expression, r.exprHash, nullID(updatedBy)); err != nil {
+			on.GroupID, nullID(on.SegmentID), on.Model, r.Kind, r.Multiplier, r.Mode, r.Config, r.Expression, r.exprHash, nullID(updatedBy)); err != nil {
 			return err
 		}
 	}
@@ -105,7 +105,7 @@ func TestWriteRulesMatchesSequential(t *testing.T) {
 	}
 	price := func(p float64) *storedRule {
 		config := json.RawMessage(fmt.Sprintf(`{"tiers": [{"name": "base", "unit": "request", "price": %v}]}`, p))
-		r, err := checkCustom(ctx, Rule{Kind: core.PriceRuleCustom, Mode: "visual", Config: config}, perRequestTier)
+		r, err := checkCustom(ctx, Rule{Kind: core.PriceRuleCustom, Mode: "visual", Config: config}, nil)
 		require.NoError(t, err)
 		return r
 	}

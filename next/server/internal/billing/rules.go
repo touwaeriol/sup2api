@@ -25,27 +25,23 @@ type Rule struct {
 	// Multiplier (kind multiplier), a decimal: the list price is the global
 	// price times it, and follows the global price when that changes.
 	Multiplier *string `json:"multiplier,omitempty"`
-	// Mode and Config (kind custom): a visual price of its own, one tier
-	// priced as the one tier of the global price, without a condition or
-	// rules. Only a visual global price of one tier (by the token or by the
-	// request) without rules takes one (PriceDef.customShape).
-	Mode   string          `json:"mode,omitempty"`
-	Config json.RawMessage `json:"config,omitempty"`
-	// Inactive marks a custom price that the global price takes no more (its
-	// mode or unit changed, or it got tiers or rules): it is skipped and the next
-	// level prices the model. Output only.
-	Inactive bool `json:"inactive,omitempty"`
+	// Mode, Config and Expression (kind custom): a price of its own, as a
+	// global price is written (visual or expression), whatever the global
+	// price is. Expression is read of an expression price only; of a visual
+	// one it is generated from Config, and it is always there on output.
+	Mode       string          `json:"mode,omitempty"`
+	Config     json.RawMessage `json:"config,omitempty"`
+	Expression string          `json:"expression,omitempty"`
 }
 
-// storedRule is a price_rules row: the rule and, of a custom price, the
-// expression generated from its config when it was saved.
+// storedRule is a price_rules row: the rule and, of a custom price, what its
+// expression tells (priceTraits).
 type storedRule struct {
 	Rule
 	scale       decimal.Decimal // Multiplier, as a number
-	shape       string          // PriceDef.customShape of a custom price
-	expression  string
 	exprHash    string
 	exprVersion int
+	traits      priceTraits
 }
 
 // setScale makes n the multiplier of the rule.
@@ -54,34 +50,20 @@ func (r *storedRule) setScale(n decimal.Decimal) {
 	r.scale, r.Multiplier = n, &text
 }
 
-// setShape records the shape of a custom price.
-func (r *storedRule) setShape() {
-	r.shape = PriceDef{Mode: r.Mode, Config: r.Config}.customShape()
-}
-
-// inactive reports whether the rule does not apply over a global price
-// whose custom prices have shape custom (PriceDef.customShape): a custom
-// price keeps the shape it was saved in.
-func (r *storedRule) inactive(custom string) bool {
-	return r.Kind == core.PriceRuleCustom && r.shape != custom
-}
-
-// view returns the rule as the API shows it over the global price base
-// (nil = the model has none).
-func (r *storedRule) view(base *PriceDef) *Rule {
+// view returns the rule as the API shows it (nil = the model has none).
+func (r *storedRule) view() *Rule {
 	if r == nil {
 		return nil
 	}
 	out := r.Rule
-	out.Inactive = base != nil && r.inactive(base.customShape())
 	return &out
 }
 
 // price returns the list price the rule makes of the global one, with where
 // the rule is from: a multiplier leaves the expression and sets Scale; a
-// custom price puts its own expression in and keeps the global one as Base.
-// ID and VideoOnly are always the global price's. A nil rule is the global
-// price as it is, its Source left empty (core.PriceRule.Source).
+// custom price puts its own expression, and what it tells, in and keeps the
+// global one as Base. ID is always the global price's. A nil rule is the
+// global price as it is, its Source left empty (core.PriceRule.Source).
 func (r *storedRule) price(global core.PriceRule, source string) *core.PriceRule {
 	if r == nil {
 		return &global
@@ -93,7 +75,8 @@ func (r *storedRule) price(global core.PriceRule, source string) *core.PriceRule
 		return &global
 	}
 	global.Base = &core.PriceBase{Expression: global.Expression, ExprHash: global.ExprHash}
-	global.Mode, global.Expression, global.ExprHash, global.ExprVersion = r.Mode, r.expression, r.exprHash, r.exprVersion
+	global.Mode, global.Expression, global.ExprHash, global.ExprVersion = r.Mode, r.Expression, r.exprHash, r.exprVersion
+	r.traits.apply(&global)
 	return &global
 }
 
@@ -101,15 +84,14 @@ func (r *storedRule) price(global core.PriceRule, source string) *core.PriceRule
 // the group's own.
 type ruleLevels struct{ segment, group *storedRule }
 
-// applied returns the first rule that applies over a global price whose
-// custom prices have shape custom (PriceDef.customShape), the segment's
-// before the group's, and where the list price then comes from. It is the
-// one place the levels are ordered.
-func (l ruleLevels) applied(custom string) (*storedRule, string) {
+// applied returns the first rule there is, the segment's before the
+// group's, and where the list price then comes from. It is the one place the
+// levels are ordered.
+func (l ruleLevels) applied() (*storedRule, string) {
 	switch {
-	case l.segment != nil && !l.segment.inactive(custom):
+	case l.segment != nil:
 		return l.segment, core.PriceSourceSegment
-	case l.group != nil && !l.group.inactive(custom):
+	case l.group != nil:
 		return l.group, core.PriceSourceGroup
 	}
 	return nil, core.PriceSourceGlobal
@@ -160,8 +142,7 @@ func loadRules(ctx context.Context, q *gorm.DB, cond string, args ...any) (ruleS
 	out := make(ruleSet, len(rows))
 	for _, row := range rows {
 		on := core.PriceQuery{GroupID: row.GroupID, SegmentID: row.SegmentID, Model: row.Model}
-		r := &storedRule{Rule: Rule{Kind: row.Kind, Mode: row.Mode, Config: row.Config},
-			expression: row.Expression, exprHash: row.ExprHash}
+		r := &storedRule{Rule: Rule{Kind: row.Kind, Mode: row.Mode, Config: row.Config}, exprHash: row.ExprHash}
 		if row.Multiplier != nil {
 			r.setScale(*row.Multiplier)
 		}
@@ -170,18 +151,19 @@ func loadRules(ctx context.Context, q *gorm.DB, cond string, args ...any) (ruleS
 		if r.Kind != core.PriceRuleCustom {
 			continue
 		}
-		r.setShape()
-		if prog, err := expr.CompileCached(r.expression); err == nil {
-			r.exprVersion = prog.Version()
+		r.Expression = row.Expression
+		if prog, err := expr.CompileCached(r.Expression); err == nil {
+			r.exprVersion, r.traits = prog.Version(), traitsOf(r.Mode, prog)
 		}
 	}
 	return out, nil
 }
 
 // checkRule validates a rule over the global price of its model (nil = the
-// model has none) and returns it as it is stored. The error says why it
-// cannot be saved.
-func checkRule(ctx context.Context, in Rule, base *PriceDef) (*storedRule, error) {
+// model has none) and returns it as it is stored. facts are the usage facts
+// an expression may read (Service.factsFor). The error says why it cannot be
+// saved.
+func checkRule(ctx context.Context, in Rule, base *PriceDef, facts map[string]bool) (*storedRule, error) {
 	if base == nil {
 		return nil, errors.New(core.Text(ctx, "the model has no global price", "该模型没有全局价格"))
 	}
@@ -196,37 +178,37 @@ func checkRule(ctx context.Context, in Rule, base *PriceDef) (*storedRule, error
 		r.setScale(scale)
 		return r, nil
 	case core.PriceRuleCustom:
-		return checkCustom(ctx, in, *base)
+		return checkCustom(ctx, in, facts)
 	}
 	return nil, errors.New(core.Text(ctx, "rule must be a multiplier or a custom price", "规则必须是倍数或自定义价"))
 }
 
-// checkCustom validates a custom price over the global price base and
-// generates its expression.
-func checkCustom(ctx context.Context, in Rule, base PriceDef) (*storedRule, error) {
-	shape := base.customShape()
-	if shape == "" {
-		return nil, errors.New(core.Text(ctx, "an expression price, or a price with several tiers, conditions or rules, takes a multiplier only",
-			"表达式计费、多档或带条件、加价规则的价格只能用倍数规则"))
+// checkCustom validates a custom price as a global price is validated
+// (visual or expression, any shape) and generates its expression. The global
+// price does not matter: a custom price replaces it.
+func checkCustom(ctx context.Context, in Rule, facts map[string]bool) (*storedRule, error) {
+	if in.Mode != expr.ModeVisual && in.Mode != expr.ModeExpression {
+		return nil, errors.New(core.Text(ctx, "a custom price is visual or expression", "自定义价的计费方式须是可视化或表达式"))
 	}
-	if in.Mode != expr.ModeVisual {
-		return nil, fmt.Errorf(core.Text(ctx, "a custom price is %s, as the global price", "自定义价的计费方式须与全局价相同：%s"), expr.ModeVisual)
+	config := in.Config
+	if len(config) == 0 || string(config) == "null" {
+		config = json.RawMessage("{}")
 	}
-	src, err := expr.Generate(expr.ModeVisual, in.Config)
+	raw, err := expressionFor(in.Mode, config, in.Expression)
 	if err != nil {
 		return nil, fmt.Errorf(core.Text(ctx, "invalid custom price: %v", "自定义价无效：%v"), err)
 	}
-	r := &storedRule{Rule: Rule{Kind: in.Kind, Mode: expr.ModeVisual, Config: in.Config}, expression: src}
-	t, _ := singleTier(in.Config)
-	if r.setShape(); r.shape != shape || shape == expr.UnitToken && (t.P == nil || t.C == nil) {
-		return nil, errors.New(core.Text(ctx, "a custom price is one tier priced as the global price (by the token, with p and c, or by the request), with no condition and no rules",
-			"自定义价只能是一档、计价方式与全局价相同（按 token 须带输入和输出价，或按次）、没有条件和加价规则"))
+	if rep := expr.Validate(raw, expr.ValidateOptions{Facts: facts}); !rep.OK {
+		e := rep.Errors[0]
+		return nil, fmt.Errorf(core.Text(ctx, "invalid custom price: %s", "自定义价无效：%s"), core.Text(ctx, e.Message["en"], e.Message["zh"]))
 	}
+	src := strings.TrimSpace(raw)
 	prog, err := expr.CompileCached(src)
 	if err != nil {
 		return nil, err
 	}
-	r.exprHash, r.exprVersion = prog.Hash(), prog.Version()
+	r := &storedRule{Rule: Rule{Kind: in.Kind, Mode: in.Mode, Config: config, Expression: src},
+		exprHash: prog.Hash(), exprVersion: prog.Version(), traits: traitsOf(in.Mode, prog)}
 	return r, nil
 }
 
@@ -265,7 +247,7 @@ func (w *ruleWrites) addHistory(r *storedRule) error {
 	if r.Kind != core.PriceRuleCustom {
 		return nil
 	}
-	prog, err := expr.CompileCached(r.expression)
+	prog, err := expr.CompileCached(r.Expression)
 	if err != nil {
 		return err
 	}
@@ -285,7 +267,7 @@ func (w *ruleWrites) addRule(on core.PriceQuery, removed bool, r *storedRule, up
 		return nil
 	}
 	row := ruleRecord{GroupID: on.GroupID, SegmentID: nullID(on.SegmentID), Model: on.Model, Kind: r.Kind,
-		Expression: r.expression, ExprHash: r.exprHash, UpdatedBy: nullID(updatedBy)}
+		Expression: r.Expression, ExprHash: r.exprHash, UpdatedBy: nullID(updatedBy)}
 	if r.Multiplier != nil {
 		row.Multiplier = &r.scale
 	}

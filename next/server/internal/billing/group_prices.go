@@ -174,7 +174,7 @@ type ModelPriceRow struct {
 // rule that applies. Without a global price no rule applies. What it says of
 // the segments is the caller's to add.
 func (l ruleLevels) row(model string, base *PriceDef) ModelPriceRow {
-	row := ModelPriceRow{Model: model, Base: base, GroupRule: l.group.view(base), Source: core.PriceSourceGlobal}
+	row := ModelPriceRow{Model: model, Base: base, GroupRule: l.group.view(), Source: core.PriceSourceGlobal}
 	if base == nil {
 		return row
 	}
@@ -245,7 +245,7 @@ func (gp *groupPrices) fill(ctx context.Context, q *gorm.DB, out *GroupModelPric
 			count := ofSegments[model]
 			row.SegmentRuleCount = &count
 		} else {
-			rule := levels.segment.view(base)
+			rule := levels.segment.view()
 			row.SegmentRule = &rule
 		}
 		out.Models = append(out.Models, row)
@@ -315,7 +315,8 @@ type ruleChange struct {
 
 // check validates the items of a PUT, all or none: an item that cannot be
 // saved is a field error on items.<index>. Removing a rule always can.
-func (gp *groupPrices) check(ctx context.Context, q *gorm.DB, items []rulePatch) ([]ruleChange, error) {
+// facts are the usage facts an expression may read.
+func (gp *groupPrices) check(ctx context.Context, q *gorm.DB, items []rulePatch, facts map[string]bool) ([]ruleChange, error) {
 	segmentIDs := []int64{}
 	for _, item := range items {
 		segmentIDs = append(segmentIDs, deref(item.SegmentID))
@@ -327,7 +328,7 @@ func (gp *groupPrices) check(ctx context.Context, q *gorm.DB, items []rulePatch)
 	}
 	changes := make([]ruleChange, 0, len(items))
 	for i, item := range items {
-		rule, err := gp.checkPatch(ctx, known, item)
+		rule, err := gp.checkPatch(ctx, known, item, facts)
 		if err != nil {
 			return nil, core.InvalidFields(core.FieldError{Field: "items." + strconv.Itoa(i), Code: "invalid", Message: err.Error()})
 		}
@@ -339,8 +340,9 @@ func (gp *groupPrices) check(ctx context.Context, q *gorm.DB, items []rulePatch)
 
 // checkPatch returns the rule an item stores, nil to remove the one there.
 // The error says why the item cannot be saved; known are the segments that
-// exist among those the items name.
-func (gp *groupPrices) checkPatch(ctx context.Context, known []int64, item rulePatch) (*storedRule, error) {
+// exist among those the items name, facts the usage facts an expression may
+// read.
+func (gp *groupPrices) checkPatch(ctx context.Context, known []int64, item rulePatch, facts map[string]bool) (*storedRule, error) {
 	switch {
 	case item.SegmentID != nil && !slices.Contains(known, *item.SegmentID):
 		return nil, errors.New(segment.UnknownMessage(ctx))
@@ -349,7 +351,7 @@ func (gp *groupPrices) checkPatch(ctx context.Context, known []int64, item ruleP
 	case !slices.Contains(gp.models, item.Model):
 		return nil, errors.New(core.Text(ctx, "the group does not provide this model", "该分组不提供此模型"))
 	}
-	return checkRule(ctx, *item.Rule, gp.prices.base(item.Model))
+	return checkRule(ctx, *item.Rule, gp.prices.base(item.Model), facts)
 }
 
 // PUT /groups/:id/model-prices?segment_id= {items: [{segment_id, model, rule}]}
@@ -380,7 +382,7 @@ func (s *Service) saveGroupPrices(c *gin.Context) {
 		if out, err = gp.scope(ctx, tx, segmentID, showUsers); err != nil {
 			return err
 		}
-		changes, err := gp.check(ctx, tx, in.Items)
+		changes, err := gp.check(ctx, tx, in.Items, s.factsFor())
 		if err != nil {
 			return err
 		}

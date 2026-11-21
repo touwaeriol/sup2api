@@ -8,14 +8,15 @@
 // the API rows together.
 import { nextId, now } from './router'
 import { configPrice, type PriceDef } from './billing'
-import { requestTier, simpleTier, singleTier, takesCustomPrice, type VisualConfig } from '../src/views/prices/priceExpr'
+import { requestTier, singleTier, type VisualConfig } from '../src/views/prices/priceExpr'
 
 export type RateSource = 'segment' | 'discount' | 'group'
 export type PriceSource = 'segment' | 'group' | 'global'
 
 export type PriceRule =
   | { kind: 'multiplier'; multiplier: string }
-  | { kind: 'custom'; mode: 'visual'; config: VisualConfig }
+  | { kind: 'custom'; mode: 'visual'; config: VisualConfig; expression?: string }
+  | { kind: 'custom'; mode: 'expression'; config: Record<string, never>; expression: string }
 
 export interface MockSegment {
   id: number
@@ -102,7 +103,7 @@ const rules: RuleRow[] = [
   { segment_id: ENTERPRISE, group_id: 2, model: 'claude-haiku-4-5', rule: { kind: 'custom', mode: 'visual', config: singleTier({ p: 0.7, c: 3.5, cr: 0.07, cc: 0.9 }) } },
   // An expression price takes a multiplier only.
   { segment_id: PERSONAL_104, group_id: 2, model: 'claude-sonnet-4-5', rule: { kind: 'multiplier', multiplier: '0.9' } },
-  // Set while the model was billed per request; its global price is per token now, so the rule is inactive.
+  // A custom price by the request over a global price by tokens.
   { segment_id: null, group_id: 1, model: 'gemini-2.5-flash', rule: { kind: 'custom', mode: 'visual', config: requestTier(0.002) } }
 ]
 
@@ -192,32 +193,26 @@ export function rateOf(s: MockSegment | null, g: PricedGroup): { value: string; 
  */
 export function applyRule(base: PriceDef | null, rule: PriceRule | null): PriceDef | null {
   if (!base || !rule) return base
-  return rule.kind === 'custom' ? configPrice(rule.mode, rule.config) : { ...base, multiplier: rule.multiplier }
+  if (rule.kind === 'multiplier') return { ...base, multiplier: rule.multiplier }
+  return rule.mode === 'expression' ? { mode: rule.mode, config: {}, expression: rule.expression } : configPrice(rule.mode, rule.config)
 }
 
-/** A rule as a row of model prices carries it. */
-type ListedRule = PriceRule & { inactive?: true }
-
-/** How a one-tier price is priced: by the request or by tokens. */
-const unitOf = (config: unknown) => simpleTier(config)?.unit ?? 'token'
-
-/** A rule as configured; a custom price the global price no longer takes (another unit, or tiers, rules or an expression now) is marked inactive. */
-function listedRule(rule: PriceRule | undefined, base: PriceDef | null): ListedRule | null {
-  if (!rule) return null
-  return rule.kind === 'custom' && base && (!takesCustomPrice(base.mode, base.config) || unitOf(rule.config) !== unitOf(base.config)) ? { ...rule, inactive: true } : rule
+/** A rule as a row of model prices carries it: a custom price with its expression. */
+function listedRule(rule: PriceRule | undefined): PriceRule | null {
+  if (!rule || rule.kind === 'multiplier' || rule.mode === 'expression') return rule ?? null
+  return { ...rule, expression: configPrice(rule.mode, rule.config).expression }
 }
 
 /**
  * The list price of a model in a group for a segment, first hit: the rule of
- * the segment there, the rule of the group, the global price. An inactive
- * rule is skipped, and without a global price no rule applies. Both rules
- * are returned as configured.
+ * the segment there, the rule of the group, the global price; without a
+ * global price no rule applies. Both rules are returned as configured.
  */
 export function listPriceOf(s: MockSegment | null, groupId: number, model: string, base: PriceDef | null) {
-  const group_rule = listedRule(rulesWhere({ segment_id: null, group_id: groupId, model })[0]?.rule, base)
-  const segment_rule = s && listedRule(rulesWhere({ segment_id: s.id, group_id: groupId, model })[0]?.rule, base)
-  const levels: Array<[PriceSource, ListedRule | null]> = base ? [['segment', segment_rule], ['group', group_rule]] : []
-  const [source, rule] = levels.find(([, r]) => r && !r.inactive) ?? ['global', null]
+  const group_rule = listedRule(rulesWhere({ segment_id: null, group_id: groupId, model })[0]?.rule)
+  const segment_rule = s && listedRule(rulesWhere({ segment_id: s.id, group_id: groupId, model })[0]?.rule)
+  const levels: Array<[PriceSource, PriceRule | null]> = base ? [['segment', segment_rule], ['group', group_rule]] : []
+  const [source, rule] = levels.find(([, r]) => r) ?? ['global', null]
   return { group_rule, segment_rule, source, list_price: applyRule(base, rule) }
 }
 

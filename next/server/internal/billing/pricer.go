@@ -24,9 +24,23 @@ type priceSnapshot struct {
 	at      time.Time
 	byModel map[string]core.PriceRule // one price per complete model id
 	bases   catalog                   // the same prices as the pricing endpoints show them
-	custom  map[string]string         // PriceDef.customShape of each base, decoded once
 	rules   ruleSet                   // price rules of groups and segments
 }
+
+// priceTraits is what the expression of a price tells of the requests it
+// serves: a price that reads video usage facts serves video requests only; a
+// visual price that reads no token count is due per request.
+type priceTraits struct{ videoOnly, perRequest bool }
+
+func traitsOf(mode string, program *expr.Program) priceTraits {
+	return priceTraits{
+		videoOnly:  slices.ContainsFunc(program.Facts(), func(fact string) bool { return strings.HasPrefix(fact, "video_") }),
+		perRequest: mode == expr.ModeVisual && len(program.UsedVars()) == 0,
+	}
+}
+
+// apply sets the traits on r.
+func (t priceTraits) apply(r *core.PriceRule) { r.VideoOnly, r.PerRequest = t.videoOnly, t.perRequest }
 
 type resolved struct {
 	at   time.Time
@@ -48,19 +62,15 @@ func (s *Service) snapshot(ctx context.Context) (*priceSnapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	snap = &priceSnapshot{at: time.Now(), byModel: map[string]core.PriceRule{}, bases: catalog{}, custom: map[string]string{}}
+	snap = &priceSnapshot{at: time.Now(), byModel: map[string]core.PriceRule{}, bases: catalog{}}
 	for _, row := range rows {
 		r := core.PriceRule{ID: row.ID, Model: row.Model, Mode: row.Mode, Expression: row.Expression,
 			ExprVersion: core.ValueOr(row.ExprVersion, 0), ExprHash: row.ExprHash}
-		// A price that reads video usage facts serves video requests only; a
-		// visual price that reads no token count is due per request.
 		if program, err := expr.CompileCached(r.Expression); err == nil {
-			r.VideoOnly = slices.ContainsFunc(program.Facts(), func(fact string) bool { return strings.HasPrefix(fact, "video_") })
-			r.PerRequest = r.Mode == expr.ModeVisual && len(program.UsedVars()) == 0
+			traitsOf(r.Mode, program).apply(&r)
 		}
 		snap.byModel[r.Model] = r
-		base := PriceDef{Mode: r.Mode, Config: row.Config, Expression: r.Expression}
-		snap.bases[r.Model], snap.custom[r.Model] = base, base.customShape()
+		snap.bases[r.Model] = PriceDef{Mode: r.Mode, Config: row.Config, Expression: r.Expression}
 	}
 	if snap.rules, err = loadRules(ctx, s.db.Gorm, ""); err != nil {
 		return nil, err
@@ -91,7 +101,7 @@ func (snap *priceSnapshot) resolve(q core.PriceQuery) *core.PriceRule {
 	if global == nil {
 		return nil
 	}
-	rule, source := snap.rules.levels(q).applied(snap.custom[q.Model])
+	rule, source := snap.rules.levels(q).applied()
 	return rule.price(*global, source)
 }
 
@@ -125,16 +135,25 @@ func (s *Service) Resolve(ctx context.Context, q core.PriceQuery) (*core.PriceRu
 }
 
 // Inputs implements core.Pricer: the body paths and header names the
-// expression reads, to be captured by the gateway at request time.
+// expression reads, to be captured by the gateway at request time; under a
+// custom rule also those the global price (Base) reads, which settlement
+// evaluates for the base cost.
 func (s *Service) Inputs(rule *core.PriceRule) (bodyPaths []string, headerNames []string) {
 	if rule == nil {
 		return nil, nil
 	}
-	p, err := expr.CompileCached(rule.Expression)
-	if err != nil {
-		return nil, nil
+	sources := []string{rule.Expression}
+	if rule.Base != nil {
+		sources = append(sources, rule.Base.Expression)
 	}
-	return p.Params(), p.Headers()
+	for _, src := range sources {
+		if p, err := expr.CompileCached(src); err == nil {
+			bodyPaths, headerNames = append(bodyPaths, p.Params()...), append(headerNames, p.Headers()...)
+		}
+	}
+	slices.Sort(bodyPaths)
+	slices.Sort(headerNames)
+	return slices.Compact(bodyPaths), slices.Compact(headerNames)
 }
 
 // factsFor returns the u() keys declared anywhere in the generation: usage

@@ -16,7 +16,8 @@ import (
 // tiers by max_len get conditions, in the old generator's order, and
 // per_request prices become one request tier with their rules, in
 // model_prices and in custom price rules; every config generates the stored
-// expression (expr_hash unchanged), price_rules takes mode visual only, and
+// expression (expr_hash unchanged), price_rules takes the modes of a
+// global price (a custom price is written as one), and
 // a rerun writes nothing.
 func TestMigration0122TierConditions(t *testing.T) {
 	const id = "0122_tier_conditions.sql"
@@ -115,13 +116,15 @@ func TestMigration0122TierConditions(t *testing.T) {
 	check("model_prices", prices, read("model_prices", "true"))
 	check("price_rules", custom, read("price_rules", "kind = 'custom'"))
 
-	// price_rules takes visual custom prices only.
+	// price_rules takes the modes of a global price only.
 	_, err := db.SQL.ExecContext(ctx, `INSERT INTO price_rules (group_id, segment_id, model, kind, mode, config, expression, expr_hash)
 		SELECT g.id, NULL, 'old-mode', 'custom', 'per_token', '{}', 'tier("x", p)', 'h' FROM groups g`)
 	require.ErrorContains(t, err, "price_rules_mode_check")
-	exec(`INSERT INTO price_rules (group_id, model, kind, mode, config, expression, expr_hash)
-		SELECT id, 'new-mode', 'custom', 'visual', '{}', 'tier("x", p)', 'h' FROM groups`)
-	exec(`DELETE FROM price_rules WHERE model = 'new-mode'`)
+	for _, mode := range []string{expr.ModeVisual, expr.ModeExpression} {
+		exec(`INSERT INTO price_rules (group_id, model, kind, mode, config, expression, expr_hash)
+			SELECT id, 'new-mode', 'custom', '`+mode+`', '{}', 'tier("x", p)', 'h' FROM groups`)
+		exec(`DELETE FROM price_rules WHERE model = 'new-mode'`)
+	}
 
 	// A rerun writes no row of either table, and leaves no function behind.
 	snapshot := func() map[string]string {

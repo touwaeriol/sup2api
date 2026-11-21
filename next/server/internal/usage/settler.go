@@ -940,9 +940,12 @@ func priceOne(ctx context.Context, q core.Quoter, p *pending) (amounts, BillingD
 	if rule.Scale != nil {
 		cost.list = res.Cost.Mul(*rule.Scale)
 	}
+	// The base cost is shown, not charged: a global price that cannot be
+	// evaluated leaves it at the list cost rather than block the charge.
 	if rule.Base != nil {
 		if cost.base, err = baseCost(rule.Base, p); err != nil {
-			return amounts{}, BillingDetail{}, "", err
+			slog.Warn("usage: base price not evaluated, base cost = list cost", "request_id", p.RequestID, "err", err)
+			cost.base = cost.list
 		}
 	}
 	detail.Cost, detail.ListCost = cost.base, &cost.list

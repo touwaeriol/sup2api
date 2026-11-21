@@ -27,8 +27,6 @@ export default {
     requestInvalid: '请填写不小于 0 的单价',
     multiplierOnly: '该模型的全局价不是只有一档、没有加价规则的可视化价格（按表达式计费，或分了多档、带加价规则），只能按倍数调整。',
     noBase: '该模型还没有全局价，请先到“模型价格”里设置。',
-    inactive: '规则未生效',
-    inactiveHint: '计费方式已变，规则未生效：全局价改了计费方式，这条自定义价不再适用。请重新设置或清除。',
     requestPrice: '单价'
   },
   price: {

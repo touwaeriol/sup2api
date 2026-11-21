@@ -30,8 +30,8 @@ func TestListPrice(t *testing.T) {
 		base.Multiplier = dec(n)
 		return base
 	}
-	own := &storedRule{Rule: Rule{Kind: core.PriceRuleCustom, Mode: "visual", Config: json.RawMessage(`{"tiers":[{"name":"base","p":0.8,"c":4}]}`)},
-		expression: `tier("base", p*0.8 + c*4)`}
+	own := &storedRule{Rule: Rule{Kind: core.PriceRuleCustom, Mode: "visual", Config: json.RawMessage(`{"tiers":[{"name":"base","p":0.8,"c":4}]}`),
+		Expression: `tier("base", p*0.8 + c*4)`}}
 	cases := []struct {
 		name string
 		base PriceDef
@@ -94,7 +94,8 @@ func costOf(t *testing.T, expression string) string {
 // config where there is one and else around the expression.
 func TestExportPrice(t *testing.T) {
 	handWritten := PriceDef{Mode: "expression", Config: json.RawMessage(`{}`), Expression: `tier("base", p*3 + c*15)`}
-	stale := customRule("request", `tier("base", flat(1))`)
+	perRequest := customRule(`tier("base", flat(1))`)
+	perRequest.Config = json.RawMessage(`{"tiers": [{"name": "base", "unit": "request", "price": 1}]}`)
 
 	p, err := exportPrice("m", handWritten, ruleLevels{group: times("1.2")})
 	require.NoError(t, err)
@@ -106,9 +107,10 @@ func TestExportPrice(t *testing.T) {
 	require.Equal(t, `tier("base", p*0.5 + c*2.5)`, p.Expression)
 	require.JSONEq(t, `{"tiers": [{"name": "base", "p": 0.5, "c": 2.5}], "rules": []}`, string(p.Config))
 
-	p, err = exportPrice("m", perTokenPrice, ruleLevels{segment: stale})
+	// A custom price goes out as it is, whatever the global price.
+	p, err = exportPrice("m", perTokenPrice, ruleLevels{segment: perRequest})
 	require.NoError(t, err)
-	require.Equal(t, syncPrice{Model: "m", Mode: perTokenPrice.Mode, Config: perTokenPrice.Config, Expression: perTokenPrice.Expression}, p)
+	require.Equal(t, syncPrice{Model: "m", Mode: "visual", Config: perRequest.Config, Expression: perRequest.Expression}, p)
 
 	// Free: the expression times 0.
 	p, err = exportPrice("m", handWritten, ruleLevels{group: times("0")})

@@ -488,7 +488,7 @@ const SMOKE: Array<[string, Record<string, number>]> = [
   ['len = 1,000,000,000', { p: 1e6, len: 1e9 }]
 ]
 
-function validate(body: any) {
+export function validate(body: any) {
   const { mode, config, expression, issue } = exprOf(body)
   const errors: Array<{ code: string; message: LText; detail?: unknown; line?: number; column?: number }> = []
   const warnings: Array<{ code: string; message: LText; detail?: unknown }> = []

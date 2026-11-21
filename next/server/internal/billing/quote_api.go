@@ -177,7 +177,7 @@ func (s *Service) quote(ctx context.Context, in QuoteRequest) (*PricingQuote, er
 	row := levels.row(on.Model, base)
 	out := &PricingQuote{Segment: ref, Accessible: terms.Open, AccessSource: accessSource(gp.group.public, terms.Granted),
 		Base: row.Base, ListPrice: row.ListPrice, PriceSource: row.Source, Rate: terms.EffectiveRate(), RateOverride: terms.Override}
-	out.PriceLevels.Segment, out.PriceLevels.Group = levels.segment.view(base), row.GroupRule
+	out.PriceLevels.Segment, out.PriceLevels.Group = levels.segment.view(), row.GroupRule
 	out.ListCost, out.Cost, err = s.quoteCosts(ctx, snap.resolve(on), in.Usage, terms.Rate)
 	return out, err
 }
