@@ -95,3 +95,27 @@ func TestPrimaryAmountsBesideItems(t *testing.T) {
 		}
 	}
 }
+
+// The segments not billed at their own price stay in billing_detail.inputs
+// through settlement (CONTRACTS §120.4).
+func TestSegmentAuditKeptInInputs(t *testing.T) {
+	item := core.PricedUsage{Kind: "advisor", Model: "main", Price: &core.PriceRule{ID: 9, Expression: `tier("main",p)`}, Tokens: core.UsageTokens{Input: 1_000_000}, UsageSemantics: "exclusive", RateMultiplier: decimal.NewFromInt(1)}
+	rec := &core.UsageRecord{Billable: true, UsageSemantics: "exclusive", Price: &core.PriceRule{ID: 9, Expression: `tier("main",p)`}, RateMultiplier: decimal.NewFromInt(1),
+		Additional: []core.PricedUsage{item}, RequestedModelSegments: []core.RequestedModelSegment{{Part: core.SegmentAdditional, Model: "unadmitted"}}}
+	_, detail, _, err := priceOf(fromRecord(rec))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(detail)
+	if !strings.Contains(string(raw), `"requested_model_segments":[{"part":"additional","index":0,"model":"unadmitted"}]`) {
+		t.Fatal("audit lost:", string(raw))
+	}
+	rec.Additional, rec.RequestedModelSegments, rec.SegmentsDropped = nil, nil, "additional: invalid model"
+	_, detail, _, err = priceOf(fromRecord(rec))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ = json.Marshal(detail); !strings.Contains(string(raw), `"segments_dropped":"additional: invalid model"`) {
+		t.Fatal("drop lost:", string(raw))
+	}
+}

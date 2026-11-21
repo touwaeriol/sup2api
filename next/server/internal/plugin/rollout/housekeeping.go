@@ -7,6 +7,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/registry"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store/model"
@@ -115,8 +116,8 @@ func (c *Controller) pruneOrphans(ctx context.Context) {
 		c.log.Warn("plugin package cleanup skipped", "err", err)
 		return
 	}
-	removed, err := c.o.Packages.PruneOrphans(func(key, version, hash8 string) bool {
-		return keep[key+"@"+version+"-"+hash8]
+	removed, err := c.o.Packages.PruneOrphans(func(key, versionHash string) bool {
+		return keep[key+"@"+versionHash]
 	})
 	for _, d := range removed {
 		c.log.Info("removed orphaned plugin package directory", "dir", d)
@@ -126,7 +127,7 @@ func (c *Controller) pruneOrphans(ctx context.Context) {
 	}
 }
 
-// referencedPackages returns "key@version-hash8" of every package version
+// referencedPackages returns "key@<version hash>" of every package version
 // named by plugins.active_version/desired_version or an open rollout.
 func (c *Controller) referencedPackages(ctx context.Context) (map[string]bool, error) {
 	var rows []model.PluginVersion
@@ -136,7 +137,7 @@ func (c *Controller) referencedPackages(ctx context.Context) (map[string]bool, e
 	out := map[string]bool{}
 	for _, v := range rows {
 		if sum := v.PackageSha256; len(sum) >= 8 {
-			out[v.PluginKey+"@"+v.Version+"-"+lower(sum[:8])] = true
+			out[v.PluginKey+"@"+core.PluginVersionHash(v.Version, sum)] = true
 		}
 	}
 	return out, nil
@@ -151,16 +152,6 @@ func referencedVersions(g *gorm.DB) *gorm.DB {
 			OR EXISTS (SELECT 1 FROM plugin_rollouts r WHERE r.plugin_key = v.plugin_key
 				AND r.phase IN ('preparing','activating')
 				AND (v.version = r.from_version OR v.version = r.target_version))`)
-}
-
-func lower(s string) string {
-	b := []byte(s)
-	for i, ch := range b {
-		if ch >= 'A' && ch <= 'Z' {
-			b[i] = ch + 'a' - 'A'
-		}
-	}
-	return string(b)
 }
 
 // servingInstance returns the instance of key currently in the generation.

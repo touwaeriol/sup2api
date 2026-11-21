@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"strings"
 
 	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
@@ -103,6 +104,13 @@ type SettingsValidator interface {
 // sticky sessions (CONTRACTS §5.6).
 type SchedulerPlugin interface {
 	RankAccounts(ctx context.Context, in *pluginv1.RankAccountsRequest) (*pluginv1.RankAccountsResponse, error)
+}
+
+// PluginVersionHash is "<version>-<hash8>", hash8 being the first 8 hex
+// digits of the package sha256 in lower case. It names a package's directory
+// and its assets' URL (PluginAssetBase).
+func PluginVersionHash(version, sha256 string) string {
+	return version + "-" + strings.ToLower(sha256[:min(8, len(sha256))])
 }
 
 // PluginAssetBase is the public URL prefix of the assets of a plugin package,

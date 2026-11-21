@@ -1,6 +1,7 @@
 package expr
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -416,7 +417,7 @@ var locCache = struct {
 
 func loadLocation(name string) (*time.Location, error) {
 	if name == "" || name == "Local" {
-		return nil, fmt.Errorf("an explicit IANA time zone is required")
+		return nil, errors.New("an explicit IANA time zone is required")
 	}
 	locMu.RLock()
 	l := locCache.m[name]

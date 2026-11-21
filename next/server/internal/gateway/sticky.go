@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"regexp"
 	"strconv"
@@ -333,7 +332,7 @@ func (c *call) resolveSticky(ctx context.Context) *stickySession {
 	}
 	if g.d.Redis == nil {
 		if c.failurePolicy != nil {
-			c.failureState.stickyErr = fmt.Errorf("sticky store unavailable")
+			c.failureState.stickyErr = errors.New("sticky store unavailable")
 		}
 		return nil
 	}

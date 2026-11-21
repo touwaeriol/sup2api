@@ -5,6 +5,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 )
@@ -241,7 +242,7 @@ func collect(ds []Delta) (*Msg, error) {
 		return nil, b.err
 	}
 	if !b.ended {
-		return nil, fmt.Errorf("convert: upstream reply has no end")
+		return nil, errors.New("convert: upstream reply has no end")
 	}
 	return &b.m, nil
 }

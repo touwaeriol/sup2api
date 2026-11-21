@@ -323,13 +323,15 @@ func withoutAccountIDs(raw json.RawMessage) json.RawMessage {
 // in the global price behind a custom rule (core.PricingTrace), at the top and
 // in the detail of every additional or replacement component
 // (AdditionalBillingDetail), and in the whole price rule of its
-// core.PricedUsage under inputs.
+// core.PricedUsage under inputs. The upstream model a segment billed at the
+// requested model was reported under goes with them (hideUpstream).
 var (
 	billingExpressionPaths    = []string{"inputs.pricing.base.expression", "inputs.pricing.base.expr_hash"}
 	componentExpressionFields = append([]string{"expression_hash"}, prefixed("detail.", billingExpressionPaths)...)
 	billingComponentFields    = map[string][]string{
 		"additional": componentExpressionFields, "replacement": componentExpressionFields,
 		"inputs.additional": {"Price"}, "inputs.replacement": {"Price"},
+		"inputs.requested_model_segments": {"model"},
 	}
 )
 
@@ -342,7 +344,8 @@ func prefixed(prefix string, paths []string) []string {
 }
 
 // withoutExpressions is billing_detail without the price expressions and
-// hashes in it; what the amounts were computed from stays. A detail that
+// hashes in it, nor upstream models; what the amounts were computed from
+// stays. A detail that
 // cannot be read goes altogether rather than unredacted.
 func withoutExpressions(raw json.RawMessage) json.RawMessage {
 	if len(raw) == 0 {

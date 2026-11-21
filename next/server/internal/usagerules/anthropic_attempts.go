@@ -2,7 +2,7 @@ package usagerules
 
 import (
 	"encoding/json"
-	"fmt"
+	"errors"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -43,7 +43,7 @@ func (c *attemptChain) add(model string, i int) error {
 	if len(c.groups) == 0 || c.groups[len(c.groups)-1].model != model {
 		for _, g := range c.groups {
 			if g.model == model {
-				return fmt.Errorf("fallback model reappeared in attempt chain")
+				return errors.New("fallback model reappeared in attempt chain")
 			}
 		}
 		c.groups = append(c.groups, attemptGroup{model: model, start: i, end: i})
@@ -62,23 +62,23 @@ func attemptEntryModel(entry gjson.Result, primary string, defaultPrimary bool) 
 		model = gjson.Result{Type: gjson.String, Str: primary}
 	}
 	if model.Type != gjson.String || model.Str == "" || !utf8.ValidString(model.Str) || strings.ContainsAny(model.Str, "\r\n\x00") {
-		return "", fmt.Errorf("missing or invalid attempt model")
+		return "", errors.New("missing or invalid attempt model")
 	}
 	return model.Str, nil
 }
 
 func (m *attemptMeter) anthropicFallback(kind, primary string) ([]core.AttemptUsage, error) {
 	if !m.usage.IsObject() || m.reason == "" {
-		return nil, fmt.Errorf("attempt response lacks usage/stop reason")
+		return nil, errors.New("attempt response lacks usage/stop reason")
 	}
 	if len(m.boundaries) > 3 {
-		return nil, fmt.Errorf("too many fallback transitions")
+		return nil, errors.New("too many fallback transitions")
 	}
 	array := m.usage.Get("iterations")
 	var entries []gjson.Result
 	if array.Exists() && array.Type != gjson.Null {
 		if !array.IsArray() || len(array.Array()) > 128 {
-			return nil, fmt.Errorf("invalid attempt usage snapshot")
+			return nil, errors.New("invalid attempt usage snapshot")
 		}
 		entries = array.Array()
 	}
@@ -89,14 +89,14 @@ func (m *attemptMeter) anthropicFallback(kind, primary string) ([]core.AttemptUs
 			selected = append(selected, entry)
 		case "advisor_message": // Independently metered by Additional rules.
 		case "compaction":
-			return nil, fmt.Errorf("fallback compaction lacks an admitted per-attempt metering contract")
+			return nil, errors.New("fallback compaction lacks an admitted per-attempt metering contract")
 		default:
-			return nil, fmt.Errorf("unknown iteration type in attempt usage")
+			return nil, errors.New("unknown iteration type in attempt usage")
 		}
 	}
 	if len(selected) == 0 {
 		if len(m.boundaries) > 0 || m.model != primary {
-			return nil, fmt.Errorf("fallback served without per-attempt usage")
+			return nil, errors.New("fallback served without per-attempt usage")
 		}
 		// No model handoff: a normal single primary completion may omit iterations.
 		tokens, err := attemptTokens(m.usage)
@@ -129,7 +129,7 @@ func (m *attemptMeter) anthropicFallback(kind, primary string) ([]core.AttemptUs
 		}
 		if entry.Get("type").Str == "fallback_message" {
 			if chain.fallbackSeen || i != len(selected)-1 {
-				return nil, fmt.Errorf("fallback terminal must be final sampling iteration")
+				return nil, errors.New("fallback terminal must be final sampling iteration")
 			}
 			chain.fallbackSeen = true
 		}
@@ -137,17 +137,17 @@ func (m *attemptMeter) anthropicFallback(kind, primary string) ([]core.AttemptUs
 	groups, fallbackSeen := chain.groups, chain.fallbackSeen
 
 	if len(groups) > 4 || len(m.boundaries) != len(groups)-1 {
-		return nil, fmt.Errorf("fallback transition/usage groups disagree")
+		return nil, errors.New("fallback transition/usage groups disagree")
 	}
 	if len(groups) > 1 && !fallbackSeen {
-		return nil, fmt.Errorf("fallback response lacks terminal iteration")
+		return nil, errors.New("fallback response lacks terminal iteration")
 	}
 	if !fallbackSeen && groups[0].model != primary {
-		return nil, fmt.Errorf("nonfallback attempt changed primary model")
+		return nil, errors.New("nonfallback attempt changed primary model")
 	}
 	for i, b := range m.boundaries {
 		if b.Get("from.model").Str != groups[i].model || b.Get("to.model").Str != groups[i+1].model {
-			return nil, fmt.Errorf("fallback transition identities do not match attempts")
+			return nil, errors.New("fallback transition identities do not match attempts")
 		}
 		if err := refusalDisposition(&items[groups[i].end], b.Get("trigger")); err != nil {
 			return nil, err
@@ -161,7 +161,7 @@ func (m *attemptMeter) anthropicFallback(kind, primary string) ([]core.AttemptUs
 	// A streamed start can retain the primary model after a mid-output handoff.
 	// The final usage identity, validated against boundaries above, is authoritative.
 	if m.model == "" || m.model != groups[0].model && m.model != items[len(items)-1].Model {
-		return nil, fmt.Errorf("response model conflicts with attempts")
+		return nil, errors.New("response model conflicts with attempts")
 	}
 	return items, nil
 }
@@ -180,18 +180,18 @@ func attemptTokens(v gjson.Result) (core.UsageTokens, error) {
 		value := v.Get(path)
 		if !value.Exists() || value.Type == gjson.Null {
 			if i < 2 {
-				return core.UsageTokens{}, fmt.Errorf("missing attempt token counter")
+				return core.UsageTokens{}, errors.New("missing attempt token counter")
 			}
 			continue
 		}
 		n, e := strconv.ParseInt(value.Raw, 10, 64)
 		if value.Type != gjson.Number || e != nil || !core.ValidTokenCount(n) {
-			return core.UsageTokens{}, fmt.Errorf("invalid attempt token counter")
+			return core.UsageTokens{}, errors.New("invalid attempt token counter")
 		}
 		values[i] = n
 	}
 	if values[4] > values[3] {
-		return core.UsageTokens{}, fmt.Errorf("attempt cache subdivision exceeds total")
+		return core.UsageTokens{}, errors.New("attempt cache subdivision exceeds total")
 	}
 	return Tokens(values[0], values[1], values[2], values[3], values[4]), nil
 }
@@ -201,11 +201,11 @@ func refusalDisposition(item *core.AttemptUsage, details gjson.Result) error {
 		return nil
 	}
 	if !details.IsObject() || details.Get("type").Str != "refusal" {
-		return fmt.Errorf("zero-output refusal lacks classification evidence")
+		return errors.New("zero-output refusal lacks classification evidence")
 	}
 	category := details.Get("category")
 	if !category.Exists() {
-		return fmt.Errorf("zero-output refusal lacks category")
+		return errors.New("zero-output refusal lacks category")
 	}
 	if category.Type == gjson.Null {
 		item.Free = true
@@ -213,7 +213,7 @@ func refusalDisposition(item *core.AttemptUsage, details gjson.Result) error {
 		return nil
 	}
 	if category.Type != gjson.String {
-		return fmt.Errorf("invalid refusal category")
+		return errors.New("invalid refusal category")
 	}
 	switch category.Str {
 	case "bio", "frontier_llm", "reasoning_extraction":
@@ -222,7 +222,7 @@ func refusalDisposition(item *core.AttemptUsage, details gjson.Result) error {
 		item.Free = true
 		item.BillingReason = "refusal_before_output_free_" + category.Str
 	default:
-		return fmt.Errorf("unknown refusal billing category")
+		return errors.New("unknown refusal billing category")
 	}
 	return nil
 }

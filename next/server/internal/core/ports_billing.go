@@ -177,7 +177,13 @@ type UsageRecord struct {
 	// Nonempty Replacement prices verified attempts instead of top-level tokens.
 	Replacement []PricedUsage
 	Additional  []PricedUsage
-	RequestID   string
+	// RequestedModelSegments are the items of Additional and Replacement
+	// billed at the requested model's price instead of their own;
+	// SegmentsDropped says why the segments could not be read, the request
+	// then being billed on its top-level usage (CONTRACTS §120.4).
+	RequestedModelSegments []RequestedModelSegment
+	SegmentsDropped        string
+	RequestID              string
 	// ClientRequestID is the client's X-Request-Id, truncated to 128 chars;
 	// recorded only, never used as an idempotency key.
 	ClientRequestID string
@@ -377,8 +383,8 @@ const UsageErrorUnreported = "usage_unreported"
 // SetUnreported makes r the free record of a request whose plugin stated no
 // usage facts: the host's reading (identity, latency, status, routing)
 // without anything to bill - success false, ErrorType UsageErrorUnreported
-// with reason, no tokens, metrics, additional or replacement usage, price
-// or reservation, UsageExtract UsageExtractUnreported. It is
+// with reason, no tokens, metrics, additional or replacement usage or their
+// audit, price or reservation, UsageExtract UsageExtractUnreported. It is
 // the one definition of that record: CloseExecutionUnreported writes it, the
 // gateway submits it for an execution without a durable observation, a
 // plugin's host_usage without a reading and a task submission that could not
@@ -386,6 +392,7 @@ const UsageErrorUnreported = "usage_unreported"
 func (r *UsageRecord) SetUnreported(reason string) {
 	r.Success, r.ErrorType, r.ErrorMessage = false, UsageErrorUnreported, x.Truncate(reason, 1000)
 	r.Tokens, r.Metrics, r.Additional, r.Replacement = UsageTokens{}, nil, nil, nil
+	r.RequestedModelSegments, r.SegmentsDropped = nil, ""
 	r.Billable, r.Price, r.Reservation, r.ReservationDropped = false, nil, nil, ""
 	r.UsageExtract = UsageExtractUnreported
 }

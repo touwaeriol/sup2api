@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"time"
@@ -36,7 +37,7 @@ func localTokenizerEstimate(ctx context.Context, prompt string, floor int64) (*p
 func (c *call) precharge(ctx context.Context) error {
 	gate := c.g.d.Balance
 	if gate == nil {
-		return fmt.Errorf("billing precharger unavailable")
+		return errors.New("billing precharger unavailable")
 	}
 	floor, err := gate.PreConsumeTokens(ctx)
 	if err != nil {
@@ -52,7 +53,7 @@ func (c *call) precharge(ctx context.Context) error {
 			EstimateUsage(context.Context, *pluginv1.EstimateUsageRequest) (*pluginv1.UsageReport, error)
 		})
 		if !ok {
-			return fmt.Errorf("plugin does not implement EstimateUsage")
+			return errors.New("plugin does not implement EstimateUsage")
 		}
 		estctx, cancel := context.WithTimeout(ctx, c.gw.hotpathTimeout())
 		defer cancel()
@@ -74,7 +75,7 @@ func (c *call) precharge(ctx context.Context) error {
 		}
 	} else {
 		if c.ep.TaskSubmit() {
-			return fmt.Errorf("task estimator unavailable")
+			return errors.New("task estimator unavailable")
 		}
 		// Built-in platforms count locally; run() may already have done it
 		// off the request path (prompt_count.go).
@@ -84,12 +85,12 @@ func (c *call) precharge(ctx context.Context) error {
 		}
 	}
 	if report == nil || report.Reserve != nil {
-		return fmt.Errorf("invalid pre-upstream estimate")
+		return errors.New("invalid pre-upstream estimate")
 	}
 	t := report.GetTokens()
 	for _, n := range []int64{t.GetInputTokens(), t.GetOutputTokens(), t.GetCacheReadTokens(), t.GetCacheCreationTokens(), t.GetCacheCreation_1HTokens()} {
 		if !core.ValidTokenCount(n) {
-			return fmt.Errorf("invalid estimated token count")
+			return errors.New("invalid estimated token count")
 		}
 	}
 

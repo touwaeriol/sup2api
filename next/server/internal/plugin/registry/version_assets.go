@@ -2,7 +2,7 @@ package registry
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,32 +19,56 @@ import (
 // remains enabled and its package is retained, and the plugin's icon for as
 // long as it is installed.
 func (s *Packages) ReadVersionAsset(ctx context.Context, key, vh, name string) (core.PluginInfo, []byte, string, error) {
-	var version, sum, url string
+	version, ok := versionOfHash(vh)
+	if !ok {
+		return core.PluginInfo{}, nil, "", ErrAssetNotFound
+	}
+	var sum, url string
 	var icon bool
-	err := servedVersion(store.G(ctx, s.db.Gorm), key, vh, name).Row().Scan(&version, &sum, &url, &icon)
-	if store.IsNoRows(err) {
+	err := servedVersion(store.G(ctx, s.db.Gorm), key, version, name).Row().Scan(&sum, &url, &icon)
+	if store.IsNoRows(err) || err == nil && core.PluginVersionHash(version, sum) != vh {
 		return core.PluginInfo{}, nil, "", ErrAssetNotFound
 	}
 	if err != nil {
 		return core.PluginInfo{}, nil, "", err
 	}
 	v := servedPackage{key: key, version: version, vh: vh, sum: strings.ToLower(sum), url: url}
-	if !icon {
-		a, err := s.readPackageAsset(ctx, v, name)
-		return a.info, a.data, a.contentType, err
+	var a versionAsset
+	if icon {
+		a, err = s.readIcon(ctx, v, name)
+	} else {
+		a, err = s.readPackageAsset(ctx, v, name)
 	}
-	// The plugins list asks for the icon of every plugin that does not run,
-	// and each read loads a whole package: one at a time, once per package.
-	s.iconMu.Lock()
-	defer s.iconMu.Unlock()
-	a, ok := s.icons[v.sum]
-	if !ok {
-		if a, err = s.readPackageAsset(ctx, v, name); err != nil {
-			return core.PluginInfo{}, nil, "", err
-		}
-		s.icons[v.sum] = a
+	return a.info, a.data, a.contentType, err
+}
+
+// packageIcon is the icon of the package with sha256 sum.
+type packageIcon struct {
+	sum   string
+	asset versionAsset
+}
+
+// readIcon reads the icon name of v once: the plugins list asks for the icon
+// of every plugin that does not run, and each read loads a whole package, so
+// the reads of one plugin's icon go one at a time.
+func (s *Packages) readIcon(ctx context.Context, v servedPackage, name string) (versionAsset, error) {
+	lk := s.lock("icon\x00" + v.key)
+	lk.Lock()
+	defer lk.Unlock()
+	s.mu.Lock()
+	cached, ok := s.icons[v.key]
+	s.mu.Unlock()
+	if ok && cached.sum == v.sum {
+		return cached.asset, nil
 	}
-	return a.info, a.data, a.contentType, nil
+	a, err := s.readPackageAsset(ctx, v, name)
+	if err != nil {
+		return versionAsset{}, err
+	}
+	s.mu.Lock()
+	s.icons[v.key] = packageIcon{sum: v.sum, asset: a}
+	s.mu.Unlock()
+	return a, nil
 }
 
 // servedPackage is the package of a version servedVersion lets through.
@@ -77,7 +101,7 @@ func (s *Packages) readPackageAsset(ctx context.Context, v servedPackage, name s
 		}
 	}
 	if !strings.EqualFold(pluginpkg.SHA256Hex(raw), v.sum) {
-		return versionAsset{}, fmt.Errorf("package checksum mismatch")
+		return versionAsset{}, errors.New("package checksum mismatch")
 	}
 	if s.verifier != nil {
 		if err := s.verifier(ctx, v.key, v.version, raw); err != nil {
@@ -89,7 +113,7 @@ func (s *Packages) readPackageAsset(ctx context.Context, v servedPackage, name s
 		return versionAsset{}, err
 	}
 	if p.Manifest.Key != v.key || p.Manifest.Version != v.version {
-		return versionAsset{}, fmt.Errorf("package identity mismatch")
+		return versionAsset{}, errors.New("package identity mismatch")
 	}
 	data, ok := p.Files[name]
 	if !ok {
@@ -99,16 +123,16 @@ func (s *Packages) readPackageAsset(ctx context.Context, v servedPackage, name s
 	return versionAsset{info: info, data: data, contentType: ContentType(name)}, nil
 }
 
-// servedVersion reads the version, package sha256 and package URL of the
-// version of key whose version hash is vh, and whether name is its icon, if
-// it may serve name: any asset while the plugin runs, only its icon while it
-// is installed but not running (the plugins list shows those too).
-func servedVersion(db *gorm.DB, key, vh, name string) *gorm.DB {
+// servedVersion reads the package sha256 and package URL of version of key,
+// and whether name is its icon, if it may serve name: any asset while the
+// plugin runs, only its icon while it is installed but not running (the
+// plugins list shows those too).
+func servedVersion(db *gorm.DB, key, version, name string) *gorm.DB {
 	uninstalling := db.Model(&model.PluginUninstall{}).Select("1").Where("plugin_uninstalls.plugin_key = p.key")
 	return db.Table("plugin_versions AS v").
-		Select("v.version, v.package_sha256, v.package_url, COALESCE(v.manifest->>'icon' = ?, false)", name).
+		Select("v.package_sha256, v.package_url, COALESCE(v.manifest->>'icon' = ?, false)", name).
 		Joins("JOIN plugins p ON p.key = v.plugin_key").
-		Where("p.key = ? AND v.version || '-' || left(v.package_sha256, 8) = ?", key, vh).
+		Where("p.key = ? AND v.version = ?", key, version).
 		Where("v.consent_status = 'approved' AND v.signature_status <> 'revoked'").
 		Where("p.status IN ('enabled', 'enabling', 'upgrading') OR v.manifest->>'icon' = ?", name).
 		Where("NOT EXISTS (?)", uninstalling)

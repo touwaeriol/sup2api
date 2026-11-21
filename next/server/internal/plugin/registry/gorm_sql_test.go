@@ -20,7 +20,7 @@ func TestSQLRegistryVersionRecord(t *testing.T) {
 
 func TestSQLRegistryServedVersion(t *testing.T) {
 	gormtest.Assert(t, func(db *gorm.DB) *gorm.DB {
-		var version string
-		return servedVersion(db, "demo", "1.2.0-0123abcd", "assets/icon.svg").Scan(&version)
+		var sum string
+		return servedVersion(db, "demo", "1.2.0", "assets/icon.svg").Scan(&sum)
 	})
 }

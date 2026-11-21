@@ -6,6 +6,7 @@ package billing
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -127,7 +128,7 @@ func (s *Service) RegisterRoutes(r *httpapi.Router) {
 // reserve and reconcile all call this to ensure consistent pricing.
 func (s *Service) Quote(ctx context.Context, in core.QuoteInputs) (decimal.Decimal, error) {
 	if in.Expression == "" {
-		return decimal.Zero, fmt.Errorf("price expression not found")
+		return decimal.Zero, errors.New("price expression not found")
 	}
 	p, err := expr.CompileCached(in.Expression)
 	if err != nil {

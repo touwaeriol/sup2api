@@ -887,9 +887,8 @@ var schedulingCases = []struct {
 
 // Judging a candidate against its binding allocates nothing, with or
 // without rules, whether it ends up serving or left out (design §3.5). Nor
-// does the rest of ineligibleReason once its route has a usage verdict for
-// the body (the first round of AllocsPerRun leaves one): a candidate costs
-// no allocation at all.
+// does the rest of ineligibleReason, which no longer checks usage (CONTRACTS
+// §120.4): a candidate costs no allocation at all.
 func TestIneligibleReasonBindingDoesNotAllocate(t *testing.T) {
 	const n = 500
 	// The least of a few rounds: what other goroutines of the test binary

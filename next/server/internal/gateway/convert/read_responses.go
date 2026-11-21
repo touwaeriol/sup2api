@@ -2,6 +2,7 @@ package convert
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -447,7 +448,7 @@ func (r *responsesReader) argsDone(key string, args, input *string) error {
 		sent = sb.String()
 	}
 	if !strings.HasPrefix(*final, sent) {
-		return fmt.Errorf("convert: final tool arguments disagree with the streamed ones")
+		return errors.New("convert: final tool arguments disagree with the streamed ones")
 	}
 	r.args(key, (*final)[len(sent):])
 	return nil

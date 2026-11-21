@@ -218,7 +218,7 @@ func TestGenerationBuildAndSwitch(t *testing.T) {
 		t.Fatalf("plugins = %+v", ps)
 	}
 	info, _ := g.Plugin("alpha")
-	if info.AssetBase != "/plugin-ui/alpha/1.0.0-"+pa.Hash8() || info.Trust != "official" {
+	if info.AssetBase != "/plugin-ui/alpha/1.0.0-"+pa.SHA256[:8] || info.Trust != "official" {
 		t.Fatalf("info = %+v", info)
 	}
 

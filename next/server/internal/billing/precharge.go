@@ -3,6 +3,7 @@ package billing
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -43,7 +44,7 @@ func (s *Service) Precharge(ctx context.Context, r *core.UsageRecord) error {
 		return nil
 	}
 	if amount.IsNegative() {
-		return fmt.Errorf("invalid negative precharge")
+		return errors.New("invalid negative precharge")
 	}
 	st, err := s.Settings(ctx)
 	if err != nil {

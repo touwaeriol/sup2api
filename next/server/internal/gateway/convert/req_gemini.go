@@ -2,6 +2,7 @@ package convert
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"mime"
 	"regexp"
@@ -273,7 +274,7 @@ func (b *geminiBuilder) inline(url string) (string, string, error) {
 	switch {
 	case ok:
 	case !isHTTPURL(url):
-		return "", "", fmt.Errorf("invalid data URL")
+		return "", "", errors.New("invalid data URL")
 	case b.opt.Fetch == nil:
 		return "", "", fmt.Errorf("media %s cannot be downloaded", url)
 	default:

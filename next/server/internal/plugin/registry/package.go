@@ -50,11 +50,9 @@ type Package struct {
 	refs int // Acquire holds not yet done; guarded by Packages.mu
 }
 
-// Hash8 is the short package hash used in directory names and asset URLs.
-func (p *Package) Hash8() string { return p.SHA256[:8] }
-
-// VersionHash is "<version>-<hash8>".
-func (p *Package) VersionHash() string { return p.Version + "-" + p.Hash8() }
+// VersionHash names the package's directory and asset URL
+// (core.PluginVersionHash).
+func (p *Package) VersionHash() string { return core.PluginVersionHash(p.Version, p.SHA256) }
 
 // AssetBase is the public URL prefix for package assets.
 func (p *Package) AssetBase() string { return core.PluginAssetBase(p.Key, p.VersionHash()) }
@@ -182,13 +180,12 @@ type Packages struct {
 
 	mu    sync.Mutex
 	cache map[string]*Package // key@version
-	// fetch serializes downloads of the same package.
+	// fetch serializes the work on one id (lock): the downloads of one
+	// package, by key@version, and the reads of one icon.
 	fetch map[string]*sync.Mutex
-
-	// icons holds the plugin icons ReadVersionAsset has read, by package
-	// sha256: a few kilobytes for each approved version asked for.
-	iconMu sync.Mutex
-	icons  map[string]versionAsset
+	// icons holds the icon ReadVersionAsset last read for each plugin key:
+	// one per plugin, replaced when another version's is read. Guarded by mu.
+	icons map[string]packageIcon
 }
 
 // PackageVerifier re-checks a package signature on this node before the
@@ -229,7 +226,7 @@ func TrustVerifier(trust *pluginpkg.TrustStore, q *gorm.DB, lim pluginpkg.Limits
 }
 
 func NewPackages(db *store.DB, dataDir string, opts ...PackagesOption) *Packages {
-	s := &Packages{db: db, dataDir: dataDir, cache: map[string]*Package{}, fetch: map[string]*sync.Mutex{}, icons: map[string]versionAsset{}}
+	s := &Packages{db: db, dataDir: dataDir, cache: map[string]*Package{}, fetch: map[string]*sync.Mutex{}, icons: map[string]packageIcon{}}
 	for _, o := range opts {
 		o(s)
 	}
@@ -260,28 +257,15 @@ var ErrPackageInUse = errors.New("plugin package in use")
 // leaves a held package (file handle and directory) alone.
 func (s *Packages) Acquire(ctx context.Context, key, version string) (p *Package, done func(), err error) {
 	id := key + "@" + version
-	s.mu.Lock()
-	if p, ok := s.cache[id]; ok {
-		p.refs++
-		s.mu.Unlock()
+	if p, ok := s.hold(id); ok {
 		return p, s.doneFunc(p), nil
 	}
-	lk, ok := s.fetch[id]
-	if !ok {
-		lk = &sync.Mutex{}
-		s.fetch[id] = lk
-	}
-	s.mu.Unlock()
-
+	lk := s.lock(id)
 	lk.Lock()
 	defer lk.Unlock()
-	s.mu.Lock()
-	if p, ok := s.cache[id]; ok {
-		p.refs++
-		s.mu.Unlock()
+	if p, ok := s.hold(id); ok {
 		return p, s.doneFunc(p), nil
 	}
-	s.mu.Unlock()
 
 	if p, err = s.load(ctx, key, version); err != nil {
 		return nil, nil, err
@@ -291,6 +275,29 @@ func (s *Packages) Acquire(ctx context.Context, key, version string) (p *Package
 	p.refs++
 	s.mu.Unlock()
 	return p, s.doneFunc(p), nil
+}
+
+// hold takes a hold on the cached package id, if any.
+func (s *Packages) hold(id string) (*Package, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.cache[id]
+	if ok {
+		p.refs++
+	}
+	return p, ok
+}
+
+// lock is the mutex that serializes the work on id, made on first use.
+func (s *Packages) lock(id string) *sync.Mutex {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	lk, ok := s.fetch[id]
+	if !ok {
+		lk = &sync.Mutex{}
+		s.fetch[id] = lk
+	}
+	return lk
 }
 
 func (s *Packages) doneFunc(p *Package) func() {
@@ -524,13 +531,7 @@ func (s *Packages) Cached() []PackageRef {
 // held by Acquire is kept and ErrPackageInUse returned.
 func (s *Packages) Release(key, version string) error {
 	id := key + "@" + version
-	s.mu.Lock()
-	lk, ok := s.fetch[id]
-	if !ok {
-		lk = &sync.Mutex{}
-		s.fetch[id] = lk
-	}
-	s.mu.Unlock()
+	lk := s.lock(id)
 	lk.Lock()
 	defer lk.Unlock()
 
@@ -550,7 +551,7 @@ func (s *Packages) Release(key, version string) error {
 	} else if key != "" && version != "" {
 		entries, _ := os.ReadDir(filepath.Join(s.dataDir, key))
 		for _, e := range entries {
-			if v, ok := versionOfDir(e.Name()); e.IsDir() && ok && v == version {
+			if v, ok := versionOfHash(e.Name()); e.IsDir() && ok && v == version {
 				dirs = append(dirs, filepath.Join(s.dataDir, key, e.Name()))
 			}
 		}
@@ -564,12 +565,13 @@ func (s *Packages) Release(key, version string) error {
 	return firstErr
 }
 
-// PruneOrphans deletes package directories (DataDir/<key>/<version>-<hash8>)
-// that are neither cached nor kept. keep receives the plugin key, the
-// version and the hash8 of the directory. Other directories (such as the
-// plugin work directory DataDir/<key>/work) are never touched. Run it at
-// node start, before packages are opened. Returns the removed directories.
-func (s *Packages) PruneOrphans(keep func(key, version, hash8 string) bool) ([]string, error) {
+// PruneOrphans deletes package directories (DataDir/<key>/<version hash>)
+// that are neither cached nor kept. keep receives the plugin key and the
+// version hash (core.PluginVersionHash) of the directory. Other directories
+// (such as the plugin work directory DataDir/<key>/work) are never touched.
+// Run it at node start, before packages are opened. Returns the removed
+// directories.
+func (s *Packages) PruneOrphans(keep func(key, versionHash string) bool) ([]string, error) {
 	keys, err := os.ReadDir(s.dataDir)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
@@ -598,12 +600,11 @@ func (s *Packages) PruneOrphans(keep func(key, version, hash8 string) bool) ([]s
 				continue
 			}
 			name := e.Name()
-			version, ok := versionOfDir(name)
-			if !ok {
+			if _, ok := versionOfHash(name); !ok {
 				continue
 			}
 			dir := filepath.Join(s.dataDir, k.Name(), name)
-			if inUse[filepath.Clean(dir)] || keep(k.Name(), version, name[len(name)-8:]) {
+			if inUse[filepath.Clean(dir)] || keep(k.Name(), name) {
 				continue
 			}
 			if err := removeAllRetry(dir); err != nil {
@@ -618,8 +619,9 @@ func (s *Packages) PruneOrphans(keep func(key, version, hash8 string) bool) ([]s
 	return removed, firstErr
 }
 
-// versionOfDir parses "<version>-<hash8>" (hash8 = 8 lower-case hex).
-func versionOfDir(name string) (string, bool) {
+// versionOfHash is the version of a version hash (core.PluginVersionHash):
+// a package directory name or the version segment of an asset URL.
+func versionOfHash(name string) (string, bool) {
 	if len(name) < 10 || name[len(name)-9] != '-' {
 		return "", false
 	}

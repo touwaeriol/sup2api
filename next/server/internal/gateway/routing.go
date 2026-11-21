@@ -85,10 +85,12 @@ type typeRoute struct {
 	// is sent upstream with streamPath set to true and its SSE answer is
 	// collected into the non-streaming response. streamPath is the upstream
 	// endpoint's request.streamPath.
-	streamOnly       bool
-	streamPath       string
-	modelReferences  []manifest.RequestModelReference
-	requiredAttempts []*manifest.AttemptUsageRule
+	streamOnly      bool
+	streamPath      string
+	modelReferences []manifest.RequestModelReference
+	// attemptRules are the attempt usage rules of the client endpoint and
+	// of the upstream endpoint, with their platforms'.
+	attemptRules []*manifest.AttemptUsageRule
 
 	// prepared is the request converted for this route, at pick time and
 	// only when an account of the type is considered (convert_policy.go).
@@ -253,10 +255,7 @@ func (c *call) addRoute(b core.AccountTypeBinding, ap manifest.AccountPlatform, 
 		streamPath:         ep.Request.StreamPath,
 		modelReferences:    ep.Request.ModelReferences}
 	rt.streamOnly = ap.StreamsOnly(y) && ep.Kind == manifest.EndpointKindProxy && ep.Response.Stream == "sse" && ep.Request.StreamPath != ""
-	if ep.Usage != nil {
-		rt.requiredAttempts = append(rt.requiredAttempts, ep.Usage.Attempts)
-	}
-	rt.requiredAttempts = append(rt.requiredAttempts, pf.Usage.Attempts)
+	rt.attemptRules = append(attemptRulesOf(c.pf, c.ep), attemptRulesOf(pf, ep)...)
 	if conv != nil {
 		rt.grade, rt.hops = conv.Grade(), convert.Hops(conv)
 		if ml, ok := conv.(convert.ModelLocator); ok {

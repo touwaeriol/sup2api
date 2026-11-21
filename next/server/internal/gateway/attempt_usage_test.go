@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
@@ -173,8 +174,15 @@ func TestFallbackUnknownModelBillsRequestedModel(t *testing.T) {
 	e.up.set("acc-1", &upstreamRule{status: 200, body: fixture})
 	res := e.messages(fallbackHTTPBody(false))
 	rec := e.record()
-	if res.status != 200 || !rec.Success || !rec.Billable || len(rec.Replacement) != 0 || rec.Price == nil || rec.Price.ID != 9 || rec.Tokens != (core.UsageTokens{Input: 20, Output: 3}) {
+	if res.status != 200 || !rec.Success || !rec.Billable || rec.Price == nil || rec.Price.ID != 9 || len(rec.Replacement) != 1 {
 		t.Fatalf("unknown model not billed at the requested model: %d %+v", res.status, rec)
+	}
+	item := rec.Replacement[0]
+	if item.Model != testModel || item.Price.ID != 9 || item.Tokens != (core.UsageTokens{Input: 20, Output: 3}) || rec.UpstreamModel != "undeclared" {
+		t.Fatalf("attempt not at the requested model: %+v", rec)
+	}
+	if want := []core.RequestedModelSegment{{Part: core.SegmentReplacement, Model: "undeclared"}}; !reflect.DeepEqual(rec.RequestedModelSegments, want) || rec.SegmentsDropped != "" {
+		t.Fatalf("audit %+v %q", rec.RequestedModelSegments, rec.SegmentsDropped)
 	}
 }
 

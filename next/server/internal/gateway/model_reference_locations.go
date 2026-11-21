@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -50,7 +51,7 @@ func modelReferenceLocationsIn(root gjson.Result, arrayPath string) ([]modelRefe
 			}
 			for offset, item := range value.Array() {
 				if len(next) >= 16384 {
-					return nil, fmt.Errorf("model reference traversal exceeds limit")
+					return nil, errors.New("model reference traversal exceeds limit")
 				}
 				next = append(next, modelReferenceLocation{path + "." + strconv.Itoa(offset), item})
 			}

@@ -2,6 +2,7 @@ package usage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 )
@@ -25,7 +26,7 @@ func (s *Service) priceOf(ctx context.Context, p *pending) (amounts, BillingDeta
 // amounts of all of them.
 func priceComponents(p *pending, price func(*pending) (amounts, BillingDetail, string, error)) (amounts, BillingDetail, string, error) {
 	if len(p.Inputs.Additional)+len(p.Inputs.Replacement) > 128 {
-		return amounts{}, BillingDetail{}, "", fmt.Errorf("additional usage exceeds limit")
+		return amounts{}, BillingDetail{}, "", errors.New("additional usage exceeds limit")
 	}
 	if len(p.Inputs.Additional) == 0 && len(p.Inputs.Replacement) == 0 {
 		return price(p)
@@ -77,7 +78,7 @@ func priceComponents(p *pending, price func(*pending) (amounts, BillingDetail, s
 			return amounts{}, BillingDetail{}, "", fmt.Errorf("additional usage %s/%s: %w", item.Kind, item.Model, err)
 		}
 		if amount.total.IsNegative() {
-			return amounts{}, BillingDetail{}, "", fmt.Errorf("negative additional usage charge")
+			return amounts{}, BillingDetail{}, "", errors.New("negative additional usage charge")
 		}
 		sum = sum.add(amount)
 		ruled = ruled || sub.ListCost != nil

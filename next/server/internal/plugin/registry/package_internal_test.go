@@ -188,8 +188,8 @@ func TestPruneOrphansAndRelease(t *testing.T) {
 	s := NewPackages(nil, dir)
 	s.Adopt(cached)
 
-	removed, err := s.PruneOrphans(func(key, version, hash8 string) bool {
-		return key == "demo" && version == "1.0.0" && hash8 == "aaaaaaaa"
+	removed, err := s.PruneOrphans(func(key, versionHash string) bool {
+		return key == "demo" && versionHash == "1.0.0-aaaaaaaa"
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -257,7 +257,7 @@ func TestVersionOfDir(t *testing.T) {
 		"1.0.0-DEADBEEF":      "",
 		"1.0.0-0123abc":       "",
 	} {
-		got, ok := versionOfDir(name)
+		got, ok := versionOfHash(name)
 		if ok != (want != "") || got != want {
 			t.Errorf("%s: got %q %v", name, got, ok)
 		}

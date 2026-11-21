@@ -12,7 +12,6 @@ import (
 	"github.com/tidwall/sjson"
 
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
-	"github.com/Sub2API-Devs/sup2api/next/server/internal/usagerules"
 )
 
 const maxReferencedModels = 64
@@ -85,6 +84,26 @@ func invalidModelReference(message string) *gwError {
 		Message: message, RecordType: errTypeInvalidRequest}
 }
 
+// referencePriceBody is the request as the referenced model's price reads
+// it: the reference's model and parameter overrides in place.
+func (c *call) referencePriceBody(ref modelReference) ([]byte, error) {
+	body := c.body
+	var err error
+	if path := c.ep.Request.ModelPath; path != "" {
+		body, err = sjson.SetBytes(body, path, ref.model)
+		if err != nil {
+			return nil, err
+		}
+	}
+	for path, raw := range ref.overrides {
+		body, err = sjson.SetRawBytes(body, path, []byte(raw))
+		if err != nil {
+			return nil, err
+		}
+	}
+	return body, nil
+}
+
 func (c *call) prepareReferencedPrices(ctx context.Context) *gwError {
 	for i := range c.modelRefs {
 		ref := &c.modelRefs[i]
@@ -112,8 +131,8 @@ func (c *call) prepareReferencedPrices(ctx context.Context) *gwError {
 // request does not carry them: the conversion drops what the upstream
 // protocol has no place for, so nothing is mapped and the response is billed
 // at the requested model. Two references the mapping makes one upstream
-// model cannot be told apart in the response: their usage is not priced
-// apart either (recordSegments).
+// model cannot be told apart in the response: their usage is billed at the
+// requested model (recordSegments).
 func (c *call) mapReferencedModels(body []byte, account *core.AccountRef, rt *typeRoute) ([]byte, error) {
 	c.upstreamPrimaryModel = account.MapModel(c.model)
 	c.upstreamRefs = nil
@@ -123,7 +142,7 @@ func (c *call) mapReferencedModels(body []byte, account *core.AccountRef, rt *ty
 			return nil, err
 		}
 		if len(refs) != 0 {
-			return nil, fmt.Errorf("conversion introduced model invocations without source authorization")
+			return nil, errors.New("conversion introduced model invocations without source authorization")
 		}
 	}
 	if len(c.modelRefs) == 0 || rt.upstream != c.ep.Protocol {
@@ -134,7 +153,7 @@ func (c *call) mapReferencedModels(body []byte, account *core.AccountRef, rt *ty
 	for _, ref := range c.modelRefs {
 		upModel := account.MapModel(ref.model)
 		if ref.identityOnly && upModel != ref.model {
-			return nil, fmt.Errorf("signed model reference requires identity mapping")
+			return nil, errors.New("signed model reference requires identity mapping")
 		}
 		key := ref.kind + "\x00" + upModel
 		if old, exists := c.upstreamRefs[key]; ambiguous[key] || exists && old.Model != ref.model {
@@ -153,38 +172,6 @@ func (c *call) mapReferencedModels(body []byte, account *core.AccountRef, rt *ty
 		}
 	}
 	return body, nil
-}
-
-// additionalUsage prices the usage billed on top of the top-level usage.
-func (c *call) additionalUsage(u *usagerules.Acc, rt *typeRoute) ([]core.PricedUsage, error) {
-	if u.AdditionalError != "" {
-		return nil, errors.New(u.AdditionalError)
-	}
-	var items []core.PricedUsage
-	for _, actual := range u.Additional() {
-		priced, ok := c.upstreamRefs[actual.Kind+"\x00"+actual.Model]
-		if !ok && actual.Model == c.upstreamPrimaryModel && primaryUsageKind(rt, actual.Kind) {
-			priced = core.PricedUsage{Kind: actual.Kind, Model: c.model, Price: c.rec.Price.Clone(),
-				PriceParams: c.rec.PriceParams, PriceHeaders: c.rec.PriceHeaders, RateMultiplier: c.rec.RateMultiplier}
-			ok = true
-		}
-		if !ok {
-			return nil, fmt.Errorf("additional usage does not match an admitted model identity")
-		}
-		priced.Tokens, priced.UsageSemantics = actual.Tokens, actual.UsageSemantics
-		priced.Metrics = actual.Metrics
-		items = append(items, priced)
-	}
-	return items, nil
-}
-
-func primaryUsageKind(rt *typeRoute, kind string) bool {
-	for _, rule := range rt.usage.Additional {
-		if rule.Name == kind && rule.UsePrimaryModel {
-			return true
-		}
-	}
-	return false
 }
 
 func (c *call) estimatedAdditional(tokens core.UsageTokens, semantics string) []core.PricedUsage {
@@ -226,7 +213,7 @@ func modelReferenceSnapshotIn(root gjson.Result, rules []manifest.RequestModelRe
 			}
 			model := item.Get(rule.ModelPath)
 			if model.Type != gjson.String || modelCount >= maxReferencedModels {
-				return nil, fmt.Errorf("plugin changed model references")
+				return nil, errors.New("plugin changed model references")
 			}
 			modelCount++
 			refs = append(refs, fmt.Sprintf("%s\x00%s.%s\x00%s", rule.Name, location.path, rule.ModelPath, model.Str))

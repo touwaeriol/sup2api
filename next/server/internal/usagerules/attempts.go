@@ -1,7 +1,7 @@
 package usagerules
 
 import (
-	"fmt"
+	"errors"
 	"strconv"
 
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
@@ -27,7 +27,7 @@ func (u *Acc) WithAttemptAccounting(active bool) *Acc {
 	if active {
 		u.attempts = &attemptMeter{}
 		if u.rules.Attempts == nil || u.rules.Attempts.Adapter != manifest.AttemptAdapterAnthropicFallback {
-			u.attempts.err = fmt.Errorf("attempt usage contract missing or unsupported")
+			u.attempts.err = errors.New("attempt usage contract missing or unsupported")
 		}
 	}
 	return u
@@ -42,7 +42,7 @@ func (u *Acc) Replacement() ([]core.AttemptUsage, error) {
 		return nil, m.err
 	}
 	if !m.complete {
-		return nil, fmt.Errorf("attempt usage has no complete terminal response")
+		return nil, errors.New("attempt usage has no complete terminal response")
 	}
 	items, err := m.anthropicFallback(u.rules.Attempts.Name, u.primaryModel)
 	if err == nil && len(items) > 0 {
@@ -64,7 +64,7 @@ func (u *Acc) applyAttempts(event string, body []byte, stream bool) {
 		return
 	}
 	if m.complete {
-		m.err = fmt.Errorf("attempt usage received data after terminal")
+		m.err = errors.New("attempt usage received data after terminal")
 		return
 	}
 	doc := gjson.ParseBytes(body)
@@ -79,12 +79,12 @@ func (u *Acc) applyAttempts(event string, body []byte, stream bool) {
 // attempt chain is present at once.
 func (u *Acc) applyAttemptsMessage(m *attemptMeter, doc gjson.Result, body []byte) {
 	if !doc.IsObject() || doc.Get("type").Str != "message" {
-		m.err = fmt.Errorf("attempt usage expected message response")
+		m.err = errors.New("attempt usage expected message response")
 		return
 	}
 	m.model = doc.Get("model").Str
 	if !doc.Get("content").IsArray() {
-		m.err = fmt.Errorf("attempt response has invalid content")
+		m.err = errors.New("attempt response has invalid content")
 		return
 	}
 	m.reason = doc.Get("stop_reason").Str
@@ -102,13 +102,13 @@ func (u *Acc) applyAttemptsMessage(m *attemptMeter, doc gjson.Result, body []byt
 // applyAttemptEvent advances the streamed state machine by one event.
 func (u *Acc) applyAttemptEvent(m *attemptMeter, event string, doc gjson.Result, body []byte) {
 	if !m.started && event != "message_start" && event != "ping" && event != "error" {
-		m.err = fmt.Errorf("attempt event before message_start")
+		m.err = errors.New("attempt event before message_start")
 		return
 	}
 	switch event {
 	case "message_start":
 		if m.started {
-			m.err = fmt.Errorf("duplicate attempt message_start")
+			m.err = errors.New("duplicate attempt message_start")
 			return
 		}
 		m.started = true
@@ -119,7 +119,7 @@ func (u *Acc) applyAttemptEvent(m *attemptMeter, event string, doc gjson.Result,
 		if doc.Get("content_block.type").Str == "fallback" {
 			m.finalFacts = nil
 			if len(m.boundaries)+len(m.pending) >= 3 {
-				m.err = fmt.Errorf("too many fallback transitions")
+				m.err = errors.New("too many fallback transitions")
 				return
 			}
 			if m.pending == nil {
@@ -132,7 +132,7 @@ func (u *Acc) applyAttemptEvent(m *attemptMeter, event string, doc gjson.Result,
 				return
 			}
 			if m.seen[index] {
-				m.err = fmt.Errorf("duplicate fallback block index")
+				m.err = errors.New("duplicate fallback block index")
 				return
 			}
 			m.seen[index] = true
@@ -164,18 +164,18 @@ func (u *Acc) applyAttemptEvent(m *attemptMeter, event string, doc gjson.Result,
 		m.usage = mergeUsageSnapshot(m.usage, doc.Get("usage"))
 	case "message_stop":
 		if len(m.pending) != 0 {
-			m.err = fmt.Errorf("unclosed fallback block")
+			m.err = errors.New("unclosed fallback block")
 		}
 		m.complete = true
 	case "error":
-		m.err = fmt.Errorf("attempt usage stream ended with upstream error")
+		m.err = errors.New("attempt usage stream ended with upstream error")
 	}
 }
 
 func attemptBlockIndex(value gjson.Result) (int64, error) {
 	n, err := strconv.ParseInt(value.Raw, 10, 64)
 	if value.Type != gjson.Number || err != nil || n < 0 || n > 1000000 {
-		return 0, fmt.Errorf("invalid fallback block index")
+		return 0, errors.New("invalid fallback block index")
 	}
 	return n, nil
 }

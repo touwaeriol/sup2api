@@ -903,7 +903,8 @@ func (c *call) settleCanceled(ctx context.Context, rec *core.UsageRecord, billin
 		return false, false
 	}
 	rec.Tokens = canceledTokens(rec.Tokens, est.tokens)
-	if len(rec.Additional) == 0 {
+	if len(rec.Additional) == 0 && rec.SegmentsDropped == "" {
+		// Segments that could not be read stay dropped (CONTRACTS §120.4).
 		rec.Additional = est.additional
 	}
 	if len(rec.Metrics) == 0 && len(est.metrics) > 0 {

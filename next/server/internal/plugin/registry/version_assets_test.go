@@ -72,6 +72,24 @@ func TestVersionAssetsServeOnlyTheIconWhileNotRunning(t *testing.T) {
 	if err := icon(); err != nil || first == 0 || loads != first {
 		t.Fatalf("icon read again: %v, package loads %d then %d", err, first, loads)
 	}
+	// The version hash must name the version's own package.
+	for _, bad := range []string{"1.0.0-00000000", "1.0.0", "1.0.0-" + pluginpkg.SHA256Hex(raw)[:7]} {
+		if _, _, _, err := packages.ReadVersionAsset(ctx, "idle", bad, m.Icon); !errors.Is(err, registry.ErrAssetNotFound) {
+			t.Fatalf("version hash %s served: %v", bad, err)
+		}
+	}
+	// One icon is kept per plugin: reading another version's replaces it.
+	m2 := registrytest.Manifest("idle", "1.1.0")
+	m2.Icon = m.Icon
+	raw2 := registrytest.Package(t, m2, []byte("bin2"), map[string][]byte{m.Icon: []byte("<svg/>")})
+	registrytest.AddVersion(t, db, m2, raw2)
+	if _, _, _, err := packages.ReadVersionAsset(ctx, "idle", "1.1.0-"+pluginpkg.SHA256Hex(raw2)[:8], m.Icon); err != nil || loads == first {
+		t.Fatalf("icon of another version: %v, package loads %d then %d", err, first, loads)
+	}
+	second := loads
+	if err := icon(); err != nil || loads == second {
+		t.Fatalf("replaced icon not read again: %v, package loads %d then %d", err, second, loads)
+	}
 	for _, refuse := range []struct{ why, set, reset string }{
 		{"unapproved", `UPDATE plugin_versions SET consent_status='awaiting' WHERE plugin_key='idle'`, `UPDATE plugin_versions SET consent_status='approved' WHERE plugin_key='idle'`},
 		{"revoked", `UPDATE plugin_versions SET signature_status='revoked' WHERE plugin_key='idle'`, `UPDATE plugin_versions SET signature_status='unsigned' WHERE plugin_key='idle'`},

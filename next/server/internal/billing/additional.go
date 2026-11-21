@@ -2,14 +2,14 @@ package billing
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/shopspring/decimal"
 )
 
 func quoteRecord(ctx context.Context, q core.Quoter, r *core.UsageRecord) (decimal.Decimal, error) {
 	if len(r.Additional)+len(r.Replacement) > 128 {
-		return decimal.Zero, fmt.Errorf("additional usage exceeds limit")
+		return decimal.Zero, errors.New("additional usage exceeds limit")
 	}
 	items := append(append([]core.PricedUsage(nil), r.Replacement...), r.Additional...)
 	for _, item := range items {
@@ -34,7 +34,7 @@ func quoteRecord(ctx context.Context, q core.Quoter, r *core.UsageRecord) (decim
 			return decimal.Zero, err
 		}
 		if amount.IsNegative() {
-			return decimal.Zero, fmt.Errorf("negative usage component")
+			return decimal.Zero, errors.New("negative usage component")
 		}
 		total = total.Add(amount)
 	}

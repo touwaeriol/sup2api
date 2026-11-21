@@ -89,10 +89,11 @@ func TestAdditionalCompactionUsesOnlyHostPrimaryAndSnapshots(t *testing.T) {
 		`{"usage":{"iterations":[{"type":"compaction","model":"attacker-model","input_tokens":1,"output_tokens":2}]}}`,
 		`{"usage":{"iterations":[{"type":"compaction","model":null,"input_tokens":1,"output_tokens":2}]}}`,
 	} {
+		// Whatever model the entry reports, it is priced at the primary model.
 		u := New(rules).WithPrimaryModel("host-mapped-model")
 		u.ApplyJSON([]byte(raw))
-		if u.AdditionalError == "" {
-			t.Fatal("response primary identity changed")
+		if items := u.Additional(); u.AdditionalError != "" || len(items) != 1 || items[0].Model != "host-mapped-model" {
+			t.Fatal(raw, items, u.AdditionalError)
 		}
 	}
 	u := New(rules)

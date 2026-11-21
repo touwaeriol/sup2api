@@ -1,6 +1,7 @@
 package usagerules
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -45,7 +46,7 @@ func (u *Acc) applyAdditional(event string, body []byte, stream bool) {
 		}
 		fail := func(err error) { u.AdditionalError = fmt.Sprintf("additional usage %s: %v", rule.Name, err) }
 		if !array.IsArray() || len(array.Array()) > MaxAdditionalItems {
-			fail(fmt.Errorf("invalid or oversized snapshot"))
+			fail(errors.New("invalid or oversized snapshot"))
 			continue
 		}
 		var entries []core.AdditionalUsage
@@ -60,15 +61,12 @@ func (u *Acc) applyAdditional(event string, body []byte, stream bool) {
 			}
 			model := entry.Get(modelPath)
 			if rule.UsePrimaryModel {
-				if model.Exists() && (model.Type != gjson.String || model.Str != u.primaryModel) {
-					fail(fmt.Errorf("response changed the admitted primary model"))
-					valid = false
-					break
-				}
+				// Priced at the requested model whatever the entry reports
+				// (CONTRACTS §120.4).
 				model = gjson.Result{Type: gjson.String, Str: u.primaryModel}
 			}
 			if model.Type != gjson.String || len(model.Str) == 0 || !utf8.ValidString(model.Str) || strings.ContainsAny(model.Str, "\r\n\x00") {
-				fail(fmt.Errorf("invalid model"))
+				fail(errors.New("invalid model"))
 				valid = false
 				break
 			}
@@ -95,7 +93,7 @@ func (u *Acc) applyAdditional(event string, body []byte, stream bool) {
 				break
 			}
 			if values["cache_creation_1h_tokens"] > values["cache_creation_tokens"] {
-				fail(fmt.Errorf("cache creation subdivision exceeds total"))
+				fail(errors.New("cache creation subdivision exceeds total"))
 				valid = false
 				break
 			}

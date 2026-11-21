@@ -116,15 +116,15 @@ func (a *API) fillSummary(ctx context.Context, s *PluginSummary) error {
 	if v != "" {
 		var sig string
 		var pub string
-		var versionHash string
+		var sum string
 		if err := store.G(ctx, a.d.DB.Gorm).Model(&model.PluginVersion{}).
 			Select(`signature_status, manifest->>'publisher', COALESCE(manifest->'ui'->'settings'->>'mode' = 'native', false),
-				COALESCE(manifest->>'icon', ''), version || '-' || left(package_sha256, 8)`).
-			Where("plugin_key = ? AND version = ?", s.Key, v).Row().Scan(&sig, &pub, &s.HasSettings, &s.Icon, &versionHash); err != nil {
+				COALESCE(manifest->>'icon', ''), package_sha256`).
+			Where("plugin_key = ? AND version = ?", s.Key, v).Row().Scan(&sig, &pub, &s.HasSettings, &s.Icon, &sum); err != nil {
 			return err
 		}
 		s.SignatureStatus = sig
-		s.AssetBase = core.PluginAssetBase(s.Key, versionHash)
+		s.AssetBase = core.PluginAssetBase(s.Key, core.PluginVersionHash(v, sum))
 		if s.Publisher == "" {
 			s.Publisher = pub
 		}

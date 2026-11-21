@@ -9,6 +9,21 @@ import (
 // MaxUsageTokens is the most tokens of one kind a usage may count.
 const MaxUsageTokens = 1_000_000_000_000
 
+// The lists of a record a RequestedModelSegment points into.
+const (
+	SegmentAdditional  = "additional"
+	SegmentReplacement = "replacement"
+)
+
+// RequestedModelSegment is a usage segment billed at the requested model's
+// price because the model the response reported for it has no admitted
+// price (billing_detail.inputs.requested_model_segments, CONTRACTS §120.4).
+type RequestedModelSegment struct {
+	Part  string `json:"part"`  // SegmentAdditional or SegmentReplacement
+	Index int    `json:"index"` // position in that list of the record
+	Model string `json:"model"` // the model the response reported
+}
+
 // ValidTokenCount reports whether n tokens of one kind is a usage that can
 // be priced: 0 to MaxUsageTokens. It is the one place the bound is checked.
 func ValidTokenCount[N int64 | float64](n N) bool {

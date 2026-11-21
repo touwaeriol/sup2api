@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 
 	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
@@ -138,17 +140,37 @@ func TestReferencedUsageJSONAndSSE(t *testing.T) {
 	}
 }
 
+// A referenced usage reported under a model without an admitted price is
+// billed at the requested model's price and noted; one that cannot be read
+// drops the segments, and the request is billed on its top-level usage
+// (CONTRACTS §120.4).
 func TestReferencedUsageDoesNotInventPrice(t *testing.T) {
-	for _, raw := range []string{
-		`{"type":"advisor_message","model":"unrequested-model","input_tokens":3,"output_tokens":4}`,
-		`{"type":"advisor_message","model":"claude-opus-5-5","input_tokens":3,"output_tokens":-1}`,
+	for _, tc := range []struct{ name, raw string }{
+		{"unadmitted model", `{"type":"advisor_message","model":"unrequested-model","input_tokens":3,"output_tokens":4}`},
+		{"unreadable", `{"type":"advisor_message","model":"claude-opus-5-5","input_tokens":3,"output_tokens":-1}`},
 	} {
-		e := pricedAdvisorEnv(t)
-		e.up.set("acc-1", &upstreamRule{status: 200, body: `{"type":"message","role":"assistant","model":"` + testModel + `","content":[],"usage":{"input_tokens":1,"output_tokens":0,"iterations":[` + raw + `]}}`})
-		res := e.messages(advisorBody(false))
-		rec := e.record()
-		if res.status != 200 || !rec.Success || !rec.Billable || len(rec.Additional) != 0 || rec.Price == nil || rec.Tokens != (core.UsageTokens{Input: 1}) {
-			t.Fatalf("usage that cannot be priced is billed on the top-level usage at the requested model: %+v", rec)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			e := pricedAdvisorEnv(t)
+			e.up.set("acc-1", &upstreamRule{status: 200, body: `{"type":"message","role":"assistant","model":"` + testModel + `","content":[],"usage":{"input_tokens":1,"output_tokens":0,"iterations":[` + tc.raw + `]}}`})
+			res := e.messages(advisorBody(false))
+			rec := e.record()
+			require.Equal(t, 200, res.status, string(res.body))
+			require.True(t, rec.Success && rec.Billable)
+			require.NotNil(t, rec.Price)
+			assert.Equal(t, core.UsageTokens{Input: 1}, rec.Tokens)
+			if tc.name == "unreadable" {
+				assert.Empty(t, rec.Additional)
+				assert.Empty(t, rec.RequestedModelSegments)
+				assert.Contains(t, rec.SegmentsDropped, "additional: ")
+				return
+			}
+			require.Len(t, rec.Additional, 1)
+			item := rec.Additional[0]
+			assert.Equal(t, testModel, item.Model)
+			assert.Equal(t, rec.Price.ID, item.Price.ID)
+			assert.Equal(t, core.UsageTokens{Input: 3, Output: 4}, item.Tokens)
+			assert.Equal(t, []core.RequestedModelSegment{{Part: core.SegmentAdditional, Index: 0, Model: "unrequested-model"}}, rec.RequestedModelSegments)
+			assert.Empty(t, rec.SegmentsDropped)
+		})
 	}
 }

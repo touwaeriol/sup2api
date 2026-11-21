@@ -65,6 +65,8 @@ func TestWithoutExpressions(t *testing.T) {
 			`"inputs":{"additional":[{"Kind":"k","Tokens":{"Input":1},"Metrics":{"x":1}}],"replacement":[{},{"Tokens":{}}]}}`,
 		// The detail of a component priced by a custom rule has the global price behind it too.
 		`{"additional":[{"detail":{"tier":"t","inputs":{"pricing":{"price_source":"group","base":{"expression":"p*3","expr_hash":"g"}}}}}],"replacement":[{"detail":{"inputs":{"pricing":{"base":{"expression":"p*4"}}}}}]}`: `{"additional":[{"detail":{"tier":"t","inputs":{"pricing":{"price_source":"group","base":{}}}}}],"replacement":[{"detail":{"inputs":{"pricing":{"base":{}}}}}]}`,
+		// Nor the upstream model of a segment billed at the requested model.
+		`{"inputs":{"requested_model_segments":[{"part":"additional","index":0,"model":"up"}]}}`: `{"inputs":{"requested_model_segments":[{"part":"additional","index":0}]}}`,
 		// Not JSON: nothing is shown rather than unredacted.
 		`{"inputs":`: ``,
 	} {

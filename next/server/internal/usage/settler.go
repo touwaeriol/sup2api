@@ -342,10 +342,13 @@ func initialStatus(rec *core.UsageRecord) string {
 type pendingInputs struct {
 	Replacement []core.PricedUsage `json:"replacement,omitempty"`
 	Additional  []core.PricedUsage `json:"additional,omitempty"`
-	Semantics   string             `json:"semantics"`
-	Params      map[string]string  `json:"params,omitempty"`
-	Headers     map[string]string  `json:"headers,omitempty"`
-	Pricing     *core.PricingTrace `json:"pricing,omitempty"` // price rule and rate source (CONTRACTS §97)
+	// Audit of the segments not billed at their own price (CONTRACTS §120.4).
+	RequestedModelSegments []core.RequestedModelSegment `json:"requested_model_segments,omitempty"`
+	SegmentsDropped        string                       `json:"segments_dropped,omitempty"`
+	Semantics              string                       `json:"semantics"`
+	Params                 map[string]string            `json:"params,omitempty"`
+	Headers                map[string]string            `json:"headers,omitempty"`
+	Pricing                *core.PricingTrace           `json:"pricing,omitempty"` // price rule and rate source (CONTRACTS §97)
 }
 
 // recordInputs are the pricing inputs of a record: what its first settlement
@@ -355,6 +358,7 @@ type pendingInputs struct {
 func recordInputs(rec *core.UsageRecord) pendingInputs {
 	return pendingInputs{Semantics: rec.UsageSemantics, Params: rec.PriceParams, Headers: rec.PriceHeaders,
 		Additional: core.ClonePricedUsage(rec.Additional), Replacement: core.ClonePricedUsage(rec.Replacement),
+		RequestedModelSegments: slices.Clone(rec.RequestedModelSegments), SegmentsDropped: trunc(rec.SegmentsDropped, 1000),
 		Pricing: pricingTrace(rec.Price, rec.SegmentID, rec.RateSource)}
 }
 

@@ -1770,7 +1770,7 @@ message RankedAccount {
 
 `webui/webui.go` 引用同一份名字列表，但**保留自己的前缀匹配语义**并在注释里写明原因：它只决定浏览器路径要不要回落到 `index.html`，前缀匹配才能既拦住 `/api/...` 又不误伤 `/apifoo`。
 
-**尚未收敛**：`httpapi/router.go` 的 `/api/v1` 仍是字面量。`/plugin-ui/<key>/<版本哈希>` 自 2026-11-21 起只有 `core.PluginAssetBase` 一处定义，路由注册、registry 和插件列表接口都用它。
+**尚未收敛**：`httpapi/router.go` 的 `/api/v1` 仍是字面量。`/plugin-ui/<key>/<版本哈希>` 自 2026-11-21 起只有 `core.PluginAssetBase` 一处定义，路由注册、registry 和插件列表接口都用它；版本哈希（`<version>-<包 sha256 前 8 位小写>`，也是包目录名）只由 `core.PluginVersionHash` 计算，SQL 里不再拼。
 
 ### 26.3 收敛暴露出来的历史分叉（存档）
 
@@ -8629,7 +8629,7 @@ ALTER TABLE usage_logs
 ### 120.1 规则
 
 - `jsonPath` / `ssePath`（`sseEvent` 限定事件）指向一个数组，每次读到都是**完整快照**（后到的整体替换先到的，不累加）；其中 `typePath` 等于 `typeValue` 的元素各是一条附加用量，模型取元素里的 `modelPath`，`map` 读 token（`input_tokens`、`output_tokens` 必须有；值必须是不超过 10¹² 的非负整数）。例：Anthropic 的 `usage.iterations`（`compaction`、`advisor`）。
-- 模型必须是**调度前准入过的**：`usePrimaryModel` 取请求的主模型（账号映射后），或者请求里经 `request.modelReferences` 声明、同名的引用模型（准入：分组允许、账号服务该模型、调度前取价，没价格的引用模型在调度前 403，§17.3）。应答报了一个没有准入的模型，附加用量不单独计价，整条请求按顶层用量、请求的模型计费（§120.4）。
+- 模型必须是**调度前准入过的**：`usePrimaryModel` 取请求的主模型（账号映射后；这一项报了别的模型也按主模型计价），或者请求里经 `request.modelReferences` 声明、同名的引用模型（准入：分组允许、账号服务该模型、调度前取价，没价格的引用模型在调度前 403，§17.3）。应答报了一个没有准入的模型，这一项按请求的模型的价格计费并记入审计（§120.4）。
 - 预扣：引用模型按估算的同一份 token 预扣（`estimatedAdditional`）；结算按实际读数。
 
 ### 120.2 已删除：对象形式与按应答取价
@@ -8657,7 +8657,16 @@ ALTER TABLE usage_logs
 所有者原话：“发出去我们不管，我们回来的时候再看一下”“如果算不了，那么就直接按照请求的模型计费”。
 
 - **发出前不检查**：请求要单独计量的部分（`fallbacks` 的各次尝试、`compaction` / `context_management` 的附加用量、引用模型的用量）不再决定请求能不能发给某个账号。调度不再因此排除账号（原来的 `usage_unsupported`），账号参数覆盖加了这类操作也不换号（原来的 `meterable`）。转换过去的请求（例如 Codex 账号接 `/v1/messages`）不带这些字段，引用模型不做映射。
-- **回来再算**：应答里的附加用量和替代计费的各次尝试能定价就分项计价（§120.3）；有任何一项定不了价（账号类型没有对应的用量规则、应答报了没准入的模型、两个引用模型映射成同一个上游模型分不清、读数不完整等），分项全部丢弃，整条请求按顶层用量、请求的模型的价格计费，照常结算，记一条 `gateway: usage segments cannot be priced` 警告日志。不再有“计费错误、整条不结算”的情况：`UsageRecord.BillingError` 和 `billing_detail.inputs.billing_error` 已删除。
+- **回来再算**：应答里的附加用量和替代计费的各次尝试分项计价（§120.3），每一项按它准入的模型的价格：附加用量先找引用模型（带引用自己的参数覆盖），报的是主模型（账号映射后）时按请求的模型；替代计费的尝试报的是主模型时按请求的模型，否则找引用模型。
+  - **定不了价的项按请求的模型计费**：某一项报的模型没有准入的价格（应答报了没准入的模型、两个引用模型映射成同一个上游模型分不清、转换过去的请求不映射引用模型等），这一项照它自己的读数、按请求的模型的价格（价格、参数、请求头、倍率都是主请求的）计费，记进 `billing_detail.inputs.requested_model_segments`。
+  - **读不出才丢弃分项**：只有读数本身不能用（附加用量快照不合法或超过上限、token 计数缺失或越界、fallback 链不完整或前后矛盾、某次尝试缺它的价格要的事实等）时，分项全部丢弃，整条请求按顶层用量、请求的模型的价格计费，原因记进 `billing_detail.inputs.segments_dropped`，并记一条 `gateway: usage segments cannot be read` 警告日志。账号类型没有对应的用量规则时读不到分项，也只按顶层用量计费（不记审计）。
+  - 两种情况都照常结算。不再有“计费错误、整条不结算”的情况：`UsageRecord.BillingError` 和 `billing_detail.inputs.billing_error` 已删除。
+- **审计字段**（2026-11-21 起；核心 `core.UsageRecord.RequestedModelSegments`、`SegmentsDropped`，由 `usage.recordInputs` 写进 `billing_detail.inputs`，结算前后都在；没有时不写）：
+
+  | 字段 | 含义 |
+  |---|---|
+  | `inputs.requested_model_segments` | 数组，每项 `{"part","index","model"}`：`part` 是 `additional` 或 `replacement`，`index` 是这一项在 `inputs.additional` / `inputs.replacement` 里的下标（与 `billing_detail.additional[i]` / `replacement[i]` 对应），`model` 是应答报的模型（上游名；`/me/usage/:id` 里像 `upstream_model` 一样删去）。这一项自己的 `model`、价格是请求的模型的 |
+  | `inputs.segments_dropped` | 字符串，分项读不出的原因，以 `additional: ` 或 `replacement: ` 开头（最长 1000 字符）。写了就没有任何分项，也没有 `requested_model_segments` |
 - 仍在发出前做的：请求本身的准入（分组允许引用的模型、引用模型有价格，§17.3）；调度时账号的模型列表和协议绑定也要提供引用的模型（`referenced_model_not_served` 等，§110，属于“账号服务哪些模型”，不是计量）；构造请求时签名的引用模型必须原名发出、转换不得凭空引入模型引用，不满足的这次尝试换号。
 - 顶层用量本身为空的应答仍按“未上报”处理（§112），不因分项丢弃而变。
 - `AdditionalUsageRule.requiredBy` 随之删除（清单里写了也被忽略，`sdk/platforms/anthropic.json` 的 `compaction` 规则已去掉）；`AttemptUsageRule.requiredBy` 保留，用来决定是否按 fallback 链读应答。

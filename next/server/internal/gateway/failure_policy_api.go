@@ -3,7 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -23,7 +23,7 @@ func loadFailurePolicy(ctx context.Context, q *gorm.DB) (*FailurePolicy, error) 
 		return nil, err
 	}
 	if p.Revision < 1 {
-		return nil, fmt.Errorf("invalid failure policy revision")
+		return nil, errors.New("invalid failure policy revision")
 	}
 	if fields := p.validate(ctx); len(fields) != 0 {
 		return nil, core.InvalidFields(fields...)
