@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { i18n } from '@/i18n'
-import PriceTrialPanel from '@/views/prices/PriceTrialPanel.vue'
+import PriceEstimator from '@/views/prices/PriceEstimator.vue'
 import UsageTokenFacts from './UsageTokenFacts.vue'
 
 const api = vi.hoisted(() => ({ post: vi.fn() }))
@@ -25,9 +25,10 @@ describe('image tokens', () => {
     vi.useFakeTimers()
     i18n.global.locale.value = 'en'
     api.post.mockResolvedValue({ cost: '0.1363', tier: '', rules: [], breakdown: {} })
-    const wrapper = mount(PriceTrialPanel, { props: { source: { mode: 'expression', expression: 'p*5 + img*8 + img_o*32 + c*10' } }, global: { plugins: [i18n], stubs: { GroupPicker: true } } })
-    expect(wrapper.text()).toContain('Image input')
-    expect(wrapper.text()).toContain('Image output')
+    const wrapper = mount(PriceEstimator, { props: { source: { mode: 'expression', expression: 'p*5 + img*8 + img_o*32 + c*10' } }, global: { plugins: [i18n] } })
+    await wrapper.findAll('button').find(b => b.text().includes('更多用量'))!.trigger('click')
+    expect(wrapper.text()).toContain('图片输入')
+    expect(wrapper.text()).toContain('图片输出')
     await vi.runAllTimersAsync()
     await flushPromises()
     const usage = api.post.mock.calls.at(-1)![1].usage

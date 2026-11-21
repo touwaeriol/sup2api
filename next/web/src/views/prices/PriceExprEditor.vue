@@ -1,110 +1,64 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { useI18n } from 'vue-i18n'
-import { SButton, SDropdown, SHint, SIcon } from '@sub2api/ui'
+import { SLink } from '@sub2api/ui'
 import ExprCodeEditor from './ExprCodeEditor.vue'
+import PricePresets from './PricePresets.vue'
 import { formatExpr } from './exprSyntax'
+import { tokenExpr } from './priceExpr'
+import { PRESETS } from './tokenPrice'
 import type { PriceValidation } from './usePriceValidation'
 
-// The expression mode: a code box with line numbers, colours and the error
-// position, a toolbar (examples, format, guide), one-click inserts and a
-// one-line status under the box. The full reference (ExprGuide) is placed by
-// PriceEditView when the editor asks for it.
+// The expression editor: preset templates, a short reference of the names it
+// reads, and a code box with line numbers, colours and the error position.
+// The full guide opens in a drawer (PriceEditView).
 // PROTOTYPE: new texts are Chinese literals until adopted.
 const model = defineModel<string>({ required: true })
 const props = defineProps<{ readonly?: boolean; error?: string; validation?: PriceValidation | null }>()
-const { t } = useI18n()
-
-const code = ref<InstanceType<typeof ExprCodeEditor>>()
 const emit = defineEmits<{ (e: 'guide'): void }>()
+const code = ref<InstanceType<typeof ExprCodeEditor>>()
 
-const EXAMPLES: Array<{ key: string; label: string; src: string }> = [
-  { key: 'single', label: '单一价格', src: 'tier("base", p*3 + c*15 + cr*0.3)' },
-  {
-    key: 'tiers',
-    label: '长上下文两档',
-    src: 'len <= 200000\n  ? tier("standard", p*3 + c*15 + cr*0.3)\n  : tier("long_context", p*6 + c*22.5 + cr*0.6)'
-  },
-  { key: 'priority', label: 'priority 整单 ×2', src: 'tier("base", p*2.5 + c*15)\n* (param("service_tier") == "priority" ? 2 : 1)' },
-  { key: 'night', label: '夜间五折', src: 'tier("base", p*3 + c*15)\n* (hour("Asia/Shanghai") < 8 ? 0.5 : 1)' },
-  { key: 'minimum', label: '最低收 0.001 美元', src: 'tier("base", max(p*3 + c*15, flat(0.001)))' }
-]
-const exampleActions = EXAMPLES.map((x) => ({ key: x.key, label: x.label }))
-function pickExample(key: string) {
-  const x = EXAMPLES.find((e) => e.key === key)
-  if (x) model.value = x.src
+const fromTiers = (key: string) => formatExpr(tokenExpr({ tiers: PRESETS[key](), rules: [] }))
+const EXTRA: Record<string, string> = {
+  priority: 'tier("base", p*2.5 + c*15)\n* (param("service_tier") == "priority" ? 2 : 1)',
+  night: 'tier("base", p*3 + c*15)\n* (hour("Asia/Shanghai") < 8 ? 0.5 : 1)',
+  minimum: 'tier("base", max(p*3 + c*15, flat(0.001)))'
 }
-
-const QUICK: Array<{ text: string; caret?: number; label?: string }> = [
-  { text: 'p' },
-  { text: 'c' },
-  { text: 'cr' },
-  { text: 'cc' },
-  { text: 'cc1h' },
-  { text: 'img' },
-  { text: 'img_o' },
-  { text: 'len' },
-  { text: 'tier("base", )', caret: 13, label: 'tier()' },
-  { text: 'flat()', caret: 5, label: 'flat()' },
-  { text: 'param("")', caret: 7, label: 'param()' },
-  { text: 'header("")', caret: 8, label: 'header()' },
-  { text: 'u("")', caret: 3, label: 'u()' },
-  { text: 'has(, "")', caret: 4, label: 'has()' },
-  { text: 'hour("Asia/Shanghai")', label: 'hour()' },
-  { text: 'max(, )', caret: 4, label: 'max()' },
-  { text: '\n* ( ? 2 : 1)', caret: 4, label: '× 加价规则' }
+const GROUPS = [
+  { label: '固定价格', items: [{ key: 'single', label: '单一价格' }, { key: 'claude', label: 'Claude（含缓存）' }, { key: 'image', label: '图片模型' }] },
+  { label: '阶梯', items: [{ key: 'claudeLong', label: 'Claude 长上下文' }, { key: 'gptLong', label: 'GPT 长上下文' }, { key: 'three', label: '三档' }] },
+  { label: '进阶', items: [{ key: 'priority', label: 'priority 整单 ×2' }, { key: 'night', label: '夜间五折' }, { key: 'minimum', label: '最低收 $0.001' }] }
 ]
+const pick = (key: string) => (model.value = EXTRA[key] ?? fromTiers(key))
 
-/** The first error that carries a position. */
 const located = computed(() => {
   for (const x of props.validation?.errors || []) {
-    if (typeof x !== 'string' && typeof x.line === 'number') return { line: x.line as number, column: (x.column as number) || 1, x }
+    if (typeof x !== 'string' && typeof x.line === 'number') return { line: x.line as number, column: (x.column as number) || 1 }
   }
   return null
 })
-function format() {
-  model.value = formatExpr(model.value)
-}
-function focusAt(line: number, column: number) {
-  code.value?.focusAt(line, column)
-}
-function insert(text: string, caret?: number) {
-  code.value?.insert(text, caret)
-}
-defineExpose({ focusAt, insert })
+const format = () => (model.value = formatExpr(model.value))
+defineExpose({ focusAt: (l: number, c: number) => code.value?.focusAt(l, c), insert: (s: string, c?: number) => code.value?.insert(s, c) })
 </script>
 
 <template>
-  <div data-testid="price-expr-editor">
-    <div class="mb-2 flex flex-wrap items-center gap-2">
-      <span class="text-sm font-medium text-fg">{{ t('prices.expression') }}</span>
-      <div v-if="!readonly" class="ml-auto flex flex-wrap items-center gap-2">
-        <SDropdown :actions="exampleActions" width="14rem" @select="pickExample">
-          <template #trigger="{ toggle, attrs }">
-            <SButton size="sm" v-bind="attrs" @click.stop="toggle">示例<SIcon name="chevron-down" class="ml-1 h-3.5 w-3.5" /></SButton>
-          </template>
-        </SDropdown>
-        <SButton size="sm" :disabled="!model.trim()" data-testid="expr-format" @click="format">格式化</SButton>
-        <SButton size="sm" variant="primary" icon="info" data-testid="expr-guide-open" @click="emit('guide')">使用说明</SButton>
+  <div class="space-y-4" data-testid="price-expr-editor">
+    <PricePresets v-if="!readonly" :groups="GROUPS" @pick="pick" />
+
+    <div class="space-y-3 rounded-xl border border-line p-3 sm:p-4">
+      <div class="rounded-lg border border-line bg-surface-2/60 px-3 py-2 font-mono text-[11.5px] leading-5 text-fg-muted" data-testid="expr-reference">
+        <div><span class="font-sans text-fg-subtle">变量：</span>len, p, c, cr, cc, cc1h, img, img_o</div>
+        <div><span class="font-sans text-fg-subtle">函数：</span>tier(name, 费用), flat(美元), param(path), header(name), u(name), has(文本, 片段), hour(tz), weekday(tz), max, min, ceil, floor, abs</div>
+        <div class="font-sans">
+          单价按美元 / 百万 token 写，<code class="font-mono">flat(0.01)</code> 是每次 0.01 美元；取不到的 token 数和用量字段按 0 算。
+          <SLink as="button" class="text-[11.5px]" data-testid="expr-guide-open" @click="emit('guide')">完整说明</SLink>
+        </div>
       </div>
-    </div>
 
-    <ExprCodeEditor ref="code" v-model="model" :rows="12" :readonly="readonly" :error-line="located?.line" :error-column="located?.column" :label="t('prices.expression')" />
-
-    <SHint size="xs" class="mt-1.5">单价按美元 / 百万 token 写：<code class="font-mono">p*3</code> 即输入每百万 3 美元。</SHint>
-    <SHint v-if="error" tone="danger" size="xs" class="mt-1">{{ error }}</SHint>
-
-    <div v-if="!readonly" class="mt-3 flex flex-wrap items-center gap-1.5" data-testid="expr-quick">
-      <span class="mr-1 text-xs text-fg-muted">插入</span>
-      <button
-        v-for="q in QUICK"
-        :key="q.text"
-        type="button"
-        class="rounded-md border border-line bg-surface px-1.5 py-0.5 font-mono text-xs text-fg hover:border-primary-400 hover:text-primary-700 dark:hover:text-primary-300"
-        @click="code?.insert(q.text, q.caret)"
-      >
-        {{ q.label || q.text }}
-      </button>
+      <ExprCodeEditor ref="code" v-model="model" :rows="10" :readonly="readonly" :error-line="located?.line" :error-column="located?.column" label="计费表达式" />
+      <div v-if="!readonly" class="flex items-center gap-3 text-xs">
+        <SLink as="button" class="text-xs" :disabled="!model.trim()" data-testid="expr-format" @click="format">格式化</SLink>
+        <span v-if="error" class="text-danger-700 dark:text-danger-300">{{ error }}</span>
+      </div>
     </div>
   </div>
 </template>

@@ -7,10 +7,10 @@ import type { PriceValidation } from './usePriceValidation'
 
 // The check result as one line under the editor: passed (with the cost of
 // one million input tokens), or each problem on a line of its own with its
-// position. The trial run opens from here.
+// position.
 // PROTOTYPE: new texts are Chinese literals until adopted.
 const props = defineProps<{ localIssues: string[]; validation: PriceValidation | null; error: string; validating: boolean; mode: string }>()
-const emit = defineEmits<{ (e: 'locate', line: number, column: number): void; (e: 'trial'): void }>()
+const emit = defineEmits<{ (e: 'locate', line: number, column: number): void }>()
 
 type Obj = Exclude<Issue, string>
 type Line = { text: string; detail?: string; line?: number; column?: number }
@@ -33,7 +33,7 @@ const cost = computed(() => {
 </script>
 
 <template>
-  <div class="mt-4 rounded-lg border px-3 py-2 text-sm" :class="problems.length ? 'border-danger-200 bg-danger-50/60 dark:border-danger-900 dark:bg-danger-950/30' : 'border-line bg-surface-2'" data-testid="price-check">
+  <div class="rounded-lg border px-3 py-2 text-sm" :class="problems.length ? 'border-danger-200 bg-danger-50/60 dark:border-danger-900 dark:bg-danger-950/30' : 'border-line bg-surface-2'" data-testid="price-check">
     <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
       <SSpinner v-if="validating" size="sm" />
       <span v-else-if="ok" class="inline-flex items-center gap-1 text-success-700 dark:text-success-400"><SIcon name="check" class="h-4 w-4" />检查通过</span>
@@ -42,7 +42,6 @@ const cost = computed(() => {
       >
       <span v-else class="text-fg-muted">检查中…</span>
       <span v-if="cost" class="text-xs text-fg-muted">100 万输入 token 一次 <b class="font-mono text-fg">{{ cost }}</b></span>
-      <SLink v-if="mode !== 'per_request'" as="button" class="ml-auto text-xs" data-testid="price-trial-open" @click="emit('trial')">试算一次</SLink>
     </div>
     <ul v-if="problems.length" class="mt-1.5 space-y-1">
       <li v-for="(p, i) in problems" :key="i" class="flex flex-wrap items-baseline gap-x-2 text-xs text-danger-700 dark:text-danger-300">

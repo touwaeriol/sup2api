@@ -1,88 +1,65 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import { useI18n } from 'vue-i18n'
-import { SButton, SDropdown, SHint, SIcon } from '@sub2api/ui'
-import type { MarkupRule, TokenConfig } from './priceExpr'
-import { PRESETS, newRule } from './tokenPrice'
-import MarkupRuleCard from './MarkupRuleCard.vue'
-import TokenTierTable from './TokenTierTable.vue'
+import { ref } from 'vue'
+import { SButton } from '@sub2api/ui'
+import { num, type TokenConfig } from './priceExpr'
+import { PRESETS, addTier, removeTier } from './tokenPrice'
+import PricePresets from './PricePresets.vue'
+import PriceRuleGroups from './PriceRuleGroups.vue'
+import PriceTierCard from './PriceTierCard.vue'
 
-// The per_token price editor: tiers by context length, each priced per token
-// or per request, and surcharge rules of AND conditions. Edits the bound
-// config in place.
+// The per_token price editor (the visual editor): preset templates, the tiers
+// as numbered cards matched in order (the last one the rest), and the
+// request rule groups. Edits the bound config in place.
+// PROTOTYPE: new texts are Chinese literals until adopted.
 const model = defineModel<TokenConfig>({ required: true })
 defineProps<{ disabled?: boolean }>()
-const { t } = useI18n()
 
-const presetActions = computed(() => Object.keys(PRESETS).map(key => ({ key, label: t(`prices.token.preset.${key}`) })))
-const applyPreset = (key: string) => (model.value.tiers = PRESETS[key]())
-const addRule = () => model.value.rules.push(newRule(t('prices.token.ruleDefault', { n: model.value.rules.length + 1 })))
-
-// PROTOTYPE: common surcharge rules to start from.
-const COMMON: Record<string, { label: string; make: () => MarkupRule }> = {
-  priority: {
-    label: 'OpenAI priority（请求里的 service_tier）×2',
-    make: () => ({ name: 'priority', multiplier: 2, conds: [{ source: 'param', key: 'service_tier', op: 'eq', value: 'priority' }] })
-  },
-  priorityUsage: {
-    label: 'OpenAI priority（应答里的服务等级）×2',
-    make: () => ({ name: 'priority', multiplier: 2, conds: [{ source: 'usage', key: 'service_tier', op: 'eq', value: 'priority' }] })
-  },
-  flex: {
-    label: 'OpenAI flex ×0.5',
-    make: () => ({ name: 'flex', multiplier: 0.5, conds: [{ source: 'param', key: 'service_tier', op: 'eq', value: 'flex' }] })
-  },
-  fast: {
-    label: 'Claude fast mode（请求头）×2',
-    make: () => ({ name: 'fast mode', multiplier: 2, conds: [{ source: 'header', key: 'anthropic-beta', op: 'contains', value: 'fast-mode' }] })
-  },
-  night: {
-    label: '夜间 0–8 点 ×0.8',
-    make: () => ({ name: '夜间折扣', multiplier: 0.8, conds: [{ source: 'time', tz: 'Asia/Shanghai', from_hour: 0, to_hour: 8 }] })
-  }
+const GROUPS = [
+  { label: '固定价格', items: [{ key: 'single', label: '单一价格' }, { key: 'claude', label: 'Claude（含缓存）' }, { key: 'image', label: '图片模型' }] },
+  { label: '阶梯', items: [{ key: 'claudeLong', label: 'Claude 长上下文' }, { key: 'gptLong', label: 'GPT 长上下文' }, { key: 'three', label: '三档' }] }
+]
+const open = ref<number | null>(0)
+function applyPreset(key: string) {
+  model.value.tiers = PRESETS[key]()
+  open.value = 0
 }
-const commonActions = Object.entries(COMMON).map(([key, x]) => ({ key, label: x.label }))
-const addCommon = (key: string) => COMMON[key] && model.value.rules.push(COMMON[key].make())
+const lower = (i: number) => (i === 0 ? 0 : num(model.value.tiers[i - 1].max_len))
+function add() {
+  addTier(model.value.tiers)
+  open.value = model.value.tiers.length - 2
+}
+function remove(i: number) {
+  removeTier(model.value.tiers, i)
+  open.value = null
+}
 </script>
 
 <template>
-  <fieldset :disabled="disabled" class="min-w-0 space-y-6" data-testid="token-price-editor">
-    <section>
-      <div class="mb-3 flex items-end justify-between gap-3">
-        <div class="min-w-0">
-          <h4 class="text-sm font-semibold text-fg">{{ t('prices.token.tiers') }}</h4>
-          <SHint size="xs">按上下文长度 len 分档，每档可以按 token 或按次计。</SHint>
-        </div>
-        <SDropdown :actions="presetActions" width="18rem" :disabled="disabled" @select="applyPreset">
-          <template #trigger="{ toggle, attrs }">
-            <SButton size="sm" v-bind="attrs" data-testid="token-presets" @click.stop="toggle">
-              {{ t('prices.token.fromPreset') }}<SIcon name="chevron-down" class="ml-1 h-3.5 w-3.5" />
-            </SButton>
-          </template>
-        </SDropdown>
-      </div>
-      <TokenTierTable v-model="model.tiers" :disabled="disabled" />
-    </section>
+  <fieldset :disabled="disabled" class="min-w-0 space-y-4" data-testid="token-price-editor">
+    <PricePresets :groups="GROUPS" :disabled="disabled" @pick="applyPreset" />
 
-    <section>
-      <div class="mb-3 flex items-end justify-between gap-3">
-        <div class="min-w-0">
-          <h4 class="text-sm font-semibold text-fg">{{ t('prices.token.rules') }}</h4>
-          <SHint size="xs">{{ t('prices.token.rulesHint') }}</SHint>
-        </div>
-        <div class="flex items-center gap-2">
-          <SDropdown :actions="commonActions" width="20rem" :disabled="disabled" @select="addCommon">
-            <template #trigger="{ toggle, attrs }">
-              <SButton size="sm" v-bind="attrs" @click.stop="toggle">常用规则<SIcon name="chevron-down" class="ml-1 h-3.5 w-3.5" /></SButton>
-            </template>
-          </SDropdown>
-          <SButton size="sm" icon="plus" data-testid="token-add-rule" @click="addRule">{{ t('prices.token.addRule') }}</SButton>
-        </div>
+    <div class="space-y-4 rounded-xl border border-line p-3 sm:p-4">
+      <div>
+        <p class="mb-2 text-xs text-fg-muted">按顺序匹配档位，第一个满足条件的档位决定价格；最后一档兜底。</p>
+        <ul class="space-y-2.5" data-testid="token-tier-list">
+          <PriceTierCard
+            v-for="(_, i) in model.tiers"
+            :key="i"
+            v-model="model.tiers[i]"
+            :open="open === i"
+            :index="i"
+            :count="model.tiers.length"
+            :lower="lower(i)"
+            :disabled="disabled"
+            @update:open="open = $event ? i : null"
+            @remove="remove(i)"
+          />
+        </ul>
+        <SButton v-if="!disabled" size="sm" variant="ghost" icon="plus" class="mt-2" data-testid="token-add-tier" @click="add">添加档位</SButton>
       </div>
-      <SHint v-if="!model.rules.length" size="xs">{{ t('prices.token.noRules') }}</SHint>
-      <ul class="space-y-3">
-        <MarkupRuleCard v-for="(_, i) in model.rules" :key="i" v-model="model.rules[i]" :index="i" @remove="model.rules.splice(i, 1)" />
-      </ul>
-    </section>
+      <div class="border-t border-line pt-4">
+        <PriceRuleGroups v-model="model.rules" :disabled="disabled" />
+      </div>
+    </div>
   </fieldset>
 </template>
