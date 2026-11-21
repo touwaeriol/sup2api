@@ -11,7 +11,7 @@ import UserSegmentPanel from './UserSegmentPanel.vue'
 const mocks = vi.hoisted(() => ({ post: vi.fn(), toast: vi.fn(), confirm: vi.fn() }))
 vi.mock('@sub2api/host', async (original) => ({ ...(await original<object>()), api: { post: mocks.post } }))
 vi.mock('@sub2api/ui', async (original) => ({ ...(await original<object>()), toast: (...a: unknown[]) => mocks.toast(...a), confirm: (...a: unknown[]) => mocks.confirm(...a) }))
-const segment = (id: number, name: string, over: Partial<Segment> = {}): Segment => ({ id, kind: 'named', name, description: '', discount: '1', is_default: false, member_count: 2, granted_groups: [], rate_override_count: 0, ...over })
+const segment = (id: number, name: string, over: Partial<Segment> = {}): Segment => ({ id, kind: 'named', name, description: '', discount: '1', is_default: false, member_count: 2, granted_groups: [], rate_overrides: [], ...over })
 const vip = segment(2, 'VIP', { discount: '0.9' })
 const staff = segment(4, 'Staff')
 vi.mock('@/components/pricing/segmentLookup', () => ({ useSegmentsLookup: () => ({ segments: ref([segment(1, '默认', { is_default: true }), vip, staff]) }) }))

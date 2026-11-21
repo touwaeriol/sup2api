@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({ post: vi.fn(), toast: vi.fn(), confirm: vi.fn(
 vi.mock('@sub2api/host', async (original) => ({ ...(await original<object>()), api: { post: mocks.post } }))
 vi.mock('@sub2api/ui', async (original) => ({ ...(await original<object>()), toast: (...a: unknown[]) => mocks.toast(...a), confirm: (...a: unknown[]) => mocks.confirm(...a) }))
 vi.mock('@/stores/auth', () => ({ useAuthStore: () => ({ has: (key: string) => !mocks.denied.has(key) }) }))
-const named = (id: number, name: string, over: Partial<Segment> = {}): Segment => ({ id, kind: 'named', name, description: '', discount: '1', is_default: false, member_count: 2, granted_groups: [], rate_override_count: 0, ...over })
+const named = (id: number, name: string, over: Partial<Segment> = {}): Segment => ({ id, kind: 'named', name, description: '', discount: '1', is_default: false, member_count: 2, granted_groups: [], rate_overrides: [], ...over })
 const fallback = named(1, '默认', { is_default: true })
 vi.mock('@/components/pricing/segmentLookup', () => ({ useSegmentsLookup: () => ({ segments: ref([fallback, named(2, 'VIP')]) }) }))
 const user = (id: number, email: string, segment: SegmentRef): User => ({ id, email, display_name: '', status: 'active', segment }) as User

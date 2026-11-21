@@ -10,7 +10,7 @@ import SegmentSelect from './SegmentSelect.vue'
 const mocks = vi.hoisted(() => ({ del: vi.fn(), toast: vi.fn() }))
 vi.mock('@sub2api/host', async (original) => ({ ...(await original<typeof import('@sub2api/host')>()), api: { del: mocks.del } }))
 vi.mock('@sub2api/ui', async (original) => ({ ...(await original<object>()), toast: (...a: unknown[]) => mocks.toast(...a) }))
-const named = (id: number, name: string, over: Partial<Segment> = {}): Segment => ({ id, kind: 'named', name, description: '', discount: '1', is_default: false, member_count: 1, granted_groups: [], rate_override_count: 0, ...over })
+const named = (id: number, name: string, over: Partial<Segment> = {}): Segment => ({ id, kind: 'named', name, description: '', discount: '1', is_default: false, member_count: 1, granted_groups: [], rate_overrides: [], ...over })
 const segments = ref([named(1, 'Default', { is_default: true }), named(2, 'VIP')])
 vi.mock('./segmentLookup', () => ({ useSegmentsLookup: () => ({ segments, ready: Promise.resolve() }) }))
 enableAutoUnmount(afterEach)

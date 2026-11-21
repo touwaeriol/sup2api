@@ -21,7 +21,7 @@ const personal: Segment = {
   is_default: false,
   member_count: 1,
   granted_groups: [],
-  rate_override_count: 0,
+  rate_overrides: [],
 }
 
 /** The user search: a button per user it would find. */

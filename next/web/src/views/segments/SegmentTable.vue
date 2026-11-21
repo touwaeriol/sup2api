@@ -10,7 +10,7 @@ import { formatNumber } from '@/utils/format'
 // The user groups and the users priced on their own in one table: who each
 // is (a personal one by its user, with the group he came from), how many
 // members, its discount, the private groups it may use and in how many
-// groups it sets a rate of its own. `members` asks for the members of a
+// groups it sets a rate of its own, with those rates. `members` asks for the members of a
 // named row (`linkMembers`: the count is a link); the caller brings
 // `cell-actions`. Other attributes and slots (card, loading, #footer, …) are
 // STable's.
@@ -27,11 +27,12 @@ const columns = computed<TableColumn[]>(() => [
   { key: 'member_count', label: t('segments.columns.members'), align: 'right', mobile: 'meta' },
   { key: 'discount', label: t('segments.columns.discount'), mobile: 'meta' },
   { key: 'granted_groups', label: t('segments.columns.granted'), mobile: 'meta', mobileSpan: 2 },
-  { key: 'rate_override_count', label: t('segments.columns.overrides'), mobile: 'meta' },
+  { key: 'rate_overrides', label: t('segments.columns.overrides'), mobile: 'meta', mobileSpan: 2 },
   { key: 'actions', label: t('common.actions'), align: 'right' }
 ])
 
 const groupChips = (s: Segment): ChipListItem[] => s.granted_groups.map((g) => ({ key: String(g.id), label: g.name }))
+const rateChips = (s: Segment): ChipListItem[] => s.rate_overrides.map((g) => ({ key: String(g.id), label: `${g.name} ${rateText(g.rate)}` }))
 const rowAttrs = (s: Segment) => ({ 'data-testid': 'segment-row', 'data-segment': s.id, 'data-kind': s.kind })
 </script>
 
@@ -62,8 +63,8 @@ const rowAttrs = (s: Segment) => ({ 'data-testid': 'segment-row', 'data-segment'
       <SChipList v-if="row.granted_groups.length" :items="groupChips(row)" :max="GROUPS_SHOWN" />
       <SHint v-else inline>{{ t('segments.publicOnly') }}</SHint>
     </template>
-    <template #cell-rate_override_count="{ row }">
-      <span v-if="row.rate_override_count" class="text-xs" data-testid="segment-overrides-cell">{{ t('segments.overrides', { n: row.rate_override_count }, row.rate_override_count) }}</span>
+    <template #cell-rate_overrides="{ row }">
+      <SChipList v-if="row.rate_overrides.length" :items="rateChips(row)" :max="GROUPS_SHOWN" data-testid="segment-overrides-cell" />
       <SHint v-else inline data-testid="segment-overrides-cell">{{ t('common.none') }}</SHint>
     </template>
   </STable>

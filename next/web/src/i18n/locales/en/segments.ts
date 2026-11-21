@@ -12,7 +12,6 @@ export default {
   defaultName: 'The default user group cannot be renamed.',
   note: 'Note',
   publicOnly: 'Public groups only',
-  overrides: '{n} group | {n} groups',
   simulate: 'Price simulator',
   deleteTitle: 'Delete the user group "{name}"',
   deleteConfirm:

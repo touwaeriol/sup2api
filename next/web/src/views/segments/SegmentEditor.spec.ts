@@ -31,7 +31,7 @@ const membersTab: Component = {
     h('button', { 'data-testid': 'members', 'data-name': props.name, onClick: () => emit('update:pending', [{ id: 6, email: 'cat@x' }]) })
 }
 
-const segment = (over: Partial<Segment> = {}): Segment => ({ id: 2, kind: 'named', name: 'VIP', description: '', discount: '0.9', is_default: false, member_count: 3, granted_groups: [], rate_override_count: 0, ...over })
+const segment = (over: Partial<Segment> = {}): Segment => ({ id: 2, kind: 'named', name: 'VIP', description: '', discount: '0.9', is_default: false, member_count: 3, granted_groups: [], rate_overrides: [], ...over })
 const solo = segment({ id: 104, kind: 'personal', name: 'a@b.c', user_id: 9, user: { id: 9, email: 'a@b.c', display_name: '' } })
 
 async function render(of: Segment | null, props: { readonly?: boolean } = {}) {

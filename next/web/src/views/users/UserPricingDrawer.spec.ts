@@ -31,7 +31,7 @@ const panel: Component = {
     h('input', { 'data-testid': 'discount', value: props.discount, onInput: (e: Event) => emit('update:discount', (e.target as HTMLInputElement).value) })
 }
 
-const segment = (over: Partial<Segment> = {}): Segment => ({ id: 2, kind: 'named', name: 'VIP', description: '', discount: '0.9', is_default: false, member_count: 3, granted_groups: [], rate_override_count: 0, ...over })
+const segment = (over: Partial<Segment> = {}): Segment => ({ id: 2, kind: 'named', name: 'VIP', description: '', discount: '0.9', is_default: false, member_count: 3, granted_groups: [], rate_overrides: [], ...over })
 const solo = segment({ id: 31, kind: 'personal', name: 'amy@x', user_id: 7, discount: '1' })
 const amy = { id: 7, email: 'amy@x', display_name: 'Amy', status: 'active', segment: { id: 1, kind: 'named', name: '默认' } } as User
 

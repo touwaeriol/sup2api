@@ -17,13 +17,13 @@ vi.mock('@/components/pricing/segmentLookup', () => ({ useSegmentsLookup: vi.fn(
 const route = reactive<{ query: Record<string, string | undefined> }>({ query: {} })
 vi.mock('vue-router', async (original) => ({ ...(await original<object>()), useRoute: () => route, useRouter: () => ({ replace: mocks.replace }) }))
 
-const segment = (id: number, name: string, over: Partial<Segment> = {}): Segment => ({ id, kind: 'named', name, description: '', discount: '1', is_default: id === 1, member_count: 3, granted_groups: [], rate_override_count: 0, ...over })
+const segment = (id: number, name: string, over: Partial<Segment> = {}): Segment => ({ id, kind: 'named', name, description: '', discount: '1', is_default: id === 1, member_count: 3, granted_groups: [], rate_overrides: [], ...over })
 const items = ref<Segment[]>([])
 const filters = reactive<Record<string, string>>({})
 vi.mock('@/composables/useList', () => ({
   useList: (...a: unknown[]) => (mocks.useList(...a), { items, filters, loading: ref(false), error: ref(null), page: ref(1), pageSize: ref(20), total: ref(2), reload: mocks.reload })
 }))
-const solo = segment(104, 'a@b.c', { kind: 'personal', user_id: 9, member_count: 1, rate_override_count: 2, user: { id: 9, email: 'a@b.c', display_name: '' }, origin: { id: 2, kind: 'named', name: 'VIP' } })
+const solo = segment(104, 'a@b.c', { kind: 'personal', user_id: 9, member_count: 1, rate_overrides: [{ id: 1, name: 'Default', rate: '0.5' }, { id: 3, name: 'Pro', rate: '0.8' }], user: { id: 9, email: 'a@b.c', display_name: '' }, origin: { id: 2, kind: 'named', name: 'VIP' } })
 enableAutoUnmount(afterEach)
 
 async function render() {
@@ -64,7 +64,7 @@ describe('user groups page', () => {
     expect(personal.get('[data-testid="segment-badge"]').text()).toBe('个人')
     expect(personal.get('[data-testid="segment-origin"]').text()).toBe('原来在 VIP')
     expect(personal.find('[data-testid="segment-members-link"]').exists()).toBe(false)
-    expect(personal.get('[data-testid="segment-overrides-cell"]').text()).toBe('2 个分组')
+    expect(personal.get('[data-testid="segment-overrides-cell"]').text()).toContain('Default ×0.5')
   })
 
   it('narrows the list to one kind, counting each once the list is loaded', async () => {

@@ -12,7 +12,6 @@ export default {
   defaultName: '默认用户组不能改名。',
   note: '说明',
   publicOnly: '只有公开分组',
-  overrides: '{n} 个分组',
   simulate: '价格试算',
   deleteTitle: '删除用户组「{name}」',
   deleteConfirm: '{n} 位成员将回到默认用户组，这个用户组的开通和倍率一并删除。此操作无法撤销。',
