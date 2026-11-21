@@ -48,7 +48,6 @@ export interface Segment extends SegmentRef {
   member_count: number
   /** Private groups it is granted. */
   granted_groups: Array<{ id: number; name: string }>
-  /** Groups whose rate it overrides. */
   /** The groups whose rate the segment sets itself, with that rate (by group id). */
   rate_overrides: Array<{ id: number; name: string; rate: string }>
   /** Personal only. */
@@ -214,7 +213,6 @@ export interface GroupPricingSummary {
   access: { segments: SegmentRef[]; personal_count: number }
   /** Models the group prices itself, provided or not. */
   price_rule_count: number
-
   /** Models the group provides. */
   model_count: number
 }

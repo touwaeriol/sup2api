@@ -9,7 +9,7 @@ import AccessRateTable from '@/components/pricing/AccessRateTable.vue'
 import PersonalSegmentPicker from '@/components/pricing/PersonalSegmentPicker.vue'
 import SegmentBadge from '@/components/pricing/SegmentBadge.vue'
 import { blankSetting, type DraftedSetting } from '@/components/pricing/accessRateDrafts'
-import { hasDiscount, rateText, validRate } from '@/components/pricing/pricingFormat'
+import { hasDiscount, rateText, typedRate } from '@/components/pricing/pricingFormat'
 import { fetchNamedSegments } from '@/components/pricing/segmentLookup'
 import { useAccessRateDrafts } from '@/components/pricing/useAccessRateDrafts'
 
@@ -54,14 +54,14 @@ function include(segment: SegmentRef) {
 
 const restricted = computed(() => props.visibility === 'restricted')
 /** The group rate the form has, once it is one. */
-const groupRate = computed(() => rateText(validRate(props.defaultRate.trim()) ? props.defaultRate.trim() : rows.value[0]?.rate.group_default))
+const groupRate = computed(() => rateText(typedRate(props.defaultRate) ?? rows.value[0]?.rate.group_default))
 /** A private group nobody may use. */
 const nobody = computed(() => restricted.value && !loading.value && !error.value && !rows.value.some((r) => r.granted))
 
 /** Saves the changed rows for group `gid`: false when a rate cannot be saved yet, a failed request rejects. */
 const save = (gid: number) => drafts.save((items) => api.put<SegmentGroupSetting[]>(`/groups/${gid}/segments`, { items }, { query: query.value }))
 
-defineExpose({ save, dirty, include })
+defineExpose({ check: drafts.check, save, dirty })
 </script>
 
 <template>

@@ -39,18 +39,21 @@ const list = useList<Segment>('/segments', { q: '', kind: 'all' satisfies Segmen
 const KINDS: SegmentKind[] = ['named', 'personal']
 /** How many of each kind match the search, for the filter's labels. */
 const counts = reactive<Record<SegmentKind, number>>({ named: 0, personal: 0 })
+/** The search the counts are of; null once a change makes them stale. */
+let countedQ: string | null = null
 
 async function countKinds() {
-  const q = list.filters.q
+  const q = (countedQ = list.filters.q)
   try {
     const totals = await Promise.all(KINDS.map((kind) => api.list<Segment>('/segments', { kind, q, page_size: 1 })))
     KINDS.forEach((kind, i) => (counts[kind] = totals[i].page.total ?? 0))
   } catch {
-    /* the labels keep the last counts */
+    // The labels keep the last counts; the next load tries again.
+    countedQ = null
   }
 }
-// Every load of the list may have changed them: a search, a save, a move.
-watch(list.items, countKinds)
+// A load of the list for another search, or after a change, counts again; a page or a kind does not.
+watch(list.items, () => list.filters.q !== countedQ && countKinds())
 
 const kindOptions = computed<SelectOption[]>(() => [
   { value: 'all', label: t('segments.kinds.all', { n: formatNumber(counts.named + counts.personal) }) },
@@ -60,6 +63,7 @@ const kindOptions = computed<SelectOption[]>(() => [
 
 /** Segments, their members or their settings changed: the list, its counts and the selects follow. */
 function changed() {
+  countedQ = null
   list.reload()
   useSegmentsLookup(true)
 }

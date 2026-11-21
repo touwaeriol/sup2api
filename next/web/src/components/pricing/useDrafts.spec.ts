@@ -73,12 +73,13 @@ describe('an editor that keeps drafts', () => {
     expect([state.saved.value, state.dirty.value]).toEqual([[], false])
   })
 
-  it('sends nothing without drafts, and nothing while they cannot be saved', async () => {
+  it('sends nothing without drafts, and nothing while they cannot be saved (check says so first)', async () => {
     let problem: string | null = 'not yet'
     const { state } = setup(() => problem)
     const put = vi.fn(async () => ['saved'])
-    expect(await state.save(put)).toBe(true)
+    expect([state.check(), await state.save(put)]).toEqual([true, true])
     state.drafts.value = withDraft(state.drafts.value, 'a', 1)
+    expect(state.check()).toBe(false)
     expect(await state.save(put)).toBe(false)
     expect(toast).toHaveBeenCalledWith('not yet', 'error')
     problem = null

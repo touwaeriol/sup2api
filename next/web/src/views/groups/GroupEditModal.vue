@@ -28,7 +28,8 @@ import { GROUP_EDIT_TABS, changedTabs, tabOfErrors, type GroupEditTab } from './
 // sub-editors with drafts of their own, saved in that order once the group
 // itself is. Every tab can be filled before the group exists: the price table
 // of a new group lists the models of the accounts picked, through the model
-// policy being edited. A step that fails keeps the dialog open on its tab; a tab with
+// policy being edited. Drafts that cannot be saved stop Save before anything
+// is sent; a step that fails keeps the dialog open on its tab; a tab with
 // unsaved changes is marked, and closing with one asks first. Only the Save
 // button submits: Enter in a rate or a search field of a tab must not save
 // the whole group.
@@ -208,6 +209,9 @@ const steps: SaveStep<GroupEditTab>[] = [
       return true
     }
   },
+  // Drafts that cannot be saved stop it before anything is.
+  { tab: 'segments', save: () => segmentsEditor.value?.check() ?? true },
+  { tab: 'pricing', save: () => pricingEditor.value?.check() ?? true },
   // A field error opens the tab of its field; any other failure was shown as a toast.
   { tab: () => tabOfErrors(errors.value) ?? tab.value, save: saveForm },
   { tab: 'accounts', save: onGroup(saveAccounts) },

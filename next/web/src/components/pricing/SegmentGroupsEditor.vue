@@ -9,7 +9,7 @@ import AccessRateTable from './AccessRateTable.vue'
 import { blankGroupSetting } from './accessRateDrafts'
 import { rateText } from './pricingFormat'
 import { useAccessRateDrafts } from './useAccessRateDrafts'
-import { fetchFirstPage } from '@/composables/lookups'
+import { fetchAllPages } from '@/composables/lookups'
 
 // What a segment (a user group, or the personal one of a user) gets in every
 // group: whether it may use a private group and the rate it pays there. Edits
@@ -24,7 +24,7 @@ const { t } = useI18n()
 
 async function fetchSettings(): Promise<SegmentGroupSetting[]> {
   if (props.segmentId !== null) return api.get<SegmentGroupSetting[]>(`/segments/${props.segmentId}/groups`)
-  return (await fetchFirstPage<Group>('/groups')).map(blankGroupSetting)
+  return (await fetchAllPages<Group>('/groups')).map(blankGroupSetting)
 }
 
 const drafts = useAccessRateDrafts({ side: 'group', fetch: fetchSettings, terms: () => ({ discount: props.discount }) })
@@ -37,7 +37,7 @@ async function save(id = props.segmentId): Promise<boolean> {
   return drafts.save((items) => api.put<SegmentGroupSetting[]>(`/segments/${id}/groups`, { items }))
 }
 
-defineExpose({ save, dirty })
+defineExpose({ check: drafts.check, save, dirty })
 </script>
 
 <template>

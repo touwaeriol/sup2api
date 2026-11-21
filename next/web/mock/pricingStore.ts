@@ -262,7 +262,6 @@ export function makePersonal(user: { id: number; email: string }, copy: boolean)
   if (!copy) return s
   pairs.push(...pairsWhere({ segment_id: from.id }).map((p) => ({ ...p, segment_id: s.id })))
   return s
-
 }
 
 /** Moves a user to a named segment; a personal segment they had is deleted. False when they are in it already. */

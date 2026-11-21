@@ -5,10 +5,10 @@ import type { Group } from '@/api/types'
 import type { SegmentGroupSetting } from '@/api/pricing'
 import SegmentGroupsEditor from './SegmentGroupsEditor.vue'
 
-const mocks = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn(), toast: vi.fn(), firstPage: vi.fn() }))
+const mocks = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn(), toast: vi.fn(), allPages: vi.fn() }))
 vi.mock('@sub2api/host', async (original) => ({ ...(await original<typeof import('@sub2api/host')>()), api: { get: mocks.get, put: mocks.put } }))
 vi.mock('@sub2api/ui', async (original) => ({ ...(await original<object>()), toast: (...a: unknown[]) => mocks.toast(...a) }))
-vi.mock('@/composables/lookups', () => ({ fetchFirstPage: mocks.firstPage }))
+vi.mock('@/composables/lookups', () => ({ fetchAllPages: mocks.allPages }))
 
 i18n.global.locale.value = 'en'
 
@@ -39,7 +39,7 @@ beforeEach(() => {
   mocks.get.mockReset().mockResolvedValue(saved())
   mocks.put.mockReset()
   mocks.toast.mockReset()
-  mocks.firstPage.mockReset()
+  mocks.allPages.mockReset()
 })
 
 describe('the groups of a segment', () => {
@@ -92,9 +92,9 @@ describe('the groups of a segment', () => {
   })
 
   it('starts a segment not created yet from every group and saves under the id it gets', async () => {
-    mocks.firstPage.mockResolvedValue([group(1, 'public', '1'), group(3, 'restricted', '1.5')])
+    mocks.allPages.mockResolvedValue([group(1, 'public', '1'), group(3, 'restricted', '1.5')])
     const { w, row, rate, source } = await render({ segmentId: null, editable: true, discount: '0.9' })
-    expect(mocks.firstPage).toHaveBeenCalledWith('/groups')
+    expect(mocks.allPages).toHaveBeenCalledWith('/groups')
     expect(mocks.get).not.toHaveBeenCalled()
     expect(rate(1)).toBe('×0.9')
     expect(source(3)).toBe('Not available')

@@ -18,6 +18,12 @@ export function validRate(v: string | null | undefined): boolean {
   return !!v && /^\d+(\.\d{1,4})?$/.test(v.trim()) && Number(v) <= MAX_RATE
 }
 
+/** A rate as typed, once it is a valid one (trimmed); null until then. */
+export function typedRate(v: string | null | undefined): string | null {
+  const rate = v?.trim()
+  return rate && validRate(rate) ? rate : null
+}
+
 /** Rates that are the same number however they are written; one still being typed is only like itself. */
 export function sameRate(a: string | null, b: string | null): boolean {
   return validRate(a) && validRate(b) ? Number(a) === Number(b) : a === b

@@ -12,7 +12,7 @@ const props = defineProps<{ group: Pick<Group, 'price_rule_count'>; link?: boole
 const emit = defineEmits<{ (e: 'open'): void }>()
 const { t } = useI18n()
 
-const ruled = computed(() => props.group.price_rule_count ?? 0)
+const ruled = computed(() => props.group.price_rule_count)
 </script>
 
 <template>

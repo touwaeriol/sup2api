@@ -14,12 +14,12 @@ enableAutoUnmount(afterEach)
 /** What ran, in order: the segment's own request and the save of its groups. */
 const calls: string[] = []
 /** What the groups editor has to save, and what saving it answers. */
-const groups = { dirty: false, saved: true }
+const groups = { dirty: false, saved: true, valid: true }
 const groupsEditor: Component = {
   props: { segmentId: { type: Number, default: null }, editable: Boolean, discount: String },
   setup(props: Readonly<Record<string, unknown>>, { expose }: SetupContext) {
     const save = async (id: number | null) => (calls.push(`groups ${id}`), groups.saved)
-    expose({ save, get dirty() { return groups.dirty } })
+    expose({ save, check: () => groups.valid, get dirty() { return groups.dirty } })
     return () => h('div', { 'data-testid': 'groups', 'data-editable': String(props.editable), 'data-segment': String(props.segmentId) })
   }
 }
@@ -53,7 +53,7 @@ async function render(of: Segment | null, props: { readonly?: boolean } = {}) {
 beforeEach(() => {
   i18n.global.locale.value = 'zh'
   calls.length = 0
-  Object.assign(groups, { dirty: false, saved: true })
+  Object.assign(groups, { dirty: false, saved: true, valid: true })
   mocks.denied.clear()
   mocks.toast.mockReset()
   mocks.confirm.mockReset().mockResolvedValue(false)
@@ -115,6 +115,15 @@ describe('segment editor', () => {
     expect(w.emitted('update:open')).toEqual([[false]])
   })
 
+  it('creates nothing while a rate cannot be saved, and opens its tab', async () => {
+    const { w, selected, submit } = await render(null)
+    await w.get('[data-testid="segment-name"]').setValue('Corp')
+    groups.valid = false
+    await submit()
+    expect(calls).toEqual([])
+    expect(selected()).toBe('分组倍率')
+  })
+
   it('creates a new segment once, however many attempts its later steps take', async () => {
     const { w, selected, submit } = await render(null)
     await w.get('[data-testid="segment-name"]').setValue('Corp')
@@ -164,6 +173,17 @@ describe('segment editor', () => {
     await flushPromises()
     expect(w.get('[role="tab"][aria-selected="true"]').text()).toBe('基本信息')
     expect(w.find('[data-testid="members"]').exists()).toBe(false)
+  })
+
+  it('sets the groups of a new segment only for a caller who reads groups, and of a saved one always', async () => {
+    mocks.denied.add('group:read')
+    const { w, tabs, submit } = await render(null)
+    expect(tabs()).toEqual(['基本信息', '成员'])
+    expect(w.find('[data-testid="groups"]').exists()).toBe(false)
+    await w.get('[data-testid="segment-name"]').setValue('Corp')
+    await submit()
+    expect(calls).toEqual(['POST /segments'])
+    expect((await render(segment())).tabs()).toEqual(['基本信息', '分组倍率', '成员'])
   })
 
   it('asks before closing with changes not saved, and closes at once without', async () => {

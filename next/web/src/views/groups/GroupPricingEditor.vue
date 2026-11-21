@@ -6,7 +6,7 @@ import type { SegmentKind } from '@/api/pricing'
 import ModelPriceTable from '@/components/pricing/ModelPriceTable.vue'
 import type { DraftedSetting } from '@/components/pricing/accessRateDrafts'
 import type { ModelOffer } from '@/components/pricing/offeredModels'
-import { rateText, validRate } from '@/components/pricing/pricingFormat'
+import { rateText, typedRate } from '@/components/pricing/pricingFormat'
 
 // The model prices of a group, paid at whose rate the caller picks: everyone
 // at the group rate (`defaultRate`, as the form has it now), or a user group
@@ -21,7 +21,7 @@ const table = ref<InstanceType<typeof ModelPriceTable>>()
 /** Whose rate the paid prices are at: a user group's id, or everyone's. */
 const payer = ref<number | 'all'>('all')
 
-const groupRate = computed(() => (validRate(props.defaultRate) ? props.defaultRate.trim() : ''))
+const groupRate = computed(() => typedRate(props.defaultRate) ?? '')
 const optionOf = (s: DraftedSetting): SelectOption => ({
   value: s.id,
   label: `${s.segment.name} ${rateText(s.rate.value || null)}`,
@@ -43,6 +43,7 @@ const rate = computed(() => {
 })
 
 defineExpose({
+  check: () => table.value?.check() ?? true,
   save: (gid: number) => table.value?.save(gid) ?? Promise.resolve(true),
   dirty: computed(() => !!table.value?.dirty)
 })

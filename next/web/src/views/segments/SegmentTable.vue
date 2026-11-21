@@ -9,11 +9,11 @@ import { formatNumber } from '@/utils/format'
 
 // The user groups and the users priced on their own in one table: who each
 // is (a personal one by its user, with the group he came from), how many
-// members, its discount, the private groups it may use and in how many
-// groups it sets a rate of its own, with those rates. `members` asks for the members of a
-// named row (`linkMembers`: the count is a link); the caller brings
-// `cell-actions`. Other attributes and slots (card, loading, #footer, …) are
-// STable's.
+// members, its discount, the private groups it may use and the groups it
+// sets a rate of its own in, with those rates. `members` asks for the
+// members of a named row (`linkMembers`: the count is a link); the caller
+// brings `cell-actions`. Other attributes and slots (card, loading, #footer,
+// …) are STable's.
 defineOptions({ inheritAttrs: false })
 defineProps<{ rows: Segment[]; linkMembers?: boolean }>()
 const emit = defineEmits<{ (e: 'members', s: Segment): void }>()

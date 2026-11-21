@@ -1,6 +1,7 @@
 // Mock handlers: users, roles, permissions, API keys, groups, proxies, nodes,
 // publishers. (Accounts and account types live in their own mock module.)
 import { SCOPABLE, canonicalPermission, parsePermission, permissionIndex } from '../src/authz/implies'
+import { offeredModels } from '../src/components/pricing/offeredModels'
 import { fail, nextId, noContent, now, on, paginate, type MockRequest } from './router'
 import { ALL_PERMISSIONS, MANAGER_PLUGIN_KEYS, SUPER_ONLY_KEYS, SUPPLIER_AGENT_KEYS, SUPPLIER_KEYS, USER_KEYS, agentUser, caller, filterOwned, hasPerm, inScope, moderatorUser, ownerScope, pricerUser, readonlyUser, resolveTeams, stepUp, stepUpRequired, userEmail, vendorUser, type Identity } from './core'
 import { accounts, groupAccountCount, groupPlatforms, groupServed, proxyAccountCount } from './accounts'
@@ -531,19 +532,6 @@ function groupOut(g: MockGroup) {
   return { ...g, account_count: groupAccountCount(g.id), platforms: groupPlatforms(g.id), api_key_count: keys.filter((k) => k.group_id === g.id).length, access: groupAccess(g), price_rule_count: rulesWhere({ group_id: g.id }).length, model_count: groupModels(g).length }
 }
 
-const GLOB_SPECIALS = /[.+^${}()|[\]\\]/g
-
-function globMatch(pattern: string, s: string): boolean {
-  return new RegExp('^' + pattern.replace(GLOB_SPECIALS, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$').test(s)
-}
-
-/** The model policy of a group (core.GroupInfo.AllowsModel): an empty list allows every model. */
-function allowsModel(g: Pick<MockGroup, 'model_allowlist' | 'model_filter_mode'>, model: string): boolean {
-  if (!g.model_allowlist.length) return true
-  const listed = g.model_allowlist.some((p) => globMatch(p, model))
-  return g.model_filter_mode === 'blacklist' ? !listed : listed
-}
-
 /**
  * The models a group provides: those its accounts declare, through its model
  * policy. An account that declares none serves every model, which here is
@@ -551,11 +539,10 @@ function allowsModel(g: Pick<MockGroup, 'model_allowlist' | 'model_filter_mode'>
  */
 export function groupModels(g: Pick<MockGroup, 'id' | 'model_allowlist' | 'model_filter_mode'>): string[] {
   const members = accounts.filter((a) => a.group_ids.includes(g.id))
-  const declared: string[] = members.flatMap((a) => a.models || [])
-  const open = members.some((a) => !a.models?.length)
-  return [...new Set([...declared, ...(open ? pricedModels() : [])])].filter((m) => allowsModel(g, m)).sort()
+  const models = members.flatMap((a) => a.models || [])
+  const unrestricted = members.filter((a) => !a.models?.length).length
+  return offeredModels({ models, unrestricted_accounts: unrestricted, model_allowlist: g.model_allowlist, model_filter_mode: g.model_filter_mode ?? 'whitelist' }, pricedModels())
 }
-
 
 function validateGroup(b: any) {
   if (b.name !== undefined && !String(b.name).trim()) return invalid('name', 'name is required')

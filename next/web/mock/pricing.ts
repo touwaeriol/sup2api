@@ -1,8 +1,8 @@
 // Mock handlers: group pricing. User groups ("segments"), their grants and
 // rates per group, the model prices of a group and the catalog of global
-// prices, personal segments, the price quote and the caller's own prices. State and resolution live in
-// pricingStore.ts; the handlers here read the request, call it and build the
-// API rows.
+// prices, personal segments, the price quote and the caller's own prices.
+// State and resolution live in pricingStore.ts; the handlers here read the
+// request, call it and build the API rows.
 import { fail, noContent, on, paginate, type MockHandler, type MockRequest, type MockResult } from './router'
 import { caller, hasPerm } from './core'
 import { groupPlatforms } from './accounts'
@@ -397,5 +397,4 @@ on('GET', '/me/prices', (req) => {
   if (!positive(req.query.group_id)) return fail(400, 'invalid_argument', 'invalid group_id')
   const g = mine.find((x) => x.id === Number(req.query.group_id))
   return g ? groupPrices(g) : fail(404, 'not_found', 'group not found')
-
 })

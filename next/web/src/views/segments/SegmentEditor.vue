@@ -13,6 +13,7 @@ import { formChanged, formOf, segmentBody, validDiscount } from '@/components/pr
 import { canListMembers, moveToSegment } from '@/components/pricing/segmentMembers'
 import { confirmDiscard } from '@/composables/confirmDiscard'
 import { markUnsaved, useTabbedSave, type SaveStep } from '@/composables/useTabbedSave'
+import { useAuthStore } from '@/stores/auth'
 import { applyFormError } from '@/utils/formErrors'
 import SegmentMembers from './SegmentMembers.vue'
 
@@ -46,11 +47,15 @@ const groupsEditor = ref<InstanceType<typeof SegmentGroupsEditor>>()
 const personal = computed(() => props.segment?.kind === 'personal')
 /** The tab the form's fields are on: a personal segment has only its discount, above its groups. */
 const formTab = computed<SegmentEditorTab>(() => (personal.value ? 'groups' : 'basic'))
-const showsMembers = canListMembers()
+const auth = useAuthStore()
+const showsMembers = canListMembers(auth)
+// A saved segment answers with its own groups (segment:read); one not created yet has to list
+// them all (GET /groups), which takes group:read. Without it they are set once the segment is saved.
+const showsGroups = computed(() => props.segment !== null || auth.has('group:read'))
 /** The tabs of the segment shown. */
 const tabKeys = computed<SegmentEditorTab[]>(() => {
   if (personal.value) return [formTab.value]
-  return TABS.filter((key) => key !== 'members' || showsMembers)
+  return TABS.filter((key) => (key !== 'members' || showsMembers) && (key !== 'groups' || showsGroups.value))
 })
 
 watch(
@@ -120,6 +125,8 @@ async function saveMembers(): Promise<boolean> {
 
 /** What Save does, in order: the groups' rates are answered under the discount the form has just saved. */
 const steps: SaveStep<SegmentEditorTab>[] = [
+  // Rates that cannot be saved stop it before anything is.
+  { tab: 'groups', save: () => groupsEditor.value?.check() ?? true },
   { tab: () => formTab.value, save: saveForm },
   { tab: 'groups', save: async () => (await groupsEditor.value?.save(current.value?.id ?? null)) ?? true },
   { tab: 'members', save: saveMembers }
@@ -175,7 +182,7 @@ async function submit() {
               <STextarea v-model="form.description" :rows="2" :disabled="locked" data-testid="segment-description" />
             </SField>
           </div>
-          <div v-show="active === 'groups'" class="space-y-3">
+          <div v-if="showsGroups" v-show="active === 'groups'" class="space-y-3">
             <SegmentDiscountField v-if="personal" v-model="form.discount" :error="errors.discount" :disabled="locked" />
             <p v-else class="text-sm text-fg-muted" data-testid="segment-editor-discount">
               <template v-if="validDiscount(discount) && hasDiscount({ discount })">

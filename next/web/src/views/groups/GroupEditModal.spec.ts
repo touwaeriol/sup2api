@@ -18,6 +18,8 @@ const calls: string[] = []
 /** What each sub-editor's save answers. */
 const answers = { accounts: [] as string[], segments: true, pricing: true }
 const dirty = { segments: false }
+/** Whether each sub-editor's drafts can be saved as they are. */
+const checks = { segments: true, pricing: true }
 
 /** A sub-editor that only records its save. */
 function editor(name: keyof typeof answers): Component {
@@ -30,7 +32,7 @@ function editor(name: keyof typeof answers): Component {
         calls.push(gid === undefined ? name : `${name}:${gid}`)
         return answers[name]
       }
-      expose({ save, get dirty() { return name === 'segments' && dirty.segments }, include: () => undefined })
+      expose({ save, check: () => (name === 'accounts' ? true : checks[name]), get dirty() { return name === 'segments' && dirty.segments } })
       return () => h('div')
     }
   }
@@ -61,6 +63,7 @@ beforeEach(() => {
   calls.length = 0
   Object.assign(answers, { accounts: [], segments: true, pricing: true })
   dirty.segments = false
+  Object.assign(checks, { segments: true, pricing: true })
   mocks.denied.clear()
   mocks.get.mockReset().mockResolvedValue({ models: [], unrestricted_accounts: 0 })
   mocks.toast.mockReset()
@@ -137,6 +140,16 @@ describe('group editor', () => {
     await submit()
     expect(calls).toEqual(['PATCH /groups/9', 'accounts:9', 'segments:9', 'pricing:9'])
     expect(w.emitted('update:open')).toEqual([[false]])
+  })
+
+  it('creates nothing while a model price cannot be saved, and opens its tab', async () => {
+    const { w, selected, submit } = await render(null)
+    await w.get('input').setValue('new')
+    checks.pricing = false
+    await submit()
+    expect(calls).toEqual([])
+    expect(selected()).toBe('价格')
+    expect(w.emitted('saved')).toBeUndefined()
   })
 
   it('names the accounts that could not be saved and stays on their tab', async () => {

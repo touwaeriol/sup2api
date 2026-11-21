@@ -143,7 +143,7 @@ async function save(gid: number): Promise<boolean> {
   return done
 }
 
-defineExpose({ save, dirty })
+defineExpose({ check: state.check, save, dirty })
 </script>
 
 <template>
