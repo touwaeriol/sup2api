@@ -4,7 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { SAlert, SField, SHint, SInput, SSegmented, SStack, type SelectOption } from '@sub2api/ui'
 import type { PriceDef, PriceRule } from '@/api/pricing'
 import { applyRule, priceBrief } from './pricingFormat'
-import { customFields, customPrices, customRule, startRule, takesCustom, validRule } from './ruleDrafts'
+import { customFields, customPrices, customRule, shownFields, startRule, takesCustom, validRule } from './ruleDrafts'
 import { priceLabel } from './ruleText'
 
 // One price rule over the global price `base`: none (the price follows the
@@ -33,8 +33,11 @@ const options = computed<SelectOption[]>(() => [
   { value: 'custom', label: t('pricing.rule.custom'), disabled: multiplierOnly.value }
 ])
 const valid = computed(() => validRule(props.modelValue))
-/** The prices of a custom rule; none while the rule is of another kind. */
-const custom = computed(() => (props.modelValue?.kind === 'custom' ? { rule: props.modelValue, prices: customPrices(props.modelValue), ...customFields(props.modelValue.mode) } : null))
+/** The prices of a custom rule and those it shows; none while the rule is of another kind. */
+const custom = computed(() => {
+  const rule = props.modelValue
+  return rule?.kind === 'custom' ? { rule, prices: customPrices(rule), keys: shownFields(rule, props.base), required: customFields(rule.mode).required } : null
+})
 const preview = computed(() => {
   const applied = applyRule(props.base, props.modelValue)
   return priceBrief(applied) ? t('pricing.rule.applied', { price: priceLabel(t, applied) }) : t('pricing.rule.appliedOpaque')

@@ -7,7 +7,7 @@ import { fail, noContent, on, paginate, type MockHandler, type MockRequest, type
 import { caller, hasPerm } from './core'
 import { groupPlatforms } from './accounts'
 import { globalPrice, money, priceCost, pricedModels, type PriceDef } from './billing'
-import { compactTokenConfig, simpleTier, takesCustomPrice } from '../src/views/prices/priceExpr'
+import { PRICE_KEYS, compactTokenConfig, simpleTier, takesCustomPrice } from '../src/views/prices/priceExpr'
 import { groupModels, groups, invalid, match, myGroups, offeredRules, userOut, users, type MockGroup, type MockUser } from './resources'
 import {
   accessOf,
@@ -254,7 +254,7 @@ route('PUT', '/groups/:id/segments', 'group:manage', onGroup((g, req) => {
  */
 const CUSTOM_PRICES = {
   per_request: { keys: ['price'], required: 1 },
-  per_token: { keys: ['p', 'c', 'cr', 'cc', 'cc1h'], required: 2 }
+  per_token: { keys: PRICE_KEYS, required: 2 }
 }
 
 /** The row of prices of a custom rule; null when a per-token one is not a single token tier without rules. */

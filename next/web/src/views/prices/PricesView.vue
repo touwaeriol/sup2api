@@ -12,7 +12,8 @@ import { deleteWithConfirm, useRowSwitch } from '@/composables/crud'
 import { activeFilterCount, useList } from '@/composables/useList'
 import { useAuthStore } from '@/stores/auth'
 import { formatDateTime, formatMoney } from '@/utils/format'
-import { isSet, num, summarize, type PriceSummary } from './priceExpr'
+import { priceCells } from '@/components/pricing/pricingFormat'
+import { summarize } from './priceExpr'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -91,17 +92,25 @@ const columns = computed<TableColumn[]>(() => [
   { key: 'actions', label: t('common.actions'), align: 'right', width: '150px' }
 ])
 
-const summaryOf = (p: Price): PriceSummary => summarize(p.mode, p.config)
+/** "$3 / request", "input $3 · output $15 · cache read $0.3": the cells of a price (its first tier); '' for an expression. */
+function cellsText(p: Price): string {
+  const { perRequest, tokens } = priceCells(p)
+  if (perRequest !== undefined) return t('prices.summary.perRequest', { price: price(perRequest) })
+  return tokens ? t('prices.summary.perToken', { p: price(tokens.p ?? 0), c: price(tokens.c ?? 0), cr: price(tokens.cr) }) : ''
+}
 
-/** "2 tiers · 1 surcharge rule": what a per-token price has beyond its first tier. */
-const moreText = (tiers: number, rules: number) =>
-  [tiers > 1 ? t('prices.summary.tiers', { n: tiers }) : '', rules ? t('prices.summary.rules', { n: rules }) : ''].filter(Boolean).join(' · ')
+/** "2 tiers · 1 surcharge rule": what a per-token price has beyond its first tier; '' for any other. */
+function moreText(p: Price): string {
+  const s = summarize(p.mode, p.config)
+  if (s.kind !== 'per_token') return ''
+  return [s.tiers > 1 ? t('prices.summary.tiers', { n: s.tiers }) : '', s.rules ? t('prices.summary.rules', { n: s.rules }) : ''].filter(Boolean).join(' · ')
+}
 
 /** "N tiers · M surcharge rules" of an expression price with several tiers or rules, from the server's analysis; '' otherwise. */
 function analysisText(p: Price): string {
   const an = p.analysis as { tiers?: unknown[]; rules?: unknown[] } | undefined
   const [tiers, rules] = [an?.tiers?.length ?? 0, an?.rules?.length ?? 0]
-  return tiers > 1 || rules ? t('prices.summary.visual', { tiers, rules }) : ''
+  return tiers > 1 || rules ? t('prices.summary.analysis', { tiers, rules }) : ''
 }
 
 function price(v: number | null) {
@@ -179,21 +188,14 @@ function runRowAction(key: string, p: Price) {
         <SBadge :tone="MODE_TONE[row.mode] ?? 'gray'">{{ t(`prices.mode.${row.mode}`) }}</SBadge>
       </template>
       <template #cell-summary="{ row }">
-        <template v-for="s in [summaryOf(row)]" :key="s.kind">
-          <span v-if="s.kind === 'per_request'" class="text-sm">{{ t('prices.summary.perRequest', { price: price(s.price) }) }}</span>
-          <span v-else-if="s.kind === 'per_token'" class="text-sm">
-            {{
-              s.first.unit === 'request'
-                ? t('prices.summary.perRequest', { price: price(num(s.first.price)) })
-                : t('prices.summary.perToken', { p: price(num(s.first.p)), c: price(num(s.first.c)), cr: price(isSet(s.first.cr) ? num(s.first.cr) : null) })
-            }}
-            <SHint v-if="s.tiers > 1 || s.rules" inline size="xs">{{ moreText(s.tiers, s.rules) }}</SHint>
-          </span>
-          <span v-else-if="analysisText(row)" class="text-sm">{{ analysisText(row) }}</span>
-          <span v-else class="block max-w-md truncate font-mono text-xs text-fg-muted" :title="row.expression">
-            {{ t('prices.summary.custom') }} · {{ row.expression }}
-          </span>
-        </template>
+        <span v-if="cellsText(row)" class="text-sm">
+          {{ cellsText(row) }}
+          <SHint v-if="moreText(row)" inline size="xs">{{ moreText(row) }}</SHint>
+        </span>
+        <span v-else-if="analysisText(row)" class="text-sm">{{ analysisText(row) }}</span>
+        <span v-else class="block max-w-md truncate font-mono text-xs text-fg-muted" :title="row.expression">
+          {{ t('prices.summary.custom') }} · {{ row.expression }}
+        </span>
       </template>
       <template #cell-source="{ row }">
         <span :title="row.source === 'sync' && row.synced_at ? formatDateTime(row.synced_at) : undefined" data-testid="price-source">

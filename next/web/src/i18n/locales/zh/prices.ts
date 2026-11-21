@@ -101,7 +101,7 @@ export default {
     perToken: '输入 {p} · 输出 {c} · 缓存读 {cr} /百万',
     tiers: '共 {n} 档',
     rules: '{n} 条加价规则',
-    visual: '{tiers} 档 · {rules} 条加价规则',
+    analysis: '{tiers} 档 · {rules} 条加价规则',
     custom: '自定义表达式'
   },
   local: {
@@ -110,7 +110,13 @@ export default {
     tierDup: '档位名称重复："{name}"',
     tierMax: '档位"{name}"需要填写上下文长度上限',
     tierOrder: '档位"{name}"的上限要大于上一档',
-    ruleField: '第 {n} 条加价规则不完整',
+    tierRest: '最后一个档位覆盖其余长度，不能填上限',
+    tierPrice: '档位"{name}"需要填写按次价格',
+    negative: '档位"{name}"的价格不能为负数',
+    price: '请填写按次价格，不能为负数',
+    ruleField: '第 {n} 条加价规则不完整或有误：倍数不能为负，比较的值不能为空，大小比较要填数字',
+    ruleHeader: '第 {n} 条加价规则的请求头名称无效',
+    ruleTz: '第 {n} 条加价规则的时区无效',
     emptyExpr: '表达式为空'
   },
   history: {

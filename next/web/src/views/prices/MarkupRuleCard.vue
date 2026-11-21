@@ -3,10 +3,10 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { SButton, SInput, SSelect } from '@sub2api/ui'
 import { NUMERIC_OPS, type CondOp, type CondSource, type FieldCond, type MarkupRule } from './priceExpr'
-import { newCond, setOp, typedValue } from './tokenPrice'
+import { newCond, setOp } from './tokenPrice'
 
 // One surcharge rule of a per_token price: its name, the multiplier and the
-// conditions that must all hold.
+// conditions that must all hold. A value is held as typed (compactTokenConfig types it).
 const rule = defineModel<MarkupRule>({ required: true })
 defineProps<{ index: number }>()
 const emit = defineEmits<{ (e: 'remove'): void }>()
@@ -85,7 +85,7 @@ const setSource = (i: number, source: CondSource) => rule.value.conds.splice(i, 
             class="w-40"
             :placeholder="t('prices.token.value')"
             :aria-label="t('prices.token.value')"
-            @update:model-value="c.value = typedValue(c, String($event ?? ''))"
+            @update:model-value="c.value = String($event ?? '')"
           />
         </template>
         <SButton

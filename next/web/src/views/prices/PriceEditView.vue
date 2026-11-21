@@ -37,7 +37,17 @@ import TokenPriceEditor from './TokenPriceEditor.vue'
 import { issueText, type Issue } from './issues'
 import PriceValidationCard from './PriceValidationCard.vue'
 import { usePriceValidation, type PricePayload } from './usePriceValidation'
-import { checkTokenConfig, compactTokenConfig, num, perRequestExpr, tokenExpr, type PriceMode, type TokenConfig } from './priceExpr'
+import {
+  checkPerRequest,
+  checkTokenConfig,
+  compactTokenConfig,
+  isSet,
+  num,
+  perRequestExpr,
+  tokenExpr,
+  type PriceMode,
+  type TokenConfig
+} from './priceExpr'
 import { defaultTokenConfig, editableTokenConfig } from './tokenPrice'
 
 const { t } = useI18n()
@@ -93,7 +103,7 @@ function applyPrice(p: Price) {
   Object.assign(form, { model: p.model, note: p.note || '', enabled: p.enabled })
   mode.value = p.mode
   sourceText.value = p.expression || ''
-  if (p.mode === 'per_request') perRequest.value = num(p.config?.price)
+  if (p.mode === 'per_request') perRequest.value = isSet(p.config?.price) ? num(p.config?.price) : null
   if (p.mode === 'per_token') token.value = editableTokenConfig(p.config)
 }
 
@@ -112,22 +122,23 @@ async function load() {
 
 // ------------------------------------------------------------------ derived payload
 
+/** The per_token config as it is sent: prices and condition values typed. */
+const tokenConfig = computed(() => compactTokenConfig(token.value))
+
 const payload = computed<PricePayload & { mode: PriceMode }>(() => {
   if (mode.value === 'per_request') {
-    return { mode: 'per_request', config: { price: num(perRequest.value) }, expression: perRequestExpr(perRequest.value) }
+    // A blank price stays blank: checkPerRequest blocks saving it.
+    const price = isSet(perRequest.value) ? num(perRequest.value) : null
+    return { mode: 'per_request', config: { price }, expression: perRequestExpr(price) }
   }
-  if (mode.value === 'per_token') {
-    return { mode: 'per_token', config: compactTokenConfig(token.value), expression: tokenExpr(token.value) }
-  }
+  if (mode.value === 'per_token') return { mode: 'per_token', config: tokenConfig.value, expression: tokenExpr(tokenConfig.value) }
   return { mode: 'expression', config: {}, expression: sourceText.value }
 })
 
 const localIssues = computed<string[]>(() => {
-  if (mode.value === 'per_token') {
-    const issues = checkTokenConfig(token.value)
-    if (issues.length) return issues.map(x => t(x.key, x.params || {}))
-  }
-  return payload.value.expression.trim() ? [] : [t('prices.local.emptyExpr')]
+  if (mode.value === 'expression') return sourceText.value.trim() ? [] : [t('prices.local.emptyExpr')]
+  const issues = mode.value === 'per_request' ? checkPerRequest(perRequest.value) : checkTokenConfig(tokenConfig.value)
+  return issues.map(x => t(x.key, x.params || {}))
 })
 
 const previewSource = computed(() => (localIssues.value.length ? null : { ...payload.value }))
@@ -241,7 +252,7 @@ const title = computed(() => {
     <SAlert v-if="syncedNotice && !loading" tone="info" dense data-testid="price-synced-notice">{{ syncedNotice }}</SAlert>
 
     <SSpinner v-if="loading" size="lg" block />
-    <div v-else class="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_400px]">
+    <div v-else class="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_400px]">
       <div class="min-w-0 space-y-5">
         <!-- basic -->
         <SCard :title="t('prices.basic')">
@@ -265,7 +276,7 @@ const title = computed(() => {
           <SDescriptions v-if="price" class="mt-4 border-t border-line pt-4" dense>
             <SDescItem :label="t('prices.exprHash')"
               ><div class="flex flex-wrap items-center gap-2">
-                <SCode inline :text="price.expr_hash || '—'" />
+                <SCode inline :text="price.expr_hash || '—'" class="break-all" />
                 <SHint inline size="xs">v{{ price.expr_version || 1 }}</SHint>
                 <SLink v-if="price.expr_hash" as="button" class="text-xs" @click="historyOpen = true">{{ t('prices.viewHistory') }}</SLink>
               </div></SDescItem
@@ -300,17 +311,22 @@ const title = computed(() => {
                 <SHint size="xs" class="mb-1 mt-2">{{ t('prices.serverGenerated') }}</SHint>
                 <SCode :text="serverExpr" />
               </template>
-              <SLink v-if="!readonly" as="button" class="mt-2 text-xs" data-testid="price-to-expression" @click="editAsExpression">{{
-                t('prices.toExpression')
-              }}</SLink>
+              <SLink
+                v-if="!readonly && !localIssues.length"
+                as="button"
+                class="mt-2 text-xs"
+                data-testid="price-to-expression"
+                @click="editAsExpression"
+                >{{ t('prices.toExpression') }}</SLink
+              >
             </SDisclosure>
             <SHint v-if="errors.expression" tone="danger" size="xs" class="mt-1">{{ errors.expression }}</SHint>
           </div>
         </SCard>
       </div>
 
-      <!-- side: validation and trial, kept in view on wide screens -->
-      <aside class="min-w-0 space-y-5 lg:sticky lg:top-4">
+      <!-- side: validation and trial, kept in view under the sticky top bar on wide screens -->
+      <aside class="min-w-0 space-y-5 xl:sticky xl:top-16 xl:max-h-[calc(100dvh-5rem)] xl:overflow-y-auto">
         <PriceValidationCard :local-issues="localIssues" :validation="validation" :error="validationError" :validating="validating" />
         <SCard :title="t('prices.trial.title')">
           <PriceTrialPanel :source="previewSource" />

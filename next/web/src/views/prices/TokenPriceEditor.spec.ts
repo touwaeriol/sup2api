@@ -4,8 +4,9 @@ import { nextTick, ref } from 'vue'
 import { SDropdown, SSelect } from '@sub2api/ui'
 import { i18n } from '@/i18n'
 import TokenPriceEditor from './TokenPriceEditor.vue'
-import { tokenExpr, type FieldCond, type TokenConfig } from './priceExpr'
-import { editableTokenConfig, setOp, typedValue } from './tokenPrice'
+import MarkupRuleCard from './MarkupRuleCard.vue'
+import { compactTokenConfig, tokenExpr, typedValue, valueText, type FieldCond, type MarkupRule, type TokenConfig } from './priceExpr'
+import { addTier, editableTokenConfig, setOp } from './tokenPrice'
 
 enableAutoUnmount(afterEach)
 
@@ -33,6 +34,45 @@ describe('the per-token editor', () => {
         .findAll('input[type="number"][data-testid^="tier-"]')
         .map(i => i.attributes('data-testid'))
     ).toEqual(['p', 'c', 'cr', 'cc', 'cc1h'].map(k => `tier-${k}`))
+  })
+
+  it('loads tiers in the order they match, the last one the rest, and a time window in full', () => {
+    const c = editableTokenConfig({
+      tiers: [
+        { name: 'rest', max_len: null, p: 2, c: 2 },
+        { name: 'short', max_len: 1000, p: 1, c: 1 }
+      ],
+      rules: [{ name: 'night', multiplier: 0.5, conds: [{ source: 'time' }, { source: 'param', key: 'n', op: 'eq', value: '5' }] }]
+    })
+    expect(c.tiers.map(t => [t.name, t.max_len, t.unit])).toEqual([
+      ['short', 1000, 'token'],
+      ['rest', null, 'token']
+    ])
+    expect(c.rules[0].conds).toEqual([
+      { source: 'time', tz: 'UTC', from_hour: 0, to_hour: 24 },
+      { source: 'param', key: 'n', op: 'eq', value: '"5"' }
+    ])
+    // A string that reads as a number stays a string through a save.
+    expect(compactTokenConfig(c).rules[0].conds[1]).toMatchObject({ value: '5' })
+    expect(
+      editableTokenConfig({
+        tiers: [
+          { name: 'a', max_len: 10 },
+          { name: 'b', max_len: 20 }
+        ]
+      }).tiers.map(t => t.max_len)
+    ).toEqual([10, null])
+  })
+
+  it('names an added tier by the first tier_N not taken', () => {
+    const tiers = editableTokenConfig({
+      tiers: [
+        { name: 'tier_2', max_len: 100 },
+        { name: 'base', max_len: null }
+      ]
+    }).tiers
+    addTier(tiers)
+    expect(tiers.map(t => t.name)).toEqual(['tier_2', 'tier_3', 'base'])
   })
 
   it('adds a bounded tier before the rest and takes one away again', async () => {
@@ -92,6 +132,16 @@ describe('the per-token editor', () => {
 })
 
 describe('a condition value', () => {
+  it('is held as typed, so a decimal survives its keystrokes', async () => {
+    const rule: MarkupRule = { name: 'r', multiplier: 2, conds: [{ source: 'param', key: 'n', op: 'gt', value: '' }] }
+    const w = mount(MarkupRuleCard, { props: { modelValue: rule, index: 0 }, global: { plugins: [i18n] } })
+    const input = w.get('[data-cond="0"] input[aria-label="值"]')
+    for (const typed of ['0', '0.', '0.0', '0.05']) await input.setValue(typed)
+    expect((input.element as HTMLInputElement).value).toBe('0.05')
+    expect(rule.conds[0]).toMatchObject({ value: '0.05' })
+    expect(compactTokenConfig({ tiers: [], rules: [rule] }).rules[0].conds[0]).toMatchObject({ value: 0.05 })
+  })
+
   const cond = (source: FieldCond['source'], op: FieldCond['op'], value?: FieldCond['value']): FieldCond => ({
     source,
     key: 'k',
@@ -106,10 +156,16 @@ describe('a condition value', () => {
     expect(typedValue(cond('header', 'eq'), '3')).toBe('3')
     expect(typedValue(cond('param', 'contains'), '3')).toBe('3')
   })
-  it('is retyped when the operator changes, and dropped for exists', () => {
+  it('reads as text in double quotes, and a saved string that reads otherwise is shown quoted', () => {
+    expect(typedValue(cond('param', 'eq'), '"3"')).toBe('3')
+    expect(valueText(cond('param', 'eq'), '3')).toBe('"3"')
+    expect(valueText(cond('param', 'eq'), 3)).toBe('3')
+    expect(valueText(cond('header', 'eq'), '3')).toBe('3')
+  })
+  it('keeps its text when the operator changes, and is dropped for exists', () => {
     const c = cond('param', 'contains', '3')
     setOp(c, 'eq')
-    expect(c.value).toBe(3)
+    expect(c.value).toBe('3')
     setOp(c, 'exists')
     expect('value' in c).toBe(false)
     setOp(c, 'eq')

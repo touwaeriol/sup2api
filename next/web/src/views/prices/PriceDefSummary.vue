@@ -7,7 +7,7 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { SHint } from '@sub2api/ui'
 import type { PriceSyncDef } from '@/api/types'
-import { PRICE_KEYS, asTokenConfig, isSet, num, sortedTiers, type PriceKey, type TokenTier } from './priceExpr'
+import { asTokenConfig, isSet, num, pricedKeys, sortedTiers, type PriceKey, type TokenTier } from './priceExpr'
 
 const props = defineProps<{ def: PriceSyncDef; compare?: PriceSyncDef | null; muted?: boolean }>()
 const { t } = useI18n()
@@ -32,7 +32,7 @@ function usd(v: number | null): string {
 const valueOf = (tier: TokenTier | undefined, k: PriceKey | 'price'): number | null => (isSet(tier?.[k]) ? num(tier?.[k]) : null)
 
 /** The prices a tier shows: its per-request price, or p, c and those set. */
-const shownKeys = (tier: TokenTier): Array<PriceKey | 'price'> => (tier.unit === 'request' ? ['price'] : PRICE_KEYS.filter(k => k === 'p' || k === 'c' || isSet(tier[k])))
+const shownKeys = (tier: TokenTier): Array<PriceKey | 'price'> => (tier.unit === 'request' ? ['price'] : pricedKeys(tier))
 
 /** True when the value differs from the same position of the compared definition. */
 function differs(i: number, k: PriceKey | 'price'): boolean {

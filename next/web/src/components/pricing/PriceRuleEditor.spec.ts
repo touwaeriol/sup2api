@@ -49,6 +49,18 @@ describe('price rule editor', () => {
     await w.get('[data-testid="price-rule-cr"]').setValue('')
     expect(emitted()).toEqual({ ...start, config: singleTier({ p: 3, c: 15, cc: 3.75 }) })
   })
+  it('takes image prices where the global price prices images apart', async () => {
+    const images: PriceDef = { mode: 'per_token', config: singleTier({ p: 5, c: 40, img: 10, img_o: 40 }), expression: '' }
+    const { w, emitted, kind } = render(null, images)
+    await kind('custom').setValue(true)
+    expect(emitted()).toEqual({ kind: 'custom', mode: 'per_token', config: singleTier({ p: 5, c: 40, img: 10, img_o: 40 }) })
+    await w.setProps({ modelValue: emitted() as PriceRule })
+    await w.get('[data-testid="price-rule-img_o"]').setValue('20')
+    expect(emitted()).toEqual({ kind: 'custom', mode: 'per_token', config: singleTier({ p: 5, c: 40, img: 10, img_o: 20 }) })
+    const plain = render({ kind: 'custom', mode: 'per_token', config: singleTier({ p: 3, c: 15 }) }).w
+    expect(plain.find('[data-testid="price-rule-cc1h"]').exists()).toBe(true)
+    expect(plain.find('[data-testid="price-rule-img"]').exists()).toBe(false)
+  })
   it('goes back to inheriting', async () => {
     const { emitted, kind } = render({ kind: 'multiplier', multiplier: '2' })
     await kind('inherit').setValue(true)

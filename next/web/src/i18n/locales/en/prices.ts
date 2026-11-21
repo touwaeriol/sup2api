@@ -101,7 +101,7 @@ export default {
     perToken: 'in {p} · out {c} · cache read {cr} /M',
     tiers: '{n} tier(s)',
     rules: '{n} surcharge rule(s)',
-    visual: '{tiers} tier(s) · {rules} surcharge rule(s)',
+    analysis: '{tiers} tier(s) · {rules} surcharge rule(s)',
     custom: 'Custom expression'
   },
   local: {
@@ -110,7 +110,13 @@ export default {
     tierDup: 'Duplicate tier name "{name}"',
     tierMax: 'Tier "{name}" needs a max context length',
     tierOrder: 'The max of tier "{name}" must be above that of the tier before it',
-    ruleField: 'Surcharge rule {n} is incomplete',
+    tierRest: 'The last tier covers the rest: it takes no max',
+    tierPrice: 'Tier "{name}" needs a per-request price',
+    negative: 'The prices of tier "{name}" may not be negative',
+    price: 'Enter a per-request price of 0 or more',
+    ruleField: 'Surcharge rule {n} is incomplete or invalid: the multiplier may not be negative, a compared value may not be blank, and a size comparison takes a number',
+    ruleHeader: 'Surcharge rule {n} has an invalid header name',
+    ruleTz: 'Surcharge rule {n} has an unknown time zone',
     emptyExpr: 'The expression is empty'
   },
   history: {

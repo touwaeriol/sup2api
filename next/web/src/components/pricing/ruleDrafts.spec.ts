@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { ModelPriceRow, PriceDef, PriceRule } from '@/api/pricing'
 import { singleTier } from '@/views/prices/priceExpr'
-import { customPrices, customRule, draftedRow, rulePatches, sameRule, setRuleDraft, startRule, takesCustom, validRule, withRule, type RuleDrafts } from './ruleDrafts'
+import { customPrices, customRule, draftedRow, shownFields, rulePatches, sameRule, setRuleDraft, startRule, takesCustom, validRule, withRule, type RuleDrafts } from './ruleDrafts'
 
 const perToken: PriceDef = { mode: 'per_token', config: singleTier({ p: 3, c: 15, cr: 0.3, cc: 3.75, cc1h: 6, img: 10 }), expression: '' }
 const tiered: PriceDef = { mode: 'per_token', config: { tiers: [{ name: 'a', max_len: 200000, p: 3, c: 15 }, { name: 'b', max_len: null, p: 6, c: 22.5 }], rules: [] }, expression: '' }
@@ -56,7 +56,16 @@ describe('a rule that may be saved', () => {
 
 describe('the prices of a custom rule', () => {
   it('read as one row, whatever the rule leaves out', () => {
-    expect(customPrices(custom({ p: 1, c: 8 }))).toEqual({ p: 1, c: 8, cr: null, cc: null, cc1h: null })
+    expect(customPrices(custom({ p: 1, c: 8 }))).toEqual({ p: 1, c: 8, cr: null, cc: null, cc1h: null, img: null, img_o: null })
+  })
+  it('keep image prices, shown where the global price prices images apart or the rule does', () => {
+    expect(customPrices(startRule('custom', perToken) as ReturnType<typeof custom>)).toMatchObject({ img: 10, img_o: null })
+    expect(sameRule(custom({ p: 3, c: 15, img: 10 }), custom({ p: 3, c: 15 }))).toBe(false)
+    expect(validRule(custom({ p: 3, c: 15, img_o: -1 }))).toBe(false)
+    const plain: PriceDef = { ...perToken, config: singleTier({ p: 3, c: 15 }) }
+    expect(shownFields(custom({ p: 1, c: 2 }), perToken)).toEqual(['p', 'c', 'cr', 'cc', 'cc1h', 'img', 'img_o'])
+    expect(shownFields(custom({ p: 1, c: 2 }), plain)).toEqual(['p', 'c', 'cr', 'cc', 'cc1h'])
+    expect(shownFields(custom({ p: 1, c: 2, img_o: 4 }), plain)).toEqual(['p', 'c', 'cr', 'cc', 'cc1h', 'img', 'img_o'])
     expect(customPrices({ kind: 'custom', mode: 'per_request', config: { price: 0.5 } })).toEqual({ price: 0.5 })
   })
 })

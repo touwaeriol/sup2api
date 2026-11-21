@@ -5,7 +5,7 @@ import { fail, nextId, noContent, now, on, paginate, type MockRequest } from './
 import { accounts } from './accounts'
 import { caller, inScope, ownerScope } from './core'
 import type { UsageView } from '../src/views/usage/view'
-import { PRICE_KEYS, priceExpression, singleTier } from '../src/views/prices/priceExpr'
+import { PRICE_KEYS, checkPerRequest, checkTokenConfig, priceExpression, singleTier, sortedTiers, asTokenConfig } from '../src/views/prices/priceExpr'
 
 type PriceMode = 'per_request' | 'per_token' | 'expression'
 type LText = { en: string; zh: string }
@@ -46,8 +46,11 @@ function groups(src: string): Array<{ at: number; text: string }> {
   return out.sort((x, y) => x.at - y.at)
 }
 
-/** `cond ? <number> : 1` at the top level of a group; null for anything else. */
-function ternary(text: string): { cond: string; multiplier: number } | null {
+/** The functions whose result depends on the request or its usage: only a condition that calls one is a traced rule. */
+const PROBE = /\b(?:param|header|u|hour|minute|weekday|day|month)\s*\(/
+
+/** `cond ? <number> : 1` at the top level of a group, the condition reading a probe; null for anything else. `q` is where the `?` is. */
+function ternary(text: string): { cond: string; multiplier: number; q: number } | null {
   const bare = blankStrings(text)
   let depth = 0
   let q = -1
@@ -58,19 +61,30 @@ function ternary(text: string): { cond: string; multiplier: number } | null {
     else if (depth === 0 && ch === '?' && bare[i + 1] !== '?' && bare[i - 1] !== '?' && q < 0) q = i
     else if (depth === 0 && ch === ':' && q >= 0) {
       const m = /^\s*(\d+(?:\.\d+)?)\s*$/.exec(text.slice(q + 1, i))
-      return m && text.slice(i + 1).trim() === '1' ? { cond: text.slice(0, q).trim(), multiplier: Number(m[1]) } : null
+      const cond = text.slice(0, q).trim()
+      return m && text.slice(i + 1).trim() === '1' && PROBE.test(blankStrings(cond)) ? { cond, multiplier: Number(m[1]), q } : null
     }
   }
   return null
 }
 
-/** The surcharges of an expression as the server traces them: every `cond ? <number> : 1`, in parentheses or the whole of it. */
+/** The surcharges of an expression as the server traces them: every `cond ? <number> : 1`, in parentheses or the whole of it; `from`..`to` is the condition in src. */
 function surcharges(src: string) {
   return [{ at: -1, text: src }, ...groups(src)].flatMap((g) => {
     const r = ternary(g.text)
-    return r ? [{ ...r, text: g.text }] : []
+    return r ? [{ cond: r.cond, multiplier: r.multiplier, text: g.text, from: g.at + 1, to: g.at + 1 + r.q }] : []
   })
 }
+
+/** src with the condition of every traced rule i wrapped in `__rule(i, …)`, as the server's compiler wraps it: a rule not reached records nothing. */
+function withTraces(src: string, traced: Array<{ from: number; to: number }>): string {
+  const marks = traced.flatMap((r, i) => [{ at: r.from, text: `__rule(${i}, ` }, { at: r.to, text: ')' }])
+  return marks.sort((a, b) => b.at - a.at).reduce((s, m) => s.slice(0, m.at) + m.text + s.slice(m.at), src)
+}
+
+/** Go string escapes JS has not: \a, and \U with eight hex digits. */
+const jsStrings = (src: string) =>
+  src.replace(/"(?:[^"\\]|\\.)*"/g, (lit) => lit.replace(/\\(?:(a)|U([0-9a-f]{8})|.)/g, (m, a, u) => (a ? '\\x07' : u ? `\\u{${u}}` : m)))
 
 interface EvalInput {
   usage: Partial<Usage>
@@ -80,7 +94,7 @@ interface EvalInput {
   at?: Date
 }
 
-function run(part: string, input: EvalInput, tokens: Usage): { value: number; tier: string } {
+function run(part: string, input: EvalInput, tokens: Usage, hits: boolean[] = []): { value: number; tier: string } {
   let tier = ''
   const headers = Object.fromEntries(Object.entries(input.headers || {}).map(([k, v]) => [k.toLowerCase(), String(v)]))
   const at = input.at || new Date()
@@ -107,12 +121,13 @@ function run(part: string, input: EvalInput, tokens: Usage): { value: number; ti
     ceil: Math.ceil,
     floor: Math.floor,
     u: (k: string) => (input.metrics || {})[k] ?? 0, // an absent usage field reads 0
-    nil: null
+    nil: null,
+    __rule: (i: number, v: unknown) => ((hits[i] = !!v), v)
   }
   const names = [...PRICE_KEYS, 'len', ...Object.keys(lib)]
   const values = [...PRICE_KEYS.map((k) => tokens[k]), tokens.len, ...Object.values(lib)]
 
-  const fn = new Function(...names, `"use strict"; return (${part});`)
+  const fn = new Function(...names, `"use strict"; return (${jsStrings(part)});`)
   const v = fn(...values)
   return { value: typeof v === 'number' ? v : Number(v), tier }
 }
@@ -147,9 +162,12 @@ function evaluate(expression: string, input: EvalInput) {
     const rate = Number(((cost / tokens[k]) * 1e6).toPrecision(10))
     items.push({ tier: b.tier, label: k, quantity: tokens[k], rate, expr: `${k}*${fmtN(rate)}`, cost: money(cost) })
   }
-  const rules = traced.map((r) => ({ cond: r.cond, multiplier: r.multiplier, matched: !!run(r.cond, input, tokens).value }))
+  // A rule the evaluation did not reach (a branch not taken, a short-circuited operand) is not matched.
+  const hits: boolean[] = []
+  const cost = run(withTraces(src, traced), input, tokens, hits).value / 1e6
+  const rules = traced.map((r, i) => ({ cond: r.cond, multiplier: r.multiplier, matched: !!hits[i] }))
   const mult = rules.reduce((m, r) => (r.matched ? m * r.multiplier : m), 1)
-  return { tier: b.tier, tokens, subtotal, flat, items, rules, multiplier: mult, cost: run(src, input, tokens).value / 1e6 }
+  return { tier: b.tier, tokens, subtotal, flat, items, rules, multiplier: mult, cost }
 }
 
 function tryEvaluate(expression: string, input: EvalInput) {
@@ -358,20 +376,30 @@ const prices: MockPrice[] = [
     .map((e, i) => mkPrice({ id: 40 + i, model: e.model, mode: e.mode, config: scaleConfig(e.config, 1.2), source: 'manual', enabled: true, note: 'negotiated' }))
 ]
 
-function exprOf(body: any): { mode: PriceMode; config: Record<string, any>; expression: string } {
+/** Why the server's generator refuses a config: the console's own checks, the tiers in the order they match as the server sorts them; null when it takes it. */
+function configIssue(mode: PriceMode, config: Record<string, any>): string | null {
+  if (mode === 'expression') return null
+  const cfg = asTokenConfig(config)
+  const issues = mode === 'per_request' ? checkPerRequest(config.price) : checkTokenConfig({ ...cfg, tiers: sortedTiers(cfg.tiers) })
+  return issues.length ? `config: ${issues.map((x) => x.key.replace('prices.local.', '')).join(', ')}` : null
+}
+
+function exprOf(body: any): { mode: PriceMode; config: Record<string, any>; expression: string; issue: string | null } {
   const mode: PriceMode = ['per_request', 'per_token', 'expression'].includes(body?.mode) ? body.mode : 'expression'
   // A per_request / per_token expression is generated from the config, whatever the client sent; an expression price has no config.
   const config = mode !== 'expression' && body?.config && typeof body.config === 'object' ? body.config : {}
-  const expression = mode === 'expression' ? String(body?.expression || '') : genExpr(mode, config)
-  return { mode, config, expression }
+  const issue = configIssue(mode, config)
+  const expression = mode === 'expression' ? String(body?.expression || '') : issue ? '' : genExpr(mode, config)
+  return { mode, config, expression, issue }
 }
 
 function validate(body: any) {
-  const { mode, config, expression } = exprOf(body)
+  const { mode, config, expression, issue } = exprOf(body)
   const errors: Array<{ code: string; message: LText; detail?: unknown }> = []
   const warnings: Array<{ code: string; message: LText; detail?: unknown }> = []
   let perMillion = 0
-  if (!expression.trim()) errors.push({ code: 'empty', message: msg('expression is empty', '表达式为空') })
+  if (issue) errors.push({ code: 'invalid_config', message: msg(issue, `价格配置无效：${issue}`) })
+  else if (!expression.trim()) errors.push({ code: 'empty', message: msg('expression is empty', '表达式为空') })
   else {
     try {
       // Smoke test: 1M input tokens, below and above every plausible tier boundary.
@@ -448,7 +476,11 @@ on('POST', '/prices/preview', (req) => {
     const p = prices.find((x) => x.id === Number(b.price_id))
     if (!p) return fail(404, 'not_found', 'price not found')
     src = { mode: p.mode, config: p.config, expression: p.expression }
-  } else src = exprOf(b)
+  } else {
+    const e = exprOf(b)
+    if (e.issue) return fail(400, 'invalid_argument', e.issue)
+    src = e
+  }
   const params = Object.fromEntries(Object.entries(b.params || {}).map(([k, v]) => [k, v]))
   const r = tryEvaluate(src.expression, { usage: b.usage || {}, headers: b.headers, params, metrics: b.metrics, at: b.at ? new Date(b.at) : undefined })
   if (!r) return fail(400, 'invalid_argument', 'expression cannot be evaluated')

@@ -3,7 +3,9 @@ import {
   checkTokenConfig,
   compactTokenConfig,
   condExpr,
+  checkPerRequest,
   fmt,
+  goQuote,
   priceExpression,
   simpleTier,
   singleTier,
@@ -100,7 +102,6 @@ describe('a condition', () => {
     expect(field('usage', 'gte', 2)).toBe('u("k") >= 2')
     expect(field('param', 'lt', 0.25)).toBe('(param("k") ?? 0) < 0.25')
     expect(field('param', 'lte', 100)).toBe('(param("k") ?? 0) <= 100')
-    expect(field('header', 'ne', 3)).toBe('header("k") != "3"')
     expect(field('param', 'eq', 'say "hi"')).toBe('param("k") == "say \\"hi\\""')
   })
   it('tests presence: a parameter against nil, a header against "", a usage field against 0', () => {
@@ -111,6 +112,17 @@ describe('a condition', () => {
   it('takes a time range, across midnight in parentheses, UTC without a zone', () => {
     expect(condExpr({ source: 'time', tz: 'UTC', from_hour: 9, to_hour: 18 })).toBe('hour("UTC") >= 9 && hour("UTC") < 18')
     expect(condExpr({ source: 'time', tz: ' ', from_hour: 22, to_hour: 6 })).toBe('(hour("UTC") >= 22 || hour("UTC") < 6)')
+  })
+})
+
+describe('strings', () => {
+  it('are quoted as Go quotes them', () => {
+    expect(goQuote('say "hi" \\ ok')).toBe('"say \\"hi\\" \\\\ ok"')
+    expect(goQuote('\x07\b\f\n\r\t\v')).toBe('"\\a\\b\\f\\n\\r\\t\\v"')
+    expect(goQuote('a\u0001b\u007f')).toBe('"a\\x01b\\x7f"')
+    expect(goQuote('\u00a0\u200b\u2028\u{e0001}')).toBe('"\\u00a0\\u200b\\u2028\\U000e0001"')
+    expect(goQuote('中文 é 😀')).toBe('"中文 é 😀"')
+    expect(goQuote('\ud800')).toBe('"\ufffd"')
   })
 })
 
@@ -194,6 +206,23 @@ describe('local checks', () => {
     expect(keys(cfg([tier('a', null)], [{ name: '', multiplier: null, conds: [{ source: 'header', key: 'x', op: 'exists' }] }]))).toEqual([
       'ruleField'
     ])
+  })
+  it('refuse what the server refuses', () => {
+    const one = (c: RuleCond) => keys(cfg([tier('a', null)], [rule(2, c)]))
+    expect(one({ source: 'header', key: 'k', op: 'ne', value: 3 })).toEqual(['ruleField'])
+    expect(one({ source: 'header', key: 'bad header', op: 'exists' })).toEqual(['ruleHeader'])
+    expect(one({ source: 'param', key: 'k', op: 'eq', value: '' })).toEqual(['ruleField'])
+    expect(one({ source: 'param', key: 'k', op: 'contains', value: 5 })).toEqual(['ruleField'])
+    expect(one({ source: 'param', key: 'k'.repeat(201), op: 'exists' })).toEqual(['ruleField'])
+    expect(one({ source: 'time', tz: 'Mars/Base', from_hour: 1, to_hour: 2 })).toEqual(['ruleTz'])
+    expect(one({ source: 'time', tz: '', from_hour: 23, to_hour: 24 })).toEqual([])
+    expect(keys(cfg([tier('a', null)], [rule(-1, { source: 'header', key: 'x', op: 'exists' })]))).toEqual(['ruleField'])
+    expect(keys(cfg([tier('a', 100, { p: -1 }), tier('b', null)]))).toEqual(['negative'])
+    expect(keys(cfg([tier('a', 100), tier('b', 200)]))).toEqual(['tierRest'])
+    expect(keys(cfg([{ name: 'q', max_len: null, unit: 'request', price: null }]))).toEqual(['tierPrice'])
+    expect(checkPerRequest(null).map(x => x.key)).toEqual(['prices.local.price'])
+    expect(checkPerRequest(-1)).toHaveLength(1)
+    expect(checkPerRequest(0)).toEqual([])
   })
 })
 
