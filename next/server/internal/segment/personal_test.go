@@ -27,7 +27,7 @@ func TestMakePersonal(t *testing.T) {
 	require.Equal(t, "1", blank["discount"])
 	require.Equal(t, float64(1), blank["member_count"])
 	require.Equal(t, []any{}, blank["granted_groups"])
-	require.Equal(t, float64(0), blank["rate_override_count"])
+	require.Equal(t, []any{}, blank["rate_overrides"])
 	require.NotContains(t, blank, "price_rule_count")
 	require.Equal(t, idOf(blank), e.segmentOf(e.plain))
 
@@ -35,7 +35,7 @@ func TestMakePersonal(t *testing.T) {
 	copied := personalize(e.masked, true).ok(201).data()
 	require.Equal(t, "0.9", copied["discount"])
 	require.Equal(t, []any{map[string]any{"id": float64(private), "name": "private"}}, copied["granted_groups"])
-	require.Equal(t, float64(1), copied["rate_override_count"])
+	require.Equal(t, []any{map[string]any{"id": float64(public), "name": "public", "rate": "0.5"}}, copied["rate_overrides"])
 	require.Equal(t, int64(1), e.id(`SELECT count(*) FROM segment_groups WHERE segment_id = $1 AND group_id = $2 AND NOT granted AND rate_override = 0.5`,
 		idOf(copied), public))
 	require.Equal(t, int64(2), e.id(`SELECT count(*) FROM segment_groups WHERE segment_id = $1`, vip), "the origin keeps its own")

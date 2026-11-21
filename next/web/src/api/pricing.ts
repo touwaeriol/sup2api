@@ -49,7 +49,8 @@ export interface Segment extends SegmentRef {
   /** Private groups it is granted. */
   granted_groups: Array<{ id: number; name: string }>
   /** Groups whose rate it overrides. */
-  rate_override_count: number
+  /** The groups whose rate the segment sets itself, with that rate (by group id). */
+  rate_overrides: Array<{ id: number; name: string; rate: string }>
   /** Personal only. */
   user?: SegmentUser
   /** Personal only: the segment the user was in before. */

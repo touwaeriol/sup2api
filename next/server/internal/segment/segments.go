@@ -27,10 +27,16 @@ type Segment struct {
 	MemberCount int64           `json:"member_count"`
 	// GrantedGroups are the private groups the segment is granted.
 	GrantedGroups []core.GroupRef `json:"granted_groups"`
-	// RateOverrideCount counts the groups whose rate it overrides.
-	RateOverrideCount int64 `json:"rate_override_count"`
+	// RateOverrides are the groups whose rate it overrides, with that rate.
+	RateOverrides []RateOverride `json:"rate_overrides"`
 	*Personal
 	CreatedAt time.Time `json:"created_at"`
+}
+
+// RateOverride is a group whose rate a segment overrides, and that rate.
+type RateOverride struct {
+	core.GroupRef
+	Rate decimal.Decimal `json:"rate"`
 }
 
 // Personal is what only a personal segment has.
@@ -60,7 +66,9 @@ const segmentColumns = RefColumns + `, s.description, s.discount, s.is_default, 
 	(SELECT COALESCE(jsonb_agg(jsonb_build_object('id', g.id, 'name', g.name) ORDER BY g.id), '[]')
 	  FROM segment_groups sg JOIN groups g ON g.id = sg.group_id
 	  WHERE sg.segment_id = s.id AND sg.granted AND g.visibility = 'restricted') AS granted_groups,
-	(SELECT count(*) FROM segment_groups sg WHERE sg.segment_id = s.id AND sg.rate_override IS NOT NULL) AS rate_override_count,
+	(SELECT COALESCE(jsonb_agg(jsonb_build_object('id', g.id, 'name', g.name, 'rate', sg.rate_override::text) ORDER BY g.id), '[]')
+	  FROM segment_groups sg JOIN groups g ON g.id = sg.group_id
+	  WHERE sg.segment_id = s.id AND sg.rate_override IS NOT NULL) AS rate_overrides,
 	COALESCE(u.display_name, '') AS display_name, o.id AS origin_id, o.kind AS origin_kind, o.name AS origin_name`
 
 // selectSegments reads the segmentRows of the segments s the caller narrows.
@@ -71,23 +79,23 @@ func selectSegments(db *gorm.DB) *gorm.DB {
 // segmentRow is a row of segmentColumns.
 type segmentRow struct {
 	core.SegmentRef
-	Description       string                      `gorm:"column:description"`
-	Discount          decimal.Decimal             `gorm:"column:discount"`
-	IsDefault         bool                        `gorm:"column:is_default"`
-	CreatedAt         time.Time                   `gorm:"column:created_at"`
-	MemberCount       int64                       `gorm:"column:member_count"`
-	GrantedGroups     store.JSON[[]core.GroupRef] `gorm:"column:granted_groups"`
-	RateOverrideCount int64                       `gorm:"column:rate_override_count"`
-	DisplayName       string                      `gorm:"column:display_name"`
-	OriginID          *int64                      `gorm:"column:origin_id"`
-	OriginKind        *string                     `gorm:"column:origin_kind"`
-	OriginName        *string                     `gorm:"column:origin_name"`
+	Description   string                      `gorm:"column:description"`
+	Discount      decimal.Decimal             `gorm:"column:discount"`
+	IsDefault     bool                        `gorm:"column:is_default"`
+	CreatedAt     time.Time                   `gorm:"column:created_at"`
+	MemberCount   int64                       `gorm:"column:member_count"`
+	GrantedGroups store.JSON[[]core.GroupRef] `gorm:"column:granted_groups"`
+	RateOverrides store.JSON[[]RateOverride]  `gorm:"column:rate_overrides"`
+	DisplayName   string                      `gorm:"column:display_name"`
+	OriginID      *int64                      `gorm:"column:origin_id"`
+	OriginKind    *string                     `gorm:"column:origin_kind"`
+	OriginName    *string                     `gorm:"column:origin_name"`
 }
 
 // segment is the row as a caller may see it (Masked).
 func (r *segmentRow) segment(showUsers bool) *Segment {
 	sg := Segment{SegmentRef: r.SegmentRef, Description: r.Description, Discount: r.Discount, IsDefault: r.IsDefault,
-		MemberCount: r.MemberCount, GrantedGroups: r.GrantedGroups.V, RateOverrideCount: r.RateOverrideCount, CreatedAt: r.CreatedAt}
+		MemberCount: r.MemberCount, GrantedGroups: r.GrantedGroups.V, RateOverrides: r.RateOverrides.V, CreatedAt: r.CreatedAt}
 	if sg.UserID == nil {
 		return &sg
 	}

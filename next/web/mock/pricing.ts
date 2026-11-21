@@ -89,7 +89,10 @@ function segmentOut(s: MockSegment, showUsers: boolean) {
     is_default: s.is_default,
     member_count: membersOf(s).length,
     granted_groups: groups.filter((g) => g.visibility === 'restricted' && granted.includes(g.id)).map((g) => ({ id: g.id, name: g.name })),
-    rate_override_count: pairsWhere({ segment_id: s.id }).filter((p) => p.rate_override !== null).length,
+    rate_overrides: pairsWhere({ segment_id: s.id })
+      .filter((p) => p.rate_override !== null)
+      .flatMap((p) => groups.filter((g) => g.id === p.group_id).map((g) => ({ id: g.id, name: g.name, rate: p.rate_override as string })))
+      .sort((x, y) => x.id - y.id),
     ...(s.kind === 'personal' ? personalOut(s, showUsers) : {}),
     created_at: s.created_at
   }

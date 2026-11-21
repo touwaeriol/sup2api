@@ -127,7 +127,10 @@ func TestSegmentCounts(t *testing.T) {
 	got := e.do(e.admin, "GET", path("/segments/%d", vip), nil).ok(200).data()
 	require.Equal(t, float64(1), got["member_count"], "a deleted user is no member")
 	require.Equal(t, []any{map[string]any{"id": float64(private), "name": "private"}}, got["granted_groups"], "only the private groups it is granted")
-	require.Equal(t, float64(2), got["rate_override_count"])
+	require.Equal(t, []any{
+		map[string]any{"id": float64(public), "name": "public", "rate": "0.5"},
+		map[string]any{"id": float64(other), "name": "other", "rate": "0.7"},
+	}, got["rate_overrides"], "the groups whose rate it overrides, in group order")
 	require.NotContains(t, got, "price_rule_count")
 
 	rows := e.do(e.admin, "GET", "/segments", nil).ok(200).rows()

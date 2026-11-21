@@ -6707,7 +6707,7 @@ kind: users | groups | api-keys | accounts | models | proxies
 | 对象 | 字段 |
 |---|---|
 | `SegmentRef` | `{id, kind, name, user_id?}`：别的行引用用户组时用它。`kind` 是 `named` \| `personal`；个人专属的 `name` 是成员的邮箱，`user_id` 是成员 |
-| `Segment` | `SegmentRef` 加 `description`、`discount`（全场折扣，`"1"` = 没有）、`is_default`、`member_count`、`granted_groups: [{id, name}]`（被授权的私有分组）、`rate_override_count`（设了专属倍率的分组数）、`created_at`；个人专属另有 `user: {id, email, display_name}` 和 `origin: SegmentRef \| null`（原来所在的用户组，已被删除时为 `null`） |
+| `Segment` | `SegmentRef` 加 `description`、`discount`（全场折扣，`"1"` = 没有）、`is_default`、`member_count`、`granted_groups: [{id, name}]`（被授权的私有分组）、`rate_overrides: [{id, name, rate}]`（单独设了倍率的分组和倍率，按分组 id 排序）、`created_at`；个人专属另有 `user: {id, email, display_name}` 和 `origin: SegmentRef \| null`（原来所在的用户组，已被删除时为 `null`） |
 | `EffectiveRate` | `{value, source, group_default, discount}`：实际倍率、它的来源（`segment` \| `discount` \| `group`），以及算它用到的分组默认倍率和全场折扣 |
 | `SegmentGroupSetting` | 一个用户组在一个分组的设置：`segment: SegmentRef`、`group: {id, name, description, status, visibility, rate_multiplier, platforms?}`、`accessible`（公开或已授权）、`granted`（显式的授权，只对私有分组有意义）、`rate_override`（专属倍率，`null` = 跟随）、`rate: EffectiveRate`、`member_count`（用户组的成员数，个人专属是 1） |
 | `PriceRule` | `{kind: "multiplier", multiplier}` 或 `{kind: "custom", mode, config, expression}`：自定义价与 `/prices` 的同名字段写法相同（`mode` 是 `visual` 或 `expression`；可视化的 `config` 是任意 `{tiers, rules}`，`expression` 不读、返回时是生成的那条；表达式的 `config` 省略或 `{}`，`expression` 必填），§131.4。返回时 `expression` 总在 |
