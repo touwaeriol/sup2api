@@ -9,8 +9,7 @@ import { SCard, SField, SHint, SSegmented, STextarea } from '@sub2api/ui'
 import { modelProtocolRules } from './protocolBinding'
 import { ruleErrors } from '../editorErrors'
 import { useProtocolLabels } from './protocolLabels'
-import ModelProtocolList from './ModelProtocolList.vue'
-import ModelProtocolMatrix from './ModelProtocolMatrix.vue'
+import ModelProtocolRows from './ModelProtocolRows.vue'
 import ProtocolIssues from './ProtocolIssues.vue'
 import type { ProtocolEditor, RulesView } from './useProtocolEdit'
 
@@ -29,7 +28,7 @@ const { t } = useI18n()
 const labels = useProtocolLabels()
 const { columns, rules, view, text, textProblem, issues } = props.editor
 
-const views = computed(() => (['matrix', 'list', 'json'] as RulesView[]).map(v => ({ value: v, label: t(`accounts.protocols.rules.views.${v}`) })))
+const views = computed(() => (['visual', 'json'] as RulesView[]).map(v => ({ value: v, label: t(`accounts.protocols.rules.views.${v}`) })))
 const textError = computed(() => (textProblem.value ? t(`accounts.protocols.rules.jsonProblems.${textProblem.value.problem}`, { model: textProblem.value.model ?? '' }) : ''))
 /** The server's errors: by saved entry for the list, and worded with the entry's models for the other views. */
 const server = computed(() => ruleErrors(props.errors))
@@ -47,16 +46,13 @@ const serverLines = computed(() => {
       <SSegmented size="sm" :options="views" :model-value="view" :aria-label="t('accounts.protocols.rules.title')" data-testid="model-protocols-view" @update:model-value="editor.setView($event as RulesView)" />
     </template>
     <div class="space-y-3">
-      <ModelProtocolMatrix v-if="view === 'matrix'" :editor="editor" :models="models" :mapping="mapping" :disabled="disabled" />
-      <ModelProtocolList v-else-if="view === 'list'" :editor="editor" :options="options" :errors="server.byEntry" :disabled="disabled" />
+      <ModelProtocolRows v-if="view === 'visual'" :editor="editor" :models="models" :mapping="mapping" :options="options" :disabled="disabled" />
       <SField v-else :error="textError">
         <STextarea v-model="text" mono :rows="10" :disabled="disabled" data-testid="model-protocols-json" @blur="editor.syncText()" />
         <template #hint>{{ t('accounts.protocols.rules.jsonHint') }}</template>
       </SField>
       <ProtocolIssues :issues="issues" />
-      <template v-if="view !== 'list' || server.general.length">
-        <SHint v-for="line in view === 'list' ? server.general : serverLines" :key="line" tone="danger" size="xs" data-testid="model-protocols-error">{{ line }}</SHint>
-      </template>
+      <SHint v-for="line in serverLines" :key="line" tone="danger" size="xs" data-testid="model-protocols-error">{{ line }}</SHint>
     </div>
   </SCard>
 </template>

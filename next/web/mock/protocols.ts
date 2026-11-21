@@ -26,7 +26,8 @@ export function typeEndpoints(supports: string[], subset?: string[]): TypeEndpoi
   const target = native.find((e) => TEXT.includes(e.protocol))?.protocol
   const out: TypeEndpoint[] = native.map((e) => ({ ...e, native: true, grade: 'native' }))
   for (const e of all) {
-    if (native.includes(e) || !target || !TEXT.includes(e.protocol)) continue
+    const adaptable = TEXT.includes(e.protocol) || (!!subset && supports.includes(e.platform) && e.protocol.startsWith('openai.images'))
+    if (native.includes(e) || !target || !adaptable) continue
     const twoHop = !supports.includes(e.platform) && [platformOf(e.protocol), platformOf(target)].sort().join() === 'anthropic,gemini'
     out.push({ ...e, native: false, grade: supports.includes(e.platform) ? 'good' : twoHop ? 'discouraged' : 'fair', via: twoHop ? [e.protocol, 'openai.chat', target] : [e.protocol, target] })
   }

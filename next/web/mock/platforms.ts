@@ -32,7 +32,7 @@ export const builtinPlatforms: MockPlatform[] = [
     label: { en: 'OpenAI', zh: 'OpenAI' },
     builtin: true,
     plugin_key: null,
-    endpoints: [ep('POST', '/v1/chat/completions', 'openai.chat'), ep('POST', '/v1/responses', 'openai.responses'), ep('POST', '/v1/embeddings', 'openai.embeddings')]
+    endpoints: [ep('POST', '/v1/chat/completions', 'openai.chat'), ep('GET', '/v1/responses', 'openai.responses_ws'), ep('POST', '/v1/responses', 'openai.responses'), ep('POST', '/v1/embeddings', 'openai.embeddings'), ep('POST', '/v1/images/generations', 'openai.images'), ep('POST', '/v1/images/edits', 'openai.images_edit')]
   },
   {
     id: 'gemini',

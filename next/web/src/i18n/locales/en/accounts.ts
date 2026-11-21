@@ -183,7 +183,10 @@ export default {
     },
     rules: {
       title: 'Protocols per model', subtitle: 'Choose models and the protocols they are served on',
-      views: { matrix: 'Matrix', list: 'List', json: 'JSON' },
+      views: { visual: 'Visual', matrix: 'Matrix', list: 'List', json: 'JSON' },
+      ownShort: 'Own', crossShort: 'Conversion', ownOf: 'Own protocols of {model}',
+      ownDefault: 'Default · all', ownAll: 'All {n}', ownNone: 'None', ownSome: '{n} of {total}',
+      addModel: 'Protocols for a model outside the list: type its id and press Enter',
       model: 'Model', rest: 'Other models', restHint: 'every model not listed on its own',
       groupOwn: 'Own platform ({platforms})', groupCross: 'Conversion (off by default)',
       default: 'Default', followsRest: 'Follows other models', reset: 'Restore default', resetAll: 'Restore all defaults',

@@ -11,7 +11,7 @@ import {
 } from './protocolBinding'
 
 export type ProtocolMode = 'all' | 'custom'
-export type RulesView = 'matrix' | 'list' | 'json'
+export type RulesView = 'visual' | 'json'
 
 /**
  * @param accountType the type whose endpoints give the protocol columns
@@ -39,7 +39,7 @@ export function useProtocolEdit(accountType: () => AccountType | null | undefine
   // ---------------------------------------------------------------- views of the model rules
 
   /** The matrix needs rows and room: an account serving every model, or a phone, starts on the list. */
-  const defaultView = (): RulesView => (models().length && !viewport.compact.value ? 'matrix' : 'list')
+  const defaultView = (): RulesView => 'visual'
   const view = ref<RulesView>(defaultView())
   const text = ref('')
   const textProblem = ref<{ problem: BindingProblem; model?: string } | null>(null)

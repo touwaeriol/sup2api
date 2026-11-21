@@ -51,6 +51,8 @@ import { useModelEdit } from './useModelEdit'
 import { useAccountSave } from './useAccountSave'
 import { CONNECTION_FIELDS, isAdvancedField, isProtocolField, isSchedulingField, LIMIT_ROWS, mappingErrorText, modelsErrorText, pluginSection, protocolsErrorTexts, SCHEDULING_ROWS, SECTION_CONTROLS, splitFieldErrors, type EditorSection } from './editorErrors'
 import ModelProtocolsCard from './protocols/ModelProtocolsCard.vue'
+import ProtoB from './protocols/ProtoB.vue'
+const protoB = location.search.includes('proto=b')
 import OwnProtocolsField from './protocols/OwnProtocolsField.vue'
 import { sameProtocolColumns } from './protocols/protocolBinding'
 import { useProtocolLabels } from './protocols/protocolLabels'
@@ -648,10 +650,6 @@ const { save } = useAccountSave({
 
         <!-- ============================================================ models -->
         <div v-show="activeSection === 'models'" data-editor-section="models" class="space-y-4">
-          <SCard v-if="accountType" :title="ownProtocolsTitle" :subtitle="t('accounts.protocols.own.subtitle')" data-testid="own-protocols-card">
-            <OwnProtocolsField :editor="protocolEdit" :errors="serverProtocolErrors" :disabled="saving" />
-            <SAlert tone="neutral" dense class="mt-3">{{ t('accounts.protocols.own.crossHint') }}</SAlert>
-          </SCard>
           <AccountModelsCard
             :editor="editorModels"
             :editing="editing"
@@ -663,7 +661,12 @@ const { save } = useAccountSave({
             @fetch="fetchModels"
             @stop-fetch="fetchRequests.stopAll"
           />
-          <ModelProtocolsCard v-if="accountType" :editor="protocolEdit" :models="models" :mapping="mapping" :options="modelLimitOptions" :errors="errors" :disabled="saving" />
+          <ProtoB v-if="accountType && protoB" :editor="protocolEdit" :models="models" :options="modelLimitOptions" data-testid="proto-b" />
+          <SCard v-if="accountType && !protoB" :title="ownProtocolsTitle" :subtitle="t('accounts.protocols.own.subtitle')" data-testid="own-protocols-card">
+            <OwnProtocolsField :editor="protocolEdit" :errors="serverProtocolErrors" :disabled="saving" />
+            <SAlert tone="neutral" dense class="mt-3">{{ t('accounts.protocols.own.crossHint') }}</SAlert>
+          </SCard>
+          <ModelProtocolsCard v-if="accountType && !protoB" :editor="protocolEdit" :models="models" :mapping="mapping" :options="modelLimitOptions" :errors="errors" :disabled="saving" />
         </div>
 
         <!-- ============================================================ scheduling and limits -->

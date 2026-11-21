@@ -74,7 +74,7 @@ export const codexAccountTypes = (['codex_device', 'codex_oauth'] as const).map(
     sensitive_fields: d.sensitiveFields || ['access_token', 'refresh_token', 'id_token'],
     supports: ['openai'],
     // Codex speaks Responses only: chat requests are adapted to it (CONTRACTS §83.3).
-    subset: ['openai.responses']
+    subset: ['openai.responses_ws', 'openai.responses']
   }
 })
 
