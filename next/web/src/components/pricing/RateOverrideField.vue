@@ -4,12 +4,12 @@ import { useI18n } from 'vue-i18n'
 import { SHint, SInput } from '@sub2api/ui'
 import type { EffectiveRate } from '@/api/pricing'
 import { validOverride } from './accessRateDrafts'
-import { effectiveRate, inheritedRate, rateText } from './pricingFormat'
+import { inheritedRate } from './pricingFormat'
 
 // The rate of a segment in a group, compact enough for a table cell. Empty
-// (null) follows the group's default times the segment's discount, which the
-// placeholder shows; a value replaces both. The line underneath says where
-// the rate comes from, or what is wrong with the value.
+// (null) follows the group's rate times the segment's discount, and the
+// placeholder says to what; a value replaces both. A value that is no rate
+// says so underneath.
 const props = defineProps<{
   modelValue: string | null
   rate: Pick<EffectiveRate, 'group_default' | 'discount'>
@@ -19,20 +19,7 @@ const props = defineProps<{
 const emit = defineEmits<{ (e: 'update:modelValue', v: string | null): void }>()
 const { t } = useI18n()
 
-const inherited = computed(() => rateText(inheritedRate(props.rate)))
 const valid = computed(() => validOverride(props.modelValue))
-const source = computed(() => {
-  if (!valid.value) return t('pricing.rate.invalid')
-  const group = rateText(props.rate.group_default)
-  switch (effectiveRate(props.rate, props.modelValue).source) {
-    case 'segment':
-      return t('pricing.rate.override', { rate: inherited.value })
-    case 'discount':
-      return t('pricing.rate.discounted', { group, discount: rateText(props.rate.discount) })
-    default:
-      return t('pricing.rate.groupDefault', { group })
-  }
-})
 </script>
 
 <template>
@@ -43,16 +30,16 @@ const source = computed(() => {
       mono
       inputmode="decimal"
       clearable
-      class="w-40"
+      class="w-36"
       :error="!valid"
       :disabled="disabled"
-      :placeholder="t('pricing.rate.follow', { rate: inherited })"
+      :placeholder="t('pricing.rate.follow', { rate: inheritedRate(rate) })"
       :aria-label="ariaLabel || t('pricing.rate.label')"
       data-testid="rate-override-input"
       @update:model-value="emit('update:modelValue', String($event ?? '').trim() || null)"
     >
-      <template v-if="modelValue !== null" #prefix><span class="text-xs text-fg-subtle">×</span></template>
+      <template #prefix><span class="text-xs text-fg-subtle">×</span></template>
     </SInput>
-    <SHint size="xs" :tone="valid ? 'muted' : 'danger'" class="whitespace-nowrap leading-4" data-testid="rate-override-source">{{ source }}</SHint>
+    <SHint v-if="!valid" size="xs" tone="danger" class="leading-4" data-testid="rate-override-invalid">{{ t('pricing.rate.invalid') }}</SHint>
   </div>
 </template>

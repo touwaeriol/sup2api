@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({ post: vi.fn(), toast: vi.fn(), confirm: vi.fn(
 vi.mock('@sub2api/host', async (original) => ({ ...(await original<object>()), api: { post: mocks.post } }))
 vi.mock('@sub2api/ui', async (original) => ({ ...(await original<object>()), toast: (...a: unknown[]) => mocks.toast(...a), confirm: (...a: unknown[]) => mocks.confirm(...a) }))
 vi.mock('@/stores/auth', () => ({ useAuthStore: () => ({ has: (key: string) => !mocks.denied.has(key) }) }))
-const named = (id: number, name: string, over: Partial<Segment> = {}): Segment => ({ id, kind: 'named', name, description: '', discount: '1', is_default: false, member_count: 2, granted_groups: [], rate_override_count: 0, price_rule_count: 0, ...over })
+const named = (id: number, name: string, over: Partial<Segment> = {}): Segment => ({ id, kind: 'named', name, description: '', discount: '1', is_default: false, member_count: 2, granted_groups: [], rate_override_count: 0, ...over })
 const fallback = named(1, '默认', { is_default: true })
 vi.mock('@/components/pricing/segmentLookup', () => ({ useSegmentsLookup: () => ({ segments: ref([fallback, named(2, 'VIP')]) }) }))
 const user = (id: number, email: string, segment: SegmentRef): User => ({ id, email, display_name: '', status: 'active', segment }) as User
@@ -24,8 +24,8 @@ enableAutoUnmount(afterEach)
 /** The user picker: hands over the user a test names. */
 const picker: Component = { emits: ['select'], setup: () => () => h('div', { 'data-testid': 'picker' }) }
 
-async function render(segment: Segment = vip) {
-  const w = mount(SegmentMembers, { props: { segment }, global: { plugins: [i18n], stubs: { UserPick: picker, RouterLink: RouterLinkStub } } })
+async function render(segment: Segment | null = vip, name = segment?.name ?? '') {
+  const w = mount(SegmentMembers, { props: { segment, name }, global: { plugins: [i18n], stubs: { UserPick: picker, RouterLink: RouterLinkStub } } })
   await flushPromises()
   const add = async (u: User) => {
     w.getComponent(picker).vm.$emit('select', u)
@@ -46,7 +46,8 @@ beforeEach(() => {
 describe('the members of a user group', () => {
   it('lists the users in it', async () => {
     const { w } = await render()
-    expect(mocks.useList).toHaveBeenCalledWith('/segments/2/members', { q: '' })
+    expect(mocks.useList).toHaveBeenCalledWith(expect.any(Function), { q: '' }, { immediate: true })
+    expect((mocks.useList.mock.calls[0][0] as () => string)()).toBe('/segments/2/members')
     expect(w.findAll('[data-testid="segment-member-row"]').map((r) => r.attributes('data-user'))).toEqual(['5'])
   })
 
@@ -64,7 +65,7 @@ describe('the members of a user group', () => {
     mocks.confirm.mockResolvedValue(false)
     const { w, add } = await render()
     await add(user(7, 'amy@x', { id: 31, kind: 'personal', name: 'amy@x', user_id: 7 }))
-    expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({ danger: true, confirmText: '加入并删除个人专属设置' }))
+    expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({ danger: true, confirmText: '加入并删除单独设置' }))
     expect(mocks.post).not.toHaveBeenCalled()
     expect(w.emitted('changed')).toBeUndefined()
   })
@@ -80,7 +81,7 @@ describe('the members of a user group', () => {
     const { w } = await render()
     await w.get('[data-testid="segment-member-remove"]').trigger('click')
     await flushPromises()
-    expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({ message: '把 bob@x 移出「VIP」？他会回到「默认」，之后按「默认」计费。' }))
+    expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({ message: '把 bob@x 移出「VIP」？他会回到「默认」，之后按「默认」付费。' }))
     expect(mocks.post).toHaveBeenCalledWith('/segments/1/members', { user_ids: [5] })
     expect(w.emitted('changed')).toHaveLength(1)
   })
@@ -97,5 +98,25 @@ describe('the members of a user group', () => {
     expect(w.find('[data-testid="picker"]').exists()).toBe(false)
     expect(w.find('[data-testid="segment-member-remove"]').exists()).toBe(false)
     expect(w.findAll('thead th').map((th) => th.text())).toEqual(['用户', '状态'])
+  })
+
+  it('collects the members of a user group not created yet, to be added once it is', async () => {
+    const { w, add } = await render(null, 'Gold')
+    expect(mocks.useList).toHaveBeenCalledWith(expect.any(Function), { q: '' }, { immediate: false })
+    expect(w.text()).toContain('选好的成员在点“新建”时一起加入。')
+    expect(w.text()).toContain('还没选成员')
+    expect(w.find('[data-testid="segment-member-search"]').exists()).toBe(false)
+    await add(user(6, 'cat@x', named(4, 'Staff')))
+    await add(user(7, 'amy@x', { id: 31, kind: 'personal', name: 'amy@x', user_id: 7 }))
+    expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining('加入「Gold」后') }))
+    await add(user(6, 'cat@x', named(4, 'Staff')))
+    expect(mocks.toast).toHaveBeenCalledWith('cat@x 已经在这个用户组里')
+    expect(mocks.post).not.toHaveBeenCalled()
+    expect(w.emitted('update:pending')?.at(-1)?.[0]).toEqual([expect.objectContaining({ id: 6 }), expect.objectContaining({ id: 7 })])
+
+    await w.setProps({ pending: [user(6, 'cat@x', named(4, 'Staff'))] })
+    expect(w.findAll('[data-testid="segment-member-row"]').map((r) => r.attributes('data-user'))).toEqual(['6'])
+    await w.get('[data-testid="segment-member-remove"]').trigger('click')
+    expect(w.emitted('update:pending')?.at(-1)?.[0]).toEqual([])
   })
 })

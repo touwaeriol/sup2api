@@ -1,46 +1,58 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { SChipList, SHint, STable, type ChipListItem, type TableColumn } from '@sub2api/ui'
+import { SBadge, SChipList, SHint, SLink, STable, type ChipListItem, type TableColumn } from '@sub2api/ui'
 import type { Segment } from '@/api/pricing'
-import { rateText } from '@/components/pricing/pricingFormat'
-import { hasDiscount } from '@/components/pricing/pricingFormat'
+import SegmentBadge from '@/components/pricing/SegmentBadge.vue'
+import { hasDiscount, rateText } from '@/components/pricing/pricingFormat'
+import { formatNumber } from '@/utils/format'
 
-// A table of segments. What a segment gets reads the same for a named and a
-// personal one, so those columns are here: its discount, the private groups
-// it may use and how much it has set of its own. The caller brings the
-// columns before them (`lead`: who the segment is) and their `cell-<key>`
-// slots, and `cell-actions` when it has actions. Other attributes and slots
-// (card, loading, #footer, …) are STable's.
+// The user groups and the users priced on their own in one table: who each
+// is (a personal one by its user, with the group he came from), how many
+// members, its discount, the private groups it may use and in how many
+// groups it sets a rate of its own. `members` asks for the members of a
+// named row (`linkMembers`: the count is a link); the caller brings
+// `cell-actions`. Other attributes and slots (card, loading, #footer, …) are
+// STable's.
 defineOptions({ inheritAttrs: false })
-const props = defineProps<{ lead: TableColumn[]; rows: Segment[]; actions?: boolean }>()
+defineProps<{ rows: Segment[]; linkMembers?: boolean }>()
+const emit = defineEmits<{ (e: 'members', s: Segment): void }>()
 const { t } = useI18n()
 
 /** Private groups shown before the rest folds into "+N". */
 const GROUPS_SHOWN = 3
 
 const columns = computed<TableColumn[]>(() => [
-  ...props.lead,
-  { key: 'discount', label: t('segments.discount.label'), mobile: 'meta' },
+  { key: 'name', label: t('segments.columns.name'), mobile: 'title' },
+  { key: 'member_count', label: t('segments.columns.members'), align: 'right', mobile: 'meta' },
+  { key: 'discount', label: t('segments.columns.discount'), mobile: 'meta' },
   { key: 'granted_groups', label: t('segments.columns.granted'), mobile: 'meta', mobileSpan: 2 },
-  { key: 'custom', label: t('segments.columns.custom'), mobile: 'meta', mobileSpan: 2 },
-  ...(props.actions ? [{ key: 'actions', label: t('common.actions'), align: 'right' } satisfies TableColumn] : [])
+  { key: 'rate_override_count', label: t('segments.columns.overrides'), mobile: 'meta' },
+  { key: 'actions', label: t('common.actions'), align: 'right' }
 ])
 
 const groupChips = (s: Segment): ChipListItem[] => s.granted_groups.map((g) => ({ key: String(g.id), label: g.name }))
-
-/** "2 own rates · 3 own prices"; '' when the segment follows the groups everywhere. */
-function customText(s: Segment): string {
-  const parts = [s.rate_override_count && t('segments.customRates', s.rate_override_count), s.price_rule_count && t('segments.customPrices', s.price_rule_count)]
-  return parts.filter(Boolean).join(' · ')
-}
-const rowAttrs = (s: Segment) => ({ 'data-testid': 'segment-row', 'data-segment': s.id })
+const rowAttrs = (s: Segment) => ({ 'data-testid': 'segment-row', 'data-segment': s.id, 'data-kind': s.kind })
 </script>
 
 <template>
   <STable v-bind="$attrs" :columns="columns" :rows="rows" :row-attrs="rowAttrs">
     <template v-for="(_, name) in $slots" #[name]="scope">
       <slot :name="name" v-bind="scope ?? {}" />
+    </template>
+    <template #cell-name="{ row }">
+      <span class="inline-flex max-w-full items-center gap-1.5">
+        <span class="truncate font-medium text-fg" data-testid="segment-name-cell">{{ row.user?.email ?? row.name }}</span>
+        <SBadge v-if="row.is_default" tone="info" size="xs" :title="t('segments.defaultHint')" data-testid="segment-default">{{ t('segments.default') }}</SBadge>
+        <SegmentBadge v-if="row.kind === 'personal'" :segment="row" class="shrink-0" />
+      </span>
+      <SHint v-if="row.kind === 'personal' && row.origin" size="xs" data-testid="segment-origin">{{ t('segments.personal.origin', { name: row.origin.name }) }}</SHint>
+      <SHint v-else-if="row.description" size="xs" class="max-w-xs truncate">{{ row.description }}</SHint>
+    </template>
+    <template #cell-member_count="{ row }">
+      <SHint v-if="row.kind === 'personal'" inline>—</SHint>
+      <SLink v-else-if="linkMembers" as="button" class="font-mono" data-testid="segment-members-link" @click="emit('members', row)">{{ formatNumber(row.member_count) }}</SLink>
+      <span v-else class="font-mono" data-testid="segment-member-count">{{ formatNumber(row.member_count) }}</span>
     </template>
     <template #cell-discount="{ row }">
       <span v-if="hasDiscount(row)" class="font-mono font-medium" data-testid="segment-discount-cell">{{ rateText(row.discount) }}</span>
@@ -50,9 +62,9 @@ const rowAttrs = (s: Segment) => ({ 'data-testid': 'segment-row', 'data-segment'
       <SChipList v-if="row.granted_groups.length" :items="groupChips(row)" :max="GROUPS_SHOWN" />
       <SHint v-else inline>{{ t('segments.publicOnly') }}</SHint>
     </template>
-    <template #cell-custom="{ row }">
-      <span v-if="customText(row)" class="text-xs" data-testid="segment-custom-cell">{{ customText(row) }}</span>
-      <SHint v-else inline data-testid="segment-custom-cell">{{ t('common.none') }}</SHint>
+    <template #cell-rate_override_count="{ row }">
+      <span v-if="row.rate_override_count" class="text-xs" data-testid="segment-overrides-cell">{{ t('segments.overrides', { n: row.rate_override_count }, row.rate_override_count) }}</span>
+      <SHint v-else inline data-testid="segment-overrides-cell">{{ t('common.none') }}</SHint>
     </template>
   </STable>
 </template>

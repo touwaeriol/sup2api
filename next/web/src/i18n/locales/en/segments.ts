@@ -1,79 +1,104 @@
 export default {
   title: 'User groups',
-  description: 'Every user belongs to exactly one user group. It decides which private groups they may use, and at what rate and prices they are billed.',
+  description: 'Every user is in one user group. It decides which private groups they may use and how many times the price they pay.',
   create: 'New user group',
+  created: 'User group created',
+  unsavedNew: 'Not saved yet: Create saves the user group, its group rates and its members together.',
   editTitle: 'Edit user group {name}',
   viewTitle: 'User group {name}',
-  searchPlaceholder: 'Search name or note…',
-  default: 'Default',
+  searchPlaceholder: 'Search name, note or user email',
+  default: 'Default for new users',
   defaultHint: 'New users join this user group; it cannot be deleted.',
   defaultName: 'The default user group cannot be renamed.',
   note: 'Note',
   publicOnly: 'Public groups only',
-  customRates: '{n} own rate | {n} own rates',
-  customPrices: '{n} own price | {n} own prices',
+  overrides: '{n} group | {n} groups',
+  simulate: 'Price simulator',
   deleteTitle: 'Delete the user group "{name}"',
   deleteConfirm:
-    'Its {n} member goes back to the default user group, and its grants, own rates and own prices are deleted with it. This cannot be undone. | Its {n} members go back to the default user group, and its grants, own rates and own prices are deleted with it. This cannot be undone.',
-  created: 'Created. You can go on to set its groups and rates, and add members.',
+    'Its {n} member goes back to the default user group, and its settings in the groups are deleted with it. This cannot be undone. | Its {n} members go back to the default user group, and its settings in the groups are deleted with it. This cannot be undone.',
+  kinds: {
+    label: 'Filter by kind',
+    all: 'All {n}',
+    named: 'User groups {n}',
+    personal: 'Personal {n}'
+  },
   columns: {
-    name: 'User group',
+    name: 'Name',
     members: 'Members',
+    discount: 'Discount',
     granted: 'Private groups it may use',
-    custom: 'Own settings'
+    overrides: 'Own rates'
   },
   tabs: {
     basic: 'Basics',
-    groups: 'Groups & rates',
-    members: 'Members'
+    groups: 'Group rates',
+    members: 'Members',
+    membersPicked: 'Members · {n} picked'
   },
   discount: {
     label: 'Discount',
-    hint: 'Multiplies the default rate of every group; a group with an own rate ignores it. 1 means no discount.',
-    example: 'E.g. group default {group} → effective {rate}',
+    hint: 'Multiplies the group rate of every group; a group with an own rate ignores it. 1 means no discount.',
+    example: 'E.g. group rate {group} → paid rate {rate}',
     invalid: 'Enter a number above 0 and below 1000000, up to 4 decimals; 1 for no discount.'
   },
   groups: {
-    hint: 'Whether "{name}" may use each group, and at what rate. Grants and rates take effect on Save; own model prices are saved in their own dialog.',
-    emptyNew: 'Save first, then set the groups and rates.',
-    private: 'Private'
-  },
-  prices: {
-    title: 'Own model prices of "{segment}" in {group}',
-    hint: 'These are list prices; paid = list price × rate (now {rate}). They are saved in this dialog, apart from the user group.',
-    readonlyHint: 'Paid = list price × rate (now {rate}).'
+    discount: 'Discount',
+    discountHint: '(change it under Basics): a group without an own rate charges the group rate × {discount}',
+    noDiscount: 'No discount (change it under Basics): a group without an own rate charges its group rate'
   },
   members: {
-    notice: 'Adding and removing members takes effect at once, apart from Save below.',
-    emptyNew: 'Save first, then add members.',
+    notice: 'Adding and removing members takes effect at once, without Save.',
+    noticeNew: 'The members picked join when you click Create.',
     add: 'Add a member',
-    addHint: 'A user belongs to one user group: joining "{segment}" moves them out of the one they are in.',
+    addHint: 'A user is in one user group: joining "{segment}" moves them out of the one they are in.',
     addPlaceholder: 'Search the user to add by email or name',
     search: 'Search members',
     inUsers: 'View in the users list',
     empty: 'This user group has no members yet',
+    emptyNew: 'No member picked yet',
+    thisSegment: 'this user group',
     already: '{name} is in this user group already',
-    dropPersonal:
-      '{name} is Personal now. Joining "{segment}" deletes their personal settings (grants, own rates, own prices); from then on they are billed as "{segment}".',
-    dropPersonalConfirm: 'Join and delete personal settings',
+    dropPersonal: '{name} is Personal now. Joining "{segment}" deletes their own settings; from then on they pay as "{segment}".',
+    dropPersonalConfirm: 'Join and delete own settings',
     movedFrom: 'Moved {name} from "{from}" to "{to}"',
     remove: 'Remove',
-    removeConfirm: 'Remove {name} from "{segment}"? They go back to "{to}" and are billed as "{to}" from then on.',
+    removeConfirm: 'Remove {name} from "{segment}"? They go back to "{to}" and pay as "{to}" from then on.',
     movedTo: 'Moved {name} to "{to}"',
     defaultHint: 'Members of the default user group cannot be removed here: add them to the user group they should be in.'
   },
   personal: {
-    summary: 'Personal · {n} user | Personal · {n} users',
-    summaryHint: 'Users priced individually; each is a user group of their own.',
-    title: 'Personal',
-    description: 'Users priced individually. Each is a user group of their own, created by the system and not named.',
-    pick: 'Price a user individually',
-    pickHint: 'The user leaves their user group and becomes Personal; one who is Personal already opens their settings.',
-    origin: 'From',
-    empty: 'No user is priced individually yet',
-    edit: 'Groups & pricing',
+    origin: 'Was in {name}',
     remove: 'Move back to a user group',
     notice: 'These settings apply to this user only.',
     noticeOrigin: 'These settings apply to this user only. They were in "{origin}"; later changes to "{origin}" no longer affect them.'
+  },
+  select: {
+    placeholder: 'Choose a user group',
+    default: 'default for new users',
+    discount: 'discount {rate}'
+  },
+  convert: {
+    pick: 'Set a rate for one user',
+    pickShort: 'Set rates for a user',
+    pickHint: 'The user leaves their user group and becomes Personal; one who is Personal already opens their settings.',
+    pickPlaceholder: 'Search a user by email or name',
+    title: 'Set rates for {name}',
+    intro: 'The user becomes Personal and leaves "{from}"; later changes to "{from}" no longer affect them.',
+    currentSegment: 'the current user group',
+    startFrom: 'Start from',
+    copy: 'Copy the current settings of "{from}"',
+    copyHint: 'The discount, the private groups enabled and the rate in each group are copied; change them afterwards.',
+    blank: 'Start from blank',
+    blankHint: 'Public groups only, at each group rate.',
+    submit: 'Set own rates',
+    done: '{name} is now Personal'
+  },
+  remove: {
+    title: 'Move {name} back to a user group',
+    target: 'Move to user group',
+    warning: 'Their own settings will be deleted; from then on they pay as the chosen user group.',
+    submit: 'Move and delete own settings',
+    done: 'Moved {name} to "{segment}"'
   }
 }
