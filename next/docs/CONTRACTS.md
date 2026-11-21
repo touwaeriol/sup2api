@@ -9222,24 +9222,24 @@ Go 类型是 `expr.TokenConfig`、`TierConfig`、`TokenPrices`、`RuleConfig`、
 
 0. 全局价是 `expression` 的模型上的自定义价规则（`price_rules` 的 `custom` 行）删掉：它们现在就失效（表达式价格只能用倍数规则），而第 2 步会把其中一些全局价转成单档按 token，让它们重新生效。
 1. `model_prices` 里 `per_token` 的旧五个单价、`price_rules` 里 `custom` + `per_token` 的旧五个单价 → `{"tiers":[{"name":"base","max_len":null,"unit":"token",…原来设了的键}],"rules":[]}`。
-2. `expression` 且 `config.tiers` 非空、每档无 `flat`（或为 0）、规则都能映射（`header` 的 `contains`/`eq`、`param` 的 `contains`/`eq`、`time`）→ `per_token`：档位展平 `prices` 嵌套、补 `unit: token`，一档时 `max_len` 为 `null`；每条规则变成单条件的 `conds`。
-3. 其余 `expression`（带 `flat`、`param` 的 `range`、视频模板、源码模式）→ `config = {}`。
-4. 表达式里的 `A ||| B ||| C` 改写为 `(A) * (B) * (C)`（不在字符串字面量里的 `|||` 才算；以行注释结尾的部分，右括号另起一行），`model_prices` 和 `price_rules` 的 `expression`、`expr_hash` 跟着换（SQL 的 `sha256` 与 `expr.Hash` 一致，测试对照）。
+2. `expression` 且 `config.tiers` 非空、每档无 `flat`（或为 0，含字符串 `"0"`）、规则都能映射（`header` 的 `contains`/`eq`、`param` 的 `contains`/`eq`、`time`），且转换结果是 `per_token` 生成器接受的配置（档名合法且不重复、价格与 `max_len` 是非负数、恰有一档不设 `max_len`、`max_len` 不重复、倍数是非负数、条件的键/值/小时/时区合法、`rules` 是数组）→ `per_token`：档位展平 `prices` 嵌套、补 `unit: token`，一档时 `max_len` 为 `null`；每条规则变成单条件的 `conds`。
+3. 其余 `expression`（带 `flat`、`param` 的 `range`、视频模板、生成器不接受的配置、源码模式）→ `config = {}`，照旧按存下的表达式计费。
+4. 表达式里的 `A ||| B ||| C` 改写为 `(A) * (B) * (C)`（不在字符串字面量里的 `|||` 才算；这一段里任何位置有行注释 `//`（不在字符串里）时，右括号另起一行），`model_prices` 和 `price_rules` 的 `expression`、`expr_hash` 跟着换（SQL 的 `sha256` 与 `expr.Hash` 一致，测试对照）。
    - `model_price_history`：为新哈希插入一行；旧哈希的行**保留哈希**、文本换成新写法（已冻结旧哈希的使用记录仍查得到、仍能编译），所以这些行的 `expression` 的哈希不再等于 `expr_hash`（§5 说价格历史与 `/prices/:id` 的 `expr_hash` 相同，这些行是例外）。
-   - 还没结算的使用记录（`billing_status` 为 `pending`、`failed`、`reserved`）`billing_detail.inputs` 里携带的表达式（`pricing.base`、`additional[].Price`、`replacement[].Price`，含其中的 `Base`）同样改写、换哈希；已结算的记录不动。`pending`、`failed` 走部分索引 `usage_logs_billing_pending_idx`，`reserved` 经 `pending_settlements.usage_log_id` 找，不扫整张 `usage_logs`。
+   - 还会重新定价的使用记录 `billing_detail.inputs` 里携带的表达式（`pricing.base`、`additional[].Price`、`replacement[].Price`，含其中的 `Base`）同样改写、换哈希：`billing_status` 为 `pending`、`failed`、`reserved` 的，以及挂在 `abandoned`、`estimated` 结算条目上的 `billed` 行（“按预估价已扣费”，`POST /usage/:id/reconcile` 会把它改回 `reserved` 再定价）。其他已结算的记录不动。`pending`、`failed` 经部分索引 `usage_logs_billing_pending_idx` 取 id，`reserved` 经 `pending_settlements.usage_log_id` 与观察中的 `async_tasks.usage_log_id` 取 id，估价已扣费的经 `pending_settlements` 取 id；id 收成数组后按主键逐行查（`id = ANY (ARRAY(…))`），不扫整张 `usage_logs`（测试在 2 万行的表上断言执行计划没有 `Seq Scan on usage_logs`）。`additional`、`replacement` 不是数组时原样保留。只有内容真的变了的行才写。
 - 第 1、2 步里写成数字字符串的价格（`"0.15"`）、规则倍数和 `max_len` 改成 JSON 数字（`expr.Num` 两种都接受，生成的表达式不变）。
-- 0–3 不改 `expression` 和 `expr_hash`。重跑一次什么也不改。改写用的临时函数在迁移末尾删掉。
+- 0–3 不改 `expression` 和 `expr_hash`。重跑一次什么也不写（测试比对四张表每行的内容与 `xmin`）。改写只对含 `|||` 的文本做，每行只算一次。改写用的临时函数在迁移末尾删掉。
 - 回退：旧核心读不了新形状的 `per_token` 配置，也不会把乘积写法里的规则当规则报告；回退要连同数据库回到升级前的备份。
 
 ### 131.7 测试
 
 - `billing/expr`：`TestGenerateMatchesOldGenerator`（12 组原生成器的输出：没有规则的逐字节相同，有规则的等于乘积写法、追踪到的规则数等于原 `|||` 个数）、`TestGenerate`（各字段与校验错误）、`TestGeneratedRulesEvaluate`、`TestRuleTracing`（嵌套、短路、非字面量、不读请求信息、`u()` 规则、倍数 0、`base` 与 `rules_multiplier`、条件不是布尔值）、`TestCompileErrors`（`|||`、`__rule`、`$env`）、`TestLegacyProduct`；`TestRuleTracing` 另含条件为 `nil`、只乘在一项上的规则（`rules_multiplier` = 费用 ÷ `base`）、去掉规则后算不出来的价格。
 - `billing`：`TestCheckRule`（含多档、按次档、带规则、没有价格的自定义价）、`TestRuleInactive`（自定义价准入与失效，含中文错误）、`TestExportPrice`、`TestParseSup2APIMultiplierOnTiers`、`TestParseSup2APIFromOldUpstream`（旧上游的五个单价、可视化与视频配置、`|||`、数字字符串缩放）、同步各源的 `per_token` 期望、`TestCheckStoredExpressions`（数据库测试，131.8 的发布检查）。
-- `migrations`：`TestMigration0121BillingModes`（数据库测试：表达式全局价上的自定义价被删，各类旧行迁移后的 mode、config、表达式，数字字符串改成数字，SQL 改写等于 `expr.LegacyProduct`、SQL 哈希等于 `expr.Hash`，config 重新生成得到同一哈希，规则求值与命中，条件为 `nil` 的规则，历史表新旧哈希，`pending`、`failed`、`reserved` 与已结算的使用记录，重跑无改动）。
+- `migrations`：`TestMigration0121BillingModes`（数据库测试：表达式全局价上的自定义价被删，各类旧行迁移后的 mode、config、表达式，数字字符串改成数字，SQL 改写等于 `expr.LegacyProduct`、SQL 哈希等于 `expr.Hash`，config 重新生成得到同一哈希，规则求值与命中，条件为 `nil` 的规则，历史表新旧哈希，`pending`、`failed`、`reserved` 与已结算的使用记录，生成器不接受的可视化配置保留表达式，`additional`/`replacement` 非数组不中止，`|||` 切分的边界（转义引号、反引号、`v1 :` 前缀、多段注释、`||||`、开头结尾的 `|||`），挂在估价结算上的 `billed` 行与只有任务观察的 `reserved` 行，重跑四张表无写入，使用记录语句走主键）。
 
 ### 131.8 如实写明的边界
 
-- 迁移 2 按 `config` 判断，不看表达式：可视化配置与手改过的表达式不一致的旧行（原来就以表达式计费）会被转成 `per_token`，计费仍按存下的表达式，但价格页显示的是配置；再保存一次时按配置重新生成。SQL 里分辨不出这种情况。
+- 迁移 2 按 `config` 判断，不看表达式：可视化配置与手改过的表达式不一致的旧行（原来就以表达式计费）会被转成 `per_token`，计费仍按存下的表达式，但价格页显示的是配置；再保存一次时按配置重新生成。SQL 里分辨不出这种情况，所以迁移之后 `check-prices` 还会用每条 `per_request`、`per_token` 价格（含自定义价）的配置生成表达式，列出生成失败或哈希与 `expr_hash` 不一致的行。
 - 规则不再分段求值、按十进制相乘，而是整个程序一次浮点计算，结果可能在最后一位（1e-8 美元）与旧引擎不同。
-- **发布检查**：新引擎比旧引擎严格的地方——表达式里出现 `__rule`、`$env`，基础表达式里出现读了请求信息、命中分支是负数的三元式（现在算一条规则，倍数不能为负）——会让已存的价格编译不过。发布前对线上库（升级前的库即可，只读、不需要新 schema）运行 `sub2api admin check-prices`（`billing.CheckStoredExpressions`）：它把 `model_prices`、`price_rules`（自定义价）、`model_price_history` 里的每条表达式用新引擎编译；库里还没跑迁移 0121（`schema_migrations` 没有 `0121_billing_modes.sql`）时先按迁移的写法改写再编译，跑过之后原样编译，列出编译不过的（表、模型或哈希、错误），全部通过时退出码 0。有输出就先改那些价格再升级。未结算使用记录里携带的表达式不单独检查：它们在保存价格时已写进历史表，随历史表一起检查。
+- **发布检查**：新引擎比旧引擎严格的地方——表达式里出现 `__rule`、`$env`，基础表达式里出现读了请求信息、命中分支是负数的三元式（现在算一条规则，倍数不能为负）——会让已存的价格编译不过。发布前对线上库（升级前的库即可，只读、不需要新 schema）运行 `sub2api admin check-prices`（`billing.CheckStoredExpressions`）：它把 `model_prices`、`price_rules`（自定义价）、`model_price_history` 里的每条表达式用新引擎编译；库里还没跑迁移 0121（`schema_migrations` 没有 `0121_billing_modes.sql`）时先按迁移的写法改写再编译，跑过之后原样编译，列出编译不过的（表、模型或哈希、错误）；跑过 0121 之后另列配置生成不出存下表达式的价格（上一条）。全部通过时退出码 0。有输出就先改那些价格再升级。未结算使用记录里携带的表达式不单独检查：它们在保存价格时已写进历史表，随历史表一起检查。
 - 不在本次：OpenAI / Codex 应答里的 `service_tier` 报成用量字段。按次带加价规则已随 131.1 的 `per_request` `rules` 补上。

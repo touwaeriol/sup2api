@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/billing/expr"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/testutil"
 )
 
@@ -29,9 +30,12 @@ func TestCheckStoredExpressions(t *testing.T) {
 	} {
 		exec(`INSERT INTO model_prices (model, mode, config, expression, expr_hash, source) VALUES ($1, 'expression', '{}', $2, $3, 'manual')`, model, src, model)
 	}
+	// A config that no longer generates its expression.
+	exec(`INSERT INTO model_prices (model, mode, config, expression, expr_hash, source) VALUES ('drift', 'per_token', $1, $2, $3, 'manual')`,
+		`{"tiers": [{"name": "base", "max_len": null, "unit": "token", "p": 1}], "rules": []}`, `tier("base", p*2 + c*0)`, expr.Hash(`tier("base", p*2 + c*0)`))
 	exec(`INSERT INTO groups (name) VALUES ('check')`)
 	exec(`INSERT INTO price_rules (group_id, model, kind, mode, config, expression, expr_hash)
-		SELECT id, 'ok', 'custom', 'per_request', '{"price": 1}', '$env.p', 'h' FROM groups WHERE name = 'check'`)
+		SELECT id, 'ok', 'custom', 'per_request', '{"price": 1}', '$env.p', $1 FROM groups WHERE name = 'check'`, expr.Hash(`tier("base", flat(1))`))
 	exec(`INSERT INTO price_rules (group_id, model, kind, multiplier) SELECT id, 'negative', 'multiplier', 2 FROM groups WHERE name = 'check'`)
 	exec(`INSERT INTO model_price_history (expr_hash, expression, expr_version) VALUES ('old', 'v1:' || $1, 1)`, negative)
 
@@ -49,7 +53,7 @@ func TestCheckStoredExpressions(t *testing.T) {
 	require.NoError(t, db.SQL.QueryRowContext(ctx, `SELECT id FROM groups WHERE name = 'check'`).Scan(&group))
 	rule := fmt.Sprintf("%d/-/ok ", group)
 	// After migration 0121 an expression is checked as it is: "|||" no longer compiles.
-	require.Equal(t, map[string]string{"model_prices": "negative old-form ", "price_rules": rule, "model_price_history": "old "}, sortedRefs(problems()))
+	require.Equal(t, map[string]string{"model_prices": "drift negative old-form ", "price_rules": rule, "model_price_history": "old "}, sortedRefs(problems()))
 	// Before it, an expression is checked as the migration will rewrite it
 	// (the database is this test's own clone).
 	exec(`DELETE FROM schema_migrations WHERE id = $1`, billingModesMigration)

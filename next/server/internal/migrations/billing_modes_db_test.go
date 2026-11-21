@@ -64,6 +64,24 @@ func TestMigration0121BillingModes(t *testing.T) {
 		{"src-literal", "expression", `{}`, literal},
 		{"src-comment", "expression", `{}`, comment},
 		{"src-bare", "expression", `{}`, bare},
+		{"vis-flat0", "expression", `{"tiers": [{"name": "z", "p": 1, "flat": "0"}]}`, `tier("z", p*1 + c*0)`},
+		// Visual configs the per_token generator would refuse keep their expression.
+		{"bad-value", "expression", `{"tiers": [{"name": "a", "p": 1}], "rules": [{"source": "param", "name": "n", "multiplier": 2}]}`, `tier("a", p*1)`},
+		{"bad-mult", "expression", `{"tiers": [{"name": "a", "p": 1}], "rules": [{"source": "param", "name": "n", "value": 1}]}`, `tier("a", p*2)`},
+		{"bad-name", "expression", `{"tiers": [{"name": "", "p": 1}]}`, `tier("a", p*3)`},
+		{"bad-rest", "expression", `{"tiers": [{"name": "a", "max_len": 10, "p": 1}, {"name": "b", "max_len": 20, "p": 2}]}`, `tier("a", p*4)`},
+		{"bad-hour", "expression", `{"tiers": [{"name": "a", "p": 1}], "rules": [{"source": "time", "from_hour": 25, "to_hour": 6, "multiplier": 2}]}`, `tier("a", p*5)`},
+		{"bad-tz", "expression", `{"tiers": [{"name": "a", "p": 1}], "rules": [{"source": "time", "tz": "Mars/Base", "from_hour": 1, "to_hour": 6, "multiplier": 2}]}`, `tier("a", p*6)`},
+		{"bad-header", "expression", `{"tiers": [{"name": "a", "p": 1}], "rules": [{"source": "header", "name": "x tag", "value": "v", "multiplier": 2}]}`, `tier("a", p*7)`},
+		{"bad-price", "expression", `{"tiers": [{"name": "a", "p": "cheap"}]}`, `tier("a", p*8)`},
+		{"bad-rules", "expression", `{"tiers": [{"name": "a", "p": 1}], "rules": {"source": "param"}}`, `tier("a", p*9)`},
+		// The old engine's split at its edges, compared with expr.LegacyProduct.
+		{"src-escaped", "expression", `{}`, `tier("x", p) ||| header("q") == "say \"|||\"" ? 2 : 1`},
+		{"src-backtick", "expression", `{}`, "tier(\"x\", p) ||| header(\"q\") == `a\\|||b` ? 2 : 1"},
+		{"src-prefix", "expression", `{}`, " v1 :  tier(\"x\", p)|||param(\"a\") == 1 ? 2 : 1 "},
+		{"src-comments", "expression", `{}`, "tier(\"x\", p) // one\n// two\n||| param(\"a\") == 1 ? 2 : 1 // three"},
+		{"src-four", "expression", `{}`, `tier("x", p) |||| param("a") == 1 ? 2 : 1`},
+		{"src-edges", "expression", `{}`, `||| tier("x", p) |||`},
 	}
 	for _, p := range prices {
 		exec(`INSERT INTO model_prices (model, mode, config, expression, expr_hash, source) VALUES ($1, $2, $3, $4, $5, 'manual')`,
@@ -89,16 +107,33 @@ func TestMigration0121BillingModes(t *testing.T) {
 				"Base": map[string]any{"expression": rules, "expr_hash": expr.Hash(rules)}}},
 			map[string]any{"Kind": "free", "Free": true},
 		},
+		"replacement": []any{
+			map[string]any{"Kind": "fallback", "Price": map[string]any{"Expression": bare, "ExprHash": expr.Hash(bare)}},
+		},
 	}})
-	usage := func(request, status string) {
+	insertUsage := func(request, status, detail string) {
 		exec(`INSERT INTO usage_logs (request_id, user_id, api_key_id, group_id, protocol, endpoint, status_code, success, billing_status, expr_hash, billing_detail)
-			VALUES ($1, 1, 1, 1, 'p', '/e', 200, true, $2, $3, $4)`, request, status, expr.Hash(rules), string(pending))
+			VALUES ($1, 1, 1, 1, 'p', '/e', 200, true, $2, $3, $4)`, request, status, expr.Hash(rules), detail)
 	}
-	for _, status := range []string{"pending", "failed", "reserved", "billed"} {
-		usage(status, status)
+	// request id: billing status
+	for request, status := range map[string]string{"pending": "pending", "failed": "failed", "reserved": "reserved",
+		"reserved-task": "reserved", "billed-estimate": "billed", "billed-settled": "billed", "billed": "billed"} {
+		insertUsage(request, status, string(pending))
 	}
-	exec(`INSERT INTO pending_settlements (plugin_key, ref_id, usage_log_id, next_check_at, deadline_at)
-		SELECT 'p', 'r', id, now(), now() FROM usage_logs WHERE request_id = 'reserved'`)
+	settle := func(request, state string) {
+		exec(`INSERT INTO pending_settlements (plugin_key, ref_id, usage_log_id, next_check_at, deadline_at, state)
+			SELECT 'p', request_id, id, now(), now(), $2 FROM usage_logs WHERE request_id = $1`, request, state)
+	}
+	settle("reserved", "pending")
+	settle("billed-estimate", "abandoned")
+	settle("billed-settled", "settled")
+	exec(`INSERT INTO async_tasks (public_id, plugin_key, kind, upstream_ref_id, user_id, api_key_id, group_id, account_id, model, protocol,
+			usage_log_id, snapshot_id_paths, next_check_at, deadline_at)
+		SELECT 't', 'p', 'video', 'u', 1, 1, 1, 1, 'm', 'p', id, '[]', now(), now() FROM usage_logs WHERE request_id = 'reserved-task'`)
+	// Inputs that are not arrays are left as they are, not an error.
+	dirty, _ := json.Marshal(map[string]any{"inputs": map[string]any{"additional": nil, "replacement": map[string]any{"x": 1},
+		"pricing": map[string]any{"base": map[string]any{"expression": ranged, "expr_hash": expr.Hash(ranged)}}}})
+	insertUsage("dirty", "pending", string(dirty))
 
 	require.Equal(t, migrationsAfter(t, migrationBefore(t, id)), migrate())
 	type row struct {
@@ -143,6 +178,12 @@ func TestMigration0121BillingModes(t *testing.T) {
 		"src-literal": {"expression", `{}`, product(`tier("x", p)`, `header("x-tag") == "a|||b" ? 2 : 1`)},
 		"src-comment": {"expression", `{}`, "(tier(\"x\", p) // the \"base\"\n) * (param(\"a\") == 1 ? 2 : 1)"},
 		"src-bare":    {"expression", `{}`, product(`tier("x", p*1)`, `param("fast") ? 2 : 1`)},
+		"vis-flat0":   {"per_token", `{"tiers": [{"p": 1, "name": "z", "unit": "token", "max_len": null}], "rules": []}`, `tier("z", p*1 + c*0)`},
+	}
+	for _, p := range prices {
+		if strings.HasPrefix(p.model, "bad-") {
+			want[p.model] = struct{ mode, config, expression string }{"expression", `{}`, p.expression}
+		}
 	}
 	for model, w := range want {
 		r := got[model]
@@ -221,10 +262,23 @@ func TestMigration0121BillingModes(t *testing.T) {
 		require.NoError(t, db.SQL.QueryRowContext(ctx, `SELECT billing_detail::text FROM usage_logs WHERE request_id = $1`, request).Scan(&d))
 		return d
 	}
-	require.JSONEq(t, string(pending), detail("billed"))
-	for _, request := range []string{"failed", "reserved"} {
+	for _, request := range []string{"billed", "billed-settled"} {
+		require.JSONEq(t, string(pending), detail(request), request)
+	}
+	for _, request := range []string{"failed", "reserved", "reserved-task", "billed-estimate"} {
 		require.Equal(t, detail("pending"), detail(request), request)
 	}
+	var dirtyAfter struct {
+		Inputs struct {
+			Pricing     struct{ Base struct{ Expression string } }
+			Additional  json.RawMessage
+			Replacement json.RawMessage
+		}
+	}
+	require.NoError(t, json.Unmarshal([]byte(detail("dirty")), &dirtyAfter))
+	require.Equal(t, got["vis-range"].Expression, dirtyAfter.Inputs.Pricing.Base.Expression)
+	require.JSONEq(t, `null`, string(dirtyAfter.Inputs.Additional))
+	require.JSONEq(t, `{"x": 1}`, string(dirtyAfter.Inputs.Replacement))
 	var after struct {
 		Inputs struct {
 			Pricing struct {
@@ -244,6 +298,9 @@ func TestMigration0121BillingModes(t *testing.T) {
 					}
 				}
 			} `json:"additional"`
+			Replacement []struct {
+				Price struct{ Expression, ExprHash string }
+			} `json:"replacement"`
 		} `json:"inputs"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(detail("pending")), &after))
@@ -257,11 +314,45 @@ func TestMigration0121BillingModes(t *testing.T) {
 	require.Equal(t, expr.Hash(rulesAfter), in.Additional[0].Price.Base.ExprHash)
 	require.True(t, in.Additional[1].Free)
 	require.Nil(t, in.Additional[1].Price)
+	require.Len(t, in.Replacement, 1)
+	require.Equal(t, got["src-bare"].Expression, in.Replacement[0].Price.Expression)
+	require.Equal(t, got["src-bare"].ExprHash, in.Replacement[0].Price.ExprHash)
 
-	before := read()
+	// A rerun writes no row of any table it touches.
+	snapshot := func() map[string]string {
+		t.Helper()
+		out := map[string]string{}
+		for _, table := range []string{"model_prices", "price_rules", "model_price_history", "usage_logs"} {
+			var s string
+			require.NoError(t, db.SQL.QueryRowContext(ctx, `SELECT string_agg(x::text, E'\n' ORDER BY x::text) FROM (SELECT t.*, t.xmin FROM `+table+` t) x`).Scan(&s))
+			out[table] = s
+		}
+		return out
+	}
+	before := snapshot()
 	exec(`DELETE FROM schema_migrations WHERE id = '` + id + `'`)
 	require.Equal(t, []string{id}, migrate())
-	require.Equal(t, before, read())
+	require.Equal(t, before, snapshot())
+
+	// The usage statement finds its rows by primary key on a table of real
+	// size, not by a scan (the UPDATE billing_modes_usage runs).
+	exec(`INSERT INTO usage_logs (request_id, user_id, api_key_id, group_id, protocol, endpoint, status_code, success, billing_status, billing_detail)
+		SELECT 'fill-' || g, 1, 1, 1, 'p', '/e', 200, true, 'billed', '{}' FROM generate_series(1, 20000) g`)
+	exec(`ANALYZE usage_logs`)
+	for _, ids := range []string{`SELECT usage_log_id FROM pending_settlements`, `SELECT id FROM usage_logs WHERE billing_status IN ('pending', 'failed')`} {
+		rows, err := db.SQL.QueryContext(ctx, `EXPLAIN SELECT id FROM usage_logs WHERE id = ANY (ARRAY(`+ids+`))
+			AND billing_status = ANY ('{reserved}') AND billing_detail::text LIKE '%|||%'`)
+		require.NoError(t, err)
+		var plan []string
+		for rows.Next() {
+			var line string
+			require.NoError(t, rows.Scan(&line))
+			plan = append(plan, line)
+		}
+		require.NoError(t, rows.Err())
+		require.NotContains(t, strings.Join(plan, "\n"), "Seq Scan on usage_logs", ids)
+		require.Contains(t, strings.Join(plan, "\n"), "Index", ids)
+	}
 }
 
 func mustCompile(t *testing.T, src string) *expr.Program {
