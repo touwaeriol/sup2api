@@ -886,9 +886,10 @@ var schedulingCases = []struct {
 }
 
 // Judging a candidate against its binding allocates nothing, with or
-// without rules, whether it ends up serving or left out (design §3.5): an
-// account that is left out costs no allocation at all, and one that serves
-// costs what the checks after the binding cost an unbound account.
+// without rules, whether it ends up serving or left out (design §3.5). Nor
+// does the rest of ineligibleReason once its route has a usage verdict for
+// the body (the first round of AllocsPerRun leaves one): a candidate costs
+// no allocation at all.
 func TestIneligibleReasonBindingDoesNotAllocate(t *testing.T) {
 	const n = 500
 	// The least of a few rounds: what other goroutines of the test binary
@@ -910,9 +911,6 @@ func TestIneligibleReasonBindingDoesNotAllocate(t *testing.T) {
 	eligible := func(c *call) func(*core.AccountRef) bool {
 		return func(ref *core.AccountRef) bool { _, _, ok := c.ineligibleReason(ref); return ok }
 	}
-	c, unbound := schedulingCandidates(t, n, false, noRules)
-	_, unboundAllocs := measure(unbound, eligible(c))
-
 	for _, tc := range schedulingCases {
 		c, refs := schedulingCandidates(t, n, tc.converted, tc.rules)
 		want := 0
@@ -927,27 +925,22 @@ func TestIneligibleReasonBindingDoesNotAllocate(t *testing.T) {
 			t.Errorf("%s: the binding serves %d of %d (want %d) in %.1f allocations", tc.name, served, n, want, allocs)
 		}
 		served, allocs = measure(refs, eligible(c))
-		switch {
-		case served != want:
-			t.Errorf("%s: %d of %d eligible, want %d", tc.name, served, n, want)
-		case !tc.served && allocs != 0:
-			t.Errorf("%s: %.1f allocations for accounts that are left out", tc.name, allocs)
-		case tc.served && !tc.converted && allocs != unboundAllocs:
-			t.Errorf("%s: %.1f allocations, %.1f without a binding", tc.name, allocs, unboundAllocs)
+		if served != want || allocs != 0 {
+			t.Errorf("%s: %d of %d eligible (want %d) in %.1f allocations", tc.name, served, n, want, allocs)
 		}
 	}
 }
 
 // BenchmarkIneligibleReason judges 500 candidates per iteration (design
 // §3.5): go test -run '^$' -bench IneligibleReason -benchmem ./internal/gateway/
-// The allocations of the cases that serve are those of the usage checks
-// after the binding, the same with and without one.
+// Each iteration is a new request: the usage checks run once per route.
 func BenchmarkIneligibleReason(b *testing.B) {
 	for _, bc := range schedulingCases {
 		b.Run(bc.name, func(b *testing.B) {
 			c, refs := schedulingCandidates(b, 500, bc.converted, bc.rules)
 			b.ReportAllocs()
 			for b.Loop() {
+				c.routeUsage = nil
 				for i := range refs {
 					_, _, _ = c.ineligibleReason(&refs[i])
 				}

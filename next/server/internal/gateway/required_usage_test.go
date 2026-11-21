@@ -36,13 +36,13 @@ func TestRequiredPrimaryUsageGateDoesNotAffectPlainRequests(t *testing.T) {
 func TestRequiredPrimaryUsageReadsEndpointDeclarations(t *testing.T) {
 	rule := manifest.AdditionalUsageRule{Name: "extra_operation", UsePrimaryModel: true, RequiredBy: []string{"operation.options"}}
 	c := &call{pf: manifest.Platform{}, ep: manifest.Endpoint{Usage: &manifest.UsageRules{Additional: []manifest.AdditionalUsageRule{rule}}}, body: []byte(`{"operation":{"options":{}}}`)}
-	if c.routeHasRequiredPrimaryUsage(&typeRoute{}) {
+	if c.routeHasRequiredPrimaryUsage(&typeRoute{}, c.body) {
 		t.Fatal("endpoint requirement ignored")
 	}
-	if c.routeHasRequiredPrimaryUsage(&typeRoute{usage: manifest.UsageRules{Additional: []manifest.AdditionalUsageRule{{Name: rule.Name}}}}) {
+	if c.routeHasRequiredPrimaryUsage(&typeRoute{usage: manifest.UsageRules{Additional: []manifest.AdditionalUsageRule{{Name: rule.Name}}}}, c.body) {
 		t.Fatal("untrusted response-model source accepted")
 	}
-	if !c.routeHasRequiredPrimaryUsage(&typeRoute{usage: manifest.UsageRules{Additional: []manifest.AdditionalUsageRule{{Name: rule.Name, UsePrimaryModel: true}}}}) {
+	if !c.routeHasRequiredPrimaryUsage(&typeRoute{usage: manifest.UsageRules{Additional: []manifest.AdditionalUsageRule{{Name: rule.Name, UsePrimaryModel: true}}}}, c.body) {
 		t.Fatal("explicit primary contract rejected")
 	}
 }

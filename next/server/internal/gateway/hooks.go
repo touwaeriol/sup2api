@@ -662,4 +662,5 @@ func (c *call) setBody(b []byte) {
 	// The reference scans belong to the old bytes (body_state.go).
 	c.bodyVersion++
 	c.doc, c.docValid = gjson.Result{}, false
+	c.routeUsage = nil
 }

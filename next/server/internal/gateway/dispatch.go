@@ -650,14 +650,33 @@ func (c *call) forceStream(rt *typeRoute, body []byte) ([]byte, error) {
 // the client's (ineligibleReason): the attempt moves to another account.
 // It reads the body the core hands to the plugin, never the plugin's.
 func (c *call) meterable(rt *typeRoute, body []byte) *gwError {
-	switch {
-	case c.ep.Billing == "free":
-	case !c.routeHasRequiredPrimaryUsageFor(rt, body):
+	switch c.usageGap(rt, body) {
+	case usageGapAdditional:
 		return invalidModelReference("account usage rules cannot meter the requested operation")
-	case !c.routeHasRequiredAttempts(rt, body):
+	case usageGapAttempts:
 		return invalidModelReference("account usage rules cannot meter the requested attempts")
 	}
 	return nil
+}
+
+// The usage a body can require that a route's usage rules do not record.
+const (
+	usageGapAdditional = "additional" // an operation metered on its own
+	usageGapAttempts   = "attempts"   // attempts such as fallbacks
+)
+
+// usageGap names the usage body requires that rt does not record, "" when
+// it records all of it or the endpoint is free. It reads the route and the
+// body, never the account.
+func (c *call) usageGap(rt *typeRoute, body []byte) string {
+	switch {
+	case c.ep.Billing == "free":
+	case !c.routeHasRequiredPrimaryUsage(rt, body):
+		return usageGapAdditional
+	case !c.routeHasRequiredAttempts(rt, body):
+		return usageGapAttempts
+	}
+	return ""
 }
 
 // layerHeaders writes the headers of a plugin's relay onto h in the layers

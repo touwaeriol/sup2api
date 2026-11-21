@@ -105,11 +105,7 @@ func (c *call) prepareReferencedPrices(ctx context.Context) *gwError {
 	return nil
 }
 
-func (c *call) routeHasRequiredPrimaryUsage(rt *typeRoute) bool {
-	return c.routeHasRequiredPrimaryUsageFor(rt, c.body)
-}
-
-func (c *call) routeHasRequiredPrimaryUsageFor(rt *typeRoute, body []byte) bool {
+func (c *call) routeHasRequiredPrimaryUsage(rt *typeRoute, body []byte) bool {
 	if rt == nil {
 		return false
 	}

@@ -7924,7 +7924,7 @@ ALTER TABLE accounts ADD COLUMN IF NOT EXISTS model_protocols jsonb NOT NULL DEF
 5. **内存上限**：单账号最多 50 条 × 500 个模型；账号在多个分组时每个分组快照各持一份（与 `models`、`model_mapping` 相同）。
 6. 改 `readGroupSnap`、`ineligibleReason`、`Serves` 时重跑基准：`go test -run '^$' -bench ProtocolRulesServes -benchmem ./internal/core/`、`go test -run '^$' -bench IneligibleReason -benchmem ./internal/gateway/`（各 500 个候选一轮）。
 
-实现时的读数（2026-11-17，开发机，只作量级参考）：`Serves` 500 个候选一轮，无配置 3.3–5.4 µs，50 条规则 17–35 µs，都是 0 allocs/op。`ineligibleReason` 500 个候选一轮：被协议绑定过滤的账号 0 allocs/op；能服务的账号无配置与 50 条规则都是 1500 allocs/op（每候选 3 次、约 1 KB，来自原有的用量检查 `routeHasRequiredPrimaryUsageFor`、`declaredAttemptRules`，不是协议判断，本次没有动）。分组快照读取（10 个无配置账号）改前 424 allocs/op、改后 399：为了多读两列不增加分配，`readGroupSnap` 把逐行的扫描临时变量改成整次读取共用一份。这组快照读数来自按旧 `HotGroupSnapshot` 基准临时重写的文件，没有提交（该基准已在 `fcc847b62` 删除，`store/gormtest/BASELINE.md` 现在没有这条路径的基线）。
+实现时的读数（2026-11-17，开发机，只作量级参考）：`Serves` 500 个候选一轮，无配置 3.3–5.4 µs，50 条规则 17–35 µs，都是 0 allocs/op。`ineligibleReason` 500 个候选一轮：被协议绑定过滤的账号 0 allocs/op；能服务的账号无配置与 50 条规则都是 1500 allocs/op（每候选 3 次、约 1 KB，来自原有的用量检查 `routeHasRequiredPrimaryUsageFor`、`declaredAttemptRules`，不是协议判断，本次没有动）。2026-11-21 起用量检查只看账号类型和请求体，每种账号类型每个请求体只算一次（`missingRouteUsage`，钩子改写请求体后重算）：500 个候选一轮是 5 allocs/op，1 MB 的请求体约 2 ms，与候选数无关（以前 500 个候选约 0.84 s）。分组快照读取（10 个无配置账号）改前 424 allocs/op、改后 399：为了多读两列不增加分配，`readGroupSnap` 把逐行的扫描临时变量改成整次读取共用一份。这组快照读数来自按旧 `HotGroupSnapshot` 基准临时重写的文件，没有提交（该基准已在 `fcc847b62` 删除，`store/gormtest/BASELINE.md` 现在没有这条路径的基线）。
 
 ### 110.9 控制台
 

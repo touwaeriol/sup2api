@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -153,5 +154,37 @@ func TestFallbackUnknownModelBlocksBillingKeepsAPI200(t *testing.T) {
 	rec := e.record()
 	if res.status != 200 || !rec.Success || !rec.Billable || !strings.Contains(rec.BillingError, "admitted") || len(rec.Replacement) != 0 {
 		t.Fatalf("unknown model mispriced: %d %+v", res.status, rec)
+	}
+}
+
+// The usage a request requires is judged once per route for a body, however
+// many candidates the route has, and again once a hook replaces the body.
+func TestMissingRouteUsagePerRouteAndBody(t *testing.T) {
+	c, refs := schedulingCandidates(t, 3, false, noRules)
+	// An openai account, converted to, whose route records the fallback
+	// attempts the claude route no longer does.
+	refs = append(refs, core.AccountRef{ID: 4, PluginKey: "t", Type: "openai", ProtocolRules: fiftyRules(testModel, messagesProtocol)()})
+	claude, openai := c.route(&refs[0]), c.route(&refs[3])
+	openai.usage.Attempts, claude.usage.Attempts = claude.usage.Attempts, nil
+	unserved := func() (ids []int64) {
+		for i := range refs {
+			if reason, detail, ok := c.ineligibleReason(&refs[i]); !ok {
+				if want := core.SchedUsageUnsupported; reason != want || detail != usageGapAttempts {
+					t.Fatalf("account %d left out for %s:%s, want %s:%s", refs[i].ID, reason, detail, want, usageGapAttempts)
+				}
+				ids = append(ids, refs[i].ID)
+			}
+		}
+		return ids
+	}
+	if got := unserved(); len(got) != 0 || len(c.routeUsage) != 2 {
+		t.Fatalf("without fallbacks: unserved %v, %d verdicts (want none, two)", got, len(c.routeUsage))
+	}
+	b := body(testModel, false)
+	b["fallbacks"] = []any{map[string]any{"model": advisorModel}}
+	raw, _ := json.Marshal(b)
+	c.setBody(raw)
+	if got := unserved(); !slices.Equal(got, []int64{1, 2, 3}) || len(c.routeUsage) != 2 {
+		t.Fatalf("with fallbacks: unserved %v, %d verdicts (want the claude accounts, two verdicts)", got, len(c.routeUsage))
 	}
 }

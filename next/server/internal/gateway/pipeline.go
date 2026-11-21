@@ -77,6 +77,8 @@ type call struct {
 	// scheduling: account types able to serve the endpoint protocol
 	routes    map[core.AccountTypeKey]*typeRoute
 	routeKeys []core.AccountTypeKey
+	// routeUsage caches missingRouteUsage per route for the current body.
+	routeUsage map[*typeRoute]string
 	// conversion: the converting routes' refusals and the served route
 	// (convert_policy.go)
 	conversion conversionState
