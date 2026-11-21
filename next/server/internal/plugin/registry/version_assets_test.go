@@ -38,20 +38,53 @@ func TestVersionAssetsReadApprovedPackageWithoutLocalProcess(t *testing.T) {
 }
 
 // A plugin that is installed but does not run serves its icon and nothing
-// else: the plugins list shows it with its logo.
+// else: the plugins list shows it with its logo. The icon is read from the
+// package once; every read still asks whether the version may be served.
 func TestVersionAssetsServeOnlyTheIconWhileNotRunning(t *testing.T) {
 	db := testutil.DB(t)
 	ctx := context.Background()
 	m := registrytest.Manifest("idle", "1.0.0")
-	raw := registrytest.Package(t, m, []byte("bin"), nil)
+	m.Icon = "assets/logo.svg"
+	raw := registrytest.Package(t, m, []byte("bin"), map[string][]byte{m.Icon: []byte("<svg/>"), "assets/other.svg": []byte("<svg/>")})
 	registrytest.Install(t, db, m, raw, nil, "disabled")
-	packages := registry.NewPackages(db, t.TempDir(), registry.WithSource(registrytest.Source()))
+	loads := 0
+	packages := registry.NewPackages(db, t.TempDir(), registry.WithSource(registrytest.Source()),
+		registry.WithVerifier(func(context.Context, string, string, []byte) error { loads++; return nil }))
 	defer packages.Close()
 	vh := "1.0.0-" + pluginpkg.SHA256Hex(raw)[:8]
-	if _, data, ct, err := packages.ReadVersionAsset(ctx, "idle", vh, m.Icon); err != nil || len(data) == 0 || ct != "image/svg+xml" {
-		t.Fatalf("icon of a disabled plugin: %q %s %v", data, ct, err)
+	icon := func() error {
+		_, data, ct, err := packages.ReadVersionAsset(ctx, "idle", vh, m.Icon)
+		if err == nil && (string(data) != "<svg/>" || ct != "image/svg+xml") {
+			t.Fatalf("icon = %q %s", data, ct)
+		}
+		return err
 	}
-	if _, _, _, err := packages.ReadVersionAsset(ctx, "idle", vh, "ui/index.html"); !errors.Is(err, registry.ErrAssetNotFound) {
-		t.Fatalf("a disabled plugin served its UI: %v", err)
+	if err := icon(); err != nil {
+		t.Fatalf("icon of a disabled plugin: %v", err)
+	}
+	for _, name := range []string{"ui/index.html", "i18n/en.json", "assets/other.svg"} {
+		if _, _, _, err := packages.ReadVersionAsset(ctx, "idle", vh, name); !errors.Is(err, registry.ErrAssetNotFound) {
+			t.Fatalf("a disabled plugin served %s: %v", name, err)
+		}
+	}
+	// The second read does not load the package again.
+	first := loads
+	if err := icon(); err != nil || first == 0 || loads != first {
+		t.Fatalf("icon read again: %v, package loads %d then %d", err, first, loads)
+	}
+	for _, refuse := range []struct{ why, set, reset string }{
+		{"unapproved", `UPDATE plugin_versions SET consent_status='awaiting' WHERE plugin_key='idle'`, `UPDATE plugin_versions SET consent_status='approved' WHERE plugin_key='idle'`},
+		{"revoked", `UPDATE plugin_versions SET signature_status='revoked' WHERE plugin_key='idle'`, `UPDATE plugin_versions SET signature_status='unsigned' WHERE plugin_key='idle'`},
+		{"uninstalling", `INSERT INTO plugin_uninstalls (plugin_key, epoch) VALUES ('idle', 1)`, `DELETE FROM plugin_uninstalls WHERE plugin_key='idle'`},
+	} {
+		if _, err := db.SQL.ExecContext(ctx, refuse.set); err != nil {
+			t.Fatal(refuse.why, err)
+		}
+		if err := icon(); !errors.Is(err, registry.ErrAssetNotFound) {
+			t.Fatalf("%s plugin served its icon: %v", refuse.why, err)
+		}
+		if _, err := db.SQL.ExecContext(ctx, refuse.reset); err != nil {
+			t.Fatal(refuse.why, err)
+		}
 	}
 }

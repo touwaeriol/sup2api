@@ -184,6 +184,11 @@ type Packages struct {
 	cache map[string]*Package // key@version
 	// fetch serializes downloads of the same package.
 	fetch map[string]*sync.Mutex
+
+	// icons holds the plugin icons ReadVersionAsset has read, by package
+	// sha256: a few kilobytes for each approved version asked for.
+	iconMu sync.Mutex
+	icons  map[string]versionAsset
 }
 
 // PackageVerifier re-checks a package signature on this node before the
@@ -224,7 +229,7 @@ func TrustVerifier(trust *pluginpkg.TrustStore, q *gorm.DB, lim pluginpkg.Limits
 }
 
 func NewPackages(db *store.DB, dataDir string, opts ...PackagesOption) *Packages {
-	s := &Packages{db: db, dataDir: dataDir, cache: map[string]*Package{}, fetch: map[string]*sync.Mutex{}}
+	s := &Packages{db: db, dataDir: dataDir, cache: map[string]*Package{}, fetch: map[string]*sync.Mutex{}, icons: map[string]versionAsset{}}
 	for _, o := range opts {
 		o(s)
 	}

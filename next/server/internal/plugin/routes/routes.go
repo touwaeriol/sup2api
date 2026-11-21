@@ -83,8 +83,9 @@ func (h *Handler) RegisterRoutes(r *httpapi.Router) {
 
 // RegisterAssets mounts GET/HEAD /plugin-ui/:key/:vh/*path on the engine.
 func (h *Handler) RegisterAssets(e gin.IRoutes) {
-	e.GET("/plugin-ui/:key/:vh/*path", h.serveAsset)
-	e.HEAD("/plugin-ui/:key/:vh/*path", h.serveAsset)
+	route := core.PluginAssetBase(":key", ":vh") + "/*path"
+	e.GET(route, h.serveAsset)
+	e.HEAD(route, h.serveAsset)
 }
 
 var (

@@ -1766,7 +1766,7 @@ message RankedAccount {
 
 `webui/webui.go` 引用同一份名字列表，但**保留自己的前缀匹配语义**并在注释里写明原因：它只决定浏览器路径要不要回落到 `index.html`，前缀匹配才能既拦住 `/api/...` 又不误伤 `/apifoo`。
 
-**尚未收敛**：`httpapi/router.go` 的 `/api/v1`、`plugin/routes/routes.go` 与 `registry/package.go` 的 `/plugin-ui/` 仍是字面量。
+**尚未收敛**：`httpapi/router.go` 的 `/api/v1` 仍是字面量。`/plugin-ui/<key>/<版本哈希>` 自 2026-11-21 起只有 `core.PluginAssetBase` 一处定义，路由注册、registry 和插件列表接口都用它。
 
 ### 26.3 收敛暴露出来的历史分叉（存档）
 

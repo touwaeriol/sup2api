@@ -47,8 +47,8 @@ type PluginSummary struct {
 	Builtin     bool `json:"builtin"`
 	HasSettings bool `json:"has_settings"` // the current version declares native ui.settings (not iframe, not an old package's schema)
 	// Icon is the manifest icon of the current version: "text:<label>", or a
-	// package path below AssetBase, which the core serves for as long as the
-	// plugin is installed (registry.ReadVersionAsset).
+	// package path below AssetBase, which the core serves whether or not the
+	// plugin runs, once the version is approved (registry.ReadVersionAsset).
 	Icon      string `json:"icon"`
 	AssetBase string `json:"asset_base"`
 	// ResourceConflicts are the exclusive resources the current generation

@@ -665,8 +665,8 @@ func TestResourceConflictsInSummary(t *testing.T) {
 }
 
 // The summary carries the manifest icon of the current version and the asset
-// base it resolves against, whether or not the plugin runs: the plugins list
-// draws the logo from them.
+// base it resolves against, here of a plugin that has never run: the plugins
+// list draws the logo from them.
 func TestSummaryIcon(t *testing.T) {
 	h, root := newHarness(t)
 	guard := pkgtest.Guard("guard", "0.1.0", "sub2api")
