@@ -10,17 +10,13 @@ import {
   SCard,
   SChoiceCards,
   SCode,
-  SDescItem,
-  SDescriptions,
   SDisclosure,
   SDrawer,
   SField,
-  SGrid,
   SHint,
   SInput,
   SLink,
   SPageHeader,
-  SSettingRow,
   SSpinner,
   SSwitch,
   confirm,
@@ -38,7 +34,7 @@ import PriceExprEditor from './PriceExprEditor.vue'
 import PriceTrialPanel from './PriceTrialPanel.vue'
 import TokenPriceEditor from './TokenPriceEditor.vue'
 import { issueText, type Issue } from './issues'
-import PriceValidationCard from './PriceValidationCard.vue'
+import PriceCheckBar from './PriceCheckBar.vue'
 import { usePriceValidation, type PricePayload } from './usePriceValidation'
 import {
   checkPerRequest,
@@ -76,18 +72,12 @@ const errors = ref<Record<string, string>>({})
 const historyOpen = ref(false)
 const exprEditor = ref<InstanceType<typeof PriceExprEditor>>()
 
-// The expression guide sits in the side column from xl (where the column
-// exists), so the editor stays usable beside it; narrower, it is a drawer.
+// The expression guide and the trial run open in drawers.
 const guideOpen = ref(false)
-const wide = ref(false)
-if (typeof window !== 'undefined' && window.matchMedia) {
-  const mq = window.matchMedia('(min-width: 1280px)')
-  wide.value = mq.matches
-  mq.addEventListener?.('change', (e) => (wide.value = e.matches))
-}
+const trialOpen = ref(false)
 function guideReplace(src: string) {
   sourceText.value = src
-  if (!wide.value) guideOpen.value = false
+  guideOpen.value = false
 }
 
 const readonly = computed(() => !auth.has('price:manage'))
@@ -254,7 +244,7 @@ const title = computed(() => {
 </script>
 
 <template>
-  <div class="max-w-screen-2xl space-y-5">
+  <div class="max-w-5xl space-y-5">
     <SPageHeader :title="title">
       <template #title-extra>
         <SBadge v-if="price" :tone="isSynced ? 'info' : 'primary'" data-testid="price-edit-source">
@@ -276,114 +266,97 @@ const title = computed(() => {
     <SAlert v-if="syncedNotice && !loading" tone="info" dense data-testid="price-synced-notice">{{ syncedNotice }}</SAlert>
 
     <SSpinner v-if="loading" size="lg" block />
-    <div v-else class="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_400px]">
-      <div class="min-w-0 space-y-5">
-        <!-- basic -->
-        <SCard :title="t('prices.basic')">
-          <SAlert tone="primary" dense class="mb-4">{{ t('prices.scopeNoteEdit') }}</SAlert>
-          <SGrid :cols="1" :md-cols="2">
-            <SField :label="t('prices.model')" :hint="t('prices.modelHint')" :error="errors.model" required>
-              <SInput v-model.trim="form.model" mono placeholder="claude-sonnet-4-5" :disabled="readonly" />
-            </SField>
-            <SField :label="t('common.note')" :error="errors.note">
-              <SInput v-model="form.note" :disabled="readonly" />
-            </SField>
-          </SGrid>
-          <SSettingRow :label="t('common.status')" dense flush class="mt-2" for="price-enabled">
-            <SSwitch
-              id="price-enabled"
-              v-model="form.enabled"
-              :disabled="readonly"
-              :label="form.enabled ? t('common.enabled') : t('common.disabled')"
-            />
-          </SSettingRow>
-          <SDescriptions v-if="price" class="mt-4 border-t border-line pt-4" dense>
-            <SDescItem :label="t('prices.exprHash')"
-              ><div class="flex flex-wrap items-center gap-2">
-                <SCode inline :text="price.expr_hash || '—'" class="break-all" />
-                <SHint inline size="xs">v{{ price.expr_version || 1 }}</SHint>
-                <SLink v-if="price.expr_hash" as="button" class="text-xs" @click="historyOpen = true">{{ t('prices.viewHistory') }}</SLink>
-              </div></SDescItem
-            >
-            <SDescItem v-if="price.updated_at" :label="t('common.updatedAt')">{{ formatDateTime(price.updated_at) }}</SDescItem>
-          </SDescriptions>
-        </SCard>
-
-        <!-- mode + editor -->
-        <SCard :title="t('prices.billingMode')">
-          <SChoiceCards
-            :model-value="mode"
-            :options="modeOptions"
-            :cols="3"
-            :disabled="readonly"
-            :aria-label="t('prices.billingMode')"
-            class="mb-5"
-            data-testid="price-mode"
-            @update:model-value="mode = $event as PriceMode"
-          />
-
-          <PerRequestEditor
-            v-if="mode === 'per_request'"
-            v-model="perRequest"
-            :disabled="readonly"
-            :error="errors['config.price']"
-            @to-token="perRequestToToken"
-          />
-          <TokenPriceEditor v-else-if="mode === 'per_token'" v-model="token" :disabled="readonly" />
-          <PriceExprEditor
-            v-else
-            ref="exprEditor"
-            v-model="sourceText"
-            :readonly="readonly"
-            :error="errors.expression"
-            :validation="validation"
-            :validating="validating"
-            @guide="guideOpen = !guideOpen"
-          />
-
-          <div v-if="mode !== 'expression'" class="mt-5 border-t border-line pt-3">
-            <SDisclosure :label="t('prices.generatedShow')" :open-label="t('prices.generatedHide')">
-              <SCode :text="payload.expression" class="mt-2" data-testid="price-generated" />
-              <template v-if="serverExpr">
-                <SHint size="xs" class="mb-1 mt-2">{{ t('prices.serverGenerated') }}</SHint>
-                <SCode :text="serverExpr" />
-              </template>
-              <SLink
-                v-if="!readonly && !localIssues.length"
-                as="button"
-                class="mt-2 text-xs"
-                data-testid="price-to-expression"
-                @click="editAsExpression"
-                >{{ t('prices.toExpression') }}</SLink
-              >
-            </SDisclosure>
-            <SHint v-if="errors.expression" tone="danger" size="xs" class="mt-1">{{ errors.expression }}</SHint>
+    <template v-else>
+      <!-- basic: one row -->
+      <SCard>
+        <div class="grid gap-x-4 gap-y-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] md:items-end">
+          <SField :label="t('prices.model')" :error="errors.model" required>
+            <SInput v-model.trim="form.model" mono placeholder="claude-sonnet-4-5" :disabled="readonly" />
+          </SField>
+          <SField :label="t('common.note')" :error="errors.note">
+            <SInput v-model="form.note" :disabled="readonly" />
+          </SField>
+          <div class="flex h-9 items-center">
+            <SSwitch v-model="form.enabled" :disabled="readonly" :label="form.enabled ? t('common.enabled') : t('common.disabled')" />
           </div>
-        </SCard>
-      </div>
+        </div>
+        <p class="mt-2 text-xs text-fg-muted">
+          完整模型 ID，不支持通配符。这是全局价，分组和用户组可以在它之上单独定价。
+          <template v-if="price">
+            <span class="mx-1 text-fg-subtle">·</span>表达式 <span class="font-mono">{{ (price.expr_hash || '').slice(0, 12) }}</span>
+            <SLink v-if="price.expr_hash" as="button" class="ml-1 text-xs" @click="historyOpen = true">{{ t('prices.viewHistory') }}</SLink>
+            <template v-if="price.updated_at"><span class="mx-1 text-fg-subtle">·</span>更新于 {{ formatDateTime(price.updated_at) }}</template>
+          </template>
+        </p>
+      </SCard>
 
-      <!-- side: validation and trial, kept in view under the sticky top bar on wide screens -->
-      <aside class="min-w-0 space-y-5 xl:sticky xl:top-16 xl:max-h-[calc(100dvh-5rem)] xl:overflow-y-auto">
-        <PriceValidationCard
+      <!-- mode + editor -->
+      <SCard>
+        <SChoiceCards
+          :model-value="mode"
+          :options="modeOptions"
+          :cols="3"
+          :disabled="readonly"
+          :aria-label="t('prices.billingMode')"
+          class="mb-5"
+          data-testid="price-mode"
+          @update:model-value="mode = $event as PriceMode"
+        />
+
+        <PerRequestEditor
+          v-if="mode === 'per_request'"
+          v-model="perRequest"
+          :disabled="readonly"
+          :error="errors['config.price']"
+          @to-token="perRequestToToken"
+        />
+        <TokenPriceEditor v-else-if="mode === 'per_token'" v-model="token" :disabled="readonly" />
+        <PriceExprEditor
+          v-else
+          ref="exprEditor"
+          v-model="sourceText"
+          :readonly="readonly"
+          :error="errors.expression"
+          :validation="validation"
+          @guide="guideOpen = true"
+        />
+
+        <PriceCheckBar
           :local-issues="localIssues"
           :validation="validation"
           :error="validationError"
           :validating="validating"
           :mode="mode"
           @locate="(l, c) => exprEditor?.focusAt(l, c)"
+          @trial="trialOpen = true"
         />
-        <SCard v-if="guideOpen && wide && mode === 'expression'" title="表达式使用说明" data-testid="expr-guide-docked">
-          <template #actions><SButton size="sm" variant="ghost" icon="x" aria-label="关闭使用说明" @click="guideOpen = false" /></template>
-          <ExprGuide @insert="(s, c) => exprEditor?.insert(s, c)" @replace="guideReplace" />
-        </SCard>
-        <SCard v-else-if="mode !== 'per_request'" :title="t('prices.trial.title')">
-          <PriceTrialPanel :source="previewSource" />
-        </SCard>
-      </aside>
-    </div>
 
-    <SDrawer :open="guideOpen && !wide && mode === 'expression'" title="表达式使用说明" width="lg" @update:open="guideOpen = $event">
+        <div v-if="mode !== 'expression'" class="mt-3">
+          <SDisclosure :label="t('prices.generatedShow')" :open-label="t('prices.generatedHide')">
+            <SCode :text="payload.expression" class="mt-2" data-testid="price-generated" />
+            <template v-if="serverExpr">
+              <SHint size="xs" class="mb-1 mt-2">{{ t('prices.serverGenerated') }}</SHint>
+              <SCode :text="serverExpr" />
+            </template>
+            <SLink
+              v-if="!readonly && !localIssues.length"
+              as="button"
+              class="mt-2 text-xs"
+              data-testid="price-to-expression"
+              @click="editAsExpression"
+              >{{ t('prices.toExpression') }}</SLink
+            >
+          </SDisclosure>
+          <SHint v-if="errors.expression" tone="danger" size="xs" class="mt-1">{{ errors.expression }}</SHint>
+        </div>
+      </SCard>
+    </template>
+
+    <SDrawer v-model:open="guideOpen" title="表达式使用说明" width="lg">
       <ExprGuide @insert="(s, c) => exprEditor?.insert(s, c)" @replace="guideReplace" />
+    </SDrawer>
+    <SDrawer v-model:open="trialOpen" :title="t('prices.trial.title')" width="md" data-testid="price-trial">
+      <PriceTrialPanel :source="previewSource" />
     </SDrawer>
     <ExprHistoryModal v-model:open="historyOpen" :hash="price?.expr_hash" />
   </div>

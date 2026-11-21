@@ -12,7 +12,7 @@ import type { PriceValidation } from './usePriceValidation'
 // PriceEditView when the editor asks for it.
 // PROTOTYPE: new texts are Chinese literals until adopted.
 const model = defineModel<string>({ required: true })
-const props = defineProps<{ readonly?: boolean; error?: string; validation?: PriceValidation | null; validating?: boolean }>()
+const props = defineProps<{ readonly?: boolean; error?: string; validation?: PriceValidation | null }>()
 const { t } = useI18n()
 
 const code = ref<InstanceType<typeof ExprCodeEditor>>()
@@ -62,18 +62,6 @@ const located = computed(() => {
   }
   return null
 })
-const status = computed(() => {
-  const v = props.validation
-  if (!model.value.trim()) return { tone: 'muted', text: '还没有内容。可以从“示例”开始，或打开“使用说明”。' }
-  if (props.validating && !v) return { tone: 'muted', text: '检查中…' }
-  if (!v) return null
-  if (v.errors.length) {
-    const l = located.value
-    return { tone: 'danger', text: l ? `第 ${l.line} 行第 ${l.column} 列有错误` : '有错误，见右侧“检查”' }
-  }
-  return { tone: 'success', text: '语法正确，试跑通过' }
-})
-
 function format() {
   model.value = formatExpr(model.value)
 }
@@ -103,22 +91,7 @@ defineExpose({ focusAt, insert })
 
     <ExprCodeEditor ref="code" v-model="model" :rows="12" :readonly="readonly" :error-line="located?.line" :error-column="located?.column" :label="t('prices.expression')" />
 
-    <div class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-      <span
-        v-if="status"
-        class="inline-flex items-center gap-1"
-        :class="{
-          'text-success-700 dark:text-success-400': status.tone === 'success',
-          'text-danger-600 dark:text-danger-400': status.tone === 'danger',
-          'text-fg-muted': status.tone === 'muted'
-        }"
-        data-testid="expr-status"
-      >
-        <SIcon v-if="status.tone !== 'muted'" :name="status.tone === 'success' ? 'check' : 'x'" class="h-3.5 w-3.5" />{{ status.text }}
-        <button v-if="located" type="button" class="ml-1 underline underline-offset-2" @click="focusAt(located.line, located.column)">定位</button>
-      </span>
-      <SHint inline size="xs" class="ml-auto">单价按美元 / 百万 token 写：<code class="font-mono">p*3</code> 即输入每百万 3 美元。</SHint>
-    </div>
+    <SHint size="xs" class="mt-1.5">单价按美元 / 百万 token 写：<code class="font-mono">p*3</code> 即输入每百万 3 美元。</SHint>
     <SHint v-if="error" tone="danger" size="xs" class="mt-1">{{ error }}</SHint>
 
     <div v-if="!readonly" class="mt-3 flex flex-wrap items-center gap-1.5" data-testid="expr-quick">
