@@ -243,7 +243,7 @@ func (s *Service) createPrice(c *gin.Context) {
 		fields = append(fields, modelField("invalid"))
 	}
 	if mode == "" {
-		fields = append(fields, core.FieldError{Field: "mode", Code: "required", Message: "per_request, per_token or expression"})
+		fields = append(fields, core.FieldError{Field: "mode", Code: "required", Message: "visual or expression"})
 	}
 	if len(fields) > 0 {
 		httpapi.Fail(c, core.InvalidFields(fields...))

@@ -4,17 +4,18 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math"
 	"regexp"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 )
 
-// Billing modes (model_prices.mode).
+// Billing modes (model_prices.mode, CONTRACTS §131.1): a visual price is
+// generated from its config, an expression price is written by hand.
 const (
-	ModePerRequest = "per_request"
-	ModePerToken   = "per_token"
+	ModeVisual     = "visual"
 	ModeExpression = "expression"
 )
 
@@ -43,16 +44,9 @@ func (n *Num) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// PerRequestConfig is mode=per_request: one price per request and the
-// request surcharges of a per_token price (CONTRACTS §131).
-type PerRequestConfig struct {
-	Price *Num         `json:"price"`
-	Rules []RuleConfig `json:"rules,omitempty"`
-}
-
-// TokenConfig is mode=per_token: prompt-length tiers and request surcharges
-// (CONTRACTS §131).
-type TokenConfig struct {
+// VisualConfig is mode=visual: conditional tiers and request surcharges
+// (CONTRACTS §131.2).
+type VisualConfig struct {
 	Tiers []TierConfig `json:"tiers"`
 	Rules []RuleConfig `json:"rules"`
 }
@@ -63,15 +57,73 @@ const (
 	UnitRequest = "request"
 )
 
-// TierConfig is one tier: it applies up to MaxLen prompt tokens (len), the
-// tier without MaxLen to the rest. A unit=token tier has token prices, a
-// unit=request tier only Price (USD per request).
+// TierConfig is one tier. Tiers are tried in order and the first whose When
+// holds applies; the last tier has no When and takes the rest. A unit=token
+// tier has token prices, a unit=request tier only Price (USD per request).
 type TierConfig struct {
-	Name   string `json:"name"`
-	MaxLen *Num   `json:"max_len"`
-	Unit   string `json:"unit,omitempty"` // token (default) | request
+	Name string    `json:"name"`
+	When *TierCond `json:"when,omitempty"`
+	Unit string    `json:"unit,omitempty"` // token (default) | request
 	TokenPrices
 	Price *Num `json:"price,omitempty"`
+}
+
+// Limits of a visual config.
+const (
+	MaxTiers      = 20
+	MaxCondDepth  = 5  // a lone comparison is 1 deep
+	MaxCondLeaves = 20 // comparisons in the condition of one tier
+)
+
+// TierCond is one node of a tier condition: exactly one of a comparison
+// {var, op, value, tz?}, {"and": [...]}, {"or": [...]} or {"not": node}.
+// Decoding never fails on a node: it records the keys written and the first
+// key whose value does not decode, and the generator reports them with the
+// node's field path.
+type TierCond struct {
+	Var   string      `json:"var,omitempty"` // len | p | c | hour | minute | weekday | month | day
+	Op    string      `json:"op,omitempty"`  // < | <= | > | >= | == | !=
+	Value *Num        `json:"value,omitempty"`
+	TZ    string      `json:"tz,omitempty"` // time quantities only; "" is UTC
+	And   []*TierCond `json:"and,omitempty"`
+	Or    []*TierCond `json:"or,omitempty"`
+	Not   *TierCond   `json:"not,omitempty"`
+
+	keys []string // sorted
+	bad  string   // first key whose value did not decode
+}
+
+// UnmarshalJSON records the node; it fails on nothing (see TierCond).
+func (c *TierCond) UnmarshalJSON(b []byte) error {
+	*c = TierCond{}
+	var m map[string]json.RawMessage
+	if json.Unmarshal(b, &m) != nil {
+		return nil // not an object: no keys, refused as an empty node
+	}
+	c.keys = slices.Sorted(maps.Keys(m))
+	for _, k := range c.keys {
+		var err error
+		switch k {
+		case "var":
+			err = json.Unmarshal(m[k], &c.Var)
+		case "op":
+			err = json.Unmarshal(m[k], &c.Op)
+		case "tz":
+			err = json.Unmarshal(m[k], &c.TZ)
+		case "value":
+			err = json.Unmarshal(m[k], &c.Value)
+		case "and":
+			err = json.Unmarshal(m[k], &c.And)
+		case "or":
+			err = json.Unmarshal(m[k], &c.Or)
+		case "not":
+			err = json.Unmarshal(m[k], &c.Not)
+		}
+		if err != nil && c.bad == "" {
+			c.bad = k
+		}
+	}
+	return nil
 }
 
 // PriceKeys are the price fields of a tier, USD per million tokens or, for
@@ -134,24 +186,12 @@ func Generate(mode string, config json.RawMessage) (string, error) {
 		config = json.RawMessage("{}")
 	}
 	switch mode {
-	case ModePerRequest:
-		var c PerRequestConfig
+	case ModeVisual:
+		var c VisualConfig
 		if err := decodeStrict(config, &c); err != nil {
 			return "", err
 		}
-		if c.Price == nil {
-			return "", cfgErr("config.price", "required")
-		}
-		if err := checkNum("config.price", float64(*c.Price)); err != nil {
-			return "", err
-		}
-		return withRules(fmt.Sprintf(`tier("base", flat(%s))`, fmtNum(float64(*c.Price))), c.Rules)
-	case ModePerToken:
-		var c TokenConfig
-		if err := decodeStrict(config, &c); err != nil {
-			return "", err
-		}
-		return generateTokens(c)
+		return generateVisual(c)
 	case ModeExpression:
 		var c map[string]json.RawMessage
 		if err := json.Unmarshal(config, &c); err != nil || len(c) > 0 {
@@ -234,69 +274,190 @@ var (
 	headerNameRe = regexp.MustCompile(`^[A-Za-z0-9!#$%&'*+.^_|~\-]{1,100}$`)
 )
 
-// generateTokens builds the tiers by len and applies the rules (withRules).
-func generateTokens(c TokenConfig) (string, error) {
-	if len(c.Tiers) == 0 {
+// generateVisual builds the tier chain and applies the rules (withRules):
+// `c1 ? T1 : (c2 ? T2 : T3)`, the last two tiers without parentheses.
+func generateVisual(c VisualConfig) (string, error) {
+	n := len(c.Tiers)
+	if n == 0 {
 		return "", cfgErr("config.tiers", "at least one tier is required")
 	}
-	type tb struct {
-		name   string
-		maxLen *float64
-		body   string
+	if n > MaxTiers {
+		return "", cfgErr("config.tiers", "at most %d tiers", MaxTiers)
 	}
-	tiers := make([]tb, 0, len(c.Tiers))
+	calls, conds := make([]string, n), make([]string, n)
 	names := map[string]bool{}
-	rest := 0
 	for i, t := range c.Tiers {
-		field := fmt.Sprintf("config.tiers[%d]", i)
-		if !tierNameRe.MatchString(t.Name) {
-			return "", cfgErr(field+".name", "must match %s", tierNameRe.String())
-		}
-		if names[t.Name] {
-			return "", cfgErr(field+".name", "duplicate tier %q", t.Name)
-		}
-		names[t.Name] = true
-		body, err := tierBody(field, t)
+		call, cond, err := tierExpr(fmt.Sprintf("config.tiers[%d]", i), t, i == n-1, names)
 		if err != nil {
 			return "", err
 		}
-		x := tb{name: t.Name, body: body}
-		if t.MaxLen != nil {
-			m := float64(*t.MaxLen)
-			if err := checkNum(field+".max_len", m); err != nil {
-				return "", err
-			}
-			x.maxLen = &m
-		} else {
-			rest++
-		}
-		tiers = append(tiers, x)
+		calls[i], conds[i] = call, cond
 	}
-	sort.SliceStable(tiers, func(i, j int) bool {
-		a, b := tiers[i].maxLen, tiers[j].maxLen
-		if a == nil || b == nil {
-			return a != nil && b == nil
-		}
-		return *a < *b
-	})
-	if rest != 1 {
-		return "", cfgErr("config.tiers", "exactly one tier must have no max_len (the rest)")
-	}
-	for i := 1; i < len(tiers); i++ {
-		if tiers[i].maxLen != nil && *tiers[i].maxLen == *tiers[i-1].maxLen {
-			return "", cfgErr("config.tiers", "duplicate max_len %s", fmtNum(*tiers[i].maxLen))
-		}
-	}
-	call := func(t tb) string { return fmt.Sprintf("tier(%s, %s)", strconv.Quote(t.name), t.body) }
-	// Built right to left: len <= a ? A : (len <= b ? B : C)
-	base := call(tiers[len(tiers)-1])
-	for i := len(tiers) - 2; i >= 0; i-- {
-		if i < len(tiers)-2 {
+	base := calls[n-1]
+	for i := n - 2; i >= 0; i-- {
+		if i < n-2 {
 			base = "(" + base + ")"
 		}
-		base = fmt.Sprintf("len <= %s ? %s : %s", fmtNum(*tiers[i].maxLen), call(tiers[i]), base)
+		base = conds[i] + " ? " + calls[i] + " : " + base
 	}
 	return withRules(base, c.Rules)
+}
+
+// tierExpr checks one tier and returns its tier() call and its condition,
+// "" for the last tier.
+func tierExpr(field string, t TierConfig, last bool, names map[string]bool) (call, cond string, err *ConfigError) {
+	if !tierNameRe.MatchString(t.Name) {
+		return "", "", cfgErr(field+".name", "must match %s", tierNameRe.String())
+	}
+	if names[t.Name] {
+		return "", "", cfgErr(field+".name", "duplicate tier %q", t.Name)
+	}
+	names[t.Name] = true
+	body, err := tierBody(field, t)
+	if err != nil {
+		return "", "", err
+	}
+	call = fmt.Sprintf("tier(%s, %s)", strconv.Quote(t.Name), body)
+	switch {
+	case last && t.When != nil:
+		return "", "", cfgErr(field+".when", "the last tier takes the rest and has no condition")
+	case last:
+		return call, "", nil
+	case t.When == nil:
+		return "", "", cfgErr(field+".when", "required on every tier but the last")
+	}
+	cond, _, err = (&condWalk{}).node(field+".when", t.When, 1)
+	return call, cond, err
+}
+
+// condWalk renders the condition of one tier and counts its comparisons.
+type condWalk struct{ leaves int }
+
+// node renders c at depth (1 for the root). group reports an and/or of two
+// or more conditions, which an enclosing and/or puts in parentheses; a group
+// of one condition is that condition.
+func (w *condWalk) node(field string, c *TierCond, depth int) (src string, group bool, err *ConfigError) {
+	if depth > MaxCondDepth {
+		return "", false, cfgErr(field, "conditions nest at most %d deep", MaxCondDepth)
+	}
+	shape, err := c.shape(field)
+	if err != nil {
+		return "", false, err
+	}
+	switch shape {
+	case "and":
+		return w.group(field+".and", c.And, " && ", depth)
+	case "or":
+		return w.group(field+".or", c.Or, " || ", depth)
+	case "not":
+		inner, _, err := w.node(field+".not", c.Not, depth+1)
+		if err != nil {
+			return "", false, err
+		}
+		return "!(" + inner + ")", false, nil
+	}
+	if w.leaves++; w.leaves > MaxCondLeaves {
+		return "", false, cfgErr(field, "a tier condition has at most %d comparisons", MaxCondLeaves)
+	}
+	src, err = comparison(field, c)
+	return src, false, err
+}
+
+func (w *condWalk) group(field string, nodes []*TierCond, sep string, depth int) (string, bool, *ConfigError) {
+	switch len(nodes) {
+	case 0:
+		return "", false, cfgErr(field, "at least one condition is required")
+	case 1:
+		return w.node(field+"[0]", nodes[0], depth+1)
+	}
+	parts := make([]string, len(nodes))
+	for i, n := range nodes {
+		s, group, err := w.node(fmt.Sprintf("%s[%d]", field, i), n, depth+1)
+		if err != nil {
+			return "", false, err
+		}
+		if group {
+			s = "(" + s + ")"
+		}
+		parts[i] = s
+	}
+	return strings.Join(parts, sep), true, nil
+}
+
+// condShapes maps each key of a condition node to the shape it belongs to.
+var condShapes = map[string]string{"var": "leaf", "op": "leaf", "value": "leaf", "tz": "leaf", "and": "and", "or": "or", "not": "not"}
+
+// condKeyErrs is what a key whose value did not decode must be.
+var condKeyErrs = map[string]string{"var": "must be a string", "op": "must be a string", "tz": "must be a string",
+	"value": "must be a finite number", "and": "must be a list of conditions", "or": "must be a list of conditions"}
+
+// shape is "leaf", "and", "or" or "not": the one shape the keys of c belong to.
+func (c *TierCond) shape(field string) (string, *ConfigError) {
+	const oneShape = "must be exactly one of {var, op, value, tz}, {and}, {or} or {not}"
+	shape := ""
+	for _, k := range c.keysOrNone() {
+		s, ok := condShapes[k]
+		if !ok {
+			return "", cfgErr(field, "unknown key %q", k)
+		}
+		if shape != "" && s != shape {
+			return "", cfgErr(field, oneShape)
+		}
+		shape = s
+	}
+	if shape == "" {
+		return "", cfgErr(field, oneShape)
+	}
+	if c.bad != "" {
+		return "", cfgErr(field+"."+c.bad, "%s", condKeyErrs[c.bad])
+	}
+	return shape, nil
+}
+
+func (c *TierCond) keysOrNone() []string {
+	if c == nil {
+		return nil
+	}
+	return c.keys
+}
+
+var (
+	countVars = map[string]bool{"len": true, "p": true, "c": true}
+	// timeVars are the whole-number ranges of the time quantities.
+	timeVars = map[string][2]int{"hour": {0, 23}, "minute": {0, 59}, "weekday": {0, 6}, "month": {1, 12}, "day": {1, 31}}
+	condOps  = map[string]bool{"<": true, "<=": true, ">": true, ">=": true, "==": true, "!=": true}
+)
+
+// comparison renders a leaf: `len <= 200000`, `hour("Asia/Shanghai") >= 22`.
+func comparison(field string, c *TierCond) (string, *ConfigError) {
+	r, timed := timeVars[c.Var]
+	if !timed && !countVars[c.Var] {
+		return "", cfgErr(field+".var", "must be len, p, c, hour, minute, weekday, month or day")
+	}
+	if !condOps[c.Op] {
+		return "", cfgErr(field+".op", "must be <, <=, >, >=, == or !=")
+	}
+	if c.Value == nil {
+		return "", cfgErr(field+".value", "required")
+	}
+	v := float64(*c.Value)
+	if math.IsNaN(v) || math.IsInf(v, 0) { // "NaN" and "Inf" parse as numeric strings
+		return "", cfgErr(field+".value", "%s", condKeyErrs["value"])
+	}
+	if !timed {
+		if slices.Contains(c.keys, "tz") {
+			return "", cfgErr(field+".tz", "only a time quantity has a time zone")
+		}
+		return fmt.Sprintf("%s %s %s", c.Var, c.Op, fmtNum(v)), nil
+	}
+	if v != math.Trunc(v) || v < float64(r[0]) || v > float64(r[1]) {
+		return "", cfgErr(field+".value", "%s is a whole number from %d to %d", c.Var, r[0], r[1])
+	}
+	zone, err := zoneArg(field+".tz", c.TZ)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s(%s) %s %s", c.Var, zone, c.Op, fmtNum(v)), nil
 }
 
 // withRules is base without rules and `(base) * (rule) * ...` with them.
@@ -425,12 +586,9 @@ func condArg(field string, c CondConfig) (string, *ConfigError) {
 }
 
 func timeCond(field string, c CondConfig) (string, *ConfigError) {
-	tz := strings.TrimSpace(c.TZ)
-	if tz == "" {
-		tz = "UTC"
-	}
-	if _, err := loadLocation(tz); err != nil {
-		return "", cfgErr(field+".tz", "unknown time zone %q", tz)
+	zone, err := zoneArg(field+".tz", strings.TrimSpace(c.TZ))
+	if err != nil {
+		return "", err
 	}
 	if c.FromHour == nil || c.ToHour == nil {
 		return "", cfgErr(field, "from_hour and to_hour are required")
@@ -439,11 +597,23 @@ func timeCond(field string, c CondConfig) (string, *ConfigError) {
 	if from < 0 || from > 23 || to < 0 || to > 24 || from == to {
 		return "", cfgErr(field, "hours must satisfy 0 <= from_hour <= 23, 0 <= to_hour <= 24, from_hour != to_hour")
 	}
-	h := fmt.Sprintf("hour(%s)", strconv.Quote(tz))
+	h := "hour(" + zone + ")"
 	if from < to {
 		return fmt.Sprintf("%s >= %d && %s < %d", h, from, h, to), nil
 	}
 	return fmt.Sprintf("(%s >= %d || %s < %d)", h, from, h, to), nil // wraps midnight
+}
+
+// zoneArg is the quoted time zone argument of a time function: tz, UTC
+// when blank; it must load.
+func zoneArg(field, tz string) (string, *ConfigError) {
+	if tz == "" {
+		tz = "UTC"
+	}
+	if _, err := loadLocation(tz); err != nil {
+		return "", cfgErr(field, "unknown time zone %q", tz)
+	}
+	return strconv.Quote(tz), nil
 }
 
 func stringValue(field string, raw json.RawMessage) (string, *ConfigError) {

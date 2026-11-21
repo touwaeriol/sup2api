@@ -899,7 +899,7 @@ export interface AccountTestResult {
 
 // ------------------------------------------------------------------ billing
 
-export type PriceMode = 'per_request' | 'per_token' | 'expression'
+export type PriceMode = 'visual' | 'expression'
 
 /** Prices are global per model (no platform); the result is the base price. */
 export interface Price {

@@ -460,7 +460,7 @@ func TestPriceNotConfigured403(t *testing.T) {
 // A price of 0 is a price: the request is served and billed at it.
 func TestZeroPriceServed(t *testing.T) {
 	e := newEnv(t)
-	zero := &core.PriceRule{ID: 31, Model: "claude-zero-1", Mode: "per_token", Expression: `tier("base", p*0)`}
+	zero := &core.PriceRule{ID: 31, Model: "claude-zero-1", Mode: "visual", Expression: `tier("base", p*0)`}
 	e.pricer.rules["claude-zero-1"] = zero
 	if r := e.messages(body("claude-zero-1", false)); r.status != 200 {
 		t.Fatalf("zero price: %d %s", r.status, r.body)

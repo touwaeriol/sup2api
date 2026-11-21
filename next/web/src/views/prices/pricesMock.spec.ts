@@ -1,18 +1,18 @@
 // @vitest-environment node
-// The price endpoints of the dev mock hold to the server: a per_token price's
+// The price endpoints of the dev mock hold to the server: a visual price's
 // expression comes from its config, and every `cond ? <number> : 1` of an
 // expression is traced as a surcharge rule.
 import { beforeAll, describe, expect, it } from 'vitest'
 import { mockServer, type MockServer } from '@/testing/mockServer'
-import { singleTier, type TokenConfig } from './priceExpr'
+import { requestTier, singleTier, type VisualConfig } from './priceExpr'
 
 let call: MockServer['call']
 beforeAll(async () => {
   ;({ call } = await mockServer('core', 'accounts', 'resources', 'billing', 'pricing', 'lookup'))
 })
 
-const ruled: TokenConfig = {
-  tiers: [{ name: 'base', max_len: null, unit: 'token', p: 3, c: 15 }],
+const ruled: VisualConfig = {
+  tiers: [{ name: 'base', unit: 'token', p: 3, c: 15 }],
   rules: [
     { name: 'fast', multiplier: 2, conds: [{ source: 'header', key: 'anthropic-beta', op: 'contains', value: 'fast-mode' }] },
     {
@@ -27,8 +27,8 @@ const ruled: TokenConfig = {
 }
 
 describe('prices in the mock', () => {
-  it('generate the expression of a per_token price from its config, whatever the client sent', async () => {
-    const v = (await call('POST', '/prices/validate', { mode: 'per_token', config: singleTier({ p: 3, c: 15 }), expression: 'flat(99)' }))
+  it('generate the expression of a visual price from its config, whatever the client sent', async () => {
+    const v = (await call('POST', '/prices/validate', { mode: 'visual', config: singleTier({ p: 3, c: 15 }), expression: 'flat(99)' }))
       .body.data
     expect(v).toMatchObject({ ok: true, expression: 'tier("base", p*3 + c*15)' })
   })
@@ -36,7 +36,7 @@ describe('prices in the mock', () => {
   it('trace each surcharge of the generated expression, and multiply the matched ones', async () => {
     const usage = { p: 1_000_000, c: 0 }
     const preview = async (extra: object) =>
-      (await call('POST', '/prices/preview', { mode: 'per_token', config: ruled, expression: '', usage, ...extra })).body.data
+      (await call('POST', '/prices/preview', { mode: 'visual', config: ruled, expression: '', usage, ...extra })).body.data
     const plain = await preview({})
     expect(plain.expression).toBe(
       '(tier("base", p*3 + c*15)) * (has(header("anthropic-beta"), "fast-mode") ? 2 : 1) * (param("service_tier") == "priority" && u("speed") != 0 ? 3 : 1)'
@@ -76,19 +76,41 @@ describe('prices in the mock', () => {
 
   it('refuse a config the server would not generate an expression of', async () => {
     const validate = async (body: object) => (await call('POST', '/prices/validate', body)).body.data
-    const bad = await validate({ mode: 'per_token', config: { ...ruled, rules: [{ name: '', multiplier: 2, conds: [{ source: 'header', key: 'bad name', op: 'exists' }] }] } })
+    const bad = await validate({ mode: 'visual', config: { ...ruled, rules: [{ name: '', multiplier: 2, conds: [{ source: 'header', key: 'bad name', op: 'exists' }] }] } })
     expect(bad).toMatchObject({ ok: false, errors: [{ code: 'invalid_config' }] })
-    expect(await validate({ mode: 'per_request', config: { price: null } })).toMatchObject({ ok: false, errors: [{ code: 'invalid_config' }] })
-    // The server sorts the tiers: a config listed out of order is fine.
-    const unsorted = { tiers: [{ name: 'rest', max_len: null, p: 2, c: 2 }, { name: 'short', max_len: 1000, p: 1, c: 1 }], rules: [] }
-    expect(await validate({ mode: 'per_token', config: unsorted })).toMatchObject({ ok: true })
-    expect((await call('POST', '/prices/preview', { mode: 'per_request', config: {}, usage: {} })).status).toBe(400)
+    expect(await validate({ mode: 'visual', config: requestTier(null) })).toMatchObject({ ok: false, errors: [{ code: 'invalid_config' }] })
+    // Tiers match in the order listed: only the last one is the rest.
+    const restFirst = { tiers: [{ name: 'rest', p: 2, c: 2 }, { name: 'short', when: { var: 'len', op: '<=', value: 1000 }, p: 1, c: 1 }], rules: [] }
+    expect(await validate({ mode: 'visual', config: restFirst })).toMatchObject({ ok: false, errors: [{ code: 'invalid_config' }] })
+    expect((await call('POST', '/prices/preview', { mode: 'visual', config: {}, usage: {} })).status).toBe(400)
   })
 
-  it('leave a custom price to a per-token price of one token tier without rules', async () => {
+  it('hit the tier whose condition holds at the time simulated, and name it', async () => {
+    const night: VisualConfig = {
+      tiers: [
+        {
+          name: 'long_night',
+          when: { and: [{ var: 'len', op: '>', value: 200000 }, { or: [{ var: 'hour', tz: 'Asia/Shanghai', op: '>=', value: 22 }, { var: 'hour', tz: 'Asia/Shanghai', op: '<', value: 6 }] }] },
+          unit: 'token',
+          p: 4,
+          c: 18
+        },
+        { name: 'long', when: { var: 'len', op: '>', value: 200000 }, unit: 'token', p: 6, c: 22.5 },
+        { name: 'base', unit: 'token', p: 3, c: 15 }
+      ],
+      rules: []
+    }
+    const tierAt = async (at: string, p: number) =>
+      (await call('POST', '/prices/preview', { mode: 'visual', config: night, expression: '', usage: { p, c: 0 }, at })).body.data.tier
+    expect(await tierAt('2026-01-01T15:30:00Z', 300000)).toBe('long_night') // 23:30 in Shanghai
+    expect(await tierAt('2026-01-01T04:00:00Z', 300000)).toBe('long') // 12:00 in Shanghai
+    expect(await tierAt('2026-01-01T15:30:00Z', 1000)).toBe('base')
+  })
+
+  it('leave a custom price to a visual price of one tier without rules, priced as the global one is', async () => {
     const save = (model: string, config: unknown) =>
-      call('PUT', '/groups/1/model-prices', { items: [{ model, rule: { kind: 'custom', mode: 'per_token', config } }] })
+      call('PUT', '/groups/1/model-prices', { items: [{ model, rule: { kind: 'custom', mode: 'visual', config } }] })
     expect((await save('gpt-4o', singleTier({ p: 1, c: 2 }))).status).toBe(200)
-    expect((await save('gpt-4o', { tiers: [{ name: 'a', max_len: null, unit: 'request', price: 1 }], rules: [] })).status).toBe(400)
+    expect((await save('gpt-4o', { tiers: [{ name: 'a', unit: 'request', price: 1 }], rules: [] })).status).toBe(400)
   })
 })

@@ -209,7 +209,7 @@ func newWSEnv(t *testing.T, caps ...string) *wsEnv {
 	e.gen.accountTypes = append(e.gen.accountTypes, core.AccountTypeBinding{Plugin: info, Type: m.AccountTypes[0], Client: e.wsPlat})
 	e.accounts.addTyped(testGroup, 11, 99, "oa-11", "openai", "apikey")
 	e.accounts.addTyped(testGroup, 12, 98, "oa-12", "openai", "apikey")
-	e.pricer.rules[wsModel] = &core.PriceRule{ID: 10, Model: wsModel, Mode: "per_token", Expression: "p*3", ExprHash: "w"}
+	e.pricer.rules[wsModel] = &core.PriceRule{ID: 10, Model: wsModel, Mode: "visual", Expression: "p*3", ExprHash: "w"}
 	e.gw.d.Draining = e.draining.Load
 	e.gw.ws.drainPoll = 20 * time.Millisecond
 	return e

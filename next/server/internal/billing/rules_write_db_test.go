@@ -104,8 +104,8 @@ func TestWriteRulesMatchesSequential(t *testing.T) {
 		return r
 	}
 	price := func(p float64) *storedRule {
-		config := json.RawMessage(fmt.Sprintf(`{"price": %v}`, p))
-		r, err := checkCustom(ctx, Rule{Kind: core.PriceRuleCustom, Mode: "per_request", Config: config}, PriceDef{Mode: "per_request"})
+		config := json.RawMessage(fmt.Sprintf(`{"tiers": [{"name": "base", "unit": "request", "price": %v}]}`, p))
+		r, err := checkCustom(ctx, Rule{Kind: core.PriceRuleCustom, Mode: "visual", Config: config}, perRequestTier)
 		require.NoError(t, err)
 		return r
 	}

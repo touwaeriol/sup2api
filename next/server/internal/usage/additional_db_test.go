@@ -62,7 +62,7 @@ func TestSettleZeroPrice(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := f.record("zero-price", true)
-	r.Price = &core.PriceRule{ID: f.price.ID, Model: f.price.Model, Mode: "per_token", Expression: zeroExpr, ExprVersion: 1, ExprHash: hash}
+	r.Price = &core.PriceRule{ID: f.price.ID, Model: f.price.Model, Mode: "visual", Expression: zeroExpr, ExprVersion: 1, ExprHash: hash}
 	before := f.balance()
 	if err := f.bill.Precharge(ctx, r); err != nil {
 		t.Fatal(err)

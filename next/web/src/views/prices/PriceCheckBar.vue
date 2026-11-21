@@ -7,9 +7,9 @@ import { issuePos, issueText, type Issue } from './issues'
 import type { PriceValidation } from './usePriceValidation'
 
 // The check result as one line under the editor: passed (with the cost of
-// one million input tokens), or each problem on a line of its own with its
+// one million input tokens, unless the price is `perRequest` only), or each problem on a line of its own with its
 // position (a link to it in the expression editor).
-const props = defineProps<{ localIssues: string[]; validation: PriceValidation | null; error: string; validating: boolean; mode: string }>()
+const props = defineProps<{ localIssues: string[]; validation: PriceValidation | null; error: string; validating: boolean; mode: string; perRequest?: boolean }>()
 const emit = defineEmits<{ (e: 'locate', line: number, column: number): void }>()
 const { t } = useI18n()
 
@@ -28,7 +28,7 @@ const warnings = computed(() => (problems.value.length ? [] : (props.validation?
 const ok = computed(() => !problems.value.length && !!props.validation)
 const cost = computed(() => {
   const c = props.validation?.cost_per_million_input
-  return ok.value && props.mode !== 'per_request' && c !== undefined && c !== null ? formatMoney(c) : ''
+  return ok.value && !props.perRequest && c !== undefined && c !== null ? formatMoney(c) : ''
 })
 </script>
 

@@ -114,7 +114,7 @@ func TestWebSocketParamOverrideUnmeteredOperationIsSent(t *testing.T) {
 // the converted account serves it and bills the requested model.
 func TestConvertedRequestWithFallbacksBillsRequestedModel(t *testing.T) {
 	e, q, _ := convEnv(t, nil)
-	e.pricer.rules[advisorModel] = &core.PriceRule{ID: 19, Model: advisorModel, Mode: "per_token", Expression: "p*7+c*11", ExprHash: "advisor-price"}
+	e.pricer.rules[advisorModel] = &core.PriceRule{ID: 19, Model: advisorModel, Mode: "visual", Expression: "p*7+c*11", ExprHash: "advisor-price"}
 	disableNative(e)
 	res := e.messages(fallbackHTTPBody(false))
 	rec := e.record()

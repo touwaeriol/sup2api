@@ -1093,7 +1093,7 @@ tier("base", flat(0.01) + p*3 + c*15) * (hour("Asia/Shanghai") < 8 ? 0.8 : 1)
 CREATE TABLE model_prices (
   id            bigserial PRIMARY KEY,
   model         text NOT NULL,                -- 完整模型 ID（迁移 0108 起不限长度），不允许通配符（CHECK 只允许字母、数字和 . _ : / @ + -）
-  mode          varchar(20)  NOT NULL,        -- per_request / per_token / expression
+  mode          varchar(20)  NOT NULL,        -- visual / expression (CONTRACTS §131)
   config        jsonb        NOT NULL,        -- 界面回显用：按次 {price}；按 token {tiers, rules}；表达式 {}
   expression    text         NOT NULL,        -- 由 config 生成，或直接编写；计费以它为准
   expr_version  int          NOT NULL DEFAULT 1,

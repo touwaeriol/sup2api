@@ -1,34 +1,38 @@
 // The templates the price editors start from, in one place: tier templates
-// (the per_token editor, and the expression editor as generated source),
+// (the visual editor, and the expression editor as generated source),
 // request rule groups (the rule editor's "common rules") and expression
 // examples (the guide, and the expression editor's "advanced" templates).
-import type { MarkupRule, PriceKey, TokenTier } from './priceExpr'
+import type { MarkupRule, PriceKey, TierCond, TokenTier } from './priceExpr'
 
-function tokenTier(name: string, maxLen: number | null, prices: Partial<Record<PriceKey, number | null>>): TokenTier {
-  return { name, max_len: maxLen, unit: 'token', ...prices }
+function tokenTier(name: string, when: TierCond | null, prices: Partial<Record<PriceKey, number | null>>): TokenTier {
+  return when ? { name, when, unit: 'token', ...prices } : { name, unit: 'token', ...prices }
 }
+
+/** The condition of a tier up to a context length. */
+const upTo = (n: number): TierCond => ({ var: 'len', op: '<=', value: n })
 
 /** Tier templates by key (named by prices.presets.item.<key>); each makes fresh tiers. */
 export const PRESETS: Record<string, () => TokenTier[]> = {
   single: () => [tokenTier('base', null, { p: 3, c: 15 })],
   claude: () => [tokenTier('base', null, { p: 3, c: 15, cr: 0.3, cc: 3.75, cc1h: 6 })],
   claudeLong: () => [
-    tokenTier('standard', 200000, { p: 3, c: 15, cr: 0.3, cc: 3.75, cc1h: 6 }),
+    tokenTier('standard', upTo(200000), { p: 3, c: 15, cr: 0.3, cc: 3.75, cc1h: 6 }),
     tokenTier('long_context', null, { p: 6, c: 22.5, cr: 0.6, cc: 7.5, cc1h: 12 })
   ],
-  gptLong: () => [tokenTier('standard', 272000, { p: 2.5, c: 15, cr: 0.25 }), tokenTier('long_context', null, { p: 5, c: 22.5, cr: 0.5 })],
+  gptLong: () => [tokenTier('standard', upTo(272000), { p: 2.5, c: 15, cr: 0.25 }), tokenTier('long_context', null, { p: 5, c: 22.5, cr: 0.5 })],
   three: () => [
-    tokenTier('short', 32000, { p: 1.2, c: 6, cr: 0.24 }),
-    tokenTier('mid', 128000, { p: 2.4, c: 12, cr: 0.48 }),
+    tokenTier('short', upTo(32000), { p: 1.2, c: 6, cr: 0.24 }),
+    tokenTier('mid', upTo(128000), { p: 2.4, c: 12, cr: 0.48 }),
     tokenTier('long', null, { p: 3, c: 15, cr: 0.6 })
   ],
-  image: () => [tokenTier('base', null, { p: 5, c: 40, cr: 1.25, img: 10, img_o: 40 })]
+  image: () => [tokenTier('base', null, { p: 5, c: 40, cr: 1.25, img: 10, img_o: 40 })],
+  request: () => [{ name: 'base', unit: 'request', price: 0.01 }]
 }
 
 /** Templates in labelled groups (prices.presets.group.<key>), as PricePresets shows them. */
 export type PresetGroup = { key: string; items: string[] }
 export const TIER_PRESET_GROUPS: PresetGroup[] = [
-  { key: 'fixed', items: ['single', 'claude', 'image'] },
+  { key: 'fixed', items: ['single', 'claude', 'image', 'request'] },
   { key: 'tiered', items: ['claudeLong', 'gptLong', 'three'] }
 ]
 

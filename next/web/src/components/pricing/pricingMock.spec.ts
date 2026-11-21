@@ -4,6 +4,7 @@
 // errors.
 import { beforeAll, describe, expect, it } from 'vitest'
 import { mockServer, type MockServer } from '@/testing/mockServer'
+import { requestTier } from '@/views/prices/priceExpr'
 
 let call: MockServer['call'], signIn: MockServer['signIn'], fields: MockServer['fields']
 beforeAll(async () => {
@@ -31,7 +32,7 @@ describe('the list price of a multiplier rule in the mock', () => {
 
   it('keeps a custom price a price of its own, without a multiplier', async () => {
     const row = (await call('GET', '/groups/1/model-prices')).body.data.models.find((m: { model: string }) => m.model === 'web-search')
-    expect(row.list_price).toMatchObject({ mode: 'per_request', config: { price: 0.008 } })
+    expect(row.list_price).toMatchObject({ mode: 'visual', config: requestTier(0.008) })
     expect(row.list_price.multiplier).toBeUndefined()
   })
 })

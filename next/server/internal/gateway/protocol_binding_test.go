@@ -339,7 +339,7 @@ func newBindingEnv(t *testing.T) *bindingEnv {
 		e.accounts.addTyped(testGroup, 11, 99, "oai-11", "openai", "apikey")
 		e.accounts.groups[testGroup] = []int64{11}
 		for _, m := range []string{"gpt-4o", "gpt-5", "text-embedding-3-small", otherModel} {
-			e.pricer.rules[m] = &core.PriceRule{ID: 10, Model: m, Mode: "per_token"}
+			e.pricer.rules[m] = &core.PriceRule{ID: 10, Model: m, Mode: "visual"}
 		}
 	})
 	return &bindingEnv{env: e, api: api, resp: resp, plat: plat}
@@ -771,7 +771,7 @@ func TestProtocolBindingStickySessionLeavesAClosedAccount(t *testing.T) {
 func TestProtocolBindingWebSocket(t *testing.T) {
 	const ws, chatOnly = "openai.responses_ws", "gpt-5-chat"
 	e := newWSEnv(t)
-	e.pricer.rules[chatOnly] = &core.PriceRule{ID: 11, Model: chatOnly, Mode: "per_token"}
+	e.pricer.rules[chatOnly] = &core.PriceRule{ID: 11, Model: chatOnly, Mode: "visual"}
 	for _, id := range []int64{11, 12} {
 		e.accounts.bind(id, []string{"openai.chat", "openai.responses"})
 	}

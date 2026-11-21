@@ -41,41 +41,34 @@ func listPrice(base PriceDef, rule *storedRule) PriceDef {
 // listPrice returns the list price the first rule that applies makes of the
 // global price base, and where it comes from.
 func (l ruleLevels) listPrice(base PriceDef) (PriceDef, string) {
-	rule, source := l.applied(base.customMode())
+	rule, source := l.applied(base.customShape())
 	return listPrice(base, rule), source
 }
 
-// customMode is the mode of the custom price a price rule may set over p:
-// that of a per_request price without rules, or of a per_token price with
-// one tier priced by the token and no rules. It is "" when only a multiplier
-// applies: an expression price, or a price with tiers or rules (CONTRACTS §131).
-func (p PriceDef) customMode() string {
-	switch p.Mode {
-	case expr.ModePerRequest:
-		if !hasRules(p.Config) {
-			return p.Mode
-		}
-	case expr.ModePerToken:
-		if _, ok := singleTokenTier(p.Config); ok {
-			return p.Mode
-		}
+// customShape is the shape of the custom price a price rule may set over p:
+// the unit (token or request) of a visual price of one tier without a
+// condition and without rules. It is "" when only a multiplier applies: an
+// expression price, or a price with several tiers or rules (CONTRACTS §131.4).
+func (p PriceDef) customShape() string {
+	if p.Mode != expr.ModeVisual {
+		return ""
 	}
-	return ""
+	t, ok := singleTier(p.Config)
+	switch {
+	case !ok:
+		return ""
+	case t.Unit == "":
+		return expr.UnitToken
+	}
+	return t.Unit
 }
 
-// hasRules reports whether a per_request config has request surcharges.
-func hasRules(config json.RawMessage) bool {
-	var c expr.PerRequestConfig
-	return json.Unmarshal(config, &c) == nil && len(c.Rules) > 0
-}
-
-// singleTokenTier returns the tier of a per_token config that has one tier,
-// priced by the token, and no rules.
-func singleTokenTier(config json.RawMessage) (expr.TierConfig, bool) {
-	var c expr.TokenConfig
-	if json.Unmarshal(config, &c) != nil || len(c.Tiers) != 1 || len(c.Rules) != 0 {
+// singleTier returns the tier of a visual config that has one tier, without
+// a condition, and no rules.
+func singleTier(config json.RawMessage) (expr.TierConfig, bool) {
+	var c expr.VisualConfig
+	if json.Unmarshal(config, &c) != nil || len(c.Tiers) != 1 || len(c.Rules) != 0 || c.Tiers[0].When != nil {
 		return expr.TierConfig{}, false
 	}
-	t := c.Tiers[0]
-	return t, t.Unit == "" || t.Unit == expr.UnitToken
+	return c.Tiers[0], true
 }

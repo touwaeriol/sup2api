@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, toRaw, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import { ApiError, api } from '@sub2api/host'
@@ -26,7 +26,6 @@ import { applyFormError } from '@/utils/formErrors'
 import { formatDateTime } from '@/utils/format'
 import ExprGuide from './ExprGuide.vue'
 import ExprHistoryModal from './ExprHistoryModal.vue'
-import PerRequestEditor from './PerRequestEditor.vue'
 import PriceExprEditor from './PriceExprEditor.vue'
 import PriceEstimator from './PriceEstimator.vue'
 import PriceModelList from './PriceModelList.vue'
@@ -34,21 +33,9 @@ import TokenPriceEditor from './TokenPriceEditor.vue'
 import { issueText, type Issue } from './issues'
 import PriceCheckBar from './PriceCheckBar.vue'
 import { usePriceValidation, type PricePayload } from './usePriceValidation'
-import {
-  checkPrice,
-  compactTokenConfig,
-  isSet,
-  num,
-  compactPerRequest,
-  perRequestExpr,
-  perRequestRules as rulesOf,
-  PRICE_MODES,
-  type MarkupRule,
-  tokenExpr,
-  type PriceMode,
-  type TokenConfig
-} from './priceExpr'
-import { defaultTokenConfig, editableRules, editableTokenConfig } from './tokenPrice'
+import { checkPrice, compactTokenConfig, PRICE_MODES, tokenExpr, type PriceMode, type VisualConfig } from './priceExpr'
+import { visualOf } from './exprParse'
+import { defaultTokenConfig, editableTokenConfig } from './tokenPrice'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -65,10 +52,8 @@ const loading = ref(false)
 const saving = ref(false)
 const price = ref<Price | null>(null)
 const form = reactive({ model: '', note: '', enabled: true })
-const mode = ref<PriceMode>('per_token')
-const perRequest = ref<number | null>(0.01)
-const perRequestRules = ref<MarkupRule[]>([])
-const token = ref<TokenConfig>(defaultTokenConfig())
+const mode = ref<PriceMode>('visual')
+const token = ref<VisualConfig>(defaultTokenConfig())
 const sourceText = ref('')
 const errors = ref<Record<string, string>>({})
 const historyOpen = ref(false)
@@ -100,9 +85,7 @@ const syncedNotice = computed(() => {
 function resetForm() {
   price.value = null
   Object.assign(form, { model: '', note: '', enabled: true })
-  mode.value = 'per_token'
-  perRequest.value = 0.01
-  perRequestRules.value = []
+  mode.value = 'visual'
   token.value = defaultTokenConfig()
   sourceText.value = ''
   errors.value = {}
@@ -115,11 +98,7 @@ function applyPrice(p: Price) {
   Object.assign(form, { model: p.model, note: p.note || '', enabled: p.enabled })
   mode.value = p.mode
   sourceText.value = p.expression || ''
-  if (p.mode === 'per_request') {
-    perRequest.value = isSet(p.config?.price) ? num(p.config?.price) : null
-    perRequestRules.value = editableRules(rulesOf(p.config))
-  }
-  if (p.mode === 'per_token') token.value = editableTokenConfig(p.config)
+  if (p.mode === 'visual') token.value = editableTokenConfig(p.config)
   markSaved()
 }
 
@@ -138,16 +117,11 @@ async function load() {
 
 // ------------------------------------------------------------------ derived payload
 
-/** The per_token config as it is sent: prices and condition values typed. */
+/** The visual config as it is sent: prices and condition values typed. */
 const tokenConfig = computed(() => compactTokenConfig(token.value))
 
 const payload = computed<PricePayload & { mode: PriceMode }>(() => {
-  if (mode.value === 'per_request') {
-    // A blank price stays blank: checkPerRequest blocks saving it.
-    const config = compactPerRequest(perRequest.value, perRequestRules.value)
-    return { mode: 'per_request', config, expression: perRequestExpr(config.price, config.rules) }
-  }
-  if (mode.value === 'per_token') return { mode: 'per_token', config: tokenConfig.value, expression: tokenExpr(tokenConfig.value) }
+  if (mode.value === 'visual') return { mode: 'visual', config: tokenConfig.value, expression: tokenExpr(tokenConfig.value) }
   return { mode: 'expression', config: {}, expression: sourceText.value }
 })
 
@@ -156,16 +130,30 @@ const localIssues = computed<string[]>(() => checkPrice(payload.value).map(x => 
 const previewText = computed(() => payload.value.expression)
 const previewSource = computed(() => (localIssues.value.length || validation.value?.errors.length ? null : { ...payload.value }))
 
-/** Per-request price into per_token: one per-call tier, a copy of the rules kept. */
-function perRequestToToken() {
-  token.value = { tiers: [{ name: 'base', max_len: null, unit: 'request', price: perRequest.value }], rules: structuredClone(toRaw(perRequestRules.value)) }
-  mode.value = 'per_token'
-}
+/** A single request tier prices no tokens: the estimator then asks for nothing. */
+const perRequestOnly = computed(() => mode.value === 'visual' && token.value.tiers.length === 1 && token.value.tiers[0].unit === 'request')
 
-/** Takes the generated source into the expression mode. */
-function editAsExpression() {
-  sourceText.value = payload.value.expression
-  mode.value = 'expression'
+/**
+ * Switches the mode (design 2026-11-22 §0): into the expression mode with the
+ * expression the visual config generates; back into the visual mode only with
+ * an expression the generator wrote (visualOf), or a blank one, which keeps
+ * the visual config there was.
+ */
+function switchMode(next: PriceMode) {
+  if (next === mode.value) return
+  if (next === 'expression') {
+    sourceText.value = payload.value.expression
+    mode.value = next
+    return
+  }
+  if (!sourceText.value.trim()) {
+    mode.value = next
+    return
+  }
+  const cfg = visualOf(sourceText.value)
+  if (!cfg) return toast(t('prices.edit.notVisual'), 'error')
+  token.value = editableTokenConfig(cfg)
+  mode.value = next
 }
 
 // ------------------------------------------------------------------ validation
@@ -303,20 +291,12 @@ watch(priceId, load, { immediate: true })
               :disabled="readonly"
               :aria-label="t('prices.billingMode')"
               data-testid="price-mode"
-              @update:model-value="mode = $event as PriceMode"
+              @update:model-value="switchMode($event as PriceMode)"
             />
             <p class="mt-1.5 text-xs text-fg-muted">{{ t(`prices.edit.modeHint.${mode}`) }}</p>
           </div>
 
-          <PerRequestEditor
-            v-if="mode === 'per_request'"
-            v-model="perRequest"
-            v-model:rules="perRequestRules"
-            :disabled="readonly"
-            :error="errors['config.price']"
-            @to-token="perRequestToToken"
-          />
-          <TokenPriceEditor v-else-if="mode === 'per_token'" v-model="token" :disabled="readonly" />
+          <TokenPriceEditor v-if="mode === 'visual'" v-model="token" :disabled="readonly" />
           <PriceExprEditor
             v-else
             ref="exprEditor"
@@ -333,10 +313,11 @@ watch(priceId, load, { immediate: true })
             :error="validationError"
             :validating="validating"
             :mode="mode"
+            :per-request="perRequestOnly"
             @locate="(l, c) => exprEditor?.focusAt(l, c)"
           />
 
-          <PriceEstimator :source="previewSource" :per-request="mode === 'per_request'" />
+          <PriceEstimator :source="previewSource" :per-request="perRequestOnly" />
 
           <section class="rounded-xl border border-line" data-testid="price-preview">
             <div class="border-b border-line px-3 py-2 text-sm font-medium text-fg sm:px-4">{{ t('prices.edit.preview') }}</div>
@@ -352,7 +333,7 @@ watch(priceId, load, { immediate: true })
                   as="button"
                   class="ml-auto text-xs"
                   data-testid="price-to-expression"
-                  @click="editAsExpression"
+                  @click="switchMode('expression')"
                   >{{ t('prices.toExpression') }}</SLink
                 >
               </div>

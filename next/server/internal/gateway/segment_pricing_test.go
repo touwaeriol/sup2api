@@ -39,7 +39,7 @@ func TestPricingFollowsThePrincipalsSegment(t *testing.T) {
 func TestReferencedPriceIsFrozenApartFromThePricer(t *testing.T) {
 	scale := decimal.RequireFromString("0.8")
 	e := newEnv(t, func(e *env) {
-		e.pricer.rules[advisorModel] = &core.PriceRule{ID: 19, Model: advisorModel, Mode: "per_token", Expression: "p*7", ExprHash: "rule",
+		e.pricer.rules[advisorModel] = &core.PriceRule{ID: 19, Model: advisorModel, Mode: "visual", Expression: "p*7", ExprHash: "rule",
 			Source: core.PriceSourceSegment, Scale: &scale, Base: &core.PriceBase{Expression: "p*9", ExprHash: "global"}}
 	})
 	e.up.set("acc-1", &upstreamRule{status: 200, body: advisorUsageBody})

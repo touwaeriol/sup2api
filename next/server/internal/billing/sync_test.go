@@ -59,12 +59,12 @@ func TestParseLiteLLM(t *testing.T) {
 		t.Fatalf("prices %d skipped %d: %v", len(f.prices), f.skipped, f.prices)
 	}
 	opus := f.prices["claude-opus-5-5"]
-	if opus.Mode != "per_token" || opus.Expression != `v1:tier("base", p*4 + c*20 + cr*0.2 + cc*5 + cc1h*8)` {
+	if opus.Mode != "visual" || opus.Expression != `v1:tier("base", p*4 + c*20 + cr*0.2 + cc*5 + cc1h*8)` {
 		t.Fatalf("opus: %+v", opus)
 	}
-	require.JSONEq(t, `{"tiers": [{"name": "base", "max_len": null, "unit": "token", "p": 4, "c": 20, "cr": 0.2, "cc": 5, "cc1h": 8}], "rules": []}`, string(opus.Config))
+	require.JSONEq(t, `{"tiers": [{"name": "base", "unit": "token", "p": 4, "c": 20, "cr": 0.2, "cc": 5, "cc1h": 8}], "rules": []}`, string(opus.Config))
 	sonnet := f.prices["claude-sonnet-4-5"]
-	if sonnet.Mode != "per_token" || len(cfgOf(t, sonnet)["tiers"].([]any)) != 2 || !strings.Contains(sonnet.Expression, `len <= 200000 ? tier("standard", p*3 + c*15 + cr*0.3)`) ||
+	if sonnet.Mode != "visual" || len(cfgOf(t, sonnet)["tiers"].([]any)) != 2 || !strings.Contains(sonnet.Expression, `len <= 200000 ? tier("standard", p*3 + c*15 + cr*0.3)`) ||
 		!strings.Contains(sonnet.Expression, `tier("long_context", p*6 + c*22.5 + cr*0.3)`) {
 		t.Fatalf("sonnet: %+v", sonnet)
 	}
@@ -94,17 +94,17 @@ func TestParseModelsDev(t *testing.T) {
 		t.Fatalf("opus: %v", c)
 	}
 	pro := f.prices["gemini-2.5-pro"]
-	if err := pro.compile(); err != nil || pro.Mode != "per_token" || !strings.Contains(pro.Expression, `tier("long_context", p*2.5 + c*15 + cr*0.25)`) {
+	if err := pro.compile(); err != nil || pro.Mode != "visual" || !strings.Contains(pro.Expression, `tier("long_context", p*2.5 + c*15 + cr*0.25)`) {
 		t.Fatalf("pro: %+v %v", pro, err)
 	}
 }
 
 func TestParseSup2APIAppliesMultiplier(t *testing.T) {
 	body := `{"data": {"prices": [
-		{"model": "claude-opus-5-5", "mode": "per_token", "config": {"tiers": [{"name": "base", "p": 4, "c": 20, "cr": 0.2}]}, "expression": "x"},
-		{"model": "web-search", "mode": "per_request", "config": {"price": 0.01}, "expression": "x"},
+		{"model": "claude-opus-5-5", "mode": "visual", "config": {"tiers": [{"name": "base", "p": 4, "c": 20, "cr": 0.2}]}, "expression": "x"},
+		{"model": "web-search", "mode": "visual", "config": {"tiers": [{"name": "base", "unit": "request", "price": 0.01}]}, "expression": "x"},
 		{"model": "custom", "mode": "expression", "config": {}, "expression": "tier(\"base\", p*2)"},
-		{"model": "bad*", "mode": "per_token", "config": {"tiers": [{"name": "base", "p": 1}]}, "expression": "x"}],
+		{"model": "bad*", "mode": "visual", "config": {"tiers": [{"name": "base", "p": 1}]}, "expression": "x"}],
 		"rate_multiplier": "1.5", "group": {"id": 3, "name": "g"}}}`
 	f, err := parseSup2API([]byte(body), true)
 	if err != nil {
@@ -138,8 +138,8 @@ func TestParseSup2APIAppliesMultiplier(t *testing.T) {
 // not their multipliers) and a request tier.
 func TestParseSup2APIMultiplierOnTiers(t *testing.T) {
 	body := `{"data": {"prices": [
-		{"model": "tiered", "mode": "per_token", "expression": "x", "config": {"tiers": [
-			{"name": "standard", "max_len": 200000, "p": 3, "c": 15, "img": 10}, {"name": "long_context", "max_len": null, "unit": "request", "price": 0.5}],
+		{"model": "tiered", "mode": "visual", "expression": "x", "config": {"tiers": [
+			{"name": "standard", "when": {"var": "len", "op": "<=", "value": 200000}, "p": 3, "c": 15, "img": 10}, {"name": "long_context", "unit": "request", "price": 0.5}],
 			"rules": [{"multiplier": 2, "conds": [{"source": "param", "key": "fast", "op": "exists"}]}]}}],
 		"rate_multiplier": "1.5", "group": {"id": 3, "name": "g"}}}`
 	f, err := parseSup2API([]byte(body), true)
@@ -147,8 +147,8 @@ func TestParseSup2APIMultiplierOnTiers(t *testing.T) {
 	require.Zero(t, f.skipped)
 	tiered := f.prices["tiered"]
 	require.NoError(t, tiered.compile())
-	require.Equal(t, "per_token", tiered.Mode)
-	require.JSONEq(t, `{"tiers": [{"name": "standard", "max_len": 200000, "p": 4.5, "c": 22.5, "img": 15}, {"name": "long_context", "max_len": null, "unit": "request", "price": 0.75}],
+	require.Equal(t, "visual", tiered.Mode)
+	require.JSONEq(t, `{"tiers": [{"name": "standard", "when": {"var": "len", "op": "<=", "value": 200000}, "p": 4.5, "c": 22.5, "img": 15}, {"name": "long_context", "unit": "request", "price": 0.75}],
 		"rules": [{"multiplier": 2, "conds": [{"source": "param", "key": "fast", "op": "exists"}]}]}`, string(tiered.Config))
 	require.Equal(t, `v1:(len <= 200000 ? tier("standard", p*4.5 + c*22.5 + img*15) : tier("long_context", flat(0.75))) * (param("fast") != nil ? 2 : 1)`, tiered.Expression)
 }
@@ -160,20 +160,30 @@ func TestParseSup2APIMultiplierOnTiers(t *testing.T) {
 func TestParseSup2APIFromOldUpstream(t *testing.T) {
 	body := `{"data": {"prices": [
 		{"model": "flat", "mode": "per_token", "config": {"p": "0.15", "c": 0.6, "cr": null}, "expression": "tier(\"base\", p*0.15 + c*0.6)"},
+		{"model": "tiered", "mode": "per_token", "config": {"tiers": [{"name": "rest", "max_len": null, "p": 4}, {"name": "mid", "max_len": "128000", "p": 2},
+			{"name": "short", "max_len": 32000, "p": 1}], "rules": [{"multiplier": 2, "conds": [{"source": "param", "key": "fast", "op": "exists"}]}]}},
 		{"model": "visual", "mode": "expression", "config": {"tiers": [{"name": "base", "prices": {"p": 1}}], "rules": [{"source": "param", "name": "fast", "multiplier": 2}]},
 			"expression": "tier(\"base\", p*1 + c*0) ||| param(\"fast\") == true ? 2 : 1"},
 		{"model": "video", "mode": "expression", "config": {"video": {"price_per_million_tokens": 7}}, "expression": "tier(\"video\", c*7)"},
-		{"model": "per-request", "mode": "per_request", "config": {"price": "0.04"}}],
+		{"model": "per-request", "mode": "per_request", "config": {"price": "0.04"}},
+		{"model": "per-request-rules", "mode": "per_request", "config": {"price": 0.5, "rules": [{"multiplier": 2, "conds": [{"source": "param", "key": "quality", "op": "eq", "value": "hd"}]}]}}],
 		"rate_multiplier": "2", "group": {"id": 3, "name": "g"}}}`
 	f, err := parseSup2API([]byte(body), false)
 	require.NoError(t, err)
 	require.Zero(t, f.skipped)
 	for model, want := range map[string][3]string{
-		"flat": {"per_token", `{"tiers": [{"name": "base", "max_len": null, "unit": "token", "p": "0.15", "c": 0.6}], "rules": []}`,
+		"flat": {"visual", `{"tiers": [{"name": "base", "unit": "token", "p": "0.15", "c": 0.6}], "rules": []}`,
 			`v1:tier("base", p*0.15 + c*0.6)`},
-		"visual":      {"expression", `{}`, `v1:(tier("base", p*1 + c*0)) * (param("fast") == true ? 2 : 1)`},
-		"video":       {"expression", `{}`, `v1:tier("video", c*7)`},
-		"per-request": {"per_request", `{"price": "0.04"}`, `v1:tier("base", flat(0.04))`},
+		"visual": {"expression", `{}`, `v1:(tier("base", p*1 + c*0)) * (param("fast") == true ? 2 : 1)`},
+		"video":  {"expression", `{}`, `v1:tier("video", c*7)`},
+		"tiered": {"visual", `{"tiers": [{"name": "short", "when": {"var": "len", "op": "<=", "value": 32000}, "p": 1},
+			{"name": "mid", "when": {"var": "len", "op": "<=", "value": "128000"}, "p": 2}, {"name": "rest", "p": 4}],
+			"rules": [{"multiplier": 2, "conds": [{"source": "param", "key": "fast", "op": "exists"}]}]}`,
+			`v1:(len <= 32000 ? tier("short", p*1 + c*0) : (len <= 128000 ? tier("mid", p*2 + c*0) : tier("rest", p*4 + c*0))) * (param("fast") != nil ? 2 : 1)`},
+		"per-request": {"visual", `{"tiers": [{"name": "base", "unit": "request", "price": "0.04"}], "rules": []}`, `v1:tier("base", flat(0.04))`},
+		"per-request-rules": {"visual", `{"tiers": [{"name": "base", "unit": "request", "price": 0.5}],
+			"rules": [{"multiplier": 2, "conds": [{"source": "param", "key": "quality", "op": "eq", "value": "hd"}]}]}`,
+			`v1:(tier("base", flat(0.5))) * (param("quality") == "hd" ? 2 : 1)`},
 	} {
 		p := f.prices[model]
 		require.NoError(t, p.compile(), model)
@@ -185,8 +195,8 @@ func TestParseSup2APIFromOldUpstream(t *testing.T) {
 	f, err = parseSup2API([]byte(body), true)
 	require.NoError(t, err)
 	require.Zero(t, f.skipped)
-	require.JSONEq(t, `{"tiers": [{"name": "base", "max_len": null, "unit": "token", "p": 0.3, "c": 1.2}], "rules": []}`, string(f.prices["flat"].Config))
-	require.JSONEq(t, `{"price": 0.08}`, string(f.prices["per-request"].Config))
+	require.JSONEq(t, `{"tiers": [{"name": "base", "unit": "token", "p": 0.3, "c": 1.2}], "rules": []}`, string(f.prices["flat"].Config))
+	require.JSONEq(t, `{"tiers": [{"name": "base", "unit": "request", "price": 0.08}], "rules": []}`, string(f.prices["per-request"].Config))
 	require.Equal(t, "((tier(\"base\", p*1 + c*0)) * (param(\"fast\") == true ? 2 : 1)) * 2", f.prices["visual"].Expression)
 }
 
@@ -194,7 +204,7 @@ func TestParseSup2APISkipsPriceWithoutConfig(t *testing.T) {
 	body := `{"data": {"prices": [
 		{"model": "no-config", "mode": "per_token", "expression": ""},
 		{"model": "null-config", "mode": "per_request", "config": null},
-		{"model": "ok", "mode": "per_token", "config": {"tiers": [{"name": "base", "p": 1, "c": 2}]}}],
+		{"model": "ok", "mode": "visual", "config": {"tiers": [{"name": "base", "p": 1, "c": 2}]}}],
 		"rate_multiplier": "2", "group": {"id": 3, "name": "g"}}}`
 	f, err := parseSup2API([]byte(body), true)
 	if err != nil {
@@ -273,7 +283,7 @@ func TestPriceSourcesSync(t *testing.T) {
 	e.mustCall(admin, 200, "PATCH", "/price-sources/"+itoa(litellmID), map[string]any{"url": upstream.URL + "/litellm.json"})
 
 	// A manual price that differs from the source.
-	e.mustCall(admin, 201, "POST", "/prices", map[string]any{"model": "claude-opus-5-5", "mode": "per_token", "config": oneTierConfig(map[string]any{"p": 1, "c": 1})})
+	e.mustCall(admin, 201, "POST", "/prices", map[string]any{"model": "claude-opus-5-5", "mode": "visual", "config": oneTierConfig(map[string]any{"p": 1, "c": 1})})
 
 	prev := data(e.mustCall(admin, 200, "POST", "/price-sources/"+itoa(litellmID)+"/preview", nil))
 	actions := map[string]string{}
@@ -371,7 +381,7 @@ func TestKeyPriceListBlacklist(t *testing.T) {
 	admin := e.user("admin-policy@example.com")
 	e.svc.SetSyncDeps(SyncDeps{Keys: fakeKeys{Mode: "blacklist"}})
 	for _, model := range []string{"claude-opus-5-5", "gpt-5"} {
-		e.mustCall(admin, 201, "POST", "/prices", map[string]any{"model": model, "mode": "per_request", "config": map[string]any{"price": 1}})
+		e.mustCall(admin, 201, "POST", "/prices", map[string]any{"model": model, "mode": "visual", "config": requestTier(1)})
 	}
 	code, out := e.call(0, "GET", "/key/prices", nil, "Authorization", "Bearer sk-good")
 	if code != 200 {
@@ -418,9 +428,9 @@ func TestMyPrices(t *testing.T) {
 	e.exec(`INSERT INTO account_groups (account_id, group_id) SELECT a.id, g.id FROM accounts a, groups g`)
 	e.exec(`DELETE FROM model_prices`)
 	for _, m := range []string{"claude-opus-5-5", "gemini-3"} {
-		e.exec(`INSERT INTO model_prices (model, mode, config, expression, expr_hash, source, enabled) VALUES ($1, 'per_request', '{"price": 1}', 'tier("base", flat(1))', 'h', 'manual', true)`, m)
+		e.exec(`INSERT INTO model_prices (model, mode, config, expression, expr_hash, source, enabled) VALUES ($1, 'visual', '{"tiers": [{"name": "base", "unit": "request", "price": 1}]}', 'tier("base", flat(1))', 'h', 'manual', true)`, m)
 	}
-	e.exec(`INSERT INTO model_prices (model, mode, config, expression, expr_hash, source, enabled) VALUES ('claude-off', 'per_request', '{"price": 1}', 'tier("base", flat(1))', 'h', 'manual', false)`)
+	e.exec(`INSERT INTO model_prices (model, mode, config, expression, expr_hash, source, enabled) VALUES ('claude-off', 'visual', '{"tiers": [{"name": "base", "unit": "request", "price": 1}]}', 'tier("base", flat(1))', 'h', 'manual', false)`)
 
 	models := func(d map[string]any) string {
 		var out []string

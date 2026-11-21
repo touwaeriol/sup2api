@@ -11,7 +11,7 @@ func TestPriceModelUsage(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
 	e.exec(`INSERT INTO model_prices (model, mode, expression, expr_hash, source)
-		VALUES ('deepseek-x', 'per_token', 'tier("base", p*0.14 + c*0.5 + cr*0.035)', 'h1', 'manual')`)
+		VALUES ('deepseek-x', 'visual', 'tier("base", p*0.14 + c*0.5 + cr*0.035)', 'h1', 'manual')`)
 	e.svc.invalidate()
 	// 1M input of which 200k cached (inclusive), 100k output.
 	ok, cost, reason, err := e.svc.PriceModelUsage(ctx, "deepseek-x", expr.SemanticsInclusive,

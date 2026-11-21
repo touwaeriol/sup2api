@@ -2,13 +2,13 @@ import { describe, expect, it } from 'vitest'
 import { i18n } from '@/i18n'
 import type { PriceDef } from '@/api/pricing'
 import { priceLabel, ruleText } from './ruleText'
-import { singleTier } from '@/views/prices/priceExpr'
+import { requestTier, singleTier } from '@/views/prices/priceExpr'
 
 const t = i18n.global.t
 i18n.global.locale.value = 'en'
 
-const perToken: PriceDef = { mode: 'per_token', config: singleTier({ p: 3, c: 15 }), expression: 'tier("base", p*3 + c*15)' }
-const perRequest: PriceDef = { mode: 'per_request', config: { price: 0.02 }, expression: 'flat(0.02)' }
+const perToken: PriceDef = { mode: 'visual', config: singleTier({ p: 3, c: 15 }), expression: 'tier("base", p*3 + c*15)' }
+const perRequest: PriceDef = { mode: 'visual', config: requestTier(0.02), expression: 'flat(0.02)' }
 const opaque: PriceDef = { mode: 'expression', config: null, expression: 'p * 2 + unknown(1)' }
 
 describe('a price in a table cell', () => {
@@ -24,9 +24,9 @@ describe('a price in a table cell', () => {
     expect(priceLabel(t, { ...opaque, multiplier: '0' })).toBe('Billed by expression ×0')
   })
   it('leaves a blank price of a custom rule blank, per request as per token', () => {
-    expect(ruleText(t, { kind: 'custom', mode: 'per_request', config: { price: null } })).toBe(t('pricing.rule.customText', { price: '— per request' }))
-    expect(priceLabel(t, { mode: 'per_request', config: { price: null }, expression: '' })).toBe('— per request')
-    expect(priceLabel(t, { mode: 'per_token', config: singleTier({ p: null, c: 15 }), expression: '' })).toBe('— / $15')
+    expect(ruleText(t, { kind: 'custom', mode: 'visual', config: requestTier(null) })).toBe(t('pricing.rule.customText', { price: '— per request' }))
+    expect(priceLabel(t, { mode: 'visual', config: requestTier(null), expression: '' })).toBe('— per request')
+    expect(priceLabel(t, { mode: 'visual', config: singleTier({ p: null, c: 15 }), expression: '' })).toBe('— / $15')
   })
   it('says that there is none', () => {
     expect(priceLabel(t, null)).toBe('No price')

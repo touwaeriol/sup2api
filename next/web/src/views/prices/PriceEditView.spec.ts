@@ -4,10 +4,12 @@ import { reactive, ref } from 'vue'
 import { createMemoryHistory, createRouter, RouterView } from 'vue-router'
 import { i18n } from '@/i18n'
 import type { Price } from '@/api/types'
-import { SPagination } from '@sub2api/ui'
+import { SPagination, SSegmented } from '@sub2api/ui'
 import ExprGuide from './ExprGuide.vue'
 import PriceEditView from './PriceEditView.vue'
+import PriceExprEditor from './PriceExprEditor.vue'
 import PriceModelList from './PriceModelList.vue'
+import TokenPriceEditor from './TokenPriceEditor.vue'
 import { priceListState } from './priceListState'
 import { singleTier } from './priceExpr'
 
@@ -15,7 +17,7 @@ const price = (id: number, note = ''): Price => ({
   id,
   model: `model-${id}`,
   note,
-  mode: 'per_token',
+  mode: 'visual',
   config: singleTier({ p: 3, c: 15 }),
   expression: 'tier("base", p*3 + c*15)',
   expr_version: 1,
@@ -50,11 +52,17 @@ const leave = vi.hoisted(() => ({ discard: false, asked: [] as boolean[] }))
 vi.mock('@/composables/confirmDiscard', () => ({
   confirmDiscard: async (dirty: boolean) => (leave.asked.push(dirty), !dirty || leave.discard)
 }))
+const toasts = vi.hoisted(() => [] as string[])
+vi.mock('@sub2api/ui', async importOriginal => {
+  const real = await importOriginal<typeof import('@sub2api/ui')>()
+  return { ...real, toast: (text: string) => toasts.push(text) }
+})
 const can = vi.hoisted(() => ({ manage: true }))
 vi.mock('@/stores/auth', () => ({ useAuthStore: () => ({ has: (perm: string) => can.manage || perm.endsWith(':read') }) }))
 enableAutoUnmount(afterEach)
 afterEach(() => {
   Object.assign(leave, { discard: false, asked: [] })
+  toasts.length = 0
   Object.assign(priceListState, { q: '', mode: '', page: 1 })
   can.manage = true
 })
@@ -122,5 +130,31 @@ describe('the price editor', () => {
     const guide = mount(ExprGuide, { props: { readonly: true }, global: { plugins: [i18n] } })
     expect(guide.findAll('button').map(b => b.text())).not.toContain('插入')
     expect(guide.findAll('button').map(b => b.text())).not.toContain('填入')
+  })
+
+  it('has two modes, visual and expression, and switches between them through the generated expression', async () => {
+    const { w } = await render()
+    const mode = w.getComponent(SSegmented)
+    expect((mode.props('options') as Array<{ label: string }>).map(o => o.label)).toEqual(['可视化', '表达式'])
+    const to = async (m: string) => {
+      mode.vm.$emit('update:modelValue', m)
+      await flushPromises()
+    }
+    await to('expression')
+    const expr = w.getComponent(PriceExprEditor)
+    expect(expr.props('modelValue')).toBe('tier("base", p*3 + c*15)')
+    // Whitespace aside, the generated expression comes back as the tiers it was generated from.
+    expr.vm.$emit('update:modelValue', 'tier("base",\n  p*4 + c*15)')
+    await flushPromises()
+    await to('visual')
+    expect(w.getComponent(TokenPriceEditor).props('modelValue').tiers).toEqual([{ name: 'base', unit: 'token', p: 4, c: 15 }])
+    // An expression written by hand stays an expression.
+    await to('expression')
+    w.getComponent(PriceExprEditor).vm.$emit('update:modelValue', 'tier("base", 4*p + c*15)')
+    await flushPromises()
+    await to('visual')
+    expect(w.findComponent(TokenPriceEditor).exists()).toBe(false)
+    expect(w.getComponent(PriceExprEditor).props('modelValue')).toBe('tier("base", 4*p + c*15)')
+    expect(toasts).toEqual(['这条表达式不是可视化生成的，无法转成可视化'])
   })
 })

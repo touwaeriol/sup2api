@@ -8,15 +8,14 @@
 // the API rows together.
 import { nextId, now } from './router'
 import { configPrice, type PriceDef } from './billing'
-import { singleTier, takesCustomPrice, type TokenConfig } from '../src/views/prices/priceExpr'
+import { requestTier, simpleTier, singleTier, takesCustomPrice, type VisualConfig } from '../src/views/prices/priceExpr'
 
 export type RateSource = 'segment' | 'discount' | 'group'
 export type PriceSource = 'segment' | 'group' | 'global'
 
 export type PriceRule =
   | { kind: 'multiplier'; multiplier: string }
-  | { kind: 'custom'; mode: 'per_request'; config: { price: number | null } }
-  | { kind: 'custom'; mode: 'per_token'; config: TokenConfig }
+  | { kind: 'custom'; mode: 'visual'; config: VisualConfig }
 
 export interface MockSegment {
   id: number
@@ -97,14 +96,14 @@ const pairs: Pair[] = [
 
 const rules: RuleRow[] = [
   { segment_id: null, group_id: 1, model: 'gpt-4o', rule: { kind: 'multiplier', multiplier: '1.2' } },
-  { segment_id: null, group_id: 1, model: 'web-search', rule: { kind: 'custom', mode: 'per_request', config: { price: 0.008 } } },
-  { segment_id: null, group_id: 2, model: 'claude-haiku-4-5', rule: { kind: 'custom', mode: 'per_token', config: singleTier({ p: 0.8, c: 4, cr: 0.08, cc: 1 }) } },
+  { segment_id: null, group_id: 1, model: 'web-search', rule: { kind: 'custom', mode: 'visual', config: requestTier(0.008) } },
+  { segment_id: null, group_id: 2, model: 'claude-haiku-4-5', rule: { kind: 'custom', mode: 'visual', config: singleTier({ p: 0.8, c: 4, cr: 0.08, cc: 1 }) } },
   { segment_id: VIP, group_id: 1, model: 'gpt-4o-mini', rule: { kind: 'multiplier', multiplier: '0.8' } },
-  { segment_id: ENTERPRISE, group_id: 2, model: 'claude-haiku-4-5', rule: { kind: 'custom', mode: 'per_token', config: singleTier({ p: 0.7, c: 3.5, cr: 0.07, cc: 0.9 }) } },
+  { segment_id: ENTERPRISE, group_id: 2, model: 'claude-haiku-4-5', rule: { kind: 'custom', mode: 'visual', config: singleTier({ p: 0.7, c: 3.5, cr: 0.07, cc: 0.9 }) } },
   // An expression price takes a multiplier only.
   { segment_id: PERSONAL_104, group_id: 2, model: 'claude-sonnet-4-5', rule: { kind: 'multiplier', multiplier: '0.9' } },
   // Set while the model was billed per request; its global price is per token now, so the rule is inactive.
-  { segment_id: null, group_id: 1, model: 'gemini-2.5-flash', rule: { kind: 'custom', mode: 'per_request', config: { price: 0.002 } } }
+  { segment_id: null, group_id: 1, model: 'gemini-2.5-flash', rule: { kind: 'custom', mode: 'visual', config: requestTier(0.002) } }
 ]
 
 // ------------------------------------------------------------------ reads
@@ -199,10 +198,13 @@ export function applyRule(base: PriceDef | null, rule: PriceRule | null): PriceD
 /** A rule as a row of model prices carries it. */
 type ListedRule = PriceRule & { inactive?: true }
 
-/** A rule as configured; a custom price the global price no longer takes (another mode, or tiers or rules now) is marked inactive. */
+/** How a one-tier price is priced: by the request or by tokens. */
+const unitOf = (config: unknown) => simpleTier(config)?.unit ?? 'token'
+
+/** A rule as configured; a custom price the global price no longer takes (another unit, or tiers, rules or an expression now) is marked inactive. */
 function listedRule(rule: PriceRule | undefined, base: PriceDef | null): ListedRule | null {
   if (!rule) return null
-  return rule.kind === 'custom' && base && (rule.mode !== base.mode || !takesCustomPrice(base.mode, base.config)) ? { ...rule, inactive: true } : rule
+  return rule.kind === 'custom' && base && (!takesCustomPrice(base.mode, base.config) || unitOf(rule.config) !== unitOf(base.config)) ? { ...rule, inactive: true } : rule
 }
 
 /**

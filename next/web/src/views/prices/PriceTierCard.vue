@@ -3,19 +3,22 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { SButton, SCheckbox, SDropdown, SIcon, SInput, SSelect } from '@sub2api/ui'
 import { usd } from '@/components/pricing/pricingFormat'
-import { formatNumber } from '@/utils/format'
-import { isSet, num, pricedKeys, type PriceKey, type TokenTier } from './priceExpr'
+import { MAX_COND_DEPTH, MAX_COND_LEAVES, num, pricedKeys, type PriceKey, type TokenTier } from './priceExpr'
+import { condText, newLeaf } from './tierCond'
 import { priceOn, setPriceOn } from './tokenPrice'
+import TierCondTree from './TierCondTree.vue'
 
-// One tier of a per_token price as a numbered card: the header reads back
-// when it matches and what it charges; the body edits the len bound, the
-// name, the unit and the prices. A price is on when its box is ticked (the
-// key is in the tier, tokenPrice.priceOn); a ticked price left blank is not
-// charged. Read-only, it still opens and closes.
+// One tier of a visual price as a numbered card: the header reads back
+// when it matches (its condition in words) and what it charges; the body
+// edits the condition (TierCondTree; the rest has none), the name, the unit
+// and the prices. A price is on when its box is ticked (the key is in the
+// tier, tokenPrice.priceOn); a ticked price left blank is not charged. The
+// menu moves the tier up or down (`canUp` / `canDown`) and removes it.
+// Read-only, it still opens and closes.
 const tier = defineModel<TokenTier>({ required: true })
-const props = defineProps<{ index: number; count: number; lower: number; disabled?: boolean }>()
+const props = defineProps<{ index: number; count: number; canUp?: boolean; canDown?: boolean; disabled?: boolean }>()
 const open = defineModel<boolean>('open', { default: false })
-const emit = defineEmits<{ (e: 'remove'): void }>()
+const emit = defineEmits<{ (e: 'remove'): void; (e: 'move', by: number): void }>()
 const { t } = useI18n()
 
 const isRest = computed(() => props.index === props.count - 1)
@@ -23,10 +26,8 @@ const only = computed(() => props.count === 1)
 
 const condition = computed(() => {
   if (only.value) return t('prices.tier.matchOnly')
-  const lower = formatNumber(props.lower)
-  if (isRest.value) return t('prices.tier.matchRest', { lower })
-  const max = isSet(tier.value.max_len) ? formatNumber(num(tier.value.max_len)) : '…'
-  return props.index === 0 ? t('prices.tier.matchFirst', { max }) : t('prices.tier.matchBetween', { lower, max })
+  if (isRest.value) return t('prices.tier.matchRest')
+  return tier.value.when ? condText(t, tier.value.when) : t('prices.tier.noCond')
 })
 
 const summary = computed(() => {
@@ -35,10 +36,15 @@ const summary = computed(() => {
   return pricedKeys(x).map(k => ({ k: t(`prices.vars.${k}`), v: usd(num(x[k])) }))
 })
 
-const unitOptions = computed(() => (['token', 'request'] as const).map(u => ({ value: u, label: t(`prices.mode.per_${u}`) })))
-const menu = computed(() => [{ key: 'remove', label: t('prices.tier.remove'), tone: 'danger' as const, disabled: only.value }])
+const unitOptions = computed(() => (['token', 'request'] as const).map(u => ({ value: u, label: t(`prices.tier.unitOf.${u}`) })))
+const menu = computed(() => [
+  { key: 'up', label: t('prices.tier.moveUp'), disabled: !props.canUp },
+  { key: 'down', label: t('prices.tier.moveDown'), disabled: !props.canDown },
+  { key: 'remove', label: t('prices.tier.remove'), danger: true, divider: true, disabled: only.value }
+])
 function onMenu(key: string) {
   if (key === 'remove') emit('remove')
+  else emit('move', key === 'up' ? -1 : 1)
 }
 
 /** A price box: p and c are always charged (their boxes stay ticked); cc1h, img and img_o fall back to another price while unticked. */
@@ -91,12 +97,11 @@ const mediaOpen = ref(MEDIA_FIELDS.some(f => on(f.key)))
         <div v-if="only || isRest" class="rounded-lg bg-surface-2 px-3 py-2 text-xs text-fg-muted">
           {{ only ? t('prices.tier.onlyHint') : t('prices.tier.restHint') }}
         </div>
-        <div v-else class="flex flex-wrap items-center gap-2 rounded-lg border border-line px-3 py-2">
-          <span class="rounded-md bg-surface-2 px-2 py-1 text-sm text-fg ring-1 ring-line">{{ t('prices.tier.len') }} <span class="font-mono text-fg-muted">len</span></span>
-          <span class="rounded-md bg-surface-2 px-2 py-1 font-mono text-sm text-fg ring-1 ring-line">&lt;=</span>
-          <SInput v-model="tier.max_len" size="sm" type="number" min="1" class="w-36" :disabled="disabled" :aria-label="t('prices.tier.maxLen')" />
-          <span class="text-xs text-fg-subtle">{{ t('prices.tier.lenHint') }}</span>
-        </div>
+        <template v-else>
+          <TierCondTree v-if="tier.when" v-model="tier.when" :disabled="disabled" />
+          <SButton v-else-if="!disabled" size="sm" variant="ghost" icon="plus" @click="tier.when = newLeaf()">{{ t('prices.cond.addCond') }}</SButton>
+          <p class="mt-1.5 text-xs text-fg-subtle">{{ t('prices.cond.hint', { depth: MAX_COND_DEPTH, leaves: MAX_COND_LEAVES }) }}</p>
+        </template>
       </div>
 
       <div class="flex flex-wrap items-center gap-2">

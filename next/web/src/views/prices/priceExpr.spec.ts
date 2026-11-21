@@ -4,10 +4,10 @@ import {
   checkTokenConfig,
   compactTokenConfig,
   condExpr,
-  checkPerRequest,
   checkPrice,
-  compactPerRequest,
+  requestTier,
   takesCustomPrice,
+  whenExpr,
   fmt,
   goQuote,
   priceExpression,
@@ -21,17 +21,20 @@ import {
   type MarkupRule,
   type PriceMode,
   type RuleCond,
-  type TokenConfig,
+  type TierCond,
+  type VisualConfig,
   type TokenTier
 } from './priceExpr'
 
-const tier = (name: string, max_len: number | null, prices: Partial<TokenTier> = {}): TokenTier => ({
+const upTo = (value: number): TierCond => ({ var: 'len', op: '<=', value })
+/** A token tier up to a length, or the rest (null). */
+const tier = (name: string, max: number | null, prices: Partial<TokenTier> = {}): TokenTier => ({
   name,
-  max_len,
+  ...(max === null ? {} : { when: upTo(max) }),
   unit: 'token',
   ...prices
 })
-const cfg = (tiers: TokenTier[], rules: MarkupRule[] = []): TokenConfig => ({ tiers, rules })
+const cfg = (tiers: TokenTier[], rules: MarkupRule[] = []): VisualConfig => ({ tiers, rules })
 const rule = (multiplier: number, ...conds: RuleCond[]): MarkupRule => ({ name: '', multiplier, conds })
 
 const STANDARD = tier('standard', 200000, { p: 3, c: 15, cr: 0.3, cc: 3.75, cc1h: 6 })
@@ -44,10 +47,10 @@ describe('the generated expression, as the server generates it', () => {
   it.each(golden.map(c => [c.name, c] as const))('is the server’s, byte for byte: %s', (_, c) => {
     expect(priceExpression(c.mode as PriceMode, c.config)).toBe(c.expression)
   })
-  it('is the legacy per-request and single-tier per-token expression, byte for byte', () => {
-    expect(priceExpression('per_request', { price: 0.01 })).toBe('tier("base", flat(0.01))')
-    expect(priceExpression('per_token', singleTier({ p: 3, c: 15, cr: 0.3 }))).toBe('tier("base", p*3 + c*15 + cr*0.3)')
-    expect(priceExpression('per_token', singleTier({ p: 1, c: 5, cr: 0.1, cc: 1.25, cc1h: 2 }))).toBe(
+  it('is the expression of an old per-request and single-tier price, byte for byte', () => {
+    expect(priceExpression('visual', requestTier(0.01))).toBe('tier("base", flat(0.01))')
+    expect(priceExpression('visual', singleTier({ p: 3, c: 15, cr: 0.3 }))).toBe('tier("base", p*3 + c*15 + cr*0.3)')
+    expect(priceExpression('visual', singleTier({ p: 1, c: 5, cr: 0.1, cc: 1.25, cc1h: 2 }))).toBe(
       'tier("base", p*1 + c*5 + cr*0.1 + cc*1.25 + cc1h*2)'
     )
     expect(priceExpression('expression', {})).toBe('')
@@ -55,9 +58,9 @@ describe('the generated expression, as the server generates it', () => {
   it('always prices p and c, and a cache price only when it is set (0 included)', () => {
     expect(tokenExpr(cfg([tier('base', null, { cr: 0, cc: null })]))).toBe('tier("base", p*0 + c*0 + cr*0)')
   })
-  it('chains tiers by max_len as the legacy tiers did, nesting from the third', () => {
+  it('chains tiers in the order listed as the length tiers did, nesting from the third', () => {
     expect(tokenExpr(cfg([STANDARD, LONG]))).toBe(TWO)
-    const three = cfg([tier('long', null, { p: 3, c: 15 }), tier('mid', 128000, { p: 2, c: 12 }), tier('short', 32000, { p: 1, c: 6 })])
+    const three = cfg([tier('short', 32000, { p: 1, c: 6 }), tier('mid', 128000, { p: 2, c: 12 }), tier('long', null, { p: 3, c: 15 })])
     expect(tokenExpr(three)).toBe(
       'len <= 32000 ? tier("short", p*1 + c*6) : (len <= 128000 ? tier("mid", p*2 + c*12) : tier("long", p*3 + c*15))'
     )
@@ -67,7 +70,7 @@ describe('the generated expression, as the server generates it', () => {
     )
   })
   it('prices a request tier flat and image tokens apart', () => {
-    expect(tokenExpr(cfg([tier('base', 1000, { p: 1, c: 2 }), { name: 'bulk', max_len: null, unit: 'request', price: 0.05 }]))).toBe(
+    expect(tokenExpr(cfg([tier('base', 1000, { p: 1, c: 2 }), { name: 'bulk', unit: 'request', price: 0.05 }]))).toBe(
       'len <= 1000 ? tier("base", p*1 + c*2) : tier("bulk", flat(0.05))'
     )
     expect(tokenExpr(cfg([tier('base', null, { p: 5, c: 40, cr: 1.25, img: 10, img_o: 40 })]))).toBe(
@@ -95,7 +98,48 @@ describe('the generated expression, as the server generates it', () => {
   })
 })
 
-describe('a condition', () => {
+describe('a tier condition', () => {
+  const leaf = (v: 'len' | 'p' | 'c', op: '<' | '<=' | '>' | '>=' | '==' | '!=', value: number): TierCond => ({ var: v, op, value })
+  const hour = (op: '>=' | '<', value: number, tz?: string): TierCond => ({ var: 'hour', op, value, ...(tz === undefined ? {} : { tz }) })
+  it('compares a count, and a time in its zone (UTC when blank or left out)', () => {
+    expect(whenExpr(leaf('p', '>', 100))).toBe('p > 100')
+    expect(whenExpr(leaf('c', '!=', 0.5))).toBe('c != 0.5')
+    expect(whenExpr(hour('>=', 22, 'Asia/Shanghai'))).toBe('hour("Asia/Shanghai") >= 22')
+    expect(whenExpr(hour('<', 6, ''))).toBe('hour("UTC") < 6')
+    expect(whenExpr(hour('<', 6))).toBe('hour("UTC") < 6')
+    expect(whenExpr({ var: 'weekday', tz: 'UTC', op: '==', value: 0 })).toBe('weekday("UTC") == 0')
+    expect(whenExpr({ var: 'minute', op: '<', value: '30' })).toBe('minute("UTC") < 30')
+  })
+  it('joins a group by && or ||, writes a group of one as its child, and puts a group of several inside another in parentheses', () => {
+    const a = leaf('len', '>', 200000)
+    const night: TierCond = { or: [hour('>=', 22, 'Asia/Shanghai'), hour('<', 6, 'Asia/Shanghai')] }
+    expect(whenExpr({ and: [a, night] })).toBe('len > 200000 && (hour("Asia/Shanghai") >= 22 || hour("Asia/Shanghai") < 6)')
+    expect(whenExpr({ and: [a] })).toBe('len > 200000')
+    expect(whenExpr({ or: [{ and: [a, leaf('p', '<', 5)] }] })).toBe('len > 200000 && p < 5')
+    // A group of one holding a group of several is that group: in parentheses where it is one of several.
+    expect(whenExpr({ and: [{ or: [{ or: [a, leaf('p', '<', 5)] }] }, leaf('c', '>', 1)] })).toBe('(len > 200000 || p < 5) && c > 1')
+    expect(whenExpr({ and: [{ and: [a, leaf('p', '<', 5)] }, leaf('c', '>', 1)] })).toBe('(len > 200000 && p < 5) && c > 1')
+  })
+  it('negates in parentheses, nested as deep as it goes', () => {
+    expect(whenExpr({ not: leaf('len', '<=', 1000) })).toBe('!(len <= 1000)')
+    expect(whenExpr({ not: { or: [leaf('p', '>', 1), { not: { and: [leaf('c', '>', 2), hour('>=', 9, 'UTC')] } }] } })).toBe(
+      '!(p > 1 || !(c > 2 && hour("UTC") >= 9))'
+    )
+  })
+  it('chains three and more tiers by any condition, the last the rest', () => {
+    const night: TierCond = { and: [leaf('len', '>', 200000), { or: [hour('>=', 22, 'Asia/Shanghai'), hour('<', 6, 'Asia/Shanghai')] }] }
+    const c = cfg([
+      { name: 'long_night', when: night, unit: 'token', p: 4, c: 18 },
+      { name: 'long', when: leaf('len', '>', 200000), unit: 'token', p: 6, c: 22.5 },
+      { name: 'base', unit: 'token', p: 3, c: 15 }
+    ])
+    expect(tokenExpr(c)).toBe(
+      'len > 200000 && (hour("Asia/Shanghai") >= 22 || hour("Asia/Shanghai") < 6) ? tier("long_night", p*4 + c*18) : (len > 200000 ? tier("long", p*6 + c*22.5) : tier("base", p*3 + c*15))'
+    )
+  })
+})
+
+describe('a rule condition', () => {
   const field = (source: FieldCond['source'], op: CondOp, value?: CondValue) => condExpr({ source, key: 'k', op, value })
   it('reads each source', () => {
     expect(field('param', 'eq', 'a')).toBe('param("k") == "a"')
@@ -150,7 +194,7 @@ describe('the config the editor saves', () => {
   it('leaves out unset prices, a request tier’s token prices and the value of exists', () => {
     const edited = cfg(
       [
-        tier('a', 1000, { p: 1, c: null, cr: null, cc1h: null, img: null, price: 9 }),
+        { ...tier('a', 0, { p: 1, c: null, cr: null, cc1h: null, img: null, price: 9 }), when: { and: [{ var: 'len', op: '<=', value: '1000' }, { var: 'p', op: '>', value: 5, tz: 'UTC' }, { not: { var: 'hour', op: '<', value: 6, tz: 'UTC' } }] } },
         { ...tier('b', null, { p: 2, c: 3 }), unit: 'request', price: 0.1 }
       ],
       [
@@ -166,8 +210,8 @@ describe('the config the editor saves', () => {
     )
     expect(compactTokenConfig(edited)).toEqual({
       tiers: [
-        { name: 'a', max_len: 1000, unit: 'token', p: 1, c: 0 },
-        { name: 'b', max_len: null, unit: 'request', price: 0.1 }
+        { name: 'a', when: { and: [upTo(1000), { var: 'p', op: '>', value: 5 }, { not: { var: 'hour', op: '<', value: 6, tz: 'UTC' } }] }, unit: 'token', p: 1, c: 0 },
+        { name: 'b', unit: 'request', price: 0.1 }
       ],
       rules: [
         {
@@ -181,27 +225,63 @@ describe('the config the editor saves', () => {
       ]
     })
   })
-  it('is one token tier for a set of prices, and only that shape is simple', () => {
+  it('is one tier for a set of prices or a price per request, and only that shape is simple', () => {
     expect(singleTier({ p: 1, c: 2, cr: null, cc: 0 })).toEqual({
-      tiers: [{ name: 'base', max_len: null, unit: 'token', p: 1, c: 2, cc: 0 }],
+      tiers: [{ name: 'base', unit: 'token', p: 1, c: 2, cc: 0 }],
       rules: []
     })
+    expect(requestTier(0.5)).toEqual({ tiers: [{ name: 'base', unit: 'request', price: 0.5 }], rules: [] })
     expect(simpleTier(singleTier({ p: 1, c: 2 }))).toMatchObject({ p: 1 })
+    expect(simpleTier(requestTier(1))).toMatchObject({ unit: 'request', price: 1 })
     expect(simpleTier(cfg([STANDARD, LONG]))).toBeNull()
     expect(simpleTier(cfg([tier('base', null)], [rule(2, { source: 'header', key: 'x', op: 'exists' })]))).toBeNull()
-    expect(simpleTier(cfg([{ name: 'base', max_len: null, unit: 'request', price: 1 }]))).toBeNull()
+    expect(takesCustomPrice('visual', requestTier(1))).toBe(true)
+    expect(takesCustomPrice('visual', cfg([STANDARD, LONG]))).toBe(false)
+    expect(takesCustomPrice('expression', {})).toBe(false)
   })
 })
 
 describe('local checks', () => {
-  const keys = (c: TokenConfig) => checkTokenConfig(c).map(x => x.key.replace('prices.local.', ''))
+  const keys = (c: VisualConfig) => checkTokenConfig(c).map(x => x.key.replace('prices.local.', ''))
   it('pass a whole config', () => {
     expect(keys(cfg([STANDARD, LONG], [rule(2, { source: 'param', key: 'n', op: 'gt', value: 3 })]))).toEqual([])
   })
-  it('want tiers with valid, distinct names and rising bounds', () => {
+  it('want tiers with valid, distinct names, a condition on each but the last, and at most 20', () => {
     expect(keys(cfg([]))).toEqual(['noTier'])
-    expect(keys(cfg([tier('a b', 10), tier('x', 5), tier('x', null)]))).toEqual(['tierName', 'tierOrder', 'tierDup'])
-    expect(keys(cfg([tier('a', null), tier('b', null)]))).toEqual(['tierMax'])
+    expect(keys(cfg([tier('a b', 10), tier('x', 5), tier('x', null)]))).toEqual(['tierName', 'tierDup'])
+    expect(keys(cfg([tier('a', null), tier('b', null)]))).toEqual(['tierWhen'])
+    expect(keys(cfg([tier('a', 100), tier('b', 200)]))).toEqual(['tierRest'])
+    expect(keys(cfg(Array.from({ length: 21 }, (_, i) => tier(`t${i}`, i === 20 ? null : i + 1))))).toEqual(['tooManyTiers'])
+    expect(keys(cfg(Array.from({ length: 20 }, (_, i) => tier(`t${i}`, i === 19 ? null : i + 1))))).toEqual([])
+  })
+  it('want every tier condition whole, as the server checks it', () => {
+    const one = (when: unknown) => keys(cfg([{ name: 'a', when: when as TierCond, unit: 'token' }, tier('b', null)]))
+    expect(one({ var: 'len', op: '>', value: -5 })).toEqual([])
+    expect(one({ var: 'len', op: '>', value: '200000' })).toEqual([])
+    expect(one({ var: 'len', op: '>', value: null })).toEqual(['condValue'])
+    expect(one({ var: 'len', op: '>', value: 'x' })).toEqual(['condValue'])
+    expect(one({ var: 'len', op: '=>', value: 1 })).toEqual(['condShape'])
+    expect(one({ var: 'cr', op: '>', value: 1 })).toEqual(['condShape'])
+    expect(one({ var: 'len', op: '>' })).toEqual(['condShape'])
+    expect(one({ var: 'len', op: '>', value: 1, tz: 'UTC' })).toEqual(['condShape'])
+    expect(one({ var: 'len', op: '>', value: 1, and: [] })).toEqual(['condShape'])
+    expect(one({ and: [], or: [] })).toEqual(['condShape'])
+    expect(one({ and: [] })).toEqual(['condEmpty'])
+    expect(one({ or: [{ var: 'p', op: '<', value: 1 }, { and: [] }] })).toEqual(['condEmpty'])
+    expect(one({ not: { var: 'hour', op: '<', value: 24 } })).toEqual(['condTime'])
+    expect(one({ var: 'hour', op: '<', value: 1.5 })).toEqual(['condTime'])
+    expect(one({ var: 'month', op: '==', value: 0 })).toEqual(['condTime'])
+    expect(one({ var: 'day', op: '==', value: 31, tz: '' })).toEqual([])
+    expect(one({ var: 'weekday', op: '==', value: 6, tz: 'Mars/Base' })).toEqual(['condTz'])
+    expect(one({ var: 'minute', op: '>=', value: 59, tz: 'Asia/Shanghai' })).toEqual([])
+  })
+  it('want a tier condition at most 5 deep and of at most 20 comparisons', () => {
+    const one = (when: TierCond) => keys(cfg([{ name: 'a', when, unit: 'token' }, tier('b', null)]))
+    const nest = (depth: number): TierCond => (depth === 1 ? upTo(1) : { not: nest(depth - 1) })
+    expect(one(nest(5))).toEqual([])
+    expect(one(nest(6))).toEqual(['condDepth'])
+    expect(one({ and: Array.from({ length: 20 }, (_, i) => upTo(i)) })).toEqual([])
+    expect(one({ and: Array.from({ length: 21 }, (_, i) => upTo(i)) })).toEqual(['condLeaves'])
   })
   it('want every rule complete', () => {
     const bad: RuleCond[] = [
@@ -232,29 +312,27 @@ describe('local checks', () => {
     expect(one({ source: 'time', tz: '', from_hour: 23, to_hour: 24 })).toEqual([])
     expect(keys(cfg([tier('a', null)], [rule(-1, { source: 'header', key: 'x', op: 'exists' })]))).toEqual(['ruleField'])
     expect(keys(cfg([tier('a', 100, { p: -1 }), tier('b', null)]))).toEqual(['negative'])
-    expect(keys(cfg([tier('a', 100), tier('b', 200)]))).toEqual(['tierRest'])
-    expect(keys(cfg([{ name: 'q', max_len: null, unit: 'request', price: null }]))).toEqual(['tierPrice'])
-    expect(checkPerRequest(null).map(x => x.key)).toEqual(['prices.local.price'])
-    expect(checkPerRequest(-1)).toHaveLength(1)
-    expect(checkPerRequest(0)).toEqual([])
+    expect(keys(cfg([{ name: 'q', unit: 'request', price: null }]))).toEqual(['tierPrice'])
+    expect(keys(requestTier(-1))).toEqual(['negative'])
+    expect(keys(requestTier(0))).toEqual([])
   })
   it('check a price as it is sent, by its mode', () => {
     const keys = (p: Parameters<typeof checkPrice>[0]) => checkPrice(p).map(x => x.key.replace('prices.local.', ''))
     expect(keys({ mode: 'expression', config: {}, expression: ' \n' })).toEqual(['emptyExpr'])
     expect(keys({ mode: 'expression', config: {}, expression: 'p*3' })).toEqual([])
-    expect(keys({ mode: 'per_request', config: compactPerRequest(null, [rule(-1, { source: 'header', key: 'x', op: 'exists' })]), expression: '' })).toEqual([
-      'price',
+    expect(keys({ mode: 'visual', config: { ...requestTier(null), rules: [rule(-1, { source: 'header', key: 'x', op: 'exists' })] }, expression: '' })).toEqual([
+      'tierPrice',
       'ruleField'
     ])
-    expect(keys({ mode: 'per_token', config: cfg([]), expression: '' })).toEqual(['noTier'])
+    expect(keys({ mode: 'visual', config: cfg([]), expression: '' })).toEqual(['noTier'])
   })
 })
 
 describe('the summary of a price', () => {
-  it('is its first tier, with the number of tiers and rules', () => {
-    expect(summarize('per_request', { price: 0.02 })).toEqual({ kind: 'per_request', price: 0.02, rules: 0 })
-    expect(summarize('per_token', cfg([LONG, STANDARD], [rule(2, { source: 'header', key: 'x', op: 'exists' })]))).toEqual({
-      kind: 'per_token',
+  it('is its first tier (the first to match), with the number of tiers and rules', () => {
+    expect(summarize('visual', requestTier(0.02))).toEqual({ kind: 'visual', first: { name: 'base', unit: 'request', price: 0.02 }, tiers: 1, rules: 0 })
+    expect(summarize('visual', cfg([STANDARD, LONG], [rule(2, { source: 'header', key: 'x', op: 'exists' })]))).toEqual({
+      kind: 'visual',
       first: STANDARD,
       tiers: 2,
       rules: 1
@@ -262,13 +340,10 @@ describe('the summary of a price', () => {
     expect(summarize('expression', {})).toEqual({ kind: 'expression' })
   })
 
-  it('a per_request price takes the rules of per_token, and then no custom price', () => {
-    const rules = [{ name: 'hd', multiplier: 2, conds: [{ source: 'param' as const, key: 'quality', op: 'eq' as const, value: 'hd' }] }]
-    const cfg = compactPerRequest(0.04, rules)
-    expect(priceExpression('per_request', cfg)).toBe('(tier("base", flat(0.04))) * (param("quality") == "hd" ? 2 : 1)')
-    expect(compactPerRequest(0.04, [])).toEqual({ price: 0.04 })
-    expect(takesCustomPrice('per_request', cfg)).toBe(false)
-    expect(takesCustomPrice('per_request', { price: 0.04 })).toBe(true)
-    expect(checkPerRequest(0.04, [{ ...rules[0], multiplier: null }]).map(x => x.key)).toEqual(['prices.local.ruleField'])
+  it('a price per request takes rules as a price by tokens does, and then no custom price', () => {
+    const rules = [rule(2, { source: 'param', key: 'quality', op: 'eq', value: 'hd' })]
+    const c = { ...requestTier(0.04), rules }
+    expect(priceExpression('visual', c)).toBe('(tier("base", flat(0.04))) * (param("quality") == "hd" ? 2 : 1)')
+    expect(takesCustomPrice('visual', c)).toBe(false)
   })
 })

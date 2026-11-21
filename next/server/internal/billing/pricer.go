@@ -24,7 +24,7 @@ type priceSnapshot struct {
 	at      time.Time
 	byModel map[string]core.PriceRule // one price per complete model id
 	bases   catalog                   // the same prices as the pricing endpoints show them
-	custom  map[string]string         // PriceDef.customMode of each base, decoded once
+	custom  map[string]string         // PriceDef.customShape of each base, decoded once
 	rules   ruleSet                   // price rules of groups and segments
 }
 
@@ -52,13 +52,15 @@ func (s *Service) snapshot(ctx context.Context) (*priceSnapshot, error) {
 	for _, row := range rows {
 		r := core.PriceRule{ID: row.ID, Model: row.Model, Mode: row.Mode, Expression: row.Expression,
 			ExprVersion: core.ValueOr(row.ExprVersion, 0), ExprHash: row.ExprHash}
-		// A price that reads video usage facts serves video requests only.
+		// A price that reads video usage facts serves video requests only; a
+		// visual price that reads no token count is due per request.
 		if program, err := expr.CompileCached(r.Expression); err == nil {
 			r.VideoOnly = slices.ContainsFunc(program.Facts(), func(fact string) bool { return strings.HasPrefix(fact, "video_") })
+			r.PerRequest = r.Mode == expr.ModeVisual && len(program.UsedVars()) == 0
 		}
 		snap.byModel[r.Model] = r
 		base := PriceDef{Mode: r.Mode, Config: row.Config, Expression: r.Expression}
-		snap.bases[r.Model], snap.custom[r.Model] = base, base.customMode()
+		snap.bases[r.Model], snap.custom[r.Model] = base, base.customShape()
 	}
 	if snap.rules, err = loadRules(ctx, s.db.Gorm, ""); err != nil {
 		return nil, err

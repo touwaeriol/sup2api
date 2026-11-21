@@ -19,7 +19,8 @@ import (
 // expression config is {}, numeric strings become numbers, and request rules
 // are written as factors, "A ||| B" as "(A) * (B)" (as expr.LegacyProduct
 // writes it), with the hash Go computes; old history rows stay under their
-// hashes. A rerun changes nothing.
+// hashes. A rerun changes nothing. The prices are checked after the later
+// migrations too (0122 makes per_token and per_request prices visual).
 func TestMigration0121BillingModes(t *testing.T) {
 	const id = "0121_billing_modes.sql"
 	db := testutil.DBThrough(t, migrationBefore(t, id))
@@ -161,24 +162,24 @@ func TestMigration0121BillingModes(t *testing.T) {
 	rulesAfter := product(`tier("base", p*1 + c*2)`, `has(header("anthropic-beta"), "fast") ? 2 : 1`, `param("n") == 4 ? 3 : 1`,
 		`has(param("model"), "mini") ? 0.5 : 1`, `(hour("UTC") >= 22 || hour("UTC") < 6) ? 0.8 : 1`)
 	want := map[string]struct{ mode, config, expression string }{
-		"pt-flat":    {"per_token", `{"tiers": [{"c": 15, "p": 3, "cc": 3.75, "cr": 0.3, "cc1h": 6, "name": "base", "unit": "token", "max_len": null}], "rules": []}`, prices[0].expression},
-		"pt-strings": {"per_token", `{"tiers": [{"c": 0.6, "p": 0.15, "name": "base", "unit": "token", "max_len": null}], "rules": []}`, prices[1].expression},
-		"pr":         {"per_request", `{"price": 0.04}`, prices[2].expression},
-		"vis-synced": {"per_token", `{"tiers": [{"c": 15, "p": 3, "cr": 0.3, "name": "standard", "unit": "token", "max_len": 200000},
-			{"c": 22.5, "p": 6, "cr": 0.6, "name": "long_context", "unit": "token", "max_len": null}], "rules": []}`, "v1:" + twoTiers},
-		"vis-rules": {"per_token", `{"tiers": [{"c": 2, "p": 1, "name": "base", "unit": "token", "max_len": null}], "rules": [
+		"pt-flat":    {"visual", `{"tiers": [{"c": 15, "p": 3, "cc": 3.75, "cr": 0.3, "cc1h": 6, "name": "base", "unit": "token"}], "rules": []}`, prices[0].expression},
+		"pt-strings": {"visual", `{"tiers": [{"c": 0.6, "p": 0.15, "name": "base", "unit": "token"}], "rules": []}`, prices[1].expression},
+		"pr":         {"visual", `{"tiers": [{"name": "base", "unit": "request", "price": 0.04}], "rules": []}`, prices[2].expression},
+		"vis-synced": {"visual", `{"tiers": [{"c": 15, "p": 3, "cr": 0.3, "name": "standard", "unit": "token", "when": {"var": "len", "op": "<=", "value": 200000}},
+			{"c": 22.5, "p": 6, "cr": 0.6, "name": "long_context", "unit": "token"}], "rules": []}`, "v1:" + twoTiers},
+		"vis-rules": {"visual", `{"tiers": [{"c": 2, "p": 1, "name": "base", "unit": "token"}], "rules": [
 			{"conds": [{"op": "contains", "key": "Anthropic-Beta", "value": "fast", "source": "header"}], "multiplier": 2},
 			{"conds": [{"op": "eq", "key": "n", "value": 4, "source": "param"}], "multiplier": 3},
 			{"conds": [{"op": "contains", "key": "model", "value": "mini", "source": "param"}], "multiplier": 0.5},
 			{"conds": [{"source": "time", "to_hour": 6, "from_hour": 22}], "multiplier": 0.8}]}`, rulesAfter},
-		"vis-one":     {"per_token", `{"tiers": [{"p": 1, "name": "only", "unit": "token", "max_len": null}], "rules": []}`, prices[5].expression},
+		"vis-one":     {"visual", `{"tiers": [{"p": 1, "name": "only", "unit": "token"}], "rules": []}`, prices[5].expression},
 		"vis-flat":    {"expression", `{}`, prices[6].expression},
 		"vis-range":   {"expression", `{}`, product(`tier("base", p*1 + c*0)`, `(param("max_tokens") ?? 0) >= 1000 ? 1.1 : 1`)},
 		"video":       {"expression", `{}`, video},
 		"src-literal": {"expression", `{}`, product(`tier("x", p)`, `header("x-tag") == "a|||b" ? 2 : 1`)},
 		"src-comment": {"expression", `{}`, "(tier(\"x\", p) // the \"base\"\n) * (param(\"a\") == 1 ? 2 : 1)"},
 		"src-bare":    {"expression", `{}`, product(`tier("x", p*1)`, `param("fast") ? 2 : 1`)},
-		"vis-flat0":   {"per_token", `{"tiers": [{"p": 1, "name": "z", "unit": "token", "max_len": null}], "rules": []}`, `tier("z", p*1 + c*0)`},
+		"vis-flat0":   {"visual", `{"tiers": [{"p": 1, "name": "z", "unit": "token"}], "rules": []}`, `tier("z", p*1 + c*0)`},
 	}
 	for _, p := range prices {
 		if strings.HasPrefix(p.model, "bad-") {
@@ -231,8 +232,8 @@ func TestMigration0121BillingModes(t *testing.T) {
 	require.NoError(t, db.Gorm.WithContext(ctx).Table("price_rules").Where("kind = 'custom'").Order("model DESC").
 		Select("mode, config, expression, expr_hash").Scan(&custom).Error)
 	require.Len(t, custom, 2)
-	require.JSONEq(t, `{"tiers": [{"c": 2, "p": 1, "name": "base", "unit": "token", "max_len": null}], "rules": []}`, string(custom[0].Config))
-	require.JSONEq(t, `{"price": 0.5}`, string(custom[1].Config))
+	require.JSONEq(t, `{"tiers": [{"c": 2, "p": 1, "name": "base", "unit": "token"}], "rules": []}`, string(custom[0].Config))
+	require.JSONEq(t, `{"tiers": [{"name": "base", "unit": "request", "price": 0.5}], "rules": []}`, string(custom[1].Config))
 	for _, r := range custom {
 		gen, err := expr.Generate(r.Mode, r.Config)
 		require.NoError(t, err)

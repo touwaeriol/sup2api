@@ -14,11 +14,11 @@ import (
 var (
 	handWrittenPrice = PriceDef{Mode: "expression", Config: json.RawMessage(`{}`),
 		Expression: `(tier("base", p*3 + c*15)) * (param("fast") == true ? 2 : 1)`}
-	perTokenPrice = PriceDef{Mode: "per_token", Config: json.RawMessage(`{"tiers": [{"name": "base", "p": 1, "c": 5}], "rules": []}`),
+	perTokenPrice = PriceDef{Mode: "visual", Config: json.RawMessage(`{"tiers": [{"name": "base", "p": 1, "c": 5}], "rules": []}`),
 		Expression: `tier("base", p*1 + c*5)`}
-	tieredPrice = PriceDef{Mode: "per_token",
-		Config: json.RawMessage(`{"tiers": [{"name": "standard", "max_len": 200000, "p": 3, "c": 15},
-			{"name": "long", "max_len": null, "p": 6, "c": 22.5}], "rules": [{"multiplier": 2, "conds": [{"source": "param", "key": "fast", "op": "eq", "value": true}]}]}`),
+	tieredPrice = PriceDef{Mode: "visual",
+		Config: json.RawMessage(`{"tiers": [{"name": "standard", "when": {"var": "len", "op": "<=", "value": 200000}, "p": 3, "c": 15},
+			{"name": "long", "p": 6, "c": 22.5}], "rules": [{"multiplier": 2, "conds": [{"source": "param", "key": "fast", "op": "eq", "value": true}]}]}`),
 		Expression: `(len <= 200000 ? tier("standard", p*3 + c*15) : tier("long", p*6 + c*22.5)) * (param("fast") == true ? 2 : 1)`}
 	videoPrice = PriceDef{Mode: "expression", Config: json.RawMessage(`{}`), Expression: `tier("video", c * (u("video_input") == true ? 4.3 : 7))`}
 )
@@ -30,7 +30,7 @@ func TestListPrice(t *testing.T) {
 		base.Multiplier = dec(n)
 		return base
 	}
-	own := &storedRule{Rule: Rule{Kind: core.PriceRuleCustom, Mode: "per_token", Config: json.RawMessage(`{"tiers":[{"name":"base","p":0.8,"c":4}]}`)},
+	own := &storedRule{Rule: Rule{Kind: core.PriceRuleCustom, Mode: "visual", Config: json.RawMessage(`{"tiers":[{"name":"base","p":0.8,"c":4}]}`)},
 		expression: `tier("base", p*0.8 + c*4)`}
 	cases := []struct {
 		name string
@@ -56,16 +56,16 @@ func TestListPrice(t *testing.T) {
 		})
 	}
 	t.Run("custom price", func(t *testing.T) {
-		require.JSONEq(t, `{"mode": "per_token", "config": {"tiers": [{"name": "base", "p": 0.8, "c": 4}]}, "expression": "tier(\"base\", p*0.8 + c*4)"}`,
+		require.JSONEq(t, `{"mode": "visual", "config": {"tiers": [{"name": "base", "p": 0.8, "c": 4}]}, "expression": "tier(\"base\", p*0.8 + c*4)"}`,
 			jsonOf(t, listPrice(perTokenPrice, own)))
 	})
 	// The multiplier is a decimal string without trailing zeros, there only
 	// under a multiplier rule.
-	require.JSONEq(t, `{"mode": "per_token", "config": {"tiers": [{"name": "base", "p": 1, "c": 5}], "rules": []}, "expression": "tier(\"base\", p*1 + c*5)"}`,
+	require.JSONEq(t, `{"mode": "visual", "config": {"tiers": [{"name": "base", "p": 1, "c": 5}], "rules": []}, "expression": "tier(\"base\", p*1 + c*5)"}`,
 		jsonOf(t, listPrice(perTokenPrice, nil)))
-	require.JSONEq(t, `{"mode": "per_token", "config": {"tiers": [{"name": "base", "p": 1, "c": 5}], "rules": []}, "expression": "tier(\"base\", p*1 + c*5)", "multiplier": "1.2"}`,
+	require.JSONEq(t, `{"mode": "visual", "config": {"tiers": [{"name": "base", "p": 1, "c": 5}], "rules": []}, "expression": "tier(\"base\", p*1 + c*5)", "multiplier": "1.2"}`,
 		jsonOf(t, listPrice(perTokenPrice, times("1.20"))))
-	require.JSONEq(t, `{"mode": "per_token", "config": {"tiers": [{"name": "base", "p": 1, "c": 5}], "rules": []}, "expression": "tier(\"base\", p*1 + c*5)", "multiplier": "0"}`,
+	require.JSONEq(t, `{"mode": "visual", "config": {"tiers": [{"name": "base", "p": 1, "c": 5}], "rules": []}, "expression": "tier(\"base\", p*1 + c*5)", "multiplier": "0"}`,
 		jsonOf(t, listPrice(perTokenPrice, times("0"))))
 }
 
@@ -94,7 +94,7 @@ func costOf(t *testing.T, expression string) string {
 // config where there is one and else around the expression.
 func TestExportPrice(t *testing.T) {
 	handWritten := PriceDef{Mode: "expression", Config: json.RawMessage(`{}`), Expression: `tier("base", p*3 + c*15)`}
-	stale := customRule("per_request", `tier("base", flat(1))`)
+	stale := customRule("request", `tier("base", flat(1))`)
 
 	p, err := exportPrice("m", handWritten, ruleLevels{group: times("1.2")})
 	require.NoError(t, err)
@@ -126,15 +126,15 @@ func TestExportPrice(t *testing.T) {
 	// expression is generated from it.
 	p, err = exportPrice("m", tieredPrice, ruleLevels{group: times("0.5")})
 	require.NoError(t, err)
-	require.JSONEq(t, `{"tiers": [{"name": "standard", "max_len": 200000, "p": 1.5, "c": 7.5}, {"name": "long", "max_len": null, "p": 3, "c": 11.25}],
+	require.JSONEq(t, `{"tiers": [{"name": "standard", "when": {"var": "len", "op": "<=", "value": 200000}, "p": 1.5, "c": 7.5}, {"name": "long", "p": 3, "c": 11.25}],
 		"rules": [{"multiplier": 2, "conds": [{"source": "param", "key": "fast", "op": "eq", "value": true}]}]}`, string(p.Config))
 	require.Equal(t, `(len <= 200000 ? tier("standard", p*1.5 + c*7.5) : tier("long", p*3 + c*11.25)) * (param("fast") == true ? 2 : 1)`, p.Expression)
 
 	// A unit=request tier and a per-request price scale their price.
-	p, err = exportPrice("m", PriceDef{Mode: "per_token", Config: json.RawMessage(`{"tiers": [{"name": "bulk", "unit": "request", "price": 0.05}]}`)}, ruleLevels{group: times("2")})
+	p, err = exportPrice("m", PriceDef{Mode: "visual", Config: json.RawMessage(`{"tiers": [{"name": "bulk", "unit": "request", "price": 0.05}]}`)}, ruleLevels{group: times("2")})
 	require.NoError(t, err)
 	require.Equal(t, `tier("bulk", flat(0.1))`, p.Expression)
-	p, err = exportPrice("m", PriceDef{Mode: "per_request", Config: json.RawMessage(`{"price": 0.05}`)}, ruleLevels{group: times("3")})
+	p, err = exportPrice("m", PriceDef{Mode: "visual", Config: json.RawMessage(`{"tiers": [{"name": "base", "unit": "request", "price": 0.05}]}`)}, ruleLevels{group: times("3")})
 	require.NoError(t, err)
 	require.Equal(t, `tier("base", flat(0.15))`, p.Expression)
 

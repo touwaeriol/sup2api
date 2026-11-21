@@ -562,10 +562,7 @@ func (c *call) prepareBilling(ctx context.Context) *gwError {
 		}
 		return fromCore(e, rt)
 	}
-	kind := rule.Mode
-	if rule.VideoOnly {
-		kind = "video"
-	}
+	kind := rule.BillingType()
 	if !c.ep.SupportsBillingType(kind) {
 		return &gwError{Status: http.StatusBadRequest, Code: "billing_type_not_supported",
 			Message:    "endpoint " + c.ep.Protocol + " does not support " + kind + " pricing for model " + c.model,
@@ -808,7 +805,7 @@ func (c *call) finishSubmit(ctx context.Context, rec *core.UsageRecord, billing 
 func (c *call) finalizeBillability(ctx context.Context, rec *core.UsageRecord, billing string) {
 	// completed: the upstream did the work this record is priced for - it
 	// answered, or the client left while it was answering and still owes for
-	// it (a per_request price is due in both cases).
+	// it (a per-request price is due in both cases).
 	owed, waived := c.settleCanceled(ctx, rec, billing)
 	hasUsage, priced := usageOf(rec, rec.Success || owed)
 	rec.Billable = !strings.EqualFold(billing, "free") && !waived && priced
@@ -819,15 +816,15 @@ func (c *call) finalizeBillability(ctx context.Context, rec *core.UsageRecord, b
 }
 
 // usageOf says whether rec holds usage, and whether it holds a price that is
-// due: one for that usage, or a per_request one when the upstream completed
-// the work.
+// due: one for that usage, or a per-request one (core.PriceRule.PerRequest)
+// when the upstream completed the work.
 func usageOf(rec *core.UsageRecord, completed bool) (hasUsage, priced bool) {
 	hasUsage = rec.Tokens != (core.UsageTokens{}) || len(rec.Metrics) > 0
-	priced = rec.Price != nil && (hasUsage || (completed && rec.Price.Mode == "per_request"))
+	priced = rec.Price != nil && (hasUsage || (completed && rec.Price.PerRequest))
 	for _, item := range append(append([]core.PricedUsage(nil), rec.Additional...), rec.Replacement...) {
 		itemUsage := item.Tokens != (core.UsageTokens{}) || len(item.Metrics) > 0
 		hasUsage = hasUsage || itemUsage
-		priced = priced || (item.Price != nil && (itemUsage || (completed && item.Price.Mode == "per_request")))
+		priced = priced || (item.Price != nil && (itemUsage || (completed && item.Price.PerRequest)))
 	}
 	return hasUsage, priced
 }
@@ -841,7 +838,7 @@ var errReadingEmpty = errors.New("the upstream answered and the host's reading o
 // reading of the answer found nothing to bill: there are no facts and the
 // core makes none up, so the missing usage shows instead of passing as a
 // free request. A free endpoint, a task submission (its usage comes when
-// the task ends) and a per_request price have something else to say about
+// the task ends) and a per-request price have something else to say about
 // the money.
 func (c *call) readingEmpty() error {
 	r := c.rec
@@ -873,7 +870,7 @@ func (c *call) endUnreported(ctx context.Context, account int64, why error) {
 // settleCanceled decides what a request pays whose client hung up while the
 // upstream was answering, by the client disconnect policy (CONTRACTS
 // §25.8). owed says the upstream's work is to be paid for, which is what
-// makes a per_request price due; waived says the policy lets this record go
+// makes a per-request price due; waived says the policy lets this record go
 // free whatever it holds.
 //
 // An answer read to its end already holds the real usage and is billed as it

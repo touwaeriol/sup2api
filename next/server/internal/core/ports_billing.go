@@ -20,11 +20,16 @@ import (
 type PriceRule struct {
 	ID          int64
 	Model       string // complete model id (exact match, no wildcards)
-	Mode        string // per_request | per_token | expression
+	Mode        string // visual | expression
 	Expression  string
 	ExprVersion int
 	ExprHash    string
 	VideoOnly   bool // expressions that read video_* usage facts require declared video support
+	// PerRequest marks a visual price that reads no token count (its tiers
+	// are priced by the request): it is due once the upstream completed the
+	// work, with or without usage, and is admitted as billing type
+	// per_request (BillingType). Always the global price's, like VideoOnly.
+	PerRequest bool `json:",omitempty"`
 	// Source is where the list price comes from (PriceSource*); "" on prices
 	// stored before price rules existed, which were all global.
 	Source string `json:",omitempty"`
@@ -34,6 +39,22 @@ type PriceRule struct {
 	// Base is the global price when a custom rule replaced the expression;
 	// nil otherwise. It tells what the usage costs at the global price.
 	Base *PriceBase `json:",omitempty"`
+}
+
+// BillingType is the endpoint billing type (manifest billingTypes) the price
+// is admitted under: video for a VideoOnly price, per_request or per_token
+// for a visual price as it reads token counts or not, else its mode
+// (CONTRACTS §131.1).
+func (r *PriceRule) BillingType() string {
+	switch {
+	case r.VideoOnly:
+		return "video"
+	case r.Mode != "visual":
+		return r.Mode
+	case r.PerRequest:
+		return "per_request"
+	}
+	return "per_token"
 }
 
 // Multiplier is what the expression's result is multiplied by to charge at

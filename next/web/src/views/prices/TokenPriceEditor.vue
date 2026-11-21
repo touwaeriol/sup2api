@@ -2,18 +2,19 @@
 import { ref, toRaw } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { SButton } from '@sub2api/ui'
-import { num, type TokenConfig, type TokenTier } from './priceExpr'
+import type { VisualConfig, TokenTier } from './priceExpr'
 import { PRESETS, TIER_PRESET_GROUPS } from './presets'
-import { addTier, removeTier } from './tokenPrice'
+import { addTier, canMoveTier, moveTier, removeTier } from './tokenPrice'
 import PricePresets from './PricePresets.vue'
 import PriceRuleGroups from './PriceRuleGroups.vue'
 import PriceTierCard from './PriceTierCard.vue'
 
-// The per_token price editor (the visual editor): preset templates, the tiers
-// as numbered cards matched in order (the last one the rest), and the
+// The visual price editor: preset templates, the tiers
+// as numbered cards matched in order (the last one the rest; the others move
+// up and down before it, and a new one goes in just before it), and the
 // request rule groups. Edits the bound config in place. Read-only, the
 // cards still open and close: each part disables its own controls.
-const model = defineModel<TokenConfig>({ required: true })
+const model = defineModel<VisualConfig>({ required: true })
 defineProps<{ disabled?: boolean }>()
 const { t } = useI18n()
 
@@ -33,10 +34,16 @@ function applyPreset(key: string) {
   model.value.tiers = PRESETS[key]()
   open.value = 0
 }
-const lower = (i: number) => (i === 0 ? 0 : num(model.value.tiers[i - 1].max_len))
 function add() {
   addTier(model.value.tiers)
   open.value = model.value.tiers.length - 2
+}
+function move(i: number, by: number) {
+  if (!canMoveTier(model.value.tiers, i, by)) return
+  moveTier(model.value.tiers, i, by)
+  // The open card stays open where its tier goes.
+  if (open.value === i) open.value = i + by
+  else if (open.value === i + by) open.value = i
 }
 function remove(i: number) {
   removeTier(model.value.tiers, i)
@@ -59,9 +66,11 @@ function remove(i: number) {
             :open="open === i"
             :index="i"
             :count="model.tiers.length"
-            :lower="lower(i)"
+            :can-up="canMoveTier(model.tiers, i, -1)"
+            :can-down="canMoveTier(model.tiers, i, 1)"
             :disabled="disabled"
             @update:open="open = $event ? i : null"
+            @move="move(i, $event)"
             @remove="remove(i)"
           />
         </ul>

@@ -16,13 +16,20 @@ func TestResolveExactModel(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
 	e.exec(`INSERT INTO model_prices (model, mode, expression, expr_hash, source)
-		VALUES ('claude-sonnet-4-5', 'per_token', 'tier("base", p*3 + c*15)', 'h1', 'manual'),
-		       ('web-search', 'per_request', 'tier("base", flat(0.01))', 'h2', 'manual'),
-		       ('gpt-4o', 'per_token', 'tier("base", p*2.5)', 'h3', 'manual')`)
+		VALUES ('claude-sonnet-4-5', 'visual', 'tier("base", p*3 + c*15)', 'h1', 'manual'),
+		       ('web-search', 'visual', 'tier("base", flat(0.01))', 'h2', 'manual'),
+		       ('gpt-4o', 'visual', 'tier("base", p*2.5)', 'h3', 'manual')`)
 	e.exec(`UPDATE model_prices SET enabled = false WHERE model = 'gpt-4o'`)
 	e.svc.invalidate()
-	if r, err := e.svc.Resolve(ctx, core.PriceQuery{Model: "claude-sonnet-4-5"}); err != nil || r.Model != "claude-sonnet-4-5" || r.Mode != "per_token" {
+	if r, err := e.svc.Resolve(ctx, core.PriceQuery{Model: "claude-sonnet-4-5"}); err != nil || r.Model != "claude-sonnet-4-5" || r.Mode != "visual" {
 		t.Fatalf("resolve: %+v %v", r, err)
+	}
+	// A visual price that reads no token count is due per request.
+	for model, perRequest := range map[string]bool{"claude-sonnet-4-5": false, "web-search": true} {
+		r, err := e.svc.Resolve(ctx, core.PriceQuery{Model: model})
+		if err != nil || r.PerRequest != perRequest {
+			t.Fatalf("resolve %s: %+v %v", model, r, err)
+		}
 	}
 	// Exact match only; a disabled price counts as missing.
 	for _, m := range []string{"claude-sonnet-4-5-20250929", "claude-sonnet", "gpt-4o"} {
@@ -32,9 +39,9 @@ func TestResolveExactModel(t *testing.T) {
 	}
 	// One price per model; wildcards and unknown sources are rejected by the database.
 	for _, sql := range []string{
-		`INSERT INTO model_prices (model, mode, expression, expr_hash, source) VALUES ('web-search', 'per_token', 'tier("base", p)', 'h4', 'sync')`,
-		`INSERT INTO model_prices (model, mode, expression, expr_hash, source) VALUES ('claude-*', 'per_token', 'tier("base", p)', 'h4', 'manual')`,
-		`INSERT INTO model_prices (model, mode, expression, expr_hash, source) VALUES ('m1', 'per_token', 'tier("base", p)', 'h4', 'plugin_default')`,
+		`INSERT INTO model_prices (model, mode, expression, expr_hash, source) VALUES ('web-search', 'visual', 'tier("base", p)', 'h4', 'sync')`,
+		`INSERT INTO model_prices (model, mode, expression, expr_hash, source) VALUES ('claude-*', 'visual', 'tier("base", p)', 'h4', 'manual')`,
+		`INSERT INTO model_prices (model, mode, expression, expr_hash, source) VALUES ('m1', 'visual', 'tier("base", p)', 'h4', 'plugin_default')`,
 	} {
 		if _, err := e.db.SQL.ExecContext(ctx, sql); err == nil {
 			t.Fatalf("accepted: %s", sql)

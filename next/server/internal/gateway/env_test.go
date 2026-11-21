@@ -1171,7 +1171,7 @@ func newEnv(t *testing.T, opts ...envOpt) *env {
 	e.slots = &fakeSlots{inUse: map[string]int{}, limits: map[string]int{}}
 	e.settler = &fakeSettler{ch: make(chan *core.UsageRecord, 64)}
 	e.pricer = &fakePricer{rules: map[string]*core.PriceRule{
-		testModel: {ID: 9, Model: testModel, Mode: "per_token", Expression: "p*3", ExprHash: "h"},
+		testModel: {ID: 9, Model: testModel, Mode: "visual", Expression: "p*3", ExprHash: "h"},
 	}}
 	e.balance = &fakeBalance{broke: map[int64]bool{}}
 	e.auth = &fakeAuth{keys: map[string]*core.APIKeyPrincipal{

@@ -4,13 +4,14 @@ import { useI18n } from 'vue-i18n'
 import { SAlert, SField, SHint, SInput, SSegmented, SStack, type SelectOption } from '@sub2api/ui'
 import type { PriceDef, PriceRule } from '@/api/pricing'
 import { applyRule, priceBrief } from './pricingFormat'
-import { customFields, customPrices, customRule, shownFields, startRule, takesCustom, validRule } from './ruleDrafts'
+import { customFields, customPrices, customRule, customUnit, shownFields, startRule, takesCustom, validRule } from './ruleDrafts'
 import { priceLabel } from './ruleText'
 
 // One price rule over the global price `base`: none (the price follows the
 // level above, named by `inheritLabel`), a multiplier of the global price, or
-// a price of its own in the global price's mode. A global price with tiers,
-// rules or an expression takes a multiplier only; a model without a global
+// a price of its own, priced as the global price's one tier is (by tokens or
+// by the request). A global price with tiers, rules or an expression takes a
+// multiplier only; a model without a global
 // price takes no rule at all.
 // Every edit emits a whole new rule, valid or not: one that is not says so
 // under its fields, and the table that holds it refuses to save it.
@@ -36,14 +37,14 @@ const valid = computed(() => validRule(props.modelValue))
 /** The prices of a custom rule and those it shows; none while the rule is of another kind. */
 const custom = computed(() => {
   const rule = props.modelValue
-  return rule?.kind === 'custom' ? { rule, prices: customPrices(rule), keys: shownFields(rule, props.base), required: customFields(rule.mode).required } : null
+  return rule?.kind === 'custom' ? { rule, prices: customPrices(rule), keys: shownFields(rule, props.base), required: customFields(customUnit(rule)).required } : null
 })
 const preview = computed(() => {
   const applied = applyRule(props.base, props.modelValue)
   return priceBrief(applied) ? t('pricing.rule.applied', { price: priceLabel(t, applied) }) : t('pricing.rule.appliedOpaque')
 })
 const customHint = computed(() => {
-  const perRequest = custom.value?.rule.mode === 'per_request'
+  const perRequest = !!custom.value && customUnit(custom.value.rule) === 'request'
   if (valid.value) return perRequest ? t('pricing.rule.requestUnit') : t('pricing.rule.tokenUnit')
   return perRequest ? t('pricing.rule.requestInvalid') : t('pricing.rule.tokenInvalid')
 })
@@ -56,7 +57,7 @@ function choose(next: Kind) {
   if (props.base) emit('update:modelValue', startRule(next, props.base))
 }
 function setPrice(rule: Extract<PriceRule, { kind: 'custom' }>, key: string, price: number | null) {
-  emit('update:modelValue', customRule(rule.mode, { ...customPrices(rule), [key]: price }))
+  emit('update:modelValue', customRule(customUnit(rule), { ...customPrices(rule), [key]: price }))
 }
 </script>
 

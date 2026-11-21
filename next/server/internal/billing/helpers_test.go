@@ -179,7 +179,12 @@ func errCode(m map[string]any) string {
 
 func contains(s, sub string) bool { return strings.Contains(s, sub) }
 
-// oneTierConfig is a per_token config of one tier with prices.
+// requestTier is a visual config of one tier priced by the request.
+func requestTier(price any) map[string]any {
+	return map[string]any{"tiers": []any{map[string]any{"name": "base", "unit": "request", "price": price}}, "rules": []any{}}
+}
+
+// oneTierConfig is a visual config of one tier with prices.
 func oneTierConfig(prices map[string]any) map[string]any {
 	tier := map[string]any{"name": "base"}
 	maps.Copy(tier, prices)

@@ -11,7 +11,7 @@ import (
 // estimate (CONTRACTS §25.8); every other outcome is billed as before.
 func TestFinalizeBillabilityCanceledStreamBillsPrecharge(t *testing.T) {
 	est := &prechargeEstimate{tokens: core.UsageTokens{Input: 120, Output: 4000}, semantics: "exclusive"}
-	perToken := &core.PriceRule{Mode: "per_token"}
+	perToken := &core.PriceRule{Mode: "visual"}
 	canceled := func() *core.UsageRecord {
 		return &core.UsageRecord{ErrorType: errTypeClientCanceled, StatusCode: statusClientClosed, Price: perToken}
 	}
@@ -61,10 +61,10 @@ func TestFinalizeBillabilityCanceledStreamBillsPrecharge(t *testing.T) {
 			t.Fatalf("billable = %v tokens = %+v extract = %q", rec.Billable, rec.Tokens, rec.UsageExtract)
 		}
 	})
-	t.Run("read to its end: per_request price is owed", func(t *testing.T) {
+	t.Run("read to its end: per-request price is owed", func(t *testing.T) {
 		c := &call{upstreamResponded: true, drained: true}
 		rec := canceled()
-		rec.Price = &core.PriceRule{Mode: "per_request"}
+		rec.Price = &core.PriceRule{Mode: "visual", PerRequest: true}
 		c.finalizeBillability(context.Background(), rec, "paid")
 		if !rec.Billable {
 			t.Fatalf("not billable: %+v", rec)
@@ -98,10 +98,10 @@ func TestFinalizeBillabilityCanceledStreamBillsPrecharge(t *testing.T) {
 			t.Fatalf("a served request went free: %+v", rec)
 		}
 	})
-	t.Run("per_request price is owed", func(t *testing.T) {
+	t.Run("per-request price is owed", func(t *testing.T) {
 		c := &call{precharged: &prechargeEstimate{}, upstreamResponded: true}
 		rec := canceled()
-		rec.Price = &core.PriceRule{Mode: "per_request"}
+		rec.Price = &core.PriceRule{Mode: "visual", PerRequest: true}
 		c.finalizeBillability(context.Background(), rec, "paid")
 		if !rec.Billable {
 			t.Fatalf("not billable: %+v", rec)

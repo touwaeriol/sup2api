@@ -98,10 +98,10 @@ func (tn *Tenant) AccountKeys() map[string]bool {
 // Per-token price of the run model (USD per million tokens).
 var RunPrice = map[string]float64{"p": 3, "c": 15, "cr": 0.3, "cc": 3.75, "cc1h": 6}
 
-// RunPriceConfig is RunPrice as a per_token config: one tier for every
+// RunPriceConfig is RunPrice as a visual config: one tier for every
 // request, no surcharge rules (CONTRACTS §131.2).
 func RunPriceConfig() map[string]any {
-	tier := map[string]any{"name": "base", "max_len": nil, "unit": "token"}
+	tier := map[string]any{"name": "base", "unit": "token"}
 	for k, v := range RunPrice {
 		tier[k] = v
 	}
@@ -132,7 +132,7 @@ func (e *Env) RunModelOf(admin *Session, family, suffix string) string {
 	if !runPriceDone[model] {
 		e.CreatePrice(admin, map[string]any{
 			"model":  model,
-			"mode":   "per_token",
+			"mode":   "visual",
 			"config": RunPriceConfig(),
 			"note":   "e2e run price",
 		})

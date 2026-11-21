@@ -51,6 +51,20 @@ func TestPriceRuleMultiplier(t *testing.T) {
 	}
 }
 
+// A price is admitted under the endpoint billing type of its kind.
+func TestPriceRuleBillingType(t *testing.T) {
+	for want, r := range map[string]PriceRule{
+		"per_token":   {Mode: "visual"},
+		"per_request": {Mode: "visual", PerRequest: true},
+		"expression":  {Mode: "expression"},
+		"video":       {Mode: "expression", VideoOnly: true},
+	} {
+		if got := r.BillingType(); got != want {
+			t.Errorf("%+v: got %s, want %s", r, got, want)
+		}
+	}
+}
+
 func TestPriceRuleClone(t *testing.T) {
 	var none *PriceRule
 	if none.Clone() != nil {

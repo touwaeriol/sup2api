@@ -30,8 +30,7 @@ export default {
   billingMode: '计费方式',
   expression: '表达式',
   mode: {
-    per_request: '按次',
-    per_token: '按 token',
+    visual: '可视化',
     expression: '表达式'
   },
   perRequestPrice: '每次价格',
@@ -54,10 +53,10 @@ export default {
   edit: {
     backToList: '返回列表',
     modeHint: {
-      per_token: '按 token 计价，可按上下文长度分档，再按请求参数、请求头、用量字段或时间加价。',
-      per_request: '每次请求一个价，不看 token 数；可按请求参数、请求头、用量字段或时间加价。',
-      expression: '界面写不了的复杂计费用表达式，字段和按 token 相同，另外能读时间。'
+      visual: '按档位计价：每档按 token 或按次收费，按顺序取第一个满足条件（长度、token 数、时间）的档位，最后一档兜底；再按请求参数、请求头、用量字段或时间加价。保存时转成表达式计费。',
+      expression: '界面写不了的复杂计费用表达式。从可视化切过来会填入它生成的表达式；只有可视化生成的表达式才能切回可视化。'
     },
+    notVisual: '这条表达式不是可视化生成的，无法转成可视化',
     preview: '预览',
     previewMode: '定价',
     previewExpr: '计费表达式（USD）',
@@ -80,6 +79,7 @@ export default {
       claudeLong: 'Claude 长上下文',
       gptLong: 'GPT 长上下文',
       three: '三档',
+      request: '按次',
       priority: 'priority 整单 ×2',
       night: '夜间五折',
       minimum: '最低收 $0.001'
@@ -89,21 +89,23 @@ export default {
     listHint: '按顺序匹配档位，第一个满足条件的档位决定价格；最后一档兜底。',
     add: '添加档位',
     matchOnly: '始终匹配（只有这一个档位）',
-    matchRest: '前面的档位都没命中（len > {lower}）',
-    matchFirst: '完整输入长度 len ≤ {max}',
-    matchBetween: 'len > {lower} 且 ≤ {max}',
+    matchRest: '兜底：前面的档位都没命中时',
+    noCond: '未设条件',
+    moveUp: '上移',
+    moveDown: '下移',
     unnamed: '未命名',
     restBadge: '兜底档位',
     remove: '删除这个档位',
     condition: '阶梯条件',
     onlyHint: '只有一个档位，所有请求都按它算。加档位后，这一档变成兜底。',
     restHint: '兜底：前面的档位都没命中时按这一档算，不用设条件。',
-    len: '完整输入长度',
-    maxLen: '上下文长度上限',
-    lenHint: 'len = 输入 + 缓存读写 + 图片输入',
     badge: '档位',
     name: '档位名称',
     unit: '这一档的计价方式',
+    unitOf: {
+      token: '按 token',
+      request: '按次'
+    },
     requestHint: '命中这一档的请求按次收费，不看 token 数。',
     tokenPrices: 'Token 价格',
     media: '媒体定价',
@@ -113,16 +115,42 @@ export default {
       img_o: '不勾选按输出价'
     }
   },
-  perRequest: {
-    common: '常用',
-    hint: '每次成功的请求收这个价，不看 token 数。',
-    volume: {
-      thousand: '1,000 次',
-      hundredThousand: '10 万次',
-      million: '100 万次'
+  cond: {
+    var: {
+      len: '输入长度 len',
+      p: '输入 token p',
+      c: '输出 token c',
+      hour: '小时',
+      minute: '分钟',
+      weekday: '星期',
+      month: '月',
+      day: '日'
     },
-    toTokenAsk: '要短请求按次、长请求按 token？',
-    toToken: '改用按 token，保留单价和规则'
+    and: '且',
+    or: '或',
+    notText: '非（{cond}）',
+    allOf: '满足全部（且）',
+    anyOf: '满足任一（或）',
+    negated: '取反',
+    kind: '组合方式',
+    group: '组 {path}',
+    groupLabel: '条件组 {path}',
+    leafLabel: '条件 {path}',
+    actions: '条件 {path} 的操作',
+    varLabel: '比较的量',
+    tz: '时区',
+    op: '比较符',
+    value: '值',
+    add: '添加',
+    addCond: '添加条件',
+    addGroup: '添加条件组',
+    negate: '条件取反',
+    unnegate: '取消取反',
+    remove: '删除条件',
+    commonTz: '常用',
+    allTz: '全部时区',
+    unknown: '无法识别的条件：',
+    hint: '同一组里的条件按“且 / 或”组合，可以嵌套子组、取反；最多 {depth} 层、{leaves} 个条件。len = 输入 + 缓存读写 + 图片输入；时间按所选时区，星期日是 0。'
   },
   rules: {
     title: '请求规则计费',
@@ -213,6 +241,8 @@ export default {
   },
   // Texts of the expression guide (ExprGuide) may mark `code` and **bold** (GuideText).
   guide: {
+    engine: '后端用 Go 的表达式库 **expr-lang/expr**（v1.17.8），语法、运算符和内置函数以它为准。本平台在它之上加了 `tier()`、`flat()`、`param()`、`header()`、`u()`、时间函数 `hour()` `minute()` `weekday()` `month()` `day()` 和变量 `p`、`c`、`cr`、`cc`、`cc1h`、`img`、`img_o`、`len`，并禁用了 `__rule`、`$env`。',
+    engineLink: 'expr-lang 文档',
     nav: {
       basics: '基本写法',
       vars: '变量',
@@ -230,7 +260,7 @@ export default {
       flat: '`flat(0.05)` 是直接加 0.05 美元，不按百万换算。',
       round: '结果不能是负数。最终金额 = 结果 × 分组倍率，**进一到 8 位小数**（只会多扣，不会少扣）。',
       layout: '可以随意换行和加空格；“格式化”会把每个乘数排成一行。',
-      generated: '按 token 和按次生成的也是表达式，在“预览”里可以“改用表达式编辑”接着改。'
+      generated: '可视化的价格保存时也转成表达式，切到“表达式”就能接着改。'
     },
     var: {
       p: '输入 token，不含缓存读写，也不含单独计价的图片输入',
@@ -334,12 +364,18 @@ export default {
     noTier: '至少需要一个档位',
     tierName: '第 {n} 个档位的名称只能用字母、数字和 _ . -（最多 64 个）',
     tierDup: '档位名称重复："{name}"',
-    tierMax: '档位"{name}"需要填写上下文长度上限',
-    tierOrder: '档位"{name}"的上限要大于上一档',
-    tierRest: '最后一个档位覆盖其余长度，不能填上限',
+    tooManyTiers: '最多 {n} 个档位',
+    tierWhen: '档位"{name}"需要条件（只有最后一档兜底，不设条件）',
+    tierRest: '最后一个档位兜底，不能设条件',
+    condShape: '档位"{name}"有一个条件不完整或格式不对',
+    condValue: '档位"{name}"的条件要填一个数字',
+    condTz: '档位"{name}"的条件时区无效',
+    condTime: '档位"{name}"的时间条件要填 {lo} 到 {hi} 的整数',
+    condEmpty: '档位"{name}"有一个空的条件组',
+    condDepth: '档位"{name}"的条件最多嵌套 {n} 层',
+    condLeaves: '档位"{name}"最多 {n} 个条件',
     tierPrice: '档位"{name}"需要填写按次价格',
     negative: '档位"{name}"的价格不能为负数',
-    price: '请填写按次价格，不能为负数',
     ruleField: '第 {n} 条加价规则不完整或有误：倍数不能为负，比较的值不能为空，大小比较要填数字',
     ruleHeader: '第 {n} 条加价规则的请求头名称无效',
     ruleTz: '第 {n} 条加价规则的时区无效',
@@ -350,7 +386,6 @@ export default {
     notFound: '该 hash 下没有保存的表达式。'
   },
   def: {
-    perRequest: '{price} / 次',
     perRequestLabel: '每次',
     perMillion: '/百万',
     otherwise: '其余'

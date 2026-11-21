@@ -1,17 +1,30 @@
 [
   {
-    "name": "per request",
-    "mode": "per_request",
+    "name": "one request tier (an old per-request price)",
+    "mode": "visual",
     "config": {
-      "price": 0.01
+      "tiers": [
+        {
+          "name": "base",
+          "unit": "request",
+          "price": 0.01
+        }
+      ],
+      "rules": []
     },
     "expression": "tier(\"base\", flat(0.01))"
   },
   {
-    "name": "per request with rules",
-    "mode": "per_request",
+    "name": "one request tier with rules",
+    "mode": "visual",
     "config": {
-      "price": 0.04,
+      "tiers": [
+        {
+          "name": "base",
+          "unit": "request",
+          "price": 0.04
+        }
+      ],
       "rules": [
         {
           "name": "hd",
@@ -43,12 +56,11 @@
   },
   {
     "name": "one tier, every price",
-    "mode": "per_token",
+    "mode": "visual",
     "config": {
       "tiers": [
         {
           "name": "base",
-          "max_len": null,
           "unit": "token",
           "p": 5,
           "c": 40,
@@ -65,12 +77,11 @@
   },
   {
     "name": "one tier, p and c only, a cache price of 0",
-    "mode": "per_token",
+    "mode": "visual",
     "config": {
       "tiers": [
         {
           "name": "base",
-          "max_len": null,
           "unit": "token",
           "cr": 0
         }
@@ -80,37 +91,48 @@
     "expression": "tier(\"base\", p*0 + c*0 + cr*0)"
   },
   {
-    "name": "four tiers, listed out of order, nested from the third",
-    "mode": "per_token",
+    "name": "four tiers, nested from the third",
+    "mode": "visual",
     "config": {
       "tiers": [
         {
-          "name": "rest",
-          "max_len": null,
-          "unit": "token",
-          "p": 4,
-          "c": 20
-        },
-        {
-          "name": "mid",
-          "max_len": 128000,
-          "unit": "token",
-          "p": 2,
-          "c": 10
-        },
-        {
           "name": "short",
-          "max_len": 32000,
+          "when": {
+            "var": "len",
+            "op": "<=",
+            "value": 32000
+          },
           "unit": "token",
           "p": 1,
           "c": 5
         },
         {
+          "name": "mid",
+          "when": {
+            "var": "len",
+            "op": "<=",
+            "value": 128000
+          },
+          "unit": "token",
+          "p": 2,
+          "c": 10
+        },
+        {
           "name": "long",
-          "max_len": 256000,
+          "when": {
+            "var": "len",
+            "op": "<=",
+            "value": 256000
+          },
           "unit": "token",
           "p": 3,
           "c": 15
+        },
+        {
+          "name": "rest",
+          "unit": "token",
+          "p": 4,
+          "c": 20
         }
       ],
       "rules": []
@@ -119,19 +141,22 @@
   },
   {
     "name": "a per-request tier",
-    "mode": "per_token",
+    "mode": "visual",
     "config": {
       "tiers": [
         {
           "name": "base",
-          "max_len": 1000,
+          "when": {
+            "var": "len",
+            "op": "<=",
+            "value": 1000
+          },
           "unit": "token",
           "p": 1,
           "c": 2
         },
         {
           "name": "bulk",
-          "max_len": null,
           "unit": "request",
           "price": 0.05
         }
@@ -142,12 +167,11 @@
   },
   {
     "name": "every condition source and operator",
-    "mode": "per_token",
+    "mode": "visual",
     "config": {
       "tiers": [
         {
           "name": "base",
-          "max_len": null,
           "unit": "token",
           "p": 3,
           "c": 15
@@ -271,12 +295,11 @@
   },
   {
     "name": "time windows: within a day, across midnight, to 24, to 0, a blank zone",
-    "mode": "per_token",
+    "mode": "visual",
     "config": {
       "tiers": [
         {
           "name": "base",
-          "max_len": null,
           "unit": "token",
           "p": 1,
           "c": 1
@@ -337,9 +360,15 @@
   },
   {
     "name": "strings quoted as Go quotes them",
-    "mode": "per_request",
+    "mode": "visual",
     "config": {
-      "price": 1,
+      "tiers": [
+        {
+          "name": "base",
+          "unit": "request",
+          "price": 1
+        }
+      ],
       "rules": [
         {
           "name": "escapes",
@@ -377,12 +406,16 @@
   },
   {
     "name": "numbers printed as Go prints them",
-    "mode": "per_token",
+    "mode": "visual",
     "config": {
       "tiers": [
         {
           "name": "tiny",
-          "max_len": 1000000,
+          "when": {
+            "var": "len",
+            "op": "<=",
+            "value": 1000000
+          },
           "unit": "token",
           "p": 1e-7,
           "c": 1.25e-8,
@@ -390,7 +423,6 @@
         },
         {
           "name": "huge",
-          "max_len": null,
           "unit": "token",
           "p": 1e+21,
           "c": "3.75"
@@ -412,5 +444,428 @@
       ]
     },
     "expression": "(len <= 1000000 ? tier(\"tiny\", p*0.0000001 + c*0.0000000125 + cr*0.30000000000000004) : tier(\"huge\", p*1000000000000000000000 + c*3.75)) * (u(\"n\") > 0.000001 ? 0.1 : 1)"
+  },
+  {
+    "name": "conditions: and over or, three tiers",
+    "mode": "visual",
+    "config": {
+      "tiers": [
+        {
+          "name": "long_night",
+          "when": {
+            "and": [
+              {
+                "var": "len",
+                "op": ">",
+                "value": 200000
+              },
+              {
+                "or": [
+                  {
+                    "var": "hour",
+                    "tz": "Asia/Shanghai",
+                    "op": ">=",
+                    "value": 22
+                  },
+                  {
+                    "var": "hour",
+                    "tz": "Asia/Shanghai",
+                    "op": "<",
+                    "value": 6
+                  }
+                ]
+              }
+            ]
+          },
+          "unit": "token",
+          "p": 4,
+          "c": 18
+        },
+        {
+          "name": "long",
+          "when": {
+            "var": "len",
+            "op": ">",
+            "value": 200000
+          },
+          "unit": "token",
+          "p": 6,
+          "c": 22.5
+        },
+        {
+          "name": "base",
+          "unit": "token",
+          "p": 3,
+          "c": 15
+        }
+      ],
+      "rules": []
+    },
+    "expression": "len > 200000 && (hour(\"Asia/Shanghai\") >= 22 || hour(\"Asia/Shanghai\") < 6) ? tier(\"long_night\", p*4 + c*18) : (len > 200000 ? tier(\"long\", p*6 + c*22.5) : tier(\"base\", p*3 + c*15))"
+  },
+  {
+    "name": "conditions: or over and, not, groups of one",
+    "mode": "visual",
+    "config": {
+      "tiers": [
+        {
+          "name": "heavy",
+          "when": {
+            "or": [
+              {
+                "var": "c",
+                "op": ">=",
+                "value": 4096
+              },
+              {
+                "and": [
+                  {
+                    "and": [
+                      {
+                        "var": "p",
+                        "op": ">",
+                        "value": 100000
+                      },
+                      {
+                        "var": "len",
+                        "op": "<=",
+                        "value": 400000
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "unit": "token",
+          "p": 5,
+          "c": 25
+        },
+        {
+          "name": "not_small",
+          "when": {
+            "not": {
+              "or": [
+                {
+                  "var": "len",
+                  "op": "<",
+                  "value": 1000
+                }
+              ]
+            }
+          },
+          "unit": "token",
+          "p": 2,
+          "c": 10
+        },
+        {
+          "name": "one",
+          "when": {
+            "and": [
+              {
+                "var": "p",
+                "op": "<",
+                "value": 10
+              }
+            ]
+          },
+          "unit": "request",
+          "price": 0.001
+        },
+        {
+          "name": "rest",
+          "unit": "token",
+          "p": 1,
+          "c": 5
+        }
+      ],
+      "rules": []
+    },
+    "expression": "c >= 4096 || (p > 100000 && len <= 400000) ? tier(\"heavy\", p*5 + c*25) : (!(len < 1000) ? tier(\"not_small\", p*2 + c*10) : (p < 10 ? tier(\"one\", flat(0.001)) : tier(\"rest\", p*1 + c*5)))"
+  },
+  {
+    "name": "conditions: not over a group, nested five deep",
+    "mode": "visual",
+    "config": {
+      "tiers": [
+        {
+          "name": "deep",
+          "when": {
+            "not": {
+              "and": [
+                {
+                  "var": "len",
+                  "op": ">",
+                  "value": 1
+                },
+                {
+                  "or": [
+                    {
+                      "not": {
+                        "var": "c",
+                        "op": "==",
+                        "value": 0
+                      }
+                    },
+                    {
+                      "var": "p",
+                      "op": "!=",
+                      "value": 2
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          "unit": "token",
+          "p": 1
+        },
+        {
+          "name": "rest",
+          "unit": "token",
+          "p": 2
+        }
+      ],
+      "rules": []
+    },
+    "expression": "!(len > 1 && (!(c == 0) || p != 2)) ? tier(\"deep\", p*1 + c*0) : tier(\"rest\", p*2 + c*0)"
+  },
+  {
+    "name": "conditions: every time quantity, zones and a blank zone",
+    "mode": "visual",
+    "config": {
+      "tiers": [
+        {
+          "name": "night",
+          "when": {
+            "var": "hour",
+            "tz": "Asia/Shanghai",
+            "op": ">=",
+            "value": 22
+          },
+          "unit": "token",
+          "p": 1,
+          "c": 1
+        },
+        {
+          "name": "half_past",
+          "when": {
+            "var": "minute",
+            "tz": "",
+            "op": "==",
+            "value": 30
+          },
+          "unit": "token",
+          "p": 2,
+          "c": 2
+        },
+        {
+          "name": "saturday",
+          "when": {
+            "var": "weekday",
+            "tz": "America/New_York",
+            "op": "==",
+            "value": 6
+          },
+          "unit": "token",
+          "p": 3,
+          "c": 3
+        },
+        {
+          "name": "december",
+          "when": {
+            "var": "month",
+            "op": "==",
+            "value": 12
+          },
+          "unit": "token",
+          "p": 4,
+          "c": 4
+        },
+        {
+          "name": "month_start",
+          "when": {
+            "var": "day",
+            "tz": "Europe/London",
+            "op": "<=",
+            "value": 7
+          },
+          "unit": "token",
+          "p": 5,
+          "c": 5
+        },
+        {
+          "name": "rest",
+          "unit": "token",
+          "p": 6,
+          "c": 6
+        }
+      ],
+      "rules": []
+    },
+    "expression": "hour(\"Asia/Shanghai\") >= 22 ? tier(\"night\", p*1 + c*1) : (minute(\"UTC\") == 30 ? tier(\"half_past\", p*2 + c*2) : (weekday(\"America/New_York\") == 6 ? tier(\"saturday\", p*3 + c*3) : (month(\"UTC\") == 12 ? tier(\"december\", p*4 + c*4) : (day(\"Europe/London\") <= 7 ? tier(\"month_start\", p*5 + c*5) : tier(\"rest\", p*6 + c*6)))))"
+  },
+  {
+    "name": "conditions: p and c, under a rule",
+    "mode": "visual",
+    "config": {
+      "tiers": [
+        {
+          "name": "big_in_small_out",
+          "when": {
+            "and": [
+              {
+                "var": "p",
+                "op": ">=",
+                "value": 100000
+              },
+              {
+                "var": "c",
+                "op": "<",
+                "value": 500
+              }
+            ]
+          },
+          "unit": "token",
+          "p": 2,
+          "c": 8,
+          "cr": 0.2
+        },
+        {
+          "name": "rest",
+          "unit": "token",
+          "p": 3,
+          "c": 15,
+          "cr": 0.3
+        }
+      ],
+      "rules": [
+        {
+          "name": "fast",
+          "multiplier": 2,
+          "conds": [
+            {
+              "source": "header",
+              "key": "anthropic-beta",
+              "op": "contains",
+              "value": "fast-mode"
+            }
+          ]
+        }
+      ]
+    },
+    "expression": "(p >= 100000 && c < 500 ? tier(\"big_in_small_out\", p*2 + c*8 + cr*0.2) : tier(\"rest\", p*3 + c*15 + cr*0.3)) * (has(header(\"anthropic-beta\"), \"fast-mode\") ? 2 : 1)"
+  },
+  {
+    "name": "conditions: == and != in a four-tier chain",
+    "mode": "visual",
+    "config": {
+      "tiers": [
+        {
+          "name": "empty",
+          "when": {
+            "var": "len",
+            "op": "==",
+            "value": 0
+          },
+          "unit": "request",
+          "price": 0
+        },
+        {
+          "name": "weekend",
+          "when": {
+            "or": [
+              {
+                "var": "weekday",
+                "tz": "UTC",
+                "op": "==",
+                "value": 0
+              },
+              {
+                "var": "weekday",
+                "tz": "UTC",
+                "op": "==",
+                "value": 6
+              }
+            ]
+          },
+          "unit": "token",
+          "p": 1,
+          "c": 2
+        },
+        {
+          "name": "not_jan",
+          "when": {
+            "var": "month",
+            "op": "!=",
+            "value": 1
+          },
+          "unit": "token",
+          "p": 2,
+          "c": 4
+        },
+        {
+          "name": "rest",
+          "unit": "token",
+          "p": 3,
+          "c": 6
+        }
+      ],
+      "rules": []
+    },
+    "expression": "len == 0 ? tier(\"empty\", flat(0)) : (weekday(\"UTC\") == 0 || weekday(\"UTC\") == 6 ? tier(\"weekend\", p*1 + c*2) : (month(\"UTC\") != 1 ? tier(\"not_jan\", p*2 + c*4) : tier(\"rest\", p*3 + c*6)))"
+  },
+  {
+    "name": "conditions: values as numeric strings",
+    "mode": "visual",
+    "config": {
+      "tiers": [
+        {
+          "name": "long",
+          "when": {
+            "and": [
+              {
+                "var": "len",
+                "op": ">",
+                "value": "200000"
+              },
+              {
+                "var": "hour",
+                "tz": "UTC",
+                "op": ">=",
+                "value": "22"
+              },
+              {
+                "var": "p",
+                "op": "<",
+                "value": " 1.5 "
+              }
+            ]
+          },
+          "unit": "token",
+          "p": 6,
+          "c": 22.5
+        },
+        {
+          "name": "mid",
+          "when": {
+            "var": "len",
+            "op": ">",
+            "value": "0.25"
+          },
+          "unit": "token",
+          "p": 4,
+          "c": "20"
+        },
+        {
+          "name": "rest",
+          "unit": "token",
+          "p": 3,
+          "c": 15
+        }
+      ],
+      "rules": []
+    },
+    "expression": "len > 200000 && hour(\"UTC\") >= 22 && p < 1.5 ? tier(\"long\", p*6 + c*22.5) : (len > 0.25 ? tier(\"mid\", p*4 + c*20) : tier(\"rest\", p*3 + c*15))"
   }
 ]

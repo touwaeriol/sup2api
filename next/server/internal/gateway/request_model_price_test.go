@@ -22,7 +22,7 @@ func TestBilledAtTheRequestedModel(t *testing.T) {
 	for _, stream := range []bool{false, true} {
 		e := newEnv(t)
 		for id, model := range map[int64]string{30: "up-mapped", 31: upModel} {
-			e.pricer.rules[model] = &core.PriceRule{ID: id, Model: model, Mode: "per_token", Expression: "p*7", ExprHash: model}
+			e.pricer.rules[model] = &core.PriceRule{ID: id, Model: model, Mode: "visual", Expression: "p*7", ExprHash: model}
 		}
 		e.accounts.set(1, func(a *core.Account) { a.ModelMapping = map[string]string{testModel: "up-mapped"} })
 		if r := e.messages(body(testModel, stream)); r.status != 200 {
@@ -118,7 +118,7 @@ func TestImageGenerationToolIsTheRequestsUsage(t *testing.T) {
 // response.completed and from a response.failed that carries them.
 func TestImageGenerationToolWebSocketTurn(t *testing.T) {
 	e := newWSEnv(t)
-	e.pricer.rules["gpt-image-2-codex"] = &core.PriceRule{ID: 21, Model: "gpt-image-2-codex", Mode: "per_token", Expression: "p*5"}
+	e.pricer.rules["gpt-image-2-codex"] = &core.PriceRule{ID: 21, Model: "gpt-image-2-codex", Mode: "visual", Expression: "p*5"}
 	c := e.mustDial()
 	turn := create(wsModel, "image")
 	turn["tools"] = []any{map[string]any{"type": "image_generation"}}

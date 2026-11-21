@@ -165,7 +165,7 @@ func apiEnv(t *testing.T) (*env, *apiUpstream, *fakePlatform, *fakePlatform) {
 		e.accounts.addTyped(testGroup, 11, 99, "oai-11", "openai", "apikey")
 		e.accounts.addTyped(testGroup, 21, 99, "gem-21", "gemini", "apikey")
 		for _, m := range []string{"gpt-4o", "gpt-5", "text-embedding-3-small", "gemini-2.5-pro"} {
-			e.pricer.rules[m] = &core.PriceRule{ID: 10, Model: m, Mode: "per_token"}
+			e.pricer.rules[m] = &core.PriceRule{ID: 10, Model: m, Mode: "visual"}
 		}
 	})
 	return e, u, op, gp

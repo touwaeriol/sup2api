@@ -25,7 +25,8 @@ type ExpressionProblem struct {
 // price_rules and model_price_history, rewritten as core migration 0121
 // rewrites it (expr.LegacyProduct) when that has not run yet, and returns
 // those that fail. After 0121 it also generates the expression of every
-// per_request and per_token price from its config and names those whose
+// visual price (per_request and per_token before 0122, converted as that
+// migration converts them) from its config and names those whose
 // config fails or does not generate the stored expression (expr_hash). It
 // only reads, so it runs before an upgrade against the old schema as well
 // as after it (`sub2api admin check-prices`, CONTRACTS §131.8).
@@ -57,10 +58,14 @@ func CheckStoredExpressions(ctx context.Context, db *gorm.DB) ([]ExpressionProbl
 			fail(table, ref, err.Error())
 		}
 	}
-	// generated: the config of a per_request or per_token price generates
-	// the stored expression; before 0121 configs are in the old shape.
+	// generated: the config of a visual price generates the stored
+	// expression; before 0121 configs are in the old shape, before 0122 they
+	// are read as that migration converts them.
 	generated := func(table, ref, mode string, config json.RawMessage, hash string) {
-		if legacy || (mode != expr.ModePerRequest && mode != expr.ModePerToken) {
+		if cfg, ok := visualFromLegacy(mode, config); ok {
+			mode, config = expr.ModeVisual, cfg
+		}
+		if legacy || mode != expr.ModeVisual {
 			return
 		}
 		if gen, err := expr.Generate(mode, config); err != nil {

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // Compact, detailed view of a price definition {mode, config, expression}:
-// a per-request price, one line per tier of a per-token price, or the
+// one line per tier of a visual price (its condition in words, in the order
+// the tiers match; a request tier's price per request), or the
 // expression, then how many tiers and rules it has, as the price lists say
 // it (priceExtras). With `compare`, values that differ from the compared
 // definition are highlighted.
@@ -9,17 +10,17 @@ import { useI18n } from 'vue-i18n'
 import { SHint } from '@sub2api/ui'
 import type { PriceSyncDef } from '@/api/types'
 import { priceExtras, usd } from '@/components/pricing/pricingFormat'
-import { asTokenConfig, isSet, num, pricedKeys, sortedTiers, type PriceKey, type TokenTier } from './priceExpr'
+import { asTokenConfig, isSet, num, pricedKeys, type PriceKey, type TokenTier } from './priceExpr'
+import { condText } from './tierCond'
 
 const props = defineProps<{ def: PriceSyncDef; compare?: PriceSyncDef | null; muted?: boolean }>()
 const { t } = useI18n()
 
-type View = { kind: 'per_request'; price: number } | { kind: 'tiers'; tiers: TokenTier[] } | { kind: 'custom'; expression: string }
+type View = { kind: 'tiers'; tiers: TokenTier[] } | { kind: 'custom'; expression: string }
 
 function viewOf(d: PriceSyncDef): View {
-  if (d.mode === 'per_request') return { kind: 'per_request', price: num(d.config?.price) }
   if (d.mode === 'expression') return { kind: 'custom', expression: d.expression }
-  return { kind: 'tiers', tiers: sortedTiers(asTokenConfig(d.config).tiers) }
+  return { kind: 'tiers', tiers: asTokenConfig(d.config).tiers }
 }
 
 const view = computed(() => viewOf(props.def))
@@ -36,7 +37,6 @@ const shownKeys = (tier: TokenTier): Array<PriceKey | 'price'> => (tier.unit ===
 function differs(i: number, k: PriceKey | 'price'): boolean {
   const [v, o] = [view.value, other.value]
   if (!o || v.kind === 'custom') return false
-  if (v.kind === 'per_request') return o.kind !== 'per_request' || o.price !== v.price
   return o.kind !== 'tiers' || valueOf(v.tiers[i], k) !== valueOf(o.tiers[i], k)
 }
 
@@ -46,13 +46,10 @@ const label = (k: PriceKey | 'price') => (k === 'price' ? t('prices.def.perReque
 
 <template>
   <div class="text-xs leading-5" :class="muted ? 'text-fg-muted' : 'text-fg'">
-    <template v-if="view.kind === 'per_request'">
-      <span :class="differs(0, 'price') ? HIGHLIGHT : ''">{{ t('prices.def.perRequest', { price: usd(view.price) }) }}</span>
-    </template>
-    <template v-else-if="view.kind === 'tiers'">
+    <template v-if="view.kind === 'tiers'">
       <div v-for="(tier, i) in view.tiers" :key="i" class="flex flex-wrap gap-x-2">
         <SHint v-if="view.tiers.length > 1" inline size="xs" class="font-mono">
-          {{ tier.name }}<template v-if="tier.max_len !== null"> ≤{{ tier.max_len }}</template><template v-else> ({{ t('prices.def.otherwise') }})</template>:
+          {{ tier.name }} ({{ tier.when ? condText(t, tier.when) : t('prices.def.otherwise') }}):
         </SHint>
         <span v-for="k in shownKeys(tier)" :key="k" :class="differs(i, k) ? HIGHLIGHT : ''">{{ label(k) }} {{ usd(valueOf(tier, k)) }}</span>
         <SHint v-if="tier.unit !== 'request'" inline size="xs">{{ t('prices.def.perMillion') }}</SHint>

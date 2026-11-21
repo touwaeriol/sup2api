@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { PriceDef } from '@/api/pricing'
 import { applyRule, effectiveRate, hasDiscount, inheritedRate, priceCells, priceExtras, priceText, sameRate, usd, validRate } from './pricingFormat'
-import { singleTier } from '@/views/prices/priceExpr'
+import { requestTier, singleTier } from '@/views/prices/priceExpr'
 
 describe('a rate typed in a form', () => {
   it('is a decimal of 0 or more with at most four decimals', () => {
@@ -50,22 +50,22 @@ describe('the rate helpers every pricing view shares', () => {
 })
 
 describe('the price a view shows', () => {
-  const perToken: PriceDef = { mode: 'per_token', config: singleTier({ p: 3, c: 15, cr: 0.3 }), expression: 'tier("base", p*3 + c*15 + cr*0.3)' }
-  const perRequest: PriceDef = { mode: 'per_request', config: { price: 0.02 }, expression: 'flat(0.02)' }
+  const perToken: PriceDef = { mode: 'visual', config: singleTier({ p: 3, c: 15, cr: 0.3 }), expression: 'tier("base", p*3 + c*15 + cr*0.3)' }
+  const perRequest: PriceDef = { mode: 'visual', config: requestTier(0.02), expression: 'tier("base", flat(0.02))' }
   const tiered: PriceDef = {
-    mode: 'per_token',
-    config: { tiers: [{ name: 'b', max_len: null, p: 6, c: 22.5 }, { name: 'a', max_len: 200000, p: 3, c: 15 }], rules: [] },
+    mode: 'visual',
+    config: { tiers: [{ name: 'a', when: { var: 'len', op: '<=', value: 200000 }, p: 3, c: 15 }, { name: 'b', p: 6, c: 22.5 }], rules: [] },
     expression: 'len <= 200000 ? tier("a", p*3 + c*15) : tier("b", p*6 + c*22.5)'
   }
-  const perCall: PriceDef = { mode: 'per_token', config: { tiers: [{ name: 'a', max_len: null, unit: 'request', price: 0.05 }], rules: [] }, expression: '' }
+  const perCall: PriceDef = { mode: 'visual', config: { tiers: [{ name: 'a', unit: 'request', price: 0.05 }], rules: [] }, expression: '' }
   const opaque: PriceDef = { mode: 'expression', config: null, expression: 'p * 2 + unknown(1)' }
   const times = (def: PriceDef, multiplier: string): PriceDef => ({ ...def, multiplier })
 
-  it('works the multiplier of a rule into the cells of a per-token and a per-request price', () => {
+  it('works the multiplier of a rule into the cells of a price by tokens and of one by the request', () => {
     expect(priceCells(times(perToken, '1.5')).tokens).toMatchObject({ p: 4.5, c: 22.5, cr: 0.45, cc: null })
     expect(priceCells(times(perRequest, '1.5'))).toEqual({ perRequest: 0.03, tiers: 1 })
   })
-  it('works it into the first tier of a tiered per-token price, and the price of a per-request tier', () => {
+  it('works it into the first tier of a tiered price, and the price of a request tier', () => {
     expect(priceCells(times(tiered, '2'))).toMatchObject({ tokens: { p: 6, c: 30 }, tiers: 2 })
     expect(priceCells(times(tiered, '2')).multiplier).toBeUndefined()
     expect(priceCells(times(perCall, '2'))).toEqual({ perRequest: 0.1, tiers: 1 })
@@ -78,7 +78,7 @@ describe('the price a view shows', () => {
     expect(priceCells(times(perToken, '0')).tokens).toMatchObject({ p: 0, c: 0, cr: 0, cc: null })
     expect(priceCells(times(perRequest, '0')).perRequest).toBe(0)
     // A draft's blank price per request stays blank, as a blank token price does.
-    const blank: PriceDef = { mode: 'per_request', config: { price: null }, expression: '' }
+    const blank: PriceDef = { mode: 'visual', config: requestTier(null), expression: '' }
     expect(priceCells(blank)).toEqual({ perRequest: null, tiers: 1 })
     expect(priceCells(times(blank, '1.5')).perRequest).toBeNull()
     expect(priceCells(times(perToken, '1'))).toEqual(priceCells(perToken))
@@ -91,7 +91,7 @@ describe('the price a view shows', () => {
 })
 
 describe('the list price a rule being edited gives', () => {
-  const base: PriceDef = { mode: 'per_token', config: singleTier({ p: 3, c: 15 }), expression: 'tier("base", p*3 + c*15)' }
+  const base: PriceDef = { mode: 'visual', config: singleTier({ p: 3, c: 15 }), expression: 'tier("base", p*3 + c*15)' }
 
   it('is the global price with the multiplier, as the server returns it once saved', () => {
     expect(applyRule(base, { kind: 'multiplier', multiplier: '1.5' })).toEqual({ ...base, multiplier: '1.5' })
@@ -103,7 +103,7 @@ describe('the list price a rule being edited gives', () => {
     expect(applyRule(null, { kind: 'multiplier', multiplier: '2' })).toBeNull()
   })
   it('is a price of its own for a custom rule', () => {
-    expect(applyRule(base, { kind: 'custom', mode: 'per_token', config: singleTier({ p: 1, c: 8 }) })).toEqual({ mode: 'per_token', config: singleTier({ p: 1, c: 8 }), expression: '' })
+    expect(applyRule(base, { kind: 'custom', mode: 'visual', config: singleTier({ p: 1, c: 8 }) })).toEqual({ mode: 'visual', config: singleTier({ p: 1, c: 8 }), expression: '' })
   })
 })
 
@@ -113,13 +113,13 @@ describe('what the price views write of a price', () => {
     expect([null, undefined].map(v => usd(v))).toEqual(['—', '—'])
     expect(priceText(0.00001, 3)).toBe('$0.00003')
   })
-  it('says what a price has beyond its first tier: its tiers when several, the rules of a per-request or per-token price', () => {
+  it('says what a price has beyond its first tier: its tiers when several, the rules of a visual price', () => {
     const t = (key: string, params?: Record<string, unknown>) => `${key.replace('prices.summary.', '')}:${params?.n}`
     const rule = { name: '', multiplier: 2, conds: [{ source: 'header', key: 'x', op: 'exists' }] }
-    expect(priceExtras(t, { mode: 'per_token', config: singleTier({ p: 1, c: 2 }) })).toBe('')
-    const twoTiers = { tiers: [{ name: 'a', max_len: 10, p: 1 }, { name: 'b', max_len: null, p: 2 }], rules: [rule] }
-    expect(priceExtras(t, { mode: 'per_token', config: twoTiers })).toBe('tiers:2 · rules:1')
-    expect(priceExtras(t, { mode: 'per_request', config: { price: 1, rules: [rule, rule] } })).toBe('rules:2')
+    expect(priceExtras(t, { mode: 'visual', config: singleTier({ p: 1, c: 2 }) })).toBe('')
+    const twoTiers = { tiers: [{ name: 'a', when: { var: 'len', op: '<=', value: 10 }, p: 1 }, { name: 'b', p: 2 }], rules: [rule] }
+    expect(priceExtras(t, { mode: 'visual', config: twoTiers })).toBe('tiers:2 · rules:1')
+    expect(priceExtras(t, { mode: 'visual', config: { ...requestTier(1), rules: [rule, rule] } })).toBe('rules:2')
     expect(priceExtras(t, { mode: 'expression', config: {} })).toBe('')
   })
 })

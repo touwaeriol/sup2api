@@ -532,9 +532,10 @@ func (t tokenSet) empty() bool {
 	return t.p == nil && t.c == nil && t.cr == nil && t.cc == nil && t.cc1h == nil
 }
 
-// levelsPrice builds a per_token price, with context tiers when there are
-// several levels: levels[0] applies up to sizes[0] tokens of prompt,
-// levels[i] above sizes[i-1]. The standard level must set input or output.
+// levelsPrice builds a visual price, with context tiers when there are
+// several levels: levels[0] applies up to sizes[0] tokens of prompt
+// ("when": len <= sizes[0]), levels[i] above sizes[i-1], the last one to the
+// rest. The standard level must set input or output.
 func levelsPrice(model string, levels []tokenSet, sizes []int64) *syncPrice {
 	if len(levels) == 0 || levels[0].p == nil && levels[0].c == nil {
 		return nil
@@ -559,14 +560,14 @@ func levelsPrice(model string, levels []tokenSet, sizes []int64) *syncPrice {
 		default:
 			t["name"] = fmt.Sprintf("over_%d", sizes[i-1])
 		}
-		t["max_len"], t["unit"] = nil, expr.UnitToken
+		t["unit"] = expr.UnitToken
 		if i < len(sizes) {
-			t["max_len"] = sizes[i]
+			t["when"] = lenAtMost(sizes[i])
 		}
 		tiers = append(tiers, t)
 	}
 	cfg, _ := json.Marshal(map[string]any{"tiers": tiers, "rules": []any{}})
-	return &syncPrice{Model: model, Mode: expr.ModePerToken, Config: cfg}
+	return &syncPrice{Model: model, Mode: expr.ModeVisual, Config: cfg}
 }
 
 // litellmEntry is the part of a LiteLLM catalog entry used here (USD per token).
@@ -765,41 +766,34 @@ func parseSup2API(body []byte, apply bool) (*fetched, error) {
 	return out, nil
 }
 
-// upgradeLegacy brings a price of an upstream older than core migration 0121
-// to the current shapes, as that migration did to stored prices: a flat
-// per_token config becomes one tier, an expression price has config {} (a
-// visual or video config there is gone; the expression is the price) and
-// "A ||| B" rules become "(A) * (B)". An expression this engine compiles is
-// already of a current upstream and stays as it is (a "|||" in a comment).
+// upgradeLegacy brings a price of an upstream older than core migration
+// 0122 to the current shapes, as migrations 0121 and 0122 did to stored
+// prices: per_token and per_request prices become visual
+// (visualFromLegacy), an expression price has config {} (a visual or video
+// config there is gone; the expression is the price) and "A ||| B" rules
+// become "(A) * (B)". An expression this engine compiles is already of a
+// current upstream and stays as it is (a "|||" in a comment).
 func upgradeLegacy(p *syncPrice) {
-	switch p.Mode {
-	case expr.ModeExpression:
-		p.Config = json.RawMessage("{}")
-		if _, err := expr.CompileCached(p.Expression); err == nil {
-			return
-		}
-		if src, ok := expr.LegacyProduct(p.Expression); ok {
-			p.Expression = src
-		}
-	case expr.ModePerToken:
-		var flat map[string]json.RawMessage
-		if json.Unmarshal(p.Config, &flat) != nil || flat == nil || flat["tiers"] != nil {
-			return
-		}
-		tier := map[string]any{"name": "base", "max_len": nil, "unit": expr.UnitToken}
-		for _, k := range []string{"p", "c", "cr", "cc", "cc1h"} {
-			if v, ok := flat[k]; ok && string(v) != "null" {
-				tier[k] = v
-			}
-		}
-		p.Config, _ = json.Marshal(map[string]any{"tiers": []any{tier}, "rules": []any{}})
+	if cfg, ok := visualFromLegacy(p.Mode, p.Config); ok {
+		p.Mode, p.Config = expr.ModeVisual, cfg
+		return
+	}
+	if p.Mode != expr.ModeExpression {
+		return
+	}
+	p.Config = json.RawMessage("{}")
+	if _, err := expr.CompileCached(p.Expression); err == nil {
+		return
+	}
+	if src, ok := expr.LegacyProduct(p.Expression); ok {
+		p.Expression = src
 	}
 }
 
-// scalePrice multiplies a price by m: the prices of a per-request or
-// per-token config are scaled in place (rule multipliers stay), an
-// expression price becomes "(expression) * m". Only a per-request or
-// per-token price needs its config to be an object.
+// scalePrice multiplies a price by m: the tier prices of a visual config
+// are scaled in place (rule multipliers and tier conditions stay), an
+// expression price becomes "(expression) * m". Only a visual price needs its
+// config to be an object.
 func scalePrice(p *syncPrice, m decimal.Decimal) error {
 	scale := func(v any) any {
 		switch x := v.(type) {
@@ -828,14 +822,13 @@ func scalePrice(p *syncPrice, m decimal.Decimal) error {
 	dec.UseNumber()
 	_ = dec.Decode(&cfg) // cfg stays nil unless the config is an object
 	switch p.Mode {
-	case expr.ModePerRequest, expr.ModePerToken:
+	case expr.ModeVisual:
 		if cfg == nil {
 			return errors.New("price config is not an object")
 		}
 	default:
 		return scaleAsExpression(p, m)
 	}
-	scaleKeys(cfg, "price")
 	tiers, _ := cfg["tiers"].([]any)
 	for _, t := range tiers {
 		if tier, ok := t.(map[string]any); ok {

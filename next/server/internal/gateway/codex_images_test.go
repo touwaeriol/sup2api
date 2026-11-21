@@ -220,8 +220,8 @@ func TestCodexImagesModelMapping(t *testing.T) {
 // for the pre-charge or the charge (CONTRACTS §17.2).
 func TestCodexImagesEchoNotPriced(t *testing.T) {
 	e, _, _ := codexImagesEnv(t)
-	e.pricer.rules["gpt-image-2-codex"] = &core.PriceRule{ID: 99, Model: "gpt-image-2-codex", Mode: "per_token", Expression: "p*1000", ExprHash: "echo"}
-	e.pricer.rules["gpt-6-luna"] = &core.PriceRule{ID: 98, Model: "gpt-6-luna", Mode: "per_token", Expression: "p*1000", ExprHash: "chat"}
+	e.pricer.rules["gpt-image-2-codex"] = &core.PriceRule{ID: 99, Model: "gpt-image-2-codex", Mode: "visual", Expression: "p*1000", ExprHash: "echo"}
+	e.pricer.rules["gpt-6-luna"] = &core.PriceRule{ID: 98, Model: "gpt-6-luna", Mode: "visual", Expression: "p*1000", ExprHash: "chat"}
 	path, body := imageRequest(false, true)
 	if r := e.post(path, body, bearer()); r.status != 200 {
 		t.Fatalf("%d %s", r.status, r.body)

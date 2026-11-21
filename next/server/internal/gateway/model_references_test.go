@@ -28,7 +28,7 @@ func advisorBody(stream bool) map[string]any {
 
 func pricedAdvisorEnv(t *testing.T) *env {
 	return newEnv(t, func(e *env) {
-		e.pricer.rules[advisorModel] = &core.PriceRule{ID: 19, Model: advisorModel, Mode: "per_token", Expression: "p*7+c*11", ExprHash: "advisor-price"}
+		e.pricer.rules[advisorModel] = &core.PriceRule{ID: 19, Model: advisorModel, Mode: "visual", Expression: "p*7+c*11", ExprHash: "advisor-price"}
 	})
 }
 

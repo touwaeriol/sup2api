@@ -13,7 +13,7 @@ const price = (id: number, model: string, note = ''): Price => ({
   id,
   model,
   note,
-  mode: 'per_token',
+  mode: 'visual',
   config: singleTier({ p: 3, c: 15, cr: 0.3 }),
   expression: '',
   expr_version: 1,

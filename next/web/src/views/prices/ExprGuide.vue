@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { SButton } from '@sub2api/ui'
+import { SButton, SLink } from '@sub2api/ui'
 import { highlight } from './exprSyntax'
 import GuideText from './GuideText.vue'
 import { EXPR_EXAMPLES } from './presets'
@@ -69,6 +69,10 @@ const EXAMPLES = Object.entries(EXPR_EXAMPLES).map(([id, src]) => ({ id, src }))
 
 <template>
   <div class="min-w-0" data-testid="expr-guide">
+    <p class="mb-3 rounded-lg bg-surface-2 px-3 py-2 text-xs leading-5 text-fg-muted" data-testid="expr-guide-engine">
+      <GuideText :text="t('prices.guide.engine')" />
+      <SLink href="https://expr-lang.org" external class="ml-1">{{ t('prices.guide.engineLink') }}</SLink>
+    </p>
     <nav class="sticky -top-px z-10 -mx-1 mb-4 flex flex-wrap gap-1.5 border-b border-line bg-surface px-1 pb-3 pt-1">
       <button
         v-for="id in SECTIONS"

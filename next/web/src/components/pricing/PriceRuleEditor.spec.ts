@@ -7,8 +7,8 @@ import PriceRuleEditor from './PriceRuleEditor.vue'
 
 i18n.global.locale.value = 'en'
 
-const perToken: PriceDef = { mode: 'per_token', config: singleTier({ p: 3, c: 15, cr: 0.3, cc: 3.75 }), expression: '' }
-const tiered: PriceDef = { mode: 'per_token', config: { tiers: [{ name: 'a', max_len: 200000, p: 3, c: 15 }, { name: 'b', max_len: null, p: 6, c: 22.5 }], rules: [] }, expression: '' }
+const perToken: PriceDef = { mode: 'visual', config: singleTier({ p: 3, c: 15, cr: 0.3, cc: 3.75 }), expression: '' }
+const tiered: PriceDef = { mode: 'visual', config: { tiers: [{ name: 'a', when: { var: 'len', op: '<=', value: 200000 }, p: 3, c: 15 }, { name: 'b', p: 6, c: 22.5 }], rules: [] }, expression: '' }
 const expression: PriceDef = { mode: 'expression', config: null, expression: 'len <= 200000 ? tier("a", p*3 + c*15) : tier("b", p*6 + c*22.5)' }
 
 function render(modelValue: PriceRule | null, base: PriceDef | null = perToken) {
@@ -41,7 +41,7 @@ describe('price rule editor', () => {
   it('starts a custom price from the global one and edits one price at a time', async () => {
     const { w, emitted, kind } = render(null)
     await kind('custom').setValue(true)
-    const start: PriceRule = { kind: 'custom', mode: 'per_token', config: singleTier({ p: 3, c: 15, cr: 0.3, cc: 3.75 }) }
+    const start: PriceRule = { kind: 'custom', mode: 'visual', config: singleTier({ p: 3, c: 15, cr: 0.3, cc: 3.75 }) }
     expect(emitted()).toEqual(start)
     await w.setProps({ modelValue: start })
     await w.get('[data-testid="price-rule-c"]').setValue('8')
@@ -50,14 +50,14 @@ describe('price rule editor', () => {
     expect(emitted()).toEqual({ ...start, config: singleTier({ p: 3, c: 15, cc: 3.75 }) })
   })
   it('takes image prices where the global price prices images apart', async () => {
-    const images: PriceDef = { mode: 'per_token', config: singleTier({ p: 5, c: 40, img: 10, img_o: 40 }), expression: '' }
+    const images: PriceDef = { mode: 'visual', config: singleTier({ p: 5, c: 40, img: 10, img_o: 40 }), expression: '' }
     const { w, emitted, kind } = render(null, images)
     await kind('custom').setValue(true)
-    expect(emitted()).toEqual({ kind: 'custom', mode: 'per_token', config: singleTier({ p: 5, c: 40, img: 10, img_o: 40 }) })
+    expect(emitted()).toEqual({ kind: 'custom', mode: 'visual', config: singleTier({ p: 5, c: 40, img: 10, img_o: 40 }) })
     await w.setProps({ modelValue: emitted() as PriceRule })
     await w.get('[data-testid="price-rule-img_o"]').setValue('20')
-    expect(emitted()).toEqual({ kind: 'custom', mode: 'per_token', config: singleTier({ p: 5, c: 40, img: 10, img_o: 20 }) })
-    const plain = render({ kind: 'custom', mode: 'per_token', config: singleTier({ p: 3, c: 15 }) }).w
+    expect(emitted()).toEqual({ kind: 'custom', mode: 'visual', config: singleTier({ p: 5, c: 40, img: 10, img_o: 20 }) })
+    const plain = render({ kind: 'custom', mode: 'visual', config: singleTier({ p: 3, c: 15 }) }).w
     expect(plain.find('[data-testid="price-rule-cc1h"]').exists()).toBe(true)
     expect(plain.find('[data-testid="price-rule-img"]').exists()).toBe(false)
   })
@@ -66,7 +66,7 @@ describe('price rule editor', () => {
     await kind('inherit').setValue(true)
     expect(emitted()).toBeNull()
   })
-  it('lets an expression price, or a per-token price with tiers, take a multiplier only', () => {
+  it('lets an expression price, or a visual price with tiers, take a multiplier only', () => {
     for (const base of [expression, tiered]) {
       const { w, kind } = render(null, base)
       expect(kind('custom').attributes('disabled')).toBeDefined()

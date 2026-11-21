@@ -25,7 +25,7 @@ func TestTaskImmediateBillingWithoutReservationAndRetry(t *testing.T) {
 		t.Helper()
 		r := f.reserved(request, "raw-"+request, core.UsageTokens{})
 		r.Reservation = nil
-		r.Price = &core.PriceRule{Mode: "per_request", Expression: expression, ExprHash: hash, ExprVersion: 1}
+		r.Price = &core.PriceRule{Mode: "visual", PerRequest: true, Expression: expression, ExprHash: hash, ExprVersion: 1}
 		if free {
 			r.Billable = false
 			r.Price = nil

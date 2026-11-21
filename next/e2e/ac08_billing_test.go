@@ -34,16 +34,17 @@ func TestAC08_BillingModes(t *testing.T) {
 		want    *big.Rat
 	}{
 		{
-			name:  "per_request",
+			name:  "visual request tier",
 			model: base + "-flat",
-			price: map[string]any{"mode": "per_request", "config": map[string]any{"price": "0.04"}}, // ASSUMED config shape
-			tier:  "base",
-			want:  big.NewRat(4, 100),
+			price: map[string]any{"mode": "visual", "config": map[string]any{
+				"tiers": []any{map[string]any{"name": "base", "unit": "request", "price": "0.04"}}, "rules": []any{}}},
+			tier: "base",
+			want: big.NewRat(4, 100),
 		},
 		{
-			name:  "per_token",
+			name:  "visual token tier",
 			model: base + "-token",
-			price: map[string]any{"mode": "per_token", "config": RunPriceConfig()},
+			price: map[string]any{"mode": "visual", "config": RunPriceConfig()},
 			tier:  "base",
 			want:  ExpectedTokenCost(RunPrice, MockInputTokens, MockOutputTokens, MockCacheReadTokens, MockCacheCreationTokens, 0, 1),
 		},

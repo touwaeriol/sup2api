@@ -67,7 +67,7 @@ export interface PriceCells {
   /** Null while the price of a draft is blank, as a token price is. */
   perRequest?: number | null
   tokens?: TokenPrices
-  /** Length tiers; 1 when the price has none. */
+  /** Tiers; 1 when the price has none. */
   tiers: number
   /** An expression the console cannot break down. */
   opaque?: boolean
@@ -75,14 +75,14 @@ export interface PriceCells {
   multiplier?: string
 }
 
-/** The cells of a price as it stands, whatever multiplier is on it: a per-token price shows its first tier. */
+/** The cells of a price as it stands, whatever multiplier is on it: a visual price shows its first tier. */
 function ownCells(def: PriceDef): PriceCells {
   const s = summarize(def.mode, def.config)
-  // A draft's blank price is no price yet, not 0.
-  if (s.kind === 'per_request') return { perRequest: def.config?.price === null ? null : s.price, tiers: 1 }
   if (s.kind === 'expression') return { tiers: 1, opaque: true }
   const { first, tiers } = s
-  return first.unit === 'request' ? { perRequest: num(first.price), tiers } : { tokens: tokenPricesOf(first), tiers }
+  // A draft's blank price is no price yet, not 0.
+  if (first.unit === 'request') return { perRequest: first.price === null || first.price === undefined ? null : num(first.price), tiers }
+  return { tokens: tokenPricesOf(first), tiers }
 }
 
 /** A product of multipliers as shown: six decimals at most. */
@@ -126,13 +126,13 @@ export function priceBrief(def: PriceDef | null | undefined, rate = 1): string {
 
 /**
  * "2 tiers · 1 surcharge rule": what a price has beyond the cells of its
- * first tier, its length tiers when it has several and the surcharge rules
- * of a per-request or per-token price; '' when it has neither (an
- * expression's are not known here).
+ * first tier, its tiers when it has several and the surcharge rules of a
+ * visual price; '' when it has neither (an expression's are not known
+ * here).
  */
 export function priceExtras(t: Translate, def: Pick<PriceDef, 'mode' | 'config'>): string {
   const s = summarize(def.mode, def.config)
   if (s.kind === 'expression') return ''
-  const tiers = s.kind === 'per_token' && s.tiers > 1 ? t('prices.summary.tiers', { n: s.tiers }) : ''
+  const tiers = s.tiers > 1 ? t('prices.summary.tiers', { n: s.tiers }) : ''
   return [tiers, s.rules ? t('prices.summary.rules', { n: s.rules }) : ''].filter(Boolean).join(' · ')
 }

@@ -49,8 +49,8 @@ func TestSQLWriteRules(t *testing.T) {
 	segment := core.PriceQuery{GroupID: 3, SegmentID: 5, Model: "claude-sonnet-4-5"}
 	gone := core.PriceQuery{GroupID: 3, SegmentID: 5, Model: "claude-haiku-4-5"}
 	again := core.PriceQuery{GroupID: 3, Model: "claude-opus-4-5"}
-	custom, err := checkCustom(context.Background(), Rule{Kind: core.PriceRuleCustom, Mode: "per_request",
-		Config: json.RawMessage(`{"price": 0}`)}, PriceDef{Mode: "per_request"})
+	custom, err := checkCustom(context.Background(), Rule{Kind: core.PriceRuleCustom, Mode: "visual",
+		Config: json.RawMessage(`{"tiers": [{"name": "base", "unit": "request", "price": 0}]}`)}, perRequestTier)
 	if err != nil {
 		t.Fatal(err)
 	}

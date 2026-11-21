@@ -43,7 +43,7 @@ func (f *fixture) customPrice() *core.PriceRule {
 	_, err := f.db.SQL.ExecContext(f.t.Context(), `INSERT INTO model_price_history (expr_hash, expression, expr_version) VALUES ($1, $2, 1)
 		ON CONFLICT DO NOTHING`, hash, customExpr)
 	require.NoError(f.t, err)
-	return &core.PriceRule{ID: f.price.ID, Model: f.price.Model, Mode: "per_token", Expression: customExpr, ExprVersion: 1, ExprHash: hash,
+	return &core.PriceRule{ID: f.price.ID, Model: f.price.Model, Mode: "visual", Expression: customExpr, ExprVersion: 1, ExprHash: hash,
 		Source: core.PriceSourceGroup, Base: &core.PriceBase{Expression: f.price.Expression, ExprHash: f.price.ExprHash}}
 }
 
@@ -91,7 +91,7 @@ func TestSettleUnderPriceRule(t *testing.T) {
 	require.Equal(t, "billed 0.20800000 0.70800000 2.0000", f.moneyColumns("rule-custom")) // 0.104 x 2
 	require.True(t, before.Sub(f.balance()).Equal(dec("0.6328")), "charged %s", before.Sub(f.balance()))
 	// The custom rule's expression is the row's; the price is still the global one.
-	require.Equal(t, expr.Hash(customExpr)+" per_token "+strconv.FormatInt(f.price.ID, 10),
+	require.Equal(t, expr.Hash(customExpr)+" visual "+strconv.FormatInt(f.price.ID, 10),
 		f.scalar(`SELECT expr_hash || ' ' || billing_mode || ' ' || price_id::text FROM usage_logs WHERE request_id = 'rule-custom'`))
 
 	detail := f.billingDetail("rule-scale")
@@ -163,7 +163,7 @@ func TestRetryUsesFrozenPriceRule(t *testing.T) {
 	_, err := f.db.SQL.ExecContext(ctx, `INSERT INTO price_rules (group_id, model, kind, multiplier) VALUES ($1, 'm-scale', 'multiplier', 0.5)`, f.group)
 	require.NoError(t, err)
 	_, err = f.db.SQL.ExecContext(ctx, `INSERT INTO price_rules (group_id, model, kind, mode, config, expression, expr_hash)
-		VALUES ($1, 'm-custom', 'custom', 'per_token', '{}', $2, $3)`, f.group, customExpr, expr.Hash(customExpr))
+		VALUES ($1, 'm-custom', 'custom', 'visual', '{}', $2, $3)`, f.group, customExpr, expr.Hash(customExpr))
 	require.NoError(t, err)
 
 	// One settlement fails, the other never ran (a crash after the insert).

@@ -30,7 +30,7 @@ func TestPriceCheckReadsSettingsInItsTransaction(t *testing.T) {
 	// A big cost under the default threshold (10 USD), not under the
 	// stored one: no confirmation is asked only if the check read it.
 	err = one.Tx(ctx, func(tx *gorm.DB) error {
-		_, err := s.check(ctx, tx, "per_token", json.RawMessage(`{"tiers":[{"name":"base","p":15,"c":75}]}`), "", false)
+		_, err := s.check(ctx, tx, "visual", json.RawMessage(`{"tiers":[{"name":"base","p":15,"c":75}]}`), "", false)
 		return err
 	})
 	require.NoError(t, err)

@@ -111,7 +111,7 @@ func (c *call) prepareReferencedPrices(ctx context.Context) *gwError {
 		if err != nil {
 			return fromCore(core.AsError(err), errTypePriceNotConfigured)
 		}
-		if rule.VideoOnly || !c.ep.SupportsBillingType(rule.Mode) {
+		if rule.VideoOnly || !c.ep.SupportsBillingType(rule.BillingType()) {
 			return invalidModelReference("referenced model " + ref.model + " has an incompatible billing type")
 		}
 		ref.priced = core.PricedUsage{Kind: ref.kind, Model: ref.model, Price: rule.Clone(),

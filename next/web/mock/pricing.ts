@@ -247,19 +247,14 @@ route('PUT', '/groups/:id/segments', 'group:manage', onGroup((g, req) => {
 // ------------------------------------------------------------------ model prices
 
 /**
- * The prices a custom rule may set per mode, as one row (a per-token rule is
- * one token tier); the first `required` of them must be set. The console
- * checks a rule by the same table before it saves (customFields in
- * src/components/pricing/ruleDrafts.ts): keep the two alike.
+ * The prices a custom rule may set by the unit of its one tier; the first
+ * `required` of them must be set. The console checks a rule by the same
+ * table before it saves (customFields in src/components/pricing/ruleDrafts.ts):
+ * keep the two alike.
  */
 const CUSTOM_PRICES = {
-  per_request: { keys: ['price'], required: 1 },
-  per_token: { keys: PRICE_KEYS, required: 2 }
-}
-
-/** The row of prices of a custom rule; null when a per-token one is not a single token tier without rules. */
-function customRow(rule: any): Record<string, any> | null {
-  return rule.mode === 'per_request' ? (rule.config ?? {}) : simpleTier(rule.config)
+  request: { keys: ['price'], required: 1 },
+  token: { keys: PRICE_KEYS, required: 2 }
 }
 
 /** Why a rule cannot be saved over the global price `base`; null when it can. */
@@ -268,11 +263,12 @@ function ruleError(rule: any, base: PriceDef | null): string | null {
   if (rule?.kind === 'multiplier') return validRate(rule.multiplier) ? null : `multiplier must be 0 or more and ${RATE_LIMITS}`
   if (rule?.kind !== 'custom') return 'rule must be a multiplier or a custom price'
   if (!takesCustomPrice(base.mode, base.config)) return 'an expression price, or a price with tiers or rules, takes a multiplier only'
-  if (rule.mode !== base.mode) return `a custom price is ${base.mode}, as the global price`
-  const row = customRow(rule)
-  if (!row) return 'a custom per-token price is one token tier without rules'
-  const { keys, required } = CUSTOM_PRICES[base.mode as keyof typeof CUSTOM_PRICES]
-  const price = (k: string) => row[k] ?? null
+  const row = rule.mode === 'visual' ? simpleTier(rule.config) : null
+  if (!row) return 'a custom price is a visual price of one tier without rules'
+  const unit = row.unit === 'request' ? 'request' : 'token'
+  if (unit !== (simpleTier(base.config)?.unit ?? 'token')) return 'a custom price is priced as the global price: by tokens or by the request'
+  const { keys, required } = CUSTOM_PRICES[unit]
+  const price = (k: string) => (row as Record<string, any>)[k] ?? null
   if (keys.some((k) => price(k) !== null && !(Number.isFinite(price(k)) && price(k) >= 0))) return 'prices must be non-negative numbers'
   return keys.slice(0, required).every((k) => price(k) !== null) ? null : `${keys.slice(0, required).join(', ')} required`
 }
@@ -289,8 +285,7 @@ function rulePatchError(g: MockGroup, item: any): string | null {
 function storedRule(rule: any): PriceRule | null {
   if (rule == null) return null
   if (rule.kind === 'multiplier') return { kind: 'multiplier', multiplier: String(rule.multiplier) }
-  if (rule.mode === 'per_request') return { kind: 'custom', mode: 'per_request', config: { price: rule.config?.price ?? null } }
-  return { kind: 'custom', mode: 'per_token', config: compactTokenConfig(rule.config) }
+  return { kind: 'custom', mode: 'visual', config: compactTokenConfig(rule.config) }
 }
 
 /** A handler of /groups/:id/model-prices[?segment_id=]: `s` is the segment asked for (null without one); 400 when segment_id is no positive integer, 404 when it does not exist. */

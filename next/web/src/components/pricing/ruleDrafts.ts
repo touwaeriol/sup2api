@@ -2,7 +2,7 @@
 // rule may be saved, and the unsaved rules of a model price table: what its
 // rows show meanwhile and what saving sends.
 import type { ListedPriceRule, ModelPriceRow, PriceDef, PriceRule, PriceRulePatch, PriceSource } from '@/api/pricing'
-import { PRICE_KEYS, isSet, num, simpleTier, singleTier, takesCustomPrice } from '@/views/prices/priceExpr'
+import { PRICE_KEYS, isSet, num, requestTier, simpleTier, singleTier, takesCustomPrice, type TierUnit } from '@/views/prices/priceExpr'
 import { applyRule, priceCells, sameRate, validRate } from './pricingFormat'
 import { withDraft } from './drafts'
 
@@ -12,15 +12,17 @@ export type RuleScope = 'group' | 'segment'
 export const ruleOf = (row: ModelPriceRow, scope: RuleScope): ListedPriceRule | null => (scope === 'segment' ? row.segment_rule : row.group_rule) ?? null
 
 export type CustomRule = Extract<PriceRule, { kind: 'custom' }>
-type CustomMode = CustomRule['mode']
+
+/** How a custom rule prices: by the request when its one tier does, by tokens otherwise. */
+export const customUnit = (rule: CustomRule): TierUnit => (simpleTier(rule.config)?.unit === 'request' ? 'request' : 'token')
 
 /**
  * The prices a custom rule sets, in the order shown: the first `required` of
  * them must be filled. The server checks a saved rule by the same table
  * (CUSTOM_PRICES in mock/pricing.ts stands in for it): keep the two alike.
  */
-export function customFields(mode: CustomMode): { keys: readonly string[]; required: number } {
-  return mode === 'per_request' ? { keys: ['price'], required: 1 } : { keys: PRICE_KEYS, required: 2 }
+export function customFields(unit: TierUnit): { keys: readonly string[]; required: number } {
+  return unit === 'request' ? { keys: ['price'], required: 1 } : { keys: PRICE_KEYS, required: 2 }
 }
 
 const IMAGE_KEYS: readonly string[] = ['img', 'img_o']
@@ -30,18 +32,18 @@ export function shownFields(rule: CustomRule, base: PriceDef | null): string[] {
   const tier = base ? simpleTier(base.config) : null
   const prices = customPrices(rule)
   const images = IMAGE_KEYS.some((k) => (tier !== null && k in tier) || prices[k] !== null)
-  return customFields(rule.mode).keys.filter((k) => images || !IMAGE_KEYS.includes(k))
+  return customFields(customUnit(rule)).keys.filter((k) => images || !IMAGE_KEYS.includes(k))
 }
 
-/** The prices of a custom rule as one row: its per-request price, or those of its one token tier. */
+/** The prices of a custom rule as one row: those of its one tier. */
 export function customPrices(rule: CustomRule): Record<string, number | null> {
-  const row: Record<string, unknown> = rule.mode === 'per_request' ? rule.config : { ...rule.config.tiers[0] }
-  return Object.fromEntries(customFields(rule.mode).keys.map((k) => [k, (row[k] as number | null | undefined) ?? null]))
+  const row: Record<string, unknown> = { ...simpleTier(rule.config) }
+  return Object.fromEntries(customFields(customUnit(rule)).keys.map((k) => [k, (row[k] as number | null | undefined) ?? null]))
 }
 
-/** The custom rule of a mode with these prices: a per-token one is a single token tier. */
-export function customRule(mode: CustomMode, prices: Record<string, number | null | undefined>): CustomRule {
-  return mode === 'per_request' ? { kind: 'custom', mode, config: { price: prices.price ?? null } } : { kind: 'custom', mode, config: singleTier(prices) }
+/** The custom rule of a unit with these prices: a visual price of one request or token tier. */
+export function customRule(unit: TierUnit, prices: Record<string, number | null | undefined>): CustomRule {
+  return { kind: 'custom', mode: 'visual', config: unit === 'request' ? requestTier(prices.price ?? null) : singleTier(prices) }
 }
 
 /** Whether a global price takes a custom price (takesCustomPrice). */
@@ -50,9 +52,9 @@ export const takesCustom = (base: PriceDef | null) => !!base && takesCustomPrice
 /** The rule a mode starts from: ×1, or the global price as a price of its own. A price that takes no custom price takes a multiplier only. */
 export function startRule(kind: PriceRule['kind'], base: PriceDef): PriceRule {
   if (kind === 'multiplier' || !takesCustom(base)) return { kind: 'multiplier', multiplier: '1' }
-  if (base.mode === 'per_request') return customRule('per_request', { price: priceCells(base).perRequest })
   const tier = simpleTier(base.config)
-  return customRule('per_token', Object.fromEntries(PRICE_KEYS.map((k) => [k, isSet(tier?.[k]) ? num(tier?.[k]) : null])))
+  if (tier?.unit === 'request') return customRule('request', { price: priceCells(base).perRequest })
+  return customRule('token', Object.fromEntries(PRICE_KEYS.map((k) => [k, isSet(tier?.[k]) ? num(tier?.[k]) : null])))
 }
 
 const isPrice = (v: unknown) => typeof v === 'number' && Number.isFinite(v) && v >= 0
@@ -62,7 +64,7 @@ export function validRule(rule: PriceRule | null): boolean {
   if (!rule) return true
   if (rule.kind === 'multiplier') return validRate(rule.multiplier)
   const prices = customPrices(rule)
-  const { keys, required } = customFields(rule.mode)
+  const { keys, required } = customFields(customUnit(rule))
   return keys.every((k, i) => isPrice(prices[k]) || (i >= required && prices[k] === null))
 }
 
@@ -70,9 +72,9 @@ export function validRule(rule: PriceRule | null): boolean {
 export function sameRule(a: PriceRule | null, b: PriceRule | null): boolean {
   if (!a || !b) return a === b
   if (a.kind === 'multiplier') return b.kind === 'multiplier' && sameRate(a.multiplier, b.multiplier)
-  if (b.kind !== 'custom' || a.mode !== b.mode) return false
+  if (b.kind !== 'custom' || customUnit(a) !== customUnit(b)) return false
   const [x, y] = [customPrices(a), customPrices(b)]
-  return customFields(a.mode).keys.every((k) => x[k] === y[k])
+  return customFields(customUnit(a)).keys.every((k) => x[k] === y[k])
 }
 
 /**

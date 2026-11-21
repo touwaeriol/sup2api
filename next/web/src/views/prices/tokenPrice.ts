@@ -1,4 +1,4 @@
-// Editing a per_token config in place (TokenPriceEditor): the edits that keep
+// Editing a visual config in place (TokenPriceEditor): the edits that keep
 // the config whole. A price beyond p and c is charged when its key is in the
 // tier (held as null while it is blank): unticking cache writes 1 h or image
 // tokens drops the key, and they fall back to another price. A condition
@@ -7,21 +7,22 @@
 // presets.ts.
 import {
   asTokenConfig,
+  condKind,
   num,
-  sortedTiers,
   valueText,
+  type CondLeaf,
   type CondOp,
   type CondSource,
   type FieldCond,
   type MarkupRule,
   type PriceKey,
   type RuleCond,
-  type TokenConfig,
+  type VisualConfig,
   type TokenTier
 } from './priceExpr'
 import { PRESETS } from './presets'
 
-export function defaultTokenConfig(): TokenConfig {
+export function defaultTokenConfig(): VisualConfig {
   return { tiers: PRESETS.claude(), rules: [] }
 }
 
@@ -31,33 +32,43 @@ function editableCond(c: RuleCond): RuleCond {
   return c.op === 'exists' ? c : { ...c, value: valueText(c, c.value) }
 }
 
-/** Editable copies of saved rules (a per_request config's, or a per_token one's). */
-export function editableRules(raw: readonly MarkupRule[]): MarkupRule[] {
+/** Editable copies of saved rules. */
+function editableRules(raw: readonly MarkupRule[]): MarkupRule[] {
   return (JSON.parse(JSON.stringify(raw)) as MarkupRule[]).map(r => ({ ...r, conds: r.conds.map(editableCond) }))
 }
 
 /** An editable copy of a saved config: tiers in the order they match, the last one the rest, each with its unit. */
-export function editableTokenConfig(raw: unknown): TokenConfig {
+export function editableTokenConfig(raw: unknown): VisualConfig {
   const c = asTokenConfig(raw)
-  const tiers = sortedTiers(JSON.parse(JSON.stringify(c.tiers)) as TokenTier[]).map(t => ({ ...t, unit: t.unit ?? 'token' }))
-  if (tiers.length) tiers[tiers.length - 1].max_len = null
+  const tiers = (JSON.parse(JSON.stringify(c.tiers)) as TokenTier[]).map(t => ({ ...t, unit: t.unit ?? 'token' }))
   return { tiers, rules: editableRules(c.rules) }
 }
 
-/** Adds a bounded tier before the rest, priced as the rest is, under the first tier_N name not taken. */
+/** The bound of a tier that applies up to a length, `len <= N`; 0 for any other condition. */
+const lenBound = (t: TokenTier) => (condKind(t.when) === 'leaf' && (t.when as CondLeaf).var === 'len' && (t.when as CondLeaf).op === '<=' ? num((t.when as CondLeaf).value) : 0)
+
+/** Adds a tier before the rest, priced as the rest is, up to twice the longest `len <=` bound (200000 without one), under the first tier_N name not taken. */
 export function addTier(tiers: TokenTier[]) {
   const last = tiers[tiers.length - 1]
-  const prevMax = tiers.slice(0, -1).reduce((m, t) => Math.max(m, num(t.max_len)), 0)
+  const bound = Math.max(0, ...tiers.map(lenBound))
   const names = new Set(tiers.map(t => t.name))
   let n = tiers.length + 1
   while (names.has(`tier_${n}`)) n++
-  tiers.splice(tiers.length - 1, 0, { ...last, name: `tier_${n}`, max_len: prevMax ? prevMax * 2 : 200000 })
+  tiers.splice(tiers.length - 1, 0, { ...last, name: `tier_${n}`, when: { var: 'len', op: '<=', value: bound ? bound * 2 : 200000 } })
 }
 
-/** Removes a tier; the last one left is the rest. */
+/** Removes a tier; the last one left is the rest, without a condition. */
 export function removeTier(tiers: TokenTier[], i: number) {
   tiers.splice(i, 1)
-  tiers[tiers.length - 1].max_len = null
+  delete tiers[tiers.length - 1].when
+}
+
+/** Whether tier i moves by `by` (±1) and stays before the rest: the rest stays last. */
+export const canMoveTier = (tiers: readonly TokenTier[], i: number, by: number) => i < tiers.length - 1 && i + by >= 0 && i + by < tiers.length - 1
+
+/** Swaps tier i with its neighbour `by` (±1) away (canMoveTier). */
+export function moveTier(tiers: TokenTier[], i: number, by: number) {
+  tiers.splice(i + by, 0, ...tiers.splice(i, 1))
 }
 
 /** Whether a tier charges a price: p and c always, any other while its key is in the tier. */

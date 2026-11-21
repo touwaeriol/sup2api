@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { EffectiveRate, PriceDef, PriceRule } from '@/api/pricing'
 import { priceLevels, rateLevels } from './quoteLevels'
-import { singleTier } from '@/views/prices/priceExpr'
+import { requestTier, singleTier } from '@/views/prices/priceExpr'
 
-const base: PriceDef = { mode: 'per_token', config: singleTier({ p: 3, c: 15 }), expression: '' }
+const base: PriceDef = { mode: 'visual', config: singleTier({ p: 3, c: 15 }), expression: '' }
 const half: PriceRule = { kind: 'multiplier', multiplier: '0.5' }
-const fixed: PriceRule = { kind: 'custom', mode: 'per_token', config: singleTier({ p: 1, c: 8 }) }
+const fixed: PriceRule = { kind: 'custom', mode: 'visual', config: singleTier({ p: 1, c: 8 }) }
 const rate = (over: Partial<EffectiveRate>): EffectiveRate => ({ value: '1.2', source: 'group', group_default: '1.2', discount: '1', ...over })
 
 const states = (levels: Array<{ key: string; state: string }>) => Object.fromEntries(levels.map((l) => [l.key, l.state]))
@@ -22,7 +22,7 @@ describe('quote levels', () => {
   })
 
   it('marks a rule that is set but not in effect, which leaves the level under it to apply', () => {
-    const stale = { kind: 'custom', mode: 'per_request', config: { price: 0.002 }, inactive: true } as const
+    const stale = { kind: 'custom', mode: 'visual', config: requestTier(0.002), inactive: true } as const
     const levels = priceLevels({ price_levels: { segment: null, group: stale }, base, price_source: 'global' })
     expect(levels.map((l) => [l.key, l.state, !!l.inactive])).toEqual([
       ['segment', 'unset', false],

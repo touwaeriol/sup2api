@@ -45,8 +45,7 @@ watch(
 
 const modeOptions = computed(() => [
   { value: '', label: t('common.all') },
-  { value: 'per_request', label: t('prices.mode.per_request') },
-  { value: 'per_token', label: t('prices.mode.per_token') },
+  { value: 'visual', label: t('prices.mode.visual') },
   { value: 'expression', label: t('prices.mode.expression') }
 ])
 
@@ -105,7 +104,7 @@ function analysisText(p: Price): string {
   return tiers > 1 || rules ? t('prices.summary.analysis', { tiers, rules }) : ''
 }
 
-const MODE_TONE: Record<string, Tone> = { expression: 'accent', per_token: 'primary' }
+const MODE_TONE: Record<string, Tone> = { expression: 'accent', visual: 'primary' }
 
 function sourceLabel(p: Price): string {
   if (p.source === 'sync') return p.sync_source_name ? t('prices.sourceSync', { name: p.sync_source_name }) : t('prices.source.sync')

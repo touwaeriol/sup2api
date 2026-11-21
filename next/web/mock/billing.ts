@@ -5,9 +5,9 @@ import { fail, nextId, noContent, now, on, paginate, type MockRequest } from './
 import { accounts } from './accounts'
 import { caller, inScope, ownerScope } from './core'
 import type { UsageView } from '../src/views/usage/view'
-import { PRICE_KEYS, checkPerRequest, checkTokenConfig, perRequestRules, priceExpression, singleTier, sortedTiers, asTokenConfig } from '../src/views/prices/priceExpr'
+import { PRICE_KEYS, checkTokenConfig, priceExpression, requestTier, singleTier, asTokenConfig, type TierCond } from '../src/views/prices/priceExpr'
 
-type PriceMode = 'per_request' | 'per_token' | 'expression'
+type PriceMode = 'visual' | 'expression'
 type LText = { en: string; zh: string }
 const msg = (en: string, zh: string): LText => ({ en, zh })
 export const money = (n: number) => n.toFixed(8)
@@ -20,12 +20,12 @@ type Usage = Record<TokenVar | 'len', number>
 
 const fmtN = (n: number) => String(Number(n.toPrecision(12)))
 
-// The server generates the expression of a per_request / per_token price from
+// The server generates the expression of a visual price from
 // its config; the console's generator matches it byte for byte, so the mock uses it.
 const genExpr = priceExpression
 
 const ALLOWED_IDENTS = new Set(
-  'p c cr cc cc1h len img img_o ai ao tier flat param header has hour weekday day month max min abs ceil floor u true false nil v1'.split(' ')
+  'p c cr cc cc1h len img img_o ai ao tier flat param header has hour minute weekday day month max min abs ceil floor u true false nil v1'.split(' ')
 )
 
 /** An expression with its string literals blanked out, same length. */
@@ -112,6 +112,7 @@ function run(part: string, input: EvalInput, tokens: Usage, hits: boolean[] = []
     header: (name: string) => headers[String(name).toLowerCase()] ?? '',
     has: (s: unknown, sub: unknown) => String(s ?? '').includes(String(sub)),
     hour: (tz: string) => Number(inTz(tz, { hour: 'numeric', hourCycle: 'h23' })),
+    minute: (tz: string) => Number(inTz(tz, { minute: 'numeric' })),
     weekday: (tz: string) => ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(inTz(tz, { weekday: 'short' })),
     day: (tz: string) => Number(inTz(tz, { day: 'numeric' })),
     month: (tz: string) => Number(inTz(tz, { month: 'numeric' })),
@@ -241,11 +242,29 @@ interface CatalogEntry {
 
 const round = (n: number) => Number(n.toPrecision(4))
 
+/** The condition of a tier up to a context length. */
+const upTo = (n: number): TierCond => ({ var: 'len', op: '<=', value: n })
+
 /** Two tiers at 200K, as LiteLLM prices Claude Sonnet. */
 const SONNET = {
   tiers: [
-    { name: 'standard', max_len: 200000, unit: 'token', p: 3, c: 15, cr: 0.3, cc: 3.75, cc1h: 6 },
-    { name: 'long_context', max_len: null, unit: 'token', p: 6, c: 22.5, cr: 0.6, cc: 7.5, cc1h: 12 }
+    { name: 'standard', when: upTo(200000), unit: 'token', p: 3, c: 15, cr: 0.3, cc: 3.75, cc1h: 6 },
+    { name: 'long_context', unit: 'token', p: 6, c: 22.5, cr: 0.6, cc: 7.5, cc1h: 12 }
+  ],
+  rules: []
+}
+
+/** Sonnet's two tiers with a cheaper long context at night (22:00–06:00 in Shanghai), checked first. */
+const SONNET_NIGHT = {
+  tiers: [
+    {
+      name: 'long_night',
+      when: { and: [{ var: 'len', op: '>', value: 200000 }, { or: [{ var: 'hour', tz: 'Asia/Shanghai', op: '>=', value: 22 }, { var: 'hour', tz: 'Asia/Shanghai', op: '<', value: 6 }] }] },
+      unit: 'token',
+      p: 4,
+      c: 18
+    },
+    ...SONNET.tiers
   ],
   rules: []
 }
@@ -254,30 +273,30 @@ const KNOWN: CatalogEntry[] = [
   {
     model: 'claude-sonnet-4-5',
     family: 'anthropic',
-    mode: 'per_token',
+    mode: 'visual',
     config: SONNET
   },
-  { model: 'claude-haiku-4-5', family: 'anthropic', mode: 'per_token', config: singleTier({ p: 1, c: 5, cr: 0.1, cc: 1.25, cc1h: 2 }) },
-  { model: 'claude-opus-4-1', family: 'anthropic', mode: 'per_token', config: singleTier({ p: 15, c: 75, cr: 1.5, cc: 18.75, cc1h: 30 }) },
-  { model: 'gpt-4o', family: 'openai', mode: 'per_token', config: singleTier({ p: 2.5, c: 10, cr: 1.25 }) },
-  { model: 'gpt-4o-mini', family: 'openai', mode: 'per_token', config: singleTier({ p: 0.15, c: 0.6, cr: 0.075 }) },
-  { model: 'gpt-5', family: 'openai', mode: 'per_token', config: singleTier({ p: 1.25, c: 10, cr: 0.125 }) },
-  { model: 'gemini-2.5-flash', family: 'google', mode: 'per_token', config: singleTier({ p: 0.3, c: 2.5, cr: 0.075 }) },
+  { model: 'claude-haiku-4-5', family: 'anthropic', mode: 'visual', config: singleTier({ p: 1, c: 5, cr: 0.1, cc: 1.25, cc1h: 2 }) },
+  { model: 'claude-opus-4-1', family: 'anthropic', mode: 'visual', config: singleTier({ p: 15, c: 75, cr: 1.5, cc: 18.75, cc1h: 30 }) },
+  { model: 'gpt-4o', family: 'openai', mode: 'visual', config: singleTier({ p: 2.5, c: 10, cr: 1.25 }) },
+  { model: 'gpt-4o-mini', family: 'openai', mode: 'visual', config: singleTier({ p: 0.15, c: 0.6, cr: 0.075 }) },
+  { model: 'gpt-5', family: 'openai', mode: 'visual', config: singleTier({ p: 1.25, c: 10, cr: 0.125 }) },
+  { model: 'gemini-2.5-flash', family: 'google', mode: 'visual', config: singleTier({ p: 0.3, c: 2.5, cr: 0.075 }) },
   {
     model: 'gemini-2.5-pro',
     family: 'google',
-    mode: 'per_token',
+    mode: 'visual',
     config: {
       tiers: [
-        { name: 'standard', max_len: 200000, unit: 'token', p: 1.25, c: 10, cr: 0.31 },
-        { name: 'long_context', max_len: null, unit: 'token', p: 2.5, c: 15, cr: 0.625 }
+        { name: 'standard', when: upTo(200000), unit: 'token', p: 1.25, c: 10, cr: 0.31 },
+        { name: 'long_context', unit: 'token', p: 2.5, c: 15, cr: 0.625 }
       ],
       rules: []
     }
   },
-  { model: 'mistral-large-latest', family: 'mistral', mode: 'per_token', config: singleTier({ p: 2, c: 6 }) },
-  { model: 'deepseek-chat', family: 'deepseek', mode: 'per_token', config: singleTier({ p: 0.27, c: 1.1, cr: 0.07 }) },
-  { model: 'grok-4', family: 'xai', mode: 'per_token', config: singleTier({ p: 3, c: 15, cr: 0.75 }) }
+  { model: 'mistral-large-latest', family: 'mistral', mode: 'visual', config: singleTier({ p: 2, c: 6 }) },
+  { model: 'deepseek-chat', family: 'deepseek', mode: 'visual', config: singleTier({ p: 0.27, c: 1.1, cr: 0.07 }) },
+  { model: 'grok-4', family: 'xai', mode: 'visual', config: singleTier({ p: 3, c: 15, cr: 0.75 }) }
 ]
 
 const PREFIX: Record<Family, string> = { anthropic: 'claude-legacy', openai: 'gpt-variant', google: 'gemini-exp', mistral: 'mistral', deepseek: 'deepseek', xai: 'grok' }
@@ -292,7 +311,7 @@ function synthetic(family: Family, count: number): CatalogEntry[] {
     const p = round(0.05 + r(1) * 10)
     const cfg: Record<string, number> = { p, c: round(p * (3 + Math.floor(r(2) * 3))) }
     if (r(3) > 0.4) cfg.cr = round(p / 10)
-    out.push({ model: `${PREFIX[family]}-${String(i).padStart(4, '0')}-${SUFFIX[i % SUFFIX.length]}`, family, mode: 'per_token', config: singleTier(cfg) })
+    out.push({ model: `${PREFIX[family]}-${String(i).padStart(4, '0')}-${SUFFIX[i % SUFFIX.length]}`, family, mode: 'visual', config: singleTier(cfg) })
   }
   return out
 }
@@ -313,9 +332,9 @@ const CATALOG = {
 const UPSTREAM_GROUP_RATE = 1.5
 const SKIPPED = { litellm: 37, models_dev: 4, sup2api: 0 }
 
-/** A per_token config with every price times `m`. */
+/** A visual config with every price times `m`. */
 function scaleConfig(cfg: Record<string, any>, m: number): Record<string, any> {
-  const scale = (t: Record<string, any>) => Object.fromEntries(Object.entries(t).map(([k, v]) => [k, typeof v === 'number' && k !== 'max_len' ? round(v * m) : v]))
+  const scale = (t: Record<string, any>) => Object.fromEntries(Object.entries(t).map(([k, v]) => [k, typeof v === 'number' ? round(v * m) : v]))
   return { ...cfg, tiers: cfg.tiers.map(scale) }
 }
 
@@ -323,13 +342,13 @@ const litellmSynth = CATALOG.litellm.filter((e) => e.model.startsWith('claude-le
 
 const prices: MockPrice[] = [
   // Manual, identical to the synced definition -> "unchanged" in previews.
-  mkPrice({ id: 1, model: 'claude-sonnet-4-5', mode: 'per_token', config: SONNET, source: 'manual', enabled: true, note: '' }),
+  mkPrice({ id: 1, model: 'claude-sonnet-4-5', mode: 'visual', config: SONNET, source: 'manual', enabled: true, note: '' }),
   // Synced from LiteLLM and still current -> "unchanged".
-  mkPrice({ id: 2, model: 'claude-haiku-4-5', mode: 'per_token', config: singleTier({ p: 1, c: 5, cr: 0.1, cc: 1.25, cc1h: 2 }), source: 'sync', sync_source_id: 1, enabled: true, note: '' }),
+  mkPrice({ id: 2, model: 'claude-haiku-4-5', mode: 'visual', config: singleTier({ p: 1, c: 5, cr: 0.1, cc: 1.25, cc1h: 2 }), source: 'sync', sync_source_id: 1, enabled: true, note: '' }),
   mkPrice({
     id: 3,
     model: 'claude-sonnet-x',
-    mode: 'per_token',
+    mode: 'visual',
     config: {
       tiers: SONNET.tiers,
       rules: [
@@ -349,7 +368,9 @@ const prices: MockPrice[] = [
     enabled: true,
     note: 'fast mode costs double'
   }),
-  mkPrice({ id: 4, model: 'web-search', mode: 'per_request', config: { price: 0.01 }, source: 'manual', enabled: true, note: '' }),
+  mkPrice({ id: 4, model: 'web-search', mode: 'visual', config: requestTier(0.01), source: 'manual', enabled: true, note: '' }),
+  // Tiers by length and by the time of day.
+  mkPrice({ id: 9, model: 'claude-sonnet-night', mode: 'visual', config: SONNET_NIGHT, source: 'manual', enabled: true, note: 'cheaper long context at night' }),
   // Manual and different from every source -> "manual" (unticked by default).
   mkPrice({
     id: 5,
@@ -362,10 +383,10 @@ const prices: MockPrice[] = [
     note: 'night discount'
   }),
   // Synced from LiteLLM, source price changed since -> "update".
-  mkPrice({ id: 6, model: 'gpt-4o', mode: 'per_token', config: singleTier({ p: 5, c: 15, cr: 2.5 }), source: 'sync', sync_source_id: 1, enabled: true, note: '' }),
+  mkPrice({ id: 6, model: 'gpt-4o', mode: 'visual', config: singleTier({ p: 5, c: 15, cr: 2.5 }), source: 'sync', sync_source_id: 1, enabled: true, note: '' }),
   // Synced from models.dev and current.
-  mkPrice({ id: 7, model: 'gemini-2.5-flash', mode: 'per_token', config: singleTier({ p: 0.3, c: 2.5, cr: 0.075 }), source: 'sync', sync_source_id: 2, enabled: true, note: '' }),
-  mkPrice({ id: 8, model: 'gpt-4o-mini', mode: 'per_token', config: singleTier({ p: 0.3, c: 1.2 }), source: 'sync', sync_source_id: 1, enabled: true, note: '' }),
+  mkPrice({ id: 7, model: 'gemini-2.5-flash', mode: 'visual', config: singleTier({ p: 0.3, c: 2.5, cr: 0.075 }), source: 'sync', sync_source_id: 2, enabled: true, note: '' }),
+  mkPrice({ id: 8, model: 'gpt-4o-mini', mode: 'visual', config: singleTier({ p: 0.3, c: 1.2 }), source: 'sync', sync_source_id: 1, enabled: true, note: '' }),
   // A few synthetic LiteLLM models: current, outdated, and manually edited.
   ...litellmSynth.slice(0, 6).map((e, i) => mkPrice({ id: 20 + i, model: e.model, mode: e.mode, config: e.config, source: 'sync', sync_source_id: 1, enabled: true, note: '' })),
   ...litellmSynth
@@ -376,17 +397,16 @@ const prices: MockPrice[] = [
     .map((e, i) => mkPrice({ id: 40 + i, model: e.model, mode: e.mode, config: scaleConfig(e.config, 1.2), source: 'manual', enabled: true, note: 'negotiated' }))
 ]
 
-/** Why the server's generator refuses a config: the console's own checks, the tiers in the order they match as the server sorts them; null when it takes it. */
+/** Why the server's generator refuses a config: the console's own checks; null when it takes it. */
 function configIssue(mode: PriceMode, config: Record<string, any>): string | null {
   if (mode === 'expression') return null
-  const cfg = asTokenConfig(config)
-  const issues = mode === 'per_request' ? checkPerRequest(config.price, perRequestRules(config)) : checkTokenConfig({ ...cfg, tiers: sortedTiers(cfg.tiers) })
+  const issues = checkTokenConfig(asTokenConfig(config))
   return issues.length ? `config: ${issues.map((x) => x.key.replace('prices.local.', '')).join(', ')}` : null
 }
 
 function exprOf(body: any): { mode: PriceMode; config: Record<string, any>; expression: string; issue: string | null } {
-  const mode: PriceMode = ['per_request', 'per_token', 'expression'].includes(body?.mode) ? body.mode : 'expression'
-  // A per_request / per_token expression is generated from the config, whatever the client sent; an expression price has no config.
+  const mode: PriceMode = body?.mode === 'visual' ? 'visual' : 'expression'
+  // A visual price's expression is generated from the config, whatever the client sent; an expression price has no config.
   const config = mode !== 'expression' && body?.config && typeof body.config === 'object' ? body.config : {}
   const issue = configIssue(mode, config)
   const expression = mode === 'expression' ? String(body?.expression || '') : issue ? '' : genExpr(mode, config)
@@ -548,10 +568,6 @@ on('POST', '/prices/validate', (req) => {
   return { ok: v.ok, expression: v.expression, expr_hash: v.expr_hash, errors: v.errors, warnings: v.warnings, samples: v.samples, cost_per_million_input: v.cost_per_million_input, analysis: v.analysis }
 })
 
-function tierBounds(expression: string) {
-  return [...expression.matchAll(/len\s*<=\s*(\d+)\s*\?\s*tier\("((?:[^"\\]|\\.)*)"/g)].map((m) => ({ name: m[2], max_len: Number(m[1]) }))
-}
-
 on('POST', '/prices/preview', (req) => {
   const b = req.body || {}
   let src: { mode: PriceMode; config: Record<string, any>; expression: string }
@@ -578,7 +594,7 @@ on('POST', '/prices/preview', (req) => {
     expr_hash: hashOf(src.expression),
     breakdown: {
       vars: r.tokens,
-      tiers: tierBounds(src.expression),
+      tiers: r.tier ? [r.tier] : [],
       items: r.items,
       subtotal: money(r.subtotal),
       base: money(r.cost),
@@ -1084,7 +1100,7 @@ function charge(price: MockPrice, input: EvalInput, rate: number, terms?: Pricin
       rules: ev.rules,
       breakdown: {
         vars: ev.tokens,
-        tiers: tierBounds(custom?.expression ?? price.expression),
+        tiers: ev.tier ? [ev.tier] : [],
         items: ev.items,
         subtotal: money(ev.subtotal),
         base: money(ev.cost),
@@ -1265,7 +1281,7 @@ for (let i = 0; i < 90; i++) {
 // multiplier rule, a custom price, the segment's own rate and its discount.
 {
   const VIP = 2
-  const haiku = configPrice('per_token', singleTier({ p: 0.8, c: 4, cr: 0.08, cc: 1 }))
+  const haiku = configPrice('visual', singleTier({ p: 0.8, c: 4, cr: 0.08, cc: 1 }))
   const tokens = { input: 12000, output: 1800 }
   const samples: Array<{ group: (typeof GROUPS)[number]; model: string; rate: number; terms: PricingTerms }> = [
     { group: GROUPS[0], model: 'gpt-4o-mini', rate: 0.9, terms: { segment_id: VIP, rate_source: 'discount', rule: { source: 'segment', scale: 0.8 } } },
