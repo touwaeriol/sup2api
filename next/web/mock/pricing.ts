@@ -267,7 +267,7 @@ function ruleError(rule: any, base: PriceDef | null): string | null {
   if (!base) return 'the model has no global price'
   if (rule?.kind === 'multiplier') return validRate(rule.multiplier) ? null : `multiplier must be 0 or more and ${RATE_LIMITS}`
   if (rule?.kind !== 'custom') return 'rule must be a multiplier or a custom price'
-  if (!takesCustomPrice(base.mode, base.config)) return 'an expression price, or a per-token price with tiers or rules, takes a multiplier only'
+  if (!takesCustomPrice(base.mode, base.config)) return 'an expression price, or a price with tiers or rules, takes a multiplier only'
   if (rule.mode !== base.mode) return `a custom price is ${base.mode}, as the global price`
   const row = customRow(rule)
   if (!row) return 'a custom per-token price is one token tier without rules'

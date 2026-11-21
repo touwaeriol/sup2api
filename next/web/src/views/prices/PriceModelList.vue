@@ -23,7 +23,7 @@ const modeOptions = [
 const usd = (n: number) => `$${+n.toFixed(4)}`
 function brief(p: Price): string {
   const s = summarize(p.mode, p.config)
-  if (s.kind === 'per_request') return `按次 ${usd(s.price)}`
+  if (s.kind === 'per_request') return `按次 ${usd(s.price)}${s.rules ? ` · ${s.rules} 条规则` : ''}`
   if (s.kind === 'expression') return '表达式'
   if (s.first.unit === 'request') return `按次 ${usd(Number(s.first.price) || 0)}${s.tiers > 1 ? ` · ${s.tiers} 档` : ''}`
   const head = `${usd(Number(s.first.p) || 0)} / ${usd(Number(s.first.c) || 0)}`

@@ -46,19 +46,27 @@ func (l ruleLevels) listPrice(base PriceDef) (PriceDef, string) {
 }
 
 // customMode is the mode of the custom price a price rule may set over p:
-// that of a per_request price, or of a per_token price with one tier priced
-// by the token and no rules. It is "" when only a multiplier applies: an
-// expression price, or a per_token price with tiers or rules (CONTRACTS §131).
+// that of a per_request price without rules, or of a per_token price with
+// one tier priced by the token and no rules. It is "" when only a multiplier
+// applies: an expression price, or a price with tiers or rules (CONTRACTS §131).
 func (p PriceDef) customMode() string {
 	switch p.Mode {
 	case expr.ModePerRequest:
-		return p.Mode
+		if !hasRules(p.Config) {
+			return p.Mode
+		}
 	case expr.ModePerToken:
 		if _, ok := singleTokenTier(p.Config); ok {
 			return p.Mode
 		}
 	}
 	return ""
+}
+
+// hasRules reports whether a per_request config has request surcharges.
+func hasRules(config json.RawMessage) bool {
+	var c expr.PerRequestConfig
+	return json.Unmarshal(config, &c) == nil && len(c.Rules) > 0
 }
 
 // singleTokenTier returns the tier of a per_token config that has one tier,

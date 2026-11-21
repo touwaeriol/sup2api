@@ -39,12 +39,15 @@ import {
   compactTokenConfig,
   isSet,
   num,
+  compactPerRequest,
   perRequestExpr,
+  perRequestRules as rulesOf,
+  type MarkupRule,
   tokenExpr,
   type PriceMode,
   type TokenConfig
 } from './priceExpr'
-import { defaultTokenConfig, editableTokenConfig } from './tokenPrice'
+import { defaultTokenConfig, editableRules, editableTokenConfig } from './tokenPrice'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -63,6 +66,7 @@ const price = ref<Price | null>(null)
 const form = reactive({ model: '', note: '', enabled: true })
 const mode = ref<PriceMode>('per_token')
 const perRequest = ref<number | null>(0.01)
+const perRequestRules = ref<MarkupRule[]>([])
 const token = ref<TokenConfig>(defaultTokenConfig())
 const sourceText = ref('')
 const errors = ref<Record<string, string>>({})
@@ -77,11 +81,11 @@ function guideReplace(src: string) {
 }
 
 const readonly = computed(() => !auth.has('price:manage'))
-const MODES = ['per_token', 'per_request', 'expression'] as const
+const MODES = ['per_request', 'per_token', 'expression'] as const
 const modeOptions = computed(() => MODES.map(m => ({ value: m, label: t(`prices.mode.${m}`) })))
 const MODE_HINT: Record<PriceMode, string> = {
   per_token: '按 token 计价，可按上下文长度分档，再按请求参数、请求头、用量字段或时间加价。',
-  per_request: '每次请求一个价，不看 token 数。',
+  per_request: '每次请求一个价，不看 token 数；可按请求参数、请求头、用量字段或时间加价。',
   expression: '界面写不了的复杂计费用表达式，字段和按 token 相同，另外能读时间。'
 }
 const modeHint = computed(() => MODE_HINT[mode.value])
@@ -102,6 +106,7 @@ function resetForm() {
   Object.assign(form, { model: '', note: '', enabled: true })
   mode.value = 'per_token'
   perRequest.value = 0.01
+  perRequestRules.value = []
   token.value = defaultTokenConfig()
   sourceText.value = ''
   errors.value = {}
@@ -113,7 +118,10 @@ function applyPrice(p: Price) {
   Object.assign(form, { model: p.model, note: p.note || '', enabled: p.enabled })
   mode.value = p.mode
   sourceText.value = p.expression || ''
-  if (p.mode === 'per_request') perRequest.value = isSet(p.config?.price) ? num(p.config?.price) : null
+  if (p.mode === 'per_request') {
+    perRequest.value = isSet(p.config?.price) ? num(p.config?.price) : null
+    perRequestRules.value = editableRules(rulesOf(p.config))
+  }
   if (p.mode === 'per_token') token.value = editableTokenConfig(p.config)
 }
 
@@ -138,8 +146,8 @@ const tokenConfig = computed(() => compactTokenConfig(token.value))
 const payload = computed<PricePayload & { mode: PriceMode }>(() => {
   if (mode.value === 'per_request') {
     // A blank price stays blank: checkPerRequest blocks saving it.
-    const price = isSet(perRequest.value) ? num(perRequest.value) : null
-    return { mode: 'per_request', config: { price }, expression: perRequestExpr(price) }
+    const config = compactPerRequest(perRequest.value, perRequestRules.value)
+    return { mode: 'per_request', config, expression: perRequestExpr(config.price, config.rules) }
   }
   if (mode.value === 'per_token') return { mode: 'per_token', config: tokenConfig.value, expression: tokenExpr(tokenConfig.value) }
   return { mode: 'expression', config: {}, expression: sourceText.value }
@@ -147,16 +155,16 @@ const payload = computed<PricePayload & { mode: PriceMode }>(() => {
 
 const localIssues = computed<string[]>(() => {
   if (mode.value === 'expression') return sourceText.value.trim() ? [] : [t('prices.local.emptyExpr')]
-  const issues = mode.value === 'per_request' ? checkPerRequest(perRequest.value) : checkTokenConfig(tokenConfig.value)
+  const issues = mode.value === 'per_request' ? checkPerRequest(perRequest.value, compactPerRequest(perRequest.value, perRequestRules.value).rules) : checkTokenConfig(tokenConfig.value)
   return issues.map(x => t(x.key, x.params || {}))
 })
 
 const previewText = computed(() => payload.value.expression)
 const previewSource = computed(() => (localIssues.value.length || validation.value?.errors.length ? null : { ...payload.value }))
 
-/** Per-request price into per_token: one per-call tier, no rules yet. */
+/** Per-request price into per_token: one per-call tier, the rules kept. */
 function perRequestToToken() {
-  token.value = { tiers: [{ name: 'base', max_len: null, unit: 'request', price: perRequest.value }], rules: [] }
+  token.value = { tiers: [{ name: 'base', max_len: null, unit: 'request', price: perRequest.value }], rules: perRequestRules.value }
   mode.value = 'per_token'
 }
 
@@ -293,6 +301,7 @@ watch(priceId, load, { immediate: true })
           <PerRequestEditor
             v-if="mode === 'per_request'"
             v-model="perRequest"
+            v-model:rules="perRequestRules"
             :disabled="readonly"
             :error="errors['config.price']"
             @to-token="perRequestToToken"
@@ -317,7 +326,7 @@ watch(priceId, load, { immediate: true })
             @locate="(l, c) => exprEditor?.focusAt(l, c)"
           />
 
-          <PriceEstimator v-if="mode !== 'per_request'" :source="previewSource" />
+          <PriceEstimator :source="previewSource" :per-request="mode === 'per_request'" />
 
           <section class="rounded-xl border border-line" data-testid="price-preview">
             <div class="border-b border-line px-3 py-2 text-sm font-medium text-fg sm:px-4">预览</div>

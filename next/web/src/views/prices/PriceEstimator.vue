@@ -13,7 +13,7 @@ import BillingBreakdown from './BillingBreakdown.vue'
 // the rule groups that matched. 请求模拟 adds request parameters, headers,
 // usage fields and a time, for the rules that read them.
 // PROTOTYPE: new texts are Chinese literals until adopted.
-const props = defineProps<{ source: Record<string, unknown> | null }>()
+const props = defineProps<{ source: Record<string, unknown> | null; perRequest?: boolean }>()
 
 const usage = reactive<Record<string, number | null>>({ p: 100000, c: 2000, cr: 0, cc: 0, cc1h: 0, img: 0, img_o: 0 })
 const len = ref<number | null>(null)
@@ -82,9 +82,10 @@ const MORE = [
 
 <template>
   <section class="rounded-xl border border-line p-3 sm:p-4" data-testid="price-estimator">
-    <div class="text-sm font-medium text-fg">Token 估算器</div>
-    <p class="mt-0.5 text-xs text-fg-muted">输入 token 数量预览费用（不含分组倍率）。</p>
+    <div class="text-sm font-medium text-fg">{{ perRequest ? '费用估算' : 'Token 估算器' }}</div>
+    <p class="mt-0.5 text-xs text-fg-muted">{{ perRequest ? '一次请求的费用（不含分组倍率）；在请求模拟里填参数、请求头或时间，看规则是否命中。' : '输入 token 数量预览费用（不含分组倍率）。' }}</p>
 
+    <template v-if="!perRequest">
     <div class="mt-3 grid grid-cols-2 gap-x-3 gap-y-2.5">
       <SField size="sm" label="输入 token"><SInput v-model="usage.p" size="sm" type="number" min="0" /></SField>
       <SField size="sm" label="输出 token"><SInput v-model="usage.c" size="sm" type="number" min="0" /></SField>
@@ -99,6 +100,7 @@ const MORE = [
     <SField size="sm" label="指定输入上下文总长度" class="mt-2.5">
       <SInput v-model="len" size="sm" type="number" min="0" :placeholder="`使用现有 token 总长度（${formatNumber(defaultLen)}）`" />
     </SField>
+    </template>
 
     <div class="mt-3 rounded-lg border border-info-200 bg-info-50/70 px-3 py-2.5 dark:border-info-900 dark:bg-info-950/30" data-testid="price-trial-result">
       <div v-if="!source" class="text-xs text-fg-muted">先修好上面的问题再估算。</div>

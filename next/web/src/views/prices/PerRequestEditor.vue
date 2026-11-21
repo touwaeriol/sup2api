@@ -2,12 +2,15 @@
 import { computed } from 'vue'
 import { SInput, SLink } from '@sub2api/ui'
 import { formatMoney } from '@/utils/format'
-import { isSet, num } from './priceExpr'
+import { isSet, num, type MarkupRule } from './priceExpr'
+import PriceRuleGroups from './PriceRuleGroups.vue'
 
-// The per_request mode: one price per call, common prices to pick and what it
-// comes to at volume. Surcharges and mixed tiers live in per_token.
+// The per_request mode: one price per call, common prices to pick, what it
+// comes to at volume, and the request rule groups of per_token. Tiers by
+// length live in per_token.
 // PROTOTYPE: new texts are Chinese literals until adopted.
 const price = defineModel<number | null>({ required: true })
+const rules = defineModel<MarkupRule[]>('rules', { required: true })
 defineProps<{ disabled?: boolean; error?: string }>()
 const emit = defineEmits<{ (e: 'to-token'): void }>()
 
@@ -17,7 +20,8 @@ const volumes = computed(() => (p.value === null ? [] : [['1,000 次', 1e3], ['1
 </script>
 
 <template>
-  <div class="rounded-xl border border-line p-3 sm:p-4" data-testid="per-request-editor">
+  <div class="space-y-4 rounded-xl border border-line p-3 sm:p-4" data-testid="per-request-editor">
+    <div>
     <div class="mb-2 flex items-center justify-between">
       <label class="text-sm font-semibold text-fg" for="per-request-price">每次价格</label>
       <span class="rounded-md bg-surface-2 px-2 py-0.5 text-[11px] text-fg-muted">$/次</span>
@@ -45,8 +49,12 @@ const volumes = computed(() => (p.value === null ? [] : [['1,000 次', 1e3], ['1
       </template>
     </p>
     <p v-if="!disabled" class="mt-1 text-xs text-fg-muted">
-      要按条件加价，或短请求按次、长请求按 token？
-      <SLink as="button" class="text-xs" data-testid="per-request-to-token" @click="emit('to-token')">改用按 token，保留这个单价</SLink>
+      要短请求按次、长请求按 token？
+      <SLink as="button" class="text-xs" data-testid="per-request-to-token" @click="emit('to-token')">改用按 token，保留单价和规则</SLink>
     </p>
+    </div>
+    <div class="border-t border-line pt-4">
+      <PriceRuleGroups v-model="rules" :disabled="disabled" />
+    </div>
   </div>
 </template>

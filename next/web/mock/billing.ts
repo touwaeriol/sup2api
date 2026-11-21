@@ -5,7 +5,7 @@ import { fail, nextId, noContent, now, on, paginate, type MockRequest } from './
 import { accounts } from './accounts'
 import { caller, inScope, ownerScope } from './core'
 import type { UsageView } from '../src/views/usage/view'
-import { PRICE_KEYS, checkPerRequest, checkTokenConfig, priceExpression, singleTier, sortedTiers, asTokenConfig } from '../src/views/prices/priceExpr'
+import { PRICE_KEYS, checkPerRequest, checkTokenConfig, perRequestRules, priceExpression, singleTier, sortedTiers, asTokenConfig } from '../src/views/prices/priceExpr'
 
 type PriceMode = 'per_request' | 'per_token' | 'expression'
 type LText = { en: string; zh: string }
@@ -380,7 +380,7 @@ const prices: MockPrice[] = [
 function configIssue(mode: PriceMode, config: Record<string, any>): string | null {
   if (mode === 'expression') return null
   const cfg = asTokenConfig(config)
-  const issues = mode === 'per_request' ? checkPerRequest(config.price) : checkTokenConfig({ ...cfg, tiers: sortedTiers(cfg.tiers) })
+  const issues = mode === 'per_request' ? checkPerRequest(config.price, perRequestRules(config)) : checkTokenConfig({ ...cfg, tiers: sortedTiers(cfg.tiers) })
   return issues.length ? `config: ${issues.map((x) => x.key.replace('prices.local.', '')).join(', ')}` : null
 }
 

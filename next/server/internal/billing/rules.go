@@ -27,8 +27,8 @@ type Rule struct {
 	Multiplier *string `json:"multiplier,omitempty"`
 	// Mode and Config (kind custom): a price of its own in the mode of the
 	// global price, with the config of a price in that mode. Only a
-	// per_request global price, or a per_token one with one tier priced by
-	// the token and no rules, takes one (PriceDef.customMode).
+	// per_request global price without rules, or a per_token one with one
+	// tier priced by the token and no rules, takes one (PriceDef.customMode).
 	Mode   string          `json:"mode,omitempty"`
 	Config json.RawMessage `json:"config,omitempty"`
 	// Inactive marks a custom price that the global price takes no more (its
@@ -199,8 +199,8 @@ func checkRule(ctx context.Context, in Rule, base *PriceDef) (*storedRule, error
 func checkCustom(ctx context.Context, in Rule, base PriceDef) (*storedRule, error) {
 	mode := base.customMode()
 	if mode == "" {
-		return nil, errors.New(core.Text(ctx, "an expression price, or a per-token price with tiers or rules, takes a multiplier only",
-			"表达式计费、分档或带加价规则的按 token 计费只能用倍数规则"))
+		return nil, errors.New(core.Text(ctx, "an expression price, or a price with tiers or rules, takes a multiplier only",
+			"表达式计费、分档或带加价规则的价格只能用倍数规则"))
 	}
 	if in.Mode != mode {
 		return nil, fmt.Errorf(core.Text(ctx, "a custom price is %s, as the global price", "自定义价的计费方式须与全局价相同：%s"), mode)
@@ -208,6 +208,9 @@ func checkCustom(ctx context.Context, in Rule, base PriceDef) (*storedRule, erro
 	src, err := expr.Generate(mode, in.Config)
 	if err != nil {
 		return nil, fmt.Errorf(core.Text(ctx, "invalid custom price: %v", "自定义价无效：%v"), err)
+	}
+	if mode == expr.ModePerRequest && hasRules(in.Config) {
+		return nil, errors.New(core.Text(ctx, "a per-request custom price is one price, without rules", "按次的自定义价只有一个单价，不能带加价规则"))
 	}
 	if mode == expr.ModePerToken {
 		if t, ok := singleTokenTier(in.Config); !ok || t.P == nil || t.C == nil {

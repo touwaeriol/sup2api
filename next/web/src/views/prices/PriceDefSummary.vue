@@ -7,15 +7,15 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { SHint } from '@sub2api/ui'
 import type { PriceSyncDef } from '@/api/types'
-import { asTokenConfig, isSet, num, pricedKeys, sortedTiers, type PriceKey, type TokenTier } from './priceExpr'
+import { asTokenConfig, isSet, num, perRequestRules, pricedKeys, sortedTiers, type PriceKey, type TokenTier } from './priceExpr'
 
 const props = defineProps<{ def: PriceSyncDef; compare?: PriceSyncDef | null; muted?: boolean }>()
 const { t } = useI18n()
 
-type View = { kind: 'per_request'; price: number } | { kind: 'tiers'; tiers: TokenTier[]; rules: number } | { kind: 'custom'; expression: string }
+type View = { kind: 'per_request'; price: number; rules: number } | { kind: 'tiers'; tiers: TokenTier[]; rules: number } | { kind: 'custom'; expression: string }
 
 function viewOf(d: PriceSyncDef): View {
-  if (d.mode === 'per_request') return { kind: 'per_request', price: num(d.config?.price) }
+  if (d.mode === 'per_request') return { kind: 'per_request', price: num(d.config?.price), rules: perRequestRules(d.config).length }
   if (d.mode === 'expression') return { kind: 'custom', expression: d.expression }
   const cfg = asTokenConfig(d.config)
   return { kind: 'tiers', tiers: sortedTiers(cfg.tiers), rules: cfg.rules.length }
@@ -48,9 +48,10 @@ const label = (k: PriceKey | 'price') => (k === 'price' ? t('prices.def.perReque
 
 <template>
   <div class="text-xs leading-5" :class="muted ? 'text-fg-muted' : 'text-fg'">
-    <span v-if="view.kind === 'per_request'" :class="differs(0, 'price') ? HIGHLIGHT : ''">
-      {{ t('prices.def.perRequest', { price: usd(view.price) }) }}
-    </span>
+    <template v-if="view.kind === 'per_request'">
+      <span :class="differs(0, 'price') ? HIGHLIGHT : ''">{{ t('prices.def.perRequest', { price: usd(view.price) }) }}</span>
+      <SHint v-if="view.rules" size="xs">{{ t('prices.def.rules', { n: view.rules }) }}</SHint>
+    </template>
     <template v-else-if="view.kind === 'tiers'">
       <div v-for="(tier, i) in view.tiers" :key="i" class="flex flex-wrap gap-x-2">
         <SHint v-if="view.tiers.length > 1" inline size="xs" class="font-mono">

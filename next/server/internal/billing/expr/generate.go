@@ -43,9 +43,11 @@ func (n *Num) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// PerRequestConfig is mode=per_request.
+// PerRequestConfig is mode=per_request: one price per request and the
+// request surcharges of a per_token price (CONTRACTS §131).
 type PerRequestConfig struct {
-	Price *Num `json:"price"`
+	Price *Num         `json:"price"`
+	Rules []RuleConfig `json:"rules,omitempty"`
 }
 
 // TokenConfig is mode=per_token: prompt-length tiers and request surcharges
@@ -143,7 +145,7 @@ func Generate(mode string, config json.RawMessage) (string, error) {
 		if err := checkNum("config.price", float64(*c.Price)); err != nil {
 			return "", err
 		}
-		return fmt.Sprintf(`tier("base", flat(%s))`, fmtNum(float64(*c.Price))), nil
+		return withRules(fmt.Sprintf(`tier("base", flat(%s))`, fmtNum(float64(*c.Price))), c.Rules)
 	case ModePerToken:
 		// Strict: a misspelt or old key (prices, flat) would be a free price.
 		var c TokenConfig
@@ -224,8 +226,7 @@ var (
 	headerNameRe = regexp.MustCompile(`^[A-Za-z0-9!#$%&'*+.^_|~\-]{1,100}$`)
 )
 
-// generateTokens builds `base` without rules and
-// `(base) * (rule) * ...` with them.
+// generateTokens builds the tiers by len and applies the rules (withRules).
 func generateTokens(c TokenConfig) (string, error) {
 	if len(c.Tiers) == 0 {
 		return "", cfgErr("config.tiers", "at least one tier is required")
@@ -287,11 +288,16 @@ func generateTokens(c TokenConfig) (string, error) {
 		}
 		base = fmt.Sprintf("len <= %s ? %s : %s", fmtNum(*tiers[i].maxLen), call(tiers[i]), base)
 	}
-	if len(c.Rules) == 0 {
+	return withRules(base, c.Rules)
+}
+
+// withRules is base without rules and `(base) * (rule) * ...` with them.
+func withRules(base string, rules []RuleConfig) (string, error) {
+	if len(rules) == 0 {
 		return base, nil
 	}
 	factors := []string{base}
-	for i, r := range c.Rules {
+	for i, r := range rules {
 		s, err := ruleExpr(fmt.Sprintf("config.rules[%d]", i), r)
 		if err != nil {
 			return "", err

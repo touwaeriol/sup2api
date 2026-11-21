@@ -4,6 +4,8 @@ import {
   compactTokenConfig,
   condExpr,
   checkPerRequest,
+  compactPerRequest,
+  takesCustomPrice,
   fmt,
   goQuote,
   priceExpression,
@@ -228,7 +230,7 @@ describe('local checks', () => {
 
 describe('the summary of a price', () => {
   it('is its first tier, with the number of tiers and rules', () => {
-    expect(summarize('per_request', { price: 0.02 })).toEqual({ kind: 'per_request', price: 0.02 })
+    expect(summarize('per_request', { price: 0.02 })).toEqual({ kind: 'per_request', price: 0.02, rules: 0 })
     expect(summarize('per_token', cfg([LONG, STANDARD], [rule(2, { source: 'header', key: 'x', op: 'exists' })]))).toEqual({
       kind: 'per_token',
       first: STANDARD,
@@ -236,5 +238,15 @@ describe('the summary of a price', () => {
       rules: 1
     })
     expect(summarize('expression', {})).toEqual({ kind: 'expression' })
+  })
+
+  it('a per_request price takes the rules of per_token, and then no custom price', () => {
+    const rules = [{ name: 'hd', multiplier: 2, conds: [{ source: 'param' as const, key: 'quality', op: 'eq' as const, value: 'hd' }] }]
+    const cfg = compactPerRequest(0.04, rules)
+    expect(priceExpression('per_request', cfg)).toBe('(tier("base", flat(0.04))) * (param("quality") == "hd" ? 2 : 1)')
+    expect(compactPerRequest(0.04, [])).toEqual({ price: 0.04 })
+    expect(takesCustomPrice('per_request', cfg)).toBe(false)
+    expect(takesCustomPrice('per_request', { price: 0.04 })).toBe(true)
+    expect(checkPerRequest(0.04, [{ ...rules[0], multiplier: null }]).map(x => x.key)).toEqual(['prices.local.ruleField'])
   })
 })

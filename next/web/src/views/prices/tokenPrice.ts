@@ -52,6 +52,11 @@ function editableCond(c: RuleCond): RuleCond {
   return c.op === 'exists' ? c : { ...c, value: valueText(c, c.value) }
 }
 
+/** Editable copies of saved rules (a per_request config's, or a per_token one's). */
+export function editableRules(raw: readonly MarkupRule[]): MarkupRule[] {
+  return (JSON.parse(JSON.stringify(raw)) as MarkupRule[]).map(r => ({ ...r, conds: r.conds.map(editableCond) }))
+}
+
 /** An editable copy of a saved config: tiers in the order they match, the last one the rest, each with its unit. */
 export function editableTokenConfig(raw: unknown): TokenConfig {
   const c = JSON.parse(JSON.stringify(asTokenConfig(raw))) as TokenConfig

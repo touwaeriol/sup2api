@@ -59,6 +59,18 @@ export interface TokenConfig {
   rules: MarkupRule[]
 }
 
+/** A per_request config: one price and the same surcharge rules as per_token. */
+export interface PerRequestConfig {
+  price: number | null
+  rules?: MarkupRule[]
+}
+
+/** The rules of a per_request config ([] when none). */
+export function perRequestRules(raw: unknown): MarkupRule[] {
+  const r = (raw as { rules?: unknown } | null)?.rules
+  return Array.isArray(r) ? (r as MarkupRule[]) : []
+}
+
 // ------------------------------------------------------------------ helpers
 
 export function num(v: unknown, fallback = 0): number {
@@ -154,9 +166,9 @@ export function simpleTier(config: unknown): TokenTier | null {
   return c.tiers.length === 1 && !c.rules.length && t.unit !== 'request' ? t : null
 }
 
-/** Whether a price takes a custom price of a group or user group: a per-request one, or a per-token one of one token tier and no rules. */
+/** Whether a price takes a custom price of a group or user group: a per-request one without rules, or a per-token one of one token tier and no rules. */
 export function takesCustomPrice(mode: PriceMode, config: unknown): boolean {
-  return mode === 'per_request' || (mode === 'per_token' && simpleTier(config) !== null)
+  return (mode === 'per_request' && !perRequestRules(config).length) || (mode === 'per_token' && simpleTier(config) !== null)
 }
 
 // ------------------------------------------------------------------ config as saved
@@ -200,10 +212,17 @@ function compactCond(c: RuleCond): RuleCond {
 
 /** The config the editor sends: unset prices and editor leftovers dropped, condition values typed (typedValue). */
 export function compactTokenConfig(cfg: TokenConfig): TokenConfig {
-  return {
-    tiers: cfg.tiers.map(compactTier),
-    rules: cfg.rules.map(r => ({ name: r.name, multiplier: orNull(r.multiplier), conds: r.conds.map(compactCond) }))
-  }
+  return { tiers: cfg.tiers.map(compactTier), rules: compactRules(cfg.rules) }
+}
+
+export function compactRules(rules: readonly MarkupRule[]): MarkupRule[] {
+  return rules.map(r => ({ name: r.name, multiplier: orNull(r.multiplier), conds: r.conds.map(compactCond) }))
+}
+
+/** The per_request config the editor sends: rules only when there are some. */
+export function compactPerRequest(price: unknown, rules: readonly MarkupRule[]): PerRequestConfig {
+  const p = orNull(price)
+  return rules.length ? { price: p, rules: compactRules(rules) } : { price: p }
 }
 
 // ------------------------------------------------------------------ generation
@@ -246,6 +265,8 @@ export function condExpr(c: RuleCond): string {
 }
 
 const ruleExpr = (r: MarkupRule) => `(${r.conds.map(condExpr).join(' && ')} ? ${fmt(num(r.multiplier))} : 1)`
+/** base without rules, `(base) * (rule) * …` with them. */
+const withRules = (base: string, rules: readonly MarkupRule[]) => (rules.length ? [`(${base})`, ...rules.map(ruleExpr)].join(' * ') : base)
 
 /**
  * The expression of a per_token config: `len <= a ? A : (len <= b ? B : C)`,
@@ -258,16 +279,16 @@ export function tokenExpr(cfg: TokenConfig): string {
     (acc, t, i) => `len <= ${fmt(num(t.max_len))} ? ${tierCall(t.name, tierBody(t))} : ${i > 0 ? `(${acc})` : acc}`,
     tierCall(last.name, tierBody(last))
   )
-  return cfg.rules.length ? [`(${base})`, ...cfg.rules.map(ruleExpr)].join(' * ') : base
+  return withRules(base, cfg.rules)
 }
 
-export function perRequestExpr(price: unknown): string {
-  return tierCall('base', `flat(${fmt(num(price))})`)
+export function perRequestExpr(price: unknown, rules: readonly MarkupRule[] = []): string {
+  return withRules(tierCall('base', `flat(${fmt(num(price))})`), rules)
 }
 
 /** The generated expression of a per_request or per_token price; '' for an expression price, which has none. */
 export function priceExpression(mode: PriceMode, config: unknown): string {
-  if (mode === 'per_request') return perRequestExpr((config as { price?: unknown } | null)?.price)
+  if (mode === 'per_request') return perRequestExpr((config as { price?: unknown } | null)?.price, perRequestRules(config))
   return mode === 'per_token' ? tokenExpr(asTokenConfig(config)) : ''
 }
 
@@ -313,9 +334,22 @@ function condIssue(c: RuleCond, n: number): LocalIssue | null {
   return c.value === '' || c.value === undefined || c.value === null ? field : null
 }
 
-/** Problems of a per_request price that block saving. */
-export function checkPerRequest(price: unknown): LocalIssue[] {
-  return isPrice(price) ? [] : [{ key: 'prices.local.price' }]
+/** Problems of a per_request price (its rules as saved) that block saving. */
+export function checkPerRequest(price: unknown, rules: readonly MarkupRule[] = []): LocalIssue[] {
+  return [...(isPrice(price) ? [] : [{ key: 'prices.local.price' }]), ...checkRules(rules)]
+}
+
+function checkRules(rules: readonly MarkupRule[]): LocalIssue[] {
+  const out: LocalIssue[] = []
+  rules.forEach((r, i) => {
+    const n = i + 1
+    const issue =
+      !isPrice(r.multiplier) || !r.conds.length
+        ? { key: 'prices.local.ruleField', params: { n } }
+        : r.conds.map(c => condIssue(c, n)).find(Boolean)
+    if (issue) out.push(issue)
+  })
+  return out
 }
 
 /**
@@ -345,27 +379,19 @@ export function checkTokenConfig(cfg: TokenConfig): LocalIssue[] {
     else if (num(t.max_len) <= prev) out.push({ key: 'prices.local.tierOrder', params: { name } })
     prev = num(t.max_len)
   })
-  cfg.rules.forEach((r, i) => {
-    const n = i + 1
-    const issue =
-      !isPrice(r.multiplier) || !r.conds.length
-        ? { key: 'prices.local.ruleField', params: { n } }
-        : r.conds.map(c => condIssue(c, n)).find(Boolean)
-    if (issue) out.push(issue)
-  })
-  return out
+  return [...out, ...checkRules(cfg.rules)]
 }
 
 // ------------------------------------------------------------------ list summary
 
 export type PriceSummary =
-  | { kind: 'per_request'; price: number }
+  | { kind: 'per_request'; price: number; rules: number }
   /** The first tier, the number of tiers and of rules. */
   | { kind: 'per_token'; first: TokenTier; tiers: number; rules: number }
   | { kind: 'expression' }
 
 export function summarize(mode: PriceMode, config: Record<string, any> | null | undefined): PriceSummary {
-  if (mode === 'per_request') return { kind: 'per_request', price: num(config?.price) }
+  if (mode === 'per_request') return { kind: 'per_request', price: num(config?.price), rules: perRequestRules(config).length }
   const cfg = asTokenConfig(config)
   const [first] = sortedTiers(cfg.tiers)
   return mode === 'per_token' && first

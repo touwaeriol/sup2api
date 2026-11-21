@@ -97,6 +97,10 @@ func TestGenerate(t *testing.T) {
 	}{
 		{name: "per request", mode: ModePerRequest, cfg: `{"price": "0.01"}`, want: `tier("base", flat(0.01))`},
 		{name: "per request missing", mode: ModePerRequest, cfg: `{}`, err: "config.price"},
+		{name: "per request with rules", mode: ModePerRequest,
+			cfg:  `{"price":0.04,"rules":[{"multiplier":2,"conds":[{"source":"param","key":"quality","op":"eq","value":"hd"}]},{"multiplier":0.5,"conds":[{"source":"time","tz":"Asia/Shanghai","from_hour":0,"to_hour":8}]}]}`,
+			want: `(tier("base", flat(0.04))) * (param("quality") == "hd" ? 2 : 1) * (hour("Asia/Shanghai") >= 0 && hour("Asia/Shanghai") < 8 ? 0.5 : 1)`},
+		{name: "per request rule without multiplier", mode: ModePerRequest, cfg: `{"price":1,"rules":[{"conds":[{"source":"param","key":"x","op":"exists"}]}]}`, err: "config.rules[0].multiplier"},
 		{name: "expression takes {}", mode: ModeExpression, cfg: `{}`, want: ``},
 		{name: "expression takes no tiers", mode: ModeExpression, cfg: `{"tiers":[{"name":"a"}]}`, err: "must be {}"},
 		{name: "expression takes no video", mode: ModeExpression, cfg: `{"video":{"price_per_million_tokens":7}}`, err: "must be {}"},

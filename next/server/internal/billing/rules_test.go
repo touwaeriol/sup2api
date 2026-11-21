@@ -228,7 +228,14 @@ func TestCheckRule(t *testing.T) {
 	_, err := checkRule(zh, Rule{Kind: "custom", Mode: "per_token"}, perToken)
 	require.EqualError(t, err, "自定义价无效：config.tiers: at least one tier is required")
 	_, err = checkRule(zh, tokens(cheap), &twoTiers)
-	require.EqualError(t, err, "表达式计费、分档或带加价规则的按 token 计费只能用倍数规则")
+	require.EqualError(t, err, "表达式计费、分档或带加价规则的价格只能用倍数规则")
+	// A per_request price with rules takes a multiplier only, and a per_request custom price has no rules.
+	ruledPerRequest := PriceDef{Mode: "per_request", Config: json.RawMessage(`{"price":1,"rules":[{"multiplier":2,"conds":[{"source":"param","key":"q","op":"eq","value":"hd"}]}]}`)}
+	require.Equal(t, "", ruledPerRequest.customMode())
+	_, err = checkRule(zh, Rule{Kind: "custom", Mode: "per_request", Config: json.RawMessage(`{"price":0.5}`)}, &ruledPerRequest)
+	require.EqualError(t, err, "表达式计费、分档或带加价规则的价格只能用倍数规则")
+	_, err = checkRule(zh, Rule{Kind: "custom", Mode: "per_request", Config: ruledPerRequest.Config}, &PriceDef{Mode: "per_request", Config: json.RawMessage(`{"price":1}`)})
+	require.EqualError(t, err, "按次的自定义价只有一个单价，不能带加价规则")
 }
 
 // A custom price is inactive over a global price that no longer takes one.

@@ -6705,7 +6705,7 @@ kind: users | groups | api-keys | accounts | models | proxies
 | `Segment` | `SegmentRef` 加 `description`、`discount`（全场折扣，`"1"` = 没有）、`is_default`、`member_count`、`granted_groups: [{id, name}]`（被授权的私有分组）、`rate_override_count`（设了专属倍率的分组数）、`price_rule_count`（专属价的条数，所有分组合计；只算各分组现在提供的模型上的，口径见下面 GET `/groups` 一行）、`created_at`；个人专属另有 `user: {id, email, display_name}` 和 `origin: SegmentRef \| null`（原来所在的用户组，已被删除时为 `null`） |
 | `EffectiveRate` | `{value, source, group_default, discount}`：实际倍率、它的来源（`segment` \| `discount` \| `group`），以及算它用到的分组默认倍率和全场折扣 |
 | `SegmentGroupSetting` | 一个用户组在一个分组的设置：`segment: SegmentRef`、`group: {id, name, description, status, visibility, rate_multiplier, platforms?}`、`accessible`（公开或已授权）、`granted`（显式的授权，只对私有分组有意义）、`rate_override`（专属倍率，`null` = 跟随）、`rate: EffectiveRate`、`price_rule_count`（这个用户组在这个分组的专属价条数，只算分组现在提供的模型上的）、`member_count`（用户组的成员数，个人专属是 1） |
-| `PriceRule` | `{kind: "multiplier", multiplier}` 或 `{kind: "custom", mode, config}`（`mode` 是 `per_token` \| `per_request`；`config` 是该方式价格的 config：按次 `{price}`，按 token 只能是一档、按 token 计、带 `p` 和 `c`、没有规则的 `{tiers, rules}`，§131.4）；规则失效（97.1）时另有 `inactive: true` |
+| `PriceRule` | `{kind: "multiplier", multiplier}` 或 `{kind: "custom", mode, config}`（`mode` 是 `per_token` \| `per_request`；`config` 是该方式价格的 config：按次 `{price}`（不带规则），按 token 只能是一档、按 token 计、带 `p` 和 `c`、没有规则的 `{tiers, rules}`，§131.4）；规则失效（97.1）时另有 `inactive: true` |
 | `PriceDef` | `{mode, config, expression, multiplier?}`：一个价格。前三个字段与 `/prices` 的同名字段相同。`multiplier`（十进制字符串）只在“这个标价来自按倍数的规则”时出现，规则是 ×0、×1 时也照常出现，含义是：标价 = 这个价格 × `multiplier`。全局价（`base`）和自定义价给出的标价不带它 |
 | `ModelPriceRow` | 分组提供的一个模型：`model`、`base: PriceDef \| null`（全局价，`null` = 没有，不能计费）、`group_rule: PriceRule \| null`（分组内定价）、`segment_rule`（带 `segment_id` 查询时：该用户组的专属价）或 `segment_rule_count`（不带时：在这个模型上有专属价的用户组数）、`list_price: PriceDef \| null`（先命中的那条规则作用后的标价，见下）、`source`（`segment` \| `group` \| `global`）。模型没有全局价时 `list_price` 为 `null`、`source` 为 `global`，两条规则仍照配置返回，不带 `inactive`（失效是对着全局价现在的计费方式判断的） |
 | `GroupModelPrices` | `{group: {id, name}, segment?: SegmentRef, rate: EffectiveRate, models: ModelPriceRow[]}`；`rate` 是所查用户组在该分组的倍率，没带用户组时是分组默认倍率 |
@@ -9133,7 +9133,7 @@ anthropic 插件自带的模型目录（插件接口 `GET /api/v1/p/anthropic/mo
 
 | mode | config | expression |
 |---|---|---|
-| `per_request` | `{price}`（不变） | 生成：`tier("base", flat(price))` |
+| `per_request` | `{price, rules?}`（`rules` 与 `per_token` 的规则同形，131.2；2026-11-21 所有者定“按次也支持额外倍率”，无迁移，旧配置照旧可读） | 生成：`tier("base", flat(price))`；有规则时 `(tier("base", flat(price))) * (条件 ? 倍数 : 1) * …`（131.3） |
 | `per_token` | `{tiers, rules}`（131.2），取代原来按 token 的五个单价和表达式的可视化分档 | 生成 |
 | `expression` | 恒为 `{}`；其它值 400（字段 `config`，“must be {}”） | 手写，计费以它为准 |
 
@@ -9201,7 +9201,7 @@ Go 类型是 `expr.TokenConfig`、`TierConfig`、`TokenPrices`、`RuleConfig`、
 
 ### 131.4 分组 / 用户组的自定义价（§97）
 
-- 能不能设自定义价由全局价决定（`billing.PriceDef.customMode`，`billing/list_price.go`）：全局价是 `per_request` → 自定义价必须是 `per_request`；全局价是 `per_token` 且**只有一档、没有规则、`unit` 为 `token`** → 自定义价必须是这样的 `per_token`；其余（表达式、分档、带规则、按次计的档位）只能用按倍数的规则。
+- 能不能设自定义价由全局价决定（`billing.PriceDef.customMode`，`billing/list_price.go`）：全局价是**没有规则的** `per_request` → 自定义价必须是不带规则的 `per_request`；全局价是 `per_token` 且**只有一档、没有规则、`unit` 为 `token`** → 自定义价必须是这样的 `per_token`；其余（表达式、分档、带规则的按 token 或按次、按次计的档位）只能用按倍数的规则。
 - 保存时：全局价不允许自定义价 400，“表达式计费、分档或带加价规则的按 token 计费只能用倍数规则” / “an expression price, or a per-token price with tiers or rules, takes a multiplier only”；`mode` 与全局价不同照旧；`config` 生成失败 400，“自定义价无效：…” / “invalid custom price: …”；按 token 的自定义价本身也必须是一档、按 token 计、写出 `p` 和 `c`、没有规则（防止多档、按次档、带规则的自定义价，以及只有档名、`p*0 + c*0` 的“免费分组”），否则 400，“按 token 的自定义价只能是一档、按 token 计、带输入和输出价、没有加价规则” / “a per-token custom price is one tier priced by the token, with p and c, and no rules”。`config` 原样存下。
 - 解析时同一个判断决定规则是否失效（97.1）：全局价后来改成分档或加了规则，原来的自定义价带 `inactive: true`、解析时跳过，与改了计费方式相同。网关解析时用价格快照里算好的结果（`priceSnapshot.custom`，每次刷新快照解码一次全局价的 config），不在每个请求里解码。
 - 控制台的自定义价编辑器仍是一行单价，存成单档 `{"tiers":[{"name":"base","max_len":null,"unit":"token",…}],"rules":[]}`。
