@@ -53,8 +53,7 @@ func BenchmarkHotKeyLookup(b *testing.B) {
 				&e.KeyLimits.RPM, &e.KeyLimits.TPM, &e.KeyLimits.Concurrency, &e.KeyQuota.Limit, &e.KeyQuota.Used, &e.GroupLossPolicy,
 				&e.SegmentID, &discount, &override)
 			e.Found = err == nil
-			rate, source := core.SegmentRate(groupRate, discount, override)
-			e.RateMultiplier, e.RateSource = rate.String(), source
+			e.RateMultiplier, e.RateSource = core.SegmentRate(groupRate, discount, override)
 			return e, err
 		}},
 		{"gorm", func() (*cached, error) { return svc.lookup(ctx, hash) }},
