@@ -13,16 +13,18 @@ export default {
   emptyPolicy: 'Empty list: all models allowed',
 
   title: 'Groups',
-  description: 'A group is a set of accounts (any types mixed) serving together; each API key is bound to one group. The group decides the rate multiplier and the allowed models.',
+  description: 'A group is a set of accounts (any types mixed) serving together; each API key is bound to one group. The group decides the allowed models, their prices and the group rate.',
   create: 'New group',
   editTitle: 'Edit group {name}',
   visibility: 'Visibility',
   public: 'Public',
   restricted: 'Private',
   publicHint: 'Every user can use it.',
-  restrictedHint: 'Only the user groups and personal users granted on the "Access & rates" tab can use it.',
-  rateMultiplier: 'Default rate',
-  multiplierHint: 'Paid = list price × rate, e.g. 0.8 for 20% off. A user group without an own rate pays it times its discount.',
+  restrictedHint: 'Only the user groups and personal users it is opened to on the "User groups" tab can use it.',
+  rateMultiplier: 'Group rate',
+  multiplierHint: '0.8 is 20% off. A user group without a rate of its own pays this (times its discount).',
+  saveHint: 'Changes take effect together on Save',
+  createHint: 'Not saved yet: everything is saved on Create',
   conversionDefault: 'Default (allow)',
   conversionHint: 'What happens when a converted request of this group\'s accounts would lose content; an account\'s own setting wins. Allow: serve it and record the losses; Safe: skip the account when tools would be lost; Strict: skip it on any loss.',
   multiplierInvalid: 'Enter a non-negative number below 1000000, with up to 4 decimals',
@@ -53,47 +55,33 @@ export default {
     notEditable: 'You cannot edit this account (only accounts you own)'
   },
   whoCanUse: 'Who can use it',
-  modelPricing: 'Model pricing',
+  modelPricing: 'Model prices',
   modelCount: 'Provides {n} model | Provides {n} models',
-  pickUser: 'Price one user individually',
-  pricingTitle: 'Access & pricing of {name}',
-  viewPricing: 'View access & pricing',
-  deleteWithPricing: 'Its grants, own rates and model prices are deleted with it.',
+  pricingTitle: 'Prices & user groups of {name}',
+  viewPricing: 'View prices & user groups',
+  deleteWithPricing: 'Its model prices, and who it is open to at which rate, are deleted with it.',
   tabs: {
     basic: 'Basics',
-    segments: 'Access & rates',
-    pricing: 'Model pricing',
-    models: 'Model policy',
     accounts: 'Accounts',
+    models: 'Model policy',
+    pricing: 'Prices',
+    segments: 'User groups',
     advanced: 'Advanced'
   },
   access: {
     everyone: 'Everyone',
-    nobody: 'Granted to nobody yet',
-    personal: '{n} personal user | {n} personal users'
+    nobody: 'Open to nobody yet',
+    personal: '{n} person | {n} people'
   },
   pricingSummary: {
-    global: 'Follows global',
-    models: '{n} model priced here | {n} models priced here',
-    segments: '{n} own price of user groups | {n} own prices of user groups'
-  },
-  segments: {
-    hint: 'Whether each user group can use this group, and at which rate. An empty own rate follows the group\'s default rate × the user group\'s discount; a value replaces both. To set one user apart, search for them under "Price one user individually": they join the table as Personal, after you confirm when they are still in a user group.',
-    nobody: 'This private group is granted to nobody yet, so nobody can use it.',
-    nobodyHint: 'Turn on a switch under "Access" below to grant it.',
-    members: '{n} user | {n} users'
+    base: 'All at original prices',
+    models: '{n} model repriced | {n} models repriced'
   },
   pricing: {
-    target: 'Pricing for',
-    groupTarget: 'Group pricing (everyone)',
-    namedTargets: 'User groups',
-    notGrantedOption: '{name} (not granted)',
-    groupScope: 'Group pricing applies to everyone using this group; a model without it follows the global price. Paid = list price × each user\'s rate (group default {rate}).',
-    segmentScope: 'Setting the own prices of "{name}": they apply to it only; a model without one follows group pricing.',
-    segmentScopeReadonly: 'The own prices of "{name}": they apply to it only; a model without one follows group pricing.',
-    segmentRate: 'Its effective rate in this group is {rate}: paid = list price {rate}.',
-    segmentNotGranted: 'It is not granted this private group yet, so these prices only matter once it is.',
-    emptyNew: 'Save the group and add accounts before pricing its models.',
-    unsavedSave: 'Save and switch'
+    payer: 'Paid at',
+    payerAll: 'Everyone (group rate) {rate}',
+    payerSegments: 'User groups',
+    payerPersonal: 'Personal',
+    notAccessible: 'Not open'
   }
 }

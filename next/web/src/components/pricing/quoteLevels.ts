@@ -18,11 +18,10 @@ function resolve<K extends string, V>(levels: Array<[K, V | null]>, source: K): 
   return levels.map(([key, value]) => ({ key, value, state: value === null ? 'unset' : key === source ? 'applies' : 'shadowed' }))
 }
 
-/** List price: the segment's rule, the group's rule, the global price. */
+/** Model price: the group's price, the original price. */
 export function priceLevels(q: Pick<PricingQuote, 'price_levels' | 'base' | 'price_source'>): QuoteLevel<PriceSource, PriceRule | PriceDef>[] {
   return resolve<PriceSource, PriceRule | PriceDef>(
     [
-      ['segment', q.price_levels.segment],
       ['group', q.price_levels.group],
       ['global', q.base]
     ],

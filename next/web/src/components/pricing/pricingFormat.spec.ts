@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { PriceDef } from '@/api/pricing'
-import { applyRule, effectiveRate, hasDiscount, inheritedRate, priceCells, priceExtras, priceText, sameRate, usd, validRate } from './pricingFormat'
+import { applyRule, effectiveRate, hasDiscount, inheritedRate, priceCells, priceExtras, priceText, sameRate, timesRate, usd, validRate } from './pricingFormat'
 import { requestTier, singleTier } from '@/views/prices/priceExpr'
 
 describe('a rate typed in a form', () => {
@@ -93,17 +93,33 @@ describe('the price a view shows', () => {
 describe('the list price a rule being edited gives', () => {
   const base: PriceDef = { mode: 'visual', config: singleTier({ p: 3, c: 15 }), expression: 'tier("base", p*3 + c*15)' }
 
-  it('is the global price with the multiplier, as the server returns it once saved', () => {
+  it('is the original price with the multiplier, as the server returns it once saved', () => {
     expect(applyRule(base, { kind: 'multiplier', multiplier: '1.5' })).toEqual({ ...base, multiplier: '1.5' })
     expect(applyRule(base, { kind: 'multiplier', multiplier: '0' })).toEqual({ ...base, multiplier: '0' })
     expect(applyRule(base, { kind: 'multiplier', multiplier: '1' })).toEqual({ ...base, multiplier: '1' })
   })
-  it('leaves the price alone while the multiplier is still being typed, and has none without a global price', () => {
+  it('leaves the price alone while the multiplier is still being typed, and has none without an original price', () => {
     expect(applyRule(base, { kind: 'multiplier', multiplier: '1.' })).toBe(base)
     expect(applyRule(null, { kind: 'multiplier', multiplier: '2' })).toBeNull()
   })
   it('is a price of its own for a custom rule', () => {
     expect(applyRule(base, { kind: 'custom', mode: 'visual', config: singleTier({ p: 1, c: 8 }) })).toEqual({ mode: 'visual', config: singleTier({ p: 1, c: 8 }), expression: '' })
+  })
+})
+
+describe('what is paid at a list price', () => {
+  const base: PriceDef = { mode: 'visual', config: singleTier({ p: 3, c: 15 }), expression: '' }
+  const opaque: PriceDef = { mode: 'expression', config: null, expression: 'p * 2 + unknown(1)' }
+
+  it('is the price times the rate, the multiplier of a rule included', () => {
+    expect(priceCells(timesRate(base, '1.2')).tokens).toMatchObject({ p: 3.6, c: 18 })
+    expect(timesRate({ ...base, multiplier: '0.8' }, '1.5')).toEqual({ ...base, multiplier: '1.2' })
+    expect(timesRate(opaque, '1.2')).toEqual({ ...opaque, multiplier: '1.2' })
+  })
+  it('is the price as it is at ×1, and nothing while the rate is still being typed', () => {
+    expect(timesRate(base, '1')).toBe(base)
+    expect(timesRate(base, '')).toBeNull()
+    expect(timesRate(base, '1.')).toBeNull()
   })
 })
 

@@ -101,10 +101,10 @@ function openEdit(g: Group | null, tab: GroupEditTab = 'basic') {
 /** The group whose access and pricing a caller who may not manage groups looks at. */
 const viewing = ref<Group | null>(null)
 const viewOpen = ref(false)
-const viewTab = ref<GroupPricingTab>('segments')
+const viewTab = ref<GroupPricingTab>('pricing')
 
 /** Opens who may use a group and what it costs there: in the editor, or read-only without group:manage. */
-function openPricing(g: Group, tab: GroupPricingTab = 'segments') {
+function openPricing(g: Group, tab: GroupPricingTab = 'pricing') {
   if (canManage.value) return openEdit(g, tab)
   viewing.value = g
   viewTab.value = tab
@@ -159,7 +159,7 @@ async function onAction(listed: Group, key: string) {
       <template #cell-rate_multiplier="{ row }">
         <span class="font-mono" data-testid="group-rate">{{ rateText(row.rate_multiplier) }}</span>
       </template>
-      <template #cell-pricing="{ row }"><GroupPricingSummary :group="row" link @open="openPricing(row, 'pricing')" /></template>
+      <template #cell-pricing="{ row }"><GroupPricingSummary :group="row" link @open="openPricing(row)" /></template>
       <template #cell-model_allowlist="{ row }">
         <SHint v-if="row.model_count !== undefined" size="xs" class="whitespace-nowrap" data-testid="group-model-count">{{ t('groups.modelCount', { n: row.model_count }, row.model_count) }}</SHint>
         <div v-if="row.model_allowlist && row.model_allowlist.length" class="flex max-w-xs flex-wrap items-center gap-1">

@@ -75,7 +75,7 @@ describe('groups page', () => {
 
   it('lists the groups without the platforms they serve', () => {
     const w = render()
-    expect(w.findAll('thead th').map(th => th.text())).toEqual(['名称', '谁能用', '默认倍率', '模型定价', '模型名单', '账号数', 'Key 数', '状态', '操作'])
+    expect(w.findAll('thead th').map(th => th.text())).toEqual(['名称', '谁能用', '分组倍率', '模型价格', '模型名单', '账号数', 'Key 数', '状态', '操作'])
     expect(rows(w).map(r => r.get('[data-testid="group-name"]').text())).toEqual(['default', 'trial'])
     expect(w.find('[data-testid="platform-badge"], [data-platform]').exists()).toBe(false)
   })
@@ -91,41 +91,41 @@ describe('groups page', () => {
     expect(access[0].text()).toBe('所有人')
     expect(access[1].findAll('[data-testid="segment-badge"]').map(b => b.text())).toEqual(['VIP', 'Corp'])
     expect(access[1].text()).toContain('+1')
-    expect(access[1].get('[data-testid="group-access-personal"]').text()).toBe('2 位个人专属')
-    expect(access[2].text()).toBe('还没授权给任何人')
+    expect(access[1].get('[data-testid="group-access-personal"]').text()).toBe('2 个人')
+    expect(access[2].text()).toBe('还没开通给任何人')
   })
 
   it('sums up the model pricing of a group and opens its editor on that tab', async () => {
-    items.value = [group(1, 'default', { model_count: 7 }), group(2, 'vip', { price_rule_count: 1, segment_rule_count: 2, model_count: 3 })]
+    items.value = [group(1, 'default', { model_count: 7 }), group(2, 'vip', { price_rule_count: 2, model_count: 3 })]
     const w = render()
     const [plain, priced] = rows(w)
-    expect(plain.get('[data-testid="group-pricing-summary"]').text()).toBe('跟随全局')
+    expect(plain.get('[data-testid="group-pricing-summary"]').text()).toBe('全部用原价')
     expect(plain.get('[data-testid="group-model-count"]').text()).toBe('提供 7 个模型')
     const summary = priced.get('[data-testid="group-pricing-summary"]')
-    expect(summary.findAll('span').map(s => s.text())).toEqual(['1 个模型单独定价', '2 条用户组专属价'])
+    expect(summary.text()).toBe('2 个模型改过价')
     await summary.trigger('click')
     await flushPromises()
     expect(w.text()).toContain('编辑分组 vip')
-    expect(w.get('[role="tab"][aria-selected="true"]').text()).toBe('模型定价')
+    expect(w.get('[role="tab"][aria-selected="true"]').text()).toBe('价格')
   })
 
-  it('shows access and pricing read-only to a caller who may not manage groups', async () => {
+  it('shows prices and user groups read-only to a caller who may not manage groups', async () => {
     denied.add('group:manage')
     items.value = [group(2, 'vip', { visibility: 'restricted', price_rule_count: 1 })]
     const w = render()
     expect(w.findAll('thead th').map(th => th.text())).not.toContain('操作')
     await rows(w)[0].get('[data-testid="group-pricing-summary"]').trigger('click')
     await flushPromises()
-    expect(w.get('[data-testid="group-pricing-view"]').findAll('[role="tab"]').map(t => t.text())).toEqual(['授权与倍率', '模型定价'])
-    expect(w.get('[role="tab"][aria-selected="true"]').text()).toBe('模型定价')
-    expect(w.text()).toContain('vip 的授权与定价')
+    expect(w.get('[data-testid="group-pricing-view"]').findAll('[role="tab"]').map(t => t.text())).toEqual(['价格', '用户组'])
+    expect(w.get('[role="tab"][aria-selected="true"]').text()).toBe('价格')
+    expect(w.text()).toContain('vip 的价格与用户组')
     expect(w.text()).not.toContain('编辑分组')
     await w.get('[data-testid="group-pricing-view-close"]').trigger('click')
 
     await openDetail(w, 0)
     await w.get('[data-testid="group-detail-pricing"]').trigger('click')
     await flushPromises()
-    expect(w.get('[role="tab"][aria-selected="true"]').text()).toBe('授权与倍率')
+    expect(w.get('[role="tab"][aria-selected="true"]').text()).toBe('价格')
   })
 
   it('lets a caller who may simulate prices but not manage groups simulate one in a group, from its detail', async () => {
@@ -179,7 +179,7 @@ describe('groups page', () => {
     expect(get).toHaveBeenCalledWith('/groups/1')
     expect(detail.text()).not.toContain('平台')
     expect(detail.get('[data-testid="group-access"]').text()).toBe('所有人')
-    expect(detail.get('[data-testid="group-pricing-summary"]').text()).toBe('跟随全局')
+    expect(detail.get('[data-testid="group-pricing-summary"]').text()).toBe('全部用原价')
     expect(detail.find('[data-testid="group-no-accounts"]').exists()).toBe(false)
     expect(w.getComponent(GroupServedProtocols).props('served')).toEqual(served[1])
   })

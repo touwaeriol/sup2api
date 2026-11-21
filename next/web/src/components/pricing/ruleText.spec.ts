@@ -24,11 +24,19 @@ describe('a price in a table cell', () => {
     expect(priceLabel(t, { ...opaque, multiplier: '0' })).toBe('Billed by expression ×0')
   })
   it('leaves a blank price of a custom rule blank, per request as per token', () => {
-    expect(ruleText(t, { kind: 'custom', mode: 'visual', config: requestTier(null) })).toBe(t('pricing.rule.customText', { price: '— per request' }))
     expect(priceLabel(t, { mode: 'visual', config: requestTier(null), expression: '' })).toBe('— per request')
     expect(priceLabel(t, { mode: 'visual', config: singleTier({ p: null, c: 15 }), expression: '' })).toBe('— / $15')
   })
   it('says that there is none', () => {
     expect(priceLabel(t, null)).toBe('No price')
+  })
+})
+
+describe('what kind of group price a rule is', () => {
+  it('is the multiplier of the original price, or custom', () => {
+    expect(ruleText(t, { kind: 'multiplier', multiplier: '0.80' })).toBe('Original × 0.8')
+    expect(ruleText(t, { kind: 'multiplier', multiplier: '1.' })).toBe('Original × —')
+    expect(ruleText(t, { kind: 'custom', mode: 'expression', expression: 'p*2' })).toBe('Custom')
+    expect(ruleText(t, null)).toBe('')
   })
 })

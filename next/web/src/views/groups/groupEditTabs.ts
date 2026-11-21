@@ -2,14 +2,15 @@
 // error on a field opens its tab, a changed field marks it. The tabs without
 // fields here are sub-editors that keep their own drafts.
 
-export const GROUP_EDIT_TABS = ['basic', 'segments', 'pricing', 'models', 'accounts', 'advanced'] as const
+export const GROUP_EDIT_TABS = ['basic', 'accounts', 'models', 'pricing', 'segments', 'advanced'] as const
 export type GroupEditTab = (typeof GROUP_EDIT_TABS)[number]
-/** The tabs about who may use the group and at what price: all a caller who only reads groups is shown. */
-export type GroupPricingTab = Extract<GroupEditTab, 'segments' | 'pricing'>
+/** The tabs about what the group costs and who may use it: all a caller who only reads groups is shown. */
+export type GroupPricingTab = Extract<GroupEditTab, 'pricing' | 'segments'>
 
 const TAB_FIELDS: Partial<Record<GroupEditTab, readonly string[]>> = {
-  basic: ['name', 'description', 'status', 'rate_multiplier', 'visibility'],
+  basic: ['name', 'description', 'status', 'visibility'],
   models: ['model_allowlist', 'model_filter_mode'],
+  pricing: ['rate_multiplier'],
   advanced: ['environment', 'conversion_loss_policy']
 }
 

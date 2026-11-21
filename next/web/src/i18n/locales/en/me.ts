@@ -103,9 +103,9 @@ export default {
   },
   models: {
     title: 'Models & prices',
-    description: 'Every model, which of your groups provide it and what it costs you there: the list price times your rate.',
+    description: 'Every model, which of your groups provide it and what it costs you there: the model price times your rate.',
     group: 'Group',
-    allGroups: 'All groups · base price',
+    allGroups: 'All groups · original price',
     search: 'Search models',
     model: 'Model',
     input: 'Input',
@@ -115,12 +115,12 @@ export default {
     groups: 'Groups',
     viewGroup: 'See what you pay in {name}',
     noGroups: 'No group provides it',
-    baseNote: 'These are the base prices of every model (rate ×1). You pay the list price times your rate in the group you use; the list price is the base price unless the group prices the model on its own. Choose a group to see what you pay there.',
+    baseNote: 'These are the original prices of every model (rate ×1). You pay the model price times your rate in the group you use; the model price is the original price unless the group gives the model a group price. Choose a group to see what you pay there.',
     unit: 'USD per million tokens',
-    basePrice: 'base price, no rate applied',
+    basePrice: 'original price, no rate applied',
     rated: 'your rate in this group, {rate}, included',
     rateSource: {
-      segment: 'you have a rate of your own in this group',
+      segment: 'you have a rate set on its own in this group',
       discount: 'your discount on every group included'
     },
     perRequest: '{price} per request',

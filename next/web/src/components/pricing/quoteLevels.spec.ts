@@ -11,18 +11,17 @@ const rate = (over: Partial<EffectiveRate>): EffectiveRate => ({ value: '1.2', s
 const states = (levels: Array<{ key: string; state: string }>) => Object.fromEntries(levels.map((l) => [l.key, l.state]))
 
 describe('quote levels', () => {
-  it('marks the list price level the quote took and greys the ones under it', () => {
-    const top = priceLevels({ price_levels: { segment: fixed, group: half }, base, price_source: 'segment' })
-    expect(top.map((l) => l.key)).toEqual(['segment', 'group', 'global'])
-    expect(states(top)).toEqual({ segment: 'applies', group: 'shadowed', global: 'shadowed' })
-    expect(top[0].value).toBe(fixed)
-
-    expect(states(priceLevels({ price_levels: { segment: null, group: half }, base, price_source: 'group' }))).toEqual({ segment: 'unset', group: 'applies', global: 'shadowed' })
-    expect(states(priceLevels({ price_levels: { segment: null, group: null }, base, price_source: 'global' }))).toEqual({ segment: 'unset', group: 'unset', global: 'applies' })
+  it('marks the model price level the quote took and greys the one under it', () => {
+    const top = priceLevels({ price_levels: { group: half }, base, price_source: 'group' })
+    expect(top.map((l) => l.key)).toEqual(['group', 'global'])
+    expect(states(top)).toEqual({ group: 'applies', global: 'shadowed' })
+    expect(top[0].value).toBe(half)
+    expect(states(priceLevels({ price_levels: { group: fixed }, base, price_source: 'group' }))).toEqual({ group: 'applies', global: 'shadowed' })
+    expect(states(priceLevels({ price_levels: { group: null }, base, price_source: 'global' }))).toEqual({ group: 'unset', global: 'applies' })
   })
 
-  it('leaves every list price level unset for a model without a global price', () => {
-    expect(states(priceLevels({ price_levels: { segment: null, group: null }, base: null, price_source: 'global' }))).toEqual({ segment: 'unset', group: 'unset', global: 'unset' })
+  it('leaves every model price level unset for a model without an original price', () => {
+    expect(states(priceLevels({ price_levels: { group: null }, base: null, price_source: 'global' }))).toEqual({ group: 'unset', global: 'unset' })
   })
 
   it('replaces the rate by the override of the segment', () => {

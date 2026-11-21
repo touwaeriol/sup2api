@@ -111,6 +111,17 @@ export function priceCells(def: PriceDef | null | undefined): PriceCells {
   return tokens ? { ...cells, tokens: Object.fromEntries(TOKEN_VARS.map((v) => [v, times(tokens[v])])) as TokenPrices } : cells
 }
 
+/**
+ * What is paid at a list price: the price times `rate`, which joins the
+ * multiplier a multiplier rule put on it, so the cells show the product
+ * (priceCells). Null when the rate is not one yet.
+ */
+export function timesRate(def: PriceDef, rate: string): PriceDef | null {
+  if (!validRate(rate)) return null
+  const k = round(num(def.multiplier, 1) * Number(rate))
+  return def.multiplier === undefined && k === 1 ? def : { ...def, multiplier: String(k) }
+}
+
 /** "$3": an amount in USD as every price view writes it, at eight significant digits (a small price never reads $0) and without an exponent; '—' when unset. */
 export function usd(v: number | null | undefined): string {
   return v === null || v === undefined ? '—' : `$${fmt(Number(num(v).toPrecision(8)))}`

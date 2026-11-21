@@ -105,10 +105,10 @@ watch(
   { immediate: true }
 )
 
-// The models the chosen group provides: the ones its model prices list.
+// The models the chosen group provides: the ones its model prices list as provided (it may price others before it provides them).
 const groupModels = useLatestRequest(
   () => (props.open ? groupId.value : null),
-  async (id) => ({ id, models: (await api.get<GroupModelPrices>(`/groups/${id}/model-prices`)).models.map((m) => m.model) }),
+  async (id) => ({ id, models: (await api.get<GroupModelPrices>(`/groups/${id}/model-prices`)).models.filter((m) => m.offered).map((m) => m.model) }),
   0
 )
 /** [] without a group, null while the models of the group load. */

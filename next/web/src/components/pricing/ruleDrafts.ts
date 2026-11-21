@@ -1,93 +1,57 @@
-// Price rules while they are edited: the rule a mode starts from, whether a
-// rule may be saved, and the unsaved rules of a model price table: what its
-// rows show meanwhile and what saving sends.
-import type { ModelPriceRow, PriceDef, PriceRule, PriceRulePatch, PriceSource } from '@/api/pricing'
-import { PRICE_KEYS, isSet, num, requestTier, simpleTier, singleTier, takesCustomPrice, type TierUnit } from '@/views/prices/priceExpr'
-import { applyRule, priceCells, sameRate, validRate } from './pricingFormat'
+// The model prices of a group while they are edited: the rule a mode starts
+// from, whether a rule may be saved, and the unsaved rules of the table: what
+// its rows show meanwhile and what saving sends.
+import type { CatalogPrice, ModelPriceRow, PriceDef, PriceRule, PriceRulePatch } from '@/api/pricing'
+import { asVisualConfig, checkPrice, compactVisualConfig, visualExpr, type LocalIssue } from '@/views/prices/priceExpr'
+import { priceDraftOf, pricePayload, type PriceDraft } from '@/views/prices/priceDraft'
+import { applyRule, sameRate, validRate } from './pricingFormat'
 import { withDraft } from './drafts'
-
-/** The rule of a row a table edits: the group's own, or that of the segment asked for. */
-export type RuleScope = 'group' | 'segment'
-
-export const ruleOf = (row: ModelPriceRow, scope: RuleScope): PriceRule | null => (scope === 'segment' ? row.segment_rule : row.group_rule) ?? null
 
 export type CustomRule = Extract<PriceRule, { kind: 'custom' }>
 
-/** How a custom rule prices: by the request when its one tier does, by tokens otherwise. */
-export const customUnit = (rule: CustomRule): TierUnit => (simpleTier(rule.config)?.unit === 'request' ? 'request' : 'token')
-
-/**
- * The prices a custom rule sets, in the order shown: the first `required` of
- * them must be filled. The server checks a saved rule by the same table
- * (CUSTOM_PRICES in mock/pricing.ts stands in for it): keep the two alike.
- */
-export function customFields(unit: TierUnit): { keys: readonly string[]; required: number } {
-  return unit === 'request' ? { keys: ['price'], required: 1 } : { keys: PRICE_KEYS, required: 2 }
+/** The custom rule of a price as its editor holds it (PriceDefEditor). */
+export function customRuleOf(draft: PriceDraft): CustomRule {
+  const p = pricePayload(draft)
+  if (p.mode === 'expression') return { kind: 'custom', mode: 'expression', expression: p.expression }
+  return { kind: 'custom', mode: 'visual', config: asVisualConfig(p.config), expression: p.expression }
 }
 
-const IMAGE_KEYS: readonly string[] = ['img', 'img_o']
+/** A custom rule as its editor takes it. */
+export const priceDraftOfRule = (rule: CustomRule): PriceDraft => priceDraftOf({ mode: rule.mode, config: rule.config ?? null, expression: rule.expression })
 
-/** The prices of a custom rule its editor shows: image tokens only when the global price prices them apart, or the rule does. */
-export function shownFields(rule: CustomRule, base: PriceDef | null): string[] {
-  const tier = base ? simpleTier(base.config) : null
-  const prices = customPrices(rule)
-  const images = IMAGE_KEYS.some((k) => (tier !== null && k in tier) || prices[k] !== null)
-  return customFields(customUnit(rule)).keys.filter((k) => images || !IMAGE_KEYS.includes(k))
-}
-
-/** The prices of a custom rule as one row: those of its one tier. */
-export function customPrices(rule: CustomRule): Record<string, number | null> {
-  const row: Record<string, unknown> = { ...simpleTier(rule.config) }
-  return Object.fromEntries(customFields(customUnit(rule)).keys.map((k) => [k, (row[k] as number | null | undefined) ?? null]))
-}
-
-/** The custom rule of a unit with these prices: a visual price of one request or token tier. */
-export function customRule(unit: TierUnit, prices: Record<string, number | null | undefined>): CustomRule {
-  return { kind: 'custom', mode: 'visual', config: unit === 'request' ? requestTier(prices.price ?? null) : singleTier(prices) }
-}
-
-/** Whether a global price takes a custom price (takesCustomPrice). */
-export const takesCustom = (base: PriceDef | null) => !!base && takesCustomPrice(base.mode, base.config)
-
-/** The rule a mode starts from: ×1, or the global price as a price of its own. A price that takes no custom price takes a multiplier only. */
+/** The rule a mode starts from: ×1, or the global price as it is, written as a price of its own. */
 export function startRule(kind: PriceRule['kind'], base: PriceDef): PriceRule {
-  if (kind === 'multiplier' || !takesCustom(base)) return { kind: 'multiplier', multiplier: '1' }
-  const tier = simpleTier(base.config)
-  if (tier?.unit === 'request') return customRule('request', { price: priceCells(base).perRequest })
-  return customRule('token', Object.fromEntries(PRICE_KEYS.map((k) => [k, isSet(tier?.[k]) ? num(tier?.[k]) : null])))
+  return kind === 'multiplier' ? { kind: 'multiplier', multiplier: '1' } : customRuleOf(priceDraftOf(base))
 }
 
-const isPrice = (v: unknown) => typeof v === 'number' && Number.isFinite(v) && v >= 0
+/** Why a rule cannot be saved yet (keys under pricing.rule and prices.local); none for no rule. */
+export function ruleIssues(rule: PriceRule | null): LocalIssue[] {
+  if (!rule) return []
+  if (rule.kind === 'multiplier') return validRate(rule.multiplier) ? [] : [{ key: 'pricing.rule.multiplierInvalid' }]
+  return checkPrice({ mode: rule.mode, config: rule.config ?? {}, expression: rule.expression ?? '' })
+}
 
-/** Whether a rule may be saved: a multiplier is a rate; a custom price has its required prices and none negative. */
-export function validRule(rule: PriceRule | null): boolean {
-  if (!rule) return true
-  if (rule.kind === 'multiplier') return validRate(rule.multiplier)
-  const prices = customPrices(rule)
-  const { keys, required } = customFields(customUnit(rule))
-  return keys.every((k, i) => isPrice(prices[k]) || (i >= required && prices[k] === null))
+export const validRule = (rule: PriceRule | null) => ruleIssues(rule).length === 0
+
+/** What a custom rule bills by: its expression as written, or the one its visual config generates (every tier and markup rule in it). */
+function billedBy(rule: CustomRule): string {
+  return rule.mode === 'expression' ? rule.expression.trim() : visualExpr(compactVisualConfig(asVisualConfig(rule.config)))
 }
 
 /** Rules that price alike: nothing to save between them. */
 export function sameRule(a: PriceRule | null, b: PriceRule | null): boolean {
   if (!a || !b) return a === b
   if (a.kind === 'multiplier') return b.kind === 'multiplier' && sameRate(a.multiplier, b.multiplier)
-  if (b.kind !== 'custom' || customUnit(a) !== customUnit(b)) return false
-  const [x, y] = [customPrices(a), customPrices(b)]
-  return customFields(customUnit(a)).keys.every((k) => x[k] === y[k])
+  return b.kind === 'custom' && a.mode === b.mode && billedBy(a) === billedBy(b)
 }
 
-/**
- * A row as it reads with `rule` in `scope`: the list price and its source
- * follow the first rule there is, as the server resolves them; without a
- * global price no rule applies.
- */
-export function withRule(row: ModelPriceRow, scope: RuleScope, rule: PriceRule | null): ModelPriceRow {
-  const next: ModelPriceRow = scope === 'segment' ? { ...row, segment_rule: rule } : { ...row, group_rule: rule }
-  const levels: Array<[PriceSource, PriceRule | null | undefined]> = row.base ? [['segment', next.segment_rule], ['group', next.group_rule]] : []
-  const [source, applied] = levels.find(([, r]) => r) ?? ['global', null]
-  return { ...next, list_price: applyRule(row.base, applied ?? null), source }
+/** A row for a model the server does not list yet: its global price from the catalog, no rule. */
+export function catalogRow(model: string, base: PriceDef | null, offered: boolean): ModelPriceRow {
+  return { model, offered, base, group_rule: null, list_price: base, source: 'global' }
 }
+
+/** The rows of the catalog by model. */
+export const catalogPrices = (catalog: readonly CatalogPrice[]) => new Map(catalog.map((c) => [c.model, c.price]))
 
 /** The unsaved rules of a table by model; null removes the saved one. */
 export type RuleDrafts = ReadonlyMap<string, PriceRule | null>
@@ -99,10 +63,12 @@ export interface DraftedRow extends ModelPriceRow {
   dirty: boolean
 }
 
-export function draftedRow(row: ModelPriceRow, scope: RuleScope, drafts: RuleDrafts): DraftedRow {
-  const saved = ruleOf(row, scope)
+/** A row as it reads under its draft: the list price and its source follow the rule, as the server resolves them; without a global price no rule applies. */
+export function draftedRow(row: ModelPriceRow, drafts: RuleDrafts): DraftedRow {
+  const saved = row.group_rule
   if (!drafts.has(row.model)) return { ...row, saved, dirty: false }
-  return { ...withRule(row, scope, drafts.get(row.model) ?? null), saved, dirty: true }
+  const rule = (row.base && drafts.get(row.model)) || null
+  return { ...row, group_rule: rule, list_price: applyRule(row.base, rule), source: rule ? 'group' : 'global', saved, dirty: true }
 }
 
 /** The drafts with `rule` as the rule of `row`; a rule that prices like the saved one is no draft. */
@@ -110,7 +76,13 @@ export function setRuleDraft(drafts: RuleDrafts, row: Pick<DraftedRow, 'model' |
   return withDraft(drafts, row.model, sameRule(rule, row.saved) ? undefined : rule)
 }
 
-/** What saving the drafts sends; `segmentId` null = the group's own rules. */
-export function rulePatches(drafts: RuleDrafts, segmentId: number | null): PriceRulePatch[] {
-  return [...drafts].map(([model, rule]) => ({ segment_id: segmentId, model, rule }))
+/** A rule as PUT takes it: a visual price by its config, an expression price by its expression. */
+function rulePayload(rule: PriceRule | null): PriceRule | null {
+  if (rule?.kind !== 'custom') return rule
+  return rule.mode === 'expression' ? { kind: 'custom', mode: 'expression', expression: rule.expression } : { kind: 'custom', mode: 'visual', config: rule.config }
+}
+
+/** What saving the drafts sends. */
+export function rulePatches(drafts: RuleDrafts): PriceRulePatch[] {
+  return [...drafts].map(([model, rule]) => ({ model, rule: rulePayload(rule) }))
 }

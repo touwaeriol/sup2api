@@ -4,7 +4,7 @@ import { changedTabs, tabOfErrors } from './groupEditTabs'
 describe('tabs of the group editor', () => {
   it('finds the tab of a field error, also of a part of a field', () => {
     expect(tabOfErrors({})).toBeUndefined()
-    expect(tabOfErrors({ rate_multiplier: 'bad' })).toBe('basic')
+    expect(tabOfErrors({ rate_multiplier: 'bad' })).toBe('pricing')
     expect(tabOfErrors({ model_filter_mode: 'bad' })).toBe('models')
     expect(tabOfErrors({ 'environment.HTTP_PROXY': 'bad' })).toBe('advanced')
     // The first tab in order wins when several have errors.
@@ -18,5 +18,6 @@ describe('tabs of the group editor', () => {
     expect(changedTabs({ ...saved, model_allowlist: ['x'] }, saved)).toEqual([])
     expect(changedTabs({ ...saved, visibility: 'restricted', environment: { A: '2' } }, saved)).toEqual(['basic', 'advanced'])
     expect(changedTabs({ ...saved, model_allowlist: ['x', 'y'] }, saved)).toEqual(['models'])
+    expect(changedTabs({ ...saved, rate_multiplier: '0.8' }, { ...saved, rate_multiplier: '1' })).toEqual(['pricing'])
   })
 })

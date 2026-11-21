@@ -21,13 +21,14 @@ describe('the list price of a multiplier rule in the mock', () => {
 
   it('is the same in the caller’s own prices of a group and in a quote', async () => {
     const mine = (await call('GET', '/me/prices?group_id=1')).body.data
-    const own = mine.prices.find((p: { model: string }) => p.model === 'gpt-4o-mini')
-    const base = (await call('GET', '/groups/1/model-prices')).body.data.models.find((m: { model: string }) => m.model === 'gpt-4o-mini').base
-    expect(own).toMatchObject({ ...base, multiplier: '0.8', source: 'segment' })
+    const own = mine.prices.find((p: { model: string }) => p.model === 'gpt-4o')
+    const base = (await call('GET', '/groups/1/model-prices')).body.data.models.find((m: { model: string }) => m.model === 'gpt-4o').base
+    expect(own).toMatchObject({ ...base, multiplier: '1.2', source: 'group' })
 
-    const quote = (await call('POST', '/pricing/quote', { user_id: 1, group_id: 1, model: 'gpt-4o-mini', usage: { p: 1_000_000, c: 0, cc1h: 0 } })).body.data
-    expect(quote.list_price).toEqual({ ...base, multiplier: '0.8' })
-    expect(Number(quote.list_cost)).toBeCloseTo(Number(base.config.tiers[0].p) * 0.8, 8)
+    const quote = (await call('POST', '/pricing/quote', { user_id: 1, group_id: 1, model: 'gpt-4o', usage: { p: 1_000_000, c: 0, cc1h: 0 } })).body.data
+    expect(quote.list_price).toEqual({ ...base, multiplier: '1.2' })
+    expect(quote.price_levels).toEqual({ group: { kind: 'multiplier', multiplier: '1.2' } })
+    expect(Number(quote.list_cost)).toBeCloseTo(Number(base.config.tiers[0].p) * 1.2, 8)
   })
 
   it('keeps a custom price a price of its own, without a multiplier', async () => {
@@ -120,22 +121,42 @@ describe('the rest of the group pricing mock', () => {
     expect(access(2).personal_count).toBe(2)
   })
 
-  it('counts only the model prices on models a group provides now, as its pricing table lists them', async () => {
+  it('counts and lists every model price of a group, on models it provides or not', async () => {
     const group = async () => (await call('GET', '/groups?page_size=200')).body.data.data.find((g: { id: number }) => g.id === 1)
-    const vip = async () => (await call('GET', '/segments/2')).body.data.price_rule_count
-    const vipIn = async () => (await call('GET', '/groups/1/segments')).body.data.find((r: { segment: { id: number } }) => r.segment.id === 2).price_rule_count
-    const before = await group()
-    expect([before.price_rule_count, before.segment_rule_count, await vip(), await vipIn()]).toEqual([3, 1, 1, 1])
+    const listed = async () => (await call('GET', '/groups/1/model-prices')).body.data.models as Array<{ model: string; offered: boolean; group_rule: unknown }>
+    expect((await group()).price_rule_count).toBe(3)
 
-    // The group stops providing gpt-4o and gpt-4o-mini: the rules on them stay, but are no longer counted.
+    // The group stops providing gpt-4o and gpt-4o-mini: the rule on gpt-4o stays, counted and listed as not provided; gpt-4o-mini goes.
     await call('PATCH', '/groups/1', { model_filter_mode: 'blacklist', model_allowlist: ['gpt-4o', 'gpt-4o-mini'] })
-    const after = await group()
-    const listed = (await call('GET', '/groups/1/model-prices')).body.data.models.filter((m: { group_rule: unknown }) => m.group_rule).length
-    expect([after.price_rule_count, after.segment_rule_count, await vip(), await vipIn()]).toEqual([listed, 0, 0, 0])
-    expect(listed).toBe(2)
+    expect((await group()).price_rule_count).toBe(3)
+    const after = await listed()
+    expect(after.find((m) => m.model === 'gpt-4o')).toMatchObject({ offered: false, group_rule: { kind: 'multiplier', multiplier: '1.2' } })
+    expect(after.some((m) => m.model === 'gpt-4o-mini')).toBe(false)
+    expect(after.filter((m) => m.group_rule).length).toBe(3)
 
     await call('PATCH', '/groups/1', { model_allowlist: [] })
-    expect((await group()).price_rule_count).toBe(3)
+    expect((await listed()).find((m) => m.model === 'gpt-4o')?.offered).toBe(true)
+  })
+
+  it('prices a model the group does not provide, as long as it has an original price', async () => {
+    const catalog = (await call('GET', '/pricing/catalog')).body.data as Array<{ model: string }>
+    const priced = catalog.map((c) => c.model)
+    const provided = ((await call('GET', '/groups/2/model-prices')).body.data.models as Array<{ model: string }>).map((m) => m.model)
+    const model = priced.find((m) => !provided.includes(m))!
+    expect(model).toBeDefined()
+    const put = await call('PUT', '/groups/2/model-prices', { items: [{ model, rule: { kind: 'custom', mode: 'expression', expression: 'p * 2' } }] })
+    expect(put.status).toBe(200)
+    expect(put.body.data.models.find((m: { model: string }) => m.model === model)).toMatchObject({ offered: false, group_rule: { kind: 'custom', mode: 'expression', expression: 'p * 2' }, source: 'group' })
+    const unpriced = await call('PUT', '/groups/2/model-prices', { items: [{ model: 'no-such-model', rule: { kind: 'multiplier', multiplier: '2' } }] })
+    expect([unpriced.status, fields(unpriced)]).toEqual([400, ['items.0']])
+    await call('PUT', '/groups/2/model-prices', { items: [{ model, rule: null }] })
+  })
+
+  it('says a quote in a disabled group cannot be used by anyone', async () => {
+    await call('PATCH', '/groups/1', { status: 'disabled' })
+    const quote = (await call('POST', '/pricing/quote', { segment_id: 2, group_id: 1, model: 'gpt-4o', usage: { p: 1, c: 1 } })).body.data
+    expect([quote.accessible, quote.access_source]).toEqual([false, 'disabled'])
+    await call('PATCH', '/groups/1', { status: 'active' })
   })
 
   it('gives the caller’s groups the fields of the server, no more', async () => {
