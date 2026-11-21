@@ -124,7 +124,7 @@ export default {
       discount: 'your discount on every group included'
     },
     perRequest: '{price} per request',
-    tiered: '{n} tiers, first shown',
+    tiered: '{n} tiers, fallback shown',
     custom: 'Billed by rules',
     customTimes: 'Billed by rules {rate}',
     empty: 'This group has no models',

@@ -1,4 +1,4 @@
-// Editing a visual config in place (TokenPriceEditor): the edits that keep
+// Editing a visual config in place (VisualPriceEditor): the edits that keep
 // the config whole. A price beyond p and c is charged when its key is in the
 // tier (held as null while it is blank): unticking cache writes 1 h or image
 // tokens drops the key, and they fall back to another price. A condition
@@ -6,7 +6,7 @@
 // (typedValue), so "0.05" is not 0 while it is typed. The templates are in
 // presets.ts.
 import {
-  asTokenConfig,
+  asVisualConfig,
   condKind,
   num,
   valueText,
@@ -18,11 +18,11 @@ import {
   type PriceKey,
   type RuleCond,
   type VisualConfig,
-  type TokenTier
+  type VisualTier
 } from './priceExpr'
 import { PRESETS } from './presets'
 
-export function defaultTokenConfig(): VisualConfig {
+export function defaultVisualConfig(): VisualConfig {
   return { tiers: PRESETS.claude(), rules: [] }
 }
 
@@ -38,17 +38,17 @@ function editableRules(raw: readonly MarkupRule[]): MarkupRule[] {
 }
 
 /** An editable copy of a saved config: tiers in the order they match, the last one the rest, each with its unit. */
-export function editableTokenConfig(raw: unknown): VisualConfig {
-  const c = asTokenConfig(raw)
-  const tiers = (JSON.parse(JSON.stringify(c.tiers)) as TokenTier[]).map(t => ({ ...t, unit: t.unit ?? 'token' }))
+export function editableVisualConfig(raw: unknown): VisualConfig {
+  const c = asVisualConfig(raw)
+  const tiers = (JSON.parse(JSON.stringify(c.tiers)) as VisualTier[]).map(t => ({ ...t, unit: t.unit ?? 'token' }))
   return { tiers, rules: editableRules(c.rules) }
 }
 
 /** The bound of a tier that applies up to a length, `len <= N`; 0 for any other condition. */
-const lenBound = (t: TokenTier) => (condKind(t.when) === 'leaf' && (t.when as CondLeaf).var === 'len' && (t.when as CondLeaf).op === '<=' ? num((t.when as CondLeaf).value) : 0)
+const lenBound = (t: VisualTier) => (condKind(t.when) === 'leaf' && (t.when as CondLeaf).var === 'len' && (t.when as CondLeaf).op === '<=' ? num((t.when as CondLeaf).value) : 0)
 
 /** Adds a tier before the rest, priced as the rest is, up to twice the longest `len <=` bound (200000 without one), under the first tier_N name not taken. */
-export function addTier(tiers: TokenTier[]) {
+export function addTier(tiers: VisualTier[]) {
   const last = tiers[tiers.length - 1]
   const bound = Math.max(0, ...tiers.map(lenBound))
   const names = new Set(tiers.map(t => t.name))
@@ -58,24 +58,24 @@ export function addTier(tiers: TokenTier[]) {
 }
 
 /** Removes a tier; the last one left is the rest, without a condition. */
-export function removeTier(tiers: TokenTier[], i: number) {
+export function removeTier(tiers: VisualTier[], i: number) {
   tiers.splice(i, 1)
   delete tiers[tiers.length - 1].when
 }
 
 /** Whether tier i moves by `by` (±1) and stays before the rest: the rest stays last. */
-export const canMoveTier = (tiers: readonly TokenTier[], i: number, by: number) => i < tiers.length - 1 && i + by >= 0 && i + by < tiers.length - 1
+export const canMoveTier = (tiers: readonly VisualTier[], i: number, by: number) => i < tiers.length - 1 && i + by >= 0 && i + by < tiers.length - 1
 
 /** Swaps tier i with its neighbour `by` (±1) away (canMoveTier). */
-export function moveTier(tiers: TokenTier[], i: number, by: number) {
+export function moveTier(tiers: VisualTier[], i: number, by: number) {
   tiers.splice(i + by, 0, ...tiers.splice(i, 1))
 }
 
 /** Whether a tier charges a price: p and c always, any other while its key is in the tier. */
-export const priceOn = (t: TokenTier, k: PriceKey) => k === 'p' || k === 'c' || k in t
+export const priceOn = (t: VisualTier, k: PriceKey) => k === 'p' || k === 'c' || k in t
 
 /** Charges a price (its key held as null until it is typed) or stops charging it; p and c are always charged. */
-export function setPriceOn(t: TokenTier, k: PriceKey, on: boolean) {
+export function setPriceOn(t: VisualTier, k: PriceKey, on: boolean) {
   if (k === 'p' || k === 'c') return
   if (on) t[k] ??= null
   else delete t[k]

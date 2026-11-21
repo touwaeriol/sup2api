@@ -90,7 +90,6 @@ export default {
     add: 'Add tier',
     matchOnly: 'Always matches (the only tier)',
     matchRest: 'Fallback: when no tier above matched',
-    noCond: 'No condition',
     moveUp: 'Move up',
     moveDown: 'Move down',
     unnamed: 'Unnamed',
@@ -241,7 +240,7 @@ export default {
   },
   // Texts of the expression guide (ExprGuide) may mark `code` and **bold** (GuideText).
   guide: {
-    engine: 'The server evaluates expressions with the Go library **expr-lang/expr** (v1.17.8): its syntax, operators and built-in functions apply. This platform adds `tier()`, `flat()`, `param()`, `header()`, `u()`, the time functions `hour()` `minute()` `weekday()` `month()` `day()` and the variables `p`, `c`, `cr`, `cc`, `cc1h`, `img`, `img_o`, `len`, and disables `__rule` and `$env`.',
+    engine: 'The server evaluates expressions with the Go library **expr-lang/expr** (v1.17.8): its syntax and operators apply, and of its built-in functions only `max()` `min()` `abs()` `ceil()` `floor()`. This platform adds `tier()`, `flat()`, `param()`, `header()`, `u()`, `has()`, the time functions `hour()` `minute()` `weekday()` `month()` `day()` and the variables `p`, `c`, `cr`, `cc`, `cc1h`, `img`, `img_o`, `ai`, `ao`, `len`, and disables `__rule` and `$env`.',
     engineLink: 'expr-lang documentation',
     nav: {
       basics: 'Basics',

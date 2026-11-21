@@ -4,11 +4,11 @@ import { useI18n } from 'vue-i18n'
 import { SButton, SDropdown, SIcon, SInput, SSelect } from '@sub2api/ui'
 import { COND_OPS, COND_SOURCES, NUMERIC_OPS, type CondOp, type CondSource, type FieldCond, type MarkupRule } from './priceExpr'
 import { RULE_PRESETS } from './presets'
-import { newCond, setOp } from './tokenPrice'
+import { newCond, setOp } from './visualPrice'
 
 // Request rules: groups of AND conditions; a group that matches multiplies the
 // whole charge by its multiplier, and the multipliers of every group that
-// matches multiply. A value is held as typed (compactTokenConfig types it).
+// matches multiply. A value is held as typed (compactVisualConfig types it).
 // Disabled, every control is read-only and nothing can be added or removed.
 const rules = defineModel<MarkupRule[]>({ required: true })
 defineProps<{ disabled?: boolean }>()

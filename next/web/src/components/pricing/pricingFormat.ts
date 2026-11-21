@@ -62,7 +62,7 @@ export function applyRule(base: PriceDef | null, rule: PriceRule | null): PriceD
   return base && validRate(rule.multiplier) ? { ...base, multiplier: rule.multiplier } : base
 }
 
-/** The cells of a price in a table: a per-request price, the tokens' prices (first tier of a tiered price), or neither. */
+/** The cells of a price in a table: a per-request price, the tokens' prices (the rest of a tiered price: its last tier), or neither. */
 export interface PriceCells {
   /** Null while the price of a draft is blank, as a token price is. */
   perRequest?: number | null
@@ -75,14 +75,18 @@ export interface PriceCells {
   multiplier?: string
 }
 
-/** The cells of a price as it stands, whatever multiplier is on it: a visual price shows its first tier. */
+/**
+ * The cells of a price as it stands, whatever multiplier is on it: a visual
+ * price shows its rest, the last tier, which applies when no tier before it
+ * matches (the first that matches applies).
+ */
 function ownCells(def: PriceDef): PriceCells {
   const s = summarize(def.mode, def.config)
   if (s.kind === 'expression') return { tiers: 1, opaque: true }
-  const { first, tiers } = s
+  const { rest, tiers } = s
   // A draft's blank price is no price yet, not 0.
-  if (first.unit === 'request') return { perRequest: first.price === null || first.price === undefined ? null : num(first.price), tiers }
-  return { tokens: tokenPricesOf(first), tiers }
+  if (rest.unit === 'request') return { perRequest: rest.price === null || rest.price === undefined ? null : num(rest.price), tiers }
+  return { tokens: tokenPricesOf(rest), tiers }
 }
 
 /** A product of multipliers as shown: six decimals at most. */
@@ -126,7 +130,7 @@ export function priceBrief(def: PriceDef | null | undefined, rate = 1): string {
 
 /**
  * "2 tiers · 1 surcharge rule": what a price has beyond the cells of its
- * first tier, its tiers when it has several and the surcharge rules of a
+ * rest, its tiers when it has several and the surcharge rules of a
  * visual price; '' when it has neither (an expression's are not known
  * here).
  */

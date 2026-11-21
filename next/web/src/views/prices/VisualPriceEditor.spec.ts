@@ -3,11 +3,11 @@ import { enableAutoUnmount, mount } from '@vue/test-utils'
 import { nextTick, ref } from 'vue'
 import { SDropdown, SSelect } from '@sub2api/ui'
 import { i18n } from '@/i18n'
-import TokenPriceEditor from './TokenPriceEditor.vue'
+import VisualPriceEditor from './VisualPriceEditor.vue'
 import PriceRuleGroups from './PriceRuleGroups.vue'
 import PriceTierCard from './PriceTierCard.vue'
-import { compactTokenConfig, tokenExpr, typedValue, valueText, type FieldCond, type MarkupRule, type TierCond, type VisualConfig } from './priceExpr'
-import { addTier, canMoveTier, editableTokenConfig, moveTier, removeTier, setOp } from './tokenPrice'
+import { compactVisualConfig, visualExpr, typedValue, valueText, type FieldCond, type MarkupRule, type TierCond, type VisualConfig } from './priceExpr'
+import { addTier, canMoveTier, editableVisualConfig, moveTier, removeTier, setOp } from './visualPrice'
 import TierCondTree from './TierCondTree.vue'
 
 enableAutoUnmount(afterEach)
@@ -15,7 +15,7 @@ enableAutoUnmount(afterEach)
 function render(start: VisualConfig, disabled = false) {
   i18n.global.locale.value = 'zh'
   const model = ref(start)
-  const w = mount(TokenPriceEditor, {
+  const w = mount(VisualPriceEditor, {
     props: { modelValue: model.value, disabled, 'onUpdate:modelValue': (v: VisualConfig) => (model.value = v) },
     global: { plugins: [i18n] }
   })
@@ -25,7 +25,7 @@ function render(start: VisualConfig, disabled = false) {
 
 const upTo = (value: number): TierCond => ({ var: 'len', op: '<=', value })
 const tierOf = (name: string, max: number) => ({ name, when: upTo(max), p: 1, c: 1 })
-const claude = (): VisualConfig => editableTokenConfig({ tiers: [{ name: 'base', p: 3, c: 15, cr: 0.3, cc: 3.75, cc1h: 6 }], rules: [] })
+const claude = (): VisualConfig => editableVisualConfig({ tiers: [{ name: 'base', p: 3, c: 15, cr: 0.3, cc: 3.75, cc1h: 6 }], rules: [] })
 
 describe('the visual editor', () => {
   it('shows a single tier for every request, its prices in one row', () => {
@@ -41,7 +41,7 @@ describe('the visual editor', () => {
   })
 
   it('loads tiers in the order saved, each with its unit, and a time window in full', () => {
-    const c = editableTokenConfig({
+    const c = editableVisualConfig({
       tiers: [tierOf('short', 1000), { name: 'rest', p: 2, c: 2 }],
       rules: [{ name: 'night', multiplier: 0.5, conds: [{ source: 'time' }, { source: 'param', key: 'n', op: 'eq', value: '5' }] }]
     })
@@ -54,11 +54,11 @@ describe('the visual editor', () => {
       { source: 'param', key: 'n', op: 'eq', value: '"5"' }
     ])
     // A string that reads as a number stays a string through a save.
-    expect(compactTokenConfig(c).rules[0].conds[1]).toMatchObject({ value: '5' })
+    expect(compactVisualConfig(c).rules[0].conds[1]).toMatchObject({ value: '5' })
   })
 
   it('names an added tier by the first tier_N not taken, before the rest, up to twice the longest len bound', () => {
-    const tiers = editableTokenConfig({ tiers: [{ name: 'tier_2', when: upTo(100) }, { name: 'base' }] }).tiers
+    const tiers = editableVisualConfig({ tiers: [{ name: 'tier_2', when: upTo(100) }, { name: 'base' }] }).tiers
     addTier(tiers)
     expect(tiers.map(t => [t.name, t.when])).toEqual([
       ['tier_2', upTo(100)],
@@ -68,7 +68,7 @@ describe('the visual editor', () => {
   })
 
   it('moves a tier up and down before the rest, which stays last; removing the rest makes the tier before it the rest', () => {
-    const tiers = editableTokenConfig({ tiers: [tierOf('a', 1), tierOf('b', 2), { name: 'c' }] }).tiers
+    const tiers = editableVisualConfig({ tiers: [tierOf('a', 1), tierOf('b', 2), { name: 'c' }] }).tiers
     expect([canMoveTier(tiers, 0, -1), canMoveTier(tiers, 0, 1), canMoveTier(tiers, 1, 1), canMoveTier(tiers, 2, -1)]).toEqual([false, true, false, false])
     moveTier(tiers, 0, 1)
     expect(tiers.map(t => t.name)).toEqual(['b', 'a', 'c'])
@@ -81,7 +81,7 @@ describe('the visual editor', () => {
 
   it('adds a tier with a condition before the rest, moves it from its menu, and takes one away again', async () => {
     const { w, model, tiers } = render(claude())
-    await w.get('[data-testid="token-add-tier"]').trigger('click')
+    await w.get('[data-testid="visual-add-tier"]').trigger('click')
     expect(model.value.tiers.map(t => [t.name, t.when])).toEqual([
       ['tier_2', upTo(200000)],
       ['base', undefined]
@@ -90,7 +90,7 @@ describe('the visual editor', () => {
     expect(tiers()[0].findComponent(TierCondTree).exists()).toBe(true)
     expect(tiers()[1].text()).toContain('兜底档位')
     expect(tiers()[1].text()).toContain('兜底：前面的档位都没命中时')
-    await w.get('[data-testid="token-add-tier"]').trigger('click')
+    await w.get('[data-testid="visual-add-tier"]').trigger('click')
     expect(model.value.tiers.map(t => t.name)).toEqual(['tier_2', 'tier_3', 'base'])
     const menu = (i: number) => w.findAllComponents(PriceTierCard)[i].findComponent(SDropdown)
     expect(menu(0).props('actions').map((a: { key: string; disabled?: boolean }) => [a.key, !!a.disabled])).toEqual([
@@ -119,7 +119,7 @@ describe('the visual editor', () => {
         { or: [{ var: 'hour', tz: 'Asia/Shanghai', op: '>=', value: 22 }, { not: { var: 'weekday', tz: 'UTC', op: '==', value: 6 } }] }
       ]
     }
-    const { tiers } = render(editableTokenConfig({ tiers: [{ name: 'night', when: night, p: 1, c: 1 }, { name: 'base' }] }))
+    const { tiers } = render(editableVisualConfig({ tiers: [{ name: 'night', when: night, p: 1, c: 1 }, { name: 'base' }] }))
     expect(tiers()[0].text()).toContain('len > 200,000 且 (小时(Asia/Shanghai) ≥ 22 或 非（星期(UTC) = 星期六）)')
   })
 
@@ -145,11 +145,11 @@ describe('the visual editor', () => {
     await nextTick()
     expect(w.find('[data-testid="tier-p"]').exists()).toBe(false)
     await w.get('[data-tier="0"] input[aria-label="每次价格"]').setValue('0.05')
-    expect(tokenExpr(model.value)).toBe('tier("base", flat(0.05))')
+    expect(visualExpr(model.value)).toBe('tier("base", flat(0.05))')
   })
 
   it('read-only, opens every card and its media prices, and changes nothing', async () => {
-    const c = editableTokenConfig({
+    const c = editableVisualConfig({
       tiers: [tierOf('short', 1000), { name: 'rest', p: 2, c: 2, img: 4 }],
       rules: [{ name: 'r', multiplier: 2, conds: [{ source: 'time', tz: 'UTC', from_hour: 22, to_hour: 0 }] }]
     })
@@ -161,7 +161,7 @@ describe('the visual editor', () => {
     expect(tiers()[1].findAll('input').every(i => i.attributes('disabled') !== undefined)).toBe(true)
     expect(w.get('[data-rule="0"]').findAll('input').every(i => i.attributes('disabled') !== undefined)).toBe(true)
     expect(w.findAll('[data-rule="0"] button').filter(b => b.attributes('disabled') === undefined).map(b => b.text())).toEqual([])
-    expect(w.find('[data-testid="token-add-tier"]').exists()).toBe(false)
+    expect(w.find('[data-testid="visual-add-tier"]').exists()).toBe(false)
     expect(w.find('[data-testid="token-add-rule"]').exists()).toBe(false)
     // The condition tree reads but takes no edits.
     await tiers()[0].get('[data-testid="tier-toggle"]').trigger('click')
@@ -174,7 +174,7 @@ describe('the visual editor', () => {
   })
 
   it('keeps a card’s state with its tier when one before it goes, and opens the media prices of a template that has them', async () => {
-    const { w, model, tiers } = render(editableTokenConfig({ tiers: [tierOf('a', 1000), tierOf('b', 2000), { name: 'c', p: 1, c: 1 }] }))
+    const { w, model, tiers } = render(editableVisualConfig({ tiers: [tierOf('a', 1000), tierOf('b', 2000), { name: 'c', p: 1, c: 1 }] }))
     await tiers()[2].get('[data-testid="tier-toggle"]').trigger('click')
     expect(tiers()[2].find('[data-testid="tier-img"]').exists()).toBe(false)
     await tiers()[2].findAll('button').find(b => b.text() === '媒体定价')!.trigger('click')
@@ -213,7 +213,7 @@ describe('a condition value', () => {
     for (const typed of ['0', '0.', '0.0', '0.05']) await input.setValue(typed)
     expect((input.element as HTMLInputElement).value).toBe('0.05')
     expect(rule.conds[0]).toMatchObject({ value: '0.05' })
-    expect(compactTokenConfig({ tiers: [], rules: [rule] }).rules[0].conds[0]).toMatchObject({ value: 0.05 })
+    expect(compactVisualConfig({ tiers: [], rules: [rule] }).rules[0].conds[0]).toMatchObject({ value: 0.05 })
   })
 
   const cond = (source: FieldCond['source'], op: FieldCond['op'], value?: FieldCond['value']): FieldCond => ({

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import golden from '../../../../server/internal/billing/expr/testdata/generate_golden.json'
 import { visualOf } from './exprParse'
 import { EXPR_EXAMPLES, PRESETS, RULE_PRESETS } from './presets'
-import { priceExpression, requestTier, tokenExpr, type VisualConfig } from './priceExpr'
+import { priceExpression, requestTier, visualExpr, type VisualConfig } from './priceExpr'
 
 const NIGHT: VisualConfig = {
   tiers: [
@@ -27,19 +27,19 @@ const NIGHT: VisualConfig = {
 
 /** A config's expression, generated, read back and generated again. */
 const roundTrip = (cfg: VisualConfig) => {
-  const back = visualOf(tokenExpr(cfg))
-  return back && tokenExpr(back)
+  const back = visualOf(visualExpr(cfg))
+  return back && visualExpr(back)
 }
 
 describe('an expression the visual editor generated', () => {
   it.each(golden.filter(c => c.mode === 'visual').map(c => [c.name, c] as const))('reads back to the same expression: %s', (_, c) => {
     const back = visualOf(c.expression)
     expect(back).not.toBeNull()
-    expect(tokenExpr(back!)).toBe(c.expression)
+    expect(visualExpr(back!)).toBe(c.expression)
   })
   it('reads back for every template, the rule groups and a tree of every kind of node', () => {
-    for (const make of Object.values(PRESETS)) expect(roundTrip({ tiers: make(), rules: [] })).toBe(tokenExpr({ tiers: make(), rules: [] }))
-    expect(roundTrip(NIGHT)).toBe(tokenExpr(NIGHT))
+    for (const make of Object.values(PRESETS)) expect(roundTrip({ tiers: make(), rules: [] })).toBe(visualExpr({ tiers: make(), rules: [] }))
+    expect(roundTrip(NIGHT)).toBe(visualExpr(NIGHT))
     expect(roundTrip({ ...requestTier(0.04), rules: [{ name: '', multiplier: 2, conds: [{ source: 'param', key: 'q', op: 'eq', value: '3' }] }] })).toBe(
       '(tier("base", flat(0.04))) * (param("q") == "3" ? 2 : 1)'
     )
@@ -57,13 +57,13 @@ describe('an expression the visual editor generated', () => {
       { source: 'time', tz: 'Asia/Shanghai', from_hour: 22, to_hour: 6 }
     ]
     const cfg: VisualConfig = { tiers: [{ name: 'base', unit: 'token', p: 1, c: 2 }], rules: [{ name: 'r', multiplier: 0.5, conds }] }
-    expect(roundTrip(cfg)).toBe(tokenExpr(cfg))
+    expect(roundTrip(cfg)).toBe(visualExpr(cfg))
   })
   it('reads back with its whitespace changed outside string literals', () => {
-    const src = tokenExpr(NIGHT)
+    const src = visualExpr(NIGHT)
     const spaced = src.replace(/ \? /g, '\n  ? ').replace(/ : /g, '\n  : ').replace(/ && /g, '\t&&\t').replace(/\(/g, '( ')
     expect(spaced).not.toBe(src)
-    expect(tokenExpr(visualOf(`\n ${spaced} \n`)!)).toBe(src)
+    expect(visualExpr(visualOf(`\n ${spaced} \n`)!)).toBe(src)
     expect(visualOf('tier( "base" , p * 3+c*15 )')).toEqual({ tiers: [{ name: 'base', unit: 'token', p: 3, c: 15 }], rules: [] })
   })
 })

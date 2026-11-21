@@ -12,7 +12,6 @@ import {
   SInput,
   SLink,
   SPageHeader,
-  SSegmented,
   SSpinner,
   SSwitch,
   confirm,
@@ -26,16 +25,14 @@ import { applyFormError } from '@/utils/formErrors'
 import { formatDateTime } from '@/utils/format'
 import ExprGuide from './ExprGuide.vue'
 import ExprHistoryModal from './ExprHistoryModal.vue'
-import PriceExprEditor from './PriceExprEditor.vue'
+import PriceDefEditor from './PriceDefEditor.vue'
 import PriceEstimator from './PriceEstimator.vue'
 import PriceModelList from './PriceModelList.vue'
-import TokenPriceEditor from './TokenPriceEditor.vue'
 import { issueText, type Issue } from './issues'
 import PriceCheckBar from './PriceCheckBar.vue'
-import { usePriceValidation, type PricePayload } from './usePriceValidation'
-import { checkPrice, compactTokenConfig, PRICE_MODES, tokenExpr, type PriceMode, type VisualConfig } from './priceExpr'
-import { visualOf } from './exprParse'
-import { defaultTokenConfig, editableTokenConfig } from './tokenPrice'
+import { usePriceValidation } from './usePriceValidation'
+import { checkPrice } from './priceExpr'
+import { newPriceDraft, priceDraftOf, pricePayload, type PriceDraft } from './priceDraft'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -52,12 +49,10 @@ const loading = ref(false)
 const saving = ref(false)
 const price = ref<Price | null>(null)
 const form = reactive({ model: '', note: '', enabled: true })
-const mode = ref<PriceMode>('visual')
-const token = ref<VisualConfig>(defaultTokenConfig())
-const sourceText = ref('')
+const draft = ref<PriceDraft>(newPriceDraft())
 const errors = ref<Record<string, string>>({})
 const historyOpen = ref(false)
-const exprEditor = ref<InstanceType<typeof PriceExprEditor>>()
+const defEditor = ref<InstanceType<typeof PriceDefEditor>>()
 const modelList = ref<InstanceType<typeof PriceModelList>>()
 const readonly = computed(() => !auth.has('price:manage'))
 
@@ -65,11 +60,10 @@ const readonly = computed(() => !auth.has('price:manage'))
 const guideOpen = ref(false)
 function guideReplace(src: string) {
   if (readonly.value) return
-  sourceText.value = src
+  draft.value.expression = src
   guideOpen.value = false
 }
 
-const modeOptions = computed(() => PRICE_MODES.map(m => ({ value: m, label: t(`prices.mode.${m}`) })))
 const isSynced = computed(() => price.value?.source === 'sync')
 const syncedNotice = computed(() => {
   const p = price.value
@@ -85,9 +79,7 @@ const syncedNotice = computed(() => {
 function resetForm() {
   price.value = null
   Object.assign(form, { model: '', note: '', enabled: true })
-  mode.value = 'visual'
-  token.value = defaultTokenConfig()
-  sourceText.value = ''
+  draft.value = newPriceDraft()
   errors.value = {}
   validator.reset()
   markSaved()
@@ -96,9 +88,7 @@ function resetForm() {
 function applyPrice(p: Price) {
   price.value = p
   Object.assign(form, { model: p.model, note: p.note || '', enabled: p.enabled })
-  mode.value = p.mode
-  sourceText.value = p.expression || ''
-  if (p.mode === 'visual') token.value = editableTokenConfig(p.config)
+  draft.value = priceDraftOf(p)
   markSaved()
 }
 
@@ -117,13 +107,7 @@ async function load() {
 
 // ------------------------------------------------------------------ derived payload
 
-/** The visual config as it is sent: prices and condition values typed. */
-const tokenConfig = computed(() => compactTokenConfig(token.value))
-
-const payload = computed<PricePayload & { mode: PriceMode }>(() => {
-  if (mode.value === 'visual') return { mode: 'visual', config: tokenConfig.value, expression: tokenExpr(tokenConfig.value) }
-  return { mode: 'expression', config: {}, expression: sourceText.value }
-})
+const payload = computed(() => pricePayload(draft.value))
 
 const localIssues = computed<string[]>(() => checkPrice(payload.value).map(x => t(x.key, x.params || {})))
 
@@ -131,30 +115,10 @@ const previewText = computed(() => payload.value.expression)
 const previewSource = computed(() => (localIssues.value.length || validation.value?.errors.length ? null : { ...payload.value }))
 
 /** A single request tier prices no tokens: the estimator then asks for nothing. */
-const perRequestOnly = computed(() => mode.value === 'visual' && token.value.tiers.length === 1 && token.value.tiers[0].unit === 'request')
-
-/**
- * Switches the mode (design 2026-11-22 §0): into the expression mode with the
- * expression the visual config generates; back into the visual mode only with
- * an expression the generator wrote (visualOf), or a blank one, which keeps
- * the visual config there was.
- */
-function switchMode(next: PriceMode) {
-  if (next === mode.value) return
-  if (next === 'expression') {
-    sourceText.value = payload.value.expression
-    mode.value = next
-    return
-  }
-  if (!sourceText.value.trim()) {
-    mode.value = next
-    return
-  }
-  const cfg = visualOf(sourceText.value)
-  if (!cfg) return toast(t('prices.edit.notVisual'), 'error')
-  token.value = editableTokenConfig(cfg)
-  mode.value = next
-}
+const perRequestOnly = computed(() => {
+  const { mode, config } = draft.value
+  return mode === 'visual' && config.tiers.length === 1 && config.tiers[0].unit === 'request'
+})
 
 // ------------------------------------------------------------------ validation
 
@@ -283,25 +247,11 @@ watch(priceId, load, { immediate: true })
             </div>
           </div>
 
-          <div>
-            <SSegmented
-              :model-value="mode"
-              block
-              :options="modeOptions"
-              :disabled="readonly"
-              :aria-label="t('prices.billingMode')"
-              data-testid="price-mode"
-              @update:model-value="switchMode($event as PriceMode)"
-            />
-            <p class="mt-1.5 text-xs text-fg-muted">{{ t(`prices.edit.modeHint.${mode}`) }}</p>
-          </div>
-
-          <TokenPriceEditor v-if="mode === 'visual'" v-model="token" :disabled="readonly" />
-          <PriceExprEditor
-            v-else
-            ref="exprEditor"
-            v-model="sourceText"
+          <PriceDefEditor
+            ref="defEditor"
+            v-model="draft"
             :readonly="readonly"
+            :issues="localIssues"
             :error="errors.expression"
             :validation="validation"
             @guide="guideOpen = true"
@@ -312,9 +262,9 @@ watch(priceId, load, { immediate: true })
             :validation="validation"
             :error="validationError"
             :validating="validating"
-            :mode="mode"
+            :mode="draft.mode"
             :per-request="perRequestOnly"
-            @locate="(l, c) => exprEditor?.focusAt(l, c)"
+            @locate="(l, c) => defEditor?.focusAt(l, c)"
           />
 
           <PriceEstimator :source="previewSource" :per-request="perRequestOnly" />
@@ -323,23 +273,23 @@ watch(priceId, load, { immediate: true })
             <div class="border-b border-line px-3 py-2 text-sm font-medium text-fg sm:px-4">{{ t('prices.edit.preview') }}</div>
             <div class="border-b border-line px-3 py-2 sm:px-4">
               <div class="text-xs text-fg-muted">{{ t('prices.edit.previewMode') }}</div>
-              <div class="text-sm text-fg">{{ t(`prices.mode.${mode}`) }}</div>
+              <div class="text-sm text-fg">{{ t(`prices.mode.${draft.mode}`) }}</div>
             </div>
             <div class="px-3 py-2 sm:px-4">
               <div class="flex items-center gap-2 text-xs text-fg-muted">
                 {{ t('prices.edit.previewExpr') }}
                 <SLink
-                  v-if="mode !== 'expression' && !readonly && !localIssues.length"
+                  v-if="draft.mode !== 'expression' && !readonly && !localIssues.length"
                   as="button"
                   class="ml-auto text-xs"
                   data-testid="price-to-expression"
-                  @click="switchMode('expression')"
+                  @click="defEditor?.switchMode('expression')"
                   >{{ t('prices.toExpression') }}</SLink
                 >
               </div>
-              <pre v-if="mode !== 'expression'" class="mt-1 whitespace-pre-wrap break-all font-mono text-xs leading-5 text-fg" data-testid="price-generated">{{ previewText || '—' }}</pre>
+              <pre v-if="draft.mode !== 'expression'" class="mt-1 whitespace-pre-wrap break-all font-mono text-xs leading-5 text-fg" data-testid="price-generated">{{ previewText || '—' }}</pre>
               <div v-else class="mt-1 text-xs text-fg-muted">{{ t('prices.edit.previewSame') }}</div>
-              <template v-if="serverExpr && mode !== 'expression'">
+              <template v-if="serverExpr && draft.mode !== 'expression'">
                 <div class="mt-2 text-xs text-fg-muted">{{ t('prices.serverGenerated') }}</div>
                 <pre class="mt-1 whitespace-pre-wrap break-all font-mono text-xs leading-5 text-fg">{{ serverExpr }}</pre>
               </template>
@@ -361,7 +311,7 @@ watch(priceId, load, { immediate: true })
     </div>
 
     <SDrawer v-model:open="guideOpen" :title="t('prices.edit.guide')" width="lg">
-      <ExprGuide :readonly="readonly" @insert="(s, c) => exprEditor?.insert(s, c)" @replace="guideReplace" />
+      <ExprGuide :readonly="readonly" @insert="(s, c) => defEditor?.insert(s, c)" @replace="guideReplace" />
     </SDrawer>
     <ExprHistoryModal v-model:open="historyOpen" :hash="price?.expr_hash" />
   </div>

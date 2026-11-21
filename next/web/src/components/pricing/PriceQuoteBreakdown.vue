@@ -14,7 +14,7 @@ import { priceLabel, ruleText } from './ruleText'
 // stands out, the ones under it are greyed), and list cost × rate = paid.
 // A segment without the grant still gets its price: what it would pay. A
 // rule the server skips is marked as the model price table marks it. A
-// tiered price shows its first tier while the cost follows the tier of the
+// tiered price shows its rest (the last tier) while the cost follows the tier of the
 // usage, which a note under the list price says. A model without a list
 // price (it has no global price) cannot be billed: the sum gives way to
 // saying so.

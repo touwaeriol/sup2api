@@ -54,7 +54,7 @@ export default {
       segment: '专属价（{segment}）',
       group: '分组内定价（{group}）',
       global: '全局价',
-      tiered: '分段计价：单价显示的是第一档，费用按这次用量所在的档计算。'
+      tiered: '分段计价：单价显示的是兜底档位（最后一档），费用按这次用量所在的档计算。'
     },
     rate: {
       title: '倍率',

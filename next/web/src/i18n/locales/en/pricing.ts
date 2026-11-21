@@ -34,7 +34,7 @@ export default {
     expression: 'Billed by expression',
     expressionTimes: 'Billed by expression {rate}',
     none: 'No price',
-    tiered: '{n} tiers, first shown'
+    tiered: '{n} tiers, fallback shown'
   },
   source: {
     segment: 'Own price',

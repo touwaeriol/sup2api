@@ -81,8 +81,3 @@ func whenByLen(tiers []map[string]json.RawMessage) {
 		delete(t, "max_len")
 	}
 }
-
-// lenAtMost is the tier condition len <= n.
-func lenAtMost(n any) map[string]any {
-	return map[string]any{"var": "len", "op": "<=", "value": n}
-}

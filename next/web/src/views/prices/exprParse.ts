@@ -8,9 +8,9 @@ import {
   COND_VARS,
   NUMERIC_OPS,
   PRICE_KEYS,
-  checkTokenConfig,
+  checkVisualConfig,
   isTimeVar,
-  tokenExpr,
+  visualExpr,
   type CmpOp,
   type CondLeaf,
   type CondOp,
@@ -21,7 +21,7 @@ import {
   type RuleCond,
   type TierCond,
   type VisualConfig,
-  type TokenTier
+  type VisualTier
 } from './priceExpr'
 
 // ------------------------------------------------------------------ tokens
@@ -44,8 +44,9 @@ const TOKEN = /\s*(?:("(?:[^"\\]|\\.)*")|(\d+(?:\.\d+)?)|([A-Za-z_][A-Za-z0-9_]*
 
 function tokenize(src: string): Token[] {
   const out: Token[] = []
+  const end = src.trimEnd().length
   TOKEN.lastIndex = 0
-  while (TOKEN.lastIndex < src.trimEnd().length) {
+  while (TOKEN.lastIndex < end) {
     const m = TOKEN.exec(src)
     if (!m) throw new SyntaxError(`at ${TOKEN.lastIndex}`)
     const [, str, n, id, op] = m
@@ -136,7 +137,7 @@ const callOf = (n: Node, f: string, arity: number) => (n.t === 'call' && n.f ===
 /** The operands of a chain of one operator written without parentheses (`a && b && c`). */
 const operands = (n: Node, op: string): Node[] => (n.t === 'bin' && n.op === op ? [...operands(n.l, op), ...operands(n.r, op)] : [n])
 
-function tierOf(n: Node): TokenTier {
+function tierOf(n: Node): VisualTier {
   const [name, body] = callOf(n, 'tier', 2)
   if (body.t === 'call') return { name: strOf(name), unit: 'request', price: numOf(callOf(body, 'flat', 1)[0]) }
   const prices = operands(body, '+').map(term => {
@@ -165,7 +166,7 @@ function whenOf(n: Node): TierCond {
 }
 
 /** The tiers of `c1 ? T1 : (c2 ? T2 : T3)`, in order. */
-function chainOf(n: Node): TokenTier[] {
+function chainOf(n: Node): VisualTier[] {
   const e = unparen(n)
   return e.t === 'tern' ? [{ ...tierOf(e.a), when: whenOf(e.c) }, ...chainOf(e.b)] : [tierOf(e)]
 }
@@ -245,6 +246,9 @@ function configOf(root: Node): VisualConfig {
 /** An expression without the whitespace outside its string literals. */
 const squash = (src: string) => src.replace(/("(?:[^"\\]|\\.)*")|\s+/g, (_, str: string | undefined) => str ?? '')
 
+/** Whether two expressions are the same but for whitespace outside string literals. */
+export const sameExpr = (a: string, b: string) => squash(a) === squash(b)
+
 /**
  * The visual config an expression was generated from: parsed, read back and
  * generated again, it must be the same expression but for whitespace outside
@@ -258,5 +262,5 @@ export function visualOf(src: string): VisualConfig | null {
   } catch {
     return null
   }
-  return squash(tokenExpr(cfg)) === squash(src) && !checkTokenConfig(cfg).length ? cfg : null
+  return sameExpr(visualExpr(cfg), src) && !checkVisualConfig(cfg).length ? cfg : null
 }

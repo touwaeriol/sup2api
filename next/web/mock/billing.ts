@@ -5,7 +5,7 @@ import { fail, nextId, noContent, now, on, paginate, type MockRequest } from './
 import { accounts } from './accounts'
 import { caller, inScope, ownerScope } from './core'
 import type { UsageView } from '../src/views/usage/view'
-import { PRICE_KEYS, checkTokenConfig, priceExpression, requestTier, singleTier, asTokenConfig, type TierCond } from '../src/views/prices/priceExpr'
+import { PRICE_KEYS, checkVisualConfig, priceExpression, requestTier, singleTier, asVisualConfig, type TierCond } from '../src/views/prices/priceExpr'
 
 type PriceMode = 'visual' | 'expression'
 type LText = { en: string; zh: string }
@@ -400,7 +400,7 @@ const prices: MockPrice[] = [
 /** Why the server's generator refuses a config: the console's own checks; null when it takes it. */
 function configIssue(mode: PriceMode, config: Record<string, any>): string | null {
   if (mode === 'expression') return null
-  const issues = checkTokenConfig(asTokenConfig(config))
+  const issues = checkVisualConfig(asVisualConfig(config))
   return issues.length ? `config: ${issues.map((x) => x.key.replace('prices.local.', '')).join(', ')}` : null
 }
 

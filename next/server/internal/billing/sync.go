@@ -532,6 +532,11 @@ func (t tokenSet) empty() bool {
 	return t.p == nil && t.c == nil && t.cr == nil && t.cc == nil && t.cc1h == nil
 }
 
+// lenAtMost is the tier condition len <= n.
+func lenAtMost(n any) map[string]any {
+	return map[string]any{"var": "len", "op": "<=", "value": n}
+}
+
 // levelsPrice builds a visual price, with context tiers when there are
 // several levels: levels[0] applies up to sizes[0] tokens of prompt
 // ("when": len <= sizes[0]), levels[i] above sizes[i-1], the last one to the

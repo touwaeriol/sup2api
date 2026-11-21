@@ -90,7 +90,7 @@ const columns = computed<TableColumn[]>(() => [
   { key: 'actions', label: t('common.actions'), align: 'right', width: '150px' }
 ])
 
-/** "$3 / request", "input $3 · output $15 · cache read $0.3": the cells of a price (its first tier); '' for an expression. */
+/** "$3 / request", "input $3 · output $15 · cache read $0.3": the cells of a price (its rest, the last tier); '' for an expression. */
 function cellsText(p: Price): string {
   const { perRequest, tokens } = priceCells(p)
   if (perRequest !== undefined) return t('prices.summary.perRequest', { price: usd(perRequest) })

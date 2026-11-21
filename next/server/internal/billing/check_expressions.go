@@ -62,10 +62,13 @@ func CheckStoredExpressions(ctx context.Context, db *gorm.DB) ([]ExpressionProbl
 	// expression; before 0121 configs are in the old shape, before 0122 they
 	// are read as that migration converts them.
 	generated := func(table, ref, mode string, config json.RawMessage, hash string) {
+		if legacy {
+			return
+		}
 		if cfg, ok := visualFromLegacy(mode, config); ok {
 			mode, config = expr.ModeVisual, cfg
 		}
-		if legacy || mode != expr.ModeVisual {
+		if mode != expr.ModeVisual {
 			return
 		}
 		if gen, err := expr.Generate(mode, config); err != nil {

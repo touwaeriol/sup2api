@@ -6,13 +6,13 @@
 
 > “模型计费仅仅保留：可视化/表达式。可视化会被转换为表达式去参与计费，可视化切换到表达式时会转换为表达式填充，表达式切换到可视化，如果不是可视化转换到表达式的转换，不能识别就不识别。删除按次，按 token 改成可视化。表达式使用说明：说明后端用的表达式库。”
 
-- `mode` 只剩 `visual`、`expression`。`per_token` 改名 `visual`（配置就是下面第 2 节的形状）；`per_request` 删除：原按次价 `{price, rules?}` 迁移成可视化的单档 `{"tiers":[{"name":"base","unit":"request","price":P}],"rules":<原规则>}`，生成的表达式与原按次逐字节相同（`tier("base", flat(P))` 加同样的规则），`expr_hash` 不变。`price_rules` 的 `mode` CHECK 约束（0095 里是 `per_token`、`per_request`）一并改成只允许 `visual`。
+- `mode` 只剩 `visual`、`expression`。`per_token` 改名 `visual`（配置就是下面第 2 节的形状）；`per_request` 删除：原按次价 `{price, rules?}` 迁移成可视化的单档 `{"tiers":[{"name":"base","unit":"request","price":P}],"rules":<原规则>}`，生成的表达式与原按次逐字节相同（`tier("base", flat(P))` 加同样的规则），`expr_hash` 不变。`price_rules` 的 `mode` CHECK 约束（0095 里是 `per_token`、`per_request`）一并改成只允许 `visual`、`expression`（见下面自定义价一条）。
 - 计费只认表达式：可视化保存时由生成器把配置转成表达式，存 `expression` + `expr_hash`，计费按表达式算（与现在相同）。
 - 界面只有两个方式标签：可视化、表达式。
   - 可视化 → 表达式：用当前配置生成的表达式填进表达式编辑器。
-  - 表达式 → 可视化：把表达式解析回配置，再用生成器重新生成，与原文（忽略首尾空白）逐字节相同才算识别成功，填进可视化；否则提示“这条表达式不是可视化生成的，无法转成可视化”，留在表达式模式。只在前端做（TS 解析器 + 生成器回环校验）。
+  - 表达式 → 可视化：把表达式解析回配置，再用生成器重新生成，与原文（忽略字符串字面量外的空白）逐字节相同才算识别成功，填进可视化；否则提示“这条表达式不是可视化生成的，无法转成可视化”，留在表达式模式。只在前端做（TS 解析器 + 生成器回环校验）。切到表达式后没改过就切回时，直接还原切走时的可视化配置（规则名、勾选未填的价格、卡片展开都保留），不解析；切到表达式前可视化有本地错误时拦下。
 - 自定义价（所有者 2026-11-22 改定：“自定义基础价格、自定义倍率是两个概念”；“用户组中只能自定义倍率，账号分组中自定义倍率、自定义模型基础价格都可以”）：分组的自定义价和全局价一样写，可视化任意形状或表达式，与全局价形状无关，没有失效判定；`price_rules.mode` 允许 `visual`、`expression`。用户组的模型价格规则由分组定价讨论串另行删除（迁移 0123）。
-- 表达式使用说明（抽屉）开头写明：后端用 Go 的表达式库 expr-lang/expr（v1.17.8，https://expr-lang.org ），语法、运算符与内置函数以它为准；本平台在它之上加了 `tier()`、`flat()`、`param()`、`header()`、`u()`、时间函数和变量 `p`、`c`…，并禁用了 `__rule`、`$env`。
+- 表达式使用说明（抽屉）开头写明：后端用 Go 的表达式库 expr-lang/expr（v1.17.8，https://expr-lang.org ），语法与运算符以它为准，内置函数只开放 `max`、`min`、`abs`、`ceil`、`floor`；本平台在它之上加了 `tier()`、`flat()`、`param()`、`header()`、`has()`、`u()`、时间函数和变量 `len`、`p`、`c`、`cr`、`cc`、`cc1h`、`img`、`img_o`、`ai`、`ao`，并禁用了 `__rule`、`$env`。
 - 价格同步、导出 `/key/prices`、e2e 夹具、mock、预设里的 `per_token`、`per_request` 全部改为 `visual`；旧上游（还有 `per_token`/`per_request`/五个单价）导入时转换。
 - 迁移 0122 同时做：`per_token` → `visual`（并把 `max_len` 换成 `when`），`per_request` → `visual` 单个按次档，`price_rules` 同样处理并改 CHECK。
 

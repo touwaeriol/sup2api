@@ -49,7 +49,7 @@ describe('price quote breakdown', () => {
     expect(w.get('[data-testid="price-quote-price"] [data-level="global"]').text()).toContain('表达式计费')
   })
 
-  it('notes under a tiered list price that the first tier is shown', () => {
+  it('notes under a tiered list price that the fallback tier is shown', () => {
     const tiered = { mode: 'visual' as const, config: { tiers: [{ name: 'a', when: { var: 'len', op: '<=', value: 200000 }, p: 3, c: 15 }, { name: 'b', p: 6, c: 22.5 }], rules: [] }, expression: '' }
     expect(render({ base: tiered, list_price: tiered }).get('[data-testid="price-quote-price-note"]').text()).toContain('分段计价')
     expect(render().find('[data-testid="price-quote-price-note"]').exists()).toBe(false)

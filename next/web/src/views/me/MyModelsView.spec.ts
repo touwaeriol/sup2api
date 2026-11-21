@@ -56,8 +56,8 @@ describe('models and prices', () => {
     expect(row(w, 'tokens').text()).toContain('$3')
     expect(row(w, 'tokens').text()).toContain('$3.75')
     expect(row(w, 'one-shot').text()).toContain('$0.2 / 次')
-    expect(row(w, 'tiered').text()).toContain('显示第一档')
-    expect(row(w, 'tiered').text()).toContain('$1')
+    expect(row(w, 'tiered').text()).toContain('显示兜底档位')
+    expect(row(w, 'tiered').text()).toContain('$4')
     expect(row(w, 'custom').text()).toContain('按规则计费')
   })
 

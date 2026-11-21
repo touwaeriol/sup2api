@@ -54,7 +54,7 @@ export default {
       segment: 'Own price ({segment})',
       group: 'Group pricing ({group})',
       global: 'Global price',
-      tiered: 'Tiered price: the first tier is shown; the cost is that of the tier this usage falls in.'
+      tiered: 'Tiered price: the fallback tier (the last) is shown; the cost is that of the tier this usage falls in.'
     },
     rate: {
       title: 'Rate',

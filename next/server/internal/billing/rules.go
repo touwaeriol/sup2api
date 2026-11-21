@@ -190,24 +190,20 @@ func checkCustom(ctx context.Context, in Rule, facts map[string]bool) (*storedRu
 	if in.Mode != expr.ModeVisual && in.Mode != expr.ModeExpression {
 		return nil, errors.New(core.Text(ctx, "a custom price is visual or expression", "自定义价的计费方式须是可视化或表达式"))
 	}
-	config := in.Config
-	if len(config) == 0 || string(config) == "null" {
-		config = json.RawMessage("{}")
-	}
-	raw, err := expressionFor(in.Mode, config, in.Expression)
+	config := priceConfig(in.Config)
+	rep, err := validatePrice(in.Mode, config, in.Expression, expr.ValidateOptions{Facts: facts})
 	if err != nil {
 		return nil, fmt.Errorf(core.Text(ctx, "invalid custom price: %v", "自定义价无效：%v"), err)
 	}
-	if rep := expr.Validate(raw, expr.ValidateOptions{Facts: facts}); !rep.OK {
+	if !rep.OK {
 		e := rep.Errors[0]
 		return nil, fmt.Errorf(core.Text(ctx, "invalid custom price: %s", "自定义价无效：%s"), core.Text(ctx, e.Message["en"], e.Message["zh"]))
 	}
-	src := strings.TrimSpace(raw)
-	prog, err := expr.CompileCached(src)
+	prog, err := expr.CompileCached(rep.Expression)
 	if err != nil {
 		return nil, err
 	}
-	r := &storedRule{Rule: Rule{Kind: in.Kind, Mode: in.Mode, Config: config, Expression: src},
+	r := &storedRule{Rule: Rule{Kind: in.Kind, Mode: in.Mode, Config: config, Expression: rep.Expression},
 		exprHash: prog.Hash(), exprVersion: prog.Version(), traits: traitsOf(in.Mode, prog)}
 	return r, nil
 }

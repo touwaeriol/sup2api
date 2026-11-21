@@ -10,17 +10,17 @@ import { useI18n } from 'vue-i18n'
 import { SHint } from '@sub2api/ui'
 import type { PriceSyncDef } from '@/api/types'
 import { priceExtras, usd } from '@/components/pricing/pricingFormat'
-import { asTokenConfig, isSet, num, pricedKeys, type PriceKey, type TokenTier } from './priceExpr'
+import { asVisualConfig, isSet, num, pricedKeys, type PriceKey, type VisualTier } from './priceExpr'
 import { condText } from './tierCond'
 
 const props = defineProps<{ def: PriceSyncDef; compare?: PriceSyncDef | null; muted?: boolean }>()
 const { t } = useI18n()
 
-type View = { kind: 'tiers'; tiers: TokenTier[] } | { kind: 'custom'; expression: string }
+type View = { kind: 'tiers'; tiers: VisualTier[] } | { kind: 'custom'; expression: string }
 
 function viewOf(d: PriceSyncDef): View {
   if (d.mode === 'expression') return { kind: 'custom', expression: d.expression }
-  return { kind: 'tiers', tiers: asTokenConfig(d.config).tiers }
+  return { kind: 'tiers', tiers: asVisualConfig(d.config).tiers }
 }
 
 const view = computed(() => viewOf(props.def))
@@ -28,10 +28,10 @@ const other = computed(() => (props.compare ? viewOf(props.compare) : null))
 const extras = computed(() => priceExtras(t, props.def))
 
 /** A price of a tier: `price` per request, a token price per 1M; null when unset. */
-const valueOf = (tier: TokenTier | undefined, k: PriceKey | 'price'): number | null => (isSet(tier?.[k]) ? num(tier?.[k]) : null)
+const valueOf = (tier: VisualTier | undefined, k: PriceKey | 'price'): number | null => (isSet(tier?.[k]) ? num(tier?.[k]) : null)
 
 /** The prices a tier shows: its per-request price, or p, c and those set. */
-const shownKeys = (tier: TokenTier): Array<PriceKey | 'price'> => (tier.unit === 'request' ? ['price'] : pricedKeys(tier))
+const shownKeys = (tier: VisualTier): Array<PriceKey | 'price'> => (tier.unit === 'request' ? ['price'] : pricedKeys(tier))
 
 /** True when the value differs from the same position of the compared definition. */
 function differs(i: number, k: PriceKey | 'price'): boolean {

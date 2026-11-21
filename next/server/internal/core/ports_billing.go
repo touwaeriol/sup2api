@@ -15,8 +15,9 @@ import (
 
 // PriceRule is the list price of a model for one caller: the global
 // model_prices row (ARCHITECTURE 7.3), or what a price rule of the caller's
-// group or segment makes of it (CONTRACTS §97). ID and VideoOnly are always
-// the global price's.
+// group or segment makes of it (CONTRACTS §97). ID is always the global
+// price's; VideoOnly and PerRequest are the effective expression's: a custom
+// price's own, the global price's under a multiplier.
 type PriceRule struct {
 	ID          int64
 	Model       string // complete model id (exact match, no wildcards)
@@ -28,7 +29,7 @@ type PriceRule struct {
 	// PerRequest marks a visual price that reads no token count (its tiers
 	// are priced by the request): it is due once the upstream completed the
 	// work, with or without usage, and is admitted as billing type
-	// per_request (BillingType). Always the global price's, like VideoOnly.
+	// per_request (BillingType). The effective expression's, like VideoOnly.
 	PerRequest bool `json:",omitempty"`
 	// Source is where the list price comes from (PriceSource*); "" on prices
 	// stored before price rules existed, which were all global.

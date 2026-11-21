@@ -9,7 +9,7 @@ import ExprGuide from './ExprGuide.vue'
 import PriceEditView from './PriceEditView.vue'
 import PriceExprEditor from './PriceExprEditor.vue'
 import PriceModelList from './PriceModelList.vue'
-import TokenPriceEditor from './TokenPriceEditor.vue'
+import VisualPriceEditor from './VisualPriceEditor.vue'
 import { priceListState } from './priceListState'
 import { singleTier } from './priceExpr'
 
@@ -25,8 +25,14 @@ const price = (id: number, note = ''): Price => ({
   source: 'manual',
   enabled: true
 })
+/** Price 3 has a named rule, which no expression holds. */
+const withRule = (): Price => ({
+  ...price(3),
+  config: { ...singleTier({ p: 3, c: 15 }), rules: [{ name: 'hd', multiplier: 2, conds: [{ source: 'param', key: 'quality', op: 'eq', value: 'hd' }] }] },
+  expression: '(tier("base", p*3 + c*15)) * (param("quality") == "hd" ? 2 : 1)'
+})
 const api = vi.hoisted(() => ({
-  get: vi.fn(async (path: string) => price(Number(path.split('/').pop()))),
+  get: vi.fn(async (path: string) => (path.endsWith('/3') ? withRule() : price(Number(path.split('/').pop())))),
   post: vi.fn(async () => ({ ok: true, errors: [], warnings: [] })),
   patch: vi.fn(async (path: string, body: Partial<Price>) => ({ ...price(Number(path.split('/').pop())), ...body }))
 }))
@@ -147,14 +153,26 @@ describe('the price editor', () => {
     expr.vm.$emit('update:modelValue', 'tier("base",\n  p*4 + c*15)')
     await flushPromises()
     await to('visual')
-    expect(w.getComponent(TokenPriceEditor).props('modelValue').tiers).toEqual([{ name: 'base', unit: 'token', p: 4, c: 15 }])
+    expect(w.getComponent(VisualPriceEditor).props('modelValue').tiers).toEqual([{ name: 'base', unit: 'token', p: 4, c: 15 }])
     // An expression written by hand stays an expression.
     await to('expression')
     w.getComponent(PriceExprEditor).vm.$emit('update:modelValue', 'tier("base", 4*p + c*15)')
     await flushPromises()
     await to('visual')
-    expect(w.findComponent(TokenPriceEditor).exists()).toBe(false)
+    expect(w.findComponent(VisualPriceEditor).exists()).toBe(false)
     expect(w.getComponent(PriceExprEditor).props('modelValue')).toBe('tier("base", 4*p + c*15)')
     expect(toasts).toEqual(['这条表达式不是可视化生成的，无法转成可视化'])
+  })
+
+  it('takes a price that went to the expression mode and back unchanged as unchanged', async () => {
+    const { w, router } = await render('/prices/3')
+    const mode = w.getComponent(SSegmented)
+    for (const m of ['expression', 'visual']) {
+      mode.vm.$emit('update:modelValue', m)
+      await flushPromises()
+    }
+    expect(w.getComponent(VisualPriceEditor).props('modelValue').rules[0].name).toBe('hd')
+    await router.push('/prices')
+    expect([router.currentRoute.value.path, leave.asked]).toEqual(['/prices', [false]])
   })
 })

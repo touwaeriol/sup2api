@@ -7,7 +7,7 @@ import { fail, noContent, on, paginate, type MockHandler, type MockRequest, type
 import { caller, hasPerm } from './core'
 import { groupPlatforms } from './accounts'
 import { configPrice, globalPrice, money, priceCost, pricedModels, validate, type PriceDef } from './billing'
-import { compactTokenConfig } from '../src/views/prices/priceExpr'
+import { compactVisualConfig } from '../src/views/prices/priceExpr'
 import { groupModels, groups, invalid, match, myGroups, offeredRules, userOut, users, type MockGroup, type MockUser } from './resources'
 import {
   accessOf,
@@ -269,7 +269,7 @@ function storedRule(rule: any): PriceRule | null {
   if (rule == null) return null
   if (rule.kind === 'multiplier') return { kind: 'multiplier', multiplier: String(rule.multiplier) }
   if (rule.mode === 'expression') return { kind: 'custom', mode: 'expression', config: {}, expression: String(rule.expression).trim() }
-  const config = compactTokenConfig(rule.config)
+  const config = compactVisualConfig(rule.config)
   return { kind: 'custom', mode: 'visual', config, expression: configPrice('visual', config).expression }
 }
 

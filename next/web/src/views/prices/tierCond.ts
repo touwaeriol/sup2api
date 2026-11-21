@@ -1,10 +1,11 @@
 // A tier condition as the console edits and reads it (TierCondTree, the tier
 // cards and the price summaries): a new comparison, a variable change that
-// keeps the zone right, whether a change stays within the depth limit, and
-// the condition in words ("len > 200,000 且 小时(Asia/Shanghai) ≥ 22").
+// keeps the zone and the value right, whether a change stays within the
+// depth limit, the zones to pick from, and the condition in words
+// ("len > 200,000 且 小时(Asia/Shanghai) ≥ 22").
 import { currentLocale } from '@/i18n'
 import { formatNumber } from '@/utils/format'
-import { condChildren, condDepth, condKind, isCompound, isSet, isTimeVar, num, MAX_COND_DEPTH, type CmpOp, type CondLeaf, type CondVar, type TierCond } from './priceExpr'
+import { condChildren, condKind, isCompound, isSet, isTimeVar, num, timeValueFits, MAX_COND_DEPTH, type CmpOp, type CondLeaf, type CondVar, type TierCond } from './priceExpr'
 
 type Translate = (key: string, params?: Record<string, unknown>) => string
 
@@ -14,15 +15,21 @@ export const DEFAULT_TZ = 'Asia/Shanghai'
 /** A comparison to fill in: on the input length, its value blank. */
 export const newLeaf = (): CondLeaf => ({ var: 'len', op: '>', value: null })
 
-/** Changes what a comparison reads: a time keeps its zone (DEFAULT_TZ for the first), any other has none. */
+/**
+ * Changes what a comparison reads: a time keeps its zone (DEFAULT_TZ for the
+ * first), any other has none. The value stays between token amounts (len, p,
+ * c) and between times while the new time takes it; any other change blanks it.
+ */
 export function setLeafVar(leaf: CondLeaf, v: CondVar) {
+  const sameKind = isTimeVar(v) === isTimeVar(leaf.var)
   leaf.var = v
   if (isTimeVar(v)) leaf.tz ??= DEFAULT_TZ
   else delete leaf.tz
+  if (!sameKind || (isTimeVar(v) && !timeValueFits(v, leaf.value))) leaf.value = null
 }
 
-/** Whether a node at `level` (the root is 1) may grow `extra` levels deeper and stay within MAX_COND_DEPTH. */
-export const roomFor = (n: TierCond, level: number, extra: number) => level - 1 + condDepth(n) + extra <= MAX_COND_DEPTH
+/** Whether a condition of `depth` levels (1 for a comparison) fits at `level` (the root is 1) within MAX_COND_DEPTH. */
+export const roomFor = (level: number, depth: number) => level - 1 + depth <= MAX_COND_DEPTH
 
 const intlLocale = () => (currentLocale() === 'zh' ? 'zh-CN' : 'en-US')
 
@@ -55,14 +62,22 @@ export function condText(t: Translate, n: TierCond): string {
 
 const COMMON_TZ = ['UTC', 'Asia/Shanghai', 'Asia/Hong_Kong', 'Asia/Tokyo', 'Asia/Singapore', 'Europe/London', 'Europe/Berlin', 'America/New_York', 'America/Los_Angeles']
 const ALL_TZ = Intl.supportedValuesOf('timeZone').filter(z => !COMMON_TZ.includes(z))
+const LISTED_TZ = new Set([...COMMON_TZ, ...ALL_TZ])
 const zoneOption = (value: string) => ({ value, label: value })
+type ZoneGroup = { value: null; label: string; options: ReturnType<typeof zoneOption>[] }
+/** The two zone groups by language, built once each. */
+const zoneGroups = new Map<string, ZoneGroup[]>()
 
 /** The zones a time comparison picks from, in two groups: the common ones and every other IANA zone; a zone neither lists heads them. */
 export function tzOptions(t: Translate, current: string | undefined) {
-  const listed = !current || COMMON_TZ.includes(current) || ALL_TZ.includes(current)
-  return [
-    ...(listed ? [] : [zoneOption(current)]),
-    { value: null, label: t('prices.cond.commonTz'), options: COMMON_TZ.map(zoneOption) },
-    { value: null, label: t('prices.cond.allTz'), options: ALL_TZ.map(zoneOption) }
-  ]
+  const locale = currentLocale()
+  let groups = zoneGroups.get(locale)
+  if (!groups) {
+    groups = [
+      { value: null, label: t('prices.cond.commonTz'), options: COMMON_TZ.map(zoneOption) },
+      { value: null, label: t('prices.cond.allTz'), options: ALL_TZ.map(zoneOption) }
+    ]
+    zoneGroups.set(locale, groups)
+  }
+  return !current || LISTED_TZ.has(current) ? groups : [zoneOption(current), ...groups]
 }

@@ -2,9 +2,9 @@
 // (the visual editor, and the expression editor as generated source),
 // request rule groups (the rule editor's "common rules") and expression
 // examples (the guide, and the expression editor's "advanced" templates).
-import type { MarkupRule, PriceKey, TierCond, TokenTier } from './priceExpr'
+import type { MarkupRule, PriceKey, TierCond, VisualTier } from './priceExpr'
 
-function tokenTier(name: string, when: TierCond | null, prices: Partial<Record<PriceKey, number | null>>): TokenTier {
+function tokenTier(name: string, when: TierCond | null, prices: Partial<Record<PriceKey, number | null>>): VisualTier {
   return when ? { name, when, unit: 'token', ...prices } : { name, unit: 'token', ...prices }
 }
 
@@ -12,7 +12,7 @@ function tokenTier(name: string, when: TierCond | null, prices: Partial<Record<P
 const upTo = (n: number): TierCond => ({ var: 'len', op: '<=', value: n })
 
 /** Tier templates by key (named by prices.presets.item.<key>); each makes fresh tiers. */
-export const PRESETS: Record<string, () => TokenTier[]> = {
+export const PRESETS: Record<string, () => VisualTier[]> = {
   single: () => [tokenTier('base', null, { p: 3, c: 15 })],
   claude: () => [tokenTier('base', null, { p: 3, c: 15, cr: 0.3, cc: 3.75, cc1h: 6 })],
   claudeLong: () => [

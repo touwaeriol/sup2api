@@ -65,8 +65,8 @@ describe('the price a view shows', () => {
     expect(priceCells(times(perToken, '1.5')).tokens).toMatchObject({ p: 4.5, c: 22.5, cr: 0.45, cc: null })
     expect(priceCells(times(perRequest, '1.5'))).toEqual({ perRequest: 0.03, tiers: 1 })
   })
-  it('works it into the first tier of a tiered price, and the price of a request tier', () => {
-    expect(priceCells(times(tiered, '2'))).toMatchObject({ tokens: { p: 6, c: 30 }, tiers: 2 })
+  it('works it into the rest of a tiered price (its last tier), and the price of a request tier', () => {
+    expect(priceCells(times(tiered, '2'))).toMatchObject({ tokens: { p: 12, c: 45 }, tiers: 2 })
     expect(priceCells(times(tiered, '2')).multiplier).toBeUndefined()
     expect(priceCells(times(perCall, '2'))).toEqual({ perRequest: 0.1, tiers: 1 })
   })
@@ -113,7 +113,7 @@ describe('what the price views write of a price', () => {
     expect([null, undefined].map(v => usd(v))).toEqual(['—', '—'])
     expect(priceText(0.00001, 3)).toBe('$0.00003')
   })
-  it('says what a price has beyond its first tier: its tiers when several, the rules of a visual price', () => {
+  it('says what a price has beyond its rest: its tiers when several, the rules of a visual price', () => {
     const t = (key: string, params?: Record<string, unknown>) => `${key.replace('prices.summary.', '')}:${params?.n}`
     const rule = { name: '', multiplier: 2, conds: [{ source: 'header', key: 'x', op: 'exists' }] }
     expect(priceExtras(t, { mode: 'visual', config: singleTier({ p: 1, c: 2 }) })).toBe('')

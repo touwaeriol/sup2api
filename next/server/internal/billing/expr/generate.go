@@ -441,6 +441,9 @@ func comparison(field string, c *TierCond) (string, *ConfigError) {
 		return "", cfgErr(field+".value", "required")
 	}
 	v := float64(*c.Value)
+	if v == 0 {
+		v = 0 // -0 is written 0, as the console's generator writes it
+	}
 	if math.IsNaN(v) || math.IsInf(v, 0) { // "NaN" and "Inf" parse as numeric strings
 		return "", cfgErr(field+".value", "%s", condKeyErrs["value"])
 	}

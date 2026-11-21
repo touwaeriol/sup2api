@@ -90,7 +90,6 @@ export default {
     add: '添加档位',
     matchOnly: '始终匹配（只有这一个档位）',
     matchRest: '兜底：前面的档位都没命中时',
-    noCond: '未设条件',
     moveUp: '上移',
     moveDown: '下移',
     unnamed: '未命名',
@@ -241,7 +240,7 @@ export default {
   },
   // Texts of the expression guide (ExprGuide) may mark `code` and **bold** (GuideText).
   guide: {
-    engine: '后端用 Go 的表达式库 **expr-lang/expr**（v1.17.8），语法、运算符和内置函数以它为准。本平台在它之上加了 `tier()`、`flat()`、`param()`、`header()`、`u()`、时间函数 `hour()` `minute()` `weekday()` `month()` `day()` 和变量 `p`、`c`、`cr`、`cc`、`cc1h`、`img`、`img_o`、`len`，并禁用了 `__rule`、`$env`。',
+    engine: '后端用 Go 的表达式库 **expr-lang/expr**（v1.17.8），语法和运算符以它为准，内置函数只开放 `max()` `min()` `abs()` `ceil()` `floor()`。本平台在它之上加了 `tier()`、`flat()`、`param()`、`header()`、`u()`、`has()`、时间函数 `hour()` `minute()` `weekday()` `month()` `day()` 和变量 `p`、`c`、`cr`、`cc`、`cc1h`、`img`、`img_o`、`ai`、`ao`、`len`，并禁用了 `__rule`、`$env`。',
     engineLink: 'expr-lang 文档',
     nav: {
       basics: '基本写法',

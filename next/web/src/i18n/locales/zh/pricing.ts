@@ -34,7 +34,7 @@ export default {
     expression: '表达式计费',
     expressionTimes: '表达式计费 {rate}',
     none: '未定价',
-    tiered: '{n} 档，显示第一档'
+    tiered: '{n} 档，显示兜底档位'
   },
   source: {
     segment: '专属价',

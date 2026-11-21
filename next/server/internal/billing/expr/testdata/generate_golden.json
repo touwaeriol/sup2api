@@ -867,5 +867,22 @@
       "rules": []
     },
     "expression": "len > 200000 && hour(\"UTC\") >= 22 && p < 1.5 ? tier(\"long\", p*6 + c*22.5) : (len > 0.25 ? tier(\"mid\", p*4 + c*20) : tier(\"rest\", p*3 + c*15))"
+  },
+  {
+    "name": "conditions: negative zero compares as 0",
+    "mode": "visual",
+    "config": {
+      "tiers": [
+        {
+          "name": "a",
+          "when": {"or": [{"var": "len", "op": ">", "value": -0}, {"var": "hour", "op": ">=", "value": "-0"}]},
+          "unit": "request",
+          "price": 1
+        },
+        {"name": "b", "unit": "request", "price": 2}
+      ],
+      "rules": []
+    },
+    "expression": "len > 0 || hour(\"UTC\") >= 0 ? tier(\"a\", flat(1)) : tier(\"b\", flat(2))"
   }
 ]

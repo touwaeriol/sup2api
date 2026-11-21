@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import golden from '../../../../server/internal/billing/expr/testdata/generate_golden.json'
 import {
-  checkTokenConfig,
-  compactTokenConfig,
+  checkVisualConfig,
+  compactVisualConfig,
   condExpr,
   checkPrice,
   requestTier,
@@ -14,7 +14,7 @@ import {
   simpleTier,
   singleTier,
   summarize,
-  tokenExpr,
+  visualExpr,
   type CondOp,
   type CondValue,
   type FieldCond,
@@ -23,18 +23,18 @@ import {
   type RuleCond,
   type TierCond,
   type VisualConfig,
-  type TokenTier
+  type VisualTier
 } from './priceExpr'
 
 const upTo = (value: number): TierCond => ({ var: 'len', op: '<=', value })
 /** A token tier up to a length, or the rest (null). */
-const tier = (name: string, max: number | null, prices: Partial<TokenTier> = {}): TokenTier => ({
+const tier = (name: string, max: number | null, prices: Partial<VisualTier> = {}): VisualTier => ({
   name,
   ...(max === null ? {} : { when: upTo(max) }),
   unit: 'token',
   ...prices
 })
-const cfg = (tiers: TokenTier[], rules: MarkupRule[] = []): VisualConfig => ({ tiers, rules })
+const cfg = (tiers: VisualTier[], rules: MarkupRule[] = []): VisualConfig => ({ tiers, rules })
 const rule = (multiplier: number, ...conds: RuleCond[]): MarkupRule => ({ name: '', multiplier, conds })
 
 const STANDARD = tier('standard', 200000, { p: 3, c: 15, cr: 0.3, cc: 3.75, cc1h: 6 })
@@ -56,24 +56,24 @@ describe('the generated expression, as the server generates it', () => {
     expect(priceExpression('expression', {})).toBe('')
   })
   it('always prices p and c, and a cache price only when it is set (0 included)', () => {
-    expect(tokenExpr(cfg([tier('base', null, { cr: 0, cc: null })]))).toBe('tier("base", p*0 + c*0 + cr*0)')
+    expect(visualExpr(cfg([tier('base', null, { cr: 0, cc: null })]))).toBe('tier("base", p*0 + c*0 + cr*0)')
   })
   it('chains tiers in the order listed as the length tiers did, nesting from the third', () => {
-    expect(tokenExpr(cfg([STANDARD, LONG]))).toBe(TWO)
+    expect(visualExpr(cfg([STANDARD, LONG]))).toBe(TWO)
     const three = cfg([tier('short', 32000, { p: 1, c: 6 }), tier('mid', 128000, { p: 2, c: 12 }), tier('long', null, { p: 3, c: 15 })])
-    expect(tokenExpr(three)).toBe(
+    expect(visualExpr(three)).toBe(
       'len <= 32000 ? tier("short", p*1 + c*6) : (len <= 128000 ? tier("mid", p*2 + c*12) : tier("long", p*3 + c*15))'
     )
     const four = cfg([tier('a', 1000), tier('b', 2000), tier('c', 3000), tier('d', null)])
-    expect(tokenExpr(four)).toBe(
+    expect(visualExpr(four)).toBe(
       'len <= 1000 ? tier("a", p*0 + c*0) : (len <= 2000 ? tier("b", p*0 + c*0) : (len <= 3000 ? tier("c", p*0 + c*0) : tier("d", p*0 + c*0)))'
     )
   })
   it('prices a request tier flat and image tokens apart', () => {
-    expect(tokenExpr(cfg([tier('base', 1000, { p: 1, c: 2 }), { name: 'bulk', unit: 'request', price: 0.05 }]))).toBe(
+    expect(visualExpr(cfg([tier('base', 1000, { p: 1, c: 2 }), { name: 'bulk', unit: 'request', price: 0.05 }]))).toBe(
       'len <= 1000 ? tier("base", p*1 + c*2) : tier("bulk", flat(0.05))'
     )
-    expect(tokenExpr(cfg([tier('base', null, { p: 5, c: 40, cr: 1.25, img: 10, img_o: 40 })]))).toBe(
+    expect(visualExpr(cfg([tier('base', null, { p: 5, c: 40, cr: 1.25, img: 10, img_o: 40 })]))).toBe(
       'tier("base", p*5 + c*40 + cr*1.25 + img*10 + img_o*40)'
     )
   })
@@ -87,12 +87,12 @@ describe('the generated expression, as the server generates it', () => {
       ),
       rule(0.8, { source: 'time', tz: 'Asia/Shanghai', from_hour: 0, to_hour: 8 })
     ]
-    expect(tokenExpr(cfg([STANDARD, LONG], rules))).toBe(
+    expect(visualExpr(cfg([STANDARD, LONG], rules))).toBe(
       `(${TWO}) * (has(header("anthropic-beta"), "fast-mode") ? 2 : 1)` +
         ' * (param("service_tier") == "priority" && u("service_tier") == "priority" ? 2 : 1)' +
         ' * (hour("Asia/Shanghai") >= 0 && hour("Asia/Shanghai") < 8 ? 0.8 : 1)'
     )
-    expect(tokenExpr(cfg([tier('base', null, { p: 1, c: 2 })], [rule(1.5, { source: 'header', key: 'x', op: 'exists' })]))).toBe(
+    expect(visualExpr(cfg([tier('base', null, { p: 1, c: 2 })], [rule(1.5, { source: 'header', key: 'x', op: 'exists' })]))).toBe(
       '(tier("base", p*1 + c*2)) * (header("x") != "" ? 1.5 : 1)'
     )
   })
@@ -133,7 +133,7 @@ describe('a tier condition', () => {
       { name: 'long', when: leaf('len', '>', 200000), unit: 'token', p: 6, c: 22.5 },
       { name: 'base', unit: 'token', p: 3, c: 15 }
     ])
-    expect(tokenExpr(c)).toBe(
+    expect(visualExpr(c)).toBe(
       'len > 200000 && (hour("Asia/Shanghai") >= 22 || hour("Asia/Shanghai") < 6) ? tier("long_night", p*4 + c*18) : (len > 200000 ? tier("long", p*6 + c*22.5) : tier("base", p*3 + c*15))'
     )
   })
@@ -208,7 +208,7 @@ describe('the config the editor saves', () => {
         }
       ]
     )
-    expect(compactTokenConfig(edited)).toEqual({
+    expect(compactVisualConfig(edited)).toEqual({
       tiers: [
         { name: 'a', when: { and: [upTo(1000), { var: 'p', op: '>', value: 5 }, { not: { var: 'hour', op: '<', value: 6, tz: 'UTC' } }] }, unit: 'token', p: 1, c: 0 },
         { name: 'b', unit: 'request', price: 0.1 }
@@ -242,7 +242,7 @@ describe('the config the editor saves', () => {
 })
 
 describe('local checks', () => {
-  const keys = (c: VisualConfig) => checkTokenConfig(c).map(x => x.key.replace('prices.local.', ''))
+  const keys = (c: VisualConfig) => checkVisualConfig(c).map(x => x.key.replace('prices.local.', ''))
   it('pass a whole config', () => {
     expect(keys(cfg([STANDARD, LONG], [rule(2, { source: 'param', key: 'n', op: 'gt', value: 3 })]))).toEqual([])
   })
@@ -329,11 +329,11 @@ describe('local checks', () => {
 })
 
 describe('the summary of a price', () => {
-  it('is its first tier (the first to match), with the number of tiers and rules', () => {
-    expect(summarize('visual', requestTier(0.02))).toEqual({ kind: 'visual', first: { name: 'base', unit: 'request', price: 0.02 }, tiers: 1, rules: 0 })
+  it('is its rest (the last tier, which applies when none before it matches), with the number of tiers and rules', () => {
+    expect(summarize('visual', requestTier(0.02))).toEqual({ kind: 'visual', rest: { name: 'base', unit: 'request', price: 0.02 }, tiers: 1, rules: 0 })
     expect(summarize('visual', cfg([STANDARD, LONG], [rule(2, { source: 'header', key: 'x', op: 'exists' })]))).toEqual({
       kind: 'visual',
-      first: STANDARD,
+      rest: LONG,
       tiers: 2,
       rules: 1
     })

@@ -3,19 +3,19 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { SButton, SCheckbox, SDropdown, SIcon, SInput, SSelect } from '@sub2api/ui'
 import { usd } from '@/components/pricing/pricingFormat'
-import { MAX_COND_DEPTH, MAX_COND_LEAVES, num, pricedKeys, type PriceKey, type TokenTier } from './priceExpr'
-import { condText, newLeaf } from './tierCond'
-import { priceOn, setPriceOn } from './tokenPrice'
+import { MAX_COND_DEPTH, MAX_COND_LEAVES, num, pricedKeys, type PriceKey, type VisualTier } from './priceExpr'
+import { condText } from './tierCond'
+import { priceOn, setPriceOn } from './visualPrice'
 import TierCondTree from './TierCondTree.vue'
 
 // One tier of a visual price as a numbered card: the header reads back
 // when it matches (its condition in words) and what it charges; the body
 // edits the condition (TierCondTree; the rest has none), the name, the unit
 // and the prices. A price is on when its box is ticked (the key is in the
-// tier, tokenPrice.priceOn); a ticked price left blank is not charged. The
+// tier, visualPrice.priceOn); a ticked price left blank is not charged. The
 // menu moves the tier up or down (`canUp` / `canDown`) and removes it.
 // Read-only, it still opens and closes.
-const tier = defineModel<TokenTier>({ required: true })
+const tier = defineModel<VisualTier>({ required: true })
 const props = defineProps<{ index: number; count: number; canUp?: boolean; canDown?: boolean; disabled?: boolean }>()
 const open = defineModel<boolean>('open', { default: false })
 const emit = defineEmits<{ (e: 'remove'): void; (e: 'move', by: number): void }>()
@@ -27,7 +27,7 @@ const only = computed(() => props.count === 1)
 const condition = computed(() => {
   if (only.value) return t('prices.tier.matchOnly')
   if (isRest.value) return t('prices.tier.matchRest')
-  return tier.value.when ? condText(t, tier.value.when) : t('prices.tier.noCond')
+  return condText(t, tier.value.when!)
 })
 
 const summary = computed(() => {
@@ -98,8 +98,7 @@ const mediaOpen = ref(MEDIA_FIELDS.some(f => on(f.key)))
           {{ only ? t('prices.tier.onlyHint') : t('prices.tier.restHint') }}
         </div>
         <template v-else>
-          <TierCondTree v-if="tier.when" v-model="tier.when" :disabled="disabled" />
-          <SButton v-else-if="!disabled" size="sm" variant="ghost" icon="plus" @click="tier.when = newLeaf()">{{ t('prices.cond.addCond') }}</SButton>
+          <TierCondTree v-model="tier.when!" :disabled="disabled" />
           <p class="mt-1.5 text-xs text-fg-subtle">{{ t('prices.cond.hint', { depth: MAX_COND_DEPTH, leaves: MAX_COND_LEAVES }) }}</p>
         </template>
       </div>

@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { ref, toRaw } from 'vue'
+import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { SButton } from '@sub2api/ui'
-import type { VisualConfig, TokenTier } from './priceExpr'
+import { useObjectKeys } from '@/composables/useObjectKeys'
+import type { VisualConfig } from './priceExpr'
 import { PRESETS, TIER_PRESET_GROUPS } from './presets'
-import { addTier, canMoveTier, moveTier, removeTier } from './tokenPrice'
+import { addTier, canMoveTier, moveTier, removeTier } from './visualPrice'
 import PricePresets from './PricePresets.vue'
 import PriceRuleGroups from './PriceRuleGroups.vue'
 import PriceTierCard from './PriceTierCard.vue'
@@ -19,15 +20,8 @@ defineProps<{ disabled?: boolean }>()
 const { t } = useI18n()
 
 // A card is keyed by its tier object, so a card's own state (its media
-// prices open) stays with its tier when one before it goes. The key is held
-// here, never in the config that is saved.
-const keys = new WeakMap<TokenTier, number>()
-let lastKey = 0
-function keyOf(tier: TokenTier): number {
-  const raw = toRaw(tier)
-  if (!keys.has(raw)) keys.set(raw, ++lastKey)
-  return keys.get(raw)!
-}
+// prices open) stays with its tier when one before it goes.
+const keyOf = useObjectKeys()
 
 const open = ref<number | null>(0)
 function applyPreset(key: string) {
@@ -52,13 +46,13 @@ function remove(i: number) {
 </script>
 
 <template>
-  <div class="min-w-0 space-y-4" data-testid="token-price-editor">
+  <div class="min-w-0 space-y-4" data-testid="visual-price-editor">
     <PricePresets :groups="TIER_PRESET_GROUPS" :disabled="disabled" @pick="applyPreset" />
 
     <div class="space-y-4 rounded-xl border border-line p-3 sm:p-4">
       <div>
         <p class="mb-2 text-xs text-fg-muted">{{ t('prices.tier.listHint') }}</p>
-        <ul class="space-y-2.5" data-testid="token-tier-list">
+        <ul class="space-y-2.5" data-testid="visual-tier-list">
           <PriceTierCard
             v-for="(tier, i) in model.tiers"
             :key="keyOf(tier)"
@@ -74,7 +68,7 @@ function remove(i: number) {
             @remove="remove(i)"
           />
         </ul>
-        <SButton v-if="!disabled" size="sm" variant="ghost" icon="plus" class="mt-2" data-testid="token-add-tier" @click="add">{{ t('prices.tier.add') }}</SButton>
+        <SButton v-if="!disabled" size="sm" variant="ghost" icon="plus" class="mt-2" data-testid="visual-add-tier" @click="add">{{ t('prices.tier.add') }}</SButton>
       </div>
       <div class="border-t border-line pt-4">
         <PriceRuleGroups v-model="model.rules" :disabled="disabled" />

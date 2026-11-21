@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { enableAutoUnmount, mount, type DOMWrapper, type VueWrapper } from '@vue/test-utils'
 import { nextTick, ref } from 'vue'
-import { SDropdown, SSelect } from '@sub2api/ui'
+import { SAlert, SBadge, SDropdown, SSelect } from '@sub2api/ui'
 import { i18n } from '@/i18n'
 import TierCondTree from './TierCondTree.vue'
 import { MAX_COND_LEAVES, whenExpr, type CondLeaf, type TierCond } from './priceExpr'
@@ -37,21 +37,21 @@ const LABELS = { var: '比较的量', tz: '时区', op: '比较符', value: '值
 const select = (w: VueWrapper, which: keyof typeof LABELS) => w.findAllComponents(SSelect).find(s => s.props('ariaLabel') === LABELS[which])!
 
 describe('a tier condition tree', () => {
-  it('edits a comparison in one row: what it reads, a time zone for a time, the operator and the value', async () => {
+  it('edits a comparison in one row: what it reads, a time zone for a time, the operator and the value (blank again when what it reads changes kind)', async () => {
     const { w, model } = render(len('>', 200000))
     expect(w.findAll('[data-testid="cond-leaf"]')).toHaveLength(1)
     expect(select(w, 'tz')).toBeUndefined()
     expect((select(w, 'var').props('options') as Array<{ value: string }>).map(o => o.value)).toEqual(['len', 'p', 'c', 'hour', 'minute', 'weekday', 'month', 'day'])
     select(w, 'var').vm.$emit('update:modelValue', 'hour')
     await nextTick()
-    expect(model.value).toEqual({ var: 'hour', op: '>', value: 200000, tz: 'Asia/Shanghai' })
+    expect(model.value).toEqual({ var: 'hour', op: '>', value: null, tz: 'Asia/Shanghai' })
     expect(select(w, 'tz').props('modelValue')).toBe('Asia/Shanghai')
     select(w, 'op').vm.$emit('update:modelValue', '>=')
     await w.get('input[aria-label="值"]').setValue('22')
     expect(whenExpr(model.value)).toBe('hour("Asia/Shanghai") >= 22')
     select(w, 'var').vm.$emit('update:modelValue', 'p')
     await nextTick()
-    expect('tz' in model.value).toBe(false)
+    expect(model.value).toEqual({ var: 'p', op: '>=', value: null })
   })
 
   it('picks a weekday by its name, from Sunday', async () => {
@@ -110,6 +110,12 @@ describe('a tier condition tree', () => {
     const full = render({ and: Array.from({ length: MAX_COND_LEAVES }, (_, i) => len('>', i)) })
     expect(keysOf(full.w.findAllComponents(SDropdown)[0])).toEqual(['-addCond', '-addGroup'])
     expect(keysOf(menuOf(full.w.findAll('[data-testid="cond-leaf"]')[0]))).toEqual(['-addCond', '-addGroup', 'negate', 'remove'])
+  })
+
+  it('marks a negation, and shows a node of no known shape as it is', () => {
+    const { w } = render({ and: [{ not: len('<', 5) }, { xor: [] } as unknown as TierCond] })
+    expect(w.get('[data-testid="cond-not"]').findComponent(SBadge).props()).toMatchObject({ tone: 'danger', size: 'xs' })
+    expect(w.getComponent(SAlert).text()).toBe('无法识别的条件： {"xor":[]}')
   })
 
   it('read-only, shows the tree and takes no edits', () => {

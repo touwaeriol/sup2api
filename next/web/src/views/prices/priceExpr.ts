@@ -1,6 +1,7 @@
 // Price configs and the expressions generated from them (design
-// 2026-11-21 §2). The generator matches the server's (billing/expr) byte for
-// byte: the console shows what the server will store. Pure TS without imports.
+// 2026-11-21 §2; tier conditions, design 2026-11-22 §3). The generator
+// matches the server's (billing/expr) byte for byte: the console shows what
+// the server will store. Pure TS without imports.
 
 /** The billing modes, in the order the console lists them. */
 export const PRICE_MODES = ['visual', 'expression'] as const
@@ -45,7 +46,7 @@ export interface CondLeaf {
 export type TierCond = CondLeaf | { and: TierCond[] } | { or: TierCond[] } | { not: TierCond }
 
 /** One tier of a visual price. A key left out (or null) is not priced; a request tier reads `price` only. */
-export interface TokenTier extends Partial<Record<PriceKey, number | null>> {
+export interface VisualTier extends Partial<Record<PriceKey, number | null>> {
   name: string
   /** When the tier applies; every tier but the last has one, the last (the rest) has none. */
   when?: TierCond
@@ -87,7 +88,7 @@ export interface MarkupRule {
 
 /** The config of a visual price: tiers matched in order (token or request priced) and surcharge rules. */
 export interface VisualConfig {
-  tiers: TokenTier[]
+  tiers: VisualTier[]
   rules: MarkupRule[]
 }
 
@@ -151,12 +152,19 @@ const goTrim = (s: string) =>
   )
 
 /** A visual config of whatever came from the server, with both lists. */
-export function asTokenConfig(raw: unknown): VisualConfig {
+export function asVisualConfig(raw: unknown): VisualConfig {
   const c = (raw ?? {}) as Partial<VisualConfig>
   return { tiers: Array.isArray(c.tiers) ? c.tiers : [], rules: Array.isArray(c.rules) ? c.rules : [] }
 }
 
 export const isTimeVar = (v: unknown): v is TimeCondVar => TIME_COND_VARS.includes(v as TimeCondVar)
+
+/** Whether a time compares with a value: a whole number within its range (TIME_RANGES); a blank value is none. */
+export function timeValueFits(v: TimeCondVar, value: unknown): boolean {
+  const [lo, hi] = TIME_RANGES[v]
+  const n = num(value, NaN)
+  return Number.isInteger(n) && n >= lo && n <= hi
+}
 
 export type CondKind = 'leaf' | 'and' | 'or' | 'not'
 const LEAF_KEYS = new Set(['var', 'op', 'value', 'tz'])
@@ -188,7 +196,7 @@ export function pricedKeys(t: Partial<Record<PriceKey, unknown>>): PriceKey[] {
   return PRICE_KEYS.filter(k => k === 'p' || k === 'c' || isSet(t[k]))
 }
 
-export function tokenPricesOf(t: TokenTier | undefined): TokenPrices {
+export function tokenPricesOf(t: VisualTier | undefined): TokenPrices {
   return Object.fromEntries(TOKEN_VARS.map(k => [k, isSet(t?.[k]) ? num(t?.[k]) : null])) as TokenPrices
 }
 
@@ -206,8 +214,8 @@ export function requestTier(price: number | null): VisualConfig {
 }
 
 /** The tier of a config with one tier (by tokens or by the request) and no rules; null for any other. */
-export function simpleTier(config: unknown): TokenTier | null {
-  const c = asTokenConfig(config)
+export function simpleTier(config: unknown): VisualTier | null {
+  const c = asVisualConfig(config)
   return c.tiers.length === 1 && !c.rules.length ? c.tiers[0] : null
 }
 
@@ -231,9 +239,9 @@ function compactWhen(n: TierCond): TierCond {
   return isTimeVar(v) && tz !== undefined ? { ...leaf, tz } : leaf
 }
 
-function compactTier(t: TokenTier): TokenTier {
-  const head: TokenTier = t.when ? { name: t.name, when: compactWhen(t.when) } : { name: t.name }
-  // A blank per-request price stays blank: checkTokenConfig and the server refuse it.
+function compactTier(t: VisualTier): VisualTier {
+  const head: VisualTier = t.when ? { name: t.name, when: compactWhen(t.when) } : { name: t.name }
+  // A blank per-request price stays blank: checkVisualConfig and the server refuse it.
   if (t.unit === 'request') return { ...head, unit: 'request', price: orNull(t.price) }
   return { ...head, unit: 'token', ...Object.fromEntries(pricedKeys(t).map(k => [k, num(t[k])])) }
 }
@@ -267,7 +275,7 @@ function compactCond(c: RuleCond): RuleCond {
 }
 
 /** The config the editor sends: unset prices and editor leftovers dropped, condition values typed (typedValue). */
-export function compactTokenConfig(cfg: VisualConfig): VisualConfig {
+export function compactVisualConfig(cfg: VisualConfig): VisualConfig {
   return { tiers: cfg.tiers.map(compactTier), rules: compactRules(cfg.rules) }
 }
 
@@ -275,12 +283,11 @@ export function compactRules(rules: readonly MarkupRule[]): MarkupRule[] {
   return rules.map(r => ({ name: r.name, multiplier: orNull(r.multiplier), conds: r.conds.map(compactCond) }))
 }
 
-
 // ------------------------------------------------------------------ generation
 
 const tierCall = (name: string, body: string) => `tier(${goQuote(name)}, ${body})`
 
-function tierBody(t: TokenTier): string {
+function tierBody(t: VisualTier): string {
   if (t.unit === 'request') return `flat(${fmt(num(t.price))})`
   return pricedKeys(t)
     .map(k => `${k}*${fmt(num(t[k]))}`)
@@ -309,7 +316,7 @@ export function condExpr(c: RuleCond): string {
   const read = `${READ[c.source]}(${goQuote(header ? goTrim(c.key).toLowerCase() : goTrim(c.key))})`
   if (c.op === 'exists') return `${read} != ${ABSENT[c.source]}`
   if (c.op === 'contains') return `has(${read}, ${goQuote(String(c.value ?? ''))})`
-  // A header is text and compares with a string (checkTokenConfig refuses any other); an absent parameter compares with a number as 0.
+  // A header is text and compares with a string (checkVisualConfig refuses any other); an absent parameter compares with a number as 0.
   if (header) return `${read} ${CMP[c.op]} ${goQuote(String(c.value ?? ''))}`
   const lhs = c.source === 'param' && NUMERIC_OPS.includes(c.op) ? `(${read} ?? 0)` : read
   return `${lhs} ${CMP[c.op]} ${literal(c.value)}`
@@ -343,7 +350,7 @@ const withRules = (base: string, rules: readonly MarkupRule[]) => (rules.length 
  * `a ? A : (b ? B : C)`, and with rules `(base) * (cond ? m : 1) * …`. ''
  * without tiers.
  */
-export function tokenExpr(cfg: VisualConfig): string {
+export function visualExpr(cfg: VisualConfig): string {
   const [last, ...rest] = [...cfg.tiers].reverse()
   if (!last) return ''
   const base = rest.reduce(
@@ -355,7 +362,7 @@ export function tokenExpr(cfg: VisualConfig): string {
 
 /** The generated expression of a visual price; '' for an expression price, which has none. */
 export function priceExpression(mode: PriceMode, config: unknown): string {
-  return mode === 'visual' ? tokenExpr(asTokenConfig(config)) : ''
+  return mode === 'visual' ? visualExpr(asVisualConfig(config)) : ''
 }
 
 // ------------------------------------------------------------------ local checks
@@ -431,8 +438,7 @@ function leafIssue(n: CondLeaf, name: string | number): LocalIssue | null {
   const tz = n.tz ?? ''
   if (typeof tz !== 'string' || !validTz(tz || 'UTC')) return { key: 'prices.local.condTz', params: { name } }
   const [lo, hi] = TIME_RANGES[n.var]
-  const v = num(n.value, NaN)
-  return isSet(n.value) && Number.isInteger(v) && v >= lo && v <= hi ? null : { key: 'prices.local.condTime', params: { name, lo, hi } }
+  return timeValueFits(n.var, n.value) ? null : { key: 'prices.local.condTime', params: { name, lo, hi } }
 }
 
 /** The first reason a condition fails the server's generator, of every node depth first; null when it passes. */
@@ -446,7 +452,7 @@ function whenIssue(n: TierCond, name: string | number): LocalIssue | null {
 }
 
 /** Why a tier's condition is refused: every tier but the last has one, the last has none; within the limits. */
-function tierWhenIssue(t: TokenTier, last: boolean, name: string | number): LocalIssue | null {
+function tierWhenIssue(t: VisualTier, last: boolean, name: string | number): LocalIssue | null {
   if (last) return t.when ? { key: 'prices.local.tierRest' } : null
   if (!t.when) return { key: 'prices.local.tierWhen', params: { name } }
   const issue = whenIssue(t.when, name)
@@ -456,11 +462,11 @@ function tierWhenIssue(t: TokenTier, last: boolean, name: string | number): Loca
 }
 
 /**
- * Problems of a visual config as saved (compactTokenConfig) that block
+ * Problems of a visual config as saved (compactVisualConfig) that block
  * saving (i18n keys under prices.local). They mirror the server's generator,
  * and refuse more: a value a rule condition compares is never blank.
  */
-export function checkTokenConfig(cfg: VisualConfig): LocalIssue[] {
+export function checkVisualConfig(cfg: VisualConfig): LocalIssue[] {
   const out: LocalIssue[] = []
   if (!cfg.tiers.length) out.push({ key: 'prices.local.noTier' })
   if (cfg.tiers.length > MAX_TIERS) out.push({ key: 'prices.local.tooManyTiers', params: { n: MAX_TIERS } })
@@ -482,18 +488,21 @@ export function checkTokenConfig(cfg: VisualConfig): LocalIssue[] {
 /** Problems of a price as it is sent (its config as saved) that block saving. */
 export function checkPrice(p: { mode: PriceMode; config: unknown; expression: string }): LocalIssue[] {
   if (p.mode === 'expression') return p.expression.trim() ? [] : [{ key: 'prices.local.emptyExpr' }]
-  return checkTokenConfig(asTokenConfig(p.config))
+  return checkVisualConfig(asVisualConfig(p.config))
 }
 
 // ------------------------------------------------------------------ list summary
 
 export type PriceSummary =
-  /** The first tier (the first to match), the number of tiers and of rules. */
-  | { kind: 'visual'; first: TokenTier; tiers: number; rules: number }
+  /**
+   * The rest (the last tier, which applies when no tier before it matches:
+   * the price a list shows), the number of tiers and of rules.
+   */
+  | { kind: 'visual'; rest: VisualTier; tiers: number; rules: number }
   | { kind: 'expression' }
 
 export function summarize(mode: PriceMode, config: Record<string, any> | null | undefined): PriceSummary {
-  const cfg = asTokenConfig(config)
-  const [first] = cfg.tiers
-  return mode === 'visual' && first ? { kind: 'visual', first, tiers: cfg.tiers.length, rules: cfg.rules.length } : { kind: 'expression' }
+  const cfg = asVisualConfig(config)
+  const rest = cfg.tiers.at(-1)
+  return mode === 'visual' && rest ? { kind: 'visual', rest, tiers: cfg.tiers.length, rules: cfg.rules.length } : { kind: 'expression' }
 }

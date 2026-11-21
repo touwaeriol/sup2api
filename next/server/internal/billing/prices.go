@@ -180,15 +180,12 @@ type checked struct {
 // details {errors, warnings, confirmation_required}.
 // q reads the settings: the caller's transaction, or the pool.
 func (s *Service) check(ctx context.Context, q *gorm.DB, mode string, config json.RawMessage, expression string, confirm bool) (*checked, error) {
-	if len(config) == 0 || string(config) == "null" {
-		config = json.RawMessage("{}")
-	}
+	config = priceConfig(config)
 	if !json.Valid(config) {
 		return nil, core.InvalidFields(core.FieldError{Field: "config", Code: "invalid", Message: "must be a JSON object"})
 	}
-	// Validate reads the text as typed, so issue positions match the editor;
-	// the price keeps it trimmed.
-	raw, err := expressionFor(mode, config, expression)
+	st, _ := s.settingsIn(ctx, q)
+	rep, err := validatePrice(mode, config, expression, expr.ValidateOptions{Facts: s.factsFor(), BigCostUSD: st.BigCostWarningUSD})
 	if err != nil {
 		if ce, ok := err.(*expr.ConfigError); ok {
 			return nil, core.ErrInvalidArgument.WithMessage(ce.Error()).WithDetails(map[string]any{
@@ -198,9 +195,7 @@ func (s *Service) check(ctx context.Context, q *gorm.DB, mode string, config jso
 		}
 		return nil, core.InvalidFields(core.FieldError{Field: "mode", Code: "invalid", Message: err.Error()})
 	}
-	st, _ := s.settingsIn(ctx, q)
-	rep := expr.Validate(raw, expr.ValidateOptions{Facts: s.factsFor(), BigCostUSD: st.BigCostWarningUSD})
-	src := strings.TrimSpace(raw)
+	src := rep.Expression
 	if !rep.OK {
 		return nil, core.ErrInvalidArgument.WithMessage("invalid price expression").WithDetails(map[string]any{
 			"expression": src, "errors": rep.Errors, "warnings": rep.Warnings,
@@ -427,21 +422,16 @@ func (s *Service) validatePrice(c *gin.Context) {
 	if in.Mode == "" {
 		in.Mode = expr.ModeExpression
 	}
-	if len(in.Config) == 0 || string(in.Config) == "null" {
-		in.Config = json.RawMessage("{}")
-	}
-	// Untrimmed, so issue positions match the editor.
-	src, err := expressionFor(in.Mode, in.Config, in.Expression)
+	st, _ := s.Settings(ctx)
+	rep, err := validatePrice(in.Mode, priceConfig(in.Config), in.Expression, expr.ValidateOptions{Facts: s.factsFor(), BigCostUSD: st.BigCostWarningUSD})
 	if err != nil {
 		issue := expr.Issue{Code: expr.CodeConfig, Message: map[string]string{"en": err.Error(), "zh": err.Error()}}
 		if ce, ok := err.(*expr.ConfigError); ok {
 			issue = ce.Issue
 		}
-		httpapi.OK(c, &expr.Report{Errors: []expr.Issue{issue}, Warnings: []expr.Issue{}})
-		return
+		rep = &expr.Report{Errors: []expr.Issue{issue}, Warnings: []expr.Issue{}}
 	}
-	st, _ := s.Settings(ctx)
-	httpapi.OK(c, expr.Validate(src, expr.ValidateOptions{Facts: s.factsFor(), BigCostUSD: st.BigCostWarningUSD}))
+	httpapi.OK(c, rep)
 }
 
 // PreviewRequest is the body of POST /prices/preview.
@@ -589,6 +579,28 @@ func deref[T any](p *T) T {
 		return zero
 	}
 	return *p
+}
+
+// priceConfig is the config a price is checked with: {} when there is none,
+// as an expression price has none.
+func priceConfig(config json.RawMessage) json.RawMessage {
+	if len(config) == 0 || string(config) == "null" {
+		return json.RawMessage("{}")
+	}
+	return config
+}
+
+// validatePrice is the check a global price and a custom price share: it
+// validates the expression the price stands for (expressionFor) as typed, so
+// issue positions match the editor; the price stores Report.Expression, the
+// text trimmed. The error is a config the generator refuses
+// (*expr.ConfigError) or an unknown mode.
+func validatePrice(mode string, config json.RawMessage, expression string, opts expr.ValidateOptions) (*expr.Report, error) {
+	raw, err := expressionFor(mode, config, expression)
+	if err != nil {
+		return nil, err
+	}
+	return expr.Validate(raw, opts), nil
 }
 
 // expressionFor returns the expression stored for a price: generated from

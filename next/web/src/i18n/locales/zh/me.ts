@@ -124,7 +124,7 @@ export default {
       discount: '已含你的全场折扣'
     },
     perRequest: '{price} / 次',
-    tiered: '{n} 档，显示第一档',
+    tiered: '{n} 档，显示兜底档位',
     custom: '按规则计费',
     customTimes: '按规则计费 {rate}',
     empty: '这个分组没有可用模型',

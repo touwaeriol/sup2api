@@ -76,6 +76,7 @@ func TestPriceOneBaseExpressionErrors(t *testing.T) {
 	requireDec(t, "1", cost.list, "list")
 	requireDec(t, "2", cost.total, "total")
 	requireDec(t, "1", detail.Cost, "billing_detail.cost")
+	require.True(t, detail.BaseFallback)
 }
 
 // The primary usage, a referenced model under another rule, an item at the

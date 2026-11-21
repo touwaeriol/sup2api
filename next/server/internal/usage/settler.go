@@ -848,16 +848,19 @@ func (p *pending) price() *core.PriceRule {
 // billing inputs and results only: the observability markers that used to
 // share it live in usage_logs.anomalies (core.Anomaly*).
 type BillingDetail struct {
-	Additional     []AdditionalBillingDetail `json:"additional,omitempty"`
-	Replacement    []AdditionalBillingDetail `json:"replacement,omitempty"`
-	ExprVersion    int                       `json:"expr_version"`
-	Tier           string                    `json:"tier"`
-	Rules          []expr.RuleResult         `json:"rules"`
-	Breakdown      expr.Breakdown            `json:"breakdown"`
-	Cost           decimal.Decimal           `json:"cost"`                // at the global price, before the rate
-	ListCost       *decimal.Decimal          `json:"list_cost,omitempty"` // at the list price, before the rate; only when a price rule applied
-	RateMultiplier decimal.Decimal           `json:"rate_multiplier"`
-	TotalCost      decimal.Decimal           `json:"total_cost"` // charged
+	Additional  []AdditionalBillingDetail `json:"additional,omitempty"`
+	Replacement []AdditionalBillingDetail `json:"replacement,omitempty"`
+	ExprVersion int                       `json:"expr_version"`
+	Tier        string                    `json:"tier"`
+	Rules       []expr.RuleResult         `json:"rules"`
+	Breakdown   expr.Breakdown            `json:"breakdown"`
+	Cost        decimal.Decimal           `json:"cost"`                // at the global price, before the rate
+	ListCost    *decimal.Decimal          `json:"list_cost,omitempty"` // at the list price, before the rate; only when a price rule applied
+	// BaseFallback marks a Cost that is the list cost: the global price a
+	// custom rule replaced could not be evaluated (priceOne).
+	BaseFallback   bool            `json:"base_fallback,omitempty"`
+	RateMultiplier decimal.Decimal `json:"rate_multiplier"`
+	TotalCost      decimal.Decimal `json:"total_cost"` // charged
 	// The primary usage's own Cost, ListCost and TotalCost, when the record
 	// has additional items and its primary usage is priced (not replaced):
 	// Cost, ListCost and TotalCost above then sum it with every item.
@@ -944,8 +947,8 @@ func priceOne(ctx context.Context, q core.Quoter, p *pending) (amounts, BillingD
 	// evaluated leaves it at the list cost rather than block the charge.
 	if rule.Base != nil {
 		if cost.base, err = baseCost(rule.Base, p); err != nil {
-			slog.Warn("usage: base price not evaluated, base cost = list cost", "request_id", p.RequestID, "err", err)
-			cost.base = cost.list
+			slog.WarnContext(ctx, "usage: base price not evaluated, base cost = list cost", "request_id", p.RequestID, "err", err)
+			cost.base, detail.BaseFallback = cost.list, true
 		}
 	}
 	detail.Cost, detail.ListCost = cost.base, &cost.list
