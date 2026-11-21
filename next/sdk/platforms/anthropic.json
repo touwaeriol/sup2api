@@ -187,7 +187,6 @@
         "typeValue": "compaction",
         "modelPath": "model",
         "usePrimaryModel": true,
-        "requiredBy": ["compaction", "context_management"],
         "semantics": "exclusive",
         "map": {
           "input_tokens": "input_tokens",

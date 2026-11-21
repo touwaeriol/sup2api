@@ -38,7 +38,7 @@ func TestCompactionUsageAndActualServiceFacts(t *testing.T) {
 			request["context_management"] = map[string]any{"edits": []any{map[string]any{"type": "compact_20260112"}}}
 			res := e.messages(request)
 			rec := e.record()
-			if res.status != 200 || rec.BillingError != "" || rec.Tokens != (core.UsageTokens{Input: 23, Output: 1}) || len(rec.Additional) != 1 {
+			if res.status != 200 || rec.Tokens != (core.UsageTokens{Input: 23, Output: 1}) || len(rec.Additional) != 1 {
 				t.Fatalf("compaction was merged, lost or repeated: %+v", rec)
 			}
 			part := rec.Additional[0]

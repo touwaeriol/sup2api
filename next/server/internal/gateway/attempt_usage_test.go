@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"slices"
-	"strings"
 	"testing"
 
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
@@ -61,7 +59,7 @@ func TestFallbackReplacementGatewayUsageAndPriceSnapshots(t *testing.T) {
 			e.plat.base = up.URL
 			response := e.messages(fallbackHTTPBody(stream))
 			rec := e.record()
-			if response.status != 200 || !rec.Success || rec.BillingError != "" || len(rec.Replacement) != 2 || len(rec.Additional) != 0 {
+			if response.status != 200 || !rec.Success || len(rec.Replacement) != 2 || len(rec.Additional) != 0 {
 				t.Fatalf("fallback replacement failed: HTTP%d %+v", response.status, rec)
 			}
 			primary, fallback := rec.Replacement[0], rec.Replacement[1]
@@ -79,6 +77,18 @@ func TestFallbackReplacementGatewayUsageAndPriceSnapshots(t *testing.T) {
 			}
 		})
 	}
+}
+
+// fallbackResponse is a non-streamed fallback from primary to fallback: the
+// primary refused before any output and the fallback answered.
+func fallbackResponse(primary, fallback string) string {
+	raw, _ := json.Marshal(map[string]any{"id": "msg-fallback", "type": "message", "role": "assistant", "model": fallback, "stop_reason": "end_turn",
+		"content": []any{map[string]any{"type": "fallback", "from": map[string]any{"model": primary}, "to": map[string]any{"model": fallback}, "trigger": map[string]any{"type": "refusal", "category": "cyber"}}},
+		"usage": map[string]any{"input_tokens": 20, "output_tokens": 3, "iterations": []any{
+			map[string]any{"type": "message", "model": primary, "input_tokens": 10, "output_tokens": 0},
+			map[string]any{"type": "fallback_message", "model": fallback, "input_tokens": 20, "output_tokens": 3},
+		}}})
+	return string(raw)
 }
 
 func TestAttemptPriceRequiresAttributedFacts(t *testing.T) {
@@ -113,15 +123,15 @@ func TestFallbackGatewayAdmissionAndAttemptContract(t *testing.T) {
 			case "missing-price":
 				delete(e.pricer.rules, advisorModel)
 			case "missing-contract":
-				for i := range e.gen.accountTypes {
-					for j := range e.gen.accountTypes[i].Type.Platforms {
-						e.gen.accountTypes[i].Type.Platforms[j].Usage = map[string]manifest.UsageRules{"anthropic.messages": {Semantics: "exclusive"}}
-					}
-				}
+				meterNothing(t, e, "anthropic", "anthropic.messages")
 			case "empty-contract-gate":
+				// The account's own attempt rule names no RequiredBy.
+				meterNothing(t, e, "anthropic", "anthropic.messages")
 				for i := range e.gen.accountTypes {
 					for j := range e.gen.accountTypes[i].Type.Platforms {
-						e.gen.accountTypes[i].Type.Platforms[j].Usage = map[string]manifest.UsageRules{"anthropic.messages": {Semantics: "exclusive", Attempts: &manifest.AttemptUsageRule{Name: "fallback", Adapter: manifest.AttemptAdapterAnthropicFallback}}}
+						rules := e.gen.accountTypes[i].Type.Platforms[j].Usage["anthropic.messages"]
+						rules.Attempts = &manifest.AttemptUsageRule{Name: "fallback", Adapter: manifest.AttemptAdapterAnthropicFallback}
+						e.gen.accountTypes[i].Type.Platforms[j].Usage["anthropic.messages"] = rules
 					}
 				}
 			case "mapping-collision":
@@ -129,62 +139,57 @@ func TestFallbackGatewayAdmissionAndAttemptContract(t *testing.T) {
 					e.accounts.set(id, func(a *core.Account) { a.ModelMapping = map[string]string{testModel: "same", advisorModel: "same"} })
 				}
 			}
+			primary, fallback := testModel, advisorModel
+			if mode == "mapping-collision" {
+				primary, fallback = "same", "same"
+			}
+			e.up.set("acc-1", &upstreamRule{status: 200, body: fallbackResponse(primary, fallback)})
 			res := e.messages(fallbackHTTPBody(false))
 			rec := e.record()
-			if mode == "empty-contract-gate" {
-				// Host request declarations still activate the meter. Missing
-				// RequiredBy in an override cannot turn an unknown response free.
-				if res.status != 200 || rec.BillingError == "" {
-					t.Fatalf("account suppressed host attempt meter: %d %+v", res.status, rec)
+			if mode == "unauthorized" || mode == "missing-price" {
+				// The group's admission of the referenced model still holds.
+				if res.status == 200 || len(e.up.keys()) > 0 || rec.Success {
+					t.Fatalf("admission bypass: %s HTTP%d %+v", mode, res.status, rec)
 				}
 				return
 			}
-			if res.status == 200 || len(e.up.keys()) > 0 || rec.Success {
-				t.Fatalf("admission bypass: %s HTTP%d %+v", mode, res.status, rec)
+			if res.status != 200 || len(e.up.keys()) != 1 || !rec.Billable || rec.Price == nil || rec.Price.ID != 9 || rec.Tokens != (core.UsageTokens{Input: 20, Output: 3}) {
+				t.Fatalf("%s: HTTP%d upstream %v %+v", mode, res.status, e.up.keys(), rec)
+			}
+			// The account's own attempt rule meters the chain without naming
+			// RequiredBy: the host's declaration activates it. An account that
+			// cannot meter it, or a chain whose attempts the mapping makes one
+			// model, is billed on its top-level usage at the requested model.
+			if want := map[bool]int{true: 2, false: 0}[mode == "empty-contract-gate"]; len(rec.Replacement) != want {
+				t.Fatalf("%s: %d replacement items, want %d: %+v", mode, len(rec.Replacement), want, rec.Replacement)
 			}
 		})
 	}
 }
 
-func TestFallbackUnknownModelBlocksBillingKeepsAPI200(t *testing.T) {
+func TestFallbackUnknownModelBillsRequestedModel(t *testing.T) {
 	e := pricedAdvisorEnv(t)
 	fixture := `{"id":"msg-sticky","type":"message","role":"assistant","model":"undeclared","content":[],"stop_reason":"end_turn","usage":{"input_tokens":20,"output_tokens":3,"iterations":[{"type":"fallback_message","model":"undeclared","input_tokens":20,"output_tokens":3}]}}`
 	e.up.set("acc-1", &upstreamRule{status: 200, body: fixture})
 	res := e.messages(fallbackHTTPBody(false))
 	rec := e.record()
-	if res.status != 200 || !rec.Success || !rec.Billable || !strings.Contains(rec.BillingError, "admitted") || len(rec.Replacement) != 0 {
-		t.Fatalf("unknown model mispriced: %d %+v", res.status, rec)
+	if res.status != 200 || !rec.Success || !rec.Billable || len(rec.Replacement) != 0 || rec.Price == nil || rec.Price.ID != 9 || rec.Tokens != (core.UsageTokens{Input: 20, Output: 3}) {
+		t.Fatalf("unknown model not billed at the requested model: %d %+v", res.status, rec)
 	}
 }
 
-// The usage a request requires is judged once per route for a body, however
-// many candidates the route has, and again once a hook replaces the body.
-func TestMissingRouteUsagePerRouteAndBody(t *testing.T) {
+// What a request asks to be metered apart is not part of scheduling: every
+// account that serves the model and protocol is eligible.
+func TestSchedulingIgnoresRequestedUsage(t *testing.T) {
 	c, refs := schedulingCandidates(t, 3, false, noRules)
-	// An openai account, converted to, whose route records the fallback
-	// attempts the claude route no longer does.
-	refs = append(refs, core.AccountRef{ID: 4, PluginKey: "t", Type: "openai", ProtocolRules: fiftyRules(testModel, messagesProtocol)()})
-	claude, openai := c.route(&refs[0]), c.route(&refs[3])
-	openai.usage.Attempts, claude.usage.Attempts = claude.usage.Attempts, nil
-	unserved := func() (ids []int64) {
-		for i := range refs {
-			if reason, detail, ok := c.ineligibleReason(&refs[i]); !ok {
-				if want := core.SchedUsageUnsupported; reason != want || detail != usageGapAttempts {
-					t.Fatalf("account %d left out for %s:%s, want %s:%s", refs[i].ID, reason, detail, want, usageGapAttempts)
-				}
-				ids = append(ids, refs[i].ID)
-			}
-		}
-		return ids
-	}
-	if got := unserved(); len(got) != 0 || len(c.routeUsage) != 2 {
-		t.Fatalf("without fallbacks: unserved %v, %d verdicts (want none, two)", got, len(c.routeUsage))
-	}
+	c.route(&refs[0]).usage = manifest.UsageRules{Semantics: "exclusive"} // records no attempts
 	b := body(testModel, false)
 	b["fallbacks"] = []any{map[string]any{"model": advisorModel}}
 	raw, _ := json.Marshal(b)
 	c.setBody(raw)
-	if got := unserved(); !slices.Equal(got, []int64{1, 2, 3}) || len(c.routeUsage) != 2 {
-		t.Fatalf("with fallbacks: unserved %v, %d verdicts (want the claude accounts, two verdicts)", got, len(c.routeUsage))
+	for i := range refs {
+		if reason, detail, ok := c.ineligibleReason(&refs[i]); !ok {
+			t.Fatalf("account %d left out for %s:%s", refs[i].ID, reason, detail)
+		}
 	}
 }

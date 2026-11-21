@@ -8,9 +8,6 @@ import (
 )
 
 func quoteRecord(ctx context.Context, q core.Quoter, r *core.UsageRecord) (decimal.Decimal, error) {
-	if r.BillingError != "" {
-		return decimal.Zero, fmt.Errorf("usage billing blocked: %s", r.BillingError)
-	}
 	if len(r.Additional)+len(r.Replacement) > 128 {
 		return decimal.Zero, fmt.Errorf("additional usage exceeds limit")
 	}

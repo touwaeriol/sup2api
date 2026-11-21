@@ -14,13 +14,13 @@ func TestSetUnreportedClearsEverythingBillable(t *testing.T) {
 	r := &UsageRecord{RequestID: "r1", AccountID: &account, Model: "m", StatusCode: 200, LatencyMs: 12,
 		Success: true, ErrorType: "upstream", Tokens: UsageTokens{Input: 3, Output: 4}, Metrics: map[string]any{"k": 1},
 		Additional: []PricedUsage{{Kind: "compaction"}}, Replacement: []PricedUsage{{Kind: "image"}},
-		Billable: true, Price: &PriceRule{ID: 1}, BillingError: "x", Reservation: &UsageReservation{}, ReservationDropped: "too large",
+		Billable: true, Price: &PriceRule{ID: 1}, Reservation: &UsageReservation{}, ReservationDropped: "too large",
 		UsageExtract: UsageExtractPlugin}
 	r.SetUnreported(strings.Repeat("é", 600))
 	want := UsageRecord{RequestID: "r1", AccountID: &account, Model: "m", StatusCode: 200, LatencyMs: 12,
 		ErrorType: UsageErrorUnreported, ErrorMessage: r.ErrorMessage, UsageExtract: UsageExtractUnreported}
 	if r.Success || r.Billable || r.Tokens != (UsageTokens{}) || r.Metrics != nil || r.Additional != nil || r.Replacement != nil ||
-		r.Price != nil || r.BillingError != "" || r.Reservation != nil || r.ReservationDropped != "" ||
+		r.Price != nil || r.Reservation != nil || r.ReservationDropped != "" ||
 		r.ErrorType != want.ErrorType || r.UsageExtract != want.UsageExtract || r.RequestID != "r1" || r.StatusCode != 200 || r.LatencyMs != 12 {
 		t.Fatalf("free record %+v", r)
 	}

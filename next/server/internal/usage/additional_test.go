@@ -32,10 +32,6 @@ func TestAdditionalPriceSnapshotsSurviveRetryAndKeepMainSeparate(t *testing.T) {
 	if amount, _, _, err := priceOf(p); err == nil || !amount.IsZero() {
 		t.Fatal("a main usage without its price was settled", amount, err)
 	}
-	p.Inputs.BillingError = "untrusted model"
-	if _, _, _, err := priceOf(p); err == nil {
-		t.Fatal("blocked usage charged")
-	}
 }
 
 func TestAdditionalPricingFailureIsAtomicAndRecordedPending(t *testing.T) {
@@ -45,11 +41,6 @@ func TestAdditionalPricingFailureIsAtomicAndRecordedPending(t *testing.T) {
 	}
 	if amount, _, _, err := priceOf(fromRecord(rec)); err == nil || !amount.IsZero() {
 		t.Fatal("partial amount returned on pricing failure", amount, err)
-	}
-	rec.Additional = nil
-	rec.BillingError = "missing usage"
-	if initialStatus(rec) != StatusPending {
-		t.Fatal("billing error silently free")
 	}
 }
 

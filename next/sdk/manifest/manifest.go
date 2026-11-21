@@ -686,18 +686,16 @@ type UsageRules struct {
 type AdditionalUsageRule struct {
 	// UsePrimaryModel takes the admitted upstream identity supplied by the
 	// host. A conflicting model reported by the response is rejected.
-	UsePrimaryModel bool `json:"usePrimaryModel,omitempty"`
-	// Non-null request fields requiring this contract through account overrides.
-	RequiredBy []string          `json:"requiredBy,omitempty"`
-	Name       string            `json:"name"`
-	JSONPath   string            `json:"jsonPath,omitempty"`
-	SSEPath    string            `json:"ssePath,omitempty"`
-	SSEEvent   string            `json:"sseEvent,omitempty"`
-	TypePath   string            `json:"typePath"`
-	TypeValue  string            `json:"typeValue"`
-	ModelPath  string            `json:"modelPath"`
-	Map        map[string]string `json:"map"`
-	Semantics  string            `json:"semantics"`
+	UsePrimaryModel bool              `json:"usePrimaryModel,omitempty"`
+	Name            string            `json:"name"`
+	JSONPath        string            `json:"jsonPath,omitempty"`
+	SSEPath         string            `json:"ssePath,omitempty"`
+	SSEEvent        string            `json:"sseEvent,omitempty"`
+	TypePath        string            `json:"typePath"`
+	TypeValue       string            `json:"typeValue"`
+	ModelPath       string            `json:"modelPath"`
+	Map             map[string]string `json:"map"`
+	Semantics       string            `json:"semantics"`
 }
 
 // Values of Endpoint.UsageSource.

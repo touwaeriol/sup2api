@@ -285,7 +285,7 @@ ALTER TABLE accounts ADD COLUMN IF NOT EXISTS model_protocols jsonb NOT NULL DEF
 13. §3.4 说 HTTP、WebSocket、粘性“走同一个入口，不需要分别处理”，改动前并非如此（WebSocket 首轮先用 `servesAllModels` 判断）。实现时把 `servesAllModels` 删掉，`candidateEligible` 改为调用 `ineligibleReason`，现在才是一个入口。这改动了现有代码，对没有协议配置的账号行为不变。
 14. §3.5 的验收：
     - “按 BASELINE.md 的命令跑 `HotGroupSnapshot`”跑不了：这个基准已在 `fcc847b62` 删除，BASELINE.md 现在没有这条路径的基线。实现时按旧基准临时重写测了前后（10 个无配置账号，424 → 399 allocs/op），基准文件没有提交，BASELINE.md 没有改。为了多读两列不增加分配，`readGroupSnap` 把逐行的扫描临时变量改成整次读取共用一份。
-    - “有规则时每候选不分配内存”：`Serves` 本身是 0 次分配（有测试断言）；但 `ineligibleReason` 里原有的用量检查对每个能服务的候选分配 3 次、约 1 KB，所以基准里能服务的情况是 1500 allocs/op（500 个候选），有无规则相同。被协议绑定过滤的账号是 0。（2026-11-21 起用量检查每种账号类型每个请求体只算一次，能服务的情况降到 5 allocs/op，见 CONTRACTS §110 的读数。）
+    - “有规则时每候选不分配内存”：`Serves` 本身是 0 次分配（有测试断言）；但 `ineligibleReason` 里原有的用量检查对每个能服务的候选分配 3 次、约 1 KB，所以基准里能服务的情况是 1500 allocs/op（500 个候选），有无规则相同。被协议绑定过滤的账号是 0。（2026-11-21 起用量检查不再参与调度，见 CONTRACTS §120.4。）
 15. 原有的网关测试里有 17 个依赖默认转换（16 个失败、1 个空过），夹具改成显式开启转换，断言没有改。
 
 **控制台**

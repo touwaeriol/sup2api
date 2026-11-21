@@ -933,14 +933,12 @@ func TestIneligibleReasonBindingDoesNotAllocate(t *testing.T) {
 
 // BenchmarkIneligibleReason judges 500 candidates per iteration (design
 // §3.5): go test -run '^$' -bench IneligibleReason -benchmem ./internal/gateway/
-// Each iteration is a new request: the usage checks run once per route.
 func BenchmarkIneligibleReason(b *testing.B) {
 	for _, bc := range schedulingCases {
 		b.Run(bc.name, func(b *testing.B) {
 			c, refs := schedulingCandidates(b, 500, bc.converted, bc.rules)
 			b.ReportAllocs()
 			for b.Loop() {
-				c.routeUsage = nil
 				for i := range refs {
 					_, _, _ = c.ineligibleReason(&refs[i])
 				}

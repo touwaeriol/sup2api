@@ -105,7 +105,7 @@ func TestImageGenerationToolIsTheRequestsUsage(t *testing.T) {
 			t.Fatalf("%s: %d %s", name, r.status, r.body)
 		}
 		rec := e.record()
-		if !rec.Billable || rec.Price == nil || rec.Price.ID != 20 || len(rec.Additional) != 0 || rec.BillingError != "" {
+		if !rec.Billable || rec.Price == nil || rec.Price.ID != 20 || len(rec.Additional) != 0 {
 			t.Fatalf("%s: record %+v", name, rec)
 		}
 		if rec.Tokens != tc.want {

@@ -24,9 +24,6 @@ func (s *Service) priceOf(ctx context.Context, p *pending) (amounts, BillingDeta
 // additional item, each at its own frozen price and rate, and sums the three
 // amounts of all of them.
 func priceComponents(p *pending, price func(*pending) (amounts, BillingDetail, string, error)) (amounts, BillingDetail, string, error) {
-	if p.Inputs.BillingError != "" {
-		return amounts{}, BillingDetail{}, "", fmt.Errorf("usage settlement blocked: %s", p.Inputs.BillingError)
-	}
 	if len(p.Inputs.Additional)+len(p.Inputs.Replacement) > 128 {
 		return amounts{}, BillingDetail{}, "", fmt.Errorf("additional usage exceeds limit")
 	}

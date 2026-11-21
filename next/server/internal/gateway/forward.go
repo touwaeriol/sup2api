@@ -82,8 +82,7 @@ func (c *call) forward(ctx context.Context, rt *typeRoute, acct *pluginv1.Accoun
 		err = errClientGone
 	}
 	c.rec.Tokens = u.Tokens()
-	c.recordAdditionalUsage(u, rt)
-	c.recordReplacementUsage(u, rt)
+	c.recordSegments(ctx, u, rt)
 	if len(u.Metrics) > 0 {
 		c.rec.Metrics = u.Metrics
 	}
@@ -528,3 +527,33 @@ func readLine(br *bufio.Reader) ([]byte, error) {
 type usageAcc = usagerules.Acc
 
 func newUsageAcc(rules manifest.UsageRules) *usageAcc { return usagerules.New(rules) }
+
+// recordSegments records the usage billed apart from the top-level usage:
+// the additional usage and the attempts that replace it. When any segment
+// cannot be priced all are dropped, and the request is billed on its
+// top-level usage at the requested model's price like any other (CONTRACTS
+// §120.4): a usage the account cannot meter apart never refuses a request.
+func (c *call) recordSegments(ctx context.Context, u *usagerules.Acc, rt *typeRoute) {
+	c.rec.Additional, c.rec.Replacement = nil, nil
+	additional, err := c.additionalUsage(u, rt)
+	if err != nil {
+		c.warnUnpricedSegments(ctx, "additional", err)
+		return
+	}
+	replacement, upModel, err := c.replacementUsage(u, rt)
+	if err != nil {
+		c.warnUnpricedSegments(ctx, "replacement", err)
+		return
+	}
+	c.rec.Additional, c.rec.Replacement = additional, replacement
+	if upModel != "" {
+		c.rec.UpstreamModel = upModel
+	}
+}
+
+// warnUnpricedSegments logs why the segments were dropped; failed names the
+// kind that could not be priced.
+func (c *call) warnUnpricedSegments(ctx context.Context, failed string, err error) {
+	slog.WarnContext(ctx, "gateway: usage segments cannot be priced; billing the top-level usage at the requested model",
+		"request_id", c.rid, "failed", failed, "model", c.model, "err", err)
+}

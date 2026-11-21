@@ -597,8 +597,7 @@ func (c *call) attempt(ctx context.Context, ref *core.AccountRef, n int) attempt
 // for an upstream that only streams (§83), then the built-in override
 // (claude_max_tokens, §84.1) and the account's parameter override (§84),
 // which also decide the headers (param_override.go). A body the overrides
-// changed gets the forced stream again and is checked again against the
-// account's usage rules (meterable).
+// changed gets the forced stream again.
 // It returns the body and the model it goes upstream with, or the
 // attempt's end.
 func (c *call) upstreamBody(ctx context.Context, acc *core.Account, ref *core.AccountRef, rt *typeRoute, body []byte, n int) ([]byte, string, *attemptResult) {
@@ -630,9 +629,6 @@ func (c *call) upstreamBody(ctx context.Context, acc *core.Account, ref *core.Ac
 	if rewritten, err = c.forceStream(rt, rewritten); err != nil {
 		return nil, "", &attemptResult{kind: attemptFailover, err: fromCore(core.ErrInternal.WithCause(err), errTypeInternal)}
 	}
-	if e := c.meterable(rt, rewritten); e != nil {
-		return nil, "", &attemptResult{kind: attemptFailover, err: e}
-	}
 	return rewritten, upModel, nil
 }
 
@@ -643,40 +639,6 @@ func (c *call) forceStream(rt *typeRoute, body []byte) ([]byte, error) {
 		return body, nil
 	}
 	return forceStreamPath(body, rt.streamPath)
-}
-
-// meterable refuses a body the overrides rewrote into an operation or
-// attempts the account's usage rules cannot meter, as scheduling refuses
-// the client's (ineligibleReason): the attempt moves to another account.
-// It reads the body the core hands to the plugin, never the plugin's.
-func (c *call) meterable(rt *typeRoute, body []byte) *gwError {
-	switch c.usageGap(rt, body) {
-	case usageGapAdditional:
-		return invalidModelReference("account usage rules cannot meter the requested operation")
-	case usageGapAttempts:
-		return invalidModelReference("account usage rules cannot meter the requested attempts")
-	}
-	return nil
-}
-
-// The usage a body can require that a route's usage rules do not record.
-const (
-	usageGapAdditional = "additional" // an operation metered on its own
-	usageGapAttempts   = "attempts"   // attempts such as fallbacks
-)
-
-// usageGap names the usage body requires that rt does not record, "" when
-// it records all of it or the endpoint is free. It reads the route and the
-// body, never the account.
-func (c *call) usageGap(rt *typeRoute, body []byte) string {
-	switch {
-	case c.ep.Billing == "free":
-	case !c.routeHasRequiredPrimaryUsage(rt, body):
-		return usageGapAdditional
-	case !c.routeHasRequiredAttempts(rt, body):
-		return usageGapAttempts
-	}
-	return ""
 }
 
 // layerHeaders writes the headers of a plugin's relay onto h in the layers

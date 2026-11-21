@@ -340,13 +340,12 @@ func initialStatus(rec *core.UsageRecord) string {
 // pendingInputs are stored in billing_detail while a record is unbilled so
 // the retry loop can reproduce the calculation.
 type pendingInputs struct {
-	Replacement  []core.PricedUsage `json:"replacement,omitempty"`
-	Additional   []core.PricedUsage `json:"additional,omitempty"`
-	BillingError string             `json:"billing_error,omitempty"`
-	Semantics    string             `json:"semantics"`
-	Params       map[string]string  `json:"params,omitempty"`
-	Headers      map[string]string  `json:"headers,omitempty"`
-	Pricing      *core.PricingTrace `json:"pricing,omitempty"` // price rule and rate source (CONTRACTS §97)
+	Replacement []core.PricedUsage `json:"replacement,omitempty"`
+	Additional  []core.PricedUsage `json:"additional,omitempty"`
+	Semantics   string             `json:"semantics"`
+	Params      map[string]string  `json:"params,omitempty"`
+	Headers     map[string]string  `json:"headers,omitempty"`
+	Pricing     *core.PricingTrace `json:"pricing,omitempty"` // price rule and rate source (CONTRACTS §97)
 }
 
 // recordInputs are the pricing inputs of a record: what its first settlement
@@ -356,7 +355,7 @@ type pendingInputs struct {
 func recordInputs(rec *core.UsageRecord) pendingInputs {
 	return pendingInputs{Semantics: rec.UsageSemantics, Params: rec.PriceParams, Headers: rec.PriceHeaders,
 		Additional: core.ClonePricedUsage(rec.Additional), Replacement: core.ClonePricedUsage(rec.Replacement),
-		BillingError: rec.BillingError, Pricing: pricingTrace(rec.Price, rec.SegmentID, rec.RateSource)}
+		Pricing: pricingTrace(rec.Price, rec.SegmentID, rec.RateSource)}
 }
 
 // pricingTrace is what a row freezes about its list price and its rate. It is

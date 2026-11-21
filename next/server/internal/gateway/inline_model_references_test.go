@@ -59,7 +59,7 @@ func TestInlineAdvisorCoreAuthorizationPriceAndMapping(t *testing.T) {
 					}
 					return
 				}
-				if response.status != 200 || !r.Success || r.BillingError != "" || len(r.Additional) != 1 || r.Additional[0].Price.ID != 19 || r.Additional[0].Model != advisorModel {
+				if response.status != 200 || !r.Success || len(r.Additional) != 1 || r.Additional[0].Price.ID != 19 || r.Additional[0].Model != advisorModel {
 					t.Fatalf("inline accounting failed: %d %+v", response.status, r)
 				}
 				if mode == "account-selection" && strings.Join(e.up.keys(), ",") != "acc-2" {

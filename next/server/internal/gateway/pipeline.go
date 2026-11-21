@@ -77,8 +77,6 @@ type call struct {
 	// scheduling: account types able to serve the endpoint protocol
 	routes    map[core.AccountTypeKey]*typeRoute
 	routeKeys []core.AccountTypeKey
-	// routeUsage caches missingRouteUsage per route for the current body.
-	routeUsage map[*typeRoute]string
 	// conversion: the converting routes' refusals and the served route
 	// (convert_policy.go)
 	conversion conversionState
@@ -813,7 +811,7 @@ func (c *call) finalizeBillability(ctx context.Context, rec *core.UsageRecord, b
 	// it (a per_request price is due in both cases).
 	owed, waived := c.settleCanceled(ctx, rec, billing)
 	hasUsage, priced := usageOf(rec, rec.Success || owed)
-	rec.Billable = !strings.EqualFold(billing, "free") && !waived && (priced || rec.BillingError != "")
+	rec.Billable = !strings.EqualFold(billing, "free") && !waived && priced
 	if !rec.Billable {
 		c.dropReservation(ctx, rec, billing, hasUsage)
 		rec.Price = nil
@@ -843,11 +841,11 @@ var errReadingEmpty = errors.New("the upstream answered and the host's reading o
 // reading of the answer found nothing to bill: there are no facts and the
 // core makes none up, so the missing usage shows instead of passing as a
 // free request. A free endpoint, a task submission (its usage comes when
-// the task ends), a per_request price and a billing error have something
-// else to say about the money.
+// the task ends) and a per_request price have something else to say about
+// the money.
 func (c *call) readingEmpty() error {
 	r := c.rec
-	if !r.Success || strings.EqualFold(c.ep.Billing, "free") || c.ep.TaskSubmit() || r.BillingError != "" {
+	if !r.Success || strings.EqualFold(c.ep.Billing, "free") || c.ep.TaskSubmit() {
 		return nil
 	}
 	if hasUsage, priced := usageOf(r, true); hasUsage || priced {

@@ -122,7 +122,7 @@ func TestReferencedUsageJSONAndSSE(t *testing.T) {
 				t.Fatalf("HTTP%d %s", res.status, res.body)
 			}
 			rec := e.record()
-			if rec.Tokens != (core.UsageTokens{Input: 1760, Output: 531, CacheRead: 412}) || len(rec.Additional) != 1 || rec.BillingError != "" {
+			if rec.Tokens != (core.UsageTokens{Input: 1760, Output: 531, CacheRead: 412}) || len(rec.Additional) != 1 {
 				t.Fatalf("wrong executor/additional split: %+v", rec)
 			}
 			item := rec.Additional[0]
@@ -147,8 +147,8 @@ func TestReferencedUsageDoesNotInventPrice(t *testing.T) {
 		e.up.set("acc-1", &upstreamRule{status: 200, body: `{"type":"message","role":"assistant","model":"` + testModel + `","content":[],"usage":{"input_tokens":1,"output_tokens":0,"iterations":[` + raw + `]}}`})
 		res := e.messages(advisorBody(false))
 		rec := e.record()
-		if res.status != 200 || !rec.Success || rec.BillingError == "" || !rec.Billable {
-			t.Fatalf("invalid billing should be retained for reconciliation without changing API200: %+v", rec)
+		if res.status != 200 || !rec.Success || !rec.Billable || len(rec.Additional) != 0 || rec.Price == nil || rec.Tokens != (core.UsageTokens{Input: 1}) {
+			t.Fatalf("usage that cannot be priced is billed on the top-level usage at the requested model: %+v", rec)
 		}
 	}
 }

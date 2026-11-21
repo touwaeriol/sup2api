@@ -98,34 +98,12 @@ func (c *call) ineligibleReason(ref *core.AccountRef) (reason, detail string, ok
 	if !ref.ServesModel(c.model) {
 		return core.SchedModelNotServed, c.model, false
 	}
-	if kind := c.missingRouteUsage(rt); kind != "" {
-		return core.SchedUsageUnsupported, kind, false
-	}
 	for _, extra := range c.modelRefs {
 		if !ref.ServesModel(extra.model) {
 			return core.SchedReferencedModelNotServed, extra.model, false
 		}
-		if c.ep.Billing != "free" && !routeAccountsFor(rt, extra.kind) {
-			return core.SchedUsageUnsupported, extra.kind, false
-		}
 	}
 	return "", "", true
-}
-
-// missingRouteUsage is the usageGap of the request's body on rt, judged once
-// per route and body, not once per candidate: it never reads the account,
-// and it scans the body, a megabyte for a long conversation. setBody drops
-// the verdicts.
-func (c *call) missingRouteUsage(rt *typeRoute) string {
-	gap, ok := c.routeUsage[rt]
-	if !ok {
-		gap = c.usageGap(rt, c.body)
-		if c.routeUsage == nil {
-			c.routeUsage = map[*typeRoute]string{}
-		}
-		c.routeUsage[rt] = gap
-	}
-	return gap
 }
 
 // protocolClosedReason says why the account's protocol binding leaves the

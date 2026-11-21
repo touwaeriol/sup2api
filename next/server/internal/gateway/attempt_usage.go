@@ -24,21 +24,6 @@ func attemptUsageActive(rule *manifest.AttemptUsageRule, body []byte) bool {
 	return false
 }
 
-func (c *call) routeHasRequiredAttempts(rt *typeRoute, body []byte) bool {
-	if rt == nil {
-		return false
-	}
-	for _, rule := range c.declaredAttemptRules(rt) {
-		if !attemptUsageActive(rule, body) {
-			continue
-		}
-		if actual := rt.usage.Attempts; actual == nil || actual.Name != rule.Name || actual.Adapter != rule.Adapter {
-			return false
-		}
-	}
-	return true
-}
-
 func (c *call) declaredAttemptRules(rt *typeRoute) []*manifest.AttemptUsageRule {
 	rules := append([]*manifest.AttemptUsageRule{c.pf.Usage.Attempts}, rt.requiredAttempts...)
 	if c.ep.Usage != nil {
@@ -74,12 +59,13 @@ func (c *call) referencePriceBody(ref modelReference) ([]byte, error) {
 	return body, nil
 }
 
-func (c *call) recordReplacementUsage(u *usagerules.Acc, rt *typeRoute) {
-	c.rec.Replacement = nil
+// replacementUsage prices the attempts that replace the top-level usage,
+// and names the upstream model of the last one; nil when the response has
+// none.
+func (c *call) replacementUsage(u *usagerules.Acc, rt *typeRoute) ([]core.PricedUsage, string, error) {
 	actual, err := u.Replacement()
-	if err != nil {
-		c.rec.BillingError = err.Error()
-		return
+	if err != nil || len(actual) == 0 {
+		return nil, "", err
 	}
 	items := make([]core.PricedUsage, 0, len(actual))
 	for _, attempt := range actual {
@@ -89,25 +75,19 @@ func (c *call) recordReplacementUsage(u *usagerules.Acc, rt *typeRoute) {
 			ok = true
 		}
 		if !ok {
-			c.rec.BillingError = "attempt usage does not match an admitted model identity"
-			return
+			return nil, "", fmt.Errorf("attempt usage does not match an admitted model identity")
 		}
 		priced.Tokens, priced.UsageSemantics, priced.Metrics = attempt.Tokens, attempt.UsageSemantics, attempt.Metrics
 		priced.Free, priced.BillingReason = attempt.Free, attempt.BillingReason
 		if err := core.ValidatePricedUsage(priced); err != nil {
-			c.rec.BillingError = err.Error()
-			return
+			return nil, "", err
 		}
 		if err := validateAttemptPriceFacts(priced); err != nil {
-			c.rec.BillingError = err.Error()
-			return
+			return nil, "", err
 		}
 		items = append(items, priced)
 	}
-	c.rec.Replacement = items
-	if len(actual) > 0 {
-		c.rec.UpstreamModel = actual[len(actual)-1].Model
-	}
+	return items, actual[len(actual)-1].Model, nil
 }
 
 // A request parameter is not evidence of a served tier or speed. In particular,

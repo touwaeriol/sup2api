@@ -14,16 +14,6 @@ func (v *validator) additionalUsageRules(field string, rules []manifest.Addition
 	selectors := map[string]bool{}
 	for i, r := range rules {
 		f := fmt.Sprintf("%s[%d]", field, i)
-		if len(r.RequiredBy) > 8 || len(r.RequiredBy) > 0 && !r.UsePrimaryModel {
-			v.add(f+".requiredBy", "invalid", "at most eight primary-model request requirements are supported")
-		}
-		paths := map[string]bool{}
-		for _, path := range r.RequiredBy {
-			if len(path) > 200 || !modelObjectPath.MatchString(path) || paths[path] {
-				v.add(f+".requiredBy", "invalid", "unique simple object paths are required")
-			}
-			paths[path] = true
-		}
 		if !usageEventRe.MatchString(r.Name) || names[r.Name] {
 			v.add(f+".name", "invalid", "additional usage name must be unique and bounded")
 		}

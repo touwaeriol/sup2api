@@ -115,7 +115,7 @@ func TestOpenAIAnthropicHTTPConversion(t *testing.T) {
 					}
 					rec := e.record()
 					if !rec.Success || rec.Protocol != protocol || rec.UpstreamProtocol != "anthropic.messages" || rec.Model != testModel ||
-						rec.UpstreamModel != "mapped-upstream" || rec.Tokens != (core.UsageTokens{Input: 10, Output: 4, CacheRead: 20, CacheCreation: 30}) || rec.BillingError != "" {
+						rec.UpstreamModel != "mapped-upstream" || rec.Tokens != (core.UsageTokens{Input: 10, Output: 4, CacheRead: 20, CacheCreation: 30}) {
 						t.Fatalf("source usage/model accounting changed: %+v", rec)
 					}
 				})

@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -105,57 +106,14 @@ func (c *call) prepareReferencedPrices(ctx context.Context) *gwError {
 	return nil
 }
 
-func (c *call) routeHasRequiredPrimaryUsage(rt *typeRoute, body []byte) bool {
-	if rt == nil {
-		return false
-	}
-	rules := append([]manifest.AdditionalUsageRule(nil), c.pf.Usage.Additional...)
-	if c.ep.Usage != nil {
-		rules = append(rules, c.ep.Usage.Additional...)
-	}
-	rules = append(rules, rt.requiredUsage...)
-	for _, required := range rules {
-		if !required.UsePrimaryModel {
-			continue
-		}
-		active := false
-		for _, path := range required.RequiredBy {
-			value := gjson.GetBytes(body, path)
-			active = active || value.Exists() && value.Type != gjson.Null
-		}
-		if !active {
-			continue
-		}
-		found := false
-		for _, actual := range rt.usage.Additional {
-			found = found || actual.Name == required.Name && actual.UsePrimaryModel
-		}
-		if !found {
-			return false
-		}
-	}
-	return true
-}
-
-func routeAccountsFor(rt *typeRoute, kind string) bool {
-	if rt == nil {
-		return false
-	}
-	if rt.usage.Attempts != nil && rt.usage.Attempts.Name == kind {
-		return true
-	}
-	for _, rule := range rt.usage.Additional {
-		if rule.Name == kind {
-			return true
-		}
-	}
-	return false
-}
-
-// mapReferencedModels rewrites only admitted fields. A converted protocol has
-// no established location for these invocations, so it cannot silently drop
-// or reinterpret them. Different client prices must not collapse to the same
-// observed upstream identity within one usage kind.
+// mapReferencedModels maps the models the request references (for example
+// its fallbacks) with the account's model mapping, and keeps the price of
+// each by the usage identity the response reports it under. A converted
+// request does not carry them: the conversion drops what the upstream
+// protocol has no place for, so nothing is mapped and the response is billed
+// at the requested model. Two references the mapping makes one upstream
+// model cannot be told apart in the response: their usage is not priced
+// apart either (recordSegments).
 func (c *call) mapReferencedModels(body []byte, account *core.AccountRef, rt *typeRoute) ([]byte, error) {
 	c.upstreamPrimaryModel = account.MapModel(c.model)
 	c.upstreamRefs = nil
@@ -168,26 +126,23 @@ func (c *call) mapReferencedModels(body []byte, account *core.AccountRef, rt *ty
 			return nil, fmt.Errorf("conversion introduced model invocations without source authorization")
 		}
 	}
-	if len(c.modelRefs) == 0 {
+	if len(c.modelRefs) == 0 || rt.upstream != c.ep.Protocol {
 		return body, nil
 	}
-	if rt.upstream != c.ep.Protocol {
-		return nil, fmt.Errorf("referenced model invocations cannot be converted to %s", rt.upstream)
-	}
 	c.upstreamRefs = map[string]core.PricedUsage{}
+	ambiguous := map[string]bool{}
 	for _, ref := range c.modelRefs {
 		upModel := account.MapModel(ref.model)
 		if ref.identityOnly && upModel != ref.model {
 			return nil, fmt.Errorf("signed model reference requires identity mapping")
 		}
-		if rt.usage.Attempts != nil && ref.kind == rt.usage.Attempts.Name && upModel == c.upstreamPrimaryModel {
-			return nil, fmt.Errorf("attempt candidate maps to the primary model")
-		}
 		key := ref.kind + "\x00" + upModel
-		if old, exists := c.upstreamRefs[key]; exists && old.Model != ref.model {
-			return nil, fmt.Errorf("different referenced models map to the same upstream usage identity")
+		if old, exists := c.upstreamRefs[key]; ambiguous[key] || exists && old.Model != ref.model {
+			ambiguous[key] = true
+			delete(c.upstreamRefs, key)
+		} else {
+			c.upstreamRefs[key] = ref.priced
 		}
-		c.upstreamRefs[key] = ref.priced
 		if ref.identityOnly {
 			continue
 		}
@@ -200,9 +155,12 @@ func (c *call) mapReferencedModels(body []byte, account *core.AccountRef, rt *ty
 	return body, nil
 }
 
-func (c *call) recordAdditionalUsage(u *usagerules.Acc, rt *typeRoute) {
-	c.rec.Additional = nil
-	c.rec.BillingError = u.AdditionalError
+// additionalUsage prices the usage billed on top of the top-level usage.
+func (c *call) additionalUsage(u *usagerules.Acc, rt *typeRoute) ([]core.PricedUsage, error) {
+	if u.AdditionalError != "" {
+		return nil, errors.New(u.AdditionalError)
+	}
+	var items []core.PricedUsage
 	for _, actual := range u.Additional() {
 		priced, ok := c.upstreamRefs[actual.Kind+"\x00"+actual.Model]
 		if !ok && actual.Model == c.upstreamPrimaryModel && primaryUsageKind(rt, actual.Kind) {
@@ -211,13 +169,13 @@ func (c *call) recordAdditionalUsage(u *usagerules.Acc, rt *typeRoute) {
 			ok = true
 		}
 		if !ok {
-			c.rec.BillingError = "additional usage does not match an admitted model identity"
-			continue
+			return nil, fmt.Errorf("additional usage does not match an admitted model identity")
 		}
 		priced.Tokens, priced.UsageSemantics = actual.Tokens, actual.UsageSemantics
 		priced.Metrics = actual.Metrics
-		c.rec.Additional = append(c.rec.Additional, priced)
+		items = append(items, priced)
 	}
+	return items, nil
 }
 
 func primaryUsageKind(rt *typeRoute, kind string) bool {

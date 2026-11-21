@@ -175,10 +175,9 @@ type UsageTokens struct {
 // usage.recorded asynchronously.
 type UsageRecord struct {
 	// Nonempty Replacement prices verified attempts instead of top-level tokens.
-	Replacement  []PricedUsage
-	Additional   []PricedUsage
-	BillingError string
-	RequestID    string
+	Replacement []PricedUsage
+	Additional  []PricedUsage
+	RequestID   string
 	// ClientRequestID is the client's X-Request-Id, truncated to 128 chars;
 	// recorded only, never used as an idempotency key.
 	ClientRequestID string
@@ -378,8 +377,8 @@ const UsageErrorUnreported = "usage_unreported"
 // SetUnreported makes r the free record of a request whose plugin stated no
 // usage facts: the host's reading (identity, latency, status, routing)
 // without anything to bill - success false, ErrorType UsageErrorUnreported
-// with reason, no tokens, metrics, additional or replacement usage, price,
-// billing error or reservation, UsageExtract UsageExtractUnreported. It is
+// with reason, no tokens, metrics, additional or replacement usage, price
+// or reservation, UsageExtract UsageExtractUnreported. It is
 // the one definition of that record: CloseExecutionUnreported writes it, the
 // gateway submits it for an execution without a durable observation, a
 // plugin's host_usage without a reading and a task submission that could not
@@ -387,7 +386,7 @@ const UsageErrorUnreported = "usage_unreported"
 func (r *UsageRecord) SetUnreported(reason string) {
 	r.Success, r.ErrorType, r.ErrorMessage = false, UsageErrorUnreported, x.Truncate(reason, 1000)
 	r.Tokens, r.Metrics, r.Additional, r.Replacement = UsageTokens{}, nil, nil, nil
-	r.Billable, r.Price, r.BillingError, r.Reservation, r.ReservationDropped = false, nil, "", nil, ""
+	r.Billable, r.Price, r.Reservation, r.ReservationDropped = false, nil, nil, ""
 	r.UsageExtract = UsageExtractUnreported
 }
 
@@ -515,9 +514,6 @@ const (
 	// The request names a second model (fallbacks, advisor) the account's
 	// model list lacks (Detail: the model).
 	SchedReferencedModelNotServed = "referenced_model_not_served"
-	// The account type does not account for a usage the request asks for
-	// (Detail: the usage kind).
-	SchedUsageUnsupported = "usage_unsupported"
 	// The model availability precheck blocked the account (see availability).
 	SchedAvailabilityBlocked = "availability_blocked"
 	// The failure policy narrowed the retry to other accounts.

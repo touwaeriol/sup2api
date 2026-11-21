@@ -17,25 +17,27 @@ func TestReviewAdditionalRouteAndPriceBoundaries(t *testing.T) {
 			t.Fatalf("unpriced primary served: %d %s %+v", res.status, res.body, rec)
 		}
 	})
-	t.Run("account override missing extra metering excluded", func(t *testing.T) {
+	t.Run("account that cannot meter the extra still serves at the requested model", func(t *testing.T) {
 		e := pricedAdvisorEnv(t)
-		for i := range e.gen.accountTypes {
-			for j := range e.gen.accountTypes[i].Type.Platforms {
-				e.gen.accountTypes[i].Type.Platforms[j].Usage = map[string]manifest.UsageRules{"anthropic.messages": {Semantics: "exclusive"}}
-			}
-		}
+		meterNothing(t, e, "anthropic", "anthropic.messages")
 		res := e.messages(advisorBody(false))
-		e.record()
-		if res.status == 200 || len(e.up.keys()) != 0 {
-			t.Fatalf("unmetered account accepted: %d", res.status)
+		rec := e.record()
+		if res.status != 200 || len(e.up.keys()) != 1 || !rec.Billable || len(rec.Additional) != 0 || rec.Price == nil || rec.Price.ID != 9 {
+			t.Fatalf("unmetered account: %d %+v", res.status, rec)
 		}
 	})
-	c := &call{ep: manifest.Endpoint{Protocol: "anthropic.messages"}, modelRefs: []modelReference{{kind: "advisor", path: "tools.0.model", model: "a"}, {kind: "advisor", path: "tools.1.model", model: "b"}}}
+	// Two references the mapping makes one upstream model cannot be told
+	// apart in the response: neither is priced by that identity, however
+	// many times they recur, and the attempt still goes upstream.
+	c := &call{ep: manifest.Endpoint{Protocol: "anthropic.messages"}, modelRefs: []modelReference{
+		{kind: "advisor", path: "tools.0.model", model: "a"}, {kind: "advisor", path: "tools.1.model", model: "b"}, {kind: "advisor", path: "tools.2.model", model: "a"}}}
 	account := &core.AccountRef{ModelMapping: map[string]string{"a": "same", "b": "same"}}
-	if _, err := c.mapReferencedModels([]byte(`{"tools":[{"model":"a"},{"model":"b"}]}`), account, &typeRoute{upstream: "anthropic.messages"}); err == nil {
-		t.Fatal("different prices collapsed to one observed identity")
+	out, err := c.mapReferencedModels([]byte(`{"tools":[{"model":"a"},{"model":"b"},{"model":"a"}]}`), account, &typeRoute{upstream: "anthropic.messages"})
+	if _, priced := c.upstreamRefs["advisor\x00same"]; err != nil || priced || string(out) != `{"tools":[{"model":"same"},{"model":"same"},{"model":"same"}]}` {
+		t.Fatalf("ambiguous references: %s %v priced=%v", out, err, priced)
 	}
-	if _, err := c.mapReferencedModels([]byte(`{}`), account, &typeRoute{upstream: "openai.chat"}); err == nil {
-		t.Fatal("conversion silently dropped nested invocation")
+	// A converted request does not carry them: nothing is mapped or priced.
+	if out, err := c.mapReferencedModels([]byte(`{}`), account, &typeRoute{upstream: "openai.chat"}); err != nil || string(out) != `{}` || c.upstreamRefs != nil {
+		t.Fatalf("converted request: %s %v %v", out, err, c.upstreamRefs)
 	}
 }

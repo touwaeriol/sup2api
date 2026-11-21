@@ -28,14 +28,8 @@ func TestAdditionalUsageManifestContract(t *testing.T) {
 	}
 	r.UsePrimaryModel = true
 	r.ModelPath = ""
-	r.RequiredBy = []string{"operation.options"}
 	p.Usage.Additional = []manifest.AdditionalUsageRule{r}
 	if codes := platformCodes(p); len(codes) > 0 {
 		t.Fatal("host-primary rule rejected", codes)
-	}
-	r.RequiredBy = []string{"operation.#"}
-	p.Usage.Additional = []manifest.AdditionalUsageRule{r}
-	if len(platformCodes(p)) == 0 {
-		t.Fatal("requirement expression accepted")
 	}
 }

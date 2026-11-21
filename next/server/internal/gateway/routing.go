@@ -88,7 +88,6 @@ type typeRoute struct {
 	streamOnly       bool
 	streamPath       string
 	modelReferences  []manifest.RequestModelReference
-	requiredUsage    []manifest.AdditionalUsageRule
 	requiredAttempts []*manifest.AttemptUsageRule
 
 	// prepared is the request converted for this route, at pick time and
@@ -252,11 +251,9 @@ func (c *call) addRoute(b core.AccountTypeBinding, ap manifest.AccountPlatform, 
 		respDeclared:       ep.Protocol != "",
 		modelPath:          ep.Request.ModelPath,
 		streamPath:         ep.Request.StreamPath,
-		modelReferences:    ep.Request.ModelReferences,
-		requiredUsage:      append([]manifest.AdditionalUsageRule(nil), pf.Usage.Additional...)}
+		modelReferences:    ep.Request.ModelReferences}
 	rt.streamOnly = ap.StreamsOnly(y) && ep.Kind == manifest.EndpointKindProxy && ep.Response.Stream == "sse" && ep.Request.StreamPath != ""
 	if ep.Usage != nil {
-		rt.requiredUsage = append(rt.requiredUsage, ep.Usage.Additional...)
 		rt.requiredAttempts = append(rt.requiredAttempts, ep.Usage.Attempts)
 	}
 	rt.requiredAttempts = append(rt.requiredAttempts, pf.Usage.Attempts)

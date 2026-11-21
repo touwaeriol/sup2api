@@ -1666,7 +1666,7 @@ message RankedAccount {
 | `model_protocol_closed` | §110 起：模型在账号的 `model_protocols` 里有条目，条目不含入站协议 | 模型名 |
 | `model_not_served` | 账号模型列表不含请求的模型 | 模型名 |
 | `referenced_model_not_served` | 请求引用了第二个模型（`fallbacks`、advisor 工具，§13 `modelReferences`），账号模型列表不含它 | 模型名 |
-| `usage_unsupported` | 账号类型无法计量请求要求的用量 | `additional` / `attempts` / 引用的用量种类 |
+| `usage_unsupported` | 2026-11-21 起不再产生（用量不参与调度，§120.4）；之前的记录里还有：账号类型无法计量请求要求的用量 | `additional` / `attempts` / 引用的用量种类 |
 | `bound_elsewhere` | 请求的文件资源、辅助历史或回退额度凭证属于另一个账号（只出现在 0.1.290 之前的记录里，随 CCGateway 删除） | `resource` / `helper_history` / `fallback_credit` |
 | `availability_blocked` | 被模型可用性预检拦截（细节在 `anomalies.availability`） | — |
 | `failure_policy` | 失败策略把重试限定在别的账号 | `same_account` / `proxy_changed` / `egress` |
@@ -3529,7 +3529,7 @@ GET `/groups/:id/models`（`group:read`）返回所有未删除成员账号的�
 - **本地 token 估算与其它工作重叠**（`gateway/prompt_count.go`，`pipeline.go` 的 `run`）。请求体从 hooks 之后不再改变，`run` 在余额检查之前启动 `startPromptCount`：一个 goroutine 做 `extractPromptText` + `tokenizer.Count`，`precharge` 在需要本地估算时 join 它（`localPromptEstimate`）。goroutine 只拿到 body 切片、promptTextPaths 与当时的 `bodyVersion`，从不读 `call` 的其它字段；`run` 用 `defer joinPromptCount()` 在每条退出路径上等待它结束，因此不会有 goroutine 活过处理函数（`submit` 释放 body 的时机因此未变）。估算值逐值相同：同一个函数、同一份文本、同一个上限（`tokenizer.MaxTextBytes`）。只在“一定会走本地路径”的地方启动：内置平台（`Platform.Client == nil`）、计费端点非 free、非 task.submit。平台插件（`EstimateUsage`）完全不受影响，它的请求按原样构造并发送；插件返回 `Unimplemented` 的回退路径仍在请求路径上自己计数。若将来某条路径在启动后替换了 body，版本号不匹配时会退回同步计数（现在没有这样的路径）。
 - **hooks 没改 body 时复用第一次 `checkModel` 的结果**（`pipeline.go` 的 `checkModel`）。`checkModel` 仍在 hooks 前后各跑一次（模型、分组白名单必须按最终 body 判断），但扫描整份 body 的模型引用检查以 `bodyVersion` 为版本缓存：hooks 只能通过 `setBody` 换 body，而 `setBody` 会递增 `bodyVersion`，所以版本未变就说明检查的输入完全一致（hooks 不改 header），第二次直接返回。版本变化时重跑，与原来一致。（资源引用与 fallback-credit 检查随 CCGateway 在 0.1.290 删除。）
 - **请求体解析与摘要每版本只做一次**（`gateway/body_state.go`）。`gjson` 解析会把整份文档复制成字符串：`ParseBytes` 一次约 1 MB 分配，而模型引用扫描每条规则、hook 前后、每次补丁对比都会调一次。现在 `call.bodyRoot()` 每个 `bodyVersion` 解析一次，`modelReferenceLocationsIn` / `modelReferenceSnapshotIn` / `modelReferencePatches` 接收已解析的根；`setBody` 与 `submit` 的 `releaseBodies` 都会丢弃它。同理 `call.bodyDigest()` 每版本只算一次 SHA-256，资源扫描缓存新增 `inspectDigest` 接受调用方已有的摘要。不是当前请求体的字节（转换后的、打好补丁的副本）仍按需解析/哈希（`rootFor` / `digestFor` 只在切片是同一个时复用缓存）。安全语义不变：没有引入任何基于字面量的预筛（`\u` 转义可以绕过），命中的永远是完整解析出的结构。
-- **插件没有打补丁时跳过补丁校验**（`gateway/dispatch.go` 的 `validatePatches`）。`applyPatches` 在补丁为空时原样返回 `upBody`，此时三项“前后对比”是同一份字节与自身比较，必然通过却要付四次扫描与两次哈希。现在先比较 `bytes.Equal(upBody, body)`，只在确实不同时才跑资源引用、端点模型引用与上游模型引用三项守卫；用量规则（`routeHasRequiredPrimaryUsage` / `routeHasRequiredAttempts`）无论如何照旧运行。比较的是字节而不是子串，无法被转义绕过；比较为假只意味着多跑一次守卫，不会少跑。
+- **插件没有打补丁时跳过补丁校验**（`gateway/dispatch.go` 的 `validatePatches`）。`applyPatches` 在补丁为空时原样返回 `upBody`，此时三项“前后对比”是同一份字节与自身比较，必然通过却要付四次扫描与两次哈希。现在先比较 `bytes.Equal(upBody, body)`，只在确实不同时才跑资源引用、端点模型引用与上游模型引用三项守卫；用量规则当时无论如何照旧运行（2026-11-21 起发送前不再检查用量规则，§120.4）。比较的是字节而不是子串，无法被转义绕过；比较为假只意味着多跑一次守卫，不会少跑。
 - **预扣事务的往返从约 12 次降到 4 次**（`billing/precharge.go`）。一个事务现在只有：BEGIN、一个 `pgx.Batch`（建 `user_balances` 行 → `FOR UPDATE` 锁住该行 → 一条 CTE 语句写 `balance_ledger`、`request_precharges` 并更新余额）、`balance.changed` 事件、COMMIT。被合并掉的正是原 `ApplyTx` 重复的语句（又一次插入余额行、又一次 `FOR UPDATE`、又一次幂等查询），余额是否足够的判断（`balance - amount > min_balance`）与幂等键是否已存在都表达在同一条 SQL 里：任何一条不满足就一行都不写，客户端据返回的 `duplicate` / `sufficient` 得到与原来相同的“成功且不扣费”或 `insufficient_balance`。锁顺序未变（仍然先锁 `user_balances` 的那一行再动流水与预留，释放路径 `ReleasePrechargeTx` 同样先锁该行）；幂等键仍是 `precharge:{request_id}`，仍是 `balance_ledger` 的唯一键；写入的值不变（`delta = -round(amount,8)`、`balance_after = balance + delta`、kind/ref_type/ref_id/note 相同，`validateChange` 在事务前先做，因此 8 位小数之外的值仍在写库前被拒）。旧的 `user_balances` 行在余额不足导致回滚时也不会留下（整条语句随事务回滚）。若幂等键恰好在本语句快照之后被其它事务插入，语句不写任何行，此时回落到 `ApplyTx` 原来的做法：加锁事务内 `findLedger` 读回该行并比较 user/amount/kind，一致则视为重复成功，不一致为 `idempotency key reused...` 冲突。`Precharge` 仍在任何上游请求之前完成（`prepareBilling` 的顺序未变），`usage` 侧的 `ApplyTx` 未改。回归测试 `TestPrechargeRoundTrips` 用 pgx tracer 计数：同一请求重跑时为 4 次 flush（1 BEGIN、2 batch、1 COMMIT），旧实现为 12 次。
 - **结算与账本在用户余额锁下只剩两次往返；预扣快速失败并限额**（2026-11-08，`billing/settle.go`、`billing/ledger.go`、`billing/precharge.go`、`usage/settler.go`）。背景：一个用户的所有计费都串在 `user_balances` 那一行的 `FOR UPDATE` 上，锁一直持有到 COMMIT，持锁期间每一次客户端往返都由排在后面的同用户请求一起买单；newapi 的全部流量在核心里是同一个用户，结算（释放预扣 + 扣费）原来在锁下要走约 15 次往返，而且结算 worker 一个事务里批量结算多条记录，锁从第一条持到提交。连接池被等锁的请求占满后，账号选择、插件宿主调用等不相干查询也排不到连接（2026-11-08 ccp 抖动的来源，见 §29.1 看门狗一段）。现在：
   - `ApplyTx` 是一个 `pgx.Batch`：建余额行（单独一条语句，因为数据修改 CTE 的结果对同一语句不可见）+ `applySQL`（一条 CTE：按幂等键找已有流水；没有才 `FOR UPDATE` 锁余额行、写流水、改余额），然后一次 `balance.changed` 事件。锁下两次往返（原来六次）。幂等语义不变：键已存在返回 `Duplicate` 并校验用户、金额、kind 一致（不一致 409）；语句快照之后被并发插入的键（`ON CONFLICT DO NOTHING` 没写也没找到）由客户端重查一次；未知用户仍是 404（余额行的外键）。
@@ -7822,7 +7822,7 @@ ALTER TABLE accounts ADD COLUMN IF NOT EXISTS model_protocols jsonb NOT NULL DEF
 ### 110.4 生效位置
 
 - **一个判断**：`gateway/sched_trace.go` 的 `ineligibleReason` 是“账号能否服务这个请求”的唯一判断，HTTP 首次挑选、WebSocket 首轮（`connect`）、故障策略刷新的快照、WebSocket 后续轮次（`candidateEligible`）都走它。原来重复这段判断的 `servesAllModels` 已删除。
-- **顺序**：路由（`no_route`）→ **协议绑定**（`protocolClosedReason`）→ 模型白名单（`model_not_served`）→ 用量计量 → 引用模型。协议绑定对请求的主模型和每个引用模型（`fallbacks`、advisor 工具等，§13 `modelReferences`）各判断一次，第一个不提供的给出原因。它排在模型白名单之前：带白名单的 OpenAI 账号收到 `/v1/messages`，原因是 `conversion_not_enabled`，不是 `model_not_served`。
+- **顺序**：路由（`no_route`）→ **协议绑定**（`protocolClosedReason`）→ 模型白名单（`model_not_served`）→ 引用模型（2026-11-21 前中间还有一步用量计量，已删，§120.4）。协议绑定对请求的主模型和每个引用模型（`fallbacks`、advisor 工具等，§13 `modelReferences`）各判断一次，第一个不提供的给出原因。它排在模型白名单之前：带白名单的 OpenAI 账号收到 `/v1/messages`，原因是 `conversion_not_enabled`，不是 `model_not_served`。
 - **被过滤的账号**只做了内存比较：不转换请求、不下载媒体、不做模型可用性预检、不参与粘性绑定、不取并发槽、不计尝试次数。调度记录里 `candidates` 计入它，`eligible` 不计入。
 - **粘性会话**：绑定的账号不再提供该协议或模型时，按“绑定账号已不在候选里”处理（§18.1），会话改绑到这次选中的账号。
 - **WebSocket**：首轮与 HTTP 相同；`openai.responses_ws` 是一个可以单独关闭的本平台协议。已建立的连接上，后续轮次换成该账号在这个协议下不提供的模型，返回现有的 400 `the account of this connection does not serve model …; open a new connection for it`，不是 404。
@@ -7924,7 +7924,7 @@ ALTER TABLE accounts ADD COLUMN IF NOT EXISTS model_protocols jsonb NOT NULL DEF
 5. **内存上限**：单账号最多 50 条 × 500 个模型；账号在多个分组时每个分组快照各持一份（与 `models`、`model_mapping` 相同）。
 6. 改 `readGroupSnap`、`ineligibleReason`、`Serves` 时重跑基准：`go test -run '^$' -bench ProtocolRulesServes -benchmem ./internal/core/`、`go test -run '^$' -bench IneligibleReason -benchmem ./internal/gateway/`（各 500 个候选一轮）。
 
-实现时的读数（2026-11-17，开发机，只作量级参考）：`Serves` 500 个候选一轮，无配置 3.3–5.4 µs，50 条规则 17–35 µs，都是 0 allocs/op。`ineligibleReason` 500 个候选一轮：被协议绑定过滤的账号 0 allocs/op；能服务的账号无配置与 50 条规则都是 1500 allocs/op（每候选 3 次、约 1 KB，来自原有的用量检查 `routeHasRequiredPrimaryUsageFor`、`declaredAttemptRules`，不是协议判断，本次没有动）。2026-11-21 起用量检查只看账号类型和请求体，每种账号类型每个请求体只算一次（`missingRouteUsage`，钩子改写请求体后重算）：500 个候选一轮是 5 allocs/op，1 MB 的请求体约 2 ms，与候选数无关（以前 500 个候选约 0.84 s）。分组快照读取（10 个无配置账号）改前 424 allocs/op、改后 399：为了多读两列不增加分配，`readGroupSnap` 把逐行的扫描临时变量改成整次读取共用一份。这组快照读数来自按旧 `HotGroupSnapshot` 基准临时重写的文件，没有提交（该基准已在 `fcc847b62` 删除，`store/gormtest/BASELINE.md` 现在没有这条路径的基线）。
+实现时的读数（2026-11-17，开发机，只作量级参考）：`Serves` 500 个候选一轮，无配置 3.3–5.4 µs，50 条规则 17–35 µs，都是 0 allocs/op。`ineligibleReason` 500 个候选一轮：被协议绑定过滤的账号 0 allocs/op；能服务的账号无配置与 50 条规则都是 1500 allocs/op（每候选 3 次、约 1 KB，来自原有的用量检查 `routeHasRequiredPrimaryUsageFor`、`declaredAttemptRules`，不是协议判断，本次没有动）。2026-11-21 起用量检查不再参与调度（§120.4），能服务的账号也是 0 allocs/op。分组快照读取（10 个无配置账号）改前 424 allocs/op、改后 399：为了多读两列不增加分配，`readGroupSnap` 把逐行的扫描临时变量改成整次读取共用一份。这组快照读数来自按旧 `HotGroupSnapshot` 基准临时重写的文件，没有提交（该基准已在 `fcc847b62` 删除，`store/gormtest/BASELINE.md` 现在没有这条路径的基线）。
 
 ### 110.9 控制台
 
@@ -8033,7 +8033,7 @@ ALTER TABLE accounts ADD COLUMN IF NOT EXISTS model_protocols jsonb NOT NULL DEF
 
 ### 112.2 `PlatformService.Execute`：唯一的请求路径
 
-每次尝试（一个账号一次，换号后从头构造）核心调账号类型所属插件的 `Execute`，WebSocket 会话每一轮消息调一次。核心在调用之前做完协议转换（`internal/gateway/convert`）、账号模型映射、引用模型映射、强制流式（§83）、`claude_max_tokens`（§84.1）和账号参数覆盖的请求体部分（§84），以及模型可用性预检。两处覆盖改动了请求体时（`gateway/dispatch.go` 的 `upstreamBody`），核心在结果上**再强制一次流式**（覆盖不能把只流式上游的 `stream` 改回假），再按账号的用量规则检查一次能否计量（`meterable`，与调度时对客户端请求体的检查相同：主用量与尝试次数），不能计量的这次尝试换号（例如覆盖加了用量规则计不了的操作）。插件交回的请求体仍不检查（§112.5）。
+每次尝试（一个账号一次，换号后从头构造）核心调账号类型所属插件的 `Execute`，WebSocket 会话每一轮消息调一次。核心在调用之前做完协议转换（`internal/gateway/convert`）、账号模型映射、引用模型映射、强制流式（§83）、`claude_max_tokens`（§84.1）和账号参数覆盖的请求体部分（§84），以及模型可用性预检。两处覆盖改动了请求体时（`gateway/dispatch.go` 的 `upstreamBody`），核心在结果上**再强制一次流式**（覆盖不能把只流式上游的 `stream` 改回假）。2026-11-21 起不再按用量规则检查请求体能否计量（原来的 `meterable` 已删，§120.4）：覆盖加了账号计不了的操作也照常发出，不换号。插件交回的请求体同样不检查（§112.5）。
 
 `ExecuteRequest`（字段 1 `request` 删除并 `reserved`）：
 
@@ -8625,7 +8625,7 @@ ALTER TABLE usage_logs
 ### 120.1 规则
 
 - `jsonPath` / `ssePath`（`sseEvent` 限定事件）指向一个数组，每次读到都是**完整快照**（后到的整体替换先到的，不累加）；其中 `typePath` 等于 `typeValue` 的元素各是一条附加用量，模型取元素里的 `modelPath`，`map` 读 token（`input_tokens`、`output_tokens` 必须有；值必须是不超过 10¹² 的非负整数）。例：Anthropic 的 `usage.iterations`（`compaction`、`advisor`）。
-- 模型必须是**调度前准入过的**：`usePrimaryModel` 取请求的主模型（账号映射后），或者请求里经 `request.modelReferences` 声明、同名的引用模型（准入：分组允许、账号服务该模型、调度前取价，没价格的引用模型在调度前 403，§17.3）。应答报了一个没有准入的模型，记录的 `BillingError` 为 `additional usage does not match an admitted model identity`，整条记录不结算（`failed`）。
+- 模型必须是**调度前准入过的**：`usePrimaryModel` 取请求的主模型（账号映射后），或者请求里经 `request.modelReferences` 声明、同名的引用模型（准入：分组允许、账号服务该模型、调度前取价，没价格的引用模型在调度前 403，§17.3）。应答报了一个没有准入的模型，附加用量不单独计价，整条请求按顶层用量、请求的模型计费（§120.4）。
 - 预扣：引用模型按估算的同一份 token 预扣（`estimatedAdditional`）；结算按实际读数。
 
 ### 120.2 已删除：对象形式与按应答取价
@@ -8647,6 +8647,16 @@ ALTER TABLE usage_logs
 `primary_total_cost` 加上各项的 `detail.total_cost` 等于顶层 `total_cost`。主用量被替代计费用量替换（不计价）时、没有分项的记录（顶层就是主用量）都不写这三个字段。重试结算与对账走同一个 `priceComponents`，结果相同。三个都是金额，`/me/usage/:id` 照常返回。
 
 控制台使用记录详情：主用量公式以 `primary_total_cost` 结尾（历史记录没有时只显示算式不显示金额，不在前端相减），每一项显示它自己的公式，再列一行“主用量小计 + 各项金额 = 合计”；被替换时不显示主用量公式。替代计费用量的每一项按尝试轮次显示“第 N 轮”（每一轮的 `kind` 都是清单 attempts 规则的名字，主模型那一轮也是）。
+
+### 120.4 用量不参与调度，算不了按请求的模型计费（2026-11-21，所有者决定）
+
+所有者原话：“发出去我们不管，我们回来的时候再看一下”“如果算不了，那么就直接按照请求的模型计费”。
+
+- **发出前不检查**：请求要单独计量的部分（`fallbacks` 的各次尝试、`compaction` / `context_management` 的附加用量、引用模型的用量）不再决定请求能不能发给某个账号。调度不再因此排除账号（原来的 `usage_unsupported`），账号参数覆盖加了这类操作也不换号（原来的 `meterable`）。转换过去的请求（例如 Codex 账号接 `/v1/messages`）不带这些字段，引用模型不做映射。
+- **回来再算**：应答里的附加用量和替代计费的各次尝试能定价就分项计价（§120.3）；有任何一项定不了价（账号类型没有对应的用量规则、应答报了没准入的模型、两个引用模型映射成同一个上游模型分不清、读数不完整等），分项全部丢弃，整条请求按顶层用量、请求的模型的价格计费，照常结算，记一条 `gateway: usage segments cannot be priced` 警告日志。不再有“计费错误、整条不结算”的情况：`UsageRecord.BillingError` 和 `billing_detail.inputs.billing_error` 已删除。
+- 仍在发出前做的：请求本身的准入（分组允许引用的模型、引用模型有价格，§17.3）；调度时账号的模型列表和协议绑定也要提供引用的模型（`referenced_model_not_served` 等，§110，属于“账号服务哪些模型”，不是计量）；构造请求时签名的引用模型必须原名发出、转换不得凭空引入模型引用，不满足的这次尝试换号。
+- 顶层用量本身为空的应答仍按“未上报”处理（§112），不因分项丢弃而变。
+- `AdditionalUsageRule.requiredBy` 随之删除（清单里写了也被忽略，`sdk/platforms/anthropic.json` 的 `compaction` 规则已去掉）；`AttemptUsageRule.requiredBy` 保留，用来决定是否按 fallback 链读应答。
 
 ## 121. Codex 账号经适配服务 OpenAI 生图，同平台适配改为显式声明（2026-11-19，所有者要求“Codex 要兼容 OpenAI 的生图协议去转成 response 生图”；无迁移；清单加 `accountTypes[].platforms[].adapted`；插件协议仍是 2、Host API 仍是 10；设计见 [DESIGN-2026-11-18-CODEX-IMAGES.md](DESIGN-2026-11-18-CODEX-IMAGES.md) 第 3 节）
 

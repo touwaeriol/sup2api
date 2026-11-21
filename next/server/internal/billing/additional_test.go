@@ -32,8 +32,4 @@ func TestReplacementPrechargeUsesAttemptsWithoutFinalDoubleCount(t *testing.T) {
 	if e != nil || !amount.Equal(decimal.NewFromInt(2)) {
 		t.Fatal(amount, e)
 	}
-	r.BillingError = "incomplete chain"
-	if _, e = quoteRecord(context.Background(), &Service{}, r); e == nil {
-		t.Fatal("blocked chain precharged")
-	}
 }
