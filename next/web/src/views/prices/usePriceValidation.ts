@@ -35,6 +35,8 @@ export interface PriceAnalysis {
 /**
  * Server-side check (POST /prices/validate) of the price being edited,
  * debounced 500 ms after each change. Skipped while `localIssues` has entries.
+ * Only the latest request writes the state: a change, a skipped run and a
+ * reset drop the answer of any request still in flight.
  */
 export function usePriceValidation(payload: Ref<PricePayload>, localIssues: Ref<string[]>) {
   const validation = ref<PriceValidation | null>(null)
@@ -43,13 +45,20 @@ export function usePriceValidation(payload: Ref<PricePayload>, localIssues: Ref<
   let seq = 0
   let timer: ReturnType<typeof setTimeout> | undefined
 
+  /** Drops the answer of the request in flight, if any. */
+  function invalidate() {
+    seq++
+    validating.value = false
+  }
+
   async function run() {
+    invalidate()
     const body = { ...payload.value }
     if (!body.expression.trim() || localIssues.value.length) {
       validation.value = null
       return
     }
-    const my = ++seq
+    const my = seq
     validating.value = true
     try {
       const r = await api.post<PriceValidateResult & { cost_per_million_input?: string; samples?: number; analysis?: PriceAnalysis }>('/prices/validate', body)
@@ -69,6 +78,7 @@ export function usePriceValidation(payload: Ref<PricePayload>, localIssues: Ref<
     payload,
     () => {
       clearTimeout(timer)
+      invalidate()
       timer = setTimeout(run, 500)
     },
     { deep: true, immediate: true }
@@ -88,6 +98,7 @@ export function usePriceValidation(payload: Ref<PricePayload>, localIssues: Ref<
   }
 
   function reset() {
+    invalidate()
     validation.value = null
     error.value = ''
   }

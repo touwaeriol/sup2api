@@ -188,7 +188,7 @@ export default {
     simulateHint: '请求体参数、请求头、用量字段、时间',
     paramsHint: '值按 JSON 读，读不了按文本',
     at: '请求时间',
-    atHint: '空着按现在'
+    atHint: '按你的浏览器时区；空着按现在'
   },
   check: {
     ok: '检查通过',
@@ -353,8 +353,7 @@ export default {
     perRequest: '{price} / 次',
     perRequestLabel: '每次',
     perMillion: '/百万',
-    otherwise: '其余',
-    rules: '另有 {n} 条加价规则'
+    otherwise: '其余'
   },
   sources: {
     title: '价格同步源',

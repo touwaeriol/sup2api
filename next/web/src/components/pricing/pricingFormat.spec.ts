@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { PriceDef } from '@/api/pricing'
-import { applyRule, effectiveRate, hasDiscount, inheritedRate, priceCells, sameRate, validRate } from './pricingFormat'
+import { applyRule, effectiveRate, hasDiscount, inheritedRate, priceCells, priceExtras, priceText, sameRate, usd, validRate } from './pricingFormat'
 import { singleTier } from '@/views/prices/priceExpr'
 
 describe('a rate typed in a form', () => {
@@ -104,5 +104,22 @@ describe('the list price a rule being edited gives', () => {
   })
   it('is a price of its own for a custom rule', () => {
     expect(applyRule(base, { kind: 'custom', mode: 'per_token', config: singleTier({ p: 1, c: 8 }) })).toEqual({ mode: 'per_token', config: singleTier({ p: 1, c: 8 }), expression: '' })
+  })
+})
+
+describe('what the price views write of a price', () => {
+  it('is an amount at eight significant digits, so a small one never reads $0', () => {
+    expect([3, 0.3, 0.00001, 1e-7, 0.1 + 0.2, 1.234567891, 1234567.891].map(v => usd(v))).toEqual(['$3', '$0.3', '$0.00001', '$0.0000001', '$0.3', '$1.2345679', '$1234567.9'])
+    expect([null, undefined].map(v => usd(v))).toEqual(['—', '—'])
+    expect(priceText(0.00001, 3)).toBe('$0.00003')
+  })
+  it('says what a price has beyond its first tier: its tiers when several, the rules of a per-request or per-token price', () => {
+    const t = (key: string, params?: Record<string, unknown>) => `${key.replace('prices.summary.', '')}:${params?.n}`
+    const rule = { name: '', multiplier: 2, conds: [{ source: 'header', key: 'x', op: 'exists' }] }
+    expect(priceExtras(t, { mode: 'per_token', config: singleTier({ p: 1, c: 2 }) })).toBe('')
+    const twoTiers = { tiers: [{ name: 'a', max_len: 10, p: 1 }, { name: 'b', max_len: null, p: 2 }], rules: [rule] }
+    expect(priceExtras(t, { mode: 'per_token', config: twoTiers })).toBe('tiers:2 · rules:1')
+    expect(priceExtras(t, { mode: 'per_request', config: { price: 1, rules: [rule, rule] } })).toBe('rules:2')
+    expect(priceExtras(t, { mode: 'expression', config: {} })).toBe('')
   })
 })

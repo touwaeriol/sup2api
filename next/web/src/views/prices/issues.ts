@@ -12,3 +12,8 @@ export function issueText(x: Issue): string {
   }
   return JSON.stringify(x)
 }
+
+/** The 1-based line and column an issue points at (column 1 when it gives none); null when it has no line. */
+export function issuePos(x: Issue): { line: number; column: number } | null {
+  return typeof x !== 'string' && typeof x?.line === 'number' ? { line: x.line, column: typeof x.column === 'number' && x.column > 0 ? x.column : 1 } : null
+}

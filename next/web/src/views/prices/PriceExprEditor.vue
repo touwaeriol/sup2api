@@ -6,8 +6,9 @@ import ExprCodeEditor from './ExprCodeEditor.vue'
 import GuideText from './GuideText.vue'
 import PricePresets from './PricePresets.vue'
 import { formatExpr } from './exprSyntax'
+import { issuePos } from './issues'
 import { tokenExpr } from './priceExpr'
-import { PRESETS, TIER_PRESET_GROUPS, type PresetGroup } from './tokenPrice'
+import { EXPR_EXAMPLES, EXPR_PRESET_GROUP, PRESETS, TIER_PRESET_GROUPS } from './presets'
 import type { PriceValidation } from './usePriceValidation'
 
 // The expression editor: preset templates, a short reference of the names it
@@ -19,21 +20,12 @@ const emit = defineEmits<{ (e: 'guide'): void }>()
 const code = ref<InstanceType<typeof ExprCodeEditor>>()
 const { t } = useI18n()
 
-const fromTiers = (key: string) => formatExpr(tokenExpr({ tiers: PRESETS[key](), rules: [] }))
-const EXTRA: Record<string, string> = {
-  priority: 'tier("base", p*2.5 + c*15)\n* (param("service_tier") == "priority" ? 2 : 1)',
-  night: 'tier("base", p*3 + c*15)\n* (hour("Asia/Shanghai") < 8 ? 0.5 : 1)',
-  minimum: 'tier("base", max(p*3 + c*15, flat(0.001)))'
-}
-const GROUPS: PresetGroup[] = [...TIER_PRESET_GROUPS, { key: 'advanced', items: Object.keys(EXTRA) }]
-const pick = (key: string) => (model.value = EXTRA[key] ?? fromTiers(key))
+// A tier template as the expression it generates; an advanced one is an example of the guide.
+const GROUPS = [...TIER_PRESET_GROUPS, EXPR_PRESET_GROUP]
+const pick = (key: string) => (model.value = PRESETS[key] ? formatExpr(tokenExpr({ tiers: PRESETS[key](), rules: [] })) : EXPR_EXAMPLES[key])
 
-const located = computed(() => {
-  for (const x of props.validation?.errors || []) {
-    if (typeof x !== 'string' && typeof x.line === 'number') return { line: x.line as number, column: (x.column as number) || 1 }
-  }
-  return null
-})
+/** Where the first error that has a position points. */
+const located = computed(() => (props.validation?.errors || []).map(issuePos).find(Boolean) ?? null)
 const format = () => (model.value = formatExpr(model.value))
 defineExpose({ focusAt: (l: number, c: number) => code.value?.focusAt(l, c), insert: (s: string, c?: number) => code.value?.insert(s, c) })
 </script>

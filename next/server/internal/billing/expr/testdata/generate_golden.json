@@ -1,0 +1,416 @@
+[
+  {
+    "name": "per request",
+    "mode": "per_request",
+    "config": {
+      "price": 0.01
+    },
+    "expression": "tier(\"base\", flat(0.01))"
+  },
+  {
+    "name": "per request with rules",
+    "mode": "per_request",
+    "config": {
+      "price": 0.04,
+      "rules": [
+        {
+          "name": "hd",
+          "multiplier": 2,
+          "conds": [
+            {
+              "source": "param",
+              "key": "quality",
+              "op": "eq",
+              "value": "hd"
+            }
+          ]
+        },
+        {
+          "name": "night",
+          "multiplier": 0.5,
+          "conds": [
+            {
+              "source": "time",
+              "tz": "Asia/Shanghai",
+              "from_hour": 0,
+              "to_hour": 8
+            }
+          ]
+        }
+      ]
+    },
+    "expression": "(tier(\"base\", flat(0.04))) * (param(\"quality\") == \"hd\" ? 2 : 1) * (hour(\"Asia/Shanghai\") >= 0 && hour(\"Asia/Shanghai\") < 8 ? 0.5 : 1)"
+  },
+  {
+    "name": "one tier, every price",
+    "mode": "per_token",
+    "config": {
+      "tiers": [
+        {
+          "name": "base",
+          "max_len": null,
+          "unit": "token",
+          "p": 5,
+          "c": 40,
+          "cr": 1.25,
+          "cc": 6.25,
+          "cc1h": 10,
+          "img": 10,
+          "img_o": 40
+        }
+      ],
+      "rules": []
+    },
+    "expression": "tier(\"base\", p*5 + c*40 + cr*1.25 + cc*6.25 + cc1h*10 + img*10 + img_o*40)"
+  },
+  {
+    "name": "one tier, p and c only, a cache price of 0",
+    "mode": "per_token",
+    "config": {
+      "tiers": [
+        {
+          "name": "base",
+          "max_len": null,
+          "unit": "token",
+          "cr": 0
+        }
+      ],
+      "rules": []
+    },
+    "expression": "tier(\"base\", p*0 + c*0 + cr*0)"
+  },
+  {
+    "name": "four tiers, listed out of order, nested from the third",
+    "mode": "per_token",
+    "config": {
+      "tiers": [
+        {
+          "name": "rest",
+          "max_len": null,
+          "unit": "token",
+          "p": 4,
+          "c": 20
+        },
+        {
+          "name": "mid",
+          "max_len": 128000,
+          "unit": "token",
+          "p": 2,
+          "c": 10
+        },
+        {
+          "name": "short",
+          "max_len": 32000,
+          "unit": "token",
+          "p": 1,
+          "c": 5
+        },
+        {
+          "name": "long",
+          "max_len": 256000,
+          "unit": "token",
+          "p": 3,
+          "c": 15
+        }
+      ],
+      "rules": []
+    },
+    "expression": "len <= 32000 ? tier(\"short\", p*1 + c*5) : (len <= 128000 ? tier(\"mid\", p*2 + c*10) : (len <= 256000 ? tier(\"long\", p*3 + c*15) : tier(\"rest\", p*4 + c*20)))"
+  },
+  {
+    "name": "a per-request tier",
+    "mode": "per_token",
+    "config": {
+      "tiers": [
+        {
+          "name": "base",
+          "max_len": 1000,
+          "unit": "token",
+          "p": 1,
+          "c": 2
+        },
+        {
+          "name": "bulk",
+          "max_len": null,
+          "unit": "request",
+          "price": 0.05
+        }
+      ],
+      "rules": []
+    },
+    "expression": "len <= 1000 ? tier(\"base\", p*1 + c*2) : tier(\"bulk\", flat(0.05))"
+  },
+  {
+    "name": "every condition source and operator",
+    "mode": "per_token",
+    "config": {
+      "tiers": [
+        {
+          "name": "base",
+          "max_len": null,
+          "unit": "token",
+          "p": 3,
+          "c": 15
+        }
+      ],
+      "rules": [
+        {
+          "name": "param",
+          "multiplier": 1.5,
+          "conds": [
+            {
+              "source": "param",
+              "key": " service_tier ",
+              "op": "eq",
+              "value": "priority"
+            },
+            {
+              "source": "param",
+              "key": "n",
+              "op": "eq",
+              "value": 3
+            },
+            {
+              "source": "param",
+              "key": "stream",
+              "op": "eq",
+              "value": true
+            },
+            {
+              "source": "param",
+              "key": "model",
+              "op": "ne",
+              "value": "3"
+            },
+            {
+              "source": "param",
+              "key": "temperature",
+              "op": "lt",
+              "value": 0.25
+            },
+            {
+              "source": "param",
+              "key": "max_tokens",
+              "op": "gte",
+              "value": 100
+            },
+            {
+              "source": "param",
+              "key": "reasoning.effort",
+              "op": "contains",
+              "value": "high"
+            },
+            {
+              "source": "param",
+              "key": "tools",
+              "op": "exists"
+            }
+          ]
+        },
+        {
+          "name": "header",
+          "multiplier": 2,
+          "conds": [
+            {
+              "source": "header",
+              "key": " Anthropic-Beta ",
+              "op": "contains",
+              "value": "fast-mode"
+            },
+            {
+              "source": "header",
+              "key": "X-Tier",
+              "op": "eq",
+              "value": "3"
+            },
+            {
+              "source": "header",
+              "key": "x-team",
+              "op": "ne",
+              "value": "ops"
+            },
+            {
+              "source": "header",
+              "key": "X-Trace",
+              "op": "exists"
+            }
+          ]
+        },
+        {
+          "name": "usage",
+          "multiplier": 3,
+          "conds": [
+            {
+              "source": "usage",
+              "key": "service_tier",
+              "op": "eq",
+              "value": "flex"
+            },
+            {
+              "source": "usage",
+              "key": "seconds",
+              "op": "gt",
+              "value": 1.5
+            },
+            {
+              "source": "usage",
+              "key": "frames",
+              "op": "lte",
+              "value": 24
+            },
+            {
+              "source": "usage",
+              "key": "speed",
+              "op": "exists"
+            }
+          ]
+        }
+      ]
+    },
+    "expression": "(tier(\"base\", p*3 + c*15)) * (param(\"service_tier\") == \"priority\" && param(\"n\") == 3 && param(\"stream\") == true && param(\"model\") != \"3\" && (param(\"temperature\") ?? 0) < 0.25 && (param(\"max_tokens\") ?? 0) >= 100 && has(param(\"reasoning.effort\"), \"high\") && param(\"tools\") != nil ? 1.5 : 1) * (has(header(\"anthropic-beta\"), \"fast-mode\") && header(\"x-tier\") == \"3\" && header(\"x-team\") != \"ops\" && header(\"x-trace\") != \"\" ? 2 : 1) * (u(\"service_tier\") == \"flex\" && u(\"seconds\") > 1.5 && u(\"frames\") <= 24 && u(\"speed\") != 0 ? 3 : 1)"
+  },
+  {
+    "name": "time windows: within a day, across midnight, to 24, to 0, a blank zone",
+    "mode": "per_token",
+    "config": {
+      "tiers": [
+        {
+          "name": "base",
+          "max_len": null,
+          "unit": "token",
+          "p": 1,
+          "c": 1
+        }
+      ],
+      "rules": [
+        {
+          "name": "day",
+          "multiplier": 1.2,
+          "conds": [
+            {
+              "source": "time",
+              "tz": "America/New_York",
+              "from_hour": 9,
+              "to_hour": 18
+            }
+          ]
+        },
+        {
+          "name": "night",
+          "multiplier": 0.8,
+          "conds": [
+            {
+              "source": "time",
+              "tz": " Asia/Shanghai ",
+              "from_hour": 22,
+              "to_hour": 6
+            }
+          ]
+        },
+        {
+          "name": "evening",
+          "multiplier": 0.9,
+          "conds": [
+            {
+              "source": "time",
+              "tz": "UTC",
+              "from_hour": 23,
+              "to_hour": 24
+            }
+          ]
+        },
+        {
+          "name": "late",
+          "multiplier": 0.7,
+          "conds": [
+            {
+              "source": "time",
+              "tz": "",
+              "from_hour": 20,
+              "to_hour": 0
+            }
+          ]
+        }
+      ]
+    },
+    "expression": "(tier(\"base\", p*1 + c*1)) * (hour(\"America/New_York\") >= 9 && hour(\"America/New_York\") < 18 ? 1.2 : 1) * ((hour(\"Asia/Shanghai\") >= 22 || hour(\"Asia/Shanghai\") < 6) ? 0.8 : 1) * (hour(\"UTC\") >= 23 && hour(\"UTC\") < 24 ? 0.9 : 1) * ((hour(\"UTC\") >= 20 || hour(\"UTC\") < 0) ? 0.7 : 1)"
+  },
+  {
+    "name": "strings quoted as Go quotes them",
+    "mode": "per_request",
+    "config": {
+      "price": 1,
+      "rules": [
+        {
+          "name": "escapes",
+          "multiplier": 2,
+          "conds": [
+            {
+              "source": "param",
+              "key": "say \"hi\" \\ ok",
+              "op": "eq",
+              "value": "a\nb\tc\u0007\b\f\r\u000b"
+            },
+            {
+              "source": "param",
+              "key": "ctl",
+              "op": "eq",
+              "value": "x\u0001y\u007f"
+            },
+            {
+              "source": "usage",
+              "key": "space",
+              "op": "contains",
+              "value": "\u00a0\u200b\u2028\udb40\udc01"
+            },
+            {
+              "source": "header",
+              "key": "x-lang",
+              "op": "eq",
+              "value": "中文 é 😀"
+            }
+          ]
+        }
+      ]
+    },
+    "expression": "(tier(\"base\", flat(1))) * (param(\"say \\\"hi\\\" \\\\ ok\") == \"a\\nb\\tc\\a\\b\\f\\r\\v\" && param(\"ctl\") == \"x\\x01y\\x7f\" && has(u(\"space\"), \"\\u00a0\\u200b\\u2028\\U000e0001\") && header(\"x-lang\") == \"中文 é 😀\" ? 2 : 1)"
+  },
+  {
+    "name": "numbers printed as Go prints them",
+    "mode": "per_token",
+    "config": {
+      "tiers": [
+        {
+          "name": "tiny",
+          "max_len": 1000000,
+          "unit": "token",
+          "p": 1e-7,
+          "c": 1.25e-8,
+          "cr": 0.30000000000000004
+        },
+        {
+          "name": "huge",
+          "max_len": null,
+          "unit": "token",
+          "p": 1e+21,
+          "c": "3.75"
+        }
+      ],
+      "rules": [
+        {
+          "name": "n",
+          "multiplier": 0.1,
+          "conds": [
+            {
+              "source": "usage",
+              "key": "n",
+              "op": "gt",
+              "value": 0.000001
+            }
+          ]
+        }
+      ]
+    },
+    "expression": "(len <= 1000000 ? tier(\"tiny\", p*0.0000001 + c*0.0000000125 + cr*0.30000000000000004) : tier(\"huge\", p*1000000000000000000000 + c*3.75)) * (u(\"n\") > 0.000001 ? 0.1 : 1)"
+  }
+]

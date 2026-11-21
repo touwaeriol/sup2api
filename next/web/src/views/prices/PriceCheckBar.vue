@@ -3,12 +3,12 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { SIcon, SLink, SSpinner } from '@sub2api/ui'
 import { formatMoney } from '@/utils/format'
-import { issueText, type Issue } from './issues'
+import { issuePos, issueText, type Issue } from './issues'
 import type { PriceValidation } from './usePriceValidation'
 
 // The check result as one line under the editor: passed (with the cost of
 // one million input tokens), or each problem on a line of its own with its
-// position.
+// position (a link to it in the expression editor).
 const props = defineProps<{ localIssues: string[]; validation: PriceValidation | null; error: string; validating: boolean; mode: string }>()
 const emit = defineEmits<{ (e: 'locate', line: number, column: number): void }>()
 const { t } = useI18n()
@@ -20,9 +20,8 @@ const problems = computed<Line[]>(() => {
   if (props.error) return [{ text: props.error }]
   return (props.validation?.errors || []).map((x) => {
     const o: Obj = typeof x === 'string' ? { message: x } : x
-    const pos = typeof o.line === 'number' ? { line: o.line as number, column: (o.column as number) || 1 } : {}
     const detail = o.detail === undefined || o.detail === null || o.detail === '' ? undefined : String(o.detail)
-    return { text: issueText(o), detail, ...pos }
+    return { text: issueText(o), detail, ...issuePos(o) }
   })
 })
 const warnings = computed(() => (problems.value.length ? [] : (props.validation?.warnings || []).map(issueText)))
@@ -34,7 +33,7 @@ const cost = computed(() => {
 </script>
 
 <template>
-  <div class="rounded-lg border px-3 py-2 text-sm" :class="problems.length ? 'border-danger-200 bg-danger-50/60 dark:border-danger-900 dark:bg-danger-950/30' : 'border-line bg-surface-2'" data-testid="price-check">
+  <div class="rounded-lg border px-3 py-2 text-sm" aria-live="polite" :class="problems.length ? 'border-danger-200 bg-danger-50/60 dark:border-danger-900 dark:bg-danger-950/30' : 'border-line bg-surface-2'" data-testid="price-check">
     <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
       <SSpinner v-if="validating" size="sm" />
       <span v-else-if="ok" class="inline-flex items-center gap-1 text-success-700 dark:text-success-400"><SIcon name="check" class="h-4 w-4" />{{ t('prices.check.ok') }}</span>
@@ -49,7 +48,7 @@ const cost = computed(() => {
         <span v-if="p.line" class="font-medium">{{ t('prices.check.position', { line: p.line, column: p.column }) }}</span>
         <span>{{ p.text }}</span>
         <span v-if="p.detail" class="font-mono text-danger-600/90 dark:text-danger-400/90">{{ p.detail }}</span>
-        <SLink v-if="p.line" as="button" class="text-xs" @click="emit('locate', p.line!, p.column!)">{{ t('prices.check.locate') }}</SLink>
+        <SLink v-if="p.line && mode === 'expression'" as="button" class="text-xs" @click="emit('locate', p.line!, p.column!)">{{ t('prices.check.locate') }}</SLink>
       </li>
     </ul>
     <ul v-if="warnings.length" class="mt-1.5 space-y-1">

@@ -37,8 +37,9 @@ function focusAt(line: number, column = 1) {
   t.setSelectionRange(at, at + 1)
 }
 
-/** Inserts text at the caret (or replaces the selection); `caret` is the offset inside `text` to leave the caret at. */
+/** Inserts text at the caret (or replaces the selection); `caret` is the offset inside `text` to leave the caret at. Read-only, nothing. */
 function insert(text: string, caret = text.length) {
+  if (props.readonly) return
   const t = ta.value
   const v = model.value
   const s = t ? t.selectionStart : v.length

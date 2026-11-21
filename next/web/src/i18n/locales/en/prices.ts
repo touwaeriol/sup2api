@@ -188,7 +188,7 @@ export default {
     simulateHint: 'Body parameters, headers, usage fields, time',
     paramsHint: 'Values are read as JSON, otherwise as text',
     at: 'Request time',
-    atHint: 'Now when empty'
+    atHint: 'In your browser’s time zone; now when empty'
   },
   check: {
     ok: 'Check passed',
@@ -353,8 +353,7 @@ export default {
     perRequest: '{price} / request',
     perRequestLabel: 'per request',
     perMillion: '/M',
-    otherwise: 'otherwise',
-    rules: '+ {n} surcharge rule(s)'
+    otherwise: 'otherwise'
   },
   sources: {
     title: 'Price sync sources',

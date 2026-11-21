@@ -40,6 +40,7 @@ const volumes = computed(() => {
           :key="c"
           type="button"
           :disabled="disabled"
+          :aria-pressed="p === c"
           class="rounded-full border px-2.5 py-0.5 font-mono text-xs"
           :class="p === c ? 'border-primary-500 bg-primary-50 text-primary-700 dark:bg-primary-900/40 dark:text-primary-300' : 'border-line text-fg hover:border-primary-400'"
           @click="price = c"

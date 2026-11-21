@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
+import golden from '../../../../server/internal/billing/expr/testdata/generate_golden.json'
 import {
   checkTokenConfig,
   compactTokenConfig,
   condExpr,
   checkPerRequest,
+  checkPrice,
   compactPerRequest,
   takesCustomPrice,
   fmt,
@@ -17,6 +19,7 @@ import {
   type CondValue,
   type FieldCond,
   type MarkupRule,
+  type PriceMode,
   type RuleCond,
   type TokenConfig,
   type TokenTier
@@ -37,6 +40,10 @@ const TWO =
   'len <= 200000 ? tier("standard", p*3 + c*15 + cr*0.3 + cc*3.75 + cc1h*6) : tier("long_context", p*6 + c*22.5 + cr*0.6 + cc*7.5 + cc1h*12)'
 
 describe('the generated expression, as the server generates it', () => {
+  // The server's TestGenerateGolden reads the same file.
+  it.each(golden.map(c => [c.name, c] as const))('is the server’s, byte for byte: %s', (_, c) => {
+    expect(priceExpression(c.mode as PriceMode, c.config)).toBe(c.expression)
+  })
   it('is the legacy per-request and single-tier per-token expression, byte for byte', () => {
     expect(priceExpression('per_request', { price: 0.01 })).toBe('tier("base", flat(0.01))')
     expect(priceExpression('per_token', singleTier({ p: 3, c: 15, cr: 0.3 }))).toBe('tier("base", p*3 + c*15 + cr*0.3)')
@@ -217,6 +224,11 @@ describe('local checks', () => {
     expect(one({ source: 'param', key: 'k', op: 'contains', value: 5 })).toEqual(['ruleField'])
     expect(one({ source: 'param', key: 'k'.repeat(201), op: 'exists' })).toEqual(['ruleField'])
     expect(one({ source: 'time', tz: 'Mars/Base', from_hour: 1, to_hour: 2 })).toEqual(['ruleTz'])
+    // Go's time.LoadLocation takes neither an offset nor a name in another case, though Intl does.
+    for (const tz of ['+08:00', '-05:00', 'asia/shanghai', 'utc', 'Local'])
+      expect([tz, one({ source: 'time', tz, from_hour: 1, to_hour: 2 })]).toEqual([tz, ['ruleTz']])
+    for (const tz of ['Asia/Shanghai', 'UTC', 'Etc/UTC', 'America/New_York'])
+      expect([tz, one({ source: 'time', tz, from_hour: 1, to_hour: 2 })]).toEqual([tz, []])
     expect(one({ source: 'time', tz: '', from_hour: 23, to_hour: 24 })).toEqual([])
     expect(keys(cfg([tier('a', null)], [rule(-1, { source: 'header', key: 'x', op: 'exists' })]))).toEqual(['ruleField'])
     expect(keys(cfg([tier('a', 100, { p: -1 }), tier('b', null)]))).toEqual(['negative'])
@@ -225,6 +237,16 @@ describe('local checks', () => {
     expect(checkPerRequest(null).map(x => x.key)).toEqual(['prices.local.price'])
     expect(checkPerRequest(-1)).toHaveLength(1)
     expect(checkPerRequest(0)).toEqual([])
+  })
+  it('check a price as it is sent, by its mode', () => {
+    const keys = (p: Parameters<typeof checkPrice>[0]) => checkPrice(p).map(x => x.key.replace('prices.local.', ''))
+    expect(keys({ mode: 'expression', config: {}, expression: ' \n' })).toEqual(['emptyExpr'])
+    expect(keys({ mode: 'expression', config: {}, expression: 'p*3' })).toEqual([])
+    expect(keys({ mode: 'per_request', config: compactPerRequest(null, [rule(-1, { source: 'header', key: 'x', op: 'exists' })]), expression: '' })).toEqual([
+      'price',
+      'ruleField'
+    ])
+    expect(keys({ mode: 'per_token', config: cfg([]), expression: '' })).toEqual(['noTier'])
   })
 })
 

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
-import type { PresetGroup } from './tokenPrice'
+import type { PresetGroup } from './presets'
 
 // Preset templates: chips in labelled groups; picking one replaces what is edited.
 defineProps<{ groups: PresetGroup[]; disabled?: boolean }>()

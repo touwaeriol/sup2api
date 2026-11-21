@@ -11,17 +11,18 @@ import { addTier, editableTokenConfig, setOp } from './tokenPrice'
 
 enableAutoUnmount(afterEach)
 
-function render(start: TokenConfig) {
+function render(start: TokenConfig, disabled = false) {
   i18n.global.locale.value = 'zh'
   const model = ref(start)
   const w = mount(TokenPriceEditor, {
-    props: { modelValue: model.value, 'onUpdate:modelValue': (v: TokenConfig) => (model.value = v) },
+    props: { modelValue: model.value, disabled, 'onUpdate:modelValue': (v: TokenConfig) => (model.value = v) },
     global: { plugins: [i18n] }
   })
   const tiers = () => w.findAll('[data-tier]')
   return { w, model, tiers }
 }
 
+const tierOf = (name: string, max_len: number) => ({ name, max_len, p: 1, c: 1 })
 const claude = (): TokenConfig =>
   editableTokenConfig({ tiers: [{ name: 'base', max_len: null, p: 3, c: 15, cr: 0.3, cc: 3.75, cc1h: 6 }], rules: [] })
 
@@ -115,6 +116,42 @@ describe('the per-token editor', () => {
     expect(w.find('[data-testid="tier-p"]').exists()).toBe(false)
     await w.get('[data-tier="0"] input[aria-label="每次价格"]').setValue('0.05')
     expect(tokenExpr(model.value)).toBe('tier("base", flat(0.05))')
+  })
+
+  it('read-only, opens every card and its media prices, and changes nothing', async () => {
+    const c = editableTokenConfig({
+      tiers: [tierOf('short', 1000), { name: 'rest', max_len: null, p: 2, c: 2, img: 4 }],
+      rules: [{ name: 'r', multiplier: 2, conds: [{ source: 'time', tz: 'UTC', from_hour: 22, to_hour: 0 }] }]
+    })
+    const { w, tiers } = render(c, true)
+    await tiers()[1].get('[data-testid="tier-toggle"]').trigger('click')
+    expect(tiers()[1].get('[data-testid="tier-img"]').attributes('disabled')).toBeDefined()
+    await tiers()[1].findAll('button').find(b => b.text() === '媒体定价')!.trigger('click')
+    expect(tiers()[1].find('[data-testid="tier-img"]').exists()).toBe(false)
+    expect(tiers()[1].findAll('input').every(i => i.attributes('disabled') !== undefined)).toBe(true)
+    expect(w.get('[data-rule="0"]').findAll('input').every(i => i.attributes('disabled') !== undefined)).toBe(true)
+    expect(w.findAll('[data-rule="0"] button').filter(b => b.attributes('disabled') === undefined).map(b => b.text())).toEqual([])
+    expect(w.find('[data-testid="token-add-tier"]').exists()).toBe(false)
+    expect(w.find('[data-testid="token-add-rule"]').exists()).toBe(false)
+    // A window may end at 0, which the list offers.
+    expect(w.findAllComponents(SSelect).find(s => s.props('ariaLabel') === '结束')!.props('options')).toContainEqual({ value: 0, label: '0:00' })
+  })
+
+  it('keeps a card’s state with its tier when one before it goes, and opens the media prices of a template that has them', async () => {
+    const { w, model, tiers } = render(editableTokenConfig({ tiers: [tierOf('a', 1000), tierOf('b', 2000), { name: 'c', max_len: null, p: 1, c: 1 }] }))
+    await tiers()[2].get('[data-testid="tier-toggle"]').trigger('click')
+    expect(tiers()[2].find('[data-testid="tier-img"]').exists()).toBe(false)
+    await tiers()[2].findAll('button').find(b => b.text() === '媒体定价')!.trigger('click')
+    w.findAllComponents(PriceTierCard)[1].findComponent(SDropdown).vm.$emit('select', 'remove')
+    await nextTick()
+    expect(model.value.tiers.map(t => t.name)).toEqual(['a', 'c'])
+    await tiers()[1].get('[data-testid="tier-toggle"]').trigger('click')
+    expect(tiers()[1].find('[data-testid="tier-img"]').exists()).toBe(true)
+    await tiers()[0].get('[data-testid="tier-toggle"]').trigger('click')
+    expect(tiers()[0].find('[data-testid="tier-img"]').exists()).toBe(false)
+
+    await w.get('[data-preset="image"]').trigger('click')
+    expect(tiers()[0].find('[data-testid="tier-img"]').exists()).toBe(true)
   })
 
   it('starts from a template', async () => {

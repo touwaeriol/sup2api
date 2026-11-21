@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, reactive, ref, toRaw, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRoute, useRouter } from 'vue-router'
+import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import { ApiError, api } from '@sub2api/host'
 import {
   SAlert,
@@ -19,6 +19,7 @@ import {
   toast
 } from '@sub2api/ui'
 import type { Price } from '@/api/types'
+import { confirmDiscard } from '@/composables/confirmDiscard'
 import { useAuthStore } from '@/stores/auth'
 import { notifyError } from '@/utils/errors'
 import { applyFormError } from '@/utils/formErrors'
@@ -34,8 +35,7 @@ import { issueText, type Issue } from './issues'
 import PriceCheckBar from './PriceCheckBar.vue'
 import { usePriceValidation, type PricePayload } from './usePriceValidation'
 import {
-  checkPerRequest,
-  checkTokenConfig,
+  checkPrice,
   compactTokenConfig,
   isSet,
   num,
@@ -73,15 +73,17 @@ const sourceText = ref('')
 const errors = ref<Record<string, string>>({})
 const historyOpen = ref(false)
 const exprEditor = ref<InstanceType<typeof PriceExprEditor>>()
+const modelList = ref<InstanceType<typeof PriceModelList>>()
+const readonly = computed(() => !auth.has('price:manage'))
 
 // The expression guide opens in a drawer.
 const guideOpen = ref(false)
 function guideReplace(src: string) {
+  if (readonly.value) return
   sourceText.value = src
   guideOpen.value = false
 }
 
-const readonly = computed(() => !auth.has('price:manage'))
 const modeOptions = computed(() => PRICE_MODES.map(m => ({ value: m, label: t(`prices.mode.${m}`) })))
 const isSynced = computed(() => price.value?.source === 'sync')
 const syncedNotice = computed(() => {
@@ -105,6 +107,7 @@ function resetForm() {
   sourceText.value = ''
   errors.value = {}
   validator.reset()
+  markSaved()
 }
 
 function applyPrice(p: Price) {
@@ -117,6 +120,7 @@ function applyPrice(p: Price) {
     perRequestRules.value = editableRules(rulesOf(p.config))
   }
   if (p.mode === 'per_token') token.value = editableTokenConfig(p.config)
+  markSaved()
 }
 
 async function load() {
@@ -147,18 +151,14 @@ const payload = computed<PricePayload & { mode: PriceMode }>(() => {
   return { mode: 'expression', config: {}, expression: sourceText.value }
 })
 
-const localIssues = computed<string[]>(() => {
-  if (mode.value === 'expression') return sourceText.value.trim() ? [] : [t('prices.local.emptyExpr')]
-  const issues = mode.value === 'per_request' ? checkPerRequest(perRequest.value, compactPerRequest(perRequest.value, perRequestRules.value).rules) : checkTokenConfig(tokenConfig.value)
-  return issues.map(x => t(x.key, x.params || {}))
-})
+const localIssues = computed<string[]>(() => checkPrice(payload.value).map(x => t(x.key, x.params || {})))
 
 const previewText = computed(() => payload.value.expression)
 const previewSource = computed(() => (localIssues.value.length || validation.value?.errors.length ? null : { ...payload.value }))
 
-/** Per-request price into per_token: one per-call tier, the rules kept. */
+/** Per-request price into per_token: one per-call tier, a copy of the rules kept. */
 function perRequestToToken() {
-  token.value = { tiers: [{ name: 'base', max_len: null, unit: 'request', price: perRequest.value }], rules: perRequestRules.value }
+  token.value = { tiers: [{ name: 'base', max_len: null, unit: 'request', price: perRequest.value }], rules: structuredClone(toRaw(perRequestRules.value)) }
   mode.value = 'per_token'
 }
 
@@ -173,6 +173,20 @@ function editAsExpression() {
 const validator = usePriceValidation(payload, localIssues)
 const { validation, error: validationError, validating, serverExpr } = validator
 
+// ------------------------------------------------------------------ unsaved changes
+
+/** What a save would send, as text. */
+const savedState = () => JSON.stringify([form.model.trim(), form.note, form.enabled, payload.value])
+const snapshot = ref('')
+/** Takes what the editor holds as saved: once it is loaded and after each save. */
+function markSaved() {
+  snapshot.value = savedState()
+}
+const dirty = computed(() => savedState() !== snapshot.value)
+// Another model (the same page) or another page: asked first while there are unsaved changes.
+onBeforeRouteUpdate((to, from) => to.path === from.path || confirmDiscard(dirty.value))
+onBeforeRouteLeave(() => confirmDiscard(dirty.value))
+
 // ------------------------------------------------------------------ actions
 
 async function submit(body: Record<string, unknown>): Promise<void> {
@@ -182,9 +196,11 @@ async function submit(body: Record<string, unknown>): Promise<void> {
       toast(t('common.saved'), 'success')
       if (r && r.id) applyPrice(r)
       else await load()
+      modelList.value?.reload()
     } else {
       const r = await api.post<Price>('/prices', body)
       toast(t('common.created'), 'success')
+      markSaved()
       if (r?.id) router.replace(`/prices/${r.id}`)
       else router.push('/prices')
     }
@@ -247,12 +263,12 @@ watch(priceId, load, { immediate: true })
   <div class="space-y-4">
     <SPageHeader :title="t('prices.title')">
       <template #actions>
-        <SButton v-if="!readonly" size="sm" variant="ghost" @click="router.push('/prices')">{{ t('prices.edit.backToList') }}</SButton>
+        <SButton size="sm" variant="ghost" @click="router.push('/prices')">{{ t('prices.edit.backToList') }}</SButton>
       </template>
     </SPageHeader>
 
     <div class="grid items-start gap-4 xl:grid-cols-[18rem_minmax(0,1fr)]">
-      <PriceModelList :current="priceId" :can-manage="!readonly" class="hidden xl:sticky xl:top-4 xl:flex xl:h-[calc(100vh-8rem)]" />
+      <PriceModelList ref="modelList" :current="priceId" :can-manage="!readonly" class="hidden xl:sticky xl:top-4 xl:flex xl:h-[calc(100vh-8rem)]" />
 
       <div class="min-w-0 rounded-xl border border-line bg-surface" data-testid="price-edit-panel">
         <div class="flex flex-wrap items-center gap-2 border-b border-line px-4 py-3 sm:px-5">
@@ -364,7 +380,7 @@ watch(priceId, load, { immediate: true })
     </div>
 
     <SDrawer v-model:open="guideOpen" :title="t('prices.edit.guide')" width="lg">
-      <ExprGuide @insert="(s, c) => exprEditor?.insert(s, c)" @replace="guideReplace" />
+      <ExprGuide :readonly="readonly" @insert="(s, c) => exprEditor?.insert(s, c)" @replace="guideReplace" />
     </SDrawer>
     <ExprHistoryModal v-model:open="historyOpen" :hash="price?.expr_hash" />
   </div>

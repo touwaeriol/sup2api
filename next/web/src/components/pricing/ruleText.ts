@@ -1,9 +1,7 @@
 // How a price and a price rule read in the pricing views. Labels live under
 // pricing.price and pricing.rule.
 import type { PriceDef, PriceRule } from '@/api/pricing'
-import { applyRule, priceBrief, priceCells, rateText, validRate } from './pricingFormat'
-
-type T = (key: string, params?: Record<string, unknown>) => string
+import { applyRule, priceBrief, priceCells, rateText, validRate, type Translate as T } from './pricingFormat'
 
 /**
  * A price in a table cell: "$3 / $15", "$0.02 per request", that an

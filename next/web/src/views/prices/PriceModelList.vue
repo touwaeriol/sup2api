@@ -1,34 +1,33 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { SButton, SInput, SPagination, SSelect, SSpinner } from '@sub2api/ui'
 import type { Price } from '@/api/types'
+import { priceExtras } from '@/components/pricing/pricingFormat'
+import { priceLabel } from '@/components/pricing/ruleText'
 import { useList } from '@/composables/useList'
-import { PRICE_MODES, summarize } from './priceExpr'
+import { PRICE_MODES } from './priceExpr'
+import { priceListState as kept } from './priceListState'
 
 // The prices beside the editor: search, mode filter and one row per model,
-// the one being edited marked. Picking a row opens it in the editor.
+// the one being edited marked. Picking a row opens it in the editor, which
+// builds the page anew: the search, filter and page are kept (priceListState).
 const props = defineProps<{ current: number | null; canManage: boolean }>()
 const router = useRouter()
 const { t } = useI18n()
 
-const { items, loading, page, pageSize, total, filters } = useList<Price>('/prices', { q: '', mode: '' }, { pageSize: 20 })
+const { items, loading, page, pageSize, total, filters, reload } = useList<Price>('/prices', { q: kept.q, mode: kept.mode }, { pageSize: 20, immediate: kept.page === 1 })
+// A kept page past the first loads as it is set.
+page.value = kept.page
+watch([() => filters.q, () => filters.mode, page], ([q, mode, p]) => Object.assign(kept, { q, mode, page: p }))
 const modeOptions = computed(() => [{ value: '', label: t('common.all') }, ...PRICE_MODES.map(m => ({ value: m, label: t(`prices.mode.${m}`) }))])
 
-const usd = (n: number) => `$${+n.toFixed(4)}`
 /** A price at a glance: "$3 / $15 · 2 tiers · 1 rule", or "$0.01 / request · 1 rule". */
-function brief(p: Price): string {
-  const s = summarize(p.mode, p.config)
-  if (s.kind === 'expression') return t('prices.mode.expression')
-  const perCall = (price: number) => t('prices.summary.perRequest', { price: usd(price) })
-  const rules = s.rules ? t('prices.summary.rules', { n: s.rules }) : ''
-  if (s.kind === 'per_request') return [perCall(s.price), rules].filter(Boolean).join(' · ')
-  const { first } = s
-  const head = first.unit === 'request' ? perCall(Number(first.price) || 0) : `${usd(Number(first.p) || 0)} / ${usd(Number(first.c) || 0)}`
-  return [head, s.tiers > 1 ? t('prices.summary.tiers', { n: s.tiers }) : '', rules].filter(Boolean).join(' · ')
-}
+const brief = (p: Price) => [priceLabel(t, p), priceExtras(t, p)].filter(Boolean).join(' · ')
 const rows = computed(() => items.value.map(p => ({ p, brief: brief(p) })))
+
+defineExpose({ reload })
 </script>
 
 <template>

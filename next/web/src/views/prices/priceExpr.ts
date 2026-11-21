@@ -28,8 +28,12 @@ export interface TokenTier extends Partial<Record<PriceKey, number | null>> {
   price?: number | null
 }
 
-export type CondSource = 'param' | 'header' | 'usage' | 'time'
-export type CondOp = 'eq' | 'ne' | 'contains' | 'exists' | 'gt' | 'gte' | 'lt' | 'lte'
+/** Where a condition reads, in the order the rule editor lists them. */
+export const COND_SOURCES = ['param', 'header', 'usage', 'time'] as const
+export type CondSource = (typeof COND_SOURCES)[number]
+/** How a condition compares, in the order the rule editor lists them. */
+export const COND_OPS = ['eq', 'ne', 'contains', 'exists', 'gt', 'gte', 'lt', 'lte'] as const
+export type CondOp = (typeof COND_OPS)[number]
 export type CondValue = string | number | boolean
 
 export interface FieldCond {
@@ -309,10 +313,16 @@ const HEADER_NAME = /^[A-Za-z0-9!#$%&'*+.^_|~-]{1,100}$/
 const isPrice = (v: unknown) => isSet(v) && num(v) >= 0
 const isText = (v: unknown) => typeof v === 'string' && v !== ''
 
+/**
+ * Whether Go's time.LoadLocation takes a zone, as far as Intl can tell: an
+ * IANA name, spelt with its case (Intl takes "asia/shanghai" and offsets
+ * such as "+08:00", Go takes neither), and not "Local".
+ */
 function validTz(tz: string): boolean {
+  if (tz === 'Local' || /^[+-]/.test(tz)) return false
   try {
-    new Intl.DateTimeFormat('en-US', { timeZone: tz })
-    return true
+    const resolved = new Intl.DateTimeFormat('en-US', { timeZone: tz }).resolvedOptions().timeZone
+    return resolved === tz || resolved.toLowerCase() !== tz.toLowerCase()
   } catch {
     return false
   }
@@ -382,6 +392,13 @@ export function checkTokenConfig(cfg: TokenConfig): LocalIssue[] {
     prev = num(t.max_len)
   })
   return [...out, ...checkRules(cfg.rules)]
+}
+
+/** Problems of a price as it is sent (its config as saved, a per_token one's tiers in the order they match) that block saving. */
+export function checkPrice(p: { mode: PriceMode; config: unknown; expression: string }): LocalIssue[] {
+  if (p.mode === 'expression') return p.expression.trim() ? [] : [{ key: 'prices.local.emptyExpr' }]
+  if (p.mode === 'per_request') return checkPerRequest((p.config as Partial<PerRequestConfig> | null)?.price, perRequestRules(p.config))
+  return checkTokenConfig(asTokenConfig(p.config))
 }
 
 // ------------------------------------------------------------------ list summary

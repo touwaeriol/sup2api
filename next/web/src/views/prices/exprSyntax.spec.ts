@@ -20,8 +20,25 @@ describe('exprSyntax', () => {
     expect(f).toBe('len <= 32000 ? tier("a", p*1)\n  : len <= 128000 ? tier("b", p*2)\n  : tier("c", p*3)')
     expect(formatExpr(f)).toBe(f)
   })
+  it('breaks a tier chain down the groups nested in its last branch, as tiers are generated', () => {
+    const src =
+      '(len <= 32000 ? tier("a", p*1) : (len <= 128000 ? tier("b", p*2) : (len <= 256000 ? tier("c", p*3) : tier("d", p*4)))) * (param("x") == "y" ? 2 : 1) * (u("n") > 1 ? (has(header("h"), "v") ? 3 : 1) : 1)'
+    const f = formatExpr(src)
+    expect(f).toBe(
+      [
+        '(len <= 32000 ? tier("a", p*1)',
+        '  : (len <= 128000 ? tier("b", p*2)',
+        '  : (len <= 256000 ? tier("c", p*3)',
+        '  : tier("d", p*4))))',
+        '* (param("x") == "y" ? 2 : 1)',
+        '* (u("n") > 1 ? (has(header("h"), "v") ? 3 : 1) : 1)'
+      ].join('\n')
+    )
+    expect(formatExpr(f)).toBe(f)
+  })
   it('leaves unbalanced input alone', () => {
     expect(formatExpr('tier("a", p*3')).toBe('tier("a", p*3')
+    expect(formatExpr('p) * (c')).toBe('p) * (c')
   })
   it('classifies tokens and underlines the error', () => {
     const kinds = tokenize('prams("x") + p').filter((t) => t.kind !== 'ws').map((t) => t.kind)

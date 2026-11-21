@@ -81,8 +81,10 @@ export function offsetOf(src: string, line: number, column: number): number {
 /**
  * Lays an expression out one factor per line: the top-level products
  * `(A) * (B)` break before each `*`, and a ternary chain that picks between
- * tiers breaks before each `:`. Surcharge rules `(cond ? 2 : 1)` stay on one
- * line. Whitespace inside strings is untouched.
+ * tiers breaks before each `:`, down the groups it nests in its last branch
+ * (`a ? A : (b ? B : C)`, as tiers are generated from the third). Surcharge
+ * rules `(cond ? 2 : 1)` stay on one line. Whitespace inside strings is
+ * untouched.
  */
 export function formatExpr(src: string): string {
   const all = tokenize(src.trim())
@@ -96,30 +98,33 @@ export function formatExpr(src: string): string {
     toks.push(t)
   }
   if (!toks.length) return src
-  const depth: number[] = []
-  let d = 0
-  for (const t of toks) {
-    if (t.text === ')' || t.text === ']') d--
-    depth.push(d)
-    if (t.text === '(' || t.text === '[') d++
+  // The group each token is in: the index of its opening bracket, -1 at the top.
+  const group: number[] = []
+  const open: number[] = []
+  for (const [i, t] of toks.entries()) {
+    if ((t.text === ')' || t.text === ']') && open.pop() === undefined) return src // unbalanced: leave it to the server's error
+    group.push(open.length ? open[open.length - 1] : -1)
+    if (t.text === '(' || t.text === '[') open.push(i)
   }
-  if (d !== 0) return src // unbalanced: leave it to the server's error
+  if (open.length) return src
 
+  const topProduct = (i: number) => toks[i].text === '*' && group[i] === -1 && toks[i - 1]?.text === ')' && toks[i + 1]?.text === '('
   // A product of groups at the top: break before each `*`.
-  const product = toks.some((t, i) => t.text === '*' && depth[i] === 0 && toks[i - 1]?.text === ')' && toks[i + 1]?.text === '(')
-  // The tier chain sits at depth 1 inside the first group of a product, else at the top.
-  const chainDepth = product && toks[0].text === '(' ? 1 : 0
+  const product = toks.some((_, i) => topProduct(i))
+  // The groups the tier chain runs in: the first group of a product, else the top; and the group each of its last branches opens.
+  const chain = new Set([product && toks[0].text === '(' ? 0 : -1])
   // A ':' whose branch is a bare number closing the group is a rule's ": 1".
   const ruleColon = (i: number) => toks[i + 1]?.kind === 'num' && (toks[i + 2] === undefined || toks[i + 2].text === ')')
 
   let out = ''
   for (let i = 0; i < toks.length; i++) {
     const t = toks[i]
-    if (product && t.text === '*' && depth[i] === 0 && toks[i - 1]?.text === ')' && toks[i + 1]?.text === '(') {
+    if (topProduct(i)) {
       out += '\n* '
       continue
     }
-    if (t.text === ':' && t.kind === 'op' && depth[i] === chainDepth && !ruleColon(i)) {
+    if (t.text === ':' && t.kind === 'op' && chain.has(group[i]) && !ruleColon(i)) {
+      if (toks[i + 1]?.text === '(') chain.add(i + 1)
       out += '\n  : '
       continue
     }

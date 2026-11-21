@@ -1,7 +1,9 @@
 // What the pricing views show of a rate, a price rule and a price: pure
 // functions shared by the admin editors and the user's own pages.
 import type { EffectiveRate, PriceDef, PriceRule } from '@/api/pricing'
-import { TOKEN_VARS, num, summarize, tokenPricesOf, type TokenPrices } from '@/views/prices/priceExpr'
+import { TOKEN_VARS, fmt, num, summarize, tokenPricesOf, type TokenPrices } from '@/views/prices/priceExpr'
+
+export type Translate = (key: string, params?: Record<string, unknown>) => string
 
 /** "×0.8": a rate as every pricing view writes it. */
 export function rateText(v: string | number | null | undefined): string {
@@ -105,9 +107,14 @@ export function priceCells(def: PriceDef | null | undefined): PriceCells {
   return tokens ? { ...cells, tokens: Object.fromEntries(TOKEN_VARS.map((v) => [v, times(tokens[v])])) as TokenPrices } : cells
 }
 
+/** "$3": an amount in USD as every price view writes it, at eight significant digits (a small price never reads $0) and without an exponent; '—' when unset. */
+export function usd(v: number | null | undefined): string {
+  return v === null || v === undefined ? '—' : `$${fmt(Number(num(v).toPrecision(8)))}`
+}
+
 /** "$3": a price per 1M tokens or per request, times `rate`. */
 export function priceText(v: number | null | undefined, rate = 1): string {
-  return v === null || v === undefined ? '—' : `$${Number((num(v) * rate).toFixed(4))}`
+  return v === null || v === undefined ? '—' : usd(num(v) * rate)
 }
 
 /** "$3 / $15": input and output of a price, or its per-request price; '' when it cannot be broken down. */
@@ -115,4 +122,17 @@ export function priceBrief(def: PriceDef | null | undefined, rate = 1): string {
   const c = priceCells(def)
   if (c.perRequest !== undefined) return priceText(c.perRequest, rate)
   return c.tokens ? `${priceText(c.tokens.p, rate)} / ${priceText(c.tokens.c, rate)}` : ''
+}
+
+/**
+ * "2 tiers · 1 surcharge rule": what a price has beyond the cells of its
+ * first tier, its length tiers when it has several and the surcharge rules
+ * of a per-request or per-token price; '' when it has neither (an
+ * expression's are not known here).
+ */
+export function priceExtras(t: Translate, def: Pick<PriceDef, 'mode' | 'config'>): string {
+  const s = summarize(def.mode, def.config)
+  if (s.kind === 'expression') return ''
+  const tiers = s.kind === 'per_token' && s.tiers > 1 ? t('prices.summary.tiers', { n: s.tiers }) : ''
+  return [tiers, s.rules ? t('prices.summary.rules', { n: s.rules }) : ''].filter(Boolean).join(' · ')
 }

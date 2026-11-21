@@ -4,10 +4,12 @@ import { useI18n } from 'vue-i18n'
 import { SButton } from '@sub2api/ui'
 import { highlight } from './exprSyntax'
 import GuideText from './GuideText.vue'
+import { EXPR_EXAMPLES } from './presets'
 
 // Usage guide of the expression language, in a drawer beside the editor
 // (PriceEditView). Snippets insert at the caret; examples replace the whole
-// expression. The texts are under prices.guide.
+// expression; read-only, the guide only reads. The texts are under prices.guide.
+defineProps<{ readonly?: boolean }>()
 const emit = defineEmits<{ (e: 'insert', text: string, caret?: number): void; (e: 'replace', text: string): void }>()
 const { t } = useI18n()
 
@@ -62,23 +64,7 @@ const CHECKS = ['syntax', 'fields', 'smoke', 'cost']
 
 const RULE_SAMPLE = 'tier("base", p*3 + c*15)\n* (param("service_tier") == "priority" ? 2 : 1)\n* (hour("Asia/Shanghai") < 8 ? 0.5 : 1)'
 
-const EXAMPLES: Array<{ id: string; src: string }> = [
-  { id: 'single', src: 'tier("base", p*3 + c*15 + cr*0.3)' },
-  {
-    id: 'longContext',
-    src: 'len <= 200000\n  ? tier("standard", p*3 + c*15 + cr*0.3 + cc*3.75 + cc1h*6)\n  : tier("long_context", p*6 + c*22.5 + cr*0.6 + cc*7.5 + cc1h*12)'
-  },
-  { id: 'priority', src: 'tier("base", p*2.5 + c*15 + cr*0.25)\n* (param("service_tier") == "priority" ? 2 : 1)' },
-  {
-    id: 'serviceTier',
-    src: 'tier("base", p*2.5 + c*15 + cr*0.25)\n* (u("service_tier") == "priority" ? 2 : 1)\n* (u("service_tier") == "flex" ? 0.5 : 1)'
-  },
-  { id: 'night', src: 'tier("base", p*3 + c*15)\n* (hour("Asia/Shanghai") < 8 ? 0.5 : 1)' },
-  { id: 'weekend', src: 'tier("base", p*3 + c*15)\n* (weekday("Asia/Shanghai") == 0 || weekday("Asia/Shanghai") == 6 ? 0.8 : 1)' },
-  { id: 'minimum', src: 'tier("base", max(p*3 + c*15, flat(0.001)))' },
-  { id: 'flatFee', src: 'tier("base", p*3 + c*15 + flat(0.002))' },
-  { id: 'effort', src: 'param("reasoning.effort") == "high"\n  ? tier("high", p*3 + c*20)\n  : tier("normal", p*3 + c*15)' }
-]
+const EXAMPLES = Object.entries(EXPR_EXAMPLES).map(([id, src]) => ({ id, src }))
 </script>
 
 <template>
@@ -89,6 +75,7 @@ const EXAMPLES: Array<{ id: string; src: string }> = [
         :key="id"
         type="button"
         class="rounded-full border px-2.5 py-0.5 text-xs"
+        :aria-current="active === id ? 'location' : undefined"
         :class="active === id ? 'border-primary-500 bg-primary-50 text-primary-700 dark:bg-primary-900/40 dark:text-primary-300' : 'border-line text-fg-muted hover:border-primary-400'"
         @click="jump(id)"
       >
@@ -109,7 +96,8 @@ const EXAMPLES: Array<{ id: string; src: string }> = [
         <dl class="grid grid-cols-[4.5rem_1fr] gap-x-3 gap-y-1.5">
           <template v-for="k in VARS" :key="k">
             <dt>
-              <button type="button" class="code hover:ring-1 hover:ring-primary-400" @click="emit('insert', k)">{{ k }}</button>
+              <code v-if="readonly" class="code">{{ k }}</code>
+              <button v-else type="button" class="code hover:ring-1 hover:ring-primary-400" @click="emit('insert', k)">{{ k }}</button>
             </dt>
             <dd class="text-fg-muted">{{ t(`prices.guide.var.${k}`) }}</dd>
           </template>
@@ -138,7 +126,7 @@ const EXAMPLES: Array<{ id: string; src: string }> = [
                 <code class="font-mono text-xs" v-html="highlight(t(`prices.guide.fn.${f.id}.sig`), -1, true)"></code>
                 <div class="text-xs text-fg-muted">{{ t(`prices.guide.fn.${f.id}.desc`) }}</div>
               </div>
-              <SButton size="xs" variant="ghost" @click="emit('insert', f.snippet, f.caret)">{{ t('prices.guide.insert') }}</SButton>
+              <SButton v-if="!readonly" size="xs" variant="ghost" @click="emit('insert', f.snippet, f.caret)">{{ t('prices.guide.insert') }}</SButton>
             </li>
           </ul>
         </div>
@@ -173,7 +161,7 @@ const EXAMPLES: Array<{ id: string; src: string }> = [
                 <div class="text-sm font-medium">{{ t(`prices.guide.example.${x.id}.title`) }}</div>
                 <div class="text-xs text-fg-muted">{{ t(`prices.guide.example.${x.id}.desc`) }}</div>
               </div>
-              <SButton size="xs" @click="emit('replace', x.src)">{{ t('prices.guide.fill') }}</SButton>
+              <SButton v-if="!readonly" size="xs" @click="emit('replace', x.src)">{{ t('prices.guide.fill') }}</SButton>
             </div>
             <pre class="m-0 overflow-x-auto px-3 pb-2.5 pt-1.5 font-mono text-xs leading-5" v-html="highlight(x.src)"></pre>
           </div>

@@ -1,19 +1,32 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, toRaw } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { SButton } from '@sub2api/ui'
-import { num, type TokenConfig } from './priceExpr'
-import { PRESETS, TIER_PRESET_GROUPS, addTier, removeTier } from './tokenPrice'
+import { num, type TokenConfig, type TokenTier } from './priceExpr'
+import { PRESETS, TIER_PRESET_GROUPS } from './presets'
+import { addTier, removeTier } from './tokenPrice'
 import PricePresets from './PricePresets.vue'
 import PriceRuleGroups from './PriceRuleGroups.vue'
 import PriceTierCard from './PriceTierCard.vue'
 
 // The per_token price editor (the visual editor): preset templates, the tiers
 // as numbered cards matched in order (the last one the rest), and the
-// request rule groups. Edits the bound config in place.
+// request rule groups. Edits the bound config in place. Read-only, the
+// cards still open and close: each part disables its own controls.
 const model = defineModel<TokenConfig>({ required: true })
 defineProps<{ disabled?: boolean }>()
 const { t } = useI18n()
+
+// A card is keyed by its tier object, so a card's own state (its media
+// prices open) stays with its tier when one before it goes. The key is held
+// here, never in the config that is saved.
+const keys = new WeakMap<TokenTier, number>()
+let lastKey = 0
+function keyOf(tier: TokenTier): number {
+  const raw = toRaw(tier)
+  if (!keys.has(raw)) keys.set(raw, ++lastKey)
+  return keys.get(raw)!
+}
 
 const open = ref<number | null>(0)
 function applyPreset(key: string) {
@@ -32,7 +45,7 @@ function remove(i: number) {
 </script>
 
 <template>
-  <fieldset :disabled="disabled" class="min-w-0 space-y-4" data-testid="token-price-editor">
+  <div class="min-w-0 space-y-4" data-testid="token-price-editor">
     <PricePresets :groups="TIER_PRESET_GROUPS" :disabled="disabled" @pick="applyPreset" />
 
     <div class="space-y-4 rounded-xl border border-line p-3 sm:p-4">
@@ -40,8 +53,8 @@ function remove(i: number) {
         <p class="mb-2 text-xs text-fg-muted">{{ t('prices.tier.listHint') }}</p>
         <ul class="space-y-2.5" data-testid="token-tier-list">
           <PriceTierCard
-            v-for="(_, i) in model.tiers"
-            :key="i"
+            v-for="(tier, i) in model.tiers"
+            :key="keyOf(tier)"
             v-model="model.tiers[i]"
             :open="open === i"
             :index="i"
@@ -58,5 +71,5 @@ function remove(i: number) {
         <PriceRuleGroups v-model="model.rules" :disabled="disabled" />
       </div>
     </div>
-  </fieldset>
+  </div>
 </template>
