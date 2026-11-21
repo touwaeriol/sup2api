@@ -14,8 +14,8 @@
       "digest": "sha256:a1ebcf2a58e5929dc650d7f85669ba199e93dab3df776aacb9cab9b792d4e628"
     },
     "codex": {
-      "version": "0.2.1",
-      "digest": "sha256:edca24070a4012a7c23ef992762578efc3cbac90ab28e38cc2836aac358c621a"
+      "version": "0.2.2",
+      "digest": "sha256:f1810fb294780e9e11bdbb4de23f664b54765572551f7b8171a705fb6e84bf80"
     },
     "dynweight": {
       "version": "0.6.0",
@@ -38,8 +38,8 @@
       "digest": "sha256:593b2f9ab0eefa0e5a2695983e16e63c9ecee6060ac813b7c972982cabae8c51"
     },
     "newapi": {
-      "version": "0.1.0",
-      "digest": "sha256:323bed1585a5bf79f736d198c0b8ec922d99730ed1761064d32405731986988c"
+      "version": "0.1.1",
+      "digest": "sha256:f96ad718a0c139578d08f16097df59867dfdfec22a89f09dc71948eceb47ac7c"
     },
     "openai": {
       "version": "0.5.0",
@@ -54,12 +54,12 @@
       "digest": "sha256:059333811a9eadc931976e3655a65e4e2258acfb01ab9bfb3bd45f90a310d734"
     },
     "sub2api": {
-      "version": "0.1.0",
-      "digest": "sha256:63ce00d5439ae0d3196a92a4546ca63875e5793396b1ce4bd76b213d1ccb554d"
+      "version": "0.1.1",
+      "digest": "sha256:c27e6d150af8f2365c3c26b147da91c8a1cb769096c4910f2d367e0c27a4070d"
     },
     "typesafe": {
-      "version": "0.1.0",
-      "digest": "sha256:bbdfa7d43d1b38b5a9fcdfb4006fed9dc4c351c421b6d8a8dc984f83cf397ce5"
+      "version": "0.1.1",
+      "digest": "sha256:143aea9a4595d6c2ec13894fb0d5acb2d6b1a4b0888ddc303e9d00d2b4d48fa1"
     },
     "vertex": {
       "version": "0.1.0",
