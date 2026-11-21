@@ -10,7 +10,7 @@ import type { PriceValidation } from './usePriceValidation'
 // run), what the price reads, the cost of one million input tokens and the
 // warnings. Local problems of the per-token and per-request forms come first.
 // PROTOTYPE: new texts are Chinese literals until adopted.
-const props = defineProps<{ localIssues: string[]; validation: PriceValidation | null; error: string; validating: boolean }>()
+const props = defineProps<{ localIssues: string[]; validation: PriceValidation | null; error: string; validating: boolean; mode?: string }>()
 const emit = defineEmits<{ (e: 'locate', line: number, column: number): void }>()
 const { t } = useI18n()
 
@@ -68,7 +68,7 @@ const detail = (x: Obj) => (x.detail === undefined || x.detail === null || x.det
 
 const reads = computed(() => {
   const a = props.validation?.analysis
-  if (!a || !steps.value || steps.value[0].state !== 'ok') return []
+  if (!a || !steps.value || steps.value[0].state !== 'ok' || props.mode === 'per_request') return []
   const rows: Array<{ label: string; items: string[]; mono?: boolean }> = [
     { label: 'token 变量', items: a.vars.filter((x) => x !== 'len'), mono: true },
     { label: '上下文长度', items: a.vars.includes('len') ? (a.len_boundaries.length ? a.len_boundaries.map((b) => `len ≤ ${b.toLocaleString('zh-CN')}`) : ['len']) : [], mono: true },
@@ -154,7 +154,7 @@ const ok = computed(() => !!steps.value && steps.value.every((s) => s.state === 
       </div>
 
       <div
-        v-if="validation?.cost_per_million_input !== undefined && validation?.cost_per_million_input !== null && ok"
+        v-if="validation?.cost_per_million_input !== undefined && validation?.cost_per_million_input !== null && ok && mode !== 'per_request'"
         class="mt-3 flex items-baseline justify-between rounded-lg bg-surface-2 px-3 py-2 text-xs"
       >
         <span class="text-fg-muted">100 万输入 token 一次</span>

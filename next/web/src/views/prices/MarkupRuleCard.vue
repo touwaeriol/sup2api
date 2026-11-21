@@ -23,14 +23,42 @@ const opsOf = (source: FieldCond['source']) =>
 const hours = computed(() => Array.from({ length: 25 }, (_, h) => ({ value: h, label: t('prices.token.hour', { h }) })))
 
 const setSource = (i: number, source: CondSource) => rule.value.conds.splice(i, 1, newCond(source))
+
+// PROTOTYPE: the rule read back as a sentence, and its effect as a percentage.
+const OPWORD: Record<CondOp, string> = { eq: '等于', ne: '不等于', contains: '包含', exists: '存在', gt: '大于', gte: '不小于', lt: '小于', lte: '不大于' }
+const SRCWORD = { param: '请求参数', header: '请求头', usage: '用量字段' } as const
+const summary = computed(() => {
+  const parts = rule.value.conds.map((c) => {
+    if (c.source === 'time') return `${c.tz || 'UTC'} 时间 ${c.from_hour}:00–${c.to_hour}:00`
+    const key = c.key || '…'
+    return c.op === 'exists' ? `${SRCWORD[c.source]} ${key} 存在` : `${SRCWORD[c.source]} ${key} ${OPWORD[c.op]} ${String(c.value ?? '') || '…'}`
+  })
+  return `${parts.join('，且 ')} 时，整单 ×${rule.value.multiplier ?? '…'}`
+})
+const effect = computed(() => {
+  const m = Number(rule.value.multiplier)
+  if (!Number.isFinite(m)) return null
+  const pct = Math.round((m - 1) * 1000) / 10
+  return pct === 0 ? { text: '不变', tone: 'muted' } : pct > 0 ? { text: `加价 ${pct}%`, tone: 'up' } : { text: m === 0 ? '免费' : `打 ${+(m * 10).toFixed(2)} 折`, tone: 'down' }
+})
 </script>
 
 <template>
   <li class="rounded-xl border border-line bg-surface" :data-rule="index">
     <div class="flex flex-wrap items-center gap-3 border-b border-line px-4 py-2.5">
       <SInput v-model="rule.name" size="sm" class="w-44" :aria-label="t('prices.token.ruleName')" />
+      <span
+        v-if="effect"
+        class="rounded-full px-2 py-0.5 text-xs font-medium"
+        :class="{
+          'bg-danger-50 text-danger-700 dark:bg-danger-900/40 dark:text-danger-300': effect.tone === 'up',
+          'bg-success-50 text-success-700 dark:bg-success-900/40 dark:text-success-300': effect.tone === 'down',
+          'bg-surface-2 text-fg-muted': effect.tone === 'muted'
+        }"
+        >{{ effect.text }}</span
+      >
       <div class="ml-auto flex items-center gap-2">
-        <span class="text-sm text-fg-muted">{{ t('prices.token.hitTimes') }}</span>
+        <span class="text-sm text-fg-muted">整单 ×</span>
         <SInput
           v-model="rule.multiplier"
           size="sm"
@@ -101,5 +129,6 @@ const setSource = (i: number, source: CondSource) => rule.value.conds.splice(i, 
         t('prices.token.addCond')
       }}</SButton>
     </div>
+    <div class="rounded-b-xl border-t border-line bg-surface-2 px-4 py-2 text-xs text-fg-muted" data-testid="rule-summary">{{ summary }}</div>
   </li>
 </template>

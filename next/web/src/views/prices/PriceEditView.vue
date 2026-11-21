@@ -33,6 +33,7 @@ import { applyFormError } from '@/utils/formErrors'
 import { formatDateTime } from '@/utils/format'
 import ExprGuide from './ExprGuide.vue'
 import ExprHistoryModal from './ExprHistoryModal.vue'
+import PerRequestEditor from './PerRequestEditor.vue'
 import PriceExprEditor from './PriceExprEditor.vue'
 import PriceTrialPanel from './PriceTrialPanel.vue'
 import TokenPriceEditor from './TokenPriceEditor.vue'
@@ -159,6 +160,12 @@ const localIssues = computed<string[]>(() => {
 })
 
 const previewSource = computed(() => (localIssues.value.length || validation.value?.errors.length ? null : { ...payload.value }))
+
+/** Per-request price into per_token: one per-call tier, no rules yet. */
+function perRequestToToken() {
+  token.value = { tiers: [{ name: 'base', max_len: null, unit: 'request', price: perRequest.value }], rules: [] }
+  mode.value = 'per_token'
+}
 
 /** Takes the generated source into the expression mode. */
 function editAsExpression() {
@@ -315,9 +322,13 @@ const title = computed(() => {
             @update:model-value="mode = $event as PriceMode"
           />
 
-          <SField v-if="mode === 'per_request'" class="max-w-xs" :label="t('prices.perRequestPrice')" :error="errors['config.price']">
-            <SInput v-model="perRequest" type="number" min="0" step="any" :suffix="t('prices.perRequestUnit')" :disabled="readonly" />
-          </SField>
+          <PerRequestEditor
+            v-if="mode === 'per_request'"
+            v-model="perRequest"
+            :disabled="readonly"
+            :error="errors['config.price']"
+            @to-token="perRequestToToken"
+          />
           <TokenPriceEditor v-else-if="mode === 'per_token'" v-model="token" :disabled="readonly" />
           <PriceExprEditor
             v-else
@@ -358,13 +369,14 @@ const title = computed(() => {
           :validation="validation"
           :error="validationError"
           :validating="validating"
+          :mode="mode"
           @locate="(l, c) => exprEditor?.focusAt(l, c)"
         />
         <SCard v-if="guideOpen && wide && mode === 'expression'" title="表达式使用说明" data-testid="expr-guide-docked">
           <template #actions><SButton size="sm" variant="ghost" icon="x" aria-label="关闭使用说明" @click="guideOpen = false" /></template>
           <ExprGuide @insert="(s, c) => exprEditor?.insert(s, c)" @replace="guideReplace" />
         </SCard>
-        <SCard v-else :title="t('prices.trial.title')">
+        <SCard v-else-if="mode !== 'per_request'" :title="t('prices.trial.title')">
           <PriceTrialPanel :source="previewSource" />
         </SCard>
       </aside>
