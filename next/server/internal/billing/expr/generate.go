@@ -72,6 +72,10 @@ type TierConfig struct {
 	Price *Num `json:"price,omitempty"`
 }
 
+// PriceKeys are the price fields of a tier, USD per million tokens or, for
+// price, per request; a multiplier scales every one of them.
+var PriceKeys = []string{"p", "c", "cr", "cc", "cc1h", "img", "img_o", "price"}
+
 // TokenPrices are USD per million tokens. p and c are always emitted (0 when
 // absent); any other price is emitted only when present, so cache tokens
 // without a price are not billed and image tokens without one are billed as
@@ -113,7 +117,8 @@ type ConfigError struct {
 	Issue Issue
 }
 
-func (e *ConfigError) Error() string { return e.Field + ": " + e.Issue.Detail }
+// Error is the detail, which starts with the field.
+func (e *ConfigError) Error() string { return e.Issue.Detail }
 
 func cfgErr(field, format string, args ...any) *ConfigError {
 	return &ConfigError{Field: field, Issue: issuef(CodeConfig, "%s: "+format, append([]any{field}, args...)...)}
@@ -140,8 +145,11 @@ func Generate(mode string, config json.RawMessage) (string, error) {
 		}
 		return fmt.Sprintf(`tier("base", flat(%s))`, fmtNum(float64(*c.Price))), nil
 	case ModePerToken:
+		// Strict: a misspelt or old key (prices, flat) would be a free price.
 		var c TokenConfig
-		if err := json.Unmarshal(config, &c); err != nil {
+		dec := json.NewDecoder(bytes.NewReader(config))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&c); err != nil {
 			return "", cfgErr("config", "%v", err)
 		}
 		return generateTokens(c)
@@ -324,8 +332,16 @@ var compareOps = map[string]string{"eq": "==", "ne": "!=", "gt": ">", "gte": ">=
 var absent = map[string]string{"param": "nil", "header": `""`, "usage": "0"}
 
 func condExpr(field string, c CondConfig) (string, *ConfigError) {
+	hasValue := len(c.Value) > 0 && string(c.Value) != "null"
+	timed := c.TZ != "" || c.FromHour != nil || c.ToHour != nil
 	if c.Source == "time" {
+		if c.Key != "" || c.Op != "" || hasValue {
+			return "", cfgErr(field, "a time condition has tz, from_hour and to_hour only")
+		}
 		return timeCond(field, c)
+	}
+	if timed {
+		return "", cfgErr(field, "only a time condition has tz, from_hour and to_hour")
 	}
 	arg, err := condArg(field, c)
 	if err != nil {
@@ -339,6 +355,9 @@ func condExpr(field string, c CondConfig) (string, *ConfigError) {
 		}
 		return fmt.Sprintf("has(%s, %s)", arg, strconv.Quote(s)), nil
 	case "exists":
+		if hasValue {
+			return "", cfgErr(field+".value", "exists takes no value")
+		}
 		return arg + " != " + absent[c.Source], nil
 	case "eq", "ne":
 		var lit string

@@ -70,8 +70,8 @@ func (v *visitor) Visit(node *ast.Node) {
 		if isVar[n.Value] {
 			a.p.used[n.Value] = true
 		}
-		if n.Value == traceFunc {
-			v.fail(CodeSyntax, traceFunc+" is reserved")
+		if n.Value == traceFunc || n.Value == "$env" {
+			v.fail(CodeSyntax, n.Value+" is reserved")
 		}
 	case *ast.ConditionalNode:
 		mult, ok := traced(n)
@@ -331,7 +331,7 @@ func isIdent(n ast.Node, name string) bool {
 }
 
 // traceFunc is the function the compiler wraps the condition of a traced
-// rule in; expressions may not call it.
+// rule in; expressions may not call it, by name or through $env.
 const traceFunc = "__rule"
 
 // probes are the functions whose result depends on the request or its usage.

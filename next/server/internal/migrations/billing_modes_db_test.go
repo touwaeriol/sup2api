@@ -14,11 +14,12 @@ import (
 )
 
 // 0121 leaves per_request, per_token and expression prices (CONTRACTS
-// §131): flat per_token configs get one tier, visual expression configs that
-// fit become per_token, every other expression config is {}, and request
-// rules are written as factors, "A ||| B" as "(A) * (B)", with the hash Go
-// computes; old history rows stay under their hashes. A rerun changes
-// nothing.
+// §131): custom rules over expression prices go, flat per_token configs get
+// one tier, visual expression configs that fit become per_token, every other
+// expression config is {}, numeric strings become numbers, and request rules
+// are written as factors, "A ||| B" as "(A) * (B)" (as expr.LegacyProduct
+// writes it), with the hash Go computes; old history rows stay under their
+// hashes. A rerun changes nothing.
 func TestMigration0121BillingModes(t *testing.T) {
 	const id = "0121_billing_modes.sql"
 	db := testutil.DBThrough(t, migrationBefore(t, id))
@@ -42,6 +43,7 @@ func TestMigration0121BillingModes(t *testing.T) {
 		comment  = "tier(\"x\", p) // the \"base\"\n||| param(\"a\") == 1 ? 2 : 1"
 		twoTiers = `len <= 200000 ? tier("standard", p*3 + c*15 + cr*0.3) : tier("long_context", p*6 + c*22.5 + cr*0.6)`
 		video    = `tier("video", c * (u("video_input") == true ? 4.3 : 7))`
+		bare     = `tier("x", p*1) ||| param("fast") ? 2 : 1`
 	)
 	prices := []struct{ model, mode, config, expression string }{
 		{"pt-flat", "per_token", `{"p": 3, "c": 15, "cr": 0.3, "cc": 3.75, "cc1h": 6}`, `tier("base", p*3 + c*15 + cr*0.3 + cc*3.75 + cc1h*6)`},
@@ -61,6 +63,7 @@ func TestMigration0121BillingModes(t *testing.T) {
 		{"video", "expression", `{"video": {"price_per_million_tokens": 7, "video_input_price_per_million_tokens": 4.3}}`, video},
 		{"src-literal", "expression", `{}`, literal},
 		{"src-comment", "expression", `{}`, comment},
+		{"src-bare", "expression", `{}`, bare},
 	}
 	for _, p := range prices {
 		exec(`INSERT INTO model_prices (model, mode, config, expression, expr_hash, source) VALUES ($1, $2, $3, $4, $5, 'manual')`,
@@ -75,6 +78,9 @@ func TestMigration0121BillingModes(t *testing.T) {
 	exec(`INSERT INTO price_rules (group_id, model, kind, mode, config, expression, expr_hash)
 		SELECT id, 'pr', 'custom', 'per_request', '{"price": 0.5}', 'tier("base", flat(0.5))', $1 FROM groups`, expr.Hash(`tier("base", flat(0.5))`))
 	exec(`INSERT INTO price_rules (group_id, model, kind, multiplier) SELECT id, 'vis-rules', 'multiplier', 1.5 FROM groups`)
+	// Inactive over an expression price; vis-one would take it after 2.
+	exec(`INSERT INTO price_rules (group_id, model, kind, mode, config, expression, expr_hash)
+		SELECT id, 'vis-one', 'custom', 'per_token', '{"p": 0, "c": 0}', 'tier("base", p*0 + c*0)', $1 FROM groups`, expr.Hash(`tier("base", p*0 + c*0)`))
 	pending, _ := json.Marshal(map[string]any{"inputs": map[string]any{
 		"semantics": "exclusive",
 		"pricing":   map[string]any{"base": map[string]any{"expression": ranged, "expr_hash": expr.Hash(ranged)}},
@@ -88,8 +94,11 @@ func TestMigration0121BillingModes(t *testing.T) {
 		exec(`INSERT INTO usage_logs (request_id, user_id, api_key_id, group_id, protocol, endpoint, status_code, success, billing_status, expr_hash, billing_detail)
 			VALUES ($1, 1, 1, 1, 'p', '/e', 200, true, $2, $3, $4)`, request, status, expr.Hash(rules), string(pending))
 	}
-	usage("pending", "pending")
-	usage("billed", "billed")
+	for _, status := range []string{"pending", "failed", "reserved", "billed"} {
+		usage(status, status)
+	}
+	exec(`INSERT INTO pending_settlements (plugin_key, ref_id, usage_log_id, next_check_at, deadline_at)
+		SELECT 'p', 'r', id, now(), now() FROM usage_logs WHERE request_id = 'reserved'`)
 
 	require.Equal(t, migrationsAfter(t, migrationBefore(t, id)), migrate())
 	type row struct {
@@ -118,14 +127,14 @@ func TestMigration0121BillingModes(t *testing.T) {
 		`has(param("model"), "mini") ? 0.5 : 1`, `(hour("UTC") >= 22 || hour("UTC") < 6) ? 0.8 : 1`)
 	want := map[string]struct{ mode, config, expression string }{
 		"pt-flat":    {"per_token", `{"tiers": [{"c": 15, "p": 3, "cc": 3.75, "cr": 0.3, "cc1h": 6, "name": "base", "unit": "token", "max_len": null}], "rules": []}`, prices[0].expression},
-		"pt-strings": {"per_token", `{"tiers": [{"c": "0.6", "p": "0.15", "name": "base", "unit": "token", "max_len": null}], "rules": []}`, prices[1].expression},
+		"pt-strings": {"per_token", `{"tiers": [{"c": 0.6, "p": 0.15, "name": "base", "unit": "token", "max_len": null}], "rules": []}`, prices[1].expression},
 		"pr":         {"per_request", `{"price": 0.04}`, prices[2].expression},
 		"vis-synced": {"per_token", `{"tiers": [{"c": 15, "p": 3, "cr": 0.3, "name": "standard", "unit": "token", "max_len": 200000},
 			{"c": 22.5, "p": 6, "cr": 0.6, "name": "long_context", "unit": "token", "max_len": null}], "rules": []}`, "v1:" + twoTiers},
 		"vis-rules": {"per_token", `{"tiers": [{"c": 2, "p": 1, "name": "base", "unit": "token", "max_len": null}], "rules": [
 			{"conds": [{"op": "contains", "key": "Anthropic-Beta", "value": "fast", "source": "header"}], "multiplier": 2},
 			{"conds": [{"op": "eq", "key": "n", "value": 4, "source": "param"}], "multiplier": 3},
-			{"conds": [{"op": "contains", "key": "model", "value": "mini", "source": "param"}], "multiplier": "0.5"},
+			{"conds": [{"op": "contains", "key": "model", "value": "mini", "source": "param"}], "multiplier": 0.5},
 			{"conds": [{"source": "time", "to_hour": 6, "from_hour": 22}], "multiplier": 0.8}]}`, rulesAfter},
 		"vis-one":     {"per_token", `{"tiers": [{"p": 1, "name": "only", "unit": "token", "max_len": null}], "rules": []}`, prices[5].expression},
 		"vis-flat":    {"expression", `{}`, prices[6].expression},
@@ -133,6 +142,7 @@ func TestMigration0121BillingModes(t *testing.T) {
 		"video":       {"expression", `{}`, video},
 		"src-literal": {"expression", `{}`, product(`tier("x", p)`, `header("x-tag") == "a|||b" ? 2 : 1`)},
 		"src-comment": {"expression", `{}`, "(tier(\"x\", p) // the \"base\"\n) * (param(\"a\") == 1 ? 2 : 1)"},
+		"src-bare":    {"expression", `{}`, product(`tier("x", p*1)`, `param("fast") ? 2 : 1`)},
 	}
 	for model, w := range want {
 		r := got[model]
@@ -147,9 +157,14 @@ func TestMigration0121BillingModes(t *testing.T) {
 			require.Equal(t, prog.Hash(), expr.Hash(gen), "%s: the config generates the stored expression", model)
 		}
 	}
-	// Prices without a separator kept their expression and hash.
+	// Prices without a separator kept their expression and hash; the others
+	// are what sync makes of an old upstream's expressions.
 	for _, p := range prices {
-		if r := got[p.model]; r.Expression == p.expression {
+		r := got[p.model]
+		if product, ok := expr.LegacyProduct(p.expression); ok {
+			require.Equal(t, product, r.Expression, p.model)
+		} else {
+			require.Equal(t, p.expression, r.Expression, p.model)
 			require.Equal(t, expr.Hash(p.expression), r.ExprHash, p.model)
 		}
 	}
@@ -159,6 +174,14 @@ func TestMigration0121BillingModes(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "6", res.Cost.String())
 	require.Len(t, res.Rules, 4)
+	// A bare param condition is false when the param is absent, as before.
+	fast := mustCompile(t, got["src-bare"].Expression)
+	res, err = fast.Eval(expr.Input{Vars: expr.Vars{P: 1e6}})
+	require.NoError(t, err)
+	require.Equal(t, "1", res.Cost.String())
+	res, err = fast.Eval(expr.Input{Vars: expr.Vars{P: 1e6}, Params: map[string]string{"fast": "true"}})
+	require.NoError(t, err)
+	require.Equal(t, "2", res.Cost.String())
 
 	var custom []struct {
 		Mode, Expression, ExprHash string
@@ -199,6 +222,9 @@ func TestMigration0121BillingModes(t *testing.T) {
 		return d
 	}
 	require.JSONEq(t, string(pending), detail("billed"))
+	for _, request := range []string{"failed", "reserved"} {
+		require.Equal(t, detail("pending"), detail(request), request)
+	}
 	var after struct {
 		Inputs struct {
 			Pricing struct {

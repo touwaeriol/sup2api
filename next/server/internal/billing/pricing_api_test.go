@@ -252,7 +252,7 @@ func TestGroupModelPricesValidation(t *testing.T) {
 		{"custom over an expression", patch(0, "claude-sonnet-4-5", custom("per_token", oneTierConfig(map[string]any{"p": 1, "c": 2}))), "multiplier only"},
 		{"custom in another mode", patch(0, "claude-haiku-4-5", custom("per_request", map[string]any{"price": 1})), "a custom price is per_token"},
 		{"negative price", patch(0, "claude-haiku-4-5", custom("per_token", oneTierConfig(map[string]any{"p": 1, "c": -2}))), "config.tiers[0].c"},
-		{"old flat prices", patch(0, "claude-haiku-4-5", custom("per_token", map[string]any{"p": 1, "c": 2})), "config.tiers"},
+		{"old flat prices", patch(0, "claude-haiku-4-5", custom("per_token", map[string]any{"p": 1, "c": 2})), `unknown field`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

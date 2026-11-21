@@ -147,7 +147,7 @@ type Breakdown struct {
 	Items           []Item          `json:"items"`
 	Subtotal        decimal.Decimal `json:"subtotal"`         // sum of items (USD)
 	Base            decimal.Decimal `json:"base"`             // the expression with no rule matched (USD)
-	RulesMultiplier decimal.Decimal `json:"rules_multiplier"` // product of the matched traced multipliers
+	RulesMultiplier decimal.Decimal `json:"rules_multiplier"` // value / base (8 places), 1 when the base is 0
 }
 
 // Result is the outcome of one evaluation. Cost excludes the group rate
@@ -220,6 +220,7 @@ func newEnv(in *Input, st *evalState) *env {
 		Rule: func(i int, cond any) (bool, error) {
 			b, ok := cond.(bool)
 			switch {
+			case cond == nil: // an absent param, as the old engine read it
 			case !ok:
 				return false, fmt.Errorf("rule condition is %T, not a boolean", cond)
 			case st == nil:
@@ -369,20 +370,20 @@ func (p *Program) Eval(in Input) (*Result, error) {
 		return nil, err
 	}
 	res := &Result{Value: value, Cost: usd(value), Rules: make([]RuleResult, len(p.rules))}
-	mult := decimal.NewFromInt(1)
 	for i, r := range p.rules {
 		res.Rules[i] = RuleResult{Cond: r.cond, Multiplier: r.mult, Matched: st.matched[i]}
-		if st.matched[i] {
-			mult = mult.Mul(decimal.NewFromFloat(r.mult))
+	}
+	// The base is the value with no rule matched; a run that fails then
+	// (a rule kept it from an error) leaves it at the value.
+	baseValue := value
+	if slices.Contains(st.matched, true) {
+		if v, err := p.run(&in, &evalState{noRules: true}); err == nil {
+			baseValue = v
 		}
 	}
-	base := res.Cost
-	if slices.Contains(st.matched, true) {
-		v, err := p.run(&in, &evalState{noRules: true})
-		if err != nil {
-			return nil, err
-		}
-		base = usd(v)
+	mult := decimal.NewFromInt(1)
+	if baseValue > 0 {
+		mult = decimal.NewFromFloat(value / baseValue).Round(8)
 	}
 	if len(st.tiers) > 0 {
 		res.Tier = st.tiers[len(st.tiers)-1]
@@ -392,7 +393,7 @@ func (p *Program) Eval(in Input) (*Result, error) {
 		Metrics:         in.Metrics,
 		Tiers:           st.tiers,
 		Items:           p.items(&in, st.tiers),
-		Base:            base,
+		Base:            usd(baseValue),
 		RulesMultiplier: mult,
 	}
 	sub := decimal.Zero

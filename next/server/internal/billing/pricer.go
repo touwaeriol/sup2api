@@ -24,6 +24,7 @@ type priceSnapshot struct {
 	at      time.Time
 	byModel map[string]core.PriceRule // one price per complete model id
 	bases   catalog                   // the same prices as the pricing endpoints show them
+	custom  map[string]string         // PriceDef.customMode of each base, decoded once
 	rules   ruleSet                   // price rules of groups and segments
 }
 
@@ -47,7 +48,7 @@ func (s *Service) snapshot(ctx context.Context) (*priceSnapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	snap = &priceSnapshot{at: time.Now(), byModel: map[string]core.PriceRule{}, bases: catalog{}}
+	snap = &priceSnapshot{at: time.Now(), byModel: map[string]core.PriceRule{}, bases: catalog{}, custom: map[string]string{}}
 	for _, row := range rows {
 		r := core.PriceRule{ID: row.ID, Model: row.Model, Mode: row.Mode, Expression: row.Expression,
 			ExprVersion: core.ValueOr(row.ExprVersion, 0), ExprHash: row.ExprHash}
@@ -56,7 +57,8 @@ func (s *Service) snapshot(ctx context.Context) (*priceSnapshot, error) {
 			r.VideoOnly = slices.ContainsFunc(program.Facts(), func(fact string) bool { return strings.HasPrefix(fact, "video_") })
 		}
 		snap.byModel[r.Model] = r
-		snap.bases[r.Model] = PriceDef{Mode: r.Mode, Config: row.Config, Expression: r.Expression}
+		base := PriceDef{Mode: r.Mode, Config: row.Config, Expression: r.Expression}
+		snap.bases[r.Model], snap.custom[r.Model] = base, base.customMode()
 	}
 	if snap.rules, err = loadRules(ctx, s.db.Gorm, ""); err != nil {
 		return nil, err
@@ -87,7 +89,7 @@ func (snap *priceSnapshot) resolve(q core.PriceQuery) *core.PriceRule {
 	if global == nil {
 		return nil
 	}
-	rule, source := snap.rules.levels(q).applied(snap.bases[q.Model])
+	rule, source := snap.rules.levels(q).applied(snap.custom[q.Model])
 	return rule.price(*global, source)
 }
 

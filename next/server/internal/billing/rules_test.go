@@ -107,7 +107,8 @@ func TestSnapshotResolve(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			snap := &priceSnapshot{byModel: map[string]core.PriceRule{"m": global, "video": video, "tiered": tiered}, rules: ruleSet{},
-				bases: catalog{"m": oneTier, "video": {Mode: "expression", Config: json.RawMessage(`{}`)}, "tiered": twoTiers}}
+				bases:  catalog{"m": oneTier, "video": {Mode: "expression", Config: json.RawMessage(`{}`)}, "tiered": twoTiers},
+				custom: map[string]string{"m": oneTier.customMode(), "video": "", "tiered": twoTiers.customMode()}}
 			for _, model := range []string{"m", "video", "tiered", "unpriced"} {
 				if tc.ofGroup != nil {
 					snap.rules[core.PriceQuery{Model: model, GroupID: group}] = tc.ofGroup
@@ -183,7 +184,15 @@ func TestCheckRule(t *testing.T) {
 		{name: "custom in another mode", rule: tokens(cheap), base: perRequest, wantErr: "a custom price is per_request"},
 		{name: "custom without a mode", rule: Rule{Kind: "custom", Config: json.RawMessage(`{"price": 1}`)}, base: perRequest, wantErr: "a custom price is per_request"},
 		{name: "custom negative price", rule: tokens(`{"tiers": [{"name": "base", "p": 1, "cr": -1}]}`), base: perToken, wantErr: "config.tiers[0].cr"},
-		{name: "custom in the old shape", rule: tokens(`{"p": 1, "c": 2}`), base: perToken, wantErr: "config.tiers"},
+		{name: "custom in the old shape", rule: tokens(`{"p": 1, "c": 2}`), base: perToken, wantErr: `unknown field "p"`},
+		{name: "custom with two tiers", base: perToken, wantErr: "one tier",
+			rule: tokens(`{"tiers": [{"name": "s", "max_len": 10, "p": 1, "c": 1}, {"name": "l", "p": 2, "c": 2}], "rules": []}`)},
+		{name: "custom priced per request", base: perToken, wantErr: "one tier",
+			rule: tokens(`{"tiers": [{"name": "base", "unit": "request", "price": 1}], "rules": []}`)},
+		{name: "custom with a rule", base: perToken, wantErr: "one tier",
+			rule: tokens(`{"tiers": [{"name": "base", "p": 1, "c": 1}], "rules": [{"multiplier": 2, "conds": [{"source": "param", "key": "x", "op": "exists"}]}]}`)},
+		{name: "custom without prices is not free", base: perToken, wantErr: "with p and c",
+			rule: tokens(`{"tiers": [{"name": "base", "max_len": null}], "rules": []}`)},
 		{name: "custom without config", rule: Rule{Kind: "custom", Mode: "per_request"}, base: perRequest, wantErr: "config.price: required"},
 		{name: "custom per token", base: perToken, rule: tokens(cheap), wantExpression: `tier("base", p*0.8 + c*4 + cr*0.08)`},
 		{name: "custom per token with image prices", base: perToken, rule: tokens(`{"tiers": [{"name": "base", "p": 1, "c": 2, "img": 3, "img_o": 4}]}`),
@@ -217,7 +226,7 @@ func TestCheckRule(t *testing.T) {
 	}
 	zh := core.WithLocale(context.Background(), "zh")
 	_, err := checkRule(zh, Rule{Kind: "custom", Mode: "per_token"}, perToken)
-	require.EqualError(t, err, "自定义价无效：config.tiers: config.tiers: at least one tier is required")
+	require.EqualError(t, err, "自定义价无效：config.tiers: at least one tier is required")
 	_, err = checkRule(zh, tokens(cheap), &twoTiers)
 	require.EqualError(t, err, "表达式计费、分档或带加价规则的按 token 计费只能用倍数规则")
 }

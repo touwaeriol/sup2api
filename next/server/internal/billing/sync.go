@@ -744,6 +744,7 @@ func parseSup2API(body []byte, apply bool) (*fetched, error) {
 	out := &fetched{prices: map[string]*syncPrice{}}
 	for i := range kp.Prices {
 		p := kp.Prices[i]
+		upgradeLegacy(&p)
 		// Prices with a config are generated locally; an expression price
 		// is its expression.
 		if p.Mode != expr.ModeExpression {
@@ -764,6 +765,33 @@ func parseSup2API(body []byte, apply bool) (*fetched, error) {
 	return out, nil
 }
 
+// upgradeLegacy brings a price of an upstream older than core migration 0121
+// to the current shapes, as that migration did to stored prices: a flat
+// per_token config becomes one tier, an expression price has config {} (a
+// visual or video config there is gone; the expression is the price) and
+// "A ||| B" rules become "(A) * (B)".
+func upgradeLegacy(p *syncPrice) {
+	switch p.Mode {
+	case expr.ModeExpression:
+		p.Config = json.RawMessage("{}")
+		if src, ok := expr.LegacyProduct(p.Expression); ok {
+			p.Expression = src
+		}
+	case expr.ModePerToken:
+		var flat map[string]json.RawMessage
+		if json.Unmarshal(p.Config, &flat) != nil || flat == nil || flat["tiers"] != nil {
+			return
+		}
+		tier := map[string]any{"name": "base", "max_len": nil, "unit": expr.UnitToken}
+		for _, k := range []string{"p", "c", "cr", "cc", "cc1h"} {
+			if v, ok := flat[k]; ok && string(v) != "null" {
+				tier[k] = v
+			}
+		}
+		p.Config, _ = json.Marshal(map[string]any{"tiers": []any{tier}, "rules": []any{}})
+	}
+}
+
 // scalePrice multiplies a price by m: the prices of a per-request or
 // per-token config are scaled in place (rule multipliers stay), an
 // expression price becomes "(expression) * m". Only a per-request or
@@ -774,11 +802,13 @@ func scalePrice(p *syncPrice, m decimal.Decimal) error {
 		case float64:
 			return json.Number(decimal.NewFromFloat(x).Mul(m).String())
 		case json.Number:
-			d, err := decimal.NewFromString(string(x))
-			if err != nil {
-				return x
+			if d, err := decimal.NewFromString(string(x)); err == nil {
+				return json.Number(d.Mul(m).String())
 			}
-			return json.Number(d.Mul(m).String())
+		case string: // expr.Num takes numeric strings
+			if d, err := decimal.NewFromString(strings.TrimSpace(x)); err == nil {
+				return json.Number(d.Mul(m).String())
+			}
 		}
 		return v
 	}
@@ -805,7 +835,7 @@ func scalePrice(p *syncPrice, m decimal.Decimal) error {
 	tiers, _ := cfg["tiers"].([]any)
 	for _, t := range tiers {
 		if tier, ok := t.(map[string]any); ok {
-			scaleKeys(tier, "p", "c", "cr", "cc", "cc1h", "img", "img_o", "price")
+			scaleKeys(tier, expr.PriceKeys...)
 		}
 	}
 	b, err := json.Marshal(cfg)

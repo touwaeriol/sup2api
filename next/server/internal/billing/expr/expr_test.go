@@ -282,6 +282,8 @@ func TestCompileErrors(t *testing.T) {
 		{`tier("x", p) ||| header("a") == "b" ? 2 : 1`, CodeSyntax},
 		{`(tier("x", p)) * (header("a") == "b" ? -2 : 1)`, CodeNegativeMultiplier},
 		{`tier("x", p) * (__rule(0, header("a") == "b") ? 2 : 1)`, CodeSyntax},
+		{`tier("x", p) * ($env.__rule(0, header("a") == "b") ? 2 : 1)`, CodeSyntax},
+		{`tier("x", p) * ($env["__rule"](0, true) ? 2 : 1)`, CodeSyntax},
 		{`param("a" + "b") == 1 ? p : c`, CodeLiteralArg},
 		{`tier(header("x"), p)`, CodeLiteralArg},
 		{`p * (hour("Mars/Olympus") > 3 ? 1 : 2)`, CodeTimezone},
@@ -449,9 +451,50 @@ func TestRuleTracing(t *testing.T) {
 			}
 		})
 	}
-	// A condition that is not a boolean fails as it did before tracing.
+	// A condition that is not a boolean fails as it did before tracing; an
+	// absent param is false, as the old engine read it (a migrated rule
+	// `param("fast") ? 2 : 1`).
 	p = mustCompile(t, `tier("x", p) * (u("flag") ? 2 : 1)`)
 	if _, err := p.Eval(Input{Vars: Vars{P: 1}, Metrics: map[string]any{"flag": "yes"}}); err == nil {
 		t.Fatal("non-boolean rule condition accepted")
+	}
+	evalCost := func(src string, in Input) *Result {
+		t.Helper()
+		res, err := mustCompile(t, src).Eval(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res
+	}
+	if res := evalCost(`tier("x", p) * (param("fast") ? 2 : 1)`, Input{Vars: Vars{P: 1e6}}); !res.Cost.Equal(dec("1")) || res.Rules[0].Matched {
+		t.Fatalf("absent param: cost %s, rules %+v", res.Cost, res.Rules)
+	}
+	// The multiplier is cost / base: a rule on one term doubles the cost
+	// here, not triples it.
+	res := evalCost(`tier("x", p*1 + c * (param("f") == 1 ? 3 : 1))`, Input{Vars: Vars{P: 1e6, C: 1e6}, Params: map[string]string{"f": "1"}})
+	if !res.Cost.Equal(dec("4")) || !res.Breakdown.Base.Equal(dec("2")) || !res.Breakdown.RulesMultiplier.Equal(dec("2")) {
+		t.Fatalf("cost %s base %s mult %s", res.Cost, res.Breakdown.Base, res.Breakdown.RulesMultiplier)
+	}
+	// Without its rules the price fails; the base is then the cost.
+	res = evalCost(`(param("q") == 1 ? 2 : 1) == 2 ? tier("x", p*1) : tier("y", p*1 - 1e9)`, Input{Vars: Vars{P: 1e6}, Params: map[string]string{"q": "1"}})
+	if !res.Cost.Equal(dec("1")) || !res.Breakdown.Base.Equal(dec("1")) || !res.Breakdown.RulesMultiplier.Equal(dec("1")) || !res.Rules[0].Matched {
+		t.Fatalf("cost %s base %s mult %s", res.Cost, res.Breakdown.Base, res.Breakdown.RulesMultiplier)
+	}
+}
+
+// LegacyProduct writes the old rule form as factors, as migration 0121 does.
+func TestLegacyProduct(t *testing.T) {
+	for src, want := range map[string]string{
+		"v1 : tier(\"x\", p) ||| param(\"a\") == \"|||\" ? 2 : 1": "(tier(\"x\", p)) * (param(\"a\") == \"|||\" ? 2 : 1)",
+		"p // note\n||| header(\"b\") == 'x\\'|||' ? 3 : 1":       "(p // note\n) * (header(\"b\") == 'x\\'|||' ? 3 : 1)",
+	} {
+		got, ok := LegacyProduct(src)
+		if !ok || got != want {
+			t.Fatalf("LegacyProduct(%q) = %q, %v", src, got, ok)
+		}
+		mustCompile(t, got)
+	}
+	if _, ok := LegacyProduct(`tier("x", p) * (header("a") == "|||" ? 2 : 1)`); ok {
+		t.Fatal("rewrote an expression without a separator")
 	}
 }

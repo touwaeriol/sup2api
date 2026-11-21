@@ -1,6 +1,9 @@
 -- Billing modes are per_request, per_token and expression only (CONTRACTS
 -- §131, core 0.1.306). One way, in place:
 --
+--   0. custom price rules over a global price in expression mode are deleted:
+--      they are inactive (an expression price takes a multiplier only), and
+--      2 would make some of them apply again;
 --   1. per_token configs of five flat prices (model_prices, and custom
 --      price_rules) become one tier: {"tiers":[{"name":"base","max_len":null,
 --      "unit":"token",<prices>}],"rules":[]};
@@ -20,13 +23,20 @@
 --      froze it, and gets the new text, which no longer has to be split), and
 --      in the expressions the pricing inputs of unsettled usage rows carry.
 --
--- 1 to 3 leave expression and expr_hash as they are. A second run finds
+-- Prices that are numeric strings ("0.15") become JSON numbers in 1 and 2.
+-- 0 to 3 leave expression and expr_hash as they are. A second run finds
 -- nothing to change: every per_token config has tiers, every expression
 -- config is {} and no expression has a separator.
 
+-- A number given as a numeric string, as a JSON number; anything else as it is.
+CREATE FUNCTION billing_modes_num(v jsonb) RETURNS jsonb LANGUAGE sql IMMUTABLE AS $$
+    SELECT CASE WHEN jsonb_typeof(v) = 'string' AND btrim(v #>> '{}') ~ '^[+-]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]{1,3})?$'
+        THEN to_jsonb(btrim(v #>> '{}')::numeric) ELSE v END
+$$;
+
 -- The prices of a tier: the token prices that are set, nothing else.
 CREATE FUNCTION billing_modes_prices(j jsonb) RETURNS jsonb LANGUAGE sql IMMUTABLE AS $$
-    SELECT COALESCE(jsonb_object_agg(key, value), '{}')
+    SELECT COALESCE(jsonb_object_agg(key, billing_modes_num(value)), '{}')
     FROM jsonb_each(CASE WHEN jsonb_typeof(j) = 'object' THEN j ELSE '{}' END)
     WHERE key IN ('p', 'c', 'cr', 'cc', 'cc1h') AND value <> 'null'
 $$;
@@ -58,11 +68,11 @@ $$;
 CREATE FUNCTION billing_modes_tokens(cfg jsonb) RETURNS jsonb LANGUAGE sql IMMUTABLE AS $$
     SELECT jsonb_build_object(
         'tiers', (SELECT jsonb_agg(jsonb_build_object('name', t->'name',
-                'max_len', CASE WHEN jsonb_array_length(cfg->'tiers') = 1 THEN 'null' ELSE COALESCE(t->'max_len', 'null') END,
+                'max_len', CASE WHEN jsonb_array_length(cfg->'tiers') = 1 THEN 'null' ELSE billing_modes_num(COALESCE(t->'max_len', 'null')) END,
                 'unit', 'token')
             || billing_modes_prices(CASE WHEN jsonb_typeof(t->'prices') = 'object' THEN t->'prices' ELSE t END) ORDER BY n)
             FROM jsonb_array_elements(cfg->'tiers') WITH ORDINALITY a(t, n)),
-        'rules', (SELECT COALESCE(jsonb_agg(jsonb_build_object('multiplier', r->'multiplier', 'conds', jsonb_build_array(billing_modes_cond(r))) ORDER BY n), '[]')
+        'rules', (SELECT COALESCE(jsonb_agg(jsonb_build_object('multiplier', billing_modes_num(r->'multiplier'), 'conds', jsonb_build_array(billing_modes_cond(r))) ORDER BY n), '[]')
             FROM jsonb_array_elements(CASE WHEN jsonb_typeof(cfg->'rules') = 'array' THEN cfg->'rules' ELSE '[]' END) WITH ORDINALITY a(r, n)))
 $$;
 
@@ -139,6 +149,10 @@ CREATE FUNCTION billing_modes_items(items jsonb) RETURNS jsonb LANGUAGE sql IMMU
     FROM jsonb_array_elements(items) WITH ORDINALITY a(i, n)
 $$;
 
+-- 0.
+DELETE FROM price_rules r WHERE r.kind = 'custom'
+    AND EXISTS (SELECT 1 FROM model_prices m WHERE m.model = r.model AND m.mode = 'expression');
+
 -- 1.
 UPDATE model_prices SET config = billing_modes_one_tier(config) WHERE mode = 'per_token' AND NOT config ? 'tiers';
 UPDATE price_rules SET config = billing_modes_one_tier(config)
@@ -163,14 +177,22 @@ UPDATE model_prices SET expression = billing_modes_product(expression), expr_has
 WHERE billing_modes_product(expression) IS NOT NULL;
 UPDATE price_rules SET expression = billing_modes_product(expression), expr_hash = billing_modes_hash(billing_modes_product(expression))
 WHERE billing_modes_product(expression) IS NOT NULL;
-UPDATE usage_logs SET billing_detail = jsonb_set(jsonb_set(
-        CASE WHEN jsonb_typeof(billing_detail #> '{inputs,pricing,base}') = 'object'
-            THEN jsonb_set(billing_detail, '{inputs,pricing,base}', billing_modes_rehash(billing_detail #> '{inputs,pricing,base}', 'expression', 'expr_hash'))
-            ELSE billing_detail END,
-        '{inputs,additional}', billing_modes_items(COALESCE(billing_detail #> '{inputs,additional}', '[]')), false),
-    '{inputs,replacement}', billing_modes_items(COALESCE(billing_detail #> '{inputs,replacement}', '[]')), false)
-WHERE billing_status IN ('pending', 'failed', 'reserved') AND billing_detail::text LIKE '%|||%';
+CREATE FUNCTION billing_modes_detail(d jsonb) RETURNS jsonb LANGUAGE sql IMMUTABLE AS $$
+    SELECT jsonb_set(jsonb_set(
+            CASE WHEN jsonb_typeof(d #> '{inputs,pricing,base}') = 'object'
+                THEN jsonb_set(d, '{inputs,pricing,base}', billing_modes_rehash(d #> '{inputs,pricing,base}', 'expression', 'expr_hash'))
+                ELSE d END,
+            '{inputs,additional}', billing_modes_items(COALESCE(d #> '{inputs,additional}', '[]')), false),
+        '{inputs,replacement}', billing_modes_items(COALESCE(d #> '{inputs,replacement}', '[]')), false)
+$$;
+-- Unsettled rows: pending and failed by their partial index, reserved ones
+-- by the pending settlements that point at them.
+UPDATE usage_logs SET billing_detail = billing_modes_detail(billing_detail)
+WHERE billing_status IN ('pending', 'failed') AND billing_detail::text LIKE '%|||%';
+UPDATE usage_logs SET billing_detail = billing_modes_detail(billing_detail)
+WHERE id IN (SELECT usage_log_id FROM pending_settlements) AND billing_status = 'reserved' AND billing_detail::text LIKE '%|||%';
 
+DROP FUNCTION billing_modes_detail(jsonb);
 DROP FUNCTION billing_modes_items(jsonb);
 DROP FUNCTION billing_modes_rehash(jsonb, text, text);
 DROP FUNCTION billing_modes_hash(text);
@@ -180,3 +202,4 @@ DROP FUNCTION billing_modes_tokens(jsonb);
 DROP FUNCTION billing_modes_convertible(jsonb);
 DROP FUNCTION billing_modes_cond(jsonb);
 DROP FUNCTION billing_modes_prices(jsonb);
+DROP FUNCTION billing_modes_num(jsonb);

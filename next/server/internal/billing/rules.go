@@ -53,10 +53,11 @@ func (r *storedRule) setScale(n decimal.Decimal) {
 	r.scale, r.Multiplier = n, &text
 }
 
-// inactive reports whether the rule does not apply over the global price
-// base: a custom price keeps the mode it was saved in.
-func (r *storedRule) inactive(base PriceDef) bool {
-	return r.Kind == core.PriceRuleCustom && r.Mode != base.customMode()
+// inactive reports whether the rule does not apply over a global price
+// whose custom prices are of mode custom (PriceDef.customMode): a custom
+// price keeps the mode it was saved in.
+func (r *storedRule) inactive(custom string) bool {
+	return r.Kind == core.PriceRuleCustom && r.Mode != custom
 }
 
 // view returns the rule as the API shows it over the global price base
@@ -66,7 +67,7 @@ func (r *storedRule) view(base *PriceDef) *Rule {
 		return nil
 	}
 	out := r.Rule
-	out.Inactive = base != nil && r.inactive(*base)
+	out.Inactive = base != nil && r.inactive(base.customMode())
 	return &out
 }
 
@@ -94,14 +95,15 @@ func (r *storedRule) price(global core.PriceRule, source string) *core.PriceRule
 // the group's own.
 type ruleLevels struct{ segment, group *storedRule }
 
-// applied returns the first rule that applies over the global price base,
-// the segment's before the group's, and where the list price then comes from.
-// It is the one place the levels are ordered.
-func (l ruleLevels) applied(base PriceDef) (*storedRule, string) {
+// applied returns the first rule that applies over a global price whose
+// custom prices are of mode custom (PriceDef.customMode), the segment's
+// before the group's, and where the list price then comes from. It is the
+// one place the levels are ordered.
+func (l ruleLevels) applied(custom string) (*storedRule, string) {
 	switch {
-	case l.segment != nil && !l.segment.inactive(base):
+	case l.segment != nil && !l.segment.inactive(custom):
 		return l.segment, core.PriceSourceSegment
-	case l.group != nil && !l.group.inactive(base):
+	case l.group != nil && !l.group.inactive(custom):
 		return l.group, core.PriceSourceGroup
 	}
 	return nil, core.PriceSourceGlobal
@@ -206,6 +208,12 @@ func checkCustom(ctx context.Context, in Rule, base PriceDef) (*storedRule, erro
 	src, err := expr.Generate(mode, in.Config)
 	if err != nil {
 		return nil, fmt.Errorf(core.Text(ctx, "invalid custom price: %v", "自定义价无效：%v"), err)
+	}
+	if mode == expr.ModePerToken {
+		if t, ok := singleTokenTier(in.Config); !ok || t.P == nil || t.C == nil {
+			return nil, errors.New(core.Text(ctx, "a per-token custom price is one tier priced by the token, with p and c, and no rules",
+				"按 token 的自定义价只能是一档、按 token 计、带输入和输出价、没有加价规则"))
+		}
 	}
 	prog, err := expr.CompileCached(src)
 	if err != nil {

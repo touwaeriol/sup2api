@@ -153,6 +153,43 @@ func TestParseSup2APIMultiplierOnTiers(t *testing.T) {
 	require.Equal(t, `v1:(len <= 200000 ? tier("standard", p*4.5 + c*22.5 + img*15) : tier("long_context", flat(0.75))) * (param("fast") != nil ? 2 : 1)`, tiered.Expression)
 }
 
+// An upstream older than core migration 0121 sends flat per_token configs,
+// visual or video expression configs and "|||" rules: they arrive in the
+// current shapes, as the migration writes stored prices. Numeric-string
+// prices are scaled.
+func TestParseSup2APIFromOldUpstream(t *testing.T) {
+	body := `{"data": {"prices": [
+		{"model": "flat", "mode": "per_token", "config": {"p": "0.15", "c": 0.6, "cr": null}, "expression": "tier(\"base\", p*0.15 + c*0.6)"},
+		{"model": "visual", "mode": "expression", "config": {"tiers": [{"name": "base", "prices": {"p": 1}}], "rules": [{"source": "param", "name": "fast", "multiplier": 2}]},
+			"expression": "tier(\"base\", p*1 + c*0) ||| param(\"fast\") == true ? 2 : 1"},
+		{"model": "video", "mode": "expression", "config": {"video": {"price_per_million_tokens": 7}}, "expression": "tier(\"video\", c*7)"},
+		{"model": "per-request", "mode": "per_request", "config": {"price": "0.04"}}],
+		"rate_multiplier": "2", "group": {"id": 3, "name": "g"}}}`
+	f, err := parseSup2API([]byte(body), false)
+	require.NoError(t, err)
+	require.Zero(t, f.skipped)
+	for model, want := range map[string][3]string{
+		"flat": {"per_token", `{"tiers": [{"name": "base", "max_len": null, "unit": "token", "p": "0.15", "c": 0.6}], "rules": []}`,
+			`v1:tier("base", p*0.15 + c*0.6)`},
+		"visual":      {"expression", `{}`, `v1:(tier("base", p*1 + c*0)) * (param("fast") == true ? 2 : 1)`},
+		"video":       {"expression", `{}`, `v1:tier("video", c*7)`},
+		"per-request": {"per_request", `{"price": "0.04"}`, `v1:tier("base", flat(0.04))`},
+	} {
+		p := f.prices[model]
+		require.NoError(t, p.compile(), model)
+		require.Equal(t, want[0], p.Mode, model)
+		require.JSONEq(t, want[1], string(p.Config), model)
+		require.Equal(t, want[2], p.Expression, model)
+	}
+
+	f, err = parseSup2API([]byte(body), true)
+	require.NoError(t, err)
+	require.Zero(t, f.skipped)
+	require.JSONEq(t, `{"tiers": [{"name": "base", "max_len": null, "unit": "token", "p": 0.3, "c": 1.2}], "rules": []}`, string(f.prices["flat"].Config))
+	require.JSONEq(t, `{"price": 0.08}`, string(f.prices["per-request"].Config))
+	require.Equal(t, "((tier(\"base\", p*1 + c*0)) * (param(\"fast\") == true ? 2 : 1)) * 2", f.prices["visual"].Expression)
+}
+
 func TestParseSup2APISkipsPriceWithoutConfig(t *testing.T) {
 	body := `{"data": {"prices": [
 		{"model": "no-config", "mode": "per_token", "expression": ""},
