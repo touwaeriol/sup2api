@@ -12,7 +12,7 @@ func seedPrices(e *env, admin int64) {
 	e.mustCall(admin, 201, "POST", "/prices", map[string]any{"model": "claude-sonnet-4-5", "mode": "expression",
 		"expression": `len <= 200000 ? tier("standard", p*3 + c*15 + cr*0.3 + cc*3.75 + cc1h*6) : tier("long_context", p*6 + c*22.5 + cr*0.6 + cc*7.5 + cc1h*12)`})
 	e.mustCall(admin, 201, "POST", "/prices", map[string]any{"model": "claude-haiku-4-5", "mode": "per_token",
-		"config": map[string]any{"p": 1, "c": 5, "cr": 0.1, "cc": 1.25, "cc1h": 2}})
+		"config": oneTierConfig(map[string]any{"p": 1, "c": 5, "cr": 0.1, "cc": 1.25, "cc1h": 2})})
 }
 
 func TestPriceAPI(t *testing.T) {
@@ -22,7 +22,7 @@ func TestPriceAPI(t *testing.T) {
 
 	// validate: generated expression and analysis; config errors are reported, not failed.
 	out := data(e.mustCall(admin, 200, "POST", "/prices/validate", map[string]any{
-		"mode": "per_token", "config": map[string]any{"p": 1, "c": 5, "cr": 0.1, "cc": 1.25, "cc1h": 2},
+		"mode": "per_token", "config": oneTierConfig(map[string]any{"p": 1, "c": 5, "cr": 0.1, "cc": 1.25, "cc1h": 2}),
 	}))
 	if out["ok"] != true || out["expression"] != `tier("base", p*1 + c*5 + cr*0.1 + cc*1.25 + cc1h*2)` {
 		t.Fatalf("validate: %v", out)
@@ -36,19 +36,23 @@ func TestPriceAPI(t *testing.T) {
 		t.Fatalf("validate config error: %v", out)
 	}
 
-	// create: visual expression config (A.6), big cost needs confirmation.
+	// create: per_token tiers and rules (A.6); an expression price has no config.
 	visual := map[string]any{
 		"tiers": []any{
-			map[string]any{"name": "standard", "max_len": 200000, "p": 3, "c": 15, "cr": 0.3, "cc": 3.75, "cc1h": 6, "flat": 0},
+			map[string]any{"name": "standard", "max_len": 200000, "p": 3, "c": 15, "cr": 0.3, "cc": 3.75, "cc1h": 6},
 			map[string]any{"name": "long_context", "max_len": nil, "p": 6, "c": 22.5, "cr": 0.6, "cc": 7.5, "cc1h": 12},
 		},
 		"rules": []any{
-			map[string]any{"kind": "header", "name": "anthropic-beta", "op": "contains", "value": "fast-mode", "multiplier": 2},
-			map[string]any{"kind": "time", "tz": "Asia/Shanghai", "from_hour": 0, "to_hour": 8, "multiplier": 0.8},
+			map[string]any{"name": "fast", "multiplier": 2, "conds": []any{map[string]any{"source": "header", "key": "anthropic-beta", "op": "contains", "value": "fast-mode"}}},
+			map[string]any{"multiplier": 0.8, "conds": []any{map[string]any{"source": "time", "tz": "Asia/Shanghai", "from_hour": 0, "to_hour": 8}}},
 		},
 	}
+	_, resp := e.call(admin, "POST", "/prices", map[string]any{"model": "claude-sonnet-x", "mode": "expression", "config": visual})
+	if errCode(resp) != "invalid_argument" {
+		t.Fatalf("expression with a config: %v", resp)
+	}
 	created := data(e.mustCall(admin, 201, "POST", "/prices", map[string]any{
-		"model": "claude-sonnet-x", "mode": "expression", "config": visual,
+		"model": "claude-sonnet-x", "mode": "per_token", "config": visual,
 	}))
 	id := int64(created["id"].(float64))
 	if _, has := created["platform"]; created["source"] != "manual" || created["expr_hash"] == "" || has ||
@@ -64,15 +68,15 @@ func TestPriceAPI(t *testing.T) {
 	e.mustCall(admin, 404, "GET", "/prices/history/nope", nil)
 
 	code, resp := e.call(admin, "POST", "/prices", map[string]any{
-		"model": "big-model", "mode": "per_token", "config": map[string]any{"p": 15, "c": 75},
+		"model": "big-model", "mode": "per_token", "config": oneTierConfig(map[string]any{"p": 15, "c": 75}),
 	})
 	if code != 400 || data(map[string]any{"data": resp["error"]})["details"].(map[string]any)["confirmation_required"] != true {
 		t.Fatalf("big cost: %d %v", code, resp)
 	}
 	e.mustCall(admin, 201, "POST", "/prices", map[string]any{
-		"model": "big-model", "mode": "per_token", "config": map[string]any{"p": 15, "c": 75}, "confirm": true,
+		"model": "big-model", "mode": "per_token", "config": oneTierConfig(map[string]any{"p": 15, "c": 75}), "confirm": true,
 	})
-	_, resp = e.call(admin, "POST", "/prices", map[string]any{"model": "big-model", "mode": "per_token", "config": map[string]any{"p": 1}})
+	_, resp = e.call(admin, "POST", "/prices", map[string]any{"model": "big-model", "mode": "per_token", "config": oneTierConfig(map[string]any{"p": 1})})
 	if errCode(resp) != "conflict" {
 		t.Fatalf("duplicate: %v", resp)
 	}
@@ -82,7 +86,7 @@ func TestPriceAPI(t *testing.T) {
 	}
 	// Prices are keyed by complete model ids: wildcards are rejected.
 	for _, m := range []string{"claude-*", "gpt-4?", "gpt 4o"} {
-		_, resp = e.call(admin, "POST", "/prices", map[string]any{"model": m, "mode": "per_token", "config": map[string]any{"p": 1}})
+		_, resp = e.call(admin, "POST", "/prices", map[string]any{"model": m, "mode": "per_token", "config": oneTierConfig(map[string]any{"p": 1})})
 		if errCode(resp) != "invalid_argument" {
 			t.Fatalf("model %q accepted: %v", m, resp)
 		}
@@ -109,7 +113,7 @@ func TestPriceAPI(t *testing.T) {
 		t.Fatalf("breakdown: %v", bd)
 	}
 	prev = data(e.mustCall(admin, 200, "POST", "/prices/preview", map[string]any{
-		"mode": "per_token", "config": map[string]any{"p": 3, "c": 15},
+		"mode": "per_token", "config": oneTierConfig(map[string]any{"p": 3, "c": 15}),
 		"usage": map[string]any{"p": 1204, "c": 812}, "group_id": gid,
 	}))
 	if prev["base_cost"] != "0.015792" || prev["cost"] != "0.023688" || prev["rate_multiplier"] != "1.5" {
@@ -154,7 +158,7 @@ func TestPriceAPI(t *testing.T) {
 		t.Fatalf("disable synced: %v", upd)
 	}
 	e.mustCall(admin, 200, "PATCH", path, map[string]any{"enabled": true})
-	upd := data(e.mustCall(admin, 200, "PATCH", path, map[string]any{"mode": "per_token", "config": map[string]any{"p": 2, "c": 4}, "note": "cheaper"}))
+	upd := data(e.mustCall(admin, 200, "PATCH", path, map[string]any{"mode": "per_token", "config": oneTierConfig(map[string]any{"p": 2, "c": 4}), "note": "cheaper"}))
 	if upd["expression"] != `tier("base", p*2 + c*4)` || upd["note"] != "cheaper" || upd["source"] != "manual" || upd["sync_source_id"] != nil {
 		t.Fatalf("patch: %v", upd)
 	}

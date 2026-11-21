@@ -6,7 +6,7 @@ import type { Issue } from './issues'
 
 export interface PricePayload {
   mode: string
-  config: Record<string, unknown>
+  config: object
   expression: string
 }
 

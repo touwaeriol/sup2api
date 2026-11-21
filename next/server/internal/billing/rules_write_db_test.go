@@ -3,6 +3,7 @@ package billing
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -103,7 +104,8 @@ func TestWriteRulesMatchesSequential(t *testing.T) {
 		return r
 	}
 	price := func(p float64) *storedRule {
-		r, err := checkCustom(ctx, Rule{Kind: core.PriceRuleCustom, Mode: "per_request", Config: map[string]*float64{"price": &p}}, "per_request")
+		config := json.RawMessage(fmt.Sprintf(`{"price": %v}`, p))
+		r, err := checkCustom(ctx, Rule{Kind: core.PriceRuleCustom, Mode: "per_request", Config: config}, PriceDef{Mode: "per_request"})
 		require.NoError(t, err)
 		return r
 	}

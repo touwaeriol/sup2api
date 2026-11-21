@@ -106,18 +106,6 @@ func Validate(src string, opts ValidateOptions) *Report {
 			break // one failing sample is enough to explain the problem
 		}
 	}
-	// Multipliers of unmatched rules are not exercised by the samples.
-	for _, rl := range p.rules {
-		if rl.multConst != nil {
-			continue
-		}
-		in := Input{At: opts.At}
-		m, err := runFloat(rl.multProg, newEnv(&in, nil))
-		if err != nil || !finiteNonNeg(m) {
-			r.Errors = append(r.Errors, issuef(CodeSmoke, "rule %q multiplier: %v", rl.cond, errOr(err, m)))
-		}
-	}
-
 	if len(r.Errors) == 0 {
 		cost, err := p.CostPerMillionInput(opts.At)
 		if err == nil {
@@ -135,16 +123,9 @@ func Validate(src string, opts ValidateOptions) *Report {
 	return r
 }
 
-func errOr(err error, v float64) any {
-	if err != nil {
-		return err
-	}
-	return v
-}
-
 // CostPerMillionInput evaluates one request with one million input tokens
 // (len = 1e6, everything else 0, no request headers or params) at the given
-// time. Request surcharges only count when they match such a request.
+// time. Request rules only count when they match such a request.
 func (p *Program) CostPerMillionInput(at time.Time) (decimal.Decimal, error) {
 	res, err := p.Eval(Input{Vars: Vars{P: 1e6, Len: 1e6}, At: at})
 	if err != nil {

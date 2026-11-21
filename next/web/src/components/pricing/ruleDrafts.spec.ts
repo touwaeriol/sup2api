@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import type { ModelPriceRow, PriceDef, PriceRule } from '@/api/pricing'
-import { draftedRow, rulePatches, sameRule, setRuleDraft, startRule, validRule, withRule, type RuleDrafts } from './ruleDrafts'
+import { singleTier } from '@/views/prices/priceExpr'
+import { customPrices, customRule, draftedRow, rulePatches, sameRule, setRuleDraft, startRule, takesCustom, validRule, withRule, type RuleDrafts } from './ruleDrafts'
 
-const perToken: PriceDef = { mode: 'per_token', config: { p: 3, c: 15, cr: 0.3, cc: 3.75, cc1h: 6 }, expression: '' }
+const perToken: PriceDef = { mode: 'per_token', config: singleTier({ p: 3, c: 15, cr: 0.3, cc: 3.75, cc1h: 6, img: 10 }), expression: '' }
+const tiered: PriceDef = { mode: 'per_token', config: { tiers: [{ name: 'a', max_len: 200000, p: 3, c: 15 }, { name: 'b', max_len: null, p: 6, c: 22.5 }], rules: [] }, expression: '' }
+const ruled: PriceDef = { mode: 'per_token', config: { ...singleTier({ p: 3, c: 15 }), rules: [{ name: '', multiplier: 2, conds: [{ source: 'header', key: 'x', op: 'exists' }] }] }, expression: '' }
+const perCall: PriceDef = { mode: 'per_token', config: { tiers: [{ name: 'a', max_len: null, unit: 'request', price: 0.1 }], rules: [] }, expression: '' }
 const perRequest: PriceDef = { mode: 'per_request', config: { price: 0.02 }, expression: '' }
 const expression: PriceDef = { mode: 'expression', config: null, expression: 'tier("base", p*3 + c*15)' }
 const times = (multiplier: string): PriceRule => ({ kind: 'multiplier', multiplier })
-const custom = (config: Record<string, number | null>): PriceRule => ({ kind: 'custom', mode: 'per_token', config })
+const custom = (prices: Record<string, number | null>) => customRule('per_token', prices)
 
 function row(over: Partial<ModelPriceRow> = {}): ModelPriceRow {
   return { model: 'gpt-4o', base: perToken, group_rule: null, list_price: perToken, source: 'global', ...over }
@@ -18,8 +22,19 @@ describe('the rule a mode starts from', () => {
     expect(startRule('custom', perToken)).toMatchObject(custom({ p: 3, c: 15, cr: 0.3, cc: 3.75 }))
     expect(startRule('custom', perRequest)).toEqual({ kind: 'custom', mode: 'per_request', config: { price: 0.02 } })
   })
-  it('is a multiplier for an expression price, whatever was asked', () => {
-    expect(startRule('custom', expression)).toEqual(times('1'))
+  it('is a multiplier for a price that takes no custom price, whatever was asked', () => {
+    for (const base of [expression, tiered, ruled, perCall]) {
+      expect(takesCustom(base)).toBe(false)
+      expect(startRule('custom', base)).toEqual(times('1'))
+    }
+    expect([perToken, perRequest].every(takesCustom)).toBe(true)
+  })
+  it('is one token tier for a per-token price, its unset cache prices left out', () => {
+    expect(startRule('custom', { ...perToken, config: singleTier({ p: 3, c: 15 }) })).toEqual({
+      kind: 'custom',
+      mode: 'per_token',
+      config: { tiers: [{ name: 'base', max_len: null, unit: 'token', p: 3, c: 15 }], rules: [] }
+    })
   })
 })
 
@@ -36,6 +51,13 @@ describe('a rule that may be saved', () => {
     expect(validRule(custom({ p: 1, c: null, cr: null, cc: null }))).toBe(false)
     expect(validRule(custom({ p: 1, c: 8, cr: -0.1, cc: null }))).toBe(false)
     expect(validRule({ kind: 'custom', mode: 'per_request', config: { price: null } })).toBe(false)
+  })
+})
+
+describe('the prices of a custom rule', () => {
+  it('read as one row, whatever the rule leaves out', () => {
+    expect(customPrices(custom({ p: 1, c: 8 }))).toEqual({ p: 1, c: 8, cr: null, cc: null, cc1h: null })
+    expect(customPrices({ kind: 'custom', mode: 'per_request', config: { price: 0.5 } })).toEqual({ price: 0.5 })
   })
 })
 
@@ -58,7 +80,7 @@ describe('a row under a rule', () => {
     const group = withRule(row(), 'group', times('2'))
     expect(group).toMatchObject({ source: 'group', list_price: { ...perToken, multiplier: '2' } })
     const own = withRule({ ...group, segment_rule: null }, 'segment', custom({ p: 1, c: 8 }))
-    expect(own).toMatchObject({ source: 'segment', list_price: { mode: 'per_token', config: { p: 1, c: 8 } } })
+    expect(own).toMatchObject({ source: 'segment', list_price: { mode: 'per_token', config: singleTier({ p: 1, c: 8 }) } })
     expect(withRule(own, 'segment', null)).toMatchObject({ source: 'group', list_price: { ...perToken, multiplier: '2' } })
     expect(withRule(group, 'group', null)).toMatchObject({ source: 'global', list_price: perToken })
   })

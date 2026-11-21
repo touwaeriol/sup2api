@@ -3,8 +3,9 @@ import { mount } from '@vue/test-utils'
 import { i18n } from '@/i18n'
 import type { PricingQuote } from '@/api/pricing'
 import PriceQuoteBreakdown from './PriceQuoteBreakdown.vue'
+import { singleTier } from '@/views/prices/priceExpr'
 
-const price = { mode: 'per_token' as const, config: { p: 3, c: 15 }, expression: '' }
+const price = { mode: 'per_token' as const, config: singleTier({ p: 3, c: 15 }), expression: '' }
 const quote: PricingQuote = {
   segment: { id: 2, kind: 'named', name: 'VIP' },
   accessible: true,
@@ -59,7 +60,7 @@ describe('price quote breakdown', () => {
   })
 
   it('notes under a tiered list price that the first tier is shown', () => {
-    const tiered = { mode: 'expression' as const, config: { tiers: [{ name: 'a', p: 3, c: 15 }, { name: 'b', p: 6, c: 22.5 }] }, expression: '' }
+    const tiered = { mode: 'per_token' as const, config: { tiers: [{ name: 'a', max_len: 200000, p: 3, c: 15 }, { name: 'b', max_len: null, p: 6, c: 22.5 }], rules: [] }, expression: '' }
     expect(render({ base: tiered, list_price: tiered }).get('[data-testid="price-quote-price-note"]').text()).toContain('分段计价')
     expect(render().find('[data-testid="price-quote-price-note"]').exists()).toBe(false)
   })

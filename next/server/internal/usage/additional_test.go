@@ -9,7 +9,7 @@ import (
 )
 
 func TestAdditionalPriceSnapshotsSurviveRetryAndKeepMainSeparate(t *testing.T) {
-	item := core.PricedUsage{Kind: "advisor", Model: "extra", Price: &core.PriceRule{ID: 9, Expression: `tier("extra",p*10+c*20) ||| header("premium") == "yes" ? 2 : 1`}, Tokens: core.UsageTokens{Input: 1_000_000, Output: 500_000}, UsageSemantics: "exclusive", PriceHeaders: map[string]string{"premium": "yes"}, RateMultiplier: decimal.NewFromInt(3)}
+	item := core.PricedUsage{Kind: "advisor", Model: "extra", Price: &core.PriceRule{ID: 9, Expression: `(tier("extra",p*10+c*20)) * (header("premium") == "yes" ? 2 : 1)`}, Tokens: core.UsageTokens{Input: 1_000_000, Output: 500_000}, UsageSemantics: "exclusive", PriceHeaders: map[string]string{"premium": "yes"}, RateMultiplier: decimal.NewFromInt(3)}
 	p := &pending{Expression: `tier("main",p*2+c*4)`, Tokens: core.UsageTokens{Input: 1_000_000, Output: 500_000}, Rate: decimal.NewFromInt(2), Inputs: pendingInputs{Semantics: "exclusive", Additional: []core.PricedUsage{item}}}
 	total, detail, _, err := priceOf(p)
 	if err != nil {

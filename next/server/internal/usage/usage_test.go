@@ -31,7 +31,7 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/testutil"
 )
 
-const a6Expr = `len <= 200000 ? tier("standard", p*3 + c*15 + cr*0.3 + cc*3.75 + cc1h*6) : tier("long_context", p*6 + c*22.5 + cr*0.6 + cc*7.5 + cc1h*12) ||| has(header("anthropic-beta"), "fast-mode") ? 2 : 1`
+const a6Expr = `(len <= 200000 ? tier("standard", p*3 + c*15 + cr*0.3 + cc*3.75 + cc1h*6) : tier("long_context", p*6 + c*22.5 + cr*0.6 + cc*7.5 + cc1h*12)) * (has(header("anthropic-beta"), "fast-mode") ? 2 : 1)`
 
 // flakyLedger fails the first n ApplyTx calls.
 type flakyLedger struct {

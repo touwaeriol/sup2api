@@ -1,7 +1,7 @@
 // What the pricing views show of a rate, a price rule and a price: pure
 // functions shared by the admin editors and the user's own pages.
 import type { EffectiveRate, PriceDef, PriceRule } from '@/api/pricing'
-import { TOKEN_VARS, hasVisualConfig, normalizeVisual, num, parseExpression, summarize, tokenPricesFrom, type TokenPrices } from '@/views/prices/priceExpr'
+import { TOKEN_VARS, num, summarize, tokenPricesOf, type TokenPrices } from '@/views/prices/priceExpr'
 
 /** "×0.8": a rate as every pricing view writes it. */
 export function rateText(v: string | number | null | undefined): string {
@@ -73,18 +73,14 @@ export interface PriceCells {
   multiplier?: string
 }
 
-/** The cells of a price as it stands, whatever multiplier is on it. */
+/** The cells of a price as it stands, whatever multiplier is on it: a per-token price shows its first tier. */
 function ownCells(def: PriceDef): PriceCells {
-  const s = summarize(def.mode, def.config, def.expression)
-  // summarize reads a blank price as 0; a draft's blank price is no price yet.
+  const s = summarize(def.mode, def.config)
+  // A draft's blank price is no price yet, not 0.
   if (s.kind === 'per_request') return { perRequest: def.config?.price === null ? null : s.price, tiers: 1 }
-  if (s.kind === 'per_token') return { tokens: s.prices, tiers: 1 }
-  if (s.kind === 'visual') {
-    const v = hasVisualConfig(def.config) ? normalizeVisual(def.config) : parseExpression(def.expression)
-    const first = v?.tiers[0]
-    if (first) return { tokens: tokenPricesFrom(first), tiers: s.tiers }
-  }
-  return { tiers: 1, opaque: true }
+  if (s.kind === 'expression') return { tiers: 1, opaque: true }
+  const { first, tiers } = s
+  return first.unit === 'request' ? { perRequest: num(first.price), tiers } : { tokens: tokenPricesOf(first), tiers }
 }
 
 /** A product of multipliers as shown: six decimals at most. */
@@ -106,7 +102,7 @@ export function priceCells(def: PriceDef | null | undefined): PriceCells {
   const times = (v: number | null) => (v === null ? null : round(v * k))
   if (cells.perRequest !== undefined) return { ...cells, perRequest: times(cells.perRequest) }
   const { tokens } = cells
-  return tokens ? { ...cells, tokens: tokenPricesFrom(Object.fromEntries(TOKEN_VARS.map((v) => [v, times(tokens[v])]))) } : cells
+  return tokens ? { ...cells, tokens: Object.fromEntries(TOKEN_VARS.map((v) => [v, times(tokens[v])])) as TokenPrices } : cells
 }
 
 /** "$3": a price per 1M tokens or per request, times `rate`. */

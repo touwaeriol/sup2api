@@ -49,7 +49,7 @@ func TestResolveExactModel(t *testing.T) {
 	if r, _ := e.svc.Resolve(ctx, core.PriceQuery{Model: "claude-sonnet-4-5"}); r.Expression != `tier("base", p*9)` {
 		t.Fatalf("after invalidation: %+v", r)
 	}
-	bodies, headers := e.svc.Inputs(&core.PriceRule{Expression: `tier("b", p) ||| param("service_tier") == "x" ? 2 : 1 ||| has(header("Anthropic-Beta"), "f") ? 2 : 1`})
+	bodies, headers := e.svc.Inputs(&core.PriceRule{Expression: `(tier("b", p)) * (param("service_tier") == "x" ? 2 : 1) * (has(header("Anthropic-Beta"), "f") ? 2 : 1)`})
 	if len(bodies) != 1 || bodies[0] != "service_tier" || len(headers) != 1 || headers[0] != "anthropic-beta" {
 		t.Fatalf("inputs %v %v", bodies, headers)
 	}

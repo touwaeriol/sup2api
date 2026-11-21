@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { EffectiveRate, PriceDef, PriceRule } from '@/api/pricing'
 import { priceLevels, rateLevels } from './quoteLevels'
+import { singleTier } from '@/views/prices/priceExpr'
 
-const base: PriceDef = { mode: 'per_token', config: { p: 3, c: 15 }, expression: '' }
+const base: PriceDef = { mode: 'per_token', config: singleTier({ p: 3, c: 15 }), expression: '' }
 const half: PriceRule = { kind: 'multiplier', multiplier: '0.5' }
-const fixed: PriceRule = { kind: 'custom', mode: 'per_token', config: { p: 1, c: 8 } }
+const fixed: PriceRule = { kind: 'custom', mode: 'per_token', config: singleTier({ p: 1, c: 8 }) }
 const rate = (over: Partial<EffectiveRate>): EffectiveRate => ({ value: '1.2', source: 'group', group_default: '1.2', discount: '1', ...over })
 
 const states = (levels: Array<{ key: string; state: string }>) => Object.fromEntries(levels.map((l) => [l.key, l.state]))

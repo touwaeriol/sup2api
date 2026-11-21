@@ -16,7 +16,7 @@ import (
 // Exercise settlement and the persisted log detail together, without a database.
 // These are administrator-defined request conditions, not provider tier presets.
 func TestPriceOfConditionalMultipliersAndLogDetail(t *testing.T) {
-	const expression = `tier("base", p*3 + c*15 + cr*0.3 + cc*3.75 + cc1h*6) ||| param("speed") == "fast" ? 2 : 1 ||| header("x-price-option") == "premium" ? 3 : 1`
+	const expression = `(tier("base", p*3 + c*15 + cr*0.3 + cc*3.75 + cc1h*6)) * (param("speed") == "fast" ? 2 : 1) * (header("x-price-option") == "premium" ? 3 : 1)`
 	for _, tc := range []struct {
 		name, semantics string
 		input           int64

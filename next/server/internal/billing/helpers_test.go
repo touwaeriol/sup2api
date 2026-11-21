@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -177,3 +178,10 @@ func errCode(m map[string]any) string {
 }
 
 func contains(s, sub string) bool { return strings.Contains(s, sub) }
+
+// oneTierConfig is a per_token config of one tier with prices.
+func oneTierConfig(prices map[string]any) map[string]any {
+	tier := map[string]any{"name": "base"}
+	maps.Copy(tier, prices)
+	return map[string]any{"tiers": []any{tier}, "rules": []any{}}
+}

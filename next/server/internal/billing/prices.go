@@ -3,7 +3,6 @@ package billing
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -316,8 +315,6 @@ func (s *Service) updatePrice(c *gin.Context) {
 		}
 		if in.Expression != nil {
 			expression = *in.Expression
-		} else if in.Config != nil && mode == expr.ModeExpression && expr.HasVisualConfig(in.Config) {
-			expression = "" // regenerate from the new visual config
 		}
 		src, hash, version := cur.Expression, cur.ExprHash, cur.ExprVersion
 		if pricing {
@@ -588,22 +585,14 @@ func deref[T any](p *T) T {
 }
 
 // expressionFor returns the expression stored for a price: generated from
-// the visual config, or the hand-written expression in expression mode.
+// the config, or the hand-written expression of an expression price, whose
+// config must be {} (an empty expression fails validation).
 func expressionFor(mode string, config json.RawMessage, expression string) (string, error) {
-	switch mode {
-	case expr.ModePerRequest, expr.ModePerToken:
-		return expr.Generate(mode, config)
-	case expr.ModeExpression:
-		var visual expr.ExpressionConfig
-		if json.Unmarshal(config, &visual) == nil && visual.Video != nil {
-			return expr.Generate(mode, config)
-		}
-		if expression != "" {
-			return expression, nil
-		}
-		return expr.Generate(mode, config)
+	src, err := expr.Generate(mode, config)
+	if err == nil && mode == expr.ModeExpression {
+		return expression, nil
 	}
-	return "", fmt.Errorf("unknown mode %q", mode)
+	return src, err
 }
 
 // recordHistory keeps expressions (hash, canonical text, version) on q

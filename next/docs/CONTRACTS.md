@@ -885,7 +885,7 @@ POST `/accounts/:id/test`（`account:test` / `account:own:test`）：
 
 | kind | 数据 | options | 说明 |
 |---|---|---|---|
-| `litellm` | LiteLLM `model_prices_and_context_window.json` | `{providers}`，默认 `["anthropic","openai","gemini"]`（`litellm_provider`） | 只取 chat、completion、responses、embedding 模式；`<provider>/` 前缀会去掉；超过 200K 上下文的价格生成两档表达式；有 1 小时缓存写入价 |
+| `litellm` | LiteLLM `model_prices_and_context_window.json` | `{providers}`，默认 `["anthropic","openai","gemini"]`（`litellm_provider`） | 只取 chat、completion、responses、embedding 模式；`<provider>/` 前缀会去掉；超过 200K 上下文的价格生成两档的按 token 价格（§131）；有 1 小时缓存写入价 |
 | `models_dev` | models.dev `api.json` | `{providers}`，默认 `["anthropic","openai","google"]` | 按 `cost.tiers`（context 类型）分档；**没有 1 小时缓存写入价** |
 | `sup2api` | 上游 sup2api 的 `GET /api/v1/key/prices` | `{apply_multiplier}`，默认 true | 必须填 `api_key`（上游的 `sk-s2a-` Key，用 AES-GCM 加密保存）。apply_multiplier 为 true 时，价格乘以上游返回的 `rate_multiplier`，也就是按实际付给上游的价格导入。上游是 §97 及以后的版本时，返回的价格已是该 Key 所有者在那个分组的标价，`rate_multiplier` 是他的实际倍率，不一定等于分组默认倍率 |
 
@@ -4472,7 +4472,7 @@ GET `/groups/:id/models`（`group:read`）返回所有未删除成员账号的�
 
 - 宿主调用 `PriceUsage`（权限 `prices`，风险 low，插件升级时自动授予）：请求 `{model, semantics: inclusive|exclusive, input, output, cache_read, cache_creation, cache_creation_1h}`，响应 `{priced, cost, reason}`。
   - `cost` 是十进制字符串（美元，8 位小数），按核心模型价格表（`model_prices`，只看完整模型名）和网关结算同一套表达式计算，不乘分组倍率。
-  - `reason` 取值：`no_price`（没有启用的价格）、`video_only`（视频价格不能按 token 计）、`eval_error`。`priced=false` 时 `cost` 为空。
+  - `reason` 取值：`no_price`（没有启用的价格）、`video_only`（表达式读了 `video_*` 用量的价格只能用于视频，不能按 token 计）、`eval_error`。`priced=false` 时 `cost` 为空。
   - 只读，不扣费、不写用量记录。SDK：`Host.PriceUsage`；`FakeHost` 用可注入的价格表实现。
 - 内置插件目录换成 moderation 0.3.0。
 
@@ -6576,7 +6576,7 @@ kind: users | groups | api-keys | accounts | models | proxies
 | 规则 | 含义 | 约束 |
 |---|---|---|
 | 按倍数 `multiplier` | 标价 = 全局价 × N，全局价变化时跟着变 | N 不小于 0、小于 1000000、最多 4 位小数。0 表示免费。1 也合法：专属价设成 ×1 表示“这个用户组按全局价，不吃分组内定价” |
-| 自定义价 `custom` | 一个固定的价格，不随全局价变化 | 沿用全局价的计费方式：按 token（`p`、`c`、`cr`、`cc`、`cc1h`，其中 `p`、`c` 必填）或按次（`price`）。全局价是表达式计费的模型只能用按倍数的规则 |
+| 自定义价 `custom` | 一个固定的价格，不随全局价变化 | 沿用全局价的计费方式：按 token（单档，`p`、`c`、`cr`、`cc`、`cc1h`，其中 `p`、`c` 必填）或按次（`price`）。全局价是表达式计费、或分档 / 带加价规则 / 按次计的档位的按 token 计费的模型只能用按倍数的规则（§131） |
 
 - 规则建立在全局价之上。模型没有启用的全局价时不能计费，规则不生效，请求被拒（§17.3）。
 - 自定义价的计费方式与全局价**现在的**计费方式不同时（规则保存之后，全局价被改成了另一种方式），这条规则**失效**：解析时跳过它，往下一层找。规则不会被删除，接口里它带 `inactive: true`（97.6）。
@@ -6705,7 +6705,7 @@ kind: users | groups | api-keys | accounts | models | proxies
 | `Segment` | `SegmentRef` 加 `description`、`discount`（全场折扣，`"1"` = 没有）、`is_default`、`member_count`、`granted_groups: [{id, name}]`（被授权的私有分组）、`rate_override_count`（设了专属倍率的分组数）、`price_rule_count`（专属价的条数，所有分组合计；只算各分组现在提供的模型上的，口径见下面 GET `/groups` 一行）、`created_at`；个人专属另有 `user: {id, email, display_name}` 和 `origin: SegmentRef \| null`（原来所在的用户组，已被删除时为 `null`） |
 | `EffectiveRate` | `{value, source, group_default, discount}`：实际倍率、它的来源（`segment` \| `discount` \| `group`），以及算它用到的分组默认倍率和全场折扣 |
 | `SegmentGroupSetting` | 一个用户组在一个分组的设置：`segment: SegmentRef`、`group: {id, name, description, status, visibility, rate_multiplier, platforms?}`、`accessible`（公开或已授权）、`granted`（显式的授权，只对私有分组有意义）、`rate_override`（专属倍率，`null` = 跟随）、`rate: EffectiveRate`、`price_rule_count`（这个用户组在这个分组的专属价条数，只算分组现在提供的模型上的）、`member_count`（用户组的成员数，个人专属是 1） |
-| `PriceRule` | `{kind: "multiplier", multiplier}` 或 `{kind: "custom", mode, config}`（`mode` 是 `per_token` \| `per_request`，`config` 只含该方式的价格字段，没填的是 `null`）；规则失效（97.1）时另有 `inactive: true` |
+| `PriceRule` | `{kind: "multiplier", multiplier}` 或 `{kind: "custom", mode, config}`（`mode` 是 `per_token` \| `per_request`；`config` 是该方式价格的 config：按次 `{price}`，按 token `{tiers, rules}`，§131；控制台存成单档）；规则失效（97.1）时另有 `inactive: true` |
 | `PriceDef` | `{mode, config, expression, multiplier?}`：一个价格。前三个字段与 `/prices` 的同名字段相同。`multiplier`（十进制字符串）只在“这个标价来自按倍数的规则”时出现，规则是 ×0、×1 时也照常出现，含义是：标价 = 这个价格 × `multiplier`。全局价（`base`）和自定义价给出的标价不带它 |
 | `ModelPriceRow` | 分组提供的一个模型：`model`、`base: PriceDef \| null`（全局价，`null` = 没有，不能计费）、`group_rule: PriceRule \| null`（分组内定价）、`segment_rule`（带 `segment_id` 查询时：该用户组的专属价）或 `segment_rule_count`（不带时：在这个模型上有专属价的用户组数）、`list_price: PriceDef \| null`（先命中的那条规则作用后的标价，见下）、`source`（`segment` \| `group` \| `global`）。模型没有全局价时 `list_price` 为 `null`、`source` 为 `global`，两条规则仍照配置返回，不带 `inactive`（失效是对着全局价现在的计费方式判断的） |
 | `GroupModelPrices` | `{group: {id, name}, segment?: SegmentRef, rate: EffectiveRate, models: ModelPriceRow[]}`；`rate` 是所查用户组在该分组的倍率，没带用户组时是分组默认倍率 |
@@ -6751,7 +6751,7 @@ kind: users | groups | api-keys | accounts | models | proxies
 | PUT `/groups/:id/model-prices?segment_id=` `{items: [{segment_id, model, rule}]}` | `group:manage` | 每项写一条规则：`segment_id` 为 `null` 是分组内定价，否则是该用户组的专属价；`rule` 为 `null` 删除这条规则。整批一个事务，任何一项不合法整批不改（400，字段 `items.<i>`）；返回最新的 `GroupModelPrices`（查询串的 `segment_id` 只决定返回哪个视图）。校验见下；调用者本人在该用户组内（默认用户组除外）409，超管例外（见表后“自己所在用户组的设置”） |
 | POST `/pricing/quote` | `price:read` 且 `group:read`；带 `user_id` 还要 `user:read`，带 `segment_id` 还要 `segment:read` | 试算一个用户（或一个用户组的任何成员）在某个分组调用某个模型要付多少，见下。响应里有分组和用户组的规则与倍率、用户所在的用户组，所以接口要求的权限与控制台试算入口的相同（选分组、选用户、选用户组各自的权限）；缺哪一项回 403 `permission_denied`，`details.permission` 是缺的那一项。这个检查在请求体的其它校验之前：没有 `user:read` 的调用者分不出某个用户 id 存不存在 |
 
-规则的校验（删除规则总是允许）：用户组必须存在；分组必须提供这个模型；模型必须有启用的全局价；`rule.kind` 是 `multiplier` 或 `custom`；倍数不小于 0、小于 1000000、最多 4 位小数；自定义价不能设在表达式计费的模型上，`mode` 必须与全局价相同，价格字段必须是非负数，按 token 必须有 `p` 和 `c`，按次必须有 `price`。保存自定义价时，核心由 `mode` 和 `config` 生成表达式存下，并写进 `model_price_history`（97.4）。
+规则的校验（删除规则总是允许）：用户组必须存在；分组必须提供这个模型；模型必须有启用的全局价；`rule.kind` 是 `multiplier` 或 `custom`；倍数不小于 0、小于 1000000、最多 4 位小数；自定义价只能设在按次、或只有一档、没有规则、按 token 计的按 token 全局价上（§131），`mode` 必须与全局价相同，`config` 必须能生成表达式（价格字段是非负数，按 token 的档位必须有 `p` 和 `c`，按次必须有 `price`）。保存自定义价时，核心由 `mode` 和 `config` 生成表达式存下，并写进 `model_price_history`（97.4）。
 
 `POST /pricing/quote`：
 
@@ -8472,7 +8472,7 @@ SDK 名 `pluginsdk.Fetch`。一个有界、非流式的请求，回答交还插�
   - `len`（分档用的完整上下文）不受扣除影响，含图片输入。
 - 例（`gpt-image-1.5` 的参考价，见 118.6；输入 1000 其中图片 600、缓存读 100，输出 4200 其中图片 4000）：`p*5 + cr*1.25 + img*8 + img_o*32 + c*10` 计 300×5 + 100×1.25 + 600×8 + 4000×32 + 200×10 = 136 425 微美元；只有文字价的 `p*5 + cr*1.25 + c*10` 计 900×5 + 100×1.25 + 4200×10 = 46 625 微美元（`billing/image_tokens_test.go`、`usage/image_tokens_db_test.go`）。
 - `POST /prices/preview` 的 `usage` 多两个可选字段 `img`、`img_o`。`usage` 是“分开”的形式：`p` 不含缓存和图片输入、`c` 不含图片输出；核心把 `p + img`、`c + img_o` 当作输入、输出总量，按结算同样的规则归一化，所以没计价的图片 token 按 `p`、`c` 的价算。`len` 缺省为 `p + cr + cc + cc1h + img`。`POST /pricing/quote`（§97）的用量不变（没有图片字段）。
-- 价格页的结构化分档编辑器、按 token 计价的 `config`（`p`、`c`、`cr`、`cc`、`cc1h`）不变：要单独给图片定价就写表达式价格。
+- 价格页的结构化分档编辑器、按 token 计价的 `config`（`p`、`c`、`cr`、`cc`、`cc1h`）不变：要单独给图片定价就写表达式价格。（§131 起按 token 的档位可以带 `img`、`img_o`。）
 
 ### 118.4 存储与接口（迁移 0112）
 
@@ -8518,7 +8518,7 @@ ALTER TABLE usage_logs
   - 没有文字输出价的模型把 `c` 写成图片输出价：上游不给输出明细时 `c` 里其实就是图片输出，这样两种情况都算对。
   - 缓存的图片输入（官方 2.00 / 0.25）没有单独变量，并入 `cr` 按文字缓存价算，略少收。
   - `gpt-image-1`（2026-10-23 下线）、`dall-e-2/3`（2026-05-12 下线）不用录；官方已没有按张计价的表；应答里的 `svg_usage` 计费方式未查到，这一版不读。
-- **价格同步源**（§17.1）这一版不映射图片价：LiteLLM 源只导入 chat、completion、responses、embedding 模式，`image_generation` 模式的条目被跳过；models.dev 源只有 `cost.input` / `output` / `cache_read`，导入的生图模型价格是只有文字价的 `per_token`（旧设计稿实测 `gpt-image-1.5` 为 `{p:5, c:10, cr:1.25}`）。这样的价格不计 `img`、`img_o`，图片 token 按文字价算，**少收**（图片输出官方价是文字输出的数倍），管理员应把它改成上表的表达式价格（改过的同步价格变成 `manual`，下次同步不会覆盖）。
+- **价格同步源**（§17.1）这一版不映射图片价：LiteLLM 源只导入 chat、completion、responses、embedding 模式，`image_generation` 模式的条目被跳过；models.dev 源只有 `cost.input` / `output` / `cache_read`，导入的生图模型价格是只有文字价的 `per_token`（旧设计稿实测 `gpt-image-1.5` 为 `{p:5, c:10, cr:1.25}`）。这样的价格不计 `img`、`img_o`，图片 token 按文字价算，**少收**（图片输出官方价是文字输出的数倍），管理员应把它改成上表的价格（§131 起按 token 的档位可以直接填 `img`、`img_o`；改过的同步价格变成 `manual`，下次同步不会覆盖）。
 
 ### 118.7 控制台
 
@@ -8997,7 +8997,7 @@ ALTER TABLE usage_logs
 
 ### 128.4 删掉它以后没有使用者、暂时保留的能力
 
-它是异步任务（`taskContract`、`Monitor`、核对循环、`s2task_` 公开 ID、§112.9）和视频计费（价格的视频配置 `expr.ExpressionConfig.Video`、只能用于视频的价格 `VideoOnly`）唯一的第一方使用者，也是宿主接口 `HostService.ListAccounts`、端点的 `usageSource: "plugin"` 与 `usageRequestFields`、SDK 的 `PollFailure`、`ClassifyPollResponse` 和一致性套件 `conformance.TaskSubmission` 唯一的第一方使用者。这些是给第三方插件的通用契约，保留；但 e2e 不再覆盖异步任务的全链路（原 AC24、AC32 的崩溃子测试），只剩核心包里的单元与数据库测试。
+它是异步任务（`taskContract`、`Monitor`、核对循环、`s2task_` 公开 ID、§112.9）和视频计费（只能用于视频的价格 `VideoOnly`；价格的视频配置 `expr.ExpressionConfig.Video` 已由 §131 删除，视频价格写成读 `u("video_*")` 的表达式）唯一的第一方使用者，也是宿主接口 `HostService.ListAccounts`、端点的 `usageSource: "plugin"` 与 `usageRequestFields`、SDK 的 `PollFailure`、`ClassifyPollResponse` 和一致性套件 `conformance.TaskSubmission` 唯一的第一方使用者。这些是给第三方插件的通用契约，保留；但 e2e 不再覆盖异步任务的全链路（原 AC24、AC32 的崩溃子测试），只剩核心包里的单元与数据库测试。
 
 ## 129. 删除 anthropic 的模型目录（2026-11-20，所有者决定“删掉，测试换探针”；迁移 0120，核心 0.1.304，anthropic 0.4.0）
 
@@ -9126,3 +9126,109 @@ anthropic 插件自带的模型目录（插件接口 `GET /api/v1/p/anthropic/mo
 - 主密钥换了，派生的密码跟着变，下次 Ensure（启动后首次连接）重设。
 - 迁移 0110 的注释写的是 §115（插件用核心的数据库用户）；它做的事（删掉旧插件角色写迁移记录用的两个 definer 函数）在 §130 下仍然成立：记录在插件自己的表里，以身份写入。已应用的迁移不改。
 - **单向**：搬迁之后旧核心找不到 `plg_<key>` 模式，持有 `db.schema` 的插件在旧核心上起不来；回退要连同数据库回到升级前的备份。
+
+## 131. 计费方式只留按次、按 token、表达式（2026-11-21，所有者定“统一改成按次、按 token 和表达式，其他的方式全部删掉”；迁移 0121，核心 0.1.306，单向；设计见 [DESIGN-2026-11-21-BILLING-MODES.md](DESIGN-2026-11-21-BILLING-MODES.md)）
+
+### 131.1 三种方式
+
+| mode | config | expression |
+|---|---|---|
+| `per_request` | `{price}`（不变） | 生成：`tier("base", flat(price))` |
+| `per_token` | `{tiers, rules}`（131.2），取代原来按 token 的五个单价和表达式的可视化分档 | 生成 |
+| `expression` | 恒为 `{}`；其它值 400（字段 `config`，“must be {}”） | 手写，计费以它为准 |
+
+- 删掉：视频计费模板（`expr.VideoConfig`、`generateVideo`）和表达式的可视化配置（`expression` 下的 `config.tiers`、`config.rules`、`config.video`）。视频价格写成读 `u("video_*")` 的表达式。
+- `VideoOnly`（§97.3、§72.13.1 的 `video_only`）只看表达式读到的用量事实：读了 `video_` 开头的 `u(...)` 就是只能用于视频的价格（`billing/pricer.go`）。
+- `POST /prices`、`PATCH /prices/:id`、`POST /prices/validate` 的形状不变；生成失败按字段报错，字段是 config 里的路径，例如 `config.tiers[0].c`、`config.rules[1].conds[0].value`。
+
+### 131.2 `per_token` 的 config
+
+Go 类型是 `expr.TokenConfig`、`TierConfig`、`TokenPrices`、`RuleConfig`、`CondConfig`（`billing/expr/generate.go`）。
+
+```json
+{
+  "tiers": [
+    {"name": "standard", "max_len": 200000, "unit": "token", "p": 3, "c": 15, "cr": 0.3, "cc": 3.75, "cc1h": 6},
+    {"name": "long_context", "max_len": null, "unit": "token", "p": 6, "c": 22.5, "img": 10, "img_o": 40},
+    {"name": "bulk", "max_len": null, "unit": "request", "price": 0.05}
+  ],
+  "rules": [
+    {"name": "priority", "multiplier": 2, "conds": [
+      {"source": "param",  "key": "service_tier",   "op": "eq",       "value": "priority"},
+      {"source": "header", "key": "anthropic-beta", "op": "contains", "value": "fast-mode"},
+      {"source": "time",   "tz": "Asia/Shanghai", "from_hour": 0, "to_hour": 8}
+    ]}
+  ]
+}
+```
+
+（示例只演示字段；真实配置里恰有一档 `max_len: null`。）
+
+- **档位**：至少一档；名字符合 `tierNameRe`、不重复；**恰有一档** `max_len` 为 `null`（其余），一档时也是；`max_len` 是非负数、不重复。按 `max_len` 从小到大生成 `len <= N ? tier(...) : …`，与原生成器相同。
+- `unit` 是 `token`（缺省）或 `request`：
+  - `token`：`p`、`c` 缺省为 0，`cr`、`cc`、`cc1h`、`img`、`img_o` 可缺，缺的不出现在表达式里（按 §104.3、§118.3 的归一化：缓存读没写不收费，图片 token 留在 `p`、`c` 里按文字价算）；不能带 `price`。
+  - `request`：只有 `price`，生成 `flat(price)`；不能带 token 单价。
+  - 价格都是有限的非负数。
+- **规则**：可空。一条规则 `{name?, multiplier, conds}`：`name` 只给人看；`multiplier` 必填、非负；`conds` 至少一个，条件之间是“且”，生成 `c1 && c2 ? m : 1`。
+- **条件**：
+
+| source | 读的值 | op |
+|---|---|---|
+| `param` | `param(key)`（请求体字段，key 1–200 字符） | `eq`、`ne`、`contains`、`exists`、`gt`、`gte`、`lt`、`lte` |
+| `header` | `header(key)`（名字转小写并校验） | `eq`、`ne`、`contains`、`exists` |
+| `usage` | `u(key)`（插件报的用量字段，key 1–200 字符） | 同 `param` |
+| `time` | `tz`（缺省 UTC）、`from_hour`（0–23）、`to_hour`（0–24），二者不等，跨午夜照旧 | 无 |
+
+  - `eq`、`ne`：值是字符串、数字或布尔字面量；`header` 的值必须是非空字符串。
+  - `contains`：非空字符串，生成 `has(…, "值")`。
+  - `exists`：没有值；`header` 生成 `!= ""`，`param` 生成 `!= nil`，`usage` 生成 `u("k") != 0`（没报的用量字段读出来是 0，`!= nil` 恒为真，所以与设计稿的 `!= nil` 不同）。
+  - `gt`、`gte`、`lt`、`lte`：值是数字；`param` 写成 `(param("k") ?? 0)`，缺的参数按 0 比。
+- **不变的输出**：没有规则时生成结果与原生成器逐字节相同（原按 token 的五个单价、原可视化分档迁移过来后表达式和 `expr_hash` 不变，`expr/generate_test.go` 的 `TestGenerateMatchesOldGenerator` 对照原生成器的输出）。有规则时的写法见 131.3。
+
+### 131.3 规则写在表达式语言里（取代 `|||`）
+
+- 删掉规则分隔符 `|||`（`expr.RuleSeparator`）和按它切分表达式的做法。含 `|||` 的表达式不再能编译（`syntax`）。
+- 规则就是乘法：生成器写成 `(基础) * (条件1 ? 倍数1 : 1) * (条件2 ? 倍数2 : 1)`，没有规则时只有基础部分。手写的表达式可以把这样的三元式写在任意位置（包括嵌套在分档里）。
+- **追踪**：程序里每个 `<条件> ? <数字字面量> : 1` 三元式，只要条件读了请求信息（`param`、`header`、`u`、`hour`、`minute`、`weekday`、`day`、`month`），就是一条规则。编译时给它的条件包一层内部函数 `__rule(i, 条件)`（`expr/analyze.go` 的 `ruleTracer`，在类型检查前的补丁阶段），求值时记下是否命中。`__rule` 是保留名字，表达式里写它是 `syntax` 错误。
+  - 每次计算报告每条规则 `{cond, multiplier, matched}`（`rules`，`cond` 是条件的源码）。没走到的规则（被短路、在另一分支里）算未命中。
+  - `breakdown.rules_multiplier` 是命中规则倍数之积；`breakdown.base` 是所有规则都不命中时的值（有规则命中时再算一次，每条规则都取 `: 1`）。
+  - 被追踪的规则倍数不能为负（`negative_multiplier`）。
+  - 不符合上面形状的三元式（命中分支不是字面量、否则分支不是 1、条件不读请求信息）是普通算术，不报告。
+- 原来依赖“基础部分 / 规则部分”切分的地方都改为对整个程序做。
+- 价格同步按倍数缩放表达式价格时写成 `(原表达式) * m`（`expr.Times`；原表达式含行注释时右括号另起一行），`mode` 为 `expression`、`config` 为 `{}`。
+
+### 131.4 分组 / 用户组的自定义价（§97）
+
+- 能不能设自定义价由全局价决定（`billing.PriceDef.customMode`，`billing/list_price.go`）：全局价是 `per_request` → 自定义价必须是 `per_request`；全局价是 `per_token` 且**只有一档、没有规则、`unit` 为 `token`** → 自定义价必须是这样的 `per_token`；其余（表达式、分档、带规则、按次计的档位）只能用按倍数的规则。
+- 保存时：全局价不允许自定义价 400，“表达式计费、分档或带加价规则的按 token 计费只能用倍数规则” / “an expression price, or a per-token price with tiers or rules, takes a multiplier only”；`mode` 与全局价不同照旧；`config` 生成失败 400，“自定义价无效：…” / “invalid custom price: …”。`config` 原样存下。
+- 解析时同一个判断决定规则是否失效（97.1）：全局价后来改成分档或加了规则，原来的自定义价带 `inactive: true`、解析时跳过，与改了计费方式相同。
+- 控制台的自定义价编辑器仍是一行单价，存成单档 `{"tiers":[{"name":"base","max_len":null,"unit":"token",…}],"rules":[]}`。
+
+### 131.5 价格同步（§17）
+
+- LiteLLM、models.dev 产出的价格一律是 `per_token`：一个价格档是单档 `base`；带 200K 档的是两档 `standard`（`max_len` 200000）和 `long_context`；更多档时第二档起叫 `over_<上一档上限>`。每档 `unit: token`，`rules: []`。同步预览的“有无变化”按新形状比较。
+- sup2api（`apply_multiplier`）与 `GET /key/prices` 折进倍数时：`per_request` 缩放 `price`；`per_token` 缩放每档的 `p`、`c`、`cr`、`cc`、`cc1h`、`img`、`img_o`、`price`，规则倍数不变，再重新生成表达式；`expression` 写成 `(原表达式) * m`（131.3）。
+
+### 131.6 迁移 0121（单向）
+
+1. `model_prices` 里 `per_token` 的旧五个单价、`price_rules` 里 `custom` + `per_token` 的旧五个单价 → `{"tiers":[{"name":"base","max_len":null,"unit":"token",…原来设了的键}],"rules":[]}`。
+2. `expression` 且 `config.tiers` 非空、每档无 `flat`（或为 0）、规则都能映射（`header` 的 `contains`/`eq`、`param` 的 `contains`/`eq`、`time`）→ `per_token`：档位展平 `prices` 嵌套、补 `unit: token`，一档时 `max_len` 为 `null`；每条规则变成单条件的 `conds`。
+3. 其余 `expression`（带 `flat`、`param` 的 `range`、视频模板、源码模式）→ `config = {}`。
+4. 表达式里的 `A ||| B ||| C` 改写为 `(A) * (B) * (C)`（不在字符串字面量里的 `|||` 才算；以行注释结尾的部分，右括号另起一行），`model_prices` 和 `price_rules` 的 `expression`、`expr_hash` 跟着换（SQL 的 `sha256` 与 `expr.Hash` 一致，测试对照）。
+   - `model_price_history`：为新哈希插入一行；旧哈希的行**保留哈希**、文本换成新写法（已冻结旧哈希的使用记录仍查得到、仍能编译），所以这些行的 `expression` 的哈希不再等于 `expr_hash`（§5 说价格历史与 `/prices/:id` 的 `expr_hash` 相同，这些行是例外）。
+   - 还没结算的使用记录（`billing_status` 为 `pending`、`failed`、`reserved`）`billing_detail.inputs` 里携带的表达式（`pricing.base`、`additional[].Price`、`replacement[].Price`，含其中的 `Base`）同样改写、换哈希；已结算的记录不动。
+- 1–3 不改 `expression` 和 `expr_hash`。重跑一次什么也不改。改写用的临时函数在迁移末尾删掉。
+- 回退：旧核心读不了新形状的 `per_token` 配置，也不会把乘积写法里的规则当规则报告；回退要连同数据库回到升级前的备份。
+
+### 131.7 测试
+
+- `billing/expr`：`TestGenerateMatchesOldGenerator`（12 组原生成器的输出：没有规则的逐字节相同，有规则的等于乘积写法、追踪到的规则数等于原 `|||` 个数）、`TestGenerate`（各字段与校验错误）、`TestGeneratedRulesEvaluate`、`TestRuleTracing`（嵌套、短路、非字面量、不读请求信息、`u()` 规则、倍数 0、`base` 与 `rules_multiplier`、条件不是布尔值）、`TestCompileErrors`（`|||`、`__rule`）。
+- `billing`：`TestCheckRule`、`TestRuleInactive`（自定义价准入与失效，含中文错误）、`TestExportPrice`、`TestParseSup2APIMultiplierOnTiers`、同步各源的 `per_token` 期望。
+- `migrations`：`TestMigration0121BillingModes`（数据库测试：各类旧行迁移后的 mode、config、表达式，SQL 哈希等于 `expr.Hash`，config 重新生成得到同一哈希，规则求值与命中，历史表新旧哈希，待结算与已结算的使用记录，重跑无改动）。
+
+### 131.8 如实写明的边界
+
+- 迁移 2 按 `config` 判断，不看表达式：可视化配置与手改过的表达式不一致的旧行（原来就以表达式计费）会被转成 `per_token`，计费仍按存下的表达式，但价格页显示的是配置；再保存一次时按配置重新生成。SQL 里分辨不出这种情况。
+- 规则不再分段求值、按十进制相乘，而是整个程序一次浮点计算，结果可能在最后一位（1e-8 美元）与旧引擎不同。
+- e2e（`next/e2e/ac08_billing_test.go`）还写着 `|||` 的价格，需要改成乘积写法。
+- 不在本次：OpenAI / Codex 应答里的 `service_tier` 报成用量字段；按次带加价规则。

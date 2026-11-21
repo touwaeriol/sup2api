@@ -5,6 +5,7 @@ import (
 
 	"github.com/shopspring/decimal"
 
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/billing/expr"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 )
 
@@ -30,8 +31,7 @@ func listPrice(base PriceDef, rule *storedRule) PriceDef {
 	case rule == nil:
 		return base
 	case rule.Kind == core.PriceRuleCustom:
-		config, _ := json.Marshal(rule.Config)
-		return PriceDef{Mode: rule.Mode, Config: config, Expression: rule.expression}
+		return PriceDef{Mode: rule.Mode, Config: rule.Config, Expression: rule.expression}
 	}
 	scale := rule.scale
 	base.Multiplier = &scale
@@ -41,6 +41,24 @@ func listPrice(base PriceDef, rule *storedRule) PriceDef {
 // listPrice returns the list price the first rule that applies makes of the
 // global price base, and where it comes from.
 func (l ruleLevels) listPrice(base PriceDef) (PriceDef, string) {
-	rule, source := l.applied(base.Mode)
+	rule, source := l.applied(base)
 	return listPrice(base, rule), source
+}
+
+// customMode is the mode of the custom price a price rule may set over p:
+// that of a per_request price, or of a per_token price with one tier priced
+// by the token and no rules. It is "" when only a multiplier applies: an
+// expression price, or a per_token price with tiers or rules (CONTRACTS §97).
+func (p PriceDef) customMode() string {
+	switch p.Mode {
+	case expr.ModePerRequest:
+		return p.Mode
+	case expr.ModePerToken:
+		var c expr.TokenConfig
+		if json.Unmarshal(p.Config, &c) == nil && len(c.Tiers) == 1 && len(c.Rules) == 0 &&
+			(c.Tiers[0].Unit == "" || c.Tiers[0].Unit == expr.UnitToken) {
+			return p.Mode
+		}
+	}
+	return ""
 }

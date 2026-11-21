@@ -25,7 +25,7 @@ export default {
     requestUnit: 'A fixed price that does not follow the global price. In $ per request',
     tokenInvalid: 'Input and output prices are required; no price may be negative',
     requestInvalid: 'Enter a price of 0 or more',
-    expressionOnly: 'This model is billed by an expression: only a multiplier applies.',
+    multiplierOnly: 'This model is billed by an expression, or per token with tiers or surcharge rules: only a multiplier applies.',
     noBase: 'This model has no global price yet. Set one under Model prices first.',
     inactive: 'Not in effect',
     inactiveHint: 'The billing mode changed, so this rule is not in effect: the global price is billed another way now and this custom price no longer fits it. Set the rule again or clear it.',

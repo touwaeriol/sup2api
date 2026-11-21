@@ -2,7 +2,7 @@ package billing
 
 import (
 	"context"
-	"encoding/json"
+	"slices"
 	"strings"
 	"time"
 
@@ -51,20 +51,12 @@ func (s *Service) snapshot(ctx context.Context) (*priceSnapshot, error) {
 	for _, row := range rows {
 		r := core.PriceRule{ID: row.ID, Model: row.Model, Mode: row.Mode, Expression: row.Expression,
 			ExprVersion: core.ValueOr(row.ExprVersion, 0), ExprHash: row.ExprHash}
-		config := row.Config
-		var visual expr.ExpressionConfig
-		r.VideoOnly = r.Mode == expr.ModeExpression && json.Unmarshal(config, &visual) == nil && visual.Video != nil
-		// Switching a video template to source mode must not bypass admission.
+		// A price that reads video usage facts serves video requests only.
 		if program, err := expr.CompileCached(r.Expression); err == nil {
-			for _, fact := range program.Facts() {
-				if strings.HasPrefix(fact, "video_") {
-					r.VideoOnly = true
-					break
-				}
-			}
+			r.VideoOnly = slices.ContainsFunc(program.Facts(), func(fact string) bool { return strings.HasPrefix(fact, "video_") })
 		}
 		snap.byModel[r.Model] = r
-		snap.bases[r.Model] = PriceDef{Mode: r.Mode, Config: config, Expression: r.Expression}
+		snap.bases[r.Model] = PriceDef{Mode: r.Mode, Config: row.Config, Expression: r.Expression}
 	}
 	if snap.rules, err = loadRules(ctx, s.db.Gorm, ""); err != nil {
 		return nil, err
@@ -95,7 +87,7 @@ func (snap *priceSnapshot) resolve(q core.PriceQuery) *core.PriceRule {
 	if global == nil {
 		return nil
 	}
-	rule, source := snap.rules.levels(q).applied(global.Mode)
+	rule, source := snap.rules.levels(q).applied(snap.bases[q.Model])
 	return rule.price(*global, source)
 }
 

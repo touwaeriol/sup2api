@@ -13,7 +13,7 @@
 // when an admin prices a user individually and deletes it when the user is
 // moved back to a named segment.
 import type { Money, User } from './types'
-import type { PriceMode } from '@/views/prices/priceExpr'
+import type { PriceMode, TokenConfig } from '@/views/prices/priceExpr'
 
 export type SegmentKind = 'named' | 'personal'
 
@@ -113,12 +113,18 @@ export interface SegmentGroupPatch {
 export type PriceRule =
   /** The global price times `multiplier`; follows the global price when it changes. */
   | { kind: 'multiplier'; multiplier: Money }
-  /** A price of its own, in the mode of the global one (an expression price takes a multiplier only). */
-  | { kind: 'custom'; mode: Exclude<PriceMode, 'expression'>; config: Record<string, number | null> }
+  /**
+   * A price of its own, in the mode of the global one: a per-request price,
+   * or a per-token price of one token tier and no rules. Only a per-request
+   * global price or a per-token one of that shape takes it; any other takes
+   * a multiplier only.
+   */
+  | { kind: 'custom'; mode: 'per_request'; config: { price: number | null } }
+  | { kind: 'custom'; mode: 'per_token'; config: TokenConfig }
 
 /** A rule as a row of model prices carries it. */
 export type ListedPriceRule = PriceRule & {
-  /** A custom price in another mode than the global price has now: it is skipped, and the next level prices the model. */
+  /** A custom price the global price no longer takes (another mode, or tiers or rules now): it is skipped, and the next level prices the model. */
   inactive?: boolean
 }
 

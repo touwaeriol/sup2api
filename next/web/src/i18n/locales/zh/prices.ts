@@ -1,16 +1,4 @@
 export default {
-  video: {
-    reserveSample: '载入 5 秒 720p 预扣示例', settleSample: '载入 10 万 Token 结算示例',
-    title: '视频计费',
-    hint: '按输出 Token 结算；可单独设置 720p 基准每秒预扣价。成功但无实际用量时保留预扣，失败退款。价格为美元，最终费用乘分组倍率。',
-    price_per_million_tokens: '每百万输出 Token 单价（必填）',
-    video_input_price_per_million_tokens: '含视频输入时整段输出单价（0 = 基础价）',
-    video_price_per_second: '720p 每秒预扣价（0 = 按 Token 估算）',
-    overridesHint: '尺寸精确匹配且不区分横竖屏；每项价格独立覆盖，0 或留空继承基础配置。',
-    sizes: '尺寸（英文逗号分隔）', add: '添加尺寸覆盖', remove: '移除此覆盖',
-    metrics: '插件计量字段 u()',
-    metricsHint: '支持 JSON 数字和布尔值。视频示例：video_seconds=5、video_pixels=921600、video_width=1280、video_height=720、video_input=true、video_estimated=true（预扣）/false（实际 Token 结算）。',
-  },
   title: '模型价格',
   description: '按模型配置计费表达式。价格由管理员维护：手动填写，或从同步源导入。',
   scopeNote: '这里是全局价。分组可以对模型单独定价，用户组可以有专属价和专属倍率；实付 = 标价 × 倍率。',
@@ -44,22 +32,18 @@ export default {
   viewHistory: '查看表达式',
   billingMode: '计费方式',
   expression: '表达式',
-  view: {
-    visual: '可视化',
-    source: '源码'
-  },
   mode: {
     per_request: '按次',
     per_token: '按 token',
     expression: '表达式'
   },
-  modeHint: {
-    per_request: '每次调用固定价格（图片、搜索等），单位美元。',
-    per_token: '输入、输出、缓存读、缓存写的每百万 token 价格（美元）。',
-    expression: '按上下文长度分档、按请求头 / 参数 / 时段加价，或直接编写表达式。'
+  modeDesc: {
+    per_request: '每次请求固定价',
+    per_token: '按 token 单价，可分档加价',
+    expression: '手写表达式，配按 token 写不了的'
   },
-  perRequestPrice: '每次价格（USD）',
-  perMillion: '每百万 token 价格（USD）',
+  perRequestPrice: '每次价格',
+  perRequestUnit: '美元 / 次',
   vars: {
     p: '输入',
     c: '输出',
@@ -67,14 +51,12 @@ export default {
     cc: '缓存写 5 分钟',
     cc1h: '缓存写 1 小时',
     img: '图片输入',
-    img_o: '图片输出',
-    flat: '固定费'
+    img_o: '图片输出'
   },
   unsetPlaceholder: '不收费',
-  cacheUnsetHint: '缓存价格留空表示这部分 token 不收费。',
-  notVisual: '该表达式无法用可视化方式表示，只能在源码模式编辑。',
-  sourceHint: '加价规则用三个竖线追加，形如 条件 ? 1.5 : 1',
-  generated: '生成的表达式（只读）',
+  generatedShow: '查看生成的表达式',
+  generatedHide: '收起表达式',
+  toExpression: '改用表达式编辑',
   serverGenerated: '服务端生成的表达式',
   validate: {
     title: '校验',
@@ -87,17 +69,15 @@ export default {
   trial: {
     title: '价格试算',
     len: 'len（上下文长度）',
+    more: '请求头、请求参数、用量字段、时间、分组',
     headers: '请求头',
     params: '请求参数',
+    metrics: '用量字段 u()',
     paramsHint: '值能按 JSON 解析时按 JSON 发送（1.5、true、"x"），否则作为字符串。',
     at: '时间',
     group: '分组（倍率）',
-    calculate: '试算',
     fixFirst: '请先修正价格定义。',
-    cost: '费用',
     tier: '档位',
-    rules: '加价规则',
-    breakdown: '明细',
     empty: '输入用量后试算。'
   },
   items: {
@@ -119,14 +99,17 @@ export default {
   summary: {
     perRequest: '{price} / 次',
     perToken: '输入 {p} · 输出 {c} · 缓存读 {cr} /百万',
+    tiers: '共 {n} 档',
+    rules: '{n} 条加价规则',
     visual: '{tiers} 档 · {rules} 条加价规则',
     custom: '自定义表达式'
   },
   local: {
     noTier: '至少需要一个档位',
-    tierName: '第 {n} 个档位缺少名称',
+    tierName: '第 {n} 个档位的名称只能用字母、数字和 _ . -（最多 64 个）',
     tierDup: '档位名称重复："{name}"',
     tierMax: '档位"{name}"需要填写上下文长度上限',
+    tierOrder: '档位"{name}"的上限要大于上一档',
     ruleField: '第 {n} 条加价规则不完整',
     emptyExpr: '表达式为空'
   },
@@ -134,37 +117,108 @@ export default {
     title: '表达式历史',
     notFound: '该 hash 下没有保存的表达式。'
   },
-  visual: {
-    tiers: '分档（按 len = 完整上下文长度）',
-    tiersHint: '按上限从小到大依次判断，最后一档为"其余"。',
-    addTier: '分档',
-    tierName: '档位',
-    condLen: '条件 len ≤',
-    otherwise: '其余',
-    always: '始终',
+  token: {
+    tiers: '价格档位',
+    tiersHint: '按上下文长度 len（含缓存）从上往下匹配，第一个满足的生效。单位：美元 / 百万 token。',
+    fromPreset: '从模板开始',
+    preset: {
+      single: '单档',
+      claude: 'Claude（含 5 分钟 / 1 小时缓存写）',
+      claudeLong: 'Claude 长上下文（200K 分两档）',
+      gptLong: 'GPT 长上下文（272K 分两档）',
+      three: '三档（32K / 128K）',
+      image: '图片模型（图片输入 / 输出）'
+    },
+    tierName: '档位名称',
+    all: '所有请求',
+    context: '上下文',
+    maxLen: '上限',
+    otherwise: '（以上都不满足时）',
+    unitLabel: '这一档的计价方式',
+    unit: {
+      token: '按 token',
+      request: '按次'
+    },
+    removeTier: '删除档位',
+    addTier: '添加档位',
+    cacheWrite: '缓存写',
+    cacheOne: '一种价',
+    cacheSplit: '分 5 分钟 / 1 小时（Claude）',
+    images: '图片单独计价',
+    byInput: '按输入价',
+    byOutput: '按输出价',
     rules: '加价规则',
-    rulesHint: '所有命中的规则按乘法叠加：例如 ×2 和 ×3 同时命中，基础费用乘以 6；未命中的规则不影响费用。',
-    addRule: '规则',
+    rulesHint: '规则里的条件全部满足才命中；命中的规则倍数相乘后整单乘上去。',
     noRules: '没有加价规则。',
+    addRule: '添加规则',
+    ruleName: '规则名称',
+    ruleDefault: '规则 {n}',
+    hitTimes: '命中后 ×',
+    multiplier: '倍数',
+    removeRule: '删除规则',
     when: '当',
-    kind: {
-      header: '请求头',
+    and: '且',
+    condSource: '条件来源',
+    condKey: '名称',
+    condOp: '比较',
+    source: {
       param: '请求参数',
+      header: '请求头',
+      usage: '用量字段',
       time: '时段'
     },
     op: {
+      eq: '等于',
+      ne: '不等于',
       contains: '包含',
-      eq: '等于'
+      exists: '存在',
+      gt: '>',
+      gte: '≥',
+      lt: '<',
+      lte: '≤'
     },
-    headerName: '请求头名称',
-    paramPath: '参数路径',
     value: '值',
     tz: '时区',
-    hour: '{h} 点',
-    multiplier: '倍数'
+    from: '从',
+    to: '到',
+    hour: '{h}:00',
+    addCond: '添加条件',
+    removeCond: '删除条件'
+  },
+  expr: {
+    hint: '结果是美元 / 百万 token 的系数：p*3 即输入每百万 3 美元。整单加价规则乘在后面，写成 * (条件 ? 倍数 : 1)。',
+    examples: '示例（点击填入）',
+    example: {
+      tiers: '长上下文两档',
+      priority: 'priority 整单 ×2',
+      minimum: '最低收 0.01'
+    },
+    vars: '变量',
+    var: {
+      p: '输入 token（不含缓存）',
+      c: '输出 token',
+      cr: '缓存读 token',
+      cc: '缓存写 token（5 分钟）',
+      cc1h: '缓存写 token（1 小时）',
+      img: '图片输入 token',
+      img_o: '图片输出 token',
+      len: '完整上下文长度（判断档位用）'
+    },
+    fns: '函数',
+    fn: {
+      tier: '标出命中的档位',
+      flat: '每次固定价',
+      param: '请求体字段',
+      header: '请求头',
+      u: '插件报的用量字段',
+      has: 'a 包含 b',
+      hour: '小时；另有 weekday 等',
+      math: '数学'
+    }
   },
   def: {
     perRequest: '{price} / 次',
+    perRequestLabel: '每次',
     perMillion: '/百万',
     otherwise: '其余',
     rules: '另有 {n} 条加价规则'

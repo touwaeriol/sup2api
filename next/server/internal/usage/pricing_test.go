@@ -183,7 +183,7 @@ func unruledRecord() *core.UsageRecord {
 	return &core.UsageRecord{
 		RequestID: "req-golden", UserID: 1, GroupID: 2, Model: "m", UsageSemantics: "exclusive", Billable: true,
 		Tokens:         core.UsageTokens{Input: 1_000_000, Output: 500_000, CacheRead: 250_000},
-		Price:          &core.PriceRule{ID: 3, Model: "m", Mode: "expression", Expression: `tier("main", p*2 + c*4 + cr*0.2) ||| header("x-tier") == "fast" ? 2 : 1`, ExprVersion: 1},
+		Price:          &core.PriceRule{ID: 3, Model: "m", Mode: "expression", Expression: `(tier("main", p*2 + c*4 + cr*0.2)) * (header("x-tier") == "fast" ? 2 : 1)`, ExprVersion: 1},
 		PriceParams:    map[string]string{"speed": `"fast"`},
 		PriceHeaders:   map[string]string{"x-tier": "fast"},
 		RateMultiplier: dec("1.25"),

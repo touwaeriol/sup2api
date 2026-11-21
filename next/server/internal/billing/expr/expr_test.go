@@ -73,7 +73,7 @@ func TestEvalExamples(t *testing.T) {
 		},
 		{
 			name: "param and header rules both hit",
-			src:  `tier("base", p*5 + c*25) ||| param("service_tier") == "priority" ? 1.5 : 1 ||| has(header("anthropic-beta"), "fast-mode") ? 2 : 1`,
+			src:  `(tier("base", p*5 + c*25)) * (param("service_tier") == "priority" ? 1.5 : 1) * (has(header("anthropic-beta"), "fast-mode") ? 2 : 1)`,
 			in: Input{Vars: Vars{P: 1000, C: 1000, Len: 1000},
 				Params:  map[string]string{"service_tier": `"priority"`},
 				Headers: map[string]string{"anthropic-beta": "context-1m,fast-mode-2026"}},
@@ -81,7 +81,7 @@ func TestEvalExamples(t *testing.T) {
 		},
 		{
 			name: "param and header rules miss",
-			src:  `tier("base", p*5 + c*25) ||| param("service_tier") == "priority" ? 1.5 : 1 ||| has(header("anthropic-beta"), "fast-mode") ? 2 : 1`,
+			src:  `(tier("base", p*5 + c*25)) * (param("service_tier") == "priority" ? 1.5 : 1) * (has(header("anthropic-beta"), "fast-mode") ? 2 : 1)`,
 			in:   Input{Vars: Vars{P: 1000, C: 1000, Len: 1000}},
 			cost: "0.03", tier: "base", matched: []bool{false, false},
 		},
@@ -99,13 +99,13 @@ func TestEvalExamples(t *testing.T) {
 		},
 		{
 			name: "numeric param comparison",
-			src:  `tier("base", p) ||| (param("max_tokens") ?? 0) > 1000 ? 1.2 : 1 ||| param("n") == 2 ? 3 : 1`,
+			src:  `(tier("base", p)) * ((param("max_tokens") ?? 0) > 1000 ? 1.2 : 1) * (param("n") == 2 ? 3 : 1)`,
 			in:   Input{Vars: Vars{P: 1e6}, Params: map[string]string{"max_tokens": "4096", "n": "2"}},
 			cost: "3.6", tier: "base", matched: []bool{true, true},
 		},
 		{
 			name: "plugin metering value",
-			src:  `tier("images", flat(u("images") * 0.04)) ||| u("quality") == "hd" ? 2 : 1`,
+			src:  `(tier("images", flat(u("images") * 0.04))) * (u("quality") == "hd" ? 2 : 1)`,
 			in:   Input{Metrics: map[string]any{"images": int64(3), "quality": "hd"}},
 			cost: "0.24", tier: "images", matched: []bool{true},
 		},
@@ -115,12 +115,6 @@ func TestEvalExamples(t *testing.T) {
 			in:   Input{Vars: Vars{P: 10, C: 50}},
 			// 2000 + 10 + 3 + 1 + 1
 			cost: "0.002015", tier: "x",
-		},
-		{
-			name: "rule separator inside string literal",
-			src:  `tier("base", p) ||| header("x-tag") == "a|||b" ? 2 : 1`,
-			in:   Input{Vars: Vars{P: 1e6}, Headers: map[string]string{"x-tag": "a|||b"}},
-			cost: "2", tier: "base", matched: []bool{true},
 		},
 		{
 			name: "time functions",
@@ -153,59 +147,6 @@ func TestEvalExamples(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-// A.6 preview: input 100000, output 2000, cache read 80000, fast-mode x2,
-// Beijing 10:00 -> standard tier, $0.7080.
-func TestPreviewExampleA6(t *testing.T) {
-	cfg := `{
-	  "tiers": [
-	    {"name": "long_context", "max_len": null, "prices": {"p": 6, "c": 22.5, "cr": 0.6, "cc": 7.5, "cc1h": 12}, "flat": 0},
-	    {"name": "standard", "max_len": 200000, "prices": {"p": 3, "c": 15, "cr": 0.3, "cc": 3.75, "cc1h": 6}, "flat": 0}
-	  ],
-	  "rules": [
-	    {"source": "header", "name": "anthropic-beta", "op": "contains", "value": "fast-mode", "multiplier": 2},
-	    {"source": "time", "tz": "Asia/Shanghai", "from_hour": 0, "to_hour": 8, "multiplier": 0.8}
-	  ]
-	}`
-	src, err := Generate(ModeExpression, json.RawMessage(cfg))
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := `len <= 200000 ? tier("standard", p*3 + c*15 + cr*0.3 + cc*3.75 + cc1h*6) : tier("long_context", p*6 + c*22.5 + cr*0.6 + cc*7.5 + cc1h*12)` +
-		` ||| has(header("anthropic-beta"), "fast-mode") ? 2 : 1 ||| hour("Asia/Shanghai") >= 0 && hour("Asia/Shanghai") < 8 ? 0.8 : 1`
-	if src != want {
-		t.Fatalf("generated\n%s\nwant\n%s", src, want)
-	}
-	p := mustCompile(t, src)
-	vars := Normalize(SemanticsExclusive, Tokens{Input: 100000, Output: 2000, CacheRead: 80000}, p.Uses)
-	if vars.P != 100000 || vars.Len != 180000 || vars.CR != 80000 {
-		t.Fatalf("vars = %+v", vars)
-	}
-	res, err := p.Eval(Input{Vars: vars, Headers: map[string]string{"anthropic-beta": "fast-mode"}, At: bj10})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.Cost.StringFixed(4) != "0.7080" || res.Tier != "standard" {
-		t.Fatalf("cost %s tier %s", res.Cost, res.Tier)
-	}
-	if !res.Rules[0].Matched || res.Rules[0].Multiplier != 2 || res.Rules[1].Matched {
-		t.Fatalf("rules = %+v", res.Rules)
-	}
-	b := res.Breakdown
-	if !b.Subtotal.Equal(dec("0.354")) || !b.Base.Equal(dec("0.354")) || !b.RulesMultiplier.Equal(dec("2")) {
-		t.Fatalf("breakdown = %+v", b)
-	}
-	got := map[string]string{}
-	for _, it := range b.Items {
-		got[it.Label] = it.Cost.String()
-	}
-	if got["p"] != "0.3" || got["c"] != "0.03" || got["cr"] != "0.024" || got["cc"] != "0" {
-		t.Fatalf("items = %+v", got)
-	}
-	if b.Items[0].Rate == nil || *b.Items[0].Rate != 3 || *b.Items[0].Quantity != 100000 {
-		t.Fatalf("first item = %+v", b.Items[0])
 	}
 }
 
@@ -285,7 +226,7 @@ func TestNormalizeImageTokens(t *testing.T) {
 }
 
 func TestAnalysis(t *testing.T) {
-	p := mustCompile(t, `len <= 1000 ? tier("a", p + u("secs")) : (len > 5000 ? tier("b", c) : tier("c", cr*2)) ||| param("x.y") == 1 ? 2 : 1 ||| has(header("X-Beta"), "f") ? 3 : 1`)
+	p := mustCompile(t, `(len <= 1000 ? tier("a", p + u("secs")) : (len > 5000 ? tier("b", c) : tier("c", cr*2))) * (param("x.y") == 1 ? 2 : 1) * (has(header("X-Beta"), "f") ? 3 : 1)`)
 	if got := strings.Join(p.UsedVars(), ","); got != "p,c,cr,len" {
 		t.Fatalf("vars = %s", got)
 	}
@@ -338,10 +279,9 @@ func TestCompileErrors(t *testing.T) {
 		{`foo * 3`, CodeSyntax},
 		{`now()`, CodeSyntax},
 		{`len("abc")`, CodeSyntax},
-		{`tier("x", p) ||| p`, CodeRuleShape},
-		{`tier("x", p) ||| header("a") == "b" ? 2 : 1.5`, CodeRuleShape},
-		{`tier("x", p) ||| `, CodeRuleShape},
-		{`tier("x", p) ||| header("a") == "b" ? -2 : 1`, CodeNegativeMultiplier},
+		{`tier("x", p) ||| header("a") == "b" ? 2 : 1`, CodeSyntax},
+		{`(tier("x", p)) * (header("a") == "b" ? -2 : 1)`, CodeNegativeMultiplier},
+		{`tier("x", p) * (__rule(0, header("a") == "b") ? 2 : 1)`, CodeSyntax},
 		{`param("a" + "b") == 1 ? p : c`, CodeLiteralArg},
 		{`tier(header("x"), p)`, CodeLiteralArg},
 		{`p * (hour("Mars/Olympus") > 3 ? 1 : 2)`, CodeTimezone},
@@ -372,7 +312,7 @@ func TestEvalErrors(t *testing.T) {
 	if _, err := p.Eval(Input{}); err == nil {
 		t.Fatal("NaN accepted")
 	}
-	p = mustCompile(t, `tier("x", p) ||| param("n") > 3 ? 2 : 1`)
+	p = mustCompile(t, `(tier("x", p)) * (param("n") > 3 ? 2 : 1)`)
 	if _, err := p.Eval(Input{Vars: Vars{P: 1}}); err == nil {
 		t.Fatal("nil comparison should fail at runtime")
 	}
@@ -390,11 +330,11 @@ func TestValidate(t *testing.T) {
 		{name: "claude tiers", src: claudeTiers, ok: true},
 		{name: "negative coefficient fails smoke", src: `tier("x", p*3 - c*15)`, errCode: CodeSmoke},
 		{name: "division by zero fails smoke", src: `tier("x", p / len)`, errCode: CodeSmoke},
-		{name: "missing param without default fails smoke", src: `tier("x", p) ||| param("n") > 3 ? 2 : 1`, errCode: CodeSmoke},
+		{name: "missing param without default fails smoke", src: `(tier("x", p)) * (param("n") > 3 ? 2 : 1)`, errCode: CodeSmoke},
 		{name: "unknown fact", src: `tier("x", flat(u("secs") * 0.1))`, opts: ValidateOptions{Facts: map[string]bool{"images": true}}, errCode: CodeUnknownFact},
 		{name: "declared fact", src: `tier("x", flat(u("secs") * 0.1))`, opts: ValidateOptions{Facts: map[string]bool{"secs": true}}, ok: true},
 		{name: "big cost warning", src: `tier("x", p*15)`, ok: true, warnCode: CodeBigCost},
-		{name: "rule surcharges on headers do not count", src: `tier("x", p*6) ||| has(header("a"), "b") ? 2 : 1`, ok: true},
+		{name: "rule surcharges on headers do not count", src: `(tier("x", p*6)) * (has(header("a"), "b") ? 2 : 1)`, ok: true},
 		{name: "custom threshold", src: `tier("x", p*3)`, opts: ValidateOptions{BigCostUSD: dec("2")}, ok: true, warnCode: CodeBigCost},
 		{name: "no tier warning", src: `p*3 + c*15`, ok: true, warnCode: CodeNoTier},
 		{name: "duplicate tier warning", src: `len < 10 ? tier("a", p) : tier("a", p*2)`, ok: true, warnCode: CodeDuplicateTier},
@@ -457,90 +397,6 @@ func TestSmokeSamplesCoverBoundaries(t *testing.T) {
 	}
 }
 
-func TestGenerate(t *testing.T) {
-	cases := []struct {
-		name string
-		mode string
-		cfg  string
-		want string
-		err  string
-	}{
-		{name: "per request", mode: ModePerRequest, cfg: `{"price": 0.04}`, want: `tier("base", flat(0.04))`},
-		{name: "per request string", mode: ModePerRequest, cfg: `{"price": "0.01"}`, want: `tier("base", flat(0.01))`},
-		{name: "per request missing", mode: ModePerRequest, cfg: `{}`, err: "config.price"},
-		{name: "per token haiku", mode: ModePerToken, cfg: `{"p": 1, "c": 5, "cr": 0.1, "cc": 1.25, "cc1h": 2}`,
-			want: `tier("base", p*1 + c*5 + cr*0.1 + cc*1.25 + cc1h*2)`},
-		{name: "per token cache omitted", mode: ModePerToken, cfg: `{"p": 2.5, "c": 10}`, want: `tier("base", p*2.5 + c*10)`},
-		{name: "per token explicit free cache", mode: ModePerToken, cfg: `{"p": 2.5, "c": 10, "cr": 0}`, want: `tier("base", p*2.5 + c*10 + cr*0)`},
-		{name: "per token negative", mode: ModePerToken, cfg: `{"p": -1}`, err: "config.p"},
-		{name: "three tiers sorted, flat prices on tier, flat fee", mode: ModeExpression, cfg: `{"tiers": [
-			{"name": "xl", "max_len": null, "p": 9, "c": 30},
-			{"name": "s", "max_len": 32000, "p": 1, "c": 2, "flat": 0.001},
-			{"name": "m", "max_len": 128000, "p": 3, "c": 6}]}`,
-			want: `len <= 32000 ? tier("s", flat(0.001) + p*1 + c*2) : (len <= 128000 ? tier("m", p*3 + c*6) : tier("xl", p*9 + c*30))`},
-		{name: "single tier", mode: ModeExpression, cfg: `{"tiers": [{"name": "base", "prices": {"p": 1, "c": 2}}]}`, want: `tier("base", p*1 + c*2)`},
-		{name: "param rules", mode: ModeExpression, cfg: `{"tiers": [{"name": "base", "p": 1}], "rules": [
-			{"kind": "param", "path": "service_tier", "op": "eq", "value": "priority", "multiplier": 1.5},
-			{"source": "param", "path": "max_tokens", "op": "range", "value": [1000, null], "multiplier": "1.1"},
-			{"source": "param", "path": "tools", "op": "contains", "value": "web_search", "multiplier": 1.2},
-			{"source": "header", "name": "X-Mode", "op": "eq", "value": "fast", "multiplier": 2}]}`,
-			want: `tier("base", p*1 + c*0) ||| param("service_tier") == "priority" ? 1.5 : 1 ||| (param("max_tokens") ?? 0) >= 1000 ? 1.1 : 1 ||| has(param("tools"), "web_search") ? 1.2 : 1 ||| header("x-mode") == "fast" ? 2 : 1`},
-		{name: "overnight time rule", mode: ModeExpression, cfg: `{"tiers": [{"name": "base", "p": 1}], "rules": [
-			{"source": "time", "tz": "UTC", "from_hour": 22, "to_hour": 6, "multiplier": 0.5}]}`,
-			want: `tier("base", p*1 + c*0) ||| (hour("UTC") >= 22 || hour("UTC") < 6) ? 0.5 : 1`},
-		{name: "no rest tier", mode: ModeExpression, cfg: `{"tiers": [{"name": "a", "max_len": 10}, {"name": "b", "max_len": 20}]}`, err: "config.tiers"},
-		{name: "two rest tiers", mode: ModeExpression, cfg: `{"tiers": [{"name": "a"}, {"name": "b"}]}`, err: "config.tiers"},
-		{name: "bad tier name", mode: ModeExpression, cfg: `{"tiers": [{"name": "a b"}]}`, err: "name"},
-		{name: "duplicate tier name", mode: ModeExpression, cfg: `{"tiers": [{"name": "a", "max_len": 5}, {"name": "a"}]}`, err: "duplicate"},
-		{name: "bad time zone", mode: ModeExpression, cfg: `{"tiers": [{"name": "a"}], "rules": [{"source": "time", "tz": "Nowhere/City", "from_hour": 1, "to_hour": 2, "multiplier": 1}]}`, err: "tz"},
-		{name: "header range", mode: ModeExpression, cfg: `{"tiers": [{"name": "a"}], "rules": [{"source": "header", "name": "x", "op": "range", "value": "1", "multiplier": 1}]}`, err: "op"},
-		{name: "missing multiplier", mode: ModeExpression, cfg: `{"tiers": [{"name": "a"}], "rules": [{"source": "header", "name": "x", "value": "1"}]}`, err: "multiplier"},
-		{name: "unknown mode", mode: "tiered", cfg: `{}`, err: "mode"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := Generate(tc.mode, json.RawMessage(tc.cfg))
-			if tc.err != "" {
-				if err == nil || !strings.Contains(err.Error(), tc.err) {
-					t.Fatalf("err = %v, want containing %q", err, tc.err)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got != tc.want {
-				t.Fatalf("got\n%s\nwant\n%s", got, tc.want)
-			}
-			if r := Validate(got, ValidateOptions{}); !r.OK {
-				t.Fatalf("generated expression invalid: %+v", r.Errors)
-			}
-		})
-	}
-}
-
-func TestGeneratedRulesEvaluate(t *testing.T) {
-	src, err := Generate(ModeExpression, json.RawMessage(`{"tiers": [{"name": "base", "p": 1}], "rules": [
-		{"source": "param", "path": "max_tokens", "op": "range", "value": [1000, 5000], "multiplier": 2},
-		{"source": "time", "tz": "UTC", "from_hour": 22, "to_hour": 6, "multiplier": 0.5}]}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	p := mustCompile(t, src)
-	at := time.Date(2026, 1, 1, 23, 0, 0, 0, time.UTC)
-	res, err := p.Eval(Input{Vars: Vars{P: 1e6}, Params: map[string]string{"max_tokens": "3000"}, At: at})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !res.Cost.Equal(dec("1")) || !res.Rules[0].Matched || !res.Rules[1].Matched {
-		t.Fatalf("res = %+v", res)
-	}
-	res, _ = p.Eval(Input{Vars: Vars{P: 1e6}, Params: map[string]string{"max_tokens": "9000"}, At: at.Add(8 * time.Hour)})
-	if !res.Cost.Equal(dec("1")) || res.Rules[0].Matched || res.Rules[1].Matched {
-		t.Fatalf("res = %+v", res)
-	}
-}
-
 func TestResultJSON(t *testing.T) {
 	p := mustCompile(t, `tier("base", p*3)`)
 	res, err := p.Eval(Input{Vars: Vars{P: 1234}})
@@ -550,5 +406,52 @@ func TestResultJSON(t *testing.T) {
 	b, _ := json.Marshal(res)
 	if !strings.Contains(string(b), `"cost":"0.003702"`) {
 		t.Fatalf("json = %s", b)
+	}
+}
+
+// Every `cond ? <literal> : 1` whose condition reads a probe is a traced
+// rule wherever it is; one the evaluation does not reach is not matched.
+func TestRuleTracing(t *testing.T) {
+	const src = `(len <= 10 ? tier("s", p * (header("a") == "x" ? 2 : 1)) : tier("l", p * 3) * (param("q") == 1 && has(header("b"), "y") ? 4 : 1))` +
+		` * (header("c") == "z" ? 2 : 1.5) * (len > 5 ? 2 : 1) * (u("hd") == true ? 0 : 1)`
+	p := mustCompile(t, src)
+	want := []string{`header("a") == "x"`, `param("q") == 1 && has(header("b"), "y")`, `u("hd") == true`}
+	if got := p.RuleConds(); !slices.Equal(got, want) {
+		t.Fatalf("conds = %q", got)
+	}
+	for _, tc := range []struct {
+		name    string
+		in      Input
+		cost    string
+		base    string
+		mult    string
+		matched []bool
+	}{
+		// The rule in the short tier is not reached on the long one, and a
+		// false left operand of && leaves has() unevaluated.
+		{"long tier, header a set", Input{Vars: Vars{P: 1e6, Len: 20}, Headers: map[string]string{"a": "x", "b": "y"}}, "9", "9", "1", []bool{false, false, false}},
+		{"long tier, both conditions", Input{Vars: Vars{P: 1e6, Len: 20}, Params: map[string]string{"q": "1"}, Headers: map[string]string{"b": "y"}}, "36", "9", "4", []bool{false, true, false}},
+		{"short tier, header a set", Input{Vars: Vars{P: 1e6, Len: 1}, Headers: map[string]string{"a": "x"}}, "3", "1.5", "2", []bool{true, false, false}},
+		{"free by usage", Input{Vars: Vars{P: 1e6, Len: 1}, Headers: map[string]string{"a": "x"}, Metrics: map[string]any{"hd": true}}, "0", "1.5", "0", []bool{true, false, true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := p.Eval(tc.in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !res.Cost.Equal(dec(tc.cost)) || !res.Breakdown.Base.Equal(dec(tc.base)) || !res.Breakdown.RulesMultiplier.Equal(dec(tc.mult)) {
+				t.Fatalf("cost %s base %s mult %s", res.Cost, res.Breakdown.Base, res.Breakdown.RulesMultiplier)
+			}
+			for i, m := range tc.matched {
+				if res.Rules[i].Matched != m || res.Rules[i].Cond != want[i] {
+					t.Fatalf("rules = %+v", res.Rules)
+				}
+			}
+		})
+	}
+	// A condition that is not a boolean fails as it did before tracing.
+	p = mustCompile(t, `tier("x", p) * (u("flag") ? 2 : 1)`)
+	if _, err := p.Eval(Input{Vars: Vars{P: 1}, Metrics: map[string]any{"flag": "yes"}}); err == nil {
+		t.Fatal("non-boolean rule condition accepted")
 	}
 }

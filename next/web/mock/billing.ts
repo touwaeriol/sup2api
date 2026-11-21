@@ -5,6 +5,7 @@ import { fail, nextId, noContent, now, on, paginate, type MockRequest } from './
 import { accounts } from './accounts'
 import { caller, inScope, ownerScope } from './core'
 import type { UsageView } from '../src/views/usage/view'
+import { PRICE_KEYS, priceExpression, singleTier } from '../src/views/prices/priceExpr'
 
 type PriceMode = 'per_request' | 'per_token' | 'expression'
 type LText = { en: string; zh: string }
@@ -14,76 +15,68 @@ const hashOf = (s: string) => createHash('sha256').update(s).digest('hex')
 
 // ------------------------------------------------------------------ tiny expression engine (mock only)
 
-const TOKEN_VARS = ['p', 'c', 'cr', 'cc', 'cc1h'] as const
-type TokenVar = (typeof TOKEN_VARS)[number]
+type TokenVar = (typeof PRICE_KEYS)[number]
 type Usage = Record<TokenVar | 'len', number>
 
 const fmtN = (n: number) => String(Number(n.toPrecision(12)))
-const isSet = (v: unknown) => v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v))
 
-function tokenTerms(src: any): string[] {
-  const out: string[] = []
-  for (const k of TOKEN_VARS) {
-    if (!isSet(src?.[k])) continue
-    const v = Number(src[k])
-    if (v === 0 && (k === 'p' || k === 'c')) continue
-    out.push(`${k}*${fmtN(v)}`)
-  }
-  return out
-}
-
-function genExpr(mode: PriceMode, config: any): string {
-  if (mode === 'per_request') return `tier("base", flat(${fmtN(Number(config?.price) || 0)}))`
-  if (mode === 'per_token') {
-    const t = tokenTerms(config)
-    return `tier("base", ${t.length ? t.join(' + ') : '0'})`
-  }
-  const tiers: any[] = Array.isArray(config?.tiers) ? config.tiers : []
-  if (!tiers.length) return 'tier("base", 0)'
-  const body = (t: any) => {
-    const parts: string[] = []
-    if (Number(t.flat)) parts.push(`flat(${fmtN(Number(t.flat))})`)
-    parts.push(...tokenTerms(t.prices || t))
-    return parts.length ? parts.join(' + ') : '0'
-  }
-  const call = (t: any) => `tier(${JSON.stringify(String(t.name))}, ${body(t)})`
-  let expr = call(tiers[tiers.length - 1])
-  for (let i = tiers.length - 2; i >= 0; i--) expr = `len <= ${Number(tiers[i].max_len) || 0} ? ${call(tiers[i])} : ${expr}`
-  return expr
-}
+// The server generates the expression of a per_request / per_token price from
+// its config; the console's generator matches it byte for byte, so the mock uses it.
+const genExpr = priceExpression
 
 const ALLOWED_IDENTS = new Set(
-  'p c cr cc cc1h len img img_o ai ao tier flat param header has hour weekday day month max min abs ceil floor u true false v1'.split(' ')
+  'p c cr cc cc1h len img img_o ai ao tier flat param header has hour weekday day month max min abs ceil floor u true false nil v1'.split(' ')
 )
 
-function splitRules(src: string): string[] {
-  const out: string[] = []
-  let cur = ''
-  let inStr = false
-  for (let i = 0; i < src.length; i++) {
-    const ch = src[i]
-    if (inStr) {
-      cur += ch
-      if (ch === '\\') cur += src[++i] ?? ''
-      else if (ch === '"') inStr = false
-    } else if (ch === '"') {
-      inStr = true
-      cur += ch
-    } else if (src.startsWith('|||', i)) {
-      out.push(cur)
-      cur = ''
-      i += 2
-    } else cur += ch
+/** An expression with its string literals blanked out, same length. */
+const blankStrings = (src: string) => src.replace(/"(?:[^"\\]|\\.)*"/g, (m) => '_'.repeat(m.length))
+
+/** The parenthesised groups of an expression, in the order they open. */
+function groups(src: string): Array<{ at: number; text: string }> {
+  const bare = blankStrings(src)
+  const out: Array<{ at: number; text: string }> = []
+  const open: number[] = []
+  for (let i = 0; i < bare.length; i++) {
+    if (bare[i] === '(') open.push(i)
+    else if (bare[i] === ')' && open.length) {
+      const at = open.pop()!
+      out.push({ at, text: src.slice(at + 1, i) })
+    }
   }
-  out.push(cur)
-  return out
+  return out.sort((x, y) => x.at - y.at)
+}
+
+/** `cond ? <number> : 1` at the top level of a group; null for anything else. */
+function ternary(text: string): { cond: string; multiplier: number } | null {
+  const bare = blankStrings(text)
+  let depth = 0
+  let q = -1
+  for (let i = 0; i < bare.length; i++) {
+    const ch = bare[i]
+    if (ch === '(') depth++
+    else if (ch === ')') depth--
+    else if (depth === 0 && ch === '?' && bare[i + 1] !== '?' && bare[i - 1] !== '?' && q < 0) q = i
+    else if (depth === 0 && ch === ':' && q >= 0) {
+      const m = /^\s*(\d+(?:\.\d+)?)\s*$/.exec(text.slice(q + 1, i))
+      return m && text.slice(i + 1).trim() === '1' ? { cond: text.slice(0, q).trim(), multiplier: Number(m[1]) } : null
+    }
+  }
+  return null
+}
+
+/** The surcharges of an expression as the server traces them: every `cond ? <number> : 1`, in parentheses or the whole of it. */
+function surcharges(src: string) {
+  return [{ at: -1, text: src }, ...groups(src)].flatMap((g) => {
+    const r = ternary(g.text)
+    return r ? [{ ...r, text: g.text }] : []
+  })
 }
 
 interface EvalInput {
   usage: Partial<Usage>
   headers?: Record<string, string>
   params?: Record<string, unknown>
-  metrics?: Record<string, number>
+  metrics?: Record<string, unknown>
   at?: Date
 }
 
@@ -101,7 +94,7 @@ function run(part: string, input: EvalInput, tokens: Usage): { value: number; ti
   const lib: Record<string, unknown> = {
     tier: (name: string, v: number) => ((tier = name), v),
     flat: (x: number) => x * 1e6, // everything is scaled back by 1e-6 below
-    param: (path: string) => String(path).split('.').reduce<any>((o, k) => (o == null ? o : o[k]), input.params || {}) ?? '',
+    param: (path: string) => String(path).split('.').reduce<any>((o, k) => (o == null ? o : o[k]), input.params || {}) ?? null,
     header: (name: string) => headers[String(name).toLowerCase()] ?? '',
     has: (s: unknown, sub: unknown) => String(s ?? '').includes(String(sub)),
     hour: (tz: string) => Number(inTz(tz, { hour: 'numeric', hourCycle: 'h23' })),
@@ -113,11 +106,12 @@ function run(part: string, input: EvalInput, tokens: Usage): { value: number; ti
     abs: Math.abs,
     ceil: Math.ceil,
     floor: Math.floor,
-    u: (k: string) => (input.metrics || {})[k] || 0
+    u: (k: string) => (input.metrics || {})[k] ?? 0, // an absent usage field reads 0
+    nil: null
   }
-  const names = [...TOKEN_VARS, 'len', ...Object.keys(lib)]
-  const values = [...TOKEN_VARS.map((k) => tokens[k]), tokens.len, ...Object.values(lib)]
-   
+  const names = [...PRICE_KEYS, 'len', ...Object.keys(lib)]
+  const values = [...PRICE_KEYS.map((k) => tokens[k]), tokens.len, ...Object.values(lib)]
+
   const fn = new Function(...names, `"use strict"; return (${part});`)
   const v = fn(...values)
   return { value: typeof v === 'number' ? v : Number(v), tier }
@@ -125,39 +119,37 @@ function run(part: string, input: EvalInput, tokens: Usage): { value: number; ti
 
 /**
  * Evaluates an expression: token variables are raw token counts and
- * coefficients are USD per 1M, so the base part is divided by 1e6 (flat()
- * pre-multiplies to compensate). Rules multiply the base.
+ * coefficients are USD per 1M, so the result is divided by 1e6 (flat()
+ * pre-multiplies to compensate). Every `cond ? <number> : 1` is a surcharge
+ * rule; the subtotal and its items are those of the expression with the
+ * rules taken out.
  */
 function evaluate(expression: string, input: EvalInput) {
   const src = expression.trim().replace(/^v1\s*:/, '')
   const bare = src.replace(/"(?:[^"\\]|\\.)*"/g, '""')
   for (const m of bare.matchAll(/[A-Za-z_][A-Za-z0-9_]*/g)) if (!ALLOWED_IDENTS.has(m[0])) throw new Error(`unknown identifier ${m[0]}`)
-  const [base, ...rules] = splitRules(src)
   const u = input.usage
-  const tokens: Usage = { p: +u.p! || 0, c: +u.c! || 0, cr: +u.cr! || 0, cc: +u.cc! || 0, cc1h: +u.cc1h! || 0, len: 0 }
-  tokens.len = u.len !== undefined ? +u.len || 0 : tokens.p + tokens.cr + tokens.cc + tokens.cc1h
+  const tokens = Object.fromEntries(PRICE_KEYS.map((k) => [k, +u[k]! || 0])) as Usage
+  tokens.len = u.len !== undefined ? +u.len || 0 : tokens.p + tokens.cr + tokens.cc + tokens.cc1h + tokens.img
+  const traced = surcharges(src)
+  const base = traced.reduce((s, r) => s.replace(r.text, '1'), src)
   const b = run(base, input, tokens)
   const subtotal = b.value / 1e6
   // Per-variable items: evaluate with only that variable set (same len, same tier).
-  const zero: Usage = { p: 0, c: 0, cr: 0, cc: 0, cc1h: 0, len: tokens.len }
+  const zero = { ...(Object.fromEntries(PRICE_KEYS.map((k) => [k, 0])) as Usage), len: tokens.len }
   const flat = run(base, input, zero).value / 1e6
   const items: Array<{ tier: string; label: string; quantity?: number; rate?: number; expr: string; cost: string }> = []
   if (flat) items.push({ tier: b.tier, label: 'flat', expr: `flat(${fmtN(flat)})`, cost: money(flat) })
-  for (const k of TOKEN_VARS) {
+  for (const k of PRICE_KEYS) {
     if (!tokens[k]) continue
     const cost = run(base, input, { ...zero, [k]: tokens[k] }).value / 1e6 - flat
     if (!cost) continue
     const rate = Number(((cost / tokens[k]) * 1e6).toPrecision(10))
     items.push({ tier: b.tier, label: k, quantity: tokens[k], rate, expr: `${k}*${fmtN(rate)}`, cost: money(cost) })
   }
-  let mult = 1
-  const ruleResults = rules.map((r) => {
-    const m = /^([\s\S]*)\?\s*([\d.]+)\s*:\s*1\s*$/.exec(r.trim())
-    const v = run(r, input, tokens).value
-    if (v !== 1) mult *= v
-    return { cond: (m ? m[1] : r).trim(), multiplier: m ? Number(m[2]) : v, matched: v !== 1 }
-  })
-  return { tier: b.tier, tokens, subtotal, flat, items, rules: ruleResults, multiplier: mult, cost: subtotal * mult }
+  const rules = traced.map((r) => ({ cond: r.cond, multiplier: r.multiplier, matched: !!run(r.cond, input, tokens).value }))
+  const mult = rules.reduce((m, r) => (r.matched ? m * r.multiplier : m), 1)
+  return { tier: b.tier, tokens, subtotal, flat, items, rules, multiplier: mult, cost: run(src, input, tokens).value / 1e6 }
 }
 
 function tryEvaluate(expression: string, input: EvalInput) {
@@ -205,7 +197,7 @@ type PriceSeed = Omit<MockPrice, 'expr_hash' | 'expr_version' | 'updated_at' | '
 }
 
 function mkPrice(p: PriceSeed): MockPrice {
-  const expression = p.mode === 'expression' && p.expression ? p.expression : genExpr(p.mode, p.config)
+  const expression = p.mode === 'expression' ? p.expression ?? '' : genExpr(p.mode, p.config)
   const synced = p.source === 'sync'
   return {
     ...p,
@@ -231,38 +223,43 @@ interface CatalogEntry {
 
 const round = (n: number) => Number(n.toPrecision(4))
 
+/** Two tiers at 200K, as LiteLLM prices Claude Sonnet. */
+const SONNET = {
+  tiers: [
+    { name: 'standard', max_len: 200000, unit: 'token', p: 3, c: 15, cr: 0.3, cc: 3.75, cc1h: 6 },
+    { name: 'long_context', max_len: null, unit: 'token', p: 6, c: 22.5, cr: 0.6, cc: 7.5, cc1h: 12 }
+  ],
+  rules: []
+}
+
 const KNOWN: CatalogEntry[] = [
   {
     model: 'claude-sonnet-4-5',
     family: 'anthropic',
-    mode: 'expression',
-    config: {
-      tiers: [
-        { name: 'standard', max_len: 200000, p: 3, c: 15, cr: 0.3, cc: 3.75, cc1h: 6 },
-        { name: 'long_context', max_len: null, p: 6, c: 22.5, cr: 0.6, cc: 7.5, cc1h: 12 }
-      ]
-    }
+    mode: 'per_token',
+    config: SONNET
   },
-  { model: 'claude-haiku-4-5', family: 'anthropic', mode: 'per_token', config: { p: 1, c: 5, cr: 0.1, cc: 1.25, cc1h: 2 } },
-  { model: 'claude-opus-4-1', family: 'anthropic', mode: 'per_token', config: { p: 15, c: 75, cr: 1.5, cc: 18.75, cc1h: 30 } },
-  { model: 'gpt-4o', family: 'openai', mode: 'per_token', config: { p: 2.5, c: 10, cr: 1.25 } },
-  { model: 'gpt-4o-mini', family: 'openai', mode: 'per_token', config: { p: 0.15, c: 0.6, cr: 0.075 } },
-  { model: 'gpt-5', family: 'openai', mode: 'per_token', config: { p: 1.25, c: 10, cr: 0.125 } },
-  { model: 'gemini-2.5-flash', family: 'google', mode: 'per_token', config: { p: 0.3, c: 2.5, cr: 0.075 } },
+  { model: 'claude-haiku-4-5', family: 'anthropic', mode: 'per_token', config: singleTier({ p: 1, c: 5, cr: 0.1, cc: 1.25, cc1h: 2 }) },
+  { model: 'claude-opus-4-1', family: 'anthropic', mode: 'per_token', config: singleTier({ p: 15, c: 75, cr: 1.5, cc: 18.75, cc1h: 30 }) },
+  { model: 'gpt-4o', family: 'openai', mode: 'per_token', config: singleTier({ p: 2.5, c: 10, cr: 1.25 }) },
+  { model: 'gpt-4o-mini', family: 'openai', mode: 'per_token', config: singleTier({ p: 0.15, c: 0.6, cr: 0.075 }) },
+  { model: 'gpt-5', family: 'openai', mode: 'per_token', config: singleTier({ p: 1.25, c: 10, cr: 0.125 }) },
+  { model: 'gemini-2.5-flash', family: 'google', mode: 'per_token', config: singleTier({ p: 0.3, c: 2.5, cr: 0.075 }) },
   {
     model: 'gemini-2.5-pro',
     family: 'google',
-    mode: 'expression',
+    mode: 'per_token',
     config: {
       tiers: [
-        { name: 'standard', max_len: 200000, p: 1.25, c: 10, cr: 0.31 },
-        { name: 'long_context', max_len: null, p: 2.5, c: 15, cr: 0.625 }
-      ]
+        { name: 'standard', max_len: 200000, unit: 'token', p: 1.25, c: 10, cr: 0.31 },
+        { name: 'long_context', max_len: null, unit: 'token', p: 2.5, c: 15, cr: 0.625 }
+      ],
+      rules: []
     }
   },
-  { model: 'mistral-large-latest', family: 'mistral', mode: 'per_token', config: { p: 2, c: 6 } },
-  { model: 'deepseek-chat', family: 'deepseek', mode: 'per_token', config: { p: 0.27, c: 1.1, cr: 0.07 } },
-  { model: 'grok-4', family: 'xai', mode: 'per_token', config: { p: 3, c: 15, cr: 0.75 } }
+  { model: 'mistral-large-latest', family: 'mistral', mode: 'per_token', config: singleTier({ p: 2, c: 6 }) },
+  { model: 'deepseek-chat', family: 'deepseek', mode: 'per_token', config: singleTier({ p: 0.27, c: 1.1, cr: 0.07 }) },
+  { model: 'grok-4', family: 'xai', mode: 'per_token', config: singleTier({ p: 3, c: 15, cr: 0.75 }) }
 ]
 
 const PREFIX: Record<Family, string> = { anthropic: 'claude-legacy', openai: 'gpt-variant', google: 'gemini-exp', mistral: 'mistral', deepseek: 'deepseek', xai: 'grok' }
@@ -277,7 +274,7 @@ function synthetic(family: Family, count: number): CatalogEntry[] {
     const p = round(0.05 + r(1) * 10)
     const cfg: Record<string, number> = { p, c: round(p * (3 + Math.floor(r(2) * 3))) }
     if (r(3) > 0.4) cfg.cr = round(p / 10)
-    out.push({ model: `${PREFIX[family]}-${String(i).padStart(4, '0')}-${SUFFIX[i % SUFFIX.length]}`, family, mode: 'per_token', config: cfg })
+    out.push({ model: `${PREFIX[family]}-${String(i).padStart(4, '0')}-${SUFFIX[i % SUFFIX.length]}`, family, mode: 'per_token', config: singleTier(cfg) })
   }
   return out
 }
@@ -289,7 +286,7 @@ const CATALOG = {
   litellm: [...KNOWN, ...FAMILIES.flatMap((f) => synthetic(f, 800))],
   models_dev: [
     // models.dev lists the newer GPT-4o price than the one we synced from LiteLLM.
-    ...KNOWN.map((e) => (e.model === 'gpt-4o' ? { ...e, config: { p: 2.5, c: 10, cr: 1.25, cc: 0 } } : e)),
+    ...KNOWN.map((e) => (e.model === 'gpt-4o' ? { ...e, config: singleTier({ p: 2.5, c: 10, cr: 1.25, cc: 0 }) } : e)),
     ...FAMILIES.flatMap((f) => synthetic(f, 12))
   ],
   // What the upstream sup2api instance exposes to our key (base prices; its group rate is 1.5).
@@ -298,33 +295,37 @@ const CATALOG = {
 const UPSTREAM_GROUP_RATE = 1.5
 const SKIPPED = { litellm: 37, models_dev: 4, sup2api: 0 }
 
+/** A per_token config with every price times `m`. */
 function scaleConfig(cfg: Record<string, any>, m: number): Record<string, any> {
-  const scale = (o: Record<string, any>) =>
-    Object.fromEntries(Object.entries(o).map(([k, v]) => [k, (TOKEN_VARS as readonly string[]).includes(k) || k === 'flat' ? round(Number(v) * m) : v]))
-  if (Array.isArray(cfg.tiers)) return { ...cfg, tiers: cfg.tiers.map(scale) }
-  return scale(cfg)
+  const scale = (t: Record<string, any>) => Object.fromEntries(Object.entries(t).map(([k, v]) => [k, typeof v === 'number' && k !== 'max_len' ? round(v * m) : v]))
+  return { ...cfg, tiers: cfg.tiers.map(scale) }
 }
-
-const SONNET_DEFAULT =
-  'len <= 200000 ? tier("standard", p*3 + c*15 + cr*0.3 + cc*3.75 + cc1h*6) : tier("long_context", p*6 + c*22.5 + cr*0.6 + cc*7.5 + cc1h*12)'
 
 const litellmSynth = CATALOG.litellm.filter((e) => e.model.startsWith('claude-legacy-'))
 
 const prices: MockPrice[] = [
   // Manual, identical to the synced definition -> "unchanged" in previews.
-  mkPrice({ id: 1, model: 'claude-sonnet-4-5', mode: 'expression', config: {}, expression: SONNET_DEFAULT, source: 'manual', enabled: true, note: '' }),
+  mkPrice({ id: 1, model: 'claude-sonnet-4-5', mode: 'per_token', config: SONNET, source: 'manual', enabled: true, note: '' }),
   // Synced from LiteLLM and still current -> "unchanged".
-  mkPrice({ id: 2, model: 'claude-haiku-4-5', mode: 'per_token', config: { p: 1, c: 5, cr: 0.1, cc: 1.25, cc1h: 2 }, source: 'sync', sync_source_id: 1, enabled: true, note: '' }),
+  mkPrice({ id: 2, model: 'claude-haiku-4-5', mode: 'per_token', config: singleTier({ p: 1, c: 5, cr: 0.1, cc: 1.25, cc1h: 2 }), source: 'sync', sync_source_id: 1, enabled: true, note: '' }),
   mkPrice({
     id: 3,
     model: 'claude-sonnet-x',
-    mode: 'expression',
+    mode: 'per_token',
     config: {
-      tiers: [
-        { name: 'standard', max_len: 200000, p: 3, c: 15, cr: 0.3, cc: 3.75, cc1h: 6 },
-        { name: 'long_context', max_len: null, p: 6, c: 22.5, cr: 0.6, cc: 7.5, cc1h: 12 }
-      ],
-      rules: [{ kind: 'header', name: 'anthropic-beta', op: 'contains', value: 'fast-mode', multiplier: 2 }]
+      tiers: SONNET.tiers,
+      rules: [
+        { name: 'fast mode', multiplier: 2, conds: [{ source: 'header', key: 'anthropic-beta', op: 'contains', value: 'fast-mode' }] },
+        {
+          name: 'priority',
+          multiplier: 2,
+          conds: [
+            { source: 'param', key: 'service_tier', op: 'eq', value: 'priority' },
+            { source: 'usage', key: 'service_tier', op: 'eq', value: 'priority' }
+          ]
+        },
+        { name: 'night', multiplier: 0.8, conds: [{ source: 'time', tz: 'Asia/Shanghai', from_hour: 0, to_hour: 8 }] }
+      ]
     },
     source: 'manual',
     enabled: true,
@@ -343,10 +344,10 @@ const prices: MockPrice[] = [
     note: 'night discount'
   }),
   // Synced from LiteLLM, source price changed since -> "update".
-  mkPrice({ id: 6, model: 'gpt-4o', mode: 'per_token', config: { p: 5, c: 15, cr: 2.5 }, source: 'sync', sync_source_id: 1, enabled: true, note: '' }),
+  mkPrice({ id: 6, model: 'gpt-4o', mode: 'per_token', config: singleTier({ p: 5, c: 15, cr: 2.5 }), source: 'sync', sync_source_id: 1, enabled: true, note: '' }),
   // Synced from models.dev and current.
-  mkPrice({ id: 7, model: 'gemini-2.5-flash', mode: 'per_token', config: { p: 0.3, c: 2.5, cr: 0.075 }, source: 'sync', sync_source_id: 2, enabled: true, note: '' }),
-  mkPrice({ id: 8, model: 'gpt-4o-mini', mode: 'per_token', config: { p: 0.3, c: 1.2 }, source: 'sync', sync_source_id: 1, enabled: true, note: '' }),
+  mkPrice({ id: 7, model: 'gemini-2.5-flash', mode: 'per_token', config: singleTier({ p: 0.3, c: 2.5, cr: 0.075 }), source: 'sync', sync_source_id: 2, enabled: true, note: '' }),
+  mkPrice({ id: 8, model: 'gpt-4o-mini', mode: 'per_token', config: singleTier({ p: 0.3, c: 1.2 }), source: 'sync', sync_source_id: 1, enabled: true, note: '' }),
   // A few synthetic LiteLLM models: current, outdated, and manually edited.
   ...litellmSynth.slice(0, 6).map((e, i) => mkPrice({ id: 20 + i, model: e.model, mode: e.mode, config: e.config, source: 'sync', sync_source_id: 1, enabled: true, note: '' })),
   ...litellmSynth
@@ -359,9 +360,9 @@ const prices: MockPrice[] = [
 
 function exprOf(body: any): { mode: PriceMode; config: Record<string, any>; expression: string } {
   const mode: PriceMode = ['per_request', 'per_token', 'expression'].includes(body?.mode) ? body.mode : 'expression'
-  const config = body?.config && typeof body.config === 'object' ? body.config : {}
-  let expression = String(body?.expression || '')
-  if (mode !== 'expression' || !expression.trim()) expression = genExpr(mode, config)
+  // A per_request / per_token expression is generated from the config, whatever the client sent; an expression price has no config.
+  const config = mode !== 'expression' && body?.config && typeof body.config === 'object' ? body.config : {}
+  const expression = mode === 'expression' ? String(body?.expression || '') : genExpr(mode, config)
   return { mode, config, expression }
 }
 
@@ -1149,7 +1150,7 @@ for (let i = 0; i < 90; i++) {
 // multiplier rule, a custom price, the segment's own rate and its discount.
 {
   const VIP = 2
-  const haiku = configPrice('per_token', { p: 0.8, c: 4, cr: 0.08, cc: 1 })
+  const haiku = configPrice('per_token', singleTier({ p: 0.8, c: 4, cr: 0.08, cc: 1 }))
   const tokens = { input: 12000, output: 1800 }
   const samples: Array<{ group: (typeof GROUPS)[number]; model: string; rate: number; terms: PricingTerms }> = [
     { group: GROUPS[0], model: 'gpt-4o-mini', rate: 0.9, terms: { segment_id: VIP, rate_source: 'discount', rule: { source: 'segment', scale: 0.8 } } },

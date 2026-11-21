@@ -3,6 +3,7 @@ package billing
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"net/http/httptest"
 	"slices"
 	"testing"
@@ -40,8 +41,7 @@ func TestSQLLedgerCount(t *testing.T) {
 // deleted (one removed and saved again: two changes of one rule), and the
 // saved ones upserted on the partial unique index of their level, the group
 // price before the segment's, the update moving updated_at by now(). A
-// multiplier has no config and no mode (NULL). The custom price's config
-// holds no number, whose pointer the snapshot would print.
+// multiplier has no config and no mode (NULL).
 func TestSQLWriteRules(t *testing.T) {
 	multiplier := &storedRule{Rule: Rule{Kind: core.PriceRuleMultiplier}}
 	multiplier.setScale(decimal.RequireFromString("1.25"))
@@ -50,11 +50,10 @@ func TestSQLWriteRules(t *testing.T) {
 	gone := core.PriceQuery{GroupID: 3, SegmentID: 5, Model: "claude-haiku-4-5"}
 	again := core.PriceQuery{GroupID: 3, Model: "claude-opus-4-5"}
 	custom, err := checkCustom(context.Background(), Rule{Kind: core.PriceRuleCustom, Mode: "per_request",
-		Config: map[string]*float64{"price": new(float64)}}, "per_request")
+		Config: json.RawMessage(`{"price": 0}`)}, PriceDef{Mode: "per_request"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	custom.Config = map[string]*float64{"price": nil}
 	changes := []ruleChange{{segment, custom}, {group, multiplier}, {gone, nil}, {again, nil}, {again, multiplier}}
 	slices.SortStableFunc(changes, func(a, b ruleChange) int {
 		return cmp.Or(cmp.Compare(a.on.SegmentID, b.on.SegmentID), cmp.Compare(a.on.Model, b.on.Model))

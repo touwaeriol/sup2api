@@ -17,7 +17,6 @@ const (
 	CodeSyntax             = "syntax_error"
 	CodeLiteralArg         = "literal_argument_required"
 	CodeTimezone           = "invalid_timezone"
-	CodeRuleShape          = "invalid_rule"
 	CodeNegativeMultiplier = "negative_multiplier"
 	CodeRuntime            = "runtime_error"
 	CodeBadResult          = "invalid_result"
@@ -35,7 +34,6 @@ var messages = map[string][2]string{
 	CodeSyntax:             {"Expression does not compile", "表达式无法编译"},
 	CodeLiteralArg:         {"Function argument must be a string literal", "函数参数必须是字符串常量"},
 	CodeTimezone:           {"Unknown time zone", "未知的时区"},
-	CodeRuleShape:          {"Request rule must have the form `condition ? multiplier : 1`", "加价规则必须是 `条件 ? 倍数 : 1` 的形式"},
 	CodeNegativeMultiplier: {"Rule multiplier must not be negative", "加价倍数不能为负数"},
 	CodeRuntime:            {"Expression failed at runtime", "表达式执行出错"},
 	CodeBadResult:          {"Expression result must be a finite, non-negative number", "表达式结果必须是有限的非负数"},

@@ -532,9 +532,9 @@ func (t tokenSet) empty() bool {
 	return t.p == nil && t.c == nil && t.cr == nil && t.cc == nil && t.cc1h == nil
 }
 
-// levelsPrice builds a per_token price, or an expression price with context
-// tiers: levels[0] applies up to sizes[0] tokens of prompt, levels[i] above
-// sizes[i-1]. The standard level must set input or output.
+// levelsPrice builds a per_token price, with context tiers when there are
+// several levels: levels[0] applies up to sizes[0] tokens of prompt,
+// levels[i] above sizes[i-1]. The standard level must set input or output.
 func levelsPrice(model string, levels []tokenSet, sizes []int64) *syncPrice {
 	if len(levels) == 0 || levels[0].p == nil && levels[0].c == nil {
 		return nil
@@ -546,14 +546,12 @@ func levelsPrice(model string, levels []tokenSet, sizes []int64) *syncPrice {
 	if levels[0].c == nil {
 		levels[0].c = &zero
 	}
-	if len(levels) == 1 {
-		cfg, _ := json.Marshal(levels[0].config())
-		return &syncPrice{Model: model, Mode: expr.ModePerToken, Config: cfg}
-	}
 	tiers := make([]map[string]any, 0, len(levels))
 	for i, l := range levels {
 		t := l.or(levels[0]).config()
 		switch {
+		case len(levels) == 1:
+			t["name"] = "base"
 		case i == 0:
 			t["name"] = "standard"
 		case len(levels) == 2:
@@ -561,15 +559,14 @@ func levelsPrice(model string, levels []tokenSet, sizes []int64) *syncPrice {
 		default:
 			t["name"] = fmt.Sprintf("over_%d", sizes[i-1])
 		}
+		t["max_len"], t["unit"] = nil, expr.UnitToken
 		if i < len(sizes) {
 			t["max_len"] = sizes[i]
-		} else {
-			t["max_len"] = nil
 		}
 		tiers = append(tiers, t)
 	}
-	cfg, _ := json.Marshal(map[string]any{"tiers": tiers})
-	return &syncPrice{Model: model, Mode: expr.ModeExpression, Config: cfg}
+	cfg, _ := json.Marshal(map[string]any{"tiers": tiers, "rules": []any{}})
+	return &syncPrice{Model: model, Mode: expr.ModePerToken, Config: cfg}
 }
 
 // litellmEntry is the part of a LiteLLM catalog entry used here (USD per token).
@@ -747,8 +744,9 @@ func parseSup2API(body []byte, apply bool) (*fetched, error) {
 	out := &fetched{prices: map[string]*syncPrice{}}
 	for i := range kp.Prices {
 		p := kp.Prices[i]
-		// Visual prices are regenerated locally from their config.
-		if p.Mode != expr.ModeExpression || expr.HasVisualConfig(p.Config) {
+		// Prices with a config are generated locally; an expression price
+		// is its expression.
+		if p.Mode != expr.ModeExpression {
 			p.Expression = ""
 		}
 		if !manifest.ValidModelID(p.Model) {
@@ -766,10 +764,10 @@ func parseSup2API(body []byte, apply bool) (*fetched, error) {
 	return out, nil
 }
 
-// scalePrice multiplies a price by m: visual configs are scaled in place,
-// other expressions get a constant surcharge rule. Only a per-request or
-// per-token price needs its config to be an object; an expression price
-// without one (null, as an upstream may send it) gets the rule.
+// scalePrice multiplies a price by m: the prices of a per-request or
+// per-token config are scaled in place (rule multipliers stay), an
+// expression price becomes "(expression) * m". Only a per-request or
+// per-token price needs its config to be an object.
 func scalePrice(p *syncPrice, m decimal.Decimal) error {
 	scale := func(v any) any {
 		switch x := v.(type) {
@@ -784,27 +782,31 @@ func scalePrice(p *syncPrice, m decimal.Decimal) error {
 		}
 		return v
 	}
+	scaleKeys := func(obj map[string]any, keys ...string) {
+		for _, k := range keys {
+			if v, ok := obj[k]; ok {
+				obj[k] = scale(v)
+			}
+		}
+	}
 	var cfg map[string]any
 	dec := json.NewDecoder(strings.NewReader(string(p.Config)))
 	dec.UseNumber()
 	_ = dec.Decode(&cfg) // cfg stays nil unless the config is an object
-	if cfg == nil && (p.Mode == expr.ModePerRequest || p.Mode == expr.ModePerToken) {
-		return errors.New("price config is not an object")
-	}
 	switch p.Mode {
-	case expr.ModePerRequest:
-		cfg["price"] = scale(cfg["price"])
-	case expr.ModePerToken:
-		for _, k := range []string{"p", "c", "cr", "cc", "cc1h"} {
-			if v, ok := cfg[k]; ok {
-				cfg[k] = scale(v)
-			}
+	case expr.ModePerRequest, expr.ModePerToken:
+		if cfg == nil {
+			return errors.New("price config is not an object")
 		}
 	default:
-		if scaleVideoConfig(cfg, scale) {
-			break
-		}
 		return scaleAsExpression(p, m)
+	}
+	scaleKeys(cfg, "price")
+	tiers, _ := cfg["tiers"].([]any)
+	for _, t := range tiers {
+		if tier, ok := t.(map[string]any); ok {
+			scaleKeys(tier, "p", "c", "cr", "cc", "cc1h", "img", "img_o", "price")
+		}
 	}
 	b, err := json.Marshal(cfg)
 	if err != nil {
@@ -814,35 +816,8 @@ func scalePrice(p *syncPrice, m decimal.Decimal) error {
 	return nil
 }
 
-// scaleVideoConfig scales every per-video price in cfg. It reports whether cfg
-// carried a video block; other modes then fall back to an expression rule.
-func scaleVideoConfig(cfg map[string]any, scale func(any) any) bool {
-	video, ok := cfg["video"].(map[string]any)
-	if !ok {
-		return false
-	}
-	entries := []map[string]any{video}
-	if rows, ok := video["resolution_prices"].([]any); ok {
-		for _, row := range rows {
-			if r, ok := row.(map[string]any); ok {
-				entries = append(entries, r)
-			}
-		}
-	}
-	keys := []string{"price_per_million_tokens", "video_input_price_per_million_tokens", "video_price_per_second"}
-	for _, entry := range entries {
-		for _, key := range keys {
-			if value, ok := entry[key]; ok {
-				entry[key] = scale(value)
-			}
-		}
-	}
-	return true
-}
-
-// scaleAsExpression rewrites a config-based price as an expression with a
-// constant multiplier rule (the only way a surcharge can apply to arbitrary
-// expressions).
+// scaleAsExpression rewrites a price as the expression price
+// "(expression) * m".
 func scaleAsExpression(p *syncPrice, m decimal.Decimal) error {
 	if p.Expression == "" {
 		src, err := expressionFor(p.Mode, p.Config, "")
@@ -851,32 +826,12 @@ func scaleAsExpression(p *syncPrice, m decimal.Decimal) error {
 		}
 		p.Expression = src
 	}
-	src, err := appendRule(p.Expression, "true ? "+m.String()+" : 1")
+	src, err := expr.Times(p.Expression, m.String())
 	if err != nil {
 		return err
 	}
 	p.Mode, p.Config, p.Expression = expr.ModeExpression, json.RawMessage("{}"), src
 	return nil
-}
-
-// appendRule returns the expression src with a request rule after it. It is
-// an error when the result does not compile to one rule more than src: after
-// an expression that ends in a comment with a quote in it the rule would be
-// part of that comment, and the price would silently stay as it was.
-func appendRule(src, rule string) (string, error) {
-	before, err := expr.CompileCached(src)
-	if err != nil {
-		return "", err
-	}
-	out := strings.TrimSpace(src) + " " + expr.RuleSeparator + " " + rule
-	after, err := expr.CompileCached(out)
-	if err != nil {
-		return "", err
-	}
-	if len(after.RuleConds()) != len(before.RuleConds())+1 {
-		return "", errors.New("the expression takes no rule after it")
-	}
-	return out, nil
 }
 
 // ---------------------------------------------------------------- preview and apply
@@ -1143,9 +1098,6 @@ func exportPrice(model string, base PriceDef, levels ruleLevels) (syncPrice, err
 	}
 	// A scaled config: its expression is generated, as on import.
 	var err error
-	if scaled.Expression, err = expressionFor(scaled.Mode, scaled.Config, ""); err != nil {
-		// No such config at this multiplier (a video template cannot be free).
-		return p, scaleAsExpression(&p, *price.Multiplier)
-	}
-	return scaled, nil
+	scaled.Expression, err = expressionFor(scaled.Mode, scaled.Config, "")
+	return scaled, err
 }

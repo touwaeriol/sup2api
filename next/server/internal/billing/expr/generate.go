@@ -43,51 +43,68 @@ func (n *Num) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// TokenPrices are USD per million tokens. p and c are always emitted; a
-// cache price that is absent (nil) is not emitted, so those tokens are not
-// billed (same as an explicit 0).
+// PerRequestConfig is mode=per_request.
+type PerRequestConfig struct {
+	Price *Num `json:"price"`
+}
+
+// TokenConfig is mode=per_token: prompt-length tiers and request surcharges
+// (CONTRACTS §131).
+type TokenConfig struct {
+	Tiers []TierConfig `json:"tiers"`
+	Rules []RuleConfig `json:"rules"`
+}
+
+// Tier units.
+const (
+	UnitToken   = "token"
+	UnitRequest = "request"
+)
+
+// TierConfig is one tier: it applies up to MaxLen prompt tokens (len), the
+// tier without MaxLen to the rest. A unit=token tier has token prices, a
+// unit=request tier only Price (USD per request).
+type TierConfig struct {
+	Name   string `json:"name"`
+	MaxLen *Num   `json:"max_len"`
+	Unit   string `json:"unit,omitempty"` // token (default) | request
+	TokenPrices
+	Price *Num `json:"price,omitempty"`
+}
+
+// TokenPrices are USD per million tokens. p and c are always emitted (0 when
+// absent); any other price is emitted only when present, so cache tokens
+// without a price are not billed and image tokens without one are billed as
+// p and c.
 type TokenPrices struct {
 	P    *Num `json:"p,omitempty"`
 	C    *Num `json:"c,omitempty"`
 	CR   *Num `json:"cr,omitempty"`
 	CC   *Num `json:"cc,omitempty"`
 	CC1h *Num `json:"cc1h,omitempty"`
+	Img  *Num `json:"img,omitempty"`
+	ImgO *Num `json:"img_o,omitempty"`
 }
 
-// PerRequestConfig is mode=per_request.
-type PerRequestConfig struct {
-	Price *Num `json:"price"`
-}
-
-// TierConfig is one tier of the visual editor. Prices may be nested under
-// "prices" or given directly on the tier.
-type TierConfig struct {
-	Name   string       `json:"name"`
-	MaxLen *Num         `json:"max_len"` // nil = the rest
-	Prices *TokenPrices `json:"prices,omitempty"`
-	TokenPrices
-	Flat *Num `json:"flat,omitempty"`
-}
-
-// RuleConfig is one request surcharge of the visual editor.
+// RuleConfig is one request surcharge: the price is multiplied by Multiplier
+// when every condition holds. Name is for people only.
 type RuleConfig struct {
-	Source     string          `json:"source,omitempty"` // header | param | time
-	Kind       string          `json:"kind,omitempty"`   // alias of source
-	Name       string          `json:"name,omitempty"`   // header name
-	Path       string          `json:"path,omitempty"`   // body path
-	Op         string          `json:"op,omitempty"`     // contains | eq | range
-	Value      json.RawMessage `json:"value,omitempty"`
-	TZ         string          `json:"tz,omitempty"`
-	FromHour   *int            `json:"from_hour,omitempty"`
-	ToHour     *int            `json:"to_hour,omitempty"`
-	Multiplier *Num            `json:"multiplier"`
+	Name       string       `json:"name,omitempty"`
+	Multiplier *Num         `json:"multiplier"`
+	Conds      []CondConfig `json:"conds"`
 }
 
-// ExpressionConfig is mode=expression edited visually.
-type ExpressionConfig struct {
-	Video *VideoConfig `json:"video,omitempty"`
-	Tiers []TierConfig `json:"tiers"`
-	Rules []RuleConfig `json:"rules,omitempty"`
+// CondConfig is one condition of a rule. Source param, header or usage
+// compares the value under Key with Op; source time is the hour window
+// [FromHour, ToHour) in TZ and has no Op.
+type CondConfig struct {
+	Source   string          `json:"source"` // param | header | usage | time
+	Key      string          `json:"key,omitempty"`
+	Op       string          `json:"op,omitempty"` // eq | ne | contains | exists | gt | gte | lt | lte
+	Value    json.RawMessage `json:"value,omitempty"`
+	TZ       string          `json:"tz,omitempty"`
+	FromHour *int            `json:"from_hour,omitempty"`
+	ToHour   *int            `json:"to_hour,omitempty"`
 }
 
 // ConfigError is a generator failure bound to a config field.
@@ -102,14 +119,9 @@ func cfgErr(field, format string, args ...any) *ConfigError {
 	return &ConfigError{Field: field, Issue: issuef(CodeConfig, "%s: "+format, append([]any{field}, args...)...)}
 }
 
-// HasVisualConfig reports whether an expression-mode config carries tiers.
-func HasVisualConfig(config json.RawMessage) bool {
-	var c ExpressionConfig
-	return json.Unmarshal(config, &c) == nil && (len(c.Tiers) > 0 || c.Video != nil)
-}
-
-// Generate builds the expression for a visual configuration. Errors are
-// *ConfigError.
+// Generate builds the expression of a price from its config. An expression
+// price is written by hand: its config must be {} and Generate returns "".
+// Errors are *ConfigError.
 func Generate(mode string, config json.RawMessage) (string, error) {
 	if len(bytes.TrimSpace(config)) == 0 {
 		config = json.RawMessage("{}")
@@ -128,21 +140,17 @@ func Generate(mode string, config json.RawMessage) (string, error) {
 		}
 		return fmt.Sprintf(`tier("base", flat(%s))`, fmtNum(float64(*c.Price))), nil
 	case ModePerToken:
-		var c TokenPrices
+		var c TokenConfig
 		if err := json.Unmarshal(config, &c); err != nil {
 			return "", cfgErr("config", "%v", err)
 		}
-		body, err := tokenBody("config", c, nil)
-		if err != nil {
-			return "", err
-		}
-		return fmt.Sprintf(`tier("base", %s)`, body), nil
+		return generateTokens(c)
 	case ModeExpression:
-		var c ExpressionConfig
-		if err := json.Unmarshal(config, &c); err != nil {
-			return "", cfgErr("config", "%v", err)
+		var c map[string]json.RawMessage
+		if err := json.Unmarshal(config, &c); err != nil || len(c) > 0 {
+			return "", cfgErr("config", "must be {}: an expression price is its expression")
 		}
-		return generateExpression(c)
+		return "", nil
 	}
 	return "", cfgErr("mode", "unknown mode %q", mode)
 }
@@ -157,20 +165,37 @@ func checkNum(field string, f float64) *ConfigError {
 // fmtNum prints the shortest decimal form without exponent.
 func fmtNum(f float64) string { return strconv.FormatFloat(f, 'f', -1, 64) }
 
-func tokenBody(field string, c TokenPrices, flat *Num) (string, *ConfigError) {
-	var terms []string
-	if flat != nil && *flat != 0 {
-		if err := checkNum(field+".flat", float64(*flat)); err != nil {
+func tierBody(field string, t TierConfig) (string, *ConfigError) {
+	switch t.Unit {
+	case "", UnitToken:
+		if t.Price != nil {
+			return "", cfgErr(field+".price", "only a unit request tier has a price")
+		}
+		return tokenBody(field, t.TokenPrices)
+	case UnitRequest:
+		if t.TokenPrices != (TokenPrices{}) {
+			return "", cfgErr(field, "a unit request tier has a price and no token prices")
+		}
+		if t.Price == nil {
+			return "", cfgErr(field+".price", "required")
+		}
+		if err := checkNum(field+".price", float64(*t.Price)); err != nil {
 			return "", err
 		}
-		terms = append(terms, fmt.Sprintf("flat(%s)", fmtNum(float64(*flat))))
+		return fmt.Sprintf("flat(%s)", fmtNum(float64(*t.Price))), nil
 	}
+	return "", cfgErr(field+".unit", "must be token or request")
+}
+
+func tokenBody(field string, c TokenPrices) (string, *ConfigError) {
+	var terms []string
 	zero := Num(0)
 	for _, x := range []struct {
 		name     string
 		v        *Num
 		required bool
-	}{{"p", c.P, true}, {"c", c.C, true}, {"cr", c.CR, false}, {"cc", c.CC, false}, {"cc1h", c.CC1h, false}} {
+	}{{"p", c.P, true}, {"c", c.C, true}, {"cr", c.CR, false}, {"cc", c.CC, false}, {"cc1h", c.CC1h, false},
+		{"img", c.Img, false}, {"img_o", c.ImgO, false}} {
 		v := x.v
 		if v == nil {
 			if !x.required {
@@ -191,13 +216,9 @@ var (
 	headerNameRe = regexp.MustCompile(`^[A-Za-z0-9!#$%&'*+.^_|~\-]{1,100}$`)
 )
 
-func generateExpression(c ExpressionConfig) (string, error) {
-	if c.Video != nil {
-		if len(c.Tiers) > 0 || len(c.Rules) > 0 {
-			return "", cfgErr("config", "video cannot be combined with tiers or rules; use source mode for custom expressions")
-		}
-		return generateVideo(*c.Video)
-	}
+// generateTokens builds `base` without rules and
+// `(base) * (rule) * ...` with them.
+func generateTokens(c TokenConfig) (string, error) {
 	if len(c.Tiers) == 0 {
 		return "", cfgErr("config.tiers", "at least one tier is required")
 	}
@@ -218,11 +239,7 @@ func generateExpression(c ExpressionConfig) (string, error) {
 			return "", cfgErr(field+".name", "duplicate tier %q", t.Name)
 		}
 		names[t.Name] = true
-		prices := t.TokenPrices
-		if t.Prices != nil {
-			prices = *t.Prices
-		}
-		body, err := tokenBody(field, prices, t.Flat)
+		body, err := tierBody(field, t)
 		if err != nil {
 			return "", err
 		}
@@ -245,7 +262,7 @@ func generateExpression(c ExpressionConfig) (string, error) {
 		}
 		return *a < *b
 	})
-	if len(tiers) > 1 && rest != 1 {
+	if rest != 1 {
 		return "", cfgErr("config.tiers", "exactly one tier must have no max_len (the rest)")
 	}
 	for i := 1; i < len(tiers); i++ {
@@ -254,30 +271,29 @@ func generateExpression(c ExpressionConfig) (string, error) {
 		}
 	}
 	call := func(t tb) string { return fmt.Sprintf("tier(%s, %s)", strconv.Quote(t.name), t.body) }
-	var base string
-	if len(tiers) == 1 {
-		base = call(tiers[0])
-	} else {
-		// Build right to left: len <= a ? A : (len <= b ? B : C)
-		base = call(tiers[len(tiers)-1])
-		for i := len(tiers) - 2; i >= 0; i-- {
-			if i < len(tiers)-2 {
-				base = "(" + base + ")"
-			}
-			base = fmt.Sprintf("len <= %s ? %s : %s", fmtNum(*tiers[i].maxLen), call(tiers[i]), base)
+	// Built right to left: len <= a ? A : (len <= b ? B : C)
+	base := call(tiers[len(tiers)-1])
+	for i := len(tiers) - 2; i >= 0; i-- {
+		if i < len(tiers)-2 {
+			base = "(" + base + ")"
 		}
+		base = fmt.Sprintf("len <= %s ? %s : %s", fmtNum(*tiers[i].maxLen), call(tiers[i]), base)
 	}
-	parts := []string{base}
+	if len(c.Rules) == 0 {
+		return base, nil
+	}
+	factors := []string{base}
 	for i, r := range c.Rules {
 		s, err := ruleExpr(fmt.Sprintf("config.rules[%d]", i), r)
 		if err != nil {
 			return "", err
 		}
-		parts = append(parts, s)
+		factors = append(factors, s)
 	}
-	return strings.Join(parts, " "+RuleSeparator+" "), nil
+	return "(" + strings.Join(factors, ") * (") + ")", nil
 }
 
+// ruleExpr is `cond && ... ? multiplier : 1`, a traced rule.
 func ruleExpr(field string, r RuleConfig) (string, *ConfigError) {
 	if r.Multiplier == nil {
 		return "", cfgErr(field+".multiplier", "required")
@@ -286,99 +302,115 @@ func ruleExpr(field string, r RuleConfig) (string, *ConfigError) {
 	if err := checkNum(field+".multiplier", m); err != nil {
 		return "", err
 	}
-	source := r.Source
-	if source == "" {
-		source = r.Kind
+	if len(r.Conds) == 0 {
+		return "", cfgErr(field+".conds", "at least one condition is required")
 	}
-	op := r.Op
-	var cond string
-	switch source {
-	case "header":
-		name := strings.ToLower(strings.TrimSpace(r.Name))
-		if !headerNameRe.MatchString(name) {
-			return "", cfgErr(field+".name", "invalid header name")
-		}
-		h := fmt.Sprintf("header(%s)", strconv.Quote(name))
-		s, err := stringValue(field, r.Value)
+	conds := make([]string, len(r.Conds))
+	for i, c := range r.Conds {
+		s, err := condExpr(fmt.Sprintf("%s.conds[%d]", field, i), c)
 		if err != nil {
 			return "", err
 		}
-		switch op {
-		case "contains", "":
-			cond = fmt.Sprintf("has(%s, %s)", h, strconv.Quote(s))
-		case "eq":
-			cond = fmt.Sprintf("%s == %s", h, strconv.Quote(s))
-		default:
-			return "", cfgErr(field+".op", "header rules support contains and eq")
-		}
-	case "param":
-		path := strings.TrimSpace(r.Path)
-		if path == "" {
-			path = strings.TrimSpace(r.Name)
-		}
-		if path == "" || len(path) > 200 {
-			return "", cfgErr(field+".path", "required")
-		}
-		pr := fmt.Sprintf("param(%s)", strconv.Quote(path))
-		switch op {
-		case "contains":
-			s, err := stringValue(field, r.Value)
-			if err != nil {
-				return "", err
-			}
-			cond = fmt.Sprintf("has(%s, %s)", pr, strconv.Quote(s))
-		case "eq", "":
-			lit, err := literal(field, r.Value)
-			if err != nil {
-				return "", err
-			}
-			cond = fmt.Sprintf("%s == %s", pr, lit)
-		case "range":
-			var bounds []*Num
-			if err := json.Unmarshal(r.Value, &bounds); err != nil || len(bounds) != 2 {
-				return "", cfgErr(field+".value", "range needs [min, max] (null for open)")
-			}
-			num := fmt.Sprintf("(%s ?? 0)", pr)
-			var cs []string
-			if bounds[0] != nil {
-				cs = append(cs, fmt.Sprintf("%s >= %s", num, fmtNum(float64(*bounds[0]))))
-			}
-			if bounds[1] != nil {
-				cs = append(cs, fmt.Sprintf("%s <= %s", num, fmtNum(float64(*bounds[1]))))
-			}
-			if len(cs) == 0 {
-				return "", cfgErr(field+".value", "range needs at least one bound")
-			}
-			cond = strings.Join(cs, " && ")
-		default:
-			return "", cfgErr(field+".op", "unknown op %q", op)
-		}
-	case "time":
-		tz := strings.TrimSpace(r.TZ)
-		if tz == "" {
-			tz = "UTC"
-		}
-		if _, err := loadLocation(tz); err != nil {
-			return "", cfgErr(field+".tz", "unknown time zone %q", tz)
-		}
-		if r.FromHour == nil || r.ToHour == nil {
-			return "", cfgErr(field, "from_hour and to_hour are required")
-		}
-		from, to := *r.FromHour, *r.ToHour
-		if from < 0 || from > 23 || to < 0 || to > 24 || from == to {
-			return "", cfgErr(field, "hours must satisfy 0 <= from_hour <= 23, 0 <= to_hour <= 24, from_hour != to_hour")
-		}
-		h := fmt.Sprintf("hour(%s)", strconv.Quote(tz))
-		switch {
-		case from < to:
-			cond = fmt.Sprintf("%s >= %d && %s < %d", h, from, h, to)
-		default: // wraps midnight
-			cond = fmt.Sprintf("(%s >= %d || %s < %d)", h, from, h, to)
-		}
-	default:
-		return "", cfgErr(field+".source", "must be header, param or time")
+		conds[i] = s
 	}
-	return fmt.Sprintf("%s ? %s : 1", cond, fmtNum(m)), nil
+	return fmt.Sprintf("%s ? %s : 1", strings.Join(conds, " && "), fmtNum(m)), nil
+}
+
+// compareOps are the comparison operators of a condition.
+var compareOps = map[string]string{"eq": "==", "ne": "!=", "gt": ">", "gte": ">=", "lt": "<", "lte": "<="}
+
+// absent is what a source reads when the value is not there: an absent
+// usage key reads 0 (eval.go metric).
+var absent = map[string]string{"param": "nil", "header": `""`, "usage": "0"}
+
+func condExpr(field string, c CondConfig) (string, *ConfigError) {
+	if c.Source == "time" {
+		return timeCond(field, c)
+	}
+	arg, err := condArg(field, c)
+	if err != nil {
+		return "", err
+	}
+	switch c.Op {
+	case "contains":
+		s, err := stringValue(field, c.Value)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("has(%s, %s)", arg, strconv.Quote(s)), nil
+	case "exists":
+		return arg + " != " + absent[c.Source], nil
+	case "eq", "ne":
+		var lit string
+		if c.Source == "header" {
+			s, err := stringValue(field, c.Value)
+			if err != nil {
+				return "", err
+			}
+			lit = strconv.Quote(s)
+		} else if lit, err = literal(field, c.Value); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("%s %s %s", arg, compareOps[c.Op], lit), nil
+	case "gt", "gte", "lt", "lte":
+		if c.Source == "header" {
+			return "", cfgErr(field+".op", "a header is text: eq, ne, contains or exists")
+		}
+		var n Num
+		if json.Unmarshal(c.Value, &n) != nil {
+			return "", cfgErr(field+".value", "must be a number")
+		}
+		if c.Source == "param" {
+			arg = "(" + arg + " ?? 0)"
+		}
+		return fmt.Sprintf("%s %s %s", arg, compareOps[c.Op], fmtNum(float64(n))), nil
+	}
+	return "", cfgErr(field+".op", "unknown op %q", c.Op)
+}
+
+// condArg is the probe a param, header or usage condition reads.
+func condArg(field string, c CondConfig) (string, *ConfigError) {
+	key := strings.TrimSpace(c.Key)
+	switch c.Source {
+	case "header":
+		key = strings.ToLower(key)
+		if !headerNameRe.MatchString(key) {
+			return "", cfgErr(field+".key", "invalid header name")
+		}
+		return fmt.Sprintf("header(%s)", strconv.Quote(key)), nil
+	case "param", "usage":
+		if key == "" || len(key) > 200 {
+			return "", cfgErr(field+".key", "required, at most 200 characters")
+		}
+		fn := "param"
+		if c.Source == "usage" {
+			fn = "u"
+		}
+		return fmt.Sprintf("%s(%s)", fn, strconv.Quote(key)), nil
+	}
+	return "", cfgErr(field+".source", "must be param, header, usage or time")
+}
+
+func timeCond(field string, c CondConfig) (string, *ConfigError) {
+	tz := strings.TrimSpace(c.TZ)
+	if tz == "" {
+		tz = "UTC"
+	}
+	if _, err := loadLocation(tz); err != nil {
+		return "", cfgErr(field+".tz", "unknown time zone %q", tz)
+	}
+	if c.FromHour == nil || c.ToHour == nil {
+		return "", cfgErr(field, "from_hour and to_hour are required")
+	}
+	from, to := *c.FromHour, *c.ToHour
+	if from < 0 || from > 23 || to < 0 || to > 24 || from == to {
+		return "", cfgErr(field, "hours must satisfy 0 <= from_hour <= 23, 0 <= to_hour <= 24, from_hour != to_hour")
+	}
+	h := fmt.Sprintf("hour(%s)", strconv.Quote(tz))
+	if from < to {
+		return fmt.Sprintf("%s >= %d && %s < %d", h, from, h, to), nil
+	}
+	return fmt.Sprintf("(%s >= %d || %s < %d)", h, from, h, to), nil // wraps midnight
 }
 
 func stringValue(field string, raw json.RawMessage) (string, *ConfigError) {
@@ -403,4 +435,21 @@ func literal(field string, raw json.RawMessage) (string, *ConfigError) {
 		return strconv.FormatBool(x), nil
 	}
 	return "", cfgErr(field+".value", "must be a string, number or boolean")
+}
+
+// Times returns the expression src multiplied by the constant m,
+// "(<src>) * m"; the ")" goes on a line of its own after a line comment.
+func Times(src, m string) (string, error) {
+	_, body, err := splitVersion(src)
+	if err != nil {
+		return "", err
+	}
+	if strings.Contains(body, "//") {
+		body += "\n"
+	}
+	out := "(" + body + ") * " + m
+	if _, err := Compile(out); err != nil {
+		return "", err
+	}
+	return out, nil
 }

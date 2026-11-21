@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -41,6 +42,7 @@ type env struct {
 	Weekday func(string) (int, error)          `expr:"weekday"`
 	Day     func(string) (int, error)          `expr:"day"`
 	Month   func(string) (int, error)          `expr:"month"`
+	Rule    func(int, any) (bool, error)       `expr:"__rule"` // traceFunc
 }
 
 // Vars are the normalized variable values of one evaluation.
@@ -119,7 +121,8 @@ type Input struct {
 	At      time.Time         // request start; zero means now
 }
 
-// RuleResult reports one request rule.
+// RuleResult reports one traced request rule. A rule the evaluation did not
+// reach (a branch not taken, a short-circuited operand) is not matched.
 type RuleResult struct {
 	Cond       string  `json:"cond"`
 	Multiplier float64 `json:"multiplier"`
@@ -143,8 +146,8 @@ type Breakdown struct {
 	Tiers           []string        `json:"tiers,omitempty"` // every tier() hit, in order
 	Items           []Item          `json:"items"`
 	Subtotal        decimal.Decimal `json:"subtotal"`         // sum of items (USD)
-	Base            decimal.Decimal `json:"base"`             // base expression (USD), before request rules
-	RulesMultiplier decimal.Decimal `json:"rules_multiplier"` // product of matched rule multipliers
+	Base            decimal.Decimal `json:"base"`             // the expression with no rule matched (USD)
+	RulesMultiplier decimal.Decimal `json:"rules_multiplier"` // product of the matched traced multipliers
 }
 
 // Result is the outcome of one evaluation. Cost excludes the group rate
@@ -158,7 +161,9 @@ type Result struct {
 }
 
 type evalState struct {
-	tiers []string
+	tiers   []string
+	matched []bool // by rule index
+	noRules bool   // every traced rule takes its ": 1" branch
 }
 
 func newEnv(in *Input, st *evalState) *env {
@@ -211,6 +216,21 @@ func newEnv(in *Input, st *evalState) *env {
 		Month: func(tz string) (int, error) {
 			t, err := inZone(tz)
 			return int(t.Month()), err
+		},
+		Rule: func(i int, cond any) (bool, error) {
+			b, ok := cond.(bool)
+			switch {
+			case !ok:
+				return false, fmt.Errorf("rule condition is %T, not a boolean", cond)
+			case st == nil:
+				return b, nil
+			case st.noRules:
+				return false, nil
+			}
+			if b && i < len(st.matched) {
+				st.matched[i] = true
+			}
+			return b, nil
 		},
 	}
 }
@@ -343,41 +363,27 @@ func usd(f float64) decimal.Decimal { return decimal.NewFromFloat(f).Div(decScal
 // Eval runs the expression. The result is always finite and non-negative;
 // anything else is an *EvalError.
 func (p *Program) Eval(in Input) (*Result, error) {
-	st := &evalState{}
-	e := newEnv(&in, st)
-	value, err := runFloat(p.base, e)
+	st := &evalState{matched: make([]bool, len(p.rules))}
+	value, err := p.run(&in, st)
 	if err != nil {
-		return nil, evalErr(CodeRuntime, err.Error())
+		return nil, err
 	}
-	if !finiteNonNeg(value) {
-		return nil, evalErr(CodeBadResult, fmt.Sprint(value))
-	}
-	res := &Result{Rules: make([]RuleResult, 0, len(p.rules))}
+	res := &Result{Value: value, Cost: usd(value), Rules: make([]RuleResult, len(p.rules))}
 	mult := decimal.NewFromInt(1)
-	for _, r := range p.rules {
-		matched, err := expr.Run(r.condProg, e)
-		if err != nil {
-			return nil, evalErr(CodeRuntime, fmt.Sprintf("rule %q: %v", r.cond, err))
+	for i, r := range p.rules {
+		res.Rules[i] = RuleResult{Cond: r.cond, Multiplier: r.mult, Matched: st.matched[i]}
+		if st.matched[i] {
+			mult = mult.Mul(decimal.NewFromFloat(r.mult))
 		}
-		rr := RuleResult{Cond: r.cond, Matched: matched == true}
-		if r.multConst != nil {
-			rr.Multiplier = *r.multConst
-		} else if m, err := runFloat(r.multProg, e); err == nil {
-			rr.Multiplier = m
-		} else if rr.Matched {
-			return nil, evalErr(CodeRuntime, fmt.Sprintf("rule %q multiplier: %v", r.cond, err))
-		}
-		if rr.Matched {
-			if !finiteNonNeg(rr.Multiplier) {
-				return nil, evalErr(CodeBadResult, fmt.Sprintf("rule %q multiplier %v", r.cond, rr.Multiplier))
-			}
-			mult = mult.Mul(decimal.NewFromFloat(rr.Multiplier))
-		}
-		res.Rules = append(res.Rules, rr)
 	}
-	base := usd(value)
-	res.Value = value * mult.InexactFloat64()
-	res.Cost = base.Mul(mult)
+	base := res.Cost
+	if slices.Contains(st.matched, true) {
+		v, err := p.run(&in, &evalState{noRules: true})
+		if err != nil {
+			return nil, err
+		}
+		base = usd(v)
+	}
 	if len(st.tiers) > 0 {
 		res.Tier = st.tiers[len(st.tiers)-1]
 	}
@@ -395,6 +401,18 @@ func (p *Program) Eval(in Input) (*Result, error) {
 	}
 	res.Breakdown.Subtotal = sub
 	return res, nil
+}
+
+// run evaluates the program once; the value must be finite and non-negative.
+func (p *Program) run(in *Input, st *evalState) (float64, error) {
+	value, err := runFloat(p.prog, newEnv(in, st))
+	if err != nil {
+		return 0, evalErr(CodeRuntime, err.Error())
+	}
+	if !finiteNonNeg(value) {
+		return 0, evalErr(CodeBadResult, fmt.Sprint(value))
+	}
+	return value, nil
 }
 
 // items evaluates the additive terms of every tier that was hit.

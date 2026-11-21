@@ -2,13 +2,13 @@
 // 7.3). It is a pure package: no database, no network, no clock except the
 // request time passed in by the caller.
 //
-// An expression has the shape
-//
-//	[v1:] <base> [||| <rule>]...
-//
-// where <base> computes the price in "micro-dollars" (token coefficients are
-// USD per million tokens, so the value divided by 1e6 is USD) and every
-// <rule> is a request surcharge of the form `cond ? multiplier : 1`.
+// An expression, optionally prefixed "v1:", computes the price in
+// "micro-dollars" (token coefficients are USD per million tokens, so the
+// value divided by 1e6 is USD). A request surcharge is written in the
+// language itself, `(base) * (cond ? multiplier : 1)`: every conditional of
+// the shape `cond ? <numeric literal> : 1` whose condition reads the request
+// or the usage (param, header, u, hour, minute, weekday, day, month) is a
+// traced rule, reported as matched or not by every evaluation.
 //
 // The engine is built on github.com/expr-lang/expr. The design follows the
 // ideas of new-api's billing expressions, but the implementation is original.
@@ -36,9 +36,6 @@ const Scale = 1_000_000
 
 // TokenVars are the token variables of v1, in display order.
 var TokenVars = []string{"p", "c", "cr", "cc", "cc1h", "img", "img_o", "ai", "ao"}
-
-// RuleSeparator separates the base expression from request rules.
-const RuleSeparator = "|||"
 
 var versionPrefix = regexp.MustCompile(`^v(\d+)\s*:`)
 
@@ -69,37 +66,6 @@ func Hash(src string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// splitRules splits on "|||" outside string literals.
-func splitRules(body string) []string {
-	var parts []string
-	var quote byte
-	start := 0
-	for i := 0; i < len(body); i++ {
-		ch := body[i]
-		if quote != 0 {
-			if ch == '\\' && quote != '`' {
-				i++
-				continue
-			}
-			if ch == quote {
-				quote = 0
-			}
-			continue
-		}
-		switch ch {
-		case '"', '\'', '`':
-			quote = ch
-		case '|':
-			if strings.HasPrefix(body[i:], RuleSeparator) {
-				parts = append(parts, strings.TrimSpace(body[start:i]))
-				i += len(RuleSeparator) - 1
-				start = i + 1
-			}
-		}
-	}
-	return append(parts, strings.TrimSpace(body[start:]))
-}
-
 // ---------------------------------------------------------------- program
 
 // Program is a compiled, analysed expression. It is immutable and safe for
@@ -109,9 +75,9 @@ type Program struct {
 	source  string // canonical "v1:<body>"
 	hash    string
 
-	base  *vm.Program
-	rules []*rule
-	tiers []*tierDef // tier() calls of the base expression, source order
+	prog  *vm.Program
+	rules []*rule    // traced rules, in evaluation-trace order
+	tiers []*tierDef // tier() calls, source order
 
 	used      map[string]bool // token variables and "len"
 	params    []string
@@ -121,11 +87,10 @@ type Program struct {
 	issues    []Issue // non-fatal findings (warnings) from analysis
 }
 
+// rule is a traced request rule: `cond ? mult : 1`.
 type rule struct {
-	cond      string // canonical condition text
-	condProg  *vm.Program
-	multProg  *vm.Program
-	multConst *float64 // set when the multiplier is a numeric literal
+	cond string // canonical condition text
+	mult float64
 }
 
 type tierDef struct {
@@ -186,7 +151,7 @@ func (p *Program) TierNames() []string {
 	return out
 }
 
-// RuleConds lists the request rule conditions.
+// RuleConds lists the traced request rule conditions.
 func (p *Program) RuleConds() []string {
 	out := make([]string, len(p.rules))
 	for i, r := range p.rules {
@@ -236,34 +201,22 @@ func Compile(src string) (*Program, error) {
 	if body == "" {
 		return nil, compileErr(CodeEmpty, "")
 	}
-	parts := splitRules(body)
 	p := &Program{
 		version: version,
 		source:  fmt.Sprintf("v%d:%s", version, body),
 		used:    map[string]bool{},
 	}
 	p.hash = Hash(p.source)
-	a := newAnalyzer(p)
-
-	baseSrc := parts[0]
-	if baseSrc == "" {
-		return nil, compileErr(CodeEmpty, "")
-	}
-	if p.base, err = expr.Compile(baseSrc, options(expr.AsFloat64())...); err != nil {
+	tracer := &ruleTracer{}
+	if p.prog, err = expr.Compile(body, options(expr.AsFloat64(), expr.Patch(tracer))...); err != nil {
 		return nil, compileErr(CodeSyntax, err.Error())
 	}
-	if err := a.analyzeBase(baseSrc); err != nil {
+	if err := newAnalyzer(p).analyze(body); err != nil {
 		return nil, err
 	}
-	for i, rs := range parts[1:] {
-		r, err := a.analyzeRule(rs)
-		if err != nil {
-			err.Issue.Detail = fmt.Sprintf("rule %d: %s", i+1, err.Issue.Detail)
-			return nil, err
-		}
-		p.rules = append(p.rules, r)
+	if tracer.n != len(p.rules) {
+		return nil, compileErr(CodeSyntax, fmt.Sprintf("traced %d rules, analysed %d", tracer.n, len(p.rules)))
 	}
-	a.finish()
 	return p, nil
 }
 

@@ -26,7 +26,7 @@ describe('the list price of a multiplier rule in the mock', () => {
 
     const quote = (await call('POST', '/pricing/quote', { user_id: 1, group_id: 1, model: 'gpt-4o-mini', usage: { p: 1_000_000, c: 0, cc1h: 0 } })).body.data
     expect(quote.list_price).toEqual({ ...base, multiplier: '0.8' })
-    expect(Number(quote.list_cost)).toBeCloseTo(Number(base.config.p) * 0.8, 8)
+    expect(Number(quote.list_cost)).toBeCloseTo(Number(base.config.tiers[0].p) * 0.8, 8)
   })
 
   it('keeps a custom price a price of its own, without a multiplier', async () => {

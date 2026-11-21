@@ -4,13 +4,14 @@ import { useI18n } from 'vue-i18n'
 import { SAlert, SField, SHint, SInput, SSegmented, SStack, type SelectOption } from '@sub2api/ui'
 import type { PriceDef, PriceRule } from '@/api/pricing'
 import { applyRule, priceBrief } from './pricingFormat'
-import { customFields, startRule, validRule } from './ruleDrafts'
+import { customFields, customPrices, customRule, startRule, takesCustom, validRule } from './ruleDrafts'
 import { priceLabel } from './ruleText'
 
 // One price rule over the global price `base`: none (the price follows the
 // level above, named by `inheritLabel`), a multiplier of the global price, or
-// a price of its own in the global price's mode. An expression price takes a
-// multiplier only; a model without a global price takes no rule at all.
+// a price of its own in the global price's mode. A global price with tiers,
+// rules or an expression takes a multiplier only; a model without a global
+// price takes no rule at all.
 // Every edit emits a whole new rule, valid or not: one that is not says so
 // under its fields, and the table that holds it refuses to save it.
 type Kind = 'inherit' | PriceRule['kind']
@@ -25,15 +26,15 @@ const emit = defineEmits<{ (e: 'update:modelValue', v: PriceRule | null): void }
 const { t } = useI18n()
 
 const kind = computed<Kind>(() => props.modelValue?.kind ?? 'inherit')
-const expressionOnly = computed(() => props.base?.mode === 'expression')
+const multiplierOnly = computed(() => !!props.base && !takesCustom(props.base))
 const options = computed<SelectOption[]>(() => [
   { value: 'inherit', label: props.inheritLabel },
   { value: 'multiplier', label: t('pricing.rule.multiplier') },
-  { value: 'custom', label: t('pricing.rule.custom'), disabled: expressionOnly.value }
+  { value: 'custom', label: t('pricing.rule.custom'), disabled: multiplierOnly.value }
 ])
 const valid = computed(() => validRule(props.modelValue))
 /** The prices of a custom rule; none while the rule is of another kind. */
-const custom = computed(() => (props.modelValue?.kind === 'custom' ? { rule: props.modelValue, ...customFields(props.modelValue.mode) } : null))
+const custom = computed(() => (props.modelValue?.kind === 'custom' ? { rule: props.modelValue, prices: customPrices(props.modelValue), ...customFields(props.modelValue.mode) } : null))
 const preview = computed(() => {
   const applied = applyRule(props.base, props.modelValue)
   return priceBrief(applied) ? t('pricing.rule.applied', { price: priceLabel(t, applied) }) : t('pricing.rule.appliedOpaque')
@@ -52,7 +53,7 @@ function choose(next: Kind) {
   if (props.base) emit('update:modelValue', startRule(next, props.base))
 }
 function setPrice(rule: Extract<PriceRule, { kind: 'custom' }>, key: string, price: number | null) {
-  emit('update:modelValue', { kind: 'custom', mode: rule.mode, config: { ...rule.config, [key]: price } })
+  emit('update:modelValue', customRule(rule.mode, { ...customPrices(rule), [key]: price }))
 }
 </script>
 
@@ -68,7 +69,7 @@ function setPrice(rule: Extract<PriceRule, { kind: 'custom' }>, key: string, pri
       @update:model-value="choose($event as Kind)"
     />
     <SAlert v-if="!base" tone="warning" dense data-testid="price-rule-no-base">{{ t('pricing.rule.noBase') }}</SAlert>
-    <SHint v-else-if="expressionOnly" size="xs" data-testid="price-rule-expression-only">{{ t('pricing.rule.expressionOnly') }}</SHint>
+    <SHint v-else-if="multiplierOnly" size="xs" data-testid="price-rule-multiplier-only">{{ t('pricing.rule.multiplierOnly') }}</SHint>
 
     <div v-if="modelValue?.kind === 'multiplier'" class="flex flex-wrap items-center gap-x-2 gap-y-1">
       <SInput
@@ -93,7 +94,7 @@ function setPrice(rule: Extract<PriceRule, { kind: 'custom' }>, key: string, pri
       <SStack direction="row" :gap="2" wrap>
         <SField v-for="(key, i) in custom.keys" :key="key" size="sm" class="w-28" :label="fieldLabel(key)" :required="i < custom.required">
           <SInput
-            :model-value="custom.rule.config[key]"
+            :model-value="custom.prices[key]"
             type="number"
             min="0"
             step="any"

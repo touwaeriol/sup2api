@@ -24,7 +24,7 @@ type PriceRule struct {
 	Expression  string
 	ExprVersion int
 	ExprHash    string
-	VideoOnly   bool // video templates and video_* expressions require declared video support
+	VideoOnly   bool // expressions that read video_* usage facts require declared video support
 	// Source is where the list price comes from (PriceSource*); "" on prices
 	// stored before price rules existed, which were all global.
 	Source string `json:",omitempty"`

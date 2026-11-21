@@ -7,6 +7,7 @@ import { fail, noContent, on, paginate, type MockHandler, type MockRequest, type
 import { caller, hasPerm } from './core'
 import { groupPlatforms } from './accounts'
 import { globalPrice, money, priceCost, pricedModels, type PriceDef } from './billing'
+import { compactTokenConfig, simpleTier, takesCustomPrice } from '../src/views/prices/priceExpr'
 import { groupModels, groups, invalid, match, myGroups, offeredRules, userOut, users, type MockGroup, type MockUser } from './resources'
 import {
   accessOf,
@@ -246,13 +247,19 @@ route('PUT', '/groups/:id/segments', 'group:manage', onGroup((g, req) => {
 // ------------------------------------------------------------------ model prices
 
 /**
- * The prices a custom rule may set per mode; the first `required` of them
- * must be set. The console checks a rule by the same table before it saves
- * (customFields in src/components/pricing/ruleDrafts.ts): keep the two alike.
+ * The prices a custom rule may set per mode, as one row (a per-token rule is
+ * one token tier); the first `required` of them must be set. The console
+ * checks a rule by the same table before it saves (customFields in
+ * src/components/pricing/ruleDrafts.ts): keep the two alike.
  */
 const CUSTOM_PRICES = {
   per_request: { keys: ['price'], required: 1 },
   per_token: { keys: ['p', 'c', 'cr', 'cc', 'cc1h'], required: 2 }
+}
+
+/** The row of prices of a custom rule; null when a per-token one is not a single token tier without rules. */
+function customRow(rule: any): Record<string, any> | null {
+  return rule.mode === 'per_request' ? (rule.config ?? {}) : simpleTier(rule.config)
 }
 
 /** Why a rule cannot be saved over the global price `base`; null when it can. */
@@ -260,10 +267,12 @@ function ruleError(rule: any, base: PriceDef | null): string | null {
   if (!base) return 'the model has no global price'
   if (rule?.kind === 'multiplier') return validRate(rule.multiplier) ? null : `multiplier must be 0 or more and ${RATE_LIMITS}`
   if (rule?.kind !== 'custom') return 'rule must be a multiplier or a custom price'
-  if (base.mode === 'expression') return 'an expression price takes a multiplier only'
+  if (!takesCustomPrice(base.mode, base.config)) return 'an expression price, or a per-token price with tiers or rules, takes a multiplier only'
   if (rule.mode !== base.mode) return `a custom price is ${base.mode}, as the global price`
-  const { keys, required } = CUSTOM_PRICES[base.mode]
-  const price = (k: string) => rule.config?.[k] ?? null
+  const row = customRow(rule)
+  if (!row) return 'a custom per-token price is one token tier without rules'
+  const { keys, required } = CUSTOM_PRICES[base.mode as keyof typeof CUSTOM_PRICES]
+  const price = (k: string) => row[k] ?? null
   if (keys.some((k) => price(k) !== null && !(Number.isFinite(price(k)) && price(k) >= 0))) return 'prices must be non-negative numbers'
   return keys.slice(0, required).every((k) => price(k) !== null) ? null : `${keys.slice(0, required).join(', ')} required`
 }
@@ -280,8 +289,8 @@ function rulePatchError(g: MockGroup, item: any): string | null {
 function storedRule(rule: any): PriceRule | null {
   if (rule == null) return null
   if (rule.kind === 'multiplier') return { kind: 'multiplier', multiplier: String(rule.multiplier) }
-  const mode: 'per_request' | 'per_token' = rule.mode
-  return { kind: 'custom', mode, config: Object.fromEntries(CUSTOM_PRICES[mode].keys.map((k) => [k, rule.config?.[k] ?? null])) }
+  if (rule.mode === 'per_request') return { kind: 'custom', mode: 'per_request', config: { price: rule.config?.price ?? null } }
+  return { kind: 'custom', mode: 'per_token', config: compactTokenConfig(rule.config) }
 }
 
 /** A handler of /groups/:id/model-prices[?segment_id=]: `s` is the segment asked for (null without one); 400 when segment_id is no positive integer, 404 when it does not exist. */

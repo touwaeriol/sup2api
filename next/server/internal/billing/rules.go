@@ -26,11 +26,14 @@ type Rule struct {
 	// price times it, and follows the global price when that changes.
 	Multiplier *string `json:"multiplier,omitempty"`
 	// Mode and Config (kind custom): a price of its own in the mode of the
-	// global price, per_token (p, c, cr, cc, cc1h) or per_request (price).
-	Mode   string              `json:"mode,omitempty"`
-	Config map[string]*float64 `json:"config,omitempty"`
-	// Inactive marks a custom price in another mode than the global price has
-	// now: it is skipped and the next level prices the model. Output only.
+	// global price, with the config of a price in that mode. Only a
+	// per_request global price, or a per_token one with one tier priced by
+	// the token and no rules, takes one (PriceDef.customMode).
+	Mode   string          `json:"mode,omitempty"`
+	Config json.RawMessage `json:"config,omitempty"`
+	// Inactive marks a custom price that the global price takes no more (its
+	// mode changed, or it got tiers or rules): it is skipped and the next
+	// level prices the model. Output only.
 	Inactive bool `json:"inactive,omitempty"`
 }
 
@@ -50,10 +53,10 @@ func (r *storedRule) setScale(n decimal.Decimal) {
 	r.scale, r.Multiplier = n, &text
 }
 
-// inactive reports whether the rule does not apply over a global price of
-// mode: a custom price keeps the mode it was saved in.
-func (r *storedRule) inactive(mode string) bool {
-	return r.Kind == core.PriceRuleCustom && r.Mode != mode
+// inactive reports whether the rule does not apply over the global price
+// base: a custom price keeps the mode it was saved in.
+func (r *storedRule) inactive(base PriceDef) bool {
+	return r.Kind == core.PriceRuleCustom && r.Mode != base.customMode()
 }
 
 // view returns the rule as the API shows it over the global price base
@@ -63,7 +66,7 @@ func (r *storedRule) view(base *PriceDef) *Rule {
 		return nil
 	}
 	out := r.Rule
-	out.Inactive = base != nil && r.inactive(base.Mode)
+	out.Inactive = base != nil && r.inactive(*base)
 	return &out
 }
 
@@ -91,14 +94,14 @@ func (r *storedRule) price(global core.PriceRule, source string) *core.PriceRule
 // the group's own.
 type ruleLevels struct{ segment, group *storedRule }
 
-// applied returns the first rule that applies over a global price of mode,
+// applied returns the first rule that applies over the global price base,
 // the segment's before the group's, and where the list price then comes from.
 // It is the one place the levels are ordered.
-func (l ruleLevels) applied(mode string) (*storedRule, string) {
+func (l ruleLevels) applied(base PriceDef) (*storedRule, string) {
 	switch {
-	case l.segment != nil && !l.segment.inactive(mode):
+	case l.segment != nil && !l.segment.inactive(base):
 		return l.segment, core.PriceSourceSegment
-	case l.group != nil && !l.group.inactive(mode):
+	case l.group != nil && !l.group.inactive(base):
 		return l.group, core.PriceSourceGroup
 	}
 	return nil, core.PriceSourceGlobal
@@ -130,7 +133,7 @@ type ruleRow struct {
 	Kind       string
 	Multiplier *decimal.Decimal
 	Mode       string
-	Config     store.JSON[map[string]*float64]
+	Config     json.RawMessage
 	Expression string
 	ExprHash   string
 }
@@ -149,7 +152,7 @@ func loadRules(ctx context.Context, q *gorm.DB, cond string, args ...any) (ruleS
 	out := make(ruleSet, len(rows))
 	for _, row := range rows {
 		on := core.PriceQuery{GroupID: row.GroupID, SegmentID: row.SegmentID, Model: row.Model}
-		r := &storedRule{Rule: Rule{Kind: row.Kind, Mode: row.Mode, Config: row.Config.V},
+		r := &storedRule{Rule: Rule{Kind: row.Kind, Mode: row.Mode, Config: row.Config},
 			expression: row.Expression, exprHash: row.ExprHash}
 		if row.Multiplier != nil {
 			r.setScale(*row.Multiplier)
@@ -164,17 +167,6 @@ func loadRules(ctx context.Context, q *gorm.DB, cond string, args ...any) (ruleS
 		}
 	}
 	return out, nil
-}
-
-// customPrices are the prices a custom rule may set per mode; the first
-// required of them must be set. The console checks a rule by the same table
-// before it saves.
-var customPrices = map[string]struct {
-	keys     []string
-	required int
-}{
-	expr.ModePerRequest: {[]string{"price"}, 1},
-	expr.ModePerToken:   {[]string{"p", "c", "cr", "cc", "cc1h"}, 2},
 }
 
 // checkRule validates a rule over the global price of its model (nil = the
@@ -195,46 +187,31 @@ func checkRule(ctx context.Context, in Rule, base *PriceDef) (*storedRule, error
 		r.setScale(scale)
 		return r, nil
 	case core.PriceRuleCustom:
-		return checkCustom(ctx, in, base.Mode)
+		return checkCustom(ctx, in, *base)
 	}
 	return nil, errors.New(core.Text(ctx, "rule must be a multiplier or a custom price", "规则必须是倍数或自定义价"))
 }
 
-// checkCustom validates a custom price over a global price of mode and
-// generates its expression. Only the prices of the mode are kept.
-func checkCustom(ctx context.Context, in Rule, mode string) (*storedRule, error) {
-	prices, ok := customPrices[mode]
-	if !ok {
-		return nil, errors.New(core.Text(ctx, "an expression price takes a multiplier only", "表达式计费的模型只能用倍数规则"))
+// checkCustom validates a custom price over the global price base and
+// generates its expression.
+func checkCustom(ctx context.Context, in Rule, base PriceDef) (*storedRule, error) {
+	mode := base.customMode()
+	if mode == "" {
+		return nil, errors.New(core.Text(ctx, "an expression price, or a per-token price with tiers or rules, takes a multiplier only",
+			"表达式计费、分档或带加价规则的按 token 计费只能用倍数规则"))
 	}
 	if in.Mode != mode {
 		return nil, fmt.Errorf(core.Text(ctx, "a custom price is %s, as the global price", "自定义价的计费方式须与全局价相同：%s"), mode)
 	}
-	config := make(map[string]*float64, len(prices.keys))
-	for _, key := range prices.keys {
-		if v := in.Config[key]; v != nil && *v < 0 {
-			return nil, errors.New(core.Text(ctx, "prices must be non-negative numbers", "价格必须为非负数"))
-		}
-		config[key] = in.Config[key]
-	}
-	for _, key := range prices.keys[:prices.required] {
-		if config[key] == nil {
-			return nil, fmt.Errorf(core.Text(ctx, "%s required", "%s 必填"), strings.Join(prices.keys[:prices.required], ", "))
-		}
-	}
-	raw, err := json.Marshal(config)
+	src, err := expr.Generate(mode, in.Config)
 	if err != nil {
-		return nil, err
-	}
-	src, err := expr.Generate(mode, raw)
-	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf(core.Text(ctx, "invalid custom price: %v", "自定义价无效：%v"), err)
 	}
 	prog, err := expr.CompileCached(src)
 	if err != nil {
 		return nil, err
 	}
-	return &storedRule{Rule: Rule{Kind: in.Kind, Mode: mode, Config: config},
+	return &storedRule{Rule: Rule{Kind: in.Kind, Mode: mode, Config: in.Config},
 		expression: src, exprHash: prog.Hash(), exprVersion: prog.Version()}, nil
 }
 
@@ -301,11 +278,7 @@ func (w *ruleWrites) addRule(on core.PriceQuery, removed bool, r *storedRule, up
 		row.Mode = &r.Mode
 	}
 	if r.Config != nil {
-		doc, err := json.Marshal(r.Config)
-		if err != nil {
-			return err
-		}
-		row.Config = doc
+		row.Config = store.Bytes(r.Config)
 	}
 	level := 0
 	if on.SegmentID != 0 {

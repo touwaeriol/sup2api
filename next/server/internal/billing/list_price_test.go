@@ -13,24 +13,15 @@ import (
 // Global prices a multiplier may be on.
 var (
 	handWrittenPrice = PriceDef{Mode: "expression", Config: json.RawMessage(`{}`),
-		Expression: `tier("base", p*3 + c*15) ||| param("fast") == true ? 2 : 1`}
-	perTokenPrice = PriceDef{Mode: "per_token", Config: json.RawMessage(`{"p": 1, "c": 5}`), Expression: `tier("base", p*1 + c*5)`}
-	tieredPrice   = PriceDef{Mode: "expression",
+		Expression: `(tier("base", p*3 + c*15)) * (param("fast") == true ? 2 : 1)`}
+	perTokenPrice = PriceDef{Mode: "per_token", Config: json.RawMessage(`{"tiers": [{"name": "base", "p": 1, "c": 5}], "rules": []}`),
+		Expression: `tier("base", p*1 + c*5)`}
+	tieredPrice = PriceDef{Mode: "per_token",
 		Config: json.RawMessage(`{"tiers": [{"name": "standard", "max_len": 200000, "p": 3, "c": 15},
-			{"name": "long", "max_len": null, "p": 6, "c": 22.5}]}`),
-		Expression: `len <= 200000 ? tier("standard", p*3 + c*15) : tier("long", p*6 + c*22.5)`}
+			{"name": "long", "max_len": null, "p": 6, "c": 22.5}], "rules": [{"multiplier": 2, "conds": [{"source": "param", "key": "fast", "op": "eq", "value": true}]}]}`),
+		Expression: `(len <= 200000 ? tier("standard", p*3 + c*15) : tier("long", p*6 + c*22.5)) * (param("fast") == true ? 2 : 1)`}
+	videoPrice = PriceDef{Mode: "expression", Config: json.RawMessage(`{}`), Expression: `tier("video", c * (u("video_input") == true ? 4.3 : 7))`}
 )
-
-// videoTemplate is a video price with the expression generated from it.
-func videoTemplate(t *testing.T) PriceDef {
-	t.Helper()
-	p := PriceDef{Mode: "expression", Config: json.RawMessage(`{"video": {"price_per_million_tokens": 7, "video_price_per_second": 0.2,
-		"resolution_prices": [{"sizes": ["1920x1080"], "price_per_million_tokens": 9}]}}`)}
-	var err error
-	p.Expression, err = expr.Generate(p.Mode, p.Config)
-	require.NoError(t, err)
-	return p
-}
 
 // The list price a rule makes of a global price, as the pricing endpoints
 // show it: a multiplier goes beside the global price, which stays as it is.
@@ -39,8 +30,7 @@ func TestListPrice(t *testing.T) {
 		base.Multiplier = dec(n)
 		return base
 	}
-	videoPrice := videoTemplate(t)
-	own := &storedRule{Rule: Rule{Kind: core.PriceRuleCustom, Mode: "per_token", Config: map[string]*float64{"p": usd(0.8), "c": usd(4), "cr": nil}},
+	own := &storedRule{Rule: Rule{Kind: core.PriceRuleCustom, Mode: "per_token", Config: json.RawMessage(`{"tiers":[{"name":"base","p":0.8,"c":4}]}`)},
 		expression: `tier("base", p*0.8 + c*4)`}
 	cases := []struct {
 		name string
@@ -53,7 +43,7 @@ func TestListPrice(t *testing.T) {
 		{"multiplier 0", perTokenPrice, "0", scaled(perTokenPrice, "0")},
 		{"multiplier 1", perTokenPrice, "1", scaled(perTokenPrice, "1")},
 		{"tiers", tieredPrice, "0.5", scaled(tieredPrice, "0.5")},
-		{"video template", videoPrice, "2", scaled(videoPrice, "2")},
+		{"video expression", videoPrice, "2", scaled(videoPrice, "2")},
 		{"hand-written expression", handWrittenPrice, "2", scaled(handWrittenPrice, "2")},
 	}
 	for _, tc := range cases {
@@ -66,16 +56,16 @@ func TestListPrice(t *testing.T) {
 		})
 	}
 	t.Run("custom price", func(t *testing.T) {
-		require.JSONEq(t, `{"mode": "per_token", "config": {"p": 0.8, "c": 4, "cr": null}, "expression": "tier(\"base\", p*0.8 + c*4)"}`,
+		require.JSONEq(t, `{"mode": "per_token", "config": {"tiers": [{"name": "base", "p": 0.8, "c": 4}]}, "expression": "tier(\"base\", p*0.8 + c*4)"}`,
 			jsonOf(t, listPrice(perTokenPrice, own)))
 	})
 	// The multiplier is a decimal string without trailing zeros, there only
 	// under a multiplier rule.
-	require.JSONEq(t, `{"mode": "per_token", "config": {"p": 1, "c": 5}, "expression": "tier(\"base\", p*1 + c*5)"}`,
+	require.JSONEq(t, `{"mode": "per_token", "config": {"tiers": [{"name": "base", "p": 1, "c": 5}], "rules": []}, "expression": "tier(\"base\", p*1 + c*5)"}`,
 		jsonOf(t, listPrice(perTokenPrice, nil)))
-	require.JSONEq(t, `{"mode": "per_token", "config": {"p": 1, "c": 5}, "expression": "tier(\"base\", p*1 + c*5)", "multiplier": "1.2"}`,
+	require.JSONEq(t, `{"mode": "per_token", "config": {"tiers": [{"name": "base", "p": 1, "c": 5}], "rules": []}, "expression": "tier(\"base\", p*1 + c*5)", "multiplier": "1.2"}`,
 		jsonOf(t, listPrice(perTokenPrice, times("1.20"))))
-	require.JSONEq(t, `{"mode": "per_token", "config": {"p": 1, "c": 5}, "expression": "tier(\"base\", p*1 + c*5)", "multiplier": "0"}`,
+	require.JSONEq(t, `{"mode": "per_token", "config": {"tiers": [{"name": "base", "p": 1, "c": 5}], "rules": []}, "expression": "tier(\"base\", p*1 + c*5)", "multiplier": "0"}`,
 		jsonOf(t, listPrice(perTokenPrice, times("0"))))
 }
 
@@ -100,71 +90,63 @@ func costOf(t *testing.T, expression string) string {
 }
 
 // What a downstream sup2api imports is the whole list price: the multiplier
-// that listPrice leaves beside the price goes into it, into the config where
-// there is one to scale and else into the expression, as a rule.
+// that listPrice leaves beside the price goes into it, into the prices of a
+// config where there is one and else around the expression.
 func TestExportPrice(t *testing.T) {
 	handWritten := PriceDef{Mode: "expression", Config: json.RawMessage(`{}`), Expression: `tier("base", p*3 + c*15)`}
 	stale := customRule("per_request", `tier("base", flat(1))`)
-	videoPrice := videoTemplate(t)
 
 	p, err := exportPrice("m", handWritten, ruleLevels{group: times("1.2")})
 	require.NoError(t, err)
-	require.Equal(t, syncPrice{Model: "m", Mode: "expression", Config: json.RawMessage(`{}`), Expression: `tier("base", p*3 + c*15) ||| true ? 1.2 : 1`}, p)
+	require.Equal(t, syncPrice{Model: "m", Mode: "expression", Config: json.RawMessage(`{}`), Expression: `(tier("base", p*3 + c*15)) * 1.2`}, p)
 	require.NoError(t, p.compile())
 
 	p, err = exportPrice("m", perTokenPrice, ruleLevels{segment: times("0.5"), group: times("1.2")})
 	require.NoError(t, err)
 	require.Equal(t, `tier("base", p*0.5 + c*2.5)`, p.Expression)
-	require.JSONEq(t, `{"p": 0.5, "c": 2.5}`, string(p.Config))
+	require.JSONEq(t, `{"tiers": [{"name": "base", "p": 0.5, "c": 2.5}], "rules": []}`, string(p.Config))
 
 	p, err = exportPrice("m", perTokenPrice, ruleLevels{segment: stale})
 	require.NoError(t, err)
 	require.Equal(t, syncPrice{Model: "m", Mode: perTokenPrice.Mode, Config: perTokenPrice.Config, Expression: perTokenPrice.Expression}, p)
 
-	// Free: a rule that makes the expression cost nothing.
+	// Free: the expression times 0.
 	p, err = exportPrice("m", handWritten, ruleLevels{group: times("0")})
 	require.NoError(t, err)
-	require.Equal(t, `tier("base", p*3 + c*15) ||| true ? 0 : 1`, p.Expression)
+	require.Equal(t, `(tier("base", p*3 + c*15)) * 0`, p.Expression)
 	require.Equal(t, "18", costOf(t, handWritten.Expression))
 	require.Equal(t, "0", costOf(t, p.Expression))
 
-	// A multiplier of 1 changes nothing: no rule is appended.
+	// A multiplier of 1 changes nothing.
 	p, err = exportPrice("m", handWritten, ruleLevels{group: times("1.0")})
 	require.NoError(t, err)
 	require.Equal(t, syncPrice{Model: "m", Mode: handWritten.Mode, Config: handWritten.Config, Expression: handWritten.Expression}, p)
 
-	// Tiers are not scaled in the config: the expression is the price, and
-	// the config of an expression price may lag behind it.
+	// Tiers are scaled in the config, request rules are not, and the
+	// expression is generated from it.
 	p, err = exportPrice("m", tieredPrice, ruleLevels{group: times("0.5")})
 	require.NoError(t, err)
-	require.Equal(t, syncPrice{Model: "m", Mode: "expression", Config: json.RawMessage(`{}`), Expression: tieredPrice.Expression + ` ||| true ? 0.5 : 1`}, p)
+	require.JSONEq(t, `{"tiers": [{"name": "standard", "max_len": 200000, "p": 1.5, "c": 7.5}, {"name": "long", "max_len": null, "p": 3, "c": 11.25}],
+		"rules": [{"multiplier": 2, "conds": [{"source": "param", "key": "fast", "op": "eq", "value": true}]}]}`, string(p.Config))
+	require.Equal(t, `(len <= 200000 ? tier("standard", p*1.5 + c*7.5) : tier("long", p*3 + c*11.25)) * (param("fast") == true ? 2 : 1)`, p.Expression)
 
-	// A video template is scaled in its config, the expression generated
-	// from it; it cannot be free, so that goes into a rule.
-	p, err = exportPrice("m", videoPrice, ruleLevels{group: times("2")})
+	// A unit=request tier and a per-request price scale their price.
+	p, err = exportPrice("m", PriceDef{Mode: "per_token", Config: json.RawMessage(`{"tiers": [{"name": "bulk", "unit": "request", "price": 0.05}]}`)}, ruleLevels{group: times("2")})
 	require.NoError(t, err)
-	require.JSONEq(t, `{"video": {"price_per_million_tokens": 14, "video_price_per_second": 0.4,
-		"resolution_prices": [{"sizes": ["1920x1080"], "price_per_million_tokens": 18}]}}`, string(p.Config))
-	want, err := expr.Generate(p.Mode, p.Config)
+	require.Equal(t, `tier("bulk", flat(0.1))`, p.Expression)
+	p, err = exportPrice("m", PriceDef{Mode: "per_request", Config: json.RawMessage(`{"price": 0.05}`)}, ruleLevels{group: times("3")})
 	require.NoError(t, err)
-	require.Equal(t, want, p.Expression)
-	require.NotEqual(t, videoPrice.Expression, p.Expression)
-	p, err = exportPrice("m", videoPrice, ruleLevels{group: times("0")})
-	require.NoError(t, err)
-	require.Equal(t, syncPrice{Model: "m", Mode: "expression", Config: json.RawMessage(`{}`), Expression: videoPrice.Expression + ` ||| true ? 0 : 1`}, p)
+	require.Equal(t, `tier("base", flat(0.15))`, p.Expression)
 
-	// Text after a comment with an odd number of quotes is no rule: the price
-	// cannot carry the multiplier, and is not exported without it.
-	for _, comment := range []string{`// don't`, `// 3" display`, "// a `tick"} {
+	// A line comment ends before the ")".
+	for _, comment := range []string{`// don't`, `// 3" display`, "// a `tick", `// list`} {
 		quoted := PriceDef{Mode: "expression", Config: json.RawMessage(`{}`), Expression: `tier("base", p*3 + c*15) ` + comment}
-		_, err = exportPrice("m", quoted, ruleLevels{group: times("2")})
-		require.Error(t, err, comment)
-		_, err = exportPrice("m", quoted, ruleLevels{})
+		p, err = exportPrice("m", quoted, ruleLevels{group: times("2")})
 		require.NoError(t, err, comment)
+		require.Equal(t, "36", costOf(t, p.Expression))
 	}
-	// A comment without one takes the rule.
-	p, err = exportPrice("m", PriceDef{Mode: "expression", Config: json.RawMessage(`{}`), Expression: `tier("base", p*3 + c*15) // list`},
+	// An expression that does not compile cannot carry the multiplier.
+	_, err = exportPrice("m", PriceDef{Mode: "expression", Config: json.RawMessage(`{}`), Expression: `tier("base", p*3 + c*15) /* open`},
 		ruleLevels{group: times("2")})
-	require.NoError(t, err)
-	require.Equal(t, "36", costOf(t, p.Expression))
+	require.Error(t, err)
 }

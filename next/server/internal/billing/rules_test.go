@@ -2,6 +2,7 @@ package billing
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/shopspring/decimal"
@@ -15,7 +16,14 @@ func dec(s string) *decimal.Decimal {
 	return &d
 }
 
-func usd(f float64) *float64 { return &f }
+// Global prices by what a custom price may do over them.
+var (
+	oneTier  = PriceDef{Mode: "per_token", Config: json.RawMessage(`{"tiers": [{"name": "base", "max_len": null, "unit": "token", "p": 1, "c": 5}], "rules": []}`)}
+	twoTiers = PriceDef{Mode: "per_token", Config: json.RawMessage(`{"tiers": [{"name": "s", "max_len": 10, "p": 1}, {"name": "l", "p": 2}]}`)}
+	ruled    = PriceDef{Mode: "per_token", Config: json.RawMessage(`{"tiers": [{"name": "base", "p": 1}],
+		"rules": [{"multiplier": 2, "conds": [{"source": "param", "key": "a", "op": "exists"}]}]}`)}
+	perRequestTier = PriceDef{Mode: "per_token", Config: json.RawMessage(`{"tiers": [{"name": "base", "unit": "request", "price": 1}]}`)}
+)
 
 func times(n string) *storedRule {
 	r := &storedRule{Rule: Rule{Kind: core.PriceRuleMultiplier}}
@@ -34,6 +42,7 @@ func TestSnapshotResolve(t *testing.T) {
 	const group, vip, other = 7, 3, 4
 	global := core.PriceRule{ID: 11, Model: "m", Mode: "per_token", Expression: `tier("base", p*1 + c*5)`, ExprVersion: 1, ExprHash: "g"}
 	video := core.PriceRule{ID: 12, Model: "video", Mode: "expression", Expression: `tier("video", c*7)`, ExprVersion: 1, ExprHash: "v", VideoOnly: true}
+	tiered := core.PriceRule{ID: 13, Model: "tiered", Mode: "per_token", Expression: `len <= 10 ? tier("s", p*1 + c*0) : tier("l", p*2 + c*0)`, ExprVersion: 1, ExprHash: "t"}
 	own := customRule("per_token", `tier("base", p*2 + c*3)`)
 	stale := customRule("per_request", `tier("base", flat(1))`)
 
@@ -88,6 +97,8 @@ func TestSnapshotResolve(t *testing.T) {
 			q: core.PriceQuery{Model: "m", GroupID: group, SegmentID: vip}, want: with(global, "", nil)},
 		{name: "a custom price never applies to an expression price", ofGroup: own, ofVIP: times("0.5"),
 			q: core.PriceQuery{Model: "video", GroupID: group}, want: with(video, "", nil)},
+		{name: "a custom price never applies to a per_token price with tiers", ofGroup: own,
+			q: core.PriceQuery{Model: "tiered", GroupID: group}, want: with(tiered, "", nil)},
 		{name: "a multiplier keeps the video admission", ofGroup: own, ofVIP: times("0.5"),
 			q: core.PriceQuery{Model: "video", GroupID: group, SegmentID: vip}, want: with(video, core.PriceSourceSegment, scaled("0.5"))},
 		{name: "no global price, no rule", ofGroup: times("1.2"), ofVIP: own,
@@ -95,8 +106,9 @@ func TestSnapshotResolve(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			snap := &priceSnapshot{byModel: map[string]core.PriceRule{"m": global, "video": video}, rules: ruleSet{}}
-			for _, model := range []string{"m", "video", "unpriced"} {
+			snap := &priceSnapshot{byModel: map[string]core.PriceRule{"m": global, "video": video, "tiered": tiered}, rules: ruleSet{},
+				bases: catalog{"m": oneTier, "video": {Mode: "expression", Config: json.RawMessage(`{}`)}, "tiered": twoTiers}}
+			for _, model := range []string{"m", "video", "tiered", "unpriced"} {
 				if tc.ofGroup != nil {
 					snap.rules[core.PriceQuery{Model: model, GroupID: group}] = tc.ofGroup
 				}
@@ -134,11 +146,14 @@ func TestSnapshotResolveCopies(t *testing.T) {
 }
 
 func TestCheckRule(t *testing.T) {
-	perToken := &PriceDef{Mode: "per_token"}
-	perRequest := &PriceDef{Mode: "per_request"}
-	expression := &PriceDef{Mode: "expression"}
+	perToken := &oneTier
+	perRequest := &PriceDef{Mode: "per_request", Config: json.RawMessage(`{"price": 1}`)}
+	expression := &PriceDef{Mode: "expression", Config: json.RawMessage(`{}`)}
 	multiplier := func(n string) Rule { return Rule{Kind: "multiplier", Multiplier: &n} }
-	tokens := func(config map[string]*float64) Rule { return Rule{Kind: "custom", Mode: "per_token", Config: config} }
+	tokens := func(config string) Rule {
+		return Rule{Kind: "custom", Mode: "per_token", Config: json.RawMessage(config)}
+	}
+	const cheap = `{"tiers": [{"name": "base", "p": 0.8, "c": 4, "cr": 0.08}], "rules": []}`
 
 	cases := []struct {
 		name    string
@@ -147,12 +162,12 @@ func TestCheckRule(t *testing.T) {
 		wantErr string
 		// What is stored of a rule that passes.
 		wantMultiplier string
-		wantConfig     map[string]*float64
 		wantExpression string
 	}{
 		{name: "no global price", rule: multiplier("1"), wantErr: "no global price"},
 		{name: "unknown kind", rule: Rule{Kind: "discount"}, base: perToken, wantErr: "a multiplier or a custom price"},
 		{name: "multiplier", rule: multiplier("1.20"), base: expression, wantMultiplier: "1.2"},
+		{name: "multiplier over tiers", rule: multiplier("1.20"), base: &twoTiers, wantMultiplier: "1.2"},
 		{name: "multiplier 0", rule: multiplier("0"), base: perToken, wantMultiplier: "0"},
 		{name: "multiplier 1", rule: multiplier("1"), base: perToken, wantMultiplier: "1"},
 		{name: "largest multiplier", rule: multiplier("999999.9999"), base: perToken, wantMultiplier: "999999.9999"},
@@ -161,19 +176,20 @@ func TestCheckRule(t *testing.T) {
 		{name: "multiplier too large", rule: multiplier("1000000"), base: perToken, wantErr: "below 1000000"},
 		{name: "multiplier too fine", rule: multiplier("1.00001"), base: perToken, wantErr: "at most 4 decimals"},
 		{name: "multiplier that is no number", rule: multiplier("much"), base: perToken, wantErr: "multiplier must be"},
-		{name: "custom over an expression price", rule: tokens(map[string]*float64{"p": usd(1), "c": usd(2)}), base: expression, wantErr: "multiplier only"},
-		{name: "custom in another mode", rule: tokens(map[string]*float64{"p": usd(1), "c": usd(2)}), base: perRequest, wantErr: "a custom price is per_request"},
-		{name: "custom without a mode", rule: Rule{Kind: "custom", Config: map[string]*float64{"price": usd(1)}}, base: perRequest, wantErr: "a custom price is per_request"},
-		{name: "custom negative price", rule: tokens(map[string]*float64{"p": usd(1), "c": usd(2), "cr": usd(-1)}), base: perToken, wantErr: "non-negative"},
-		{name: "custom without output price", rule: tokens(map[string]*float64{"p": usd(1), "cr": usd(1)}), base: perToken, wantErr: "p, c required"},
-		{name: "custom without config", rule: Rule{Kind: "custom", Mode: "per_request"}, base: perRequest, wantErr: "price required"},
-		{name: "custom per token keeps the prices of the mode", base: perToken,
-			rule:           tokens(map[string]*float64{"p": usd(0.8), "c": usd(4), "cr": usd(0.08), "price": usd(9)}),
-			wantConfig:     map[string]*float64{"p": usd(0.8), "c": usd(4), "cr": usd(0.08), "cc": nil, "cc1h": nil},
-			wantExpression: `tier("base", p*0.8 + c*4 + cr*0.08)`},
+		{name: "custom over an expression price", rule: tokens(cheap), base: expression, wantErr: "multiplier only"},
+		{name: "custom over per_token tiers", rule: tokens(cheap), base: &twoTiers, wantErr: "multiplier only"},
+		{name: "custom over per_token rules", rule: tokens(cheap), base: &ruled, wantErr: "multiplier only"},
+		{name: "custom over a per_token request tier", rule: tokens(cheap), base: &perRequestTier, wantErr: "multiplier only"},
+		{name: "custom in another mode", rule: tokens(cheap), base: perRequest, wantErr: "a custom price is per_request"},
+		{name: "custom without a mode", rule: Rule{Kind: "custom", Config: json.RawMessage(`{"price": 1}`)}, base: perRequest, wantErr: "a custom price is per_request"},
+		{name: "custom negative price", rule: tokens(`{"tiers": [{"name": "base", "p": 1, "cr": -1}]}`), base: perToken, wantErr: "config.tiers[0].cr"},
+		{name: "custom in the old shape", rule: tokens(`{"p": 1, "c": 2}`), base: perToken, wantErr: "config.tiers"},
+		{name: "custom without config", rule: Rule{Kind: "custom", Mode: "per_request"}, base: perRequest, wantErr: "config.price: required"},
+		{name: "custom per token", base: perToken, rule: tokens(cheap), wantExpression: `tier("base", p*0.8 + c*4 + cr*0.08)`},
+		{name: "custom per token with image prices", base: perToken, rule: tokens(`{"tiers": [{"name": "base", "p": 1, "c": 2, "img": 3, "img_o": 4}]}`),
+			wantExpression: `tier("base", p*1 + c*2 + img*3 + img_o*4)`},
 		{name: "custom per request, free", base: perRequest,
-			rule:           Rule{Kind: "custom", Mode: "per_request", Config: map[string]*float64{"price": usd(0)}, Inactive: true},
-			wantConfig:     map[string]*float64{"price": usd(0)},
+			rule:           Rule{Kind: "custom", Mode: "per_request", Config: json.RawMessage(`{"price": 0}`), Inactive: true},
 			wantExpression: `tier("base", flat(0))`},
 	}
 	for _, tc := range cases {
@@ -193,14 +209,27 @@ func TestCheckRule(t *testing.T) {
 				return
 			}
 			require.Equal(t, tc.base.Mode, got.Mode)
-			require.Equal(t, tc.wantConfig, got.Config)
+			require.Equal(t, tc.rule.Config, got.Config)
 			require.Equal(t, tc.wantExpression, got.expression)
 			require.NotEmpty(t, got.exprHash)
 			require.Equal(t, 1, got.exprVersion)
 		})
 	}
-	_, err := checkRule(core.WithLocale(context.Background(), "zh"), Rule{Kind: "custom", Mode: "per_token"}, perToken)
-	require.EqualError(t, err, "p, c 必填")
+	zh := core.WithLocale(context.Background(), "zh")
+	_, err := checkRule(zh, Rule{Kind: "custom", Mode: "per_token"}, perToken)
+	require.EqualError(t, err, "自定义价无效：config.tiers: config.tiers: at least one tier is required")
+	_, err = checkRule(zh, tokens(cheap), &twoTiers)
+	require.EqualError(t, err, "表达式计费、分档或带加价规则的按 token 计费只能用倍数规则")
+}
+
+// A custom price is inactive over a global price that no longer takes one.
+func TestRuleInactive(t *testing.T) {
+	own := customRule("per_token", `tier("base", p*2)`)
+	for base, inactive := range map[*PriceDef]bool{&oneTier: false, &twoTiers: true, &ruled: true, &perRequestTier: true,
+		{Mode: "per_request", Config: json.RawMessage(`{"price": 1}`)}: true, {Mode: "expression", Config: json.RawMessage(`{}`)}: true} {
+		require.Equal(t, inactive, own.view(base).Inactive, "%s %s", base.Mode, base.Config)
+	}
+	require.False(t, times("2").view(&twoTiers).Inactive)
 }
 
 // Precharge charges at the rate times the scale of the rule, as settlement does.

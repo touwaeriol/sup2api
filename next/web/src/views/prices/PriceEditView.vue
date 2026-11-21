@@ -8,25 +8,22 @@ import {
   SBadge,
   SButton,
   SCard,
+  SChoiceCards,
   SCode,
   SDescItem,
   SDescriptions,
+  SDisclosure,
   SField,
   SGrid,
   SHint,
   SInput,
   SLink,
   SPageHeader,
-  SRadioGroup,
-  SSectionTitle,
-  SSegmented,
   SSettingRow,
   SSpinner,
   SSwitch,
-  STextarea,
   confirm,
-  toast,
-  type SelectOption
+  toast
 } from '@sub2api/ui'
 import type { Price } from '@/api/types'
 import { useAuthStore } from '@/stores/auth'
@@ -34,32 +31,14 @@ import { notifyError } from '@/utils/errors'
 import { applyFormError } from '@/utils/formErrors'
 import { formatDateTime } from '@/utils/format'
 import ExprHistoryModal from './ExprHistoryModal.vue'
+import PriceExprEditor from './PriceExprEditor.vue'
 import PriceTrialPanel from './PriceTrialPanel.vue'
-import VisualExprEditor from './VisualExprEditor.vue'
-import VideoPriceEditor from './VideoPriceEditor.vue'
-import { emptyVideoPrice, readVideoPrice, videoExpression } from './videoPrice'
+import TokenPriceEditor from './TokenPriceEditor.vue'
 import { issueText, type Issue } from './issues'
 import PriceValidationCard from './PriceValidationCard.vue'
 import { usePriceValidation, type PricePayload } from './usePriceValidation'
-import {
-  CACHE_VARS,
-  TOKEN_VARS,
-  checkVisual,
-  compactPrices,
-  defaultVisual,
-  hasVisualConfig,
-  normalizeVisual,
-  num,
-  parseExpression,
-  perRequestExpr,
-  perTokenExpr,
-  tokenPricesFrom,
-  visualConfigForSave,
-  visualExpr,
-  type PriceMode,
-  type TokenPrices,
-  type VisualConfig
-} from './priceExpr'
+import { checkTokenConfig, compactTokenConfig, num, perRequestExpr, tokenExpr, type PriceMode, type TokenConfig } from './priceExpr'
+import { defaultTokenConfig, editableTokenConfig } from './tokenPrice'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -77,19 +56,15 @@ const saving = ref(false)
 const price = ref<Price | null>(null)
 const form = reactive({ model: '', note: '', enabled: true })
 const mode = ref<PriceMode>('per_token')
-const perRequest = ref<number | ''>(0.01)
-const perToken = reactive<TokenPrices>({ p: 3, c: 15, cr: 0.3, cc: 3.75, cc1h: 6 })
-const visual = ref<VisualConfig>(defaultVisual())
-const video = ref(emptyVideoPrice())
-const exprView = ref<'visual' | 'source' | 'video'>('visual')
+const perRequest = ref<number | null>(0.01)
+const token = ref<TokenConfig>(defaultTokenConfig())
 const sourceText = ref('')
-const notVisual = ref(false)
 const errors = ref<Record<string, string>>({})
 const historyOpen = ref(false)
 
 const readonly = computed(() => !auth.has('price:manage'))
 const MODES = ['per_request', 'per_token', 'expression'] as const
-const modeOptions = computed(() => MODES.map(m => ({ value: m, label: t(`prices.mode.${m}`) })))
+const modeOptions = computed(() => MODES.map(m => ({ value: m, label: t(`prices.mode.${m}`), description: t(`prices.modeDesc.${m}`) })))
 const isSynced = computed(() => price.value?.source === 'sync')
 const syncedNotice = computed(() => {
   const p = price.value
@@ -107,12 +82,8 @@ function resetForm() {
   Object.assign(form, { model: '', note: '', enabled: true })
   mode.value = 'per_token'
   perRequest.value = 0.01
-  Object.assign(perToken, { p: 3, c: 15, cr: 0.3, cc: 3.75, cc1h: 6 })
-  visual.value = defaultVisual()
-  video.value = emptyVideoPrice()
-  exprView.value = 'visual'
+  token.value = defaultTokenConfig()
   sourceText.value = ''
-  notVisual.value = false
   errors.value = {}
   validator.reset()
 }
@@ -122,27 +93,8 @@ function applyPrice(p: Price) {
   Object.assign(form, { model: p.model, note: p.note || '', enabled: p.enabled })
   mode.value = p.mode
   sourceText.value = p.expression || ''
-  notVisual.value = false
-  exprView.value = 'visual'
-  const cfg = p.config || {}
-  const parsed = parseExpression(p.expression)
-  if (p.mode === 'per_request') {
-    perRequest.value = cfg.price !== undefined ? num(cfg.price) : (parsed?.tiers[0]?.flat ?? 0)
-  } else if (p.mode === 'per_token') {
-    const src = TOKEN_VARS.some(k => cfg[k] !== undefined) ? cfg : parsed?.tiers[0]
-    Object.assign(perToken, tokenPricesFrom(src))
-  } else if (cfg.video) {
-    video.value = readVideoPrice(cfg.video)
-    exprView.value = 'video'
-  } else if (hasVisualConfig(cfg)) {
-    visual.value = normalizeVisual(cfg)
-  } else if (parsed) {
-    visual.value = parsed
-  } else {
-    visual.value = defaultVisual()
-    exprView.value = 'source'
-    notVisual.value = true
-  }
+  if (p.mode === 'per_request') perRequest.value = num(p.config?.price)
+  if (p.mode === 'per_token') token.value = editableTokenConfig(p.config)
 }
 
 async function load() {
@@ -165,60 +117,25 @@ const payload = computed<PricePayload & { mode: PriceMode }>(() => {
     return { mode: 'per_request', config: { price: num(perRequest.value) }, expression: perRequestExpr(perRequest.value) }
   }
   if (mode.value === 'per_token') {
-    const cfg = tokenPricesFrom(perToken)
-    return { mode: 'per_token', config: compactPrices(cfg), expression: perTokenExpr(cfg) }
-  }
-  if (exprView.value === 'video') {
-    return { mode: 'expression', config: { video: video.value }, expression: videoExpression(video.value) }
-  }
-  if (exprView.value === 'visual') {
-    return { mode: 'expression', config: visualConfigForSave(visual.value), expression: visualExpr(normalizeVisual(visual.value)) }
+    return { mode: 'per_token', config: compactTokenConfig(token.value), expression: tokenExpr(token.value) }
   }
   return { mode: 'expression', config: {}, expression: sourceText.value }
 })
 
 const localIssues = computed<string[]>(() => {
-  if (mode.value === 'expression' && exprView.value === 'visual') return checkVisual(visual.value).map(x => t(x.key, x.params || {}))
-  if (!payload.value.expression.trim()) return [t('prices.local.emptyExpr')]
-  return []
+  if (mode.value === 'per_token') {
+    const issues = checkTokenConfig(token.value)
+    if (issues.length) return issues.map(x => t(x.key, x.params || {}))
+  }
+  return payload.value.expression.trim() ? [] : [t('prices.local.emptyExpr')]
 })
 
 const previewSource = computed(() => (localIssues.value.length ? null : { ...payload.value }))
 
-// ------------------------------------------------------------------ expression view toggle
-
-const exprViewOptions = computed<SelectOption[]>(() => [
-  { value: 'video', label: t('prices.video.title') },
-  { value: 'visual', label: t('prices.view.visual') },
-  { value: 'source', label: t('prices.view.source') }
-])
-
-function onExprView(v: unknown) {
-  if (v === 'video') {
-    exprView.value = 'video'
-    notVisual.value = false
-  } else if (v === 'visual') toVisual()
-  else if (v === 'source') toSource()
-}
-
-function toSource() {
-  if (exprView.value === 'source') return
+/** Takes the generated source into the expression mode. */
+function editAsExpression() {
   sourceText.value = payload.value.expression
-  exprView.value = 'source'
-}
-
-function toVisual() {
-  if (exprView.value === 'visual') return
-  if (exprView.value === 'video') sourceText.value = payload.value.expression
-  const parsed = parseExpression(sourceText.value)
-  if (!parsed) {
-    notVisual.value = true
-    toast(t('prices.notVisual'), 'warning')
-    return
-  }
-  visual.value = parsed
-  notVisual.value = false
-  exprView.value = 'visual'
+  mode.value = 'expression'
 }
 
 // ------------------------------------------------------------------ validation
@@ -324,113 +241,82 @@ const title = computed(() => {
     <SAlert v-if="syncedNotice && !loading" tone="info" dense data-testid="price-synced-notice">{{ syncedNotice }}</SAlert>
 
     <SSpinner v-if="loading" size="lg" block />
-    <template v-else>
-      <!-- basic -->
-      <SCard :title="t('prices.basic')">
-        <SAlert tone="primary" dense class="mb-4">{{ t('prices.scopeNoteEdit') }}</SAlert>
-        <SGrid :cols="1" :md-cols="2">
-          <SField :label="t('prices.model')" :hint="t('prices.modelHint')" :error="errors.model" required>
-            <SInput v-model.trim="form.model" mono placeholder="claude-sonnet-4-5" :disabled="readonly" />
-          </SField>
-          <SField :label="t('common.note')" :error="errors.note">
-            <SInput v-model="form.note" :disabled="readonly" />
-          </SField>
-        </SGrid>
-        <SSettingRow :label="t('common.status')" dense flush class="mt-2" for="price-enabled">
-          <SSwitch
-            id="price-enabled"
-            v-model="form.enabled"
-            :disabled="readonly"
-            :label="form.enabled ? t('common.enabled') : t('common.disabled')"
-          />
-        </SSettingRow>
-        <SDescriptions v-if="price" class="mt-4 border-t border-line pt-4" dense>
-          <SDescItem :label="t('prices.exprHash')"
-            ><div class="flex flex-wrap items-center gap-2">
-              <SCode inline :text="price.expr_hash || '—'" />
-              <SHint inline size="xs">v{{ price.expr_version || 1 }}</SHint>
-              <SLink v-if="price.expr_hash" as="button" class="text-xs" @click="historyOpen = true">{{ t('prices.viewHistory') }}</SLink>
-            </div></SDescItem
-          >
-          <SDescItem v-if="price.updated_at" :label="t('common.updatedAt')">{{ formatDateTime(price.updated_at) }}</SDescItem>
-        </SDescriptions>
-      </SCard>
-
-      <!-- mode + editor -->
-      <SCard :title="t('prices.billingMode')">
-        <template #actions>
-          <SSegmented
-            v-if="mode === 'expression'"
-            :model-value="exprView"
-            :options="exprViewOptions"
-            size="sm"
-            :aria-label="t('prices.billingMode')"
-            data-testid="price-expr-view"
-            @update:model-value="onExprView"
-          />
-        </template>
-        <SRadioGroup
-          :model-value="mode"
-          :options="modeOptions"
-          inline
-          :disabled="readonly"
-          class="mb-4"
-          @update:model-value="mode = $event as PriceMode"
-        />
-        <SHint size="xs" class="mb-4">{{ t(`prices.modeHint.${mode}`) }}</SHint>
-
-        <div v-if="mode === 'per_request'" class="max-w-xs">
-          <SField :label="t('prices.perRequestPrice')" :error="errors['config.price']">
-            <SInput v-model.number="perRequest" type="number" min="0" step="any" :disabled="readonly" />
-          </SField>
-        </div>
-
-        <div v-else-if="mode === 'per_token'">
-          <SSectionTitle tag="p">{{ t('prices.perMillion') }}</SSectionTitle>
-          <SGrid :cols-base="2" :cols="3" :lg-cols="5" :gap="3">
-            <label v-for="k in TOKEN_VARS" :key="k" class="text-xs">
-              <SHint inline size="xs">{{ t(`prices.vars.${k}`) }}</SHint>
-              <SInput
-                v-model.number="perToken[k]"
-                type="number"
-                min="0"
-                step="any"
-                class="mt-1"
-                :placeholder="CACHE_VARS.includes(k) ? t('prices.unsetPlaceholder') : '0'"
-                :disabled="readonly"
-              />
-            </label>
+    <div v-else class="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_400px]">
+      <div class="min-w-0 space-y-5">
+        <!-- basic -->
+        <SCard :title="t('prices.basic')">
+          <SAlert tone="primary" dense class="mb-4">{{ t('prices.scopeNoteEdit') }}</SAlert>
+          <SGrid :cols="1" :md-cols="2">
+            <SField :label="t('prices.model')" :hint="t('prices.modelHint')" :error="errors.model" required>
+              <SInput v-model.trim="form.model" mono placeholder="claude-sonnet-4-5" :disabled="readonly" />
+            </SField>
+            <SField :label="t('common.note')" :error="errors.note">
+              <SInput v-model="form.note" :disabled="readonly" />
+            </SField>
           </SGrid>
-          <SHint size="xs" class="mt-1">{{ t('prices.cacheUnsetHint') }}</SHint>
-        </div>
+          <SSettingRow :label="t('common.status')" dense flush class="mt-2" for="price-enabled">
+            <SSwitch
+              id="price-enabled"
+              v-model="form.enabled"
+              :disabled="readonly"
+              :label="form.enabled ? t('common.enabled') : t('common.disabled')"
+            />
+          </SSettingRow>
+          <SDescriptions v-if="price" class="mt-4 border-t border-line pt-4" dense>
+            <SDescItem :label="t('prices.exprHash')"
+              ><div class="flex flex-wrap items-center gap-2">
+                <SCode inline :text="price.expr_hash || '—'" />
+                <SHint inline size="xs">v{{ price.expr_version || 1 }}</SHint>
+                <SLink v-if="price.expr_hash" as="button" class="text-xs" @click="historyOpen = true">{{ t('prices.viewHistory') }}</SLink>
+              </div></SDescItem
+            >
+            <SDescItem v-if="price.updated_at" :label="t('common.updatedAt')">{{ formatDateTime(price.updated_at) }}</SDescItem>
+          </SDescriptions>
+        </SCard>
 
-        <template v-else>
-          <SAlert v-if="notVisual" tone="warning" dense class="mb-3">{{ t('prices.notVisual') }}</SAlert>
-          <VideoPriceEditor v-if="exprView === 'video'" v-model="video" :disabled="readonly" />
-          <VisualExprEditor v-else-if="exprView === 'visual'" v-model="visual" :disabled="readonly" />
-          <SField v-else :label="t('prices.expression')" :error="errors.expression" :hint="t('prices.sourceHint')">
-            <STextarea v-model="sourceText" :rows="8" spellcheck="false" class="text-xs" mono :readonly="readonly" />
+        <!-- mode + editor -->
+        <SCard :title="t('prices.billingMode')">
+          <SChoiceCards
+            :model-value="mode"
+            :options="modeOptions"
+            :cols="3"
+            :disabled="readonly"
+            :aria-label="t('prices.billingMode')"
+            class="mb-5"
+            data-testid="price-mode"
+            @update:model-value="mode = $event as PriceMode"
+          />
+
+          <SField v-if="mode === 'per_request'" class="max-w-xs" :label="t('prices.perRequestPrice')" :error="errors['config.price']">
+            <SInput v-model="perRequest" type="number" min="0" step="any" :suffix="t('prices.perRequestUnit')" :disabled="readonly" />
           </SField>
-        </template>
+          <TokenPriceEditor v-else-if="mode === 'per_token'" v-model="token" :disabled="readonly" />
+          <PriceExprEditor v-else v-model="sourceText" :readonly="readonly" :error="errors.expression" />
 
-        <div v-if="mode !== 'expression' || exprView !== 'source'" class="mt-4">
-          <SHint size="xs" class="mb-1">{{ t('prices.generated') }}</SHint>
-          <SCode :text="payload.expression" />
-          <template v-if="serverExpr && mode !== 'expression'">
-            <SHint size="xs" class="mb-1 mt-2">{{ t('prices.serverGenerated') }}</SHint>
-            <SCode :text="serverExpr" />
-          </template>
-          <SHint v-if="errors.expression" tone="danger" size="xs" class="mt-1">{{ errors.expression }}</SHint>
-        </div>
-      </SCard>
+          <div v-if="mode !== 'expression'" class="mt-5 border-t border-line pt-3">
+            <SDisclosure :label="t('prices.generatedShow')" :open-label="t('prices.generatedHide')">
+              <SCode :text="payload.expression" class="mt-2" data-testid="price-generated" />
+              <template v-if="serverExpr">
+                <SHint size="xs" class="mb-1 mt-2">{{ t('prices.serverGenerated') }}</SHint>
+                <SCode :text="serverExpr" />
+              </template>
+              <SLink v-if="!readonly" as="button" class="mt-2 text-xs" data-testid="price-to-expression" @click="editAsExpression">{{
+                t('prices.toExpression')
+              }}</SLink>
+            </SDisclosure>
+            <SHint v-if="errors.expression" tone="danger" size="xs" class="mt-1">{{ errors.expression }}</SHint>
+          </div>
+        </SCard>
+      </div>
 
-      <PriceValidationCard :local-issues="localIssues" :validation="validation" :error="validationError" :validating="validating" />
-
-      <!-- trial -->
-      <SCard :title="t('prices.trial.title')">
-        <PriceTrialPanel :source="previewSource" />
-      </SCard>
-    </template>
+      <!-- side: validation and trial, kept in view on wide screens -->
+      <aside class="min-w-0 space-y-5 lg:sticky lg:top-4">
+        <PriceValidationCard :local-issues="localIssues" :validation="validation" :error="validationError" :validating="validating" />
+        <SCard :title="t('prices.trial.title')">
+          <PriceTrialPanel :source="previewSource" />
+        </SCard>
+      </aside>
+    </div>
 
     <ExprHistoryModal v-model:open="historyOpen" :hash="price?.expr_hash" />
   </div>

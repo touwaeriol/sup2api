@@ -12,7 +12,7 @@ import { deleteWithConfirm, useRowSwitch } from '@/composables/crud'
 import { activeFilterCount, useList } from '@/composables/useList'
 import { useAuthStore } from '@/stores/auth'
 import { formatDateTime, formatMoney } from '@/utils/format'
-import { summarize, type PriceSummary } from './priceExpr'
+import { isSet, num, summarize, type PriceSummary } from './priceExpr'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -91,16 +91,17 @@ const columns = computed<TableColumn[]>(() => [
   { key: 'actions', label: t('common.actions'), align: 'right', width: '150px' }
 ])
 
-function summaryOf(p: Price): PriceSummary {
-  const s = summarize(p.mode, p.config, p.expression)
-  // Prefer the server analysis (tiers/rules) for expressions the parser cannot map.
-  const an = p.analysis as { tiers?: unknown; rules?: unknown } | undefined
-  if (s.kind === 'custom' && an && (an.tiers !== undefined || an.rules !== undefined)) {
-    const count = (x: unknown) => (Array.isArray(x) ? x.length : typeof x === 'number' ? x : 0)
-    const names = Array.isArray(an.tiers) ? an.tiers.map((x: unknown) => (typeof x === 'string' ? x : (x as { name?: string } | null)?.name)).filter((x): x is string => !!x) : []
-    return { kind: 'visual', tiers: count(an.tiers), rules: count(an.rules), tierNames: names }
-  }
-  return s
+const summaryOf = (p: Price): PriceSummary => summarize(p.mode, p.config)
+
+/** "2 tiers · 1 surcharge rule": what a per-token price has beyond its first tier. */
+const moreText = (tiers: number, rules: number) =>
+  [tiers > 1 ? t('prices.summary.tiers', { n: tiers }) : '', rules ? t('prices.summary.rules', { n: rules }) : ''].filter(Boolean).join(' · ')
+
+/** "N tiers · M surcharge rules" of an expression price with several tiers or rules, from the server's analysis; '' otherwise. */
+function analysisText(p: Price): string {
+  const an = p.analysis as { tiers?: unknown[]; rules?: unknown[] } | undefined
+  const [tiers, rules] = [an?.tiers?.length ?? 0, an?.rules?.length ?? 0]
+  return tiers > 1 || rules ? t('prices.summary.visual', { tiers, rules }) : ''
 }
 
 function price(v: number | null) {
@@ -175,18 +176,20 @@ function runRowAction(key: string, p: Price) {
         <SHint v-if="row.note" size="xs" class="truncate">{{ row.note }}</SHint>
       </template>
       <template #cell-mode="{ row }">
-        <SBadge :tone="MODE_TONE[row.mode] ?? 'gray'">{{ row.config?.video ? t('prices.video.title') : t(`prices.mode.${row.mode}`) }}</SBadge>
+        <SBadge :tone="MODE_TONE[row.mode] ?? 'gray'">{{ t(`prices.mode.${row.mode}`) }}</SBadge>
       </template>
       <template #cell-summary="{ row }">
         <template v-for="s in [summaryOf(row)]" :key="s.kind">
           <span v-if="s.kind === 'per_request'" class="text-sm">{{ t('prices.summary.perRequest', { price: price(s.price) }) }}</span>
           <span v-else-if="s.kind === 'per_token'" class="text-sm">
-            {{ t('prices.summary.perToken', { p: price(s.prices.p), c: price(s.prices.c), cr: price(s.prices.cr) }) }}
+            {{
+              s.first.unit === 'request'
+                ? t('prices.summary.perRequest', { price: price(num(s.first.price)) })
+                : t('prices.summary.perToken', { p: price(num(s.first.p)), c: price(num(s.first.c)), cr: price(isSet(s.first.cr) ? num(s.first.cr) : null) })
+            }}
+            <SHint v-if="s.tiers > 1 || s.rules" inline size="xs">{{ moreText(s.tiers, s.rules) }}</SHint>
           </span>
-          <span v-else-if="s.kind === 'visual'" class="text-sm">
-            {{ t('prices.summary.visual', { tiers: s.tiers, rules: s.rules }) }}
-            <SHint v-if="s.tierNames.length > 1" inline size="xs">({{ s.tierNames.join(' / ') }})</SHint>
-          </span>
+          <span v-else-if="analysisText(row)" class="text-sm">{{ analysisText(row) }}</span>
           <span v-else class="block max-w-md truncate font-mono text-xs text-fg-muted" :title="row.expression">
             {{ t('prices.summary.custom') }} · {{ row.expression }}
           </span>

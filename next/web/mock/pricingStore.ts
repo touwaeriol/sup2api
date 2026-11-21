@@ -8,13 +8,15 @@
 // the API rows together.
 import { nextId, now } from './router'
 import { configPrice, type PriceDef } from './billing'
+import { singleTier, takesCustomPrice, type TokenConfig } from '../src/views/prices/priceExpr'
 
 export type RateSource = 'segment' | 'discount' | 'group'
 export type PriceSource = 'segment' | 'group' | 'global'
 
 export type PriceRule =
   | { kind: 'multiplier'; multiplier: string }
-  | { kind: 'custom'; mode: 'per_request' | 'per_token'; config: Record<string, number | null> }
+  | { kind: 'custom'; mode: 'per_request'; config: { price: number | null } }
+  | { kind: 'custom'; mode: 'per_token'; config: TokenConfig }
 
 export interface MockSegment {
   id: number
@@ -96,9 +98,9 @@ const pairs: Pair[] = [
 const rules: RuleRow[] = [
   { segment_id: null, group_id: 1, model: 'gpt-4o', rule: { kind: 'multiplier', multiplier: '1.2' } },
   { segment_id: null, group_id: 1, model: 'web-search', rule: { kind: 'custom', mode: 'per_request', config: { price: 0.008 } } },
-  { segment_id: null, group_id: 2, model: 'claude-haiku-4-5', rule: { kind: 'custom', mode: 'per_token', config: { p: 0.8, c: 4, cr: 0.08, cc: 1 } } },
+  { segment_id: null, group_id: 2, model: 'claude-haiku-4-5', rule: { kind: 'custom', mode: 'per_token', config: singleTier({ p: 0.8, c: 4, cr: 0.08, cc: 1 }) } },
   { segment_id: VIP, group_id: 1, model: 'gpt-4o-mini', rule: { kind: 'multiplier', multiplier: '0.8' } },
-  { segment_id: ENTERPRISE, group_id: 2, model: 'claude-haiku-4-5', rule: { kind: 'custom', mode: 'per_token', config: { p: 0.7, c: 3.5, cr: 0.07, cc: 0.9 } } },
+  { segment_id: ENTERPRISE, group_id: 2, model: 'claude-haiku-4-5', rule: { kind: 'custom', mode: 'per_token', config: singleTier({ p: 0.7, c: 3.5, cr: 0.07, cc: 0.9 }) } },
   // An expression price takes a multiplier only.
   { segment_id: PERSONAL_104, group_id: 2, model: 'claude-sonnet-4-5', rule: { kind: 'multiplier', multiplier: '0.9' } },
   // Set while the model was billed per request; its global price is per token now, so the rule is inactive.
@@ -197,10 +199,10 @@ export function applyRule(base: PriceDef | null, rule: PriceRule | null): PriceD
 /** A rule as a row of model prices carries it. */
 type ListedRule = PriceRule & { inactive?: true }
 
-/** A rule as configured; a custom price in another mode than the global price has now is marked inactive. */
+/** A rule as configured; a custom price the global price no longer takes (another mode, or tiers or rules now) is marked inactive. */
 function listedRule(rule: PriceRule | undefined, base: PriceDef | null): ListedRule | null {
   if (!rule) return null
-  return rule.kind === 'custom' && base && rule.mode !== base.mode ? { ...rule, inactive: true } : rule
+  return rule.kind === 'custom' && base && (rule.mode !== base.mode || !takesCustomPrice(base.mode, base.config)) ? { ...rule, inactive: true } : rule
 }
 
 /**

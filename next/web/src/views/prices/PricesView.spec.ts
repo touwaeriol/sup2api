@@ -7,13 +7,14 @@ import { i18n } from '@/i18n'
 import type { Price } from '@/api/types'
 import PriceSimulatorModal from '@/components/pricing/PriceSimulatorModal.vue'
 import PricesView from './PricesView.vue'
+import { singleTier } from './priceExpr'
 
 const price = (id: number, model: string, note = ''): Price => ({
   id,
   model,
   note,
   mode: 'per_token',
-  config: { p: 3, c: 15, cr: 0.3 },
+  config: singleTier({ p: 3, c: 15, cr: 0.3 }),
   expression: '',
   expr_version: 1,
   expr_hash: '',

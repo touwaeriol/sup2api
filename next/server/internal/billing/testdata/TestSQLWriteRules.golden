@@ -64,7 +64,7 @@ $3 string "claude-sonnet-4-5"
 $4 string "custom"
 $5 *decimal.Decimal nil
 $6 *string "per_request"
-$7 store.Bytes [123 34 112 114 105 99 101 34 58 110 117 108 108 125]
+$7 store.Bytes [123 34 112 114 105 99 101 34 58 32 48 125]
 $8 string "tier(\"base\", flat(0))"
 $9 string "b67b5f5938d990a59bd23264b3c82d5d9055128a6d78aab0994597de293c267c"
 $10 *int64 2

@@ -24,7 +24,7 @@ func TestFallbackReplacementGatewayUsageAndPriceSnapshots(t *testing.T) {
 		t.Run(fmt.Sprint(stream), func(t *testing.T) {
 			e := pricedAdvisorEnv(t)
 			e.pricer.params = []string{"model", "speed", "max_tokens", "output_config"}
-			e.pricer.rules[advisorModel].Expression = `p*7+c*11 ||| u("speed") == "fast" ? 2 : 1`
+			e.pricer.rules[advisorModel].Expression = `(p*7+c*11) * (u("speed") == "fast" ? 2 : 1)`
 			lim := newFakeLimiter()
 			e.gw.d.Limiter = lim
 			e.accounts.set(1, func(a *core.Account) {
@@ -92,7 +92,7 @@ func fallbackResponse(primary, fallback string) string {
 }
 
 func TestAttemptPriceRequiresAttributedFacts(t *testing.T) {
-	price := &core.PriceRule{Expression: `p+c ||| u("speed") == "fast" ? 2 : 1`}
+	price := &core.PriceRule{Expression: `(p+c) * (u("speed") == "fast" ? 2 : 1)`}
 	for _, tc := range []struct {
 		name      string
 		item      core.PricedUsage

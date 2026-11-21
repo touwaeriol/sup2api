@@ -70,6 +70,19 @@ func (v *visitor) Visit(node *ast.Node) {
 		if isVar[n.Value] {
 			a.p.used[n.Value] = true
 		}
+		if n.Value == traceFunc {
+			v.fail(CodeSyntax, traceFunc+" is reserved")
+		}
+	case *ast.ConditionalNode:
+		mult, ok := traced(n)
+		if !ok {
+			return
+		}
+		if mult < 0 {
+			v.fail(CodeNegativeMultiplier, n.String())
+			return
+		}
+		a.p.rules = append(a.p.rules, &rule{cond: n.Cond.String(), mult: mult})
 	case *ast.BinaryNode:
 		switch n.Operator {
 		case "<", "<=", ">", ">=", "==", "!=":
@@ -164,7 +177,9 @@ func (a *analyzer) walk(node ast.Node) *CompileError {
 	return v.err
 }
 
-func (a *analyzer) analyzeBase(src string) *CompileError {
+// analyze collects what the expression reads, its traced rules and the
+// terms of its tiers.
+func (a *analyzer) analyze(src string) *CompileError {
 	node, cerr := parse(src)
 	if cerr != nil {
 		return cerr
@@ -196,6 +211,7 @@ func (a *analyzer) analyzeBase(src string) *CompileError {
 		}
 		a.p.tiers = append(a.p.tiers, td)
 	}
+	a.finish()
 	return nil
 }
 
@@ -314,40 +330,55 @@ func isIdent(n ast.Node, name string) bool {
 	return ok && id.Value == name
 }
 
-func (a *analyzer) analyzeRule(src string) (*rule, *CompileError) {
-	if src == "" {
-		return nil, compileErr(CodeRuleShape, "empty rule")
+// traceFunc is the function the compiler wraps the condition of a traced
+// rule in; expressions may not call it.
+const traceFunc = "__rule"
+
+// probes are the functions whose result depends on the request or its usage.
+var probes = map[string]bool{"param": true, "header": true, "u": true, "hour": true, "minute": true, "weekday": true, "day": true, "month": true}
+
+// traced reports whether a conditional is a traced rule, `cond ? m : 1`
+// with a numeric literal m and a condition that reads a probe, and returns m.
+func traced(n *ast.ConditionalNode) (float64, bool) {
+	if f, ok := numLiteral(n.Exp2); !ok || f != 1 {
+		return 0, false
 	}
-	node, cerr := parse(src)
-	if cerr != nil {
-		return nil, cerr
-	}
-	cn, ok := node.(*ast.ConditionalNode)
+	m, ok := numLiteral(n.Exp1)
 	if !ok {
-		return nil, compileErr(CodeRuleShape, src)
+		return 0, false
 	}
-	if f, ok := numLiteral(cn.Exp2); !ok || f != 1 {
-		return nil, compileErr(CodeRuleShape, src)
-	}
-	if err := a.walk(node); err != nil {
-		return nil, err
-	}
-	r := &rule{cond: cn.Cond.String()}
-	var err error
-	if r.condProg, err = expr.Compile(r.cond, options(expr.AsBool())...); err != nil {
-		return nil, compileErr(CodeSyntax, err.Error())
-	}
-	multSrc := cn.Exp1.String()
-	if r.multProg, err = expr.Compile(multSrc, options(expr.AsFloat64())...); err != nil {
-		return nil, compileErr(CodeSyntax, err.Error())
-	}
-	if f, ok := numLiteral(cn.Exp1); ok {
-		r.multConst = &f
-		if f < 0 {
-			return nil, compileErr(CodeNegativeMultiplier, multSrc)
+	found := &probeFinder{}
+	cond := n.Cond
+	ast.Walk(&cond, found)
+	return m, found.ok
+}
+
+type probeFinder struct{ ok bool }
+
+func (f *probeFinder) Visit(node *ast.Node) {
+	if call, ok := (*node).(*ast.CallNode); ok {
+		if id, ok := call.Callee.(*ast.IdentifierNode); ok && probes[id.Value] {
+			f.ok = true
 		}
 	}
-	return r, nil
+}
+
+// ruleTracer is the compile patch that wraps the condition of every traced
+// rule in traceFunc(index, cond). ast.Walk visits in the same post-order as
+// the analysis, so the indexes are those of Program.rules; wrapping keeps
+// the probes of a condition, so an enclosing rule is still found.
+type ruleTracer struct{ n int }
+
+func (t *ruleTracer) Visit(node *ast.Node) {
+	n, ok := (*node).(*ast.ConditionalNode)
+	if !ok {
+		return
+	}
+	if _, ok := traced(n); !ok {
+		return
+	}
+	n.Cond = &ast.CallNode{Callee: &ast.IdentifierNode{Value: traceFunc}, Arguments: []ast.Node{&ast.IntegerNode{Value: t.n}, n.Cond}}
+	t.n++
 }
 
 func (a *analyzer) finish() {

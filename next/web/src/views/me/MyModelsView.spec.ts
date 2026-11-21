@@ -4,6 +4,7 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import { ApiError } from '@sub2api/host'
 import { i18n } from '@/i18n'
 import MyModelsView from './MyModelsView.vue'
+import { singleTier } from '@/views/prices/priceExpr'
 
 const get = vi.hoisted(() => vi.fn())
 vi.mock('@sub2api/host', async (orig) => ({ ...(await orig<object>()), api: { get } }))
@@ -15,9 +16,9 @@ const groups = [
 ]
 const [basic, vip] = groups.map(({ id, name }) => ({ id, name }))
 const prices = [
-  { model: 'tokens', mode: 'per_token', config: { p: 3, c: 15, cr: 0.3, cc: 3.75 }, expression: '', groups: [basic, vip] },
+  { model: 'tokens', mode: 'per_token', config: singleTier({ p: 3, c: 15, cr: 0.3, cc: 3.75 }), expression: '', groups: [basic, vip] },
   { model: 'one-shot', mode: 'per_request', config: { price: 0.2 }, expression: '', groups: [basic] },
-  { model: 'tiered', mode: 'expression', config: { tiers: [{ name: 'a', p: 1, c: 2 }, { name: 'b', p: 3, c: 4 }] }, expression: '', groups: [basic] },
+  { model: 'tiered', mode: 'per_token', config: { tiers: [{ name: 'a', max_len: 200000, p: 1, c: 2 }, { name: 'b', max_len: null, p: 3, c: 4 }], rules: [] }, expression: '', groups: [basic] },
   { model: 'custom', mode: 'expression', config: {}, expression: 'p * 2 + unknown(1)', groups: [] }
 ]
 const everyGroup = { group: null, rate_multiplier: '1', prices }

@@ -39,6 +39,12 @@ func cfgOf(t *testing.T, p *syncPrice) map[string]any {
 	return m
 }
 
+// tierOf is tier i of a per_token price.
+func tierOf(t *testing.T, p *syncPrice, i int) map[string]any {
+	t.Helper()
+	return cfgOf(t, p)["tiers"].([]any)[i].(map[string]any)
+}
+
 func TestParseLiteLLM(t *testing.T) {
 	f, err := parseLiteLLM([]byte(litellmSample), defaultLiteLLMProviders)
 	if err != nil {
@@ -56,15 +62,16 @@ func TestParseLiteLLM(t *testing.T) {
 	if opus.Mode != "per_token" || opus.Expression != `v1:tier("base", p*4 + c*20 + cr*0.2 + cc*5 + cc1h*8)` {
 		t.Fatalf("opus: %+v", opus)
 	}
+	require.JSONEq(t, `{"tiers": [{"name": "base", "max_len": null, "unit": "token", "p": 4, "c": 20, "cr": 0.2, "cc": 5, "cc1h": 8}], "rules": []}`, string(opus.Config))
 	sonnet := f.prices["claude-sonnet-4-5"]
-	if sonnet.Mode != "expression" || !strings.Contains(sonnet.Expression, `len <= 200000 ? tier("standard", p*3 + c*15 + cr*0.3)`) ||
+	if sonnet.Mode != "per_token" || len(cfgOf(t, sonnet)["tiers"].([]any)) != 2 || !strings.Contains(sonnet.Expression, `len <= 200000 ? tier("standard", p*3 + c*15 + cr*0.3)`) ||
 		!strings.Contains(sonnet.Expression, `tier("long_context", p*6 + c*22.5 + cr*0.3)`) {
 		t.Fatalf("sonnet: %+v", sonnet)
 	}
-	if g := f.prices["gemini-2.5-flash"]; g == nil || cfgOf(t, g)["p"] != 0.3 {
+	if g := f.prices["gemini-2.5-flash"]; g == nil || tierOf(t, g, 0)["p"] != 0.3 {
 		t.Fatalf("gemini: %+v", g)
 	}
-	if e := f.prices["text-embedding-3-small"]; e == nil || cfgOf(t, e)["p"] != 0.02 {
+	if e := f.prices["text-embedding-3-small"]; e == nil || tierOf(t, e, 0)["p"] != 0.02 {
 		t.Fatalf("embedding: %+v", e)
 	}
 }
@@ -83,21 +90,21 @@ func TestParseModelsDev(t *testing.T) {
 	if len(f.prices) != 2 {
 		t.Fatalf("prices: %v", f.prices)
 	}
-	if c := cfgOf(t, f.prices["claude-opus-5-5"]); c["cc"] != 5.0 || c["cc1h"] != nil {
+	if c := tierOf(t, f.prices["claude-opus-5-5"], 0); c["cc"] != 5.0 || c["cc1h"] != nil {
 		t.Fatalf("opus: %v", c)
 	}
 	pro := f.prices["gemini-2.5-pro"]
-	if err := pro.compile(); err != nil || !strings.Contains(pro.Expression, `tier("long_context", p*2.5 + c*15 + cr*0.25)`) {
+	if err := pro.compile(); err != nil || pro.Mode != "per_token" || !strings.Contains(pro.Expression, `tier("long_context", p*2.5 + c*15 + cr*0.25)`) {
 		t.Fatalf("pro: %+v %v", pro, err)
 	}
 }
 
 func TestParseSup2APIAppliesMultiplier(t *testing.T) {
 	body := `{"data": {"prices": [
-		{"model": "claude-opus-5-5", "mode": "per_token", "config": {"p": 4, "c": 20, "cr": 0.2}, "expression": "x"},
+		{"model": "claude-opus-5-5", "mode": "per_token", "config": {"tiers": [{"name": "base", "p": 4, "c": 20, "cr": 0.2}]}, "expression": "x"},
 		{"model": "web-search", "mode": "per_request", "config": {"price": 0.01}, "expression": "x"},
 		{"model": "custom", "mode": "expression", "config": {}, "expression": "tier(\"base\", p*2)"},
-		{"model": "bad*", "mode": "per_token", "config": {"p": 1}, "expression": "x"}],
+		{"model": "bad*", "mode": "per_token", "config": {"tiers": [{"name": "base", "p": 1}]}, "expression": "x"}],
 		"rate_multiplier": "1.5", "group": {"id": 3, "name": "g"}}}`
 	f, err := parseSup2API([]byte(body), true)
 	if err != nil {
@@ -117,7 +124,7 @@ func TestParseSup2APIAppliesMultiplier(t *testing.T) {
 	if e := f.prices["web-search"].Expression; e != `v1:tier("base", flat(0.015))` {
 		t.Fatalf("per request: %s", e)
 	}
-	if e := f.prices["custom"].Expression; e != `v1:tier("base", p*2) ||| true ? 1.5 : 1` {
+	if e := f.prices["custom"].Expression; e != `v1:(tier("base", p*2)) * 1.5` {
 		t.Fatalf("expression: %s", e)
 	}
 	f, _ = parseSup2API([]byte(body), false)
@@ -127,43 +134,30 @@ func TestParseSup2APIAppliesMultiplier(t *testing.T) {
 	}
 }
 
-// How the upstream rate goes into a price that is not per token or per
-// request: tiers keep no config, the rate becomes a rule after the expression
-// generated from them; a video template is scaled in its config.
-func TestParseSup2APIMultiplierOnVisualExpression(t *testing.T) {
+// How the upstream rate goes into per_token tiers with rules (their prices,
+// not their multipliers) and a request tier.
+func TestParseSup2APIMultiplierOnTiers(t *testing.T) {
 	body := `{"data": {"prices": [
-		{"model": "tiered", "mode": "expression", "expression": "x", "config": {"tiers": [
-			{"name": "standard", "max_len": 200000, "p": 3, "c": 15}, {"name": "long_context", "max_len": null, "p": 6, "c": 22.5}]}},
-		{"model": "video", "mode": "expression", "expression": "x", "config": {"video": {"price_per_million_tokens": 7, "video_price_per_second": 0.2}}}],
+		{"model": "tiered", "mode": "per_token", "expression": "x", "config": {"tiers": [
+			{"name": "standard", "max_len": 200000, "p": 3, "c": 15, "img": 10}, {"name": "long_context", "max_len": null, "unit": "request", "price": 0.5}],
+			"rules": [{"multiplier": 2, "conds": [{"source": "param", "key": "fast", "op": "exists"}]}]}}],
 		"rate_multiplier": "1.5", "group": {"id": 3, "name": "g"}}}`
 	f, err := parseSup2API([]byte(body), true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(f.prices) != 2 || f.skipped != 0 {
-		t.Fatalf("prices %v skipped %d", f.prices, f.skipped)
-	}
-	for _, p := range f.prices {
-		if err := p.compile(); err != nil {
-			t.Fatalf("%s: %v", p.Model, err)
-		}
-	}
+	require.NoError(t, err)
+	require.Zero(t, f.skipped)
 	tiered := f.prices["tiered"]
-	if tiered.Mode != "expression" || string(tiered.Config) != "{}" || tiered.Expression !=
-		`v1:len <= 200000 ? tier("standard", p*3 + c*15) : tier("long_context", p*6 + c*22.5) ||| true ? 1.5 : 1` {
-		t.Fatalf("tiers: %+v", tiered)
-	}
-	video := cfgOf(t, f.prices["video"])["video"].(map[string]any)
-	if video["price_per_million_tokens"] != 10.5 || video["video_price_per_second"] != 0.3 || strings.Contains(f.prices["video"].Expression, "|||") {
-		t.Fatalf("video: %+v", f.prices["video"])
-	}
+	require.NoError(t, tiered.compile())
+	require.Equal(t, "per_token", tiered.Mode)
+	require.JSONEq(t, `{"tiers": [{"name": "standard", "max_len": 200000, "p": 4.5, "c": 22.5, "img": 15}, {"name": "long_context", "max_len": null, "unit": "request", "price": 0.75}],
+		"rules": [{"multiplier": 2, "conds": [{"source": "param", "key": "fast", "op": "exists"}]}]}`, string(tiered.Config))
+	require.Equal(t, `v1:(len <= 200000 ? tier("standard", p*4.5 + c*22.5 + img*15) : tier("long_context", flat(0.75))) * (param("fast") != nil ? 2 : 1)`, tiered.Expression)
 }
 
 func TestParseSup2APISkipsPriceWithoutConfig(t *testing.T) {
 	body := `{"data": {"prices": [
 		{"model": "no-config", "mode": "per_token", "expression": ""},
 		{"model": "null-config", "mode": "per_request", "config": null},
-		{"model": "ok", "mode": "per_token", "config": {"p": 1, "c": 2}}],
+		{"model": "ok", "mode": "per_token", "config": {"tiers": [{"name": "base", "p": 1, "c": 2}]}}],
 		"rate_multiplier": "2", "group": {"id": 3, "name": "g"}}}`
 	f, err := parseSup2API([]byte(body), true)
 	if err != nil {
@@ -175,7 +169,7 @@ func TestParseSup2APISkipsPriceWithoutConfig(t *testing.T) {
 }
 
 // An expression price needs no config to carry the multiplier: without one,
-// null or missing, it gets the surcharge rule as before (scalePrice).
+// null or missing, it is multiplied as before (scalePrice).
 func TestParseSup2APIScalesExpressionWithoutConfig(t *testing.T) {
 	body := `{"data": {"prices": [
 		{"model": "null-config", "mode": "expression", "config": null, "expression": "tier(\"base\", p*2)"},
@@ -187,7 +181,7 @@ func TestParseSup2APIScalesExpressionWithoutConfig(t *testing.T) {
 	for _, model := range []string{"null-config", "no-config"} {
 		p := f.prices[model]
 		require.NotNil(t, p, model)
-		require.Equal(t, []string{"expression", "{}", `tier("base", p*2) ||| true ? 1.5 : 1`},
+		require.Equal(t, []string{"expression", "{}", `(tier("base", p*2)) * 1.5`},
 			[]string{p.Mode, string(p.Config), p.Expression}, model)
 	}
 }
@@ -242,7 +236,7 @@ func TestPriceSourcesSync(t *testing.T) {
 	e.mustCall(admin, 200, "PATCH", "/price-sources/"+itoa(litellmID), map[string]any{"url": upstream.URL + "/litellm.json"})
 
 	// A manual price that differs from the source.
-	e.mustCall(admin, 201, "POST", "/prices", map[string]any{"model": "claude-opus-5-5", "mode": "per_token", "config": map[string]any{"p": 1, "c": 1}})
+	e.mustCall(admin, 201, "POST", "/prices", map[string]any{"model": "claude-opus-5-5", "mode": "per_token", "config": oneTierConfig(map[string]any{"p": 1, "c": 1})})
 
 	prev := data(e.mustCall(admin, 200, "POST", "/price-sources/"+itoa(litellmID)+"/preview", nil))
 	actions := map[string]string{}
