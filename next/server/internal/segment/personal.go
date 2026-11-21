@@ -43,9 +43,6 @@ func (s *Service) makePersonal(c *gin.Context) {
 		httpapi.Fail(c, err)
 		return
 	}
-	if in.Copy {
-		s.priceRulesChanged(ctx)
-	}
 	s.render(c, id, httpapi.Created)
 }
 
@@ -105,17 +102,11 @@ func createPersonal(ctx context.Context, tx *gorm.DB, userID int64, copyFrom boo
 }
 
 // copySettings gives segment to what segment from has in every group: its
-// grants, rate overrides and model prices. The two are unrelated afterwards.
+// grants and rate overrides. The two are unrelated afterwards.
 func copySettings(ctx context.Context, tx *gorm.DB, from, to int64) error {
 	g := store.G(ctx, tx)
 	pairs := g.Model(&model.SegmentGroup{}).Select("?::bigint, group_id, granted, rate_override", to).Where("segment_id = ?", from)
-	if err := gormpg.InsertSelect(g, "segment_groups", []string{"segment_id", "group_id", "granted", "rate_override"}, pairs).Error; err != nil {
-		return err
-	}
-	rules := g.Model(&model.PriceRule{}).Select("group_id, ?::bigint, model, kind, multiplier, mode, config, expression, expr_hash, updated_by", to).
-		Where("segment_id = ?", from)
-	return gormpg.InsertSelect(g, "price_rules", []string{"group_id", "segment_id", "model", "kind", "multiplier", "mode", "config",
-		"expression", "expr_hash", "updated_by"}, rules).Error
+	return gormpg.InsertSelect(g, "segment_groups", []string{"segment_id", "group_id", "granted", "rate_override"}, pairs).Error
 }
 
 // removePersonal moves a personal user back to a named segment (?to=, the
@@ -130,7 +121,6 @@ func (s *Service) removePersonal(c *gin.Context) {
 		httpapi.Fail(c, err)
 		return
 	}
-	var dropped bool
 	err := s.tx(ctx, func(tx *gorm.DB) error {
 		notPersonal := core.ErrNotFound.WithMessage(t(ctx, "the user has no personal user group", "该用户不是个人专属"))
 		kind, err := userSegmentKind(ctx, tx, uid)
@@ -145,8 +135,7 @@ func (s *Service) removePersonal(c *gin.Context) {
 			return err
 		}
 		// The user was not locked when checked: only one still personal moves.
-		var moved int
-		moved, dropped, err = moveUsers(ctx, tx, to, []int64{uid}, core.SegmentPersonal)
+		moved, err := moveUsers(ctx, tx, to, []int64{uid}, core.SegmentPersonal)
 		if err == nil && moved == 0 {
 			return notPersonal
 		}
@@ -155,9 +144,6 @@ func (s *Service) removePersonal(c *gin.Context) {
 	if err != nil {
 		httpapi.Fail(c, err)
 		return
-	}
-	if dropped {
-		s.priceRulesChanged(ctx)
 	}
 	httpapi.NoContent(c)
 }

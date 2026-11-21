@@ -63,8 +63,7 @@ func TestGroupPricingSummary(t *testing.T) {
 	personal := e.one(`INSERT INTO segments (kind, user_id) VALUES ('personal', $1) RETURNING id`, e.user)
 	e.exec(`INSERT INTO segment_groups (segment_id, group_id, granted, rate_override) VALUES
 		($1, $4, true, NULL), ($2, $4, false, 0.5), ($3, $4, true, NULL), ($1, $5, true, NULL)`, vip, team, personal, private, open)
-	e.exec(`INSERT INTO price_rules (group_id, segment_id, model, kind, multiplier) VALUES
-		($1, NULL, 'm1', 'multiplier', 1.2), ($1, $2, 'm1', 'multiplier', 0.9), ($1, $3, 'm2', 'multiplier', 0)`, private, vip, personal)
+	e.exec(`INSERT INTO price_rules (group_id, model, kind, multiplier) VALUES ($1, 'm1', 'multiplier', 1.2)`, private)
 	e.account([]string{"m1", "m2"}, private)
 
 	rows, total := e.listed(e.admin, "/groups")
@@ -74,13 +73,12 @@ func TestGroupPricingSummary(t *testing.T) {
 		"personal_count": float64(1),
 	}, rows["private"]["access"], "the named segments granted, and the personal ones counted")
 	require.EqualValues(t, 1, rows["private"]["price_rule_count"])
-	require.EqualValues(t, 2, rows["private"]["segment_rule_count"])
+	require.NotContains(t, rows["private"], "segment_rule_count")
 	require.EqualValues(t, 2, rows["private"]["model_count"])
 
 	require.Equal(t, map[string]any{"segments": []any{}, "personal_count": float64(0)}, rows["open"]["access"],
 		"a public group lists nobody, whatever was granted")
 	require.EqualValues(t, 0, rows["open"]["price_rule_count"])
-	require.EqualValues(t, 0, rows["open"]["segment_rule_count"])
 	require.EqualValues(t, 0, rows["open"]["model_count"])
 
 	code, out := e.do(e.admin, "GET", fmt.Sprintf("/groups/%d", private), nil)
@@ -96,47 +94,31 @@ func TestGroupPricingSummary(t *testing.T) {
 	require.Zero(t, e.one(`SELECT (SELECT count(*) FROM segment_groups WHERE group_id = $1) + (SELECT count(*) FROM price_rules WHERE group_id = $1)`, private))
 }
 
-// Price rules count on the models a group provides now, as its pricing table
-// lists them: a rule on a model it no longer provides stays stored but is not
-// counted, in the group list nor for the segments (SegmentRuleCounts).
-func TestRuleCountsFollowOfferedModels(t *testing.T) {
+// Price rules count as the group's pricing table lists them: on any model,
+// one the group no longer provides (or never did) included.
+func TestRuleCountsOfAnyModel(t *testing.T) {
 	e := setup(t)
 	declared := e.one(`INSERT INTO groups (name, visibility) VALUES ('declared', 'restricted') RETURNING id`)
 	open := e.one(`INSERT INTO groups (name) VALUES ('open') RETURNING id`)
-	vip := e.one(`INSERT INTO segments (name) VALUES ('vip') RETURNING id`)
 	e.account([]string{"m1"}, declared)
 	e.account([]string{}, open) // serves every model that has a global price
 	e.price("priced", true)
-	for _, g := range []int64{declared, open} {
-		e.exec(`INSERT INTO price_rules (group_id, segment_id, model, kind, multiplier) VALUES
-			($1, NULL, 'm1', 'multiplier', 1), ($1, $2, 'm1', 'multiplier', 1),
-			($1, NULL, 'priced', 'multiplier', 1), ($1, $2, 'priced', 'multiplier', 1),
-			($1, NULL, 'gone', 'multiplier', 1), ($1, $2, 'gone', 'multiplier', 1)`, g, vip)
-	}
-	counts := func() (map[string][]any, map[int64]map[int64]int64) {
+	e.exec(`INSERT INTO price_rules (group_id, model, kind, multiplier) VALUES
+		($1, 'm1', 'multiplier', 1), ($1, 'priced', 'multiplier', 1), ($1, 'gone', 'multiplier', 1), ($2, 'gone', 'multiplier', 1)`, declared, open)
+	counts := func() map[string][]any {
 		t.Helper()
 		rows, _ := e.listed(e.admin, "/groups")
 		out := map[string][]any{}
 		for name, row := range rows {
-			out[name] = []any{row["price_rule_count"], row["segment_rule_count"]}
+			out[name] = []any{row["price_rule_count"], row["model_count"]}
 		}
-		bySegment, err := (&Service{db: e.db}).SegmentRuleCounts(context.Background(), []int64{vip})
-		require.NoError(t, err)
-		return out, bySegment
+		return out
 	}
 
-	// declared provides m1 (an account declares it); open provides priced
-	// (an account declares nothing and it has a price). Neither provides gone.
-	groups, bySegment := counts()
-	require.Equal(t, map[string][]any{"declared": {float64(1), float64(1)}, "open": {float64(1), float64(1)}}, groups)
-	require.Equal(t, map[int64]map[int64]int64{vip: {declared: 1, open: 1}}, bySegment)
-
-	// Once the price is disabled, open provides nothing: its rules stay, uncounted.
+	require.Equal(t, map[string][]any{"declared": {float64(3), float64(1)}, "open": {float64(1), float64(1)}}, counts())
+	// Once the price is disabled, open provides nothing; its rule still counts.
 	e.exec(`UPDATE model_prices SET enabled = false WHERE model = 'priced'`)
-	groups, bySegment = counts()
-	require.Equal(t, map[string][]any{"declared": {float64(1), float64(1)}, "open": {float64(0), float64(0)}}, groups)
-	require.Equal(t, map[int64]map[int64]int64{vip: {declared: 1}}, bySegment)
-	require.EqualValues(t, 12, e.one(`SELECT count(*) FROM price_rules`))
+	require.Equal(t, map[string][]any{"declared": {float64(3), float64(1)}, "open": {float64(1), float64(0)}}, counts())
 }
 
 func TestGroupModels(t *testing.T) {

@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
-	"sync/atomic"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -52,8 +51,6 @@ type env struct {
 	svc                  *Service
 	h                    http.Handler
 	admin, masked, plain int64
-	// rulesChanged counts the PriceRulesChanged calls.
-	rulesChanged atomic.Int64
 }
 
 func setup(t *testing.T) *env {
@@ -75,38 +72,10 @@ func setup(t *testing.T) *env {
 			}
 			return out, nil
 		},
-		PriceRulesChanged: func(context.Context) { e.rulesChanged.Add(1) },
-		RuleCounts:        e.ruleCounts,
 	})
 	e.svc.RegisterRoutes(httpapi.NewRouter(engine, fakeTokens{}, authz))
 	e.h = engine
 	return e
-}
-
-// goneModel is a model no group provides any more: its rules stay stored, and
-// group.Service.SegmentRuleCounts, which ruleCounts stands in for, leaves
-// them out. Which models a group provides is the group package's to tell.
-const goneModel = "gone"
-
-func (e *env) ruleCounts(ctx context.Context, segmentIDs []int64) (map[int64]map[int64]int64, error) {
-	rows, err := e.db.SQL.QueryContext(ctx, `SELECT segment_id, group_id, count(*) FROM price_rules
-		WHERE segment_id = ANY($1) AND model <> $2 GROUP BY 1, 2`, segmentIDs, goneModel)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := map[int64]map[int64]int64{}
-	for rows.Next() {
-		var segment, group, n int64
-		if err := rows.Scan(&segment, &group, &n); err != nil {
-			return nil, err
-		}
-		if out[segment] == nil {
-			out[segment] = map[int64]int64{}
-		}
-		out[segment][group] = n
-	}
-	return out, rows.Err()
 }
 
 // What another writer did to a transaction is a conflict to try again, not a
@@ -185,11 +154,6 @@ func (e *env) pair(segment, group int64, granted bool, override string) {
 }
 
 // rule gives the segment (0 = the group itself) a model price in the group.
-func (e *env) rule(group, segment int64, model string) {
-	e.exec(`INSERT INTO price_rules (group_id, segment_id, model, kind, multiplier) VALUES ($1, NULLIF($2, 0), $3, 'multiplier', 0.8)`,
-		group, segment, model)
-}
-
 func (e *env) segmentOf(user int64) int64 {
 	return e.id(`SELECT segment_id FROM users WHERE id = $1`, user)
 }

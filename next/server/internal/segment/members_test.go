@@ -25,18 +25,14 @@ func TestAddMembers(t *testing.T) {
 	require.Equal(t, vip, e.segmentOf(e.masked))
 	require.Equal(t, float64(1), moved(vip, e.plain, third), "a user already there does not move")
 	require.Equal(t, float64(0), moved(vip))
-	require.Zero(t, e.rulesChanged.Load(), "no personal segment went")
 
 	// A personal user who is moved loses the personal segment and its settings.
 	personal := e.personal(e.plain)
 	e.pair(personal, group, true, "0.5")
-	e.rule(group, personal, "m1")
 	require.Equal(t, float64(1), moved(def, e.plain))
 	require.Equal(t, def, e.segmentOf(e.plain))
 	require.Zero(t, e.id(`SELECT count(*) FROM segments WHERE id = $1`, personal))
 	require.Zero(t, e.id(`SELECT count(*) FROM segment_groups`))
-	require.Zero(t, e.id(`SELECT count(*) FROM price_rules`))
-	require.Equal(t, int64(1), e.rulesChanged.Load())
 
 	// Nobody moves when one of the users is unknown; a deleted user is.
 	e.exec(`UPDATE users SET deleted_at = now() WHERE id = $1`, e.masked)
@@ -114,8 +110,7 @@ func TestSegmentDeleteWaitsForMovers(t *testing.T) {
 				if err := setUserSegment(store.G(ctx, tx), gorm.Expr("default_segment_id()"), "id = ANY(?)", store.Int64s(ids)).Error; err != nil {
 					return err
 				}
-				_, err := DropPersonal(ctx, tx, ids...)
-				return err
+				return DropPersonal(ctx, tx, ids...)
 			}
 			if err := move(last); err != nil {
 				return err
@@ -160,7 +155,6 @@ func TestMixedWritersRace(t *testing.T) {
 		a, b := e.segment(path("a %d", round), "0.9"), e.segment(path("b %d", round), "0.8")
 		e.exec(`UPDATE users SET segment_id = $1 WHERE id = ANY($2) AND segment_id IN (SELECT id FROM segments WHERE kind = 'named')`, a, users[:6])
 		e.pair(a, groups[0], true, "0.5")
-		e.rule(groups[0], a, "m1")
 		calls := []func() int{
 			call("DELETE", path("/segments/%d", a), nil),
 			call("DELETE", path("/segments/%d", b), nil),

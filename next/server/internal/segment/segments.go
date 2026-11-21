@@ -27,11 +27,8 @@ type Segment struct {
 	MemberCount int64           `json:"member_count"`
 	// GrantedGroups are the private groups the segment is granted.
 	GrantedGroups []core.GroupRef `json:"granted_groups"`
-	// RateOverrideCount counts the groups whose rate it overrides and
-	// PriceRuleCount its own model prices, over all groups, on the models
-	// each group provides now (Deps.RuleCounts).
+	// RateOverrideCount counts the groups whose rate it overrides.
 	RateOverrideCount int64 `json:"rate_override_count"`
-	PriceRuleCount    int64 `json:"price_rule_count"`
 	*Personal
 	CreatedAt time.Time `json:"created_at"`
 }
@@ -57,8 +54,7 @@ func fromSegments(db *gorm.DB) *gorm.DB {
 }
 
 // segmentColumns are the columns of a segmentRow: a segment with its member
-// count, grants and rates; its price_rule_count comes from countRules. A
-// deleted user is no member.
+// count, grants and rates. A deleted user is no member.
 const segmentColumns = RefColumns + `, s.description, s.discount, s.is_default, s.created_at,
 	(SELECT count(*) FROM users m WHERE m.segment_id = s.id AND m.deleted_at IS NULL) AS member_count,
 	(SELECT COALESCE(jsonb_agg(jsonb_build_object('id', g.id, 'name', g.name) ORDER BY g.id), '[]')
@@ -119,27 +115,7 @@ func (s *Service) load(ctx context.Context, id int64) (*Segment, error) {
 	if err != nil {
 		return nil, err
 	}
-	sg := row.segment(show)
-	return sg, s.countRules(ctx, sg)
-}
-
-// countRules sets the price rule counts of the segments (Deps.RuleCounts).
-func (s *Service) countRules(ctx context.Context, segments ...*Segment) error {
-	ids := make([]int64, len(segments))
-	for i, sg := range segments {
-		ids[i] = sg.ID
-	}
-	counts, err := s.ruleCounts(ctx, ids)
-	if err != nil {
-		return err
-	}
-	for _, sg := range segments {
-		sg.PriceRuleCount = 0
-		for _, n := range counts[sg.ID] {
-			sg.PriceRuleCount += n
-		}
-	}
-	return nil
+	return row.segment(show), nil
 }
 
 // render answers with the segment as the caller may see it.
@@ -164,19 +140,38 @@ func searchSegments(f *store.Conds, q string, showUsers bool) {
 	f.And(`(`+cond+`)`, args...)
 }
 
-// listFilter narrows the segments s to those of the kind that match q ("" =
-// any).
+// kindAll is the ?kind= of GET /segments that lists both kinds.
+const kindAll = "all"
+
+// listOrder is the order of GET /segments: the default segment, the other
+// named ones, then the personal ones, each by id.
+const listOrder = "s.is_default DESC, s.kind = 'personal', s.id"
+
+// listKind reads ?kind= of GET /segments: named (the default), personal or
+// all.
+func listKind(c *gin.Context) string {
+	if kind := c.Query("kind"); kind == core.SegmentPersonal || kind == kindAll {
+		return kind
+	}
+	return core.SegmentNamed
+}
+
+// listFilter narrows the segments s to those of the kind (kindAll = any)
+// that match q ("" = any).
 func listFilter(kind, q string, showUsers bool) func(*gorm.DB) *gorm.DB {
 	var f store.Conds
-	f.And("s.kind = ?", kind)
+	if kind != kindAll {
+		f.And("s.kind = ?", kind)
+	}
 	if q != "" {
 		searchSegments(&f, q, showUsers)
 	}
 	return f.Scope()
 }
 
-// list returns a page of the named segments, the default one first, or with
-// ?kind=personal of the personal ones.
+// list returns a page of the named segments, the default one first, with
+// ?kind=personal of the personal ones, with ?kind=all of both, the named
+// ones (the default one first) before the personal ones.
 func (s *Service) list(c *gin.Context) {
 	ctx := c.Request.Context()
 	show, err := ShowUsers(ctx, s.authz)
@@ -184,11 +179,7 @@ func (s *Service) list(c *gin.Context) {
 		httpapi.Fail(c, err)
 		return
 	}
-	kind := core.SegmentNamed
-	if c.Query("kind") == core.SegmentPersonal {
-		kind = core.SegmentPersonal
-	}
-	g, filter := store.G(ctx, s.db.Gorm), listFilter(kind, strings.TrimSpace(c.Query("q")), show)
+	g, filter := store.G(ctx, s.db.Gorm), listFilter(listKind(c), strings.TrimSpace(c.Query("q")), show)
 	var total int64
 	if err := fromSegments(g).Scopes(filter).Count(&total).Error; err != nil {
 		httpapi.Fail(c, err)
@@ -196,7 +187,7 @@ func (s *Service) list(c *gin.Context) {
 	}
 	page, size := httpapi.Pagination(c)
 	var rows []segmentRow
-	if err := selectSegments(g).Scopes(filter).Order("s.is_default DESC, s.id").Limit(size).Offset((page - 1) * size).
+	if err := selectSegments(g).Scopes(filter).Order(listOrder).Limit(size).Offset((page - 1) * size).
 		Scan(&rows).Error; err != nil {
 		httpapi.Fail(c, err)
 		return
@@ -204,10 +195,6 @@ func (s *Service) list(c *gin.Context) {
 	items := make([]*Segment, 0, len(rows))
 	for i := range rows {
 		items = append(items, rows[i].segment(show))
-	}
-	if err := s.countRules(ctx, items...); err != nil {
-		httpapi.Fail(c, err)
-		return
 	}
 	httpapi.List(c, items, httpapi.Page{Page: page, PageSize: size, Total: total})
 }
@@ -332,8 +319,7 @@ func updateSegment(db *gorm.DB, id int64, in *segmentInput) *gorm.DB {
 	return db.Model(&model.Segment{}).Where("id = ?", id).Updates(in.columns())
 }
 
-// delete removes a named segment with its grants, rates and model prices
-// (they cascade). Its members fall back to the default segment. A personal
+// delete removes a named segment with its grants and rates (they cascade). Its members fall back to the default segment. A personal
 // segment only goes this way once its user is deleted (requireOrphan).
 func (s *Service) delete(c *gin.Context) {
 	ctx := c.Request.Context()
@@ -382,7 +368,6 @@ func (s *Service) delete(c *gin.Context) {
 		httpapi.Fail(c, err)
 		return
 	}
-	s.priceRulesChanged(ctx)
 	httpapi.NoContent(c)
 }
 

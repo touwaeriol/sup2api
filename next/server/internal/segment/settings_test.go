@@ -8,7 +8,7 @@ import (
 
 // settingsFixture is segment "vip" (discount 0.8, one member) and three
 // groups: a public one at rate 1.5, a private one at rate 2 granted to vip at
-// its own rate 0.5 with a model price, and a private one vip has nothing in.
+// its own rate 0.5, and a private one vip has nothing in.
 type settingsFixture struct {
 	*env
 	vip                    int64
@@ -21,7 +21,6 @@ func newSettingsFixture(t *testing.T) settingsFixture {
 	f.vip = f.segment("vip", "0.8")
 	f.public, f.granted, f.other = f.group("public", "public", "1.5"), f.group("granted", "restricted", "2"), f.group("other", "restricted", "1")
 	f.pair(f.vip, f.granted, true, "0.5")
-	f.rule(f.granted, f.vip, "m1")
 	f.exec(`UPDATE users SET segment_id = $1 WHERE id = $2`, f.vip, f.plain)
 	return f
 }
@@ -51,7 +50,7 @@ func TestSegmentGroups(t *testing.T) {
 		"group": map[string]any{"id": float64(f.granted), "name": "granted", "description": "", "status": "active",
 			"visibility": "restricted", "rate_multiplier": "2", "platforms": []any{"anthropic"}},
 		"accessible": true, "granted": true, "rate_override": "0.5", "rate": rate("0.5", "segment", "2", "0.8"),
-		"price_rule_count": float64(1), "member_count": float64(1),
+		"member_count": float64(1),
 	}, rows[1])
 	for _, tc := range []struct {
 		row        map[string]any
@@ -67,7 +66,6 @@ func TestSegmentGroups(t *testing.T) {
 		require.Equal(t, false, tc.row["granted"])
 		require.Nil(t, tc.row["rate_override"])
 		require.Equal(t, tc.rate, tc.row["rate"])
-		require.Equal(t, float64(0), tc.row["price_rule_count"])
 	}
 
 	f.do(f.admin, "GET", "/segments/999999/groups", nil).failed(404, "not_found")
@@ -122,17 +120,17 @@ func TestSetSegmentGroups(t *testing.T) {
 func TestGroupSegments(t *testing.T) {
 	f := newSettingsFixture(t)
 	def := f.defaultSegment()
-	withGrant, withRule, bare := f.personal(f.admin), f.personal(f.masked), f.personal(f.user("bare@x.com"))
+	withGrant, withRate, bare := f.personal(f.admin), f.personal(f.masked), f.personal(f.user("bare@x.com"))
 	f.pair(withGrant, f.granted, true, "")
-	f.rule(f.granted, withRule, "m1")
+	f.pair(withRate, f.granted, false, "0.7")
 	segments := func(query string) []any {
 		rows := f.do(f.admin, "GET", path("/groups/%d/segments%s", f.granted, query), nil).ok(200).rows()
 		return names(rows, func(r map[string]any) any { return idOf(r["segment"].(map[string]any)) })
 	}
 
-	require.Equal(t, []any{def, f.vip, withGrant, withRule}, segments(""),
+	require.Equal(t, []any{def, f.vip, withGrant, withRate}, segments(""),
 		"every named segment, then the personal ones with something in the group")
-	require.Equal(t, []any{def, f.vip, withGrant, withRule, bare}, segments(path("?include=%d,x,%d", bare, f.vip)),
+	require.Equal(t, []any{def, f.vip, withGrant, withRate, bare}, segments(path("?include=%d,x,%d", bare, f.vip)),
 		"?include= adds personal segments that have nothing there yet")
 
 	rows := f.do(f.admin, "GET", path("/groups/%d/segments", f.granted), nil).ok(200).rows()
@@ -140,11 +138,11 @@ func TestGroupSegments(t *testing.T) {
 	require.Equal(t, rate("2", "group", "2", "1"), rows[0]["rate"])
 	require.Equal(t, float64(0), rows[0]["member_count"])
 	require.Equal(t, rate("0.5", "segment", "2", "0.8"), rows[1]["rate"])
-	require.Equal(t, float64(1), rows[1]["price_rule_count"])
+	require.NotContains(t, rows[1], "price_rule_count")
 	require.Equal(t, float64(1), rows[1]["member_count"])
 	require.Equal(t, map[string]any{"id": float64(withGrant), "kind": "personal", "name": "admin@x.com", "user_id": float64(f.admin)}, rows[2]["segment"])
 	require.Equal(t, true, rows[2]["accessible"])
-	require.Equal(t, float64(1), rows[3]["price_rule_count"])
+	require.Equal(t, "0.7", rows[3]["rate_override"])
 	require.Equal(t, float64(f.granted), rows[3]["group"].(map[string]any)["id"])
 
 	f.do(f.admin, "GET", "/groups/999999/segments", nil).failed(404, "not_found")
@@ -239,6 +237,7 @@ func TestPersonalNamesAreMasked(t *testing.T) {
 		require.Equal(t, tc.name, f.do(tc.caller, "GET", path("/segments/%d", personal), nil).ok(200).data()["name"])
 		for _, q := range []string{"plain@", "name+of+plain"} {
 			require.Equal(t, tc.found, f.do(tc.caller, "GET", "/segments?kind=personal&q="+q, nil).ok(200).total(), q)
+			require.Equal(t, tc.found, f.do(tc.caller, "GET", "/segments?kind=all&q="+q, nil).ok(200).total(), q)
 		}
 		ofSegment := f.do(tc.caller, "GET", path("/segments/%d/groups", personal), nil).ok(200).rows()
 		require.Equal(t, tc.name, ofSegment[0]["segment"].(map[string]any)["name"])
