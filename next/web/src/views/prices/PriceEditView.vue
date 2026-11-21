@@ -13,6 +13,7 @@ import {
   SDescItem,
   SDescriptions,
   SDisclosure,
+  SDrawer,
   SField,
   SGrid,
   SHint,
@@ -30,6 +31,7 @@ import { useAuthStore } from '@/stores/auth'
 import { notifyError } from '@/utils/errors'
 import { applyFormError } from '@/utils/formErrors'
 import { formatDateTime } from '@/utils/format'
+import ExprGuide from './ExprGuide.vue'
 import ExprHistoryModal from './ExprHistoryModal.vue'
 import PriceExprEditor from './PriceExprEditor.vue'
 import PriceTrialPanel from './PriceTrialPanel.vue'
@@ -71,6 +73,21 @@ const token = ref<TokenConfig>(defaultTokenConfig())
 const sourceText = ref('')
 const errors = ref<Record<string, string>>({})
 const historyOpen = ref(false)
+const exprEditor = ref<InstanceType<typeof PriceExprEditor>>()
+
+// The expression guide sits in the side column from xl (where the column
+// exists), so the editor stays usable beside it; narrower, it is a drawer.
+const guideOpen = ref(false)
+const wide = ref(false)
+if (typeof window !== 'undefined' && window.matchMedia) {
+  const mq = window.matchMedia('(min-width: 1280px)')
+  wide.value = mq.matches
+  mq.addEventListener?.('change', (e) => (wide.value = e.matches))
+}
+function guideReplace(src: string) {
+  sourceText.value = src
+  if (!wide.value) guideOpen.value = false
+}
 
 const readonly = computed(() => !auth.has('price:manage'))
 const MODES = ['per_request', 'per_token', 'expression'] as const
@@ -141,7 +158,7 @@ const localIssues = computed<string[]>(() => {
   return issues.map(x => t(x.key, x.params || {}))
 })
 
-const previewSource = computed(() => (localIssues.value.length ? null : { ...payload.value }))
+const previewSource = computed(() => (localIssues.value.length || validation.value?.errors.length ? null : { ...payload.value }))
 
 /** Takes the generated source into the expression mode. */
 function editAsExpression() {
@@ -302,7 +319,16 @@ const title = computed(() => {
             <SInput v-model="perRequest" type="number" min="0" step="any" :suffix="t('prices.perRequestUnit')" :disabled="readonly" />
           </SField>
           <TokenPriceEditor v-else-if="mode === 'per_token'" v-model="token" :disabled="readonly" />
-          <PriceExprEditor v-else v-model="sourceText" :readonly="readonly" :error="errors.expression" />
+          <PriceExprEditor
+            v-else
+            ref="exprEditor"
+            v-model="sourceText"
+            :readonly="readonly"
+            :error="errors.expression"
+            :validation="validation"
+            :validating="validating"
+            @guide="guideOpen = !guideOpen"
+          />
 
           <div v-if="mode !== 'expression'" class="mt-5 border-t border-line pt-3">
             <SDisclosure :label="t('prices.generatedShow')" :open-label="t('prices.generatedHide')">
@@ -327,13 +353,26 @@ const title = computed(() => {
 
       <!-- side: validation and trial, kept in view under the sticky top bar on wide screens -->
       <aside class="min-w-0 space-y-5 xl:sticky xl:top-16 xl:max-h-[calc(100dvh-5rem)] xl:overflow-y-auto">
-        <PriceValidationCard :local-issues="localIssues" :validation="validation" :error="validationError" :validating="validating" />
-        <SCard :title="t('prices.trial.title')">
+        <PriceValidationCard
+          :local-issues="localIssues"
+          :validation="validation"
+          :error="validationError"
+          :validating="validating"
+          @locate="(l, c) => exprEditor?.focusAt(l, c)"
+        />
+        <SCard v-if="guideOpen && wide && mode === 'expression'" title="表达式使用说明" data-testid="expr-guide-docked">
+          <template #actions><SButton size="sm" variant="ghost" icon="x" aria-label="关闭使用说明" @click="guideOpen = false" /></template>
+          <ExprGuide @insert="(s, c) => exprEditor?.insert(s, c)" @replace="guideReplace" />
+        </SCard>
+        <SCard v-else :title="t('prices.trial.title')">
           <PriceTrialPanel :source="previewSource" />
         </SCard>
       </aside>
     </div>
 
+    <SDrawer :open="guideOpen && !wide && mode === 'expression'" title="表达式使用说明" width="lg" @update:open="guideOpen = $event">
+      <ExprGuide @insert="(s, c) => exprEditor?.insert(s, c)" @replace="guideReplace" />
+    </SDrawer>
     <ExprHistoryModal v-model:open="historyOpen" :hash="price?.expr_hash" />
   </div>
 </template>

@@ -393,25 +393,102 @@ function exprOf(body: any): { mode: PriceMode; config: Record<string, any>; expr
   return { mode, config, expression, issue }
 }
 
+/** 1-based line and column of a 0-based offset. */
+function lineCol(src: string, at: number) {
+  const before = src.slice(0, at).split('\n')
+  return { line: before.length, column: before[before.length - 1].length + 1 }
+}
+
+const STR = /"(?:[^"\\]|\\.)*"/g
+
+function editDistance(a: string, b: string): number {
+  const d = Array.from({ length: b.length + 1 }, (_, j) => j)
+  for (let i = 1; i <= a.length; i++) {
+    let prev = d[0]
+    d[0] = i
+    for (let j = 1; j <= b.length; j++) {
+      const t = d[j]
+      d[j] = Math.min(d[j] + 1, d[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1))
+      prev = t
+    }
+  }
+  return d[b.length]
+}
+
+/** First syntax problem the mock can place: an unbalanced bracket or an unknown name. */
+function syntaxIssue(src: string) {
+  const bare = src.replace(STR, (m) => '"' + ' '.repeat(m.length - 2) + '"')
+  const syntax = (at: number, detail: string) => ({ ...lineCol(src, at), code: 'syntax_error', message: msg('syntax error', '语法错误'), detail })
+  const open: number[] = []
+  for (let i = 0; i < bare.length; i++) {
+    if (bare[i] === '(') open.push(i)
+    else if (bare[i] === ')' && open.pop() === undefined) return syntax(i, '多了一个右括号')
+  }
+  if (open.length) return syntax(open[open.length - 1], '这个左括号没有配对的右括号')
+  for (const m of bare.matchAll(/[A-Za-z_][A-Za-z0-9_]*/g)) {
+    if (!ALLOWED_IDENTS.has(m[0])) {
+      const near = [...ALLOWED_IDENTS].filter((x) => !x.startsWith('_') && editDistance(x, m[0]) <= 2).sort((a, b) => editDistance(a, m[0]) - editDistance(b, m[0]))[0]
+      return syntax(m.index!, `不认识的名字 ${m[0]}${near ? `，是不是 ${near}？` : ''}`)
+    }
+  }
+  return null
+}
+
+/** What an expression reads (expr.Analysis), by pattern. */
+function analyze(src: string) {
+  const all = (re: RegExp) => [...new Set([...src.matchAll(re)].map((m) => m[1]))]
+  const bare = src.replace(STR, '""')
+  const idents = new Set(bare.match(/[A-Za-z_][A-Za-z0-9_]*/g) || [])
+  return {
+    version: 1,
+    vars: [...PRICE_KEYS, 'len'].filter((k) => idents.has(k)),
+    params: all(/param\("([^"]+)"\)/g),
+    headers: all(/header\("([^"]+)"\)/g).map((h) => h.toLowerCase()),
+    facts: all(/\bu\("([^"]+)"\)/g),
+    tiers: all(/tier\("([^"]+)"/g),
+    rules: surcharges(src).map((r) => r.cond),
+    len_boundaries: [...new Set([...bare.matchAll(/len\s*(?:<=|<|>=|>)\s*(\d+)/g)].map((m) => Number(m[1])))].sort((a, b) => a - b),
+    zones: all(/(?:hour|minute|weekday|day|month)\("([^"]+)"\)/g)
+  }
+}
+
+/** Usage fields the mock plugins declare. */
+const DECLARED_FACTS = new Set(['service_tier', 'speed', 'video_seconds'])
+
+const SMOKE: Array<[string, Record<string, number>]> = [
+  ['全部为 0', {}],
+  ['只有输入 1,000,000 token', { p: 1e6, len: 1e6 }],
+  ['只有输出 1,000 token', { c: 1000 }],
+  ['缓存读写各 1,000 token', { cr: 1000, cc: 1000, cc1h: 1000 }],
+  ['len = 1,000,000,000', { p: 1e6, len: 1e9 }]
+]
+
 function validate(body: any) {
   const { mode, config, expression, issue } = exprOf(body)
-  const errors: Array<{ code: string; message: LText; detail?: unknown }> = []
+  const errors: Array<{ code: string; message: LText; detail?: unknown; line?: number; column?: number }> = []
   const warnings: Array<{ code: string; message: LText; detail?: unknown }> = []
   let perMillion = 0
+  let analysis: ReturnType<typeof analyze> | undefined
+  const src = expression.trim().replace(/^v1\s*:/, '')
+  const syn = issue || !src ? null : syntaxIssue(src)
   if (issue) errors.push({ code: 'invalid_config', message: msg(issue, `价格配置无效：${issue}`) })
-  else if (!expression.trim()) errors.push({ code: 'empty', message: msg('expression is empty', '表达式为空') })
+  else if (!src) errors.push({ code: 'empty_expression', message: msg('expression is empty', '表达式为空') })
+  else if (syn) errors.push(syn)
   else {
-    try {
-      // Smoke test: 1M input tokens, below and above every plausible tier boundary.
-      for (const len of [0, 1e6, 1e9]) {
-        const r = evaluate(expression, { usage: { p: 1e6, len } })
-        if (!Number.isFinite(r.cost) || r.cost < 0) throw new Error('result is not a finite non-negative number')
-        perMillion = Math.max(perMillion, r.cost)
+    analysis = analyze(src)
+    for (const f of analysis.facts) {
+      if (!DECLARED_FACTS.has(f)) errors.push({ code: 'unknown_usage_fact', message: msg('usage field not declared by any plugin', '没有插件声明这个用量字段'), detail: f })
+    }
+    for (const [name, usage] of errors.length ? [] : SMOKE) {
+      try {
+        const r = evaluate(expression, { usage })
+        if (!Number.isFinite(r.cost) || r.cost < 0) throw new Error(`result ${r.cost} is not a finite non-negative number`)
+        if (usage.p === 1e6 && usage.len === 1e6) perMillion = r.cost
+      } catch (e) {
+        const text = e instanceof Error ? e.message : String(e)
+        errors.push({ code: 'smoke_test_failed', message: msg('trial run failed', '试跑失败'), detail: `样例「${name}」：${text}` })
+        break
       }
-      evaluate(expression, { usage: { p: 1000, c: 1000, cr: 1000, cc: 1000, cc1h: 1000 } })
-    } catch (e) {
-      const text = e instanceof Error ? e.message : String(e)
-      errors.push({ code: 'compile', message: msg(text, `表达式错误：${text}`) })
     }
   }
   const threshold = Number(billingSettings.big_cost_warning_usd) || 10
@@ -428,8 +505,9 @@ function validate(body: any) {
     expr_hash: hashOf(expression),
     errors,
     warnings,
-    samples: 24,
+    samples: 38,
     cost_per_million_input: money(perMillion),
+    analysis,
     mode,
     config
   }
@@ -462,7 +540,7 @@ on('GET', '/prices', (req) => {
 })
 on('POST', '/prices/validate', (req) => {
   const v = validate(req.body)
-  return { ok: v.ok, expression: v.expression, expr_hash: v.expr_hash, errors: v.errors, warnings: v.warnings, samples: v.samples, cost_per_million_input: v.cost_per_million_input }
+  return { ok: v.ok, expression: v.expression, expr_hash: v.expr_hash, errors: v.errors, warnings: v.warnings, samples: v.samples, cost_per_million_input: v.cost_per_million_input, analysis: v.analysis }
 })
 
 function tierBounds(expression: string) {

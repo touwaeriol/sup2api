@@ -16,6 +16,20 @@ export interface PriceValidation {
   errors: Issue[]
   warnings: Issue[]
   cost_per_million_input?: string | number
+  samples?: number
+  analysis?: PriceAnalysis
+}
+
+/** What a compiled expression reads (expr.Analysis). */
+export interface PriceAnalysis {
+  vars: string[]
+  params: string[]
+  headers: string[]
+  facts: string[]
+  tiers: string[]
+  rules: string[]
+  len_boundaries: number[]
+  zones?: string[]
 }
 
 /**
@@ -38,7 +52,7 @@ export function usePriceValidation(payload: Ref<PricePayload>, localIssues: Ref<
     const my = ++seq
     validating.value = true
     try {
-      const r = await api.post<PriceValidateResult & { cost_per_million_input?: string }>('/prices/validate', body)
+      const r = await api.post<PriceValidateResult & { cost_per_million_input?: string; samples?: number; analysis?: PriceAnalysis }>('/prices/validate', body)
       if (my !== seq) return
       validation.value = { ...r, errors: r?.errors || [], warnings: r?.warnings || [] }
       error.value = ''
