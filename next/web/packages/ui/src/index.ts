@@ -64,6 +64,10 @@ export { default as STableColumnSettings } from './STableColumnSettings.vue'
 export { useTableColumns, TABLE_COLUMN_SCOPE_KEY } from './tableColumns'
 export type { TableColumnState, TableColumnStorage, TableColumnPreferences } from './tableColumns'
 export { default as STabs } from './STabs.vue'
+// A form in tabs saved by one request (UI 4.1): the frame, and the parts each tab adds to the request.
+export { default as STabbedForm } from './STabbedForm.vue'
+export { useTabbedForm, useTabbedFormPart } from './tabbedForm'
+export type { TabbedForm, TabbedFormPart } from './tabbedForm'
 export { default as STagInput } from './STagInput.vue'
 // A panel whose title is shown by its own navigation (a tab, a side menu):
 // headings in it that repeat the title are hidden, as inside STabs.
@@ -92,6 +96,7 @@ export type {
   TableColumn,
   TableReorderEvent,
   TabItem,
+  FormTab,
   SelectOption,
   MenuAction,
   Tone,

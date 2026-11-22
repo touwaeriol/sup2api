@@ -1,6 +1,6 @@
 {
   "name": "@sub2api/host",
-  "version": "4.0.0",
+  "version": "4.1.0",
   "private": true,
   "type": "module",
   "description": "Host API shared between the sub2api console and native plugin UIs (session-aware HTTP, router, i18n, permissions, toast).",

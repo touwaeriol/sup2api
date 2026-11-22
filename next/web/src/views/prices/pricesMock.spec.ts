@@ -122,7 +122,7 @@ describe('prices in the mock', () => {
   })
 
   it('take a custom price of any shape, visual or expression, checked as a global price is', async () => {
-    const save = (rule: Record<string, unknown>) => call('PUT', '/groups/1/model-prices', { items: [{ model: 'gpt-4o', rule: { kind: 'custom', ...rule } }] })
+    const save = (rule: Record<string, unknown>) => call('PATCH', '/groups/1', { model_prices: [{ model: 'gpt-4o', rule: { kind: 'custom', ...rule } }] })
     expect((await save({ mode: 'visual', config: singleTier({ p: 1, c: 2 }) })).status).toBe(200)
     expect((await save({ mode: 'visual', config: { tiers: [{ name: 'a', unit: 'request', price: 1 }], rules: [] } })).status).toBe(200)
     expect((await save({ mode: 'expression', expression: 'tier("base", p*2 + c*4)' })).status).toBe(200)

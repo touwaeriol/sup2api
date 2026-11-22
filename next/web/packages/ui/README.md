@@ -540,3 +540,35 @@ defineExpose({ validate: form.validate })
 - `checkMessages(messages, { sources, dynamic? })`：在 `describe` 里加三条用例：中英文键相同；文案里没有 vue-i18n 特殊字符（`@`、`|`、`{name}` 占位符以外的花括号）；每个键都在 `sources`（`import.meta.glob(['./*.vue', './*.ts', '!./*.spec.ts', '!./messages.ts'], { query: '?raw', import: 'default', eager: true })`）里以 `'a.b'` 出现，或在 `dynamic` 列出的前缀下（拼出来的键）。
 - `cleanup()`：卸载上面挂载的组件、撤销 `mountSettings` 的 `setHost`、撤销 `fakeHost` 提供的控制台（之后 `useHost()` 再次抛错，上一条用例授予的权限不会带到下一条）、清空 `<body>`：`afterEach(cleanup)`。
 - `mountPinned(component, options?, pin?)`：在固定的视口形态（默认手机）下挂载（控制台自己的 spec 用）。
+
+## 一次请求保存的标签表单（UI SDK 4.1）
+
+编辑弹窗的各个标签页都先把修改存成前端草稿，点“新建 / 保存”时一次请求、一个接口提交，不再有“先保存再设置”：新建时每个标签页都能直接编辑。新增 `STabbedForm`（外壳）和 `useTabbedForm`（保存逻辑），只新增导出，4.0 的接口不变。用到它们的插件声明 `hostUICompat: "^4.1"`。
+
+```vue
+<script setup lang="ts">
+import { ref } from 'vue'
+import { STabbedForm, useTabbedForm, type FormTab } from '@sub2api/ui'
+const tabs: FormTab[] = [{ key: 'basic', label: '基本信息' }, { key: 'prices', label: '价格' }]
+const tab = ref('basic')
+const form = useTabbedForm(tab, () => tabs.map((t) => t.key))
+form.register({ tab: 'basic', check: () => !!name.value.trim(), body: () => ({ name: name.value }), dirty: () => name.value !== saved, fields: ['name'], applyErrors: (e) => (errors.value = e) })
+async function save() {
+  const done = await form.submit((body) => host.api.post('/things', body))
+  if (done) close()
+}
+</script>
+<template>
+  <STabbedForm v-model="tab" :tabs="tabs" :form="form" layout="top">
+    <template #default="{ tab: key }">
+      <BasicPane v-if="key === 'basic'" />
+      <PricesPane v-else />
+    </template>
+  </STabbedForm>
+</template>
+```
+
+- **`STabbedForm`**：`tabs: FormTab[]`（`TabItem` 加 `summary?`）、`v-model`（当前标签）、`layout: 'top' | 'side'`（默认 `top`）、`form?`（`useTabbedForm` 的返回值，取未保存与出错的标签）、`idPrefix?`、`ariaLabel?`。`top` 是 `STabs` 的标签栏；`side` 是左侧导航：序号、标题、一行 `summary`，手机宽度变成横向滚动的一行。每个标签标题后有标记：出错为红点，否则有未保存的修改为黄点（读屏读出 `ui.tabHasErrors` / `ui.tabUnsaved`）。默认插槽按每个标签各渲染一次（参数 `{ tab }`，标签的 key），各在自己的 `tabpanel` 里；所有面板都保持挂载，只显示当前的（`v-show`），切换标签不丢草稿。面板与 `STabs` 一样是标题范围：与标签同名的 `SSettingsGroup` 等标题不再显示。
+- **`useTabbedForm(current, tabs)`**：`current` 是当前标签的 `Ref`（即 `v-model`），`tabs` 是按顺序的标签 key（数组、`Ref` 或函数）。它把表单 provide 给调用者下面的组件。返回 `{ current, saving, dirtyTabs, errorTabs, anyDirty, register, submit, clearErrors }`。
+- **部分**（`TabbedFormPart`）：`{ tab, check?(): boolean, body(): Record<string, unknown>, dirty?: boolean | Ref | () => boolean, fields?: string[], applyErrors?(errors) }`。一个标签可以有几个部分。调用 `useTabbedForm` 的组件用 `form.register(part)` 登记（返回取消登记的函数）；标签页里的子组件用 `useTabbedFormPart(part)`，组件卸载时自动取消；不在这样的表单里时什么也不做。`fields` 是这个部分发的请求体字段前缀：`"model_prices"` 认领字段错误 `model_prices` 和 `model_prices.0.rule`，不认领 `model_prices_x`。
+- **`submit(send)`**：先跑所有部分的 `check`（全部都跑，每个标签自己显示原因），有失败的就标红这些标签、打开其中第一个（按 `tabs` 的顺序），返回 `false`，不发请求；否则把各部分的 `body()` 合并成一个对象（各部分的字段不要重叠），调 `send` 一次并返回它的结果。`send` 以 `ApiError` 拒绝且带字段错误（`ApiError.fields`，§3.1）时，按字段前缀找到对应的部分，把它认领的错误（键是完整路径）交给它的 `applyErrors`，标红并打开第一个标签，返回 `false`；没有部分认领的失败原样拒绝，由调用方提示。`saving` 在请求期间为真；`errorTabs` 在下一次 `submit` 或 `clearErrors()` 时清空。

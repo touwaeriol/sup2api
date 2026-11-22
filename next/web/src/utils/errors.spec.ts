@@ -70,7 +70,7 @@ describe('errorMessage of resource scope refusals', () => {
   it('words not_in_scope of a field', () => {
     const e = invalid([{ field: 'group_ids', code: 'not_in_scope', message: 'bind the account to a group you manage' }])
     i18n.global.locale.value = 'zh'
-    expect(fieldErrors(e, undefined, { not_in_scope: 'accounts.scopeErrors.notInScope' })).toEqual({ group_ids: '账号必须绑定到你管理的分组' })
+    expect(fieldErrors(e, undefined, { not_in_scope: 'accounts.scopeErrors.notInScope' })).toEqual({ group_ids: '账号必须绑定到你管理的账号分组' })
     i18n.global.locale.value = 'en'
   })
 })

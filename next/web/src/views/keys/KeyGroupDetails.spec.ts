@@ -20,20 +20,20 @@ describe('API key group details', () => {
   it('lists a few endpoints of each protocol the group serves, not every endpoint of its platforms', () => {
     const served = [{ protocol: 'anthropic.messages' }]
     const w = render({ platforms: ['anthropic', 'openai'], served_protocols: served })
-    expect(w.text()).toContain('此分组的 Key 可以调用')
+    expect(w.text()).toContain('此账号分组的 Key 可以调用')
     expect(w.getComponent(PlatformEndpointsPreview).props()).toEqual({ served, max: 3 })
   })
 
   it('warns instead when the group serves no protocol', () => {
     const w = render({ platforms: ['anthropic'], served_protocols: [] })
-    expect(w.text()).toContain('该分组暂时无法提供服务')
+    expect(w.text()).toContain('该账号分组暂时无法提供服务')
     expect(w.findComponent(PlatformEndpointsPreview).exists()).toBe(false)
   })
 
   it('shows the rate of the owner, next to the default of the group when it is another', () => {
     const own = render({ id: 2, name: 'vip', rate_multiplier: '0.8', effective_rate: '0.72', exclusive: true })
     expect(own.getComponent(GroupBadge).props('rate')).toBe('0.72')
-    expect(own.get('[data-testid="key-group-own-rate"]').text()).toBe('分组默认 ×0.8，你的倍率 ×0.72')
+    expect(own.get('[data-testid="key-group-own-rate"]').text()).toBe('账号分组默认 ×0.8，你的倍率 ×0.72')
     expect(own.get('[data-testid="key-group-exclusive"]').text()).toBe('专属')
 
     const plain = render({ effective_rate: '1' })

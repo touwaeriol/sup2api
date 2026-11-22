@@ -20,18 +20,18 @@ export default {
     windowHint: 'RPM and TPM are the usage of the last 60 seconds and sessions that of their period, each counted in 20 rolling segments (3 seconds each for 60 seconds) that stop counting once they expire. RPM counts a request when it starts, so a long stream counts once and concurrency can exceed RPM. TPM is the input outside any cache plus the output; with a cap it includes what requests in flight reserved, replaced by their real usage when they finish. Sessions are those that started a request within the period (by sticky session key; a request matching no sticky rule counts as one); the period is 60 seconds unless set for the account or a model list, and the caps table names each one. Without a cap only the usage is shown. A request for a listed model counts on the account and on its list. TPD is the input outside any cache plus the output since midnight in the browser time zone, counted as TPM is, by the hour in Redis. Sessions and requests in flight by model need not add up to the row of all models: a session can use several models.'
   },
   usage: {
-    column: 'Usage', title: 'Account usage', raw: 'Raw', rawHint: 'Counted at the raw ratio: group multiplier taken as 1',
+    column: 'Usage', title: 'Account usage', raw: 'Raw', rawHint: 'Counted at the raw ratio: rate taken as 1',
     today: 'Today {cost} · {n} requests', range: 'Range', rawCost: 'Raw cost', cost: 'Charged', requests: 'Requests', tokens: 'Tokens',
     ranges: { today: 'Today', last7: 'Last 7 days', last30: 'Last 30 days', total: 'Lifetime' },
     per: { hour: 'per hour', day: 'per day', week: 'per week', month: 'per month', none: 'total' },
     perN: { hour: 'per {n} hours', day: 'per {n} days', week: 'per {n} weeks', month: 'per {n} months' },
     limitLine: 'Usage limit ({period}): {used} / {amount}', resetsAt: 'resets {time}', loadFailed: 'Could not load the usage details',
     limitReached: 'Usage limit reached: {used} / {amount} ({period})', limitReachedPlain: 'Usage limit reached',
-    hint: 'From the usage records (core statistics). With raw-ratio accounting, lifetime usage and the usage limit count the raw cost (group multiplier taken as 1).'
+    hint: 'From the usage records (core statistics). With raw-ratio accounting, lifetime usage and the usage limit count the raw cost (rate taken as 1).'
   },
   usageLimit: {
     title: 'Usage limit', description: 'Caps the cost an account serves. At the limit the account is auto-disabled and comes back when the next period starts; raising the limit or turning it off enables it at once. Works for every account type.',
-    rawCost: 'Raw-ratio accounting', rawCostHint: 'Lifetime usage and the usage limit count the cost before the group multiplier. Both costs are recorded, so switching also applies to past usage.',
+    rawCost: 'Raw-ratio accounting', rawCostHint: 'Lifetime usage and the usage limit count the cost before the rate. Both costs are recorded, so switching also applies to past usage.',
     enabled: 'Enable usage limit', enabledHint: 'Off: usage is only recorded, the account is never disabled. Independent of "Allow auto-disable".',
     amount: 'Limit', amountHint: 'Counted in {basis}', basisRaw: 'raw cost', basisCost: 'charged cost', unit: 'USD',
     period: 'Reset period', periodHint: '"Never" is a lifetime limit: once reached the account stays auto-disabled until the limit is raised.',
@@ -67,10 +67,10 @@ export default {
     selectedCount: '{n} selected',
     noModelMatch: 'No matching models',
     addModels: 'Add',
-    groupModelHint: 'Account models and group allowlists apply separately. The API Key group must also allow the request model.',
+    groupModelHint: 'Account models and account group allowlists apply separately. The API Key account group must also allow the request model.',
  authMethod: 'Authentication method', connection: 'Connection', models: 'Protocols & models', scheduling: 'Scheduling & limits', advanced: 'Advanced', navigation: 'Account configuration', searchTypes: 'Search providers or account types',
     unnamed: 'No name yet', allModels: 'All models', modelsSummary: '{n} models', mappingSummary: '{n} mappings', summaryPriority: 'Priority {n}', summaryWeight: 'Weight {n}', summaryConcurrency: 'Concurrency {n}', pluginSectionAfterSave: 'Available after the account is saved', sectionHasErrors: 'Something here needs fixing',
-    basicHint: 'Account name, groups and egress proxy', namePlaceholder: 'e.g. claude-main', groupsHint: 'Accounts outside every group are never scheduled', credentialsHint: 'Credentials are validated and stored by the {plugin} plugin',
+    basicHint: 'Account name, account groups and egress proxy', namePlaceholder: 'e.g. claude-main', groupsHint: 'Accounts outside every account group are never scheduled', credentialsHint: 'Credentials are validated and stored by the {plugin} plugin',
     modelsCardHint: 'Request models the account serves; empty means no restriction', mappingCardHint: 'Rewrites request models to upstream models; billing and allowlists still use the request model', prefilled: 'Prefilled with the plugin preset: {what}. Save as is or adjust; an empty model list serves every model.',
     prefilledEdit: "This account served all models; it has been prefilled with the plugin preset ({what}), which takes effect when you save. To keep it unrestricted, click 'Clear'.", prefillWhat: '{models} models', prefillWhatMapping: '{models} models and {mapping} mappings', prefilledFooter: 'Models prefilled with the plugin preset; saved on Save', prefilledView: 'Review',
     fillDefaults: 'Add preset models ({n})', fillDefaultsHint: 'Merges the plugin preset into the list; existing entries stay', fillDefaultMapping: 'Add preset mapping ({n})', defaultsAdded: '{n} preset models added', defaultMappingAdded: '{n} preset mappings added', defaultsNothingNew: 'The preset is already in the list',
@@ -81,7 +81,7 @@ export default {
     autoDisableGlobalOff: 'Automatic disabling is globally off. This switch has no effect and cannot be changed; the account preference is preserved.', autoDisableUnavailable: 'Unable to load the global automatic disabling setting. This switch cannot be changed for now; the account preference is preserved.',
     unitConcurrency: 'requests', unitRpm: 'req / min', unitTpm: 'tokens / min', create: 'Create account', modelsInputHint: 'Type or pick a model, Enter or comma adds it, paste comma or line separated lists; click a tag to copy it, mapped models show → target' },
   title: 'Accounts',
-  subtitle: 'Upstream accounts used by the gateway. Account types are declared by plugins; a group can mix accounts of different types.',
+  subtitle: 'Upstream accounts used by the gateway. Account types are declared by plugins; an account group can mix accounts of different types.',
   new: 'New account',
   allTypes: 'All types',
   allStatus: 'All status',
@@ -94,7 +94,7 @@ export default {
   orphanedHint: 'Plugin "{plugin}" is not installed; the account is kept but not used.',
   cooldownUntil: 'Cooling down until {time}',
   type: 'Type',
-  groups: 'Groups',
+  groups: 'Account groups',
   proxy: 'Proxy',
   proxyRequired: 'This account type needs a proxy',
   createdBy: 'Created by',
@@ -109,7 +109,7 @@ export default {
   },
   proxyPickExisting: 'Pick existing',
   proxyPasteUrl: 'Paste proxy URL',
-  groupsLocked: 'Changing the groups needs group:manage or account:group:bind.',
+  groupsLocked: 'Changing the account groups needs group:manage or account:group:bind.',
   guardedSettingsHint: 'Restricted settings (such as the base URL) can only use the official values; other values need account:settings:custom.',
   typeNeedsRelay: 'Needs account:relay: this type can point at any upstream.',
   proxyUrlProbeHint: 'Without a scheme (host:port:user:pass and similar), click Test: socks5, http and https are tried in turn',
@@ -137,7 +137,7 @@ export default {
   spmLimit: 'Session limit',
   forwarding: {
     title: 'Request forwarding',
-    hint: 'How requests go to the upstream: which client headers they carry, which parameters are rewritten, and the timeouts. An empty timeout follows the group and global environment variables',
+    hint: 'How requests go to the upstream: which client headers they carry, which parameters are rewritten, and the timeouts. An empty timeout follows the account group and global environment variables',
     allDefault: 'All defaults',
     passAll: 'Pass *',
     passRules: 'Pass {n} rules',
@@ -156,9 +156,9 @@ export default {
   conversion: {
     title: 'Conversion loss policy',
     hint: 'What happens when a request converted to another upstream protocol would lose content. Allow: serve it and record the losses; Safe: skip this account when a tool definition, tool choice or tool call would be lost; Strict: skip it on any loss. A skipped account does not count as a failover attempt',
-    inherit: 'Inherit from groups',
-    hintOwn: 'Effective: {policy} (overrides the groups)',
-    hintGroups: 'Inherited from groups: {groups}',
+    inherit: 'Inherit from account groups',
+    hintOwn: 'Effective: {policy} (overrides the account groups)',
+    hintGroups: 'Inherited from account groups: {groups}',
     hintDefault: 'Effective: {policy} (default)',
     policies: { allow: 'Allow', safe: 'Safe', strict: 'Strict' },
     grades: { native: 'native', good: 'good', fair: 'fair', discouraged: 'discouraged', local: 'local estimate' },
@@ -566,8 +566,8 @@ export default {
     resetConfirm: 'Clear the cooldown, error and automatic-disable state of the {n} selected accounts?',
     editTitle: 'Edit {n} accounts', editInfo: 'Only the ticked fields change (editing a field ticks it). Each account is saved on its own with the same checks as a single edit.',
     apply: 'Apply to {n} accounts', weightHint: 'Random share within one priority (1–1000)', zeroUnlimited: '0 means unlimited', spmHint: '0 means unlimited; the count and the period (1 minute to 24 hours) apply together',
-    groupModeLabel: 'How to change groups', groupMode: { replace: 'Replace with', add: 'Add', remove: 'Remove' },
-    groupModeHint: { replace: 'Each account gets exactly the chosen groups (none clears them)', add: 'The chosen groups are added to each account\'s groups', remove: 'The chosen groups are removed from each account; others stay' },
+    groupModeLabel: 'How to change account groups', groupMode: { replace: 'Replace with', add: 'Add', remove: 'Remove' },
+    groupModeHint: { replace: 'Each account gets exactly the chosen account groups (none clears them)', add: 'The chosen account groups are added to those of each account', remove: 'The chosen account groups are removed from each account; others stay' },
     proxyHint: 'None means no proxy',
     controlFixed: '{n} selected accounts have a type that does not allow changing this',
     editDone: '{ok} accounts updated ({skipped} needed no change)', editPartial: '{ok} succeeded, {fail} failed, {skipped} skipped',
@@ -658,7 +658,7 @@ export default {
     staleHint: 'The last query failed; this is the balance read before'
   },
   scopeErrors: {
-    notInScope: 'Bind the account to a group you manage',
+    notInScope: 'Bind the account to an account group you manage',
     wouldLeaveScope: 'The change would move the account out of your range'
   }
 }

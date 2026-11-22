@@ -9,7 +9,7 @@ import UserPick from './UserPick.vue'
 
 // Prices a user on his own (POST /users/:id/personal-segment): he leaves his
 // user group for one of his own, which starts as a copy of that group's
-// discount, grants and rates, or empty. Without `user` the dialog first asks
+// grants, rates and model rates, or empty. Without `user` the dialog first asks
 // whom: a user who is priced on his own already is answered at once. `done`
 // carries his personal segment and whether it was made just now.
 const props = defineProps<{ open: boolean; user: PersonalDialogUser | null }>()

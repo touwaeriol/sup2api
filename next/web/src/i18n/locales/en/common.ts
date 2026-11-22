@@ -65,7 +65,7 @@ export default {
   type: 'Type',
   model: 'Model',
   user: 'User',
-  group: 'Group',
+  group: 'Account group',
   account: 'Account',
   onlyMine: 'Only mine',
   theme: {

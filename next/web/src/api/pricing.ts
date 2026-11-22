@@ -1,14 +1,17 @@
 // Group pricing: user groups ("segments" in code, to stay clear of the
 // user_groups grant table and of the length tiers of a price), who may use a
-// private group, and what a call costs there.
+// private account group ("group" in code), and what a call costs there.
 //
 //   paid = list price × rate
 //
-// Both sides resolve on their own, first hit wins:
-//   list price: group × model rule        -> global model price
-//   rate:       segment × group override  -> group default × segment discount -> group default
+// Both sides resolve on their own:
+//   list price: the group's model price -> the global price
+//   rate:       one applies, never a product; the most specific first:
+//               segment × group × model -> segment × group -> group × model -> group base rate
 //
-// A segment prices no model: it only sets rates (CONTRACTS §97.10).
+// A segment prices no model: it only sets rates. A group's model price and
+// rates, and a segment's rates, are written with the group or the segment
+// itself (POST/PATCH /groups, POST/PATCH /segments), all in one request.
 //
 // Every user belongs to exactly one segment. A personal segment is a segment of
 // kind "personal" with that single user as its member: the system creates it
@@ -41,8 +44,6 @@ export type PersonalDialogUser = Pick<User, 'id' | 'email' | 'display_name' | 's
 
 export interface Segment extends SegmentRef {
   description: string
-  /** Multiplies the default rate of every group; "1" = none. An override of a group ignores it. */
-  discount: Money
   /** New users join it; it cannot be deleted. */
   is_default: boolean
   member_count: number
@@ -57,18 +58,16 @@ export interface Segment extends SegmentRef {
   created_at?: string
 }
 
-/** Where a rate comes from. */
-export type RateSource = 'segment' | 'discount' | 'group'
+/** Where a rate comes from, the most specific first: the segment's for the model in the group, the segment's in the group, the group's for the model, the group's base rate. */
+export type RateSource = 'segment_model' | 'segment' | 'group_model' | 'group'
 /** Where a list price comes from. */
 export type PriceSource = 'group' | 'global'
 
 export interface EffectiveRate {
   value: Money
   source: RateSource
-  /** The group's default rate. */
+  /** The group's base rate. */
   group_default: Money
-  /** The segment's discount. */
-  discount: Money
 }
 
 /**
@@ -95,32 +94,34 @@ export interface SegmentGroupSetting {
   accessible: boolean
   /** The explicit grant; only matters for a private group. */
   granted: boolean
-  /** The rate of this segment in this group; null = inherit. */
+  /** The rate of this segment in this group; null = follow the group. */
   rate_override: Money | null
+  /** The rate at the level of the group (no model): the override, or the group's base rate. */
   rate: EffectiveRate
+  /** The segment's model rates in this group, by model: those models are paid at these instead. */
+  model_rates: ModelRate[]
   /** Members of the segment (1 for a personal one). */
   member_count?: number
 }
 
-/** PUT /segments/:id/groups and PUT /groups/:id/segments: one changed pair. */
-export interface SegmentGroupPatch {
-  segment_id?: number
-  group_id?: number
-  granted?: boolean
-  rate_override?: Money | null
+/** A model paid at a rate of its own (of a group, or of a segment in a group). */
+export interface ModelRate {
+  model: string
+  rate: Money
 }
 
-/** A model price of a group. */
-export type PriceRule =
-  /** The global price times `multiplier`; follows the global price when it changes. */
-  | { kind: 'multiplier'; multiplier: Money }
-  /**
-   * A price of its own, written as a global price is (visual or expression),
-   * whatever the global price is. `expression` is read of an expression price
-   * only; the server always returns it, generated from `config` for a visual one.
-   */
+/**
+ * The model price of a group: a price of its own, written as a global price
+ * is (visual or expression), whatever the global price is. `expression` is
+ * read of an expression price only; the server always returns it, generated
+ * from `config` for a visual one.
+ */
+export type CustomPrice =
   | { kind: 'custom'; mode: 'visual'; config: VisualConfig; expression?: string }
   | { kind: 'custom'; mode: 'expression'; config?: Record<string, never>; expression: string }
+
+/** A price rule as usage records priced before model rates still carry it: a model price, or the global price × `multiplier`. */
+export type PriceRule = { kind: 'multiplier'; multiplier: Money } | CustomPrice
 
 export interface PriceDef {
   mode: PriceMode
@@ -134,32 +135,77 @@ export interface PriceDef {
   multiplier?: Money
 }
 
-/** A model of a group's pricing table: one the group provides or has a rule on. */
+/** A model of a group's pricing table: one the group provides, or one it sets a price or a rate on. */
 export interface ModelPriceRow {
   model: string
-  /** Whether the group provides the model now; false on a rule over a model it does not, which no request reaches yet. */
+  /** Whether the group provides the model now; false on a price or a rate over a model it does not, which no request reaches yet. */
   offered: boolean
-  /** The global price; null = the model has none and cannot be billed. */
+  /** The global price ("original price"); null = the model has none and cannot be billed. */
   base: PriceDef | null
-  group_rule: PriceRule | null
-  /** The price after the rule (a multiplier rule: the global price with `multiplier`); null without a global price. */
-  list_price: PriceDef | null
-  source: PriceSource
+  /** The group's model price; null = the original price. */
+  price: CustomPrice | null
+  /** The group's model rate; null = the group's base rate. */
+  rate: Money | null
 }
 
-/** GET and PUT /groups/:id/model-prices. */
+/** GET /groups/:id/model-prices. */
 export interface GroupModelPrices {
   group: { id: number; name: string }
-  /** The group's default rate. */
+  /** The group's base rate. */
   rate: EffectiveRate
   /** By model. */
   models: ModelPriceRow[]
 }
 
-/** An item of PUT /groups/:id/model-prices: `rule` null removes it. A rule takes a model with a global price, whether the group provides it or not. */
-export interface PriceRulePatch {
+/** An item of `model_prices` (POST/PATCH /groups): `rule` null removes the model price. It takes a model with a global price, whether the group provides it or not. */
+export interface ModelPricePatch {
   model: string
-  rule: PriceRule | null
+  rule: CustomPrice | null
+}
+
+/** An item of `model_rates` (POST/PATCH /groups): `rate` null removes the model rate. */
+export interface ModelRatePatch {
+  model: string
+  rate: Money | null
+}
+
+/** An item of `segment_rates` (POST/PATCH /groups) or, from the other side, `group_rates` (POST/PATCH /segments): one segment in one group. `granted` left out stays; `rate` null follows the group. */
+export interface SegmentRatePatch {
+  segment_id: number
+  granted?: boolean
+  rate: Money | null
+}
+export interface GroupRatePatch {
+  group_id: number
+  granted?: boolean
+  rate: Money | null
+}
+
+/** An item of `model_rates` (POST/PATCH /segments): the segment's rate for a model in a group; null removes it. */
+export interface SegmentModelRatePatch {
+  group_id: number
+  model: string
+  rate: Money | null
+}
+
+/**
+ * What POST /groups and PATCH /groups/:id take besides the group's own
+ * fields; PATCH sends only what changed. Checked as one: any item that is
+ * wrong changes nothing, and its field error names it (`model_prices.<i>.rule`,
+ * `model_rates.<i>.rate`, `segment_rates.<i>.rate`, `<i>` its position).
+ */
+export interface GroupPricingWrite {
+  model_prices?: ModelPricePatch[]
+  model_rates?: ModelRatePatch[]
+  segment_rates?: SegmentRatePatch[]
+}
+
+/** POST /segments and PATCH /segments/:id, checked as one like GroupPricingWrite (`group_rates.<i>.rate`, `model_rates.<i>.rate`). A personal segment has no name or description. */
+export interface SegmentWrite {
+  name?: string
+  description?: string
+  group_rates?: GroupRatePatch[]
+  model_rates?: SegmentModelRatePatch[]
 }
 
 /** A row of GET /pricing/catalog: an enabled global price; the rows come by model. */
@@ -188,11 +234,11 @@ export interface PricingQuote {
   base: PriceDef | null
   list_price: PriceDef | null
   price_source: PriceSource
-  /** The group's rule, as configured; it applies when `price_source` is group. */
-  price_levels: { group: PriceRule | null }
+  /** The group's model price, as configured; it applies when `price_source` is group. */
+  price_levels: { group: CustomPrice | null }
   rate: EffectiveRate
-  /** The override of this segment in this group, if any. */
-  rate_override: Money | null
+  /** Every level of the rate, most specific first; null = not set. The one `rate.source` names applies. */
+  rate_levels: { segment_model: Money | null; segment: Money | null; group_model: Money | null; group: Money }
   /** list price × usage. */
   list_cost: Money
   /** list cost × rate. */
@@ -211,7 +257,7 @@ export interface MyGroupPricing {
 export interface GroupPricingSummary {
   /** Who may use a private group: the named segments granted, and how many personal ones. */
   access: { segments: SegmentRef[]; personal_count: number }
-  /** Models the group prices itself, provided or not. */
+  /** Models the group sets a price or a model rate of its own on, provided or not. */
   price_rule_count: number
   /** Models the group provides. */
   model_count: number

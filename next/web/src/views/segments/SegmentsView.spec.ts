@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
+import { enableAutoUnmount, flushPromises, mount, RouterLinkStub } from '@vue/test-utils'
 import { reactive, ref } from 'vue'
 import { SDropdown } from '@sub2api/ui'
 import PriceSimulatorModal from '@/components/pricing/PriceSimulatorModal.vue'
@@ -17,7 +17,7 @@ vi.mock('@/components/pricing/segmentLookup', () => ({ useSegmentsLookup: vi.fn(
 const route = reactive<{ query: Record<string, string | undefined> }>({ query: {} })
 vi.mock('vue-router', async (original) => ({ ...(await original<object>()), useRoute: () => route, useRouter: () => ({ replace: mocks.replace }) }))
 
-const segment = (id: number, name: string, over: Partial<Segment> = {}): Segment => ({ id, kind: 'named', name, description: '', discount: '1', is_default: id === 1, member_count: 3, granted_groups: [], rate_overrides: [], ...over })
+const segment = (id: number, name: string, over: Partial<Segment> = {}): Segment => ({ id, kind: 'named', name, description: '', is_default: id === 1, member_count: 3, granted_groups: [], rate_overrides: [], ...over })
 const items = ref<Segment[]>([])
 const filters = reactive<Record<string, string>>({})
 vi.mock('@/composables/useList', () => ({
@@ -27,7 +27,7 @@ const solo = segment(104, 'a@b.c', { kind: 'personal', user_id: 9, member_count:
 enableAutoUnmount(afterEach)
 
 async function render() {
-  const w = mount(SegmentsView, { global: { plugins: [i18n], stubs: { Teleport: true, SegmentEditor: true, PersonalRemoveDialog: true, PersonalSegmentPicker: true, PriceSimulatorModal: true } } })
+  const w = mount(SegmentsView, { global: { plugins: [i18n], stubs: { Teleport: true, RouterLink: RouterLinkStub, SegmentEditor: true, PersonalRemoveDialog: true, PersonalSegmentPicker: true, PriceSimulatorModal: true } } })
   await flushPromises()
   return { w, editor: () => w.getComponent(SegmentEditor).props() }
 }
@@ -36,7 +36,7 @@ beforeEach(() => {
   i18n.global.locale.value = 'zh'
   mocks.denied.clear()
   route.query = {}
-  items.value = [segment(1, '默认'), segment(2, 'VIP', { discount: '0.9', granted_groups: [{ id: 3, name: 'Claude' }] }), solo]
+  items.value = [segment(1, '默认'), segment(2, 'VIP', { granted_groups: [{ id: 3, name: 'Claude' }] }), solo]
   Object.assign(filters, { q: '', kind: 'all' })
   mocks.replace.mockReset()
   mocks.reload.mockReset()
@@ -53,10 +53,9 @@ describe('user groups page', () => {
   it('lists the user groups and the users priced on their own in one table', async () => {
     const { w } = await render()
     expect(mocks.useList).toHaveBeenCalledWith('/segments', { q: '', kind: 'all' })
-    expect(w.findAll('thead th').map((th) => th.text())).toEqual(['名称', '成员', '折扣', '可用的私有分组', '单独倍率', '操作'])
+    expect(w.findAll('thead th').map((th) => th.text())).toEqual(['名称', '成员', '可用的私有账号分组', '单独倍率', '操作'])
     expect(w.get('[data-segment="1"]').get('[data-testid="segment-default"]').text()).toBe('新用户默认')
     const vip = w.get('[data-segment="2"]')
-    expect(vip.get('[data-testid="segment-discount-cell"]').text()).toBe('×0.9')
     expect(vip.text()).toContain('Claude')
     expect(vip.get('[data-testid="segment-overrides-cell"]').text()).toBe('无')
     const personal = w.get('[data-segment="104"]')
@@ -74,25 +73,25 @@ describe('user groups page', () => {
     expect(mocks.list).toHaveBeenCalledWith('/segments', { kind: 'named', q: '', page_size: 1 })
     expect(mocks.list).toHaveBeenCalledWith('/segments', { kind: 'personal', q: '', page_size: 1 })
     const kinds = w.get('[data-testid="segment-kind"]')
-    expect(kinds.findAll('label').map((l) => l.text())).toEqual(['全部 3', '用户组 2', '专享 1'])
+    expect(kinds.findAll('label').map((l) => l.text())).toEqual(['全部 3', '用户分组 2', '专享 1'])
     await kinds.findAll('input')[2].setValue(true)
     expect(filters.kind).toBe('personal')
   })
 
-  it('opens the editor of a row, and its members from the member count', async () => {
+  it('opens the editor of a row, and links its member count to its members on the users page', async () => {
     const { w, editor } = await render()
     const vip = w.get('[data-segment="2"]')
     await vip.get('[data-testid="segment-edit"]').trigger('click')
-    expect(editor()).toMatchObject({ open: true, segment: items.value[1], tab: 'basic', readonly: false })
-    await vip.get('[data-testid="segment-members-link"]').trigger('click')
-    expect(editor()).toMatchObject({ tab: 'members' })
+    expect(editor()).toMatchObject({ open: true, segment: items.value[1], readonly: false })
+    expect(vip.getComponent(RouterLinkStub).props('to')).toEqual({ path: '/users', query: { segment: 2 } })
+    expect(menu(w, 2)).toEqual(['simulate', 'delete'])
   })
 
   it('opens the user group ?edit= names, a personal one too, and takes the parameter off the address bar', async () => {
     route.query = { edit: '2', q: 'x' }
     const { editor } = await render()
     expect(mocks.get).toHaveBeenCalledWith('/segments/2')
-    expect(editor()).toMatchObject({ open: true, segment: items.value[1], tab: 'basic' })
+    expect(editor()).toMatchObject({ open: true, segment: items.value[1] })
     expect(mocks.replace).toHaveBeenCalledWith({ query: { q: 'x', edit: undefined } })
 
     route.query = { edit: '104' }
@@ -135,13 +134,9 @@ describe('user groups page', () => {
     expect(editor()).toMatchObject({ open: true, readonly: true })
   })
 
-  it('opens the members of a user group only for a caller who reads users', async () => {
-    const all = await render()
-    expect(menu(all.w, 2)).toEqual(['members', 'simulate', 'delete'])
-
+  it('links the members of a user group only for a caller who reads users', async () => {
     mocks.denied.add('user:read')
     const { w, editor } = await render()
-    expect(menu(w, 2)).toEqual(['simulate', 'delete'])
     const vip = w.get('[data-segment="2"]')
     expect(vip.find('[data-testid="segment-members-link"]').exists()).toBe(false)
     expect(vip.get('[data-testid="segment-member-count"]').text()).toBe('3')
@@ -154,7 +149,7 @@ describe('user groups page', () => {
 
     mocks.denied.add('group:read')
     const { w } = await render()
-    expect(menu(w, 2)).toEqual(['members', 'delete'])
+    expect(menu(w, 2)).toEqual(['delete'])
     // Mounted, it would ask for the groups and be refused.
     expect(w.findComponent(PriceSimulatorModal).exists()).toBe(false)
   })

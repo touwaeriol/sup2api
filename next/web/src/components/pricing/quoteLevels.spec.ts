@@ -1,22 +1,21 @@
 import { describe, expect, it } from 'vitest'
-import type { EffectiveRate, PriceDef, PriceRule } from '@/api/pricing'
+import type { CustomPrice, EffectiveRate, PriceDef, PricingQuote } from '@/api/pricing'
 import { priceLevels, rateLevels } from './quoteLevels'
 import { singleTier } from '@/views/prices/priceExpr'
 
 const base: PriceDef = { mode: 'visual', config: singleTier({ p: 3, c: 15 }), expression: '' }
-const half: PriceRule = { kind: 'multiplier', multiplier: '0.5' }
-const fixed: PriceRule = { kind: 'custom', mode: 'visual', config: singleTier({ p: 1, c: 8 }) }
-const rate = (over: Partial<EffectiveRate>): EffectiveRate => ({ value: '1.2', source: 'group', group_default: '1.2', discount: '1', ...over })
+const fixed: CustomPrice = { kind: 'custom', mode: 'visual', config: singleTier({ p: 1, c: 8 }) }
+const rate = (over: Partial<EffectiveRate>): EffectiveRate => ({ value: '1.2', source: 'group', group_default: '1.2', ...over })
+const levels = (over: Partial<PricingQuote['rate_levels']>): PricingQuote['rate_levels'] => ({ segment_model: null, segment: null, group_model: null, group: '1.2', ...over })
 
 const states = (levels: Array<{ key: string; state: string }>) => Object.fromEntries(levels.map((l) => [l.key, l.state]))
 
 describe('quote levels', () => {
   it('marks the model price level the quote took and greys the one under it', () => {
-    const top = priceLevels({ price_levels: { group: half }, base, price_source: 'group' })
+    const top = priceLevels({ price_levels: { group: fixed }, base, price_source: 'group' })
     expect(top.map((l) => l.key)).toEqual(['group', 'global'])
     expect(states(top)).toEqual({ group: 'applies', global: 'shadowed' })
-    expect(top[0].value).toBe(half)
-    expect(states(priceLevels({ price_levels: { group: fixed }, base, price_source: 'group' }))).toEqual({ group: 'applies', global: 'shadowed' })
+    expect(top[0].value).toBe(fixed)
     expect(states(priceLevels({ price_levels: { group: null }, base, price_source: 'global' }))).toEqual({ group: 'unset', global: 'applies' })
   })
 
@@ -24,25 +23,22 @@ describe('quote levels', () => {
     expect(states(priceLevels({ price_levels: { group: null }, base: null, price_source: 'global' }))).toEqual({ group: 'unset', global: 'unset' })
   })
 
-  it('replaces the rate by the override of the segment', () => {
-    const levels = rateLevels({ rate: rate({ value: '0.8', source: 'segment', discount: '0.9' }), rate_override: '0.8' })
-    expect(levels.map((l) => [l.key, l.value, l.state])).toEqual([
-      ['segment', 0.8, 'applies'],
-      ['discount', 1.08, 'shadowed'],
+  it('takes the most specific rate set and greys the ones under it', () => {
+    const q = { rate: rate({ value: '0.85', source: 'segment_model' }), rate_levels: levels({ segment_model: '0.85', segment: '0.7', group_model: null }) }
+    expect(rateLevels(q).map((l) => [l.key, l.value, l.state])).toEqual([
+      ['segment_model', 0.85, 'applies'],
+      ['segment', 0.7, 'shadowed'],
+      ['group_model', null, 'unset'],
       ['group', 1.2, 'shadowed']
     ])
   })
 
-  it('multiplies the default rate of the group by the discount of the segment', () => {
-    const levels = rateLevels({ rate: rate({ value: '1.08', source: 'discount', discount: '0.9' }), rate_override: null })
-    expect(levels.map((l) => [l.key, l.value, l.state])).toEqual([
-      ['segment', null, 'unset'],
-      ['discount', 1.08, 'applies'],
-      ['group', 1.2, 'shadowed']
-    ])
+  it('takes the model rate of the group over its base rate', () => {
+    const q = { rate: rate({ value: '0.9', source: 'group_model' }), rate_levels: levels({ group_model: '0.9' }) }
+    expect(states(rateLevels(q))).toEqual({ segment_model: 'unset', segment: 'unset', group_model: 'applies', group: 'shadowed' })
   })
 
-  it('falls back to the default rate of the group; a discount of 1 is no discount', () => {
-    expect(states(rateLevels({ rate: rate({}), rate_override: null }))).toEqual({ segment: 'unset', discount: 'unset', group: 'applies' })
+  it('falls back to the base rate of the group', () => {
+    expect(states(rateLevels({ rate: rate({}), rate_levels: levels({}) }))).toEqual({ segment_model: 'unset', segment: 'unset', group_model: 'unset', group: 'applies' })
   })
 })

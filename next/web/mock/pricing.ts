@@ -1,13 +1,13 @@
-// Mock handlers: group pricing. User groups ("segments"), their grants and
-// rates per group, the model prices of a group and the catalog of global
-// prices, personal segments, the price quote and the caller's own prices.
-// State and resolution live in pricingStore.ts; the handlers here read the
-// request, call it and build the API rows.
+// Mock handlers: group pricing. User groups ("segments") with their grants
+// and rates per account group ("group"), the pricing table of a group and the
+// catalog of global prices, personal segments, the price quote and the
+// caller's own prices. State and resolution live in pricingStore.ts, the
+// checks of what a write carries in pricingWrites.ts; the handlers here read
+// the request, call them and build the API rows.
 import { fail, noContent, on, paginate, type MockHandler, type MockRequest, type MockResult } from './router'
 import { caller, hasPerm } from './core'
 import { groupPlatforms } from './accounts'
-import { configPrice, globalPrice, money, priceCost, pricedModels, validate, type PriceDef } from './billing'
-import { compactVisualConfig } from '../src/views/prices/priceExpr'
+import { globalPrice, money, priceCost, pricedModels } from './billing'
 import type { PricingQuote } from '../src/api/pricing'
 import { invalid, match } from './common'
 import { groupModels, groups, myGroups, type MockGroup } from './groups'
@@ -20,8 +20,11 @@ import {
   grantedGroupIds,
   listPriceOf,
   makePersonal,
+  modelRateOf,
+  modelRatesWhere,
   moveUser,
   pairsWhere,
+  rateLevelsOf,
   rateOf,
   rateOverrideOf,
   removeSegment,
@@ -29,11 +32,9 @@ import {
   segmentOfUser,
   segmentRef,
   segments,
-  setPair,
-  setRule,
-  type MockSegment,
-  type PriceRule
+  type MockSegment
 } from './pricingStore'
+import { applySegmentRates, fieldsFailure, segmentRatesErrors } from './pricingWrites'
 
 // ------------------------------------------------------------------ routing helpers
 
@@ -67,13 +68,8 @@ const onSegment = (handler: (s: MockSegment, req: MockRequest) => MockResult) =>
 const onGroup = (handler: (g: MockGroup, req: MockRequest) => MockResult) => onRow('group', (req) => groups.find((g) => g.id === idOf(req)), handler)
 const onUser = (handler: (u: MockUser, req: MockRequest) => MockResult) => onRow('user', (req) => users.find((u) => u.id === idOf(req)), handler)
 
-/** A rate, a discount or a multiplier: a non-negative decimal of at most four decimals, below 1000000. */
-const validRate = (v: unknown) => /^\d+(\.\d{1,4})?$/.test(String(v)) && Number(v) < 1000000
-/** What the message of a value that is no rate ends with. */
-const RATE_LIMITS = 'below 1000000, with at most 4 decimals'
 /** An id in the query as the server parses one: a positive integer ("007" is 7). */
 const positive = (v: string) => /^\d+$/.test(v) && Number(v) > 0
-const itemsOf = (req: MockRequest): any[] => (Array.isArray(req.body?.items) ? req.body.items : [])
 
 // ------------------------------------------------------------------ rows
 
@@ -88,7 +84,6 @@ function segmentOut(s: MockSegment, showUsers: boolean) {
   return {
     ...segmentRef(s, showUsers),
     description: s.description,
-    discount: s.discount,
     is_default: s.is_default,
     member_count: membersOf(s).length,
     granted_groups: groups.filter((g) => g.visibility === 'restricted' && granted.includes(g.id)).map((g) => ({ id: g.id, name: g.name })),
@@ -118,6 +113,7 @@ function settingOut(s: MockSegment, g: MockGroup, showUsers: boolean) {
     granted: access.granted,
     rate_override: rateOverrideOf(s.id, g.id),
     rate: rateOf(s, g),
+    model_rates: modelRatesWhere({ segment_id: s.id, group_id: g.id }).map(({ model, rate }) => ({ model, rate })).sort((a, b) => a.model.localeCompare(b.model)),
     member_count: membersOf(s).length
   }
 }
@@ -136,17 +132,17 @@ function groupSettings(g: MockGroup, req: MockRequest) {
     .map((s) => settingOut(s, g, showsUsers(req)))
 }
 
-/** One model of a group's pricing table: whether the group provides it, its global price, the group's rule and the list price. */
+/** One model of a group's pricing table: whether the group provides it, its global price, and the group's model price and model rate. */
 function modelRow(g: MockGroup, model: string, offered: string[]) {
   const base = globalPrice(model)
-  const { group_rule, list_price, source } = listPriceOf(g.id, model, base)
-  return { model, offered: offered.includes(model), base, group_rule, list_price, source }
+  return { model, offered: offered.includes(model), base, price: listPriceOf(g.id, model, base).group_rule, rate: modelRateOf(null, g.id, model) }
 }
 
-/** The pricing table of a group: the models it provides and those it has a rule on, by model, at its default rate. */
+/** The pricing table of a group: the models it provides and those it sets a price or a rate on, by model, at its base rate. */
 function modelPrices(g: MockGroup) {
   const offered = groupModels(g)
-  const models = [...new Set([...offered, ...rulesWhere({ group_id: g.id }).map((r) => r.model)])].sort()
+  const set = [...rulesWhere({ group_id: g.id }), ...modelRatesWhere({ segment_id: null, group_id: g.id })].map((r) => r.model)
+  const models = [...new Set([...offered, ...set])].sort()
   return { group: { id: g.id, name: g.name }, rate: rateOf(null, g), models: models.map((m) => modelRow(g, m, offered)) }
 }
 
@@ -172,14 +168,13 @@ const DESCRIPTION_MAX = 2000
 /** The first invalid field of a segment body; `self` is the segment being edited. */
 function segmentError(b: any, self?: MockSegment) {
   const name = String(b.name ?? '').trim()
-  if (self?.kind === 'personal' && (b.name !== undefined || b.description !== undefined)) return invalid('name', 'a personal user group only has a discount')
+  if (self?.kind === 'personal' && (b.name !== undefined || b.description !== undefined)) return invalid('name', 'a personal user group has no name or description')
   if (b.name !== undefined && !name) return invalid('name', 'name is required')
   if ([...name].length > NAME_MAX) return invalid('name', `name must be at most ${NAME_MAX} characters`)
   // Unique without regard to case, as segments_name_uq on lower(name).
   if (name && segments.some((s) => s !== self && s.kind === 'named' && s.name.toLowerCase() === name.toLowerCase())) return invalid('name', 'name already in use')
   if (b.description !== undefined && [...String(b.description)].length > DESCRIPTION_MAX) return invalid('description', 'description is too long')
-  if (b.discount !== undefined && !(validRate(b.discount) && Number(b.discount) > 0)) return invalid('discount', `must be above 0 and ${RATE_LIMITS}`)
-  return null
+  return fieldsFailure(segmentRatesErrors(b, (id) => groups.some((g) => g.id === id))) ?? null
 }
 
 route('GET', '/segments', 'segment:read', (req) => {
@@ -192,7 +187,9 @@ route('POST', '/segments', 'segment:manage', (req) => {
   const b = req.body || {}
   const err = segmentError({ ...b, name: b.name ?? '' })
   if (err) return err
-  return segmentOut(addSegment(String(b.name).trim(), String(b.description ?? ''), String(b.discount ?? '1')), showsUsers(req))
+  const s = addSegment(String(b.name).trim(), String(b.description ?? ''))
+  applySegmentRates(s.id, b)
+  return segmentOut(s, showsUsers(req))
 })
 route('PATCH', '/segments/:id', 'segment:manage', onSegment((s, req) => {
   const b = req.body || {}
@@ -200,7 +197,7 @@ route('PATCH', '/segments/:id', 'segment:manage', onSegment((s, req) => {
   if (err) return err
   if (b.name !== undefined) s.name = String(b.name).trim()
   if (b.description !== undefined) s.description = String(b.description)
-  if (b.discount !== undefined) s.discount = String(b.discount)
+  applySegmentRates(s.id, b)
   return segmentOut(s, showsUsers(req))
 }))
 route('DELETE', '/segments/:id', 'segment:manage', onSegment((s) => {
@@ -223,78 +220,18 @@ route('POST', '/segments/:id/members', 'segment:manage', onSegment((s, req) => {
   return { moved: ids.filter((id) => moveUser(id, s)).length }
 }))
 
-// ------------------------------------------------------------------ grants and rates
+// ------------------------------------------------------------------ grants and rates (read; written with the group or the segment)
 
-/**
- * Checks and applies the changed pairs of a PUT, all or none. `pairOf` gives
- * the segment and the group an item is about; returns the error, if any.
- */
-function savePairs(items: any[], pairOf: (item: any) => { s?: MockSegment; g?: MockGroup }) {
-  const changes: Array<{ s: MockSegment; g: MockGroup; item: any }> = []
-  for (const [i, item] of items.entries()) {
-    const { s, g } = pairOf(item)
-    if (!s || !g) return invalid(`items.${i}`, 'unknown user group or group')
-    if (item.rate_override != null && !validRate(item.rate_override)) return invalid(`items.${i}.rate_override`, `must be 0 or more and ${RATE_LIMITS}`)
-    changes.push({ s, g, item })
-  }
-  for (const { s, g, item } of changes) setPair(s.id, g.id, { granted: item.granted, rate_override: item.rate_override == null ? item.rate_override : String(item.rate_override) })
-  return null
-}
-
-route('GET', '/segments/:id/groups', 'segment:read', onSegment(segmentSettings))
-route('PUT', '/segments/:id/groups', 'segment:manage', onSegment((s, req) => {
-  const err = savePairs(itemsOf(req), (item) => ({ s, g: groups.find((g) => g.id === Number(item.group_id)) }))
-  return err ?? segmentSettings(s, req)
-}))
 function includedIn(req: MockRequest) {
   return String(req.query.include || '').split(',').filter(Boolean).map(Number)
 }
 
+route('GET', '/segments/:id/groups', 'segment:read', onSegment(segmentSettings))
 route('GET', '/groups/:id/segments', 'group:read', onGroup(groupSettings))
-route('PUT', '/groups/:id/segments', 'group:manage', onGroup((g, req) => {
-  const err = savePairs(itemsOf(req), (item) => ({ s: findSegment(Number(item.segment_id)), g }))
-  return err ?? groupSettings(g, req)
-}))
 
-// ------------------------------------------------------------------ model prices
-
-/** Why a rule cannot be saved over the global price `base`; null when it can. A custom price is checked as a global price is, whatever `base` is. */
-function ruleError(rule: any, base: PriceDef | null): string | null {
-  if (!base) return 'the model has no global price'
-  if (rule?.kind === 'multiplier') return validRate(rule.multiplier) ? null : `multiplier must be 0 or more and ${RATE_LIMITS}`
-  if (rule?.kind !== 'custom') return 'rule must be a multiplier or a custom price'
-  if (rule.mode !== 'visual' && rule.mode !== 'expression') return 'a custom price is visual or expression'
-  const v = validate(rule)
-  return v.errors.length ? `invalid custom price: ${v.errors[0].message.en}` : null
-}
-
-/** Why an item of PUT /groups/:id/model-prices cannot be saved; removing a rule always can. A rule takes a model with a global price, whether the group provides it or not. */
-function rulePatchError(item: any): string | null {
-  if ('segment_id' in item) return 'unknown field "segment_id"'
-  return item.rule == null ? null : ruleError(item.rule, globalPrice(item.model))
-}
-
-/** A rule as it is stored: a decimal string, or a price with its expression (generated from the config of a visual one). */
-function storedRule(rule: any): PriceRule | null {
-  if (rule == null) return null
-  if (rule.kind === 'multiplier') return { kind: 'multiplier', multiplier: String(rule.multiplier) }
-  if (rule.mode === 'expression') return { kind: 'custom', mode: 'expression', config: {}, expression: String(rule.expression).trim() }
-  const config = compactVisualConfig(rule.config)
-  return { kind: 'custom', mode: 'visual', config, expression: configPrice('visual', config).expression }
-}
+// ------------------------------------------------------------------ pricing table (read; written with the group)
 
 route('GET', '/groups/:id/model-prices', 'group:read', onGroup(modelPrices))
-// User groups price no models: an old console's segment_id fails (CONTRACTS §97.10).
-route('PUT', '/groups/:id/model-prices', 'group:manage', onGroup((g, req) => {
-  if (req.query.segment_id !== undefined) return fail(400, 'invalid_argument', 'segment_id is not accepted: user groups set rates only')
-  const items = itemsOf(req)
-  for (const [i, item] of items.entries()) {
-    const err = rulePatchError(item)
-    if (err) return invalid(`items.${i}`, err)
-  }
-  for (const item of items) setRule(g.id, String(item.model), storedRule(item.rule))
-  return modelPrices(g)
-}))
 // GET /pricing/catalog: every enabled global price, by model.
 route('GET', '/pricing/catalog', 'group:read', () => pricedModels().map((model) => ({ model, price: globalPrice(model)! })))
 
@@ -346,7 +283,7 @@ function quoteOf(req: MockRequest, s: MockSegment, g: MockGroup) {
   const access = quoteAccess(s, g)
   const base = globalPrice(b.model)
   const price = listPriceOf(g.id, b.model, base)
-  const rate = rateOf(s, g)
+  const rate = rateOf(s, g, b.model)
   // Without a global price nothing is billed.
   const listCost = price.list_price ? priceCost(price.list_price, b.usage || {}) : 0
   if (listCost === null) return fail(400, 'invalid_argument', 'the price cannot be evaluated with this usage')
@@ -359,7 +296,7 @@ function quoteOf(req: MockRequest, s: MockSegment, g: MockGroup) {
     price_source: price.source,
     price_levels: { group: price.group_rule },
     rate,
-    rate_override: rateOverrideOf(s.id, g.id),
+    rate_levels: rateLevelsOf(s, g, b.model),
     list_cost: money(listCost),
     cost: money(listCost * Number(rate.value))
   }

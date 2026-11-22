@@ -1,18 +1,21 @@
-// The grant and the rate of segments in groups while they are edited: what a
-// row shows under its unsaved changes and what saving sends. One group lists
-// its segments, one segment lists its groups; both edit the same settings, so
-// the rules are here once. Pure: an editor only holds the state.
+// The grant and the rate of segments (user groups) in groups (account groups)
+// while they are edited: what a row shows under its unsaved changes and what
+// the request sends. One group lists its segments, one segment lists its
+// groups; both edit the same settings, so the rules are here once. Pure: an
+// editor only holds the state.
 import type { Group } from '@/api/types'
-import type { SegmentGroupPatch, SegmentGroupSetting } from '@/api/pricing'
+import type { GroupRatePatch, SegmentGroupSetting, SegmentRatePatch } from '@/api/pricing'
 import { effectiveRate, sameRate, validRate } from './pricingFormat'
 import { withDraft } from './drafts'
-import { validDiscount } from './segmentForm'
 
 /** The end of a setting the rows of an editor differ in: the segments of one group, or the groups of one segment. */
 export type SettingSide = 'segment' | 'group'
 
 /** What a row changes; a field left out is as saved. */
-export type SettingDraft = Pick<SegmentGroupPatch, 'granted' | 'rate_override'>
+export interface SettingDraft {
+  granted?: boolean
+  rate_override?: string | null
+}
 
 /** The unsaved changes by row id. */
 export type SettingDrafts = ReadonlyMap<number, SettingDraft>
@@ -21,7 +24,6 @@ export type SettingDrafts = ReadonlyMap<number, SettingDraft>
 export interface SettingTerms {
   visibility?: Group['visibility']
   groupDefault?: string
-  discount?: string
 }
 
 /** A row of an editor: the saved setting under its draft and the terms. */
@@ -36,15 +38,15 @@ export interface DraftedSetting extends SegmentGroupSetting {
 /** An override that may be saved: none, or a rate. */
 export const validOverride = (v: string | null): boolean => v === null || validRate(v)
 
-/** A value of the form once `valid` takes it (a rate, a discount), the saved one until then. */
-const rated = (typed: string | undefined, saved: string, valid: (v: string) => boolean) => (typed !== undefined && valid(typed.trim()) ? typed.trim() : saved)
+/** A rate of the form once it is one, the saved one until then. */
+const rated = (typed: string | undefined, saved: string) => (typed !== undefined && validRate(typed.trim()) ? typed.trim() : saved)
 
 /** A row as it reads under `draft` and `terms`: the group's visibility, access and the rate follow both. */
 export function draftedSetting(side: SettingSide, saved: SegmentGroupSetting, draft?: SettingDraft, terms: SettingTerms = {}): DraftedSetting {
   const granted = draft?.granted ?? saved.granted
   const rate_override = draft?.rate_override === undefined ? saved.rate_override : draft.rate_override
   const visibility = terms.visibility ?? saved.group.visibility
-  const base = { group_default: rated(terms.groupDefault, saved.rate.group_default, validRate), discount: rated(terms.discount, saved.rate.discount, validDiscount) }
+  const group = rated(terms.groupDefault, saved.rate.group_default)
   return {
     ...saved,
     id: saved[side].id,
@@ -52,7 +54,7 @@ export function draftedSetting(side: SettingSide, saved: SegmentGroupSetting, dr
     granted,
     rate_override,
     accessible: visibility === 'public' || granted,
-    rate: effectiveRate(base, rate_override),
+    rate: effectiveRate({ segment: rate_override, group }),
     saved,
     dirty: !!draft
   }
@@ -67,12 +69,20 @@ export function mergeSettingDraft(drafts: SettingDrafts, row: Pick<DraftedSettin
   return withDraft(drafts, row.id, Object.keys(draft).length ? draft : undefined)
 }
 
-/** What saving the drafts sends: per changed row, only what changed (PUT /groups/:id/segments, PUT /segments/:id/groups). */
-export function settingPatches(side: SettingSide, drafts: SettingDrafts): SegmentGroupPatch[] {
-  return [...drafts].map(([id, draft]) => ({ [`${side}_id`]: id, ...draft }))
+/** An item of the request for a changed row: the grant only when it changed, the rate as it now is. */
+function settingPatch(row: DraftedSetting, draft: SettingDraft) {
+  return { ...(draft.granted === undefined ? {} : { granted: draft.granted }), rate: row.rate_override }
 }
 
-/** The setting of a segment not created yet in group `g`: every row of a new segment, whose discount comes from its form. */
+/** What the request sends of the drafts: the changed rows of a group's segments (`segment_rates`) or of a segment's groups (`group_rates`). */
+export function segmentRatePatches(rows: readonly DraftedSetting[], drafts: SettingDrafts): SegmentRatePatch[] {
+  return rows.filter((r) => drafts.has(r.id)).map((r) => ({ segment_id: r.id, ...settingPatch(r, drafts.get(r.id)!) }))
+}
+export function groupRatePatches(rows: readonly DraftedSetting[], drafts: SettingDrafts): GroupRatePatch[] {
+  return rows.filter((r) => drafts.has(r.id)).map((r) => ({ group_id: r.id, ...settingPatch(r, drafts.get(r.id)!) }))
+}
+
+/** The setting of a segment not created yet in group `g`: every row of a new segment. */
 export function blankGroupSetting(g: Group): SegmentGroupSetting {
   const { id, name, description, status, visibility, platforms } = g
   const rate_multiplier = String(g.rate_multiplier)
@@ -82,6 +92,21 @@ export function blankGroupSetting(g: Group): SegmentGroupSetting {
     accessible: visibility === 'public',
     granted: false,
     rate_override: null,
-    rate: effectiveRate({ group_default: rate_multiplier, discount: '1' }, null)
+    rate: effectiveRate({ group: rate_multiplier }),
+    model_rates: []
+  }
+}
+
+/** The setting of segment `s` in a group not created yet: a row of a new group, whose terms come from its form. */
+export function blankSegmentSetting(s: Pick<SegmentGroupSetting['segment'], 'id' | 'kind' | 'name' | 'user_id'> & { member_count?: number }): SegmentGroupSetting {
+  return {
+    segment: { id: s.id, kind: s.kind, name: s.name, user_id: s.user_id },
+    group: { id: 0, name: '', description: '', status: 'active', visibility: 'public', rate_multiplier: '1' },
+    accessible: true,
+    granted: false,
+    rate_override: null,
+    rate: effectiveRate({ group: '1' }),
+    model_rates: [],
+    member_count: s.member_count
   }
 }

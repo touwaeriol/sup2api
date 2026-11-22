@@ -55,6 +55,11 @@ export interface TabItem {
   disabled?: boolean
 }
 
+/** A tab of STabbedForm (UI 4.1); `summary` is the line under its title in the side layout. */
+export interface FormTab extends TabItem {
+  summary?: string
+}
+
 export interface SelectOption {
   value: string | number | boolean | null
   label: string

@@ -43,6 +43,7 @@ const options = {
       EnvironmentEditor: true,
       GroupModelPolicyEditor: true,
       ModelPriceTable: true,
+      GroupSegmentsEditor: true,
       GroupDeleteModal: true,
       PriceSimulatorModal: true
     }
@@ -73,7 +74,7 @@ describe('groups page', () => {
 
   it('lists the groups without the platforms they serve', () => {
     const w = render()
-    expect(w.findAll('thead th').map(th => th.text())).toEqual(['名称', '谁能用', '分组倍率', '模型价格', '模型名单', '账号数', 'Key 数', '状态', '操作'])
+    expect(w.findAll('thead th').map(th => th.text())).toEqual(['名称', '谁能用', '基本倍率', '模型价格', '模型名单', '账号数', 'Key 数', '状态', '操作'])
     expect(rows(w).map(r => r.get('[data-testid="group-name"]').text())).toEqual(['default', 'trial'])
     expect(w.find('[data-testid="platform-badge"], [data-platform]').exists()).toBe(false)
   })
@@ -100,10 +101,10 @@ describe('groups page', () => {
     expect(plain.get('[data-testid="group-pricing-summary"]').text()).toBe('全部用原价')
     expect(plain.get('[data-testid="group-model-count"]').text()).toBe('提供 7 个模型')
     const summary = priced.get('[data-testid="group-pricing-summary"]')
-    expect(summary.text()).toBe('2 个模型改过价')
+    expect(summary.text()).toBe('2 个模型单独设置')
     await summary.trigger('click')
     await flushPromises()
-    expect(w.text()).toContain('编辑分组 vip')
+    expect(w.text()).toContain('编辑账号分组 vip')
     expect(w.get('[role="tab"][aria-selected="true"]').text()).toBe('价格')
   })
 
@@ -117,7 +118,7 @@ describe('groups page', () => {
     const shown = () => w.find('[data-testid="group-pricing-view"]').exists()
     expect(shown()).toBe(true)
     expect(w.text()).toContain('vip 的价格')
-    expect(w.text()).not.toContain('编辑分组')
+    expect(w.text()).not.toContain('编辑账号分组')
     await w.get('[data-testid="group-pricing-view-close"]').trigger('click')
     await flushPromises()
     expect(shown()).toBe(false)
@@ -167,7 +168,7 @@ describe('groups page', () => {
       .find(b => b.text() === '编辑')!
       .trigger('click')
     await flushPromises()
-    expect(w.text()).toContain('编辑分组 default')
+    expect(w.text()).toContain('编辑账号分组 default')
     const form = w.get('form')
     expect(form.text()).not.toContain('平台')
     expect(form.find('[data-testid="platform-badge"], [data-platform]').exists()).toBe(false)

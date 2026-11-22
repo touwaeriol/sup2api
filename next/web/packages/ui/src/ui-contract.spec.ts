@@ -13,8 +13,10 @@ describe('host UI 4 contract', () => {
     expect('STabLayout' in ui).toBe(false)
     expect('TabBar' in ui).toBe(false)
   })
-  it('rejects plugins built for UI 3 or older and accepts ^4.0', () => {
-    expect(HOST_UI_VERSION).toBe('4.0.0')
+  it('rejects plugins built for UI 3 or older and accepts ^4.0 and ^4.1', () => {
+    expect(HOST_UI_VERSION).toBe('4.1.0')
+    expect(satisfiesRange(HOST_UI_VERSION, '^4.1')).toBe(true)
+    expect(satisfiesRange(HOST_UI_VERSION, '^4.2')).toBe(false)
     for (const range of ['^1.0', '^2.0', '^3.0', '^3.20']) expect(satisfiesRange(HOST_UI_VERSION, range), range).toBe(false)
     expect(satisfiesRange(HOST_UI_VERSION, '^4.0')).toBe(true)
     expect(satisfiesRange('3.20.0', '^4.0')).toBe(false)
@@ -66,6 +68,13 @@ describe('host UI 4 contract', () => {
     expectTypeOf<ui.NativeAccountFormProps['mode']>().toEqualTypeOf<'create' | 'edit'>()
     expect(Object.keys(ui.nativeAccountFormProps)).toEqual(['modelValue', 'mode', 'account', 'accountType', 'errors', 'proxyTicket'])
     expectTypeOf<ReturnType<ui.FormApi['bindNumber']>>().toEqualTypeOf<ReturnType<ui.FormApi['bind']>>()
+  })
+  it('exports the tabbed form saved by one request (UI 4.1)', () => {
+    for (const name of ['STabbedForm', 'useTabbedForm', 'useTabbedFormPart'] as const) expect(ui[name]).toBeDefined()
+    expectTypeOf<ui.FormTab['summary']>().toEqualTypeOf<string | undefined>()
+    expectTypeOf<ReturnType<ui.TabbedForm['submit']>>().toEqualTypeOf<Promise<unknown>>()
+    expect(readme).toContain('（UI SDK 4.1）')
+    expect(readme).toContain('hostUICompat: "^4.1"')
   })
   it('exports the horizontal clip probe the permission matrix uses (UI 3.16)', () => {
     expect(ui.useScrollClip).toBeDefined()

@@ -17,7 +17,6 @@ const personal: Segment = {
   name: user.email,
   user_id: user.id,
   description: '',
-  discount: '0.9',
   is_default: false,
   member_count: 1,
   granted_groups: [],

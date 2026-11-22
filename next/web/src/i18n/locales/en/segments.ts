@@ -1,9 +1,9 @@
 export default {
   title: 'User groups',
-  description: 'Every user is in one user group. It decides which private groups they may use and how many times the price they pay.',
+  description: 'Every user is in one user group. It decides which private account groups they may use and how many times the price they pay.',
   create: 'New user group',
   created: 'User group created',
-  unsavedNew: 'Not saved yet: Create saves the user group, its group rates and its members together.',
+  unsavedNew: 'Not saved yet: fill in any tab, everything is sent together on Create. Members are added on the users page.',
   editTitle: 'Edit user group {name}',
   viewTitle: 'User group {name}',
   searchPlaceholder: 'Search name, note or user email',
@@ -11,11 +11,11 @@ export default {
   defaultHint: 'New users join this user group; it cannot be deleted.',
   defaultName: 'The default user group cannot be renamed.',
   note: 'Note',
-  publicOnly: 'Public groups only',
+  publicOnly: 'Public account groups only',
   simulate: 'Price simulator',
   deleteTitle: 'Delete the user group "{name}"',
   deleteConfirm:
-    'Its {n} member goes back to the default user group, and its settings in the groups are deleted with it. This cannot be undone. | Its {n} members go back to the default user group, and its settings in the groups are deleted with it. This cannot be undone.',
+    'Its {n} member goes back to the default user group, and its settings and model rates in the account groups are deleted with it. This cannot be undone. | Its {n} members go back to the default user group, and its settings and model rates in the account groups are deleted with it. This cannot be undone.',
   kinds: {
     label: 'Filter by kind',
     all: 'All {n}',
@@ -25,46 +25,24 @@ export default {
   columns: {
     name: 'Name',
     members: 'Members',
-    discount: 'Discount',
-    granted: 'Private groups it may use',
+    granted: 'Private account groups it may use',
     overrides: 'Own rates'
   },
   tabs: {
     basic: 'Basics',
-    groups: 'Group rates',
-    members: 'Members',
-    membersPicked: 'Members · {n} picked'
+    groups: 'Account group rates'
   },
-  discount: {
-    label: 'Discount',
-    hint: 'Multiplies the group rate of every group; a group with an own rate ignores it. 1 means no discount.',
-    example: 'E.g. group rate {group} → paid rate {rate}',
-    invalid: 'Enter a number above 0, up to 999999.9999 and 4 decimals; 1 for no discount.'
-  },
-  groups: {
-    discount: 'Discount',
-    discountHint: '(change it under Basics): a group without an own rate charges the group rate × {discount}',
-    noDiscount: 'No discount (change it under Basics): a group without an own rate charges its group rate'
-  },
-  members: {
-    notice: 'Adding and removing members takes effect at once, without Save.',
-    noticeNew: 'The members picked join when you click Create.',
-    add: 'Add a member',
-    addHint: 'A user is in one user group: joining "{segment}" moves them out of the one they are in.',
-    addPlaceholder: 'Search the user to add by email or name',
-    search: 'Search members',
-    inUsers: 'View in the users list',
-    empty: 'This user group has no members yet',
-    emptyNew: 'No member picked yet',
-    thisSegment: 'this user group',
-    already: '{name} is in this user group already',
-    dropPersonal: '{name} is Exclusive now. Joining "{segment}" deletes their own settings; from then on they pay as "{segment}".',
-    dropPersonalConfirm: 'Join and delete own settings',
-    movedFrom: 'Moved {name} from "{from}" to "{to}"',
-    remove: 'Remove',
-    removeConfirm: 'Remove {name} from "{segment}"? They go back to "{to}" and pay as "{to}" from then on.',
-    movedTo: 'Moved {name} to "{to}"',
-    defaultHint: 'Members of the default user group cannot be removed here: add them to the user group they should be in.'
+  modelRates: {
+    toggle: 'Model rates ({n})',
+    intro: 'A model with a rate of its own is billed at its original price × that model rate; the others follow this row, {rate}.',
+    add: 'Add model',
+    addNone: 'No model to add',
+    addFooter: 'Only the models of this account group with an original price',
+    empty: 'No model has a rate of its own yet',
+    removed: 'To be removed',
+    rateOf: 'Model rate of {model}',
+    undo: 'Undo',
+    invalid: 'The model rate of {model} in "{group}" is not valid: enter a number from 0 to 999999.9999, up to 4 decimals.'
   },
   personal: {
     origin: 'Was in {name}',
@@ -74,8 +52,7 @@ export default {
   },
   select: {
     placeholder: 'Choose a user group',
-    default: 'default for new users',
-    discount: 'discount {rate}'
+    default: 'default for new users'
   },
   convert: {
     pick: 'Set a rate for one user',
@@ -87,9 +64,9 @@ export default {
     currentSegment: 'the current user group',
     startFrom: 'Start from',
     copy: 'Copy the current settings of "{from}"',
-    copyHint: 'The discount, the private groups enabled and the rate in each group are copied; change them afterwards.',
+    copyHint: 'The private account groups granted, and the rate and model rates in each account group are copied; change them afterwards.',
     blank: 'Start from blank',
-    blankHint: 'Public groups only, at each group rate.',
+    blankHint: 'Public account groups only, at each account group rate.',
     submit: 'Set own rates',
     done: '{name} is now Exclusive'
   },

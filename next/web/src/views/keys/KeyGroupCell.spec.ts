@@ -32,21 +32,21 @@ describe('API key group cell', () => {
 
   it('marks a group without usable accounts with a warning icon, the sentence in its tooltip only', () => {
     const w = render({ platforms: [], status: 'active' })
-    expect(problem(w)).toEqual({ text: '该分组暂时无法提供服务（没有可用账号）。', tone: 'warning' })
+    expect(problem(w)).toEqual({ text: '该账号分组暂时无法提供服务（没有可用账号）。', tone: 'warning' })
     expect(w.text()).toBe('vip')
-    expect(w.get('[data-testid="key-group-problem"]').attributes('aria-label')).toBe('该分组暂时无法提供服务（没有可用账号）。')
+    expect(w.get('[data-testid="key-group-problem"]').attributes('aria-label')).toBe('该账号分组暂时无法提供服务（没有可用账号）。')
   })
 
   it('says why the group cannot serve the key: deleted (no badge), disabled or no longer open', () => {
     const deleted = render({ name: '', platforms: [], status: 'deleted' })
     expect(badge(deleted).exists()).toBe(false)
-    expect(problem(deleted)).toEqual({ text: '分组已删除，请重新选择分组', tone: 'danger' })
+    expect(problem(deleted)).toEqual({ text: '账号分组已删除，请重新选择账号分组', tone: 'danger' })
     expect(deleted.text()).toBe('')
 
     const disabled = render({ platforms: ['anthropic'], status: 'disabled' })
     expect(badge(disabled).exists()).toBe(true)
-    expect(problem(disabled)).toEqual({ text: '分组已停用', tone: 'danger' })
-    expect(problem(render({ platforms: ['anthropic'], status: 'unavailable' }))?.text).toBe('分组已不对你开放')
+    expect(problem(disabled)).toEqual({ text: '账号分组已停用', tone: 'danger' })
+    expect(problem(render({ platforms: ['anthropic'], status: 'unavailable' }))?.text).toBe('账号分组已不对你开放')
   })
 
   it('shows no problem for a group state added by a newer server', () => {

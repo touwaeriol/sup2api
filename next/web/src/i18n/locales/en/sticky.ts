@@ -44,7 +44,7 @@ export default {
     user: 'the user owning the API key'
   },
   includes: {
-    group: 'group',
+    group: 'account group',
     model: 'model',
     rule: 'rule'
   },

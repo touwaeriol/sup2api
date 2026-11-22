@@ -30,9 +30,9 @@ describe('group delete with API keys', () => {
   it('moves the keys to the picked group (never the group itself)', async () => {
     const w = render()
     await flushPromises()
-    expect(w.text()).toContain('该分组下还有 4 个 API Key')
-    expect(w.text()).toContain('2 个账号只会移出分组')
-    expect(w.get('[data-testid="group-delete-pricing"]').text()).toBe('该分组的模型价格，以及各用户组在它上面的开通和倍率，会一并删除。')
+    expect(w.text()).toContain('该账号分组下还有 4 个 API Key')
+    expect(w.text()).toContain('2 个账号只会移出账号分组')
+    expect(w.get('[data-testid="group-delete-pricing"]').text()).toBe('该账号分组的模型价格、模型倍率，以及各用户分组在它上面的开通、倍率和模型倍率，会一并删除。')
     await w.get('[data-testid="group-delete-confirm"]').trigger('click')
     expect(del).not.toHaveBeenCalled()
     expect(w.text()).toContain('必填')

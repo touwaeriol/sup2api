@@ -17,15 +17,15 @@ import { latestOnly } from '@/composables/useLatestRequest'
 import { useAuthStore } from '@/stores/auth'
 import { notifyError } from '@/utils/errors'
 import { formatNumber } from '@/utils/format'
-import SegmentEditor, { type SegmentEditorTab } from './SegmentEditor.vue'
+import SegmentEditor from './SegmentEditor.vue'
 import SegmentTable from './SegmentTable.vue'
 
 // User groups ("segments"): every user is in exactly one, and it decides
-// which private groups he may use and at what rate. The users priced on
-// their own, each a segment of his own, are in the same list after the named
-// ones (GET /segments?kind=all), and the kind filter narrows it to either. A
-// caller who may not manage segments opens them read-only; the members of
-// one are listed only to a caller who reads users.
+// which private account groups he may use and at what rate. The users priced
+// on their own, each a segment of his own, are in the same list after the
+// named ones (GET /segments?kind=all), and the kind filter narrows it to
+// either. A caller who may not manage segments opens them read-only; the
+// member count links to the users page for a caller who reads users.
 const { t } = useI18n()
 const auth = useAuthStore()
 const route = useRoute()
@@ -77,11 +77,8 @@ function changed() {
 
 const editing = ref<Segment | null>(null)
 const editorOpen = ref(false)
-const editorTab = ref<SegmentEditorTab>('basic')
-
-function openEditor(s: Segment | null, tab: SegmentEditorTab = 'basic') {
+function openEditor(s: Segment | null) {
   editing.value = s
-  editorTab.value = tab
   editorOpen.value = true
 }
 
@@ -112,14 +109,12 @@ function picked(segment: SegmentRef, created: boolean) {
 function rowActions(s: Segment): MenuAction[] {
   if (s.kind === 'personal') return [{ key: 'moveBack', label: t('segments.personal.remove'), hidden: !canManage.value }]
   return [
-    { key: 'members', label: t('segments.tabs.members'), hidden: !canMembers.value },
     { key: 'simulate', label: t('segments.simulate'), hidden: !canSimulate.value },
     { key: 'delete', label: t('common.delete'), danger: true, hidden: !canManage.value, disabled: s.is_default }
   ]
 }
 function onAction(s: Segment, key: string) {
-  if (key === 'members') openEditor(s, 'members')
-  else if (key === 'simulate') simulate(s)
+  if (key === 'simulate') simulate(s)
   else if (key === 'delete') remove(s)
   else if (key === 'moveBack') askMoveBack(s)
 }
@@ -167,7 +162,7 @@ function movedBack() {
       </template>
     </SPageHeader>
 
-    <SegmentTable card :rows="list.items.value" :link-members="canMembers" :loading="list.loading.value" :error="list.error.value" @retry="list.reload" @members="openEditor($event, 'members')">
+    <SegmentTable card :rows="list.items.value" :link-members="canMembers" :loading="list.loading.value" :error="list.error.value" @retry="list.reload">
       <template #cell-actions="{ row }">
         <div class="flex items-center justify-end gap-1">
           <SButton variant="ghost" size="sm" data-testid="segment-edit" @click="openEditor(row)">{{ t(canManage ? 'common.edit' : 'common.view') }}</SButton>
@@ -179,7 +174,7 @@ function movedBack() {
       </template>
     </SegmentTable>
 
-    <SegmentEditor v-model:open="editorOpen" :segment="editing" :tab="editorTab" :readonly="!canManage" @changed="changed" @remove="askMoveBack" />
+    <SegmentEditor v-model:open="editorOpen" :segment="editing" :readonly="!canManage" @changed="changed" @remove="askMoveBack" />
     <PersonalRemoveDialog v-model:open="moveBackOpen" :user="personalUserOf(movingBack)" :origin="movingBack?.origin" @done="movedBack" />
     <PriceSimulatorModal v-if="canSimulate" v-model:open="simulatorOpen" :preset="simulatorPreset" />
   </div>

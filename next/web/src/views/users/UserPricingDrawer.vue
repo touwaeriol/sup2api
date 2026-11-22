@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '@sub2api/host'
-import { SAlert, SButton, SDrawer, SHint, SLink, SSectionTitle, SSpinner, toast } from '@sub2api/ui'
+import { SAlert, SButton, SDrawer, SHint, SLink, SSectionTitle, SSpinner, toast, useTabbedForm } from '@sub2api/ui'
 import type { Segment } from '@/api/pricing'
 import type { User } from '@/api/types'
 import PriceSimulatorModal from '@/components/pricing/PriceSimulatorModal.vue'
@@ -13,14 +13,15 @@ import { useLatestRequest } from '@/composables/useLatestRequest'
 import { useAuthStore } from '@/stores/auth'
 import { notifyError } from '@/utils/errors'
 import SegmentGroupsEditor from '@/components/pricing/SegmentGroupsEditor.vue'
-import { validDiscount } from '@/components/pricing/segmentForm'
 import UserSegmentPanel from './UserSegmentPanel.vue'
 
-// The group rates of one user: the segment he belongs to and what it gives
-// him in every group. The settings of a named segment are every member's, so
-// they are shown read-only; those of a personal segment are edited here and
-// saved with the button in the footer; closing with something not saved asks
-// first. `changed` tells the list that the user is in another segment now.
+// The account group rates of one user: the user group ("segment") he belongs
+// to and what it gives him in every account group. The settings of a named
+// one are every member's, so they are shown read-only; those of a personal
+// one are edited here as drafts and saved in one request (PATCH
+// /segments/:id) with the button in the footer; closing with something not
+// saved asks first. `changed` tells the list that the user is in another
+// user group now.
 const props = defineProps<{ open: boolean; user: User | null }>()
 const emit = defineEmits<{ (e: 'update:open', v: boolean): void; (e: 'changed'): void }>()
 const { t } = useI18n()
@@ -51,31 +52,23 @@ function onMoved() {
 
 // ------------------------------------------------------------------ personal settings
 
-const editor = ref<InstanceType<typeof SegmentGroupsEditor>>()
-const discount = ref('1')
-const saving = ref(false)
-watch(segment, (s) => {
-  discount.value = s?.discount ?? '1'
-})
-
+// The drawer has no tabs: the rates are the one part of the request (useTabbedForm).
+const tabbed = useTabbedForm(ref('groups'), ['groups'])
+/** Saves made: the rates load again from what the last one answered. */
+const saves = ref(0)
 const editable = computed(() => segment.value?.kind === 'personal' && canManage.value)
-const discountChanged = computed(() => discount.value.trim() !== segment.value?.discount)
-const dirty = computed(() => editable.value && (discountChanged.value || !!editor.value?.dirty))
-const savable = computed(() => dirty.value && validDiscount(discount.value.trim()))
+const dirty = computed(() => editable.value && tabbed.anyDirty.value)
 
 async function save() {
   const s = segment.value
-  if (!s || !savable.value) return
-  saving.value = true
+  if (!s || !dirty.value) return
   try {
-    // The discount first: what the editor's save answers is then rated by it.
-    if (discountChanged.value) segment.value = await api.patch<Segment>(`/segments/${s.id}`, { discount: discount.value.trim() })
-    if (await editor.value?.save()) toast(t('common.saved'), 'success')
+    if ((await tabbed.submit((body) => api.patch<Segment>(`/segments/${s.id}`, body))) === false) return
   } catch (e) {
-    notifyError(e)
-  } finally {
-    saving.value = false
+    return notifyError(e)
   }
+  saves.value++
+  toast(t('common.saved'), 'success')
 }
 
 const close = async () => (await confirmDiscard(dirty.value)) && emit('update:open', false)
@@ -99,7 +92,7 @@ const simulatorOpen = ref(false)
       <template v-else>
         <section>
           <SSectionTitle :title="t('users.pricing.membership')" />
-          <UserSegmentPanel v-model:discount="discount" :user="user" :segment="segment" :editable="canManage" @changed="onMoved" />
+          <UserSegmentPanel :user="user" :segment="segment" :editable="canManage" @changed="onMoved" />
         </section>
         <section>
           <SSectionTitle :title="t('users.pricing.groups')" />
@@ -110,7 +103,7 @@ const simulatorOpen = ref(false)
               <SLink :to="{ path: '/segments', query: { edit: segment.id } }" data-testid="user-pricing-segment-link">{{ t(canManage ? 'users.pricing.editSegment' : 'users.pricing.viewSegment') }}</SLink>
             </template>
           </SAlert>
-          <SegmentGroupsEditor ref="editor" :segment-id="segment.id" :editable="editable" :disabled="saving" :discount="discount" />
+          <SegmentGroupsEditor :key="saves" :segment-id="segment.id" :editable="editable" :disabled="tabbed.saving.value" tab="groups" />
         </section>
       </template>
     </div>
@@ -118,7 +111,7 @@ const simulatorOpen = ref(false)
     <template #footer>
       <SButton v-if="canSimulate" icon="price" class="me-auto" data-testid="user-pricing-simulate" @click="simulatorOpen = true">{{ t('users.pricing.simulate') }}</SButton>
       <SButton data-testid="user-pricing-close" @click="close">{{ t('common.close') }}</SButton>
-      <SButton v-if="editable" variant="primary" :loading="saving" :disabled="!savable" data-testid="user-pricing-save" @click="save">{{ t('common.save') }}</SButton>
+      <SButton v-if="editable" variant="primary" :loading="tabbed.saving.value" :disabled="!dirty" data-testid="user-pricing-save" @click="save">{{ t('common.save') }}</SButton>
     </template>
   </SDrawer>
 

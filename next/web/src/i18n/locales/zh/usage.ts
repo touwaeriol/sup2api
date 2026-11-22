@@ -38,11 +38,11 @@ export default {
   search: {
     logType: '日志类型',
     retried: '重试',
-    // 模型、用户、API Key、分组、账号是实体选择器（EntityPicker），占位用它自带的实体名；
+    // 模型、用户、API Key、账号分组、账号是实体选择器（EntityPicker），占位用它自带的实体名；
     // 这里是其余输入框的占位，以及筛选标签的名称（按查询参数）。
     client_ip: '调用 IP（精确）',
-    group_id: '分组',
-    group_name: '分组名称包含',
+    group_id: '账号分组',
+    group_name: '账号分组名称包含',
     request_id: '请求 ID',
     client_request_id: '客户端请求 ID',
     platform: '平台',
@@ -231,7 +231,7 @@ export default {
       busy: '账号均繁忙或限流',
       picked: '跳过部分账号后选中'
     },
-    candidates: '分组可调度账号',
+    candidates: '账号分组可调度账号',
     eligible: '可服务本请求',
     counts: '按原因',
     skipped: '未选用的账号',

@@ -103,32 +103,33 @@ export default {
   },
   models: {
     title: 'Models & prices',
-    description: 'Every model, which of your groups provide it and what it costs you there: the model price times your rate.',
-    group: 'Group',
-    allGroups: 'All groups · original price',
+    description: 'Every model, which of your account groups provide it and what it costs you there: the model price times your rate.',
+    group: 'Account group',
+    allGroups: 'All account groups · original price',
     search: 'Search models',
     model: 'Model',
     input: 'Input',
     output: 'Output',
     cacheRead: 'Cache read',
     cacheWrite: 'Cache write',
-    groups: 'Groups',
+    groups: 'Account groups',
     viewGroup: 'See what you pay in {name}',
-    noGroups: 'No group provides it',
-    baseNote: 'These are the original prices of every model (rate ×1). You pay the model price times your rate in the group you use; the model price is the original price unless the group gives the model a group price. Choose a group to see what you pay there.',
+    noGroups: 'No account group provides it',
+    baseNote: 'These are the original prices of every model (rate ×1). You pay the model price times your rate in the account group you use; the model price is the original price unless the account group gives the model a price of its own. Choose an account group to see what you pay there.',
     unit: 'USD per million tokens',
     basePrice: 'original price, no rate applied',
-    rated: 'your rate in this group, {rate}, included',
+    rated: 'your rate in this account group, {rate}, included',
     rateSource: {
-      segment: 'you have a rate set on its own in this group',
-      discount: 'your discount on every group included'
+      segment_model: 'you have a rate of your own for this model',
+      segment: 'your user group has a rate of its own in this account group',
+      group_model: 'this model has a rate of its own in this account group'
     },
     perRequest: '{price} per request',
     tiered: '{n} tiers, fallback shown',
     custom: 'Billed by rules',
     customTimes: 'Billed by rules {rate}',
-    empty: 'This group has no models',
+    empty: 'This account group has no models',
     emptyAll: 'No models yet',
-    groupUnavailable: 'The group in the link is not open to you. Showing all groups instead.'
+    groupUnavailable: 'The account group in the link is not open to you. Showing all account groups instead.'
   }
 }

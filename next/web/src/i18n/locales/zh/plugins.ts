@@ -139,7 +139,7 @@ export default {
     headers: '请求头',
     body: '请求体',
     user_id: '用户 ID',
-    group_id: '分组 ID',
+    group_id: '账号分组 ID',
     api_key_id: 'API Key ID',
     metadata: '元数据'
   },
@@ -210,7 +210,7 @@ export default {
     accountTypes: '账号类型',
     hooks: '网关钩子',
     models: '模型',
-    groups: '分组',
+    groups: '账号分组',
     reads: '读取字段',
     maxPrompt: '提示词上限',
     timeout: '超时',

@@ -5,7 +5,8 @@ import { fail, nextId, noContent, now, on, paginate } from './router'
 import { caller } from './core'
 import { accounts, groupAccountCount, groupPlatforms, groupServed } from './accounts'
 import { pricedModels } from './billing'
-import { accessOf, forgetGroup, groupAccess, rateOf, rulesWhere, segmentOfUser } from './pricingStore'
+import { accessOf, forgetGroup, groupAccess, modelRatesWhere, rateOf, rulesWhere, segmentOfUser } from './pricingStore'
+import { applyGroupPricing, fieldsFailure, groupPricingErrors, validRate } from './pricingWrites'
 import { invalid, match } from './common'
 import { keys } from './apiKeys'
 
@@ -29,10 +30,13 @@ export const groups: MockGroup[] = [
   { id: 4, name: 'gemini-trial', description: 'Planned Gemini access (no accounts yet)', status: 'active', rate_multiplier: '1', visibility: 'public', model_allowlist: ['gemini-*'], account_count: 0, created_at: now(-86400 * 1) }
 ]
 
+/** The models a group sets a price or a rate of its own on. */
+const setModelCount = (gid: number) => new Set([...rulesWhere({ group_id: gid }), ...modelRatesWhere({ group_id: gid, segment_id: null })].map((r) => r.model)).size
+
 // account_count and platforms come from the accounts mock (CONTRACTS §13);
 // the key count uses the server spelling api_key_count.
 function groupOut(g: MockGroup) {
-  return { ...g, account_count: groupAccountCount(g.id), platforms: groupPlatforms(g.id), api_key_count: keys.filter((k) => k.group_id === g.id).length, access: groupAccess(g), price_rule_count: rulesWhere({ group_id: g.id }).length, model_count: groupModels(g).length }
+  return { ...g, account_count: groupAccountCount(g.id), platforms: groupPlatforms(g.id), api_key_count: keys.filter((k) => k.group_id === g.id).length, access: groupAccess(g), price_rule_count: setModelCount(g.id), model_count: groupModels(g).length }
 }
 
 /**
@@ -47,11 +51,12 @@ export function groupModels(g: Pick<MockGroup, 'id' | 'model_allowlist' | 'model
   return offeredModels({ models, unrestricted_accounts: unrestricted, model_allowlist: g.model_allowlist, model_filter_mode: g.model_filter_mode ?? 'whitelist' }, pricedModels())
 }
 
+/** The first wrong field of the group's own, else every wrong item of its prices and rates (pricingWrites): any of them changes nothing. */
 function validateGroup(b: any) {
   if (b.name !== undefined && !String(b.name).trim()) return invalid('name', 'name is required')
-  if (b.rate_multiplier !== undefined && !(Number(b.rate_multiplier) >= 0)) return invalid('rate_multiplier', 'must be a non-negative number')
+  if (b.rate_multiplier !== undefined && !validRate(b.rate_multiplier)) return invalid('rate_multiplier', 'must be 0 or more, below 1000000, with at most 4 decimals')
   if (b.visibility !== undefined && !['public', 'restricted'].includes(b.visibility)) return invalid('visibility', 'invalid visibility')
-  return null
+  return fieldsFailure(groupPricingErrors(b)) ?? null
 }
 
 // ?model=<name> keeps the groups that provide that model.
@@ -89,6 +94,7 @@ on('POST', '/groups', (req) => {
     created_at: now()
   }
   groups.push(g)
+  applyGroupPricing(g.id, b)
   return groupOut(g)
 })
 on('PATCH', '/groups/:id', (req) => {
@@ -99,6 +105,7 @@ on('PATCH', '/groups/:id', (req) => {
   const b = req.body || {}
   for (const k of ['name', 'description', 'status', 'visibility', 'model_allowlist', 'model_filter_mode'] as const) if (b[k] !== undefined) (g as any)[k] = b[k]
   if (b.rate_multiplier !== undefined) g.rate_multiplier = String(b.rate_multiplier)
+  applyGroupPricing(g.id, b)
   return groupOut(g)
 })
 on('DELETE', '/groups/:id', (req) => {

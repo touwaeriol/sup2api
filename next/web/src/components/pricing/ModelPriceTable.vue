@@ -1,145 +1,90 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { api } from '@sub2api/host'
-import { SBadge, SEmpty, SHint, SInput, SRowAction, SSwitch, STable, type SelectOption, type TableColumn } from '@sub2api/ui'
-import type { CatalogPrice, GroupModelPrices, ModelPriceRow, PriceRule } from '@/api/pricing'
+import { SBadge, SEmpty, SHint, SInput, SRowAction, SSwitch, STable, useTabbedFormPart, type SelectOption, type TableColumn } from '@sub2api/ui'
 import ModelBadge from '@/components/platform/ModelBadge.vue'
 import AddSelect from './AddSelect.vue'
 import PriceRuleEditor from './PriceRuleEditor.vue'
-import { withDraft } from './drafts'
-import { priceCells, rateText, timesRate } from './pricingFormat'
-import { catalogPrices, catalogRow, draftedRow, rulePatches, setRuleDraft, validRule, type DraftedRow } from './ruleDrafts'
-import { priceLabel, ruleText } from './ruleText'
-import { useDrafts } from './useDrafts'
+import RateOverrideField from './RateOverrideField.vue'
+import { priceCells, rateText } from './pricingFormat'
+import { priceLabel } from './ruleText'
+import { usePricingTable, type PricingRow } from './usePricingTable'
 
-// The model prices of a group: each model's original price, the group's own
-// price (the original × N, or a price of its own) and what is paid at `rate`.
-// The rows are the models the group provides and those it prices, as the
-// server lists them. A group not saved yet (groupId null) has no accounts, so
-// it provides nothing yet: its table starts empty. Any model with an original
-// price can be added and priced before an account provides it. "Change" opens
-// a row's editor under it, one row at a time. Edits stay in drafts (useDrafts)
-// until the parent calls save(gid), as it does with its other sub-editors once
-// the group is saved.
-const props = defineProps<{ groupId: number | null; rate: string; editable?: boolean }>()
+// The pricing table of a group: per model its original price, its model
+// price (a price of its own; empty follows the original price), its model
+// rate (empty follows `baseRate`, the group's base rate as the form has it)
+// and what is paid: the price that applies × the one rate that applies. The
+// rows are the models the group provides and those it sets something on; a
+// group not saved yet (groupId null) provides nothing yet, so its table
+// starts empty. Any model with an original price can be added. "Change
+// price" opens a row's price editor under it, one row at a time. Edits stay
+// in drafts, which the group's request sends (the part of tab `tab` of the
+// enclosing tabbed form); without `editable` the table only shows.
+const props = defineProps<{ groupId: number | null; baseRate: string; editable?: boolean; tab?: string }>()
 const { t } = useI18n()
 
 /** Search and the filter appear from this many models on. */
 const TOOLS_FROM = 8
 
-interface Saved {
-  rows: ModelPriceRow[]
-  /** The original prices, to add a model with. */
-  catalog: CatalogPrice[]
-}
-
-async function fetchSaved(): Promise<Saved> {
-  const { groupId } = props
-  const [prices, catalog] = await Promise.all([
-    groupId === null ? null : api.get<GroupModelPrices>(`/groups/${groupId}/model-prices`),
-    props.editable ? api.get<CatalogPrice[]>('/pricing/catalog') : []
-  ])
-  return { rows: prices?.models ?? [], catalog }
-}
-const state = useDrafts<Saved, string, PriceRule | null>({ empty: () => ({ rows: [], catalog: [] }), fetch: fetchSaved, problem: incomplete })
-const { saved, drafts, loading, error, dirty } = state
+const table = usePricingTable({ groupId: () => props.groupId, baseRate: () => props.baseRate, editable: () => !!props.editable })
+const { rows, drafts, loading, error, dirty, added } = table
+if (props.editable && props.tab) useTabbedFormPart({ tab: props.tab, check, body: table.body, dirty, fields: ['model_prices', 'model_rates'], applyErrors })
 
 /** The table keeps which editor is open: a new key closes it. */
 const tableKey = ref(0)
 const q = ref('')
-const onlyRuled = ref(false)
-/** Models added here, in the order added. */
-const added = ref<string[]>([])
+const onlySet = ref(false)
 
 function load() {
   tableKey.value++
   added.value = []
-  return state.load()
+  return table.load()
 }
 watch(() => props.groupId, load, { immediate: true })
 
-const prices = computed(() => catalogPrices(saved.value.catalog))
-const listed = computed<ModelPriceRow[]>(() => {
-  const rows = new Map(saved.value.rows.map((r) => [r.model, r]))
-  added.value.filter((m) => !rows.has(m)).forEach((m) => rows.set(m, catalogRow(m, prices.value.get(m) ?? null)))
-  return [...rows.values()]
-})
-const savedModels = computed(() => new Set(saved.value.rows.map((r) => r.model)))
-
-function viewRow(row: ModelPriceRow) {
-  const r = draftedRow(row, drafts.value)
-  return {
-    ...r,
-    tiers: priceCells(r.base).tiers,
-    paid: r.list_price && timesRate(r.list_price, props.rate),
-    invalid: r.dirty && !validRule(r.group_rule),
-    /** Added here and not saved: it can go again. */
-    removable: added.value.includes(r.model) && !savedModels.value.has(r.model)
-  }
-}
-const rows = computed(() => listed.value.map(viewRow))
-const ruled = computed(() => rows.value.filter((r) => r.group_rule).length)
+const isSet = (r: PricingRow) => r.price !== null || r.rate !== null
+const setCount = computed(() => rows.value.filter(isSet).length)
 const shown = computed(() => {
   const s = q.value.trim().toLowerCase()
-  // A rule being removed keeps its row in sight until it is saved.
-  return rows.value.filter((r) => (!s || r.model.toLowerCase().includes(s)) && (!onlyRuled.value || r.group_rule || r.dirty))
+  // A row being cleared keeps its place in sight until it is saved.
+  return rows.value.filter((r) => (!s || r.model.toLowerCase().includes(s)) && (!onlySet.value || isSet(r) || r.dirty))
 })
 
 /** The models that can be added: those with an original price the table does not list. */
 const addable = computed<SelectOption[]>(() => {
-  const listedModels = new Set(listed.value.map((r) => r.model))
-  return saved.value.catalog.filter((c) => !listedModels.has(c.model)).map((c) => ({ value: c.model, label: c.model, hint: priceLabel(t, c.price) }))
+  const listed = new Set(rows.value.map((r) => r.model))
+  return table.saved.value.catalog.filter((c) => !listed.has(c.model)).map((c) => ({ value: c.model, label: c.model, hint: priceLabel(t, c.price) }))
 })
 
 // The model column keeps a share of the width whatever its names are long (a
-// long one is cut, its tooltip has it whole), so the table fits the dialog
-// without scrolling sideways.
+// long one is cut, its tooltip has it whole), so the table fits the dialog.
 const columns = computed<TableColumn[]>(() => [
-  { key: 'model', label: t('common.model'), class: 'w-[28%] max-w-0 overflow-hidden', mobile: 'title' },
+  { key: 'model', label: t('common.model'), class: 'w-[24%] max-w-0 overflow-hidden', mobile: 'title' },
   { key: 'base', label: t('pricing.table.base'), mobile: 'meta' },
-  { key: 'group', label: t('pricing.table.group'), mobile: 'meta' },
-  { key: 'paid', label: t('pricing.table.paid', { rate: rateText(props.rate || null) }), mobile: 'meta' },
+  { key: 'price', label: t('pricing.table.price'), mobile: 'meta' },
+  { key: 'rate', label: t('pricing.table.rate'), mobile: 'meta' },
+  { key: 'paid', label: t('pricing.table.paid'), mobile: 'meta' },
   ...(props.editable ? [{ key: 'actions', label: t('common.actions'), align: 'right' } satisfies TableColumn] : [])
 ])
-const rowAttrs = (row: DraftedRow) => ({ 'data-testid': 'model-price-row', 'data-model': row.model })
+const rowAttrs = (row: PricingRow) => ({ 'data-testid': 'model-price-row', 'data-model': row.model })
 
-function draft(row: DraftedRow, rule: PriceRule | null) {
-  drafts.value = setRuleDraft(drafts.value, row, rule)
+/** Brings every row back in sight: one that is wrong has to be seen. */
+function showAll() {
+  q.value = ''
+  onlySet.value = false
+}
+function check(): boolean {
+  const ok = table.check()
+  if (!ok) showAll()
+  return ok
+}
+function applyErrors(errors: Record<string, string>) {
+  table.applyErrors(errors)
+  showAll()
 }
 function add(model: SelectOption['value']) {
-  if (typeof model === 'string') added.value = [...added.value, model]
+  if (typeof model === 'string') table.add(model)
 }
-function remove(model: string) {
-  added.value = added.value.filter((m) => m !== model)
-  drafts.value = withDraft(drafts.value, model, undefined)
-}
-
-/** Why the drafts cannot be saved yet: one is not filled in. The toast names its model; its row is marked, comes into sight, and its editor says why. */
-function incomplete(): string | null {
-  const invalid = rows.value.find((r) => r.invalid)
-  if (!invalid) return null
-  q.value = ''
-  onlyRuled.value = false
-  return t('pricing.table.invalid', { model: invalid.model })
-}
-
-/**
- * Saves the drafts for group `gid` and shows what the server answers. False
- * when a draft cannot be saved yet (see `incomplete`). A failed request
- * rejects and keeps the drafts.
- */
-async function save(gid: number): Promise<boolean> {
-  const done = await state.save(async (sent) => {
-    const answer = await api.put<GroupModelPrices>(`/groups/${gid}/model-prices`, { items: rulePatches(sent) })
-    return { catalog: saved.value.catalog, rows: answer.models }
-  })
-  // Once everything is saved the open editor has nothing left to show; one on a rule edited meanwhile stays.
-  if (done && !dirty.value) tableKey.value++
-  return done
-}
-
-defineExpose({ check: state.check, save, dirty })
 </script>
 
 <template>
@@ -147,24 +92,15 @@ defineExpose({ check: state.check, save, dirty })
     <div class="flex flex-wrap items-center justify-between gap-2">
       <div class="flex items-center gap-2">
         <h3 class="text-sm font-semibold text-fg">{{ t('pricing.table.title') }}</h3>
-        <SBadge tone="gray" data-testid="model-price-count">{{ t('pricing.table.count', { n: rows.length }, rows.length) }}<template v-if="ruled"> · {{ t('pricing.table.ruled', { n: ruled }, ruled) }}</template></SBadge>
+        <SBadge tone="gray" data-testid="model-price-count">{{ t('pricing.table.count', { n: rows.length }, rows.length) }}<template v-if="setCount"> · {{ t('pricing.table.set', { n: setCount }, setCount) }}</template></SBadge>
       </div>
       <div class="flex flex-wrap items-center gap-2">
         <template v-if="rows.length > TOOLS_FROM">
           <!-- Enter filters the list; it must not submit a surrounding form. -->
           <SInput v-model="q" class="w-48" size="sm" icon="search" clearable :placeholder="t('pricing.table.search')" :aria-label="t('pricing.table.search')" data-testid="model-price-search" @keydown.enter.prevent />
-          <SSwitch v-model="onlyRuled" size="sm" :label="t('pricing.table.onlyRuled')" data-testid="model-price-only-ruled" />
+          <SSwitch v-model="onlySet" size="sm" :label="t('pricing.table.onlySet')" data-testid="model-price-only-set" />
         </template>
-        <AddSelect
-          v-if="editable"
-          :options="addable"
-          :label="t('pricing.table.add')"
-          :no-results="t('pricing.table.addNone')"
-          :footer="t('pricing.table.addFooter')"
-          :disabled="loading"
-          data-testid="model-price-add"
-          @add="add"
-        />
+        <AddSelect v-if="editable" :options="addable" :label="t('pricing.table.add')" :no-results="t('pricing.table.addNone')" :footer="t('pricing.table.addFooter')" :disabled="loading" data-testid="model-price-add" @add="add" />
       </div>
     </div>
 
@@ -189,36 +125,40 @@ defineExpose({ check: state.check, save, dirty })
           <span class="inline-flex max-w-full flex-wrap items-center gap-1.5">
             <ModelBadge :model="row.model" />
             <SBadge v-if="!row.offered" tone="warning" size="xs" :title="t('pricing.table.notOfferedHint')" data-testid="model-price-not-offered">{{ t('pricing.table.notOffered') }}</SBadge>
-            <SBadge v-if="row.dirty" :tone="row.invalid ? 'danger' : 'warning'" size="xs" :title="row.invalid ? t('pricing.table.invalid', { model: row.model }) : undefined" data-testid="model-price-unsaved">
-              {{ t('pricing.table.unsaved') }}
+            <SBadge v-if="row.dirty || row.error" :tone="row.invalid || row.error ? 'danger' : 'warning'" size="xs" :title="row.error || (row.invalid ? t('pricing.table.invalid', { model: row.model }) : undefined)" data-testid="model-price-unsaved">
+              {{ row.error ? t('pricing.table.refused') : t('pricing.table.unsaved') }}
             </SBadge>
           </span>
+          <SHint v-if="row.error" size="xs" tone="danger" data-testid="model-price-error">{{ row.error }}</SHint>
         </template>
         <template #cell-base="{ row }">
-          <span class="whitespace-nowrap font-mono text-xs" :class="row.group_rule ? 'text-fg-subtle line-through' : row.base ? '' : 'text-fg-muted'" data-testid="model-price-base">{{ priceLabel(t, row.base) }}</span>
-          <SHint v-if="row.tiers > 1" size="xs">{{ t('pricing.price.tiered', { n: row.tiers }) }}</SHint>
+          <span class="whitespace-nowrap font-mono text-xs" :class="row.price ? 'text-fg-subtle line-through' : row.base ? '' : 'text-fg-muted'" data-testid="model-price-base">{{ priceLabel(t, row.base) }}</span>
+          <SHint v-if="priceCells(row.base).tiers > 1" size="xs">{{ t('pricing.price.tiered', { n: priceCells(row.base).tiers }) }}</SHint>
         </template>
-        <template #cell-group="{ row }">
-          <span v-if="row.group_rule" class="inline-flex flex-wrap items-baseline gap-x-1.5" data-testid="model-price-group">
-            <span class="whitespace-nowrap font-mono text-xs">{{ priceLabel(t, row.list_price) }}</span>
-            <SHint inline size="xs">{{ ruleText(t, row.group_rule) }}</SHint>
-          </span>
-          <SHint v-else inline size="xs" data-testid="model-price-group">{{ t('pricing.table.useBase') }}</SHint>
+        <template #cell-price="{ row }">
+          <span v-if="row.price" class="whitespace-nowrap font-mono text-xs" data-testid="model-price-price">{{ priceLabel(t, row.list_price) }}</span>
+          <SHint v-else inline size="xs" data-testid="model-price-price">{{ t('pricing.table.followBase') }}</SHint>
+        </template>
+        <template #cell-rate="{ row }">
+          <RateOverrideField v-if="editable" :model-value="row.rate" :follow="baseRate" :aria-label="t('pricing.table.rateOf', { model: row.model })" @update:model-value="table.change(row, { rate: $event })" />
+          <span v-else-if="row.rate !== null" class="font-mono text-xs" data-testid="model-price-rate">{{ rateText(row.rate) }}</span>
+          <SHint v-else inline size="xs" data-testid="model-price-rate">{{ t('pricing.table.followRate') }}</SHint>
         </template>
         <template #cell-paid="{ row }">
           <span class="whitespace-nowrap font-mono text-xs font-semibold" data-testid="model-price-paid">{{ row.list_price ? (row.paid ? priceLabel(t, row.paid) : '—') : priceLabel(t, null) }}</span>
+          <SHint size="xs" data-testid="model-price-paid-source">{{ rateText(row.applied.value || null) }} · {{ t(`pricing.table.rateSource.${row.applied.source}`) }}</SHint>
         </template>
         <template #cell-actions="{ row, expanded, toggleExpand }">
           <div class="flex items-center justify-end gap-1">
-            <SRowAction :label="expanded ? t('pricing.table.done') : t('pricing.table.set')" :aria-expanded="expanded" data-testid="model-price-set" @click="toggleExpand()" />
-            <SRowAction v-if="row.group_rule" tone="danger" :label="t('pricing.table.clear')" data-testid="model-price-clear" @click="draft(row, null)" />
-            <SRowAction v-if="row.removable" :label="t('common.remove')" data-testid="model-price-remove" @click="remove(row.model)" />
+            <SRowAction :label="expanded ? t('pricing.table.done') : t('pricing.table.change')" :aria-expanded="expanded" data-testid="model-price-set" @click="toggleExpand()" />
+            <SRowAction v-if="isSet(row)" tone="danger" :label="t('pricing.table.clear')" data-testid="model-price-clear" @click="table.change(row, { price: null, rate: null })" />
+            <SRowAction v-if="row.removable" :label="t('common.remove')" data-testid="model-price-remove" @click="table.remove(row.model)" />
           </div>
         </template>
         <template #expand="{ row }">
           <div class="space-y-2">
             <p class="text-xs font-semibold text-fg">{{ t('pricing.table.editing', { model: row.model }) }}</p>
-            <PriceRuleEditor :model-value="row.group_rule" :base="row.base" :rate="rate" @update:model-value="draft(row, $event)" />
+            <PriceRuleEditor :model-value="row.price" :base="row.base" :rate="row.applied.value" @update:model-value="table.change(row, { price: $event })" />
           </div>
         </template>
       </STable>

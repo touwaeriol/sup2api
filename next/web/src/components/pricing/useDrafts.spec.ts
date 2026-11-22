@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises } from '@vue/test-utils'
-import { unsent, withDraft } from './drafts'
+import { itemErrors, withDraft } from './drafts'
 import { useDrafts } from './useDrafts'
 
 const toast = vi.hoisted(() => vi.fn())
@@ -21,10 +21,10 @@ describe('drafts by row key', () => {
     expect(withDraft(one, 'a', undefined).size).toBe(0)
     expect(one.get('a')).toBe(1)
   })
-  it('leave, once some are saved, those made or changed after they were sent', () => {
-    const sent = new Map([['a', { v: 1 }], ['b', { v: 2 }]])
-    const now = new Map([['a', sent.get('a')!], ['b', { v: 3 }], ['c', { v: 4 }]])
-    expect([...unsent(now, sent).keys()]).toEqual(['b', 'c'])
+  it('take the field errors of a list back to the rows that were sent at those places', () => {
+    const sent = [{ model: 'a' }, { model: 'b' }]
+    const errors = { 'model_prices.1.rule': 'bad', 'model_prices.7.rule': 'gone', 'model_rates.0.rate': 'other list', name: 'not a list' }
+    expect([...itemErrors(errors, 'model_prices', sent, (i) => i.model)]).toEqual([['b', 'bad']])
   })
 })
 
@@ -73,61 +73,23 @@ describe('an editor that keeps drafts', () => {
     expect([state.saved.value, state.dirty.value]).toEqual([[], false])
   })
 
-  it('sends nothing without drafts, and nothing while they cannot be saved (check says so first)', async () => {
+  it('can always be sent without drafts; with some, only once nothing is wrong (a toast says what)', () => {
     let problem: string | null = 'not yet'
     const { state } = setup(() => problem)
-    const put = vi.fn(async () => ['saved'])
-    expect([state.check(), await state.save(put)]).toEqual([true, true])
+    expect(state.check()).toBe(true)
     state.drafts.value = withDraft(state.drafts.value, 'a', 1)
-    expect(state.check()).toBe(false)
-    expect(await state.save(put)).toBe(false)
+    expect([state.dirty.value, state.check()]).toEqual([true, false])
     expect(toast).toHaveBeenCalledWith('not yet', 'error')
     problem = null
-    expect(await state.save(put)).toBe(true)
-    expect(put).toHaveBeenCalledTimes(1)
-    expect([state.saved.value, state.dirty.value]).toEqual([['saved'], false])
+    expect(state.check()).toBe(true)
   })
 
-  it('keeps the drafts when the save fails', async () => {
-    const { state } = setup()
-    state.drafts.value = withDraft(state.drafts.value, 'a', 1)
-    await expect(state.save(async () => Promise.reject(new Error('conflict')))).rejects.toThrow('conflict')
-    expect(state.drafts.value.get('a')).toBe(1)
-  })
-
-  it('keeps what is edited while the save is under way, and its answer over a fetch still out', async () => {
+  it('keeps the drafts on a refresh', async () => {
     const { answers, state } = setup()
-    state.drafts.value = withDraft(withDraft(state.drafts.value, 'a', 1), 'b', 2)
-    const answer = deferred<string[]>()
-    const put = vi.fn((_sent: ReadonlyMap<string, number>) => answer.promise)
-    const saving = state.save(put)
+    state.drafts.value = withDraft(state.drafts.value, 'a', 1)
     state.refresh()
-    state.drafts.value = withDraft(withDraft(state.drafts.value, 'b', 3), 'c', 4)
-
-    answer.resolve(['saved'])
-    expect(await saving).toBe(true)
-    answers[0].resolve(['stale'])
+    answers[0].resolve(['fresh'])
     await flushPromises()
-    expect([...put.mock.calls[0][0]]).toEqual([['a', 1], ['b', 2]])
-    expect([...state.drafts.value]).toEqual([['b', 3], ['c', 4]])
-    expect(state.saved.value).toEqual(['saved'])
-    expect(state.loading.value).toBe(false)
-  })
-
-  it('leaves out the answer of a save that comes after another object is loaded', async () => {
-    const { answers, state } = setup()
-    state.drafts.value = withDraft(state.drafts.value, 'a', 1)
-    const answer = deferred<string[]>()
-    const saving = state.save(() => answer.promise)
-    state.load()
-    state.drafts.value = withDraft(state.drafts.value, 'b', 2)
-
-    answer.resolve(['of the one before'])
-    expect(await saving).toBe(true)
-    expect([...state.drafts.value]).toEqual([['b', 2]])
-    expect([state.saved.value, state.loading.value]).toEqual([[], true])
-    answers[0].resolve(['loaded'])
-    await flushPromises()
-    expect([state.saved.value, state.loading.value]).toEqual([['loaded'], false])
+    expect([state.saved.value, [...state.drafts.value]]).toEqual([['fresh'], [['a', 1]]])
   })
 })

@@ -197,10 +197,10 @@ describe('account forwarding and proxy', () => {
     expect(hint()).toBe('生效：允许（默认）')
     groups.value = [{ id: 1, name: 'default' }, { id: 2, name: 'vip', conversion_loss_policy: 'safe' }, { id: 3, name: 'other', conversion_loss_policy: 'strict' }] as Group[]
     await flushPromises()
-    expect(hint()).toBe('继承分组：default=允许, vip=安全')
+    expect(hint()).toBe('继承账号分组：default=允许, vip=安全')
     expect(w.get('[data-testid="account-conversion-policy"]').element.closest('[data-editor-section]')?.getAttribute('data-editor-section')).toBe('advanced')
     await w.get('[data-testid="account-conversion-policy-select"]').setValue('strict')
-    expect(hint()).toBe('生效：严格（覆盖分组设置）')
+    expect(hint()).toBe('生效：严格（覆盖账号分组设置）')
     expect(w.getComponent(AccountEditorNav).props('sections').find(s => s.key === 'advanced')?.summary).toBe('不透传 · 转换：严格 · 超时跟随')
     await w.get('form').trigger('submit'); await flushPromises()
     expect(mocks.patch).toHaveBeenCalledWith('/accounts/1', expect.objectContaining({ conversion_loss_policy: 'strict' }))
@@ -985,7 +985,7 @@ describe('account protocols (DESIGN-2026-11-17-PROTOCOL-BINDING §5.1)', () => {
     editorOf(plain).rules.value = { 'gpt-5.6': ['openai.chat', 'anthropic.messages'] }
     await flushPromises()
     expect(policy(plain).attributes('disabled')).toBeUndefined()
-    expect(hint(plain)).toBe('生效：安全（覆盖分组设置）')
+    expect(hint(plain)).toBe('生效：安全（覆盖账号分组设置）')
     // So does an adapted own protocol (Codex chat), until the account closes it.
     const adapted = render(savedAccount(), false, { ...accountType, ...codex } as AccountType)
     await flushPromises()

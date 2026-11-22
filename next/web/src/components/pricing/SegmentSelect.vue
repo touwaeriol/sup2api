@@ -3,21 +3,16 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { SSelect, type SelectOption } from '@sub2api/ui'
 import type { Segment } from '@/api/pricing'
-import { hasDiscount, rateText } from './pricingFormat'
 import { useSegmentsLookup } from './segmentLookup'
 
-// Picks one named segment. An option reads "VIP · discount ×0.9"; the
-// default segment says so. Personal segments are not offered: a user gets one
+// Picks one named segment; the default segment says so. Personal segments are not offered: a user gets one
 // through PersonalConvertDialog.
 const props = defineProps<{ modelValue: number | null; disabled?: boolean; placeholder?: string; exclude?: number[] }>()
 const emit = defineEmits<{ (e: 'update:modelValue', v: number | null): void }>()
 const { t } = useI18n()
 const { segments } = useSegmentsLookup()
 
-function label(s: Segment): string {
-  const marks = [s.is_default ? t('segments.select.default') : '', hasDiscount(s) ? t('segments.select.discount', { rate: rateText(s.discount) }) : '']
-  return [s.name, ...marks.filter(Boolean)].join(' · ')
-}
+const label = (s: Segment): string => (s.is_default ? `${s.name} · ${t('segments.select.default')}` : s.name)
 
 const options = computed<SelectOption[]>(() => segments.value.filter((s) => !props.exclude?.includes(s.id)).map((s) => ({ value: s.id, label: label(s) })))
 </script>

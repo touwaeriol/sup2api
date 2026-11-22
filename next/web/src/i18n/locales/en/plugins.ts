@@ -139,7 +139,7 @@ export default {
     headers: 'request headers',
     body: 'request body',
     user_id: 'user ID',
-    group_id: 'group ID',
+    group_id: 'account group ID',
     api_key_id: 'API key ID',
     metadata: 'metadata'
   },
@@ -210,7 +210,7 @@ export default {
     accountTypes: 'Account types',
     hooks: 'Gateway hooks',
     models: 'models',
-    groups: 'groups',
+    groups: 'account groups',
     reads: 'Reads',
     maxPrompt: 'Prompt limit',
     timeout: 'Timeout',

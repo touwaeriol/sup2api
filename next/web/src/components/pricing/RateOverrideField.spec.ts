@@ -5,18 +5,18 @@ import RateOverrideField from './RateOverrideField.vue'
 
 i18n.global.locale.value = 'en'
 
-function render(modelValue: string | null, rate = { group_default: '1.2', discount: '0.9' }) {
-  const w = mount(RateOverrideField, { props: { modelValue, rate }, global: { plugins: [i18n] } })
+function render(modelValue: string | null, follow = '1.2') {
+  const w = mount(RateOverrideField, { props: { modelValue, follow }, global: { plugins: [i18n] } })
   return { w, input: w.get('[data-testid="rate-override-input"]') }
 }
 
 describe('rate override field', () => {
-  it('says what an empty field follows: the group rate times the discount', () => {
+  it('says what an empty field follows', () => {
     const { w, input } = render(null)
-    expect(input.attributes('placeholder')).toBe('Follows 1.08')
+    expect(input.attributes('placeholder')).toBe('Follows 1.2')
     expect(input.attributes('aria-invalid')).toBeUndefined()
     expect(w.find('[data-testid="rate-override-invalid"]').exists()).toBe(false)
-    expect(render(null, { group_default: '1.2', discount: '1' }).input.attributes('placeholder')).toBe('Follows 1.2')
+    expect(render(null, '0.80').input.attributes('placeholder')).toBe('Follows 0.8')
   })
   it('emits the typed rate, and null again once cleared', async () => {
     const { w, input } = render(null)

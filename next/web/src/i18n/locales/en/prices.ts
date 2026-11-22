@@ -1,8 +1,8 @@
 export default {
   title: 'Model prices',
   description: 'Billing expressions per model. Prices are maintained by admins: entered manually or imported from a sync source.',
-  scopeNote: 'These are the original prices. A group can give a model a group price, and a user group can set rates; paid = model price × rate.',
-  scopeLinks: { groups: 'Groups', segments: 'User groups' },
+  scopeNote: 'These are the original prices. An account group can give a model a model price, and account groups and user groups can set rates; paid = model price × the one rate that applies.',
+  scopeLinks: { groups: 'Account groups', segments: 'User groups' },
   simulate: 'Price simulator',
   simulateModel: 'Simulate this model',
   new: 'New price',
@@ -198,8 +198,8 @@ export default {
   estimator: {
     title: 'Token estimator',
     titleRequest: 'Cost estimate',
-    hint: 'Enter token counts to preview the cost (group rate not included).',
-    hintRequest: 'The cost of one request (group rate not included). Fill in parameters, headers or a time under Request simulation to see which rules match.',
+    hint: 'Enter token counts to preview the cost (rate not included).',
+    hintRequest: 'The cost of one request (rate not included). Fill in parameters, headers or a time under Request simulation to see which rules match.',
     more: 'More usage (1-hour cache, images)',
     len: 'Context length',
     lenPlaceholder: 'The token total ({n}) when empty',
@@ -255,7 +255,7 @@ export default {
     basics: {
       cost: 'An expression works out the cost of one request. Token variables hold the tokens it used, and prices are in **USD per 1M tokens**: `p*3` is $3 per 1M input tokens.',
       flat: '`flat(0.05)` adds $0.05 as it is, not per million.',
-      round: 'The result may not be negative. The amount charged = result × group rate, **rounded up to 8 decimals** (never under-charged).',
+      round: 'The result may not be negative. The amount charged = result × rate, **rounded up to 8 decimals** (never under-charged).',
       layout: 'Line breaks and spaces are free; Format puts each factor on a line of its own.',
       generated: 'A visual price is saved as an expression too: switch to Expression to carry on from it.'
     },
@@ -346,8 +346,8 @@ export default {
     subtotal: 'Subtotal',
     rules: 'combined rule multiplier',
     base: 'Base cost',
-    listScale: 'group price multiplier',
-    groupRate: 'group rate'
+    listScale: 'model price multiplier',
+    groupRate: 'rate'
   },
   summary: {
     perRequest: '{price} / request',
@@ -429,9 +429,9 @@ export default {
       models_dev: 'models.dev vendor ids such as anthropic, openai, google; only models of these vendors are imported. Press Enter to add.'
     },
     providersPlaceholder: 'Type a vendor and press Enter',
-    applyMultiplier: 'Apply the upstream group rate',
-    applyMultiplierHint: 'Multiplies prices by the rate of the group the upstream key belongs to, i.e. imports what we actually pay upstream.',
-    multiplierOn: 'with group rate',
+    applyMultiplier: 'Apply the upstream rate',
+    applyMultiplierHint: 'Multiplies prices by the rate of the upstream key, i.e. imports what we actually pay upstream.',
+    multiplierOn: 'with upstream rate',
     multiplierOff: 'base prices',
     deleteConfirm: 'Delete the sync source "{name}"? The {n} price(s) imported from it are kept but no longer linked to this source.',
     viewPrices: 'View these prices'

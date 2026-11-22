@@ -65,7 +65,7 @@ export default {
   type: '类型',
   model: '模型',
   user: '用户',
-  group: '分组',
+  group: '账号分组',
   account: '账号',
   onlyMine: '只看我的',
   theme: {

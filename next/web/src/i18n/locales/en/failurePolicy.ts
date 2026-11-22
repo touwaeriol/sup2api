@@ -86,8 +86,8 @@ export default {
   keywordsHint:
     'One per line, case-insensitive. Empty means status codes only; with status codes, the status must match too. A transport rule with no conditions matches all transport failures.',
   matchMode: 'Condition relationship',
-  groups: 'Group IDs',
-  group: 'Group ID',
+  groups: 'Account group IDs',
+  group: 'Account group ID',
   models: 'Models',
   protocols: 'Protocols',
   scopeHint: 'Empty means any; multiple values match any.',

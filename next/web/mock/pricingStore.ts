@@ -1,10 +1,11 @@
 // Group pricing, the state and how it resolves: user groups ("segments"),
-// the private groups they are granted, the rate a segment gets in a group
-// and the model prices of a group.
+// the private groups they are granted, and the prices and rates of account
+// groups ("groups").
 //
 //   paid = list price × rate
-//
-// A segment prices no model: it only sets rates (CONTRACTS §97.10).
+//   list price: the group's model price -> the global price
+//   rate (one applies, never a product; the most specific first):
+//     segment × group × model -> segment × group -> group × model -> group base rate
 //
 // Users and groups are known here by id only; resources.ts and pricing.ts put
 // the API rows together.
@@ -12,11 +13,11 @@ import { nextId, now } from './router'
 import { configPrice, type PriceDef } from './billing'
 import { requestTier, singleTier, type VisualConfig } from '../src/views/prices/priceExpr'
 
-export type RateSource = 'segment' | 'discount' | 'group'
+export type RateSource = 'segment_model' | 'segment' | 'group_model' | 'group'
 export type PriceSource = 'group' | 'global'
 
+/** The model price of a group: a price of its own, visual or an expression. */
 export type PriceRule =
-  | { kind: 'multiplier'; multiplier: string }
   | { kind: 'custom'; mode: 'visual'; config: VisualConfig; expression?: string }
   | { kind: 'custom'; mode: 'expression'; config: Record<string, never>; expression: string }
 
@@ -26,7 +27,6 @@ export interface MockSegment {
   /** A personal segment carries the email of its user. */
   name: string
   description: string
-  discount: string
   is_default: boolean
   /** Personal only: its one member, and the segment that user came from. */
   user_id?: number
@@ -56,6 +56,14 @@ export interface RuleRow {
   rule: PriceRule
 }
 
+/** A model rate: of a group (`segment_id` null) or of a segment in a group; at most one on a model each. */
+export interface ModelRateRow {
+  segment_id: number | null
+  group_id: number
+  model: string
+  rate: string
+}
+
 // ------------------------------------------------------------------ state
 
 const DEFAULT = 1
@@ -66,12 +74,12 @@ const PERSONAL_104 = 11
 const PERSONAL_107 = 12
 
 export const segments: MockSegment[] = [
-  { id: DEFAULT, kind: 'named', name: '默认', description: '注册后自动加入', discount: '1', is_default: true, created_at: now(-86400 * 90) },
-  { id: VIP, kind: 'named', name: 'VIP', description: '充值满 $200 的老客户', discount: '0.9', is_default: false, created_at: now(-86400 * 45) },
-  { id: ENTERPRISE, kind: 'named', name: '企业客户', description: '签了合同的公司', discount: '1', is_default: false, created_at: now(-86400 * 30) },
-  { id: INTERNAL, kind: 'named', name: '内部', description: '自己人和测试号', discount: '1', is_default: false, created_at: now(-86400 * 20) },
-  { id: PERSONAL_104, kind: 'personal', name: 'user5@example.org', description: '', discount: '0.9', is_default: false, user_id: 104, origin_id: VIP, created_at: now(-86400 * 6) },
-  { id: PERSONAL_107, kind: 'personal', name: 'user8@example.org', description: '', discount: '1', is_default: false, user_id: 107, origin_id: DEFAULT, created_at: now(-86400 * 2) }
+  { id: DEFAULT, kind: 'named', name: '默认', description: '注册后自动加入', is_default: true, created_at: now(-86400 * 90) },
+  { id: VIP, kind: 'named', name: 'VIP', description: '充值满 $200 的老客户', is_default: false, created_at: now(-86400 * 45) },
+  { id: ENTERPRISE, kind: 'named', name: '企业客户', description: '签了合同的公司', is_default: false, created_at: now(-86400 * 30) },
+  { id: INTERNAL, kind: 'named', name: '内部', description: '自己人和测试号', is_default: false, created_at: now(-86400 * 20) },
+  { id: PERSONAL_104, kind: 'personal', name: 'user5@example.org', description: '', is_default: false, user_id: 104, origin_id: VIP, created_at: now(-86400 * 6) },
+  { id: PERSONAL_107, kind: 'personal', name: 'user8@example.org', description: '', is_default: false, user_id: 107, origin_id: DEFAULT, created_at: now(-86400 * 2) }
 ]
 
 /** User id -> segment id. A user without an entry is in the default segment, as a new user is. */
@@ -97,11 +105,19 @@ const pairs: Pair[] = [
 ]
 
 const rules: RuleRow[] = [
-  { group_id: 1, model: 'gpt-4o', rule: { kind: 'multiplier', multiplier: '1.2' } },
   { group_id: 1, model: 'web-search', rule: { kind: 'custom', mode: 'visual', config: requestTier(0.008) } },
   { group_id: 2, model: 'claude-haiku-4-5', rule: { kind: 'custom', mode: 'visual', config: singleTier({ p: 0.8, c: 4, cr: 0.08, cc: 1 }) } },
   // A custom price by the request over a global price by tokens.
   { group_id: 1, model: 'gemini-2.5-flash', rule: { kind: 'custom', mode: 'visual', config: requestTier(0.002) } }
+]
+
+// Group vip (2) charges ×0.9 for claude-opus-4-1 instead of its ×0.8, and default (1) ×1.2 for gpt-4o.
+// VIP pays ×0.85 for gpt-4o and ×0.9 for claude-sonnet-4-5 in default, whatever default charges.
+const modelRates: ModelRateRow[] = [
+  { segment_id: null, group_id: 1, model: 'gpt-4o', rate: '1.2' },
+  { segment_id: null, group_id: 2, model: 'claude-opus-4-1', rate: '0.9' },
+  { segment_id: VIP, group_id: 1, model: 'gpt-4o', rate: '0.85' },
+  { segment_id: VIP, group_id: 1, model: 'claude-sonnet-4-5', rate: '0.9' }
 ]
 
 // ------------------------------------------------------------------ reads
@@ -114,6 +130,7 @@ function where<T extends object>(rows: T[], by: Partial<T>): T[] {
 
 export const pairsWhere = (by: Partial<Pair>) => where(pairs, by)
 export const rulesWhere = (by: Partial<RuleRow>) => where(rules, by)
+export const modelRatesWhere = (by: Partial<ModelRateRow>) => where(modelRates, by)
 
 export function findSegment(id: number | null | undefined): MockSegment | undefined {
   return segments.find((s) => s.id === id)
@@ -157,11 +174,6 @@ export function groupAccess(g: PricedGroup) {
 
 // ------------------------------------------------------------------ resolving
 
-/** The largest rate, at the four decimals a rate keeps (usage_logs.rate_multiplier is numeric(10,4)). */
-const MAX_RATE = 999999.9999
-/** A discounted rate as the server writes it: rounded half up to four decimals (scaled first: a float is a little under a tie such as 0.25625) and capped. */
-const discounted = (n: number) => String(Math.min(Math.round(Number((n * 1e4).toFixed(4))) / 1e4, MAX_RATE))
-
 /** Whether a segment may use a group: public, or granted. */
 export function accessOf(s: MockSegment, g: PricedGroup): { accessible: boolean; granted: boolean; source: 'public' | 'grant' | 'none' } {
   const granted = pairsWhere({ segment_id: s.id, group_id: g.id, granted: true }).length > 0
@@ -169,34 +181,37 @@ export function accessOf(s: MockSegment, g: PricedGroup): { accessible: boolean;
   return { accessible: granted, granted, source: granted ? 'grant' : 'none' }
 }
 
-/**
- * The rate of a segment in a group, first hit: its override there, the
- * group's default times its discount, the group's default. Without a segment
- * it is the group's default.
- */
-export function rateOf(s: MockSegment | null, g: PricedGroup): { value: string; source: RateSource; group_default: string; discount: string } {
-  const levels = { group_default: g.rate_multiplier, discount: s?.discount ?? '1' }
-  const override = s ? rateOverrideOf(s.id, g.id) : null
-  if (override !== null) return { ...levels, value: override, source: 'segment' }
-  if (Number(levels.discount) !== 1) return { ...levels, value: discounted(Number(g.rate_multiplier) * Number(levels.discount)), source: 'discount' }
-  return { ...levels, value: g.rate_multiplier, source: 'group' }
+/** The model rate of a group (`segmentId` null) or of a segment in it; null when none is set. */
+export function modelRateOf(segmentId: number | null, groupId: number, model: string): string | null {
+  return modelRatesWhere({ segment_id: segmentId, group_id: groupId, model })[0]?.rate ?? null
 }
 
-/**
- * The list price a rule gives over the global price `base`, as the server's
- * billing.listPrice gives it: a custom rule is a price of its own; a
- * multiplier goes beside the global price, which stays as it is (no config
- * scaled, no expression rewritten). A model without a global price has none.
- */
+/** Every level of the rate of a segment in a group for a model, most specific first; null = not set. Without a segment or a model those levels are not set. */
+export function rateLevelsOf(s: MockSegment | null, g: PricedGroup, model?: string) {
+  return {
+    segment_model: s && model ? modelRateOf(s.id, g.id, model) : null,
+    segment: s ? rateOverrideOf(s.id, g.id) : null,
+    group_model: model ? modelRateOf(null, g.id, model) : null,
+    group: g.rate_multiplier
+  }
+}
+
+/** The rate that applies: the most specific level set (one, never a product), with where it comes from and the group's base rate. */
+export function rateOf(s: MockSegment | null, g: PricedGroup, model?: string): { value: string; source: RateSource; group_default: string } {
+  const levels = rateLevelsOf(s, g, model)
+  const source = (['segment_model', 'segment', 'group_model'] as const).find((k) => levels[k] !== null) ?? 'group'
+  return { value: levels[source] ?? g.rate_multiplier, source, group_default: g.rate_multiplier }
+}
+
+/** The list price a model price gives: a price of its own, whatever the global price `base` is. A model without a global price has none. */
 export function applyRule(base: PriceDef | null, rule: PriceRule | null): PriceDef | null {
   if (!base || !rule) return base
-  if (rule.kind === 'multiplier') return { ...base, multiplier: rule.multiplier }
   return rule.mode === 'expression' ? { mode: rule.mode, config: {}, expression: rule.expression } : configPrice(rule.mode, rule.config)
 }
 
-/** A rule as a row of model prices carries it: a custom price with its expression. */
+/** A model price as a row carries it: with its expression. */
 function listedRule(rule: PriceRule | undefined): PriceRule | null {
-  if (!rule || rule.kind === 'multiplier' || rule.mode === 'expression') return rule ?? null
+  if (!rule || rule.mode === 'expression') return rule ?? null
   return { ...rule, expression: configPrice(rule.mode, rule.config).expression }
 }
 
@@ -235,8 +250,14 @@ export function setRule(groupId: number, model: string, rule: PriceRule | null) 
   if (rule) rules.push({ group_id: groupId, model, rule })
 }
 
-export function addSegment(name: string, description: string, discount: string): MockSegment {
-  const s: MockSegment = { id: nextId(), kind: 'named', name, description, discount, is_default: false, created_at: now() }
+/** Sets or (`rate` null) removes the model rate of a group (`segmentId` null) or of a segment in it. */
+export function setModelRate(segmentId: number | null, groupId: number, model: string, rate: string | null) {
+  drop(modelRates, (r) => r.segment_id === segmentId && r.group_id === groupId && r.model === model)
+  if (rate !== null) modelRates.push({ segment_id: segmentId, group_id: groupId, model, rate })
+}
+
+export function addSegment(name: string, description: string): MockSegment {
+  const s: MockSegment = { id: nextId(), kind: 'named', name, description, is_default: false, created_at: now() }
   segments.push(s)
   return s
 }
@@ -244,6 +265,7 @@ export function addSegment(name: string, description: string, discount: string):
 /** Deletes a segment with its grants and rates. Its members fall back to the default segment. */
 export function removeSegment(s: MockSegment) {
   drop(pairs, (p) => p.segment_id === s.id)
+  drop(modelRates, (r) => r.segment_id === s.id)
   drop(segments, (x) => x === s)
   for (const [userId, id] of membership) if (id === s.id) membership.delete(userId)
   for (const x of segments) if (x.origin_id === s.id) x.origin_id = null
@@ -251,16 +273,17 @@ export function removeSegment(s: MockSegment) {
 
 /**
  * Gives a user a segment of their own. With `copy` it starts from what the
- * segment they leave has now (discount, grants, rates); the two are
+ * segment they leave has now (grants, rates, model rates); the two are
  * unrelated afterwards.
  */
 export function makePersonal(user: { id: number; email: string }, copy: boolean): MockSegment {
   const from = segmentOfUser(user.id)
-  const s: MockSegment = { id: nextId(), kind: 'personal', name: user.email, description: '', discount: copy ? from.discount : '1', is_default: false, user_id: user.id, origin_id: from.id, created_at: now() }
+  const s: MockSegment = { id: nextId(), kind: 'personal', name: user.email, description: '', is_default: false, user_id: user.id, origin_id: from.id, created_at: now() }
   segments.push(s)
   membership.set(user.id, s.id)
   if (!copy) return s
   pairs.push(...pairsWhere({ segment_id: from.id }).map((p) => ({ ...p, segment_id: s.id })))
+  modelRates.push(...modelRatesWhere({ segment_id: from.id }).map((r) => ({ ...r, segment_id: s.id })))
   return s
 }
 
@@ -284,4 +307,5 @@ export function forgetUser(userId: number) {
 export function forgetGroup(groupId: number) {
   drop(pairs, (p) => p.group_id === groupId)
   drop(rules, (r) => r.group_id === groupId)
+  drop(modelRates, (r) => r.group_id === groupId)
 }

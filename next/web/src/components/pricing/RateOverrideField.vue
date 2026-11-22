@@ -2,24 +2,17 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { SHint, SInput } from '@sub2api/ui'
-import type { EffectiveRate } from '@/api/pricing'
-import { validOverride } from './accessRateDrafts'
-import { inheritedRate } from './pricingFormat'
+import { validRate } from './pricingFormat'
 
-// The rate of a segment in a group, compact enough for a table cell. Empty
-// (null) follows the group's rate times the segment's discount, and the
-// placeholder says to what; a value replaces both. A value that is no rate
-// says so underneath.
-const props = defineProps<{
-  modelValue: string | null
-  rate: Pick<EffectiveRate, 'group_default' | 'discount'>
-  disabled?: boolean
-  ariaLabel?: string
-}>()
+// A rate that may be left to follow another, compact enough for a table
+// cell: a user group's rate in an account group, or a model rate. Empty
+// (null) follows `follow`, and the placeholder says so; a value replaces it.
+// A value that is no rate says so underneath.
+const props = defineProps<{ modelValue: string | null; follow: string; disabled?: boolean; ariaLabel?: string }>()
 const emit = defineEmits<{ (e: 'update:modelValue', v: string | null): void }>()
 const { t } = useI18n()
 
-const valid = computed(() => validOverride(props.modelValue))
+const valid = computed(() => props.modelValue === null || validRate(props.modelValue))
 </script>
 
 <template>
@@ -30,10 +23,10 @@ const valid = computed(() => validOverride(props.modelValue))
       mono
       inputmode="decimal"
       clearable
-      class="w-36"
+      class="w-32"
       :error="!valid"
       :disabled="disabled"
-      :placeholder="t('pricing.rate.follow', { rate: inheritedRate(rate) })"
+      :placeholder="t('pricing.rate.follow', { rate: validRate(follow) ? Number(follow) : '—' })"
       :aria-label="ariaLabel || t('pricing.rate.label')"
       data-testid="rate-override-input"
       @update:model-value="emit('update:modelValue', String($event ?? '').trim() || null)"

@@ -268,7 +268,7 @@ describe('bulk account dialogs', () => {
       const w = mount(AccountBulkEditDialog, { props: { open: true, accounts: [acc(1)], typeOf: () => undefined }, global: { plugins: [i18n], stubs: { SModal } } })
       const field = w.get('[data-testid="bulk-field-groups"]')
       expect(field.get('input[type="checkbox"]').attributes('disabled')).toBeDefined()
-      expect(field.text()).toContain('修改分组需要')
+      expect(field.text()).toContain('修改账号分组需要')
     } finally {
       perms.has = () => true
     }

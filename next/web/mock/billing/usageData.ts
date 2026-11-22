@@ -42,7 +42,7 @@ export const NATIVE_ENDPOINT: Record<string, { platform: string; protocol: strin
  */
 export interface PricingTerms {
   segment_id: number
-  rate_source: 'segment' | 'discount' | 'group'
+  rate_source: 'segment_model' | 'segment' | 'group_model' | 'group'
   /** A rule of the group: a multiplier of the global price, or a price of its own. */
   rule?: { source: 'group'; scale?: number; custom?: PriceDef }
 }

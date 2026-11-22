@@ -38,12 +38,12 @@ export default {
   search: {
     logType: 'Log type',
     retried: 'Retries',
-    // The model, user, API key, group and account are entity pickers (EntityPicker), named by
+    // The model, user, API key, account group and account are entity pickers (EntityPicker), named by
     // the picker itself; these are the other fields' placeholders and the filter chips' names
     // (by query parameter).
     client_ip: 'Client IP (exact)',
-    group_id: 'Group',
-    group_name: 'Group name contains',
+    group_id: 'Account group',
+    group_name: 'Account group name contains',
     request_id: 'Request ID',
     client_request_id: 'Client request ID',
     platform: 'Platform',

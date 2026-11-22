@@ -12,7 +12,7 @@ export default {
   },
   items: {
     dashboard: 'Dashboard',
-    groups: 'Groups',
+    groups: 'Account groups',
     accounts: 'Accounts',
     proxies: 'Proxies',
     prices: 'Model prices',

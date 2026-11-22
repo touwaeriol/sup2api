@@ -511,7 +511,7 @@ const MENUS = [
     label: L('Accounts & proxies', '账号/代理'),
     items: [
       { id: 'accounts', label: L('Accounts', '账号'), icon: 'account', path: '/accounts' },
-      { id: 'groups', label: L('Groups', '分组'), icon: 'group', path: '/groups' },
+      { id: 'groups', label: L('Account groups', '账号分组'), icon: 'group', path: '/groups' },
       { id: 'proxies', label: L('Proxies', '代理'), icon: 'proxy', path: '/proxies' },
       { id: 'dynweight:dynweight', label: L('Dynamic Weight', '动态权重'), icon: 'chart', path: '/p/dynweight/dashboard', plugin_key: 'dynweight' }
     ]
@@ -534,7 +534,7 @@ const MENUS = [
     label: L('Users', '用户'),
     items: [
       { id: 'users', label: L('Users', '用户'), icon: 'user', path: '/users' },
-      { id: 'segments', label: L('User groups', '用户组'), icon: 'publisher', path: '/segments' },
+      { id: 'segments', label: L('User groups', '用户分组'), icon: 'publisher', path: '/segments' },
       { id: 'roles', label: L('Roles & permissions', '角色与权限'), icon: 'role', path: '/roles' }
     ]
   },

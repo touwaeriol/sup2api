@@ -38,25 +38,25 @@ describe('group pricing of a usage record', () => {
     expect(has('usage-list-price')).toBe(false)
     expect(has('usage-list-cost')).toBe(false)
     expect(has('rate-source')).toBe(false)
-    expect(w.text().replace(/\s+/g, ' ')).toContain('基础费用 $0.00576 × 条件总倍率 1 × 分组倍率 1.5 = $0.00864')
+    expect(w.text().replace(/\s+/g, ' ')).toContain('基础费用 $0.00576 × 条件总倍率 1 × 倍率 1.5 = $0.00864')
   })
 
   it('shows the multiplier rule that gave the model price, its cost and where the rate comes from', () => {
-    const pricing: UsagePricing = { segment_id: 2, rate_source: 'discount', price_source: 'group', scale: '0.8' }
+    const pricing: UsagePricing = { segment_id: 2, rate_source: 'segment_model', price_source: 'group', scale: '0.8' }
     const { w, text } = render(record({ rate: '0.9', total: '0.0041472', list_cost: '0.004608', pricing }))
-    expect(text('usage-list-price')).toMatch(/^分组价 ?原价 × 0\.8$/)
+    expect(text('usage-list-price')).toMatch(/^账号分组价 ?原价 × 0\.8$/)
     expect(text('usage-list-cost')).toBe('$0.004608')
-    expect(text('rate-source')).toBe(`(${source('discount')})`)
-    expect(w.text().replace(/\s+/g, ' ')).toContain(`× 条件总倍率 1 × 分组价倍数 0.8 × 分组倍率 0.9 (${source('discount')}) = $0.004147`)
+    expect(text('rate-source')).toBe(`(${source('segment_model')})`)
+    expect(w.text().replace(/\s+/g, ' ')).toContain(`× 条件总倍率 1 × 模型价格倍数 0.8 × 倍率 0.9 (${source('segment_model')}) = $0.004147`)
   })
 
   it('names a custom price, which is no multiplier of the base cost', () => {
     const pricing: UsagePricing = { segment_id: 2, rate_source: 'segment', price_source: 'group', base: { expression: 'tier("base", p*1 + c*5)', expr_hash: 'abc' } }
     const { w, text } = render(record({ rate: '0.7', total: '0.004032', list_cost: '0.00576', pricing }))
-    expect(text('usage-list-price')).toMatch(/^分组价 ?自定义$/)
+    expect(text('usage-list-price')).toMatch(/^账号分组价 ?自定义$/)
     expect(text('usage-list-cost')).toBe('$0.00576')
     expect(text('rate-source')).toBe(`(${source('segment')})`)
-    expect(w.text()).not.toContain('分组价倍数')
+    expect(w.text()).not.toContain('账号分组价倍数')
   })
 
   it('says only where the rate comes from when no rule gave the model price', () => {
@@ -69,13 +69,13 @@ describe('group pricing of a usage record', () => {
   it('still names the price of a user group on a record priced before those were removed', () => {
     const pricing: UsagePricing = { segment_id: 2, rate_source: 'segment', price_source: 'segment', scale: '0.8' }
     const { text } = render(record({ rate: '0.9', total: '0.0041472', list_cost: '0.004608', pricing }))
-    expect(text('usage-list-price')).toMatch(/^用户组价（已停用的功能） ?原价 × 0\.8$/)
+    expect(text('usage-list-price')).toMatch(/^用户分组价（已停用的功能） ?原价 × 0\.8$/)
   })
 
   it('names no source of the rate when the record has none', () => {
     const { has, text } = render(record({ rate: '1', total: '0.006912', list_cost: '0.006912', pricing: { price_source: 'group', scale: '1.2' } }), 'en')
     expect(has('rate-source')).toBe(false)
-    expect(text('usage-list-price')).toMatch(/^Group price ?Original × 1\.2$/)
+    expect(text('usage-list-price')).toMatch(/^Account group price ?Original × 1\.2$/)
     expect(text('usage-list-cost')).toBe('$0.006912')
   })
 })
@@ -116,7 +116,7 @@ describe('separately priced items of a usage record', () => {
     const formula = item.find('[data-testid="usage-component-breakdown"]').text().replace(/\s+/g, ' ')
     expect(formula).toContain('3,000 × $15/M = $0.045')
     expect(formula).toContain('400 × $75/M = $0.03')
-    expect(formula).toContain('基础费用 $0.075 × 条件总倍率 1 × 分组倍率 1 = $0.075')
+    expect(formula).toContain('基础费用 $0.075 × 条件总倍率 1 × 倍率 1 = $0.075')
   })
 
   it('keeps each item\'s tokens and amount together, a free one first and a priced one after', () => {
@@ -163,7 +163,7 @@ describe('separately priced items of a usage record', () => {
     expect(has('usage-additional')).toBe(false)
     expect(has('usage-replacement')).toBe(false)
     expect(has('usage-components-total')).toBe(false)
-    expect(text('usage-primary-breakdown')).toContain('基础费用 $0.00576 × 条件总倍率 1 × 分组倍率 1 = $0.00576')
+    expect(text('usage-primary-breakdown')).toContain('基础费用 $0.00576 × 条件总倍率 1 × 倍率 1 = $0.00576')
   })
 })
 
@@ -178,7 +178,7 @@ describe('primary usage and total of a record with items', () => {
 
   it('ends the primary formula in its own amount and adds the items up to the total', () => {
     const { text } = render(withAdvisor('0.00576'))
-    expect(text('usage-primary-breakdown')).toContain('基础费用 $0.00576 × 条件总倍率 1 × 分组倍率 1 = $0.00576')
+    expect(text('usage-primary-breakdown')).toContain('基础费用 $0.00576 × 条件总倍率 1 × 倍率 1 = $0.00576')
     expect(text('usage-components-total')).toBe('主用量 $0.00576 + 顾问模型 $0.075 = 合计 $0.08076')
   })
 
@@ -205,7 +205,7 @@ describe('primary usage and total of a record with items', () => {
   it('leaves the primary amount out of a record settled before it was kept', () => {
     const { text } = render(withAdvisor())
     const primary = text('usage-primary-breakdown')
-    expect(primary).toContain('基础费用 $0.00576 × 条件总倍率 1 × 分组倍率 1')
+    expect(primary).toContain('基础费用 $0.00576 × 条件总倍率 1 × 倍率 1')
     expect(primary).not.toContain('=')
     expect(text('usage-components-total')).toBe('主用量 — + 顾问模型 $0.075 = 合计 $0.08076')
   })

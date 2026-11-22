@@ -2,10 +2,10 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { SAlert, SBadge, SGrid, SHint } from '@sub2api/ui'
-import type { PriceDef, PriceRule, PricingQuote } from '@/api/pricing'
+import type { CustomPrice, PriceDef, PricingQuote } from '@/api/pricing'
 import { formatMoney } from '@/utils/format'
 import SegmentBadge from './SegmentBadge.vue'
-import { applyRule, priceBrief, priceCells, rateText } from './pricingFormat'
+import { applyRule, priceCells, rateText } from './pricingFormat'
 import { priceLevels, rateLevels, type LevelState, type QuoteLevel } from './quoteLevels'
 import { priceLabel, ruleText } from './ruleText'
 
@@ -34,26 +34,17 @@ interface Chain {
   note?: string
 }
 
-/** A level of the model price: the original price itself, or the group's price with the price it comes to; a multiplier of an expression the console cannot break down is the multiplier alone. */
-function priceLevelText(v: PriceRule | PriceDef): string {
+/** A level of the model price: the original price itself, or the group's price with the price it comes to. */
+function priceLevelText(v: CustomPrice | PriceDef): string {
   if (!('kind' in v)) return priceLabel(t, v)
   const price = applyRule(props.quote.base, v)
-  return !price || (v.kind === 'multiplier' && !priceBrief(price)) ? ruleText(t, v) : `${ruleText(t, v)} = ${priceLabel(t, price)}`
+  return price ? `${ruleText(t, v)} = ${priceLabel(t, price)}` : ruleText(t, v)
 }
 
-/** What a level without a setting says. A discount of 1 is no discount: "not set" would read as something left undone. */
-const UNSET: Record<string, string | undefined> = { 'rate.discount': 'pricingTools.quote.rate.noDiscount' }
-
-const names = computed(() => ({
-  segment: props.quote.segment.name,
-  group: props.groupName ?? '',
-  base: rateText(props.quote.rate.group_default),
-  discount: rateText(props.quote.rate.discount)
-}))
+const names = computed(() => ({ segment: props.quote.segment.name, group: props.groupName ?? '' }))
 
 function chain<V>(key: Chain['key'], levels: QuoteLevel<string, V>[], text: (v: V) => string, note?: string): Chain {
-  const unset = (level: string) => t(UNSET[`${key}.${level}`] ?? 'pricingTools.quote.unset')
-  const rows = levels.map((l) => ({ key: l.key, state: l.state, label: t(`pricingTools.quote.${key}.${l.key}`, names.value), text: l.value === null ? unset(l.key) : text(l.value) }))
+  const rows = levels.map((l) => ({ key: l.key, state: l.state, label: t(`pricingTools.quote.${key}.${l.key}`, names.value), text: l.value === null ? t('pricingTools.quote.unset') : text(l.value) }))
   return { key, rows, note }
 }
 const tieredNote = computed(() => (priceCells(props.quote.list_price).tiers > 1 ? t('pricingTools.quote.price.tiered') : undefined))

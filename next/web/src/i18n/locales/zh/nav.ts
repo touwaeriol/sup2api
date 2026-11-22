@@ -12,7 +12,7 @@ export default {
   },
   items: {
     dashboard: '仪表盘',
-    groups: '分组',
+    groups: '账号分组',
     accounts: '账号',
     proxies: '代理',
     prices: '模型价格',
@@ -22,7 +22,7 @@ export default {
     accountUsage: '账号日志',
     ledger: '余额流水',
     users: '用户',
-    segments: '用户组',
+    segments: '用户分组',
     roles: '角色与权限',
     plugins: '已安装插件',
     market: '插件市场',

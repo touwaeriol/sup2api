@@ -94,7 +94,7 @@ CCGateway 插件（Claude Code 托管账号、它的 companions 与 `cli-reverse
 ### 前端（`next/web`）
 
 - 控制台构建产物输出到 `server/web/dist`，由核心用 `embed` 嵌入。`server/web/dist/index.html` 是被跟踪的占位文件，本地 `npm run build` 会覆盖它，**提交前 `git checkout` 还原**。
-- 插件的原生界面在各插件的 `ui/native/`，依赖 `@sub2api/ui`、`@sub2api/host`。改这三个包的公开接口要同步升级它们的版本（目前 4.0.0，`HOST_UI_VERSION`；带原生界面的插件声明 `hostUICompat: "^4.0"`）和 CONTRACTS §23、`web/packages/ui/README.md`。表单用 `@sub2api/ui` 的 `useForm`/`SForm`、`createApiKeyForm`、`usePluginSettings` 等写成代码，测试辅助在 `@sub2api/ui/testing`（只能在 spec 里引用）。
+- 插件的原生界面在各插件的 `ui/native/`，依赖 `@sub2api/ui`、`@sub2api/host`。改这三个包的公开接口要同步升级它们的版本（目前 4.1.0，`HOST_UI_VERSION`；带原生界面的插件声明 `hostUICompat: "^4.0"`，用到 4.1 新增导出的声明 `"^4.1"`）和 CONTRACTS §23、`web/packages/ui/README.md`。表单用 `@sub2api/ui` 的 `useForm`/`SForm`、`createApiKeyForm`、`usePluginSettings` 等写成代码，测试辅助在 `@sub2api/ui/testing`（只能在 spec 里引用）。
 - 插件 UI 与控制台的写法约定见 CONTRACTS §23.4：用 `@sub2api/ui` 组件，不用控制台全局类和 Tailwind 工具类，颜色只用契约里的 8 个 CSS 变量，操作按钮写文字，私有样式以插件 key 为前缀，接口走 `host.api` / `host.pluginApi`（原始字节类请求用 `fetchWithSession`）。
 
 ## 开发规则

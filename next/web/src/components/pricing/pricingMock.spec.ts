@@ -11,30 +11,24 @@ beforeAll(async () => {
   ;({ call, signIn, fields } = await mockServer('core', 'accounts', 'resources', 'billing', 'pricing', 'lookup'))
 })
 
-describe('the list price of a multiplier rule in the mock', () => {
-  it('is the global price as it is with the multiplier beside it, in the model prices of a group', async () => {
-    const { body } = await call('GET', '/groups/1/model-prices')
-    const row = body.data.models.find((m: { model: string }) => m.model === 'gpt-4o')
-    expect(row.group_rule).toEqual({ kind: 'multiplier', multiplier: '1.2' })
-    expect(row.list_price).toEqual({ ...row.base, multiplier: '1.2' })
+describe('the model prices and model rates of a group in the mock', () => {
+  const row = async (gid: number, model: string) => (await call('GET', `/groups/${gid}/model-prices`)).body.data.models.find((m: { model: string }) => m.model === model)
+
+  it('lists a model price as a price of its own and a model rate beside it', async () => {
+    expect(await row(1, 'gpt-4o')).toMatchObject({ price: null, rate: '1.2' })
+    const search = await row(1, 'web-search')
+    expect(search.price).toMatchObject({ kind: 'custom', mode: 'visual', config: requestTier(0.008) })
+    expect(search.rate).toBeNull()
   })
 
-  it('is the same in the caller’s own prices of a group and in a quote', async () => {
-    const mine = (await call('GET', '/me/prices?group_id=1')).body.data
-    const own = mine.prices.find((p: { model: string }) => p.model === 'gpt-4o')
-    const base = (await call('GET', '/groups/1/model-prices')).body.data.models.find((m: { model: string }) => m.model === 'gpt-4o').base
-    expect(own).toMatchObject({ ...base, multiplier: '1.2', source: 'group' })
-
-    const quote = (await call('POST', '/pricing/quote', { user_id: 1, group_id: 1, model: 'gpt-4o', usage: { p: 1_000_000, c: 0, cc1h: 0 } })).body.data
-    expect(quote.list_price).toEqual({ ...base, multiplier: '1.2' })
-    expect(quote.price_levels).toEqual({ group: { kind: 'multiplier', multiplier: '1.2' } })
-    expect(Number(quote.list_cost)).toBeCloseTo(Number(base.config.tiers[0].p) * 1.2, 8)
-  })
-
-  it('keeps a custom price a price of its own, without a multiplier', async () => {
-    const row = (await call('GET', '/groups/1/model-prices')).body.data.models.find((m: { model: string }) => m.model === 'web-search')
-    expect(row.list_price).toMatchObject({ mode: 'visual', config: requestTier(0.008) })
-    expect(row.list_price.multiplier).toBeUndefined()
+  it('quotes the most specific rate alone: the user group’s for the model over every other', async () => {
+    const quote = (await call('POST', '/pricing/quote', { segment_id: 2, group_id: 1, model: 'gpt-4o', usage: { p: 1_000_000, c: 0 } })).body.data
+    expect(quote.rate).toMatchObject({ value: '0.85', source: 'segment_model' })
+    expect(quote.rate_levels).toEqual({ segment_model: '0.85', segment: null, group_model: '1.2', group: '1' })
+    expect(quote.price_levels).toEqual({ group: null })
+    expect(Number(quote.cost)).toBeCloseTo(Number(quote.list_cost) * 0.85, 8)
+    const plain = (await call('POST', '/pricing/quote', { segment_id: 1, group_id: 1, model: 'gpt-4o', usage: { p: 1, c: 0 } })).body.data
+    expect(plain.rate).toMatchObject({ value: '1.2', source: 'group_model' })
   })
 })
 
@@ -121,35 +115,50 @@ describe('the rest of the group pricing mock', () => {
     expect(access(2).personal_count).toBe(2)
   })
 
-  it('counts and lists every model price of a group, on models it provides or not', async () => {
+  it('counts and lists every model a group sets a price or a rate on, provided or not', async () => {
     const group = async () => (await call('GET', '/groups?page_size=200')).body.data.data.find((g: { id: number }) => g.id === 1)
-    const listed = async () => (await call('GET', '/groups/1/model-prices')).body.data.models as Array<{ model: string; offered: boolean; group_rule: unknown }>
+    const listed = async () => (await call('GET', '/groups/1/model-prices')).body.data.models as Array<{ model: string; offered: boolean; price: unknown; rate: string | null }>
     expect((await group()).price_rule_count).toBe(3)
 
-    // The group stops providing gpt-4o and gpt-4o-mini: the rule on gpt-4o stays, counted and listed as not provided; gpt-4o-mini goes.
+    // The group stops providing gpt-4o and gpt-4o-mini: the rate on gpt-4o stays, counted and listed as not provided; gpt-4o-mini goes.
     await call('PATCH', '/groups/1', { model_filter_mode: 'blacklist', model_allowlist: ['gpt-4o', 'gpt-4o-mini'] })
     expect((await group()).price_rule_count).toBe(3)
     const after = await listed()
-    expect(after.find((m) => m.model === 'gpt-4o')).toMatchObject({ offered: false, group_rule: { kind: 'multiplier', multiplier: '1.2' } })
+    expect(after.find((m) => m.model === 'gpt-4o')).toMatchObject({ offered: false, rate: '1.2' })
     expect(after.some((m) => m.model === 'gpt-4o-mini')).toBe(false)
-    expect(after.filter((m) => m.group_rule).length).toBe(3)
+    expect(after.filter((m) => m.price || m.rate).length).toBe(3)
 
     await call('PATCH', '/groups/1', { model_allowlist: [] })
     expect((await listed()).find((m) => m.model === 'gpt-4o')?.offered).toBe(true)
   })
 
-  it('prices a model the group does not provide, as long as it has an original price', async () => {
+  it('saves a group with its prices and rates in one request, or nothing of it when one item is wrong', async () => {
     const catalog = (await call('GET', '/pricing/catalog')).body.data as Array<{ model: string }>
-    const priced = catalog.map((c) => c.model)
     const provided = ((await call('GET', '/groups/2/model-prices')).body.data.models as Array<{ model: string }>).map((m) => m.model)
-    const model = priced.find((m) => !provided.includes(m))!
-    expect(model).toBeDefined()
-    const put = await call('PUT', '/groups/2/model-prices', { items: [{ model, rule: { kind: 'custom', mode: 'expression', expression: 'p * 2' } }] })
-    expect(put.status).toBe(200)
-    expect(put.body.data.models.find((m: { model: string }) => m.model === model)).toMatchObject({ offered: false, group_rule: { kind: 'custom', mode: 'expression', expression: 'p * 2' }, source: 'group' })
-    const unpriced = await call('PUT', '/groups/2/model-prices', { items: [{ model: 'no-such-model', rule: { kind: 'multiplier', multiplier: '2' } }] })
-    expect([unpriced.status, fields(unpriced)]).toEqual([400, ['items.0']])
-    await call('PUT', '/groups/2/model-prices', { items: [{ model, rule: null }] })
+    const model = catalog.map((c) => c.model).find((m) => !provided.includes(m))!
+    const price = { kind: 'custom', mode: 'expression', expression: 'p * 2' }
+    const wrong = await call('PATCH', '/groups/2', { name: 'vip2', model_prices: [{ model, rule: price }, { model: 'no-such-model', rule: price }], model_rates: [{ model, rate: '0.' }], segment_rates: [{ segment_id: 2, rate: '0.5' }] })
+    expect([wrong.status, fields(wrong)]).toEqual([400, ['model_prices.1.model', 'model_rates.0.rate']])
+    expect((await call('GET', '/groups/2')).body.data.name).toBe('vip')
+
+    const saved = await call('PATCH', '/groups/2', { model_prices: [{ model, rule: price }], model_rates: [{ model, rate: '0.9' }], segment_rates: [{ segment_id: 2, granted: false, rate: null }] })
+    expect(saved.status).toBe(200)
+    const row = (await call('GET', '/groups/2/model-prices')).body.data.models.find((m: { model: string }) => m.model === model)
+    expect(row).toMatchObject({ offered: false, price: { kind: 'custom', mode: 'expression', expression: 'p * 2' }, rate: '0.9' })
+    const vip = (await call('GET', '/groups/2/segments')).body.data.find((r: { segment: { id: number } }) => r.segment.id === 2)
+    expect(vip).toMatchObject({ granted: false, rate_override: null })
+    await call('PATCH', '/groups/2', { model_prices: [{ model, rule: null }], model_rates: [{ model, rate: null }], segment_rates: [{ segment_id: 2, granted: true, rate: '0.7' }] })
+  })
+
+  it('creates a user group with its rates and model rates in one request, checked as one', async () => {
+    const wrong = await call('POST', '/segments', { name: 'Gold', group_rates: [{ group_id: 99, rate: '1' }], model_rates: [{ group_id: 1, model: 'gpt-4o', rate: 'x' }] })
+    expect([wrong.status, fields(wrong)]).toEqual([400, ['group_rates.0.group_id', 'model_rates.0.rate']])
+    const created = await call('POST', '/segments', { name: 'Gold', group_rates: [{ group_id: 2, granted: true, rate: '0.6' }], model_rates: [{ group_id: 1, model: 'gpt-4o', rate: '0.5' }] })
+    expect(created.status).toBe(200)
+    const rows = (await call('GET', `/segments/${created.body.data.id}/groups`)).body.data as Array<{ group: { id: number }; granted: boolean; rate_override: string | null; model_rates: unknown[] }>
+    expect(rows.find((r) => r.group.id === 2)).toMatchObject({ granted: true, rate_override: '0.6' })
+    expect(rows.find((r) => r.group.id === 1)?.model_rates).toEqual([{ model: 'gpt-4o', rate: '0.5' }])
+    await call('DELETE', `/segments/${created.body.data.id}`)
   })
 
   it('says a quote in a disabled group cannot be used by anyone', async () => {

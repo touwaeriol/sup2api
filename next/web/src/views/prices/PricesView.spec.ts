@@ -70,7 +70,7 @@ describe('model prices list', () => {
 
   it('says that these are the original prices and links to where a group prices a model and a user group sets rates', async () => {
     const note = (await render()).get('[data-testid="price-scope-note"]')
-    expect(note.text()).toContain('实付 = 模型价格 × 倍率')
+    expect(note.text()).toContain('实付 = 模型价格 × 生效的那一个倍率')
     expect(note.findAll('a').map(a => a.attributes('href'))).toEqual(['/groups', '/segments'])
   })
 

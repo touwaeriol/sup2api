@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { PriceDef } from '@/api/pricing'
-import { applyRule, effectiveRate, hasDiscount, inheritedRate, priceCells, priceExtras, priceText, sameRate, timesRate, usd, validRate } from './pricingFormat'
+import { applyRule, effectiveRate, priceCells, priceExtras, priceText, sameRate, timesRate, usd, validRate } from './pricingFormat'
 import { requestTier, singleTier } from '@/views/prices/priceExpr'
 
 describe('a rate typed in a form', () => {
@@ -14,23 +14,6 @@ describe('a rate typed in a form', () => {
   })
 })
 
-describe('the rate a segment inherits', () => {
-  const rate = (group_default: string, discount: string) => inheritedRate({ group_default, discount })
-
-  it('is the default of the group times the discount', () => {
-    expect(rate('1.2', '0.9')).toBe(1.08)
-    expect(rate('1.2', '1')).toBe(1.2)
-  })
-  it('keeps four decimals, rounded half up as the server rounds', () => {
-    expect(rate('0.3333', '0.3333')).toBe(0.1111)
-    expect(rate('0.5125', '0.5')).toBe(0.2563)
-    expect(rate('0.0001', '0.4')).toBe(0)
-  })
-  it('is capped at the largest rate', () => {
-    expect(rate('999999', '2')).toBe(999999.9999)
-  })
-})
-
 describe('the rate helpers every pricing view shares', () => {
   it('compare rates as numbers, and one still being typed only with itself', () => {
     expect(sameRate('0.80', '0.8')).toBe(true)
@@ -38,14 +21,16 @@ describe('the rate helpers every pricing view shares', () => {
     expect(sameRate('0.', '0')).toBe(false)
     expect(sameRate('0.8', null)).toBe(false)
   })
-  it('tell a discount from none', () => {
-    expect(hasDiscount({ discount: '0.9' })).toBe(true)
-    expect(hasDiscount({ discount: '1.0' })).toBe(false)
+  it('take the most specific rate set, alone: rates never multiply', () => {
+    const all = { segment_model: '0.85', segment: '0.7', group_model: '1.2', group: '0.8' }
+    expect(effectiveRate(all)).toEqual({ value: '0.85', source: 'segment_model', group_default: '0.8' })
+    expect(effectiveRate({ ...all, segment_model: null })).toMatchObject({ value: '0.7', source: 'segment' })
+    expect(effectiveRate({ ...all, segment_model: null, segment: null })).toMatchObject({ value: '1.2', source: 'group_model' })
+    expect(effectiveRate({ group: '0.8' })).toEqual({ value: '0.8', source: 'group', group_default: '0.8' })
   })
-  it('say where the rate comes from', () => {
-    expect(effectiveRate({ group_default: '1.2', discount: '0.9' }, null)).toMatchObject({ value: '1.08', source: 'discount' })
-    expect(effectiveRate({ group_default: '1.2', discount: '1' }, null)).toMatchObject({ value: '1.2', source: 'group' })
-    expect(effectiveRate({ group_default: '1.2', discount: '0.9' }, '0.5')).toMatchObject({ value: '0.5', source: 'segment' })
+  it('say which level applies while its rate is still being typed, without a value yet', () => {
+    expect(effectiveRate({ segment: '0.', group: '0.8' })).toEqual({ value: '', source: 'segment', group_default: '0.8' })
+    expect(effectiveRate({ segment: ' 0 ', group: '0.8' })).toMatchObject({ value: '0', source: 'segment' })
   })
 })
 

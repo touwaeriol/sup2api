@@ -6,13 +6,18 @@
 // aria-labelledby the tab id. Internal to STabs; not a public component.
 // When the tabs overflow, the bar scrolls sideways, fades the edge that hides
 // more tabs and centres the selected tab whenever it changes. Tabs are 44px
-// high on touch screens.
+// high on touch screens. `dirty` and `errors` (tab keys) put a mark after
+// a tab's title (TabMarks), as STabbedForm does.
 import { computed, nextTick, ref, useId } from 'vue'
 import type { TabItem } from '../types'
 import { navIndex } from '../keyboard'
 import { useCentredSelection, useScrollFade } from '../scrollClip'
+import TabMarks from './TabMarks.vue'
 
-const props = withDefaults(defineProps<{ tabs: TabItem[]; modelValue: string; idPrefix?: string; size?: 'sm' | 'md'; ariaLabel?: string }>(), { size: 'md' })
+const props = withDefaults(
+  defineProps<{ tabs: TabItem[]; modelValue: string; idPrefix?: string; size?: 'sm' | 'md'; ariaLabel?: string; dirty?: readonly string[]; errors?: readonly string[] }>(),
+  { size: 'md', dirty: () => [], errors: () => [] }
+)
 const emit = defineEmits<{ (e: 'update:modelValue', v: string): void }>()
 const uid = useId()
 const prefix = computed(() => props.idPrefix || uid)
@@ -69,6 +74,7 @@ function onKey(e: KeyboardEvent) {
           >
             {{ tab.label }}
             <span v-if="tab.badge !== undefined" class="ml-1 rounded-full bg-gray-100 px-1.5 text-xs dark:bg-dark-700">{{ tab.badge }}</span>
+            <TabMarks :dirty="dirty.includes(tab.key)" :error="errors.includes(tab.key)" class="mb-0.5 ml-1.5 align-middle" />
           </button>
         </nav>
       </div>

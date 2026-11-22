@@ -1,7 +1,7 @@
 export default {
   kind: {
     user: '用户',
-    group: '分组',
+    group: '账号分组',
     api_key: 'API Key',
     account: '账号',
     model: '模型',

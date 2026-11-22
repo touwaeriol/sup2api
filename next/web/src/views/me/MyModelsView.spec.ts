@@ -11,7 +11,7 @@ vi.mock('@sub2api/host', async (orig) => ({ ...(await orig<object>()), api: { ge
 enableAutoUnmount(afterEach)
 
 const groups = [
-  { id: 1, name: 'default', rate_multiplier: '1', effective_rate: '0.9', rate_source: 'discount', exclusive: false },
+  { id: 1, name: 'default', rate_multiplier: '1', effective_rate: '0.9', rate_source: 'group', exclusive: false },
   { id: 2, name: 'vip', rate_multiplier: '1.2', effective_rate: '1.5', rate_source: 'segment', exclusive: true }
 ]
 const [basic, vip] = groups.map(({ id, name }) => ({ id, name }))
@@ -74,11 +74,11 @@ describe('models and prices', () => {
   it('opens on every group: the original prices, and which of the groups provide each model', async () => {
     const { w, router } = await render()
     expect(get).toHaveBeenLastCalledWith('/me/prices', {})
-    expect(w.get('[data-testid="models-group"]').findAll('option').map((o) => o.text())).toEqual(['全部分组 · 原价', 'default · ×0.9', 'vip · ×1.5 · 专属'])
+    expect(w.get('[data-testid="models-group"]').findAll('option').map((o) => o.text())).toEqual(['全部账号分组 · 原价', 'default · ×0.9', 'vip · ×1.5 · 专属'])
     expect(w.find('[data-testid="models-base-note"]').exists()).toBe(true)
     expect(unit(w)).toContain('原价，未乘倍率')
     expect(row(w, 'tokens').findAll('[data-testid="models-row-group"]').map((c) => c.text())).toEqual(['default', 'vip'])
-    expect(row(w, 'custom').text()).toContain('暂无分组提供')
+    expect(row(w, 'custom').text()).toContain('暂无账号分组提供')
 
     // A group of a model opens what the caller pays there.
     await row(w, 'tokens').findAll('[data-testid="models-row-group"] button')[1].trigger('click')
@@ -95,14 +95,14 @@ describe('models and prices', () => {
     expect(get).toHaveBeenLastCalledWith('/me/prices', { group_id: '2' })
     expect(row(w, 'tokens').text()).toContain('$4.5')
     expect(unit(w)).toContain('×1.5')
-    expect(unit(w)).toContain('你在该分组有单独设的倍率')
+    expect(unit(w)).toContain('你所在的用户分组在该账号分组有单独设的倍率')
     expect(w.text()).not.toContain('one-shot')
     // One group: no base price note, no column of groups.
     expect(w.find('[data-testid="models-base-note"]').exists()).toBe(false)
     expect(w.find('[data-testid="models-row-group"]').exists()).toBe(false)
 
     await w.get('[data-testid="models-search"]').setValue('nothing')
-    expect(w.text()).toContain('这个分组没有可用模型')
+    expect(w.text()).toContain('这个账号分组没有可用模型')
 
     await w.get('[data-testid="models-group"]').setValue('0')
     await settle()
@@ -159,7 +159,7 @@ describe('models and prices', () => {
       ['/me/prices', { group_id: '999' }],
       ['/me/prices', {}]
     ])
-    expect(w.get('[data-testid="models-group-unavailable"]').text()).toBe('链接里的分组不对你开放，已改为显示全部分组。')
+    expect(w.get('[data-testid="models-group-unavailable"]').text()).toBe('链接里的账号分组不对你开放，已改为显示全部账号分组。')
     expect(w.find('[role="alert"]').exists()).toBe(false)
     expect((w.get('[data-testid="models-group"]').element as HTMLSelectElement).selectedIndex).toBe(0)
     expect(row(w, 'one-shot').exists()).toBe(true)

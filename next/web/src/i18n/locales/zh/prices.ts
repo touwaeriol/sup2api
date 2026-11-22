@@ -1,8 +1,8 @@
 export default {
   title: '模型价格',
   description: '按模型配置计费表达式。价格由管理员维护：手动填写，或从同步源导入。',
-  scopeNote: '这里设的是原价。分组可以给模型另定分组价，用户组可以设倍率；实付 = 模型价格 × 倍率。',
-  scopeLinks: { groups: '分组', segments: '用户组' },
+  scopeNote: '这里设的是原价。账号分组可以给模型另定模型价格，账号分组和用户分组可以设倍率；实付 = 模型价格 × 生效的那一个倍率。',
+  scopeLinks: { groups: '账号分组', segments: '用户分组' },
   simulate: '价格试算',
   simulateModel: '试算这个模型',
   new: '新增价格',
@@ -198,8 +198,8 @@ export default {
   estimator: {
     title: 'Token 估算器',
     titleRequest: '费用估算',
-    hint: '输入 token 数量预览费用（不含分组倍率）。',
-    hintRequest: '一次请求的费用（不含分组倍率）；在请求模拟里填参数、请求头或时间，看规则是否命中。',
+    hint: '输入 token 数量预览费用（不含倍率）。',
+    hintRequest: '一次请求的费用（不含倍率）；在请求模拟里填参数、请求头或时间，看规则是否命中。',
     more: '更多用量（1 小时缓存、图片）',
     len: '指定输入上下文总长度',
     lenPlaceholder: '使用现有 token 总长度（{n}）',
@@ -255,7 +255,7 @@ export default {
     basics: {
       cost: '表达式算出这一次请求的费用。token 变量是这次用掉的 token 数，单价按**美元 / 百万 token**写：`p*3` 就是输入每百万 3 美元。',
       flat: '`flat(0.05)` 是直接加 0.05 美元，不按百万换算。',
-      round: '结果不能是负数。最终金额 = 结果 × 分组倍率，**进一到 8 位小数**（只会多扣，不会少扣）。',
+      round: '结果不能是负数。最终金额 = 结果 × 倍率，**进一到 8 位小数**（只会多扣，不会少扣）。',
       layout: '可以随意换行和加空格；“格式化”会把每个乘数排成一行。',
       generated: '可视化的价格保存时也转成表达式，切到“表达式”就能接着改。'
     },
@@ -346,8 +346,8 @@ export default {
     subtotal: '小计',
     rules: '条件总倍率',
     base: '基础费用',
-    listScale: '分组价倍数',
-    groupRate: '分组倍率'
+    listScale: '模型价格倍数',
+    groupRate: '倍率'
   },
   summary: {
     perRequest: '{price} / 次',
@@ -429,9 +429,9 @@ export default {
       models_dev: 'models.dev 的厂商 id，如 anthropic、openai、google；只导入这些厂商的模型。按回车添加。'
     },
     providersPlaceholder: '输入厂商后回车',
-    applyMultiplier: '按上游分组倍率导入',
-    applyMultiplierHint: '导入时把价格乘以上游 Key 所在分组的倍率，也就是按我们实际付给上游的价格导入。',
-    multiplierOn: '按分组倍率',
+    applyMultiplier: '按上游倍率导入',
+    applyMultiplierHint: '导入时把价格乘以上游 Key 的倍率，也就是按我们实际付给上游的价格导入。',
+    multiplierOn: '按上游倍率',
     multiplierOff: '按基础价格',
     deleteConfirm: '删除同步源"{name}"？已从它导入的 {n} 条价格会保留，但不再关联这个同步源。',
     viewPrices: '查看这些价格'

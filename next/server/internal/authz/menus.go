@@ -78,7 +78,7 @@ var coreMenus = []coreMenuSection{
 	// submenu (§132).
 	{"gateway", lt("Accounts & proxies", "账号/代理"), []coreMenuItem{
 		{"accounts", lt("Accounts", "账号"), "account", "/accounts", []string{"GET /accounts"}},
-		{"groups", lt("Groups", "分组"), "group", "/groups", []string{"GET /groups"}},
+		{"groups", lt("Account groups", "账号分组"), "group", "/groups", []string{"GET /groups"}},
 		{"proxies", lt("Proxies", "代理"), "proxy", "/proxies", []string{"GET /proxies"}},
 	}},
 	// No core items: request guards and moderation are plugins and join it.
@@ -91,7 +91,7 @@ var coreMenus = []coreMenuSection{
 	// belong to (CONTRACTS §97).
 	{"users", lt("Users", "用户"), []coreMenuItem{
 		{"users", lt("Users", "用户"), "user", "/users", []string{"GET /users"}},
-		{"segments", lt("User groups", "用户组"), "publisher", "/segments", []string{"GET /segments"}},
+		{"segments", lt("User groups", "用户分组"), "publisher", "/segments", []string{"GET /segments"}},
 		{"roles", lt("Roles & permissions", "角色与权限"), "role", "/roles", []string{"GET /roles"}},
 	}},
 	// Plugin management; plugin menus with section "plugins" (the default)

@@ -1,6 +1,6 @@
 export default {
   state: { active: '已启用', disabled: '已禁用', expired: '已过期', exhausted: '额度用尽' },
-  filter: { search: '搜索名称或密钥', allStatus: '全部状态', allGroups: '全部分组' },
+  filter: { search: '搜索名称或密钥', allStatus: '全部状态', allGroups: '全部账号分组' },
   models: { title: '可用模型', allowed: '{n} 项', blocked: '排除 {n} 项' },
   ipLimit: 'IP 限制',
   unlimited: '无限制',
@@ -20,7 +20,7 @@ export default {
     doneWithErrors: '成功 {ok} 个，失败 {fail} 个（{name}：{error}）',
     nothingToChange: '所选密钥已是该状态'
   },
-  myDescription: '仅显示和管理你自己的密钥，管理员也无法查看其他用户的 Key。每个 Key 绑定一个分组，决定可访问的平台、模型和费率。',
+  myDescription: '仅显示和管理你自己的密钥，管理员也无法查看其他用户的 Key。每个 Key 绑定一个账号分组，决定可访问的平台、模型和费率。',
   create: '新建 API Key',
   edit: '编辑 API Key',
   key: '密钥',
@@ -34,10 +34,10 @@ export default {
   expiresInPast: '过期时间必须晚于现在',
   noExpiry: '永不',
   lastUsed: '最近使用',
-  noGroups: '没有可用的分组，请联系管理员分配。',
+  noGroups: '没有可用的账号分组，请联系管理员分配。',
   groupModels: '可用模型',
-  groupPrices: '查看该分组的模型与价格',
-  ownRate: '分组默认 {group}，你的倍率 {rate}',
+  groupPrices: '查看该账号分组的模型与价格',
+  ownRate: '账号分组默认 {group}，你的倍率 {rate}',
   createdTitle: 'API Key 已创建',
   rotatedTitle: 'API Key 已重新生成',
   onceWarning: '请复制保存此密钥，之后也可以在列表中点击复制按钮获取。',
@@ -71,7 +71,7 @@ export default {
     run: '在终端执行（只对当前终端有效）',
     file: '写入 {path}',
     usage: '查询这个 Key 的剩余额度、限速与用量（GET /v1/usage，CC Switch、Magpie 导入后自动查询）',
-    noClient: '这个 Key 所在分组的平台没有内置的客户端配置，可直接调用下方接口。',
+    noClient: '这个 Key 所在账号分组的平台没有内置的客户端配置，可直接调用下方接口。',
     endpoints: '可调用的接口（地址前加 {base}）：',
     magpie: {
       intro: '在 Magpie 里点“添加供应商”，选“自定义供应商”，按下面逐项填写：“Base URL”一栏选一种协议并填它的地址，其余协议的地址在“更多端点”里，余额两项在“高级”里；这里没有列出的地址留空。',
@@ -92,17 +92,17 @@ export default {
     guide: '手动配置说明',
     notOpened: '没有打开 {app}？请先安装 {app} 后再试。'
   },
-  changeGroup: '更换分组',
-  groupChanged: '已更换分组',
+  changeGroup: '更换账号分组',
+  groupChanged: '已更换账号分组',
   groupState: {
-    deleted: '分组已删除，请重新选择分组',
-    disabled: '分组已停用',
-    unavailable: '分组已不对你开放'
+    deleted: '账号分组已删除，请重新选择账号分组',
+    disabled: '账号分组已停用',
+    unavailable: '账号分组已不对你开放'
   },
   enabledToast: 'API Key 已启用',
   disabledToast: 'API Key 已停用，使用它的请求会被拒绝',
   empty: '还没有 API Key',
-  emptyHint: '新建一个 Key，即可通过网关调用所选分组的平台和模型。',
+  emptyHint: '新建一个 Key，即可通过网关调用所选账号分组的平台和模型。',
   emptyFiltered: '没有符合条件的 API Key，请调整搜索或筛选。',
   confirmDelete: '确定删除 API Key "{name}"？使用它的客户端将立即失效。'
 }

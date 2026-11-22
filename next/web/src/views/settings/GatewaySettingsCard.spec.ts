@@ -141,7 +141,7 @@ describe('request body limit and platform call timeout (forwarding v2 §8.1, §8
     const row = field(w, 'max_request_body_mb').text()
     expect(row).toContain('请求体上限')
     expect(row).toContain('每个网关请求')
-    expect(row).toContain('端点、分组和插件都不能另设')
+    expect(row).toContain('端点、账号分组和插件都不能另设')
     expect(row).not.toContain('内部上限')
     expect(row).toContain('MB')
 

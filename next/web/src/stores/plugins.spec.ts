@@ -205,7 +205,7 @@ describe('plugin store outdated native UIs', () => {
     mocks.get.mockResolvedValue([
       { ...plugin(OLD, 'fast-plugin.ts'), host_ui_compat: '^3.20' },
       { ...plugin(FAST, 'fast-plugin.ts'), host_ui_compat: '^4.0' },
-      { ...plugin(NEW, 'fast-plugin.ts'), host_ui_compat: '^4.1' },
+      { ...plugin(NEW, 'fast-plugin.ts'), host_ui_compat: '^4.2' },
       { ...plugin('community', 'fast-plugin.ts'), host_ui_compat: '^3.20', trust: 'community' }
     ])
     const store = usePluginStore()
@@ -213,7 +213,7 @@ describe('plugin store outdated native UIs', () => {
     expect([OLD, FAST, NEW, 'community', 'gone'].map(k => store.uiMismatch(k))).toEqual(['plugin', null, 'core', null, null])
     expect(store.component(OLD, 'FastPage')).toBeUndefined()
     expect(store.component(NEW, 'FastPage')).toBeUndefined()
-    expect(store.errors[OLD]).toBe('hostUICompat ^3.20 does not match host UI 4.0.0')
-    expect(store.errors[NEW]).toBe('hostUICompat ^4.1 does not match host UI 4.0.0')
+    expect(store.errors[OLD]).toBe('hostUICompat ^3.20 does not match host UI 4.1.0')
+    expect(store.errors[NEW]).toBe('hostUICompat ^4.2 does not match host UI 4.1.0')
   })
 })

@@ -12,15 +12,12 @@ export default {
   rule: {
     mode: '定价方式',
     kind: {
-      none: '用原价',
-      multiplier: '原价 × N',
+      none: '跟随原价',
       custom: '自定义价格'
     },
     multiplierText: '原价 × {rate}',
     customText: '自定义',
-    timesPrefix: '原价 ×',
-    multiplierHint: '原价变了跟着变',
-    customHint: '和“模型价格”页同一个编辑器：可以分档、按次或写表达式。原价变了不跟着变。',
+    customHint: '和“模型价格”页同一个编辑器：可以分档、按次或写表达式。原价变了不跟着变；要按比例算，请用“模型倍率”。',
     preview: '模型价格 {price}，乘倍率 {rate} 后实付 {paid}',
     noBase: '这个模型还没有原价，先到“模型价格”页设置。'
   },
@@ -32,36 +29,44 @@ export default {
     tiered: '{n} 档，显示兜底档位'
   },
   source: {
-    group: '分组价',
-    segment: '用户组价（已停用的功能）'
+    group: '账号分组价',
+    segment: '用户分组价（已停用的功能）'
   },
   table: {
     title: '模型价格',
     count: '{n} 个模型',
-    ruled: '{n} 个改过价',
     base: '原价',
-    group: '分组价',
-    paid: '实付（{rate}）',
-    useBase: '用原价',
+    price: '模型价格',
+    rate: '模型倍率',
+    paid: '实付',
+    followBase: '跟随原价',
+    followRate: '跟随基本倍率',
+    rateOf: '{model} 的模型倍率',
+    rateSource: {
+      group_model: '模型倍率',
+      group: '跟随基本倍率'
+    },
     notOffered: '账号暂未提供',
-    notOfferedHint: '分组里的账号还没有这个模型，价格先存着',
-    editing: '{model} 在本分组的价格',
-    set: '改价',
+    notOfferedHint: '账号分组里的账号还没有这个模型，设置先存着',
+    editing: '{model} 在本账号分组的模型价格',
+    set: '{n} 个单独设置',
+    change: '改价',
     done: '完成',
     clear: '清除',
-    clearHint: '“清除”= 恢复用原价',
+    clearHint: '“清除”= 模型价格跟随原价、模型倍率跟随基本倍率',
+    refused: '未通过',
     add: '添加模型',
     addNone: '没有可添加的模型',
     addFooter: '只能添加在“模型价格”页定了原价的模型',
     unsaved: '未保存',
     unsavedCount: '{n} 项改动未保存',
     search: '搜索模型',
-    onlyRuled: '只看改过价的',
+    onlySet: '只看单独设置的',
     unit: '单位：$ / 百万 token（输入 / 输出）；按次计费的模型是每次价格。',
-    emptyNew: '新分组还没有账号：在账号编辑里把账号加入这个分组后，账号提供的模型会自动列在这里；也可以先“添加模型”定价。',
-    noAccounts: '在账号编辑里把账号加入这个分组后，账号提供的模型会自动列在这里。',
-    emptyModels: '分组还没有提供模型：模型来自分组里账号的模型，经“模型名单”过滤。可以先“添加模型”定价。',
+    emptyNew: '新账号分组还没有账号：在账号编辑里把账号加入这个账号分组后，账号提供的模型会自动列在这里；也可以先“添加模型”定价。',
+    noAccounts: '在账号编辑里把账号加入这个账号分组后，账号提供的模型会自动列在这里。',
+    emptyModels: '账号分组还没有提供模型：模型来自账号分组里账号的模型，经“模型名单”过滤。可以先“添加模型”定价。',
     emptyFiltered: '没有符合条件的模型',
-    invalid: '{model} 的价格没有填完整，请先改正。'
+    invalid: '{model} 的模型价格或模型倍率填得不对，请先改正。'
   }
 }

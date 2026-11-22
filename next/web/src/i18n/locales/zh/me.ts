@@ -103,32 +103,33 @@ export default {
   },
   models: {
     title: '模型与价格',
-    description: '系统里有哪些模型、你的分组提供哪些，以及你的实付价（模型价格 × 你的倍率）。',
-    group: '分组',
-    allGroups: '全部分组 · 原价',
+    description: '系统里有哪些模型、你的账号分组提供哪些，以及你的实付价（模型价格 × 你的倍率）。',
+    group: '账号分组',
+    allGroups: '全部账号分组 · 原价',
     search: '搜索模型',
     model: '模型',
     input: '输入',
     output: '输出',
     cacheRead: '缓存读',
     cacheWrite: '缓存写',
-    groups: '可用分组',
+    groups: '可用账号分组',
     viewGroup: '查看你在 {name} 的实付价',
-    noGroups: '暂无分组提供',
-    baseNote: '这里是全部模型的原价（倍率 ×1）。实付 = 模型价格 × 你在所选分组的倍率；模型价格一般就是原价，个别模型在分组里另有分组价。选一个分组查看你的实付价。',
+    noGroups: '暂无账号分组提供',
+    baseNote: '这里是全部模型的原价（倍率 ×1）。实付 = 模型价格 × 你在所选账号分组的倍率；模型价格一般就是原价，个别模型在账号分组里另有模型价格。选一个账号分组查看你的实付价。',
     unit: 'USD / 百万 Token',
     basePrice: '原价，未乘倍率',
-    rated: '已按你在该分组的倍率 {rate} 计算',
+    rated: '已按你在该账号分组的倍率 {rate} 计算',
     rateSource: {
-      segment: '你在该分组有单独设的倍率',
-      discount: '已含你的折扣'
+      segment_model: '这个模型你有单独设的倍率',
+      segment: '你所在的用户分组在该账号分组有单独设的倍率',
+      group_model: '这个模型在该账号分组有单独的倍率'
     },
     perRequest: '{price} / 次',
     tiered: '{n} 档，显示兜底档位',
     custom: '按规则计费',
     customTimes: '按规则计费 {rate}',
-    empty: '这个分组没有可用模型',
+    empty: '这个账号分组没有可用模型',
     emptyAll: '还没有可用的模型',
-    groupUnavailable: '链接里的分组不对你开放，已改为显示全部分组。'
+    groupUnavailable: '链接里的账号分组不对你开放，已改为显示全部账号分组。'
   }
 }

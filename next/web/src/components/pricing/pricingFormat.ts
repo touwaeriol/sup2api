@@ -13,7 +13,7 @@ export function rateText(v: string | number | null | undefined): string {
 /** The largest rate, at the four decimals the server keeps of one (numeric(10,4)). */
 const MAX_RATE = 999999.9999
 
-/** A rate, a discount or a multiplier as typed in a form: a non-negative decimal of at most four decimals, below 1000000. */
+/** A rate or a multiplier as typed in a form: a non-negative decimal of at most four decimals, below 1000000. */
 export function validRate(v: string | null | undefined): boolean {
   return !!v && /^\d+(\.\d{1,4})?$/.test(v.trim()) && Number(v) <= MAX_RATE
 }
@@ -30,38 +30,37 @@ export function sameRate(a: string | null, b: string | null): boolean {
 }
 
 /**
- * The rate a segment gets in a group without an override of its own: the
- * group's default times the segment's discount, as the server works it out,
- * rounded half up to four decimals and capped. The product is scaled before
- * it is rounded: 0.5125 × 0.5 is 0.25625 to the server and a little less to a float.
+ * The levels of a rate, the most specific first: a segment's rate for the
+ * model in the group, the segment's rate in the group, the group's rate for
+ * the model, the group's base rate. A level left out or null is not set.
  */
-export function inheritedRate(rate: Pick<EffectiveRate, 'group_default' | 'discount'>): number {
-  const scaled = Number((num(rate.group_default, 1) * num(rate.discount, 1) * 1e4).toFixed(4))
-  return Math.min(Math.round(scaled) / 1e4, MAX_RATE)
+export interface RateLevels {
+  segment_model?: string | null
+  segment?: string | null
+  group_model?: string | null
+  group: string
 }
 
-/** Whether a discount is one: "1" is none. */
-export function hasDiscount(of: Pick<EffectiveRate, 'discount'>): boolean {
-  return num(of.discount, 1) !== 1
-}
+const LEVELS = ['segment_model', 'segment', 'group_model'] as const
 
 /**
- * The rate that applies, first hit wins: the override, the group's default
- * times the discount, the group's default. An override still being typed
- * gives no value.
+ * The rate that applies: the most specific level set, alone (rates never
+ * multiply), as the server resolves it. A level set to a rate still being
+ * typed applies with no value yet.
  */
-export function effectiveRate(base: Pick<EffectiveRate, 'group_default' | 'discount'>, override: string | null): EffectiveRate {
-  if (override !== null) return { ...base, value: validRate(override) ? override : '', source: 'segment' }
-  return { ...base, value: String(inheritedRate(base)), source: hasDiscount(base) ? 'discount' : 'group' }
+export function effectiveRate(levels: RateLevels): EffectiveRate {
+  const source = LEVELS.find((k) => levels[k] !== null && levels[k] !== undefined) ?? 'group'
+  const value = source === 'group' ? levels.group : (levels[source] as string)
+  return { value: validRate(value) ? value.trim() : '', source, group_default: levels.group }
 }
 
 /**
  * The list price a rule gives over the global price `base`, in the shape the
- * server returns one: a custom rule is a price of its own; a multiplier goes
- * beside the global price, which stays as it is. So a rule being edited and
- * a saved one are shown through the same priceCells. A multiplier still
- * being typed leaves the price as it is. Without a global price no rule
- * applies: there is no price.
+ * server returns one: a model price is a price of its own; the multiplier of
+ * a record priced before model rates goes beside the global price, which
+ * stays as it is. So a price being edited and a saved one are shown through
+ * the same priceCells. A multiplier still being typed leaves the price as it
+ * is. Without a global price no rule applies: there is no price.
  */
 export function applyRule(base: PriceDef | null, rule: PriceRule | null): PriceDef | null {
   if (!rule || !base) return base

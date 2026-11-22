@@ -24,6 +24,8 @@ export default {
       banned: 'Banned'
     },
     loadFailed: 'Failed to load',
+    tabUnsaved: 'Unsaved changes',
+    tabHasErrors: 'Something here needs fixing',
     autoRefresh: 'Auto refresh',
     autoRefreshOff: 'Off',
     autoRefreshEvery: 'Every {n}s',
@@ -201,6 +203,8 @@ export default {
       banned: '已封禁'
     },
     loadFailed: '加载失败',
+    tabUnsaved: '有未保存的修改',
+    tabHasErrors: '这里有需要改正的地方',
     autoRefresh: '自动刷新',
     autoRefreshOff: '关闭',
     autoRefreshEvery: '每 {n} 秒',

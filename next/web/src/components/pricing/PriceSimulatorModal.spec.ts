@@ -90,7 +90,7 @@ describe('price simulator', () => {
 
   it('says so when no group provides the model', async () => {
     const w = await open({ model: 'claude-opus-9' })
-    expect(w.get('[data-testid="price-sim-unprovided"]').text()).toBe('还没有分组提供 claude-opus-9，无法试算。')
+    expect(w.get('[data-testid="price-sim-unprovided"]').text()).toBe('还没有账号分组提供 claude-opus-9，无法试算。')
     expect(chosen(w)).toEqual({ group: null, model: null })
   })
 

@@ -1,7 +1,7 @@
 export default {
   kind: {
     user: 'User',
-    group: 'Group',
+    group: 'Account group',
     api_key: 'API key',
     account: 'Account',
     model: 'Model',

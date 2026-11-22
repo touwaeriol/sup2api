@@ -44,7 +44,7 @@ export default {
     user: 'API Key 所属用户'
   },
   includes: {
-    group: '分组',
+    group: '账号分组',
     model: '模型',
     rule: '规则'
   },

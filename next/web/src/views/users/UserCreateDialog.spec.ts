@@ -11,7 +11,7 @@ vi.mock('@sub2api/host', async (original) => ({ ...(await original<object>()), a
 // A new epoch per test: the managed roles are cached per permissions reload.
 vi.mock('@/stores/auth', () => ({ useAuthStore: () => ({ has: (key: string) => !mocks.denied.has(key), hasAction: (a: string) => !mocks.denied.has(a), me: { id: 1, superuser: false }, permissionsEpoch: mocks.epoch }) }))
 const managed = (key: string, grantable = true) => ({ key, name: { en: key }, builtin: true, grantable, missing: grantable ? [] : ['x:y'] })
-const segments = ref([{ id: 1, name: 'Default', is_default: true, discount: '1' }, { id: 2, name: 'VIP', is_default: false, discount: '0.9' }] as Segment[])
+const segments = ref([{ id: 1, name: 'Default', is_default: true }, { id: 2, name: 'VIP', is_default: false }] as Segment[])
 vi.mock('@/components/pricing/segmentLookup', () => ({ useSegmentsLookup: () => ({ segments }) }))
 enableAutoUnmount(afterEach)
 

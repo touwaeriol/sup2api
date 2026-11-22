@@ -1,31 +1,30 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { SAlert, SHint, SInput, SSegmented, type SelectOption } from '@sub2api/ui'
-import type { PriceDef, PriceRule } from '@/api/pricing'
+import { SAlert, SHint, SSegmented, type SelectOption } from '@sub2api/ui'
+import type { CustomPrice, PriceDef } from '@/api/pricing'
 import PriceDefEditor from '@/views/prices/PriceDefEditor.vue'
 import type { PriceDraft } from '@/views/prices/priceDraft'
-import { applyRule, rateText, sameRate, timesRate } from './pricingFormat'
+import { applyRule, rateText, timesRate } from './pricingFormat'
 import { customRuleOf, priceDraftOfRule, ruleIssues, sameRule, startRule } from './ruleDrafts'
 import { priceLabel } from './ruleText'
 
-// The price of one model in a group, over its original price `base`: the
-// original price, the original price × N, or a price of its own written as an
-// original price is (visual or expression, PriceDefEditor). A line under it
-// says what the model then costs and what that is at `rate`. Every edit emits
-// a whole new rule, valid or not: one that is not says why, and the table
-// that holds it refuses to save it. A model without an original price takes
-// no rule.
-type Kind = 'none' | PriceRule['kind']
+// The model price of one model in a group, over its original price `base`:
+// the original price, or a price of its own written as an original price is
+// (visual or expression, PriceDefEditor). A line under it says what the model
+// then costs and what that is at `rate`. Every edit emits a whole new price,
+// valid or not: one that is not says why, and the table that holds it refuses
+// to send it. A model without an original price takes no price.
+type Kind = 'none' | 'custom'
 
-const props = defineProps<{ modelValue: PriceRule | null; base: PriceDef | null; rate: string; disabled?: boolean }>()
-const emit = defineEmits<{ (e: 'update:modelValue', v: PriceRule | null): void }>()
+const props = defineProps<{ modelValue: CustomPrice | null; base: PriceDef | null; rate: string; disabled?: boolean }>()
+const emit = defineEmits<{ (e: 'update:modelValue', v: CustomPrice | null): void }>()
 const { t } = useI18n()
 
-const kind = computed<Kind>(() => props.modelValue?.kind ?? 'none')
+const kind = computed<Kind>(() => (props.modelValue ? 'custom' : 'none'))
 /** Without a global price a rule cannot be saved: it may only be cleared. */
 const locked = computed(() => props.disabled || !props.base)
-const options = computed<SelectOption[]>(() => (['none', 'multiplier', 'custom'] as const).map((value) => ({ value, label: t(`pricing.rule.kind.${value}`) })))
+const options = computed<SelectOption[]>(() => (['none', 'custom'] as const).map((value) => ({ value, label: t(`pricing.rule.kind.${value}`) })))
 const issues = computed(() => ruleIssues(props.modelValue).map((x) => t(x.key, x.params ?? {})))
 
 /** The custom price as its editor holds it; it is edited in place, and each edit goes out as a rule. */
@@ -35,13 +34,13 @@ const price = ref<PriceDraft | null>(null)
  * saved rule with the saved rule itself: neither that nor the rule coming
  * back is a reason to start the editor over.
  */
-let emitted: PriceRule | null = null
+let emitted: CustomPrice | null = null
 watch(
   () => props.modelValue,
   (rule) => {
     if (emitted && (rule === emitted || (rule && sameRule(rule, emitted)))) return
     emitted = null
-    price.value = rule?.kind === 'custom' ? priceDraftOfRule(rule) : null
+    price.value = rule ? priceDraftOfRule(rule) : null
   },
   { immediate: true }
 )
@@ -54,22 +53,14 @@ watch(
   { deep: true }
 )
 
-/** The multiplier as typed: "1.0" stays so while the rule reads 1. */
-const typed = ref('')
-const multiplier = computed(() => (props.modelValue?.kind === 'multiplier' && !sameRate(typed.value, props.modelValue.multiplier) ? props.modelValue.multiplier : typed.value))
-function typeMultiplier(v: unknown) {
-  typed.value = String(v ?? '').trim()
-  send({ kind: 'multiplier', multiplier: typed.value })
-}
-
-function send(rule: PriceRule | null) {
+function send(rule: CustomPrice | null) {
   emitted = rule
   emit('update:modelValue', rule)
 }
 function choose(next: Kind) {
   if (next === kind.value || !props.base) return
-  const rule = next === 'none' ? null : startRule(next, props.base)
-  price.value = rule?.kind === 'custom' ? priceDraftOfRule(rule) : null
+  const rule = next === 'none' ? null : startRule(props.base)
+  price.value = rule && priceDraftOfRule(rule)
   send(rule)
 }
 
@@ -94,24 +85,6 @@ const preview = computed(() => {
       @update:model-value="choose($event as Kind)"
     />
     <SAlert v-if="!base" tone="warning" dense data-testid="price-rule-no-base">{{ t('pricing.rule.noBase') }}</SAlert>
-
-    <div v-if="modelValue?.kind === 'multiplier'" class="flex flex-wrap items-center gap-x-2 gap-y-1">
-      <SInput
-        :model-value="multiplier"
-        size="sm"
-        mono
-        inputmode="decimal"
-        class="w-40"
-        :error="issues.length > 0"
-        :disabled="locked"
-        :aria-label="t('pricing.rule.kind.multiplier')"
-        data-testid="price-rule-multiplier"
-        @update:model-value="typeMultiplier"
-      >
-        <template #prefix><span class="whitespace-nowrap text-xs text-fg-subtle">{{ t('pricing.rule.timesPrefix') }}</span></template>
-      </SInput>
-      <SHint inline size="xs">{{ t('pricing.rule.multiplierHint') }}</SHint>
-    </div>
 
     <template v-if="price">
       <SHint size="xs">{{ t('pricing.rule.customHint') }}</SHint>

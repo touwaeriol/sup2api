@@ -84,7 +84,7 @@ export default {
   },
   environment: {
     title: '环境变量',
-    subtitle: '转发的通用运行参数，由核心声明，插件读取生效后的值。账号、分组可以覆盖这里的值；留空表示跟随下一层（账号 → 分组 → 全局 → 进程环境变量）。修改后各节点对新请求生效。',
+    subtitle: '转发的通用运行参数，由核心声明，插件读取生效后的值。账号、账号分组可以覆盖这里的值；留空表示跟随下一层（账号 → 账号分组 → 全局 → 进程环境变量）。修改后各节点对新请求生效。',
     groupHint: '覆盖全局环境变量；留空跟随全局。',
     range: '范围 {min}–{max}。',
     processSet: '进程环境变量 {name} = {value}。',
@@ -120,7 +120,7 @@ export default {
       default_hook_timeout_ms: 'manifest 未设置超时的钩子使用此值。',
       platform_hotpath_timeout_ms: '每个请求在调度前不属于钩子的平台调用超时：解析模型、为预扣估算用量。',
       max_request_body_mb:
-        '每个网关请求的请求体大小上限（MB），超出返回 413；WebSocket 的单条消息也按它限制。这是唯一的请求大小上限，端点、分组和插件都不能另设。',
+        '每个网关请求的请求体大小上限（MB），超出返回 413；WebSocket 的单条消息也按它限制。这是唯一的请求大小上限，端点、账号分组和插件都不能另设。',
       media_download_max_mb: '请求转换到 Gemini 时下载 http(s) 图片等媒体，单个文件的大小上限（MB）。',
       claude_max_tokens:
         '开启后，发往 Anthropic 账号的请求没带 max_tokens 时按下表补上，带了不改；账号自己的参数覆盖在其后执行，可再修改。关闭时只有转换到 Anthropic 的请求按协议要求补 {fallback}。'

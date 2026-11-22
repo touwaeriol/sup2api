@@ -75,14 +75,14 @@ export function availabilityRows() {
 }
 
 // Four records priced by group pricing, as mock/pricingStore.ts sets it up
-// for the console user (segment VIP: ×0.9 on every group and a rate of its
-// own of ×0.7 in the vip group; the default group sells gpt-4o at ×1.2, the
-// vip group claude-haiku-4-5 at a price of its own). One each of the four
-// sources: a group's ×N, a group's custom price, the segment's rate and its
-// discount.
+// for the console user (user group VIP: ×0.85 for gpt-4o and ×0.9 for
+// claude-sonnet-4-5 in the default group, ×0.7 in the vip group; the vip
+// group sells claude-haiku-4-5 at a price of its own). One rate applies,
+// the most specific set: the user group's for the model, then its own in the
+// account group.
 const VIP = 2
 const GROUP_PRICING: Array<{ group: (typeof GROUPS)[number]; model: string; rate: number; terms: PricingTerms }> = [
-  { group: GROUPS[0], model: 'gpt-4o', rate: 0.9, terms: { segment_id: VIP, rate_source: 'discount', rule: { source: 'group', scale: 1.2 } } },
+  { group: GROUPS[0], model: 'gpt-4o', rate: 0.85, terms: { segment_id: VIP, rate_source: 'segment_model' } },
   {
     group: GROUPS[1],
     model: 'claude-haiku-4-5',
@@ -90,7 +90,7 @@ const GROUP_PRICING: Array<{ group: (typeof GROUPS)[number]; model: string; rate
     terms: { segment_id: VIP, rate_source: 'segment', rule: { source: 'group', custom: configPrice('visual', singleTier({ p: 0.8, c: 4, cr: 0.08, cc: 1 })) } }
   },
   { group: GROUPS[1], model: 'claude-sonnet-4-5', rate: 0.7, terms: { segment_id: VIP, rate_source: 'segment' } },
-  { group: GROUPS[0], model: 'claude-sonnet-x', rate: 0.9, terms: { segment_id: VIP, rate_source: 'discount' } }
+  { group: GROUPS[0], model: 'claude-sonnet-4-5', rate: 0.9, terms: { segment_id: VIP, rate_source: 'segment_model' } }
 ]
 
 function groupPricingRow({ group, model, rate, terms }: (typeof GROUP_PRICING)[number], i: number) {

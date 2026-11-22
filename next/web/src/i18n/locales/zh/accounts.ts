@@ -19,18 +19,18 @@ export default {
     windowHint: 'RPM、TPM 是近 60 秒用量，会话是周期内用量，都把周期分成 20 段滚动统计（60 秒即每段 3 秒），段已过期才不再计入。RPM 在请求开始时计入，长流不会重复计，所以并发可以高于 RPM。TPM 是非缓存输入加输出，设了上限时包含进行中请求的预占，结束后换成实际值。会话是周期内开始过请求的会话数（按粘性会话键，没有命中粘性规则的请求各算一个）；周期默认 60 秒，账号和各模型列表可分别设置，限额表的会话列标出各自的周期。没设上限的只显示用量。指定模型的请求同时计入账号总量和所在列表。TPD 是今日（浏览器所在时区）0 点起累计的非缓存输入加输出，与 TPM 同口径，按小时记在 Redis。按模型的会话和并发相加不等于全部模型：一个会话可能用多个模型。'
   },
   usage: {
-    column: '用量', title: '账号用量', raw: '原始', rawHint: '按原始倍率计费：分组倍率视为 1',
+    column: '用量', title: '账号用量', raw: '原始', rawHint: '按原始倍率计费：倍率视为 1',
     today: '今日 {cost} · {n} 次', range: '时间', rawCost: '原始费用', cost: '计费后', requests: '请求', tokens: 'Token',
     ranges: { today: '今日', last7: '近 7 天', last30: '近 30 天', total: '累计' },
     per: { hour: '每小时', day: '每天', week: '每周', month: '每月', none: '总额' },
     perN: { hour: '每 {n} 小时', day: '每 {n} 天', week: '每 {n} 周', month: '每 {n} 个月' },
     limitLine: '用量限制（{period}）：{used} / {amount}', resetsAt: '{time} 重置', loadFailed: '用量明细加载失败',
     limitReached: '用量已达上限：{used} / {amount}（{period}）', limitReachedPlain: '用量已达上限',
-    hint: '数据来自使用记录（核心统计）。开启原始倍率计费时，累计用量和用量限制都按原始费用计算（分组倍率视为 1）。'
+    hint: '数据来自使用记录（核心统计）。开启原始倍率计费时，累计用量和用量限制都按原始费用计算（倍率视为 1）。'
   },
   usageLimit: {
     title: '用量限制', description: '按账号的费用用量限额。达到上限后自动禁用该账号，到下一个周期自动启用；调高限额或关闭限制后立即启用。所有账号类型都适用。',
-    rawCost: '原始倍率计费', rawCostHint: '开启后，账号的累计用量和用量限制都按原始费用计算（分组倍率视为 1）。核心同时记录两种口径，切换后历史数据也按新口径显示。',
+    rawCost: '原始倍率计费', rawCostHint: '开启后，账号的累计用量和用量限制都按原始费用计算（倍率视为 1）。核心同时记录两种口径，切换后历史数据也按新口径显示。',
     enabled: '启用用量限制', enabledHint: '关闭时只统计用量，不会自动禁用。不受「允许自动禁用」开关影响。',
     amount: '限额', amountHint: '按{basis}计算', basisRaw: '原始费用', basisCost: '计费后费用', unit: 'USD',
     period: '重置周期', periodHint: '「不重置」即总额度：用满后保持自动禁用，调高限额后自动启用。',
@@ -66,10 +66,10 @@ export default {
     selectedCount: '已选 {n} 个',
     noModelMatch: '没有匹配的模型',
     addModels: '添加',
-    groupModelHint: '账号模型与分组白名单分别生效；API Key 所属分组也必须允许请求模型。',
+    groupModelHint: '账号模型与账号分组白名单分别生效；API Key 所属账号分组也必须允许请求模型。',
  authMethod: '认证方式', connection: '接入配置', models: '协议与模型', scheduling: '调度与限流', advanced: '高级', navigation: '账号配置导航', searchTypes: '搜索服务商或账号类型',
     unnamed: '尚未填写名称', allModels: '全部模型', modelsSummary: '{n} 个模型', mappingSummary: '{n} 条映射', summaryPriority: '优先级 {n}', summaryWeight: '权重 {n}', summaryConcurrency: '并发 {n}', pluginSectionAfterSave: '保存账号后可配置', sectionHasErrors: '此处有待修正的内容',
-    basicHint: '账号名称、所属分组与出口代理', namePlaceholder: '例如 claude-main', groupsHint: '未加入分组的账号不会被调度', credentialsHint: '连接凭证由插件「{plugin}」校验与保存',
+    basicHint: '账号名称、所属账号分组与出口代理', namePlaceholder: '例如 claude-main', groupsHint: '未加入账号分组的账号不会被调度', credentialsHint: '连接凭证由插件「{plugin}」校验与保存',
     modelsCardHint: '账号可服务的请求模型；留空表示不限制', mappingCardHint: '把请求模型改写为上游模型；计费、白名单仍按请求模型', prefilled: '已按插件预设填入 {what}，可直接保存，也可按需增删；清空模型列表表示可服务所有模型。',
     prefilledEdit: "该账号原为不限模型，已按插件预设填充 {what}，保存后生效；如需保持不限请点'清空'。", prefillWhat: '{models} 个模型', prefillWhatMapping: '{models} 个模型与 {mapping} 条映射', prefilledFooter: '模型已按插件预设填充，保存后生效', prefilledView: '查看',
     fillDefaults: '填入预设模型（{n}）', fillDefaultsHint: '把插件预设的模型合并进列表，已有的保留', fillDefaultMapping: '填入预设映射（{n}）', defaultsAdded: '已加入 {n} 个预设模型', defaultMappingAdded: '已加入 {n} 条预设映射', defaultsNothingNew: '预设内容都已在列表中',
@@ -80,7 +80,7 @@ export default {
     autoDisableGlobalOff: '全局自动禁用已关闭，此开关暂不生效且不可修改；账号原有设置会保留。', autoDisableUnavailable: '无法读取全局自动禁用设置，暂时无法修改此开关；账号原有设置会保留。',
     unitConcurrency: '个请求', unitRpm: '次 / 分钟', unitTpm: 'tokens / 分钟', create: '创建账号', modelsInputHint: '输入或从下拉中选择模型，回车或逗号添加，可粘贴逗号或换行分隔的列表；点击标签复制，已映射的模型显示 → 目标' },
   title: '账号',
-  subtitle: '网关使用的上游账号。账号类型由插件声明，同一分组可以混放不同类型的账号。',
+  subtitle: '网关使用的上游账号。账号类型由插件声明，同一账号分组可以混放不同类型的账号。',
   new: '新建账号',
   allTypes: '全部类型',
   allStatus: '全部状态',
@@ -93,7 +93,7 @@ export default {
   orphanedHint: '插件"{plugin}"未安装，账号保留但不会被使用。',
   cooldownUntil: '冷却至 {time}',
   type: '类型',
-  groups: '分组',
+  groups: '账号分组',
   proxy: '代理',
   proxyRequired: '此账号类型必须配置代理',
   createdBy: '创建人',
@@ -108,7 +108,7 @@ export default {
   },
   proxyPickExisting: '选择已有',
   proxyPasteUrl: '粘贴代理串',
-  groupsLocked: '修改分组需要 group:manage 或 account:group:bind 权限。',
+  groupsLocked: '修改账号分组需要 group:manage 或 account:group:bind 权限。',
   guardedSettingsHint: '受限设置（如 Base URL）只能使用官方值；其他值需要 account:settings:custom 权限。',
   typeNeedsRelay: '需要 account:relay 权限：这个类型可以自定义上游地址。',
   proxyUrlProbeHint: '没有协议的写法（主机:端口:用户名:密码 等）请点「测试」，依次尝试 socks5、http、https',
@@ -136,7 +136,7 @@ export default {
   spmLimit: '会话数限制',
   forwarding: {
     title: '请求转发',
-    hint: '请求发往上游时的处理：带上哪些客户端请求头、改写哪些参数，以及各项超时。超时留空表示跟随分组与全局的环境变量',
+    hint: '请求发往上游时的处理：带上哪些客户端请求头、改写哪些参数，以及各项超时。超时留空表示跟随账号分组与全局的环境变量',
     allDefault: '全部跟随默认',
     passAll: '透传 *',
     passRules: '透传 {n} 条',
@@ -155,9 +155,9 @@ export default {
   conversion: {
     title: '协议转换丢失策略',
     hint: '请求要转换成上游的另一种协议时，内容丢失怎么处理。允许：照常服务并记录丢失；安全：工具定义、工具选择或工具调用会丢失时不用此账号；严格：有任何丢失都不用此账号。不用的账号直接跳过，不计失败切换',
-    inherit: '继承分组',
-    hintOwn: '生效：{policy}（覆盖分组设置）',
-    hintGroups: '继承分组：{groups}',
+    inherit: '继承账号分组',
+    hintOwn: '生效：{policy}（覆盖账号分组设置）',
+    hintGroups: '继承账号分组：{groups}',
     hintDefault: '生效：{policy}（默认）',
     policies: { allow: '允许', safe: '安全', strict: '严格' },
     grades: { native: '原生', good: '良好', fair: '一般', discouraged: '不推荐', local: '本地估算' },
@@ -564,8 +564,8 @@ export default {
     resetConfirm: '清除所选 {n} 个账号的冷却、错误与自动禁用状态？',
     editTitle: '批量编辑 {n} 个账号', editInfo: '只更新勾选的字段（修改某项会自动勾选），其余保持不变。逐个账号保存，校验与单个编辑相同。',
     apply: '应用到 {n} 个账号', weightHint: '同一优先级内按权重随机分配（1–1000）', zeroUnlimited: '0 表示不限制', spmHint: '0 表示不限制；数量和周期（1 分钟–24 小时）一起应用',
-    groupModeLabel: '分组修改方式', groupMode: { replace: '替换为', add: '追加', remove: '移除' },
-    groupModeHint: { replace: '各账号的分组改为所选分组（不选即清空分组）', add: '在各账号原有分组上追加所选分组', remove: '从各账号移除所选分组，其余分组保留' },
+    groupModeLabel: '账号分组修改方式', groupMode: { replace: '替换为', add: '追加', remove: '移除' },
+    groupModeHint: { replace: '各账号的账号分组改为所选的（不选即清空）', add: '在各账号原有的账号分组上追加所选的', remove: '从各账号移除所选的账号分组，其余保留' },
     proxyHint: '不选即不使用代理',
     controlFixed: '{n} 个所选账号的类型不允许修改此项',
     editDone: '已更新 {ok} 个账号（{skipped} 个无需修改）', editPartial: '成功 {ok}，失败 {fail}，跳过 {skipped}',
@@ -653,7 +653,7 @@ export default {
     staleHint: '最近一次查询失败，显示的是上次查到的余额'
   },
   scopeErrors: {
-    notInScope: '账号必须绑定到你管理的分组',
+    notInScope: '账号必须绑定到你管理的账号分组',
     wouldLeaveScope: '修改后账号将不在你的管理范围内'
   }
 }

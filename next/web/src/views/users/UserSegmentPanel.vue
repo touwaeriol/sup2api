@@ -1,26 +1,21 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { SAlert, SButton, SField, SGrid, SHint, toast } from '@sub2api/ui'
+import { SAlert, SButton, SField, SHint, toast } from '@sub2api/ui'
 import type { PersonalDialogUser, Segment } from '@/api/pricing'
 import PersonalConvertDialog from '@/components/pricing/PersonalConvertDialog.vue'
 import PersonalRemoveDialog from '@/components/pricing/PersonalRemoveDialog.vue'
 import SegmentSelect from '@/components/pricing/SegmentSelect.vue'
-import { rateText } from '@/components/pricing/pricingFormat'
 import { useSegmentsLookup } from '@/components/pricing/segmentLookup'
 import { moveToSegment } from '@/components/pricing/segmentMembers'
 import { confirmAction } from '@/composables/crud'
-import SegmentDiscountField from '@/components/pricing/SegmentDiscountField.vue'
-import { validDiscount } from '@/components/pricing/segmentForm'
 
-// The segment one user belongs to, and the ways out of it. In a named segment:
-// move him to another one, or give him a personal one. In a personal segment:
-// its discount (a draft the parent saves with the rest of the personal
-// settings), or back to a named segment. Every move is made at once and
-// reported with `changed`.
+// The user group ("segment") one user belongs to, and the ways out of it. In
+// a named one: move him to another one, or give him a personal one. In a
+// personal one: back to a named one. Every move is made at once and reported
+// with `changed`.
 const props = defineProps<{ user: PersonalDialogUser; segment: Segment; editable?: boolean }>()
 const emit = defineEmits<{ (e: 'changed'): void }>()
-const discount = defineModel<string>('discount', { required: true })
 const { t } = useI18n()
 const { segments } = useSegmentsLookup()
 
@@ -59,14 +54,9 @@ async function switchTo(id: number | null) {
 <template>
   <div class="space-y-3" data-testid="user-segment-panel" :data-kind="segment.kind">
     <template v-if="segment.kind === 'named'">
-      <SGrid :cols="2">
-        <SField :label="t('users.segment')" :hint="t('users.pricing.segmentHint')">
-          <SegmentSelect :model-value="chosen" :disabled="!editable" data-testid="user-segment-switch" @update:model-value="switchTo" />
-        </SField>
-        <SField :label="t('users.pricing.discount')" :hint="t('users.pricing.discountOf', { segment: segment.name })">
-          <span class="flex min-h-control items-center font-mono font-medium" data-testid="user-segment-discount">{{ rateText(segment.discount) }}</span>
-        </SField>
-      </SGrid>
+      <SField :label="t('users.segment')" :hint="t('users.pricing.segmentHint')" class="sm:max-w-sm">
+        <SegmentSelect :model-value="chosen" :disabled="!editable" data-testid="user-segment-switch" @update:model-value="switchTo" />
+      </SField>
       <div v-if="editable" class="flex flex-wrap items-center gap-3">
         <SButton icon="user" data-testid="user-convert" @click="convertOpen = true">{{ t('users.pricing.convert') }}</SButton>
         <SHint size="xs" class="min-w-0 flex-1 basis-64">{{ t('users.pricing.convertHint') }}</SHint>
@@ -80,7 +70,6 @@ async function switchTo(id: number | null) {
           <SButton size="sm" data-testid="user-move-back" @click="removeOpen = true">{{ t('users.pricing.moveBack') }}</SButton>
         </template>
       </SAlert>
-      <SegmentDiscountField v-model="discount" :error="validDiscount(discount.trim()) ? undefined : t('segments.discount.invalid')" :disabled="!editable" />
     </template>
 
     <PersonalConvertDialog v-model:open="convertOpen" :user="member" @done="emit('changed')" />
