@@ -68,12 +68,12 @@ func (s *Service) actOnUsers(ctx context.Context, userIDs ...int64) error {
 }
 
 // errOwnSegment is the refusal of a change to the terms of a user group the
-// caller is in (GuardOwnSegments).
+// caller is in (guardOwnSegments).
 func errOwnSegment(ctx context.Context) *core.Error {
 	return core.ErrConflict.WithMessage(t(ctx, "you cannot change the terms of a user group you are in", "你不能修改自己所在用户组的定价或授权"))
 }
 
-// GuardOwnSegments fails unless the caller may change what the segments
+// guardOwnSegments fails unless the caller may change what the segments
 // charge or grant (discount, grants, rates): the caller is a
 // member of none of them, or it manages itself (UserGuard on itself: only a
 // superuser with the built-in assignable lists, audited there; FU2, FU6).
@@ -83,7 +83,7 @@ func errOwnSegment(ctx context.Context) *core.Error {
 // prices, as price:manage and group:manage do, not one's own; dropping the
 // is_default condition tightens it. q is the writer's transaction or the
 // pool.
-func GuardOwnSegments(ctx context.Context, q *gorm.DB, users core.UserGuard, segmentIDs []int64) error {
+func guardOwnSegments(ctx context.Context, q *gorm.DB, users core.UserGuard, segmentIDs []int64) error {
 	actor, _ := core.UserID(ctx)
 	if actor == 0 || len(segmentIDs) == 0 {
 		return nil

@@ -289,7 +289,7 @@ func (s *Service) savePairs(ctx context.Context, items []pairInput) error {
 		if err != nil {
 			return err
 		}
-		if err := GuardOwnSegments(ctx, tx, s.users, segments); err != nil {
+		if err := guardOwnSegments(ctx, tx, s.users, segments); err != nil {
 			return err
 		}
 		g := store.G(ctx, tx)

@@ -309,7 +309,7 @@ func (s *Service) update(c *gin.Context) {
 		err = in.validate(ctx, kind, false)
 	}
 	if err == nil && in.Discount != nil {
-		err = GuardOwnSegments(ctx, s.db.Gorm, s.users, []int64{id})
+		err = guardOwnSegments(ctx, s.db.Gorm, s.users, []int64{id})
 	}
 	if err != nil {
 		httpapi.Fail(c, err)
@@ -341,7 +341,7 @@ func (s *Service) delete(c *gin.Context) {
 			return err
 		}
 		// Its members fall back to the default segment's terms.
-		if err := GuardOwnSegments(ctx, tx, s.users, []int64{id}); err != nil {
+		if err := guardOwnSegments(ctx, tx, s.users, []int64{id}); err != nil {
 			return err
 		}
 		if err := releaseMembers(ctx, tx, id); err != nil {

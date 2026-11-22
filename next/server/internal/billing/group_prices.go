@@ -293,7 +293,8 @@ func (s *Service) saveGroupPrices(c *gin.Context) {
 		return
 	}
 	// User groups no longer price models: a segment_id of the old console
-	// must fail, not price the whole group.
+	// must fail, not price the whole group. Remove once no 0.1.306 console
+	// can still be open (the release after 0.1.307).
 	if _, set := c.GetQuery("segment_id"); set {
 		httpapi.Fail(c, core.ErrInvalidArgument.WithMessage(core.Text(c.Request.Context(), "segment_id is not accepted: user groups set rates only", "不接受 segment_id：用户组只能设倍率")))
 		return
