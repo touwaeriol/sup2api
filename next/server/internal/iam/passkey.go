@@ -17,7 +17,6 @@ import (
 	"gorm.io/gorm/clause"
 
 	"github.com/Sub2API-Devs/sup2api/next/runtime-contract/gormpg"
-	"github.com/Sub2API-Devs/sup2api/next/server/internal/audit"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store/model"
@@ -273,7 +272,7 @@ func (s *Service) storePasskey(ctx context.Context, userID int64, name, rpID str
 		if err != nil {
 			return err
 		}
-		return audit.Audit(ctx, tx, userID, "user.passkey.add", "user", strconv.FormatInt(userID, 10), map[string]any{"passkey_id": p.ID, "name": name})
+		return auditSelf(ctx, tx, userID, "user.passkey.add", map[string]any{"passkey_id": p.ID, "name": name})
 	})
 	if err != nil {
 		return nil, err
@@ -308,7 +307,7 @@ func (s *Service) RenamePasskey(ctx context.Context, userID, id int64, name stri
 			return core.ErrNotFound
 		}
 		p.Name, p.RPID, p.CreatedAt, p.LastUsedAt = row.Name, row.RpID, row.CreatedAt, row.LastUsedAt
-		return audit.Audit(ctx, tx, userID, "user.passkey.rename", "user", strconv.FormatInt(userID, 10), map[string]any{"passkey_id": id, "name": name})
+		return auditSelf(ctx, tx, userID, "user.passkey.rename", map[string]any{"passkey_id": id, "name": name})
 	})
 	if err != nil {
 		return nil, err
@@ -335,7 +334,7 @@ func (s *Service) DeletePasskey(ctx context.Context, userID, id int64) error {
 		if res.RowsAffected == 0 {
 			return core.ErrNotFound
 		}
-		return audit.Audit(ctx, tx, userID, "user.passkey.delete", "user", strconv.FormatInt(userID, 10), map[string]any{"passkey_id": id})
+		return auditSelf(ctx, tx, userID, "user.passkey.delete", map[string]any{"passkey_id": id})
 	})
 }
 

@@ -80,7 +80,7 @@ func (s *Service) auditSuperuserLogin(ctx context.Context, tx *gorm.DB, userID i
 		return err
 	}
 	meta, _ := ctx.Value(sessionMetaKey{}).(sessionMeta)
-	if err := audit.Audit(audit.WithClientIP(ctx, meta.ip), tx, userID, "auth.superadmin_login", "user", strconv.FormatInt(userID, 10),
+	if err := auditSelf(audit.WithClientIP(ctx, meta.ip), tx, userID, "auth.superadmin_login",
 		map[string]any{"method": meta.method, "ip": meta.ip}); err != nil {
 		return err
 	}
@@ -125,7 +125,7 @@ func (s *Service) RevokeSession(ctx context.Context, userID int64, id string) er
 		if !live {
 			return core.ErrNotFound
 		}
-		return audit.Audit(ctx, tx, userID, "user.session.revoke", "user", strconv.FormatInt(userID, 10), nil)
+		return auditSelf(ctx, tx, userID, "user.session.revoke", nil)
 	})
 }
 
@@ -157,7 +157,7 @@ func (s *Service) hasSession(ctx context.Context, g *gorm.DB, userID int64, id s
 // does not outlive the request.
 func (s *Service) RevokeOtherSessions(ctx context.Context, userID int64, keepSession, presented string) (string, error) {
 	err := s.changeSessions(ctx, userID, otherSessions(keepSession), func(tx *gorm.DB) error {
-		return audit.Audit(ctx, tx, userID, "user.session.revoke_others", "user", strconv.FormatInt(userID, 10), nil)
+		return auditSelf(ctx, tx, userID, "user.session.revoke_others", nil)
 	})
 	if err != nil {
 		return "", err
@@ -355,7 +355,7 @@ func (s *Service) UpdateProfile(ctx context.Context, userID int64, displayName s
 		if err := setLiveProfile(store.G(ctx, tx), userID, displayName).Error; err != nil {
 			return err
 		}
-		return audit.Audit(ctx, tx, userID, "user.profile.update", "user", strconv.FormatInt(userID, 10), map[string]any{"display_name": displayName})
+		return auditSelf(ctx, tx, userID, "user.profile.update", map[string]any{"display_name": displayName})
 	})
 }
 

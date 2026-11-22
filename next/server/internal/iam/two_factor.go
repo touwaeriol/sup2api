@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/base64"
 	"image/png"
-	"strconv"
 	"time"
 
 	"github.com/pquerna/otp"
@@ -13,7 +12,6 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
-	"github.com/Sub2API-Devs/sup2api/next/server/internal/audit"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store/model"
@@ -149,7 +147,7 @@ func (s *Service) EnableTwoFactor(ctx context.Context, userID int64, flowToken, 
 		if codes, err = s.issueBackupCodes(ctx, tx, userID); err != nil {
 			return err
 		}
-		return audit.Audit(ctx, tx, userID, "user.two_factor.enable", "user", strconv.FormatInt(userID, 10), nil)
+		return auditSelf(ctx, tx, userID, "user.two_factor.enable", nil)
 	})
 	if err != nil {
 		return nil, err
@@ -213,7 +211,7 @@ func (s *Service) DisableTwoFactor(ctx context.Context, userID int64) error {
 		if err := removeTwoFactor(ctx, tx, userID); err != nil {
 			return err
 		}
-		return audit.Audit(ctx, tx, userID, "user.two_factor.disable", "user", strconv.FormatInt(userID, 10), nil)
+		return auditSelf(ctx, tx, userID, "user.two_factor.disable", nil)
 	})
 }
 
@@ -232,7 +230,7 @@ func (s *Service) RegenerateBackupCodes(ctx context.Context, userID int64) ([]st
 		if codes, err = s.issueBackupCodes(ctx, tx, userID); err != nil {
 			return err
 		}
-		return audit.Audit(ctx, tx, userID, "user.two_factor.backup_codes", "user", strconv.FormatInt(userID, 10), nil)
+		return auditSelf(ctx, tx, userID, "user.two_factor.backup_codes", nil)
 	})
 	return codes, err
 }
@@ -286,6 +284,6 @@ func (s *Service) ResetSecurity(ctx context.Context, actorID, targetID int64) er
 		if err := deletePasskeysOf(store.G(ctx, tx), targetID).Error; err != nil {
 			return err
 		}
-		return audit.Audit(ctx, tx, actorID, "user.security.reset", "user", strconv.FormatInt(targetID, 10), nil)
+		return auditUser(ctx, tx, actorID, "user.security.reset", targetID, nil)
 	})
 }

@@ -3,12 +3,10 @@ package iam
 import (
 	"context"
 	"slices"
-	"strconv"
 
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 
-	"github.com/Sub2API-Devs/sup2api/next/server/internal/audit"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store/model"
@@ -257,7 +255,7 @@ func (s *Service) recordUserUpdated(ctx context.Context, tx *gorm.DB, actorID, i
 	if err := s.emit(ctx, tx, "user.updated", id, u.Email, u.Status); err != nil {
 		return nil, err
 	}
-	if err := audit.Audit(ctx, tx, actorID, "user.update", "user", strconv.FormatInt(id, 10), updateAuditDetail(in)); err != nil {
+	if err := auditUser(ctx, tx, actorID, "user.update", id, updateAuditDetail(in)); err != nil {
 		return nil, err
 	}
 	return u, nil

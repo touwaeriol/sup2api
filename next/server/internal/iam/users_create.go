@@ -3,14 +3,12 @@ package iam
 import (
 	"context"
 	"errors"
-	"strconv"
 
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
 	"github.com/Sub2API-Devs/sup2api/next/runtime-contract/gormpg"
-	"github.com/Sub2API-Devs/sup2api/next/server/internal/audit"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/authz"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/segment"
@@ -135,7 +133,7 @@ func (s *Service) recordUserCreated(ctx context.Context, tx *gorm.DB, actorID, i
 		"email": email,
 		"roles": roles,
 	}
-	return audit.Audit(ctx, tx, actorID, "user.create", "user", strconv.FormatInt(id, 10), detail)
+	return auditUser(ctx, tx, actorID, "user.create", id, detail)
 }
 
 // insertUser creates a user in segmentID, or the default segment when nil,

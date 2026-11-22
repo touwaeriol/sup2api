@@ -3,7 +3,6 @@ package iam
 import (
 	"context"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -12,7 +11,6 @@ import (
 	"gorm.io/gorm/clause"
 
 	"github.com/Sub2API-Devs/sup2api/next/runtime-contract/gormpg"
-	"github.com/Sub2API-Devs/sup2api/next/server/internal/audit"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/authz"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/iam/tokenstore"
@@ -208,7 +206,7 @@ func (s *Service) CreateAccessKey(ctx context.Context, userID int64, in CreateAc
 			return err
 		}
 		key = row.key()
-		return audit.Audit(ctx, tx, userID, "user.access_key.create", "user", strconv.FormatInt(userID, 10),
+		return auditSelf(ctx, tx, userID, "user.access_key.create",
 			map[string]any{"access_key_id": key.ID, "name": name, "permissions": perms})
 	})
 	if err != nil {
@@ -275,7 +273,7 @@ func (s *Service) UpdateAccessKey(ctx context.Context, userID, id int64, in Upda
 			return core.ErrNotFound
 		}
 		key = row.key()
-		return audit.Audit(ctx, tx, userID, "user.access_key.update", "user", strconv.FormatInt(userID, 10),
+		return auditSelf(ctx, tx, userID, "user.access_key.update",
 			map[string]any{"access_key_id": id, "name": key.Name, "permissions": key.Permissions})
 	})
 	if err != nil {
@@ -323,7 +321,7 @@ func (s *Service) DeleteAccessKey(ctx context.Context, userID, id int64) error {
 		if res.RowsAffected == 0 {
 			return core.ErrNotFound
 		}
-		return audit.Audit(ctx, tx, userID, "user.access_key.delete", "user", strconv.FormatInt(userID, 10), map[string]any{"access_key_id": id})
+		return auditSelf(ctx, tx, userID, "user.access_key.delete", map[string]any{"access_key_id": id})
 	})
 }
 

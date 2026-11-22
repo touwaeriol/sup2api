@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -14,7 +13,6 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 
-	"github.com/Sub2API-Devs/sup2api/next/server/internal/audit"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/iam/tokenstore"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store"
@@ -107,7 +105,7 @@ func (s *Service) issueStepUpProof(ctx context.Context, r *http.Request, userID 
 		if token, err = s.createFlow(ctx, flowStepUpProof, userID, payload); err != nil {
 			return err
 		}
-		if err := audit.Audit(ctx, tx, userID, "user.security_verify", "user", strconv.FormatInt(userID, 10), detail); err != nil {
+		if err := auditSelf(ctx, tx, userID, "user.security_verify", detail); err != nil {
 			return err
 		}
 		access, err = s.rotateSession(ctx, userID, core.Session(ctx), bearerToken(r))

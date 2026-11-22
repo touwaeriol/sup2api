@@ -2,11 +2,9 @@ package iam
 
 import (
 	"context"
-	"strconv"
 
 	"gorm.io/gorm"
 
-	"github.com/Sub2API-Devs/sup2api/next/server/internal/audit"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/segment"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store"
@@ -99,7 +97,7 @@ func (s *Service) softDeleteUser(ctx context.Context, tx *gorm.DB, actorID, id i
 		return err
 	}
 	detail := map[string]any{"email": email}
-	return audit.Audit(ctx, tx, actorID, "user.delete", "user", strconv.FormatInt(id, 10), detail)
+	return auditUser(ctx, tx, actorID, "user.delete", id, detail)
 }
 
 // userDeletion soft-deletes a user and moves it back to the default segment.
