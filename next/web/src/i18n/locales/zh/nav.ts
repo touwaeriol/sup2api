@@ -1,7 +1,7 @@
 export default {
   sections: {
     overview: '控制台',
-    gateway: '网关',
+    gateway: '账号/代理',
     security: '安全',
     finance: '财务',
     users: '用户',

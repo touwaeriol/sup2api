@@ -4,8 +4,9 @@ import type { NavItem, NavSection } from '@/stores/app'
 /**
  * The console menu shows three groups (CONTRACTS §90): the console every role
  * has (section "overview"), personal ("me") and admin, which holds every other
- * section in the server's order: gateway, security and finance listed flat,
- * the sections of FOLDED_SECTIONS and a plugin's own folded into a submenu,
+ * section in the server's order: security and finance listed flat, the
+ * sections of FOLDED_SECTIONS (accounts & proxies among them, §132) and a
+ * plugin's own folded into a submenu,
  * and last the entries that open a sidebar view (system settings), which
  * the caller passes in (sidebarViews.ts).
  */
@@ -30,7 +31,7 @@ export interface NavGroup {
 const OPERATOR_SECTIONS = ['gateway', 'security', 'finance', 'users', 'system']
 
 /** Core sections folded into a submenu, as a plugin's own section is. */
-const FOLDED_SECTIONS = ['users', 'plugins', 'system']
+const FOLDED_SECTIONS = ['gateway', 'users', 'plugins', 'system']
 
 /** A flat section that continues the block of another one; the rest start their own. */
 const BLOCK_OF: Record<string, string> = { finance: 'security' }
@@ -40,7 +41,7 @@ const isPluginSection = (s: NavSection) => s.key.includes(':')
 
 const folds = (s: NavSection) => isPluginSection(s) || FOLDED_SECTIONS.includes(s.key)
 
-/** The admin group reads as blocks: the gateway, security with finance, the submenus, the view entries. */
+/** The admin group reads as blocks: security with finance, the submenus, the view entries. */
 const blockOf = (s: NavSection) => (folds(s) ? 'submenus' : (BLOCK_OF[s.key] ?? s.key))
 
 const linkOf = (item: NavItem): NavLink => ({ key: `item:${item.id}`, item })

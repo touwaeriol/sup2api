@@ -1,7 +1,7 @@
 super_admin rev=1 superuser=true assign_custom=false
   assignable: -
   menu overview: /dashboard,/me/api-keys,/me/models,/me/usage/overview,/me/usage,/usage/overview,/usage
-  menu gateway: /accounts,/proxies
+  menu gateway: /accounts,/groups,/proxies
   menu finance: /ledger
   menu users: /users,/segments,/roles
   menu plugins: /plugins,/market,/publishers
@@ -63,7 +63,7 @@ admin rev=1 superuser=false assign_custom=true
   user:read
   user:update
   menu overview: /dashboard,/me/api-keys,/me/models,/me/usage/overview,/me/usage,/usage/overview,/usage
-  menu gateway: /accounts,/proxies
+  menu gateway: /accounts,/groups,/proxies
   menu finance: /ledger
   menu users: /users,/segments,/roles
   menu plugins: /plugins,/market,/publishers
@@ -101,7 +101,7 @@ operator rev=1 superuser=false assign_custom=false
   user:read
   user:update
   menu overview: /dashboard,/me/api-keys,/me/models,/me/usage/overview,/me/usage,/usage/overview,/usage
-  menu gateway: /accounts,/proxies
+  menu gateway: /accounts,/groups,/proxies
   menu finance: /ledger
   menu users: /users,/segments,/roles
   menu system: /nodes,/system/tasks,/system/audit,/settings

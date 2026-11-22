@@ -46,8 +46,12 @@ describe('where pages belong (CONTRACTS §90)', () => {
     let menu!: ReturnType<typeof useSettingsMenu>
     mount(defineComponent({ setup: () => ((menu = useSettingsMenu()), () => null) }), { global: { plugins: [i18n, router] } })
     const listed = menu.value.flatMap(g => g.links.map(l => l.item.path))
-    expect(listed).toEqual(expect.arrayContaining(['/settings?tab=sticky', '/groups', '/prices']))
+    expect(listed).toEqual(expect.arrayContaining(['/settings?tab=sticky', '/prices']))
     for (const path of [...listed, '/prices/new', '/prices/sources/3/sync']) expect([path, viewOf(path)]).toEqual([path, 'settings'])
+  })
+
+  it('opens groups in the console view, beside the accounts (CONTRACTS §132)', () => {
+    expect([metaOf('/groups').parent, viewOf('/groups')]).toEqual([undefined, undefined])
   })
 
   it('opens plugin settings in the console view, under the installed plugins', () => {
@@ -100,8 +104,6 @@ describe('the settings entry', () => {
 
   it('leads a caller without one to the first page of the view that is theirs', async () => {
     auth.denied = ['settings:read', 'sticky:read']
-    expect(await follow('/settings')).toBe('/groups')
-    auth.denied.push('group:read')
     expect(await follow('/settings')).toBe('/prices')
   })
 

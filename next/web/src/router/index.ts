@@ -54,7 +54,7 @@ const children: RouteRecordRaw[] = [
   { path: 'roles', component: () => import('@/views/roles/RolesView.vue'), meta: { perm: 'role:read', title: 'nav.items.roles' } },
   { path: 'api-keys', redirect: '/me/api-keys' },
   { path: 'me/api-keys', component: () => import('@/views/keys/MyApiKeysView.vue'), meta: { perm: 'apikey:self:manage', title: 'nav.items.myApiKeys' } },
-  { path: 'groups', component: () => import('@/views/groups/GroupsView.vue'), meta: { perm: 'group:read', title: 'nav.items.groups', parent: '/settings' } },
+  { path: 'groups', component: () => import('@/views/groups/GroupsView.vue'), meta: { perm: 'group:read', title: 'nav.items.groups' } },
   { path: 'proxies', component: () => import('@/views/proxies/ProxiesView.vue'), meta: { action: PROXY_ACTIONS.read, title: 'nav.items.proxies' } },
   { path: 'accounts', component: () => import('@/views/accounts/AccountsView.vue'), meta: { action: ACCOUNT_ACTIONS.read, title: 'nav.items.accounts' } },
   // The old platforms page.

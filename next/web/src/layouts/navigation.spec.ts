@@ -32,7 +32,7 @@ function makeRouter() {
       { path: '/accounts', component: Blank, meta: { title: 'nav.items.accounts' } },
       { path: '/users', component: Blank, meta: { title: 'nav.items.users' } },
       { path: '/users/:id/detail', component: Blank, meta: { title: 'nav.items.users', parent: '/users' } },
-      { path: '/groups', component: Blank, meta: { title: 'nav.items.groups', parent: '/settings' } },
+      { path: '/groups', component: Blank, meta: { title: 'nav.items.groups' } },
       { path: '/prices', component: Blank, meta: { title: 'nav.items.prices', parent: '/settings' } },
       { path: '/prices/sources', component: Blank, meta: { title: 'prices.sources.title', parent: '/prices' } },
       { path: '/prices/sources/:id/sync', component: Blank, meta: { title: 'prices.syncPrices', parent: '/prices/sources' } },
@@ -96,7 +96,7 @@ describe('sidebar', () => {
   const overview = { section: 'overview', items: [item('dashboard', '/dashboard')] }
   const operatorMenu = [
     overview,
-    { section: 'gateway', items: [item('accounts', '/accounts'), item('proxies', '/proxies')] },
+    { section: 'gateway', items: [item('accounts', '/accounts'), item('groups', '/groups'), item('proxies', '/proxies')] },
     { section: 'security', items: [item('guard', '/p/guard/dashboard')] },
     { section: 'finance', items: [item('recharge', '/p/payment/recharge')] },
     { section: 'users', items: [item('users', '/users'), item('roles', '/roles')] },
@@ -105,20 +105,20 @@ describe('sidebar', () => {
     { section: 'system', items: [item('nodes', '/nodes'), item('tasks', '/system/tasks'), settings] },
     { section: 'me', items: [item('wallet', '/me/wallet')] }
   ]
-  const flat = ['dashboard', 'wallet', 'accounts', 'proxies', 'guard', 'recharge']
+  const flat = ['dashboard', 'wallet', 'guard', 'recharge']
 
-  it('lists gateway, security and finance flat, folds the other admin sections and ends with system settings', async () => {
+  it('lists security and finance flat, folds the other admin sections (accounts & proxies first) and ends with system settings', async () => {
     const { wrapper, app } = await mountSidebar(operatorMenu)
     expect(wrapper.get('[data-testid="nav-group-admin"]').text()).toContain('管理员')
     expect(labels(wrapper)).toEqual([...flat, '系统设置'])
-    expect(submenus(wrapper)).toEqual(['用户', '插件', '媒体库', '系统'])
+    expect(submenus(wrapper)).toEqual(['账号/代理', '用户', '插件', '媒体库', '系统'])
     expect(wrapper.findAll('nav a').at(-1)!.attributes('href')).toBe('/settings')
     // The settings page is reached by its own entry, not from the system submenu.
     await wrapper.get('[data-testid="nav-submenu-system"]').trigger('click')
     expect(labels(wrapper)).toEqual([...flat, 'nodes', 'tasks', '系统设置'])
     expect(wrapper.get('[data-testid="nav-submenu-system"]').attributes('aria-expanded')).toBe('true')
     expect(JSON.parse(localStorage.getItem('s2a.navOpen') || '[]')).toEqual(['system'])
-    // A little space sets the blocks apart: gateway, security with finance, the submenus, the settings entry.
+    // A little space sets the blocks apart: the submenus, security with finance, the submenus, the settings entry.
     const spacers = wrapper.findAll('[data-testid="nav-group-admin"] > [aria-hidden="true"]')
     expect(spacers.map(d => d.element.nextElementSibling?.textContent?.trim())).toEqual(['guard', '用户', '系统设置'])
     app.sidebarCollapsed = true
@@ -127,7 +127,7 @@ describe('sidebar', () => {
     expect(wrapper.text()).not.toContain('管理员')
     expect(submenus(wrapper)).toEqual([])
     expect(wrapper.findAll('nav a').map(a => a.attributes('aria-label'))).toEqual([
-      ...flat,
+      ...['dashboard', 'wallet', 'accounts', 'groups', 'proxies', 'guard', 'recharge'],
       ...['users', 'roles', 'plugins', 'market', 'inbox', 'assets', 'sets', 'nodes', 'tasks'],
       '系统设置'
     ])
@@ -168,7 +168,10 @@ describe('sidebar', () => {
   })
 
   it('lights up the menu entry of the page, else of its nearest parent page, else of a path it starts with', async () => {
-    expect(current((await mountSidebar(operatorMenu, '/accounts')).wrapper)).toEqual(['accounts'])
+    const accounts = await mountSidebar(operatorMenu, '/accounts')
+    expect(current(accounts.wrapper)).toEqual(['accounts'])
+    expect(accounts.wrapper.get('[data-testid="nav-submenu-gateway"]').attributes('aria-expanded')).toBe('true')
+    expect(labels(accounts.wrapper)).toEqual(['dashboard', 'wallet', 'accounts', 'groups', 'proxies', 'guard', 'recharge', '系统设置'])
     // A page whose menu (here) has no entry of its own lights up its parent's.
     const detail = await mountSidebar(operatorMenu, '/users/3/detail')
     expect(current(detail.wrapper)).toEqual(['users'])
@@ -213,7 +216,7 @@ describe('sidebar', () => {
     const link = (key: string, path: string, active = false) => ({ key, item: item(key, path), active })
     const groups: ViewGroup[] = [
       { key: 'gateway', label: '网关', links: [link('gateway', '/settings?tab=gateway', true), link('sticky', '/settings?tab=sticky')] },
-      { key: 'pricing', label: '分组与定价', links: [link('groups', '/groups')] }
+      { key: 'pricing', label: '定价', links: [link('prices', '/prices')] }
     ]
     const view = (w: Sidebar) => w.find('[data-testid="nav-view-settings"]')
     const back = (w: Sidebar) => w.get<HTMLElement>('[data-testid="nav-back"]')
@@ -226,22 +229,22 @@ describe('sidebar', () => {
     it('swaps the console menu for the menu of system settings, under a way back', async () => {
       const { wrapper } = await mountSidebar(operatorMenu, '/settings')
       expect(wrapper.find('[data-testid="nav-group-admin"]').exists()).toBe(false)
-      expect(labels(wrapper)).toEqual(['返回控制台', 'gateway', 'sticky', 'groups'])
+      expect(labels(wrapper)).toEqual(['返回控制台', 'gateway', 'sticky', 'prices'])
       expect(wrapper.findAll('nav a').map(a => a.attributes('href'))).toEqual([
         '/dashboard',
         '/settings?tab=gateway',
         '/settings?tab=sticky',
-        '/groups'
+        '/prices'
       ])
       expect(view(wrapper).text()).toContain('网关')
-      expect(view(wrapper).text()).toContain('分组与定价')
+      expect(view(wrapper).text()).toContain('定价')
       expect(current(wrapper)).toEqual(['gateway'])
     })
 
     it('is chosen by the route: the pages of the view and the pages under them, not a page of the system section', async () => {
       const { wrapper, router } = await mountSidebar(operatorMenu, '/prices')
       expect(view(wrapper).exists()).toBe(true)
-      for (const path of ['/settings?tab=sticky', '/groups', '/prices/sources/3/sync']) {
+      for (const path of ['/settings?tab=sticky', '/prices/sources', '/prices/sources/3/sync']) {
         await router.push(path)
         await flushPromises()
         expect([path, view(wrapper).exists()]).toEqual([path, true])
@@ -252,6 +255,11 @@ describe('sidebar', () => {
       await flushPromises()
       expect(view(wrapper).exists()).toBe(false)
       expect(current(wrapper)).toEqual(['nodes'])
+      // Groups sit with the accounts, in the console menu (§132).
+      await router.push('/groups')
+      await flushPromises()
+      expect(view(wrapper).exists()).toBe(false)
+      expect(current(wrapper)).toEqual(['groups'])
     })
 
     it('leads back to the console page the view was opened from, not to an error page', async () => {
@@ -259,7 +267,7 @@ describe('sidebar', () => {
       await router.push('/forbidden?perm=x')
       await router.push('/no/such/page')
       await router.push('/settings')
-      await router.push('/groups')
+      await router.push('/prices')
       await flushPromises()
       expect(back(wrapper).attributes('href')).toBe('/accounts?page=2')
       await back(wrapper).trigger('click')
@@ -295,7 +303,7 @@ describe('sidebar', () => {
       app.sidebarCollapsed = true
       await flushPromises()
       expect(view(wrapper).text()).toBe('')
-      expect(wrapper.findAll('nav a').map(a => a.attributes('aria-label'))).toEqual(['返回控制台', 'gateway', 'sticky', 'groups'])
+      expect(wrapper.findAll('nav a').map(a => a.attributes('aria-label'))).toEqual(['返回控制台', 'gateway', 'sticky', 'prices'])
       expect(back(wrapper).attributes('title')).toBe('返回控制台')
       expect(wrapper.findAll('nav hr')).toHaveLength(2)
     })
@@ -323,8 +331,8 @@ describe('top bar', () => {
     denied.add('settings:read').add('sticky:read').add('plugin:read')
     const router = makeRouter()
     const wrapper = mount(AppTopbar, { global: { plugins: [i18n, router], stubs: { ChangePasswordDialog: true } } })
-    // Groups for the built-in operator, plugin settings for a holder of the plugin's permission alone.
-    for (const [path, parent] of [['/groups', '系统设置'], ['/plugins/mailer/settings', '已安装插件']]) {
+    // Model prices for the built-in operator, plugin settings for a holder of the plugin's permission alone.
+    for (const [path, parent] of [['/prices', '系统设置'], ['/plugins/mailer/settings', '已安装插件']]) {
       await router.push(path)
       await flushPromises()
       const nav = wrapper.get('[data-testid="breadcrumbs"]')

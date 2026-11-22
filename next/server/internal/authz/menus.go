@@ -48,11 +48,11 @@ type coreMenuSection struct {
 	items []coreMenuItem
 }
 
-// coreMenus follows CONTRACTS §22.1 and §90: settings with settings, features
-// with features. Every feature page sits in the section it belongs to, and
-// system settings is one entry (/settings), the last core item of system; the
-// console lists the pages behind that entry itself (groups, model prices and
-// plugin settings among them), so they have no item here.
+// coreMenus follows CONTRACTS §22.1, §90 and §132: settings with settings,
+// features with features. Every feature page sits in the section it belongs
+// to, and system settings is one entry (/settings), the last core item of
+// system; the console lists the pages behind that entry itself (model prices
+// among them), so they have no item here.
 // The console shows three groups: overview (the console every role has), me
 // (personal) and admin, made of the other sections. Sections stay apart so
 // plugins can join the one their pages belong to.
@@ -73,10 +73,12 @@ var coreMenus = []coreMenuSection{
 		{"account-usage-overview", lt("Account usage overview", "账号用量概览"), "chart", "/account-usage/overview", []string{"GET /account-usage/overview"}},
 		{"account-usage", lt("Account usage logs", "账号日志"), "usage", "/account-usage", []string{"GET /account-usage"}},
 	}},
-	// Accounts and the proxies they go out through, each for the keys of its
-	// list endpoint (GET /accounts, GET /proxies).
-	{"gateway", lt("Gateway", "网关"), []coreMenuItem{
+	// Accounts, the groups they serve in and the proxies they go out through,
+	// each for the keys of its list endpoint; the console folds them into one
+	// submenu (§132).
+	{"gateway", lt("Accounts & proxies", "账号/代理"), []coreMenuItem{
 		{"accounts", lt("Accounts", "账号"), "account", "/accounts", []string{"GET /accounts"}},
+		{"groups", lt("Groups", "分组"), "group", "/groups", []string{"GET /groups"}},
 		{"proxies", lt("Proxies", "代理"), "proxy", "/proxies", []string{"GET /proxies"}},
 	}},
 	// No core items: request guards and moderation are plugins and join it.
@@ -101,7 +103,7 @@ var coreMenus = []coreMenuSection{
 	}},
 	// Operations pages, then the one entry of system settings, shown to
 	// holders of a permission one of its core pages needs: a configuration
-	// page (settings, sticky sessions), groups or model prices. Plugin menus
+	// page (settings, sticky sessions) or model prices. Plugin menus
 	// with section "system" still join it, after /settings (dynweight 0.5.4).
 	{"system", lt("System", "系统"), []coreMenuItem{
 		{"nodes", lt("Cluster nodes", "集群节点"), "node", "/nodes", []string{"GET /nodes"}},
@@ -109,8 +111,8 @@ var coreMenus = []coreMenuSection{
 		{"upgrades", lt("Core updates", "核心升级"), "refresh", "/system/upgrades", []string{"GET /system/upgrades"}},
 		{"audit", lt("Audit logs", "审计日志"), "clock", "/system/audit", []string{"GET /audit-logs"}},
 		// The first page of each kind the entry leads to: a configuration
-		// page, sticky sessions, groups, model prices.
-		{"settings", lt("System settings", "系统设置"), "settings", "/settings", []string{"GET /settings/gateway", "GET /sticky-rules", "GET /groups", "GET /prices"}},
+		// page, sticky sessions, model prices.
+		{"settings", lt("System settings", "系统设置"), "settings", "/settings", []string{"GET /settings/gateway", "GET /sticky-rules", "GET /prices"}},
 	}},
 	{"me", lt("Personal", "个人中心"), []coreMenuItem{
 		{"my-wallet", lt("Wallet", "钱包"), "balance", "/me/wallet", []string{"GET /me/balance"}},

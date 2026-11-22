@@ -9,7 +9,8 @@ import type { PermRef } from '@/generated/permissions'
 /**
  * System settings (CONTRACTS §90): the configuration pages of the settings
  * page (?tab=<key>) and, in the sidebar's settings view, the pages with an
- * address of their own that belong with them: groups and model prices.
+ * address of their own that belong with them: model prices. Groups sit with
+ * the accounts (§132).
  */
 
 /** The settings page: every configuration page is one of its tabs. */
@@ -57,10 +58,7 @@ const LAYOUT: Group[] = [
   },
   {
     key: 'pricing',
-    pages: [
-      ownPage('/groups', 'group:read', 'nav.items.groups', 'group'),
-      ownPage('/prices', 'price:read', 'nav.items.prices', 'price')
-    ]
+    pages: [ownPage('/prices', 'price:read', 'nav.items.prices', 'price')]
   },
   {
     key: 'billing',

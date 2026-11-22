@@ -182,11 +182,11 @@ describe('useSettingsNav', () => {
 })
 
 describe('useSettingsMenu', () => {
-  it('lists the nine configuration pages, groups and model prices in four groups', () => {
+  it('lists the nine configuration pages and model prices in four groups', () => {
     const groups = setupOf(useSettingsMenu)
     expect(shape(groups.value)).toEqual([
       ['网关', ['gateway', 'failure', 'sticky', 'offload']],
-      ['分组与定价', ['/groups', '/prices']],
+      ['定价', ['/prices']],
       ['计费与通知', ['billing', 'notifications']],
       ['运行环境', ['updates', 'environment', 'plugin-egress']]
     ])
@@ -196,7 +196,7 @@ describe('useSettingsMenu', () => {
       active: false
     })
     // A page with an address of its own keeps it.
-    expect(groups.value[1].links[1]).toEqual({
+    expect(groups.value[1].links[0]).toEqual({
       key: '/prices',
       item: { id: 'settings:/prices', labelKey: 'nav.items.prices', icon: 'price', path: '/prices' },
       active: false
@@ -205,25 +205,25 @@ describe('useSettingsMenu', () => {
 
   it('gives every page an icon of its own that SIcon can draw', () => {
     const icons = setupOf(useSettingsMenu).value.flatMap(g => g.links.map(l => l.item.icon!))
-    expect(icons.filter(hasIcon)).toHaveLength(11)
-    expect(new Set(icons).size).toBe(11)
+    expect(icons.filter(hasIcon)).toHaveLength(10)
+    expect(new Set(icons).size).toBe(10)
   })
 
   it('leaves out the pages the caller may not open and the groups left empty', () => {
     permissions.denied = ['settings:read']
     expect(shape(setupOf(useSettingsMenu).value)).toEqual([
       ['网关', ['sticky']],
-      ['分组与定价', ['/groups', '/prices']]
+      ['定价', ['/prices']]
     ])
   })
 
   it('shows a caller with no configuration page, as the built-in operator, the pages that are theirs', () => {
     permissions.denied = ['settings:read', 'sticky:read']
-    expect(shape(setupOf(useSettingsMenu).value)).toEqual([['分组与定价', ['/groups', '/prices']]])
+    expect(shape(setupOf(useSettingsMenu).value)).toEqual([['定价', ['/prices']]])
     // The settings entry opens the first of them.
-    expect(settingsLanding()).toBe('/groups')
-    permissions.denied.push('group:read')
     expect(settingsLanding()).toBe('/prices')
+    permissions.denied.push('price:read')
+    expect(settingsLanding()).toBeUndefined()
   })
 
   it('lights up the open configuration page on the settings page only', () => {
@@ -236,9 +236,9 @@ describe('useSettingsMenu', () => {
   it('lights up a page with an address of its own on that page and on the pages below it', () => {
     const groups = setupOf(useSettingsMenu)
     route.query = {}
-    route.path = '/groups'
+    route.path = '/prices'
     route.meta = { parent: '/settings' }
-    expect(activeKeys(groups.value)).toEqual(['/groups'])
+    expect(activeKeys(groups.value)).toEqual(['/prices'])
     route.path = '/prices/sources/3/sync'
     route.meta = { parent: '/prices/sources' }
     expect(activeKeys(groups.value)).toEqual(['/prices'])

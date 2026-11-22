@@ -3,7 +3,7 @@ export default {
   missingTab: 'That settings page is not available to you (or no longer exists); showing the first one instead.',
   groups: {
     gateway: 'Gateway',
-    pricing: 'Groups & pricing',
+    pricing: 'Pricing',
     billing: 'Billing & notifications',
     runtime: 'Runtime'
   },

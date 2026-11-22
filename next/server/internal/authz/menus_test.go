@@ -37,7 +37,7 @@ func TestBindMenuRoutes(t *testing.T) {
 	db := testutil.DB(t)
 	s := newService(t, db, newMemBus(), nil)
 	operator := addUser(t, s, "op@x.com", RoleOperator)
-	if got := sectionPaths(t, s, operator, "gateway"); got != "/accounts,/proxies" {
+	if got := sectionPaths(t, s, operator, "gateway"); got != "/accounts,/groups,/proxies" {
 		t.Fatalf("gateway = %s", got)
 	}
 
@@ -51,7 +51,7 @@ func TestBindMenuRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := sectionPaths(t, s, operator, "gateway"); got != "/accounts" {
+	if got := sectionPaths(t, s, operator, "gateway"); got != "/accounts,/groups" {
 		t.Fatalf("gateway with GET /proxies under settings:manage = %s", got)
 	}
 

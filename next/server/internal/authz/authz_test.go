@@ -1144,8 +1144,8 @@ func TestMenus(t *testing.T) {
 	if got := menuPaths(byKey["overview"]); got != "/dashboard,/me/api-keys,/me/models,/me/usage/overview,/me/usage,/usage/overview,/usage" {
 		t.Fatalf("admin console = %s", got)
 	}
-	// No groups or model prices: the settings view lists them.
-	if got := menuPaths(byKey["gateway"]); got != "/accounts,/proxies,/p/mod/rules" {
+	// Accounts, groups and proxies (§132); no model prices: the settings view lists them.
+	if got := menuPaths(byKey["gateway"]); got != "/accounts,/groups,/proxies,/p/mod/rules" {
 		t.Fatalf("core section with plugin item = %s", got)
 	}
 	if sec := byKey["users"]; menuPaths(sec) != "/users,/segments,/roles" || sec.Label.Get("zh") != "用户" {
@@ -1189,9 +1189,9 @@ func TestMenus(t *testing.T) {
 	}
 
 	// One page of the settings view alone opens its entry and nothing else of
-	// system: sticky sessions, or groups or model prices, which the operator
-	// role has without any settings permission.
-	for _, perm := range []string{"sticky:read", "group:read", "price:read"} {
+	// system: sticky sessions, or model prices, which the operator role has
+	// without any settings permission.
+	for _, perm := range []string{"sticky:read", "price:read"} {
 		key := strings.ReplaceAll(perm, ":", "_")
 		role, err = s.CreateRole(ctx, admin, CreateRoleInput{Key: key, Name: core.LocalizedText{"en": perm}, PermissionKeys: []string{perm}})
 		if err != nil {
@@ -1201,6 +1201,15 @@ func TestMenus(t *testing.T) {
 		if got := sectionPaths(t, s, viewer, "system"); got != "/settings" {
 			t.Fatalf("system with only %s = %s", perm, got)
 		}
+	}
+	// group:read alone opens groups beside the accounts, not system settings (§132).
+	role, err = s.CreateRole(ctx, admin, CreateRoleInput{Key: "group_viewer", Name: core.LocalizedText{"en": "Group viewer"}, PermissionKeys: []string{"group:read"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	groupViewer := addUser(t, s, "g@x.com", role.Key)
+	if got := sectionPaths(t, s, groupViewer, "gateway") + " | " + sectionPaths(t, s, groupViewer, "system"); got != "/groups | " {
+		t.Fatalf("group:read alone = %s", got)
 	}
 
 	// balance:all:read alone opens finance with the ledger.
@@ -1217,7 +1226,7 @@ func TestMenus(t *testing.T) {
 
 	// Without a generation there are no plugin menus.
 	reg.gen = nil
-	if got := sectionPaths(t, s, admin, "gateway"); got != "/accounts,/proxies" {
+	if got := sectionPaths(t, s, admin, "gateway"); got != "/accounts,/groups,/proxies" {
 		t.Fatalf("gateway without a generation = %s", got)
 	}
 }

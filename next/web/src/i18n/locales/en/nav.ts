@@ -1,7 +1,7 @@
 export default {
   sections: {
     overview: 'Console',
-    gateway: 'Gateway',
+    gateway: 'Accounts & proxies',
     security: 'Security',
     finance: 'Finance',
     users: 'Users',

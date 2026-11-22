@@ -6049,25 +6049,25 @@ PATCH `/users/:id` 只有改密码、邮箱时要 proof；PUT `/me/password` 先
 | --- | --- | --- |
 | 控制台 | `overview`（标签“控制台 / Console”） | 仪表盘、API 密钥、模型与价格、用量概览（`/me/usage/overview`）、使用日志（`/me/usage`），以及有 `usage:all:read` 才有的全站概览（`/usage/overview`）、全站日志（`/usage`）；有 `usage:account:read`（任意范围）而没有不带范围的 `usage:all:read` 才有的账号用量概览（`/account-usage/overview`）、账号日志（`/account-usage`）（§103.5，`menus.go` 的 `hideWith`：持有其中任一不带范围的 key 就隐藏，超管同样隐藏） |
 | 个人中心 | `me`（标签“个人中心 / Personal”） | 钱包、个人设置（`/me/profile`）；`section:"me"` 的插件菜单（我的邀请、每日签到）接在后面 |
-| 管理员 | 其余所有区，按服务端顺序 | `gateway`、`security`、`finance` 的项平铺、不画区标题；`users`、`plugins`、`system`（不含 `/settings`）和插件自己的区（`<插件>:<id>`）折叠成目录，见 90.3；最后一项是“系统设置”（`system` 区的 `/settings`） |
+| 管理员 | 其余所有区，按服务端顺序 | `security`、`finance` 的项平铺、不画区标题；`gateway`（§132 起，“账号/代理”）、`users`、`plugins`、`system`（不含 `/settings`）和插件自己的区（`<插件>:<id>`）折叠成目录，见 90.3；最后一项是“系统设置”（`system` 区的 `/settings`） |
 
 ### 90.1 区的内容
 
 | 区（标签） | 核心项（按返回顺序） | 内置插件菜单 |
 | --- | --- | --- |
-| gateway 网关 | 账号、代理 | 动态权重（dynweight；只有 0.5.4 在 `system` 区） |
+| gateway 网关（§132 起标签“账号/代理 / Accounts & proxies”） | 账号、分组（§132 起）、代理 | 动态权重（dynweight；只有 0.5.4 在 `system` 区） |
 | security 安全 | 无 | 请求守卫、提示词审核 |
 | finance 财务 | 余额流水（`balance:all:read`，T80） | 增长管理 |
 | users 用户（标签“用户 / Users”） | 用户（`user:read` 的任意范围，代理供应商的 team 也显示，§103.3）、用户组（§97 起）、角色与权限 | |
 | plugins 插件 | 已安装插件、插件市场、发布者；`section:"plugins"` 的插件菜单接在后面 | |
 | system 系统（标签“系统 / System”） | 集群节点、定时任务、核心升级、审计日志、系统设置 `/settings` | |
 
-- 分组（`/groups`，`group:read`）、模型价格（`/prices`，`price:read`）没有菜单项，由控制台列在系统设置视图里（90.2）。
+- 模型价格（`/prices`，`price:read`）没有菜单项，由控制台列在系统设置视图里（90.2）。分组（`/groups`，`group:read`）§132 起是 `gateway` 区的菜单项，不再在系统设置视图里。
 - 用户组（§97 起）：id `segments`，标签“用户组 / User groups”，图标 `publisher`，地址 `/segments`，持有 `segment:read` 才返回；排在“用户”之后、“角色与权限”之前，和它们一起进“用户”目录（90.3）。分组一侧的授权、专属倍率和分组内定价没有单独的菜单项，在分组页（系统设置视图，90.2）里。
 - 余额流水（`/ledger`，`balance:all:read`）在核心 `finance` 区有菜单项“余额流水”（2026-11-13 权限加固 T80），也可从用户列表的行操作打开；页面和接口不变。
 - 平台页取消，没有菜单项（地址见 90.4）；接口 `GET /platforms`、`GET /me/platforms` 不变，控制台的平台列表一律取 `GET /me/platforms`。
 - 模型目录：anthropic 0.3.1 去掉了菜单 `anthropic-models`、页面 `models` 和宿主权限 `ui.menu`；插件接口 `GET /api/v1/p/anthropic/models` 和权限 `model_catalog:read` 随 0.4.0 一并删除（§129）。
-- 系统设置：id `settings`，是 `system` 区最后一个核心项，持有 `settings:read`、`sticky:read`、`group:read`、`price:read` 任意一个就返回：后两个是因为分组、模型价格从系统设置视图进入，内置运维角色有它们而没有 `settings` / `sticky` 权限。`section:"system"` 的插件菜单仍并入 `system` 区，排在 `/settings` 之后（如 dynweight 0.5.4 的动态权重），和其余项一起进“系统”目录。
+- 系统设置：id `settings`，是 `system` 区最后一个核心项，持有 `settings:read`、`sticky:read`、`price:read` 任意一个就返回：`price:read` 是因为模型价格从系统设置视图进入，内置运维角色有它而没有 `settings` / `sticky` 权限（§132 前还有 `group:read`）。`section:"system"` 的插件菜单仍并入 `system` 区，排在 `/settings` 之后（如 dynweight 0.5.4 的动态权重），和其余项一起进“系统”目录。
 - 账号、代理、角色与权限、插件管理各项的权限和图标不变。只有 `account:own:*` / `proxy:own:*` 的调用者（供应商）在 `gateway` 区看到账号、代理，没有 `system` 区；再有 `group:read` 或 `price:read` 时，`system` 区只有“系统设置”一项，视图里只列他能打开的页面。
 - 各区仍按 `CoreMenuSections()` 的 order 返回（`me` 是 800），三组的排列由控制台决定。
 
@@ -9335,3 +9335,13 @@ Go 类型是 `expr.VisualConfig`、`TierConfig`、`TierCond`、`TokenPrices`、`
 - 不改 `expression`、`expr_hash`：新配置生成的表达式与原来逐字节相同（测试断言迁移后每行 `expr.Generate(mode, config)` 的哈希等于所存 `expr_hash`）。价格历史、使用记录不动（使用记录 `billing_detail` 里冻结的 `Mode` 仍是旧名，只作记录）。
 - `SET LOCAL lock_timeout = '10s'`；临时函数（`tier_conditions_*`）在末尾删掉；重跑一次什么也不写（没有 `per_token`、`per_request` 的行了）。
 - 回退：旧核心不认识 `visual` 方式和 `when` 条件；回退要连同数据库回到升级前的备份。
+
+## 132. 账号、分组、代理合成“账号/代理”目录（2026-11-22，用户要求“账号分组 + 代理 + 账号弄成一个支持展开的二级菜单的账号/代理菜单”；无迁移，接口形状不变，可滚动）
+
+取代 §90 里分组进系统设置视图、`gateway` 区平铺的部分；§90 其余不变。
+
+- 服务端（`menus.go`）：`gateway` 区标签改为“账号/代理 / Accounts & proxies”，核心项按顺序是账号 `/accounts`、分组 `/groups`（id `groups`，图标 `group`，取 `GET /groups` 的权限，即 `group:read` 的任意范围）、代理 `/proxies`；`section:"gateway"` 的插件菜单（dynweight 的动态权重）仍接在后面。系统设置项不再认 `GET /groups`：只有 `group:read` 的调用者在 `gateway` 区看到分组，没有“系统设置”。
+- 控制台（`sidebarGroups.ts`）：`gateway` 加进 `FOLDED_SECTIONS`，可见项两项及以上时折叠成目录“账号/代理”（首项图标），只有一项时直接显示这一项；当前页在其中时自动展开，展开状态同样记在 `s2a.navOpen`。区标签由控制台的 `nav.sections.gateway` 给出。
+- 系统设置视图（`settingsNav.ts`）：“分组与定价”组只剩模型价格，组名改为“定价 / Pricing”；一个配置页都打不开的调用者打开 `/settings` 时落到 `/prices`。
+- 地址不变：`/groups` 的路由不再有 `meta.parent: '/settings'`，打开时侧栏是控制台视图，“账号/代理”目录展开、分组高亮，没有面包屑。
+- 混跑：旧控制台拿到新菜单时，账号、分组、代理在管理员组里平铺（区标签取旧的“网关”，管理员组不画区标题）；新控制台拿到旧菜单时，“账号/代理”目录里只有账号、代理，分组暂时没有侧栏入口（地址仍能打开）。刷新页面后恢复一致。
