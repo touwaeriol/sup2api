@@ -51,7 +51,7 @@ describe('price rule editor', () => {
   it('says why N is not one', () => {
     const { w } = render({ kind: 'multiplier', multiplier: 'x' })
     expect(w.get('input[data-testid="price-rule-multiplier"]').attributes('aria-invalid')).toBe('true')
-    expect(w.get('[data-testid="price-rule-issue"]').text()).toBe('Enter a number from 0 to below 1000000, up to 4 decimals')
+    expect(w.get('[data-testid="price-rule-issue"]').text()).toBe('Enter a number from 0 to 999999.9999, up to 4 decimals')
     expect(w.find('[data-testid="price-rule-preview"]').exists()).toBe(false)
   })
 
@@ -100,5 +100,12 @@ describe('price rule editor', () => {
     expect(kind('multiplier').attributes('disabled')).toBeDefined()
     expect(w.find('[data-testid="price-rule-no-base"]').exists()).toBe(true)
     expect(w.find('[data-testid="price-rule-preview"]').exists()).toBe(false)
+  })
+
+  it('only shows the saved rule of a model whose original price went away', () => {
+    const { w } = render({ kind: 'multiplier', multiplier: '2' }, null)
+    expect(w.get('input[data-testid="price-rule-multiplier"]').attributes('disabled')).toBeDefined()
+    const custom = render({ kind: 'custom', mode: 'expression', expression: 'p * 2' }, null)
+    expect(custom.w.get('[data-testid="expr-code"] textarea').attributes('readonly')).toBeDefined()
   })
 })

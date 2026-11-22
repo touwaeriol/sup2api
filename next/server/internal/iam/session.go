@@ -4,7 +4,6 @@ import (
 	"context"
 	"log/slog"
 	"strconv"
-	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -81,7 +80,7 @@ func (s *Service) auditSuperuserLogin(ctx context.Context, tx *gorm.DB, userID i
 		return err
 	}
 	meta, _ := ctx.Value(sessionMetaKey{}).(sessionMeta)
-	if err := audit.Audit(audit.WithClientIP(ctx, meta.ip), tx, userID, "auth.superadmin_login", "user", strconv.FormatInt(userID, 10),
+	if err := auditSelf(audit.WithClientIP(ctx, meta.ip), tx, userID, "auth.superadmin_login",
 		map[string]any{"method": meta.method, "ip": meta.ip}); err != nil {
 		return err
 	}
@@ -126,7 +125,7 @@ func (s *Service) RevokeSession(ctx context.Context, userID int64, id string) er
 		if !live {
 			return core.ErrNotFound
 		}
-		return audit.Audit(ctx, tx, userID, "user.session.revoke", "user", strconv.FormatInt(userID, 10), nil)
+		return auditSelf(ctx, tx, userID, "user.session.revoke", nil)
 	})
 }
 
@@ -158,7 +157,7 @@ func (s *Service) hasSession(ctx context.Context, g *gorm.DB, userID int64, id s
 // does not outlive the request.
 func (s *Service) RevokeOtherSessions(ctx context.Context, userID int64, keepSession, presented string) (string, error) {
 	err := s.changeSessions(ctx, userID, otherSessions(keepSession), func(tx *gorm.DB) error {
-		return audit.Audit(ctx, tx, userID, "user.session.revoke_others", "user", strconv.FormatInt(userID, 10), nil)
+		return auditSelf(ctx, tx, userID, "user.session.revoke_others", nil)
 	})
 	if err != nil {
 		return "", err
@@ -348,15 +347,15 @@ func (s *Service) currentSession(c *gin.Context) string {
 
 // UpdateProfile changes what the user may change about themselves.
 func (s *Service) UpdateProfile(ctx context.Context, userID int64, displayName string) error {
-	displayName = strings.TrimSpace(displayName)
-	if utf8.RuneCountInString(displayName) > 100 {
-		return core.InvalidFields(core.FieldError{Field: "display_name", Code: "too_long", Message: "at most 100 characters"})
+	displayName, f := normalizeDisplayName(displayName)
+	if f != nil {
+		return core.InvalidFields(*f)
 	}
 	return s.db.Tx(ctx, func(tx *gorm.DB) error {
 		if err := setLiveProfile(store.G(ctx, tx), userID, displayName).Error; err != nil {
 			return err
 		}
-		return audit.Audit(ctx, tx, userID, "user.profile.update", "user", strconv.FormatInt(userID, 10), map[string]any{"display_name": displayName})
+		return auditSelf(ctx, tx, userID, "user.profile.update", map[string]any{"display_name": displayName})
 	})
 }
 

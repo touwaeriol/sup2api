@@ -1,6 +1,6 @@
 // Package segment owns user groups ("segments", CONTRACTS §97): which private
-// groups their members may use and at what rate. Model prices of a segment
-// are billing's.
+// groups their members may use and at what rate. Segments set no model
+// prices: those are a group's (CONTRACTS §97.10).
 package segment
 
 import (

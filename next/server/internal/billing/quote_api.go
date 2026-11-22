@@ -166,6 +166,21 @@ func (s *Service) quote(ctx context.Context, in QuoteRequest) (*PricingQuote, er
 		return nil, core.InvalidFields(core.FieldError{Field: "model", Code: "invalid",
 			Message: core.Text(ctx, "the group does not provide this model", "该分组不提供此模型")})
 	}
+	out, err := s.quoteScope(ctx, gp.group, terms)
+	if err != nil {
+		return nil, err
+	}
+	on := core.PriceQuery{Model: in.Model, GroupID: in.GroupID}
+	row := tableRow(on.Model, snap.bases.base(on.Model), snap.rules.of(on))
+	out.Base, out.ListPrice, out.PriceSource, out.PriceLevels.Group = row.Base, row.ListPrice, row.Source, row.GroupRule
+	out.ListCost, out.Cost, err = s.quoteCosts(ctx, snap.resolve(on), in.Usage, terms.Rate)
+	return out, err
+}
+
+// quoteScope starts the quote on the side of who it is for: the segment of
+// terms as the caller may see it, whether its members may call g and the
+// rate they pay there.
+func (s *Service) quoteScope(ctx context.Context, g pricedGroup, terms segment.Terms) (*PricingQuote, error) {
 	showUsers, err := segment.ShowUsers(ctx, s.Authz)
 	if err != nil {
 		return nil, err
@@ -174,14 +189,8 @@ func (s *Service) quote(ctx context.Context, in QuoteRequest) (*PricingQuote, er
 	if err != nil {
 		return nil, err
 	}
-	on := core.PriceQuery{Model: in.Model, GroupID: in.GroupID}
-	row := tableRow(on.Model, snap.bases.base(on.Model), snap.rules.of(on))
-	g := gp.group
-	out := &PricingQuote{Segment: ref, Accessible: g.active && terms.Open, AccessSource: accessSource(g, terms.Granted),
-		Base: row.Base, ListPrice: row.ListPrice, PriceSource: row.Source, Rate: terms.EffectiveRate(), RateOverride: terms.Override}
-	out.PriceLevels.Group = row.GroupRule
-	out.ListCost, out.Cost, err = s.quoteCosts(ctx, snap.resolve(on), in.Usage, terms.Rate)
-	return out, err
+	return &PricingQuote{Segment: ref, Accessible: g.active && terms.Open, AccessSource: accessSource(g, terms.Granted),
+		Rate: terms.EffectiveRate(), RateOverride: terms.Override}, nil
 }
 
 // accessSource says why a segment may use the group, or why not.

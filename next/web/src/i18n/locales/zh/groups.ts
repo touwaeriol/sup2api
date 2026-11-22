@@ -27,7 +27,6 @@ export default {
   createHint: '还没保存：点“新建”时一起保存',
   conversionDefault: '默认（允许）',
   conversionHint: '本组账号的请求经协议转换会丢失内容时如何处理；账号自己的设置优先。允许：照常服务并记录丢失；安全：工具会丢失时跳过账号；严格：有任何丢失都跳过账号。',
-  multiplierInvalid: '请输入非负数，小于 1000000，最多 4 位小数',
   modelAllowlist: '模型白名单',
   allowlistHint: '留空表示不限。支持通配符，例如 claude-*。',
   allowlistPlaceholder: '输入模型匹配规则后按回车',

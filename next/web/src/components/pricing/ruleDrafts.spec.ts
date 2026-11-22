@@ -35,7 +35,7 @@ describe('a rule that may be saved', () => {
     expect(validRule(null)).toBe(true)
     expect(validRule(times('1.5'))).toBe(true)
     for (const bad of ['', '-1', '1000000']) expect(validRule(times(bad))).toBe(false)
-    expect(ruleIssues(times('x'))).toEqual([{ key: 'pricing.rule.multiplierInvalid' }])
+    expect(ruleIssues(times('x'))).toEqual([{ key: 'pricing.rate.invalid' }])
   })
   it('is a custom price the price editor would save: any number of tiers, or an expression', () => {
     expect(validRule(visual(tieredConfig))).toBe(true)
@@ -76,8 +76,8 @@ describe('a row under its draft', () => {
     expect(draftedRow(row(), new Map([['gpt-4o', times('0.8')]]))).toMatchObject({ source: 'group', list_price: { ...perToken, multiplier: '0.8' } })
     expect(draftedRow(row(), new Map([['gpt-4o', visual(requestTier(0.1))]]))).toMatchObject({ source: 'group', list_price: { mode: 'visual', config: requestTier(0.1) } })
   })
-  it('takes no rule without an original price', () => {
-    expect(draftedRow(row({ base: null, list_price: null }), new Map([['gpt-4o', times('2')]]))).toMatchObject({ group_rule: null, source: 'global', list_price: null })
+  it('keeps the rule without an original price, which prices nothing', () => {
+    expect(draftedRow(row({ base: null, list_price: null }), new Map([['gpt-4o', times('2')]]))).toMatchObject({ group_rule: times('2'), source: 'global', list_price: null })
   })
   it('of a model the server does not list yet is its original price', () => {
     expect(catalogRow('o3', perToken, false)).toEqual({ model: 'o3', offered: false, base: perToken, group_rule: null, list_price: perToken, source: 'global' })

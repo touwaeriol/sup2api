@@ -11,7 +11,7 @@ import type { GroupPricingTab } from './groupEditTabs'
 // What a group costs and who may use it at which rate, for a caller who may
 // read groups and not manage them: the price and user group tabs of the group
 // editor, shown and not edited.
-const props = defineProps<{ open: boolean; group: Group | null; initialTab?: GroupPricingTab }>()
+const props = defineProps<{ open: boolean; group: Group | null }>()
 const emit = defineEmits<{ (e: 'update:open', v: boolean): void }>()
 const { t } = useI18n()
 
@@ -23,7 +23,7 @@ const tabs = computed<TabItem[]>(() => (['pricing', 'segments'] as const).map((k
 watch(
   () => props.open,
   (v) => {
-    if (v) tab.value = props.initialTab ?? 'pricing'
+    if (v) tab.value = 'pricing'
   },
   { immediate: true }
 )

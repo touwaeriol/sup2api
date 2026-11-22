@@ -71,23 +71,21 @@ func (l *loginLimiter) check(ctx context.Context, email, ip string) time.Duratio
 		slog.WarnContext(ctx, "iam: login rate limit check failed, allowing attempt", "err", err)
 		return 0
 	}
-	var wait time.Duration
-	block := func(cnt *redis.StringCmd, ttl *redis.DurationCmd, max int64) {
-		n, err := cnt.Int64()
-		if err != nil || n < max {
-			return
-		}
-		d := ttl.Val()
-		if d <= 0 {
-			d = l.window
-		}
-		if d > wait {
-			wait = d
-		}
+	return max(l.lockedFor(eCnt, eTTL, l.maxEmail), l.lockedFor(iCnt, iTTL, l.maxIP))
+}
+
+// lockedFor is how long a counter at cnt, with ttl left of its window,
+// locks a client out: 0 below limit, the rest of the window (the whole
+// window for a counter without a TTL) at it or above.
+func (l *loginLimiter) lockedFor(cnt *redis.StringCmd, ttl *redis.DurationCmd, limit int64) time.Duration {
+	n, err := cnt.Int64()
+	if err != nil || n < limit {
+		return 0
 	}
-	block(eCnt, eTTL, l.maxEmail)
-	block(iCnt, iTTL, l.maxIP)
-	return wait
+	if d := ttl.Val(); d > 0 {
+		return d
+	}
+	return l.window
 }
 
 // fail records a failed attempt for email+IP and IP.

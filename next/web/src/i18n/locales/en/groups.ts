@@ -27,7 +27,6 @@ export default {
   createHint: 'Not saved yet: everything is saved on Create',
   conversionDefault: 'Default (allow)',
   conversionHint: 'What happens when a converted request of this group\'s accounts would lose content; an account\'s own setting wins. Allow: serve it and record the losses; Safe: skip the account when tools would be lost; Strict: skip it on any loss.',
-  multiplierInvalid: 'Enter a non-negative number below 1000000, with up to 4 decimals',
   modelAllowlist: 'Model allowlist',
   allowlistHint: 'Empty = unlimited. Wildcards such as claude-* are supported.',
   allowlistPlaceholder: 'Type a model pattern and press Enter',

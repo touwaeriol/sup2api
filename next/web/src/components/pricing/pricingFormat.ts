@@ -60,12 +60,13 @@ export function effectiveRate(base: Pick<EffectiveRate, 'group_default' | 'disco
  * server returns one: a custom rule is a price of its own; a multiplier goes
  * beside the global price, which stays as it is. So a rule being edited and
  * a saved one are shown through the same priceCells. A multiplier still
- * being typed leaves the price as it is.
+ * being typed leaves the price as it is. Without a global price no rule
+ * applies: there is no price.
  */
 export function applyRule(base: PriceDef | null, rule: PriceRule | null): PriceDef | null {
-  if (!rule) return base
+  if (!rule || !base) return base
   if (rule.kind === 'custom') return { mode: rule.mode, config: rule.config ?? {}, expression: rule.expression ?? '' }
-  return base && validRate(rule.multiplier) ? { ...base, multiplier: rule.multiplier } : base
+  return validRate(rule.multiplier) ? { ...base, multiplier: rule.multiplier } : base
 }
 
 /** The cells of a price in a table: a per-request price, the tokens' prices (the rest of a tiered price: its last tier), or neither. */

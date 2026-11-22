@@ -23,6 +23,8 @@ const emit = defineEmits<{ (e: 'update:modelValue', v: PriceRule | null): void }
 const { t } = useI18n()
 
 const kind = computed<Kind>(() => props.modelValue?.kind ?? 'none')
+/** Without a global price a rule cannot be saved: it may only be cleared. */
+const locked = computed(() => props.disabled || !props.base)
 const options = computed<SelectOption[]>(() => (['none', 'multiplier', 'custom'] as const).map((value) => ({ value, label: t(`pricing.rule.kind.${value}`) })))
 const issues = computed(() => ruleIssues(props.modelValue).map((x) => t(x.key, x.params ?? {})))
 
@@ -86,7 +88,7 @@ const preview = computed(() => {
       :model-value="kind"
       :options="options"
       size="sm"
-      :disabled="disabled || !base"
+      :disabled="locked"
       :aria-label="t('pricing.rule.mode')"
       data-testid="price-rule-kind"
       @update:model-value="choose($event as Kind)"
@@ -101,7 +103,7 @@ const preview = computed(() => {
         inputmode="decimal"
         class="w-40"
         :error="issues.length > 0"
-        :disabled="disabled"
+        :disabled="locked"
         :aria-label="t('pricing.rule.kind.multiplier')"
         data-testid="price-rule-multiplier"
         @update:model-value="typeMultiplier"
@@ -113,7 +115,7 @@ const preview = computed(() => {
 
     <template v-if="price">
       <SHint size="xs">{{ t('pricing.rule.customHint') }}</SHint>
-      <PriceDefEditor v-model="price" :readonly="disabled" :issues="issues" />
+      <PriceDefEditor v-model="price" :readonly="locked" :issues="issues" />
     </template>
 
     <SHint v-if="issues.length" size="xs" tone="danger" data-testid="price-rule-issue">{{ issues[0] }}</SHint>

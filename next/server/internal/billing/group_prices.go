@@ -293,9 +293,10 @@ func (s *Service) saveGroupPrices(c *gin.Context) {
 		return
 	}
 	// User groups no longer price models: a segment_id of the old console
-	// must fail, not price the whole group.
+	// must fail, not price the whole group. Remove once no 0.1.306 console
+	// can still be open (the release after 0.1.307).
 	if _, set := c.GetQuery("segment_id"); set {
-		httpapi.Fail(c, core.ErrInvalidArgument.WithMessage("segment_id is not accepted: user groups set rates only"))
+		httpapi.Fail(c, core.ErrInvalidArgument.WithMessage(core.Text(c.Request.Context(), "segment_id is not accepted: user groups set rates only", "不接受 segment_id：用户组只能设倍率")))
 		return
 	}
 	var in struct {
@@ -304,26 +305,7 @@ func (s *Service) saveGroupPrices(c *gin.Context) {
 	if !httpapi.BindStrictJSON(c, &in) {
 		return
 	}
-	uid, _ := core.UserID(ctx)
-	err := s.db.Tx(ctx, func(tx *gorm.DB) error {
-		if _, err := loadGroup(ctx, tx, "g.id = ?", groupID); err != nil {
-			return err
-		}
-		prices, err := loadCatalog(ctx, tx)
-		if err != nil {
-			return err
-		}
-		changes, err := checkPatches(ctx, groupID, prices, in.Items, s.factsFor())
-		if err != nil {
-			return err
-		}
-		return applyChanges(ctx, tx, changes, uid)
-	})
-	// The group went away while its rules were stored.
-	if store.IsForeignKeyViolation(err) {
-		err = core.ErrConflict.WithMessage(core.Text(ctx, "the data changed meanwhile, try again", "数据已被其他操作修改，请重试")).WithCause(err)
-	}
-	if err != nil {
+	if err := s.writeGroupPrices(ctx, groupID, in.Items); err != nil {
 		httpapi.Fail(c, err)
 		return
 	}
@@ -335,6 +317,31 @@ func (s *Service) saveGroupPrices(c *gin.Context) {
 		return
 	}
 	httpapi.OK(c, out)
+}
+
+// writeGroupPrices checks the items against the global prices and saves
+// them as the rules of the group, all or none, in one transaction.
+func (s *Service) writeGroupPrices(ctx context.Context, groupID int64, items []rulePatch) error {
+	uid, _ := core.UserID(ctx)
+	err := s.db.Tx(ctx, func(tx *gorm.DB) error {
+		if _, err := loadGroup(ctx, tx, "g.id = ?", groupID); err != nil {
+			return err
+		}
+		prices, err := loadCatalog(ctx, tx)
+		if err != nil {
+			return err
+		}
+		changes, err := checkPatches(ctx, groupID, prices, items, s.factsFor())
+		if err != nil {
+			return err
+		}
+		return applyChanges(ctx, tx, changes, uid)
+	})
+	// The group went away while its rules were stored.
+	if store.IsForeignKeyViolation(err) {
+		return core.ErrConflict.WithMessage(core.Text(ctx, "the data changed meanwhile, try again", "数据已被其他操作修改，请重试")).WithCause(err)
+	}
+	return err
 }
 
 // applyChanges writes the changes in tx (writeRules). They go in the order

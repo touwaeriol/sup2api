@@ -39,7 +39,7 @@ export default {
     label: 'Discount',
     hint: 'Multiplies the group rate of every group; a group with an own rate ignores it. 1 means no discount.',
     example: 'E.g. group rate {group} → paid rate {rate}',
-    invalid: 'Enter a number above 0 and below 1000000, up to 4 decimals; 1 for no discount.'
+    invalid: 'Enter a number above 0, up to 999999.9999 and 4 decimals; 1 for no discount.'
   },
   groups: {
     discount: 'Discount',

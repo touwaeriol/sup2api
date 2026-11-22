@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { fail, nextId, noContent, now, on, paginate, type MockRequest } from './router'
 import { activePlatforms, platformById, platformLabel } from './platforms'
 import { agentUser, caller, filterOwned, hasAction, hasPerm, inScope, ownerScope, stepUp, userEmail, type Identity } from './core'
-import { resolveProxyURL, validateProxyURL } from './resources'
+import { resolveProxyURL, validateProxyURL } from './proxies'
 import { nextPath } from './paths'
 import { codexAccountTypes, codexCredentialErrors } from './codex'
 import { groupServedProtocols, protocolFieldErrors, servedProtocols, typeEndpoints } from './protocols'
@@ -468,7 +468,7 @@ const withGroups = (a: any) => ({
   groups: (a.group_ids || []).map((id: number) => ({ id, name: GROUP_NAMES[id] ?? `group-${id}` }))
 })
 
-/** Names of the groups in resources.ts (which imports this file), for the `groups` of an account. */
+/** Names of the groups in groups.ts (which imports this file), for the `groups` of an account. */
 const GROUP_NAMES: Record<number, string> = { 1: 'default', 2: 'vip', 3: 'haiku-only', 4: 'gemini-trial' }
 
 // The console's three statuses, as the core filters them (GET /accounts ?status=).

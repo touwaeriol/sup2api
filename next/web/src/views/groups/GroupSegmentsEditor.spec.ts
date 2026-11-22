@@ -3,7 +3,7 @@ import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { i18n } from '@/i18n'
 import type { Group } from '@/api/types'
 import type { Segment, SegmentGroupSetting, SegmentRef } from '@/api/pricing'
-import type { SSelect } from '@sub2api/ui'
+import AddSelect from '@/components/pricing/AddSelect.vue'
 import GroupSegmentsEditor from './GroupSegmentsEditor.vue'
 
 const mocks = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn(), toast: vi.fn(), firstPage: vi.fn() }))
@@ -40,9 +40,9 @@ async function render(props: { groupId: number | null; visibility?: Group['visib
   const listed = () => w.findAll('[data-testid="access-rate-row"]').map((r) => Number(r.attributes('data-segment')))
   const rate = (id: number) => row(id).get('[data-testid="access-rate-value"]').text()
   const source = (id: number) => row(id).get('[data-testid="access-rate-source"]').text()
-  const addSelect = () => w.getComponent<typeof SSelect>('[data-testid="group-segments-add"]')
+  const addSelect = () => w.getComponent(AddSelect)
   const add = async (id: number) => {
-    addSelect().vm.$emit('update:modelValue', id)
+    addSelect().vm.$emit('add', id)
     await flushPromises()
   }
   return { w, row, listed, rate, source, addSelect, add }

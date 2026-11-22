@@ -2,9 +2,10 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '@sub2api/host'
-import { SBadge, SEmpty, SHint, SInput, SRowAction, SSelect, SSwitch, STable, type SelectOption, type TableColumn } from '@sub2api/ui'
+import { SBadge, SEmpty, SHint, SInput, SRowAction, SSwitch, STable, type SelectOption, type TableColumn } from '@sub2api/ui'
 import type { CatalogPrice, GroupModelPrices, ModelPriceRow, PriceRule } from '@/api/pricing'
 import ModelBadge from '@/components/platform/ModelBadge.vue'
+import AddSelect from './AddSelect.vue'
 import PriceRuleEditor from './PriceRuleEditor.vue'
 import { withDraft } from './drafts'
 import { offeredModels, type ModelOffer } from './offeredModels'
@@ -111,7 +112,7 @@ const rowAttrs = (row: DraftedRow) => ({ 'data-testid': 'model-price-row', 'data
 function draft(row: DraftedRow, rule: PriceRule | null) {
   drafts.value = setRuleDraft(drafts.value, row, rule)
 }
-function add(model: unknown) {
+function add(model: SelectOption['value']) {
   if (typeof model === 'string') added.value = [...added.value, model]
 }
 function remove(model: string) {
@@ -159,23 +160,15 @@ defineExpose({ check: state.check, save, dirty })
           <SInput v-model="q" class="w-48" size="sm" icon="search" clearable :placeholder="t('pricing.table.search')" :aria-label="t('pricing.table.search')" data-testid="model-price-search" @keydown.enter.prevent />
           <SSwitch v-model="onlyRuled" size="sm" :label="t('pricing.table.onlyRuled')" data-testid="model-price-only-ruled" />
         </template>
-        <!-- The field never holds a value: clearable drops its "no value" row. -->
-        <SSelect
+        <AddSelect
           v-if="editable"
-          :model-value="null"
           :options="addable"
-          searchable
-          clearable
-          icon="plus"
-          size="sm"
-          class="w-44"
-          :placeholder="t('pricing.table.add')"
-          :aria-label="t('pricing.table.add')"
+          :label="t('pricing.table.add')"
           :no-results="t('pricing.table.addNone')"
           :footer="t('pricing.table.addFooter')"
           :disabled="loading"
           data-testid="model-price-add"
-          @update:model-value="add"
+          @add="add"
         />
       </div>
     </div>

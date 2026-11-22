@@ -23,6 +23,23 @@ func (s *Service) registerSecurityRoutes(r *httpapi.Router) {
 	r.Public(http.MethodPost, "/auth/passkey/begin", s.handlePasskeyLoginBegin)
 	r.Public(http.MethodPost, "/auth/passkey/finish", s.handlePasskeyLoginFinish)
 
+	s.registerFactorRoutes(r)
+
+	// Step-up verification (§80.2): any caller, a session or an access key.
+	r.AuthedRead("/me/verify/methods", s.handleVerifyMethods)
+	r.Handle(http.MethodPost, "/me/verify/begin", s.handleVerifyBegin)
+	r.Handle(http.MethodPost, "/me/verify", s.handleVerify)
+
+	s.registerSessionRoutes(r)
+
+	// Removing someone's second factor leaves the account one password away,
+	// like resetting the password: the same permission and a step-up (D16).
+	r.StepUp(core.StepUpUserSecurityReset).Perm(http.MethodDelete, "/users/:id/security", "user:password:reset", s.handleResetSecurity)
+}
+
+// registerFactorRoutes mounts the caller's own two-factor and passkeys;
+// adding or removing a factor takes a step-up.
+func (s *Service) registerFactorRoutes(r *httpapi.Router) {
 	r.Self(http.MethodGet, "/me/two-factor", selfSecurity, s.handleTwoFactor)
 	r.StepUp(core.StepUpSelf2FAEnable).Self(http.MethodPost, "/me/two-factor/setup", selfSecurity, s.handleTwoFactorSetup)
 	r.Self(http.MethodPost, "/me/two-factor/enable", selfSecurity, s.handleTwoFactorEnable)
@@ -34,16 +51,13 @@ func (s *Service) registerSecurityRoutes(r *httpapi.Router) {
 	r.Self(http.MethodPost, "/me/passkeys/finish", selfSecurity, s.handlePasskeyAddFinish)
 	r.Self(http.MethodPatch, "/me/passkeys/:id", selfSecurity, s.handlePasskeyRename)
 	r.StepUp(core.StepUpSelfPasskeyDelete).Self(http.MethodDelete, "/me/passkeys/:id", selfSecurity, s.handlePasskeyDelete)
+}
 
-	// Step-up verification (§80.2): any caller, a session or an access key.
-	r.AuthedRead("/me/verify/methods", s.handleVerifyMethods)
-	r.Handle(http.MethodPost, "/me/verify/begin", s.handleVerifyBegin)
-	r.Handle(http.MethodPost, "/me/verify", s.handleVerify)
-
-	// Only a login session manages login sessions and access keys: a key
-	// could otherwise end its owner's sessions, or renew or widen itself
-	// (§80). Creating or changing a key takes a step-up each time; deleting
-	// one only takes rights away.
+// registerSessionRoutes mounts the caller's login sessions and access keys.
+// Only a login session manages them: a key could otherwise end its owner's
+// sessions, or renew or widen itself (§80). Creating or changing a key
+// takes a step-up each time; deleting one only takes rights away.
+func (s *Service) registerSessionRoutes(r *httpapi.Router) {
 	session := r.SessionOnly()
 	keyWrite := session.StepUp(core.StepUpAccessKeyWrite)
 	session.Handle(http.MethodGet, "/me/sessions", s.handleSessions)
@@ -55,10 +69,6 @@ func (s *Service) registerSecurityRoutes(r *httpapi.Router) {
 	keyWrite.Handle(http.MethodPost, "/me/access-keys", s.handleAccessKeyCreate)
 	keyWrite.Handle(http.MethodPatch, "/me/access-keys/:id", s.handleAccessKeyUpdate)
 	session.Handle(http.MethodDelete, "/me/access-keys/:id", s.handleAccessKeyDelete)
-
-	// Removing someone's second factor leaves the account one password away,
-	// like resetting the password: the same permission and a step-up (D16).
-	r.StepUp(core.StepUpUserSecurityReset).Perm(http.MethodDelete, "/users/:id/security", "user:password:reset", s.handleResetSecurity)
 }
 
 func (s *Service) handleAccessKeys(c *gin.Context) {

@@ -8,7 +8,10 @@ import { caller, hasPerm } from './core'
 import { groupPlatforms } from './accounts'
 import { configPrice, globalPrice, money, priceCost, pricedModels, validate, type PriceDef } from './billing'
 import { compactVisualConfig } from '../src/views/prices/priceExpr'
-import { groupModels, groups, invalid, match, myGroups, userOut, users, type MockGroup, type MockUser } from './resources'
+import type { PricingQuote } from '../src/api/pricing'
+import { invalid, match } from './common'
+import { groupModels, groups, myGroups, type MockGroup } from './groups'
+import { userOut, users, type MockUser } from './users'
 import {
   accessOf,
   addSegment,
@@ -267,6 +270,7 @@ function ruleError(rule: any, base: PriceDef | null): string | null {
 
 /** Why an item of PUT /groups/:id/model-prices cannot be saved; removing a rule always can. A rule takes a model with a global price, whether the group provides it or not. */
 function rulePatchError(item: any): string | null {
+  if ('segment_id' in item) return 'unknown field "segment_id"'
   return item.rule == null ? null : ruleError(item.rule, globalPrice(item.model))
 }
 
@@ -280,7 +284,9 @@ function storedRule(rule: any): PriceRule | null {
 }
 
 route('GET', '/groups/:id/model-prices', 'group:read', onGroup(modelPrices))
+// User groups price no models: an old console's segment_id fails (CONTRACTS §97.10).
 route('PUT', '/groups/:id/model-prices', 'group:manage', onGroup((g, req) => {
+  if (req.query.segment_id !== undefined) return fail(400, 'invalid_argument', 'segment_id is not accepted: user groups set rates only')
   const items = itemsOf(req)
   for (const [i, item] of items.entries()) {
     const err = rulePatchError(item)
@@ -318,7 +324,7 @@ function quoteSegment(b: any): MockSegment | undefined {
 const quotePerms = (b: any) => ['group:read', ...(b.user_id != null ? ['user:read'] : []), ...(b.segment_id != null ? ['segment:read'] : [])]
 
 /** Whether a segment may use a group, as a quote says: nobody may use a disabled group. */
-function quoteAccess(s: MockSegment, g: MockGroup): { accessible: boolean; source: 'disabled' | 'public' | 'grant' | 'none' } {
+function quoteAccess(s: MockSegment, g: MockGroup): { accessible: boolean; source: PricingQuote['access_source'] } {
   return g.status === 'active' ? accessOf(s, g) : { accessible: false, source: 'disabled' }
 }
 
@@ -334,24 +340,14 @@ function usageFailure(usage: any): MockResult | undefined {
   return fields.length ? fail(400, 'invalid_argument', 'invalid', { fields }) : undefined
 }
 
-// POST /pricing/quote, in the order the server checks: the permissions, the subject, the usage, the group, the segment, the model, then the costs.
-route('POST', '/pricing/quote', 'price:read', (req) => {
-  const b = req.body || {}
-  const missing = missingPerm(req, quotePerms(b))
-  if (missing) return denied(missing)
-  if ((b.user_id == null) === (b.segment_id == null)) return invalid('user_id', 'give either user_id or segment_id')
-  const badUsage = usageFailure(b.usage)
-  if (badUsage) return badUsage
-  const g = groups.find((x) => x.id === Number(b.group_id))
-  if (!g) return fail(404, 'not_found', 'group not found')
-  const s = quoteSegment(b)
-  if (!s) return fail(404, 'not_found', b.user_id == null ? 'user group not found' : 'user not found')
-  if (!groupModels(g).includes(b.model)) return invalid('model', 'the group does not provide this model')
+/** The quote of a model for segment s in group g; a price the usage cannot be evaluated with is a 400, as for a request. */
+function quoteOf(req: MockRequest, s: MockSegment, g: MockGroup) {
+  const b = req.body
   const access = quoteAccess(s, g)
   const base = globalPrice(b.model)
   const price = listPriceOf(g.id, b.model, base)
   const rate = rateOf(s, g)
-  // Without a global price nothing is billed; a price the usage cannot be evaluated with is a 400, as for a request.
+  // Without a global price nothing is billed.
   const listCost = price.list_price ? priceCost(price.list_price, b.usage || {}) : 0
   if (listCost === null) return fail(400, 'invalid_argument', 'the price cannot be evaluated with this usage')
   return {
@@ -367,6 +363,22 @@ route('POST', '/pricing/quote', 'price:read', (req) => {
     list_cost: money(listCost),
     cost: money(listCost * Number(rate.value))
   }
+}
+
+// POST /pricing/quote, in the order the server checks: the permissions, the subject, the usage, the group, the segment, the model, then the costs.
+route('POST', '/pricing/quote', 'price:read', (req) => {
+  const b = req.body || {}
+  const missing = missingPerm(req, quotePerms(b))
+  if (missing) return denied(missing)
+  if ((b.user_id == null) === (b.segment_id == null)) return invalid('user_id', 'give either user_id or segment_id')
+  const badUsage = usageFailure(b.usage)
+  if (badUsage) return badUsage
+  const g = groups.find((x) => x.id === Number(b.group_id))
+  if (!g) return fail(404, 'not_found', 'group not found')
+  const s = quoteSegment(b)
+  if (!s) return fail(404, 'not_found', b.user_id == null ? 'user group not found' : 'user not found')
+  if (!groupModels(g).includes(b.model)) return invalid('model', 'the group does not provide this model')
+  return quoteOf(req, s, g)
 })
 
 // ------------------------------------------------------------------ the caller's prices

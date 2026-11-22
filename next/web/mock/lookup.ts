@@ -10,7 +10,10 @@ import { caller, filterOwned, hasPerm, ownerScope, type Identity } from './core'
 import { parsePermission } from '../src/authz/implies'
 import { accounts } from './accounts'
 import { pricedModels } from './billing'
-import { ME_ID, groups, keys, myGroups, proxies, users } from './resources'
+import { ME_ID, keys } from './apiKeys'
+import { groups, myGroups } from './groups'
+import { proxies } from './proxies'
+import { users } from './users'
 
 interface Row {
   id: number | string

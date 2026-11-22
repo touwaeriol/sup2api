@@ -269,35 +269,12 @@ func liveUsers(db *gorm.DB) *gorm.DB {
 // Bootstrap creates the first super admin from config when the database has
 // no users. Without configured credentials it only logs a warning.
 func (s *Service) Bootstrap(ctx context.Context) error {
-	email, password := s.cfg.BootstrapAdminEmail, s.cfg.BootstrapAdminPassword
 	var created *User
 	var version int64
 	err := s.db.Tx(ctx, func(tx *gorm.DB) error {
-		// One bootstrap at a time across the nodes.
-		if err := store.XactLock(ctx, tx, "sub2api:iam:bootstrap"); err != nil {
-			return err
-		}
-		g := store.G(ctx, tx)
-		exists, err := gormpg.Exists(g, liveUsers(g))
-		if err != nil {
-			return err
-		}
-		if exists {
-			return nil
-		}
-		if email == "" || password == "" {
-			slog.WarnContext(ctx, "iam: no users exist and SUB2API_BOOTSTRAP_ADMIN_EMAIL/PASSWORD are not set")
-			return nil
-		}
-		u, v, err := s.createUserTx(ctx, tx, 0, CreateUserInput{
-			Email: email, DisplayName: "Administrator", Password: password,
-			RoleKeys: []string{authz.RoleSuperAdmin},
-		})
-		if err != nil {
-			return fmt.Errorf("bootstrap admin: %w", err)
-		}
-		created, version = u, v
-		return nil
+		var err error
+		created, version, err = s.bootstrapTx(ctx, tx)
+		return err
 	})
 	if err != nil {
 		return err
@@ -307,4 +284,32 @@ func (s *Service) Bootstrap(ctx context.Context) error {
 		slog.InfoContext(ctx, "iam: bootstrap super admin created", "email", created.Email, "user_id", created.ID)
 	}
 	return nil
+}
+
+// bootstrapTx creates the configured super admin in tx unless a user
+// exists or nothing is configured, and returns it with the authz version of
+// its roles; nil when it creates none.
+func (s *Service) bootstrapTx(ctx context.Context, tx *gorm.DB) (*User, int64, error) {
+	// One bootstrap at a time across the nodes.
+	if err := store.XactLock(ctx, tx, "sub2api:iam:bootstrap"); err != nil {
+		return nil, 0, err
+	}
+	g := store.G(ctx, tx)
+	exists, err := gormpg.Exists(g, liveUsers(g))
+	if err != nil || exists {
+		return nil, 0, err
+	}
+	email, password := s.cfg.BootstrapAdminEmail, s.cfg.BootstrapAdminPassword
+	if email == "" || password == "" {
+		slog.WarnContext(ctx, "iam: no users exist and SUB2API_BOOTSTRAP_ADMIN_EMAIL/PASSWORD are not set")
+		return nil, 0, nil
+	}
+	u, v, err := s.createUserTx(ctx, tx, 0, CreateUserInput{
+		Email: email, DisplayName: "Administrator", Password: password,
+		RoleKeys: []string{authz.RoleSuperAdmin},
+	})
+	if err != nil {
+		return nil, 0, fmt.Errorf("bootstrap admin: %w", err)
+	}
+	return u, v, nil
 }

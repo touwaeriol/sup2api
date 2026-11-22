@@ -164,7 +164,7 @@ async function saveForm(): Promise<boolean> {
   errors.value = {}
   if (!form.name.trim()) errors.value.name = t('common.required')
   const rm = String(form.rate_multiplier).trim()
-  if (!validRate(rm)) errors.value.rate_multiplier = t('groups.multiplierInvalid')
+  if (!validRate(rm)) errors.value.rate_multiplier = t('pricing.rate.invalid')
   if (Object.keys(errors.value).length) return false
   // What is sent, not what the fields hold when the answer comes: a change made meanwhile stays unsaved.
   const sent: GroupForm = JSON.parse(JSON.stringify(form))
