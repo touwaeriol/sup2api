@@ -3,7 +3,7 @@
 // its segments, one segment lists its groups; both edit the same settings, so
 // the rules are here once. Pure: an editor only holds the state.
 import type { Group } from '@/api/types'
-import type { Segment, SegmentGroupPatch, SegmentGroupSetting } from '@/api/pricing'
+import type { SegmentGroupPatch, SegmentGroupSetting } from '@/api/pricing'
 import { effectiveRate, sameRate, validRate } from './pricingFormat'
 import { withDraft } from './drafts'
 import { validDiscount } from './segmentForm'
@@ -70,19 +70,6 @@ export function mergeSettingDraft(drafts: SettingDrafts, row: Pick<DraftedSettin
 /** What saving the drafts sends: per changed row, only what changed (PUT /groups/:id/segments, PUT /segments/:id/groups). */
 export function settingPatches(side: SettingSide, drafts: SettingDrafts): SegmentGroupPatch[] {
   return [...drafts].map(([id, draft]) => ({ [`${side}_id`]: id, ...draft }))
-}
-
-/** The setting of segment `s` in a group not created yet: every row of a new group, whose terms come from its form. */
-export function blankSetting(s: Segment): SegmentGroupSetting {
-  return {
-    segment: { id: s.id, kind: s.kind, name: s.name, user_id: s.user_id },
-    group: { id: 0, name: '', description: '', status: 'active', visibility: 'public', rate_multiplier: '1' },
-    accessible: true,
-    granted: false,
-    rate_override: null,
-    rate: effectiveRate({ group_default: '1', discount: s.discount }, null),
-    member_count: s.member_count
-  }
 }
 
 /** The setting of a segment not created yet in group `g`: every row of a new segment, whose discount comes from its form. */

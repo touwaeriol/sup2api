@@ -1,9 +1,9 @@
-// The models a group would provide with the accounts and the model policy
-// being edited, before it is saved: what the server works out of the saved
-// ones (group.Models.Offers, core.GroupInfo.AllowsModel). Kept alike with
-// them, so a new group's price table lists what its saved one will.
+// The models a group provides with its accounts and its model policy: what
+// the server works out (group.Models.Offers, core.GroupInfo.AllowsModel),
+// for the mock server (mock/groups.ts). Kept alike with the server, so the
+// mock lists what a real core would.
 
-/** The accounts of a group as its editor has them, and its model policy. */
+/** The accounts of a group, and its model policy. */
 export interface ModelOffer {
   /** The models the accounts declare. */
   models: string[]

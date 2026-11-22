@@ -80,7 +80,7 @@ describe('a row under its draft', () => {
     expect(draftedRow(row({ base: null, list_price: null }), new Map([['gpt-4o', times('2')]]))).toMatchObject({ group_rule: times('2'), source: 'global', list_price: null })
   })
   it('of a model the server does not list yet is its original price', () => {
-    expect(catalogRow('o3', perToken, false)).toEqual({ model: 'o3', offered: false, base: perToken, group_rule: null, list_price: perToken, source: 'global' })
+    expect(catalogRow('o3', perToken)).toEqual({ model: 'o3', offered: false, base: perToken, group_rule: null, list_price: perToken, source: 'global' })
   })
 })
 

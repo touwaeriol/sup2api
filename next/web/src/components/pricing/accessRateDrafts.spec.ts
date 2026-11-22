@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Group } from '@/api/types'
-import type { Segment, SegmentGroupSetting } from '@/api/pricing'
-import { blankGroupSetting, blankSetting, draftedSetting, mergeSettingDraft, settingPatches, validOverride, type SettingDraft, type SettingDrafts } from './accessRateDrafts'
+import type { SegmentGroupSetting } from '@/api/pricing'
+import { blankGroupSetting, draftedSetting, mergeSettingDraft, settingPatches, validOverride, type SettingDraft, type SettingDrafts } from './accessRateDrafts'
 import { effectiveRate } from './pricingFormat'
 
 function setting(group: number, over: Partial<SegmentGroupSetting> = {}, visibility: 'public' | 'restricted' = 'public'): SegmentGroupSetting {
@@ -96,16 +96,6 @@ describe('the drafts', () => {
     ])
     expect(settingPatches('segment', drafts)[0]).toEqual({ segment_id: 1, rate_override: '0.5' })
     expect(settingPatches('segment', none)).toEqual([])
-  })
-})
-
-describe('a group not created yet', () => {
-  it('starts every segment with nothing set, at its own discount', () => {
-    const personal = { id: 104, kind: 'personal', name: 'a@b.c', user_id: 9, discount: '0.9', member_count: 1 } as Segment
-    const blank = blankSetting(personal)
-    expect(blank).toMatchObject({ segment: { id: 104, kind: 'personal', name: 'a@b.c', user_id: 9 }, granted: false, rate_override: null, member_count: 1 })
-    // The group's side comes from its form.
-    expect(draftedSetting('segment', blank, undefined, { visibility: 'restricted', groupDefault: '0.8' })).toMatchObject({ id: 104, accessible: false, rate: { value: '0.72', source: 'discount' } })
   })
 })
 

@@ -41,10 +41,8 @@ const options = {
       ModelBadge: true,
       GroupServedProtocols: true,
       EnvironmentEditor: true,
-      GroupAccountsEditor: true,
       GroupModelPolicyEditor: true,
-      GroupSegmentsEditor: true,
-      GroupPricingEditor: true,
+      ModelPriceTable: true,
       GroupDeleteModal: true,
       PriceSimulatorModal: true
     }
@@ -109,23 +107,25 @@ describe('groups page', () => {
     expect(w.get('[role="tab"][aria-selected="true"]').text()).toBe('价格')
   })
 
-  it('shows prices and user groups read-only to a caller who may not manage groups', async () => {
+  it('shows the model prices read-only to a caller who may not manage groups', async () => {
     denied.add('group:manage')
     items.value = [group(2, 'vip', { visibility: 'restricted', price_rule_count: 1 })]
     const w = render()
     expect(w.findAll('thead th').map(th => th.text())).not.toContain('操作')
     await rows(w)[0].get('[data-testid="group-pricing-summary"]').trigger('click')
     await flushPromises()
-    expect(w.get('[data-testid="group-pricing-view"]').findAll('[role="tab"]').map(t => t.text())).toEqual(['价格', '用户组'])
-    expect(w.get('[role="tab"][aria-selected="true"]').text()).toBe('价格')
-    expect(w.text()).toContain('vip 的价格与用户组')
+    const shown = () => w.find('[data-testid="group-pricing-view"]').exists()
+    expect(shown()).toBe(true)
+    expect(w.text()).toContain('vip 的价格')
     expect(w.text()).not.toContain('编辑分组')
     await w.get('[data-testid="group-pricing-view-close"]').trigger('click')
+    await flushPromises()
+    expect(shown()).toBe(false)
 
     await openDetail(w, 0)
     await w.get('[data-testid="group-detail-pricing"]').trigger('click')
     await flushPromises()
-    expect(w.get('[role="tab"][aria-selected="true"]').text()).toBe('价格')
+    expect(shown()).toBe(true)
   })
 
   it('lets a caller who may simulate prices but not manage groups simulate one in a group, from its detail', async () => {

@@ -20,7 +20,7 @@ export default {
   public: 'Public',
   restricted: 'Private',
   publicHint: 'Every user can use it.',
-  restrictedHint: 'Only the user groups and exclusive users it is opened to on the "User groups" tab can use it.',
+  restrictedHint: 'Only the user groups and exclusive users it is opened to can use it; open it to them under "Group rates" when editing a user group.',
   rateMultiplier: 'Group rate',
   multiplierHint: '0.8 is 20% off. A user group without a rate of its own pays this (times its discount).',
   saveHint: 'Changes take effect together on Save',
@@ -42,29 +42,16 @@ export default {
     moveHint: 'Moved keys use the new group\'s multiplier and model rules right away; if the group is not open to a key\'s owner, its calls are refused.',
     unbindHint: 'The keys are kept but cannot call until their owners pick another group on the API keys page; meanwhile calls answer "the group of this API key has been deleted".'
   },
-  accounts: {
-    title: 'Accounts',
-    hint: 'Accounts of any type can be mixed in one group; they are scheduled together for every endpoint their types can serve.',
-    onlySelected: 'Selected only',
-    selectVisible: 'Select shown',
-    clearVisible: 'Clear shown',
-    none: 'No accounts',
-    selected: '{n} selected',
-    saveFailed: 'Group saved, but these accounts could not be updated: {names}',
-    notEditable: 'You cannot edit this account (only accounts you own)'
-  },
   whoCanUse: 'Who can use it',
   modelPricing: 'Model prices',
   modelCount: 'Provides {n} model | Provides {n} models',
-  pricingTitle: 'Prices & user groups of {name}',
-  viewPricing: 'View prices & user groups',
+  pricingTitle: 'Prices of {name}',
+  viewPricing: 'View prices',
   deleteWithPricing: 'Its model prices, and who it is open to at which rate, are deleted with it.',
   tabs: {
     basic: 'Basics',
-    accounts: 'Accounts',
     models: 'Model policy',
     pricing: 'Prices',
-    segments: 'User groups',
     advanced: 'Advanced'
   },
   access: {
@@ -75,12 +62,5 @@ export default {
   pricingSummary: {
     base: 'All at original prices',
     models: '{n} model repriced | {n} models repriced'
-  },
-  pricing: {
-    payer: 'Paid at',
-    payerAll: 'Everyone (group rate) {rate}',
-    payerSegments: 'User groups',
-    payerPersonal: 'Exclusive',
-    notAccessible: 'Not open'
   }
 }

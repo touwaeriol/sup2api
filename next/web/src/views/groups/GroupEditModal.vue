@@ -5,62 +5,43 @@ import { api } from '@sub2api/host'
 import { SChoiceCards, SField, SFormModal, SGrid, SHint, SInput, SSelect, SSettingsGroup, STabs, STextarea, toast, type ChoiceOption, type TabItem } from '@sub2api/ui'
 import type { ConversionLossPolicy, EnvironmentValues, Group } from '@/api/types'
 import { useStatusOptions } from '@/composables/crud'
-import { useAuthStore } from '@/stores/auth'
 import { notifyError } from '@/utils/errors'
 import { applyFormError } from '@/utils/formErrors'
 import { policyOptions } from '@/utils/conversion'
-import { ACCOUNT_ACTIONS } from '@/composables/useScope'
 import { markUnsaved, useTabbedSave, type SaveStep } from '@/composables/useTabbedSave'
-import type { DraftedSetting } from '@/components/pricing/accessRateDrafts'
-import type { ModelOffer } from '@/components/pricing/offeredModels'
-import { validRate } from '@/components/pricing/pricingFormat'
+import ModelPriceTable from '@/components/pricing/ModelPriceTable.vue'
+import { typedRate, validRate } from '@/components/pricing/pricingFormat'
 import { confirmDiscard } from '@/composables/confirmDiscard'
 import { latestOnly } from '@/composables/useLatestRequest'
 import EnvironmentEditor from '@/components/environment/EnvironmentEditor.vue'
-import GroupAccountsEditor from './GroupAccountsEditor.vue'
 import GroupModelPolicyEditor from './GroupModelPolicyEditor.vue'
-import GroupPricingEditor from './GroupPricingEditor.vue'
-import GroupSegmentsEditor from './GroupSegmentsEditor.vue'
 import { GROUP_EDIT_TABS, changedTabs, tabOfErrors, type GroupEditTab } from './groupEditTabs'
 
 // Creates a group (`group` null) or edits one, in tabs. The form holds the
-// group's own fields; its accounts, user groups and model prices are
-// sub-editors with drafts of their own, saved in that order once the group
-// itself is. Every tab can be filled before the group exists: the price table
-// of a new group lists the models of the accounts picked, through the model
-// policy being edited. Drafts that cannot be saved stop Save before anything
-// is sent; a step that fails keeps the dialog open on its tab; a tab with
-// unsaved changes is marked, and closing with one asks first. Only the Save
-// button submits: Enter in a rate or a search field of a tab must not save
-// the whole group.
+// group's own fields; its model prices are a sub-editor with drafts of its
+// own, saved once the group itself is. The accounts of a group are set on the
+// accounts, and the user groups that may use it at which rate on the user
+// groups ("Group rates"), so neither is edited here. Prices can be set before
+// the group exists: a new group has no accounts yet, so it provides no models
+// and its price table lists only those added there. Drafts that cannot be
+// saved stop Save before anything is sent; a step that fails keeps the dialog
+// open on its tab; a tab with unsaved changes is marked, and closing with one
+// asks first. Only the Save button submits: Enter in a rate or a search field
+// of a tab must not save the whole group.
 const props = defineProps<{ open: boolean; group: Group | null; initialTab?: GroupEditTab }>()
 const emit = defineEmits<{ (e: 'update:open', v: boolean): void; (e: 'saved'): void }>()
 const { t } = useI18n()
-const auth = useAuthStore()
-// Account membership is stored on accounts, so editing it needs account rights
-// (all-level or own-level, CONTRACTS §21; the editor disables rows the caller cannot edit).
-const canEditAccounts = computed(() => auth.hasAction(ACCOUNT_ACTIONS.read) && auth.hasAction(ACCOUNT_ACTIONS.update))
-// A saved group answers with its own user groups (group:read); one not created yet has to list
-// them all (GET /segments), which takes segment:read. Without it they are set once the group is saved.
-const canSetSegments = computed(() => props.group !== null || auth.has('segment:read'))
-const accountsEditor = ref<InstanceType<typeof GroupAccountsEditor>>()
 const modelPolicyEditor = ref<InstanceType<typeof GroupModelPolicyEditor>>()
-const segmentsEditor = ref<InstanceType<typeof GroupSegmentsEditor>>()
-const pricingEditor = ref<InstanceType<typeof GroupPricingEditor>>()
+const pricingEditor = ref<InstanceType<typeof ModelPriceTable>>()
+/** The models the accounts of a saved group declare, for its model policy; a new group has no accounts. */
 interface ModelSource { models: string[]; unrestricted_accounts: number }
 const modelSource = ref<ModelSource>({ models: [], unrestricted_accounts: 0 })
-const selectedModelSource = ref<ModelSource | null>(null)
 const modelsLoading = ref(false)
 const modelLoadError = ref('')
 const beginModels = latestOnly()
-const currentModelSource = computed(() => canEditAccounts.value && auth.has('account:read') && selectedModelSource.value ? selectedModelSource.value : {
-  models: [...new Set([...modelSource.value.models, ...(selectedModelSource.value?.models || [])])].sort(),
-  unrestricted_accounts: modelSource.value.unrestricted_accounts
-})
 async function loadModels(gid: number | null) {
   const latest = beginModels()
   modelSource.value = { models: [], unrestricted_accounts: 0 }
-  selectedModelSource.value = null
   modelLoadError.value = ''
   modelsLoading.value = !!gid
   if (!gid) return
@@ -106,8 +87,8 @@ const opened = ref(blankForm())
 /** The group a first save created: saving again after a later step failed must not create another. */
 const created = ref<Group | null>(null)
 const current = computed(() => created.value ?? props.group)
-/** The rows of the user groups editor, for the paid prices of the price tab. */
-const segmentRows = ref<DraftedSetting[]>([])
+/** The group rate the form has, once it is one: what the price table's paid prices are at. */
+const paidRate = computed(() => typedRate(form.rate_multiplier) ?? '')
 const tab = ref<GroupEditTab>('basic')
 
 const visibilityOptions = computed<ChoiceOption[]>(() => [
@@ -127,7 +108,6 @@ watch(
     opened.value = JSON.parse(JSON.stringify(form))
     created.value = null
     errors.value = {}
-    segmentRows.value = []
     tab.value = props.initialTab ?? 'basic'
   },
   { immediate: true }
@@ -135,18 +115,8 @@ watch(
 
 // ------------------------------------------------------------------ tabs
 
-const dirtyTabs = computed<string[]>(() => {
-  const editors: Partial<Record<GroupEditTab, boolean>> = { accounts: accountsEditor.value?.dirty, segments: segmentsEditor.value?.dirty, pricing: pricingEditor.value?.dirty }
-  return [...changedTabs(form, opened.value), ...GROUP_EDIT_TABS.filter((key) => editors[key])]
-})
-const tabs = computed<TabItem[]>(() => {
-  const hidden: Partial<Record<GroupEditTab, boolean>> = { accounts: !canEditAccounts.value, segments: !canSetSegments.value }
-  const shown = GROUP_EDIT_TABS.filter((key) => !hidden[key])
-  return markUnsaved(shown.map((key) => ({ key, label: t(`groups.tabs.${key}`) })), (key) => dirtyTabs.value.includes(key))
-})
-
-/** What a group not saved yet would provide, for its price table; a saved group's table lists what the server says. */
-const offer = computed<ModelOffer | null>(() => (props.group ? null : { ...currentModelSource.value, model_allowlist: form.model_allowlist, model_filter_mode: form.model_filter_mode }))
+const dirtyTabs = computed<string[]>(() => [...changedTabs(form, opened.value), ...(pricingEditor.value?.dirty ? ['pricing'] : [])])
+const tabs = computed<TabItem[]>(() => markUnsaved(GROUP_EDIT_TABS.map((key) => ({ key, label: t(`groups.tabs.${key}`) })), (key) => dirtyTabs.value.includes(key)))
 
 // ------------------------------------------------------------------ save
 
@@ -191,15 +161,13 @@ async function saveForm(): Promise<boolean> {
   return true
 }
 
-async function saveAccounts(gid: number): Promise<boolean> {
-  const failed = (await accountsEditor.value?.save(gid)) ?? []
-  if (failed.length) toast(t('groups.accounts.saveFailed', { names: failed.join(', ') }), 'error')
-  return !failed.length
+/** Saves the drafted prices under the id the group has by then. */
+async function savePrices(): Promise<boolean> {
+  const gid = current.value?.id
+  return gid === undefined || ((await pricingEditor.value?.save(gid)) ?? true)
 }
-/** A sub-editor's step: it saves under the id the group has by then. */
-const onGroup = (save: (gid: number) => Promise<boolean>) => async () => (current.value ? save(current.value.id) : true)
 
-/** What Save does, in order: the group first, and its accounts before the prices of the models they provide. */
+/** What Save does, in order: the group first, then its model prices. */
 const steps: SaveStep<GroupEditTab>[] = [
   // Adds the drafted model patterns; nothing there can fail.
   {
@@ -209,14 +177,11 @@ const steps: SaveStep<GroupEditTab>[] = [
       return true
     }
   },
-  // Drafts that cannot be saved stop it before anything is.
-  { tab: 'segments', save: () => segmentsEditor.value?.check() ?? true },
+  // Drafted prices that cannot be saved stop it before anything is.
   { tab: 'pricing', save: () => pricingEditor.value?.check() ?? true },
   // A field error opens the tab of its field; any other failure was shown as a toast.
   { tab: () => tabOfErrors(errors.value) ?? tab.value, save: saveForm },
-  { tab: 'accounts', save: onGroup(saveAccounts) },
-  { tab: 'segments', save: onGroup(async (gid) => (await segmentsEditor.value?.save(gid)) ?? true) },
-  { tab: 'pricing', save: onGroup(async (gid) => (await pricingEditor.value?.save(gid)) ?? true) }
+  { tab: 'pricing', save: savePrices }
 ]
 
 async function submit() {
@@ -246,7 +211,7 @@ const leave = async () => (await confirmDiscard(dirtyTabs.value.length > 0)) && 
     @submit="submit"
   >
     <STabs v-if="open" v-model="tab" :tabs="tabs" :aria-label="t('groups.title')" data-testid="group-edit-tabs">
-      <!-- Every tab stays mounted: the sub-editors keep their drafts while another tab shows. The least height keeps the dialog from collapsing on a short tab. -->
+      <!-- Every tab stays mounted: the price table keeps its drafts while another tab shows. The least height keeps the dialog from collapsing on a short tab. -->
       <div class="min-h-[24rem]">
         <div v-show="tab === 'basic'" class="space-y-4">
           <SGrid>
@@ -264,31 +229,17 @@ const leave = async () => (await confirmDiscard(dirtyTabs.value.length > 0)) && 
             <SChoiceCards v-model="form.visibility" :options="visibilityOptions" data-testid="group-visibility" />
           </SField>
         </div>
-        <GroupSegmentsEditor
-          v-if="canSetSegments"
-          v-show="tab === 'segments'"
-          ref="segmentsEditor"
-          :group-id="group?.id ?? null"
-          :visibility="form.visibility"
-          :default-rate="form.rate_multiplier"
-          editable
-          :disabled="saving"
-          @rows="segmentRows = $event"
-        />
         <div v-show="tab === 'pricing'" class="space-y-4">
           <SField :label="t('groups.rateMultiplier')" required :hint="t('groups.multiplierHint')" :error="errors.rate_multiplier" class="rounded-xl border border-line p-4">
             <SInput v-model="form.rate_multiplier" mono inputmode="decimal" class="sm:w-48" data-testid="group-default-rate">
               <template #prefix><span class="text-xs text-fg-subtle">×</span></template>
             </SInput>
           </SField>
-          <GroupPricingEditor ref="pricingEditor" :group-id="group?.id ?? null" :offer="offer" :segments="segmentRows" :default-rate="form.rate_multiplier" editable />
+          <ModelPriceTable ref="pricingEditor" :group-id="group?.id ?? null" :rate="paidRate" editable />
         </div>
         <SField v-show="tab === 'models'" :label="t('groups.modelRules')" :hint="t('groups.allowlistHint')" :error="errors.model_allowlist || errors.model_filter_mode">
-          <GroupModelPolicyEditor :key="group?.id ?? 'new'" ref="modelPolicyEditor" v-model="form.model_allowlist" v-model:mode="form.model_filter_mode" :options="currentModelSource.models" :loading="modelsLoading" :unrestricted-accounts="currentModelSource.unrestricted_accounts" />
+          <GroupModelPolicyEditor :key="group?.id ?? 'new'" ref="modelPolicyEditor" v-model="form.model_allowlist" v-model:mode="form.model_filter_mode" :options="modelSource.models" :loading="modelsLoading" :unrestricted-accounts="modelSource.unrestricted_accounts" />
           <SHint v-if="modelLoadError" tone="danger" size="xs">{{ modelLoadError }}</SHint>
-        </SField>
-        <SField v-if="canEditAccounts" v-show="tab === 'accounts'" :label="t('groups.accounts.title')" :hint="t('groups.accounts.hint')">
-          <GroupAccountsEditor ref="accountsEditor" :group-id="group?.id ?? null" @models="selectedModelSource = $event" />
         </SField>
         <div v-show="tab === 'advanced'" class="space-y-4">
           <SField :label="t('accounts.conversion.title')" :hint="t('groups.conversionHint')" :error="errors.conversion_loss_policy">

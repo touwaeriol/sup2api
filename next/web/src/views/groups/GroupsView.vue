@@ -96,13 +96,13 @@ function openEdit(g: Group | null, tab: GroupEditTab = 'basic') {
   open.value = true
 }
 
-// ------------------------------------------------------------------ access and pricing
+// ------------------------------------------------------------------ pricing
 
-/** The group whose access and pricing a caller who may not manage groups looks at. */
+/** The group whose model prices a caller who may not manage groups looks at. */
 const viewing = ref<Group | null>(null)
 const viewOpen = ref(false)
 
-/** Opens what a group costs and who may use it: in the editor, or read-only without group:manage. */
+/** Opens the model prices of a group: in the editor, or read-only without group:manage. */
 function openPricing(g: Group) {
   if (canManage.value) return openEdit(g, 'pricing')
   viewing.value = g

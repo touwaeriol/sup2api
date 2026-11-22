@@ -8,7 +8,6 @@ import ModelBadge from '@/components/platform/ModelBadge.vue'
 import AddSelect from './AddSelect.vue'
 import PriceRuleEditor from './PriceRuleEditor.vue'
 import { withDraft } from './drafts'
-import { offeredModels, type ModelOffer } from './offeredModels'
 import { priceCells, rateText, timesRate } from './pricingFormat'
 import { catalogPrices, catalogRow, draftedRow, rulePatches, setRuleDraft, validRule, type DraftedRow } from './ruleDrafts'
 import { priceLabel, ruleText } from './ruleText'
@@ -16,15 +15,14 @@ import { useDrafts } from './useDrafts'
 
 // The model prices of a group: each model's original price, the group's own
 // price (the original × N, or a price of its own) and what is paid at `rate`.
-// The rows are the models the group provides and those it prices; a group
-// not saved yet (groupId null) lists what `offer` would provide, from the
-// catalog of original prices. Any model with an original price can be added
-// and priced before an account provides it. "Change" opens a row's editor
-// under it, one row at a time. Edits stay in drafts (useDrafts) until the
-// parent calls save(gid), as it does with its other sub-editors once the
-// group is saved. The `rate` slot heads the table: the choice of whose rate
-// the paid prices are at.
-const props = defineProps<{ groupId: number | null; offer?: ModelOffer | null; rate: string; editable?: boolean }>()
+// The rows are the models the group provides and those it prices, as the
+// server lists them. A group not saved yet (groupId null) has no accounts, so
+// it provides nothing yet: its table starts empty. Any model with an original
+// price can be added and priced before an account provides it. "Change" opens
+// a row's editor under it, one row at a time. Edits stay in drafts (useDrafts)
+// until the parent calls save(gid), as it does with its other sub-editors once
+// the group is saved.
+const props = defineProps<{ groupId: number | null; rate: string; editable?: boolean }>()
 const { t } = useI18n()
 
 /** Search and the filter appear from this many models on. */
@@ -32,7 +30,7 @@ const TOOLS_FROM = 8
 
 interface Saved {
   rows: ModelPriceRow[]
-  /** The original prices, to add a model with and to price the models of a group not saved yet. */
+  /** The original prices, to add a model with. */
   catalog: CatalogPrice[]
 }
 
@@ -40,7 +38,7 @@ async function fetchSaved(): Promise<Saved> {
   const { groupId } = props
   const [prices, catalog] = await Promise.all([
     groupId === null ? null : api.get<GroupModelPrices>(`/groups/${groupId}/model-prices`),
-    props.editable || groupId === null ? api.get<CatalogPrice[]>('/pricing/catalog') : []
+    props.editable ? api.get<CatalogPrice[]>('/pricing/catalog') : []
   ])
   return { rows: prices?.models ?? [], catalog }
 }
@@ -62,12 +60,9 @@ function load() {
 watch(() => props.groupId, load, { immediate: true })
 
 const prices = computed(() => catalogPrices(saved.value.catalog))
-const offered = computed(() => (props.offer ? offeredModels(props.offer, saved.value.catalog.map((c) => c.model)) : []))
 const listed = computed<ModelPriceRow[]>(() => {
   const rows = new Map(saved.value.rows.map((r) => [r.model, r]))
-  const more = (models: string[], provided: boolean) => models.filter((m) => !rows.has(m)).forEach((m) => rows.set(m, catalogRow(m, prices.value.get(m) ?? null, provided)))
-  more(offered.value, true)
-  more(added.value, false)
+  added.value.filter((m) => !rows.has(m)).forEach((m) => rows.set(m, catalogRow(m, prices.value.get(m) ?? null)))
   return [...rows.values()]
 })
 const savedModels = computed(() => new Set(saved.value.rows.map((r) => r.model)))
@@ -172,7 +167,6 @@ defineExpose({ check: state.check, save, dirty })
         />
       </div>
     </div>
-    <div v-if="rows.length" class="flex justify-end"><slot name="rate" /></div>
 
     <SEmpty v-if="!loading && !error && !rows.length" size="sm" icon="price" :text="t(groupId === null ? 'pricing.table.emptyNew' : 'pricing.table.emptyModels')" data-testid="model-price-empty" />
     <template v-else>
@@ -228,7 +222,7 @@ defineExpose({ check: state.check, save, dirty })
           </div>
         </template>
       </STable>
-      <p v-if="groupId === null && !offered.length" class="rounded-xl border border-dashed border-line p-4 text-center text-xs text-fg-muted" data-testid="model-price-no-accounts">{{ t('pricing.table.noAccounts') }}</p>
+      <p v-if="groupId === null" class="rounded-xl border border-dashed border-line p-4 text-center text-xs text-fg-muted" data-testid="model-price-no-accounts">{{ t('pricing.table.noAccounts') }}</p>
       <div class="flex flex-wrap items-center justify-between gap-2">
         <SHint size="xs">{{ t('pricing.table.unit') }}</SHint>
         <SBadge v-if="dirty" tone="warning" data-testid="model-price-dirty">{{ t('pricing.table.unsavedCount', drafts.size) }}</SBadge>

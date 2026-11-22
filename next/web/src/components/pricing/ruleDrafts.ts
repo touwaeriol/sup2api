@@ -46,9 +46,9 @@ export function sameRule(a: PriceRule | null, b: PriceRule | null): boolean {
   return b.kind === 'custom' && a.mode === b.mode && billedBy(a) === billedBy(b)
 }
 
-/** A row for a model the server does not list yet: its global price from the catalog, no rule. */
-export function catalogRow(model: string, base: PriceDef | null, offered: boolean): ModelPriceRow {
-  return { model, offered, base, group_rule: null, list_price: base, source: 'global' }
+/** A row for a model added before the server lists it: not provided, its global price from the catalog, no rule. */
+export function catalogRow(model: string, base: PriceDef | null): ModelPriceRow {
+  return { model, offered: false, base, group_rule: null, list_price: base, source: 'global' }
 }
 
 /** The rows of the catalog by model. */

@@ -58,8 +58,8 @@ export default {
     search: 'Search models',
     onlyRuled: 'Repriced only',
     unit: 'In $ per 1M tokens (input / output); per request for models billed that way.',
-    emptyNew: 'Once accounts are added on Accounts, the models they provide are listed here. You can also add a model and price it now.',
-    noAccounts: 'Once accounts are added on Accounts, the models they provide are listed here.',
+    emptyNew: 'A new group has no accounts yet. Once accounts are put in this group (when editing an account), the models they provide are listed here. You can also add a model and price it now.',
+    noAccounts: 'Once accounts are put in this group (when editing an account), the models they provide are listed here.',
     emptyModels: 'The group provides no models yet: its models are those of its accounts, through the model list. You can add a model and price it now.',
     emptyFiltered: 'No models match',
     invalid: 'The price of {model} is incomplete. Correct it first.'

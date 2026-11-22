@@ -27,7 +27,4 @@ export function useSegmentsLookup(force = false) {
   return { segments, ready: request(force).then(noop, noop) }
 }
 
-/** The named segments read afresh (refreshing the shared cache), for a page that must say when they cannot be read: a failed request rejects. */
-export const fetchNamedSegments = (): Promise<Segment[]> => request(true)
-
 function noop() {}

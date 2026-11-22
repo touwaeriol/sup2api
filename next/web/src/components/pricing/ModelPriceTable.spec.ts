@@ -4,7 +4,6 @@ import { i18n } from '@/i18n'
 import type { CatalogPrice, GroupModelPrices, ModelPriceRow, PriceDef } from '@/api/pricing'
 import AddSelect from './AddSelect.vue'
 import ModelPriceTable from './ModelPriceTable.vue'
-import type { ModelOffer } from './offeredModels'
 import { singleTier } from '@/views/prices/priceExpr'
 
 const mocks = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn(), toast: vi.fn() }))
@@ -36,7 +35,6 @@ const groupView = () =>
 
 interface Props {
   groupId: number | null
-  offer?: ModelOffer | null
   rate?: string
   editable?: boolean
 }
@@ -214,28 +212,15 @@ describe('model price table', () => {
 })
 
 describe('the model prices of a group not saved yet', () => {
-  const offer = (over: Partial<ModelOffer> = {}): ModelOffer => ({ models: [], unrestricted_accounts: 0, model_allowlist: [], model_filter_mode: 'blacklist', ...over })
-
-  it('lists what the accounts picked would provide, at the original prices of the catalog', async () => {
-    const { w, cell } = await render({ groupId: null, offer: offer({ models: ['o3', 'unpriced'] }), editable: true })
+  it('starts empty, as a group without accounts provides nothing yet', async () => {
+    const { w } = await render({ groupId: null, editable: true })
     expect(mocks.get.mock.calls.map((c) => c[0])).toEqual(['/pricing/catalog'])
-    expect(w.findAll('[data-testid="model-price-row"]').map((r) => r.attributes('data-model'))).toEqual(['o3', 'unpriced'])
-    expect(cell('o3', 'base')).toBe('$2 / $8')
-    expect(cell('unpriced', 'base')).toBe('No price')
-    expect(w.find('[data-testid="model-price-not-offered"]').exists()).toBe(false)
-    expect(w.find('[data-testid="model-price-no-accounts"]').exists()).toBe(false)
-  })
-
-  it('follows the accounts and the model policy being edited', async () => {
-    const { w } = await render({ groupId: null, offer: offer(), editable: true })
-    const listed = () => w.findAll('[data-testid="model-price-row"]').map((r) => r.attributes('data-model'))
-    expect(w.get('[data-testid="model-price-empty"]').text()).toContain('Once accounts are added on Accounts')
-    await w.setProps({ offer: offer({ unrestricted_accounts: 1, model_allowlist: ['gpt-*'] }) })
-    expect(listed()).toEqual(['claude-haiku-4-5', 'o3'])
+    expect(w.find('[data-testid="model-price-row"]').exists()).toBe(false)
+    expect(w.get('[data-testid="model-price-empty"]').text()).toContain('Once accounts are put in this group')
   })
 
   it('prices a model before any account, and saves everything under the id the group gets', async () => {
-    const { w, row, editor, add } = await render({ groupId: null, offer: offer(), editable: true })
+    const { w, row, editor, add } = await render({ groupId: null, editable: true })
     await add('gpt-5')
     expect(row('gpt-5').find('[data-testid="model-price-not-offered"]').exists()).toBe(true)
     expect(w.find('[data-testid="model-price-no-accounts"]').exists()).toBe(true)

@@ -6063,7 +6063,7 @@ PATCH `/users/:id` 只有改密码、邮箱时要 proof；PUT `/me/password` 先
 | system 系统（标签“系统 / System”） | 集群节点、定时任务、核心升级、审计日志、系统设置 `/settings` | |
 
 - 模型价格（`/prices`，`price:read`）没有菜单项，由控制台列在系统设置视图里（90.2）。分组（`/groups`，`group:read`）§132 起是 `gateway` 区的菜单项，不再在系统设置视图里。
-- 用户组（§97 起）：id `segments`，标签“用户组 / User groups”，图标 `publisher`，地址 `/segments`，持有 `segment:read` 才返回；排在“用户”之后、“角色与权限”之前，和它们一起进“用户”目录（90.3）。分组一侧的授权、专属倍率和分组内定价没有单独的菜单项，在分组页（系统设置视图，90.2）里。
+- 用户组（§97 起）：id `segments`，标签“用户组 / User groups”，图标 `publisher`，地址 `/segments`，持有 `segment:read` 才返回；排在“用户”之后、“角色与权限”之前，和它们一起进“用户”目录（90.3）。分组内定价没有单独的菜单项，在分组页的编辑窗口（“价格”标签页）里；各用户组在分组上的开通和专属倍率只在用户组编辑窗口的“分组倍率”标签页里设，分组编辑窗口没有“用户组”标签页（92.5）。
 - 余额流水（`/ledger`，`balance:all:read`）在核心 `finance` 区有菜单项“余额流水”（2026-11-13 权限加固 T80），也可从用户列表的行操作打开；页面和接口不变。
 - 平台页取消，没有菜单项（地址见 90.4）；接口 `GET /platforms`、`GET /me/platforms` 不变，控制台的平台列表一律取 `GET /me/platforms`。
 - 模型目录：anthropic 0.3.1 去掉了菜单 `anthropic-models`、页面 `models` 和宿主权限 `ui.menu`；插件接口 `GET /api/v1/p/anthropic/models` 和权限 `model_catalog:read` 随 0.4.0 一并删除（§129）。
@@ -6263,6 +6263,7 @@ codex 插件要给 `codex_device` 账号加一个详情标签页、一个行操�
 ### 92.5 分组页
 
 - 列表、编辑窗口、详情都不再显示“可服务的平台”：核心对四种文本协议互转（§88），一个分组能接哪些协议不取决于它的账号属于哪个平台。`Group.platforms` 字段照常返回，控制台只用它给分组徽章着色和算接入地址。“有账号但不支持任何已启用平台”的警告随之取消。§110 起：一个分组能接哪些协议取决于成员账号开放的协议（跨平台转换要在账号上按模型开启），分组详情的“端点”一栏按 `GET /groups/:id` 的 `served_protocols` 显示（§110.9）；列表和编辑窗口仍不显示。
+- 编辑窗口（2026-11-22 起，用户要求）只有“基本信息”“模型名单”“价格”“高级”四个标签页。“账号”标签页删除：账号属于哪些分组在账号编辑里设（`group_ids`）。“用户组”标签页删除：各用户组在分组上的开通和专属倍率在用户组编辑的“分组倍率”里设（97.7）。“价格”页的实付价按表单里的分组倍率算，不再能切换成某个用户组的倍率。新建分组还没有账号，不提供任何模型：价格表起初是空的，可以先“添加模型”定价，与保存后 `GET /groups/:id/model-prices` 的结果一致（没有账号的分组只列有规则的模型）；“模型名单”页也没有可选的账号模型。没有 `group:manage` 时从列表的模型价格打开的只读窗口只显示价格表，没有标签页。
 - 没有账号的分组在“账号数”前显示警告图标（`ProblemIcon`，`data-testid="group-no-accounts"`），列表、手机卡片和详情都有。
 - 接入地址（`views/platforms/PlatformEndpointsPreview.vue`：分组详情、密钥页的手动配置说明、密钥编辑窗口里的分组说明）一律包含经协议转换可达的端点（`views/platforms/convertedEndpoints.ts`）：分组自己的平台里只要有一个文本协议端点（`anthropic.messages`、`openai.chat`、`openai.responses`、`gemini.generate`、`gemini.stream_generate`），就额外列出其它平台上这些协议以及两个 count_tokens 的端点，标“经协议转换”；embeddings、视频等不可转换的端点只列在自己平台下。这是按平台级端点做的近似，不看各账号类型声明的端点子集；这张协议清单与 `server/internal/convert` 的内置转换对一致，新增转换对时两处一起改。密钥编辑窗口里的分组说明（`KeyGroupDetails.vue`）是个小框：每个平台最多列 3 个端点，转换端点收在“经协议转换还可调用：<平台名>”的展开项里（`fold`），默认收起；另两处直接列出。
 - **§110 起（取代上一条的转换部分）**：`convertedEndpoints.ts` 已删除，控制台不再推算“经协议转换可达”的端点。分组详情改用 `served_protocols`（`views/groups/GroupServedProtocols.vue`：按平台列出成员账号实际开放的端点，每个端点带提供它的账号数；没有账号开放任何协议时给警告）；密钥页的手动配置说明和密钥编辑窗口里的分组说明用 `PlatformEndpointsPreview`，2026-11-18 起按 `GET /me/groups` 每行的 `served_protocols` 列端点，与分组详情同源（§110.10 第 5 条）。
@@ -6811,7 +6812,7 @@ kind: users | groups | api-keys | accounts | models | proxies
 - 分组一侧的授权、专属倍率和模型定价（`/groups/:id/segments`、`/groups/:id/model-prices`），以及定价页用的全局价目录（GET `/pricing/catalog`，`group:read`），沿用 `group:read` / `group:manage`；价格试算接口和控制台的试算入口要求相同：`price:read` 和 `group:read`，按用户试算还要 `user:read`，按用户组试算还要 `segment:read`（97.6）；成员列表要 `segment:read` 和 `user:read`；新建用户时指定用户组要 `segment:manage`。
 - 菜单（`authz/menus.go`，§90.1）：`users` 区加一项，id `segments`，标签“用户组 / User groups”，图标 `publisher`，地址 `/segments`，持有 `segment:read` 才返回；排在“用户”之后、“角色与权限”之前。
 - 控制台新增页面根 `/segments`，`manifest.ConsoleSegments` 加 `segments`：插件的 GET / HEAD 网关端点不能以它开头（§55）。
-- 新建分组时，分组编辑窗口的“用户组”标签页要读 `GET /segments`，没有 `segment:read` 的角色不显示这个标签页；编辑已有分组时它读 `GET /groups/:id/segments`（`group:read`），照常显示。反过来，新建用户组时用户组编辑窗口的“分组倍率”标签页要读 `GET /groups`，没有 `group:read` 的角色不显示这个标签页；编辑已有用户组时它读 `GET /segments/:id/groups`（`segment:read`），照常显示。
+- 新建用户组时用户组编辑窗口的“分组倍率”标签页要读 `GET /groups`，没有 `group:read` 的角色不显示这个标签页；编辑已有用户组时它读 `GET /segments/:id/groups`（`segment:read`），照常显示。分组编辑窗口原来也有一个“用户组”标签页（读写 `GET/PUT /groups/:id/segments`，新建分组时读 `GET /segments`），2026-11-22 删除（92.5）：开通和专属倍率只在“分组倍率”里设。`/groups/:id/segments` 接口保留，控制台不再调用。
 
 ### 97.8 兼容、升级顺序与回滚
 
