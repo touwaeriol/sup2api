@@ -1,7 +1,6 @@
 package iam
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"net"
@@ -52,33 +51,9 @@ var errPasskeyFailed = core.ErrUnauthenticated.WithMessage("passkey verification
 // compares with this one, so a request with a forged Origin header gets no
 // further than one with a true one.
 func (s *Service) webAuthnFor(r *http.Request, rpID string) (*webauthn.WebAuthn, error) {
-	origin := r.Header.Get("Origin")
-	u, err := url.Parse(origin)
-	if origin == "" || err != nil || u.Hostname() == "" {
-		return nil, errPasskeyUnavailable
-	}
-	host := u.Hostname()
-	if rpID == "" {
-		rpID = s.cfg.WebAuthnRPID
-	}
-	if s.cfg.WebAuthnRPID == "" {
-		requestHost := r.Host
-		if h, _, err := net.SplitHostPort(r.Host); err == nil {
-			requestHost = h
-		}
-		if !strings.EqualFold(host, requestHost) {
-			return nil, errPasskeyUnavailable
-		}
-	}
-	if rpID == "" {
-		rpID = host
-	}
-	if !strings.EqualFold(host, rpID) && !strings.HasSuffix(strings.ToLower(host), "."+strings.ToLower(rpID)) {
-		return nil, errPasskeyUnavailable
-	}
-	// WebAuthn has no IP-address relying parties.
-	if net.ParseIP(rpID) != nil {
-		return nil, errPasskeyUnavailable
+	origin, rpID, err := s.relyingParty(r, rpID)
+	if err != nil {
+		return nil, err
 	}
 	return webauthn.New(&webauthn.Config{
 		RPID:          rpID,
@@ -90,6 +65,43 @@ func (s *Service) webAuthnFor(r *http.Request, rpID string) (*webauthn.WebAuthn,
 			UserVerification:   protocol.VerificationRequired,
 		},
 	})
+}
+
+// relyingParty checks the Origin of r against rpID (the setting when "",
+// then the Origin's host) as webAuthnFor describes, and returns the origin
+// and the relying party's id.
+func (s *Service) relyingParty(r *http.Request, rpID string) (origin, id string, err error) {
+	origin = r.Header.Get("Origin")
+	u, err := url.Parse(origin)
+	if origin == "" || err != nil || u.Hostname() == "" {
+		return "", "", errPasskeyUnavailable
+	}
+	host := u.Hostname()
+	if rpID == "" {
+		rpID = s.cfg.WebAuthnRPID
+	}
+	if s.cfg.WebAuthnRPID == "" && !strings.EqualFold(host, hostname(r.Host)) {
+		return "", "", errPasskeyUnavailable
+	}
+	if rpID == "" {
+		rpID = host
+	}
+	if !strings.EqualFold(host, rpID) && !strings.HasSuffix(strings.ToLower(host), "."+strings.ToLower(rpID)) {
+		return "", "", errPasskeyUnavailable
+	}
+	// WebAuthn has no IP-address relying parties.
+	if net.ParseIP(rpID) != nil {
+		return "", "", errPasskeyUnavailable
+	}
+	return origin, rpID, nil
+}
+
+// hostname is hostport without its port, when it has one.
+func hostname(hostport string) string {
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		return h
+	}
+	return hostport
 }
 
 // webAuthnUser adapts a user to the library.
@@ -211,33 +223,50 @@ func (s *Service) FinishPasskeyRegistration(ctx context.Context, r *http.Request
 	if err != nil {
 		return nil, err
 	}
+	rpID, c, err := s.createPasskeyCredential(ctx, r, userID, flowToken, credential)
+	if err != nil {
+		return nil, err
+	}
+	return s.storePasskey(ctx, userID, name, rpID, c)
+}
+
+// createPasskeyCredential takes the flow of a BeginPasskeyRegistration
+// ceremony and verifies the browser's answer to it, returning the relying
+// party's id and the new credential.
+func (s *Service) createPasskeyCredential(ctx context.Context, r *http.Request, userID int64, flowToken string, credential json.RawMessage) (string, *webauthn.Credential, error) {
 	var session webauthn.SessionData
 	if _, err := s.takeFlow(ctx, flowToken, flowPasskeyRegister, userID, &session); err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	wa, err := s.webAuthnFor(r, session.RelyingPartyID)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	parsed, err := protocol.ParseCredentialCreationResponseBytes(credential)
 	if err != nil {
-		return nil, core.ErrInvalidArgument.WithMessage("invalid passkey response").WithCause(err)
+		return "", nil, core.ErrInvalidArgument.WithMessage("invalid passkey response").WithCause(err)
 	}
 	u, _, err := s.loadWebAuthnUser(ctx, userID)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	c, err := wa.CreateCredential(u, session, parsed)
 	if err != nil {
-		return nil, core.ErrInvalidArgument.WithMessage("passkey verification failed").WithCause(err)
+		return "", nil, core.ErrInvalidArgument.WithMessage("passkey verification failed").WithCause(err)
 	}
+	return session.RelyingPartyID, c, nil
+}
+
+// storePasskey stores the credential c of userID as a passkey named name
+// and audits it; a credential stored before is a conflict.
+func (s *Service) storePasskey(ctx context.Context, userID int64, name, rpID string, c *webauthn.Credential) (*Passkey, error) {
 	raw, err := json.Marshal(c)
 	if err != nil {
 		return nil, err
 	}
-	p := &Passkey{Name: name, RPID: session.RelyingPartyID}
+	p := &Passkey{Name: name, RPID: rpID}
 	err = s.db.Tx(ctx, func(tx *gorm.DB) error {
-		err := insertPasskey(store.G(ctx, tx), userID, name, session.RelyingPartyID, c.ID, raw).Row().Scan(&p.ID, &p.CreatedAt)
+		err := insertPasskey(store.G(ctx, tx), userID, name, rpID, c.ID, raw).Row().Scan(&p.ID, &p.CreatedAt)
 		if store.IsNoRows(err) {
 			return core.ErrConflict.WithMessage("this passkey is already registered")
 		}
@@ -260,6 +289,37 @@ func insertPasskey(db *gorm.DB, userID int64, name, rpID string, credentialID, c
 	return gormpg.InsertSelectReturning(db, model.UserPasskey{}.TableName(), []string{"user_id", "name", "rp_id", "credential_id", "credential"}, row,
 		clause.OnConflict{Columns: []clause.Column{{Name: "credential_id"}}, DoNothing: true},
 		clause.Returning{Columns: []clause.Column{{Name: "id"}, {Name: "created_at"}}})
+}
+
+// RenamePasskey changes the name of one of the user's passkeys.
+func (s *Service) RenamePasskey(ctx context.Context, userID, id int64, name string) (*Passkey, error) {
+	name, err := normalizePasskeyName(name)
+	if err != nil {
+		return nil, err
+	}
+	p := &Passkey{ID: id}
+	err = s.db.Tx(ctx, func(tx *gorm.DB) error {
+		var row model.UserPasskey
+		res := renamePasskey(store.G(ctx, tx), id, userID, name, &row)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return core.ErrNotFound
+		}
+		p.Name, p.RPID, p.CreatedAt, p.LastUsedAt = row.Name, row.RpID, row.CreatedAt, row.LastUsedAt
+		return audit.Audit(ctx, tx, userID, "user.passkey.rename", "user", strconv.FormatInt(userID, 10), map[string]any{"passkey_id": id, "name": name})
+	})
+	if err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
+// renamePasskey renames the passkey id of userID and reads it into dst.
+func renamePasskey(db *gorm.DB, id, userID int64, name string, dst *model.UserPasskey) *gorm.DB {
+	return db.Model(dst).Clauses(clause.Returning{Columns: []clause.Column{{Name: "name"}, {Name: "rp_id"}, {Name: "created_at"}, {Name: "last_used_at"}}}).
+		Where("id = ? AND user_id = ?", id, userID).Update("name", name)
 }
 
 // DeletePasskey removes one of the user's passkeys.
@@ -287,97 +347,6 @@ func passkeyByID(db *gorm.DB, id, userID int64) *gorm.DB {
 // deletePasskey removes the passkey id of userID.
 func deletePasskey(db *gorm.DB, id, userID int64) *gorm.DB {
 	return passkeyByID(db, id, userID).Delete(&model.UserPasskey{})
-}
-
-// BeginPasskeyLogin starts a discoverable login: the browser offers the
-// passkeys it has for this site, so no email is asked for or revealed.
-func (s *Service) BeginPasskeyLogin(ctx context.Context, r *http.Request, ip string) (*PasskeyCeremony, error) {
-	if wait := s.limiter.check(ctx, "", ip); wait > 0 {
-		return nil, rateLimitedError(ctx, wait)
-	}
-	if wait := s.limiter.allowPasskeyBegin(ctx, ip); wait > 0 {
-		return nil, rateLimitedError(ctx, wait)
-	}
-	wa, err := s.webAuthnFor(r, "")
-	if err != nil {
-		return nil, err
-	}
-	options, session, err := wa.BeginDiscoverableLogin(webauthn.WithUserVerification(protocol.VerificationRequired))
-	if err != nil {
-		return nil, err
-	}
-	token, err := s.createFlow(ctx, flowPasskeyLogin, 0, session)
-	if err != nil {
-		return nil, err
-	}
-	return &PasskeyCeremony{FlowToken: token, ExpiresIn: flowTTLSeconds, Options: options}, nil
-}
-
-// FinishPasskeyLogin verifies the assertion and issues tokens. A passkey checks
-// the user's presence and verification itself, so two-factor is not asked for
-// again. Every failure looks the same and counts towards the login rate limit.
-func (s *Service) FinishPasskeyLogin(ctx context.Context, r *http.Request, flowToken string, credential json.RawMessage, ip string) (*LoginResult, error) {
-	if wait := s.limiter.check(ctx, "", ip); wait > 0 {
-		return nil, rateLimitedError(ctx, wait)
-	}
-	var session webauthn.SessionData
-	if _, err := s.takeFlow(ctx, flowToken, flowPasskeyLogin, 0, &session); err != nil {
-		return nil, err
-	}
-	fail := func() (*LoginResult, error) {
-		s.limiter.fail(ctx, "", ip)
-		return nil, errPasskeyFailed
-	}
-	wa, err := s.webAuthnFor(r, session.RelyingPartyID)
-	if err != nil {
-		return nil, err
-	}
-	parsed, err := protocol.ParseCredentialRequestResponseBytes(credential)
-	if err != nil {
-		return fail()
-	}
-	var user *webAuthnUser
-	var passkeyID int64
-	found, verified, err := wa.ValidatePasskeyLogin(func(rawID, handle []byte) (webauthn.User, error) {
-		var owner int64
-		var rpID string
-		err := passkeyByCredential(store.G(ctx, s.db.Gorm), rawID).Row().Scan(&passkeyID, &owner, &rpID)
-		if err != nil {
-			return nil, err
-		}
-		if rpID != session.RelyingPartyID || !bytes.Equal(handle, userHandle(owner)) {
-			return nil, errPasskeyFailed
-		}
-		u, status, err := s.loadWebAuthnUser(ctx, owner)
-		if err != nil {
-			return nil, err
-		}
-		if status != StatusActive {
-			return nil, errPasskeyFailed
-		}
-		user = u
-		return u, nil
-	}, session, parsed)
-	if err != nil || found == nil || user == nil {
-		return fail()
-	}
-	raw, err := json.Marshal(verified)
-	if err != nil {
-		return nil, err
-	}
-	return s.signIn(withLoginMethod(ctx, loginMethodPasskey), user.id, login{gone: errPasskeyFailed, disabled: errPasskeyFailed,
-		check: func(g *gorm.DB, _ string) error {
-			res := usePasskey(passkeyByID(g, passkeyID, user.id), raw)
-			if res.Error == nil && res.RowsAffected == 0 {
-				return errPasskeyFailed
-			}
-			return res.Error
-		}})
-}
-
-// passkeyByCredential reads the passkey of a credential the browser names.
-func passkeyByCredential(db *gorm.DB, credentialID []byte) *gorm.DB {
-	return db.Model(&model.UserPasskey{}).Select("id, user_id, rp_id").Where("credential_id = ?", credentialID)
 }
 
 // userPasskeyByCredential is the passkey of userID with credentialID.

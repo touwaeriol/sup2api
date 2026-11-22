@@ -4,7 +4,6 @@ import (
 	"context"
 	"log/slog"
 	"strconv"
-	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -348,9 +347,9 @@ func (s *Service) currentSession(c *gin.Context) string {
 
 // UpdateProfile changes what the user may change about themselves.
 func (s *Service) UpdateProfile(ctx context.Context, userID int64, displayName string) error {
-	displayName = strings.TrimSpace(displayName)
-	if utf8.RuneCountInString(displayName) > 100 {
-		return core.InvalidFields(core.FieldError{Field: "display_name", Code: "too_long", Message: "at most 100 characters"})
+	displayName, f := normalizeDisplayName(displayName)
+	if f != nil {
+		return core.InvalidFields(*f)
 	}
 	return s.db.Tx(ctx, func(tx *gorm.DB) error {
 		if err := setLiveProfile(store.G(ctx, tx), userID, displayName).Error; err != nil {

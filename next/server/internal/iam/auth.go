@@ -45,21 +45,9 @@ func (s *Service) Login(ctx context.Context, email, password, ip string) (*Login
 	if wait := s.limiter.check(ctx, email, ip); wait > 0 {
 		return nil, rateLimitedError(ctx, wait)
 	}
-	var id int64
-	var hash, status string
-	err := userByEmail(store.G(ctx, s.db.Gorm), strings.ToLower(strings.TrimSpace(email)), "id, password_hash, status").Row().Scan(&id, &hash, &status)
-	if store.IsNoRows(err) {
-		// Burn comparable time so response timing does not reveal accounts.
-		_ = bcrypt.CompareHashAndPassword(s.dummyHash, []byte(password))
-		s.limiter.fail(ctx, email, ip)
-		return nil, errBadCredentials
-	}
+	id, hash, status, err := s.checkLoginPassword(ctx, email, password, ip)
 	if err != nil {
 		return nil, err
-	}
-	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) != nil {
-		s.limiter.fail(ctx, email, ip)
-		return nil, errBadCredentials
 	}
 	s.limiter.reset(ctx, email, ip)
 	if status != StatusActive {
@@ -70,11 +58,7 @@ func (s *Service) Login(ctx context.Context, email, password, ip string) (*Login
 		return nil, err
 	}
 	if twoFactor {
-		token, err := s.createFlow(ctx, flowLogin2FA, id, login2FAPayload{Email: limiterEmail(email), Password: tokenstore.Hash(hash)})
-		if err != nil {
-			return nil, err
-		}
-		return &LoginResult{TwoFactorRequired: true, FlowToken: token, ExpiresIn: flowTTLSeconds}, nil
+		return s.startLogin2FA(ctx, id, email, hash)
 	}
 	// A password change may have committed while bcrypt was running above:
 	// the hash is checked again under the lock.
@@ -84,6 +68,38 @@ func (s *Service) Login(ctx context.Context, email, password, ip string) (*Login
 		}
 		return nil
 	}})
+}
+
+// checkLoginPassword reads the user of email and checks password against
+// its hash, and returns the user's id, hash and status. An unknown email or
+// a wrong password counts towards the rate limit and is errBadCredentials;
+// an unknown one burns comparable time.
+func (s *Service) checkLoginPassword(ctx context.Context, email, password, ip string) (id int64, hash, status string, err error) {
+	err = userByEmail(store.G(ctx, s.db.Gorm), strings.ToLower(strings.TrimSpace(email)), "id, password_hash, status").Row().Scan(&id, &hash, &status)
+	if store.IsNoRows(err) {
+		// Burn comparable time so response timing does not reveal accounts.
+		_ = bcrypt.CompareHashAndPassword(s.dummyHash, []byte(password))
+		s.limiter.fail(ctx, email, ip)
+		return 0, "", "", errBadCredentials
+	}
+	if err != nil {
+		return 0, "", "", err
+	}
+	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) != nil {
+		s.limiter.fail(ctx, email, ip)
+		return 0, "", "", errBadCredentials
+	}
+	return id, hash, status, nil
+}
+
+// startLogin2FA answers a correct password of a user with two-factor: the
+// flow of the second step (LoginSecondFactor), with the password snapshot.
+func (s *Service) startLogin2FA(ctx context.Context, userID int64, email, hash string) (*LoginResult, error) {
+	token, err := s.createFlow(ctx, flowLogin2FA, userID, login2FAPayload{Email: limiterEmail(email), Password: tokenstore.Hash(hash)})
+	if err != nil {
+		return nil, err
+	}
+	return &LoginResult{TwoFactorRequired: true, FlowToken: token, ExpiresIn: flowTTLSeconds}, nil
 }
 
 // login is what a login path adds to signIn: the errors it answers a user
@@ -153,22 +169,7 @@ func (s *Service) LoginSecondFactor(ctx context.Context, flowToken, code, ip str
 	if wait := s.limiter.check(ctx, payload.Email, ip); wait > 0 {
 		return nil, rateLimitedError(ctx, wait)
 	}
-	result, err := s.signIn(withLoginMethod(ctx, loginMethodTwoFactor), userID, login{
-		gone: errBadCredentials, disabled: errUserDisabled,
-		check: func(g *gorm.DB, hash string) error {
-			if tokenstore.Hash(hash) != payload.Password {
-				return errFlowExpired
-			}
-			return s.checkSecondFactor(ctx, g, userID, code)
-		},
-		// Taken last: a failure before leaves the flow for another try (a
-		// flow in Valkey does not come back with a rollback).
-		done: func() error {
-			var used login2FAPayload
-			_, err := s.takeFlow(ctx, flowToken, flowLogin2FA, userID, &used)
-			return err
-		},
-	})
+	result, err := s.signIn(withLoginMethod(ctx, loginMethodTwoFactor), userID, s.secondFactorLogin(ctx, userID, flowToken, code, payload.Password))
 	if isBadSecondFactor(err) {
 		s.limiter.fail(ctx, payload.Email, ip)
 		if ferr := s.recordSecondFactorFailure(ctx, userID); ferr != nil {
@@ -180,6 +181,28 @@ func (s *Service) LoginSecondFactor(ctx context.Context, flowToken, code, ip str
 	}
 	s.limiter.reset(ctx, payload.Email, ip)
 	return result, nil
+}
+
+// secondFactorLogin is the login of the second step of the flow flowToken:
+// the password unchanged since the first (passwordHash, its snapshot), then
+// a correct code; the flow is taken last.
+func (s *Service) secondFactorLogin(ctx context.Context, userID int64, flowToken, code, passwordHash string) login {
+	return login{
+		gone: errBadCredentials, disabled: errUserDisabled,
+		check: func(g *gorm.DB, hash string) error {
+			if tokenstore.Hash(hash) != passwordHash {
+				return errFlowExpired
+			}
+			return s.checkSecondFactor(ctx, g, userID, code)
+		},
+		// Taken last: a failure before leaves the flow for another try (a
+		// flow in Valkey does not come back with a rollback).
+		done: func() error {
+			var used login2FAPayload
+			_, err := s.takeFlow(ctx, flowToken, flowLogin2FA, userID, &used)
+			return err
+		},
+	}
 }
 
 // newSessionID returns a random session id.

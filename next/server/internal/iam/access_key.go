@@ -81,30 +81,46 @@ func (s *Service) grantablePermissions(ctx context.Context, userID int64, wanted
 	if err != nil {
 		return nil, err
 	}
-	var invalid, missing []string
-	for _, k := range wanted {
-		if _, err := perm.Parse(k); err != nil {
-			invalid = append(invalid, k)
-		}
-	}
-	if len(invalid) > 0 {
-		return nil, core.InvalidFields(core.FieldError{Field: "permissions", Code: "invalid", Message: "invalid permission keys: " + strings.Join(invalid, ", ")})
+	if err := validPermissionKeys(wanted); err != nil {
+		return nil, err
 	}
 	// Canonical keys, each implied by the user's (CONTRACTS §21: a key's
 	// scope never reaches beyond its user's).
 	out := perm.CanonicalSet(wanted)
-	for _, k := range out {
-		p, _ := perm.Parse(k)
-		if !slices.Contains(active, string(p.Action)) || !set.Has(k) {
-			missing = append(missing, k)
-		}
-	}
-	if len(missing) > 0 {
+	if missing := ungrantable(out, active, set); len(missing) > 0 {
 		return nil, core.ErrPermissionDenied.WithMessage(t(ctx,
 			"an access key can only have permissions you hold",
 			"访问密钥只能拥有你自己的权限")).WithDetails(map[string]any{"missing": missing})
 	}
 	return out, nil
+}
+
+// validPermissionKeys refuses keys that are not permission keys, naming
+// them all.
+func validPermissionKeys(keys []string) error {
+	var invalid []string
+	for _, k := range keys {
+		if _, err := perm.Parse(k); err != nil {
+			invalid = append(invalid, k)
+		}
+	}
+	if len(invalid) > 0 {
+		return core.InvalidFields(core.FieldError{Field: "permissions", Code: "invalid", Message: "invalid permission keys: " + strings.Join(invalid, ", ")})
+	}
+	return nil
+}
+
+// ungrantable are the canonical keys whose action is not active or which
+// the user's set does not imply.
+func ungrantable(keys, active []string, set core.PermissionSet) []string {
+	var missing []string
+	for _, k := range keys {
+		p, _ := perm.Parse(k)
+		if !slices.Contains(active, string(p.Action)) || !set.Has(k) {
+			missing = append(missing, k)
+		}
+	}
+	return missing
 }
 
 func (s *Service) lostPermissions(ctx context.Context, userID int64, keys []*AccessKey) error {
@@ -173,14 +189,7 @@ func (s *Service) AccessKeys(ctx context.Context, userID int64) ([]*AccessKey, e
 // CreateAccessKey checks the permissions and creates a key (the route takes
 // a self.access_key.write step-up). The secret appears only in this result.
 func (s *Service) CreateAccessKey(ctx context.Context, userID int64, in CreateAccessKeyInput) (*AccessKey, error) {
-	name, err := normalizeAccessKeyName(in.Name)
-	if err != nil {
-		return nil, err
-	}
-	if in.ExpiresAt != nil && in.ExpiresAt.Before(time.Now().Add(accessKeyMinLifetime)) {
-		return nil, core.InvalidFields(core.FieldError{Field: "expires_at", Code: "too_soon", Message: "at least one hour from now"})
-	}
-	perms, err := s.grantablePermissions(ctx, userID, in.Permissions)
+	name, perms, err := s.checkNewAccessKey(ctx, userID, in)
 	if err != nil {
 		return nil, err
 	}
@@ -191,12 +200,8 @@ func (s *Service) CreateAccessKey(ctx context.Context, userID int64, in CreateAc
 			return err
 		}
 		g := store.G(ctx, tx)
-		var n int64
-		if err := accessKeysOf(g, userID).Count(&n).Error; err != nil {
+		if err := checkAccessKeyRoom(ctx, g, userID); err != nil {
 			return err
-		}
-		if n >= accessKeyMaxPerUser {
-			return core.ErrConflict.WithMessage(t(ctx, "too many access keys", "访问密钥数量已达上限"))
 		}
 		var row accessKeyRow
 		if err := insertAccessKey(g, userID, name, hash, raw[len(raw)-4:], perms, in.ExpiresAt).Scan(&row).Error; err != nil {
@@ -214,6 +219,37 @@ func (s *Service) CreateAccessKey(ctx context.Context, userID int64, in CreateAc
 	return key, nil
 }
 
+// checkNewAccessKey validates a new key, in this order: its name, its
+// expiry, its permissions (grantablePermissions); it returns the normalized
+// name and permissions.
+func (s *Service) checkNewAccessKey(ctx context.Context, userID int64, in CreateAccessKeyInput) (string, []string, error) {
+	name, err := normalizeAccessKeyName(in.Name)
+	if err != nil {
+		return "", nil, err
+	}
+	if in.ExpiresAt != nil && in.ExpiresAt.Before(time.Now().Add(accessKeyMinLifetime)) {
+		return "", nil, core.InvalidFields(core.FieldError{Field: "expires_at", Code: "too_soon", Message: "at least one hour from now"})
+	}
+	perms, err := s.grantablePermissions(ctx, userID, in.Permissions)
+	if err != nil {
+		return "", nil, err
+	}
+	return name, perms, nil
+}
+
+// checkAccessKeyRoom refuses a new key of userID, whose row the caller has
+// locked, when it has accessKeyMaxPerUser already.
+func checkAccessKeyRoom(ctx context.Context, g *gorm.DB, userID int64) error {
+	var n int64
+	if err := accessKeysOf(g, userID).Count(&n).Error; err != nil {
+		return err
+	}
+	if n >= accessKeyMaxPerUser {
+		return core.ErrConflict.WithMessage(t(ctx, "too many access keys", "访问密钥数量已达上限"))
+	}
+	return nil
+}
+
 // insertAccessKey creates an access key and returns its accessKeyColumns.
 func insertAccessKey(db *gorm.DB, userID int64, name, hash, hint string, perms []string, expiresAt *time.Time) *gorm.DB {
 	row := store.OneRow(db).Select("?, ?, ?, ?, ?, ?", userID, name, hash, hint, store.Strings(perms), expiresAt)
@@ -224,23 +260,12 @@ func insertAccessKey(db *gorm.DB, userID int64, name, hash, hint string, perms [
 // UpdateAccessKey renames a key or replaces its permissions (the route
 // takes a self.access_key.write step-up, as creating a key does).
 func (s *Service) UpdateAccessKey(ctx context.Context, userID, id int64, in UpdateAccessKeyInput) (*AccessKey, error) {
-	var name *string
-	if in.Name != nil {
-		v, err := normalizeAccessKeyName(*in.Name)
-		if err != nil {
-			return nil, err
-		}
-		name = &v
-	}
-	var perms []string
-	if in.Permissions != nil {
-		var err error
-		if perms, err = s.grantablePermissions(ctx, userID, in.Permissions); err != nil {
-			return nil, err
-		}
+	name, perms, err := s.checkAccessKeyUpdate(ctx, userID, in)
+	if err != nil {
+		return nil, err
 	}
 	var key *AccessKey
-	err := s.db.Tx(ctx, func(tx *gorm.DB) error {
+	err = s.db.Tx(ctx, func(tx *gorm.DB) error {
 		var row accessKeyRow
 		res := updateAccessKey(store.G(ctx, tx), id, userID, name, perms, &row)
 		if res.Error != nil {
@@ -257,6 +282,27 @@ func (s *Service) UpdateAccessKey(ctx context.Context, userID, id int64, in Upda
 		return nil, err
 	}
 	return key, s.lostPermissions(ctx, userID, []*AccessKey{key})
+}
+
+// checkAccessKeyUpdate validates the name and the permissions an update
+// sets, and returns them normalized; nil for those it keeps.
+func (s *Service) checkAccessKeyUpdate(ctx context.Context, userID int64, in UpdateAccessKeyInput) (*string, []string, error) {
+	var name *string
+	if in.Name != nil {
+		v, err := normalizeAccessKeyName(*in.Name)
+		if err != nil {
+			return nil, nil, err
+		}
+		name = &v
+	}
+	if in.Permissions == nil {
+		return name, nil, nil
+	}
+	perms, err := s.grantablePermissions(ctx, userID, in.Permissions)
+	if err != nil {
+		return nil, nil, err
+	}
+	return name, perms, nil
 }
 
 // updateAccessKey renames the key id of userID or replaces its permissions,
