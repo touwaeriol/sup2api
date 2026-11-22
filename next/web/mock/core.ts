@@ -465,7 +465,8 @@ const MENU_PERMS: Record<string, string | string[]> = {
   '/market': 'plugin:market:read',
   '/publishers': 'publisher:read',
   '/nodes': 'node:read',
-  '/settings': ['settings:read', 'sticky:read', 'group:read', 'price:read'],
+  '/groups': 'group:read',
+  '/settings': ['settings:read', 'sticky:read', 'price:read'],
   '/system/upgrades': 'system:update:read',
   '/system/audit': 'audit:read',
   '/system/tasks': 'task:read',
@@ -487,7 +488,7 @@ on('GET', '/me/menus', (req) => {
 })
 
 // Mirrors server/internal/authz/menus.go (sections, labels and order, CONTRACTS
-// §90) with the bundled plugins' menus placed where their manifests put them.
+// §90, §132) with the bundled plugins' menus placed where their manifests put them.
 const L = (en: string, zh: string) => ({ en, zh })
 const MENUS = [
   {
@@ -507,9 +508,10 @@ const MENUS = [
   },
   {
     section: 'gateway',
-    label: L('Gateway', '网关'),
+    label: L('Accounts & proxies', '账号/代理'),
     items: [
       { id: 'accounts', label: L('Accounts', '账号'), icon: 'account', path: '/accounts' },
+      { id: 'groups', label: L('Groups', '分组'), icon: 'group', path: '/groups' },
       { id: 'proxies', label: L('Proxies', '代理'), icon: 'proxy', path: '/proxies' },
       { id: 'dynweight:dynweight', label: L('Dynamic Weight', '动态权重'), icon: 'chart', path: '/p/dynweight/dashboard', plugin_key: 'dynweight' }
     ]
