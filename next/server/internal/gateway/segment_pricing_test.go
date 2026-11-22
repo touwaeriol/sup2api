@@ -16,7 +16,7 @@ const advisorUsageBody = `{"type":"message","role":"assistant","model":"` + test
 // The list price is asked for the key's group, for the request's model and
 // for each model it refers to; the usage record has the owner's segment and
 // the rate the owner pays, whatever the group's own rate is.
-func TestPricingFollowsThePrincipalsSegment(t *testing.T) {
+func TestPricingFollowsThePrincipalsRate(t *testing.T) {
 	e := pricedAdvisorEnv(t)
 	p := e.auth.keys[testKey]
 	p.SegmentID, p.RateSource, p.Group.RateMultiplier = 12, core.RateSourceDiscount, decimal.RequireFromString("1.2")

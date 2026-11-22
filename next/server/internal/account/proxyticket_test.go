@@ -137,7 +137,7 @@ func TestProxyTicket(t *testing.T) {
 		"no user":        func() (*pluginv1.ExecutionHTTPResponse, error) { return fetch(0, "anthropic", byID) },
 		"another plugin": func() (*pluginv1.ExecutionHTTPResponse, error) { return fetch(admin, "relay", byID) },
 		"tampered": func() (*pluginv1.ExecutionHTTPResponse, error) {
-			return fetch(admin, "anthropic", byID[:len(byID)-2]+"AA")
+			return fetch(admin, "anthropic", tamper(byID))
 		},
 		"made up":          func() (*pluginv1.ExecutionHTTPResponse, error) { return fetch(admin, "anthropic", "not-a-ticket") },
 		"without a ticket": func() (*pluginv1.ExecutionHTTPResponse, error) { return fetch(admin, "anthropic", "") },
@@ -201,4 +201,14 @@ func TestProxyChoiceCheck(t *testing.T) {
 // denied reports a permission_denied error.
 func denied(err error) bool {
 	return err != nil && core.AsError(err).Code == core.ErrPermissionDenied.Code
+}
+
+// tamper changes one character in the middle of a ticket: every bit of it
+// counts, unlike the last character's padding bits.
+func tamper(ticket string) string {
+	i, c := len(ticket)/2, byte('A')
+	if ticket[i] == c {
+		c = 'B'
+	}
+	return ticket[:i] + string(c) + ticket[i+1:]
 }

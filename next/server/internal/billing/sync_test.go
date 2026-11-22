@@ -39,7 +39,7 @@ func cfgOf(t *testing.T, p *syncPrice) map[string]any {
 	return m
 }
 
-// tierOf is tier i of a per_token price.
+// tierOf is tier i of a visual price.
 func tierOf(t *testing.T, p *syncPrice, i int) map[string]any {
 	t.Helper()
 	return cfgOf(t, p)["tiers"].([]any)[i].(map[string]any)
@@ -134,7 +134,7 @@ func TestParseSup2APIAppliesMultiplier(t *testing.T) {
 	}
 }
 
-// How the upstream rate goes into per_token tiers with rules (their prices,
+// How the upstream rate goes into visual tiers with rules (their prices,
 // not their multipliers) and a request tier.
 func TestParseSup2APIMultiplierOnTiers(t *testing.T) {
 	body := `{"data": {"prices": [

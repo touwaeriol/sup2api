@@ -10,7 +10,7 @@ import { condChildren, condKind, isCompound, isSet, isTimeVar, num, timeValueFit
 type Translate = (key: string, params?: Record<string, unknown>) => string
 
 /** The zone a time comparison starts in, as a time rule's does. */
-export const DEFAULT_TZ = 'Asia/Shanghai'
+const DEFAULT_TZ = 'Asia/Shanghai'
 
 /** A comparison to fill in: on the input length, its value blank. */
 export const newLeaf = (): CondLeaf => ({ var: 'len', op: '>', value: null })

@@ -24,7 +24,7 @@
 | `next/plugins/*` | 官方插件，每个是独立 Go 模块；`plugins/released.json` 记录线上版本 |
 | `next/tools/sub2api-plugin` | 插件 CLI：keygen、build、pack、sign、verify、index、`db diff/check`、`dev` |
 | `next/web` | 控制台（Vue 3 + Vite + TS + Pinia + Tailwind），`packages/` 下是共享给插件的 `@sub2api/ui`、`@sub2api/host`、`@sub2api/vite-preset` |
-| `next/deploy` | 镜像构建脚本、网关托管部署（`gateway/`）、单机栈（`single/`）、e2e 栈、单向发布进行中的发布与回退手册（`rollback/`，发布完成、不能再回退后删除；现在有协议绑定的升级手册 `protocol-binding-release.md` 和它的只读查询 `protocol-binding-conversions.sql`） |
+| `next/deploy` | 镜像构建脚本、网关托管部署（`gateway/`）、单机栈（`single/`）、e2e 栈、单向发布进行中的发布与回退手册（`rollback/`，发布完成、不能再回退后删除；现在有协议绑定的升级手册 `protocol-binding-release.md` 和它的只读查询 `protocol-binding-conversions.sql`，以及 0.1.307 计费改造（迁移 0122/0123）的单向发布手册 `0.1.307-billing-release.md`） |
 | `next/e2e` | 验收测试，需要部署好的栈；CI 只编译不运行 |
 | `next/protocol-codec` | 早期为 ccgateway 引入的协议转换库。`next/` 里没有模块 import 它（next CI 仍按普通模块检查它）；但根目录旧版 `backend/` 经 `replace` 依赖它（根目录 `Dockerfile` 也复制它），所以暂不能删（CONVERT-MATRIX.md 开头）。不要在新代码里引用 |
 | `next/docs` | 契约、架构、设计稿、交接、审计记录 |

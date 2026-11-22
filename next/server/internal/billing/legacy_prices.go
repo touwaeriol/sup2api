@@ -15,7 +15,7 @@ const (
 
 // visualFromLegacy converts a price of a mode before core migration 0122 to
 // a visual config, as that migration converts stored prices (CONTRACTS
-// §131.6): per_request {price, rules?} becomes one request tier with the
+// §131.9; a flat per_token config as §131.6): per_request {price, rules?} becomes one request tier with the
 // same rules; per_token tiers by max_len become tiers with "when": len <=
 // max_len, ordered by max_len with the rest last; a flat per_token config
 // (before 0121) becomes one token tier. The configs generate the expressions

@@ -128,8 +128,6 @@ export default {
     and: 'AND',
     or: 'OR',
     notText: 'not ({cond})',
-    allOf: 'AND',
-    anyOf: 'OR',
     negated: 'Not',
     kind: 'How the conditions combine',
     group: 'Group {path}',

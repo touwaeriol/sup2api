@@ -167,7 +167,7 @@ func checkCustom(ctx context.Context, in Rule, facts map[string]bool) (*storedRu
 		return nil, errors.New(core.Text(ctx, "a custom price is visual or expression", "自定义价的计费方式须是可视化或表达式"))
 	}
 	config := priceConfig(in.Config)
-	rep, err := validatePrice(in.Mode, config, in.Expression, expr.ValidateOptions{Facts: facts})
+	rep, err := checkPriceDef(in.Mode, config, in.Expression, expr.ValidateOptions{Facts: facts})
 	if err != nil {
 		return nil, fmt.Errorf(core.Text(ctx, "invalid custom price: %v", "自定义价无效：%v"), err)
 	}

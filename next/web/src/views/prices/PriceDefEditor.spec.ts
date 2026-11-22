@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { enableAutoUnmount, flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { reactive, ref } from 'vue'
-import { SSegmented } from '@sub2api/ui'
+import { SDrawer, SSegmented } from '@sub2api/ui'
 import { i18n } from '@/i18n'
+import ExprGuide from './ExprGuide.vue'
 import PriceDefEditor from './PriceDefEditor.vue'
 import PriceExprEditor from './PriceExprEditor.vue'
 import VisualPriceEditor from './VisualPriceEditor.vue'
@@ -123,11 +124,26 @@ describe('the price definition editor', () => {
     expect(other.config.rules[0].name).toBe('')
   })
 
-  it('read-only, neither switches nor edits, and still opens the guide', async () => {
-    const { w } = render(priceDraftOf({ mode: 'expression', config: {}, expression: 'p * 2' }), { readonly: true })
+  it('opens the guide in a drawer, whose example replaces the expression', async () => {
+    const { w, draft } = render(priceDraftOf({ mode: 'expression', config: {}, expression: 'p * 2' }))
+    expect(w.getComponent(SDrawer).props('open')).toBe(false)
+    await w.get('[data-testid="expr-guide-open"]').trigger('click')
+    expect(w.getComponent(SDrawer).props('open')).toBe(true)
+    w.getComponent(ExprGuide).vm.$emit('replace', 'p * 3')
+    await flushPromises()
+    expect(draft.value.expression).toBe('p * 3')
+    expect(w.getComponent(SDrawer).props('open')).toBe(false)
+  })
+
+  it('read-only, neither switches nor edits, and still opens the guide, which replaces nothing', async () => {
+    const { w, draft } = render(priceDraftOf({ mode: 'expression', config: {}, expression: 'p * 2' }), { readonly: true })
     expect(w.getComponent(SSegmented).props('disabled')).toBe(true)
     expect(w.getComponent(PriceExprEditor).props('readonly')).toBe(true)
     await w.get('[data-testid="expr-guide-open"]').trigger('click')
-    expect(w.emitted('guide')).toHaveLength(1)
+    expect(w.getComponent(SDrawer).props('open')).toBe(true)
+    expect(w.getComponent(ExprGuide).props('readonly')).toBe(true)
+    w.getComponent(ExprGuide).vm.$emit('replace', 'p * 3')
+    await flushPromises()
+    expect(draft.value.expression).toBe('p * 2')
   })
 })

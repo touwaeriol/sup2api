@@ -9,7 +9,7 @@ function tokenTier(name: string, when: TierCond | null, prices: Partial<Record<P
 }
 
 /** The condition of a tier up to a context length. */
-const upTo = (n: number): TierCond => ({ var: 'len', op: '<=', value: n })
+export const upTo = (n: number): TierCond => ({ var: 'len', op: '<=', value: n })
 
 /** Tier templates by key (named by prices.presets.item.<key>); each makes fresh tiers. */
 export const PRESETS: Record<string, () => VisualTier[]> = {

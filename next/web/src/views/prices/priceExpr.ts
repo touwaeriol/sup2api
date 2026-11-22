@@ -1,7 +1,8 @@
 // Price configs and the expressions generated from them (design
 // 2026-11-21 §2; tier conditions, design 2026-11-22 §3). The generator
 // matches the server's (billing/expr) byte for byte: the console shows what
-// the server will store. Pure TS without imports.
+// the server will store; the checks before saving are in priceCheck.ts. Pure
+// TS without imports.
 
 /** The billing modes, in the order the console lists them. */
 export const PRICE_MODES = ['visual', 'expression'] as const
@@ -21,7 +22,7 @@ export type PriceKey = (typeof PRICE_KEYS)[number]
 export type TierUnit = 'token' | 'request'
 
 /** What a tier condition compares: the input length, input and output tokens, or a time in a zone (design 2026-11-22 §2). */
-export const TOKEN_COND_VARS = ['len', 'p', 'c'] as const
+const TOKEN_COND_VARS = ['len', 'p', 'c'] as const
 export const TIME_COND_VARS = ['hour', 'minute', 'weekday', 'month', 'day'] as const
 export const COND_VARS = [...TOKEN_COND_VARS, ...TIME_COND_VARS] as const
 export type CondVar = (typeof COND_VARS)[number]
@@ -30,10 +31,9 @@ export const CMP_OPS = ['<', '<=', '>', '>=', '==', '!='] as const
 export type CmpOp = (typeof CMP_OPS)[number]
 /** The whole values a time compares with, inclusive (weekday 0 is Sunday). */
 export const TIME_RANGES: Record<TimeCondVar, readonly [number, number]> = { hour: [0, 23], minute: [0, 59], weekday: [0, 6], month: [1, 12], day: [1, 31] }
-/** The most levels and comparisons a tier's condition takes, and the most tiers a price takes. */
+/** The most levels and comparisons a tier's condition takes. */
 export const MAX_COND_DEPTH = 5
 export const MAX_COND_LEAVES = 20
-export const MAX_TIERS = 20
 
 /** A comparison: `var op value`, a time read in `tz` (UTC when blank). The value may be held as typed text. */
 export interface CondLeaf {
@@ -145,7 +145,7 @@ export function goQuote(s: string): string {
 }
 
 /** Go's strings.TrimSpace: Unicode White_Space, which JS's trim() is not (it trims U+FEFF, keeps U+0085). */
-const goTrim = (s: string) =>
+export const goTrim = (s: string) =>
   s.replace(
     /^[\t\n\v\f\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+|[\t\n\v\f\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+$/g,
     ''
@@ -166,7 +166,7 @@ export function timeValueFits(v: TimeCondVar, value: unknown): boolean {
   return Number.isInteger(n) && n >= lo && n <= hi
 }
 
-export type CondKind = 'leaf' | 'and' | 'or' | 'not'
+type CondKind = 'leaf' | 'and' | 'or' | 'not'
 const LEAF_KEYS = new Set(['var', 'op', 'value', 'tz'])
 
 /** The kind of a condition node, by its keys exactly; null for any other shape. */
@@ -265,11 +265,8 @@ function compactCond(c: RuleCond): RuleCond {
 
 /** The config the editor sends: unset prices and editor leftovers dropped, condition values typed (typedValue). */
 export function compactVisualConfig(cfg: VisualConfig): VisualConfig {
-  return { tiers: cfg.tiers.map(compactTier), rules: compactRules(cfg.rules) }
-}
-
-export function compactRules(rules: readonly MarkupRule[]): MarkupRule[] {
-  return rules.map(r => ({ name: r.name, multiplier: orNull(r.multiplier), conds: r.conds.map(compactCond) }))
+  const rules = cfg.rules.map(r => ({ name: r.name, multiplier: orNull(r.multiplier), conds: r.conds.map(compactCond) }))
+  return { tiers: cfg.tiers.map(compactTier), rules }
 }
 
 // ------------------------------------------------------------------ generation
@@ -349,135 +346,22 @@ export function visualExpr(cfg: VisualConfig): string {
   return withRules(base, cfg.rules)
 }
 
+/** Whether a condition compares a token count (len, p, c) anywhere. */
+const readsTokens = (n: TierCond): boolean =>
+  condKind(n) === 'leaf' ? TOKEN_COND_VARS.includes((n as CondLeaf).var as (typeof TOKEN_COND_VARS)[number]) : condChildren(n).some(readsTokens)
+
+/**
+ * Whether a visual config is due per request, as the server tells it (its
+ * expression reads no token variable, §131.1): every tier a request tier, no
+ * tier condition comparing a token count. Rules read no token variable.
+ */
+export function perRequestOnly(cfg: VisualConfig): boolean {
+  return cfg.tiers.length > 0 && cfg.tiers.every(t => t.unit === 'request' && !(t.when && readsTokens(t.when)))
+}
+
 /** The generated expression of a visual price; '' for an expression price, which has none. */
 export function priceExpression(mode: PriceMode, config: unknown): string {
   return mode === 'visual' ? visualExpr(asVisualConfig(config)) : ''
-}
-
-// ------------------------------------------------------------------ local checks
-
-export interface LocalIssue {
-  key: string
-  params?: Record<string, unknown>
-}
-
-const TIER_NAME = /^[A-Za-z0-9_.-]{1,64}$/
-/** As the server's headerNameRe, of the trimmed lower-case key. */
-const HEADER_NAME = /^[A-Za-z0-9!#$%&'*+.^_|~-]{1,100}$/
-
-/** Whether a price is set and not negative. */
-const isPrice = (v: unknown) => isSet(v) && num(v) >= 0
-const isText = (v: unknown) => typeof v === 'string' && v !== ''
-
-/**
- * Whether Go's time.LoadLocation takes a zone, as far as Intl can tell: an
- * IANA name, spelt with its case (Intl takes "asia/shanghai" and offsets
- * such as "+08:00", Go takes neither), and not "Local".
- */
-function validTz(tz: string): boolean {
-  if (tz === 'Local' || /^[+-]/.test(tz)) return false
-  try {
-    const resolved = new Intl.DateTimeFormat('en-US', { timeZone: tz }).resolvedOptions().timeZone
-    return resolved === tz || resolved.toLowerCase() !== tz.toLowerCase()
-  } catch {
-    return false
-  }
-}
-
-/** Why a condition of rule n (from 1) fails the server's generator, as the server checks it; null when it passes. */
-function condIssue(c: RuleCond, n: number): LocalIssue | null {
-  const field = { key: 'prices.local.ruleField', params: { n } }
-  if (c.source === 'time') {
-    const [a, b] = [c.from_hour, c.to_hour]
-    if (!validTz(goTrim(c.tz ?? '') || 'UTC')) return { key: 'prices.local.ruleTz', params: { n } }
-    const hours = Number.isInteger(a) && Number.isInteger(b) && a >= 0 && a <= 23 && b >= 0 && b <= 24 && a !== b
-    return hours ? null : field
-  }
-  const key = goTrim(c.key)
-  if (c.source === 'header' && !HEADER_NAME.test(key.toLowerCase())) return { key: 'prices.local.ruleHeader', params: { n } }
-  if (c.source !== 'header' && (!key || new TextEncoder().encode(key).length > 200)) return field
-  if (c.op === 'exists') return null
-  if (NUMERIC_OPS.includes(c.op)) return c.source !== 'header' && typeof c.value === 'number' ? null : field
-  if (c.op === 'contains' || c.source === 'header') return isText(c.value) ? null : field
-  return c.value === '' || c.value === undefined || c.value === null ? field : null
-}
-
-function checkRules(rules: readonly MarkupRule[]): LocalIssue[] {
-  const out: LocalIssue[] = []
-  rules.forEach((r, i) => {
-    const n = i + 1
-    const issue =
-      !isPrice(r.multiplier) || !r.conds.length
-        ? { key: 'prices.local.ruleField', params: { n } }
-        : r.conds.map(c => condIssue(c, n)).find(Boolean)
-    if (issue) out.push(issue)
-  })
-  return out
-}
-
-const isCmpOp = (op: unknown): op is CmpOp => CMP_OPS.includes(op as CmpOp)
-
-/** Why a comparison fails the server's generator; null when it passes. */
-function leafIssue(n: CondLeaf, name: string | number): LocalIssue | null {
-  if (!COND_VARS.includes(n.var) || !isCmpOp(n.op)) return { key: 'prices.local.condShape', params: { name } }
-  if (!isTimeVar(n.var)) {
-    if (n.tz !== undefined) return { key: 'prices.local.condShape', params: { name } }
-    return isSet(n.value) ? null : { key: 'prices.local.condValue', params: { name } }
-  }
-  const tz = n.tz ?? ''
-  if (typeof tz !== 'string' || !validTz(tz || 'UTC')) return { key: 'prices.local.condTz', params: { name } }
-  const [lo, hi] = TIME_RANGES[n.var]
-  return timeValueFits(n.var, n.value) ? null : { key: 'prices.local.condTime', params: { name, lo, hi } }
-}
-
-/** The first reason a condition fails the server's generator, of every node depth first; null when it passes. */
-function whenIssue(n: TierCond, name: string | number): LocalIssue | null {
-  const kind = condKind(n)
-  if (!kind) return { key: 'prices.local.condShape', params: { name } }
-  if (kind === 'leaf') return leafIssue(n as CondLeaf, name)
-  const kids = condChildren(n)
-  if (!kids.length) return { key: 'prices.local.condEmpty', params: { name } }
-  return kids.reduce<LocalIssue | null>((found, k) => found ?? whenIssue(k, name), null)
-}
-
-/** Why a tier's condition is refused: every tier but the last has one, the last has none; within the limits. */
-function tierWhenIssue(t: VisualTier, last: boolean, name: string | number): LocalIssue | null {
-  if (last) return t.when ? { key: 'prices.local.tierRest' } : null
-  if (!t.when) return { key: 'prices.local.tierWhen', params: { name } }
-  const issue = whenIssue(t.when, name)
-  if (issue) return issue
-  if (condDepth(t.when) > MAX_COND_DEPTH) return { key: 'prices.local.condDepth', params: { name, n: MAX_COND_DEPTH } }
-  return condLeaves(t.when) > MAX_COND_LEAVES ? { key: 'prices.local.condLeaves', params: { name, n: MAX_COND_LEAVES } } : null
-}
-
-/**
- * Problems of a visual config as saved (compactVisualConfig) that block
- * saving (i18n keys under prices.local). They mirror the server's generator,
- * and refuse more: a value a rule condition compares is never blank.
- */
-export function checkVisualConfig(cfg: VisualConfig): LocalIssue[] {
-  const out: LocalIssue[] = []
-  if (!cfg.tiers.length) out.push({ key: 'prices.local.noTier' })
-  if (cfg.tiers.length > MAX_TIERS) out.push({ key: 'prices.local.tooManyTiers', params: { n: MAX_TIERS } })
-  const names = new Set<string>()
-  cfg.tiers.forEach((t, i) => {
-    const name = t.name || i + 1
-    if (!TIER_NAME.test(t.name)) out.push({ key: 'prices.local.tierName', params: { n: i + 1 } })
-    else if (names.has(t.name)) out.push({ key: 'prices.local.tierDup', params: { name } })
-    names.add(t.name)
-    if (t.unit === 'request' && !isSet(t.price)) out.push({ key: 'prices.local.tierPrice', params: { name } })
-    else if ([t.price, ...PRICE_KEYS.map(k => t[k])].some(v => isSet(v) && num(v) < 0))
-      out.push({ key: 'prices.local.negative', params: { name } })
-    const issue = tierWhenIssue(t, i === cfg.tiers.length - 1, name)
-    if (issue) out.push(issue)
-  })
-  return [...out, ...checkRules(cfg.rules)]
-}
-
-/** Problems of a price as it is sent (its config as saved) that block saving. */
-export function checkPrice(p: { mode: PriceMode; config: unknown; expression: string }): LocalIssue[] {
-  if (p.mode === 'expression') return p.expression.trim() ? [] : [{ key: 'prices.local.emptyExpr' }]
-  return checkVisualConfig(asVisualConfig(p.config))
 }
 
 // ------------------------------------------------------------------ list summary

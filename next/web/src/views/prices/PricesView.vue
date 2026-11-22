@@ -13,6 +13,7 @@ import { activeFilterCount, useList } from '@/composables/useList'
 import { useAuthStore } from '@/stores/auth'
 import { formatDateTime } from '@/utils/format'
 import { priceCells, priceExtras, usd } from '@/components/pricing/pricingFormat'
+import { PRICE_MODES, type PriceMode } from './priceExpr'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -43,11 +44,7 @@ watch(
   }
 )
 
-const modeOptions = computed(() => [
-  { value: '', label: t('common.all') },
-  { value: 'visual', label: t('prices.mode.visual') },
-  { value: 'expression', label: t('prices.mode.expression') }
-])
+const modeOptions = computed(() => [{ value: '', label: t('common.all') }, ...PRICE_MODES.map(m => ({ value: m, label: t(`prices.mode.${m}`) }))])
 
 const sourceOptions = computed(() => [
   { value: '', label: t('common.all') },
@@ -104,7 +101,7 @@ function analysisText(p: Price): string {
   return tiers > 1 || rules ? t('prices.summary.analysis', { tiers, rules }) : ''
 }
 
-const MODE_TONE: Record<string, Tone> = { expression: 'accent', visual: 'primary' }
+const MODE_TONE: Record<PriceMode, Tone> = { expression: 'accent', visual: 'primary' }
 
 function sourceLabel(p: Price): string {
   if (p.source === 'sync') return p.sync_source_name ? t('prices.sourceSync', { name: p.sync_source_name }) : t('prices.source.sync')

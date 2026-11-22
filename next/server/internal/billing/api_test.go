@@ -36,7 +36,7 @@ func TestPriceAPI(t *testing.T) {
 		t.Fatalf("validate config error: %v", out)
 	}
 
-	// create: per_token tiers and rules (A.6); an expression price has no config.
+	// create: visual tiers and rules (A.6); an expression price has no config.
 	visual := map[string]any{
 		"tiers": []any{
 			map[string]any{"name": "standard", "when": map[string]any{"var": "len", "op": "<=", "value": 200000}, "p": 3, "c": 15, "cr": 0.3, "cc": 3.75, "cc1h": 6},

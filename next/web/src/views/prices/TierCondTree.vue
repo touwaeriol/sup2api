@@ -41,8 +41,8 @@ const isFull = computed(() => total.value >= MAX_COND_LEAVES)
 const varOptions = computed(() => COND_VARS.map(value => ({ value, label: t(`prices.cond.var.${value}`) })))
 const opOptions = CMP_OPS.map(value => ({ value, label: value }))
 const kindOptions = computed(() => [
-  { value: 'and', label: t('prices.cond.allOf') },
-  { value: 'or', label: t('prices.cond.anyOf') }
+  { value: 'and', label: t('prices.cond.and') },
+  { value: 'or', label: t('prices.cond.or') }
 ])
 const weekdayOptions = computed(() => weekdayNames().map((label, value) => ({ value, label })))
 const zoneOptions = computed(() => (kind.value === 'leaf' && isTimeVar(leaf.value.var) ? tzOptions(t, leaf.value.tz) : []))
@@ -138,7 +138,11 @@ const ACCENT = { and: 'border-l-primary-500', or: 'border-l-amber-500', not: 'bo
       type="number"
       step="any"
       class="min-w-0 flex-1 basis-20 sm:w-36 sm:flex-none"
-      :placeholder="t('prices.cond.value')" :disabled="disabled" :aria-label="t('prices.cond.value')" data-testid="cond-value" />
+      :placeholder="t('prices.cond.value')"
+      :disabled="disabled"
+      :aria-label="t('prices.cond.value')"
+      data-testid="cond-value"
+    />
     <SDropdown v-if="!disabled" :actions="actions" width="11rem" :aria-label="t('prices.cond.actions', { path })" class="ml-auto" @select="onAction" />
   </div>
 

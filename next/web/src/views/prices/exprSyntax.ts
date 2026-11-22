@@ -78,36 +78,31 @@ export function offsetOf(src: string, line: number, column: number): number {
   return Math.min(at + Math.max(column - 1, 0), src.length)
 }
 
-/**
- * Lays an expression out one factor per line: the top-level products
- * `(A) * (B)` break before each `*`, and a ternary chain that picks between
- * tiers breaks before each `:`, down the groups it nests in its last branch
- * (`a ? A : (b ? B : C)`, as tiers are generated from the third). Surcharge
- * rules `(cond ? 2 : 1)` stay on one line. Whitespace inside strings is
- * untouched.
- */
-export function formatExpr(src: string): string {
-  const all = tokenize(src.trim())
+/** The tokens of src but whitespace, and whether whitespace came before each in the source. */
+function significant(src: string): { toks: Tok[]; spaced: boolean[] } {
   const toks: Tok[] = []
-  const spaced: boolean[] = [] // whitespace before the token in the source
-  for (const t of all) {
-    if (t.kind === 'ws') {
-      if (toks.length) spaced[toks.length] = true
-      continue
-    }
-    toks.push(t)
+  const spaced: boolean[] = []
+  for (const t of tokenize(src)) {
+    if (t.kind !== 'ws') toks.push(t)
+    else if (toks.length) spaced[toks.length] = true
   }
-  if (!toks.length) return src
-  // The group each token is in: the index of its opening bracket, -1 at the top.
+  return { toks, spaced }
+}
+
+/** The group each token is in: the index of its opening bracket, -1 at the top; null when the brackets do not balance. */
+function groupsOf(toks: Tok[]): number[] | null {
   const group: number[] = []
   const open: number[] = []
   for (const [i, t] of toks.entries()) {
-    if ((t.text === ')' || t.text === ']') && open.pop() === undefined) return src // unbalanced: leave it to the server's error
+    if ((t.text === ')' || t.text === ']') && open.pop() === undefined) return null
     group.push(open.length ? open[open.length - 1] : -1)
     if (t.text === '(' || t.text === '[') open.push(i)
   }
-  if (open.length) return src
+  return open.length ? null : group
+}
 
+/** The tokens laid out (formatExpr), `group` the group of each. */
+function layout(toks: Tok[], spaced: boolean[], group: number[]): string {
   const topProduct = (i: number) => toks[i].text === '*' && group[i] === -1 && toks[i - 1]?.text === ')' && toks[i + 1]?.text === '('
   // A product of groups at the top: break before each `*`.
   const product = toks.some((_, i) => topProduct(i))
@@ -115,20 +110,32 @@ export function formatExpr(src: string): string {
   const chain = new Set([product && toks[0].text === '(' ? 0 : -1])
   // A ':' whose branch is a bare number closing the group is a rule's ": 1".
   const ruleColon = (i: number) => toks[i + 1]?.kind === 'num' && (toks[i + 2] === undefined || toks[i + 2].text === ')')
-
   let out = ''
   for (let i = 0; i < toks.length; i++) {
     const t = toks[i]
     if (topProduct(i)) {
       out += '\n* '
-      continue
-    }
-    if (t.text === ':' && t.kind === 'op' && chain.has(group[i]) && !ruleColon(i)) {
+    } else if (t.text === ':' && t.kind === 'op' && chain.has(group[i]) && !ruleColon(i)) {
       if (toks[i + 1]?.text === '(') chain.add(i + 1)
       out += '\n  : '
-      continue
+    } else {
+      out += (spaced[i] && !/[ \n]$/.test(out) ? ' ' : '') + t.text
     }
-    out += (spaced[i] && !/[ \n]$/.test(out) ? ' ' : '') + t.text
   }
   return out
+}
+
+/**
+ * Lays an expression out one factor per line: the top-level products
+ * `(A) * (B)` break before each `*`, and a ternary chain that picks between
+ * tiers breaks before each `:`, down the groups it nests in its last branch
+ * (`a ? A : (b ? B : C)`, as tiers are generated from the third). Surcharge
+ * rules `(cond ? 2 : 1)` stay on one line. Whitespace inside strings is
+ * untouched; an expression whose brackets do not balance is left to the
+ * server's error.
+ */
+export function formatExpr(src: string): string {
+  const { toks, spaced } = significant(src.trim())
+  const group = toks.length ? groupsOf(toks) : null
+  return group ? layout(toks, spaced, group) : src
 }

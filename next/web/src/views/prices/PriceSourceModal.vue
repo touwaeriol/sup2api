@@ -69,36 +69,42 @@ function options(): Record<string, unknown> {
   return usesProviders.value ? { providers: form.providers.map((s) => s.trim()).filter(Boolean) } : { apply_multiplier: form.applyMultiplier }
 }
 
-async function submit() {
-  errors.value = {}
+/** What is wrong with the form before it is sent; empty when nothing is. */
+function formErrors(): Record<string, string> {
   const e: Record<string, string> = {}
   if (!form.name.trim()) e.name = t('common.required')
   if (!form.url.trim()) e.url = t('common.required')
   else if (!isHttpUrl(form.url)) e.url = t('prices.sources.urlInvalid')
-  if (form.kind === 'sup2api') {
-    const willHaveKey = !!form.apiKey.trim() || (hasStoredKey.value && !form.clearKey)
-    if (!willHaveKey) e.api_key = t('prices.sources.apiKeyRequired')
-  }
-  if (Object.keys(e).length) {
-    errors.value = e
-    return
-  }
-  const body: Record<string, unknown> = {
-    name: form.name.trim(),
-    url: form.url.trim(),
-    options: options(),
-    enabled: form.enabled
-  }
+  const willHaveKey = !!form.apiKey.trim() || (hasStoredKey.value && !form.clearKey)
+  if (form.kind === 'sup2api' && !willHaveKey) e.api_key = t('prices.sources.apiKeyRequired')
+  return e
+}
+
+/** What a save sends: a new source also sends its kind; an edit omits the key to keep it, sends "" to clear it, any other to replace it. */
+function bodyOf(): Record<string, unknown> {
+  const body: Record<string, unknown> = { name: form.name.trim(), url: form.url.trim(), options: options(), enabled: form.enabled }
   if (editing.value) {
-    // Omitted = keep the stored key, "" = clear it, other = new key.
     if (form.apiKey.trim()) body.api_key = form.apiKey.trim()
     else if (hasStoredKey.value && form.clearKey) body.api_key = ''
   } else {
     body.kind = form.kind
     if (form.kind === 'sup2api') body.api_key = form.apiKey.trim()
   }
+  return body
+}
+
+/** Shows a refusal of a save: a name taken, or the fields (the vendor list's under providers). */
+function showError(err: unknown) {
+  if (err instanceof ApiError && err.code === 'conflict') errors.value = { name: err.message }
+  else if (applyFormError(err, errors) && errors.value['options.providers']) errors.value.providers ??= errors.value['options.providers']
+}
+
+async function submit() {
+  errors.value = formErrors()
+  if (Object.keys(errors.value).length) return
   saving.value = true
   try {
+    const body = bodyOf()
     const r = editing.value
       ? await api.patch<PriceSource>(`/price-sources/${editing.value.id}`, body)
       : await api.post<PriceSource>('/price-sources', body)
@@ -106,8 +112,7 @@ async function submit() {
     emit('update:open', false)
     emit('saved', r || null)
   } catch (err) {
-    if (err instanceof ApiError && err.code === 'conflict') errors.value = { name: err.message }
-    else if (applyFormError(err, errors) && errors.value['options.providers']) errors.value.providers ??= errors.value['options.providers']
+    showError(err)
   } finally {
     saving.value = false
   }

@@ -128,8 +128,6 @@ export default {
     and: '与',
     or: '或',
     notText: '非（{cond}）',
-    allOf: '与',
-    anyOf: '或',
     negated: '取反',
     kind: '组合方式',
     group: '组 {path}',

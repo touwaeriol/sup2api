@@ -13,7 +13,7 @@ import type { PriceValidation } from './usePriceValidation'
 
 // The expression editor: preset templates, a short reference of the names it
 // reads, and a code box with line numbers, colours and the error position.
-// The full guide opens in a drawer (PriceEditView).
+// The full guide opens in a drawer (PriceDefEditor).
 const model = defineModel<string>({ required: true })
 const props = defineProps<{ readonly?: boolean; error?: string; validation?: PriceValidation | null }>()
 const emit = defineEmits<{ (e: 'guide'): void }>()

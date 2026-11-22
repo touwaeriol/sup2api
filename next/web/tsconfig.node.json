@@ -16,5 +16,5 @@
       "@/*": ["./src/*"]
     }
   },
-  "include": ["vite.config.ts", "mock/**/*.ts", "scripts/**/*.ts", "packages/ui/src/icons.ts", "src/authz/implies.ts", "src/generated/permissions.ts", "src/views/usage/view.ts", "src/views/accounts/headerOverride/model.ts", "src/views/accounts/controls/jsonObject.ts", "src/views/accounts/protocols/protocolBinding.ts", "src/api/types.ts", "src/api/pricing.ts", "src/views/prices/priceExpr.ts", "src/components/pricing/offeredModels.ts", "src/views/settings/pluginEgress.ts"]
+  "include": ["vite.config.ts", "mock/**/*.ts", "scripts/**/*.ts", "packages/ui/src/icons.ts", "src/authz/implies.ts", "src/generated/permissions.ts", "src/views/usage/view.ts", "src/views/accounts/headerOverride/model.ts", "src/views/accounts/controls/jsonObject.ts", "src/views/accounts/protocols/protocolBinding.ts", "src/api/types.ts", "src/api/pricing.ts", "src/views/prices/priceExpr.ts", "src/views/prices/priceCheck.ts", "src/views/prices/presets.ts", "src/components/pricing/offeredModels.ts", "src/views/settings/pluginEgress.ts"]
 }

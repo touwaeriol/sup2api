@@ -10,7 +10,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/billing/expr"
@@ -101,27 +100,10 @@ func (s *Service) registerPriceRoutes(r *httpapi.Router) {
 func (s *Service) listPrices(c *gin.Context) {
 	ctx := c.Request.Context()
 	page, size := httpapi.Pagination(c)
-	var f store.Conds
-	if v := c.Query("mode"); v != "" {
-		f.And("mp.mode = ?", v)
-	}
-	if v := c.Query("source"); v != "" {
-		f.And("mp.source = ?", v)
-	}
-	if v := c.Query("sync_source_id"); v != "" {
-		id, err := strconv.ParseInt(v, 10, 64)
-		if err != nil {
-			httpapi.Fail(c, core.InvalidFields(core.FieldError{Field: "sync_source_id", Code: "invalid", Message: "must be an integer"}))
-			return
-		}
-		f.And("mp.sync_source_id = ?", id)
-	}
-	if v := c.Query("enabled"); v != "" {
-		f.And("mp.enabled = ?", v == "true" || v == "1")
-	}
-	if v := strings.TrimSpace(c.Query("q")); v != "" {
-		pattern := "%" + store.Like(v) + "%"
-		f.And("(mp.model ILIKE ? OR mp.note ILIKE ?)", pattern, pattern)
+	f, err := priceFilter(c)
+	if err != nil {
+		httpapi.Fail(c, err)
+		return
 	}
 	g := store.G(ctx, s.db.Gorm)
 	var total int64
@@ -140,6 +122,32 @@ func (s *Service) listPrices(c *gin.Context) {
 		items = append(items, rows[i].price())
 	}
 	httpapi.List(c, items, httpapi.Page{Page: page, PageSize: size, Total: total})
+}
+
+// priceFilter is the filter of GET /prices.
+func priceFilter(c *gin.Context) (store.Conds, error) {
+	var f store.Conds
+	if v := c.Query("mode"); v != "" {
+		f.And("mp.mode = ?", v)
+	}
+	if v := c.Query("source"); v != "" {
+		f.And("mp.source = ?", v)
+	}
+	if v := c.Query("sync_source_id"); v != "" {
+		id, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return f, core.InvalidFields(core.FieldError{Field: "sync_source_id", Code: "invalid", Message: "must be an integer"})
+		}
+		f.And("mp.sync_source_id = ?", id)
+	}
+	if v := c.Query("enabled"); v != "" {
+		f.And("mp.enabled = ?", v == "true" || v == "1")
+	}
+	if v := strings.TrimSpace(c.Query("q")); v != "" {
+		pattern := "%" + store.Like(v) + "%"
+		f.And("(mp.model ILIKE ? OR mp.note ILIKE ?)", pattern, pattern)
+	}
+	return f, nil
 }
 
 func (s *Service) showPrice(c *gin.Context) {
@@ -167,70 +175,34 @@ type priceInput struct {
 	Confirm bool `json:"confirm"`
 }
 
-// checked is a validated expression ready to store.
-type checked struct {
-	mode   string
-	config json.RawMessage
-	src    string
-	prog   *expr.Program
-}
-
-// check builds and validates the expression for a price. Validation errors
-// and an unconfirmed big-cost warning are returned as invalid_argument with
-// details {errors, warnings, confirmation_required}.
-// q reads the settings: the caller's transaction, or the pool.
-func (s *Service) check(ctx context.Context, q *gorm.DB, mode string, config json.RawMessage, expression string, confirm bool) (*checked, error) {
-	config = priceConfig(config)
-	if !json.Valid(config) {
-		return nil, core.InvalidFields(core.FieldError{Field: "config", Code: "invalid", Message: "must be a JSON object"})
-	}
-	st, _ := s.settingsIn(ctx, q)
-	rep, err := validatePrice(mode, config, expression, expr.ValidateOptions{Facts: s.factsFor(), BigCostUSD: st.BigCostWarningUSD})
-	if err != nil {
-		if ce, ok := err.(*expr.ConfigError); ok {
-			return nil, core.ErrInvalidArgument.WithMessage(ce.Error()).WithDetails(map[string]any{
-				"fields": []core.FieldError{{Field: ce.Field, Code: ce.Issue.Code, Message: ce.Issue.Detail}},
-				"errors": []expr.Issue{ce.Issue},
-			})
-		}
-		return nil, core.InvalidFields(core.FieldError{Field: "mode", Code: "invalid", Message: err.Error()})
-	}
-	src := rep.Expression
-	if !rep.OK {
-		return nil, core.ErrInvalidArgument.WithMessage("invalid price expression").WithDetails(map[string]any{
-			"expression": src, "errors": rep.Errors, "warnings": rep.Warnings,
-		})
-	}
-	if !confirm {
-		for _, w := range rep.Warnings {
-			if w.Code == expr.CodeBigCost {
-				return nil, core.ErrInvalidArgument.WithMessage("confirmation required").WithDetails(map[string]any{
-					"expression": src, "errors": []expr.Issue{}, "warnings": rep.Warnings, "confirmation_required": true,
-				})
-			}
-		}
-	}
-	prog, err := expr.CompileCached(src)
-	if err != nil {
-		return nil, err
-	}
-	return &checked{mode: mode, config: config, src: src, prog: prog}, nil
-}
-
-// modelField is the field error for a model that is not a complete model id.
-func modelField(code string) core.FieldError {
-	return core.FieldError{Field: "model", Code: code,
-		Message: "a complete model id: letters, digits and . _ : / @ + - (no wildcards)"}
-}
-
 func (s *Service) createPrice(c *gin.Context) {
 	ctx := c.Request.Context()
 	var in priceInput
 	if !httpapi.BindJSON(c, &in) {
 		return
 	}
-	var fields []core.FieldError
 	name, mode := deref(in.Model), deref(in.Mode)
+	if fields := newPriceFields(name, mode); len(fields) > 0 {
+		httpapi.Fail(c, core.InvalidFields(fields...))
+		return
+	}
+	ck, err := s.check(ctx, s.db.Gorm, mode, in.Config, deref(in.Expression), in.Confirm)
+	if err != nil {
+		httpapi.Fail(c, err)
+		return
+	}
+	var p *Price
+	err = s.db.Tx(ctx, func(tx *gorm.DB) error {
+		var err error
+		p, err = s.insertPrice(ctx, tx, name, ck, in)
+		return err
+	})
+	s.replySaved(c, p, err, httpapi.Created)
+}
+
+// newPriceFields are the field errors of the model and mode of a new price.
+func newPriceFields(name, mode string) []core.FieldError {
+	var fields []core.FieldError
 	switch {
 	case name == "":
 		fields = append(fields, modelField("required"))
@@ -240,43 +212,41 @@ func (s *Service) createPrice(c *gin.Context) {
 	if mode == "" {
 		fields = append(fields, core.FieldError{Field: "mode", Code: "required", Message: "visual or expression"})
 	}
-	if len(fields) > 0 {
-		httpapi.Fail(c, core.InvalidFields(fields...))
-		return
-	}
-	ck, err := s.check(ctx, s.db.Gorm, mode, in.Config, deref(in.Expression), in.Confirm)
-	if err != nil {
-		httpapi.Fail(c, err)
-		return
-	}
+	return fields
+}
+
+// insertPrice writes a new manual price and keeps its expression where a
+// settlement retry reads it back.
+func (s *Service) insertPrice(ctx context.Context, tx *gorm.DB, name string, ck *checked, in priceInput) (*Price, error) {
 	enabled := in.Enabled == nil || *in.Enabled
 	uid, _ := core.UserID(ctx)
-	var p *Price
-	err = s.db.Tx(ctx, func(tx *gorm.DB) error {
-		// Every column is written, enabled and expr_version included;
-		// updated_at is the default.
-		version := ck.prog.Version()
-		row := &model.ModelPrice{Model: name, Mode: ck.mode, Config: ck.config, Expression: ck.src, ExprVersion: &version,
-			ExprHash: ck.prog.Hash(), Source: SourceManual, Enabled: &enabled, Note: deref(in.Note), UpdatedBy: nullID(uid)}
-		if err := store.G(ctx, tx).Create(row).Error; err != nil {
-			return err
-		}
-		var err error
-		if p, err = s.getPrice(ctx, tx, row.ID, false); err != nil {
-			return err
-		}
-		return recordHistory(ctx, tx, ck.prog)
-	})
+	// Every column is written, enabled and expr_version included;
+	// updated_at is the default.
+	version := ck.prog.Version()
+	row := &model.ModelPrice{Model: name, Mode: ck.mode, Config: ck.config, Expression: ck.src, ExprVersion: &version,
+		ExprHash: ck.prog.Hash(), Source: SourceManual, Enabled: &enabled, Note: deref(in.Note), UpdatedBy: nullID(uid)}
+	if err := store.G(ctx, tx).Create(row).Error; err != nil {
+		return nil, err
+	}
+	p, err := s.getPrice(ctx, tx, row.ID, false)
+	if err != nil {
+		return nil, err
+	}
+	return p, recordHistory(ctx, tx, ck.prog)
+}
+
+// replySaved answers a price write: a second price of the model is a
+// conflict.
+func (s *Service) replySaved(c *gin.Context, p *Price, err error, reply func(*gin.Context, any)) {
 	if store.IsUniqueViolation(err, "") {
-		httpapi.Fail(c, errPriceExists)
-		return
+		err = errPriceExists
 	}
 	if err != nil {
 		httpapi.Fail(c, err)
 		return
 	}
-	s.changed(ctx, "prices")
-	httpapi.Created(c, p)
+	s.changed(c.Request.Context(), "prices")
+	reply(c, p)
 }
 
 func (s *Service) updatePrice(c *gin.Context) {
@@ -289,75 +259,68 @@ func (s *Service) updatePrice(c *gin.Context) {
 	if !httpapi.BindJSON(c, &in) {
 		return
 	}
-	uid, _ := core.UserID(ctx)
 	var out *Price
 	err := s.db.Tx(ctx, func(tx *gorm.DB) error {
 		cur, err := s.getPrice(ctx, tx, id, true)
 		if err != nil {
 			return err
 		}
-		model, mode := cur.Model, cur.Mode
-		if in.Model != nil {
-			model = *in.Model
+		set, err := s.priceChanges(ctx, tx, cur, in)
+		if err != nil {
+			return err
 		}
-		if in.Mode != nil {
-			mode = *in.Mode
-		}
-		if !manifest.ValidModelID(model) {
-			return core.InvalidFields(modelField("invalid"))
-		}
-		config, expression := cur.Config, cur.Expression
-		pricing := in.Mode != nil || in.Config != nil || in.Expression != nil
-		if in.Config != nil {
-			config = in.Config
-		}
-		if in.Expression != nil {
-			expression = *in.Expression
-		}
-		src, hash, version := cur.Expression, cur.ExprHash, cur.ExprVersion
-		if pricing {
-			ck, err := s.check(ctx, tx, mode, config, expression, in.Confirm)
-			if err != nil {
-				return err
-			}
-			config, src, hash, version = ck.config, ck.src, ck.prog.Hash(), ck.prog.Version()
-			if err := recordHistory(ctx, tx, ck.prog); err != nil {
-				return err
-			}
-		}
-		enabled, note := cur.Enabled, cur.Note
-		if in.Enabled != nil {
-			enabled = *in.Enabled
-		}
-		if in.Note != nil {
-			note = *in.Note
-		}
-		// Editing a synced price makes it manual: later syncs only replace
-		// it when an administrator selects it in the preview.
-		source, syncID := cur.Source, cur.SyncSourceID
-		if pricing || in.Model != nil {
-			source, syncID = SourceManual, nil
-		}
-		if err := updatePriceRow(store.G(ctx, tx), id, map[string]any{
-			"model": model, "mode": mode, "config": config, "expression": src, "expr_version": version,
-			"expr_hash": hash, "enabled": enabled, "note": note, "updated_by": nullID(uid),
-			"source": source, "sync_source_id": syncID,
-		}).Error; err != nil {
+		if err := updatePriceRow(store.G(ctx, tx), id, set).Error; err != nil {
 			return err
 		}
 		out, err = s.getPrice(ctx, tx, id, false)
 		return err
 	})
-	if store.IsUniqueViolation(err, "") {
-		httpapi.Fail(c, errPriceExists)
-		return
+	s.replySaved(c, out, err, httpapi.OK)
+}
+
+// reprice checks the mode, config and expression of a price after a PATCH
+// body that sets any of them, and keeps the expression in the history.
+func (s *Service) reprice(ctx context.Context, tx *gorm.DB, cur *Price, in priceInput, mode string) (*checked, error) {
+	config := cur.Config
+	if in.Config != nil {
+		config = in.Config
 	}
+	ck, err := s.check(ctx, tx, mode, config, core.ValueOr(in.Expression, cur.Expression), in.Confirm)
 	if err != nil {
-		httpapi.Fail(c, err)
-		return
+		return nil, err
 	}
-	s.changed(ctx, "prices")
-	httpapi.OK(c, out)
+	return ck, recordHistory(ctx, tx, ck.prog)
+}
+
+// priceChanges is every column of the locked price cur after the PATCH
+// body in: a field left out keeps its value; a new mode, config or
+// expression is checked (reprice).
+func (s *Service) priceChanges(ctx context.Context, tx *gorm.DB, cur *Price, in priceInput) (map[string]any, error) {
+	name, mode := core.ValueOr(in.Model, cur.Model), core.ValueOr(in.Mode, cur.Mode)
+	if !manifest.ValidModelID(name) {
+		return nil, core.InvalidFields(modelField("invalid"))
+	}
+	config, src, hash, version := cur.Config, cur.Expression, cur.ExprHash, cur.ExprVersion
+	pricing := in.Mode != nil || in.Config != nil || in.Expression != nil
+	if pricing {
+		ck, err := s.reprice(ctx, tx, cur, in, mode)
+		if err != nil {
+			return nil, err
+		}
+		config, src, hash, version = ck.config, ck.src, ck.prog.Hash(), ck.prog.Version()
+	}
+	// Editing a synced price makes it manual: later syncs only replace
+	// it when an administrator selects it in the preview.
+	source, syncID := cur.Source, cur.SyncSourceID
+	if pricing || in.Model != nil {
+		source, syncID = SourceManual, nil
+	}
+	uid, _ := core.UserID(ctx)
+	return map[string]any{
+		"model": name, "mode": mode, "config": config, "expression": src, "expr_version": version, "expr_hash": hash,
+		"enabled": core.ValueOr(in.Enabled, cur.Enabled), "note": core.ValueOr(in.Note, cur.Note), "updated_by": nullID(uid),
+		"source": source, "sync_source_id": syncID,
+	}, nil
 }
 
 func (s *Service) deletePrice(c *gin.Context) {
@@ -423,7 +386,7 @@ func (s *Service) validatePrice(c *gin.Context) {
 		in.Mode = expr.ModeExpression
 	}
 	st, _ := s.Settings(ctx)
-	rep, err := validatePrice(in.Mode, priceConfig(in.Config), in.Expression, expr.ValidateOptions{Facts: s.factsFor(), BigCostUSD: st.BigCostWarningUSD})
+	rep, err := checkPriceDef(in.Mode, priceConfig(in.Config), in.Expression, expr.ValidateOptions{Facts: s.factsFor(), BigCostUSD: st.BigCostWarningUSD})
 	if err != nil {
 		issue := expr.Issue{Code: expr.CodeConfig, Message: map[string]string{"en": err.Error(), "zh": err.Error()}}
 		if ce, ok := err.(*expr.ConfigError); ok {
@@ -432,136 +395,6 @@ func (s *Service) validatePrice(c *gin.Context) {
 		rep = &expr.Report{Errors: []expr.Issue{issue}, Warnings: []expr.Issue{}}
 	}
 	httpapi.OK(c, rep)
-}
-
-// PreviewRequest is the body of POST /prices/preview.
-type PreviewRequest struct {
-	PriceID    *int64            `json:"price_id"`
-	Mode       string            `json:"mode"`
-	Config     json.RawMessage   `json:"config"`
-	Expression string            `json:"expression"`
-	Usage      PreviewUsage      `json:"usage"`
-	Metrics    map[string]any    `json:"metrics"`
-	Headers    map[string]string `json:"headers"`
-	Params     map[string]any    `json:"params"`
-	At         *time.Time        `json:"at"`
-	GroupID    *int64            `json:"group_id"`
-}
-
-// PreviewUsage holds token counts in the exclusive form (p excludes cache
-// and image input, c image output). They are normalized like settlement
-// (expr.Normalize): cache categories the expression does not price are not
-// billed, image tokens it does not price are billed as p and c. len defaults
-// to p + cr + cc + cc1h + img.
-type PreviewUsage struct {
-	P    float64  `json:"p"`
-	C    float64  `json:"c"`
-	CR   float64  `json:"cr"`
-	CC   float64  `json:"cc"`
-	CC1h float64  `json:"cc1h"`
-	Img  float64  `json:"img"`
-	ImgO float64  `json:"img_o"`
-	Len  *float64 `json:"len"`
-}
-
-// PreviewResult is the response of POST /prices/preview.
-type PreviewResult struct {
-	Cost           decimal.Decimal   `json:"cost"`      // after the group multiplier
-	BaseCost       decimal.Decimal   `json:"base_cost"` // before the group multiplier
-	RateMultiplier decimal.Decimal   `json:"rate_multiplier"`
-	Tier           string            `json:"tier"`
-	Rules          []expr.RuleResult `json:"rules"`
-	Breakdown      expr.Breakdown    `json:"breakdown"`
-	Expression     string            `json:"expression"`
-	ExprHash       string            `json:"expr_hash"`
-}
-
-func (s *Service) previewPrice(c *gin.Context) {
-	ctx := c.Request.Context()
-	var in PreviewRequest
-	if !httpapi.BindJSON(c, &in) {
-		return
-	}
-	src := in.Expression
-	if in.PriceID != nil {
-		p, err := s.getPrice(ctx, s.db.Gorm, *in.PriceID, false)
-		if err != nil {
-			httpapi.Fail(c, err)
-			return
-		}
-		src = p.Expression
-	} else {
-		mode := in.Mode
-		if mode == "" {
-			mode = expr.ModeExpression
-		}
-		var err error
-		if src, err = expressionFor(mode, in.Config, strings.TrimSpace(in.Expression)); err != nil {
-			httpapi.Fail(c, core.ErrInvalidArgument.WithMessage(err.Error()))
-			return
-		}
-	}
-	prog, err := expr.CompileCached(src)
-	if err != nil {
-		details := map[string]any{"expression": src}
-		if ce, ok := err.(*expr.CompileError); ok {
-			details["errors"] = []expr.Issue{ce.Issue}
-		}
-		httpapi.Fail(c, core.ErrInvalidArgument.WithMessage("invalid price expression").WithDetails(details))
-		return
-	}
-	u := in.Usage
-	vars := expr.Normalize(expr.SemanticsExclusive, expr.Tokens{
-		Input: int64(u.P + u.Img), Output: int64(u.C + u.ImgO), CacheRead: int64(u.CR), CacheCreation: int64(u.CC), CacheCreation1h: int64(u.CC1h),
-		ImageInput: int64(u.Img), ImageOutput: int64(u.ImgO),
-	}, prog.Uses)
-	if u.Len != nil {
-		vars.Len = *u.Len
-	}
-	input := expr.Input{Vars: vars, Metrics: in.Metrics, Headers: map[string]string{}, Params: map[string]string{}}
-	for k, v := range in.Headers {
-		input.Headers[strings.ToLower(k)] = v
-	}
-	for k, v := range in.Params {
-		b, _ := json.Marshal(v)
-		input.Params[k] = string(b)
-	}
-	if in.At != nil {
-		input.At = *in.At
-	}
-	res, err := prog.Eval(input)
-	if err != nil {
-		details := map[string]any{"expression": src}
-		if ee, ok := err.(*expr.EvalError); ok {
-			details["errors"] = []expr.Issue{ee.Issue}
-		}
-		httpapi.Fail(c, core.ErrInvalidArgument.WithMessage(err.Error()).WithDetails(details))
-		return
-	}
-	mult := decimal.NewFromInt(1)
-	if in.GroupID != nil {
-		var g model.Group
-		err := store.G(ctx, s.db.Gorm).Select("rate_multiplier").Where("id = ?", *in.GroupID).Take(&g).Error
-		if store.IsNoRows(err) {
-			httpapi.Fail(c, core.ErrNotFound.WithMessage("group not found"))
-			return
-		}
-		if err != nil {
-			httpapi.Fail(c, err)
-			return
-		}
-		mult = core.ValueOr(g.RateMultiplier, mult) // NOT NULL: always read
-	}
-	httpapi.OK(c, &PreviewResult{
-		Cost:           FinalCost(res.Cost, mult),
-		BaseCost:       res.Cost,
-		RateMultiplier: mult,
-		Tier:           res.Tier,
-		Rules:          res.Rules,
-		Breakdown:      res.Breakdown,
-		Expression:     prog.Expression(),
-		ExprHash:       prog.Hash(),
-	})
 }
 
 // FinalCost applies the group multiplier and rounds up to the 8 decimal
@@ -579,51 +412,4 @@ func deref[T any](p *T) T {
 		return zero
 	}
 	return *p
-}
-
-// priceConfig is the config a price is checked with: {} when there is none,
-// as an expression price has none.
-func priceConfig(config json.RawMessage) json.RawMessage {
-	if len(config) == 0 || string(config) == "null" {
-		return json.RawMessage("{}")
-	}
-	return config
-}
-
-// validatePrice is the check a global price and a custom price share: it
-// validates the expression the price stands for (expressionFor) as typed, so
-// issue positions match the editor; the price stores Report.Expression, the
-// text trimmed. The error is a config the generator refuses
-// (*expr.ConfigError) or an unknown mode.
-func validatePrice(mode string, config json.RawMessage, expression string, opts expr.ValidateOptions) (*expr.Report, error) {
-	raw, err := expressionFor(mode, config, expression)
-	if err != nil {
-		return nil, err
-	}
-	return expr.Validate(raw, opts), nil
-}
-
-// expressionFor returns the expression stored for a price: generated from
-// the config, or the hand-written expression of an expression price, whose
-// config must be {} (an empty expression fails validation).
-func expressionFor(mode string, config json.RawMessage, expression string) (string, error) {
-	src, err := expr.Generate(mode, config)
-	if err == nil && mode == expr.ModeExpression {
-		return expression, nil
-	}
-	return src, err
-}
-
-// recordHistory keeps expressions (hash, canonical text, version) on q
-// where a settlement retry reads them back, in one INSERT in their order.
-func recordHistory(ctx context.Context, q *gorm.DB, progs ...*expr.Program) error {
-	if len(progs) == 0 {
-		return nil
-	}
-	rows := make([]model.ModelPriceHistory, len(progs))
-	for i, p := range progs {
-		rows[i] = model.ModelPriceHistory{ExprHash: p.Hash(), Expression: p.Expression(), ExprVersion: p.Version()}
-	}
-	return store.G(ctx, q).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "expr_hash"}}, DoNothing: true}).
-		Create(&rows).Error
 }

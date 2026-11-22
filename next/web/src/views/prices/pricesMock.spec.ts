@@ -33,6 +33,20 @@ describe('prices in the mock', () => {
     expect(v).toMatchObject({ ok: true, expression: 'tier("base", p*3 + c*15)' })
   })
 
+  it('refuse a save without a mode or with an unknown one, and an expression price with a config, as the server does', async () => {
+    const save = (body: object) => call('POST', '/prices', { model: 'mode-check', ...body })
+    const oldMode = await save({ mode: 'per_token', config: singleTier({ p: 1, c: 1 }), expression: 'tier("base", p*1 + c*1)' })
+    expect(oldMode.status).toBe(400)
+    expect(oldMode.body.error.details.fields).toEqual([{ field: 'mode', code: 'invalid_config', message: 'unknown mode "per_token"' }])
+    const configured = await save({ mode: 'expression', config: singleTier({ p: 1, c: 1 }), expression: 'tier("base", p*1 + c*1)' })
+    expect(configured.status).toBe(400)
+    expect(configured.body.error.details.fields[0]).toMatchObject({ field: 'config' })
+    const noMode = await save({ config: {}, expression: 'tier("base", p*1 + c*1)' })
+    expect(noMode.status).toBe(400)
+    expect(noMode.body.error.details.fields).toEqual([{ field: 'mode', code: 'required', message: 'visual or expression' }])
+    expect((await save({ mode: 'expression', config: {}, expression: 'tier("base", p*1 + c*1)' })).status).toBe(201)
+  })
+
   it('trace each surcharge of the generated expression, and multiply the matched ones', async () => {
     const usage = { p: 1_000_000, c: 0 }
     const preview = async (extra: object) =>

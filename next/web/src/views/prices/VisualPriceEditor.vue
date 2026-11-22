@@ -10,11 +10,11 @@ import PricePresets from './PricePresets.vue'
 import PriceRuleGroups from './PriceRuleGroups.vue'
 import PriceTierCard from './PriceTierCard.vue'
 
-// The visual price editor: preset templates, the tiers
-// as numbered cards matched in order (the last one the rest; the others move
-// up and down before it, and a new one goes in just before it), and the
-// request rule groups. Edits the bound config in place. Read-only, the
-// cards still open and close: each part disables its own controls.
+// The visual price editor: preset templates, the tiers as numbered cards
+// matched in order (the last one the rest; the others move up and down before
+// it, and a new one goes in just before it), and the request rule groups.
+// Edits the bound config in place. Read-only, the cards still open and close:
+// each part disables its own controls.
 const model = defineModel<VisualConfig>({ required: true })
 defineProps<{ disabled?: boolean }>()
 const { t } = useI18n()

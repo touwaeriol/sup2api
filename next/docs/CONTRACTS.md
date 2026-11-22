@@ -562,7 +562,7 @@ compose 里的 `mock-upstream` 服务模拟 Anthropic `/v1/messages` 与 `/v1/me
 - 布尔查询参数：`/usage` 的 `success` 按 Go `strconv.ParseBool`（`true/false/1/0/t/f`）；`/prices` 的 `enabled` 仅 `true` 或 `1` 视为真，其他任意非空值视为假。
 - 创建成功返回 201 `{data}`，删除成功返回 204 无响应体。
 
-### 15.1 API Key（`apikey/apikey.go`、`apikey/platforms.go`）
+### 15.1 API Key（`apikey/apikey.go`、`authenticate.go`、`keys_write.go`、`platforms.go`）
 
 响应对象 `APIKey`：
 
@@ -890,7 +890,7 @@ POST `/accounts/:id/test`（`account:test` / `account:own:test`）：
 
 | kind | 数据 | options | 说明 |
 |---|---|---|---|
-| `litellm` | LiteLLM `model_prices_and_context_window.json` | `{providers}`，默认 `["anthropic","openai","gemini"]`（`litellm_provider`） | 只取 chat、completion、responses、embedding 模式；`<provider>/` 前缀会去掉；超过 200K 上下文的价格生成两档的按 token 价格（§131）；有 1 小时缓存写入价 |
+| `litellm` | LiteLLM `model_prices_and_context_window.json` | `{providers}`，默认 `["anthropic","openai","gemini"]`（`litellm_provider`） | 只取 chat、completion、responses、embedding 模式；`<provider>/` 前缀会去掉；超过 200K 上下文的价格生成两档的可视化价格（第一档 `len <= 200000`，§131）；有 1 小时缓存写入价 |
 | `models_dev` | models.dev `api.json` | `{providers}`，默认 `["anthropic","openai","google"]` | 按 `cost.tiers`（context 类型）分档；**没有 1 小时缓存写入价** |
 | `sup2api` | 上游 sup2api 的 `GET /api/v1/key/prices` | `{apply_multiplier}`，默认 true | 必须填 `api_key`（上游的 `sk-s2a-` Key，用 AES-GCM 加密保存）。apply_multiplier 为 true 时，价格乘以上游返回的 `rate_multiplier`，也就是按实际付给上游的价格导入。上游是 §97 及以后的版本时，返回的价格已是该 Key 所有者在那个分组的标价，`rate_multiplier` 是他的实际倍率，不一定等于分组默认倍率 |
 
@@ -905,7 +905,7 @@ POST `/accounts/:id/test`（`account:test` / `account:own:test`）：
 | DELETE `/price-sources/:id` | `price:manage` | 204；已导入的价格保留，`sync_source_id` 置空 |
 | POST `/price-sources/:id/preview` | `price:manage` | 拉取后与本地对比，返回 `{source_id, fetched_at, total, skipped, items:[{model, action, incoming:{model, mode, config, expression}, current}]}`。action：`create` 本地没有；`update` 本地是同步来的价格且不同；`manual` 本地是手动价格且不同；`unchanged` 相同。拉取失败返回 503 `unavailable`，并写入 `last_error` |
 | POST `/price-sources/:id/apply` | `price:manage` | `{models:[...]}` → `{created, updated, unchanged, skipped:[{model, reason}]}`。服务端重新拉取，只导入列出的模型（选中的手动价格也会被覆盖），导入后都是 `source=sync`；记审计 `price.sync` |
-| GET `/key/prices` | API Key（`Authorization: Bearer` 或 `x-api-key`） | 供下游 sup2api 同步用：`{prices:[{model, mode, config, expression}], rate_multiplier, group:{id, name}}`，只含启用的价格，以及该 Key 所在分组白名单允许的模型。§97 起模型范围不变，内容按 Key 的所有者算：`prices` 是所有者在该分组的标价（分组内定价 → 全局价），`rate_multiplier` 是所有者在该分组的实际倍率；响应形状不变，下游读不到规则，所以按倍数的规则在这里折进价格：按次、按 token 的价格缩放配置里的价格（规则倍数不变）并重新生成表达式，表达式价格写成 `(原表达式) * N`（`expr.Times`，§131.3），下游照常编译；倍数为 1 时不改，改后编译不通过的模型跳过（§97.6）。这是唯一把规则倍数折进价格的接口 |
+| GET `/key/prices` | API Key（`Authorization: Bearer` 或 `x-api-key`） | 供下游 sup2api 同步用：`{prices:[{model, mode, config, expression}], rate_multiplier, group:{id, name}}`，只含启用的价格，以及该 Key 所在分组白名单允许的模型。§97 起模型范围不变，内容按 Key 的所有者算：`prices` 是所有者在该分组的标价（分组内定价 → 全局价），`rate_multiplier` 是所有者在该分组的实际倍率；响应形状不变，下游读不到规则，所以按倍数的规则在这里折进价格：可视化价格缩放各档的价格（`expr.PriceKeys`，档位条件和规则倍数不变）并重新生成表达式，表达式价格写成 `(原表达式) * N`（`expr.Times`，§131.3），下游照常编译；倍数为 1 时不改，改后编译不通过的模型跳过（§97.6）。这是唯一把规则倍数折进价格的接口 |
 
 同步只能由管理员手动触发（先预览再应用），没有定时自动覆盖。
 
@@ -2196,12 +2196,12 @@ Linux 上 `go test -v ./...`（`next/server`）共 **599 个 `=== RUN`，只有 
 | `continue`（默认，2026-11-12 用户决定） | 不再向客户端写，继续把上游响应读完，按上游报告的用量计费；记录仍为 `client_canceled` / 499，`usage_extract` 不写 `precharge`。读不完时按 `precharge` 处理。 |
 | `free` | 立即中止上游，`billable=false`，已报告的 token 仍留在记录里。 |
 
-- **估算与已报告用量的合并改为分侧取值**，取代上一段的「每项取较大值」：输入侧四项（`input`、`cache_read`、`cache_creation`、`cache_creation_1h`）只要响应报告过任意一项就整体采用响应的数，否则整体采用估算；输出取两者较大值。原因：估算把整段提示算作输入，响应把同一段提示的缓存部分算在缓存项下，逐项取较大值在输入不含缓存的协议（Anthropic）上把提示计了两遍。实现 `gateway/pipeline.go` 的 `canceledTokens`。
+- **估算与已报告用量的合并改为分侧取值**，取代上一段的「每项取较大值」：输入侧四项（`input`、`cache_read`、`cache_creation`、`cache_creation_1h`）只要响应报告过任意一项就整体采用响应的数，否则整体采用估算；输出取两者较大值。原因：估算把整段提示算作输入，响应把同一段提示的缓存部分算在缓存项下，逐项取较大值在输入不含缓存的协议（Anthropic）上把提示计了两遍。实现 `gateway/pipeline_submit.go` 的 `canceledTokens`。
 - **`continue` 不另设等待上限**（2026-11-14 用户决定：与请求本身的超时保持一致，不单独配置）：续读只受这次上游交换原有的超时约束，即环境变量 `relay_timeout_seconds`（上游整体超时）和 `streaming_idle_timeout_seconds`（流式空闲超时，§74.3），与客户端还在时相同（`relay_timeout_seconds` 未设置即不限，这时非流式响应读正文没有上限，流式只受空闲超时约束）；到时上游被取消，按 `precharge` 处理。原设置 `client_disconnect_wait_seconds`（5–1800，默认 120）删除，接口不再返回、PUT 不再接受，已存的值留在行里但不读；滚动期间旧核心仍按它等待。读取期间请求不退出，账号与 API Key 的并发名额照常占用。
 - **上游请求的 context 不再派生自客户端请求**（`gateway/dispatch.go` 的 `send`）：由 `gateway/disconnect.go` 的 `upstreamDrain` 在客户端 context 结束时取消它，`continue` 且 `forward` 正在转发成功响应时不取消，读到结束或被上游超时取消。
 - **`continue` 只覆盖由核心 `forward()` 中继的响应**（`forwardSSE`、`forwardJSON`、`forwardJSONConverted`），以及流式专用上游（§83）给非流式客户端拼 JSON 之前收流的那一段（`collectStreamOnly`：2xx 的 SSE 已经开始读就算上游已应答，`continue` 读完再交给 `forward()`，其余策略按 `precharge` 处理）。`task.submit`、资源与额度流、WebSocket 不续读，按 `precharge` 处理。转发 V2（§112）起每个请求都经插件的 `Execute`：不等待的中继由核心在 `Execute` 返回后发出、`forward()` 中继和记用量，与上面相同；等待形式（插件解析用量的端点）同样续读，续读结束后插件才拿到观察、返回事实。等待形式下插件放弃这次中继调用（被终止、进程退出）不算客户端断开：客户端 context 只取自请求本身，插件的调用结束时网关以 `errExecutionAborted` 取消上游，记为上游中断；非流式应答先写进暂存（`spool.go`），暂存写失败（临时文件建不了或写不进；暂存不限大小，§112.16）记为内部错误，同样不算客户端断开。插件自己结算的部分不受影响：`Reservation` 只出现在 `task.submit`（仍不续读），`Replacement` 由 `settleCanceled` 原样保留。实现：`gateway/dispatch.go` 的 `watchClient(ctx, ucancel, !c.ep.TaskSubmit())`。
 - 旧的 `billing` 行没有这个字段，读出默认值，**所以升级后既有部署即按 `continue` 运行**；存储值不在取值集合内时策略取默认值。设置读取失败时网关按 `precharge` 处理。
-- **什么算「读完」**：有输出因客户端已离开而被丢弃，且上游正常结束、没有以流内错误事件收尾。客户端收完最后一个字节才断开的请求没有丢输出，照常记为成功。关停不再等待在途请求时调用 `Gateway.AbandonReads()`（`app/phases.go` 的 `cancelRequests`），续读立即中止，按 `precharge` 处理。
+- **什么算「读完」**：有输出因客户端已离开而被丢弃，且上游正常结束、没有以流内错误事件收尾。客户端收完最后一个字节才断开的请求没有丢输出，照常记为成功。关停不再等待在途请求时调用 `Gateway.AbandonReads()`（`app/phases_http.go` 的 `cancelRequests`），续读立即中止，按 `precharge` 处理。
 - **终止用量送达后才断开的请求算已服务**（核心 0.1.301）：流里的终止用量事件已经转发给客户端（转发时客户端还在、此前没有丢过输出；“还在”在每次写之前判定，三种策略相同：写之后、`serve` 之前才断开的算已服务，写之前已断开的不算，哪怕这次写成功了——`precharge`、`free` 下上游在断开时已被取消，从缓冲读出的事件没有送到），之后客户端在上游关流前断开的请求，记为成功（状态码取上游的），按上游报告的用量计费，三种策略都不适用，也不再续读（`continue` 下同样立即取消上游）；之后上游流空闲超时同样记成功，账号统计不计为取消（`pipeline.go` 的 `statsCanceled`）。不等待与等待两种中继形式的 HTTP 请求都适用（判定在 `forward()`，`upstreamDrain.serve`/`served`）。**终止用量事件**由 manifest 的 usage 规则判定，不按协议写死（`usagerules.Acc.Final`）：`usage.sse` 里**指名事件**（`event` 非空）且映射了 `output_tokens` 的规则命中、并且该事件里输出数存在且不为 null。输出数只有应答结束时才知道，所以声明它的具名事件就是最终用量：Anthropic `message_delta`（`message_start` 只报输入侧，不映射输出，不算）、OpenAI Responses（HTTP 流）`response.completed` / `response.incomplete`。规则匹配任意事件（`"event": ""`）的协议（OpenAI Chat Completions 末尾的 usage chunk、Gemini 每个 chunk 的 `usageMetadata`）没有可判定的终止事件（Gemini 与部分 OpenAI 兼容上游每个 chunk 都带累计用量），仍以读到上游结束为准；非流式 JSON 读完才提取用量，同样不变。终止用量事件之前断开的，行为不变。WebSocket 轮次本来就在终止事件写给客户端后结束（`websocket.go` 的 `observe`），客户端之后断开不影响已结束的轮次，无需改动。测试：`gateway/disconnect_test.go`（终止用量后断开记成功，含转换路由与插件执行的 Responses `response.completed`；之前断开仍是 499 加预扣补齐；插件执行路径两种情况；插件放弃转发不算断开）、`usagerules/final_test.go`。
 - 策略经 `core.ClientDisconnectSource.ClientDisconnectPolicy` 读取，`billing.Service` 实现；网关拿不到时按 `precharge` 处理。网关包的测试环境同样默认 `precharge`，只有针对 `continue` 的用例显式开启。
 - 测试：`gateway/disconnect_test.go`（三种策略、续读被上游整体超时结束、续读中关停的端到端，`canceledTokens`）、`e2e/ac26_client_disconnect_test.go`（整机验收）、`gateway/precharge_cancel_test.go`（判定）、`billing/settings_disconnect_test.go`（设置读写与校验）。
@@ -2222,7 +2222,7 @@ Linux 上 `go test -v ./...`（`next/server`）共 **599 个 `=== RUN`，只有 
 - **为什么对所有请求做，而不是只对有钩子的请求**：协议转换路径（`convert`，encoding/json 取最后一个）和插件里用 gjson 读字段的地方（取第一个）同样会对同一个请求体读出不同的值；检查本身很便宜。实测（i5-13600KF，`gateway/jsonscan_test.go` 基准）：40 MB（30 MB base64 图片 + 800 条消息）请求 5 ms、960 B 分配，约为原有 gjson 校验（37 ms）的 1/7；最坏形状（5.5 MB 全是小对象和短字符串）7 ms（约 760 MB/s）。
 - **过深嵌套**：同一次扫描里，容器嵌套超过 10000 层（与 encoding/json 相同）时回答 400 `request body is nested too deeply`。原因：gjson 的校验是递归的，约 11 MB 的 `[` 就能让 goroutine 栈超过 1 GB 上限，这是**整个进程退出**的 fatal error，不是能 recover 的 panic（2026-10-31 用 gjson v1.19.0 实测）；任何持有 API Key 的人在默认 128 MB（原 32 MB）的请求体上限内都能做到。所以扫描在 gjson 校验之前执行。插件补丁的 `value_json` 同样先扫描。
 - **顺序**：UTF-8 检查 → 结构扫描（过深则拒绝）→ gjson 校验（不合法则 `request body is not valid JSON`）→ 重复键。不合法的 JSON 报"不是合法 JSON"，不报重复键。
-- **实现**：`gateway/jsonscan.go` `scanJSONShape`（单遍，不解码；字符串用 `bytes.IndexByte` 跳过；每个对象 16 个键以内用切片比较，超过换 map），`pipeline.go` `checkBodyJSON`，`websocket.go` `begin`，`hooks.go` `applyPatches`。
+- **实现**：`gateway/jsonscan.go` `scanJSONShape`（单遍，不解码；字符串用 `bytes.IndexByte` 跳过；每个对象 16 个键以内用切片比较，超过换 map），`pipeline_request.go` `checkBodyJSON`，`websocket.go` `begin`，`hooks.go` `applyPatches`。
 - **没有覆盖的**：资源请求（Files API 等，`resource_http.go`，不执行钩子）不检查。上游返回的 JSON（`usagerules`、`forward.go` 的 SSE 数据）也用 gjson 校验，深度问题理论上存在，但来源是上游，不在本节范围。
 
 ### 26.8 内建插件分两种：安装并启用 / 只安装（2026-09-30）
@@ -3531,8 +3531,8 @@ GET `/groups/:id/models`（`group:read`）返回所有未删除成员账号的�
 
 一次约 1 MB 的 Anthropic 请求在核心里从读完请求体到交给插件约 0.2–0.35 秒，其中大部分是串行的数据库往返和同一份请求体的反复扫描。本节记录把这些工作并行化、去重、并成一次往返的改动；发往上游的字节、对外响应与错误码、计费金额语义、幂等键与审计一律不变。
 
-- **本地 token 估算与其它工作重叠**（`gateway/prompt_count.go`，`pipeline.go` 的 `run`）。请求体从 hooks 之后不再改变，`run` 在余额检查之前启动 `startPromptCount`：一个 goroutine 做 `extractPromptText` + `tokenizer.Count`，`precharge` 在需要本地估算时 join 它（`localPromptEstimate`）。goroutine 只拿到 body 切片、promptTextPaths 与当时的 `bodyVersion`，从不读 `call` 的其它字段；`run` 用 `defer joinPromptCount()` 在每条退出路径上等待它结束，因此不会有 goroutine 活过处理函数（`submit` 释放 body 的时机因此未变）。估算值逐值相同：同一个函数、同一份文本、同一个上限（`tokenizer.MaxTextBytes`）。只在“一定会走本地路径”的地方启动：内置平台（`Platform.Client == nil`）、计费端点非 free、非 task.submit。平台插件（`EstimateUsage`）完全不受影响，它的请求按原样构造并发送；插件返回 `Unimplemented` 的回退路径仍在请求路径上自己计数。若将来某条路径在启动后替换了 body，版本号不匹配时会退回同步计数（现在没有这样的路径）。
-- **hooks 没改 body 时复用第一次 `checkModel` 的结果**（`pipeline.go` 的 `checkModel`）。`checkModel` 仍在 hooks 前后各跑一次（模型、分组白名单必须按最终 body 判断），但扫描整份 body 的模型引用检查以 `bodyVersion` 为版本缓存：hooks 只能通过 `setBody` 换 body，而 `setBody` 会递增 `bodyVersion`，所以版本未变就说明检查的输入完全一致（hooks 不改 header），第二次直接返回。版本变化时重跑，与原来一致。（资源引用与 fallback-credit 检查随 CCGateway 在 0.1.290 删除。）
+- **本地 token 估算与其它工作重叠**（`gateway/prompt_count.go`，`pipeline.go` 的 `billAndDispatch`，由 `run` 调用）。请求体从 hooks 之后不再改变，`billAndDispatch` 在余额检查之前启动 `startPromptCount`：一个 goroutine 做 `extractPromptText` + `tokenizer.Count`，`precharge` 在需要本地估算时 join 它（`localPromptEstimate`）。goroutine 只拿到 body 切片、promptTextPaths 与当时的 `bodyVersion`，从不读 `call` 的其它字段；`billAndDispatch` 用 `defer joinPromptCount()` 在每条退出路径上等待它结束，因此不会有 goroutine 活过处理函数（`submit` 释放 body 的时机因此未变）。估算值逐值相同：同一个函数、同一份文本、同一个上限（`tokenizer.MaxTextBytes`）。只在“一定会走本地路径”的地方启动：内置平台（`Platform.Client == nil`）、计费端点非 free、非 task.submit。平台插件（`EstimateUsage`）完全不受影响，它的请求按原样构造并发送；插件返回 `Unimplemented` 的回退路径仍在请求路径上自己计数。若将来某条路径在启动后替换了 body，版本号不匹配时会退回同步计数（现在没有这样的路径）。
+- **hooks 没改 body 时复用第一次 `checkModel` 的结果**（`pipeline_request.go` 的 `checkModel`）。`checkModel` 仍在 hooks 前后各跑一次（模型、分组白名单必须按最终 body 判断），但扫描整份 body 的模型引用检查以 `bodyVersion` 为版本缓存：hooks 只能通过 `setBody` 换 body，而 `setBody` 会递增 `bodyVersion`，所以版本未变就说明检查的输入完全一致（hooks 不改 header），第二次直接返回。版本变化时重跑，与原来一致。（资源引用与 fallback-credit 检查随 CCGateway 在 0.1.290 删除。）
 - **请求体解析与摘要每版本只做一次**（`gateway/body_state.go`）。`gjson` 解析会把整份文档复制成字符串：`ParseBytes` 一次约 1 MB 分配，而模型引用扫描每条规则、hook 前后、每次补丁对比都会调一次。现在 `call.bodyRoot()` 每个 `bodyVersion` 解析一次，`modelReferenceLocationsIn` / `modelReferenceSnapshotIn` / `modelReferencePatches` 接收已解析的根；`setBody` 与 `submit` 的 `releaseBodies` 都会丢弃它。同理 `call.bodyDigest()` 每版本只算一次 SHA-256，资源扫描缓存新增 `inspectDigest` 接受调用方已有的摘要。不是当前请求体的字节（转换后的、打好补丁的副本）仍按需解析/哈希（`rootFor` / `digestFor` 只在切片是同一个时复用缓存）。安全语义不变：没有引入任何基于字面量的预筛（`\u` 转义可以绕过），命中的永远是完整解析出的结构。
 - **插件没有打补丁时跳过补丁校验**（`gateway/dispatch.go` 的 `validatePatches`）。`applyPatches` 在补丁为空时原样返回 `upBody`，此时三项“前后对比”是同一份字节与自身比较，必然通过却要付四次扫描与两次哈希。现在先比较 `bytes.Equal(upBody, body)`，只在确实不同时才跑资源引用、端点模型引用与上游模型引用三项守卫；用量规则当时无论如何照旧运行（2026-11-21 起发送前不再检查用量规则，§120.4）。比较的是字节而不是子串，无法被转义绕过；比较为假只意味着多跑一次守卫，不会少跑。
 - **预扣事务的往返从约 12 次降到 4 次**（`billing/precharge.go`）。一个事务现在只有：BEGIN、一个 `pgx.Batch`（建 `user_balances` 行 → `FOR UPDATE` 锁住该行 → 一条 CTE 语句写 `balance_ledger`、`request_precharges` 并更新余额）、`balance.changed` 事件、COMMIT。被合并掉的正是原 `ApplyTx` 重复的语句（又一次插入余额行、又一次 `FOR UPDATE`、又一次幂等查询），余额是否足够的判断（`balance - amount > min_balance`）与幂等键是否已存在都表达在同一条 SQL 里：任何一条不满足就一行都不写，客户端据返回的 `duplicate` / `sufficient` 得到与原来相同的“成功且不扣费”或 `insufficient_balance`。锁顺序未变（仍然先锁 `user_balances` 的那一行再动流水与预留，释放路径 `ReleasePrechargeTx` 同样先锁该行）；幂等键仍是 `precharge:{request_id}`，仍是 `balance_ledger` 的唯一键；写入的值不变（`delta = -round(amount,8)`、`balance_after = balance + delta`、kind/ref_type/ref_id/note 相同，`validateChange` 在事务前先做，因此 8 位小数之外的值仍在写库前被拒）。旧的 `user_balances` 行在余额不足导致回滚时也不会留下（整条语句随事务回滚）。若幂等键恰好在本语句快照之后被其它事务插入，语句不写任何行，此时回落到 `ApplyTx` 原来的做法：加锁事务内 `findLedger` 读回该行并比较 user/amount/kind，一致则视为重复成功，不一致为 `idempotency key reused...` 冲突。`Precharge` 仍在任何上游请求之前完成（`prepareBilling` 的顺序未变），`usage` 侧的 `ApplyTx` 未改。回归测试 `TestPrechargeRoundTrips` 用 pgx tracer 计数：同一请求重跑时为 4 次 flush（1 BEGIN、2 batch、1 COMMIT），旧实现为 12 次。
@@ -6643,8 +6643,8 @@ kind: users | groups | api-keys | accounts | models | proxies
 
 - `Source` 为空就是全局价，常量 `core.PriceSourceGlobal`（`global`）只用在给人看的接口里：定价表的 `source`、试算的 `price_source`、`/me/prices?group_id=` 的 `source` 在全局价时输出 `global`；冻结到使用记录时这个字段省略（97.4）。0123 之前冻结的记录里还可能是 `segment`（已删除的专属价），只作记录，没有对应的常量。
 - `ID` 始终取全局价的，`usage_logs.price_id` 一直指向全局价那一行。`VideoOnly`、`PerRequest` 取生效表达式的：命中自定义价时按规则自己的表达式算（`billing.traitsOf`，读规则时算一次），按倍数的规则不改变它们。命中自定义价的记录，`usage_logs.expr_hash` 是规则表达式的哈希，在 `model_price_history` 里查得到。
-- **规则倍数与倍率只在一处相乘**：`func (r *PriceRule) Multiplier(rate decimal.Decimal) decimal.Decimal`（`rate × Scale`，`r` 或 `Scale` 为 nil 时就是 `rate`）。传给 `Quote` 的 `RateMultiplier` 都经过它：预扣（`billing/additional.go` 的 `quoteRecord`）和结算、预留、对账（`usage/settler.go` 的 `priceOne`）。
-- 网关：主模型和引用模型（`prepareBilling`、`prepareReferencedPrices`）的 `Resolve` 都带分组；写使用记录时把 `SegmentID`、`RateSource` 记到 `core.UsageRecord`。计费方式准入看 `BillingType()`（`Mode`、`VideoOnly`、`PerRequest`）。价格入参的捕获（`Pricer.Inputs`）取生效表达式和 `Base` 两条表达式读的请求参数、请求头的并集：自定义价可以取代任何全局价，结算时还要用同一份入参再算一次全局价得出原价。原价只用于展示：全局价表达式算不出（编译或求值出错）时原价记成标价费用、`billing_detail.base_fallback: true`（报表可据此排除）、打一条警告日志，照常扣费，不让记录进 `failed`（`usage/settler.go` 的 `priceOne`）。
+- **规则倍数与倍率只在一处相乘**：`func (r *PriceRule) Multiplier(rate decimal.Decimal) decimal.Decimal`（`rate × Scale`，`r` 或 `Scale` 为 nil 时就是 `rate`）。传给 `Quote` 的 `RateMultiplier` 都经过它：预扣（`billing/additional.go` 的 `quoteRecord`）和结算、预留、对账（`usage/pricing.go` 的 `priceOne`）。
+- 网关：主模型和引用模型（`prepareBilling`、`prepareReferencedPrices`）的 `Resolve` 都带分组；写使用记录时把 `SegmentID`、`RateSource` 记到 `core.UsageRecord`。计费方式准入看 `BillingType()`（`Mode`、`VideoOnly`、`PerRequest`）。价格入参的捕获（`Pricer.Inputs`）取生效表达式和 `Base` 两条表达式读的请求参数、请求头的并集：自定义价可以取代任何全局价，结算时还要用同一份入参再算一次全局价得出原价。原价只用于展示：全局价表达式算不出（编译或求值出错）时原价记成标价费用、`billing_detail.base_fallback: true`（报表可据此排除）、打一条警告日志，照常扣费，不让记录进 `failed`（`usage/pricing.go` 的 `withRule`）。带替换项或附加项的记录，只要任一分项的原价回退，顶层也标 `base_fallback`，分项明细（`replacement[].detail`、`additional[].detail`）里各自也带这个标记（`usage/additional.go` 的 `priceComponents`）。
 - 插件的只读报价 `PriceModelUsage`（`billing/usage_quote.go`）仍按全局价、倍率 1。`POST /prices/preview` 的 `group_id` 保持原意，只取分组默认倍率。
 - WebSocket 每一轮（`response.create`）开始之前用握手时的 API Key 重新鉴权（`gateway/websocket.go` 的 `refresh`，§35 “会话”一段），这一轮的倍率就是重新鉴权算出的：连接期间改了授权、全场折扣或专属倍率，下一轮就生效，不用重连；授权被撤销时这一轮 403 并关闭连接。标价同样每一轮重新解析。
 
@@ -6668,15 +6668,15 @@ kind: users | groups | api-keys | accounts | models | proxies
 
 - 倍率来源是分组默认、标价是全局价时，整个 `pricing` 省略：这样的记录，`billing_detail` 与本节之前逐字节相同。
 - 附加和替换分项（`core.PricedUsage`）本来就整条持久化自己的 `Price`，`Source`、`Scale`、`Base` 随它一起冻结。
-- 首次结算用的输入和写进 `billing_detail.inputs` 留给重试、对账的输入，由同一个函数从使用记录取出（`usage/settler.go` 的 `recordInputs`，含 `pricing`），两边逐字段相同：给待结算输入加字段只改这一处。
-- 结算重试（`usage/settler.go` 的 `RetryPending`）和对账（`usage/reconcile.go` 的 `loadReserved`）从库里重建待结算项时**不重新解析规则**：表达式照旧按 `expr_hash` 从 `model_price_history` 取（自定义价的表达式在保存规则时已经写进历史表，任何版本的节点都取得到），`scale` 和 `base` 从 `inputs.pricing` 取，倍率从 `usage_logs.rate_multiplier` 取。请求之后规则被修改或删除、用户换了用户组，都不影响这笔账。
-- 读回冻结价格的两条 SQL（重试、对账）共用同一段连接（`usage/settler.go` 的 `frozenPriceJoins`）：先按 `expr_hash` 在 `model_price_history` 里找；找不到时回退到 `price_id` 指向的那条全局价现在的表达式，但只对**不是自定义价**的记录回退（`inputs.pricing.base` 为空）。命中自定义价的记录 `price_id` 指的是全局价，不是它实际的标价，所以历史表里缺行时它没有表达式可用：重试进 `failed`（`price expression not found`）；对账保持 `reserved` 和预留时的估算值，并在 `pending_settlements.last_error` 留痕。两种情况都不会静默按全局价扣费。记录带附加分项时也一样：主项命中自定义价而表达式缺失，整条记录进 `failed`，不会只收分项、主项按 0 算（`usage/additional.go` 的 `priceComponents`；主项本来就没有价格，或被替换分项取代时，才不计主项）。正常路径下不会缺行：保存规则和写历史表在同一个事务里。
+- 首次结算用的输入和写进 `billing_detail.inputs` 留给重试、对账的输入，由同一个函数从使用记录取出（`usage/usage_rows.go` 的 `recordInputs`，含 `pricing`），两边逐字段相同：给待结算输入加字段只改这一处。
+- 结算重试（`usage/settle.go` 的 `RetryPending`）和对账（`usage/reconcile.go` 的 `loadReserved`）从库里重建待结算项时**不重新解析规则**：表达式照旧按 `expr_hash` 从 `model_price_history` 取（自定义价的表达式在保存规则时已经写进历史表，任何版本的节点都取得到），`scale` 和 `base` 从 `inputs.pricing` 取，倍率从 `usage_logs.rate_multiplier` 取。请求之后规则被修改或删除、用户换了用户组，都不影响这笔账。
+- 读回冻结价格的两条 SQL（重试、对账）共用同一段连接（`usage/settle.go` 的 `frozenPrice`）：先按 `expr_hash` 在 `model_price_history` 里找；找不到时回退到 `price_id` 指向的那条全局价现在的表达式，但只对**不是自定义价**的记录回退（`inputs.pricing.base` 为空）。命中自定义价的记录 `price_id` 指的是全局价，不是它实际的标价，所以历史表里缺行时它没有表达式可用：重试进 `failed`（`price expression not found`）；对账保持 `reserved` 和预留时的估算值，并在 `pending_settlements.last_error` 留痕。两种情况都不会静默按全局价扣费。记录带附加分项时也一样：主项命中自定义价而表达式缺失，整条记录进 `failed`，不会只收分项、主项按 0 算（`usage/additional.go` 的 `priceComponents`；主项本来就没有价格，或被替换分项取代时，才不计主项）。正常路径下不会缺行：保存规则和写历史表在同一个事务里。
 
 ### 97.5 三个金额
 
 | 名称 | 含义 | 存放 |
 |---|---|---|
-| 原价 `base_cost` | 全局价 × 用量 | `usage_logs.base_cost`（新列）；`billing_detail.cost`（含义不变：倍率前、全局价）。命中自定义价而全局价算不出时等于标价费用，`billing_detail.base_fallback` 为 `true`（97.3） |
+| 原价 `base_cost` | 全局价 × 用量 | `usage_logs.base_cost`（新列）；`billing_detail.cost`（含义不变：倍率前、全局价）。命中自定义价而全局价算不出时等于标价费用，`billing_detail.base_fallback` 为 `true`；任一替换项或附加项回退时顶层也为 `true`，分项明细里各自也带（97.3） |
 | 标价费用 `list_cost` | 标价 × 用量 | `billing_detail.list_cost`，只在命中规则时写 |
 | 实付 `total_cost` | 标价费用 × 倍率 | `usage_logs.total_cost`（不变） |
 
@@ -6791,7 +6791,7 @@ kind: users | groups | api-keys | accounts | models | proxies
 | DELETE `/users/:id` | 用户的个人专属随之删除，`segment_id` 改回默认用户组 |
 | POST / PATCH `/me/api-keys`，Key 的 `group_status`，网关鉴权 | 分组可用性按用户组（§15.1） |
 | GET `/me/prices` | 两种形态，见 §79.5。带 `group_id` 时每行是上面的 `PriceDef`（按倍数的规则带 `multiplier`，表达式和配置不动）加 `source`，价格出自价格快照；`group_id` 不是正整数 400 |
-| GET `/key/prices` | 模型范围不变（分组模型名单放行的全部已启用模型）；价格是 Key 所有者在该分组的标价，出自本节点给请求计费用的价格快照，`rate_multiplier` 是他的实际倍率。响应形状不变（没有 `multiplier`），读者看不到规则，所以这是**唯一把规则倍数折进价格的接口**（`billing` 的 `exportPrice`：先 `listPrice`，有倍数且不等于 1 时再缩放）：按次、按 token 的价格缩放配置里的价格（`expr.PriceKeys`，数字字符串同样缩放；规则倍数不变），表达式由缩放后的配置重新生成；表达式价格写成 `(原表达式) * N`（`expr.Times`；原表达式含行注释时右括号另起一行，§131.3）。倍数等于 1 时不改，价格就是全局价。改后重新编译，不通过的模型从结果里跳过并记日志，接口不因此失败。每行的 `expression` 都非空。缩放用的是从上游同步价格时“应用倍率”的同一个函数，两处的结果一致（§17.1） |
+| GET `/key/prices` | 模型范围不变（分组模型名单放行的全部已启用模型）；价格是 Key 所有者在该分组的标价，出自本节点给请求计费用的价格快照，`rate_multiplier` 是他的实际倍率。响应形状不变（没有 `multiplier`），读者看不到规则，所以这是**唯一把规则倍数折进价格的接口**（`billing` 的 `exportPrice`：先 `listPrice`，有倍数且不等于 1 时再缩放）：可视化价格缩放各档的价格（`expr.PriceKeys`，数字字符串同样缩放；档位条件和规则倍数不变），表达式由缩放后的配置重新生成；表达式价格写成 `(原表达式) * N`（`expr.Times`；原表达式含行注释时右括号另起一行，§131.3）。倍数等于 1 时不改，价格就是全局价。改后重新编译，不通过的模型从结果里跳过并记日志，接口不因此失败。每行的 `expression` 都非空。缩放用的是从上游同步价格时“应用倍率”的同一个函数，两处的结果一致（§17.1） |
 | GET `/usage/:id`、`/me/usage/:id` | `billing_detail` 里可能多出 `inputs.pricing`（97.4）和 `list_cost`（97.5） |
 | GET `/usage/summary`、概览、导出 | `standard_cost` 和原价一列的口径（§66.1、§66.5） |
 | GET `/lookup/groups?mine=true`、`/lookup/models?mine=true` | 可用分组的范围按用户组。`models?mine=true` 是各可用分组 `/me/prices?group_id=` 结果并集的超集（§96.3） |
@@ -6933,7 +6933,7 @@ WHERE s.kind = 'personal' AND u.deleted_at IS NOT NULL;
 
 - 删掉：GET `/groups/:id/model-prices` 的 `?segment_id=`、行里的 `segment_rule` 和 `segment_rule_count`、响应的 `segment`；PUT 的 `?segment_id=` 和 `items[].segment_id`；试算的 `price_levels.segment`；`Segment`、`SegmentGroupSetting` 的 `price_rule_count`；`Segment.rate_override_count`（换成 `rate_overrides: [{id, name, rate}]`）；GET `/groups` 的 `segment_rule_count`。`source`、`price_source` 只有 `group` 和 `global`。个人专属复制设置不再复制规则。
 - 同时改的：保存规则只要求模型有启用的全局价，定价表并上分组有规则的模型并带 `offered`，`price_rule_count` 不再按分组提供的模型过滤（97.1、97.6）；新增 GET `/pricing/catalog`；GET `/segments?kind=all`；定价表、`/me/prices?group_id=`、`/key/prices` 读价格快照，与计费同源；试算对停用的分组回答 `accessible: false`、`access_source: "disabled"`；价格快照的并发载入合并成一次（97.3）。
-- 网关鉴权缓存里的实际倍率直接存十进制数（`core.SegmentRate` 算出的那个），不再存字符串、读时解析；原来解析失败时静默按 ×1 计费，现在没有这条路径。
+- 网关鉴权读出的实际倍率直接是 `core.SegmentRate` 算出的十进制数，不再转成字符串再解析；原来解析失败时静默按 ×1 计费，现在没有这条路径。
 - PUT `/groups/:id/model-prices` 带 `?segment_id=` 或请求体里有未知字段（如旧控制台项里的 `segment_id`）回 400 `invalid_argument`，不会被当成分组内定价写入。控制台随核心一起发布，升级后刷新页面即可；脚本按新形状发。
 
 **历史使用记录**：0123 之前命中专属价的记录，`billing_detail.inputs.pricing.price_source` 是 `"segment"`，表达式在 `model_price_history`，`scale`、`base` 在 `inputs.pricing`。结算重试和对账不重新解析规则（97.4），这些记录照常读、照常结算；使用记录详情照常显示标价来源。代码里不再有 `segment` 这个来源的常量，这个值只出现在旧数据里。
@@ -6959,7 +6959,7 @@ WHERE s.kind = 'personal' AND u.deleted_at IS NOT NULL;
 
 ### 98.1 存储与格式
 
-- 位置：`usage_logs.anomalies.attempts`（常量 `core.AnomalyAttempts`），值是 JSON 字符串（与 `scheduling`、`availability` 相同的“字符串里装 JSON”），核心类型 `core.AttemptTrail` / `core.AttemptStep`（`core/ports_billing.go`）。无迁移。
+- 位置：`usage_logs.anomalies.attempts`（常量 `core.AnomalyAttempts`），值是 JSON 字符串（与 `scheduling`、`availability` 相同的“字符串里装 JSON”），核心类型 `core.AttemptTrail` / `core.AttemptStep`（`core/ports_usage_trace.go`）。无迁移。
 - **只在 `attempts ≥ 2` 时写**；只发了一次的请求（绝大多数）不写，`anomalies` 不变。
 
 ```json
@@ -7866,7 +7866,7 @@ ALTER TABLE accounts ADD COLUMN IF NOT EXISTS model_protocols jsonb NOT NULL DEF
 - **不经调度的端点**：异步任务的查询端点（第一方插件里原来只有 0.1.304 删除的 `volcengine.video_query`）不选账号，协议绑定对它不生效；校验和 `served_protocols` 仍把它当普通本平台协议。
 - 优先级、等级排序（§88.3）、丢失策略、故障策略、均衡负载都不变。没有配置这两个字段、请求走本平台协议的账号，行为与本节之前相同。
 
-**调度跳过原因**（§24.6 的表同步增加这三项，`core/ports_billing.go`）：
+**调度跳过原因**（§24.6 的表同步增加这三项，`core/ports_usage_trace.go`）：
 
 | `reason` | 常量 | 含义 | `detail` |
 |---|---|---|---|
@@ -7948,7 +7948,7 @@ ALTER TABLE accounts ADD COLUMN IF NOT EXISTS model_protocols jsonb NOT NULL DEF
 - count_tokens 协议跟随生成协议列出：`grade` 为 `local`（本地估算）时，类型声明了该平台记 `adapted`，没声明记 `converted`。
 - 账号类型未注册（插件未启用）时为 `[]`。
 
-**分组的 `served_protocols`**：`[{protocol, accounts}]`，组内账号开放的协议的并集，`accounts` 是对至少一个模型开放该协议的账号数，按端点声明的顺序。统计组内未删除的账号，不看状态和是否参与调度；类型未注册的账号不计。分组模块经 `core.GroupProtocols`（账号模块实现）取，不跨模块 import；在 `internal/app/phases.go` 里账号模块建好后赋给 `group.Service.Protocols`。`GroupServedProtocols(ctx, groupIDs)` 一次查询算出多个分组（返回按分组 id 的 map，每个问到的分组都有、列表不为 nil）：分组详情问一个，`GET /me/groups` 对整页问一次，不按行查询（2026-11-18 起；此前只接受一个分组）。
+**分组的 `served_protocols`**：`[{protocol, accounts}]`，组内账号开放的协议的并集，`accounts` 是对至少一个模型开放该协议的账号数，按端点声明的顺序。统计组内未删除的账号，不看状态和是否参与调度；类型未注册的账号不计。分组模块经 `core.GroupProtocols`（账号模块实现）取，不跨模块 import；在 `internal/app/phases_core.go` 里账号模块建好后赋给 `group.Service.Protocols`。`GroupServedProtocols(ctx, groupIDs)` 一次查询算出多个分组（返回按分组 id 的 map，每个问到的分组都有、列表不为 nil）：分组详情问一个，`GET /me/groups` 对整页问一次，不按行查询（2026-11-18 起；此前只接受一个分组）。
 
 ### 110.8 性能约束
 
@@ -8017,7 +8017,7 @@ ALTER TABLE accounts ADD COLUMN IF NOT EXISTS model_protocols jsonb NOT NULL DEF
 
 ### 111.2 它是唯一的请求大小上限
 
-- 网关请求路径上限制客户端请求大小的地方只有两处，都读这个设置（`gateway/pipeline.go` 的 `bodyLimit`）：读 HTTP 请求体时的 `http.MaxBytesReader`（超出回 413 `request_too_large`），和 WebSocket 连接的单条消息上限（超出以 1009 关闭连接）。
+- 网关请求路径上限制客户端请求大小的地方只有两处，都读这个设置（`gateway/pipeline_request.go` 的 `bodyLimit`）：读 HTTP 请求体时的 `http.MaxBytesReader`（超出回 413 `request_too_large`），和 WebSocket 连接的单条消息上限（超出以 1009 关闭连接）。
 - **删除**：
   - 环境变量 `max_request_body_mb`（§74.3）连同它的全局层、分组层和进程环境变量 `SUB2API_MAX_REQUEST_BODY_MB`；`sdk/protocol` 的常量 `EnvVarMaxRequestBodyMB`、`core.Environment.Bytes` 和变量单位 `mb` 一并删除。带这个键的 `PUT /settings/environment`、分组或账号的 `environment` 现在按未知变量拒绝（400）。启动时仍设置了 `SUB2API_MAX_REQUEST_BODY_MB` 的进程不报错，这个变量不再被读取。
   - 端点清单的 `request.maxBodyBytes`：核心不再读它（字段本身由 `sdk/manifest` 的改动删除，没有清单用过它）。
@@ -8478,7 +8478,7 @@ SDK 名 `pluginsdk.Fetch`。一个有界、非流式的请求，回答交还插�
 | `images_edits` | `POST /v1/images/edits` | `openai.images_edit` | 同上 | 同上 |
 
 - 两个都是 `kind: proxy`、`auth.headers: ["authorization"]`、`errorFormat: openai`、`billing: usage`、`billingTypes: ["per_request","per_token","expression"]`。官方接口要求显式给 `model`，没给时网关照常回 400“model is required”。不带 `/v1` 的 `POST /images/generations`、`/images/edits` 按 §104.2 改写。
-- **只收 JSON 请求体**。官方 edits 也接受 JSON（`images: [{image_url | file_id}]`，`mask` 同理），这一形式与 generations 一样原样转发。**表单上传（`multipart/form-data`）形式暂不支持**：网关读完请求体后的第一道检查（`gateway/pipeline.go` 的 `checkBodyJSON`，§25.9）就回 400 `invalid_argument`，信息 `request body is not valid JSON`（OpenAI 错误形状里 `type` 为 `invalid_request_error`），不选账号、不预扣、不调插件、不发上游；与其它不是 JSON 的请求体一样留一条免费的使用记录，`error_type = invalid_request`、没有账号、token 为 0（鉴权失败时没有记录）。网关要收 multipart，得改读请求体、取模型和审核取提示词，放在以后。
+- **只收 JSON 请求体**。官方 edits 也接受 JSON（`images: [{image_url | file_id}]`，`mask` 同理），这一形式与 generations 一样原样转发。**表单上传（`multipart/form-data`）形式暂不支持**：网关读完请求体后的第一道检查（`gateway/pipeline_request.go` 的 `checkBodyJSON`，§25.9）就回 400 `invalid_argument`，信息 `request body is not valid JSON`（OpenAI 错误形状里 `type` 为 `invalid_request_error`），不选账号、不预扣、不调插件、不发上游；与其它不是 JSON 的请求体一样留一条免费的使用记录，`error_type = invalid_request`、没有账号、token 为 0（鉴权失败时没有记录）。网关要收 multipart，得改读请求体、取模型和审核取提示词，放在以后。
 - 插件侧：`sdk/pluginsdk/providers/openai` 的预设加 `ProtocolImages`、`ProtocolImagesEdit` 两条路由（`/v1/images/generations`、`/v1/images/edits`，Bearer、`content-type: application/json`，请求体原样，流式也**不**加 `stream_options`：图片流不需要它就带用量）。openai 插件因此服务这两个协议（插件内容同批升到 0.5.0，默认模型加 `gpt-image-2`、`gpt-image-1.5`、`gpt-image-1-mini`，不加 2026-12-01 下线的 `chatgpt-image-latest`）。
 
 ### 118.2 用量字段与规则
@@ -8502,7 +8502,7 @@ SDK 名 `pluginsdk.Fetch`。一个有界、非流式的请求，回答交还插�
 
 ### 118.3 计费变量 `img`、`img_o`
 
-- 变量早已在 `billing/expr` 里（`TokenVars`、`Vars`），表达式里写它们校验能过；这一版给它们接上数据：`expr.Tokens` 加 `ImageInput`、`ImageOutput`（字段与 `core.UsageTokens` 一一对应，两处互相转换），结算（`usage/settler.go` 的 `priceOne`、`evaluate`）、`billing.Quote`、价格试算都带上。
+- 变量早已在 `billing/expr` 里（`TokenVars`、`Vars`），表达式里写它们校验能过；这一版给它们接上数据：`expr.Tokens` 加 `ImageInput`、`ImageOutput`（字段与 `core.UsageTokens` 一一对应，两处互相转换），结算（`usage/pricing.go` 的 `priceOne`、`evaluate`）、`billing.Quote`、价格试算都带上。
 - `expr.Normalize` 的规则与缓存写入在 `inclusive` 下的做法一致（§104.3），**两种语义都适用**：
   - 表达式用到 `img` 时 `img = ImageInput`，`p` 再扣掉它；用到 `img_o` 时 `img_o = ImageOutput`，`c` 扣掉它；`p`、`c` 都不小于 0。
   - 没用到时图片 token 留在 `p`、`c` 里按文字价算——**不会变成免费，也不会重复计**。
@@ -8521,7 +8521,7 @@ ALTER TABLE usage_logs
 ```
 
 - 常量默认值的 `ADD COLUMN` 只改目录、不重写表；拿不到锁 10 秒后迁移失败，重试即可（0108 的先例）。旧行读出 0。旧核心忽略这两列。`internal/store/model` 由 `gen-models` 重新生成。
-- 使用记录写这两列（`usage/settler.go` 的 `usageLogRow`），待结算重读（`pendingColumns`）也带上。
+- 使用记录写这两列（`usage/usage_rows.go` 的 `usageLogRow`），待结算重读（`pendingColumns`）也带上。
 - `/usage`、`/me/usage` 的列表与详情多 `image_input_tokens`、`image_output_tokens`（§15.2 的列表字段）；`usage.recorded` 事件同样多这两个键（§6 的事件表）。账号侧视图 `/account-usage`（§103.5 的允许字段）、导出、用量汇总、`usage_hourly` 不变。
 - `core.UsageTokens` 的两个新字段在 JSON 里为 0 时省略（`json:",omitempty"`）：`billing_detail.inputs` 里保存的附加 / 替换用量（`PricedUsage`）对其它请求逐字节不变。
 
@@ -8727,7 +8727,7 @@ ALTER TABLE usage_logs
 - **同平台适配只对列出的端点生效**（§83.3 改写）：类型在平台 P 的子集不含客户端端点时，只有 `adapted` 列出这个端点，才经转换由子集内的端点服务。判断只在 `core.BestConvertTarget` 一处（目标端点与客户端端点同平台时要求 `AccountPlatform.Adapts`），网关 `planRoutes`、账号模块 `servedEndpoints` / `typeProtocols` / `served_protocols`、count_tokens 的本地估算都经它。没列出的端点不服务，不做隐式适配的兼容（第三方插件依赖过隐式适配的要补声明）。
 - 第一方插件补上的声明：codex `codex_device`、`codex_oauth` 列 `chat_completions`、`images_generations`、`images_edits`；azure-openai `azure_deployment`（子集 chat、embeddings）列 `responses`（`/v1/responses` 转成 chat，此前靠隐式适配）。其他第一方类型在自己的平台上不写子集或子集已含所需端点，不受影响。
 - 清单检查（`sdk/manifest/check` `accountAdapted`）：键必须是该平台的端点（`unknown_endpoint`）、不在 `endpoints` 子集里（`native`；不写子集即全部端点都在子集里）、不是 WebSocket 或任务端点（`not_convertible`）；`model` 写了就必须是完整模型 ID（`invalid`）。离线打包解析不了外部平台时只查 `model`，安装时再查。
-- 注册表（`plugin/registry` `unservedAdapted`）：绑定类型时再查核心确实有“该端点协议 → 同平台子集内某端点协议”的转换（同一个 `BestConvertTarget`）；没有就不绑定这个类型，记 ERROR `account type skipped, the core converts no adapted endpoint to its endpoints`。注册表经 `registry.WithConverters` 拿到与网关、账号模块同一个转换器注册表（`app/phases.go`）。
+- 注册表（`plugin/registry` `unservedAdapted`）：绑定类型时再查核心确实有“该端点协议 → 同平台子集内某端点协议”的转换（同一个 `BestConvertTarget`）；没有就不绑定这个类型，记 ERROR `account type skipped, the core converts no adapted endpoint to its endpoints`。注册表经 `registry.WithConverters` 拿到与网关、账号模块同一个转换器注册表（`app/phases_core.go`）。
 - 跨平台转换不变（§110，按账号、按模型开）。
 
 ### 121.2 请求转换（`convert/openai_images_responses.go`）
@@ -9191,7 +9191,7 @@ anthropic 插件自带的模型目录（插件接口 `GET /api/v1/p/anthropic/mo
 
 ### 131.2 `visual` 的 config
 
-Go 类型是 `expr.VisualConfig`、`TierConfig`、`TierCond`、`TokenPrices`、`RuleConfig`、`CondConfig`（`billing/expr/generate.go`）。解码是严格的：不认识的键（旧的 `max_len`、`prices` 嵌套、`flat`、拼错的价格名）400（字段 `config`，`unknown field`），不会变成 0 价。价格可以是 JSON 数字或数字字符串（`"0.15"`，`expr.Num`）；一档的价格键是 `expr.PriceKeys`（`p`、`c`、`cr`、`cc`、`cc1h`、`img`、`img_o`、`price`）。
+Go 类型是 `expr.VisualConfig`、`TierConfig`、`TierCond`、`TokenPrices`、`RuleConfig`、`CondConfig`（`billing/expr/generate.go`，`TierCond` 在 `tier_cond.go`）。解码是严格的：不认识的键（旧的 `max_len`、`prices` 嵌套、`flat`、拼错的价格名）400（字段 `config`，`unknown field`），不会变成 0 价。价格可以是 JSON 数字或数字字符串（`"0.15"`，`expr.Num`）；一档的价格键是 `expr.PriceKeys`（`p`、`c`、`cr`、`cc`、`cc1h`、`img`、`img_o`、`price`）。
 
 ```json
 {
@@ -9291,7 +9291,7 @@ Go 类型是 `expr.VisualConfig`、`TierConfig`、`TierCond`、`TokenPrices`、`
   END;
   ```
 - 生效表达式决定 `VideoOnly`、`PerRequest`（97.3）：例如按 token 的全局价上设一个按次的自定义价，命中它的请求按次计、上游完成就收费；视频全局价上设一个不读视频用量的自定义价，命中它的请求不再限于视频端点。
-- 控制台的自定义价编辑器还是一行单价（只编辑单档），换成完整的价格编辑器由分组定价改造负责；接口已经接受任意形状。
+- 控制台的分组自定义价用与模型价格页相同的编辑器（`PriceDefEditor`：可视化或表达式），可以写任意形状。
 
 ### 131.5 价格同步（§17）
 

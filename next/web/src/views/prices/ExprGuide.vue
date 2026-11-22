@@ -7,7 +7,7 @@ import GuideText from './GuideText.vue'
 import { EXPR_EXAMPLES } from './presets'
 
 // Usage guide of the expression language, in a drawer beside the editor
-// (PriceEditView). Snippets insert at the caret; examples replace the whole
+// (PriceDefEditor). Snippets insert at the caret; examples replace the whole
 // expression; read-only, the guide only reads. The texts are under prices.guide.
 defineProps<{ readonly?: boolean }>()
 const emit = defineEmits<{ (e: 'insert', text: string, caret?: number): void; (e: 'replace', text: string): void }>()

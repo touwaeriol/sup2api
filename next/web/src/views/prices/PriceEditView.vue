@@ -7,7 +7,6 @@ import {
   SAlert,
   SBadge,
   SButton,
-  SDrawer,
   SField,
   SInput,
   SLink,
@@ -23,7 +22,6 @@ import { useAuthStore } from '@/stores/auth'
 import { notifyError } from '@/utils/errors'
 import { applyFormError } from '@/utils/formErrors'
 import { formatDateTime } from '@/utils/format'
-import ExprGuide from './ExprGuide.vue'
 import ExprHistoryModal from './ExprHistoryModal.vue'
 import PriceDefEditor from './PriceDefEditor.vue'
 import PriceEstimator from './PriceEstimator.vue'
@@ -31,7 +29,8 @@ import PriceModelList from './PriceModelList.vue'
 import { issueText, type Issue } from './issues'
 import PriceCheckBar from './PriceCheckBar.vue'
 import { usePriceValidation } from './usePriceValidation'
-import { checkPrice } from './priceExpr'
+import { checkPrice } from './priceCheck'
+import { perRequestOnly } from './priceExpr'
 import { newPriceDraft, priceDraftOf, pricePayload, type PriceDraft } from './priceDraft'
 
 const { t } = useI18n()
@@ -55,14 +54,6 @@ const historyOpen = ref(false)
 const defEditor = ref<InstanceType<typeof PriceDefEditor>>()
 const modelList = ref<InstanceType<typeof PriceModelList>>()
 const readonly = computed(() => !auth.has('price:manage'))
-
-// The expression guide opens in a drawer.
-const guideOpen = ref(false)
-function guideReplace(src: string) {
-  if (readonly.value) return
-  draft.value.expression = src
-  guideOpen.value = false
-}
 
 const isSynced = computed(() => price.value?.source === 'sync')
 const syncedNotice = computed(() => {
@@ -114,11 +105,8 @@ const localIssues = computed<string[]>(() => checkPrice(payload.value).map(x => 
 const previewText = computed(() => payload.value.expression)
 const previewSource = computed(() => (localIssues.value.length || validation.value?.errors.length ? null : { ...payload.value }))
 
-/** A single request tier prices no tokens: the estimator then asks for nothing. */
-const perRequestOnly = computed(() => {
-  const { mode, config } = draft.value
-  return mode === 'visual' && config.tiers.length === 1 && config.tiers[0].unit === 'request'
-})
+/** A price due per request prices no tokens: the estimator then asks for nothing. */
+const perRequest = computed(() => draft.value.mode === 'visual' && perRequestOnly(draft.value.config))
 
 // ------------------------------------------------------------------ validation
 
@@ -141,36 +129,45 @@ onBeforeRouteLeave(() => confirmDiscard(dirty.value))
 
 // ------------------------------------------------------------------ actions
 
+/** Saves the price shown, and takes what the server answers. */
+async function update(body: Record<string, unknown>) {
+  const r = await api.patch<Price>(`/prices/${priceId.value}`, body)
+  toast(t('common.saved'), 'success')
+  if (r && r.id) applyPrice(r)
+  else await load()
+  modelList.value?.reload()
+}
+
+/** Creates the price and opens it. */
+async function create(body: Record<string, unknown>) {
+  const r = await api.post<Price>('/prices', body)
+  toast(t('common.created'), 'success')
+  markSaved()
+  if (r?.id) router.replace(`/prices/${r.id}`)
+  else router.push('/prices')
+}
+
+/** Handles a big-cost warning of the server: asks, then sends the same body again with confirm=true. False when the refusal is not one. */
+async function confirmBigCost(e: ApiError, body: Record<string, unknown>): Promise<boolean> {
+  const d = e.details
+  if (!d.confirmation_required || body.confirm) return false
+  const list = ((d.warnings || []) as Issue[]).map(issueText).join('\n')
+  const ok = await confirm({
+    title: t('prices.validate.warnTitle'),
+    message: t('prices.validate.warnConfirm', { list: list || e.message }),
+    danger: true
+  })
+  if (ok) await submit({ ...body, confirm: true })
+  return true
+}
+
 async function submit(body: Record<string, unknown>): Promise<void> {
   try {
-    if (priceId.value) {
-      const r = await api.patch<Price>(`/prices/${priceId.value}`, body)
-      toast(t('common.saved'), 'success')
-      if (r && r.id) applyPrice(r)
-      else await load()
-      modelList.value?.reload()
-    } else {
-      const r = await api.post<Price>('/prices', body)
-      toast(t('common.created'), 'success')
-      markSaved()
-      if (r?.id) router.replace(`/prices/${r.id}`)
-      else router.push('/prices')
-    }
+    await (priceId.value ? update(body) : create(body))
   } catch (e) {
     if (e instanceof ApiError && e.code === 'invalid_argument') {
-      const d = e.details
-      validator.showSaveIssues(d)
-      // Big-cost warning: ask, then resend the same body with confirm=true.
-      if (d.confirmation_required && !body.confirm) {
-        const list = ((d.warnings || []) as Issue[]).map(issueText).join('\n')
-        const ok = await confirm({
-          title: t('prices.validate.warnTitle'),
-          message: t('prices.validate.warnConfirm', { list: list || e.message }),
-          danger: true
-        })
-        if (ok) await submit({ ...body, confirm: true })
-        return
-      }
+      validator.showSaveIssues(e.details)
+      if (await confirmBigCost(e, body)) return
     }
     applyFormError(e, errors)
   }
@@ -254,7 +251,6 @@ watch(priceId, load, { immediate: true })
             :issues="localIssues"
             :error="errors.expression"
             :validation="validation"
-            @guide="guideOpen = true"
           />
 
           <PriceCheckBar
@@ -263,11 +259,11 @@ watch(priceId, load, { immediate: true })
             :error="validationError"
             :validating="validating"
             :mode="draft.mode"
-            :per-request="perRequestOnly"
+            :per-request="perRequest"
             @locate="(l, c) => defEditor?.focusAt(l, c)"
           />
 
-          <PriceEstimator :source="previewSource" :per-request="perRequestOnly" />
+          <PriceEstimator :source="previewSource" :per-request="perRequest" />
 
           <section class="rounded-xl border border-line" data-testid="price-preview">
             <div class="border-b border-line px-3 py-2 text-sm font-medium text-fg sm:px-4">{{ t('prices.edit.preview') }}</div>
@@ -310,9 +306,6 @@ watch(priceId, load, { immediate: true })
       </div>
     </div>
 
-    <SDrawer v-model:open="guideOpen" :title="t('prices.edit.guide')" width="lg">
-      <ExprGuide :readonly="readonly" @insert="(s, c) => defEditor?.insert(s, c)" @replace="guideReplace" />
-    </SDrawer>
     <ExprHistoryModal v-model:open="historyOpen" :hash="price?.expr_hash" />
   </div>
 </template>

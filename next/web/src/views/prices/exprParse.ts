@@ -8,7 +8,6 @@ import {
   COND_VARS,
   NUMERIC_OPS,
   PRICE_KEYS,
-  checkVisualConfig,
   isTimeVar,
   visualExpr,
   type CmpOp,
@@ -23,6 +22,7 @@ import {
   type VisualConfig,
   type VisualTier
 } from './priceExpr'
+import { checkVisualConfig } from './priceCheck'
 
 // ------------------------------------------------------------------ tokens
 
@@ -73,56 +73,72 @@ type Node =
 /** Binding power of the binary operators the generator writes. */
 const BP: Record<string, number> = { '||': 1, '&&': 2, '==': 3, '!=': 3, '<': 3, '<=': 3, '>': 3, '>=': 3, '??': 4, '+': 5, '*': 6 }
 
-function parse(src: string): Node {
-  const toks = tokenize(src)
-  let i = 0
-  const peek = (v: string) => toks[i]?.k === 'op' && toks[i].v === v
-  const expect = (v: string) => {
-    if (!peek(v)) throw new SyntaxError(`want ${v}`)
-    i++
+/** A recursive descent parser over the tokens of one expression. */
+class Parser {
+  private i = 0
+  constructor(private readonly toks: Token[]) {}
+
+  /** The whole input as one expression. */
+  root(): Node {
+    const root = this.ternary()
+    if (this.i < this.toks.length) throw new SyntaxError('trailing input')
+    return root
   }
-  function ternary(): Node {
-    const c = binary(0)
-    if (!peek('?')) return c
-    i++
-    const a = ternary()
-    expect(':')
-    return { t: 'tern', c, a, b: ternary() }
+
+  private peek(v: string): boolean {
+    const tok = this.toks[this.i]
+    return tok?.k === 'op' && tok.v === v
   }
-  function binary(min: number): Node {
-    let l = unary()
-    for (let tok = toks[i]; tok?.k === 'op' && BP[tok.v] >= min; tok = toks[i]) {
-      i++
-      l = { t: 'bin', op: tok.v, l, r: binary(BP[tok.v] + 1) }
+
+  private expect(v: string) {
+    if (!this.peek(v)) throw new SyntaxError(`want ${v}`)
+    this.i++
+  }
+
+  private ternary(): Node {
+    const c = this.binary(0)
+    if (!this.peek('?')) return c
+    this.i++
+    const a = this.ternary()
+    this.expect(':')
+    return { t: 'tern', c, a, b: this.ternary() }
+  }
+
+  private binary(min: number): Node {
+    let l = this.unary()
+    for (let tok = this.toks[this.i]; tok?.k === 'op' && BP[tok.v] >= min; tok = this.toks[this.i]) {
+      this.i++
+      l = { t: 'bin', op: tok.v, l, r: this.binary(BP[tok.v] + 1) }
     }
     return l
   }
-  function unary(): Node {
-    const tok = toks[i++]
+
+  private unary(): Node {
+    const tok = this.toks[this.i++]
     if (!tok) throw new SyntaxError('unexpected end')
     if (tok.k === 'num' || tok.k === 'str') return { t: tok.k, v: tok.v } as Node
-    if (tok.k === 'id') return peek('(') ? { t: 'call', f: tok.v, args: callArgs() } : { t: 'id', v: tok.v }
-    if (tok.v === '!') return { t: 'not', e: unary() }
-    if (tok.v === '-' && toks[i]?.k === 'num') return { t: 'num', v: -(toks[i++] as { v: number }).v }
+    if (tok.k === 'id') return this.peek('(') ? { t: 'call', f: tok.v, args: this.callArgs() } : { t: 'id', v: tok.v }
+    if (tok.v === '!') return { t: 'not', e: this.unary() }
+    if (tok.v === '-' && this.toks[this.i]?.k === 'num') return { t: 'num', v: -(this.toks[this.i++] as { v: number }).v }
     if (tok.v !== '(') throw new SyntaxError(`unexpected ${tok.v}`)
-    const e = ternary()
-    expect(')')
+    const e = this.ternary()
+    this.expect(')')
     return { t: 'paren', e }
   }
-  function callArgs(): Node[] {
-    expect('(')
-    const args = [ternary()]
-    while (peek(',')) {
-      i++
-      args.push(ternary())
+
+  private callArgs(): Node[] {
+    this.expect('(')
+    const args = [this.ternary()]
+    while (this.peek(',')) {
+      this.i++
+      args.push(this.ternary())
     }
-    expect(')')
+    this.expect(')')
     return args
   }
-  const root = ternary()
-  if (i < toks.length) throw new SyntaxError('trailing input')
-  return root
 }
+
+const parse = (src: string): Node => new Parser(tokenize(src)).root()
 
 // ------------------------------------------------------------------ tree → config
 

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -210,15 +211,20 @@ func TestMigration0121BillingModes(t *testing.T) {
 			require.Equal(t, expr.Hash(p.expression), r.ExprHash, p.model)
 		}
 	}
-	// Same cost as the old engine's base times the matched multipliers.
-	res, err := mustCompile(t, got["vis-rules"].Expression).Eval(expr.Input{Vars: expr.Vars{P: 1e6},
-		Headers: map[string]string{"anthropic-beta": "fast-mode"}, Params: map[string]string{"n": "4"}})
-	require.NoError(t, err)
-	require.Equal(t, "6", res.Cost.String())
-	require.Len(t, res.Rules, 4)
+	// Same cost as the old engine's base times the matched multipliers: at
+	// noon UTC the night rule (22:00-06:00 UTC) does not match, at 23:00 it
+	// does.
+	visRules := mustCompile(t, got["vis-rules"].Expression)
+	for at, cost := range map[int]string{12: "6", 23: "4.8"} {
+		res, err := visRules.Eval(expr.Input{Vars: expr.Vars{P: 1e6}, At: time.Date(2026, 1, 1, at, 0, 0, 0, time.UTC),
+			Headers: map[string]string{"anthropic-beta": "fast-mode"}, Params: map[string]string{"n": "4"}})
+		require.NoError(t, err)
+		require.Equal(t, cost, res.Cost.String(), "%d:00 UTC", at)
+		require.Len(t, res.Rules, 4)
+	}
 	// A bare param condition is false when the param is absent, as before.
 	fast := mustCompile(t, got["src-bare"].Expression)
-	res, err = fast.Eval(expr.Input{Vars: expr.Vars{P: 1e6}})
+	res, err := fast.Eval(expr.Input{Vars: expr.Vars{P: 1e6}})
 	require.NoError(t, err)
 	require.Equal(t, "1", res.Cost.String())
 	res, err = fast.Eval(expr.Input{Vars: expr.Vars{P: 1e6}, Params: map[string]string{"fast": "true"}})

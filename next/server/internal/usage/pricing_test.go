@@ -79,6 +79,34 @@ func TestPriceOneBaseExpressionErrors(t *testing.T) {
 	require.True(t, detail.BaseFallback)
 }
 
+// A replacement or additional item whose global price cannot be evaluated
+// marks the top of the detail too: its cost is in the summed base cost.
+func TestItemBaseFallbackReachesTheTop(t *testing.T) {
+	item := core.PricedUsage{Kind: "advisor", Model: "extra", UsageSemantics: "exclusive", Tokens: core.UsageTokens{Input: 1_000_000}, RateMultiplier: dec("1"),
+		Price: &core.PriceRule{ID: 9, Expression: `tier("custom", p*3)`, Source: core.PriceSourceGroup, Base: &core.PriceBase{Expression: "invalid ("}}}
+	main := `tier("main", p*2)`
+	for name, inputs := range map[string]pendingInputs{
+		"additional":  {Semantics: "exclusive", Additional: []core.PricedUsage{item}},
+		"replacement": {Semantics: "exclusive", Replacement: []core.PricedUsage{item}},
+	} {
+		p := &pending{Expression: main, Rate: dec("1"), Tokens: core.UsageTokens{Input: 1_000_000}, Inputs: inputs}
+		_, detail, _, err := priceAmounts(p)
+		require.NoError(t, err, name)
+		require.True(t, detail.BaseFallback, name)
+		sub := append(detail.Additional, detail.Replacement...)
+		require.Len(t, sub, 1, name)
+		require.True(t, sub[0].Detail.BaseFallback, name)
+		requireDec(t, "3", sub[0].Detail.Cost, name+": item cost is its list cost")
+	}
+
+	// An item whose global price evaluates leaves the top unmarked.
+	item.Price.Base = &core.PriceBase{Expression: `tier("global", p*4)`}
+	p := &pending{Expression: main, Rate: dec("1"), Tokens: core.UsageTokens{Input: 1_000_000}, Inputs: pendingInputs{Semantics: "exclusive", Additional: []core.PricedUsage{item}}}
+	_, detail, _, err := priceAmounts(p)
+	require.NoError(t, err)
+	require.False(t, detail.BaseFallback)
+}
+
 // The primary usage, a referenced model under another rule, an item at the
 // global price and a replacement: each is priced at its own frozen price and
 // rate, and the three amounts are summed over all of them.

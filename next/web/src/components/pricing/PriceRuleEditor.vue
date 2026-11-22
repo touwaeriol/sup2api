@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { SAlert, SDrawer, SHint, SInput, SSegmented, type SelectOption } from '@sub2api/ui'
+import { SAlert, SHint, SInput, SSegmented, type SelectOption } from '@sub2api/ui'
 import type { PriceDef, PriceRule } from '@/api/pricing'
-import ExprGuide from '@/views/prices/ExprGuide.vue'
 import PriceDefEditor from '@/views/prices/PriceDefEditor.vue'
 import type { PriceDraft } from '@/views/prices/priceDraft'
 import { applyRule, rateText, sameRate, timesRate } from './pricingFormat'
@@ -78,14 +77,6 @@ const preview = computed(() => {
   const paid = list && timesRate(list, props.rate)
   return t('pricing.rule.preview', { price: priceLabel(t, list), rate: rateText(props.rate || null), paid: paid ? priceLabel(t, paid) : '—' })
 })
-
-// The expression guide opens in a drawer, as on the original price's page.
-const guideOpen = ref(false)
-const defEditor = ref<InstanceType<typeof PriceDefEditor>>()
-function guideReplace(src: string) {
-  if (price.value) price.value.expression = src
-  guideOpen.value = false
-}
 </script>
 
 <template>
@@ -122,10 +113,7 @@ function guideReplace(src: string) {
 
     <template v-if="price">
       <SHint size="xs">{{ t('pricing.rule.customHint') }}</SHint>
-      <PriceDefEditor ref="defEditor" v-model="price" :readonly="disabled" :issues="issues" @guide="guideOpen = true" />
-      <SDrawer v-model:open="guideOpen" :title="t('prices.edit.guide')" width="lg">
-        <ExprGuide :readonly="disabled" @insert="(s: string, c?: number) => defEditor?.insert(s, c)" @replace="guideReplace" />
-      </SDrawer>
+      <PriceDefEditor v-model="price" :readonly="disabled" :issues="issues" />
     </template>
 
     <SHint v-if="issues.length" size="xs" tone="danger" data-testid="price-rule-issue">{{ issues[0] }}</SHint>

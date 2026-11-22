@@ -2,7 +2,8 @@
 // from, whether a rule may be saved, and the unsaved rules of the table: what
 // its rows show meanwhile and what saving sends.
 import type { CatalogPrice, ModelPriceRow, PriceDef, PriceRule, PriceRulePatch } from '@/api/pricing'
-import { asVisualConfig, checkPrice, compactVisualConfig, visualExpr, type LocalIssue } from '@/views/prices/priceExpr'
+import { asVisualConfig, compactVisualConfig, visualExpr } from '@/views/prices/priceExpr'
+import { checkPrice, type LocalIssue } from '@/views/prices/priceCheck'
 import { priceDraftOf, pricePayload, type PriceDraft } from '@/views/prices/priceDraft'
 import { applyRule, sameRate, validRate } from './pricingFormat'
 import { withDraft } from './drafts'
