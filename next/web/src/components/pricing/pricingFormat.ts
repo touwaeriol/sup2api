@@ -18,6 +18,12 @@ export function validRate(v: string | null | undefined): boolean {
   return !!v && /^\d+(\.\d{1,4})?$/.test(v.trim()) && Number(v) <= MAX_RATE
 }
 
+/** A rate as typed, once it is a valid one (trimmed); null until then. */
+export function typedRate(v: string | null | undefined): string | null {
+  const rate = v?.trim()
+  return rate && validRate(rate) ? rate : null
+}
+
 /** Rates that are the same number however they are written; one still being typed is only like itself. */
 export function sameRate(a: string | null, b: string | null): boolean {
   return validRate(a) && validRate(b) ? Number(a) === Number(b) : a === b
@@ -109,6 +115,17 @@ export function priceCells(def: PriceDef | null | undefined): PriceCells {
   if (cells.perRequest !== undefined) return { ...cells, perRequest: times(cells.perRequest) }
   const { tokens } = cells
   return tokens ? { ...cells, tokens: Object.fromEntries(TOKEN_VARS.map((v) => [v, times(tokens[v])])) as TokenPrices } : cells
+}
+
+/**
+ * What is paid at a list price: the price times `rate`, which joins the
+ * multiplier a multiplier rule put on it, so the cells show the product
+ * (priceCells). Null when the rate is not one yet.
+ */
+export function timesRate(def: PriceDef, rate: string): PriceDef | null {
+  if (!validRate(rate)) return null
+  const k = round(num(def.multiplier, 1) * Number(rate))
+  return def.multiplier === undefined && k === 1 ? def : { ...def, multiplier: String(k) }
 }
 
 /** "$3": an amount in USD as every price view writes it, at eight significant digits (a small price never reads $0) and without an exponent; '—' when unset. */

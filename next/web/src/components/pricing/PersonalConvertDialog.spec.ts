@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
+import { defineComponent, h } from 'vue'
 import { ApiError } from '@sub2api/host'
 import { i18n } from '@/i18n'
 import type { Segment } from '@/api/pricing'
@@ -20,12 +21,17 @@ const personal: Segment = {
   is_default: false,
   member_count: 1,
   granted_groups: [],
-  rate_override_count: 0,
-  price_rule_count: 0
+  rate_overrides: [],
 }
 
-function render() {
-  return mount(PersonalConvertDialog, { props: { open: true, user }, global: { plugins: [i18n] }, attachTo: document.body })
+/** The user search: a button per user it would find. */
+const userPick = defineComponent({
+  emits: ['select'],
+  setup: (_, { emit }) => () => [user, { ...user, id: 8, email: 'bo@example.com', segment: { id: 32, kind: 'personal' as const, name: 'bo@example.com' } }].map((u) => h('button', { type: 'button', 'data-testid': `pick-${u.id}`, onClick: () => emit('select', u) }))
+})
+
+function render(of: typeof user | null = user) {
+  return mount(PersonalConvertDialog, { props: { open: true, user: of }, global: { plugins: [i18n], stubs: { UserPick: userPick } }, attachTo: document.body })
 }
 const dialog = () => document.body.querySelector<HTMLElement>('[data-testid="personal-convert-dialog"]')!
 const submit = () => document.body.querySelector<HTMLElement>('[data-testid="personal-convert-submit"]')!.click()
@@ -39,14 +45,15 @@ describe('personal convert dialog', () => {
 
   it('names the segment the user leaves and copies its settings by default', async () => {
     const wrapper = render()
-    expect(dialog().textContent).toContain('他不再属于「VIP」')
+    expect(dialog().textContent).toContain('不再属于「VIP」')
+    expect(dialog().querySelector('[data-testid="pick-7"]')).toBeNull()
     expect(dialog().textContent).toContain('复制「VIP」现在的设置')
 
     submit()
     await flushPromises()
     expect(mocks.post).toHaveBeenCalledWith('/users/7/personal-segment', { copy: true })
-    expect(mocks.toast).toHaveBeenCalledWith('已把 amy@example.com 设为个人专属', 'success')
-    expect(wrapper.emitted('done')).toEqual([[personal]])
+    expect(mocks.toast).toHaveBeenCalledWith('amy@example.com 现在是个人', 'success')
+    expect(wrapper.emitted('done')).toEqual([[personal, true]])
     expect(wrapper.emitted('update:open')).toEqual([[false]])
     wrapper.unmount()
   })
@@ -72,6 +79,31 @@ describe('personal convert dialog', () => {
     expect(mocks.toast).toHaveBeenCalledWith('already personal', 'error')
     expect(wrapper.emitted('done')).toBeUndefined()
     expect(wrapper.emitted('update:open')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('asks whom first when the opener names nobody', async () => {
+    const wrapper = render(null)
+    expect(document.body.textContent).toContain('给某个用户单独设倍率')
+    expect(document.body.querySelector<HTMLButtonElement>('[data-testid="personal-convert-submit"]')!.disabled).toBe(true)
+    dialog().querySelector<HTMLElement>('[data-testid="pick-7"]')!.click()
+    await flushPromises()
+    expect(document.body.textContent).toContain('给 amy@example.com 单独设倍率')
+    expect(dialog().textContent).toContain('复制「VIP」现在的设置')
+    submit()
+    await flushPromises()
+    expect(mocks.post).toHaveBeenCalledWith('/users/7/personal-segment', { copy: true })
+    expect(wrapper.emitted('done')).toEqual([[personal, true]])
+    wrapper.unmount()
+  })
+
+  it('answers at once with the personal segment a picked user has already', async () => {
+    const wrapper = render(null)
+    dialog().querySelector<HTMLElement>('[data-testid="pick-8"]')!.click()
+    await flushPromises()
+    expect(mocks.post).not.toHaveBeenCalled()
+    expect(wrapper.emitted('done')).toEqual([[{ id: 32, kind: 'personal', name: 'bo@example.com' }, false]])
+    expect(wrapper.emitted('update:open')).toEqual([[false]])
     wrapper.unmount()
   })
 })

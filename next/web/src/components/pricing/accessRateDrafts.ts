@@ -72,7 +72,7 @@ export function settingPatches(side: SettingSide, drafts: SettingDrafts): Segmen
   return [...drafts].map(([id, draft]) => ({ [`${side}_id`]: id, ...draft }))
 }
 
-/** The setting of a segment in a group that has nothing saved for it: every row of a group not created yet, whose terms come from its form. */
+/** The setting of segment `s` in a group not created yet: every row of a new group, whose terms come from its form. */
 export function blankSetting(s: Segment): SegmentGroupSetting {
   return {
     segment: { id: s.id, kind: s.kind, name: s.name, user_id: s.user_id },
@@ -81,7 +81,20 @@ export function blankSetting(s: Segment): SegmentGroupSetting {
     granted: false,
     rate_override: null,
     rate: effectiveRate({ group_default: '1', discount: s.discount }, null),
-    price_rule_count: 0,
     member_count: s.member_count
+  }
+}
+
+/** The setting of a segment not created yet in group `g`: every row of a new segment, whose discount comes from its form. */
+export function blankGroupSetting(g: Group): SegmentGroupSetting {
+  const { id, name, description, status, visibility, platforms } = g
+  const rate_multiplier = String(g.rate_multiplier)
+  return {
+    segment: { id: 0, kind: 'named', name: '' },
+    group: { id, name, description, status, visibility, rate_multiplier, platforms },
+    accessible: visibility === 'public',
+    granted: false,
+    rate_override: null,
+    rate: effectiveRate({ group_default: rate_multiplier, discount: '1' }, null)
   }
 }

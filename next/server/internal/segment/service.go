@@ -22,27 +22,19 @@ type Deps struct {
 	Users core.UserGuard
 	// Platforms returns the platforms each group serves (group.Service.Platforms).
 	Platforms func(ctx context.Context, groupIDs []int64) (map[int64][]string, error)
-	// PriceRulesChanged drops the cached price rules on every node (billing.Service.PriceRulesChanged).
-	PriceRulesChanged func(ctx context.Context)
-	// RuleCounts counts the price rules of each segment by group id, on the
-	// models each group provides now (group.Service.SegmentRuleCounts).
-	RuleCounts func(ctx context.Context, segmentIDs []int64) (map[int64]map[int64]int64, error)
 }
 
 // Service serves the segment endpoints.
 type Service struct {
-	db                *store.DB
-	authz             core.Authorizer
-	users             core.UserGuard
-	platforms         func(ctx context.Context, groupIDs []int64) (map[int64][]string, error)
-	priceRulesChanged func(ctx context.Context)
-	ruleCounts        func(ctx context.Context, segmentIDs []int64) (map[int64]map[int64]int64, error)
+	db        *store.DB
+	authz     core.Authorizer
+	users     core.UserGuard
+	platforms func(ctx context.Context, groupIDs []int64) (map[int64][]string, error)
 }
 
 // New builds the segment service.
 func New(d Deps) *Service {
-	return &Service{db: d.DB, authz: d.Authz, users: core.GuardOrDeny(d.Users), platforms: d.Platforms, priceRulesChanged: d.PriceRulesChanged,
-		ruleCounts: d.RuleCounts}
+	return &Service{db: d.DB, authz: d.Authz, users: core.GuardOrDeny(d.Users), platforms: d.Platforms}
 }
 
 // RegisterRoutes mounts the segment endpoints. The members of a segment are
@@ -82,7 +74,7 @@ func errOwnSegment(ctx context.Context) *core.Error {
 }
 
 // GuardOwnSegments fails unless the caller may change what the segments
-// charge or grant (discount, grants, rates, model prices): the caller is a
+// charge or grant (discount, grants, rates): the caller is a
 // member of none of them, or it manages itself (UserGuard on itself: only a
 // superuser with the built-in assignable lists, audited there; FU2, FU6).
 // It is the one check of every such write; refusals are 409. Other members

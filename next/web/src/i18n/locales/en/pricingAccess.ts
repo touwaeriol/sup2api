@@ -1,25 +1,44 @@
 export default {
   segment: 'User group',
-  access: 'Access',
-  rateOverride: 'Own rate',
-  rate: 'Effective rate',
-  prices: 'Own prices',
+  access: 'Available',
+  rate: 'Rate',
+  paid: 'Paid rate',
   public: 'Public',
-  granted: 'Granted',
-  notGranted: 'Not granted',
+  private: 'Private',
+  granted: 'Enabled',
+  notGranted: 'Not enabled',
   grant: {
-    segment: 'Grant this group to "{name}"',
-    group: 'Grant "{name}"'
+    segment: 'Enable this group for "{name}"',
+    group: 'Enable "{name}"'
   },
-  rateOf: 'Own rate of "{name}"',
+  rateOf: 'Rate of "{name}"',
+  follow: 'Follows',
   source: {
     segment: 'Own rate',
-    discount: 'Group default × discount',
-    group: 'Group default'
+    discount: 'Group rate × discount',
+    group: 'Follows the group rate'
   },
-  inactive: 'Not granted, not in effect',
-  priceCount: '{n} price | {n} prices',
-  setPrices: 'Set',
+  discounted: 'Group rate {group} × discount {discount}',
+  unavailable: 'Not available',
   unsaved: 'Unsaved',
-  invalidRate: 'The own rate of "{name}" is not valid: enter a number from 0 to below 1000000, up to 4 decimals.'
+  remove: 'Remove',
+  groupRate: 'Group rate',
+  members: '{n} member | {n} members',
+  discountOf: 'Discount {rate}',
+  overrideNote: 'A rate you enter is used as is, without the discount; clear it to follow again.',
+  inGroup: {
+    restricted: 'Only the user groups it is enabled for may use this group.',
+    public: 'Everyone may use this group.',
+    keptGrants: 'Everyone may use a public group; these settings apply again if it goes back to private.',
+    nobody: 'This private group is enabled for no user group: nobody can use it now.',
+    nobodyHint: 'Add a user group or a user to enable it.',
+    addSegment: 'Add user group',
+    addUser: 'Add user',
+    addNone: 'Every user group is listed',
+    empty: {
+      public: 'Nothing set here yet: everyone pays the group rate times their discount.',
+      restricted: 'Not enabled for any user group or user yet: nobody can use it.'
+    }
+  },
+  invalidRate: 'The rate of "{name}" is not valid: enter a number from 0 to 999999.9999, up to 4 decimals.'
 }

@@ -5,8 +5,10 @@
 //   paid = list price × rate
 //
 // Both sides resolve on their own, first hit wins:
-//   list price: segment × group × model rule -> group × model rule -> global model price
-//   rate:       segment × group override     -> group default × segment discount -> group default
+//   list price: group × model rule        -> global model price
+//   rate:       segment × group override  -> group default × segment discount -> group default
+//
+// A segment prices no model: it only sets rates (CONTRACTS §97.10).
 //
 // Every user belongs to exactly one segment. A personal segment is a segment of
 // kind "personal" with that single user as its member: the system creates it
@@ -16,6 +18,8 @@ import type { Money, User } from './types'
 import type { PriceMode, VisualConfig } from '@/views/prices/priceExpr'
 
 export type SegmentKind = 'named' | 'personal'
+/** GET /segments?kind=: `all` lists the named segments (the default first), then the personal ones. */
+export type SegmentListKind = SegmentKind | 'all'
 
 /** A segment as other rows refer to it. `name` of a personal segment is its user's email. */
 export interface SegmentRef {
@@ -44,10 +48,8 @@ export interface Segment extends SegmentRef {
   member_count: number
   /** Private groups it is granted. */
   granted_groups: Array<{ id: number; name: string }>
-  /** Groups whose rate it overrides. */
-  rate_override_count: number
-  /** Its own model prices, over all groups. */
-  price_rule_count: number
+  /** The groups whose rate the segment sets itself, with that rate (by group id). */
+  rate_overrides: Array<{ id: number; name: string; rate: string }>
   /** Personal only. */
   user?: SegmentUser
   /** Personal only: the segment the user was in before. */
@@ -58,7 +60,7 @@ export interface Segment extends SegmentRef {
 /** Where a rate comes from. */
 export type RateSource = 'segment' | 'discount' | 'group'
 /** Where a list price comes from. */
-export type PriceSource = 'segment' | 'group' | 'global'
+export type PriceSource = 'group' | 'global'
 
 export interface EffectiveRate {
   value: Money
@@ -77,7 +79,8 @@ export interface EffectiveRate {
 export interface UsagePricing {
   segment_id?: number
   rate_source?: RateSource
-  price_source?: PriceSource
+  /** Left out at the global price. `segment`: a model price of a segment, only on records priced before migration 0123 deleted them. */
+  price_source?: 'group' | 'segment'
   /** The multiplier of a multiplier rule. */
   scale?: Money
   /** The global price a custom rule replaced. */
@@ -95,8 +98,6 @@ export interface SegmentGroupSetting {
   /** The rate of this segment in this group; null = inherit. */
   rate_override: Money | null
   rate: EffectiveRate
-  /** Model prices of this segment in this group. */
-  price_rule_count: number
   /** Members of the segment (1 for a personal one). */
   member_count?: number
 }
@@ -109,7 +110,7 @@ export interface SegmentGroupPatch {
   rate_override?: Money | null
 }
 
-/** A model price of a group, or of a segment in a group. */
+/** A model price of a group. */
 export type PriceRule =
   /** The global price times `multiplier`; follows the global price when it changes. */
   | { kind: 'multiplier'; multiplier: Money }
@@ -133,35 +134,38 @@ export interface PriceDef {
   multiplier?: Money
 }
 
-/** One model a group provides, with the rules on it. */
+/** A model of a group's pricing table: one the group provides or has a rule on. */
 export interface ModelPriceRow {
   model: string
+  /** Whether the group provides the model now; false on a rule over a model it does not, which no request reaches yet. */
+  offered: boolean
   /** The global price; null = the model has none and cannot be billed. */
   base: PriceDef | null
   group_rule: PriceRule | null
-  /** Only when a segment was asked for. */
-  segment_rule?: PriceRule | null
-  /** Segments with a rule of their own on this model (asked without a segment). */
-  segment_rule_count?: number
-  /** The price after the first rule in effect (a multiplier rule: the global price with `multiplier`); null without a global price. */
+  /** The price after the rule (a multiplier rule: the global price with `multiplier`); null without a global price. */
   list_price: PriceDef | null
   source: PriceSource
 }
 
-/** GET /groups/:id/model-prices[?segment_id=]. */
+/** GET and PUT /groups/:id/model-prices. */
 export interface GroupModelPrices {
   group: { id: number; name: string }
-  segment?: SegmentRef
-  /** The rate of the segment asked for, else the group's default. */
+  /** The group's default rate. */
   rate: EffectiveRate
+  /** By model. */
   models: ModelPriceRow[]
 }
 
-/** PUT /groups/:id/model-prices: `rule` null removes it; `segment_id` null = the group's own rule. */
+/** An item of PUT /groups/:id/model-prices: `rule` null removes it. A rule takes a model with a global price, whether the group provides it or not. */
 export interface PriceRulePatch {
-  segment_id: number | null
   model: string
   rule: PriceRule | null
+}
+
+/** A row of GET /pricing/catalog: an enabled global price; the rows come by model. */
+export interface CatalogPrice {
+  model: string
+  price: PriceDef
 }
 
 /** The largest token count a quote takes (core.MaxUsageTokens). */
@@ -179,12 +183,13 @@ export interface PricingQuoteRequest {
 export interface PricingQuote {
   segment: SegmentRef
   accessible: boolean
-  access_source: 'public' | 'grant' | 'none'
+  /** disabled: the group is disabled, whoever asks. */
+  access_source: 'disabled' | 'public' | 'grant' | 'none'
   base: PriceDef | null
   list_price: PriceDef | null
   price_source: PriceSource
-  /** The two rule levels of the list price, as configured; the one in `price_source` applies, the global price when it says so. */
-  price_levels: { segment: PriceRule | null; group: PriceRule | null }
+  /** The group's rule, as configured; it applies when `price_source` is group. */
+  price_levels: { group: PriceRule | null }
   rate: EffectiveRate
   /** The override of this segment in this group, if any. */
   rate_override: Money | null
@@ -206,10 +211,8 @@ export interface MyGroupPricing {
 export interface GroupPricingSummary {
   /** Who may use a private group: the named segments granted, and how many personal ones. */
   access: { segments: SegmentRef[]; personal_count: number }
-  /** Models the group prices itself. */
+  /** Models the group prices itself, provided or not. */
   price_rule_count: number
-  /** Model prices of segments in the group. */
-  segment_rule_count: number
   /** Models the group provides. */
   model_count: number
 }

@@ -121,7 +121,6 @@ const columns = computed<TableColumn[]>(() => [
         <template #cell-model="{ row }">
           <div class="flex flex-wrap items-center gap-2">
             <ModelBadge :model="row.model" />
-            <SBadge v-if="row.source === 'segment'" tone="primary" size="xs" data-testid="models-own-price">{{ t('pricing.source.segment') }}</SBadge>
             <SBadge v-if="row.price.tiers > 1" tone="gray">{{ t('me.models.tiered', { n: row.price.tiers }) }}</SBadge>
           </div>
         </template>

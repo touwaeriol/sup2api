@@ -25,13 +25,13 @@ import (
 // writeRules must match).
 func sequentialRuleChanges(ctx context.Context, tx *gorm.DB, changes []ruleChange, updatedBy int64) error {
 	slices.SortStableFunc(changes, func(a, b ruleChange) int {
-		return cmp.Or(cmp.Compare(a.on.SegmentID, b.on.SegmentID), cmp.Compare(a.on.Model, b.on.Model))
+		return cmp.Or(cmp.Compare(a.on.GroupID, b.on.GroupID), cmp.Compare(a.on.Model, b.on.Model))
 	})
 	for _, ch := range changes {
 		on, r := ch.on, ch.rule
 		if r == nil {
-			if _, err := store.SQLTx(tx).ExecContext(ctx, `DELETE FROM price_rules WHERE group_id = $1 AND model = $2
-				AND segment_id IS NOT DISTINCT FROM $3`, on.GroupID, on.Model, nullID(on.SegmentID)); err != nil {
+			if _, err := store.SQLTx(tx).ExecContext(ctx, `DELETE FROM price_rules WHERE group_id = $1 AND model = $2`,
+				on.GroupID, on.Model); err != nil {
 				return err
 			}
 			continue
@@ -46,42 +46,38 @@ func sequentialRuleChanges(ctx context.Context, tx *gorm.DB, changes []ruleChang
 				return err
 			}
 		}
-		target := `(group_id, model) WHERE segment_id IS NULL`
-		if on.SegmentID != 0 {
-			target = `(group_id, segment_id, model) WHERE segment_id IS NOT NULL`
-		}
 		if _, err := store.SQLTx(tx).ExecContext(ctx, `
-			INSERT INTO price_rules (group_id, segment_id, model, kind, multiplier, mode, config, expression, expr_hash, updated_by)
-			VALUES ($1, $2, $3, $4, $5::numeric, NULLIF($6, ''), $7, $8, $9, $10)
-			ON CONFLICT `+target+` DO UPDATE SET kind = EXCLUDED.kind, multiplier = EXCLUDED.multiplier,
+			INSERT INTO price_rules (group_id, model, kind, multiplier, mode, config, expression, expr_hash, updated_by)
+			VALUES ($1, $2, $3, $4::numeric, NULLIF($5, ''), $6, $7, $8, $9)
+			ON CONFLICT (group_id, model) DO UPDATE SET kind = EXCLUDED.kind, multiplier = EXCLUDED.multiplier,
 				mode = EXCLUDED.mode, config = EXCLUDED.config, expression = EXCLUDED.expression,
 				expr_hash = EXCLUDED.expr_hash, updated_by = EXCLUDED.updated_by, updated_at = now()`,
-			on.GroupID, nullID(on.SegmentID), on.Model, r.Kind, r.Multiplier, r.Mode, r.Config, r.Expression, r.exprHash, nullID(updatedBy)); err != nil {
+			on.GroupID, on.Model, r.Kind, r.Multiplier, r.Mode, r.Config, r.Expression, r.exprHash, nullID(updatedBy)); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// ruleState is the rules of the group and the history, with each rule's id
+// ruleState is the rules of the groups and the history, with each rule's id
 // as "kept" (one of initial) or "new".
-func ruleState(t *testing.T, ctx context.Context, tx *gorm.DB, group int64, initial map[int64]bool) []string {
+func ruleState(t *testing.T, ctx context.Context, tx *gorm.DB, groups []int64, initial map[int64]bool) []string {
 	t.Helper()
-	rows, err := store.SQLTx(tx).QueryContext(ctx, `SELECT id, COALESCE(segment_id, 0), model, kind, COALESCE(multiplier::text, '-'), COALESCE(mode, '-'),
+	rows, err := store.SQLTx(tx).QueryContext(ctx, `SELECT id, group_id, model, kind, COALESCE(multiplier::text, '-'), COALESCE(mode, '-'),
 		COALESCE(config::text, '-'), expression, expr_hash, COALESCE(updated_by, 0), updated_at = now()
-		FROM price_rules WHERE group_id = $1 ORDER BY segment_id NULLS FIRST, model`, group)
+		FROM price_rules WHERE group_id = ANY($1) ORDER BY group_id, model`, store.Int64s(groups))
 	require.NoError(t, err)
 	var state []string
 	for rows.Next() {
-		var id, segment, by int64
+		var id, group, by int64
 		var model, kind, mult, mode, config, expression, hash string
 		var touched bool
-		require.NoError(t, rows.Scan(&id, &segment, &model, &kind, &mult, &mode, &config, &expression, &hash, &by, &touched))
+		require.NoError(t, rows.Scan(&id, &group, &model, &kind, &mult, &mode, &config, &expression, &hash, &by, &touched))
 		identity := "new"
 		if initial[id] {
 			identity = "kept"
 		}
-		state = append(state, fmt.Sprintf("%d %s %s %s %s %s %s %s by %d touched %v %s", segment, model, kind, mult, mode, config, expression, hash, by, touched, identity))
+		state = append(state, fmt.Sprintf("%d %s %s %s %s %s %s %s by %d touched %v %s", group, model, kind, mult, mode, config, expression, hash, by, touched, identity))
 	}
 	require.NoError(t, rows.Err())
 	rows.Close()
@@ -109,20 +105,21 @@ func TestWriteRulesMatchesSequential(t *testing.T) {
 		require.NoError(t, err)
 		return r
 	}
-	g, vip := e.open, e.vip
-	on := func(segment int64, model string) core.PriceQuery {
-		return core.PriceQuery{GroupID: g, SegmentID: segment, Model: model}
+	g, p := e.open, e.private
+	groups := []int64{g, p}
+	on := func(group int64, model string) core.PriceQuery {
+		return core.PriceQuery{GroupID: group, Model: model}
 	}
 	// The rules there before each case.
 	seed := []ruleChange{
-		{on(0, "claude-haiku-4-5"), mult("1.1")},
-		{on(vip, "claude-sonnet-4-5"), price(0.3)},
-		{on(vip, "web-search"), mult("2")},
-		{on(0, "web-search"), price(0.02)},
+		{on(g, "claude-haiku-4-5"), mult("1.1")},
+		{on(p, "claude-sonnet-4-5"), price(0.3)},
+		{on(p, "web-search"), mult("2")},
+		{on(g, "web-search"), price(0.02)},
 	}
 	require.NoError(t, e.db.Tx(ctx, func(tx *gorm.DB) error { return applyChanges(ctx, tx, slices.Clone(seed), e.admin) }))
 	initial := map[int64]bool{}
-	rows, err := e.db.SQL.QueryContext(ctx, `SELECT id FROM price_rules WHERE group_id = $1`, g)
+	rows, err := e.db.SQL.QueryContext(ctx, `SELECT id FROM price_rules`)
 	require.NoError(t, err)
 	ids, err := testutil.Column[int64](rows)
 	require.NoError(t, err)
@@ -133,16 +130,16 @@ func TestWriteRulesMatchesSequential(t *testing.T) {
 
 	cases := map[string][]ruleChange{
 		"mixed": {
-			{on(vip, "claude-haiku-4-5"), price(0.4)}, {on(0, "claude-haiku-4-5"), mult("1.3")},
-			{on(vip, "claude-sonnet-4-5"), nil}, {on(0, "unpriced"), nil}, {on(0, "web-search"), mult("1.75")},
+			{on(p, "claude-haiku-4-5"), price(0.4)}, {on(g, "claude-haiku-4-5"), mult("1.3")},
+			{on(p, "claude-sonnet-4-5"), nil}, {on(g, "unpriced"), nil}, {on(g, "web-search"), mult("1.75")},
 		},
-		"removed then saved": {{on(0, "claude-haiku-4-5"), nil}, {on(0, "claude-haiku-4-5"), mult("1.5")}},
-		"saved then removed": {{on(vip, "web-search"), mult("3")}, {on(vip, "web-search"), nil}},
-		"saved twice":        {{on(vip, "claude-sonnet-4-5"), price(0.5)}, {on(vip, "claude-sonnet-4-5"), mult("1.2")}},
+		"removed then saved": {{on(g, "claude-haiku-4-5"), nil}, {on(g, "claude-haiku-4-5"), mult("1.5")}},
+		"saved then removed": {{on(p, "web-search"), mult("3")}, {on(p, "web-search"), nil}},
+		"saved twice":        {{on(p, "claude-sonnet-4-5"), price(0.5)}, {on(p, "claude-sonnet-4-5"), mult("1.2")}},
 		"new, removed, saved": {
-			{on(0, "claude-sonnet-4-5"), mult("2")}, {on(0, "claude-sonnet-4-5"), nil}, {on(0, "claude-sonnet-4-5"), price(0.7)},
+			{on(g, "claude-sonnet-4-5"), mult("2")}, {on(g, "claude-sonnet-4-5"), nil}, {on(g, "claude-sonnet-4-5"), price(0.7)},
 		},
-		"same expression twice": {{on(0, "claude-sonnet-4-5"), price(0.9)}, {on(vip, "claude-haiku-4-5"), price(0.9)}},
+		"same expression twice": {{on(g, "claude-sonnet-4-5"), price(0.9)}, {on(p, "claude-haiku-4-5"), price(0.9)}},
 		"nothing":               {},
 	}
 	for name, changes := range cases {
@@ -153,7 +150,7 @@ func TestWriteRulesMatchesSequential(t *testing.T) {
 					if err := apply(ctx, tx, slices.Clone(changes), e.member); err != nil {
 						return err
 					}
-					state := ruleState(t, ctx, tx, g, initial)
+					state := ruleState(t, ctx, tx, groups, initial)
 					if i == 0 {
 						want = state
 					} else {
@@ -182,7 +179,7 @@ func TestWriteRulesConcurrentNoDeadlock(t *testing.T) {
 	}
 	a := core.PriceQuery{GroupID: e.open, Model: "claude-haiku-4-5"}
 	b := core.PriceQuery{GroupID: e.open, Model: "web-search"}
-	c := core.PriceQuery{GroupID: e.open, SegmentID: e.vip, Model: "claude-haiku-4-5"}
+	c := core.PriceQuery{GroupID: e.private, Model: "claude-haiku-4-5"}
 	require.NoError(t, e.db.Tx(ctx, func(tx *gorm.DB) error {
 		return applyChanges(ctx, tx, []ruleChange{{a, mult("1")}, {b, mult("1")}, {c, mult("1")}}, e.admin)
 	}))

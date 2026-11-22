@@ -173,18 +173,18 @@ func cacheKey(hash string) string { return "apikey:" + hash }
 // facts are deliberately not cached: a concurrent revoke must not be undone
 // by a reader refilling a Redis entry after invalidation.
 type cached struct {
-	Found           bool       `json:"found"`
-	KeyID           int64      `json:"key_id,omitempty"`
-	UserID          int64      `json:"user_id,omitempty"`
-	KeyStatus       string     `json:"key_status,omitempty"`
-	ExpiresAt       *time.Time `json:"expires_at,omitempty"`
-	UserActive      bool       `json:"user_active,omitempty"`
-	GroupID         int64      `json:"group_id,omitempty"`
-	GroupName       string     `json:"group_name,omitempty"`
-	GroupStatus     string     `json:"group_status,omitempty"`
-	RateMultiplier  string     `json:"rate_multiplier,omitempty"`
-	ModelAllowlist  []string   `json:"model_allowlist,omitempty"`
-	ModelFilterMode string     `json:"model_filter_mode,omitempty"`
+	Found           bool            `json:"found"`
+	KeyID           int64           `json:"key_id,omitempty"`
+	UserID          int64           `json:"user_id,omitempty"`
+	KeyStatus       string          `json:"key_status,omitempty"`
+	ExpiresAt       *time.Time      `json:"expires_at,omitempty"`
+	UserActive      bool            `json:"user_active,omitempty"`
+	GroupID         int64           `json:"group_id,omitempty"`
+	GroupName       string          `json:"group_name,omitempty"`
+	GroupStatus     string          `json:"group_status,omitempty"`
+	RateMultiplier  decimal.Decimal `json:"rate_multiplier"`
+	ModelAllowlist  []string        `json:"model_allowlist,omitempty"`
+	ModelFilterMode string          `json:"model_filter_mode,omitempty"`
 	// GroupEnvironment is the group layer of the environment (§74.3).
 	GroupEnvironment core.EnvironmentValues `json:"group_environment,omitempty"`
 	GroupAvailable   bool                   `json:"group_available,omitempty"`
@@ -232,10 +232,6 @@ func (s *Service) Authenticate(ctx context.Context, rawKey string) (*core.APIKey
 	if !ok {
 		return nil, core.ErrPermissionDenied.WithDetails(map[string]any{"permission": "gateway:use"})
 	}
-	rate, err := decimal.NewFromString(e.RateMultiplier)
-	if err != nil {
-		rate = decimal.NewFromInt(1)
-	}
 	allow := e.ModelAllowlist
 	if allow == nil {
 		allow = []string{}
@@ -252,7 +248,7 @@ func (s *Service) Authenticate(ctx context.Context, rawKey string) (*core.APIKey
 			ID:                   e.GroupID,
 			Name:                 e.GroupName,
 			Status:               e.GroupStatus,
-			RateMultiplier:       rate,
+			RateMultiplier:       e.RateMultiplier,
 			ModelAllowlist:       allow,
 			ModelFilterMode:      e.ModelFilterMode,
 			Environment:          e.GroupEnvironment,
@@ -311,8 +307,7 @@ func (s *Service) lookup(ctx context.Context, hash string) (*cached, error) {
 		return nil, err
 	default:
 		e.Found = true
-		rate, source := core.SegmentRate(groupRate, discount, override)
-		e.RateMultiplier, e.RateSource = rate.String(), source
+		e.RateMultiplier, e.RateSource = core.SegmentRate(groupRate, discount, override)
 	}
 	return e, nil
 }

@@ -205,7 +205,8 @@
 | POST `/prices/validate` `{mode, config?, expression?}` → `{ok, expression, expr_hash?, errors[], warnings[], samples, cost_per_million_input?, analysis?}`，`errors[]`、`warnings[]` 的每项是 Issue（见表下） | `price:read` |
 | POST `/prices/preview` `{price_id? \| mode+config/expression, usage:{p,c,cr,cc,cc1h,img?,img_o?,len?}, metrics:{}, headers:{}, params:{}, at?, group_id?}` → `{cost, base_cost, rate_multiplier, expression, expr_hash, tier, rules:[{cond,multiplier,matched}], breakdown:{...}}` | `price:read` |
 | POST `/prices/:id/override`（复制插件默认价格为管理员价格） | `price:manage` |
-| GET `/groups/:id/model-prices`（`?segment_id=`），PUT `/groups/:id/model-prices` `{items:[{segment_id, model, rule}]}` | `group:read` / `group:manage`；分组内定价与用户组专属价（§97.6） |
+| GET `/groups/:id/model-prices`，PUT `/groups/:id/model-prices` `{items:[{model, rule}]}` | `group:read` / `group:manage`；分组内定价（§97.6） |
+| GET `/pricing/catalog` | `group:read`；全部启用的全局价，按模型排序，定价页给分组添加模型时从中选（§97.6） |
 | POST `/pricing/quote` `{user_id? \| segment_id?, group_id, model, usage:{p,c,cr?,cc?,cc1h?}}` | `price:read`；某个用户或用户组在某个分组调用某个模型的标价、倍率与费用；`user_id` 与 `segment_id` 必须恰好给一个（§97.6） |
 | GET `/prices/history/:expr_hash` | `price:read` |
 | GET `/me/balance` → `{balance}`；GET `/me/ledger`（`?kind=&from=&to=`） | `balance:self:read` |
@@ -461,7 +462,7 @@ compose 里的 `mock-upstream` 服务模拟 Anthropic `/v1/messages` 与 `/v1/me
 
 **调度**：端点协议 P → 候选账号类型 = 原生支持 P 的，加上支持 Q 且核心有 `P→Q` 转换器的（转换目标、等级与同一优先级内的先后见 §88）→ 分组内这些类型的账号（§110 起：其中的跨平台转换默认关闭，账号要在 `model_protocols` 里为模型开启才参与）。请求由账号类型所属插件构造；需转换时核心转换请求体和响应（含 SSE）。用量规则：账号类型为该协议声明的 `usage`，否则取声明该协议端点的平台的 `usage`；`passHeaders` 同理（请求体整个交给插件，§112）。错误格式始终是端点的 `errorFormat`。
 
-**计费**：`Resolve(model)` 只按模型匹配：管理员价格优先，其次插件默认价格；按完整模型 ID 精确匹配（0007 起不支持通配符，见 §16），同一模型有多个插件默认价格时取最早安装的插件（插件默认价格已由 §17 取消，每个模型只有一条全局价）。§97 起，全局价之上还有两层按分组设置的标价，`Resolve(ctx, PriceQuery{Model, GroupID, SegmentID})` 按“专属价（用户组 × 分组 × 模型）→ 分组内定价（分组 × 模型）→ 全局价”取先命中的一条；模型没有启用的全局价时不能计费，规则不生效。费用 = 表达式结果 × 倍率。这里的倍率是 Key 所有者在该分组的**实际倍率**（专属倍率 → 分组默认倍率 × 用户组的全场折扣 → 分组默认倍率，先命中者生效，鉴权时算出），不再一律是分组倍率；命中按倍数的规则时另乘规则倍数，两个数只在 `PriceRule.Multiplier` 相乘（§97.3）。
+**计费**：`Resolve(model)` 只按模型匹配：管理员价格优先，其次插件默认价格；按完整模型 ID 精确匹配（0007 起不支持通配符，见 §16），同一模型有多个插件默认价格时取最早安装的插件（插件默认价格已由 §17 取消，每个模型只有一条全局价）。§97 起，全局价之上还有一层按分组设置的标价，`Resolve(ctx, PriceQuery{Model, GroupID})` 按“分组内定价（分组 × 模型）→ 全局价”取先命中的一条（用户组不给模型定价，原来的专属价由迁移 0123 删除，§97.10）；模型没有启用的全局价时不能计费，规则不生效。费用 = 表达式结果 × 倍率。这里的倍率是 Key 所有者在该分组的**实际倍率**（专属倍率 → 分组默认倍率 × 用户组的全场折扣 → 分组默认倍率，先命中者生效，鉴权时算出），不再一律是分组倍率；命中按倍数的规则时另乘规则倍数，两个数只在 `PriceRule.Multiplier` 相乘（§97.3）。
 
 **账号归属**：插件只拿得到自己声明的账号类型的账号（凭证、代理等全部信息），不需要宿主授权（§124；此前是 `accounts.credentials {"types": "own"}`）。
 
@@ -877,7 +878,7 @@ POST `/accounts/:id/test`（`account:test` / `account:own:test`）：
   - `POST /prices/:id/override` 已删除；同一模型重复录入返回 409；
   - 修改同步价格的 model、mode、config 或 expression 后，它会变成 `manual`，`sync_source_id` 清空；只改 enabled 或 note 时保持 `sync`；
   - 使用记录详情的 `price` 为 `{id, model, source}`。
-- **匹配**：按完整模型 ID 精确匹配，只看启用的价格。找不到价格时请求被拒，403 `model_price_not_configured`（§17.3）。这里的价格是全局价；§97 起，找到全局价之后还要按请求的分组和调用者所在的用户组取分组内定价或专属价（§97.3），没有全局价的模型仍按本条处理，规则不生效。
+- **匹配**：按完整模型 ID 精确匹配，只看启用的价格。找不到价格时请求被拒，403 `model_price_not_configured`（§17.3）。这里的价格是全局价；§97 起，找到全局价之后还要按请求的分组取分组内定价（§97.3），没有全局价的模型仍按本条处理，规则不生效。
 - **迁移 0008**：
   - 删除插件默认价格，原来的管理员价格改为 `manual`；
   - 加唯一索引 `model_prices_model_uq`，以及约束 `source IN ('manual','sync')`；
@@ -904,7 +905,7 @@ POST `/accounts/:id/test`（`account:test` / `account:own:test`）：
 | DELETE `/price-sources/:id` | `price:manage` | 204；已导入的价格保留，`sync_source_id` 置空 |
 | POST `/price-sources/:id/preview` | `price:manage` | 拉取后与本地对比，返回 `{source_id, fetched_at, total, skipped, items:[{model, action, incoming:{model, mode, config, expression}, current}]}`。action：`create` 本地没有；`update` 本地是同步来的价格且不同；`manual` 本地是手动价格且不同；`unchanged` 相同。拉取失败返回 503 `unavailable`，并写入 `last_error` |
 | POST `/price-sources/:id/apply` | `price:manage` | `{models:[...]}` → `{created, updated, unchanged, skipped:[{model, reason}]}`。服务端重新拉取，只导入列出的模型（选中的手动价格也会被覆盖），导入后都是 `source=sync`；记审计 `price.sync` |
-| GET `/key/prices` | API Key（`Authorization: Bearer` 或 `x-api-key`） | 供下游 sup2api 同步用：`{prices:[{model, mode, config, expression}], rate_multiplier, group:{id, name}}`，只含启用的价格，以及该 Key 所在分组白名单允许的模型。§97 起模型范围不变，内容按 Key 的所有者算：`prices` 是所有者在该分组的标价（专属价 → 分组内定价 → 全局价），`rate_multiplier` 是所有者在该分组的实际倍率；响应形状不变，下游读不到规则，所以按倍数的规则在这里折进价格：按次、按 token 的价格缩放配置里的价格（规则倍数不变）并重新生成表达式，表达式价格写成 `(原表达式) * N`（`expr.Times`，§131.3），下游照常编译；倍数为 1 时不改，改后编译不通过的模型跳过（§97.6）。这是唯一把规则倍数折进价格的接口 |
+| GET `/key/prices` | API Key（`Authorization: Bearer` 或 `x-api-key`） | 供下游 sup2api 同步用：`{prices:[{model, mode, config, expression}], rate_multiplier, group:{id, name}}`，只含启用的价格，以及该 Key 所在分组白名单允许的模型。§97 起模型范围不变，内容按 Key 的所有者算：`prices` 是所有者在该分组的标价（分组内定价 → 全局价），`rate_multiplier` 是所有者在该分组的实际倍率；响应形状不变，下游读不到规则，所以按倍数的规则在这里折进价格：按次、按 token 的价格缩放配置里的价格（规则倍数不变）并重新生成表达式，表达式价格写成 `(原表达式) * N`（`expr.Times`，§131.3），下游照常编译；倍数为 1 时不改，改后编译不通过的模型跳过（§97.6）。这是唯一把规则倍数折进价格的接口 |
 
 同步只能由管理员手动触发（先预览再应用），没有定时自动覆盖。
 
@@ -4867,7 +4868,7 @@ GET `/groups/:id/models`（`group:read`）返回所有未删除成员账号的�
 
 - 迁移 `0064_account_usage.sql`：`account_usage_hourly(account_id, hour, cost, raw_cost, requests, tokens)` 与 `account_usage_totals(account_id, …)`；首次迁移时回填全部历史行。回填期间以 `SHARE ROW EXCLUSIVE` 锁住 `usage_logs`（读不受影响，插入与结算更新排队到迁移提交），时长是对整张表做一次聚合：按 0064 编写时生产约 1.75 万行估计远小于 1 秒；表大到几百万行时部署前要先评估。回填只在小时表、累计表和 0068 的增量表都为空时执行（行要么已在汇总里，要么还在增量表里等待并入），重放不会重复计数。回填与触发器用同一个 `account_usage_raw_cost`（定义只在 0064 里，0068/0070 不再改它）：触发器退款或换账号时按当时的函数扣回原贡献，回填若用另一版算法就会留下残差。以后要改这个函数，必须同时锁表重算两张汇总表。
 - 迁移 `0068_account_usage_journal.sql`：`usage_logs` 上的触发器 `account_usage_track` 只往 `account_usage_deltas` 追加增量，不再在结算事务里改汇总行（结算按批写入，两批以不同顺序写同一批账号、或与同一用户的结算交错时会死锁，热门账号的写入也会排队在它的那一行上）。全集群任务 `core.account.usage_limits` 每 5 秒在一个节点上（0.1.236 起；之前靠 advisory lock `account.usage_limits`，§77.7）用 `account_usage_fold(n)` 把增量并入小时表和累计表，所以用量和限额最多滞后几秒。
-- 口径与 §61 API Key 额度一致：`billed`/`reserved` 的行计入费用，转为 `free`/`failed` 时退回；`cost` 为计费后费用，`raw_cost` 为分组倍率前的费用（取 `billing_detail.cost`，须为非负数，任意位小数，四舍五入到 8 位；缺失或为负数时 `total_cost / rate_multiplier`，倍率 ≤ 0 时取 `total_cost`。负数会抵扣限额，所以不采用）。注意：使用记录统计页的「原价」(`standard_cost`) 在迁移 0096 之前的行上一律是 `total_cost / rate_multiplier`，两者在 `billing_detail.cost` 与之不一致或倍率为 0 时会不同；0096 起的行取 `usage_logs.base_cost`（§66.1、§97.5），与 `billing_detail.cost` 同为全局价口径。§97 起有了分组内定价和专属价，`billing_detail.cost` 仍是**全局价口径**（全局价 × 用量，不含定价规则，也不含倍率）：账号的原始费用度量的是账号消耗了多少上游额度，不随某个分组或用户组的售价变化，`account_usage_raw_cost` 不用改，历史也不用重算；`requests` 为成功行数；`tokens` 为五类 token 之和。行换账号时从旧账号扣回。删除历史日志不回退累计值。
+- 口径与 §61 API Key 额度一致：`billed`/`reserved` 的行计入费用，转为 `free`/`failed` 时退回；`cost` 为计费后费用，`raw_cost` 为分组倍率前的费用（取 `billing_detail.cost`，须为非负数，任意位小数，四舍五入到 8 位；缺失或为负数时 `total_cost / rate_multiplier`，倍率 ≤ 0 时取 `total_cost`。负数会抵扣限额，所以不采用）。注意：使用记录统计页的「原价」(`standard_cost`) 在迁移 0096 之前的行上一律是 `total_cost / rate_multiplier`，两者在 `billing_detail.cost` 与之不一致或倍率为 0 时会不同；0096 起的行取 `usage_logs.base_cost`（§66.1、§97.5），与 `billing_detail.cost` 同为全局价口径。§97 起有了分组内定价，`billing_detail.cost` 仍是**全局价口径**（全局价 × 用量，不含定价规则，也不含倍率）：账号的原始费用度量的是账号消耗了多少上游额度，不随某个分组或用户组的售价变化，`account_usage_raw_cost` 不用改，历史也不用重算；`requests` 为成功行数；`tokens` 为五类 token 之和。行换账号时从旧账号扣回。删除历史日志不回退累计值。
 - 两张表不引用 `accounts`（触发器在结算事务里执行，已清除的账号不能让写入失败）。小时桶按 UTC 整点；半小时时区的日/周/月周期边界落在 UTC 半点，按所在小时桶近似（偏差半小时）；按小时的周期对齐 UTC 整点（73.3），不近似。
 - 迁移 `0070_account_usage_limit_source.sql`：`accounts.auto_disabled_source` 与被用量限制暂缓的自动禁用（73.3）。
 - 账号视图新增 `usage: {raw_cost_accounting, total, today, limit}`；`today` 从请求 `tz=<IANA 时区>` 的当日零点起（缺省 UTC；`httpapi.RequestContext` 读入 `core.TimeZone`）；`usage.limit_disabled` 表示账号正被用量限制自动禁用，控制台据此本地化原因，不解析原因字符串。`GET /accounts/:id/usage`（`account:read` / `account:own:read`）返回 `today`、`last_7_days`、`last_30_days`、`total` 和 `limit`。读得到账号的人都看到 `cost` 与 `raw_cost`（team 范围的上级代理也一样，§103.4）。
@@ -5551,7 +5552,7 @@ node 任务（可工作节点各跑，`RequireWork`）：
 | 请求 | 响应 | 模型范围与价格 |
 |---|---|---|
 | 不带 `group_id` | `{group: null, rate_multiplier: "1", prices: [{model, mode, config, expression, groups: [{id, name}]}]}` | 全部已启用的全局价，价格就是全局价（不带 `multiplier`、`source`）；`groups` 是调用者可用（`/me/groups` 的范围）且提供该模型的分组，可以为空 |
-| 带 `group_id` | `{group: {id, name}, rate_multiplier, rate_source, prices: [{model, mode, config, expression, multiplier?, source}]}` | 该分组提供且能计费（有启用的全局价）的模型；每行是调用者在该分组的标价（专属价 → 分组内定价 → 全局价，`source` 为 `segment` \| `group` \| `global`），形状是 §97.6 的 `PriceDef`：命中按倍数的规则时，`mode`、`config`、`expression` 仍是全局价的，另带 `multiplier`，标价 = 这个价格 × `multiplier`；命中自定义价时是规则自己的价格；没有规则时是全局价。表达式不改写，配置不缩放。`rate_multiplier` 是调用者在该分组的实际倍率，`rate_source` 是它的来源（`segment` \| `discount` \| `group`） |
+| 带 `group_id` | `{group: {id, name}, rate_multiplier, rate_source, prices: [{model, mode, config, expression, multiplier?, source}]}` | 该分组提供且能计费（有启用的全局价）的模型；每行是调用者在该分组的标价（分组内定价 → 全局价，`source` 为 `group` \| `global`；出自本节点给请求计费用的价格快照），形状是 §97.6 的 `PriceDef`：命中按倍数的规则时，`mode`、`config`、`expression` 仍是全局价的，另带 `multiplier`，标价 = 这个价格 × `multiplier`；命中自定义价时是规则自己的价格；没有规则时是全局价。表达式不改写，配置不缩放。`rate_multiplier` 是调用者在该分组的实际倍率，`rate_source` 是它的来源（`segment` \| `discount` \| `group`） |
 
 - 调用者不可用的分组（不存在、已停用、私有且没有授权给调用者所在的用户组）回 404；`group_id` 不是正整数回 400 `invalid_argument`。
 - “分组提供的模型”按分组里的账号算（§97.1），所以带 `group_id` 时不再与该分组的 API Key 读到的 `GET /key/prices` 相同：后者仍是分组模型名单放行的全部已启用模型（§17.1）。两者的标价与倍率按同一套规则解析，表达方式不同：这里把规则倍数放在 `multiplier` 里，由页面乘上去；`GET /key/prices` 的读者看不到规则，倍数已经折进它返回的价格（§97.6）。
@@ -6535,19 +6536,19 @@ kind: users | groups | api-keys | accounts | models | proxies
 - 回滚顺序：核心退回 0.1.279 之前先把 moderation 退回 0.9.1。
 
 
-## 97. 分组定价：用户组、私有分组授权、倍率与分组内模型定价（2026-11-12，用户要求；迁移 0095、0096；核心 0.1.281）
+## 97. 分组定价：用户组、私有分组授权、倍率与分组内模型定价（2026-11-12，用户要求；迁移 0095、0096；核心 0.1.281。2026-11-21 起模型价格只属于分组，用户组只设倍率，迁移 0123，单向，97.10）
 
-此前私有分组要逐个用户授权（`user_groups`），费用只有“全局价 × 分组倍率”一种算法。本节加三样东西：**用户组**（每个用户属于一个，决定他能用哪些私有分组、在各个分组按什么倍率付费）、**分组内定价**（一个分组对某个模型自己的标价）和**专属价**（一个用户组在某个分组对某个模型的标价）。设计文档：[DESIGN-2026-11-12-GROUP-PRICING.md](DESIGN-2026-11-12-GROUP-PRICING.md)。
+此前私有分组要逐个用户授权（`user_groups`），费用只有“全局价 × 分组倍率”一种算法。本节加两样东西：**用户组**（每个用户属于一个，决定他能用哪些私有分组、在各个分组按什么倍率付费）和**分组内定价**（一个分组对某个模型自己的标价）。用户组只管倍率和使用权，不给模型定价；原来的**专属价**（一个用户组在某个分组对某个模型的标价）已由迁移 0123 删除（97.10）。设计文档：[DESIGN-2026-11-12-GROUP-PRICING.md](DESIGN-2026-11-12-GROUP-PRICING.md)。
 
 本节优先于前文中与之冲突的描述；§4、§5、§12、§15.1、§15.2、§17、§23.1、§66、§73.2、§79.5、§90.1、§90.4、§96.3、§96.5、§96.7 里受影响的句子已按本节改过。
 
 ### 97.1 模型
 
-**实付 = 标价 × 倍率。** 标价和倍率各有一条解析链，各自取先命中的一层。两条链互不影响：命中专属价不改变倍率怎么取，有专属倍率也不改变标价怎么取。
+**实付 = 标价 × 倍率。** 标价和倍率各有一条解析链，各自取先命中的一层。两条链互不影响：命中分组内定价不改变倍率怎么取，有专属倍率也不改变标价怎么取。
 
 | | 解析顺序（先命中者生效） |
 |---|---|
-| 标价 | 专属价（用户组 × 分组 × 模型的规则）→ 分组内定价（分组 × 模型的规则）→ 全局价（§17） |
+| 标价 | 分组内定价（分组 × 模型的规则）→ 全局价（§17） |
 | 倍率 | 专属倍率（用户组 × 分组）→ 分组默认倍率 × 用户组的全场折扣（折扣不等于 1 时）→ 分组默认倍率（`groups.rate_multiplier`） |
 
 倍率的三层是替换，不是连乘：有专属倍率时，全场折扣不参与。
@@ -6565,28 +6566,28 @@ kind: users | groups | api-keys | accounts | models | proxies
 
 - 每个用户属于且只属于一个用户组（`users.segment_id`）。
 - 内置“默认”用户组（`is_default`）：新用户进它，不能删除。
-- 命名用户组（`kind = named`）由管理员创建，名称不区分大小写唯一。删除时成员回到默认用户组，它的授权、专属倍率和专属价一并删除。
-- **个人专属**（`kind = personal`）是系统建的、只有一个成员的用户组，用来给单个用户单独授权和定价。把用户设为个人专属时，可以复制他原来所在用户组的设置（全场折扣、各分组的授权与专属倍率、专属价），也可以从空白开始；复制之后两边互不相关。个人专属记着用户原来所在的用户组（`origin`）。把用户移回命名用户组时，个人专属连同它的设置删除。用户被软删除时，他的个人专属删除，`segment_id` 改回默认用户组。
+- 命名用户组（`kind = named`）由管理员创建，名称不区分大小写唯一。删除时成员回到默认用户组，它的授权和专属倍率一并删除。
+- **个人专属**（`kind = personal`）是系统建的、只有一个成员的用户组，用来给单个用户单独授权和定价。把用户设为个人专属时，可以复制他原来所在用户组的设置（全场折扣、各分组的授权与专属倍率），也可以从空白开始；复制之后两边互不相关。个人专属记着用户原来所在的用户组（`origin`）。把用户移回命名用户组时，个人专属连同它的设置删除。用户被软删除时，他的个人专属删除，`segment_id` 改回默认用户组。
 - 全场折扣（`discount`）乘在每个分组的默认倍率上，1 表示没有折扣。折扣必须大于 0；要让一个用户组在某个分组免费，给它设专属倍率 0。
 
 **分组的可见性**（`groups.visibility`）
 
 - `public`（公开）：所有用户可用。
 - `restricted`（界面叫“私有”）：只有被**授权**的用户组的成员可用。授权记在“用户组 × 分组”上（`segment_groups.granted`），不再记在单个用户上；要只给一个用户授权，把他设为个人专属。
-- 能不能用只看可见性、授权和分组状态。专属倍率和专属价不带来使用权：公开分组上可以设专属倍率；私有分组上只设了专属倍率、没有授权的用户组仍然不能用。
+- 能不能用只看可见性、授权和分组状态。专属倍率不带来使用权：公开分组上可以设专属倍率；私有分组上只设了专属倍率、没有授权的用户组仍然不能用。
 
-**定价规则**（分组内定价和专属价是同一种规则，区别只在有没有用户组）
+**定价规则**（分组内定价：每个分组在每个模型上至多一条）
 
 | 规则 | 含义 | 约束 |
 |---|---|---|
-| 按倍数 `multiplier` | 标价 = 全局价 × N，全局价变化时跟着变 | N 不小于 0、小于 1000000、最多 4 位小数。0 表示免费。1 也合法：专属价设成 ×1 表示“这个用户组按全局价，不吃分组内定价” |
+| 按倍数 `multiplier` | 标价 = 全局价 × N，全局价变化时跟着变 | N 不小于 0、小于 1000000、最多 4 位小数。0 表示免费。1 也合法，标价等于全局价 |
 | 自定义价 `custom` | 一个自己的价格，取代全局价，不随全局价变化 | 和全局价一样写（可视化或表达式，任意档位、条件、加价规则），校验也与全局价相同；与全局价是什么形状无关（§131.4） |
 
 - 规则建立在全局价之上。模型没有启用的全局价时不能计费，规则不生效，请求被拒（§17.3）。
 - 规则没有失效一说：全局价之后怎么改，自定义价照样取代它，按倍数的规则照样乘在它上面（2026-11-22 起；之前计费方式不同的自定义价会失效、带 `inactive`）。
-- 规则只能设在分组提供的模型上；删除规则不受这个限制。
+- 规则可以设在任何有启用全局价的模型上，不要求分组现在提供它（2026-11-21 起；之前只能设在分组提供的模型上）：可以先定价，再接入提供这个模型的账号。分组不提供的模型没有请求到得了，规则留着不起作用，提供之后立即生效。
 
-**分组提供的模型**：分组内未删除的账号声明的模型；只要有一个账号没有声明模型（不限模型），再加上全部已启用全局价的模型；最后经分组的模型名单（白名单或黑名单）过滤。定价表、`GET /groups` 的 `model_count` 和 `?model=`、价格试算、`GET /me/prices?group_id=` 用的都是这个范围。
+**分组提供的模型**：分组内未删除的账号声明的模型；只要有一个账号没有声明模型（不限模型），再加上全部已启用全局价的模型；最后经分组的模型名单（白名单或黑名单）过滤。`GET /groups` 的 `model_count` 和 `?model=`、价格试算、`GET /me/prices?group_id=` 用的都是这个范围；定价表列出这个范围，再并上分组有规则的模型（97.6）。
 
 **实际倍率**：倍率链算出的那个数，保留 4 位小数（四舍五入），上限 999999.9999，与 `usage_logs.rate_multiplier numeric(10,4)` 一致。首次结算、结算重试和对账用的都是这一列里的数，所以鉴权时算出的倍率必须原样存得进去；否则重试用的倍率与首次不同，超出范围时写入还会失败。专属倍率和分组默认倍率在保存时就限制为小于 1000000、最多 4 位小数，需要取整和封顶的只有“分组默认倍率 × 全场折扣”这一层。
 
@@ -6600,7 +6601,7 @@ kind: users | groups | api-keys | accounts | models | proxies
 |---|---|
 | `segments` | `kind`（`named` \| `personal`，默认 `named`）；`name varchar(100)`（个人专属存空串，接口里给成员的邮箱）；`description`；`discount numeric(10,4)`（默认 1，CHECK `> 0`）；`is_default`；`user_id`（个人专属的唯一成员，引用 `users`，`ON DELETE CASCADE`）；`origin_id`（个人专属原来所在的用户组，`ON DELETE SET NULL`）；`created_at`、`updated_at`。约束 `segments_personal_user`（`kind = 'personal'` 当且仅当 `user_id` 非空）、`segments_default_named`（默认用户组必须是命名用户组）。唯一索引 `segments_name_uq`（`lower(name)`，只对命名用户组）、`segments_user_uq`（`user_id`，只对个人专属：每个用户至多一个）、`segments_default_uq`（至多一个默认用户组） |
 | `segment_groups` | 主键 `(segment_id, group_id)`，两列都 `ON DELETE CASCADE`；`granted`（授权，只对私有分组有意义）；`rate_override numeric(10,4)`（专属倍率，NULL = 跟随，CHECK `>= 0`）；`updated_at`。索引 `segment_groups_group_idx (group_id)`。既没有授权也没有专属倍率的行不保留 |
-| `price_rules` | `group_id`（`ON DELETE CASCADE`）；`segment_id`（NULL = 分组内定价，非空 = 专属价，`ON DELETE CASCADE`）；`model text`（迁移 0108 前是 `varchar(200)`）；`kind`（`multiplier` \| `custom`）；`multiplier numeric(10,4)`（CHECK `>= 0`）；`mode`（`visual` \| `expression`，与全局价的方式无关；迁移 0122 前是 `per_token` \| `per_request`）、`config jsonb`、`expression`、`expr_hash`（自定义价的表达式：可视化的保存规则时由 `expr.Generate(mode, config)` 生成，表达式的是手写的原文去掉首尾空白，`config` 为 `{}`）；`updated_by`、`updated_at`。约束 `price_rules_kind`：按倍数的规则只有 `multiplier`，自定义价只有 `mode`、`config` 和非空的 `expression`。唯一索引 `price_rules_group_uq (group_id, model) WHERE segment_id IS NULL`（部分索引）、`price_rules_segment_uq (group_id, segment_id, model)`（不带条件；NULL 互不相等，所以只约束专属价，同时是按分组查规则的索引）；索引 `price_rules_segment_idx (segment_id)` |
+| `price_rules` | `group_id`（`ON DELETE CASCADE`）；`model text`（迁移 0108 前是 `varchar(200)`）；`kind`（`multiplier` \| `custom`）；`multiplier numeric(10,4)`（CHECK `>= 0`）；`mode`（`visual` \| `expression`，与全局价的方式无关；迁移 0122 前是 `per_token` \| `per_request`）、`config jsonb`、`expression`、`expr_hash`（自定义价的表达式：可视化的保存规则时由 `expr.Generate(mode, config)` 生成，表达式的是手写的原文去掉首尾空白，`config` 为 `{}`）；`updated_by`、`updated_at`。约束 `price_rules_kind`：按倍数的规则只有 `multiplier`，自定义价只有 `mode`、`config` 和非空的 `expression`。唯一索引 `price_rules_group_model_uq (group_id, model)`，同时是按分组查规则的索引。0123 之前还有 `segment_id`（非空 = 专属价）和建在它上面的 `price_rules_group_uq`（部分索引）、`price_rules_segment_uq`、`price_rules_segment_idx`，0123 删除（97.10） |
 | `users.segment_id` | 非空，引用 `segments`，默认值 `default_segment_id()`（返回默认用户组的 id）：任何不写这一列的 `INSERT INTO users`（旧二进制、插件、测试）都进默认用户组。索引 `users_segment_idx`。这个外键没有级联，有成员的用户组在库里删不掉，删除接口先把成员移回默认用户组。“默认用户组不能删”是应用层的规则，数据库层只有这个外键挡着：成员全部移走之后，手工 `DELETE` 是删得掉的，之后 `default_segment_id()` 返回 NULL，新用户插不进去。手工改库不要删它 |
 | `usage_logs.base_cost` | `numeric(20,8)`，可空、没有默认值（不重写表）：原价（97.5）。0096 之前的行是 NULL |
 
@@ -6626,33 +6627,33 @@ kind: users | groups | api-keys | accounts | models | proxies
 - 实际倍率由 `core.SegmentRate(groupDefault, discount, override)` 算出（97.9）。`APIKeyPrincipal.Group.RateMultiplier` 放的就是**实际倍率**，下游（写使用记录、`GET /key/prices`）不用知道它是怎么来的；`APIKeyPrincipal` 另有 `SegmentID` 和 `RateSource`（`segment` \| `discount` \| `group`）记录来源。
 - 分组是否可用（公开，或已授权给所有者所在的用户组）在同一条 SQL 里得出；不可用时照旧回 403 `group_not_allowed`（§15.1）。
 
-**标价**由 `core.Pricer.Resolve(ctx, core.PriceQuery{Model, GroupID, SegmentID})` 给出。`billing` 的价格快照同时载入 `price_rules`，与全局价用同一个 TTL、同一个 `config:changed` 失效。解析顺序：
+**标价**由 `core.Pricer.Resolve(ctx, core.PriceQuery{Model, GroupID})` 给出。`billing` 的价格快照同时载入 `price_rules`，与全局价用同一个 TTL、同一个 `config:changed` 失效；同一个失效代次的并发载入合并成一次读库（`singleflight`，按代次；载入不随某个请求取消）。解析顺序：
 
 1. 模型没有启用的全局价：返回 `ErrPriceNotConfigured`（§17.3）；这时不看规则。
-2. 取 `(分组, 用户组, 模型)` 的规则；没有或已失效，再取 `(分组, NULL, 模型)` 的规则；都没有就是全局价。
-3. `GroupID`、`SegmentID` 为 0 时只取全局价。
+2. 取 `(分组, 模型)` 的规则；没有就是全局价。
+3. `GroupID` 为 0 时只取全局价。
 
 返回的 `core.PriceRule` 多三个字段，都是 `omitempty`，已经持久化的旧 JSON 照常读：
 
 | 命中 | `Source` | `Expression`、`ExprHash`、`Mode` | `Scale` | `Base` |
 |---|---|---|---|---|
 | 全局价 | 空 | 全局价的 | nil | nil |
-| 按倍数的规则 | `group` 或 `segment` | 全局价的 | 规则的 N | nil |
-| 自定义价 | `group` 或 `segment` | 规则自己的（保存规则时生成并存下，同时写进 `model_price_history`） | nil | 全局价的 `{Expression, ExprHash}`，用来算原价 |
+| 按倍数的规则 | `group` | 全局价的 | 规则的 N | nil |
+| 自定义价 | `group` | 规则自己的（保存规则时生成并存下，同时写进 `model_price_history`） | nil | 全局价的 `{Expression, ExprHash}`，用来算原价 |
 
-- `Source` 为空就是全局价，常量 `core.PriceSourceGlobal`（`global`）只用在给人看的接口里：定价表的 `source`、试算的 `price_source`、`/me/prices?group_id=` 的 `source` 在全局价时输出 `global`；冻结到使用记录时这个字段省略（97.4）。
+- `Source` 为空就是全局价，常量 `core.PriceSourceGlobal`（`global`）只用在给人看的接口里：定价表的 `source`、试算的 `price_source`、`/me/prices?group_id=` 的 `source` 在全局价时输出 `global`；冻结到使用记录时这个字段省略（97.4）。0123 之前冻结的记录里还可能是 `segment`（已删除的专属价），只作记录，没有对应的常量。
 - `ID` 始终取全局价的，`usage_logs.price_id` 一直指向全局价那一行。`VideoOnly`、`PerRequest` 取生效表达式的：命中自定义价时按规则自己的表达式算（`billing.traitsOf`，读规则时算一次），按倍数的规则不改变它们。命中自定义价的记录，`usage_logs.expr_hash` 是规则表达式的哈希，在 `model_price_history` 里查得到。
 - **规则倍数与倍率只在一处相乘**：`func (r *PriceRule) Multiplier(rate decimal.Decimal) decimal.Decimal`（`rate × Scale`，`r` 或 `Scale` 为 nil 时就是 `rate`）。传给 `Quote` 的 `RateMultiplier` 都经过它：预扣（`billing/additional.go` 的 `quoteRecord`）和结算、预留、对账（`usage/settler.go` 的 `priceOne`）。
-- 网关：主模型和引用模型（`prepareBilling`、`prepareReferencedPrices`）的 `Resolve` 都带分组和用户组；写使用记录时把 `SegmentID`、`RateSource` 记到 `core.UsageRecord`。计费方式准入看 `BillingType()`（`Mode`、`VideoOnly`、`PerRequest`）。价格入参的捕获（`Pricer.Inputs`）取生效表达式和 `Base` 两条表达式读的请求参数、请求头的并集：自定义价可以取代任何全局价，结算时还要用同一份入参再算一次全局价得出原价。原价只用于展示：全局价表达式算不出（编译或求值出错）时原价记成标价费用、`billing_detail.base_fallback: true`（报表可据此排除）、打一条警告日志，照常扣费，不让记录进 `failed`（`usage/settler.go` 的 `priceOne`）。
+- 网关：主模型和引用模型（`prepareBilling`、`prepareReferencedPrices`）的 `Resolve` 都带分组；写使用记录时把 `SegmentID`、`RateSource` 记到 `core.UsageRecord`。计费方式准入看 `BillingType()`（`Mode`、`VideoOnly`、`PerRequest`）。价格入参的捕获（`Pricer.Inputs`）取生效表达式和 `Base` 两条表达式读的请求参数、请求头的并集：自定义价可以取代任何全局价，结算时还要用同一份入参再算一次全局价得出原价。原价只用于展示：全局价表达式算不出（编译或求值出错）时原价记成标价费用、`billing_detail.base_fallback: true`（报表可据此排除）、打一条警告日志，照常扣费，不让记录进 `failed`（`usage/settler.go` 的 `priceOne`）。
 - 插件的只读报价 `PriceModelUsage`（`billing/usage_quote.go`）仍按全局价、倍率 1。`POST /prices/preview` 的 `group_id` 保持原意，只取分组默认倍率。
-- WebSocket 连接在整个生命周期里复用升级时的鉴权结果（分组倍率原来也是这样）：连接期间用户组或倍率设置变了，倍率要到重连才变；标价每一轮重新解析。
+- WebSocket 每一轮（`response.create`）开始之前用握手时的 API Key 重新鉴权（`gateway/websocket.go` 的 `refresh`，§35 “会话”一段），这一轮的倍率就是重新鉴权算出的：连接期间改了授权、全场折扣或专属倍率，下一轮就生效，不用重连；授权被撤销时这一轮 403 并关闭连接。标价同样每一轮重新解析。
 
 ### 97.4 冻结与重试
 
 使用记录写入时，主项的倍率来源和命中的规则冻结在 `billing_detail.inputs.pricing`（`core.PricingTrace`）：
 
 ```json
-{ "segment_id": 12, "rate_source": "discount", "price_source": "segment",
+{ "segment_id": 12, "rate_source": "discount", "price_source": "group",
   "scale": "0.8",
   "base": { "expression": "…", "expr_hash": "…" } }
 ```
@@ -6661,7 +6662,7 @@ kind: users | groups | api-keys | accounts | models | proxies
 |---|---|
 | `segment_id` | 定价时所有者所在的用户组 |
 | `rate_source` | 倍率来源：`segment`（专属倍率）\| `discount`（分组默认倍率 × 全场折扣）\| `group`（分组默认倍率） |
-| `price_source` | 标价来源：`segment`（专属价）\| `group`（分组内定价）；标价是全局价时省略，不写 `global` |
+| `price_source` | 标价来源：`group`（分组内定价）；标价是全局价时省略，不写 `global`。0123 之前的记录可能是 `segment`（已删除的专属价）：重试、对账本来就只用 `scale`、`base` 和历史表里的表达式，不重新解析规则，这些记录照常结算 |
 | `scale` | 只在命中按倍数的规则时有：规则的 N |
 | `base` | 只在命中自定义价时有：当时的全局价表达式，用来算原价 |
 
@@ -6706,19 +6707,20 @@ kind: users | groups | api-keys | accounts | models | proxies
 | 对象 | 字段 |
 |---|---|
 | `SegmentRef` | `{id, kind, name, user_id?}`：别的行引用用户组时用它。`kind` 是 `named` \| `personal`；个人专属的 `name` 是成员的邮箱，`user_id` 是成员 |
-| `Segment` | `SegmentRef` 加 `description`、`discount`（全场折扣，`"1"` = 没有）、`is_default`、`member_count`、`granted_groups: [{id, name}]`（被授权的私有分组）、`rate_override_count`（设了专属倍率的分组数）、`price_rule_count`（专属价的条数，所有分组合计；只算各分组现在提供的模型上的，口径见下面 GET `/groups` 一行）、`created_at`；个人专属另有 `user: {id, email, display_name}` 和 `origin: SegmentRef \| null`（原来所在的用户组，已被删除时为 `null`） |
+| `Segment` | `SegmentRef` 加 `description`、`discount`（全场折扣，`"1"` = 没有）、`is_default`、`member_count`、`granted_groups: [{id, name}]`（被授权的私有分组）、`rate_overrides: [{id, name, rate}]`（单独设了倍率的分组和倍率，按分组 id 排序）、`created_at`；个人专属另有 `user: {id, email, display_name}` 和 `origin: SegmentRef \| null`（原来所在的用户组，已被删除时为 `null`） |
 | `EffectiveRate` | `{value, source, group_default, discount}`：实际倍率、它的来源（`segment` \| `discount` \| `group`），以及算它用到的分组默认倍率和全场折扣 |
-| `SegmentGroupSetting` | 一个用户组在一个分组的设置：`segment: SegmentRef`、`group: {id, name, description, status, visibility, rate_multiplier, platforms?}`、`accessible`（公开或已授权）、`granted`（显式的授权，只对私有分组有意义）、`rate_override`（专属倍率，`null` = 跟随）、`rate: EffectiveRate`、`price_rule_count`（这个用户组在这个分组的专属价条数，只算分组现在提供的模型上的）、`member_count`（用户组的成员数，个人专属是 1） |
+| `SegmentGroupSetting` | 一个用户组在一个分组的设置：`segment: SegmentRef`、`group: {id, name, description, status, visibility, rate_multiplier, platforms?}`、`accessible`（公开或已授权）、`granted`（显式的授权，只对私有分组有意义）、`rate_override`（专属倍率，`null` = 跟随）、`rate: EffectiveRate`、`member_count`（用户组的成员数，个人专属是 1） |
 | `PriceRule` | `{kind: "multiplier", multiplier}` 或 `{kind: "custom", mode, config, expression}`：自定义价与 `/prices` 的同名字段写法相同（`mode` 是 `visual` 或 `expression`；可视化的 `config` 是任意 `{tiers, rules}`，`expression` 不读、返回时是生成的那条；表达式的 `config` 省略或 `{}`，`expression` 必填），§131.4。返回时 `expression` 总在 |
 | `PriceDef` | `{mode, config, expression, multiplier?}`：一个价格。前三个字段与 `/prices` 的同名字段相同。`multiplier`（十进制字符串）只在“这个标价来自按倍数的规则”时出现，规则是 ×0、×1 时也照常出现，含义是：标价 = 这个价格 × `multiplier`。全局价（`base`）和自定义价给出的标价不带它 |
-| `ModelPriceRow` | 分组提供的一个模型：`model`、`base: PriceDef \| null`（全局价，`null` = 没有，不能计费）、`group_rule: PriceRule \| null`（分组内定价）、`segment_rule`（带 `segment_id` 查询时：该用户组的专属价）或 `segment_rule_count`（不带时：在这个模型上有专属价的用户组数）、`list_price: PriceDef \| null`（先命中的那条规则作用后的标价，见下）、`source`（`segment` \| `group` \| `global`）。模型没有全局价时 `list_price` 为 `null`、`source` 为 `global`，两条规则仍照配置返回 |
-| `GroupModelPrices` | `{group: {id, name}, segment?: SegmentRef, rate: EffectiveRate, models: ModelPriceRow[]}`；`rate` 是所查用户组在该分组的倍率，没带用户组时是分组默认倍率 |
+| `ModelPriceRow` | 定价表的一行：`model`、`offered`（分组现在是否提供这个模型；`false` 的行是分组有规则、现在却不提供的模型，规则不起作用）、`base: PriceDef \| null`（全局价，`null` = 没有，不能计费）、`group_rule: PriceRule \| null`（分组内定价）、`list_price: PriceDef \| null`（规则作用后的标价，见下）、`source`（`group` \| `global`）。模型没有全局价时 `list_price` 为 `null`、`source` 为 `global`，规则仍照配置返回 |
+| `GroupModelPrices` | `{group: {id, name}, rate: EffectiveRate, models: ModelPriceRow[]}`；`rate` 是分组默认倍率，`models` 按模型名排序 |
+| `CatalogPrice` | `{model, price: PriceDef}`：一条启用的全局价（`price` 不带 `multiplier`） |
 
-`list_price` 是给人看的标价，由 `billing` 里的一个函数（`listPrice`）从全局价和先命中的那条规则得出。三种情况：
+`list_price` 是给人看的标价，由 `billing` 里的一个函数（`listPrice`）从全局价和分组的规则得出。三种情况：
 
 | 情况 | `list_price` |
 |---|---|
-| 没有规则生效（没有规则，或规则都已失效） | 全局价原样，不带 `multiplier` |
+| 没有规则 | 全局价原样，不带 `multiplier` |
 | 自定义价 | 规则自己的价格：`mode`、`config` 是规则的，`expression` 是保存规则时生成的那条；不带 `multiplier` |
 | 按倍数的规则 | 全局价原样（`mode`、`config`、`expression` 都不动），另带 `multiplier`，值是规则的 N |
 
@@ -6731,31 +6733,32 @@ kind: users | groups | api-keys | accounts | models | proxies
 
 | 接口 | 权限 | 说明 |
 |---|---|---|
-| GET `/segments?q=&kind=named\|personal` | `segment:read` | 分页，`Segment[]`，默认用户组排最前。`kind` 缺省 `named`。`q` 匹配名称和说明；调用者有 `user:read` 时，个人专属还匹配成员的邮箱和显示名（没有 `user:read` 时不匹配这两项，否则可以用搜索试出邮箱） |
+| GET `/segments?q=&kind=named\|personal\|all` | `segment:read` | 分页，`Segment[]`，默认用户组排最前。`kind` 缺省 `named`，其它值也按 `named`；`all`（2026-11-21）是一个列表：命名用户组在前（默认用户组最前），个人专属在后，各自按 id，分页和 `q` 照常。`q` 匹配名称和说明；调用者有 `user:read` 时，个人专属还匹配成员的邮箱和显示名（没有 `user:read` 时不匹配这两项，否则可以用搜索试出邮箱） |
 | GET `/segments/:id` | `segment:read` | `Segment` |
 | POST `/segments` `{name, description, discount}` | `segment:manage` | 建命名用户组，201，返回 `Segment`。`name` 必填，去首尾空格后 1–100 字符，不区分大小写唯一（字段 `name`）；`description` 最多 2000 字符（字段 `description`）；`discount` 缺省 `"1"`，必须大于 0、小于 1000000、最多 4 位小数（字段 `discount`） |
 | PATCH `/segments/:id` | `segment:manage` | 字段都可选，校验同上。个人专属只能改 `discount`，带 `name` 或 `description` 回 400（字段 `name`）；调用者本人在该用户组内（默认用户组除外）409，超管例外（见表后“自己所在用户组的设置”） |
-| DELETE `/segments/:id` | `segment:manage` | 204。成员回默认用户组，它的授权、专属倍率、专属价一并删除；以它为 `origin` 的个人专属 `origin` 变成 `null`。默认用户组 409；个人专属 409（用下面的移回接口），只有一个例外：唯一成员已被软删除的个人专属可以经此删除（升级窗口里旧节点软删除用户会留下这种行，97.8）；调用者本人在该用户组内（默认用户组除外）409，超管例外（见表后“自己所在用户组的设置”） |
+| DELETE `/segments/:id` | `segment:manage` | 204。成员回默认用户组，它的授权和专属倍率一并删除；以它为 `origin` 的个人专属 `origin` 变成 `null`。默认用户组 409；个人专属 409（用下面的移回接口），只有一个例外：唯一成员已被软删除的个人专属可以经此删除（升级窗口里旧节点软删除用户会留下这种行，97.8）；调用者本人在该用户组内（默认用户组除外）409，超管例外（见表后“自己所在用户组的设置”） |
 | GET `/segments/:id/members?q=` | `segment:read` 且 `user:read` | 分页，行同 GET `/users`；`q` 匹配邮箱或显示名。这个接口在 `iam` 包里，它就是带用户组条件的用户列表 |
 | POST `/segments/:id/members` `{user_ids}` | `segment:manage` | 把用户移入这个用户组，返回 `{moved}`（实际移动的人数，已在组内的不算）。目标只能是命名用户组，个人专属 409；不存在的用户 400（字段 `user_ids`）。原来是个人专属的用户，个人专属随之删除。`user_ids` 里有调用者不可管理的用户（按默认清单含非超管的调用者本人）403（§43.6 可管理目标），都在事务之前判断，整批不动 |
 | GET `/segments/:id/groups` | `segment:read` | `SegmentGroupSetting[]`，每个分组一行，不分页 |
 | PUT `/segments/:id/groups` `{items: [{group_id, granted?, rate_override?}]}` | `segment:manage` | 只改列出的分组，整批一个事务，返回最新的列表。`granted` 没传 = 不动。`rate_override` 区分三种：没传 = 不动，`null` = 跟随，值 = 专属倍率，校验同分组倍率（不小于 0、小于 1000000、最多 4 位小数；字段 `items.<i>.rate_override`）。分组不存在 400（字段 `items.<i>`）。字段错误里的 `<i>` 是该项在请求 `items` 里的原始位置。同一个分组出现多条时按请求里的顺序应用，后面的生效。任何一项不合法，整批不改；调用者本人在该用户组内（默认用户组除外）409，超管例外（见表后“自己所在用户组的设置”） |
-| GET `/groups/:id/segments?include=` | `group:read` | 同一种行，从分组一侧看，不分页：全部命名用户组，后面跟在本分组有授权、专属倍率或专属价的个人专属，以及 `include`（逗号分隔的 id）点名的个人专属 |
+| GET `/groups/:id/segments?include=` | `group:read` | 同一种行，从分组一侧看，不分页：全部命名用户组，后面跟在本分组有授权或专属倍率的个人专属，以及 `include`（逗号分隔的 id）点名的个人专属 |
 | PUT `/groups/:id/segments?include=` `{items: [{segment_id, granted?, rate_override?}]}` | `group:manage` | 同 PUT `/segments/:id/groups`，另一个方向（`<i>` 同样是原始位置，同一个用户组出现多条时后面的生效）；用户组不存在 400（字段 `items.<i>`）；调用者本人在该用户组内（默认用户组除外）409，超管例外（见表后“自己所在用户组的设置”） |
-| POST `/users/:id/personal-segment` `{copy}` | `segment:manage` | 把用户设为个人专属，201，返回 `Segment`。`copy` 为真时复制原用户组的全场折扣、各分组的授权与专属倍率、专属价；否则从空白开始（折扣 1，没有授权，原用户组带来的私有分组不再可用）。用户不存在（含已软删除）404；已是个人专属 409；目标不可管理（含非超管的本人）403（§43.6 可管理目标） |
+| POST `/users/:id/personal-segment` `{copy}` | `segment:manage` | 把用户设为个人专属，201，返回 `Segment`。`copy` 为真时复制原用户组的全场折扣、各分组的授权与专属倍率；否则从空白开始（折扣 1，没有授权，原用户组带来的私有分组不再可用）。用户不存在（含已软删除）404；已是个人专属 409；目标不可管理（含非超管的本人）403（§43.6 可管理目标） |
 | DELETE `/users/:id/personal-segment?to=` | `segment:manage` | 把用户移回命名用户组，个人专属及其设置删除，204。`to` 缺省是默认用户组，必须是命名用户组（否则 400，字段 `to`）。用户不是个人专属时 404；请求处理期间用户已被别的请求移出个人专属的，同样回 404，不会把他再移一次；目标不可管理（含非超管的本人）403（§43.6 可管理目标） |
 
-**目标用户检查**（2026-11-12，M7、C-L7；FU6 改写）：选择某个用户所属的用户组（POST `/segments/:id/members`、POST/DELETE `/users/:id/personal-segment`）和调整余额（POST `/users/:id/balance/adjust`）的目标须是调用者可管理的用户，本人也按同一规则判断（§43.6 可管理目标；`core.UserGuard`，用户组为 `core.ActOnData`，余额为 `core.ActOnBalance`：目标持有 `user` 以外的角色时还要 `balance:adjust:any`，2026-11-13；一条 SQL 判断整批）。期 2 T33 的“作用于自己 409”与 FU5 的超管豁免已由 FU6 取代：非超管作用于自己现在是 403 `not_manageable`，超管照常，经访问密钥也按操作者的角色判断；作用于自己的成功检查记 `user.act_on_self` 审计。未注入 `core.UserGuard` 时一律拒绝（`core.GuardOrDeny`）。**自己所在用户组的设置**（2026-11-12 权限加固 FU2，产品性收紧）：作用于用户组本身、改变它的定价或授权的写入——PATCH `/segments/:id` 带 `discount`、DELETE `/segments/:id`（成员全部回默认用户组）、PUT `/segments/:id/groups`、PUT `/groups/:id/segments`（`items` 里任一用户组）与分组的专属价（PUT `/groups/:id/model-prices`，`items` 里 `segment_id` 非空的项）——调用者本人是其中任一用户组的成员（含自己的个人专属）时 409 `you cannot change the terms of a user group you are in`，整批不写；能管理自己的调用者例外（`UserGuard` 对本人，`core.ActOnData`：按默认清单只有超管，清单里按名字列了自己角色的自定义角色也算，`assign_custom` 不含自己持有的角色，会话或带该接口权限的密钥均可，记 `user.act_on_self` 审计）。判断只有 `segment.GuardOwnSegments` 一处（DELETE、PUT 与专属价在写事务里读成员关系，PATCH 无事务，写前读）。**默认用户组不做成员检查**：所有用户默认都在默认用户组，改它等同于改全平台的定价，与 `price:manage`、`group:manage` 改全局价格同一性质，不算给自己定价；如需收紧，只要去掉 `GuardOwnSegments` 里的 `NOT s.is_default` 条件。只读接口、只改 `name` / `description` 的 PATCH、新建用户组、分组自身的定价（`segment_id` 为 `null`）不受影响。组内其他成员（含权限更高的用户）不做目标用户检查，由 `segment:manage` / `group:manage` 把关：这些写入作用于用户组，不是“选择某个用户属于哪个用户组”。POST `/usage/:id/refund` 的目标检查延后。
+**目标用户检查**（2026-11-12，M7、C-L7；FU6 改写）：选择某个用户所属的用户组（POST `/segments/:id/members`、POST/DELETE `/users/:id/personal-segment`）和调整余额（POST `/users/:id/balance/adjust`）的目标须是调用者可管理的用户，本人也按同一规则判断（§43.6 可管理目标；`core.UserGuard`，用户组为 `core.ActOnData`，余额为 `core.ActOnBalance`：目标持有 `user` 以外的角色时还要 `balance:adjust:any`，2026-11-13；一条 SQL 判断整批）。期 2 T33 的“作用于自己 409”与 FU5 的超管豁免已由 FU6 取代：非超管作用于自己现在是 403 `not_manageable`，超管照常，经访问密钥也按操作者的角色判断；作用于自己的成功检查记 `user.act_on_self` 审计。未注入 `core.UserGuard` 时一律拒绝（`core.GuardOrDeny`）。**自己所在用户组的设置**（2026-11-12 权限加固 FU2，产品性收紧）：作用于用户组本身、改变它的定价或授权的写入——PATCH `/segments/:id` 带 `discount`、DELETE `/segments/:id`（成员全部回默认用户组）、PUT `/segments/:id/groups`、PUT `/groups/:id/segments`（`items` 里任一用户组）——调用者本人是其中任一用户组的成员（含自己的个人专属）时 409 `you cannot change the terms of a user group you are in`，整批不写；能管理自己的调用者例外（`UserGuard` 对本人，`core.ActOnData`：按默认清单只有超管，清单里按名字列了自己角色的自定义角色也算，`assign_custom` 不含自己持有的角色，会话或带该接口权限的密钥均可，记 `user.act_on_self` 审计）。判断只有 `segment.GuardOwnSegments` 一处（DELETE、PUT 在写事务里读成员关系，PATCH 无事务，写前读）。**默认用户组不做成员检查**：所有用户默认都在默认用户组，改它等同于改全平台的定价，与 `price:manage`、`group:manage` 改全局价格同一性质，不算给自己定价；如需收紧，只要去掉 `GuardOwnSegments` 里的 `NOT s.is_default` 条件。只读接口、只改 `name` / `description` 的 PATCH、新建用户组、分组的模型定价（PUT `/groups/:id/model-prices`）不受影响。组内其他成员（含权限更高的用户）不做目标用户检查，由 `segment:manage` / `group:manage` 把关：这些写入作用于用户组，不是“选择某个用户属于哪个用户组”。POST `/usage/:id/refund` 的目标检查延后。
 
 **分组内定价与试算**
 
 | 接口 | 权限 | 说明 |
 |---|---|---|
-| GET `/groups/:id/model-prices?segment_id=` | `group:read` | `GroupModelPrices`。行是分组提供的模型（97.1）；分组已不提供的模型上留下的旧规则不并入。不带 `segment_id` 时每行给 `segment_rule_count`，带时给该用户组的 `segment_rule`，`list_price`、`source`、`rate` 也按该用户组算。`segment_id` 不是正整数 400（字段 `segment_id`），指的用户组不存在 404 |
-| PUT `/groups/:id/model-prices?segment_id=` `{items: [{segment_id, model, rule}]}` | `group:manage` | 每项写一条规则：`segment_id` 为 `null` 是分组内定价，否则是该用户组的专属价；`rule` 为 `null` 删除这条规则。整批一个事务，任何一项不合法整批不改（400，字段 `items.<i>`）；返回最新的 `GroupModelPrices`（查询串的 `segment_id` 只决定返回哪个视图）。校验见下；调用者本人在该用户组内（默认用户组除外）409，超管例外（见表后“自己所在用户组的设置”） |
+| GET `/groups/:id/model-prices` | `group:read` | `GroupModelPrices`。行是分组提供的模型（97.1）并上分组有规则的模型，`offered` 区分两者（2026-11-21 起；之前不提供的模型上的规则不列出）。全局价和规则出自本节点给请求计费用的价格快照（同试算）。分组不存在 404 |
+| PUT `/groups/:id/model-prices` `{items: [{model, rule}]}` | `group:manage` | 每项写分组在一个模型上的规则，`rule` 为 `null` 删除。整批一个事务，任何一项不合法整批不改（400，字段 `items.<i>`）；分组不存在 404，写入期间分组被删 409。提交后让价格快照失效，返回最新的 `GroupModelPrices`（读的是失效后重新载入的快照，就是刚保存的内容）。校验见下 |
+| GET `/pricing/catalog` | `group:read` | `CatalogPrice[]`，不分页：全部启用的全局价，按模型名排序，出自价格快照。定价页给分组添加它还不提供的模型时从这里选，新建分组（还没有 id）时也能用 |
 | POST `/pricing/quote` | `price:read` 且 `group:read`；带 `user_id` 还要 `user:read`，带 `segment_id` 还要 `segment:read` | 试算一个用户（或一个用户组的任何成员）在某个分组调用某个模型要付多少，见下。响应里有分组和用户组的规则与倍率、用户所在的用户组，所以接口要求的权限与控制台试算入口的相同（选分组、选用户、选用户组各自的权限）；缺哪一项回 403 `permission_denied`，`details.permission` 是缺的那一项。这个检查在请求体的其它校验之前：没有 `user:read` 的调用者分不出某个用户 id 存不存在 |
 
-规则的校验（删除规则总是允许）：用户组必须存在；分组必须提供这个模型；模型必须有启用的全局价；`rule.kind` 是 `multiplier` 或 `custom`；倍数不小于 0、小于 1000000、最多 4 位小数；自定义价与全局价同样校验（`mode` 是 `visual` 或 `expression`，配置能生成表达式、表达式能通过 `expr.Validate`），不看全局价的形状（§131.4）。保存自定义价时，核心存下生成的（或手写的）表达式，并写进 `model_price_history`（97.4）。
+规则的校验（删除规则总是允许）：模型必须有启用的全局价，分组提不提供它都可以（97.1）；`rule.kind` 是 `multiplier` 或 `custom`；倍数不小于 0、小于 1000000、最多 4 位小数；自定义价与全局价同样校验（`mode` 是 `visual` 或 `expression`，配置能生成表达式、表达式能通过 `expr.Validate`），不看全局价的形状（§131.4）。保存自定义价时，核心存下生成的（或手写的）表达式，并写进 `model_price_history`（97.4）。
 
 `POST /pricing/quote`：
 
@@ -6766,10 +6769,10 @@ kind: users | groups | api-keys | accounts | models | proxies
 | 字段 | 含义 |
 |---|---|
 | `segment` | 按哪个用户组算的（`SegmentRef`） |
-| `accessible`、`access_source` | 该用户组能不能用这个分组，以及原因：`public`（公开分组）\| `grant`（私有分组，已授权）\| `none`（私有分组，没有授权）。不能用时照样给出价格和费用 |
+| `accessible`、`access_source` | 该用户组能不能用这个分组，以及原因：`disabled`（分组已停用，不论可见性和授权都不能用；2026-11-21 起，之前停用的分组也按可见性回答）\| `public`（公开分组）\| `grant`（私有分组，已授权）\| `none`（私有分组，没有授权）。不能用时照样给出价格和费用 |
 | `base`、`list_price` | 全局价和标价（`PriceDef`，`list_price` 的形状见上）；没有全局价时都是 `null` |
-| `price_source` | 标价来源：`segment` \| `group` \| `global`；没有全局价时是 `global` |
-| `price_levels` | `{segment: PriceRule \| null, group: PriceRule \| null}`：两层规则各自的配置，生效的是 `price_source` 那一层 |
+| `price_source` | 标价来源：`group` \| `global`；没有全局价时是 `global` |
+| `price_levels` | `{group: PriceRule \| null}`：分组的规则 |
 | `rate`、`rate_override` | `EffectiveRate`，以及这个用户组在这个分组的专属倍率（没有为 `null`） |
 | `list_cost`、`cost` | 标价费用（标价 × 用量）和实付（标价费用 × 倍率）；没有全局价时都是 `"0"` |
 
@@ -6779,7 +6782,7 @@ kind: users | groups | api-keys | accounts | models | proxies
 
 | 接口 | 变化 |
 |---|---|
-| GET `/groups` | 每行加 `access: {segments: SegmentRef[], personal_count}`（私有分组授权给了哪些命名用户组，以及多少个个人专属；只统计私有分组，公开分组恒为 `{segments: [], personal_count: 0}`，留在公开分组上的授权行不计）、`price_rule_count`（分组内定价的条数）、`segment_rule_count`（本分组里各用户组专属价的条数）、`model_count`（分组提供的模型数）。两个条数只算分组**现在提供**的模型上的规则，与定价表列出的一致：分组不再提供某个模型后（账号不再声明它，或不限模型的账号所依赖的全局价被停用），那个模型上的规则留在库里但不计入，重新提供时又计入；`Segment`、`SegmentGroupSetting` 的 `price_rule_count` 同一口径（`group` 包的 `offeredRules`，97.9）；新筛选 `?model=`，只留提供该模型的分组 |
+| GET `/groups` | 每行加 `access: {segments: SegmentRef[], personal_count}`（私有分组授权给了哪些命名用户组，以及多少个个人专属；只统计私有分组，公开分组恒为 `{segments: [], personal_count: 0}`，留在公开分组上的授权行不计）、`price_rule_count`（分组内定价的条数，分组提不提供那个模型都算，与定价表列出的规则一致；2026-11-21 起，之前只算分组提供的模型上的）、`model_count`（分组提供的模型数）；新筛选 `?model=`，只留提供该模型的分组 |
 | GET `/me/groups` | 可用性按调用者所在的用户组。每行只比原来多三项：`effective_rate`（调用者在该分组的实际倍率）、`rate_source`、`exclusive`（私有分组）。`rate_multiplier` 仍是分组默认倍率（§15.2）。某个分组读不到调用者在其中的条件时（列出分组和读条件是两次查询，中间分组被删等），这个分组从结果里略去，不报错 |
 | GET `/users`、GET `/users/:id` | 加 `segment: SegmentRef`；去掉 `group_ids`；新筛选 `segment=<用户组 id>` 或 `segment=personal`（所有个人专属的用户） |
 | POST `/auth/login` | 不变：返回的 `user` 不带 `segment`（§5.1） |
@@ -6787,8 +6790,8 @@ kind: users | groups | api-keys | accounts | models | proxies
 | GET / PUT `/users/:id/groups` | 删除。私有分组授权给用户组；给单个用户授权用个人专属 |
 | DELETE `/users/:id` | 用户的个人专属随之删除，`segment_id` 改回默认用户组 |
 | POST / PATCH `/me/api-keys`，Key 的 `group_status`，网关鉴权 | 分组可用性按用户组（§15.1） |
-| GET `/me/prices` | 两种形态，见 §79.5。带 `group_id` 时每行是上面的 `PriceDef`（按倍数的规则带 `multiplier`，表达式和配置不动）加 `source`；`group_id` 不是正整数 400 |
-| GET `/key/prices` | 模型范围不变（分组模型名单放行的全部已启用模型）；价格是 Key 所有者在该分组的标价，`rate_multiplier` 是他的实际倍率。响应形状不变（没有 `multiplier`），读者看不到规则，所以这是**唯一把规则倍数折进价格的接口**（`billing` 的 `exportPrice`：先 `listPrice`，有倍数且不等于 1 时再缩放）：按次、按 token 的价格缩放配置里的价格（`expr.PriceKeys`，数字字符串同样缩放；规则倍数不变），表达式由缩放后的配置重新生成；表达式价格写成 `(原表达式) * N`（`expr.Times`；原表达式含行注释时右括号另起一行，§131.3）。倍数等于 1 时不改，价格就是全局价。改后重新编译，不通过的模型从结果里跳过并记日志，接口不因此失败。每行的 `expression` 都非空。缩放用的是从上游同步价格时“应用倍率”的同一个函数，两处的结果一致（§17.1） |
+| GET `/me/prices` | 两种形态，见 §79.5。带 `group_id` 时每行是上面的 `PriceDef`（按倍数的规则带 `multiplier`，表达式和配置不动）加 `source`，价格出自价格快照；`group_id` 不是正整数 400 |
+| GET `/key/prices` | 模型范围不变（分组模型名单放行的全部已启用模型）；价格是 Key 所有者在该分组的标价，出自本节点给请求计费用的价格快照，`rate_multiplier` 是他的实际倍率。响应形状不变（没有 `multiplier`），读者看不到规则，所以这是**唯一把规则倍数折进价格的接口**（`billing` 的 `exportPrice`：先 `listPrice`，有倍数且不等于 1 时再缩放）：按次、按 token 的价格缩放配置里的价格（`expr.PriceKeys`，数字字符串同样缩放；规则倍数不变），表达式由缩放后的配置重新生成；表达式价格写成 `(原表达式) * N`（`expr.Times`；原表达式含行注释时右括号另起一行，§131.3）。倍数等于 1 时不改，价格就是全局价。改后重新编译，不通过的模型从结果里跳过并记日志，接口不因此失败。每行的 `expression` 都非空。缩放用的是从上游同步价格时“应用倍率”的同一个函数，两处的结果一致（§17.1） |
 | GET `/usage/:id`、`/me/usage/:id` | `billing_detail` 里可能多出 `inputs.pricing`（97.4）和 `list_cost`（97.5） |
 | GET `/usage/summary`、概览、导出 | `standard_cost` 和原价一列的口径（§66.1、§66.5） |
 | GET `/lookup/groups?mine=true`、`/lookup/models?mine=true` | 可用分组的范围按用户组。`models?mine=true` 是各可用分组 `/me/prices?group_id=` 结果并集的超集（§96.3） |
@@ -6796,19 +6799,19 @@ kind: users | groups | api-keys | accounts | models | proxies
 
 **个人专属的名称对没有 `user:read` 的调用者屏蔽。** 个人专属的名称是成员的邮箱。上面所有接口里，调用者没有 `user:read` 时，个人专属的 `name` 给 `#<user_id>`，`Segment` 不带 `user`。否则只有 `segment:read`、`group:read` 或 `price:read` 的角色可以借用户组列表、分组的授权表或试算结果列出用户邮箱；`GET /segments?q=` 对这样的调用者也不匹配成员的邮箱和显示名。“调用者有没有 `user:read`”的判定（`segment.ShowUsers`）和名称的替换（`segment.Masked`）各只写在 `segment` 包一处，别的包调用它们（97.9）。
 
-**何时生效。** 授权、全场折扣和专属倍率由鉴权每个请求直接读库，改完下一个请求就生效。只有定价规则在价格快照里：`billing` 写入规则后广播 `config:changed`；个人专属“复制设置”、个人专属删除和用户组删除也会改 `price_rules`，由 `segment` 在**事务提交之后**调用 `app` 注入的 `PriceRulesChanged(ctx)`，让 `billing` 的快照失效；软删除一个带个人专属的用户（`iam`）同样在事务提交之后调用它。在提交之前调用，节点会把旧规则再缓存一个 TTL。
+**何时生效。** 授权、全场折扣和专属倍率由鉴权每个请求直接读库，改完下一个请求就生效。只有定价规则在价格快照里：`billing` 在写规则的事务**提交之后**广播 `config:changed`（在提交之前广播，节点会把旧规则再缓存一个 TTL）。用户组的操作（复制设置、删个人专属、删用户组、软删除用户）不碰 `price_rules`，不通知价格快照（0123 起；之前专属价随它们变化，由 `app` 注入的 `PriceRulesChanged` 通知）。
 
-**快照里短暂留着已删对象的规则，是接受的行为。** 删除分组时，它上面的规则随外键级联删除，这条路径不通知价格快照；广播本身也是尽力而为，某个节点没收到时同样如此（滚动窗口里旧节点软删除用户也不会通知）。这些情况下，快照会把已删分组或已删用户组的规则多留到 TTL 过期。id 不复用，已删的分组和用户组不会再有请求解析到，这些规则不影响任何计费，所以不为它们加通知。
+**快照里短暂留着已删分组的规则，是接受的行为。** 删除分组时，它上面的规则随外键级联删除，这条路径不通知价格快照；广播本身也是尽力而为，某个节点没收到时同样如此。这些情况下，快照会把已删分组的规则多留到 TTL 过期。id 不复用，已删的分组不会再有请求解析到，这些规则不影响任何计费，所以不为它们加通知。
 
 **并发。** 删除用户组与同时往里移成员，靠行锁和 `users.segment_id` 的外键兜底，冲突的一方回 409；同一个用户同时被两个请求设为个人专属，由唯一索引 `segments_user_uq` 兜底，后到的回 409。成员移动、删除用户组等写操作遇到并发冲突（包括数据库判定的死锁）一律回 409 `conflict`，原样重试即可，不会是 500。
 
 ### 97.7 权限与菜单
 
 - 新权限模块 `segment`（“用户组”）：`segment:read`、`segment:manage`，都不是敏感权限（§4）。内置角色里 `admin` 有；`operator` 有（它只排除 `settings`、`sticky`、`plugin`、`publisher` 四个模块）；`user` 没有。
-- 分组一侧的授权、专属倍率和模型定价（`/groups/:id/segments`、`/groups/:id/model-prices`）沿用 `group:read` / `group:manage`；价格试算接口和控制台的试算入口要求相同：`price:read` 和 `group:read`，按用户试算还要 `user:read`，按用户组试算还要 `segment:read`（97.6）；成员列表要 `segment:read` 和 `user:read`；新建用户时指定用户组要 `segment:manage`。
+- 分组一侧的授权、专属倍率和模型定价（`/groups/:id/segments`、`/groups/:id/model-prices`），以及定价页用的全局价目录（GET `/pricing/catalog`，`group:read`），沿用 `group:read` / `group:manage`；价格试算接口和控制台的试算入口要求相同：`price:read` 和 `group:read`，按用户试算还要 `user:read`，按用户组试算还要 `segment:read`（97.6）；成员列表要 `segment:read` 和 `user:read`；新建用户时指定用户组要 `segment:manage`。
 - 菜单（`authz/menus.go`，§90.1）：`users` 区加一项，id `segments`，标签“用户组 / User groups”，图标 `publisher`，地址 `/segments`，持有 `segment:read` 才返回；排在“用户”之后、“角色与权限”之前。
 - 控制台新增页面根 `/segments`，`manifest.ConsoleSegments` 加 `segments`：插件的 GET / HEAD 网关端点不能以它开头（§55）。
-- 新建分组时，分组编辑窗口的“授权与倍率”标签页要读 `GET /segments`，没有 `segment:read` 的角色不显示这个标签页；编辑已有分组时它读 `GET /groups/:id/segments`（`group:read`），照常显示。
+- 新建分组时，分组编辑窗口的“用户组”标签页要读 `GET /segments`，没有 `segment:read` 的角色不显示这个标签页；编辑已有分组时它读 `GET /groups/:id/segments`（`group:read`），照常显示。反过来，新建用户组时用户组编辑窗口的“分组倍率”标签页要读 `GET /groups`，没有 `group:read` 的角色不显示这个标签页；编辑已有用户组时它读 `GET /segments/:id/groups`（`segment:read`），照常显示。
 
 ### 97.8 兼容、升级顺序与回滚
 
@@ -6820,21 +6823,20 @@ kind: users | groups | api-keys | accounts | models | proxies
 - **所有节点升级完之前，不要改授权，也不要建规则、设全场折扣或专属倍率。** 旧节点不认识它们：它按分组默认倍率和全局价给新请求计费，重试时也不认 `inputs.pricing` 里的规则倍数。
 - 使用记录：新记录多 `base_cost` 和可选的 `billing_detail` 字段（`list_cost`、`inputs.pricing`），旧二进制忽略它们。
 
-**新旧节点并存的窗口**里有五处不对称，都不丢数据：
+**新旧节点并存的窗口**里有四处不对称，都不丢数据（原来还有 helper history 用量信封一处，信封与 `provider_helper_usage_outbox` 已随 CCGateway 删除，§101、迁移 0102）：
 
-1. **helper history 的用量信封。** 信封（`core/helper_history_usage.go`）按“不认识的字段一律拒收”解码。`core.UsageRecord` 新增的 `RateSource`、`SegmentID` 每次都会写进信封，所以新节点写的信封旧二进制一律拒收：每分钟推迟一次，行留在 `provider_helper_usage_outbox` 里。滚动升级时这只是延迟，新节点会把它们入账。
-2. **旧节点对账新节点预留的行**时只改 `total_cost`，`base_cost` 停在预留时的估算值。
-3. **旧节点刷新小时汇总**（§66.8）用旧公式算 `standard_cost`，不读 `base_cost`：倍率为 0 的新记录计 0，其余的行与 `base_cost` 只有末位舍入的差别。窗口内被旧节点封存或重算过的小时，全部节点升级完之后要标脏重算（本节末的 C）。
-4. **旧节点软删除用户**时不删他的个人专属，留下一个唯一成员已软删除的个人专属。它不影响鉴权和计费（已删除的用户本来就被拒绝）。全部节点升级完之后用本节末的查询 D 找出来，逐个经 DELETE `/segments/:id` 删除（97.6）。
-5. **旧节点重启会暂时收回 `segment:*` 权限。** 第一个新节点启动时登记 `segment:read`、`segment:manage` 并授给内置角色；之后若有旧节点重启，它启动时同步核心权限（`authz` 的 `SyncCore`），把自己不认识的这两项标成 `removed`。从这时起，所有节点上非超级管理员访问用户组页面、成员列表、新建用户时指定用户组都回 403，菜单里的“用户组”也不显示，直到再有一个新节点启动（权限恢复 `active`；授予没被删（0.1.290 起是 `casbin_rule` 的行，之前是 `role_permissions`），授权随之回来）。不影响鉴权和计费；每次新增权限都有这个现象。滚动窗口里遇到时，再启动一个新节点即可。
+1. **旧节点对账新节点预留的行**时只改 `total_cost`，`base_cost` 停在预留时的估算值。
+2. **旧节点刷新小时汇总**（§66.8）用旧公式算 `standard_cost`，不读 `base_cost`：倍率为 0 的新记录计 0，其余的行与 `base_cost` 只有末位舍入的差别。窗口内被旧节点封存或重算过的小时，全部节点升级完之后要标脏重算（本节末的 C）。
+3. **旧节点软删除用户**时不删他的个人专属，留下一个唯一成员已软删除的个人专属。它不影响鉴权和计费（已删除的用户本来就被拒绝）。全部节点升级完之后用本节末的查询 D 找出来，逐个经 DELETE `/segments/:id` 删除（97.6）。
+4. **旧节点重启会暂时收回 `segment:*` 权限。** 第一个新节点启动时登记 `segment:read`、`segment:manage` 并授给内置角色；之后若有旧节点重启，它启动时同步核心权限（`authz` 的 `SyncCore`），把自己不认识的这两项标成 `removed`。从这时起，所有节点上非超级管理员访问用户组页面、成员列表、新建用户时指定用户组都回 403，菜单里的“用户组”也不显示，直到再有一个新节点启动（权限恢复 `active`；授予没被删（0.1.290 起是 `casbin_rule` 的行，之前是 `role_permissions`），授权随之回来）。不影响鉴权和计费；每次新增权限都有这个现象。滚动窗口里遇到时，再启动一个新节点即可。
 
 **回滚**到旧二进制不需要改库，但要知道下面几件事：
 
 1. 新功能整体失效。旧二进制读的 `user_groups` 冻结在迁移时刻：升级后新做的授权它看不到，升级后撤销的授权会复活；全场折扣、专属倍率、规则对新请求不生效。回滚前把这期间撤销过的授权在 `user_groups` 里同步删掉（本节末的 B）。
 2. 回滚时还没结算的记录（`pending`、`failed`、`reserved`）由旧二进制结算。倍率和自定义价是对的（倍率在 `usage_logs.rate_multiplier` 里，自定义价的表达式在历史表里）；按倍数的规则会被忽略，按“全局价 × 倍率”结算。回滚前先让待结算清空，或先删掉按倍数的规则。旧二进制读回冻结价格时没有 97.4 里“不是自定义价才回退到全局价”的条件：自定义价的记录在历史表里缺行时，它仍会按全局价结算。正常路径下不会缺行，保存规则和写历史表在同一个事务里。
 3. 旧二进制退款、关闭记录或对账时只改 `total_cost`、不改 `base_cost`，这些记录在统计里的“原价”会停在改之前的值。旧二进制结算新节点留下的待结算行（`pending`、`failed`）时同样不写 `base_cost`，并且整体重写 `billing_detail`，把 `inputs.pricing` 抹掉：`base_cost` 为 `NULL` 的行统计回退成 `total_cost / rate_multiplier`，命中按倍数规则的行（按第 2 条已按全局价结算）结果正好是原价；命中自定义价的行算出的是自定义价的费用，统计和导出里的“原价”（`standard_cost`）偏离真正的原价，再次升级后这些行的详情也不再显示倍率来源和标价来源。所以回滚前先让待结算清空（第 2 条）。
-4. **回滚前先让 `provider_helper_usage_outbox` 清空**（`SELECT count(*) FROM provider_helper_usage_outbox` 为 0）。新节点留在里面的信封，旧二进制一直拒收，这部分用量要到再次升级才入账。
-5. 回滚期间旧二进制封存的小时汇总同样按旧公式算，再次升级完成后一并标脏重算（C 的时间范围取到最后一个旧二进制节点停止）。
+4. 回滚期间旧二进制封存的小时汇总同样按旧公式算，再次升级完成后一并标脏重算（C 的时间范围取到最后一个旧二进制节点停止）。
+5. 以上是回滚到 0095 之前的二进制；迁移 0123 删了数据，跨过它的回退要连同数据库回到升级前的备份（97.10）。
 
 **接口与控制台**
 
@@ -6910,15 +6912,46 @@ WHERE s.kind = 'personal' AND u.deleted_at IS NOT NULL;
 | 引用一个用户组时的名称 | `segment.Ref(ctx, q, id, showUsers) (core.SegmentRef, error)`；`segment.Masked(ref, showUsers)`；`segment.ShowUsers(ctx, authz) (bool, error)` | `segment` 的各接口、定价表、试算、成员列表 | 个人专属的名称是成员的邮箱；调用者没有 `user:read`（`ShowUsers` 为假）时给 `#<user_id>`（97.6）。读名称走 `Ref`，已经读到的引用走 `Masked`；连表读用户组引用的列清单只有 `segment.RefColumns` 一份（`iam` 的用户列表也引用它）。用户组不存在的 404 是 `segment.NotFound(ctx)`（带中英文案，`Ref` 返回它，`billing` 的定价表与试算、`iam` 的成员列表都经它），字段里点名了不存在的用户组时的文案是 `segment.UnknownMessage(ctx)`（`iam` 新建用户、`billing` 保存规则） |
 | 引用一个分组 | `core.GroupRef{ID, Name}` | 各接口里的 `{id, name}`（`granted_groups`、定价表和 `/me/prices` 的 `group`、`groups`） | 同一个形状只有一个类型 |
 | 锁定并校验命名用户组 | `segment.LockNamed(ctx, tx, id *int64) (int64, error)` | 把用户移回命名用户组（`to`）、`iam` 新建用户时指定用户组 | 返回 `id` 指的命名用户组（`nil` = 默认用户组），并锁住它直到事务结束，将要进组的用户不会指向一个正被删除的用户组；不是命名用户组时 `core.ErrNotFound` |
-| 删个人专属 | `segment.DropPersonal(ctx, tx, userIDs...) (bool, error)` | 成员移入命名用户组、移回接口、`iam` 软删除用户 | 连同它的授权、专属倍率、专属价一起删；返回是否真的删了，调用方据此在事务提交后通知价格快照（97.6） |
+| 删个人专属 | `segment.DropPersonal(ctx, tx, userIDs...) error` | 成员移入命名用户组、移回接口、`iam` 软删除用户 | 连同它的授权和专属倍率一起删；不碰 `price_rules`，不通知价格快照 |
 | 分组提供的模型 | `group.Models.Offers(model, priced, policy) bool`：单个模型的判断，“有账号声明它，或有不限模型的账号且它有启用的全局价；并且分组的模型名单放行” | `Models.Offered`（一个分组的全部模型）、`GET /groups?model=`；对外的入口是 `group.OfferedModels(ctx, q, groups []core.GroupInfo, priced []string) (map[int64][]string, error)`，`model_count`、定价表、试算、`/me/prices` 都用它 | 账号声明的模型由 `group.ProvidedModels(ctx, q, groupIDs)` 读出（`Models` 带“不限模型的账号数”），GET `/groups/:id/models` 直接返回它；与全局价、模型名单的结合只在 `Offers` 里 |
-| 规则条数 | `group` 的 `offeredRules`：只留分组现在提供的模型上的规则；`segment` 经 `app` 注入的 `group.Service.SegmentRuleCounts(ctx, segmentIDs)` 取 | GET `/groups` 的 `price_rule_count`、`segment_rule_count`，`Segment` 与 `SegmentGroupSetting` 的 `price_rule_count` | 与定价表列出的规则一致（97.6） |
+| 规则条数 | `group` 的 `ruleCounts(ctx, q, groupIDs)`：按分组数 `price_rules` 的行 | GET `/groups` 的 `price_rule_count` | 定价表列出分组的全部规则（含分组不提供的模型上的），条数同一口径（97.6） |
+| 一个分组各模型的标价 | `billing` 的 `(*priceSnapshot).each(groupID, models, add)`：对有全局价的每个模型给出全局价和分组的规则 | `/me/prices?group_id=`、`/key/prices` | 读的是本节点给请求计费用的那份快照，与定价表、试算、计费同源 |
 | 待结算输入 | `usage` 的 `recordInputs(rec)` | 首次结算（`fromRecord`）、写入待结算行（`insertAtomic`），重试和对账读回的就是后者 | 两边逐字段相同（97.4） |
 | 规则倍数 × 倍率 | `(*core.PriceRule).Multiplier(rate)` | 预扣、结算、预留、对账、试算 | 两个数只在这里相乘，预扣和结算不可能算出不同的乘数（97.3） |
 | 规则到展示用标价 | `billing` 的 `listPrice(base, rule) PriceDef`（97.6 的 `list_price`） | 定价表、试算、`/me/prices?group_id=` | 无规则是全局价，自定义价是规则自己的价格，按倍数是全局价加 `multiplier`；不改写表达式、不缩放配置，三处同形 |
 | 规则到导出用价格 | `billing` 的 `exportPrice`：`listPrice` 之后，有 `multiplier` 且不等于 1 时用同步价格的 `scalePrice` 折进价格 | 只有 `GET /key/prices` | 下游读不到规则，所以只有这里把倍数折进价格；`scalePrice` 也是“从上游同步价格并应用倍率”用的函数，两处行为相同（97.6、§17.1） |
 
-包的分工与依赖方向：`segment` 管用户组的读写（增删改、成员、个人专属、两个方向的授权与专属倍率）和上表里它名下的那几个函数；`billing` 管 `price_rules` 的存取与校验、价格快照与 `Resolve`、定价表、试算、`/me/prices`、`/key/prices`；`group`、`apikey`、`iam`、`lookup`、`usage`、`gateway` 各改自己的接口和 SQL。依赖方向是 `billing → group, segment`，`apikey / group / iam / lookup → segment`，`segment` 不依赖它们，没有环；这几个包之间是直接 import（§1 的约定是只经 `core` 的接口依赖，这里按上面的方向放开）。为了不成环，成员列表（它要返回用户行）放在 `iam`；`SegmentGroupSetting.group.platforms` 所需的平台查询、规则条数和价格快照的失效通知，由 `app` 组装时注入 `segment`。
+包的分工与依赖方向：`segment` 管用户组的读写（增删改、成员、个人专属、两个方向的授权与专属倍率）和上表里它名下的那几个函数；`billing` 管 `price_rules` 的存取与校验、价格快照与 `Resolve`、定价表、试算、`/me/prices`、`/key/prices`；`group`、`apikey`、`iam`、`lookup`、`usage`、`gateway` 各改自己的接口和 SQL。依赖方向是 `billing → group, segment`，`apikey / group / iam / lookup → segment`，`segment` 不依赖它们，没有环；这几个包之间是直接 import（§1 的约定是只经 `core` 的接口依赖，这里按上面的方向放开）。为了不成环，成员列表（它要返回用户行）放在 `iam`；`SegmentGroupSetting.group.platforms` 所需的平台查询由 `app` 组装时注入 `segment`。
+
+### 97.10 用户组不再给模型定价（2026-11-21，用户要求；迁移 `0123_drop_segment_price_rules.sql`，单向）
+
+用户的规则：用户组（含个人专属）只能定制倍率，也就是全场折扣、各分组的授权和专属倍率；分组可以定制倍率，也可以给模型定价（按倍数，或自定义价：可视化或表达式）。实付 = 模型价格（分组内定价 → 全局价）× 倍率（专属倍率 → 分组默认倍率 × 全场折扣 → 分组默认倍率）。本节前文已按此改过。
+
+**迁移 0123**（`SET LOCAL lock_timeout = '10s'`，幂等）：删除 `price_rules` 里 `segment_id` 非空的行（专属价）；删掉索引 `price_rules_segment_uq`、`price_rules_segment_idx`、`price_rules_group_uq` 和列 `segment_id`；建唯一索引 `price_rules_group_model_uq (group_id, model)`。列已经删了时删除语句跳过，重跑不改变任何东西。
+
+**接口变化**（类型见 `web/src/api/pricing.ts`）：
+
+- 删掉：GET `/groups/:id/model-prices` 的 `?segment_id=`、行里的 `segment_rule` 和 `segment_rule_count`、响应的 `segment`；PUT 的 `?segment_id=` 和 `items[].segment_id`；试算的 `price_levels.segment`；`Segment`、`SegmentGroupSetting` 的 `price_rule_count`；`Segment.rate_override_count`（换成 `rate_overrides: [{id, name, rate}]`）；GET `/groups` 的 `segment_rule_count`。`source`、`price_source` 只有 `group` 和 `global`。个人专属复制设置不再复制规则。
+- 同时改的：保存规则只要求模型有启用的全局价，定价表并上分组有规则的模型并带 `offered`，`price_rule_count` 不再按分组提供的模型过滤（97.1、97.6）；新增 GET `/pricing/catalog`；GET `/segments?kind=all`；定价表、`/me/prices?group_id=`、`/key/prices` 读价格快照，与计费同源；试算对停用的分组回答 `accessible: false`、`access_source: "disabled"`；价格快照的并发载入合并成一次（97.3）。
+- 网关鉴权缓存里的实际倍率直接存十进制数（`core.SegmentRate` 算出的那个），不再存字符串、读时解析；原来解析失败时静默按 ×1 计费，现在没有这条路径。
+- PUT `/groups/:id/model-prices` 带 `?segment_id=` 或请求体里有未知字段（如旧控制台项里的 `segment_id`）回 400 `invalid_argument`，不会被当成分组内定价写入。控制台随核心一起发布，升级后刷新页面即可；脚本按新形状发。
+
+**历史使用记录**：0123 之前命中专属价的记录，`billing_detail.inputs.pricing.price_source` 是 `"segment"`，表达式在 `model_price_history`，`scale`、`base` 在 `inputs.pricing`。结算重试和对账不重新解析规则（97.4），这些记录照常读、照常结算；使用记录详情照常显示标价来源。代码里不再有 `segment` 这个来源的常量，这个值只出现在旧数据里。
+
+**升级与回退**：
+
+- 0123 删的是数据。升级前对线上库跑只读查询，列出将被删除的专属价，报给所有者：
+
+  ```sql
+  SELECT r.group_id, r.segment_id, r.model, r.kind, r.multiplier, r.mode
+  FROM price_rules r
+  WHERE r.segment_id IS NOT NULL
+  ORDER BY r.group_id, r.segment_id, r.model;
+  ```
+
+- 迁移之后，旧二进制的价格快照要读 `price_rules.segment_id`，读不出来，无法计费：不能和新节点混跑，按停机维护的方式一次升级全部节点。
+- 单向：回退要连同数据库回到升级前的备份。删掉的专属价不会自动回来。命中过专属价的使用记录不受影响（上面“历史使用记录”）。
+
 
 ## 98. 使用记录调用链路（2026-11-15，用户要求：日志展示每次请求依次尝试的账号，参考 new-api use_channel；无迁移；核心 0.1.288 候选）
 
@@ -9243,7 +9276,7 @@ Go 类型是 `expr.VisualConfig`、`TierConfig`、`TierCond`、`TokenPrices`、`
 
 ### 131.4 分组 / 用户组的自定义价（§97）
 
-- 2026-11-22 所有者定：自定义基础价格和自定义倍率是两件事。分组可以设倍率，也可以给模型设自己的基础价格，**想怎么改就怎么改**：自定义价和全局价一样写（可视化任意档位、条件、加价规则，或表达式），与全局价是什么形状无关。（用户组只能设倍率，用户组的模型价格规则由分组定价那边另行删除。）
+- 2026-11-22 所有者定：自定义基础价格和自定义倍率是两件事。分组可以设倍率，也可以给模型设自己的基础价格，**想怎么改就怎么改**：自定义价和全局价一样写（可视化任意档位、条件、加价规则，或表达式），与全局价是什么形状无关。（用户组只能设倍率，用户组的模型价格规则已由迁移 0123 删除，§97.10。）
 - 保存时（`billing.checkCustom`）：`mode` 不是 `visual` 或 `expression` 400，“自定义价的计费方式须是可视化或表达式” / “a custom price is visual or expression”；配置生成失败或表达式校验不过（`expr.Validate`，用量事实按当前代际声明的检查）400，“自定义价无效：…” / “invalid custom price: …”。可视化的 `config` 原样存下；表达式的 `config` 存 `{}`，表达式去掉首尾空白存下。没有大额确认（规则接口不带 `confirm`）。
 - 没有失效判定：原来的 `customShape`、`storedRule.shape`、`priceSnapshot.custom`、接口里的 `inactive` 都删了。所以 0.1.306 上原来失效的自定义价（全局价后来改成了另一种方式、多档或带规则），升级后会**开始生效**，取代全局价计费。迁移不替所有者决定它们的去留：升级前对线上库跑下面的只读查询（0.1.306 的口径，`billing.PriceDef.customMode`），有结果就先报给所有者，由他决定删掉还是保留：
 

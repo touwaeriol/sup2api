@@ -1,11 +1,12 @@
 // Mock handlers: users, roles, permissions, API keys, groups, proxies, nodes,
 // publishers. (Accounts and account types live in their own mock module.)
 import { SCOPABLE, canonicalPermission, parsePermission, permissionIndex } from '../src/authz/implies'
+import { offeredModels } from '../src/components/pricing/offeredModels'
 import { fail, nextId, noContent, now, on, paginate, type MockRequest } from './router'
 import { ALL_PERMISSIONS, MANAGER_PLUGIN_KEYS, SUPER_ONLY_KEYS, SUPPLIER_AGENT_KEYS, SUPPLIER_KEYS, USER_KEYS, agentUser, caller, filterOwned, hasPerm, inScope, moderatorUser, ownerScope, pricerUser, readonlyUser, resolveTeams, stepUp, stepUpRequired, userEmail, vendorUser, type Identity } from './core'
 import { accounts, groupAccountCount, groupPlatforms, groupServed, proxyAccountCount } from './accounts'
 import { pricedModels } from './billing'
-import { accessOf, findSegment, forgetGroup, forgetUser, groupAccess, moveUser, rateOf, rulesWhere, segmentOfUser, segmentRef, type RuleRow } from './pricingStore'
+import { accessOf, findSegment, forgetGroup, forgetUser, groupAccess, moveUser, rateOf, rulesWhere, segmentOfUser, segmentRef } from './pricingStore'
 
 type L = { en: string; zh: string }
 const L = (en: string, zh: string): L => ({ en, zh })
@@ -528,20 +529,7 @@ export const groups: MockGroup[] = [
 // account_count and platforms come from the accounts mock (CONTRACTS §13);
 // the key count uses the server spelling api_key_count.
 function groupOut(g: MockGroup) {
-  return { ...g, account_count: groupAccountCount(g.id), platforms: groupPlatforms(g.id), api_key_count: keys.filter((k) => k.group_id === g.id).length, access: groupAccess(g), ...groupRuleCounts(g.id), model_count: groupModels(g).length }
-}
-
-const GLOB_SPECIALS = /[.+^${}()|[\]\\]/g
-
-function globMatch(pattern: string, s: string): boolean {
-  return new RegExp('^' + pattern.replace(GLOB_SPECIALS, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$').test(s)
-}
-
-/** The model policy of a group (core.GroupInfo.AllowsModel): an empty list allows every model. */
-function allowsModel(g: Pick<MockGroup, 'model_allowlist' | 'model_filter_mode'>, model: string): boolean {
-  if (!g.model_allowlist.length) return true
-  const listed = g.model_allowlist.some((p) => globMatch(p, model))
-  return g.model_filter_mode === 'blacklist' ? !listed : listed
+  return { ...g, account_count: groupAccountCount(g.id), platforms: groupPlatforms(g.id), api_key_count: keys.filter((k) => k.group_id === g.id).length, access: groupAccess(g), price_rule_count: rulesWhere({ group_id: g.id }).length, model_count: groupModels(g).length }
 }
 
 /**
@@ -551,33 +539,9 @@ function allowsModel(g: Pick<MockGroup, 'model_allowlist' | 'model_filter_mode'>
  */
 export function groupModels(g: Pick<MockGroup, 'id' | 'model_allowlist' | 'model_filter_mode'>): string[] {
   const members = accounts.filter((a) => a.group_ids.includes(g.id))
-  const declared: string[] = members.flatMap((a) => a.models || [])
-  const open = members.some((a) => !a.models?.length)
-  return [...new Set([...declared, ...(open ? pricedModels() : [])])].filter((m) => allowsModel(g, m)).sort()
-}
-
-/**
- * The price rules `by` picks that are on a model their group provides now:
- * the ones its pricing table lists. A rule on a model the group no longer
- * provides stays stored but is neither listed nor counted (CONTRACTS §97.6).
- */
-export function offeredRules(by: Partial<RuleRow>): RuleRow[] {
-  const offered = new Map<number, string[]>()
-  const modelsOf = (id: number) => {
-    if (!offered.has(id)) {
-      const g = groups.find((x) => x.id === id)
-      offered.set(id, g ? groupModels(g) : [])
-    }
-    return offered.get(id)!
-  }
-  return rulesWhere(by).filter((r) => modelsOf(r.group_id).includes(r.model))
-}
-
-/** How many model prices a group has, as its pricing table lists them: its own, and those of segments in it. */
-function groupRuleCounts(groupId: number) {
-  const rules = offeredRules({ group_id: groupId })
-  const own = rules.filter((r) => r.segment_id === null).length
-  return { price_rule_count: own, segment_rule_count: rules.length - own }
+  const models = members.flatMap((a) => a.models || [])
+  const unrestricted = members.filter((a) => !a.models?.length).length
+  return offeredModels({ models, unrestricted_accounts: unrestricted, model_allowlist: g.model_allowlist, model_filter_mode: g.model_filter_mode ?? 'whitelist' }, pricedModels())
 }
 
 function validateGroup(b: any) {

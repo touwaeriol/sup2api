@@ -55,6 +55,13 @@ export function useDrafts<S, K, D>(options: DraftsOptions<S>) {
     return refresh()
   }
 
+  /** Whether the drafts can be saved as they are; a toast says why not. Run before saving anything they depend on. */
+  function check(): boolean {
+    const problem = dirty.value ? options.problem?.() : null
+    if (problem) toast(problem, 'error')
+    return !problem
+  }
+
   /**
    * Sends the drafts through `put` and shows what the server answers. False
    * when they cannot be saved yet (a toast says why). A failed request
@@ -64,11 +71,7 @@ export function useDrafts<S, K, D>(options: DraftsOptions<S>) {
    */
   async function save(put: (sent: ReadonlyMap<K, D>) => Promise<S>): Promise<boolean> {
     if (!dirty.value) return true
-    const problem = options.problem?.()
-    if (problem) {
-      toast(problem, 'error')
-      return false
-    }
+    if (!check()) return false
     const sent = drafts.value
     const loaded = sameLoad
     const state = await put(sent)
@@ -81,5 +84,5 @@ export function useDrafts<S, K, D>(options: DraftsOptions<S>) {
     return true
   }
 
-  return { saved, drafts, loading, error, dirty, refresh, load, save }
+  return { saved, drafts, loading, error, dirty, refresh, load, check, save }
 }

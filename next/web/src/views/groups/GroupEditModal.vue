@@ -4,7 +4,6 @@ import { useI18n } from 'vue-i18n'
 import { api } from '@sub2api/host'
 import { SChoiceCards, SField, SFormModal, SGrid, SHint, SInput, SSelect, SSettingsGroup, STabs, STextarea, toast, type ChoiceOption, type TabItem } from '@sub2api/ui'
 import type { ConversionLossPolicy, EnvironmentValues, Group } from '@/api/types'
-import type { SegmentRef } from '@/api/pricing'
 import { useStatusOptions } from '@/composables/crud'
 import { useAuthStore } from '@/stores/auth'
 import { notifyError } from '@/utils/errors'
@@ -13,6 +12,7 @@ import { policyOptions } from '@/utils/conversion'
 import { ACCOUNT_ACTIONS } from '@/composables/useScope'
 import { markUnsaved, useTabbedSave, type SaveStep } from '@/composables/useTabbedSave'
 import type { DraftedSetting } from '@/components/pricing/accessRateDrafts'
+import type { ModelOffer } from '@/components/pricing/offeredModels'
 import { validRate } from '@/components/pricing/pricingFormat'
 import { confirmDiscard } from '@/composables/confirmDiscard'
 import { latestOnly } from '@/composables/useLatestRequest'
@@ -26,7 +26,10 @@ import { GROUP_EDIT_TABS, changedTabs, tabOfErrors, type GroupEditTab } from './
 // Creates a group (`group` null) or edits one, in tabs. The form holds the
 // group's own fields; its accounts, user groups and model prices are
 // sub-editors with drafts of their own, saved in that order once the group
-// itself is. A step that fails keeps the dialog open on its tab; a tab with
+// itself is. Every tab can be filled before the group exists: the price table
+// of a new group lists the models of the accounts picked, through the model
+// policy being edited. Drafts that cannot be saved stop Save before anything
+// is sent; a step that fails keeps the dialog open on its tab; a tab with
 // unsaved changes is marked, and closing with one asks first. Only the Save
 // button submits: Enter in a rate or a search field of a tab must not save
 // the whole group.
@@ -103,7 +106,7 @@ const opened = ref(blankForm())
 /** The group a first save created: saving again after a later step failed must not create another. */
 const created = ref<Group | null>(null)
 const current = computed(() => created.value ?? props.group)
-/** The rows of the user groups editor, for the tab that prices per user group. */
+/** The rows of the user groups editor, for the paid prices of the price tab. */
 const segmentRows = ref<DraftedSetting[]>([])
 const tab = ref<GroupEditTab>('basic')
 
@@ -142,11 +145,8 @@ const tabs = computed<TabItem[]>(() => {
   return markUnsaved(shown.map((key) => ({ key, label: t(`groups.tabs.${key}`) })), (key) => dirtyTabs.value.includes(key))
 })
 
-/** Opens the model prices of one user group. */
-function openPricing(segment: SegmentRef) {
-  pricingEditor.value?.select(segment)
-  tab.value = 'pricing'
-}
+/** What a group not saved yet would provide, for its price table; a saved group's table lists what the server says. */
+const offer = computed<ModelOffer | null>(() => (props.group ? null : { ...currentModelSource.value, model_allowlist: form.model_allowlist, model_filter_mode: form.model_filter_mode }))
 
 // ------------------------------------------------------------------ save
 
@@ -209,11 +209,14 @@ const steps: SaveStep<GroupEditTab>[] = [
       return true
     }
   },
+  // Drafts that cannot be saved stop it before anything is.
+  { tab: 'segments', save: () => segmentsEditor.value?.check() ?? true },
+  { tab: 'pricing', save: () => pricingEditor.value?.check() ?? true },
   // A field error opens the tab of its field; any other failure was shown as a toast.
   { tab: () => tabOfErrors(errors.value) ?? tab.value, save: saveForm },
   { tab: 'accounts', save: onGroup(saveAccounts) },
   { tab: 'segments', save: onGroup(async (gid) => (await segmentsEditor.value?.save(gid)) ?? true) },
-  { tab: 'pricing', save: async () => (await pricingEditor.value?.save()) ?? true }
+  { tab: 'pricing', save: onGroup(async (gid) => (await pricingEditor.value?.save(gid)) ?? true) }
 ]
 
 async function submit() {
@@ -257,9 +260,6 @@ const leave = async () => (await confirmDiscard(dirtyTabs.value.length > 0)) && 
           <SField :label="t('common.description')" :error="errors.description">
             <STextarea v-model="form.description" :rows="2" />
           </SField>
-          <SField :label="t('groups.rateMultiplier')" required :hint="t('groups.multiplierHint')" :error="errors.rate_multiplier">
-            <SInput v-model="form.rate_multiplier" mono inputmode="decimal" class="sm:w-48" data-testid="group-default-rate" />
-          </SField>
           <SField :label="t('groups.visibility')" :error="errors.visibility">
             <SChoiceCards v-model="form.visibility" :options="visibilityOptions" data-testid="group-visibility" />
           </SField>
@@ -274,17 +274,15 @@ const leave = async () => (await confirmDiscard(dirtyTabs.value.length > 0)) && 
           editable
           :disabled="saving"
           @rows="segmentRows = $event"
-          @pricing="openPricing"
         />
-        <GroupPricingEditor
-          v-show="tab === 'pricing'"
-          ref="pricingEditor"
-          :group-id="group?.id ?? null"
-          :segments="segmentRows"
-          :default-rate="form.rate_multiplier"
-          editable
-          @include="segmentsEditor?.include($event)"
-        />
+        <div v-show="tab === 'pricing'" class="space-y-4">
+          <SField :label="t('groups.rateMultiplier')" required :hint="t('groups.multiplierHint')" :error="errors.rate_multiplier" class="rounded-xl border border-line p-4">
+            <SInput v-model="form.rate_multiplier" mono inputmode="decimal" class="sm:w-48" data-testid="group-default-rate">
+              <template #prefix><span class="text-xs text-fg-subtle">×</span></template>
+            </SInput>
+          </SField>
+          <GroupPricingEditor ref="pricingEditor" :group-id="group?.id ?? null" :offer="offer" :segments="segmentRows" :default-rate="form.rate_multiplier" editable />
+        </div>
         <SField v-show="tab === 'models'" :label="t('groups.modelRules')" :hint="t('groups.allowlistHint')" :error="errors.model_allowlist || errors.model_filter_mode">
           <GroupModelPolicyEditor :key="group?.id ?? 'new'" ref="modelPolicyEditor" v-model="form.model_allowlist" v-model:mode="form.model_filter_mode" :options="currentModelSource.models" :loading="modelsLoading" :unrestricted-accounts="currentModelSource.unrestricted_accounts" />
           <SHint v-if="modelLoadError" tone="danger" size="xs">{{ modelLoadError }}</SHint>
@@ -302,5 +300,6 @@ const leave = async () => (await confirmDiscard(dirtyTabs.value.length > 0)) && 
         </div>
       </div>
     </STabs>
+    <template #footer-start><SHint size="xs" data-testid="group-edit-save-hint">{{ t(current ? 'groups.saveHint' : 'groups.createHint') }}</SHint></template>
   </SFormModal>
 </template>

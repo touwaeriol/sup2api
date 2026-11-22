@@ -12,8 +12,6 @@ func TestMakePersonal(t *testing.T) {
 	public, private := e.group("public", "public", "1"), e.group("private", "restricted", "2")
 	e.pair(vip, private, true, "")
 	e.pair(vip, public, false, "0.5")
-	e.rule(private, vip, "m1")
-	e.rule(private, 0, "m2")
 	e.exec(`UPDATE users SET segment_id = $1 WHERE id = ANY($2)`, vip, []int64{e.plain, e.masked})
 	personalize := func(user int64, copySettings bool) response {
 		return e.do(e.admin, "POST", path("/users/%d/personal-segment", user), map[string]any{"copy": copySettings})
@@ -29,23 +27,18 @@ func TestMakePersonal(t *testing.T) {
 	require.Equal(t, "1", blank["discount"])
 	require.Equal(t, float64(1), blank["member_count"])
 	require.Equal(t, []any{}, blank["granted_groups"])
-	require.Equal(t, float64(0), blank["rate_override_count"])
-	require.Equal(t, float64(0), blank["price_rule_count"])
+	require.Equal(t, []any{}, blank["rate_overrides"])
+	require.NotContains(t, blank, "price_rule_count")
 	require.Equal(t, idOf(blank), e.segmentOf(e.plain))
-	require.Zero(t, e.rulesChanged.Load(), "no price rule was written")
 
-	// A copy starts from the discount, grants, rates and prices of that segment.
+	// A copy starts from the discount, grants and rates of that segment.
 	copied := personalize(e.masked, true).ok(201).data()
 	require.Equal(t, "0.9", copied["discount"])
 	require.Equal(t, []any{map[string]any{"id": float64(private), "name": "private"}}, copied["granted_groups"])
-	require.Equal(t, float64(1), copied["rate_override_count"])
-	require.Equal(t, float64(1), copied["price_rule_count"])
+	require.Equal(t, []any{map[string]any{"id": float64(public), "name": "public", "rate": "0.5"}}, copied["rate_overrides"])
 	require.Equal(t, int64(1), e.id(`SELECT count(*) FROM segment_groups WHERE segment_id = $1 AND group_id = $2 AND NOT granted AND rate_override = 0.5`,
 		idOf(copied), public))
-	require.Equal(t, int64(1), e.id(`SELECT count(*) FROM price_rules WHERE segment_id = $1 AND group_id = $2 AND model = 'm1' AND multiplier = 0.8`,
-		idOf(copied), private))
-	require.Equal(t, int64(1), e.id(`SELECT count(*) FROM price_rules WHERE segment_id = $1`, vip), "the origin keeps its own")
-	require.Equal(t, int64(1), e.rulesChanged.Load())
+	require.Equal(t, int64(2), e.id(`SELECT count(*) FROM segment_groups WHERE segment_id = $1`, vip), "the origin keeps its own")
 
 	personalize(e.plain, true).failed(409, "conflict")
 	personalize(999999, false).failed(404, "not_found")
@@ -91,11 +84,10 @@ func TestRemovePersonal(t *testing.T) {
 	remove := func(user int64, query string) response {
 		return e.do(e.admin, "DELETE", path("/users/%d/personal-segment%s", user, query), nil)
 	}
-	// personalWithSettings makes the user personal with a grant and a price.
+	// personalWithSettings makes the user personal with a grant and a rate.
 	personalWithSettings := func(user int64) int64 {
 		id := e.personal(user)
 		e.pair(id, group, true, "0.5")
-		e.rule(group, id, "m1")
 		return id
 	}
 
@@ -105,8 +97,6 @@ func TestRemovePersonal(t *testing.T) {
 	require.Equal(t, def, e.segmentOf(e.plain))
 	require.Zero(t, e.id(`SELECT count(*) FROM segments WHERE id = $1`, first), "the personal segment is deleted")
 	require.Zero(t, e.id(`SELECT count(*) FROM segment_groups`), "with its grants and rates")
-	require.Zero(t, e.id(`SELECT count(*) FROM price_rules`), "and its prices")
-	require.Equal(t, int64(1), e.rulesChanged.Load())
 	remove(e.plain, "").failed(404, "not_found")
 
 	// ?to= must name a named segment.
@@ -118,7 +108,6 @@ func TestRemovePersonal(t *testing.T) {
 	require.NotEqual(t, def, e.segmentOf(e.plain), "nothing moved")
 	remove(e.plain, path("?to=%d", vip)).ok(204)
 	require.Equal(t, vip, e.segmentOf(e.plain))
-	require.Equal(t, int64(2), e.rulesChanged.Load())
 
 	remove(999999, "").failed(404, "not_found")
 	e.do(e.plain, "DELETE", path("/users/%d/personal-segment", e.masked), nil).failed(403, "permission_denied")

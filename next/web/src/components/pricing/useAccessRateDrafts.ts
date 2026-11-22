@@ -20,7 +20,7 @@ export interface AccessRateDraftsOptions {
  */
 export function useAccessRateDrafts(options: AccessRateDraftsOptions) {
   const state = useDrafts<SegmentGroupSetting[], number, SettingDraft>({ empty: () => [], fetch: options.fetch, problem: invalidRate })
-  const { loading, error, dirty, refresh, load } = state
+  const { loading, error, dirty, refresh, load, check } = state
 
   const rows = computed<DraftedSetting[]>(() => {
     const terms = options.terms?.()
@@ -46,5 +46,5 @@ export function useAccessRateDrafts(options: AccessRateDraftsOptions) {
     return state.save((sent) => put(settingPatches(options.side, sent)))
   }
 
-  return { rows, loading, error, dirty, refresh, load, change, save }
+  return { rows, loading, error, dirty, refresh, load, check, change, save }
 }

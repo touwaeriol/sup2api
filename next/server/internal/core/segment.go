@@ -9,8 +9,7 @@ import (
 // Group pricing (CONTRACTS §97): what a call costs is a list price times a
 // rate, and each side is resolved on its own.
 //
-//	list price: the segment's price of the model in the group
-//	            -> the group's price of the model -> the global price
+//	list price: the group's price of the model -> the global price
 //	rate:       the segment's rate in the group
 //	            -> the group's rate x the segment's discount -> the group's rate
 //
@@ -31,9 +30,8 @@ const (
 
 // Where a list price comes from.
 const (
-	PriceSourceSegment = "segment" // the segment's rule on the model in the group
-	PriceSourceGroup   = "group"   // the group's rule on the model
-	PriceSourceGlobal  = "global"  // the global model price
+	PriceSourceGroup  = "group"  // the group's rule on the model
+	PriceSourceGlobal = "global" // the global model price
 )
 
 // Price rule kinds.
@@ -86,12 +84,11 @@ func SegmentRate(groupDefault, discount decimal.Decimal, override *decimal.Decim
 	return decimal.Min(groupDefault.Mul(discount).Round(rateScale), maxRate), RateSourceDiscount
 }
 
-// PriceQuery asks for the list price of a model. GroupID and SegmentID select
-// the price rules that apply; zero values ask for the global price.
+// PriceQuery asks for the list price of a model. GroupID selects the price
+// rule that applies; 0 asks for the global price.
 type PriceQuery struct {
-	Model     string
-	GroupID   int64
-	SegmentID int64
+	Model   string
+	GroupID int64
 }
 
 // PricingTrace records why a usage record was priced as it was. It is frozen
@@ -99,8 +96,10 @@ type PriceQuery struct {
 // retry prices it the same way whatever the rules are by then. A record at
 // the global price and the group's own rate has none.
 type PricingTrace struct {
-	SegmentID   int64  `json:"segment_id,omitempty"`
-	RateSource  string `json:"rate_source,omitempty"`
+	SegmentID  int64  `json:"segment_id,omitempty"`
+	RateSource string `json:"rate_source,omitempty"`
+	// PriceSource is group, or segment on a record priced by a user group's
+	// rule before core migration 0123 removed them (PriceRule.Source).
 	PriceSource string `json:"price_source,omitempty"`
 	// Scale is the multiplier of a multiplier rule.
 	Scale *decimal.Decimal `json:"scale,omitempty"`

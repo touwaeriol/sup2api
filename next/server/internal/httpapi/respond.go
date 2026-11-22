@@ -4,6 +4,7 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -89,6 +90,18 @@ func PageBounds(page, size int) (int, int) {
 // BindJSON decodes the body or renders invalid_argument.
 func BindJSON(c *gin.Context, v any) bool {
 	if err := c.ShouldBindJSON(v); err != nil {
+		Fail(c, core.ErrInvalidArgument.WithMessage(err.Error()))
+		return false
+	}
+	return true
+}
+
+// BindStrictJSON is BindJSON that also rejects fields v does not have, for a
+// body whose old shape must not be read as another meaning.
+func BindStrictJSON(c *gin.Context, v any) bool {
+	dec := json.NewDecoder(c.Request.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
 		Fail(c, core.ErrInvalidArgument.WithMessage(err.Error()))
 		return false
 	}

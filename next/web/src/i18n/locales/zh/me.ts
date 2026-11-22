@@ -103,9 +103,9 @@ export default {
   },
   models: {
     title: '模型与价格',
-    description: '系统里有哪些模型、你的分组提供哪些，以及你的实付价（标价 × 你的倍率）。',
+    description: '系统里有哪些模型、你的分组提供哪些，以及你的实付价（模型价格 × 你的倍率）。',
     group: '分组',
-    allGroups: '全部分组 · 基础价',
+    allGroups: '全部分组 · 原价',
     search: '搜索模型',
     model: '模型',
     input: '输入',
@@ -115,13 +115,13 @@ export default {
     groups: '可用分组',
     viewGroup: '查看你在 {name} 的实付价',
     noGroups: '暂无分组提供',
-    baseNote: '这里是全部模型的基础价（倍率 ×1）。实付 = 标价 × 你在所选分组的倍率；标价一般就是基础价，个别模型在分组里另有定价。选一个分组查看你的实付价。',
+    baseNote: '这里是全部模型的原价（倍率 ×1）。实付 = 模型价格 × 你在所选分组的倍率；模型价格一般就是原价，个别模型在分组里另有分组价。选一个分组查看你的实付价。',
     unit: 'USD / 百万 Token',
-    basePrice: '基础价，未乘倍率',
+    basePrice: '原价，未乘倍率',
     rated: '已按你在该分组的倍率 {rate} 计算',
     rateSource: {
-      segment: '你在该分组有专属倍率',
-      discount: '已含你的全场折扣'
+      segment: '你在该分组有单独设的倍率',
+      discount: '已含你的折扣'
     },
     perRequest: '{price} / 次',
     tiered: '{n} 档，显示兜底档位',

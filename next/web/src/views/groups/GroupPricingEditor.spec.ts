@@ -1,42 +1,45 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
+import { enableAutoUnmount, mount } from '@vue/test-utils'
 import { h, ref, type Component, type SetupContext } from 'vue'
+import { SSelect, type SelectOption } from '@sub2api/ui'
 import { i18n } from '@/i18n'
-import type { Segment, SegmentGroupSetting, SegmentRef } from '@/api/pricing'
-import { blankSetting, draftedSetting, type DraftedSetting } from '@/components/pricing/accessRateDrafts'
+import type { SegmentRef } from '@/api/pricing'
+import type { DraftedSetting } from '@/components/pricing/accessRateDrafts'
 import GroupPricingEditor from './GroupPricingEditor.vue'
 
 enableAutoUnmount(afterEach)
 
-/** The price table: whether it has drafts and what saving them answers. */
+/** The price table: the rate it is given, whether it has drafts and what saving them answers. */
 const tableDirty = ref(false)
 const tableSave = vi.fn()
 const table: Component = {
-  props: { groupId: Number, segment: Object, editable: Boolean },
-  setup(props: { segment?: SegmentRef }, { expose }: SetupContext) {
-    expose({ load: vi.fn(), save: tableSave, dirty: tableDirty })
-    return () => h('div', { 'data-testid': 'table', 'data-segment': props.segment?.id ?? '' })
+  props: ['groupId', 'offer', 'rate', 'editable'],
+  setup(props: Record<string, any>, { expose, slots }: SetupContext) {
+    expose({ save: tableSave, dirty: tableDirty })
+    return () => h('div', { 'data-testid': 'table', 'data-rate': props.rate }, slots.rate?.())
   }
 }
-const picker: Component = { emits: ['select'], setup: () => () => h('div', { 'data-testid': 'picker' }) }
 
-const vip: SegmentRef = { id: 2, kind: 'named', name: 'VIP' }
-const staff: SegmentRef = { id: 4, kind: 'named', name: 'Staff' }
-const solo: SegmentRef = { id: 104, kind: 'personal', name: 'a@b.c', user_id: 9 }
-/** The row of a segment in a private group at ×0.8, as the user groups editor hands it over. */
-const view = (segment: SegmentRef, over: Partial<SegmentGroupSetting> = {}, discount = '1'): DraftedSetting =>
-  draftedSetting('segment', { ...blankSetting({ ...segment, discount } as Segment), ...over }, undefined, { visibility: 'restricted', groupDefault: '0.8' })
-const segments = [view(vip, { granted: true }, '0.9'), view(staff), view(solo, { granted: true, rate_override: '0.65' })]
+/** A row of the user groups tab, as it hands its rows over: only what the price tab reads. */
+const row = (segment: SegmentRef, rate: string, accessible = true) => ({ id: segment.id, segment, accessible, rate: { value: rate } }) as DraftedSetting
+const segments = [
+  row({ id: 2, kind: 'named', name: 'VIP' }, '0.72'),
+  row({ id: 4, kind: 'named', name: 'Staff' }, '0.8', false),
+  row({ id: 104, kind: 'personal', name: 'a@b.c', user_id: 9 }, '0.65')
+]
 
-function render(groupId: number | null = 3) {
+function render(props: { defaultRate?: string; segments?: DraftedSetting[] } = {}) {
   const w = mount(GroupPricingEditor, {
-    props: { groupId, segments, defaultRate: '0.8', editable: true },
-    global: { plugins: [i18n], stubs: { Teleport: true, ModelPriceTable: table, PersonalSegmentPicker: picker } }
+    props: { groupId: 3, segments, defaultRate: '0.8', editable: true, ...props },
+    global: { plugins: [i18n], stubs: { Teleport: true, ModelPriceTable: table } }
   })
-  const target = () => w.get('[data-testid="table"]').attributes('data-segment')
-  const scope = () => w.get('[data-testid="group-pricing-scope"]').text()
-  const asked = () => w.find('[data-testid="group-pricing-unsaved"]').exists()
-  return { w, target, scope, asked }
+  const payer = () => w.getComponent<typeof SSelect>('[data-testid="group-pricing-payer"]')
+  const rate = () => w.get('[data-testid="table"]').attributes('data-rate')
+  const pick = async (value: SelectOption['value']) => {
+    payer().vm.$emit('update:modelValue', value)
+    await w.vm.$nextTick()
+  }
+  return { w, payer, rate, pick }
 }
 
 beforeEach(() => {
@@ -46,74 +49,44 @@ beforeEach(() => {
 })
 
 describe('group pricing editor', () => {
-  it('prices the group itself until a user group is chosen, and says whose prices and at which rate', async () => {
-    const { w, target, scope } = render()
-    expect(target()).toBe('')
-    expect(scope()).toContain('分组默认 ×0.8')
-    await w.vm.select(vip)
-    expect(target()).toBe('2')
-    expect(scope()).toContain('「VIP」')
-    expect(scope()).toContain('×0.72')
-    await w.vm.select(solo)
-    expect(scope()).toContain('×0.65')
-    await w.vm.select(staff)
-    expect(scope()).toContain('还没被授权')
-  })
-
-  it('offers the user groups by kind, and marks the ones that cannot use the group', () => {
-    const { w } = render()
-    const select = w.getComponent({ name: 'SSelect' })
-    expect(select.props('options')).toEqual([
-      { value: null, label: '分组内定价（所有人）' },
-      { value: 'named', label: '用户组', options: [{ value: 2, label: 'VIP' }, { value: 4, label: 'Staff（未授权）' }] },
-      { value: 'personal', label: '个人专属', options: [{ value: 104, label: 'a@b.c' }] }
+  it('pays at the group rate of the form, then at the rate of the user group or person picked', async () => {
+    const { payer, rate, pick, w } = render()
+    expect(rate()).toBe('0.8')
+    const options = payer().props('options') as SelectOption[]
+    expect(options.map((o) => [o.label, o.options?.map((c) => [c.label, c.tag])])).toEqual([
+      ['所有人（分组倍率）×0.8', undefined],
+      ['用户组', [['VIP ×0.72', undefined], ['Staff ×0.8', '未开通']]],
+      ['个人', [['a@b.c ×0.65', undefined]]]
     ])
+    await pick(104)
+    expect(rate()).toBe('0.65')
+    await w.setProps({ defaultRate: '1.2' })
+    expect(rate()).toBe('0.65')
+    await pick('all')
+    expect(rate()).toBe('1.2')
   })
 
-  it('asks before leaving a target with drafts: stay, discard or save', async () => {
-    const { w, target, asked } = render()
-    await w.vm.select(vip)
+  it('goes back to everyone when the user group picked leaves the rows, and pays at no rate while the group rate is not one', async () => {
+    const { w, rate, pick } = render()
+    await pick(2)
+    await w.setProps({ segments: segments.slice(1) })
+    expect(rate()).toBe('0.8')
+    await w.setProps({ defaultRate: '1.' })
+    expect(rate()).toBe('')
+  })
+
+  it('lists only everyone without user groups', () => {
+    const { payer } = render({ segments: [] })
+    expect((payer().props('options') as SelectOption[]).map((o) => o.label)).toEqual(['所有人（分组倍率）×0.8'])
+  })
+
+  it('saves the table under the id it is given and says whether it has drafts', async () => {
+    const { w } = render()
+    const vm = w.vm as unknown as { save: (gid: number) => Promise<boolean>; dirty: boolean }
+    expect(vm.dirty).toBe(false)
     tableDirty.value = true
-
-    await w.vm.select(null)
-    expect(asked()).toBe(true)
-    await w.get('[data-testid="group-pricing-unsaved-stay"]').trigger('click')
-    expect([asked(), target()]).toEqual([false, '2'])
-
-    await w.vm.select(null)
-    await w.get('[data-testid="group-pricing-unsaved-save"]').trigger('click')
-    await flushPromises()
-    expect(tableSave).toHaveBeenCalledTimes(1)
-    expect([asked(), target()]).toEqual([false, ''])
-
-    await w.vm.select(solo)
-    await w.get('[data-testid="group-pricing-unsaved-discard"]').trigger('click')
-    await flushPromises()
-    expect(tableSave).toHaveBeenCalledTimes(1)
-    expect(target()).toBe('104')
-  })
-
-  it('keeps the target when its drafts cannot be saved', async () => {
-    const { w, target, asked } = render()
-    tableDirty.value = true
-    tableSave.mockResolvedValue(false)
-    await w.vm.select(vip)
-    await w.get('[data-testid="group-pricing-unsaved-save"]').trigger('click')
-    await flushPromises()
-    expect([asked(), target()]).toEqual([false, ''])
-  })
-
-  it('hands a user picked here to the user groups editor and prices him', async () => {
-    const { w, target } = render()
-    w.getComponent(picker).vm.$emit('select', solo)
-    await flushPromises()
-    expect(w.emitted('include')).toEqual([[solo]])
-    expect(target()).toBe('104')
-  })
-
-  it('has nothing to price before the group exists', () => {
-    const { w } = render(null)
-    expect(w.get('[data-testid="group-pricing-empty"]').text()).toContain('先保存分组并加入账号后再定价')
-    expect(w.find('[data-testid="table"]').exists()).toBe(false)
+    expect(vm.dirty).toBe(true)
+    expect(await vm.save(9)).toBe(true)
+    expect(tableSave).toHaveBeenCalledWith(9)
   })
 })

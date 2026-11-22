@@ -4,8 +4,10 @@ SELECT s.id, s.kind, CASE WHEN s.user_id IS NULL THEN s.name ELSE u.email END AS
 	(SELECT COALESCE(jsonb_agg(jsonb_build_object('id', g.id, 'name', g.name) ORDER BY g.id), '[]')
 	  FROM segment_groups sg JOIN groups g ON g.id = sg.group_id
 	  WHERE sg.segment_id = s.id AND sg.granted AND g.visibility = 'restricted') AS granted_groups,
-	(SELECT count(*) FROM segment_groups sg WHERE sg.segment_id = s.id AND sg.rate_override IS NOT NULL) AS rate_override_count,
-	COALESCE(u.display_name, '') AS display_name, o.id AS origin_id, o.kind AS origin_kind, o.name AS origin_name FROM segments s LEFT JOIN users u ON u.id = s.user_id LEFT JOIN segments o ON o.id = s.origin_id WHERE s.kind = $1 AND ((s.name ILIKE $2 OR s.description ILIKE $3 OR u.email ILIKE $4 OR u.display_name ILIKE $5)) ORDER BY s.is_default DESC, s.id LIMIT $6
+	(SELECT COALESCE(jsonb_agg(jsonb_build_object('id', g.id, 'name', g.name, 'rate', sg.rate_override::text) ORDER BY g.id), '[]')
+	  FROM segment_groups sg JOIN groups g ON g.id = sg.group_id
+	  WHERE sg.segment_id = s.id AND sg.rate_override IS NOT NULL) AS rate_overrides,
+	COALESCE(u.display_name, '') AS display_name, o.id AS origin_id, o.kind AS origin_kind, o.name AS origin_name FROM segments s LEFT JOIN users u ON u.id = s.user_id LEFT JOIN segments o ON o.id = s.origin_id WHERE s.kind = $1 AND ((s.name ILIKE $2 OR s.description ILIKE $3 OR u.email ILIKE $4 OR u.display_name ILIKE $5)) ORDER BY s.is_default DESC, s.kind = 'personal', s.id LIMIT $6
 -- vars
 $1 string "personal"
 $2 string "%a\\_b%"

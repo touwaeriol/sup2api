@@ -14,6 +14,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 	"github.com/shopspring/decimal"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/billing/expr"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
@@ -38,6 +39,7 @@ type Service struct {
 	mu       sync.Mutex
 	epoch    uint64
 	prices   *priceSnapshot
+	loads    singleflight.Group // snapshot loads, one per epoch
 	resolved map[core.PriceQuery]resolved
 	settings *settingsSnapshot
 
@@ -107,11 +109,6 @@ func (s *Service) changed(ctx context.Context, key string) {
 		slog.WarnContext(ctx, "billing: publish config:changed", "err", err)
 	}
 }
-
-// PriceRulesChanged drops the cached price rules on every node. Packages
-// that delete or copy price_rules rows on their own (a segment going away)
-// call it after their transaction committed.
-func (s *Service) PriceRulesChanged(ctx context.Context) { s.changed(ctx, "price_rules") }
 
 // RegisterRoutes mounts the billing console API.
 func (s *Service) RegisterRoutes(r *httpapi.Router) {

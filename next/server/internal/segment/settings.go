@@ -32,10 +32,7 @@ type Setting struct {
 	// follows the group. Rate is what its members pay there.
 	RateOverride *decimal.Decimal `json:"rate_override"`
 	Rate         EffectiveRate    `json:"rate"`
-	// PriceRuleCount counts the model prices of the segment in the group, on
-	// the models the group provides now (Deps.RuleCounts).
-	PriceRuleCount int64 `json:"price_rule_count"`
-	MemberCount    int64 `json:"member_count"`
+	MemberCount  int64            `json:"member_count"`
 }
 
 // SettingGroup is the group of a Setting.
@@ -105,7 +102,7 @@ func (s *Service) ofSegment(c *gin.Context, id int64, items []pairInput) ([]*Set
 
 // ofGroup saves the items as settings in the group and returns what the
 // segments have there: every named one, then the personal ones that have a
-// grant, a rate or a model price in the group or are named by ?include=.
+// grant or a rate in the group or are named by ?include=.
 func (s *Service) ofGroup(c *gin.Context, id int64, items []pairInput) ([]*Setting, error) {
 	ctx := c.Request.Context()
 	if err := requireGroup(ctx, s.db.Gorm, id); err != nil {
@@ -119,8 +116,7 @@ func (s *Service) ofGroup(c *gin.Context, id int64, items []pairInput) ([]*Setti
 	}
 	rows, err := s.settingRows(ctx, func(db *gorm.DB) *gorm.DB {
 		return db.Where(`g.id = ? AND (s.kind = 'named' OR s.id = ANY(?)
-			OR EXISTS (SELECT 1 FROM segment_groups sg WHERE sg.segment_id = s.id AND sg.group_id = g.id)
-			OR EXISTS (SELECT 1 FROM price_rules pr WHERE pr.segment_id = s.id AND pr.group_id = g.id))`, id, store.Int64s(includedIDs(c))).
+			OR EXISTS (SELECT 1 FROM segment_groups sg WHERE sg.segment_id = s.id AND sg.group_id = g.id))`, id, store.Int64s(includedIDs(c))).
 			Order("s.kind = 'personal', s.id")
 	})
 	if err != nil {
@@ -205,9 +201,9 @@ type settingRow struct {
 	GroupVisibility  string `gorm:"column:group_visibility"`
 }
 
-// complete fills in what the rows do not carry themselves: the terms and the
-// price rule count of each pair, the platforms of the groups, and the names
-// as the caller may see them.
+// complete fills in what the rows do not carry themselves: the terms of each
+// pair, the platforms of the groups, and the names as the caller may see
+// them.
 func (s *Service) complete(ctx context.Context, rows []*Setting, terms func(*Setting) Terms) ([]*Setting, error) {
 	show, err := ShowUsers(ctx, s.authz)
 	if err != nil {
@@ -217,12 +213,7 @@ func (s *Service) complete(ctx context.Context, rows []*Setting, terms func(*Set
 	if err != nil {
 		return nil, err
 	}
-	rules, err := s.ruleCounts(ctx, idsOf(rows, segmentID))
-	if err != nil {
-		return nil, err
-	}
 	for _, r := range rows {
-		r.PriceRuleCount = rules[r.Segment.ID][r.Group.ID]
 		tm := terms(r)
 		r.Segment = Masked(r.Segment, show)
 		r.Group.RateMultiplier, r.Group.Platforms = tm.GroupRate, platforms[r.Group.ID]

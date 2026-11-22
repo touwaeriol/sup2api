@@ -18,16 +18,21 @@ const calls: string[] = []
 /** What each sub-editor's save answers. */
 const answers = { accounts: [] as string[], segments: true, pricing: true }
 const dirty = { segments: false }
+/** Whether each sub-editor's drafts can be saved as they are. */
+const checks = { segments: true, pricing: true }
 
 /** A sub-editor that only records its save. */
 function editor(name: keyof typeof answers): Component {
   return {
+    name: `${name}-editor`,
+    props: ['offer'],
+    emits: ['models', 'rows'],
     setup(_: unknown, { expose }: SetupContext) {
       const save = async (gid?: number) => {
         calls.push(gid === undefined ? name : `${name}:${gid}`)
         return answers[name]
       }
-      expose({ save, get dirty() { return name === 'segments' && dirty.segments }, select: () => undefined, include: () => undefined })
+      expose({ save, check: () => (name === 'accounts' ? true : checks[name]), get dirty() { return name === 'segments' && dirty.segments } })
       return () => h('div')
     }
   }
@@ -58,6 +63,7 @@ beforeEach(() => {
   calls.length = 0
   Object.assign(answers, { accounts: [], segments: true, pricing: true })
   dirty.segments = false
+  Object.assign(checks, { segments: true, pricing: true })
   mocks.denied.clear()
   mocks.get.mockReset().mockResolvedValue({ models: [], unrestricted_accounts: 0 })
   mocks.toast.mockReset()
@@ -69,20 +75,31 @@ beforeEach(() => {
 describe('group editor', () => {
   it('shows the six tabs and opens on the one asked for', async () => {
     const { w, selected } = await render(vip, 'pricing')
-    expect(w.findAll('[role="tab"]').map((t) => t.text())).toEqual(['基本信息', '授权与倍率', '模型定价', '模型名单', '账号', '高级'])
-    expect(selected()).toBe('模型定价')
+    expect(w.findAll('[role="tab"]').map((t) => t.text())).toEqual(['基本信息', '账号', '模型名单', '价格', '用户组', '高级'])
+    expect(selected()).toBe('价格')
+    expect(w.get('[data-testid="group-edit-save-hint"]').text()).toBe('改动点“保存”后一起生效')
+  })
+
+  it('prices a new group by the models of the accounts picked, through its model policy', async () => {
+    const { w } = await render(null)
+    expect(w.get('[data-testid="group-edit-save-hint"]').text()).toBe('还没保存：点“新建”时一起保存')
+    w.findComponent({ name: 'accounts-editor' }).vm.$emit('models', { models: ['gpt-4o'], unrestricted_accounts: 1 })
+    await flushPromises()
+    expect(w.findComponent({ name: 'pricing-editor' }).props('offer')).toEqual({ models: ['gpt-4o'], unrestricted_accounts: 1, model_allowlist: [], model_filter_mode: 'blacklist' })
+    // A saved group's table lists what the server says it provides.
+    expect((await render(vip)).w.findComponent({ name: 'pricing-editor' }).props('offer')).toBeNull()
   })
 
   it('leaves the user groups of a new group for later when the caller may not list them', async () => {
     mocks.denied.add('segment:read')
     const tabsOf = (w: Awaited<ReturnType<typeof render>>['w']) => w.findAll('[role="tab"]').map((t) => t.text())
     const { w, submit } = await render(null)
-    expect(tabsOf(w)).toEqual(['基本信息', '模型定价', '模型名单', '账号', '高级'])
+    expect(tabsOf(w)).toEqual(['基本信息', '账号', '模型名单', '价格', '高级'])
     await w.get('input').setValue('new')
     await submit()
-    expect(calls).toEqual(['POST /groups', 'accounts:9', 'pricing'])
+    expect(calls).toEqual(['POST /groups', 'accounts:9', 'pricing:9'])
     // A saved group answers with its own user groups, which takes group:read only.
-    expect(tabsOf((await render(vip)).w)).toContain('授权与倍率')
+    expect(tabsOf((await render(vip)).w)).toContain('用户组')
   })
 
   it('lists the models of the group opened last, whichever answers first', async () => {
@@ -101,7 +118,7 @@ describe('group editor', () => {
   it('saves the group, then its accounts, user groups and model prices', async () => {
     const { w, submit } = await render(vip)
     await submit()
-    expect(calls).toEqual(['PATCH /groups/2', 'accounts:2', 'segments:2', 'pricing'])
+    expect(calls).toEqual(['PATCH /groups/2', 'accounts:2', 'segments:2', 'pricing:2'])
     expect(mocks.patch.mock.calls[0][1]).toMatchObject({ name: 'vip', rate_multiplier: '0.8', visibility: 'restricted' })
     expect(w.emitted('update:open')).toEqual([[false]])
     expect(w.emitted('saved')).toHaveLength(1)
@@ -116,13 +133,23 @@ describe('group editor', () => {
     expect(w.emitted('update:open')).toBeUndefined()
     // The list shows the group that was created all the same.
     expect(w.emitted('saved')).toHaveLength(1)
-    expect(selected()).toBe('授权与倍率')
+    expect(selected()).toBe('用户组')
 
     calls.length = 0
     answers.segments = true
     await submit()
-    expect(calls).toEqual(['PATCH /groups/9', 'accounts:9', 'segments:9', 'pricing'])
+    expect(calls).toEqual(['PATCH /groups/9', 'accounts:9', 'segments:9', 'pricing:9'])
     expect(w.emitted('update:open')).toEqual([[false]])
+  })
+
+  it('creates nothing while a model price cannot be saved, and opens its tab', async () => {
+    const { w, selected, submit } = await render(null)
+    await w.get('input').setValue('new')
+    checks.pricing = false
+    await submit()
+    expect(calls).toEqual([])
+    expect(selected()).toBe('价格')
+    expect(w.emitted('saved')).toBeUndefined()
   })
 
   it('names the accounts that could not be saved and stays on their tab', async () => {
@@ -139,7 +166,7 @@ describe('group editor', () => {
     const { w, selected, submit } = await render(vip, 'advanced')
     await w.get('[data-testid="group-default-rate"]').setValue('-1')
     await submit()
-    expect(selected()).toContain('基本信息')
+    expect(selected()).toContain('价格')
     expect(w.text()).toContain('请输入非负数')
     expect(calls).toEqual([])
   })
@@ -148,12 +175,12 @@ describe('group editor', () => {
     dirty.segments = true
     const { w } = await render(vip)
     const marked = () => w.findAll('[role="tab"]').filter((t) => t.text().includes('•')).map((t) => t.text().replace(/\s*•/, ''))
-    expect(marked()).toEqual(['授权与倍率'])
+    expect(marked()).toEqual(['用户组'])
     await w.get('[data-testid="group-default-rate"]').setValue('0.9')
-    expect(marked()).toEqual(['基本信息', '授权与倍率'])
+    expect(marked()).toEqual(['价格', '用户组'])
   })
 
-  it('takes a default rate as the server does: up to four decimals, below 1000000', async () => {
+  it('takes a group rate as the server does: up to four decimals, below 1000000', async () => {
     const { w, submit } = await render(vip)
     await w.get('[data-testid="group-default-rate"]').setValue('0.12345')
     await submit()

@@ -63,17 +63,19 @@ func (u QuoteUsage) tokens() core.UsageTokens {
 // PricingQuote is the response of POST /pricing/quote: what the call costs
 // and how both sides of the price were resolved (CONTRACTS §97).
 type PricingQuote struct {
-	Segment    core.SegmentRef `json:"segment"`
-	Accessible bool            `json:"accessible"`
-	// AccessSource is why the segment may use the group: public, grant or none.
+	Segment core.SegmentRef `json:"segment"`
+	// Accessible: the segment's members may call the group, as the gateway
+	// lets them (an active group, public or granted). AccessSource says why:
+	// public, grant, none (private, not granted) or disabled (the group is).
+	Accessible   bool      `json:"accessible"`
 	AccessSource string    `json:"access_source"`
 	Base         *PriceDef `json:"base"`
 	ListPrice    *PriceDef `json:"list_price"`
 	PriceSource  string    `json:"price_source"`
-	// PriceLevels are the rules as configured; the one PriceSource names applies.
+	// PriceLevels are the rules as configured: the group's applies when
+	// PriceSource says so.
 	PriceLevels struct {
-		Segment *Rule `json:"segment"`
-		Group   *Rule `json:"group"`
+		Group *Rule `json:"group"`
 	} `json:"price_levels"`
 	Rate segment.EffectiveRate `json:"rate"`
 	// RateOverride is the segment's own rate in the group, if it has one.
@@ -145,7 +147,14 @@ func quoteTerms(ctx context.Context, q *gorm.DB, in QuoteRequest) (segment.Terms
 }
 
 func (s *Service) quote(ctx context.Context, in QuoteRequest) (*PricingQuote, error) {
-	gp, err := loadGroupPrices(ctx, s.db.Gorm, "g.id = ?", in.GroupID)
+	// The prices shown and the costs come from the one price snapshot a
+	// request is billed by on this node, so they agree with each other even
+	// while that snapshot lags behind a change made on another node.
+	snap, err := s.snapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	gp, err := loadGroupPrices(ctx, s.db.Gorm, snap.bases, "g.id = ?", in.GroupID)
 	if err != nil {
 		return nil, err
 	}
@@ -165,27 +174,22 @@ func (s *Service) quote(ctx context.Context, in QuoteRequest) (*PricingQuote, er
 	if err != nil {
 		return nil, err
 	}
-	// The prices shown and the costs come from the one price snapshot a
-	// request is billed by on this node, so they agree with each other even
-	// while that snapshot lags behind a change made on another node.
-	snap, err := s.snapshot(ctx)
-	if err != nil {
-		return nil, err
-	}
-	on := core.PriceQuery{Model: in.Model, GroupID: in.GroupID, SegmentID: terms.SegmentID}
-	base, levels := snap.bases.base(on.Model), snap.rules.levels(on)
-	row := levels.row(on.Model, base)
-	out := &PricingQuote{Segment: ref, Accessible: terms.Open, AccessSource: accessSource(gp.group.public, terms.Granted),
+	on := core.PriceQuery{Model: in.Model, GroupID: in.GroupID}
+	row := tableRow(on.Model, snap.bases.base(on.Model), snap.rules.of(on))
+	g := gp.group
+	out := &PricingQuote{Segment: ref, Accessible: g.active && terms.Open, AccessSource: accessSource(g, terms.Granted),
 		Base: row.Base, ListPrice: row.ListPrice, PriceSource: row.Source, Rate: terms.EffectiveRate(), RateOverride: terms.Override}
-	out.PriceLevels.Segment, out.PriceLevels.Group = levels.segment.view(), row.GroupRule
+	out.PriceLevels.Group = row.GroupRule
 	out.ListCost, out.Cost, err = s.quoteCosts(ctx, snap.resolve(on), in.Usage, terms.Rate)
 	return out, err
 }
 
-// accessSource says why a segment may use a group.
-func accessSource(public, granted bool) string {
+// accessSource says why a segment may use the group, or why not.
+func accessSource(g pricedGroup, granted bool) string {
 	switch {
-	case public:
+	case !g.active:
+		return "disabled"
+	case g.public:
 		return "public"
 	case granted:
 		return "grant"

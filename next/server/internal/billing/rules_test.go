@@ -43,13 +43,13 @@ func customRule(expression string) *storedRule {
 	return r
 }
 
-// The list price of a query: the segment's rule, the group's rule, the global
-// price, first hit; nothing applies without a global price. A custom price
-// replaces a global price of any shape, and what its expression tells
-// (VideoOnly, PerRequest) replaces the global price's. The global price comes
-// back as it is, without a source.
+// The list price of a query: the group's rule, else the global price;
+// nothing applies without a global price. A custom price replaces a global
+// price of any shape, and what its expression tells (VideoOnly, PerRequest)
+// replaces the global price's. The global price comes back as it is,
+// without a source.
 func TestSnapshotResolve(t *testing.T) {
-	const group, vip, other = 7, 3, 4
+	const group = 7
 	global := core.PriceRule{ID: 11, Model: "m", Mode: "visual", Expression: `tier("base", p*1 + c*5)`, ExprVersion: 1, ExprHash: "g"}
 	video := core.PriceRule{ID: 12, Model: "video", Mode: "expression", Expression: `tier("video", c*7)`, ExprVersion: 1, ExprHash: "v", VideoOnly: true}
 	tiered := core.PriceRule{ID: 13, Model: "tiered", Mode: "visual", Expression: `len <= 10 ? tier("s", p*1 + c*0) : tier("l", p*2 + c*0)`, ExprVersion: 1, ExprHash: "t"}
@@ -75,56 +75,41 @@ func TestSnapshotResolve(t *testing.T) {
 	replaced := replacedBy(own)
 
 	cases := []struct {
-		name           string
-		ofGroup, ofVIP *storedRule
-		q              core.PriceQuery
-		want           *core.PriceRule
+		name    string
+		ofGroup *storedRule
+		q       core.PriceQuery
+		want    *core.PriceRule
 	}{
-		{name: "no rules", q: core.PriceQuery{Model: "m", GroupID: group, SegmentID: vip}, want: with(global, "", nil)},
-		{name: "a query without group or segment is the global price", ofGroup: times("1.2"), ofVIP: own,
+		{name: "no rules", q: core.PriceQuery{Model: "m", GroupID: group}, want: with(global, "", nil)},
+		{name: "a query without group is the global price", ofGroup: times("1.2"),
 			q: core.PriceQuery{Model: "m"}, want: with(global, "", nil)},
-		{name: "a segment alone selects no rule", ofGroup: times("1.2"), ofVIP: own,
-			q: core.PriceQuery{Model: "m", SegmentID: vip}, want: with(global, "", nil)},
-		{name: "rules of another group", ofGroup: times("1.2"), ofVIP: own,
-			q: core.PriceQuery{Model: "m", GroupID: group + 1, SegmentID: vip}, want: with(global, "", nil)},
+		{name: "rules of another group", ofGroup: times("1.2"),
+			q: core.PriceQuery{Model: "m", GroupID: group + 1}, want: with(global, "", nil)},
 		{name: "group multiplier", ofGroup: times("1.2"),
 			q: core.PriceQuery{Model: "m", GroupID: group}, want: with(global, core.PriceSourceGroup, scaled("1.2"))},
 		{name: "group custom", ofGroup: own,
-			q: core.PriceQuery{Model: "m", GroupID: group, SegmentID: vip}, want: with(global, core.PriceSourceGroup, replaced)},
-		{name: "segment multiplier before group custom", ofGroup: own, ofVIP: times("0.8"),
-			q: core.PriceQuery{Model: "m", GroupID: group, SegmentID: vip}, want: with(global, core.PriceSourceSegment, scaled("0.8"))},
-		{name: "segment custom before group multiplier", ofGroup: times("1.2"), ofVIP: own,
-			q: core.PriceQuery{Model: "m", GroupID: group, SegmentID: vip}, want: with(global, core.PriceSourceSegment, replaced)},
-		{name: "the rule of another segment", ofGroup: times("1.2"), ofVIP: own,
-			q: core.PriceQuery{Model: "m", GroupID: group, SegmentID: other}, want: with(global, core.PriceSourceGroup, scaled("1.2"))},
-		{name: "a segment rule without the segment", ofVIP: own,
-			q: core.PriceQuery{Model: "m", GroupID: group}, want: with(global, "", nil)},
+			q: core.PriceQuery{Model: "m", GroupID: group}, want: with(global, core.PriceSourceGroup, replaced)},
 		{name: "multiplier 0 is free", ofGroup: times("0"),
 			q: core.PriceQuery{Model: "m", GroupID: group}, want: with(global, core.PriceSourceGroup, scaled("0"))},
-		{name: "segment multiplier 1 hides the group's rule", ofGroup: times("2"), ofVIP: times("1"),
-			q: core.PriceQuery{Model: "m", GroupID: group, SegmentID: vip}, want: with(global, core.PriceSourceSegment, scaled("1"))},
+		{name: "multiplier 1", ofGroup: times("1"),
+			q: core.PriceQuery{Model: "m", GroupID: group}, want: with(global, core.PriceSourceGroup, scaled("1"))},
 		{name: "a custom price by the request over one by the token is due per request", ofGroup: perRequest,
 			q: core.PriceQuery{Model: "m", GroupID: group}, want: with(global, core.PriceSourceGroup, replacedBy(perRequest))},
-		{name: "a custom price replaces an expression price and its video admission", ofGroup: own, ofVIP: times("0.5"),
+		{name: "a custom price replaces an expression price and its video admission", ofGroup: own,
 			q: core.PriceQuery{Model: "video", GroupID: group}, want: with(video, core.PriceSourceGroup, replaced)},
 		{name: "a custom price replaces a visual price with tiers", ofGroup: own,
 			q: core.PriceQuery{Model: "tiered", GroupID: group}, want: with(tiered, core.PriceSourceGroup, replaced)},
-		{name: "a multiplier keeps the video admission", ofGroup: own, ofVIP: times("0.5"),
-			q: core.PriceQuery{Model: "video", GroupID: group, SegmentID: vip}, want: with(video, core.PriceSourceSegment, scaled("0.5"))},
-		{name: "no global price, no rule", ofGroup: times("1.2"), ofVIP: own,
-			q: core.PriceQuery{Model: "unpriced", GroupID: group, SegmentID: vip}},
+		{name: "a multiplier keeps the video admission", ofGroup: times("0.5"),
+			q: core.PriceQuery{Model: "video", GroupID: group}, want: with(video, core.PriceSourceGroup, scaled("0.5"))},
+		{name: "no global price, no rule", ofGroup: times("1.2"),
+			q: core.PriceQuery{Model: "unpriced", GroupID: group}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			snap := &priceSnapshot{byModel: map[string]core.PriceRule{"m": global, "video": video, "tiered": tiered}, rules: ruleSet{},
 				bases: catalog{"m": oneTier, "video": exprPrice, "tiered": twoTiers}}
-			for _, model := range []string{"m", "video", "tiered", "unpriced"} {
-				if tc.ofGroup != nil {
-					snap.rules[core.PriceQuery{Model: model, GroupID: group}] = tc.ofGroup
-				}
-				if tc.ofVIP != nil {
-					snap.rules[core.PriceQuery{Model: model, GroupID: group, SegmentID: vip}] = tc.ofVIP
-				}
+			if tc.ofGroup != nil {
+				snap.rules[group] = map[string]*storedRule{"m": tc.ofGroup, "video": tc.ofGroup, "tiered": tc.ofGroup, "unpriced": tc.ofGroup}
 			}
 			got := snap.resolve(tc.q)
 			if tc.want == nil {
@@ -146,7 +131,7 @@ func TestSnapshotResolveCopies(t *testing.T) {
 	global := core.PriceRule{ID: 1, Model: "m", Mode: "visual", Expression: "p", ExprHash: "g"}
 	rule := times("1.2")
 	snap := &priceSnapshot{byModel: map[string]core.PriceRule{"m": global},
-		rules: ruleSet{{Model: "m", GroupID: 7}: rule}}
+		rules: ruleSet{7: {"m": rule}}}
 	got := snap.resolve(core.PriceQuery{Model: "m", GroupID: 7})
 	*got.Scale = decimal.NewFromInt(9)
 	got.Expression = "changed"

@@ -11,7 +11,7 @@ import UserSegmentPanel from './UserSegmentPanel.vue'
 const mocks = vi.hoisted(() => ({ post: vi.fn(), toast: vi.fn(), confirm: vi.fn() }))
 vi.mock('@sub2api/host', async (original) => ({ ...(await original<object>()), api: { post: mocks.post } }))
 vi.mock('@sub2api/ui', async (original) => ({ ...(await original<object>()), toast: (...a: unknown[]) => mocks.toast(...a), confirm: (...a: unknown[]) => mocks.confirm(...a) }))
-const segment = (id: number, name: string, over: Partial<Segment> = {}): Segment => ({ id, kind: 'named', name, description: '', discount: '1', is_default: false, member_count: 2, granted_groups: [], rate_override_count: 0, price_rule_count: 0, ...over })
+const segment = (id: number, name: string, over: Partial<Segment> = {}): Segment => ({ id, kind: 'named', name, description: '', discount: '1', is_default: false, member_count: 2, granted_groups: [], rate_overrides: [], ...over })
 const vip = segment(2, 'VIP', { discount: '0.9' })
 const staff = segment(4, 'Staff')
 vi.mock('@/components/pricing/segmentLookup', () => ({ useSegmentsLookup: () => ({ segments: ref([segment(1, '默认', { is_default: true }), vip, staff]) }) }))
@@ -42,7 +42,7 @@ describe('the user group of a user', () => {
     expect(w.get('[data-testid="user-segment-discount"]').text()).toBe('×0.9')
     w.getComponent(SegmentSelect).vm.$emit('update:modelValue', 4)
     await flushPromises()
-    expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({ message: '把 amy@x 从「VIP」移到「Staff」？之后他按「Staff」的授权、倍率和价格计费。' }))
+    expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({ message: '把 amy@x 从「VIP」移到「Staff」？之后他按「Staff」的开通和倍率付费。' }))
     expect(mocks.post).toHaveBeenCalledWith('/segments/4/members', { user_ids: [7] })
     expect(mocks.toast).toHaveBeenCalledWith('已把 amy@x 移到「Staff」', 'success')
     expect(w.emitted('changed')).toHaveLength(1)
@@ -68,7 +68,7 @@ describe('the user group of a user', () => {
 
   it('edits the discount of a personal segment and moves him back to the user group he came from', async () => {
     const w = render(solo)
-    expect(w.get('[data-testid="user-personal-banner"]').text()).toContain('他来自用户组「VIP」')
+    expect(w.get('[data-testid="user-personal-banner"]').text()).toContain('他原来在「VIP」')
     await w.get('[data-testid="segment-discount"]').setValue('0.7')
     expect(w.emitted('update:discount')).toEqual([['0.7']])
 
@@ -79,7 +79,7 @@ describe('the user group of a user', () => {
   })
 
   it('says a discount that is not one is wrong', () => {
-    expect(render(solo, true, '0').text()).toContain('请输入大于 0')
+    expect(render(solo, true, '0').text()).toContain('填大于 0')
   })
 
   it('only shows it to a caller who may not manage user groups', () => {

@@ -41,6 +41,18 @@ func TestSegmentCreateAndRead(t *testing.T) {
 	require.Equal(t, []any{}, e.do(e.admin, "GET", path("/segments/%d/groups", idOf(team)), nil).ok(200).body["data"], "no groups yet")
 	e.do(e.admin, "GET", "/segments/999999", nil).failed(404, "not_found")
 	e.do(e.plain, "GET", "/segments", nil).failed(403, "permission_denied")
+
+	// ?kind=all: the named ones (the default first), then the personal ones,
+	// on the same pages.
+	solo := e.personal(e.plain)
+	ids := func(query string) []any {
+		return names(e.do(e.admin, "GET", "/segments"+query, nil).ok(200).rows(), func(r map[string]any) any { return idOf(r) })
+	}
+	require.Equal(t, []any{e.defaultSegment(), idOf(created), idOf(team), solo}, ids("?kind=all"))
+	require.Equal(t, float64(4), e.do(e.admin, "GET", "/segments?kind=all", nil).ok(200).total())
+	require.Equal(t, []any{solo}, ids("?kind=all&page=2&page_size=3"))
+	require.Equal(t, []any{solo}, ids("?kind=all&q=plain@"))
+	require.Equal(t, []any{e.defaultSegment(), idOf(created), idOf(team)}, ids("?kind=other"), "any other kind is named")
 	e.do(e.plain, "POST", "/segments", map[string]any{"name": "x"}).failed(403, "permission_denied")
 }
 
@@ -109,32 +121,20 @@ func TestSegmentCounts(t *testing.T) {
 	e.pair(vip, public, true, "0.5")
 	e.pair(vip, private, true, "")
 	e.pair(vip, other, false, "0.7")
-	e.rule(public, vip, "m1")
-	e.rule(private, vip, "m1")
-	e.rule(private, 0, "m1")
 	e.exec(`UPDATE users SET segment_id = $1 WHERE id = ANY($2)`, vip, []int64{e.plain, e.masked})
 	e.exec(`UPDATE users SET deleted_at = now() WHERE id = $1`, e.masked)
 
 	got := e.do(e.admin, "GET", path("/segments/%d", vip), nil).ok(200).data()
 	require.Equal(t, float64(1), got["member_count"], "a deleted user is no member")
 	require.Equal(t, []any{map[string]any{"id": float64(private), "name": "private"}}, got["granted_groups"], "only the private groups it is granted")
-	require.Equal(t, float64(2), got["rate_override_count"])
-	require.Equal(t, float64(2), got["price_rule_count"], "the group's own rule is not the segment's")
+	require.Equal(t, []any{
+		map[string]any{"id": float64(public), "name": "public", "rate": "0.5"},
+		map[string]any{"id": float64(other), "name": "other", "rate": "0.7"},
+	}, got["rate_overrides"], "the groups whose rate it overrides, in group order")
+	require.NotContains(t, got, "price_rule_count")
 
 	rows := e.do(e.admin, "GET", "/segments", nil).ok(200).rows()
 	require.Equal(t, got, rows[1], "the list carries the same counts")
-
-	// A rule on a model the group no longer provides is not in its pricing
-	// table, and not counted: by segment, nor by segment and group.
-	e.rule(private, vip, goneModel)
-	require.Equal(t, got, e.do(e.admin, "GET", path("/segments/%d", vip), nil).ok(200).data())
-	require.Equal(t, got, e.do(e.admin, "GET", "/segments", nil).ok(200).rows()[1])
-	counts := map[float64]any{}
-	for _, row := range e.do(e.admin, "GET", path("/segments/%d/groups", vip), nil).ok(200).rows() {
-		counts[row["group"].(map[string]any)["id"].(float64)] = row["price_rule_count"]
-	}
-	require.Equal(t, float64(1), counts[float64(private)])
-	require.Equal(t, float64(1), counts[float64(public)])
 	require.Equal(t, float64(1), rows[0]["member_count"])
 }
 
@@ -143,8 +143,7 @@ func TestSegmentDelete(t *testing.T) {
 	vip, def := e.segment("VIP", "0.9"), e.defaultSegment()
 	group := e.group("private", "restricted", "1")
 	e.pair(vip, group, true, "0.5")
-	e.rule(group, vip, "m1")
-	e.rule(group, 0, "m1")
+	e.exec(`INSERT INTO price_rules (group_id, model, kind, multiplier) VALUES ($1, 'm1', 'multiplier', 0.8)`, group)
 	e.exec(`UPDATE users SET segment_id = $1 WHERE id = ANY($2)`, vip, []int64{e.plain, e.masked})
 	e.exec(`UPDATE users SET deleted_at = now() WHERE id = $1`, e.masked)
 	personal := e.personal(e.plain)
@@ -153,7 +152,6 @@ func TestSegmentDelete(t *testing.T) {
 	e.do(e.admin, "DELETE", path("/segments/%d", def), nil).failed(409, "conflict")
 	e.do(e.admin, "DELETE", path("/segments/%d", personal), nil).failed(409, "conflict")
 	e.do(e.admin, "DELETE", "/segments/999999", nil).failed(404, "not_found")
-	require.Zero(t, e.rulesChanged.Load())
 
 	// A node of the version before segments deletes a user and leaves the
 	// personal segment behind: that one can go.
@@ -163,15 +161,13 @@ func TestSegmentDelete(t *testing.T) {
 	e.do(e.admin, "DELETE", path("/segments/%d", orphan), nil).ok(204)
 	require.Equal(t, def, e.segmentOf(gone), "the deleted user falls back to the default segment")
 	require.Zero(t, e.id(`SELECT count(*) FROM segments WHERE id = $1`, orphan))
-	e.rulesChanged.Store(0)
 
 	e.do(e.admin, "DELETE", path("/segments/%d", vip), nil).ok(204)
 	e.do(e.admin, "GET", path("/segments/%d", vip), nil).failed(404, "not_found")
 	require.Equal(t, def, e.segmentOf(e.masked), "its members, deleted ones too, fall back to the default segment")
 	require.Equal(t, personal, e.segmentOf(e.plain), "a user who left it before stays where they are")
 	require.Zero(t, e.id(`SELECT count(*) FROM segment_groups WHERE segment_id = $1`, vip))
-	require.Equal(t, int64(1), e.id(`SELECT count(*) FROM price_rules`), "its prices go, the group's own stay")
-	require.Equal(t, int64(1), e.rulesChanged.Load(), "the price rules are dropped from the cache")
+	require.Equal(t, int64(1), e.id(`SELECT count(*) FROM price_rules`), "the group's prices stay")
 	got := e.do(e.admin, "GET", path("/segments/%d", personal), nil).ok(200).data()
 	require.Contains(t, got, "origin")
 	require.Nil(t, got["origin"], "a personal segment forgets an origin that is gone")

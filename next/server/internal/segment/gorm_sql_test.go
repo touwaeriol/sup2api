@@ -96,7 +96,16 @@ func TestSQLSegmentList(t *testing.T) {
 	gormtest.Assert(t, func(db *gorm.DB) *gorm.DB {
 		var rows []segmentRow
 		return selectSegments(db).Scopes(listFilter(core.SegmentPersonal, "a_b", true)).
-			Order("s.is_default DESC, s.id").Limit(20).Offset(0).Scan(&rows)
+			Order(listOrder).Limit(20).Offset(0).Scan(&rows)
+	})
+}
+
+// GET /segments?kind=all&q=: both kinds, with no condition on the kind.
+func TestSQLSegmentListAll(t *testing.T) {
+	gormtest.Assert(t, func(db *gorm.DB) *gorm.DB {
+		var rows []segmentRow
+		return selectSegments(db).Scopes(listFilter(kindAll, "a_b", false)).
+			Order(listOrder).Limit(20).Offset(0).Scan(&rows)
 	})
 }
 

@@ -367,10 +367,9 @@ func (c *call) newRecord() *core.UsageRecord {
 	}
 }
 
-// priceQuery asks for model's list price as the key's group and its owner's
-// segment see it.
+// priceQuery asks for model's list price in the key's group.
 func (c *call) priceQuery(model string) core.PriceQuery {
-	return core.PriceQuery{Model: model, GroupID: c.principal.Group.ID, SegmentID: c.principal.SegmentID}
+	return core.PriceQuery{Model: model, GroupID: c.principal.Group.ID}
 }
 
 // bodyLimit is the largest client request body (or WebSocket message): the

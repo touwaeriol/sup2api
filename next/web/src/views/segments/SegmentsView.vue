@@ -1,29 +1,30 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from '@sub2api/host'
-import { SAlert, SBadge, SButton, SDropdown, SHint, SInput, SLink, SPageHeader, SPagination, confirm, type MenuAction, type TableColumn } from '@sub2api/ui'
-import type { Segment } from '@/api/pricing'
+import { SButton, SDropdown, SInput, SPageHeader, SPagination, SSegmented, confirm, type MenuAction, type SelectOption } from '@sub2api/ui'
+import type { Segment, SegmentKind, SegmentListKind, SegmentRef } from '@/api/pricing'
+import PersonalRemoveDialog from '@/components/pricing/PersonalRemoveDialog.vue'
+import PersonalSegmentPicker from '@/components/pricing/PersonalSegmentPicker.vue'
 import PriceSimulatorModal from '@/components/pricing/PriceSimulatorModal.vue'
 import { canSimulatePrices } from '@/components/pricing/quoteSubjects'
 import { useSegmentsLookup } from '@/components/pricing/segmentLookup'
-import { canListMembers } from '@/components/pricing/segmentMembers'
+import { canListMembers, personalUserOf } from '@/components/pricing/segmentMembers'
 import { deleteResource } from '@/composables/crud'
 import { useList } from '@/composables/useList'
 import { useAuthStore } from '@/stores/auth'
 import { notifyError } from '@/utils/errors'
 import { formatNumber } from '@/utils/format'
-import PersonalSegments from './PersonalSegments.vue'
 import SegmentEditor, { type SegmentEditorTab } from './SegmentEditor.vue'
 import SegmentTable from './SegmentTable.vue'
 
 // User groups ("segments"): every user is in exactly one, and it decides
-// which private groups he may use and at what rate and prices. The list has
-// the named ones; the users priced individually, each a segment of his own,
-// are summed up under it and listed by PersonalSegments. A caller who may
-// not manage segments opens them read-only; the members of one are listed
-// only to a caller who reads users.
+// which private groups he may use and at what rate. The users priced on
+// their own, each a segment of his own, are in the same list after the named
+// ones (GET /segments?kind=all), and the kind filter narrows it to either. A
+// caller who may not manage segments opens them read-only; the members of
+// one are listed only to a caller who reads users.
 const { t } = useI18n()
 const auth = useAuthStore()
 const route = useRoute()
@@ -31,44 +32,39 @@ const router = useRouter()
 const canManage = computed(() => auth.has('segment:manage'))
 const canMembers = computed(() => canListMembers(auth))
 const canSimulate = computed(() => canSimulatePrices(auth))
-const list = useList<Segment>('/segments', { q: '' })
+const list = useList<Segment>('/segments', { q: '', kind: 'all' satisfies SegmentListKind })
 
-const lead = computed<TableColumn[]>(() => [
-  { key: 'name', label: t('segments.columns.name'), mobile: 'title' },
-  { key: 'member_count', label: t('segments.columns.members'), align: 'right', mobile: 'meta' }
-])
+// ------------------------------------------------------------------ kinds
 
-function rowActions(s: Segment): MenuAction[] {
-  return [
-    { key: 'members', label: t('segments.tabs.members'), hidden: !canMembers.value },
-    { key: 'simulate', label: t('pricingTools.sim.title'), hidden: !canSimulate.value },
-    { key: 'delete', label: t('common.delete'), danger: true, hidden: !canManage.value, disabled: s.is_default }
-  ]
-}
-function onAction(s: Segment, key: string) {
-  if (key === 'members') openEditor(s, 'members')
-  else if (key === 'simulate') simulate(s)
-  else if (key === 'delete') remove(s)
-}
+const KINDS: SegmentKind[] = ['named', 'personal']
+/** How many of each kind match the search, for the filter's labels. */
+const counts = reactive<Record<SegmentKind, number>>({ named: 0, personal: 0 })
+/** The search the counts are of; null once a change makes them stale. */
+let countedQ: string | null = null
 
-// ------------------------------------------------------------------ personal segments
-
-const personalCount = ref(0)
-const personalOpen = ref(false)
-
-async function countPersonal() {
+async function countKinds() {
+  const q = (countedQ = list.filters.q)
   try {
-    personalCount.value = (await api.list<Segment>('/segments', { kind: 'personal', page_size: 1 })).page.total ?? 0
+    const totals = await Promise.all(KINDS.map((kind) => api.list<Segment>('/segments', { kind, q, page_size: 1 })))
+    KINDS.forEach((kind, i) => (counts[kind] = totals[i].page.total ?? 0))
   } catch {
-    /* the row keeps the last count */
+    // The labels keep the last counts; the next load tries again.
+    countedQ = null
   }
 }
-countPersonal()
+// A load of the list for another search, or after a change, counts again; a page or a kind does not.
+watch(list.items, () => list.filters.q !== countedQ && countKinds())
 
-/** Segments, their members or their settings changed: the list, the count below it and the selects follow. */
+const kindOptions = computed<SelectOption[]>(() => [
+  { value: 'all', label: t('segments.kinds.all', { n: formatNumber(counts.named + counts.personal) }) },
+  { value: 'named', label: t('segments.kinds.named', { n: formatNumber(counts.named) }) },
+  { value: 'personal', label: t('segments.kinds.personal', { n: formatNumber(counts.personal) }) }
+])
+
+/** Segments, their members or their settings changed: the list, its counts and the selects follow. */
 function changed() {
+  countedQ = null
   list.reload()
-  countPersonal()
   useSegmentsLookup(true)
 }
 
@@ -84,21 +80,44 @@ function openEditor(s: Segment | null, tab: SegmentEditorTab = 'basic') {
   editorOpen.value = true
 }
 
-/** ?edit=<id> opens that user group: other pages link to it this way. The parameter is used once and leaves the address bar. */
-async function openFromQuery(id: unknown) {
-  if (typeof id !== 'string') return
-  router.replace({ query: { ...route.query, edit: undefined } })
+async function openById(id: number | string) {
   try {
-    const s = await api.get<Segment>(`/segments/${id}`)
-    // A personal segment is edited where its user is, not in this list.
-    if (s.kind === 'named') openEditor(s)
+    openEditor(await api.get<Segment>(`/segments/${id}`))
   } catch (e) {
     notifyError(e)
   }
 }
+
+/** ?edit=<id> opens that user group, a personal one too: other pages link to it this way. The parameter is used once and leaves the address bar. */
+function openFromQuery(id: unknown) {
+  if (typeof id !== 'string') return
+  router.replace({ query: { ...route.query, edit: undefined } })
+  return openById(id)
+}
 watch(() => route.query.edit, openFromQuery, { immediate: true })
 
+/** Opens the personal segment of the user picked: the one he had, or the one just made for him. */
+function picked(segment: SegmentRef, created: boolean) {
+  if (created) changed()
+  return openById(segment.id)
+}
+
 // ------------------------------------------------------------------ row menu
+
+function rowActions(s: Segment): MenuAction[] {
+  if (s.kind === 'personal') return [{ key: 'moveBack', label: t('segments.personal.remove'), hidden: !canManage.value }]
+  return [
+    { key: 'members', label: t('segments.tabs.members'), hidden: !canMembers.value },
+    { key: 'simulate', label: t('segments.simulate'), hidden: !canSimulate.value },
+    { key: 'delete', label: t('common.delete'), danger: true, hidden: !canManage.value, disabled: s.is_default }
+  ]
+}
+function onAction(s: Segment, key: string) {
+  if (key === 'members') openEditor(s, 'members')
+  else if (key === 'simulate') simulate(s)
+  else if (key === 'delete') remove(s)
+  else if (key === 'moveBack') askMoveBack(s)
+}
 
 const simulatorPreset = ref<{ segmentId: number }>()
 const simulatorOpen = ref(false)
@@ -113,31 +132,37 @@ async function remove(s: Segment) {
   const ask = { title: t('segments.deleteTitle', { name: s.name }), message: t('segments.deleteConfirm', { n: s.member_count }, s.member_count), confirmText: t('common.delete'), danger: true }
   return (await confirm(ask)) && deleteResource(`/segments/${s.id}`, undefined, changed)
 }
+
+// ------------------------------------------------------------------ move a personal user back
+
+const movingBack = ref<Segment | null>(null)
+const moveBackOpen = ref(false)
+
+function askMoveBack(s: Segment) {
+  movingBack.value = s
+  moveBackOpen.value = true
+}
+
+function movedBack() {
+  editorOpen.value = false
+  changed()
+}
 </script>
 
 <template>
   <div>
     <SPageHeader :title="t('segments.title')" :description="t('segments.description')">
       <template #actions>
+        <PersonalSegmentPicker :label="t('segments.convert.pickShort')" @select="picked" />
         <SButton v-if="canManage" variant="primary" icon="plus" fab data-testid="segment-create" @click="openEditor(null)">{{ t('segments.create') }}</SButton>
       </template>
       <template #filters-primary>
+        <SSegmented v-model="list.filters.kind" size="sm" :options="kindOptions" :aria-label="t('segments.kinds.label')" data-testid="segment-kind" />
         <SInput v-model="list.filters.q" class="w-64" icon="search" clearable :aria-label="t('common.search')" :placeholder="t('segments.searchPlaceholder')" data-testid="segment-search" />
       </template>
     </SPageHeader>
 
-    <SegmentTable card :lead="lead" :rows="list.items.value" actions :loading="list.loading.value" :error="list.error.value" @retry="list.reload">
-      <template #cell-name="{ row }">
-        <span class="inline-flex max-w-full items-center gap-1.5">
-          <span class="truncate font-medium text-fg" data-testid="segment-name-cell">{{ row.name }}</span>
-          <SBadge v-if="row.is_default" tone="info" size="xs" :title="t('segments.defaultHint')" data-testid="segment-default">{{ t('segments.default') }}</SBadge>
-        </span>
-        <SHint v-if="row.description" size="xs" class="max-w-xs truncate">{{ row.description }}</SHint>
-      </template>
-      <template #cell-member_count="{ row }">
-        <SLink v-if="canMembers" as="button" class="font-mono" data-testid="segment-members-link" @click="openEditor(row, 'members')">{{ formatNumber(row.member_count) }}</SLink>
-        <span v-else class="font-mono" data-testid="segment-member-count">{{ formatNumber(row.member_count) }}</span>
-      </template>
+    <SegmentTable card :rows="list.items.value" :link-members="canMembers" :loading="list.loading.value" :error="list.error.value" @retry="list.reload" @members="openEditor($event, 'members')">
       <template #cell-actions="{ row }">
         <div class="flex items-center justify-end gap-1">
           <SButton variant="ghost" size="sm" data-testid="segment-edit" @click="openEditor(row)">{{ t(canManage ? 'common.edit' : 'common.view') }}</SButton>
@@ -145,19 +170,12 @@ async function remove(s: Segment) {
         </div>
       </template>
       <template #footer>
-        <SAlert tone="accent" icon="user" class="mt-3" data-testid="segments-personal">
-          <template #title>{{ t('segments.personal.summary', { n: formatNumber(personalCount) }, personalCount) }}</template>
-          {{ t('segments.personal.summaryHint') }}
-          <template #actions>
-            <SButton size="sm" data-testid="segments-personal-open" @click="personalOpen = true">{{ t('common.view') }}</SButton>
-          </template>
-        </SAlert>
         <SPagination v-model:page="list.page.value" v-model:page-size="list.pageSize.value" :total="list.total.value" />
       </template>
     </SegmentTable>
 
-    <SegmentEditor v-model:open="editorOpen" :segment="editing" :tab="editorTab" :readonly="!canManage" @changed="changed" />
-    <PersonalSegments v-model:open="personalOpen" @changed="changed" />
+    <SegmentEditor v-model:open="editorOpen" :segment="editing" :tab="editorTab" :readonly="!canManage" @changed="changed" @remove="askMoveBack" />
+    <PersonalRemoveDialog v-model:open="moveBackOpen" :user="personalUserOf(movingBack)" :origin="movingBack?.origin" @done="movedBack" />
     <PriceSimulatorModal v-if="canSimulate" v-model:open="simulatorOpen" :preset="simulatorPreset" />
   </div>
 </template>

@@ -9,6 +9,9 @@ vi.mock('@/stores/auth', () => ({ useAuthStore: () => ({ has: () => false }) }))
 vi.mock('@/composables/platforms', () => ({ usePlatforms: () => ({ load: vi.fn(), label: (id: string) => id }) }))
 enableAutoUnmount(afterEach)
 
+/** Where a rate comes from, as the user group side words it. */
+const source = (key: string) => i18n.global.t(`pricingAccess.source.${key}`)
+
 /** A billed record: 0.00576 at the global price, then what group pricing made of it. */
 function record(detail: { rate: string; total: string; pricing?: UsagePricing; list_cost?: string }): UsageRow {
   const { rate, total, pricing, list_cost } = detail
@@ -30,7 +33,7 @@ function render(u: UsageRow, locale: 'zh' | 'en' = 'zh') {
 }
 
 describe('group pricing of a usage record', () => {
-  it('reads as before at the global price and the default rate of the group', () => {
+  it('reads as before at the original price and the group rate', () => {
     const { w, has } = render(record({ rate: '1.5', total: '0.00864' }))
     expect(has('usage-list-price')).toBe(false)
     expect(has('usage-list-cost')).toBe(false)
@@ -38,37 +41,41 @@ describe('group pricing of a usage record', () => {
     expect(w.text().replace(/\s+/g, ' ')).toContain('基础费用 $0.00576 × 条件总倍率 1 × 分组倍率 1.5 = $0.00864')
   })
 
-  it('shows the multiplier rule that gave the list price, the list cost and where the rate comes from', () => {
-    const pricing: UsagePricing = { segment_id: 2, rate_source: 'discount', price_source: 'segment', scale: '0.8' }
+  it('shows the multiplier rule that gave the model price, its cost and where the rate comes from', () => {
+    const pricing: UsagePricing = { segment_id: 2, rate_source: 'discount', price_source: 'group', scale: '0.8' }
     const { w, text } = render(record({ rate: '0.9', total: '0.0041472', list_cost: '0.004608', pricing }))
-    expect(text('usage-list-price')).toMatch(/^专属价 ?全局 ×0\.8$/)
+    expect(text('usage-list-price')).toMatch(/^分组价 ?原价 × 0\.8$/)
     expect(text('usage-list-cost')).toBe('$0.004608')
-    expect(text('rate-source')).toBe('(分组默认 × 全场折扣)')
-    expect(w.text().replace(/\s+/g, ' ')).toContain('× 条件总倍率 1 × 标价倍数 0.8 × 分组倍率 0.9 (分组默认 × 全场折扣) = $0.004147')
+    expect(text('rate-source')).toBe(`(${source('discount')})`)
+    expect(w.text().replace(/\s+/g, ' ')).toContain(`× 条件总倍率 1 × 分组价倍数 0.8 × 分组倍率 0.9 (${source('discount')}) = $0.004147`)
   })
 
   it('names a custom price, which is no multiplier of the base cost', () => {
     const pricing: UsagePricing = { segment_id: 2, rate_source: 'segment', price_source: 'group', base: { expression: 'tier("base", p*1 + c*5)', expr_hash: 'abc' } }
     const { w, text } = render(record({ rate: '0.7', total: '0.004032', list_cost: '0.00576', pricing }))
-    expect(text('usage-list-price')).toMatch(/^分组内定价 ?自定义价格$/)
+    expect(text('usage-list-price')).toMatch(/^分组价 ?自定义$/)
     expect(text('usage-list-cost')).toBe('$0.00576')
-    expect(text('rate-source')).toBe('(专属倍率)')
-    expect(w.text()).not.toContain('标价倍数')
+    expect(text('rate-source')).toBe(`(${source('segment')})`)
+    expect(w.text()).not.toContain('分组价倍数')
   })
 
-  it('says only where the rate comes from when no rule gave the list price', () => {
-    for (const price_source of [undefined, 'global'] as const) {
-      const { has, text } = render(record({ rate: '0.7', total: '0.004032', pricing: { segment_id: 2, rate_source: 'segment', price_source } }), 'en')
-      expect(has('usage-list-price')).toBe(false)
-      expect(has('usage-list-cost')).toBe(false)
-      expect(text('rate-source')).toBe('(Own rate)')
-    }
+  it('says only where the rate comes from when no rule gave the model price', () => {
+    const { has, text } = render(record({ rate: '0.7', total: '0.004032', pricing: { segment_id: 2, rate_source: 'segment' } }), 'en')
+    expect(has('usage-list-price')).toBe(false)
+    expect(has('usage-list-cost')).toBe(false)
+    expect(text('rate-source')).toBe(`(${source('segment')})`)
+  })
+
+  it('still names the price of a user group on a record priced before those were removed', () => {
+    const pricing: UsagePricing = { segment_id: 2, rate_source: 'segment', price_source: 'segment', scale: '0.8' }
+    const { text } = render(record({ rate: '0.9', total: '0.0041472', list_cost: '0.004608', pricing }))
+    expect(text('usage-list-price')).toMatch(/^用户组价（已停用的功能） ?原价 × 0\.8$/)
   })
 
   it('names no source of the rate when the record has none', () => {
     const { has, text } = render(record({ rate: '1', total: '0.006912', list_cost: '0.006912', pricing: { price_source: 'group', scale: '1.2' } }), 'en')
     expect(has('rate-source')).toBe(false)
-    expect(text('usage-list-price')).toMatch(/^Group pricing ?Global ×1\.2$/)
+    expect(text('usage-list-price')).toMatch(/^Group price ?Original × 1\.2$/)
     expect(text('usage-list-cost')).toBe('$0.006912')
   })
 })

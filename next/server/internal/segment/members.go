@@ -32,7 +32,6 @@ func (s *Service) addMembers(c *gin.Context) {
 		return
 	}
 	var moved int
-	var dropped bool
 	err := s.tx(ctx, func(tx *gorm.DB) error {
 		// The lock keeps the segment from being deleted under the move.
 		kind, _, err := segmentKind(ctx, tx, id, store.LockingStrengthKeyShare)
@@ -45,15 +44,12 @@ func (s *Service) addMembers(c *gin.Context) {
 		if err := requireUsers(ctx, tx, in.UserIDs); err != nil {
 			return err
 		}
-		moved, dropped, err = moveUsers(ctx, tx, id, in.UserIDs, "")
+		moved, err = moveUsers(ctx, tx, id, in.UserIDs, "")
 		return err
 	})
 	if err != nil {
 		httpapi.Fail(c, err)
 		return
-	}
-	if dropped {
-		s.priceRulesChanged(ctx)
 	}
 	httpapi.OK(c, gin.H{"moved": moved})
 }
@@ -78,18 +74,16 @@ func requireUsers(ctx context.Context, q *gorm.DB, ids []int64) error {
 // moveUsers puts the users into the named segment to and deletes the
 // personal segment of each one who had one, with its settings. With from a
 // segment kind, only users in a segment of that kind move. It returns how
-// many moved (a user already there does not) and whether a personal segment
-// went: its price rules went with it.
-func moveUsers(ctx context.Context, tx *gorm.DB, to int64, userIDs []int64, from string) (moved int, dropped bool, err error) {
+// many moved (a user already there does not).
+func moveUsers(ctx context.Context, tx *gorm.DB, to int64, userIDs []int64, from string) (int, error) {
 	ids, err := lockUsers(ctx, tx, movingUsers, store.Int64s(userIDs), to, from, from)
 	if err != nil {
-		return 0, false, err
+		return 0, err
 	}
 	if err := setUserSegment(store.G(ctx, tx), to, "id = ANY(?)", store.Int64s(ids)).Error; err != nil {
-		return 0, false, err
+		return 0, err
 	}
-	dropped, err = DropPersonal(ctx, tx, ids...)
-	return len(ids), dropped, err
+	return len(ids), DropPersonal(ctx, tx, ids...)
 }
 
 // movingUsers picks the users of ids (the first parameter) that are not
@@ -126,10 +120,7 @@ func setUserSegment(db *gorm.DB, segment any, cond string, args ...any) *gorm.DB
 }
 
 // DropPersonal deletes the personal segments of the users, who have left
-// them, with their grants, rates and model prices. It reports whether one
-// went: the cached price rules are then stale, and the caller drops them
-// after the transaction (Deps.PriceRulesChanged).
-func DropPersonal(ctx context.Context, tx *gorm.DB, userIDs ...int64) (bool, error) {
-	res := store.G(ctx, tx).Where("kind = 'personal' AND user_id = ANY(?)", store.Int64s(userIDs)).Delete(&model.Segment{})
-	return res.RowsAffected > 0, res.Error
+// them, with their grants and rates.
+func DropPersonal(ctx context.Context, tx *gorm.DB, userIDs ...int64) error {
+	return store.G(ctx, tx).Where("kind = 'personal' AND user_id = ANY(?)", store.Int64s(userIDs)).Delete(&model.Segment{}).Error
 }

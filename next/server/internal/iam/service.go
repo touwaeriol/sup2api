@@ -48,10 +48,6 @@ type Deps struct {
 	Cipher *secret.Cipher
 	// BcryptCost defaults to bcrypt.DefaultCost (tests lower it).
 	BcryptCost int
-	// PriceRulesChanged drops the cached price rules on every node
-	// (billing.Service.PriceRulesChanged): deleting a user deletes those of
-	// their personal segment. Optional.
-	PriceRulesChanged func(ctx context.Context)
 	// SessionRedis keeps the sessions and the flows (tokenstore.NewClient
 	// on Redis's server); Redis when nil.
 	SessionRedis redis.Cmdable
@@ -68,8 +64,6 @@ type Service struct {
 	bus    core.Bus
 	cipher *secret.Cipher
 	cost   int
-
-	priceRulesChanged func(ctx context.Context)
 
 	limiter *loginLimiter
 
@@ -105,11 +99,8 @@ func New(d Deps) *Service {
 	if d.BcryptCost == 0 {
 		d.BcryptCost = bcrypt.DefaultCost
 	}
-	if d.PriceRulesChanged == nil {
-		d.PriceRulesChanged = func(context.Context) {}
-	}
 	s := &Service{db: d.DB, rdb: d.Redis, cfg: d.Config, events: d.Events, authz: d.Authz, owners: d.Owners, bus: d.Bus, cipher: d.Cipher, cost: d.BcryptCost, status: map[int64]statusEntry{},
-		priceRulesChanged: d.PriceRulesChanged, limiter: newLoginLimiter(d.Redis)}
+		limiter: newLoginLimiter(d.Redis)}
 	s.dummyHash, _ = bcrypt.GenerateFromPassword([]byte("dummy-password-for-timing"), s.cost)
 	if d.Redis != nil {
 		var o tokenstore.Options

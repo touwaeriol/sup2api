@@ -192,21 +192,15 @@ func TestDeleteUserLeavesSegment(t *testing.T) {
 	own := c.personal(carol)
 	group := c.one(`INSERT INTO groups (name, visibility) VALUES ('private', 'restricted') RETURNING id`)
 	c.one(`INSERT INTO segment_groups (segment_id, group_id, granted) VALUES ($1, $2, true) RETURNING group_id`, own, group)
-	c.one(`INSERT INTO price_rules (group_id, segment_id, model, kind, multiplier) VALUES ($1, $2, 'm', 'multiplier', 0.5) RETURNING id`, group, own)
 
-	var announced int
-	c.svc.priceRulesChanged = func(context.Context) { announced++ }
 	require.NoError(t, c.svc.DeleteUser(ctx, c.root, carol))
-	require.Equal(t, 1, announced, "the price rules of the personal segment went: the cached ones are dropped")
 	require.NoError(t, c.svc.DeleteUser(ctx, c.root, bob))
-	require.Equal(t, 1, announced, "a user without a personal segment takes no price rules along")
 
 	for _, id := range []int64{carol, bob} {
 		require.Equal(t, def, c.one(`SELECT segment_id FROM users WHERE id = $1`, id), "a deleted user is back in the default segment")
 	}
 	require.Zero(t, c.one(`SELECT count(*) FROM segments WHERE id = $1`, own), "the personal segment goes with its user")
 	require.Zero(t, c.one(`SELECT count(*) FROM segment_groups WHERE segment_id = $1`, own))
-	require.Zero(t, c.one(`SELECT count(*) FROM price_rules WHERE segment_id = $1`, own))
 	require.EqualValues(t, 1, c.one(`SELECT count(*) FROM segments WHERE id = $1`, vip), "a named segment outlives its members")
 }
 

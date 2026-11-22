@@ -1062,8 +1062,9 @@ func (s *Service) applySync(c *gin.Context) {
 
 // keyPrices lists the enabled prices for the holder of an API key (another
 // sup2api syncing from this one): only models the key's group allows, at the
-// list price the key's owner gets in the group, plus the rate the owner pays
-// there. The key goes in Authorization: Bearer or x-api-key.
+// group's list price from the price snapshot requests are billed by, plus
+// the rate the key's owner pays there. The key goes in Authorization: Bearer
+// or x-api-key.
 func (s *Service) keyPrices(c *gin.Context) {
 	ctx := c.Request.Context()
 	if s.sync.Keys == nil {
@@ -1083,16 +1084,16 @@ func (s *Service) keyPrices(c *gin.Context) {
 		httpapi.Fail(c, err)
 		return
 	}
-	prices, err := loadCatalog(ctx, s.db.Gorm)
+	snap, err := s.snapshot(ctx)
 	if err != nil {
 		httpapi.Fail(c, err)
 		return
 	}
-	models := slices.DeleteFunc(prices.models(), func(model string) bool { return !pr.Group.AllowsModel(model) })
+	models := slices.DeleteFunc(snap.bases.models(), func(model string) bool { return !pr.Group.AllowsModel(model) })
 	out := KeyPrices{Prices: []syncPrice{}, RateMultiplier: pr.Group.RateMultiplier}
 	out.Group.ID, out.Group.Name = pr.Group.ID, pr.Group.Name
-	err = eachPrice(ctx, s.db.Gorm, prices, models, pr.Group.ID, pr.SegmentID, func(model string, base PriceDef, levels ruleLevels) {
-		p, err := exportPrice(model, base, levels)
+	snap.each(pr.Group.ID, models, func(model string, base PriceDef, rule *storedRule) {
+		p, err := exportPrice(model, base, rule)
 		if err != nil {
 			// Left out rather than listed at a price that is not the owner's.
 			slog.WarnContext(ctx, "billing: key prices: model left out", "model", model, "group_id", pr.Group.ID, "err", err)
@@ -1100,10 +1101,6 @@ func (s *Service) keyPrices(c *gin.Context) {
 		}
 		out.Prices = append(out.Prices, p)
 	})
-	if err != nil {
-		httpapi.Fail(c, err)
-		return
-	}
 	httpapi.OK(c, out)
 }
 
@@ -1111,8 +1108,8 @@ func (s *Service) keyPrices(c *gin.Context) {
 // which sees no rule beside the price: here, and nowhere else, the multiplier
 // of a rule goes into the price (scalePrice). The expression is always there.
 // An error means the price cannot carry the multiplier.
-func exportPrice(model string, base PriceDef, levels ruleLevels) (syncPrice, error) {
-	price, _ := levels.listPrice(base)
+func exportPrice(model string, base PriceDef, rule *storedRule) (syncPrice, error) {
+	price := listPrice(base, rule)
 	p := syncPrice{Model: model, Mode: price.Mode, Config: price.Config, Expression: price.Expression}
 	if price.Multiplier == nil || price.Multiplier.Equal(decimal.NewFromInt(1)) {
 		return p, nil

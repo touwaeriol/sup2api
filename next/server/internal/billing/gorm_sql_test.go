@@ -39,25 +39,22 @@ func TestSQLLedgerCount(t *testing.T) {
 // The rule changes of a PUT: the custom price's expression to the history,
 // the changed rules locked in the order of their keys, the removed ones
 // deleted (one removed and saved again: two changes of one rule), and the
-// saved ones upserted on the partial unique index of their level, the group
-// price before the segment's, the update moving updated_at by now(). A
-// multiplier has no config and no mode (NULL).
+// saved ones upserted on their group and model, the update moving
+// updated_at by now(). A multiplier has no config and no mode (NULL).
 func TestSQLWriteRules(t *testing.T) {
 	multiplier := &storedRule{Rule: Rule{Kind: core.PriceRuleMultiplier}}
 	multiplier.setScale(decimal.RequireFromString("1.25"))
-	group := core.PriceQuery{GroupID: 3, Model: "claude-sonnet-4-5"}
-	segment := core.PriceQuery{GroupID: 3, SegmentID: 5, Model: "claude-sonnet-4-5"}
-	gone := core.PriceQuery{GroupID: 3, SegmentID: 5, Model: "claude-haiku-4-5"}
+	scaled := core.PriceQuery{GroupID: 3, Model: "claude-sonnet-4-5"}
+	customized := core.PriceQuery{GroupID: 3, Model: "gpt-5"}
+	gone := core.PriceQuery{GroupID: 3, Model: "claude-haiku-4-5"}
 	again := core.PriceQuery{GroupID: 3, Model: "claude-opus-4-5"}
 	custom, err := checkCustom(context.Background(), Rule{Kind: core.PriceRuleCustom, Mode: "visual",
 		Config: json.RawMessage(`{"tiers": [{"name": "base", "unit": "request", "price": 0}]}`)}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	changes := []ruleChange{{segment, custom}, {group, multiplier}, {gone, nil}, {again, nil}, {again, multiplier}}
-	slices.SortStableFunc(changes, func(a, b ruleChange) int {
-		return cmp.Or(cmp.Compare(a.on.SegmentID, b.on.SegmentID), cmp.Compare(a.on.Model, b.on.Model))
-	})
+	changes := []ruleChange{{customized, custom}, {scaled, multiplier}, {gone, nil}, {again, nil}, {again, multiplier}}
+	slices.SortStableFunc(changes, func(a, b ruleChange) int { return cmp.Compare(a.on.Model, b.on.Model) })
 	w, err := collapseChanges(changes, 2)
 	if err != nil {
 		t.Fatal(err)

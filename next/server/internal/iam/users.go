@@ -591,7 +591,6 @@ func (s *Service) DeleteUser(ctx context.Context, actorID, id int64) error {
 	}
 
 	var v int64
-	var dropped bool // a personal segment went, with its price rules
 	err := s.db.Tx(ctx, func(tx *gorm.DB) error {
 		var err error
 		if v, err = s.authz.Bump(ctx, tx, id); err != nil {
@@ -617,11 +616,11 @@ func (s *Service) DeleteUser(ctx context.Context, actorID, id int64) error {
 		}
 		// A soft delete does not fire the cascade of segments.user_id: the
 		// user goes back to the default segment and a personal one is removed
-		// here, with its grants, rates and prices.
+		// here, with its grants and rates.
 		if err := updateUser(g, id, userDeletion()).Error; err != nil {
 			return err
 		}
-		if dropped, err = segment.DropPersonal(ctx, tx, id); err != nil {
+		if err := segment.DropPersonal(ctx, tx, id); err != nil {
 			return err
 		}
 		if err := s.endAllSessions(ctx, tx, id); err != nil {
@@ -645,9 +644,6 @@ func (s *Service) DeleteUser(ctx context.Context, actorID, id int64) error {
 	}
 	s.sessionsEnded(ctx, id)
 	s.authz.Committed(ctx, v)
-	if dropped {
-		s.priceRulesChanged(ctx)
-	}
 	return nil
 }
 
