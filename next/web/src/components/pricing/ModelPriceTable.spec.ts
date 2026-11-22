@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
-import { SSelect } from '@sub2api/ui'
 import { i18n } from '@/i18n'
 import type { CatalogPrice, GroupModelPrices, ModelPriceRow, PriceDef } from '@/api/pricing'
+import AddSelect from './AddSelect.vue'
 import ModelPriceTable from './ModelPriceTable.vue'
 import type { ModelOffer } from './offeredModels'
 import { singleTier } from '@/views/prices/priceExpr'
@@ -48,7 +48,7 @@ async function render(props: Props) {
   /** The one open rule editor, in the row under its model's. */
   const editor = () => w.get('[data-testid="price-rule-editor"]')
   const add = async (model: string) => {
-    w.getComponent<typeof SSelect>('[data-testid="model-price-add"]').vm.$emit('update:modelValue', model)
+    w.getComponent(AddSelect).vm.$emit('add', model)
     await flushPromises()
   }
   return { w, row, cell, editor, add }
@@ -122,7 +122,7 @@ describe('model price table', () => {
   it('adds any model with an original price, which can go again until it is saved', async () => {
     const { w, row, cell, add } = await render({ groupId: 3, editable: true })
     expect(mocks.get).toHaveBeenCalledWith('/pricing/catalog')
-    const options = () => w.getComponent<typeof SSelect>('[data-testid="model-price-add"]').props('options').map((o: { value: unknown; hint?: string }) => [o.value, o.hint])
+    const options = () => w.getComponent(AddSelect).props('options').map((o: { value: unknown; hint?: string }) => [o.value, o.hint])
     expect(options()).toEqual([['claude-haiku-4-5', '$1 / $5']])
     await add('claude-haiku-4-5')
     expect(cell('claude-haiku-4-5', 'base')).toBe('$1 / $5')

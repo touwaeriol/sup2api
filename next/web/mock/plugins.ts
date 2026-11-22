@@ -3,10 +3,10 @@
 // /ui/plugins and /p/<key>/... live in pluginui.ts; publishers are not here.
 import { fail, noContent, now, on, paginate, type MockRequest } from './router'
 import { caller, hasPerm, stepUp, type Identity } from './core'
-import { addRoleKeys, bumpAuthz, managesRole } from './resources'
+import { addRoleKeys, bumpAuthz, managesRole } from './roles'
 import { pluginPlatforms } from './platforms'
 import { pluginAccountCount, uninstallPluginAccounts } from './accounts'
-import { invalid } from './resources'
+import { invalid } from './common'
 import { mailerSettings } from './mailer'
 
 type Any = Record<string, any>

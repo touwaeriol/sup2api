@@ -2,10 +2,11 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '@sub2api/host'
-import { SAlert, SBadge, SHint, SSelect, type SelectOption } from '@sub2api/ui'
+import { SAlert, SBadge, SHint, type SelectOption } from '@sub2api/ui'
 import type { Group } from '@/api/types'
 import type { Segment, SegmentGroupSetting, SegmentRef } from '@/api/pricing'
 import AccessRateTable from '@/components/pricing/AccessRateTable.vue'
+import AddSelect from '@/components/pricing/AddSelect.vue'
 import PersonalSegmentPicker from '@/components/pricing/PersonalSegmentPicker.vue'
 import SegmentBadge from '@/components/pricing/SegmentBadge.vue'
 import { blankSetting, type DraftedSetting } from '@/components/pricing/accessRateDrafts'
@@ -95,21 +96,13 @@ defineExpose({ check: drafts.check, save, dirty })
         </span>
       </span>
       <span v-if="editable" class="flex flex-wrap items-center gap-2">
-        <!-- The field never holds a value: clearable drops its "no value" row. -->
-        <SSelect
-          :model-value="null"
+        <AddSelect
           :options="addable"
-          searchable
-          clearable
-          icon="plus"
-          size="sm"
-          class="w-44"
-          :placeholder="t('pricingAccess.inGroup.addSegment')"
-          :aria-label="t('pricingAccess.inGroup.addSegment')"
+          :label="t('pricingAccess.inGroup.addSegment')"
           :no-results="t('pricingAccess.inGroup.addNone')"
           :disabled="disabled || loading"
           data-testid="group-segments-add"
-          @update:model-value="typeof $event === 'number' && add($event)"
+          @add="typeof $event === 'number' && add($event)"
         />
         <PersonalSegmentPicker size="sm" :label="t('pricingAccess.inGroup.addUser')" :disabled="disabled" @select="include" />
       </span>
