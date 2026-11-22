@@ -206,6 +206,25 @@ func TestGroupModels(t *testing.T) {
 	require.Contains(t, rows, "narrowed")
 }
 
+// myGroupRow is a row of GET /me/groups as TestMyGroupsRates reads it.
+type myGroupRow struct {
+	rate, source, groupRate string
+	exclusive               bool
+}
+
+// myGroups reads GET /me/groups of the user, by group name.
+func (e *env) myGroups(uid int64) map[string]myGroupRow {
+	e.t.Helper()
+	code, out := e.do(uid, "GET", "/me/groups", nil)
+	require.Equal(e.t, 200, code, "%v", out)
+	got := map[string]myGroupRow{}
+	for _, it := range out["data"].([]any) {
+		g := it.(map[string]any)
+		got[g["name"].(string)] = myGroupRow{g["effective_rate"].(string), g["rate_source"].(string), g["rate_multiplier"].(string), g["exclusive"].(bool)}
+	}
+	return got
+}
+
 func TestMyGroupsRates(t *testing.T) {
 	e := setup(t)
 	vip := e.one(`INSERT INTO segments (name) VALUES ('vip') RETURNING id`)
@@ -219,30 +238,9 @@ func TestMyGroupsRates(t *testing.T) {
 	// A model rate is not the group's rate.
 	e.exec(`INSERT INTO group_model_rates (group_id, model, rate) VALUES ($1, 'm', 9)`, open)
 
-	type row struct {
-		rate, source, groupRate string
-		exclusive               bool
-	}
-	for _, tc := range []struct {
-		name string
-		uid  int64
-		want map[string]row
-	}{
-		{"a segment with its own rates", e.user, map[string]row{
-			"open":    {"1.2", core.RateSourceSegment, "1.5", false},
-			"granted": {"0.5", core.RateSourceSegment, "2", true},
-		}},
-		{"the default segment", e.admin, map[string]row{
-			"open": {"1.5", core.RateSourceGroup, "1.5", false},
-		}},
-	} {
-		code, out := e.do(tc.uid, "GET", "/me/groups", nil)
-		require.Equal(t, 200, code, tc.name)
-		got := map[string]row{}
-		for _, it := range out["data"].([]any) {
-			g := it.(map[string]any)
-			got[g["name"].(string)] = row{g["effective_rate"].(string), g["rate_source"].(string), g["rate_multiplier"].(string), g["exclusive"].(bool)}
-		}
-		require.Equal(t, tc.want, got, tc.name)
-	}
+	require.Equal(t, map[string]myGroupRow{
+		"open":    {"1.2", core.RateSourceSegment, "1.5", false},
+		"granted": {"0.5", core.RateSourceSegment, "2", true},
+	}, e.myGroups(e.user), "a segment with its own rates")
+	require.Equal(t, map[string]myGroupRow{"open": {"1.5", core.RateSourceGroup, "1.5", false}}, e.myGroups(e.admin), "the default segment")
 }

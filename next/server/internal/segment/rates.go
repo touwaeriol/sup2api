@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"slices"
-	"strings"
 
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
@@ -27,26 +26,19 @@ const (
 	keyGroup   = "group_id"
 )
 
-// rateErrors are the field errors of the rate at path: it is required,
-// and a rate or null.
-func rateErrors(ctx context.Context, in core.RateInput, path string) []core.FieldError {
-	if !in.Set {
-		return []core.FieldError{core.NewFieldError(ctx, path, "required", "a rate or null is required", "必须填写倍率或 null")}
-	}
-	return in.Errors(ctx, path)
-}
-
 func unknownItem(ctx context.Context, path string) core.FieldError {
 	return core.NewFieldError(ctx, path, "not_found", "not found", "不存在")
 }
 
 // pairInput is one segment in one group: granted left out stays as it is,
-// a null rate follows the group.
+// a null rate follows the group. Remove drops the pair instead, with the
+// segment's model rates in the group; it takes no rate.
 type pairInput struct {
 	SegmentID int64          `json:"segment_id"`
 	GroupID   int64          `json:"group_id"`
 	Granted   *bool          `json:"granted"`
 	Rate      core.RateInput `json:"rate"`
+	Remove    bool           `json:"remove"`
 }
 
 // end is the id of the end of the pair key names.
@@ -66,15 +58,23 @@ func ends(items []pairInput, key string) []int64 {
 	return x.Unique(ids)
 }
 
+// removes reports whether an item removes its pair: the model rates of the
+// segment in the group go with it.
+func removes(items []pairInput) bool {
+	return slices.ContainsFunc(items, func(it pairInput) bool { return it.Remove })
+}
+
 // pairErrors are the field errors of the pairs of the list: the end key
-// names is not among known, the rate is missing or wrong.
+// names is not among known, the rate of a pair kept is missing or wrong.
 func pairErrors(ctx context.Context, list, key string, items []pairInput, known map[int64]bool) []core.FieldError {
 	var fe []core.FieldError
 	for i, it := range items {
 		if !known[it.end(key)] {
 			fe = append(fe, unknownItem(ctx, core.ItemField(list, i, key)))
 		}
-		fe = append(fe, rateErrors(ctx, it.Rate, core.ItemField(list, i, "rate"))...)
+		if !it.Remove {
+			fe = append(fe, it.Rate.Errors(ctx, core.ItemField(list, i, "rate"))...)
+		}
 	}
 	return fe
 }
@@ -89,22 +89,54 @@ type modelRateInput struct {
 // modelRatesField is the list of model rates of POST/PATCH /segments.
 const modelRatesField = "model_rates"
 
-// modelRateErrors trims the models of the items and returns the field
-// errors of the items: a group not among known, no model, no rate.
-func modelRateErrors(ctx context.Context, items []modelRateInput, known map[int64]bool) []core.FieldError {
+// rateRefs are what the rates of a segment write refer to: the groups that
+// exist and the models with an enabled global price.
+type rateRefs struct {
+	groups map[int64]bool
+	priced map[string]bool
+}
+
+// modelRateErrors are the field errors of the model rates, their models
+// trimmed: a group that does not exist, no model, no rate, or a rate set on
+// a model with no global price (removing one always can).
+func modelRateErrors(ctx context.Context, items []modelRateInput, refs rateRefs) []core.FieldError {
 	var fe []core.FieldError
-	for i := range items {
-		it := &items[i]
-		it.Model = strings.TrimSpace(it.Model)
-		if !known[it.GroupID] {
+	for i, it := range items {
+		if !refs.groups[it.GroupID] {
 			fe = append(fe, unknownItem(ctx, core.ItemField(modelRatesField, i, keyGroup)))
 		}
-		if it.Model == "" {
-			fe = append(fe, core.NewFieldError(ctx, core.ItemField(modelRatesField, i, "model"), "required", "model is required", "模型必填"))
+		rateErrs := it.Rate.Errors(ctx, core.ItemField(modelRatesField, i, "rate"))
+		model := core.ItemField(modelRatesField, i, "model")
+		switch {
+		case it.Model == "":
+			fe = append(fe, core.NewFieldError(ctx, model, "required", "model is required", "模型必填"))
+		case len(rateErrs) == 0 && it.Rate.Value != nil && !refs.priced[it.Model]:
+			fe = append(fe, core.NewFieldError(ctx, model, "invalid", "the model has no global price", "该模型没有全局价格"))
 		}
-		fe = append(fe, rateErrors(ctx, it.Rate, core.ItemField(modelRatesField, i, "rate"))...)
+		fe = append(fe, rateErrs...)
 	}
 	return fe
+}
+
+// pricedModels reports which of models have an enabled global price.
+func pricedModels(ctx context.Context, q *gorm.DB, models []string) (map[string]bool, error) {
+	var found []string
+	if len(models) > 0 {
+		if err := store.G(ctx, q).Model(&model.ModelPrice{}).Where("enabled AND model = ANY(?)", store.Strings(models)).
+			Pluck("model", &found).Error; err != nil {
+			return nil, err
+		}
+	}
+	return setOf(found), nil
+}
+
+// setOf is the set of the values.
+func setOf[T comparable](values []T) map[T]bool {
+	set := make(map[T]bool, len(values))
+	for _, v := range values {
+		set[v] = true
+	}
+	return set
 }
 
 // knownRows reports which of ids are rows of the table. With lock, in a
@@ -124,11 +156,7 @@ func knownRows(ctx context.Context, q *gorm.DB, table string, ids []int64, lock 
 	if err := db.Pluck("id", &found).Error; err != nil {
 		return nil, err
 	}
-	known := make(map[int64]bool, len(found))
-	for _, id := range found {
-		known[id] = true
-	}
-	return known, nil
+	return setOf(found), nil
 }
 
 // putPairs writes the pairs, in one order for every writer so that two
@@ -144,12 +172,26 @@ func putPairs(ctx context.Context, tx *gorm.DB, items []pairInput) error {
 	})
 	g := store.G(ctx, tx)
 	for _, it := range ordered {
-		if err := savePair(g, it).Error; err != nil {
+		if err := putPair(g, it); err != nil {
 			return err
 		}
 	}
 	return g.Where("NOT granted AND rate_override IS NULL AND segment_id = ANY(?) AND group_id = ANY(?)",
 		store.Int64s(ends(items, keySegment)), store.Int64s(ends(items, keyGroup))).Delete(&model.SegmentGroup{}).Error
+}
+
+// putPair writes the item: it saves the pair, or removes it and the
+// segment's model rates in the group, in that order (putModelRates writes
+// them after the pairs too).
+func putPair(db *gorm.DB, it pairInput) error {
+	if !it.Remove {
+		return savePair(db, it).Error
+	}
+	const pair = "segment_id = ? AND group_id = ?"
+	if err := db.Where(pair, it.SegmentID, it.GroupID).Delete(&model.SegmentGroup{}).Error; err != nil {
+		return err
+	}
+	return db.Where(pair, it.SegmentID, it.GroupID).Delete(&model.SegmentModelRate{}).Error
 }
 
 // savePair writes the item: the pair is created, or takes the item's rate

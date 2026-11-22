@@ -12,12 +12,10 @@ import (
 
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/audit"
-	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/httpapi"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/lookup"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/api"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/routes"
-	"github.com/Sub2API-Devs/sup2api/next/server/internal/segment"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/updater"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/webui"
 	"github.com/Sub2API-Devs/sup2api/next/server/web"
@@ -32,7 +30,7 @@ func (b *boot) registerRoutes(r *httpapi.Router) {
 	b.idm.RegisterRoutes(r)
 	b.az.RegisterRoutes(r)
 	b.grp.RegisterRoutes(r)
-	b.buildSegments().RegisterRoutes(r)
+	b.seg.RegisterRoutes(r)
 	b.env.RegisterRoutes(r)
 	b.ntf.RegisterRoutes(r)
 	b.keys.RegisterRoutes(r)
@@ -53,15 +51,6 @@ func (b *boot) registerRoutes(r *httpapi.Router) {
 	pr.RegisterAssets(b.engine)
 	b.gw.RegisterRoutes(r)
 	b.egress.RegisterRoutes(r)
-}
-
-// buildSegments builds the segment service. It and billing write their
-// parts of POST/PATCH /groups (the segments' rates, the model prices and
-// rates) in the group's transaction (CONTRACTS §97).
-func (b *boot) buildSegments() *segment.Service {
-	seg := segment.New(segment.Deps{DB: b.db, Authz: b.az, Users: b.az, Platforms: b.grp.Platforms, RatesChanged: b.bill.RatesChanged})
-	b.grp.Parts = []core.GroupWritePart{seg, b.bill}
-	return seg
 }
 
 // startPluginWrites starts the audit log of plugin writes and registers its
@@ -132,13 +121,7 @@ func (b *boot) startHTTP() error {
 		return fmt.Errorf("http listen: %w", err)
 	}
 	defer listener.Close()
-	errc := make(chan error, 1)
-	go func() {
-		b.log.Info("listening", "addr", b.cfg.HTTPAddr, "boot_id", b.cl.Registry.BootID(), "version", b.version)
-		if err := srv.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errc <- err
-		}
-	}()
+	errc := b.serveHTTP(srv, listener)
 	b.publishManaged()
 	select {
 	case <-b.ctx.Done():
@@ -146,6 +129,19 @@ func (b *boot) startHTTP() error {
 		return fmt.Errorf("http: %w", err)
 	}
 	return b.stopHTTP(srv, cancelRequests)
+}
+
+// serveHTTP serves srv on listener in the background. The channel gets the
+// error that stopped it, unless that was the shutdown.
+func (b *boot) serveHTTP(srv *http.Server, listener net.Listener) <-chan error {
+	errc := make(chan error, 1)
+	go func() {
+		b.log.Info("listening", "addr", b.cfg.HTTPAddr, "boot_id", b.cl.Registry.BootID(), "version", b.version)
+		if err := srv.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errc <- err
+		}
+	}()
+	return errc
 }
 
 // mountHTTP builds the console assets, the engine and every route.

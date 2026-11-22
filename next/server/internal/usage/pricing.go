@@ -75,7 +75,9 @@ type frozenRule struct {
 	// on any other row. Such a row settles as it was priced: charged at its
 	// rate times scale, its list cost its base cost times scale. Nothing
 	// sets a scale any more: pricingTrace only carries the one of a frozen
-	// item into its trace, and this is where any is applied.
+	// item into its trace, and this is where any is applied. Compatibility,
+	// removed with core.PriceRule.Scale once no unsettled row has one
+	// (CONTRACTS §97.4).
 	scale *decimal.Decimal
 }
 

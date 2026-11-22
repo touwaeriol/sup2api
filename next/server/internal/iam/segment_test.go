@@ -174,7 +174,7 @@ func TestCreateUserSegment(t *testing.T) {
 			require.EqualValues(t, tc.want, out["data"].(map[string]any)["segment"].(map[string]any)["id"], tc.name)
 		case 400:
 			require.Equal(t, "segment_id", details["fields"].([]any)[0].(map[string]any)["field"], tc.name)
-			require.Equal(t, "用户组不存在", details["fields"].([]any)[0].(map[string]any)["message"], tc.name)
+			require.Equal(t, "用户分组不存在", details["fields"].([]any)[0].(map[string]any)["message"], tc.name)
 		case 403:
 			require.Equal(t, "segment:manage", details["permission"], tc.name)
 		}
@@ -253,7 +253,7 @@ func TestSegmentMembers(t *testing.T) {
 	code, out = c.do("GET", "/segments/999999/members", c.token, nil)
 	require.Equal(t, 404, code)
 	require.Equal(t, "not_found", errCode(out))
-	require.Equal(t, "用户组不存在", out["error"].(map[string]any)["message"], "the segment package's wording, localized")
+	require.Equal(t, "用户分组不存在", out["error"].(map[string]any)["message"], "the segment package's wording, localized")
 }
 
 // The segment is an administrator's label on a user: the token response a

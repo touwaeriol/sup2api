@@ -150,7 +150,7 @@ func t(ctx context.Context, en, zh string) string { return core.Text(ctx, en, zh
 
 // groupNotFound is the not_found of a group that does not exist.
 func groupNotFound(ctx context.Context) error {
-	return core.ErrNotFound.WithMessage(t(ctx, "group not found", "分组不存在"))
+	return core.ErrNotFound.WithMessage(t(ctx, "account group not found", "账号分组不存在"))
 }
 
 func (s *Service) list(c *gin.Context) {

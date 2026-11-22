@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { allowsModel, globMatch, offeredModels, type ModelOffer } from './offeredModels'
+import { allowsModel, globMatch, offeredModels, type ModelOffer } from '../../../mock/offeredModels'
 
 const offer = (over: Partial<ModelOffer> = {}): ModelOffer => ({ models: [], unrestricted_accounts: 0, model_allowlist: [], model_filter_mode: 'whitelist', ...over })
 const priced = ['claude-haiku-4-5', 'gpt-4o', 'gpt-4o-mini']

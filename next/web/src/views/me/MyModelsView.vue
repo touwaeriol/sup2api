@@ -1,13 +1,15 @@
 <script setup lang="ts">
 // Mine > Models & prices: every model at its base price with the caller's
 // groups that provide it, or what one of those groups provides at what the
-// caller pays there, the list price times their rate (CONTRACTS §79.5).
+// caller pays there: each model at its list price times the rate the caller
+// pays for it there, which a column shows with where it comes from
+// (CONTRACTS §79.5, §97.6).
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { api, isApiError } from '@sub2api/host'
 import { SAlert, SBadge, SCard, SChip, SInput, SPageHeader, SSelect, STable, type TableColumn } from '@sub2api/ui'
-import type { MyPrices } from '@/api/pricing'
+import type { MyPriceRow, MyPrices } from '@/api/pricing'
 import type { Group } from '@/api/types'
 import { fetchMyGroups } from '@/composables/lookups'
 import { useLatestRequest } from '@/composables/useLatestRequest'
@@ -67,23 +69,20 @@ onMounted(async () => {
 
 /** Whether the rows are every model at its base price, not those of one group. */
 const atBase = computed(() => prices.value?.group === null)
-const rate = computed(() => num(prices.value?.rate_multiplier, 1))
-const money = (v: number | null | undefined) => priceText(v, rate.value)
-/** A price that cannot be broken down: billed by its rules, times the caller's rate in the group, which the cells beside it are multiplied by. */
-const opaqueText = computed(() => (round(rate.value) === 1 ? t('me.models.custom') : t('me.models.customTimes', { rate: rateText(round(rate.value)) })))
+/** A price that cannot be broken down: billed by its rules, times the caller's rate for the model, which the cells beside it are multiplied by. */
+const opaqueText = (rate: number) => (round(rate) === 1 ? t('me.models.custom') : t('me.models.customTimes', { rate: rateText(round(rate)) }))
 
-/** What the prices of the rows are: the base ones, or the caller's in the group, and where their rate comes from unless it is the group's own. */
-function priceNotes(p: MyPrices): string[] {
-  if (!p.group) return [t('me.models.basePrice')]
-  const rated = t('me.models.rated', { rate: rateText(p.rate_multiplier) })
-  return p.rate_source && p.rate_source !== 'group' ? [rated, t(`me.models.rateSource.${p.rate_source}`)] : [rated]
+const unit = computed(() => [t('me.models.unit'), ...(prices.value ? [t(prices.value.group ? 'me.models.rated' : 'me.models.basePrice')] : [])].join(' · '))
+
+/** A row as the table shows it: its cells, and the rate they are multiplied by (1 at the base price). */
+function viewRow(r: MyPriceRow) {
+  const rate = num(r.rate, 1)
+  return { ...r, price: priceCells(r), money: (v: number | null | undefined) => priceText(v, rate), opaque: opaqueText(rate) }
 }
-const unit = computed(() => [t('me.models.unit'), ...(prices.value ? priceNotes(prices.value) : [])].join(' · '))
-
 const shown = computed(() => {
   const q = search.value.trim().toLowerCase()
   const rows = prices.value?.prices ?? []
-  return (q ? rows.filter((r) => r.model.toLowerCase().includes(q)) : rows).map((r) => ({ ...r, price: priceCells(r) }))
+  return (q ? rows.filter((r) => r.model.toLowerCase().includes(q)) : rows).map(viewRow)
 })
 
 const columns = computed<TableColumn[]>(() => [
@@ -92,7 +91,7 @@ const columns = computed<TableColumn[]>(() => [
   { key: 'output', label: t('me.models.output'), align: 'right', width: '120px' },
   { key: 'cacheRead', label: t('me.models.cacheRead'), align: 'right', width: '120px' },
   { key: 'cacheWrite', label: t('me.models.cacheWrite'), align: 'right', width: '120px' },
-  ...(atBase.value ? [{ key: 'groups', label: t('me.models.groups') }] : [])
+  atBase.value ? { key: 'groups', label: t('me.models.groups') } : { key: 'rate', label: t('me.models.rate'), align: 'right', nowrap: true }
 ])
 </script>
 
@@ -116,13 +115,17 @@ const columns = computed<TableColumn[]>(() => [
           </div>
         </template>
         <template #cell-input="{ row }">
-          <span v-if="row.price.perRequest != null" class="whitespace-nowrap font-mono text-xs" data-testid="models-per-request">{{ t('me.models.perRequest', { price: money(row.price.perRequest) }) }}</span>
-          <span v-else-if="row.price.opaque" class="text-xs text-fg-muted" data-testid="models-opaque">{{ opaqueText }}</span>
-          <span v-else class="font-mono text-xs">{{ money(row.price.tokens?.p) }}</span>
+          <span v-if="row.price.perRequest != null" class="whitespace-nowrap font-mono text-xs" data-testid="models-per-request">{{ t('me.models.perRequest', { price: row.money(row.price.perRequest) }) }}</span>
+          <span v-else-if="row.price.opaque" class="text-xs text-fg-muted" data-testid="models-opaque">{{ row.opaque }}</span>
+          <span v-else class="font-mono text-xs">{{ row.money(row.price.tokens?.p) }}</span>
         </template>
-        <template #cell-output="{ row }"><span class="font-mono text-xs">{{ money(row.price.tokens?.c) }}</span></template>
-        <template #cell-cacheRead="{ row }"><span class="font-mono text-xs">{{ money(row.price.tokens?.cr) }}</span></template>
-        <template #cell-cacheWrite="{ row }"><span class="font-mono text-xs">{{ money(row.price.tokens?.cc) }}</span></template>
+        <template #cell-output="{ row }"><span class="font-mono text-xs">{{ row.money(row.price.tokens?.c) }}</span></template>
+        <template #cell-cacheRead="{ row }"><span class="font-mono text-xs">{{ row.money(row.price.tokens?.cr) }}</span></template>
+        <template #cell-cacheWrite="{ row }"><span class="font-mono text-xs">{{ row.money(row.price.tokens?.cc) }}</span></template>
+        <template #cell-rate="{ row }">
+          <span class="font-mono text-xs font-semibold" data-testid="models-row-rate">{{ rateText(row.rate) }}</span>
+          <span v-if="row.rate_source" class="block text-xs text-fg-muted" data-testid="models-row-rate-source">{{ t(`me.models.rateSource.${row.rate_source}`) }}</span>
+        </template>
         <template #cell-groups="{ row }">
           <div v-if="row.groups?.length" class="flex flex-wrap gap-1">
             <SChip v-for="g in row.groups" :key="g.id" clickable size="xs" :title="t('me.models.viewGroup', { name: g.name })" data-testid="models-row-group" @click="groupID = String(g.id)">{{ g.name }}</SChip>

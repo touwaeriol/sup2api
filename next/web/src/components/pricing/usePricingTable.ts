@@ -2,9 +2,9 @@ import { computed, ref, shallowRef } from 'vue'
 import { api } from '@sub2api/host'
 import type { CatalogPrice, GroupModelPrices, ModelPriceRow } from '@/api/pricing'
 import { i18n } from '@/i18n'
-import { itemErrors, withDraft } from './drafts'
+import { listRequest, withDraft } from './drafts'
 import { effectiveRate } from './pricingFormat'
-import { catalogPrices, catalogRow, draftedRow, mergeRowDraft, pricingPatches, type DraftedRow, type RowDraft } from './pricingRows'
+import { catalogPrices, catalogRow, draftedRow, mergeRowDraft, groupModelRatePatches, modelPricePatches, type DraftedRow, type RowDraft } from './pricingRows'
 import { useDrafts } from './useDrafts'
 
 export interface PricingTableOptions {
@@ -95,17 +95,12 @@ function modelChanges(state: TableState, added: { value: string[] }) {
   }
 }
 
-/** What the group's request sends of the drafts, and the field errors of its answer by model. */
+/** What the group's request sends of the drafts (`model_prices`, `model_rates`), and the field errors of its answer by model. */
 function requestOf(state: TableState, rowErrors: { value: ReadonlyMap<string, string> }) {
-  let sent: ReturnType<typeof pricingPatches> = {}
+  const byModel = (item: { model: string }) => item.model
+  const lists = [listRequest('model_prices', () => modelPricePatches(state.drafts.value), byModel), listRequest('model_rates', () => groupModelRatePatches(state.drafts.value), byModel)]
   return {
-    body() {
-      sent = pricingPatches(state.drafts.value)
-      return sent
-    },
-    applyErrors(errors: Record<string, string>) {
-      const byModel = (item: { model: string }) => item.model
-      rowErrors.value = new Map([...itemErrors(errors, 'model_prices', sent.model_prices ?? [], byModel), ...itemErrors(errors, 'model_rates', sent.model_rates ?? [], byModel)])
-    }
+    body: () => Object.assign({}, ...lists.map((l) => l.body())),
+    applyErrors: (errors: Record<string, string>) => (rowErrors.value = new Map(lists.flatMap((l) => [...l.errors(errors)])))
   }
 }

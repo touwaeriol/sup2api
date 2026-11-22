@@ -61,21 +61,44 @@ func (in *segmentInput) groupIDs() []int64 {
 	return x.Unique(ids)
 }
 
-// rateErrors are the field errors of the rates, known being the groups
-// that exist.
-func (in *segmentInput) rateErrors(ctx context.Context, known map[int64]bool) []core.FieldError {
-	return append(pairErrors(ctx, groupRatesField, keyGroup, in.GroupRates, known), modelRateErrors(ctx, in.ModelRates, known)...)
+// trimModels trims the models of the model rates, as they are checked and
+// stored.
+func (in *segmentInput) trimModels() {
+	for i := range in.ModelRates {
+		in.ModelRates[i].Model = strings.TrimSpace(in.ModelRates[i].Model)
+	}
+}
+
+// refs reads what the rates refer to. With lock, in a transaction, the
+// groups are locked against deletion until it ends.
+func (in *segmentInput) refs(ctx context.Context, q *gorm.DB, lock bool) (rateRefs, error) {
+	groups, err := knownRows(ctx, q, "groups", in.groupIDs(), lock)
+	if err != nil {
+		return rateRefs{}, err
+	}
+	models := make([]string, len(in.ModelRates))
+	for i, it := range in.ModelRates {
+		models[i] = it.Model
+	}
+	priced, err := pricedModels(ctx, q, x.Unique(models))
+	return rateRefs{groups: groups, priced: priced}, err
+}
+
+// rateErrors are the field errors of the rates against what they refer to.
+func (in *segmentInput) rateErrors(ctx context.Context, refs rateRefs) []core.FieldError {
+	return append(pairErrors(ctx, groupRatesField, keyGroup, in.GroupRates, refs.groups), modelRateErrors(ctx, in.ModelRates, refs)...)
 }
 
 // check fails with the field errors of the whole input, for a segment of
 // the kind.
 func (s *Service) check(ctx context.Context, in *segmentInput, kind string, create bool) error {
 	fe := in.textErrors(ctx, kind, create)
-	known, err := knownRows(ctx, s.db.Gorm, "groups", in.groupIDs(), false)
+	in.trimModels()
+	refs, err := in.refs(ctx, s.db.Gorm, false)
 	if err != nil {
 		return err
 	}
-	if fe = append(fe, in.rateErrors(ctx, known)...); len(fe) > 0 {
+	if fe = append(fe, in.rateErrors(ctx, refs)...); len(fe) > 0 {
 		return core.InvalidFields(fe...)
 	}
 	return nil
@@ -91,11 +114,11 @@ func (s *Service) writeRates(ctx context.Context, tx *gorm.DB, id int64, in *seg
 	if err := guardOwnSegments(ctx, tx, s.users, []int64{id}); err != nil {
 		return err
 	}
-	known, err := knownRows(ctx, tx, "groups", in.groupIDs(), true)
+	refs, err := in.refs(ctx, tx, true)
 	if err != nil {
 		return err
 	}
-	if fe := in.rateErrors(ctx, known); len(fe) > 0 {
+	if fe := in.rateErrors(ctx, refs); len(fe) > 0 {
 		return core.InvalidFields(fe...)
 	}
 	for i := range in.GroupRates {
@@ -113,6 +136,13 @@ func (s *Service) ratesWritten(ctx context.Context, modelRates bool) {
 	if modelRates && s.ratesChanged != nil {
 		s.ratesChanged(ctx)
 	}
+}
+
+// changesModelRates reports whether the write changes model rates: it
+// sets some, or removes a pair and with it the segment's model rates in
+// that group.
+func (in *segmentInput) changesModelRates() bool {
+	return len(in.ModelRates) > 0 || removes(in.GroupRates)
 }
 
 // columns are the segments columns of the provided fields, as written; the
@@ -136,7 +166,7 @@ func nameTaken(ctx context.Context, err error) error {
 func (s *Service) create(c *gin.Context) {
 	ctx := c.Request.Context()
 	var in segmentInput
-	if !httpapi.BindJSON(c, &in) {
+	if !httpapi.BindStrictJSON(c, &in) {
 		return
 	}
 	if err := s.check(ctx, &in, core.SegmentNamed, true); err != nil {
@@ -154,7 +184,7 @@ func (s *Service) create(c *gin.Context) {
 		httpapi.Fail(c, err)
 		return
 	}
-	s.ratesWritten(ctx, len(in.ModelRates) > 0)
+	s.ratesWritten(ctx, in.changesModelRates())
 	s.render(c, row.ID, httpapi.Created)
 }
 
@@ -165,7 +195,7 @@ func (s *Service) update(c *gin.Context) {
 		return
 	}
 	var in segmentInput
-	if !httpapi.BindJSON(c, &in) {
+	if !httpapi.BindStrictJSON(c, &in) {
 		return
 	}
 	kind, _, err := segmentKind(ctx, s.db.Gorm, id, "")
@@ -184,7 +214,7 @@ func (s *Service) update(c *gin.Context) {
 		httpapi.Fail(c, err)
 		return
 	}
-	s.ratesWritten(ctx, len(in.ModelRates) > 0)
+	s.ratesWritten(ctx, in.changesModelRates())
 	s.render(c, id, httpapi.OK)
 }
 

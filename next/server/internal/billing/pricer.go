@@ -46,9 +46,10 @@ func traitsOf(mode string, program *expr.Program) priceTraits {
 // apply sets the traits on r.
 func (t priceTraits) apply(r *core.PriceRule) { r.VideoOnly, r.PerRequest = t.videoOnly, t.perRequest }
 
+// resolved is the list price of a query in snap: nil = no global price.
 type resolved struct {
-	at   time.Time
-	rule *core.PriceRule // nil = no match
+	snap *priceSnapshot
+	rule *core.PriceRule
 }
 
 // snapshot returns the prices requests are billed by: the cached snapshot
@@ -144,30 +145,36 @@ func (snap *priceSnapshot) resolve(q core.PriceQuery) *core.PriceRule {
 // Resolve implements core.Pricer. Prices are global per model: the platform
 // and account type serving the request do not matter (ARCHITECTURE 7.3). A
 // price rule of the caller's group may replace the global price; without a
-// global price no rule applies.
-func (s *Service) Resolve(ctx context.Context, q core.PriceQuery) (*core.PriceRule, error) {
+// global price no rule applies. The rates set on the model come from the
+// same snapshot.
+func (s *Service) Resolve(ctx context.Context, q core.PriceQuery, segmentID int64, levels core.RateLevels) (*core.PriceRule, core.RateLevels, error) {
+	snap, err := s.snapshot(ctx)
+	if err != nil {
+		return nil, levels, err
+	}
+	rule := s.resolveIn(snap, q)
+	if rule == nil {
+		return nil, levels, core.ErrPriceNotConfigured.WithDetails(map[string]any{"model": q.Model})
+	}
+	return rule.Clone(), snap.rates.levels(q, segmentID, levels), nil
+}
+
+// resolveIn is the list price of q in snap, kept for the next request while
+// snap is the snapshot.
+func (s *Service) resolveIn(snap *priceSnapshot, q core.PriceQuery) *core.PriceRule {
 	s.mu.Lock()
 	hit, ok := s.resolved[q]
 	s.mu.Unlock()
-	var rule *core.PriceRule
-	if ok && time.Since(hit.at) < s.cacheTTL {
-		rule = hit.rule
-	} else {
-		snap, err := s.snapshot(ctx)
-		if err != nil {
-			return nil, err
-		}
-		rule = snap.resolve(q)
-		s.mu.Lock()
-		if s.prices == snap {
-			s.resolved[q] = resolved{at: snap.at, rule: rule}
-		}
-		s.mu.Unlock()
+	if ok && hit.snap == snap {
+		return hit.rule
 	}
-	if rule == nil {
-		return nil, core.ErrPriceNotConfigured.WithDetails(map[string]any{"model": q.Model})
+	rule := snap.resolve(q)
+	s.mu.Lock()
+	if s.prices == snap {
+		s.resolved[q] = resolved{snap: snap, rule: rule}
 	}
-	return rule.Clone(), nil
+	s.mu.Unlock()
+	return rule
 }
 
 // Inputs implements core.Pricer: the body paths and header names the

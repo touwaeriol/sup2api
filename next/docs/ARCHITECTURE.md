@@ -254,7 +254,9 @@ erDiagram
   segments ||--o{ segment_groups : granted_and_rated
   groups ||--o{ segment_groups : open_to
   groups ||--o{ price_rules : prices
-  segments ||--o{ price_rules : own_prices
+  groups ||--o{ group_model_rates : model_rates
+  segments ||--o{ segment_model_rates : model_rates
+  groups ||--o{ segment_model_rates : rated_in
   proxies ||--o{ accounts : used_by
   plugins ||--o{ accounts : defines_type
   plugins ||--o{ model_prices : default_price
@@ -281,7 +283,6 @@ erDiagram
     bigint id PK
     string kind
     string name
-    numeric discount
     boolean is_default
     bigint user_id FK
     bigint origin_id FK
@@ -292,15 +293,24 @@ erDiagram
     boolean granted
     numeric rate_override
   }
+  segment_model_rates {
+    bigint segment_id FK
+    bigint group_id FK
+    string model
+    numeric rate
+  }
+  group_model_rates {
+    bigint group_id FK
+    string model
+    numeric rate
+  }
   price_rules {
     bigint id PK
     bigint group_id FK
-    bigint segment_id FK
     string model
-    string kind
-    numeric multiplier
     string mode
     jsonb config
+    string expression
     string expr_hash
   }
   user_balances {
@@ -401,7 +411,7 @@ erDiagram
   }
 ```
 
-`roles`、`casbin_rule`、`proxies`、`account_groups`、`segments`、`segment_groups`、`price_rules`、`plugin_permission_grants`、`plugin_migrations`、`plugin_rollouts`、`events`、`plugin_event_cursors`、`plugin_event_deadletters`、`plugin_job_runs`、`plugin_egress_logs` 的字段见各章节。
+`roles`、`casbin_rule`、`proxies`、`account_groups`、`segments`、`segment_groups`、`segment_model_rates`、`group_model_rates`、`price_rules`、`plugin_permission_grants`、`plugin_migrations`、`plugin_rollouts`、`events`、`plugin_event_cursors`、`plugin_event_deadletters`、`plugin_job_runs`、`plugin_egress_logs` 的字段见各章节。
 
 授予与角色指派只存在 `casbin_rule`（0.1.290 起，迁移 0100，CONTRACTS §99.1）：p 行是角色的授予，g 行是用户的角色；它没有外键，按角色 key、权限 key、用户 id 引用，上图的连线是这些引用而不是外键。原来的 `user_roles`、`role_permissions`、`role_permission_scopes` 已由 0100 转换后删除。
 
@@ -1046,7 +1056,7 @@ CREATE TABLE balance_ledger (
 
 - **全局价只按模型设置**：同一个模型不论由哪个平台的端点、哪种账号类型提供服务，全局价都是同一个；价格表不区分平台
 - **全局价之上账号分组可以给模型定自己的价格**（模型价格），存在 `price_rules`（账号分组 × 模型，每个账号分组每个模型至多一条）。标价取先命中的一层：模型价格 → 全局价。模型价格只有独立价格一种（可视化或表达式，与全局价的形状无关，CONTRACTS §131.4）；用户分组不给模型定价。模型没有启用的全局价时不能计费，模型价格不生效；账号分组不提供的模型上也可以先定价，提供之后生效
-- **倍率只取一个**，四层里最具体的那层生效，不相乘：用户分组 × 账号分组 × 模型 → 用户分组 × 账号分组 → 账号分组 × 模型 → 账号分组基本倍率（`core.RateLevels.Rate`）。每层保存时就是最多 4 位小数的数，生效的那个原样存进使用记录的倍率列，首次结算和重试用的是同一个数。原来的全场折扣和“按倍数”规则由迁移 0124 换算成这些倍率
+- **倍率只取一个**，四层里最具体的那层生效，不相乘：用户分组 × 账号分组 × 模型 → 用户分组 × 账号分组 → 账号分组 × 模型 → 账号分组基本倍率（`core.RateLevels.Rate`）。每层保存时就是最多 4 位小数的数，生效的那个原样存进使用记录的倍率列，首次结算和重试用的是同一个数。网关一次调用 `core.Pricer.Resolve` 从同一份价格快照取标价和模型的两层倍率（账号分组 × 模型、用户分组 × 账号分组 × 模型），鉴权给另外两层；`GET /me/prices?group_id=` 每行给出同样四层取一的倍率，与实际扣费一致。原来的全场折扣和“按倍数”规则由迁移 0124 换算成这些倍率
 - 价格表达式算出的仍是**基础价格**：倍率是乘在表达式结果外面的一个数，表达式文本不拼接、不改写（模型价格是另一条完整的表达式）。只有给下游同步的 `GET /key/prices` 把模型倍率与密钥倍率的比值折进它导出的价格（CONTRACTS §97.6）
 - 价格按**完整模型 ID** 设置、精确匹配，**不支持通配符**（2026-09-25 决定）：别名和带日期的 ID 是不同的模型，需要分别定价。**价格归核心所有，只能由管理员配置**，插件不提供价格；管理员可以手动录入，也可以从价格同步源（LiteLLM、models.dev 等公开价格库，或上游 sup2api）预览后选择导入，见 CONTRACTS §17
 

@@ -30,10 +30,13 @@ func (s *Service) PrepareGroupWrite(ctx context.Context, _ int64, body map[strin
 	if fe := pairErrors(ctx, segmentRatesField, keySegment, items, known); len(fe) > 0 || len(items) == 0 {
 		return core.GroupWrite{}, fe, nil
 	}
-	apply := func(ctx context.Context, tx *gorm.DB, groupID int64) error {
+	write := core.GroupWrite{Apply: func(ctx context.Context, tx *gorm.DB, groupID int64) error {
 		return s.putGroupPairs(ctx, tx, groupID, items)
+	}}
+	if removes(items) {
+		write.AfterCommit = func(ctx context.Context, _ int64) { s.ratesWritten(ctx, true) }
 	}
-	return core.GroupWrite{Apply: apply}, nil, nil
+	return write, nil, nil
 }
 
 // putGroupPairs writes the checked items as pairs of the group, which tx

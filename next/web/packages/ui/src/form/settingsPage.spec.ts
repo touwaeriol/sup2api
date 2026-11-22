@@ -296,8 +296,8 @@ describe('SSettingsPage route leave', () => {
     expect(router.currentRoute.value.path).toBe('/other')
   })
 
-  it('asks before another ?tab= of the same route unmounts it', async () => {
-    fakeHost(['plugin:manage'])
+  /** The settings page on a tab of its route, as the console's plugin detail page has it: the tab is the address's ?tab=. */
+  async function settingsOnTab() {
     const { api } = settingsApi({ values: { host: 'a' } })
     let settings!: PluginSettingsForm<M>
     const Settings = defineComponent({
@@ -306,18 +306,18 @@ describe('SSettingsPage route leave', () => {
         return () => h(SSettingsPage, { settings })
       }
     })
-    // Like the console's plugin detail page: the tab is the address's ?tab=.
-    const Detail = defineComponent({
-      setup() {
-        const route = useRoute()
-        return () => (route.query.tab === 'settings' ? h(Settings) : h('p', 'overview'))
-      }
-    })
+    const Detail = defineComponent({ setup: () => { const route = useRoute(); return () => (route.query.tab === 'settings' ? h(Settings) : h('p', 'overview')) } })
     const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/', component: Detail }] })
     await router.push('/?tab=settings')
     const w = mount(RouterView, { global: { plugins: [router] } })
     mounted.push(w)
     await flushPromises()
+    return { w, router, settings }
+  }
+
+  it('asks before another ?tab= of the same route unmounts it', async () => {
+    fakeHost(['plugin:manage'])
+    const { w, router, settings } = await settingsOnTab()
     settings.set('host', 'b')
     const switching = router.replace({ query: { tab: 'overview' } })
     await flushPromises()

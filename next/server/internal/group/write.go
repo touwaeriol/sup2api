@@ -8,6 +8,7 @@ import (
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 
+	"github.com/Sub2API-Devs/sup2api/next/runtime-contract/gormpg"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/httpapi"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store"
@@ -15,7 +16,7 @@ import (
 )
 
 func dupName(ctx context.Context) error {
-	return core.InvalidFields(core.NewFieldError(ctx, "name", "duplicate", "a group with this name already exists", "分组名称已存在"))
+	return core.InvalidFields(core.NewFieldError(ctx, "name", "duplicate", "an account group with this name already exists", "账号分组名称已存在"))
 }
 
 // groupWrite is a checked POST /groups or PATCH /groups/:id: the group's own
@@ -80,24 +81,20 @@ func (s *Service) prepare(ctx context.Context, id int64, w *groupWrite, body map
 }
 
 // save writes the group row (put) and then the parts in one transaction,
-// and runs what the parts do after the commit.
+// and runs what the parts do after the commit. Losing to a concurrent write
+// (a segment deleted meanwhile, a deadlock) is a conflict.
 func (s *Service) save(ctx context.Context, w *groupWrite, put func(tx *gorm.DB) (int64, error)) (int64, error) {
 	var id int64
 	err := s.db.Tx(ctx, func(tx *gorm.DB) (err error) {
 		if id, err = put(tx); err != nil {
 			return err
 		}
-		for _, p := range w.parts {
-			if p.Apply == nil {
-				continue
-			}
-			if err := p.Apply(ctx, tx, id); err != nil {
-				return err
-			}
-		}
-		return nil
+		return w.apply(ctx, tx, id)
 	})
-	if err != nil {
+	switch {
+	case store.IsWriteRace(err):
+		return 0, core.ChangedMeanwhile(ctx, err)
+	case err != nil:
 		return 0, err
 	}
 	for _, p := range w.parts {
@@ -106,6 +103,19 @@ func (s *Service) save(ctx context.Context, w *groupWrite, put func(tx *gorm.DB)
 		}
 	}
 	return id, nil
+}
+
+// apply writes the parts in tx, after the row of group id.
+func (w *groupWrite) apply(ctx context.Context, tx *gorm.DB, id int64) error {
+	for _, p := range w.parts {
+		if p.Apply == nil {
+			continue
+		}
+		if err := p.Apply(ctx, tx, id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Service) create(c *gin.Context) {
@@ -157,6 +167,10 @@ func (s *Service) update(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if err := requireGroup(ctx, s.db.Gorm, id); err != nil {
+		httpapi.Fail(c, err)
+		return
+	}
 	w, ok := s.bindWrite(c, id)
 	if !ok {
 		return
@@ -193,4 +207,15 @@ func updateRow(ctx context.Context, tx *gorm.DB, id int64, in *groupInput) error
 		return groupNotFound(ctx)
 	}
 	return nil
+}
+
+// requireGroup fails with not_found unless group id exists: a write to a
+// group that does not exist is that, whatever its body says.
+func requireGroup(ctx context.Context, q *gorm.DB, id int64) error {
+	db := store.G(ctx, q)
+	found, err := gormpg.Exists(db, db.Model(&model.Group{}).Where("id = ?", id))
+	if err == nil && !found {
+		return groupNotFound(ctx)
+	}
+	return err
 }

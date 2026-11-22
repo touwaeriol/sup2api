@@ -17,7 +17,7 @@ describe('the model prices and model rates of a group in the mock', () => {
   it('lists a model price as a price of its own and a model rate beside it', async () => {
     expect(await row(1, 'gpt-4o')).toMatchObject({ price: null, rate: '1.2' })
     const search = await row(1, 'web-search')
-    expect(search.price).toMatchObject({ kind: 'custom', mode: 'visual', config: requestTier(0.008) })
+    expect(search.price).toMatchObject({ mode: 'visual', config: requestTier(0.008) })
     expect(search.rate).toBeNull()
   })
 
@@ -136,7 +136,7 @@ describe('the rest of the group pricing mock', () => {
     const catalog = (await call('GET', '/pricing/catalog')).body.data as Array<{ model: string }>
     const provided = ((await call('GET', '/groups/2/model-prices')).body.data.models as Array<{ model: string }>).map((m) => m.model)
     const model = catalog.map((c) => c.model).find((m) => !provided.includes(m))!
-    const price = { kind: 'custom', mode: 'expression', expression: 'p * 2' }
+    const price = { mode: 'expression', expression: 'p * 2' }
     const wrong = await call('PATCH', '/groups/2', { name: 'vip2', model_prices: [{ model, rule: price }, { model: 'no-such-model', rule: price }], model_rates: [{ model, rate: '0.' }], segment_rates: [{ segment_id: 2, rate: '0.5' }] })
     expect([wrong.status, fields(wrong)]).toEqual([400, ['model_prices.1.model', 'model_rates.0.rate']])
     expect((await call('GET', '/groups/2')).body.data.name).toBe('vip')
@@ -144,7 +144,7 @@ describe('the rest of the group pricing mock', () => {
     const saved = await call('PATCH', '/groups/2', { model_prices: [{ model, rule: price }], model_rates: [{ model, rate: '0.9' }], segment_rates: [{ segment_id: 2, granted: false, rate: null }] })
     expect(saved.status).toBe(200)
     const row = (await call('GET', '/groups/2/model-prices')).body.data.models.find((m: { model: string }) => m.model === model)
-    expect(row).toMatchObject({ offered: false, price: { kind: 'custom', mode: 'expression', expression: 'p * 2' }, rate: '0.9' })
+    expect(row).toMatchObject({ offered: false, price: { mode: 'expression', expression: 'p * 2' }, rate: '0.9' })
     const vip = (await call('GET', '/groups/2/segments')).body.data.find((r: { segment: { id: number } }) => r.segment.id === 2)
     expect(vip).toMatchObject({ granted: false, rate_override: null })
     await call('PATCH', '/groups/2', { model_prices: [{ model, rule: null }], model_rates: [{ model, rate: null }], segment_rates: [{ segment_id: 2, granted: true, rate: '0.7' }] })

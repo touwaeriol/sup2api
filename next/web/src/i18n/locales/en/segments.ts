@@ -34,7 +34,7 @@ export default {
   },
   modelRates: {
     toggle: 'Model rates ({n})',
-    intro: 'A model with a rate of its own is billed at its original price × that model rate; the others follow this row, {rate}.',
+    intro: 'A model with a rate of its own is billed at its original price × that model rate; the others pay the rate that applies to each: this row\'s rate, or when it is empty the account group\'s model rate or base rate.',
     add: 'Add model',
     addNone: 'No model to add',
     addFooter: 'Only the models of this account group with an original price',

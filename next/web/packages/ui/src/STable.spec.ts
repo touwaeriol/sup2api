@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
-import { defineComponent, h, nextTick, ref } from 'vue'
+import { defineComponent, h, nextTick, ref, type MaybeRefOrGetter, type Ref } from 'vue'
 import STable from './STable.vue'
 import { TABLE_COLUMN_SCOPE_KEY, useTableColumns, type TableColumnState, type TableColumnStorage } from './tableColumns'
 import type { TableColumn } from './types'
@@ -117,6 +117,26 @@ describe('table column preferences', () => {
   const menuItem = (label: string) => Array.from(document.querySelectorAll<HTMLButtonElement>('[role^="menuitem"]'))
     .find(item => item.textContent?.trim() === label)!
 
+  /** useTableColumns in a component of its own, under `scope` (the signed-in user) when given. */
+  function columnState(schema: MaybeRefOrGetter<readonly TableColumn[]>, key: MaybeRefOrGetter<string>, storage?: TableColumnStorage, scope?: Ref<unknown>) {
+    let state!: TableColumnState
+    const provide = scope ? { [TABLE_COLUMN_SCOPE_KEY as symbol]: scope } : {}
+    const w = mount(defineComponent({ setup: () => ((state = useTableColumns(schema, key, storage)), () => h('div')) }), { global: { provide } })
+    return { state, w }
+  }
+
+  /** A remote storage whose reads and writes wait for the test to answer them. */
+  function pendingStorage() {
+    const reads: Array<(raw: string | null) => void> = []
+    const writes: Array<() => void> = []
+    const storage: TableColumnStorage = {
+      getItem: vi.fn(() => new Promise<string | null>(resolve => reads.push(resolve))),
+      setItem: vi.fn(() => new Promise<void>(resolve => writes.push(resolve))),
+      removeItem: vi.fn()
+    }
+    return { storage, reads, writes }
+  }
+
   it('selects columns, preserves cell slots and colspan, persists, and resets defaults', async () => {
     localStorage.clear()
     const props = { columns, rows: [{ id: 1, name: 'One', ip: '192.0.2.1' }], columnSettingsKey: 'plugin.example.requests', expandable: true, selectable: true }
@@ -148,18 +168,11 @@ describe('table column preferences', () => {
     expect(menuItem('Cost').getAttribute('aria-checked')).toBe('false')
   })
 
-  it('isolates users and table keys and respects a changing permitted schema', async () => {
+  it('isolates users and table keys', async () => {
     localStorage.clear()
     const scope = ref<string | number | null>(1)
     const key = ref('core.usage.all')
-    const schema = ref(columns)
-    let state!: TableColumnState
-    mount(defineComponent({
-      setup() {
-        state = useTableColumns(schema, key)
-        return () => h('div', state.visibleColumns.value.map(column => column.key).join(','))
-      }
-    }), { global: { provide: { [TABLE_COLUMN_SCOPE_KEY as symbol]: scope } } })
+    const { state } = columnState(columns, key, undefined, scope)
     state.setVisible('ip', false)
     state.setVisible('cost', true)
     scope.value = 2
@@ -172,7 +185,13 @@ describe('table column preferences', () => {
     key.value = 'core.usage.self'
     await nextTick()
     expect(state.isVisible('ip')).toBe(true)
-    key.value = 'core.usage.all'
+  })
+
+  it('respects a changing permitted schema', async () => {
+    localStorage.clear()
+    const schema = ref(columns)
+    const { state } = columnState(schema, 'core.usage.all')
+    state.setVisible('cost', true)
     schema.value = [{ key: 'name', label: 'Translated name', hideable: false }, { key: 'new', label: 'New column' }]
     await nextTick()
     expect(state.visibleColumns.value.map(column => column.key)).toEqual(['name', 'new'])
@@ -182,38 +201,34 @@ describe('table column preferences', () => {
     expect(state.isVisible('cost')).toBe(true)
   })
 
-  it('handles malformed or unavailable storage and never hides the last visible column', async () => {
+  const twoColumns = [{ key: 'name', label: 'Name' }, { key: 'ip', label: 'IP' }]
+
+  it('handles malformed storage and never hides the last visible column', () => {
     localStorage.clear()
-    let state!: TableColumnState
-    const mountState = () => mount(defineComponent({
-      setup() {
-        state = useTableColumns([{ key: 'name', label: 'Name' }, { key: 'ip', label: 'IP' }], 'test')
-        return () => h('div')
-      }
-    }))
-    const w = mountState()
-    state.setVisible('ip', false)
-    state.setVisible('name', false)
-    expect(state.visibleColumns.value.map(column => column.key)).toEqual(['name'])
+    const first = columnState(twoColumns, 'test')
+    first.state.setVisible('ip', false)
+    first.state.setVisible('name', false)
+    expect(first.state.visibleColumns.value.map(column => column.key)).toEqual(['name'])
     const storageKey = localStorage.key(0)!
-    w.unmount()
+    first.w.unmount()
     localStorage.setItem(storageKey, 'broken json')
-    const reset = mountState()
+    const { state } = columnState(twoColumns, 'test')
     expect(state.visibleColumns.value).toHaveLength(2)
     localStorage.setItem(storageKey, '{"test":{"name":false,"ip":false,"unknown":true}}')
     window.dispatchEvent(new StorageEvent('storage', { key: storageKey }))
     expect(state.visibleColumns.value.map(column => column.key)).toEqual(['name'])
-    vi.stubGlobal('localStorage', {
-      getItem: () => { throw new Error('blocked') },
-      setItem: () => { throw new Error('blocked') },
-      removeItem: () => { throw new Error('blocked') }
-    })
+  })
+
+  it('keeps working while storage is unavailable', () => {
+    localStorage.clear()
+    const { state, w } = columnState(twoColumns, 'test')
+    const blocked = () => { throw new Error('blocked') }
+    vi.stubGlobal('localStorage', { getItem: blocked, setItem: blocked, removeItem: blocked })
     try {
-      state.setVisible('ip', true)
-      expect(state.isVisible('ip')).toBe(true)
-      reset.unmount()
-      mountState()
-      expect(state.visibleColumns.value).toHaveLength(2)
+      state.setVisible('ip', false)
+      expect(state.isVisible('ip')).toBe(false)
+      w.unmount()
+      expect(columnState(twoColumns, 'test').state.visibleColumns.value).toHaveLength(2)
     } finally {
       vi.unstubAllGlobals()
     }
@@ -242,17 +257,11 @@ describe('table column preferences', () => {
     expect(w.findAll('th')).toHaveLength(1)
   })
 
-  it('serializes asynchronous saves, retries failures, and resets through the caller adapter', async () => {
+  it('serializes asynchronous saves', async () => {
     const releases: Array<() => void> = []
     const setItem = vi.fn(() => new Promise<void>(resolve => releases.push(resolve)))
     const storage: TableColumnStorage = { getItem: vi.fn(async () => null), setItem, removeItem: vi.fn(async () => {}) }
-    let state!: TableColumnState
-    mount(defineComponent({
-      setup() {
-        state = useTableColumns(columns, 'remote', storage)
-        return () => h('div')
-      }
-    }))
+    const { state } = columnState(columns, 'remote', storage)
     await flushPromises()
     const first = state.setVisible('ip', false)
     const second = state.setVisible('ip', true)
@@ -265,15 +274,18 @@ describe('table column preferences', () => {
     expect(setItem).toHaveBeenCalledTimes(2)
     releases[1]()
     await second
-    const calls = vi.mocked(storage.setItem).mock.calls
-    expect(calls.map(([, value]) => JSON.parse(value))).toEqual([{ remote: { ip: false } }, { remote: { ip: true } }])
+    expect(vi.mocked(storage.setItem).mock.calls.map(([, value]) => JSON.parse(value))).toEqual([{ remote: { ip: false } }, { remote: { ip: true } }])
     expect(state.saving.value).toBe(false)
+  })
 
-    setItem.mockRejectedValueOnce(new Error('save failed'))
+  it('retries a failed save, and resets through the caller adapter', async () => {
+    const storage: TableColumnStorage = { getItem: vi.fn(async () => null), setItem: vi.fn(async () => {}), removeItem: vi.fn(async () => {}) }
+    const { state } = columnState(columns, 'remote', storage)
+    await flushPromises()
+    vi.mocked(storage.setItem).mockRejectedValueOnce(new Error('save failed'))
     await state.setVisible('ip', false)
     expect(state.isVisible('ip')).toBe(false)
     expect(state.error.value).toBeInstanceOf(Error)
-    setItem.mockResolvedValueOnce(undefined)
     await state.retry()
     expect(state.error.value).toBeNull()
     await state.reset()
@@ -281,22 +293,10 @@ describe('table column preferences', () => {
     expect(state.isVisible('ip')).toBe(true)
   })
 
-  it('discards stale loads and queued writes when the user changes', async () => {
+  it('discards a stale load when the user changes', async () => {
     const scope = ref(1)
-    const reads: Array<(raw: string | null) => void> = []
-    let releaseWrite!: () => void
-    const storage: TableColumnStorage = {
-      getItem: vi.fn(() => new Promise<string | null>(resolve => reads.push(resolve))),
-      setItem: vi.fn(() => new Promise<void>(resolve => { releaseWrite = resolve })),
-      removeItem: vi.fn()
-    }
-    let state!: TableColumnState
-    mount(defineComponent({
-      setup() {
-        state = useTableColumns(columns, 'remote', storage)
-        return () => h('div')
-      }
-    }), { global: { provide: { [TABLE_COLUMN_SCOPE_KEY as symbol]: scope } } })
+    const { storage, reads } = pendingStorage()
+    const { state } = columnState(columns, 'remote', storage, scope)
     await flushPromises()
     scope.value = 2
     await flushPromises()
@@ -305,17 +305,26 @@ describe('table column preferences', () => {
     reads[0]('{"remote":{"ip":true}}')
     await flushPromises()
     expect(state.isVisible('ip')).toBe(false)
+  })
+
+  it('drops the queued writes of a user who is gone', async () => {
+    const scope = ref(1)
+    const { storage, reads, writes } = pendingStorage()
+    const { state } = columnState(columns, 'remote', storage, scope)
+    await flushPromises()
+    reads[0]('{"remote":{"ip":false}}')
+    await flushPromises()
     state.setVisible('ip', true)
     state.setVisible('cost', true)
     await flushPromises()
-    reads[2]('{"remote":{"ip":false}}')
+    reads[1]('{"remote":{"ip":false}}')
     await flushPromises()
     expect(storage.setItem).toHaveBeenCalledTimes(1)
     scope.value = 3
-    releaseWrite()
+    writes[0]()
     await flushPromises()
-    expect(storage.setItem).toHaveBeenCalledTimes(1) // the queued second write belongs to user 2
-    reads[3](null)
+    expect(storage.setItem).toHaveBeenCalledTimes(1) // the queued second write belongs to user 1
+    reads[2](null)
     await flushPromises()
     expect(state.isVisible('cost')).toBe(false)
     expect(state.isVisible('ip')).toBe(true)
@@ -323,66 +332,57 @@ describe('table column preferences', () => {
 
   it('stores table names in one local document and resets only the selected table', () => {
     localStorage.clear()
-    let usage!: TableColumnState
-    let accounts!: TableColumnState
-    mount(defineComponent({
-      setup() {
-        usage = useTableColumns(columns, 'usage-log')
-        accounts = useTableColumns(columns, 'account-list')
-        return () => h('div')
-      }
-    }))
+    const usage = columnState(columns, 'usage-log').state
+    const accounts = columnState(columns, 'account-list').state
     usage.setVisible('ip', false)
     accounts.setVisible('cost', true)
     expect(localStorage.length).toBe(1)
     const key = localStorage.key(0)!
-    expect(JSON.parse(localStorage.getItem(key)!)).toEqual({
-      'usage-log': { ip: false },
-      'account-list': { cost: true }
-    })
+    expect(JSON.parse(localStorage.getItem(key)!)).toEqual({ 'usage-log': { ip: false }, 'account-list': { cost: true } })
     usage.reset()
     expect(JSON.parse(localStorage.getItem(key)!)).toEqual({ 'account-list': { cost: true } })
     accounts.reset()
     expect(localStorage.getItem(key)).toBeNull()
   })
 
-  it('merges writes from separate tables sharing a remote document', async () => {
-    let saved: string | null = null
-    let release!: () => void
+  /** A remote document the tables share; its first write waits for `release`. */
+  function sharedDocument(saved: string | null) {
+    const doc = { saved, release: () => {} }
     const storage: TableColumnStorage = {
-      getItem: vi.fn(async () => saved),
+      getItem: vi.fn(async () => doc.saved),
       setItem: vi.fn(async (_key, value) => {
-        if (saved === null) await new Promise<void>(resolve => { release = resolve })
-        saved = value
+        if (doc.saved === null) await new Promise<void>(resolve => { doc.release = resolve })
+        doc.saved = value
       }),
-      removeItem: vi.fn(async () => { saved = null })
+      removeItem: vi.fn(async () => { doc.saved = null })
     }
-    let usage!: TableColumnState
-    let accounts!: TableColumnState
-    const table = (name: string, expose: (state: TableColumnState) => void) => defineComponent({
-      setup() {
-        expose(useTableColumns(columns, name, storage))
-        return () => h('div')
-      }
-    })
-    mount(table('usage-log', state => { usage = state }))
-    mount(table('account-list', state => { accounts = state }))
+    return { doc, storage }
+  }
+
+  it('merges writes from separate tables sharing a remote document', async () => {
+    const { doc, storage } = sharedDocument(null)
+    const usage = columnState(columns, 'usage-log', storage).state
+    const accounts = columnState(columns, 'account-list', storage).state
     await flushPromises()
     const first = usage.setVisible('ip', false)
     const second = accounts.setVisible('cost', true)
     await flushPromises()
     expect(storage.setItem).toHaveBeenCalledTimes(1)
-    release()
+    doc.release()
     await Promise.all([first, second])
-    expect(JSON.parse(saved!)).toEqual({
-      'usage-log': { ip: false },
-      'account-list': { cost: true }
-    })
+    expect(JSON.parse(doc.saved!)).toEqual({ 'usage-log': { ip: false }, 'account-list': { cost: true } })
+  })
+
+  it('resets one table of a shared remote document, removing the document with the last', async () => {
+    const { doc, storage } = sharedDocument('{"usage-log":{"ip":false},"account-list":{"cost":true}}')
+    const usage = columnState(columns, 'usage-log', storage).state
+    const accounts = columnState(columns, 'account-list', storage).state
+    await flushPromises()
     await usage.reset()
-    expect(JSON.parse(saved!)).toEqual({ 'account-list': { cost: true } })
+    expect(JSON.parse(doc.saved!)).toEqual({ 'account-list': { cost: true } })
     expect(storage.removeItem).not.toHaveBeenCalled()
     await accounts.reset()
-    expect(saved).toBeNull()
+    expect(doc.saved).toBeNull()
     expect(storage.removeItem).toHaveBeenCalledTimes(1)
   })
 })

@@ -249,7 +249,7 @@ func lockDeletable(ctx context.Context, tx *gorm.DB, id int64) error {
 	case err != nil:
 		return err
 	case isDefault:
-		return core.ErrConflict.WithMessage(t(ctx, "the default user group cannot be deleted", "默认用户组不能删除"))
+		return core.ErrConflict.WithMessage(t(ctx, "the default user group cannot be deleted", "默认用户分组不能删除"))
 	case kind == core.SegmentPersonal:
 		return requireOrphan(ctx, tx, id)
 	}
@@ -284,7 +284,7 @@ func requireOrphan(ctx context.Context, q *gorm.DB, id int64) error {
 		Where("s.id = ?", id).Take(&live).Error
 	if err == nil && live {
 		return core.ErrConflict.WithMessage(t(ctx, "a personal user group is deleted by moving its user to a user group",
-			"个人专属通过把用户移回用户组来删除"))
+			"个人专属通过把用户移回命名用户分组来删除"))
 	}
 	return err
 }

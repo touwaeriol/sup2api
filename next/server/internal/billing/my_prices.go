@@ -21,9 +21,16 @@ type MyPriceRow struct {
 	Groups []core.GroupRef `json:"groups,omitzero"`
 	// Source (with a group): where the list price comes from.
 	Source string `json:"source,omitempty"`
+	// Rate (with a group) is the rate the caller pays for the model there
+	// and RateSource where it comes from, of all four levels
+	// (core.RateLevels): what a call is billed at.
+	Rate       *decimal.Decimal `json:"rate,omitempty"`
+	RateSource string           `json:"rate_source,omitempty"`
 }
 
-// MyPrices is the response of GET /me/prices.
+// MyPrices is the response of GET /me/prices. RateMultiplier and
+// RateSource are the group's rate for the caller, the model aside; each row
+// has its own.
 type MyPrices struct {
 	Group          *core.GroupRef  `json:"group"`
 	RateMultiplier decimal.Decimal `json:"rate_multiplier"`
@@ -94,7 +101,8 @@ func (s *Service) pricesOfGroups(ctx context.Context, uid int64) (*MyPrices, err
 }
 
 // pricesInGroup lists the models one of the user's groups provides and can
-// bill, at the list price and the rate the user gets there.
+// bill, at the list price and the rate the user gets there: each model's,
+// and the one without a rate of its own.
 func (s *Service) pricesInGroup(ctx context.Context, uid, groupID int64) (*MyPrices, error) {
 	snap, err := s.snapshot(ctx)
 	if err != nil {
@@ -112,10 +120,11 @@ func (s *Service) pricesInGroup(ctx context.Context, uid, groupID int64) (*MyPri
 	if !ok {
 		return nil, core.ErrNotFound
 	}
-	group := gp.group.ref()
-	out := &MyPrices{Group: &group, RateMultiplier: t.Rate, RateSource: t.RateSource, Prices: []MyPriceRow{}}
+	group, rate := gp.group.ref(), segment.RateOf(t.Levels())
+	out := &MyPrices{Group: &group, RateMultiplier: rate.Value, RateSource: rate.Source, Prices: []MyPriceRow{}}
 	snap.each(groupID, gp.models, func(model string, base PriceDef, rule *storedRule) {
-		out.Prices = append(out.Prices, MyPriceRow{Model: model, PriceDef: listPrice(base, rule), Source: rule.source()})
+		r, source := snap.rates.levels(core.PriceQuery{Model: model, GroupID: groupID}, t.SegmentID, t.Levels()).Rate()
+		out.Prices = append(out.Prices, MyPriceRow{Model: model, PriceDef: listPrice(base, rule), Source: rule.source(), Rate: &r, RateSource: source})
 	})
 	return out, nil
 }

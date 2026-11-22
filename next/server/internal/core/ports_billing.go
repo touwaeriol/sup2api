@@ -39,6 +39,12 @@ type PriceRule struct {
 	// those rules into model rates (the list price was the expression times
 	// it). Resolve never sets it; usage's settlement applies it to retry
 	// such an item as it was priced. nil = none.
+	//
+	// Compatibility, kept for the usage records priced before 0124 and not
+	// settled yet (billing_status pending, failed or reserved). Remove it,
+	// with PricingTrace.Scale and usage's frozenRule.scale, in the first
+	// release after the check of CONTRACTS §97.4 counts none on every
+	// deployment.
 	Scale *decimal.Decimal `json:",omitempty"`
 	// Base is the global price when a custom rule replaced the expression;
 	// nil otherwise. It tells what the usage costs at the global price.
@@ -78,18 +84,18 @@ func (r *PriceRule) Clone() *PriceRule {
 	return &c
 }
 
-// Pricer resolves price rules and tells the gateway which request inputs an
-// expression reads (param()/header()), so they can be captured at request
-// time and evaluated later during settlement.
+// Pricer resolves what a caller pays for a model and tells the gateway
+// which request inputs an expression reads (param()/header()), so they can
+// be captured at request time and evaluated later during settlement.
 type Pricer interface {
-	// Resolve returns the list price q asks for, never nil without an error:
-	// ErrPriceNotConfigured when the model has no global price.
-	Resolve(ctx context.Context, q PriceQuery) (*PriceRule, error)
+	// Resolve returns the list price q asks for, never nil without an
+	// error, and levels with the rates set on its model added: its group's,
+	// and that of segment segmentID in the group (CONTRACTS §97). Both come
+	// from one price snapshot, so a change to prices and rates applies to a
+	// call as a whole. ErrPriceNotConfigured when the model has no global
+	// price.
+	Resolve(ctx context.Context, q PriceQuery, segmentID int64, levels RateLevels) (*PriceRule, RateLevels, error)
 	Inputs(rule *PriceRule) (bodyPaths []string, headerNames []string)
-	// ModelRates returns levels with the rates set on the model of q added:
-	// its group's, and that of segment segmentID in the group (CONTRACTS
-	// §97). They come from the snapshot Resolve reads.
-	ModelRates(ctx context.Context, q PriceQuery, segmentID int64, levels RateLevels) (RateLevels, error)
 }
 
 // What a request pays when its client hangs up while the upstream is

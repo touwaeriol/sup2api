@@ -12,8 +12,8 @@ import { withDraft } from './drafts'
 /** The model price of a price as its editor holds it (PriceDefEditor). */
 export function customPriceOf(draft: PriceDraft): CustomPrice {
   const p = pricePayload(draft)
-  if (p.mode === 'expression') return { kind: 'custom', mode: 'expression', expression: p.expression }
-  return { kind: 'custom', mode: 'visual', config: asVisualConfig(p.config), expression: p.expression }
+  if (p.mode === 'expression') return { mode: 'expression', expression: p.expression }
+  return { mode: 'visual', config: asVisualConfig(p.config), expression: p.expression }
 }
 
 /** A model price as its editor takes it. */
@@ -86,13 +86,11 @@ export function mergeRowDraft(drafts: RowDrafts, row: Pick<DraftedRow, 'model' |
 /** A model price as the request takes it: a visual price by its config, an expression price by its expression. */
 function customPayload(custom: CustomPrice | null): CustomPrice | null {
   if (!custom) return null
-  return custom.mode === 'expression' ? { kind: 'custom', mode: 'expression', expression: custom.expression } : { kind: 'custom', mode: 'visual', config: custom.config }
+  return custom.mode === 'expression' ? { mode: 'expression', expression: custom.expression } : { mode: 'visual', config: custom.config }
 }
 
-/** What the request sends of the drafts: the changed model prices and model rates, each list only when it has items. */
-export function pricingPatches(drafts: RowDrafts): { model_prices?: ModelPricePatch[]; model_rates?: ModelRatePatch[] } {
-  const entries = [...drafts]
-  const model_prices = entries.filter(([, d]) => d.price !== undefined).map(([model, d]) => ({ model, rule: customPayload(d.price ?? null) }))
-  const model_rates = entries.filter(([, d]) => d.rate !== undefined).map(([model, d]) => ({ model, rate: d.rate ?? null }))
-  return { ...(model_prices.length ? { model_prices } : {}), ...(model_rates.length ? { model_rates } : {}) }
-}
+/** What the request sends of the drafts: the changed model prices (`model_prices`). */
+export const modelPricePatches = (drafts: RowDrafts): ModelPricePatch[] => [...drafts].filter(([, d]) => d.price !== undefined).map(([model, d]) => ({ model, rule: customPayload(d.price ?? null) }))
+
+/** What the request sends of the drafts: the changed model rates (`model_rates`). */
+export const groupModelRatePatches = (drafts: RowDrafts): ModelRatePatch[] => [...drafts].filter(([, d]) => d.rate !== undefined).map(([model, d]) => ({ model, rate: d.rate ?? null }))

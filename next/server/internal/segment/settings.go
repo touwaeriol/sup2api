@@ -90,17 +90,21 @@ func (s *Service) ofSegment(c *gin.Context, id int64) ([]*Setting, error) {
 	return s.complete(ctx, rows, func(r *Setting) Terms { return terms[r.Group.ID] })
 }
 
+// inGroup is the SQL condition for "the segment s has a grant, a rate or
+// a model rate in the group g".
+const inGroup = `(EXISTS (SELECT 1 FROM segment_groups sg WHERE sg.segment_id = s.id AND sg.group_id = g.id)
+	OR EXISTS (SELECT 1 FROM segment_model_rates smr WHERE smr.segment_id = s.id AND smr.group_id = g.id))`
+
 // ofGroup returns what the segments have in the group: every named one,
-// then the personal ones that have a grant or a rate in the group or are
-// named by ?include=.
+// then the personal ones that have a grant, a rate or a model rate in the
+// group or are named by ?include=.
 func (s *Service) ofGroup(c *gin.Context, id int64) ([]*Setting, error) {
 	ctx := c.Request.Context()
 	if err := requireGroup(ctx, s.db.Gorm, id); err != nil {
 		return nil, err
 	}
 	rows, err := s.settingRows(ctx, func(db *gorm.DB) *gorm.DB {
-		return db.Where(`g.id = ? AND (s.kind = 'named' OR s.id = ANY(?)
-			OR EXISTS (SELECT 1 FROM segment_groups sg WHERE sg.segment_id = s.id AND sg.group_id = g.id))`, id, store.Int64s(includedIDs(c))).
+		return db.Where(`g.id = ? AND (s.kind = 'named' OR s.id = ANY(?) OR `+inGroup+`)`, id, store.Int64s(includedIDs(c))).
 			Order("s.kind = 'personal', s.id")
 	})
 	if err != nil {
@@ -117,7 +121,7 @@ func requireGroup(ctx context.Context, q *gorm.DB, id int64) error {
 	var found int64
 	err := store.G(ctx, q).Model(&model.Group{}).Select("id").Where("id = ?", id).Take(&found).Error
 	if store.IsNoRows(err) {
-		return core.ErrNotFound.WithMessage(t(ctx, "group not found", "分组不存在"))
+		return core.ErrNotFound.WithMessage(t(ctx, "account group not found", "账号分组不存在"))
 	}
 	return err
 }
@@ -205,7 +209,7 @@ func (s *Service) complete(ctx context.Context, rows []*Setting, terms func(*Set
 		tm := terms(r)
 		r.Segment = Masked(r.Segment, show)
 		r.Group.RateMultiplier, r.Group.Platforms = tm.GroupRate, platforms[r.Group.ID]
-		r.Accessible, r.Granted, r.RateOverride, r.Rate = tm.Open, tm.Granted, tm.Override, tm.EffectiveRate()
+		r.Accessible, r.Granted, r.RateOverride, r.Rate = tm.Open, tm.Granted, tm.Override, RateOf(tm.Levels())
 		if r.ModelRates = rates[pairKey{r.Segment.ID, r.Group.ID}]; r.ModelRates == nil {
 			r.ModelRates = []ModelRate{}
 		}

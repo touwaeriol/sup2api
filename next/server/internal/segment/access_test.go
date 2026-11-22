@@ -65,32 +65,49 @@ func TestUsableGroup(t *testing.T) {
 	require.Equal(t, []int64{f.public, f.granted}, f.groups(t, OpenToUser, f.user))
 }
 
-func TestTerms(t *testing.T) {
-	f := newAccessFixture(t)
-	ctx := context.Background()
-	groups := []int64{f.public, f.granted, f.restricted, 0}
+// termsRate is the rate and its source the terms give a model with no rate
+// of its own.
+func termsRate(tm Terms) string {
+	r := RateOf(tm.Levels())
+	return r.Value.String() + " " + r.Source
+}
 
-	got, err := UserTerms(ctx, f.db.Gorm, f.user, groups)
+func TestUserTerms(t *testing.T) {
+	f := newAccessFixture(t)
+	got, err := UserTerms(context.Background(), f.db.Gorm, f.user, []int64{f.public, f.granted, f.restricted, 0})
 	require.NoError(t, err)
 	require.Len(t, got, 3, "a group that does not exist has no terms")
 	for _, tc := range []struct {
-		name   string
-		group  int64
-		open   bool
-		rate   string
-		source string
+		name  string
+		group int64
+		open  bool
+		rate  string
 	}{
-		{"public group at its base rate", f.public, true, "1.5", core.RateSourceGroup},
-		{"granted group at the override", f.granted, true, "0.5", core.RateSourceSegment},
-		{"private group not granted", f.restricted, false, "1", core.RateSourceGroup},
+		{"public group at its base rate", f.public, true, "1.5 group"},
+		{"granted group at the override", f.granted, true, "0.5 segment"},
+		{"private group not granted", f.restricted, false, "1 group"},
 	} {
 		terms := got[tc.group]
 		require.Equal(t, f.vip, terms.SegmentID, tc.name)
 		require.Equal(t, tc.open, terms.Open, tc.name)
-		require.Equal(t, tc.rate, terms.Rate.String(), tc.name)
-		require.Equal(t, tc.source, terms.RateSource, tc.name)
+		require.Equal(t, tc.rate, termsRate(terms), tc.name)
 	}
+	require.Equal(t, "0.5", got[f.granted].Override.String())
+	require.Nil(t, got[f.public].Override)
 
+	other, err := UserTerms(context.Background(), f.db.Gorm, f.other, []int64{f.granted})
+	require.NoError(t, err)
+	require.Equal(t, "2 group", termsRate(other[f.granted]))
+	require.False(t, other[f.granted].Open)
+}
+
+// SegmentTerms and GroupTerms are the same query as UserTerms.
+func TestSegmentAndGroupTerms(t *testing.T) {
+	f := newAccessFixture(t)
+	ctx := context.Background()
+	groups := []int64{f.public, f.granted, f.restricted, 0}
+	got, err := UserTerms(ctx, f.db.Gorm, f.user, groups)
+	require.NoError(t, err)
 	bySegment, err := SegmentTerms(ctx, f.db.Gorm, f.vip, groups)
 	require.NoError(t, err)
 	require.Equal(t, got, bySegment)
@@ -101,20 +118,8 @@ func TestTerms(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, byGroup, 2, "a segment that does not exist has no terms")
 	require.Equal(t, got[f.granted], byGroup[f.vip])
-	require.Equal(t, "2", byGroup[def].Rate.String())
+	require.Equal(t, "2 group", termsRate(byGroup[def]))
 	require.False(t, byGroup[def].Open)
-
-	granted := got[f.granted]
-	require.Equal(t, EffectiveRate{Value: granted.Rate, Source: core.RateSourceSegment, GroupDefault: granted.GroupRate}, granted.EffectiveRate())
-	require.Equal(t, granted.EffectiveRate(), RateOf(granted.Levels()))
-	require.Equal(t, "0.5", granted.Override.String())
-	require.Nil(t, got[f.public].Override)
-
-	other, err := UserTerms(ctx, f.db.Gorm, f.other, groups)
-	require.NoError(t, err)
-	require.Equal(t, "2", other[f.granted].Rate.String())
-	require.Equal(t, core.RateSourceGroup, other[f.granted].RateSource)
-	require.False(t, other[f.granted].Open)
 }
 
 // The console's rate of levels with model rates is the most specific one.

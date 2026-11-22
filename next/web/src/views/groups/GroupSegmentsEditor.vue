@@ -10,22 +10,23 @@ import AddSelect from '@/components/pricing/AddSelect.vue'
 import GroupVisibilityBadge from '@/components/pricing/GroupVisibilityBadge.vue'
 import PersonalSegmentPicker from '@/components/pricing/PersonalSegmentPicker.vue'
 import SegmentBadge from '@/components/pricing/SegmentBadge.vue'
-import { blankSegmentSetting, type DraftedSetting } from '@/components/pricing/accessRateDrafts'
+import { blankSegmentSetting, setsAnything, type DraftedSetting } from '@/components/pricing/accessRateDrafts'
 import { rateText, typedRate } from '@/components/pricing/pricingFormat'
 import { useAccessRateDrafts } from '@/components/pricing/useAccessRateDrafts'
 import { fetchAllPages } from '@/composables/lookups'
 
 // The user groups of an account group with something set apart: enabled (a
-// private group), a rate of their own, added here, or changed and not saved
-// yet; every other user group pays the group's base rate. "Add user group"
-// lists a named one, "Add user" a personal one; Remove clears what a row
-// sets. These are the same settings the user group's "Account group rates"
+// private group), a rate of their own, model rates of their own, added here,
+// or changed and not saved yet; every other user group pays the group's
+// rates. "Add user group" lists a named one, "Add user" a personal one;
+// Remove takes away everything a row has here, its model rates included
+// (Undo keeps it). These are the same settings the user group's "Account group rates"
 // edit, from the other side. The rows follow the visibility and the base
 // rate of the form being edited. Edits stay in drafts, which the group's
 // request sends (`segment_rates`, the part of tab `tab` of the enclosing
-// tabbed form). A group not created yet (groupId null) starts from every
-// named user group with nothing set.
-const props = defineProps<{ groupId: number | null; visibility: Group['visibility']; defaultRate: string; editable?: boolean; disabled?: boolean; tab?: string }>()
+// tabbed form while `editable`). A group not created yet (groupId null)
+// starts from every named user group with nothing set.
+const props = defineProps<{ groupId: number | null; visibility: Group['visibility']; defaultRate: string; editable: boolean; tab: string; disabled?: boolean }>()
 const { t } = useI18n()
 
 /** Personal segments picked here: fetched although the group has nothing for them yet. */
@@ -42,7 +43,7 @@ async function fetchSettings(): Promise<SegmentGroupSetting[]> {
 
 const drafts = useAccessRateDrafts({ side: 'segment', fetch: fetchSettings, terms: () => ({ visibility: props.visibility, groupDefault: props.defaultRate }) })
 const { rows, loading, error, dirty, refresh, change } = drafts
-if (props.editable && props.tab) useTabbedFormPart({ tab: props.tab, check: drafts.check, body: drafts.body, dirty, fields: drafts.fields, applyErrors: drafts.applyErrors })
+useTabbedFormPart({ tab: props.tab, check: drafts.check, body: drafts.body, dirty, fields: drafts.fields, applyErrors: drafts.applyErrors }, () => props.editable)
 
 function load() {
   included.value = []
@@ -52,7 +53,7 @@ function load() {
 watch(() => props.groupId, load, { immediate: true })
 
 /** The rows the table lists. */
-const listed = computed(() => rows.value.filter((r) => r.granted || r.rate_override !== null || r.dirty || added.value.includes(r.id) || drafts.rowErrors.value.has(r.id)))
+const listed = computed(() => rows.value.filter((r) => setsAnything(r) || r.dirty || added.value.includes(r.id) || drafts.rowErrors.value.has(r.id)))
 /** The named user groups not listed yet. */
 const addable = computed<SelectOption[]>(() => rows.value.filter((r) => r.segment.kind === 'named' && !listed.value.includes(r)).map((r) => ({ value: r.id, label: r.segment.name })))
 
@@ -66,10 +67,10 @@ function include(segment: SegmentRef) {
   included.value = [...included.value, segment.id]
   return refresh()
 }
-/** Clears what a row sets; once that is saved it is no longer listed. */
+/** Takes away everything a row has here; once that is saved it is no longer listed. */
 function remove(row: DraftedSetting) {
   added.value = added.value.filter((id) => id !== row.id)
-  change(row, { granted: false, rate_override: null })
+  change(row, { removed: true })
 }
 
 const restricted = computed(() => props.visibility === 'restricted')
@@ -119,11 +120,15 @@ const nobody = computed(() => restricted.value && !loading.value && !error.value
       @retry="refresh"
       @change="change"
       @remove="remove"
+      @undo="drafts.undo"
     >
       <template #lead="{ row }">
         <b class="truncate font-medium">{{ row.segment.name }}</b>
         <SBadge v-if="row.segment.kind === 'named'" size="xs" class="whitespace-nowrap">{{ t('pricingAccess.members', { n: row.member_count ?? 0 }, row.member_count ?? 0) }}</SBadge>
         <SegmentBadge v-else :segment="row.segment" />
+      </template>
+      <template #note="{ row }">
+        <SHint v-if="row.model_rates.length" size="xs" data-testid="group-segment-model-rates">{{ t('pricingAccess.inGroup.modelRates', { n: row.model_rates.length }, row.model_rates.length) }}</SHint>
       </template>
     </AccessRateTable>
     <SHint v-if="editable" size="xs">{{ t('pricingAccess.overrideNote') }}</SHint>

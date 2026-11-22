@@ -43,27 +43,26 @@ const modelPrices = (): GroupModelPrices => ({
   ]
 })
 
-/** The editor as the part of a tabbed form, as the segment editor holds it. */
+/** The editor as the part of a tabbed form, as the segment editor and the pricing drawer hold it. */
 const Host = defineComponent({
-  props: { segmentId: { type: Number as PropType<number | null>, default: null } },
+  props: { segmentId: { type: Number as PropType<number | null>, default: null }, editable: Boolean },
   setup(props, { expose }) {
     const form = useTabbedForm(ref('groups'), ['groups'])
     expose({ form })
-    return () => h(SegmentGroupsEditor, { segmentId: props.segmentId, editable: true, tab: 'groups' })
+    return () => h(SegmentGroupsEditor, { segmentId: props.segmentId, editable: props.editable, tab: 'groups' })
   }
 })
 
 async function render(props: { segmentId: number | null; editable?: boolean }) {
-  const editable = !!props.editable
-  const w = editable ? mount(Host, { props: { segmentId: props.segmentId }, global: { plugins: [i18n] } }) : mount(SegmentGroupsEditor, { props, global: { plugins: [i18n] } })
+  const w = mount(Host, { props, global: { plugins: [i18n] } })
   await flushPromises()
   const row = (id: number) => w.get(`[data-group="${id}"]`)
   const rate = (id: number) => row(id).get('[data-testid="access-rate-value"]').text()
   const source = (id: number) => row(id).get('[data-testid="access-rate-source"]').text()
-  const form = editable ? (w.vm as unknown as { form: ReturnType<typeof useTabbedForm> }).form : undefined
+  const form = (w.vm as unknown as { form: ReturnType<typeof useTabbedForm> }).form
   const sent = async (answer: () => Promise<unknown> = async () => ({})) => {
     const send = vi.fn((_body: Record<string, unknown>) => answer())
-    const result = await form!.submit(send)
+    const result = await form.submit(send)
     await flushPromises()
     return { result, body: send.mock.calls[0]?.[0] }
   }
@@ -104,7 +103,7 @@ describe('the account groups of a segment', () => {
     expect([rate(1), source(1)]).toEqual(['×0.6', 'Set by the user group'])
     await row(2).get('input[data-testid="access-rate-grant"]').setValue(true)
     expect(row(2).find('[data-testid="access-rate-unsaved"]').exists()).toBe(true)
-    expect(form!.dirtyTabs.value).toEqual(['groups'])
+    expect(form.dirtyTabs.value).toEqual(['groups'])
     expect((await sent()).body).toEqual({ group_rates: [{ group_id: 1, rate: '0.6' }, { group_id: 2, granted: true, rate: '0.5' }] })
   })
 
@@ -122,6 +121,17 @@ describe('the account groups of a segment', () => {
     const refusal = new ApiError(400, { code: 'invalid_argument', message: 'invalid', details: { fields: [{ field: 'group_rates.0.rate', code: 'invalid', message: 'too low' }] } })
     expect((await sent(() => Promise.reject(refusal))).result).toBe(false)
     expect(row(2).get('[data-testid="access-rate-error"]').text()).toBe('too low')
+  })
+
+  it('sends its drafts once it turns editable in place, as a user made personal in the pricing drawer', async () => {
+    const { w, row, sent } = await render({ segmentId: 2 })
+    expect((await sent()).body).toEqual({})
+    await w.setProps({ segmentId: 31, editable: true })
+    await flushPromises()
+    await row(1).get('input[data-testid="rate-override-input"]').setValue('0.6')
+    expect((await sent()).body).toEqual({ group_rates: [{ group_id: 1, rate: '0.6' }] })
+    await w.setProps({ editable: false })
+    expect((await sent()).body).toEqual({})
   })
 
   it('starts a segment not created yet from every account group, with nothing set', async () => {
@@ -142,6 +152,25 @@ describe('the model rates of a segment in an account group', () => {
     expect(rates.get('[data-testid="segment-model-rate-value"]').text()).toBe('×0.85')
     expect(rates.find('[data-testid="segment-model-rate-add"]').exists()).toBe(false)
     expect(mocks.get).not.toHaveBeenCalledWith('/groups/1/model-prices')
+  })
+
+  it('adds a model at the rate it pays now: the account group\'s model rate, or the row\'s once it has one', async () => {
+    mocks.get.mockImplementation(async (path: string) => {
+      if (!path.endsWith('/model-prices')) return saved()
+      const prices = modelPrices()
+      prices.models[1].rate = '0.9'
+      return prices
+    })
+    const { w, openModels } = await render({ segmentId: 2, editable: true })
+    const rates = await openModels(1)
+    rates.getComponent(AddSelect).vm.$emit('add', 'o3')
+    await flushPromises()
+    expect((w.get('[data-testid="segment-model-rate-row"][data-model="o3"] input').element as HTMLInputElement).value).toBe('0.9')
+    await w.get('[data-group="1"] input[data-testid="rate-override-input"]').setValue('0.6')
+    rates.getComponent(AddSelect).vm.$emit('add', 'gpt-5')
+    await flushPromises()
+    expect((w.get('[data-testid="segment-model-rate-row"][data-model="gpt-5"] input').element as HTMLInputElement).value).toBe('0.6')
+    expect(rates.text()).toContain('the others pay the rate that applies to each')
   })
 
   it('adds a model with an original price at the rate of the row, changes and removes one, all sent with the segment', async () => {

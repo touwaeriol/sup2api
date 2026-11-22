@@ -26,8 +26,8 @@ func groupWriteCases() []groupWriteCase {
 	return []groupWriteCase{
 		{"price without a global price", "model_prices", patch("unpriced", custom("visual", requestTier(1))), "model_prices.1.model", "no global price"},
 		{"price on a model nobody has", "model_prices", patch("nobody-has-it", written("p")), "model_prices.1.model", "no global price"},
-		{"multiplier rule", "model_prices", patch("claude-haiku-4-5", map[string]any{"kind": "multiplier", "multiplier": "2"}), "model_prices.1.rule", "a model price is a custom price"},
-		{"price in an old mode", "model_prices", patch("claude-haiku-4-5", custom("per_request", map[string]any{"price": 1})), "model_prices.1.rule", "visual or expression"},
+		{"old multiplier rule", "model_prices", patch("claude-haiku-4-5", map[string]any{"kind": "multiplier", "multiplier": "2"}), "model_prices.1.rule", "mode must be visual or expression"},
+		{"price in an old mode", "model_prices", patch("claude-haiku-4-5", custom("per_request", map[string]any{"price": 1})), "model_prices.1.rule", "mode must be visual or expression"},
 		{"expression that does not compile", "model_prices", patch("claude-haiku-4-5", written(`tier("base", p*`)), "model_prices.1.rule", "invalid custom price"},
 		{"expression of an unknown variable", "model_prices", patch("claude-haiku-4-5", written(`tier("base", nope*2)`)), "model_prices.1.rule", "invalid custom price"},
 		{"negative price", "model_prices", patch("claude-haiku-4-5", custom("visual", oneTierConfig(map[string]any{"p": 1, "c": -2}))), "model_prices.1.rule", "config.tiers[0].c"},
@@ -37,7 +37,8 @@ func groupWriteCases() []groupWriteCase {
 		{"rate too large", "model_rates", rated("claude-haiku-4-5", "1000000"), "model_rates.1.rate", "below 1000000"},
 		{"rate too fine", "model_rates", rated("claude-haiku-4-5", "0.00001"), "model_rates.1.rate", "at most 4 decimals"},
 		{"rate that is no number", "model_rates", rated("claude-haiku-4-5", "much"), "model_rates.1.rate", "must be 0 or more"},
-		{"rate as a JSON number", "model_rates", rated("claude-haiku-4-5", 1.5), "model_rates", "must be a list of model rates"},
+		{"rate as a JSON number", "model_rates", rated("claude-haiku-4-5", 1.5), "model_rates.1.rate", "must be 0 or more"},
+		{"rate left out", "model_rates", map[string]any{"model": "claude-haiku-4-5"}, "model_rates.1.rate", "a rate or null is required"},
 		{"prices that are no list", "model_prices", nil, "model_prices", "must be a list of model prices"},
 	}
 }
@@ -68,15 +69,17 @@ func TestGroupWriteValidation(t *testing.T) {
 	checkRemovalsAndPlainRates(t, e)
 }
 
-// Every wrong item of both lists of a group write is named.
+// Every wrong item of both lists of a group write is named, and every
+// problem of an item: no global price and a wrong price or rate alike.
 func checkEveryWrongItemNamed(t *testing.T, e *pricingEnv, validRate map[string]any) {
-	fields := e.writeGroup(e.open, map[string]any{"model_prices": []any{patch("unpriced", written("p"))},
-		"model_rates": []any{validRate, rated("claude-haiku-4-5", "-1"), rated("unpriced", "1")}})
+	fields := e.writeGroup(e.open, map[string]any{"model_prices": []any{patch("unpriced", written("p")), patch("unpriced", written("p*"))},
+		"model_rates": []any{validRate, rated("claude-haiku-4-5", "-1"), rated("unpriced", "1"), rated("unpriced", 2)}})
 	var named []string
 	for _, f := range fields {
 		named = append(named, f.Field)
 	}
-	require.Equal(t, []string{"model_prices.0.model", "model_rates.1.rate", "model_rates.2.model"}, named)
+	require.Equal(t, []string{"model_prices.0.model", "model_prices.1.model", "model_prices.1.rule",
+		"model_rates.1.rate", "model_rates.2.model", "model_rates.3.model", "model_rates.3.rate"}, named)
 }
 
 // Removing always can; 0 and 1 are rates like any other.
@@ -99,8 +102,8 @@ func TestGroupWriteApplies(t *testing.T) {
 
 	ctx := core.WithUserID(context.Background(), e.admin)
 	raw := map[string]json.RawMessage{
-		"model_prices": json.RawMessage(`[{"model": "web-search", "rule": {"kind": "custom", "mode": "expression", "expression": "flat(2)"}},
-			{"model": "claude-haiku-4-5", "rule": {"kind": "custom", "mode": "expression", "expression": "flat(1)"}},
+		"model_prices": json.RawMessage(`[{"model": "web-search", "rule": {"mode": "expression", "expression": "flat(2)"}},
+			{"model": "claude-haiku-4-5", "rule": {"mode": "expression", "expression": "flat(1)"}},
 			{"model": "web-search", "rule": null}]`),
 		"model_rates": json.RawMessage(`[{"model": "claude-haiku-4-5", "rate": "1"}, {"model": "claude-haiku-4-5", "rate": "2.5"}]`)}
 	w, fields, err = e.svc.PrepareGroupWrite(ctx, 0, raw)
@@ -123,7 +126,7 @@ func TestModelRatesFollowWrites(t *testing.T) {
 	q := core.PriceQuery{Model: "claude-haiku-4-5", GroupID: e.open}
 	levels := func(segment int64) []string {
 		t.Helper()
-		got, err := e.svc.ModelRates(ctx, q, segment, core.RateLevels{Segment: dec("1.2"), Group: *dec("1.5")})
+		_, got, err := e.svc.Resolve(ctx, q, segment, core.RateLevels{Segment: dec("1.2"), Group: *dec("1.5")})
 		require.NoError(t, err)
 		rate, source := got.Rate()
 		return []string{text(got.SegmentModel), text(got.GroupModel), rate.String(), source}

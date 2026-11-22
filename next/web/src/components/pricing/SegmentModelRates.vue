@@ -10,17 +10,18 @@ import AddSelect from './AddSelect.vue'
 import DraftBadge from './DraftBadge.vue'
 import RateInput from './RateInput.vue'
 import type { DraftedModelRate } from './modelRateDrafts'
-import { listPriceOf, rateText } from './pricingFormat'
+import { effectiveRate, listPriceOf, rateText } from './pricingFormat'
 import { priceLabel } from './priceLabels'
 
 // The model rates of a user group in one account group, under that group's
 // row: each model added here is paid at its list price × its own rate; the
-// others follow `rate`, the user group's rate there. Editable, "Add model"
-// offers the account group's models with a global price that have no rate
-// yet; a row reports what changes (`add` at `rate`, `change`, `remove`,
-// `undo`) and the parent keeps the drafts. `errors` are the server's
-// refusals by row key.
-const props = defineProps<{ rows: DraftedModelRate[]; groupId: number; rate: string; editable?: boolean; disabled?: boolean; errors?: ReadonlyMap<string, string> }>()
+// others pay the rate that applies to each: `override`, the user group's
+// rate there, else the account group's model rate, else `groupRate`, its
+// base rate. Editable, "Add model" offers the account group's models with a
+// global price that have no rate yet; a row reports what changes (`add` at
+// the rate the model pays now, `change`, `remove`, `undo`) and the parent
+// keeps the drafts. `errors` are the server's refusals by row key.
+const props = defineProps<{ rows: DraftedModelRate[]; groupId: number; override: string | null; groupRate: string; editable?: boolean; disabled?: boolean; errors?: ReadonlyMap<string, string> }>()
 const emit = defineEmits<{
   (e: 'add', model: string, rate: string): void
   (e: 'change', row: DraftedModelRate, rate: string): void
@@ -30,18 +31,23 @@ const { t } = useI18n()
 
 const prices = useLatestRequest(() => (props.editable ? props.groupId : null), (gid) => api.get<GroupModelPrices>(`/groups/${gid}/model-prices`), 0)
 
+const models = computed(() => prices.result.value?.models ?? [])
 const addable = computed<SelectOption[]>(() => {
   const taken = new Set(props.rows.map((r) => r.model))
-  const models = prices.result.value?.models ?? []
-  return models.filter((m) => m.base && !taken.has(m.model)).map((m) => ({ value: m.model, label: m.model, hint: priceLabel(t, listPriceOf(m.base, m.price)) }))
+  return models.value.filter((m) => m.base && !taken.has(m.model)).map((m) => ({ value: m.model, label: m.model, hint: priceLabel(t, listPriceOf(m.base, m.price)) }))
 })
-const add = (model: SelectOption['value']) => emit('add', String(model), props.rate)
+/** The rate a model pays now, without a rate of the user group's own for it. */
+function paidRate(model: string): string {
+  const groupModel = models.value.find((m) => m.model === model)?.rate
+  return effectiveRate({ segment: props.override, group_model: groupModel, group: props.groupRate }).value
+}
+const add = (model: SelectOption['value']) => emit('add', String(model), paidRate(String(model)))
 </script>
 
 <template>
   <div class="space-y-2" data-testid="segment-model-rates" :data-group="groupId">
     <div class="flex flex-wrap items-center justify-between gap-2">
-      <SHint inline size="xs">{{ t('segments.modelRates.intro', { rate: rateText(rate || null) }) }}</SHint>
+      <SHint inline size="xs">{{ t('segments.modelRates.intro') }}</SHint>
       <AddSelect
         v-if="editable"
         :options="addable"

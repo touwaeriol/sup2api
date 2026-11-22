@@ -344,8 +344,8 @@ const { save } = useAccountSave({
         <!-- ============================================================ scheduling and limits -->
         <AccountSchedulingPane
           v-else-if="key === 'scheduling'"
-          v-model:basic="basic"
           v-model:model-limits="modelLimitCards"
+          :basic="basic"
           :controls="controls"
           :errors="errors"
           :saving="saving"
@@ -356,7 +356,7 @@ const { save } = useAccountSave({
         />
 
         <!-- ============================================================ advanced -->
-        <AccountForwardingPane v-else-if="key === 'advanced'" v-model:basic="basic" :controls="controls" :errors="errors" :saving="saving" :models="models" :conversion-used="conversionUsed" />
+        <AccountForwardingPane v-else-if="key === 'advanced'" :basic="basic" :controls="controls" :errors="errors" :saving="saving" :models="models" :conversion-used="conversionUsed" />
 
         <!-- ============================================================ plugin sections (account.editor.section) -->
         <template v-else>

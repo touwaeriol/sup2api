@@ -20,9 +20,11 @@ import { useModelRateDrafts } from './useModelRateDrafts'
 // rates there (a model paid at a rate of its own; the others follow the
 // row). Edits stay in drafts (what applies follows them at once), which the
 // segment's request sends: the part of tab `tab` of the enclosing tabbed
-// form. A segment not created yet (segmentId null) starts from every account
-// group with nothing set. `disabled` holds the fields still while it saves.
-const props = defineProps<{ segmentId: number | null; editable?: boolean; disabled?: boolean; tab?: string }>()
+// form while `editable` (it may turn so in place: a user made personal in
+// the pricing drawer). A segment not created yet (segmentId null) starts
+// from every account group with nothing set. `disabled` holds the fields
+// still while it saves.
+const props = defineProps<{ segmentId: number | null; tab: string; editable?: boolean; disabled?: boolean }>()
 const { t } = useI18n()
 
 async function fetchSettings(): Promise<SegmentGroupSetting[]> {
@@ -45,8 +47,8 @@ watch(
   { immediate: true }
 )
 
-if (props.editable && props.tab) {
-  useTabbedFormPart({
+useTabbedFormPart(
+  {
     tab: props.tab,
     // Both run, so each table marks what is wrong.
     check: () => [groups.check(), modelRates.check()].every(Boolean),
@@ -54,8 +56,9 @@ if (props.editable && props.tab) {
     dirty: () => groups.dirty.value || modelRates.dirty.value,
     fields: ['group_rates', 'model_rates'],
     applyErrors: (errors) => [groups.applyErrors(errors), modelRates.applyErrors(errors)]
-  })
-}
+  },
+  () => !!props.editable
+)
 </script>
 
 <template>
@@ -90,7 +93,8 @@ if (props.editable && props.tab) {
       <SegmentModelRates
         :rows="modelRates.rowsOf(row.id)"
         :group-id="row.id"
-        :rate="row.rate.value"
+        :override="row.rate_override"
+        :group-rate="row.rate.group_default"
         :editable="editable"
         :disabled="disabled"
         :errors="modelRates.rowErrors.value"

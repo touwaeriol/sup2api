@@ -92,6 +92,25 @@ describe('the drafts', () => {
   })
 })
 
+describe('a removed row', () => {
+  const kept = setting(1, { granted: true, rate_override: '0.7', model_rates: [{ model: 'gpt-4o', rate: '0.5' }] }, 'restricted')
+  const segmentDrafts = (change: SettingDraft, drafts = none) => mergeSettingDraft(drafts, draftedSetting('segment', kept, drafts.get(2)), change)
+
+  it('reads as nothing set, its model rates gone, until it is saved', () => {
+    const row = draftedSetting('segment', kept, { removed: true })
+    expect(row).toMatchObject({ granted: false, rate_override: null, model_rates: [], accessible: false, removed: true, dirty: true })
+  })
+  it('is sent as remove, without a rate', () => {
+    const drafts = segmentDrafts({ removed: true })
+    expect(segmentRatePatches([draftedSetting('segment', kept, drafts.get(2))], drafts)).toEqual([{ segment_id: 2, remove: true }])
+  })
+  it('is no draft when the row sets nothing, and starts from nothing set when changed again', () => {
+    expect(segmentDrafts({ removed: true }, none).size).toBe(1)
+    expect(mergeSettingDraft(none, draftedSetting('segment', setting(1)), { removed: true }).size).toBe(0)
+    expect(segmentDrafts({ granted: true }, segmentDrafts({ removed: true })).get(2)).toEqual({ rate_override: null })
+  })
+})
+
 describe('a segment not created yet', () => {
   it('starts every group with nothing set, at its base rate', () => {
     const group = { id: 5, name: 'Claude', description: '', status: 'active', visibility: 'restricted', rate_multiplier: 1.2, model_allowlist: [] } as Group

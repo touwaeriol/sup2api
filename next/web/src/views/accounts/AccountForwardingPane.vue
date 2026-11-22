@@ -25,6 +25,7 @@ defineProps<{
   /** Whether a model is converted or a protocol adapted: else nothing can be lost and the policy is greyed. */
   conversionUsed: boolean
 }>()
+// The editor's basics, one reactive object edited in place (given with :basic).
 const basic = defineModel<AccountBasics>('basic', { required: true })
 const { t } = useI18n()
 const showEnvironment = useEnvironmentLayer('account')

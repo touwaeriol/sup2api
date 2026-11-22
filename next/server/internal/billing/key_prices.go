@@ -31,7 +31,7 @@ type KeyPrices struct {
 // config to be an object.
 func scalePrice(p *syncPrice, m decimal.Decimal) error {
 	if p.Mode != expr.ModeVisual {
-		return scaleAsExpression(p, m)
+		return scaleAsExpression(p, m.String())
 	}
 	var cfg map[string]any
 	dec := json.NewDecoder(strings.NewReader(string(p.Config)))
@@ -79,9 +79,9 @@ func scaleTier(tier map[string]any, m decimal.Decimal) {
 }
 
 // scaleAsExpression rewrites a price as the expression price
-// "(expression) * m".
-func scaleAsExpression(p *syncPrice, m decimal.Decimal) error {
-	src, err := expr.Times(p.Expression, m.String())
+// "(expression) * factor"; factor is a constant expression.
+func scaleAsExpression(p *syncPrice, factor string) error {
+	src, err := expr.Times(p.Expression, factor)
 	if err != nil {
 		return err
 	}
@@ -141,8 +141,11 @@ func (s *Service) keyPrincipal(c *gin.Context) (*core.APIKeyPrincipal, error) {
 // exportPrice returns the list price of a model for a downstream sup2api,
 // which applies one rate, that of the key, to every price: here, and nowhere
 // else, a model paid at another rate has the ratio of the two folded into
-// its price (scalePrice). The expression is always there. An error means the
-// price cannot carry the ratio.
+// its price (scalePrice). A ratio with no finite decimal (1 / 3) is not
+// rounded: the price becomes the expression "(expression) * modelRate /
+// keyRate", which the key's rate turns back into the model's (CONTRACTS
+// §97.6). The expression is always there. An error means the price cannot
+// carry the ratio.
 func exportPrice(model string, price PriceDef, keyRate, modelRate decimal.Decimal) (syncPrice, error) {
 	p := syncPrice{Model: model, Mode: price.Mode, Config: price.Config, Expression: price.Expression}
 	if modelRate.Equal(keyRate) {
@@ -151,7 +154,11 @@ func exportPrice(model string, price PriceDef, keyRate, modelRate decimal.Decima
 	if keyRate.IsZero() {
 		return p, errors.New("the model has a rate of its own in a group the key pays nothing in")
 	}
-	if err := scalePrice(&p, modelRate.Div(keyRate)); err != nil || p.Expression != "" {
+	ratio := modelRate.Div(keyRate)
+	if !ratio.Mul(keyRate).Equal(modelRate) {
+		return p, scaleAsExpression(&p, modelRate.String()+" / "+keyRate.String())
+	}
+	if err := scalePrice(&p, ratio); err != nil || p.Expression != "" {
 		return p, err
 	}
 	// A scaled config: its expression is generated, as on import.

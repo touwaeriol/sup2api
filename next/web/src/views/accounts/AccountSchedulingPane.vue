@@ -27,6 +27,7 @@ const props = defineProps<{
   /** The models a model list can hold. */
   modelOptions: string[]
 }>()
+// The editor's basics, one reactive object edited in place (given with :basic).
 const basic = defineModel<AccountBasics>('basic', { required: true })
 const modelLimits = defineModel<ModelLimitCard[]>('modelLimits', { required: true })
 const { t } = useI18n()

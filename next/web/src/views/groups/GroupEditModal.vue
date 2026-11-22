@@ -2,14 +2,15 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '@sub2api/host'
-import { SChoiceCards, SField, SFormModal, SGrid, SHint, SInput, SSelect, SSettingsGroup, STabbedForm, STextarea, toast, useTabbedForm, type ChoiceOption, type FormTab, type TabbedFormPart } from '@sub2api/ui'
+import { SChoiceCards, SField, SGrid, SHint, SInput, SSelect, SSettingsGroup, STextarea, toast, useTabbedForm, type ChoiceOption, type FormTab, type TabbedFormPart } from '@sub2api/ui'
 import type { Group } from '@/api/types'
 import { useStatusOptions } from '@/composables/crud'
 import { policyOptions } from '@/utils/conversion'
+import TabbedFormModal from '@/components/TabbedFormModal.vue'
 import ModelPriceTable from '@/components/pricing/ModelPriceTable.vue'
 import RateInput from '@/components/pricing/RateInput.vue'
 import { typedRate } from '@/components/pricing/pricingFormat'
-import { useTabbedSubmit } from '@/composables/useTabbedSubmit'
+import { useAuthStore } from '@/stores/auth'
 import { notifyError } from '@/utils/errors'
 import { latestOnly } from '@/composables/useLatestRequest'
 import EnvironmentEditor from '@/components/environment/EnvironmentEditor.vue'
@@ -24,9 +25,9 @@ import { GROUP_EDIT_TABS, TAB_FIELDS, blankForm, fieldChanged, fieldProblems, fi
 // Save sends them all in one request (useTabbedForm), so the group, its
 // prices and its user group rates are saved together or not at all. A field
 // that is wrong, here or as the server answers, marks its tab and opens it;
-// a tab with unsaved changes is marked, and closing with one asks first.
-// Only the Save button submits: Enter in a rate or a search field must not
-// save the whole group. Accounts are put in groups on the accounts.
+// a tab with unsaved changes is marked, and closing with one asks first
+// (TabbedFormModal). The user group rates take segment:read: without it
+// that tab is not shown. Accounts are put in groups on the accounts.
 const props = defineProps<{ open: boolean; group: Group | null; initialTab?: GroupEditTab }>()
 const emit = defineEmits<{ (e: 'update:open', v: boolean): void; (e: 'saved'): void }>()
 const { t } = useI18n()
@@ -61,7 +62,9 @@ const opened = ref(blankForm())
 /** The base rate the form has, once it is one: what the tables' paid prices and rates are at. */
 const baseRate = computed(() => typedRate(form.rate_multiplier) ?? '')
 const tab = ref<GroupEditTab>('basic')
-const tabbed = useTabbedForm(tab, GROUP_EDIT_TABS)
+const auth = useAuthStore()
+const tabKeys = computed(() => GROUP_EDIT_TABS.filter((key) => key !== 'segments' || auth.has('segment:read')))
+const tabbed = useTabbedForm(tab, tabKeys)
 
 /** The part of the request a tab's own fields make. */
 function fieldsPart(key: GroupEditTab): TabbedFormPart {
@@ -83,7 +86,7 @@ function fieldsPart(key: GroupEditTab): TabbedFormPart {
 }
 GROUP_EDIT_TABS.filter((key) => TAB_FIELDS[key].length).forEach((key) => tabbed.register(fieldsPart(key)))
 
-const tabs = computed<FormTab[]>(() => GROUP_EDIT_TABS.map((key) => ({ key, label: t(`groups.tabs.${key}`) })))
+const tabs = computed<FormTab[]>(() => tabKeys.value.map((key) => ({ key, label: t(`groups.tabs.${key}`) })))
 const visibilityOptions = computed<ChoiceOption[]>(() => [
   { value: 'public', icon: 'globe', label: t('groups.public'), description: t('groups.publicHint') },
   { value: 'restricted', icon: 'lock', label: t('groups.restricted'), description: t('groups.restrictedHint') }
@@ -101,78 +104,72 @@ watch(
     opened.value = JSON.parse(JSON.stringify(form))
     errors.value = {}
     tabbed.clearErrors()
-    tab.value = props.initialTab ?? 'basic'
+    tab.value = props.initialTab && tabKeys.value.includes(props.initialTab) ? props.initialTab : 'basic'
   },
   { immediate: true }
 )
 
 // ------------------------------------------------------------------ save
 
-const { submit, leave } = useTabbedSubmit(tabbed, {
-  /** One request: the group with its prices and rates (POST /groups, PATCH /groups/:id). */
-  send: (body) => (props.group ? api.patch<Group>(`/groups/${props.group.id}`, body) : api.post<Group>('/groups', body)),
-  done() {
-    emit('saved')
-    toast(t(props.group ? 'common.updated' : 'common.created'), 'success')
-    emit('update:open', false)
-  },
-  close: () => emit('update:open', false)
-})
+/** One request: the group with its prices and rates (POST /groups, PATCH /groups/:id). */
+const send = (body: Record<string, unknown>) => (props.group ? api.patch<Group>(`/groups/${props.group.id}`, body) : api.post<Group>('/groups', body))
+function saved() {
+  emit('saved')
+  toast(t(props.group ? 'common.updated' : 'common.created'), 'success')
+}
 </script>
 
 <template>
-  <SFormModal
+  <TabbedFormModal
+    v-model:tab="tab"
     :open="open"
     :title="group ? t('groups.editTitle', { name: group.name }) : t('groups.create')"
-    width="2xl"
-    :loading="tabbed.saving.value"
+    :tabs="tabs"
+    :form="tabbed"
+    :send="send"
     :submit-text="group ? t('common.save') : t('common.create')"
-    :submit-attrs="{ 'data-testid': 'group-edit-submit' }"
-    :enter-submit="false"
-    data-testid="group-edit"
-    @update:open="leave"
-    @submit="submit"
+    testid="group-edit"
+    min-height="min-h-[24rem]"
+    @update:open="emit('update:open', $event)"
+    @saved="saved"
   >
-    <!-- Every tab stays mounted while the dialog is open: the tables keep their drafts while another tab shows. The least height keeps the dialog from collapsing on a short tab. -->
-    <STabbedForm v-if="open" v-model="tab" :tabs="tabs" :form="tabbed" :aria-label="t('groups.title')" class="min-h-[24rem]" data-testid="group-edit-tabs">
-      <template #default="{ tab: key }">
-        <div v-if="key === 'basic'" class="space-y-4">
-          <SGrid>
-            <SField :label="t('common.name')" required :error="errors.name">
-              <SInput v-model="form.name" data-testid="group-name" />
-            </SField>
-            <SField :label="t('common.status')" :error="errors.status">
-              <SSelect v-model="form.status" :options="statusOptions" />
-            </SField>
-          </SGrid>
-          <SField :label="t('common.description')" :error="errors.description">
-            <STextarea v-model="form.description" :rows="2" />
+    <template #default="{ tab: key }">
+      <div v-if="key === 'basic'" class="space-y-4">
+        <SGrid>
+          <SField :label="t('common.name')" required :error="errors.name">
+            <SInput v-model="form.name" data-testid="group-name" />
           </SField>
-          <SField :label="t('groups.visibility')" :error="errors.visibility">
-            <SChoiceCards v-model="form.visibility" :options="visibilityOptions" data-testid="group-visibility" />
+          <SField :label="t('common.status')" :error="errors.status">
+            <SSelect v-model="form.status" :options="statusOptions" />
           </SField>
-        </div>
-        <SField v-else-if="key === 'models'" :label="t('groups.modelRules')" :hint="t('groups.allowlistHint')" :error="errors.model_allowlist || errors.model_filter_mode">
-          <GroupModelPolicyEditor :key="group?.id ?? 'new'" ref="modelPolicyEditor" v-model="form.model_allowlist" v-model:mode="form.model_filter_mode" :options="modelSource.models" :loading="modelsLoading" :unrestricted-accounts="modelSource.unrestricted_accounts" />
-          <SHint v-if="modelLoadError" tone="danger" size="xs">{{ modelLoadError }}</SHint>
+        </SGrid>
+        <SField :label="t('common.description')" :error="errors.description">
+          <STextarea v-model="form.description" :rows="2" />
         </SField>
-        <div v-else-if="key === 'pricing'" class="space-y-4">
-          <SField :label="t('groups.rateMultiplier')" required :hint="t('groups.multiplierHint')" :error="errors.rate_multiplier" class="rounded-xl border border-line p-4">
-            <RateInput v-model="form.rate_multiplier" size="md" class="sm:w-48" data-testid="group-default-rate" />
-          </SField>
-          <ModelPriceTable :group-id="group?.id ?? null" :base-rate="baseRate" editable tab="pricing" />
-        </div>
-        <GroupSegmentsEditor v-else-if="key === 'segments'" :group-id="group?.id ?? null" :visibility="form.visibility" :default-rate="form.rate_multiplier" editable :disabled="tabbed.saving.value" tab="segments" />
-        <div v-else class="space-y-4">
-          <SField :label="t('accounts.conversion.title')" :hint="t('groups.conversionHint')" :error="errors.conversion_loss_policy">
-            <SSelect v-model="form.conversion_loss_policy" :options="conversionOptions" data-testid="group-conversion-policy" />
-          </SField>
-          <SSettingsGroup :title="t('settings.environment.title')" :description="t('settings.environment.groupHint')" data-testid="group-environment">
-            <EnvironmentEditor v-model="form.environment" layer="group" field="environment" :errors="errors" :disabled="tabbed.saving.value" />
-          </SSettingsGroup>
-        </div>
-      </template>
-    </STabbedForm>
+        <SField :label="t('groups.visibility')" :error="errors.visibility">
+          <SChoiceCards v-model="form.visibility" :options="visibilityOptions" data-testid="group-visibility" />
+        </SField>
+      </div>
+      <SField v-else-if="key === 'models'" :label="t('groups.modelRules')" :hint="t('groups.allowlistHint')" :error="errors.model_allowlist || errors.model_filter_mode">
+        <GroupModelPolicyEditor :key="group?.id ?? 'new'" ref="modelPolicyEditor" v-model="form.model_allowlist" v-model:mode="form.model_filter_mode" :options="modelSource.models" :loading="modelsLoading" :unrestricted-accounts="modelSource.unrestricted_accounts" />
+        <SHint v-if="modelLoadError" tone="danger" size="xs">{{ modelLoadError }}</SHint>
+      </SField>
+      <div v-else-if="key === 'pricing'" class="space-y-4">
+        <SField :label="t('groups.rateMultiplier')" required :hint="t('groups.multiplierHint')" :error="errors.rate_multiplier" class="rounded-xl border border-line p-4">
+          <RateInput v-model="form.rate_multiplier" size="md" class="sm:w-48" data-testid="group-default-rate" />
+        </SField>
+        <ModelPriceTable :group-id="group?.id ?? null" :base-rate="baseRate" editable tab="pricing" />
+      </div>
+      <GroupSegmentsEditor v-else-if="key === 'segments'" :group-id="group?.id ?? null" :visibility="form.visibility" :default-rate="form.rate_multiplier" editable :disabled="tabbed.saving.value" tab="segments" />
+      <div v-else class="space-y-4">
+        <SField :label="t('accounts.conversion.title')" :hint="t('groups.conversionHint')" :error="errors.conversion_loss_policy">
+          <SSelect v-model="form.conversion_loss_policy" :options="conversionOptions" data-testid="group-conversion-policy" />
+        </SField>
+        <SSettingsGroup :title="t('settings.environment.title')" :description="t('settings.environment.groupHint')" data-testid="group-environment">
+          <EnvironmentEditor v-model="form.environment" layer="group" field="environment" :errors="errors" :disabled="tabbed.saving.value" />
+        </SSettingsGroup>
+      </div>
+    </template>
     <template #footer-start><SHint size="xs" data-testid="group-edit-save-hint">{{ t(group ? 'groups.saveHint' : 'groups.createHint') }}</SHint></template>
-  </SFormModal>
+  </TabbedFormModal>
 </template>

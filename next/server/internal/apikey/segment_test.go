@@ -32,28 +32,34 @@ func (e *env) keyGroupStatus(user int64) any {
 	return keys[0].(map[string]any)["group_status"]
 }
 
+// segmentTermsCase is a key's group, what the owner's segment gets there,
+// and the rate authentication gives.
+type segmentTermsCase struct {
+	name                  string
+	visibility, groupRate string
+	// row is the segment's (granted, rate_override) in the group; nil = none.
+	row []any
+	// rate is "" when the group is not open to the owner.
+	rate, source string
+}
+
+var segmentTermsCases = []segmentTermsCase{
+	{"public, group rate", "public", "1.5", nil, "1.5", core.RateSourceGroup},
+	{"public, own rate", "public", "1.5", []any{false, "2.5"}, "2.5", core.RateSourceSegment},
+	{"public, own rate 0 is free", "public", "1.5", []any{false, "0"}, "0", core.RateSourceSegment},
+	{"private granted, group rate", "restricted", "2", []any{true, nil}, "2", core.RateSourceGroup},
+	{"private granted, own rate", "restricted", "2", []any{true, "0.25"}, "0.25", core.RateSourceSegment},
+	{"private granted, own rate 0 is free", "restricted", "2", []any{true, "0"}, "0", core.RateSourceSegment},
+	{"private, nothing set", "restricted", "2", nil, "", ""},
+	{"private, own rate without the grant", "restricted", "2", []any{false, "0.25"}, "", ""},
+}
+
 // Authentication reads what the owner's segment gets in the key's group: a
 // private group needs the grant; the principal carries the group's base rate
 // and the segment's own rate there, the latter applying (core.RateLevels).
 func TestAuthenticateSegmentTerms(t *testing.T) {
 	e := setup(t)
-	for _, c := range []struct {
-		name                  string
-		visibility, groupRate string
-		// row is the segment's (granted, rate_override) in the group; nil = none.
-		row []any
-		// rate is "" when the group is not open to the owner.
-		rate, source string
-	}{
-		{"public, group rate", "public", "1.5", nil, "1.5", core.RateSourceGroup},
-		{"public, own rate", "public", "1.5", []any{false, "2.5"}, "2.5", core.RateSourceSegment},
-		{"public, own rate 0 is free", "public", "1.5", []any{false, "0"}, "0", core.RateSourceSegment},
-		{"private granted, group rate", "restricted", "2", []any{true, nil}, "2", core.RateSourceGroup},
-		{"private granted, own rate", "restricted", "2", []any{true, "0.25"}, "0.25", core.RateSourceSegment},
-		{"private granted, own rate 0 is free", "restricted", "2", []any{true, "0"}, "0", core.RateSourceSegment},
-		{"private, nothing set", "restricted", "2", nil, "", ""},
-		{"private, own rate without the grant", "restricted", "2", []any{false, "0.25"}, "", ""},
-	} {
+	for _, c := range segmentTermsCases {
 		t.Run(c.name, func(t *testing.T) {
 			group := e.exec1(`INSERT INTO groups (name, visibility, rate_multiplier) VALUES ($1, $2, $3::numeric) RETURNING id`, c.name, c.visibility, c.groupRate)
 			seg := e.exec1(`INSERT INTO segments (name) VALUES ($1) RETURNING id`, c.name)
@@ -61,24 +67,30 @@ func TestAuthenticateSegmentTerms(t *testing.T) {
 			if c.row != nil {
 				e.exec(`INSERT INTO segment_groups (segment_id, group_id, granted, rate_override) VALUES ($1, $2, $3, $4::numeric)`, seg, group, c.row[0], c.row[1])
 			}
-			p, err := e.svc.Authenticate(t.Context(), e.addKey(e.user, group))
-			// Authentication and the key endpoints tell alike whether the
-			// owner may use the group: by the one rule, segment.OpenToKeyOwner.
-			var open bool
-			require.NoError(t, e.db.Tx(t.Context(), func(tx *gorm.DB) (err error) {
-				open, err = groupAvailable(t.Context(), tx, e.user, group)
-				return err
-			}))
-			require.Equal(t, c.rate != "", open)
-			if c.rate == "" {
-				require.Equal(t, CodeGroupNotAllowed, codeOf(err))
-				return
-			}
-			require.NoError(t, err)
-			rate, source := p.Rates().Rate()
-			require.Equal(t, []any{seg, c.groupRate, c.rate, c.source}, []any{p.SegmentID, p.Group.RateMultiplier.String(), rate.String(), source})
+			checkSegmentTerms(t, e, c, seg, group)
 		})
 	}
+}
+
+// checkSegmentTerms authenticates a new key of the user in group, whose
+// segment is seg, as c says.
+func checkSegmentTerms(t *testing.T, e *env, c segmentTermsCase, seg, group int64) {
+	p, err := e.svc.Authenticate(t.Context(), e.addKey(e.user, group))
+	// Authentication and the key endpoints tell alike whether the owner may
+	// use the group: by the one rule, segment.OpenToKeyOwner.
+	var open bool
+	require.NoError(t, e.db.Tx(t.Context(), func(tx *gorm.DB) (err error) {
+		open, err = groupAvailable(t.Context(), tx, e.user, group)
+		return err
+	}))
+	require.Equal(t, c.rate != "", open)
+	if c.rate == "" {
+		require.Equal(t, CodeGroupNotAllowed, codeOf(err))
+		return
+	}
+	require.NoError(t, err)
+	rate, source := p.Rates().Rate()
+	require.Equal(t, []any{seg, c.groupRate, c.rate, c.source}, []any{p.SegmentID, p.Group.RateMultiplier.String(), rate.String(), source})
 }
 
 // Authentication asks whether the owner may use the key's group by the one
@@ -87,6 +99,16 @@ func TestAuthenticateSegmentTerms(t *testing.T) {
 func TestLookupUsesOpenToUser(t *testing.T) {
 	require.Contains(t, lookupColumns, segment.OpenToKeyOwner)
 	require.Contains(t, selectKey, segment.OpenToKeyOwner)
+}
+
+// segmentStep changes the owner's segment or what it gets in the group,
+// and says the rate authentication then gives.
+type segmentStep struct {
+	name string
+	sql  string // "" = nothing changes
+	args []any
+	// rate is "" when the group is not open to the owner.
+	rate, source string
 }
 
 // Nothing of a segment is cached: moving the owner to another segment, or
@@ -99,15 +121,8 @@ func TestSegmentChangeAppliesAtOnce(t *testing.T) {
 	solo := e.exec1(`INSERT INTO segments (name) VALUES ('solo') RETURNING id`)
 	e.exec(`INSERT INTO segment_groups (segment_id, group_id, granted, rate_override) VALUES ($1, $3, true, NULL), ($2, $3, true, 3)`, team, solo, vip)
 	raw := e.addKey(e.user, vip)
-
 	move := `UPDATE users SET segment_id = $2 WHERE id = $1`
-	for _, step := range []struct {
-		name string
-		sql  string // "" = nothing changes
-		args []any
-		// rate is "" when the group is not open to the owner.
-		rate, source string
-	}{
+	for _, step := range []segmentStep{
 		{"the default segment has no grant", "", nil, "", ""},
 		{"moved to a granted segment", move, []any{e.user, team}, "2", core.RateSourceGroup},
 		{"moved to a segment with its own rate", move, []any{e.user, solo}, "3", core.RateSourceSegment},
@@ -115,22 +130,25 @@ func TestSegmentChangeAppliesAtOnce(t *testing.T) {
 		{"own rate set", `UPDATE segment_groups SET rate_override = 1.5 WHERE segment_id = $1`, []any{solo}, "1.5", core.RateSourceSegment},
 		{"grant revoked", `UPDATE segment_groups SET granted = false WHERE segment_id = $1`, []any{solo}, "", ""},
 	} {
-		t.Run(step.name, func(t *testing.T) {
-			if step.sql != "" {
-				e.exec(step.sql, step.args...)
-			}
-			p, err := e.svc.Authenticate(t.Context(), raw)
-			if step.rate == "" {
-				require.Equal(t, CodeGroupNotAllowed, codeOf(err))
-				require.Equal(t, "unavailable", e.keyGroupStatus(e.user))
-				return
-			}
-			require.NoError(t, err)
-			rate, source := p.Rates().Rate()
-			require.Equal(t, []any{step.rate, step.source}, []any{rate.String(), source})
-			require.Equal(t, "active", e.keyGroupStatus(e.user))
-		})
+		t.Run(step.name, func(t *testing.T) { checkSegmentStep(t, e, raw, step) })
 	}
+}
+
+// checkSegmentStep applies step and authenticates raw, the user's only key.
+func checkSegmentStep(t *testing.T, e *env, raw string, step segmentStep) {
+	if step.sql != "" {
+		e.exec(step.sql, step.args...)
+	}
+	p, err := e.svc.Authenticate(t.Context(), raw)
+	if step.rate == "" {
+		require.Equal(t, CodeGroupNotAllowed, codeOf(err))
+		require.Equal(t, "unavailable", e.keyGroupStatus(e.user))
+		return
+	}
+	require.NoError(t, err)
+	rate, source := p.Rates().Rate()
+	require.Equal(t, []any{step.rate, step.source}, []any{rate.String(), source})
+	require.Equal(t, "active", e.keyGroupStatus(e.user))
 }
 
 // A key is created in, or moved to, a private group only when its owner's

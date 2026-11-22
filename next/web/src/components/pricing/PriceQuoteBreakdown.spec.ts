@@ -50,7 +50,7 @@ describe('price quote breakdown', () => {
   })
 
   it('shows a custom group price with the price it is', () => {
-    const w = render({ price_source: 'group', list_price: { mode: 'visual', config: singleTier({ p: 1, c: 8 }), expression: '' }, price_levels: { group: { kind: 'custom', mode: 'visual', config: singleTier({ p: 1, c: 8 }) } } })
+    const w = render({ price_source: 'group', list_price: { mode: 'visual', config: singleTier({ p: 1, c: 8 }), expression: '' }, price_levels: { group: { mode: 'visual', config: singleTier({ p: 1, c: 8 }) } } })
     expect(w.get('[data-testid="price-quote-price"] [data-level="group"]').text()).toContain('自定义 = $1 / $8')
   })
 

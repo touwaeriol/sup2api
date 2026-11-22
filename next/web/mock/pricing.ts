@@ -34,7 +34,7 @@ import {
   segments,
   type MockSegment
 } from './pricingStore'
-import { applySegmentRates, fieldsFailure, segmentRatesErrors } from './pricingWrites'
+import { applySegmentRates, fieldsFailure, ownSegmentConflict, segmentRatesErrors, writesRates, type FieldError } from './pricingWrites'
 
 // ------------------------------------------------------------------ routing helpers
 
@@ -120,8 +120,8 @@ function settingOut(s: MockSegment, g: MockGroup, showUsers: boolean) {
 
 const segmentSettings = (s: MockSegment, req: MockRequest) => groups.map((g) => settingOut(s, g, showsUsers(req)))
 
-/** A personal segment is listed in a group only when it has something there. */
-const hasSettingsIn = (s: MockSegment, g: MockGroup) => pairsWhere({ segment_id: s.id, group_id: g.id }).length > 0
+/** A personal segment is listed in a group only when it has something there: a grant, a rate or a model rate. */
+const hasSettingsIn = (s: MockSegment, g: MockGroup) => [...pairsWhere({ segment_id: s.id, group_id: g.id }), ...modelRatesWhere({ segment_id: s.id, group_id: g.id })].length > 0
 
 /** The rows of a group: `include` (?include=<id>,<id>) keeps personal segments that have nothing there yet. */
 function groupSettings(g: MockGroup, req: MockRequest) {
@@ -165,16 +165,30 @@ function segmentMatches(s: MockSegment, q: Record<string, string>, showUsers: bo
 const NAME_MAX = 100
 const DESCRIPTION_MAX = 2000
 
-/** The first invalid field of a segment body; `self` is the segment being edited. */
-function segmentError(b: any, self?: MockSegment) {
+/** The field errors of the name and the description of a segment body (segment.textErrors); `self` is the segment being edited, none on a create. */
+function textErrors(b: any, self?: MockSegment): FieldError[] {
+  if (self?.kind === 'personal' && (b.name !== undefined || b.description !== undefined)) return [{ field: 'name', code: 'invalid', message: 'a personal user group has no name or description' }]
   const name = String(b.name ?? '').trim()
-  if (self?.kind === 'personal' && (b.name !== undefined || b.description !== undefined)) return invalid('name', 'a personal user group has no name or description')
-  if (b.name !== undefined && !name) return invalid('name', 'name is required')
-  if ([...name].length > NAME_MAX) return invalid('name', `name must be at most ${NAME_MAX} characters`)
-  // Unique without regard to case, as segments_name_uq on lower(name).
-  if (name && segments.some((s) => s !== self && s.kind === 'named' && s.name.toLowerCase() === name.toLowerCase())) return invalid('name', 'name already in use')
-  if (b.description !== undefined && [...String(b.description)].length > DESCRIPTION_MAX) return invalid('description', 'description is too long')
-  return fieldsFailure(segmentRatesErrors(b, (id) => groups.some((g) => g.id === id))) ?? null
+  const tooLong = b.description !== undefined && [...String(b.description)].length > DESCRIPTION_MAX
+  return [
+    ...((b.name !== undefined || !self) && !name ? [{ field: 'name', code: 'required', message: 'name is required' }] : []),
+    ...([...name].length > NAME_MAX ? [{ field: 'name', code: 'invalid', message: `name must be at most ${NAME_MAX} characters` }] : []),
+    ...(tooLong ? [{ field: 'description', code: 'too_long', message: 'description is too long' }] : [])
+  ]
+}
+
+/**
+ * What keeps a segment write back, in the server's order: every wrong field
+ * and item in one 400, then a name another named segment has (unique without
+ * regard to case, as segments_name_uq on lower(name)), then rates of a user
+ * group the caller is in.
+ */
+function segmentError(req: MockRequest, b: any, self?: MockSegment) {
+  const name = String(b.name ?? '').trim().toLowerCase()
+  const failure = fieldsFailure([...textErrors(b, self), ...segmentRatesErrors(b, (id) => groups.some((g) => g.id === id))])
+  if (failure) return failure
+  if (name && segments.some((s) => s !== self && s.kind === 'named' && s.name.toLowerCase() === name)) return invalid('name', 'name already in use', 'duplicate')
+  return self && writesRates(b) ? ownSegmentConflict(req, [self.id]) : undefined
 }
 
 route('GET', '/segments', 'segment:read', (req) => {
@@ -185,7 +199,7 @@ route('GET', '/segments', 'segment:read', (req) => {
 route('GET', '/segments/:id', 'segment:read', onSegment((s, req) => segmentOut(s, showsUsers(req))))
 route('POST', '/segments', 'segment:manage', (req) => {
   const b = req.body || {}
-  const err = segmentError({ ...b, name: b.name ?? '' })
+  const err = segmentError(req, b)
   if (err) return err
   const s = addSegment(String(b.name).trim(), String(b.description ?? ''))
   applySegmentRates(s.id, b)
@@ -193,16 +207,18 @@ route('POST', '/segments', 'segment:manage', (req) => {
 })
 route('PATCH', '/segments/:id', 'segment:manage', onSegment((s, req) => {
   const b = req.body || {}
-  const err = segmentError(b, s)
+  const err = segmentError(req, b, s)
   if (err) return err
   if (b.name !== undefined) s.name = String(b.name).trim()
   if (b.description !== undefined) s.description = String(b.description)
   applySegmentRates(s.id, b)
   return segmentOut(s, showsUsers(req))
 }))
-route('DELETE', '/segments/:id', 'segment:manage', onSegment((s) => {
+route('DELETE', '/segments/:id', 'segment:manage', onSegment((s, req) => {
   if (s.is_default) return fail(409, 'conflict', 'the default user group cannot be deleted')
   if (s.kind === 'personal') return fail(409, 'conflict', 'a personal user group is deleted by moving its user to a user group')
+  const own = ownSegmentConflict(req, [s.id])
+  if (own) return own
   removeSegment(s)
   return noContent()
 }))
@@ -329,11 +345,16 @@ function allPrices(mine: MyGroup[]) {
   return { group: null, rate_multiplier: '1', prices: pricedModels().map((model) => ({ model, ...globalPrice(model)!, groups: groupsOf(model) })) }
 }
 
-/** The models one of the caller's groups provides and can bill, at the list price and the rate the caller gets there. */
-function groupPrices(g: MyGroup) {
+/**
+ * The models one of the caller's groups provides and can bill, each at its
+ * list price and the rate the caller pays for it there (of the four levels,
+ * the model's included); the rate on top is the group's, without a model.
+ */
+function groupPrices(g: MyGroup, s: MockSegment) {
   const prices = groupModels(g).flatMap((model) => {
     const { list_price, source } = listPriceOf(g.id, model, globalPrice(model))
-    return list_price ? [{ model, ...list_price, source }] : []
+    const rate = rateOf(s, g, model)
+    return list_price ? [{ model, ...list_price, source, rate: rate.value, rate_source: rate.source }] : []
   })
   return { group: { id: g.id, name: g.name }, rate_multiplier: g.effective_rate, rate_source: g.rate_source, prices }
 }
@@ -345,5 +366,5 @@ on('GET', '/me/prices', (req) => {
   if (!req.query.group_id) return allPrices(mine)
   if (!positive(req.query.group_id)) return fail(400, 'invalid_argument', 'invalid group_id')
   const g = mine.find((x) => x.id === Number(req.query.group_id))
-  return g ? groupPrices(g) : fail(404, 'not_found', 'group not found')
+  return g ? groupPrices(g, segmentOfUser(who.id)) : fail(404, 'not_found', 'group not found')
 })

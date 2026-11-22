@@ -1,7 +1,7 @@
 import { computed, shallowRef } from 'vue'
 import { toast } from '@sub2api/ui'
 import { i18n } from '@/i18n'
-import { itemErrors, withDraft } from './drafts'
+import { listRequest, withDraft } from './drafts'
 import { modelRatePatches, modelRateRows, newModelRate, setModelRateDraft, type DraftedModelRate, type ModelRateDrafts, type SegmentModelRate } from './modelRateDrafts'
 
 export interface ModelRateDraftsOptions {
@@ -18,17 +18,6 @@ function checkRates(rows: readonly DraftedModelRate[], groupName: (id: number) =
   return !row
 }
 
-/** What the request sends of the drafts, and the field errors of its answer by row key. */
-function requestOf(drafts: { value: ModelRateDrafts }, rowErrors: { value: ReadonlyMap<string, string> }) {
-  let sent: ReturnType<typeof modelRatePatches> = []
-  return {
-    body() {
-      sent = modelRatePatches(drafts.value)
-      return sent.length ? { model_rates: sent } : {}
-    },
-    applyErrors: (errors: Record<string, string>) => (rowErrors.value = itemErrors(errors, 'model_rates', sent, (item) => newModelRate(item.group_id, item.model).key))
-  }
-}
 
 /**
  * The model rates of a segment in all its groups while they are edited: the
@@ -40,6 +29,7 @@ export function useModelRateDrafts(options: ModelRateDraftsOptions) {
   const drafts = shallowRef<ModelRateDrafts>(new Map())
   const rowErrors = shallowRef<ReadonlyMap<string, string>>(new Map())
   const rows = computed(() => modelRateRows(options.saved(), drafts.value))
+  const request = listRequest('model_rates', () => modelRatePatches(drafts.value), (item) => newModelRate(item.group_id, item.model).key)
 
   function change(row: Pick<DraftedModelRate, 'key' | 'saved' | 'group_id' | 'model'>, rate: string | null) {
     drafts.value = setModelRateDraft(drafts.value, row, rate)
@@ -58,6 +48,7 @@ export function useModelRateDrafts(options: ModelRateDraftsOptions) {
     /** Adds `model` in group `groupId` at `rate`, the rate it pays there now. */
     add: (groupId: number, model: string, rate: string) => change(newModelRate(groupId, model), rate),
     undo: (row: DraftedModelRate) => (drafts.value = withDraft(drafts.value, row.key, undefined)),
-    ...requestOf(drafts, rowErrors)
+    body: request.body,
+    applyErrors: (errors: Record<string, string>) => (rowErrors.value = request.errors(errors))
   }
 }

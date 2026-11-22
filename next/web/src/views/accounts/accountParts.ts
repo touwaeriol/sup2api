@@ -3,6 +3,7 @@
 // so each section shows what is wrong), adds its fields to the one request
 // body, takes the server errors of those fields (SECTION_FIELDS) and marks
 // its section while an error of it is shown.
+import { ref } from 'vue'
 import type { TabbedFormPart } from '@sub2api/ui'
 import { sameSet } from './bulkEdit'
 import { accountControl } from './commonControls'
@@ -52,17 +53,23 @@ function connectionBody(d: AccountSaveDeps, credentials: Record<string, unknown>
   return out
 }
 
-/** Name, groups, proxy and the plugin form's credentials (collected by the check, sent by the body). */
+/**
+ * Name, groups, proxy and the plugin form's credentials (collected by the
+ * check, sent by the body). Credentials the plugin form refused (its own
+ * validation, which shows why) mark the section until the next save.
+ */
 function connectionPart(d: AccountSaveDeps, t: T): TabbedFormPart {
   let credentials: Record<string, unknown> | null = null
+  const refused = ref(false)
   return sectionPart(d, 'connection', {
     async check() {
       const ok = report(d, connectionProblems(d, t))
       credentials = await d.collectCredentials()
-      return ok && credentials !== null
+      refused.value = credentials === null
+      return ok && !refused.value
     },
     body: () => connectionBody(d, credentials),
-    invalid: () => Object.keys(d.errors.value).some(isSectionField('connection')) || Object.keys(d.credErrors.value).length > 0,
+    invalid: () => refused.value || Object.keys(d.errors.value).some(isSectionField('connection')) || Object.keys(d.credErrors.value).length > 0,
     applyErrors(e) {
       const { cred, base } = splitFieldErrors(e)
       d.errors.value = { ...d.errors.value, ...base }

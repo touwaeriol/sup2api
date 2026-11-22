@@ -22,19 +22,19 @@ func TestResolveExactModel(t *testing.T) {
 		       ('gpt-4o', 'visual', 'tier("base", p*2.5)', 'h3', 'manual')`)
 	e.exec(`UPDATE model_prices SET enabled = false WHERE model = 'gpt-4o'`)
 	e.svc.invalidate()
-	if r, err := e.svc.Resolve(ctx, core.PriceQuery{Model: "claude-sonnet-4-5"}); err != nil || r.Model != "claude-sonnet-4-5" || r.Mode != "visual" {
+	if r, err := priceOf(ctx, e.svc, core.PriceQuery{Model: "claude-sonnet-4-5"}); err != nil || r.Model != "claude-sonnet-4-5" || r.Mode != "visual" {
 		t.Fatalf("resolve: %+v %v", r, err)
 	}
 	// A visual price that reads no token count is due per request.
 	for model, perRequest := range map[string]bool{"claude-sonnet-4-5": false, "web-search": true} {
-		r, err := e.svc.Resolve(ctx, core.PriceQuery{Model: model})
+		r, err := priceOf(ctx, e.svc, core.PriceQuery{Model: model})
 		if err != nil || r.PerRequest != perRequest {
 			t.Fatalf("resolve %s: %+v %v", model, r, err)
 		}
 	}
 	// Exact match only; a disabled price counts as missing.
 	for _, m := range []string{"claude-sonnet-4-5-20250929", "claude-sonnet", "gpt-4o"} {
-		if _, err := e.svc.Resolve(ctx, core.PriceQuery{Model: m}); core.AsError(err).Code != "model_price_not_configured" {
+		if _, err := priceOf(ctx, e.svc, core.PriceQuery{Model: m}); core.AsError(err).Code != "model_price_not_configured" {
 			t.Fatalf("resolve %s: err = %v", m, err)
 		}
 	}
@@ -50,11 +50,11 @@ func TestResolveExactModel(t *testing.T) {
 	}
 	// The bus invalidates the cache.
 	e.exec(`UPDATE model_prices SET expression = 'tier("base", p*9)' WHERE model = 'claude-sonnet-4-5'`)
-	if r, _ := e.svc.Resolve(ctx, core.PriceQuery{Model: "claude-sonnet-4-5"}); r.Expression == `tier("base", p*9)` {
+	if r, _ := priceOf(ctx, e.svc, core.PriceQuery{Model: "claude-sonnet-4-5"}); r.Expression == `tier("base", p*9)` {
 		t.Fatal("cache should still serve the old answer before invalidation")
 	}
 	_ = e.bus.Publish(ctx, core.ChannelConfigChanged, []byte(`{"key":"prices"}`))
-	if r, _ := e.svc.Resolve(ctx, core.PriceQuery{Model: "claude-sonnet-4-5"}); r.Expression != `tier("base", p*9)` {
+	if r, _ := priceOf(ctx, e.svc, core.PriceQuery{Model: "claude-sonnet-4-5"}); r.Expression != `tier("base", p*9)` {
 		t.Fatalf("after invalidation: %+v", r)
 	}
 	bodies, headers := e.svc.Inputs(&core.PriceRule{Expression: `(tier("b", p)) * (param("service_tier") == "x" ? 2 : 1) * (has(header("Anthropic-Beta"), "f") ? 2 : 1)`})

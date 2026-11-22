@@ -1,6 +1,6 @@
 // The models a group provides with its accounts and its model policy: what
 // the server works out (group.Models.Offers, core.GroupInfo.AllowsModel),
-// for the mock server (mock/groups.ts). Kept alike with the server, so the
+// for the mock server (groups.ts). Kept alike with the server, so the
 // mock lists what a real core would.
 
 /** The accounts of a group, and its model policy. */

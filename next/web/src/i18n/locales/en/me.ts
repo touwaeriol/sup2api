@@ -118,11 +118,13 @@ export default {
     baseNote: 'These are the original prices of every model (rate ×1). You pay the model price times your rate in the account group you use; the model price is the original price unless the account group gives the model a price of its own. Choose an account group to see what you pay there.',
     unit: 'USD per million tokens',
     basePrice: 'original price, no rate applied',
-    rated: 'your rate in this account group, {rate}, included',
+    rated: 'your rate for each model in this account group included',
+    rate: 'Your rate',
     rateSource: {
-      segment_model: 'you have a rate of your own for this model',
-      segment: 'your user group has a rate of its own in this account group',
-      group_model: 'this model has a rate of its own in this account group'
+      segment_model: 'your user group\'s rate for this model',
+      segment: 'your user group\'s rate in this account group',
+      group_model: 'this model\'s rate in this account group',
+      group: 'the account group\'s base rate'
     },
     perRequest: '{price} per request',
     tiered: '{n} tiers, fallback shown',

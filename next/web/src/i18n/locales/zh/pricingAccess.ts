@@ -21,10 +21,11 @@ export default {
   },
   unavailable: '用不了',
   remove: '移除',
+  undo: '撤销',
   groupRate: '基本倍率',
   baseRate: '基本倍率',
   members: '{n} 人',
-  overrideNote: '倍率留空 = 跟随账号分组的基本倍率；只有一个倍率生效，不会相乘。',
+  overrideNote: '倍率留空 = 跟随账号分组：设了模型倍率的模型按模型倍率，其他模型按基本倍率；只有一个倍率生效，不会相乘。',
   inGroup: {
     restricted: '只有开通的用户分组能用这个账号分组。',
     public: '所有人都能用这个账号分组。',
@@ -34,6 +35,7 @@ export default {
     addSegment: '添加用户分组',
     addUser: '添加用户',
     addNone: '用户分组都已在列表里',
+    modelRates: '{n} 个模型单独设了倍率，移除时一并删除',
     empty: {
       public: '还没有单独设置：所有人按基本倍率计费。',
       restricted: '还没有开通给任何用户分组或用户，现在没有人能用。'

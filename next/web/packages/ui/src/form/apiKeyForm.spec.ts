@@ -175,8 +175,9 @@ describe('createApiKeyForm: the anthropic form', () => {
     expect(w.get('textarea').classes()).toContain('font-mono')
   })
 
-  it('extra fields: select with defaults, sections, `when`, date-time in RFC 3339, no base URL', async () => {
-    const Bedrock = createApiKeyForm({
+  /** An API key form with extra fields: a region with a pattern, a prefix to select, a date-time while the prefix is "us". */
+  const bedrock = () =>
+    createApiKeyForm({
       baseUrl: false,
       apiKey: { max: 2048 },
       defaults: { region: 'us-east-1', inference_profile_prefix: 'global' },
@@ -186,14 +187,25 @@ describe('createApiKeyForm: the anthropic form', () => {
         { key: 'expires', kind: 'date-time', label: () => 'Expires', when: (m) => m.inference_profile_prefix === 'us', rules: { required: true, type: 'date-time' } }
       ]
     })
-    const { w, credentials, validate } = editor(Bedrock)
+
+  it('extra fields: select with defaults, sections, no base URL, and their own rules', async () => {
+    const { w, credentials, validate } = editor(bedrock())
     await flushPromises()
     expect(credentials.value).toEqual({ region: 'us-east-1', inference_profile_prefix: 'global' })
     expect(w.find('input[type="url"]').exists()).toBe(false)
     expect(w.findAll('h4').map((x) => x.text())).toEqual(['Where'])
-    expect(w.find('input[type="datetime-local"]').exists()).toBe(false)
     await typeInto(w, KEY, 'k'.repeat(1000))
     expect(await validate()).toBe(true)
+    await typeInto(w, 'input[type="text"]', 'nowhere')
+    expect(await validate()).toBe(false)
+    expect(w.text()).toContain('Invalid format')
+  })
+
+  it('extra fields: `when`, and a date-time in RFC 3339', async () => {
+    const { w, credentials, validate } = editor(bedrock())
+    await flushPromises()
+    expect(w.find('input[type="datetime-local"]').exists()).toBe(false)
+    await typeInto(w, KEY, 'k')
     await w.find('select').setValue(String(1))
     await flushPromises()
     expect(credentials.value.inference_profile_prefix).toBe('us')
@@ -203,9 +215,6 @@ describe('createApiKeyForm: the anthropic form', () => {
     await flushPromises()
     expect(credentials.value.expires).toMatch(/^2026-11-19T\d{2}:00:00(\.000)?(Z|[+-]\d{2}:\d{2})$/)
     expect(await validate()).toBe(true)
-    await typeInto(w, 'input[type="text"]', 'nowhere')
-    expect(await validate()).toBe(false)
-    expect(w.text()).toContain('Invalid format')
   })
 
   it('apiKey min, max and pattern apply when given', async () => {

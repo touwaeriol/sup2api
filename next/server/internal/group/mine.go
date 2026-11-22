@@ -105,9 +105,9 @@ func (s *Service) completeMine(ctx context.Context, uid int64, groups []MyGroup)
 		if !ok {
 			continue
 		}
-		g.Platforms = ps[g.ID]
-		g.ServedProtocols = myServed(served[g.ID])
-		g.EffectiveRate, g.RateSource = tm.Rate, tm.RateSource
+		g.Platforms, g.ServedProtocols = ps[g.ID], myServed(served[g.ID])
+		rate := segment.RateOf(tm.Levels())
+		g.EffectiveRate, g.RateSource = rate.Value, rate.Source
 		mine = append(mine, g)
 	}
 	return mine, nil

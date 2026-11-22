@@ -17,7 +17,7 @@ enableAutoUnmount(afterEach)
 i18n.global.locale.value = 'en'
 
 const price = (p: number, c: number): PriceDef => ({ mode: 'visual', config: singleTier({ p, c }), expression: '' })
-const own: CustomPrice = { kind: 'custom', mode: 'visual', config: singleTier({ p: 1, c: 8 }) }
+const own: CustomPrice = { mode: 'visual', config: singleTier({ p: 1, c: 8 }) }
 const catalog: CatalogPrice[] = [
   { model: 'claude-haiku-4-5', price: price(1, 5) },
   { model: 'gpt-4o', price: price(3, 15) },
@@ -126,7 +126,7 @@ describe('model price table', () => {
     const { result, body } = await sent()
     expect(result).toEqual({})
     expect(body).toEqual({
-      model_prices: [{ model: 'gpt-4o', rule: { kind: 'custom', mode: 'visual', config: singleTier({ p: 3, c: 15 }) } }, { model: 'gpt-5', rule: null }],
+      model_prices: [{ model: 'gpt-4o', rule: { mode: 'visual', config: singleTier({ p: 3, c: 15 }) } }, { model: 'gpt-5', rule: null }],
       model_rates: [{ model: 'o3', rate: '0.5' }]
     })
   })

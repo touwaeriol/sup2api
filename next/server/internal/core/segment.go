@@ -62,8 +62,10 @@ func RateError(ctx context.Context, field string) FieldError {
 }
 
 // RateInput is a rate request field: a rate as a JSON string, or null
-// (Value nil). Set marks it present and Invalid one that is no rate
-// (ParseRate); a value that is no string fails the decoding.
+// (Value nil). Set marks it present and Invalid a value that is no rate:
+// one that is no string or null, or a string ParseRate refuses. Decoding
+// never fails, so a list reports each wrong item by its path (Errors)
+// instead of failing as a whole.
 type RateInput struct {
 	Set     bool
 	Value   *decimal.Decimal
@@ -71,11 +73,12 @@ type RateInput struct {
 }
 
 func (in *RateInput) UnmarshalJSON(b []byte) error {
-	var text *string
-	if err := json.Unmarshal(b, &text); err != nil {
-		return err
-	}
 	*in = RateInput{Set: true}
+	var text *string
+	if json.Unmarshal(b, &text) != nil {
+		in.Invalid = true
+		return nil
+	}
 	if text != nil {
 		d, ok := ParseRate(*text)
 		in.Value, in.Invalid = &d, !ok
@@ -83,10 +86,14 @@ func (in *RateInput) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// Errors are the field errors of the rate at field: RateError when it is
-// no rate.
+// Errors are the field errors of the rate at field: required when it is
+// missing (a rate or null must be given), RateError when it is no rate.
+// Value means anything only without them.
 func (in RateInput) Errors(ctx context.Context, field string) []FieldError {
-	if in.Invalid {
+	switch {
+	case !in.Set:
+		return []FieldError{NewFieldError(ctx, field, "required", "a rate or null is required", "必须填写倍率或 null")}
+	case in.Invalid:
 		return []FieldError{RateError(ctx, field)}
 	}
 	return nil
@@ -148,7 +155,8 @@ type PricingTrace struct {
 	PriceSource string `json:"price_source,omitempty"`
 	// Scale is the multiplier of a multiplier rule, on records priced
 	// before core migration 0124 turned those rules into model rates
-	// (PriceRule.Scale); none is written any more.
+	// (PriceRule.Scale); none is written any more. Compatibility, removed
+	// with PriceRule.Scale (CONTRACTS §97.4).
 	Scale *decimal.Decimal `json:"scale,omitempty"`
 	// Base is the global price a custom rule replaced.
 	Base *PriceBase `json:"base,omitempty"`

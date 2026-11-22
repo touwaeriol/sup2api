@@ -184,43 +184,70 @@ func (s *Service) Menus(ctx context.Context, userID int64) ([]MenuSection, error
 	if err != nil {
 		return nil, err
 	}
-	type section struct {
-		MenuSection
-		order int
-	}
-	var out []section
-	byKey := map[string]int{}
-	add := func(key string, label core.LocalizedText, order int) int {
-		if i, ok := byKey[key]; ok {
-			return i
-		}
-		out = append(out, section{MenuSection{Section: key, Label: label, Items: []MenuItem{}}, order})
-		byKey[key] = len(out) - 1
-		return len(out) - 1
-	}
+	var b sidebar
 	for _, sec := range coreMenus {
 		order, _ := manifest.CoreMenuSectionOrder(sec.id)
-		i := add(sec.id, sec.label, order)
+		i := b.section(sec.id, sec.label, order)
 		for _, it := range sec.items {
-			anyOf, bound := s.menuAnyOf(it)
-			if !bound || !hasAny(set, anyOf) || slices.ContainsFunc(hideWith[it.id], set.Has) {
-				continue
+			if s.showsCore(it, set) {
+				b.add(i, MenuItem{ID: it.id, Label: it.label, Icon: it.icon, Path: it.path})
 			}
-			out[i].Items = append(out[i].Items, MenuItem{ID: it.id, Label: it.label, Icon: it.icon, Path: it.path})
 		}
 	}
 	for _, pm := range s.pluginMenus(set) {
-		i := add(pm.sectionKey, pm.sectionLabel, pm.sectionOrder)
-		out[i].Items = append(out[i].Items, pm.MenuItem)
+		b.add(b.section(pm.sectionKey, pm.sectionLabel, pm.sectionOrder), pm.MenuItem)
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].order < out[j].order })
-	res := make([]MenuSection, 0, len(out))
-	for _, sec := range out {
+	return b.sections(), nil
+}
+
+// showsCore reports whether the core menu item shows to the holder of set:
+// its routes are bound, set holds one of their permissions and none of
+// those that hide it (hideWith).
+func (s *Service) showsCore(it coreMenuItem, set core.PermissionSet) bool {
+	anyOf, bound := s.menuAnyOf(it)
+	return bound && hasAny(set, anyOf) && !slices.ContainsFunc(hideWith[it.id], set.Has)
+}
+
+// sidebar collects the sections of a sidebar, each once by key, in the
+// order they were first named.
+type sidebar struct {
+	list  []orderedSection
+	byKey map[string]int
+}
+
+// orderedSection is a section with where it goes among the others.
+type orderedSection struct {
+	MenuSection
+	order int
+}
+
+// section returns the index of the section key, adding it with the label
+// and the order the first time.
+func (b *sidebar) section(key string, label core.LocalizedText, order int) int {
+	if i, ok := b.byKey[key]; ok {
+		return i
+	}
+	if b.byKey == nil {
+		b.byKey = map[string]int{}
+	}
+	b.list = append(b.list, orderedSection{MenuSection{Section: key, Label: label, Items: []MenuItem{}}, order})
+	b.byKey[key] = len(b.list) - 1
+	return len(b.list) - 1
+}
+
+// add appends the item to section i.
+func (b *sidebar) add(i int, item MenuItem) { b.list[i].Items = append(b.list[i].Items, item) }
+
+// sections are the sections that have items, by order.
+func (b *sidebar) sections() []MenuSection {
+	sort.SliceStable(b.list, func(i, j int) bool { return b.list[i].order < b.list[j].order })
+	out := make([]MenuSection, 0, len(b.list))
+	for _, sec := range b.list {
 		if len(sec.Items) > 0 {
-			res = append(res, sec.MenuSection)
+			out = append(out, sec.MenuSection)
 		}
 	}
-	return res, nil
+	return out
 }
 
 // pluginMenu is a plugin menu item with the section it goes to: a core
@@ -233,6 +260,8 @@ type pluginMenu struct {
 	order        int
 }
 
+// pluginMenus are the menus of the running plugins that set allows, by
+// order and then id.
 func (s *Service) pluginMenus(set core.PermissionSet) []pluginMenu {
 	if s.plugins == nil {
 		return nil
@@ -243,53 +272,63 @@ func (s *Service) pluginMenus(set core.PermissionSet) []pluginMenu {
 	}
 	var list []pluginMenu
 	for _, p := range gen.Plugins() {
-		if p.Manifest == nil || p.Manifest.UI == nil {
-			continue
-		}
-		// A plugin key shows at any scope, as the core's account and proxy
-		// menus do (hasAny); the plugin routes narrow the data.
-		allowed := func(perm string) bool { return set.HasSome(manifest.PermissionKey(p.Key, perm)) }
-		for _, m := range manifest.FilterUI(p.Manifest.UI, allowed, set.Has).Menus {
-			label := core.LocalizedText(m.Label)
-			if label == nil {
-				label = core.LocalizedText{"en": m.ID}
-			}
-			pm := pluginMenu{MenuItem: MenuItem{
-				ID:        p.Key + ":" + m.ID,
-				Label:     label,
-				Icon:      cmp.Or(m.Icon, "puzzle"),
-				Path:      "/p/" + p.Key + "/" + strings.TrimPrefix(m.Page, "/"),
-				PluginKey: p.Key,
-			}, order: m.Order}
-			// A core section (the shared "plugins" one by default) already
-			// exists with its own label by the time plugin menus join it.
-			section := cmp.Or(m.Section, "plugins")
-			if order, ok := manifest.CoreMenuSectionOrder(section); ok {
-				pm.sectionKey, pm.sectionOrder = section, order
-			} else {
-				pm.sectionKey = p.Key + ":" + m.Section
-				pm.sectionLabel, pm.sectionOrder = core.LocalizedText{"en": m.Section}, manifest.PluginMenuSectionOrder
-				for _, sec := range p.Manifest.UI.Sections {
-					if sec.ID == m.Section {
-						if l := core.LocalizedText(sec.Label); l != nil {
-							pm.sectionLabel = l
-						}
-						if sec.Order != 0 {
-							pm.sectionOrder = sec.Order
-						}
-					}
-				}
-			}
-			list = append(list, pm)
+		if p.Manifest != nil && p.Manifest.UI != nil {
+			list = append(list, pluginMenusOf(p.Key, p.Manifest.UI, set)...)
 		}
 	}
 	sort.SliceStable(list, func(i, j int) bool {
-		if list[i].order != list[j].order {
-			return list[i].order < list[j].order
-		}
-		return list[i].ID < list[j].ID
+		return cmp.Or(cmp.Compare(list[i].order, list[j].order), cmp.Compare(list[i].ID, list[j].ID)) < 0
 	})
 	return list
+}
+
+// pluginMenusOf are the menus of the UI of plugin key that set allows. A
+// plugin key shows at any scope, as the core's account and proxy menus do
+// (hasAny); the plugin routes narrow the data.
+func pluginMenusOf(key string, ui *manifest.UI, set core.PermissionSet) []pluginMenu {
+	allowed := func(perm string) bool { return set.HasSome(manifest.PermissionKey(key, perm)) }
+	var list []pluginMenu
+	for _, m := range manifest.FilterUI(ui, allowed, set.Has).Menus {
+		label := core.LocalizedText(m.Label)
+		if label == nil {
+			label = core.LocalizedText{"en": m.ID}
+		}
+		pm := pluginMenu{MenuItem: MenuItem{
+			ID:        key + ":" + m.ID,
+			Label:     label,
+			Icon:      cmp.Or(m.Icon, "puzzle"),
+			Path:      "/p/" + key + "/" + strings.TrimPrefix(m.Page, "/"),
+			PluginKey: key,
+		}, order: m.Order}
+		pm.place(key, ui, m.Section)
+		list = append(list, pm)
+	}
+	return list
+}
+
+// place puts the menu in its section: a core one (the shared "plugins" one
+// by default), which already exists with its own label by the time plugin
+// menus join it, or the plugin's own section, labelled and ordered as its
+// UI declares it.
+func (pm *pluginMenu) place(key string, ui *manifest.UI, section string) {
+	shared := cmp.Or(section, "plugins")
+	if order, ok := manifest.CoreMenuSectionOrder(shared); ok {
+		pm.sectionKey, pm.sectionOrder = shared, order
+		return
+	}
+	pm.sectionKey = key + ":" + section
+	pm.sectionLabel, pm.sectionOrder = core.LocalizedText{"en": section}, manifest.PluginMenuSectionOrder
+	for _, sec := range ui.Sections {
+		if sec.ID != section {
+			continue
+		}
+		if l := core.LocalizedText(sec.Label); l != nil {
+			pm.sectionLabel = l
+		}
+		if sec.Order != 0 {
+			pm.sectionOrder = sec.Order
+		}
+	}
 }
 
 func hasAny(set core.PermissionSet, perms []string) bool {

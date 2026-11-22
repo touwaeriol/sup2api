@@ -45,14 +45,11 @@ type Terms struct {
 	// rate in the group (nil = none).
 	GroupRate decimal.Decimal
 	Override  *decimal.Decimal
-	// Rate is the rate members pay there for a model with no rate of its
-	// own and RateSource where it comes from (core.RateLevels).
-	Rate       decimal.Decimal
-	RateSource string
 }
 
 // Levels are the rate levels of the terms; the model levels are the
-// caller's to add.
+// caller's to add. RateOf(Levels()) is what members pay there for a model
+// with no rate of its own.
 func (t Terms) Levels() core.RateLevels {
 	return core.RateLevels{Segment: t.Override, Group: t.GroupRate}
 }
@@ -64,15 +61,11 @@ type EffectiveRate struct {
 	GroupDefault decimal.Decimal `json:"group_default"`
 }
 
-// RateOf returns the rate levels pick for the console.
+// RateOf returns the rate levels pick (core.RateLevels.Rate) for the
+// console. It is the one way to it.
 func RateOf(l core.RateLevels) EffectiveRate {
 	value, source := l.Rate()
 	return EffectiveRate{Value: value, Source: source, GroupDefault: l.Group}
-}
-
-// EffectiveRate returns the terms' rate for the console.
-func (t Terms) EffectiveRate() EffectiveRate {
-	return EffectiveRate{Value: t.Rate, Source: t.RateSource, GroupDefault: t.GroupRate}
 }
 
 // termsColumns are the columns of a termsRow.
@@ -91,10 +84,8 @@ type termsRow struct {
 
 // terms returns the row as Terms.
 func (r termsRow) terms() Terms {
-	t := Terms{SegmentID: r.SegmentID, Granted: r.Granted, Open: r.Public || r.Granted,
+	return Terms{SegmentID: r.SegmentID, Granted: r.Granted, Open: r.Public || r.Granted,
 		GroupRate: r.GroupRate, Override: r.RateOverride}
-	t.Rate, t.RateSource = t.Levels().Rate()
-	return t
 }
 
 // UserTerms returns the terms of the user's segment in each of the groups

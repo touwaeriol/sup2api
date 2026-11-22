@@ -108,3 +108,43 @@ func TestCreateSegmentWithRates(t *testing.T) {
 		"model_rates": []any{map[string]any{"group_id": 999999, "model": "m", "rate": "1"}}}).invalid("model_rates.0.group_id")
 	require.Equal(t, int64(0), f.id(`SELECT count(*) FROM segments WHERE name = 'other'`), "a wrong rate creates nothing")
 }
+
+// A segment's model rate takes a model with a global price; removing one
+// always can.
+func TestSegmentModelRatesNeedGlobalPrice(t *testing.T) {
+	f := newSettingsFixture(t)
+	rates := func(items ...map[string]any) response {
+		return f.do(f.admin, "PATCH", path("/segments/%d", f.vip), map[string]any{"model_rates": items})
+	}
+	fe := rates(map[string]any{"group_id": f.public, "model": "m", "rate": "1"},
+		map[string]any{"group_id": f.public, "model": " unpriced ", "rate": "1"}).invalid("model_rates.1.model")
+	require.Equal(t, "the model has no global price", fe["message"])
+	f.exec(`INSERT INTO segment_model_rates (segment_id, group_id, model, rate) VALUES ($1, $2, 'unpriced', 0.5)`, f.vip, f.public)
+	rates(map[string]any{"group_id": f.public, "model": "unpriced", "rate": nil}).ok(200)
+	require.Equal(t, "none", f.modelRateOf(f.vip, f.public, "unpriced"))
+	f.exec(`UPDATE model_prices SET enabled = false WHERE model = 'm'`)
+	rates(map[string]any{"group_id": f.public, "model": "m", "rate": "1"}).invalid("model_rates.0.model")
+}
+
+// POST/PATCH /segments refuse fields they do not have, such as the removed
+// discount; a rate that is no string is the field error of its item.
+func TestSegmentWriteStrict(t *testing.T) {
+	f := newSettingsFixture(t)
+	f.do(f.admin, "PATCH", path("/segments/%d", f.vip), map[string]any{"discount": "0.9"}).failed(400, "invalid_argument")
+	f.do(f.admin, "POST", "/segments", map[string]any{"name": "gold", "discount": "0.9"}).failed(400, "invalid_argument")
+	require.Equal(t, int64(0), f.id(`SELECT count(*) FROM segments WHERE name = 'gold'`))
+	f.do(f.admin, "PATCH", path("/segments/%d", f.vip), map[string]any{"group_rates": []any{
+		map[string]any{"group_id": f.public, "rate": "1"}, map[string]any{"group_id": f.other, "rate": 2}}}).invalid("group_rates.1.rate")
+}
+
+// A group_rates item with remove drops the pair and the segment's model
+// rates in that group.
+func TestSegmentGroupRatesRemove(t *testing.T) {
+	f := newSettingsFixture(t)
+	f.exec(`INSERT INTO segment_model_rates (segment_id, group_id, model, rate) VALUES ($1, $2, 'm', 0.5)`, f.vip, f.granted)
+	f.do(f.admin, "PATCH", path("/segments/%d", f.vip), map[string]any{"group_rates": []any{
+		map[string]any{"group_id": f.granted, "remove": true}}}).ok(200)
+	require.Equal(t, "none", f.pairOf(f.vip, f.granted))
+	require.Equal(t, "none", f.modelRateOf(f.vip, f.granted, "m"))
+	require.Equal(t, int32(1), f.ratesChanged.Load())
+}

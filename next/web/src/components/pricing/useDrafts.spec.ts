@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises } from '@vue/test-utils'
-import { itemErrors, withDraft } from './drafts'
+import { itemErrors, listRequest, withDraft } from './drafts'
 import { useDrafts } from './useDrafts'
 
 const toast = vi.hoisted(() => vi.fn())
@@ -25,6 +25,14 @@ describe('drafts by row key', () => {
     const sent = [{ model: 'a' }, { model: 'b' }]
     const errors = { 'model_prices.1.rule': 'bad', 'model_prices.7.rule': 'gone', 'model_rates.0.rate': 'other list', name: 'not a list' }
     expect([...itemErrors(errors, 'model_prices', sent, (i) => i.model)]).toEqual([['b', 'bad']])
+  })
+  it('send a list only with items, and take the errors back to what was sent then', () => {
+    let items = [{ model: 'a' }, { model: 'b' }]
+    const list = listRequest('model_rates', () => items, (i) => i.model)
+    expect(list.body()).toEqual({ model_rates: items })
+    items = []
+    expect([...list.errors({ 'model_rates.1.rate': 'bad' })]).toEqual([['b', 'bad']])
+    expect(list.body()).toEqual({})
   })
 })
 

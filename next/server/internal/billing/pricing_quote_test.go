@@ -216,12 +216,16 @@ func TestPricingQuoteOneSnapshot(t *testing.T) {
 }
 
 // GET /me/prices?group_id=: what the group provides and can bill, at the
-// caller's list price there and the rate they pay there, model rates aside.
+// caller's list price there and the rate they pay there: the group's, model
+// rates aside, and each model's, of all four levels.
 func TestMyPricesInGroup(t *testing.T) {
 	e := newPricingEnv(t, allowAll{})
 	require.Nil(t, e.writeGroup(e.private, map[string]any{
 		"model_prices": []any{patch("web-search", custom("visual", requestTier(0.008)))},
 		"model_rates":  []any{rated("claude-haiku-4-5", "2.4")}}))
+	require.Nil(t, e.writeGroup(e.open, map[string]any{"model_rates": []any{rated("claude-haiku-4-5", "0.9")}}))
+	e.exec(`INSERT INTO segment_model_rates (segment_id, group_id, model, rate) VALUES ($1, $2, 'web-search', 0.3)`, e.vip, e.private)
+	e.svc.invalidate()
 	checkMyPricesInPrivate(t, e)
 	checkMyPricesElsewhere(t, e)
 }
@@ -245,31 +249,39 @@ func checkMyPricesInPrivate(t *testing.T, e *pricingEnv) {
 	require.Len(t, rows, 3, "a model without a global price is left out")
 	require.Equal(t, map[string]any{"model": "claude-haiku-4-5", "mode": "visual", "source": "global",
 		"config":     oneTierConfig(map[string]any{"p": 1.0, "c": 5.0, "cr": 0.1, "cc": 1.25, "cc1h": 2.0}),
-		"expression": `tier("base", p*1 + c*5 + cr*0.1 + cc*1.25 + cc1h*2)`}, rows["claude-haiku-4-5"])
-	require.Equal(t, map[string]any{"model": "web-search", "mode": "visual", "source": "group",
+		"expression": `tier("base", p*1 + c*5 + cr*0.1 + cc*1.25 + cc1h*2)`, "rate": "0.5", "rate_source": "segment"}, rows["claude-haiku-4-5"])
+	require.Equal(t, map[string]any{"model": "web-search", "mode": "visual", "source": "group", "rate": "0.3", "rate_source": "segment_model",
 		"config": requestTier(0.008), "expression": `tier("base", flat(0.008))`}, rows["web-search"])
 }
 
-// checkMyPricesElsewhere reads the prices in the public group, without a
-// group, and once the private group is disabled.
+// checkMyPricesElsewhere reads the prices in the public group, then
+// without a group.
 func checkMyPricesElsewhere(t *testing.T, e *pricingEnv) {
 	// The public group at vip's own rate there; the default segment at the
 	// group's.
 	d := data(e.mustCall(e.member, 200, "GET", "/me/prices?group_id="+itoa(e.open), nil))
 	require.Equal(t, []any{"1.2", "segment", "global"}, []any{d["rate_multiplier"], d["rate_source"], pricesByModel(d)["web-search"]["source"]})
+	require.Equal(t, []any{"1.2", "segment"}, []any{pricesByModel(d)["claude-haiku-4-5"]["rate"], pricesByModel(d)["claude-haiku-4-5"]["rate_source"]})
 	d = data(e.mustCall(e.admin, 200, "GET", "/me/prices?group_id="+itoa(e.open), nil))
 	require.Equal(t, []any{"1.5", "group"}, []any{d["rate_multiplier"], d["rate_source"]})
+	haiku, search := pricesByModel(d)["claude-haiku-4-5"], pricesByModel(d)["web-search"]
+	require.Equal(t, []any{"0.9", "group_model", "1.5", "group"}, []any{haiku["rate"], haiku["rate_source"], search["rate"], search["rate_source"]})
 
-	// Without a group the prices are the global ones and no price of a group
-	// shows.
-	d = data(e.mustCall(e.member, 200, "GET", "/me/prices", nil))
+	checkMyPricesWithoutGroup(t, e)
+}
+
+// checkMyPricesWithoutGroup reads the global prices, with the groups that
+// provide each model (no price or rate of a group shows), also once the
+// private group is disabled.
+func checkMyPricesWithoutGroup(t *testing.T, e *pricingEnv) {
+	d := data(e.mustCall(e.member, 200, "GET", "/me/prices", nil))
 	require.Nil(t, d["group"])
 	require.NotContains(t, d, "rate_source")
 	rows := pricesByModel(d)
 	require.Len(t, rows, 4)
 	both := []any{map[string]any{"id": float64(e.open), "name": "open"}, map[string]any{"id": float64(e.private), "name": "private"}}
 	require.Equal(t, map[string]any{"model": "web-search", "mode": "visual", "config": requestTier(0.01),
-		"expression": `tier("base", flat(0.01))`, "groups": both}, rows["web-search"])
+		"expression": `tier("base", flat(0.01))`, "groups": both}, rows["web-search"], "no rate without a group")
 	require.Equal(t, []any{}, rows["gpt-5"]["groups"])
 	// Whoever was not granted the private group does not see it.
 	require.Equal(t, both[:1], pricesByModel(data(e.mustCall(e.admin, 200, "GET", "/me/prices", nil)))["web-search"]["groups"])

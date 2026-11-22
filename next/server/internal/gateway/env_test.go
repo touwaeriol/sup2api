@@ -481,29 +481,24 @@ type fakePricer struct {
 	queries     []core.PriceQuery
 }
 
-func (p *fakePricer) Resolve(_ context.Context, q core.PriceQuery) (*core.PriceRule, error) {
+func (p *fakePricer) Resolve(_ context.Context, q core.PriceQuery, segmentID int64, levels core.RateLevels) (*core.PriceRule, core.RateLevels, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.calls++
 	p.queries = append(p.queries, q)
-	if r, ok := p.rules[q.Model]; ok {
-		return r, nil
+	r, ok := p.rules[q.Model]
+	if !ok {
+		return nil, levels, core.ErrPriceNotConfigured
 	}
-	return nil, core.ErrPriceNotConfigured
-}
-
-func (p *fakePricer) Inputs(*core.PriceRule) ([]string, []string) { return p.params, p.headers }
-
-func (p *fakePricer) ModelRates(_ context.Context, q core.PriceQuery, segmentID int64, levels core.RateLevels) (core.RateLevels, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
 	set := p.rates[q.Model]
 	levels.GroupModel = set.GroupModel
 	if segmentID == p.rateSegment {
 		levels.SegmentModel = set.SegmentModel
 	}
-	return levels, nil
+	return r, levels, nil
 }
+
+func (p *fakePricer) Inputs(*core.PriceRule) ([]string, []string) { return p.params, p.headers }
 
 func (p *fakePlatform) EstimateUsage(_ context.Context, in *pluginv1.EstimateUsageRequest) (*pluginv1.UsageReport, error) {
 	return &pluginv1.UsageReport{Tokens: &pluginv1.UsageTokens{InputTokens: in.GetPreConsumeTokens()}}, nil

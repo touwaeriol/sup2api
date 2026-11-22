@@ -5,6 +5,8 @@ import { ApiError } from '@sub2api/host'
 import STabbedForm from './STabbedForm.vue'
 import SSettingsGroup from './SSettingsGroup.vue'
 import { errorsByPart, useTabbedForm, useTabbedFormPart, type TabbedForm, type TabbedFormPart } from './tabbedForm'
+import { toastState } from './feedback'
+import { provideViewport } from './viewport'
 import type { FormTab } from './types'
 
 enableAutoUnmount(afterEach)
@@ -81,6 +83,11 @@ describe('STabbedForm', () => {
     expect(w.get('[data-tab="basic"]').isVisible()).toBe(true)
   })
 
+  it('says the side tabs run across on a phone, where they are a row', () => {
+    const Phone = defineComponent({ setup: () => (provideViewport({ compact: true }), () => h(STabbedForm, { tabs: TABS, modelValue: 'rates', layout: 'side' }, { default: () => 'x' })) })
+    expect(mount(Phone).get('[role="tablist"]').attributes('aria-orientation')).toBe('horizontal')
+  })
+
   it('shows the icon of a side tab in a tile, the number leading its title', () => {
     const w = mount(STabbedForm, { props: { tabs: [{ ...TABS[0], icon: 'key' }, TABS[1]], modelValue: 'basic', layout: 'side', idPrefix: 'i' }, slots: { default: 'x' } })
     expect(w.get('#i-tab-basic').find('svg').exists()).toBe(true)
@@ -148,6 +155,19 @@ describe('useTabbedForm', () => {
     await expect(form().submit(() => Promise.reject(orphan))).rejects.toBe(orphan)
   })
 
+  it('tells in a toast the field errors no part claims, beside those it hands out', async () => {
+    const { w, form } = mountEditor()
+    toastState.items.splice(0)
+    const refusal = new ApiError(400, { code: 'invalid_argument', message: 'invalid', details: { fields: [
+      { field: 'name', code: 'duplicate', message: 'taken' },
+      { field: 'other.0', code: 'invalid', message: 'odd' }
+    ] } })
+    expect(await form().submit(() => Promise.reject(refusal))).toBe(false)
+    await nextTick()
+    expect(w.get('[data-testid="errors-basic"]').text()).toBe('name')
+    expect(toastState.items.map((t) => [t.kind, t.message])).toEqual([['error', 'other.0: odd']])
+  })
+
   it('claims a field by its prefix only', () => {
     const a: TabbedFormPart = { tab: 'a', body: () => ({}), fields: ['name'] }
     const b: TabbedFormPart = { tab: 'b', body: () => ({}), fields: ['model_rates'] }
@@ -200,6 +220,22 @@ describe('useTabbedForm', () => {
     expect(await form.submit(async () => 'sent')).toBe(false)
     drop()
     expect(await form.submit(async () => 'sent')).toBe('sent')
+  })
+
+  it('holds the part of a component only while it is active', async () => {
+    let form!: TabbedForm
+    const active = ref(false)
+    const Part = defineComponent({ setup: () => (useTabbedFormPart({ tab: 'rates', body: () => ({ segment_rates: [1] }), dirty: true }, active), () => null) })
+    mount(defineComponent({ setup: () => ((form = useTabbedForm(ref('basic'), KEYS)), () => h(Part)) }))
+    expect(await form.submit(async (body) => body)).toEqual({})
+    active.value = true
+    await nextTick()
+    expect(form.dirtyTabs.value).toEqual(['rates'])
+    expect(await form.submit(async (body) => body)).toEqual({ segment_rates: [1] })
+    active.value = false
+    await nextTick()
+    expect(form.anyDirty.value).toBe(false)
+    expect(await form.submit(async (body) => body)).toEqual({})
   })
 
   it('shows no tabs for a form of one tab, as STabs does', () => {

@@ -24,8 +24,8 @@ type rulePatch struct {
 	Rule  *Rule  `json:"rule"`
 }
 
-// ratePatch is an item of model_rates: a null or missing rate removes the
-// one there.
+// ratePatch is an item of model_rates: the rate is required, null removes
+// the one there.
 type ratePatch struct {
 	Model string         `json:"model"`
 	Rate  core.RateInput `json:"rate"`
@@ -79,13 +79,16 @@ func (w *groupPricing) apply(ctx context.Context, tx *gorm.DB, groupID int64) er
 	return w.rates.write(ctx, tx, groupID, uid)
 }
 
-// checkPrices reads and checks the items of model_prices.
+// checkPrices reads and checks the items of model_prices. Every problem of
+// an item is told: a model without a global price and a price that cannot
+// be saved alike.
 func (w *groupPricing) checkPrices(ctx context.Context, raw json.RawMessage, facts map[string]bool) {
 	items, fe := core.DecodeList[rulePatch](ctx, raw, modelPricesField, "model prices", "模型价格")
 	w.fields = append(w.fields, fe...)
 	for i, item := range items {
 		change := ruleChange{on: core.PriceQuery{Model: item.Model}}
-		if item.Rule != nil && w.priced(ctx, modelPricesField, i, item.Model) {
+		if item.Rule != nil {
+			w.requirePriced(ctx, modelPricesField, i, item.Model)
 			rule, err := checkRule(ctx, *item.Rule, facts)
 			if err != nil {
 				w.fields = append(w.fields, core.FieldError{Field: core.ItemField(modelPricesField, i, "rule"), Code: "invalid", Message: err.Error()})
@@ -96,24 +99,23 @@ func (w *groupPricing) checkPrices(ctx context.Context, raw json.RawMessage, fac
 	}
 }
 
-// checkRates reads and checks the items of model_rates; a later item on a
-// model replaces an earlier one.
+// checkRates reads and checks the items of model_rates, telling every
+// problem of an item; a later item on a model replaces an earlier one.
 func (w *groupPricing) checkRates(ctx context.Context, raw json.RawMessage) {
 	items, fe := core.DecodeList[ratePatch](ctx, raw, modelRatesField, "model rates", "模型倍率")
 	w.fields = append(w.fields, fe...)
 	for i, item := range items {
-		if item.Rate.Value != nil && w.priced(ctx, modelRatesField, i, item.Model) {
-			w.fields = append(w.fields, item.Rate.Errors(ctx, core.ItemField(modelRatesField, i, "rate"))...)
+		if item.Rate.Value != nil || item.Rate.Invalid {
+			w.requirePriced(ctx, modelRatesField, i, item.Model)
 		}
+		w.fields = append(w.fields, item.Rate.Errors(ctx, core.ItemField(modelRatesField, i, "rate"))...)
 		w.rates[item.Model] = item.Rate.Value
 	}
 }
 
-// priced reports whether model has a global price, or fails item i of list.
-func (w *groupPricing) priced(ctx context.Context, list string, i int, model string) bool {
-	if w.prices.base(model) != nil {
-		return true
+// requirePriced fails item i of list when model has no global price.
+func (w *groupPricing) requirePriced(ctx context.Context, list string, i int, model string) {
+	if w.prices.base(model) == nil {
+		w.fields = append(w.fields, core.NewFieldError(ctx, core.ItemField(list, i, "model"), "invalid", "the model has no global price", "该模型没有全局价格"))
 	}
-	w.fields = append(w.fields, core.NewFieldError(ctx, core.ItemField(list, i, "model"), "invalid", "the model has no global price", "该模型没有全局价格"))
-	return false
 }

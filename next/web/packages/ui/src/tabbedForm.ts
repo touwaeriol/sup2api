@@ -3,8 +3,9 @@
 // send into one body and makes one request, so nothing has to be saved
 // before another tab can be filled in. Field errors of the answer go back to
 // the parts that sent those fields, and their tabs are marked.
-import { computed, inject, onScopeDispose, provide, ref, shallowRef, toValue, type InjectionKey, type MaybeRefOrGetter, type Ref } from 'vue'
+import { computed, inject, provide, ref, shallowRef, toValue, watch, type InjectionKey, type MaybeRefOrGetter, type Ref } from 'vue'
 import { isApiError } from '@sub2api/host'
+import { toast } from './feedback'
 
 /** One part of the request, held by one tab (a tab may hold several). */
 export interface TabbedFormPart {
@@ -43,8 +44,8 @@ export interface TabbedForm {
   /**
    * Checks every part, sends the merged body through `send` once and returns
    * its answer; false when a check failed or the answer had field errors the
-   * parts claim (their tabs are marked, the first is opened). Any other
-   * failure rejects.
+   * parts claim (their tabs are marked, the first is opened; a toast tells
+   * the field errors no part claims). Any other failure rejects.
    */
   submit: <T>(send: (body: Record<string, unknown>) => Promise<T>) => Promise<T | false>
   /** Unmarks the tabs: when the form is opened on another object. */
@@ -109,11 +110,18 @@ async function failedChecks(parts: readonly TabbedFormPart[]): Promise<TabbedFor
   return parts.filter((_, i) => !passed[i])
 }
 
-/** Hands the claimed field errors of a failed request to their parts and gives those parts; none when no part claims one. */
+/**
+ * Hands the claimed field errors of a failed request to their parts and
+ * gives those parts; none when no part claims one. The field errors no part
+ * claims are told in one toast, as no tab can show them.
+ */
 function claimErrors(parts: readonly TabbedFormPart[], e: unknown): TabbedFormPart[] {
   if (!isApiError(e)) return []
   const byPart = errorsByPart(parts, e.fields)
   for (const [part, errors] of byPart) part.applyErrors?.(errors)
+  const claimed = new Set([...byPart.values()].flatMap(Object.keys))
+  const left = Object.entries(e.fields).filter(([field]) => !claimed.has(field))
+  if (byPart.size && left.length) toast(left.map(([field, message]) => `${field}: ${message}`).join('; '), 'error')
   return [...byPart.keys()]
 }
 
@@ -156,10 +164,18 @@ export function useTabbedForm(current: Ref<string>, tabs: MaybeRefOrGetter<reado
 /**
  * Adds a part to the tabbed form of an enclosing component (useTabbedForm
  * provides it) for as long as the calling component lives. Outside such a
- * form it does nothing.
+ * form it does nothing. `active` (default true) keeps the part in the form
+ * only while it holds: a component that turns editable while it stays
+ * mounted adds its part then, and takes it away when it is read-only again.
  */
-export function useTabbedFormPart(part: TabbedFormPart): void {
+export function useTabbedFormPart(part: TabbedFormPart, active: MaybeRefOrGetter<boolean> = true): void {
   const form = inject(TABBED_FORM_KEY, null)
   if (!form) return
-  onScopeDispose(form.register(part))
+  watch(
+    () => toValue(active),
+    (on, _, onCleanup) => {
+      if (on) onCleanup(form.register(part))
+    },
+    { immediate: true }
+  )
 }

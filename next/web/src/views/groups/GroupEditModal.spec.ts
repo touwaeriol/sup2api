@@ -7,9 +7,10 @@ import type { Group } from '@/api/types'
 import GroupEditModal from './GroupEditModal.vue'
 import type { GroupEditTab } from './groupForm'
 
-const mocks = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), patch: vi.fn(), toast: vi.fn(), confirm: vi.fn() }))
+const mocks = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), patch: vi.fn(), toast: vi.fn(), confirm: vi.fn(), denied: new Set<string>() }))
 vi.mock('@sub2api/host', async (original) => ({ ...(await original<object>()), api: { get: mocks.get, post: mocks.post, patch: mocks.patch } }))
 vi.mock('@sub2api/ui', async (original) => ({ ...(await original<object>()), toast: (...a: unknown[]) => mocks.toast(...a), confirm: (...a: unknown[]) => mocks.confirm(...a) }))
+vi.mock('@/stores/auth', () => ({ useAuthStore: () => ({ has: (key: string) => !mocks.denied.has(key) }) }))
 enableAutoUnmount(afterEach)
 
 /** What a table on a tab holds: what it sends, whether it has drafts, whether they can be sent, and the errors it was given. */
@@ -68,6 +69,7 @@ beforeEach(() => {
   parts.pricing = { body: {}, dirty: false, valid: true }
   parts.segments = { body: {}, dirty: false, valid: true }
   mocks.get.mockReset().mockResolvedValue({ models: [], unrestricted_accounts: 0 })
+  mocks.denied.clear()
   mocks.toast.mockReset()
   mocks.confirm.mockReset().mockResolvedValue(false)
   mocks.patch.mockReset().mockResolvedValue(vip)
@@ -75,6 +77,14 @@ beforeEach(() => {
 })
 
 describe('group editor', () => {
+  it('shows no user group rates to a caller who may not read user groups', async () => {
+    mocks.denied.add('segment:read')
+    const { w, selected, tabs } = await render(vip, 'segments')
+    expect(tabs()).toEqual(['基本信息', '模型名单', '价格', '高级'])
+    expect(selected()).toBe('basic')
+    expect(w.find('[data-testid="stub-segments"]').exists()).toBe(false)
+  })
+
   it('shows the five tabs and opens on the one asked for', async () => {
     const { w, selected, tabs } = await render(vip, 'pricing')
     expect(tabs()).toEqual(['基本信息', '模型名单', '价格', '用户分组倍率', '高级'])

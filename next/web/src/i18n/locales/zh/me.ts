@@ -118,11 +118,13 @@ export default {
     baseNote: '这里是全部模型的原价（倍率 ×1）。实付 = 模型价格 × 你在所选账号分组的倍率；模型价格一般就是原价，个别模型在账号分组里另有模型价格。选一个账号分组查看你的实付价。',
     unit: 'USD / 百万 Token',
     basePrice: '原价，未乘倍率',
-    rated: '已按你在该账号分组的倍率 {rate} 计算',
+    rated: '已乘你在该账号分组每个模型的倍率',
+    rate: '你的倍率',
     rateSource: {
-      segment_model: '这个模型你有单独设的倍率',
-      segment: '你所在的用户分组在该账号分组有单独设的倍率',
-      group_model: '这个模型在该账号分组有单独的倍率'
+      segment_model: '你的用户分组给这个模型单独设的倍率',
+      segment: '你的用户分组在该账号分组的倍率',
+      group_model: '这个模型在该账号分组的倍率',
+      group: '账号分组的基本倍率'
     },
     perRequest: '{price} / 次',
     tiered: '{n} 档，显示兜底档位',

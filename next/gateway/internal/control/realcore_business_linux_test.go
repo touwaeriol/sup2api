@@ -165,7 +165,7 @@ func (c *apiClient) grantGroup(user, group int64) {
 	if current.str("data.segment.kind") != "personal" {
 		segment = c.ok(http.MethodPost, fmt.Sprintf("/users/%d/personal-segment", user), map[string]any{"copy": false}).id("data.id")
 	}
-	c.ok(http.MethodPut, fmt.Sprintf("/segments/%d/groups", segment), map[string]any{"items": []map[string]any{{"group_id": group, "granted": true}}})
+	c.ok(http.MethodPatch, fmt.Sprintf("/segments/%d", segment), map[string]any{"group_rates": []map[string]any{{"group_id": group, "granted": true, "rate": nil}}})
 }
 
 func (c *apiClient) login(email, password string) *apiClient {

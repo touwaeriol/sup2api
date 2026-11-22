@@ -29,7 +29,7 @@ const TOOLS_FROM = 8
 
 const table = usePricingTable({ groupId: () => props.groupId, baseRate: () => props.baseRate, editable: () => !!props.editable })
 const { rows, drafts, loading, error, dirty, added } = table
-if (props.editable && props.tab) useTabbedFormPart({ tab: props.tab, check, body: table.body, dirty, fields: ['model_prices', 'model_rates'], applyErrors })
+useTabbedFormPart({ tab: props.tab ?? '', check, body: table.body, dirty, fields: ['model_prices', 'model_rates'], applyErrors }, () => !!props.editable && props.tab !== undefined)
 
 /** The table keeps which editor is open: a new key closes it. */
 const tableKey = ref(0)

@@ -39,7 +39,7 @@ type APIKeyPrincipal struct {
 }
 
 // Rates are the rate levels of the key's owner in the key's group, the
-// model aside: Pricer.ModelRates adds those of a model.
+// model aside: Pricer.Resolve adds those of a model.
 func (p *APIKeyPrincipal) Rates() RateLevels {
 	return RateLevels{Segment: p.RateOverride, Group: p.Group.RateMultiplier}
 }

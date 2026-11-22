@@ -21,10 +21,11 @@ export default {
   },
   unavailable: 'Not available',
   remove: 'Remove',
+  undo: 'Undo',
   groupRate: 'Base rate',
   baseRate: 'Base rate',
   members: '{n} member | {n} members',
-  overrideNote: 'An empty rate follows the base rate of the account group. Only one rate applies; rates are never multiplied.',
+  overrideNote: 'An empty rate follows the account group: a model with a model rate pays that, the others its base rate. Only one rate applies; rates are never multiplied.',
   inGroup: {
     restricted: 'Only the user groups it is granted to may use this account group.',
     public: 'Everyone may use this account group.',
@@ -34,6 +35,7 @@ export default {
     addSegment: 'Add user group',
     addUser: 'Add user',
     addNone: 'Every user group is listed',
+    modelRates: 'A rate of its own on {n} model; Remove deletes it too | Rates of its own on {n} models; Remove deletes them too',
     empty: {
       public: 'Nothing set here yet: everyone pays the base rate.',
       restricted: 'Not granted to any user group or user yet: nobody can use it.'

@@ -35,17 +35,17 @@ interface Chain {
 }
 
 /** A level of the model price: the original price itself, or the group's price with the price it comes to. */
-function priceLevelText(v: CustomPrice | PriceDef): string {
-  if (!('kind' in v)) return priceLabel(t, v)
-  const price = listPriceOf(props.quote.base, v)
+function priceLevelText(v: CustomPrice | PriceDef, level: string): string {
+  if (level !== 'group') return priceLabel(t, v as PriceDef)
+  const price = listPriceOf(props.quote.base, v as CustomPrice)
   const custom = t('pricing.editor.customText')
   return price ? `${custom} = ${priceLabel(t, price)}` : custom
 }
 
 const names = computed(() => ({ segment: props.quote.segment.name, group: props.groupName ?? '' }))
 
-function chain<V>(key: Chain['key'], levels: QuoteLevel<string, V>[], text: (v: V) => string, note?: string): Chain {
-  const rows = levels.map((l) => ({ key: l.key, state: l.state, label: t(`pricingTools.quote.${key}.${l.key}`, names.value), text: l.value === null ? t('pricingTools.quote.unset') : text(l.value) }))
+function chain<V>(key: Chain['key'], levels: QuoteLevel<string, V>[], text: (v: V, level: string) => string, note?: string): Chain {
+  const rows = levels.map((l) => ({ key: l.key, state: l.state, label: t(`pricingTools.quote.${key}.${l.key}`, names.value), text: l.value === null ? t('pricingTools.quote.unset') : text(l.value, l.key) }))
   return { key, rows, note }
 }
 const tieredNote = computed(() => (priceCells(props.quote.list_price).tiers > 1 ? t('pricingTools.quote.price.tiered') : undefined))

@@ -189,7 +189,17 @@ describe('declared plugin account actions and the toolbar slot (CONTRACTS §23.3
     expect(list.filters.ids).toBe('')
   })
 
-  it('mounts the toolbar slot among the primary filters and filters the list to the ids common to every plugin, one closable chip each', async () => {
+  /** The list with plugin a's ids [12, 21] and plugin b's [21, 7] set from the toolbar. */
+  async function twoSets() {
+    list.items.value = []
+    const w = render(stubs)
+    slotProps(w, 'a').setIds([12, 21], 'A')
+    slotProps(w, 'b').setIds([21, 7], 'B')
+    await flushPromises()
+    return w
+  }
+
+  it('mounts the toolbar slot among the primary filters and filters the list to the ids common to every plugin, one chip each', async () => {
     list.items.value = []
     const w = render(stubs)
     expect(w.getComponent(PluginSlot).props('name')).toBe('account.list.toolbar')
@@ -206,6 +216,10 @@ describe('declared plugin account actions and the toolbar slot (CONTRACTS §23.3
     // Each plugin sees only its own set.
     expect(slotProps(w, 'a').ids).toEqual([12, 21])
     expect(slotProps(w, 'b').ids).toEqual([21, 7])
+  })
+
+  it('closes the set of one plugin with its chip, and asks for id 0 when the sets have no id in common', async () => {
+    const w = await twoSets()
     await w.findAll('[data-testid="chip-close"]')[0].trigger('click')
     expect(list.filters.ids).toBe('21,7')
     expect(chips(w)).toEqual(['B'])
@@ -215,6 +229,10 @@ describe('declared plugin account actions and the toolbar slot (CONTRACTS §23.3
     await flushPromises()
     expect(list.filters.ids).toBe('0')
     expect(chips(w)).toEqual(['B', 'A'])
+  })
+
+  it('clears the set of every plugin with the filters', async () => {
+    const w = await twoSets()
     w.findAllComponents(SButton).filter((b) => b.attributes('data-testid') === 'clear-filters')[0].vm.$emit('click')
     await flushPromises()
     expect(list.filters.ids).toBe('')

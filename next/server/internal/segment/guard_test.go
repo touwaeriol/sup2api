@@ -11,52 +11,67 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/testutil"
 )
 
-// Whose user group a caller may choose is authz's CanActOnUsers: the users
-// it manages, itself only as the super admin (C-L7, FU6). admin and masked
-// both hold segment:manage; the roles decide.
-func TestMembershipActsOnOthers(t *testing.T) {
-	e := setup(t)
-	az := authz.New(authz.Deps{DB: e.db})
+// membership is an env whose users carry authz's roles: admin is an admin,
+// masked (here operator) an operator, as is operator2, supplier a user and
+// supplier, super the super admin. admin and operator both hold
+// segment:manage; the roles decide.
+type membership struct {
+	*env
+	operator, operator2, supplier, super, vip int64
+}
+
+func newMembership(t *testing.T) membership {
+	t.Helper()
+	m := membership{env: setup(t)}
+	az := authz.New(authz.Deps{DB: m.db})
 	require.NoError(t, az.SyncCore(context.Background()))
-	e.svc.users = az
-	super := e.user("super@x.com")
-	for user, role := range map[int64]string{e.admin: authz.RoleAdmin, e.masked: authz.RoleOperator, super: authz.RoleSuperAdmin} {
-		testutil.AssignRoles(t, e.db, user, role)
+	m.svc.users = az
+	m.operator, m.vip, m.super = m.masked, m.segment("VIP"), m.user("super@x.com")
+	m.operator2, m.supplier = m.user("op2@x.com"), m.user("supplier@x.com")
+	for user, roles := range map[int64][]string{m.admin: {authz.RoleAdmin}, m.operator: {authz.RoleOperator},
+		m.super: {authz.RoleSuperAdmin}, m.operator2: {authz.RoleOperator}, m.supplier: {authz.RoleUser, authz.RoleSupplier}} {
+		testutil.AssignRoles(t, m.db, user, roles...)
 	}
-	operator, vip := e.masked, e.segment("VIP")
-	operator2, supplier := e.user("op2@x.com"), e.user("supplier@x.com")
-	testutil.AssignRoles(t, e.db, operator2, authz.RoleOperator)
-	testutil.AssignRoles(t, e.db, supplier, authz.RoleUser, authz.RoleSupplier)
+	return m
+}
+
+// Whose user group a caller may choose is authz's CanActOnUsers: the users
+// it manages, itself only as the super admin (C-L7, FU6).
+func TestMembershipActsOnOthers(t *testing.T) {
+	m := newMembership(t)
 	add := func(users ...int64) response {
-		return e.do(operator, "POST", path("/segments/%d/members", vip), map[string]any{"user_ids": users})
+		return m.do(m.operator, "POST", path("/segments/%d/members", m.vip), map[string]any{"user_ids": users})
 	}
+	add(m.plain, m.operator).failed(403, "permission_denied")
+	require.NotEqual(t, m.vip, m.segmentOf(m.plain), "nobody moves when the caller is among them")
+	add(m.plain, m.operator2).failed(403, "permission_denied")
+	add(m.plain, m.admin).failed(403, "permission_denied")
+	add(m.plain, m.super).failed(403, "permission_denied")
+	m.do(m.admin, "POST", path("/segments/%d/members", m.vip), map[string]any{"user_ids": []int64{m.super}}).failed(403, "permission_denied")
+	require.NotEqual(t, m.vip, m.segmentOf(m.plain), "nobody moves when one may not be moved")
+	require.Equal(t, float64(2), add(m.plain, m.supplier).ok(200).data()["moved"])
+}
+
+// Making a user personal and back follows the same rule.
+func TestPersonalActsOnOthers(t *testing.T) {
+	m := newMembership(t)
 	personalize := func(user int64) response {
-		return e.do(operator, "POST", path("/users/%d/personal-segment", user), map[string]any{})
+		return m.do(m.operator, "POST", path("/users/%d/personal-segment", user), map[string]any{})
 	}
 	depersonalize := func(user int64) response {
-		return e.do(operator, "DELETE", path("/users/%d/personal-segment", user), nil)
+		return m.do(m.operator, "DELETE", path("/users/%d/personal-segment", user), nil)
 	}
+	personalize(m.operator).failed(403, "permission_denied")
+	personalize(m.admin).failed(403, "permission_denied")
+	personalize(m.super).failed(403, "permission_denied")
+	personalize(m.plain).ok(201)
 
-	add(e.plain, operator).failed(403, "permission_denied")
-	require.NotEqual(t, vip, e.segmentOf(e.plain), "nobody moves when the caller is among them")
-	add(e.plain, operator2).failed(403, "permission_denied")
-	add(e.plain, e.admin).failed(403, "permission_denied")
-	add(e.plain, super).failed(403, "permission_denied")
-	e.do(e.admin, "POST", path("/segments/%d/members", vip), map[string]any{"user_ids": []int64{super}}).failed(403, "permission_denied")
-	require.NotEqual(t, vip, e.segmentOf(e.plain), "nobody moves when one may not be moved")
-	require.Equal(t, float64(2), add(e.plain, supplier).ok(200).data()["moved"])
-
-	personalize(operator).failed(403, "permission_denied")
-	personalize(e.admin).failed(403, "permission_denied")
-	personalize(super).failed(403, "permission_denied")
-	personalize(e.plain).ok(201)
-
-	e.personal(operator)
-	e.personal(e.admin)
-	depersonalize(operator).failed(403, "permission_denied")
-	depersonalize(e.admin).failed(403, "permission_denied")
-	depersonalize(e.plain).ok(204)
-	require.Equal(t, int64(2), e.id(`SELECT count(*) FROM segments WHERE kind = 'personal'`))
+	m.personal(m.operator)
+	m.personal(m.admin)
+	depersonalize(m.operator).failed(403, "permission_denied")
+	depersonalize(m.admin).failed(403, "permission_denied")
+	depersonalize(m.plain).ok(204)
+	require.Equal(t, int64(2), m.id(`SELECT count(*) FROM segments WHERE kind = 'personal'`))
 }
 
 // The super admin chooses its own user group like anyone else's, and each

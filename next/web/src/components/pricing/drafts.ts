@@ -23,3 +23,20 @@ export function itemErrors<T, K>(errors: Record<string, string>, name: string, s
   }
   return out
 }
+
+/**
+ * A list of a request made of drafts: body() is what the request sends of it
+ * (nothing while `patches` gives no item) and keeps what it sent, so that
+ * errors() can take the field errors of the answer back to the rows, by
+ * `keyOf` of the item they name.
+ */
+export function listRequest<T, K>(name: string, patches: () => T[], keyOf: (item: T) => K) {
+  let sent: T[] = []
+  return {
+    body(): Record<string, T[]> {
+      sent = patches()
+      return sent.length ? { [name]: sent } : {}
+    },
+    errors: (errors: Record<string, string>) => itemErrors(errors, name, sent, keyOf)
+  }
+}

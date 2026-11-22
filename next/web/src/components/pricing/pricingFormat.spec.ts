@@ -77,11 +77,11 @@ describe('the list price of a model', () => {
   const base: PriceDef = { mode: 'visual', config: singleTier({ p: 3, c: 15 }), expression: 'tier("base", p*3 + c*15)' }
 
   it('is the model price, a price of its own', () => {
-    expect(listPriceOf(base, { kind: 'custom', mode: 'visual', config: singleTier({ p: 1, c: 8 }) })).toEqual({ mode: 'visual', config: singleTier({ p: 1, c: 8 }), expression: '' })
+    expect(listPriceOf(base, { mode: 'visual', config: singleTier({ p: 1, c: 8 }) })).toEqual({ mode: 'visual', config: singleTier({ p: 1, c: 8 }), expression: '' })
   })
   it('is the original price without one, and none without an original price', () => {
     expect(listPriceOf(base, null)).toBe(base)
-    expect(listPriceOf(null, { kind: 'custom', mode: 'expression', expression: 'p*2' })).toBeNull()
+    expect(listPriceOf(null, { mode: 'expression', expression: 'p*2' })).toBeNull()
   })
 })
 

@@ -1,12 +1,12 @@
 // Mock groups: the groups with their model policy and the models they
 // provide, and the groups a user may use (GET /me/groups).
-import { offeredModels } from '../src/components/pricing/offeredModels'
-import { fail, nextId, noContent, now, on, paginate } from './router'
+import { offeredModels } from './offeredModels'
+import { fail, nextId, noContent, now, on, paginate, type MockRequest } from './router'
 import { caller } from './core'
 import { accounts, groupAccountCount, groupPlatforms, groupServed } from './accounts'
 import { pricedModels } from './billing'
 import { accessOf, forgetGroup, groupAccess, modelRatesWhere, rateOf, modelPricesWhere, segmentOfUser } from './pricingStore'
-import { applyGroupPricing, fieldsFailure, groupPricingErrors, validRate } from './pricingWrites'
+import { applyGroupPricing, fieldsFailure, groupPricingErrors, ownSegmentConflict, RATE_RULE, segmentsOf, validRate, type FieldError } from './pricingWrites'
 import { invalid, match } from './common'
 import { keys } from './apiKeys'
 
@@ -51,12 +51,32 @@ export function groupModels(g: Pick<MockGroup, 'id' | 'model_allowlist' | 'model
   return offeredModels({ models, unrestricted_accounts: unrestricted, model_allowlist: g.model_allowlist, model_filter_mode: g.model_filter_mode ?? 'whitelist' }, pricedModels())
 }
 
-/** The first wrong field of the group's own, else every wrong item of its prices and rates (pricingWrites): any of them changes nothing. */
-function validateGroup(b: any) {
-  if (b.name !== undefined && !String(b.name).trim()) return invalid('name', 'name is required')
-  if (b.rate_multiplier !== undefined && !validRate(b.rate_multiplier)) return invalid('rate_multiplier', 'must be 0 or more, below 1000000, with at most 4 decimals')
-  if (b.visibility !== undefined && !['public', 'restricted'].includes(b.visibility)) return invalid('visibility', 'invalid visibility')
-  return fieldsFailure(groupPricingErrors(b)) ?? null
+/** The checks of the group's own fields besides its name, as group.groupInput's: a field given that is wrong. */
+const OWN_CHECKS: Array<[field: string, wrong: (v: any) => boolean, code: string, message: string]> = [
+  ['description', (v) => [...String(v)].length > 2000, 'too_long', 'description is too long'],
+  ['status', (v) => v !== 'active' && v !== 'disabled', 'invalid', 'status must be active or disabled'],
+  ['visibility', (v) => v !== 'public' && v !== 'restricted', 'invalid', 'visibility must be public or restricted'],
+  ['rate_multiplier', (v) => !validRate(v), 'invalid', RATE_RULE],
+  ['model_filter_mode', (v) => v !== 'whitelist' && v !== 'blacklist', 'invalid', 'model filter mode must be whitelist or blacklist']
+]
+
+/** The field error of the name: a create takes one, trimmed of 1-100 characters. */
+function nameErrors(b: any, create: boolean): FieldError[] {
+  if (b.name === undefined) return create ? [{ field: 'name', code: 'required', message: 'name is required' }] : []
+  const n = [...String(b.name).trim()].length
+  return n && n <= 100 ? [] : [{ field: 'name', code: 'invalid', message: 'name must be 1-100 characters' }]
+}
+
+/** Every wrong field of the group's own and every wrong item of its prices and rates (pricingWrites), in one 400: any of them changes nothing. */
+function validateGroup(b: any, create: boolean) {
+  const own = OWN_CHECKS.filter(([field, wrong]) => b[field] !== undefined && wrong(b[field])).map(([field, , code, message]) => ({ field, code, message }))
+  return fieldsFailure([...nameErrors(b, create), ...own, ...groupPricingErrors(b)])
+}
+
+/** What keeps a checked write back: a name another group has, a user group of the caller's own among segment_rates. */
+function writeConflict(req: MockRequest, b: any, self?: MockGroup) {
+  if (b.name !== undefined && groups.some((g) => g !== self && g.name === String(b.name).trim())) return invalid('name', 'a group with this name already exists', 'duplicate')
+  return ownSegmentConflict(req, segmentsOf(b))
 }
 
 // ?model=<name> keeps the groups that provide that model.
@@ -78,12 +98,11 @@ on('GET', '/groups/:id', (req) => {
 })
 on('POST', '/groups', (req) => {
   const b = req.body || {}
-  const err = validateGroup({ name: b.name ?? '', ...b })
+  const err = validateGroup(b, true) ?? writeConflict(req, b)
   if (err) return err
-  if (groups.some((g) => g.name === b.name)) return invalid('name', 'name already in use')
   const g: MockGroup = {
     id: nextId(),
-    name: b.name,
+    name: String(b.name).trim(),
     description: b.description || '',
     status: b.status || 'active',
     rate_multiplier: String(b.rate_multiplier ?? '1'),
@@ -100,10 +119,11 @@ on('POST', '/groups', (req) => {
 on('PATCH', '/groups/:id', (req) => {
   const g = groups.find((x) => x.id === Number(req.params.id))
   if (!g) return fail(404, 'not_found', 'group not found')
-  const err = validateGroup(req.body || {})
-  if (err) return err
   const b = req.body || {}
-  for (const k of ['name', 'description', 'status', 'visibility', 'model_allowlist', 'model_filter_mode'] as const) if (b[k] !== undefined) (g as any)[k] = b[k]
+  const err = validateGroup(b, false) ?? writeConflict(req, b, g)
+  if (err) return err
+  for (const k of ['description', 'status', 'visibility', 'model_allowlist', 'model_filter_mode'] as const) if (b[k] !== undefined) (g as any)[k] = b[k]
+  if (b.name !== undefined) g.name = String(b.name).trim()
   if (b.rate_multiplier !== undefined) g.rate_multiplier = String(b.rate_multiplier)
   applyGroupPricing(g.id, b)
   return groupOut(g)

@@ -25,5 +25,5 @@
       "@sub2api/host": ["packages/host/src/index.ts"]
     }
   },
-  "include": ["src/**/*.ts", "src/**/*.vue", "packages/ui/src/**/*.ts", "packages/ui/src/**/*.vue", "packages/host/src/**/*.ts"]
+  "include": ["src/**/*.ts", "src/**/*.vue", "packages/ui/src/**/*.ts", "packages/ui/src/**/*.vue", "packages/host/src/**/*.ts", "mock/offeredModels.ts"]
 }

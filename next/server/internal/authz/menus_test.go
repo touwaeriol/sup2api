@@ -30,43 +30,44 @@ func testMenuRoutes(id string) ([]string, bool) {
 	return keys, ok
 }
 
-// A menu item shows to the holders of its main routes' keys; before the
-// routes are bound it stays hidden, and binding fails on a missing route.
+// rekeyed is testMenuRoutes with the route keyed by keys instead; nil keys
+// leave the route out.
+func rekeyed(route string, keys []string) func(string) ([]string, bool) {
+	return func(id string) ([]string, bool) {
+		if id == route {
+			return keys, keys != nil
+		}
+		return testMenuRoutes(id)
+	}
+}
+
+// A menu item shows to the holders of its main routes' keys: a route keyed
+// differently moves the menu with it; binding fails on a missing route.
 func TestBindMenuRoutes(t *testing.T) {
 	t.Parallel()
-	db := testutil.DB(t)
-	s := newService(t, db, newMemBus(), nil)
+	s := newService(t, testutil.DB(t), newMemBus(), nil)
 	operator := addUser(t, s, "op@x.com", RoleOperator)
 	if got := sectionPaths(t, s, operator, "gateway"); got != "/accounts,/groups,/proxies" {
 		t.Fatalf("gateway = %s", got)
 	}
-
-	// A route keyed differently moves the menu with it.
-	err := s.BindMenuRoutes(func(id string) ([]string, bool) {
-		if id == "GET /proxies" {
-			return []string{"settings:manage"}, true
-		}
-		return testMenuRoutes(id)
-	})
-	if err != nil {
+	if err := s.BindMenuRoutes(rekeyed("GET /proxies", []string{"settings:manage"})); err != nil {
 		t.Fatal(err)
 	}
 	if got := sectionPaths(t, s, operator, "gateway"); got != "/accounts,/groups" {
 		t.Fatalf("gateway with GET /proxies under settings:manage = %s", got)
 	}
-
-	err = s.BindMenuRoutes(func(id string) ([]string, bool) {
-		if id == "GET /accounts" {
-			return nil, false
-		}
-		return testMenuRoutes(id)
-	})
+	err := s.BindMenuRoutes(rekeyed("GET /accounts", nil))
 	if err == nil || !strings.Contains(err.Error(), "menu accounts: no route GET /accounts") {
 		t.Fatalf("missing route: %v", err)
 	}
+}
 
-	unbound := New(Deps{DB: db, Bus: newMemBus()})
-	menus, err := unbound.Menus(context.Background(), operator)
+// Before the routes are bound the menu items that need them stay hidden.
+func TestUnboundMenus(t *testing.T) {
+	t.Parallel()
+	db := testutil.DB(t)
+	operator := addUser(t, newService(t, db, newMemBus(), nil), "op@x.com", RoleOperator)
+	menus, err := New(Deps{DB: db, Bus: newMemBus()}).Menus(context.Background(), operator)
 	if err != nil {
 		t.Fatal(err)
 	}

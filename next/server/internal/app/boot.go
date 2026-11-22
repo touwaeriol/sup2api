@@ -36,6 +36,7 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/registry"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/rollout"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/proxy"
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/segment"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/task"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/usage"
@@ -74,6 +75,7 @@ type boot struct {
 	az      *authz.Service
 	idm     *iam.Service
 	grp     *group.Service
+	seg     *segment.Service
 	env     *environment.Service
 	ntf     *notify.Service
 	keys    *apikey.Service

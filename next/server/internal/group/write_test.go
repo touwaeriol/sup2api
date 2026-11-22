@@ -90,6 +90,26 @@ func TestGroupUpdateParts(t *testing.T) {
 	require.Zero(t, e.one(`SELECT count(*) FROM groups WHERE description = 'd'`), "nor a changed one")
 	require.Equal(t, []int64{id}, part.committed, "only committed writes run what comes after")
 
-	code, _ = e.do(e.admin, "PATCH", "/groups/999999", map[string]any{"rates": []string{"z"}})
-	require.Equal(t, 404, code)
+	code, _ = e.do(e.admin, "PATCH", "/groups/999999", map[string]any{"name": " ", "rates": []string{""}})
+	require.Equal(t, 404, code, "a group that does not exist is that, whatever the body")
+}
+
+// racePart's write refers to a user group that is gone, as when one is
+// deleted meanwhile.
+type racePart struct{}
+
+func (racePart) PrepareGroupWrite(context.Context, int64, map[string]json.RawMessage) (core.GroupWrite, []core.FieldError, error) {
+	return core.GroupWrite{Apply: func(ctx context.Context, tx *gorm.DB, id int64) error {
+		return store.G(ctx, tx).Create(&model.SegmentGroup{SegmentID: 999999, GroupID: id}).Error
+	}}, nil, nil
+}
+
+// A group write that loses to a concurrent one is a conflict to send again.
+func TestGroupWriteRace(t *testing.T) {
+	e := setup(t)
+	e.svc.Parts = []core.GroupWritePart{racePart{}}
+	code, out := e.do(e.admin, "POST", "/groups", map[string]any{"name": "a"})
+	require.Equal(t, 409, code, "%v", out)
+	require.Equal(t, "conflict", out["error"].(map[string]any)["code"])
+	require.Zero(t, e.one(`SELECT count(*) FROM groups WHERE name = 'a'`))
 }

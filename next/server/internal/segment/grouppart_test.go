@@ -20,7 +20,13 @@ func (e *env) groupWrite(uid, groupID int64, items ...map[string]any) ([]core.Fi
 	if err != nil || len(fe) > 0 || w.Apply == nil {
 		return fe, err
 	}
-	return nil, e.db.Tx(ctx, func(tx *gorm.DB) error { return w.Apply(ctx, tx, groupID) })
+	if err := e.db.Tx(ctx, func(tx *gorm.DB) error { return w.Apply(ctx, tx, groupID) }); err != nil {
+		return nil, err
+	}
+	if w.AfterCommit != nil {
+		w.AfterCommit(ctx, groupID)
+	}
+	return nil, nil
 }
 
 // groupCall writes segment_rates of group g as the admin and answers the
@@ -67,7 +73,37 @@ func TestGroupWritePart(t *testing.T) {
 	require.Equal(t, []string{"segment_rates.0.rate", "segment_rates.1.rate"},
 		write(map[string]any{"segment_id": def, "granted": false}, map[string]any{"segment_id": f.vip, "rate": "-1"}))
 	require.Equal(t, "true null", f.pairOf(def, f.other), "all or none")
+}
 
+// An item with remove drops the pair and the segment's model rates in the
+// group, takes no rate, and has billing's snapshot dropped.
+func TestGroupWritePartRemove(t *testing.T) {
+	f := newSettingsFixture(t)
+	f.exec(`INSERT INTO segment_model_rates (segment_id, group_id, model, rate) VALUES ($1, $2, 'm', 0.5), ($1, $3, 'm', 0.6)`,
+		f.vip, f.granted, f.public)
+	fe, err := f.groupWrite(f.admin, f.granted, map[string]any{"segment_id": f.vip, "remove": true})
+	require.NoError(t, err)
+	require.Empty(t, fe)
+	require.Equal(t, "none", f.pairOf(f.vip, f.granted))
+	require.Equal(t, "none", f.modelRateOf(f.vip, f.granted, "m"))
+	require.Equal(t, "0.6000", f.modelRateOf(f.vip, f.public, "m"), "other groups keep theirs")
+	require.Equal(t, int32(1), f.ratesChanged.Load())
+
+	fe, err = f.groupWrite(f.admin, f.granted, map[string]any{"segment_id": 999999, "remove": true})
+	require.NoError(t, err)
+	require.Equal(t, []string{"segment_rates.0.segment_id"}, fields(fe))
+	_, err = f.groupWrite(f.admin, f.granted, map[string]any{"segment_id": f.vip, "rate": "0.5"})
+	require.NoError(t, err)
+	require.Equal(t, int32(1), f.ratesChanged.Load(), "a write without removals leaves the model rates alone")
+}
+
+// A rate that is no string is the field error of its item.
+func TestGroupWritePartRateType(t *testing.T) {
+	f := newSettingsFixture(t)
+	fe, err := f.groupWrite(f.admin, f.other, map[string]any{"segment_id": f.vip, "rate": "1"},
+		map[string]any{"segment_id": f.vip, "rate": 1.5})
+	require.NoError(t, err)
+	require.Equal(t, []string{"segment_rates.1.rate"}, fields(fe))
 }
 
 // What PrepareGroupWrite makes of a body: nothing without segment_rates or

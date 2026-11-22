@@ -12,9 +12,14 @@
 --   4. A multiplier rule (global price × N) becomes a model rate that keeps
 --      the price: the account group's for the model (N × base rate), and
 --      for each user group with a rate in that account group, its own for
---      the model (N × that rate). Then price_rules keeps custom prices only
---      and loses multiplier. kind stays, always 'custom': 0121, applied and
---      immutable, names it and must run again (FirstIdempotentMigration).
+--      the model (N × that rate), personal ones and those step 3 gave a rate
+--      alike. Then price_rules keeps custom prices only and loses
+--      multiplier. kind stays, always 'custom': 0121, applied and immutable,
+--      names it, and every migration from 0026 on must be safe to run again
+--      (FirstIdempotentMigration); it can go once that is past 0121.
+--
+-- Rates are rounded to 4 decimals and capped at 999999.9999, what
+-- numeric(10,4) holds: the only place a rate is rounded or capped.
 --
 -- One way: the discount and the multiplier rules are gone, the way back is
 -- the pre-upgrade backup. Usage records keep what they were priced with
@@ -44,7 +49,7 @@ CREATE INDEX IF NOT EXISTS segment_model_rates_group_idx ON segment_model_rates 
 -- 3. Before 4, which reads the rates 3 writes.
 DO $$ BEGIN
     INSERT INTO segment_groups (segment_id, group_id, rate_override)
-    SELECT s.id, g.id, LEAST(round(COALESCE(g.rate_multiplier, 1) * s.discount, 4), 999999.9999)
+    SELECT s.id, g.id, LEAST(round(g.rate_multiplier * s.discount, 4), 999999.9999)
     FROM segments s CROSS JOIN groups g
     WHERE s.discount <> 1
     ON CONFLICT (segment_id, group_id) DO UPDATE SET rate_override = EXCLUDED.rate_override, updated_at = now()
@@ -56,7 +61,7 @@ ALTER TABLE segments DROP COLUMN IF EXISTS discount;
 -- 4.
 DO $$ BEGIN
     INSERT INTO group_model_rates (group_id, model, rate, updated_by)
-    SELECT r.group_id, r.model, LEAST(round(r.multiplier * COALESCE(g.rate_multiplier, 1), 4), 999999.9999), r.updated_by
+    SELECT r.group_id, r.model, LEAST(round(r.multiplier * g.rate_multiplier, 4), 999999.9999), r.updated_by
     FROM price_rules r JOIN groups g ON g.id = r.group_id
     WHERE r.kind = 'multiplier'
     ON CONFLICT (group_id, model) DO NOTHING;
@@ -71,6 +76,9 @@ DO $$ BEGIN
 EXCEPTION WHEN undefined_column THEN NULL;
 END $$;
 
+-- price_rules_kind_check is the column CHECK of 0095 that still lets
+-- 'multiplier' in; price_rules_kind says all there is now.
+ALTER TABLE price_rules DROP CONSTRAINT IF EXISTS price_rules_kind_check;
 ALTER TABLE price_rules DROP CONSTRAINT IF EXISTS price_rules_kind;
 ALTER TABLE price_rules ALTER COLUMN kind SET DEFAULT 'custom';
 ALTER TABLE price_rules ADD CONSTRAINT price_rules_kind CHECK (kind = 'custom');

@@ -4,6 +4,7 @@
 package core
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -78,6 +79,12 @@ var (
 	ErrUnsupported        = NewError(http.StatusNotImplemented, "unsupported", "not supported")
 	ErrInternal           = NewError(http.StatusInternalServerError, "internal", "internal error")
 )
+
+// ChangedMeanwhile is the conflict of a write that lost to a concurrent one
+// (store.IsWriteRace): sending it again may succeed.
+func ChangedMeanwhile(ctx context.Context, cause error) *Error {
+	return ErrConflict.WithMessage(Text(ctx, "the data changed meanwhile, try again", "数据已被其他操作修改，请重试")).WithCause(cause)
+}
 
 // FieldError is one validation problem, rendered under details.fields.
 type FieldError struct {

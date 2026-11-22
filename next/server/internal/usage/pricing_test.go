@@ -12,33 +12,39 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 )
 
+// The global price has a 1-hour cache write rate and the custom one does
+// not: normalized for the custom price, both cache writes count as cc.
+const (
+	amountsGlobal = `tier("global", p*2 + c*4 + cc*3 + cc1h*6)` // 2 + 2 + 3 + 6
+	amountsCustom = `tier("custom", p*1 + c*2 + cc*2)`          // 1 + 1 + 4
+)
+
+// amountsCase is a row's expression and frozen pricing, and its amounts.
+type amountsCase struct {
+	name              string
+	expression        string
+	pricing           *core.PricingTrace
+	base, list, total string
+	listed            bool // billing_detail.list_cost is written
+	tier              string
+}
+
+var amountsCases = []amountsCase{
+	{"no rule", amountsGlobal, nil, "13", "13", "19.5", false, "global"},
+	{"the segment's rate alone", amountsGlobal, &core.PricingTrace{SegmentID: 4, RateSource: discountSource, PriceSource: core.PriceSourceGlobal},
+		"13", "13", "19.5", false, "global"},
+	{"multiplier", amountsGlobal, &core.PricingTrace{PriceSource: core.PriceSourceGroup, Scale: decPtr("0.8")}, "13", "10.4", "15.6", true, "global"},
+	{"multiplier 0", amountsGlobal, &core.PricingTrace{PriceSource: segmentSource, Scale: decPtr("0")}, "13", "0", "0", true, "global"},
+	{"multiplier 1", amountsGlobal, &core.PricingTrace{PriceSource: segmentSource, Scale: decPtr("1")}, "13", "13", "19.5", true, "global"},
+	{"custom", amountsCustom, &core.PricingTrace{PriceSource: core.PriceSourceGroup, Base: &core.PriceBase{Expression: amountsGlobal}}, "13", "6", "9", true, "custom"},
+}
+
 // The three amounts of one priced usage (CONTRACTS §97): a multiplier rule
 // scales the list cost and leaves the base cost and the breakdown at the
 // global price; a custom rule sets the list cost and the base cost is the
 // global expression over the same usage, normalized for itself.
 func TestPriceOneAmounts(t *testing.T) {
-	// The global price has a 1-hour cache write rate and the custom one does
-	// not: normalized for the custom price, both cache writes count as cc.
-	const (
-		global = `tier("global", p*2 + c*4 + cc*3 + cc1h*6)` // 2 + 2 + 3 + 6
-		custom = `tier("custom", p*1 + c*2 + cc*2)`          // 1 + 1 + 4
-	)
-	for _, tc := range []struct {
-		name              string
-		expression        string
-		pricing           *core.PricingTrace
-		base, list, total string
-		listed            bool // billing_detail.list_cost is written
-		tier              string
-	}{
-		{"no rule", global, nil, "13", "13", "19.5", false, "global"},
-		{"the segment's rate alone", global, &core.PricingTrace{SegmentID: 4, RateSource: discountSource, PriceSource: core.PriceSourceGlobal},
-			"13", "13", "19.5", false, "global"},
-		{"multiplier", global, &core.PricingTrace{PriceSource: core.PriceSourceGroup, Scale: decPtr("0.8")}, "13", "10.4", "15.6", true, "global"},
-		{"multiplier 0", global, &core.PricingTrace{PriceSource: segmentSource, Scale: decPtr("0")}, "13", "0", "0", true, "global"},
-		{"multiplier 1", global, &core.PricingTrace{PriceSource: segmentSource, Scale: decPtr("1")}, "13", "13", "19.5", true, "global"},
-		{"custom", custom, &core.PricingTrace{PriceSource: core.PriceSourceGroup, Base: &core.PriceBase{Expression: global}}, "13", "6", "9", true, "custom"},
-	} {
+	for _, tc := range amountsCases {
 		t.Run(tc.name, func(t *testing.T) {
 			p := &pending{
 				Expression: tc.expression, Rate: dec("1.5"), CreatedAt: time.Date(2026, 11, 12, 8, 0, 0, 0, time.UTC),
@@ -51,17 +57,21 @@ func TestPriceOneAmounts(t *testing.T) {
 			requireDec(t, tc.base, cost.base, "base")
 			requireDec(t, tc.list, cost.list, "list")
 			requireDec(t, tc.total, cost.total, "total")
-
-			requireDec(t, tc.base, detail.Cost, "billing_detail.cost")
-			requireDec(t, tc.total, detail.TotalCost, "billing_detail.total_cost")
-			requireDec(t, "1.5", detail.RateMultiplier, "billing_detail.rate_multiplier") // the rate, without the rule's multiplier
-			require.Equal(t, tc.tier, detail.Tier)
-			require.Equal(t, tc.pricing, detail.Inputs.Pricing)
-			require.Equal(t, tc.listed, detail.ListCost != nil)
-			if tc.listed {
-				requireDec(t, tc.list, *detail.ListCost, "billing_detail.list_cost")
-			}
+			checkAmountsDetail(t, tc, detail)
 		})
+	}
+}
+
+// checkAmountsDetail checks what billing_detail keeps of the amounts of tc.
+func checkAmountsDetail(t *testing.T, tc amountsCase, detail BillingDetail) {
+	requireDec(t, tc.base, detail.Cost, "billing_detail.cost")
+	requireDec(t, tc.total, detail.TotalCost, "billing_detail.total_cost")
+	requireDec(t, "1.5", detail.RateMultiplier, "billing_detail.rate_multiplier") // the rate, without the rule's multiplier
+	require.Equal(t, tc.tier, detail.Tier)
+	require.Equal(t, tc.pricing, detail.Inputs.Pricing)
+	require.Equal(t, tc.listed, detail.ListCost != nil)
+	if tc.listed {
+		requireDec(t, tc.list, *detail.ListCost, "billing_detail.list_cost")
 	}
 }
 
@@ -167,18 +177,19 @@ func TestPriceComponentsSumAmounts(t *testing.T) {
 	check("stored", "38", "21", "52")
 }
 
-// What a row freezes about its price and rate: nothing at the global price
-// and the group's own rate, and otherwise enough to give the rule back. A
-// zero multiplier is a rule, not the absence of one.
-func TestPricingTrace(t *testing.T) {
+// traceCase is the price and rate source of a record and the trace it
+// freezes.
+type traceCase struct {
+	name       string
+	price      *core.PriceRule
+	segmentID  int64
+	rateSource string
+	want       *core.PricingTrace
+}
+
+func traceCases() []traceCase {
 	base := &core.PriceBase{Expression: `tier("global", p*2)`, ExprHash: "g"}
-	for _, tc := range []struct {
-		name       string
-		price      *core.PriceRule
-		segmentID  int64
-		rateSource string
-		want       *core.PricingTrace
-	}{
+	return []traceCase{
 		{"no price", nil, 4, "", nil},
 		{"a price from before price rules", &core.PriceRule{ID: 1}, 4, "", nil},
 		{"the global price at the group's rate", &core.PriceRule{ID: 1, Source: core.PriceSourceGlobal}, 4, core.RateSourceGroup, nil},
@@ -191,7 +202,14 @@ func TestPricingTrace(t *testing.T) {
 			&core.PricingTrace{SegmentID: 4, RateSource: core.RateSourceGroup, PriceSource: core.PriceSourceGroup, Scale: decPtr("0")}},
 		{"custom", &core.PriceRule{ID: 1, Source: segmentSource, Base: base}, 4, "",
 			&core.PricingTrace{SegmentID: 4, PriceSource: segmentSource, Base: base}},
-	} {
+	}
+}
+
+// What a row freezes about its price and rate: nothing at the global price
+// and the group's own rate, and otherwise enough to give the rule back. A
+// zero multiplier is a rule, not the absence of one.
+func TestPricingTrace(t *testing.T) {
+	for _, tc := range traceCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			got := pricingTrace(tc.price, tc.segmentID, tc.rateSource)
 			require.Equal(t, tc.want, got)

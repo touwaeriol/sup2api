@@ -117,8 +117,8 @@ export interface ModelRate {
  * from `config` for a visual one.
  */
 export type CustomPrice =
-  | { kind: 'custom'; mode: 'visual'; config: VisualConfig; expression?: string }
-  | { kind: 'custom'; mode: 'expression'; config?: Record<string, never>; expression: string }
+  | { mode: 'visual'; config: VisualConfig; expression?: string }
+  | { mode: 'expression'; config?: Record<string, never>; expression: string }
 
 export interface PriceDef {
   mode: PriceMode
@@ -154,25 +154,27 @@ export interface ModelPricePatch {
   rule: CustomPrice | null
 }
 
-/** An item of `model_rates` (POST/PATCH /groups): `rate` null removes the model rate. */
+/** An item of `model_rates` (POST/PATCH /groups): `rate` is required, null removes the model rate. */
 export interface ModelRatePatch {
   model: string
   rate: Money | null
 }
 
-/** An item of `segment_rates` (POST/PATCH /groups) or, from the other side, `group_rates` (POST/PATCH /segments): one segment in one group. `granted` left out stays; `rate` null follows the group. */
-export interface SegmentRatePatch {
-  segment_id: number
-  granted?: boolean
-  rate: Money | null
-}
+/**
+ * An item of `segment_rates` (POST/PATCH /groups) or, from the other side,
+ * `group_rates` (POST/PATCH /segments): one segment in one group. `granted`
+ * left out stays; `rate` is required, null follows the group. An item of
+ * `segment_rates` may instead `remove` everything the segment has in the
+ * group: its grant, its rate and its model rates there.
+ */
+export type SegmentRatePatch = { segment_id: number; granted?: boolean; rate: Money | null } | { segment_id: number; remove: true }
 export interface GroupRatePatch {
   group_id: number
   granted?: boolean
   rate: Money | null
 }
 
-/** An item of `model_rates` (POST/PATCH /segments): the segment's rate for a model in a group; null removes it. */
+/** An item of `model_rates` (POST/PATCH /segments): the segment's rate for a model in a group (the model has an enabled global price); `rate` is required, null removes it. */
 export interface SegmentModelRatePatch {
   group_id: number
   model: string
@@ -261,9 +263,13 @@ export interface MyPriceRow extends PriceDef {
   groups?: Array<{ id: number; name: string }>
   /** With a group: where the list price comes from. */
   source?: PriceSource
+  /** With a group: the rate the caller pays for the model there, of the four levels, as billing takes it. */
+  rate?: Money
+  /** With a group: where `rate` comes from. */
+  rate_source?: RateSource
 }
 
-/** GET /me/prices[?group_id=]: every model at its global price, or what one group provides at the caller's price there. */
+/** GET /me/prices[?group_id=]: every model at its global price, or what one group provides at the caller's price there. The rate on top is the group's, without a model ('1' without a group). */
 export interface MyPrices {
   group: { id: number; name: string } | null
   rate_multiplier: Money

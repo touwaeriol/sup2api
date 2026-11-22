@@ -163,7 +163,7 @@ func TestPriceAPI(t *testing.T) {
 		t.Fatalf("patch: %v", upd)
 	}
 	// Resolution sees the change immediately (local invalidation + bus).
-	r, err := e.svc.Resolve(context.Background(), core.PriceQuery{Model: "claude-haiku-4-5"})
+	r, err := priceOf(context.Background(), e.svc, core.PriceQuery{Model: "claude-haiku-4-5"})
 	if err != nil || r.Expression != `tier("base", p*2 + c*4)` {
 		t.Fatalf("resolve after patch: %+v %v", r, err)
 	}

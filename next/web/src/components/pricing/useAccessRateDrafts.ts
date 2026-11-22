@@ -2,7 +2,7 @@ import { computed, shallowRef } from 'vue'
 import type { SegmentGroupSetting } from '@/api/pricing'
 import { i18n } from '@/i18n'
 import { draftedSetting, groupRatePatches, mergeSettingDraft, segmentRatePatches, validOverride, type DraftedSetting, type SettingDraft, type SettingSide, type SettingTerms } from './accessRateDrafts'
-import { itemErrors, withDraft } from './drafts'
+import { listRequest, withDraft } from './drafts'
 import { useDrafts } from './useDrafts'
 
 export interface AccessRateDraftsOptions {
@@ -42,12 +42,13 @@ export function useAccessRateDrafts(options: AccessRateDraftsOptions) {
     rowErrors.value = withDraft(rowErrors.value, row.id, undefined)
   }
 
-  let sent: Array<{ segment_id?: number; group_id?: number }> = []
-  function body() {
-    sent = options.side === 'segment' ? segmentRatePatches(rows.value, state.drafts.value) : groupRatePatches(rows.value, state.drafts.value)
-    return sent.length ? { [LIST[options.side]]: sent } : {}
-  }
-  const applyErrors = (errors: Record<string, string>) => (rowErrors.value = itemErrors(errors, LIST[options.side], sent, (item) => item.segment_id ?? item.group_id ?? 0))
+  const request = listRequest<{ segment_id?: number; group_id?: number }, number>(
+    LIST[options.side],
+    () => (options.side === 'segment' ? segmentRatePatches : groupRatePatches)(rows.value, state.drafts.value),
+    (item) => item.segment_id ?? item.group_id ?? 0
+  )
+  const applyErrors = (errors: Record<string, string>) => (rowErrors.value = request.errors(errors))
+  const undo = (row: DraftedSetting) => (state.drafts.value = withDraft(state.drafts.value, row.id, undefined))
 
-  return { ...state, rows, rowErrors, change, body, applyErrors, fields: [LIST[options.side]] }
+  return { ...state, rows, rowErrors, change, undo, body: request.body, applyErrors, fields: [LIST[options.side]] }
 }

@@ -11,10 +11,11 @@ import { withDraft } from './drafts'
 /** The end of a setting the rows of an editor differ in: the segments of one group, or the groups of one segment. */
 export type SettingSide = 'segment' | 'group'
 
-/** What a row changes; a field left out is as saved. */
+/** What a row changes; a field left out is as saved. `removed` takes away everything the segment has in the group: its grant, its rate and its model rates there. */
 export interface SettingDraft {
   granted?: boolean
   rate_override?: string | null
+  removed?: boolean
 }
 
 /** The unsaved changes by row id. */
@@ -33,6 +34,8 @@ export interface DraftedSetting extends SegmentGroupSetting {
   /** The setting on the server, which a draft is compared with. */
   saved: SegmentGroupSetting
   dirty: boolean
+  /** Removed by the draft: it goes once saved. */
+  removed: boolean
 }
 
 /** An override that may be saved: none, or a rate. */
@@ -41,14 +44,19 @@ export const validOverride = (v: string | null): boolean => v === null || validR
 /** A rate of the form once it is one, the saved one until then. */
 const rated = (typed: string | undefined, saved: string) => (typed !== undefined && validRate(typed.trim()) ? typed.trim() : saved)
 
+/** What a removed row reads as: nothing set. */
+const NOTHING = { granted: false, rate_override: null, model_rates: [] }
+
 /** A row as it reads under `draft` and `terms`: the group's visibility, access and the rate follow both. */
 export function draftedSetting(side: SettingSide, saved: SegmentGroupSetting, draft?: SettingDraft, terms: SettingTerms = {}): DraftedSetting {
-  const granted = draft?.granted ?? saved.granted
-  const rate_override = draft?.rate_override === undefined ? saved.rate_override : draft.rate_override
+  const removed = !!draft?.removed
+  const base = removed ? { ...saved, ...NOTHING } : saved
+  const granted = draft?.granted ?? base.granted
+  const rate_override = draft?.rate_override === undefined ? base.rate_override : draft.rate_override
   const visibility = terms.visibility ?? saved.group.visibility
   const group = rated(terms.groupDefault, saved.rate.group_default)
   return {
-    ...saved,
+    ...base,
     id: saved[side].id,
     group: { ...saved.group, visibility },
     granted,
@@ -56,13 +64,24 @@ export function draftedSetting(side: SettingSide, saved: SegmentGroupSetting, dr
     accessible: visibility === 'public' || granted,
     rate: effectiveRate({ segment: rate_override, group }),
     saved,
-    dirty: !!draft
+    dirty: !!draft,
+    removed
   }
 }
 
-/** The drafts with `change` added to what `row` changes already; a field that reads like the saved setting again is none, and a row without any is no draft. */
+/** Whether a segment has anything in the group: a grant, a rate or a model rate. */
+export const setsAnything = (s: Pick<SegmentGroupSetting, 'granted' | 'rate_override' | 'model_rates'>) => s.granted || s.rate_override !== null || s.model_rates.length > 0
+
+/**
+ * The drafts with `change` added to what `row` changes already; a field that
+ * reads like the saved setting again is none, and a row without any is no
+ * draft. Removing a row that sets nothing is none either; a change after a
+ * removal starts from nothing set.
+ */
 export function mergeSettingDraft(drafts: SettingDrafts, row: Pick<DraftedSetting, 'id' | 'saved'>, change: SettingDraft): SettingDrafts {
-  const merged = { ...drafts.get(row.id), ...change }
+  if (change.removed) return withDraft(drafts, row.id, setsAnything(row.saved) ? { removed: true } : undefined)
+  const prev = drafts.get(row.id)
+  const merged = prev?.removed ? { ...NOTHING, ...change } : { ...prev, ...change }
   const draft: SettingDraft = {}
   if (merged.granted !== undefined && merged.granted !== row.saved.granted) draft.granted = merged.granted
   if (merged.rate_override !== undefined && !sameRate(merged.rate_override, row.saved.rate_override)) draft.rate_override = merged.rate_override
@@ -74,9 +93,9 @@ function settingPatch(row: DraftedSetting, draft: SettingDraft) {
   return { ...(draft.granted === undefined ? {} : { granted: draft.granted }), rate: row.rate_override }
 }
 
-/** What the request sends of the drafts: the changed rows of a group's segments (`segment_rates`) or of a segment's groups (`group_rates`). */
+/** What the request sends of the drafts: the changed rows of a group's segments (`segment_rates`; a removed one by `remove`) or of a segment's groups (`group_rates`). */
 export function segmentRatePatches(rows: readonly DraftedSetting[], drafts: SettingDrafts): SegmentRatePatch[] {
-  return rows.filter((r) => drafts.has(r.id)).map((r) => ({ segment_id: r.id, ...settingPatch(r, drafts.get(r.id)!) }))
+  return rows.filter((r) => drafts.has(r.id)).map((r) => (r.removed ? { segment_id: r.id, remove: true } : { segment_id: r.id, ...settingPatch(r, drafts.get(r.id)!) }))
 }
 export function groupRatePatches(rows: readonly DraftedSetting[], drafts: SettingDrafts): GroupRatePatch[] {
   return rows.filter((r) => drafts.has(r.id)).map((r) => ({ group_id: r.id, ...settingPatch(r, drafts.get(r.id)!) }))

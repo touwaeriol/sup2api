@@ -70,12 +70,12 @@ func newPricingEnv(t *testing.T, authz core.Authorizer) *pricingEnv {
 }
 
 func custom(mode string, config map[string]any) map[string]any {
-	return map[string]any{"kind": "custom", "mode": mode, "config": config}
+	return map[string]any{"mode": mode, "config": config}
 }
 
 // written is a custom price written as an expression.
 func written(expression string) map[string]any {
-	return map[string]any{"kind": "custom", "mode": "expression", "expression": expression}
+	return map[string]any{"mode": "expression", "expression": expression}
 }
 
 // shown is a custom price as the API shows it: with its expression.
@@ -140,13 +140,27 @@ func fieldError(t *testing.T, resp map[string]any) (field, message string) {
 	return first["field"].(string), first["message"].(string)
 }
 
+// haikuGlobal is the global price of claude-haiku-4-5 in a pricing env.
+var haikuGlobal = map[string]any{"mode": "visual", "config": oneTierConfig(map[string]any{"p": 1.0, "c": 5.0, "cr": 0.1, "cc": 1.25, "cc1h": 2.0}),
+	"expression": `tier("base", p*1 + c*5 + cr*0.1 + cc*1.25 + cc1h*2)`}
+
+// The price table of a group: what it provides and what has a price or a
+// rate of the group, as written with the group and as the global prices
+// change.
 func TestGroupModelPrices(t *testing.T) {
 	e := newPricingEnv(t, allowAll{})
-	ctx := context.Background()
-	haikuConfig := oneTierConfig(map[string]any{"p": 1.0, "c": 5.0, "cr": 0.1, "cc": 1.25, "cc1h": 2.0})
+	checkPlainModelPrices(t, e)
+	checkSavedModelPrices(t, e)
+	checkReplacedModelPrices(t, e)
+	checkModelPricesFollowGlobal(t, e)
+	// Not found and malformed.
+	e.mustCall(e.admin, 404, "GET", "/groups/999999/model-prices", nil)
+	e.mustCall(e.admin, 400, "GET", "/groups/open/model-prices", nil)
+}
 
-	// Without prices or rates: the models the group provides at their
-	// global prices, at the group's base rate.
+// Without prices or rates: the models the group provides at their global
+// prices, at the group's base rate.
+func checkPlainModelPrices(t *testing.T, e *pricingEnv) {
 	out, rows := e.modelPrices(e.open)
 	require.Equal(t, map[string]any{"id": float64(e.open), "name": "open"}, out["group"])
 	require.Equal(t, map[string]any{"value": "1.5", "source": "group", "group_default": "1.5"}, out["rate"])
@@ -155,18 +169,21 @@ func TestGroupModelPrices(t *testing.T) {
 		models = append(models, row.(map[string]any)["model"].(string))
 	}
 	require.Equal(t, []string{"claude-haiku-4-5", "claude-sonnet-4-5", "unpriced", "web-search"}, models)
-	haiku := map[string]any{"mode": "visual", "config": haikuConfig, "expression": `tier("base", p*1 + c*5 + cr*0.1 + cc*1.25 + cc1h*2)`}
-	require.Equal(t, map[string]any{"model": "claude-haiku-4-5", "offered": true, "base": haiku, "price": nil, "rate": nil}, rows["claude-haiku-4-5"])
+	require.Equal(t, map[string]any{"model": "claude-haiku-4-5", "offered": true, "base": haikuGlobal, "price": nil, "rate": nil}, rows["claude-haiku-4-5"])
 	require.Equal(t, map[string]any{"model": "unpriced", "offered": true, "base": nil, "price": nil, "rate": nil}, rows["unpriced"])
+}
 
-	// Prices and rates saved in one write, a rate on a model no account of
-	// the group declares (gpt-5 has a global price): it is listed, not offered.
+// Prices and rates saved in one write, a rate on a model no account of the
+// group declares (gpt-5 has a global price): it is listed, not offered. The
+// expression of a model price is in the history, where a settlement retry
+// reads it by its hash.
+func checkSavedModelPrices(t *testing.T, e *pricingEnv) {
 	require.Nil(t, e.writeGroup(e.open, map[string]any{
 		"model_prices": []any{patch("web-search", custom("visual", requestTier(0.008)))},
 		"model_rates":  []any{rated("claude-haiku-4-5", "1.20"), rated("gpt-5", "0.5")}}))
 	require.Contains(t, e.bus.sent, core.ChannelConfigChanged+` {"key":"price_rules"}`)
-	_, rows = e.modelPrices(e.open)
-	require.Equal(t, map[string]any{"model": "claude-haiku-4-5", "offered": true, "base": haiku, "price": nil, "rate": "1.2"}, rows["claude-haiku-4-5"])
+	_, rows := e.modelPrices(e.open)
+	require.Equal(t, map[string]any{"model": "claude-haiku-4-5", "offered": true, "base": haikuGlobal, "price": nil, "rate": "1.2"}, rows["claude-haiku-4-5"])
 	require.Equal(t, shown(custom("visual", requestTier(0.008)), `tier("base", flat(0.008))`), rows["web-search"]["price"])
 	require.Nil(t, rows["web-search"]["rate"])
 	require.Equal(t, []any{false, nil, "0.5"}, []any{rows["gpt-5"]["offered"], rows["gpt-5"]["price"], rows["gpt-5"]["rate"]})
@@ -175,43 +192,38 @@ func TestGroupModelPrices(t *testing.T) {
 	_, rows = e.modelPrices(e.private)
 	require.Len(t, rows, 4)
 	require.Equal(t, []any{nil, nil}, []any{rows["claude-haiku-4-5"]["price"], rows["claude-haiku-4-5"]["rate"]})
+	require.Equal(t, int64(1), e.one(`SELECT count(*) FROM price_rules r
+		JOIN model_price_history h ON h.expr_hash = r.expr_hash AND h.expression = 'v1:' || r.expression`))
+}
 
-	// The expression of a model price is in the history, where a settlement
-	// retry reads it by its hash.
-	var stored, inHistory int
-	require.NoError(t, e.db.SQL.QueryRowContext(ctx, `SELECT count(*), count(h.expr_hash) FROM price_rules r
-		LEFT JOIN model_price_history h ON h.expr_hash = r.expr_hash AND h.expression = 'v1:' || r.expression`).Scan(&stored, &inHistory))
-	require.Equal(t, []int{1, 1}, []int{stored, inHistory})
-
-	// Replaced in place and removed by null; removing one that is not there,
-	// on any model, is fine.
+// Replaced in place and removed by null; removing one that is not there, on
+// any model, is fine.
+func checkReplacedModelPrices(t *testing.T, e *pricingEnv) {
 	require.Nil(t, e.writeGroup(e.open, map[string]any{
 		"model_prices": []any{patch("claude-haiku-4-5", custom("visual", oneTierConfig(map[string]any{"p": 0.8, "c": 4}))),
 			patch("web-search", nil), patch("no-such-model", nil)},
 		"model_rates": []any{rated("claude-haiku-4-5", nil), rated("gpt-5", "0.75"), rated("no-such-model", nil)}}))
-	_, rows = e.modelPrices(e.open)
+	_, rows := e.modelPrices(e.open)
 	own := oneTierConfig(map[string]any{"p": 0.8, "c": 4.0})
 	require.Equal(t, shown(custom("visual", own), `tier("base", p*0.8 + c*4)`), rows["claude-haiku-4-5"]["price"])
 	require.Equal(t, []any{nil, nil, "0.75"}, []any{rows["claude-haiku-4-5"]["rate"], rows["web-search"]["price"], rows["gpt-5"]["rate"]})
 	require.Equal(t, []int64{1, 1}, []int64{e.one(`SELECT count(*) FROM price_rules`), e.one(`SELECT count(*) FROM group_model_rates`)})
 	require.Equal(t, e.admin, e.one(`SELECT updated_by FROM group_model_rates`))
+}
 
-	// The global price changes its shape: the model price still replaces
-	// it, and is due by the token although the global price is by the request.
+// The global price changes its shape: the model price still replaces it,
+// and is due by the token although the global price is by the request. A
+// rate whose global price goes stays listed with it.
+func checkModelPricesFollowGlobal(t *testing.T, e *pricingEnv) {
 	haikuID := e.one(`SELECT id FROM model_prices WHERE model = 'claude-haiku-4-5'`)
 	e.mustCall(e.admin, 200, "PATCH", "/prices/"+itoa(haikuID), map[string]any{"mode": "visual", "config": requestTier(1)})
-	r, err := e.svc.Resolve(ctx, core.PriceQuery{Model: "claude-haiku-4-5", GroupID: e.open})
+	r, err := priceOf(context.Background(), e.svc, core.PriceQuery{Model: "claude-haiku-4-5", GroupID: e.open})
 	require.NoError(t, err)
 	require.Equal(t, []any{core.PriceSourceGroup, `tier("base", flat(1))`, false}, []any{r.Source, r.Base.Expression, r.PerRequest})
 
-	// A rate whose global price goes stays listed with it.
 	e.mustCall(e.admin, 200, "PATCH", "/prices/"+itoa(e.one(`SELECT id FROM model_prices WHERE model = 'gpt-5'`)), map[string]any{"enabled": false})
-	_, rows = e.modelPrices(e.open)
+	_, rows := e.modelPrices(e.open)
 	require.Equal(t, map[string]any{"model": "gpt-5", "offered": false, "base": nil, "price": nil, "rate": "0.75"}, rows["gpt-5"])
-
-	// Not found and malformed.
-	e.mustCall(e.admin, 404, "GET", "/groups/999999/model-prices", nil)
-	e.mustCall(e.admin, 400, "GET", "/groups/open/model-prices", nil)
 }
 
 // Who may read the model prices of a group; they are written with the group
@@ -248,56 +260,62 @@ func TestPricingCatalog(t *testing.T) {
 	require.Equal(t, map[string]any{"model": "web-search", "price": rows["web-search"]["base"]}, resp["data"].([]any)[2])
 }
 
+// mustPrice is the list price of q.
+func mustPrice(t *testing.T, e *pricingEnv, q core.PriceQuery) *core.PriceRule {
+	t.Helper()
+	r, err := priceOf(context.Background(), e.svc, q)
+	require.NoError(t, err)
+	return r
+}
+
 // A model price prices requests as soon as it is saved, and a price handed
 // out is the caller's to change.
 func TestResolveFollowsRules(t *testing.T) {
 	e := newPricingEnv(t, allowAll{})
-	ctx := context.Background()
 	q := core.PriceQuery{Model: "claude-haiku-4-5", GroupID: e.open}
-	resolve := func(q core.PriceQuery) *core.PriceRule {
-		t.Helper()
-		r, err := e.svc.Resolve(ctx, q)
-		require.NoError(t, err)
-		return r
-	}
-
 	// Without a group, and without a rule, it is the global price, field
 	// for field what Resolve gave before there were rules.
-	global := resolve(core.PriceQuery{Model: q.Model})
+	global := mustPrice(t, e, core.PriceQuery{Model: q.Model})
 	var want core.PriceRule
-	require.NoError(t, e.db.SQL.QueryRowContext(ctx, `SELECT id, model, mode, expression, expr_version, expr_hash FROM model_prices WHERE model = $1`, q.Model).
+	require.NoError(t, e.db.SQL.QueryRowContext(t.Context(), `SELECT id, model, mode, expression, expr_version, expr_hash FROM model_prices WHERE model = $1`, q.Model).
 		Scan(&want.ID, &want.Model, &want.Mode, &want.Expression, &want.ExprVersion, &want.ExprHash))
 	require.Equal(t, &want, global)
-	require.Equal(t, global, resolve(q))
+	require.Equal(t, global, mustPrice(t, e, q))
+	checkResolvedGroupPrice(t, e, q, global)
+	checkResolveStaleness(t, e, q)
+}
 
-	// The group's price, in no other group.
-	ownPrice := map[string]any{"model_prices": []any{patch(q.Model, custom("visual", oneTierConfig(map[string]any{"p": 0.8, "c": 4})))}}
-	require.Nil(t, e.writeGroup(e.open, ownPrice))
-	r := resolve(q)
+// The group's price, in no other group; a copy the caller changes changes
+// nothing.
+func checkResolvedGroupPrice(t *testing.T, e *pricingEnv, q core.PriceQuery, global *core.PriceRule) {
+	require.Nil(t, e.writeGroup(e.open, map[string]any{"model_prices": []any{patch(q.Model, custom("visual", oneTierConfig(map[string]any{"p": 0.8, "c": 4})))}}))
+	r := mustPrice(t, e, q)
 	require.Equal(t, core.PriceSourceGroup, r.Source)
 	require.Nil(t, r.Scale)
 	require.Equal(t, &core.PriceBase{Expression: global.Expression, ExprHash: global.ExprHash}, r.Base)
 	require.Equal(t, `tier("base", p*0.8 + c*4)`, r.Expression)
 	require.Equal(t, []any{global.ID, "visual", 1}, []any{r.ID, r.Mode, r.ExprVersion})
 	var frozen string
-	require.NoError(t, e.db.SQL.QueryRowContext(ctx, `SELECT expression FROM model_price_history WHERE expr_hash = $1`, r.ExprHash).Scan(&frozen))
+	require.NoError(t, e.db.SQL.QueryRowContext(t.Context(), `SELECT expression FROM model_price_history WHERE expr_hash = $1`, r.ExprHash).Scan(&frozen))
 	require.Contains(t, frozen, r.Expression)
 	r.Base.Expression, r.Expression = "changed", "changed"
-	require.Equal(t, global.Expression, resolve(q).Base.Expression)
-	require.Equal(t, global, resolve(core.PriceQuery{Model: q.Model, GroupID: e.private}))
+	require.Equal(t, global.Expression, mustPrice(t, e, q).Base.Expression)
+	require.Equal(t, global, mustPrice(t, e, core.PriceQuery{Model: q.Model, GroupID: e.private}))
+}
 
-	// A rule removed behind the service's back (another node) applies until
-	// the snapshot is dropped.
+// A rule removed behind the service's back (another node) applies until the
+// snapshot is dropped; without a global price there is nothing a rule could
+// apply to.
+func checkResolveStaleness(t *testing.T, e *pricingEnv, q core.PriceQuery) {
 	e.exec(`DELETE FROM price_rules WHERE group_id = $1`, e.open)
-	require.Equal(t, core.PriceSourceGroup, resolve(q).Source)
+	require.Equal(t, core.PriceSourceGroup, mustPrice(t, e, q).Source)
 	e.svc.invalidate()
-	require.Empty(t, resolve(q).Source)
+	require.Empty(t, mustPrice(t, e, q).Source)
 
-	// Without a global price there is nothing a rule could apply to.
-	require.Nil(t, e.writeGroup(e.open, ownPrice))
+	require.Nil(t, e.writeGroup(e.open, map[string]any{"model_prices": []any{patch(q.Model, custom("visual", oneTierConfig(map[string]any{"p": 0.8, "c": 4})))}}))
 	e.exec(`UPDATE model_prices SET enabled = false WHERE model = $1`, q.Model)
 	e.svc.invalidate()
-	_, err := e.svc.Resolve(ctx, q)
+	_, err := priceOf(context.Background(), e.svc, q)
 	require.Equal(t, "model_price_not_configured", core.AsError(err).Code)
 }
 

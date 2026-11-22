@@ -22,7 +22,7 @@ var (
 // The list price under a group's model price, as the pricing endpoints show
 // it: the global price without one, the group's own price with one.
 func TestListPrice(t *testing.T) {
-	own := &storedRule{Rule: Rule{Kind: ruleCustom, Mode: "visual", Config: json.RawMessage(`{"tiers":[{"name":"base","p":0.8,"c":4}]}`),
+	own := &storedRule{Rule: Rule{Mode: "visual", Config: json.RawMessage(`{"tiers":[{"name":"base","p":0.8,"c":4}]}`),
 		Expression: `tier("base", p*0.8 + c*4)`}}
 	require.Equal(t, perTokenPrice, listPrice(perTokenPrice, nil))
 	require.JSONEq(t, `{"mode": "visual", "config": {"tiers": [{"name": "base", "p": 0.8, "c": 4}]}, "expression": "tier(\"base\", p*0.8 + c*4)"}`,
@@ -49,16 +49,19 @@ func costOf(t *testing.T, expression string) string {
 	return res.Cost.String()
 }
 
+// handWritten is an expression price.
+var handWritten = PriceDef{Mode: "expression", Config: json.RawMessage(`{}`), Expression: `tier("base", p*3 + c*15)`}
+
+// export is exportPrice of model "m" with the rates as strings.
+func export(price PriceDef, keyRate, modelRate string) (syncPrice, error) {
+	return exportPrice("m", price, *dec(keyRate), *dec(modelRate))
+}
+
 // What a downstream sup2api imports is the whole list price at the key's
 // rate: a model paid at another rate has the ratio of the two folded into
 // its price, into the prices of a config where there is one and else around
 // the expression.
 func TestExportPrice(t *testing.T) {
-	handWritten := PriceDef{Mode: "expression", Config: json.RawMessage(`{}`), Expression: `tier("base", p*3 + c*15)`}
-	export := func(price PriceDef, keyRate, modelRate string) (syncPrice, error) {
-		return exportPrice("m", price, *dec(keyRate), *dec(modelRate))
-	}
-
 	p, err := export(handWritten, "1", "1.2")
 	require.NoError(t, err)
 	require.Equal(t, syncPrice{Model: "m", Mode: "expression", Config: json.RawMessage(`{}`), Expression: `(tier("base", p*3 + c*15)) * 1.2`}, p)
@@ -84,28 +87,46 @@ func TestExportPrice(t *testing.T) {
 	// A rate of its own where the key pays nothing has no ratio.
 	_, err = export(handWritten, "0", "1")
 	require.Error(t, err)
+}
 
-	// Tiers are scaled in the config, request rules are not, and the
-	// expression is generated from it.
-	p, err = export(tieredPrice, "2", "1")
+// A ratio with no finite decimal is not rounded: both rates go into the
+// expression, a visual price's too, and the key's rate gives back what the
+// model's rate bills (CONTRACTS §97.6).
+func TestExportPriceInexactRatio(t *testing.T) {
+	for _, price := range []PriceDef{handWritten, perTokenPrice} {
+		p, err := export(price, "0.3", "0.1")
+		require.NoError(t, err)
+		require.Equal(t, "("+price.Expression+") * 0.1 / 0.3", p.Expression)
+		require.Equal(t, []any{"expression", "{}"}, []any{p.Mode, string(p.Config)})
+		want := dec(costOf(t, price.Expression)).Mul(*dec("0.1"))
+		got := dec(costOf(t, p.Expression)).Mul(*dec("0.3"))
+		require.True(t, want.Equal(got.Round(12)), "want %s, got %s", want, got)
+	}
+}
+
+// Tiers are scaled in the config, request rules are not, and the
+// expression is generated from it; a unit=request tier scales its price.
+func TestExportPriceScalesTiers(t *testing.T) {
+	p, err := export(tieredPrice, "2", "1")
 	require.NoError(t, err)
 	require.JSONEq(t, `{"tiers": [{"name": "standard", "when": {"var": "len", "op": "<=", "value": 200000}, "p": 1.5, "c": 7.5}, {"name": "long", "p": 3, "c": 11.25}],
 		"rules": [{"multiplier": 2, "conds": [{"source": "param", "key": "fast", "op": "eq", "value": true}]}]}`, string(p.Config))
 	require.Equal(t, `(len <= 200000 ? tier("standard", p*1.5 + c*7.5) : tier("long", p*3 + c*11.25)) * (param("fast") == true ? 2 : 1)`, p.Expression)
 
-	// A unit=request tier scales its price.
 	p, err = export(PriceDef{Mode: "visual", Config: json.RawMessage(`{"tiers": [{"name": "bulk", "unit": "request", "price": 0.05}]}`)}, "1", "2")
 	require.NoError(t, err)
 	require.Equal(t, `tier("bulk", flat(0.1))`, p.Expression)
+}
 
-	// A line comment ends before the ")".
+// A line comment ends before the ")"; an expression that does not compile
+// cannot carry the ratio.
+func TestExportPriceComments(t *testing.T) {
 	for _, comment := range []string{`// don't`, `// 3" display`, "// a `tick", `// list`} {
 		quoted := PriceDef{Mode: "expression", Config: json.RawMessage(`{}`), Expression: `tier("base", p*3 + c*15) ` + comment}
-		p, err = export(quoted, "1", "2")
+		p, err := export(quoted, "1", "2")
 		require.NoError(t, err, comment)
 		require.Equal(t, "36", costOf(t, p.Expression))
 	}
-	// An expression that does not compile cannot carry the ratio.
-	_, err = export(PriceDef{Mode: "expression", Config: json.RawMessage(`{}`), Expression: `tier("base", p*3 + c*15) /* open`}, "1", "2")
+	_, err := export(PriceDef{Mode: "expression", Config: json.RawMessage(`{}`), Expression: `tier("base", p*3 + c*15) /* open`}, "1", "2")
 	require.Error(t, err)
 }

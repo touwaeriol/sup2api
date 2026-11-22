@@ -45,7 +45,8 @@ func (fakeAuthz) CanActOnUsers(context.Context, int64, core.UserAction, ...int64
 
 // env is the segment service behind the real router. admin has every
 // permission, masked every one but user:read, plain none. All three are
-// members of the default segment.
+// members of the default segment. The models of testPricedModels have a global
+// price, as a segment's model rate needs.
 type env struct {
 	t                    *testing.T
 	db                   *store.DB
@@ -56,11 +57,17 @@ type env struct {
 	ratesChanged atomic.Int32
 }
 
+// testPricedModels are the models every env has a global price of.
+var testPricedModels = []string{"m", "gpt-4o", "claude"}
+
 func setup(t *testing.T) *env {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	e := &env{t: t, db: testutil.DB(t)}
 	e.admin, e.masked, e.plain = e.user("admin@x.com"), e.user("masked@x.com"), e.user("plain@x.com")
+	for _, m := range testPricedModels {
+		e.exec(`INSERT INTO model_prices (model, mode, expression, expr_hash, source) VALUES ($1, 'expression', '0', 'h', 'manual')`, m)
+	}
 	authz := fakeAuthz{
 		e.admin:  func(string) bool { return true },
 		e.masked: func(p string) bool { return p != "user:read" },
@@ -89,31 +96,29 @@ func TestTxConflicts(t *testing.T) {
 	ctx := context.Background()
 	failure := errors.New("failure")
 	for _, tc := range []struct {
-		name     string
-		fn       func(tx *gorm.DB) error
-		conflict bool
+		name string
+		fn   func(tx *gorm.DB) error
+		want error
 	}{
 		{"a row referred to is gone", func(tx *gorm.DB) error {
 			_, err := store.SQLTx(tx).ExecContext(ctx, `INSERT INTO segment_groups (segment_id, group_id, granted) VALUES (default_segment_id(), 999999, true)`)
 			return err
-		}, true},
+		}, core.ErrConflict},
 		{"a deadlock", func(tx *gorm.DB) error {
 			// The error the server sends for one (SQLSTATE 40P01).
 			_, err := store.SQLTx(tx).ExecContext(ctx, `DO $$ BEGIN RAISE EXCEPTION 'deadlock detected' USING ERRCODE = '40P01'; END $$`)
 			return err
-		}, true},
-		{"another error", func(*gorm.DB) error { return failure }, false},
+		}, core.ErrConflict},
+		{"another error", func(*gorm.DB) error { return failure }, failure},
+		{"none", func(*gorm.DB) error { return nil }, nil},
 	} {
 		err := e.svc.tx(ctx, tc.fn)
-		if !tc.conflict {
-			require.Equal(t, failure, err, tc.name)
+		if tc.want == core.ErrConflict {
+			require.Equal(t, core.ErrConflict.Code, core.AsError(err).Code, tc.name)
 			continue
 		}
-		var ce *core.Error
-		require.ErrorAs(t, err, &ce, tc.name)
-		require.Equal(t, core.ErrConflict.Code, ce.Code, tc.name)
+		require.Equal(t, tc.want, err, tc.name)
 	}
-	require.NoError(t, e.svc.tx(ctx, func(*gorm.DB) error { return nil }))
 }
 
 // id runs an INSERT ... RETURNING id (or any query of one integer).

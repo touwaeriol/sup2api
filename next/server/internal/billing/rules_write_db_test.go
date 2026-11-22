@@ -27,32 +27,37 @@ func sequentialRuleChanges(ctx context.Context, tx *gorm.DB, changes []ruleChang
 		return cmp.Or(cmp.Compare(a.on.GroupID, b.on.GroupID), cmp.Compare(a.on.Model, b.on.Model))
 	})
 	for _, ch := range changes {
-		on, r := ch.on, ch.rule
-		if r == nil {
-			if _, err := store.SQLTx(tx).ExecContext(ctx, `DELETE FROM price_rules WHERE group_id = $1 AND model = $2`,
-				on.GroupID, on.Model); err != nil {
-				return err
-			}
-			continue
+		var err error
+		if ch.rule == nil {
+			_, err = store.SQLTx(tx).ExecContext(ctx, `DELETE FROM price_rules WHERE group_id = $1 AND model = $2`, ch.on.GroupID, ch.on.Model)
+		} else {
+			err = sequentialSave(ctx, tx, ch.on, ch.rule, updatedBy)
 		}
-		prog, err := expr.CompileCached(r.Expression)
 		if err != nil {
-			return err
-		}
-		if _, err := store.SQLTx(tx).ExecContext(ctx, `INSERT INTO model_price_history (expr_hash, expression, expr_version) VALUES ($1, $2, $3)
-			ON CONFLICT (expr_hash) DO NOTHING`, prog.Hash(), prog.Expression(), prog.Version()); err != nil {
-			return err
-		}
-		if _, err := store.SQLTx(tx).ExecContext(ctx, `
-			INSERT INTO price_rules (group_id, model, mode, config, expression, expr_hash, updated_by)
-			VALUES ($1, $2, $3, $4, $5, $6, $7)
-			ON CONFLICT (group_id, model) DO UPDATE SET mode = EXCLUDED.mode, config = EXCLUDED.config,
-				expression = EXCLUDED.expression, expr_hash = EXCLUDED.expr_hash, updated_by = EXCLUDED.updated_by, updated_at = now()`,
-			on.GroupID, on.Model, r.Mode, r.Config, r.Expression, r.exprHash, nullID(updatedBy)); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// sequentialSave writes r on on, and its expression to the history, by one
+// statement each.
+func sequentialSave(ctx context.Context, tx *gorm.DB, on core.PriceQuery, r *storedRule, updatedBy int64) error {
+	prog, err := expr.CompileCached(r.Expression)
+	if err != nil {
+		return err
+	}
+	if _, err := store.SQLTx(tx).ExecContext(ctx, `INSERT INTO model_price_history (expr_hash, expression, expr_version) VALUES ($1, $2, $3)
+		ON CONFLICT (expr_hash) DO NOTHING`, prog.Hash(), prog.Expression(), prog.Version()); err != nil {
+		return err
+	}
+	_, err = store.SQLTx(tx).ExecContext(ctx, `
+		INSERT INTO price_rules (group_id, model, mode, config, expression, expr_hash, updated_by)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		ON CONFLICT (group_id, model) DO UPDATE SET mode = EXCLUDED.mode, config = EXCLUDED.config,
+			expression = EXCLUDED.expression, expr_hash = EXCLUDED.expr_hash, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+		on.GroupID, on.Model, r.Mode, r.Config, r.Expression, r.exprHash, nullID(updatedBy))
+	return err
 }
 
 // ruleState is the rules of the groups and the history, with each rule's id
@@ -84,71 +89,81 @@ func ruleState(t *testing.T, ctx context.Context, tx *gorm.DB, groups []int64, i
 	return append(state, history...)
 }
 
+// ruleOn is model in group.
+func ruleOn(group int64, model string) core.PriceQuery {
+	return core.PriceQuery{GroupID: group, Model: model}
+}
+
+// seedRules saves the rules there before each case, and returns their ids.
+func seedRules(t *testing.T, e *pricingEnv) map[int64]bool {
+	g, p := e.open, e.private
+	seed := []ruleChange{
+		{ruleOn(g, "claude-haiku-4-5"), requestPrice(t, 1.1)},
+		{ruleOn(p, "claude-sonnet-4-5"), requestPrice(t, 0.3)},
+		{ruleOn(p, "web-search"), requestPrice(t, 2)},
+		{ruleOn(g, "web-search"), requestPrice(t, 0.02)},
+	}
+	ctx := context.Background()
+	require.NoError(t, e.db.Tx(ctx, func(tx *gorm.DB) error { return applyChanges(ctx, tx, seed, e.admin) }))
+	rows, err := e.db.SQL.QueryContext(ctx, `SELECT id FROM price_rules`)
+	require.NoError(t, err)
+	ids, err := testutil.Column[int64](rows)
+	require.NoError(t, err)
+	initial := map[int64]bool{}
+	for _, id := range ids {
+		initial[id] = true
+	}
+	require.Len(t, initial, len(seed))
+	return initial
+}
+
+// ruleWriteCases are the changes of one request, by name.
+func ruleWriteCases(t *testing.T, g, p int64) map[string][]ruleChange {
+	price := func(v float64) *storedRule { return requestPrice(t, v) }
+	return map[string][]ruleChange{
+		"mixed": {
+			{ruleOn(p, "claude-haiku-4-5"), price(0.4)}, {ruleOn(g, "claude-haiku-4-5"), price(1.3)},
+			{ruleOn(p, "claude-sonnet-4-5"), nil}, {ruleOn(g, "unpriced"), nil}, {ruleOn(g, "web-search"), price(1.75)},
+		},
+		"removed then saved": {{ruleOn(g, "claude-haiku-4-5"), nil}, {ruleOn(g, "claude-haiku-4-5"), price(1.5)}},
+		"saved then removed": {{ruleOn(p, "web-search"), price(3)}, {ruleOn(p, "web-search"), nil}},
+		"saved twice":        {{ruleOn(p, "claude-sonnet-4-5"), price(0.5)}, {ruleOn(p, "claude-sonnet-4-5"), price(1.2)}},
+		"new, removed, saved": {
+			{ruleOn(g, "claude-sonnet-4-5"), price(2)}, {ruleOn(g, "claude-sonnet-4-5"), nil}, {ruleOn(g, "claude-sonnet-4-5"), price(0.7)},
+		},
+		"same expression twice": {{ruleOn(g, "claude-sonnet-4-5"), price(0.9)}, {ruleOn(p, "claude-haiku-4-5"), price(0.9)}},
+		"nothing":               {},
+	}
+}
+
 // writeRules leaves what the statements of the changes left one after
 // the other: the rules (kept or new rows), their values, updated_by and
 // updated_at, and the history, also when a request changes one rule twice.
 func TestWriteRulesMatchesSequential(t *testing.T) {
 	e := newPricingEnv(t, allowAll{})
-	ctx := context.Background()
-	price := func(p float64) *storedRule { return requestPrice(t, p) }
-	g, p := e.open, e.private
-	groups := []int64{g, p}
-	on := func(group int64, model string) core.PriceQuery {
-		return core.PriceQuery{GroupID: group, Model: model}
-	}
-	// The rules there before each case.
-	seed := []ruleChange{
-		{on(g, "claude-haiku-4-5"), price(1.1)},
-		{on(p, "claude-sonnet-4-5"), price(0.3)},
-		{on(p, "web-search"), price(2)},
-		{on(g, "web-search"), price(0.02)},
-	}
-	require.NoError(t, e.db.Tx(ctx, func(tx *gorm.DB) error { return applyChanges(ctx, tx, slices.Clone(seed), e.admin) }))
-	initial := map[int64]bool{}
-	rows, err := e.db.SQL.QueryContext(ctx, `SELECT id FROM price_rules`)
-	require.NoError(t, err)
-	ids, err := testutil.Column[int64](rows)
-	require.NoError(t, err)
-	for _, id := range ids {
-		initial[id] = true
-	}
-	require.Len(t, initial, len(seed))
-
-	cases := map[string][]ruleChange{
-		"mixed": {
-			{on(p, "claude-haiku-4-5"), price(0.4)}, {on(g, "claude-haiku-4-5"), price(1.3)},
-			{on(p, "claude-sonnet-4-5"), nil}, {on(g, "unpriced"), nil}, {on(g, "web-search"), price(1.75)},
-		},
-		"removed then saved": {{on(g, "claude-haiku-4-5"), nil}, {on(g, "claude-haiku-4-5"), price(1.5)}},
-		"saved then removed": {{on(p, "web-search"), price(3)}, {on(p, "web-search"), nil}},
-		"saved twice":        {{on(p, "claude-sonnet-4-5"), price(0.5)}, {on(p, "claude-sonnet-4-5"), price(1.2)}},
-		"new, removed, saved": {
-			{on(g, "claude-sonnet-4-5"), price(2)}, {on(g, "claude-sonnet-4-5"), nil}, {on(g, "claude-sonnet-4-5"), price(0.7)},
-		},
-		"same expression twice": {{on(g, "claude-sonnet-4-5"), price(0.9)}, {on(p, "claude-haiku-4-5"), price(0.9)}},
-		"nothing":               {},
-	}
-	for name, changes := range cases {
+	initial := seedRules(t, e)
+	groups := []int64{e.open, e.private}
+	for name, changes := range ruleWriteCases(t, e.open, e.private) {
 		t.Run(name, func(t *testing.T) {
-			var want, got []string
-			for i, apply := range []func(context.Context, *gorm.DB, []ruleChange, int64) error{sequentialRuleChanges, applyChanges} {
-				err := e.db.Tx(ctx, func(tx *gorm.DB) error {
-					if err := apply(ctx, tx, slices.Clone(changes), e.member); err != nil {
-						return err
-					}
-					state := ruleState(t, ctx, tx, groups, initial)
-					if i == 0 {
-						want = state
-					} else {
-						got = state
-					}
-					return errRollback
-				})
-				require.ErrorIs(t, err, errRollback)
-			}
-			require.Equal(t, want, got)
+			want := writtenState(t, e, sequentialRuleChanges, changes, groups, initial)
+			require.Equal(t, want, writtenState(t, e, applyChanges, changes, groups, initial))
 		})
 	}
+}
+
+// writtenState is the state apply leaves of changes, rolled back after.
+func writtenState(t *testing.T, e *pricingEnv, apply func(context.Context, *gorm.DB, []ruleChange, int64) error,
+	changes []ruleChange, groups []int64, initial map[int64]bool) (state []string) {
+	ctx := context.Background()
+	err := e.db.Tx(ctx, func(tx *gorm.DB) error {
+		if err := apply(ctx, tx, slices.Clone(changes), e.member); err != nil {
+			return err
+		}
+		state = ruleState(t, ctx, tx, groups, initial)
+		return errRollback
+	})
+	require.ErrorIs(t, err, errRollback)
+	return state
 }
 
 var errRollback = errors.New("rollback")
@@ -157,7 +172,7 @@ var errRollback = errors.New("rollback")
 func requestPrice(t *testing.T, p float64) *storedRule {
 	t.Helper()
 	config := json.RawMessage(fmt.Sprintf(`{"tiers": [{"name": "base", "unit": "request", "price": %v}]}`, p))
-	r, err := checkRule(context.Background(), Rule{Kind: ruleCustom, Mode: "visual", Config: config}, nil)
+	r, err := checkRule(context.Background(), Rule{Mode: "visual", Config: config}, nil)
 	require.NoError(t, err)
 	return r
 }

@@ -25,7 +25,7 @@ vi.mock('@/components/pricing/SegmentGroupsEditor.vue', async (): Promise<{ defa
       props: ['segmentId', 'editable', 'disabled', 'tab'],
       setup(props: Record<string, unknown>) {
         groups.mounts++
-        if (props.editable) useTabbedFormPart({ tab: 'groups', fields: ['group_rates', 'model_rates'], body: () => groups.body, check: () => true, dirty: () => groups.dirty, applyErrors: (e) => (groups.errors = e) })
+        useTabbedFormPart({ tab: 'groups', fields: ['group_rates', 'model_rates'], body: () => groups.body, check: () => true, dirty: () => groups.dirty, applyErrors: (e) => (groups.errors = e) }, () => !!props.editable)
         return () => render('div', { 'data-testid': 'groups', 'data-editable': String(!!props.editable) })
       }
     }

@@ -4,11 +4,13 @@
 // shows it in a tile before them, the number then leading the title. A
 // tablist like TabBar's (same ids, roving tabindex; arrows of either
 // direction and Home / End move and select); below the md breakpoint it
-// turns into a row that scrolls sideways (STabbedForm makes its column
-// stick). Internal; not a public component.
-import { nextTick, ref } from 'vue'
+// turns into a row that scrolls sideways, keeping the selected tab in sight
+// (STabbedForm makes its column stick). Internal; not a public component.
+import { computed, nextTick, ref } from 'vue'
 import { navIndex } from '../keyboard'
+import { useCentredSelection } from '../scrollClip'
 import type { FormTab } from '../types'
+import { useViewport } from '../viewport'
 import SIcon from '../SIcon.vue'
 import TabMarks from './TabMarks.vue'
 
@@ -17,6 +19,10 @@ const emit = defineEmits<{ (e: 'update:modelValue', v: string): void }>()
 const nav = ref<HTMLElement>()
 
 const tabEl = (key: string) => Array.from(nav.value?.querySelectorAll<HTMLElement>('[role="tab"]') ?? []).find((el) => el.dataset.key === key)
+// A tab opened by Save (a failed check) may be out of sight in the phone row.
+useCentredSelection(nav, () => tabEl(props.modelValue))
+const { compact } = useViewport()
+const orientation = computed(() => (compact.value ? 'horizontal' : 'vertical'))
 
 function onKey(e: KeyboardEvent) {
   const enabled = props.tabs.filter((t) => !t.disabled)
@@ -30,7 +36,7 @@ function onKey(e: KeyboardEvent) {
 </script>
 
 <template>
-  <nav ref="nav" role="tablist" aria-orientation="vertical" :aria-label="ariaLabel" class="flex min-w-0 gap-1.5 overflow-x-auto md:flex-col md:overflow-visible" @keydown="onKey">
+  <nav ref="nav" role="tablist" :aria-orientation="orientation" :aria-label="ariaLabel" class="relative flex min-w-0 gap-1.5 overflow-x-auto md:flex-col md:overflow-visible" @keydown="onKey">
     <button
       v-for="(tab, i) in tabs"
       :id="`${idPrefix}-tab-${tab.key}`"

@@ -158,6 +158,12 @@ var (
 	Hint                  = gormpg.Hint
 )
 
+// IsWriteRace reports whether err is a write that lost to a concurrent one:
+// a row it refers to was deleted meanwhile (a foreign key violation), or the
+// database broke a deadlock with another writer. The same write may succeed
+// when sent again (core.ChangedMeanwhile).
+func IsWriteRace(err error) bool { return IsForeignKeyViolation(err) || IsDeadlock(err) }
+
 // QuoteIdent quotes a (qualified) identifier for SQL text, for DDL, which
 // takes no parameters: QuoteIdent("s", "t") is "s"."t".
 func QuoteIdent(parts ...string) string {

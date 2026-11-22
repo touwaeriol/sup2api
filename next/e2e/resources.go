@@ -101,9 +101,9 @@ func (e *Env) GrantGroups(admin *Session, userID int64, groupIDs []int64) {
 	}
 	items := make([]map[string]any, len(groupIDs))
 	for i, gid := range groupIDs {
-		items[i] = map[string]any{"group_id": gid, "granted": true}
+		items[i] = map[string]any{"group_id": gid, "granted": true, "rate": nil}
 	}
-	admin.OK(e.T, http.MethodPut, fmt.Sprintf("/segments/%d/groups", id), map[string]any{"items": items})
+	admin.OK(e.T, http.MethodPatch, fmt.Sprintf("/segments/%d", id), map[string]any{"group_rates": items})
 }
 
 // ------------------------------------------------------------------ groups, keys

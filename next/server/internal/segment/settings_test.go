@@ -106,6 +106,18 @@ func TestGroupSegments(t *testing.T) {
 	require.Equal(t, float64(f.granted), rows[3]["group"].(map[string]any)["id"])
 }
 
+// A personal segment with only model rates in the group is listed too.
+func TestGroupSegmentsWithModelRates(t *testing.T) {
+	f := newSettingsFixture(t)
+	personal := f.personal(f.admin)
+	f.exec(`INSERT INTO segment_model_rates (segment_id, group_id, model, rate) VALUES ($1, $2, 'm', 0.5)`, personal, f.granted)
+	rows := f.do(f.admin, "GET", path("/groups/%d/segments", f.granted), nil).ok(200).rows()
+	last := rows[len(rows)-1]
+	require.Equal(t, float64(personal), last["segment"].(map[string]any)["id"])
+	require.Equal(t, []any{map[string]any{"model": "m", "rate": "0.5"}}, last["model_rates"])
+	require.Equal(t, false, last["granted"])
+}
+
 // A caller that may not read users sees a personal segment as "#<user id>":
 // neither the rows nor the search give emails away.
 func TestPersonalNamesAreMasked(t *testing.T) {

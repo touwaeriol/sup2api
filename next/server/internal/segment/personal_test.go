@@ -97,38 +97,43 @@ func TestRemovePersonalRace(t *testing.T) {
 	}
 }
 
+// removePersonal moves the user out of their personal segment as the
+// admin, with the query.
+func (e *env) removePersonal(user int64, query string) response {
+	return e.do(e.admin, "DELETE", path("/users/%d/personal-segment%s", user, query), nil)
+}
+
+// personalWithSettings makes the user personal with a grant and a rate in a
+// new group.
+func (e *env) personalWithSettings(user int64) int64 {
+	id := e.personal(user)
+	e.pair(id, e.group(path("private %d", id), "restricted", "1"), true, "0.5")
+	return id
+}
+
+// Without ?to= the user goes back to the default segment.
 func TestRemovePersonal(t *testing.T) {
 	e := setup(t)
-	vip, def := e.segment("VIP"), e.defaultSegment()
-	group := e.group("private", "restricted", "1")
-	remove := func(user int64, query string) response {
-		return e.do(e.admin, "DELETE", path("/users/%d/personal-segment%s", user, query), nil)
-	}
-	// personalWithSettings makes the user personal with a grant and a rate.
-	personalWithSettings := func(user int64) int64 {
-		id := e.personal(user)
-		e.pair(id, group, true, "0.5")
-		return id
-	}
-
-	// Without ?to= the user goes back to the default segment.
-	first := personalWithSettings(e.plain)
-	remove(e.plain, "").ok(204)
-	require.Equal(t, def, e.segmentOf(e.plain))
+	first := e.personalWithSettings(e.plain)
+	e.removePersonal(e.plain, "").ok(204)
+	require.Equal(t, e.defaultSegment(), e.segmentOf(e.plain))
 	require.Zero(t, e.id(`SELECT count(*) FROM segments WHERE id = $1`, first), "the personal segment is deleted")
 	require.Zero(t, e.id(`SELECT count(*) FROM segment_groups`), "with its grants and rates")
-	remove(e.plain, "").failed(404, "not_found")
+	e.removePersonal(e.plain, "").failed(404, "not_found")
+	e.removePersonal(999999, "").failed(404, "not_found")
+	e.do(e.plain, "DELETE", path("/users/%d/personal-segment", e.masked), nil).failed(403, "permission_denied")
+}
 
-	// ?to= must name a named segment.
-	personalWithSettings(e.plain)
+// ?to= must name a named segment.
+func TestRemovePersonalTo(t *testing.T) {
+	e := setup(t)
+	vip := e.segment("VIP")
+	e.personalWithSettings(e.plain)
 	other := e.personal(e.masked)
 	for _, to := range []string{"999999", "x", path("%d", other)} {
-		remove(e.plain, "?to="+to).invalid("to")
+		e.removePersonal(e.plain, "?to="+to).invalid("to")
 	}
-	require.NotEqual(t, def, e.segmentOf(e.plain), "nothing moved")
-	remove(e.plain, path("?to=%d", vip)).ok(204)
+	require.NotEqual(t, e.defaultSegment(), e.segmentOf(e.plain), "nothing moved")
+	e.removePersonal(e.plain, path("?to=%d", vip)).ok(204)
 	require.Equal(t, vip, e.segmentOf(e.plain))
-
-	remove(999999, "").failed(404, "not_found")
-	e.do(e.plain, "DELETE", path("/users/%d/personal-segment", e.masked), nil).failed(403, "permission_denied")
 }

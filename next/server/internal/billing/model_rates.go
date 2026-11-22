@@ -67,16 +67,6 @@ func loadModelRates(ctx context.Context, q *gorm.DB) (modelRates, error) {
 	return out, nil
 }
 
-// ModelRates implements core.Pricer: levels with the rates set on the model
-// of q, from the snapshot Resolve reads.
-func (s *Service) ModelRates(ctx context.Context, q core.PriceQuery, segmentID int64, levels core.RateLevels) (core.RateLevels, error) {
-	snap, err := s.snapshot(ctx)
-	if err != nil {
-		return levels, err
-	}
-	return snap.rates.levels(q, segmentID, levels), nil
-}
-
 // RatesChanged drops the price snapshot here and on the other nodes, once a
 // write of model rates outside billing (those of segments) committed.
 func (s *Service) RatesChanged(ctx context.Context) { s.changed(ctx, "model_rates") }
@@ -90,12 +80,12 @@ type rateChanges map[string]*decimal.Decimal
 // their models.
 func (rc rateChanges) write(ctx context.Context, tx *gorm.DB, groupID, updatedBy int64) error {
 	var removed []string
-	var saved []model.GroupModelRate
+	var saved []rateRecord
 	for _, m := range slices.Sorted(maps.Keys(rc)) {
 		if rate := rc[m]; rate == nil {
 			removed = append(removed, m)
 		} else {
-			saved = append(saved, model.GroupModelRate{GroupID: groupID, Model: m, Rate: *rate, UpdatedBy: nullID(updatedBy)})
+			saved = append(saved, rateRecord{GroupID: groupID, Model: m, Rate: *rate, UpdatedBy: nullID(updatedBy)})
 		}
 	}
 	g := store.G(ctx, tx)
@@ -109,3 +99,15 @@ func (rc rateChanges) write(ctx context.Context, tx *gorm.DB, groupID, updatedBy
 	}
 	return g.Clauses(store.UpsertOn(groupModelKeys, "rate", "updated_by")).Create(&saved).Error
 }
+
+// rateRecord is the columns of group_model_rates a saved rate writes, as
+// ruleRecord is of price_rules: updated_at takes its default, and nothing
+// is read back.
+type rateRecord struct {
+	GroupID   int64
+	Model     string
+	Rate      decimal.Decimal
+	UpdatedBy *int64
+}
+
+func (rateRecord) TableName() string { return model.GroupModelRate{}.TableName() }

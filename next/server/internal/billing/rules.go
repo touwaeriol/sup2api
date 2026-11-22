@@ -17,16 +17,14 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store/model"
 )
 
-// ruleCustom is the kind of a model price: a price of its own.
-const ruleCustom = "custom"
-
 // Rule is a model price of a group as the API reads and writes it (CONTRACTS
 // §97): a price of its own, as a global price is written (visual or
 // expression), whatever the global price is. Expression is read of an
 // expression price only; of a visual one it is generated from Config, and it
-// is always there on output.
+// is always there on output. The API has no kind: a model price is only
+// ever a price of its own (price_rules.kind keeps the column default
+// "custom").
 type Rule struct {
-	Kind       string          `json:"kind"`
 	Mode       string          `json:"mode"`
 	Config     json.RawMessage `json:"config,omitempty"`
 	Expression string          `json:"expression,omitempty"`
@@ -87,7 +85,7 @@ func loadRules(ctx context.Context, q *gorm.DB) (ruleSet, error) {
 	}
 	out := ruleSet{}
 	for _, row := range rows {
-		r := &storedRule{Rule: Rule{Kind: ruleCustom, Mode: row.Mode, Config: row.Config, Expression: row.Expression}, exprHash: row.ExprHash}
+		r := &storedRule{Rule: Rule{Mode: row.Mode, Config: row.Config, Expression: row.Expression}, exprHash: row.ExprHash}
 		if prog, err := expr.CompileCached(r.Expression); err == nil {
 			r.exprVersion, r.traits = prog.Version(), traitsOf(r.Mode, prog)
 		}
@@ -105,8 +103,8 @@ func loadRules(ctx context.Context, q *gorm.DB) (ruleSet, error) {
 // expression may read (Service.factsFor). The error says why it cannot be
 // saved.
 func checkRule(ctx context.Context, in Rule, facts map[string]bool) (*storedRule, error) {
-	if in.Kind != ruleCustom || in.Mode != expr.ModeVisual && in.Mode != expr.ModeExpression {
-		return nil, errors.New(core.Text(ctx, "a model price is a custom price, visual or expression", "模型价格须是自定义价：可视化或表达式"))
+	if in.Mode != expr.ModeVisual && in.Mode != expr.ModeExpression {
+		return nil, errors.New(core.Text(ctx, "mode must be visual or expression", "mode 必须为可视化（visual）或表达式（expression）"))
 	}
 	config := priceConfig(in.Config)
 	rep, err := checkPriceDef(in.Mode, config, in.Expression, expr.ValidateOptions{Facts: facts})
@@ -121,7 +119,7 @@ func checkRule(ctx context.Context, in Rule, facts map[string]bool) (*storedRule
 	if err != nil {
 		return nil, err
 	}
-	r := &storedRule{Rule: Rule{Kind: in.Kind, Mode: in.Mode, Config: config, Expression: rep.Expression},
+	r := &storedRule{Rule: Rule{Mode: in.Mode, Config: config, Expression: rep.Expression},
 		exprHash: prog.Hash(), exprVersion: prog.Version(), traits: traitsOf(in.Mode, prog)}
 	return r, nil
 }

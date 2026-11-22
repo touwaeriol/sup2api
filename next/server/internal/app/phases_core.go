@@ -13,6 +13,7 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/authz"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/background"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/billing"
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/environment"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/event"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/gateway/convert"
@@ -25,6 +26,7 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/registry"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/proxy"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/ratelimit"
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/segment"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/usage"
 )
 
@@ -153,7 +155,7 @@ func (b *boot) buildIdentity() error {
 
 // buildKeys builds the groups, the API keys and the proxies.
 func (b *boot) buildKeys() error {
-	b.grp = group.New(b.db, b.rdb, b.cl.Bus, b.reg, b.az)
+	b.buildGroups()
 	b.keys = apikey.New(b.db, b.rdb, b.az, b.reg)
 	b.keys.Cipher = b.cipher
 	// Per-key caps the owners set (CONTRACTS §60): minute windows and slots.
@@ -166,6 +168,16 @@ func (b *boot) buildKeys() error {
 	b.stats.Start()
 	b.stopper.add("account-stats", b.stats.Close)
 	return b.startEgress()
+}
+
+// buildGroups builds the groups and the user groups. The segment service
+// and billing write their parts of POST/PATCH /groups (the segments'
+// rates, the model prices and rates) in the group's transaction
+// (CONTRACTS §97).
+func (b *boot) buildGroups() {
+	b.grp = group.New(b.db, b.rdb, b.cl.Bus, b.reg, b.az)
+	b.seg = segment.New(segment.Deps{DB: b.db, Authz: b.az, Users: b.az, Platforms: b.grp.Platforms, RatesChanged: b.bill.RatesChanged})
+	b.grp.Parts = []core.GroupWritePart{b.seg, b.bill}
 }
 
 // buildAccounts builds the account module and starts the key, proxy and

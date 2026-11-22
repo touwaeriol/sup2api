@@ -20,12 +20,13 @@ import type { DraftedSetting, SettingDraft, SettingSide } from './accessRateDraf
 // read-only it says the same in words. Where the rows are the user groups of
 // an account group, a public one keeps its grants on disabled switches: they
 // apply again once it is private. `removable` adds a Remove action per row
-// (`remove`); `rowErrors` are the server's refusals by row id. Other
+// (`remove`; a row removed and not saved offers `undo`); `rowErrors` are the
+// server's refusals by row id. Other
 // attributes (loading, error, empty-text, @retry, expandable, expand-toggle)
 // are STable's.
 defineOptions({ inheritAttrs: false })
 const props = defineProps<{ rows: DraftedSetting[]; side: SettingSide; editable?: boolean; disabled?: boolean; removable?: boolean; rowErrors?: ReadonlyMap<number, string> }>()
-const emit = defineEmits<{ (e: 'change', row: DraftedSetting, draft: SettingDraft): void; (e: 'remove', row: DraftedSetting): void }>()
+const emit = defineEmits<{ (e: 'change', row: DraftedSetting, draft: SettingDraft): void; (e: 'remove' | 'undo', row: DraftedSetting): void }>()
 const { t } = useI18n()
 
 const columns = computed<TableColumn[]>(() => [
@@ -51,7 +52,7 @@ const sourceText = (row: DraftedSetting) => t(`pricingAccess.source.${row.rate.s
       <div :class="row.accessible ? '' : 'text-fg-subtle'">
         <span class="inline-flex max-w-full flex-wrap items-center gap-1.5">
           <slot name="lead" :row="row" />
-          <DraftBadge :dirty="row.dirty" :error="rowErrors?.get(row.id)" testid="access-rate" />
+          <DraftBadge :dirty="row.dirty" :removed="row.removed" :error="rowErrors?.get(row.id)" testid="access-rate" />
         </span>
         <SHint v-if="rowErrors?.has(row.id)" size="xs" tone="danger" data-testid="access-rate-error">{{ rowErrors.get(row.id) }}</SHint>
         <slot name="note" :row="row" v-bind="{ expanded, toggleExpand }" />
@@ -98,7 +99,8 @@ const sourceText = (row: DraftedSetting) => t(`pricingAccess.source.${row.rate.s
       <slot name="expand" :row="row" />
     </template>
     <template #cell-actions="{ row }">
-      <SRowAction tone="danger" :label="t('pricingAccess.remove')" :disabled="disabled" data-testid="access-rate-remove" @click="emit('remove', row)" />
+      <SRowAction v-if="row.removed" :label="t('pricingAccess.undo')" :disabled="disabled" data-testid="access-rate-undo" @click="emit('undo', row)" />
+      <SRowAction v-else tone="danger" :label="t('pricingAccess.remove')" :disabled="disabled" data-testid="access-rate-remove" @click="emit('remove', row)" />
     </template>
   </STable>
 </template>

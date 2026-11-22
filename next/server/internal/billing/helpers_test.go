@@ -190,3 +190,10 @@ func oneTierConfig(prices map[string]any) map[string]any {
 	maps.Copy(tier, prices)
 	return map[string]any{"tiers": []any{tier}, "rules": []any{}}
 }
+
+// priceOf is the list price of q, the caller's rates aside
+// (core.Pricer.Resolve).
+func priceOf(ctx context.Context, s *Service, q core.PriceQuery) (*core.PriceRule, error) {
+	r, _, err := s.Resolve(ctx, q, 0, core.RateLevels{})
+	return r, err
+}

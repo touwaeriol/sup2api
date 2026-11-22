@@ -24,16 +24,13 @@ func (c *call) prepareBilling(ctx context.Context) *gwError {
 	if strings.EqualFold(c.ep.Billing, "free") {
 		return nil
 	}
-	rule, e := c.resolvePrice(ctx)
+	p, e := c.resolvePrice(ctx)
 	if e != nil {
 		return e
 	}
-	c.price = rule
-	c.rec.Price = rule
+	c.price, c.rec.Price = p.rule, p.rule
+	c.rec.RateMultiplier, c.rec.RateSource = p.rate, p.source
 	c.capturePriceInputs(c.price)
-	if c.rec.RateMultiplier, c.rec.RateSource, e = c.modelRate(ctx, c.model); e != nil {
-		return e
-	}
 	if e := c.prepareReferencedPrices(ctx); e != nil {
 		return e
 	}
@@ -58,30 +55,38 @@ func (c *call) admitCharge(ctx context.Context) *gwError {
 	return nil
 }
 
-// resolvePrice is the list price of the request's model, which the endpoint
-// must support the billing type of.
-func (c *call) resolvePrice(ctx context.Context) (*core.PriceRule, *gwError) {
-	rule, err := c.g.d.Pricer.Resolve(ctx, c.priceQuery(c.model))
+// modelPrice is what the key's owner pays for a model in the key's group:
+// its list price and the rate with where it comes from (core.RateLevels).
+type modelPrice struct {
+	rule   *core.PriceRule
+	rate   decimal.Decimal
+	source string
+}
+
+// priceOf resolves the price and the rate of model from one price snapshot
+// (core.Pricer.Resolve).
+func (c *call) priceOf(ctx context.Context, model string) (modelPrice, error) {
+	rule, levels, err := c.g.d.Pricer.Resolve(ctx, c.priceQuery(model), c.principal.SegmentID, c.principal.Rates())
 	if err != nil {
-		return nil, typedError(err, core.ErrPriceNotConfigured.Code, errTypePriceNotConfigured)
+		return modelPrice{}, err
 	}
-	if kind := rule.BillingType(); !c.ep.SupportsBillingType(kind) {
-		return nil, &gwError{Status: http.StatusBadRequest, Code: "billing_type_not_supported",
+	rate, source := levels.Rate()
+	return modelPrice{rule: rule, rate: rate, source: source}, nil
+}
+
+// resolvePrice is the price of the request's model, which the endpoint
+// must support the billing type of.
+func (c *call) resolvePrice(ctx context.Context) (modelPrice, *gwError) {
+	p, err := c.priceOf(ctx, c.model)
+	if err != nil {
+		return p, typedError(err, core.ErrPriceNotConfigured.Code, errTypePriceNotConfigured)
+	}
+	if kind := p.rule.BillingType(); !c.ep.SupportsBillingType(kind) {
+		return p, &gwError{Status: http.StatusBadRequest, Code: "billing_type_not_supported",
 			Message:    "endpoint " + c.ep.Protocol + " does not support " + kind + " pricing for model " + c.model,
 			RecordType: errTypeInvalidRequest}
 	}
-	return rule, nil
-}
-
-// modelRate is the rate the key's owner pays for model in the key's group
-// and where it comes from (core.RateLevels).
-func (c *call) modelRate(ctx context.Context, model string) (decimal.Decimal, string, *gwError) {
-	levels, err := c.g.d.Pricer.ModelRates(ctx, c.priceQuery(model), c.principal.SegmentID, c.principal.Rates())
-	if err != nil {
-		return decimal.Zero, "", fromCore(core.AsError(err), errTypeInternal)
-	}
-	rate, source := levels.Rate()
-	return rate, source, nil
+	return p, nil
 }
 
 // typedError is the gateway error of err, recorded as recordType when its

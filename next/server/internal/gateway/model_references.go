@@ -130,18 +130,15 @@ func (c *call) referencePriceBody(ref modelReference) ([]byte, error) {
 func (c *call) prepareReferencedPrices(ctx context.Context) *gwError {
 	for i := range c.modelRefs {
 		ref := &c.modelRefs[i]
-		rule, err := c.g.d.Pricer.Resolve(ctx, c.priceQuery(ref.model))
+		p, err := c.priceOf(ctx, ref.model)
 		if err != nil {
 			return fromCore(core.AsError(err), errTypePriceNotConfigured)
 		}
+		rule := p.rule
 		if rule.VideoOnly || !c.ep.SupportsBillingType(rule.BillingType()) {
 			return invalidModelReference("referenced model " + ref.model + " has an incompatible billing type")
 		}
-		rate, _, e := c.modelRate(ctx, ref.model)
-		if e != nil {
-			return e
-		}
-		ref.priced = core.PricedUsage{Kind: ref.kind, Model: ref.model, Price: rule.Clone(), RateMultiplier: rate}
+		ref.priced = core.PricedUsage{Kind: ref.kind, Model: ref.model, Price: rule.Clone(), RateMultiplier: p.rate}
 		body, err := c.referencePriceBody(*ref)
 		if err != nil {
 			return invalidModelReference("cannot prepare referenced model price inputs")

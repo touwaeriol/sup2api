@@ -11,39 +11,46 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store"
 )
 
+// moveTo moves the users into the segment as the admin and returns how many
+// moved.
+func (e *env) moveTo(segment int64, users ...int64) any {
+	e.t.Helper()
+	return e.do(e.admin, "POST", path("/segments/%d/members", segment), map[string]any{"user_ids": users}).ok(200).data()["moved"]
+}
+
 func TestAddMembers(t *testing.T) {
 	e := setup(t)
-	vip, def := e.segment("VIP"), e.defaultSegment()
-	group := e.group("private", "restricted", "1")
-	third := e.user("third@x.com")
-	moved := func(segment int64, users ...int64) any {
-		return e.do(e.admin, "POST", path("/segments/%d/members", segment), map[string]any{"user_ids": users}).ok(200).data()["moved"]
-	}
-
-	require.Equal(t, float64(2), moved(vip, e.plain, e.masked, e.plain), "a user named twice moves once")
+	vip, third := e.segment("VIP"), e.user("third@x.com")
+	require.Equal(t, float64(2), e.moveTo(vip, e.plain, e.masked, e.plain), "a user named twice moves once")
 	require.Equal(t, vip, e.segmentOf(e.plain))
 	require.Equal(t, vip, e.segmentOf(e.masked))
-	require.Equal(t, float64(1), moved(vip, e.plain, third), "a user already there does not move")
-	require.Equal(t, float64(0), moved(vip))
+	require.Equal(t, float64(1), e.moveTo(vip, e.plain, third), "a user already there does not move")
+	require.Equal(t, float64(0), e.moveTo(vip))
 
 	// A personal user who is moved loses the personal segment and its settings.
 	personal := e.personal(e.plain)
-	e.pair(personal, group, true, "0.5")
-	require.Equal(t, float64(1), moved(def, e.plain))
-	require.Equal(t, def, e.segmentOf(e.plain))
+	e.pair(personal, e.group("private", "restricted", "1"), true, "0.5")
+	require.Equal(t, float64(1), e.moveTo(e.defaultSegment(), e.plain))
+	require.Equal(t, e.defaultSegment(), e.segmentOf(e.plain))
 	require.Zero(t, e.id(`SELECT count(*) FROM segments WHERE id = $1`, personal))
 	require.Zero(t, e.id(`SELECT count(*) FROM segment_groups`))
+}
 
-	// Nobody moves when one of the users is unknown; a deleted user is.
+// Nobody moves when one of the users is unknown, a deleted user included;
+// a personal segment takes no members.
+func TestAddMembersRefused(t *testing.T) {
+	e := setup(t)
+	vip, third := e.segment("VIP"), e.user("third@x.com")
+	e.moveTo(vip, e.masked, third)
 	e.exec(`UPDATE users SET deleted_at = now() WHERE id = $1`, e.masked)
 	for _, unknown := range []int64{999999, e.masked} {
-		r := e.do(e.admin, "POST", path("/segments/%d/members", def), map[string]any{"user_ids": []int64{third, unknown}})
+		r := e.do(e.admin, "POST", path("/segments/%d/members", e.defaultSegment()), map[string]any{"user_ids": []int64{third, unknown}})
 		require.Equal(t, path("unknown user %d", unknown), r.invalid("user_ids")["message"])
 	}
 	require.Equal(t, vip, e.segmentOf(third))
 	require.Equal(t, vip, e.segmentOf(e.masked), "a deleted user stays where they were")
 
-	personal = e.personal(e.plain)
+	personal := e.personal(e.plain)
 	e.do(e.admin, "POST", path("/segments/%d/members", personal), map[string]any{"user_ids": []int64{third}}).failed(409, "conflict")
 	e.do(e.admin, "POST", "/segments/999999/members", map[string]any{"user_ids": []int64{third}}).failed(404, "not_found")
 	e.do(e.plain, "POST", path("/segments/%d/members", vip), map[string]any{"user_ids": []int64{third}}).failed(403, "permission_denied")
@@ -90,7 +97,6 @@ func TestSegmentDeleteRace(t *testing.T) {
 // the others once the delete waits.
 func TestSegmentDeleteWaitsForMovers(t *testing.T) {
 	e := setup(t)
-	ctx := context.Background()
 	vip := e.segment("vip")
 	users := []int64{e.user("a@x.com"), e.user("b@x.com"), e.user("c@x.com")}
 	e.exec(`UPDATE users SET segment_id = $1 WHERE id = ANY($2)`, vip, users)
@@ -98,33 +104,8 @@ func TestSegmentDeleteWaitsForMovers(t *testing.T) {
 		e.do(e.admin, "POST", path("/users/%d/personal-segment", u), map[string]any{"copy": true}).ok(201)
 	}
 	last := e.id(`SELECT user_id FROM segments WHERE origin_id = $1 ORDER BY ctid DESC LIMIT 1`, vip)
-
-	holding, waiting := make(chan struct{}), make(chan struct{})
-	moved := make(chan error, 1)
-	go func() {
-		moved <- e.db.Tx(ctx, func(tx *gorm.DB) error {
-			if _, err := lockUsers(ctx, tx, `id = ANY(?)`, store.Int64s(users)); err != nil {
-				return err
-			}
-			move := func(ids ...int64) error { // as moveUsers, past its lock
-				if err := setUserSegment(store.G(ctx, tx), gorm.Expr("default_segment_id()"), "id = ANY(?)", store.Int64s(ids)).Error; err != nil {
-					return err
-				}
-				return DropPersonal(ctx, tx, ids...)
-			}
-			if err := move(last); err != nil {
-				return err
-			}
-			close(holding)
-			<-waiting
-			return move(users...)
-		})
-	}()
-	select {
-	case <-holding:
-	case err := <-moved:
-		t.Fatalf("the mover failed: %v", err)
-	}
+	waiting := make(chan struct{})
+	moved := e.holdMovers(users, last, waiting)
 	deleted := make(chan int, 1)
 	go func() { deleted <- e.do(e.admin, "DELETE", path("/segments/%d", vip), nil).code }()
 	require.Eventually(t, func() bool {
@@ -137,6 +118,40 @@ func TestSegmentDeleteWaitsForMovers(t *testing.T) {
 	for _, u := range users {
 		require.Equal(t, e.defaultSegment(), e.segmentOf(u))
 	}
+}
+
+// holdMovers starts a mover that locks the users, moves first back to the
+// default segment as moveUsers does past its lock, and returns once it
+// holds them; it moves them all once waiting closes, and the channel gets
+// the end of its transaction.
+func (e *env) holdMovers(users []int64, first int64, waiting <-chan struct{}) <-chan error {
+	ctx := context.Background()
+	holding, moved := make(chan struct{}), make(chan error, 1)
+	go func() {
+		moved <- e.db.Tx(ctx, func(tx *gorm.DB) error {
+			if _, err := lockUsers(ctx, tx, `id = ANY(?)`, store.Int64s(users)); err != nil {
+				return err
+			}
+			move := func(ids ...int64) error {
+				if err := setUserSegment(store.G(ctx, tx), gorm.Expr("default_segment_id()"), "id = ANY(?)", store.Int64s(ids)).Error; err != nil {
+					return err
+				}
+				return DropPersonal(ctx, tx, ids...)
+			}
+			if err := move(first); err != nil {
+				return err
+			}
+			close(holding)
+			<-waiting
+			return move(users...)
+		})
+	}()
+	select {
+	case <-holding:
+	case err := <-moved:
+		e.t.Fatalf("the mover failed: %v", err)
+	}
+	return moved
 }
 
 // Every writer of the package at once, on the same users, segments and

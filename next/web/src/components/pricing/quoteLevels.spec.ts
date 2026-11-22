@@ -4,7 +4,7 @@ import { priceLevels, rateLevels } from './quoteLevels'
 import { singleTier } from '@/views/prices/priceExpr'
 
 const base: PriceDef = { mode: 'visual', config: singleTier({ p: 3, c: 15 }), expression: '' }
-const fixed: CustomPrice = { kind: 'custom', mode: 'visual', config: singleTier({ p: 1, c: 8 }) }
+const fixed: CustomPrice = { mode: 'visual', config: singleTier({ p: 1, c: 8 }) }
 const rate = (over: Partial<EffectiveRate>): EffectiveRate => ({ value: '1.2', source: 'group', group_default: '1.2', ...over })
 const levels = (over: Partial<PricingQuote['rate_levels']>): PricingQuote['rate_levels'] => ({ segment_model: null, segment: null, group_model: null, group: '1.2', ...over })
 

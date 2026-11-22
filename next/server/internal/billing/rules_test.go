@@ -27,11 +27,65 @@ var (
 // customRule is a custom visual price of expression, with what the
 // expression tells (priceTraits).
 func customRule(expression string) *storedRule {
-	r := &storedRule{Rule: Rule{Kind: ruleCustom, Mode: "visual", Expression: expression}, exprHash: "hash of " + expression, exprVersion: 1}
+	r := &storedRule{Rule: Rule{Mode: "visual", Expression: expression}, exprHash: "hash of " + expression, exprVersion: 1}
 	if prog, err := expr.CompileCached(expression); err == nil {
 		r.traits = traitsOf(r.Mode, prog)
 	}
 	return r
+}
+
+// Global prices of a snapshot, in group snapGroup.
+const snapGroup = 7
+
+var (
+	snapGlobal = core.PriceRule{ID: 11, Model: "m", Mode: "visual", Expression: `tier("base", p*1 + c*5)`, ExprVersion: 1, ExprHash: "g"}
+	snapVideo  = core.PriceRule{ID: 12, Model: "video", Mode: "expression", Expression: `tier("video", c*7)`, ExprVersion: 1, ExprHash: "v", VideoOnly: true}
+	snapTiered = core.PriceRule{ID: 13, Model: "tiered", Mode: "visual", Expression: `len <= 10 ? tier("s", p*1 + c*0) : tier("l", p*2 + c*0)`, ExprVersion: 1, ExprHash: "t"}
+)
+
+// withSource returns the global price base as a rule of source changes it.
+func withSource(base core.PriceRule, source string, change func(*core.PriceRule)) *core.PriceRule {
+	base.Source = source
+	if change != nil {
+		change(&base)
+	}
+	return &base
+}
+
+// replacedBy is what custom price c makes of a global price.
+func replacedBy(c *storedRule) func(*core.PriceRule) {
+	return func(r *core.PriceRule) {
+		r.Base = &core.PriceBase{Expression: r.Expression, ExprHash: r.ExprHash}
+		r.Mode, r.Expression, r.ExprHash = c.Mode, c.Expression, c.exprHash
+		r.VideoOnly, r.PerRequest = c.traits.videoOnly, c.traits.perRequest
+	}
+}
+
+// resolveCase is a rule of snapGroup on every model, a query, and the price
+// it resolves to (nil = none).
+type resolveCase struct {
+	name    string
+	ofGroup *storedRule
+	q       core.PriceQuery
+	want    *core.PriceRule
+}
+
+func resolveCases() []resolveCase {
+	own, perRequest := customRule(`tier("base", p*2 + c*3)`), customRule(`tier("base", flat(1))`)
+	replaced, inGroup := replacedBy(own), func(model string) core.PriceQuery { return core.PriceQuery{Model: model, GroupID: snapGroup} }
+	return []resolveCase{
+		{name: "no rules", q: inGroup("m"), want: withSource(snapGlobal, "", nil)},
+		{name: "a query without group is the global price", ofGroup: own, q: core.PriceQuery{Model: "m"}, want: withSource(snapGlobal, "", nil)},
+		{name: "rules of another group", ofGroup: own, q: core.PriceQuery{Model: "m", GroupID: snapGroup + 1}, want: withSource(snapGlobal, "", nil)},
+		{name: "group custom", ofGroup: own, q: inGroup("m"), want: withSource(snapGlobal, core.PriceSourceGroup, replaced)},
+		{name: "a custom price by the request over one by the token is due per request", ofGroup: perRequest,
+			q: inGroup("m"), want: withSource(snapGlobal, core.PriceSourceGroup, replacedBy(perRequest))},
+		{name: "a custom price replaces an expression price and its video admission", ofGroup: own,
+			q: inGroup("video"), want: withSource(snapVideo, core.PriceSourceGroup, replaced)},
+		{name: "a custom price replaces a visual price with tiers", ofGroup: own,
+			q: inGroup("tiered"), want: withSource(snapTiered, core.PriceSourceGroup, replaced)},
+		{name: "no global price, no rule", ofGroup: own, q: inGroup("unpriced")},
+	}
 }
 
 // The list price of a query: the group's rule, else the global price;
@@ -40,58 +94,12 @@ func customRule(expression string) *storedRule {
 // replaces the global price's. The global price comes back as it is,
 // without a source.
 func TestSnapshotResolve(t *testing.T) {
-	const group = 7
-	global := core.PriceRule{ID: 11, Model: "m", Mode: "visual", Expression: `tier("base", p*1 + c*5)`, ExprVersion: 1, ExprHash: "g"}
-	video := core.PriceRule{ID: 12, Model: "video", Mode: "expression", Expression: `tier("video", c*7)`, ExprVersion: 1, ExprHash: "v", VideoOnly: true}
-	tiered := core.PriceRule{ID: 13, Model: "tiered", Mode: "visual", Expression: `len <= 10 ? tier("s", p*1 + c*0) : tier("l", p*2 + c*0)`, ExprVersion: 1, ExprHash: "t"}
-	own := customRule(`tier("base", p*2 + c*3)`)
-	perRequest := customRule(`tier("base", flat(1))`)
-
-	// with returns the global price as a rule changes it.
-	with := func(base core.PriceRule, source string, change func(*core.PriceRule)) *core.PriceRule {
-		base.Source = source
-		if change != nil {
-			change(&base)
-		}
-		return &base
-	}
-	replacedBy := func(c *storedRule) func(*core.PriceRule) {
-		return func(r *core.PriceRule) {
-			r.Base = &core.PriceBase{Expression: r.Expression, ExprHash: r.ExprHash}
-			r.Mode, r.Expression, r.ExprHash = c.Mode, c.Expression, c.exprHash
-			r.VideoOnly, r.PerRequest = c.traits.videoOnly, c.traits.perRequest
-		}
-	}
-	replaced := replacedBy(own)
-
-	cases := []struct {
-		name    string
-		ofGroup *storedRule
-		q       core.PriceQuery
-		want    *core.PriceRule
-	}{
-		{name: "no rules", q: core.PriceQuery{Model: "m", GroupID: group}, want: with(global, "", nil)},
-		{name: "a query without group is the global price", ofGroup: own,
-			q: core.PriceQuery{Model: "m"}, want: with(global, "", nil)},
-		{name: "rules of another group", ofGroup: own,
-			q: core.PriceQuery{Model: "m", GroupID: group + 1}, want: with(global, "", nil)},
-		{name: "group custom", ofGroup: own,
-			q: core.PriceQuery{Model: "m", GroupID: group}, want: with(global, core.PriceSourceGroup, replaced)},
-		{name: "a custom price by the request over one by the token is due per request", ofGroup: perRequest,
-			q: core.PriceQuery{Model: "m", GroupID: group}, want: with(global, core.PriceSourceGroup, replacedBy(perRequest))},
-		{name: "a custom price replaces an expression price and its video admission", ofGroup: own,
-			q: core.PriceQuery{Model: "video", GroupID: group}, want: with(video, core.PriceSourceGroup, replaced)},
-		{name: "a custom price replaces a visual price with tiers", ofGroup: own,
-			q: core.PriceQuery{Model: "tiered", GroupID: group}, want: with(tiered, core.PriceSourceGroup, replaced)},
-		{name: "no global price, no rule", ofGroup: own,
-			q: core.PriceQuery{Model: "unpriced", GroupID: group}},
-	}
-	for _, tc := range cases {
+	for _, tc := range resolveCases() {
 		t.Run(tc.name, func(t *testing.T) {
-			snap := &priceSnapshot{byModel: map[string]core.PriceRule{"m": global, "video": video, "tiered": tiered}, rules: ruleSet{},
+			snap := &priceSnapshot{byModel: map[string]core.PriceRule{"m": snapGlobal, "video": snapVideo, "tiered": snapTiered}, rules: ruleSet{},
 				bases: catalog{"m": oneTier, "video": exprPrice, "tiered": twoTiers}}
 			if tc.ofGroup != nil {
-				snap.rules[group] = map[string]*storedRule{"m": tc.ofGroup, "video": tc.ofGroup, "tiered": tc.ofGroup, "unpriced": tc.ofGroup}
+				snap.rules[snapGroup] = map[string]*storedRule{"m": tc.ofGroup, "video": tc.ofGroup, "tiered": tc.ofGroup, "unpriced": tc.ofGroup}
 			}
 			got := snap.resolve(tc.q)
 			if tc.want == nil {
@@ -116,49 +124,56 @@ func TestSnapshotResolveCopies(t *testing.T) {
 	require.Equal(t, "", snap.byModel["m"].Source)
 }
 
-func TestCheckRule(t *testing.T) {
-	tokens := func(config string) Rule {
-		return Rule{Kind: "custom", Mode: "visual", Config: json.RawMessage(config)}
-	}
-	written := func(src string) Rule { return Rule{Kind: "custom", Mode: "expression", Expression: src} }
+// checkRuleCase is a model price, what saving it fails with, and what is
+// stored of one that passes.
+type checkRuleCase struct {
+	name    string
+	rule    Rule
+	wantErr string
+	// What is stored of a rule that passes.
+	wantExpression string
+	wantTraits     priceTraits
+}
+
+// tokensRule is a visual model price of config; writtenRule an expression
+// one.
+func tokensRule(config string) Rule { return Rule{Mode: "visual", Config: json.RawMessage(config)} }
+
+func writtenRule(src string) Rule { return Rule{Mode: "expression", Expression: src} }
+
+func checkRuleCases() []checkRuleCase {
 	const cheap = `{"tiers": [{"name": "base", "p": 0.8, "c": 4, "cr": 0.08}], "rules": []}`
 	const tiered = `{"tiers": [{"name": "s", "when": {"var": "len", "op": "<=", "value": 10}, "p": 1, "c": 1}, {"name": "l", "p": 2, "c": 2}], "rules": []}`
 	const withRule = `{"tiers": [{"name": "base", "p": 1, "c": 1}], "rules": [{"multiplier": 2, "conds": [{"source": "param", "key": "x", "op": "exists"}]}]}`
-
-	cases := []struct {
-		name    string
-		rule    Rule
-		wantErr string
-		// What is stored of a rule that passes.
-		wantExpression string
-		wantTraits     priceTraits
-	}{
-		{name: "unknown kind", rule: Rule{Kind: "multiplier"}, wantErr: "a model price is a custom price"},
-		{name: "custom in an old mode", rule: Rule{Kind: "custom", Mode: "per_request", Config: json.RawMessage(`{"price": 1}`)}, wantErr: "a model price is a custom price, visual or expression"},
-		{name: "custom without a mode", rule: Rule{Kind: "custom", Config: json.RawMessage(`{"price": 1}`)}, wantErr: "a model price is a custom price, visual or expression"},
-		{name: "custom negative price", rule: tokens(`{"tiers": [{"name": "base", "p": 1, "cr": -1}]}`), wantErr: "config.tiers[0].cr"},
-		{name: "custom in the old shape", rule: tokens(`{"p": 1, "c": 2}`), wantErr: `unknown field "p"`},
-		{name: "custom without config", rule: Rule{Kind: "custom", Mode: "visual"}, wantErr: "config.tiers: at least one tier"},
-		{name: "custom request tier without a price", rule: tokens(`{"tiers": [{"name": "base", "unit": "request"}]}`), wantErr: "config.tiers[0].price: required"},
-		{name: "custom expression that does not compile", rule: written(`tier("base", p*`), wantErr: "invalid custom price"},
-		{name: "custom expression with a config", rule: Rule{Kind: "custom", Mode: "expression", Config: json.RawMessage(cheap), Expression: `p`}, wantErr: "invalid custom price"},
-		{name: "custom per token", rule: tokens(cheap), wantExpression: `tier("base", p*0.8 + c*4 + cr*0.08)`},
-		{name: "custom per token with image prices", rule: tokens(`{"tiers": [{"name": "base", "p": 1, "c": 2, "img": 3, "img_o": 4}]}`),
+	return []checkRuleCase{
+		{name: "custom in an old mode", rule: Rule{Mode: "per_request", Config: json.RawMessage(`{"price": 1}`)}, wantErr: "mode must be visual or expression"},
+		{name: "custom without a mode", rule: Rule{Config: json.RawMessage(`{"price": 1}`)}, wantErr: "mode must be visual or expression"},
+		{name: "custom negative price", rule: tokensRule(`{"tiers": [{"name": "base", "p": 1, "cr": -1}]}`), wantErr: "config.tiers[0].cr"},
+		{name: "custom in the old shape", rule: tokensRule(`{"p": 1, "c": 2}`), wantErr: `unknown field "p"`},
+		{name: "custom without config", rule: Rule{Mode: "visual"}, wantErr: "config.tiers: at least one tier"},
+		{name: "custom request tier without a price", rule: tokensRule(`{"tiers": [{"name": "base", "unit": "request"}]}`), wantErr: "config.tiers[0].price: required"},
+		{name: "custom expression that does not compile", rule: writtenRule(`tier("base", p*`), wantErr: "invalid custom price"},
+		{name: "custom expression with a config", rule: Rule{Mode: "expression", Config: json.RawMessage(cheap), Expression: `p`}, wantErr: "invalid custom price"},
+		{name: "custom per token", rule: tokensRule(cheap), wantExpression: `tier("base", p*0.8 + c*4 + cr*0.08)`},
+		{name: "custom per token with image prices", rule: tokensRule(`{"tiers": [{"name": "base", "p": 1, "c": 2, "img": 3, "img_o": 4}]}`),
 			wantExpression: `tier("base", p*1 + c*2 + img*3 + img_o*4)`},
 		{name: "custom per request, free",
-			rule:           Rule{Kind: "custom", Mode: "visual", Config: json.RawMessage(`{"tiers": [{"name": "base", "unit": "request", "price": 0}]}`)},
+			rule:           Rule{Mode: "visual", Config: json.RawMessage(`{"tiers": [{"name": "base", "unit": "request", "price": 0}]}`)},
 			wantExpression: `tier("base", flat(0))`, wantTraits: priceTraits{perRequest: true}},
 		{name: "custom per request",
-			rule:           tokens(`{"tiers": [{"name": "base", "unit": "request", "price": 1}], "rules": []}`),
+			rule:           tokensRule(`{"tiers": [{"name": "base", "unit": "request", "price": 1}], "rules": []}`),
 			wantExpression: `tier("base", flat(1))`, wantTraits: priceTraits{perRequest: true}},
-		{name: "custom with tiers", rule: tokens(tiered),
+		{name: "custom with tiers", rule: tokensRule(tiered),
 			wantExpression: `len <= 10 ? tier("s", p*1 + c*1) : tier("l", p*2 + c*2)`},
-		{name: "custom with a rule", rule: tokens(withRule),
+		{name: "custom with a rule", rule: tokensRule(withRule),
 			wantExpression: `(tier("base", p*1 + c*1)) * (param("x") != nil ? 2 : 1)`},
-		{name: "custom expression, trimmed", rule: written("  tier(\"base\", p*2 + c*3)\n"),
+		{name: "custom expression, trimmed", rule: writtenRule("  tier(\"base\", p*2 + c*3)\n"),
 			wantExpression: `tier("base", p*2 + c*3)`},
 	}
-	for _, tc := range cases {
+}
+
+func TestCheckRule(t *testing.T) {
+	for _, tc := range checkRuleCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := checkRule(context.Background(), tc.rule, nil)
 			if tc.wantErr != "" {
@@ -166,7 +181,6 @@ func TestCheckRule(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			require.Equal(t, ruleCustom, got.Kind)
 			require.Equal(t, tc.rule.Mode, got.Mode)
 			if tc.rule.Mode == "visual" {
 				require.Equal(t, tc.rule.Config, got.Config)
@@ -179,9 +193,13 @@ func TestCheckRule(t *testing.T) {
 			require.Equal(t, 1, got.exprVersion)
 		})
 	}
+}
+
+// A model price that cannot be saved says why in the caller's language.
+func TestCheckRuleMessages(t *testing.T) {
 	zh := core.WithLocale(context.Background(), "zh")
-	_, err := checkRule(zh, Rule{Kind: "custom", Mode: "visual"}, nil)
+	_, err := checkRule(zh, Rule{Mode: "visual"}, nil)
 	require.EqualError(t, err, "自定义价无效：config.tiers: at least one tier is required")
-	_, err = checkRule(zh, Rule{Kind: "custom", Mode: "per_token"}, nil)
-	require.EqualError(t, err, "模型价格须是自定义价：可视化或表达式")
+	_, err = checkRule(zh, Rule{Mode: "per_token"}, nil)
+	require.EqualError(t, err, "mode 必须为可视化（visual）或表达式（expression）")
 }

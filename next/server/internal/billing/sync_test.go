@@ -305,7 +305,7 @@ func TestPriceSourcesSync(t *testing.T) {
 		t.Fatalf("apply: %v", res)
 	}
 	// The manual price was not selected and stays manual.
-	r, err := e.svc.Resolve(ctx, core.PriceQuery{Model: "claude-opus-5-5"})
+	r, err := priceOf(ctx, e.svc, core.PriceQuery{Model: "claude-opus-5-5"})
 	if err != nil || r.Expression != `v1:tier("base", p*1 + c*1)` && r.Expression != `tier("base", p*1 + c*1)` {
 		t.Fatalf("manual kept: %+v %v", r, err)
 	}
@@ -318,7 +318,7 @@ func TestPriceSourcesSync(t *testing.T) {
 	if synced["page"].(map[string]any)["total"].(float64) != 3 {
 		t.Fatalf("synced prices: %v", synced)
 	}
-	if r, _ := e.svc.Resolve(ctx, core.PriceQuery{Model: "claude-opus-5-5"}); !strings.Contains(r.Expression, "cc1h*8") {
+	if r, _ := priceOf(ctx, e.svc, core.PriceQuery{Model: "claude-opus-5-5"}); !strings.Contains(r.Expression, "cc1h*8") {
 		t.Fatalf("opus after sync: %+v", r)
 	}
 

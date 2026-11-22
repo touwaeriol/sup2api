@@ -185,20 +185,31 @@ func TestRetryUsesFrozenPriceRule(t *testing.T) {
 	require.Equal(t, "failed 0.00000000 null 1.2000", f.moneyColumns("retry-scale"))
 	require.Equal(t, "pending 0.00000000 null 2.0000", f.moneyColumns("retry-custom"))
 
+	changePricesAfterward(t, f, scaled, custom)
+	time.Sleep(5 * time.Millisecond)
+	checkRetriedAtFrozenPrices(t, f)
+}
+
+// changePricesAfterward changes the rate, the rule and the global price the
+// records were priced by, and the caller's copies of their prices.
+func changePricesAfterward(t *testing.T, f *fixture, scaled, custom *core.UsageRecord) {
 	changed := `tier("changed", p*999 + c*999)`
 	for _, sql := range []string{
 		`UPDATE group_model_rates SET rate = 9 WHERE model = 'm-scale'`,
 		`DELETE FROM price_rules WHERE model = 'm-custom'`,
 		`UPDATE model_prices SET expression = '` + changed + `', expr_hash = '` + expr.Hash(changed) + `'`,
 	} {
-		_, err := f.db.SQL.ExecContext(ctx, sql)
+		_, err := f.db.SQL.ExecContext(t.Context(), sql)
 		require.NoError(t, err, sql)
 	}
 	// The caller's objects are not the frozen ones either.
 	*scaled.Price.Scale, custom.Price.Base.Expression = dec("9"), changed
-	time.Sleep(5 * time.Millisecond)
+}
 
-	n, err := f.svc.RetryPending(ctx)
+// checkRetriedAtFrozenPrices retries both records: each is billed as it was
+// priced.
+func checkRetriedAtFrozenPrices(t *testing.T, f *fixture) {
+	n, err := f.svc.RetryPending(t.Context())
 	require.NoError(t, err)
 	require.Equal(t, 2, n)
 	require.Equal(t, "billed 0.42480000 0.70800000 1.2000", f.moneyColumns("retry-scale"))

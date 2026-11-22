@@ -18,8 +18,8 @@ export type PriceSource = 'group' | 'global'
 
 /** The model price of a group: a price of its own, visual or an expression. */
 export type ModelPrice =
-  | { kind: 'custom'; mode: 'visual'; config: VisualConfig; expression?: string }
-  | { kind: 'custom'; mode: 'expression'; config: Record<string, never>; expression: string }
+  | { mode: 'visual'; config: VisualConfig; expression?: string }
+  | { mode: 'expression'; config: Record<string, never>; expression: string }
 
 export interface MockSegment {
   id: number
@@ -105,10 +105,10 @@ const pairs: Pair[] = [
 ]
 
 const prices: ModelPriceRow[] = [
-  { group_id: 1, model: 'web-search', price: { kind: 'custom', mode: 'visual', config: requestTier(0.008) } },
-  { group_id: 2, model: 'claude-haiku-4-5', price: { kind: 'custom', mode: 'visual', config: singleTier({ p: 0.8, c: 4, cr: 0.08, cc: 1 }) } },
+  { group_id: 1, model: 'web-search', price: { mode: 'visual', config: requestTier(0.008) } },
+  { group_id: 2, model: 'claude-haiku-4-5', price: { mode: 'visual', config: singleTier({ p: 0.8, c: 4, cr: 0.08, cc: 1 }) } },
   // A custom price by the request over a global price by tokens.
-  { group_id: 1, model: 'gemini-2.5-flash', price: { kind: 'custom', mode: 'visual', config: requestTier(0.002) } }
+  { group_id: 1, model: 'gemini-2.5-flash', price: { mode: 'visual', config: requestTier(0.002) } }
 ]
 
 // Group vip (2) charges ×0.9 for claude-opus-4-1 instead of its ×0.8, and default (1) ×1.2 for gpt-4o.
@@ -242,6 +242,12 @@ export function setPair(segmentId: number, groupId: number, patch: { granted?: b
   if (!cur) pairs.push(pair)
   // A pair that says nothing is not kept.
   drop(pairs, (p) => !p.granted && p.rate_override === null)
+}
+
+/** Removes everything a segment has in a group: its grant, its rate override and its model rates there. */
+export function removePair(segmentId: number, groupId: number) {
+  drop(pairs, (p) => p.segment_id === segmentId && p.group_id === groupId)
+  drop(modelRates, (r) => r.segment_id === segmentId && r.group_id === groupId)
 }
 
 /** Sets or (`price` null) removes the model price of a group. */

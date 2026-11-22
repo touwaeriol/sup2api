@@ -72,7 +72,7 @@ func (s *Service) actOnUsers(ctx context.Context, userIDs ...int64) error {
 // errOwnSegment is the refusal of a change to the terms of a user group the
 // caller is in (guardOwnSegments).
 func errOwnSegment(ctx context.Context) *core.Error {
-	return core.ErrConflict.WithMessage(t(ctx, "you cannot change the terms of a user group you are in", "你不能修改自己所在用户组的定价或授权"))
+	return core.ErrConflict.WithMessage(t(ctx, "you cannot change the terms of a user group you are in", "你不能修改自己所在用户分组的倍率或授权"))
 }
 
 // guardOwnSegments fails unless the caller may change what the segments
@@ -107,13 +107,13 @@ func guardOwnSegments(ctx context.Context, q *gorm.DB, users core.UserGuard, seg
 // one wording of it: iam and billing answer with it too. It is
 // core.ErrNotFound to errors.Is.
 func NotFound(ctx context.Context) error {
-	return core.ErrNotFound.WithMessage(t(ctx, "user group not found", "用户组不存在")).WithCause(core.ErrNotFound)
+	return core.ErrNotFound.WithMessage(t(ctx, "user group not found", "用户分组不存在")).WithCause(core.ErrNotFound)
 }
 
 // UnknownMessage is the message of a field that names a user group that does not
 // exist, or not one it may name.
 func UnknownMessage(ctx context.Context) string {
-	return t(ctx, "unknown user group", "用户组不存在")
+	return t(ctx, "unknown user group", "用户分组不存在")
 }
 
 // UserNotFound is the not_found of a user that does not exist or was
@@ -122,13 +122,13 @@ func UserNotFound(ctx context.Context) error {
 	return core.ErrNotFound.WithMessage(t(ctx, "user not found", "用户不存在")).WithCause(core.ErrNotFound)
 }
 
-// tx runs fn in a transaction. A row the writes refer to that was deleted
-// meanwhile (a foreign key violation) is a conflict, not a failure, and so is
-// a deadlock with another writer, should the lock order leave one possible.
+// tx runs fn in a transaction. Losing to a concurrent write (a row the
+// writes refer to deleted meanwhile, a deadlock should the lock order leave
+// one possible) is a conflict, not a failure.
 func (s *Service) tx(ctx context.Context, fn func(tx *gorm.DB) error) error {
 	err := s.db.Tx(ctx, fn)
-	if store.IsForeignKeyViolation(err) || store.IsDeadlock(err) {
-		return core.ErrConflict.WithMessage(t(ctx, "the data changed meanwhile, try again", "数据已被其他操作修改，请重试")).WithCause(err)
+	if store.IsWriteRace(err) {
+		return core.ChangedMeanwhile(ctx, err)
 	}
 	return err
 }

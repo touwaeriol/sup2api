@@ -32,7 +32,7 @@ describe('price rule editor', () => {
   it('starts a price of its own from the original price, tiers and all, in the price editor', async () => {
     const { w, emitted, kind } = render(null, tiered)
     await kind('custom').setValue(true)
-    expect(emitted()).toMatchObject({ kind: 'custom', mode: 'visual', config: { tiers: [{ name: 'a', p: 3, c: 15 }, { name: 'b', p: 6, c: 22.5 }], rules: [] } })
+    expect(emitted()).toMatchObject({ mode: 'visual', config: { tiers: [{ name: 'a', p: 3, c: 15 }, { name: 'b', p: 6, c: 22.5 }], rules: [] } })
     await w.setProps({ modelValue: emitted() as CustomPrice })
     expect(w.find('[data-testid="price-def-editor"]').exists()).toBe(true)
     // The list shows the fallback tier.
@@ -42,29 +42,29 @@ describe('price rule editor', () => {
   it('sends every edit in the price editor as a whole rule', async () => {
     const { w, emitted, kind } = render(null, expression)
     await kind('custom').setValue(true)
-    expect(emitted()).toEqual({ kind: 'custom', mode: 'expression', expression: 'p * 3 + c * 15' })
+    expect(emitted()).toEqual({ mode: 'expression', expression: 'p * 3 + c * 15' })
     await w.setProps({ modelValue: emitted() as CustomPrice })
     await w.get('[data-testid="expr-code"] textarea').setValue('p * 2')
     await flushPromises()
-    expect(emitted()).toEqual({ kind: 'custom', mode: 'expression', expression: 'p * 2' })
+    expect(emitted()).toEqual({ mode: 'expression', expression: 'p * 2' })
     await w.setProps({ modelValue: emitted() as CustomPrice })
     expect(preview(w)).toBe('Model price Billed by expression; at rate ×1.2 you pay Billed by expression ×1.2')
   })
 
   it('closes the price editor when the rule is cleared from outside', async () => {
-    const { w } = render({ kind: 'custom', mode: 'expression', expression: 'p * 2' })
+    const { w } = render({ mode: 'expression', expression: 'p * 2' })
     expect(w.find('[data-testid="price-def-editor"]').exists()).toBe(true)
     await w.setProps({ modelValue: null })
     expect(w.find('[data-testid="price-def-editor"]').exists()).toBe(false)
   })
 
   it('says why a price of its own cannot be saved', () => {
-    const { w } = render({ kind: 'custom', mode: 'expression', expression: ' ' })
+    const { w } = render({ mode: 'expression', expression: ' ' })
     expect(w.get('[data-testid="model-price-editor-issue"]').text()).toBe(i18n.global.t('prices.local.emptyExpr'))
   })
 
   it('goes back to the original price', async () => {
-    const { emitted, kind } = render({ kind: 'custom', mode: 'expression', expression: 'p * 2' })
+    const { emitted, kind } = render({ mode: 'expression', expression: 'p * 2' })
     await kind('none').setValue(true)
     expect(emitted()).toBeNull()
   })
@@ -77,7 +77,7 @@ describe('price rule editor', () => {
   })
 
   it('only shows the saved price of a model whose original price went away', () => {
-    const { w } = render({ kind: 'custom', mode: 'expression', expression: 'p * 2' }, null)
+    const { w } = render({ mode: 'expression', expression: 'p * 2' }, null)
     expect(w.get('[data-testid="expr-code"] textarea').attributes('readonly')).toBeDefined()
   })
 })

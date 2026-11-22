@@ -2,12 +2,12 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '@sub2api/host'
-import { SAlert, SButton, SField, SFormModal, SHint, SInput, STabbedForm, STextarea, toast, useTabbedForm, type FormTab } from '@sub2api/ui'
+import { SAlert, SButton, SField, SHint, SInput, STextarea, toast, useTabbedForm, type FormTab } from '@sub2api/ui'
 import type { Segment } from '@/api/pricing'
+import TabbedFormModal from '@/components/TabbedFormModal.vue'
 import SegmentBadge from '@/components/pricing/SegmentBadge.vue'
 import SegmentGroupsEditor from '@/components/pricing/SegmentGroupsEditor.vue'
 import { SEGMENT_FIELDS, formChanged, formOf, segmentBody } from '@/components/pricing/segmentForm'
-import { useTabbedSubmit } from '@/composables/useTabbedSubmit'
 import { useAuthStore } from '@/stores/auth'
 
 // Creates or edits a user group ("segment"). A named one has two tabs: what it
@@ -17,17 +17,18 @@ import { useAuthStore } from '@/stores/auth'
 // to a named one. Every tab can be filled in at once, a new group's too: Save
 // sends the form and the rates in one request (useTabbedForm), and a field
 // that is wrong marks its tab and opens it. Users are put in a user group on
-// the users page. Closing with something not saved asks first. `readonly`
-// only shows the segment, to a caller who may not change it.
+// the users page. Closing with something not saved asks first
+// (TabbedFormModal). `readonly` only shows the segment, to a caller who may
+// not change it.
 const TABS = ['basic', 'groups'] as const
-export type SegmentEditorTab = (typeof TABS)[number]
-const props = defineProps<{ open: boolean; segment: Segment | null; tab?: SegmentEditorTab; readonly?: boolean }>()
+type SegmentEditorTab = (typeof TABS)[number]
+const props = defineProps<{ open: boolean; segment: Segment | null; readonly?: boolean }>()
 const emit = defineEmits<{ (e: 'update:open', v: boolean): void; (e: 'changed'): void; (e: 'remove', segment: Segment): void }>()
 const { t } = useI18n()
 
 const form = reactive(formOf(null))
 const errors = ref<Record<string, string>>({})
-const shown = ref<string>('basic')
+const shown = ref<SegmentEditorTab>('basic')
 const personal = computed(() => props.segment?.kind === 'personal')
 const auth = useAuthStore()
 // A saved segment answers with its own account groups (segment:read); one not created yet has to
@@ -57,7 +58,7 @@ watch(
     Object.assign(form, formOf(props.segment))
     errors.value = {}
     tabbed.clearErrors()
-    shown.value = props.tab && tabKeys.value.includes(props.tab) ? props.tab : tabKeys.value[0]
+    shown.value = tabKeys.value[0]
   },
   { immediate: true }
 )
@@ -67,30 +68,27 @@ const title = computed(() => {
   return t(props.readonly ? 'segments.viewTitle' : 'segments.editTitle', { name: props.segment.name })
 })
 
-const { submit, leave } = useTabbedSubmit(tabbed, {
-  /** One request (SegmentWrite): the user group with its account group rates and model rates. */
-  send: (body) => (props.segment ? api.patch<Segment>(`/segments/${props.segment.id}`, body) : api.post<Segment>('/segments', body)),
-  done() {
-    emit('changed')
-    toast(t(props.segment ? 'common.updated' : 'segments.created'), 'success')
-    emit('update:open', false)
-  },
-  close: () => emit('update:open', false)
-})
+/** One request (SegmentWrite): the user group with its account group rates and model rates. */
+const send = (body: Record<string, unknown>) => (props.segment ? api.patch<Segment>(`/segments/${props.segment.id}`, body) : api.post<Segment>('/segments', body))
+function saved() {
+  emit('changed')
+  toast(t(props.segment ? 'common.updated' : 'segments.created'), 'success')
+}
 </script>
 
 <template>
-  <SFormModal
+  <TabbedFormModal
+    v-model:tab="shown"
     :open="open"
     :title="title"
-    width="2xl"
-    :loading="tabbed.saving.value"
+    :tabs="tabs"
+    :form="tabbed"
+    :send="send"
     :submit-text="segment ? t('common.save') : t('common.create')"
-    :submit-attrs="{ 'data-testid': 'segment-editor-submit' }"
-    :enter-submit="false"
-    data-testid="segment-editor"
-    @update:open="leave"
-    @submit="submit"
+    testid="segment-editor"
+    min-height="min-h-[20rem]"
+    @update:open="emit('update:open', $event)"
+    @saved="saved"
   >
     <template v-if="personal && segment" #header>
       <h3 class="flex min-w-0 items-center gap-2 text-base font-semibold text-fg" data-testid="segment-editor-personal">
@@ -98,31 +96,30 @@ const { submit, leave } = useTabbedSubmit(tabbed, {
         <SegmentBadge :segment="segment" class="shrink-0" />
       </h3>
     </template>
-    <SAlert v-if="personal && segment" tone="accent" icon="user" data-testid="segment-editor-notice">
-      {{ segment.origin ? t('segments.personal.noticeOrigin', { origin: segment.origin.name }) : t('segments.personal.notice') }}
-      <template v-if="!readonly" #actions>
-        <SButton size="sm" data-testid="segment-editor-remove" @click="emit('remove', segment)">{{ t('segments.personal.remove') }}</SButton>
-      </template>
-    </SAlert>
-    <!-- Every tab stays mounted while the dialog is open, so the rates keep their drafts. The least height keeps the dialog from collapsing on a short tab. -->
-    <STabbedForm v-if="open" v-model="shown" :tabs="tabs" :form="tabbed" :aria-label="title" class="min-h-[20rem]" data-testid="segment-editor-tabs">
-      <template #default="{ tab: key }">
-        <div v-if="key === 'basic'" class="space-y-4">
-          <SField :label="t('common.name')" required :hint="segment?.is_default ? t('segments.defaultName') : undefined" :error="errors.name">
-            <SInput v-model="form.name" :disabled="locked || segment?.is_default" data-testid="segment-name" />
-          </SField>
-          <SField :label="t('segments.note')" :error="errors.description">
-            <STextarea v-model="form.description" :rows="2" :disabled="locked" data-testid="segment-description" />
-          </SField>
-        </div>
-        <SegmentGroupsEditor v-else :segment-id="segment?.id ?? null" :editable="!readonly" :disabled="tabbed.saving.value" tab="groups" />
-      </template>
-    </STabbedForm>
+    <template v-if="personal && segment" #before>
+      <SAlert tone="accent" icon="user" data-testid="segment-editor-notice">
+        {{ segment.origin ? t('segments.personal.noticeOrigin', { origin: segment.origin.name }) : t('segments.personal.notice') }}
+        <template v-if="!readonly" #actions>
+          <SButton size="sm" data-testid="segment-editor-remove" @click="emit('remove', segment)">{{ t('segments.personal.remove') }}</SButton>
+        </template>
+      </SAlert>
+    </template>
+    <template #default="{ tab: key }">
+      <div v-if="key === 'basic'" class="space-y-4">
+        <SField :label="t('common.name')" required :hint="segment?.is_default ? t('segments.defaultName') : undefined" :error="errors.name">
+          <SInput v-model="form.name" :disabled="locked || segment?.is_default" data-testid="segment-name" />
+        </SField>
+        <SField :label="t('segments.note')" :error="errors.description">
+          <STextarea v-model="form.description" :rows="2" :disabled="locked" data-testid="segment-description" />
+        </SField>
+      </div>
+      <SegmentGroupsEditor v-else :segment-id="segment?.id ?? null" :editable="!readonly" :disabled="tabbed.saving.value" tab="groups" />
+    </template>
     <template v-if="!segment" #footer-start>
       <SHint size="xs" data-testid="segment-editor-unsaved">{{ t('segments.unsavedNew') }}</SHint>
     </template>
     <template v-if="readonly" #footer>
       <SButton variant="primary" data-testid="segment-editor-close" @click="emit('update:open', false)">{{ t('common.close') }}</SButton>
     </template>
-  </SFormModal>
+  </TabbedFormModal>
 </template>

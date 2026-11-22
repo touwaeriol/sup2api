@@ -22,7 +22,8 @@ const prices = [
   { model: 'custom', mode: 'expression', config: {}, expression: 'p * 2 + unknown(1)', groups: [] }
 ]
 const everyGroup = { group: null, rate_multiplier: '1', prices }
-const inVip = { group: vip, rate_multiplier: '1.5', rate_source: 'segment', prices: [{ ...prices[0], groups: undefined, source: 'group' }] }
+const inGroup = (row: (typeof prices)[number], rate: string, rate_source: string) => ({ ...row, groups: undefined, source: 'group', rate, rate_source })
+const inVip = { group: vip, rate_multiplier: '1.5', rate_source: 'segment', prices: [inGroup(prices[0], '1.5', 'segment'), inGroup({ ...prices[0], model: 'cheaper' }, '0.5', 'segment_model')] }
 
 /** The prices are asked for a tick after the choice: only the latest choice counts. */
 async function settle() {
@@ -87,15 +88,22 @@ describe('models and prices', () => {
     expect(get).toHaveBeenLastCalledWith('/me/prices', { group_id: '2' })
   })
 
-  it('multiplies by the rate of the caller in the chosen group, and searches', async () => {
+  it('multiplies each model by the rate of the caller for it in the chosen group, and says where it comes from', async () => {
     const { w, router } = await render()
     await w.get('[data-testid="models-group"]').setValue('2')
     await settle()
     expect(router.currentRoute.value.query).toEqual({ group: '2' })
     expect(get).toHaveBeenLastCalledWith('/me/prices', { group_id: '2' })
     expect(row(w, 'tokens').text()).toContain('$4.5')
-    expect(unit(w)).toContain('×1.5')
-    expect(unit(w)).toContain('你所在的用户分组在该账号分组有单独设的倍率')
+    expect(row(w, 'tokens').get('[data-testid="models-row-rate"]').text()).toBe('×1.5')
+    expect(row(w, 'tokens').get('[data-testid="models-row-rate-source"]').text()).toBe('你的用户分组在该账号分组的倍率')
+    expect(row(w, 'cheaper').text()).toContain('$1.5')
+    expect(row(w, 'cheaper').get('[data-testid="models-row-rate-source"]').text()).toBe('你的用户分组给这个模型单独设的倍率')
+    expect(unit(w)).toContain('已乘你在该账号分组每个模型的倍率')
+  })
+
+  it('shows one group without the base price note and the groups, and searches', async () => {
+    const { w, router } = await render('/me/models?group=2')
     expect(w.text()).not.toContain('one-shot')
     // One group: no base price note, no column of groups.
     expect(w.find('[data-testid="models-base-note"]').exists()).toBe(false)
@@ -111,11 +119,9 @@ describe('models and prices', () => {
   })
 
   it('works the caller’s rate into a price it cannot break down, as into the others', async () => {
-    const custom = { ...prices[3], groups: undefined, source: 'group' }
-    const rated = { group: vip, rate_multiplier: '1.5', rate_source: 'segment', prices: [custom] }
+    const rated = { group: vip, rate_multiplier: '1', rate_source: 'group', prices: [inGroup(prices[3], '1.5', 'group_model')] }
     get.mockImplementation(async (path: string) => (path === '/me/groups' ? groups : rated))
     const { w } = await render('/me/models?group=2')
-    expect(unit(w)).toContain('×1.5')
     expect(row(w, 'custom').get('[data-testid="models-opaque"]').text()).toBe('按规则计费 ×1.5')
   })
 
