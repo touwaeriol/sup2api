@@ -26,9 +26,9 @@ type MyGroup struct {
 	// serve, as GET /groups/:id reports them but without the number of
 	// accounts serving each: what the caller's keys of the group can call.
 	ServedProtocols []MyServedProtocol `json:"served_protocols"`
-	// EffectiveRate is the rate the caller pays in the group and RateSource
-	// where it comes from (core.SegmentRate); RateMultiplier stays the
-	// group's default.
+	// EffectiveRate is the rate the caller pays in the group, model rates
+	// aside, and RateSource where it comes from (segment.Terms);
+	// RateMultiplier stays the group's base rate.
 	EffectiveRate decimal.Decimal `json:"effective_rate"`
 	RateSource    string          `json:"rate_source"`
 	// Exclusive marks a private group the caller's segment is granted.

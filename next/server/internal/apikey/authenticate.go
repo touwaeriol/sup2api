@@ -27,7 +27,7 @@ type cached struct {
 	GroupID         int64
 	GroupName       string
 	GroupStatus     string
-	RateMultiplier  decimal.Decimal
+	RateMultiplier  decimal.Decimal // the group's base rate
 	ModelAllowlist  []string
 	ModelFilterMode string
 	// GroupEnvironment is the group layer of the environment (§74.3).
@@ -38,10 +38,10 @@ type cached struct {
 	KeyQuota         core.KeyQuota
 	// GroupLossPolicy is the group's conversion loss policy (§88).
 	GroupLossPolicy string
-	// SegmentID is the owner's segment. RateMultiplier is the rate the segment
-	// pays in the group and RateSource where it comes from (core.SegmentRate).
-	SegmentID  int64
-	RateSource string
+	// SegmentID is the owner's segment and RateOverride its own rate in the
+	// group (nil = none).
+	SegmentID    int64
+	RateOverride *decimal.Decimal
 }
 
 // Authenticate resolves a raw client key into a principal.
@@ -91,12 +91,12 @@ func (e *cached) principal() *core.APIKeyPrincipal {
 		allow = []string{}
 	}
 	return &core.APIKeyPrincipal{
-		KeyID:      e.KeyID,
-		UserID:     e.UserID,
-		SegmentID:  e.SegmentID,
-		RateSource: e.RateSource,
-		KeyLimits:  e.KeyLimits,
-		KeyQuota:   e.KeyQuota,
+		KeyID:        e.KeyID,
+		UserID:       e.UserID,
+		SegmentID:    e.SegmentID,
+		RateOverride: e.RateOverride,
+		KeyLimits:    e.KeyLimits,
+		KeyQuota:     e.KeyQuota,
 		Group: core.GroupInfo{
 			ID:                   e.GroupID,
 			Name:                 e.GroupName,
@@ -120,15 +120,14 @@ const lookupColumns = `k.id, k.user_id, k.status, k.expires_at,
 		COALESCE(g.model_allowlist, '[]'), COALESCE(g.model_filter_mode, 'blacklist'), COALESCE(g.environment, '{}'),
 		COALESCE(` + segment.OpenToKeyOwner + `, false), k.allowed_ips,
 		k.rpm_limit, k.tpm_limit, k.max_concurrency, k.quota_limit, k.quota_used, COALESCE(g.conversion_loss_policy, ''),
-		s.id, s.discount, sg.rate_override`
+		u.segment_id, sg.rate_override`
 
 // lookupFrom is lookupQuery's FROM: the joins as one text, which renders
 // as Joins would and allocates less on this path.
 const lookupFrom = "api_keys k" +
 	" JOIN users u ON u.id = k.user_id" +
-	" JOIN segments s ON s.id = u.segment_id" +
 	" LEFT JOIN groups g ON g.id = k.group_id" +
-	" LEFT JOIN segment_groups sg ON sg.segment_id = s.id AND sg.group_id = g.id"
+	" LEFT JOIN segment_groups sg ON sg.segment_id = u.segment_id AND sg.group_id = g.id"
 
 // lookupQuery reads lookupColumns of the key hash in one statement. It runs
 // on every gateway request: its row is scanned through Row into local
@@ -140,18 +139,14 @@ func lookupQuery(db *gorm.DB, hash string) *gorm.DB {
 
 func (s *Service) lookup(ctx context.Context, hash string) (*cached, error) {
 	e := &cached{}
-	// The group's default rate, the segment's discount and its own rate in
-	// the group (NULL = none).
-	var groupRate, discount decimal.Decimal
-	var override *decimal.Decimal
 	// database/sql hands jsonb over as its document: JSON decodes it.
 	var allow store.JSON[[]string]
 	var env store.JSON[core.EnvironmentValues]
 	err := lookupQuery(store.G(ctx, s.db.Gorm), hash).Row().Scan(
 		&e.KeyID, &e.UserID, &e.KeyStatus, &e.ExpiresAt, &e.UserActive,
-		&e.GroupID, &e.GroupName, &e.GroupStatus, &groupRate, &allow, &e.ModelFilterMode, &env, &e.GroupAvailable, (*store.Strings)(&e.AllowedIPs),
+		&e.GroupID, &e.GroupName, &e.GroupStatus, &e.RateMultiplier, &allow, &e.ModelFilterMode, &env, &e.GroupAvailable, (*store.Strings)(&e.AllowedIPs),
 		&e.KeyLimits.RPM, &e.KeyLimits.TPM, &e.KeyLimits.Concurrency, &e.KeyQuota.Limit, &e.KeyQuota.Used, &e.GroupLossPolicy,
-		&e.SegmentID, &discount, &override)
+		&e.SegmentID, &e.RateOverride)
 	e.ModelAllowlist, e.GroupEnvironment = allow.V, env.V
 	switch {
 	case store.IsNoRows(err):
@@ -160,7 +155,6 @@ func (s *Service) lookup(ctx context.Context, hash string) (*cached, error) {
 		return nil, err
 	default:
 		e.Found = true
-		e.RateMultiplier, e.RateSource = core.SegmentRate(groupRate, discount, override)
 	}
 	return e, nil
 }

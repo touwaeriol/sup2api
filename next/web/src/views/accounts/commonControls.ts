@@ -34,6 +34,8 @@ export interface ControlView {
   /** Why it is disabled ('' when editable): replaces the control's hint. */
   reason: string
 }
+/** The view of every control of an account type. */
+export type ControlViews = Record<CommonControlName, ControlView>
 
 export function accountControl(type: AccountType | null | undefined, name: CommonControlName): AccountControl {
   const d = type?.common_controls?.[name] ?? {}
@@ -73,7 +75,7 @@ export function controlViews(
   type: AccountType | null | undefined,
   t: (key: string, values?: Record<string, unknown>) => string,
   saved?: Account | null
-): Record<CommonControlName, ControlView> {
+): ControlViews {
   const view = (name: CommonControlName): ControlView => {
     const c = accountControl(type, name)
     const pending =
@@ -87,7 +89,7 @@ export function controlViews(
           : t('accounts.editorUi.commonControlFixed')
     return { visible: c.visible, disabled: !c.configurable, required: c.required, reason }
   }
-  return Object.fromEntries(COMMON_CONTROLS.map(n => [n, view(n)])) as Record<CommonControlName, ControlView>
+  return Object.fromEntries(COMMON_CONTROLS.map(n => [n, view(n)])) as ControlViews
 }
 
 /** controlViews of a reactive account type and the saved account being edited. */

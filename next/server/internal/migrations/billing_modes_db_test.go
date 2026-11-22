@@ -235,7 +235,7 @@ func TestMigration0121BillingModes(t *testing.T) {
 		Mode, Expression, ExprHash string
 		Config                     json.RawMessage
 	}
-	require.NoError(t, db.Gorm.WithContext(ctx).Table("price_rules").Where("kind = 'custom'").Order("model DESC").
+	require.NoError(t, db.Gorm.WithContext(ctx).Table("price_rules").Order("model DESC").
 		Select("mode, config, expression, expr_hash").Scan(&custom).Error)
 	require.Len(t, custom, 2)
 	require.JSONEq(t, `{"tiers": [{"c": 2, "p": 1, "name": "base", "unit": "token"}], "rules": []}`, string(custom[0].Config))

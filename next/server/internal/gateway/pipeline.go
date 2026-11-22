@@ -369,8 +369,11 @@ func (c *call) apiKey() string {
 	return ""
 }
 
+// newRecord starts the usage record at the rate of the key's group, the
+// model aside: prepareBilling sets the model's.
 func (c *call) newRecord() *core.UsageRecord {
 	p := c.principal
+	rate, source := p.Rates().Rate()
 	return &core.UsageRecord{
 		RequestID:       c.rid,
 		ClientRequestID: c.clientRID,
@@ -378,13 +381,13 @@ func (c *call) newRecord() *core.UsageRecord {
 		APIKeyID:        p.KeyID,
 		GroupID:         p.Group.ID,
 		SegmentID:       p.SegmentID,
-		RateSource:      p.RateSource,
+		RateSource:      source,
 		PluginKey:       c.plugin.Key,
 		PluginVersion:   c.plugin.Version,
 		Platform:        c.platform,
 		Protocol:        c.ep.Protocol,
 		Endpoint:        c.ep.Path,
-		RateMultiplier:  p.Group.RateMultiplier,
+		RateMultiplier:  rate,
 		ClientIP:        c.c.ClientIP(),
 		UserAgent:       truncateUTF8(c.c.Request.UserAgent(), 500),
 		NodeID:          c.g.nodeID(),

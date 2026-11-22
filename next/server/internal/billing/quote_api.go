@@ -72,16 +72,25 @@ type PricingQuote struct {
 	Base         *PriceDef `json:"base"`
 	ListPrice    *PriceDef `json:"list_price"`
 	PriceSource  string    `json:"price_source"`
-	// PriceLevels are the rules as configured: the group's applies when
+	// PriceLevels are the prices as configured: the group's applies when
 	// PriceSource says so.
 	PriceLevels struct {
 		Group *Rule `json:"group"`
 	} `json:"price_levels"`
 	Rate segment.EffectiveRate `json:"rate"`
-	// RateOverride is the segment's own rate in the group, if it has one.
-	RateOverride *decimal.Decimal `json:"rate_override"`
-	ListCost     decimal.Decimal  `json:"list_cost"` // list price x usage
-	Cost         decimal.Decimal  `json:"cost"`      // list cost x rate
+	// RateLevels are every level of the rate; Rate.Source names the one
+	// that applies.
+	RateLevels RateLevels      `json:"rate_levels"`
+	ListCost   decimal.Decimal `json:"list_cost"` // list price x usage
+	Cost       decimal.Decimal `json:"cost"`      // list cost x rate
+}
+
+// RateLevels are core.RateLevels as the API shows them, null where not set.
+type RateLevels struct {
+	SegmentModel *decimal.Decimal `json:"segment_model"`
+	Segment      *decimal.Decimal `json:"segment"`
+	GroupModel   *decimal.Decimal `json:"group_model"`
+	Group        decimal.Decimal  `json:"group"`
 }
 
 // permissions are what a quote needs besides the route's price:read, as the
@@ -154,32 +163,44 @@ func (s *Service) quote(ctx context.Context, in QuoteRequest) (*PricingQuote, er
 	if err != nil {
 		return nil, err
 	}
-	gp, err := loadGroupPrices(ctx, s.db.Gorm, snap.bases, "g.id = ?", in.GroupID)
+	g, terms, err := quoteSubject(ctx, s.db.Gorm, snap, in)
 	if err != nil {
 		return nil, err
 	}
-	terms, err := quoteTerms(ctx, s.db.Gorm, in)
-	if err != nil {
-		return nil, err
-	}
-	if !slices.Contains(gp.models, in.Model) {
-		return nil, core.InvalidFields(core.FieldError{Field: "model", Code: "invalid",
-			Message: core.Text(ctx, "the group does not provide this model", "该分组不提供此模型")})
-	}
-	out, err := s.quoteScope(ctx, gp.group, terms)
+	out, err := s.quoteScope(ctx, g, terms)
 	if err != nil {
 		return nil, err
 	}
 	on := core.PriceQuery{Model: in.Model, GroupID: in.GroupID}
-	row := tableRow(on.Model, snap.bases.base(on.Model), snap.rules.of(on))
-	out.Base, out.ListPrice, out.PriceSource, out.PriceLevels.Group = row.Base, row.ListPrice, row.Source, row.GroupRule
-	out.ListCost, out.Cost, err = s.quoteCosts(ctx, snap.resolve(on), in.Usage, terms.Rate)
+	rule, levels := snap.rules.of(on), snap.rates.levels(on, terms.SegmentID, terms.Levels())
+	out.Base = snap.bases.base(on.Model)
+	out.ListPrice, out.PriceSource = listedPrice(out.Base, rule)
+	out.PriceLevels.Group = rule.view()
+	out.Rate, out.RateLevels = segment.RateOf(levels), RateLevels(levels)
+	out.ListCost, out.Cost, err = s.quoteCosts(ctx, snap.resolve(on), in.Usage, out.Rate.Value)
 	return out, err
 }
 
+// quoteSubject reads the group of the quote and the terms there of who it
+// is for; the group must provide the model.
+func quoteSubject(ctx context.Context, q *gorm.DB, snap *priceSnapshot, in QuoteRequest) (pricedGroup, segment.Terms, error) {
+	gp, err := loadGroupPrices(ctx, q, snap.bases, "g.id = ?", in.GroupID)
+	if err != nil {
+		return pricedGroup{}, segment.Terms{}, err
+	}
+	terms, err := quoteTerms(ctx, q, in)
+	if err != nil {
+		return pricedGroup{}, segment.Terms{}, err
+	}
+	if !slices.Contains(gp.models, in.Model) {
+		return pricedGroup{}, segment.Terms{}, core.InvalidFields(core.FieldError{Field: "model", Code: "invalid",
+			Message: core.Text(ctx, "the group does not provide this model", "该分组不提供此模型")})
+	}
+	return gp.group, terms, nil
+}
+
 // quoteScope starts the quote on the side of who it is for: the segment of
-// terms as the caller may see it, whether its members may call g and the
-// rate they pay there.
+// terms as the caller may see it and whether its members may call g.
 func (s *Service) quoteScope(ctx context.Context, g pricedGroup, terms segment.Terms) (*PricingQuote, error) {
 	showUsers, err := segment.ShowUsers(ctx, s.Authz)
 	if err != nil {
@@ -189,8 +210,7 @@ func (s *Service) quoteScope(ctx context.Context, g pricedGroup, terms segment.T
 	if err != nil {
 		return nil, err
 	}
-	return &PricingQuote{Segment: ref, Accessible: g.active && terms.Open, AccessSource: accessSource(g, terms.Granted),
-		Rate: terms.EffectiveRate(), RateOverride: terms.Override}, nil
+	return &PricingQuote{Segment: ref, Accessible: g.active && terms.Open, AccessSource: accessSource(g, terms.Granted)}, nil
 }
 
 // accessSource says why a segment may use the group, or why not.
@@ -208,8 +228,7 @@ func accessSource(g pricedGroup, granted bool) string {
 
 // quoteCosts prices usage the way a request is billed at the list price rule
 // (as the snapshot resolves it; nil = the model has no global price): through
-// Quote with the multiplier of the rule. listCost is before the rate and cost
-// after it. Both are zero for a model without a global price. A price the
+// Quote. listCost is before the rate and cost after it. Both are zero for a model without a global price. A price the
 // usage cannot be evaluated with is an error, as it is for a request.
 func (s *Service) quoteCosts(ctx context.Context, rule *core.PriceRule, u QuoteUsage, rate decimal.Decimal) (listCost, cost decimal.Decimal, err error) {
 	if rule == nil {
@@ -217,7 +236,7 @@ func (s *Service) quoteCosts(ctx context.Context, rule *core.PriceRule, u QuoteU
 	}
 	in := core.QuoteInputs{Expression: rule.Expression, UsageSemantics: expr.SemanticsExclusive, Tokens: u.tokens()}
 	quote := func(rate decimal.Decimal) (decimal.Decimal, error) {
-		in.RateMultiplier = rule.Multiplier(rate)
+		in.RateMultiplier = rate
 		amount, err := s.Quote(ctx, in)
 		if err != nil {
 			return decimal.Zero, core.ErrInvalidArgument.WithMessage(err.Error())

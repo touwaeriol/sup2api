@@ -1,22 +1,23 @@
-// Save pipeline of the account editor (CONTRACTS §16, §18, §21.4, §41):
-// the pre-request checks (invalidSection), the request body (requestBody), the
-// POST / PATCH (submit) and the error routing (showSaveError) in one place.
-// AccountEditor keeps the template and only wires the state below.
-import type { ComputedRef, Ref } from 'vue'
-import { nextTick } from 'vue'
+// Save pipeline of the account editor (CONTRACTS §16, §18, §21.4, §41): the
+// editor's tabbed form (useTabbedForm) gets one part per core section, each
+// with its checks, its share of the request body, the server errors it
+// claims (editorErrors SECTION_FIELDS) and whether it shows an error now;
+// Save checks every part, sends one POST / PATCH and opens the first section
+// with a problem. The usage limit is saved on its own endpoint afterwards.
+import { nextTick, type Ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { api } from '@sub2api/host'
-import { toast } from '@sub2api/ui'
-import type { Account, AccountType, CommonControlName, ConversionLossPolicy, EnvironmentValues } from '@/api/types'
+import { api, isApiError } from '@sub2api/host'
+import { toast, type TabbedForm } from '@sub2api/ui'
+import type { Account, AccountType, ConversionLossPolicy, EnvironmentValues } from '@/api/types'
 import { useProxiesLookup } from '@/composables/lookups'
 import { errorMessage, fieldErrors, notifyError } from '@/utils/errors'
 import { accountControl, withoutFixed } from './commonControls'
-import { sectionOfErrors, splitFieldErrors, type EditorSection } from './editorErrors'
+import { accountParts } from './accountParts'
 import type { useModelEdit } from './useModelEdit'
-import { fromCards, repeatedModel, type ModelLimitCard } from './modelLimits'
-import { windowOf } from './spmWindow'
-import { sameSet } from './bulkEdit'
+import type { ModelLimitCard } from './modelLimits'
 import type { ProtocolEditor } from './protocols/useProtocolEdit'
+import type { AutoDisablePolicy } from './useAutoDisablePolicy'
+import type { UsageLimitEditor } from './useUsageLimitEdit'
 
 /** Field error codes of a save worded by the console: a restricted caller's account out of its groups (CONTRACTS §21). */
 const SCOPE_FIELD_CODES = { not_in_scope: 'accounts.scopeErrors.notInScope' }
@@ -52,162 +53,104 @@ export interface AccountBasics {
 export type ModelEditor = ReturnType<typeof useModelEdit>
 
 export interface AccountSaveDeps {
+  /** The editor's tabbed form: the parts are registered on it. */
+  form: TabbedForm
   /** The account being edited (null for a new one). */
-  account: ComputedRef<Account | null | undefined>
-  accountType: ComputedRef<AccountType | null>
-  editing: ComputedRef<boolean>
+  account: () => Account | null | undefined
+  accountType: () => AccountType | null
   basic: AccountBasics
   /** 指定模型限速 cards (CONTRACTS §68). */
   modelLimits: Ref<ModelLimitCard[]>
   errors: Ref<Record<string, string>>
   credErrors: Ref<Record<string, string>>
-  saving: Ref<boolean>
-  activeSection: Ref<EditorSection>
   /** The model list / mapping editor (useModelEdit). */
   models: ModelEditor
   /** The protocol cards (useProtocolEdit): `protocols` and `model_protocols`. */
   protocols: ProtocolEditor
-  /** The global auto-disable switch (null while it loads). */
-  autoDisableEnabled: Ref<boolean | null>
+  autoDisable: AutoDisablePolicy
   /** The proxy_url to send instead of proxy_id ('' sends proxy_id). */
-  proxyUrlToSend: ComputedRef<string>
+  proxyUrlToSend: () => string
+  /** The plugin form's credentials; null when it refuses them (it shows why). */
   collectCredentials(): Promise<Record<string, unknown> | null>
   showCredentialErrors(cred: Record<string, string>): void
-  loadAutoDisablePolicy(): Promise<void>
   /** The usage limit card (CONTRACTS §73), saved on its own endpoint once the account is. */
-  usageLimit?: {
-    /** Shows the card's errors and reports whether it blocks saving. */
-    invalid(): boolean
-    /** Saves the limit of the saved account when it changed. */
-    save(a: Account): Promise<void>
-  }
+  usageLimit: UsageLimitEditor
   saved(a: Account): void
+}
+
+/**
+ * Native constraints (an input's min, max…) are checked first, so the first
+ * invalid field's section is opened before the browser tries to focus it in
+ * a hidden one. Whether one was found.
+ */
+async function revealInvalidField(form: HTMLFormElement, current: Ref<string>): Promise<boolean> {
+  type Validated = HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement
+  const invalid = Array.from(form.elements as HTMLCollectionOf<Validated>).find((el) => el.willValidate && !el.validity.valid)
+  if (!invalid) return false
+  const tab = invalid.closest<HTMLElement>('[role="tabpanel"][data-tab]')?.dataset.tab
+  if (tab) current.value = tab
+  await nextTick()
+  if (invalid.isConnected) invalid.reportValidity()
+  return true
+}
+
+/** Words the field errors whose codes the console knows, before the parts take them. */
+function withFieldTexts(e: unknown): unknown {
+  if (isApiError(e)) Object.assign(e.fields, fieldErrors(e, undefined, SCOPE_FIELD_CODES))
+  return e
+}
+
+type T = ReturnType<typeof useI18n>['t']
+const editing = (deps: AccountSaveDeps) => !!deps.account()?.id
+/** What a save sent and got back. */
+interface Sent {
+  account: Account
+  /** A pasted proxy URL was sent (the server may have created the proxy). */
+  viaUrl: boolean
+}
+
+/** The merged body, completed and sent: auto_disable while the global switch is on, the type of a new account, without the fixed fields. */
+async function send(deps: AccountSaveDeps, body: Record<string, unknown>): Promise<Sent> {
+  await deps.autoDisable.load()
+  if (deps.autoDisable.enabled.value === true) body.auto_disable = deps.basic.auto_disable
+  // Fields the type fixes are left to the server (docs/COMMON-CONTROLS.md §1).
+  const sent = withoutFixed(body, deps.accountType())
+  // The account type is (plugin_key, type); accounts have no platform.
+  const request = editing(deps) ? api.patch<Account>(`/accounts/${deps.account()!.id}`, sent) : api.post<Account>('/accounts', { ...sent, plugin_key: deps.accountType()!.plugin_key, type: deps.accountType()!.type })
+  return { account: await request.catch((e) => Promise.reject(withFieldTexts(e))), viaUrl: !!sent.proxy_url }
+}
+
+/** After the account is saved: the toasts, the usage limit on its own endpoint, then `saved`. */
+async function afterSave(deps: AccountSaveDeps, t: T, { account, viaUrl }: Sent) {
+  toast(t(editing(deps) ? 'common.updated' : 'common.created'), 'success')
+  if (viaUrl) {
+    // The proxy picker cache may now miss the (re)used proxy.
+    useProxiesLookup(true)
+    if (account?.proxy_created) toast(t('accounts.proxyAutoCreated'), 'info')
+  }
+  if (account?.id && accountControl(deps.accountType(), 'usage_limit').configurable) {
+    // The account is saved either way: a refused limit is reported, not retried
+    // (re-submitting a new account would create it twice).
+    await deps.usageLimit.save(account).catch((e) => toast(t('accounts.usageLimit.saveFailed', { error: errorMessage(e) }), 'error'))
+  }
+  deps.saved(account)
 }
 
 export function useAccountSave(deps: AccountSaveDeps) {
   const { t } = useI18n()
-  const { account, accountType, editing, basic, errors, credErrors, saving, activeSection, models, proxyUrlToSend } = deps
-  const control = (name: CommonControlName) => accountControl(accountType.value, name)
-
-  /** Checks done before the request; the section to show when one fails. */
-  async function invalidSection(form: HTMLFormElement): Promise<EditorSection | 'native' | null> {
-    // Native constraints are checked explicitly so the first invalid field can
-    // be revealed before the browser tries to focus it in a hidden pane.
-    const invalid = form.querySelector<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>('input:invalid, select:invalid, textarea:invalid')
-    if (invalid) {
-      const section = invalid.closest<HTMLElement>('[data-editor-section]')?.dataset.editorSection
-      if (section) activeSection.value = section as EditorSection
-      await nextTick()
-      if (invalid.isConnected) invalid.reportValidity()
-      return 'native'
-    }
-    if (!basic.name.trim()) {
-      errors.value = { name: t('ui.form.v.required') }
-      return 'connection'
-    }
-    if (control('proxy').required && basic.proxy_id == null && !proxyUrlToSend.value) {
-      const message = t('accounts.proxyRequired')
-      errors.value = { proxy_id: message, proxy_url: message }
-      return 'connection'
-    }
-    const repeated = repeatedModel(deps.modelLimits.value)
-    if (repeated) {
-      errors.value = { model_limits: t('accounts.modelLimits.duplicate', { model: repeated }) }
-      return 'scheduling'
-    }
-    if (deps.usageLimit?.invalid()) return 'scheduling'
-    // Pending text-mode edits are committed (and validated) before saving.
-    if (!models.commitPending() || !deps.protocols.commitPending()) return 'models'
-    // A rule without protocols, an account serving nothing: shown in the protocol cards.
-    return deps.protocols.issues.value.some(i => i.level === 'error') ? 'models' : null
-  }
-
-  function requestBody(creds: Record<string, unknown>): Record<string, unknown> {
-    const body: Record<string, unknown> = {
-      name: basic.name.trim(),
-      priority: Number(basic.priority),
-      weight: Number(basic.weight),
-      max_concurrency: Number(basic.max_concurrency),
-      ...models.payload(),
-      rpm_limit: Number(basic.rpm_limit) || 0,
-      tpm_limit: Number(basic.tpm_limit) || 0,
-      spm_limit: Number(basic.spm_limit) || 0,
-      spm_window_seconds: windowOf(basic.spm_window_seconds),
-      model_limits: fromCards(deps.modelLimits.value),
-      environment: basic.environment,
-      header_passthrough: basic.header_passthrough,
-      header_override: basic.header_override,
-      param_override: basic.param_override,
-      conversion_loss_policy: basic.conversion_loss_policy,
-      schedulable: basic.schedulable
-    }
-    // Groups only when changed: changing them needs its own permission (CONTRACTS §21.2).
-    if (!sameSet(basic.group_ids, account.value?.group_ids ?? [])) body.group_ids = basic.group_ids
-    if (deps.autoDisableEnabled.value === true) body.auto_disable = basic.auto_disable
-    // Exactly one of proxy_id / proxy_url (CONTRACTS §21.4: both is a conflict).
-    if (proxyUrlToSend.value) body.proxy_url = proxyUrlToSend.value
-    else body.proxy_id = basic.proxy_id
-    // The credentials and the protocols depend on the account type: an account whose type is gone keeps what it has.
-    if (accountType.value && !account.value?.orphaned) Object.assign(body, { credentials: creds }, deps.protocols.binding())
-    // Fields the type fixes are left to the server (docs/COMMON-CONTROLS.md §1).
-    return withoutFixed(body, accountType.value)
-  }
-
-  async function submit(body: Record<string, unknown>): Promise<Account> {
-    if (editing.value) return api.patch<Account>(`/accounts/${account.value!.id}`, body)
-    // The account type is (plugin_key, type); accounts have no platform.
-    body.plugin_key = accountType.value!.plugin_key
-    body.type = accountType.value!.type
-    return api.post<Account>('/accounts', body)
-  }
-
-  function showSaveError(e: unknown) {
-    const all = fieldErrors(e, undefined, SCOPE_FIELD_CODES)
-    const { cred, base } = splitFieldErrors(all)
-    errors.value = base
-    deps.showCredentialErrors(cred)
-    const section = sectionOfErrors(base, cred)
-    if (section) activeSection.value = section
-    if (!Object.keys(all).length) notifyError(e)
-  }
+  for (const part of accountParts(deps, t)) deps.form.register(part)
 
   async function save(event: Event) {
-    errors.value = {}
-    credErrors.value = {}
-    const problem = await invalidSection(event.currentTarget as HTMLFormElement)
-    if (problem && problem !== 'native') activeSection.value = problem
-    if (problem) return
-    const creds = await deps.collectCredentials()
-    if (!creds) {
-      activeSection.value = 'connection'
-      return
-    }
-    saving.value = true
-    await deps.loadAutoDisablePolicy()
-    const body = requestBody(creds)
+    deps.errors.value = {}
+    deps.credErrors.value = {}
+    if (await revealInvalidField(event.currentTarget as HTMLFormElement, deps.form.current)) return
+    let result: Sent | false
     try {
-      const result = await submit(body)
-      toast(t(editing.value ? 'common.updated' : 'common.created'), 'success')
-      if (body.proxy_url) {
-        // The proxy picker cache may now miss the (re)used proxy.
-        useProxiesLookup(true)
-        if (result?.proxy_created) toast(t('accounts.proxyAutoCreated'), 'info')
-      }
-      if (deps.usageLimit && result?.id && control('usage_limit').configurable) {
-        // The account is saved either way: a refused limit is reported, not retried
-        // (re-submitting a new account would create it twice).
-        try {
-          await deps.usageLimit.save(result)
-        } catch (e) {
-          toast(t('accounts.usageLimit.saveFailed', { error: errorMessage(e) }), 'error')
-        }
-      }
-      deps.saved(result)
+      result = await deps.form.submit((body) => send(deps, body))
     } catch (e) {
-      showSaveError(e)
-    } finally {
-      saving.value = false
+      return notifyError(e)
     }
+    if (result) await afterSave(deps, t, result)
   }
 
   return { save }

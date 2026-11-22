@@ -28,6 +28,11 @@ const customExpr = `tier("custom", p*1 + c*2)`
 // still settle, retry and reconcile by their scale and base.
 const segmentSource = "segment"
 
+// discountSource is the rate source of a record priced at a user group's
+// discount, frozen before core migration 0124 removed discounts: such
+// records settle by the rate they were frozen with.
+const discountSource = "discount"
+
 // scaled is the fixture's record under a multiplier rule of the user's
 // segment (segmentSource), at the segment's discounted rate. At the global
 // price the usage costs 0.708.
@@ -35,7 +40,7 @@ func (f *fixture) scaled(id, scale string) *core.UsageRecord {
 	rec := f.record(id, true)
 	rule := *f.price
 	rule.Source, rule.Scale = segmentSource, decPtr(scale)
-	rec.Price, rec.SegmentID, rec.RateSource, rec.RateMultiplier = &rule, 12, core.RateSourceDiscount, dec("1.2")
+	rec.Price, rec.SegmentID, rec.RateSource, rec.RateMultiplier = &rule, 12, discountSource, dec("1.2")
 	return rec
 }
 
@@ -158,17 +163,18 @@ func TestUnruledRowIsStoredAsBefore(t *testing.T) {
 	require.Equal(t, "billed 0.70800000 0.70800000 1.0000", f.moneyColumns("marked"))
 }
 
-// A retry prices a row with the rule frozen in it: changing or deleting the
-// rule, or the global price, after the request does not change the charge.
+// A retry prices a row with the rule and rate frozen in it: changing or
+// deleting the rule, a model rate or the global price after the request does
+// not change the charge.
 func TestRetryUsesFrozenPriceRule(t *testing.T) {
 	f := newFixture(t)
 	ctx := t.Context()
 	scaled, custom := f.scaled("retry-scale", "0.5"), f.customPriced("retry-custom")
 	scaled.Model, custom.Model = "m-scale", "m-custom"
-	_, err := f.db.SQL.ExecContext(ctx, `INSERT INTO price_rules (group_id, model, kind, multiplier) VALUES ($1, 'm-scale', 'multiplier', 0.5)`, f.group)
+	_, err := f.db.SQL.ExecContext(ctx, `INSERT INTO group_model_rates (group_id, model, rate) VALUES ($1, 'm-scale', 0.5)`, f.group)
 	require.NoError(t, err)
-	_, err = f.db.SQL.ExecContext(ctx, `INSERT INTO price_rules (group_id, model, kind, mode, config, expression, expr_hash)
-		VALUES ($1, 'm-custom', 'custom', 'visual', '{}', $2, $3)`, f.group, customExpr, expr.Hash(customExpr))
+	_, err = f.db.SQL.ExecContext(ctx, `INSERT INTO price_rules (group_id, model, mode, config, expression, expr_hash)
+		VALUES ($1, 'm-custom', 'visual', '{}', $2, $3)`, f.group, customExpr, expr.Hash(customExpr))
 	require.NoError(t, err)
 
 	// One settlement fails, the other never ran (a crash after the insert).
@@ -181,7 +187,7 @@ func TestRetryUsesFrozenPriceRule(t *testing.T) {
 
 	changed := `tier("changed", p*999 + c*999)`
 	for _, sql := range []string{
-		`UPDATE price_rules SET multiplier = 9 WHERE model = 'm-scale'`,
+		`UPDATE group_model_rates SET rate = 9 WHERE model = 'm-scale'`,
 		`DELETE FROM price_rules WHERE model = 'm-custom'`,
 		`UPDATE model_prices SET expression = '` + changed + `', expr_hash = '` + expr.Hash(changed) + `'`,
 	} {

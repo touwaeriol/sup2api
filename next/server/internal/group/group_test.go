@@ -162,6 +162,7 @@ func TestGroupPlatformsWithoutRegistry(t *testing.T) {
 type env struct {
 	t     *testing.T
 	db    *store.DB
+	svc   *Service
 	h     http.Handler
 	mr    *miniredis.Miniredis
 	bus   *fakeBus
@@ -179,7 +180,8 @@ func setup(t *testing.T) *env {
 	e.user = mkUser(t, db, "user@x.com")
 	engine := gin.New()
 	r := httpapi.NewRouter(engine, fakeTokens{}, fakeAuthz{admin: e.admin})
-	New(db, rdb, e.bus, fakeRegistry{gen: testGen()}, authz.New(authz.Deps{})).RegisterRoutes(r)
+	e.svc = New(db, rdb, e.bus, fakeRegistry{gen: testGen()}, authz.New(authz.Deps{}))
+	e.svc.RegisterRoutes(r)
 	e.h = engine
 	return e
 }

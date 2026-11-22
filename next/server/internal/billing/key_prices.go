@@ -92,8 +92,8 @@ func scaleAsExpression(p *syncPrice, m decimal.Decimal) error {
 // keyPrices lists the enabled prices for the holder of an API key (another
 // sup2api syncing from this one): only models the key's group allows, at the
 // group's list price from the price snapshot requests are billed by, plus
-// the rate the key's owner pays there. The key goes in Authorization: Bearer
-// or x-api-key.
+// the rate the key's owner pays there for a model with no rate of its own.
+// The key goes in Authorization: Bearer or x-api-key.
 func (s *Service) keyPrices(c *gin.Context) {
 	ctx := c.Request.Context()
 	pr, err := s.keyPrincipal(c)
@@ -106,11 +106,13 @@ func (s *Service) keyPrices(c *gin.Context) {
 		httpapi.Fail(c, err)
 		return
 	}
-	models := slices.DeleteFunc(snap.bases.models(), func(model string) bool { return !pr.Group.AllowsModel(model) })
-	out := KeyPrices{Prices: []syncPrice{}, RateMultiplier: pr.Group.RateMultiplier}
+	rate, _ := pr.Rates().Rate()
+	out := KeyPrices{Prices: []syncPrice{}, RateMultiplier: rate}
 	out.Group.ID, out.Group.Name = pr.Group.ID, pr.Group.Name
+	models := slices.DeleteFunc(snap.bases.models(), func(model string) bool { return !pr.Group.AllowsModel(model) })
 	snap.each(pr.Group.ID, models, func(model string, base PriceDef, rule *storedRule) {
-		p, err := exportPrice(model, base, rule)
+		modelRate, _ := snap.rates.levels(core.PriceQuery{Model: model, GroupID: pr.Group.ID}, pr.SegmentID, pr.Rates()).Rate()
+		p, err := exportPrice(model, listPrice(base, rule), rate, modelRate)
 		if err != nil {
 			// Left out rather than listed at a price that is not the owner's.
 			slog.WarnContext(ctx, "billing: key prices: model left out", "model", model, "group_id", pr.Group.ID, "err", err)
@@ -137,21 +139,23 @@ func (s *Service) keyPrincipal(c *gin.Context) (*core.APIKeyPrincipal, error) {
 }
 
 // exportPrice returns the list price of a model for a downstream sup2api,
-// which sees no rule beside the price: here, and nowhere else, the multiplier
-// of a rule goes into the price (scalePrice). The expression is always there.
-// An error means the price cannot carry the multiplier.
-func exportPrice(model string, base PriceDef, rule *storedRule) (syncPrice, error) {
-	price := listPrice(base, rule)
+// which applies one rate, that of the key, to every price: here, and nowhere
+// else, a model paid at another rate has the ratio of the two folded into
+// its price (scalePrice). The expression is always there. An error means the
+// price cannot carry the ratio.
+func exportPrice(model string, price PriceDef, keyRate, modelRate decimal.Decimal) (syncPrice, error) {
 	p := syncPrice{Model: model, Mode: price.Mode, Config: price.Config, Expression: price.Expression}
-	if price.Multiplier == nil || price.Multiplier.Equal(decimal.NewFromInt(1)) {
+	if modelRate.Equal(keyRate) {
 		return p, nil
 	}
-	scaled := p
-	if err := scalePrice(&scaled, *price.Multiplier); err != nil || scaled.Expression != "" {
-		return scaled, err
+	if keyRate.IsZero() {
+		return p, errors.New("the model has a rate of its own in a group the key pays nothing in")
+	}
+	if err := scalePrice(&p, modelRate.Div(keyRate)); err != nil || p.Expression != "" {
+		return p, err
 	}
 	// A scaled config: its expression is generated, as on import.
 	var err error
-	scaled.Expression, err = expressionFor(scaled.Mode, scaled.Config, "")
-	return scaled, err
+	p.Expression, err = expressionFor(p.Mode, p.Config, "")
+	return p, err
 }

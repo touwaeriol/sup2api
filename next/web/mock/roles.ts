@@ -63,7 +63,7 @@ export const roles: MockRole[] = [
   // Group pricing without users (CONTRACTS §97.6): personal user groups go by "#<user id>".
   custom(8, 'pricer', L('Pricer', '定价员'), 'Prices groups and user groups, sees no users', pricerUser.permissions),
   // Resource scopes (CONTRACTS §21): the accounts of group 1, one more account of group 2, one proxy.
-  custom(10, 'group_ops', L('Group operator', '分组运维'), 'Runs the accounts of group 1', [
+  custom(10, 'group_ops', L('Account group operator', '账号分组运维'), 'Runs the accounts of account group 1', [
     'account:read:group/1', 'account:create:group/1', 'account:update:group/1', 'account:test:group/1', 'account:update:group/2/account/13',
     'proxy:read:proxy/1', 'proxy:manage:proxy/1', 'group:read', 'gateway:use'
   ])

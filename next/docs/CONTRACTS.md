@@ -1554,10 +1554,10 @@ type ProxyResolver interface {
 
 | 导出 | 说明 |
 |---|---|
-| `STabbedForm` | 外壳：`tabs: FormTab[]`（`TabItem` 加 `summary?`）、`v-model` 当前标签、`layout: 'top' \| 'side'`（默认 `top`）、`form?`（`useTabbedForm` 的返回值）。`top` 是 `STabs` 的标签栏，`side` 是左侧导航（序号、标题、一行摘要；手机宽度变横向滚动条）。标签标题后：出错红点，否则有未保存的修改黄点。默认插槽按标签各渲染一次（`{ tab }`），所有面板保持挂载（`v-show`） |
-| `useTabbedForm(current, tabs)` | 保存逻辑。部分 `TabbedFormPart {tab, check?, body, dirty?, fields?, applyErrors?}` 用 `form.register` 或子组件里的 `useTabbedFormPart` 登记。`submit(send)`：跑全部 `check`，有失败的标红并打开第一个、返回 `false`；否则合并各部分的 `body()` 调 `send` 一次；`ApiError` 带字段错误时按 `fields` 前缀交给对应部分的 `applyErrors`、标红并打开第一个标签、返回 `false`，没有部分认领的失败原样拒绝。另有 `saving`、`dirtyTabs`、`errorTabs`、`anyDirty`、`clearErrors` |
+| `STabbedForm` | 外壳：`tabs: FormTab[]`（`TabItem` 加 `summary?`、`icon?`）、`v-model` 当前标签、`layout: 'top' \| 'side'`（默认 `top`）、`form?`（`useTabbedForm` 的返回值）。`top` 是 `STabs` 的标签栏，`side` 是左侧导航（序号、标题、一行摘要，带 `icon` 的标签前面多一个图标块、序号移到标题前；桌面宽度贴顶，手机宽度变横向滚动条）。具名插槽 `before-nav` 在标签前面（`side` 在左侧导航上方，`top` 在标签栏上方）。标签标题后：出错红点，否则有未保存的修改黄点。默认插槽按标签各渲染一次（`{ tab }`），所有面板保持挂载（`v-show`），面板带 `data-tab` |
+| `useTabbedForm(current, tabs)` | 保存逻辑。部分 `TabbedFormPart {tab, check?, body, dirty?, fields?, applyErrors?, invalid?}` 用 `form.register` 或子组件里的 `useTabbedFormPart` 登记；`check` 可返回 `Promise<boolean>`；`fields` 前缀 `a` 认领 `a`、`a.x`、`a[0]`；给了 `invalid`（部分现在是否显示着错误）的部分，标签红点只看它，没给的看上一次保存的结果。`submit(send)`：跑全部 `check`，有失败的标红并打开第一个、返回 `false`；否则合并各部分的 `body()` 调 `send` 一次；`ApiError` 带字段错误时按 `fields` 前缀交给对应部分的 `applyErrors`、标红并打开第一个标签、返回 `false`，没有部分认领的失败原样拒绝。另有 `saving`（从检查开始到请求结束）、`dirtyTabs`、`errorTabs`、`anyDirty`、`clearErrors` |
 
-控制台的账号分组编辑（`views/groups/GroupEditModal.vue`）与用户分组编辑（`views/segments/SegmentEditor.vue`）用 `layout="top"`；原来分步保存的 `src/composables/useTabbedSave.ts` 删除。账号编辑器迁移到 `layout="side"` 留到后续。这两个弹窗现在由 mock 提供的一次提交接口（`POST/PATCH /groups` 带 `model_prices`、`model_rates`、`segment_rates`，`POST/PATCH /segments` 带 `group_rates`、`model_rates`）是界面原型，后端未实现，§97 仍描述现行后端；后端实现时按 `web/src/api/pricing.ts` 的类型改写 §97。
+控制台的账号分组编辑（`views/groups/GroupEditModal.vue`）与用户分组编辑（`views/segments/SegmentEditor.vue`）用 `layout="top"`；原来分步保存的 `src/composables/useTabbedSave.ts` 删除。账号编辑器（`views/accounts/AccountEditor.vue`）用 `layout="side"`：接入配置、协议与模型、调度与限流、高级各是一个部分（`accountParts.ts`，字段前缀见 `editorErrors.ts` 的 `SECTION_FIELDS`，凭证由接入配置部分的异步 `check` 向插件表单收取），插件声明的分区（§87.4）排在后面、图标取声明的 `icon`；账号类型卡片放在 `before-nav`；接口、请求体与用量限制的单独保存（§73）不变，原来的 `AccountEditorNav.vue` 删除。账号编辑器没有“未保存”标记（与迁移前一致）。这两个弹窗现在由 mock 提供的一次提交接口（`POST/PATCH /groups` 带 `model_prices`、`model_rates`、`segment_rates`，`POST/PATCH /segments` 带 `group_rates`、`model_rates`）是界面原型，后端未实现，§97 仍描述现行后端；后端实现时按 `web/src/api/pricing.ts` 的类型改写 §97。
 
 ## 24. 插件改写候选账号的调度参数（priority / weight）（2026-09-29，用户要求）
 

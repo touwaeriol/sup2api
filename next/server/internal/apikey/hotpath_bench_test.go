@@ -4,10 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 
-	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store/gormtest"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/testutil"
 )
@@ -45,15 +43,12 @@ func BenchmarkHotKeyLookup(b *testing.B) {
 	}{
 		{"sql", func() (*cached, error) {
 			e := &cached{}
-			var groupRate, discount decimal.Decimal
-			var override *decimal.Decimal
 			err := db.SQL.QueryRowContext(ctx, rawLookupSQL, hash).Scan(
 				&e.KeyID, &e.UserID, &e.KeyStatus, &e.ExpiresAt, &e.UserActive,
-				&e.GroupID, &e.GroupName, &e.GroupStatus, &groupRate, &e.ModelAllowlist, &e.ModelFilterMode, &e.GroupEnvironment, &e.GroupAvailable, &e.AllowedIPs,
+				&e.GroupID, &e.GroupName, &e.GroupStatus, &e.RateMultiplier, &e.ModelAllowlist, &e.ModelFilterMode, &e.GroupEnvironment, &e.GroupAvailable, &e.AllowedIPs,
 				&e.KeyLimits.RPM, &e.KeyLimits.TPM, &e.KeyLimits.Concurrency, &e.KeyQuota.Limit, &e.KeyQuota.Used, &e.GroupLossPolicy,
-				&e.SegmentID, &discount, &override)
+				&e.SegmentID, &e.RateOverride)
 			e.Found = err == nil
-			e.RateMultiplier, e.RateSource = core.SegmentRate(groupRate, discount, override)
 			return e, err
 		}},
 		{"gorm", func() (*cached, error) { return svc.lookup(ctx, hash) }},

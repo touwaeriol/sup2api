@@ -469,12 +469,16 @@ func (a *fakeAuth) Authenticate(_ context.Context, raw string) (*core.APIKeyPrin
 }
 
 type fakePricer struct {
-	mu      sync.Mutex
-	rules   map[string]*core.PriceRule // model -> rule; missing = not configured
-	params  []string
-	headers []string
-	calls   int
-	queries []core.PriceQuery
+	mu    sync.Mutex
+	rules map[string]*core.PriceRule // model -> rule; missing = not configured
+	// rates are the model rates by model: the group's (GroupModel) and that
+	// of the segment rateSegment (SegmentModel).
+	rates       map[string]core.RateLevels
+	rateSegment int64
+	params      []string
+	headers     []string
+	calls       int
+	queries     []core.PriceQuery
 }
 
 func (p *fakePricer) Resolve(_ context.Context, q core.PriceQuery) (*core.PriceRule, error) {
@@ -489,6 +493,17 @@ func (p *fakePricer) Resolve(_ context.Context, q core.PriceQuery) (*core.PriceR
 }
 
 func (p *fakePricer) Inputs(*core.PriceRule) ([]string, []string) { return p.params, p.headers }
+
+func (p *fakePricer) ModelRates(_ context.Context, q core.PriceQuery, segmentID int64, levels core.RateLevels) (core.RateLevels, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	set := p.rates[q.Model]
+	levels.GroupModel = set.GroupModel
+	if segmentID == p.rateSegment {
+		levels.SegmentModel = set.SegmentModel
+	}
+	return levels, nil
+}
 
 func (p *fakePlatform) EstimateUsage(_ context.Context, in *pluginv1.EstimateUsageRequest) (*pluginv1.UsageReport, error) {
 	return &pluginv1.UsageReport{Tokens: &pluginv1.UsageTokens{InputTokens: in.GetPreConsumeTokens()}}, nil

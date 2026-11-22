@@ -114,15 +114,15 @@ func TestMigration0122TierConditions(t *testing.T) {
 		}
 	}
 	check("model_prices", prices, read("model_prices", "true"))
-	check("price_rules", custom, read("price_rules", "kind = 'custom'"))
+	check("price_rules", custom, read("price_rules", "true"))
 
 	// price_rules takes the modes of a global price only.
-	_, err := db.SQL.ExecContext(ctx, `INSERT INTO price_rules (group_id, model, kind, mode, config, expression, expr_hash)
-		SELECT g.id, 'old-mode', 'custom', 'per_token', '{}', 'tier("x", p)', 'h' FROM groups g`)
+	_, err := db.SQL.ExecContext(ctx, `INSERT INTO price_rules (group_id, model, mode, config, expression, expr_hash)
+		SELECT g.id, 'old-mode', 'per_token', '{}', 'tier("x", p)', 'h' FROM groups g`)
 	require.ErrorContains(t, err, "price_rules_mode_check")
 	for _, mode := range []string{expr.ModeVisual, expr.ModeExpression} {
-		exec(`INSERT INTO price_rules (group_id, model, kind, mode, config, expression, expr_hash)
-			SELECT id, 'new-mode', 'custom', '` + mode + `', '{}', 'tier("x", p)', 'h' FROM groups`)
+		exec(`INSERT INTO price_rules (group_id, model, mode, config, expression, expr_hash)
+			SELECT id, 'new-mode', '` + mode + `', '{}', 'tier("x", p)', 'h' FROM groups`)
 		exec(`DELETE FROM price_rules WHERE model = 'new-mode'`)
 	}
 

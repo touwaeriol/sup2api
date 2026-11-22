@@ -36,30 +36,34 @@ func TestSQLLedgerCount(t *testing.T) {
 	})
 }
 
-// The rule changes of a PUT: the custom price's expression to the history,
-// the changed rules locked in the order of their keys, the removed ones
-// deleted (one removed and saved again: two changes of one rule), and the
-// saved ones upserted on their group and model, the update moving
-// updated_at by now(). A multiplier has no config and no mode (NULL).
+// The model price changes of a group write: the expressions to the
+// history, the changed rules locked in the order of their keys, the removed
+// ones deleted (one removed and saved again: two changes of one rule), and
+// the saved ones upserted on their group and model, the update moving
+// updated_at by now().
 func TestSQLWriteRules(t *testing.T) {
-	multiplier := &storedRule{Rule: Rule{Kind: core.PriceRuleMultiplier}}
-	multiplier.setScale(decimal.RequireFromString("1.25"))
-	scaled := core.PriceQuery{GroupID: 3, Model: "claude-sonnet-4-5"}
 	customized := core.PriceQuery{GroupID: 3, Model: "gpt-5"}
 	gone := core.PriceQuery{GroupID: 3, Model: "claude-haiku-4-5"}
 	again := core.PriceQuery{GroupID: 3, Model: "claude-opus-4-5"}
-	custom, err := checkCustom(context.Background(), Rule{Kind: core.PriceRuleCustom, Mode: "visual",
+	custom, err := checkRule(context.Background(), Rule{Kind: ruleCustom, Mode: "visual",
 		Config: json.RawMessage(`{"tiers": [{"name": "base", "unit": "request", "price": 0}]}`)}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	changes := []ruleChange{{customized, custom}, {scaled, multiplier}, {gone, nil}, {again, nil}, {again, multiplier}}
+	changes := []ruleChange{{customized, custom}, {gone, nil}, {again, nil}, {again, custom}}
 	slices.SortStableFunc(changes, func(a, b ruleChange) int { return cmp.Compare(a.on.Model, b.on.Model) })
 	w, err := collapseChanges(changes, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
 	gormtest.AssertRun(t, func(db *gorm.DB) error { return writeRules(db.Statement.Context, db, w) })
+}
+
+// The model rate changes of a group write: the removed ones deleted, the
+// others upserted in the order of their models.
+func TestSQLWriteModelRates(t *testing.T) {
+	changes := rateChanges{"gpt-5": dec("1.2"), "claude-haiku-4-5": nil, "claude-opus-4-5": dec("0")}
+	gormtest.AssertRun(t, func(db *gorm.DB) error { return changes.write(db.Statement.Context, db, 3, 2) })
 }
 
 // The ledger statements of the request path: the CTEs bind each use of a

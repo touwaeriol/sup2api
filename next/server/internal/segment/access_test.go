@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/require"
 
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
@@ -12,9 +13,9 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/testutil"
 )
 
-// accessFixture is a user in segment "vip" (discount 0.8) and three groups:
-// a public one, a private one granted to vip at its own rate, and a private
-// one vip was not granted.
+// accessFixture is a user in segment "vip" and three groups: a public one,
+// a private one granted to vip at its own rate, and a private one vip was
+// not granted.
 type accessFixture struct {
 	db                          *store.DB
 	user, other, vip            int64
@@ -29,7 +30,7 @@ func newAccessFixture(t *testing.T) accessFixture {
 		t.Helper()
 		require.NoError(t, f.db.SQL.QueryRowContext(ctx, sql, args...).Scan(dst))
 	}
-	one(&f.vip, `INSERT INTO segments (name, discount) VALUES ('vip', 0.8) RETURNING id`)
+	one(&f.vip, `INSERT INTO segments (name) VALUES ('vip') RETURNING id`)
 	one(&f.user, `INSERT INTO users (email, password_hash, segment_id) VALUES ('vip@test', 'x', $1) RETURNING id`, f.vip)
 	one(&f.other, `INSERT INTO users (email, password_hash) VALUES ('default@test', 'x') RETURNING id`)
 	one(&f.public, `INSERT INTO groups (name, rate_multiplier) VALUES ('public', 1.5) RETURNING id`)
@@ -79,9 +80,9 @@ func TestTerms(t *testing.T) {
 		rate   string
 		source string
 	}{
-		{"public group at the discount", f.public, true, "1.2", core.RateSourceDiscount},
+		{"public group at its base rate", f.public, true, "1.5", core.RateSourceGroup},
 		{"granted group at the override", f.granted, true, "0.5", core.RateSourceSegment},
-		{"private group not granted", f.restricted, false, "0.8", core.RateSourceDiscount},
+		{"private group not granted", f.restricted, false, "1", core.RateSourceGroup},
 	} {
 		terms := got[tc.group]
 		require.Equal(t, f.vip, terms.SegmentID, tc.name)
@@ -103,9 +104,10 @@ func TestTerms(t *testing.T) {
 	require.Equal(t, "2", byGroup[def].Rate.String())
 	require.False(t, byGroup[def].Open)
 
-	require.Equal(t, EffectiveRate{Value: got[f.public].Rate, Source: core.RateSourceDiscount,
-		GroupDefault: got[f.public].GroupRate, Discount: got[f.public].Discount}, got[f.public].EffectiveRate())
-	require.Equal(t, "0.5", got[f.granted].Override.String())
+	granted := got[f.granted]
+	require.Equal(t, EffectiveRate{Value: granted.Rate, Source: core.RateSourceSegment, GroupDefault: granted.GroupRate}, granted.EffectiveRate())
+	require.Equal(t, granted.EffectiveRate(), RateOf(granted.Levels()))
+	require.Equal(t, "0.5", granted.Override.String())
 	require.Nil(t, got[f.public].Override)
 
 	other, err := UserTerms(ctx, f.db.Gorm, f.other, groups)
@@ -113,6 +115,20 @@ func TestTerms(t *testing.T) {
 	require.Equal(t, "2", other[f.granted].Rate.String())
 	require.Equal(t, core.RateSourceGroup, other[f.granted].RateSource)
 	require.False(t, other[f.granted].Open)
+}
+
+// The console's rate of levels with model rates is the most specific one.
+func TestRateOf(t *testing.T) {
+	d := func(s string) *decimal.Decimal { v := decimal.RequireFromString(s); return &v }
+	levels := core.RateLevels{Segment: d("0.5"), GroupModel: d("0.9"), Group: *d("2")}
+	require.Equal(t, "0.5 segment 2", rateText(RateOf(levels)))
+	levels.SegmentModel = d("0.25")
+	require.Equal(t, "0.25 segment_model 2", rateText(RateOf(levels)))
+	require.Equal(t, "0.9 group_model 2", rateText(RateOf(core.RateLevels{GroupModel: d("0.9"), Group: *d("2")})))
+}
+
+func rateText(r EffectiveRate) string {
+	return r.Value.String() + " " + r.Source + " " + r.GroupDefault.String()
 }
 
 func TestRef(t *testing.T) {

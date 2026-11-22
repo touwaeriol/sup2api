@@ -52,6 +52,10 @@ describe('account automatic disabling policy', () => {
   const account = { id: 23, name: 'test', auto_disable: true, models: [], model_mapping: {}, credentials: {} } as unknown as Account
   const accountType = { plugin_key: 'test', type: 'key', form: { mode: 'native' }, platforms: [], endpoints: [], default_models: [] } as unknown as AccountType
   const renderEditor = (saved: Account | null = account) => shallowMount(AccountEditor, { props: { account: saved, accountType }, global: { plugins: [i18n], stubs: {
+    STabbedForm: false,
+    STitleScope: false,
+    AccountSchedulingPane: false,
+    AccountCredentialsCard: false,
     SCard: { template: '<section><slot /></section>' },
     SSettingsGroup: false,
     SSettingRow: false,

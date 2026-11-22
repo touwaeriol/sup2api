@@ -30,13 +30,26 @@ func TestSQLGroupTerms(t *testing.T) {
 	})
 }
 
-// The upsert of a pair: an absent granted (nil) keeps the stored one, an
-// absent rate override (Set false) too.
+// The upsert of a pair: an absent granted (nil) keeps the stored one, the
+// rate is the item's.
 func TestSQLSavePair(t *testing.T) {
 	gormtest.Assert(t, func(db *gorm.DB) *gorm.DB {
 		rate := decimal.RequireFromString("0.8")
-		return savePair(db, pairInput{SegmentID: 3, GroupID: 4, RateOverride: rateInput{Set: true, Value: &rate}})
+		return savePair(db, pairInput{SegmentID: 3, GroupID: 4, Rate: rateInput{Set: true, Value: &rate}})
 	})
+}
+
+// A model rate is set by an upsert and removed on null.
+func TestSQLSaveModelRate(t *testing.T) {
+	rate := decimal.RequireFromString("0.8")
+	for name, it := range map[string]modelRateInput{
+		"set":    {GroupID: 4, Model: "m", Rate: rateInput{Set: true, Value: &rate}},
+		"remove": {GroupID: 4, Model: "m", Rate: rateInput{Set: true}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			gormtest.Assert(t, func(db *gorm.DB) *gorm.DB { return saveModelRate(db, 3, it) })
+		})
+	}
 }
 
 func TestSQLLockMovingUsers(t *testing.T) {
@@ -68,9 +81,9 @@ func TestSQLSetUserSegment(t *testing.T) {
 // A PATCH writes the fields present and updated_at = now(), as the raw SQL
 // did.
 func TestSQLSegmentUpdate(t *testing.T) {
-	name, discount := "VIP", "0.9"
+	name := "VIP"
 	gormtest.Assert(t, func(db *gorm.DB) *gorm.DB {
-		return updateSegment(db, 3, &segmentInput{Name: &name, Discount: &discount})
+		return segmentUpdate(db, 3, &segmentInput{Name: &name})
 	})
 }
 

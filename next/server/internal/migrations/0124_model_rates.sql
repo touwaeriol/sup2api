@@ -13,7 +13,8 @@
 --      the price: the account group's for the model (N × base rate), and
 --      for each user group with a rate in that account group, its own for
 --      the model (N × that rate). Then price_rules keeps custom prices only
---      and loses kind and multiplier.
+--      and loses multiplier. kind stays, always 'custom': 0121, applied and
+--      immutable, names it and must run again (FirstIdempotentMigration).
 --
 -- One way: the discount and the multiplier rules are gone, the way back is
 -- the pre-upgrade backup. Usage records keep what they were priced with
@@ -43,7 +44,7 @@ CREATE INDEX IF NOT EXISTS segment_model_rates_group_idx ON segment_model_rates 
 -- 3. Before 4, which reads the rates 3 writes.
 DO $$ BEGIN
     INSERT INTO segment_groups (segment_id, group_id, rate_override)
-    SELECT s.id, g.id, round(COALESCE(g.rate_multiplier, 1) * s.discount, 4)
+    SELECT s.id, g.id, LEAST(round(COALESCE(g.rate_multiplier, 1) * s.discount, 4), 999999.9999)
     FROM segments s CROSS JOIN groups g
     WHERE s.discount <> 1
     ON CONFLICT (segment_id, group_id) DO UPDATE SET rate_override = EXCLUDED.rate_override, updated_at = now()
@@ -55,13 +56,13 @@ ALTER TABLE segments DROP COLUMN IF EXISTS discount;
 -- 4.
 DO $$ BEGIN
     INSERT INTO group_model_rates (group_id, model, rate, updated_by)
-    SELECT r.group_id, r.model, round(r.multiplier * COALESCE(g.rate_multiplier, 1), 4), r.updated_by
+    SELECT r.group_id, r.model, LEAST(round(r.multiplier * COALESCE(g.rate_multiplier, 1), 4), 999999.9999), r.updated_by
     FROM price_rules r JOIN groups g ON g.id = r.group_id
     WHERE r.kind = 'multiplier'
     ON CONFLICT (group_id, model) DO NOTHING;
 
     INSERT INTO segment_model_rates (segment_id, group_id, model, rate)
-    SELECT sg.segment_id, r.group_id, r.model, round(r.multiplier * sg.rate_override, 4)
+    SELECT sg.segment_id, r.group_id, r.model, LEAST(round(r.multiplier * sg.rate_override, 4), 999999.9999)
     FROM price_rules r JOIN segment_groups sg ON sg.group_id = r.group_id AND sg.rate_override IS NOT NULL
     WHERE r.kind = 'multiplier'
     ON CONFLICT (segment_id, group_id, model) DO NOTHING;
@@ -71,7 +72,8 @@ EXCEPTION WHEN undefined_column THEN NULL;
 END $$;
 
 ALTER TABLE price_rules DROP CONSTRAINT IF EXISTS price_rules_kind;
-ALTER TABLE price_rules DROP COLUMN IF EXISTS kind;
+ALTER TABLE price_rules ALTER COLUMN kind SET DEFAULT 'custom';
+ALTER TABLE price_rules ADD CONSTRAINT price_rules_kind CHECK (kind = 'custom');
 ALTER TABLE price_rules DROP COLUMN IF EXISTS multiplier;
 ALTER TABLE price_rules ALTER COLUMN mode SET NOT NULL;
 ALTER TABLE price_rules ALTER COLUMN config SET NOT NULL;

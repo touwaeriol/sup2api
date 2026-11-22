@@ -6,25 +6,22 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-func TestSegmentRate(t *testing.T) {
+// One rate applies, the most specific set, never a product.
+func TestRateLevels(t *testing.T) {
 	d := decimal.RequireFromString
 	ptr := func(s string) *decimal.Decimal { v := d(s); return &v }
 	for _, c := range []struct {
-		name            string
-		group, discount string
-		override        *decimal.Decimal
-		want, source    string
+		name         string
+		levels       RateLevels
+		want, source string
 	}{
-		{"group default", "0.8", "1", nil, "0.8", RateSourceGroup},
-		{"discount", "0.8", "0.9", nil, "0.72", RateSourceDiscount},
-		{"override wins over the discount", "0.8", "0.9", ptr("0.65"), "0.65", RateSourceSegment},
-		{"override of zero is free", "0.8", "0.9", ptr("0"), "0", RateSourceSegment},
-		{"discount keeps four decimals", "0.8333", "0.95", nil, "0.7916", RateSourceDiscount},
-		{"discount rounds half up", "0.3333", "0.5", nil, "0.1667", RateSourceDiscount},
-		{"discount on a free group", "0", "0.9", nil, "0", RateSourceDiscount},
-		{"capped at what the column holds", "999999", "999999", nil, "999999.9999", RateSourceDiscount},
+		{"group base rate", RateLevels{Group: d("0.8")}, "0.8", RateSourceGroup},
+		{"group model rate", RateLevels{GroupModel: ptr("1.2"), Group: d("0.8")}, "1.2", RateSourceGroupModel},
+		{"segment rate wins over the group model rate", RateLevels{Segment: ptr("0.5"), GroupModel: ptr("1.2"), Group: d("0.8")}, "0.5", RateSourceSegment},
+		{"segment model rate wins over all", RateLevels{SegmentModel: ptr("0.3"), Segment: ptr("0.5"), GroupModel: ptr("1.2"), Group: d("0.8")}, "0.3", RateSourceSegmentModel},
+		{"a rate of zero is set", RateLevels{Segment: ptr("0"), Group: d("0.8")}, "0", RateSourceSegment},
 	} {
-		rate, source := SegmentRate(d(c.group), d(c.discount), c.override)
+		rate, source := c.levels.Rate()
 		if !rate.Equal(d(c.want)) || source != c.source {
 			t.Errorf("%s: got %s (%s), want %s (%s)", c.name, rate, source, c.want, c.source)
 		}

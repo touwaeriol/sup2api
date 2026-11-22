@@ -85,25 +85,25 @@ var coreModules = []coreModule{
 		{key: perm.APIKeySelfManage, en: "Manage own API keys", zh: "管理自己的 API Key",
 			desc: lt("Create and manage your own gateway API keys.", "新建与管理自己的网关 API Key。")},
 	}},
-	{"group", lt("Groups", "分组"), []corePerm{
-		{key: perm.GroupRead, en: "View groups", zh: "查看分组",
-			desc: lt("View groups and the accounts bound to them.", "查看分组及其绑定的账号。")},
-		{key: perm.GroupManage, en: "Manage groups", zh: "管理分组", sensitive: true,
-			desc: lt("Create, edit and delete groups and set which user groups may use them, at what rates and prices; also lets restricted account editors change any account's groups.", "新建、修改、删除分组，设置哪些用户组可用及其倍率与价格；账号范围受限的人有它时可改任意账号的分组。"), requires: req(perm.GroupRead)},
+	{"group", lt("Account groups", "账号分组"), []corePerm{
+		{key: perm.GroupRead, en: "View account groups", zh: "查看账号分组",
+			desc: lt("View account groups and the accounts bound to them.", "查看账号分组及其绑定的账号。")},
+		{key: perm.GroupManage, en: "Manage account groups", zh: "管理账号分组", sensitive: true,
+			desc: lt("Create, edit and delete account groups with their model prices and rates and which user groups may use them at what rates; also lets restricted account editors change any account's account groups.", "新建、修改、删除账号分组，设置模型价格、模型倍率以及哪些用户分组可用、按什么倍率；账号范围受限的人有它时可改任意账号的账号分组。"), requires: req(perm.GroupRead)},
 	}},
 	// User groups (segments, CONTRACTS §97): who is in which one, the private
 	// groups it may use and what it pays there.
-	{"segment", lt("User groups", "用户组"), []corePerm{
-		{key: perm.SegmentRead, en: "View user groups", zh: "查看用户组",
-			desc: lt("View user groups, their members and pricing.", "查看用户组、成员与定价。")},
-		{key: perm.SegmentManage, en: "Manage user groups", zh: "管理用户组",
-			desc: lt("Create, edit and delete user groups: members, private groups and prices.", "新建、修改、删除用户组：成员、专属分组与价格。"), requires: req(perm.SegmentRead)},
+	{"segment", lt("User groups", "用户分组"), []corePerm{
+		{key: perm.SegmentRead, en: "View user groups", zh: "查看用户分组",
+			desc: lt("View user groups, their members and rates.", "查看用户分组、成员与倍率。")},
+		{key: perm.SegmentManage, en: "Manage user groups", zh: "管理用户分组",
+			desc: lt("Create, edit and delete user groups: members, private account groups and rates.", "新建、修改、删除用户分组：成员、私有账号分组的开通与倍率。"), requires: req(perm.SegmentRead)},
 	}},
 	{"account", lt("Accounts", "账号"), []corePerm{
 		// Scopable (perm.ScopeType): account:read reaches every account,
 		// account:read:own, :group/12, :account/125 … some (CONTRACTS §21).
 		{key: perm.AccountRead, en: "View accounts", zh: "查看账号",
-			desc: lt("View upstream accounts within the scope granted (all, own, own and the users below, a group or one account).", "查看授权范围内的上游账号（全部、自己的、自己及下级、某分组或单个账号）。")},
+			desc: lt("View upstream accounts within the scope granted (all, own, own and the users below, an account group or one account).", "查看授权范围内的上游账号（全部、自己的、自己及下级、某账号分组或单个账号）。")},
 		{key: perm.AccountCreate, en: "Create accounts", zh: "新建账号",
 			desc: lt("Create upstream accounts within the scope granted.", "在授权范围内新建上游账号。"), requires: req(perm.AccountRead)},
 		{key: perm.AccountUpdate, en: "Edit accounts", zh: "编辑账号",
@@ -116,10 +116,10 @@ var coreModules = []coreModule{
 			desc: lt("Reveal the plain credentials of accounts within the scope granted; asks for verification each time.", "明文查看授权范围内账号的凭证；每次需要二次验证。"), requires: req(perm.AccountRead)},
 		{key: perm.AccountSettingsCustom, en: "Custom guarded settings (e.g. base URL)", zh: "自定义受限设置（如 Base URL）",
 			desc: lt("Set guarded account settings (e.g. base URL) to values other than the official ones.", "把受限的账号设置（如 Base URL）改成非官方值。"), requires: req(perm.AccountUpdate)},
-		{key: perm.AccountGroupBind, en: "Bind accounts to groups (own level)", zh: "将账号绑定到分组（own 级）",
-			desc: lt("Bind accounts to groups you can use; only matters to callers with a restricted account scope (own, a group or one account) and without group:manage.", "把账号绑定到自己可用的分组；只对账号范围受限（仅自己、某分组或单个账号）且没有 group:manage 的人生效。"), requires: req(perm.AccountUpdate)},
+		{key: perm.AccountGroupBind, en: "Bind accounts to account groups (own level)", zh: "将账号绑定到账号分组（own 级）",
+			desc: lt("Bind accounts to account groups you can use; only matters to callers with a restricted account scope (own, an account group or one account) and without group:manage.", "把账号绑定到自己可用的账号分组；只对账号范围受限（仅自己、某账号分组或单个账号）且没有 group:manage 的人生效。"), requires: req(perm.AccountUpdate)},
 		{key: perm.AccountRelay, en: "Create relay-type accounts with custom upstream", zh: "创建自定义上游的 relay 类账号", sensitive: true,
-			desc: lt("Create accounts whose upstream address is free (relay) or re-point it; only matters to callers with a restricted account scope (own, group or account).", "创建或改动可自定义上游地址的账号（relay）；只对账号范围受限（仅自己、某分组或单个账号）的人生效。"), requires: req(perm.AccountCreate)},
+			desc: lt("Create accounts whose upstream address is free (relay) or re-point it; only matters to callers with a restricted account scope (own, account group or account).", "创建或改动可自定义上游地址的账号（relay）；只对账号范围受限（仅自己、某账号分组或单个账号）的人生效。"), requires: req(perm.AccountCreate)},
 		// 所属 (accounts.owner_id) decides whose own and team scopes reach
 		// an account (CONTRACTS §103).
 		{key: perm.AccountOwnerUpdate, en: "Change account owners", zh: "修改账号所属", sensitive: true,

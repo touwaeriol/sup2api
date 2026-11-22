@@ -4,7 +4,6 @@ import (
 	"context"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
@@ -21,10 +20,8 @@ import (
 type Segment struct {
 	core.SegmentRef
 	Description string `json:"description"`
-	// Discount multiplies the default rate of every group; 1 = none.
-	Discount    decimal.Decimal `json:"discount"`
-	IsDefault   bool            `json:"is_default"`
-	MemberCount int64           `json:"member_count"`
+	IsDefault   bool   `json:"is_default"`
+	MemberCount int64  `json:"member_count"`
 	// GrantedGroups are the private groups the segment is granted.
 	GrantedGroups []core.GroupRef `json:"granted_groups"`
 	// RateOverrides are the groups whose rate it overrides, with that rate.
@@ -61,7 +58,7 @@ func fromSegments(db *gorm.DB) *gorm.DB {
 
 // segmentColumns are the columns of a segmentRow: a segment with its member
 // count, grants and rates. A deleted user is no member.
-const segmentColumns = RefColumns + `, s.description, s.discount, s.is_default, s.created_at,
+const segmentColumns = RefColumns + `, s.description, s.is_default, s.created_at,
 	(SELECT count(*) FROM users m WHERE m.segment_id = s.id AND m.deleted_at IS NULL) AS member_count,
 	(SELECT COALESCE(jsonb_agg(jsonb_build_object('id', g.id, 'name', g.name) ORDER BY g.id), '[]')
 	  FROM segment_groups sg JOIN groups g ON g.id = sg.group_id
@@ -80,7 +77,6 @@ func selectSegments(db *gorm.DB) *gorm.DB {
 type segmentRow struct {
 	core.SegmentRef
 	Description   string                      `gorm:"column:description"`
-	Discount      decimal.Decimal             `gorm:"column:discount"`
 	IsDefault     bool                        `gorm:"column:is_default"`
 	CreatedAt     time.Time                   `gorm:"column:created_at"`
 	MemberCount   int64                       `gorm:"column:member_count"`
@@ -94,7 +90,7 @@ type segmentRow struct {
 
 // segment is the row as a caller may see it (Masked).
 func (r *segmentRow) segment(showUsers bool) *Segment {
-	sg := Segment{SegmentRef: r.SegmentRef, Description: r.Description, Discount: r.Discount, IsDefault: r.IsDefault,
+	sg := Segment{SegmentRef: r.SegmentRef, Description: r.Description, IsDefault: r.IsDefault,
 		MemberCount: r.MemberCount, GrantedGroups: r.GrantedGroups.V, RateOverrides: r.RateOverrides.V, CreatedAt: r.CreatedAt}
 	if sg.UserID == nil {
 		return &sg
@@ -213,118 +209,6 @@ func (s *Service) get(c *gin.Context) {
 		return
 	}
 	s.render(c, id, httpapi.OK)
-}
-
-type segmentInput struct {
-	Name        *string `json:"name"`
-	Description *string `json:"description"`
-	Discount    *string `json:"discount"`
-}
-
-// validate checks the provided fields of a segment of the kind; create
-// requires name. A personal segment has no name of its own (it goes by its
-// user) and no description.
-func (in *segmentInput) validate(ctx context.Context, kind string, create bool) error {
-	if kind == core.SegmentPersonal && (in.Name != nil || in.Description != nil) {
-		return core.InvalidFields(fieldError(ctx, "name", "invalid", "a personal user group only has a discount", "个人专属只能修改折扣"))
-	}
-	var fe []core.FieldError
-	name, given := "", in.Name != nil
-	if given {
-		name = strings.TrimSpace(*in.Name)
-		in.Name = &name
-	}
-	if (given || create) && name == "" {
-		fe = append(fe, fieldError(ctx, "name", "required", "name is required", "名称必填"))
-	} else if utf8.RuneCountInString(name) > 100 {
-		fe = append(fe, fieldError(ctx, "name", "invalid", "name must be at most 100 characters", "名称最多 100 个字符"))
-	}
-	if in.Description != nil && utf8.RuneCountInString(*in.Description) > 2000 {
-		fe = append(fe, fieldError(ctx, "description", "too_long", "description is too long", "描述过长"))
-	}
-	if in.Discount != nil {
-		d, ok := core.ParseRate(*in.Discount)
-		if !ok || !d.IsPositive() {
-			fe = append(fe, fieldError(ctx, "discount", "invalid", "must be a positive number with at most 4 decimals", "必须为正数，最多 4 位小数"))
-		}
-		discount := d.String()
-		in.Discount = &discount
-	}
-	if len(fe) > 0 {
-		return core.InvalidFields(fe...)
-	}
-	return nil
-}
-
-// columns are the segments columns of the provided fields, as written; the
-// others keep their value.
-func (in *segmentInput) columns() map[string]any {
-	set := map[string]any{"updated_at": gorm.Expr("now()")}
-	store.SetIf(set, "name", in.Name)
-	store.SetIf(set, "description", in.Description)
-	store.SetIf(set, "discount", in.Discount)
-	return set
-}
-
-// nameTaken turns a clash with the name of another named segment into the
-// field error; other errors pass through.
-func nameTaken(ctx context.Context, err error) error {
-	if store.IsUniqueViolation(err, "segments_name_uq") {
-		return core.InvalidFields(fieldError(ctx, "name", "duplicate", "name already in use", "名称已被使用"))
-	}
-	return err
-}
-
-func (s *Service) create(c *gin.Context) {
-	ctx := c.Request.Context()
-	var in segmentInput
-	if !httpapi.BindJSON(c, &in) {
-		return
-	}
-	if err := in.validate(ctx, core.SegmentNamed, true); err != nil {
-		httpapi.Fail(c, err)
-		return
-	}
-	discount := decimal.RequireFromString(core.ValueOr(in.Discount, "1"))
-	row := model.Segment{Name: *in.Name, Description: core.ValueOr(in.Description, ""), Discount: &discount}
-	if err := store.G(ctx, s.db.Gorm).Create(&row).Error; err != nil {
-		httpapi.Fail(c, nameTaken(ctx, err))
-		return
-	}
-	s.render(c, row.ID, httpapi.Created)
-}
-
-func (s *Service) update(c *gin.Context) {
-	ctx := c.Request.Context()
-	id, ok := httpapi.PathID(c, "id")
-	if !ok {
-		return
-	}
-	var in segmentInput
-	if !httpapi.BindJSON(c, &in) {
-		return
-	}
-	kind, _, err := segmentKind(ctx, s.db.Gorm, id, "")
-	if err == nil {
-		err = in.validate(ctx, kind, false)
-	}
-	if err == nil && in.Discount != nil {
-		err = guardOwnSegments(ctx, s.db.Gorm, s.users, []int64{id})
-	}
-	if err != nil {
-		httpapi.Fail(c, err)
-		return
-	}
-	if err = updateSegment(store.G(ctx, s.db.Gorm), id, &in).Error; err != nil {
-		httpapi.Fail(c, nameTaken(ctx, err))
-		return
-	}
-	s.render(c, id, httpapi.OK)
-}
-
-// updateSegment writes the fields of in present to segment id.
-func updateSegment(db *gorm.DB, id int64, in *segmentInput) *gorm.DB {
-	return db.Model(&model.Segment{}).Where("id = ?", id).Updates(in.columns())
 }
 
 // delete removes a named segment with its grants and rates (they cascade).

@@ -1,21 +1,22 @@
 -- sql
-INSERT INTO "model_price_history" ("expr_hash","expression","expr_version") VALUES ($1,$2,$3) ON CONFLICT ("expr_hash") DO NOTHING RETURNING "created_at"
+INSERT INTO "model_price_history" ("expr_hash","expression","expr_version") VALUES ($1,$2,$3),($4,$5,$6) ON CONFLICT ("expr_hash") DO NOTHING RETURNING "created_at"
 -- vars
 $1 string "b67b5f5938d990a59bd23264b3c82d5d9055128a6d78aab0994597de293c267c"
 $2 string "v1:tier(\"base\", flat(0))"
 $3 int 1
+$4 string "b67b5f5938d990a59bd23264b3c82d5d9055128a6d78aab0994597de293c267c"
+$5 string "v1:tier(\"base\", flat(0))"
+$6 int 1
 
 -- sql
-SELECT "id" FROM "price_rules" WHERE ("group_id","model") IN (($1,$2),($3,$4),($5,$6),($7,$8)) ORDER BY group_id, model FOR UPDATE
+SELECT "id" FROM "price_rules" WHERE ("group_id","model") IN (($1,$2),($3,$4),($5,$6)) ORDER BY group_id, model FOR UPDATE
 -- vars
 $1 int64 3
 $2 string "claude-haiku-4-5"
 $3 int64 3
 $4 string "claude-opus-4-5"
 $5 int64 3
-$6 string "claude-sonnet-4-5"
-$7 int64 3
-$8 string "gpt-5"
+$6 string "gpt-5"
 
 -- sql
 DELETE FROM "price_rules" WHERE ("group_id","model") IN (($1,$2),($3,$4))
@@ -26,32 +27,19 @@ $3 int64 3
 $4 string "claude-opus-4-5"
 
 -- sql
-INSERT INTO "price_rules" ("group_id","model","kind","multiplier","mode","config","expression","expr_hash","updated_by") VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9),($10,$11,$12,$13,$14,$15,$16,$17,$18),($19,$20,$21,$22,$23,$24,$25,$26,$27) ON CONFLICT ("group_id","model") DO UPDATE SET "kind"="excluded"."kind","multiplier"="excluded"."multiplier","mode"="excluded"."mode","config"="excluded"."config","expression"="excluded"."expression","expr_hash"="excluded"."expr_hash","updated_by"="excluded"."updated_by","updated_at"=now()
+INSERT INTO "price_rules" ("group_id","model","mode","config","expression","expr_hash","updated_by") VALUES ($1,$2,$3,$4,$5,$6,$7),($8,$9,$10,$11,$12,$13,$14) ON CONFLICT ("group_id","model") DO UPDATE SET "mode"="excluded"."mode","config"="excluded"."config","expression"="excluded"."expression","expr_hash"="excluded"."expr_hash","updated_by"="excluded"."updated_by","updated_at"=now()
 -- vars
 $1 int64 3
 $2 string "claude-opus-4-5"
-$3 string "multiplier"
-$4 *decimal.Decimal 1.25
-$5 *string nil
-$6 store.Bytes []
-$7 string ""
-$8 string ""
-$9 *int64 2
-$10 int64 3
-$11 string "claude-sonnet-4-5"
-$12 string "multiplier"
-$13 *decimal.Decimal 1.25
-$14 *string nil
-$15 store.Bytes []
-$16 string ""
-$17 string ""
-$18 *int64 2
-$19 int64 3
-$20 string "gpt-5"
-$21 string "custom"
-$22 *decimal.Decimal nil
-$23 *string "visual"
-$24 store.Bytes [123 34 116 105 101 114 115 34 58 32 91 123 34 110 97 109 101 34 58 32 34 98 97 115 101 34 44 32 34 117 110 105 116 34 58 32 34 114 101 113 117 101 115 116 34 44 32 34 112 114 105 99 101 34 58 32 48 125 93 125]
-$25 string "tier(\"base\", flat(0))"
-$26 string "b67b5f5938d990a59bd23264b3c82d5d9055128a6d78aab0994597de293c267c"
-$27 *int64 2
+$3 string "visual"
+$4 store.Bytes [123 34 116 105 101 114 115 34 58 32 91 123 34 110 97 109 101 34 58 32 34 98 97 115 101 34 44 32 34 117 110 105 116 34 58 32 34 114 101 113 117 101 115 116 34 44 32 34 112 114 105 99 101 34 58 32 48 125 93 125]
+$5 string "tier(\"base\", flat(0))"
+$6 string "b67b5f5938d990a59bd23264b3c82d5d9055128a6d78aab0994597de293c267c"
+$7 *int64 2
+$8 int64 3
+$9 string "gpt-5"
+$10 string "visual"
+$11 store.Bytes [123 34 116 105 101 114 115 34 58 32 91 123 34 110 97 109 101 34 58 32 34 98 97 115 101 34 44 32 34 117 110 105 116 34 58 32 34 114 101 113 117 101 115 116 34 44 32 34 112 114 105 99 101 34 58 32 48 125 93 125]
+$12 string "tier(\"base\", flat(0))"
+$13 string "b67b5f5938d990a59bd23264b3c82d5d9055128a6d78aab0994597de293c267c"
+$14 *int64 2

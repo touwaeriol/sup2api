@@ -32,7 +32,7 @@ func TestPriceOneAmounts(t *testing.T) {
 		tier              string
 	}{
 		{"no rule", global, nil, "13", "13", "19.5", false, "global"},
-		{"the segment's rate alone", global, &core.PricingTrace{SegmentID: 4, RateSource: core.RateSourceDiscount, PriceSource: core.PriceSourceGlobal},
+		{"the segment's rate alone", global, &core.PricingTrace{SegmentID: 4, RateSource: discountSource, PriceSource: core.PriceSourceGlobal},
 			"13", "13", "19.5", false, "global"},
 		{"multiplier", global, &core.PricingTrace{PriceSource: core.PriceSourceGroup, Scale: decPtr("0.8")}, "13", "10.4", "15.6", true, "global"},
 		{"multiplier 0", global, &core.PricingTrace{PriceSource: segmentSource, Scale: decPtr("0")}, "13", "0", "0", true, "global"},
@@ -182,8 +182,10 @@ func TestPricingTrace(t *testing.T) {
 		{"no price", nil, 4, "", nil},
 		{"a price from before price rules", &core.PriceRule{ID: 1}, 4, "", nil},
 		{"the global price at the group's rate", &core.PriceRule{ID: 1, Source: core.PriceSourceGlobal}, 4, core.RateSourceGroup, nil},
-		{"the segment's discount", &core.PriceRule{ID: 1, Source: core.PriceSourceGlobal}, 4, core.RateSourceDiscount,
-			&core.PricingTrace{SegmentID: 4, RateSource: core.RateSourceDiscount, PriceSource: core.PriceSourceGlobal}},
+		{"the group's rate for the model", &core.PriceRule{ID: 1, Source: core.PriceSourceGlobal}, 4, core.RateSourceGroupModel,
+			&core.PricingTrace{SegmentID: 4, RateSource: core.RateSourceGroupModel, PriceSource: core.PriceSourceGlobal}},
+		{"the segment's rate for the model", &core.PriceRule{ID: 1}, 4, core.RateSourceSegmentModel,
+			&core.PricingTrace{SegmentID: 4, RateSource: core.RateSourceSegmentModel}},
 		{"the segment's rate without a price", nil, 4, core.RateSourceSegment, &core.PricingTrace{SegmentID: 4, RateSource: core.RateSourceSegment}},
 		{"multiplier 0", &core.PriceRule{ID: 1, Source: core.PriceSourceGroup, Scale: decPtr("0")}, 4, core.RateSourceGroup,
 			&core.PricingTrace{SegmentID: 4, RateSource: core.RateSourceGroup, PriceSource: core.PriceSourceGroup, Scale: decPtr("0")}},

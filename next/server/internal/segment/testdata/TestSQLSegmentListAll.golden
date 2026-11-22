@@ -1,5 +1,5 @@
 -- sql
-SELECT s.id, s.kind, CASE WHEN s.user_id IS NULL THEN s.name ELSE u.email END AS name, s.user_id, s.description, s.discount, s.is_default, s.created_at,
+SELECT s.id, s.kind, CASE WHEN s.user_id IS NULL THEN s.name ELSE u.email END AS name, s.user_id, s.description, s.is_default, s.created_at,
 	(SELECT count(*) FROM users m WHERE m.segment_id = s.id AND m.deleted_at IS NULL) AS member_count,
 	(SELECT COALESCE(jsonb_agg(jsonb_build_object('id', g.id, 'name', g.name) ORDER BY g.id), '[]')
 	  FROM segment_groups sg JOIN groups g ON g.id = sg.group_id

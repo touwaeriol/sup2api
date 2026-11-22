@@ -35,6 +35,12 @@ func (e *env) account(models []string, groups ...int64) {
 	}
 }
 
+// rule gives the group a model price of its own on the model.
+func (e *env) rule(group int64, model string) {
+	e.t.Helper()
+	e.exec(`INSERT INTO price_rules (group_id, model, mode, config, expression) VALUES ($1, $2, 'expression', '{}', '0')`, group, model)
+}
+
 func (e *env) price(model string, enabled bool) {
 	e.t.Helper()
 	e.exec(`INSERT INTO model_prices (model, mode, expression, expr_hash, source, enabled) VALUES ($1, 'expression', '0', 'h', 'manual', $2)`, model, enabled)
@@ -63,7 +69,8 @@ func TestGroupPricingSummary(t *testing.T) {
 	personal := e.one(`INSERT INTO segments (kind, user_id) VALUES ('personal', $1) RETURNING id`, e.user)
 	e.exec(`INSERT INTO segment_groups (segment_id, group_id, granted, rate_override) VALUES
 		($1, $4, true, NULL), ($2, $4, false, 0.5), ($3, $4, true, NULL), ($1, $5, true, NULL)`, vip, team, personal, private, open)
-	e.exec(`INSERT INTO price_rules (group_id, model, kind, multiplier) VALUES ($1, 'm1', 'multiplier', 1.2)`, private)
+	e.rule(private, "m1")
+	e.exec(`INSERT INTO group_model_rates (group_id, model, rate) VALUES ($1, 'm1', 1.2), ($1, 'm3', 0.5)`, private)
 	e.account([]string{"m1", "m2"}, private)
 
 	rows, total := e.listed(e.admin, "/groups")
@@ -72,7 +79,7 @@ func TestGroupPricingSummary(t *testing.T) {
 		"segments":       []any{map[string]any{"id": float64(vip), "kind": core.SegmentNamed, "name": "vip"}},
 		"personal_count": float64(1),
 	}, rows["private"]["access"], "the named segments granted, and the personal ones counted")
-	require.EqualValues(t, 1, rows["private"]["price_rule_count"])
+	require.EqualValues(t, 2, rows["private"]["price_rule_count"], "the models with a price or a rate of their own, each once")
 	require.NotContains(t, rows["private"], "segment_rule_count")
 	require.EqualValues(t, 2, rows["private"]["model_count"])
 
@@ -80,22 +87,38 @@ func TestGroupPricingSummary(t *testing.T) {
 		"a public group lists nobody, whatever was granted")
 	require.EqualValues(t, 0, rows["open"]["price_rule_count"])
 	require.EqualValues(t, 0, rows["open"]["model_count"])
+	requireDetailIsRow(t, e, private, rows["private"])
+}
 
-	code, out := e.do(e.admin, "GET", fmt.Sprintf("/groups/%d", private), nil)
+// requireDetailIsRow requires GET /groups/:id to read as the group's row in
+// the list, but for the protocols only the detail lists.
+func requireDetailIsRow(t *testing.T, e *env, id int64, row map[string]any) {
+	t.Helper()
+	code, out := e.do(e.admin, "GET", fmt.Sprintf("/groups/%d", id), nil)
 	require.Equal(t, 200, code)
 	detail := out["data"].(map[string]any)
 	require.Equal(t, []any{}, detail["served_protocols"], "only the detail lists the protocols")
 	delete(detail, "served_protocols")
-	require.Equal(t, rows["private"], detail, "one group otherwise reads as its row in the list")
-
-	// Grants, rates and price rules go with the group.
-	code, _ = e.do(e.admin, "DELETE", fmt.Sprintf("/groups/%d", private), nil)
-	require.Equal(t, 204, code)
-	require.Zero(t, e.one(`SELECT (SELECT count(*) FROM segment_groups WHERE group_id = $1) + (SELECT count(*) FROM price_rules WHERE group_id = $1)`, private))
+	require.Equal(t, row, detail, "one group otherwise reads as its row in the list")
 }
 
-// Price rules count as the group's pricing table lists them: on any model,
-// one the group no longer provides (or never did) included.
+// Grants, prices and rates go with the group.
+func TestGroupDeleteTakesPricing(t *testing.T) {
+	e := setup(t)
+	g := e.one(`INSERT INTO groups (name) VALUES ('g') RETURNING id`)
+	vip := e.one(`INSERT INTO segments (name) VALUES ('vip') RETURNING id`)
+	e.exec(`INSERT INTO segment_groups (segment_id, group_id, granted) VALUES ($1, $2, true)`, vip, g)
+	e.exec(`INSERT INTO segment_model_rates (segment_id, group_id, model, rate) VALUES ($1, $2, 'm1', 0.5)`, vip, g)
+	e.exec(`INSERT INTO group_model_rates (group_id, model, rate) VALUES ($1, 'm1', 1.2)`, g)
+	e.rule(g, "m1")
+	code, _ := e.do(e.admin, "DELETE", fmt.Sprintf("/groups/%d", g), nil)
+	require.Equal(t, 204, code)
+	require.Zero(t, e.one(`SELECT (SELECT count(*) FROM segment_groups WHERE group_id = $1) + (SELECT count(*) FROM price_rules WHERE group_id = $1)
+		+ (SELECT count(*) FROM group_model_rates WHERE group_id = $1) + (SELECT count(*) FROM segment_model_rates WHERE group_id = $1)`, g))
+}
+
+// Model prices and rates count as the group's pricing table lists them: on
+// any model, one the group no longer provides (or never did) included.
 func TestRuleCountsOfAnyModel(t *testing.T) {
 	e := setup(t)
 	declared := e.one(`INSERT INTO groups (name, visibility) VALUES ('declared', 'restricted') RETURNING id`)
@@ -103,8 +126,9 @@ func TestRuleCountsOfAnyModel(t *testing.T) {
 	e.account([]string{"m1"}, declared)
 	e.account([]string{}, open) // serves every model that has a global price
 	e.price("priced", true)
-	e.exec(`INSERT INTO price_rules (group_id, model, kind, multiplier) VALUES
-		($1, 'm1', 'multiplier', 1), ($1, 'priced', 'multiplier', 1), ($1, 'gone', 'multiplier', 1), ($2, 'gone', 'multiplier', 1)`, declared, open)
+	e.rule(declared, "m1")
+	e.rule(declared, "gone")
+	e.exec(`INSERT INTO group_model_rates (group_id, model, rate) VALUES ($1, 'priced', 1), ($2, 'gone', 1)`, declared, open)
 	counts := func() map[string][]any {
 		t.Helper()
 		rows, _ := e.listed(e.admin, "/groups")
@@ -184,13 +208,16 @@ func TestGroupModels(t *testing.T) {
 
 func TestMyGroupsRates(t *testing.T) {
 	e := setup(t)
-	vip := e.one(`INSERT INTO segments (name, discount) VALUES ('vip', 0.8) RETURNING id`)
+	vip := e.one(`INSERT INTO segments (name) VALUES ('vip') RETURNING id`)
 	e.exec(`UPDATE users SET segment_id = $2 WHERE id = $1`, e.user, vip)
-	e.one(`INSERT INTO groups (name, rate_multiplier) VALUES ('open', 1.5) RETURNING id`)
+	open := e.one(`INSERT INTO groups (name, rate_multiplier) VALUES ('open', 1.5) RETURNING id`)
 	granted := e.one(`INSERT INTO groups (name, visibility, rate_multiplier) VALUES ('granted', 'restricted', 2) RETURNING id`)
 	e.one(`INSERT INTO groups (name, visibility) VALUES ('closed', 'restricted') RETURNING id`)
 	off := e.one(`INSERT INTO groups (name, visibility, status) VALUES ('off', 'restricted', 'disabled') RETURNING id`)
-	e.exec(`INSERT INTO segment_groups (segment_id, group_id, granted, rate_override) VALUES ($1, $2, true, 0.5), ($1, $3, true, NULL)`, vip, granted, off)
+	e.exec(`INSERT INTO segment_groups (segment_id, group_id, granted, rate_override) VALUES ($1, $2, true, 0.5), ($1, $3, true, NULL), ($1, $4, false, 1.2)`,
+		vip, granted, off, open)
+	// A model rate is not the group's rate.
+	e.exec(`INSERT INTO group_model_rates (group_id, model, rate) VALUES ($1, 'm', 9)`, open)
 
 	type row struct {
 		rate, source, groupRate string
@@ -201,8 +228,8 @@ func TestMyGroupsRates(t *testing.T) {
 		uid  int64
 		want map[string]row
 	}{
-		{"a segment with a discount and an override", e.user, map[string]row{
-			"open":    {"1.2", core.RateSourceDiscount, "1.5", false},
+		{"a segment with its own rates", e.user, map[string]row{
+			"open":    {"1.2", core.RateSourceSegment, "1.5", false},
 			"granted": {"0.5", core.RateSourceSegment, "2", true},
 		}},
 		{"the default segment", e.admin, map[string]row{

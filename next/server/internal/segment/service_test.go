@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -51,6 +52,8 @@ type env struct {
 	svc                  *Service
 	h                    http.Handler
 	admin, masked, plain int64
+	// ratesChanged counts the calls of Deps.RatesChanged.
+	ratesChanged atomic.Int32
 }
 
 func setup(t *testing.T) *env {
@@ -72,6 +75,7 @@ func setup(t *testing.T) *env {
 			}
 			return out, nil
 		},
+		RatesChanged: func(context.Context) { e.ratesChanged.Add(1) },
 	})
 	e.svc.RegisterRoutes(httpapi.NewRouter(engine, fakeTokens{}, authz))
 	e.h = engine
@@ -132,8 +136,8 @@ func (e *env) user(email string) int64 {
 
 func (e *env) defaultSegment() int64 { return e.id(`SELECT default_segment_id()`) }
 
-func (e *env) segment(name, discount string) int64 {
-	return e.id(`INSERT INTO segments (name, discount) VALUES ($1, $2::numeric) RETURNING id`, name, discount)
+func (e *env) segment(name string) int64 {
+	return e.id(`INSERT INTO segments (name) VALUES ($1) RETURNING id`, name)
 }
 
 // personal makes the user personal, coming from the segment they are in.
@@ -153,7 +157,6 @@ func (e *env) pair(segment, group int64, granted bool, override string) {
 		segment, group, granted, override)
 }
 
-// rule gives the segment (0 = the group itself) a model price in the group.
 func (e *env) segmentOf(user int64) int64 {
 	return e.id(`SELECT segment_id FROM users WHERE id = $1`, user)
 }

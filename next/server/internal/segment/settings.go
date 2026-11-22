@@ -1,17 +1,13 @@
 package segment
 
 import (
-	"cmp"
 	"context"
-	"encoding/json"
-	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/httpapi"
@@ -29,10 +25,20 @@ type Setting struct {
 	Accessible bool `json:"accessible"`
 	Granted    bool `json:"granted"`
 	// RateOverride is the segment's own rate in the group; null = it
-	// follows the group. Rate is what its members pay there.
+	// follows the group. Rate is what its members pay there for a model
+	// with no rate of its own: the override, or the group's base rate.
 	RateOverride *decimal.Decimal `json:"rate_override"`
 	Rate         EffectiveRate    `json:"rate"`
-	MemberCount  int64            `json:"member_count"`
+	// ModelRates are the segment's rates for models in the group, by model:
+	// those models are paid at these instead.
+	ModelRates  []ModelRate `json:"model_rates"`
+	MemberCount int64       `json:"member_count"`
+}
+
+// ModelRate is a model paid at a rate of its own.
+type ModelRate struct {
+	Model string          `json:"model"`
+	Rate  decimal.Decimal `json:"rate"`
 }
 
 // SettingGroup is the group of a Setting.
@@ -46,29 +52,20 @@ type SettingGroup struct {
 	Platforms      []string        `json:"platforms"`
 }
 
-func (s *Service) segmentGroups(c *gin.Context)    { s.serveSettings(c, s.ofSegment, false) }
-func (s *Service) setSegmentGroups(c *gin.Context) { s.serveSettings(c, s.ofSegment, true) }
-func (s *Service) groupSegments(c *gin.Context)    { s.serveSettings(c, s.ofGroup, false) }
-func (s *Service) setGroupSegments(c *gin.Context) { s.serveSettings(c, s.ofGroup, true) }
+func (s *Service) segmentGroups(c *gin.Context) { s.serveSettings(c, s.ofSegment) }
+func (s *Service) groupSegments(c *gin.Context) { s.serveSettings(c, s.ofGroup) }
 
-// settingsOf saves the items as settings of the row the path names (a
-// segment or a group) and returns the settings of that row.
-type settingsOf func(c *gin.Context, id int64, items []pairInput) ([]*Setting, error)
+// settingsOf returns the settings of the row the path names (a segment or
+// a group).
+type settingsOf func(c *gin.Context, id int64) ([]*Setting, error)
 
-// serveSettings answers with the settings of the row the path names, after
-// saving the items of the body when write is set.
-func (s *Service) serveSettings(c *gin.Context, of settingsOf, write bool) {
+// serveSettings answers with the settings of the row the path names.
+func (s *Service) serveSettings(c *gin.Context, of settingsOf) {
 	id, ok := httpapi.PathID(c, "id")
 	if !ok {
 		return
 	}
-	var in struct {
-		Items []pairInput `json:"items"`
-	}
-	if write && !httpapi.BindJSON(c, &in) {
-		return
-	}
-	rows, err := of(c, id, in.Items)
+	rows, err := of(c, id)
 	if err != nil {
 		httpapi.Fail(c, err)
 		return
@@ -76,17 +73,10 @@ func (s *Service) serveSettings(c *gin.Context, of settingsOf, write bool) {
 	httpapi.OK(c, rows)
 }
 
-// ofSegment saves the items as settings of the segment and returns what it
-// has in every group.
-func (s *Service) ofSegment(c *gin.Context, id int64, items []pairInput) ([]*Setting, error) {
+// ofSegment returns what the segment has in every group.
+func (s *Service) ofSegment(c *gin.Context, id int64) ([]*Setting, error) {
 	ctx := c.Request.Context()
 	if _, _, err := segmentKind(ctx, s.db.Gorm, id, ""); err != nil {
-		return nil, err
-	}
-	for i := range items {
-		items[i].SegmentID = id
-	}
-	if err := s.savePairs(ctx, items); err != nil {
 		return nil, err
 	}
 	rows, err := s.settingRows(ctx, func(db *gorm.DB) *gorm.DB { return db.Where("s.id = ?", id).Order("g.id") })
@@ -100,18 +90,12 @@ func (s *Service) ofSegment(c *gin.Context, id int64, items []pairInput) ([]*Set
 	return s.complete(ctx, rows, func(r *Setting) Terms { return terms[r.Group.ID] })
 }
 
-// ofGroup saves the items as settings in the group and returns what the
-// segments have there: every named one, then the personal ones that have a
-// grant or a rate in the group or are named by ?include=.
-func (s *Service) ofGroup(c *gin.Context, id int64, items []pairInput) ([]*Setting, error) {
+// ofGroup returns what the segments have in the group: every named one,
+// then the personal ones that have a grant or a rate in the group or are
+// named by ?include=.
+func (s *Service) ofGroup(c *gin.Context, id int64) ([]*Setting, error) {
 	ctx := c.Request.Context()
 	if err := requireGroup(ctx, s.db.Gorm, id); err != nil {
-		return nil, err
-	}
-	for i := range items {
-		items[i].GroupID = id
-	}
-	if err := s.savePairs(ctx, items); err != nil {
 		return nil, err
 	}
 	rows, err := s.settingRows(ctx, func(db *gorm.DB) *gorm.DB {
@@ -201,9 +185,9 @@ type settingRow struct {
 	GroupVisibility  string `gorm:"column:group_visibility"`
 }
 
-// complete fills in what the rows do not carry themselves: the terms of each
-// pair, the platforms of the groups, and the names as the caller may see
-// them.
+// complete fills in what the rows do not carry themselves: the terms and
+// the model rates of each pair, the platforms of the groups, and the names
+// as the caller may see them.
 func (s *Service) complete(ctx context.Context, rows []*Setting, terms func(*Setting) Terms) ([]*Setting, error) {
 	show, err := ShowUsers(ctx, s.authz)
 	if err != nil {
@@ -213,164 +197,38 @@ func (s *Service) complete(ctx context.Context, rows []*Setting, terms func(*Set
 	if err != nil {
 		return nil, err
 	}
+	rates, err := modelRates(ctx, s.db.Gorm, idsOf(rows, segmentID), idsOf(rows, groupID))
+	if err != nil {
+		return nil, err
+	}
 	for _, r := range rows {
 		tm := terms(r)
 		r.Segment = Masked(r.Segment, show)
 		r.Group.RateMultiplier, r.Group.Platforms = tm.GroupRate, platforms[r.Group.ID]
 		r.Accessible, r.Granted, r.RateOverride, r.Rate = tm.Open, tm.Granted, tm.Override, tm.EffectiveRate()
+		if r.ModelRates = rates[pairKey{r.Segment.ID, r.Group.ID}]; r.ModelRates == nil {
+			r.ModelRates = []ModelRate{}
+		}
 	}
 	return rows, nil
 }
 
-// pairInput is one changed pair of PUT /segments/:id/groups and of
-// PUT /groups/:id/segments; the path names one side of it.
-type pairInput struct {
-	SegmentID    int64     `json:"segment_id"`
-	GroupID      int64     `json:"group_id"`
-	Granted      *bool     `json:"granted"`
-	RateOverride rateInput `json:"rate_override"`
-}
+// pairKey is a segment in a group.
+type pairKey struct{ segment, group int64 }
 
-// rateInput is a rate_override request field: absent (Set false), null
-// (Value nil: follow the group) or a rate. Invalid marks one that is no rate.
-type rateInput struct {
-	Set     bool
-	Value   *decimal.Decimal
-	Invalid bool
-}
-
-func (in *rateInput) UnmarshalJSON(b []byte) error {
-	var text *string
-	if err := json.Unmarshal(b, &text); err != nil {
-		return err
-	}
-	*in = rateInput{Set: true}
-	if text == nil {
-		return nil
-	}
-	d, ok := core.ParseRate(*text)
-	in.Value, in.Invalid = &d, !ok
-	return nil
-}
-
-// checkRates fails with the field errors of the items whose rate_override
-// is no rate.
-func checkRates(ctx context.Context, items []pairInput) error {
-	var fe []core.FieldError
-	for i, it := range items {
-		if it.RateOverride.Invalid {
-			fe = append(fe, fieldError(ctx, "items."+strconv.Itoa(i)+".rate_override", "invalid",
-				"must be a non-negative number with at most 4 decimals", "必须为非负数，最多 4 位小数"))
-		}
-	}
-	if len(fe) > 0 {
-		return core.InvalidFields(fe...)
-	}
-	return nil
-}
-
-// savePairs applies the items, all or none. A field an item leaves out
-// stays as it is.
-func (s *Service) savePairs(ctx context.Context, items []pairInput) error {
-	if err := checkRates(ctx, items); err != nil {
-		return err
-	}
-	if len(items) == 0 {
-		return nil
-	}
-	// One order for every writer: two saves of the same pairs cannot deadlock.
-	// Items on one pair keep the order sent, and items itself is left as
-	// sent: field errors name its positions.
-	ordered := slices.SortedStableFunc(slices.Values(items), func(a, b pairInput) int {
-		return cmp.Or(cmp.Compare(a.SegmentID, b.SegmentID), cmp.Compare(a.GroupID, b.GroupID))
-	})
-	return s.tx(ctx, func(tx *gorm.DB) error {
-		segments, groups, err := lockPairs(ctx, tx, items)
-		if err != nil {
-			return err
-		}
-		if err := guardOwnSegments(ctx, tx, s.users, segments); err != nil {
-			return err
-		}
-		g := store.G(ctx, tx)
-		for _, it := range ordered {
-			if err := savePair(g, it).Error; err != nil {
-				return err
-			}
-		}
-		// A pair that says nothing is not kept.
-		return g.Where("NOT granted AND rate_override IS NULL AND segment_id = ANY(?) AND group_id = ANY(?)",
-			store.Int64s(segments), store.Int64s(groups)).Delete(&model.SegmentGroup{}).Error
-	})
-}
-
-// savePair writes the item: the pair is created, or what the item sets
-// replaces what the pair has.
-func savePair(db *gorm.DB, it pairInput) *gorm.DB {
-	return db.Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "segment_id"}, {Name: "group_id"}},
-		DoUpdates: clause.Assignments(map[string]any{
-			"granted":       gorm.Expr("COALESCE(?, segment_groups.granted)", it.Granted),
-			"rate_override": gorm.Expr("CASE WHEN ? THEN ?::numeric ELSE segment_groups.rate_override END", it.RateOverride.Set, it.RateOverride.Value),
-			"updated_at":    gorm.Expr("now()"),
-		}),
-	}).Create(&newPair{SegmentID: it.SegmentID, GroupID: it.GroupID, Granted: it.Granted != nil && *it.Granted,
-		RateOverride: it.RateOverride.Value})
-}
-
-// newPair is a segment_groups row, every column written as given (an
-// unset grant is false); updated_at is the default, and nothing is read
-// back.
-type newPair struct {
-	SegmentID    int64            `gorm:"column:segment_id"`
-	GroupID      int64            `gorm:"column:group_id"`
-	Granted      bool             `gorm:"column:granted"`
-	RateOverride *decimal.Decimal `gorm:"column:rate_override"`
-}
-
-func (newPair) TableName() string { return model.SegmentGroup{}.TableName() }
-
-// lockPairs returns the segments and the groups the items are about, locked
-// against deletion until the transaction ends. It fails with the field
-// errors of the items about a segment or a group that does not exist.
-func lockPairs(ctx context.Context, tx *gorm.DB, items []pairInput) (segments, groups []int64, err error) {
-	for _, it := range items {
-		segments, groups = append(segments, it.SegmentID), append(groups, it.GroupID)
-	}
-	knownSegments, err := lockRows(ctx, tx, "segments", segments)
-	if err != nil {
-		return nil, nil, err
-	}
-	knownGroups, err := lockRows(ctx, tx, "groups", groups)
-	if err != nil {
-		return nil, nil, err
-	}
-	var fe []core.FieldError
-	for i, it := range items {
-		if !knownSegments[it.SegmentID] || !knownGroups[it.GroupID] {
-			fe = append(fe, fieldError(ctx, "items."+strconv.Itoa(i), "not_found", "unknown user group or group", "用户组或分组不存在"))
-		}
-	}
-	if len(fe) > 0 {
-		return nil, nil, core.InvalidFields(fe...)
-	}
-	return segments, groups, nil
-}
-
-// lockRows reports which of ids are rows of the table and locks those, in id
-// order, against deletion.
-func lockRows(ctx context.Context, tx *gorm.DB, table string, ids []int64) (map[int64]bool, error) {
-	if err := store.RequireTx(tx); err != nil {
+// modelRates reads the model rates the segments have in the groups, by
+// segment and group, each by model.
+func modelRates(ctx context.Context, q *gorm.DB, segments, groups []int64) (map[pairKey][]ModelRate, error) {
+	var rows []model.SegmentModelRate
+	if err := store.G(ctx, q).Select("segment_id", "group_id", "model", "rate").
+		Where("segment_id = ANY(?) AND group_id = ANY(?)", store.Int64s(segments), store.Int64s(groups)).
+		Order("model").Find(&rows).Error; err != nil {
 		return nil, err
 	}
-	var found []int64
-	if err := store.G(ctx, tx).Table(table).Where("id = ANY(?)", store.Int64s(ids)).Order("id").
-		Clauses(store.Lock(store.LockingStrengthKeyShare)).Pluck("id", &found).Error; err != nil {
-		return nil, err
+	out := make(map[pairKey][]ModelRate)
+	for _, r := range rows {
+		k := pairKey{r.SegmentID, r.GroupID}
+		out[k] = append(out[k], ModelRate{Model: r.Model, Rate: r.Rate})
 	}
-	known := make(map[int64]bool, len(found))
-	for _, id := range found {
-		known[id] = true
-	}
-	return known, nil
+	return out, nil
 }

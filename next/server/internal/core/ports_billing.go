@@ -34,8 +34,9 @@ type PriceRule struct {
 	// frozen before core migration 0123 may say "segment" (a user group's
 	// rule, since removed): they settle as any other rule, by Scale and Base.
 	Source string `json:",omitempty"`
-	// Scale is the multiplier of a multiplier rule: the list price is the
-	// expression times it. nil = none.
+	// Scale is the multiplier of a multiplier rule, on prices frozen before
+	// core migration 0124 turned those rules into model rates: the list
+	// price is the expression times it. nil = none.
 	Scale *decimal.Decimal `json:",omitempty"`
 	// Base is the global price when a custom rule replaced the expression;
 	// nil otherwise. It tells what the usage costs at the global price.
@@ -93,6 +94,10 @@ type Pricer interface {
 	// ErrPriceNotConfigured when the model has no global price.
 	Resolve(ctx context.Context, q PriceQuery) (*PriceRule, error)
 	Inputs(rule *PriceRule) (bodyPaths []string, headerNames []string)
+	// ModelRates returns levels with the rates set on the model of q added:
+	// its group's, and that of segment segmentID in the group (CONTRACTS
+	// §97). They come from the snapshot Resolve reads.
+	ModelRates(ctx context.Context, q PriceQuery, segmentID int64, levels RateLevels) (RateLevels, error)
 }
 
 // What a request pays when its client hangs up while the upstream is

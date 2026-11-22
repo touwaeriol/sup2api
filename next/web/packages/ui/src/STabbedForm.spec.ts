@@ -81,6 +81,19 @@ describe('STabbedForm', () => {
     expect(w.get('[data-tab="basic"]').isVisible()).toBe(true)
   })
 
+  it('shows the icon of a side tab in a tile, the number leading its title', () => {
+    const w = mount(STabbedForm, { props: { tabs: [{ ...TABS[0], icon: 'key' }, TABS[1]], modelValue: 'basic', layout: 'side', idPrefix: 'i' }, slots: { default: 'x' } })
+    expect(w.get('#i-tab-basic').find('svg').exists()).toBe(true)
+    expect(w.get('#i-tab-basic').text()).toMatch(/^1\s*Basic/)
+    expect(w.get('#i-tab-prices').find('svg').exists()).toBe(false)
+  })
+
+  it('puts the before-nav slot above the side navigation', () => {
+    const w = mount(STabbedForm, { props: { tabs: TABS, modelValue: 'basic', layout: 'side' }, slots: { 'before-nav': '<div data-testid="lead">Account type</div>', default: 'x' } })
+    const lead = w.get('[data-testid="lead"]').element
+    expect(lead.nextElementSibling?.getAttribute('role')).toBe('tablist')
+  })
+
   it('hides a heading that repeats the title of its tab', () => {
     const w = mount(STabbedForm, { props: { tabs: TABS, modelValue: 'basic' }, slots: { default: () => h(SSettingsGroup, { title: 'Basic' }, () => 'content') } })
     expect(w.get('[data-tab="basic"]').find('h5').exists()).toBe(false)
@@ -139,8 +152,35 @@ describe('useTabbedForm', () => {
     const a: TabbedFormPart = { tab: 'a', body: () => ({}), fields: ['name'] }
     const b: TabbedFormPart = { tab: 'b', body: () => ({}), fields: ['model_rates'] }
     const out = errorsByPart([a, b], { name: 'x', 'name.first': 'y', names: 'z', 'model_rates.0.rate': 'w' })
+    expect(errorsByPart([a], { 'name[0]': 'v' }).get(a)).toEqual({ 'name[0]': 'v' })
     expect(out.get(a)).toEqual({ name: 'x', 'name.first': 'y' })
     expect(out.get(b)).toEqual({ 'model_rates.0.rate': 'w' })
+  })
+
+  it('waits for a check that waits, and is saving meanwhile', async () => {
+    const { form } = mountEditor()
+    let pass!: (ok: boolean) => void
+    form().register({ tab: 'rates', body: () => ({}), check: () => new Promise<boolean>((r) => (pass = r)) })
+    const answer = form().submit(async () => 'sent')
+    await nextTick()
+    expect(form().saving.value).toBe(true)
+    pass(false)
+    expect(await answer).toBe(false)
+    expect(form().saving.value).toBe(false)
+    expect(form().current.value).toBe('rates')
+  })
+
+  it('marks the tab of an invalid part as its errors come and go, not by the last Save', async () => {
+    const { w, form } = mountEditor()
+    const wrong = ref(true)
+    form().register({ tab: 'prices', body: () => ({}), check: () => !wrong.value, invalid: wrong })
+    expect(form().errorTabs.value).toEqual(['prices'])
+    expect(await form().submit(async () => 'sent')).toBe(false)
+    expect(form().current.value).toBe('prices')
+    wrong.value = false
+    expect(form().errorTabs.value).toEqual([])
+    await nextTick()
+    expect(w.get('#f-tab-prices').find('[data-testid="tab-mark-error"]').exists()).toBe(false)
   })
 
   it('forgets the part of a component that is gone', async () => {

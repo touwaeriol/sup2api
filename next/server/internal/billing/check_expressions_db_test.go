@@ -49,9 +49,8 @@ func TestCheckStoredExpressions(t *testing.T) {
 			model, mode, row[0], row[1], expr.Hash(row[1]))
 	}
 	exec(`INSERT INTO groups (name) VALUES ('check')`)
-	exec(`INSERT INTO price_rules (group_id, model, kind, mode, config, expression, expr_hash)
-		SELECT id, 'ok', 'custom', 'visual', '{"tiers": [{"name": "base", "unit": "request", "price": 1}]}', '$env.p', $1 FROM groups WHERE name = 'check'`, expr.Hash(`tier("base", flat(1))`))
-	exec(`INSERT INTO price_rules (group_id, model, kind, multiplier) SELECT id, 'negative', 'multiplier', 2 FROM groups WHERE name = 'check'`)
+	exec(`INSERT INTO price_rules (group_id, model, mode, config, expression, expr_hash)
+		SELECT id, 'ok', 'visual', '{"tiers": [{"name": "base", "unit": "request", "price": 1}]}', '$env.p', $1 FROM groups WHERE name = 'check'`, expr.Hash(`tier("base", flat(1))`))
 	exec(`INSERT INTO model_price_history (expr_hash, expression, expr_version) VALUES ('old', 'v1:' || $1, 1)`, negative)
 
 	problems := func() map[string]string {

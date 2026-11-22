@@ -33,34 +33,30 @@ func (e *env) keyGroupStatus(user int64) any {
 }
 
 // Authentication reads what the owner's segment gets in the key's group: a
-// private group needs the grant, and the rate is the segment's own there,
-// else the group's times the segment's discount, else the group's.
+// private group needs the grant; the principal carries the group's base rate
+// and the segment's own rate there, the latter applying (core.RateLevels).
 func TestAuthenticateSegmentTerms(t *testing.T) {
 	e := setup(t)
 	for _, c := range []struct {
-		name                string
-		visibility          string
-		groupRate, discount string
+		name                  string
+		visibility, groupRate string
 		// row is the segment's (granted, rate_override) in the group; nil = none.
 		row []any
 		// rate is "" when the group is not open to the owner.
 		rate, source string
 	}{
-		{"public, group rate", "public", "1.5", "1", nil, "1.5", core.RateSourceGroup},
-		{"public, discount", "public", "1.5", "0.8", nil, "1.2", core.RateSourceDiscount},
-		{"public, discount rounded to 4 decimals", "public", "1.3333", "0.3333", nil, "0.4444", core.RateSourceDiscount},
-		{"public, own rate ignores the discount", "public", "1.5", "0.8", []any{false, "2.5"}, "2.5", core.RateSourceSegment},
-		{"public, own rate 0 is free", "public", "1.5", "0.8", []any{false, "0"}, "0", core.RateSourceSegment},
-		{"private granted, group rate", "restricted", "2", "1", []any{true, nil}, "2", core.RateSourceGroup},
-		{"private granted, discount", "restricted", "2", "0.5", []any{true, nil}, "1", core.RateSourceDiscount},
-		{"private granted, own rate", "restricted", "2", "0.5", []any{true, "0.25"}, "0.25", core.RateSourceSegment},
-		{"private granted, own rate 0 is free", "restricted", "2", "1", []any{true, "0"}, "0", core.RateSourceSegment},
-		{"private, nothing set", "restricted", "2", "1", nil, "", ""},
-		{"private, own rate without the grant", "restricted", "2", "0.5", []any{false, "0.25"}, "", ""},
+		{"public, group rate", "public", "1.5", nil, "1.5", core.RateSourceGroup},
+		{"public, own rate", "public", "1.5", []any{false, "2.5"}, "2.5", core.RateSourceSegment},
+		{"public, own rate 0 is free", "public", "1.5", []any{false, "0"}, "0", core.RateSourceSegment},
+		{"private granted, group rate", "restricted", "2", []any{true, nil}, "2", core.RateSourceGroup},
+		{"private granted, own rate", "restricted", "2", []any{true, "0.25"}, "0.25", core.RateSourceSegment},
+		{"private granted, own rate 0 is free", "restricted", "2", []any{true, "0"}, "0", core.RateSourceSegment},
+		{"private, nothing set", "restricted", "2", nil, "", ""},
+		{"private, own rate without the grant", "restricted", "2", []any{false, "0.25"}, "", ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			group := e.exec1(`INSERT INTO groups (name, visibility, rate_multiplier) VALUES ($1, $2, $3::numeric) RETURNING id`, c.name, c.visibility, c.groupRate)
-			seg := e.exec1(`INSERT INTO segments (name, discount) VALUES ($1, $2::numeric) RETURNING id`, c.name, c.discount)
+			seg := e.exec1(`INSERT INTO segments (name) VALUES ($1) RETURNING id`, c.name)
 			e.exec(`UPDATE users SET segment_id = $2 WHERE id = $1`, e.user, seg)
 			if c.row != nil {
 				e.exec(`INSERT INTO segment_groups (segment_id, group_id, granted, rate_override) VALUES ($1, $2, $3, $4::numeric)`, seg, group, c.row[0], c.row[1])
@@ -79,7 +75,8 @@ func TestAuthenticateSegmentTerms(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			require.Equal(t, []any{seg, c.rate, c.source}, []any{p.SegmentID, p.Group.RateMultiplier.String(), p.RateSource})
+			rate, source := p.Rates().Rate()
+			require.Equal(t, []any{seg, c.groupRate, c.rate, c.source}, []any{p.SegmentID, p.Group.RateMultiplier.String(), rate.String(), source})
 		})
 	}
 }
@@ -98,7 +95,7 @@ func TestLookupUsesOpenToUser(t *testing.T) {
 func TestSegmentChangeAppliesAtOnce(t *testing.T) {
 	e := setup(t)
 	vip := e.exec1(`INSERT INTO groups (name, visibility, rate_multiplier) VALUES ('vip', 'restricted', 2) RETURNING id`)
-	team := e.exec1(`INSERT INTO segments (name, discount) VALUES ('team', 0.5) RETURNING id`)
+	team := e.exec1(`INSERT INTO segments (name) VALUES ('team') RETURNING id`)
 	solo := e.exec1(`INSERT INTO segments (name) VALUES ('solo') RETURNING id`)
 	e.exec(`INSERT INTO segment_groups (segment_id, group_id, granted, rate_override) VALUES ($1, $3, true, NULL), ($2, $3, true, 3)`, team, solo, vip)
 	raw := e.addKey(e.user, vip)
@@ -112,10 +109,10 @@ func TestSegmentChangeAppliesAtOnce(t *testing.T) {
 		rate, source string
 	}{
 		{"the default segment has no grant", "", nil, "", ""},
-		{"moved to a granted segment", move, []any{e.user, team}, "1", core.RateSourceDiscount},
+		{"moved to a granted segment", move, []any{e.user, team}, "2", core.RateSourceGroup},
 		{"moved to a segment with its own rate", move, []any{e.user, solo}, "3", core.RateSourceSegment},
 		{"own rate removed", `UPDATE segment_groups SET rate_override = NULL WHERE segment_id = $1`, []any{solo}, "2", core.RateSourceGroup},
-		{"discount set", `UPDATE segments SET discount = 0.75 WHERE id = $1`, []any{solo}, "1.5", core.RateSourceDiscount},
+		{"own rate set", `UPDATE segment_groups SET rate_override = 1.5 WHERE segment_id = $1`, []any{solo}, "1.5", core.RateSourceSegment},
 		{"grant revoked", `UPDATE segment_groups SET granted = false WHERE segment_id = $1`, []any{solo}, "", ""},
 	} {
 		t.Run(step.name, func(t *testing.T) {
@@ -129,7 +126,8 @@ func TestSegmentChangeAppliesAtOnce(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			require.Equal(t, []any{step.rate, step.source}, []any{p.Group.RateMultiplier.String(), p.RateSource})
+			rate, source := p.Rates().Rate()
+			require.Equal(t, []any{step.rate, step.source}, []any{rate.String(), source})
 			require.Equal(t, "active", e.keyGroupStatus(e.user))
 		})
 	}

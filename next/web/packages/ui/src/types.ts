@@ -55,9 +55,10 @@ export interface TabItem {
   disabled?: boolean
 }
 
-/** A tab of STabbedForm (UI 4.1); `summary` is the line under its title in the side layout. */
+/** A tab of STabbedForm (UI 4.1); `summary` is the line under its title and `icon` (an SIcon name) a tile before it, in the side layout. */
 export interface FormTab extends TabItem {
   summary?: string
+  icon?: string
 }
 
 export interface SelectOption {

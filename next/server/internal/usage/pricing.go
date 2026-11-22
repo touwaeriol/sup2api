@@ -177,8 +177,8 @@ func quote(ctx context.Context, q core.Quoter, p *pending, rule *core.PriceRule)
 }
 
 // withRule turns the amounts and detail of the row's expression into those
-// of a price rule. A multiplier rule scales the global price: tier, rules
-// and breakdown stay the global price's. A custom rule replaces it: they are
+// of a price rule. A multiplier rule (frozen before core migration 0124)
+// scales the global price: tier, rules and breakdown stay the global price's. A custom rule replaces it: they are
 // the rule's, and the global price is evaluated for the base cost alone. The
 // base cost is shown, not charged: a global price that cannot be evaluated
 // leaves it at the list cost rather than block the charge.

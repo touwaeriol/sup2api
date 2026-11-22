@@ -68,7 +68,7 @@ export default {
     addModels: '添加',
     groupModelHint: '账号模型与账号分组白名单分别生效；API Key 所属账号分组也必须允许请求模型。',
  authMethod: '认证方式', connection: '接入配置', models: '协议与模型', scheduling: '调度与限流', advanced: '高级', navigation: '账号配置导航', searchTypes: '搜索服务商或账号类型',
-    unnamed: '尚未填写名称', allModels: '全部模型', modelsSummary: '{n} 个模型', mappingSummary: '{n} 条映射', summaryPriority: '优先级 {n}', summaryWeight: '权重 {n}', summaryConcurrency: '并发 {n}', pluginSectionAfterSave: '保存账号后可配置', sectionHasErrors: '此处有待修正的内容',
+    unnamed: '尚未填写名称', allModels: '全部模型', modelsSummary: '{n} 个模型', mappingSummary: '{n} 条映射', summaryPriority: '优先级 {n}', summaryWeight: '权重 {n}', summaryConcurrency: '并发 {n}', pluginSectionAfterSave: '保存账号后可配置',
     basicHint: '账号名称、所属账号分组与出口代理', namePlaceholder: '例如 claude-main', groupsHint: '未加入账号分组的账号不会被调度', credentialsHint: '连接凭证由插件「{plugin}」校验与保存',
     modelsCardHint: '账号可服务的请求模型；留空表示不限制', mappingCardHint: '把请求模型改写为上游模型；计费、白名单仍按请求模型', prefilled: '已按插件预设填入 {what}，可直接保存，也可按需增删；清空模型列表表示可服务所有模型。',
     prefilledEdit: "该账号原为不限模型，已按插件预设填充 {what}，保存后生效；如需保持不限请点'清空'。", prefillWhat: '{models} 个模型', prefillWhatMapping: '{models} 个模型与 {mapping} 条映射', prefilledFooter: '模型已按插件预设填充，保存后生效', prefilledView: '查看',

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/shopspring/decimal"
 	"github.com/tidwall/gjson"
 
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
@@ -29,6 +30,9 @@ func (c *call) prepareBilling(ctx context.Context) *gwError {
 	c.price = rule
 	c.rec.Price = rule
 	c.capturePriceInputs(c.price)
+	if c.rec.RateMultiplier, c.rec.RateSource, e = c.modelRate(ctx, c.model); e != nil {
+		return e
+	}
 	if e := c.prepareReferencedPrices(ctx); e != nil {
 		return e
 	}
@@ -60,6 +64,17 @@ func (c *call) resolvePrice(ctx context.Context) (*core.PriceRule, *gwError) {
 			RecordType: errTypeInvalidRequest}
 	}
 	return rule, nil
+}
+
+// modelRate is the rate the key's owner pays for model in the key's group
+// and where it comes from (core.RateLevels).
+func (c *call) modelRate(ctx context.Context, model string) (decimal.Decimal, string, *gwError) {
+	levels, err := c.g.d.Pricer.ModelRates(ctx, c.priceQuery(model), c.principal.SegmentID, c.principal.Rates())
+	if err != nil {
+		return decimal.Zero, "", fromCore(core.AsError(err), errTypeInternal)
+	}
+	rate, source := levels.Rate()
+	return rate, source, nil
 }
 
 // typedError is the gateway error of err, recorded as recordType when its

@@ -13,7 +13,7 @@ import (
 
 func TestAddMembers(t *testing.T) {
 	e := setup(t)
-	vip, def := e.segment("VIP", "1"), e.defaultSegment()
+	vip, def := e.segment("VIP"), e.defaultSegment()
 	group := e.group("private", "restricted", "1")
 	third := e.user("third@x.com")
 	moved := func(segment int64, users ...int64) any {
@@ -55,7 +55,7 @@ func TestAddMembers(t *testing.T) {
 func TestSegmentDeleteRace(t *testing.T) {
 	e := setup(t)
 	for round := range 5 {
-		vip := e.segment(path("vip %d", round), "0.9")
+		vip := e.segment(path("vip %d", round))
 		users := []int64{e.user(path("a%d@x.com", round)), e.user(path("b%d@x.com", round)), e.user(path("c%d@x.com", round))}
 		e.exec(`UPDATE users SET segment_id = $1 WHERE id = ANY($2)`, vip, users)
 		calls := []func() int{
@@ -91,7 +91,7 @@ func TestSegmentDeleteRace(t *testing.T) {
 func TestSegmentDeleteWaitsForMovers(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
-	vip := e.segment("vip", "0.9")
+	vip := e.segment("vip")
 	users := []int64{e.user("a@x.com"), e.user("b@x.com"), e.user("c@x.com")}
 	e.exec(`UPDATE users SET segment_id = $1 WHERE id = ANY($2)`, vip, users)
 	for _, u := range users {
@@ -148,41 +148,11 @@ func TestMixedWritersRace(t *testing.T) {
 	for i := range users {
 		users[i] = e.user(path("s%d@x.com", i))
 	}
-	call := func(method, path string, body any) func() int {
-		return func() int { return e.do(e.admin, method, path, body).code }
-	}
 	for round := range 25 {
-		a, b := e.segment(path("a %d", round), "0.9"), e.segment(path("b %d", round), "0.8")
+		a, b := e.segment(path("a %d", round)), e.segment(path("b %d", round))
 		e.exec(`UPDATE users SET segment_id = $1 WHERE id = ANY($2) AND segment_id IN (SELECT id FROM segments WHERE kind = 'named')`, a, users[:6])
 		e.pair(a, groups[0], true, "0.5")
-		calls := []func() int{
-			call("DELETE", path("/segments/%d", a), nil),
-			call("DELETE", path("/segments/%d", b), nil),
-			call("POST", path("/segments/%d/members", b), map[string]any{"user_ids": users}),
-			call("POST", path("/segments/%d/members", a), map[string]any{"user_ids": users}),
-			call("POST", path("/segments/%d/members", e.defaultSegment()), map[string]any{"user_ids": users[3:9]}),
-			call("GET", "/segments?kind=personal", nil),
-		}
-		for _, u := range users[:8] {
-			calls = append(calls,
-				call("POST", path("/users/%d/personal-segment", u), map[string]any{"copy": true}),
-				call("DELETE", path("/users/%d/personal-segment?to=%d", u, b), nil))
-		}
-		for _, g := range groups {
-			calls = append(calls, call("PUT", path("/groups/%d/segments", g), map[string]any{"items": []any{
-				map[string]any{"segment_id": b, "granted": true, "rate_override": "0.3"},
-				map[string]any{"segment_id": a, "granted": false, "rate_override": nil},
-			}}))
-		}
-		for _, s := range []int64{a, b} {
-			calls = append(calls,
-				call("GET", path("/segments/%d/groups", s), nil),
-				call("PUT", path("/segments/%d/groups", s), map[string]any{"items": []any{
-					map[string]any{"group_id": groups[2], "rate_override": "0.7"},
-					map[string]any{"group_id": groups[0], "granted": true},
-					map[string]any{"group_id": groups[1], "granted": false, "rate_override": nil},
-				}}))
-		}
+		calls := e.mixedWriters(a, b, users, groups)
 		codes := concurrently(len(calls), func(i int) int { return calls[i]() })
 		for _, code := range codes {
 			require.Less(t, code, 500, "round %d: %v", round, codes)
@@ -193,4 +163,37 @@ func TestMixedWritersRace(t *testing.T) {
 			"a user in the personal segment of another")
 		require.Zero(t, e.id(`SELECT count(*) FROM segment_groups WHERE NOT granted AND rate_override IS NULL`), "a pair that says nothing")
 	}
+}
+
+// mixedWriters are the writes of TestMixedWritersRace on segments a and b,
+// each answering its status.
+func (e *env) mixedWriters(a, b int64, users, groups []int64) []func() int {
+	call := func(method, path string, body any) func() int {
+		return func() int { return e.do(e.admin, method, path, body).code }
+	}
+	calls := []func() int{
+		call("DELETE", path("/segments/%d", a), nil),
+		call("DELETE", path("/segments/%d", b), nil),
+		call("POST", path("/segments/%d/members", b), map[string]any{"user_ids": users}),
+		call("POST", path("/segments/%d/members", a), map[string]any{"user_ids": users}),
+		call("POST", path("/segments/%d/members", e.defaultSegment()), map[string]any{"user_ids": users[3:9]}),
+		call("GET", "/segments?kind=personal", nil),
+	}
+	for _, u := range users[:8] {
+		calls = append(calls, call("POST", path("/users/%d/personal-segment", u), map[string]any{"copy": true}),
+			call("DELETE", path("/users/%d/personal-segment?to=%d", u, b), nil))
+	}
+	for _, g := range groups {
+		calls = append(calls, e.groupCall(g, map[string]any{"segment_id": b, "granted": true, "rate": "0.3"},
+			map[string]any{"segment_id": a, "granted": false, "rate": nil}))
+	}
+	for _, s := range []int64{a, b} {
+		calls = append(calls, call("GET", path("/segments/%d/groups", s), nil),
+			call("PATCH", path("/segments/%d", s), map[string]any{"group_rates": []any{
+				map[string]any{"group_id": groups[2], "rate": "0.7"},
+				map[string]any{"group_id": groups[0], "granted": true, "rate": nil},
+				map[string]any{"group_id": groups[1], "granted": false, "rate": nil},
+			}, "model_rates": []any{map[string]any{"group_id": groups[0], "model": "m", "rate": "0.5"}}}))
+	}
+	return calls
 }

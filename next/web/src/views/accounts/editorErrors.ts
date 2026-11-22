@@ -1,5 +1,5 @@
 // Server field errors of the account editor (ApiError.fields) and the section
-// that holds each field; the common controls of each section.
+// whose request fields they are; the common controls of each section.
 import type { CommonControlName } from '@/api/types'
 
 /** The core sections and the plugin ones (`plugin:<plugin>:<component>`, account.editor.section). */
@@ -19,22 +19,27 @@ const SCHEDULING_CONTROLS: readonly CommonControlName[] = [...SCHEDULING_ROWS, .
  */
 export const SECTION_CONTROLS: Partial<Record<EditorSection, readonly CommonControlName[]>> = { scheduling: SCHEDULING_CONTROLS }
 
-export const CONNECTION_FIELDS = ['name', 'group_ids', 'proxy_id', 'proxy_url', 'settings']
-
 /** Whether the field (or a part of it: `field.x`, `field[0]`) is one of these. */
 const fieldOf = (fields: readonly string[]) => (k: string) => fields.some(p => k === p || k.startsWith(`${p}.`) || k.startsWith(`${p}[`))
 
-/** The advanced section (request forwarding): header passthrough rules (CONTRACTS §81), the header override (§108), the parameter override (§84), the conversion loss policy (CONVERT-MATRIX §6.3) and the account layer of the environment variables (`environment.<key>`). */
-export const isAdvancedField = fieldOf(['header_passthrough', 'header_override', 'param_override', 'conversion_loss_policy', 'environment'])
+/**
+ * The request fields of each core section, as field prefixes: the part of the
+ * save that sends them claims their server errors (useTabbedForm), and a
+ * section holding an error of one is marked.
+ */
+export const SECTION_FIELDS = {
+  connection: ['name', 'group_ids', 'proxy_id', 'proxy_url', 'settings', 'credentials'],
+  /** The model list, the mapping and the two protocol fields (DESIGN-2026-11-17-PROTOCOL-BINDING §4). */
+  models: ['models', 'model_mapping', 'protocols', 'model_protocols'],
+  /** The scheduling section's controls and the session window (a model list's limits included). */
+  scheduling: [...SCHEDULING_CONTROLS, 'spm_window_seconds'],
+  /** Request forwarding: header passthrough (CONTRACTS §81), header override (§108), parameter override (§84), conversion loss policy (CONVERT-MATRIX §6.3), the account layer of the environment variables (`environment.<key>`). */
+  advanced: ['header_passthrough', 'header_override', 'param_override', 'conversion_loss_policy', 'environment']
+} as const satisfies Partial<Record<EditorSection, readonly string[]>>
+export type CoreSection = keyof typeof SECTION_FIELDS
 
-/** Scheduling and limit fields: the scheduling section's controls and the session window (a model list's limits included). */
-export const isSchedulingField = fieldOf([...SCHEDULING_CONTROLS, 'spm_window_seconds'])
-
-const CREDENTIAL_RE = /^credentials[.[]?(.*?)]?$/
-/** The two protocol fields (DESIGN-2026-11-17-PROTOCOL-BINDING §4): `protocols[i]`, `model_protocols[i].models[j]`, `model_protocols[i].protocols[j]`. */
-export const isProtocolField = fieldOf(['protocols', 'model_protocols'])
-/** The "protocols and models" section: the model list, the mapping and the two protocol fields. */
-const isModelsField = fieldOf(['models', 'model_mapping', 'protocols', 'model_protocols'])
+/** Whether a field belongs to the section: `protocols[1]` and `model_protocols[0].models[2]` to models, `environment.x` to advanced. */
+export const isSectionField = (section: CoreSection) => fieldOf(SECTION_FIELDS[section])
 
 /** The server's error of the model list / mapping, as `field: text` ('' when there is none). */
 export function modelsErrorText(errors: Record<string, string>): string {
@@ -70,6 +75,7 @@ export function ruleErrors(errors: Record<string, string>): { general: string[];
   return { general, byEntry }
 }
 
+const CREDENTIAL_RE = /^credentials[.[]?(.*?)]?$/
 /** Splits field errors into the plugin form's (`credentials.x` → `x`) and the editor's own. */
 export function splitFieldErrors(all: Record<string, string>): { cred: Record<string, string>; base: Record<string, string> } {
   const cred: Record<string, string> = {}
@@ -82,10 +88,3 @@ export function splitFieldErrors(all: Record<string, string>): { cred: Record<st
   return { cred, base }
 }
 
-/** The first section holding one of these errors, or null. */
-export function sectionOfErrors(base: Record<string, string>, cred: Record<string, string>): EditorSection | null {
-  if (Object.keys(cred).length || CONNECTION_FIELDS.some(k => k in base)) return 'connection'
-  if (Object.keys(base).some(isModelsField)) return 'models'
-  if (Object.keys(base).some(isAdvancedField) && !Object.keys(base).some(isSchedulingField)) return 'advanced'
-  return Object.keys(base).length ? 'scheduling' : null
-}

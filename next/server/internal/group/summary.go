@@ -13,8 +13,8 @@ import (
 // PricingSummary is what a group row tells of group pricing (CONTRACTS §97).
 type PricingSummary struct {
 	Access Access `json:"access"`
-	// PriceRuleCount counts the model prices of the group, as its pricing
-	// table lists them: on any model, provided now or not.
+	// PriceRuleCount counts the models the group sets a price or a rate of
+	// its own on, as its pricing table lists them: provided now or not.
 	PriceRuleCount int64 `json:"price_rule_count"`
 	// ModelCount is the number of models the group provides (Models.Offered).
 	ModelCount int `json:"model_count"`
@@ -53,13 +53,17 @@ func (s *Service) fillSummary(ctx context.Context, gs []*Group) error {
 	return nil
 }
 
-// ruleCounts counts the price rules of each of the groups, by group id.
+// ruleCounts counts, for each of the groups, the models it sets a price
+// (price_rules) or a rate (group_model_rates) of its own on, by group id.
 func ruleCounts(ctx context.Context, q *gorm.DB, ids []int64) (map[int64]int64, error) {
 	var rows []struct {
 		GroupID int64 `gorm:"column:group_id"`
 		N       int64 `gorm:"column:n"`
 	}
-	if err := store.G(ctx, q).Model(&model.PriceRule{}).Select("group_id, count(*) AS n").Where("group_id = ANY(?)", store.Int64s(ids)).
+	g := store.G(ctx, q)
+	priced := g.Model(&model.PriceRule{}).Select("group_id, model").Where("group_id = ANY(?)", store.Int64s(ids))
+	rated := g.Model(&model.GroupModelRate{}).Select("group_id, model").Where("group_id = ANY(?)", store.Int64s(ids))
+	if err := g.Table("((?) UNION (?)) AS m", priced, rated).Select("group_id, count(*) AS n").
 		Group("group_id").Scan(&rows).Error; err != nil {
 		return nil, err
 	}
@@ -76,12 +80,7 @@ func groupAccess(ctx context.Context, q *gorm.DB, ids []int64) (map[int64]Access
 	for _, id := range ids {
 		out[id] = Access{Segments: []core.SegmentRef{}}
 	}
-	var rows []struct {
-		GroupID       int64         `gorm:"column:group_id"`
-		SegmentIDs    store.Int64s  `gorm:"column:segment_ids"`
-		Names         store.Strings `gorm:"column:names"`
-		PersonalCount int64         `gorm:"column:personal_count"`
-	}
+	var rows []accessRow
 	// For each private group of ids that grants a segment: the named
 	// segments granted it (ids and names in id order) and the number of
 	// personal ones.
@@ -95,11 +94,23 @@ func groupAccess(ctx context.Context, q *gorm.DB, ids []int64) (map[int64]Access
 		return nil, err
 	}
 	for _, r := range rows {
-		a := Access{Segments: []core.SegmentRef{}, PersonalCount: r.PersonalCount}
-		for i, id := range r.SegmentIDs {
-			a.Segments = append(a.Segments, core.SegmentRef{ID: id, Kind: core.SegmentNamed, Name: r.Names[i]})
-		}
-		out[r.GroupID] = a
+		out[r.GroupID] = r.access()
 	}
 	return out, nil
+}
+
+// accessRow is who a private group is granted to, as groupAccess reads it.
+type accessRow struct {
+	GroupID       int64         `gorm:"column:group_id"`
+	SegmentIDs    store.Int64s  `gorm:"column:segment_ids"`
+	Names         store.Strings `gorm:"column:names"`
+	PersonalCount int64         `gorm:"column:personal_count"`
+}
+
+func (r accessRow) access() Access {
+	a := Access{Segments: []core.SegmentRef{}, PersonalCount: r.PersonalCount}
+	for i, id := range r.SegmentIDs {
+		a.Segments = append(a.Segments, core.SegmentRef{ID: id, Kind: core.SegmentNamed, Name: r.Names[i]})
+	}
+	return a
 }

@@ -35,38 +35,49 @@ const (
 	UsableGroup = `g.status = 'active' AND ` + OpenToUser
 )
 
-// Terms is what a segment gets in a group.
+// Terms is what a segment gets in a group, the model aside.
 type Terms struct {
 	SegmentID int64
 	// Granted is the explicit grant; Open reports whether members may use
 	// the group: it is public or granted.
 	Granted, Open bool
-	// GroupRate is the group's default rate, Discount the segment's and
-	// Override the segment's own rate in the group (nil = none).
-	GroupRate, Discount decimal.Decimal
-	Override            *decimal.Decimal
-	// Rate is the rate members pay there and RateSource where it comes from
-	// (core.SegmentRate).
+	// GroupRate is the group's base rate and Override the segment's own
+	// rate in the group (nil = none).
+	GroupRate decimal.Decimal
+	Override  *decimal.Decimal
+	// Rate is the rate members pay there for a model with no rate of its
+	// own and RateSource where it comes from (core.RateLevels).
 	Rate       decimal.Decimal
 	RateSource string
 }
 
-// EffectiveRate is a rate with what it was made of, as the console shows it.
+// Levels are the rate levels of the terms; the model levels are the
+// caller's to add.
+func (t Terms) Levels() core.RateLevels {
+	return core.RateLevels{Segment: t.Override, Group: t.GroupRate}
+}
+
+// EffectiveRate is a rate with where it comes from, as the console shows it.
 type EffectiveRate struct {
 	Value        decimal.Decimal `json:"value"`
 	Source       string          `json:"source"`
 	GroupDefault decimal.Decimal `json:"group_default"`
-	Discount     decimal.Decimal `json:"discount"`
+}
+
+// RateOf returns the rate levels pick for the console.
+func RateOf(l core.RateLevels) EffectiveRate {
+	value, source := l.Rate()
+	return EffectiveRate{Value: value, Source: source, GroupDefault: l.Group}
 }
 
 // EffectiveRate returns the terms' rate for the console.
 func (t Terms) EffectiveRate() EffectiveRate {
-	return EffectiveRate{Value: t.Rate, Source: t.RateSource, GroupDefault: t.GroupRate, Discount: t.Discount}
+	return EffectiveRate{Value: t.Rate, Source: t.RateSource, GroupDefault: t.GroupRate}
 }
 
 // termsColumns are the columns of a termsRow.
 const termsColumns = `g.id AS group_id, s.id AS segment_id, COALESCE(sg.granted, false) AS granted, g.visibility = 'public' AS public,
-	g.rate_multiplier, s.discount, sg.rate_override`
+	g.rate_multiplier, sg.rate_override`
 
 // termsRow is what a segment gets in a group, as stored.
 type termsRow struct {
@@ -75,8 +86,15 @@ type termsRow struct {
 	Granted      bool             `gorm:"column:granted"`
 	Public       bool             `gorm:"column:public"`
 	GroupRate    decimal.Decimal  `gorm:"column:rate_multiplier"`
-	Discount     decimal.Decimal  `gorm:"column:discount"`
 	RateOverride *decimal.Decimal `gorm:"column:rate_override"`
+}
+
+// terms returns the row as Terms.
+func (r termsRow) terms() Terms {
+	t := Terms{SegmentID: r.SegmentID, Granted: r.Granted, Open: r.Public || r.Granted,
+		GroupRate: r.GroupRate, Override: r.RateOverride}
+	t.Rate, t.RateSource = t.Levels().Rate()
+	return t
 }
 
 // UserTerms returns the terms of the user's segment in each of the groups
@@ -121,9 +139,7 @@ func queryTerms(ctx context.Context, q *gorm.DB, key func(groupID int64, t Terms
 	}
 	out := make(map[int64]Terms, len(rows))
 	for _, r := range rows {
-		t := Terms{SegmentID: r.SegmentID, Granted: r.Granted, Open: r.Public || r.Granted,
-			GroupRate: r.GroupRate, Discount: r.Discount, Override: r.RateOverride}
-		t.Rate, t.RateSource = core.SegmentRate(t.GroupRate, t.Discount, t.Override)
+		t := r.terms()
 		out[key(r.GroupID, t)] = t
 	}
 	return out, nil

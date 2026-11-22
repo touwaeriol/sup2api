@@ -623,19 +623,24 @@ type GroupInfo struct {
 }
 
 // APIKeyPrincipal is the result of gateway authentication. Group.RateMultiplier
-// is the rate the key's owner pays in the group (SegmentRate), not the
-// group's default.
+// is the group's base rate.
 type APIKeyPrincipal struct {
 	KeyID  int64
 	UserID int64
-	// SegmentID is the segment of the key's owner; RateSource is where
-	// Group.RateMultiplier comes from (RateSource*).
-	SegmentID  int64
-	RateSource string
+	// SegmentID is the segment of the key's owner and RateOverride its own
+	// rate in the key's group (nil = none).
+	SegmentID    int64
+	RateOverride *decimal.Decimal
 	// KeyLimits and KeyQuota are the caps the key's owner set on it.
 	KeyLimits KeyLimits
 	KeyQuota  KeyQuota
 	Group     GroupInfo
+}
+
+// Rates are the rate levels of the key's owner in the key's group, the
+// model aside: Pricer.ModelRates adds those of a model.
+func (p *APIKeyPrincipal) Rates() RateLevels {
+	return RateLevels{Segment: p.RateOverride, Group: p.Group.RateMultiplier}
 }
 
 // KeyQuota is an API key's spend cap in USD (Limit 0 = unlimited) and what

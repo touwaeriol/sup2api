@@ -12,6 +12,7 @@ type PriceRule struct {
 	ID         int64           `gorm:"column:id;primaryKey;default:(-)"`                   // bigint default nextval('price_rules_id_seq'::regclass)
 	GroupID    int64           `gorm:"column:group_id"`                                    // bigint
 	Model      string          `gorm:"column:model"`                                       // text
+	Kind       *string         `gorm:"column:kind;default:(-)"`                            // character varying(20) default 'custom'::character varying
 	Mode       string          `gorm:"column:mode"`                                        // character varying(20)
 	Config     json.RawMessage `gorm:"column:config"`                                      // jsonb
 	Expression string          `gorm:"column:expression;default:(-)"`                      // text default ''::text

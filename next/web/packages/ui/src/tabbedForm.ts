@@ -10,26 +10,32 @@ import { isApiError } from '@sub2api/host'
 export interface TabbedFormPart {
   /** The tab that shows the part: a failed check or a field error opens it. */
   tab: string
-  /** Whether the part can be sent; false keeps the request back, and the part shows why. Default true. */
-  check?: () => boolean
+  /** Whether the part can be sent; false keeps the request back, and the part shows why. It may wait (a plugin form validating). Default true. */
+  check?: () => boolean | Promise<boolean>
   /** What the part adds to the request body; it is merged with the other parts' (their fields must not overlap). */
   body: () => Record<string, unknown>
   /** Whether the part holds unsaved changes. */
   dirty?: MaybeRefOrGetter<boolean>
-  /** The body fields the part sends, as path prefixes: "name" claims the field errors "name" and "name.x", "model_prices" also "model_prices.0.rule". */
+  /** The body fields the part sends, as path prefixes: "name" claims the field errors "name", "name.x" and "name[0]", "model_prices" also "model_prices.0.rule". */
   fields?: readonly string[]
   /** Takes the field errors the part claims, keyed by their full paths. */
   applyErrors?: (errors: Record<string, string>) => void
+  /**
+   * Whether the part shows an error now (one typed in, or one the server
+   * gave and the part still holds). When given, it alone marks the tab, as
+   * the part's errors come and go; else the last Save's result does.
+   */
+  invalid?: MaybeRefOrGetter<boolean>
 }
 
 export interface TabbedForm {
   /** The tab in front. */
   current: Ref<string>
-  /** A request is under way. */
+  /** Save is under way: its checks or its request. */
   saving: Readonly<Ref<boolean>>
   /** The tabs with unsaved changes, in tab order. */
   dirtyTabs: Readonly<Ref<string[]>>
-  /** The tabs a failed check or a field error marked, in tab order; cleared when Save is pressed again. */
+  /** The tabs a failed check or a field error marked (cleared when Save is pressed again), or whose parts are `invalid`, in tab order. */
   errorTabs: Readonly<Ref<string[]>>
   anyDirty: Readonly<Ref<boolean>>
   /** Adds a part; the returned function takes it away again. */
@@ -47,8 +53,8 @@ export interface TabbedForm {
 
 const TABBED_FORM_KEY: InjectionKey<TabbedForm> = Symbol('tabbed-form')
 
-/** Whether a field error belongs to a field prefix ("a" claims "a" and "a.b", not "ab"). */
-const claims = (prefix: string, field: string) => field === prefix || field.startsWith(`${prefix}.`)
+/** Whether a field error belongs to a field prefix ("a" claims "a", "a.b" and "a[0]", not "ab"). */
+const claims = (prefix: string, field: string) => field === prefix || field.startsWith(`${prefix}.`) || field.startsWith(`${prefix}[`)
 
 /** The field errors by the part that claims them; those no part claims are left out. */
 export function errorsByPart(parts: readonly TabbedFormPart[], fields: Record<string, string>): Map<TabbedFormPart, Record<string, string>> {
@@ -80,26 +86,35 @@ function useParts(tabs: MaybeRefOrGetter<readonly string[]>) {
   return { parts, inOrder, dirtyTabs, register }
 }
 
-/** The tabs marked for an error; marking opens the first of them. */
-function useMarks(current: Ref<string>, inOrder: (keys: Iterable<string>) => string[]) {
+/**
+ * The tabs with an error: a part that says whether it is `invalid` marks its
+ * tab by that alone, the others by the last marking. Marking the failed
+ * parts opens the first of their tabs.
+ */
+function useMarks(current: Ref<string>, parts: Ref<TabbedFormPart[]>, inOrder: (keys: Iterable<string>) => string[]) {
   const marked = ref<string[]>([])
-  function mark(tabKeys: string[]) {
-    marked.value = tabKeys
-    const first = inOrder(tabKeys)[0]
+  const shows = (p: TabbedFormPart) => (p.invalid === undefined ? marked.value.includes(p.tab) : toValue(p.invalid))
+  function mark(failed: TabbedFormPart[]) {
+    marked.value = failed.filter((p) => p.invalid === undefined).map((p) => p.tab)
+    const first = inOrder(failed.map((p) => p.tab))[0]
     if (first !== undefined) current.value = first
   }
-  return { errorTabs: computed(() => inOrder(marked.value)), mark, clear: () => (marked.value = []) }
+  const errorTabs = computed(() => inOrder(parts.value.filter(shows).map((p) => p.tab)))
+  return { errorTabs, mark, clear: () => (marked.value = []) }
 }
 
-/** The tabs of the parts whose check fails; every check runs, so each tab shows what is wrong. */
-const failedChecks = (parts: readonly TabbedFormPart[]) => parts.filter((p) => !(p.check?.() ?? true)).map((p) => p.tab)
+/** The parts whose check fails; every check runs, so each tab shows what is wrong. */
+async function failedChecks(parts: readonly TabbedFormPart[]): Promise<TabbedFormPart[]> {
+  const passed = await Promise.all(parts.map((p) => p.check?.() ?? true))
+  return parts.filter((_, i) => !passed[i])
+}
 
-/** Hands the claimed field errors of a failed request to their parts and gives their tabs; none when no part claims one. */
-function claimErrors(parts: readonly TabbedFormPart[], e: unknown): string[] {
+/** Hands the claimed field errors of a failed request to their parts and gives those parts; none when no part claims one. */
+function claimErrors(parts: readonly TabbedFormPart[], e: unknown): TabbedFormPart[] {
   if (!isApiError(e)) return []
   const byPart = errorsByPart(parts, e.fields)
   for (const [part, errors] of byPart) part.applyErrors?.(errors)
-  return [...byPart.keys()].map((p) => p.tab)
+  return [...byPart.keys()]
 }
 
 /**
@@ -110,18 +125,18 @@ function claimErrors(parts: readonly TabbedFormPart[], e: unknown): string[] {
  */
 export function useTabbedForm(current: Ref<string>, tabs: MaybeRefOrGetter<readonly string[]>): TabbedForm {
   const { parts, inOrder, dirtyTabs, register } = useParts(tabs)
-  const { errorTabs, mark, clear } = useMarks(current, inOrder)
+  const { errorTabs, mark, clear } = useMarks(current, parts, inOrder)
   const saving = ref(false)
 
   async function submit<T>(send: (body: Record<string, unknown>) => Promise<T>): Promise<T | false> {
     clear()
-    const failed = failedChecks(parts.value)
-    if (failed.length) {
-      mark(failed)
-      return false
-    }
     saving.value = true
     try {
+      const failed = await failedChecks(parts.value)
+      if (failed.length) {
+        mark(failed)
+        return false
+      }
       return await send(Object.assign({}, ...parts.value.map((p) => p.body())))
     } catch (e) {
       const claimed = claimErrors(parts.value, e)

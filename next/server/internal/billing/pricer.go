@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"gorm.io/gorm"
+
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/billing/expr"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
@@ -26,6 +28,7 @@ type priceSnapshot struct {
 	byModel map[string]core.PriceRule // one price per complete model id
 	bases   catalog                   // the same prices as the pricing endpoints show them
 	rules   ruleSet                   // price rules of groups
+	rates   modelRates                // rates set on models
 }
 
 // priceTraits is what the expression of a price tells of the requests it
@@ -74,11 +77,33 @@ func (s *Service) snapshot(ctx context.Context) (*priceSnapshot, error) {
 	}
 }
 
-// loadSnapshot reads the enabled global prices and the price rules, and
-// keeps them as the snapshot unless invalidate came since epoch.
+// loadSnapshot reads the enabled global prices, the price rules and the
+// model rates, and keeps them as the snapshot unless invalidate came since
+// epoch.
 func (s *Service) loadSnapshot(ctx context.Context, epoch uint64) (*priceSnapshot, error) {
+	snap, err := loadGlobalPrices(ctx, s.db.Gorm)
+	if err != nil {
+		return nil, err
+	}
+	if snap.rules, err = loadRules(ctx, s.db.Gorm); err != nil {
+		return nil, err
+	}
+	if snap.rates, err = loadModelRates(ctx, s.db.Gorm); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	if s.epoch == epoch {
+		s.prices = snap
+		s.resolved = map[core.PriceQuery]resolved{}
+	}
+	s.mu.Unlock()
+	return snap, nil
+}
+
+// loadGlobalPrices starts a snapshot with the enabled global prices.
+func loadGlobalPrices(ctx context.Context, q *gorm.DB) (*priceSnapshot, error) {
 	var rows []model.ModelPrice
-	err := enabledPrices(store.G(ctx, s.db.Gorm), "id", "model", "mode", "expression", "expr_version", "expr_hash", "config").
+	err := enabledPrices(store.G(ctx, q), "id", "model", "mode", "expression", "expr_version", "expr_hash", "config").
 		Find(&rows).Error
 	if err != nil {
 		return nil, err
@@ -93,15 +118,6 @@ func (s *Service) loadSnapshot(ctx context.Context, epoch uint64) (*priceSnapsho
 		snap.byModel[r.Model] = r
 		snap.bases[r.Model] = PriceDef{Mode: r.Mode, Config: row.Config, Expression: r.Expression}
 	}
-	if snap.rules, err = loadRules(ctx, s.db.Gorm); err != nil {
-		return nil, err
-	}
-	s.mu.Lock()
-	if s.epoch == epoch {
-		s.prices = snap
-		s.resolved = map[core.PriceQuery]resolved{}
-	}
-	s.mu.Unlock()
 	return snap, nil
 }
 
@@ -127,8 +143,8 @@ func (snap *priceSnapshot) resolve(q core.PriceQuery) *core.PriceRule {
 
 // Resolve implements core.Pricer. Prices are global per model: the platform
 // and account type serving the request do not matter (ARCHITECTURE 7.3). A
-// price rule of the caller's group may replace or scale the global price;
-// without a global price no rule applies.
+// price rule of the caller's group may replace the global price; without a
+// global price no rule applies.
 func (s *Service) Resolve(ctx context.Context, q core.PriceQuery) (*core.PriceRule, error) {
 	s.mu.Lock()
 	hit, ok := s.resolved[q]

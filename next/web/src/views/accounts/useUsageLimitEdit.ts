@@ -101,3 +101,5 @@ export function useUsageLimitEdit(accountId: () => number | undefined, shown: ()
 
   return { limit, status, loadError, errors, summary, load, prefill, invalid, save }
 }
+
+export type UsageLimitEditor = ReturnType<typeof useUsageLimitEdit>

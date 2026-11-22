@@ -5,7 +5,6 @@ import (
 	"context"
 	"maps"
 	"slices"
-	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
@@ -23,7 +22,6 @@ import (
 func (s *Service) registerPricingRoutes(r *httpapi.Router) {
 	r.Perm("GET", "/pricing/catalog", "group:read", s.showCatalog)
 	r.Perm("GET", "/groups/:id/model-prices", "group:read", s.showGroupPrices)
-	r.Perm("PUT", "/groups/:id/model-prices", "group:manage", s.saveGroupPrices)
 	r.Perm("POST", "/pricing/quote", "price:read", s.quotePricing).Uses(perm.GroupRead, perm.UserRead, perm.SegmentRead)
 }
 
@@ -170,55 +168,52 @@ func (snap *priceSnapshot) each(groupID int64, models []string, add func(model s
 }
 
 // ModelPriceRow is a model of a group's pricing table: one the group
-// provides or has a rule on.
+// provides, or sets a price or a rate on.
 type ModelPriceRow struct {
 	Model string `json:"model"`
-	// Offered is false on a model the group has a rule on but does not
-	// provide now (Models.Offered): no request reaches it there yet.
+	// Offered is false on a model the group sets a price or a rate on but
+	// does not provide now (Models.Offered): no request reaches it there yet.
 	Offered bool `json:"offered"`
 	// Base is the global price; null = the model has none and cannot be billed.
-	Base      *PriceDef `json:"base"`
-	GroupRule *Rule     `json:"group_rule"`
-	// ListPrice is the price after the rule; null without a global price.
-	ListPrice *PriceDef `json:"list_price"`
-	Source    string    `json:"source"`
+	Base *PriceDef `json:"base"`
+	// Price is the group's own price of the model; null = the global price.
+	Price *Rule `json:"price"`
+	// Rate is the group's rate for the model; null = the group's base rate.
+	Rate *decimal.Decimal `json:"rate"`
 }
 
-// tableRow prices model under the group's rule (nil = none): its global
-// price (nil = none), the rule as configured and the list price after it.
-// Without a global price no rule applies.
-func tableRow(model string, base *PriceDef, rule *storedRule) ModelPriceRow {
-	row := ModelPriceRow{Model: model, Base: base, GroupRule: rule.view(), Source: core.PriceSourceGlobal}
+// listedPrice is the list price under the group's rule (nil = none) of a
+// model whose global price is base, and where it comes from. Without a
+// global price there is none, and no rule applies.
+func listedPrice(base *PriceDef, rule *storedRule) (*PriceDef, string) {
 	if base == nil {
-		return row
+		return nil, core.PriceSourceGlobal
 	}
 	price := listPrice(*base, rule)
-	row.ListPrice, row.Source = &price, rule.source()
-	return row
+	return &price, rule.source()
 }
 
-// GroupModelPrices is the response of GET and PUT /groups/:id/model-prices.
+// GroupModelPrices is the response of GET /groups/:id/model-prices.
 type GroupModelPrices struct {
 	Group core.GroupRef `json:"group"`
-	// Rate is the group's default rate.
+	// Rate is the group's base rate.
 	Rate   segment.EffectiveRate `json:"rate"`
 	Models []ModelPriceRow       `json:"models"`
 }
 
-// table is the pricing table of the group under rules: a row for every
-// model it provides or has a rule on, by model.
-func (gp *groupPrices) table(prices catalog, rules ruleSet) *GroupModelPrices {
-	g, one := gp.group, decimal.NewFromInt(1)
-	rate, source := core.SegmentRate(g.RateMultiplier, one, nil)
-	out := &GroupModelPrices{Group: g.ref(), Rate: segment.EffectiveRate{Value: rate, Source: source, GroupDefault: g.RateMultiplier, Discount: one}}
-	ruled := rules[g.ID]
-	models := append(slices.Clone(gp.models), slices.Collect(maps.Keys(ruled))...)
+// table is the pricing table of the group under the snapshot: a row for
+// every model it provides or sets a price or a rate on, by model.
+func (gp *groupPrices) table(snap *priceSnapshot) *GroupModelPrices {
+	g := gp.group
+	ruled, rated := snap.rules[g.ID], snap.rates.groups[g.ID]
+	models := slices.Concat(gp.models, slices.Collect(maps.Keys(ruled)), slices.Collect(maps.Keys(rated)))
 	slices.Sort(models)
 	models = slices.Compact(models)
-	out.Models = make([]ModelPriceRow, len(models))
+	out := &GroupModelPrices{Group: g.ref(), Rate: segment.RateOf(core.RateLevels{Group: g.RateMultiplier}), Models: make([]ModelPriceRow, len(models))}
 	for i, model := range models {
-		out.Models[i] = tableRow(model, prices.base(model), ruled[model])
-		_, out.Models[i].Offered = slices.BinarySearch(gp.models, model)
+		_, offered := slices.BinarySearch(gp.models, model)
+		out.Models[i] = ModelPriceRow{Model: model, Offered: offered, Base: snap.bases.base(model),
+			Price: ruled[model].view(), Rate: rateOf(rated, model)}
 	}
 	return out
 }
@@ -234,7 +229,7 @@ func (s *Service) groupPriceTable(ctx context.Context, groupID int64) (*GroupMod
 	if err != nil {
 		return nil, err
 	}
-	return gp.table(snap.bases, snap.rules), nil
+	return gp.table(snap), nil
 }
 
 // GET /groups/:id/model-prices
@@ -251,97 +246,10 @@ func (s *Service) showGroupPrices(c *gin.Context) {
 	httpapi.OK(c, out)
 }
 
-// rulePatch is an item of PUT /groups/:id/model-prices: a null rule removes
-// the one there.
-type rulePatch struct {
-	Model string `json:"model"`
-	Rule  *Rule  `json:"rule"`
-}
-
 // ruleChange is a checked rulePatch: the rule to store on on, nil to remove.
 type ruleChange struct {
 	on   core.PriceQuery
 	rule *storedRule
-}
-
-// checkPatches validates the items of a PUT on the group, all or none,
-// over the global prices: an item that cannot be saved is a field error on
-// items.<index>. Removing a rule always can; a rule needs a global price of
-// its model, whether the group provides the model or not. facts are the
-// usage facts an expression may read.
-func checkPatches(ctx context.Context, groupID int64, prices catalog, items []rulePatch, facts map[string]bool) ([]ruleChange, error) {
-	changes := make([]ruleChange, len(items))
-	for i, item := range items {
-		changes[i].on = core.PriceQuery{Model: item.Model, GroupID: groupID}
-		if item.Rule == nil {
-			continue
-		}
-		rule, err := checkRule(ctx, *item.Rule, prices.base(item.Model), facts)
-		if err != nil {
-			return nil, core.InvalidFields(core.FieldError{Field: "items." + strconv.Itoa(i), Code: "invalid", Message: err.Error()})
-		}
-		changes[i].rule = rule
-	}
-	return changes, nil
-}
-
-// PUT /groups/:id/model-prices {items: [{model, rule}]}
-func (s *Service) saveGroupPrices(c *gin.Context) {
-	ctx := c.Request.Context()
-	groupID, ok := httpapi.PathID(c, "id")
-	if !ok {
-		return
-	}
-	// User groups no longer price models: a segment_id of the old console
-	// must fail, not price the whole group. Remove once no 0.1.306 console
-	// can still be open (the release after 0.1.307).
-	if _, set := c.GetQuery("segment_id"); set {
-		httpapi.Fail(c, core.ErrInvalidArgument.WithMessage(core.Text(c.Request.Context(), "segment_id is not accepted: user groups set rates only", "不接受 segment_id：用户组只能设倍率")))
-		return
-	}
-	var in struct {
-		Items []rulePatch `json:"items"`
-	}
-	if !httpapi.BindStrictJSON(c, &in) {
-		return
-	}
-	if err := s.writeGroupPrices(ctx, groupID, in.Items); err != nil {
-		httpapi.Fail(c, err)
-		return
-	}
-	// Dropped here before the table is read: it shows what was saved.
-	s.changed(ctx, "price_rules")
-	out, err := s.groupPriceTable(ctx, groupID)
-	if err != nil {
-		httpapi.Fail(c, err)
-		return
-	}
-	httpapi.OK(c, out)
-}
-
-// writeGroupPrices checks the items against the global prices and saves
-// them as the rules of the group, all or none, in one transaction.
-func (s *Service) writeGroupPrices(ctx context.Context, groupID int64, items []rulePatch) error {
-	uid, _ := core.UserID(ctx)
-	err := s.db.Tx(ctx, func(tx *gorm.DB) error {
-		if _, err := loadGroup(ctx, tx, "g.id = ?", groupID); err != nil {
-			return err
-		}
-		prices, err := loadCatalog(ctx, tx)
-		if err != nil {
-			return err
-		}
-		changes, err := checkPatches(ctx, groupID, prices, items, s.factsFor())
-		if err != nil {
-			return err
-		}
-		return applyChanges(ctx, tx, changes, uid)
-	})
-	// The group went away while its rules were stored.
-	if store.IsForeignKeyViolation(err) {
-		return core.ErrConflict.WithMessage(core.Text(ctx, "the data changed meanwhile, try again", "数据已被其他操作修改，请重试")).WithCause(err)
-	}
-	return err
 }
 
 // applyChanges writes the changes in tx (writeRules). They go in the order

@@ -10,7 +10,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
@@ -36,23 +35,20 @@ func sequentialRuleChanges(ctx context.Context, tx *gorm.DB, changes []ruleChang
 			}
 			continue
 		}
-		if r.Kind == core.PriceRuleCustom {
-			prog, err := expr.CompileCached(r.Expression)
-			if err != nil {
-				return err
-			}
-			if _, err := store.SQLTx(tx).ExecContext(ctx, `INSERT INTO model_price_history (expr_hash, expression, expr_version) VALUES ($1, $2, $3)
-				ON CONFLICT (expr_hash) DO NOTHING`, prog.Hash(), prog.Expression(), prog.Version()); err != nil {
-				return err
-			}
+		prog, err := expr.CompileCached(r.Expression)
+		if err != nil {
+			return err
+		}
+		if _, err := store.SQLTx(tx).ExecContext(ctx, `INSERT INTO model_price_history (expr_hash, expression, expr_version) VALUES ($1, $2, $3)
+			ON CONFLICT (expr_hash) DO NOTHING`, prog.Hash(), prog.Expression(), prog.Version()); err != nil {
+			return err
 		}
 		if _, err := store.SQLTx(tx).ExecContext(ctx, `
-			INSERT INTO price_rules (group_id, model, kind, multiplier, mode, config, expression, expr_hash, updated_by)
-			VALUES ($1, $2, $3, $4::numeric, NULLIF($5, ''), $6, $7, $8, $9)
-			ON CONFLICT (group_id, model) DO UPDATE SET kind = EXCLUDED.kind, multiplier = EXCLUDED.multiplier,
-				mode = EXCLUDED.mode, config = EXCLUDED.config, expression = EXCLUDED.expression,
-				expr_hash = EXCLUDED.expr_hash, updated_by = EXCLUDED.updated_by, updated_at = now()`,
-			on.GroupID, on.Model, r.Kind, r.Multiplier, r.Mode, r.Config, r.Expression, r.exprHash, nullID(updatedBy)); err != nil {
+			INSERT INTO price_rules (group_id, model, mode, config, expression, expr_hash, updated_by)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
+			ON CONFLICT (group_id, model) DO UPDATE SET mode = EXCLUDED.mode, config = EXCLUDED.config,
+				expression = EXCLUDED.expression, expr_hash = EXCLUDED.expr_hash, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+			on.GroupID, on.Model, r.Mode, r.Config, r.Expression, r.exprHash, nullID(updatedBy)); err != nil {
 			return err
 		}
 	}
@@ -63,21 +59,21 @@ func sequentialRuleChanges(ctx context.Context, tx *gorm.DB, changes []ruleChang
 // as "kept" (one of initial) or "new".
 func ruleState(t *testing.T, ctx context.Context, tx *gorm.DB, groups []int64, initial map[int64]bool) []string {
 	t.Helper()
-	rows, err := store.SQLTx(tx).QueryContext(ctx, `SELECT id, group_id, model, kind, COALESCE(multiplier::text, '-'), COALESCE(mode, '-'),
-		COALESCE(config::text, '-'), expression, expr_hash, COALESCE(updated_by, 0), updated_at = now()
+	rows, err := store.SQLTx(tx).QueryContext(ctx, `SELECT id, group_id, model, mode, config::text, expression, expr_hash,
+		COALESCE(updated_by, 0), updated_at = now()
 		FROM price_rules WHERE group_id = ANY($1) ORDER BY group_id, model`, store.Int64s(groups))
 	require.NoError(t, err)
 	var state []string
 	for rows.Next() {
 		var id, group, by int64
-		var model, kind, mult, mode, config, expression, hash string
+		var model, mode, config, expression, hash string
 		var touched bool
-		require.NoError(t, rows.Scan(&id, &group, &model, &kind, &mult, &mode, &config, &expression, &hash, &by, &touched))
+		require.NoError(t, rows.Scan(&id, &group, &model, &mode, &config, &expression, &hash, &by, &touched))
 		identity := "new"
 		if initial[id] {
 			identity = "kept"
 		}
-		state = append(state, fmt.Sprintf("%d %s %s %s %s %s %s %s by %d touched %v %s", group, model, kind, mult, mode, config, expression, hash, by, touched, identity))
+		state = append(state, fmt.Sprintf("%d %s %s %s %s %s by %d touched %v %s", group, model, mode, config, expression, hash, by, touched, identity))
 	}
 	require.NoError(t, rows.Err())
 	rows.Close()
@@ -94,17 +90,7 @@ func ruleState(t *testing.T, ctx context.Context, tx *gorm.DB, groups []int64, i
 func TestWriteRulesMatchesSequential(t *testing.T) {
 	e := newPricingEnv(t, allowAll{})
 	ctx := context.Background()
-	mult := func(n string) *storedRule {
-		r := &storedRule{Rule: Rule{Kind: core.PriceRuleMultiplier}}
-		r.setScale(decimal.RequireFromString(n))
-		return r
-	}
-	price := func(p float64) *storedRule {
-		config := json.RawMessage(fmt.Sprintf(`{"tiers": [{"name": "base", "unit": "request", "price": %v}]}`, p))
-		r, err := checkCustom(ctx, Rule{Kind: core.PriceRuleCustom, Mode: "visual", Config: config}, nil)
-		require.NoError(t, err)
-		return r
-	}
+	price := func(p float64) *storedRule { return requestPrice(t, p) }
 	g, p := e.open, e.private
 	groups := []int64{g, p}
 	on := func(group int64, model string) core.PriceQuery {
@@ -112,9 +98,9 @@ func TestWriteRulesMatchesSequential(t *testing.T) {
 	}
 	// The rules there before each case.
 	seed := []ruleChange{
-		{on(g, "claude-haiku-4-5"), mult("1.1")},
+		{on(g, "claude-haiku-4-5"), price(1.1)},
 		{on(p, "claude-sonnet-4-5"), price(0.3)},
-		{on(p, "web-search"), mult("2")},
+		{on(p, "web-search"), price(2)},
 		{on(g, "web-search"), price(0.02)},
 	}
 	require.NoError(t, e.db.Tx(ctx, func(tx *gorm.DB) error { return applyChanges(ctx, tx, slices.Clone(seed), e.admin) }))
@@ -130,14 +116,14 @@ func TestWriteRulesMatchesSequential(t *testing.T) {
 
 	cases := map[string][]ruleChange{
 		"mixed": {
-			{on(p, "claude-haiku-4-5"), price(0.4)}, {on(g, "claude-haiku-4-5"), mult("1.3")},
-			{on(p, "claude-sonnet-4-5"), nil}, {on(g, "unpriced"), nil}, {on(g, "web-search"), mult("1.75")},
+			{on(p, "claude-haiku-4-5"), price(0.4)}, {on(g, "claude-haiku-4-5"), price(1.3)},
+			{on(p, "claude-sonnet-4-5"), nil}, {on(g, "unpriced"), nil}, {on(g, "web-search"), price(1.75)},
 		},
-		"removed then saved": {{on(g, "claude-haiku-4-5"), nil}, {on(g, "claude-haiku-4-5"), mult("1.5")}},
-		"saved then removed": {{on(p, "web-search"), mult("3")}, {on(p, "web-search"), nil}},
-		"saved twice":        {{on(p, "claude-sonnet-4-5"), price(0.5)}, {on(p, "claude-sonnet-4-5"), mult("1.2")}},
+		"removed then saved": {{on(g, "claude-haiku-4-5"), nil}, {on(g, "claude-haiku-4-5"), price(1.5)}},
+		"saved then removed": {{on(p, "web-search"), price(3)}, {on(p, "web-search"), nil}},
+		"saved twice":        {{on(p, "claude-sonnet-4-5"), price(0.5)}, {on(p, "claude-sonnet-4-5"), price(1.2)}},
 		"new, removed, saved": {
-			{on(g, "claude-sonnet-4-5"), mult("2")}, {on(g, "claude-sonnet-4-5"), nil}, {on(g, "claude-sonnet-4-5"), price(0.7)},
+			{on(g, "claude-sonnet-4-5"), price(2)}, {on(g, "claude-sonnet-4-5"), nil}, {on(g, "claude-sonnet-4-5"), price(0.7)},
 		},
 		"same expression twice": {{on(g, "claude-sonnet-4-5"), price(0.9)}, {on(p, "claude-haiku-4-5"), price(0.9)}},
 		"nothing":               {},
@@ -167,25 +153,30 @@ func TestWriteRulesMatchesSequential(t *testing.T) {
 
 var errRollback = errors.New("rollback")
 
+// requestPrice is a stored model price of p per request.
+func requestPrice(t *testing.T, p float64) *storedRule {
+	t.Helper()
+	config := json.RawMessage(fmt.Sprintf(`{"tiers": [{"name": "base", "unit": "request", "price": %v}]}`, p))
+	r, err := checkRule(context.Background(), Rule{Kind: ruleCustom, Mode: "visual", Config: config}, nil)
+	require.NoError(t, err)
+	return r
+}
+
 // Two requests changing the same rules in opposite orders lock them in one
 // order (writeRules' lock) and never deadlock.
 func TestWriteRulesConcurrentNoDeadlock(t *testing.T) {
 	e := newPricingEnv(t, allowAll{})
 	ctx := context.Background()
-	mult := func(n string) *storedRule {
-		r := &storedRule{Rule: Rule{Kind: core.PriceRuleMultiplier}}
-		r.setScale(decimal.RequireFromString(n))
-		return r
-	}
+	price := func(p float64) *storedRule { return requestPrice(t, p) }
 	a := core.PriceQuery{GroupID: e.open, Model: "claude-haiku-4-5"}
 	b := core.PriceQuery{GroupID: e.open, Model: "web-search"}
 	c := core.PriceQuery{GroupID: e.private, Model: "claude-haiku-4-5"}
 	require.NoError(t, e.db.Tx(ctx, func(tx *gorm.DB) error {
-		return applyChanges(ctx, tx, []ruleChange{{a, mult("1")}, {b, mult("1")}, {c, mult("1")}}, e.admin)
+		return applyChanges(ctx, tx, []ruleChange{{a, price(1)}, {b, price(1)}, {c, price(1)}}, e.admin)
 	}))
 	requests := [][]ruleChange{
-		{{c, mult("2")}, {b, nil}, {a, mult("2")}},
-		{{a, nil}, {b, mult("3")}, {c, nil}},
+		{{c, price(2)}, {b, nil}, {a, price(2)}},
+		{{a, nil}, {b, price(3)}, {c, nil}},
 	}
 	for range 30 {
 		var wg sync.WaitGroup

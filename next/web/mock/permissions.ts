@@ -45,21 +45,21 @@ export const MODULES: ModuleDef[] = [
     { key: 'user:read', label: L('View', '查看') }, { key: 'user:create', label: L('Create', '新建') },
     { key: 'user:update', label: L('Edit', '编辑') }, { key: 'user:delete', label: L('Delete', '删除'), risk: 'sensitive' },
     { key: 'user:password:reset', label: L('Reset passwords and 2FA', '重置密码与两步验证'), risk: 'sensitive' }] },
-  { module: 'segment', label: L('User groups', '用户组'), source: 'core', status: 'active', permissions: [
+  { module: 'segment', label: L('User groups', '用户分组'), source: 'core', status: 'active', permissions: [
     { key: 'segment:read', label: L('View', '查看') }, { key: 'segment:manage', label: L('Manage', '管理') }] },
   { module: 'role', label: L('Roles', '角色'), source: 'core', status: 'active', permissions: [
     { key: 'role:read', label: L('View', '查看') }, { key: 'role:define', label: L('Define', '定义'), risk: 'sensitive' },
     { key: 'role:assign', label: L('Assign', '分配'), risk: 'sensitive' }] },
   { module: 'apikey', label: L('API keys', 'API Key'), source: 'core', status: 'active', permissions: [
     { key: 'apikey:self:manage', label: L('Manage own', '管理自己的') }] },
-  { module: 'group', label: L('Groups', '分组'), source: 'core', status: 'active', permissions: [
+  { module: 'group', label: L('Account groups', '账号分组'), source: 'core', status: 'active', permissions: [
     { key: 'group:read', label: L('View', '查看') }, { key: 'group:manage', label: L('Manage', '管理') }] },
   { module: 'account', label: L('Accounts', '账号'), source: 'core', status: 'active', permissions: [
     { key: 'account:read', label: L('View', '查看') }, { key: 'account:create', label: L('Create', '新建') },
     { key: 'account:update', label: L('Edit', '编辑') }, { key: 'account:delete', label: L('Delete', '删除'), risk: 'sensitive' },
     { key: 'account:test', label: L('Test', '测试') }, { key: 'account:credential:view', label: L('View credentials', '查看凭证'), risk: 'sensitive' },
     { key: 'account:settings:custom', label: L('Custom restricted settings', '自定义受限设置') },
-    { key: 'account:group:bind', label: L('Bind accounts to groups (own level)', '将账号绑定到分组（own 级）') },
+    { key: 'account:group:bind', label: L('Bind accounts to account groups (own level)', '将账号绑定到账号分组（own 级）') },
     { key: 'account:relay', label: L('Create relay-type accounts with custom upstream', '创建自定义上游的 relay 类账号'), risk: 'sensitive' }] },
   { module: 'proxy', label: L('Proxies', '代理'), source: 'core', status: 'active', permissions: [
     { key: 'proxy:read', label: L('View', '查看') }, { key: 'proxy:manage', label: L('Manage', '管理') }] },

@@ -30,6 +30,10 @@ type Service struct {
 	// without it). The account module is built after this one, so it is
 	// set afterwards.
 	Protocols core.GroupProtocols
+	// Parts are the fields of POST /groups and PATCH /groups/:id other
+	// modules own (prices, rates), written in the group's transaction; set
+	// after New, as the modules are built around this one.
+	Parts []core.GroupWritePart
 }
 
 // New builds the group service. rdb, bus and reg may be nil; reg resolves

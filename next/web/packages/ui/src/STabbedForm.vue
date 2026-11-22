@@ -6,7 +6,8 @@
 // the tab in front. The default slot is rendered once per tab with `{ tab }`
 // (the key), each in its own panel: every panel stays mounted and only the
 // one in front shows, so the drafts of the others live on. A form of one tab
-// shows no tabs, as STabs does.
+// shows no tabs, as STabs does. The `before-nav` slot comes before the tabs:
+// above the side navigation (sticking with it), or above the tab bar.
 import { computed, useId } from 'vue'
 import TabBar from './internal/TabBar.vue'
 import SideTabNav from './internal/SideTabNav.vue'
@@ -26,7 +27,7 @@ const props = withDefaults(
   { layout: 'top' }
 )
 const emit = defineEmits<{ (e: 'update:modelValue', v: string): void }>()
-defineSlots<{ default(props: { tab: string }): unknown }>()
+defineSlots<{ default(props: { tab: string }): unknown; 'before-nav'?(): unknown }>()
 const uid = useId()
 const prefix = computed(() => props.idPrefix || uid)
 const current = computed(() => (props.tabs.some((t) => t.key === props.modelValue && !t.disabled) ? props.modelValue : props.tabs.find((t) => !t.disabled)?.key))
@@ -37,10 +38,11 @@ const nav = computed(() => props.tabs.length > 1)
 
 <template>
   <div :class="nav && layout === 'side' ? 'grid gap-4 md:grid-cols-[13rem_minmax(0,1fr)]' : 'space-y-5'" :data-layout="layout">
-    <template v-if="nav">
+    <div v-if="nav" :class="layout === 'side' ? 'min-w-0 space-y-3 self-start md:sticky md:top-0' : 'space-y-3'">
+      <slot name="before-nav" />
       <TabBar v-if="layout === 'top'" :tabs="tabs" :model-value="current ?? ''" :id-prefix="prefix" :aria-label="ariaLabel" v-bind="marks" @update:model-value="select" />
       <SideTabNav v-else :tabs="tabs" :model-value="current ?? ''" :id-prefix="prefix" :aria-label="ariaLabel" v-bind="marks" @update:model-value="select" />
-    </template>
+    </div>
     <div class="min-w-0">
       <STitleScope
         v-for="tab in tabs"

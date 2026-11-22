@@ -238,13 +238,17 @@ func TestParseSup2APIScalesExpressionWithoutConfig(t *testing.T) {
 type fakeKeys struct {
 	Mode  string
 	Group int64
+	// Segment and Override are the owner's segment and its own rate in the
+	// group.
+	Segment  int64
+	Override *decimal.Decimal
 }
 
 func (f fakeKeys) Authenticate(_ context.Context, raw string) (*core.APIKeyPrincipal, error) {
 	if raw != "sk-good" {
 		return nil, core.ErrUnauthenticated
 	}
-	pr := &core.APIKeyPrincipal{KeyID: 1, UserID: 1, Group: core.GroupInfo{ID: 7, Name: "vip",
+	pr := &core.APIKeyPrincipal{KeyID: 1, UserID: 1, SegmentID: f.Segment, RateOverride: f.Override, Group: core.GroupInfo{ID: 7, Name: "vip",
 		RateMultiplier: decimal.NewFromInt(2), ModelAllowlist: []string{"claude-*"}, ModelFilterMode: f.Mode}}
 	if f.Group != 0 {
 		pr.Group.ID = f.Group

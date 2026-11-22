@@ -22,6 +22,9 @@ type Deps struct {
 	Users core.UserGuard
 	// Platforms returns the platforms each group serves (group.Service.Platforms).
 	Platforms func(ctx context.Context, groupIDs []int64) (map[int64][]string, error)
+	// RatesChanged, optional, runs once segment model rates were written:
+	// billing's price snapshot holds them.
+	RatesChanged func(ctx context.Context)
 }
 
 // Service serves the segment endpoints.
@@ -30,15 +33,20 @@ type Service struct {
 	authz     core.Authorizer
 	users     core.UserGuard
 	platforms func(ctx context.Context, groupIDs []int64) (map[int64][]string, error)
+	// ratesChanged is Deps.RatesChanged.
+	ratesChanged func(ctx context.Context)
 }
 
 // New builds the segment service.
 func New(d Deps) *Service {
-	return &Service{db: d.DB, authz: d.Authz, users: core.GuardOrDeny(d.Users), platforms: d.Platforms}
+	return &Service{db: d.DB, authz: d.Authz, users: core.GuardOrDeny(d.Users), platforms: d.Platforms,
+		ratesChanged: d.RatesChanged}
 }
 
 // RegisterRoutes mounts the segment endpoints. The members of a segment are
-// listed by iam (GET /segments/:id/members): they are user rows.
+// listed by iam (GET /segments/:id/members): they are user rows. What a
+// segment has in groups is written with the segment (POST/PATCH /segments)
+// or with the group (segment_rates of POST/PATCH /groups, PrepareGroupWrite).
 func (s *Service) RegisterRoutes(r *httpapi.Router) {
 	r.Perm("GET", "/segments", "segment:read", s.list)
 	r.Perm("POST", "/segments", "segment:manage", s.create)
@@ -47,9 +55,7 @@ func (s *Service) RegisterRoutes(r *httpapi.Router) {
 	r.Perm("DELETE", "/segments/:id", "segment:manage", s.delete)
 	r.Perm("POST", "/segments/:id/members", "segment:manage", s.addMembers)
 	r.Perm("GET", "/segments/:id/groups", "segment:read", s.segmentGroups)
-	r.Perm("PUT", "/segments/:id/groups", "segment:manage", s.setSegmentGroups)
 	r.Perm("GET", "/groups/:id/segments", "group:read", s.groupSegments)
-	r.Perm("PUT", "/groups/:id/segments", "group:manage", s.setGroupSegments)
 	r.Perm("POST", "/users/:id/personal-segment", "segment:manage", s.makePersonal)
 	r.Perm("DELETE", "/users/:id/personal-segment", "segment:manage", s.removePersonal)
 }
@@ -74,7 +80,7 @@ func errOwnSegment(ctx context.Context) *core.Error {
 }
 
 // guardOwnSegments fails unless the caller may change what the segments
-// charge or grant (discount, grants, rates): the caller is a
+// charge or grant (grants, rates): the caller is a
 // member of none of them, or it manages itself (UserGuard on itself: only a
 // superuser with the built-in assignable lists, audited there; FU2, FU6).
 // It is the one check of every such write; refusals are 409. Other members

@@ -9,8 +9,7 @@ import ProxyPicker from '@/components/ProxyPicker.vue'
 import ModelLimitsEditor from './ModelLimitsEditor.vue'
 import ModelMappingEditor from './ModelMappingEditor.vue'
 import PluginSlot from '@/components/plugin/PluginSlot.vue'
-import { SSpinner, STagInput } from '@sub2api/ui'
-import AccountEditorNav from './AccountEditorNav.vue'
+import { SSpinner, STabbedForm, STagInput, type FormTab, type TabbedForm } from '@sub2api/ui'
 import ParamOverrideField from './paramOverride/ParamOverrideField.vue'
 import HeaderOverrideField from './headerOverride/HeaderOverrideField.vue'
 import AccountUsageLimitCard from './AccountUsageLimitCard.vue'
@@ -43,9 +42,21 @@ beforeEach(() => {
 })
 const accountType = { plugin_key: 'claude', type: 'apikey', creation_group: 'claude', form: { mode: 'native', component: 'KeyForm' }, platforms: [], default_models: [], default_model_mapping: {} } as unknown as AccountType
 
+/** The editor's side tabs: their keys, labels and summaries, the one in front and the ones marked for an error. */
+const nav = (w: ReturnType<typeof shallowMount>) => w.getComponent(STabbedForm)
+const sections = (w: ReturnType<typeof shallowMount>) => nav(w).props('tabs') as FormTab[]
+const marked = (w: ReturnType<typeof shallowMount>) => (nav(w).props('form') as TabbedForm).errorTabs.value
+const sectionOf = (el: Element) => el.closest('[data-tab]')?.getAttribute('data-tab')
+
 function render(account?: Account, realSelect = false, type: AccountType = accountType) {
   return shallowMount(AccountEditor, { props: { accountType: type, account }, global: { plugins: [i18n], stubs: {
-    // The models card is rendered (not stubbed) so its tag select is reachable.
+    // The tabs, their panels and the sections are rendered (not stubbed); the models card so its tag select is reachable.
+    STabbedForm: false,
+    STitleScope: false,
+    AccountProxyField: false,
+    AccountCredentialsCard: false,
+    AccountSchedulingPane: false,
+    AccountForwardingPane: false,
     AccountModelsCard: false,
     RateLimitEditor: false,
     SessionLimitInput: false,
@@ -106,7 +117,7 @@ describe('a form mode this console does not render', () => {
     expect(w.find('[data-testid="credential-errors"]').exists()).toBe(false)
     await w.get('form').trigger('submit'); await flushPromises()
     expect(w.get('[data-testid="credential-errors"]').text()).toBe('插件未接受以下凭证字段extra: unknown field')
-    expect(w.getComponent(AccountEditorNav).props('errors')).toMatchObject({ connection: true })
+    expect(marked(w)).toContain('connection')
   })
 
   it('lists them when the native form failed to load, and leaves them to a loaded form', async () => {
@@ -141,8 +152,8 @@ describe('account forwarding and proxy', () => {
     await flushPromises()
     const rules = w.getComponent(STagInput)
     expect(rules.props('modelValue')).toEqual(['*'])
-    expect(w.get('[data-testid="account-header-passthrough"]').element.closest('[data-editor-section]')?.getAttribute('data-editor-section')).toBe('advanced')
-    const advanced = () => w.getComponent(AccountEditorNav).props('sections').find(s => s.key === 'advanced')
+    expect(sectionOf(w.get('[data-testid="account-header-passthrough"]').element)).toBe('advanced')
+    const advanced = () => sections(w).find(s => s.key === 'advanced')
     expect(advanced()).toMatchObject({ label: '高级', summary: '透传 * · 超时跟随' })
     rules.vm.$emit('update:modelValue', ['*', 'regex:^x-claude-code-'])
     await flushPromises()
@@ -156,8 +167,8 @@ describe('account forwarding and proxy', () => {
     await flushPromises()
     const field = w.getComponent(ParamOverrideField)
     expect(field.props('modelValue')).toEqual(override)
-    expect(field.element.closest('[data-editor-section]')?.getAttribute('data-editor-section')).toBe('advanced')
-    const advanced = () => w.getComponent(AccountEditorNav).props('sections').find(s => s.key === 'advanced')
+    expect(sectionOf(field.element)).toBe('advanced')
+    const advanced = () => sections(w).find(s => s.key === 'advanced')
     expect(advanced()?.summary).toBe('不透传 · 覆盖 2 条 · 超时跟随')
     field.vm.$emit('update:modelValue', null)
     await flushPromises()
@@ -171,9 +182,9 @@ describe('account forwarding and proxy', () => {
     await flushPromises()
     const field = w.getComponent(HeaderOverrideField)
     expect(field.props('modelValue')).toEqual(headers)
-    expect(field.element.closest('[data-editor-section]')?.getAttribute('data-editor-section')).toBe('advanced')
+    expect(sectionOf(field.element)).toBe('advanced')
     expect(w.getComponent(ParamOverrideField).props('headerOverride')).toEqual(headers)
-    const advanced = () => w.getComponent(AccountEditorNav).props('sections').find(s => s.key === 'advanced')
+    const advanced = () => sections(w).find(s => s.key === 'advanced')
     expect(advanced()?.summary).toBe('不透传 · 请求头覆盖 2 项 · 超时跟随')
     mocks.patch.mockRejectedValueOnce(new ApiError(400, { code: 'invalid_argument', message: 'invalid', details: { fields: [{ field: 'header_override', code: 'blocked', message: 'Authorization: blocked' }] } }))
     field.vm.$emit('update:modelValue', { Authorization: 'x' })
@@ -181,7 +192,7 @@ describe('account forwarding and proxy', () => {
     await w.get('form').trigger('submit'); await flushPromises()
     expect(mocks.patch).toHaveBeenCalledWith('/accounts/1', expect.objectContaining({ header_override: { Authorization: 'x' } }))
     expect(field.props('error')).toBe('Authorization: blocked')
-    expect(w.getComponent(AccountEditorNav).props('errors')).toMatchObject({ advanced: true })
+    expect(marked(w)).toContain('advanced')
     field.vm.$emit('update:modelValue', null)
     await flushPromises()
     await w.get('form').trigger('submit'); await flushPromises()
@@ -198,13 +209,22 @@ describe('account forwarding and proxy', () => {
     groups.value = [{ id: 1, name: 'default' }, { id: 2, name: 'vip', conversion_loss_policy: 'safe' }, { id: 3, name: 'other', conversion_loss_policy: 'strict' }] as Group[]
     await flushPromises()
     expect(hint()).toBe('继承账号分组：default=允许, vip=安全')
-    expect(w.get('[data-testid="account-conversion-policy"]').element.closest('[data-editor-section]')?.getAttribute('data-editor-section')).toBe('advanced')
+    expect(sectionOf(w.get('[data-testid="account-conversion-policy"]').element)).toBe('advanced')
     await w.get('[data-testid="account-conversion-policy-select"]').setValue('strict')
     expect(hint()).toBe('生效：严格（覆盖账号分组设置）')
-    expect(w.getComponent(AccountEditorNav).props('sections').find(s => s.key === 'advanced')?.summary).toBe('不透传 · 转换：严格 · 超时跟随')
+    expect(sections(w).find(s => s.key === 'advanced')?.summary).toBe('不透传 · 转换：严格 · 超时跟随')
     await w.get('form').trigger('submit'); await flushPromises()
     expect(mocks.patch).toHaveBeenCalledWith('/accounts/1', expect.objectContaining({ conversion_loss_policy: 'strict' }))
     groups.value = []
+  })
+
+  it('opens the section of a field the browser finds invalid, and sends nothing', async () => {
+    const w = render(savedAccount())
+    await flushPromises()
+    await w.get('input[data-testid="account-priority"]').setValue('-5')
+    await w.get('form').trigger('submit'); await flushPromises()
+    expect(nav(w).props('modelValue')).toBe('scheduling')
+    expect(mocks.patch).not.toHaveBeenCalled()
   })
 
   it('keeps an inherited conversion loss policy as null', async () => {
@@ -442,7 +462,7 @@ describe('account model limits', () => {
     await flushPromises()
     expect(mocks.patch).toHaveBeenCalledWith('/accounts/1', expect.objectContaining({ spm_window_seconds: 60, model_limits: [] }))
     expect(w.getComponent(RateLimitEditor).props('errors')).toEqual({ spm_window_seconds: 'spm_window_seconds: invalid' })
-    expect(w.getComponent(AccountEditorNav).props('errors')).toMatchObject({ scheduling: true })
+    expect(marked(w)).toContain('scheduling')
   })
 
   it('leaves a period the type fixes to the server, and hides one the type hides', async () => {
@@ -535,7 +555,7 @@ describe('account usage limit', () => {
   async function open() {
     const w = render(savedAccount())
     await flushPromises()
-    w.getComponent(AccountEditorNav).vm.$emit('update:modelValue', 'scheduling')
+    nav(w).vm.$emit('update:modelValue', 'scheduling')
     await flushPromises()
     return w
   }
@@ -548,10 +568,10 @@ describe('account usage limit', () => {
     const w = render(savedAccount())
     await flushPromises()
     expect(mocks.get).not.toHaveBeenCalledWith('/accounts/1/usage-limit')
-    w.getComponent(AccountEditorNav).vm.$emit('update:modelValue', 'scheduling')
+    nav(w).vm.$emit('update:modelValue', 'scheduling')
     await flushPromises()
     expect(card(w).props()).toMatchObject({ status: 'ready', modelValue: saved })
-    expect(w.getComponent(AccountEditorNav).props('sections')[2].summary).toContain('用量限制 $200.00 每周')
+    expect(sections(w)[2].summary).toContain('用量限制 $200.00 每周')
     await submit(w)
     expect(mocks.patch).toHaveBeenCalledOnce()
     expect(mocks.put).not.toHaveBeenCalled()
@@ -559,7 +579,7 @@ describe('account usage limit', () => {
     card(w).vm.$emit('update:modelValue', { ...saved, amount: '300', period_count: 2 })
     await flushPromises()
     expect(card(w).props('modelValue').timezone).toBe(zone)
-    expect(w.getComponent(AccountEditorNav).props('sections')[2].summary).toContain('用量限制 $300.00 每 2 周')
+    expect(sections(w)[2].summary).toContain('用量限制 $300.00 每 2 周')
     await submit(w)
     expect(mocks.put).toHaveBeenCalledWith('/accounts/1/usage-limit', { ...saved, amount: '300', period_count: 2, timezone: zone })
     expect(mocks.patch.mock.invocationCallOrder[1]).toBeLessThan(mocks.put.mock.invocationCallOrder[0])
@@ -625,7 +645,7 @@ describe('account usage limit', () => {
     await submit(w)
     expect(mocks.patch).not.toHaveBeenCalled()
     expect(card(w).props('errors')).toEqual({ period_count: '周期长度必须为 1-12' })
-    expect(w.getComponent(AccountEditorNav).props('errors').scheduling).toBe(true)
+    expect(marked(w)).toContain('scheduling')
   })
 
   it('starts a limit the account never saved in the browser time zone', async () => {
@@ -678,7 +698,6 @@ describe('common controls of the account type (docs/COMMON-CONTROLS.md §2)', ()
     }
   } as unknown as AccountType
   const input = (w: ReturnType<typeof render>, key: string) => w.get(`input[data-testid="account-${key}"]`)
-  const sections = (w: ReturnType<typeof render>) => w.getComponent(AccountEditorNav).props('sections')
 
   beforeEach(() => {
     vi.clearAllMocks()
@@ -713,7 +732,7 @@ describe('common controls of the account type (docs/COMMON-CONTROLS.md §2)', ()
   it('requires the declared proxy and leaves the fixed fields to the server', async () => {
     const w = render(undefined, false, declared)
     await flushPromises()
-    await w.get('[data-editor-section="connection"] input').setValue('demo')
+    await w.get('[data-tab="connection"] input').setValue('demo')
     await w.get('form').trigger('submit'); await flushPromises()
     expect(mocks.post).not.toHaveBeenCalledWith('/accounts', expect.anything())
     expect(w.get('[data-testid="proxy-field"]').text()).toContain('此账号类型必须配置代理')
@@ -757,7 +776,7 @@ describe('plugin sections (account.editor.section)', () => {
     { pluginKey: 'any', name: 'AnySection', component: {} }
   ]
   const type = { ...accountType, plugin_key: 'demo', type: 'controls', creation_group: undefined } as unknown as AccountType
-  const plugin = (w: ReturnType<typeof render>) => w.getComponent(AccountEditorNav).props('sections').filter(s => s.key.startsWith('plugin:'))
+  const plugin = (w: ReturnType<typeof render>) => sections(w).filter(s => s.key.startsWith('plugin:'))
 
   beforeEach(() => {
     vi.clearAllMocks()
@@ -788,7 +807,7 @@ describe('plugin sections (account.editor.section)', () => {
     expect(slots[0].props('props')).toEqual({ account, accountType: type, readonly: false })
     const only = slots[0].props('only') as (e: unknown) => boolean
     expect(entries.map(only)).toEqual([true, false, false])
-    expect(slots[0].element.closest('[data-editor-section]')?.getAttribute('data-editor-section')).toBe('plugin:demo:DemoSection')
+    expect(sectionOf(slots[0].element)).toBe('plugin:demo:DemoSection')
   })
 })
 
@@ -842,7 +861,7 @@ describe('account field permissions', () => {
     perms.denied = ['account:relay']
     const official = { ...accountType, plugin_key: 'relay', type: 'official', creation_group: 'relay', custom_upstream: false } as unknown as AccountType
     const custom = { ...official, type: 'custom', custom_upstream: true } as unknown as AccountType
-    const w = shallowMount(AccountEditor, { props: { accountType: official, accountTypeOptions: [official, custom] }, global: { plugins: [i18n], stubs: { SCard: { template: '<div><slot /></div>' }, SField: { template: '<div><slot /></div>' } } } })
+    const w = shallowMount(AccountEditor, { props: { accountType: official, accountTypeOptions: [official, custom] }, global: { plugins: [i18n], stubs: { STabbedForm: false, STitleScope: false, AccountCredentialsCard: false, SCard: { template: '<div><slot /></div>' }, SField: { template: '<div><slot /></div>' } } } })
     await flushPromises()
     const options = w.findComponent({ name: 'SChoiceCards' }).props('options') as { value: string; disabled: boolean }[]
     expect(options).toEqual([expect.objectContaining({ value: 'official', disabled: false }), expect.objectContaining({ value: 'custom', disabled: true })])
@@ -869,8 +888,7 @@ describe('account protocols (DESIGN-2026-11-17-PROTOCOL-BINDING §5.1)', () => {
   })
   const openaiType = { ...accountType, ...openai } as AccountType
   const bound = () => ({ ...savedAccount(), models: ['gpt-5.6', 'claude-sonnet-4-5'], protocols: ['openai.chat', 'openai.responses'], model_protocols: [{ models: ['claude-sonnet-4-5'], protocols: ['anthropic.messages'] }] }) as Account
-  const nav = (w: ReturnType<typeof render>) => w.getComponent(AccountEditorNav)
-  const section = (w: ReturnType<typeof render>) => nav(w).props('sections').find(s => s.key === 'models')!
+  const section = (w: ReturnType<typeof render>) => sections(w).find(s => s.key === 'models')!
   const editorOf = (w: ReturnType<typeof render>) => w.getComponent(OwnProtocolsField).props('editor')
   const policy = (w: ReturnType<typeof render>) => w.get('[data-testid="account-conversion-policy-select"]')
 
@@ -878,7 +896,7 @@ describe('account protocols (DESIGN-2026-11-17-PROTOCOL-BINDING §5.1)', () => {
     const w = render(bound(), false, openaiType)
     await flushPromises()
     expect(section(w).label).toBe('协议与模型')
-    const cards = [...w.get('[data-editor-section="models"]').element.children].map(c => c.getAttribute('data-testid') || c.tagName.toLowerCase())
+    const cards = [...w.get('[data-tab="models"]').element.children].map(c => c.getAttribute('data-testid') || c.tagName.toLowerCase())
     expect(cards).toEqual(['own-protocols-card', 'div', 'model-protocols-card-stub'])
     expect(w.get('[data-testid="own-protocols-card"]').findComponent(OwnProtocolsField).exists()).toBe(true)
     // Both cards work on one state; the matrix gets the model list and the mapping.
@@ -926,14 +944,14 @@ describe('account protocols (DESIGN-2026-11-17-PROTOCOL-BINDING §5.1)', () => {
   it('does not save while a model has no protocol or the account opens none, and shows the section', async () => {
     const w = render({ ...bound(), model_protocols: [{ models: ['gpt-5.6'], protocols: [] }] } as Account, false, openaiType)
     await flushPromises()
-    expect(nav(w).props('errors')).toMatchObject({ models: true })
+    expect(marked(w)).toContain('models')
     await w.get('form').trigger('submit'); await flushPromises()
     expect(mocks.patch).not.toHaveBeenCalled()
     expect(nav(w).props('modelValue')).toBe('models')
     const editor = editorOf(w)
     editor.rules.value = {}
     await flushPromises()
-    expect(nav(w).props('errors')).toMatchObject({ models: false })
+    expect(marked(w)).not.toContain('models')
     // Every own protocol closed and nothing converted.
     editor.setMode('custom')
     for (const c of editor.columns.value.own) if (editor.protocols.value!.includes(c.key)) editor.toggleOwn(c)
@@ -967,7 +985,7 @@ describe('account protocols (DESIGN-2026-11-17-PROTOCOL-BINDING §5.1)', () => {
     await flushPromises()
     await w.get('form').trigger('submit'); await flushPromises()
     expect(nav(w).props('modelValue')).toBe('models')
-    expect(nav(w).props('errors')).toMatchObject({ models: true })
+    expect(marked(w)).toContain('models')
     expect(w.getComponent(OwnProtocolsField).props('errors')).toEqual(['openai.responses: 不是本平台协议'])
     expect(w.getComponent(ModelProtocolsCard).props('errors')).toMatchObject({ 'model_protocols[0].protocols[0]': '不能服务此协议' })
   })

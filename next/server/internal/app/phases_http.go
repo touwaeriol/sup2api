@@ -12,6 +12,7 @@ import (
 
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/audit"
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/httpapi"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/lookup"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/api"
@@ -31,7 +32,7 @@ func (b *boot) registerRoutes(r *httpapi.Router) {
 	b.idm.RegisterRoutes(r)
 	b.az.RegisterRoutes(r)
 	b.grp.RegisterRoutes(r)
-	segment.New(segment.Deps{DB: b.db, Authz: b.az, Users: b.az, Platforms: b.grp.Platforms}).RegisterRoutes(r)
+	b.buildSegments().RegisterRoutes(r)
 	b.env.RegisterRoutes(r)
 	b.ntf.RegisterRoutes(r)
 	b.keys.RegisterRoutes(r)
@@ -52,6 +53,15 @@ func (b *boot) registerRoutes(r *httpapi.Router) {
 	pr.RegisterAssets(b.engine)
 	b.gw.RegisterRoutes(r)
 	b.egress.RegisterRoutes(r)
+}
+
+// buildSegments builds the segment service. It and billing write their
+// parts of POST/PATCH /groups (the segments' rates, the model prices and
+// rates) in the group's transaction (CONTRACTS §97).
+func (b *boot) buildSegments() *segment.Service {
+	seg := segment.New(segment.Deps{DB: b.db, Authz: b.az, Users: b.az, Platforms: b.grp.Platforms, RatesChanged: b.bill.RatesChanged})
+	b.grp.Parts = []core.GroupWritePart{seg, b.bill}
+	return seg
 }
 
 // startPluginWrites starts the audit log of plugin writes and registers its

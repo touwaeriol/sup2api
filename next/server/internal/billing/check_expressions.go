@@ -8,7 +8,6 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/billing/expr"
-	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store/model"
 )
@@ -47,9 +46,7 @@ func CheckStoredExpressions(ctx context.Context, db *gorm.DB) ([]ExpressionProbl
 	for _, r := range rules {
 		ref := fmt.Sprintf("%d/%s", r.GroupID, r.Model)
 		c.compile("price_rules", ref, r.Expression)
-		if r.Mode != nil {
-			c.generated("price_rules", ref, *r.Mode, r.Config, r.ExprHash)
-		}
+		c.generated("price_rules", ref, r.Mode, r.Config, r.ExprHash)
 	}
 	for _, h := range history {
 		c.compile("model_price_history", h.ExprHash, h.Expression)
@@ -58,7 +55,8 @@ func CheckStoredExpressions(ctx context.Context, db *gorm.DB) ([]ExpressionProbl
 }
 
 // storedExpressions reads the prices, custom prices and price history
-// CheckStoredExpressions checks.
+// CheckStoredExpressions checks. Only a custom price has an expression:
+// before core migration 0124 multiplier rules had none, nor a mode.
 func storedExpressions(ctx context.Context, db *gorm.DB) ([]model.ModelPrice, []model.PriceRule, []model.ModelPriceHistory, error) {
 	var prices []model.ModelPrice
 	var rules []model.PriceRule
@@ -67,7 +65,7 @@ func storedExpressions(ctx context.Context, db *gorm.DB) ([]model.ModelPrice, []
 	if err := g.Select("model", "mode", "config", "expression", "expr_hash").Find(&prices).Error; err != nil {
 		return nil, nil, nil, err
 	}
-	if err := g.Select("group_id", "model", "mode", "config", "expression", "expr_hash").Where("kind = ?", core.PriceRuleCustom).Find(&rules).Error; err != nil {
+	if err := g.Select("group_id", "model", "mode", "config", "expression", "expr_hash").Where("expression <> ''").Find(&rules).Error; err != nil {
 		return nil, nil, nil, err
 	}
 	err := g.Select("expr_hash", "expression").Find(&history).Error

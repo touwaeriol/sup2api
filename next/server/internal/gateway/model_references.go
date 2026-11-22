@@ -114,8 +114,11 @@ func (c *call) prepareReferencedPrices(ctx context.Context) *gwError {
 		if rule.VideoOnly || !c.ep.SupportsBillingType(rule.BillingType()) {
 			return invalidModelReference("referenced model " + ref.model + " has an incompatible billing type")
 		}
-		ref.priced = core.PricedUsage{Kind: ref.kind, Model: ref.model, Price: rule.Clone(),
-			RateMultiplier: c.rec.RateMultiplier}
+		rate, _, e := c.modelRate(ctx, ref.model)
+		if e != nil {
+			return e
+		}
+		ref.priced = core.PricedUsage{Kind: ref.kind, Model: ref.model, Price: rule.Clone(), RateMultiplier: rate}
 		body, err := c.referencePriceBody(*ref)
 		if err != nil {
 			return invalidModelReference("cannot prepare referenced model price inputs")

@@ -20,7 +20,8 @@
 - 倍率只取一个、不相乘：用户分组×账号分组×模型 → 用户分组×账号分组 → 账号分组×模型 → 账号分组基本倍率；原价是账号分组的模型价格，没有则是全局价格；实付 = 原价 × 生效的那一个倍率。
 - 接口（mock 已实现，后端待做）：`POST/PATCH /groups` 带 `model_prices`、`model_rates`、`segment_rates`；`POST/PATCH /segments` 带 `group_rates`、`model_rates`；PATCH 只发改动；整单一次校验，字段错误形如 `model_prices.<i>.rule`。原来的子接口（分组价格、用户组成员页的保存等）在前端已不再调用。
 - 只能查看账号分组的调用者打开的只读价格窗口只显示价格表（CONTRACTS §92.5）。
-- `@sub2api/ui` 4.1.0（只增不改）：新增 `STabbedForm`、`useTabbedForm`、`useTabbedFormPart`，`HOST_UI_VERSION` 4.1.0（CONTRACTS §23.6）。
+- `@sub2api/ui` 4.1.0（只增不改）：新增 `STabbedForm`、`useTabbedForm`、`useTabbedFormPart`，`HOST_UI_VERSION` 4.1.0（CONTRACTS §23.6）。侧边布局另有标签图标、`before-nav` 插槽，部分可以异步检查、用 `invalid` 随改随消地标红。
+- 账号编辑器改用同一个 `STabbedForm` 的侧边布局：左侧导航、各页内容、保存接口、校验和出错跳页不变，手机上导航仍是横向滚动条。
 
 ## 2026-11-22
 

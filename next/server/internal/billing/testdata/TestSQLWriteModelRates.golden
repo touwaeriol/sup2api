@@ -1,0 +1,17 @@
+-- sql
+DELETE FROM "group_model_rates" WHERE group_id = $1 AND model = ANY($2)
+-- vars
+$1 int64 3
+$2 store.Strings [claude-haiku-4-5]
+
+-- sql
+INSERT INTO "group_model_rates" ("group_id","model","rate","updated_by") VALUES ($1,$2,$3,$4),($5,$6,$7,$8) ON CONFLICT ("group_id","model") DO UPDATE SET "rate"="excluded"."rate","updated_by"="excluded"."updated_by","updated_at"=now() RETURNING "updated_at"
+-- vars
+$1 int64 3
+$2 string "claude-opus-4-5"
+$3 decimal.Decimal 0
+$4 *int64 2
+$5 int64 3
+$6 string "gpt-5"
+$7 decimal.Decimal 1.2
+$8 *int64 2

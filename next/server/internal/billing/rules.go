@@ -8,7 +8,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
@@ -18,36 +17,28 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store/model"
 )
 
+// ruleCustom is the kind of a model price: a price of its own.
+const ruleCustom = "custom"
+
 // Rule is a model price of a group as the API reads and writes it (CONTRACTS
-// §97).
+// §97): a price of its own, as a global price is written (visual or
+// expression), whatever the global price is. Expression is read of an
+// expression price only; of a visual one it is generated from Config, and it
+// is always there on output.
 type Rule struct {
-	Kind string `json:"kind"`
-	// Multiplier (kind multiplier), a decimal: the list price is the global
-	// price times it, and follows the global price when that changes.
-	Multiplier *string `json:"multiplier,omitempty"`
-	// Mode, Config and Expression (kind custom): a price of its own, as a
-	// global price is written (visual or expression), whatever the global
-	// price is. Expression is read of an expression price only; of a visual
-	// one it is generated from Config, and it is always there on output.
-	Mode       string          `json:"mode,omitempty"`
+	Kind       string          `json:"kind"`
+	Mode       string          `json:"mode"`
 	Config     json.RawMessage `json:"config,omitempty"`
 	Expression string          `json:"expression,omitempty"`
 }
 
-// storedRule is a price_rules row: the rule and, of a custom price, what its
-// expression tells (priceTraits).
+// storedRule is a price_rules row: the rule and what its expression tells
+// (priceTraits).
 type storedRule struct {
 	Rule
-	scale       decimal.Decimal // Multiplier, as a number
 	exprHash    string
 	exprVersion int
 	traits      priceTraits
-}
-
-// setScale makes n the multiplier of the rule.
-func (r *storedRule) setScale(n decimal.Decimal) {
-	text := n.String()
-	r.scale, r.Multiplier = n, &text
 }
 
 // view returns the rule as the API shows it (nil = the model has none).
@@ -59,21 +50,15 @@ func (r *storedRule) view() *Rule {
 	return &out
 }
 
-// price returns the list price the rule makes of the global one: a
-// multiplier leaves the expression and sets Scale; a custom price puts its
-// own expression, and what it tells, in and keeps the global one as Base. ID
-// is always the global price's. A nil rule is the global price as it is, its
+// price returns the list price the rule makes of the global one: its own
+// expression, and what it tells, with the global one kept as Base. ID is
+// always the global price's. A nil rule is the global price as it is, its
 // Source left empty (core.PriceRule.Source).
 func (r *storedRule) price(global core.PriceRule) *core.PriceRule {
 	if r == nil {
 		return &global
 	}
 	global.Source = core.PriceSourceGroup
-	if r.Kind == core.PriceRuleMultiplier {
-		scale := r.scale
-		global.Scale = &scale
-		return &global
-	}
 	global.Base = &core.PriceBase{Expression: global.Expression, ExprHash: global.ExprHash}
 	global.Mode, global.Expression, global.ExprHash, global.ExprVersion = r.Mode, r.Expression, r.exprHash, r.exprVersion
 	r.traits.apply(&global)
@@ -94,77 +79,34 @@ type ruleSet map[int64]map[string]*storedRule
 // of returns the rule on the model of q in its group; nil without one.
 func (rs ruleSet) of(q core.PriceQuery) *storedRule { return rs[q.GroupID][q.Model] }
 
-// ruleRow is a row of price_rules as loadRules reads it.
-type ruleRow struct {
-	GroupID    int64
-	Model      string
-	Kind       string
-	Multiplier *decimal.Decimal
-	Mode       string
-	Config     json.RawMessage
-	Expression string
-	ExprHash   string
-}
-
 // loadRules reads every price rule.
 func loadRules(ctx context.Context, q *gorm.DB) (ruleSet, error) {
-	var rows []ruleRow
-	if err := store.G(ctx, q).Model(&model.PriceRule{}).Select(`group_id, model, kind, multiplier,
-		COALESCE(mode, '') AS mode, config, expression, expr_hash`).Scan(&rows).Error; err != nil {
+	var rows []model.PriceRule
+	if err := store.G(ctx, q).Select("group_id", "model", "mode", "config", "expression", "expr_hash").Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	out := ruleSet{}
 	for _, row := range rows {
-		r := &storedRule{Rule: Rule{Kind: row.Kind, Mode: row.Mode, Config: row.Config}, exprHash: row.ExprHash}
-		if row.Multiplier != nil {
-			r.setScale(*row.Multiplier)
+		r := &storedRule{Rule: Rule{Kind: ruleCustom, Mode: row.Mode, Config: row.Config, Expression: row.Expression}, exprHash: row.ExprHash}
+		if prog, err := expr.CompileCached(r.Expression); err == nil {
+			r.exprVersion, r.traits = prog.Version(), traitsOf(r.Mode, prog)
 		}
 		if out[row.GroupID] == nil {
 			out[row.GroupID] = map[string]*storedRule{}
 		}
 		out[row.GroupID][row.Model] = r
-		// Only a custom price has an expression of its own.
-		if r.Kind != core.PriceRuleCustom {
-			continue
-		}
-		r.Expression = row.Expression
-		if prog, err := expr.CompileCached(r.Expression); err == nil {
-			r.exprVersion, r.traits = prog.Version(), traitsOf(r.Mode, prog)
-		}
 	}
 	return out, nil
 }
 
-// checkRule validates a rule over the global price of its model (nil = the
-// model has none) and returns it as it is stored. facts are the usage facts
-// an expression may read (Service.factsFor). The error says why it cannot be
+// checkRule validates a model price as a global price is validated (visual
+// or expression, any shape) and generates its expression; the global price
+// does not matter, the rule replaces it. facts are the usage facts an
+// expression may read (Service.factsFor). The error says why it cannot be
 // saved.
-func checkRule(ctx context.Context, in Rule, base *PriceDef, facts map[string]bool) (*storedRule, error) {
-	if base == nil {
-		return nil, errors.New(core.Text(ctx, "the model has no global price", "该模型没有全局价格"))
-	}
-	switch in.Kind {
-	case core.PriceRuleMultiplier:
-		scale, ok := core.ParseRate(deref(in.Multiplier))
-		if !ok {
-			return nil, errors.New(core.Text(ctx, "multiplier must be 0 or more and below 1000000, with at most 4 decimals",
-				"倍数必须不小于 0、小于 1000000，最多 4 位小数"))
-		}
-		r := &storedRule{Rule: Rule{Kind: in.Kind}}
-		r.setScale(scale)
-		return r, nil
-	case core.PriceRuleCustom:
-		return checkCustom(ctx, in, facts)
-	}
-	return nil, errors.New(core.Text(ctx, "rule must be a multiplier or a custom price", "规则必须是倍数或自定义价"))
-}
-
-// checkCustom validates a custom price as a global price is validated
-// (visual or expression, any shape) and generates its expression. The global
-// price does not matter: a custom price replaces it.
-func checkCustom(ctx context.Context, in Rule, facts map[string]bool) (*storedRule, error) {
-	if in.Mode != expr.ModeVisual && in.Mode != expr.ModeExpression {
-		return nil, errors.New(core.Text(ctx, "a custom price is visual or expression", "自定义价的计费方式须是可视化或表达式"))
+func checkRule(ctx context.Context, in Rule, facts map[string]bool) (*storedRule, error) {
+	if in.Kind != ruleCustom || in.Mode != expr.ModeVisual && in.Mode != expr.ModeExpression {
+		return nil, errors.New(core.Text(ctx, "a model price is a custom price, visual or expression", "模型价格须是自定义价：可视化或表达式"))
 	}
 	config := priceConfig(in.Config)
 	rep, err := checkPriceDef(in.Mode, config, in.Expression, expr.ValidateOptions{Facts: facts})
@@ -201,9 +143,7 @@ type ruleWrites struct {
 type ruleRecord struct {
 	GroupID    int64
 	Model      string
-	Kind       string
-	Multiplier *decimal.Decimal
-	Mode       *string
+	Mode       string
 	Config     store.Bytes
 	Expression string
 	ExprHash   string
@@ -212,11 +152,8 @@ type ruleRecord struct {
 
 func (ruleRecord) TableName() string { return model.PriceRule{}.TableName() }
 
-// addHistory adds the expression of a custom price r to the history.
+// addHistory adds the expression of r to the history.
 func (w *ruleWrites) addHistory(r *storedRule) error {
-	if r.Kind != core.PriceRuleCustom {
-		return nil
-	}
 	prog, err := expr.CompileCached(r.Expression)
 	if err != nil {
 		return err
@@ -236,18 +173,8 @@ func (w *ruleWrites) addRule(on core.PriceQuery, removed bool, r *storedRule, up
 	if r == nil {
 		return
 	}
-	row := ruleRecord{GroupID: on.GroupID, Model: on.Model, Kind: r.Kind, Expression: r.Expression, ExprHash: r.exprHash,
-		UpdatedBy: nullID(updatedBy)}
-	if r.Multiplier != nil {
-		row.Multiplier = &r.scale
-	}
-	if r.Mode != "" {
-		row.Mode = &r.Mode
-	}
-	if r.Config != nil {
-		row.Config = store.Bytes(r.Config)
-	}
-	w.saved = append(w.saved, row)
+	w.saved = append(w.saved, ruleRecord{GroupID: on.GroupID, Model: on.Model, Mode: r.Mode, Config: store.Bytes(r.Config),
+		Expression: r.Expression, ExprHash: r.exprHash, UpdatedBy: nullID(updatedBy)})
 }
 
 // ruleKeys matches the rules of keys (ruleWrites).
@@ -255,12 +182,12 @@ func ruleKeys(keys []any) clause.IN {
 	return clause.IN{Column: []clause.Column{{Name: "group_id"}, {Name: "model"}}, Values: keys}
 }
 
-// ruleConflict is the upsert of the saved rules on price_rules_group_model_uq:
-// the rule over the one there, if any, by its user, updated_at moved.
-func ruleConflict() clause.OnConflict {
-	set := clause.AssignmentColumns([]string{"kind", "multiplier", "mode", "config", "expression", "expr_hash", "updated_by"})
+// groupModelUpsert is the upsert of a row of a group's model (on group_id
+// and model): the columns of set over the row there, if any, updated_at
+// moved.
+func groupModelUpsert(set ...string) clause.OnConflict {
 	return clause.OnConflict{Columns: []clause.Column{{Name: "group_id"}, {Name: "model"}},
-		DoUpdates: append(set, clause.Assignment{Column: clause.Column{Name: "updated_at"}, Value: clause.Expr{SQL: "now()"}})}
+		DoUpdates: append(clause.AssignmentColumns(set), clause.Assignment{Column: clause.Column{Name: "updated_at"}, Value: clause.Expr{SQL: "now()"}})}
 }
 
 // writeRules writes w in tx, as the statements of each change did one after
@@ -298,5 +225,5 @@ func writeRules(ctx context.Context, tx *gorm.DB, w *ruleWrites) error {
 	if len(w.saved) == 0 {
 		return nil
 	}
-	return g.Clauses(ruleConflict()).Create(&w.saved).Error
+	return g.Clauses(groupModelUpsert("mode", "config", "expression", "expr_hash", "updated_by")).Create(&w.saved).Error
 }

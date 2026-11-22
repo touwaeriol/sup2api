@@ -203,8 +203,8 @@ export const PERMISSIONS: Record<PermKey, PermMeta> = {
     stepUp: false,
     requires: [],
     description: {
-      en: 'View groups and the accounts bound to them.',
-      zh: '查看分组及其绑定的账号。'
+      en: 'View account groups and the accounts bound to them.',
+      zh: '查看账号分组及其绑定的账号。'
     }
   },
   'group:manage': {
@@ -213,8 +213,8 @@ export const PERMISSIONS: Record<PermKey, PermMeta> = {
     stepUp: false,
     requires: ['group:read'],
     description: {
-      en: "Create, edit and delete groups and set which user groups may use them, at what rates and prices; also lets restricted account editors change any account's groups.",
-      zh: '新建、修改、删除分组，设置哪些用户组可用及其倍率与价格；账号范围受限的人有它时可改任意账号的分组。'
+      en: "Create, edit and delete account groups with their model prices and rates and which user groups may use them at what rates; also lets restricted account editors change any account's account groups.",
+      zh: '新建、修改、删除账号分组，设置模型价格、模型倍率以及哪些用户分组可用、按什么倍率；账号范围受限的人有它时可改任意账号的账号分组。'
     }
   },
   'segment:read': {
@@ -223,8 +223,8 @@ export const PERMISSIONS: Record<PermKey, PermMeta> = {
     stepUp: false,
     requires: [],
     description: {
-      en: 'View user groups, their members and pricing.',
-      zh: '查看用户组、成员与定价。'
+      en: 'View user groups, their members and rates.',
+      zh: '查看用户分组、成员与倍率。'
     }
   },
   'segment:manage': {
@@ -233,8 +233,8 @@ export const PERMISSIONS: Record<PermKey, PermMeta> = {
     stepUp: false,
     requires: ['segment:read'],
     description: {
-      en: 'Create, edit and delete user groups: members, private groups and prices.',
-      zh: '新建、修改、删除用户组：成员、专属分组与价格。'
+      en: 'Create, edit and delete user groups: members, private account groups and rates.',
+      zh: '新建、修改、删除用户分组：成员、私有账号分组的开通与倍率。'
     }
   },
   'account:read': {
@@ -243,8 +243,8 @@ export const PERMISSIONS: Record<PermKey, PermMeta> = {
     stepUp: false,
     requires: [],
     description: {
-      en: 'View upstream accounts within the scope granted (all, own, own and the users below, a group or one account).',
-      zh: '查看授权范围内的上游账号（全部、自己的、自己及下级、某分组或单个账号）。'
+      en: 'View upstream accounts within the scope granted (all, own, own and the users below, an account group or one account).',
+      zh: '查看授权范围内的上游账号（全部、自己的、自己及下级、某账号分组或单个账号）。'
     }
   },
   'account:create': {
@@ -313,8 +313,8 @@ export const PERMISSIONS: Record<PermKey, PermMeta> = {
     stepUp: false,
     requires: ['account:update'],
     description: {
-      en: 'Bind accounts to groups you can use; only matters to callers with a restricted account scope (own, a group or one account) and without group:manage.',
-      zh: '把账号绑定到自己可用的分组；只对账号范围受限（仅自己、某分组或单个账号）且没有 group:manage 的人生效。'
+      en: 'Bind accounts to account groups you can use; only matters to callers with a restricted account scope (own, an account group or one account) and without group:manage.',
+      zh: '把账号绑定到自己可用的账号分组；只对账号范围受限（仅自己、某账号分组或单个账号）且没有 group:manage 的人生效。'
     }
   },
   'account:relay': {
@@ -323,8 +323,8 @@ export const PERMISSIONS: Record<PermKey, PermMeta> = {
     stepUp: false,
     requires: ['account:create'],
     description: {
-      en: 'Create accounts whose upstream address is free (relay) or re-point it; only matters to callers with a restricted account scope (own, group or account).',
-      zh: '创建或改动可自定义上游地址的账号（relay）；只对账号范围受限（仅自己、某分组或单个账号）的人生效。'
+      en: 'Create accounts whose upstream address is free (relay) or re-point it; only matters to callers with a restricted account scope (own, account group or account).',
+      zh: '创建或改动可自定义上游地址的账号（relay）；只对账号范围受限（仅自己、某账号分组或单个账号）的人生效。'
     }
   },
   'account:owner:update': {

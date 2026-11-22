@@ -43,6 +43,7 @@ func (s *Service) makePersonal(c *gin.Context) {
 		httpapi.Fail(c, err)
 		return
 	}
+	s.ratesWritten(ctx, in.Copy)
 	s.render(c, id, httpapi.Created)
 }
 
@@ -74,7 +75,7 @@ func createPersonal(ctx context.Context, tx *gorm.DB, userID int64, copyFrom boo
 	if kind == core.SegmentPersonal {
 		return 0, errAlreadyPersonal(ctx)
 	}
-	id, from, err := insertPersonal(ctx, tx, userID, copyFrom)
+	id, from, err := insertPersonal(ctx, tx, userID)
 	if err != nil {
 		return 0, err
 	}
@@ -91,11 +92,10 @@ func createPersonal(ctx context.Context, tx *gorm.DB, userID int64, copyFrom boo
 	return id, copySettings(ctx, tx, from, id)
 }
 
-// insertPersonal inserts the personal segment of a user in a named segment,
-// with the discount of that segment when copyFrom is set, and returns its id
-// and the segment the user is in (its origin). A user who is in none, or
-// has one already, is errAlreadyPersonal.
-func insertPersonal(ctx context.Context, tx *gorm.DB, userID int64, copyFrom bool) (id, from int64, err error) {
+// insertPersonal inserts the personal segment of a user in a named segment
+// and returns its id and the segment the user is in (its origin). A user
+// who is in none, or has one already, is errAlreadyPersonal.
+func insertPersonal(ctx context.Context, tx *gorm.DB, userID int64) (id, from int64, err error) {
 	// The user is not locked yet: referring to the origin waits for a
 	// delete of it, and that delete waits for its members.
 	var created struct {
@@ -103,9 +103,9 @@ func insertPersonal(ctx context.Context, tx *gorm.DB, userID int64, copyFrom boo
 		OriginID int64 `gorm:"column:origin_id"`
 	}
 	g := store.G(ctx, tx)
-	origin := g.Table("users u").Select("'personal', u.id, s.id, CASE WHEN ? THEN s.discount ELSE 1 END", copyFrom).
+	origin := g.Table("users u").Select("'personal', u.id, s.id").
 		Joins("JOIN segments s ON s.id = u.segment_id").Where("u.id = ? AND u.deleted_at IS NULL AND s.kind = 'named'", userID)
-	err = gormpg.InsertSelectReturning(g, "segments", []string{"kind", "user_id", "origin_id", "discount"}, origin,
+	err = gormpg.InsertSelectReturning(g, "segments", []string{"kind", "user_id", "origin_id"}, origin,
 		clause.Returning{Columns: []clause.Column{{Name: "id"}, {Name: "origin_id"}}}).Take(&created).Error
 	if store.IsNoRows(err) || store.IsUniqueViolation(err, "segments_user_uq") {
 		return 0, 0, errAlreadyPersonal(ctx)
@@ -114,11 +114,15 @@ func insertPersonal(ctx context.Context, tx *gorm.DB, userID int64, copyFrom boo
 }
 
 // copySettings gives segment to what segment from has in every group: its
-// grants and rate overrides. The two are unrelated afterwards.
+// grants, rate overrides and model rates. The two are unrelated afterwards.
 func copySettings(ctx context.Context, tx *gorm.DB, from, to int64) error {
 	g := store.G(ctx, tx)
 	pairs := g.Model(&model.SegmentGroup{}).Select("?::bigint, group_id, granted, rate_override", to).Where("segment_id = ?", from)
-	return gormpg.InsertSelect(g, "segment_groups", []string{"segment_id", "group_id", "granted", "rate_override"}, pairs).Error
+	if err := gormpg.InsertSelect(g, "segment_groups", []string{"segment_id", "group_id", "granted", "rate_override"}, pairs).Error; err != nil {
+		return err
+	}
+	rates := g.Model(&model.SegmentModelRate{}).Select("?::bigint, group_id, model, rate", to).Where("segment_id = ?", from)
+	return gormpg.InsertSelect(g, "segment_model_rates", []string{"segment_id", "group_id", "model", "rate"}, rates).Error
 }
 
 // removePersonal moves a personal user back to a named segment (?to=, the

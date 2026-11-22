@@ -31,9 +31,9 @@ func fieldError(ctx context.Context, field, code, en, zh string) core.FieldError
 	return core.FieldError{Field: field, Code: code, Message: t(ctx, en, zh)}
 }
 
-// validate checks the provided fields, normalizing them as stored; create
+// check checks the provided fields, normalizing them as stored; create
 // requires name. The field errors come in the order of the fields.
-func (in *groupInput) validate(ctx context.Context, create bool) error {
+func (in *groupInput) check(ctx context.Context, create bool) []core.FieldError {
 	fe := in.checkText(ctx, create)
 	fe = append(fe, in.checkChoices(ctx)...)
 	fe = append(fe, in.checkRate(ctx)...)
@@ -43,11 +43,7 @@ func (in *groupInput) validate(ctx context.Context, create bool) error {
 		fe = append(fe, errs...)
 		in.Environment = &values
 	}
-	fe = append(fe, in.ConversionLossPolicy.Validate(ctx, "conversion_loss_policy")...)
-	if len(fe) > 0 {
-		return core.InvalidFields(fe...)
-	}
-	return nil
+	return append(fe, in.ConversionLossPolicy.Validate(ctx, "conversion_loss_policy")...)
 }
 
 // checkText checks the name, trimmed, and the description.

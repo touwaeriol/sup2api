@@ -1,6 +1,6 @@
 -- sql
 SELECT g.id AS group_id, s.id AS segment_id, COALESCE(sg.granted, false) AS granted, g.visibility = 'public' AS public,
-	g.rate_multiplier, s.discount, sg.rate_override FROM groups g JOIN segments s ON s.id = ANY($1) LEFT JOIN segment_groups sg ON sg.segment_id = s.id AND sg.group_id = g.id WHERE g.id = ANY($2)
+	g.rate_multiplier, sg.rate_override FROM groups g JOIN segments s ON s.id = ANY($1) LEFT JOIN segment_groups sg ON sg.segment_id = s.id AND sg.group_id = g.id WHERE g.id = ANY($2)
 -- vars
 $1 store.Int64s [3 4]
 $2 store.Int64s [1]
