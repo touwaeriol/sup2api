@@ -56,7 +56,7 @@ describe('group pricing editor', () => {
     expect(options.map((o) => [o.label, o.options?.map((c) => [c.label, c.tag])])).toEqual([
       ['所有人（分组倍率）×0.8', undefined],
       ['用户组', [['VIP ×0.72', undefined], ['Staff ×0.8', '未开通']]],
-      ['个人', [['a@b.c ×0.65', undefined]]]
+      ['专享', [['a@b.c ×0.65', undefined]]]
     ])
     await pick(104)
     expect(rate()).toBe('0.65')

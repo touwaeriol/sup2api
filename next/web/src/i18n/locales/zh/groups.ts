@@ -20,7 +20,7 @@ export default {
   public: '公开',
   restricted: '私有',
   publicHint: '所有用户都能用。',
-  restrictedHint: '只有开通的用户组和个人能用，在“用户组”里开通。',
+  restrictedHint: '只有开通的用户组和专享用户能用，在“用户组”里开通。',
   rateMultiplier: '分组倍率',
   multiplierHint: '0.8 就是八折。用户组没单独设倍率时按它算（再乘用户组折扣）。',
   saveHint: '改动点“保存”后一起生效',
@@ -71,7 +71,7 @@ export default {
   access: {
     everyone: '所有人',
     nobody: '还没开通给任何人',
-    personal: '{n} 个人'
+    personal: '{n} 位专享用户'
   },
   pricingSummary: {
     base: '全部用原价',
@@ -81,7 +81,7 @@ export default {
     payer: '实付按',
     payerAll: '所有人（分组倍率）{rate}',
     payerSegments: '用户组',
-    payerPersonal: '个人',
+    payerPersonal: '专享',
     notAccessible: '未开通'
   }
 }

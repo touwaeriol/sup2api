@@ -20,7 +20,7 @@ export default {
     label: 'Filter by kind',
     all: 'All {n}',
     named: 'User groups {n}',
-    personal: 'Personal {n}'
+    personal: 'Exclusive {n}'
   },
   columns: {
     name: 'Name',
@@ -58,7 +58,7 @@ export default {
     emptyNew: 'No member picked yet',
     thisSegment: 'this user group',
     already: '{name} is in this user group already',
-    dropPersonal: '{name} is Personal now. Joining "{segment}" deletes their own settings; from then on they pay as "{segment}".',
+    dropPersonal: '{name} is Exclusive now. Joining "{segment}" deletes their own settings; from then on they pay as "{segment}".',
     dropPersonalConfirm: 'Join and delete own settings',
     movedFrom: 'Moved {name} from "{from}" to "{to}"',
     remove: 'Remove',
@@ -80,10 +80,10 @@ export default {
   convert: {
     pick: 'Set a rate for one user',
     pickShort: 'Set rates for a user',
-    pickHint: 'The user leaves their user group and becomes Personal; one who is Personal already opens their settings.',
+    pickHint: 'The user leaves their user group and becomes Exclusive; one who is Exclusive already opens their settings.',
     pickPlaceholder: 'Search a user by email or name',
     title: 'Set rates for {name}',
-    intro: 'The user becomes Personal and leaves "{from}"; later changes to "{from}" no longer affect them.',
+    intro: 'The user becomes Exclusive and leaves "{from}"; later changes to "{from}" no longer affect them.',
     currentSegment: 'the current user group',
     startFrom: 'Start from',
     copy: 'Copy the current settings of "{from}"',
@@ -91,7 +91,7 @@ export default {
     blank: 'Start from blank',
     blankHint: 'Public groups only, at each group rate.',
     submit: 'Set own rates',
-    done: '{name} is now Personal'
+    done: '{name} is now Exclusive'
   },
   remove: {
     title: 'Move {name} back to a user group',

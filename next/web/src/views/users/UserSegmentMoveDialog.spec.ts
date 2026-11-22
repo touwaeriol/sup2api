@@ -44,7 +44,7 @@ describe('moving users to a user group', () => {
 
     await choose(2)
     expect(text('user-move-impact')).toBe('2 位用户将移到「VIP」。1 位已在「VIP」，不受影响。')
-    expect(text('user-move-personal')).toBe('包含 1 位个人用户，移动后他们单独设的开通和倍率会被删除。')
+    expect(text('user-move-personal')).toBe('包含 1 位专享用户，移动后他们单独设的开通和倍率会被删除。')
 
     submitButton().click()
     await flushPromises()

@@ -20,7 +20,7 @@ export default {
   public: 'Public',
   restricted: 'Private',
   publicHint: 'Every user can use it.',
-  restrictedHint: 'Only the user groups and personal users it is opened to on the "User groups" tab can use it.',
+  restrictedHint: 'Only the user groups and exclusive users it is opened to on the "User groups" tab can use it.',
   rateMultiplier: 'Group rate',
   multiplierHint: '0.8 is 20% off. A user group without a rate of its own pays this (times its discount).',
   saveHint: 'Changes take effect together on Save',
@@ -71,7 +71,7 @@ export default {
   access: {
     everyone: 'Everyone',
     nobody: 'Open to nobody yet',
-    personal: '{n} person | {n} people'
+    personal: '{n} exclusive user | {n} exclusive users'
   },
   pricingSummary: {
     base: 'All at original prices',
@@ -81,7 +81,7 @@ export default {
     payer: 'Paid at',
     payerAll: 'Everyone (group rate) {rate}',
     payerSegments: 'User groups',
-    payerPersonal: 'Personal',
+    payerPersonal: 'Exclusive',
     notAccessible: 'Not open'
   }
 }

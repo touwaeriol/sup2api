@@ -91,7 +91,7 @@ describe('groups page', () => {
     expect(access[0].text()).toBe('所有人')
     expect(access[1].findAll('[data-testid="segment-badge"]').map(b => b.text())).toEqual(['VIP', 'Corp'])
     expect(access[1].text()).toContain('+1')
-    expect(access[1].get('[data-testid="group-access-personal"]').text()).toBe('2 个人')
+    expect(access[1].get('[data-testid="group-access-personal"]').text()).toBe('2 位专享用户')
     expect(access[2].text()).toBe('还没开通给任何人')
   })
 

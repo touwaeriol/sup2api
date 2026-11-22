@@ -1,7 +1,7 @@
 export default {
   segment: {
-    personal: '个人',
-    personalOf: '个人 · {name}'
+    personal: '专享',
+    personalOf: '专享 · {name}'
   },
   exclusive: '专属',
   rate: {

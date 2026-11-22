@@ -1,7 +1,7 @@
 export default {
   segment: {
-    personal: 'Personal',
-    personalOf: 'Personal · {name}'
+    personal: 'Exclusive',
+    personalOf: 'Exclusive · {name}'
   },
   exclusive: 'Exclusive',
   rate: {

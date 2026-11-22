@@ -19,7 +19,7 @@ export default {
     label: '按类型筛选',
     all: '全部 {n}',
     named: '用户组 {n}',
-    personal: '个人 {n}'
+    personal: '专享 {n}'
   },
   columns: {
     name: '名称',
@@ -57,7 +57,7 @@ export default {
     emptyNew: '还没选成员',
     thisSegment: '这个用户组',
     already: '{name} 已经在这个用户组里',
-    dropPersonal: '{name} 现在是个人。加入「{segment}」后，他单独设的开通和倍率会被删除，之后按「{segment}」付费。',
+    dropPersonal: '{name} 现在是专享。加入「{segment}」后，他单独设的开通和倍率会被删除，之后按「{segment}」付费。',
     dropPersonalConfirm: '加入并删除单独设置',
     movedFrom: '已把 {name} 从「{from}」移到「{to}」',
     remove: '移出',
@@ -79,10 +79,10 @@ export default {
   convert: {
     pick: '给某个用户单独设倍率',
     pickShort: '给用户单独设倍率',
-    pickHint: '他会离开原来的用户组，成为“个人”；已经是个人的直接打开他的设置。',
+    pickHint: '他会离开原来的用户组，成为“专享”；已经是专享的直接打开他的设置。',
     pickPlaceholder: '按邮箱或昵称搜索用户',
     title: '给 {name} 单独设倍率',
-    intro: '他会成为“个人”，不再属于「{from}」，之后「{from}」的改动不再影响他。',
+    intro: '他会成为“专享”，不再属于「{from}」，之后「{from}」的改动不再影响他。',
     currentSegment: '原用户组',
     startFrom: '从哪里开始',
     copy: '复制「{from}」现在的设置',
@@ -90,7 +90,7 @@ export default {
     blank: '从空白开始',
     blankHint: '只能用公开分组，按分组倍率付费。',
     submit: '单独设倍率',
-    done: '{name} 现在是个人'
+    done: '{name} 现在是专享'
   },
   remove: {
     title: '把 {name} 移回用户组',

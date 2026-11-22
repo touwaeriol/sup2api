@@ -52,7 +52,7 @@ describe('personal convert dialog', () => {
     submit()
     await flushPromises()
     expect(mocks.post).toHaveBeenCalledWith('/users/7/personal-segment', { copy: true })
-    expect(mocks.toast).toHaveBeenCalledWith('amy@example.com 现在是个人', 'success')
+    expect(mocks.toast).toHaveBeenCalledWith('amy@example.com 现在是专享', 'success')
     expect(wrapper.emitted('done')).toEqual([[personal, true]])
     expect(wrapper.emitted('update:open')).toEqual([[false]])
     wrapper.unmount()
