@@ -59,7 +59,7 @@ async function render(props: Props, hosted = false) {
   const cell = (model: string, name: string) => row(model).get(`[data-testid="model-price-${name}"]`).text()
   const rate = (model: string) => row(model).get('input[data-testid="rate-override-input"]')
   /** The one open price editor, in the row under its model's. */
-  const editor = () => w.get('[data-testid="price-rule-editor"]')
+  const editor = () => w.get('[data-testid="model-price-editor-editor"]')
   const add = async (model: string) => {
     w.getComponent(AddSelect).vm.$emit('add', model)
     await flushPromises()
@@ -88,11 +88,11 @@ describe('model price table', () => {
     expect(mocks.get.mock.calls.map((c) => c[0])).toEqual(['/groups/3/model-prices'])
     expect(cell('gpt-4o', 'base')).toBe('$3 / $15')
     expect(cell('gpt-4o', 'price')).toBe('Follows the original price')
-    expect(cell('gpt-4o', 'rate')).toBe('×1.5')
+    expect(row('gpt-4o').get('[data-testid="rate-override-value"]').text()).toBe('×1.5')
     // The model rate replaces the base rate: ×1.5, not ×1.5 × 0.8.
     expect(cell('gpt-4o', 'paid')).toBe('$4.5 / $22.5')
     expect(cell('gpt-4o', 'paid-source')).toBe('×1.5 · Model rate')
-    expect(cell('o3', 'rate')).toBe('Follows the base rate')
+    expect(row('o3').get('[data-testid="rate-override-value"]').text()).toBe('Follows the base rate')
     expect(cell('o3', 'paid')).toBe('$1.6 / $6.4')
     expect(cell('o3', 'paid-source')).toBe('×0.8 · Follows the base rate')
     expect(cell('gpt-5', 'price')).toBe('$1 / $8')
@@ -165,10 +165,10 @@ describe('model price table', () => {
     const set = (model: string) => row(model).get('[data-testid="model-price-set"]')
     await set('gpt-4o').trigger('click')
     await set('o3').trigger('click')
-    expect(w.findAll('[data-testid="price-rule-editor"]')).toHaveLength(1)
-    expect(row('o3').element.nextElementSibling?.querySelector('[data-testid="price-rule-editor"]')).not.toBeNull()
+    expect(w.findAll('[data-testid="model-price-editor-editor"]')).toHaveLength(1)
+    expect(row('o3').element.nextElementSibling?.querySelector('[data-testid="model-price-editor-editor"]')).not.toBeNull()
     await set('o3').trigger('click')
-    expect(w.find('[data-testid="price-rule-editor"]').exists()).toBe(false)
+    expect(w.find('[data-testid="model-price-editor-editor"]').exists()).toBe(false)
   })
 
   it('adds any model with an original price, which can go again with its draft until it is saved', async () => {

@@ -22,69 +22,71 @@ const PERIOD_FIELDS = ['period', 'period_count', 'anchor'] as const
 /** What decides whether the limit changed: the zone alone is not an edit. */
 const fingerprint = (v: AccountUsageLimit) => JSON.stringify({ ...v, timezone: undefined })
 
-export function useUsageLimitEdit(accountId: () => number | undefined, shown: () => boolean) {
-  const { t } = useI18n()
+/** The limit being edited, the fingerprint it was loaded or saved with, the card's state and its model. */
+function useLimitState() {
   const value = ref<AccountUsageLimit>(defaultUsageLimit())
   const saved = ref('')
   const status = ref<UsageLimitStatus>('ready')
-  const loadError = ref('')
   const errors = ref<Record<string, string>>({})
-  let forId: number | undefined | null = null
-  let seq = 0
-
-  /** The card's model: an edit of the periods takes the browser's time zone, the one saved. */
-  const limit = computed({
-    get: () => value.value,
-    set: (v: AccountUsageLimit) => (value.value = PERIOD_FIELDS.some((k) => v[k] !== value.value[k]) ? { ...v, timezone: browserTZ() } : v)
-  })
-
   function reset(v: AccountUsageLimit, next: UsageLimitStatus) {
     value.value = v
     saved.value = fingerprint(v)
     status.value = next
     errors.value = {}
   }
+  /** The card's model: an edit of the periods takes the browser's time zone, the one saved. */
+  const limit = computed({
+    get: () => value.value,
+    set: (v: AccountUsageLimit) => (value.value = PERIOD_FIELDS.some((k) => v[k] !== value.value[k]) ? { ...v, timezone: browserTZ() } : v)
+  })
+  return { value, saved, status, errors, reset, limit }
+}
+type LimitState = ReturnType<typeof useLimitState>
 
+/** Loads the limit of the account the first time the card is shown; a stale answer is dropped. */
+function useLimitLoader(s: LimitState, accountId: () => number | undefined, shown: () => boolean) {
+  const loadError = ref('')
+  let forId: number | undefined | null = null
+  let seq = 0
   async function load() {
     const id = accountId()
-    if (!id || status.value === 'loading' || status.value === 'ready') return
+    if (!id || s.status.value === 'loading' || s.status.value === 'ready') return
     const my = ++seq
-    status.value = 'loading'
+    s.status.value = 'loading'
     try {
       const loaded = loadedUsageLimit(await fetchUsageLimit(id))
-      if (my === seq) reset(loaded, 'ready')
+      if (my === seq) s.reset(loaded, 'ready')
     } catch (e) {
       if (my !== seq) return
       loadError.value = errorMessage(e)
-      status.value = 'failed'
+      s.status.value = 'failed'
     }
   }
-
-  watch(
-    () => [accountId(), shown()] as const,
-    ([id, visible]) => {
-      if (id !== forId) {
-        forId = id
-        seq++
-        reset(defaultUsageLimit(), id ? 'idle' : 'ready')
-      }
-      if (visible) void load()
-    },
-    { immediate: true }
-  )
-
-  /** Shows a value (a declared default) as the unchanged one: saving sends it only once edited. */
-  function prefill(v: Partial<AccountUsageLimit>) {
-    reset({ ...defaultUsageLimit(), ...v }, status.value)
+  function follow([id, visible]: readonly [number | undefined, boolean]) {
+    if (id !== forId) {
+      forId = id
+      seq++
+      s.reset(defaultUsageLimit(), id ? 'idle' : 'ready')
+    }
+    if (visible) void load()
   }
+  watch(() => [accountId(), shown()] as const, follow, { immediate: true })
+  return { loadError, load }
+}
 
+export function useUsageLimitEdit(accountId: () => number | undefined, shown: () => boolean) {
+  const { t } = useI18n()
+  const state = useLimitState()
+  const { value, saved, status, errors, reset, limit } = state
+  const { loadError, load } = useLimitLoader(state, accountId, shown)
+  /** Shows a value (a declared default) as the unchanged one: saving sends it only once edited. */
+  const prefill = (v: Partial<AccountUsageLimit>) => reset({ ...defaultUsageLimit(), ...v }, status.value)
   /** Shows the card's errors and reports whether they block saving; a limit that never loaded is not checked. */
   function invalid(): boolean {
     const field = status.value === 'ready' ? usageLimitError(value.value) : null
     errors.value = field ? { [field]: t(MESSAGES[field], { max: PERIOD_COUNT_MAX[value.value.period] }) } : {}
     return field !== null
   }
-
   /** Saves the limit of the saved account when it loaded and changed. */
   async function save(a: Account) {
     if (status.value !== 'ready' || fingerprint(value.value) === saved.value) return
@@ -92,13 +94,11 @@ export function useUsageLimitEdit(accountId: () => number | undefined, shown: ()
     await saveUsageLimit(a.id, body)
     reset(body, 'ready')
   }
-
   /** "Usage limit $200.00 per week" of the section navigation, empty when off. */
   const summary = computed(() => {
     const l = value.value
     return l.enabled ? t('accounts.usageLimit.summary', { amount: formatMoney(l.amount, 2), period: usagePeriodLabel(t, l.period, l.period_count) }) : ''
   })
-
   return { limit, status, loadError, errors, summary, load, prefill, invalid, save }
 }
 

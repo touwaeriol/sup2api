@@ -2,9 +2,7 @@
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { SBadge, SCard, SCode, SDescItem, SDescriptions, SDisclosure, SHint, SIcon, SLink } from '@sub2api/ui'
-import type { UsagePricing } from '@/api/pricing'
 import ModelBadge from '@/components/platform/ModelBadge.vue'
-import { ruleText } from '@/components/pricing/ruleText'
 import { useAuthStore } from '@/stores/auth'
 import { formatMoney, formatNumber } from '@/utils/format'
 import { useOptionalT } from '@/composables/optionalText'
@@ -12,6 +10,7 @@ import BillingBreakdown from '@/views/prices/BillingBreakdown.vue'
 import ExprHistoryModal from '@/views/prices/ExprHistoryModal.vue'
 import UsageTokenFacts from './UsageTokenFacts.vue'
 import { billingTone, factText, usageComponents, type UsageRow } from './usage'
+import { listRuleOf, pricingOf } from './usagePricing'
 
 // Billing half of an expanded usage record (billing_detail, A.14).
 const props = defineProps<{ u: UsageRow }>()
@@ -30,14 +29,7 @@ const rules = computed<Rule[]>(() => (Array.isArray(bd.value.rules) ? bd.value.r
 const ledgerId = computed(() => props.u.ledger_id ?? bd.value.ledger_id ?? null)
 const rate = computed(() => bd.value.rate_multiplier ?? props.u.rate_multiplier ?? null)
 // Group pricing (inputs.pricing, list_cost): a record at the global price and the group's default rate has neither.
-const pricing = computed<UsagePricing>(() => pricingOf(bd.value))
-/** The price that replaced the original price, when one did: whose it is (a user group's only on records before they were removed) and what it made of the original price. */
-const listRule = computed(() => {
-  const { price_source: source, scale, base } = pricing.value
-  if (!source) return null
-  const multiplier = scale === undefined ? '' : ruleText(t, { kind: 'multiplier', multiplier: scale })
-  return { source, text: base ? t('pricing.rule.customText') : multiplier }
-})
+const listRule = computed(() => listRuleOf(t, pricingOf(bd.value)))
 // Items priced separately from the primary usage, such as an advisor model at its own price.
 const components = computed(() => (['additional', 'replacement'] as const)
   .map(list => ({ list, items: usageComponents(props.u, list) }))
@@ -56,10 +48,6 @@ const inputs = computed(() => [
   ...Object.entries(bd.value.inputs?.params || {}).map(([key, value]) => ({ name: `param("${key}")`, value })),
   ...Object.entries(bd.value.inputs?.headers || {}).map(([key, value]) => ({ name: `header("${key}")`, value }))
 ])
-
-function pricingOf(detail: Detail): UsagePricing {
-  return detail.inputs?.pricing || {}
-}
 
 /** BillingBreakdown's props for one priced part of a record (the primary usage or an item): its own breakdown, rules, rates and amount. */
 function breakdownOf(detail: Detail, rateMultiplier: string | number | null, total: string | number | null) {
@@ -116,7 +104,7 @@ function label(prefix: string, value: string) {
       </SDescItem>
 
       <SDescItem v-if="listRule" :label="t('usage.billing.listPrice')"><div class="flex flex-wrap items-center gap-2" data-testid="usage-list-price">
-        <SBadge :tone="listRule.source === 'segment' ? 'gray' : 'info'">{{ label('pricing.source', listRule.source) }}</SBadge>
+        <SBadge :tone="listRule.source === 'segment' ? 'gray' : 'info'">{{ listRule.label }}</SBadge>
         <span>{{ listRule.text }}</span>
       </div></SDescItem>
 

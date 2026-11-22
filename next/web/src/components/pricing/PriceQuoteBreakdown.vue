@@ -5,9 +5,9 @@ import { SAlert, SBadge, SGrid, SHint } from '@sub2api/ui'
 import type { CustomPrice, PriceDef, PricingQuote } from '@/api/pricing'
 import { formatMoney } from '@/utils/format'
 import SegmentBadge from './SegmentBadge.vue'
-import { applyRule, priceCells, rateText } from './pricingFormat'
+import { listPriceOf, priceCells, rateText } from './pricingFormat'
 import { priceLevels, rateLevels, type LevelState, type QuoteLevel } from './quoteLevels'
-import { priceLabel, ruleText } from './ruleText'
+import { priceLabel } from './priceLabels'
 
 // A quote (POST /pricing/quote) read as one sum: whether the segment may use
 // the group, the model price and the rate level by level (the one that
@@ -37,8 +37,9 @@ interface Chain {
 /** A level of the model price: the original price itself, or the group's price with the price it comes to. */
 function priceLevelText(v: CustomPrice | PriceDef): string {
   if (!('kind' in v)) return priceLabel(t, v)
-  const price = applyRule(props.quote.base, v)
-  return price ? `${ruleText(t, v)} = ${priceLabel(t, price)}` : ruleText(t, v)
+  const price = listPriceOf(props.quote.base, v)
+  const custom = t('pricing.editor.customText')
+  return price ? `${custom} = ${priceLabel(t, price)}` : custom
 }
 
 const names = computed(() => ({ segment: props.quote.segment.name, group: props.groupName ?? '' }))

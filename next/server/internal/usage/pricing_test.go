@@ -196,13 +196,12 @@ func TestPricingTrace(t *testing.T) {
 			got := pricingTrace(tc.price, tc.segmentID, tc.rateSource)
 			require.Equal(t, tc.want, got)
 			// The trace gives the rule back: a retry prices with it.
-			frozen := (&pending{Inputs: pendingInputs{Pricing: got}}).price()
+			frozen := (&pending{Inputs: pendingInputs{Pricing: got}}).rule()
 			rule := tc.price
 			if rule == nil {
 				rule = &core.PriceRule{}
 			}
-			require.Equal(t, rule.Scale, frozen.Scale)
-			require.Equal(t, rule.Base, frozen.Base)
+			require.Equal(t, frozenRule{base: rule.Base, scale: rule.Scale}, frozen)
 		})
 	}
 }

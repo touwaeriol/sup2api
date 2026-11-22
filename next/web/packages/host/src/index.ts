@@ -295,10 +295,7 @@ function check(v: [number, number, number], c: string): boolean {
   const parts = raw.replace(/^v/, '').split('.')
   switch (op) {
     case '^':
-      return (
-        cmpV(v, b) >= 0 &&
-        (b[0] > 0 ? v[0] === b[0] : b[1] > 0 ? v[0] === 0 && v[1] === b[1] : cmpV(v, b) === 0 || (v[0] === 0 && v[1] === 0))
-      )
+      return caret(v, b)
     case '~':
       return cmpV(v, b) >= 0 && v[0] === b[0] && (parts.length < 2 || v[1] === b[1])
     case '>=':
@@ -309,10 +306,21 @@ function check(v: [number, number, number], c: string): boolean {
       return cmpV(v, b) > 0
     case '<':
       return cmpV(v, b) < 0
-    default: {
-      // "1", "1.x", "1.2.x" match prefixes; full versions match exactly
-      const fixed = parts.filter(p => p !== 'x' && p !== '*').length
-      return v.slice(0, fixed).every((x, i) => x === b[i])
-    }
+    default:
+      return prefix(v, b, parts)
   }
+}
+
+/** "^1.2.3": not older and the same major; below 1.0 the same minor; below 0.1 any 0.0.x. */
+function caret(v: [number, number, number], b: [number, number, number]): boolean {
+  if (cmpV(v, b) < 0) return false
+  if (b[0] > 0) return v[0] === b[0]
+  if (b[1] > 0) return v[0] === 0 && v[1] === b[1]
+  return cmpV(v, b) === 0 || (v[0] === 0 && v[1] === 0)
+}
+
+/** "1", "1.x", "1.2.x" match prefixes; full versions match exactly. */
+function prefix(v: [number, number, number], b: [number, number, number], parts: string[]): boolean {
+  const fixed = parts.filter(p => p !== 'x' && p !== '*').length
+  return v.slice(0, fixed).every((x, i) => x === b[i])
 }

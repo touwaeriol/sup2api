@@ -55,8 +55,9 @@ func CheckStoredExpressions(ctx context.Context, db *gorm.DB) ([]ExpressionProbl
 }
 
 // storedExpressions reads the prices, custom prices and price history
-// CheckStoredExpressions checks. Only a custom price has an expression:
-// before core migration 0124 multiplier rules had none, nor a mode.
+// CheckStoredExpressions checks. Only custom prices are read: against a
+// schema before core migration 0124 the multiplier rules are there too,
+// with no expression and no mode.
 func storedExpressions(ctx context.Context, db *gorm.DB) ([]model.ModelPrice, []model.PriceRule, []model.ModelPriceHistory, error) {
 	var prices []model.ModelPrice
 	var rules []model.PriceRule

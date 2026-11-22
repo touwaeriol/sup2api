@@ -172,7 +172,7 @@ func leavePersonal(ctx context.Context, tx *gorm.DB, uid int64, to string) error
 // moveTarget returns the named segment to names, the default one when to is
 // empty, locked against deletion until the transaction ends.
 func moveTarget(ctx context.Context, tx *gorm.DB, to string) (int64, error) {
-	unknown := core.InvalidFields(fieldError(ctx, "to", "invalid", "pick a user group", "请选择一个用户组"))
+	unknown := core.InvalidFields(core.NewFieldError(ctx, "to", "invalid", "pick a user group", "请选择一个用户组"))
 	var want *int64
 	if to != "" {
 		n, err := strconv.ParseInt(to, 10, 64)

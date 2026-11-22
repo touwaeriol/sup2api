@@ -158,6 +158,11 @@ export default {
     tier: 'Tier',
     listPrice: 'Model price',
     listCost: 'Cost at model price',
+    listRule: {
+      group: 'Account group price',
+      segment: 'User group price (retired)',
+      scale: 'Original × {rate}'
+    },
     rules: 'Markup rules',
     matched: 'matched',
     notMatched: 'not matched',

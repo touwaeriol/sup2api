@@ -4,18 +4,22 @@ export default {
     personalOf: '专享 · {name}'
   },
   exclusive: '专属',
+  draft: {
+    unsaved: '未保存',
+    refused: '未通过',
+    removed: '将移除'
+  },
   rate: {
     label: '倍率',
     follow: '跟随 {rate}',
     invalid: '填 0 到 999999.9999 之间的数字，最多 4 位小数'
   },
-  rule: {
+  editor: {
     mode: '定价方式',
     kind: {
       none: '跟随原价',
       custom: '自定义价格'
     },
-    multiplierText: '原价 × {rate}',
     customText: '自定义',
     customHint: '和“模型价格”页同一个编辑器：可以分档、按次或写表达式。原价变了不跟着变；要按比例算，请用“模型倍率”。',
     preview: '模型价格 {price}，乘倍率 {rate} 后实付 {paid}',
@@ -27,10 +31,6 @@ export default {
     expressionTimes: '表达式计费 {rate}',
     none: '未定价',
     tiered: '{n} 档，显示兜底档位'
-  },
-  source: {
-    group: '账号分组价',
-    segment: '用户分组价（已停用的功能）'
   },
   table: {
     title: '模型价格',
@@ -54,11 +54,9 @@ export default {
     done: '完成',
     clear: '清除',
     clearHint: '“清除”= 模型价格跟随原价、模型倍率跟随基本倍率',
-    refused: '未通过',
     add: '添加模型',
     addNone: '没有可添加的模型',
     addFooter: '只能添加在“模型价格”页定了原价的模型',
-    unsaved: '未保存',
     unsavedCount: '{n} 项改动未保存',
     search: '搜索模型',
     onlySet: '只看单独设置的',

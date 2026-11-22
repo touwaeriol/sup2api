@@ -20,8 +20,6 @@ export default {
     group: '跟随账号分组'
   },
   unavailable: '用不了',
-  unsaved: '未保存',
-  refused: '未通过',
   remove: '移除',
   groupRate: '基本倍率',
   baseRate: '基本倍率',

@@ -15,7 +15,7 @@ import (
 )
 
 func dupName(ctx context.Context) error {
-	return core.InvalidFields(fieldError(ctx, "name", "duplicate", "a group with this name already exists", "分组名称已存在"))
+	return core.InvalidFields(core.NewFieldError(ctx, "name", "duplicate", "a group with this name already exists", "分组名称已存在"))
 }
 
 // groupWrite is a checked POST /groups or PATCH /groups/:id: the group's own

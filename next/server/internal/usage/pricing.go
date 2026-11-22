@@ -63,17 +63,41 @@ func fromRecord(rec *core.UsageRecord) *pending {
 	return p
 }
 
-// price is the price rule frozen in the row's inputs, as far as priceOne
-// reads one: the multiplier and the base. It is a core.PriceRule because
-// PriceRule.Multiplier is where a rule's multiplier meets the rate. A retry
-// and a reconcile rebuild it from the row alone, so a rule changed after the
-// request does not change the charge.
-func (p *pending) price() *core.PriceRule {
-	rule := &core.PriceRule{}
+// frozenRule is the price rule a row was priced by, as frozen in its inputs
+// (core.PricingTrace): what priceOne needs of it beyond the expression. A
+// retry and a reconcile rebuild it from the row alone, so a rule changed
+// after the request does not change the charge.
+type frozenRule struct {
+	// base is the global price a custom rule replaced; nil without one.
+	base *core.PriceBase
+	// scale is the multiplier of a multiplier rule, frozen with rows priced
+	// before core migration 0124 turned those rules into model rates; nil
+	// on any other row. Such a row settles as it was priced: charged at its
+	// rate times scale, its list cost its base cost times scale. Nothing
+	// sets a scale any more: pricingTrace only carries the one of a frozen
+	// item into its trace, and this is where any is applied.
+	scale *decimal.Decimal
+}
+
+// rule is the price rule frozen in the row's inputs.
+func (p *pending) rule() frozenRule {
 	if trace := p.Inputs.Pricing; trace != nil {
-		rule.Scale, rule.Base = trace.Scale, trace.Base
+		return frozenRule{base: trace.Base, scale: trace.Scale}
 	}
-	return rule
+	return frozenRule{}
+}
+
+// applied reports whether a rule priced the row: its base and list costs
+// may then differ.
+func (r frozenRule) applied() bool { return r.scale != nil || r.base != nil }
+
+// rate is what the expression's result is multiplied by to charge the row
+// at rate: rate itself, times the scale of a multiplier rule.
+func (r frozenRule) rate(rate decimal.Decimal) decimal.Decimal {
+	if r.scale == nil {
+		return rate
+	}
+	return rate.Mul(*r.scale)
 }
 
 // BillingDetail is stored in usage_logs.billing_detail once billed. It holds
@@ -128,7 +152,7 @@ func priceOne(ctx context.Context, q core.Quoter, p *pending) (amounts, BillingD
 	if err != nil {
 		return amounts{}, BillingDetail{}, "", fmt.Errorf("compile price expression: %w", err)
 	}
-	rule := p.price()
+	rule := p.rule()
 	amount, err := quote(ctx, q, p, rule)
 	if err != nil {
 		return amounts{}, BillingDetail{}, "", err
@@ -143,14 +167,14 @@ func priceOne(ctx context.Context, q core.Quoter, p *pending) (amounts, BillingD
 		ExprVersion: prog.Version(), Tier: res.Tier, Rules: res.Rules, Breakdown: res.Breakdown,
 		Cost: res.Cost, RateMultiplier: p.Rate, TotalCost: amount, Inputs: p.Inputs, Attempts: p.Attempts + 1,
 	}
-	if rule.Scale != nil || rule.Base != nil {
+	if rule.applied() {
 		cost, detail = withRule(ctx, p, rule, cost, detail)
 	}
 	return cost, detail, prog.Hash(), nil
 }
 
 // quote is what the row is charged: its expression over its usage at its
-// rate times the rule's multiplier, rounded.
+// rate (frozenRule.rate), rounded.
 //
 // priceOne evaluates the expression a second time for billing_detail on
 // purpose: Quote returns only the final amount (that is all core.Quoter
@@ -159,7 +183,7 @@ func priceOne(ctx context.Context, q core.Quoter, p *pending) (amounts, BillingD
 // away: it applies the rate multiplier and rounding, so amount and res.Cost
 // are not interchangeable. A future core.Quoter method returning both would
 // remove this second pass.
-func quote(ctx context.Context, q core.Quoter, p *pending, rule *core.PriceRule) (decimal.Decimal, error) {
+func quote(ctx context.Context, q core.Quoter, p *pending, rule frozenRule) (decimal.Decimal, error) {
 	params := make(map[string]any, len(p.Inputs.Params))
 	for k, v := range p.Inputs.Params {
 		params[k] = v
@@ -171,24 +195,24 @@ func quote(ctx context.Context, q core.Quoter, p *pending, rule *core.PriceRule)
 		Metrics:        p.Metrics,
 		PriceParams:    params,
 		PriceHeaders:   p.Inputs.Headers,
-		RateMultiplier: rule.Multiplier(p.Rate),
+		RateMultiplier: rule.rate(p.Rate),
 		CreatedAt:      p.CreatedAt,
 	})
 }
 
 // withRule turns the amounts and detail of the row's expression into those
-// of a price rule. A multiplier rule (frozen before core migration 0124)
-// scales the global price: tier, rules and breakdown stay the global price's. A custom rule replaces it: they are
-// the rule's, and the global price is evaluated for the base cost alone. The
+// of the rule. A multiplier rule scales the global price: tier, rules and
+// breakdown stay the global price's. A custom rule replaces it: they are the
+// rule's, and the global price is evaluated for the base cost alone. The
 // base cost is shown, not charged: a global price that cannot be evaluated
 // leaves it at the list cost rather than block the charge.
-func withRule(ctx context.Context, p *pending, rule *core.PriceRule, cost amounts, detail BillingDetail) (amounts, BillingDetail) {
-	if rule.Scale != nil {
-		cost.list = cost.base.Mul(*rule.Scale)
+func withRule(ctx context.Context, p *pending, rule frozenRule, cost amounts, detail BillingDetail) (amounts, BillingDetail) {
+	if rule.scale != nil {
+		cost.list = cost.base.Mul(*rule.scale)
 	}
-	if rule.Base != nil {
+	if rule.base != nil {
 		var err error
-		if cost.base, err = baseCost(rule.Base, p); err != nil {
+		if cost.base, err = baseCost(rule.base, p); err != nil {
 			slog.WarnContext(ctx, "usage: base price not evaluated, base cost = list cost", "request_id", p.RequestID, "err", err)
 			cost.base, detail.BaseFallback = cost.list, true
 		}

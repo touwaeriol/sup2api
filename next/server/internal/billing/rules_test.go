@@ -185,17 +185,3 @@ func TestCheckRule(t *testing.T) {
 	_, err = checkRule(zh, Rule{Kind: "custom", Mode: "per_token"}, nil)
 	require.EqualError(t, err, "模型价格须是自定义价：可视化或表达式")
 }
-
-// Precharge charges a price frozen before core migration 0124 at the rate
-// times the scale of its multiplier rule, as settlement does.
-func TestQuoteRecordAppliesRuleScale(t *testing.T) {
-	r := &core.UsageRecord{
-		Price:          &core.PriceRule{Expression: `tier("main", p*2)`, Scale: dec("0.5")},
-		UsageSemantics: "exclusive", Tokens: core.UsageTokens{Input: 1_000_000}, RateMultiplier: decimal.NewFromInt(3),
-		Additional: []core.PricedUsage{{Kind: "advisor", Model: "other", Price: &core.PriceRule{Expression: `tier("other", c*10)`, Scale: dec("0")},
-			UsageSemantics: "exclusive", Tokens: core.UsageTokens{Output: 1_000_000}, RateMultiplier: decimal.NewFromInt(3)}},
-	}
-	amount, err := quoteRecord(context.Background(), &Service{}, r)
-	require.NoError(t, err)
-	require.Equal(t, "3", amount.String())
-}

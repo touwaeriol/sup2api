@@ -26,11 +26,6 @@ type groupInput struct {
 	ConversionLossPolicy core.LossPolicyInput `json:"conversion_loss_policy"`
 }
 
-// fieldError is the field error with the message in the caller's language.
-func fieldError(ctx context.Context, field, code, en, zh string) core.FieldError {
-	return core.FieldError{Field: field, Code: code, Message: t(ctx, en, zh)}
-}
-
 // check checks the provided fields, normalizing them as stored; create
 // requires name. The field errors come in the order of the fields.
 func (in *groupInput) check(ctx context.Context, create bool) []core.FieldError {
@@ -53,13 +48,13 @@ func (in *groupInput) checkText(ctx context.Context, create bool) []core.FieldEr
 		n := strings.TrimSpace(*in.Name)
 		in.Name = &n
 		if n == "" || utf8.RuneCountInString(n) > 100 {
-			fe = append(fe, fieldError(ctx, "name", "invalid", "name must be 1-100 characters", "名称长度须为 1-100 个字符"))
+			fe = append(fe, core.NewFieldError(ctx, "name", "invalid", "name must be 1-100 characters", "名称长度须为 1-100 个字符"))
 		}
 	} else if create {
-		fe = append(fe, fieldError(ctx, "name", "required", "name is required", "名称必填"))
+		fe = append(fe, core.NewFieldError(ctx, "name", "required", "name is required", "名称必填"))
 	}
 	if in.Description != nil && utf8.RuneCountInString(*in.Description) > 2000 {
-		fe = append(fe, fieldError(ctx, "description", "too_long", "description is too long", "描述过长"))
+		fe = append(fe, core.NewFieldError(ctx, "description", "too_long", "description is too long", "描述过长"))
 	}
 	return fe
 }
@@ -68,10 +63,10 @@ func (in *groupInput) checkText(ctx context.Context, create bool) []core.FieldEr
 func (in *groupInput) checkChoices(ctx context.Context) []core.FieldError {
 	var fe []core.FieldError
 	if in.Status != nil && *in.Status != "active" && *in.Status != "disabled" {
-		fe = append(fe, fieldError(ctx, "status", "invalid", "status must be active or disabled", "状态必须为 active 或 disabled"))
+		fe = append(fe, core.NewFieldError(ctx, "status", "invalid", "status must be active or disabled", "状态必须为 active 或 disabled"))
 	}
 	if in.Visibility != nil && *in.Visibility != "public" && *in.Visibility != "restricted" {
-		fe = append(fe, fieldError(ctx, "visibility", "invalid", "visibility must be public or restricted", "可见性必须为 public 或 restricted"))
+		fe = append(fe, core.NewFieldError(ctx, "visibility", "invalid", "visibility must be public or restricted", "可见性必须为 public 或 restricted"))
 	}
 	return fe
 }
@@ -83,8 +78,7 @@ func (in *groupInput) checkRate(ctx context.Context) []core.FieldError {
 	}
 	d, ok := core.ParseRate(*in.RateMultiplier)
 	if !ok {
-		return []core.FieldError{fieldError(ctx, "rate_multiplier", "invalid",
-			"rate multiplier must be a non-negative number with at most 4 decimals", "倍率必须为非负数，最多 4 位小数")}
+		return []core.FieldError{core.RateError(ctx, "rate_multiplier")}
 	}
 	v := d.String()
 	in.RateMultiplier = &v
@@ -95,7 +89,7 @@ func (in *groupInput) checkRate(ctx context.Context) []core.FieldError {
 func (in *groupInput) checkModels(ctx context.Context) []core.FieldError {
 	var fe []core.FieldError
 	if in.ModelFilterMode != nil && *in.ModelFilterMode != "whitelist" && *in.ModelFilterMode != "blacklist" {
-		fe = append(fe, fieldError(ctx, "model_filter_mode", "invalid", "model filter mode must be whitelist or blacklist", "模型过滤模式必须为白名单或黑名单"))
+		fe = append(fe, core.NewFieldError(ctx, "model_filter_mode", "invalid", "model filter mode must be whitelist or blacklist", "模型过滤模式必须为白名单或黑名单"))
 	}
 	if in.ModelAllowlist == nil {
 		return fe
@@ -104,7 +98,7 @@ func (in *groupInput) checkModels(ctx context.Context) []core.FieldError {
 	for _, m := range *in.ModelAllowlist {
 		m = strings.TrimSpace(m)
 		if m == "" {
-			fe = append(fe, fieldError(ctx, "model_allowlist", "invalid", "model patterns must not be empty", "模型模式不能为空"))
+			fe = append(fe, core.NewFieldError(ctx, "model_allowlist", "invalid", "model patterns must not be empty", "模型模式不能为空"))
 			break
 		}
 		clean = append(clean, m)

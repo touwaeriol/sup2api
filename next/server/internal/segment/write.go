@@ -33,7 +33,7 @@ type segmentInput struct {
 // has neither: it goes by its user.
 func (in *segmentInput) textErrors(ctx context.Context, kind string, create bool) []core.FieldError {
 	if kind == core.SegmentPersonal && (in.Name != nil || in.Description != nil) {
-		return []core.FieldError{fieldError(ctx, "name", "invalid", "a personal user group has no name or description", "个人用户分组没有名称和说明")}
+		return []core.FieldError{core.NewFieldError(ctx, "name", "invalid", "a personal user group has no name or description", "个人用户分组没有名称和说明")}
 	}
 	var fe []core.FieldError
 	name, given := "", in.Name != nil
@@ -42,12 +42,12 @@ func (in *segmentInput) textErrors(ctx context.Context, kind string, create bool
 		in.Name = &name
 	}
 	if (given || create) && name == "" {
-		fe = append(fe, fieldError(ctx, "name", "required", "name is required", "名称必填"))
+		fe = append(fe, core.NewFieldError(ctx, "name", "required", "name is required", "名称必填"))
 	} else if utf8.RuneCountInString(name) > 100 {
-		fe = append(fe, fieldError(ctx, "name", "invalid", "name must be at most 100 characters", "名称最多 100 个字符"))
+		fe = append(fe, core.NewFieldError(ctx, "name", "invalid", "name must be at most 100 characters", "名称最多 100 个字符"))
 	}
 	if in.Description != nil && utf8.RuneCountInString(*in.Description) > 2000 {
-		fe = append(fe, fieldError(ctx, "description", "too_long", "description is too long", "描述过长"))
+		fe = append(fe, core.NewFieldError(ctx, "description", "too_long", "description is too long", "描述过长"))
 	}
 	return fe
 }
@@ -128,7 +128,7 @@ func (in *segmentInput) columns() map[string]any {
 // field error; other errors pass through.
 func nameTaken(ctx context.Context, err error) error {
 	if store.IsUniqueViolation(err, "segments_name_uq") {
-		return core.InvalidFields(fieldError(ctx, "name", "duplicate", "name already in use", "名称已被使用"))
+		return core.InvalidFields(core.NewFieldError(ctx, "name", "duplicate", "name already in use", "名称已被使用"))
 	}
 	return err
 }

@@ -38,7 +38,6 @@ export default {
     addNone: '没有可添加的模型',
     addFooter: '只列这个账号分组里有原价的模型',
     empty: '还没有单独设倍率的模型',
-    removed: '将移除',
     rateOf: '{model} 的模型倍率',
     undo: '撤销',
     invalid: '「{group}」里 {model} 的模型倍率填得不对：填 0 到 999999.9999 之间的数字，最多 4 位小数。'

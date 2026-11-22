@@ -62,10 +62,6 @@ func (s *Service) RegisterRoutes(r *httpapi.Router) {
 
 func t(ctx context.Context, en, zh string) string { return core.Text(ctx, en, zh) }
 
-func fieldError(ctx context.Context, field, code, en, zh string) core.FieldError {
-	return core.FieldError{Field: field, Code: code, Message: t(ctx, en, zh)}
-}
-
 // actOnUsers fails unless the caller may choose the user group of the users:
 // it manages every one of them, itself only as a superuser (C-L7, FU6).
 func (s *Service) actOnUsers(ctx context.Context, userIDs ...int64) error {

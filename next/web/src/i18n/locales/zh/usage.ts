@@ -157,6 +157,11 @@ export default {
     tier: '档位',
     listPrice: '模型价格',
     listCost: '按模型价格的费用',
+    listRule: {
+      group: '账号分组价',
+      segment: '用户分组价（已停用的功能）',
+      scale: '原价 × {rate}'
+    },
     rules: '加价规则',
     matched: '命中',
     notMatched: '未命中',

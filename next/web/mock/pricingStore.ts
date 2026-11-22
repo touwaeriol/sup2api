@@ -17,7 +17,7 @@ export type RateSource = 'segment_model' | 'segment' | 'group_model' | 'group'
 export type PriceSource = 'group' | 'global'
 
 /** The model price of a group: a price of its own, visual or an expression. */
-export type PriceRule =
+export type ModelPrice =
   | { kind: 'custom'; mode: 'visual'; config: VisualConfig; expression?: string }
   | { kind: 'custom'; mode: 'expression'; config: Record<string, never>; expression: string }
 
@@ -50,10 +50,10 @@ interface Pair {
 }
 
 /** A model price of a group: at most one on a model. */
-export interface RuleRow {
+export interface ModelPriceRow {
   group_id: number
   model: string
-  rule: PriceRule
+  price: ModelPrice
 }
 
 /** A model rate: of a group (`segment_id` null) or of a segment in a group; at most one on a model each. */
@@ -104,11 +104,11 @@ const pairs: Pair[] = [
   { segment_id: INTERNAL, group_id: 1, granted: false, rate_override: '0.5' }
 ]
 
-const rules: RuleRow[] = [
-  { group_id: 1, model: 'web-search', rule: { kind: 'custom', mode: 'visual', config: requestTier(0.008) } },
-  { group_id: 2, model: 'claude-haiku-4-5', rule: { kind: 'custom', mode: 'visual', config: singleTier({ p: 0.8, c: 4, cr: 0.08, cc: 1 }) } },
+const prices: ModelPriceRow[] = [
+  { group_id: 1, model: 'web-search', price: { kind: 'custom', mode: 'visual', config: requestTier(0.008) } },
+  { group_id: 2, model: 'claude-haiku-4-5', price: { kind: 'custom', mode: 'visual', config: singleTier({ p: 0.8, c: 4, cr: 0.08, cc: 1 }) } },
   // A custom price by the request over a global price by tokens.
-  { group_id: 1, model: 'gemini-2.5-flash', rule: { kind: 'custom', mode: 'visual', config: requestTier(0.002) } }
+  { group_id: 1, model: 'gemini-2.5-flash', price: { kind: 'custom', mode: 'visual', config: requestTier(0.002) } }
 ]
 
 // Group vip (2) charges ×0.9 for claude-opus-4-1 instead of its ×0.8, and default (1) ×1.2 for gpt-4o.
@@ -129,7 +129,7 @@ function where<T extends object>(rows: T[], by: Partial<T>): T[] {
 }
 
 export const pairsWhere = (by: Partial<Pair>) => where(pairs, by)
-export const rulesWhere = (by: Partial<RuleRow>) => where(rules, by)
+export const modelPricesWhere = (by: Partial<ModelPriceRow>) => where(prices, by)
 export const modelRatesWhere = (by: Partial<ModelRateRow>) => where(modelRates, by)
 
 export function findSegment(id: number | null | undefined): MockSegment | undefined {
@@ -204,26 +204,26 @@ export function rateOf(s: MockSegment | null, g: PricedGroup, model?: string): {
 }
 
 /** The list price a model price gives: a price of its own, whatever the global price `base` is. A model without a global price has none. */
-export function applyRule(base: PriceDef | null, rule: PriceRule | null): PriceDef | null {
-  if (!base || !rule) return base
-  return rule.mode === 'expression' ? { mode: rule.mode, config: {}, expression: rule.expression } : configPrice(rule.mode, rule.config)
+export function appliedPrice(base: PriceDef | null, price: ModelPrice | null): PriceDef | null {
+  if (!base || !price) return base
+  return price.mode === 'expression' ? { mode: price.mode, config: {}, expression: price.expression } : configPrice(price.mode, price.config)
 }
 
 /** A model price as a row carries it: with its expression. */
-function listedRule(rule: PriceRule | undefined): PriceRule | null {
-  if (!rule || rule.mode === 'expression') return rule ?? null
-  return { ...rule, expression: configPrice(rule.mode, rule.config).expression }
+function listedPrice(price: ModelPrice | undefined): ModelPrice | null {
+  if (!price || price.mode === 'expression') return price ?? null
+  return { ...price, expression: configPrice(price.mode, price.config).expression }
 }
 
 /**
- * The list price of a model in a group, first hit: the rule of the group,
- * the global price; without a global price no rule applies. The rule is
- * returned as configured.
+ * The list price of a model in a group, first hit: the model price of the
+ * group, the global price; without a global price no model price applies.
+ * The model price is returned as configured.
  */
 export function listPriceOf(groupId: number, model: string, base: PriceDef | null) {
-  const group_rule = listedRule(rulesWhere({ group_id: groupId, model })[0]?.rule)
-  const source: PriceSource = base && group_rule ? 'group' : 'global'
-  return { group_rule, source, list_price: applyRule(base, group_rule) }
+  const group_price = listedPrice(modelPricesWhere({ group_id: groupId, model })[0]?.price)
+  const source: PriceSource = base && group_price ? 'group' : 'global'
+  return { group_price, source, list_price: appliedPrice(base, group_price) }
 }
 
 // ------------------------------------------------------------------ changes
@@ -244,10 +244,10 @@ export function setPair(segmentId: number, groupId: number, patch: { granted?: b
   drop(pairs, (p) => !p.granted && p.rate_override === null)
 }
 
-/** Sets or (`rule` null) removes the model price of a group. */
-export function setRule(groupId: number, model: string, rule: PriceRule | null) {
-  drop(rules, (r) => r.group_id === groupId && r.model === model)
-  if (rule) rules.push({ group_id: groupId, model, rule })
+/** Sets or (`price` null) removes the model price of a group. */
+export function setModelPrice(groupId: number, model: string, price: ModelPrice | null) {
+  drop(prices, (r) => r.group_id === groupId && r.model === model)
+  if (price) prices.push({ group_id: groupId, model, price })
 }
 
 /** Sets or (`rate` null) removes the model rate of a group (`segmentId` null) or of a segment in it. */
@@ -306,6 +306,6 @@ export function forgetUser(userId: number) {
 /** A deleted group: its grants, rates and prices go with it. */
 export function forgetGroup(groupId: number) {
   drop(pairs, (p) => p.group_id === groupId)
-  drop(rules, (r) => r.group_id === groupId)
+  drop(prices, (r) => r.group_id === groupId)
   drop(modelRates, (r) => r.group_id === groupId)
 }

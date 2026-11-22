@@ -7,9 +7,8 @@ import type { Segment } from '@/api/pricing'
 import SegmentBadge from '@/components/pricing/SegmentBadge.vue'
 import SegmentGroupsEditor from '@/components/pricing/SegmentGroupsEditor.vue'
 import { SEGMENT_FIELDS, formChanged, formOf, segmentBody } from '@/components/pricing/segmentForm'
-import { confirmDiscard } from '@/composables/confirmDiscard'
+import { useTabbedSubmit } from '@/composables/useTabbedSubmit'
 import { useAuthStore } from '@/stores/auth'
-import { notifyError } from '@/utils/errors'
 
 // Creates or edits a user group ("segment"). A named one has two tabs: what it
 // is, and its account group rates (with model rates under each account
@@ -68,21 +67,16 @@ const title = computed(() => {
   return t(props.readonly ? 'segments.viewTitle' : 'segments.editTitle', { name: props.segment.name })
 })
 
-/** One request (SegmentWrite): the user group with its account group rates and model rates. */
-const send = (body: Record<string, unknown>) => (props.segment ? api.patch<Segment>(`/segments/${props.segment.id}`, body) : api.post<Segment>('/segments', body))
-
-async function submit() {
-  try {
-    if ((await tabbed.submit(send)) === false) return
-  } catch (e) {
-    return notifyError(e)
-  }
-  emit('changed')
-  toast(t(props.segment ? 'common.updated' : 'segments.created'), 'success')
-  emit('update:open', false)
-}
-
-const leave = async () => (await confirmDiscard(tabbed.anyDirty.value)) && emit('update:open', false)
+const { submit, leave } = useTabbedSubmit(tabbed, {
+  /** One request (SegmentWrite): the user group with its account group rates and model rates. */
+  send: (body) => (props.segment ? api.patch<Segment>(`/segments/${props.segment.id}`, body) : api.post<Segment>('/segments', body)),
+  done() {
+    emit('changed')
+    toast(t(props.segment ? 'common.updated' : 'segments.created'), 'success')
+    emit('update:open', false)
+  },
+  close: () => emit('update:open', false)
+})
 </script>
 
 <template>

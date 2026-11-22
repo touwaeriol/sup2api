@@ -182,13 +182,8 @@ func ruleKeys(keys []any) clause.IN {
 	return clause.IN{Column: []clause.Column{{Name: "group_id"}, {Name: "model"}}, Values: keys}
 }
 
-// groupModelUpsert is the upsert of a row of a group's model (on group_id
-// and model): the columns of set over the row there, if any, updated_at
-// moved.
-func groupModelUpsert(set ...string) clause.OnConflict {
-	return clause.OnConflict{Columns: []clause.Column{{Name: "group_id"}, {Name: "model"}},
-		DoUpdates: append(clause.AssignmentColumns(set), clause.Assignment{Column: clause.Column{Name: "updated_at"}, Value: clause.Expr{SQL: "now()"}})}
-}
+// groupModelKeys are the unique columns of a row of a group's model.
+var groupModelKeys = []string{"group_id", "model"}
 
 // writeRules writes w in tx, as the statements of each change did one after
 // the other: a rule removed is deleted where it is, a rule saved is upserted
@@ -225,5 +220,5 @@ func writeRules(ctx context.Context, tx *gorm.DB, w *ruleWrites) error {
 	if len(w.saved) == 0 {
 		return nil
 	}
-	return g.Clauses(groupModelUpsert("mode", "config", "expression", "expr_hash", "updated_by")).Create(&w.saved).Error
+	return g.Clauses(store.UpsertOn(groupModelKeys, "mode", "config", "expression", "expr_hash", "updated_by")).Create(&w.saved).Error
 }

@@ -1,5 +1,5 @@
 // Unsaved edits by row key, as plain data: what the editors that keep drafts
-// (useDrafts.ts) and the modules that say what a draft is (ruleDrafts.ts,
+// (useDrafts.ts) and the modules that say what a draft is (pricingRows.ts,
 // accessRateDrafts.ts, modelRateDrafts.ts) share.
 
 /** The drafts with `draft` on `key`; undefined takes the draft of the row away: it reads as saved again. */

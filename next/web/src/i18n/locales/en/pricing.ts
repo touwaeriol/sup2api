@@ -4,18 +4,22 @@ export default {
     personalOf: 'Exclusive · {name}'
   },
   exclusive: 'Exclusive',
+  draft: {
+    unsaved: 'Unsaved',
+    refused: 'Refused',
+    removed: 'To be removed'
+  },
   rate: {
     label: 'Rate',
     follow: 'Follows {rate}',
     invalid: 'Enter a number from 0 to 999999.9999, up to 4 decimals'
   },
-  rule: {
+  editor: {
     mode: 'Pricing',
     kind: {
       none: 'Follows the original price',
       custom: 'Custom price'
     },
-    multiplierText: 'Original × {rate}',
     customText: 'Custom',
     customHint: 'The same editor as on Model prices: tiers, per request or an expression. Does not follow the original price; to scale it, use the model rate.',
     preview: 'Model price {price}; at rate {rate} you pay {paid}',
@@ -27,10 +31,6 @@ export default {
     expressionTimes: 'Billed by expression {rate}',
     none: 'No price',
     tiered: '{n} tiers, fallback shown'
-  },
-  source: {
-    group: 'Account group price',
-    segment: 'User group price (retired)'
   },
   table: {
     title: 'Model prices',
@@ -54,11 +54,9 @@ export default {
     done: 'Done',
     clear: 'Clear',
     clearHint: '"Clear" makes the model price follow the original price and the model rate follow the base rate',
-    refused: 'Refused',
     add: 'Add model',
     addNone: 'No model to add',
     addFooter: 'Only models with an original price on Model prices can be added',
-    unsaved: 'Unsaved',
     unsavedCount: '{n} unsaved change | {n} unsaved changes',
     search: 'Search models',
     onlySet: 'Set only',

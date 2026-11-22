@@ -72,7 +72,7 @@ func requireUsers(ctx context.Context, q *gorm.DB, ids []int64) error {
 	for _, unknown := range ids {
 		if !slices.Contains(live, unknown) {
 			id := strconv.FormatInt(unknown, 10)
-			return core.InvalidFields(fieldError(ctx, "user_ids", "not_found", "unknown user "+id, "用户 "+id+" 不存在"))
+			return core.InvalidFields(core.NewFieldError(ctx, "user_ids", "not_found", "unknown user "+id, "用户 "+id+" 不存在"))
 		}
 	}
 	return nil

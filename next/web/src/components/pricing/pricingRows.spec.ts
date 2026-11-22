@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { CustomPrice, ModelPriceRow, PriceDef } from '@/api/pricing'
 import { requestTier, singleTier, type VisualConfig } from '@/views/prices/priceExpr'
 import { newPriceDraft } from '@/views/prices/priceDraft'
-import { catalogRow, customRuleOf, draftedRow, mergeRowDraft, priceDraftOfRule, pricingPatches, ruleIssues, sameRule, startRule, validRule, type RowDrafts } from './ruleDrafts'
+import { catalogRow, customPriceOf, draftedRow, mergeRowDraft, priceDraftOfCustom, pricingPatches, priceIssues, samePrice, startPrice, validPrice, type RowDrafts } from './pricingRows'
 
 const perToken: PriceDef = { mode: 'visual', config: singleTier({ p: 3, c: 15, cr: 0.3 }), expression: 'tier("base", p*3 + c*15 + cr*0.3)' }
 const tieredConfig: VisualConfig = { tiers: [{ name: 'a', when: { var: 'len', op: '<=', value: 200000 }, p: 3, c: 15 }, { name: 'b', p: 6, c: 22.5 }], rules: [] }
@@ -17,42 +17,42 @@ function row(over: Partial<ModelPriceRow> = {}): ModelPriceRow {
 
 describe('the model price a row starts from', () => {
   it('is the original price as a price of its own, whatever its shape', () => {
-    expect(startRule(perToken)).toMatchObject({ kind: 'custom', mode: 'visual', config: { tiers: [{ name: 'base', unit: 'token', p: 3, c: 15, cr: 0.3 }], rules: [] } })
-    expect(startRule(tiered)).toMatchObject({ kind: 'custom', mode: 'visual', config: { tiers: [{ name: 'a' }, { name: 'b' }] } })
-    expect(startRule(expression)).toEqual(written('tier("base", p*3 + c*15)'))
+    expect(startPrice(perToken)).toMatchObject({ kind: 'custom', mode: 'visual', config: { tiers: [{ name: 'base', unit: 'token', p: 3, c: 15, cr: 0.3 }], rules: [] } })
+    expect(startPrice(tiered)).toMatchObject({ kind: 'custom', mode: 'visual', config: { tiers: [{ name: 'a' }, { name: 'b' }] } })
+    expect(startPrice(expression)).toEqual(written('tier("base", p*3 + c*15)'))
   })
   it('goes back and forth to the price editor', () => {
-    const rule = startRule(tiered)
-    expect(sameRule(customRuleOf(priceDraftOfRule(rule)), rule)).toBe(true)
-    expect(customRuleOf({ ...newPriceDraft(), mode: 'expression', expression: 'p*2' })).toEqual(written('p*2'))
+    const rule = startPrice(tiered)
+    expect(samePrice(customPriceOf(priceDraftOfCustom(rule)), rule)).toBe(true)
+    expect(customPriceOf({ ...newPriceDraft(), mode: 'expression', expression: 'p*2' })).toEqual(written('p*2'))
   })
 })
 
 describe('a model price that may be saved', () => {
   it('is none, or a custom price the price editor would save: any number of tiers, or an expression', () => {
-    expect(validRule(null)).toBe(true)
-    expect(validRule(visual(tieredConfig))).toBe(true)
-    expect(validRule(visual(requestTier(0.02)))).toBe(true)
-    expect(validRule(visual(requestTier(null)))).toBe(false)
-    expect(validRule(visual(singleTier({ p: 1, c: -1 })))).toBe(false)
-    expect(validRule(written('p * 2'))).toBe(true)
-    expect(ruleIssues(written('  '))).toEqual([{ key: 'prices.local.emptyExpr' }])
+    expect(validPrice(null)).toBe(true)
+    expect(validPrice(visual(tieredConfig))).toBe(true)
+    expect(validPrice(visual(requestTier(0.02)))).toBe(true)
+    expect(validPrice(visual(requestTier(null)))).toBe(false)
+    expect(validPrice(visual(singleTier({ p: 1, c: -1 })))).toBe(false)
+    expect(validPrice(written('p * 2'))).toBe(true)
+    expect(priceIssues(written('  '))).toEqual([{ key: 'prices.local.emptyExpr' }])
   })
 })
 
 describe('model prices that price alike', () => {
   it('are compared by what they bill: every tier and markup rule, or the expression', () => {
-    expect(sameRule(null, null)).toBe(true)
-    expect(sameRule(visual(singleTier({ p: 3, c: 15 })), null)).toBe(false)
-    expect(sameRule(visual(singleTier({ p: 3, c: 15 })), visual(singleTier({ p: 3, c: 15, cr: null })))).toBe(true)
-    expect(sameRule(visual(tieredConfig), visual({ ...tieredConfig, tiers: [tieredConfig.tiers[0], { name: 'b', p: 6, c: 30 }] }))).toBe(false)
+    expect(samePrice(null, null)).toBe(true)
+    expect(samePrice(visual(singleTier({ p: 3, c: 15 })), null)).toBe(false)
+    expect(samePrice(visual(singleTier({ p: 3, c: 15 })), visual(singleTier({ p: 3, c: 15, cr: null })))).toBe(true)
+    expect(samePrice(visual(tieredConfig), visual({ ...tieredConfig, tiers: [tieredConfig.tiers[0], { name: 'b', p: 6, c: 30 }] }))).toBe(false)
     const ruled: VisualConfig = { ...tieredConfig, rules: [{ name: 'hd', multiplier: 2, conds: [{ source: 'header', key: 'x', op: 'exists' }] }] }
-    expect(sameRule(visual(tieredConfig), visual(ruled))).toBe(false)
+    expect(samePrice(visual(tieredConfig), visual(ruled))).toBe(false)
     // The server returns the expression a visual price generates; it changes nothing.
-    expect(sameRule(visual(tieredConfig), { ...visual(tieredConfig), expression: 'whatever' })).toBe(true)
-    expect(sameRule(written('p*2 '), written('p*2'))).toBe(true)
-    expect(sameRule(written('p*2'), written('p*3'))).toBe(false)
-    expect(sameRule(written('tier("base", p*3 + c*15)'), visual(singleTier({ p: 3, c: 15 })))).toBe(false)
+    expect(samePrice(visual(tieredConfig), { ...visual(tieredConfig), expression: 'whatever' })).toBe(true)
+    expect(samePrice(written('p*2 '), written('p*2'))).toBe(true)
+    expect(samePrice(written('p*2'), written('p*3'))).toBe(false)
+    expect(samePrice(written('tier("base", p*3 + c*15)'), visual(singleTier({ p: 3, c: 15 })))).toBe(false)
   })
 })
 

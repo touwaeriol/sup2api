@@ -3,6 +3,10 @@
 // scheduling reads as auto-disabled; a cooldown or an
 // orphaned plugin is a note on the status, not a status of its own.
 import type { Account } from '@/api/types'
+import { formatDateTime, formatMoney, formatTime } from '@/utils/format'
+import { usagePeriodLabel } from './accountUsage'
+
+type Translate = (key: string, named?: Record<string, unknown>) => string
 
 export type AccountStatusKey = 'active' | 'disabled' | 'auto_disabled'
 
@@ -37,4 +41,42 @@ export function accountStatusTone(a: Pick<Account, 'status' | 'schedulable' | 'o
   const key = accountStatusKey(a)
   if (key === 'active') return 'success'
   return key === 'auto_disabled' && a.status !== 'active' && a.auto_disabled_until ? 'warning' : 'danger'
+}
+
+/** Whether an account is cooling down now. */
+export const coolingDown = (a: Pick<Account, 'cooldown_until'>) => !!a.cooldown_until && new Date(a.cooldown_until).getTime() > Date.now()
+
+/** How the status of an account reads: detail is the full explanation (the badge's tooltip, the detail dialog), note the short recovery time under the badge. */
+export interface StatusView {
+  tone: ReturnType<typeof accountStatusTone>
+  label: string
+  detail?: string
+  note?: string
+}
+
+/** Why an account is not running: its plugin is gone, its cooldown, its usage limit (in local words) or the server's reason. */
+function statusReason(t: Translate, a: Account, cooling: boolean): string {
+  if (a.orphaned) return t('accounts.orphanedHint', { plugin: a.plugin_key })
+  if (cooling && a.cooldown_reason) return a.cooldown_reason
+  if (!a.usage?.limit_disabled) return a.status_reason ?? ''
+  const limit = a.usage.limit
+  if (!limit) return t('accounts.usage.limitReachedPlain')
+  return t('accounts.usage.limitReached', { used: formatMoney(limit.used, 2), amount: formatMoney(limit.amount, 2), period: usagePeriodLabel(t, limit.period, limit.period_count) })
+}
+
+/**
+ * The status of an account as the list and the detail show it. Auto-disabled
+ * reads as one badge, yellow with a release time and red without; why, and
+ * when it comes back, go in its detail.
+ */
+export function statusView(t: Translate, a: Account): StatusView {
+  const key = accountStatusKey(a)
+  const cooling = key === 'active' && coolingDown(a)
+  const view: StatusView = { tone: accountStatusTone(a), label: t(`accounts.status.${key}`), detail: statusReason(t, a, cooling) || undefined }
+  if (key === 'auto_disabled' && a.auto_disabled_until) {
+    const release = t('accounts.autoReleaseAt', { time: formatDateTime(a.auto_disabled_until) })
+    view.detail = view.detail ? `${view.detail}\n${release}` : release
+  }
+  if (cooling) view.note = t('accounts.cooldownUntil', { time: formatTime(a.cooldown_until) })
+  return view
 }

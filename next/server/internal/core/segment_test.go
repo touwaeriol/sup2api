@@ -28,26 +28,6 @@ func TestRateLevels(t *testing.T) {
 	}
 }
 
-func TestPriceRuleMultiplier(t *testing.T) {
-	d := decimal.RequireFromString
-	rate := d("0.72")
-	var none *PriceRule
-	if got := none.Multiplier(rate); !got.Equal(rate) {
-		t.Errorf("no price: got %s", got)
-	}
-	if got := (&PriceRule{}).Multiplier(rate); !got.Equal(rate) {
-		t.Errorf("no scale: got %s", got)
-	}
-	scale := d("0.8")
-	if got := (&PriceRule{Scale: &scale}).Multiplier(rate); !got.Equal(d("0.576")) {
-		t.Errorf("scaled: got %s", got)
-	}
-	zero := decimal.Zero
-	if got := (&PriceRule{Scale: &zero}).Multiplier(rate); !got.IsZero() {
-		t.Errorf("a multiplier of zero is free: got %s", got)
-	}
-}
-
 // A price is admitted under the endpoint billing type of its kind.
 func TestPriceRuleBillingType(t *testing.T) {
 	for want, r := range map[string]PriceRule{

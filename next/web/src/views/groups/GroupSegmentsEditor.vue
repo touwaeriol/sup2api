@@ -7,6 +7,7 @@ import type { Group } from '@/api/types'
 import type { Segment, SegmentGroupSetting, SegmentRef } from '@/api/pricing'
 import AccessRateTable from '@/components/pricing/AccessRateTable.vue'
 import AddSelect from '@/components/pricing/AddSelect.vue'
+import GroupVisibilityBadge from '@/components/pricing/GroupVisibilityBadge.vue'
 import PersonalSegmentPicker from '@/components/pricing/PersonalSegmentPicker.vue'
 import SegmentBadge from '@/components/pricing/SegmentBadge.vue'
 import { blankSegmentSetting, type DraftedSetting } from '@/components/pricing/accessRateDrafts'
@@ -82,7 +83,7 @@ const nobody = computed(() => restricted.value && !loading.value && !error.value
   <div class="space-y-3" data-testid="group-segments">
     <div class="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
       <span class="inline-flex min-w-0 flex-1 basis-80 flex-wrap items-center gap-2 text-sm text-fg-muted" data-testid="group-segments-intro">
-        <SBadge :tone="restricted ? 'gray' : 'success'">{{ t(restricted ? 'pricingAccess.private' : 'pricingAccess.public') }}</SBadge>
+        <GroupVisibilityBadge :visibility="visibility" />
         <span>
           {{ t(restricted ? 'pricingAccess.inGroup.restricted' : 'pricingAccess.inGroup.public') }}
           {{ t('pricingAccess.baseRate') }} <b class="font-mono font-medium text-fg">{{ groupRate }}</b>

@@ -1,23 +1,19 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { api, MAX_ACCOUNT_BATCH } from '@sub2api/host'
-import { SAutoRefresh, SBadge, SBulkBar, SButton, SChip, SCode, SCopyButton, SDescItem, SDescriptions, SDropdown, SHint, SIcon, SInput, SLink, SModal, SPageHeader, SPagination, SSectionTitle, SSelect, SSpinner, SSwitch, STable, STabs, STooltip, confirm, toast, useAutoRefresh, type SelectOption, type TableColumn } from '@sub2api/ui'
-import type { Account, AccountLastTest, AccountType } from '@/api/types'
-import { activeFilterCount, filterFlag, useList } from '@/composables/useList'
+import { SAutoRefresh, SBadge, SBulkBar, SButton, SChip, SDropdown, SHint, SIcon, SInput, SLink, SModal, SPageHeader, SPagination, SSelect, SSpinner, SSwitch, STable, STooltip, confirm, toast, useAutoRefresh, type TableColumn } from '@sub2api/ui'
+import type { Account, AccountLastTest } from '@/api/types'
+import { activeFilterCount, useList } from '@/composables/useList'
 import { useGroupsLookup } from '@/composables/lookups'
-import { ACCOUNT_ACTIONS, useScope } from '@/composables/useScope'
+import { ACCOUNT_ACTIONS } from '@/composables/useScope'
 import { P } from '@/generated/permissions'
 import { useAuthStore } from '@/stores/auth'
-import { usePluginStore, type PluginAccountActionEntry, type SlotEntry } from '@/stores/plugins'
+import { usePluginStore } from '@/stores/plugins'
 import { notifyError } from '@/utils/errors'
-import { formatDateTime, formatMoney, formatRelative, formatTime } from '@/utils/format'
-import { lt } from '@/i18n'
-import { useAccountTypes, typeKey } from './accountTypes'
+import { formatRelative } from '@/utils/format'
+import { useAccountTypes } from './accountTypes'
 import AccountTypePicker from './AccountTypePicker.vue'
-import AccountTypeEndpoints from './AccountTypeEndpoints.vue'
-import AccountTypePlatforms from './AccountTypePlatforms.vue'
 import EntityPicker from '@/components/EntityPicker.vue'
 import UserRef from '@/components/entity/UserRef.vue'
 import AccountGroupsCell from './AccountGroupsCell.vue'
@@ -25,55 +21,57 @@ import AccountProtocolMarks from './AccountProtocolMarks.vue'
 import AccountEditor from './AccountEditor.vue'
 import AccountNumberCell from './AccountNumberCell.vue'
 import PluginSlot from '@/components/plugin/PluginSlot.vue'
-import { forAccountType, slotKey } from '@/components/plugin/slots'
+import { forAccountType } from '@/components/plugin/slots'
 import AccountLimitsCell from './AccountLimitsCell.vue'
 import AccountSuccessRateCell from './AccountSuccessRateCell.vue'
 import AccountUsageCell from './AccountUsageCell.vue'
-import { todayQuery, usagePeriodLabel } from './accountUsage'
-import AccountLimitsTable from './AccountLimitsTable.vue'
+import { todayQuery } from './accountUsage'
 import { sameCreationGroup } from './accountTypeChoices'
-import { accountControl } from './commonControls'
 import AccountQuotaCell from './AccountQuotaCell.vue'
 import AccountBalanceCell from './AccountBalanceCell.vue'
 import AccountModelTest from './AccountModelTest.vue'
 import AccountDeleteDialog from './AccountDeleteDialog.vue'
+import AccountDetailModal from './AccountDetailModal.vue'
 import AccountOwnerDialog, { type AccountOwner } from './AccountOwnerDialog.vue'
+import AccountRevealModal from './AccountRevealModal.vue'
 import LastTestCell from './AccountLastTest.vue'
-import { actionAppliesTo, pluginAccountActionKey, rowActions, runRowAction, type RowActionDeps } from './accountRowActions'
+import { rowActions, runRowAction, type RowActionDeps } from './accountRowActions'
 import { usePluginAccountActions } from './usePluginAccountActions'
-import { accountEnabled, accountStatusKey, accountStatusKeys, accountStatusTone, enabledPatch } from './accountStatus'
+import { accountEnabled, coolingDown, statusView } from './accountStatus'
+import { useAccountAbilities } from './accountAbilities'
+import { useAccountBulk } from './useAccountBulk'
+import { useAccountEditorDialog } from './useAccountEditorDialog'
 import { useBatchTest } from './useBatchTest'
+import { useCredRefresh } from './useCredRefresh'
+import { useEnabledToggle } from './useEnabledToggle'
+import { useIdsFilter } from './useIdsFilter'
+import { useAccountFilters } from './useAccountFilters'
 import { useSelection } from '@/composables/useSelection'
-import { useBulkRun } from '@/composables/useBulkRun'
-import { bulkToast } from '@/composables/bulkToast'
 import AccountBulkEditDialog from './AccountBulkEditDialog.vue'
 import AccountBulkDeleteDialog from './AccountBulkDeleteDialog.vue'
-import { hasBalance, hasQuota, refreshAccountCredentials, resetAccountStatus, useBalanceRefresh, useQuotaRefresh } from './accountQuota'
+import { hasBalance, hasQuota, resetAccountStatus, useBalanceRefresh, useQuotaRefresh } from './accountQuota'
 
 const { t } = useI18n()
 const auth = useAuthStore()
 const plugins = usePluginStore()
-const scope = useScope()
 const accountTypes = useAccountTypes()
 accountTypes.load()
 /** The account type of `a` (undefined until the types load or for an orphaned type). */
 const typeOf = (a?: Pick<Account, 'plugin_key' | 'type'> | null) => (a ? accountTypes.find(a.plugin_key, a.type) : undefined)
 const { groups } = useGroupsLookup()
+const can = useAccountAbilities(typeOf)
+const { canUpdate, canTest, canDelete, canResetStatus, canEnable, toggleable, editable, selectable } = can
 
 // Scopes (CONTRACTS §21, §103.4): account:read sees every account, a narrower scope
 // only the accounts in it (the server filters; row actions follow the same rule).
 // The owner (所属) shows to a caller reaching more than its own accounts (every
 // account, or its team's), the creator, shown only, to one reaching every account.
-const readLevel = computed(() => scope.level(ACCOUNT_ACTIONS.read))
+const readLevel = computed(() => can.scope.level(ACCOUNT_ACTIONS.read))
 const showCreator = computed(() => readLevel.value === 'all')
 const showOwner = computed(() => readLevel.value === 'all' || readLevel.value === 'team')
 // One creator on the whole page says nothing per row: the column only shows when creators differ.
 const mixedCreators = computed(() => new Set(list.items.value.map((a) => a.created_by)).size > 1)
 const canCreate = computed(() => auth.hasAction(ACCOUNT_ACTIONS.create))
-const canUpdate = (a: Account) => scope.can(a, ACCOUNT_ACTIONS.update)
-const canTest = (a: Account) => scope.can(a, ACCOUNT_ACTIONS.test)
-const canDelete = (a: Account) => scope.can(a, ACCOUNT_ACTIONS.delete)
-const canReveal = (a: Account) => scope.can(a, ACCOUNT_ACTIONS.reveal)
 
 // `mine=true` (owned by the caller) and `owner_id=<id>` work at every level, `subordinates=true`
 // (owned by the caller's team) with a team scope; `created_by=<id>` only at the all level (ignored otherwise).
@@ -81,61 +79,8 @@ const canReveal = (a: Account) => scope.can(a, ACCOUNT_ACTIONS.reveal)
 const list = useList<Account>(`/accounts?${new URLSearchParams(todayQuery())}`, {
   plugin_key: '', type: '', group_id: '', status: '', model: '', q: '', mine: '', owner_id: '', subordinates: '', created_by: '', orphaned: '', ids: ''
 })
-// The account.list.toolbar slot (CONTRACTS §23.3 UI 3.6) narrows the list to
-// the ids plugins name. Each plugin keeps its own set and chip label (a
-// plugin's `ids` prop is that set; an empty array or null clears it); the list
-// gets the intersection of every set (`?ids=1,2`, at most MAX_ACCOUNT_BATCH:
-// the rest are dropped and the chips say so). Sets without a common id ask
-// for id 0, which no account has, so the list comes back empty.
-const idsFilters = ref<Record<string, { ids: number[]; label: string }>>({})
-const toolbarProps = (entry: SlotEntry) => ({
-  ids: idsFilters.value[entry.pluginKey]?.ids ?? null,
-  setIds(ids: number[] | null, label: string) {
-    // Plugin input is clamped on the way in: positive integers only, no repeats.
-    const clean = [...new Set((ids ?? []).filter((id) => Number.isInteger(id) && id > 0))]
-    if (clean.length) idsFilters.value[entry.pluginKey] = { ids: clean, label }
-    else clearIds(entry.pluginKey)
-  }
-})
-/** Clears one plugin's id set, or every set. */
-function clearIds(pluginKey?: string) {
-  if (pluginKey) delete idsFilters.value[pluginKey]
-  else idsFilters.value = {}
-}
-/** The ids common to every plugin's set (null without any), cut to MAX_ACCOUNT_BATCH. */
-const idsCommon = computed(() => {
-  const sets = Object.values(idsFilters.value).map((f) => f.ids)
-  if (!sets.length) return null
-  const common = sets.reduce((acc, ids) => {
-    const own = new Set(ids)
-    return acc.filter((id) => own.has(id))
-  })
-  return { ids: common.slice(0, MAX_ACCOUNT_BATCH), truncated: common.length > MAX_ACCOUNT_BATCH }
-})
-watch(idsCommon, (c) => {
-  list.filters.ids = !c ? '' : c.ids.length ? c.ids.join(',') : '0'
-})
-const onlyMine = filterFlag(list.filters, 'mine')
-const onlySubordinates = filterFlag(list.filters, 'subordinates')
-// Accounts of disabled/uninstalled plugins are hidden by default; the switch
-// asks for `orphaned=all`.
-const showOrphaned = computed({
-  get: () => list.filters.orphaned === 'all',
-  set: (v: boolean) => {
-    list.filters.orphaned = v ? 'all' : ''
-  }
-})
-
-// One select drives both ?plugin_key= and ?type= (account type identity).
-const typeFilter = computed({
-  get: () => (list.filters.plugin_key && list.filters.type ? typeKey(list.filters.plugin_key, list.filters.type) : ''),
-  set: (raw: SelectOption['value']) => {
-    const v = typeof raw === 'string' ? raw : ''
-    const i = v.indexOf('/')
-    list.filters.plugin_key = i > 0 ? v.slice(0, i) : ''
-    list.filters.type = i > 0 ? v.slice(i + 1) : ''
-  }
-})
+const { idsFilters, idsCommon, toolbarProps, clearIds } = useIdsFilter(list.filters)
+const { onlyMine, onlySubordinates, showOrphaned, typeFilter, statusOptions: statusSelectOptions, typeOptions, advancedOpen: advancedFilters, filterCount, hasAdvanced: hasAdvancedFilters, reset: resetFilters } = useAccountFilters(list.filters, clearIds)
 
 // A quota column decoration declaring accountTypes (UI 3.8) is only for those types of its plugin.
 const quotaSlots = computed(() => plugins.slotEntries('account.list.quota'))
@@ -177,100 +122,14 @@ function patchAccount(id: number, patch: Partial<Account>) {
   if (detail.value?.id === id) Object.assign(detail.value, patch)
 }
 
-function coolingDown(a: Account) {
-  return !!a.cooldown_until && new Date(a.cooldown_until).getTime() > Date.now()
-}
-
-/** detail: full explanation (list badge tooltip, detail drawer); note: short recovery time shown under the list badge. */
-type StatusView = { tone: ReturnType<typeof accountStatusTone>; label: string; detail?: string; note?: string }
-function statusOf(a: Account): StatusView {
-  const key = accountStatusKey(a)
-  const cooling = key === 'active' && coolingDown(a)
-  // The usage limit's own reason is localized; without the limit's figures it reads generically.
-  const limit = a.usage?.limit
-  let statusReason = a.status_reason
-  if (a.usage?.limit_disabled) {
-    statusReason = limit
-      ? t('accounts.usage.limitReached', { used: formatMoney(limit.used, 2), amount: formatMoney(limit.amount, 2), period: usagePeriodLabel(t, limit.period, limit.period_count) })
-      : t('accounts.usage.limitReachedPlain')
-  }
-  const reason = a.orphaned ? t('accounts.orphanedHint', { plugin: a.plugin_key }) : (cooling && a.cooldown_reason) || statusReason
-  const view: StatusView = { tone: accountStatusTone(a), label: t(`accounts.status.${key}`), detail: reason || undefined }
-  // Auto-disabled reads as one badge, yellow with a release time and red without; why, and when it comes back, show in its
-  // tooltip (hover or keyboard focus) and in the detail drawer.
-  if (key === 'auto_disabled' && a.auto_disabled_until) {
-    const release = t('accounts.autoReleaseAt', { time: formatDateTime(a.auto_disabled_until) })
-    view.detail = view.detail ? `${view.detail}\n${release}` : release
-  }
-  if (cooling) view.note = t('accounts.cooldownUntil', { time: formatTime(a.cooldown_until) })
-  return view
-}
+const statusOf = (a: Account) => statusView(t, a)
 
 // ---------------------------------------------------------------- auto refresh (in_use / cooldown)
 const refreshSeconds = ref(10)
 useAutoRefresh(list.reload, () => refreshSeconds.value * 1000, { enabled: () => !editorOpen.value })
 
 // ---------------------------------------------------------------- create / edit
-const editorOpen = ref(false)
-const step = ref<1 | 2>(1)
-const pickedType = ref<AccountType | null>(null)
-const editing = ref<Account | null>(null)
-const editorLoading = ref(false)
-
-const editorTitle = computed(() => {
-  if (editing.value) return `${t('accounts.editTitle')} · ${editing.value.name}`
-  if (step.value === 1) return t('accounts.newStep1')
-  return `${t('accounts.newTitle')} · ${pickedType.value ? accountTypes.label(pickedType.value.plugin_key, pickedType.value.type) : ''}`
-})
-
-function openCreate() {
-  editing.value = null
-  pickedType.value = null
-  step.value = 1
-  editorOpen.value = true
-}
-
-function pick(at: AccountType) {
-  pickedType.value = at
-  step.value = 2
-}
-
-async function openEdit(a: Pick<Account, 'id'>) {
-  editorLoading.value = true
-  editorOpen.value = true
-  step.value = 2
-  try {
-    const full = await api.get<Account>(`/accounts/${a.id}`, todayQuery())
-    editing.value = full
-    await accountTypes.load()
-    pickedType.value = typeOf(full) || null
-  } catch (e) {
-    notifyError(e)
-    editorOpen.value = false
-  } finally {
-    editorLoading.value = false
-  }
-}
-
-function onSaved() {
-  list.reload()
-  editorOpen.value = false
-}
-
-// Deep link (/accounts?edit=<id>): opens the editor.
-const route = useRoute()
-const router = useRouter()
-watch(
-  () => route.query.edit,
-  (raw) => {
-    const id = Number(Array.isArray(raw) ? raw[0] : raw)
-    if (!raw || !Number.isInteger(id) || id <= 0) return
-    void openEdit({ id })
-    const { edit: _e, ...rest } = route.query
-    void router.replace({ query: rest })
-  },
-  { immediate: true }
-)
+const { open: editorOpen, step, pickedType, editing, loading: editorLoading, title: editorTitle, openCreate, pick, openEdit, onSaved } = useAccountEditorDialog(list.reload)
 
 // ---------------------------------------------------------------- test (model test dialog, CONTRACTS: POST /accounts/:id/test)
 const testOpen = ref(false)
@@ -293,18 +152,6 @@ function onTestUpdated(saved: Account) {
 }
 
 // ---------------------------------------------------------------- selection + bulk actions
-// Rows the caller may act on in some way; each action runs on the selected
-// accounts it applies to (the button shows how many), and the server checks
-// every request as it does for a single row.
-const testable = (a: Account) => canTest(a) && !a.orphaned
-const editable = (a: Account) => canUpdate(a) && !a.orphaned
-const toggleable = (a: Account) => editable(a) && accountControl(typeOf(a), 'schedulable').configurable
-// An account an administrator disabled (admin_locked, still disabled): a caller with a restricted scope can
-// neither enable it nor reset its status (the server answers 403 account_locked_by_admin), so both are shown
-// disabled or left out. A stale lock on an account in another status holds nothing back, as on the server.
-const lockedByAdmin = (a: Account) => !!a.admin_locked && a.status === 'disabled' && scope.level(ACCOUNT_ACTIONS.update) !== 'all'
-const canEnable = (a: Account) => toggleable(a) && !lockedByAdmin(a)
-const selectable = (a: Account) => testable(a) || editable(a) || canDelete(a)
 const selection = useSelection<Account>({ items: list.items, key: (a) => a.id, selectable, loadAll: loadAllAccounts })
 const selectionKeys = computed({ get: () => selection.keys.value as unknown[], set: (v: unknown[]) => selection.update(v) })
 const anySelectable = computed(() => list.items.value.some(selectable))
@@ -320,40 +167,11 @@ async function loadAllAccounts(): Promise<Account[]> {
 }
 // A changed filter starts a new selection: rows outside it would be acted on unseen.
 watch(() => ({ ...list.filters }), () => selection.clear(), { deep: true })
-const picked = computed(() => ({
-  test: selection.rows.value.filter(testable),
-  edit: selection.rows.value.filter(editable),
-  toggle: selection.rows.value.filter(toggleable),
-  enable: selection.rows.value.filter(canEnable),
-  reset: selection.rows.value.filter(canResetStatus),
-  remove: selection.rows.value.filter(canDelete)
-}))
 
 const { batchTesting, batchRunning, batchDone, batchTotal, batchTest, stopBatch } = useBatchTest({ tested: onTested })
-
-const bulk = useBulkRun(4)
 const declaredActions = usePluginAccountActions(list.reload)
+const { bulk, picked, more: moreBulkActions, onMore: onBulkMore } = useAccountBulk({ selected: selection.rows, can, patch: patchAccount, reload: list.reload, runDeclared: declaredActions.run })
 const bulkBusy = computed(() => batchRunning.value || bulk.running.value || declaredActions.running.value)
-// Same request and same rows as the row switch: enable takes every account that is not enabled (an automatic
-// disable included), disable every one not disabled by hand.
-async function bulkToggle(enable: boolean) {
-  const rows = enable ? picked.value.enable.filter((a) => !accountEnabled(a)) : picked.value.toggle.filter((a) => a.status !== 'disabled')
-  if (!rows.length) return toast(t('accounts.bulk.nothingToChange'), 'info')
-  const out = await bulk.run(rows, async (a, signal) => {
-    patchAccount(a.id, await api.patch<Account>(`/accounts/${a.id}`, enabledPatch(enable), { signal, query: todayQuery() }))
-  })
-  bulkToast('accounts.bulk', out.ok.length, out.failed)
-}
-async function bulkReset() {
-  const rows = picked.value.reset
-  const ok = await confirm({ title: t('accounts.resetStatusTitle'), message: t('accounts.bulk.resetConfirm', { n: rows.length }), confirmText: t('accounts.resetStatus') })
-  if (!ok) return
-  const out = await bulk.run(rows, async (a) => {
-    patchAccount(a.id, await resetAccountStatus(a.id))
-  })
-  bulkToast('accounts.bulk', out.ok.length, out.failed)
-  list.reload()
-}
 const bulkEditOpen = ref(false)
 const bulkDeleteOpen = ref(false)
 function onBulkSaved(rows: Account[]) {
@@ -364,53 +182,12 @@ function onBulkDeleted(ids: number[]) {
   selection.drop(ids)
   list.reload()
 }
-/** The selected rows a declared bulk action targets: the same rows its row-menu entry shows on (CONTRACTS §23.3). */
-const declaredTargets = (x: PluginAccountActionEntry) => selection.rows.value.filter((a) => actionAppliesTo(x, a, canUpdate))
-const moreBulkActions = computed(() => [
-  { key: 'enable', label: t('accounts.bulk.enable', { n: picked.value.enable.length }), disabled: !picked.value.enable.length },
-  { key: 'disable', label: t('accounts.bulk.disable', { n: picked.value.toggle.length }), disabled: !picked.value.toggle.length },
-  { key: 'reset', label: t('accounts.bulk.reset', { n: picked.value.reset.length }), disabled: !picked.value.reset.length },
-  ...plugins.accountActions.filter((x) => x.bulk).map((x) => ({ key: pluginAccountActionKey(x), label: t('accounts.bulk.pluginAction', { name: lt(x.label) || x.id, n: declaredTargets(x).length }), icon: x.icon, danger: x.danger, disabled: !declaredTargets(x).length }))
-])
-function onBulkMore(key: string) {
-  if (key === 'enable' || key === 'disable') void bulkToggle(key === 'enable')
-  else if (key === 'reset') void bulkReset()
-  else {
-    const declared = plugins.accountActions.find((x) => pluginAccountActionKey(x) === key)
-    if (declared) void declaredActions.run(declared, declaredTargets(declared))
-  }
-}
-
-// ---------------------------------------------------------------- reveal credentials
-const revealOpen = ref(false)
-const revealed = ref<Record<string, unknown> | null>(null)
-async function reveal(a: Account) {
-  try {
-    revealed.value = await api.post<Record<string, unknown>>(`/accounts/${a.id}/credentials/reveal`)
-    revealOpen.value = true
-  } catch (e) {
-    notifyError(e)
-  }
-}
-const revealedText = computed(() => JSON.stringify(revealed.value, null, 2))
 
 // ---------------------------------------------------------------- detail
 const detailOpen = ref(false)
 const detail = ref<Account | null>(null)
-const detailTab = ref('overview')
-// A tab declaring accountTypes (UI 3.8) is only for those types of its plugin; openDetail starts every account on the overview.
-const detailSlots = computed(() => plugins.slotEntries('account.detail.tabs').filter((e) => forAccountType(e, detail.value)))
-const detailTabs = computed(() => [{ key: 'overview', label: t('accounts.overview') }, ...detailSlots.value.map((e) => ({ key: slotKey(e), label: tabLabel(e.pluginKey, e.name) }))])
-function tabLabel(pluginKey: string, name: string) {
-  const msgKey = `plugin.${pluginKey}.tabs.${name}`
-  const translated = t(msgKey)
-  return translated !== msgKey ? translated : `${pluginKey} · ${name}`
-}
-const detailSlot = computed(() => detailSlots.value.find((e) => slotKey(e) === detailTab.value))
-const detailType = computed(() => typeOf(detail.value))
 
 async function openDetail(a: Account) {
-  detailTab.value = 'overview'
   detail.value = a
   detailOpen.value = true
   try {
@@ -422,23 +199,13 @@ async function openDetail(a: Account) {
   }
 }
 
-// ---------------------------------------------------------------- quota refresh / reset status
+// ---------------------------------------------------------------- quota / balance / credential refresh, reset status
 // The snapshot of every row arrives with the list; "refresh" asks the upstream
-// for one account (force), with duplicate in-flight clicks coalesced.
-const quotaRefresh = useQuotaRefresh({
-  onSnapshot: (id, quota) => patchAccount(id, { quota }),
-  onError: (_id, e) => notifyError(e)
-})
-
-// ---------------------------------------------------------------- balance refresh
-// Similar to quota refresh, but for account balance (CONTRACTS §52).
-const balanceRefresh = useBalanceRefresh({
-  onSnapshot: (id, balance) => patchAccount(id, { balance }),
-  onError: (_id, e) => notifyError(e)
-})
-
-// A manual disable is undone with Enable; Reset status clears what the gateway set.
-const canResetStatus = (a: Account) => canUpdate(a) && !a.orphaned && a.status !== 'disabled' && !lockedByAdmin(a)
+// for one account (force), with duplicate in-flight clicks coalesced. The
+// balance works the same (CONTRACTS §52).
+const quotaRefresh = useQuotaRefresh({ onSnapshot: (id, quota) => patchAccount(id, { quota }), onError: (_id, e) => notifyError(e) })
+const balanceRefresh = useBalanceRefresh({ onSnapshot: (id, balance) => patchAccount(id, { balance }), onError: (_id, e) => notifyError(e) })
+const credRefresh = useCredRefresh(patchAccount)
 
 async function resetStatus(a: Account) {
   const ok = await confirm({ title: t('accounts.resetStatusTitle'), message: t('accounts.resetStatusConfirm', { name: a.name }), confirmText: t('accounts.resetStatus') })
@@ -454,71 +221,9 @@ async function resetStatus(a: Account) {
   }
 }
 
-// ---------------------------------------------------------------- credential refresh (CONTRACTS §48)
-// The core renews expiring tokens by itself; the detail shows the state and
-// offers one manual refresh.
-const refreshingCreds = ref(new Set<number>())
-const canRefreshCreds = (a: Account) => !!a.refresh && canUpdate(a) && !a.orphaned
-
-function credRefreshText(a: Account): { text: string; warn: boolean } {
-  const r = a.refresh
-  if (!r) return { text: '', warn: false }
-  if (r.error_type === 'auth_rejected') return { text: t('accounts.credRefresh.authRejected'), warn: true }
-  const parts: string[] = []
-  if (!r.expires_at) parts.push(t('accounts.credRefresh.unknown'))
-  else if (new Date(r.expires_at).getTime() <= Date.now()) parts.push(t('accounts.credRefresh.expired'))
-  else parts.push(t('accounts.credRefresh.expiresAt', { time: formatDateTime(r.expires_at) }))
-  if (r.last_success_at) parts.push(t('accounts.credRefresh.lastSuccess', { time: formatRelative(r.last_success_at, t) }))
-  if (r.error_type === 'transient') parts.push(t('accounts.credRefresh.transient', { error: r.error }))
-  return { text: parts.join(' · '), warn: r.error_type === 'transient' }
-}
-
-async function refreshCreds(a: Account) {
-  if (refreshingCreds.value.has(a.id)) return
-  refreshingCreds.value.add(a.id)
-  try {
-    const out = await refreshAccountCredentials(a.id)
-    a.refresh = out.refresh
-    patchAccount(a.id, { refresh: out.refresh })
-    if (out.refreshed) toast(t('accounts.credRefresh.done'), 'success')
-    else if (out.skipped === 'in_progress') toast(t('accounts.credRefresh.inProgress'), 'info')
-    else if (out.skipped === 'changed') toast(t('accounts.credRefresh.changed'), 'info')
-    else if (out.error) toast(t('accounts.credRefresh.failed', { error: out.error }), 'error')
-  } catch (e) {
-    notifyError(e)
-  } finally {
-    refreshingCreds.value.delete(a.id)
-  }
-}
 // ---------------------------------------------------------------- enable / disable (actions column)
-// The row's enable / disable button shows the new state at once and puts the
-// old one back when the request fails. Enable is the manual enable (see
-// enabledPatch): it also recovers an automatically disabled account, which
-// offers Enable; the row menu offers such an account a manual disable.
-const togglingEnabled = ref(new Set<number>())
-async function toggleEnabled(a: Account, on: boolean) {
-  if (togglingEnabled.value.has(a.id) || !(on ? canEnable(a) : toggleable(a))) return
-  togglingEnabled.value.add(a.id)
-  const before = { status: a.status, schedulable: a.schedulable, status_reason: a.status_reason, auto_disabled_until: a.auto_disabled_until }
-  patchAccount(a.id, { ...enabledPatch(on), ...(on ? { status_reason: '', auto_disabled_until: null } : {}) })
-  try {
-    patchAccount(a.id, await api.patch<Account>(`/accounts/${a.id}`, enabledPatch(on), { query: todayQuery() }))
-    toast(t(on ? 'accounts.listUi.enabledDone' : 'accounts.listUi.disabledDone', { name: a.name }), 'success')
-  } catch (e) {
-    patchAccount(a.id, before)
-    notifyError(e)
-  } finally {
-    togglingEnabled.value.delete(a.id)
-  }
-}
-/** Hover text of a row's enable / disable button: what it does. */
-function enabledToggleTitle(a: Account) {
-  if (!accountControl(typeOf(a), 'schedulable').configurable) return t('accounts.editorUi.commonControlFixed')
-  if (accountEnabled(a)) return t('accounts.listUi.disableHint')
-  if (lockedByAdmin(a)) return t('accounts.listUi.adminLockedHint')
-  return t(a.status === 'disabled' ? 'accounts.listUi.enableHint' : 'accounts.listUi.enableAutoHint')
-}
-const canDisable = (a: Account) => toggleable(a) && a.status !== 'disabled' && !accountEnabled(a)
+const enabledToggle = useEnabledToggle({ can, typeOf, patch: patchAccount })
+const togglingEnabled = enabledToggle.toggling
 
 // ---------------------------------------------------------------- row actions
 const deleteOpen = ref(false)
@@ -536,20 +241,21 @@ function changeOwner(a: Account) {
   ownerOpen.value = true
 }
 const ownerChanged = ({ id, ...owner }: AccountOwner) => patchAccount(id, owner)
+const revealModal = ref<InstanceType<typeof AccountRevealModal>>()
 
 const rowActionDeps: RowActionDeps = {
-  canReveal,
+  canReveal: can.canReveal,
   canResetStatus,
-  canDisable,
-  canRefreshCreds,
+  canDisable: can.canDisable,
+  canRefreshCreds: can.canRefreshCreds,
   canUpdate,
   canDelete,
   canChangeOwner: () => auth.has(P.AccountOwnerUpdate),
   openDetail,
-  reveal,
+  reveal: (a) => revealModal.value?.reveal(a),
   resetStatus,
-  disable: (a) => toggleEnabled(a, false),
-  refreshCreds,
+  disable: (a) => enabledToggle.toggle(a, false),
+  refreshCreds: credRefresh.refresh,
   changeOwner,
   remove,
   // Read on each menu build: the plugin list may change after a refresh.
@@ -563,27 +269,7 @@ function onAction(a: Account, key: string) {
   void runRowAction(a, key, rowActionDeps)
 }
 
-const statusSelectOptions = computed<SelectOption[]>(() => [
-  { value: '', label: t('accounts.allStatus') },
-  ...accountStatusKeys.map((s) => ({ value: s, label: t(`accounts.status.${s}`) }))
-])
-// Account types grouped per plugin (<optgroup>), "all types" first.
-const typeOptions = computed<SelectOption[]>(() => [
-  { value: '', label: t('accounts.allTypes') },
-  ...accountTypes.grouped.value.map((g) => ({
-    value: g.plugin_key,
-    label: lt(g.plugin_name) || g.plugin_key,
-    options: g.types.map((at) => ({ value: typeKey(at.plugin_key, at.type), label: lt(at.label) || at.type }))
-  }))
-])
-const advancedFilters = ref(false)
 const denseRows = ref(true)
-const filterCount = computed(() => activeFilterCount(list.filters, ['plugin_key']))
-const hasAdvancedFilters = computed(() => ['model', 'owner_id', 'created_by', 'mine', 'subordinates', 'orphaned'].some((key) => !!list.filters[key]))
-function resetFilters() {
-  for (const key of Object.keys(list.filters)) list.filters[key] = ''
-  clearIds()
-}
 </script>
 
 <template>
@@ -723,9 +409,9 @@ function resetFilters() {
             :tone="accountEnabled(row) ? 'danger' : 'info'"
             :disabled="togglingEnabled.has(row.id) || !(accountEnabled(row) ? toggleable(row) : canEnable(row))"
             :aria-label="t(accountEnabled(row) ? 'accounts.listUi.disableAccount' : 'accounts.listUi.enableAccount', { name: row.name })"
-            :title="enabledToggleTitle(row)"
+            :title="enabledToggle.title(row)"
             data-testid="account-enable-toggle"
-            @click="toggleEnabled(row, !accountEnabled(row))"
+            @click="enabledToggle.toggle(row, !accountEnabled(row))"
           >
             {{ t(accountEnabled(row) ? 'common.disable' : 'common.enable') }}
           </SButton>
@@ -760,79 +446,24 @@ function resetFilters() {
     <AccountDeleteDialog v-model:open="deleteOpen" :account="deleteTarget" @deleted="list.reload" />
     <AccountOwnerDialog v-model:open="ownerOpen" :account="ownerTarget" @changed="ownerChanged" />
 
-    <!-- reveal -->
-    <SModal v-model:open="revealOpen" :title="t('accounts.revealCredentials')" width="lg" @close="revealed = null">
-      <SHint tone="warning" class="mb-3">{{ t('accounts.revealWarning') }}</SHint>
-      <SCode>{{ revealedText }}</SCode>
-      <template #footer>
-        <SCopyButton :text="revealedText" :label="t('common.copy')" variant="secondary" size="md" />
-        <SButton variant="primary" @click="revealOpen = false">{{ t('common.close') }}</SButton>
-      </template>
-    </SModal>
-
-    <!-- detail -->
-    <SModal v-model:open="detailOpen" :title="detail?.name || ''" width="xl">
-      <template v-if="detail">
-        <STabs v-model="detailTab" :tabs="detailTabs">
-          <div v-if="detailTab === 'overview'" class="space-y-4">
-            <SDescriptions label-width="9rem">
-              <SDescItem label="ID">{{ detail.id }}</SDescItem>
-              <SDescItem :label="t('accounts.type')">
-                {{ accountTypes.typeLabel(detail.plugin_key, detail.type, detail.type_label) }}
-                <SHint inline size="xs">· {{ accountTypes.pluginName(detail.plugin_key) }} <span class="font-mono">({{ detail.plugin_key }}/{{ detail.type }})</span></SHint>
-              </SDescItem>
-              <SDescItem v-if="detailType" :label="t('platforms.supported')"><AccountTypePlatforms :items="detailType.platforms" /></SDescItem>
-              <SDescItem :label="t('accounts.servesEndpoints')">
-                <AccountTypeEndpoints v-if="detailType" :endpoints="detailType.endpoints" :platforms="detailType.platforms.map((p) => p.id)" :served="detail.served_protocols" />
-                <SHint v-else inline size="xs">{{ t('accounts.typeUnavailable') }}</SHint>
-              </SDescItem>
-              <SDescItem :label="t('common.status')">
-                <SBadge :tone="statusOf(detail).tone" dot>{{ statusOf(detail).label }}</SBadge>
-                <SHint v-if="statusOf(detail).note" inline size="xs" class="ml-2">{{ statusOf(detail).note }}</SHint>
-                <SHint v-if="statusOf(detail).detail" inline size="xs" class="ml-2 whitespace-pre-line" data-testid="account-detail-status-reason">{{ statusOf(detail).detail }}</SHint>
-                <SLink v-if="coolingDown(detail) && canResetStatus(detail)" as="button" class="ml-2 text-xs" :title="t('accounts.resetStatusHint')" @click="resetStatus(detail)">{{ t('accounts.resetStatus') }}</SLink>
-              </SDescItem>
-              <SDescItem :label="t('accounts.groups')">{{ groupNames(detail.group_ids, detail.groups) }}</SDescItem>
-              <SDescItem :label="t('accounts.priority')">{{ detail.priority }}</SDescItem>
-              <SDescItem :label="t('accounts.weight')">{{ detail.weight ?? 1 }}</SDescItem>
-              <SDescItem :label="t('accounts.listUi.limitsColumn')"><AccountLimitsTable :account="detail" class="max-w-xl" /></SDescItem>
-              <SDescItem v-if="detail.refresh" :label="t('accounts.credRefresh.label')" data-testid="account-cred-refresh">
-                  <span :class="credRefreshText(detail).warn ? 'text-warning-600' : ''" class="text-sm">{{ credRefreshText(detail).text }}</span>
-                  <SLink v-if="canRefreshCreds(detail)" as="button" class="ml-2 text-xs" :title="t('accounts.credRefresh.actionHint')" :disabled="refreshingCreds.has(detail.id)" @click="refreshCreds(detail)">{{ t('accounts.credRefresh.action') }}</SLink>
-              </SDescItem>
-              <SDescItem :label="t('accounts.usage.column')"><AccountUsageCell :account-id="detail.id" :usage="detail.usage" /></SDescItem>
-              <SDescItem v-if="hasQuota(detail.quota)" :label="t('accounts.quota.column')"><AccountQuotaCell :quota="detail.quota" :refreshing="quotaRefresh.refreshing.has(detail.id)" @refresh="quotaRefresh.refresh(detail.id)" /></SDescItem>
-              <SDescItem v-if="hasBalance(detail.balance)" :label="t('accounts.balance.accountLabel')"><AccountBalanceCell :balance="detail.balance" :refreshing="balanceRefresh.refreshing.has(detail.id)" @refresh="balanceRefresh.refresh(detail.id)" /></SDescItem>
-              <SDescItem :label="t('accounts.models')">
-                <span v-if="detail.models?.length" class="flex flex-wrap gap-1">
-                  <SBadge v-for="m in detail.models" :key="m" tone="gray"><span class="font-mono">{{ m }}</span></SBadge>
-                </span>
-                <SHint v-else inline>{{ t('accounts.allModels') }}</SHint>
-              </SDescItem>
-              <SDescItem :label="t('accounts.modelMapping')">
-                <ul v-if="detail.model_mapping && Object.keys(detail.model_mapping).length" class="space-y-0.5">
-                  <li v-for="(to, from) in detail.model_mapping" :key="from" class="font-mono text-xs">
-                    {{ from }} <SHint inline size="xs">→</SHint> {{ to }}
-                  </li>
-                </ul>
-                <SHint v-else inline>—</SHint>
-              </SDescItem>
-              <SDescItem :label="t('accounts.schedulable')">{{ detail.schedulable ? t('common.yes') : t('common.no') }}</SDescItem>
-              <SDescItem :label="t('accounts.lastUsed')">{{ formatDateTime(detail.last_used_at) }}</SDescItem>
-              <SDescItem :label="t('accounts.lastTest.column')"><LastTestCell :last="detail.last_test" :testing="batchTesting.has(detail.id)" /></SDescItem>
-              <SDescItem v-if="showOwner" :label="t('accounts.owner')"><UserRef :id="detail.owner_id" :email="detail.owner_email" /></SDescItem>
-              <SDescItem v-if="showCreator" :label="t('accounts.createdBy')"><UserRef :id="detail.created_by" :email="detail.created_by_email" /></SDescItem>
-              <SDescItem :label="t('common.createdAt')">{{ formatDateTime(detail.created_at) }}</SDescItem>
-            </SDescriptions>
-            <div v-if="detail.credentials">
-              <SSectionTitle :title="t('accounts.credentials')" />
-              <SCode>{{ JSON.stringify(detail.credentials, null, 2) }}</SCode>
-            </div>
-          </div>
-          <component :is="detailSlot.component" v-else-if="detailSlot" :account="detail" />
-        </STabs>
-      </template>
-    </SModal>
+    <AccountRevealModal ref="revealModal" />
+    <AccountDetailModal
+      v-model:open="detailOpen"
+      :account="detail"
+      :groups-text="detail ? groupNames(detail.group_ids, detail.groups) : ''"
+      :show-owner="showOwner"
+      :show-creator="showCreator"
+      :testing="!!detail && batchTesting.has(detail.id)"
+      :quota-refreshing="!!detail && quotaRefresh.refreshing.has(detail.id)"
+      :balance-refreshing="!!detail && balanceRefresh.refreshing.has(detail.id)"
+      :cred-refreshing="!!detail && credRefresh.refreshing.value.has(detail.id)"
+      :can-reset-status="!!detail && canResetStatus(detail)"
+      :can-refresh-creds="!!detail && can.canRefreshCreds(detail)"
+      @reset-status="detail && resetStatus(detail)"
+      @refresh-quota="detail && quotaRefresh.refresh(detail.id)"
+      @refresh-balance="detail && balanceRefresh.refresh(detail.id)"
+      @refresh-creds="detail && credRefresh.refresh(detail)"
+    />
   </div>
 </template>
 

@@ -3,7 +3,7 @@ import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { i18n } from '@/i18n'
 import type { CustomPrice, PriceDef } from '@/api/pricing'
 import { singleTier, type VisualConfig } from '@/views/prices/priceExpr'
-import PriceRuleEditor from './PriceRuleEditor.vue'
+import ModelPriceEditor from './ModelPriceEditor.vue'
 
 i18n.global.locale.value = 'en'
 enableAutoUnmount(afterEach)
@@ -14,16 +14,16 @@ const tiered: PriceDef = { mode: 'visual', config: tieredConfig, expression: '' 
 const expression: PriceDef = { mode: 'expression', config: null, expression: 'p * 3 + c * 15' }
 
 function render(modelValue: CustomPrice | null, base: PriceDef | null = perToken, rate = '1.2') {
-  const w = mount(PriceRuleEditor, { props: { modelValue, base, rate }, global: { plugins: [i18n], stubs: { Teleport: true } } })
+  const w = mount(ModelPriceEditor, { props: { modelValue, base, rate }, global: { plugins: [i18n], stubs: { Teleport: true } } })
   const emitted = () => w.emitted('update:modelValue')?.at(-1)?.[0] as CustomPrice | null | undefined
-  return { w, emitted, kind: (value: string) => w.get(`[data-testid="price-rule-kind"] input[type="radio"][value="${value}"]`) }
+  return { w, emitted, kind: (value: string) => w.get(`[data-testid="model-price-editor-kind"] input[type="radio"][value="${value}"]`) }
 }
-const preview = (w: ReturnType<typeof render>['w']) => w.get('[data-testid="price-rule-preview"]').text()
+const preview = (w: ReturnType<typeof render>['w']) => w.get('[data-testid="model-price-editor-preview"]').text()
 
 describe('price rule editor', () => {
   it('offers to follow the original price or a price of its own, and says what is paid', () => {
     const { w, kind } = render(null)
-    expect(w.get('[data-testid="price-rule-kind"]').text()).toBe('Follows the original price Custom price')
+    expect(w.get('[data-testid="model-price-editor-kind"]').text()).toBe('Follows the original price Custom price')
     expect((kind('none').element as HTMLInputElement).checked).toBe(true)
     expect(w.find('[data-testid="price-def-editor"]').exists()).toBe(false)
     expect(preview(w)).toBe('Model price $3 / $15; at rate ×1.2 you pay $3.6 / $18')
@@ -60,7 +60,7 @@ describe('price rule editor', () => {
 
   it('says why a price of its own cannot be saved', () => {
     const { w } = render({ kind: 'custom', mode: 'expression', expression: ' ' })
-    expect(w.get('[data-testid="price-rule-issue"]').text()).toBe(i18n.global.t('prices.local.emptyExpr'))
+    expect(w.get('[data-testid="model-price-editor-issue"]').text()).toBe(i18n.global.t('prices.local.emptyExpr'))
   })
 
   it('goes back to the original price', async () => {
@@ -72,8 +72,8 @@ describe('price rule editor', () => {
   it('takes no rule for a model without an original price', () => {
     const { w, kind } = render(null, null)
     expect(kind('custom').attributes('disabled')).toBeDefined()
-    expect(w.find('[data-testid="price-rule-no-base"]').exists()).toBe(true)
-    expect(w.find('[data-testid="price-rule-preview"]').exists()).toBe(false)
+    expect(w.find('[data-testid="model-price-editor-no-base"]').exists()).toBe(true)
+    expect(w.find('[data-testid="model-price-editor-preview"]').exists()).toBe(false)
   })
 
   it('only shows the saved price of a model whose original price went away', () => {

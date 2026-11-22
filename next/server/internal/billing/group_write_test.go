@@ -12,18 +12,18 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 )
 
-// What a group write takes of model prices and rates is checked as one: any
-// item that is wrong fails the whole write, and its field error names it by
-// its position.
-func TestGroupWriteValidation(t *testing.T) {
-	e := newPricingEnv(t, allowAll{})
-	validPrice, validRate := patch("web-search", custom("visual", requestTier(1))), rated("web-search", "3")
-	cases := []struct {
-		name, list string
-		item       map[string]any
-		field      string
-		message    string
-	}{
+// groupWriteCase is a group write with one wrong item, in list, and the
+// field error it gets.
+type groupWriteCase struct {
+	name, list string
+	item       map[string]any
+	field      string
+	message    string
+}
+
+// groupWriteCases are the wrong items a group write can have.
+func groupWriteCases() []groupWriteCase {
+	return []groupWriteCase{
 		{"price without a global price", "model_prices", patch("unpriced", custom("visual", requestTier(1))), "model_prices.1.model", "no global price"},
 		{"price on a model nobody has", "model_prices", patch("nobody-has-it", written("p")), "model_prices.1.model", "no global price"},
 		{"multiplier rule", "model_prices", patch("claude-haiku-4-5", map[string]any{"kind": "multiplier", "multiplier": "2"}), "model_prices.1.rule", "a model price is a custom price"},
@@ -40,7 +40,15 @@ func TestGroupWriteValidation(t *testing.T) {
 		{"rate as a JSON number", "model_rates", rated("claude-haiku-4-5", 1.5), "model_rates", "must be a list of model rates"},
 		{"prices that are no list", "model_prices", nil, "model_prices", "must be a list of model prices"},
 	}
-	for _, tc := range cases {
+}
+
+// What a group write takes of model prices and rates is checked as one: any
+// item that is wrong fails the whole write, and its field error names it by
+// its position.
+func TestGroupWriteValidation(t *testing.T) {
+	e := newPricingEnv(t, allowAll{})
+	validPrice, validRate := patch("web-search", custom("visual", requestTier(1))), rated("web-search", "3")
+	for _, tc := range groupWriteCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			body := map[string]any{"model_prices": []any{validPrice, tc.item}, "model_rates": []any{validRate}}
 			if tc.list == "model_rates" {
@@ -56,8 +64,12 @@ func TestGroupWriteValidation(t *testing.T) {
 		})
 	}
 	require.Zero(t, e.one(`SELECT count(*) FROM price_rules`)+e.one(`SELECT count(*) FROM group_model_rates`))
+	checkEveryWrongItemNamed(t, e, validRate)
+	checkRemovalsAndPlainRates(t, e)
+}
 
-	// Every wrong item of both lists is named.
+// Every wrong item of both lists of a group write is named.
+func checkEveryWrongItemNamed(t *testing.T, e *pricingEnv, validRate map[string]any) {
 	fields := e.writeGroup(e.open, map[string]any{"model_prices": []any{patch("unpriced", written("p"))},
 		"model_rates": []any{validRate, rated("claude-haiku-4-5", "-1"), rated("unpriced", "1")}})
 	var named []string
@@ -65,8 +77,10 @@ func TestGroupWriteValidation(t *testing.T) {
 		named = append(named, f.Field)
 	}
 	require.Equal(t, []string{"model_prices.0.model", "model_rates.1.rate", "model_rates.2.model"}, named)
+}
 
-	// Removing always can; 0 and 1 are rates like any other.
+// Removing always can; 0 and 1 are rates like any other.
+func checkRemovalsAndPlainRates(t *testing.T, e *pricingEnv) {
 	require.Nil(t, e.writeGroup(e.open, map[string]any{"model_prices": []any{patch("unpriced", nil)},
 		"model_rates": []any{rated("unpriced", nil), rated("claude-haiku-4-5", "0"), rated("web-search", "1")}}))
 	_, rows := e.modelPrices(e.open)

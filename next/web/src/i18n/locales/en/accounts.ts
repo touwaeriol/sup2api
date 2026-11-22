@@ -122,7 +122,6 @@ export default {
   proxyUrlExtraHint: 'A proxy URL cannot have a path, query or fragment',
   proxyAutoCreated: 'A proxy was created automatically',
   priority: 'Priority',
-  priorityShort: 'Prio.',
   priorityHint: 'Higher is used first',
   scheduling: 'Scheduling',
   weight: 'Weight',
@@ -133,7 +132,6 @@ export default {
   limits: 'Rate limits',
   rpmLimit: 'Requests per minute (RPM)',
   tpmLimit: 'Tokens per minute (TPM)',
-  tpdLimit: 'Tokens per day (TPD)',
   spmLimit: 'Session limit',
   forwarding: {
     title: 'Request forwarding',
@@ -471,7 +469,6 @@ export default {
     }
   },
 
-  tpdHint: '0 = unlimited; per UTC day',
   spmHint: 'Cap of the sessions active within the period, which runs from 1 minute to 24 hours. Sessions are told apart by sticky session key, and a session asking again within the period is not a new one; sessions already on the account always pass, new sessions over the cap go to other accounts. A request matching no sticky rule is a new session of its own. 0 means unlimited',
   spmWindow: {
     sessions: 'sessions', every: '/ every', length: 'Period', unit: 'Period unit', units: { second: 'second | seconds', minute: 'minute | minutes', hour: 'hour | hours' },
@@ -479,22 +476,16 @@ export default {
   },
   models: 'Models',
   modelsPlaceholder: 'Model id, press Enter',
-  modelsTextPlaceholder: 'One model id per line, or comma separated',
   allModels: 'All models',
   modelInvalid: 'Not a complete model id (wildcards are not allowed): {model}',
   modelsNotArray: 'Must be a JSON array of model id strings',
   modelsJsonPlaceholder: '[\n  "claude-opus-4-1",\n  "claude-sonnet-4-5"\n]',
   modelDuplicate: 'Duplicate model: {model}',
   modelMapping: 'Model mapping',
-  modelMappingHint: 'Request model → upstream model; both must be complete model ids',
   mappingFrom: 'Request model',
   mappingTo: 'Upstream model',
   mappingInvalidJSON: 'Invalid JSON',
   mappingNotObject: 'Must be an object like {"request-model": "upstream-model"}',
-  textEdit: 'Text editing',
-  tagEdit: 'Tag editing',
-  jsonEdit: 'JSON editing',
-  tableEdit: 'Table editing',
   schedulable: 'Schedulable',
   autoDisable: 'Allow automatic disabling',
   lastUsed: 'Last used',
@@ -502,7 +493,6 @@ export default {
   newStep1: 'New account · choose a type',
   newTitle: 'New account',
   basic: 'Basic information',
-  core: 'core',
   testErrorCode: 'Error code',
   testErrorSource: 'Error source',
   testResponseHeaders: 'Upstream response information',
@@ -576,7 +566,6 @@ export default {
     deleteRun: 'Delete {n} accounts',
     deleteDone: '{ok} accounts deleted', deletePartial: '{ok} deleted, {fail} failed, {skipped} not run'
   },
-  latency: 'Latency',
   message: 'Message',
   revealCredentials: 'Reveal credentials',
   revealWarning: 'These are plaintext credentials. The access is audited; do not share them.',
@@ -597,8 +586,6 @@ export default {
     column: 'Plan usage',
     /** Known window keys, in display order. Unknown keys follow in server order. */
     /** Windows sorted as KNOWN_QUOTA_WINDOWS, unknown keys last (stable). */
-    windows: { '5h': '5 hours', '7d': '7 days', '7d_sonnet': '7 days Sonnet', '7d_fable': '7 days Fable' },
-    windowsShort: { '5h': '5h', '7d': '7d', '7d_sonnet': '7d S', '7d_fable': '7d F' },
     rejectedHint: 'The upstream rejects requests in this window until it resets',
     warningHint: 'The upstream warns that this window is almost used up',
     resetsAt: 'resets {time}',

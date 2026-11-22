@@ -28,7 +28,7 @@ import {
   rateOf,
   rateOverrideOf,
   removeSegment,
-  rulesWhere,
+  modelPricesWhere,
   segmentOfUser,
   segmentRef,
   segments,
@@ -135,13 +135,13 @@ function groupSettings(g: MockGroup, req: MockRequest) {
 /** One model of a group's pricing table: whether the group provides it, its global price, and the group's model price and model rate. */
 function modelRow(g: MockGroup, model: string, offered: string[]) {
   const base = globalPrice(model)
-  return { model, offered: offered.includes(model), base, price: listPriceOf(g.id, model, base).group_rule, rate: modelRateOf(null, g.id, model) }
+  return { model, offered: offered.includes(model), base, price: listPriceOf(g.id, model, base).group_price, rate: modelRateOf(null, g.id, model) }
 }
 
 /** The pricing table of a group: the models it provides and those it sets a price or a rate on, by model, at its base rate. */
 function modelPrices(g: MockGroup) {
   const offered = groupModels(g)
-  const set = [...rulesWhere({ group_id: g.id }), ...modelRatesWhere({ segment_id: null, group_id: g.id })].map((r) => r.model)
+  const set = [...modelPricesWhere({ group_id: g.id }), ...modelRatesWhere({ segment_id: null, group_id: g.id })].map((r) => r.model)
   const models = [...new Set([...offered, ...set])].sort()
   return { group: { id: g.id, name: g.name }, rate: rateOf(null, g), models: models.map((m) => modelRow(g, m, offered)) }
 }
@@ -294,7 +294,7 @@ function quoteOf(req: MockRequest, s: MockSegment, g: MockGroup) {
     base,
     list_price: price.list_price,
     price_source: price.source,
-    price_levels: { group: price.group_rule },
+    price_levels: { group: price.group_price },
     rate,
     rate_levels: rateLevelsOf(s, g, b.model),
     list_cost: money(listCost),

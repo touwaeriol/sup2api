@@ -239,6 +239,12 @@ func (c *call) run(ctx context.Context) {
 		c.fail(e)
 		return
 	}
+	c.serveRequest(ctx)
+}
+
+// serveRequest serves a read request of an authenticated key: within the
+// key's caps, after the hooks.
+func (c *call) serveRequest(ctx context.Context) {
 	ctx, releaseKey, e := c.admitCaps(ctx) // 3. The caps of the API key.
 	if e != nil {
 		c.fail(e)

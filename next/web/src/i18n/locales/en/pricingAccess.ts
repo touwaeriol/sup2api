@@ -20,8 +20,6 @@ export default {
     group: 'Follows the account group'
   },
   unavailable: 'Not available',
-  unsaved: 'Unsaved',
-  refused: 'Refused',
   remove: 'Remove',
   groupRate: 'Base rate',
   baseRate: 'Base rate',

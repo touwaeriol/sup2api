@@ -4,10 +4,11 @@ import { useI18n } from 'vue-i18n'
 import { SBadge, SEmpty, SHint, SInput, SRowAction, SSwitch, STable, useTabbedFormPart, type SelectOption, type TableColumn } from '@sub2api/ui'
 import ModelBadge from '@/components/platform/ModelBadge.vue'
 import AddSelect from './AddSelect.vue'
-import PriceRuleEditor from './PriceRuleEditor.vue'
+import DraftBadge from './DraftBadge.vue'
+import ModelPriceEditor from './ModelPriceEditor.vue'
 import RateOverrideField from './RateOverrideField.vue'
 import { priceCells, rateText } from './pricingFormat'
-import { priceLabel } from './ruleText'
+import { paidLabel, priceLabel } from './priceLabels'
 import { usePricingTable, type PricingRow } from './usePricingTable'
 
 // The pricing table of a group: per model its original price, its model
@@ -125,9 +126,7 @@ function add(model: SelectOption['value']) {
           <span class="inline-flex max-w-full flex-wrap items-center gap-1.5">
             <ModelBadge :model="row.model" />
             <SBadge v-if="!row.offered" tone="warning" size="xs" :title="t('pricing.table.notOfferedHint')" data-testid="model-price-not-offered">{{ t('pricing.table.notOffered') }}</SBadge>
-            <SBadge v-if="row.dirty || row.error" :tone="row.invalid || row.error ? 'danger' : 'warning'" size="xs" :title="row.error || (row.invalid ? t('pricing.table.invalid', { model: row.model }) : undefined)" data-testid="model-price-unsaved">
-              {{ row.error ? t('pricing.table.refused') : t('pricing.table.unsaved') }}
-            </SBadge>
+            <DraftBadge :dirty="row.dirty" :invalid="row.invalid" :error="row.error" :invalid-title="t('pricing.table.invalid', { model: row.model })" testid="model-price" />
           </span>
           <SHint v-if="row.error" size="xs" tone="danger" data-testid="model-price-error">{{ row.error }}</SHint>
         </template>
@@ -140,12 +139,17 @@ function add(model: SelectOption['value']) {
           <SHint v-else inline size="xs" data-testid="model-price-price">{{ t('pricing.table.followBase') }}</SHint>
         </template>
         <template #cell-rate="{ row }">
-          <RateOverrideField v-if="editable" :model-value="row.rate" :follow="baseRate" :aria-label="t('pricing.table.rateOf', { model: row.model })" @update:model-value="table.change(row, { rate: $event })" />
-          <span v-else-if="row.rate !== null" class="font-mono text-xs" data-testid="model-price-rate">{{ rateText(row.rate) }}</span>
-          <SHint v-else inline size="xs" data-testid="model-price-rate">{{ t('pricing.table.followRate') }}</SHint>
+          <RateOverrideField
+            :model-value="row.rate"
+            :follow="baseRate"
+            :readonly="!editable"
+            :follow-text="t('pricing.table.followRate')"
+            :aria-label="t('pricing.table.rateOf', { model: row.model })"
+            @update:model-value="table.change(row, { rate: $event })"
+          />
         </template>
         <template #cell-paid="{ row }">
-          <span class="whitespace-nowrap font-mono text-xs font-semibold" data-testid="model-price-paid">{{ row.list_price ? (row.paid ? priceLabel(t, row.paid) : '—') : priceLabel(t, null) }}</span>
+          <span class="whitespace-nowrap font-mono text-xs font-semibold" data-testid="model-price-paid">{{ paidLabel(t, row.list_price, row.applied.value) }}</span>
           <SHint size="xs" data-testid="model-price-paid-source">{{ rateText(row.applied.value || null) }} · {{ t(`pricing.table.rateSource.${row.applied.source}`) }}</SHint>
         </template>
         <template #cell-actions="{ row, expanded, toggleExpand }">
@@ -158,7 +162,7 @@ function add(model: SelectOption['value']) {
         <template #expand="{ row }">
           <div class="space-y-2">
             <p class="text-xs font-semibold text-fg">{{ t('pricing.table.editing', { model: row.model }) }}</p>
-            <PriceRuleEditor :model-value="row.price" :base="row.base" :rate="row.applied.value" @update:model-value="table.change(row, { price: $event })" />
+            <ModelPriceEditor :model-value="row.price" :base="row.base" :rate="row.applied.value" @update:model-value="table.change(row, { price: $event })" />
           </div>
         </template>
       </STable>

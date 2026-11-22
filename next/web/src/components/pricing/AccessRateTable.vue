@@ -2,6 +2,8 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { SBadge, SHint, SRowAction, SSwitch, STable, type TableColumn } from '@sub2api/ui'
+import DraftBadge from './DraftBadge.vue'
+import GroupVisibilityBadge from './GroupVisibilityBadge.vue'
 import RateOverrideField from './RateOverrideField.vue'
 import { rateText } from './pricingFormat'
 import type { DraftedSetting, SettingDraft, SettingSide } from './accessRateDrafts'
@@ -49,8 +51,7 @@ const sourceText = (row: DraftedSetting) => t(`pricingAccess.source.${row.rate.s
       <div :class="row.accessible ? '' : 'text-fg-subtle'">
         <span class="inline-flex max-w-full flex-wrap items-center gap-1.5">
           <slot name="lead" :row="row" />
-          <SBadge v-if="rowErrors?.has(row.id)" tone="danger" size="xs" data-testid="access-rate-refused">{{ t('pricingAccess.refused') }}</SBadge>
-          <SBadge v-else-if="row.dirty" tone="warning" size="xs" data-testid="access-rate-unsaved">{{ t('pricingAccess.unsaved') }}</SBadge>
+          <DraftBadge :dirty="row.dirty" :error="rowErrors?.get(row.id)" testid="access-rate" />
         </span>
         <SHint v-if="rowErrors?.has(row.id)" size="xs" tone="danger" data-testid="access-rate-error">{{ rowErrors.get(row.id) }}</SHint>
         <slot name="note" :row="row" v-bind="{ expanded, toggleExpand }" />
@@ -58,7 +59,7 @@ const sourceText = (row: DraftedSetting) => t(`pricingAccess.source.${row.rate.s
     </template>
     <template #cell-access="{ row }">
       <span class="inline-flex items-center gap-2">
-        <SBadge v-if="row.group.visibility === 'public'" tone="success" data-testid="access-rate-public">{{ t('pricingAccess.public') }}</SBadge>
+        <GroupVisibilityBadge v-if="row.group.visibility === 'public'" visibility="public" data-testid="access-rate-public" />
         <SSwitch
           v-if="editable && (row.group.visibility === 'restricted' || keepsGrants)"
           size="sm"
@@ -77,15 +78,14 @@ const sourceText = (row: DraftedSetting) => t(`pricingAccess.source.${row.rate.s
     </template>
     <template #cell-rate_override="{ row }">
       <RateOverrideField
-        v-if="editable"
         :model-value="row.rate_override"
         :follow="row.rate.group_default"
+        :readonly="!editable"
+        :follow-text="t('pricingAccess.follow')"
         :disabled="disabled"
         :aria-label="t('pricingAccess.rateOf', { name: nameOf(row) })"
         @update:model-value="emit('change', row, { rate_override: $event })"
       />
-      <span v-else-if="row.rate_override !== null" class="font-mono" data-testid="access-rate-override">{{ rateText(row.rate_override) }}</span>
-      <SHint v-else inline size="xs" data-testid="access-rate-override">{{ t('pricingAccess.follow') }}</SHint>
     </template>
     <template #cell-rate="{ row }">
       <template v-if="row.accessible">

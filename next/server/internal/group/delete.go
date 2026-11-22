@@ -54,7 +54,7 @@ func moveKeysTo(c *gin.Context, id int64) (*int64, bool) {
 	}
 	n, err := strconv.ParseInt(v, 10, 64)
 	if err != nil || n <= 0 || n == id {
-		httpapi.Fail(c, core.InvalidFields(fieldError(c.Request.Context(), "move_keys_to", "invalid",
+		httpapi.Fail(c, core.InvalidFields(core.NewFieldError(c.Request.Context(), "move_keys_to", "invalid",
 			"pick another existing group", "请选择另一个已存在的分组")))
 		return nil, false
 	}
@@ -100,7 +100,7 @@ func lockForDelete(ctx context.Context, tx *gorm.DB, id int64, moveTo *int64) er
 		return groupNotFound(ctx)
 	}
 	if moveTo != nil && !slices.Contains(locked, *moveTo) {
-		return core.InvalidFields(fieldError(ctx, "move_keys_to", "not_found", "the target group does not exist", "目标分组不存在"))
+		return core.InvalidFields(core.NewFieldError(ctx, "move_keys_to", "not_found", "the target group does not exist", "目标分组不存在"))
 	}
 	return nil
 }

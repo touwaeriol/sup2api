@@ -3,9 +3,7 @@ package segment
 import (
 	"cmp"
 	"context"
-	"encoding/json"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/shopspring/decimal"
@@ -29,57 +27,26 @@ const (
 	keyGroup   = "group_id"
 )
 
-// rateInput is a rate request field: a rate, or null (Value nil) to follow
-// the level below. Set marks it present, Invalid one that is no rate.
-type rateInput struct {
-	Set     bool
-	Value   *decimal.Decimal
-	Invalid bool
-}
-
-func (in *rateInput) UnmarshalJSON(b []byte) error {
-	var text *string
-	if err := json.Unmarshal(b, &text); err != nil {
-		return err
+// rateErrors are the field errors of the rate at path: it is required,
+// and a rate or null.
+func rateErrors(ctx context.Context, in core.RateInput, path string) []core.FieldError {
+	if !in.Set {
+		return []core.FieldError{core.NewFieldError(ctx, path, "required", "a rate or null is required", "必须填写倍率或 null")}
 	}
-	*in = rateInput{Set: true}
-	if text == nil {
-		return nil
-	}
-	d, ok := core.ParseRate(*text)
-	in.Value, in.Invalid = &d, !ok
-	return nil
-}
-
-// errors returns the field error of the rate at path: it is required, and
-// a rate or null.
-func (in rateInput) errors(ctx context.Context, path string) []core.FieldError {
-	switch {
-	case !in.Set:
-		return []core.FieldError{fieldError(ctx, path, "required", "a rate or null is required", "必须填写倍率或 null")}
-	case in.Invalid:
-		return []core.FieldError{fieldError(ctx, path, "invalid",
-			"must be a non-negative number with at most 4 decimals", "必须为非负数，最多 4 位小数")}
-	}
-	return nil
-}
-
-// itemPath is the path of field of item i of the list.
-func itemPath(list string, i int, field string) string {
-	return list + "." + strconv.Itoa(i) + "." + field
+	return in.Errors(ctx, path)
 }
 
 func unknownItem(ctx context.Context, path string) core.FieldError {
-	return fieldError(ctx, path, "not_found", "not found", "不存在")
+	return core.NewFieldError(ctx, path, "not_found", "not found", "不存在")
 }
 
 // pairInput is one segment in one group: granted left out stays as it is,
 // a null rate follows the group.
 type pairInput struct {
-	SegmentID int64     `json:"segment_id"`
-	GroupID   int64     `json:"group_id"`
-	Granted   *bool     `json:"granted"`
-	Rate      rateInput `json:"rate"`
+	SegmentID int64          `json:"segment_id"`
+	GroupID   int64          `json:"group_id"`
+	Granted   *bool          `json:"granted"`
+	Rate      core.RateInput `json:"rate"`
 }
 
 // end is the id of the end of the pair key names.
@@ -105,18 +72,18 @@ func pairErrors(ctx context.Context, list, key string, items []pairInput, known 
 	var fe []core.FieldError
 	for i, it := range items {
 		if !known[it.end(key)] {
-			fe = append(fe, unknownItem(ctx, itemPath(list, i, key)))
+			fe = append(fe, unknownItem(ctx, core.ItemField(list, i, key)))
 		}
-		fe = append(fe, it.Rate.errors(ctx, itemPath(list, i, "rate"))...)
+		fe = append(fe, rateErrors(ctx, it.Rate, core.ItemField(list, i, "rate"))...)
 	}
 	return fe
 }
 
 // modelRateInput is a segment's rate for a model in a group; null removes it.
 type modelRateInput struct {
-	GroupID int64     `json:"group_id"`
-	Model   string    `json:"model"`
-	Rate    rateInput `json:"rate"`
+	GroupID int64          `json:"group_id"`
+	Model   string         `json:"model"`
+	Rate    core.RateInput `json:"rate"`
 }
 
 // modelRatesField is the list of model rates of POST/PATCH /segments.
@@ -130,12 +97,12 @@ func modelRateErrors(ctx context.Context, items []modelRateInput, known map[int6
 		it := &items[i]
 		it.Model = strings.TrimSpace(it.Model)
 		if !known[it.GroupID] {
-			fe = append(fe, unknownItem(ctx, itemPath(modelRatesField, i, keyGroup)))
+			fe = append(fe, unknownItem(ctx, core.ItemField(modelRatesField, i, keyGroup)))
 		}
 		if it.Model == "" {
-			fe = append(fe, fieldError(ctx, itemPath(modelRatesField, i, "model"), "required", "model is required", "模型必填"))
+			fe = append(fe, core.NewFieldError(ctx, core.ItemField(modelRatesField, i, "model"), "required", "model is required", "模型必填"))
 		}
-		fe = append(fe, it.Rate.errors(ctx, itemPath(modelRatesField, i, "rate"))...)
+		fe = append(fe, rateErrors(ctx, it.Rate, core.ItemField(modelRatesField, i, "rate"))...)
 	}
 	return fe
 }
@@ -234,13 +201,7 @@ func saveModelRate(db *gorm.DB, segmentID int64, it modelRateInput) *gorm.DB {
 		return db.Where("segment_id = ? AND group_id = ? AND model = ?", segmentID, it.GroupID, it.Model).
 			Delete(&model.SegmentModelRate{})
 	}
-	return db.Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "segment_id"}, {Name: "group_id"}, {Name: "model"}},
-		DoUpdates: clause.Assignments(map[string]any{
-			"rate":       gorm.Expr("EXCLUDED.rate"),
-			"updated_at": gorm.Expr("now()"),
-		}),
-	}).Create(&newModelRate{SegmentID: segmentID, GroupID: it.GroupID, Model: it.Model, Rate: *it.Rate.Value})
+	return db.Clauses(store.UpsertOn([]string{"segment_id", "group_id", "model"}, "rate")).Create(&newModelRate{SegmentID: segmentID, GroupID: it.GroupID, Model: it.Model, Rate: *it.Rate.Value})
 }
 
 // newModelRate is a segment_model_rates row as written; updated_at is the

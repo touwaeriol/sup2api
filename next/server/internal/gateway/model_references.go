@@ -39,31 +39,54 @@ func (c *call) checkReferencedModels() *gwError {
 			return invalidModelReference(err.Error())
 		}
 		for _, location := range locations {
-			item := location.item
-			if !matchesModelReference(item, rule.Match) {
-				continue
+			if e := c.addModelReference(rule, location); e != nil {
+				return e
 			}
-			value := item.Get(rule.ModelPath)
-			path := location.path + "." + rule.ModelPath
-			if value.Type != gjson.String || value.Str == "" || strings.TrimSpace(value.Str) != value.Str || strings.ContainsAny(value.Str, "\r\n\x00") {
-				return invalidModelReference(path + " must be a nonempty model identifier")
-			}
-			if !c.principal.Group.AllowsModel(value.Str) {
-				return fromCore(core.ErrModelNotFound.WithDetails(map[string]any{"model": value.Str}), errTypeModelNotAllowed)
-			}
-			if len(c.modelRefs) == maxReferencedModels {
-				return invalidModelReference("too many referenced models")
-			}
-			ref := modelReference{kind: rule.Name, path: path, model: value.Str, overrides: map[string]string{}, identityOnly: rule.IdentityOnly}
-			for _, field := range rule.ParameterOverrides {
-				if value := item.Get(field); value.Exists() {
-					ref.overrides[field] = value.Raw
-				}
-			}
-			c.modelRefs = append(c.modelRefs, ref)
 		}
 	}
 	return nil
+}
+
+// addModelReference checks the model rule declares in the item at location
+// and keeps it as a reference of the request; an item the rule does not
+// match is skipped.
+func (c *call) addModelReference(rule manifest.RequestModelReference, location modelReferenceLocation) *gwError {
+	item := location.item
+	if !matchesModelReference(item, rule.Match) {
+		return nil
+	}
+	value, path := item.Get(rule.ModelPath), location.path+"."+rule.ModelPath
+	if !isModelIdentifier(value) {
+		return invalidModelReference(path + " must be a nonempty model identifier")
+	}
+	if !c.principal.Group.AllowsModel(value.Str) {
+		return fromCore(core.ErrModelNotFound.WithDetails(map[string]any{"model": value.Str}), errTypeModelNotAllowed)
+	}
+	if len(c.modelRefs) == maxReferencedModels {
+		return invalidModelReference("too many referenced models")
+	}
+	c.modelRefs = append(c.modelRefs, modelReference{kind: rule.Name, path: path, model: value.Str,
+		overrides: parameterOverrides(item, rule.ParameterOverrides), identityOnly: rule.IdentityOnly})
+	return nil
+}
+
+// isModelIdentifier reports whether value is a model id: a nonempty string
+// without surrounding space or line breaks.
+func isModelIdentifier(value gjson.Result) bool {
+	return value.Type == gjson.String && value.Str != "" && strings.TrimSpace(value.Str) == value.Str &&
+		!strings.ContainsAny(value.Str, "\r\n\x00")
+}
+
+// parameterOverrides are the raw values of the fields of item that are
+// there, by field.
+func parameterOverrides(item gjson.Result, fields []string) map[string]string {
+	out := map[string]string{}
+	for _, field := range fields {
+		if value := item.Get(field); value.Exists() {
+			out[field] = value.Raw
+		}
+	}
+	return out
 }
 
 func matchesModelReference(item gjson.Result, match map[string]string) bool {
@@ -139,14 +162,8 @@ func (c *call) prepareReferencedPrices(ctx context.Context) *gwError {
 func (c *call) mapReferencedModels(body []byte, account *core.AccountRef, rt *typeRoute) ([]byte, error) {
 	c.upstreamPrimaryModel = account.MapModel(c.model)
 	c.upstreamRefs = nil
-	if rt.conv != nil {
-		refs, err := modelReferenceSnapshot(body, rt.modelReferences)
-		if err != nil {
-			return nil, err
-		}
-		if len(refs) != 0 {
-			return nil, errors.New("conversion introduced model invocations without source authorization")
-		}
+	if err := requireNoConvertedReferences(body, rt); err != nil {
+		return nil, err
 	}
 	if len(c.modelRefs) == 0 || rt.upstream != c.ep.Protocol {
 		return body, nil
@@ -154,25 +171,51 @@ func (c *call) mapReferencedModels(body []byte, account *core.AccountRef, rt *ty
 	c.upstreamRefs = map[string]core.PricedUsage{}
 	ambiguous := map[string]bool{}
 	for _, ref := range c.modelRefs {
-		upModel := account.MapModel(ref.model)
-		if ref.identityOnly && upModel != ref.model {
-			return nil, errors.New("signed model reference requires identity mapping")
-		}
-		key := ref.kind + "\x00" + upModel
-		if old, exists := c.upstreamRefs[key]; ambiguous[key] || exists && old.Model != ref.model {
-			ambiguous[key] = true
-			delete(c.upstreamRefs, key)
-		} else {
-			c.upstreamRefs[key] = ref.priced
-		}
-		if ref.identityOnly {
-			continue
-		}
 		var err error
-		body, err = sjson.SetBytes(body, ref.path, upModel)
-		if err != nil {
-			return nil, fmt.Errorf("map referenced model: %w", err)
+		if body, err = c.mapReference(body, account, ref, ambiguous); err != nil {
+			return nil, err
 		}
+	}
+	return body, nil
+}
+
+// requireNoConvertedReferences fails when the conversion of the route put
+// model references into body: they were never authorized.
+func requireNoConvertedReferences(body []byte, rt *typeRoute) error {
+	if rt.conv == nil {
+		return nil
+	}
+	refs, err := modelReferenceSnapshot(body, rt.modelReferences)
+	if err != nil {
+		return err
+	}
+	if len(refs) != 0 {
+		return errors.New("conversion introduced model invocations without source authorization")
+	}
+	return nil
+}
+
+// mapReference maps the model of ref in body and keeps its price under the
+// usage identity of the upstream model; ambiguous are the identities two
+// references share, whose usage is billed at the requested model.
+func (c *call) mapReference(body []byte, account *core.AccountRef, ref modelReference, ambiguous map[string]bool) ([]byte, error) {
+	upModel := account.MapModel(ref.model)
+	if ref.identityOnly && upModel != ref.model {
+		return nil, errors.New("signed model reference requires identity mapping")
+	}
+	key := ref.kind + "\x00" + upModel
+	if old, exists := c.upstreamRefs[key]; ambiguous[key] || exists && old.Model != ref.model {
+		ambiguous[key] = true
+		delete(c.upstreamRefs, key)
+	} else {
+		c.upstreamRefs[key] = ref.priced
+	}
+	if ref.identityOnly {
+		return body, nil
+	}
+	body, err := sjson.SetBytes(body, ref.path, upModel)
+	if err != nil {
+		return nil, fmt.Errorf("map referenced model: %w", err)
 	}
 	return body, nil
 }

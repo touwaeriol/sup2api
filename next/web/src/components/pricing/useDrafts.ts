@@ -3,7 +3,7 @@
 // load and refresh them. The parent sends the drafts with the rest of its
 // form in one request (useTabbedForm). The pricing table and the tables of
 // grants and rates all edit this way; what a draft is and how a row reads
-// under one is theirs (ruleDrafts.ts, accessRateDrafts.ts, modelRateDrafts.ts).
+// under one is theirs (pricingRows.ts, accessRateDrafts.ts, modelRateDrafts.ts).
 import { computed, ref, shallowRef } from 'vue'
 import { toast } from '@sub2api/ui'
 import { latestOnly } from '@/composables/useLatestRequest'

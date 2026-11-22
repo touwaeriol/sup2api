@@ -110,33 +110,13 @@ describe('models and prices', () => {
     expect(get).toHaveBeenLastCalledWith('/me/prices', {})
   })
 
-  it('reads the multiplier of a rule into the prices of a group, and names it after a price it cannot break down', async () => {
-    const ruled = {
-      group: basic,
-      rate_multiplier: '1',
-      rate_source: 'group',
-      prices: [
-        { ...prices[0], groups: undefined, multiplier: '0.8', source: 'group' },
-        { ...prices[1], groups: undefined, multiplier: '0', source: 'group' },
-        { ...prices[3], groups: undefined, multiplier: '1.5', source: 'group' }
-      ]
-    }
-    get.mockImplementation(async (path: string) => (path === '/me/groups' ? groups : ruled))
-    const { w } = await render('/me/models?group=1')
-    expect(row(w, 'tokens').text()).toContain('$2.4')
-    expect(row(w, 'tokens').text()).toContain('$12')
-    expect(row(w, 'one-shot').get('[data-testid="models-per-request"]').text()).toBe('$0 / 次')
-    expect(row(w, 'custom').get('[data-testid="models-opaque"]').text()).toBe('按规则计费 ×1.5')
-  })
-
   it('works the caller’s rate into a price it cannot break down, as into the others', async () => {
     const custom = { ...prices[3], groups: undefined, source: 'group' }
-    const rated = { group: vip, rate_multiplier: '1.5', rate_source: 'segment', prices: [{ ...custom, multiplier: '0.8' }, { ...custom, model: 'plain' }] }
+    const rated = { group: vip, rate_multiplier: '1.5', rate_source: 'segment', prices: [custom] }
     get.mockImplementation(async (path: string) => (path === '/me/groups' ? groups : rated))
     const { w } = await render('/me/models?group=2')
     expect(unit(w)).toContain('×1.5')
-    expect(row(w, 'custom').get('[data-testid="models-opaque"]').text()).toBe('按规则计费 ×1.2')
-    expect(row(w, 'plain').get('[data-testid="models-opaque"]').text()).toBe('按规则计费 ×1.5')
+    expect(row(w, 'custom').get('[data-testid="models-opaque"]').text()).toBe('按规则计费 ×1.5')
   })
 
   it('opens the group named in the address', async () => {

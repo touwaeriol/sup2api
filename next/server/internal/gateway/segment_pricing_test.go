@@ -51,14 +51,12 @@ func TestPricingAtTheGroupsModelRate(t *testing.T) {
 	require.Equal(t, "0.9", rec.Additional[0].RateMultiplier.String())
 }
 
-// The price a usage item is frozen with is a copy down to the scale of a
-// multiplier rule and the base of a custom one: the pricer's rule is shared
-// by every request.
+// The price a usage item is frozen with is a copy down to the base of a
+// custom rule: the pricer's rule is shared by every request.
 func TestReferencedPriceIsFrozenApartFromThePricer(t *testing.T) {
-	scale := decimal.RequireFromString("0.8")
 	e := newEnv(t, func(e *env) {
 		e.pricer.rules[advisorModel] = &core.PriceRule{ID: 19, Model: advisorModel, Mode: "visual", Expression: "p*7", ExprHash: "rule",
-			Source: core.PriceSourceGroup, Scale: &scale, Base: &core.PriceBase{Expression: "p*9", ExprHash: "global"}}
+			Source: core.PriceSourceGroup, Base: &core.PriceBase{Expression: "p*9", ExprHash: "global"}}
 	})
 	e.up.set("acc-1", &upstreamRule{status: 200, body: advisorUsageBody})
 
@@ -68,8 +66,6 @@ func TestReferencedPriceIsFrozenApartFromThePricer(t *testing.T) {
 	rule, frozen := e.pricer.rules[advisorModel], rec.Additional[0].Price
 	require.Equal(t, rule, frozen)
 
-	*frozen.Scale = decimal.Zero
 	frozen.Base.Expression = "0"
-	require.Equal(t, "0.8", rule.Scale.String())
 	require.Equal(t, "p*9", rule.Base.Expression)
 }

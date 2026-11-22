@@ -17,8 +17,9 @@ func (c *call) priceQuery(model string) core.PriceQuery {
 	return core.PriceQuery{Model: model, GroupID: c.principal.Group.ID}
 }
 
-// prepareBilling resolves the model's global price (ARCHITECTURE 7.3),
-// captures the price inputs and checks the balance. Free endpoints skip it.
+// prepareBilling resolves the model's list price (ARCHITECTURE 7.3) and
+// rate, captures the price inputs and checks the balance. Free endpoints
+// skip it.
 func (c *call) prepareBilling(ctx context.Context) *gwError {
 	if strings.EqualFold(c.ep.Billing, "free") {
 		return nil
@@ -36,6 +37,12 @@ func (c *call) prepareBilling(ctx context.Context) *gwError {
 	if e := c.prepareReferencedPrices(ctx); e != nil {
 		return e
 	}
+	return c.admitCharge(ctx)
+}
+
+// admitCharge checks the key's quota and the owner's balance, and
+// precharges the request.
+func (c *call) admitCharge(ctx context.Context) *gwError {
 	if c.g.d.Balance == nil {
 		return fromCore(core.AsError(errors.New("billing precharger unavailable")), errTypeInternal)
 	}

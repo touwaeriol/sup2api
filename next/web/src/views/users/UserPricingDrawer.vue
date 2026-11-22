@@ -10,8 +10,8 @@ import SegmentBadge from '@/components/pricing/SegmentBadge.vue'
 import { canSimulatePrices } from '@/components/pricing/quoteSubjects'
 import { confirmDiscard } from '@/composables/confirmDiscard'
 import { useLatestRequest } from '@/composables/useLatestRequest'
+import { useTabbedSubmit } from '@/composables/useTabbedSubmit'
 import { useAuthStore } from '@/stores/auth'
-import { notifyError } from '@/utils/errors'
 import SegmentGroupsEditor from '@/components/pricing/SegmentGroupsEditor.vue'
 import UserSegmentPanel from './UserSegmentPanel.vue'
 
@@ -59,17 +59,14 @@ const saves = ref(0)
 const editable = computed(() => segment.value?.kind === 'personal' && canManage.value)
 const dirty = computed(() => editable.value && tabbed.anyDirty.value)
 
-async function save() {
-  const s = segment.value
-  if (!s || !dirty.value) return
-  try {
-    if ((await tabbed.submit((body) => api.patch<Segment>(`/segments/${s.id}`, body))) === false) return
-  } catch (e) {
-    return notifyError(e)
+const { submit } = useTabbedSubmit(tabbed, {
+  send: (body) => api.patch<Segment>(`/segments/${segment.value!.id}`, body),
+  done() {
+    saves.value++
+    toast(t('common.saved'), 'success')
   }
-  saves.value++
-  toast(t('common.saved'), 'success')
-}
+})
+const save = () => segment.value && dirty.value && submit()
 
 const close = async () => (await confirmDiscard(dirty.value)) && emit('update:open', false)
 

@@ -7,7 +7,7 @@
 import { fail, type MockResult } from './router'
 import { configPrice, globalPrice, validate } from './billing'
 import { compactVisualConfig } from '../src/views/prices/priceExpr'
-import { findSegment, setModelRate, setPair, setRule, type PriceRule } from './pricingStore'
+import { findSegment, setModelRate, setPair, setModelPrice, type ModelPrice } from './pricingStore'
 
 interface FieldError {
   field: string
@@ -78,10 +78,10 @@ export function segmentRatesErrors(body: any, hasGroup: (id: number) => boolean)
 }
 
 /** A model price as it is stored: with its expression (generated from the config of a visual one). */
-function storedPrice(rule: any): PriceRule | null {
-  if (rule == null) return null
-  if (rule.mode === 'expression') return { kind: 'custom', mode: 'expression', config: {}, expression: String(rule.expression).trim() }
-  const config = compactVisualConfig(rule.config)
+function storedPrice(price: any): ModelPrice | null {
+  if (price == null) return null
+  if (price.mode === 'expression') return { kind: 'custom', mode: 'expression', config: {}, expression: String(price.expression).trim() }
+  const config = compactVisualConfig(price.config)
   return { kind: 'custom', mode: 'visual', config, expression: configPrice('visual', config).expression }
 }
 
@@ -90,7 +90,7 @@ const listOf = (body: any, name: string): any[] => (Array.isArray(body?.[name]) 
 
 /** Applies the checked prices and rates of group `gid`, in the order given (a later item on the same thing wins). */
 export function applyGroupPricing(gid: number, body: any) {
-  for (const item of listOf(body, 'model_prices')) setRule(gid, String(item.model), storedPrice(item.rule))
+  for (const item of listOf(body, 'model_prices')) setModelPrice(gid, String(item.model), storedPrice(item.rule))
   for (const item of listOf(body, 'model_rates')) setModelRate(null, gid, String(item.model), rateOf(item.rate))
   for (const item of listOf(body, 'segment_rates')) setPair(Number(item.segment_id), gid, { granted: item.granted, rate_override: rateOf(item.rate) })
 }

@@ -1,10 +1,10 @@
 import { computed, ref, shallowRef } from 'vue'
 import { api } from '@sub2api/host'
-import type { CatalogPrice, GroupModelPrices, ModelPriceRow, PriceDef } from '@/api/pricing'
+import type { CatalogPrice, GroupModelPrices, ModelPriceRow } from '@/api/pricing'
 import { i18n } from '@/i18n'
 import { itemErrors, withDraft } from './drafts'
-import { effectiveRate, timesRate } from './pricingFormat'
-import { catalogPrices, catalogRow, draftedRow, mergeRowDraft, pricingPatches, type DraftedRow, type RowDraft } from './ruleDrafts'
+import { effectiveRate } from './pricingFormat'
+import { catalogPrices, catalogRow, draftedRow, mergeRowDraft, pricingPatches, type DraftedRow, type RowDraft } from './pricingRows'
 import { useDrafts } from './useDrafts'
 
 export interface PricingTableOptions {
@@ -22,11 +22,10 @@ interface Saved {
   catalog: CatalogPrice[]
 }
 
-/** A row as the table shows it: what applies under its draft, and what is paid. */
+/** A row as the table shows it: what applies under its draft, the rate included. */
 export interface PricingRow extends DraftedRow {
   /** The model rate, or the base rate, as it applies. */
   applied: ReturnType<typeof effectiveRate>
-  paid: PriceDef | null
   /** Added here and not saved: it can go again. */
   removable: boolean
   /** Why the server refused what was sent for it. */
@@ -48,7 +47,7 @@ export function usePricingTable(options: PricingTableOptions) {
     const r = draftedRow(row, state.drafts.value.get(row.model))
     const applied = effectiveRate({ group_model: r.rate, group: options.baseRate() })
     const removable = added.value.includes(r.model) && !state.saved.value.rows.some((s) => s.model === r.model)
-    return { ...r, applied, paid: r.list_price && timesRate(r.list_price, applied.value), removable, error: rowErrors.value.get(r.model) }
+    return { ...r, applied, removable, error: rowErrors.value.get(r.model) }
   }
 
   /** Why the drafts cannot be sent yet: the first row not filled in right, by its model. */

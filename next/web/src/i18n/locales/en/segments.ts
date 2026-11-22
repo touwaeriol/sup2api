@@ -39,7 +39,6 @@ export default {
     addNone: 'No model to add',
     addFooter: 'Only the models of this account group with an original price',
     empty: 'No model has a rate of its own yet',
-    removed: 'To be removed',
     rateOf: 'Model rate of {model}',
     undo: 'Undo',
     invalid: 'The model rate of {model} in "{group}" is not valid: enter a number from 0 to 999999.9999, up to 4 decimals.'

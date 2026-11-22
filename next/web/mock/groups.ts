@@ -5,7 +5,7 @@ import { fail, nextId, noContent, now, on, paginate } from './router'
 import { caller } from './core'
 import { accounts, groupAccountCount, groupPlatforms, groupServed } from './accounts'
 import { pricedModels } from './billing'
-import { accessOf, forgetGroup, groupAccess, modelRatesWhere, rateOf, rulesWhere, segmentOfUser } from './pricingStore'
+import { accessOf, forgetGroup, groupAccess, modelRatesWhere, rateOf, modelPricesWhere, segmentOfUser } from './pricingStore'
 import { applyGroupPricing, fieldsFailure, groupPricingErrors, validRate } from './pricingWrites'
 import { invalid, match } from './common'
 import { keys } from './apiKeys'
@@ -31,7 +31,7 @@ export const groups: MockGroup[] = [
 ]
 
 /** The models a group sets a price or a rate of its own on. */
-const setModelCount = (gid: number) => new Set([...rulesWhere({ group_id: gid }), ...modelRatesWhere({ group_id: gid, segment_id: null })].map((r) => r.model)).size
+const setModelCount = (gid: number) => new Set([...modelPricesWhere({ group_id: gid }), ...modelRatesWhere({ group_id: gid, segment_id: null })].map((r) => r.model)).size
 
 // account_count and platforms come from the accounts mock (CONTRACTS §13);
 // the key count uses the server spelling api_key_count.

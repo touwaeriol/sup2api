@@ -8,8 +8,6 @@ export default {
   modelRules: 'Model policy',
   whitelist: 'Whitelist',
   blacklist: 'Blacklist',
-  whitelistHint: 'Allow only matching models',
-  blacklistHint: 'Block matching models; allow the rest',
   emptyPolicy: 'Empty list: all models allowed',
 
   title: 'Account groups',
@@ -27,7 +25,6 @@ export default {
   createHint: 'Not saved yet: fill in any tab, everything is sent together on Create',
   conversionDefault: 'Default (allow)',
   conversionHint: 'What happens when a converted request of this account group\'s accounts would lose content; an account\'s own setting wins. Allow: serve it and record the losses; Safe: skip the account when tools would be lost; Strict: skip it on any loss.',
-  modelAllowlist: 'Model allowlist',
   allowlistHint: 'Empty = unlimited. Wildcards such as claude-* are supported.',
   allowlistPlaceholder: 'Type a model pattern and press Enter',
   accountCount: 'Accounts',

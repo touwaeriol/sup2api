@@ -80,7 +80,7 @@ export interface UsagePricing {
   rate_source?: RateSource
   /** Left out at the global price. `segment`: a model price of a segment, only on records priced before migration 0123 deleted them. */
   price_source?: 'group' | 'segment'
-  /** The multiplier of a multiplier rule. */
+  /** The multiplier of a multiplier rule, on records priced before migration 0124 turned those rules into model rates. */
   scale?: Money
   /** The global price a custom rule replaced. */
   base?: { expression: string; expr_hash: string }
@@ -120,19 +120,10 @@ export type CustomPrice =
   | { kind: 'custom'; mode: 'visual'; config: VisualConfig; expression?: string }
   | { kind: 'custom'; mode: 'expression'; config?: Record<string, never>; expression: string }
 
-/** A price rule as usage records priced before model rates still carry it: a model price, or the global price × `multiplier`. */
-export type PriceRule = { kind: 'multiplier'; multiplier: Money } | CustomPrice
-
 export interface PriceDef {
   mode: PriceMode
   config: Record<string, any> | null
   expression: string
-  /**
-   * Only on the list price a multiplier rule gives, 0 and 1 included: the
-   * list price is this price, which is the global one as it is, times it.
-   * A global price and a custom price have none.
-   */
-  multiplier?: Money
 }
 
 /** A model of a group's pricing table: one the group provides, or one it sets a price or a rate on. */

@@ -19,10 +19,9 @@ func (s *Service) PrepareGroupWrite(ctx context.Context, _ int64, body map[strin
 	if !ok {
 		return core.GroupWrite{}, nil, nil
 	}
-	var items []pairInput
-	if err := json.Unmarshal(raw, &items); err != nil {
-		return core.GroupWrite{}, []core.FieldError{fieldError(ctx, segmentRatesField, "invalid",
-			"must be a list of user group rates", "必须为用户分组倍率的列表")}, nil
+	items, fe := core.DecodeList[pairInput](ctx, raw, segmentRatesField, "user group rates", "用户分组倍率")
+	if fe != nil {
+		return core.GroupWrite{}, fe, nil
 	}
 	known, err := knownRows(ctx, s.db.Gorm, "segments", ends(items, keySegment), false)
 	if err != nil {

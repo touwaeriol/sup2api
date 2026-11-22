@@ -13,9 +13,9 @@ import (
 
 // PriceRule is the list price of a model for one caller: the global
 // model_prices row (ARCHITECTURE 7.3), or what a price rule of the caller's
-// group makes of it (CONTRACTS §97). ID is always the global
-// price's; VideoOnly and PerRequest are the effective expression's: a custom
-// price's own, the global price's under a multiplier.
+// group makes of it (CONTRACTS §97). ID is always the global price's;
+// VideoOnly and PerRequest are the effective expression's: a custom price's
+// own, else the global price's.
 type PriceRule struct {
 	ID          int64
 	Model       string // complete model id (exact match, no wildcards)
@@ -34,9 +34,11 @@ type PriceRule struct {
 	// frozen before core migration 0123 may say "segment" (a user group's
 	// rule, since removed): they settle as any other rule, by Scale and Base.
 	Source string `json:",omitempty"`
-	// Scale is the multiplier of a multiplier rule, on prices frozen before
-	// core migration 0124 turned those rules into model rates: the list
-	// price is the expression times it. nil = none.
+	// Scale is frozen data only: the multiplier of a multiplier rule, on
+	// prices frozen with usage items before core migration 0124 turned
+	// those rules into model rates (the list price was the expression times
+	// it). Resolve never sets it; usage's settlement applies it to retry
+	// such an item as it was priced. nil = none.
 	Scale *decimal.Decimal `json:",omitempty"`
 	// Base is the global price when a custom rule replaced the expression;
 	// nil otherwise. It tells what the usage costs at the global price.
@@ -57,16 +59,6 @@ func (r *PriceRule) BillingType() string {
 		return "per_request"
 	}
 	return "per_token"
-}
-
-// Multiplier is what the expression's result is multiplied by to charge at
-// rate: the rate times the rule's scale. It is the one place the two meet,
-// so precharge and settlement cannot disagree.
-func (r *PriceRule) Multiplier(rate decimal.Decimal) decimal.Decimal {
-	if r == nil || r.Scale == nil {
-		return rate
-	}
-	return rate.Mul(*r.Scale)
 }
 
 // Clone copies the rule with its scale and base.

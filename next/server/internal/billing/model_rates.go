@@ -107,5 +107,5 @@ func (rc rateChanges) write(ctx context.Context, tx *gorm.DB, groupID, updatedBy
 	if len(saved) == 0 {
 		return nil
 	}
-	return g.Clauses(groupModelUpsert("rate", "updated_by")).Create(&saved).Error
+	return g.Clauses(store.UpsertOn(groupModelKeys, "rate", "updated_by")).Create(&saved).Error
 }

@@ -5,11 +5,12 @@ import { api } from '@sub2api/host'
 import { SChoiceCards, SField, SFormModal, SGrid, SHint, SInput, SSelect, SSettingsGroup, STabbedForm, STextarea, toast, useTabbedForm, type ChoiceOption, type FormTab, type TabbedFormPart } from '@sub2api/ui'
 import type { Group } from '@/api/types'
 import { useStatusOptions } from '@/composables/crud'
-import { notifyError } from '@/utils/errors'
 import { policyOptions } from '@/utils/conversion'
 import ModelPriceTable from '@/components/pricing/ModelPriceTable.vue'
+import RateInput from '@/components/pricing/RateInput.vue'
 import { typedRate } from '@/components/pricing/pricingFormat'
-import { confirmDiscard } from '@/composables/confirmDiscard'
+import { useTabbedSubmit } from '@/composables/useTabbedSubmit'
+import { notifyError } from '@/utils/errors'
 import { latestOnly } from '@/composables/useLatestRequest'
 import EnvironmentEditor from '@/components/environment/EnvironmentEditor.vue'
 import GroupModelPolicyEditor from './GroupModelPolicyEditor.vue'
@@ -107,21 +108,16 @@ watch(
 
 // ------------------------------------------------------------------ save
 
-/** One request: the group with its prices and rates (POST /groups, PATCH /groups/:id). */
-const send = (body: Record<string, unknown>) => (props.group ? api.patch<Group>(`/groups/${props.group.id}`, body) : api.post<Group>('/groups', body))
-
-async function submit() {
-  try {
-    if ((await tabbed.submit(send)) === false) return
-  } catch (e) {
-    return notifyError(e)
-  }
-  emit('saved')
-  toast(t(props.group ? 'common.updated' : 'common.created'), 'success')
-  emit('update:open', false)
-}
-
-const leave = async () => (await confirmDiscard(tabbed.anyDirty.value)) && emit('update:open', false)
+const { submit, leave } = useTabbedSubmit(tabbed, {
+  /** One request: the group with its prices and rates (POST /groups, PATCH /groups/:id). */
+  send: (body) => (props.group ? api.patch<Group>(`/groups/${props.group.id}`, body) : api.post<Group>('/groups', body)),
+  done() {
+    emit('saved')
+    toast(t(props.group ? 'common.updated' : 'common.created'), 'success')
+    emit('update:open', false)
+  },
+  close: () => emit('update:open', false)
+})
 </script>
 
 <template>
@@ -162,9 +158,7 @@ const leave = async () => (await confirmDiscard(tabbed.anyDirty.value)) && emit(
         </SField>
         <div v-else-if="key === 'pricing'" class="space-y-4">
           <SField :label="t('groups.rateMultiplier')" required :hint="t('groups.multiplierHint')" :error="errors.rate_multiplier" class="rounded-xl border border-line p-4">
-            <SInput v-model="form.rate_multiplier" mono inputmode="decimal" class="sm:w-48" data-testid="group-default-rate">
-              <template #prefix><span class="text-xs text-fg-subtle">×</span></template>
-            </SInput>
+            <RateInput v-model="form.rate_multiplier" size="md" class="sm:w-48" data-testid="group-default-rate" />
           </SField>
           <ModelPriceTable :group-id="group?.id ?? null" :base-rate="baseRate" editable tab="pricing" />
         </div>

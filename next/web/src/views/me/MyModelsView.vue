@@ -1,9 +1,7 @@
 <script setup lang="ts">
 // Mine > Models & prices: every model at its base price with the caller's
 // groups that provide it, or what one of those groups provides at what the
-// caller pays there, the list price times their rate (CONTRACTS §79.5). The
-// list price of a multiplier rule is the global price with `multiplier`:
-// priceCells works it into the numbers, as in the admin's tables.
+// caller pays there, the list price times their rate (CONTRACTS §79.5).
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
@@ -14,7 +12,7 @@ import type { Group } from '@/api/types'
 import { fetchMyGroups } from '@/composables/lookups'
 import { useLatestRequest } from '@/composables/useLatestRequest'
 import ModelBadge from '@/components/platform/ModelBadge.vue'
-import { priceCells, priceText, rateText, round, type PriceCells } from '@/components/pricing/pricingFormat'
+import { priceCells, priceText, rateText, round } from '@/components/pricing/pricingFormat'
 import { myGroupLabel } from '@/views/keys/myGroup'
 import { num } from '@/views/prices/priceExpr'
 import { notifyError } from '@/utils/errors'
@@ -71,15 +69,8 @@ onMounted(async () => {
 const atBase = computed(() => prices.value?.group === null)
 const rate = computed(() => num(prices.value?.rate_multiplier, 1))
 const money = (v: number | null | undefined) => priceText(v, rate.value)
-/**
- * A price that cannot be broken down: billed by its rules, times what the
- * cells beside it are multiplied by, the multiplier of a rule on it and the
- * caller's rate in the group, as one number.
- */
-function opaqueText(price: PriceCells): string {
-  const times = round(num(price.multiplier, 1) * rate.value)
-  return price.multiplier === undefined && times === 1 ? t('me.models.custom') : t('me.models.customTimes', { rate: rateText(times) })
-}
+/** A price that cannot be broken down: billed by its rules, times the caller's rate in the group, which the cells beside it are multiplied by. */
+const opaqueText = computed(() => (round(rate.value) === 1 ? t('me.models.custom') : t('me.models.customTimes', { rate: rateText(round(rate.value)) })))
 
 /** What the prices of the rows are: the base ones, or the caller's in the group, and where their rate comes from unless it is the group's own. */
 function priceNotes(p: MyPrices): string[] {
@@ -126,7 +117,7 @@ const columns = computed<TableColumn[]>(() => [
         </template>
         <template #cell-input="{ row }">
           <span v-if="row.price.perRequest != null" class="whitespace-nowrap font-mono text-xs" data-testid="models-per-request">{{ t('me.models.perRequest', { price: money(row.price.perRequest) }) }}</span>
-          <span v-else-if="row.price.opaque" class="text-xs text-fg-muted" data-testid="models-opaque">{{ opaqueText(row.price) }}</span>
+          <span v-else-if="row.price.opaque" class="text-xs text-fg-muted" data-testid="models-opaque">{{ opaqueText }}</span>
           <span v-else class="font-mono text-xs">{{ money(row.price.tokens?.p) }}</span>
         </template>
         <template #cell-output="{ row }"><span class="font-mono text-xs">{{ money(row.price.tokens?.c) }}</span></template>

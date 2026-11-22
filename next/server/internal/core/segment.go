@@ -1,6 +1,8 @@
 package core
 
 import (
+	"context"
+	"encoding/json"
 	"strings"
 
 	"github.com/shopspring/decimal"
@@ -50,6 +52,44 @@ var maxRate = decimal.New(9999999999, -rateScale)
 func ParseRate(s string) (decimal.Decimal, bool) {
 	d, err := decimal.NewFromString(strings.TrimSpace(s))
 	return d, err == nil && !d.IsNegative() && !d.GreaterThan(maxRate) && d.Exponent() >= -rateScale
+}
+
+// RateError is the field error of a value at field that is no rate
+// (ParseRate).
+func RateError(ctx context.Context, field string) FieldError {
+	return NewFieldError(ctx, field, "invalid",
+		"must be 0 or more and below 1000000, with at most 4 decimals", "必须不小于 0、小于 1000000，最多 4 位小数")
+}
+
+// RateInput is a rate request field: a rate as a JSON string, or null
+// (Value nil). Set marks it present and Invalid one that is no rate
+// (ParseRate); a value that is no string fails the decoding.
+type RateInput struct {
+	Set     bool
+	Value   *decimal.Decimal
+	Invalid bool
+}
+
+func (in *RateInput) UnmarshalJSON(b []byte) error {
+	var text *string
+	if err := json.Unmarshal(b, &text); err != nil {
+		return err
+	}
+	*in = RateInput{Set: true}
+	if text != nil {
+		d, ok := ParseRate(*text)
+		in.Value, in.Invalid = &d, !ok
+	}
+	return nil
+}
+
+// Errors are the field errors of the rate at field: RateError when it is
+// no rate.
+func (in RateInput) Errors(ctx context.Context, field string) []FieldError {
+	if in.Invalid {
+		return []FieldError{RateError(ctx, field)}
+	}
+	return nil
 }
 
 // SegmentRef names a segment where other rows refer to it. Name of a personal
@@ -107,7 +147,8 @@ type PricingTrace struct {
 	// rule before core migration 0123 removed them (PriceRule.Source).
 	PriceSource string `json:"price_source,omitempty"`
 	// Scale is the multiplier of a multiplier rule, on records priced
-	// before core migration 0124 turned those rules into model rates.
+	// before core migration 0124 turned those rules into model rates
+	// (PriceRule.Scale); none is written any more.
 	Scale *decimal.Decimal `json:"scale,omitempty"`
 	// Base is the global price a custom rule replaced.
 	Base *PriceBase `json:"base,omitempty"`

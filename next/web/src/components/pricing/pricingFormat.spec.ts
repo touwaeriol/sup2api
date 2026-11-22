@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { PriceDef } from '@/api/pricing'
-import { applyRule, effectiveRate, priceCells, priceExtras, priceText, sameRate, timesRate, usd, validRate } from './pricingFormat'
+import { effectiveRate, listPriceOf, priceCells, priceExtras, priceText, sameRate, usd, validRate } from './pricingFormat'
 import { requestTier, singleTier } from '@/views/prices/priceExpr'
 
 describe('a rate typed in a form', () => {
@@ -44,67 +44,44 @@ describe('the price a view shows', () => {
   }
   const perCall: PriceDef = { mode: 'visual', config: { tiers: [{ name: 'a', unit: 'request', price: 0.05 }], rules: [] }, expression: '' }
   const opaque: PriceDef = { mode: 'expression', config: null, expression: 'p * 2 + unknown(1)' }
-  const times = (def: PriceDef, multiplier: string): PriceDef => ({ ...def, multiplier })
-
-  it('works the multiplier of a rule into the cells of a price by tokens and of one by the request', () => {
-    expect(priceCells(times(perToken, '1.5')).tokens).toMatchObject({ p: 4.5, c: 22.5, cr: 0.45, cc: null })
-    expect(priceCells(times(perRequest, '1.5'))).toEqual({ perRequest: 0.03, tiers: 1 })
+  it('works a rate into the cells of a price by tokens and of one by the request', () => {
+    expect(priceCells(perToken, 1.5).tokens).toMatchObject({ p: 4.5, c: 22.5, cr: 0.45, cc: null })
+    expect(priceCells(perRequest, 1.5)).toEqual({ perRequest: 0.03, tiers: 1 })
   })
   it('works it into the rest of a tiered price (its last tier), and the price of a request tier', () => {
-    expect(priceCells(times(tiered, '2'))).toMatchObject({ tokens: { p: 12, c: 45 }, tiers: 2 })
-    expect(priceCells(times(tiered, '2')).multiplier).toBeUndefined()
-    expect(priceCells(times(perCall, '2'))).toEqual({ perRequest: 0.1, tiers: 1 })
+    expect(priceCells(tiered, 2)).toMatchObject({ tokens: { p: 12, c: 45 }, tiers: 2 })
+    expect(priceCells(tiered, 2).factor).toBeUndefined()
+    expect(priceCells(perCall, 2)).toEqual({ perRequest: 0.1, tiers: 1 })
   })
   it('keeps it beside an expression the console cannot break down', () => {
-    expect(priceCells(times(opaque, '1.5'))).toEqual({ tiers: 1, opaque: true, multiplier: '1.5' })
-    expect(priceCells(opaque).multiplier).toBeUndefined()
+    expect(priceCells(opaque, 1.5)).toEqual({ tiers: 1, opaque: true, factor: 1.5 })
+    expect(priceCells(opaque).factor).toBeUndefined()
   })
   it('makes a price free at ×0 and leaves it as it is at ×1', () => {
-    expect(priceCells(times(perToken, '0')).tokens).toMatchObject({ p: 0, c: 0, cr: 0, cc: null })
-    expect(priceCells(times(perRequest, '0')).perRequest).toBe(0)
+    expect(priceCells(perToken, 0).tokens).toMatchObject({ p: 0, c: 0, cr: 0, cc: null })
+    expect(priceCells(perRequest, 0).perRequest).toBe(0)
     // A draft's blank price per request stays blank, as a blank token price does.
     const blank: PriceDef = { mode: 'visual', config: requestTier(null), expression: '' }
     expect(priceCells(blank)).toEqual({ perRequest: null, tiers: 1 })
-    expect(priceCells(times(blank, '1.5')).perRequest).toBeNull()
-    expect(priceCells(times(perToken, '1'))).toEqual(priceCells(perToken))
+    expect(priceCells(blank, 1.5).perRequest).toBeNull()
+    expect(priceCells(perToken, 1)).toEqual(priceCells(perToken))
   })
   it('rewrites neither the config nor the expression for it', () => {
-    const shown = times(tiered, '2')
-    priceCells(shown)
-    expect(shown).toEqual({ ...tiered, multiplier: '2' })
+    const shown = structuredClone(tiered)
+    priceCells(shown, 2)
+    expect(shown).toEqual(tiered)
   })
 })
 
-describe('the list price a rule being edited gives', () => {
+describe('the list price of a model', () => {
   const base: PriceDef = { mode: 'visual', config: singleTier({ p: 3, c: 15 }), expression: 'tier("base", p*3 + c*15)' }
 
-  it('is the original price with the multiplier, as the server returns it once saved', () => {
-    expect(applyRule(base, { kind: 'multiplier', multiplier: '1.5' })).toEqual({ ...base, multiplier: '1.5' })
-    expect(applyRule(base, { kind: 'multiplier', multiplier: '0' })).toEqual({ ...base, multiplier: '0' })
-    expect(applyRule(base, { kind: 'multiplier', multiplier: '1' })).toEqual({ ...base, multiplier: '1' })
+  it('is the model price, a price of its own', () => {
+    expect(listPriceOf(base, { kind: 'custom', mode: 'visual', config: singleTier({ p: 1, c: 8 }) })).toEqual({ mode: 'visual', config: singleTier({ p: 1, c: 8 }), expression: '' })
   })
-  it('leaves the price alone while the multiplier is still being typed, and has none without an original price', () => {
-    expect(applyRule(base, { kind: 'multiplier', multiplier: '1.' })).toBe(base)
-    expect(applyRule(null, { kind: 'multiplier', multiplier: '2' })).toBeNull()
-  })
-  it('is a price of its own for a custom rule', () => {
-    expect(applyRule(base, { kind: 'custom', mode: 'visual', config: singleTier({ p: 1, c: 8 }) })).toEqual({ mode: 'visual', config: singleTier({ p: 1, c: 8 }), expression: '' })
-  })
-})
-
-describe('what is paid at a list price', () => {
-  const base: PriceDef = { mode: 'visual', config: singleTier({ p: 3, c: 15 }), expression: '' }
-  const opaque: PriceDef = { mode: 'expression', config: null, expression: 'p * 2 + unknown(1)' }
-
-  it('is the price times the rate, the multiplier of a rule included', () => {
-    expect(priceCells(timesRate(base, '1.2')).tokens).toMatchObject({ p: 3.6, c: 18 })
-    expect(timesRate({ ...base, multiplier: '0.8' }, '1.5')).toEqual({ ...base, multiplier: '1.2' })
-    expect(timesRate(opaque, '1.2')).toEqual({ ...opaque, multiplier: '1.2' })
-  })
-  it('is the price as it is at ×1, and nothing while the rate is still being typed', () => {
-    expect(timesRate(base, '1')).toBe(base)
-    expect(timesRate(base, '')).toBeNull()
-    expect(timesRate(base, '1.')).toBeNull()
+  it('is the original price without one, and none without an original price', () => {
+    expect(listPriceOf(base, null)).toBe(base)
+    expect(listPriceOf(null, { kind: 'custom', mode: 'expression', expression: 'p*2' })).toBeNull()
   })
 })
 

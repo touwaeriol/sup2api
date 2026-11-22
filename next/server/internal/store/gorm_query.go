@@ -38,6 +38,18 @@ func SetIf[T any](set map[string]any, column string, v *T) {
 	}
 }
 
+// UpsertOn is the upsert of a row on its unique columns keys, for
+// db.Clauses: the columns of set take the inserted values over the row
+// there, if any, and updated_at moves to now().
+func UpsertOn(keys []string, set ...string) clause.OnConflict {
+	columns := make([]clause.Column, len(keys))
+	for i, k := range keys {
+		columns[i] = clause.Column{Name: k}
+	}
+	touch := clause.Assignment{Column: clause.Column{Name: "updated_at"}, Value: clause.Expr{SQL: "now()"}}
+	return clause.OnConflict{Columns: columns, DoUpdates: append(clause.AssignmentColumns(set), touch)}
+}
+
 // The row lock strengths that gorm's clause package has no constant for
 // (it has clause.LockingStrengthUpdate and clause.LockingStrengthShare).
 const (

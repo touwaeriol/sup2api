@@ -2,14 +2,16 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '@sub2api/host'
-import { SBadge, SHint, SInput, SRowAction, type SelectOption } from '@sub2api/ui'
+import { SHint, SRowAction, type SelectOption } from '@sub2api/ui'
 import type { GroupModelPrices } from '@/api/pricing'
 import ModelBadge from '@/components/platform/ModelBadge.vue'
 import { useLatestRequest } from '@/composables/useLatestRequest'
 import AddSelect from './AddSelect.vue'
+import DraftBadge from './DraftBadge.vue'
+import RateInput from './RateInput.vue'
 import type { DraftedModelRate } from './modelRateDrafts'
-import { applyRule, rateText } from './pricingFormat'
-import { priceLabel } from './ruleText'
+import { listPriceOf, rateText } from './pricingFormat'
+import { priceLabel } from './priceLabels'
 
 // The model rates of a user group in one account group, under that group's
 // row: each model added here is paid at its list price × its own rate; the
@@ -31,7 +33,7 @@ const prices = useLatestRequest(() => (props.editable ? props.groupId : null), (
 const addable = computed<SelectOption[]>(() => {
   const taken = new Set(props.rows.map((r) => r.model))
   const models = prices.result.value?.models ?? []
-  return models.filter((m) => m.base && !taken.has(m.model)).map((m) => ({ value: m.model, label: m.model, hint: priceLabel(t, applyRule(m.base, m.price)) }))
+  return models.filter((m) => m.base && !taken.has(m.model)).map((m) => ({ value: m.model, label: m.model, hint: priceLabel(t, listPriceOf(m.base, m.price)) }))
 })
 const add = (model: SelectOption['value']) => emit('add', String(model), props.rate)
 </script>
@@ -57,25 +59,18 @@ const add = (model: SelectOption['value']) => emit('add', String(model), props.r
       <li v-for="row in rows" :key="row.key" class="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-1.5" data-testid="segment-model-rate-row" :data-model="row.model">
         <span class="inline-flex min-w-0 flex-1 flex-wrap items-center gap-1.5" :class="row.removed ? 'line-through opacity-60' : ''">
           <ModelBadge :model="row.model" />
-          <SBadge v-if="row.removed" tone="danger" size="xs">{{ t('segments.modelRates.removed') }}</SBadge>
-          <SBadge v-else-if="errors?.has(row.key)" tone="danger" size="xs" :title="errors.get(row.key)" data-testid="segment-model-rate-refused">{{ errors.get(row.key) }}</SBadge>
-          <SBadge v-else-if="row.dirty" :tone="row.invalid ? 'danger' : 'warning'" size="xs" data-testid="segment-model-rate-unsaved">{{ t('pricingAccess.unsaved') }}</SBadge>
+          <DraftBadge :dirty="row.dirty" :invalid="row.invalid" :removed="row.removed" :error="errors?.get(row.key)" show-error testid="segment-model-rate" />
         </span>
-        <SInput
+        <RateInput
           v-if="editable"
           :model-value="row.rate"
-          size="sm"
-          mono
-          inputmode="decimal"
           class="w-28"
           :error="row.invalid"
           :disabled="disabled || row.removed"
           :aria-label="t('segments.modelRates.rateOf', { model: row.model })"
           data-testid="segment-model-rate-input"
-          @update:model-value="emit('change', row, String($event ?? '').trim())"
-        >
-          <template #prefix><span class="text-xs text-fg-subtle">×</span></template>
-        </SInput>
+          @update:model-value="emit('change', row, $event.trim())"
+        />
         <span v-else class="font-mono text-sm" data-testid="segment-model-rate-value">{{ rateText(row.rate) }}</span>
         <template v-if="editable">
           <SRowAction v-if="row.removed" :label="t('segments.modelRates.undo')" :disabled="disabled" data-testid="segment-model-rate-undo" @click="emit('undo', row)" />

@@ -64,10 +64,9 @@ beforeEach(() => {
 })
 
 describe('segment editor', () => {
-  it('has two tabs, no members and no discount', async () => {
+  it('has two tabs', async () => {
     const { w, tabs } = await render(segment())
     expect(tabs()).toEqual(['基本信息', '账号分组倍率'])
-    expect(w.find('[data-testid="segment-discount"]').exists()).toBe(false)
     expect(w.get('[data-testid="groups"]').attributes()).toMatchObject({ 'data-segment': '2', 'data-editable': 'true' })
   })
 

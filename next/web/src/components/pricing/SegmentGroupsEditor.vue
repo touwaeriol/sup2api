@@ -2,11 +2,12 @@
 import { watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '@sub2api/host'
-import { SBadge, SHint, SIcon, SLink, SStatusBadge, useTabbedFormPart } from '@sub2api/ui'
+import { SHint, SLink, SStatusBadge, useTabbedFormPart } from '@sub2api/ui'
 import type { Group } from '@/api/types'
 import type { SegmentGroupSetting } from '@/api/pricing'
 import { fetchAllPages } from '@/composables/lookups'
 import AccessRateTable from './AccessRateTable.vue'
+import GroupVisibilityBadge from './GroupVisibilityBadge.vue'
 import SegmentModelRates from './SegmentModelRates.vue'
 import { blankGroupSetting } from './accessRateDrafts'
 import { rateText } from './pricingFormat'
@@ -74,10 +75,7 @@ if (props.editable && props.tab) {
   >
     <template #lead="{ row }">
       <b class="truncate font-medium">{{ row.group.name }}</b>
-      <SBadge v-if="row.group.visibility === 'restricted'" size="xs" data-testid="segment-group-private">
-        <SIcon name="lock" class="h-3 w-3" />
-        {{ t('pricingAccess.private') }}
-      </SBadge>
+      <GroupVisibilityBadge v-if="row.group.visibility === 'restricted'" visibility="restricted" size="xs" data-testid="segment-group-private" />
       <SStatusBadge v-if="row.group.status !== 'active'" :status="row.group.status" size="xs" />
     </template>
     <template #note="{ row, expanded, toggleExpand }">
