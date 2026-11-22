@@ -10,8 +10,9 @@ import (
 // rate, and each side is resolved on its own.
 //
 //	list price: the group's price of the model -> the global price
-//	rate:       the segment's rate in the group
-//	            -> the group's rate x the segment's discount -> the group's rate
+//	rate:       one applies, never a product, the most specific first:
+//	            segment x group x model -> segment x group
+//	            -> group x model -> the group's base rate
 //
 // A segment is a user group: every user belongs to exactly one.
 
@@ -21,23 +22,18 @@ const (
 	SegmentPersonal = "personal" // the segment of one user
 )
 
-// Where a rate comes from.
+// Where a rate comes from, the most specific first.
 const (
-	RateSourceSegment  = "segment"  // the segment's own rate in the group
-	RateSourceDiscount = "discount" // the group's rate times the segment's discount
-	RateSourceGroup    = "group"    // the group's rate
+	RateSourceSegmentModel = "segment_model" // the segment's rate for the model in the group
+	RateSourceSegment      = "segment"       // the segment's rate in the group
+	RateSourceGroupModel   = "group_model"   // the group's rate for the model
+	RateSourceGroup        = "group"         // the group's base rate
 )
 
 // Where a list price comes from.
 const (
 	PriceSourceGroup  = "group"  // the group's rule on the model
 	PriceSourceGlobal = "global" // the global model price
-)
-
-// Price rule kinds.
-const (
-	PriceRuleMultiplier = "multiplier" // the global price times a constant
-	PriceRuleCustom     = "custom"     // a price of its own
 )
 
 // rateScale is the number of decimals a rate keeps, as
@@ -49,7 +45,7 @@ const rateScale = 4
 // maxRate is the largest rate that column holds: 999999.9999.
 var maxRate = decimal.New(9999999999, -rateScale)
 
-// ParseRate reads a rate, a discount or a multiplier as a client sends it: a
+// ParseRate reads a rate as a client sends it: a
 // decimal from 0 to 999999.9999 with 4 decimals at most.
 func ParseRate(s string) (decimal.Decimal, bool) {
 	d, err := decimal.NewFromString(strings.TrimSpace(s))
@@ -71,17 +67,26 @@ type GroupRef struct {
 	Name string `json:"name"`
 }
 
-// SegmentRate is the rate a segment pays in a group and where it comes from:
-// its override there, else the group's default times its discount, else the
-// group's default. It is the one place the rule lives.
-func SegmentRate(groupDefault, discount decimal.Decimal, override *decimal.Decimal) (decimal.Decimal, string) {
-	if override != nil {
-		return *override, RateSourceSegment
+// RateLevels are the rates that may apply to a call, nil where not set.
+// Rate picks one; it is the one place the rule lives.
+type RateLevels struct {
+	SegmentModel *decimal.Decimal
+	Segment      *decimal.Decimal
+	GroupModel   *decimal.Decimal
+	Group        decimal.Decimal // the group's base rate
+}
+
+// Rate is the most specific rate set and where it comes from.
+func (l RateLevels) Rate() (decimal.Decimal, string) {
+	switch {
+	case l.SegmentModel != nil:
+		return *l.SegmentModel, RateSourceSegmentModel
+	case l.Segment != nil:
+		return *l.Segment, RateSourceSegment
+	case l.GroupModel != nil:
+		return *l.GroupModel, RateSourceGroupModel
 	}
-	if discount.Equal(decimal.NewFromInt(1)) {
-		return groupDefault, RateSourceGroup
-	}
-	return decimal.Min(groupDefault.Mul(discount).Round(rateScale), maxRate), RateSourceDiscount
+	return l.Group, RateSourceGroup
 }
 
 // PriceQuery asks for the list price of a model. GroupID selects the price
@@ -101,7 +106,8 @@ type PricingTrace struct {
 	// PriceSource is group, or segment on a record priced by a user group's
 	// rule before core migration 0123 removed them (PriceRule.Source).
 	PriceSource string `json:"price_source,omitempty"`
-	// Scale is the multiplier of a multiplier rule.
+	// Scale is the multiplier of a multiplier rule, on records priced
+	// before core migration 0124 turned those rules into model rates.
 	Scale *decimal.Decimal `json:"scale,omitempty"`
 	// Base is the global price a custom rule replaced.
 	Base *PriceBase `json:"base,omitempty"`

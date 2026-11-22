@@ -4,22 +4,19 @@ package model
 
 import (
 	"time"
-
-	"github.com/shopspring/decimal"
 )
 
 // Segment is a row of table segments.
 type Segment struct {
-	ID          int64            `gorm:"column:id;primaryKey;default:(-)"`                   // bigint default nextval('segments_id_seq'::regclass)
-	Kind        *string          `gorm:"column:kind;default:(-)"`                            // character varying(20) default 'named'::character varying
-	Name        string           `gorm:"column:name;default:(-)"`                            // character varying(100) default ''::character varying
-	Description string           `gorm:"column:description;default:(-)"`                     // text default ''::text
-	Discount    *decimal.Decimal `gorm:"column:discount;default:(-)"`                        // numeric(10,4) default 1
-	IsDefault   bool             `gorm:"column:is_default;default:(-)"`                      // boolean default false
-	UserID      *int64           `gorm:"column:user_id"`                                     // bigint
-	OriginID    *int64           `gorm:"column:origin_id"`                                   // bigint
-	CreatedAt   time.Time        `gorm:"column:created_at;default:(-);autoCreateTime:false"` // timestamp with time zone default now()
-	UpdatedAt   time.Time        `gorm:"column:updated_at;default:(-);autoUpdateTime:false"` // timestamp with time zone default now()
+	ID          int64     `gorm:"column:id;primaryKey;default:(-)"`                   // bigint default nextval('segments_id_seq'::regclass)
+	Kind        *string   `gorm:"column:kind;default:(-)"`                            // character varying(20) default 'named'::character varying
+	Name        string    `gorm:"column:name;default:(-)"`                            // character varying(100) default ''::character varying
+	Description string    `gorm:"column:description;default:(-)"`                     // text default ''::text
+	IsDefault   bool      `gorm:"column:is_default;default:(-)"`                      // boolean default false
+	UserID      *int64    `gorm:"column:user_id"`                                     // bigint
+	OriginID    *int64    `gorm:"column:origin_id"`                                   // bigint
+	CreatedAt   time.Time `gorm:"column:created_at;default:(-);autoCreateTime:false"` // timestamp with time zone default now()
+	UpdatedAt   time.Time `gorm:"column:updated_at;default:(-);autoUpdateTime:false"` // timestamp with time zone default now()
 }
 
 // TableName implements gorm's schema.Tabler.

@@ -5,23 +5,19 @@ package model
 import (
 	"encoding/json"
 	"time"
-
-	"github.com/shopspring/decimal"
 )
 
 // PriceRule is a row of table price_rules.
 type PriceRule struct {
-	ID         int64            `gorm:"column:id;primaryKey;default:(-)"`                   // bigint default nextval('price_rules_id_seq'::regclass)
-	GroupID    int64            `gorm:"column:group_id"`                                    // bigint
-	Model      string           `gorm:"column:model"`                                       // text
-	Kind       string           `gorm:"column:kind"`                                        // character varying(20)
-	Multiplier *decimal.Decimal `gorm:"column:multiplier"`                                  // numeric(10,4)
-	Mode       *string          `gorm:"column:mode"`                                        // character varying(20)
-	Config     json.RawMessage  `gorm:"column:config"`                                      // jsonb
-	Expression string           `gorm:"column:expression;default:(-)"`                      // text default ''::text
-	ExprHash   string           `gorm:"column:expr_hash;default:(-)"`                       // character varying(64) default ''::character varying
-	UpdatedBy  *int64           `gorm:"column:updated_by"`                                  // bigint
-	UpdatedAt  time.Time        `gorm:"column:updated_at;default:(-);autoUpdateTime:false"` // timestamp with time zone default now()
+	ID         int64           `gorm:"column:id;primaryKey;default:(-)"`                   // bigint default nextval('price_rules_id_seq'::regclass)
+	GroupID    int64           `gorm:"column:group_id"`                                    // bigint
+	Model      string          `gorm:"column:model"`                                       // text
+	Mode       string          `gorm:"column:mode"`                                        // character varying(20)
+	Config     json.RawMessage `gorm:"column:config"`                                      // jsonb
+	Expression string          `gorm:"column:expression;default:(-)"`                      // text default ''::text
+	ExprHash   string          `gorm:"column:expr_hash;default:(-)"`                       // character varying(64) default ''::character varying
+	UpdatedBy  *int64          `gorm:"column:updated_by"`                                  // bigint
+	UpdatedAt  time.Time       `gorm:"column:updated_at;default:(-);autoUpdateTime:false"` // timestamp with time zone default now()
 }
 
 // TableName implements gorm's schema.Tabler.
