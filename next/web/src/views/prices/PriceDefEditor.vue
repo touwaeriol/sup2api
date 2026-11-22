@@ -18,9 +18,9 @@ import { editableVisualConfig } from './visualPrice'
 // blank value would be generated as 0); back into the visual mode with the
 // visual config it left while the expression is still the one generated
 // then (whitespace outside string literals aside), else with the config the
-// expression was generated from (visualOf), or not at all, with a toast, for
-// one the generator did not write. A blank expression keeps the visual
-// config. Edits the bound draft in place; another draft bound forgets the
+// expression was generated from (visualOf); an expression the generator did
+// not write is dropped, with a toast, and the visual mode shows the config it
+// had. A blank expression keeps the visual config. Edits the bound draft in place; another draft bound forgets the
 // config left. Read-only, it switches and edits nothing.
 const draft = defineModel<PriceDraft>({ required: true })
 const props = defineProps<{
@@ -52,8 +52,12 @@ function switchMode(next: PriceMode) {
     d.config = left.config
   } else if (d.expression.trim()) {
     const cfg = visualOf(d.expression)
-    if (!cfg) return toast(t('prices.edit.notVisual'), 'error')
-    d.config = editableVisualConfig(cfg)
+    if (cfg) d.config = editableVisualConfig(cfg)
+    else {
+      if (left) d.config = left.config
+      d.expression = ''
+      toast(t('prices.edit.notVisual'), 'warning')
+    }
   }
   d.mode = next
 }
