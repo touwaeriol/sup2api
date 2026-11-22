@@ -100,14 +100,15 @@ describe('the price definition editor', () => {
     expect(draft.value.config.rules[0]).toMatchObject({ name: '', multiplier: 3 })
   })
 
-  it('stays in the expression mode for an expression the generator did not write, and keeps the visual config for a blank one', async () => {
+  it('drops an expression the generator did not write, back on the visual config it left, and keeps that config for a blank one', async () => {
     const { w, draft } = render(start())
     const config = draft.value.config
     await to(w, 'expression')
     await write(w, 'tier("base", 4*p + c*15)')
     await to(w, 'visual')
-    expect(toasts).toEqual(['这条表达式不是可视化生成的，无法转成可视化'])
-    expect(draft.value.mode).toBe('expression')
+    expect(toasts).toEqual(['这条表达式不是可视化生成的，无法转成可视化，已丢弃'])
+    expect(draft.value).toMatchObject({ mode: 'visual', config, expression: '' })
+    await to(w, 'expression')
     await write(w, '  ')
     await to(w, 'visual')
     expect(draft.value).toMatchObject({ mode: 'visual', config })

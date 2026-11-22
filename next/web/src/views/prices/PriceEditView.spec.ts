@@ -154,14 +154,13 @@ describe('the price editor', () => {
     await flushPromises()
     await to('visual')
     expect(w.getComponent(VisualPriceEditor).props('modelValue').tiers).toEqual([{ name: 'base', unit: 'token', p: 4, c: 15 }])
-    // An expression written by hand stays an expression.
+    // An expression written by hand is dropped: the visual config stays.
     await to('expression')
     w.getComponent(PriceExprEditor).vm.$emit('update:modelValue', 'tier("base", 4*p + c*15)')
     await flushPromises()
     await to('visual')
-    expect(w.findComponent(VisualPriceEditor).exists()).toBe(false)
-    expect(w.getComponent(PriceExprEditor).props('modelValue')).toBe('tier("base", 4*p + c*15)')
-    expect(toasts).toEqual(['这条表达式不是可视化生成的，无法转成可视化'])
+    expect(w.getComponent(VisualPriceEditor).props('modelValue').tiers).toEqual([{ name: 'base', unit: 'token', p: 4, c: 15 }])
+    expect(toasts).toEqual(['这条表达式不是可视化生成的，无法转成可视化，已丢弃'])
   })
 
   it('takes a price that went to the expression mode and back unchanged as unchanged', async () => {
