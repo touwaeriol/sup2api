@@ -8,9 +8,13 @@
 
 开发完成、尚未上线的改动。发布时改成发布日期的一节，补上提交、实际版本号和发布过程。
 
-### 核心 0.1.308（草稿）：账号分组 / 用户分组定价重做、一次请求保存的编辑器、侧栏“账号/代理”目录（迁移 0124，单向，停机维护；网关不变）
+## 2026-11-23
 
-尚未构建发布；发布时补上提交、清单、构建与发布过程。本节内容都随核心 0.1.308 一起发布。
+### 核心 0.1.308：账号分组 / 用户分组定价重做、一次请求保存的编辑器、侧栏“账号/代理”目录（`f0e4d77ca`；迁移 0124，单向，停机维护；网关仍 0.1.139）
+
+- **构建**：照 0.1.307 的做法在 ovh 上从 touwaeriol/sup2api develop `f0e4d77ca` 构建（`stage/own-0.1.308/`，150 秒，内置包用 `sup2api-plugins-2026` 重签）。清单 sha256 `87bcd859abe8b08d86e1d3561ca707260293d931da53652011f4a8bef3bf2ce9`（`release_id` `core-v0.1.308`，amd64 bundle `e2dc522a…b386`、arm64 `b036beed…dc5`），strategy maintenance，schema `6c3ac553…cf2e` → `395364cf4d02c6e4e03473cdf9129893361223e06000cea167522f0cde402436`。10 个内置插件包与 0.1.307 逐字节相同，只有 `sub2api`、`sub2api-plugin` 两个二进制变了；`next/plugins/released.json` 不用改。
+- **发布前**：后端全量 `go test -race`（带 PostgreSQL）、前端 vitest（302 个文件、2738 个用例）、vue-tsc、eslint 通过，GitHub next CI 通过（第一次 server 任务偶发失败，重跑通过）。对线上库只读跑 CONTRACTS §97.10 第 1–5 条：折扣不等于 1 的用户分组 0 个、倍数规则 0 条、会舍入或封顶的值 0 行，0124 在线上只改表结构不改数据（已有用户分组倍率 2 行：默认用户分组在分组 9、10 都是 0.6；`price_rules` 为空）；新核心只读 `check-prices` 通过。
+- **ovh 集群**（北京时间 2026-11-23 03:46–03:47，用户原话“更新到我们的线上服务。ssh ovh”）：import 后预检 primary-first-v1、无阻断（expected_revision 579），计划 `a80699659ebad05cec84b16d99935af5` 03:46:16.9→03:47:08.2，迁移 0124 于 03:46:37.76 应用；ovh 3130 与 api.prophey.ai `/readyz` 503 约 8 秒（03:46:33.6→03:46:41.6），没有连接错误。核验：两节点核心 0.1.308、网关 0.1.139，7 个启用插件 active、ready、restarts 0；`group_model_rates`、`segment_model_rates` 都是 0 行，用户分组倍率仍 2 行，`segments.discount`、`price_rules.multiplier` 已删；迁移后 `check-prices` 通过，`model_prices` 不变（expression 25、visual 183）；经 api.prophey.ai 的非流式、流式 `/v1/messages` 各一个（临时密钥，已删）200、`billed`、费用与价格一致；两节点日志无 ERROR。升级前后 15 分钟都没有真实流量（线上最后一个正常请求在 11-22 19:59），实际负载下的表现待有流量后再看。没有关 new-api 渠道（392 由管理员关着，未动），没有另做数据库备份。ec2pool 未升级。
 
 #### 升级须知
 
