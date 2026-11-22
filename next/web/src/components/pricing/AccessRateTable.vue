@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { SBadge, SHint, SSwitch, STable, type TableColumn } from '@sub2api/ui'
+import { SBadge, SHint, SRowAction, SSwitch, STable, type TableColumn } from '@sub2api/ui'
 import RateOverrideField from './RateOverrideField.vue'
 import { rateText } from './pricingFormat'
 import type { DraftedSetting, SettingDraft, SettingSide } from './accessRateDrafts'
@@ -14,11 +14,12 @@ import type { DraftedSetting, SettingDraft, SettingSide } from './accessRateDraf
 // Editable, a row has a switch and a rate field and reports what they change
 // (`change`); read-only it says the same in words. Where the rows are the
 // segments of a group, a public group keeps its grants on disabled switches:
-// they apply again once it is private. Other attributes (loading, error,
-// @retry) are STable's.
+// they apply again once it is private. `removable` adds a Remove action per
+// row (`remove`). Other attributes (loading, error, empty-text, @retry) are
+// STable's.
 defineOptions({ inheritAttrs: false })
-const props = defineProps<{ rows: DraftedSetting[]; side: SettingSide; editable?: boolean; disabled?: boolean }>()
-const emit = defineEmits<{ (e: 'change', row: DraftedSetting, draft: SettingDraft): void }>()
+const props = defineProps<{ rows: DraftedSetting[]; side: SettingSide; editable?: boolean; disabled?: boolean; removable?: boolean }>()
+const emit = defineEmits<{ (e: 'change', row: DraftedSetting, draft: SettingDraft): void; (e: 'remove', row: DraftedSetting): void }>()
 const { t } = useI18n()
 
 const columns = computed<TableColumn[]>(() => [
@@ -26,7 +27,8 @@ const columns = computed<TableColumn[]>(() => [
   { key: 'lead', label: props.side === 'segment' ? t('pricingAccess.segment') : t('common.group'), grow: true, class: 'min-w-[11rem]', mobile: 'title' },
   { key: 'access', label: t('pricingAccess.access'), nowrap: true, mobile: 'meta' },
   { key: 'rate_override', label: t('pricingAccess.rate'), nowrap: true, mobile: 'meta' },
-  { key: 'rate', label: t('pricingAccess.paid'), nowrap: true, mobile: 'meta' }
+  { key: 'rate', label: t('pricingAccess.paid'), nowrap: true, mobile: 'meta' },
+  ...(props.removable ? [{ key: 'actions', label: t('common.actions'), align: 'right' } satisfies TableColumn] : [])
 ])
 const rowAttrs = (row: DraftedSetting) => ({ 'data-testid': 'access-rate-row', [`data-${props.side}`]: row.id })
 const nameOf = (row: DraftedSetting) => row[props.side].name
@@ -89,6 +91,9 @@ function sourceText(row: DraftedSetting): string {
         <SHint size="xs" data-testid="access-rate-source">{{ sourceText(row) }}</SHint>
       </template>
       <SHint v-else inline size="xs" data-testid="access-rate-source">{{ t('pricingAccess.unavailable') }}</SHint>
+    </template>
+    <template #cell-actions="{ row }">
+      <SRowAction tone="danger" :label="t('pricingAccess.remove')" :disabled="disabled" data-testid="access-rate-remove" @click="emit('remove', row)" />
     </template>
   </STable>
 </template>

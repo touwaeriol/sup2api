@@ -6811,7 +6811,7 @@ kind: users | groups | api-keys | accounts | models | proxies
 - 分组一侧的授权、专属倍率和模型定价（`/groups/:id/segments`、`/groups/:id/model-prices`），以及定价页用的全局价目录（GET `/pricing/catalog`，`group:read`），沿用 `group:read` / `group:manage`；价格试算接口和控制台的试算入口要求相同：`price:read` 和 `group:read`，按用户试算还要 `user:read`，按用户组试算还要 `segment:read`（97.6）；成员列表要 `segment:read` 和 `user:read`；新建用户时指定用户组要 `segment:manage`。
 - 菜单（`authz/menus.go`，§90.1）：`users` 区加一项，id `segments`，标签“用户组 / User groups”，图标 `publisher`，地址 `/segments`，持有 `segment:read` 才返回；排在“用户”之后、“角色与权限”之前。
 - 控制台新增页面根 `/segments`，`manifest.ConsoleSegments` 加 `segments`：插件的 GET / HEAD 网关端点不能以它开头（§55）。
-- 新建分组时，分组编辑窗口的“授权与倍率”标签页要读 `GET /segments`，没有 `segment:read` 的角色不显示这个标签页；编辑已有分组时它读 `GET /groups/:id/segments`（`group:read`），照常显示。反过来，新建用户组时用户组编辑窗口的“分组倍率”标签页要读 `GET /groups`，没有 `group:read` 的角色不显示这个标签页；编辑已有用户组时它读 `GET /segments/:id/groups`（`segment:read`），照常显示。
+- 新建分组时，分组编辑窗口的“用户组”标签页要读 `GET /segments`，没有 `segment:read` 的角色不显示这个标签页；编辑已有分组时它读 `GET /groups/:id/segments`（`group:read`），照常显示。反过来，新建用户组时用户组编辑窗口的“分组倍率”标签页要读 `GET /groups`，没有 `group:read` 的角色不显示这个标签页；编辑已有用户组时它读 `GET /segments/:id/groups`（`segment:read`），照常显示。
 
 ### 97.8 兼容、升级顺序与回滚
 
