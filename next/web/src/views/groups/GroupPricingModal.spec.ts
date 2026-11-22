@@ -28,8 +28,8 @@ const pricingEditor: Component = {
 
 const group = { id: 3, name: 'pro', visibility: 'restricted', rate_multiplier: 1.2 } as unknown as Group
 
-async function render(initialTab?: 'segments' | 'pricing') {
-  const w = mount(GroupPricingModal, { props: { open: true, group, initialTab }, global: { plugins: [i18n], stubs: { Teleport: true, GroupSegmentsEditor: segmentsEditor, GroupPricingEditor: pricingEditor } } })
+async function render() {
+  const w = mount(GroupPricingModal, { props: { open: true, group }, global: { plugins: [i18n], stubs: { Teleport: true, GroupSegmentsEditor: segmentsEditor, GroupPricingEditor: pricingEditor } } })
   await flushPromises()
   return { w, selected: () => w.get('[role="tab"][aria-selected="true"]').text() }
 }
@@ -46,10 +46,6 @@ describe('prices and user groups of a group, read-only', () => {
     expect(tab()).toBe('价格')
     expect(w.get('[data-testid="segments"]').attributes()).toMatchObject({ 'data-editable': 'false', 'data-rate': '1.2' })
     expect(w.get('[data-testid="pricing"]').attributes()).toMatchObject({ 'data-editable': 'false', 'data-rows': '1', 'data-rate': '1.2' })
-  })
-
-  it('opens on the tab asked for', async () => {
-    expect((await render('segments')).selected()).toBe('用户组')
   })
 
   it('closes', async () => {

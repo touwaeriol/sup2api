@@ -270,6 +270,7 @@ function ruleError(rule: any, base: PriceDef | null): string | null {
 
 /** Why an item of PUT /groups/:id/model-prices cannot be saved; removing a rule always can. A rule takes a model with a global price, whether the group provides it or not. */
 function rulePatchError(item: any): string | null {
+  if ('segment_id' in item) return 'unknown field "segment_id"'
   return item.rule == null ? null : ruleError(item.rule, globalPrice(item.model))
 }
 
@@ -283,7 +284,9 @@ function storedRule(rule: any): PriceRule | null {
 }
 
 route('GET', '/groups/:id/model-prices', 'group:read', onGroup(modelPrices))
+// User groups price no models: an old console's segment_id fails (CONTRACTS §97.10).
 route('PUT', '/groups/:id/model-prices', 'group:manage', onGroup((g, req) => {
+  if (req.query.segment_id !== undefined) return fail(400, 'invalid_argument', 'segment_id is not accepted: user groups set rates only')
   const items = itemsOf(req)
   for (const [i, item] of items.entries()) {
     const err = rulePatchError(item)

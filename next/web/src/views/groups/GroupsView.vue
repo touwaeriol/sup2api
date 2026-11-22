@@ -16,7 +16,7 @@ import GroupDeleteModal from './GroupDeleteModal.vue'
 import GroupEditModal from './GroupEditModal.vue'
 import GroupPricingModal from './GroupPricingModal.vue'
 import GroupPricingSummary from './GroupPricingSummary.vue'
-import type { GroupEditTab, GroupPricingTab } from './groupEditTabs'
+import type { GroupEditTab } from './groupEditTabs'
 import ModelBadge from '@/components/platform/ModelBadge.vue'
 import PriceSimulatorModal from '@/components/pricing/PriceSimulatorModal.vue'
 import { rateText } from '@/components/pricing/pricingFormat'
@@ -101,13 +101,11 @@ function openEdit(g: Group | null, tab: GroupEditTab = 'basic') {
 /** The group whose access and pricing a caller who may not manage groups looks at. */
 const viewing = ref<Group | null>(null)
 const viewOpen = ref(false)
-const viewTab = ref<GroupPricingTab>('pricing')
 
-/** Opens who may use a group and what it costs there: in the editor, or read-only without group:manage. */
-function openPricing(g: Group, tab: GroupPricingTab = 'pricing') {
-  if (canManage.value) return openEdit(g, tab)
+/** Opens what a group costs and who may use it: in the editor, or read-only without group:manage. */
+function openPricing(g: Group) {
+  if (canManage.value) return openEdit(g, 'pricing')
   viewing.value = g
-  viewTab.value = tab
   viewOpen.value = true
 }
 
@@ -195,7 +193,7 @@ async function onAction(listed: Group, key: string) {
     </STable>
 
     <GroupEditModal v-model:open="open" :group="editing" :initial-tab="editTab" @saved="changed" />
-    <GroupPricingModal v-model:open="viewOpen" :group="viewing" :initial-tab="viewTab" />
+    <GroupPricingModal v-model:open="viewOpen" :group="viewing" />
 
     <GroupDeleteModal v-model:open="deleteOpen" :group="deleting" :key-count="deleting ? keyCount(deleting) ?? 0 : 0" @deleted="changed" />
     <PriceSimulatorModal v-if="canSimulate" v-model:open="simOpen" :preset="simPreset" />

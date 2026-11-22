@@ -13,6 +13,7 @@ import { useSegmentsLookup } from '@/components/pricing/segmentLookup'
 import { canListMembers, personalUserOf } from '@/components/pricing/segmentMembers'
 import { deleteResource } from '@/composables/crud'
 import { useList } from '@/composables/useList'
+import { latestOnly } from '@/composables/useLatestRequest'
 import { useAuthStore } from '@/stores/auth'
 import { notifyError } from '@/utils/errors'
 import { formatNumber } from '@/utils/format'
@@ -42,14 +43,18 @@ const counts = reactive<Record<SegmentKind, number>>({ named: 0, personal: 0 })
 /** The search the counts are of; null once a change makes them stale. */
 let countedQ: string | null = null
 
+const nextCount = latestOnly()
+
+/** Counts each kind for the search; an answer that comes after a newer count is dropped. */
 async function countKinds() {
   const q = (countedQ = list.filters.q)
+  const latest = nextCount()
   try {
     const totals = await Promise.all(KINDS.map((kind) => api.list<Segment>('/segments', { kind, q, page_size: 1 })))
-    KINDS.forEach((kind, i) => (counts[kind] = totals[i].page.total ?? 0))
+    if (latest()) KINDS.forEach((kind, i) => (counts[kind] = totals[i].page.total ?? 0))
   } catch {
     // The labels keep the last counts; the next load tries again.
-    countedQ = null
+    if (latest()) countedQ = null
   }
 }
 // A load of the list for another search, or after a change, counts again; a page or a kind does not.

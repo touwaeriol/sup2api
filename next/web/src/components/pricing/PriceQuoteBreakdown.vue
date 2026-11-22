@@ -38,7 +38,7 @@ interface Chain {
 function priceLevelText(v: PriceRule | PriceDef): string {
   if (!('kind' in v)) return priceLabel(t, v)
   const price = applyRule(props.quote.base, v)
-  return v.kind === 'multiplier' && !priceBrief(price) ? ruleText(t, v) : `${ruleText(t, v)} = ${priceLabel(t, price)}`
+  return !price || (v.kind === 'multiplier' && !priceBrief(price)) ? ruleText(t, v) : `${ruleText(t, v)} = ${priceLabel(t, price)}`
 }
 
 /** What a level without a setting says. A discount of 1 is no discount: "not set" would read as something left undone. */

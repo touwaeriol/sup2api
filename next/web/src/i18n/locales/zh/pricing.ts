@@ -22,7 +22,6 @@ export default {
     multiplierHint: '原价变了跟着变',
     customHint: '和“模型价格”页同一个编辑器：可以分档、按次或写表达式。原价变了不跟着变。',
     preview: '模型价格 {price}，乘倍率 {rate} 后实付 {paid}',
-    multiplierInvalid: '请输入不小于 0、小于 1000000 的数字，最多 4 位小数',
     noBase: '这个模型还没有原价，先到“模型价格”页设置。'
   },
   price: {

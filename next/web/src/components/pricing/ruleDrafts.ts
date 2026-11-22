@@ -27,7 +27,7 @@ export function startRule(kind: PriceRule['kind'], base: PriceDef): PriceRule {
 /** Why a rule cannot be saved yet (keys under pricing.rule and prices.local); none for no rule. */
 export function ruleIssues(rule: PriceRule | null): LocalIssue[] {
   if (!rule) return []
-  if (rule.kind === 'multiplier') return validRate(rule.multiplier) ? [] : [{ key: 'pricing.rule.multiplierInvalid' }]
+  if (rule.kind === 'multiplier') return validRate(rule.multiplier) ? [] : [{ key: 'pricing.rate.invalid' }]
   return checkPrice({ mode: rule.mode, config: rule.config ?? {}, expression: rule.expression ?? '' })
 }
 
@@ -63,12 +63,12 @@ export interface DraftedRow extends ModelPriceRow {
   dirty: boolean
 }
 
-/** A row as it reads under its draft: the list price and its source follow the rule, as the server resolves them; without a global price no rule applies. */
+/** A row as it reads under its draft: the list price and its source follow the rule, as the server resolves them (applyRule). */
 export function draftedRow(row: ModelPriceRow, drafts: RuleDrafts): DraftedRow {
   const saved = row.group_rule
   if (!drafts.has(row.model)) return { ...row, saved, dirty: false }
-  const rule = (row.base && drafts.get(row.model)) || null
-  return { ...row, group_rule: rule, list_price: applyRule(row.base, rule), source: rule ? 'group' : 'global', saved, dirty: true }
+  const rule = drafts.get(row.model) ?? null
+  return { ...row, group_rule: rule, list_price: applyRule(row.base, rule), source: rule && row.base ? 'group' : 'global', saved, dirty: true }
 }
 
 /** The drafts with `rule` as the rule of `row`; a rule that prices like the saved one is no draft. */

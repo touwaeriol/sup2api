@@ -22,7 +22,6 @@ export default {
     multiplierHint: 'Follows the original price',
     customHint: 'The same editor as on Model prices: tiers, per request or an expression. Does not follow the original price.',
     preview: 'Model price {price}; at rate {rate} you pay {paid}',
-    multiplierInvalid: 'Enter a number from 0 to below 1000000, up to 4 decimals',
     noBase: 'This model has no original price yet. Set one on Model prices first.'
   },
   price: {

@@ -167,7 +167,7 @@ describe('group editor', () => {
     await w.get('[data-testid="group-default-rate"]').setValue('-1')
     await submit()
     expect(selected()).toContain('价格')
-    expect(w.text()).toContain('请输入非负数')
+    expect(w.text()).toContain('填 0 到 999999.9999 之间的数字')
     expect(calls).toEqual([])
   })
 
