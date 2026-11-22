@@ -3,7 +3,6 @@ package group
 import (
 	"context"
 	"slices"
-	"sort"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -52,10 +51,8 @@ func ProvidedModels(ctx context.Context, q *gorm.DB, groupIDs []int64) (map[int6
 	if err := liveAccounts(store.G(ctx, q), groupIDs).Select("ag.group_id, a.models").Scan(&rows).Error; err != nil {
 		return nil, err
 	}
-	sets := make(map[int64]map[string]bool, len(groupIDs))
 	out := make(map[int64]Models, len(groupIDs))
 	for _, id := range groupIDs {
-		sets[id] = map[string]bool{}
 		out[id] = Models{Models: []string{}}
 	}
 	for _, r := range rows {
@@ -64,16 +61,17 @@ func ProvidedModels(ctx context.Context, q *gorm.DB, groupIDs []int64) (map[int6
 			m.UnrestrictedAccounts++
 		}
 		for _, model := range r.Models {
-			model = strings.TrimSpace(model)
-			if model != "" && !sets[r.GroupID][model] {
-				sets[r.GroupID][model] = true
+			if model = strings.TrimSpace(model); model != "" {
 				m.Models = append(m.Models, model)
 			}
 		}
 		out[r.GroupID] = m
 	}
-	for _, m := range out {
-		sort.Strings(m.Models)
+	// Several accounts may declare a model: each is listed once.
+	for id, m := range out {
+		slices.Sort(m.Models)
+		m.Models = slices.Compact(m.Models)
+		out[id] = m
 	}
 	return out, nil
 }

@@ -253,9 +253,9 @@ func (in *rateInput) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// savePairs applies the items, all or none. A field an item leaves out
-// stays as it is.
-func (s *Service) savePairs(ctx context.Context, items []pairInput) error {
+// checkRates fails with the field errors of the items whose rate_override
+// is no rate.
+func checkRates(ctx context.Context, items []pairInput) error {
 	var fe []core.FieldError
 	for i, it := range items {
 		if it.RateOverride.Invalid {
@@ -265,6 +265,15 @@ func (s *Service) savePairs(ctx context.Context, items []pairInput) error {
 	}
 	if len(fe) > 0 {
 		return core.InvalidFields(fe...)
+	}
+	return nil
+}
+
+// savePairs applies the items, all or none. A field an item leaves out
+// stays as it is.
+func (s *Service) savePairs(ctx context.Context, items []pairInput) error {
+	if err := checkRates(ctx, items); err != nil {
+		return err
 	}
 	if len(items) == 0 {
 		return nil

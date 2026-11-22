@@ -32,19 +32,8 @@ func (s *Service) addMembers(c *gin.Context) {
 		return
 	}
 	var moved int
-	err := s.tx(ctx, func(tx *gorm.DB) error {
-		// The lock keeps the segment from being deleted under the move.
-		kind, _, err := segmentKind(ctx, tx, id, store.LockingStrengthKeyShare)
-		if err != nil {
-			return err
-		}
-		if kind == core.SegmentPersonal {
-			return core.ErrConflict.WithMessage(t(ctx, "a personal user group has one member", "个人专属只有一个成员"))
-		}
-		if err := requireUsers(ctx, tx, in.UserIDs); err != nil {
-			return err
-		}
-		moved, err = moveUsers(ctx, tx, id, in.UserIDs, "")
+	err := s.tx(ctx, func(tx *gorm.DB) (err error) {
+		moved, err = joinNamed(ctx, tx, id, in.UserIDs)
 		return err
 	})
 	if err != nil {
@@ -52,6 +41,24 @@ func (s *Service) addMembers(c *gin.Context) {
 		return
 	}
 	httpapi.OK(c, gin.H{"moved": moved})
+}
+
+// joinNamed moves the users into the named segment id (moveUsers) and
+// returns how many moved. A personal segment takes no one, and an id that is
+// no user fails the whole move.
+func joinNamed(ctx context.Context, tx *gorm.DB, id int64, userIDs []int64) (int, error) {
+	// The lock keeps the segment from being deleted under the move.
+	kind, _, err := segmentKind(ctx, tx, id, store.LockingStrengthKeyShare)
+	if err != nil {
+		return 0, err
+	}
+	if kind == core.SegmentPersonal {
+		return 0, core.ErrConflict.WithMessage(t(ctx, "a personal user group has one member", "个人专属只有一个成员"))
+	}
+	if err := requireUsers(ctx, tx, userIDs); err != nil {
+		return 0, err
+	}
+	return moveUsers(ctx, tx, id, userIDs, "")
 }
 
 // requireUsers fails with the field error of the first id that is not a

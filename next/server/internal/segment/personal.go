@@ -58,6 +58,11 @@ func userSegmentKind(ctx context.Context, q *gorm.DB, userID int64) (string, err
 	return kind, err
 }
 
+// errAlreadyPersonal is the refusal to make a user personal who is already.
+func errAlreadyPersonal(ctx context.Context) error {
+	return core.ErrConflict.WithMessage(t(ctx, "the user has a personal user group already", "该用户已是个人专属"))
+}
+
 // createPersonal makes the personal segment of a user in a named segment and
 // moves the user into it. Two requests for one user are settled by
 // segments_user_uq.
@@ -66,10 +71,31 @@ func createPersonal(ctx context.Context, tx *gorm.DB, userID int64, copyFrom boo
 	if err != nil {
 		return 0, err
 	}
-	already := core.ErrConflict.WithMessage(t(ctx, "the user has a personal user group already", "该用户已是个人专属"))
 	if kind == core.SegmentPersonal {
-		return 0, already
+		return 0, errAlreadyPersonal(ctx)
 	}
+	id, from, err := insertPersonal(ctx, tx, userID, copyFrom)
+	if err != nil {
+		return 0, err
+	}
+	res := setUserSegment(store.G(ctx, tx), id, "id = ? AND segment_id = ? AND deleted_at IS NULL", userID, from)
+	if res.Error != nil {
+		return 0, res.Error
+	}
+	if res.RowsAffected == 0 {
+		return 0, core.ErrConflict.WithMessage(t(ctx, "the user changed user group meanwhile, try again", "该用户的用户组刚被修改，请重试"))
+	}
+	if !copyFrom {
+		return id, nil
+	}
+	return id, copySettings(ctx, tx, from, id)
+}
+
+// insertPersonal inserts the personal segment of a user in a named segment,
+// with the discount of that segment when copyFrom is set, and returns its id
+// and the segment the user is in (its origin). A user who is in none, or
+// has one already, is errAlreadyPersonal.
+func insertPersonal(ctx context.Context, tx *gorm.DB, userID int64, copyFrom bool) (id, from int64, err error) {
 	// The user is not locked yet: referring to the origin waits for a
 	// delete of it, and that delete waits for its members.
 	var created struct {
@@ -82,23 +108,9 @@ func createPersonal(ctx context.Context, tx *gorm.DB, userID int64, copyFrom boo
 	err = gormpg.InsertSelectReturning(g, "segments", []string{"kind", "user_id", "origin_id", "discount"}, origin,
 		clause.Returning{Columns: []clause.Column{{Name: "id"}, {Name: "origin_id"}}}).Take(&created).Error
 	if store.IsNoRows(err) || store.IsUniqueViolation(err, "segments_user_uq") {
-		return 0, already
+		return 0, 0, errAlreadyPersonal(ctx)
 	}
-	if err != nil {
-		return 0, err
-	}
-	id, from := created.ID, created.OriginID
-	res := setUserSegment(g, id, "id = ? AND segment_id = ? AND deleted_at IS NULL", userID, from)
-	if res.Error != nil {
-		return 0, res.Error
-	}
-	if res.RowsAffected == 0 {
-		return 0, core.ErrConflict.WithMessage(t(ctx, "the user changed user group meanwhile, try again", "该用户的用户组刚被修改，请重试"))
-	}
-	if !copyFrom {
-		return id, nil
-	}
-	return id, copySettings(ctx, tx, from, id)
+	return created.ID, created.OriginID, err
 }
 
 // copySettings gives segment to what segment from has in every group: its
@@ -121,31 +133,36 @@ func (s *Service) removePersonal(c *gin.Context) {
 		httpapi.Fail(c, err)
 		return
 	}
-	err := s.tx(ctx, func(tx *gorm.DB) error {
-		notPersonal := core.ErrNotFound.WithMessage(t(ctx, "the user has no personal user group", "该用户不是个人专属"))
-		kind, err := userSegmentKind(ctx, tx, uid)
-		if err != nil {
-			return err
-		}
-		if kind != core.SegmentPersonal {
-			return notPersonal
-		}
-		to, err := moveTarget(ctx, tx, c.Query("to"))
-		if err != nil {
-			return err
-		}
-		// The user was not locked when checked: only one still personal moves.
-		moved, err := moveUsers(ctx, tx, to, []int64{uid}, core.SegmentPersonal)
-		if err == nil && moved == 0 {
-			return notPersonal
-		}
-		return err
-	})
+	err := s.tx(ctx, func(tx *gorm.DB) error { return leavePersonal(ctx, tx, uid, c.Query("to")) })
 	if err != nil {
 		httpapi.Fail(c, err)
 		return
 	}
 	httpapi.NoContent(c)
+}
+
+// leavePersonal moves a personal user to the named segment to names
+// (moveTarget), deleting the personal segment and its settings; a user who
+// is not personal is not found.
+func leavePersonal(ctx context.Context, tx *gorm.DB, uid int64, to string) error {
+	notPersonal := core.ErrNotFound.WithMessage(t(ctx, "the user has no personal user group", "该用户不是个人专属"))
+	kind, err := userSegmentKind(ctx, tx, uid)
+	if err != nil {
+		return err
+	}
+	if kind != core.SegmentPersonal {
+		return notPersonal
+	}
+	target, err := moveTarget(ctx, tx, to)
+	if err != nil {
+		return err
+	}
+	// The user was not locked when checked: only one still personal moves.
+	moved, err := moveUsers(ctx, tx, target, []int64{uid}, core.SegmentPersonal)
+	if err == nil && moved == 0 {
+		return notPersonal
+	}
+	return err
 }
 
 // moveTarget returns the named segment to names, the default one when to is

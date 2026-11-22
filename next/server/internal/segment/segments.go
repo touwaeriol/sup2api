@@ -337,47 +337,57 @@ func (s *Service) delete(c *gin.Context) {
 		return
 	}
 	err := s.tx(ctx, func(tx *gorm.DB) error {
-		// The lock keeps new members out until the segment is gone.
-		kind, isDefault, err := segmentKind(ctx, tx, id, clause.LockingStrengthUpdate)
-		switch {
-		case err != nil:
+		if err := lockDeletable(ctx, tx, id); err != nil {
 			return err
-		case isDefault:
-			return core.ErrConflict.WithMessage(t(ctx, "the default user group cannot be deleted", "默认用户组不能删除"))
-		case kind == core.SegmentPersonal:
-			if err := requireOrphan(ctx, tx, id); err != nil {
-				return err
-			}
 		}
 		// Its members fall back to the default segment's terms.
 		if err := GuardOwnSegments(ctx, tx, s.users, []int64{id}); err != nil {
 			return err
 		}
-		// Deleted users leave too: users.segment_id references the row.
-		// Members are locked before they are moved, as moveUsers does, and
-		// with them, in the same id order, the users of the personal
-		// segments that came from it: the delete clears those segments'
-		// origin_id (ON DELETE SET NULL), and moveUsers deletes them
-		// (DropPersonal) holding their users. Taking the users first, as
-		// moveUsers does, keeps the two from taking the segment rows in
-		// different orders (a deadlock); no new one comes from it
-		// meanwhile, as its insert waits for the lock taken above. Only the
-		// members move.
-		locked, err := lockUsers(ctx, tx, `segment_id = ? OR id IN (SELECT user_id FROM segments WHERE origin_id = ?)`, id, id)
-		if err != nil {
+		if err := releaseMembers(ctx, tx, id); err != nil {
 			return err
 		}
-		g := store.G(ctx, tx)
-		if err := setUserSegment(g, gorm.Expr("default_segment_id()"), "id = ANY(?) AND segment_id = ?", store.Int64s(locked), id).Error; err != nil {
-			return err
-		}
-		return g.Delete(&model.Segment{}, id).Error
+		return store.G(ctx, tx).Delete(&model.Segment{}, id).Error
 	})
 	if err != nil {
 		httpapi.Fail(c, err)
 		return
 	}
 	httpapi.NoContent(c)
+}
+
+// lockDeletable locks segment id until the transaction ends, which keeps new
+// members out until it is gone, and fails unless it may be deleted: not the
+// default one, and a personal one only once its user is deleted.
+func lockDeletable(ctx context.Context, tx *gorm.DB, id int64) error {
+	kind, isDefault, err := segmentKind(ctx, tx, id, clause.LockingStrengthUpdate)
+	switch {
+	case err != nil:
+		return err
+	case isDefault:
+		return core.ErrConflict.WithMessage(t(ctx, "the default user group cannot be deleted", "默认用户组不能删除"))
+	case kind == core.SegmentPersonal:
+		return requireOrphan(ctx, tx, id)
+	}
+	return nil
+}
+
+// releaseMembers moves the members of segment id, deleted users included,
+// to the default segment: users.segment_id references the row.
+//
+// Members are locked before they are moved, as moveUsers does, and with
+// them, in the same id order, the users of the personal segments that came
+// from it: the delete clears those segments' origin_id (ON DELETE SET NULL),
+// and moveUsers deletes them (DropPersonal) holding their users. Taking the
+// users first, as moveUsers does, keeps the two from taking the segment rows
+// in different orders (a deadlock); no new one comes from it meanwhile, as
+// its insert waits for the lock lockDeletable took. Only the members move.
+func releaseMembers(ctx context.Context, tx *gorm.DB, id int64) error {
+	locked, err := lockUsers(ctx, tx, `segment_id = ? OR id IN (SELECT user_id FROM segments WHERE origin_id = ?)`, id, id)
+	if err != nil {
+		return err
+	}
+	return setUserSegment(store.G(ctx, tx), gorm.Expr("default_segment_id()"), "id = ANY(?) AND segment_id = ?", store.Int64s(locked), id).Error
 }
 
 // requireOrphan fails unless the user of the personal segment is deleted. A
