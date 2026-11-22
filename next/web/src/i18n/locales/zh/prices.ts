@@ -125,11 +125,11 @@ export default {
       month: '月',
       day: '日'
     },
-    and: '且',
+    and: '与',
     or: '或',
     notText: '非（{cond}）',
-    allOf: '满足全部（且）',
-    anyOf: '满足任一（或）',
+    allOf: '与',
+    anyOf: '或',
     negated: '取反',
     kind: '组合方式',
     group: '组 {path}',
@@ -149,7 +149,7 @@ export default {
     commonTz: '常用',
     allTz: '全部时区',
     unknown: '无法识别的条件：',
-    hint: '同一组里的条件按“且 / 或”组合，可以嵌套子组、取反；最多 {depth} 层、{leaves} 个条件。len = 输入 + 缓存读写 + 图片输入；时间按所选时区，星期日是 0。'
+    hint: '同一组里的条件按“与 / 或”组合，可以嵌套子组、取反；最多 {depth} 层、{leaves} 个条件。len = 输入 + 缓存读写 + 图片输入；时间按所选时区，星期日是 0。'
   },
   rules: {
     title: '请求规则计费',
@@ -276,7 +276,7 @@ export default {
     op: {
       arith: '加减乘除、取余',
       compare: '比较',
-      logic: '且、或、非（也可写 and、or、not）',
+      logic: '与、或、非（也可写 and、or、not）',
       ternary: '条件成立取甲，否则取乙，可以连着写',
       coalesce: 'a 是空（nil）时取 b，常用于 param() 读不到的情况',
       paren: '括号改变先后顺序'

@@ -120,7 +120,7 @@ describe('the visual editor', () => {
       ]
     }
     const { tiers } = render(editableVisualConfig({ tiers: [{ name: 'night', when: night, p: 1, c: 1 }, { name: 'base' }] }))
-    expect(tiers()[0].text()).toContain('len > 200,000 且 (小时(Asia/Shanghai) ≥ 22 或 非（星期(UTC) = 星期六）)')
+    expect(tiers()[0].text()).toContain('len > 200,000 与 (小时(Asia/Shanghai) ≥ 22 或 非（星期(UTC) = 星期六）)')
   })
 
   it('charges a price whose box is ticked: unticking 1 h cache writes drops cc1h, ticking images keeps img', async () => {

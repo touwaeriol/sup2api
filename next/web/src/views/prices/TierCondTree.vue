@@ -146,7 +146,7 @@ const ACCENT = { and: 'border-l-primary-500', or: 'border-l-amber-500', not: 'bo
   <section v-else-if="kind" role="group" :aria-label="t('prices.cond.groupLabel', { path })" class="min-w-0 rounded-lg border border-l-[3px] border-line bg-surface-2/40" :class="ACCENT[kind]" :data-testid="`cond-${kind}`">
     <div class="flex flex-wrap items-center gap-2 px-3 py-2">
       <SBadge v-if="kind === 'not'" tone="danger" size="xs">{{ t('prices.cond.negated') }}</SBadge>
-      <SSelect v-else :model-value="kind" size="sm" class="w-36 min-w-0 sm:w-40" :options="kindOptions" :disabled="disabled" :aria-label="t('prices.cond.kind')" data-testid="cond-kind" @update:model-value="setKind($event as 'and' | 'or')" />
+      <SSelect v-else :model-value="kind" size="sm" class="w-24 shrink-0" :options="kindOptions" :disabled="disabled" :aria-label="t('prices.cond.kind')" data-testid="cond-kind" @update:model-value="setKind($event as 'and' | 'or')" />
       <span class="text-xs text-fg-subtle">{{ t('prices.cond.group', { path }) }}</span>
       <div v-if="!disabled" class="ml-auto flex items-center gap-1">
         <SDropdown v-if="isGroup" :actions="additions" :label="t('prices.cond.add')" width="11rem" data-testid="cond-add" @select="onAction" />

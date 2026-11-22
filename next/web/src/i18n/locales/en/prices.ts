@@ -125,11 +125,11 @@ export default {
       month: 'Month',
       day: 'Day'
     },
-    and: 'and',
-    or: 'or',
+    and: 'AND',
+    or: 'OR',
     notText: 'not ({cond})',
-    allOf: 'All hold (and)',
-    anyOf: 'Any holds (or)',
+    allOf: 'AND',
+    anyOf: 'OR',
     negated: 'Not',
     kind: 'How the conditions combine',
     group: 'Group {path}',
@@ -149,7 +149,7 @@ export default {
     commonTz: 'Common',
     allTz: 'All time zones',
     unknown: 'Unrecognised condition:',
-    hint: 'The conditions of a group combine by and / or; groups nest and negate, {depth} levels and {leaves} conditions at most. len = input + cache reads and writes + image input; times read in the zone chosen, Sunday is 0.'
+    hint: 'The conditions of a group combine by AND / OR; groups nest and negate, {depth} levels and {leaves} conditions at most. len = input + cache reads and writes + image input; times read in the zone chosen, Sunday is 0.'
   },
   rules: {
     title: 'Request rules',
