@@ -22,8 +22,8 @@
       "digest": "sha256:774778bd66673e5de9e54faf2f8a32556bf2e1a84c8f57b609b29c45a1b809cc"
     },
     "gemini": {
-      "version": "0.4.0",
-      "digest": "sha256:ee008f377766dc32f81a2362b5a2245db1f6c8e9a793fade6769e73c4cadc3a9"
+      "version": "0.4.1",
+      "digest": "sha256:633becb00ee6d162c7a6f9912badb449f00eb91c9fbc497d463b65b8f1c27634"
     },
     "guard": {
       "version": "0.3.1",
@@ -38,8 +38,8 @@
       "digest": "sha256:593b2f9ab0eefa0e5a2695983e16e63c9ecee6060ac813b7c972982cabae8c51"
     },
     "newapi": {
-      "version": "0.1.1",
-      "digest": "sha256:f96ad718a0c139578d08f16097df59867dfdfec22a89f09dc71948eceb47ac7c"
+      "version": "0.1.2",
+      "digest": "sha256:cb18a39f6f3b63bd99143d82cf93b4ed436f5348039a8225a3d69f44efea7063"
     },
     "openai": {
       "version": "0.5.0",
@@ -54,16 +54,16 @@
       "digest": "sha256:059333811a9eadc931976e3655a65e4e2258acfb01ab9bfb3bd45f90a310d734"
     },
     "sub2api": {
-      "version": "0.1.1",
-      "digest": "sha256:c27e6d150af8f2365c3c26b147da91c8a1cb769096c4910f2d367e0c27a4070d"
+      "version": "0.1.2",
+      "digest": "sha256:6277161ced5f8f65bb5bfcca7ee4e77eba059a5015caadc02fd6ba32a7375da5"
     },
     "typesafe": {
       "version": "0.1.1",
       "digest": "sha256:143aea9a4595d6c2ec13894fb0d5acb2d6b1a4b0888ddc303e9d00d2b4d48fa1"
     },
     "vertex": {
-      "version": "0.1.0",
-      "digest": "sha256:fda352875938cbeb6b72dd8378d2a6dc1f6d1adb3ff249d7b6d2588bae9897ec"
+      "version": "0.1.1",
+      "digest": "sha256:f5b37efc626ad3341c17757ff9bcae24c7c945b55ccc95dd0cb4aea9330f1210"
     }
   }
 }

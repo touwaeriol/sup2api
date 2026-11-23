@@ -8,14 +8,24 @@
 
 开发完成、尚未上线的改动。发布时改成发布日期的一节，补上提交、实际版本号和发布过程。
 
-#### Gemini 的 v1 与 v1beta、embedContent、模型列表（核心 0.1.312；gemini 0.4.1、sub2api 0.1.2、newapi 0.1.2、vertex 0.1.1；无迁移，可滚动）
+## 2026-11-23
+
+### 核心 0.1.312：Gemini 的 v1 与 v1beta、embedContent、模型列表（`7cfc2f3c6`；无迁移，滚动更新；gemini 0.4.1、newapi 0.1.2、sub2api 0.1.2、vertex 0.1.1；网关仍 0.1.139）
+
+- **构建**：照 0.1.311 的做法在 ovh 上从 touwaeriol/sup2api develop `7cfc2f3c6` 构建（`stage/own-0.1.312/`，153 秒，内置包用 `sup2api-plugins-2026` 重签）。清单 sha256 `5b3eb0bd4aaec5e086d83912a7c54d522315ac4ba6e323be72c65e567bd105cc`（`release_id` `core-v0.1.312`，amd64 bundle `54815c91…5c7a`、arm64 `09f318e2…4615`），strategy rolling，schema `395364cf…2436` 不变（最后一个迁移仍是 0124）。内置包只有 gemini 0.4.0→0.4.1、newapi 0.1.1→0.1.2、sub2api 0.1.1→0.1.2 变了，其余与 0.1.311 逐字节相同；vertex 不是内置插件、ovh 没有安装，这次不涉及部署。`next/plugins/released.json` 按本次重写（gemini 0.4.1、newapi 0.1.2、sub2api 0.1.2、vertex 0.1.1）。
+- **发布前**：GitHub next CI 通过（run 45155162017；backend-security 是既有失败）；新核心只读运行 `sub2api admin check-prices` 通过。
+- **ovh 集群**（北京时间 2026-11-23 18:37–18:39，所有者授权此类无迁移发布自主进行）：18:37:27 import，预检 rolling-v1、无阻断（expected_revision 587），计划 `e128b00cfea00a6e0dbf9d5d1dabc34e` 18:37:49.7→18:39:12.9：ccp 18:37:56 让出、18:38:17 就绪，ovh 18:38:26 让出、等进行中的请求排空到 18:39:06 停止、18:39:11 就绪；ovh 3130 与 api.prophey.ai `/readyz` 全程 200（开发机另以 0.5 秒间隔探测，同样），没有 503，切换期间 61 个请求全部成功。两节点都换上新核心后内置同步把 gemini 升到 0.4.1（18:39:24 两节点新实例启动，18:39:27 rollout 完成，18:39:30 移除 0.4.0 包），newapi 0.1.2、sub2api 0.1.2 按 install-only 装上、仍未启用。没有关 new-api 渠道（392 由管理员关着，未动）。
+- **核验**：两节点核心 0.1.312、网关 0.1.139，7 个启用插件 active、ready、restarts 0（gemini 0.4.1）；升级后 `check-prices` 通过。经 api.prophey.ai 用临时密钥（分组 19，唯一的 Gemini API Key 账号 130，已删）：GET `/v1/models` 按请求头给 OpenAI（Bearer）、Gemini（`x-goog-api-key`）、Anthropic（`anthropic-version`）格式，`/v1beta/models`、`/v1beta/models/<模型>`（带不带 `models/` 都行）是 Gemini 格式，都是 14 个模型、`Cache-Control: no-store`；没有 key 401，未知模型 404 `model_not_found`。`gemini-3.8-flash` 的 POST `/v1/models/…:generateContent`、`:streamGenerateContent?alt=sse` 200、`billed`，`:countTokens` 200、`free`，使用记录的 endpoint 是 `/v1/models/:model:…`；同样的三个 `/v1beta` 请求得到上游 404（空应答体，使用记录 endpoint `/v1beta/models/:model:…`、`free`）：这个账号的上游（17:13 新建的自建网关）只有 `/v1`，按 §134 原样透传到同一版本，不是回归。先试的 `gemini-2.5-flash` 上游没有这个模型（6 个 404）。这些 404 让 dynweight 按“错误率过高”把账号 130 在分组 19 的权重调低（gemini-2.5-flash 1→0.81，gemini-3.8-flash 1→0.9）；分组 19 只有这一个账号，不影响选号，没有改回。升级前 15 分钟 658 个请求全部成功，升级后 15 分钟 507 个请求除了上面 9 个测试请求的上游 404 全部成功，没有 5xx；两节点日志无 ERROR（ccp 的 “version already stored with other content” WARN 0.1.311 时就有）。
+- 回滚：无迁移，可以用同样方式滚动回 0.1.311（清单 `74b10008…b836`）；newapi 0.1.2 要求核心 ≥0.1.312，但它在 ovh 没有启用。
+
+本次发布包含的改动：
+
+#### Gemini 的 v1 与 v1beta、embedContent、模型列表（gemini 0.4.1、sub2api 0.1.2、newapi 0.1.2、vertex 0.1.1；无迁移，可滚动）
 
 - **v1 与 v1beta 都支持**：网关新增 `/v1/models/{model}:generateContent`、`:streamGenerateContent`、`:countTokens`，与原有 `/v1beta/...` 并列；各自原样透传到上游的同一版本，不互转、不改字段，协议、调度、计费、审核都不分版本，使用记录里的端点是客户端实际调用的那个（用户要求）。别的协议转换到 Gemini 的请求照旧走 v1beta。Vertex AI 账号：v1 走 Vertex v1，v1beta 走 v1beta1（此前一律 v1）。New API 账号也接 v1（它在 `/v1/models/*path` 有 Gemini 中继），两版的 countTokens 仍不接。
 - **embedContent / batchEmbedContents**：两个版本都有，原生透传，按应答 `usageMetadata.promptTokenCount` 计输入 token；Gemini API Key、sub2api、New API 账号服务，Vertex 不服务。
 - **模型列表**：`GET /v1/models`、`/v1/models/{model}`、`/v1beta/models`、`/v1beta/models/{model}` 由核心直接回答 key 所在分组可用的模型，不转发、不计费；`/v1beta` 是 Gemini 格式，`/v1` 照 new-api 按请求头给 OpenAI、Anthropic 或 Gemini 格式。
 - 控制台端点列表的兜底目录同步；e2e 的 Gemini 调用改用 `/v1`，另测一次 `/v1beta`。见 CONTRACTS §134。
-
-## 2026-11-23
 
 ### 核心 0.1.311：页面操作统一留在页面里、价格与倍率的代码规范修复、插件先授权再安装（`22f79d3ed`；无迁移，滚动更新；UI SDK 4.3，dynweight 0.7.0、guard 0.3.1；网关仍 0.1.139）
 
