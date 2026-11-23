@@ -6,7 +6,7 @@
     "en": "Blocks gateway requests whose prompt matches keyword or regex rules, counts traffic from usage events, and shows a dashboard.",
     "zh": "按关键词或正则规则拦截网关请求，基于用量事件统计流量，并提供统计大盘。"
   },
-  "version": "0.3.0",
+  "version": "0.3.1",
   "publisher": "sub2api",
   "icon": "text:G",
   "runtime": "grpc",

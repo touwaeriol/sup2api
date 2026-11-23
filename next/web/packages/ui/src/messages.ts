@@ -135,6 +135,7 @@ export default {
     goToPage: 'Go to page',
     go: 'Go',
     refreshNow: 'Refresh now',
+    refresh: 'Refresh',
     // Forms (useForm, SForm and the form building blocks)
     form: {
       secretKeep: 'A value is stored. Leave empty to keep it.',
@@ -315,6 +316,7 @@ export default {
     goToPage: '跳转到页',
     go: '跳转',
     refreshNow: '立即刷新',
+    refresh: '刷新',
     // Forms (useForm, SForm and the form building blocks)
     form: {
       secretKeep: '已保存值，留空表示不修改。',

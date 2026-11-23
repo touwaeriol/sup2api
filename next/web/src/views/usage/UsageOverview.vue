@@ -5,13 +5,13 @@
 // price): the search bar (time range, granularity, filters), the four totals
 // and the charts.
 // Every part follows the same filters, which a link may preset (?user_id=,
-// ?from=, …). The page header (title, refresh) stays with the view and bumps
-// `revision`. The requests themselves are on the usage records page.
+// ?from=, …). Refresh sits with Reset / Search in the search bar and reloads
+// every part. The requests themselves are on the usage records page.
 import { computed, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import { api } from '@sub2api/host'
-import { SDateRange, SSegmented, type RangeKey } from '@sub2api/ui'
+import { SButton, SDateRange, SSegmented, type RangeKey } from '@sub2api/ui'
 import type { UsageSummaryRow } from '@/api/types'
 import UsageSummaryCards from '@/components/UsageSummaryCards.vue'
 import UsageCharts from '@/components/stats/UsageCharts.vue'
@@ -27,12 +27,9 @@ const props = withDefaults(
     summaryPath: string
     defaultRange: RangeKey
     view: UsageView
-    /** Bumped by the page's refresh button: reload everything (the page owns the header). */
-    revision?: number
   }>(),
-  { revision: 0 }
+  {}
 )
-const emit = defineEmits<{ (e: 'update:loading', value: boolean): void }>()
 const { t } = useI18n()
 const route = useRoute()
 const auth = useAuthStore()
@@ -91,16 +88,12 @@ function secondaryFilter(k: string): Record<string, string> {
 /** Where each view keeps the charts' settings. */
 const CHART_GROUPS: Record<UsageView, string> = { all: 'usage-admin', self: 'usage-mine', account: 'usage-account' }
 const revisionCharts = ref(0)
-watch(
-  () => props.revision,
-  () => {
-    totals.reload()
-    protocols.reload()
-    models.reload()
-    revisionCharts.value++
-  }
-)
-watch(totals.loading, (v) => emit('update:loading', v), { immediate: true })
+function refresh() {
+  totals.reload()
+  protocols.reload()
+  models.reload()
+  revisionCharts.value++
+}
 
 function filterBy(patch: Record<string, string>) {
   Object.assign(filters, patch)
@@ -123,6 +116,9 @@ function filterBy(patch: Record<string, string>) {
             @update:model-value="picked = $event as Granularity"
           />
         </div>
+      </template>
+      <template #tools>
+        <SButton size="sm" icon="refresh" :loading="totals.loading.value" data-testid="usage-refresh" @click="refresh">{{ t('common.refresh') }}</SButton>
       </template>
     </UsageFilters>
 

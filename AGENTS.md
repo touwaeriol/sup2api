@@ -94,7 +94,7 @@ CCGateway 插件（Claude Code 托管账号、它的 companions 与 `cli-reverse
 ### 前端（`next/web`）
 
 - 控制台构建产物输出到 `server/web/dist`，由核心用 `embed` 嵌入。`server/web/dist/index.html` 是被跟踪的占位文件，本地 `npm run build` 会覆盖它，**提交前 `git checkout` 还原**。
-- 插件的原生界面在各插件的 `ui/native/`，依赖 `@sub2api/ui`、`@sub2api/host`。改这三个包的公开接口要同步升级它们的版本（目前 4.2.0，`HOST_UI_VERSION`；带原生界面的插件声明 `hostUICompat: "^4.0"`，用到 4.1、4.2 新增接口的声明 `"^4.1"`、`"^4.2"`）和 CONTRACTS §23、`web/packages/ui/README.md`。表单用 `@sub2api/ui` 的 `useForm`/`SForm`、`createApiKeyForm`、`usePluginSettings` 等写成代码，多个标签页一次请求保存的编辑弹窗用 `STabbedForm`/`useTabbedForm`（CONTRACTS §23.6；账号、账号分组、用户分组的编辑器都用它），测试辅助在 `@sub2api/ui/testing`（只能在 spec 里引用）。
+- 插件的原生界面在各插件的 `ui/native/`，依赖 `@sub2api/ui`、`@sub2api/host`。改这三个包的公开接口要同步升级它们的版本（目前 4.3.0，`HOST_UI_VERSION`；带原生界面的插件声明 `hostUICompat: "^4.0"`，用到 4.1、4.2、4.3 新增接口的声明 `"^4.1"`、`"^4.2"`、`"^4.3"`；4.3 是 `STabs #end`、`SAutoRefresh button`）和 CONTRACTS §23、`web/packages/ui/README.md`。表单用 `@sub2api/ui` 的 `useForm`/`SForm`、`createApiKeyForm`、`usePluginSettings` 等写成代码，多个标签页一次请求保存的编辑弹窗用 `STabbedForm`/`useTabbedForm`（CONTRACTS §23.6；账号、账号分组、用户分组的编辑器都用它），测试辅助在 `@sub2api/ui/testing`（只能在 spec 里引用）。
 - 插件 UI 与控制台的写法约定见 CONTRACTS §23.4：用 `@sub2api/ui` 组件，不用控制台全局类和 Tailwind 工具类，颜色只用契约里的 8 个 CSS 变量，操作按钮写文字，私有样式以插件 key 为前缀，接口走 `host.api` / `host.pluginApi`（原始字节类请求用 `fetchWithSession`）。
 
 ## 开发规则
@@ -183,7 +183,7 @@ CI 只跑 `npm ci`、`typecheck`、`test`；`lint` 本地也要跑。
 
 ## 读代码从哪里开始
 
-- 契约与构建规则：`next/docs/CONTRACTS.md` §1–§3；最近的大改动：§97（账号分组与用户分组定价：实付 = 标价 × 四层里取一个的倍率，账号分组、用户分组连同价格和倍率一次请求写入；迁移 0124）、§132（侧栏“账号/代理”目录）、§112（平台插件转发 V2）、§113（插件联网）、§114（插件包不依赖主节点）、§130（插件数据库隔离，取代 §115）、§131（计费方式只留可视化与表达式）、§116（删除 Claude OAuth）、§117（代理票据）、§118（OpenAI 生图）、§119（上游插件 newapi、sub2api、typesafe）、§124（插件按归属收到账号的全部信息）、§125（删除 growth）、§127（密钥与基础地址）、§128（删除 volcengine）、§129（删除 anthropic 的模型目录）、§23 与 §75（插件界面只用代码写、界面包 4.0）、§52（账号余额）、§111（请求体上限、插件内存）、§110（协议绑定）、§99（Casbin）、§100（会话）、§2 的“核心的 SQL”“插件数据库”。
+- 契约与构建规则：`next/docs/CONTRACTS.md` §1–§3；最近的大改动：§97（账号分组与用户分组定价：实付 = 标价 × 四层里取一个的倍率，账号分组、用户分组连同价格和倍率一次请求写入；迁移 0124）、§133（页面操作留在页面里：页头工具栏、`STabs #end`、列表卡片底部、筛选条四个位置，UI 4.3）、§132（侧栏“账号/代理”目录）、§112（平台插件转发 V2）、§113（插件联网）、§114（插件包不依赖主节点）、§130（插件数据库隔离，取代 §115）、§131（计费方式只留可视化与表达式）、§116（删除 Claude OAuth）、§117（代理票据）、§118（OpenAI 生图）、§119（上游插件 newapi、sub2api、typesafe）、§124（插件按归属收到账号的全部信息）、§125（删除 growth）、§127（密钥与基础地址）、§128（删除 volcengine）、§129（删除 anthropic 的模型目录）、§23 与 §75（插件界面只用代码写、界面包 4.0）、§52（账号余额）、§111（请求体上限、插件内存）、§110（协议绑定）、§99（Casbin）、§100（会话）、§2 的“核心的 SQL”“插件数据库”。
 - 架构与数据模型：`next/docs/ARCHITECTURE.md` §2–§5、§13、§16。
 - 最近发生了什么：`CHANGELOG.md` 的“未发布”与最新几节。
 - 组装入口：`next/server/cmd/sub2api/main.go`、`next/server/internal/app`。

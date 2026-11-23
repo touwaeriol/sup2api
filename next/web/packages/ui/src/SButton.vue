@@ -13,12 +13,15 @@
 // screen readers), marked `data-fab` so the page layout can keep room for it
 // under the last row, and not shown while the bulk selection dock (SBulkBar)
 // holds the bottom of the screen; an ordinary button on wide screens.
+// In a toolbar (toolbar.ts) the toolbar sets the size, and in a page's own
+// toolbar a primary button with an icon is a fab unless `:fab="false"`.
 import { computed } from 'vue'
 import { RouterLink, type RouteLocationRaw } from 'vue-router'
 import SSpinner from './SSpinner.vue'
 import SIcon from './SIcon.vue'
 import { isDev } from './dev'
 import { useViewport } from './viewport'
+import { useToolbar } from './toolbar'
 
 const props = withDefaults(
   defineProps<{
@@ -38,7 +41,7 @@ const props = withDefaults(
     tone?: 'default' | 'danger' | 'info'
     fab?: boolean
   }>(),
-  { variant: 'secondary', size: 'md', type: 'button', tone: 'default' }
+  { variant: 'secondary', size: 'md', type: 'button', tone: 'default', fab: undefined }
 )
 
 if (isDev && props.iconOnly && !props.ariaLabel) {
@@ -75,13 +78,16 @@ const FAB = {
   icon: 'h-6 w-6'
 }
 const { compact } = useViewport()
-const fab = computed(() => props.fab && !!props.icon && compact.value)
+const toolbar = useToolbar()
+const size = computed(() => (toolbar ? 'md' : props.size))
+const floats = computed(() => props.fab ?? (!!toolbar?.float && props.variant === 'primary' && !props.block))
+const fab = computed(() => floats.value && !!props.icon && compact.value)
 const inactive = computed(() => props.disabled || props.loading)
 const isLink = computed(() => !!(props.to || props.href))
 const cls = computed(() => [
   'btn',
   VARIANT[props.variant],
-  SIZE[props.size],
+  SIZE[size.value],
   props.block ? 'w-full' : '',
   props.iconOnly || props.square ? SQUARE : '',
   fab.value ? FAB.button : '',

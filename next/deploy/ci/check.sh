@@ -95,7 +95,7 @@ plugins() {
     pkg=$("$checks/sub2api-plugin" pack --dir "plugins/$p" --runtimes "$checks/$p-runtime" --out-dir "$dest")
     "$checks/sub2api-plugin" sign --key "$checks/keys/managed-test.key" --key-id managed-test --publisher sub2api "$pkg" >> "$out/plugin-build-$p.log"
   done
-  # R2 alone bundles a newer dynweight (the 0.6.1-test overlay, which adds a
+  # R2 alone bundles a newer dynweight (the 0.7.1-test overlay, which adds a
   # migration), so updating the core must update it.
   mkdir -p "$checks/builtin-next"
   "$checks/sub2api-plugin" build --dir plugins/dynweight --overlay testdata/upgrade --out "$checks/dynweight-next-runtime" >> "$out/plugin-build-dynweight.log"
@@ -110,7 +110,7 @@ realcore() {
   set -e
   checks=/src/checks
   # Both versions must satisfy the bundled plugins' hostCompat (>=0.1.304
-  # <0.2.0), or the cores refuse them.
+  # <0.2.0, dynweight >=0.1.311), or the cores refuse them.
   CGO_ENABLED=0 go build -ldflags '-X main.Version=0.1.900' -o "$checks/core-r1" ./server/cmd/sub2api
   # R2 is built from a separate copy with one test-only SQL migration. It is
   # never added to the application's migration inventory.

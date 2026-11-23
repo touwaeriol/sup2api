@@ -120,6 +120,14 @@ describe('scheduled tasks page', () => {
     wrapper.unmount()
   })
 
+  it('reloads the tasks from the refresh button beside the interval picker', async () => {
+    const wrapper = await render()
+    await wrapper.get('[data-testid="auto-refresh-now"]').trigger('click')
+    await flushPromises()
+    expect(mocks.get.mock.calls.filter(([path]) => path === '/system/tasks')).toHaveLength(2)
+    wrapper.unmount()
+  })
+
   it('shows empty tables without tasks', async () => {
     mocks.get.mockResolvedValue({ summary: { total: 0, running: 0, failing: 0, failed_24h: 0, leader: '' }, cluster: [], nodes: [] })
     const wrapper = await render()

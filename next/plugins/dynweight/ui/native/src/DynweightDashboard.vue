@@ -84,13 +84,12 @@ function showEvents(f: Filter) {
 
 <template>
   <div>
-    <SPageHeader :title="t('title')" :description="t('subtitle')">
-      <template #actions>
-        <SButton icon="refresh" :loading="refreshing" @click="refresh">{{ t('refresh') }}</SButton>
-      </template>
-    </SPageHeader>
+    <SPageHeader :title="t('title')" :description="t('subtitle')" />
 
     <STabs v-model="tab" :tabs="tabs">
+      <template #end>
+        <SButton icon="refresh" :loading="refreshing" @click="refresh">{{ t('refresh') }}</SButton>
+      </template>
       <StatusTab
         v-if="visited.has('status')"
         v-show="tab === 'status'"
