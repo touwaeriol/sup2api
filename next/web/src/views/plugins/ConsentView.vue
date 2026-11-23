@@ -1,14 +1,14 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
-import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { onBeforeRouteLeave } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { api, isApiError } from '@sub2api/host'
-import { SAlert, SBadge, SButton, SCard, SEmpty, SHint, SIcon, SLink, SPageHeader, SSpinner, confirm, toast } from '@sub2api/ui'
-import type { ConsentResult, DatabaseAccess, HostPermissionReview, PluginReview, PluginRoleGrant, ReviewDiffItem, ReviewUserPermission } from '@/api/types'
+import { SAlert, SBadge, SButton, SCard, SHint, SIcon, SLink, SPageHeader, SSpinner, toast } from '@sub2api/ui'
+import type { ConsentRequest, DatabaseAccess, HostPermissionReview, PluginRoleGrant, ReviewDiffItem, ReviewUserPermission } from '@/api/types'
 import { lt } from '@/i18n'
-import { errorMessage, notifyError } from '@/utils/errors'
 import { useAuthStore } from '@/stores/auth'
-import { dropReview, getReview } from './reviewCache'
+import { useConsentTarget } from './consent/useConsentTarget'
+import InstallSteps from './consent/InstallSteps.vue'
+import ConsentUnavailable from './consent/ConsentUnavailable.vue'
 import { RISK_ORDER, asArray, capabilityIdsOf, riskOf, type Risk } from './pluginUtil'
 import PluginAvatar from './parts/PluginAvatar.vue'
 import TrustBadge from './parts/TrustBadge.vue'
@@ -31,21 +31,9 @@ import { P } from '@/generated/permissions'
 
 const { t } = useI18n()
 const tr = useOptionalT()
-const route = useRoute()
-const router = useRouter()
 const auth = useAuthStore()
 
-const key = computed(() => String(route.params.key))
-const version = computed(() => String(route.params.version))
-
-const review = ref<PluginReview | null>(null)
-const loading = ref(true)
-const loadError = ref('')
-/** No reachable node holds the version's package (410 package_gone): nothing to review or approve. */
-const packageGone = ref(false)
-const fromCache = ref(false)
-const submitting = ref(false)
-const rejecting = ref(false)
+const { source, review, loading, failure, busy, settled, isUpgrade, load, approve, reject, cancel } = useConsentTarget()
 const showMissing = ref(false)
 
 const checked = reactive<Record<string, boolean>>({})
@@ -61,8 +49,6 @@ const userChanges = computed(() => {
   return { added: count('created'), revived: count('revived'), removed: asArray(review.value?.removed_user_permissions).length }
 })
 const anyUserChange = computed(() => userChanges.value.added + userChanges.value.revived + userChanges.value.removed > 0)
-/** Approved or rejected: the page goes away without asking about the matrix. */
-const settled = ref(false)
 onBeforeRouteLeave(() => settled.value || confirmDiscard(consent.matrix.dirty.value))
 
 /** Granting db.schema to this plugin takes the override as well (review.needs_db_schema_unconfined). */
@@ -125,7 +111,6 @@ function toggle(row: HPRow, v: boolean) {
 const missingRequired = computed(() => rows.value.filter((r) => !r.optional && !checked[r.id]))
 const blockedByPermission = computed(() => rows.value.filter((r) => !r.optional && !r.allowed))
 const signatureOk = computed(() => review.value?.signature_status === 'valid')
-const isUpgrade = computed(() => !!review.value?.diff)
 // Grants to roles the caller may not name go to a super admin's review instead of blocking (D2).
 const canSubmit = computed(() => !!review.value && review.value.host_compat_ok !== false && blockedByPermission.value.length === 0)
 const { colon, hpLabel } = useConsentLabels()
@@ -139,95 +124,33 @@ function sigLabel(s: string | undefined): string {
 
 const capabilityIds = computed(() => capabilityIdsOf(review.value?.capabilities))
 
-// ------------------------------------------------------------------ load / submit
+// ------------------------------------------------------------------ submit
 
-async function load() {
-  loading.value = true
-  loadError.value = ''
-  fromCache.value = false
-  packageGone.value = false
-  try {
-    review.value = await api.get<PluginReview>(
-      `/plugins/${encodeURIComponent(key.value)}/versions/${encodeURIComponent(version.value)}/review`
-    )
-  } catch (e) {
-    // The review kept from the upload would offer to approve a package that is gone.
-    packageGone.value = isApiError(e) && e.code === 'package_gone'
-    if (packageGone.value) dropReview(key.value, version.value)
-    const cached = packageGone.value ? undefined : getReview(key.value, version.value)
-    if (cached) {
-      review.value = cached
-      fromCache.value = true
-    } else {
-      review.value = null
-      loadError.value = errorMessage(e)
-    }
-  } finally {
-    loading.value = false
-  }
-  if (review.value) initChecks()
+/** What the ticks and the matrix grant: a carried grant left ticked is not sent, the server keeps it. */
+function consentRequest(): ConsentRequest {
+  const grants = rows.value.filter((x) => checked[x.id] && !x.carried).map((x) => (x.scope ? { permission: x.id, scope: x.scope } : { permission: x.id }))
+  const denied = rows.value.filter((x) => !checked[x.id]).map((x) => x.id)
+  return { grants, denied, new_permission_roles: consent.payload() }
 }
 
-async function submit() {
-  const r = review.value
-  if (!r || !canSubmit.value) return
+function submit() {
+  if (!review.value || !canSubmit.value) return
   if (missingRequired.value.length) {
     showMissing.value = true
     toast(t('plugins.consent.missingRequired', { list: missingRequired.value.map((x) => hpLabel(x.id)).join(', ') }), 'error')
     return
   }
-  // A carried grant left ticked is not sent: the server keeps it.
-  const grants = rows.value.filter((x) => checked[x.id] && !x.carried).map((x) => (x.scope ? { permission: x.id, scope: x.scope } : { permission: x.id }))
-  const denied = rows.value.filter((x) => !checked[x.id]).map((x) => x.id)
-  submitting.value = true
-  try {
-    const res = await api.post<ConsentResult>(`/plugins/${encodeURIComponent(key.value)}/versions/${encodeURIComponent(version.value)}/consent`, {
-      grants,
-      denied,
-      new_permission_roles: consent.payload()
-    })
-    dropReview(key.value, version.value)
-    settled.value = true
-    toast(t('plugins.consent.approved', { name: lt(r.name) || r.plugin_key, version: r.version }), 'success')
-    if (res?.withheld?.length) toast(t('plugins.matrix.withheld', { n: res.withheld.length }), 'info')
-    router.push({ path: `/plugins/${encodeURIComponent(key.value)}`, query: { consented: version.value } })
-  } catch (e) {
-    // The matrix locks critical rows for a non-super caller; a refusal still says why (D3).
-    if (isApiError(e) && e.details?.reason === 'critical') toast(t('plugins.matrix.criticalOnly'), 'error')
-    else notifyError(e)
-  } finally {
-    submitting.value = false
-  }
+  return approve(consentRequest())
 }
 
-async function reject() {
-  const ok = await confirm({
-    title: t('plugins.consent.rejectTitle'),
-    message: t('plugins.consent.rejectConfirm', { name: lt(review.value?.name) || key.value, version: version.value }),
-    danger: true,
-    confirmText: t('plugins.consent.reject')
-  })
-  if (!ok) return
-  rejecting.value = true
-  try {
-    await api.post(`/plugins/${encodeURIComponent(key.value)}/versions/${encodeURIComponent(version.value)}/reject`)
-    dropReview(key.value, version.value)
-    settled.value = true
-    toast(t('plugins.consent.rejected'), 'success')
-    router.push('/plugins')
-  } catch (e) {
-    notifyError(e)
-  } finally {
-    rejecting.value = false
-  }
-}
-
+// A review loaded again (409 package_changed) starts from its own ticks.
+watch(review, (r) => r && initChecks())
 onMounted(load)
 </script>
 
 <template>
   <div class="mx-auto max-w-5xl pb-24">
-    <SPageHeader :title="review ? `${isUpgrade ? t('plugins.consent.titleUpgrade') : t('plugins.consent.titleInstall')}${colon}${lt(review.name) || review.plugin_key}` : t('nav.crumbs.pluginConsent')">
+    <SPageHeader :title="review ? `${isUpgrade ? t('plugins.consent.titleUpgrade') : t('plugins.consent.titleInstall')}${colon}${lt(review.name) || review.plugin_key}` : t(source.reject ? 'nav.crumbs.pluginConsent' : 'nav.crumbs.pluginInstall')">
       <template v-if="review" #title-extra>
         <span class="font-mono text-sm text-gray-500">v{{ review.version }}</span>
       </template>
@@ -235,12 +158,7 @@ onMounted(load)
 
     <div v-if="loading" class="flex justify-center py-20"><SSpinner size="lg" /></div>
 
-    <SCard v-else-if="!review">
-      <SEmpty icon="warning" :text="packageGone ? t('plugins.consent.packageGone', { version }) : t('plugins.consent.notFound')" data-testid="consent-unavailable">
-        <SHint v-if="loadError && !packageGone" size="xs" tone="danger">{{ loadError }}</SHint>
-        <SButton size="sm" @click="load">{{ t('common.refresh') }}</SButton>
-      </SEmpty>
-    </SCard>
+    <ConsentUnavailable v-else-if="!review" :failure="failure" :source="source" @retry="load" @back="cancel" />
 
     <template v-else>
       <!-- header -->
@@ -266,10 +184,10 @@ onMounted(load)
             <div v-if="capabilityIds.length" class="mt-2 flex flex-wrap gap-1">
               <SBadge v-for="c in capabilityIds" :key="c" tone="gray">{{ c }}</SBadge>
             </div>
-            <SHint v-if="fromCache" size="xs" class="mt-2">{{ t('plugins.consent.fromCache') }}</SHint>
           </div>
         </div>
       </SCard>
+      <InstallSteps v-if="!source.reject" :upgrade="isUpgrade" :version="review.version" :from="review.upgrade_from" />
 
       <!-- warnings -->
       <SAlert v-if="!review.host_compat_ok" tone="danger" icon="x" :title="t('plugins.consent.incompatibleTitle')" class="mt-4">
@@ -356,8 +274,9 @@ onMounted(load)
           {{ t('plugins.matrix.summaryPending', { n: consent.summary.value.pending }, consent.summary.value.pending) }}
         </p>
         <template #actions>
-          <SButton variant="danger" :loading="rejecting" :disabled="submitting" @click="reject">{{ t('plugins.consent.reject') }}</SButton>
-          <SButton variant="primary" :loading="submitting" :disabled="!canSubmit || rejecting" icon="shield" data-testid="consent-approve" @click="submit">
+          <SButton v-if="source.reject" variant="danger" :loading="busy === 'reject'" :disabled="!!busy" @click="reject">{{ t('plugins.consent.reject') }}</SButton>
+          <SButton v-else :disabled="!!busy" data-testid="consent-cancel" @click="cancel">{{ isUpgrade ? t('plugins.consent.cancelUpgrade') : t('plugins.consent.cancelInstall') }}</SButton>
+          <SButton variant="primary" :loading="busy === 'approve'" :disabled="!canSubmit || !!busy" icon="shield" data-testid="consent-approve" @click="submit">
             {{ isUpgrade ? t('plugins.consent.approveUpgrade') : t('plugins.consent.approve') }}
           </SButton>
         </template>

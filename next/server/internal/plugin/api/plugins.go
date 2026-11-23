@@ -5,16 +5,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
-	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 
-	rc "github.com/Sub2API-Devs/sup2api/next/runtime-contract"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/httpapi"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/install"
@@ -356,65 +353,6 @@ func versionRows(db *gorm.DB, key string) *gorm.DB {
 }
 
 // ---------------------------------------------------------------- install flow
-
-func (a *API) upload(c *gin.Context) {
-	max := a.d.Install.Limits().MaxPackageBytes
-	if max <= 0 {
-		max = rc.PluginPackageMaxBytes
-	}
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, max+1<<20)
-	fh, err := c.FormFile("file")
-	if err != nil {
-		httpapi.Fail(c, core.InvalidFields(core.FieldError{Field: "file", Code: "required", Message: "multipart field \"file\" is required (or too large)"}))
-		return
-	}
-	if fh.Size > max {
-		httpapi.Fail(c, core.ErrInvalidArgument.WithMessage(fmt.Sprintf("package exceeds %d bytes", max)))
-		return
-	}
-	f, err := fh.Open()
-	if err != nil {
-		httpapi.Fail(c, err)
-		return
-	}
-	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, max+1))
-	if err != nil {
-		httpapi.Fail(c, err)
-		return
-	}
-	r, err := a.d.Install.Upload(ctx(c), data, actor(c), install.UploadOptions{Source: "upload"})
-	if err != nil {
-		httpapi.Fail(c, err)
-		return
-	}
-	httpapi.OK(c, r)
-}
-
-func (a *API) installFromMarket(c *gin.Context) {
-	var in struct {
-		SourceID int64  `json:"source_id"`
-		Key      string `json:"key"`
-		Version  string `json:"version"`
-	}
-	if !httpapi.BindJSON(c, &in) {
-		return
-	}
-	if in.SourceID <= 0 || in.Key == "" || in.Version == "" {
-		httpapi.Fail(c, core.ErrInvalidArgument.WithMessage("source_id, key and version are required"))
-		return
-	}
-	if a.d.Market == nil {
-		httpapi.Fail(c, core.ErrUnavailable.WithMessage("market unavailable"))
-		return
-	}
-	r, err := a.d.Market.Install(ctx(c), in.SourceID, in.Key, in.Version, actor(c))
-	if err != nil {
-		httpapi.Fail(c, err)
-		return
-	}
-	httpapi.OK(c, r)
-}
 
 // pluginDatabase shows the plugin's database side (CONTRACTS §130).
 func (a *API) pluginDatabase(c *gin.Context) {

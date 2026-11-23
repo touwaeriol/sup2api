@@ -75,19 +75,41 @@ func claimRetiredKey(ctx context.Context, tx *gorm.DB, key string, publisher *in
 		return err
 	}
 	g := store.G(ctx, tx)
-	var r model.PluginKeyRetirement
-	err := retirement(g, key).Select("publisher_id").Clauses(store.ForUpdate()).Take(&r).Error
+	other, err := retiredByOther(retirement(g, key).Clauses(store.ForUpdate()), publisher)
 	switch {
-	case store.IsNoRows(err):
-		return nil
-	case err != nil:
+	case err != nil || !other:
 		return err
-	case sameID(r.PublisherID, publisher):
-		return nil
 	case source == "builtin":
 		slog.WarnContext(ctx, "builtin plugin takes back a key retired by another publisher", "plugin", key)
 		return retirement(g, key).Delete(&model.PluginKeyRetirement{}).Error
 	}
+	return keyRetired(key)
+}
+
+// checkRetiredKey is claimRetiredKey for the install preview, which claims
+// nothing: it fails as claimRetiredKey does for a source other than a
+// built-in plugin.
+func checkRetiredKey(ctx context.Context, q *gorm.DB, key string, publisher *int64) error {
+	other, err := retiredByOther(retirement(store.G(ctx, q), key), publisher)
+	if err != nil || !other {
+		return err
+	}
+	return keyRetired(key)
+}
+
+// retiredByOther reports whether the retirement q selects is of a
+// publisher other than publisher (none: false).
+func retiredByOther(q *gorm.DB, publisher *int64) (bool, error) {
+	var r model.PluginKeyRetirement
+	err := q.Select("publisher_id").Take(&r).Error
+	if store.IsNoRows(err) {
+		return false, nil
+	}
+	return err == nil && !sameID(r.PublisherID, publisher), err
+}
+
+// keyRetired is the error of installing key retired by another publisher.
+func keyRetired(key string) error {
 	return ErrKeyRetired.WithMessage(fmt.Sprintf("plugin key %q belonged to an uninstalled plugin of another publisher; "+
 		"an administrator must release it first (POST /api/v1/plugins/retired-keys/%s/release), which can delete the accounts and data it left behind", key, key))
 }

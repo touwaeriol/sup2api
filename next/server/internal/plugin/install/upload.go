@@ -34,70 +34,70 @@ type UploadOptions struct {
 // consent without touching the running version, unless they request no new
 // or wider host permissions, in which case consent is carried over.
 func (s *Service) Upload(ctx context.Context, data []byte, actorID int64, opt UploadOptions) (*Review, error) {
+	res, err := s.upload(ctx, data, actorID, opt, nil)
+	if res == nil {
+		return nil, err
+	}
+	return res.Review, err
+}
+
+// upload is Upload; with c, the operator's consent c follows instead of
+// carryOverConsent (InstallWithConsent).
+func (s *Service) upload(ctx context.Context, data []byte, actorID int64, opt UploadOptions, c *InstallConsent) (*InstallResult, error) {
+	p, err := s.preparePackage(ctx, data, opt, c)
+	if err != nil {
+		return nil, err
+	}
+	ctx, release, err := core.BeginPluginMutation(ctx, s.d.Mutations)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	rec, err := s.recordUpload(ctx, p, actorID, opt)
+	if err != nil {
+		return nil, err
+	}
+	r, err := s.reviewUpload(ctx, p, &rec.uploadState, actorID)
+	if err != nil {
+		return nil, err
+	}
+	r.ConsentStatus, r.UploadedAt = rec.consent, rec.uploadedAt
+	if c != nil {
+		return s.consentUpload(ctx, r, rec, c, actorID)
+	}
+	return &InstallResult{Review: r}, s.carryOverConsent(ctx, r, p.Manifest.Key, p.Manifest.Version, actorID)
+}
+
+// uploadRecord is what recordUpload leaves for the review: the state it
+// read and what it wrote.
+type uploadRecord struct {
+	uploadState
+	consent    string
+	uploadedAt time.Time
+	// inserted: the upload inserted the version row (not an identical
+	// re-upload), which undoUpload removes again.
+	inserted bool
+}
+
+// preparePackage opens and checks data (openAndValidate), checks that it is
+// the package c was given for (c may be nil) and stores it: the bytes must
+// be retrievable before any row names them. A package rejected afterwards
+// stays unreferenced and is collected by the shell.
+func (s *Service) preparePackage(ctx context.Context, data []byte, opt UploadOptions, c *InstallConsent) (*pkg.Package, error) {
 	p, err := s.openAndValidate(ctx, data, opt)
 	if err != nil {
 		return nil, err
 	}
-	// The bytes must be retrievable before any row names them. A package
-	// rejected below stays unreferenced and is collected by the shell.
+	if err := c.matches(p); err != nil {
+		return nil, err
+	}
 	if s.d.Packages == nil || s.d.Packages.Store == nil {
 		return nil, core.ErrUnavailable.WithMessage("plugin package store is not configured")
 	}
 	if err := s.d.Packages.Store.Put(ctx, p.SHA256, p.Raw); err != nil {
 		return nil, core.ErrUnavailable.WithMessage("store the plugin package on this node").WithCause(err)
 	}
-	ctx, release, guardErr := core.BeginPluginMutation(ctx, s.d.Mutations)
-	if guardErr != nil {
-		return nil, guardErr
-	}
-	defer release()
-	// A package already stored with the same content was validated by the
-	// core that took it; checks added since (the job limits of 0.1.238) must
-	// not stop it from being re-uploaded or installed again from the market.
-	stored, err := s.storedIdentical(ctx, p)
-	if err != nil {
-		return nil, err
-	}
-	if !stored {
-		if err := s.validatePackage(ctx, p, opt); err != nil {
-			return nil, err
-		}
-	}
-
-	rec, err := s.recordUpload(ctx, p, actorID, opt)
-	if store.IsUniqueViolation(err, "") {
-		// Another first upload of the plugin created its row meanwhile: one
-		// that does not take the change lock (a node's first install of a
-		// built-in plugin). It is another cluster change being submitted, and
-		// the same retry succeeds.
-		return nil, core.ErrClusterChangeBusy.WithMessage("the plugin is being uploaded concurrently; retry").WithCause(err)
-	}
-	if err != nil {
-		return nil, err
-	}
-	r := buildReview(p.Manifest, p.Files, rec.verification, s.opt.HostVersion, rec.current)
-	r.noteRevoked(rec.revoked)
-	if err := s.resolveRoleGrants(ctx, r, p.Manifest, actorID); err != nil {
-		return nil, err
-	}
-	s.noteDBSchema(r, p.Manifest)
-	if err := s.noteDatabase(ctx, r); err != nil {
-		return nil, err
-	}
-	r.ConsentStatus = rec.consent
-	r.PackageSHA256, r.PackageSize, r.UploadedAt = p.SHA256, int64(len(p.Raw)), rec.uploadedAt
-	r.UpgradeFrom = rec.upgradeOf
-	return r, s.carryOverConsent(ctx, r, p.Manifest.Key, p.Manifest.Version, actorID)
-}
-
-// uploadRecord is what the transaction half of Upload leaves for the review.
-type uploadRecord struct {
-	verification *pkg.Verification
-	current      map[string]Grant
-	revoked      map[string]bool
-	consent      string
-	uploadedAt   time.Time
-	upgradeOf    string
+	return p, nil
 }
 
 // openAndValidate unpacks the package and checks the caller's key/version
@@ -121,6 +121,18 @@ func (s *Service) openAndValidate(ctx context.Context, data []byte, opt UploadOp
 		return nil, err
 	}
 	return p, nil
+}
+
+// checkContent validates p (validatePackage) unless this exact package is
+// stored already: the core that took it validated it, and checks added
+// since (the job limits of 0.1.238) must not stop it from being re-uploaded
+// or installed again from the market.
+func (s *Service) checkContent(ctx context.Context, p *pkg.Package, opt UploadOptions) error {
+	stored, err := s.storedIdentical(ctx, p)
+	if err != nil || stored {
+		return err
+	}
+	return s.validatePackage(ctx, p, opt)
 }
 
 // storedIdentical reports whether this exact package is stored as its key and
@@ -165,105 +177,105 @@ func (s *Service) validatePackage(ctx context.Context, p *pkg.Package, opt Uploa
 	return core.InvalidFields(errs...).WithMessage("database.access names tables or columns the core does not have")
 }
 
-// recordUpload writes the plugin row, the version row and the audit entry in
-// one transaction.
+// recordUpload checks the content of p (checkContent), then writes the
+// plugin row, the version row and the audit entry in one transaction.
 func (s *Service) recordUpload(ctx context.Context, p *pkg.Package, actorID int64, opt UploadOptions) (*uploadRecord, error) {
-	m := p.Manifest
+	if err := s.checkContent(ctx, p, opt); err != nil {
+		return nil, err
+	}
 	rec := &uploadRecord{consent: ConsentAwaiting}
 	err := s.d.DB.Tx(ctx, func(tx *gorm.DB) error {
-		ver, err := s.d.Trust.Verify(ctx, tx, p)
+		st, err := s.readUploadState(ctx, tx, p, opt, true)
 		if err != nil {
 			return err
 		}
-		rec.verification = ver
-		if err := pkg.CheckTrust(m, ver.Trust); err != nil {
-			return err
-		}
-		g := store.G(ctx, tx)
-		var plugin model.Plugin
-		existing := true
-		err = lockedPlugin(g, m.Key).Select("status, publisher_id").Take(&plugin).Error
-		if store.IsNoRows(err) {
-			existing = false
-		} else if err != nil {
-			return err
-		}
-		status, pubID := plugin.Status, plugin.PublisherID
-		if err := checkReserved(m, opt.Source, ver.Trust, !existing && !s.opt.Plugins.DevMode); err != nil {
-			return err
-		}
-		if !existing {
-			if err := claimRetiredKey(ctx, tx, m.Key, ver.PublisherID, opt.Source); err != nil {
-				return err
-			}
-		}
-		if existing && !sameID(pubID, ver.PublisherID) {
-			return core.ErrConflict.WithMessage(fmt.Sprintf("plugin %q is owned by another publisher", m.Key))
-		}
-		if existing {
-			if err := checkUninstall(ctx, tx, m.Key); err != nil {
-				return err
-			}
-		}
-		if !existing {
-			if err := g.Create(newPlugin(m, ver.PublisherID, actorID)).Error; err != nil {
-				return err
-			}
-			status = StatusAwaitingConsent
-		}
-		insert, priorConsent, err := insertVersionRow(ctx, tx, p, ver, opt, actorID)
-		if err != nil {
-			return err
-		}
-		if !insert {
-			rec.consent = priorConsent // idempotent re-upload keeps its status
-		}
-		if err := versionRow(g, m.Key, m.Version).Select("uploaded_at").Take(&rec.uploadedAt).Error; err != nil {
-			return err
-		}
-		if status != StatusAwaitingConsent {
-			if rec.current, rec.revoked, err = loadPriorGrants(ctx, tx, m.Key); err != nil {
-				return err
-			}
-			if rec.upgradeOf, err = s.runningVersion(ctx, tx, m.Key, m.Version); err != nil {
-				return err
-			}
-		}
-		return audit.Audit(ctx, tx, actorID, "plugin.upload", "plugin", m.Key, map[string]any{
-			"version": m.Version, "sha256": p.SHA256, "trust": ver.Trust, "signature_status": ver.SignatureStatus,
-			"source": opt.Source,
-		})
+		rec.uploadState = *st
+		return writeUpload(ctx, tx, p, actorID, opt, rec)
 	})
+	if store.IsUniqueViolation(err, "") {
+		// Another first upload of the plugin created its row meanwhile: one
+		// that does not take the change lock (a node's first install of a
+		// built-in plugin). It is another cluster change being submitted, and
+		// the same retry succeeds.
+		return nil, core.ErrClusterChangeBusy.WithMessage("the plugin is being uploaded concurrently; retry").WithCause(err)
+	}
 	if err != nil {
 		return nil, err
 	}
 	return rec, nil
 }
 
+// writeUpload records p in tx after readUploadState (rec): the plugins row
+// of a first upload, the version row unless an identical one exists (whose
+// consent status rec then keeps) and the audit entry.
+func writeUpload(ctx context.Context, tx *gorm.DB, p *pkg.Package, actorID int64, opt UploadOptions, rec *uploadRecord) error {
+	m, ver, g := p.Manifest, rec.verification, store.G(ctx, tx)
+	if !rec.existing {
+		if err := g.Create(newPlugin(m, ver.PublisherID, actorID)).Error; err != nil {
+			return err
+		}
+	}
+	inserted, priorConsent, err := insertVersionRow(ctx, tx, p, ver, opt, actorID)
+	if err != nil {
+		return err
+	}
+	if rec.inserted = inserted; !inserted {
+		rec.consent = priorConsent // idempotent re-upload keeps its status
+	}
+	if err := versionRow(g, m.Key, m.Version).Select("uploaded_at").Take(&rec.uploadedAt).Error; err != nil {
+		return err
+	}
+	return audit.Audit(ctx, tx, actorID, "plugin.upload", "plugin", m.Key, map[string]any{
+		"version": m.Version, "sha256": p.SHA256, "trust": ver.Trust, "signature_status": ver.SignatureStatus,
+		"source": opt.Source,
+	})
+}
+
 // insertVersionRow inserts the version unless it already exists with the
 // same content. inserted is false for an identical re-upload, whose existing
 // consent status is returned so the review can report it unchanged.
 func insertVersionRow(ctx context.Context, tx *gorm.DB, p *pkg.Package, ver *pkg.Verification, opt UploadOptions, actorID int64) (inserted bool, priorConsent string, err error) {
-	m := p.Manifest
 	g := store.G(ctx, tx)
-	var old model.PluginVersion
-	err = versionRow(g, m.Key, m.Version).Select("package_sha256, consent_status").Take(&old).Error
-	oldSHA, oldConsent := old.PackageSha256, core.ValueOr(old.ConsentStatus, "")
+	prior, err := priorVersion(g, p)
 	switch {
-	case store.IsNoRows(err):
 	case err != nil:
 		return false, "", err
-	case oldConsent == ConsentRejected:
+	case prior.rejected:
 		// A rejected upload may be retried (possibly with other content).
-		if err := versionRow(g, m.Key, m.Version).Delete(&model.PluginVersion{}).Error; err != nil {
+		if err := versionRow(g, p.Manifest.Key, p.Manifest.Version).Delete(&model.PluginVersion{}).Error; err != nil {
 			return false, "", err
 		}
-	case oldSHA == p.SHA256:
-		return false, oldConsent, nil // idempotent re-upload
-	default:
-		return false, "", core.ErrConflict.WithMessage(fmt.Sprintf("version %s of %q was already uploaded with different content", m.Version, m.Key))
+	case prior.found:
+		return false, prior.consent, nil // idempotent re-upload
 	}
 	return true, "", g.Create(newVersion(p, ver, opt, actorID)).Error
+}
+
+// priorUpload is the version row an upload finds (priorVersion).
+type priorUpload struct {
+	found    bool   // the same content: an idempotent re-upload
+	consent  string // its consent status
+	rejected bool   // rejected: a retry, with any content, replaces it
+}
+
+// priorVersion reads the version row of the key and version of p, a
+// conflict when it holds other content and was not rejected.
+func priorVersion(g *gorm.DB, p *pkg.Package) (priorUpload, error) {
+	m := p.Manifest
+	var old model.PluginVersion
+	err := versionRow(g, m.Key, m.Version).Select("package_sha256, consent_status").Take(&old).Error
+	consent := core.ValueOr(old.ConsentStatus, "")
+	switch {
+	case store.IsNoRows(err):
+		return priorUpload{}, nil
+	case err != nil:
+		return priorUpload{}, err
+	case consent == ConsentRejected:
+		return priorUpload{rejected: true}, nil
+	case old.PackageSha256 == p.SHA256:
+		return priorUpload{found: true, consent: consent}, nil
+	}
+	return priorUpload{}, core.ErrConflict.WithMessage(fmt.Sprintf("version %s of %q was already uploaded with different content", m.Version, m.Key))
 }
 
 // newPlugin is the plugins row of a first upload of m, awaiting consent.

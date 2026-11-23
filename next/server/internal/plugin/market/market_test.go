@@ -1,6 +1,7 @@
 package market
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -15,16 +16,9 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/testutil"
 )
 
-type fakeInstaller struct {
-	got  []byte
-	opts install.UploadOptions
-}
+type fakeInstaller struct{}
 
-func (f *fakeInstaller) Upload(_ context.Context, data []byte, _ int64, opt install.UploadOptions) (*install.Review, error) {
-	f.got, f.opts = data, opt
-	return &install.Review{PluginKey: opt.ExpectKey, Version: opt.ExpectVersion}, nil
-}
-func (f *fakeInstaller) HostVersion() string { return "0.1.0" }
+func (fakeInstaller) HostVersion() string { return "0.1.0" }
 
 func TestMarket(t *testing.T) {
 	db := testutil.DB(t)
@@ -60,8 +54,7 @@ func TestMarket(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	inst := &fakeInstaller{}
-	s := New(db, inst, srv.Client(), 1<<20)
+	s := New(db, fakeInstaller{}, srv.Client(), 1<<20)
 	seed := fmt.Sprintf(`[{"name":"official","url":%q,"public_key":%q}]`, srv.URL+"/m/", mk.PubB64())
 	if err := s.SeedSources(ctx, seed); err != nil {
 		t.Fatal(err)
@@ -85,19 +78,7 @@ func TestMarket(t *testing.T) {
 		t.Fatalf("cache: hits=%d err=%v", hits, err)
 	}
 
-	r, err := s.Install(ctx, srcs[0].ID, "tool", "1.1.0", 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if r.PluginKey != "tool" || len(inst.got) != len(pkgBytes) || inst.opts.ExpectVersion != "1.1.0" {
-		t.Fatalf("install = %+v opts=%+v", r, inst.opts)
-	}
-	if _, err := s.Install(ctx, srcs[0].ID, "tool", "1.0.0", 0); core.AsError(err).Code != "invalid_argument" {
-		t.Fatalf("sha mismatch: %v", err)
-	}
-	if _, err := s.Install(ctx, srcs[0].ID, "tool", "9.9.9", 0); core.AsError(err).Code != "not_found" {
-		t.Fatalf("missing version: %v", err)
-	}
+	checkDownload(t, s, srcs[0].ID, srv.URL+"/m/", pkgBytes)
 
 	// Tampered index is rejected.
 	other := pkgtest.NewKey("other")
@@ -138,5 +119,26 @@ func TestCompatible(t *testing.T) {
 				t.Errorf("pkg.HostCompatible(%q, %q) disagrees", tc.compat, tc.host)
 			}
 		}
+	}
+}
+
+// checkDownload downloads the versions of tool from source srcID (index at
+// base): 1.1.0 is pkgBytes, 1.0.0 fails its sha256, 9.9.9 is not listed.
+func checkDownload(t *testing.T, s *Service, srcID int64, base string, pkgBytes []byte) {
+	ctx := context.Background()
+	got, opt, err := s.Download(ctx, srcID, "tool", "1.1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := install.UploadOptions{ExpectKey: "tool", ExpectVersion: "1.1.0", Source: fmt.Sprintf("market:%d", srcID),
+		PackageURL: base + "pkgs/tool-1.1.0.s2plugin"}
+	if !bytes.Equal(got, pkgBytes) || opt != want {
+		t.Fatalf("download = %d bytes, opts=%+v", len(got), opt)
+	}
+	if _, _, err := s.Download(ctx, srcID, "tool", "1.0.0"); core.AsError(err).Code != "invalid_argument" {
+		t.Fatalf("sha mismatch: %v", err)
+	}
+	if _, _, err := s.Download(ctx, srcID, "tool", "9.9.9"); core.AsError(err).Code != "not_found" {
+		t.Fatalf("missing version: %v", err)
 	}
 }

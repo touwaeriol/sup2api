@@ -1523,21 +1523,26 @@ sequenceDiagram
   participant M as 插件市场索引
   participant PG as PostgreSQL
   alt 从市场安装
-    A->>API: 选择市场中的插件
+    A->>API: 选择市场中的插件（review-from-market）
     API->>M: 下载插件包，校验 sha256
   else 手动上传
-    A->>API: 上传 .s2plugin（plugin:install）
+    A->>API: 选择 .s2plugin（review-upload，plugin:install）
   end
   API->>API: 校验签名、发布者信任级别、吊销状态
   API->>API: 校验 manifest：hostCompat、一致性检查、权限冲突、资源申请上限
-  API->>API: 包存入本节点网关的插件包存储（其他节点用到时向它取）
-  API->>PG: 写入 plugin_versions，plugins.status=awaiting_consent
-  API-->>A: 确认页（权限分级、账号类型、钩子、任务、订阅、界面、资源、数据库）
-  A->>API: 确认授权（勾选高风险项）
-  API->>PG: 写入授权、注册用户权限、写入默认价格，status=installed
-  A->>API: 启用
+  API->>PG: 只读事务里读当前状态（升级的现有授予、运行版本），什么都不写
+  API-->>A: 安装前确认页（权限分级、账号类型、钩子、任务、订阅、界面、资源、数据库），带 package_sha256
+  A->>API: 同意并安装：upload / install-from-market 带 consent（二次验证 plugin.grant）
+  API->>API: 包的 sha256 与 consent.package_sha256 不同则 409 package_changed，什么都不写
+  API->>API: 再校验一遍，包存入本节点网关的插件包存储（其他节点用到时向它取）
+  API->>PG: 写入 plugin_versions、plugins（awaiting_consent）
+  API->>PG: 立即以操作者身份同意：写入授权、注册用户权限、写入默认价格，status=installed
+  Note over API,PG: 同意失败时删掉本次写入的版本行和新建的插件行，返回同意的错误
+  A->>API: 启用（升级：逐节点升级）
   API->>API: 进入 5.7 的发布流程
 ```
+
+不带 `consent` 的上传与市场安装仍是两步：先登记为 `awaiting_consent`，再 POST consent（脚本、e2e 用；CONTRACTS §5.7“先授权再安装”）。
 
 ---
 

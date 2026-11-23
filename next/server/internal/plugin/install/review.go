@@ -86,7 +86,7 @@ type Review struct {
 	// a platform plugin works, not a permission to grant or deny
 	// (forwarding v2, D15; CONTRACTS §124).
 	RequestAccess core.LocalizedText `json:"request_access,omitempty"`
-	UploadedAt    time.Time          `json:"uploaded_at"`
+	UploadedAt    time.Time          `json:"uploaded_at,omitzero"`
 }
 
 // requestAccessStatement is Review.RequestAccess.

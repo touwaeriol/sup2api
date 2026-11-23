@@ -10,9 +10,9 @@ import { lt } from '@/i18n'
 import { errorMessage, notifyError } from '@/utils/errors'
 import { useAuthStore } from '@/stores/auth'
 import { refreshShell } from '@/stores/app'
-import { consentPath } from './reviewCache'
+import { consentPath } from './consent/paths'
 import RoleGrantsReview from './parts/RoleGrantsReview.vue'
-import { compareVersions, conflictLines, consoleSettings, isPendingConsent, nativeSettingsPath, refusalText, shownStatus, tabOf, type PluginDetail, type PluginSettings } from './pluginUtil'
+import { compareVersions, conflictLines, consoleSettings, isPendingConsent, nativeSettingsPath, refusalText, rolloutAfterConsent, shownStatus, tabOf, type PluginDetail, type PluginSettings } from './pluginUtil'
 import TrustBadge from './parts/TrustBadge.vue'
 import OverviewTab from './detail/OverviewTab.vue'
 import PermissionsTab from './detail/PermissionsTab.vue'
@@ -60,12 +60,7 @@ const upgradeChoices = computed<ChoiceOption[]>(() => approvedUpgrades.value.map
 const pendingVersions = computed(() => (detail.value?.versions || []).filter((v) => isPendingConsent(v.consent_status)))
 
 const consented = computed(() => (typeof route.query.consented === 'string' ? route.query.consented : ''))
-const consentedAction = computed<'enable' | 'upgrade' | null>(() => {
-  if (!consented.value || !detail.value || !canManage.value) return null
-  if (status.value === 'installed' || status.value === 'disabled') return 'enable'
-  if (status.value === 'enabled' && consented.value !== detail.value.active_version) return 'upgrade'
-  return null
-})
+const consentedAction = computed(() => (consented.value && detail.value && canManage.value ? rolloutAfterConsent(detail.value, consented.value) : null))
 
 /** The installed version declares a database (its review's or manifest's database). */
 const hasDatabase = computed(() => !!detail.value?.manifest?.database)

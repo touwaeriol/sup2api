@@ -800,7 +800,6 @@ func (s *Service) Reject(ctx context.Context, key, version string, actorID int64
 		return guardErr
 	}
 	defer release()
-
 	return s.d.DB.Tx(ctx, func(tx *gorm.DB) error {
 		g := store.G(ctx, tx)
 		var status string
@@ -818,25 +817,9 @@ func (s *Service) Reject(ctx context.Context, key, version string, actorID int64
 		if res.RowsAffected == 0 {
 			return core.ErrConflict.WithMessage("version is not awaiting consent")
 		}
-		removed := false
-		if status == StatusAwaitingConsent {
-			var pending int64
-			if err := g.Model(&model.PluginVersion{}).Where("plugin_key = ? AND consent_status <> ?", key, ConsentRejected).Count(&pending).Error; err != nil {
-				return err
-			}
-			if pending == 0 {
-				// The staged permissions' grants first: the plugin row's
-				// foreign key cascades to permissions, not to casbin_rule.
-				if s.d.Permissions != nil {
-					if err := s.d.Permissions.DeletePlugin(ctx, tx, key); err != nil {
-						return err
-					}
-				}
-				if err := g.Where("key = ?", key).Delete(&model.Plugin{}).Error; err != nil {
-					return err
-				}
-				removed = true
-			}
+		removed, err := s.removeAbandoned(ctx, tx, key, status)
+		if err != nil {
+			return err
 		}
 		return audit.Audit(ctx, tx, actorID, "plugin.reject", "plugin", key, map[string]any{"version": version, "plugin_removed": removed})
 	})

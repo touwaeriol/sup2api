@@ -174,16 +174,27 @@ func (r *Router) handle(method, path string, mode Mode, keys []perm.Key, check g
 // requireStepUp spends the request's step-up proof on scope.
 func (r *Router) requireStepUp(scope string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if r.stepUp == nil {
-			Fail(c, core.ErrInternal.WithMessage("step-up verification is not available"))
-			return
+		if r.SpendStepUp(c, scope) {
+			c.Next()
 		}
-		if err := r.stepUp.ConsumeStepUp(c.Request.Context(), scope); err != nil {
-			Fail(c, err)
-			return
-		}
-		c.Next()
 	}
+}
+
+// SpendStepUp spends the request's step-up proof on scope as the routes of
+// a StepUp view do, rendering the failure (failing closed without a
+// verifier); false: the caller stops. It is for a handler whose scope
+// depends on its body, which registers its route on no StepUp view and
+// spends the proof once it has read the body.
+func (r *Router) SpendStepUp(c *gin.Context, scope string) bool {
+	if r.stepUp == nil {
+		Fail(c, core.ErrInternal.WithMessage("step-up verification is not available"))
+		return false
+	}
+	if err := r.stepUp.ConsumeStepUp(c.Request.Context(), scope); err != nil {
+		Fail(c, err)
+		return false
+	}
+	return true
 }
 
 // Granted returns the permission keys the route middleware matched for the

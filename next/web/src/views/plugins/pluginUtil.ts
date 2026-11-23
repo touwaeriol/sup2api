@@ -444,6 +444,13 @@ export function isPendingConsent(s: string | undefined): boolean {
   return s === 'pending' || s === 'awaiting_consent' || s === 'awaiting'
 }
 
+/** The rollout that puts an approved version into service: enable a stopped plugin, upgrade a running one; null when neither applies. */
+export function rolloutAfterConsent(p: Pick<PluginDetail, 'status' | 'active_version'>, version: string): 'enable' | 'upgrade' | null {
+  if (p.status === 'installed' || p.status === 'disabled') return 'enable'
+  if (p.status === 'enabled' && version !== p.active_version) return 'upgrade'
+  return null
+}
+
 /**
  * Settings the settings tab shows: the component of native settings that have
  * no page of their own; native settings with a page live on that page (§75.5).

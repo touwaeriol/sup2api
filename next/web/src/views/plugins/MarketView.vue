@@ -2,15 +2,15 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { api, requestRaw } from '@sub2api/host'
-import { SBadge, SButton, SCard, SChoiceCards, SEmpty, SField, SHint, SIcon, SInput, SLink, SModal, SPageHeader, SSelect, SSpinner, toast, type ChoiceOption } from '@sub2api/ui'
-import type { MarketPlugin, MarketSource, MarketVersion, PluginReview, PluginSummary } from '@/api/types'
+import { requestRaw } from '@sub2api/host'
+import { SBadge, SButton, SCard, SChoiceCards, SEmpty, SField, SHint, SIcon, SInput, SLink, SModal, SPageHeader, SSelect, SSpinner, type ChoiceOption } from '@sub2api/ui'
+import type { MarketPlugin, MarketSource, MarketVersion, PluginSummary } from '@/api/types'
 import { lt } from '@/i18n'
 import { notifyError } from '@/utils/errors'
 import { fetchFirstPage } from '@/composables/lookups'
 import { formatBytes } from '@/utils/format'
 import { useAuthStore } from '@/stores/auth'
-import { consentPath, putReview } from './reviewCache'
+import { marketInstallLocation } from './consent/paths'
 import { compareVersions } from './pluginUtil'
 import PluginAvatar from './parts/PluginAvatar.vue'
 import TrustBadge from './parts/TrustBadge.vue'
@@ -31,7 +31,6 @@ const loadingSources = ref(true)
 
 const picker = ref<MarketPlugin | null>(null)
 const pickVersion = ref('')
-const installing = ref(false)
 
 const sourceOptions = computed(() => sources.value.map((s) => ({ value: s.id, label: s.enabled ? s.name : `${s.name} (${t('common.disabled')})` })))
 
@@ -162,21 +161,12 @@ const pickBlocked = computed(() => {
   return pickVersion.value === installedOf(m) || incompatible(versionOf(m, pickVersion.value))
 })
 
-async function install() {
+/** Reviews the picked version first: nothing is downloaded or registered before the consent. */
+function install() {
   const m = picker.value
-  if (!m || !pickVersion.value || sourceId.value === null || pickBlocked.value) return
-  installing.value = true
-  try {
-    const r = await api.post<PluginReview>('/plugins/install-from-market', { source_id: sourceId.value, key: m.key, version: pickVersion.value })
-    putReview(r)
-    picker.value = null
-    toast(t('plugins.market.downloaded', { name: lt(r.name) || r.plugin_key, version: r.version }), 'success')
-    router.push(consentPath(r.plugin_key || m.key, r.version || pickVersion.value))
-  } catch (e) {
-    notifyError(e)
-  } finally {
-    installing.value = false
-  }
+  if (!m || sourceId.value === null || pickBlocked.value) return
+  picker.value = null
+  router.push(marketInstallLocation(sourceId.value, m.key, pickVersion.value))
 }
 
 watch(sourceId, loadPlugins)
@@ -300,7 +290,7 @@ onMounted(async () => {
       </template>
       <template #footer>
         <SButton @click="picker = null">{{ t('common.cancel') }}</SButton>
-        <SButton variant="primary" :loading="installing" :disabled="pickBlocked" icon="shield" @click="install">
+        <SButton variant="primary" :disabled="pickBlocked" icon="shield" data-testid="market-continue" @click="install">
           {{ t('plugins.market.continue') }}
         </SButton>
       </template>

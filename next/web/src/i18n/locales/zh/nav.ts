@@ -43,6 +43,7 @@ export default {
     pluginDetail: '插件详情',
     pluginRollout: '发布进度',
     pluginConsent: '安装授权',
+    pluginInstall: '安装前确认授权',
     pluginSettings: '插件设置'
   },
   breadcrumb: '面包屑导航',
