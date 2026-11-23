@@ -73,7 +73,7 @@ function validateGroup(b: any, create: boolean) {
   return fieldsFailure([...nameErrors(b, create), ...own, ...groupPricingErrors(b)])
 }
 
-/** What keeps a checked write back: a name another group has, a user group of the caller's own among segment_rates. */
+/** What keeps a checked write back: a name another group has, a user group of the caller's own among segment_rates and segment_model_rates. */
 function writeConflict(req: MockRequest, b: any, self?: MockGroup) {
   if (b.name !== undefined && groups.some((g) => g !== self && g.name === String(b.name).trim())) return invalid('name', 'a group with this name already exists', 'duplicate')
   return ownSegmentConflict(req, segmentsOf(b))

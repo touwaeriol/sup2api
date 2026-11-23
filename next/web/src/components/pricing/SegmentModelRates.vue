@@ -1,13 +1,12 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { api } from '@sub2api/host'
 import { SHint, SRowAction, type SelectOption } from '@sub2api/ui'
-import type { CatalogPrice, GroupModelPrices, ModelPriceRow } from '@/api/pricing'
+import type { ModelPriceRow } from '@/api/pricing'
 import ModelBadge from '@/components/platform/ModelBadge.vue'
-import { useLatestRequest } from '@/composables/useLatestRequest'
 import AddSelect from './AddSelect.vue'
 import DraftBadge from './DraftBadge.vue'
+import { useGroupModels } from './groupModels'
 import RateInput from './RateInput.vue'
 import type { DraftedModelRate } from './modelRateDrafts'
 import { effectiveRate, listPriceOf, rateText } from './pricingFormat'
@@ -20,10 +19,21 @@ import { priceLabel } from './priceLabels'
 // the account group's model rate, else `groupRate`, its base rate.
 // Editable, "Add model" offers the account group's models with a global
 // price that have no rate yet (every model with one while the account group
-// is not created: groupId null); a row reports what changes (`add` at the
-// rate the model pays now, `change`, `remove`, `undo`) and the parent keeps
-// the drafts. `errors` are the server's refusals by row key.
-const props = defineProps<{ rows: DraftedModelRate[]; groupId: number | null; override: string | null; groupRate: string; editable?: boolean; disabled?: boolean; errors?: ReadonlyMap<string, string> }>()
+// is not created: groupId null), as its saved price table lists them: the
+// parent's `models` when it has them for every row (null while they load),
+// else asked here. A row reports what changes (`add` at the rate the model
+// pays now, `change`, `remove`, `undo`) and the parent keeps the drafts.
+// `errors` are the server's refusals by row key.
+const props = defineProps<{
+  rows: DraftedModelRate[]
+  groupId: number | null
+  override: string | null
+  groupRate: string
+  models?: ModelPriceRow[] | null
+  editable?: boolean
+  disabled?: boolean
+  errors?: ReadonlyMap<string, string>
+}>()
 const emit = defineEmits<{
   (e: 'add', model: string, rate: string): void
   (e: 'change', row: DraftedModelRate, rate: string): void
@@ -31,14 +41,9 @@ const emit = defineEmits<{
 }>()
 const { t } = useI18n()
 
-/** The models an account group may price: its price table, or the catalog of global prices for one not created yet (0). */
-async function fetchModels(gid: number): Promise<ModelPriceRow[]> {
-  if (gid) return (await api.get<GroupModelPrices>(`/groups/${gid}/model-prices`)).models
-  return (await api.get<CatalogPrice[]>('/pricing/catalog')).map((c) => ({ model: c.model, offered: true, base: c.price, price: null, rate: null }))
-}
-const prices = useLatestRequest(() => (props.editable ? (props.groupId ?? 0) : null), fetchModels, 0)
+const prices = useGroupModels(() => (props.editable && props.models === undefined ? (props.groupId ?? 0) : null))
 
-const models = computed(() => prices.result.value ?? [])
+const models = computed(() => (props.models === undefined ? prices.result.value : props.models) ?? [])
 const addable = computed<SelectOption[]>(() => {
   const taken = new Set(props.rows.map((r) => r.model))
   return models.value.filter((m) => m.base && !taken.has(m.model)).map((m) => ({ value: m.model, label: m.model, hint: priceLabel(t, listPriceOf(m.base, m.price)) }))

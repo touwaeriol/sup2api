@@ -59,11 +59,11 @@ func (in *segmentInput) rates() rateWrite {
 	return rateWrite{far: keyGroup, pairList: groupRatesField, modelList: modelRatesField, pairs: in.GroupRates, models: in.ModelRates}
 }
 
-// check fails with the field errors of the whole input, for a segment of
-// the kind.
-func (s *Service) check(ctx context.Context, in *segmentInput, kind string, create bool) error {
+// check fails with the field errors of the whole input, its rates w, for a
+// segment of the kind.
+func (s *Service) check(ctx context.Context, in *segmentInput, w *rateWrite, kind string, create bool) error {
 	fe := in.textErrors(ctx, kind, create)
-	rateErrs, err := in.rates().check(ctx, s.db.Gorm)
+	rateErrs, err := w.check(ctx, s.db.Gorm)
 	if err != nil {
 		return err
 	}
@@ -105,7 +105,8 @@ func (s *Service) create(c *gin.Context) {
 	if !httpapi.BindStrictJSON(c, &in) {
 		return
 	}
-	if err := s.check(ctx, &in, core.SegmentNamed, true); err != nil {
+	w := in.rates()
+	if err := s.check(ctx, &in, &w, core.SegmentNamed, true); err != nil {
 		httpapi.Fail(c, err)
 		return
 	}
@@ -114,13 +115,13 @@ func (s *Service) create(c *gin.Context) {
 		if err := store.G(ctx, tx).Create(&row).Error; err != nil {
 			return nameTaken(ctx, err)
 		}
-		return s.writeRates(ctx, tx, row.ID, in.rates())
+		return s.writeRates(ctx, tx, row.ID, &w)
 	})
 	if err != nil {
 		httpapi.Fail(c, err)
 		return
 	}
-	s.ratesWritten(ctx, in.rates().changesModelRates())
+	s.ratesWritten(ctx, w.changesModelRates())
 	s.render(c, row.ID, httpapi.Created)
 }
 
@@ -134,23 +135,24 @@ func (s *Service) update(c *gin.Context) {
 	if !httpapi.BindStrictJSON(c, &in) {
 		return
 	}
+	w := in.rates()
 	kind, _, err := segmentKind(ctx, s.db.Gorm, id, "")
 	if err == nil {
-		err = s.check(ctx, &in, kind, false)
+		err = s.check(ctx, &in, &w, kind, false)
 	}
 	if err == nil {
 		err = s.tx(ctx, func(tx *gorm.DB) error {
 			if err := updateSegment(ctx, tx, id, &in); err != nil {
 				return err
 			}
-			return s.writeRates(ctx, tx, id, in.rates())
+			return s.writeRates(ctx, tx, id, &w)
 		})
 	}
 	if err != nil {
 		httpapi.Fail(c, err)
 		return
 	}
-	s.ratesWritten(ctx, in.rates().changesModelRates())
+	s.ratesWritten(ctx, w.changesModelRates())
 	s.render(c, id, httpapi.OK)
 }
 

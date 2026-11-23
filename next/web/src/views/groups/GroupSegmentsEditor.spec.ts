@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { defineComponent, h, ref, type PropType } from 'vue'
+import { ApiError } from '@sub2api/host'
 import { useTabbedForm } from '@sub2api/ui'
 import { i18n } from '@/i18n'
 import type { CatalogPrice, GroupModelPrices, Segment, SegmentGroupSetting } from '@/api/pricing'
@@ -61,8 +62,8 @@ async function render(groupId: number | null) {
   await flushPromises()
   const row = (id: number) => w.get(`[data-testid="access-rate-row"][data-segment="${id}"]`)
   const form = (w.vm as unknown as { form: ReturnType<typeof useTabbedForm> }).form
-  const sent = async () => {
-    const send = vi.fn(async (_body: Record<string, unknown>) => ({}))
+  const sent = async (answer: () => Promise<unknown> = async () => ({})) => {
+    const send = vi.fn((_body: Record<string, unknown>) => answer())
     const result = await form.submit(send)
     await flushPromises()
     return { result, body: send.mock.calls[0]?.[0] }
@@ -123,6 +124,33 @@ describe('GroupSegmentsEditor model rates', () => {
     const rates = await openModels(2)
     expect(mocks.get).toHaveBeenCalledWith('/pricing/catalog')
     expect(rates.getComponent(AddSelect).props('options').map((o: { value: unknown }) => o.value)).toEqual(['claude'])
+  })
+
+  it('asks the account group’s models once for every row it opens', async () => {
+    const { w, openModels } = await render(7)
+    w.getComponent(AddSelect).vm.$emit('add', 3)
+    await flushPromises()
+    await openModels(2)
+    await openModels(3)
+    expect(mocks.get.mock.calls.filter(([path]) => path === '/groups/7/model-prices')).toHaveLength(1)
+  })
+
+  it('takes the server’s refusal of a model rate back to its row', async () => {
+    const { w, sent, openModels, input } = await render(7)
+    await openModels(2)
+    await input('gpt-4o').setValue('0.3')
+    const refusal = new ApiError(400, { code: 'invalid_argument', message: 'invalid', details: { fields: [{ field: 'segment_model_rates.0.model', code: 'invalid', message: 'the model has no global price' }] } })
+    expect((await sent(() => Promise.reject(refusal))).result).toBe(false)
+    expect(w.get('[data-testid="segment-model-rate-row"][data-model="gpt-4o"]').text()).toContain('the model has no global price')
+  })
+
+  it('starts the model rates over for another account group', async () => {
+    const { w, sent, openModels, input } = await render(7)
+    await openModels(2)
+    await input('gpt-4o').setValue('0.3')
+    await w.setProps({ groupId: 8 })
+    await flushPromises()
+    expect((await sent()).body).toEqual({})
   })
 
   it('keeps a model rate that is not one back, naming the user group', async () => {

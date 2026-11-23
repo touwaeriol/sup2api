@@ -174,19 +174,14 @@ export interface GroupRatePatch {
   rate: Money | null
 }
 
-/** An item of `model_rates` (POST/PATCH /segments): the segment's rate for a model in a group (the model has an enabled global price); `rate` is required, null removes it. */
-export interface SegmentModelRatePatch {
-  group_id: number
-  model: string
-  rate: Money | null
-}
+/** A user group's rate for a model in an account group, written from one end: the item names the far end under its key; `rate` is required, null removes it (the model has an enabled global price). */
+export type ModelRatePatchOf<F extends 'group_id' | 'segment_id'> = Record<F, number> & { model: string; rate: Money | null }
 
-/** An item of `segment_model_rates` (POST/PATCH /groups): a segment's rate for a model in the group, the other direction of SegmentModelRatePatch; `rate` is required, null removes it. */
-export interface GroupSegmentModelRatePatch {
-  segment_id: number
-  model: string
-  rate: Money | null
-}
+/** An item of `model_rates` (POST/PATCH /segments): the segment's rate for a model in a group. */
+export type SegmentModelRatePatch = ModelRatePatchOf<'group_id'>
+
+/** An item of `segment_model_rates` (POST/PATCH /groups): a segment's rate for a model in the group, the other direction of SegmentModelRatePatch. */
+export type GroupSegmentModelRatePatch = ModelRatePatchOf<'segment_id'>
 
 /**
  * What POST /groups and PATCH /groups/:id take besides the group's own

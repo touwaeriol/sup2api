@@ -85,12 +85,14 @@ func TestSegmentModelRates(t *testing.T) {
 	rates(map[string]any{"group_id": f.public, "model": "gpt-4o", "rate": "0.5"}, map[string]any{"group_id": f.public, "model": "gpt-4o", "rate": nil}).ok(200)
 	require.Equal(t, "none", f.modelRateOf(f.vip, f.public, "gpt-4o"), "null removes it; the last word wins")
 
+	rates(map[string]any{"segment_id": f.granted, "group_id": f.public, "model": "m", "rate": "0.6"}).ok(200)
+	require.Equal(t, "0.6000", f.modelRateOf(f.vip, f.public, "m"), "an item's segment_id is taken, not read")
 	rates(map[string]any{"group_id": 999999, "model": "m", "rate": "1"}).invalid("model_rates.0.group_id")
 	rates(map[string]any{"group_id": f.public, "model": " ", "rate": "1"}).invalid("model_rates.0.model")
 	rates(map[string]any{"group_id": f.public, "model": "m", "rate": "-1"}).invalid("model_rates.0.rate")
 	rates(map[string]any{"group_id": f.public, "model": "m"}).invalid("model_rates.0.rate")
 	f.do(f.admin, "PATCH", path("/segments/%d", f.vip), map[string]any{"name": "gold"}).ok(200)
-	require.Equal(t, int32(2), f.ratesChanged.Load(), "a write without model rates says nothing")
+	require.Equal(t, int32(3), f.ratesChanged.Load(), "a write without model rates says nothing")
 }
 
 // A new segment comes with its rates, in one transaction.

@@ -46,7 +46,8 @@ func New(d Deps) *Service {
 // RegisterRoutes mounts the segment endpoints. The members of a segment are
 // listed by iam (GET /segments/:id/members): they are user rows. What a
 // segment has in groups is written with the segment (POST/PATCH /segments)
-// or with the group (segment_rates of POST/PATCH /groups, PrepareGroupWrite).
+// or with the group (segment_rates and segment_model_rates of POST/PATCH
+// /groups, PrepareGroupWrite): both are a rateWrite.
 func (s *Service) RegisterRoutes(r *httpapi.Router) {
 	r.Perm("GET", "/segments", "segment:read", s.list)
 	r.Perm("POST", "/segments", "segment:manage", s.create)

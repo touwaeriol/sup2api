@@ -181,7 +181,7 @@ func TestGroupWriteRemoveThenModelRates(t *testing.T) {
 		"segment_rates":       []any{map[string]any{"segment_id": f.vip, "rate": "-1"}},
 		"segment_model_rates": map[string]any{}})
 	require.NoError(t, err)
-	require.Equal(t, []string{"segment_model_rates"}, fields(fe), "a list that is none")
+	require.Equal(t, []string{"segment_model_rates", "segment_rates.0.rate"}, fields(fe), "a list that is none, and the other list's errors with it")
 	fe, err = f.groupWriteBody(f.admin, f.granted, map[string]any{
 		"segment_rates":       []any{map[string]any{"segment_id": f.vip, "rate": "-1"}},
 		"segment_model_rates": []any{map[string]any{"segment_id": 999999, "model": "m", "rate": "1"}}})
@@ -223,5 +223,37 @@ func TestSettingsSaveRace(t *testing.T) {
 		require.Equal(t, len(saves), count(codes, 200), "%v", codes)
 		require.Contains(t, []string{"true 0.1000", "true 0.2000", "true 0.3000", "none"}, f.pairOf(f.vip, f.other))
 		require.Contains(t, []string{"true 0.1000", "true 0.2000"}, f.pairOf(f.vip, f.public))
+	}
+}
+
+// Saves of the same model rates at once, from either side, all go through:
+// both sides write them in one order.
+func TestModelRatesSaveRace(t *testing.T) {
+	f := newSettingsFixture(t)
+	ofSegment := func(rate string, groups ...int64) func() int {
+		items := make([]map[string]any, len(groups))
+		for i, g := range groups {
+			items[i] = map[string]any{"group_id": g, "model": "m", "rate": rate}
+		}
+		return func() int {
+			return f.do(f.admin, "PATCH", path("/segments/%d", f.vip), map[string]any{"model_rates": items}).code
+		}
+	}
+	ofGroup := func(g int64, rate string) func() int {
+		return func() int {
+			fe, err := f.groupWriteBody(f.admin, g, map[string]any{"segment_model_rates": []any{
+				map[string]any{"segment_id": f.vip, "model": "m", "rate": rate}, map[string]any{"segment_id": f.vip, "model": "gpt-4o", "rate": rate}}})
+			if len(fe) > 0 || err != nil {
+				return 500
+			}
+			return 200
+		}
+	}
+	saves := []func() int{ofSegment("0.1", f.other, f.public), ofSegment("0.2", f.public, f.other), ofGroup(f.other, "0.3"), ofGroup(f.public, "0.4")}
+	for range 10 {
+		codes := concurrently(len(saves), func(i int) int { return saves[i]() })
+		require.Equal(t, len(saves), count(codes, 200), "%v", codes)
+		require.Contains(t, []string{"0.1000", "0.2000", "0.3000"}, f.modelRateOf(f.vip, f.other, "m"))
+		require.Contains(t, []string{"0.1000", "0.2000", "0.4000"}, f.modelRateOf(f.vip, f.public, "m"))
 	}
 }

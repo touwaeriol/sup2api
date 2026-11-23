@@ -26,15 +26,15 @@ type rateWrite struct {
 }
 
 // empty reports whether the write sets nothing.
-func (w rateWrite) empty() bool { return len(w.pairs)+len(w.models) == 0 }
+func (w *rateWrite) empty() bool { return len(w.pairs)+len(w.models) == 0 }
 
 // farIDs are the distinct far ends the items name.
-func (w rateWrite) farIDs() []int64 {
+func (w *rateWrite) farIDs() []int64 {
 	return x.Unique(append(ends(w.pairs, w.far), ends(w.models, w.far)...))
 }
 
 // farTable is the table of the far ends.
-func (w rateWrite) farTable() string {
+func (w *rateWrite) farTable() string {
 	if w.far == keySegment {
 		return "segments"
 	}
@@ -43,7 +43,7 @@ func (w rateWrite) farTable() string {
 
 // trimModels trims the models of the model rates, as they are checked and
 // stored.
-func (w rateWrite) trimModels() {
+func (w *rateWrite) trimModels() {
 	for i := range w.models {
 		w.models[i].Model = strings.TrimSpace(w.models[i].Model)
 	}
@@ -51,7 +51,7 @@ func (w rateWrite) trimModels() {
 
 // refs reads what the items refer to. With lock, in a transaction, the far
 // ends are locked against deletion until it ends.
-func (w rateWrite) refs(ctx context.Context, q *gorm.DB, lock bool) (rateRefs, error) {
+func (w *rateWrite) refs(ctx context.Context, q *gorm.DB, lock bool) (rateRefs, error) {
 	known, err := knownRows(ctx, q, w.farTable(), w.farIDs(), lock)
 	if err != nil {
 		return rateRefs{}, err
@@ -65,13 +65,13 @@ func (w rateWrite) refs(ctx context.Context, q *gorm.DB, lock bool) (rateRefs, e
 }
 
 // errors are the field errors of the items against what they refer to.
-func (w rateWrite) errors(ctx context.Context, refs rateRefs) []core.FieldError {
+func (w *rateWrite) errors(ctx context.Context, refs rateRefs) []core.FieldError {
 	return append(pairErrors(ctx, w.pairList, w.far, w.pairs, refs.known), modelRateErrors(ctx, w.modelList, w.far, w.models, refs)...)
 }
 
 // check trims the models and returns the field errors of the write, read
 // outside the transaction that writes it.
-func (w rateWrite) check(ctx context.Context, q *gorm.DB) ([]core.FieldError, error) {
+func (w *rateWrite) check(ctx context.Context, q *gorm.DB) ([]core.FieldError, error) {
 	w.trimModels()
 	refs, err := w.refs(ctx, q, false)
 	if err != nil {
@@ -82,7 +82,7 @@ func (w rateWrite) check(ctx context.Context, q *gorm.DB) ([]core.FieldError, er
 
 // segments are the segments the write changes the terms of, made from
 // the end self.
-func (w rateWrite) segments(self int64) []int64 {
+func (w *rateWrite) segments(self int64) []int64 {
 	if w.far == keySegment {
 		return w.farIDs()
 	}
@@ -91,7 +91,7 @@ func (w rateWrite) segments(self int64) []int64 {
 
 // changesModelRates reports whether the write changes model rates: it sets
 // some, or removes a pair and with it the segment's model rates there.
-func (w rateWrite) changesModelRates() bool {
+func (w *rateWrite) changesModelRates() bool {
 	return len(w.models) > 0 || removes(w.pairs)
 }
 
@@ -99,7 +99,7 @@ func (w rateWrite) changesModelRates() bool {
 // the far ends are locked and must still exist, and none of the segments
 // may be the caller's own (guardOwnSegments). Pairs go first, so a model
 // rate sent with the removal of its pair is kept.
-func (s *Service) writeRates(ctx context.Context, tx *gorm.DB, self int64, w rateWrite) error {
+func (s *Service) writeRates(ctx context.Context, tx *gorm.DB, self int64, w *rateWrite) error {
 	if w.empty() {
 		return nil
 	}

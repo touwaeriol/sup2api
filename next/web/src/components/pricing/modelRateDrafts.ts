@@ -4,6 +4,7 @@
 // rate of its own instead of the pair's rate. What the rows show under their
 // unsaved rates and what the request sends. A row added here is a draft
 // without a saved row. Pure: an editor only holds the state.
+import type { ModelRatePatchOf } from '@/api/pricing'
 import type { Money } from '@/api/types'
 import { sameRate, validRate } from './pricingFormat'
 import { withDraft } from './drafts'
@@ -27,9 +28,6 @@ export interface ModelRateDraft {
 
 /** The unsaved rates by row key. */
 export type ModelRateDrafts = ReadonlyMap<string, ModelRateDraft>
-
-/** An item of the request's list: the far end under its key. */
-export type ModelRatePatchOf<F extends ModelRateFar> = Record<F, number> & { model: string; rate: Money | null }
 
 /** The key of a row: one model under one far end. */
 export const modelRateKey = (r: Pick<PairModelRate, 'far' | 'model'>) => `${r.far}:${r.model}`

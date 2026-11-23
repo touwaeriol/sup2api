@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '@sub2api/host'
-import { SAlert, SBadge, SHint, SLink, useTabbedFormPart, type SelectOption } from '@sub2api/ui'
+import { SAlert, SBadge, SHint, SLink, type SelectOption } from '@sub2api/ui'
 import type { Group } from '@/api/types'
 import type { Segment, SegmentGroupSetting, SegmentRef } from '@/api/pricing'
 import AccessRateTable from '@/components/pricing/AccessRateTable.vue'
@@ -13,8 +13,9 @@ import SegmentBadge from '@/components/pricing/SegmentBadge.vue'
 import SegmentModelRates from '@/components/pricing/SegmentModelRates.vue'
 import { blankSegmentSetting, setsAnything, type DraftedSetting } from '@/components/pricing/accessRateDrafts'
 import { rateText, typedRate } from '@/components/pricing/pricingFormat'
+import { useGroupModels } from '@/components/pricing/groupModels'
+import { useAccessModelRates } from '@/components/pricing/useAccessModelRates'
 import { useAccessRateDrafts } from '@/components/pricing/useAccessRateDrafts'
-import { useModelRateDrafts } from '@/components/pricing/useModelRateDrafts'
 import { fetchAllPages } from '@/composables/lookups'
 
 // The user groups of an account group with something set apart: enabled (a
@@ -47,23 +48,9 @@ async function fetchSettings(): Promise<SegmentGroupSetting[]> {
 
 const drafts = useAccessRateDrafts({ side: 'segment', fetch: fetchSettings, terms: () => ({ visibility: props.visibility, groupDefault: props.defaultRate }) })
 const { rows, loading, error, refresh, change } = drafts
-const modelRates = useModelRateDrafts({
-  far: 'segment_id',
-  saved: () => drafts.saved.value.flatMap((s) => s.model_rates.map((r) => ({ far: s.segment.id, ...r }))),
-  farName: (id) => drafts.saved.value.find((s) => s.segment.id === id)?.segment.name ?? `#${id}`
-})
-useTabbedFormPart(
-  {
-    tab: props.tab,
-    // Both run, so each table marks what is wrong.
-    check: () => [drafts.check(), modelRates.check()].every(Boolean),
-    body: () => ({ ...drafts.body(), ...modelRates.body() }),
-    dirty: () => drafts.dirty.value || modelRates.dirty.value,
-    fields: [...drafts.fields, modelRates.field],
-    applyErrors: (errors) => [drafts.applyErrors(errors), modelRates.applyErrors(errors)]
-  },
-  () => props.editable
-)
+const modelRates = useAccessModelRates(drafts, 'segment', props.tab, () => props.editable)
+/** The models every row may add a rate on: one request for all of them. */
+const groupModels = useGroupModels(() => (props.editable ? (props.groupId ?? 0) : null))
 
 function load() {
   included.value = []
@@ -163,6 +150,7 @@ const nobody = computed(() => restricted.value && !loading.value && !error.value
         <SegmentModelRates
           :rows="modelRates.rowsOf(row.id)"
           :group-id="groupId"
+          :models="groupModels.result.value"
           :override="row.rate_override"
           :group-rate="row.rate.group_default"
           :editable="editable"

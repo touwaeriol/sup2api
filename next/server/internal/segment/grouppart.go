@@ -18,7 +18,7 @@ const (
 )
 
 // decodeGroupRates reads the lists of the body, as a write from the group;
-// a list that is none is a field error.
+// a list that is none is a field error, and the other list is still read.
 func decodeGroupRates(ctx context.Context, body map[string]json.RawMessage) (rateWrite, []core.FieldError) {
 	w := rateWrite{far: keySegment, pairList: segmentRatesField, modelList: segmentModelRatesField}
 	var fe []core.FieldError
@@ -39,14 +39,18 @@ func decodeGroupRates(ctx context.Context, body map[string]json.RawMessage) (rat
 // segment_model_rates.
 func (s *Service) PrepareGroupWrite(ctx context.Context, _ int64, body map[string]json.RawMessage) (core.GroupWrite, []core.FieldError, error) {
 	w, fe := decodeGroupRates(ctx, body)
-	if len(fe) > 0 || w.empty() {
+	if w.empty() {
 		return core.GroupWrite{}, fe, nil
 	}
-	if fe, err := w.check(ctx, s.db.Gorm); err != nil || len(fe) > 0 {
-		return core.GroupWrite{}, fe, err
+	itemErrs, err := w.check(ctx, s.db.Gorm)
+	if err != nil {
+		return core.GroupWrite{}, nil, err
+	}
+	if fe = append(fe, itemErrs...); len(fe) > 0 {
+		return core.GroupWrite{}, fe, nil
 	}
 	write := core.GroupWrite{Apply: func(ctx context.Context, tx *gorm.DB, groupID int64) error {
-		return s.writeRates(ctx, tx, groupID, w)
+		return s.writeRates(ctx, tx, groupID, &w)
 	}}
 	if w.changesModelRates() {
 		write.AfterCommit = func(ctx context.Context, _ int64) { s.ratesWritten(ctx, true) }

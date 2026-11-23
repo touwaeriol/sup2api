@@ -45,7 +45,7 @@ function rateProblems(item: any): Problem[] {
 }
 
 /** Setting a price or a rate on a model takes an enabled global price for it. */
-const pricedProblems = (model: unknown): Problem[] => (globalPrice(String(model)) ? [] : [['model', 'invalid', 'the model has no global price']])
+const pricedProblems = (model: unknown): Problem[] => (globalPrice(String(model).trim()) ? [] : [['model', 'invalid', 'the model has no global price']])
 
 /** Why a model price cannot be saved; removing one always can. It takes a model with a global price, and is checked as a global price is. */
 function priceProblems(item: any): Problem[] {
@@ -64,24 +64,27 @@ const pairProblems = (key: string, exists: (id: number) => boolean): ItemCheck =
   ...(item.remove === true ? [] : rateProblems(item))
 ]
 
-/** Why a model rate of a segment cannot be saved: a group that exists, a model named, and what a model rate of a group takes. */
-const segmentModelRateProblems = (hasGroup: (id: number) => boolean): ItemCheck => (item) => [
-  ...(hasGroup(Number(item.group_id)) ? [] : [['group_id', 'not_found', 'not found'] as Problem]),
+/** Why a model rate of a segment in a group cannot be saved: the far end `key` that exists, a model named, and what a model rate of a group takes. */
+const segmentModelRateProblems = (key: string, exists: (id: number) => boolean): ItemCheck => (item) => [
+  ...(exists(Number(item[key])) ? [] : [[key, 'not_found', 'not found'] as Problem]),
   ...(String(item.model ?? '').trim() ? modelRateProblems(item) : [['model', 'required', 'model is required'] as Problem, ...rateProblems(item)])
 ]
+
+const hasSegment = (id: number) => !!findSegment(id)
 
 /** The field errors of what POST/PATCH /groups take besides the group's own fields. */
 export function groupPricingErrors(body: any): FieldError[] {
   return [
     ...listErrors(body, 'model_prices', priceProblems),
     ...listErrors(body, 'model_rates', modelRateProblems),
-    ...listErrors(body, 'segment_rates', pairProblems('segment_id', (id) => !!findSegment(id)))
+    ...listErrors(body, 'segment_rates', pairProblems('segment_id', hasSegment)),
+    ...listErrors(body, 'segment_model_rates', segmentModelRateProblems('segment_id', hasSegment))
   ]
 }
 
 /** The field errors of what POST/PATCH /segments take besides the segment's own fields; `hasGroup` says whether a group exists. */
 export function segmentRatesErrors(body: any, hasGroup: (id: number) => boolean): FieldError[] {
-  return [...listErrors(body, 'group_rates', pairProblems('group_id', hasGroup)), ...listErrors(body, 'model_rates', segmentModelRateProblems(hasGroup))]
+  return [...listErrors(body, 'group_rates', pairProblems('group_id', hasGroup)), ...listErrors(body, 'model_rates', segmentModelRateProblems('group_id', hasGroup))]
 }
 
 /**
@@ -96,8 +99,8 @@ export function ownSegmentConflict(req: MockRequest, segmentIds: number[]): Mock
   return fail(409, 'conflict', 'you cannot change the terms of a user group you are in')
 }
 
-/** The segments segment_rates of a group's body names. */
-export const segmentsOf = (body: any): number[] => listOf(body, 'segment_rates').map((item) => Number(item.segment_id))
+/** The segments segment_rates and segment_model_rates of a group's body name. */
+export const segmentsOf = (body: any): number[] => [...listOf(body, 'segment_rates'), ...listOf(body, 'segment_model_rates')].map((item) => Number(item.segment_id))
 
 /** Whether a segment's body changes its rates. */
 export const writesRates = (body: any) => body?.group_rates !== undefined || body?.model_rates !== undefined
@@ -123,6 +126,7 @@ export function applyGroupPricing(gid: number, body: any) {
   for (const item of listOf(body, 'model_prices')) setModelPrice(gid, String(item.model), storedPrice(item.rule))
   for (const item of listOf(body, 'model_rates')) setModelRate(null, gid, String(item.model), item.rate)
   for (const item of listOf(body, 'segment_rates')) applySegmentRate(gid, item)
+  for (const item of listOf(body, 'segment_model_rates')) setModelRate(Number(item.segment_id), gid, String(item.model).trim(), item.rate)
 }
 
 /** Applies the checked rates of segment `sid`, in the order given. */

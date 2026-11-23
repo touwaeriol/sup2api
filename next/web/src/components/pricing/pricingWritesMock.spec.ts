@@ -48,12 +48,25 @@ describe('the model rates of a user group in the mock', () => {
   })
 })
 
+describe('the model rates of user groups set from an account group in the mock', () => {
+  it('take a user group that exists, a model with a global price and a rate, and show on the user group', async () => {
+    const a = await call('PATCH', '/groups/1', { segment_model_rates: [{ segment_id: 999, model: 'gpt-4o', rate: '1' }, { segment_id: 3, model: 'no-such-model', rate: '1' }, { segment_id: 3, model: 'gpt-4o' }] })
+    expect(problems(a)).toEqual(['segment_model_rates.0.segment_id not_found', 'segment_model_rates.1.model invalid', 'segment_model_rates.2.rate required'])
+    expect((await call('PATCH', '/groups/1', { segment_model_rates: [{ segment_id: 3, model: ' gpt-4o ', rate: '0.6' }] })).status).toBe(200)
+    const row = ((await call('GET', '/segments/3/groups')).body.data as Array<{ group: { id: number }; model_rates: unknown[] }>).find((r) => r.group.id === 1)
+    expect(row?.model_rates).toEqual([{ model: 'gpt-4o', rate: '0.6' }])
+    expect((await call('PATCH', '/groups/1', { segment_model_rates: [{ segment_id: 3, model: 'gpt-4o', rate: null }] })).status).toBe(200)
+  })
+})
+
 describe('the user groups a caller is in, in the mock', () => {
   it('are not his to change the terms of, unless he may act on himself', async () => {
     await call('POST', '/segments/2/members', { user_ids: [9] })
     const pricer = await signIn('pricer@example.com')
     const a = await call('PATCH', '/groups/2', { segment_rates: [{ segment_id: 2, rate: '0.1' }] }, pricer)
     expect([a.status, a.body.error.code]).toEqual([409, 'conflict'])
+    const b = await call('PATCH', '/groups/2', { segment_model_rates: [{ segment_id: 2, model: 'gpt-4o', rate: '0.1' }] }, pricer)
+    expect([b.status, b.body.error.code]).toEqual([409, 'conflict'])
     expect((await call('PATCH', '/groups/2', { segment_rates: [{ segment_id: 3, rate: null }] }, pricer)).status).toBe(200)
     await call('POST', '/segments/1/members', { user_ids: [9] })
   })

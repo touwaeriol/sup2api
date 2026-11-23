@@ -2,7 +2,7 @@
 import { watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '@sub2api/host'
-import { SHint, SLink, SStatusBadge, useTabbedFormPart } from '@sub2api/ui'
+import { SHint, SLink, SStatusBadge } from '@sub2api/ui'
 import type { Group } from '@/api/types'
 import type { SegmentGroupSetting } from '@/api/pricing'
 import { fetchAllPages } from '@/composables/lookups'
@@ -11,8 +11,8 @@ import GroupVisibilityBadge from './GroupVisibilityBadge.vue'
 import SegmentModelRates from './SegmentModelRates.vue'
 import { blankGroupSetting } from './accessRateDrafts'
 import { rateText } from './pricingFormat'
+import { useAccessModelRates } from './useAccessModelRates'
 import { useAccessRateDrafts } from './useAccessRateDrafts'
-import { useModelRateDrafts } from './useModelRateDrafts'
 
 // What a user group ("segment": a named one, or the personal one of a user)
 // gets in every account group: whether it may use a private one, its rate
@@ -33,11 +33,7 @@ async function fetchSettings(): Promise<SegmentGroupSetting[]> {
 }
 
 const groups = useAccessRateDrafts({ side: 'group', fetch: fetchSettings })
-const modelRates = useModelRateDrafts({
-  far: 'group_id',
-  saved: () => groups.saved.value.flatMap((s) => s.model_rates.map((r) => ({ far: s.group.id, ...r }))),
-  farName: (id) => groups.saved.value.find((s) => s.group.id === id)?.group.name ?? `#${id}`
-})
+const modelRates = useAccessModelRates(groups, 'group', props.tab, () => !!props.editable)
 const { rows, loading, error, refresh, change } = groups
 watch(
   () => props.segmentId,
@@ -46,19 +42,6 @@ watch(
     return groups.load()
   },
   { immediate: true }
-)
-
-useTabbedFormPart(
-  {
-    tab: props.tab,
-    // Both run, so each table marks what is wrong.
-    check: () => [groups.check(), modelRates.check()].every(Boolean),
-    body: () => ({ ...groups.body(), ...modelRates.body() }),
-    dirty: () => groups.dirty.value || modelRates.dirty.value,
-    fields: [...groups.fields, modelRates.field],
-    applyErrors: (errors) => [groups.applyErrors(errors), modelRates.applyErrors(errors)]
-  },
-  () => !!props.editable
 )
 </script>
 
