@@ -1516,30 +1516,6 @@ export type ManifestGrant = true | string[]
  */
 export type NewPermissionRoles = Record<string, Record<string, ManifestGrant>>
 
-/** The answer of POST …/consent. */
-export interface ConsentResult {
-  /** The grants this consent held back for a super admin's review (D2). */
-  withheld?: PluginRoleGrant[]
-}
-
-/** The body of POST …/consent. */
-export interface ConsentRequest {
-  grants: Array<{ permission: string; scope?: unknown }>
-  denied: string[]
-  new_permission_roles: NewPermissionRoles
-}
-
-/** The consent an install carries (upload, install-from-market): what was approved, for the package reviewed. */
-export interface InstallConsent extends ConsentRequest {
-  package_sha256: string
-}
-
-/** The answer of an install carrying a consent. */
-export interface ConsentedInstall {
-  review: PluginReview
-  consent: ConsentResult
-}
-
 export interface RolloutNode {
   node_id: string
   boot_id: string

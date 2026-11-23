@@ -1,7 +1,7 @@
-// Mock handlers: plugins (list, detail, review/consent, lifecycle, rollouts,
-// grants, settings, resources, egress, jobs, events) and the plugin market.
-// /ui/plugins and /p/<key>/... live in pluginui.ts; publishers are not here.
-import { createHash } from 'node:crypto'
+// Mock handlers: plugins (list, detail, lifecycle, rollouts, grants, settings,
+// resources, egress, jobs, events) and the plugin market. Reviews, consents
+// and installs live in pluginConsent.ts, /ui/plugins and /p/<key>/... in
+// pluginui.ts; publishers are not here.
 import { fail, noContent, now, on, paginate, type MockRequest } from './router'
 import { caller, hasPerm, stepUp, type Identity } from './core'
 import { addRoleKeys, bumpAuthz, managesRole } from './roles'
@@ -10,7 +10,7 @@ import { pluginAccountCount, uninstallPluginAccounts } from './accounts'
 import { invalid } from './common'
 import { mailerSettings } from './mailer'
 
-type Any = Record<string, any>
+export type Any = Record<string, any>
 
 /** Version of the mock core, reported as host_version by GET /market/plugins. */
 export const HOST_VERSION = '0.1.5'
@@ -156,11 +156,11 @@ function anthropicManifest(version: string): Any {
   }
 }
 
-function grant(permission: string, scope: Any | null = null, version = '0.1.0'): Any {
+export function grant(permission: string, scope: Any | null = null, version = '0.1.0'): Any {
   return { permission, scope, status: 'active', plugin_version: version, granted_by: 1, granted_by_email: 'admin@example.com', granted_at: now(-86400 * 3) }
 }
 
-const plugins = new Map<string, MockPlugin>()
+export const plugins = new Map<string, MockPlugin>()
 
 plugins.set('guard', {
   key: 'guard',
@@ -402,7 +402,7 @@ plugins.set('videogen', {
 // ------------------------------------------------------------------ reviews
 
 /** An item of review.diff (review.go DiffItem). */
-const diffItem = (id: string, risk: string) => ({ id, risk })
+export const diffItem = (id: string, risk: string) => ({ id, risk })
 
 // The guard's user permissions as the catalog has them (resources.ts plugin.guard):
 // local keys, defaults as canonical suffixes ("" every row), as the review sends them.
@@ -449,7 +449,7 @@ function guardUserPermissions(upgrade: boolean): Any {
   }
 }
 
-function guardReview(version: string, diff?: Any): Any {
+export function guardReview(version: string, diff?: Any): Any {
   return {
     plugin_key: 'guard',
     version,
@@ -645,7 +645,7 @@ function denial(who: Identity, role: Any, risk: string): string {
  * the removed rows' holders, the revived and renamed rows' cell grants and
  * the inherited role grants.
  */
-function forViewer(r: Any, who: Identity): Any {
+export function forViewer(r: Any, who: Identity): Any {
   const perms: Any[] = r.user_permissions ?? []
   if (!perms.length) return r
   const upgrade = !!r.diff
@@ -682,7 +682,7 @@ function forViewer(r: Any, who: Identity): Any {
  * against the viewer's review; returns the error, or the grants held for
  * review (the defaults of cells the viewer may not name, overridden or not).
  */
-function settleRoleGrants(r: Any, who: Identity, overrides: Any): { error: Any } | { withheld: Any[] } {
+export function settleRoleGrants(r: Any, who: Identity, overrides: Any): { error: Any } | { withheld: Any[] } {
   const v = forViewer(r, who)
   for (const [local, roles] of Object.entries<Any>(overrides ?? {})) {
     const p = v.user_permissions?.find((x: Any) => x.key === local && x.new && !x.revived)
@@ -700,7 +700,7 @@ function settleRoleGrants(r: Any, who: Identity, overrides: Any): { error: Any }
   return { withheld: (v.new_role_grants ?? []).filter((g: Any) => g.withheld) }
 }
 
-const reviews = new Map<string, Any>()
+export const reviews = new Map<string, Any>()
 // guard: a first install (as after an uninstall) and the pending 0.2.0 upgrade.
 reviews.set('guard@0.1.0', guardReview('0.1.0'))
 // 0.2.0 asks for more tables and privileges than the db.core_read grant of 0.1.0 holds: a wider scope.
@@ -790,7 +790,7 @@ const market: Record<number, Any[]> = {
   ]
 }
 
-function reviewFor(key: string, version: string): Any {
+export function reviewFor(key: string, version: string): Any {
   const existing = reviews.get(`${key}@${version}`)
   if (existing) return existing
   let r: Any
@@ -807,7 +807,7 @@ function reviewFor(key: string, version: string): Any {
 }
 
 /** Registers an uploaded / downloaded version and returns its review. */
-function stageVersion(review: Any): Any {
+export function stageVersion(review: Any): Any {
   const key = review.plugin_key
   let p = plugins.get(key)
   if (!p) {
@@ -835,34 +835,6 @@ function stageVersion(review: Any): Any {
   else p.versions.push({ version: review.version, consent_status: 'pending' })
   reviews.set(`${key}@${review.version}`, review)
   return review
-}
-
-/** The sha256 of a version's package (made up, the same for every download). */
-const packageSha = (r: Any) => createHash('sha256').update(`${r.plugin_key}@${r.version}`).digest('hex')
-
-/** A review as served: the package it describes and, for an upgrade, the version installed now. */
-function served(r: Any, who: Identity): Any {
-  const active = plugins.get(r.plugin_key)?.active_version
-  const from = active && active !== r.version ? { upgrade_from: active } : {}
-  return forViewer({ ...r, package_sha256: packageSha(r), ...from }, who)
-}
-
-/** A review of a package nothing was registered for. */
-const preInstallReview = (r: Any, who: Identity) => ({ ...served(r, who), consent_status: '' })
-
-/** Registers a version and approves it with the consent; a refused consent leaves nothing registered. */
-function installConsented(r: Any, consent: Any, who: Identity): Any {
-  if (consent.package_sha256 !== packageSha(r)) return fail(409, 'package_changed', 'the package differs from the one reviewed; review it again')
-  const before = plugins.get(r.plugin_key)
-  const hadVersion = !!before?.versions.some((v) => v.version === r.version)
-  stageVersion(r)
-  const res = consentTo(r.plugin_key, r.version, consent, who)
-  if (res?.__status) {
-    if (!before) plugins.delete(r.plugin_key)
-    else if (!hadVersion) before.versions = before.versions.filter((v) => v.version !== r.version)
-    return res
-  }
-  return { review: { ...served(r, who), consent_status: 'approved' }, consent: { withheld: res.withheld } }
 }
 
 // ------------------------------------------------------------------ rollouts
@@ -943,7 +915,7 @@ function startRollout(p: MockPlugin, action: MockRollout['action'], target: stri
 // ------------------------------------------------------------------ views
 
 /** The role grants a consent held back for a super admin's review (D2), by plugin, each with its version. */
-const reviewQueue = new Map<string, Any[]>()
+export const reviewQueue = new Map<string, Any[]>()
 
 function summary(p: MockPlugin): Any {
   const running = p.status === 'enabled' || p.status === 'upgrading'
@@ -1045,11 +1017,11 @@ function detailOf(p: MockPlugin): Any {
   }
 }
 
-function find(key: string): MockPlugin | undefined {
+export function find(key: string): MockPlugin | undefined {
   return plugins.get(key)
 }
 
-const notFound = (key: string) => fail(404, 'not_found', `plugin ${key} not found`)
+export const notFound = (key: string) => fail(404, 'not_found', `plugin ${key} not found`)
 
 // ------------------------------------------------------------------ routes
 
@@ -1071,32 +1043,6 @@ on('POST', '/plugins/retired-keys/:key/release', (req) => {
   retiredKeys.delete(r.key)
   return { accounts_deleted: body.purge_accounts ? r.accounts : 0, kv_deleted: body.purge ? 1 : 0 }
 })
-
-// The package is not read: an uploaded file is always guard 0.1.1.
-const uploadedReview = () => guardReview('0.1.1', { added: [], widened: [diffItem('gateway.hook', 'high')], removed: [] })
-const marketReview = (req: MockRequest) => {
-  const { key, version } = req.body || {}
-  return key && version ? reviewFor(key, version) : null
-}
-const needKeyVersion = () => fail(400, 'invalid_argument', 'key and version are required')
-
-// Reviews before anything is registered (no rows, no audit).
-on('POST', '/plugins/review-upload', (req) => preInstallReview(uploadedReview(), caller(req)))
-on('POST', '/plugins/review-from-market', (req) => {
-  const r = marketReview(req)
-  return r ? preInstallReview(r, caller(req)) : needKeyVersion()
-})
-
-// With a consent an install registers and approves at once (the consent's step-up); without, it only registers.
-const install = (review: (req: MockRequest) => Any | null, consentOf: (req: MockRequest) => Any) => (req: MockRequest) => {
-  const r = review(req)
-  if (!r) return needKeyVersion()
-  const consent = consentOf(req)
-  if (!consent) return stepUp('plugin.install', () => served(stageVersion(r), caller(req)))(req)
-  return stepUp('plugin.grant', () => installConsented(r, consent, caller(req)))(req)
-}
-on('POST', '/plugins/upload', install(uploadedReview, (req) => (req.body?.consent ? JSON.parse(req.body.consent) : null)))
-on('POST', '/plugins/install-from-market', install(marketReview, (req) => req.body?.consent ?? null))
 
 on('GET', '/plugins/:key', (req) => {
   const p = find(req.params.key)
@@ -1128,35 +1074,6 @@ on('GET', '/plugins/:key/database', (req) => {
     migrations: guard ? guardMigrations(guard).map((m) => ({ ...m, applied_at: now(-86400 * 3) })) : []
   }
 })
-
-on('GET', '/plugins/:key/versions/:version/review', (req) => {
-  const r = reviews.get(`${req.params.key}@${req.params.version}`)
-  return r ? served(r, caller(req)) : fail(404, 'not_found', 'no review for this version')
-})
-
-on('POST', '/plugins/:key/versions/:version/consent', stepUp('plugin.grant', (req) => consentTo(req.params.key, req.params.version, req.body, caller(req))))
-
-/** Records a consent on a registered version: the grants chosen, the role grants checked against the viewer. */
-function consentTo(key: string, version: string, body: Any, who: Identity): Any {
-  const p = find(key)
-  if (!p) return notFound(key)
-  const grants: Array<{ permission: string; scope?: Any }> = body?.grants || []
-  const v = p.versions.find((x) => x.version === version)
-  if (!v) return fail(404, 'not_found', 'version not found')
-  const settled = settleRoleGrants(reviews.get(`${p.key}@${v.version}`) ?? {}, who, body?.new_permission_roles)
-  if ('error' in settled) return settled.error
-  v.consent_status = 'approved'
-  p.grants = grants.map((g) => grant(g.permission, g.scope ?? null, version))
-  // What the consent held back waits on the plugin for a super admin (role_grants_to_review).
-  const queued = (reviewQueue.get(p.key) ?? []).filter((g) => g.version !== v.version)
-  const held = settled.withheld.map((g: Any) => ({ ...g, version: v.version }))
-  if (queued.length || held.length) reviewQueue.set(p.key, [...queued, ...held])
-  else reviewQueue.delete(p.key)
-  bumpAuthz()
-  if (p.status === 'awaiting_consent') p.status = 'installed'
-  if (!p.active_version) p.desired_version = version
-  return { ok: true, withheld: settled.withheld }
-}
 
 /** The review queue of a version: confirmed (written to the roles, step-up) or rejected whole. */
 function settleQueue(req: MockRequest, confirm: boolean) {

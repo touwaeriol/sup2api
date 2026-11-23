@@ -18,12 +18,14 @@ const text = computed(() => {
 
 <template>
   <SCard>
-    <SEmpty v-if="failure?.kind === 'upload_missing'" icon="upload" :text="t('plugins.consent.uploadMissing')" data-testid="consent-unavailable">
-      <SButton size="sm" variant="primary" @click="$emit('back')">{{ t('plugins.consent.backToList') }}</SButton>
+    <SEmpty v-if="failure?.kind === 'upload_missing'" icon="upload" :text="t('pluginInstall.uploadMissing')" data-testid="consent-unavailable">
+      <SButton size="sm" variant="primary" @click="$emit('back')">{{ t('pluginInstall.backToList') }}</SButton>
     </SEmpty>
     <SEmpty v-else icon="warning" :text="text" data-testid="consent-unavailable">
       <SHint v-if="failure?.kind === 'error' && failure.message" size="xs" tone="danger">{{ failure.message }}</SHint>
       <SButton size="sm" @click="$emit('retry')">{{ t('common.refresh') }}</SButton>
+      <!-- An install refused on review (a bad signature, an incompatible core) is left the way it came. -->
+      <SButton v-if="source.kind !== 'registered'" size="sm" @click="$emit('back')">{{ t('common.back') }}</SButton>
     </SEmpty>
   </SCard>
 </template>

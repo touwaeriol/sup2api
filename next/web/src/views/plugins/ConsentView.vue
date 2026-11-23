@@ -3,7 +3,8 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { onBeforeRouteLeave } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { SAlert, SBadge, SButton, SCard, SHint, SIcon, SLink, SPageHeader, SSpinner, toast } from '@sub2api/ui'
-import type { ConsentRequest, DatabaseAccess, HostPermissionReview, PluginRoleGrant, ReviewDiffItem, ReviewUserPermission } from '@/api/types'
+import type { ConsentRequest } from '@/api/pluginConsent'
+import type { DatabaseAccess, HostPermissionReview, PluginRoleGrant, ReviewDiffItem, ReviewUserPermission } from '@/api/types'
 import { lt } from '@/i18n'
 import { useAuthStore } from '@/stores/auth'
 import { useConsentTarget } from './consent/useConsentTarget'
@@ -135,7 +136,7 @@ function consentRequest(): ConsentRequest {
 
 function submit() {
   if (!review.value || !canSubmit.value) return
-  if (missingRequired.value.length) {
+  if (missingRequired.value.length && review.value.consent_status !== 'approved') {
     showMissing.value = true
     toast(t('plugins.consent.missingRequired', { list: missingRequired.value.map((x) => hpLabel(x.id)).join(', ') }), 'error')
     return
@@ -187,7 +188,7 @@ onMounted(load)
           </div>
         </div>
       </SCard>
-      <InstallSteps v-if="!source.reject" :upgrade="isUpgrade" :version="review.version" :from="review.upgrade_from" />
+      <InstallSteps v-if="!source.reject" :upgrade="isUpgrade" :version="review.version" :from="review.upgrade_from" :approved="review.consent_status === 'approved'" />
 
       <!-- warnings -->
       <SAlert v-if="!review.host_compat_ok" tone="danger" icon="x" :title="t('plugins.consent.incompatibleTitle')" class="mt-4">
@@ -275,7 +276,7 @@ onMounted(load)
         </p>
         <template #actions>
           <SButton v-if="source.reject" variant="danger" :loading="busy === 'reject'" :disabled="!!busy" @click="reject">{{ t('plugins.consent.reject') }}</SButton>
-          <SButton v-else :disabled="!!busy" data-testid="consent-cancel" @click="cancel">{{ isUpgrade ? t('plugins.consent.cancelUpgrade') : t('plugins.consent.cancelInstall') }}</SButton>
+          <SButton v-else :disabled="!!busy" data-testid="consent-cancel" @click="cancel">{{ isUpgrade ? t('pluginInstall.cancelUpgrade') : t('pluginInstall.cancelInstall') }}</SButton>
           <SButton variant="primary" :loading="busy === 'approve'" :disabled="!canSubmit || !!busy" icon="shield" data-testid="consent-approve" @click="submit">
             {{ isUpgrade ? t('plugins.consent.approveUpgrade') : t('plugins.consent.approve') }}
           </SButton>

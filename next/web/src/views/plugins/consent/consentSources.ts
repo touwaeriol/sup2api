@@ -4,7 +4,8 @@
 // registered only with its consent, so cancelling it leaves nothing behind.
 import type { RouteLocationNormalizedLoaded } from 'vue-router'
 import { api } from '@sub2api/host'
-import type { ConsentRequest, ConsentResult, ConsentedInstall, InstallConsent, PluginReview } from '@/api/types'
+import type { PluginReview } from '@/api/types'
+import type { ConsentRequest, ConsentResult, ConsentedInstall, InstallConsent } from '@/api/pluginConsent'
 import { MARKET_INSTALL_PATH, UPLOAD_INSTALL_PATH } from './paths'
 import { pendingUpload } from './pendingUpload'
 

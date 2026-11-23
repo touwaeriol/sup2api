@@ -105,9 +105,9 @@ func (t *TrustStore) Verify(ctx context.Context, q *gorm.DB, p *Package) (*Verif
 }
 
 // VerifyReadOnly is Verify registering nothing, for the install preview's
-// read-only transaction: an official publisher not registered yet has no
-// PublisherID, and the checks Verify makes of what it registers are made of
-// what is registered.
+// read-only transaction: the checks Verify makes of what it registers are
+// made of what is registered (lookupOfficial: an official publisher not
+// registered yet has PublisherID 0).
 func (t *TrustStore) VerifyReadOnly(ctx context.Context, q *gorm.DB, p *Package) (*Verification, error) {
 	return t.verify(ctx, q, p, verifyMode{validity: true})
 }
@@ -262,18 +262,20 @@ func (t *TrustStore) registerOfficial(ctx context.Context, q *gorm.DB, name, key
 }
 
 // lookupOfficial is registerOfficial for a read-only transaction: it reads
-// the publisher name and the key keyID as registered, if they are (a
-// publisher not registered yet has a nil id), and checks them as
-// registerOfficial does.
+// the publisher name and the key keyID as registered and checks them as
+// registerOfficial does. A publisher not registered yet gets id 0, which no
+// row holds: like the id registering it would give, it owns no plugin and
+// no retired key.
 func lookupOfficial(g *gorm.DB, name, keyID string) (*int64, error) {
+	var id int64
 	pub, err := activePublisher(g, name)
-	if store.IsNoRows(err) {
-		return nil, checkOfficialKey(g, 0, keyID)
-	}
-	if err != nil {
+	switch {
+	case err == nil:
+		id = pub.ID
+	case !store.IsNoRows(err):
 		return nil, err
 	}
-	return &pub.ID, checkOfficialKey(g, pub.ID, keyID)
+	return &id, checkOfficialKey(g, id, keyID)
 }
 
 // activePublisher reads the publisher name, revokedError when it is

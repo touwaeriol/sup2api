@@ -105,9 +105,17 @@ describe('consent page sources', () => {
     it('reviews before anything is installed and says so above the steps', async () => {
       const w = await shown()
       expect(mocks.post).toHaveBeenCalledWith('/plugins/review-from-market', { source_id: 2, key: 'bar', version: '1.0.0' })
-      expect(w.get('[data-testid="install-steps"]').text()).toContain(tt('plugins.consent.steps.install.note'))
+      expect(w.get('[data-testid="install-steps"]').text()).toContain(tt('pluginInstall.steps.install.note'))
       expect(w.get('[data-testid="consent-approve"]').text()).toBe(tt('plugins.consent.approve'))
       expect(w.text()).not.toContain(tt('plugins.consent.reject'))
+    })
+
+    it('a review the server refuses offers the way back', async () => {
+      mocks.post.mockRejectedValue({ status: 400, code: 'invalid_argument', message: 'bad signature', details: {} })
+      const w = await shown()
+      expect(w.find('[data-testid="consent-approve"]').exists()).toBe(false)
+      await w.findAll('[data-testid="consent-unavailable"] button').find((b) => b.text() === tt('common.back'))!.trigger('click')
+      expect(mocks.push).toHaveBeenCalledWith('/market')
     })
 
     it('cancelling calls nothing and goes back to the market', async () => {
@@ -126,6 +134,16 @@ describe('consent page sources', () => {
       expect(mocks.push).toHaveBeenCalledWith('/plugins/bar/rollout')
     })
 
+    it('a package approved before is not consented again: its rollout starts', async () => {
+      mocks.post.mockImplementation(async (path: string) => (path.endsWith('review-from-market') ? review({ consent_status: 'approved' }) : {}))
+      const w = await shown()
+      expect(w.get('[data-testid="install-steps"]').text()).toContain(tt('pluginInstall.approvedNote'))
+      await click(w, 'consent-approve')
+      expect(mocks.post).not.toHaveBeenCalledWith('/plugins/install-from-market', expect.anything())
+      expect(mocks.post).toHaveBeenCalledWith('/plugins/bar/enable', undefined)
+      expect(mocks.push).toHaveBeenCalledWith('/plugins/bar/rollout')
+    })
+
     it('a changed package is reviewed again instead of installed (409 package_changed)', async () => {
       const w = await shown()
       mocks.post.mockImplementation(async (path: string) => {
@@ -133,7 +151,7 @@ describe('consent page sources', () => {
         return review()
       })
       await click(w, 'consent-approve')
-      expect(toastState.items.map((x) => x.message)).toContain(tt('plugins.consent.packageChanged'))
+      expect(toastState.items.map((x) => x.message)).toContain(tt('pluginInstall.packageChanged'))
       expect(mocks.post.mock.calls.filter(([p]) => p === '/plugins/review-from-market')).toHaveLength(2)
       expect(mocks.push).not.toHaveBeenCalled()
     })
@@ -162,7 +180,7 @@ describe('consent page sources', () => {
 
     it('without the chosen file (a reload) asks for it again and calls nothing', async () => {
       const w = await shown()
-      expect(w.get('[data-testid="consent-unavailable"]').text()).toContain(tt('plugins.consent.uploadMissing'))
+      expect(w.get('[data-testid="consent-unavailable"]').text()).toContain(tt('pluginInstall.uploadMissing'))
       expect(mocks.upload).not.toHaveBeenCalled()
       await w.get('[data-testid="consent-unavailable"] button').trigger('click')
       expect(mocks.push).toHaveBeenCalledWith('/plugins')
@@ -175,8 +193,8 @@ describe('consent page sources', () => {
       plugin('enabled', '0.1.0')
       const w = await shown()
       expect(formOf(mocks.upload.mock.calls[0])).toEqual({ file })
-      expect(w.get('[data-testid="install-steps"]').text()).toContain(tt('plugins.consent.steps.upgrade.note', { from: '0.1.0', version: '0.2.0' }))
-      expect(w.get('[data-testid="consent-cancel"]').text()).toBe(tt('plugins.consent.cancelUpgrade'))
+      expect(w.get('[data-testid="install-steps"]').text()).toContain(tt('pluginInstall.steps.upgrade.note', { from: '0.1.0', version: '0.2.0' }))
+      expect(w.get('[data-testid="consent-cancel"]').text()).toBe(tt('pluginInstall.cancelUpgrade'))
       await click(w, 'consent-approve')
       expect(mocks.upload.mock.calls[1][0]).toBe('/plugins/upload')
       expect(JSON.parse(String(formOf(mocks.upload.mock.calls[1]).consent))).toEqual({ ...CONSENT, package_sha256: SHA })

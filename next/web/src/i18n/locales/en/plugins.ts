@@ -187,13 +187,6 @@ export default {
     titleUpgrade: 'Upgrade plugin',
     notFound: 'Review information for this version is not available. Upload the package again or install it from the market.',
     packageGone: 'No reachable node holds the package of version {version} (the nodes holding it may be down, or it was cleaned up after a failed upgrade), so it cannot be reviewed or approved. Bring a node that holds it back online, upload the package again, or install it from the market.',
-    uploadMissing: 'The plugin package is no longer on this page (it was reloaded, for example). Go back to the plugin list and choose the file again.',
-    backToList: 'Back to plugins',
-    packageChanged: 'The plugin package has changed. Please review it again.',
-    steps: {
-      install: { consent: 'Approve permissions', install: 'Install', start: 'Enable', note: 'Nothing is installed yet. The plugin is installed and enabled only once you approve; cancelling leaves nothing behind.' },
-      upgrade: { consent: 'Approve permissions', install: 'Install new version', start: 'Upgrade node by node', note: 'Nothing has changed yet: the running v{from} keeps serving. v{version} is installed and the upgrade starts only once you approve; cancelling leaves nothing behind.' }
-    },
     signature: 'Signature',
     hostCompat: 'Host compat',
     incompatibleTitle: 'This plugin is not compatible with this host',
@@ -245,8 +238,6 @@ export default {
     stillRequired: '{n} required permission(s) still need to be ticked.',
     approve: 'Approve & install',
     approveUpgrade: 'Approve & upgrade',
-    cancelInstall: 'Cancel install',
-    cancelUpgrade: 'Cancel upgrade',
     approved: 'Permissions for {name} v{version} approved.',
     reject: 'Reject',
     rejectTitle: 'Reject this version',

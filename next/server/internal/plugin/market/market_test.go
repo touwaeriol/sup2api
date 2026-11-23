@@ -20,12 +20,9 @@ type fakeInstaller struct{}
 
 func (fakeInstaller) HostVersion() string { return "0.1.0" }
 
-func TestMarket(t *testing.T) {
-	db := testutil.DB(t)
-	ctx := context.Background()
-	mk := pkgtest.NewKey("market")
-	pkgBytes := pkgtest.Build(pkgtest.Minimal("tool", "1.1.0", "acme"), pkgtest.NewKey("acme-1"))
-
+// testIndex is the index of tool the market test serves, signed with mk:
+// 1.1.0 is pkgBytes, 1.0.0 fails its sha256, 2.0.0 needs a newer host.
+func testIndex(mk pkgtest.Key, pkgBytes []byte) (raw, sig []byte) {
 	idx := Index{Version: 1, Plugins: []IndexPlugin{{
 		Key: "tool", Name: core.LocalizedText{"en": "Tool"}, Publisher: "acme",
 		Versions: []IndexVersion{
@@ -34,55 +31,64 @@ func TestMarket(t *testing.T) {
 			{Version: "2.0.0", URL: "pkgs/tool-2.0.0.s2plugin", SHA256: "00", Size: 1, HostCompat: ">=0.2.0"},
 		},
 	}}}
-	raw, _ := json.Marshal(idx)
-	sig := SignIndex(raw, mk.Priv)
-	hits := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/m/index.json":
-			hits++
+	raw, _ = json.Marshal(idx)
+	return raw, SignIndex(raw, mk.Priv)
+}
+
+// serveIndex serves the index raw (signature sig) at /m/ with the packages
+// of tool; hits counts the index downloads.
+func serveIndex(t *testing.T, raw, sig, pkgBytes []byte) (srv *httptest.Server, hits *int) {
+	hits = new(int)
+	files := map[string][]byte{"/m/index.json.sig": sig, "/m/pkgs/tool-1.1.0.s2plugin": pkgBytes, "/m/pkgs/tool-1.0.0.s2plugin": []byte("x")}
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/m/index.json" {
+			*hits++
 			_, _ = w.Write(raw)
-		case "/m/index.json.sig":
-			_, _ = w.Write(sig)
-		case "/m/pkgs/tool-1.1.0.s2plugin":
-			_, _ = w.Write(pkgBytes)
-		case "/m/pkgs/tool-1.0.0.s2plugin":
-			_, _ = w.Write([]byte("x"))
-		default:
+		} else if body, ok := files[r.URL.Path]; ok {
+			_, _ = w.Write(body)
+		} else {
 			http.NotFound(w, r)
 		}
 	}))
-	defer srv.Close()
+	t.Cleanup(srv.Close)
+	return srv, hits
+}
 
-	s := New(db, fakeInstaller{}, srv.Client(), 1<<20)
-	seed := fmt.Sprintf(`[{"name":"official","url":%q,"public_key":%q}]`, srv.URL+"/m/", mk.PubB64())
-	if err := s.SeedSources(ctx, seed); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.SeedSources(ctx, seed); err != nil { // idempotent
-		t.Fatal(err)
+// seedOfficial seeds the source official at url, twice (it is idempotent),
+// and returns its id.
+func seedOfficial(t *testing.T, s *Service, url string, mk pkgtest.Key) int64 {
+	ctx := context.Background()
+	seed := fmt.Sprintf(`[{"name":"official","url":%q,"public_key":%q}]`, url, mk.PubB64())
+	for range 2 {
+		if err := s.SeedSources(ctx, seed); err != nil {
+			t.Fatal(err)
+		}
 	}
 	srcs, err := s.ListSources(ctx)
 	if err != nil || len(srcs) != 1 {
 		t.Fatalf("sources: %v %v", err, srcs)
 	}
-	list, err := s.ListPlugins(ctx, srcs[0].ID, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(list) != 1 || list[0].LatestVersion != "1.1.0" || len(list[0].Versions) != 3 || list[0].Versions[0].Compatible {
-		t.Fatalf("list = %+v", list)
-	}
-	// Cached.
-	if _, err := s.ListPlugins(ctx, 0, false); err != nil || hits != 1 {
-		t.Fatalf("cache: hits=%d err=%v", hits, err)
-	}
+	return srcs[0].ID
+}
 
-	checkDownload(t, s, srcs[0].ID, srv.URL+"/m/", pkgBytes)
-
+func TestMarket(t *testing.T) {
+	ctx := context.Background()
+	mk := pkgtest.NewKey("market")
+	pkgBytes := pkgtest.Build(pkgtest.Minimal("tool", "1.1.0", "acme"), pkgtest.NewKey("acme-1"))
+	raw, sig := testIndex(mk, pkgBytes)
+	srv, hits := serveIndex(t, raw, sig, pkgBytes)
+	s := New(testutil.DB(t), fakeInstaller{}, srv.Client(), 1<<20)
+	src := seedOfficial(t, s, srv.URL+"/m/", mk)
+	list, err := s.ListPlugins(ctx, src, false)
+	if err != nil || len(list) != 1 || list[0].LatestVersion != "1.1.0" || len(list[0].Versions) != 3 || list[0].Versions[0].Compatible {
+		t.Fatalf("list = %+v %v", list, err)
+	}
+	if _, err := s.ListPlugins(ctx, 0, false); err != nil || *hits != 1 {
+		t.Fatalf("cache: hits=%d err=%v", *hits, err)
+	}
+	checkDownload(t, s, src, srv.URL+"/m/", pkgBytes)
 	// Tampered index is rejected.
-	other := pkgtest.NewKey("other")
-	if _, err := VerifyIndex(raw, SignIndex(raw, other.Priv), mk.PubB64()); err == nil {
+	if _, err := VerifyIndex(raw, SignIndex(raw, pkgtest.NewKey("other").Priv), mk.PubB64()); err == nil {
 		t.Fatal("wrong key accepted")
 	}
 	if _, err := VerifyIndex(append(raw, ' '), sig, mk.PubB64()); err == nil {

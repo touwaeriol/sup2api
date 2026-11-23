@@ -108,23 +108,24 @@ func TestReviewPackageUpgrade(t *testing.T) {
 	}
 }
 
-// The preview fails as the upload would: another package of an uploaded
-// version, another publisher's key, a retired key.
+// The preview fails as the upload would: a retired key (checked before the
+// official publisher is registered, which the upload would register with
+// an id no retirement holds), another package of an uploaded version.
 func TestReviewPackageFailsAsUpload(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
-	installGuard(t, e)
-	changed := pkgtest.Guard("guard", "0.1.0", "sub2api")
-	changed.Description = manifest.LocalizedText{"en": "changed"}
-	if _, err := e.svc.ReviewPackage(ctx, pkgtest.Build(changed, e.root), e.admin, UploadOptions{}); core.AsError(err).Code != "conflict" {
-		t.Fatalf("other content: %v", err)
-	}
 	if _, err := e.db.SQL.ExecContext(ctx, `INSERT INTO plugin_key_retirements (plugin_key, publisher_id) VALUES ('tool', NULL)`); err != nil {
 		t.Fatal(err)
 	}
 	tool := pkgtest.Build(pkgtest.Guard("tool", "1.0.0", "sub2api"), e.root)
 	if _, err := e.svc.ReviewPackage(ctx, tool, e.admin, UploadOptions{}); core.AsError(err).Code != ErrKeyRetired.Code {
 		t.Fatalf("retired key: %v", err)
+	}
+	installGuard(t, e)
+	changed := pkgtest.Guard("guard", "0.1.0", "sub2api")
+	changed.Description = manifest.LocalizedText{"en": "changed"}
+	if _, err := e.svc.ReviewPackage(ctx, pkgtest.Build(changed, e.root), e.admin, UploadOptions{}); core.AsError(err).Code != "conflict" {
+		t.Fatalf("other content: %v", err)
 	}
 }
 
@@ -208,4 +209,16 @@ func undoAudits(t *testing.T, db *store.DB) int {
 		t.Fatal(err)
 	}
 	return n
+}
+
+// The preview of a package already stored and approved says so: installing
+// it again takes no consent (the console starts the rollout directly).
+func TestReviewPackageReportsApproved(t *testing.T) {
+	e := newEnv(t)
+	installGuard(t, e)
+	data := pkgtest.Build(pkgtest.Guard("guard", "0.1.0", "sub2api"), e.root)
+	r, err := e.svc.ReviewPackage(context.Background(), data, e.admin, UploadOptions{Source: "upload"})
+	if err != nil || r.ConsentStatus != ConsentApproved {
+		t.Fatalf("review = %+v, %v", r, err)
+	}
 }

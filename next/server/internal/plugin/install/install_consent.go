@@ -78,20 +78,25 @@ func (s *Service) consentUpload(ctx context.Context, r *Review, rec *uploadRecor
 }
 
 // undoUpload removes what the upload of key@version recorded (rec) when it
-// inserted the version row: that row and, when the upload created the
-// plugin row, the plugin with its permissions (removeAbandoned, as Reject).
-// A version or plugin that existed before is left as it was. The upload's
-// audit entry stays, followed by plugin.upload.undo.
+// inserted the version row: that row while it still awaits consent and,
+// when the upload created the plugin row, the plugin with its permissions
+// (removeAbandoned, as Reject). A version or plugin that existed before is
+// left as it was. It outlives the request (WithoutCancel): a client gone,
+// or the change lock's deadline passed, during the consent must not leave
+// the version recorded. The upload's audit entry stays, followed by
+// plugin.upload.undo.
 func (s *Service) undoUpload(ctx context.Context, key, version string, rec *uploadRecord, actorID int64) error {
 	if !rec.inserted {
 		return nil
 	}
+	ctx = context.WithoutCancel(ctx)
 	return s.d.DB.Tx(ctx, func(tx *gorm.DB) error {
 		if err := lockPlugin(tx, key); err != nil {
 			return err
 		}
-		if err := versionRow(store.G(ctx, tx), key, version).Delete(&model.PluginVersion{}).Error; err != nil {
-			return err
+		res := versionRow(store.G(ctx, tx), key, version).Where("consent_status = ?", ConsentAwaiting).Delete(&model.PluginVersion{})
+		if res.Error != nil || res.RowsAffected == 0 {
+			return res.Error
 		}
 		removed := false
 		if !rec.existing {

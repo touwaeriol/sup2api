@@ -23,6 +23,7 @@ import './pluginEgress'
 import './updates'
 import './observability'
 import './plugins'
+import './pluginConsent'
 
 async function readBody(req: IncomingMessage): Promise<any> {
   const chunks: Buffer[] = []

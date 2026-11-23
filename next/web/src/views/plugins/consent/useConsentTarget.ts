@@ -7,7 +7,8 @@ import { useRoute, useRouter, type RouteLocationRaw } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { api, isApiError } from '@sub2api/host'
 import { confirm, toast } from '@sub2api/ui'
-import type { ConsentRequest, ConsentResult, PluginReview } from '@/api/types'
+import type { PluginReview } from '@/api/types'
+import type { ConsentRequest, ConsentResult } from '@/api/pluginConsent'
 import { lt } from '@/i18n'
 import { errorMessage, notifyError } from '@/utils/errors'
 import { useAuthStore } from '@/stores/auth'
@@ -34,7 +35,7 @@ function createTarget() {
     loading: ref(true),
     failure: ref<ReviewFailure | null>(null),
     busy: ref<'' | 'approve' | 'reject'>(''),
-    /** Approved, rejected or cancelled: the page goes away without asking about the matrix. */
+    /** Approved or rejected: the page goes away without asking about the matrix. */
     settled: ref(false)
   }
 }
@@ -55,10 +56,9 @@ async function load(c: Target) {
   }
 }
 
-/** Leaves the page for good: nothing it holds is kept. */
+/** Leaves a page whose consent was sent (or whose version was rejected): nothing is left to ask about. */
 function leave(c: Target, to: RouteLocationRaw) {
   c.settled.value = true
-  clearPendingUpload()
   return c.router.push(to)
 }
 
@@ -82,7 +82,7 @@ function announce(c: Target, r: PluginReview, res: ConsentResult | null | undefi
 
 async function approveFailed(c: Target, e: unknown) {
   if (isApiError(e) && e.code === 'package_changed') {
-    toast(c.t('plugins.consent.packageChanged'), 'error')
+    toast(c.t('pluginInstall.packageChanged'), 'error')
     return load(c)
   }
   // The matrix locks critical rows for a non-super caller; a refusal still says why (D3).
@@ -94,14 +94,17 @@ async function approve(c: Target, consent: ConsentRequest) {
   const r = c.review.value
   if (!r || c.busy.value) return
   c.busy.value = 'approve'
-  let res: ConsentResult
+  let res: ConsentResult | null
   try {
-    res = await c.source.approve(r, consent)
+    // The same package approved before takes no consent again (the server refuses it): only its rollout starts.
+    res = r.consent_status === 'approved' ? null : await c.source.approve(r, consent)
   } catch (e) {
     c.busy.value = ''
     return approveFailed(c, e)
   }
-  announce(c, r, res)
+  // Sent: leaving while the rollout starts no longer asks about the matrix.
+  c.settled.value = true
+  if (res) announce(c, r, res)
   await launch(c, r.plugin_key, r.version)
   c.busy.value = ''
 }
@@ -137,7 +140,7 @@ export function useConsentTarget() {
     load: () => load(c),
     approve: (consent: ConsentRequest) => approve(c, consent),
     reject: () => reject(c),
-    /** Cancelling an install calls nothing: it was never registered. */
-    cancel: () => leave(c, c.source.back)
+    /** Cancelling an install calls nothing: it was never registered (unsaved matrix edits are asked about on the way out). */
+    cancel: () => c.router.push(c.source.back)
   }
 }
