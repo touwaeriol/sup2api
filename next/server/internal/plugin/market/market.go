@@ -73,9 +73,10 @@ type IndexVersion struct {
 	HostCompat string `json:"host_compat"`
 }
 
-// Installer is the part of install.Service the market needs.
+// Installer is the part of install.Service the market needs: the host
+// version the index entries are checked against. Downloaded packages go to
+// the installer through the console API (Download).
 type Installer interface {
-	Upload(ctx context.Context, data []byte, actorID int64, opt install.UploadOptions) (*install.Review, error)
 	HostVersion() string
 }
 
@@ -440,51 +441,6 @@ func (s *Service) trustLevels(ctx context.Context) (map[string]string, error) {
 		out[p.Name] = t
 	}
 	return out, nil
-}
-
-// Install downloads a version, checks size and sha256, and hands the
-// package to the installer (signature, trust and manifest checks happen
-// there). Returns the consent review.
-func (s *Service) Install(ctx context.Context, sourceID int64, key, version string, actorID int64) (*install.Review, error) {
-	idx, src, err := s.Index(ctx, sourceID, false)
-	if err != nil {
-		return nil, err
-	}
-	entry, err := findVersion(idx, key, version)
-	if err != nil {
-		// The cached index may be stale; retry once with a fresh copy.
-		if idx, src, err = s.Index(ctx, sourceID, true); err != nil {
-			return nil, err
-		}
-		if entry, err = findVersion(idx, key, version); err != nil {
-			return nil, err
-		}
-	}
-	base, _ := indexURL(src.URL)
-	ref, err := url.Parse(entry.URL)
-	if err != nil {
-		return nil, core.ErrUnavailable.WithMessage("market entry has an invalid url")
-	}
-	dl := base.ResolveReference(ref)
-	if dl.Scheme != "http" && dl.Scheme != "https" {
-		return nil, core.ErrUnavailable.WithMessage("market entry url must be http(s)")
-	}
-	if entry.Size > s.maxBytes {
-		return nil, core.ErrInvalidArgument.WithMessage(fmt.Sprintf("package size %d exceeds the limit of %d bytes", entry.Size, s.maxBytes))
-	}
-	data, err := Fetch(ctx, s.pkg, dl.String(), s.maxBytes)
-	if err != nil {
-		return nil, err
-	}
-	if entry.Size > 0 && int64(len(data)) != entry.Size {
-		return nil, core.ErrInvalidArgument.WithMessage("downloaded package size does not match the index")
-	}
-	if !strings.EqualFold(pkg.SHA256Hex(data), entry.SHA256) {
-		return nil, core.ErrInvalidArgument.WithMessage("downloaded package sha256 does not match the index")
-	}
-	return s.inst.Upload(ctx, data, actorID, install.UploadOptions{
-		ExpectKey: key, ExpectVersion: version, Source: fmt.Sprintf("market:%d", src.ID), PackageURL: dl.String(),
-	})
 }
 
 func findVersion(idx *Index, key, version string) (*IndexVersion, error) {

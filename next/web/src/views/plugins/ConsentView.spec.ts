@@ -5,7 +5,6 @@ import { SEmpty, SHint, SIcon, toastState } from '@sub2api/ui'
 import { i18n } from '@/i18n'
 import type { PluginReview } from '@/api/types'
 import ConsentView from './ConsentView.vue'
-import { getReview, putReview } from './reviewCache'
 
 const mocks = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), push: vi.fn(), can: true, lacks: new Set<string>(), superuser: true, epoch: 0, managed: [] as object[] }))
 // An API error is anything carrying a code (the tests reject with plain objects).
@@ -17,7 +16,7 @@ vi.mock('@sub2api/host', async (original) => ({
 const leave = vi.hoisted(() => ({ guard: null as null | (() => unknown) }))
 vi.mock('vue-router', () => ({
   RouterLink: { template: '<a><slot /></a>' },
-  useRoute: () => ({ params: { key: 'demo', version: '1.2.0' } }),
+  useRoute: () => ({ path: '/plugins/demo/versions/1.2.0/consent', params: { key: 'demo', version: '1.2.0' }, query: {} }),
   useRouter: () => ({ push: mocks.push }),
   onBeforeRouteLeave: (g: () => unknown) => (leave.guard = g)
 }))
@@ -563,17 +562,7 @@ describe('plugin consent page', () => {
     expect(w.text()).toContain(i18n.global.t('plugins.consent.notFound'))
   })
 
-  it('falls back to the review kept from the upload when the server cannot give it', async () => {
-    putReview(review())
-    mocks.get.mockRejectedValue(new Error('network'))
-    const w = mountView()
-    await flushPromises()
-    expect(w.find('[data-testid="consent-approve"]').exists()).toBe(true)
-    expect(w.text()).toContain(i18n.global.t('plugins.consent.fromCache'))
-  })
-
-  it('says the package is gone rather than offering the kept review (410 package_gone)', async () => {
-    putReview(review())
+  it('says the package is gone rather than offering an approval (410 package_gone)', async () => {
     mocks.get.mockRejectedValue({ status: 410, code: 'package_gone', message: 'no reachable node holds the package of this version; bring a node that holds it back online, or upload it again', details: {} })
     for (const locale of ['zh', 'en'] as const) {
       i18n.global.locale.value = locale
@@ -583,6 +572,5 @@ describe('plugin consent page', () => {
       expect(w.find('[data-testid="consent-approve"]').exists()).toBe(false)
       w.unmount()
     }
-    expect(getReview('demo', '1.2.0')).toBeUndefined()
   })
 })

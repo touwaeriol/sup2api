@@ -1385,8 +1385,14 @@ export interface PluginReview {
   publisher: string
   trust: Trust
   signature_status: string
+  /** '' for a pre-install review (review-upload, review-from-market): nothing is registered. */
+  consent_status?: string
   host_compat_ok: boolean
   host_compat?: string
+  /** The package reviewed: an install sends it back in its consent (package_sha256). */
+  package_sha256?: string
+  /** An upgrade: the version installed now. */
+  upgrade_from?: string
   capabilities: Array<string | { id: string }>
   /** Derived from platforms[].endpoints. */
   gateway_endpoints: Array<Record<string, any>>
@@ -1509,12 +1515,6 @@ export type ManifestGrant = true | string[]
  * gets nothing, {} gives it to none.
  */
 export type NewPermissionRoles = Record<string, Record<string, ManifestGrant>>
-
-/** The answer of POST …/consent. */
-export interface ConsentResult {
-  /** The grants this consent held back for a super admin's review (D2). */
-  withheld?: PluginRoleGrant[]
-}
 
 export interface RolloutNode {
   node_id: string

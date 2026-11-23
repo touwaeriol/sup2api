@@ -23,6 +23,7 @@ import './pluginEgress'
 import './updates'
 import './observability'
 import './plugins'
+import './pluginConsent'
 
 async function readBody(req: IncomingMessage): Promise<any> {
   const chunks: Buffer[] = []
@@ -37,7 +38,20 @@ async function readBody(req: IncomingMessage): Promise<any> {
       return undefined
     }
   }
+  if (ct.includes('multipart/form-data')) return { __raw: raw.length, ...(await formFields(raw, ct)) }
   return { __raw: raw.length }
+}
+
+/** The text fields of a multipart body (a file field gives its file name). */
+async function formFields(raw: Buffer, ct: string): Promise<Record<string, string>> {
+  const out: Record<string, string> = {}
+  try {
+    const form = await new Response(new Uint8Array(raw), { headers: { 'content-type': ct } }).formData()
+    form.forEach((v, k) => (out[k] = typeof v === 'string' ? v : v.name))
+  } catch {
+    /* not a well-formed multipart body: the fields stay unread */
+  }
+  return out
 }
 
 function send(res: ServerResponse, status: number, body: unknown) {

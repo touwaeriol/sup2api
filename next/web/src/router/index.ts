@@ -96,6 +96,9 @@ const children: RouteRecordRaw[] = [
   },
 
   { path: 'plugins', component: () => import('@/views/plugins/PluginsView.vue'), meta: { perm: 'plugin:read', title: 'nav.items.plugins' } },
+  // Installs reviewed before anything is registered (consent/consentSources.ts).
+  { path: 'plugins/install/market', component: () => import('@/views/plugins/ConsentView.vue'), meta: { perm: 'plugin:install', title: 'nav.crumbs.pluginInstall', parent: '/market' } },
+  { path: 'plugins/install/upload', component: () => import('@/views/plugins/ConsentView.vue'), meta: { perm: 'plugin:install', title: 'nav.crumbs.pluginInstall', parent: '/plugins' } },
   {
     path: 'plugins/:key/versions/:version/consent',
     component: () => import('@/views/plugins/ConsentView.vue'),

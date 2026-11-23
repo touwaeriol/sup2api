@@ -43,6 +43,7 @@ export default {
     pluginDetail: 'Plugin details',
     pluginRollout: 'Rollout',
     pluginConsent: 'Review and install',
+    pluginInstall: 'Review before install',
     pluginSettings: 'Plugin settings'
   },
   breadcrumb: 'Breadcrumb',

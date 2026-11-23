@@ -92,11 +92,24 @@ func revokedError(msg string) error {
 	return core.ErrPermissionDenied.WithMessage(msg).WithDetails(map[string]any{"reason": "revoked"})
 }
 
+// verifyMode is how verify checks a package: validity, the signing key's
+// validity window (not for an installed package); register, an official
+// publisher and root key are registered (not in a read-only transaction).
+type verifyMode struct{ validity, register bool }
+
 // Verify checks the package signature and resolves publisher trust. Run it
 // inside the upload transaction: packages signed by an official root key
 // auto-register their publisher (trust official) and key.
 func (t *TrustStore) Verify(ctx context.Context, q *gorm.DB, p *Package) (*Verification, error) {
-	return t.verify(ctx, q, p, true)
+	return t.verify(ctx, q, p, verifyMode{validity: true, register: true})
+}
+
+// VerifyReadOnly is Verify registering nothing, for the install preview's
+// read-only transaction: the checks Verify makes of what it registers are
+// made of what is registered (lookupOfficial: an official publisher not
+// registered yet has PublisherID 0).
+func (t *TrustStore) VerifyReadOnly(ctx context.Context, q *gorm.DB, p *Package) (*Verification, error) {
+	return t.verify(ctx, q, p, verifyMode{validity: true})
 }
 
 // VerifyInstalled re-checks an already installed package when a node loads
@@ -105,10 +118,10 @@ func (t *TrustStore) Verify(ctx context.Context, q *gorm.DB, p *Package) (*Verif
 // key was valid when the package was uploaded; expiry must not stop plugins
 // that are already installed).
 func (t *TrustStore) VerifyInstalled(ctx context.Context, q *gorm.DB, p *Package) (*Verification, error) {
-	return t.verify(ctx, q, p, false)
+	return t.verify(ctx, q, p, verifyMode{register: true})
 }
 
-func (t *TrustStore) verify(ctx context.Context, q *gorm.DB, p *Package, checkValidity bool) (*Verification, error) {
+func (t *TrustStore) verify(ctx context.Context, q *gorm.DB, p *Package, mode verifyMode) (*Verification, error) {
 	sig := p.Signature
 	if sig == nil {
 		if !t.allowUnsigned {
@@ -120,53 +133,94 @@ func (t *TrustStore) verify(ctx context.Context, q *gorm.DB, p *Package, checkVa
 		return nil, sigError(fmt.Sprintf("signature publisher %q does not match manifest publisher %q", sig.Publisher, p.Manifest.Publisher))
 	}
 	if ok, found := t.official[sig.KeyID]; found {
-		if err := t.check(p, sig, ok.pub); err != nil {
-			return nil, sigError(err.Error())
-		}
-		id, err := t.registerOfficial(ctx, q, sig.Publisher, sig.KeyID, ok.b64)
-		if err != nil {
-			return nil, err
-		}
-		return &Verification{Publisher: sig.Publisher, PublisherID: &id, KeyID: sig.KeyID, Trust: TrustOfficial, SignatureStatus: SigValid}, nil
+		return t.verifyOfficial(ctx, q, p, ok, mode.register)
 	}
+	return t.verifyPublisherKey(ctx, q, p, mode.validity)
+}
 
-	var (
-		pubB64, keyStatus, pubName, trust, pubStatus string
-		notBefore, notAfter                          *time.Time
-		pubID                                        int64
-	)
-	err := signingKey(store.G(ctx, q), sig.KeyID).
-		Row().Scan(&pubB64, &keyStatus, &notBefore, &notAfter, &pubID, &pubName, &trust, &pubStatus)
-	if store.IsNoRows(err) {
-		return nil, sigError(fmt.Sprintf("unknown signing key %q", sig.KeyID))
+// verifyOfficial verifies p, signed by the official root key ok, and
+// registers its publisher and key (register) or reads them.
+func (t *TrustStore) verifyOfficial(ctx context.Context, q *gorm.DB, p *Package, ok officialKey, register bool) (*Verification, error) {
+	sig := p.Signature
+	if err := t.check(p, sig, ok.pub); err != nil {
+		return nil, sigError(err.Error())
+	}
+	var id *int64
+	var err error
+	if register {
+		id, err = t.registerOfficial(ctx, q, sig.Publisher, sig.KeyID, ok.b64)
+	} else {
+		id, err = lookupOfficial(store.G(ctx, q), sig.Publisher, sig.KeyID)
 	}
 	if err != nil {
 		return nil, err
 	}
-	if pubName != sig.Publisher {
-		return nil, sigError(fmt.Sprintf("key %q does not belong to publisher %q", sig.KeyID, sig.Publisher))
+	return &Verification{Publisher: sig.Publisher, PublisherID: id, KeyID: sig.KeyID, Trust: TrustOfficial, SignatureStatus: SigValid}, nil
+}
+
+// verifyPublisherKey verifies p, signed by a key of publisher_keys: known,
+// its publisher's, neither revoked and, with validity, within its validity
+// window.
+func (t *TrustStore) verifyPublisherKey(ctx context.Context, q *gorm.DB, p *Package, validity bool) (*Verification, error) {
+	sig := p.Signature
+	k, err := readSigningKey(store.G(ctx, q), sig)
+	if err != nil {
+		return nil, err
 	}
-	if pubStatus != "active" {
-		return nil, revokedError(fmt.Sprintf("publisher %q has been revoked", pubName))
+	if validity {
+		if err := t.checkWindow(sig.KeyID, k); err != nil {
+			return nil, err
+		}
 	}
-	if keyStatus != "active" {
-		return nil, revokedError(fmt.Sprintf("signing key %q has been revoked", sig.KeyID))
-	}
-	now := t.now()
-	if checkValidity && notBefore != nil && now.Before(*notBefore) {
-		return nil, sigError(fmt.Sprintf("signing key %q is not valid yet", sig.KeyID))
-	}
-	if checkValidity && notAfter != nil && now.After(*notAfter) {
-		return nil, sigError(fmt.Sprintf("signing key %q has expired", sig.KeyID))
-	}
-	pub, err := pkgsig.ParsePublicKey(pubB64)
+	pub, err := pkgsig.ParsePublicKey(k.PublicKey)
 	if err != nil {
 		return nil, err
 	}
 	if err := t.check(p, sig, pub); err != nil {
 		return nil, sigError(err.Error())
 	}
-	return &Verification{Publisher: pubName, PublisherID: &pubID, KeyID: sig.KeyID, Trust: trust, SignatureStatus: SigValid}, nil
+	return &Verification{Publisher: k.Name, PublisherID: &k.PublisherID, KeyID: sig.KeyID, Trust: k.Trust, SignatureStatus: SigValid}, nil
+}
+
+// signingKeyRow is what signingKey reads of a key and its publisher.
+type signingKeyRow struct {
+	PublicKey, KeyStatus         string
+	NotBefore, NotAfter          *time.Time
+	PublisherID                  int64
+	Name, Trust, PublisherStatus string
+}
+
+// readSigningKey reads the key sig names and checks that it is sig's
+// publisher's and that neither is revoked.
+func readSigningKey(g *gorm.DB, sig *pkgsig.Signature) (*signingKeyRow, error) {
+	var k signingKeyRow
+	err := signingKey(g, sig.KeyID).Row().
+		Scan(&k.PublicKey, &k.KeyStatus, &k.NotBefore, &k.NotAfter, &k.PublisherID, &k.Name, &k.Trust, &k.PublisherStatus)
+	switch {
+	case store.IsNoRows(err):
+		return nil, sigError(fmt.Sprintf("unknown signing key %q", sig.KeyID))
+	case err != nil:
+		return nil, err
+	case k.Name != sig.Publisher:
+		return nil, sigError(fmt.Sprintf("key %q does not belong to publisher %q", sig.KeyID, sig.Publisher))
+	case k.PublisherStatus != "active":
+		return nil, revokedError(fmt.Sprintf("publisher %q has been revoked", k.Name))
+	case k.KeyStatus != "active":
+		return nil, revokedError(fmt.Sprintf("signing key %q has been revoked", sig.KeyID))
+	}
+	return &k, nil
+}
+
+// checkWindow fails when key keyID (k) is used outside its validity window.
+func (t *TrustStore) checkWindow(keyID string, k *signingKeyRow) error {
+	now := t.now()
+	if k.NotBefore != nil && now.Before(*k.NotBefore) {
+		return sigError(fmt.Sprintf("signing key %q is not valid yet", keyID))
+	}
+	if k.NotAfter != nil && now.After(*k.NotAfter) {
+		return sigError(fmt.Sprintf("signing key %q has expired", keyID))
+	}
+	return nil
 }
 
 // signingKey reads the signing key keyID and its publisher.
@@ -187,38 +241,72 @@ func (t *TrustStore) check(p *Package, sig *pkgsig.Signature, pub ed25519.Public
 // key so it can be revoked like any other key. Both inserts tolerate a
 // concurrent first registration (several plugins verifying at once on a
 // fresh database): the loser's insert does nothing and the row is read back.
-func (t *TrustStore) registerOfficial(ctx context.Context, q *gorm.DB, name, keyID, b64 string) (int64, error) {
+func (t *TrustStore) registerOfficial(ctx context.Context, q *gorm.DB, name, keyID, b64 string) (*int64, error) {
 	g := store.G(ctx, q)
 	if err := g.Clauses(onConflictNothing("name")).Create(&model.Publisher{Name: name, TrustLevel: TrustOfficial}).Error; err != nil {
-		return 0, err
+		return nil, err
 	}
-	var pub model.Publisher
-	if err := g.Select("id", "trust_level", "status").Where("name = ?", name).Take(&pub).Error; err != nil {
-		return 0, err
-	}
-	id := pub.ID
-	if core.ValueOr(pub.Status, "") != "active" {
-		return 0, revokedError(fmt.Sprintf("publisher %q has been revoked", name))
+	pub, err := activePublisher(g, name)
+	if err != nil {
+		return nil, err
 	}
 	if pub.TrustLevel != TrustOfficial {
-		if err := g.Model(&model.Publisher{}).Where("id = ?", id).Update("trust_level", TrustOfficial).Error; err != nil {
-			return 0, err
+		if err := g.Model(&model.Publisher{}).Where("id = ?", pub.ID).Update("trust_level", TrustOfficial).Error; err != nil {
+			return nil, err
 		}
 	}
-	if err := g.Clauses(onConflictNothing("key_id")).Create(&model.PublisherKey{KeyID: keyID, PublisherID: id, PublicKey: b64}).Error; err != nil {
-		return 0, err
+	if err := g.Clauses(onConflictNothing("key_id")).Create(&model.PublisherKey{KeyID: keyID, PublisherID: pub.ID, PublicKey: b64}).Error; err != nil {
+		return nil, err
 	}
+	return &pub.ID, checkOfficialKey(g, pub.ID, keyID)
+}
+
+// lookupOfficial is registerOfficial for a read-only transaction: it reads
+// the publisher name and the key keyID as registered and checks them as
+// registerOfficial does. A publisher not registered yet gets id 0, which no
+// row holds: like the id registering it would give, it owns no plugin and
+// no retired key.
+func lookupOfficial(g *gorm.DB, name, keyID string) (*int64, error) {
+	var id int64
+	pub, err := activePublisher(g, name)
+	switch {
+	case err == nil:
+		id = pub.ID
+	case !store.IsNoRows(err):
+		return nil, err
+	}
+	return &id, checkOfficialKey(g, id, keyID)
+}
+
+// activePublisher reads the publisher name, revokedError when it is
+// revoked.
+func activePublisher(g *gorm.DB, name string) (*model.Publisher, error) {
+	var pub model.Publisher
+	if err := g.Select("id", "trust_level", "status").Where("name = ?", name).Take(&pub).Error; err != nil {
+		return nil, err
+	}
+	if core.ValueOr(pub.Status, "") != "active" {
+		return nil, revokedError(fmt.Sprintf("publisher %q has been revoked", name))
+	}
+	return &pub, nil
+}
+
+// checkOfficialKey checks the official key keyID as registered, if it is:
+// it must be publisher id's and not revoked.
+func checkOfficialKey(g *gorm.DB, id int64, keyID string) error {
 	var key model.PublisherKey
-	if err := g.Select("publisher_id", "status").Where("key_id = ?", keyID).Take(&key).Error; err != nil {
-		return 0, err
+	err := g.Select("publisher_id", "status").Where("key_id = ?", keyID).Take(&key).Error
+	switch {
+	case store.IsNoRows(err):
+		return nil
+	case err != nil:
+		return err
+	case key.PublisherID != id:
+		return sigError(fmt.Sprintf("official key %q is registered to another publisher", keyID))
+	case core.ValueOr(key.Status, "") != "active":
+		return revokedError(fmt.Sprintf("signing key %q has been revoked", keyID))
 	}
-	if key.PublisherID != id {
-		return 0, sigError(fmt.Sprintf("official key %q is registered to another publisher", keyID))
-	}
-	if core.ValueOr(key.Status, "") != "active" {
-		return 0, revokedError(fmt.Sprintf("signing key %q has been revoked", keyID))
-	}
-	return id, nil
+	return nil
 }
 
 // onConflictNothing skips an INSERT that conflicts on column.

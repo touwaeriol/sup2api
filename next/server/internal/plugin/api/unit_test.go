@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/httpapi"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/install"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/testutil"
@@ -50,36 +51,54 @@ type refusingTokens struct {
 	testutil.StepUpRefused
 }
 
+// stepUpCase is a route and the step-up scope it asks for ("": none).
+type stepUpCase struct {
+	method, path string
+	body         any
+	scope        string
+}
+
+// stepUpCases are the routes TestPluginRoutesStepUp checks. The ones taking
+// no proof fail further on (no database or market here), not with 403.
+func stepUpCases(t *testing.T) []stepUpCase {
+	market := map[string]any{"source_id": 1, "key": "guard", "version": "0.1.0"}
+	withConsent := map[string]any{"source_id": 1, "key": "guard", "version": "0.1.0", "consent": map[string]any{"package_sha256": "00"}}
+	return []stepUpCase{
+		{"POST", "/plugins/upload", fileBody(t, []byte("x")), core.StepUpPluginInstall},
+		{"POST", "/plugins/upload", consentFileBody(t, []byte("x"), `{"package_sha256":"00"}`), core.StepUpPluginGrant},
+		{"POST", "/plugins/install-from-market", market, core.StepUpPluginInstall},
+		{"POST", "/plugins/install-from-market", withConsent, core.StepUpPluginGrant},
+		{"POST", "/plugins/guard/versions/0.1.0/consent", nil, core.StepUpPluginGrant},
+		{"POST", "/plugins/guard/versions/0.1.0/role-grants/confirm", nil, core.StepUpPluginGrant},
+		{"POST", "/publishers", nil, core.StepUpPublisherManage},
+		{"POST", "/publishers/1/keys", nil, core.StepUpPublisherManage},
+		{"POST", "/publishers/1/revoke", nil, core.StepUpPublisherManage},
+		{"POST", "/publisher-keys/k/revoke", nil, core.StepUpPublisherManage},
+		{"POST", "/plugins/review-upload", fileBody(t, []byte("x")), ""},
+		{"POST", "/plugins/review-from-market", market, ""},
+		{"POST", "/plugins/guard/versions/0.1.0/reject", nil, ""},
+		{"POST", "/plugins/guard/enable", nil, ""},
+		{"DELETE", "/plugins/guard", nil, ""},
+		{"GET", "/publishers", nil, ""},
+	}
+}
+
 // Code execution and trust roots take a step-up proof (CONTRACTS §80.2):
 // installing, consenting and the publishers' writes; rejecting, enabling,
-// uninstalling and reading do not.
+// uninstalling, reading and the install preview do not. An install
+// carrying the consent asks for the consent's scope.
 func TestPluginRoutesStepUp(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	engine := gin.New()
-	New(Deps{}).RegisterRoutes(httpapi.NewRouter(engine, refusingTokens{}, authz{}))
+	New(Deps{Install: install.New(install.Deps{}, install.Options{})}).RegisterRoutes(httpapi.NewRouter(engine, refusingTokens{}, authz{}))
 	h := &harness{t: t, engine: engine}
-	for _, tc := range []struct {
-		method, path string
-		stepUp       bool
-	}{
-		{"POST", "/plugins/upload", true},
-		{"POST", "/plugins/install-from-market", true},
-		{"POST", "/plugins/guard/versions/0.1.0/consent", true},
-		{"POST", "/plugins/guard/versions/0.1.0/role-grants/confirm", true},
-		{"POST", "/publishers", true},
-		{"POST", "/publishers/1/keys", true},
-		{"POST", "/publishers/1/revoke", true},
-		{"POST", "/publisher-keys/k/revoke", true},
-		// Not these (no database here: they fail further on, not with 403).
-		{"POST", "/plugins/guard/versions/0.1.0/reject", false},
-		{"POST", "/plugins/guard/enable", false},
-		{"DELETE", "/plugins/guard", false},
-		{"GET", "/publishers", false},
-	} {
-		code, out := h.do(tc.method, tc.path, "admin", nil)
+	for _, tc := range stepUpCases(t) {
+		code, out := h.do(tc.method, tc.path, "admin", tc.body)
 		e, _ := out["error"].(map[string]any)
-		if got := code == 403 && e["code"] == "verification_required"; got != tc.stepUp {
-			t.Errorf("%s %s: %d %v, step-up wanted %v", tc.method, tc.path, code, out, tc.stepUp)
+		details, _ := e["details"].(map[string]any)
+		stepUp := code == 403 && e["code"] == "verification_required"
+		if stepUp != (tc.scope != "") || stepUp && details["scope"] != tc.scope {
+			t.Errorf("%s %s: %d %v, step-up wanted %q", tc.method, tc.path, code, out, tc.scope)
 		}
 	}
 }

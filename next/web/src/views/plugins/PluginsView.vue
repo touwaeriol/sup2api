@@ -2,15 +2,15 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { api } from '@sub2api/host'
 import { SBadge, SButton, SEmpty, SHint, SInput, SPageHeader, SSelect, STable, toast, type TableColumn, type Tone } from '@sub2api/ui'
 import PluginStatusBadge from './parts/PluginStatusBadge.vue'
-import type { PluginReview, PluginSummary } from '@/api/types'
+import type { PluginSummary } from '@/api/types'
 import { lt } from '@/i18n'
 import { notifyError } from '@/utils/errors'
 import { fetchFirstPage } from '@/composables/lookups'
 import { useAuthStore } from '@/stores/auth'
-import { consentPath, putReview } from './reviewCache'
+import { UPLOAD_INSTALL_PATH, consentPath } from './consent/paths'
+import { setPendingUpload } from './consent/pendingUpload'
 import PluginAvatar from './parts/PluginAvatar.vue'
 import RetiredKeys from './parts/RetiredKeys.vue'
 import TrustBadge from './parts/TrustBadge.vue'
@@ -24,7 +24,6 @@ const items = ref<PluginSummary[]>([])
 const loading = ref(false)
 const q = ref('')
 const status = ref<string | null>(null)
-const uploading = ref(false)
 const fileInput = ref<HTMLInputElement>()
 
 const STATUSES = ['awaiting_consent', 'installed', 'enabling', 'enabled', 'upgrading', 'disabled']
@@ -90,7 +89,8 @@ function pickFile() {
   fileInput.value?.click()
 }
 
-async function onFile(e: Event) {
+/** The chosen package is reviewed first: it is sent to be installed only with the consent. */
+function onFile(e: Event) {
   const input = e.target as HTMLInputElement
   const file = input.files?.[0]
   input.value = ''
@@ -99,19 +99,8 @@ async function onFile(e: Event) {
     toast(t('plugins.list.badFile'), 'error')
     return
   }
-  uploading.value = true
-  try {
-    const fd = new FormData()
-    fd.append('file', file)
-    const r = await api.upload<PluginReview>('/plugins/upload', fd)
-    putReview(r)
-    toast(t('plugins.list.uploaded', { name: lt(r.name) || r.plugin_key, version: r.version }), 'success')
-    router.push(consentPath(r.plugin_key, r.version))
-  } catch (err) {
-    notifyError(err)
-  } finally {
-    uploading.value = false
-  }
+  setPendingUpload(file)
+  router.push(UPLOAD_INSTALL_PATH)
 }
 
 onMounted(load)
@@ -125,7 +114,7 @@ onMounted(load)
         <SButton v-if="auth.has('plugin:market:read')" to="/market" icon="market">
           {{ t('plugins.market.title') }}
         </SButton>
-        <SButton v-if="auth.has('plugin:install')" variant="primary" :loading="uploading" icon="upload" @click="pickFile">
+        <SButton v-if="auth.has('plugin:install')" variant="primary" icon="upload" @click="pickFile">
           {{ t('plugins.list.upload') }}
         </SButton>
         <input ref="fileInput" type="file" accept=".s2plugin" class="hidden" @change="onFile" />
