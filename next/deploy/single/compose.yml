@@ -106,6 +106,7 @@ services:
       SUB2API_PLUGIN_OFFICIAL_KEYS: ${SUB2API_PLUGIN_OFFICIAL_KEYS:-}
       SUB2API_MARKET_SOURCES: ${SUB2API_MARKET_SOURCES:-}
       SUB2API_DEV_MARKET_URL: http://market:8080/index.json
+      SUB2API_MARKET_ALLOW_HTTP: "true"
     volumes:
       - appdata:/var/lib/sub2api
 

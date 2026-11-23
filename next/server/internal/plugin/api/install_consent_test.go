@@ -49,22 +49,21 @@ func (h *harness) pluginRows() (plugins, versions int) {
 }
 
 // serveMarket gives h a market source (id returned) whose index offers
-// guard 0.1.0 as data.
+// guard 0.1.0 as data, by the official publisher sub2api.
 func (h *harness) serveMarket(data []byte) int64 {
 	h.t.Helper()
-	mk := pkgtest.NewKey("market")
-	idx := market.Index{Version: 1, Plugins: []market.IndexPlugin{{Key: "guard", Name: core.LocalizedText{"en": "Guard"}, Publisher: "sub2api",
-		Versions: []market.IndexVersion{{Version: "0.1.0", URL: "guard.s2plugin", SHA256: pkg.SHA256Hex(data), Size: int64(len(data)), HostCompat: ">=0.1.0"}}}}}
+	idx := market.Index{Version: 2, Publishers: []market.IndexPublisher{{ID: "sub2api", Trust: pkg.TrustOfficial, Status: pkg.PublisherActive}},
+		Plugins: []market.IndexPlugin{{Key: "guard", Name: core.LocalizedText{"en": "Guard"}, Publisher: "sub2api",
+			Versions: []market.IndexVersion{{Version: "0.1.0", URL: "guard.s2plugin", SHA256: pkg.SHA256Hex(data), Size: int64(len(data)), HostCompat: ">=0.1.0"}}}}}
 	raw, _ := json.Marshal(idx)
-	sig := market.SignIndex(raw, mk.Priv)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body := map[string][]byte{"/m/index.json": raw, "/m/index.json.sig": sig, "/m/guard.s2plugin": data}[r.URL.Path]
+		body := map[string][]byte{"/m/index.json": raw, "/m/guard.s2plugin": data}[r.URL.Path]
 		_, _ = w.Write(body)
 	}))
 	h.t.Cleanup(srv.Close)
-	m := market.New(h.db, h.api.d.Install, srv.Client(), 10<<20)
+	m := market.New(h.db, h.api.d.Install, srv.Client(), market.Options{MaxPackageBytes: 10 << 20, AllowHTTP: true})
 	ctx := context.Background()
-	if err := m.SeedSources(ctx, fmt.Sprintf(`[{"name":"official","url":%q,"public_key":%q}]`, srv.URL+"/m/", mk.PubB64())); err != nil {
+	if err := m.SeedSources(ctx, fmt.Sprintf(`[{"name":"official","url":%q}]`, srv.URL+"/m/")); err != nil {
 		h.t.Fatal(err)
 	}
 	srcs, err := m.ListSources(ctx)
@@ -109,14 +108,20 @@ func TestAPIUploadWithConsent(t *testing.T) {
 }
 
 // The market preview and install with consent download the version and
-// check it against the index, as the install without consent does.
+// check it against the index, as the install without consent does. The
+// package is not signed: its trust is the index's (CONTRACTS §136), while
+// the same package uploaded by hand is refused.
 func TestAPIMarketWithConsent(t *testing.T) {
-	h, root := newHarness(t)
-	pkgBytes := pkgtest.Build(pkgtest.Guard("guard", "0.1.0", "sub2api"), root)
+	h, _ := newHarness(t)
+	pkgBytes := pkgtest.Zip(pkgtest.Files(pkgtest.Guard("guard", "0.1.0", "sub2api")))
 	src := h.serveMarket(pkgBytes)
+	if code, out := h.do("POST", "/plugins/review-upload", "admin", fileBody(t, pkgBytes)); code != 400 {
+		t.Fatalf("unsigned upload review = %d %v", code, out)
+	}
 	body := map[string]any{"source_id": src, "key": "guard", "version": "0.1.0"}
 	code, out := h.do("POST", "/plugins/review-from-market", "admin", body)
-	if code != 200 || data(out)["package_sha256"] != pkg.SHA256Hex(pkgBytes) || data(out)["consent_status"] != "" {
+	if r := data(out); code != 200 || r["package_sha256"] != pkg.SHA256Hex(pkgBytes) || r["consent_status"] != "" ||
+		r["trust"] != pkg.TrustOfficial || r["signature_status"] != pkg.SigIndexed {
 		t.Fatalf("market review = %d %v", code, out)
 	}
 	if p, v := h.pluginRows(); p != 0 || v != 0 {

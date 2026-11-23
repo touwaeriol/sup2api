@@ -52,7 +52,7 @@
 | | 插件能力 | 声明网关端点和协议格式、账号类型和录入界面、粘性会话默认规则、注册用户权限、数据库 schema 和迁移脚本（含数据迁移）、插件接口、菜单和页面、网关钩子、后台任务、事件订阅、默认模型价格 |
 | | 出口隧道 + 严格模式 | 插件的对外连接经过核心转发并记录；Linux 上用 seccomp 保证无法绕过；默认全部放行，按插件可切换为只去授权的域名；管理员可在“插件联网”里屏蔽域名或只允许列出的域名，同样管核心替插件发出的上游请求、取回和账号请求（CONTRACTS §113） |
 | | 资源限制 | 每个插件的内存、CPU、文件数限制：GOMEMLIMIT + 内存看门狗 + oom_score_adj + nice + rlimit，都不需要特权（cgroup 预留） |
-| | 签名与市场 | Ed25519 发布者签名、信任级别、发布者密钥管理与吊销；从插件市场索引（不签名的静态 JSON，由索引登记处的 PR 审核与其中的 sha256 保证可信，CONTRACTS §135）浏览、安装、检查更新 |
+| | 签名与市场 | Ed25519 发布者签名（手动上传、内置插件）、信任级别、发布者密钥管理与吊销；从插件市场索引（不签名的静态 JSON，由索引登记处的 PR 审核与其中的 sha256 保证可信，信任取自索引里的发布者，CONTRACTS §135、§136）浏览、安装、检查更新 |
 | | 前端扩展 | 沙箱 iframe、**原生微前端**（受信插件把 Vue 组件挂进控制台；2026-11-19 起不再有声明式的 schema 表单与表格页，CONTRACTS §23） |
 | 演示插件 | anthropic | API Key 账号类型 + 默认价格（内置插件）；另有市场插件 relay（中转 Key 账号类型） |
 | | guard | 网关钩子（关键词拦截）+ 事件订阅 + 后台任务 + 出口访问 + 原生界面 + 资源限制 |
@@ -89,7 +89,7 @@ flowchart LR
   pg[("PostgreSQL<br/>public：核心表、各插件的表（plg_&lt;key&gt;__*）<br/>updater：升级计划")]
   redis[("Redis / Valkey<br/>会话 · 节点注册 · 并发槽位 · 冷却 · 余额缓存<br/>分布式锁 · 广播 · 节点密钥登记")]
   rel["更新源<br/>GitHub Releases 或 HTTPS 目录（releases.json）<br/>核心与网关的清单与安装物"]
-  market["插件市场索引<br/>静态 JSON（登记处审核）"]
+  market["插件市场索引<br/>静态 JSON（HTTPS，登记处审核）"]
   up["上游<br/>api.anthropic.com 等"]
   ext["插件访问的外部服务<br/>（经出口隧道）"]
 
@@ -1330,7 +1330,7 @@ cgroup 可以给每个插件单独设置硬性上限，超出直接被限制，�
 ```
 
 - 校验：上传时重新计算 digest，用发布者公钥验证签名；插件包内任何文件被改动都会导致校验失败
-- 插件包不存 PG（PG 只记 `package_sha256`）：节点从市场或从持有它的其他在线节点取回插件包（MULTINODE-SYNC-PROTOCOL §6.2）后，按 sha256 校验，启动前再验一次签名
+- 插件包不存 PG（PG 只记 `package_sha256`）：节点从市场或从持有它的其他在线节点取回插件包（MULTINODE-SYNC-PROTOCOL §6.2）后，按 sha256 校验，启动前再验一次签名（从市场安装的版本不验签，只查发布者未被吊销，CONTRACTS §136）
 
 ### 11.2 信任体系
 
@@ -1355,9 +1355,9 @@ flowchart TD
 
 ### 11.3 插件市场（本期只做客户端）
 
-- 配置一个或多个市场索引地址（`[{name,url}]`，没有公钥）；索引是一个**不签名的静态 JSON 文件**（index.json v2，CONTRACTS §11.1）：发布者、插件列表、版本、下载地址、sha256、Release 页面
-- 索引由索引登记处（GitHub 仓库 touwaeriol/sup2api-plugin）的文件生成：发布者、插件、版本各一个 JSON 文件，经 PR 提交；`sub2api-plugin registry check` 审核 PR（作者属于发布者、包只来自插件仓库的 GitHub Release、下载核对 sha256 与清单），合并后由 `sub2api-plugin index` 生成索引（CONTRACTS §135）。可信来源是这个仓库的审核和索引里的 sha256
-- 控制台"插件市场"页：浏览、查看详情、一键安装（下载 → 校验 sha256 → 进入授权确认）、检查已安装插件的更新
+- 配置一个或多个市场索引地址（只接受 HTTPS）；索引是一个**不签名的静态 JSON 文件**（index.json v2，CONTRACTS §11.1），由登记处仓库 touwaeriol/sup2api-plugin 经 PR 审核（`sub2api-plugin registry check`）后 CI 用 `sub2api-plugin index` 生成（CONTRACTS §135）：发布者（信任级别、状态）、插件、版本、GitHub Release 下载地址、sha256、弃用标记
+- 控制台"插件市场"页：浏览、按发布者筛选、一键安装（下载 → 按索引校验大小与 sha256 → 进入授权确认）、检查已安装插件的更新（弃用的版本不算更新）
+- 可信来源是登记处仓库的审核与 HTTPS：没有索引签名，也没有市场公钥；从市场安装的包不看包签名，信任级别取自索引里发布者的 `trust`，发布者被吊销或不在索引中时拒绝安装（CONTRACTS §136）
 
 ### 11.4 开发工具
 
@@ -1528,7 +1528,7 @@ sequenceDiagram
   else 手动上传
     A->>API: 选择 .s2plugin（review-upload，plugin:install）
   end
-  API->>API: 校验签名、发布者信任级别、吊销状态
+  API->>API: 校验签名（市场安装取索引里的发布者信任级别，不看签名）、发布者信任级别、吊销状态
   API->>API: 校验 manifest：hostCompat、一致性检查、权限冲突、资源申请上限
   API->>PG: 只读事务里读当前状态（升级的现有授予、运行版本），什么都不写
   API-->>A: 安装前确认页（权限分级、账号类型、钩子、任务、订阅、界面、资源、数据库），带 package_sha256

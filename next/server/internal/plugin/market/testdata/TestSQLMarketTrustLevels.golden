@@ -1,3 +1,0 @@
--- sql
-SELECT "name","trust_level","status" FROM "publishers"
--- vars

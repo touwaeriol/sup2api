@@ -8,6 +8,14 @@
 
 开发完成、尚未上线的改动。发布时改成发布日期的一节，补上提交、实际版本号和发布过程。
 
+### 插件商店：信任取自索引、去掉密钥、只用 HTTPS、弃用（分支 `feat/market-core`；迁移 0125，单向，改库走 `primary-first-v1`；CONTRACTS §11.1、§136）
+
+- **index.json v2**：核心只拉 `index.json`，不再有 `index.json.sig`；v2 带 `publishers`（`trust`、`status`）、插件的 `repo`/`source`/`builtin`/`deprecated`、版本的 `release_url`/`deprecated`。v1 与 `market.VerifyIndex`/`SignIndex` 删除。
+- **市场源去掉公钥**：迁移 `0125_market_sources_drop_public_key.sql` 删除 `market_sources.public_key`；`SUB2API_MARKET_SOURCES` 改为 `[{name,url}]`；源与包地址只接受 https，新开关 `SUB2API_MARKET_ALLOW_HTTP=true` 才接受 http（本地市场；e2e、single、ovh 的 compose 已加，网关外壳透传）。
+- **信任**：从市场安装/预审的包不看签名，信任级别取自索引里发布者的 `trust`，发布者按名字登记（已有的改成索引的级别）；发布者在索引里吊销或缺失时 403 `permission_denied`（`details.reason` 为 `revoked` / `publisher_unlisted`）。版本行 `signature_status` 新值 `indexed`；节点加载时这类版本不验签、只查发布者未被吊销。手动上传与内置插件不变。
+- **弃用**：`GET /market/plugins` 透传插件与版本的 `deprecated`；`latest_version`、`update_available` 不计弃用版本，弃用版本仍可安装。列表新增 `publisher_name`、`publisher_homepage`、`publisher_status`、`repo`、`source_url`、`builtin`，`trust` 改为索引的值。
+- **控制台**：插件市场页显示发布者名称与信任级别、吊销/缺失标记（禁止安装）、内置、弃用（原因）、主页/仓库/源码链接，可按发布者筛选；选版本时标出弃用版本并给出“更新说明”链接；确认页把 `indexed` 当作通过。
+
 ## 2026-11-23
 
 ### 核心 0.1.312：Gemini 的 v1 与 v1beta、embedContent、模型列表（`7cfc2f3c6`；无迁移，滚动更新；gemini 0.4.1、newapi 0.1.2、sub2api 0.1.2、vertex 0.1.1；网关仍 0.1.139）

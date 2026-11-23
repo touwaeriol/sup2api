@@ -1,5 +1,5 @@
 // Mock handlers: plugins (list, detail, lifecycle, rollouts, grants, settings,
-// resources, egress, jobs, events) and the plugin market. Reviews, consents
+// resources, egress, jobs, events); the plugin market is market.ts. Reviews, consents
 // and installs live in pluginConsent.ts, /ui/plugins and /p/<key>/... in
 // pluginui.ts; publishers are not here.
 import { fail, noContent, now, on, paginate, type MockRequest } from './router'
@@ -9,6 +9,7 @@ import { pluginPlatforms } from './platforms'
 import { pluginAccountCount, uninstallPluginAccounts } from './accounts'
 import { invalid } from './common'
 import { mailerSettings } from './mailer'
+import { marketEntry } from './market'
 
 export type Any = Record<string, any>
 
@@ -708,88 +709,6 @@ reviews.set('guard@0.2.0', guardReview('0.2.0', { added: [diffItem('net', 'high'
 reviews.set('foo_platform@1.0.0', genericReview('foo_platform', '1.0.0', { en: 'Foo Platform', zh: 'Foo 平台' }, 'foo-labs', 'community'))
 reviews.set('anthropic@0.2.0', anthropicReview('0.2.0'))
 
-// ------------------------------------------------------------------ market
-
-const sources = [
-  { id: 1, name: 'Official market', url: 'https://market.sub2api.dev/index.json', enabled: true },
-  { id: 2, name: 'Community', url: 'https://example.com/s2a/index.json', enabled: true }
-]
-
-const market: Record<number, Any[]> = {
-  1: [
-    {
-      key: 'anthropic',
-      name: { en: 'Anthropic', zh: 'Anthropic' },
-      description: { en: 'Claude API keys and OAuth accounts.', zh: 'Claude API Key 与 OAuth 账号。' },
-      publisher: 'sub2api',
-      trust: 'official',
-      categories: ['platform'],
-      versions: [
-        { version: '0.1.0', host_compat: '>=0.1.0 <0.2.0', size: 9_830_400 },
-        { version: '0.2.0', host_compat: '>=0.1.0 <0.2.0', size: 10_223_616 },
-        // needs a newer core than HOST_VERSION
-        { version: '0.3.0', host_compat: '>=0.2.0 <0.3.0', size: 10_485_760 }
-      ]
-    },
-    {
-      key: 'guard',
-      name: { en: 'Guard', zh: '请求守卫' },
-      description: { en: 'Request inspection and blocking.', zh: '请求检查与拦截。' },
-      publisher: 'sub2api',
-      trust: 'official',
-      categories: ['security'],
-      versions: [{ version: '0.1.0', host_compat: '>=0.1.0 <0.2.0', size: 7_340_032 }]
-    },
-    {
-      key: 'openai',
-      name: { en: 'OpenAI', zh: 'OpenAI' },
-      description: { en: 'OpenAI API keys for the built-in openai platform.', zh: '内置 openai 平台的 OpenAI API Key。' },
-      publisher: 'sub2api',
-      trust: 'official',
-      categories: ['platform'],
-      versions: [{ version: '0.1.0', host_compat: '>=0.1.0 <0.2.0', size: 8_912_896 }]
-    },
-    {
-      key: 'gemini',
-      name: { en: 'Gemini', zh: 'Gemini' },
-      description: { en: 'Google AI Studio API keys for the built-in gemini platform.', zh: '内置 gemini 平台的 Google AI Studio API Key。' },
-      publisher: 'sub2api',
-      trust: 'official',
-      categories: ['platform'],
-      versions: [{ version: '0.1.0', host_compat: '>=0.1.0 <0.2.0', size: 8_650_752 }]
-    }
-  ],
-  2: [
-    // Not installed: a first install from the market.
-    {
-      key: 'bar_platform',
-      name: { en: 'Bar Platform', zh: 'Bar 平台' },
-      description: { en: 'Community adapter for the Bar API.', zh: 'Bar API 的社区适配器。' },
-      publisher: 'bar-labs',
-      trust: 'community',
-      categories: ['platform'],
-      versions: [{ version: '1.0.0', host_compat: '>=0.1.0', size: 6_291_456 }]
-    },
-    {
-      key: 'foo_platform',
-      name: { en: 'Foo Platform', zh: 'Foo 平台' },
-      description: { en: 'Community adapter for the Foo API.', zh: 'Foo API 的社区适配器。' },
-      publisher: 'foo-labs',
-      trust: 'community',
-      categories: ['platform'],
-      versions: [{ version: '1.0.0', host_compat: '>=0.1.0' }]
-    },
-    {
-      key: 'legacy_tool',
-      name: { en: 'Legacy tool', zh: '旧版工具' },
-      description: { en: 'Only works with old hosts.', zh: '只兼容旧版核心。' },
-      publisher: 'someone',
-      trust: 'unsigned',
-      versions: [{ version: '0.0.3', host_compat: '>=0.0.1 <0.1.0' }]
-    }
-  ]
-}
-
 export function reviewFor(key: string, version: string): Any {
   const existing = reviews.get(`${key}@${version}`)
   if (existing) return existing
@@ -797,9 +716,7 @@ export function reviewFor(key: string, version: string): Any {
   if (key === 'guard') r = guardReview(version)
   else if (key === 'anthropic') r = anthropicReview(version)
   else {
-    const m = Object.values(market)
-      .flat()
-      .find((x) => x.key === key)
+    const m = marketEntry(key)
     r = genericReview(key, version, m?.name ?? { en: key }, m?.publisher ?? 'unknown', m?.trust ?? 'unsigned')
   }
   reviews.set(`${key}@${version}`, r)
@@ -1326,48 +1243,3 @@ on('GET', '/plugins/:key/events', (req) => {
   const p = find(req.params.key)
   return p ? eventsOf(p) : notFound(req.params.key)
 })
-
-on('GET', '/market/sources', () => sources)
-
-on('GET', '/market/plugins', (req) => {
-  const id = Number(req.query.source_id || 1)
-  const list = (market[id] || []).map((m) => ({
-    ...m,
-    installed_version: plugins.get(m.key)?.active_version ?? undefined,
-    latest_version: m.versions[m.versions.length - 1]?.version,
-    versions: m.versions.map((v: Any) => ({ ...v, compatible: satisfies(HOST_VERSION, v.host_compat) }))
-  }))
-  // host_version sits next to data and page (CONTRACTS §14.3).
-  return { ...paginate(list, req.query), host_version: HOST_VERSION }
-})
-
-/** Minimal semver range check: space-separated >=, >, <=, <, = comparators. */
-function satisfies(version: string, range: string | undefined): boolean {
-  if (!range) return true
-  const cmp = (a: string, b: string) => {
-    const pa = a.split('.').map(Number)
-    const pb = b.split('.').map(Number)
-    for (let i = 0; i < 3; i++) if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) - (pb[i] || 0)
-    return 0
-  }
-  return range
-    .trim()
-    .split(/\s+/)
-    .every((c) => {
-      const m = /^(>=|<=|>|<|=)?v?(\d+(?:\.\d+){0,2})$/.exec(c)
-      if (!m) return true
-      const d = cmp(version, m[2])
-      switch (m[1]) {
-        case '>=':
-          return d >= 0
-        case '>':
-          return d > 0
-        case '<=':
-          return d <= 0
-        case '<':
-          return d < 0
-        default:
-          return d === 0
-      }
-    })
-}

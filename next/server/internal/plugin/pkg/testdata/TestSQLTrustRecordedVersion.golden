@@ -1,0 +1,6 @@
+-- sql
+SELECT "signature_status" FROM "plugin_versions" WHERE plugin_key = $1 AND version = $2 LIMIT $3
+-- vars
+$1 string "demo"
+$2 string "1.2.0"
+$3 int 1

@@ -1657,27 +1657,53 @@ export interface MarketSource {
   enabled: boolean
 }
 
+/** Deprecation of a market plugin or version: still installable, never the latest (CONTRACTS §136). */
+export interface MarketDeprecation {
+  reason: LText
+}
+
+/** Publisher status of a market plugin: only an active publisher's plugins install (CONTRACTS §136). */
+export type MarketPublisherStatus = 'active' | 'revoked' | 'missing'
+
+/** A plugin of GET /market/plugins (CONTRACTS §11.1, §136). */
 export interface MarketPlugin {
+  source_id: number
+  source_name: string
   key: string
   name: LText
   description?: LText
+  /** Publisher id of the index (the manifest's publisher). */
   publisher: string
-  trust?: Trust
+  publisher_name?: LText
+  publisher_homepage?: string
+  /** Trust level the index gives the publisher; '' when it does not list it. */
+  trust: Trust
+  publisher_status: MarketPublisherStatus
+  /** GitHub repository (owner/name) the packages are released from. */
+  repo?: string
+  /** Source code URL. */
+  source_url?: string
+  builtin: boolean
+  deprecated?: MarketDeprecation
+  /** Newest compatible version that is not deprecated ('' when none). */
+  latest_version: string
   versions: MarketVersion[]
-  installed_version?: string | null // assumed
-  latest_version?: string // assumed
+  installed_version?: string
+  installed_status?: string
+  update_available: boolean
   categories?: string[] // assumed
 }
 
 /** A version of a market plugin (CONTRACTS §11.1, §14.3). */
 export interface MarketVersion {
   version: string
-  url?: string
-  sha256?: string
   size?: number
   host_compat?: string
   /** host_compat satisfied by the running core version. */
   compatible: boolean
+  /** GitHub release page of the version (release notes). */
+  release_url?: string
+  deprecated?: MarketDeprecation
 }
 
 // ------------------------------------------------------------------ plugin egress (CONTRACTS §14.2)
