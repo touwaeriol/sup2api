@@ -139,6 +139,14 @@ func (f ownFixture) grantInGroup(uid, segment int64) error {
 	return err
 }
 
+// modelRateInGroup sets a model rate of segment in grp as uid, through
+// segment_model_rates of the group.
+func (f ownFixture) modelRateInGroup(uid, segment int64) error {
+	fe, err := f.groupWriteBody(uid, f.grp, map[string]any{"segment_model_rates": []map[string]any{{"segment_id": segment, "model": "m", "rate": "0.5"}}})
+	require.Empty(f.t, fe)
+	return err
+}
+
 // segment:manage and group:manage change what a user group charges or
 // grants only when the caller is not in it, a personal segment included
 // (FU2).
@@ -148,6 +156,8 @@ func TestSettingsOfOwnSegment(t *testing.T) {
 	f.modelRate(f.operator, f.own).failed(409, "conflict")
 	var ce *core.Error
 	require.ErrorAs(t, f.grantInGroup(f.operator, f.own), &ce)
+	require.Equal(t, core.ErrConflict.Code, ce.Code)
+	require.ErrorAs(t, f.modelRateInGroup(f.operator, f.own), &ce)
 	require.Equal(t, core.ErrConflict.Code, ce.Code)
 	f.do(f.operator, "DELETE", path("/segments/%d", f.own), nil).failed(409, "conflict")
 	require.Equal(t, int64(0), f.id(`SELECT count(*) FROM segment_groups WHERE segment_id = $1`, f.own), "a refused save writes nothing")
@@ -168,6 +178,7 @@ func TestSettingsOfOtherSegments(t *testing.T) {
 	f.grant(f.operator, f.other).ok(200)
 	f.modelRate(f.operator, f.other).ok(200)
 	require.NoError(t, f.grantInGroup(f.operator, f.other))
+	require.NoError(t, f.modelRateInGroup(f.operator, f.other))
 	// admin is in the default segment and no superuser: it is exempt.
 	require.Equal(t, f.defaultSegment(), f.segmentOf(f.admin))
 	f.modelRate(f.admin, f.defaultSegment()).ok(200)

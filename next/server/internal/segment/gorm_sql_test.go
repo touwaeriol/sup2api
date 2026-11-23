@@ -35,7 +35,7 @@ func TestSQLGroupTerms(t *testing.T) {
 func TestSQLSavePair(t *testing.T) {
 	gormtest.Assert(t, func(db *gorm.DB) *gorm.DB {
 		rate := decimal.RequireFromString("0.8")
-		return savePair(db, pairInput{SegmentID: 3, GroupID: 4, Rate: core.RateInput{Set: true, Value: &rate}})
+		return savePair(db, pairInput{pairEnds: pairEnds{SegmentID: 3, GroupID: 4}, Rate: core.RateInput{Set: true, Value: &rate}})
 	})
 }
 
@@ -43,11 +43,11 @@ func TestSQLSavePair(t *testing.T) {
 func TestSQLSaveModelRate(t *testing.T) {
 	rate := decimal.RequireFromString("0.8")
 	for name, it := range map[string]modelRateInput{
-		"set":    {GroupID: 4, Model: "m", Rate: core.RateInput{Set: true, Value: &rate}},
-		"remove": {GroupID: 4, Model: "m", Rate: core.RateInput{Set: true}},
+		"set":    {pairEnds: pairEnds{SegmentID: 3, GroupID: 4}, Model: "m", Rate: core.RateInput{Set: true, Value: &rate}},
+		"remove": {pairEnds: pairEnds{SegmentID: 3, GroupID: 4}, Model: "m", Rate: core.RateInput{Set: true}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			gormtest.Assert(t, func(db *gorm.DB) *gorm.DB { return saveModelRate(db, 3, it) })
+			gormtest.Assert(t, func(db *gorm.DB) *gorm.DB { return saveModelRate(db, it) })
 		})
 	}
 }

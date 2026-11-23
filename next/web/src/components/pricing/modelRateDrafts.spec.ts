@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { modelRatePatches, modelRateRows, newModelRate, setModelRateDraft, type ModelRateDrafts, type SegmentModelRate } from './modelRateDrafts'
+import { modelRatePatches, modelRateRows, newModelRate, setModelRateDraft, withoutFar, type ModelRateDrafts, type PairModelRate } from './modelRateDrafts'
 
-const saved: SegmentModelRate[] = [{ group_id: 2, model: 'claude-haiku-4-5', rate: '0.5' }]
+const saved: PairModelRate[] = [{ far: 2, model: 'claude-haiku-4-5', rate: '0.5' }]
 const savedRow = () => modelRateRows(saved, new Map())[0]
 
-describe('the model rates of a segment under their drafts', () => {
+describe('the model rates of one end under their drafts', () => {
   it('read as saved without a draft', () => {
     expect(modelRateRows(saved, new Map())).toEqual([{ ...saved[0], key: '2:claude-haiku-4-5', saved: saved[0], removed: false, dirty: false, invalid: false }])
   })
@@ -34,11 +34,20 @@ describe('the model rates of a segment under their drafts', () => {
     expect(setModelRateDraft(drafts, added, null).size).toBe(0)
   })
 
-  it('become one patch per row, null removing the rate', () => {
+  it('become one patch per row, the far end under its key, null removing the rate', () => {
     const drafts = setModelRateDraft(setModelRateDraft(new Map(), savedRow(), null), newModelRate(1, 'gpt-4o'), '0')
-    expect(modelRatePatches(drafts)).toEqual([
+    expect(modelRatePatches(drafts, 'group_id')).toEqual([
       { group_id: 2, model: 'claude-haiku-4-5', rate: null },
       { group_id: 1, model: 'gpt-4o', rate: '0' }
     ])
+    expect(modelRatePatches(drafts, 'segment_id')).toEqual([
+      { segment_id: 2, model: 'claude-haiku-4-5', rate: null },
+      { segment_id: 1, model: 'gpt-4o', rate: '0' }
+    ])
+  })
+
+  it('drop the drafts under one far end', () => {
+    const drafts = setModelRateDraft(setModelRateDraft(new Map(), savedRow(), null), newModelRate(1, 'gpt-4o'), '0')
+    expect([...withoutFar(drafts, 2).keys()]).toEqual(['1:gpt-4o'])
   })
 })

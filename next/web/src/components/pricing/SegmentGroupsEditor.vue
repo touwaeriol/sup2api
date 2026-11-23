@@ -34,8 +34,9 @@ async function fetchSettings(): Promise<SegmentGroupSetting[]> {
 
 const groups = useAccessRateDrafts({ side: 'group', fetch: fetchSettings })
 const modelRates = useModelRateDrafts({
-  saved: () => groups.saved.value.flatMap((s) => s.model_rates.map((r) => ({ group_id: s.group.id, ...r }))),
-  groupName: (id) => groups.saved.value.find((s) => s.group.id === id)?.group.name ?? `#${id}`
+  far: 'group_id',
+  saved: () => groups.saved.value.flatMap((s) => s.model_rates.map((r) => ({ far: s.group.id, ...r }))),
+  farName: (id) => groups.saved.value.find((s) => s.group.id === id)?.group.name ?? `#${id}`
 })
 const { rows, loading, error, refresh, change } = groups
 watch(
@@ -54,7 +55,7 @@ useTabbedFormPart(
     check: () => [groups.check(), modelRates.check()].every(Boolean),
     body: () => ({ ...groups.body(), ...modelRates.body() }),
     dirty: () => groups.dirty.value || modelRates.dirty.value,
-    fields: ['group_rates', 'model_rates'],
+    fields: [...groups.fields, modelRates.field],
     applyErrors: (errors) => [groups.applyErrors(errors), modelRates.applyErrors(errors)]
   },
   () => !!props.editable

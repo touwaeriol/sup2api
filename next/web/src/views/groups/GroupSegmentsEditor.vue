@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '@sub2api/host'
-import { SAlert, SBadge, SHint, useTabbedFormPart, type SelectOption } from '@sub2api/ui'
+import { SAlert, SBadge, SHint, SLink, useTabbedFormPart, type SelectOption } from '@sub2api/ui'
 import type { Group } from '@/api/types'
 import type { Segment, SegmentGroupSetting, SegmentRef } from '@/api/pricing'
 import AccessRateTable from '@/components/pricing/AccessRateTable.vue'
@@ -10,22 +10,26 @@ import AddSelect from '@/components/pricing/AddSelect.vue'
 import GroupVisibilityBadge from '@/components/pricing/GroupVisibilityBadge.vue'
 import PersonalSegmentPicker from '@/components/pricing/PersonalSegmentPicker.vue'
 import SegmentBadge from '@/components/pricing/SegmentBadge.vue'
+import SegmentModelRates from '@/components/pricing/SegmentModelRates.vue'
 import { blankSegmentSetting, setsAnything, type DraftedSetting } from '@/components/pricing/accessRateDrafts'
 import { rateText, typedRate } from '@/components/pricing/pricingFormat'
 import { useAccessRateDrafts } from '@/components/pricing/useAccessRateDrafts'
+import { useModelRateDrafts } from '@/components/pricing/useModelRateDrafts'
 import { fetchAllPages } from '@/composables/lookups'
 
 // The user groups of an account group with something set apart: enabled (a
 // private group), a rate of their own, model rates of their own, added here,
 // or changed and not saved yet; every other user group pays the group's
-// rates. "Add user group" lists a named one, "Add user" a personal one;
-// Remove takes away everything a row has here, its model rates included
-// (Undo keeps it). These are the same settings the user group's "Account group rates"
-// edit, from the other side. The rows follow the visibility and the base
-// rate of the form being edited. Edits stay in drafts, which the group's
-// request sends (`segment_rates`, the part of tab `tab` of the enclosing
-// tabbed form while `editable`). A group not created yet (groupId null)
-// starts from every named user group with nothing set.
+// rates. Under each row, its model rates here (a model paid at a rate of its
+// own; the others follow the row). "Add user group" lists a named one, "Add
+// user" a personal one; Remove takes away everything a row has here, its
+// model rates included (Undo keeps the row, not its unsaved model rates).
+// These are the same settings the user group's "Account group rates" edit,
+// from the other side. The rows follow the visibility and the base rate of
+// the form being edited. Edits stay in drafts, which the group's request
+// sends (`segment_rates`, `segment_model_rates`: the part of tab `tab` of the
+// enclosing tabbed form while `editable`). A group not created yet (groupId
+// null) starts from every named user group with nothing set.
 const props = defineProps<{ groupId: number | null; visibility: Group['visibility']; defaultRate: string; editable: boolean; tab: string; disabled?: boolean }>()
 const { t } = useI18n()
 
@@ -42,12 +46,29 @@ async function fetchSettings(): Promise<SegmentGroupSetting[]> {
 }
 
 const drafts = useAccessRateDrafts({ side: 'segment', fetch: fetchSettings, terms: () => ({ visibility: props.visibility, groupDefault: props.defaultRate }) })
-const { rows, loading, error, dirty, refresh, change } = drafts
-useTabbedFormPart({ tab: props.tab, check: drafts.check, body: drafts.body, dirty, fields: drafts.fields, applyErrors: drafts.applyErrors }, () => props.editable)
+const { rows, loading, error, refresh, change } = drafts
+const modelRates = useModelRateDrafts({
+  far: 'segment_id',
+  saved: () => drafts.saved.value.flatMap((s) => s.model_rates.map((r) => ({ far: s.segment.id, ...r }))),
+  farName: (id) => drafts.saved.value.find((s) => s.segment.id === id)?.segment.name ?? `#${id}`
+})
+useTabbedFormPart(
+  {
+    tab: props.tab,
+    // Both run, so each table marks what is wrong.
+    check: () => [drafts.check(), modelRates.check()].every(Boolean),
+    body: () => ({ ...drafts.body(), ...modelRates.body() }),
+    dirty: () => drafts.dirty.value || modelRates.dirty.value,
+    fields: [...drafts.fields, modelRates.field],
+    applyErrors: (errors) => [drafts.applyErrors(errors), modelRates.applyErrors(errors)]
+  },
+  () => props.editable
+)
 
 function load() {
   included.value = []
   added.value = []
+  modelRates.reset()
   return drafts.load()
 }
 watch(() => props.groupId, load, { immediate: true })
@@ -70,6 +91,7 @@ function include(segment: SegmentRef) {
 /** Takes away everything a row has here; once that is saved it is no longer listed. */
 function remove(row: DraftedSetting) {
   added.value = added.value.filter((id) => id !== row.id)
+  modelRates.discard(row.id)
   change(row, { removed: true })
 }
 
@@ -117,6 +139,8 @@ const nobody = computed(() => restricted.value && !loading.value && !error.value
       :error="error"
       :row-errors="drafts.rowErrors.value"
       :empty-text="t(`pricingAccess.inGroup.empty.${visibility}`)"
+      expandable
+      :expand-toggle="false"
       @retry="refresh"
       @change="change"
       @remove="remove"
@@ -127,8 +151,28 @@ const nobody = computed(() => restricted.value && !loading.value && !error.value
         <SBadge v-if="row.segment.kind === 'named'" size="xs" class="whitespace-nowrap">{{ t('pricingAccess.members', { n: row.member_count ?? 0 }, row.member_count ?? 0) }}</SBadge>
         <SegmentBadge v-else :segment="row.segment" />
       </template>
-      <template #note="{ row }">
-        <SHint v-if="row.model_rates.length" size="xs" data-testid="group-segment-model-rates">{{ t('pricingAccess.inGroup.modelRates', { n: row.model_rates.length }, row.model_rates.length) }}</SHint>
+      <template #note="{ row, expanded, toggleExpand }">
+        <SHint size="xs">
+          <SLink as="button" :aria-expanded="expanded" data-testid="group-segment-model-rates-toggle" @click="toggleExpand()">
+            {{ t('segments.modelRates.toggle', { n: modelRates.rowsOf(row.id).length }) }}
+          </SLink>
+          <template v-if="editable && row.model_rates.length"> · {{ t('pricingAccess.inGroup.modelRates') }}</template>
+        </SHint>
+      </template>
+      <template #expand="{ row }">
+        <SegmentModelRates
+          :rows="modelRates.rowsOf(row.id)"
+          :group-id="groupId"
+          :override="row.rate_override"
+          :group-rate="row.rate.group_default"
+          :editable="editable"
+          :disabled="disabled || row.removed"
+          :errors="modelRates.rowErrors.value"
+          @add="(model, rate) => modelRates.add(row.id, model, rate)"
+          @change="(r, rate) => modelRates.change(r, rate)"
+          @remove="(r) => modelRates.change(r, null)"
+          @undo="modelRates.undo"
+        />
       </template>
     </AccessRateTable>
     <SHint v-if="editable" size="xs">{{ t('pricingAccess.overrideNote') }}</SHint>

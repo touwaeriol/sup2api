@@ -41,7 +41,7 @@ export default {
     empty: 'No model has a rate of its own yet',
     rateOf: 'Model rate of {model}',
     undo: 'Undo',
-    invalid: 'The model rate of {model} in "{group}" is not valid: enter a number from 0 to 999999.9999, up to 4 decimals.'
+    invalid: 'The model rate of {model} in "{name}" is not valid: enter a number from 0 to 999999.9999, up to 4 decimals.'
   },
   personal: {
     origin: 'Was in {name}',

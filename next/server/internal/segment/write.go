@@ -12,7 +12,6 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/httpapi"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store/model"
-	"github.com/Sub2API-Devs/sup2api/next/server/internal/x"
 )
 
 // groupRatesField is the list of POST/PATCH /segments that sets what the
@@ -52,82 +51,26 @@ func (in *segmentInput) textErrors(ctx context.Context, kind string, create bool
 	return fe
 }
 
-// groupIDs are the distinct groups the rates are in.
-func (in *segmentInput) groupIDs() []int64 {
-	ids := ends(in.GroupRates, keyGroup)
-	for _, it := range in.ModelRates {
-		ids = append(ids, it.GroupID)
-	}
-	return x.Unique(ids)
-}
+// modelRatesField is the list of model rates of POST/PATCH /segments.
+const modelRatesField = "model_rates"
 
-// trimModels trims the models of the model rates, as they are checked and
-// stored.
-func (in *segmentInput) trimModels() {
-	for i := range in.ModelRates {
-		in.ModelRates[i].Model = strings.TrimSpace(in.ModelRates[i].Model)
-	}
-}
-
-// refs reads what the rates refer to. With lock, in a transaction, the
-// groups are locked against deletion until it ends.
-func (in *segmentInput) refs(ctx context.Context, q *gorm.DB, lock bool) (rateRefs, error) {
-	groups, err := knownRows(ctx, q, "groups", in.groupIDs(), lock)
-	if err != nil {
-		return rateRefs{}, err
-	}
-	models := make([]string, len(in.ModelRates))
-	for i, it := range in.ModelRates {
-		models[i] = it.Model
-	}
-	priced, err := pricedModels(ctx, q, x.Unique(models))
-	return rateRefs{groups: groups, priced: priced}, err
-}
-
-// rateErrors are the field errors of the rates against what they refer to.
-func (in *segmentInput) rateErrors(ctx context.Context, refs rateRefs) []core.FieldError {
-	return append(pairErrors(ctx, groupRatesField, keyGroup, in.GroupRates, refs.groups), modelRateErrors(ctx, in.ModelRates, refs)...)
+// rates are the rates of the input, seen from the segment.
+func (in *segmentInput) rates() rateWrite {
+	return rateWrite{far: keyGroup, pairList: groupRatesField, modelList: modelRatesField, pairs: in.GroupRates, models: in.ModelRates}
 }
 
 // check fails with the field errors of the whole input, for a segment of
 // the kind.
 func (s *Service) check(ctx context.Context, in *segmentInput, kind string, create bool) error {
 	fe := in.textErrors(ctx, kind, create)
-	in.trimModels()
-	refs, err := in.refs(ctx, s.db.Gorm, false)
+	rateErrs, err := in.rates().check(ctx, s.db.Gorm)
 	if err != nil {
 		return err
 	}
-	if fe = append(fe, in.rateErrors(ctx, refs)...); len(fe) > 0 {
+	if fe = append(fe, rateErrs...); len(fe) > 0 {
 		return core.InvalidFields(fe...)
 	}
 	return nil
-}
-
-// writeRates writes the checked rates of segment id, which tx has written:
-// the groups are locked and must still exist, and the segment may not be
-// the caller's own (guardOwnSegments).
-func (s *Service) writeRates(ctx context.Context, tx *gorm.DB, id int64, in *segmentInput) error {
-	if len(in.GroupRates)+len(in.ModelRates) == 0 {
-		return nil
-	}
-	if err := guardOwnSegments(ctx, tx, s.users, []int64{id}); err != nil {
-		return err
-	}
-	refs, err := in.refs(ctx, tx, true)
-	if err != nil {
-		return err
-	}
-	if fe := in.rateErrors(ctx, refs); len(fe) > 0 {
-		return core.InvalidFields(fe...)
-	}
-	for i := range in.GroupRates {
-		in.GroupRates[i].SegmentID = id
-	}
-	if err := putPairs(ctx, tx, in.GroupRates); err != nil {
-		return err
-	}
-	return putModelRates(ctx, tx, id, in.ModelRates)
 }
 
 // ratesWritten tells billing, once committed, that model rates changed:
@@ -136,13 +79,6 @@ func (s *Service) ratesWritten(ctx context.Context, modelRates bool) {
 	if modelRates && s.ratesChanged != nil {
 		s.ratesChanged(ctx)
 	}
-}
-
-// changesModelRates reports whether the write changes model rates: it
-// sets some, or removes a pair and with it the segment's model rates in
-// that group.
-func (in *segmentInput) changesModelRates() bool {
-	return len(in.ModelRates) > 0 || removes(in.GroupRates)
 }
 
 // columns are the segments columns of the provided fields, as written; the
@@ -178,13 +114,13 @@ func (s *Service) create(c *gin.Context) {
 		if err := store.G(ctx, tx).Create(&row).Error; err != nil {
 			return nameTaken(ctx, err)
 		}
-		return s.writeRates(ctx, tx, row.ID, &in)
+		return s.writeRates(ctx, tx, row.ID, in.rates())
 	})
 	if err != nil {
 		httpapi.Fail(c, err)
 		return
 	}
-	s.ratesWritten(ctx, in.changesModelRates())
+	s.ratesWritten(ctx, in.rates().changesModelRates())
 	s.render(c, row.ID, httpapi.Created)
 }
 
@@ -207,14 +143,14 @@ func (s *Service) update(c *gin.Context) {
 			if err := updateSegment(ctx, tx, id, &in); err != nil {
 				return err
 			}
-			return s.writeRates(ctx, tx, id, &in)
+			return s.writeRates(ctx, tx, id, in.rates())
 		})
 	}
 	if err != nil {
 		httpapi.Fail(c, err)
 		return
 	}
-	s.ratesWritten(ctx, in.changesModelRates())
+	s.ratesWritten(ctx, in.rates().changesModelRates())
 	s.render(c, id, httpapi.OK)
 }
 

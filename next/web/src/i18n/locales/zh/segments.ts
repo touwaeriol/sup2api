@@ -40,7 +40,7 @@ export default {
     empty: '还没有单独设倍率的模型',
     rateOf: '{model} 的模型倍率',
     undo: '撤销',
-    invalid: '「{group}」里 {model} 的模型倍率填得不对：填 0 到 999999.9999 之间的数字，最多 4 位小数。'
+    invalid: '「{name}」里 {model} 的模型倍率填得不对：填 0 到 999999.9999 之间的数字，最多 4 位小数。'
   },
   personal: {
     origin: '原来在 {name}',

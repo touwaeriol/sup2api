@@ -35,7 +35,7 @@ const tablePart = vi.hoisted(() => async (key: 'pricing' | 'segments', fields: s
 })
 // Mocked as modules, not stubbed: a stub may be a new component on every render, and a part registers once per mount.
 vi.mock('@/components/pricing/ModelPriceTable.vue', async () => ({ default: await tablePart('pricing', ['model_prices', 'model_rates'], ['groupId', 'baseRate']) }))
-vi.mock('./GroupSegmentsEditor.vue', async () => ({ default: await tablePart('segments', ['segment_rates'], ['groupId', 'visibility', 'defaultRate']) }))
+vi.mock('./GroupSegmentsEditor.vue', async () => ({ default: await tablePart('segments', ['segment_rates', 'segment_model_rates'], ['groupId', 'visibility', 'defaultRate']) }))
 const policy: Component = { props: ['options'], setup: (_: unknown, { expose }: SetupContext) => (expose({ commit: () => true }), () => h('div')) }
 
 const vip = { id: 2, name: 'vip', description: '', status: 'active', rate_multiplier: '0.8', visibility: 'restricted', model_allowlist: [] } as unknown as Group

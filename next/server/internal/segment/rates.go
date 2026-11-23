@@ -15,16 +15,49 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/x"
 )
 
-// The rates of a segment are written with the group (segment_rates of
-// POST/PATCH /groups) or with the segment (group_rates and model_rates of
-// POST/PATCH /segments), each list checked as a whole: any item that is
-// wrong writes nothing, and its field error names it by its position.
+// The rates of a segment are written with the group (segment_rates and
+// segment_model_rates of POST/PATCH /groups) or with the segment
+// (group_rates and model_rates of POST/PATCH /segments), each list checked
+// as a whole: any item that is wrong writes nothing, and its field error
+// names it by its position. Both are a rateWrite seen from one end.
 
 // The keys of the two ends of a pair, as items name them.
 const (
 	keySegment = "segment_id"
 	keyGroup   = "group_id"
 )
+
+// pairEnds are the two ends of an item: the end the write is made from is
+// set by the write (setEnd), whatever the item says.
+type pairEnds struct {
+	SegmentID int64 `json:"segment_id"`
+	GroupID   int64 `json:"group_id"`
+}
+
+// end is the id of the end key names.
+func (e pairEnds) end(key string) int64 {
+	if key == keySegment {
+		return e.SegmentID
+	}
+	return e.GroupID
+}
+
+// setEnd sets the end key names to id.
+func (e *pairEnds) setEnd(key string, id int64) {
+	if key == keySegment {
+		e.SegmentID = id
+	} else {
+		e.GroupID = id
+	}
+}
+
+// otherKey is the key of the end opposite the one key names.
+func otherKey(key string) string {
+	if key == keySegment {
+		return keyGroup
+	}
+	return keySegment
+}
 
 func unknownItem(ctx context.Context, path string) core.FieldError {
 	return core.NewFieldError(ctx, path, "not_found", "not found", "不存在")
@@ -34,28 +67,32 @@ func unknownItem(ctx context.Context, path string) core.FieldError {
 // a null rate follows the group. Remove drops the pair instead, with the
 // segment's model rates in the group; it takes no rate.
 type pairInput struct {
-	SegmentID int64          `json:"segment_id"`
-	GroupID   int64          `json:"group_id"`
-	Granted   *bool          `json:"granted"`
-	Rate      core.RateInput `json:"rate"`
-	Remove    bool           `json:"remove"`
+	pairEnds
+	Granted *bool          `json:"granted"`
+	Rate    core.RateInput `json:"rate"`
+	Remove  bool           `json:"remove"`
 }
 
-// end is the id of the end of the pair key names.
-func (p pairInput) end(key string) int64 {
-	if key == keySegment {
-		return p.SegmentID
-	}
-	return p.GroupID
-}
+// ended is an item with two ends: a pair or a model rate.
+type ended interface{ end(key string) int64 }
 
-// ends returns the distinct ids of the ends key names of the pairs.
-func ends(items []pairInput, key string) []int64 {
+// ends returns the distinct ids of the ends key names of the items.
+func ends[T ended](items []T, key string) []int64 {
 	ids := make([]int64, len(items))
 	for i, it := range items {
 		ids[i] = it.end(key)
 	}
 	return x.Unique(ids)
+}
+
+// setEnds sets the end key names of every item to id.
+func setEnds[T any, P interface {
+	*T
+	setEnd(key string, id int64)
+}](items []T, key string, id int64) {
+	for i := range items {
+		P(&items[i]).setEnd(key, id)
+	}
 }
 
 // removes reports whether an item removes its pair: the model rates of the
@@ -81,32 +118,30 @@ func pairErrors(ctx context.Context, list, key string, items []pairInput, known 
 
 // modelRateInput is a segment's rate for a model in a group; null removes it.
 type modelRateInput struct {
-	GroupID int64          `json:"group_id"`
-	Model   string         `json:"model"`
-	Rate    core.RateInput `json:"rate"`
+	pairEnds
+	Model string         `json:"model"`
+	Rate  core.RateInput `json:"rate"`
 }
 
-// modelRatesField is the list of model rates of POST/PATCH /segments.
-const modelRatesField = "model_rates"
-
-// rateRefs are what the rates of a segment write refer to: the groups that
-// exist and the models with an enabled global price.
+// rateRefs are what the rates of a write refer to: the far ends that exist
+// and the models with an enabled global price.
 type rateRefs struct {
-	groups map[int64]bool
+	known  map[int64]bool
 	priced map[string]bool
 }
 
-// modelRateErrors are the field errors of the model rates, their models
-// trimmed: a group that does not exist, no model, no rate, or a rate set on
-// a model with no global price (removing one always can).
-func modelRateErrors(ctx context.Context, items []modelRateInput, refs rateRefs) []core.FieldError {
+// modelRateErrors are the field errors of the model rates of the list,
+// their models trimmed: a far end (key) that does not exist, no model, no
+// rate, or a rate set on a model with no global price (removing one always
+// can).
+func modelRateErrors(ctx context.Context, list, key string, items []modelRateInput, refs rateRefs) []core.FieldError {
 	var fe []core.FieldError
 	for i, it := range items {
-		if !refs.groups[it.GroupID] {
-			fe = append(fe, unknownItem(ctx, core.ItemField(modelRatesField, i, keyGroup)))
+		if !refs.known[it.end(key)] {
+			fe = append(fe, unknownItem(ctx, core.ItemField(list, i, key)))
 		}
-		rateErrs := it.Rate.Errors(ctx, core.ItemField(modelRatesField, i, "rate"))
-		model := core.ItemField(modelRatesField, i, "model")
+		rateErrs := it.Rate.Errors(ctx, core.ItemField(list, i, "rate"))
+		model := core.ItemField(list, i, "model")
 		switch {
 		case it.Model == "":
 			fe = append(fe, core.NewFieldError(ctx, model, "required", "model is required", "模型必填"))
@@ -220,16 +255,16 @@ type newPair struct {
 
 func (newPair) TableName() string { return model.SegmentGroup{}.TableName() }
 
-// putModelRates writes the model rates of the segment, in one order for
-// every writer; items on one model keep the order sent, the last one wins.
-// The caller has locked the segment and the groups.
-func putModelRates(ctx context.Context, tx *gorm.DB, segmentID int64, items []modelRateInput) error {
+// putModelRates writes the model rates, in one order for every writer;
+// items on one model of one pair keep the order sent, the last one wins.
+// The caller has locked both ends.
+func putModelRates(ctx context.Context, tx *gorm.DB, items []modelRateInput) error {
 	ordered := slices.SortedStableFunc(slices.Values(items), func(a, b modelRateInput) int {
-		return cmp.Or(cmp.Compare(a.GroupID, b.GroupID), cmp.Compare(a.Model, b.Model))
+		return cmp.Or(cmp.Compare(a.SegmentID, b.SegmentID), cmp.Compare(a.GroupID, b.GroupID), cmp.Compare(a.Model, b.Model))
 	})
 	g := store.G(ctx, tx)
 	for _, it := range ordered {
-		if err := saveModelRate(g, segmentID, it).Error; err != nil {
+		if err := saveModelRate(g, it).Error; err != nil {
 			return err
 		}
 	}
@@ -238,12 +273,12 @@ func putModelRates(ctx context.Context, tx *gorm.DB, segmentID int64, items []mo
 
 // saveModelRate sets the segment's rate for the item's model in its group,
 // or removes it on a null rate.
-func saveModelRate(db *gorm.DB, segmentID int64, it modelRateInput) *gorm.DB {
+func saveModelRate(db *gorm.DB, it modelRateInput) *gorm.DB {
 	if it.Rate.Value == nil {
-		return db.Where("segment_id = ? AND group_id = ? AND model = ?", segmentID, it.GroupID, it.Model).
+		return db.Where("segment_id = ? AND group_id = ? AND model = ?", it.SegmentID, it.GroupID, it.Model).
 			Delete(&model.SegmentModelRate{})
 	}
-	return db.Clauses(store.UpsertOn([]string{"segment_id", "group_id", "model"}, "rate")).Create(&newModelRate{SegmentID: segmentID, GroupID: it.GroupID, Model: it.Model, Rate: *it.Rate.Value})
+	return db.Clauses(store.UpsertOn([]string{"segment_id", "group_id", "model"}, "rate")).Create(&newModelRate{SegmentID: it.SegmentID, GroupID: it.GroupID, Model: it.Model, Rate: *it.Rate.Value})
 }
 
 // newModelRate is a segment_model_rates row as written; updated_at is the

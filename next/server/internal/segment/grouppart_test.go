@@ -13,10 +13,20 @@ import (
 // groupWrite writes segment_rates as POST/PATCH /groups do, as the user:
 // the field errors the part found, or the error of the transaction.
 func (e *env) groupWrite(uid, groupID int64, items ...map[string]any) ([]core.FieldError, error) {
+	return e.groupWriteBody(uid, groupID, map[string]any{"segment_rates": items})
+}
+
+// groupWriteBody writes the lists of body as POST/PATCH /groups do, as the
+// user.
+func (e *env) groupWriteBody(uid, groupID int64, body map[string]any) ([]core.FieldError, error) {
 	ctx := core.WithUserID(e.t.Context(), uid)
-	raw, err := json.Marshal(items)
-	require.NoError(e.t, err)
-	w, fe, err := e.svc.PrepareGroupWrite(ctx, groupID, map[string]json.RawMessage{"segment_rates": raw})
+	raw := map[string]json.RawMessage{}
+	for k, v := range body {
+		b, err := json.Marshal(v)
+		require.NoError(e.t, err)
+		raw[k] = b
+	}
+	w, fe, err := e.svc.PrepareGroupWrite(ctx, groupID, raw)
 	if err != nil || len(fe) > 0 || w.Apply == nil {
 		return fe, err
 	}
@@ -120,6 +130,73 @@ func TestGroupWritePartBody(t *testing.T) {
 	_, fe, err = f.svc.PrepareGroupWrite(t.Context(), f.other, map[string]json.RawMessage{"segment_rates": []byte(`{}`)})
 	require.NoError(t, err)
 	require.Equal(t, []string{"segment_rates"}, fields(fe))
+}
+
+// segment_model_rates sets the segments' rates for the group's models from
+// the group, as model_rates of a segment does from the other end: checked as
+// a whole, the item's group ignored, billing's snapshot dropped.
+func TestGroupWriteSegmentModelRates(t *testing.T) {
+	f := newSettingsFixture(t)
+	write := func(items ...map[string]any) []string {
+		fe, err := f.groupWriteBody(f.admin, f.public, map[string]any{"segment_model_rates": items})
+		require.NoError(t, err)
+		return fields(fe)
+	}
+	require.Empty(t, write(map[string]any{"segment_id": f.vip, "model": " m ", "rate": "0.85"},
+		map[string]any{"segment_id": f.vip, "group_id": f.other, "model": "gpt-4o", "rate": "0.9"}))
+	require.Equal(t, "0.8500", f.modelRateOf(f.vip, f.public, "m"), "the model is trimmed")
+	require.Equal(t, "0.9000", f.modelRateOf(f.vip, f.public, "gpt-4o"), "the item's group is the group written")
+	require.Equal(t, "none", f.modelRateOf(f.vip, f.other, "gpt-4o"))
+	require.Equal(t, int32(1), f.ratesChanged.Load())
+	row := f.do(f.admin, "GET", path("/groups/%d/segments", f.public), nil).ok(200).rows()
+	require.NotNil(t, rowOfSegment(row, f.vip), "a segment with only model rates is listed")
+	require.Equal(t, []any{map[string]any{"model": "gpt-4o", "rate": "0.9"}, map[string]any{"model": "m", "rate": "0.85"}},
+		rowOfSegment(row, f.vip)["model_rates"])
+
+	require.Empty(t, write(map[string]any{"segment_id": f.vip, "model": "m", "rate": nil}))
+	require.Equal(t, "none", f.modelRateOf(f.vip, f.public, "m"), "null removes it")
+	require.Equal(t, []string{"segment_model_rates.0.segment_id", "segment_model_rates.1.model", "segment_model_rates.2.rate", "segment_model_rates.3.model"},
+		write(map[string]any{"segment_id": 999999, "model": "m", "rate": "1"},
+			map[string]any{"segment_id": f.vip, "model": "unpriced", "rate": "1"},
+			map[string]any{"segment_id": f.vip, "model": "m"},
+			map[string]any{"segment_id": f.vip, "model": " ", "rate": "1"}))
+	require.Equal(t, "0.9000", f.modelRateOf(f.vip, f.public, "gpt-4o"), "all or none")
+}
+
+// A pair removed and its model rates set in one write: the removal goes
+// first, the model rates sent with it stay; both lists are checked together.
+func TestGroupWriteRemoveThenModelRates(t *testing.T) {
+	f := newSettingsFixture(t)
+	f.exec(`INSERT INTO segment_model_rates (segment_id, group_id, model, rate) VALUES ($1, $2, 'gpt-4o', 0.5)`, f.vip, f.granted)
+	fe, err := f.groupWriteBody(f.admin, f.granted, map[string]any{
+		"segment_rates":       []any{map[string]any{"segment_id": f.vip, "remove": true}},
+		"segment_model_rates": []any{map[string]any{"segment_id": f.vip, "model": "m", "rate": "0.7"}}})
+	require.NoError(t, err)
+	require.Empty(t, fe)
+	require.Equal(t, "none", f.pairOf(f.vip, f.granted))
+	require.Equal(t, "none", f.modelRateOf(f.vip, f.granted, "gpt-4o"))
+	require.Equal(t, "0.7000", f.modelRateOf(f.vip, f.granted, "m"))
+
+	fe, err = f.groupWriteBody(f.admin, f.granted, map[string]any{
+		"segment_rates":       []any{map[string]any{"segment_id": f.vip, "rate": "-1"}},
+		"segment_model_rates": map[string]any{}})
+	require.NoError(t, err)
+	require.Equal(t, []string{"segment_model_rates"}, fields(fe), "a list that is none")
+	fe, err = f.groupWriteBody(f.admin, f.granted, map[string]any{
+		"segment_rates":       []any{map[string]any{"segment_id": f.vip, "rate": "-1"}},
+		"segment_model_rates": []any{map[string]any{"segment_id": 999999, "model": "m", "rate": "1"}}})
+	require.NoError(t, err)
+	require.Equal(t, []string{"segment_rates.0.rate", "segment_model_rates.0.segment_id"}, fields(fe))
+}
+
+// rowOfSegment is the row of segment id among rows of GET /groups/:id/segments.
+func rowOfSegment(rows []map[string]any, id int64) map[string]any {
+	for _, r := range rows {
+		if seg, _ := r["segment"].(map[string]any); seg != nil && int64(seg["id"].(float64)) == id {
+			return r
+		}
+	}
+	return nil
 }
 
 // Saves of the same pairs at once, from either side and in either order, all

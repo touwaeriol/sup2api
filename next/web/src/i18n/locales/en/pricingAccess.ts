@@ -35,7 +35,7 @@ export default {
     addSegment: 'Add user group',
     addUser: 'Add user',
     addNone: 'Every user group is listed',
-    modelRates: 'A rate of its own on {n} model; Remove deletes it too | Rates of its own on {n} models; Remove deletes them too',
+    modelRates: 'Remove deletes the model rates too',
     empty: {
       public: 'Nothing set here yet: everyone pays the base rate.',
       restricted: 'Not granted to any user group or user yet: nobody can use it.'

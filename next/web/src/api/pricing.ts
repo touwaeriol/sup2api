@@ -181,16 +181,25 @@ export interface SegmentModelRatePatch {
   rate: Money | null
 }
 
+/** An item of `segment_model_rates` (POST/PATCH /groups): a segment's rate for a model in the group, the other direction of SegmentModelRatePatch; `rate` is required, null removes it. */
+export interface GroupSegmentModelRatePatch {
+  segment_id: number
+  model: string
+  rate: Money | null
+}
+
 /**
  * What POST /groups and PATCH /groups/:id take besides the group's own
  * fields; PATCH sends only what changed. Checked as one: any item that is
  * wrong changes nothing, and its field error names it (`model_prices.<i>.rule`,
- * `model_rates.<i>.rate`, `segment_rates.<i>.rate`, `<i>` its position).
+ * `model_rates.<i>.rate`, `segment_rates.<i>.rate`, `segment_model_rates.<i>.model`,
+ * `<i>` its position).
  */
 export interface GroupPricingWrite {
   model_prices?: ModelPricePatch[]
   model_rates?: ModelRatePatch[]
   segment_rates?: SegmentRatePatch[]
+  segment_model_rates?: GroupSegmentModelRatePatch[]
 }
 
 /** POST /segments and PATCH /segments/:id, checked as one like GroupPricingWrite (`group_rates.<i>.rate`, `model_rates.<i>.rate`). A personal segment has no name or description. */

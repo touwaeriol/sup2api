@@ -9,53 +9,47 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 )
 
-// segmentRatesField is the list of POST/PATCH /groups that sets what the
-// segments have in the group: each item a segment, its grant and its rate.
-const segmentRatesField = "segment_rates"
+// The lists of POST/PATCH /groups this part owns: what the segments have in
+// the group (each item a segment, its grant and its rate), and their rates
+// for its models (each item a segment, a model and the rate).
+const (
+	segmentRatesField      = "segment_rates"
+	segmentModelRatesField = "segment_model_rates"
+)
 
-// PrepareGroupWrite implements core.GroupWritePart for segment_rates.
+// decodeGroupRates reads the lists of the body, as a write from the group;
+// a list that is none is a field error.
+func decodeGroupRates(ctx context.Context, body map[string]json.RawMessage) (rateWrite, []core.FieldError) {
+	w := rateWrite{far: keySegment, pairList: segmentRatesField, modelList: segmentModelRatesField}
+	var fe []core.FieldError
+	if raw, ok := body[segmentRatesField]; ok {
+		var errs []core.FieldError
+		w.pairs, errs = core.DecodeList[pairInput](ctx, raw, segmentRatesField, "user group rates", "用户分组倍率")
+		fe = append(fe, errs...)
+	}
+	if raw, ok := body[segmentModelRatesField]; ok {
+		var errs []core.FieldError
+		w.models, errs = core.DecodeList[modelRateInput](ctx, raw, segmentModelRatesField, "user group model rates", "用户分组模型倍率")
+		fe = append(fe, errs...)
+	}
+	return w, fe
+}
+
+// PrepareGroupWrite implements core.GroupWritePart for segment_rates and
+// segment_model_rates.
 func (s *Service) PrepareGroupWrite(ctx context.Context, _ int64, body map[string]json.RawMessage) (core.GroupWrite, []core.FieldError, error) {
-	raw, ok := body[segmentRatesField]
-	if !ok {
-		return core.GroupWrite{}, nil, nil
-	}
-	items, fe := core.DecodeList[pairInput](ctx, raw, segmentRatesField, "user group rates", "用户分组倍率")
-	if fe != nil {
+	w, fe := decodeGroupRates(ctx, body)
+	if len(fe) > 0 || w.empty() {
 		return core.GroupWrite{}, fe, nil
 	}
-	known, err := knownRows(ctx, s.db.Gorm, "segments", ends(items, keySegment), false)
-	if err != nil {
-		return core.GroupWrite{}, nil, err
-	}
-	if fe := pairErrors(ctx, segmentRatesField, keySegment, items, known); len(fe) > 0 || len(items) == 0 {
-		return core.GroupWrite{}, fe, nil
+	if fe, err := w.check(ctx, s.db.Gorm); err != nil || len(fe) > 0 {
+		return core.GroupWrite{}, fe, err
 	}
 	write := core.GroupWrite{Apply: func(ctx context.Context, tx *gorm.DB, groupID int64) error {
-		return s.putGroupPairs(ctx, tx, groupID, items)
+		return s.writeRates(ctx, tx, groupID, w)
 	}}
-	if removes(items) {
+	if w.changesModelRates() {
 		write.AfterCommit = func(ctx context.Context, _ int64) { s.ratesWritten(ctx, true) }
 	}
 	return write, nil, nil
-}
-
-// putGroupPairs writes the checked items as pairs of the group, which tx
-// has written: the segments are locked and must still exist, and none of
-// them may be the caller's own (guardOwnSegments).
-func (s *Service) putGroupPairs(ctx context.Context, tx *gorm.DB, groupID int64, items []pairInput) error {
-	for i := range items {
-		items[i].GroupID = groupID
-	}
-	segments := ends(items, keySegment)
-	known, err := knownRows(ctx, tx, "segments", segments, true)
-	if err != nil {
-		return err
-	}
-	if fe := pairErrors(ctx, segmentRatesField, keySegment, items, known); len(fe) > 0 {
-		return core.InvalidFields(fe...)
-	}
-	if err := guardOwnSegments(ctx, tx, s.users, segments); err != nil {
-		return err
-	}
-	return putPairs(ctx, tx, items)
 }

@@ -35,7 +35,7 @@ export default {
     addSegment: '添加用户分组',
     addUser: '添加用户',
     addNone: '用户分组都已在列表里',
-    modelRates: '{n} 个模型单独设了倍率，移除时一并删除',
+    modelRates: '移除时模型倍率一并删除',
     empty: {
       public: '还没有单独设置：所有人按基本倍率计费。',
       restricted: '还没有开通给任何用户分组或用户，现在没有人能用。'
