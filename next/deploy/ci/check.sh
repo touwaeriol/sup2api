@@ -110,7 +110,7 @@ realcore() {
   set -e
   checks=/src/checks
   # Both versions must satisfy the bundled plugins' hostCompat (>=0.1.304
-  # <0.2.0, dynweight >=0.1.312), or the cores refuse them.
+  # <0.2.0, dynweight >=0.1.311), or the cores refuse them.
   CGO_ENABLED=0 go build -ldflags '-X main.Version=0.1.900' -o "$checks/core-r1" ./server/cmd/sub2api
   # R2 is built from a separate copy with one test-only SQL migration. It is
   # never added to the application's migration inventory.

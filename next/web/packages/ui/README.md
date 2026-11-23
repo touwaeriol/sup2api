@@ -590,7 +590,7 @@ async function save() {
 
 ## 页面操作留在页面里（UI SDK 4.3）
 
-页面的操作按钮（新建、刷新、管理……）不再进控制台顶栏，每个页面都放在同一个位置，样式以账号列表为准。只改了宿主的渲染：旧插件不重新构建也照这样显示。用到本节新增的 `STabs #end`、`SAutoRefresh` 的 `button` / `loading` 的插件声明 `hostUICompat: "^4.3"`，`hostCompat` 要求核心 `>=0.1.312`（0.1.311 是最后一个带 UI 4.2 的核心）。`:fab="false"` 在旧宿主上同样有效（`fab` 原来就是 `SButton` 的属性），只为它不必抬声明。
+页面的操作按钮（新建、刷新、管理……）不再进控制台顶栏，每个页面都放在同一个位置，样式以账号列表为准。只改了宿主的渲染：旧插件不重新构建也照这样显示。用到本节新增的 `STabs #end`、`SAutoRefresh` 的 `button` / `loading` 的插件声明 `hostUICompat: "^4.3"`，`hostCompat` 要求核心 `>=0.1.311`（0.1.310 是最后一个带 UI 4.2 的核心）。`:fab="false"` 在旧宿主上同样有效（`fab` 原来就是 `SButton` 的属性），只为它不必抬声明。
 
 ```vue
 <SPageHeader :title="t('title')">
