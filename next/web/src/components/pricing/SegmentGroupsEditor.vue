@@ -2,12 +2,13 @@
 import { watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '@sub2api/host'
-import { SHint, SLink, SStatusBadge } from '@sub2api/ui'
+import { SHint, SStatusBadge } from '@sub2api/ui'
 import type { Group } from '@/api/types'
 import type { SegmentGroupSetting } from '@/api/pricing'
 import { fetchAllPages } from '@/composables/lookups'
 import AccessRateTable from './AccessRateTable.vue'
 import GroupVisibilityBadge from './GroupVisibilityBadge.vue'
+import ModelRatesToggle from './ModelRatesToggle.vue'
 import SegmentModelRates from './SegmentModelRates.vue'
 import { blankGroupSetting } from './accessRateDrafts'
 import { rateText } from './pricingFormat'
@@ -66,12 +67,10 @@ watch(
       <SStatusBadge v-if="row.group.status !== 'active'" :status="row.group.status" size="xs" />
     </template>
     <template #note="{ row, expanded, toggleExpand }">
-      <SHint size="xs">
-        {{ t('pricingAccess.groupRate') }} {{ rateText(row.group.rate_multiplier) }} ·
-        <SLink as="button" :aria-expanded="expanded" data-testid="segment-model-rates-toggle" @click="toggleExpand()">
-          {{ t('segments.modelRates.toggle', { n: modelRates.rowsOf(row.id).length }) }}
-        </SLink>
-      </SHint>
+      <div class="mt-1 flex flex-wrap items-center gap-2">
+        <SHint inline size="xs">{{ t('pricingAccess.groupRate') }} {{ rateText(row.group.rate_multiplier) }}</SHint>
+        <ModelRatesToggle :count="modelRates.rowsOf(row.id).length" :expanded="expanded" :editable="editable" data-testid="segment-model-rates-toggle" @toggle="toggleExpand()" />
+      </div>
     </template>
     <template #expand="{ row }">
       <SegmentModelRates

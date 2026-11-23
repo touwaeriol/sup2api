@@ -57,6 +57,15 @@ describe('the visual editor', () => {
     expect(compactVisualConfig(c).rules[0].conds[1]).toMatchObject({ value: '5' })
   })
 
+  it('loads a token tier saved without p or c at 0, as the server bills it, and keeps a blank (null) of a draft blank', () => {
+    const [saved, draft, request] = editableVisualConfig({ tiers: [{ name: 'a', when: upTo(9), cr: 1 }, { name: 'b', when: upTo(99), p: null, c: 2 }, { name: 'c', unit: 'request', price: 1 }] }).tiers
+    expect([saved, draft, request]).toEqual([
+      { name: 'a', when: upTo(9), unit: 'token', p: 0, c: 0, cr: 1 },
+      { name: 'b', when: upTo(99), unit: 'token', p: null, c: 2 },
+      { name: 'c', unit: 'request', price: 1 }
+    ])
+  })
+
   it('names an added tier by the first tier_N not taken, before the rest, up to twice the longest len bound', () => {
     const tiers = editableVisualConfig({ tiers: [{ name: 'tier_2', when: upTo(100) }, { name: 'base' }] }).tiers
     addTier(tiers)

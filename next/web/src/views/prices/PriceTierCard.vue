@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { SButton, SCheckbox, SDropdown, SIcon, SInput, SSelect } from '@sub2api/ui'
 import { usd } from '@/components/pricing/pricingFormat'
-import { MAX_COND_DEPTH, MAX_COND_LEAVES, num, pricedKeys, type PriceKey, type VisualTier } from './priceExpr'
+import { MAX_COND_DEPTH, MAX_COND_LEAVES, chargedKeys, isSet, num, type PriceKey, type VisualTier } from './priceExpr'
 import { condText } from './tierCond'
 import { priceOn, setPriceOn } from './visualPrice'
 import TierCondTree from './TierCondTree.vue'
@@ -12,7 +12,8 @@ import TierCondTree from './TierCondTree.vue'
 // when it matches (its condition in words) and what it charges; the body
 // edits the condition (TierCondTree; the rest has none), the name, the unit
 // and the prices. A price is on when its box is ticked (the key is in the
-// tier, visualPrice.priceOn); a ticked price left blank is not charged. The
+// tier, visualPrice.priceOn); a ticked price left blank is not filled in
+// (never 0): the price cannot be saved until a number is typed. The
 // menu moves the tier up or down (`canUp` / `canDown`) and removes it.
 // Read-only, it still opens and closes.
 const tier = defineModel<VisualTier>({ required: true })
@@ -30,10 +31,12 @@ const condition = computed(() => {
   return condText(t, tier.value.when!)
 })
 
+/** A price as typed: '—' while blank. */
+const typed = (v: unknown) => usd(isSet(v) ? num(v) : null)
 const summary = computed(() => {
   const x = tier.value
-  if (x.unit === 'request') return [{ k: t('prices.def.perRequestLabel'), v: usd(num(x.price)) }]
-  return pricedKeys(x).map(k => ({ k: t(`prices.vars.${k}`), v: usd(num(x[k])) }))
+  if (x.unit === 'request') return [{ k: t('prices.def.perRequestLabel'), v: typed(x.price) }]
+  return chargedKeys(x).map(k => ({ k: t(`prices.vars.${k}`), v: typed(x[k]) }))
 })
 
 const unitOptions = computed(() => (['token', 'request'] as const).map(u => ({ value: u, label: t(`prices.tier.unitOf.${u}`) })))
@@ -55,7 +58,7 @@ const MEDIA_FIELDS: Field[] = [
   { key: 'img_o', fallback: true }
 ]
 const on = (k: PriceKey) => priceOn(tier.value, k)
-const placeholder = (f: Field) => (on(f.key) ? '0' : f.fallback ? t(`prices.tier.fallback.${f.key}`) : t('prices.unsetPlaceholder'))
+const placeholder = (f: Field) => (on(f.key) ? t('prices.tier.required') : f.fallback ? t(`prices.tier.fallback.${f.key}`) : t('prices.unsetPlaceholder'))
 /** The media prices start open on a tier that charges one (a card is keyed by its tier: a template makes new cards). */
 const mediaOpen = ref(MEDIA_FIELDS.some(f => on(f.key)))
 </script>
@@ -114,7 +117,7 @@ const mediaOpen = ref(MEDIA_FIELDS.some(f => on(f.key)))
           <span class="text-sm font-semibold text-fg">{{ t('prices.perRequestPrice') }}</span>
           <span class="rounded-md bg-surface-2 px-2 py-0.5 text-[11px] text-fg-muted">${{ t('prices.per.request') }}</span>
         </div>
-        <SInput v-model="tier.price" size="sm" type="number" min="0" step="any" class="w-44" placeholder="0" :disabled="disabled" :aria-label="t('prices.perRequestPrice')" />
+        <SInput v-model="tier.price" size="sm" type="number" min="0" step="any" class="w-44" :placeholder="t('prices.tier.required')" :disabled="disabled" :aria-label="t('prices.perRequestPrice')" />
         <p class="mt-1 text-xs text-fg-subtle">{{ t('prices.tier.requestHint') }}</p>
       </div>
       <div v-else>

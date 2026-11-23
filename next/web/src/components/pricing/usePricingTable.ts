@@ -4,7 +4,7 @@ import type { CatalogPrice, GroupModelPrices, ModelPriceRow } from '@/api/pricin
 import { i18n } from '@/i18n'
 import { listRequest, withDraft } from './drafts'
 import { effectiveRate } from './pricingFormat'
-import { catalogPrices, catalogRow, draftedRow, mergeRowDraft, groupModelRatePatches, modelPricePatches, type DraftedRow, type RowDraft } from './pricingRows'
+import { catalogPrices, catalogRow, draftedRow, mergeRowDraft, groupModelRatePatches, modelPricePatches, savedPrice, validPrice, type DraftedRow, type RowDraft } from './pricingRows'
 import { useDrafts } from './useDrafts'
 
 export interface PricingTableOptions {
@@ -28,6 +28,8 @@ export interface PricingRow extends DraftedRow {
   applied: ReturnType<typeof effectiveRate>
   /** Added here and not saved: it can go again. */
   removable: boolean
+  /** It has a price to bill by: the original price, or a model price typed in full; else its requests are refused. */
+  priced: boolean
   /** Why the server refused what was sent for it. */
   error?: string
 }
@@ -47,7 +49,7 @@ export function usePricingTable(options: PricingTableOptions) {
     const r = draftedRow(row, state.drafts.value.get(row.model))
     const applied = effectiveRate({ group_model: r.rate, group: options.baseRate() })
     const removable = added.value.includes(r.model) && !state.saved.value.rows.some((s) => s.model === r.model)
-    return { ...r, applied, removable, error: rowErrors.value.get(r.model) }
+    return { ...r, applied, removable, priced: !!r.base || (!!r.price && validPrice(r.price)), error: rowErrors.value.get(r.model) }
   }
 
   /** Why the drafts cannot be sent yet: the first row not filled in right, by its model. */
@@ -71,7 +73,7 @@ async function fetchSaved(options: PricingTableOptions): Promise<Saved> {
     id === null ? null : api.get<GroupModelPrices>(`/groups/${id}/model-prices`),
     options.editable() ? api.get<CatalogPrice[]>('/pricing/catalog') : []
   ])
-  return { rows: prices?.models ?? [], catalog }
+  return { rows: (prices?.models ?? []).map((r) => ({ ...r, price: savedPrice(r.price) })), catalog }
 }
 
 /** The saved rows, then the models added here that the server does not list, from the catalog. */

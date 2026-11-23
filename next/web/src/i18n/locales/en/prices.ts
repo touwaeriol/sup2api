@@ -86,6 +86,7 @@ export default {
     }
   },
   tier: {
+    required: 'Enter a price',
     listHint: 'Tiers are matched in order: the first whose condition holds sets the price, and the last one takes the rest.',
     add: 'Add tier',
     matchOnly: 'Always matches (the only tier)',
@@ -372,6 +373,7 @@ export default {
     condDepth: 'The condition of tier "{name}" nests at most {n} levels deep',
     condLeaves: 'Tier "{name}" takes at most {n} conditions',
     tierPrice: 'Tier "{name}" needs a per-request price',
+    tierBlank: 'Tier "{name}" has a price not filled in: enter a price (0 for free), or untick it',
     negative: 'The prices of tier "{name}" may not be negative',
     ruleField: 'Surcharge rule {n} is incomplete or invalid: the multiplier may not be negative, a compared value may not be blank, and a size comparison takes a number',
     ruleHeader: 'Surcharge rule {n} has an invalid header name',

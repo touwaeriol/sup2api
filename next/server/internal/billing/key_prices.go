@@ -90,9 +90,10 @@ func scaleAsExpression(p *syncPrice, factor string) error {
 }
 
 // keyPrices lists the enabled prices for the holder of an API key (another
-// sup2api syncing from this one): only models the key's group allows, at the
-// group's list price from the price snapshot requests are billed by, plus
-// the rate the key's owner pays there for a model with no rate of its own.
+// sup2api syncing from this one): only models the key's group allows and
+// prices (a global price or the group's own), at the group's list price from
+// the price snapshot requests are billed by, plus the rate the key's owner
+// pays there for a model with no rate of its own.
 // The key goes in Authorization: Bearer or x-api-key.
 func (s *Service) keyPrices(c *gin.Context) {
 	ctx := c.Request.Context()
@@ -109,10 +110,10 @@ func (s *Service) keyPrices(c *gin.Context) {
 	rate, _ := pr.Rates().Rate()
 	out := KeyPrices{Prices: []syncPrice{}, RateMultiplier: rate}
 	out.Group.ID, out.Group.Name = pr.Group.ID, pr.Group.Name
-	models := slices.DeleteFunc(snap.bases.models(), func(model string) bool { return !pr.Group.AllowsModel(model) })
-	snap.each(pr.Group.ID, models, func(model string, base PriceDef, rule *storedRule) {
+	models := slices.DeleteFunc(snap.priced(pr.Group.ID), func(model string) bool { return !pr.Group.AllowsModel(model) })
+	snap.each(pr.Group.ID, models, func(model string, price PriceDef, _ string) {
 		modelRate, _ := snap.rates.levels(core.PriceQuery{Model: model, GroupID: pr.Group.ID}, pr.SegmentID, pr.Rates()).Rate()
-		p, err := exportPrice(model, listPrice(base, rule), rate, modelRate)
+		p, err := exportPrice(model, price, rate, modelRate)
 		if err != nil {
 			// Left out rather than listed at a price that is not the owner's.
 			slog.WarnContext(ctx, "billing: key prices: model left out", "model", model, "group_id", pr.Group.ID, "err", err)

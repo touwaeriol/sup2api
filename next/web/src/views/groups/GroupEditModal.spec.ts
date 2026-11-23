@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { enableAutoUnmount, flushPromises, mount, type VueWrapper } from '@vue/test-utils'
-import { h, type Component, type SetupContext } from 'vue'
+import { h, nextTick, type Component, type SetupContext } from 'vue'
 import { ApiError } from '@sub2api/host'
 import { i18n } from '@/i18n'
 import type { Group } from '@/api/types'
@@ -35,7 +35,7 @@ const tablePart = vi.hoisted(() => async (key: 'pricing' | 'segments', fields: s
 })
 // Mocked as modules, not stubbed: a stub may be a new component on every render, and a part registers once per mount.
 vi.mock('@/components/pricing/ModelPriceTable.vue', async () => ({ default: await tablePart('pricing', ['model_prices', 'model_rates'], ['groupId', 'baseRate']) }))
-vi.mock('./GroupSegmentsEditor.vue', async () => ({ default: await tablePart('segments', ['segment_rates', 'segment_model_rates'], ['groupId', 'visibility', 'defaultRate']) }))
+vi.mock('./GroupSegmentsEditor.vue', async () => ({ default: await tablePart('segments', ['segment_rates', 'segment_model_rates'], ['groupId', 'visibility', 'defaultRate', 'priced']) }))
 const policy: Component = { props: ['options'], setup: (_: unknown, { expose }: SetupContext) => (expose({ commit: () => true }), () => h('div')) }
 
 const vip = { id: 2, name: 'vip', description: '', status: 'active', rate_multiplier: '0.8', visibility: 'restricted', model_allowlist: [] } as unknown as Group
@@ -105,6 +105,15 @@ describe('group editor', () => {
     await w.get('[data-testid="group-default-rate"]').setValue('1.')
     expect(table().attributes('data-baserate')).toBe('')
     expect(w.get('[data-testid="stub-segments"]').attributes()).toMatchObject({ 'data-visibility': 'public', 'data-defaultrate': '1.' })
+  })
+
+  it('tells the user group rates which models the pricing tab has priced as drafted', async () => {
+    const { w } = await render(null)
+    const drafted = new Map([['claude-opus-x-test', true]])
+    const stub = (key: string) => w.findComponent(`[data-testid="stub-${key}"]`) as VueWrapper
+    stub('pricing').vm.$emit('priced', drafted)
+    await nextTick()
+    expect(stub('segments').props()).toMatchObject({ priced: drafted })
   })
 
   it('lists the models of the group opened last, whichever answers first', async () => {

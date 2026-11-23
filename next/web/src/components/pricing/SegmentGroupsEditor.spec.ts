@@ -43,6 +43,9 @@ const modelPrices = (): GroupModelPrices => ({
   ]
 })
 
+/** The global prices: a model the accounts offer too, and one they do not. */
+const catalog = () => [{ model: 'o3', price }, { model: 'claude-x', price }]
+
 /** The editor as the part of a tabbed form, as the segment editor and the pricing drawer hold it. */
 const Host = defineComponent({
   props: { segmentId: { type: Number as PropType<number | null>, default: null }, editable: Boolean },
@@ -66,8 +69,10 @@ async function render(props: { segmentId: number | null; editable?: boolean }) {
     await flushPromises()
     return { result, body: send.mock.calls[0]?.[0] }
   }
+  /** Opens the model rates of a row, unless they are open already (a row with saved ones starts open). */
   const openModels = async (id: number) => {
-    await row(id).get('[data-testid="segment-model-rates-toggle"]').trigger('click')
+    const toggle = row(id).get('[data-testid="segment-model-rates-toggle"]')
+    if (toggle.attributes('aria-expanded') !== 'true') await toggle.trigger('click')
     await flushPromises()
     return w.get(`[data-testid="segment-model-rates"][data-group="${id}"]`)
   }
@@ -75,7 +80,7 @@ async function render(props: { segmentId: number | null; editable?: boolean }) {
 }
 
 beforeEach(() => {
-  mocks.get.mockReset().mockImplementation(async (path: string) => (path.endsWith('/model-prices') ? modelPrices() : saved()))
+  mocks.get.mockReset().mockImplementation(async (path: string) => (path.endsWith('/model-prices') ? modelPrices() : path === '/pricing/catalog' ? catalog() : saved()))
   mocks.toast.mockReset()
   mocks.allPages.mockReset()
 })
@@ -86,7 +91,8 @@ describe('the account groups of a segment', () => {
     expect(mocks.get).toHaveBeenCalledWith('/segments/2/groups')
     expect(w.findAll('thead th').map((th) => th.text())).toEqual(['Account group', 'Available', 'Rate', 'Paid rate'])
     expect(row(1).text()).toContain('Base rate ×1.2')
-    expect(row(1).get('[data-testid="segment-model-rates-toggle"]').text()).toBe('Model rates (1)')
+    expect(row(1).get('[data-testid="segment-model-rates-toggle"]').text()).toBe('Model rates 1')
+    expect(row(2).get('[data-testid="segment-model-rates-toggle"]').text()).toBe('Model rates 0')
     expect(row(1).get('[data-testid="access-rate-public"]').text()).toBe('Public')
     expect(row(1).get('[data-testid="rate-override-value"]').text()).toBe('Follows')
     expect(source(1)).toBe('Follows the account group')
@@ -156,6 +162,7 @@ describe('the model rates of a segment in an account group', () => {
 
   it('adds a model at the rate it pays now: the account group\'s model rate, or the row\'s once it has one', async () => {
     mocks.get.mockImplementation(async (path: string) => {
+      if (path === '/pricing/catalog') return catalog()
       if (!path.endsWith('/model-prices')) return saved()
       const prices = modelPrices()
       prices.models[1].rate = '0.9'
@@ -178,15 +185,51 @@ describe('the model rates of a segment in an account group', () => {
     const rates = await openModels(1)
     expect(mocks.get).toHaveBeenCalledWith('/groups/1/model-prices')
     const add = rates.getComponent(AddSelect)
-    expect(add.props('options').map((o: { value: unknown }) => o.value)).toEqual(['o3'])
+    // The accounts' models first, then the global prices, then (greyed) what is listed already.
+    const options = add.props('options') as Array<{ value: unknown; tag?: string; disabled?: boolean }>
+    expect(options.map((o) => [o.value, o.tag, !!o.disabled])).toEqual([
+      ['o3', 'Offered by accounts', false],
+      ['unpriced', 'Offered by accounts', false],
+      ['claude-x', 'Model prices', false],
+      ['gpt-4o', 'Added', true]
+    ])
     add.vm.$emit('add', 'o3')
     await flushPromises()
     const input = (model: string) => w.get(`[data-testid="segment-model-rate-row"][data-model="${model}"] input`)
     expect((input('o3').element as HTMLInputElement).value).toBe('1.2')
     await input('o3').setValue('0.7')
     await w.get('[data-model="gpt-4o"] [data-testid="segment-model-rate-remove"]').trigger('click')
-    expect(row(1).get('[data-testid="segment-model-rates-toggle"]').text()).toBe('Model rates (2)')
+    expect(row(1).get('[data-testid="segment-model-rates-toggle"]').text()).toBe('Model rates 2')
     expect((await sent()).body).toEqual({ model_rates: [{ group_id: 1, model: 'o3', rate: '0.7' }, { group_id: 1, model: 'gpt-4o', rate: null }] })
+  })
+
+  it('opens the rows with saved model rates, and offers to set some on the others', async () => {
+    const { w, row } = await render({ segmentId: 2, editable: true })
+    const toggle = (id: number) => row(id).get('[data-testid="segment-model-rates-toggle"]')
+    const open = () => w.findAll('[data-testid="segment-model-rates"]').map((e) => e.attributes('data-group'))
+    expect([toggle(1).attributes('aria-expanded'), toggle(2).attributes('aria-expanded')]).toEqual(['true', 'false'])
+    expect(open()).toEqual(['1'])
+    expect(toggle(2).text()).toBe('Set model rates')
+    await toggle(1).trigger('click')
+    expect(open()).toEqual([])
+  })
+
+  it('adds any model, typed or without a price, and says which are not priced', async () => {
+    const { w, openModels, sent } = await render({ segmentId: 2, editable: true })
+    const rates = await openModels(1)
+    const add = rates.getComponent(AddSelect)
+    expect(add.props('creatable')).toBe(true)
+    expect(add.props('options').find((o: { value: unknown }) => o.value === 'unpriced')?.hint).toBe('No price')
+    add.vm.$emit('add', 'claude-opus-x-test')
+    add.vm.$emit('add', 'unpriced')
+    add.vm.$emit('add', 'o3')
+    await flushPromises()
+    const unpriced = (model: string) => w.get(`[data-testid="segment-model-rate-row"][data-model="${model}"]`).find('[data-testid="segment-model-rate-unpriced"]')
+    expect(unpriced('claude-opus-x-test').text()).toBe('Not priced: requests for this model are refused until it has a price, a custom price in this account group or a global price')
+    expect([unpriced('unpriced').exists(), unpriced('o3').exists(), unpriced('gpt-4o').exists()]).toEqual([true, false, false])
+    // A typed model starts at the rate the row pays now.
+    expect((w.get('[data-model="claude-opus-x-test"] input').element as HTMLInputElement).value).toBe('1.2')
+    expect((await sent()).body.model_rates).toContainEqual({ group_id: 1, model: 'claude-opus-x-test', rate: '1.2' })
   })
 
   it('keeps a model rate that is not one back, naming the account group', async () => {

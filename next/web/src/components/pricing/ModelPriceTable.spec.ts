@@ -171,11 +171,15 @@ describe('model price table', () => {
     expect(w.find('[data-testid="model-price-editor-editor"]').exists()).toBe(false)
   })
 
-  it('adds any model with an original price, which can go again with its draft until it is saved', async () => {
+  it('offers the models with an original price, which can go again with their draft until saved', async () => {
     const { w, row, cell, rate, add, form } = await hosted({ groupId: 3 })
     expect(mocks.get).toHaveBeenCalledWith('/pricing/catalog')
-    const options = () => w.getComponent(AddSelect).props('options').map((o: { value: unknown; hint?: string }) => [o.value, o.hint])
-    expect(options()).toEqual([['claude-haiku-4-5', '$1 / $5']])
+    type Option = { value: unknown; hint?: string; tag?: string; disabled?: boolean }
+    const all = () => w.getComponent(AddSelect).props('options') as Option[]
+    const options = () => all().filter((o) => !o.disabled).map((o) => [o.value, o.tag, o.hint])
+    expect(options()).toEqual([['claude-haiku-4-5', 'Model prices', '$1 / $5']])
+    // The listed models are offered greyed: a typed name of one is not added again.
+    expect(all().filter((o) => o.disabled).map((o) => [o.value, o.tag])).toEqual([['gpt-4o', 'Added'], ['o3', 'Added'], ['gpt-5', 'Added']])
     await add('claude-haiku-4-5')
     expect(cell('claude-haiku-4-5', 'base')).toBe('$1 / $5')
     expect(options()).toEqual([])
@@ -185,6 +189,66 @@ describe('model price table', () => {
     await row('claude-haiku-4-5').get('[data-testid="model-price-remove"]').trigger('click')
     expect(w.find('[data-model="claude-haiku-4-5"]').exists()).toBe(false)
     expect(form.anyDirty.value).toBe(false)
+  })
+
+  it('adds a typed model without a global price: not priced until its own price is typed, a rate kept meanwhile', async () => {
+    const { w, row, cell, rate, editor, add, sent } = await hosted({ groupId: 3 })
+    expect(w.getComponent(AddSelect).props('creatable')).toBe(true)
+    expect(w.getComponent(AddSelect).props('footer')).toBe('Models the accounts offer first, then those on Model prices; or type any model name')
+    await add('claude-opus-x-test')
+    expect(cell('claude-opus-x-test', 'base')).toBe('No price')
+    expect(cell('claude-opus-x-test', 'paid')).toBe('No price')
+    expect(cell('claude-opus-x-test', 'unpriced')).toBe('Not priced: requests for this model are refused until it has a price, a custom price in this account group or a global price')
+    expect(row('gpt-4o').find('[data-testid="model-price-unpriced"]').exists()).toBe(false)
+    await rate('claude-opus-x-test').setValue('0.7')
+    await row('claude-opus-x-test').get('[data-testid="model-price-set"]').trigger('click')
+    await editor().get('input[type="radio"][value="custom"]').setValue(true)
+    await flushPromises()
+    // The price editor starts blank (nothing to copy), and blank is not $0: the group is kept back until a price is typed.
+    const fields = () => editor().findAll('input[type="number"]')
+    expect(fields().map((f) => (f.element as HTMLInputElement).value).filter(Boolean)).toEqual([])
+    expect(cell('claude-opus-x-test', 'price')).toBe('— / —')
+    expect((await sent()).result).toBe(false)
+    expect(mocks.toast).toHaveBeenCalledWith('The model price or model rate of claude-opus-x-test is not valid. Correct it first.', 'error')
+    const priced = () => (w.getComponent(ModelPriceTable).emitted('priced')?.at(-1)?.[0] as ReadonlyMap<string, boolean>).get('claude-opus-x-test')
+    expect([row('claude-opus-x-test').find('[data-testid="model-price-unpriced"]').exists(), priced()]).toEqual([true, false])
+    await fields()[0].setValue('3')
+    await fields()[1].setValue('0')
+    await flushPromises()
+    expect([row('claude-opus-x-test').find('[data-testid="model-price-unpriced"]').exists(), priced()]).toEqual([false, true])
+    const body = (await sent()).body
+    expect(body?.model_rates).toEqual([{ model: 'claude-opus-x-test', rate: '0.7' }])
+    expect(body?.model_prices).toEqual([{ model: 'claude-opus-x-test', rule: { mode: 'visual', config: { tiers: [{ name: 'base', unit: 'token', p: 3, c: 0 }], rules: [] } } }])
+  })
+
+  it('says a saved model with only a rate is not priced, and adds a typed name it lists only once', async () => {
+    mocks.get.mockImplementation(async (path: string) => (path === '/pricing/catalog' ? catalog : prices([...groupView().models, { model: 'only-rate', offered: false, base: null, price: null, rate: '0.5' }])))
+    const { w, row, add } = await hosted({ groupId: 3 })
+    expect(row('only-rate').find('[data-testid="model-price-unpriced"]').exists()).toBe(true)
+    await add('only-rate')
+    expect(w.findAll('[data-model="only-rate"]')).toHaveLength(1)
+    expect(row('only-rate').find('[data-testid="model-price-remove"]').exists()).toBe(false)
+  })
+
+  it('takes a saved custom price stored without c (billed 0) as priced, and opening its editor changes nothing', async () => {
+    const stored: CustomPrice = { mode: 'visual', config: { tiers: [{ name: 'base', p: 2 }], rules: [] } }
+    mocks.get.mockImplementation(async (path: string) => (path === '/pricing/catalog' ? catalog : prices([{ model: 'legacy', offered: true, base: null, price: stored, rate: null }])))
+    const { row, editor, form } = await hosted({ groupId: 3 })
+    expect(row('legacy').find('[data-testid="model-price-unpriced"]').exists()).toBe(false)
+    await row('legacy').get('[data-testid="model-price-set"]').trigger('click')
+    await flushPromises()
+    expect(editor().findAll('input[type="number"]').map((f) => (f.element as HTMLInputElement).value).slice(0, 2)).toEqual(['2', '0'])
+    expect(form.anyDirty.value).toBe(false)
+  })
+
+  it('does not call a model with a global price unpriced while its custom price is being typed', async () => {
+    const { row, editor } = await hosted({ groupId: 3 })
+    await row('o3').get('[data-testid="model-price-set"]').trigger('click')
+    await editor().get('input[type="radio"][value="custom"]').setValue(true)
+    await editor().findAll('input[type="number"]')[0].setValue('')
+    await flushPromises()
+    expect(row('o3').find('[data-testid="model-price-unpriced"]').exists()).toBe(false)
+    expect(editor().find('[data-testid="model-price-editor-issue"]').exists()).toBe(true)
   })
 
   it('searches and filters the models set on once there are many', async () => {

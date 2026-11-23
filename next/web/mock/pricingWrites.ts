@@ -7,7 +7,7 @@
 // (groups.ts) and POST/PATCH /segments (pricing.ts) call these.
 import { fail, type MockRequest, type MockResult } from './router'
 import { caller } from './core'
-import { configPrice, globalPrice, validate } from './billing'
+import { configPrice, validate } from './billing'
 import { compactVisualConfig } from '../src/views/prices/priceExpr'
 import { findSegment, removePair, segmentOfUser, setModelRate, setPair, setModelPrice, type ModelPrice } from './pricingStore'
 
@@ -44,19 +44,22 @@ function rateProblems(item: any): Problem[] {
   return item.rate === null || validRate(item.rate) ? [] : [['rate', 'invalid', RATE_RULE]]
 }
 
-/** Setting a price or a rate on a model takes an enabled global price for it. */
-const pricedProblems = (model: unknown): Problem[] => (globalPrice(String(model).trim()) ? [] : [['model', 'invalid', 'the model has no global price']])
+/** The model of an item: any name, trimmed, not empty (a global price is not needed). */
+const modelProblems = (item: any): Problem[] => (String(item.model ?? '').trim() ? [] : [['model', 'required', 'model is required']])
 
-/** Why a model price cannot be saved; removing one always can. It takes a model with a global price, and is checked as a global price is. */
-function priceProblems(item: any): Problem[] {
-  if (item.rule == null) return []
-  if (item.rule.mode !== 'visual' && item.rule.mode !== 'expression') return [...pricedProblems(item.model), ['rule', 'invalid', 'a model price is visual or an expression']]
-  const v = validate(item.rule)
-  return [...pricedProblems(item.model), ...(v.errors.length ? [['rule', 'invalid', `invalid price: ${v.errors[0].message.en}`] as Problem] : [])]
+/** The rule of a model price: none removes it; else checked as a global price is. */
+function ruleProblems(rule: any): Problem[] {
+  if (rule == null) return []
+  if (rule.mode !== 'visual' && rule.mode !== 'expression') return [['rule', 'invalid', 'a model price is visual or an expression']]
+  const v = validate(rule)
+  return v.errors.length ? [['rule', 'invalid', `invalid price: ${v.errors[0].message.en}`]] : []
 }
 
-/** Why a model rate cannot be saved: a rate on a model with a global price; removing one always can. */
-const modelRateProblems = (item: any): Problem[] => [...(item.rate == null ? [] : pricedProblems(item.model)), ...rateProblems(item)]
+/** Why a model price cannot be saved: a model named and a rule that is right. */
+const priceProblems = (item: any): Problem[] => [...modelProblems(item), ...ruleProblems(item.rule)]
+
+/** Why a model rate cannot be saved: a model named and a rate or null. */
+const modelRateProblems = (item: any): Problem[] => [...modelProblems(item), ...rateProblems(item)]
 
 /** Why a pair (a segment in a group) cannot be saved; `exists` says whether the other end does. An item of segment_rates may `remove` the pair instead. */
 const pairProblems = (key: string, exists: (id: number) => boolean): ItemCheck => (item) => [
@@ -64,10 +67,10 @@ const pairProblems = (key: string, exists: (id: number) => boolean): ItemCheck =
   ...(item.remove === true ? [] : rateProblems(item))
 ]
 
-/** Why a model rate of a segment in a group cannot be saved: the far end `key` that exists, a model named, and what a model rate of a group takes. */
+/** Why a model rate of a segment in a group cannot be saved: the far end `key` that exists, and what a model rate of a group takes. */
 const segmentModelRateProblems = (key: string, exists: (id: number) => boolean): ItemCheck => (item) => [
   ...(exists(Number(item[key])) ? [] : [[key, 'not_found', 'not found'] as Problem]),
-  ...(String(item.model ?? '').trim() ? modelRateProblems(item) : [['model', 'required', 'model is required'] as Problem, ...rateProblems(item)])
+  ...modelRateProblems(item)
 ]
 
 const hasSegment = (id: number) => !!findSegment(id)
@@ -123,8 +126,8 @@ function applySegmentRate(gid: number, item: any) {
 
 /** Applies the checked prices and rates of group `gid`, in the order given (a later item on the same thing wins). */
 export function applyGroupPricing(gid: number, body: any) {
-  for (const item of listOf(body, 'model_prices')) setModelPrice(gid, String(item.model), storedPrice(item.rule))
-  for (const item of listOf(body, 'model_rates')) setModelRate(null, gid, String(item.model), item.rate)
+  for (const item of listOf(body, 'model_prices')) setModelPrice(gid, String(item.model).trim(), storedPrice(item.rule))
+  for (const item of listOf(body, 'model_rates')) setModelRate(null, gid, String(item.model).trim(), item.rate)
   for (const item of listOf(body, 'segment_rates')) applySegmentRate(gid, item)
   for (const item of listOf(body, 'segment_model_rates')) setModelRate(Number(item.segment_id), gid, String(item.model).trim(), item.rate)
 }

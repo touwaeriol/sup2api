@@ -1,8 +1,8 @@
 // @vitest-environment node
 // The writes of group pricing in the dev mock answer as the server does
 // (CONTRACTS §97.6): every problem of every field and item in one 400 with
-// the server's codes, a required rate, the model rates of a user group on
-// models with a global price, the removal of a user group from an account
+// the server's codes, a required rate, prices and rates on any model name
+// (a global price is not needed), the removal of a user group from an account
 // group, the 409 of a user group the caller is in, and the caller's rate
 // per model.
 import { beforeAll, describe, expect, it } from 'vitest'
@@ -22,9 +22,19 @@ describe('the checks of a group write in the mock', () => {
     expect(problems(a)).toEqual(['name required', 'visibility invalid', 'rate_multiplier invalid', 'model_rates.0.rate required', 'segment_rates.0.segment_id not_found', 'segment_rates.1.rate required'])
   })
 
-  it('names both a model without a global price and its rate, and takes a rate written as a string only', async () => {
-    const a = await call('PATCH', '/groups/1', { model_rates: [{ model: 'no-such-model', rate: 'x' }, { model: 'gpt-4o', rate: 0.5 }] })
-    expect(problems(a)).toEqual(['model_rates.0.model invalid', 'model_rates.0.rate invalid', 'model_rates.1.rate invalid'])
+  it('takes any model named, and a rate written as a string only', async () => {
+    const a = await call('PATCH', '/groups/1', { model_rates: [{ model: 'no-such-model', rate: 'x' }, { model: 'gpt-4o', rate: 0.5 }, { model: ' ', rate: '1' }], model_prices: [{ rule: null }] })
+    expect(problems(a)).toEqual(['model_prices.0.model required', 'model_rates.0.rate invalid', 'model_rates.1.rate invalid', 'model_rates.2.model required'])
+  })
+
+  it('prices a model without a global price by the group alone, and lists models with only a rate', async () => {
+    const rule = { mode: 'expression', expression: 'tier("base", p*2)' }
+    const a = await call('PATCH', '/groups/1', { model_prices: [{ model: ' claude-opus-x-test ', rule }], model_rates: [{ model: 'only-rate-x', rate: '0.5' }] })
+    expect(a.status).toBe(200)
+    const rows = (await call('GET', '/groups/1/model-prices')).body.data.models as Array<{ model: string; base: unknown; price: unknown; rate: string | null }>
+    expect(rows.find((r) => r.model === 'claude-opus-x-test')).toMatchObject({ base: null, price: { mode: 'expression' }, rate: null })
+    expect(rows.find((r) => r.model === 'only-rate-x')).toMatchObject({ base: null, price: null, rate: '0.5' })
+    expect((await call('PATCH', '/groups/1', { model_prices: [{ model: 'claude-opus-x-test', rule: null }], model_rates: [{ model: 'only-rate-x', rate: null }] })).status).toBe(200)
   })
 
   it('takes a name another group has as a duplicate', async () => {
@@ -33,9 +43,9 @@ describe('the checks of a group write in the mock', () => {
 })
 
 describe('the model rates of a user group in the mock', () => {
-  it('take a model named, with a global price, and a rate', async () => {
+  it('take any model named, and a rate', async () => {
     const a = await call('PATCH', '/segments/2', { model_rates: [{ group_id: 1, model: ' ', rate: '1' }, { group_id: 1, model: 'no-such-model', rate: '1' }, { group_id: 99, model: 'gpt-4o' }] })
-    expect(problems(a)).toEqual(['model_rates.0.model required', 'model_rates.1.model invalid', 'model_rates.2.group_id not_found', 'model_rates.2.rate required'])
+    expect(problems(a)).toEqual(['model_rates.0.model required', 'model_rates.2.group_id not_found', 'model_rates.2.rate required'])
   })
 
   it('list a personal user group that has only model rates in the account group, which Remove takes away', async () => {
@@ -49,9 +59,9 @@ describe('the model rates of a user group in the mock', () => {
 })
 
 describe('the model rates of user groups set from an account group in the mock', () => {
-  it('take a user group that exists, a model with a global price and a rate, and show on the user group', async () => {
+  it('take a user group that exists, any model named and a rate, and show on the user group', async () => {
     const a = await call('PATCH', '/groups/1', { segment_model_rates: [{ segment_id: 999, model: 'gpt-4o', rate: '1' }, { segment_id: 3, model: 'no-such-model', rate: '1' }, { segment_id: 3, model: 'gpt-4o' }] })
-    expect(problems(a)).toEqual(['segment_model_rates.0.segment_id not_found', 'segment_model_rates.1.model invalid', 'segment_model_rates.2.rate required'])
+    expect(problems(a)).toEqual(['segment_model_rates.0.segment_id not_found', 'segment_model_rates.2.rate required'])
     expect((await call('PATCH', '/groups/1', { segment_model_rates: [{ segment_id: 3, model: ' gpt-4o ', rate: '0.6' }] })).status).toBe(200)
     const row = ((await call('GET', '/segments/3/groups')).body.data as Array<{ group: { id: number }; model_rates: unknown[] }>).find((r) => r.group.id === 1)
     expect(row?.model_rates).toEqual([{ model: 'gpt-4o', rate: '0.6' }])

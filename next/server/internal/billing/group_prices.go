@@ -73,18 +73,6 @@ func loadGroup(ctx context.Context, q *gorm.DB, cond string, args ...any) (price
 // catalog is the enabled global prices by model.
 type catalog map[string]PriceDef
 
-func loadCatalog(ctx context.Context, q *gorm.DB) (catalog, error) {
-	var rows []model.ModelPrice
-	if err := enabledPrices(store.G(ctx, q), "model", "mode", "config", "expression").Find(&rows).Error; err != nil {
-		return nil, err
-	}
-	out := make(catalog, len(rows))
-	for _, r := range rows {
-		out[r.Model] = PriceDef{Mode: r.Mode, Config: r.Config, Expression: r.Expression}
-	}
-	return out, nil
-}
-
 // enabledPrices selects columns of the enabled global prices.
 func enabledPrices(db *gorm.DB, columns ...string) *gorm.DB {
 	return db.Model(&model.ModelPrice{}).Select(columns).Where("enabled")
@@ -125,72 +113,65 @@ func (s *Service) showCatalog(c *gin.Context) {
 }
 
 // offeredModels returns the models each of the groups provides
-// (group.OfferedModels), by group id.
-func offeredModels(ctx context.Context, q *gorm.DB, groups []pricedGroup, prices catalog) (map[int64][]string, error) {
+// (group.OfferedModels) against the models with a list price there in snap,
+// by group id.
+func offeredModels(ctx context.Context, q *gorm.DB, groups []pricedGroup, snap *priceSnapshot) (map[int64][]string, error) {
 	infos := make([]core.GroupInfo, len(groups))
 	for i, g := range groups {
 		infos[i] = g.GroupInfo
 	}
-	return group.OfferedModels(ctx, q, infos, prices.models())
+	return group.OfferedModels(ctx, q, infos, snap.priced)
 }
 
 // groupPrices is a group with the models it provides (sorted), worked out
-// over the models that have a global price.
+// over the models that have a list price in the group.
 type groupPrices struct {
 	group  pricedGroup
 	models []string
 }
 
 // loadGroupPrices reads the one group cond selects and the models it
-// provides at prices; not_found without one.
-func loadGroupPrices(ctx context.Context, q *gorm.DB, prices catalog, cond string, args ...any) (*groupPrices, error) {
+// provides at the prices of snap; not_found without one.
+func loadGroupPrices(ctx context.Context, q *gorm.DB, snap *priceSnapshot, cond string, args ...any) (*groupPrices, error) {
 	g, err := loadGroup(ctx, q, cond, args...)
 	if err != nil {
 		return nil, err
 	}
-	offered, err := offeredModels(ctx, q, []pricedGroup{g}, prices)
+	offered, err := offeredModels(ctx, q, []pricedGroup{g}, snap)
 	if err != nil {
 		return nil, err
 	}
 	return &groupPrices{group: g, models: offered[g.ID]}, nil
 }
 
-// each calls add with the global price of each of models that has one and
-// the rule of the group on it (nil = none). It is the one place the list
-// prices of a group's models are read; the caller says which models and
-// what to make of each.
-func (snap *priceSnapshot) each(groupID int64, models []string, add func(model string, base PriceDef, rule *storedRule)) {
+// each calls add with the list price, and where it comes from, of each of
+// models that has one in the group (listPrice). It is the one place the
+// list prices of a group's models are read; the caller says which models
+// and what to make of each.
+func (snap *priceSnapshot) each(groupID int64, models []string, add func(model string, price PriceDef, source string)) {
 	for _, model := range models {
-		if base, ok := snap.bases[model]; ok {
-			add(model, base, snap.rules.of(core.PriceQuery{Model: model, GroupID: groupID}))
+		price, source := listPrice(snap.bases.base(model), snap.rules.of(core.PriceQuery{Model: model, GroupID: groupID}))
+		if price != nil {
+			add(model, *price, source)
 		}
 	}
 }
 
 // ModelPriceRow is a model of a group's pricing table: one the group
-// provides, or sets a price or a rate on.
+// provides, or sets a price or a rate on, or a user group's rate in it.
 type ModelPriceRow struct {
 	Model string `json:"model"`
-	// Offered is false on a model the group sets a price or a rate on but
-	// does not provide now (Models.Offered): no request reaches it there yet.
+	// Offered is false on a model the group, or a user group in it, sets a
+	// price or a rate on but the group does not provide now (Models.Offered):
+	// no request reaches it there yet.
 	Offered bool `json:"offered"`
-	// Base is the global price; null = the model has none and cannot be billed.
+	// Base is the global price; null = the model has none: it is billed at
+	// the group's price, and not at all without one.
 	Base *PriceDef `json:"base"`
 	// Price is the group's own price of the model; null = the global price.
 	Price *Rule `json:"price"`
 	// Rate is the group's rate for the model; null = the group's base rate.
 	Rate *decimal.Decimal `json:"rate"`
-}
-
-// listedPrice is the list price under the group's rule (nil = none) of a
-// model whose global price is base, and where it comes from. Without a
-// global price there is none, and no rule applies.
-func listedPrice(base *PriceDef, rule *storedRule) (*PriceDef, string) {
-	if base == nil {
-		return nil, core.PriceSourceGlobal
-	}
-	price := listPrice(*base, rule)
-	return &price, rule.source()
 }
 
 // GroupModelPrices is the response of GET /groups/:id/model-prices.
@@ -202,11 +183,12 @@ type GroupModelPrices struct {
 }
 
 // table is the pricing table of the group under the snapshot: a row for
-// every model it provides or sets a price or a rate on, by model.
+// every model it provides or sets a price or a rate on, or a user group
+// sets a rate on in it, by model.
 func (gp *groupPrices) table(snap *priceSnapshot) *GroupModelPrices {
 	g := gp.group
 	ruled, rated := snap.rules[g.ID], snap.rates.groups[g.ID]
-	models := slices.Concat(gp.models, slices.Collect(maps.Keys(ruled)), slices.Collect(maps.Keys(rated)))
+	models := slices.Concat(gp.models, slices.Collect(maps.Keys(ruled)), slices.Collect(maps.Keys(rated)), snap.rates.segmentModels(g.ID))
 	slices.Sort(models)
 	models = slices.Compact(models)
 	out := &GroupModelPrices{Group: g.ref(), Rate: segment.RateOf(core.RateLevels{Group: g.RateMultiplier}), Models: make([]ModelPriceRow, len(models))}
@@ -225,7 +207,7 @@ func (s *Service) groupPriceTable(ctx context.Context, groupID int64) (*GroupMod
 	if err != nil {
 		return nil, err
 	}
-	gp, err := loadGroupPrices(ctx, s.db.Gorm, snap.bases, "g.id = ?", groupID)
+	gp, err := loadGroupPrices(ctx, s.db.Gorm, snap, "g.id = ?", groupID)
 	if err != nil {
 		return nil, err
 	}

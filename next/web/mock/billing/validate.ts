@@ -2,7 +2,7 @@
 // them: the config the server's generator takes, the expression's syntax by
 // pattern, the usage facts it reads, trial runs and the big-cost warning.
 import { checkVisualConfig } from '../../src/views/prices/priceCheck'
-import { PRICE_KEYS, PRICE_MODES, asVisualConfig, priceExpression, type PriceMode } from '../../src/views/prices/priceExpr'
+import { PRICE_KEYS, PRICE_MODES, asVisualConfig, priceExpression, type PriceMode, type VisualConfig } from '../../src/views/prices/priceExpr'
 import { ALLOWED_IDENTS, evaluate, fmtN, surcharges } from './engine'
 import { billingSettings } from './settings'
 import { hashOf, money, msg, type LText } from './shared'
@@ -10,6 +10,9 @@ import { hashOf, money, msg, type LText } from './shared'
 /** Why the server's generator refuses a price: the field and what is wrong with it. */
 export type ConfigIssue = { field: 'mode' | 'config'; detail: string }
 type Issue = { code: string; message: LText; detail?: unknown; line?: number; column?: number }
+
+/** A visual config as the server's generator reads it: a token tier without p or c charges 0 for it. */
+const serverConfig = (cfg: VisualConfig): VisualConfig => ({ ...cfg, tiers: cfg.tiers.map((t) => (t.unit === 'request' ? t : { ...t, p: t.p ?? 0, c: t.c ?? 0 })) })
 
 /**
  * Why the server's generator refuses a price (expr.Generate): an unknown
@@ -19,7 +22,7 @@ type Issue = { code: string; message: LText; detail?: unknown; line?: number; co
 function configIssue(mode: string, config: Record<string, any>): ConfigIssue | null {
   if (!PRICE_MODES.includes(mode as PriceMode)) return { field: 'mode', detail: `unknown mode "${mode}"` }
   if (mode === 'expression') return Object.keys(config).length ? { field: 'config', detail: 'must be {}: an expression price is its expression' } : null
-  const issues = checkVisualConfig(asVisualConfig(config))
+  const issues = checkVisualConfig(serverConfig(asVisualConfig(config)))
   return issues.length ? { field: 'config', detail: issues.map((x) => x.key.replace('prices.local.', '')).join(', ') } : null
 }
 

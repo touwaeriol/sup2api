@@ -2,9 +2,10 @@
 import { SSelect, type SelectOption } from '@sub2api/ui'
 
 // A small searchable select that adds what is picked (`add`) and never holds
-// a value itself: the list a table adds rows from. Other attributes
-// (data-testid, …) are SSelect's.
-defineProps<{ options: SelectOption[]; label: string; noResults: string; footer?: string; disabled?: boolean }>()
+// a value itself: the list a table adds rows from. `creatable` also adds the
+// typed text when it is none of the options (SSelect's "Add “text”" row).
+// Other attributes (data-testid, …) are SSelect's.
+defineProps<{ options: SelectOption[]; label: string; noResults: string; footer?: string; disabled?: boolean; creatable?: boolean }>()
 const emit = defineEmits<{ (e: 'add', value: NonNullable<SelectOption['value']>): void }>()
 
 function pick(value: SelectOption['value'] | undefined) {
@@ -27,6 +28,8 @@ function pick(value: SelectOption['value'] | undefined) {
     :no-results="noResults"
     :footer="footer"
     :disabled="disabled"
+    :creatable="creatable"
     @update:model-value="pick"
+    @create="pick"
   />
 </template>

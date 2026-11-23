@@ -2,13 +2,15 @@ package lookup
 
 import (
 	"context"
+	"slices"
 
 	"gorm.io/gorm"
 
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/group"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/segment"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store"
-	"github.com/Sub2API-Devs/sup2api/next/server/internal/store/model"
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/x"
 )
 
 // entities are the kinds of GET /lookup/:kind (CONTRACTS §96). They are kept
@@ -62,8 +64,10 @@ var entities = []*entity{
 	},
 	{
 		// The models are those of the price table (GET /prices), disabled
-		// prices included. A price is enabled or not; it has no status value.
-		kind: "models", from: "model_prices mp", name: "mp.model",
+		// prices included, and those an account group prices on its own
+		// (CONTRACTS §97.1). A price is enabled or not; it has no status
+		// value.
+		kind: "models", from: "(SELECT model FROM model_prices UNION SELECT model FROM price_rules) mp", name: "mp.model",
 		read: "price:read",
 		mine: &ownRows{perms: []string{"apikey:self:manage"}, scope: usableModels},
 	},
@@ -89,8 +93,9 @@ func callerIs(cond string) func(context.Context, *gorm.DB, int64, *store.Conds) 
 	}
 }
 
-// usableModels leaves the models the caller's groups allow: an enabled price
-// that the model policy of at least one of them lets through. The picker on a
+// usableModels leaves the models the caller's groups allow: a model with a
+// list price in one of them (group.PricedModels: an enabled global price or
+// the group's own) that its model policy lets through. The picker on a
 // user's own pages is not tied to a group, so this is the union over all of
 // them. GET /me/prices?group_id= lists a subset of it: of these, only the
 // models the accounts of that group provide. The group policy is a glob list
@@ -101,26 +106,22 @@ func usableModels(ctx context.Context, q *gorm.DB, uid int64, f *store.Conds) er
 	if err != nil {
 		return err
 	}
-	var models []string
-	if err := db.Model(&model.ModelPrice{}).Where("enabled").Pluck("model", &models).Error; err != nil {
+	priced, err := group.PricedModels(ctx, db, groups)
+	if err != nil {
 		return err
 	}
 	usable := []string{}
-	for _, m := range models {
-		for _, g := range groups {
-			if g.AllowsModel(m) {
-				usable = append(usable, m)
-				break
-			}
-		}
+	for _, g := range groups {
+		usable = append(usable, slices.DeleteFunc(priced(g.ID), func(m string) bool { return !g.AllowsModel(m) })...)
 	}
-	f.And("mp.model = ANY(?)", store.Strings(usable))
+	f.And("mp.model = ANY(?)", store.Strings(x.Unique(usable)))
 	return nil
 }
 
 // policyRow is the model policy of one group. SQL NULL and JSON null read
 // as no list.
 type policyRow struct {
+	ID              int64
 	ModelAllowlist  store.JSON[[]string]
 	ModelFilterMode string
 }
@@ -128,7 +129,7 @@ type policyRow struct {
 // policyRows reads into dst the model policies of the groups user uid can
 // use.
 func policyRows(db *gorm.DB, uid int64, dst *[]policyRow) *gorm.DB {
-	return db.Table("groups g").Select("g.model_allowlist, g.model_filter_mode").Where(groupOpenTo, uid).Scan(dst)
+	return db.Table("groups g").Select("g.id, g.model_allowlist, g.model_filter_mode").Where(groupOpenTo, uid).Scan(dst)
 }
 
 // modelPolicies is policyRows as core.GroupInfo.
@@ -139,7 +140,7 @@ func modelPolicies(db *gorm.DB, uid int64) ([]core.GroupInfo, error) {
 	}
 	groups := make([]core.GroupInfo, len(rows))
 	for i, r := range rows {
-		groups[i] = core.GroupInfo{ModelAllowlist: r.ModelAllowlist.V, ModelFilterMode: r.ModelFilterMode}
+		groups[i] = core.GroupInfo{ID: r.ID, ModelAllowlist: r.ModelAllowlist.V, ModelFilterMode: r.ModelFilterMode}
 	}
 	return groups, nil
 }

@@ -49,16 +49,16 @@ const segment = (id: number, name: string): Segment => ({ id, kind: 'named', nam
 
 /** The editor as the part of the account group's tabbed form. */
 const Host = defineComponent({
-  props: { groupId: { type: Number as PropType<number | null>, default: null } },
+  props: { groupId: { type: Number as PropType<number | null>, default: null }, priced: { type: Map as PropType<ReadonlyMap<string, boolean>>, default: undefined } },
   setup(props, { expose }) {
     const form = useTabbedForm(ref('segments'), ['segments'])
     expose({ form })
-    return () => h(GroupSegmentsEditor, { groupId: props.groupId, visibility: 'public', defaultRate: '1.2', editable: true, tab: 'segments' })
+    return () => h(GroupSegmentsEditor, { groupId: props.groupId, visibility: 'public', defaultRate: '1.2', editable: true, tab: 'segments', priced: props.priced })
   }
 })
 
-async function render(groupId: number | null) {
-  const w = mount(Host, { props: { groupId }, global: { plugins: [i18n], stubs: { PersonalSegmentPicker: true } } })
+async function render(groupId: number | null, priced?: ReadonlyMap<string, boolean>) {
+  const w = mount(Host, { props: { groupId, priced }, global: { plugins: [i18n], stubs: { PersonalSegmentPicker: true } } })
   await flushPromises()
   const row = (id: number) => w.get(`[data-testid="access-rate-row"][data-segment="${id}"]`)
   const form = (w.vm as unknown as { form: ReturnType<typeof useTabbedForm> }).form
@@ -68,8 +68,10 @@ async function render(groupId: number | null) {
     await flushPromises()
     return { result, body: send.mock.calls[0]?.[0] }
   }
+  /** Opens the model rates of a row, unless they are open already (a row with saved ones starts open). */
   const openModels = async (id: number) => {
-    await row(id).get('[data-testid="group-segment-model-rates-toggle"]').trigger('click')
+    const toggle = row(id).get('[data-testid="group-segment-model-rates-toggle"]')
+    if (toggle.attributes('aria-expanded') !== 'true') await toggle.trigger('click')
     await flushPromises()
     return w.get('[data-testid="segment-model-rates"]')
   }
@@ -90,11 +92,12 @@ beforeEach(() => {
 describe('GroupSegmentsEditor model rates', () => {
   it('lists a user group’s model rates under its row and sends the changes as segment_model_rates', async () => {
     const { row, sent, openModels, input, w } = await render(7)
-    expect(row(2).get('[data-testid="group-segment-model-rates-toggle"]').text()).toBe('Model rates (1)')
+    expect(row(2).get('[data-testid="group-segment-model-rates-toggle"]').text()).toBe('Model rates 1')
     const rates = await openModels(2)
     expect(mocks.get).toHaveBeenCalledWith('/groups/7/model-prices')
     const add = rates.getComponent(AddSelect)
-    expect(add.props('options').map((o: { value: unknown }) => o.value)).toEqual(['o3'])
+    // The accounts' models first, then the global prices, then (greyed) what is listed already.
+    expect(add.props('options').map((o: { value: unknown; disabled?: boolean }) => [o.value, !!o.disabled])).toEqual([['o3', false], ['unpriced', false], ['claude', false], ['gpt-4o', true]])
     add.vm.$emit('add', 'o3')
     await flushPromises()
     expect((input('o3').element as HTMLInputElement).value).toBe('0.5')
@@ -108,6 +111,37 @@ describe('GroupSegmentsEditor model rates', () => {
     })
   })
 
+  it('opens the rows with saved model rates, and offers to set some on the others', async () => {
+    const { w, row } = await render(7)
+    w.getComponent(AddSelect).vm.$emit('add', 3)
+    await flushPromises()
+    const toggle = (id: number) => row(id).get('[data-testid="group-segment-model-rates-toggle"]')
+    expect([toggle(2).attributes('aria-expanded'), toggle(3).attributes('aria-expanded')]).toEqual(['true', 'false'])
+    expect(w.findAll('[data-testid="segment-model-rate-row"]').map((r) => r.attributes('data-model'))).toEqual(['gpt-4o'])
+    expect(toggle(3).text()).toBe('Set model rates')
+  })
+
+  it('adds a typed model at the rate the row pays now and says it is not priced', async () => {
+    const { w, sent, openModels, input } = await render(7)
+    const add = (await openModels(2)).getComponent(AddSelect)
+    expect(add.props('creatable')).toBe(true)
+    add.vm.$emit('add', 'claude-opus-x-test')
+    await flushPromises()
+    expect((input('claude-opus-x-test').element as HTMLInputElement).value).toBe('0.5')
+    const row = (model: string) => w.get(`[data-testid="segment-model-rate-row"][data-model="${model}"]`)
+    expect(row('claude-opus-x-test').get('[data-testid="segment-model-rate-unpriced"]').text()).toContain('Not priced')
+    expect(row('gpt-4o').find('[data-testid="segment-model-rate-unpriced"]').exists()).toBe(false)
+    expect((await sent()).body).toEqual({ segment_model_rates: [{ segment_id: 2, model: 'claude-opus-x-test', rate: '0.5' }] })
+  })
+
+  it('counts the prices drafted on the pricing tab of the same editor', async () => {
+    const { w, openModels } = await render(7, new Map([['claude-opus-x-test', true], ['gpt-4o', false]]))
+    ;(await openModels(2)).getComponent(AddSelect).vm.$emit('add', 'claude-opus-x-test')
+    await flushPromises()
+    const hint = (model: string) => w.get(`[data-testid="segment-model-rate-row"][data-model="${model}"]`).find('[data-testid="segment-model-rate-unpriced"]').exists()
+    expect([hint('claude-opus-x-test'), hint('gpt-4o')]).toEqual([false, true])
+  })
+
   it('drops the unsaved model rates of a row removed, which takes its saved ones', async () => {
     const { row, sent, openModels } = await render(7)
     const rates = await openModels(2)
@@ -117,7 +151,7 @@ describe('GroupSegmentsEditor model rates', () => {
     expect((await sent()).body).toEqual({ segment_rates: [{ segment_id: 2, remove: true }] })
   })
 
-  it('offers every model with a global price while the account group is not created', async () => {
+  it('offers every model with a global price while the account group is not created, and any typed one', async () => {
     const { w, openModels } = await render(null)
     w.getComponent(AddSelect).vm.$emit('add', 2)
     await flushPromises()

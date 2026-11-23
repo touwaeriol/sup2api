@@ -203,9 +203,9 @@ export function rateOf(s: MockSegment | null, g: PricedGroup, model?: string): {
   return { value: levels[source] ?? g.rate_multiplier, source, group_default: g.rate_multiplier }
 }
 
-/** The list price a model price gives: a price of its own, whatever the global price `base` is. A model without a global price has none. */
+/** The list price a model price gives: a price of its own that stands alone, else the global price `base`; none without either. */
 export function appliedPrice(base: PriceDef | null, price: ModelPrice | null): PriceDef | null {
-  if (!base || !price) return base
+  if (!price) return base
   return price.mode === 'expression' ? { mode: price.mode, config: {}, expression: price.expression } : configPrice(price.mode, price.config)
 }
 
@@ -217,12 +217,12 @@ function listedPrice(price: ModelPrice | undefined): ModelPrice | null {
 
 /**
  * The list price of a model in a group, first hit: the model price of the
- * group, the global price; without a global price no model price applies.
- * The model price is returned as configured.
+ * group (with or without a global price), the global price. The model price
+ * is returned as configured.
  */
 export function listPriceOf(groupId: number, model: string, base: PriceDef | null) {
   const group_price = listedPrice(modelPricesWhere({ group_id: groupId, model })[0]?.price)
-  const source: PriceSource = base && group_price ? 'group' : 'global'
+  const source: PriceSource = group_price ? 'group' : 'global'
   return { group_price, source, list_price: appliedPrice(base, group_price) }
 }
 

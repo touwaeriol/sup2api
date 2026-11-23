@@ -84,15 +84,19 @@ func resolveCases() []resolveCase {
 			q: inGroup("video"), want: withSource(snapVideo, core.PriceSourceGroup, replaced)},
 		{name: "a custom price replaces a visual price with tiers", ofGroup: own,
 			q: inGroup("tiered"), want: withSource(snapTiered, core.PriceSourceGroup, replaced)},
-		{name: "no global price, no rule", ofGroup: own, q: inGroup("unpriced")},
+		{name: "no global price: the group's own price, without base or id", ofGroup: perRequest, q: inGroup("unpriced"),
+			want: &core.PriceRule{Model: "unpriced", Mode: "visual", Expression: perRequest.Expression, ExprHash: perRequest.exprHash,
+				ExprVersion: 1, PerRequest: true, Source: core.PriceSourceGroup}},
+		{name: "no global price in another group", ofGroup: own, q: core.PriceQuery{Model: "unpriced", GroupID: snapGroup + 1}},
+		{name: "no price at all", q: inGroup("unpriced")},
 	}
 }
 
-// The list price of a query: the group's rule, else the global price;
-// nothing applies without a global price. A custom price replaces a global
-// price of any shape, and what its expression tells (VideoOnly, PerRequest)
-// replaces the global price's. The global price comes back as it is,
-// without a source.
+// The list price of a query: the group's rule, else the global price; a
+// rule stands without a global price, and nothing applies without either.
+// A custom price replaces a global price of any shape, and what its
+// expression tells (VideoOnly, PerRequest) replaces the global price's. The
+// global price comes back as it is, without a source.
 func TestSnapshotResolve(t *testing.T) {
 	for _, tc := range resolveCases() {
 		t.Run(tc.name, func(t *testing.T) {
@@ -122,6 +126,15 @@ func TestSnapshotResolveCopies(t *testing.T) {
 	require.Equal(t, `tier("base", p*2)`, rule.Expression)
 	require.Equal(t, "p", snap.byModel["m"].Expression)
 	require.Equal(t, "", snap.byModel["m"].Source)
+}
+
+// The models with a list price in a group: those with a global price and
+// those the group prices itself.
+func TestSnapshotPriced(t *testing.T) {
+	snap := &priceSnapshot{bases: catalog{"m": oneTier, "video": exprPrice},
+		rules: ruleSet{7: {"m": customRule("p"), "own": customRule("p")}}}
+	require.Equal(t, []string{"m", "own", "video"}, snap.priced(7))
+	require.Equal(t, []string{"m", "video"}, snap.priced(8))
 }
 
 // checkRuleCase is a model price, what saving it fails with, and what is

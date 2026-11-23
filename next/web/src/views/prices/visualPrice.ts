@@ -37,10 +37,16 @@ function editableRules(raw: readonly MarkupRule[]): MarkupRule[] {
   return (JSON.parse(JSON.stringify(raw)) as MarkupRule[]).map(r => ({ ...r, conds: r.conds.map(editableCond) }))
 }
 
+/** A saved tier with its unit; a token tier without p or c charges 0 for it, as the server bills it (blank, null, is only what the editor leaves unfilled). */
+function editableTier(t: VisualTier): VisualTier {
+  const unit = t.unit ?? 'token'
+  return unit === 'token' ? { p: 0, c: 0, ...t, unit } : { ...t, unit }
+}
+
 /** An editable copy of a saved config: tiers in the order they match, the last one the rest, each with its unit. */
 export function editableVisualConfig(raw: unknown): VisualConfig {
   const c = asVisualConfig(raw)
-  const tiers = (JSON.parse(JSON.stringify(c.tiers)) as VisualTier[]).map(t => ({ ...t, unit: t.unit ?? 'token' }))
+  const tiers = (JSON.parse(JSON.stringify(c.tiers)) as VisualTier[]).map(editableTier)
   return { tiers, rules: editableRules(c.rules) }
 }
 

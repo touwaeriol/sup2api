@@ -24,15 +24,16 @@ type groupWriteCase struct {
 // groupWriteCases are the wrong items a group write can have.
 func groupWriteCases() []groupWriteCase {
 	return []groupWriteCase{
-		{"price without a global price", "model_prices", patch("unpriced", custom("visual", requestTier(1))), "model_prices.1.model", "no global price"},
-		{"price on a model nobody has", "model_prices", patch("nobody-has-it", written("p")), "model_prices.1.model", "no global price"},
+		{"price without a model", "model_prices", patch(" ", custom("visual", requestTier(1))), "model_prices.1.model", "model is required"},
+		{"price on a wildcard", "model_prices", patch("claude-*", written("p")), "model_prices.1.model", "a complete model id"},
 		{"old multiplier rule", "model_prices", patch("claude-haiku-4-5", map[string]any{"kind": "multiplier", "multiplier": "2"}), "model_prices.1.rule", "mode must be visual or expression"},
 		{"price in an old mode", "model_prices", patch("claude-haiku-4-5", custom("per_request", map[string]any{"price": 1})), "model_prices.1.rule", "mode must be visual or expression"},
 		{"expression that does not compile", "model_prices", patch("claude-haiku-4-5", written(`tier("base", p*`)), "model_prices.1.rule", "invalid custom price"},
 		{"expression of an unknown variable", "model_prices", patch("claude-haiku-4-5", written(`tier("base", nope*2)`)), "model_prices.1.rule", "invalid custom price"},
 		{"negative price", "model_prices", patch("claude-haiku-4-5", custom("visual", oneTierConfig(map[string]any{"p": 1, "c": -2}))), "model_prices.1.rule", "config.tiers[0].c"},
 		{"old flat prices", "model_prices", patch("claude-haiku-4-5", custom("visual", map[string]any{"p": 1, "c": 2})), "model_prices.1.rule", "unknown field"},
-		{"rate without a global price", "model_rates", rated("unpriced", "1"), "model_rates.1.model", "no global price"},
+		{"rate without a model", "model_rates", rated("", "1"), "model_rates.1.model", "model is required"},
+		{"rate on a model with a space", "model_rates", rated("claude haiku", "1"), "model_rates.1.model", "a complete model id"},
 		{"negative rate", "model_rates", rated("claude-haiku-4-5", "-1"), "model_rates.1.rate", "must be 0 or more"},
 		{"rate too large", "model_rates", rated("claude-haiku-4-5", "1000000"), "model_rates.1.rate", "below 1000000"},
 		{"rate too fine", "model_rates", rated("claude-haiku-4-5", "0.00001"), "model_rates.1.rate", "at most 4 decimals"},
@@ -70,10 +71,10 @@ func TestGroupWriteValidation(t *testing.T) {
 }
 
 // Every wrong item of both lists of a group write is named, and every
-// problem of an item: no global price and a wrong price or rate alike.
+// problem of an item: a wrong model and a wrong price or rate alike.
 func checkEveryWrongItemNamed(t *testing.T, e *pricingEnv, validRate map[string]any) {
-	fields := e.writeGroup(e.open, map[string]any{"model_prices": []any{patch("unpriced", written("p")), patch("unpriced", written("p*"))},
-		"model_rates": []any{validRate, rated("claude-haiku-4-5", "-1"), rated("unpriced", "1"), rated("unpriced", 2)}})
+	fields := e.writeGroup(e.open, map[string]any{"model_prices": []any{patch("", written("p")), patch("a b", written("p*"))},
+		"model_rates": []any{validRate, rated("claude-haiku-4-5", "-1"), rated(" ", "1"), rated("*", 2)}})
 	var named []string
 	for _, f := range fields {
 		named = append(named, f.Field)

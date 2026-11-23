@@ -93,6 +93,8 @@ describe('prices in the mock', () => {
     const bad = await validate({ mode: 'visual', config: { ...ruled, rules: [{ name: '', multiplier: 2, conds: [{ source: 'header', key: 'bad name', op: 'exists' }] }] } })
     expect(bad).toMatchObject({ ok: false, errors: [{ code: 'invalid_config' }] })
     expect(await validate({ mode: 'visual', config: requestTier(null) })).toMatchObject({ ok: false, errors: [{ code: 'invalid_config' }] })
+    // As the server's generator: a token tier without p or c charges 0 for it.
+    expect(await validate({ mode: 'visual', config: { tiers: [{ name: 'base', unit: 'token', p: 3 }], rules: [] } })).toMatchObject({ ok: true })
     // Tiers match in the order listed: only the last one is the rest.
     const restFirst = { tiers: [{ name: 'rest', p: 2, c: 2 }, { name: 'short', when: { var: 'len', op: '<=', value: 1000 }, p: 1, c: 1 }], rules: [] }
     expect(await validate({ mode: 'visual', config: restFirst })).toMatchObject({ ok: false, errors: [{ code: 'invalid_config' }] })

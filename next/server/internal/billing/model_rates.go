@@ -34,6 +34,17 @@ func (m modelRates) levels(q core.PriceQuery, segmentID int64, l core.RateLevels
 	return l
 }
 
+// segmentModels returns the models segments set a rate on in the group.
+func (m modelRates) segmentModels(groupID int64) []string {
+	var out []string
+	for key := range m.segments {
+		if key.on.GroupID == groupID {
+			out = append(out, key.on.Model)
+		}
+	}
+	return out
+}
+
 // rateOf is the rate of key in rates; nil without one.
 func rateOf[K comparable](rates map[K]decimal.Decimal, key K) *decimal.Decimal {
 	r, ok := rates[key]

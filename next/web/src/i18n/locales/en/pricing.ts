@@ -18,19 +18,29 @@ export default {
     mode: 'Pricing',
     kind: {
       none: 'Follows the original price',
+      unpriced: 'Not priced',
       custom: 'Custom price'
     },
     customText: 'Custom',
     customHint: 'The same editor as on Model prices: tiers, per request or an expression. Does not follow the original price; to scale it, use the model rate.',
     preview: 'Model price {price}; at rate {rate} you pay {paid}',
-    noBase: 'This model has no original price yet. Set one on Model prices first.'
+    noBase: 'This model has no global price: the custom price starts blank and applies to this account group only.'
   },
   price: {
     perRequest: '{price} per request',
     expression: 'Billed by expression',
     expressionTimes: 'Billed by expression {rate}',
     none: 'No price',
+    unpriced: 'Not priced: requests for this model are refused until it has a price, a custom price in this account group or a global price',
     tiered: '{n} tiers, fallback shown'
+  },
+  add: {
+    source: {
+      offered: 'Offered by accounts',
+      catalog: 'Model prices',
+      added: 'Added'
+    },
+    footer: 'Models the accounts offer first, then those on Model prices; or type any model name'
   },
   table: {
     title: 'Model prices',
@@ -56,7 +66,6 @@ export default {
     clearHint: '"Clear" makes the model price follow the original price and the model rate follow the base rate',
     add: 'Add model',
     addNone: 'No model to add',
-    addFooter: 'Only models with an original price on Model prices can be added',
     unsavedCount: '{n} unsaved change | {n} unsaved changes',
     search: 'Search models',
     onlySet: 'Set only',

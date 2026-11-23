@@ -2,6 +2,7 @@ package billing
 
 import (
 	"context"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -46,7 +47,7 @@ func traitsOf(mode string, program *expr.Program) priceTraits {
 // apply sets the traits on r.
 func (t priceTraits) apply(r *core.PriceRule) { r.VideoOnly, r.PerRequest = t.videoOnly, t.perRequest }
 
-// resolved is the list price of a query in snap: nil = no global price.
+// resolved is the list price of a query in snap: nil = none.
 type resolved struct {
 	snap *priceSnapshot
 	rule *core.PriceRule
@@ -131,22 +132,26 @@ func (snap *priceSnapshot) match(model string) *core.PriceRule {
 	return &r
 }
 
-// resolve returns the list price q asks for, or nil when the model has no
-// global price: the group's price rule on the model, else the global price
+// resolve returns the list price q asks for, or nil when the model has none
+// in the group: the group's price of the model, else the global price
 // (CONTRACTS §97).
 func (snap *priceSnapshot) resolve(q core.PriceQuery) *core.PriceRule {
-	global := snap.match(q.Model)
-	if global == nil {
-		return nil
-	}
-	return snap.rules.of(q).price(*global)
+	return snap.rules.of(q).price(q.Model, snap.match(q.Model))
+}
+
+// priced returns the models with a list price in the group, sorted: those
+// with a global price and those the group prices itself.
+func (snap *priceSnapshot) priced(groupID int64) []string {
+	models := slices.AppendSeq(slices.Collect(maps.Keys(snap.bases)), maps.Keys(snap.rules[groupID]))
+	slices.Sort(models)
+	return slices.Compact(models)
 }
 
 // Resolve implements core.Pricer. Prices are global per model: the platform
 // and account type serving the request do not matter (ARCHITECTURE 7.3). A
-// price rule of the caller's group may replace the global price; without a
-// global price no rule applies. The rates set on the model come from the
-// same snapshot.
+// price of the caller's group replaces the global price, and stands without
+// one. The rates set on the model come from the same snapshot; they price
+// nothing while the model has no price.
 func (s *Service) Resolve(ctx context.Context, q core.PriceQuery, segmentID int64, levels core.RateLevels) (*core.PriceRule, core.RateLevels, error) {
 	snap, err := s.snapshot(ctx)
 	if err != nil {

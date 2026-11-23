@@ -157,7 +157,7 @@ func TestGroupWriteSegmentModelRates(t *testing.T) {
 	require.Equal(t, "none", f.modelRateOf(f.vip, f.public, "m"), "null removes it")
 	require.Equal(t, []string{"segment_model_rates.0.segment_id", "segment_model_rates.1.model", "segment_model_rates.2.rate", "segment_model_rates.3.model"},
 		write(map[string]any{"segment_id": 999999, "model": "m", "rate": "1"},
-			map[string]any{"segment_id": f.vip, "model": "unpriced", "rate": "1"},
+			map[string]any{"segment_id": f.vip, "model": "gpt *", "rate": "1"},
 			map[string]any{"segment_id": f.vip, "model": "m"},
 			map[string]any{"segment_id": f.vip, "model": " ", "rate": "1"}))
 	require.Equal(t, "0.9000", f.modelRateOf(f.vip, f.public, "gpt-4o"), "all or none")
