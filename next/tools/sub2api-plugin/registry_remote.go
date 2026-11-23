@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -19,7 +20,15 @@ type remote struct {
 	client  *http.Client
 	apiBase string // GitHub REST API root
 	token   string // GITHUB_TOKEN, sent to the API only
+	budget  *int64 // bytes left to download; nil: only the package limit applies
 }
+
+// checkDownloadBudget bounds what one `registry check` downloads in all: a
+// pull request adds a version or a few, each compared with one earlier
+// package, so eight packages of the largest size are ample, and a pull
+// request listing many versions cannot fill the runner's disk or hold it for
+// hours.
+const checkDownloadBudget = 8 * runtimecontract.PluginPackageMaxBytes
 
 var newRemote = func() *remote {
 	return &remote{
@@ -57,27 +66,51 @@ func (r *remote) get(u string, api bool) (*http.Response, error) {
 // download saves u to a temporary file within the package size limit; the
 // caller removes it.
 func (r *remote) download(u string) (string, error) {
+	limit, err := r.downloadLimit()
+	if err != nil {
+		return "", err
+	}
 	resp, err := r.get(u, false)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
-	if resp.ContentLength > runtimecontract.PluginPackageMaxBytes {
-		return "", fmt.Errorf("%s is %d bytes, the package limit is %d", u, resp.ContentLength, runtimecontract.PluginPackageMaxBytes)
+	tooBig := fmt.Errorf("%s exceeds %d bytes (the package limit, or what is left of the download budget)", u, limit)
+	if resp.ContentLength > limit {
+		return "", tooBig
 	}
 	f, err := os.CreateTemp("", "sub2api-registry-*"+PackageExt)
 	if err != nil {
 		return "", err
 	}
-	_, err = io.Copy(&limitedWriter{w: f, left: runtimecontract.PluginPackageMaxBytes}, resp.Body)
-	if cerr := f.Close(); err == nil {
-		err = cerr
+	n, err := io.Copy(f, io.LimitReader(resp.Body, limit+1))
+	r.spend(n)
+	if err = errors.Join(err, f.Close()); err == nil && n > limit {
+		err = tooBig
 	}
 	if err != nil {
 		_ = os.Remove(f.Name())
-		return "", fmt.Errorf("%s: %w", u, err)
+		return "", err
 	}
 	return f.Name(), nil
+}
+
+// downloadLimit is what the next download may take.
+func (r *remote) downloadLimit() (int64, error) {
+	limit := int64(runtimecontract.PluginPackageMaxBytes)
+	if r.budget == nil {
+		return limit, nil
+	}
+	if *r.budget <= 0 {
+		return 0, fmt.Errorf("the download budget of %d bytes is used up", checkDownloadBudget)
+	}
+	return min(limit, *r.budget), nil
+}
+
+func (r *remote) spend(n int64) {
+	if r.budget != nil {
+		*r.budget -= n
+	}
 }
 
 // pkgInfo is a package read for the registry.

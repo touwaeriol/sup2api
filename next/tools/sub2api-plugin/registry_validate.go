@@ -11,20 +11,21 @@ import (
 
 	runtimecontract "github.com/Sub2API-Devs/sup2api/next/runtime-contract"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
+	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest/check"
 )
 
-// regKeyMaxLen is the manifest's key length limit.
-const regKeyMaxLen = 30
-
-// Registry identifiers. A plugin key follows the manifest's key rule; a
-// publisher id is the manifest's publisher.
+// Registry identifiers. A plugin key follows the manifest's rule
+// (check.ValidatePluginKey); a publisher id is the manifest's publisher. A
+// GitHub login is alphanumeric with single inner hyphens, at most 39 bytes.
 var (
-	regKeyRe       = regexp.MustCompile(`^[a-z](_?[a-z0-9]){1,29}$`)
 	regPublisherRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
-	regRepoRe      = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,100}$`)
-	regLoginRe     = regexp.MustCompile(`^[A-Za-z0-9](?:-?[A-Za-z0-9]){0,38}$`)
+	regRepoRe      = regexp.MustCompile(`^[A-Za-z0-9](?:-?[A-Za-z0-9])*/[A-Za-z0-9._-]{1,100}$`)
+	regLoginRe     = regexp.MustCompile(`^[A-Za-z0-9](?:-?[A-Za-z0-9])*$`)
 	regSHA256Re    = regexp.MustCompile(`^[0-9a-f]{64}$`)
 )
+
+// regLoginMaxLen is GitHub's limit on a login (and an owner) name.
+const regLoginMaxLen = 39
 
 var (
 	regTrustLevels = []string{"official", "verified", "community"}
@@ -69,21 +70,40 @@ func checkPublisher(name string, pub *regPublisher) []string {
 	p.httpsURL("homepage", pub.Homepage)
 	p.when(!slices.Contains(regTrustLevels, pub.Trust), "trust must be one of %v", regTrustLevels)
 	p.when(!slices.Contains(regStatuses, pub.Status), "status must be one of %v", regStatuses)
-	p.when(pub.GitHub == nil, "github is required (a list of GitHub logins)")
-	for _, login := range pub.GitHub {
-		p.when(!regLoginRe.MatchString(login), "github login %q is invalid", login)
-	}
+	p.logins(pub.GitHub)
 	return p
+}
+
+// logins requires a non-empty list of distinct valid GitHub logins.
+func (p *problems) logins(list []string) {
+	p.when(len(list) == 0, "github must list at least one GitHub login")
+	seen := map[string]bool{}
+	for _, login := range list {
+		p.when(!validLogin(login), "github login %q is invalid", login)
+		p.when(seen[strings.ToLower(login)], "github login %q is listed twice", login)
+		seen[strings.ToLower(login)] = true
+	}
+}
+
+func validLogin(s string) bool { return len(s) <= regLoginMaxLen && regLoginRe.MatchString(s) }
+
+// validRepo accepts owner/name with a GitHub owner and a name that is not
+// "." or "..".
+func validRepo(repo string) bool {
+	owner, name, _ := strings.Cut(repo, "/")
+	return regRepoRe.MatchString(repo) && validLogin(owner) && name != "." && name != ".."
 }
 
 func checkPlugin(name string, pl *regPlugin) []string {
 	var p problems
 	p.when(pl.Key != name, "key %q must equal the directory name %q", pl.Key, name)
-	p.when(!regKeyRe.MatchString(pl.Key) || len(pl.Key) > regKeyMaxLen, "key %q must match %s, at most %d bytes", pl.Key, regKeyRe, regKeyMaxLen)
+	if err := check.ValidatePluginKey(pl.Key); err != nil {
+		p.addf("key %q: %v", pl.Key, err)
+	}
 	p.when(pl.Publisher == "", "publisher is required")
 	p.text("name", pl.Name)
 	p.text("description", pl.Description)
-	p.when(!regRepoRe.MatchString(pl.Repo), "repo %q must be owner/name", pl.Repo)
+	p.when(!validRepo(pl.Repo), "repo %q must be a GitHub owner/name", pl.Repo)
 	p.httpsURL("source", pl.Source)
 	p.deprecated("deprecated", pl.Deprecated)
 	return p
@@ -92,8 +112,8 @@ func checkPlugin(name string, pl *regPlugin) []string {
 func checkVersion(name string, v *regVersion) []string {
 	var p problems
 	p.when(v.Version != name, "version %q must equal the file name %q", v.Version, name)
-	_, err := semver.StrictNewVersion(v.Version)
-	p.when(err != nil, "version %q is not semver", v.Version)
+	sv, err := semver.StrictNewVersion(v.Version)
+	p.when(err != nil || sv.Metadata() != "", "version %q is not semver without build metadata", v.Version)
 	u, err := url.Parse(v.URL)
 	p.when(v.URL == "" || err != nil || strings.ContainsAny(v.URL, " \t\r\n") || u.Fragment != "" || !strings.HasSuffix(u.Path, PackageExt),
 		"url %q is invalid (a %s file)", v.URL, PackageExt)
@@ -124,7 +144,10 @@ func (e *regEntry) sortedVersions() []*regVersion {
 		out = append(out, v)
 	}
 	slices.SortFunc(out, func(a, b *regVersion) int {
-		return semver.MustParse(b.Version).Compare(semver.MustParse(a.Version))
+		if c := semver.MustParse(b.Version).Compare(semver.MustParse(a.Version)); c != 0 {
+			return c
+		}
+		return strings.Compare(b.Version, a.Version)
 	})
 	return out
 }

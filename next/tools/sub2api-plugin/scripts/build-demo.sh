@@ -130,7 +130,7 @@ package guard guard-test "$OUT/test" testdata/guardtest guardtest
 # The market's registry: each package's version file with a relative url,
 # so the index works wherever the directory is served.
 "$BIN" registry import --registry "$WORK/registry" --repo touwaeriol/sup2api --trust official "$OUT"/*.s2plugin >/dev/null
-"$BIN" index --registry "$WORK/registry" --out "$OUT/index.json"
+"$BIN" index --dev --registry "$WORK/registry" --out "$OUT/index.json"
 if [ -f "$KEYDIR/$KEYID.pub" ]; then
   "$BIN" verify --pub "$KEYDIR/$KEYID.pub" "$OUT"/*.s2plugin "$OUT"/test/*.s2plugin
 fi

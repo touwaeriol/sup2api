@@ -22,7 +22,8 @@ Usage:
                                              and a database; see db below for the PostgreSQL it needs)
   sub2api-plugin sign   --key <private key file> --key-id <id> [--publisher <name>] <file.s2plugin>
   sub2api-plugin verify --pub <public key file|base64> <file.s2plugin>
-  sub2api-plugin index  --registry <registry dir> [--out <index.json>]   (validate the registry, write index.json v2)
+  sub2api-plugin index  --registry <registry dir> [--out <index.json>] [--dev]
+                        (validate the registry, write index.json v2; --dev: a local market, relative urls allowed)
   sub2api-plugin registry check --registry <head dir> --base <base dir> --author <GitHub login> [--summary <file.md>] [--json]
                         (review a registry pull request; downloads every new version's package)
   sub2api-plugin registry add-version --registry <dir> --plugin <key> [--tag <tag>]
@@ -94,6 +95,15 @@ func parseInterspersed(fs *flag.FlagSet, args []string) ([]string, error) {
 		pos = append(pos, fs.Arg(0))
 		args = fs.Args()[1:]
 	}
+}
+
+// parseNoArgs parses flags and refuses any positional argument.
+func parseNoArgs(fs *flag.FlagSet, args []string) error {
+	pos, err := parseInterspersed(fs, args)
+	if err == nil && len(pos) > 0 {
+		err = fmt.Errorf("unexpected argument %q", pos[0])
+	}
+	return err
 }
 
 func newFlagSet(name string, stderr io.Writer) *flag.FlagSet {

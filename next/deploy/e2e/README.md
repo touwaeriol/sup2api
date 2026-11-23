@@ -38,7 +38,7 @@ docker compose -f next/deploy/e2e/compose.yml --env-file next/deploy/e2e/.env ru
 docker compose -f next/deploy/e2e/compose.yml --env-file next/deploy/e2e/.env up -d --no-build --wait --wait-timeout 240
 ```
 
-使用预先构建的镜像时跳过 `build`。`market-init` 会检查市场索引（`index.json` v2，不签名，由 `build-demo.sh` 经 `sub2api-plugin registry import` 与 `index` 生成，CONTRACTS §135）和公钥存在，随后复制镜像内市场到本项目的数据卷；配置错误或市场缺失会阻止节点启动。应用入口脚本把市场源配置为 `[{name,url}]`，并从同一镜像的公钥配置插件信任（市场里的包仍带开发密钥的签名，上传与内置包照常验签）；不会关闭签名验证。
+使用预先构建的镜像时跳过 `build`。`market-init` 会检查市场索引（`index.json` v2，不签名，由 `build-demo.sh` 经 `sub2api-plugin registry import` 与 `index --dev` 生成，CONTRACTS §135）和公钥存在，随后复制镜像内市场到本项目的数据卷；配置错误或市场缺失会阻止节点启动。应用入口脚本把市场源配置为 `[{name,url}]`，并从同一镜像的公钥配置插件信任（市场里的包仍带开发密钥的签名，上传与内置包照常验签）；不会关闭签名验证。
 
 Caddy 路由：
 

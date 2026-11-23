@@ -52,7 +52,7 @@
 | | 插件能力 | 声明网关端点和协议格式、账号类型和录入界面、粘性会话默认规则、注册用户权限、数据库 schema 和迁移脚本（含数据迁移）、插件接口、菜单和页面、网关钩子、后台任务、事件订阅、默认模型价格 |
 | | 出口隧道 + 严格模式 | 插件的对外连接经过核心转发并记录；Linux 上用 seccomp 保证无法绕过；默认全部放行，按插件可切换为只去授权的域名；管理员可在“插件联网”里屏蔽域名或只允许列出的域名，同样管核心替插件发出的上游请求、取回和账号请求（CONTRACTS §113） |
 | | 资源限制 | 每个插件的内存、CPU、文件数限制：GOMEMLIMIT + 内存看门狗 + oom_score_adj + nice + rlimit，都不需要特权（cgroup 预留） |
-| | 签名与市场 | Ed25519 发布者签名、信任级别、发布者密钥管理与吊销；从插件市场索引（签名的静态 JSON）浏览、安装、检查更新 |
+| | 签名与市场 | Ed25519 发布者签名、信任级别、发布者密钥管理与吊销；从插件市场索引（不签名的静态 JSON，由索引登记处的 PR 审核与其中的 sha256 保证可信，CONTRACTS §135）浏览、安装、检查更新 |
 | | 前端扩展 | 沙箱 iframe、**原生微前端**（受信插件把 Vue 组件挂进控制台；2026-11-19 起不再有声明式的 schema 表单与表格页，CONTRACTS §23） |
 | 演示插件 | anthropic | API Key 账号类型 + 默认价格（内置插件）；另有市场插件 relay（中转 Key 账号类型） |
 | | guard | 网关钩子（关键词拦截）+ 事件订阅 + 后台任务 + 出口访问 + 原生界面 + 资源限制 |
@@ -89,7 +89,7 @@ flowchart LR
   pg[("PostgreSQL<br/>public：核心表、各插件的表（plg_&lt;key&gt;__*）<br/>updater：升级计划")]
   redis[("Redis / Valkey<br/>会话 · 节点注册 · 并发槽位 · 冷却 · 余额缓存<br/>分布式锁 · 广播 · 节点密钥登记")]
   rel["更新源<br/>GitHub Releases 或 HTTPS 目录（releases.json）<br/>核心与网关的清单与安装物"]
-  market["插件市场索引<br/>签名的静态 JSON"]
+  market["插件市场索引<br/>静态 JSON（登记处审核）"]
   up["上游<br/>api.anthropic.com 等"]
   ext["插件访问的外部服务<br/>（经出口隧道）"]
 
@@ -1355,13 +1355,13 @@ flowchart TD
 
 ### 11.3 插件市场（本期只做客户端）
 
-- 配置一个或多个市场索引地址；索引是一个**签名的静态 JSON 文件**（可以托管在 GitHub 或任意静态存储）：插件列表、版本、下载地址、sha256、发布者
-- 控制台"插件市场"页：浏览、查看详情、一键安装（下载 → 校验 sha256 和签名 → 进入授权确认）、检查已安装插件的更新
-- 索引本身用市场密钥签名，防止被篡改
+- 配置一个或多个市场索引地址（`[{name,url}]`，没有公钥）；索引是一个**不签名的静态 JSON 文件**（index.json v2，CONTRACTS §11.1）：发布者、插件列表、版本、下载地址、sha256、Release 页面
+- 索引由索引登记处（GitHub 仓库 touwaeriol/sup2api-plugin）的文件生成：发布者、插件、版本各一个 JSON 文件，经 PR 提交；`sub2api-plugin registry check` 审核 PR（作者属于发布者、包只来自插件仓库的 GitHub Release、下载核对 sha256 与清单），合并后由 `sub2api-plugin index` 生成索引（CONTRACTS §135）。可信来源是这个仓库的审核和索引里的 sha256
+- 控制台"插件市场"页：浏览、查看详情、一键安装（下载 → 校验 sha256 → 进入授权确认）、检查已安装插件的更新
 
 ### 11.4 开发工具
 
-`sub2api-plugin` 命令行：`keygen`（生成发布者密钥）、`build`（交叉编译 linux/amd64、linux/arm64，`--dev` 额外编译本机平台）、`pack`、`sign`、`verify`、`index`（生成和签名市场索引）。
+`sub2api-plugin` 命令行：`keygen`（生成发布者密钥）、`build`（交叉编译 linux/amd64、linux/arm64，`--dev` 额外编译本机平台）、`pack`、`sign`、`verify`、`index`（从索引登记处生成市场索引，`--dev` 用于本地市场）、`registry check|add-version|codeowners|import`（审核登记处的 PR、从 GitHub Release 写版本文件、生成 CODEOWNERS、登记本地包，CONTRACTS §135）。
 
 ---
 
@@ -1624,7 +1624,7 @@ next/
 │   └── mailer/  payment/
 ├── protocol-codec/                # 早期的协议转换库；next/ 内无人引用，只剩旧版 backend/ 依赖
 ├── tools/
-│   └── sub2api-plugin/            # keygen / build / pack / sign / verify / index / db diff|check / dev
+│   └── sub2api-plugin/            # keygen / build / pack / sign / verify / index / registry / db diff|check / dev
 ├── e2e/                           # 验收测试（需要部署好的 e2e 栈；CI 只编译）
 ├── web/                           # 控制台（Vue 3）
 │   ├── src/

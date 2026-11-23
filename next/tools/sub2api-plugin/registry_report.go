@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest/check"
@@ -106,18 +107,18 @@ func writeSection(b *strings.Builder, title string, lines []string) {
 	}
 	fmt.Fprintf(b, "\n### %s\n\n", title)
 	for _, l := range lines {
-		fmt.Fprintf(b, "- %s\n", l)
+		fmt.Fprintf(b, "- %s\n", codeSpan(l))
 	}
 }
 
 func writeVersionReport(b *strings.Builder, v versionReport) {
 	fmt.Fprintf(b, "\n### `%s` %s\n\n", v.Plugin, v.Version)
-	fmt.Fprintf(b, "- Package: %s (%d bytes, sha256 `%s`)\n", v.URL, v.Size, v.SHA256)
+	fmt.Fprintf(b, "- Package: %s (%d bytes, sha256 `%s`)\n", codeSpan(v.URL), v.Size, v.SHA256)
 	switch {
 	case v.Previous == "":
 		b.WriteString("- Compared with: no earlier version\n")
 	case v.PreviousError != "":
-		fmt.Fprintf(b, "- Compared with: %s, **unavailable** (%s); everything is listed as added\n", v.Previous, v.PreviousError)
+		fmt.Fprintf(b, "- Compared with: %s, **unavailable** (%s); everything is listed as added\n", v.Previous, codeSpan(v.PreviousError))
 	default:
 		fmt.Fprintf(b, "- Compared with: %s\n", v.Previous)
 	}
@@ -143,7 +144,37 @@ func writeDiff(b *strings.Builder, title string, d listDiff) {
 }
 
 func codeList(items []string) string {
-	return "`" + strings.Join(items, "`, `") + "`"
+	spans := make([]string, len(items))
+	for i, it := range items {
+		spans[i] = codeSpan(it)
+	}
+	return strings.Join(spans, ", ")
+}
+
+// codeSpan renders s, which may come from the pull request or a package, as
+// one inline code span: control characters become U+FFFD and the fence is
+// longer than any backtick run inside.
+func codeSpan(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return unicode.ReplacementChar
+		}
+		return r
+	}, s)
+	longest, run := 0, 0
+	for _, r := range s {
+		if r != '`' {
+			run = 0
+			continue
+		}
+		run++
+		longest = max(longest, run)
+	}
+	fence := strings.Repeat("`", longest+1)
+	if strings.HasPrefix(s, "`") || strings.HasSuffix(s, "`") {
+		s = " " + s + " "
+	}
+	return fence + s + fence
 }
 
 func pick(cond bool, yes, no string) string {

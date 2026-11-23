@@ -62,7 +62,7 @@ using the dedicated Compose project `sub2api-next-e2e` by default.
   the dev public key and `SUB2API_MARKET_SOURCES=[{"name":"local-dev","url":$SUB2API_DEV_MARKET_URL}]`
   unless those variables are set. The bundled market's `index.json` (v2, not
   signed) is built by `build-demo.sh` with `sub2api-plugin registry import`
-  and `index` (CONTRACTS §135).
+  and `index --dev` (CONTRACTS §135).
 
 Node settings live in each stack's `compose.yml`. The E2E stack explicitly
 enables package signature checks, plugin seccomp and strict networking. Its

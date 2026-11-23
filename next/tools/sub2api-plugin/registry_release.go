@@ -81,10 +81,8 @@ func (rel *ghRelease) packageAsset() (*ghAsset, error) {
 // version, its page is in p.Repo, and the asset is under the tag with the
 // digest GitHub reports.
 func (rel *ghRelease) backs(p *regPlugin, asset *ghAsset, info *pkgInfo) error {
-	ver := info.m.Version
-	tags := []string{"v" + ver, p.Key + "-v" + ver, "plugin-" + p.Key + "-v" + ver}
-	if !slices.Contains(tags, rel.TagName) {
-		return fmt.Errorf("tag %q must be one of %s for version %s", rel.TagName, strings.Join(tags, ", "), ver)
+	if err := tagNamesVersion(p.Key, info.m.Version, rel.TagName); err != nil {
+		return err
 	}
 	if want := releasePage(p.Repo, rel.TagName); rel.HTMLURL != want {
 		return fmt.Errorf("html_url %q, want %q", rel.HTMLURL, want)
@@ -98,14 +96,44 @@ func (rel *ghRelease) backs(p *regPlugin, asset *ghAsset, info *pkgInfo) error {
 	return nil
 }
 
-func releasePage(repo, tag string) string {
-	return "https://github.com/" + repo + "/releases/tag/" + tag
+// releaseConsistent checks offline that v names a release of plugin p: the
+// url is an asset under a tag named for the version, and release_url is that
+// tag's page.
+func releaseConsistent(p *regPlugin, v *regVersion) error {
+	tag, err := releaseAssetTag(p.Repo, v.URL)
+	if err != nil {
+		return err
+	}
+	if err := tagNamesVersion(p.Key, v.Version, tag); err != nil {
+		return err
+	}
+	if want := releasePage(p.Repo, tag); v.ReleaseURL != want {
+		return fmt.Errorf("release_url %q must be %q", v.ReleaseURL, want)
+	}
+	return nil
 }
+
+// tagNamesVersion requires a release tag v<ver>, <key>-v<ver> or
+// plugin-<key>-v<ver> (the form of the plugins in touwaeriol/sup2api).
+func tagNamesVersion(key, ver, tag string) error {
+	tags := []string{"v" + ver, key + "-v" + ver, "plugin-" + key + "-v" + ver}
+	if slices.Contains(tags, tag) {
+		return nil
+	}
+	return fmt.Errorf("tag %q must be one of %s for version %s", tag, strings.Join(tags, ", "), ver)
+}
+
+// githubURL is a page of repo on github.com.
+func githubURL(repo string, parts ...string) string {
+	return strings.Join(append([]string{"https://github.com", repo}, parts...), "/")
+}
+
+func releasePage(repo, tag string) string { return githubURL(repo, "releases", "tag", tag) }
 
 // releaseAssetTag returns the tag of a release asset url of repo, which must
 // be https://github.com/<repo>/releases/download/<tag>/<file>.s2plugin.
 func releaseAssetTag(repo, u string) (string, error) {
-	prefix := "https://github.com/" + repo + "/releases/download/"
+	prefix := githubURL(repo, "releases", "download", "")
 	rest, ok := strings.CutPrefix(u, prefix)
 	tag, file, _ := strings.Cut(rest, "/")
 	parsed, err := url.Parse(u)

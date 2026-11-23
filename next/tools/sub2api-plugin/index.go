@@ -31,13 +31,14 @@ func cmdIndex(args []string, stdout, stderr io.Writer) error {
 	fs := newFlagSet("index", stderr)
 	root := fs.String("registry", "", "registry checkout (publishers/, plugins/) (required)")
 	out := fs.String("out", "", "output file (default: stdout)")
-	if _, err := parseInterspersed(fs, args); err != nil {
+	dev := fs.Bool("dev", false, "a local market: versions need not name a GitHub release (relative urls)")
+	if err := parseNoArgs(fs, args); err != nil {
 		return err
 	}
 	if *root == "" {
 		return errors.New("--registry is required")
 	}
-	reg, err := loadRegistry(*root)
+	reg, err := loadRegistry(*root, *dev)
 	if err != nil {
 		return err
 	}

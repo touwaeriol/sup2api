@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // checkResult is what `registry check` reports (--json prints it as is).
@@ -43,7 +44,7 @@ func cmdRegistryCheck(args []string, stdout, stderr io.Writer) error {
 	author := fs.String("author", "", "GitHub login of the pull request author (required)")
 	summary := fs.String("summary", "", "also write the Markdown summary to this file")
 	asJSON := fs.Bool("json", false, "print the result as JSON instead of Markdown")
-	if _, err := parseInterspersed(fs, args); err != nil {
+	if err := parseNoArgs(fs, args); err != nil {
 		return err
 	}
 	if *head == "" || *base == "" || *author == "" {
@@ -83,21 +84,31 @@ type checker struct {
 	author     string
 	remote     *remote
 	res        *checkResult
-	owners     map[string]bool // publishers whose files change
+	owners     map[string]bool             // publishers whose files change
+	previous   map[string]*previousPackage // by plugin key
+}
+
+// previousPackage is the version a plugin's new versions are compared with.
+type previousPackage struct {
+	version string
+	info    *pkgInfo
+	err     string
 }
 
 func runRegistryCheck(headRoot, baseRoot, author string, r *remote) *checkResult {
-	c := &checker{author: author, remote: r, owners: map[string]bool{},
+	budget := int64(checkDownloadBudget)
+	r.budget = &budget
+	c := &checker{author: author, remote: r, owners: map[string]bool{}, previous: map[string]*previousPackage{},
 		res: &checkResult{Errors: []string{}, ManualReview: []string{}, Versions: []versionReport{}}}
-	var errHead, errBase, errDiff error
-	c.head, errHead = loadRegistry(headRoot)
-	c.base, errBase = loadRegistry(baseRoot)
-	changes, errDiff := diffTrees(baseRoot, headRoot)
-	for _, err := range []error{errHead, errBase, errDiff} {
-		for _, line := range errorLines(err) {
-			c.fail("%s", line)
-		}
-	}
+	var err error
+	c.head, err = loadRegistry(headRoot, false)
+	c.lines(err, c.fail, "")
+	c.base, err = loadRegistry(baseRoot, false)
+	// A base that fails today's rules (they were tightened) is read as far
+	// as it loads; a person looks at the pull request.
+	c.lines(err, c.manual, "the base does not pass the current checks: ")
+	changes, err := diffTrees(baseRoot, headRoot)
+	c.lines(err, c.fail, "")
 	if len(c.res.Errors) == 0 {
 		c.review(changes)
 	}
@@ -107,6 +118,15 @@ func runRegistryCheck(headRoot, baseRoot, author string, r *remote) *checkResult
 		c.res.Publisher = slices.Collect(maps.Keys(c.owners))[0]
 	}
 	return c.res
+}
+
+// lines reports each line of a joined error through add.
+func (c *checker) lines(err error, add func(string, ...any), prefix string) {
+	if err != nil {
+		for _, line := range strings.Split(err.Error(), "\n") {
+			add("%s%s", prefix, line)
+		}
+	}
 }
 
 func (c *checker) fail(format string, args ...any) {
@@ -122,12 +142,13 @@ func (c *checker) review(changes []fileChange) {
 	byPlugin := map[string][]fileChange{}
 	for _, ch := range changes {
 		dir, rest, _ := strings.Cut(ch.path, "/")
-		switch dir {
-		case regPublishersDir:
-			id := strings.TrimSuffix(rest, regJSONExt)
-			c.owners[id] = true
+		switch {
+		case strings.ContainsFunc(ch.path, unicode.IsControl):
+			c.fail("%q: a path with control characters", ch.path)
+		case dir == regPublishersDir:
+			c.owners[strings.TrimSuffix(rest, regJSONExt)] = true
 			c.manual("%s: publisher file %s", ch.path, ch.kind)
-		case regPluginsDir:
+		case dir == regPluginsDir:
 			key, _, _ := strings.Cut(rest, "/")
 			byPlugin[key] = append(byPlugin[key], ch)
 		default:
@@ -145,17 +166,21 @@ func (c *checker) review(changes []fileChange) {
 // pluginChanges reviews the changed files of plugins/<key>/.
 func (c *checker) pluginChanges(key string, chs []fileChange) {
 	old, cur := c.base.plugins[key], c.head.plugins[key]
+	what := path.Join(regPluginsDir, key)
 	switch {
 	case old == nil:
 		c.owners[cur.plugin.Publisher] = true
-		c.manual("plugins/%s: new plugin", key)
+		c.manual("%s: new plugin", what)
+		if _, known := c.base.publishers[cur.plugin.Publisher]; known {
+			c.requireAuthor(cur.plugin.Publisher, what)
+		}
 	case cur == nil:
 		c.owners[old.plugin.Publisher] = true
-		c.manual("plugins/%s: plugin removed", key)
+		c.manual("%s: plugin removed", what)
 	default:
 		c.owners[cur.plugin.Publisher] = true
 		c.owners[old.plugin.Publisher] = true
-		c.requireAuthor(old.plugin.Publisher, "plugins/"+key)
+		c.requireAuthor(old.plugin.Publisher, what)
 	}
 	for _, ch := range chs {
 		c.pluginFileChange(key, ch)
@@ -166,16 +191,24 @@ func (c *checker) pluginFileChange(key string, ch fileChange) {
 	rel := strings.TrimPrefix(ch.path, regPluginsDir+"/"+key+"/")
 	ver, isVersion := strings.CutPrefix(rel, regVersionsDir+"/")
 	ver = strings.TrimSuffix(ver, regJSONExt)
+	old := c.baseVersion(key, ver)
 	switch {
 	case !isVersion:
 		c.manual("%s %s", ch.path, ch.kind)
 	case ch.kind == changeDeleted:
 		c.manual("%s: version %s deleted", ch.path, ver)
-	case ch.kind == changeModified:
-		c.immutable(ch.path, c.base.plugins[key].versions[ver], c.head.plugins[key].versions[ver])
-	default:
+	case ch.kind == changeModified && old != nil:
+		c.immutable(ch.path, old, c.head.plugins[key].versions[ver])
+	default: // added, or a base version that did not load
 		c.verifyNew(key, c.head.plugins[key].versions[ver])
 	}
+}
+
+func (c *checker) baseVersion(key, ver string) *regVersion {
+	if e := c.base.plugins[key]; e != nil {
+		return e.versions[ver]
+	}
+	return nil
 }
 
 // requireAuthor fails unless the author is one of the base publisher's
@@ -183,6 +216,8 @@ func (c *checker) pluginFileChange(key string, ch fileChange) {
 func (c *checker) requireAuthor(pubID, what string) {
 	pub := c.base.publishers[pubID]
 	switch {
+	case pub == nil:
+		c.manual("%s: publisher %s did not load from the base, the author is not checked", what, pubID)
 	case pub.Status != "active":
 		c.fail("%s: publisher %s is %s", what, pubID, pub.Status)
 	case !slices.ContainsFunc(pub.GitHub, func(l string) bool { return strings.EqualFold(l, c.author) }):
@@ -223,25 +258,31 @@ func (c *checker) verifyNew(key string, v *regVersion) {
 		c.fail("%s: does not match the package: %s", file, versionMismatch(*v, want))
 		return
 	}
-	c.res.Versions = append(c.res.Versions, c.versionReport(key, v, info))
+	prev := c.previousOf(key)
+	c.res.Versions = append(c.res.Versions, versionReport{Plugin: key, Version: v.Version, URL: v.URL, SHA256: v.SHA256,
+		Size: v.Size, Previous: prev.version, PreviousError: prev.err, Changes: compareManifests(factsOf(prev.info), factsOf(info))})
 }
 
-// versionReport compares a new version with the newest non-deprecated
-// version the base lists.
-func (c *checker) versionReport(key string, v *regVersion, info *pkgInfo) versionReport {
-	rep := versionReport{Plugin: key, Version: v.Version, URL: v.URL, SHA256: v.SHA256, Size: v.Size}
-	var prevInfo *pkgInfo
-	if old := c.base.plugins[key]; old != nil {
-		if prev := old.newestVersion(func(p *regVersion) bool { return p.Deprecated == nil }); prev != nil {
-			rep.Previous = prev.Version
-			var err error
-			if prevInfo, err = c.remote.fetchPackage(&old.plugin, prev.URL); err != nil {
-				rep.PreviousError = err.Error()
-			}
+// previousOf is the newest non-deprecated version the base lists for key,
+// downloaded once per plugin.
+func (c *checker) previousOf(key string) *previousPackage {
+	if prev, ok := c.previous[key]; ok {
+		return prev
+	}
+	prev := &previousPackage{}
+	c.previous[key] = prev
+	old := c.base.plugins[key]
+	if old == nil {
+		return prev
+	}
+	if v := old.newestVersion(func(v *regVersion) bool { return v.Deprecated == nil }); v != nil {
+		prev.version = v.Version
+		info, err := c.remote.fetchPackage(&old.plugin, v.URL)
+		if prev.info = info; err != nil {
+			prev.err = err.Error()
 		}
 	}
-	rep.Changes = compareManifests(factsOf(prevInfo), factsOf(info))
-	return rep
+	return prev
 }
 
 // versionMismatch lists the fields where file and want differ.
@@ -261,12 +302,4 @@ func versionMismatch(file, want regVersion) string {
 		}
 	}
 	return strings.Join(out, "; ")
-}
-
-// errorLines splits a joined error into its lines.
-func errorLines(err error) []string {
-	if err == nil {
-		return nil
-	}
-	return strings.Split(err.Error(), "\n")
 }

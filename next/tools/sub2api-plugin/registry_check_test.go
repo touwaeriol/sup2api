@@ -17,19 +17,7 @@ func TestRegistryCheckRejectsBadVersions(t *testing.T) {
 	good := f.head(t)
 	runOK(t, "registry", "add-version", "--registry", good, "--plugin", "demo")
 	v := readVersionFile(t, good, "demo", "0.2.0")
-	cases := map[string]struct {
-		edit func(*regVersion)
-		want string
-	}{
-		"sha256":      {func(v *regVersion) { v.SHA256 = strings.Repeat("0", 64) }, "sha256 is"},
-		"host_compat": {func(v *regVersion) { v.HostCompat = ">=0.1.0" }, "host_compat is"},
-		"other repo":  {func(v *regVersion) { v.URL = strings.Replace(v.URL, "acme/demo", "acme/evil", 1) }, "must be https://github.com/acme/demo/releases/download/"},
-		"not github":  {func(v *regVersion) { v.URL = "https://example.com/demo-0.2.0.s2plugin" }, "must be https://github.com/"},
-		"missing":     {func(v *regVersion) { v.URL = strings.Replace(v.URL, "demo-v0.2.0", "v9", 1) }, "404"},
-		"release_url": {func(v *regVersion) { v.ReleaseURL = releasePage("acme/demo", "v0.1.0") }, "release_url is"},
-		"other tag":   {func(v *regVersion) { v.URL = strings.Replace(v.URL, "demo-v0.2.0", "v0.1.0", 1) }, "url is"},
-	}
-	for name, tc := range cases {
+	for name, tc := range badVersionCases() {
 		t.Run(name, func(t *testing.T) {
 			head := f.head(t)
 			bad := v
@@ -39,6 +27,26 @@ func TestRegistryCheckRejectsBadVersions(t *testing.T) {
 				t.Fatalf("errors = %q, want %q", res.Errors, tc.want)
 			}
 		})
+	}
+}
+
+// badVersionCase edits a correct new version file into a wrong one.
+type badVersionCase struct {
+	edit func(*regVersion)
+	want string
+}
+
+func badVersionCases() map[string]badVersionCase {
+	return map[string]badVersionCase{
+		"sha256":      {func(v *regVersion) { v.SHA256 = strings.Repeat("0", 64) }, "sha256 is"},
+		"host_compat": {func(v *regVersion) { v.HostCompat = ">=0.1.0" }, "host_compat is"},
+		"other repo":  {func(v *regVersion) { v.URL = strings.Replace(v.URL, "acme/demo", "acme/evil", 1) }, "must be https://github.com/acme/demo/releases/download/"},
+		"not github":  {func(v *regVersion) { v.URL = "https://example.com/demo-0.2.0.s2plugin" }, "must be https://github.com/"},
+		"missing": {func(v *regVersion) {
+			v.URL, v.ReleaseURL = strings.Replace(v.URL, "/demo-v0.2.0/", "/plugin-demo-v0.2.0/", 1), releasePage("acme/demo", "plugin-demo-v0.2.0")
+		}, "404"},
+		"release_url": {func(v *regVersion) { v.ReleaseURL = releasePage("acme/demo", "v0.1.0") }, `release_url "`},
+		"other tag":   {func(v *regVersion) { v.URL = strings.Replace(v.URL, "demo-v0.2.0", "v0.1.0", 1) }, `tag "v0.1.0" must be one of`},
 	}
 }
 
@@ -87,7 +95,7 @@ func manualReviewCases() map[string]manualCase {
 		"new plugin": {func(t *testing.T, head string) {
 			raw, _ := os.ReadFile(filepath.Join(head, "plugins", "demo", "plugin.json"))
 			writeFile(t, filepath.Join(head, "plugins", "demo_two", "plugin.json"), strings.Replace(string(raw), `"demo"`, `"demo_two"`, 1))
-		}, "mallory", "plugins/demo_two: new plugin"},
+		}, "alice", "plugins/demo_two: new plugin"},
 	}
 }
 
@@ -156,7 +164,10 @@ func TestRegistryImport(t *testing.T) {
 		t.Fatalf("url = %q", v.URL)
 	}
 	out := filepath.Join(t.TempDir(), "index.json")
-	runOK(t, "index", "--registry", reg, "--out", out)
+	if msg := runFail(t, "index", "--registry", reg, "--out", out); !strings.Contains(msg, `url "demo-0.1.0.s2plugin" must be https://github.com/acme/demo/releases/download/`) {
+		t.Fatalf("relative url without --dev: %s", msg)
+	}
+	runOK(t, "index", "--registry", reg, "--out", out, "--dev")
 	raw, _ := os.ReadFile(out)
 	var idx marketIndex
 	if err := json.Unmarshal(raw, &idx); err != nil {
@@ -178,7 +189,7 @@ func TestRegistryValidation(t *testing.T) {
 	if p := checkVersion("1.0.0", &v); len(p) != 1 || !strings.Contains(p[0], "url") {
 		t.Fatal(p)
 	}
-	for key, ok := range map[string]bool{"azure_openai": true, "demo": true, "a__b": false, "trailing_": false, "Demo": false, "x": false} {
+	for key, ok := range map[string]bool{"azure_openai": true, "demo": true, "a__b": false, "trailing_": false, "Demo": false, "x": false, "core": false} {
 		pl := regPlugin{Key: key}
 		if got := !strings.Contains(joined(checkPlugin(key, &pl)), "key "); got != ok {
 			t.Errorf("key %q valid = %v, want %v", key, got, ok)

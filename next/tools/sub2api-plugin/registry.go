@@ -6,11 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"maps"
-	"os"
 	"path"
-	"path/filepath"
-	"slices"
 	"strings"
 
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
@@ -85,20 +81,22 @@ type registry struct {
 }
 
 // loadRegistry reads and validates every publisher, plugin and version file
-// under root. All problems are reported together.
-func loadRegistry(root string) (*registry, error) {
+// under root; all problems are reported together, with what did load. Unless
+// dev, a version file must also name a GitHub release of its plugin's repo
+// (releaseConsistent); dev allows the relative urls of a local market.
+func loadRegistry(root string, dev bool) (*registry, error) {
 	reg := &registry{publishers: map[string]*regPublisher{}, plugins: map[string]*regEntry{}}
 	var errs []error
-	for _, name := range jsonFiles(filepath.Join(root, regPublishersDir), &errs) {
+	for _, name := range jsonFiles(root, regPublishersDir, &errs) {
 		p := &regPublisher{}
 		if addErr(&errs, readRegistryFile(root, path.Join(regPublishersDir, name), p, checkPublisher)) {
 			reg.publishers[p.ID] = p
 		}
 	}
-	dirs, err := readDirIfExists(filepath.Join(root, regPluginsDir))
+	dirs, err := readDirIfExists(root, regPluginsDir)
 	addErr(&errs, err)
 	for _, d := range dirs {
-		e, perrs := loadPluginDir(root, d)
+		e, perrs := loadPluginDir(root, d, dev)
 		errs = append(errs, perrs...)
 		if e != nil {
 			reg.plugins[e.plugin.Key] = e
@@ -114,21 +112,25 @@ func loadRegistry(root string) (*registry, error) {
 
 // loadPluginDir reads plugins/<key>/: plugin.json, an optional icon.svg and
 // versions/*.json, and nothing else.
-func loadPluginDir(root string, d fs.DirEntry) (*regEntry, []error) {
+func loadPluginDir(root string, d fs.DirEntry, dev bool) (*regEntry, []error) {
 	rel := path.Join(regPluginsDir, d.Name())
 	if !d.IsDir() {
-		return nil, []error{fmt.Errorf("%s: not a plugin directory", rel)}
+		return nil, []error{fmt.Errorf("%s: not a directory", rel)}
 	}
 	var errs []error
-	addErr(&errs, onlyEntries(filepath.Join(root, rel), regPluginFile, regIconFile, regVersionsDir))
+	addErr(&errs, onlyEntries(root, rel, []string{regPluginFile, regIconFile}, []string{regVersionsDir}))
 	e := &regEntry{versions: map[string]*regVersion{}}
 	if !addErr(&errs, readRegistryFile(root, path.Join(rel, regPluginFile), &e.plugin, checkPlugin)) {
 		return nil, errs
 	}
 	vdir := path.Join(rel, regVersionsDir)
-	for _, name := range jsonFiles(filepath.Join(root, vdir), &errs) {
+	for _, name := range jsonFiles(root, vdir, &errs) {
 		v := &regVersion{}
-		if addErr(&errs, readRegistryFile(root, path.Join(vdir, name), v, checkVersion)) {
+		file := path.Join(vdir, name)
+		if !addErr(&errs, readRegistryFile(root, file, v, checkVersion)) {
+			continue
+		}
+		if dev || addErr(&errs, prefixErr(file, releaseConsistent(&e.plugin, v))) {
 			e.versions[v.Version] = v
 		}
 	}
@@ -138,7 +140,7 @@ func loadPluginDir(root string, d fs.DirEntry) (*regEntry, []error) {
 // readRegistryFile decodes rel strictly into v and validates it against its
 // file name (the stem of rel, or its directory for plugin.json).
 func readRegistryFile[T any](root, rel string, v *T, check func(name string, v *T) []string) error {
-	raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+	raw, err := readRegular(root, rel)
 	if err != nil {
 		return err
 	}
@@ -157,42 +159,12 @@ func readRegistryFile[T any](root, rel string, v *T, check func(name string, v *
 	return nil
 }
 
-// jsonFiles lists the *.json files of dir (none when dir is missing); any
-// other entry is a problem.
-func jsonFiles(dir string, errs *[]error) []string {
-	entries, err := readDirIfExists(dir)
-	addErr(errs, err)
-	var names []string
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), regJSONExt) {
-			*errs = append(*errs, fmt.Errorf("%s: unexpected entry %q", filepath.ToSlash(dir), e.Name()))
-			continue
-		}
-		names = append(names, e.Name())
+// prefixErr prefixes a non-nil err with the file it is about.
+func prefixErr(file string, err error) error {
+	if err == nil {
+		return nil
 	}
-	return names
-}
-
-// onlyEntries fails when dir holds an entry not named in allowed.
-func onlyEntries(dir string, allowed ...string) error {
-	entries, err := readDirIfExists(dir)
-	if err != nil {
-		return err
-	}
-	for _, e := range entries {
-		if !slices.Contains(allowed, e.Name()) {
-			return fmt.Errorf("%s: unexpected entry %q", filepath.ToSlash(dir), e.Name())
-		}
-	}
-	return nil
-}
-
-func readDirIfExists(dir string) ([]fs.DirEntry, error) {
-	entries, err := os.ReadDir(dir)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
-	}
-	return entries, err
+	return fmt.Errorf("%s: %w", file, err)
 }
 
 // addErr appends a non-nil err and reports whether err was nil.
@@ -201,82 +173,4 @@ func addErr(errs *[]error, err error) bool {
 		*errs = append(*errs, err)
 	}
 	return err == nil
-}
-
-// fileChange is one file that differs between two checkouts.
-type fileChange struct {
-	path string // slash-separated, relative to the checkout
-	kind string // changeAdded, changeModified or changeDeleted
-}
-
-const (
-	changeAdded    = "added"
-	changeModified = "modified"
-	changeDeleted  = "deleted"
-)
-
-// diffTrees lists the files that differ between two checkouts, by path.
-func diffTrees(baseRoot, headRoot string) ([]fileChange, error) {
-	base, err := treeFiles(baseRoot)
-	if err != nil {
-		return nil, err
-	}
-	head, err := treeFiles(headRoot)
-	if err != nil {
-		return nil, err
-	}
-	var out []fileChange
-	for _, p := range slices.Sorted(maps.Keys(mergeKeys(base, head))) {
-		old, inBase := base[p]
-		cur, inHead := head[p]
-		switch {
-		case !inBase:
-			out = append(out, fileChange{p, changeAdded})
-		case !inHead:
-			out = append(out, fileChange{p, changeDeleted})
-		case old != cur:
-			out = append(out, fileChange{p, changeModified})
-		}
-	}
-	return out, nil
-}
-
-func mergeKeys(a, b map[string]string) map[string]string {
-	out := maps.Clone(a)
-	maps.Copy(out, b)
-	return out
-}
-
-// treeFiles maps every file below root (except .git) to its content; a
-// symbolic link maps to its target, so changing either shows.
-func treeFiles(root string) (map[string]string, error) {
-	files := map[string]string{}
-	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			if d.Name() == ".git" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		rel, err := filepath.Rel(root, p)
-		if err != nil {
-			return err
-		}
-		content, err := fileContent(p, d)
-		files[filepath.ToSlash(rel)] = content
-		return err
-	})
-	return files, err
-}
-
-func fileContent(p string, d fs.DirEntry) (string, error) {
-	if d.Type()&fs.ModeSymlink != 0 {
-		target, err := os.Readlink(p)
-		return "symlink:" + target, err
-	}
-	b, err := os.ReadFile(p)
-	return string(b), err
 }

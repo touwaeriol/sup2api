@@ -42,7 +42,7 @@ func cmdRegistryAddVersion(args []string, stdout, stderr io.Writer) error {
 	root := fs.String("registry", "", "registry checkout (required)")
 	key := fs.String("plugin", "", "plugin key (required)")
 	tag := fs.String("tag", "", "release tag (default: the latest release)")
-	if _, err := parseInterspersed(fs, args); err != nil {
+	if err := parseNoArgs(fs, args); err != nil {
 		return err
 	}
 	if *root == "" || *key == "" {
@@ -57,7 +57,7 @@ func cmdRegistryAddVersion(args []string, stdout, stderr io.Writer) error {
 }
 
 func addVersion(root, key, tag string, r *remote) (string, error) {
-	reg, err := loadRegistry(root)
+	reg, err := loadRegistry(root, false)
 	if err != nil {
 		return "", err
 	}
@@ -78,13 +78,13 @@ func cmdRegistryCodeowners(args []string, stdout, stderr io.Writer) error {
 	fs := newFlagSet("registry codeowners", stderr)
 	root := fs.String("registry", "", "registry checkout (required)")
 	def := fs.String("default-owner", "touwaeriol", "GitHub login owning everything else")
-	if _, err := parseInterspersed(fs, args); err != nil {
+	if err := parseNoArgs(fs, args); err != nil {
 		return err
 	}
 	if *root == "" {
 		return errors.New("--registry is required")
 	}
-	reg, err := loadRegistry(*root)
+	reg, err := loadRegistry(*root, false)
 	if err != nil {
 		return err
 	}
@@ -114,6 +114,11 @@ func ownersOf(p *regPublisher) string {
 	}
 	return "@" + strings.Join(p.GitHub, " @")
 }
+
+// importLogin is the GitHub login of a publisher file `registry import`
+// creates: a local market has no publisher on GitHub, and the list may not
+// be empty.
+const importLogin = "local-dev"
 
 // importOptions configure `registry import`, which registers local
 // packages for a development market (no download, no GitHub).
@@ -153,7 +158,8 @@ func importPackage(o importOptions, pkg string) (string, error) {
 		return "", err
 	}
 	m := info.m
-	pub := regPublisher{indexPublisher: indexPublisher{ID: m.Publisher, Name: bilingual(nil, m.Publisher), Trust: o.trust, Status: "active"}, GitHub: []string{}}
+	pub := regPublisher{indexPublisher: indexPublisher{ID: m.Publisher, Name: bilingual(nil, m.Publisher), Trust: o.trust, Status: "active"},
+		GitHub: []string{importLogin}}
 	if err := writeIfMissing(filepath.Join(o.root, regPublishersDir, m.Publisher+regJSONExt), m.Publisher, &pub, checkPublisher); err != nil {
 		return "", err
 	}
@@ -162,7 +168,7 @@ func importPackage(o importOptions, pkg string) (string, error) {
 		return "", err
 	}
 	v := info.version(o.urlPrefix + url.PathEscape(filepath.Base(pkg)))
-	v.ReleaseURL = "https://github.com/" + o.repo + "/releases" // no release behind a local package
+	v.ReleaseURL = githubURL(o.repo, "releases") // no release behind a local package
 	return writeVersion(o.root, m.Key, v)
 }
 

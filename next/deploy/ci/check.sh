@@ -105,7 +105,7 @@ plugins() {
   # The market's unsigned index v2, from a registry of its packages.
   rm -rf "$checks/registry"
   "$checks/sub2api-plugin" registry import --registry "$checks/registry" --repo touwaeriol/sup2api --trust official "$checks"/market/*.s2plugin > "$out/plugin-market-index.log"
-  "$checks/sub2api-plugin" index --registry "$checks/registry" --out "$checks/market/index.json" >> "$out/plugin-market-index.log" 2>&1
+  "$checks/sub2api-plugin" index --dev --registry "$checks/registry" --out "$checks/market/index.json" >> "$out/plugin-market-index.log" 2>&1
   ls "$checks/builtin" "$checks/builtin-next" "$checks/upload" "$checks/market"
 }
 

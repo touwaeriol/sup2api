@@ -2,6 +2,7 @@ package check
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"net/url"
@@ -329,15 +330,33 @@ func protocolPluginUsage(p *manifest.Platform, protocol string) bool {
 	return false
 }
 
+// ValidatePluginKey reports why key cannot be a plugin's key (nil when it
+// can): the rule manifest.key is held to, for tools that name plugins by key.
+func ValidatePluginKey(key string) error {
+	if code, msg := pluginKeyProblem(key); code != "" {
+		return errors.New(msg)
+	}
+	return nil
+}
+
+// pluginKeyProblem is the error code and message of an invalid plugin key.
+func pluginKeyProblem(key string) (code, msg string) {
+	if !pluginKeyRe.MatchString(key) || len(key) > 30 {
+		return "invalid_format", fmt.Sprintf("key must match %s and be at most 30 bytes", pluginKeyRe.String())
+	}
+	if coreKeys[key] {
+		return "reserved", fmt.Sprintf("key %q is reserved for the core", key)
+	}
+	return "", ""
+}
+
 func (v *validator) basics() {
 	m := v.m
 	if m.APIVersion != manifest.APIVersion {
 		v.add("apiVersion", "unsupported", "apiVersion must be %d", manifest.APIVersion)
 	}
-	if !pluginKeyRe.MatchString(m.Key) || len(m.Key) > 30 {
-		v.add("key", "invalid_format", "key must match %s and be at most 30 bytes", pluginKeyRe.String())
-	} else if coreKeys[m.Key] {
-		v.add("key", "reserved", "key %q is reserved for the core", m.Key)
+	if code, msg := pluginKeyProblem(m.Key); code != "" {
+		v.add("key", code, "%s", msg)
 	}
 	if strings.TrimSpace(m.Name["en"]) == "" {
 		v.add("name", "required", "name.en is required")
