@@ -8,9 +8,19 @@
 
 开发完成、尚未上线的改动。发布时改成发布日期的一节，补上提交、实际版本号和发布过程。
 
-### 核心 0.1.311（草稿）：页面操作统一留在页面里（无迁移，可滚动；UI SDK 4.3，dynweight 0.7.0、guard 0.3.1）
+## 2026-11-23
 
-尚未构建发布；发布时补上提交、清单、构建与发布过程。
+### 核心 0.1.311：页面操作统一留在页面里、价格与倍率的代码规范修复、插件先授权再安装（`22f79d3ed`；无迁移，滚动更新；UI SDK 4.3，dynweight 0.7.0、guard 0.3.1；网关仍 0.1.139）
+
+- **构建**：照 0.1.310 的做法在 ovh 上从 touwaeriol/sup2api develop `22f79d3ed` 构建（`stage/own-0.1.311/`，149 秒，内置包用 `sup2api-plugins-2026` 重签）。清单 sha256 `74b10008e95aefd4fdec24457cf2808a5e4402ca89cc3844fd684f4da600b836`（`release_id` `core-v0.1.311`，amd64 bundle `d7670c2e…4fa94`、arm64 `9f0d3afb…95cb`），strategy rolling，schema `395364cf…2436` 不变（最后一个迁移仍是 0124）。内置包只有 dynweight 0.6.0→0.7.0 变了（`hostCompat >=0.1.311`），其余与 0.1.310 逐字节相同；guard 不是内置插件、ovh 没有安装，这次不涉及部署。`next/plugins/released.json` 按本次重写（dynweight 0.7.0、guard 0.3.1）。
+- **发布前**：GitHub next CI 通过（backend-security 是既有失败）；新核心只读运行 `sub2api admin check-prices` 通过。
+- **ovh 集群**（北京时间 2026-11-23 13:10–13:12，用户原话“等三个讨论串全部都完成之后帮我更新上去”）：import 后预检 rolling-v1、无阻断（expected_revision 585），计划 `b1a26765eca5e88f3f81979ec0ac14a6` 13:10:22.9→13:12:05.9：ccp 13:10:33 让出、13:11:00 就绪，ovh 13:11:06 让出、等进行中的请求排空到 13:11:59 停止、13:12:04 就绪；ovh 3130 与 api.prophey.ai `/readyz` 全程 200，没有 503，切换期间 36 个请求全部成功。两节点都换上新核心后内置插件同步把 dynweight 升到 0.7.0（13:12:23–13:12:25 两节点新实例启动，13:12:33 移除 0.6.0 包）。没有关 new-api 渠道（392 由管理员关着，未动）。
+- **核验**：两节点核心 0.1.311、网关 0.1.139，7 个启用插件 active、ready、restarts 0（dynweight 0.7.0）；升级后 `check-prices` 通过；控制台 /prices、/groups、/plugins、/plugins/dynweight 与懒加载资源 200；GET `/groups/:id/model-prices`、`/me/prices`（含 `?group_id=`）等只读接口 200，没有写线上配置。经 api.prophey.ai 的非流式、流式 `/v1/messages`（临时密钥，已删）200、`billed`、`rate_multiplier` 1.0、费用与价格一致。升级前 15 分钟 348 个请求，1 个 499（客户端取消），没有 5xx；升级后 15 分钟 236 个请求全部成功。两节点日志无 ERROR。
+- 回滚：无迁移，可以用同样方式滚动回 0.1.310（清单 `ffeb73ad…dd3e`）；dynweight 0.7.0 要求核心 ≥0.1.311，回退核心前先确认 dynweight 的处理。
+
+本次发布包含的改动：
+
+#### 页面操作统一留在页面里（UI SDK 4.3，dynweight 0.7.0、guard 0.3.1）
 
 - 页面的操作按钮不再进顶栏，所有页面都照账号列表的样式放在页面里：页头一行，筛选在左、操作在右；有标签的页面放在标签栏右端；左列表、右详情的页面放在列表卡片底部（如角色页“新建角色”）；已有筛选条的页面放在“重置”“搜索”旁（用量概览的刷新、价格同步的“重新拉取”）。去掉页头里的“返回”按钮，上级页面走面包屑。节点、任务、账号页的自动刷新旁多一个“刷新”按钮（手机上在自动刷新菜单里）。同一行的按钮一样高，手机上页头带图标的主按钮浮在右下角。`HOST_UI_VERSION` 4.3.0：`STabs` 新插槽 `#end`、`SAutoRefresh` 新属性 `button` / `loading`，用到的插件声明 `hostUICompat: "^4.3"`、`hostCompat >=0.1.311`；旧插件不用重新构建，操作自动留在页面里（CONTRACTS §133）。dynweight 0.7.0 的刷新移到标签栏右端；guard 0.3.1 的时间范围进页头筛选位，“管理规则”在手机上不浮动。
 
@@ -24,8 +34,6 @@
 - 从市场安装、升级或上传插件时，先看到这个包要的全部权限（升级时与当前版本比较），确认授权后才下载、安装；取消则什么都不留下（用户要求）。此前要先登记一个待授权的版本，再进授权页。
 - 控制台：市场选版本后、上传选文件后直接进“安装前确认授权”页（`/plugins/install/market`、`/plugins/install/upload`），顶部步骤条“确认授权 → 安装 → 启用/逐节点升级”，底部“取消安装/取消升级”与“同意并安装/同意并升级”；同意后自动开始启用或升级并跳到发布页，启动失败时回插件详情的横幅手动启用/升级。已登记待授权的版本（如升级失败退回）批准后同样自动启用/升级。删掉上传返回的审查缓存。
 - 接口：新增 POST `/plugins/review-upload`、`/plugins/review-from-market`（安装预审，返回与 GET review 同结构的审查信息，不写任何记录）；POST `/plugins/upload`（multipart 字段 `consent`）与 `/plugins/install-from-market`（字段 `consent`）可带上同意的内容和预审返回的 `package_sha256`，登记后立即同意，返回 `{review, consent}`；包与预审的不同时 409 `package_changed`，同意失败时撤销本次登记（审计 `plugin.upload.undo`）。带 `consent` 的安装要二次验证 `plugin.grant`，不带时仍是 `plugin.install`，行为不变。见 CONTRACTS §5.7“先授权再安装”、§80.2。
-
-## 2026-11-23
 
 ### 核心 0.1.310：没有全局价、账号还不支持的模型也能设价格和倍率（`5c083499e`；无迁移，滚动更新；UI SDK 4.2；网关仍 0.1.139）
 

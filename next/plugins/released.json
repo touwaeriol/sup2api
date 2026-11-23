@@ -18,16 +18,16 @@
       "digest": "sha256:f1810fb294780e9e11bdbb4de23f664b54765572551f7b8171a705fb6e84bf80"
     },
     "dynweight": {
-      "version": "0.6.0",
-      "digest": "sha256:842200b08ec729465edc4391a0a02453220cf9aa8d5ba9aa02664ed9761a3294"
+      "version": "0.7.0",
+      "digest": "sha256:774778bd66673e5de9e54faf2f8a32556bf2e1a84c8f57b609b29c45a1b809cc"
     },
     "gemini": {
       "version": "0.4.0",
       "digest": "sha256:ee008f377766dc32f81a2362b5a2245db1f6c8e9a793fade6769e73c4cadc3a9"
     },
     "guard": {
-      "version": "0.3.0",
-      "digest": "sha256:991d0fe9497754f9e6bfad7dd69e4dc4c2bcc2f323d8d1e25bb30f5df8f2262d"
+      "version": "0.3.1",
+      "digest": "sha256:ade3b4291671102fe8c2a117dfc11e646eb5beea4a4da0dc07ba99b2a60a0858"
     },
     "mailer": {
       "version": "0.1.5",
