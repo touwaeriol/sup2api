@@ -32,6 +32,7 @@ const canReadGateways = computed(() => auth.has('system:update:read'))
  */
 const gatewayVersions = ref<Map<string, string> | null>()
 const loading = ref(true)
+const refreshing = ref(false)
 const refreshSeconds = ref(5)
 const tick = ref(Date.now())
 let clock: ReturnType<typeof setInterval> | undefined
@@ -41,6 +42,7 @@ let failures = 0
 async function load(manual = false) {
   if (inflight) return
   inflight = true
+  refreshing.value = manual
   try {
     const items = await fetchFirstPage<NodeInfo>('/nodes')
     nodes.value = [...items].sort((a, b) => a.node_id.localeCompare(b.node_id))
@@ -59,6 +61,7 @@ async function load(manual = false) {
   } finally {
     inflight = false
     loading.value = false
+    refreshing.value = false
   }
 }
 
@@ -179,7 +182,7 @@ const versionsText = computed(() => (gatewayVersions.value?.size ? t('nodes.vers
   <div>
     <SPageHeader :title="t('nodes.title')" :description="t('nodes.description')">
       <template #actions>
-        <SAutoRefresh v-model="refreshSeconds" :choices="REFRESH_CHOICES" button :loading="loading" @refresh="load(true)" />
+        <SAutoRefresh v-model="refreshSeconds" :choices="REFRESH_CHOICES" button :loading="refreshing" @refresh="load(true)" />
       </template>
     </SPageHeader>
 

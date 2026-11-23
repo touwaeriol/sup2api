@@ -11,7 +11,7 @@
   "icon": "text:W",
   "runtime": "grpc",
   "entry": { "grpc": { "binaries": "runtimes/{os}-{arch}/plugin" } },
-  "hostCompat": ">=0.1.311 <0.2.0",
+  "hostCompat": ">=0.1.312 <0.2.0",
   "hostUICompat": "^4.3",
 
   "capabilities": [

@@ -10,7 +10,8 @@
 // toolbar. It shows the current interval, or just its name when off. On a
 // compact screen it is a square refresh icon with a dot while running, and
 // with @refresh bound its menu starts with "Refresh now". `button` adds a
-// Refresh button after it on wide screens (spinning while `loading`); the
+// Refresh button after it on wide screens (spinning while `loading`; only
+// with @refresh bound); the
 // phone keeps the one icon button, whose menu has "Refresh now".
 import { computed } from 'vue'
 import { useUiT } from './i18n'
@@ -63,7 +64,7 @@ function select(key: string) {
       </template>
     </SDropdown>
     <SButton
-      v-if="button && !compact"
+      v-if="button && onRefresh && !compact"
       icon="refresh"
       :size="size"
       :loading="loading"

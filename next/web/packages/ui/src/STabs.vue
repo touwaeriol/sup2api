@@ -33,7 +33,7 @@ const visible = computed(() => props.showTabs && props.tabs.length > (props.show
       :aria-label="ariaLabel"
       @update:model-value="emit('update:modelValue', $event)"
     >
-      <template v-if="$slots.end" #end><slot name="end" /></template>
+      <template v-if="$slots.end" #end><ToolbarScope><slot name="end" /></ToolbarScope></template>
     </TabBar>
     <div v-else-if="$slots.end" class="flex flex-wrap items-center justify-end gap-2"><ToolbarScope><slot name="end" /></ToolbarScope></div>
     <STitleScope

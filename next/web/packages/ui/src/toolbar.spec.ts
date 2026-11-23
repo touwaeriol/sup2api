@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { enableAutoUnmount } from '@vue/test-utils'
 import { defineComponent, h, shallowRef, type VNode } from 'vue'
 import SButton from './SButton.vue'
+import SModal from './SModal.vue'
 import SPageHeader from './SPageHeader.vue'
 import STabs from './STabs.vue'
 import { provideTitleContext, type PageHead } from './titleContext'
@@ -46,6 +47,23 @@ describe('buttons in a toolbar', () => {
     mountPinned(STabs, { props: { tabs, modelValue: 'a' }, slots: { end: () => create({ size: 'xs' }) } })
     expect(fabs()).toBe(0)
     expect(document.querySelector('[data-testid="tab-bar-end"] button')?.classList).toContain('btn-md')
+  })
+
+  it('do not float as a block button', () => {
+    mountPinned(page(() => [create({ block: true })]))
+    expect(fabs()).toBe(0)
+  })
+
+  it('take the toolbar size at the end of tabs whose bar is hidden', () => {
+    mountPinned(STabs, { props: { tabs: [{ key: 'a', label: '甲' }], modelValue: 'a' }, slots: { end: () => create({ size: 'xs' }) } })
+    expect(document.querySelector('button')?.classList).toContain('btn-md')
+  })
+
+  it('in a dialog opened from a page toolbar keep their own size and do not float', () => {
+    mountPinned(page(() => [h(SModal, { open: true, title: '弹窗' }, () => create({ size: 'xs' }))]))
+    const inDialog = document.querySelector('[role="dialog"] .btn-primary')
+    expect(inDialog?.classList).toContain('btn-xs')
+    expect(fabs()).toBe(0)
   })
 
   it('outside a toolbar keep their own size and float only with fab', () => {

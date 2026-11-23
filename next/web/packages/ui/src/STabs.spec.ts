@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { enableAutoUnmount, mount } from '@vue/test-utils'
 import { h, nextTick } from 'vue'
 import STabs from './STabs.vue'
+import { mountPinned } from './testViewport'
 import SSettingsGroup from './SSettingsGroup.vue'
 import SPageHeader from './SPageHeader.vue'
 import SSectionTitle from './SSectionTitle.vue'
@@ -105,6 +106,13 @@ describe('tab bar end', () => {
     const w = mount(STabs, { props: { tabs: two, modelValue: 'a' }, slots: { end: () => h('button', '刷新') } })
     expect(w.get('[role="tablist"]').text()).not.toContain('刷新')
     expect(w.get('[data-testid="tab-bar-end"]').text()).toBe('刷新')
+  })
+  it('puts #end on a row of its own above the bar on a phone', () => {
+    const w = mountPinned(STabs, { props: { tabs: two, modelValue: 'a' }, slots: { end: () => h('button', '刷新') } })
+    const end = w.get('[data-testid="tab-bar-end"]')
+    expect(end.element.compareDocumentPosition(w.get('[role="tablist"]').element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(end.element.contains(w.get('[role="tablist"]').element)).toBe(false)
+    expect(w.findAll('[data-testid="tab-bar-end"]')).toHaveLength(1)
   })
   it('keeps #end on its own row when the bar is not shown', () => {
     const w = mount(STabs, { props: { tabs: two.slice(0, 1), modelValue: 'a' }, slots: { end: () => h('button', '刷新') } })

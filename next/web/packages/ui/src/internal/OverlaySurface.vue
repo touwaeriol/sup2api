@@ -27,7 +27,9 @@ import { useUiT } from '../i18n'
 import SIcon from '../SIcon.vue'
 import { useDialog, useSheetSwipe, type OverlayForm } from '../overlay'
 import { resetTitleContext } from '../titleContext'
+import { provideToolbar } from '../toolbar'
 resetTitleContext()
+provideToolbar(null)
 
 const props = withDefaults(
   defineProps<{

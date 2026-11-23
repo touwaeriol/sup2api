@@ -24,6 +24,7 @@ const canManage = computed(() => auth.has('task:manage'))
 
 const overview = ref<TasksOverview | null>(null)
 const loading = ref(true)
+const refreshing = ref(false)
 const refreshSeconds = ref(10)
 const tab = ref(route.query.tab === 'nodes' ? 'nodes' : 'cluster')
 const focusNode = ref(typeof route.query.node === 'string' ? route.query.node : '')
@@ -38,6 +39,7 @@ let failures = 0
 async function load(manual = false) {
   if (inflight) return
   inflight = true
+  refreshing.value = manual
   try {
     overview.value = await api.get<TasksOverview>('/system/tasks')
     failures = 0
@@ -47,6 +49,7 @@ async function load(manual = false) {
   } finally {
     inflight = false
     loading.value = false
+    refreshing.value = false
   }
 }
 useAutoRefresh(load, () => refreshSeconds.value * 1000)
@@ -191,7 +194,7 @@ function openTask(name: string, node = '') {
   <div>
     <SPageHeader :title="t('tasks.title')" :description="t('tasks.description')">
       <template #actions>
-        <SAutoRefresh v-model="refreshSeconds" :choices="REFRESH_CHOICES" button :loading="loading" @refresh="load(true)" />
+        <SAutoRefresh v-model="refreshSeconds" :choices="REFRESH_CHOICES" button :loading="refreshing" @refresh="load(true)" />
       </template>
     </SPageHeader>
 
