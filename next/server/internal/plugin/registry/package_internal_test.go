@@ -109,31 +109,26 @@ func TestMaterializeRejectsBadSignature(t *testing.T) {
 func TestMaterializeUnsignedPolicy(t *testing.T) {
 	m := registrytest.Manifest("uns", "1.0.0")
 	data := registrytest.Package(t, m, []byte("bin"), nil)
-	dir := t.TempDir()
-
-	db := testutil.DB(t).Gorm
-	strict, _ := pluginpkg.NewTrustStore(nil, false)
-	s := NewPackages(nil, dir, WithVerifier(TrustVerifier(strict, db, pluginpkg.Limits{})))
-	if err := s.materialize(context.Background(), pkgFor(dir, data, "uns", "1.0.0"),
-		func() ([]byte, error) { return data, nil }); err == nil {
+	fetch := func() ([]byte, error) { return data, nil }
+	dir, db := t.TempDir(), testutil.DB(t).Gorm
+	verifying := func(dir string, allowUnsigned bool) *Packages {
+		ts, _ := pluginpkg.NewTrustStore(nil, allowUnsigned)
+		return NewPackages(nil, dir, WithVerifier(TrustVerifier(ts, db, pluginpkg.Limits{})))
+	}
+	if err := verifying(dir, false).materialize(context.Background(), pkgFor(dir, data, "uns", "1.0.0"), fetch); err == nil {
 		t.Fatal("unsigned package accepted although unsigned plugins are not allowed")
 	}
-
-	lax, _ := pluginpkg.NewTrustStore(nil, true)
-	s = NewPackages(nil, dir, WithVerifier(TrustVerifier(lax, db, pluginpkg.Limits{})))
 	p := pkgFor(dir, data, "uns", "1.0.0")
-	if err := s.materialize(context.Background(), p, func() ([]byte, error) { return data, nil }); err != nil {
+	if err := verifying(dir, true).materialize(context.Background(), p, fetch); err != nil {
 		t.Fatal(err)
 	}
 	defer p.Close()
 	if !p.Has("manifest.json") {
 		t.Fatal("package not opened")
 	}
-
 	// Manifest identity must match the requested version.
-	s = NewPackages(nil, t.TempDir(), WithVerifier(TrustVerifier(lax, db, pluginpkg.Limits{})))
-	other := pkgFor(s.dataDir, data, "uns", "2.0.0")
-	if err := s.materialize(context.Background(), other, func() ([]byte, error) { return data, nil }); err == nil {
+	s := verifying(t.TempDir(), true)
+	if err := s.materialize(context.Background(), pkgFor(s.dataDir, data, "uns", "2.0.0"), fetch); err == nil {
 		t.Fatal("package of another version accepted")
 	}
 }

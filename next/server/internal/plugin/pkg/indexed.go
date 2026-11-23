@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store"
@@ -47,11 +46,12 @@ func (ip IndexedPublisher) Check() error {
 
 // VerifyIndexed resolves the trust of p, installed from a market source,
 // from what its index says of the publisher (ip) instead of its signature,
-// which is not read. The publisher must be listed active, be the
-// manifest's and not be revoked on this core. register (an upload)
-// records it with the index's trust level; otherwise (the install preview)
-// it is only read, and one not registered yet gets id 0 as in
-// lookupOfficial.
+// which is not read: the trust level is the version's (recorded on its row,
+// plugin_versions.trust_level), never written to the publisher. The
+// publisher must be listed active, be the manifest's and not be revoked on
+// this core. register (an upload) registers it if needed (registerIndexed);
+// otherwise (the install preview) it is only read, and one not registered
+// yet gets id 0 as in lookupOfficial.
 func (t *TrustStore) VerifyIndexed(ctx context.Context, q *gorm.DB, p *Package, ip IndexedPublisher, register bool) (*Verification, error) {
 	if err := ip.Check(); err != nil {
 		return nil, err
@@ -68,10 +68,10 @@ func (t *TrustStore) VerifyIndexed(ctx context.Context, q *gorm.DB, p *Package, 
 }
 
 // indexedPublisherID is the id of the active publisher ip, registered
-// first with the index's trust level when register.
+// first when register.
 func indexedPublisherID(g *gorm.DB, ip IndexedPublisher, register bool) (*int64, error) {
 	if register {
-		if err := upsertPublisher(g, ip.Name, ip.Trust).Error; err != nil {
+		if err := registerIndexed(g, ip.Name).Error; err != nil {
 			return nil, err
 		}
 	}
@@ -85,11 +85,12 @@ func indexedPublisherID(g *gorm.DB, ip IndexedPublisher, register bool) (*int64,
 	return nil, err
 }
 
-// upsertPublisher registers the publisher name with trust, or sets the
-// trust level of the one registered: the index decides it.
-func upsertPublisher(g *gorm.DB, name, trust string) *gorm.DB {
-	return g.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "name"}}, DoUpdates: clause.AssignmentColumns([]string{"trust_level"})}).
-		Create(&model.Publisher{Name: name, TrustLevel: trust})
+// registerIndexed registers the publisher name of a market install unless
+// it is registered: as community, the level of a publisher without a key
+// here (its hand uploads are not trusted any higher). A registered one is
+// never changed by an index.
+func registerIndexed(g *gorm.DB, name string) *gorm.DB {
+	return g.Clauses(onConflictNothing("name")).Create(&model.Publisher{Name: name, TrustLevel: TrustCommunity})
 }
 
 // VerifyRecorded re-checks the package p of a recorded version when a node
@@ -107,10 +108,19 @@ func (t *TrustStore) VerifyRecorded(ctx context.Context, q *gorm.DB, p *Package)
 	case v.SignatureStatus == SigRevoked:
 		return revokedError("the package signature has been revoked")
 	case v.SignatureStatus == SigIndexed:
-		_, err = activePublisher(g, p.Manifest.Publisher)
-		return err
+		return checkIndexedPublisher(g, p.Manifest.Publisher)
 	}
 	_, err = t.VerifyInstalled(ctx, q, p)
+	return err
+}
+
+// checkIndexedPublisher fails unless the publisher name of an indexed
+// version is registered and active.
+func checkIndexedPublisher(g *gorm.DB, name string) error {
+	_, err := activePublisher(g, name)
+	if store.IsNoRows(err) {
+		return revokedError(fmt.Sprintf("publisher %q is not registered", name))
+	}
 	return err
 }
 

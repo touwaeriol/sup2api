@@ -162,7 +162,7 @@ func checkDownload(t *testing.T, s *Service, srcID int64, base string, pkgBytes 
 // which is never deprecated: tool 1.1.0 installed has no update although
 // the deprecated 1.2.0 is newer.
 func TestUpdateAvailable(t *testing.T) {
-	idx, err := parseIndex(testIndex(nil))
+	idx, err := parseIndex(testIndex(nil), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,20 +197,22 @@ func TestMarketHTTPS(t *testing.T) {
 	}
 }
 
-// Only index.json v2 with known publisher trust levels and statuses is
-// read.
+// Only index.json v2 with valid publisher ids and known trust levels and
+// statuses is read.
 func TestParseIndex(t *testing.T) {
 	for _, raw := range []string{
 		`{"version":1,"plugins":[]}`,
 		`{"version":2,"publishers":[{"id":"a","trust":"unsigned","status":"active"}]}`,
 		`{"version":2,"publishers":[{"id":"a","trust":"official","status":"paused"}]}`,
+		`{"version":2,"publishers":[{"id":"Acme","trust":"official","status":"active"}]}`,
+		`{"version":2,"publishers":[{"id":"","trust":"official","status":"active"}]}`,
 		`not json`,
 	} {
-		if _, err := parseIndex([]byte(raw)); err == nil {
+		if _, err := parseIndex([]byte(raw), false); err == nil {
 			t.Errorf("accepted %s", raw)
 		}
 	}
-	if _, err := parseIndex(testIndex(nil)); err != nil {
+	if _, err := parseIndex(testIndex(nil), false); err != nil {
 		t.Fatal(err)
 	}
 }

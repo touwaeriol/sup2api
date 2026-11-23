@@ -88,3 +88,11 @@ func TestSQLPluginRollouts(t *testing.T) {
 		return rolloutPage(db, "demo", &snapTime, 20, 0).Scan(&raw)
 	})
 }
+
+// The summary's current version reads its trust level as pkg.VersionTrust.
+func TestSQLPluginCurrentVersionSummary(t *testing.T) {
+	gormtest.Assert(t, func(db *gorm.DB) *gorm.DB {
+		var sig string
+		return currentVersionSummary(db, "demo", "1.2.0").Scan(&sig)
+	})
+}

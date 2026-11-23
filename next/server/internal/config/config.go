@@ -218,8 +218,7 @@ func Load(goos string) (*Config, error) {
 	p.Landlock = boolEnv("SUB2API_PLUGIN_LANDLOCK", linux)
 	p.RunDir = env("SUB2API_PLUGIN_RUN_DIR", filepath.Join(p.DataDir, ".run"))
 	p.EgressAllowPrivate = boolEnv("SUB2API_PLUGIN_EGRESS_ALLOW_PRIVATE", false)
-	p.MarketSourcesJSON = os.Getenv("SUB2API_MARKET_SOURCES")
-	p.MarketAllowHTTP = boolEnv("SUB2API_MARKET_ALLOW_HTTP", false)
+	p.loadMarket()
 	p.BuiltinDir = env("SUB2API_BUILTIN_PLUGIN_DIR", "/opt/sub2api/builtin")
 	if s := os.Getenv("SUB2API_PLUGIN_OFFICIAL_KEYS"); s != "" {
 		for _, k := range strings.Split(s, ",") {
@@ -265,6 +264,13 @@ func env(k, def string) string {
 		return v
 	}
 	return def
+}
+
+// loadMarket reads the market settings: the sources seeded at start and
+// whether http market URLs are accepted.
+func (p *PluginConfig) loadMarket() {
+	p.MarketSourcesJSON = os.Getenv("SUB2API_MARKET_SOURCES")
+	p.MarketAllowHTTP = boolEnv("SUB2API_MARKET_ALLOW_HTTP", false)
 }
 
 func boolEnv(k string, def bool) bool {

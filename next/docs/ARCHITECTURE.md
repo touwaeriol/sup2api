@@ -396,6 +396,8 @@ erDiagram
     jsonb manifest
     bigint publisher_id FK
     string signature_status
+    string trust_level
+    string source
   }
   publishers {
     bigint id PK
@@ -1357,7 +1359,7 @@ flowchart TD
 
 - 配置一个或多个市场索引地址（只接受 HTTPS）；索引是一个**不签名的静态 JSON 文件**（index.json v2，CONTRACTS §11.1），由登记处仓库 touwaeriol/sup2api-plugin 经 PR 审核（`sub2api-plugin registry check`）后 CI 用 `sub2api-plugin index` 生成（CONTRACTS §135）：发布者（信任级别、状态）、插件、版本、GitHub Release 下载地址、sha256、弃用标记
 - 控制台"插件市场"页：浏览、按发布者筛选、一键安装（下载 → 按索引校验大小与 sha256 → 进入授权确认）、检查已安装插件的更新（弃用的版本不算更新）
-- 可信来源是登记处仓库的审核与 HTTPS：没有索引签名，也没有市场公钥；从市场安装的包不看包签名，信任级别取自索引里发布者的 `trust`，发布者被吊销或不在索引中时拒绝安装（CONTRACTS §136）
+- 可信来源是登记处仓库的审核与 HTTPS：没有索引签名，也没有市场公钥；从市场安装的包不看包签名，信任级别取自索引里发布者的 `trust`，记在这个版本上（`plugin_versions.trust_level`），不改本地发布者；发布者被吊销或不在索引中时拒绝安装；从某个源装的插件只能从同一个源升级（CONTRACTS §136）
 
 ### 11.4 开发工具
 

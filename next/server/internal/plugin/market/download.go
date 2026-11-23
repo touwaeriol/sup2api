@@ -46,19 +46,18 @@ type entry struct {
 	publisher pkg.IndexedPublisher
 }
 
-// findEntry finds key@version in the index of source sourceID. The cached
-// index may be stale: a miss retries once with a fresh copy.
+// findEntry finds key@version in a fresh copy of the index of source
+// sourceID: an install goes by what the market lists now.
 func (s *Service) findEntry(ctx context.Context, sourceID int64, key, version string) (*entry, error) {
-	for _, refresh := range []bool{false, true} {
-		idx, src, err := s.Index(ctx, sourceID, refresh)
-		if err != nil {
-			return nil, err
-		}
-		if p, v, ok := idx.find(key, version); ok {
-			return s.newEntry(src, idx, p, v)
-		}
+	idx, src, err := s.Index(ctx, sourceID, true)
+	if err != nil {
+		return nil, err
 	}
-	return nil, core.ErrNotFound.WithMessage(fmt.Sprintf("plugin %s %s not found in market index", key, version))
+	p, v, ok := idx.find(key, version)
+	if !ok {
+		return nil, core.ErrNotFound.WithMessage(fmt.Sprintf("plugin %s %s not found in market index", key, version))
+	}
+	return s.newEntry(src, idx, p, v)
 }
 
 // newEntry is the entry of version v of plugin p, listed by idx of src.
@@ -79,7 +78,7 @@ func (s *Service) downloadURL(e *entry) (string, error) {
 		return "", core.ErrUnavailable.WithMessage("market entry has an invalid url")
 	}
 	dl := e.base.ResolveReference(ref)
-	if !s.schemeAllowed(dl) {
+	if !schemeAllowed(dl, s.opt.AllowHTTP) {
 		return "", core.ErrUnavailable.WithMessage("market entry url must be https")
 	}
 	if e.version.Size > s.opt.MaxPackageBytes {

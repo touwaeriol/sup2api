@@ -1,0 +1,5 @@
+-- sql
+SELECT COALESCE(tv.trust_level, tp.trust_level) FROM plugin_versions AS tv LEFT JOIN publishers tp ON tp.id = tv.publisher_id WHERE tv.plugin_key = $1 AND tv.version = $2
+-- vars
+$1 string "demo"
+$2 string "1.2.0"

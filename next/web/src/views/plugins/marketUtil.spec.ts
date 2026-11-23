@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { MarketPlugin } from '@/api/types'
-import { latestOf, matches, newerIncompatible, noCompatible, publisherBlocked, publisherOptions, repoURL } from './marketUtil'
+import { matches, newerIncompatible, noCompatible, publisherBlocked, publisherOptions, repoURL } from './marketUtil'
 
 const reason = { reason: { en: 'old', zh: '旧' } }
 
@@ -16,7 +16,7 @@ function plugin(over: Partial<MarketPlugin> = {}): MarketPlugin {
     publisher_status: 'active',
     repo: 'acme/tool',
     builtin: false,
-    latest_version: '',
+    latest_version: '1.0.0',
     update_available: false,
     versions: [
       { version: '1.0.0', compatible: true },
@@ -28,10 +28,9 @@ function plugin(over: Partial<MarketPlugin> = {}): MarketPlugin {
 }
 
 describe('market versions', () => {
-  it('never takes a deprecated or incompatible version as the latest', () => {
-    expect(latestOf(plugin())).toBe('1.0.0')
-    expect(latestOf(plugin({ latest_version: '1.0.0' }))).toBe('1.0.0')
+  it('reports a newer version this core cannot run, beside the latest one the core reports', () => {
     expect(newerIncompatible(plugin())).toBe('2.0.0')
+    expect(newerIncompatible(plugin({ latest_version: '' }))).toBe('')
     expect(newerIncompatible(plugin({ versions: [{ version: '1.0.0', compatible: true }] }))).toBe('')
   })
   it('reports a listing no version of which runs on this core', () => {

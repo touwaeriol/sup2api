@@ -22,6 +22,8 @@ type PluginVersion struct {
 	UploadedBy      *int64          `gorm:"column:uploaded_by"`                // bigint
 	UploadedAt      time.Time       `gorm:"column:uploaded_at;default:(-)"`    // timestamp with time zone default now()
 	PackageURL      string          `gorm:"column:package_url;default:(-)"`    // text default ''::text
+	TrustLevel      *string         `gorm:"column:trust_level"`                // character varying(20)
+	Source          *string         `gorm:"column:source"`                     // character varying(30)
 }
 
 // TableName implements gorm's schema.Tabler.

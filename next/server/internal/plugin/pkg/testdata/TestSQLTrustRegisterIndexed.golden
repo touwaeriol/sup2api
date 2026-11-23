@@ -1,0 +1,6 @@
+-- sql
+INSERT INTO "publishers" ("name","trust_level","revoked_at") VALUES ($1,$2,$3) ON CONFLICT ("name") DO NOTHING RETURNING "id","status","created_at"
+-- vars
+$1 string "acme"
+$2 string "community"
+$3 *time.Time nil

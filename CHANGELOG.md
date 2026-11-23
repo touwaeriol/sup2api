@@ -8,12 +8,15 @@
 
 开发完成、尚未上线的改动。发布时改成发布日期的一节，补上提交、实际版本号和发布过程。
 
-### 插件商店：信任取自索引、去掉密钥、只用 HTTPS、弃用（分支 `feat/market-core`；迁移 0125，单向，改库走 `primary-first-v1`；CONTRACTS §11.1、§136）
+### 插件商店：信任取自索引、去掉密钥、只用 HTTPS、弃用（分支 `feat/market`；迁移 0125，单向，改库走 `primary-first-v1`；CONTRACTS §11.1、§136；发布与回退见 `next/deploy/rollback/market-0125-release.md`）
 
-- **index.json v2**：核心只拉 `index.json`，不再有 `index.json.sig`；v2 带 `publishers`（`trust`、`status`）、插件的 `repo`/`source`/`builtin`/`deprecated`、版本的 `release_url`/`deprecated`。v1 与 `market.VerifyIndex`/`SignIndex` 删除。
-- **市场源去掉公钥**：迁移 `0125_market_sources_drop_public_key.sql` 删除 `market_sources.public_key`；`SUB2API_MARKET_SOURCES` 改为 `[{name,url}]`；源与包地址只接受 https，新开关 `SUB2API_MARKET_ALLOW_HTTP=true` 才接受 http（本地市场；e2e、single、ovh 的 compose 已加，网关外壳透传）。
-- **信任**：从市场安装/预审的包不看签名，信任级别取自索引里发布者的 `trust`，发布者按名字登记（已有的改成索引的级别）；发布者在索引里吊销或缺失时 403 `permission_denied`（`details.reason` 为 `revoked` / `publisher_unlisted`）。版本行 `signature_status` 新值 `indexed`；节点加载时这类版本不验签、只查发布者未被吊销。手动上传与内置插件不变。
-- **弃用**：`GET /market/plugins` 透传插件与版本的 `deprecated`；`latest_version`、`update_available` 不计弃用版本，弃用版本仍可安装。列表新增 `publisher_name`、`publisher_homepage`、`publisher_status`、`repo`、`source_url`、`builtin`，`trust` 改为索引的值。
+- **index.json v2**：核心只拉 `index.json`，不再有 `index.json.sig`；v2 带 `publishers`（`trust`、`status`）、插件的 `repo`/`source`/`builtin`/`deprecated`、版本的 `release_url`/`deprecated`。v1 与 `market.VerifyIndex`/`SignIndex` 删除。发布者 `id` 不合规时整份索引无效；`homepage`、`source`、`release_url` 不是 https 地址时丢弃该字段。
+- **市场源去掉公钥**：迁移 `0125_market_sources_drop_public_key.sql` 删除 `market_sources.public_key`（并给 `plugin_versions` 加 `trust_level`、`source`）；`SUB2API_MARKET_SOURCES` 改为 `[{name,url}]`；源与包地址只接受 https（跳转也一样），新开关 `SUB2API_MARKET_ALLOW_HTTP=true` 才接受 http，只给本地市场（e2e、single 的 compose 已加）；生产（ovh）不设，市场源改为 `https://raw.githubusercontent.com/touwaeriol/sup2api-plugin/index/index.json`。
+- **发布顺序**：用 http 市场的栈要**先换上**把 `SUB2API_MARKET_ALLOW_HTTP` 列进透传白名单的网关，再发核心；市场源是 https 的（生产）不依赖新网关。新核心拒绝 http 源、旧核心要求源带 `public_key`，所以发核心前先把各节点的 `MARKET_SOURCES` 改成 https 地址并暂留旧的 `public_key`（手册第一节）。回退只能恢复升级前的备份。
+- **信任**：从市场安装/预审的包不看签名，信任级别取自索引里发布者的 `trust`，**记在版本行上**（`plugin_versions.trust_level`）；本地发布者按名字登记为 `community`，已有的发布者行不被索引改写。同意、授权、节点加载、review、插件列表都按“版本行的级别，没有时发布者行的级别”。发布者在索引里吊销或缺失时 403 `permission_denied`（`details.reason` 为 `revoked` / `publisher_unlisted`）。版本行 `signature_status` 新值 `indexed`；节点加载时这类版本不验签、只查发布者已登记且未被吊销。手动上传与内置插件不变。
+- **同源升级**：从某个市场源装的插件只能从同一个源升级，换源 403 `permission_denied`（`details.reason = "source_mismatch"`）；手动上传或内置的插件可以从市场升级。
+- **保留标识**：市场不再是可信渠道，第一方插件的键要索引把发布者列为 `official` 才能从市场占用（手动上传仍要官方签名，内置不变）。
+- **弃用**：`GET /market/plugins` 透传插件与版本的 `deprecated`；`latest_version`、`update_available` 不计弃用版本，弃用版本仍可安装。列表新增 `publisher_name`、`publisher_homepage`、`publisher_status`、`repo`、`source_url`、`builtin`，`trust` 改为索引的值。安装总是重新拉索引。
 - **控制台**：插件市场页显示发布者名称与信任级别、吊销/缺失标记（禁止安装）、内置、弃用（原因）、主页/仓库/源码链接，可按发布者筛选；选版本时标出弃用版本并给出“更新说明”链接；确认页把 `indexed` 当作通过。
 
 ## 2026-11-23

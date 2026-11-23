@@ -1,5 +1,5 @@
 -- sql
-INSERT INTO "plugin_versions" ("plugin_key","version","manifest","manifest_hash","package_sha256","package_size","publisher_id","key_id","signature_status","uploaded_by","consent_status") VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING "consent_status","uploaded_at","package_url"
+INSERT INTO "plugin_versions" ("plugin_key","version","manifest","manifest_hash","package_sha256","package_size","publisher_id","key_id","signature_status","uploaded_by","trust_level","source","consent_status") VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING "consent_status","uploaded_at","package_url"
 -- vars
 $1 string "demo"
 $2 string "1.2.0"
@@ -11,4 +11,6 @@ $7 *int64 nil
 $8 *string nil
 $9 string "unsigned"
 $10 *int64 nil
-$11 *string "awaiting_consent"
+$11 *string nil
+$12 *string nil
+$13 *string "awaiting_consent"

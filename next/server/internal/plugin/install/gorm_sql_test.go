@@ -37,9 +37,9 @@ func TestSQLBumpPlugin(t *testing.T) {
 	gormtest.Assert(t, func(db *gorm.DB) *gorm.DB { return bumpPlugin(db, "demo") })
 }
 
-func TestSQLBumpPluginReturningTrust(t *testing.T) {
+func TestSQLBumpPluginReturning(t *testing.T) {
 	gormtest.Assert(t, func(db *gorm.DB) *gorm.DB {
-		return bumpPluginReturningTrust(db, "demo", &bumpedTrust{})
+		return bumpPluginReturning(db, "demo", &bumpedPlugin{})
 	})
 }
 
@@ -238,5 +238,13 @@ func TestSQLRunningSignedBy(t *testing.T) {
 	gormtest.Assert(t, func(db *gorm.DB) *gorm.DB {
 		var keys []string
 		return runningSignedBy(db, "k1").Scan(&keys)
+	})
+}
+
+// A market install reads the source of the plugin's current version.
+func TestSQLCurrentSource(t *testing.T) {
+	gormtest.Assert(t, func(db *gorm.DB) *gorm.DB {
+		var source *string
+		return currentSource(db, "demo").Scan(&source)
 	})
 }

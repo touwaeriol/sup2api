@@ -1,0 +1,8 @@
+-- sql
+SELECT signature_status, manifest->>'publisher', COALESCE(manifest->'ui'->'settings'->>'mode' = 'native', false),
+			COALESCE(manifest->>'icon', ''), package_sha256, COALESCE((SELECT COALESCE(tv.trust_level, tp.trust_level) FROM plugin_versions AS tv LEFT JOIN publishers tp ON tp.id = tv.publisher_id WHERE tv.plugin_key = $1 AND tv.version = $2), 'unsigned') FROM "plugin_versions" WHERE plugin_key = $3 AND version = $4
+-- vars
+$1 string "demo"
+$2 string "1.2.0"
+$3 string "demo"
+$4 string "1.2.0"

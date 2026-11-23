@@ -873,11 +873,11 @@ func roleColumns(db *gorm.DB) *gorm.DB {
 }
 
 // reviewedVersion selects what the review of key@version shows of the
-// plugin, the version and its publisher.
+// plugin, the version (trust: pkg.VersionTrust) and its publisher.
 func reviewedVersion(db *gorm.DB, key, version string) *gorm.DB {
 	return db.Table("plugin_versions AS v").
-		Select(`p.status, v.consent_status, v.signature_status, v.key_id, pub.name, pub.trust_level,
-			v.package_size, v.package_sha256, v.uploaded_at`).
+		Select(`p.status, v.consent_status, v.signature_status, v.key_id, pub.name, (?),
+			v.package_size, v.package_sha256, v.uploaded_at`, pkg.VersionTrust(db, gorm.Expr("v.plugin_key"), gorm.Expr("v.version"))).
 		Joins("JOIN plugins p ON p.key = v.plugin_key").
 		Joins("LEFT JOIN publishers pub ON pub.id = v.publisher_id").
 		Where("v.plugin_key = ? AND v.version = ?", key, version)

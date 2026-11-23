@@ -22,11 +22,6 @@ export function newestOf(m: MarketPlugin): string {
   return sortedVersions(m).find(v => !v.deprecated)?.version || ''
 }
 
-/** Latest version: the newest compatible one that is not deprecated, as the core reports it ('' when none). */
-export function latestOf(m: MarketPlugin): string {
-  return m.latest_version || sortedVersions(m).find(v => !v.deprecated && !incompatible(v))?.version || ''
-}
-
 /** The listing has versions but none runs on this core. */
 export function noCompatible(m: MarketPlugin): boolean {
   return (m.versions || []).length > 0 && (m.versions || []).every(incompatible)
@@ -55,13 +50,13 @@ export function repoURL(m: MarketPlugin): string {
 
 /** Whether m matches the search keyword kw (lower case). */
 export function matches(m: MarketPlugin, kw: string): boolean {
-  const texts = [m.key, lt(m.name), lt(m.description), m.publisher, publisherLabel(m), ...(m.categories || [])]
+  const texts = [m.key, lt(m.name), lt(m.description), m.publisher, publisherLabel(m)]
   return texts.some(s => (s || '').toLowerCase().includes(kw))
 }
 
-/** The newest version when it is newer than the latest one only because this core cannot run it ('' otherwise). */
+/** The newest version when it is newer than the latest one (latest_version, as the core reports it) only because this core cannot run it ('' otherwise). */
 export function newerIncompatible(m: MarketPlugin): string {
   const newest = newestOf(m)
-  const latest = latestOf(m)
+  const latest = m.latest_version
   return newest && latest && newest !== latest && incompatible(versionOf(m, newest)) ? newest : ''
 }

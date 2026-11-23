@@ -144,8 +144,8 @@ func TestReservedKeysAndPlatforms(t *testing.T) {
 	if _, err := e.svc.Upload(ctx, guard, e.admin, UploadOptions{}); errCode(err) != "plugin_key_reserved" {
 		t.Fatalf("hand upload of a reserved key: %v", err)
 	}
-	if _, err := e.svc.Upload(ctx, guard, e.admin, UploadOptions{Source: "market:1"}); err != nil {
-		t.Fatalf("market install of a reserved key: %v", err)
+	if _, err := e.svc.Upload(ctx, guard, e.admin, UploadOptions{Source: "market:1"}); errCode(err) != "plugin_key_reserved" {
+		t.Fatalf("verified market install of a reserved key: %v", err)
 	}
 	// An officially signed hand upload may claim it.
 	if _, err := e.svc.Upload(ctx, pkgtest.Build(pkgtest.Minimal("payment", "1.0.0", "sub2api"), e.root), e.admin, UploadOptions{}); err != nil {

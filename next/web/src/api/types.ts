@@ -1691,7 +1691,6 @@ export interface MarketPlugin {
   installed_version?: string
   installed_status?: string
   update_available: boolean
-  categories?: string[] // assumed
 }
 
 /** A version of a market plugin (CONTRACTS §11.1, §14.3). */

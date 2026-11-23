@@ -16,7 +16,8 @@ if [ ! -f .env ]; then
   kid=$(docker run --rm --entrypoint cat sup2api:latest /opt/sub2api/market/dev-official.keyid | tr -d ' \r\n')
   pub=$(docker run --rm --entrypoint cat sup2api:latest /opt/sub2api/market/dev-official.pub | tr -d ' \r\n')
   printf "PLUGIN_TRUST_KEY=%s=%s\n" "$kid" "$pub" >> .env
-  printf "MARKET_SOURCES='[{\"name\":\"local-dev\",\"url\":\"http://market:8080/index.json\"}]'\n" >> .env
+  # The plugin store index (CONTRACTS §136), https only in production.
+  printf "MARKET_SOURCES='[{\"name\":\"official\",\"url\":\"https://raw.githubusercontent.com/touwaeriol/sup2api-plugin/index/index.json\"}]'\n" >> .env
 fi
 
 # ---- cluster CA, node and release-origin certificates

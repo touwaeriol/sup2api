@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"strings"
 
 	"gorm.io/gorm"
 
@@ -18,7 +17,9 @@ import (
 // (audit 2026-10-09 P1-5): a package uploaded by hand may use them only with
 // an official signature, so nobody can take a key or platform a later image
 // ships as built-in (the built-in install would fail on every node). Built-in
-// installs and configured market sources are trusted channels. A platform or
+// installs are a trusted channel; a market install claims one only when its
+// index lists the publisher as official (the version's trust level, CONTRACTS
+// §136.2), like any other package. A platform or
 // notification channel id is reserved for its own plugin whatever the source:
 // the channel's provider reads every notification sent on it.
 // TestReservedCoverRepo keeps the lists in step with next/plugins.
@@ -58,8 +59,9 @@ func reservedUse(m *manifest.Manifest) (field, msg string) {
 	return "", ""
 }
 
-// ErrReservedKey: a hand upload without an official signature uses the key,
-// a platform id or a notification channel id of a first-party plugin.
+// ErrReservedKey: a package neither official nor built in claims the key of
+// a first-party plugin, or a package uses a platform or notification channel
+// id reserved for another plugin.
 var ErrReservedKey = core.NewError(http.StatusForbidden, "plugin_key_reserved", "the plugin key, platform or notification channel id is reserved")
 
 // ErrResourceConflict: a version declares a platform, gateway endpoint or
@@ -106,10 +108,8 @@ func checkReserved(m *manifest.Manifest, source, trust string, claim bool) error
 	if field, msg := reservedUse(m); field != "" {
 		return ErrReservedKey.WithMessage(msg)
 	}
-	if !claim || !reservedKeys[m.Key] || trust == pkg.TrustOfficial || source == "builtin" || isMarketSource(source) {
+	if !claim || !reservedKeys[m.Key] || trust == pkg.TrustOfficial || source == "builtin" {
 		return nil
 	}
-	return ErrReservedKey.WithMessage(fmt.Sprintf("plugin key %q is reserved for a first-party plugin; upload an officially signed package or install it from the market", m.Key))
+	return ErrReservedKey.WithMessage(fmt.Sprintf("plugin key %q is reserved for a first-party plugin: only an official package (signed, or listed by a market under an official publisher) may claim it", m.Key))
 }
-
-func isMarketSource(source string) bool { return strings.HasPrefix(source, "market:") }

@@ -15,13 +15,13 @@ import (
 )
 
 // Registry identifiers. A plugin key follows the manifest's rule
-// (check.ValidatePluginKey); a publisher id is the manifest's publisher. A
+// (check.ValidatePluginKey); a publisher id is the manifest's publisher
+// (check.ValidatePublisherID, which the core's market client applies too). A
 // GitHub login is alphanumeric with single inner hyphens, at most 39 bytes.
 var (
-	regPublisherRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
-	regRepoRe      = regexp.MustCompile(`^[A-Za-z0-9](?:-?[A-Za-z0-9])*/[A-Za-z0-9._-]{1,100}$`)
-	regLoginRe     = regexp.MustCompile(`^[A-Za-z0-9](?:-?[A-Za-z0-9])*$`)
-	regSHA256Re    = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	regRepoRe   = regexp.MustCompile(`^[A-Za-z0-9](?:-?[A-Za-z0-9])*/[A-Za-z0-9._-]{1,100}$`)
+	regLoginRe  = regexp.MustCompile(`^[A-Za-z0-9](?:-?[A-Za-z0-9])*$`)
+	regSHA256Re = regexp.MustCompile(`^[0-9a-f]{64}$`)
 )
 
 // regLoginMaxLen is GitHub's limit on a login (and an owner) name.
@@ -65,7 +65,9 @@ func (p *problems) httpsURL(field, raw string) {
 func checkPublisher(name string, pub *regPublisher) []string {
 	var p problems
 	p.when(pub.ID != name, "id %q must equal the file name %q", pub.ID, name)
-	p.when(!regPublisherRe.MatchString(pub.ID), "id %q must match %s", pub.ID, regPublisherRe)
+	if err := check.ValidatePublisherID(pub.ID); err != nil {
+		p.addf("id: %v", err)
+	}
 	p.text("name", pub.Name)
 	p.httpsURL("homepage", pub.Homepage)
 	p.when(!slices.Contains(regTrustLevels, pub.Trust), "trust must be one of %v", regTrustLevels)

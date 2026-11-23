@@ -1,0 +1,4 @@
+-- sql
+UPDATE "plugins" SET "row_version"=row_version + 1,"updated_at"=now() WHERE key = $1 RETURNING "status",publisher_id IS NOT NULL AS published
+-- vars
+$1 string "demo"

@@ -1,5 +1,5 @@
 -- sql
-SELECT p.status, v.consent_status, v.signature_status, v.key_id, pub.name, pub.trust_level,
+SELECT p.status, v.consent_status, v.signature_status, v.key_id, pub.name, (SELECT COALESCE(tv.trust_level, tp.trust_level) FROM plugin_versions AS tv LEFT JOIN publishers tp ON tp.id = tv.publisher_id WHERE tv.plugin_key = v.plugin_key AND tv.version = v.version),
 			v.package_size, v.package_sha256, v.uploaded_at FROM plugin_versions AS v JOIN plugins p ON p.key = v.plugin_key LEFT JOIN publishers pub ON pub.id = v.publisher_id WHERE v.plugin_key = $1 AND v.version = $2
 -- vars
 $1 string "demo"

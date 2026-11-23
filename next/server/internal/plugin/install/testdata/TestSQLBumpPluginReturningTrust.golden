@@ -1,4 +1,0 @@
--- sql
-UPDATE "plugins" SET "row_version"=row_version + 1,"updated_at"=now() WHERE key = $1 RETURNING "status",publisher_id IS NOT NULL AS published,(SELECT trust_level FROM publishers WHERE id = plugins.publisher_id) AS trust
--- vars
-$1 string "demo"

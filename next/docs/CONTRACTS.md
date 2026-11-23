@@ -414,11 +414,11 @@
 }
 ```
 
-- `version` 必须是 2，其他值（包括旧的 1）整份索引作废（`GET /market/plugins` 503 `unavailable`，信息 `market index is invalid: …`）。`publishers[].trust` 只能是 `official`、`verified`、`community`，`status` 只能是 `active`、`revoked`，否则同样整份作废。
+- `version` 必须是 2，其他值（包括旧的 1）整份索引作废（`GET /market/plugins` 503 `unavailable`，信息 `market index is invalid: …`）。`publishers[].id` 须符合 `^[a-z0-9][a-z0-9_-]{0,63}$`（`check.ValidatePublisherID`，登记处工具用同一条规则），`trust` 只能是 `official`、`verified`、`community`，`status` 只能是 `active`、`revoked`，否则同样整份作废。
 - 可选字段缺省时省略：`homepage`、`source`、`builtin`、`deprecated`。`publishers` 按 `id` 排序，`plugins` 按 `key` 排序，`versions` 按 semver 降序；核心不依赖这些顺序。
 - `plugins[].publisher` 是 `publishers[].id`，也是包清单的 `publisher`；`key`、`version`、`host_compat` 与清单的 `key`、`version`、`hostCompat` 一致（由登记处的检查保证，核心安装时照常按清单校验）。
 - `url` 可以是相对地址，相对 index.json 所在目录解析（本地与测试市场用相对地址；登记处生成的是 GitHub Release 的绝对地址）。解析后的地址须是 https，开了 `SUB2API_MARKET_ALLOW_HTTP` 时也接受 http。
-- `release_url` 是该版本的发布页（更新说明），核心只透传，不校验格式（本地导入可能只是 `…/releases`）。
+- `release_url` 是该版本的发布页（更新说明），核心不校验它指向哪里（本地导入可能只是 `…/releases`）。控制台原样打开的链接（`publishers[].homepage`、`plugins[].source`、`versions[].release_url`）须是绝对的 https 地址（开了 `SUB2API_MARKET_ALLOW_HTTP` 时也可以是 http），否则核心丢弃该字段（按缺省处理），索引照常可用。
 - 核心的行为（信任取自索引、发布者被吊销或不在索引中、弃用、https）见 §136。
 
 ### 11.2 插件出口 SDK（D 实现 `sdk/pluginsdk/egress`，E 调用）
@@ -754,7 +754,7 @@ POST `/me/api-keys/:id/rotate` 强制匹配当前登录用户 ID，不设管理�
 - `POST /plugins/:key/rollouts/:id/cancel`（`plugin:manage`）成功返回 204。
 - `disable` 可带可选请求体 `{reason}`（默认 `"disabled by administrator"`）。`enable` 在插件处于 `awaiting_consent` 时返回 409；`upgrade` 的版本未批准返回 409、签名已吊销返回 403。
 
-插件详情 `GET /plugins/:key` 顶层字段：列表项全部字段（`key, name, status, status_reason, active_version, desired_version, current_version, publisher, trust, signature_status, pending_versions, egress_policy, installed_at, updated_at, builtin`）加 `manifest`（当前版本的 `review` 结构，无版本时 `null`）、`grants:[{permission, risk, scope, status, plugin_version, granted_by, granted_at}]`、`nodes`（逐节点，见 §15.3）、`node_summary`、`hooks:[{id?, point, order, failure, timeout_ms, needs, stats}]`、`jobs`、`events`、`resources:{requested, overrides, effective, max_memory_mb}`、`versions:[{version, consent_status, signature_status, package_sha256, package_size, uploaded_at}]`（上传时间倒序）、`rollout`。插件 `status` 取值 `awaiting_consent` \| `installed` \| `enabling` \| `enabled` \| `upgrading` \| `disabled`；`trust` 为 `official` \| `verified` \| `community` \| `unsigned`；`signature_status` 为 `valid` \| `unsigned` \| `revoked`。
+插件详情 `GET /plugins/:key` 顶层字段：列表项全部字段（`key, name, status, status_reason, active_version, desired_version, current_version, publisher, trust, signature_status, pending_versions, egress_policy, installed_at, updated_at, builtin`）加 `manifest`（当前版本的 `review` 结构，无版本时 `null`）、`grants:[{permission, risk, scope, status, plugin_version, granted_by, granted_at}]`、`nodes`（逐节点，见 §15.3）、`node_summary`、`hooks:[{id?, point, order, failure, timeout_ms, needs, stats}]`、`jobs`、`events`、`resources:{requested, overrides, effective, max_memory_mb}`、`versions:[{version, consent_status, signature_status, package_sha256, package_size, uploaded_at}]`（上传时间倒序）、`rollout`。插件 `status` 取值 `awaiting_consent` \| `installed` \| `enabling` \| `enabled` \| `upgrading` \| `disabled`；`trust` 为 `official` \| `verified` \| `community` \| `unsigned`，是当前版本运行时的级别（版本行的 `trust_level`，为空时取发布者行的级别，§136.2）；`signature_status` 为 `valid` \| `unsigned` \| `revoked` \| `indexed`（从市场安装，§136.2）。
 
 ### 15.7 角色（`authz/roles.go`、`authz/http.go`）
 
@@ -3447,7 +3447,7 @@ GET `/groups/:id/models`（`group:read`）返回所有未删除成员账号的�
 - 卸载 `purge=true` 现在同时删除插件的 KV（`plugin:kv:<key>:*`，事务外尽力而为，失败只记日志）。
 
 ### 55.2 第一方标识与平台保留（P1-5）
-- `install/reserved.go` 保留 `next/plugins` 下全部第一方插件的标识与其声明的平台 ID（测试 `TestReservedCoverRepo` 保证与仓库一致）。新增第一方插件时要在同一次改动里把它的键加进 `reservedKeys`（2026-11-17 加了 `azure_openai`、`bedrock`、`vertex`，§109.5）。手动上传要**新占用**保留标识，须官方签名；内置安装与市场来源（`market:<id>`）是可信渠道；`SUB2API_PLUGIN_DEV_MODE` 下不限制。保留平台 ID 只能由其所属插件声明，任何渠道都一样。违反时 `403 plugin_key_reserved`。
+- `install/reserved.go` 保留 `next/plugins` 下全部第一方插件的标识与其声明的平台 ID（测试 `TestReservedCoverRepo` 保证与仓库一致）。新增第一方插件时要在同一次改动里把它的键加进 `reservedKeys`（2026-11-17 加了 `azure_openai`、`bedrock`、`vertex`，§109.5）。要**新占用**保留标识，包须是官方级别：手动上传要官方签名，市场安装要索引把发布者列为 `official`（版本的信任级别，§136.2；市场本身不是可信渠道）；内置安装是可信渠道；`SUB2API_PLUGIN_DEV_MODE` 下不限制。保留平台 ID 只能由其所属插件声明，任何渠道都一样。违反时 `403 plugin_key_reserved`。
 - **待批准版本不占独享资源**：上传时只与其他插件**已批准**版本的平台/端点比对；批准（Consent）时在同一事务内用 `pkg.Conflicts` 再比对一次，冲突则 `409 plugin_resource_conflict`，`details.fields` 列出冲突字段（`platform_conflict` / `endpoint_conflict`）。
 
 ### 55.3 核心路径保留补全（P1-6）
@@ -9470,16 +9470,19 @@ sub2api-plugin registry import --registry <目录> --repo <owner/name> [--trust 
 
 - 市场不再签名：没有 `index.json.sig`，核心只拉 `index.json`；`market.VerifyIndex`、`SignIndex`、`IndexSignaturePrefix` 与 v1 格式删除。
 - 市场源没有公钥：迁移 `0125_market_sources_drop_public_key.sql` 删除 `market_sources.public_key`；`GET /market/sources` 不再返回 `public_key`。`SUB2API_MARKET_SOURCES` 为 `[{name, url}]`（同名的源更新 `url`；旧配置里多写的 `public_key` 不读）。
-- 可信来源是登记处仓库（PR 审核）、HTTPS 与索引里审核过的 sha256：市场源地址与解析后的包地址只接受 `https://`；`SUB2API_MARKET_ALLOW_HTTP=true`（默认 false，网关外壳透传给核心）时也接受 `http://`，只给本地市场用（e2e 栈的 Caddy、`deploy/single`、ovh 上的本地市场、网关真实核心测试的 httptest）。它不像 `SUB2API_PLUGIN_DEV_MODE` 那样关沙箱。启动时 `SUB2API_MARKET_SOURCES` 里有不合规的地址，核心启动失败；库里已有的 http 源在不放开时读取失败（列出全部源时跳过它，单独查它 400 `invalid_argument`）。
+- 可信来源是登记处仓库（PR 审核）、HTTPS 与索引里审核过的 sha256：市场源地址与解析后的包地址只接受 `https://`；`SUB2API_MARKET_ALLOW_HTTP=true`（默认 false，网关外壳透传给核心）时也接受 `http://`，只给本地市场用（e2e 栈的 Caddy、`deploy/single`、网关真实核心测试的 httptest），生产不设。市场客户端只跟随到同样合规的地址的跳转（`market.CheckRedirect`，核心各节点下载市场包也用它），https 的源跳到 http 时请求失败。它不像 `SUB2API_PLUGIN_DEV_MODE` 那样关沙箱。启动时 `SUB2API_MARKET_SOURCES` 里有不合规的地址，核心启动失败；库里已有的 http 源在不放开时读取失败（列出全部源时跳过它，单独查它 400 `invalid_argument`）。
 - 手动上传与内置插件的包签名规则不变（官方根密钥、`publisher_keys`、`SUB2API_PLUGIN_ALLOW_UNSIGNED`）。
 
 ### 136.2 市场来源的信任取自索引
 
-- `market.Download`（`review-from-market`、`install-from-market` 共用）先看该插件的发布者在索引里的状态：`active` 才下载；`revoked` 403 `permission_denied`，`details.reason = "revoked"`；索引的 `publishers` 里没有它 403 `permission_denied`，`details.reason = "publisher_unlisted"`。
-- 下载的包按索引的大小与 sha256 校验后交给安装器，`UploadOptions.Indexed` 带上索引里的发布者（`pkg.IndexedPublisher{Name, Trust, Status}`）。安装器对带 `Indexed` 的包不读签名（包签不签、签名对不对都不影响），改由 `TrustStore.VerifyIndexed` 决定信任：发布者须是清单的 `publisher`（否则 400 `fields[{field:"publisher", code:"publisher_mismatch"}]`）；上传时按名字登记到 `publishers`（新发布者以索引的 `trust` 建行，已有的把 `trust_level` 改成索引的值：同名发布者手动上传的包此后也按这个级别），预审只读（未登记时按 id 0 判断，与官方根密钥的预审相同）；本核心已吊销的发布者照旧 403 `reason = "revoked"`。信任级别能申请什么不变（`pkg.CheckTrust`），保留标识里市场来源仍是可信渠道（§55.2）。
-- 版本行的 `signature_status` 记为新值 `indexed`（列没有取值约束，不需要迁移；审计 `plugin.upload` 的 `signature_status` 同），`key_id` 为空，`publisher_id` 为登记的发布者。review、插件详情照常返回 `trust`（发布者行的级别）与 `signature_status: "indexed"`；控制台确认页把 `indexed` 当作通过（“由商店索引担保”），不显示签名警告。
-- 同意（`install.Consent`）照旧按发布者行的级别与状态检查，不再看索引。
-- 节点加载：`registry.TrustVerifier` 改调 `TrustStore.VerifyRecorded`：按版本行的 `signature_status`，`indexed` 不验签（包已按版本行的 sha256 校验），只要求发布者在本核心未被吊销；`revoked` 的版本一律不加载；其余照旧 `VerifyInstalled`。吊销发布者（`POST /publishers/:id/revoke`）同样把它的 `indexed` 版本改为 `revoked` 并禁用插件。
+- `market.Download`（`review-from-market`、`install-from-market` 共用）每次都重新拉索引（不用列表的缓存），再看该插件的发布者在索引里的状态：`active` 才下载；`revoked` 403 `permission_denied`，`details.reason = "revoked"`；索引的 `publishers` 里没有它 403 `permission_denied`，`details.reason = "publisher_unlisted"`。
+- 下载的包按索引的大小与 sha256 校验后交给安装器，`UploadOptions.Indexed` 带上索引里的发布者（`pkg.IndexedPublisher{Name, Trust, Status}`）。安装器对带 `Indexed` 的包不读签名（包签不签、签名对不对都不影响；市场包的签名一律不读，这是接受的取舍：信任来自登记处的审核与 sha256），改由 `TrustStore.VerifyIndexed` 决定信任：发布者须是清单的 `publisher`（否则 400 `fields[{field:"publisher", code:"publisher_mismatch"}]`）；本核心已吊销的发布者 403 `reason = "revoked"`。上传时按名字登记发布者：没有的以 `community` 建行（`ON CONFLICT DO NOTHING`），**已有的发布者行从不被索引改写**，所以索引的级别不会带到同名发布者手动上传的包上。预审只读（未登记时按 id 0 判断，与官方根密钥的预审相同）。
+- **信任按版本记**：索引给的级别写在这个版本行的 `plugin_versions.trust_level`（0125 新增，可空；手动上传与内置的版本为空）。运行时读信任的地方（同意、单项授权、节点加载与原生界面、review、插件列表与详情）一律用 `pkg.VersionTrust`：版本行有值用它，否则用发布者行的级别，都没有（未签名）为 `unsigned`。信任级别能申请什么不变（`pkg.CheckTrust`）；保留标识要官方级别，市场来源不再是可信渠道（§55.2），所以第一方插件从市场安装要索引把 `sub2api` 列为 `official`。
+- **同源升级**：版本行的 `plugin_versions.source`（0125 新增，可空）记上传来源（`upload`、`builtin`、`market:<id>`）。已安装的插件当前版本来自 `market:<id>` 时，市场安装只能来自同一个源，否则 403 `permission_denied`，`details.reason = "source_mismatch"`、`details.source` 为当前版本的来源；当前版本是手动上传或内置的，可以从任一市场升级。
+- 版本行的 `signature_status` 记为新值 `indexed`（列没有取值约束；审计 `plugin.upload` 的 `signature_status` 同），`key_id` 为空，`publisher_id` 为登记的发布者。review、插件详情返回版本的 `trust` 与 `signature_status: "indexed"`；控制台确认页把 `indexed` 当作通过（“由商店索引担保”），不显示签名警告。
+- 同意（`install.Consent`）照旧检查发布者行的状态，级别按上面的版本信任，不再看索引。
+- 节点加载：`registry.TrustVerifier` 改调 `TrustStore.VerifyRecorded`：按版本行的 `signature_status`，`indexed` 不验签（包已按版本行的 sha256 校验），只要求发布者在本核心已登记且未被吊销（缺了发布者行按吊销报 403，不是数据库错误）；`revoked` 的版本一律不加载；其余照旧 `VerifyInstalled`。吊销发布者（`POST /publishers/:id/revoke`）同样把它的 `indexed` 版本改为 `revoked` 并禁用插件。
+- 索引的校验：发布者的 `id` 用与登记处工具相同的规则（`check.ValidatePublisherID`，`^[a-z0-9][a-z0-9_-]{0,63}$`），不合规整份索引无效；控制台原样打开的链接（发布者 `homepage`、插件 `source`、版本 `release_url`）不是绝对的 https 地址（开了 `SUB2API_MARKET_ALLOW_HTTP` 时也可以是 http）时丢弃该字段，索引照常可用。
 
 ### 136.3 商店列表
 
@@ -9487,10 +9490,10 @@ sub2api-plugin registry import --registry <目录> --repo <owner/name> [--trust 
 
 ### 136.4 控制台
 
-插件市场页（`MarketView.vue`）：每个插件显示发布者名称与信任级别（`TrustBadge`）、发布者已吊销或不在索引中的标记（此时“安装/升级”按钮禁用并说明原因）、内置、弃用（悬停与下方提示显示原因）、发布者主页、仓库（`https://github.com/<repo>`）与源码链接（新窗口打开）；页头筛选条新增“发布者”下拉。选择版本的弹窗标出弃用的版本（原因）并给每个版本一个“更新说明”链接（`release_url`，新窗口）。判断与筛选放在 `views/plugins/marketUtil.ts`，标记与链接是 `parts/MarketBadges.vue`、`parts/MarketLinks.vue`；mock 的市场在 `web/mock/market.ts`。
+插件市场页（`MarketView.vue`）：每个插件显示发布者名称与信任级别（`TrustBadge`）、发布者已吊销或不在索引中的标记（此时“安装/升级”按钮禁用并说明原因）、内置、弃用（悬停与下方提示显示原因）、发布者主页、仓库（`https://github.com/<repo>`）与源码链接（新窗口打开）；页头筛选条新增“发布者”下拉。选择版本的弹窗标出弃用的版本（原因）并给每个版本一个“更新说明”链接（`release_url`，新窗口）。判断与筛选放在 `views/plugins/marketUtil.ts`（最新版本直接用接口的 `latest_version`），列表行、选择版本的弹窗、标记与链接是 `parts/MarketRow.vue`、`parts/MarketVersionPicker.vue`、`parts/MarketBadges.vue`、`parts/MarketLinks.vue`；mock 的市场在 `web/mock/market.ts`。
 
 ### 136.5 迁移与发布
 
-- 0125 单向：删掉的公钥此后任何核心都不用，回退靠升级前的备份；可以重跑。改库，走 `primary-first-v1`。
-- 部署：生产的 `SUB2API_MARKET_SOURCES` 指向 `https://raw.githubusercontent.com/touwaeriol/sup2api-plugin/index/index.json`；用本地 http 市场的栈加 `SUB2API_MARKET_ALLOW_HTTP=true`（e2e、single 的 compose 与 ovh 的 compose 已加）。
-- 测试：`market`（v2 解析、发布者状态、弃用与最新版本、https 规则、下载拒绝吊销与缺失的发布者）、`pkg`（`VerifyIndexed`、`VerifyRecorded`）、`plugin/api`（未签名的包经市场安装取得索引的 official，手动上传同一个包被拒）、`registry`（加载时按版本行验签）。
+- 0125 单向：删除 `market_sources.public_key`，加 `plugin_versions.trust_level`、`plugin_versions.source`。删掉的公钥此后任何核心都不用，回退只能恢复升级前的备份；可以重跑。改库，走 `primary-first-v1`。发布与回退步骤见 `next/deploy/rollback/market-0125-release.md`。
+- 部署：生产（ovh、clicodeplus）的 `SUB2API_MARKET_SOURCES` 指向 `https://raw.githubusercontent.com/touwaeriol/sup2api-plugin/index/index.json`，不设 `SUB2API_MARKET_ALLOW_HTTP`；用本地 http 市场的栈加 `SUB2API_MARKET_ALLOW_HTTP=true`（e2e、single 的 compose 已加），这样的栈要先换上透传这个变量的网关再发核心。旧核心要求市场源带 `public_key`、新核心拒绝 http 源，所以发布前先把 `MARKET_SOURCES` 改成 https 地址并暂留旧的 `public_key`（手册第一节）。
+- 测试：`market`（v2 解析、发布者 id、链接丢弃、跳转、发布者状态、弃用与最新版本、https 规则、下载拒绝吊销与缺失的发布者、下载重新拉索引）、`pkg`（`VerifyIndexed` 不改发布者行、`VerifyRecorded` 含缺失的发布者、`ReadVersionTrust`）、`install`（同源升级、保留标识要索引的 official）、`plugin/api`（未签名的包经市场安装取得索引的 official，手动上传同一个包被拒；版本信任出现在列表与 review，发布者行仍是 community）、`registry`（加载时按版本行验签）。

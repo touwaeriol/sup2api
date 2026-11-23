@@ -74,7 +74,9 @@ type cached struct {
 }
 
 // New builds the market client. client nil uses a 60 s timeout client;
-// package downloads use a copy of it with at least rc.PluginPackageTransferTimeout.
+// package downloads use a copy of it with at least
+// rc.PluginPackageTransferTimeout. Both copies follow a redirect only to an
+// allowed URL (CheckRedirect).
 func New(db *store.DB, inst Installer, client *http.Client, opt Options) *Service {
 	if client == nil {
 		client = &http.Client{Timeout: 60 * time.Second}
@@ -82,11 +84,35 @@ func New(db *store.DB, inst Installer, client *http.Client, opt Options) *Servic
 	if opt.MaxPackageBytes <= 0 {
 		opt.MaxPackageBytes = rc.PluginPackageMaxBytes
 	}
-	pkgClient := *client
+	s := &Service{db: db, inst: inst, opt: opt, now: time.Now, cache: map[int64]cached{}}
+	idxClient, pkgClient := *client, *client
+	idxClient.CheckRedirect = CheckRedirect(opt.AllowHTTP)
+	pkgClient.CheckRedirect = idxClient.CheckRedirect
 	if pkgClient.Timeout != 0 && pkgClient.Timeout < rc.PluginPackageTransferTimeout {
 		pkgClient.Timeout = rc.PluginPackageTransferTimeout
 	}
-	return &Service{db: db, inst: inst, client: client, pkg: &pkgClient, opt: opt, now: time.Now, cache: map[int64]cached{}}
+	s.client, s.pkg = &idxClient, &pkgClient
+	return s
+}
+
+// maxRedirects is net/http's default limit on redirects.
+const maxRedirects = 10
+
+// CheckRedirect is the redirect policy of every market download (the
+// market client's, and each node's download of a market package): a
+// redirect is followed only to a URL whose scheme a market URL may have
+// (schemeAllowed), so a market served over https cannot hand the core a
+// plain http URL.
+func CheckRedirect(allowHTTP bool) func(req *http.Request, via []*http.Request) error {
+	return func(req *http.Request, via []*http.Request) error {
+		if !schemeAllowed(req.URL, allowHTTP) {
+			return fmt.Errorf("market redirect to a %s URL refused", req.URL.Scheme)
+		}
+		if len(via) >= maxRedirects {
+			return fmt.Errorf("stopped after %d redirects", maxRedirects)
+		}
+		return nil
+	}
 }
 
 // seed is one source of SUB2API_MARKET_SOURCES.
@@ -160,16 +186,16 @@ func (s *Service) source(ctx context.Context, id int64) (*Source, error) {
 }
 
 // schemeAllowed reports whether a market URL may use the scheme of u:
-// https, or http with AllowHTTP.
-func (s *Service) schemeAllowed(u *url.URL) bool {
-	return u.Scheme == "https" || s.opt.AllowHTTP && u.Scheme == "http"
+// https, or http with allowHTTP (Options.AllowHTTP).
+func schemeAllowed(u *url.URL, allowHTTP bool) bool {
+	return u.Scheme == "https" || allowHTTP && u.Scheme == "http"
 }
 
 // indexURL is the index.json URL of a source URL: absolute, https (or
 // http with AllowHTTP); a directory (ending in "/") gets index.json.
 func (s *Service) indexURL(raw string) (*url.URL, error) {
 	u, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || !s.schemeAllowed(u) || u.Host == "" {
+	if err != nil || !schemeAllowed(u, s.opt.AllowHTTP) || u.Host == "" {
 		return nil, errors.New("url must be an absolute https URL (http only with SUB2API_MARKET_ALLOW_HTTP)")
 	}
 	if strings.HasSuffix(u.Path, "/") || u.Path == "" {
@@ -219,7 +245,7 @@ func (s *Service) fetchIndex(ctx context.Context, u string) (*Index, error) {
 	if err != nil {
 		return nil, err
 	}
-	idx, err := parseIndex(raw)
+	idx, err := parseIndex(raw, s.opt.AllowHTTP)
 	if err != nil {
 		return nil, core.ErrUnavailable.WithMessage("market index is invalid: " + err.Error()).WithCause(err)
 	}

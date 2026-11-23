@@ -34,7 +34,6 @@ const first = (key: string, name: Any, description: Any, versions: Any[], extra:
   repo: 'touwaeriol/sup2api',
   source_url: `https://github.com/touwaeriol/sup2api/tree/main/next/plugins/${key}`,
   builtin: false,
-  categories: ['platform'],
   versions,
   ...extra
 })
@@ -59,15 +58,9 @@ const market: Record<number, Any[]> = {
       ],
       { builtin: true }
     ),
-    first(
-      'guard',
-      L('Guard', '请求守卫'),
-      L('Request inspection and blocking.', '请求检查与拦截。'),
-      [v('touwaeriol/sup2api', '0.1.0', '>=0.1.0 <0.2.0', 7_340_032)],
-      {
-        categories: ['security']
-      }
-    ),
+    first('guard', L('Guard', '请求守卫'), L('Request inspection and blocking.', '请求检查与拦截。'), [
+      v('touwaeriol/sup2api', '0.1.0', '>=0.1.0 <0.2.0', 7_340_032)
+    ]),
     first('openai', L('OpenAI', 'OpenAI'), L('OpenAI API keys for the built-in openai platform.', '内置 openai 平台的 OpenAI API Key。'), [
       v('touwaeriol/sup2api', '0.1.0', '>=0.1.0 <0.2.0', 8_912_896)
     ]),
@@ -90,7 +83,6 @@ const market: Record<number, Any[]> = {
       publisher_status: 'active',
       repo: 'bar-labs/s2a-bar',
       builtin: false,
-      categories: ['platform'],
       versions: [v('bar-labs/s2a-bar', '1.0.0', '>=0.1.0', 6_291_456)]
     },
     {
@@ -104,7 +96,6 @@ const market: Record<number, Any[]> = {
       repo: 'foo-labs/s2a-foo',
       builtin: false,
       deprecated: { reason: L('Superseded by bar_platform.', '已由 bar_platform 取代。') },
-      categories: ['platform'],
       versions: [v('foo-labs/s2a-foo', '1.0.0', '>=0.1.0')]
     },
     {

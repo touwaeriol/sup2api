@@ -49,15 +49,15 @@ func (h *harness) pluginRows() (plugins, versions int) {
 }
 
 // serveMarket gives h a market source (id returned) whose index offers
-// guard 0.1.0 as data, by the official publisher sub2api.
-func (h *harness) serveMarket(data []byte) int64 {
+// key 0.1.0 as data, by publisher pub with trust.
+func (h *harness) serveMarket(data []byte, key, pub, trust string) int64 {
 	h.t.Helper()
-	idx := market.Index{Version: 2, Publishers: []market.IndexPublisher{{ID: "sub2api", Trust: pkg.TrustOfficial, Status: pkg.PublisherActive}},
-		Plugins: []market.IndexPlugin{{Key: "guard", Name: core.LocalizedText{"en": "Guard"}, Publisher: "sub2api",
-			Versions: []market.IndexVersion{{Version: "0.1.0", URL: "guard.s2plugin", SHA256: pkg.SHA256Hex(data), Size: int64(len(data)), HostCompat: ">=0.1.0"}}}}}
+	idx := market.Index{Version: 2, Publishers: []market.IndexPublisher{{ID: pub, Trust: trust, Status: pkg.PublisherActive}},
+		Plugins: []market.IndexPlugin{{Key: key, Name: core.LocalizedText{"en": key}, Publisher: pub,
+			Versions: []market.IndexVersion{{Version: "0.1.0", URL: key + ".s2plugin", SHA256: pkg.SHA256Hex(data), Size: int64(len(data)), HostCompat: ">=0.1.0"}}}}}
 	raw, _ := json.Marshal(idx)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body := map[string][]byte{"/m/index.json": raw, "/m/guard.s2plugin": data}[r.URL.Path]
+		body := map[string][]byte{"/m/index.json": raw, "/m/" + key + ".s2plugin": data}[r.URL.Path]
 		_, _ = w.Write(body)
 	}))
 	h.t.Cleanup(srv.Close)
@@ -114,7 +114,7 @@ func TestAPIUploadWithConsent(t *testing.T) {
 func TestAPIMarketWithConsent(t *testing.T) {
 	h, _ := newHarness(t)
 	pkgBytes := pkgtest.Zip(pkgtest.Files(pkgtest.Guard("guard", "0.1.0", "sub2api")))
-	src := h.serveMarket(pkgBytes)
+	src := h.serveMarket(pkgBytes, "guard", "sub2api", pkg.TrustOfficial)
 	if code, out := h.do("POST", "/plugins/review-upload", "admin", fileBody(t, pkgBytes)); code != 400 {
 		t.Fatalf("unsigned upload review = %d %v", code, out)
 	}
@@ -132,5 +132,29 @@ func TestAPIMarketWithConsent(t *testing.T) {
 	review, _ := data(out)["review"].(map[string]any)
 	if code != 200 || review["consent_status"] != install.ConsentApproved {
 		t.Fatalf("market install with consent = %d %v", code, out)
+	}
+}
+
+// A market version runs with the trust level its index gave: the summary
+// and the review show it, while the publisher registered by the install
+// stays community (CONTRACTS §136.2).
+func TestAPIMarketVersionTrust(t *testing.T) {
+	h, _ := newHarness(t)
+	pkgBytes := pkgtest.Zip(pkgtest.Files(pkgtest.Guard("acme_guard", "0.1.0", "acme")))
+	body := map[string]any{"source_id": h.serveMarket(pkgBytes, "acme_guard", "acme", pkg.TrustVerified), "key": "acme_guard", "version": "0.1.0",
+		"consent": guardConsent(pkg.SHA256Hex(pkgBytes))}
+	if code, out := h.do("POST", "/plugins/install-from-market", "admin", body); code != 200 {
+		t.Fatalf("market install = %d %v", code, out)
+	}
+	if code, out := h.do("GET", "/plugins/acme_guard", "admin", nil); code != 200 || data(out)["trust"] != pkg.TrustVerified {
+		t.Fatalf("summary = %d %v", code, out)
+	}
+	code, out := h.do("GET", "/plugins/acme_guard/versions/0.1.0/review", "admin", nil)
+	if code != 200 || data(out)["trust"] != pkg.TrustVerified {
+		t.Fatalf("review = %d %v", code, out)
+	}
+	var trust string
+	if err := h.db.SQL.QueryRow(`SELECT trust_level FROM publishers WHERE name = 'acme'`).Scan(&trust); err != nil || trust != pkg.TrustCommunity {
+		t.Fatalf("publisher trust_level = %q %v", trust, err)
 	}
 }

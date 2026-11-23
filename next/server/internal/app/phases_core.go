@@ -80,7 +80,7 @@ func (b *boot) buildPackages(trust *pkg.TrustStore) {
 	}
 	b.marketClient = &http.Client{Timeout: 60 * time.Second}
 	// Package downloads get more time than index requests.
-	packageHTTP := &http.Client{Timeout: runtimecontract.PluginPackageTransferTimeout}
+	packageHTTP := &http.Client{Timeout: runtimecontract.PluginPackageTransferTimeout, CheckRedirect: market.CheckRedirect(cfg.Plugins.MarketAllowHTTP)}
 	b.packageSrc = &blobs.Source{Store: packageStore, MaxBytes: cfg.Plugins.MaxPackageBytes,
 		Download: func(ctx context.Context, url string, limit int64) ([]byte, error) {
 			return market.Fetch(ctx, packageHTTP, url, limit)

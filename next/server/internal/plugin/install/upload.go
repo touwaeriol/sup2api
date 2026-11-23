@@ -295,8 +295,17 @@ func newVersion(p *pkg.Package, ver *pkg.Verification, opt UploadOptions, actorI
 		PluginKey: m.Key, Version: m.Version, Manifest: p.ManifestRaw, ManifestHash: p.ManifestHash,
 		PackageSha256: p.SHA256, PackageURL: opt.PackageURL, PackageSize: int64(len(p.Raw)),
 		PublisherID: ver.PublisherID, KeyID: nullStr(ver.KeyID), SignatureStatus: ver.SignatureStatus,
-		ConsentStatus: &consent, UploadedBy: nullID(actorID),
+		TrustLevel: versionTrust(ver), Source: nullStr(opt.Source), ConsentStatus: &consent, UploadedBy: nullID(actorID),
 	}
+}
+
+// versionTrust is the trust level a version records of its own: the index's
+// for a market install (SigIndexed), nil (its publisher's) otherwise.
+func versionTrust(ver *pkg.Verification) *string {
+	if ver.SignatureStatus != pkg.SigIndexed {
+		return nil
+	}
+	return &ver.Trust
 }
 
 // carryOverConsent approves an upgrade that neither adds nor widens host

@@ -3,8 +3,10 @@ package market
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"time"
 
+	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest/check"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/pkg"
 )
@@ -59,9 +61,10 @@ type IndexVersion struct {
 	Deprecated *Deprecation `json:"deprecated,omitempty"`
 }
 
-// parseIndex parses index.json v2 and checks the trust level and status of
-// each publisher.
-func parseIndex(raw []byte) (*Index, error) {
+// parseIndex parses index.json v2, checks each publisher (an invalid one
+// invalidates the index) and drops the links that are no allowed URL
+// (dropLinks).
+func parseIndex(raw []byte, allowHTTP bool) (*Index, error) {
 	var idx Index
 	if err := json.Unmarshal(raw, &idx); err != nil {
 		return nil, fmt.Errorf("index.json: %w", err)
@@ -74,12 +77,16 @@ func parseIndex(raw []byte) (*Index, error) {
 			return nil, err
 		}
 	}
+	idx.dropLinks(allowHTTP)
 	return &idx, nil
 }
 
-// checkPublisher fails for a trust level or status the index format does
-// not have.
+// checkPublisher fails for an id, trust level or status the index format
+// does not have.
 func checkPublisher(p IndexPublisher) error {
+	if err := check.ValidatePublisherID(p.ID); err != nil {
+		return err
+	}
 	switch p.Trust {
 	case pkg.TrustOfficial, pkg.TrustVerified, pkg.TrustCommunity:
 	default:
@@ -89,6 +96,28 @@ func checkPublisher(p IndexPublisher) error {
 		return fmt.Errorf("publisher %q: invalid status %q", p.ID, p.Status)
 	}
 	return nil
+}
+
+// dropLinks empties the links the console opens as they are (a publisher's
+// homepage, a plugin's source, a version's release_url) unless they are an
+// absolute https URL (http too with allowHTTP), so that no other scheme
+// reaches a page.
+func (idx *Index) dropLinks(allowHTTP bool) {
+	keep := func(link *string) {
+		if u, err := url.Parse(*link); err != nil || u.Host == "" || !schemeAllowed(u, allowHTTP) {
+			*link = ""
+		}
+	}
+	for i := range idx.Publishers {
+		keep(&idx.Publishers[i].Homepage)
+	}
+	for i := range idx.Plugins {
+		p := &idx.Plugins[i]
+		keep(&p.Source)
+		for j := range p.Versions {
+			keep(&p.Versions[j].ReleaseURL)
+		}
+	}
 }
 
 // publisher is the publisher id of the index; ok is false when it is not

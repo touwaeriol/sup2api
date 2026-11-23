@@ -208,23 +208,6 @@ func WithSource(src *blobs.Source) PackagesOption {
 	return func(s *Packages) { s.source = src }
 }
 
-// TrustVerifier verifies packages with the plugin trust store as their
-// version rows were recorded (TrustStore.VerifyRecorded: official root keys
-// and publisher_keys, or the publisher of a market install, read through
-// q). lim bounds unpacking and should match the upload limits.
-func TrustVerifier(trust *pluginpkg.TrustStore, q *gorm.DB, lim pluginpkg.Limits) PackageVerifier {
-	return func(ctx context.Context, key, version string, data []byte) error {
-		p, err := pluginpkg.Open(data, lim)
-		if err != nil {
-			return err
-		}
-		if p.Manifest.Key != key || p.Manifest.Version != version {
-			return fmt.Errorf("package manifest identifies %s@%s", p.Manifest.Key, p.Manifest.Version)
-		}
-		return trust.VerifyRecorded(ctx, q, p)
-	}
-}
-
 func NewPackages(db *store.DB, dataDir string, opts ...PackagesOption) *Packages {
 	s := &Packages{db: db, dataDir: dataDir, cache: map[string]*Package{}, fetch: map[string]*sync.Mutex{}, icons: map[string]packageIcon{}}
 	for _, o := range opts {
@@ -312,11 +295,12 @@ func (s *Packages) doneFunc(p *Package) func() {
 }
 
 // versionRecord reads what loading key@version needs: its manifest, package
-// sha256 and URL, signature status, publisher name and trust level, and
-// when the plugin was installed.
+// sha256 and URL, signature status, publisher name, trust level
+// (pluginpkg.VersionTrust) and when the plugin was installed.
 func versionRecord(db *gorm.DB, key, version string) *gorm.DB {
 	return db.Table("plugin_versions AS v").
-		Select("v.manifest, v.package_sha256, v.package_url, v.signature_status, p.name, p.trust_level, (?)",
+		Select("v.manifest, v.package_sha256, v.package_url, v.signature_status, p.name, (?), (?)",
+			pluginpkg.VersionTrust(db, gorm.Expr("v.plugin_key"), gorm.Expr("v.version")),
 			db.Model(&model.Plugin{}).Select("installed_at").Where("key = v.plugin_key")).
 		Joins("LEFT JOIN publishers p ON p.id = v.publisher_id").
 		Where("v.plugin_key = ? AND v.version = ?", key, version)
