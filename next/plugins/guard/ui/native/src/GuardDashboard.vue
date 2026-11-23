@@ -83,7 +83,7 @@ const recentColumns = computed<TableColumn[]>(() => [
       </template>
       <template #actions>
         <SButton icon="refresh" :loading="loading" @click="load">{{ t('refresh') }}</SButton>
-        <SButton v-if="host.can('rules:read')" variant="primary" icon="shield" @click="rulesOpen = true">{{ t('manageRules') }}</SButton>
+        <SButton v-if="host.can('rules:read')" variant="primary" icon="shield" :fab="false" @click="rulesOpen = true">{{ t('manageRules') }}</SButton>
       </template>
     </SPageHeader>
 
