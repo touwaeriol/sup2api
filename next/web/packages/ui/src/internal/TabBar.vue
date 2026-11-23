@@ -14,6 +14,7 @@ import type { TabItem } from '../types'
 import { navIndex } from '../keyboard'
 import { useCentredSelection, useScrollFade } from '../scrollClip'
 import TabMarks from './TabMarks.vue'
+import ToolbarScope from './ToolbarScope.vue'
 
 const props = withDefaults(
   defineProps<{ tabs: TabItem[]; modelValue: string; idPrefix?: string; size?: 'sm' | 'md'; ariaLabel?: string; dirty?: readonly string[]; errors?: readonly string[] }>(),
@@ -79,7 +80,7 @@ function onKey(e: KeyboardEvent) {
           </button>
         </nav>
       </div>
-      <div v-if="$slots.end" class="flex shrink-0 items-center gap-2 py-1" data-testid="tab-bar-end"><slot name="end" /></div>
+      <div v-if="$slots.end" class="flex shrink-0 items-center gap-2 py-1" data-testid="tab-bar-end"><ToolbarScope><slot name="end" /></ToolbarScope></div>
     </div>
   </div>
 </template>

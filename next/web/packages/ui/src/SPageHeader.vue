@@ -4,7 +4,9 @@
 // screen what the page puts beside its title (#before, #title-extra); the
 // header itself is a single toolbar row in the page: #filters on the left,
 // #actions on the right (alone, they end the row). Actions never go into the
-// title bar: every page keeps them in the same place.
+// title bar: every page keeps them in the same place. The header is a
+// toolbar (toolbar.ts): its buttons take one size, and directly in a shell a
+// primary button with an icon floats on a phone.
 // In a nested scope (a tab, a dialog) or outside a shell it is a title block
 // with the actions beside it and the filters below; a title that repeats the
 // scope's is not drawn again.
@@ -15,6 +17,7 @@
 import { computed, onBeforeUnmount, useSlots, watchEffect } from 'vue'
 import { usePageHeadSink, useTitleVisibility } from './titleContext'
 import { useViewport } from './viewport'
+import { provideToolbar } from './toolbar'
 import FilterSheet from './internal/FilterSheet.vue'
 
 const props = withDefaults(defineProps<{ title: string; description?: string; filtersActiveCount?: number }>(), {
@@ -26,6 +29,7 @@ const sink = usePageHeadSink()
 const lifted = !!sink
 const distinct = useTitleVisibility(() => props.title)
 const showTitle = computed(() => !lifted && distinct.value)
+provideToolbar({ float: lifted })
 
 // A phone's title bar has room for the title only: what goes with the title
 // and the actions stay in the page there (and the description is not shown).
