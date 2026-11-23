@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
@@ -34,14 +35,9 @@ func (g *Gateway) serveKeyUsage(c *gin.Context) bool {
 
 func (g *Gateway) reportKeyUsage(c *gin.Context) {
 	ctx := c.Request.Context()
-	key := requestKey(c)
-	if key == "" {
-		writeError(c, FormatAnthropic, fromCore(core.ErrUnauthenticated.WithMessage("missing api key"), ""))
-		return
-	}
-	p, err := g.d.Auth.Authenticate(core.WithClientIP(ctx, c.ClientIP()), key)
-	if err != nil {
-		writeError(c, FormatAnthropic, fromCore(core.AsError(err), ""))
+	p, e := g.authenticateKey(ctx, c.ClientIP(), requestKey(c))
+	if e != nil {
+		writeError(c, FormatAnthropic, e)
 		return
 	}
 	report, err := g.d.KeyUsage.KeyUsage(ctx, p)
@@ -50,6 +46,19 @@ func (g *Gateway) reportKeyUsage(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, report)
+}
+
+// authenticateKey authenticates the API key a gateway request carries, sent
+// from clientIP: the pipeline's, the model list's and /v1/usage's one check.
+func (g *Gateway) authenticateKey(ctx context.Context, clientIP, key string) (*core.APIKeyPrincipal, *gwError) {
+	if key == "" {
+		return nil, fromCore(core.ErrUnauthenticated.WithMessage("missing api key"), "")
+	}
+	p, err := g.d.Auth.Authenticate(core.WithClientIP(ctx, clientIP), key)
+	if err != nil {
+		return nil, fromCore(core.AsError(err), "")
+	}
+	return p, nil
 }
 
 // requestKey reads an API key from x-api-key, Authorization: Bearer or

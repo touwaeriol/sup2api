@@ -34,11 +34,18 @@ export const BUILTIN_PLATFORMS: Platform[] = [
     id: 'gemini',
     label: { en: 'Gemini', zh: 'Gemini' },
     builtin: true,
-    endpoints: [
-      ep('generate_content', 'POST', '/v1beta/models/:model:generateContent', 'gemini.generate'),
-      ep('stream_generate_content', 'POST', '/v1beta/models/:model:streamGenerateContent', 'gemini.stream_generate'),
-      ep('count_tokens', 'POST', '/v1beta/models/:model:countTokens', 'gemini.count_tokens', 'free')
-    ]
+    // Every Gemini endpoint on both API versions (CONTRACTS §134).
+    endpoints: ['v1beta', 'v1'].flatMap(version => {
+      const id = (name: string) => (version === 'v1' ? `${name}_v1` : name)
+      const path = (method: string) => `/${version}/models/:model:${method}`
+      return [
+        ep(id('generate_content'), 'POST', path('generateContent'), 'gemini.generate'),
+        ep(id('stream_generate_content'), 'POST', path('streamGenerateContent'), 'gemini.stream_generate'),
+        ep(id('count_tokens'), 'POST', path('countTokens'), 'gemini.count_tokens', 'free'),
+        ep(id('embed_content'), 'POST', path('embedContent'), 'gemini.embed'),
+        ep(id('batch_embed_contents'), 'POST', path('batchEmbedContents'), 'gemini.batch_embed')
+      ]
+    })
   }
 ]
 

@@ -12,13 +12,16 @@ const (
 	ProtocolGenerate       = "gemini.generate"
 	ProtocolStreamGenerate = "gemini.stream_generate"
 	ProtocolCountTokens    = "gemini.count_tokens"
+	ProtocolEmbed          = "gemini.embed"
+	ProtocolBatchEmbed     = "gemini.batch_embed"
 )
 
 // APIKey is a Gemini API key account type: x-goog-api-key on
 // https://generativelanguage.googleapis.com (a trailing /v1beta or /v1
-// replaced by the route's /v1beta), the model of the request's metadata in
-// the path of generateContent, streamGenerateContent (SSE) and countTokens,
-// the Gemini error policy, a one-token generateContent test (streamed for an
+// replaced by the route's version), the model of the request's metadata in
+// the path of generateContent, streamGenerateContent (SSE), countTokens,
+// embedContent and batchEmbedContents (bodies as they are, never
+// converted), the Gemini error policy, a one-token generateContent test (streamed for an
 // account that only serves streamGenerateContent) and the model listing.
 func APIKey(id string) standard.Type {
 	return standard.Type{
@@ -30,6 +33,8 @@ func APIKey(id string) standard.Type {
 			ProtocolGenerate:       modelRoute(":generateContent"),
 			ProtocolStreamGenerate: modelRoute(":streamGenerateContent?alt=sse"),
 			ProtocolCountTokens:    modelRoute(":countTokens"),
+			ProtocolEmbed:          modelRoute(":embedContent"),
+			ProtocolBatchEmbed:     modelRoute(":batchEmbedContents"),
 		},
 		DefaultProtocol: ProtocolGenerate,
 		Classify:        Policy,
@@ -48,11 +53,14 @@ const testModel = "gemini-2.5-flash-lite"
 // the path).
 func generatePing(string) string { return GenerateContentPingBody(1) }
 
-// modelRoute is a method of a model, /v1beta/models/<model><method>: the
-// model is the request's meta.model without a "models/" prefix, required.
+// modelRoute is a method of a model, /<version>/models/<model><method>: the
+// version is the client's (Version), the model the request's meta.model
+// without a "models/" prefix, required.
 func modelRoute(method string) standard.Route {
 	return standard.Route{
-		Path:  func(r *standard.Request) string { return "/v1beta/models/" + url.PathEscape(r.Model) + method },
+		Path: func(r *standard.Request) string {
+			return "/" + Version(r.Meta) + "/models/" + url.PathEscape(r.Model) + method
+		},
 		Model: standard.Model{FromMeta: true, TrimPrefix: "models/", Required: true, Missing: "model is required (path /v1beta/models/{model}:...)"},
 	}
 }

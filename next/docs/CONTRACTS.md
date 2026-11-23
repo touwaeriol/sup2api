@@ -528,7 +528,7 @@ compose 里的 `mock-upstream` 服务模拟 Anthropic `/v1/messages` 与 `/v1/me
 
 - 新增**内置插件** `openai`（账号类型 `apikey` → 平台 `openai`）和 `gemini`（账号类型 `apikey` → 平台 `gemini`），与 anthropic 一样随镜像提供、只能禁用不能卸载（`build-go.sh` 的 `BUILTIN_PLUGINS="anthropic openai gemini"`）。字段：`api_key`（敏感）、`base_url`（默认 `https://api.openai.com` / `https://generativelanguage.googleapis.com`）、`model_mapping`；提供主流模型默认价格。
 - openai 插件：`openai.chat` 流式请求强制 patch `stream_options.include_usage=true`，保证上游返回用量。
-- gemini 插件：流式请求（`gemini.stream_generate`）上游一律带 `?alt=sse`（网关按客户端是否带 `alt=sse` 重新组装）；模型取 `meta.model`，上游路径 `/v1beta/models/{model}:{action}`，Key 放 `x-goog-api-key`。
+- gemini 插件：流式请求（`gemini.stream_generate`）上游一律带 `?alt=sse`（网关按客户端是否带 `alt=sse` 重新组装）；模型取 `meta.model`，上游路径 `/v1beta/models/{model}:{action}`（2026-11-23 起版本跟随客户端，见 §134），Key 放 `x-goog-api-key`。
 - 用量映射值支持 `a+b` 求和（缺失按 0）；`gemini.json` 的 `output_tokens` = `candidatesTokenCount + thoughtsTokenCount`。
 - 新接口 `GET /me/platforms`（登录即可）：`[{id, label, builtin, endpoints:[{method, path, protocol, billing}]}]`，当前可用的全部平台（不含账号类型），用于普通用户创建 Key 时预览端点。
 
@@ -9013,7 +9013,7 @@ ALTER TABLE usage_logs
 `Spec.FromAccount` 从存值算出“根”放进 `Config.BaseURL`：在存值的转义形式**路径**上找 `Versions` 里能作为后缀的项，取最长的一个，整段匹配、区分大小写，至多去掉一段，再去掉剩下的末尾 `/`；找不到就用存值。scheme 和主机不参与（`http://v1`、`http://api/v3` 的根就是它们本身）；核心比较受限地址用同一个函数 `manifest.TrimVersion`（§21.3）。路由、模型列表、余额的路径照旧完整接在根后面（`standard`、`ModelListRequest` 的拼接都没有变）。所以：
 
 - 填 `https://x/v1` 与填 `https://x` 请求同样的地址；地址本身以 `/v1` 结尾的站点填 `https://x/v1/v1`，请求发往 `https://x/v1/v1/<路由>`。
-- 带的是另一个版本时按路由的来：gemini、newapi、sub2api 填 `…/v1` 时 Gemini 协议请求 `…/v1beta/…`；newapi、sub2api 的余额也从根拼。
+- 带的是另一个版本时按路由的来：Gemini 协议的版本跟客户端调用的端点走（§134），与填的版本段无关，例如填 `…/v1` 而客户端调 `/v1beta/…` 时请求 `…/v1beta/…`；newapi、sub2api 的余额也从根拼。
 - `…/a%2Fv1` 不算以 `/v1` 结尾（请求 `…/a%2Fv1/v1/…`），`…/V1`、`…/xv1` 也不算；只认类型自己声明的版本段（智谱 `…/api/paas/v4` 这类仍配不通，与此前相同，设计 Q7）。
 - azure 的 Foundry 项目名恰好是 `openai` 时（`…/api/projects/openai`），末尾被当作版本段 `/openai`，请求少了项目那一段，与此前相同（设计 Q11，接受现状）。
 
@@ -9378,3 +9378,32 @@ Go 类型是 `expr.VisualConfig`、`TierConfig`、`TierCond`、`TokenPrices`、`
 - **控制台。** 账号、分组、节点、任务、插件详情、发布者、发布进度、模型价格、价格来源、价格编辑、价格同步、角色、用量概览按上面四个位置调整；节点、任务、账号的刷新改用 `SAutoRefresh button`。
 - **版本。** `HOST_UI_VERSION`、`@sub2api/ui`、`@sub2api/host`、`@sub2api/vite-preset` 4.3.0（`ui-contract.spec.ts` 锁定，并检查 README 的 `（UI SDK 4.3）` 与 `hostUICompat: "^4.3"`）。用到 `STabs #end` 或 `SAutoRefresh` 的 `button` / `loading` 的插件声明 `hostUICompat: "^4.3"`、`hostCompat >=0.1.311`（0.1.310 是最后一个带 UI 4.2 的核心）；核心按 `hostCompat` 安装、不看 `hostUICompat`（§23.1），`sdk/manifest` 没有按 UI 版本的核心下限检查，所以这一步靠插件作者。`tools/sub2api-plugin` 的 `TestPluginsStartAtTheFirstCoreOfTheProtocol` 原来要求下限正好是 `protocol.FirstCoreVersion`（0.1.304），改为不低于它（仍只有一个下限）。`:fab="false"` 在旧宿主上同样有效，不必抬声明。随核心 0.1.311 滚动更新，没有迁移。
 - **插件兼容。** 原生插件用的是宿主的 `@sub2api/ui`：旧插件不重新构建，页头操作在新宿主上自动留在页面里；页头里带图标的 primary 按钮会在手机上浮动。dynweight 0.7.0 把刷新移进 `STabs #end`（`hostUICompat ^4.3`、`hostCompat >=0.1.311 <0.2.0`；升级夹具随之改为 `0.7.1-test`）；guard 0.3.1 的时间范围移到 `#filters-primary`，“管理规则”加 `:fab="false"`（兼容声明不变；guardtest 构建为 `0.3.1-test`）；moderation 页头只有一个次要的刷新按钮，不改。
+
+
+## 134. Gemini 的 v1 与 v1beta、embedContent、模型列表（2026-11-23，用户定“/v1/models/{model}:generateContent 和 /v1beta/... 两个路径网关都要支持，各自原样透传到上游的同版本，不互相转换、不改字段；测试统一用 /v1”，并选定 embedContent 与模型列表一起做；无迁移，核心 0.1.312，可滚动）
+
+依据：Google 的 v1 与 v1beta 是同一协议的两个版本，v1 稳定，v1beta 多实验功能（ai.google.dev/gemini-api/docs/api-versions）；Vertex AI 对应 v1 与 v1beta1，路径层级不同。
+
+### 134.1 端点
+
+- 内置 gemini 平台（`sdk/platforms/gemini.json`）每个端点有两份：v1beta 版（原 id）与 v1 版（id 加 `_v1`，路径 `/v1/models/…`），除 id 和路径外逐字相同（`sdk/platforms` 的 `TestGeminiEndpointsOnBothVersions` 锁定），协议 id 相同，所以调度、计费、审核钩子、粘性规则、价格都按协议照旧，不分版本。使用记录的 `endpoint` 是客户端实际调用的那一个（如 `/v1/models/:model:generateContent`）。
+- 端点：`generate_content`（`gemini.generate`）、`stream_generate_content`（`gemini.stream_generate`）、`count_tokens`（`gemini.count_tokens`，免费）、新增 `embed_content`（`gemini.embed`，`:embedContent`）、`batch_embed_contents`（`gemini.batch_embed`，`:batchEmbedContents`），各带 `_v1` 版。
+- embed 两个协议只原生透传，不是任何协议转换的源或目标（`convert/builtins.go` 没有它们的转换对）。计费按应答 `usageMetadata.promptTokenCount` 记 `input_tokens`（端点级 usage，inclusive；Google 的 `EmbedContentResponse`、`BatchEmbedContentsResponse` 都带 `usageMetadata`），预扣按 `promptTextPaths`（`content.parts.#.text`、`requests.#.content.parts.#.text`）本地估算；应答没有用量时照 §25.3 按未上报处理，不按估算补记。
+- 声明了显式端点子集的账号类型要写出 `_v1` 的 id 才服务 v1：省略 `endpoints` 的（gemini、sub2api）自动服务两个版本。
+
+### 134.2 上游版本
+
+- `sdk/pluginsdk/providers/gemini`：`ClientVersion(meta)` 在 `meta.client_protocol` 是 `gemini.*` 时按 `meta.endpoint` 给出 `v1`（`/v1/…`）或 `v1beta`；`Version(meta)` 是上游版本：Gemini 客户端的请求保留它调用的版本，其余（别的协议转换来的请求、账号测试、模型拉取，这些没有客户端版本）用 `v1beta`，与以前相同。gemini 预设的路由（gemini、newapi、sub2api 三个插件共用）按它拼 `/<版本>/models/<模型>:<方法>`，请求体原样转发。
+- newapi（0.1.2，`hostCompat >=0.1.312`）：New API（codingplus）在 `/v1beta/models/*path` 和 `/v1/models/*path` 都有 Gemini 中继，所以显式列出两个版本的 generate、stream、embed、batch_embed；两个版本的 count_tokens 都不列（New API 在 `/v1beta` 把 countTokens 答成 404，在 `/v1` 会当成 generateContent 转发）。New API 往 Google 用哪个版本由它自己的设置决定。
+- vertex（0.1.1，`hostCompat >=0.1.312`）：三个账号类型加 `_v1` 端点；Gemini 客户端的 `/v1beta` 请求发往 Vertex `v1beta1`，`/v1` 请求、转换来的请求和账号测试发往 `v1`（此前一律 `v1`）。vertex 不服务 embed。
+- gemini 0.4.1、sub2api 0.1.2：只是预设多了 embed 路由、版本跟随，`hostCompat` 不变。sub2api 不限定端点，`/v1` 与 embed 请求也原样发往上游站点；旧版 Sub2API 只有 `/v1beta/models/*`，接旧版站点时客户端请用 `/v1beta`（用 `/v1` 会得到上游 404），sub2api-next 0.1.312 起两个版本都有。
+- 控制台：端点兜底目录（`web/src/composables/platforms.ts`）与 `/me/platforms` 同序（v1beta 五个在前、v1 五个在后）；协议显示名补 `embedContent`、`batchEmbedContents`；gemini 插件表单的地址说明改为“版本跟随客户端”。
+
+### 134.3 模型列表
+
+- 核心自己应答（`server/internal/gateway/models_list.go`），不转发上游、不计费、不写使用记录，响应 `Cache-Control: no-store`：`GET /v1/models`、`GET /v1/models/:model`、`GET /v1beta/models`、`GET /v1beta/models/:model`。挂在平台端点匹配之后，所以同路径的 POST 端点（`:generateContent` 等）不受影响；插件若声明同方法同路径的 GET 端点会接管它（目前没有）。
+- 格式：`/v1beta/*` 一律 Gemini；`/v1/*` 参照 new-api 按请求头分派：带 `anthropic-version` → Anthropic（Anthropic SDK 用 API Key 或 Bearer 令牌都带它；new-api 还要求 `x-api-key`，这里不要求），否则带 `x-goog-api-key` 或 `?key=` → Gemini，否则 OpenAI。错误（401 key 缺失或无效、404 `model_not_found`）用对应协议的错误形状。
+  - OpenAI：`{"object":"list","data":[{"id","object":"model","created":0,"owned_by":"sub2api"}]}`；单个是其中一项。
+  - Anthropic：`{"data":[{"type":"model","id","display_name","created_at":"1970-01-01T00:00:00Z"}],"has_more":false,"first_id","last_id"}`。
+  - Gemini：`{"models":[{"name":"models/<id>","version":"001","displayName","supportedGenerationMethods":[…]}]}`，不分页（忽略 `pageSize`、`pageToken`，不返回 `nextPageToken`）；查单个时模型可带或不带 `models/`。`supportedGenerationMethods` 取网关在该版本实际声明的 `POST /<版本>/models/:model:<方法>` 端点：名字含 `embedding` 的模型列含 embed 的方法，其余列另外那些。
+- 鉴权与 `GET /v1/usage` 共用 `authenticateKey`（Authorization Bearer、`x-api-key`、`x-goog-api-key`、`?key=`）。模型来源是 key 所在分组的可用模型（`core.GroupModelLister`，由 group 模块的 `offeredModels` 实现，与 `/me/prices`、分组的模型数同一规则）；三种格式列同一份清单，不按协议过滤（核心会做协议转换）。

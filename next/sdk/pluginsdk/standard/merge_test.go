@@ -88,8 +88,9 @@ func TestMergeShape(t *testing.T) {
 		openai.ProtocolEmbeddings, openai.ProtocolImages, openai.ProtocolResponses, typesafe.ProtocolSystemOne}; !slices.Equal(tests, want) {
 		t.Errorf("tests %v, want %v", tests, want)
 	}
-	// openai: chat, responses, responses_ws, embeddings, images, images_edit.
-	if got, want := slices.Sorted(maps.Keys(m.Routes)), 6+2+3+1; len(got) != want {
+	// openai: chat, responses, responses_ws, embeddings, images, images_edit;
+	// gemini: generate, stream_generate, count_tokens, embed, batch_embed.
+	if got, want := slices.Sorted(maps.Keys(m.Routes)), 6+2+5+1; len(got) != want {
 		t.Errorf("routes %v", got)
 	}
 	// A merged type merges again: its routes keep their auth and tests are

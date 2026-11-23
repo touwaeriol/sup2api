@@ -93,12 +93,18 @@ func (e *Env) OpenAI(apiKey, path string, body any) *GatewayResult {
 	return e.Gateway(e.T, e.BaseURL, path, "", body, map[string]string{"Authorization": "Bearer " + apiKey})
 }
 
-// Gemini calls /v1beta/models/{model}:{action}[?query] through the load
-// balancer with the API key in x-goog-api-key (apiKey "" = pass it in
-// query as key=).
+// Gemini calls /v1/models/{model}:{action}[?query], the version the tests
+// use (the owner's choice, 2026-11-23), through the load balancer with the
+// API key in x-goog-api-key (apiKey "" = pass it in query as key=).
 func (e *Env) Gemini(apiKey, model, action, query string, body any) *GatewayResult {
 	e.T.Helper()
-	path := "/v1beta/models/" + model + ":" + action
+	return e.GeminiAt("v1", apiKey, model, action, query, body)
+}
+
+// GeminiAt is Gemini on API version ("v1" or "v1beta").
+func (e *Env) GeminiAt(version, apiKey, model, action, query string, body any) *GatewayResult {
+	e.T.Helper()
+	path := "/" + version + "/models/" + model + ":" + action
 	if query != "" {
 		path += "?" + query
 	}

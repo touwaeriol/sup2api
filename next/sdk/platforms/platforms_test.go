@@ -97,7 +97,7 @@ func TestProtocols(t *testing.T) {
 	want := map[string][]string{
 		"anthropic": {"anthropic.messages", "anthropic.count_tokens"},
 		"openai":    {"openai.chat", "openai.responses", "openai.responses_ws", "openai.embeddings", "openai.images", "openai.images_edit"},
-		"gemini":    {"gemini.generate", "gemini.stream_generate", "gemini.count_tokens"},
+		"gemini":    {"gemini.generate", "gemini.stream_generate", "gemini.count_tokens", "gemini.embed", "gemini.batch_embed"},
 	}
 	for _, p := range Builtin() {
 		if got := p.Protocols(); !slices.Equal(got, want[p.ID]) {

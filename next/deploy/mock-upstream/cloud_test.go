@@ -278,6 +278,11 @@ func TestVertexGemini(t *testing.T) {
 	if rec := s.lastRecorded(); rec.APIKey != "vertex-key-1" {
 		t.Fatalf("recorded %+v", rec)
 	}
+	// Vertex's beta, v1beta1, the same.
+	m = decode(t, post(t, srv, "/v1beta1/projects/my-project/locations/us-central1/publishers/google/models/gemini-2.5-flash:generateContent", token, body))
+	if get(m, "modelVersion") != "gemini-2.5-flash" {
+		t.Fatalf("v1beta1 = %v", m)
+	}
 	// Errors keep Google's shape.
 	resp := post(t, srv, project+"gemini-2.5-flash:generateContent", map[string]string{"Authorization": "Bearer tok-status-401"}, body)
 	if m = decode(t, resp); resp.StatusCode != 401 || get(m, "error", "status") != "UNAUTHENTICATED" {

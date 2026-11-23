@@ -93,6 +93,10 @@ func TestRequest(t *testing.T) {
 			"/v1beta/models/gemini-2.5-flash:generateContent", "", map[string]string{"x-goog-api-key": apiKey}, json},
 		{gemini.ProtocolStreamGenerate, "gemini-2.5-flash", `{"contents":[]}`, true,
 			"/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse", "", map[string]string{"x-goog-api-key": apiKey}, json},
+		{gemini.ProtocolEmbed, "gemini-embedding-001", `{"content":{"parts":[{"text":"hi"}]}}`, false,
+			"/v1beta/models/gemini-embedding-001:embedContent", "", map[string]string{"x-goog-api-key": apiKey}, json},
+		{gemini.ProtocolBatchEmbed, "gemini-embedding-001", `{"requests":[{"content":{"parts":[{"text":"hi"}]}}]}`, false,
+			"/v1beta/models/gemini-embedding-001:batchEmbedContents", "", map[string]string{"x-goog-api-key": apiKey}, json},
 		{typesafe.ProtocolSystemOne, "jev-latest", `{"model":"jev-latest","state":"hi","questions":{}}`, false,
 			"/v1/systemone", "", bearer, json},
 	} {

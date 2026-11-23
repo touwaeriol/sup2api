@@ -204,7 +204,7 @@ func TestAC20_OpenAIGeminiAPIKeys(t *testing.T) {
 		g.JSON().Get("usageMetadata.thoughtsTokenCount").Int() != MockThoughtsTokens {
 		t.Fatalf("generateContent: HTTP %d %s", g.Status, g.Body)
 	}
-	r = upstream(mark, geminiKey, "/v1beta/models/"+gemModel+":generateContent")
+	r = upstream(mark, geminiKey, "/v1/models/"+gemModel+":generateContent")
 	if r.Headers.Get("x-goog-api-key").String() != geminiKey || strings.Contains(r.Query, "key=") {
 		t.Fatalf("gemini upstream auth: %s query %q", r.Headers.Raw, r.Query)
 	}
@@ -215,13 +215,26 @@ func TestAC20_OpenAIGeminiAPIKeys(t *testing.T) {
 		t.Fatalf("generateContent with ?key=: HTTP %d %s", g.Status, g.Body)
 	}
 
+	// v1beta is served too and goes upstream on v1beta, as it is
+	// (CONTRACTS §134).
+	mark = m.Mark(t)
+	g = e.GeminiAt("v1beta", key, gemModel, "generateContent", "", GeminiBody("hello v1beta"))
+	if g.Status != 200 {
+		t.Fatalf("v1beta generateContent: HTTP %d %s", g.Status, g.Body)
+	}
+	upstream(mark, geminiKey, "/v1beta/models/"+gemModel+":generateContent")
+	checkUsage(g, gm)
+	if u := e.UsageByRequest(admin, tn.User.UserID, g.RequestID); u.Get("endpoint").String() != "/v1beta/models/:model:generateContent" {
+		t.Fatalf("v1beta usage endpoint: %s", u.Raw)
+	}
+
 	// 9. streamGenerateContent?alt=sse: SSE through, upstream always alt=sse.
 	mark = m.Mark(t)
 	g = e.Gemini(key, gemModel, "streamGenerateContent", "alt=sse", GeminiBody("hello gemini stream"))
 	if g.Status != 200 || len(g.Events) < 2 || g.Events[len(g.Events)-1].Data.Get("usageMetadata.thoughtsTokenCount").Int() != MockThoughtsTokens {
 		t.Fatalf("streamGenerateContent sse: HTTP %d %s events %d", g.Status, g.Body, len(g.Events))
 	}
-	r = upstream(mark, geminiKey, "/v1beta/models/"+gemModel+":streamGenerateContent")
+	r = upstream(mark, geminiKey, "/v1/models/"+gemModel+":streamGenerateContent")
 	if r.Query != "alt=sse" || !r.Stream {
 		t.Fatalf("gemini stream upstream query = %q", r.Query)
 	}
@@ -237,7 +250,7 @@ func TestAC20_OpenAIGeminiAPIKeys(t *testing.T) {
 	if g.Status != 200 || !arr.IsArray() || n < 2 || arr.Get(fmt.Sprintf("%d.usageMetadata.thoughtsTokenCount", n-1)).Int() != MockThoughtsTokens {
 		t.Fatalf("streamGenerateContent array: HTTP %d %s", g.Status, g.Body)
 	}
-	if r := upstream(mark, geminiKey, "/v1beta/models/"+gemModel+":streamGenerateContent"); r.Query != "alt=sse" {
+	if r := upstream(mark, geminiKey, "/v1/models/"+gemModel+":streamGenerateContent"); r.Query != "alt=sse" {
 		t.Fatalf("gemini array stream upstream query = %q", r.Query)
 	}
 	checkUsage(g, gm)
@@ -248,10 +261,20 @@ func TestAC20_OpenAIGeminiAPIKeys(t *testing.T) {
 	if g.Status != 200 || g.JSON().Get("totalTokens").Int() <= 0 {
 		t.Fatalf("countTokens: HTTP %d %s", g.Status, g.Body)
 	}
-	upstream(mark, geminiKey, "/v1beta/models/"+gemModel+":countTokens")
+	upstream(mark, geminiKey, "/v1/models/"+gemModel+":countTokens")
 	if u := e.UsageByRequest(admin, tn.User.UserID, g.RequestID); u.Get("billing_status").String() != "free" || Money(t, u.Get("total_cost").String()).Sign() != 0 {
 		t.Fatalf("countTokens usage: %s", u.Raw)
 	}
+
+	// 10b. embedContent is relayed as it is and billed on the reply's
+	// usageMetadata.promptTokenCount (CONTRACTS §134.1).
+	mark = m.Mark(t)
+	g = e.Gemini(key, gemModel, "embedContent", "", map[string]any{"content": map[string]any{"parts": []any{map[string]any{"text": "embed me"}}}})
+	if g.Status != 200 || len(g.JSON().Get("embedding.values").Array()) == 0 {
+		t.Fatalf("embedContent: HTTP %d %s", g.Status, g.Body)
+	}
+	upstream(mark, geminiKey, "/v1/models/"+gemModel+":embedContent")
+	checkUsage(g, wantUsage{accountID: geminiID, plugin: GeminiPlugin, platform: "gemini", protocol: "gemini.embed", input: MockInputTokens})
 
 	// 11. The anthropic endpoint is not served by this group.
 	expectNotServed(t, e.Messages(key, MessagesBody(tn.Model, "no anthropic here", false), nil), "anthropic")

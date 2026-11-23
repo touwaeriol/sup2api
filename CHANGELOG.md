@@ -8,6 +8,13 @@
 
 开发完成、尚未上线的改动。发布时改成发布日期的一节，补上提交、实际版本号和发布过程。
 
+#### Gemini 的 v1 与 v1beta、embedContent、模型列表（核心 0.1.312；gemini 0.4.1、sub2api 0.1.2、newapi 0.1.2、vertex 0.1.1；无迁移，可滚动）
+
+- **v1 与 v1beta 都支持**：网关新增 `/v1/models/{model}:generateContent`、`:streamGenerateContent`、`:countTokens`，与原有 `/v1beta/...` 并列；各自原样透传到上游的同一版本，不互转、不改字段，协议、调度、计费、审核都不分版本，使用记录里的端点是客户端实际调用的那个（用户要求）。别的协议转换到 Gemini 的请求照旧走 v1beta。Vertex AI 账号：v1 走 Vertex v1，v1beta 走 v1beta1（此前一律 v1）。New API 账号也接 v1（它在 `/v1/models/*path` 有 Gemini 中继），两版的 countTokens 仍不接。
+- **embedContent / batchEmbedContents**：两个版本都有，原生透传，按应答 `usageMetadata.promptTokenCount` 计输入 token；Gemini API Key、sub2api、New API 账号服务，Vertex 不服务。
+- **模型列表**：`GET /v1/models`、`/v1/models/{model}`、`/v1beta/models`、`/v1beta/models/{model}` 由核心直接回答 key 所在分组可用的模型，不转发、不计费；`/v1beta` 是 Gemini 格式，`/v1` 照 new-api 按请求头给 OpenAI、Anthropic 或 Gemini 格式。
+- 控制台端点列表的兜底目录同步；e2e 的 Gemini 调用改用 `/v1`，另测一次 `/v1beta`。见 CONTRACTS §134。
+
 ## 2026-11-23
 
 ### 核心 0.1.311：页面操作统一留在页面里、价格与倍率的代码规范修复、插件先授权再安装（`22f79d3ed`；无迁移，滚动更新；UI SDK 4.3，dynweight 0.7.0、guard 0.3.1；网关仍 0.1.139）

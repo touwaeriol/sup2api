@@ -78,6 +78,17 @@ type KeyUsageReporter interface {
 	KeyUsage(ctx context.Context, p *APIKeyPrincipal) (any, error)
 }
 
+// GroupModelLister lists the models an account group offers, by the rule of
+// the console's group and price pages (group.Models.Offered): a model one of
+// its accounts declares, or a priced model when one declares none, within
+// the group's model policy. The gateway answers GET /v1/models with the
+// models of the key's group.
+type GroupModelLister interface {
+	// OfferedModels returns the models of g (its ID and model policy),
+	// sorted; never nil without an error.
+	OfferedModels(ctx context.Context, g GroupInfo) ([]string, error)
+}
+
 // KeySlots is the Slots kind of the API keys' requests in flight.
 const KeySlots = "apikey"
 

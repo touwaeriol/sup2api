@@ -19,7 +19,7 @@ import (
 
 const (
 	key     = "sub2api"
-	version = "0.1.1"
+	version = "0.1.2"
 )
 
 // TestManifest runs manifest.json through the checks the core runs before

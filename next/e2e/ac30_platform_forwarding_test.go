@@ -143,7 +143,7 @@ func platformCases() []platformCase {
 				if stream {
 					action = "streamGenerateContent"
 				}
-				expectPath(t, r, "", "/v1beta/models/"+model+":"+action)
+				expectPath(t, r, "", "/v1/models/"+model+":"+action)
 				if r.Key() != k {
 					t.Fatalf("gemini key: %+v", r)
 				}
@@ -180,7 +180,7 @@ func platformCases() []platformCase {
 				if stream {
 					action, query = "streamGenerateContent", "alt=sse"
 				}
-				expectPath(t, r, "", "/v1beta/models/"+model+":"+action)
+				expectPath(t, r, "", "/v1/models/"+model+":"+action)
 				if r.Header("x-goog-api-key") != k || r.Header("authorization") != "" || r.Query != query {
 					t.Fatalf("sub2api gemini headers/query %q: %s", r.Query, r.Headers.Raw)
 				}

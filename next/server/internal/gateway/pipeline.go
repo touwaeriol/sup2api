@@ -268,13 +268,9 @@ func (c *call) serveRequest(ctx context.Context) {
 // authenticate reads and authenticates the API key, and starts the usage
 // record of its principal.
 func (c *call) authenticate(ctx context.Context) *gwError {
-	key := c.apiKey()
-	if key == "" {
-		return fromCore(core.ErrUnauthenticated.WithMessage("missing api key"), "")
-	}
-	p, err := c.g.d.Auth.Authenticate(core.WithClientIP(ctx, c.c.ClientIP()), key)
-	if err != nil {
-		return fromCore(core.AsError(err), "")
+	p, e := c.g.authenticateKey(ctx, c.c.ClientIP(), c.apiKey())
+	if e != nil {
+		return e
 	}
 	c.principal = p
 	c.rec = c.newRecord()

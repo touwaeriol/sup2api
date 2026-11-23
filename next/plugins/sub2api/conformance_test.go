@@ -21,7 +21,7 @@ func TestConformance(t *testing.T) {
 		Protocols: []string{
 			openai.ProtocolChat, openai.ProtocolResponses, openai.ProtocolEmbeddings, openai.ProtocolImages, openai.ProtocolImagesEdit,
 			anthropic.ProtocolMessages, anthropic.ProtocolCountTokens,
-			gemini.ProtocolGenerate, gemini.ProtocolStreamGenerate, gemini.ProtocolCountTokens,
+			gemini.ProtocolGenerate, gemini.ProtocolStreamGenerate, gemini.ProtocolCountTokens, gemini.ProtocolEmbed, gemini.ProtocolBatchEmbed,
 		},
 		Credentials: []string{"authorization", "x-api-key", "x-goog-api-key"},
 	}, conformanceCases()...)
@@ -50,6 +50,8 @@ func conformanceCases() []conformance.Case {
 	add(gemini.ProtocolGenerate, "gemini-2.5-flash", contents, false)
 	add(gemini.ProtocolStreamGenerate, "gemini-2.5-flash", contents, true)
 	add(gemini.ProtocolCountTokens, "gemini-2.5-flash", contents, false)
+	add(gemini.ProtocolEmbed, "gemini-embedding-001", `{"content":{"parts":[{"text":"hi"}]}}`, false)
+	add(gemini.ProtocolBatchEmbed, "gemini-embedding-001", `{"requests":[{"model":"models/gemini-embedding-001","content":{"parts":[{"text":"hi"}]}}]}`, false)
 	return append(cases, conformance.Case{Account: account, WebSocket: true,
 		Meta: &pluginv1.RequestMeta{Protocol: openai.ProtocolResponsesWS, Model: "gpt-4o-mini", Stream: true},
 		Body: []byte(`{"type":"response.create","model":"gpt-4o-mini","input":"hi"}`)})

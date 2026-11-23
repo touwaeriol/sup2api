@@ -393,11 +393,7 @@ func (s *server) embeddings(w http.ResponseWriter, r *http.Request) {
 	s.setStatus(id, 200)
 	data := make([]any, n)
 	for i := range data {
-		vec := make([]float64, 8)
-		for j := range vec {
-			vec[j] = float64((i+1)*(j+1)%7) / 7
-		}
-		data[i] = map[string]any{"object": "embedding", "index": i, "embedding": vec}
+		data[i] = map[string]any{"object": "embedding", "index": i, "embedding": mockVector(i)}
 	}
 	w.Header().Set("x-mock-request-id", strconv.FormatInt(id, 10))
 	writeJSON(w, 200, map[string]any{
@@ -460,7 +456,8 @@ func geminiUsage(u Usage, output, thoughts int64) map[string]any {
 	return m
 }
 
-// gemini serves /v1beta/models/{model}:{action}.
+// gemini serves /v1beta/models/{model}:{action} and the same under /v1
+// (the embedding methods in gemini_embed.go).
 func (s *server) gemini(w http.ResponseWriter, r *http.Request) {
 	body := readBody(r)
 	spec := r.PathValue("spec")
@@ -468,7 +465,7 @@ func (s *server) gemini(w http.ResponseWriter, r *http.Request) {
 	if i <= 0 {
 		id := s.record(r, body, "", false, "")
 		s.setStatus(id, 404)
-		geminiError(w, 404, "NOT_FOUND", "mock: expected /v1beta/models/{model}:{action}")
+		geminiError(w, 404, "NOT_FOUND", "mock: expected /{version}/models/{model}:{action}")
 		return
 	}
 	model, act := spec[:i], spec[i+1:]
@@ -486,6 +483,9 @@ func (s *server) gemini(w http.ResponseWriter, r *http.Request) {
 	}
 	switch act {
 	case "generateContent", "streamGenerateContent", "countTokens":
+	case "embedContent", "batchEmbedContents":
+		s.geminiEmbed(w, id, b, act, body)
+		return
 	default:
 		s.setStatus(id, 404)
 		geminiError(w, 404, "NOT_FOUND", "mock: unknown method "+act)

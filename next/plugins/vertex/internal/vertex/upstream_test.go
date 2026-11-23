@@ -59,6 +59,8 @@ const (
 	regionalBase = "https://us-central1-aiplatform.googleapis.com/v1/projects/my-project-123456/locations/us-central1/publishers/google/models/"
 	globalBase   = "https://aiplatform.googleapis.com/v1/projects/my-project-123456/locations/global/publishers/google/models/"
 	expressBase  = "https://aiplatform.googleapis.com/v1/publishers/google/models/"
+	// regionalBetaBase is regionalBase on Vertex's v1beta1.
+	regionalBetaBase = "https://us-central1-aiplatform.googleapis.com/v1beta1/projects/my-project-123456/locations/us-central1/publishers/google/models/"
 )
 
 var globalTarget = map[string]any{fieldProject: testProject, fieldLocation: LocationGlobal}
@@ -140,7 +142,21 @@ func executeCases() []executeCase {
 		// A token left in an API key account is not sent.
 		executeCase{"api key with a stray token", executeRequest(stored(TypeAPIKey, map[string]any{fieldAPIKey: testAPIKey, fieldAccessToken: "ya29.stray"}, fullTarget), ProtocolGenerate, model),
 			regionalBase + model + ":generateContent", model, keyAuth},
+		// A Gemini client's version: /v1beta goes to Vertex's v1beta1, /v1
+		// stays on v1 (CONTRACTS §134.2).
+		executeCase{"gemini client on v1beta", clientRequest(saAccount(fullTarget), "/v1beta/models/:model:generateContent", model),
+			regionalBetaBase + model + ":generateContent", model, tokenAuth},
+		executeCase{"gemini client on v1", clientRequest(apiKeyAccount(nil), "/v1/models/:model:generateContent", model),
+			expressBase + model + ":generateContent", model, keyAuth},
 	)
+}
+
+// clientRequest is executeRequest of a Gemini client's generateContent call
+// on endpoint.
+func clientRequest(acc *pluginv1.Account, endpoint, model string) *pluginv1.ExecuteRequest {
+	in := executeRequest(acc, ProtocolGenerate, model)
+	in.Meta.ClientProtocol, in.Meta.Endpoint = ProtocolGenerate, endpoint
+	return in
 }
 
 // relayed runs one Execute in the harness and returns the request it

@@ -15,9 +15,11 @@
 //	POST /v1/embeddings             OpenAI embeddings (usage.prompt_tokens)
 //	POST /v1/moderations            OpenAI moderation scores; MOD-HIT-<category> scores 0.99 (moderation_api.go)
 //	POST /v1/systemone              TypeSafe System One noul answers, same MOD-HIT rule (moderation_api.go)
-//	POST /v1beta/models/{m}:generateContent        Gemini, usageMetadata incl. thoughtsTokenCount
-//	POST /v1beta/models/{m}:streamGenerateContent  ?alt=sse -> SSE, otherwise a JSON array
-//	POST /v1beta/models/{m}:countTokens            {"totalTokens": N}
+//	POST /{v1,v1beta}/models/{m}:generateContent   Gemini, usageMetadata incl. thoughtsTokenCount
+//	POST /{v1,v1beta}/models/{m}:streamGenerateContent  ?alt=sse -> SSE, otherwise a JSON array
+//	POST /{v1,v1beta}/models/{m}:countTokens       {"totalTokens": N}
+//	POST /{v1,v1beta}/models/{m}:embedContent      {"embedding":{"values"}}, usageMetadata.promptTokenCount
+//	POST /{v1,v1beta}/models/{m}:batchEmbedContents  {"embeddings":[{"values"}]}, one per request, the same usage
 //	POST /openai/v1/{chat/completions,responses,embeddings}
 //	                                Azure OpenAI v1: the OpenAI endpoints above, key in the api-key header
 //	POST /openai/deployments/{d}/{chat/completions,embeddings}?api-version=YYYY-MM-DD[-preview]
@@ -27,8 +29,8 @@
 //	                                the same as an AWS event stream (application/vnd.amazon.eventstream);
 //	                                a SigV4 request must be signed with the secret "mock-secret-<access key id>",
 //	                                scoped to the service bedrock and the region of bedrock-runtime.<region>.amazonaws.com
-//	POST /v1/projects/{p}/locations/{l}/publishers/google/models/{m}:{action}
-//	POST /v1/publishers/google/models/{m}:{action}
+//	POST /{v1,v1beta1}/projects/{p}/locations/{l}/publishers/google/models/{m}:{action}
+//	POST /{v1,v1beta1}/publishers/google/models/{m}:{action}
 //	                                Vertex AI: the Gemini actions above
 //	POST /backend-api/codex/responses  the Codex backend: OpenAI Responses, refused (400 {"detail"}) unless
 //	                                stream is true and store is false (GET = WebSocket mode)
@@ -202,6 +204,7 @@ func (s *server) handler() http.Handler {
 	mux.HandleFunc("POST /v1/moderations", s.moderations)
 	mux.HandleFunc("POST /v1/systemone", s.systemOne)
 	mux.HandleFunc("POST /v1beta/models/{spec}", s.gemini)
+	mux.HandleFunc("POST /v1/models/{spec}", s.gemini)
 	// The Codex backend (ChatGPT subscription accounts): the Responses API,
 	// streamed only, and its WebSocket mode.
 	mux.HandleFunc("POST /backend-api/codex/responses", s.responses)

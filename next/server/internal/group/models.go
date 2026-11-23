@@ -133,6 +133,18 @@ func (s *Service) offeredModels(ctx context.Context, groups []core.GroupInfo) (m
 	return OfferedModels(ctx, s.db.Gorm, groups, func(id int64) []string { return priced[id] })
 }
 
+var _ core.GroupModelLister = (*Service)(nil)
+
+// OfferedModels returns the models the group g provides
+// (core.GroupModelLister).
+func (s *Service) OfferedModels(ctx context.Context, g core.GroupInfo) ([]string, error) {
+	offered, err := s.offeredModels(ctx, []core.GroupInfo{g})
+	if err != nil {
+		return nil, err
+	}
+	return offered[g.ID], nil
+}
+
 // groupsProviding returns the ids of the groups that provide the model name
 // (Models.Offers); never nil.
 func (s *Service) groupsProviding(ctx context.Context, name string) ([]int64, error) {

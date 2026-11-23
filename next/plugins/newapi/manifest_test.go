@@ -19,23 +19,24 @@ import (
 
 const (
 	key     = "newapi"
-	version = "0.1.1"
+	version = "0.1.2"
 )
 
 // TestManifest runs manifest.json through the checks the core runs before
 // it installs a package and pins what the package keeps: an
 // account-type-only plugin whose apikey serves every endpoint of the
-// built-in openai and anthropic platforms, gemini without countTokens (the
-// site answers it 404) and the TypeSafe plugin's typesafe platform, each
-// with the platform's own client headers; an address the caller sets
-// (account:relay guards it), a balance, and its own process that reads
-// only its own accounts and opens no connection.
+// built-in openai and anthropic platforms, gemini's endpoints on v1beta
+// and v1 without countTokens (the site answers it 404 on v1beta and takes
+// it for generateContent on v1) and the TypeSafe plugin's typesafe
+// platform, each with the platform's own client headers; an
+// address the caller sets (account:relay guards it), a balance, and its
+// own process that reads only its own accounts and opens no connection.
 func TestManifest(t *testing.T) {
 	m := load(t)
 	if m.Key != key || m.Version != version || m.Publisher != "sub2api" || m.Runtime != manifest.RuntimeGRPC || m.Icon != "assets/newapi-color.svg" {
 		t.Fatalf("identity = %s %s %s %s %s", m.Key, m.Version, m.Publisher, m.Runtime, m.Icon)
 	}
-	if m.Entry.GRPC == nil || m.Entry.GRPC.Binaries == "" || m.HostCompat != ">=0.1.304 <0.2.0" {
+	if m.Entry.GRPC == nil || m.Entry.GRPC.Binaries == "" || m.HostCompat != ">=0.1.312 <0.2.0" {
 		t.Fatalf("entry/hostCompat = %+v %s", m.Entry, m.HostCompat)
 	}
 	// WebSocket: the openai preset's responses_ws route.
@@ -49,7 +50,8 @@ func TestManifest(t *testing.T) {
 	want := []manifest.AccountPlatform{
 		{Platform: "openai"},
 		{Platform: "anthropic"},
-		{Platform: "gemini", Endpoints: []string{"generate_content", "stream_generate_content"}},
+		{Platform: "gemini", Endpoints: []string{"generate_content", "stream_generate_content", "embed_content", "batch_embed_contents",
+			"generate_content_v1", "stream_generate_content_v1", "embed_content_v1", "batch_embed_contents_v1"}},
 		{Platform: "typesafe"},
 	}
 	if at.ID != newapi.TypeAPIKey || !reflect.DeepEqual(at.Platforms, want) {

@@ -19,7 +19,7 @@ import (
 // The package and its one account type.
 const (
 	key      = "gemini"
-	version  = "0.4.0"
+	version  = "0.4.1"
 	platform = "gemini"
 )
 

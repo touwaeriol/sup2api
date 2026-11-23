@@ -61,6 +61,9 @@ type Deps struct {
 	KeyWindows core.RateWindows
 	// KeyUsage answers GET /v1/usage (CONTRACTS §62); nil = 404.
 	KeyUsage core.KeyUsageReporter
+	// Models lists the models of an API key's group for GET /v1/models and
+	// /v1beta/models (models_list.go); nil leaves those paths unanswered.
+	Models core.GroupModelLister
 	// Quota receives the subscription quota headers of upstream responses
 	// for account types declaring manifest quota.headers (CONTRACTS §44);
 	// nil = not recorded.
@@ -250,6 +253,12 @@ func (g *Gateway) Middleware() gin.HandlerFunc {
 		}
 		if rt != nil {
 			g.serve(c, t.gen, rt.binding, params)
+			c.Abort()
+			return
+		}
+		// After the platform endpoints: the model list never takes a
+		// request one of them serves.
+		if g.serveModels(c) {
 			c.Abort()
 			return
 		}

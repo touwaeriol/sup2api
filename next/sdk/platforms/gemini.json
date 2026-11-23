@@ -87,6 +87,237 @@
       },
       "errorFormat": "gemini",
       "billing": "free"
+    },
+    {
+      "id": "embed_content",
+      "method": "POST",
+      "path": "/v1beta/models/:model:embedContent",
+      "protocol": "gemini.embed",
+      "kind": "proxy",
+      "auth": {
+        "headers": [
+          "x-goog-api-key"
+        ],
+        "query": "key"
+      },
+      "request": {
+        "modelParam": "model",
+        "promptTextPaths": [
+          "content.parts.#.text"
+        ]
+      },
+      "response": {
+        "nonStream": "json"
+      },
+      "errorFormat": "gemini",
+      "billing": "usage",
+      "usage": {
+        "semantics": "inclusive",
+        "json": {
+          "map": {
+            "input_tokens": "usageMetadata.promptTokenCount"
+          }
+        }
+      },
+      "billingTypes": [
+        "per_request",
+        "per_token",
+        "expression"
+      ]
+    },
+    {
+      "id": "batch_embed_contents",
+      "method": "POST",
+      "path": "/v1beta/models/:model:batchEmbedContents",
+      "protocol": "gemini.batch_embed",
+      "kind": "proxy",
+      "auth": {
+        "headers": [
+          "x-goog-api-key"
+        ],
+        "query": "key"
+      },
+      "request": {
+        "modelParam": "model",
+        "promptTextPaths": [
+          "requests.#.content.parts.#.text"
+        ]
+      },
+      "response": {
+        "nonStream": "json"
+      },
+      "errorFormat": "gemini",
+      "billing": "usage",
+      "usage": {
+        "semantics": "inclusive",
+        "json": {
+          "map": {
+            "input_tokens": "usageMetadata.promptTokenCount"
+          }
+        }
+      },
+      "billingTypes": [
+        "per_request",
+        "per_token",
+        "expression"
+      ]
+    },
+    {
+      "id": "generate_content_v1",
+      "method": "POST",
+      "path": "/v1/models/:model:generateContent",
+      "protocol": "gemini.generate",
+      "kind": "proxy",
+      "auth": {
+        "headers": [
+          "x-goog-api-key"
+        ],
+        "query": "key"
+      },
+      "request": {
+        "modelParam": "model",
+        "promptTextPaths": [
+          "systemInstruction.parts.#.text",
+          "contents.#.parts.#.text"
+        ]
+      },
+      "response": {
+        "nonStream": "json"
+      },
+      "errorFormat": "gemini",
+      "billing": "usage",
+      "billingTypes": [
+        "per_request",
+        "per_token",
+        "expression"
+      ]
+    },
+    {
+      "id": "stream_generate_content_v1",
+      "method": "POST",
+      "path": "/v1/models/:model:streamGenerateContent",
+      "protocol": "gemini.stream_generate",
+      "kind": "proxy",
+      "auth": {
+        "headers": [
+          "x-goog-api-key"
+        ],
+        "query": "key"
+      },
+      "request": {
+        "modelParam": "model",
+        "stream": true,
+        "promptTextPaths": [
+          "systemInstruction.parts.#.text",
+          "contents.#.parts.#.text"
+        ]
+      },
+      "response": {
+        "stream": "sse",
+        "nonStream": "json"
+      },
+      "errorFormat": "gemini",
+      "billing": "usage",
+      "billingTypes": [
+        "per_request",
+        "per_token",
+        "expression"
+      ]
+    },
+    {
+      "id": "count_tokens_v1",
+      "method": "POST",
+      "path": "/v1/models/:model:countTokens",
+      "protocol": "gemini.count_tokens",
+      "kind": "proxy",
+      "auth": {
+        "headers": [
+          "x-goog-api-key"
+        ],
+        "query": "key"
+      },
+      "request": {
+        "modelParam": "model"
+      },
+      "response": {
+        "nonStream": "json"
+      },
+      "errorFormat": "gemini",
+      "billing": "free"
+    },
+    {
+      "id": "embed_content_v1",
+      "method": "POST",
+      "path": "/v1/models/:model:embedContent",
+      "protocol": "gemini.embed",
+      "kind": "proxy",
+      "auth": {
+        "headers": [
+          "x-goog-api-key"
+        ],
+        "query": "key"
+      },
+      "request": {
+        "modelParam": "model",
+        "promptTextPaths": [
+          "content.parts.#.text"
+        ]
+      },
+      "response": {
+        "nonStream": "json"
+      },
+      "errorFormat": "gemini",
+      "billing": "usage",
+      "usage": {
+        "semantics": "inclusive",
+        "json": {
+          "map": {
+            "input_tokens": "usageMetadata.promptTokenCount"
+          }
+        }
+      },
+      "billingTypes": [
+        "per_request",
+        "per_token",
+        "expression"
+      ]
+    },
+    {
+      "id": "batch_embed_contents_v1",
+      "method": "POST",
+      "path": "/v1/models/:model:batchEmbedContents",
+      "protocol": "gemini.batch_embed",
+      "kind": "proxy",
+      "auth": {
+        "headers": [
+          "x-goog-api-key"
+        ],
+        "query": "key"
+      },
+      "request": {
+        "modelParam": "model",
+        "promptTextPaths": [
+          "requests.#.content.parts.#.text"
+        ]
+      },
+      "response": {
+        "nonStream": "json"
+      },
+      "errorFormat": "gemini",
+      "billing": "usage",
+      "usage": {
+        "semantics": "inclusive",
+        "json": {
+          "map": {
+            "input_tokens": "usageMetadata.promptTokenCount"
+          }
+        }
+      },
+      "billingTypes": [
+        "per_request",
+        "per_token",
+        "expression"
+      ]
     }
   ],
   "passHeaders": [

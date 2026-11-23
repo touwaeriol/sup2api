@@ -59,7 +59,7 @@ func TestManifestShape(t *testing.T) {
 	if m.Key != "vertex" || m.Version != vertex.Version || m.Runtime != "grpc" || m.APIVersion != manifest.APIVersion || m.Publisher != "sub2api" {
 		t.Fatalf("key/version/runtime = %s %s %s (plugin version %s)", m.Key, m.Version, m.Runtime, vertex.Version)
 	}
-	if m.Entry.GRPC == nil || m.Entry.GRPC.Binaries == "" || m.HostCompat != ">=0.1.304 <0.2.0" {
+	if m.Entry.GRPC == nil || m.Entry.GRPC.Binaries == "" || m.HostCompat != ">=0.1.312 <0.2.0" {
 		t.Fatalf("entry/hostCompat = %+v %s", m.Entry, m.HostCompat)
 	}
 	if m.Name["en"] == "" || m.Name["zh"] == "" || m.Description["en"] == "" || m.Description["zh"] == "" {
@@ -107,7 +107,8 @@ func TestManifestShape(t *testing.T) {
 			t.Errorf("%s refresh = %+v", at.ID, at.Refresh)
 		}
 		if len(at.Platforms) != 1 || at.Platforms[0].Platform != vertex.PlatformID ||
-			!slices.Equal(at.Platforms[0].Endpoints, []string{"generate_content", "stream_generate_content", "count_tokens"}) {
+			!slices.Equal(at.Platforms[0].Endpoints, []string{"generate_content", "stream_generate_content", "count_tokens",
+				"generate_content_v1", "stream_generate_content_v1", "count_tokens_v1"}) {
 			t.Errorf("%s platforms = %+v", at.ID, at.Platforms)
 		}
 		if !slices.Contains(at.DefaultModels, vertex.DefaultTestModel) || len(at.DefaultModelMapping) != 0 {

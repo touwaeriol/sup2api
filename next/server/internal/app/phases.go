@@ -226,7 +226,7 @@ func (b *boot) buildGateway() {
 		DB: b.db, Redis: b.rdb, Bus: b.cl.Bus, Node: b.cl.Registry, Registry: b.reg, Events: b.events,
 		Auth: b.keys, Pricer: b.bill, Balance: b.bill, Slots: b.cl.Slots,
 		Environment: b.env,
-		Accounts:    b.acc, NetworkAccess: b.egress, Settler: b.settler, Observations: observations, Tasks: b.settler, Limiter: b.limiter, KeyWindows: b.keys.Windows, KeyUsage: b.keys, Quota: b.acc, Config: b.cfg, Converters: b.converters,
+		Accounts:    b.acc, NetworkAccess: b.egress, Settler: b.settler, Observations: observations, Tasks: b.settler, Limiter: b.limiter, KeyWindows: b.keys.Windows, KeyUsage: b.keys, Models: b.grp, Quota: b.acc, Config: b.cfg, Converters: b.converters,
 		Draining: b.gate.isDraining,
 	})
 }

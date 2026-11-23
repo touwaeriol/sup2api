@@ -25,7 +25,7 @@ func TestConformance(t *testing.T) {
 		Protocols: []string{
 			openai.ProtocolChat, openai.ProtocolResponses, openai.ProtocolEmbeddings, openai.ProtocolImages, openai.ProtocolImagesEdit,
 			anthropic.ProtocolMessages, anthropic.ProtocolCountTokens,
-			gemini.ProtocolGenerate, gemini.ProtocolStreamGenerate,
+			gemini.ProtocolGenerate, gemini.ProtocolStreamGenerate, gemini.ProtocolEmbed, gemini.ProtocolBatchEmbed,
 			typesafe.ProtocolSystemOne,
 		},
 		Credentials: []string{"authorization", "x-api-key", "x-goog-api-key"},
@@ -54,6 +54,8 @@ func conformanceCases() []conformance.Case {
 	contents := `{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`
 	add(gemini.ProtocolGenerate, "gemini-2.5-flash", contents, false)
 	add(gemini.ProtocolStreamGenerate, "gemini-2.5-flash", contents, true)
+	add(gemini.ProtocolEmbed, "gemini-embedding-001", `{"content":{"parts":[{"text":"hi"}]}}`, false)
+	add(gemini.ProtocolBatchEmbed, "gemini-embedding-001", `{"requests":[{"model":"models/gemini-embedding-001","content":{"parts":[{"text":"hi"}]}}]}`, false)
 	add(typesafe.ProtocolSystemOne, "jev-latest", `{"model":"jev-latest","state":"hi","questions":{"q":{"type":"noul","instructions":"Greeting?"}}}`, false)
 	return append(cases, conformance.Case{Account: account, WebSocket: true,
 		Meta: &pluginv1.RequestMeta{Protocol: openai.ProtocolResponsesWS, Model: "gpt-4o-mini", Stream: true},

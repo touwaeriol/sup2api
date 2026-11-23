@@ -28,7 +28,7 @@ import (
 
 const (
 	// Version is the plugin version (manifest.json "version").
-	Version = "0.1.0"
+	Version = "0.1.1"
 
 	// Account types (manifest accountTypes[].id).
 	TypeServiceAccount = "vertex_sa"

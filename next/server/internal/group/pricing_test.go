@@ -168,21 +168,42 @@ func TestRuleCountsOfAnyModel(t *testing.T) {
 	require.Equal(t, map[string][]any{"declared": {float64(3), float64(1)}, "open": {float64(1), float64(0)}}, counts())
 }
 
-func TestGroupModels(t *testing.T) {
-	e := setup(t)
+// modelGroups adds five groups, their accounts and two priced models: what
+// a group offers by its accounts and its model policy. It returns the ids
+// of denied and narrowed.
+func (e *env) modelGroups() (denied, narrowed int64) {
 	group := func(name, mode string, patterns ...string) int64 {
 		return e.one(`INSERT INTO groups (name, model_filter_mode, model_allowlist) VALUES ($1, $2, to_jsonb($3::text[])) RETURNING id`,
 			name, mode, append([]string{}, patterns...))
 	}
 	declared := group("declared", "blacklist")
 	unrestricted := group("unrestricted", "blacklist")
-	denied := group("denied", "blacklist", "m1")
-	narrowed := group("narrowed", "whitelist", "p*")
+	denied = group("denied", "blacklist", "m1")
+	narrowed = group("narrowed", "whitelist", "p*")
 	group("empty", "blacklist")
 	e.account([]string{"m1"}, declared, denied)
 	e.account([]string{}, unrestricted, narrowed)
 	e.account([]string{"m1"}, narrowed)
 	e.price("p1", "p2")
+	return denied, narrowed
+}
+
+// The gateway's model list of a key in a group (core.GroupModelLister)
+// follows the rule of the group pages, with the policy the key's group has.
+func TestGroupOfferedModels(t *testing.T) {
+	e := setup(t)
+	denied, narrowed := e.modelGroups()
+	listed, err := e.svc.OfferedModels(context.Background(), core.GroupInfo{ID: narrowed, ModelFilterMode: "whitelist", ModelAllowlist: []string{"p*"}})
+	require.NoError(t, err)
+	require.Equal(t, []string{"p1", "p2"}, listed)
+	listed, err = e.svc.OfferedModels(context.Background(), core.GroupInfo{ID: denied, ModelFilterMode: "blacklist", ModelAllowlist: []string{"m1"}})
+	require.NoError(t, err)
+	require.Equal(t, []string{}, listed)
+}
+
+func TestGroupModels(t *testing.T) {
+	e := setup(t)
+	e.modelGroups()
 
 	rows, total := e.listed(e.admin, "/groups")
 	require.EqualValues(t, 5, total)

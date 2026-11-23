@@ -3,10 +3,10 @@
   "key": "gemini",
   "name": { "en": "Gemini", "zh": "Gemini" },
   "description": {
-    "en": "Gemini API key account type. The gemini platform and its endpoints (/v1beta/models/{model}:generateContent, :streamGenerateContent, :countTokens) are built into the core; model prices are set by administrators in the core.",
-    "zh": "Gemini API Key 账号类型（gemini 平台及其端点 /v1beta/models/{model}:generateContent、:streamGenerateContent、:countTokens 由核心内置；模型价格由管理员在核心中配置）。"
+    "en": "Gemini API key account type. The gemini platform and its endpoints (/v1beta/models/{model} and /v1/models/{model} with :generateContent, :streamGenerateContent, :countTokens, :embedContent, :batchEmbedContents; each version goes upstream on the same version) are built into the core; model prices are set by administrators in the core.",
+    "zh": "Gemini API Key 账号类型（gemini 平台及其端点 /v1beta/models/{model} 与 /v1/models/{model} 的 :generateContent、:streamGenerateContent、:countTokens、:embedContent、:batchEmbedContents 由核心内置，各版本原样发往上游同一版本；模型价格由管理员在核心中配置）。"
   },
-  "version": "0.4.0",
+  "version": "0.4.1",
   "publisher": "sub2api",
   "icon": "assets/gemini-color.svg",
   "runtime": "grpc",

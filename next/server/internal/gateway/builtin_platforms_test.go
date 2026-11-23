@@ -26,8 +26,9 @@ type apiCall struct {
 }
 
 // apiUpstream answers OpenAI (chat, responses, embeddings) and Gemini
-// (generateContent, streamGenerateContent with alt=sse, countTokens)
-// requests with canned bodies carrying usage. status[key] forces an error.
+// (generateContent, streamGenerateContent with alt=sse, countTokens,
+// embedContent, batchEmbedContents) requests with canned bodies carrying
+// usage. status[key] forces an error.
 type apiUpstream struct {
 	srv    *httptest.Server
 	mu     sync.Mutex
@@ -121,6 +122,8 @@ func (u *apiUpstream) handle(w http.ResponseWriter, r *http.Request) {
 	case strings.HasSuffix(r.URL.Path, ":countTokens"):
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"totalTokens":31}`))
+	case strings.HasSuffix(r.URL.Path, ":embedContent") || strings.HasSuffix(r.URL.Path, ":batchEmbedContents"):
+		geminiEmbedAnswer(w, r.URL.Path)
 	default:
 		http.Error(w, "unexpected "+r.URL.Path, 404)
 	}
@@ -149,6 +152,10 @@ func apiPlatform(u *apiUpstream) *fakePlatform {
 			return u.srv.URL + "/v1beta/models/" + m.GetModel() + ":streamGenerateContent?alt=sse"
 		case "gemini.count_tokens":
 			return u.srv.URL + "/v1beta/models/" + m.GetModel() + ":countTokens"
+		case "gemini.embed":
+			return u.srv.URL + geminiTestPath(m, ":embedContent")
+		case "gemini.batch_embed":
+			return u.srv.URL + geminiTestPath(m, ":batchEmbedContents")
 		}
 		return u.srv.URL + "/unknown"
 	}}

@@ -167,7 +167,7 @@ export default {
     names: {
       openai: { chat: 'Chat Completions', responses: 'Responses', responses_ws: 'Responses WebSocket', embeddings: 'Embeddings', images: 'Images', images_edit: 'Image Edits' },
       anthropic: { messages: 'Messages' },
-      gemini: { generate: 'generateContent', stream_generate: 'streamGenerateContent' }
+      gemini: { generate: 'generateContent', stream_generate: 'streamGenerateContent', embed: 'embedContent', batch_embed: 'batchEmbedContents' }
     },
     own: {
       title: '本平台协议', titleOf: '本平台协议（{platforms}）', subtitle: '这个账号接哪些协议的请求',

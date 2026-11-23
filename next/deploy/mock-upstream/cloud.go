@@ -29,8 +29,11 @@ func (s *server) cloudRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /openai/deployments/{deployment}/embeddings", azureDeployment(s.embeddings))
 	mux.HandleFunc("POST /model/{model}/invoke", s.bedrockInvoke)
 	mux.HandleFunc("POST /model/{model}/invoke-with-response-stream", s.bedrockInvoke)
-	mux.HandleFunc("POST /v1/projects/{project}/locations/{location}/publishers/google/models/{spec}", s.gemini)
-	mux.HandleFunc("POST /v1/publishers/google/models/{spec}", s.gemini)
+	// Vertex AI v1 and v1beta1 (a Gemini client's /v1beta goes to v1beta1).
+	for _, version := range []string{"v1", "v1beta1"} {
+		mux.HandleFunc("POST /"+version+"/projects/{project}/locations/{location}/publishers/google/models/{spec}", s.gemini)
+		mux.HandleFunc("POST /"+version+"/publishers/google/models/{spec}", s.gemini)
+	}
 }
 
 // ------------------------------------------------------------------ Azure OpenAI
