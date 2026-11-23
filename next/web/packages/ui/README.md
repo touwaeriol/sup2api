@@ -576,9 +576,21 @@ async function save() {
 - **部分**（`TabbedFormPart`）：`{ tab, check?(): boolean | Promise<boolean>, body(): Record<string, unknown>, dirty?: boolean | Ref | () => boolean, fields?: string[], applyErrors?(errors), invalid?: boolean | Ref | () => boolean }`。`check` 可以等待（例如插件表单的校验）。给了 `invalid`（这个部分现在是否显示着错误：输入时就发现的，或服务端返回、还没被改掉的）时，它的标签是否标红只看 `invalid`，错误随改随消；没给时看上一次保存的结果。一个标签可以有几个部分。调用 `useTabbedForm` 的组件用 `form.register(part)` 登记（返回取消登记的函数）；标签页里的子组件用 `useTabbedFormPart(part, active?)`，组件卸载时自动取消；`active`（布尔值、`Ref` 或函数，默认 `true`）为假时不登记，变真时登记、再变假时取消，组件不必重新挂载（例如控制台定价抽屉里把用户转成专享后，同一个倍率表变成可编辑）；不在这样的表单里时什么也不做。`fields` 是这个部分发的请求体字段前缀：`"model_prices"` 认领字段错误 `model_prices`、`model_prices.0.rule` 和 `model_prices[0]`，不认领 `model_prices_x`。
 - **`submit(send)`**：先跑所有部分的 `check`（全部都跑，每个标签自己显示原因），有失败的就标红这些标签、打开其中第一个（按 `tabs` 的顺序），返回 `false`，不发请求；否则把各部分的 `body()` 合并成一个对象（各部分的字段不要重叠），调 `send` 一次并返回它的结果。`send` 以 `ApiError` 拒绝且带字段错误（`ApiError.fields`，§3.1）时，按字段前缀找到对应的部分，把它认领的错误（键是完整路径）交给它的 `applyErrors`，标红并打开第一个标签，返回 `false`；有部分认领、但也有没被任何部分认领的字段错误时，后者拼成一条错误 toast（`字段: 信息`，用 `; ` 分隔），不会静默丢掉；一条也没被认领的失败原样拒绝，由调用方提示。`saving` 从检查开始到请求结束都为真；`errorTabs` 在下一次 `submit` 或 `clearErrors()` 时清空。
 
-## 页面操作留在页面里（UI SDK 4.2）
+## 可新建的下拉与默认展开的行（UI SDK 4.2）
 
-页面的操作按钮（新建、刷新、管理……）不再进控制台顶栏，每个页面都放在同一个位置，样式以账号列表为准。只改了宿主的渲染：旧插件不重新构建也照这样显示。用到本节新增的 `STabs #end`、`SAutoRefresh` 的 `button` / `loading` 的插件声明 `hostUICompat: "^4.2"`，`hostCompat` 要求核心 `>=0.1.311`（0.1.310 是最后一个带 UI 4.1 的核心）。`:fab="false"` 在旧宿主上同样有效（`fab` 原来就是 `SButton` 的属性），只为它不必抬声明。
+只新增两个可选属性和一个事件，4.1 的接口不变。用到它们的插件声明 `hostUICompat: "^4.2"`；更早的控制台忽略它们（没有“添加”行，行一开始都收起）。
+
+- **`SSelect` 的 `creatable`**（只在 `searchable` 时生效）：输入的文字去掉首尾空白后不为空、且不是任何选项的 `label` 或 `value` 时，列表末尾多一行“添加“文字””（`ui.createItem`，主色、上方虚线）。这一行和 `footer` 一起固定在面板底部（仍是 listbox 里的 `option`，键盘、高亮、`aria-activedescendant`、点击都照常），列表再长也不会被遮住；键盘移动时高亮的选项会滚到这块固定区域上方。选中这一行（点击，或高亮后回车）发出 `create(text)`，`text` 已去掉首尾空白，不发 `update:modelValue`；它不是值，`modelValue` 不变，由调用方决定怎么用（例如加进列表）。高亮仍默认落在第一个匹配的选项上，所以回车先选已有的选项；输入的文字正好是某个可选选项的 `label` 或 `value` 时，高亮落在这个选项上（完全一致优先于第一个匹配，只在 `creatable` 时如此）；和某个禁用选项完全一致时也不出现“添加”行（例如标成“已添加”的项）。没有匹配时这一行是唯一的一行。`remote` 时同样生效（只和当前给出的 `options` 比较）。
+- **`STable` 的 `defaultExpanded(row)`**（配合 `expandable`）：一行第一次出现在表里时，函数为真就展开（例如已有内容的行）。之后这一行（按 `rowKey`）保持用户的选择：收起后换一批行对象也不会再自动展开；第一次出现的 key 才看函数。同时有 `expandSingle` 时只展开其中第一行，且只在没有展开的行时。默认展开不发 `expand` 事件。
+
+```vue
+<SSelect :model-value="null" :options="models" searchable clearable creatable placeholder="添加模型" @update:model-value="add" @create="add" />
+<STable :columns="columns" :rows="rows" expandable :default-expanded="(row) => row.items.length > 0" />
+```
+
+## 页面操作留在页面里（UI SDK 4.3）
+
+页面的操作按钮（新建、刷新、管理……）不再进控制台顶栏，每个页面都放在同一个位置，样式以账号列表为准。只改了宿主的渲染：旧插件不重新构建也照这样显示。用到本节新增的 `STabs #end`、`SAutoRefresh` 的 `button` / `loading` 的插件声明 `hostUICompat: "^4.3"`，`hostCompat` 要求核心 `>=0.1.311`（0.1.310 是最后一个带 UI 4.2 的核心）。`:fab="false"` 在旧宿主上同样有效（`fab` 原来就是 `SButton` 的属性），只为它不必抬声明。
 
 ```vue
 <SPageHeader :title="t('title')">

@@ -13,10 +13,12 @@ import (
 
 // PriceRule is the list price of a model for one caller: the global
 // model_prices row (ARCHITECTURE 7.3), or what a price rule of the caller's
-// group makes of it (CONTRACTS §97). ID is always the global price's;
-// VideoOnly and PerRequest are the effective expression's: a custom price's
-// own, else the global price's.
+// group makes of it, or the group's own price of a model without a global
+// price (CONTRACTS §97). VideoOnly and PerRequest are the effective
+// expression's: a custom price's own, else the global price's.
 type PriceRule struct {
+	// ID is always the global price's (model_prices.id, usage_logs.price_id);
+	// 0 under a group's price of a model without one.
 	ID          int64
 	Model       string // complete model id (exact match, no wildcards)
 	Mode        string // visual | expression
@@ -47,7 +49,8 @@ type PriceRule struct {
 	// deployment.
 	Scale *decimal.Decimal `json:",omitempty"`
 	// Base is the global price when a custom rule replaced the expression;
-	// nil otherwise. It tells what the usage costs at the global price.
+	// nil otherwise, also under a group's price of a model without a global
+	// price. It tells what the usage costs at the global price.
 	Base *PriceBase `json:",omitempty"`
 }
 
@@ -92,8 +95,8 @@ type Pricer interface {
 	// error, and levels with the rates set on its model added: its group's,
 	// and that of segment segmentID in the group (CONTRACTS §97). Both come
 	// from one price snapshot, so a change to prices and rates applies to a
-	// call as a whole. ErrPriceNotConfigured when the model has no global
-	// price.
+	// call as a whole. ErrPriceNotConfigured when the model has no price
+	// in the group: neither the group's own nor an enabled global one.
 	Resolve(ctx context.Context, q PriceQuery, segmentID int64, levels RateLevels) (*PriceRule, RateLevels, error)
 	Inputs(rule *PriceRule) (bodyPaths []string, headerNames []string)
 }

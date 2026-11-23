@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { enableAutoUnmount, flushPromises, mount, shallowMount } from '@vue/test-utils'
 import { defineComponent, h } from 'vue'
 import SSelect from './SSelect.vue'
@@ -256,5 +256,103 @@ describe('searchable select with remote options (UI 3.11)', () => {
     expect(searched).toEqual(['', 'main'])
     expect(sheet.querySelectorAll('[role="option"]')).toHaveLength(2)
     expect(sheet.textContent).toContain('More')
+  })
+})
+
+describe('creatable searchable select (UI 4.2)', () => {
+  const models: SelectOption[] = [{ label: 'gpt-5', value: 'gpt-5' }, { label: 'gpt-5-mini', value: 'gpt-5-mini' }]
+  const texts = (w: ReturnType<typeof mount>) => w.findAll('[role="option"]').map((r) => r.text())
+
+  it('offers the typed text last while no option is it, and emits create with it trimmed', async () => {
+    const w = mount(SSelect, { props: { modelValue: null, options: models, searchable: true, clearable: true, creatable: true } })
+    const input = w.get('input')
+    await input.trigger('focus')
+    expect(texts(w)).toEqual(['gpt-5', 'gpt-5-mini'])
+    await input.setValue('  gpt-5  ')
+    // An option has that text: nothing to add.
+    expect(texts(w)).toEqual(['gpt-5', 'gpt-5-mini'])
+    await input.setValue(' gpt ')
+    expect(texts(w)).toEqual(['gpt-5', 'gpt-5-mini', 'Add “gpt”'])
+    const add = w.findAll('[role="option"]')[2]
+    expect(add.classes()).toContain('border-dashed')
+    expect(add.attributes('aria-selected')).toBe('false')
+    // Enter picks the first match; the row adds only when picked.
+    await input.trigger('keydown', { key: 'Enter' })
+    expect(w.emitted('update:modelValue')).toEqual([['gpt-5']])
+    await input.trigger('focus')
+    await input.setValue(' claude-x ')
+    expect(texts(w)).toEqual(['Add “claude-x”'])
+    await input.trigger('keydown', { key: 'Enter' })
+    expect(w.emitted('create')).toEqual([['claude-x']])
+    expect(w.emitted('update:modelValue')).toHaveLength(1)
+    expect(w.find('[role="listbox"]').exists()).toBe(false)
+  })
+
+  it('picks the option the typed text names exactly before the first match, and offers no row for a disabled one', async () => {
+    const w = mount(SSelect, { props: { modelValue: null, options: [models[1], models[0], { label: 'o3', value: 'o3', disabled: true }], searchable: true, creatable: true } })
+    const input = w.get('input')
+    await input.trigger('focus')
+    await input.setValue(' gpt-5 ')
+    expect(texts(w)).toEqual(['gpt-5-mini', 'gpt-5'])
+    await input.trigger('keydown', { key: 'Enter' })
+    expect(w.emitted('update:modelValue')).toEqual([['gpt-5']])
+    await input.trigger('focus')
+    await input.setValue('o3')
+    expect(texts(w)).toEqual(['o3'])
+    await input.trigger('keydown', { key: 'Enter' })
+    expect(w.emitted('create')).toBeUndefined()
+    expect(w.emitted('update:modelValue')).toHaveLength(1)
+  })
+
+  it('pins the add row over the footer, keeps it an option of the listbox, and scrolls the active option clear of it', async () => {
+    const many = Array.from({ length: 12 }, (_, i) => ({ label: `gpt-${i}`, value: `gpt-${i}` }))
+    const scrolled: { value: string; margin: string }[] = []
+    const proto = Element.prototype as { scrollIntoView?: (this: HTMLElement) => void }
+    const native = proto.scrollIntoView
+    proto.scrollIntoView = function () {
+      scrolled.push({ value: this.textContent ?? '', margin: this.style.scrollMarginBottom })
+    }
+    const height = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.hasAttribute('data-pinned') ? 64 : 0
+    })
+    const w = mount(SSelect, { props: { modelValue: null, options: many, searchable: true, creatable: true, footer: 'Type any name' } })
+    const input = w.get('input')
+    await input.trigger('focus')
+    await input.setValue('gpt')
+    const pin = w.get('[data-pinned]')
+    expect(pin.classes()).toEqual(expect.arrayContaining(['sticky', 'bottom-0']))
+    expect(pin.attributes('role')).toBe('none')
+    expect(pin.get('[role="option"]').text()).toBe('Add “gpt”')
+    expect(pin.text()).toContain('Type any name')
+    expect(texts(w)).toHaveLength(13)
+    await input.trigger('keydown', { key: 'ArrowDown' })
+    await flushPromises()
+    expect(scrolled.at(-1)).toEqual({ value: 'gpt-1', margin: '64px' })
+    await input.trigger('keydown', { key: 'End' })
+    await flushPromises()
+    const add = pin.get('[role="option"]')
+    expect(input.attributes('aria-activedescendant')).toBe(add.attributes('id'))
+    expect(add.classes()).toContain('bg-primary-50')
+    expect(scrolled.at(-1)?.value).toBe('gpt-1')
+    await input.trigger('keydown', { key: 'Enter' })
+    expect(w.emitted('create')).toEqual([['gpt']])
+    proto.scrollIntoView = native
+    height.mockRestore()
+  })
+
+  it('adds by a click and offers nothing for blank text or without creatable', async () => {
+    const w = mount(SSelect, { props: { modelValue: null, options: models, searchable: true, creatable: true, noResults: 'None' } })
+    const input = w.get('input')
+    await input.trigger('focus')
+    await input.setValue('   ')
+    expect(texts(w)).toEqual(['gpt-5', 'gpt-5-mini'])
+    await input.setValue('o3')
+    await w.get('[role="option"]').trigger('click')
+    expect(w.emitted('create')).toEqual([['o3']])
+    await w.setProps({ creatable: false })
+    await input.trigger('focus')
+    await input.setValue('o3')
+    expect(texts(w)).toEqual([])
+    expect(w.text()).toContain('None')
   })
 })

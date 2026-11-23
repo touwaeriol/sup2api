@@ -69,15 +69,31 @@ describe('price rule editor', () => {
     expect(emitted()).toBeNull()
   })
 
-  it('takes no rule for a model without an original price', () => {
-    const { w, kind } = render(null, null)
-    expect(kind('custom').attributes('disabled')).toBeDefined()
-    expect(w.find('[data-testid="model-price-editor-no-base"]').exists()).toBe(true)
+  it('starts a price of its own blank for a model without an original price', async () => {
+    const { w, emitted, kind } = render(null, null)
+    expect(w.get('[data-testid="model-price-editor-kind"]').text()).toBe('Not priced Custom price')
+    expect(w.get('[data-testid="model-price-editor-no-base"]').text()).toBe(i18n.global.t('pricing.editor.noBase'))
     expect(w.find('[data-testid="model-price-editor-preview"]').exists()).toBe(false)
+    await kind('custom').setValue(true)
+    expect(emitted()).toMatchObject({ mode: 'visual', config: { tiers: [{ name: 'base', unit: 'token' }], rules: [] } })
+    await w.setProps({ modelValue: emitted() as CustomPrice })
+    // Nothing is copied: the price fields wait to be typed, and blank is not 0.
+    const fields = () => w.findAll('[data-testid="price-def-editor"] input[type="number"]')
+    expect(fields().map((f) => (f.element as HTMLInputElement).value).filter(Boolean)).toEqual([])
+    expect(emitted()).toMatchObject({ config: { tiers: [{ p: null, c: null }] } })
+    expect(w.get('[data-testid="model-price-editor-issue"]').text()).toBe('Tier "base" has a price not filled in: enter a price (0 for free), or untick it')
+    expect(w.find('[data-testid="model-price-editor-preview"]').exists()).toBe(false)
+    await fields()[0].setValue('3')
+    await fields()[1].setValue('0')
+    await flushPromises()
+    await w.setProps({ modelValue: emitted() as CustomPrice })
+    expect(w.find('[data-testid="model-price-editor-issue"]').exists()).toBe(false)
+    expect(preview(w)).toBe('Model price $3 / $0; at rate ×1.2 you pay $3.6 / $0')
   })
 
-  it('only shows the saved price of a model whose original price went away', () => {
+  it('edits the saved price of a model without an original price, which stands alone', () => {
     const { w } = render({ mode: 'expression', expression: 'p * 2' }, null)
-    expect(w.get('[data-testid="expr-code"] textarea').attributes('readonly')).toBeDefined()
+    expect(w.get('[data-testid="expr-code"] textarea').attributes('readonly')).toBeUndefined()
+    expect(preview(w)).toBe('Model price Billed by expression; at rate ×1.2 you pay Billed by expression ×1.2')
   })
 })

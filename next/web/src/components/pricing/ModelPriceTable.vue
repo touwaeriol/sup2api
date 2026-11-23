@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { SBadge, SEmpty, SHint, SInput, SRowAction, SSwitch, STable, useTabbedFormPart, type SelectOption, type TableColumn } from '@sub2api/ui'
 import ModelBadge from '@/components/platform/ModelBadge.vue'
 import AddSelect from './AddSelect.vue'
+import { addModelOptions } from './addModelOptions'
 import DraftBadge from './DraftBadge.vue'
 import ModelPriceEditor from './ModelPriceEditor.vue'
 import RateOverrideField from './RateOverrideField.vue'
@@ -17,11 +18,17 @@ import { usePricingTable, type PricingRow } from './usePricingTable'
 // and what is paid: the price that applies × the one rate that applies. The
 // rows are the models the group provides and those it sets something on; a
 // group not saved yet (groupId null) provides nothing yet, so its table
-// starts empty. Any model with an original price can be added. "Change
+// starts empty. Any model name can be added (addModelOptions offers those
+// the accounts offer, then those with a global price); one without any
+// price says it is not priced, and its
+// requests are refused until it has one. "Change
 // price" opens a row's price editor under it, one row at a time. Edits stay
 // in drafts, which the group's request sends (the part of tab `tab` of the
-// enclosing tabbed form); without `editable` the table only shows.
+// enclosing tabbed form); without `editable` the table only shows. `priced`
+// reports, by model, whether each row is priced as drafted (the user group
+// rates of the same editor say which models are not).
 const props = defineProps<{ groupId: number | null; baseRate: string; editable?: boolean; tab?: string }>()
+const emit = defineEmits<{ (e: 'priced', priced: ReadonlyMap<string, boolean>): void }>()
 const { t } = useI18n()
 
 /** Search and the filter appear from this many models on. */
@@ -43,6 +50,8 @@ function load() {
 }
 watch(() => props.groupId, load, { immediate: true })
 
+watch(() => new Map(rows.value.map((r) => [r.model, r.priced])), (priced) => emit('priced', priced), { immediate: true })
+
 const isSet = (r: PricingRow) => r.price !== null || r.rate !== null
 const setCount = computed(() => rows.value.filter(isSet).length)
 const shown = computed(() => {
@@ -51,11 +60,8 @@ const shown = computed(() => {
   return rows.value.filter((r) => (!s || r.model.toLowerCase().includes(s)) && (!onlySet.value || isSet(r) || r.dirty))
 })
 
-/** The models that can be added: those with an original price the table does not list. */
-const addable = computed<SelectOption[]>(() => {
-  const listed = new Set(rows.value.map((r) => r.model))
-  return table.saved.value.catalog.filter((c) => !listed.has(c.model)).map((c) => ({ value: c.model, label: c.model, hint: priceLabel(t, c.price) }))
-})
+/** The models offered to add (any other name may be typed); the table lists every model the accounts offer already. */
+const addable = computed<SelectOption[]>(() => addModelOptions(t, [], table.saved.value.catalog, new Set(rows.value.map((r) => r.model))))
 
 // The model column keeps a share of the width whatever its names are long (a
 // long one is cut, its tooltip has it whole), so the table fits the dialog.
@@ -83,6 +89,7 @@ function applyErrors(errors: Record<string, string>) {
   table.applyErrors(errors)
   showAll()
 }
+/** Adds a model; one the table lists is offered greyed, so it never comes twice. */
 function add(model: SelectOption['value']) {
   if (typeof model === 'string') table.add(model)
 }
@@ -101,7 +108,7 @@ function add(model: SelectOption['value']) {
           <SInput v-model="q" class="w-48" size="sm" icon="search" clearable :placeholder="t('pricing.table.search')" :aria-label="t('pricing.table.search')" data-testid="model-price-search" @keydown.enter.prevent />
           <SSwitch v-model="onlySet" size="sm" :label="t('pricing.table.onlySet')" data-testid="model-price-only-set" />
         </template>
-        <AddSelect v-if="editable" :options="addable" :label="t('pricing.table.add')" :no-results="t('pricing.table.addNone')" :footer="t('pricing.table.addFooter')" :disabled="loading" data-testid="model-price-add" @add="add" />
+        <AddSelect v-if="editable" :options="addable" :label="t('pricing.table.add')" :no-results="t('pricing.table.addNone')" :footer="t('pricing.add.footer')" :disabled="loading" creatable data-testid="model-price-add" @add="add" />
       </div>
     </div>
 
@@ -129,6 +136,7 @@ function add(model: SelectOption['value']) {
             <DraftBadge :dirty="row.dirty" :invalid="row.invalid" :error="row.error" :invalid-title="t('pricing.table.invalid', { model: row.model })" testid="model-price" />
           </span>
           <SHint v-if="row.error" size="xs" tone="danger" data-testid="model-price-error">{{ row.error }}</SHint>
+          <SHint v-if="!row.priced" size="xs" tone="warning" data-testid="model-price-unpriced">{{ t('pricing.price.unpriced') }}</SHint>
         </template>
         <template #cell-base="{ row }">
           <span class="whitespace-nowrap font-mono text-xs" :class="row.price ? 'text-fg-subtle line-through' : row.base ? '' : 'text-fg-muted'" data-testid="model-price-base">{{ priceLabel(t, row.base) }}</span>

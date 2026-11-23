@@ -45,7 +45,12 @@ export interface CondLeaf {
 /** A tier condition: a comparison, all or any of at least one condition, or the negation of one. */
 export type TierCond = CondLeaf | { and: TierCond[] } | { or: TierCond[] } | { not: TierCond }
 
-/** One tier of a visual price. A key left out (or null) is not priced; a request tier reads `price` only. */
+/**
+ * One tier of a visual price. A price beyond p and c is charged while its key
+ * is in the tier; a charged price that is null (or p / c missing) is blank,
+ * which the console does not save (a saved tier without p or c loads at 0,
+ * as the server bills it, editableVisualConfig). A request tier reads `price` only.
+ */
 export interface VisualTier extends Partial<Record<PriceKey, number | null>> {
   name: string
   /** When the tier applies; every tier but the last has one, the last (the rest) has none. */
@@ -196,6 +201,17 @@ export function pricedKeys(t: Partial<Record<PriceKey, unknown>>): PriceKey[] {
   return PRICE_KEYS.filter(k => k === 'p' || k === 'c' || isSet(t[k]))
 }
 
+/** The prices a token tier charges: p and c always, the others while their key is in it (ticked; null while blank). */
+export function chargedKeys(t: Partial<Record<PriceKey, unknown>>): PriceKey[] {
+  return PRICE_KEYS.filter(k => k === 'p' || k === 'c' || k in t)
+}
+
+/** The prices of a tier left blank (not 0): its per-request price, or the token prices it charges. */
+export function blankPrices(t: VisualTier): Array<PriceKey | 'price'> {
+  if (t.unit === 'request') return isSet(t.price) ? [] : ['price']
+  return chargedKeys(t).filter(k => !isSet(t[k]))
+}
+
 export function tokenPricesOf(t: VisualTier | undefined): TokenPrices {
   return Object.fromEntries(TOKEN_VARS.map(k => [k, isSet(t?.[k]) ? num(t?.[k]) : null])) as TokenPrices
 }
@@ -230,9 +246,9 @@ function compactWhen(n: TierCond): TierCond {
 
 function compactTier(t: VisualTier): VisualTier {
   const head: VisualTier = t.when ? { name: t.name, when: compactWhen(t.when) } : { name: t.name }
-  // A blank per-request price stays blank: checkVisualConfig and the server refuse it.
+  // A blank price stays blank, never 0: checkVisualConfig and the server refuse it.
   if (t.unit === 'request') return { ...head, unit: 'request', price: orNull(t.price) }
-  return { ...head, unit: 'token', ...Object.fromEntries(pricedKeys(t).map(k => [k, num(t[k])])) }
+  return { ...head, unit: 'token', ...Object.fromEntries(chargedKeys(t).map(k => [k, orNull(t[k])])) }
 }
 
 const NUMBER = /^-?\d+(\.\d+)?$/
@@ -263,7 +279,7 @@ function compactCond(c: RuleCond): RuleCond {
   return { source, key, op, value: typeof value === 'string' ? typedValue(c, value) : (value ?? '') }
 }
 
-/** The config the editor sends: unset prices and editor leftovers dropped, condition values typed (typedValue). */
+/** The config the editor sends: unticked prices and editor leftovers dropped, a blank price kept null (never 0), condition values typed (typedValue). */
 export function compactVisualConfig(cfg: VisualConfig): VisualConfig {
   const rules = cfg.rules.map(r => ({ name: r.name, multiplier: orNull(r.multiplier), conds: r.conds.map(compactCond) }))
   return { tiers: cfg.tiers.map(compactTier), rules }

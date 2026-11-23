@@ -33,11 +33,11 @@ export default {
     groups: 'Account group rates'
   },
   modelRates: {
-    toggle: 'Model rates ({n})',
+    toggle: 'Model rates {n}',
+    setUp: 'Set model rates',
     intro: 'A model with a rate of its own is billed at its original price × that model rate; the others pay the rate that applies to each: this row\'s rate, or when it is empty the account group\'s model rate or base rate.',
     add: 'Add model',
     addNone: 'No model to add',
-    addFooter: 'Only the models of this account group with an original price',
     empty: 'No model has a rate of its own yet',
     rateOf: 'Model rate of {model}',
     undo: 'Undo',

@@ -15,7 +15,8 @@ import type { DraftedSetting, SettingDraft, SettingSide } from './accessRateDraf
 // the account group) and the rate it pays with where that comes from. The
 // caller names a row in #lead (on one line) and #note (a line under it,
 // which gets the row's `expanded` and `toggleExpand`: with STable's
-// `expandable`, the #expand slot shows under an open row). Editable, a row
+// `expandable`, the #expand slot shows under an open row, and a row with
+// saved model rates starts open). Editable, a row
 // has a switch and a rate field and reports what they change (`change`);
 // read-only it says the same in words. Where the rows are the user groups of
 // an account group, a public one keeps its grants on disabled switches: they
@@ -42,12 +43,15 @@ const nameOf = (row: DraftedSetting) => row[props.side].name
 /** A grant kept on a public group shows on a switch nobody can turn: only the group's form edits its grants this way. */
 const keepsGrants = computed(() => props.editable && props.side === 'segment')
 
+/** A row with saved model rates starts open: they show without a click. */
+const hasModelRates = (row: DraftedSetting) => row.model_rates.length > 0
+
 /** Where the rate a row pays comes from, in words. */
 const sourceText = (row: DraftedSetting) => t(`pricingAccess.source.${row.rate.source}`)
 </script>
 
 <template>
-  <STable v-bind="$attrs" :columns="columns" :rows="rows" dense :row-attrs="rowAttrs">
+  <STable v-bind="$attrs" :columns="columns" :rows="rows" dense :row-attrs="rowAttrs" :default-expanded="hasModelRates">
     <template #cell-lead="{ row, expanded, toggleExpand }">
       <div :class="row.accessible ? '' : 'text-fg-subtle'">
         <span class="inline-flex max-w-full flex-wrap items-center gap-1.5">

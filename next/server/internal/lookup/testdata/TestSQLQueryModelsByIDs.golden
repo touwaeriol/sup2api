@@ -1,5 +1,5 @@
 -- sql
-SELECT mp.model AS id, mp.model AS name, '' AS hint, '' AS status FROM model_prices mp WHERE mp.model = ANY($1) AND mp.model = ANY($2) ORDER BY mp.model
+SELECT mp.model AS id, mp.model AS name, '' AS hint, '' AS status FROM (SELECT model FROM model_prices UNION SELECT model FROM price_rules) mp WHERE mp.model = ANY($1) AND mp.model = ANY($2) ORDER BY mp.model
 -- vars
 $1 store.Strings [gpt-x]
 $2 store.Strings [gpt-x gpt-y]

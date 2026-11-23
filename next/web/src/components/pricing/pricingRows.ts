@@ -1,9 +1,9 @@
 // The pricing table of a group while it is edited: per model its model price
-// (a price of its own, or the original price) and its model rate (or the
+// (a price of its own, standing alone, or the original price) and its model rate (or the
 // group's base rate). What a price starts from, whether one may be saved, how
 // a row reads under its unsaved changes and what the request sends.
 import type { CatalogPrice, CustomPrice, ModelPricePatch, ModelPriceRow, ModelRatePatch, PriceDef } from '@/api/pricing'
-import { asVisualConfig, compactVisualConfig, visualExpr } from '@/views/prices/priceExpr'
+import { asVisualConfig, blankPrices, compactVisualConfig, visualExpr } from '@/views/prices/priceExpr'
 import { checkPrice, type LocalIssue } from '@/views/prices/priceCheck'
 import { priceDraftOf, pricePayload, type PriceDraft } from '@/views/prices/priceDraft'
 import { listPriceOf, sameRate, validRate } from './pricingFormat'
@@ -19,8 +19,19 @@ export function customPriceOf(draft: PriceDraft): CustomPrice {
 /** A model price as its editor takes it. */
 export const priceDraftOfCustom = (custom: CustomPrice): PriceDraft => priceDraftOf({ mode: custom.mode, config: custom.config ?? null, expression: custom.expression })
 
-/** The model price a model starts from: its original price as it is, written as a price of its own. */
-export const startPrice = (base: PriceDef): CustomPrice => customPriceOf(priceDraftOf(base))
+/**
+ * A saved model price as the editor sends it back (editableVisualConfig): a
+ * token tier without p or c reads 0, as the server bills it. Drafts are
+ * compared with it and it is checked like them, so a saved price is neither
+ * changed nor refused by reading it.
+ */
+export const savedPrice = (custom: CustomPrice | null): CustomPrice | null => custom && customPriceOf(priceDraftOfCustom(custom))
+
+/** A price with no value yet: one token tier, its input and output prices blank (not 0: it cannot be saved until they are typed). */
+const blankDraft = (): PriceDraft => ({ mode: 'visual', config: { tiers: [{ name: 'base', unit: 'token', p: null, c: null }], rules: [] }, expression: '' })
+
+/** The model price a model starts from, as its editor holds it: its original price as it is, or blank without one. */
+export const startDraft = (base: PriceDef | null): PriceDraft => (base ? priceDraftOf(base) : blankDraft())
 
 /** Why a model price cannot be saved yet (keys under prices.local); none for no price. */
 export function priceIssues(custom: CustomPrice | null): LocalIssue[] {
@@ -29,9 +40,11 @@ export function priceIssues(custom: CustomPrice | null): LocalIssue[] {
 
 export const validPrice = (custom: CustomPrice | null) => priceIssues(custom).length === 0
 
-/** What a model price bills by: its expression as written, or the one its visual config generates (every tier and markup rule in it). */
+/** What a model price bills by: its expression as written, or the one its visual config generates (every tier and markup rule in it) with the prices still blank, which are not 0. */
 function billedBy(custom: CustomPrice): string {
-  return custom.mode === 'expression' ? custom.expression.trim() : visualExpr(compactVisualConfig(asVisualConfig(custom.config)))
+  if (custom.mode === 'expression') return custom.expression.trim()
+  const config = compactVisualConfig(asVisualConfig(custom.config))
+  return `${visualExpr(config)} ${JSON.stringify(config.tiers.map(blankPrices))}`
 }
 
 /** Model prices that price alike: nothing to save between them. */

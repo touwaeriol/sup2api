@@ -9,6 +9,7 @@
 //   out for a table opened from a cell only (phone cards keep their Details
 //   toggle); expandSingle closes the other rows when one opens, each with
 //   an `expand` (row, false) before the (row, true) of the one that opens;
+//   defaultExpanded(row) opens the rows it is true for when first listed;
 // - selectable + v-model:selected (array of row keys, see rowKey): checkbox
 //   column with a select-all header (indeterminate when partly selected);
 //   rowSelectable(row) disables individual rows; Shift+click on a checkbox
@@ -47,6 +48,7 @@ import { useTableColumns, type TableColumnStorage } from './tableColumns'
 import STableColumnSettings from './STableColumnSettings.vue'
 import { useScrollClip } from './scrollClip'
 import { useTableSwipeSelect } from './tableSwipeSelect'
+import { useTableExpand } from './tableExpand'
 import { useViewport } from './viewport'
 import { cardFields, TABLE_CARD } from './tableCard'
 import ReorderHandle from './internal/ReorderHandle.vue'
@@ -66,6 +68,8 @@ const props = withDefaults(
     expandToggle?: boolean
     /** Opening a row closes the others. */
     expandSingle?: boolean
+    /** Rows it is true for start open the first time they are listed (a row seen before keeps what the user made of it). */
+    defaultExpanded?: (row: T) => boolean
     /** Keep expanded content within the visible width of a scrollable table. */
     fitExpandedToContainer?: boolean
     emptyText?: string
@@ -93,7 +97,7 @@ const props = withDefaults(
     /** Phone form: rows as cards (default) or the scrolling table. */
     mobile?: 'card' | 'scroll'
   }>(),
-  { rowKey: 'id', expandToggle: true, selected: () => [], swipeSelect: true, mobile: 'card', emptyText: undefined, rowSelectable: undefined, rowClass: undefined, rowAttrs: undefined, error: undefined, errorText: undefined, onRetry: undefined }
+  { rowKey: 'id', expandToggle: true, selected: () => [], swipeSelect: true, mobile: 'card', emptyText: undefined, rowSelectable: undefined, rowClass: undefined, rowAttrs: undefined, defaultExpanded: undefined, error: undefined, errorText: undefined, onRetry: undefined }
 )
 const emit = defineEmits<{
   (e: 'row-click', row: T): void
@@ -106,7 +110,6 @@ const emit = defineEmits<{
 const t = useUiT()
 const columnState = useTableColumns(() => props.columns, () => props.columnSettingsKey, () => props.columnStorage)
 const visibleColumns = computed(() => props.columnSettingsKey ? columnState.visibleColumns.value : props.columns)
-const expanded = ref(new Set<unknown>())
 const { compact } = useViewport()
 const cardLayout = computed(() => compact.value && props.mobile === 'card')
 const rootClass = computed(() => {
@@ -138,21 +141,11 @@ const keyed = computed(() => props.rows.map((row, i) => ({ row, i, key: keyOf(ro
 /** Reorderable rows are not natively draggable, whatever rowAttrs says. */
 const attrsOf = (row: T, i: number) => (props.reorderable ? { ...props.rowAttrs?.(row, i), draggable: false } : props.rowAttrs?.(row, i))
 
-function toggle(row: T, key: unknown) {
-  const open = !expanded.value.has(key)
-  // expandSingle closes the other rows; the ones still listed report it, before the row that opens.
-  const closed = open && props.expandSingle ? keyed.value.filter(k => k.key !== key && expanded.value.has(k.key)) : []
-  const s = new Set(open && props.expandSingle ? [] : expanded.value)
-  if (open) s.add(key)
-  else s.delete(key)
-  expanded.value = s
-  for (const k of closed) emit('expand', k.row, false)
-  emit('expand', row, open)
-}
-/** What a cell slot gets of its row's expansion, in the table and in a card: closed, and a toggle that does nothing, when rows do not expand. */
-const expansion = (row: T, key: unknown) => ({
-  expanded: !!props.expandable && expanded.value.has(key),
-  toggleExpand: () => (props.expandable ? toggle(row, key) : undefined)
+const { expanded, toggle, expansion } = useTableExpand(keyed, {
+  expandable: () => !!props.expandable,
+  single: () => !!props.expandSingle,
+  initially: () => props.defaultExpanded,
+  onExpand: (row, open) => emit('expand', row, open)
 })
 /** The props of a page slot rendered by the cards: a cell slot gets its row's expansion there too. */
 function cardSlotProps(name: string | number, scope: Record<string, any> | undefined) {

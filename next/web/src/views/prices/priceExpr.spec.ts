@@ -188,7 +188,7 @@ describe('numbers', () => {
 })
 
 describe('the config the editor saves', () => {
-  it('leaves out unset prices, a request tier’s token prices and the value of exists', () => {
+  it('keeps a blank price blank (never 0), and leaves out a request tier’s token prices and the value of exists', () => {
     const edited = cfg(
       [
         { ...tier('a', 0, { p: 1, c: null, cr: null, cc1h: null, img: null, price: 9 }), when: { and: [{ var: 'len', op: '<=', value: '1000' }, { var: 'p', op: '>', value: 5, tz: 'UTC' }, { not: { var: 'hour', op: '<', value: 6, tz: 'UTC' } }] } },
@@ -207,7 +207,7 @@ describe('the config the editor saves', () => {
     )
     expect(compactVisualConfig(edited)).toEqual({
       tiers: [
-        { name: 'a', when: { and: [upTo(1000), { var: 'p', op: '>', value: 5 }, { not: { var: 'hour', op: '<', value: 6, tz: 'UTC' } }] }, unit: 'token', p: 1, c: 0 },
+        { name: 'a', when: { and: [upTo(1000), { var: 'p', op: '>', value: 5 }, { not: { var: 'hour', op: '<', value: 6, tz: 'UTC' } }] }, unit: 'token', p: 1, c: null, cr: null, cc1h: null, img: null },
         { name: 'b', unit: 'request', price: 0.1 }
       ],
       rules: [

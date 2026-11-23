@@ -77,17 +77,17 @@ func ProvidedModels(ctx context.Context, q *gorm.DB, groupIDs []int64) (map[int6
 }
 
 // Offers reports whether a group with these accounts provides model: an
-// account declares it, or one declares none and the model has an enabled
-// global price (priced), and the model policy of the group allows it. It is
-// the one place the rule is written. Models must be sorted, as
-// ProvidedModels returns them.
+// account declares it, or one declares none and the model has a list price
+// in the group (priced: an enabled global price or the group's own), and
+// the model policy of the group allows it. It is the one place the rule is
+// written. Models must be sorted, as ProvidedModels returns them.
 func (m Models) Offers(model string, priced bool, policy core.GroupInfo) bool {
 	_, declared := slices.BinarySearch(m.Models, model)
 	return (declared || priced && m.UnrestrictedAccounts > 0) && policy.AllowsModel(model)
 }
 
 // Offered returns the models a group with these accounts provides (Offers),
-// sorted; priced are the models with an enabled global price.
+// sorted; priced are the models with a list price in the group.
 func (m Models) Offered(priced []string, policy core.GroupInfo) []string {
 	out := []string{}
 	keep := func(names []string, havePrice bool) {
@@ -104,37 +104,64 @@ func (m Models) Offered(priced []string, policy core.GroupInfo) []string {
 }
 
 // OfferedModels returns the models each of the groups provides
-// (Models.Offered), by group id; priced are the models with an enabled global
-// price. Of a group it reads the id and the model policy.
-func OfferedModels(ctx context.Context, q *gorm.DB, groups []core.GroupInfo, priced []string) (map[int64][]string, error) {
+// (Models.Offered), by group id; priced returns the models with a list price
+// in a group. Of a group it reads the id and the model policy.
+func OfferedModels(ctx context.Context, q *gorm.DB, groups []core.GroupInfo, priced func(groupID int64) []string) (map[int64][]string, error) {
 	provided, err := providedModels(ctx, q, groups)
 	if err != nil {
 		return nil, err
 	}
 	out := make(map[int64][]string, len(groups))
 	for _, g := range groups {
-		out[g.ID] = provided[g.ID].Offered(priced, g)
+		out[g.ID] = provided[g.ID].Offered(priced(g.ID), g)
 	}
 	return out, nil
 }
 
 // providedModels returns ProvidedModels of the groups.
 func providedModels(ctx context.Context, q *gorm.DB, groups []core.GroupInfo) (map[int64]Models, error) {
+	return ProvidedModels(ctx, q, groupIDs(groups))
+}
+
+// groupIDs are the ids of the groups.
+func groupIDs(groups []core.GroupInfo) []int64 {
 	ids := make([]int64, len(groups))
 	for i, g := range groups {
 		ids[i] = g.ID
 	}
-	return ProvidedModels(ctx, q, ids)
+	return ids
 }
 
 // offeredModels returns OfferedModels of the groups against the models that
-// have an enabled global price now.
+// have a list price there now (PricedModels).
 func offeredModels(ctx context.Context, q *gorm.DB, groups []core.GroupInfo) (map[int64][]string, error) {
-	var priced []string
-	if err := store.G(ctx, q).Model(&model.ModelPrice{}).Where("enabled").Pluck("model", &priced).Error; err != nil {
+	priced, err := PricedModels(ctx, q, groups)
+	if err != nil {
 		return nil, err
 	}
 	return OfferedModels(ctx, q, groups, priced)
+}
+
+// PricedModels reads the models with a list price now in each of the
+// groups: those with an enabled global price and those the group prices
+// itself (CONTRACTS §97.1). Of a group it reads the id. The function it
+// returns gives them for one of the groups, unsorted, a model possibly
+// twice.
+func PricedModels(ctx context.Context, q *gorm.DB, groups []core.GroupInfo) (func(groupID int64) []string, error) {
+	db := store.G(ctx, q)
+	var global []string
+	if err := db.Model(&model.ModelPrice{}).Where("enabled").Pluck("model", &global).Error; err != nil {
+		return nil, err
+	}
+	var rules []model.PriceRule
+	if err := db.Select("group_id", "model").Where("group_id = ANY(?)", store.Int64s(groupIDs(groups))).Find(&rules).Error; err != nil {
+		return nil, err
+	}
+	own := map[int64][]string{}
+	for _, r := range rules {
+		own[r.GroupID] = append(own[r.GroupID], r.Model)
+	}
+	return func(id int64) []string { return slices.Concat(global, own[id]) }, nil
 }
 
 // groupsProviding returns the ids of the groups that provide the model name
@@ -157,15 +184,29 @@ func (s *Service) groupsProviding(ctx context.Context, name string) ([]int64, er
 	if err != nil {
 		return nil, err
 	}
-	priced, err := gormpg.Exists(db, db.Model(&model.ModelPrice{}).Where("model = ? AND enabled", name))
+	priced, err := pricedIn(db, name)
 	if err != nil {
 		return nil, err
 	}
 	ids := []int64{}
 	for _, g := range groups {
-		if provided[g.ID].Offers(name, priced, g) {
+		if provided[g.ID].Offers(name, priced(g.ID), g) {
 			ids = append(ids, g.ID)
 		}
 	}
 	return ids, nil
+}
+
+// pricedIn returns whether the model name has a list price in a group: an
+// enabled global price or the group's own.
+func pricedIn(db *gorm.DB, name string) (func(groupID int64) bool, error) {
+	global, err := gormpg.Exists(db, db.Model(&model.ModelPrice{}).Where("model = ? AND enabled", name))
+	if err != nil {
+		return nil, err
+	}
+	var own []int64
+	if err := db.Model(&model.PriceRule{}).Where("model = ?", name).Pluck("group_id", &own).Error; err != nil {
+		return nil, err
+	}
+	return func(groupID int64) bool { return global || slices.Contains(own, groupID) }, nil
 }

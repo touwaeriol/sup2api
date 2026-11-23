@@ -25,7 +25,10 @@ import OverlaySurface from './internal/OverlaySurface.vue'
 // `tinted` frame the field (icon, text, the selected hint, ×, chevron);
 // `remote` leaves the matching to the caller (`search` event, `loading`,
 // `selected` for a value the results do not list); `note` / `footer` head and
-// end the list.
+// end the list. `creatable` (UI 4.2) ends the list with "Add “text”" while
+// the typed text is not an option: picking it emits `create` with the text.
+// That row and the footer are pinned to the bottom of the panel together, so
+// a long list never hides them; the active option scrolls clear of them.
 defineOptions({ inheritAttrs: false })
 const props = withDefaults(
   defineProps<{
@@ -54,16 +57,20 @@ const props = withDefaults(
     note?: string
     /** Searchable: a line kept at the bottom of the list. */
     footer?: string
+    /** Searchable: typed text that is no option's label or value is offered as a last row; picking it emits `create` with the text, trimmed. */
+    creatable?: boolean
   }>(),
   { size: undefined, icon: undefined, selected: undefined, note: undefined, footer: undefined }
 )
-const emit = defineEmits<{ (e: 'update:modelValue', v: SelectOption['value']): void; (e: 'search', query: string): void }>()
+const emit = defineEmits<{ (e: 'update:modelValue', v: SelectOption['value']): void; (e: 'search', query: string): void; (e: 'create', text: string): void }>()
 const attrs = useAttrs()
 const t = useUiT()
 const { id, a11y, invalid, size, blur } = useFieldControl(props)
 
 interface Choice extends SelectOption {
   group?: string
+  /** The "Add “text”" row of a creatable select: the text it adds. */
+  create?: string
 }
 // Every selectable option in order (group children carry the group label);
 // the native <option> value is the index into this list.
@@ -94,11 +101,26 @@ const listHost = computed(() => {
 const choices = computed<Choice[]>(() =>
   props.placeholder === undefined || props.clearable ? flat.value : [{ value: null, label: props.placeholder }, ...flat.value]
 )
-const filtered = computed(() => {
+const matched = computed(() => {
   if (props.remote) return choices.value
   const q = query.value.trim().toLocaleLowerCase()
   return choices.value.filter((o) => [o.label, o.hint, o.description].some((text) => text?.toLocaleLowerCase().includes(q)))
 })
+/** What a creatable select offers to add: the typed text, trimmed, unless an option is labelled or valued so already. */
+const creating = computed(() => {
+  const text = query.value.trim()
+  return props.creatable && text && !flat.value.some((o) => o.label === text || o.value === text) ? text : undefined
+})
+const filtered = computed<Choice[]>(() => {
+  const text = creating.value
+  return text === undefined ? matched.value : [...matched.value, { value: null, label: t('ui.createItem', { name: text }), accent: true, create: text }]
+})
+/** Where the "Add" row is in `filtered` (always last); -1 without one. */
+const addAt = computed(() => (creating.value === undefined ? -1 : filtered.value.length - 1))
+/** The block pinned to the bottom of the panel: the "Add" row, then the footer. */
+const pinned = computed(() => !!props.footer || addAt.value >= 0)
+/** The option holding the value (the "Add" row never does). */
+const isPicked = (o: Choice) => o.create === undefined && o.value === props.modelValue
 const shown = computed(() => {
   const given = props.selected
   return given && given.value === props.modelValue ? given : choices.value.find((o) => o.value === props.modelValue)
@@ -116,10 +138,13 @@ const typing = computed(() => open.value && !sheet.value)
 const rich = (o: Choice) => props.remote || !!(o.hint || o.description || o.tag || o.muted || o.accent)
 const PRIMARY_TEXT = 'text-primary-700 dark:text-primary-300'
 const MARK = 'rounded-sm bg-yellow-200 px-px text-inherit dark:bg-yellow-700/60'
+// An action row: a dashed line sets it off from the options, under it (a leading accent row) or over it (the pinned "Add" row).
+const ACCENT_ROW = 'border-dashed border-line [&:not(:last-child)]:mb-1 [&:not(:last-child)]:border-b'
+const CREATE_ROW = 'border-t border-dashed border-line'
 function labelClass(o: Choice) {
   if (o.accent) return PRIMARY_TEXT
   if (o.muted) return 'text-fg-muted'
-  return o.value === props.modelValue ? `font-semibold ${PRIMARY_TEXT}` : ''
+  return isPicked(o) ? `font-semibold ${PRIMARY_TEXT}` : ''
 }
 /** A row's text as [before, typed, after] around the typed text of a remote search (any case); the whole text when it is not there. */
 function cut(text: string, o: Choice): string[] {
@@ -151,8 +176,14 @@ function hide() {
 watch(open, (v) => {
   if (!v) floating.stop()
 })
+/** Scrolls the active option into view clear of the pinned block (a pinned row is always in view). */
 function scrollActive() {
-  nextTick(() => menu.value?.querySelector(`[data-index="${active.value}"]`)?.scrollIntoView?.({ block: 'nearest' }))
+  nextTick(() => {
+    const row = menu.value?.querySelector<HTMLElement>(`[data-index="${active.value}"]`)
+    if (!row || row.closest('[data-pinned]')) return
+    row.style.scrollMarginBottom = `${menu.value?.querySelector<HTMLElement>('[data-pinned]')?.offsetHeight ?? 0}px`
+    row.scrollIntoView?.({ block: 'nearest' })
+  })
 }
 function search(e: Event) {
   const v = (e.target as HTMLInputElement).value
@@ -161,9 +192,15 @@ function search(e: Event) {
   if (props.remote) emit('search', v)
   relist()
 }
-/** After the list changed: its first enabled option is active and the panel is placed again. */
+/** The enabled option a creatable select's typed text names exactly (label or value); -1 for none. */
+function exactIndex(): number {
+  const text = query.value.trim()
+  return props.creatable && text ? filtered.value.findIndex((o) => !o.disabled && o.create === undefined && (o.label === text || o.value === text)) : -1
+}
+/** After the list changed: its first enabled option is active (in a creatable select the one the text names exactly) and the panel is placed again. */
 function relist() {
-  active.value = filtered.value.findIndex((o) => !o.disabled)
+  const exact = exactIndex()
+  active.value = exact >= 0 ? exact : filtered.value.findIndex((o) => !o.disabled)
   if (floats.value) nextTick(() => floating.update())
 }
 // Remote results arrive after the typing that asked for them. The same values
@@ -172,9 +209,10 @@ watch(filtered, (now, before) => {
   if (!open.value || !props.remote) return
   if (now.length !== before.length || now.some((o, i) => o.value !== before[i].value)) relist()
 })
-function pick(o: SelectOption) {
+function pick(o: Choice) {
   if (props.disabled || o.disabled) return
-  emit('update:modelValue', o.value)
+  if (o.create === undefined) emit('update:modelValue', o.value)
+  else emit('create', o.create)
   open.value = false
 }
 /** The × button: it goes away with the value, so focus that was on it (keyboard) moves to the field. */
@@ -333,8 +371,8 @@ const control = computed(() =>
                 // Results coming in must not resize the panel under the pointer.
                 remote ? 'max-h-72 w-80 max-w-[calc(100vw-1rem)]' : 'max-h-60'
               ],
-          // The footer sticks to the list's content edge: no padding under it for rows to show through.
-          footer ? 'pb-0' : ''
+          // The pinned block sticks to the list's content edge: no padding under it for rows to show through.
+          pinned ? 'pb-0' : ''
         ]"
         :style="floats ? floating.style.value : undefined"
         @mousedown.prevent
@@ -357,18 +395,18 @@ const control = computed(() =>
             {{ o.group }}
           </li>
           <li
+            v-if="o.create === undefined"
             :id="`${listId}-${i}`"
             role="option"
             :data-index="i"
-            :aria-selected="o.value === modelValue"
+            :aria-selected="isPicked(o)"
             :aria-disabled="o.disabled || undefined"
             class="cursor-pointer py-2"
             :class="[
               sheet ? 'flex min-h-11 items-center gap-2 px-5 text-base' : ['text-sm', o.group ? 'pl-5 pr-3' : 'px-3'],
               i === active ? 'bg-primary-50 text-primary-700 dark:bg-primary-900/30 dark:text-primary-300' : 'text-gray-700 dark:text-gray-200',
               o.disabled ? 'cursor-not-allowed opacity-40' : '',
-              o.accent ? 'border-dashed border-line [&:not(:last-child)]:mb-1 [&:not(:last-child)]:border-b' : '',
-              footer ? 'scroll-mb-8' : ''
+              o.accent ? ACCENT_ROW : ''
             ]"
             @mouseenter="active = i"
             @click="pick(o)"
@@ -393,7 +431,7 @@ const control = computed(() =>
                 </template>
               </span>
             </span>
-            <SIcon v-if="sheet && o.value === modelValue" name="check" class="h-4 w-4 shrink-0 text-primary-600" />
+            <SIcon v-if="sheet && isPicked(o)" name="check" class="h-4 w-4 shrink-0 text-primary-600" />
           </li>
         </template>
         <li v-if="loading" role="presentation" class="flex items-center gap-2 py-2 text-sm text-fg-muted" :class="sheet ? 'px-5' : 'px-3'">
@@ -401,13 +439,26 @@ const control = computed(() =>
           {{ t('ui.searching') }}
         </li>
         <li v-else-if="!filtered.length" role="presentation" class="px-3 py-2 text-sm text-fg-muted">{{ noResults ?? t('ui.noResults') }}</li>
-        <li
-          v-if="footer"
-          role="presentation"
-          class="sticky bottom-0 mt-1 border-t border-line py-1.5 text-xs text-fg-muted"
-          :class="sheet ? 'bg-surface px-5' : 'bg-white px-3 dark:bg-dark-800'"
-        >
-          {{ footer }}
+        <!-- Pinned: the "Add" row (still an option of the listbox) over the footer. -->
+        <li v-if="pinned" role="none" data-pinned class="sticky bottom-0 mt-1" :class="sheet ? 'bg-surface' : 'bg-white dark:bg-dark-800'">
+          <div
+            v-if="addAt >= 0"
+            :id="`${listId}-${addAt}`"
+            role="option"
+            :data-index="addAt"
+            aria-selected="false"
+            class="cursor-pointer py-2"
+            :class="[
+              sheet ? 'flex min-h-11 items-center px-5 text-base' : 'px-3 text-sm',
+              addAt === active ? 'bg-primary-50 dark:bg-primary-900/30' : '',
+              addAt > 0 ? CREATE_ROW : ''
+            ]"
+            @mouseenter="active = addAt"
+            @click="pick(filtered[addAt])"
+          >
+            <span class="block truncate" :class="PRIMARY_TEXT">{{ filtered[addAt].label }}</span>
+          </div>
+          <div v-if="footer" role="presentation" class="border-t border-line py-1.5 text-xs text-fg-muted" :class="sheet ? 'px-5' : 'px-3'">{{ footer }}</div>
         </li>
       </ul>
     </component>

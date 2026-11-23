@@ -462,7 +462,7 @@ compose 里的 `mock-upstream` 服务模拟 Anthropic `/v1/messages` 与 `/v1/me
 
 **调度**：端点协议 P → 候选账号类型 = 原生支持 P 的，加上支持 Q 且核心有 `P→Q` 转换器的（转换目标、等级与同一优先级内的先后见 §88）→ 分组内这些类型的账号（§110 起：其中的跨平台转换默认关闭，账号要在 `model_protocols` 里为模型开启才参与）。请求由账号类型所属插件构造；需转换时核心转换请求体和响应（含 SSE）。用量规则：账号类型为该协议声明的 `usage`，否则取声明该协议端点的平台的 `usage`；`passHeaders` 同理（请求体整个交给插件，§112）。错误格式始终是端点的 `errorFormat`。
 
-**计费**：`Resolve(model)` 只按模型匹配：管理员价格优先，其次插件默认价格；按完整模型 ID 精确匹配（0007 起不支持通配符，见 §16），同一模型有多个插件默认价格时取最早安装的插件（插件默认价格已由 §17 取消，每个模型只有一条全局价）。§97 起，全局价之上还有账号分组给模型定的价格，`Resolve(ctx, PriceQuery{Model, GroupID})` 按“账号分组的模型价格 → 全局价”取先命中的一条；模型没有启用的全局价时不能计费，模型价格不生效。费用 = 表达式结果 × 倍率。倍率只取一个（2026-11-23 起，迁移 0124）：用户分组 × 账号分组 × 模型 → 用户分组 × 账号分组 → 账号分组 × 模型 → 账号分组基本倍率，最具体的一层生效，不相乘（`core.RateLevels.Rate`，§97.1、§97.3）。
+**计费**：`Resolve(model)` 只按模型匹配：管理员价格优先，其次插件默认价格；按完整模型 ID 精确匹配（0007 起不支持通配符，见 §16），同一模型有多个插件默认价格时取最早安装的插件（插件默认价格已由 §17 取消，每个模型只有一条全局价）。§97 起，全局价之上还有账号分组给模型定的价格，`Resolve(ctx, PriceQuery{Model, GroupID})` 按“账号分组的模型价格 → 全局价”取先命中的一条，模型价格不要求有全局价；两者都没有时不能计费。费用 = 表达式结果 × 倍率。倍率只取一个（2026-11-23 起，迁移 0124）：用户分组 × 账号分组 × 模型 → 用户分组 × 账号分组 → 账号分组 × 模型 → 账号分组基本倍率，最具体的一层生效，不相乘（`core.RateLevels.Rate`，§97.1、§97.3）。
 
 **账号归属**：插件只拿得到自己声明的账号类型的账号（凭证、代理等全部信息），不需要宿主授权（§124；此前是 `accounts.credentials {"types": "own"}`）。
 
@@ -878,7 +878,7 @@ POST `/accounts/:id/test`（`account:test` / `account:own:test`）：
   - `POST /prices/:id/override` 已删除；同一模型重复录入返回 409；
   - 修改同步价格的 model、mode、config 或 expression 后，它会变成 `manual`，`sync_source_id` 清空；只改 enabled 或 note 时保持 `sync`；
   - 使用记录详情的 `price` 为 `{id, model, source}`。
-- **匹配**：按完整模型 ID 精确匹配，只看启用的价格。找不到价格时请求被拒，403 `model_price_not_configured`（§17.3）。这里的价格是全局价；§97 起，找到全局价之后还要按请求的账号分组取它给这个模型定的价格（模型价格，§97.3），没有全局价的模型仍按本条处理，模型价格不生效。
+- **匹配**：按完整模型 ID 精确匹配，只看启用的价格。找不到价格时请求被拒，403 `model_price_not_configured`（§17.3）。这里的价格是全局价；§97 起，先按请求的账号分组取它给这个模型定的价格（模型价格，§97.3），没有才用全局价；模型价格不要求有全局价，两者都没有的模型按本条处理。
 - **迁移 0008**：
   - 删除插件默认价格，原来的管理员价格改为 `manual`；
   - 加唯一索引 `model_prices_model_uq`，以及约束 `source IN ('manual','sync')`；
@@ -905,7 +905,7 @@ POST `/accounts/:id/test`（`account:test` / `account:own:test`）：
 | DELETE `/price-sources/:id` | `price:manage` | 204；已导入的价格保留，`sync_source_id` 置空 |
 | POST `/price-sources/:id/preview` | `price:manage` | 拉取后与本地对比，返回 `{source_id, fetched_at, total, skipped, items:[{model, action, incoming:{model, mode, config, expression}, current}]}`。action：`create` 本地没有；`update` 本地是同步来的价格且不同；`manual` 本地是手动价格且不同；`unchanged` 相同。拉取失败返回 503 `unavailable`，并写入 `last_error` |
 | POST `/price-sources/:id/apply` | `price:manage` | `{models:[...]}` → `{created, updated, unchanged, skipped:[{model, reason}]}`。服务端重新拉取，只导入列出的模型（选中的手动价格也会被覆盖），导入后都是 `source=sync`；记审计 `price.sync` |
-| GET `/key/prices` | API Key（`Authorization: Bearer` 或 `x-api-key`） | 供下游 sup2api 同步用：`{prices:[{model, mode, config, expression}], rate_multiplier, group:{id, name}}`，只含启用的价格，以及该 Key 所在分组白名单允许的模型。§97 起模型范围不变，内容按 Key 的所有者算：`prices` 是所有者在该账号分组的标价（账号分组的模型价格 → 全局价），`rate_multiplier` 是所有者在该账号分组不含模型的倍率（用户分组倍率或基本倍率）；响应形状不变，下游只乘这一个倍率，所以某个模型生效的倍率（模型倍率、用户分组模型倍率）与它不同时，把比值折进这个模型的价格：可视化价格缩放各档的价格（`expr.PriceKeys`，档位条件和加价倍数不变）并重新生成表达式，表达式价格写成 `(原表达式) * 比值`（`expr.Times`，§131.3），下游照常编译；比值为 1 时不改，折不进去（`rate_multiplier` 为 0）或改后编译不通过的模型跳过（§97.6）。这是唯一把倍率折进价格的接口 |
+| GET `/key/prices` | API Key（`Authorization: Bearer` 或 `x-api-key`） | 供下游 sup2api 同步用：`{prices:[{model, mode, config, expression}], rate_multiplier, group:{id, name}}`，只含在该 Key 所在账号分组有标价（启用的全局价或该账号分组的模型价格）且分组白名单允许的模型。§97 起内容按 Key 的所有者算：`prices` 是所有者在该账号分组的标价（账号分组的模型价格 → 全局价），`rate_multiplier` 是所有者在该账号分组不含模型的倍率（用户分组倍率或基本倍率）；响应形状不变，下游只乘这一个倍率，所以某个模型生效的倍率（模型倍率、用户分组模型倍率）与它不同时，把比值折进这个模型的价格：可视化价格缩放各档的价格（`expr.PriceKeys`，档位条件和加价倍数不变）并重新生成表达式，表达式价格写成 `(原表达式) * 比值`（`expr.Times`，§131.3），下游照常编译；比值为 1 时不改，折不进去（`rate_multiplier` 为 0）或改后编译不通过的模型跳过（§97.6）。这是唯一把倍率折进价格的接口 |
 
 同步只能由管理员手动触发（先预览再应用），没有定时自动覆盖。
 
@@ -921,7 +921,7 @@ POST `/accounts/:id/test`（`account:test` / `account:own:test`）：
 
 所有者原话："删除。不要免费提供。"；此前的规则："如果模型找不到用量配置就报错。"
 
-- 模型没有启用的全局价格时一律报错，403 `model_price_not_configured`，没有任何放行途径。适用于：请求的主模型（调度前拒绝，不选账号、不发上游）；请求里经 `request.modelReferences` 声明的引用模型（§120，调度前拒绝）。账号测试不查价格、不计费（§17.2）。
+- 模型没有价格时一律报错，403 `model_price_not_configured`，没有任何放行途径。“没有价格”指在请求的账号分组里没有标价：既没有该账号分组的模型价格，也没有启用的全局价（§97.1）。适用于：请求的主模型（调度前拒绝，不选账号、不发上游）；请求里经 `request.modelReferences` 声明的引用模型（§120，调度前拒绝）。账号测试不查价格、不计费（§17.2）。
 - `/settings/billing` 的 `missing_price_policy`（`reject` / `free`）整项删除：接口不再返回、`PUT` 时这个字段被忽略；插件读到的 `protocol.BillingSettings` 没有 `MissingPricePolicy`（§107.2）；控制台的设置项删除。数据库里已存的值不迁移、读取时忽略，下次保存计费设置时随整份文档重写而消失（与 §8 的 `client_disconnect_wait_seconds` 相同）。
 - `core.Pricer.Resolve` 要么返回价格、要么返回错误（找不到价格时是 `ErrPriceNotConfigured`），不再返回 `(nil, nil)`。所以计费的请求一定带着主模型的价格：预扣、结算里"主价格为空即免费"的分支删除；结算时主用量的价格表达式在价格历史里找不到，这条记录结算失败，不再按免费处理。升级前在免费放行下写入、还没结算完的记录（`usage_logs.billing_status` 为 `pending` / `failed` 且 `expr_hash = ''`）同样结算失败：价格为空的附加或替换分项报错，计入重试次数，用完后停在 `failed`，由管理员处理。
 - **价格为 0** 是管理员录入的价格，不受影响：请求照常转发、按 0 计费（记录为 `billed`，金额 0）。
@@ -1333,7 +1333,7 @@ type ProxyResolver interface {
 
 ### 23.1 加载方式与 import map
 
-- 控制台 `GET /ui/plugins` 后（`web/src/stores/plugins.ts`），对 `native_entry` 非空、`trust` 为 `official`/`verified`、且 `host_ui_compat` 匹配 `HOST_UI_VERSION`（当前 `4.2.0`，§90.7、§21；`satisfiesRange` 支持 `^1.0`、`~1.2`、`>=1.0.0 <2.0.0`、`1.x`、`*`、`||`）的插件执行 `import(asset_base + native_entry)`，调用模块导出的 `register(host)`；插件被禁用或 `native_entry` 的 URL 变化（版本升级）时调用 `unregister?()` 并丢弃已注册组件。不满足条件或 `register` 抛错的记在 `errors[key]`，页面显示原因；只是契约不匹配时（`uiMismatch(key)`）不显示技术原因、不给“重试”：插件声明的契约比控制台旧，提示升级插件；比控制台新（`@sub2api/host` 的 `belowRange(HOST_UI_VERSION, hostUICompat)`，例如插件 `^4.1`、控制台 4.0.0：核心安装时只看 `hostCompat`，作者漏抬它时就会装上），提示升级核心。列表一到就置 `listed`（只要列表的地方看 `listed`，不等模块；菜单来自 `GET /me/menus`，不等插件）；各插件模块并行加载，`pending[key]` 标记仍在加载的插件，插件页只等自己插件的模块；`refresh()` 在本次启动的模块都加载或失败后返回，重叠的 `refresh()` 不重复加载仍在 `pending` 的插件。所有原生入口在控制台启动时都会加载，所以插件**页面**组件应在 `register` 里以 `defineAsyncComponent(() => import('./Page.vue'))` 注册（`@sub2api/ui` 导出的 `lazyPage`（UI 3.4，manifest 声明 `hostUICompat: "^3.4"`）封装了这一步，带加载占位和两次重试（间隔 500ms、1000ms；每次挂载重新计数，所以插件页的"重试"按钮和再次进入页面都会重新走完两次重试）），入口只保留 slot 组件、文案和 `register` 需要的代码。核心按 `hostCompat` 安装插件，不看 `hostUICompat`；核心 0.1.228 是最后一个带 UI 3.3 的版本，UI 3.4 从核心 0.1.229 起。（dynweight 0.4.1、growth 0.1.6 因此声明 `hostCompat >=0.1.229`）。
+- 控制台 `GET /ui/plugins` 后（`web/src/stores/plugins.ts`），对 `native_entry` 非空、`trust` 为 `official`/`verified`、且 `host_ui_compat` 匹配 `HOST_UI_VERSION`（当前 `4.3.0`，§90.7、§21；`satisfiesRange` 支持 `^1.0`、`~1.2`、`>=1.0.0 <2.0.0`、`1.x`、`*`、`||`）的插件执行 `import(asset_base + native_entry)`，调用模块导出的 `register(host)`；插件被禁用或 `native_entry` 的 URL 变化（版本升级）时调用 `unregister?()` 并丢弃已注册组件。不满足条件或 `register` 抛错的记在 `errors[key]`，页面显示原因；只是契约不匹配时（`uiMismatch(key)`）不显示技术原因、不给“重试”：插件声明的契约比控制台旧，提示升级插件；比控制台新（`@sub2api/host` 的 `belowRange(HOST_UI_VERSION, hostUICompat)`，例如插件 `^4.1`、控制台 4.0.0：核心安装时只看 `hostCompat`，作者漏抬它时就会装上），提示升级核心。列表一到就置 `listed`（只要列表的地方看 `listed`，不等模块；菜单来自 `GET /me/menus`，不等插件）；各插件模块并行加载，`pending[key]` 标记仍在加载的插件，插件页只等自己插件的模块；`refresh()` 在本次启动的模块都加载或失败后返回，重叠的 `refresh()` 不重复加载仍在 `pending` 的插件。所有原生入口在控制台启动时都会加载，所以插件**页面**组件应在 `register` 里以 `defineAsyncComponent(() => import('./Page.vue'))` 注册（`@sub2api/ui` 导出的 `lazyPage`（UI 3.4，manifest 声明 `hostUICompat: "^3.4"`）封装了这一步，带加载占位和两次重试（间隔 500ms、1000ms；每次挂载重新计数，所以插件页的"重试"按钮和再次进入页面都会重新走完两次重试）），入口只保留 slot 组件、文案和 `register` 需要的代码。核心按 `hostCompat` 安装插件，不看 `hostUICompat`；核心 0.1.228 是最后一个带 UI 3.3 的版本，UI 3.4 从核心 0.1.229 起。（dynweight 0.4.1、growth 0.1.6 因此声明 `hostCompat >=0.1.229`）。
 - `entry.js` 的形状是 `NativePluginModule`：`register(host: PluginHost): void | Promise<void>`、`unregister?(): void | Promise<void>`。`register` 里用 `host.registerComponent(name, comp)` 注册 manifest `ui.pages[].component`、`ui.slots[].component` 引用的组件名，用 `host.addMessages({en, zh})` 注册文案；`unregister` 释放模块级状态（moderation 的 `entry.ts` 是最小样例）。组件和接口助手要读 `host` 时，插件的 `host.ts` 用 `@sub2api/host` 的 `definePluginHost(name)`（UI 4.0）建模块级的 host：`export const { setHost, useHost: useShopHost } = definePluginHost('shop')`，`register` 里 `setHost(host)`，`unregister` 里 `setHost(null)`；`register` 之前或 `unregister` 之后调 `useShopHost()` 抛 `shop UI used before register(host)`。
 - **import map**：控制台 `index.html` 注入 `<script type="importmap">`，把 `vue`、`vue-router`、`pinia`、`vue-i18n`、`@sub2api/ui`、`@sub2api/host` 映射到控制台自己构建出的 chunk（`web/vite.config.ts` 的 `SHARED`，`preserveEntrySignatures: 'strict'`，所有导出都保留；dev 下映射到源码，复用同样的预打包依赖）。插件用 `@sub2api/vite-preset` 构建时这些模块（`SHARED_MODULES`，前缀匹配 `vue/*` 之类的子路径）全部 external，**不得打进插件包**，否则页面里会出现第二份 Vue 运行时和第二套组件/状态：`toast`、`confirm`、i18n、路由、`theme` 都不再与控制台共享，组件的 `provide/inject` 也会失效。
 - 构建：`vite.config.ts` 写 `export default defineConfig(sub2apiPlugin({ entry: 'src/entry.ts' }))`；选项 `entry`（默认 `src/entry.ts`）、`outDir`（默认 `dist`）、`vue`（透传 `@vitejs/plugin-vue`）、`minify`（默认 true）。输出 `dist/entry.js`（ES module，target es2022）、`dist/entry.css`（有样式时；`entry.js` 头部自动按自身 URL 插一条 `<link rel="stylesheet">`，同源，CSP 不用改）、`dist/chunks/*`、`dist/assets/*`。打包成插件时放到 manifest `ui.native.entry` 指向的位置（moderation：`ui/native/entry.js`）。preset 也导出 `HOST_UI_VERSION`，manifest `hostUICompat` 按它声明（`sdk/manifest`：声明了 `ui.native` 时必填）。4.0.0 删掉了 schema 表单的导出（§23.3），所以 0.1.304 起全部带界面的官方插件（16 个，payment 没有界面）都声明 `^4.0`；此前按用到的最高小版本声明（guard 用 3.4 的 `lazyPage` 写 `^3.4`，dynweight 0.5.7、moderation 0.9.1 用 `host.components.EntityPicker` 写 `^3.11`（§96.6），moderation 0.9.2 写 `^3.12`（§96.7），用代理票据的写 `^3.20`（§117））。
@@ -1409,14 +1409,14 @@ type ProxyResolver interface {
 
 | 组件 | 用途 | props（默认值） | emits / slots |
 |---|---|---|---|
-| `SPageHeader` | 页面页头。直接在控制台外壳下时，标题、说明和（宽屏）`before`/`title-extra` 显示在顶栏，页面里只剩筛选与操作一行（UI 3.9，§94；操作从不进顶栏，UI 4.2，§133）；嵌套范围内是页面里的标题行。页头是工具栏：按钮一律 md，外壳下带 `icon` 的 primary 按钮在手机上浮动（§133） | `title`（必填）、`description` | slots `before`、`title-extra`、`actions`、`filters`（筛选行） |
+| `SPageHeader` | 页面页头。直接在控制台外壳下时，标题、说明和（宽屏）`before`/`title-extra` 显示在顶栏，页面里只剩筛选与操作一行（UI 3.9，§94；操作从不进顶栏，UI 4.3，§133）；嵌套范围内是页面里的标题行。页头是工具栏：按钮一律 md，外壳下带 `icon` 的 primary 按钮在手机上浮动（§133） | `title`（必填）、`description` | slots `before`、`title-extra`、`actions`、`filters`（筛选行） |
 | `SCard` | 卡片（`.card` 表面，与 `SSettingsGroup`、`STable card` 同一套） | `title`、`subtitle`、`padded`（true）、`variant`（`default`/`flat`，flat 去阴影，卡片套卡片时用） | slots 默认、`title`、`actions`、`footer`（底部按钮条） |
 | `SStatCard` | 统计卡 | `label`、`value`（必填）、`sub`、`icon`、`tone`（`primary`/`success`/`warning`/`danger`，primary）、`trend`（number \| null，显示 ▲/▼ 百分比）、`loading`、`compact`（小号）、`selected`（boolean；给了就渲染成 `<button aria-pressed>`，选中描边）、`selectable`（渲染成按钮）、`to`（`RouterLink`）/ `href`（`<a>`）：整张卡是链接 | emits `click`（有 `@click` 监听时也渲染成按钮）；slot 默认 |
 | `SChart` | ECharts 图（懒加载 echarts；已注册 Line/Bar/Pie、Grid/Tooltip/Legend/Title/Dataset、Canvas） | `option`（必填，按原样应用，自动补主题色、文字、轴线和 tooltip 颜色）、`height`（`'280px'`）、`loading` | 自动 resize、随暗色重绘。`option` 按引用比较：传新对象（computed）才重绘，不要原地改 |
 | `STable<T>` | 表格 | `columns: TableColumn[]`、`rows: T[]`、`loading`、`rowKey`（`'id'`）、`expandable`、`fitExpandedToContainer`（展开内容限制在可见宽度内）、`emptyText`、`dense`、`selectable` + `selected: unknown[]`（`v-model:selected`，行 key 数组；表头全选/半选，只作用于当前 `rows`）、`rowSelectable(row) → boolean`（禁用个别行的勾选框）、`clickable`（行可聚焦、`cursor-pointer`，Enter/空格也发 `row-click`）、`rowClass(row, index)`、`rowAttrs(row, index) → Record`（如 `data-testid`）、`card`（表格放进卡片，去掉双边框） | emits `row-click(row)`（鼠标点击总会发）、`expand(row, open)`、`update:selected(keys)`；slots `cell-<key>`（`{row, value, index}`）、`head-<key>`（`{column}`，替代表头文字）、`expand`（`{row}`）、`empty`、`toolbar`（仅 `card`，表格上方工具条）、`footer`（仅 `card`，放分页）；`key` 支持 `a.b` 路径，空值显示 `—`；`key === 'actions'` 的列粘在右侧，有列被它遮住时才显示左侧分隔阴影 |
 | `SPagination` | 分页（`<nav>`，当前页 `aria-current="page"`） | `page`、`pageSize`、`total`（必填）、`pageSizes`（`[20,50,100]`）、`hideSizes`（不显示每页条数）、`size`（`sm`/`md`，sm） | emits `update:page`、`update:pageSize`（改每页数时 `page` 回 1） |
-| `STabs` | 标签和内容容器，统一同名标题去重、键盘切换与可访问面板关联；增强入口从核心 0.1.154 提供 | `tabs: TabItem[]`、`modelValue: string`、`showTabs`、`showSingle`、`idPrefix`、`size`、`ariaLabel` | emits `update:modelValue`；default slot `{active}`，必须将对应内容放入容器；slot `end`（UI 4.2，§133）：标签栏右端的操作，不随标签滚动，标签栏不显示时单独一行靠右，按钮一律 md；底层标签栏不公开 |
-| `SButton` | 按钮；给 `to` 渲染 `RouterLink`、给 `href` 渲染 `<a>`（同样的 `.btn` 类），否则原生 `<button>` | `variant`（`primary`/`secondary`/`ghost`/`danger`/`success`/`warning`，secondary）、`size`（`xs`/`sm`/`md`/`lg`，md；xs 为表格内的紧凑按钮）、`loading`（spinner + 禁用 + `aria-busy`）、`disabled`、`type`（`button`/`submit`/`reset`，button）、`block`、`to`（`string \| RouteLocationRaw`）、`href`、`icon` / `iconRight`（SIcon 名）、`iconOnly`（只显示图标的方形按钮，**必须**配 `ariaLabel`）、`square`（方形）、`ariaLabel`、`tone`（`default`/`danger`/`info`：ghost/secondary 按钮的红色 / 蓝色文字，用于删除、禁用 / 启用；`info` 2026-11-09 起）、`fab`（UI 3.5；不写时由所在工具栏决定，UI 4.2，§133）。在工具栏（页头、`STabs #end`）里忽略 `size`，一律 md | 原生 `click`；slot 默认。`to`/`href` 形态 `disabled`/`loading` 时渲染无 `href` 的 `<a aria-disabled="true">` |
+| `STabs` | 标签和内容容器，统一同名标题去重、键盘切换与可访问面板关联；增强入口从核心 0.1.154 提供 | `tabs: TabItem[]`、`modelValue: string`、`showTabs`、`showSingle`、`idPrefix`、`size`、`ariaLabel` | emits `update:modelValue`；default slot `{active}`，必须将对应内容放入容器；slot `end`（UI 4.3，§133）：标签栏右端的操作，不随标签滚动，标签栏不显示时单独一行靠右，按钮一律 md；底层标签栏不公开 |
+| `SButton` | 按钮；给 `to` 渲染 `RouterLink`、给 `href` 渲染 `<a>`（同样的 `.btn` 类），否则原生 `<button>` | `variant`（`primary`/`secondary`/`ghost`/`danger`/`success`/`warning`，secondary）、`size`（`xs`/`sm`/`md`/`lg`，md；xs 为表格内的紧凑按钮）、`loading`（spinner + 禁用 + `aria-busy`）、`disabled`、`type`（`button`/`submit`/`reset`，button）、`block`、`to`（`string \| RouteLocationRaw`）、`href`、`icon` / `iconRight`（SIcon 名）、`iconOnly`（只显示图标的方形按钮，**必须**配 `ariaLabel`）、`square`（方形）、`ariaLabel`、`tone`（`default`/`danger`/`info`：ghost/secondary 按钮的红色 / 蓝色文字，用于删除、禁用 / 启用；`info` 2026-11-09 起）、`fab`（UI 3.5；不写时由所在工具栏决定，UI 4.3，§133）。在工具栏（页头、`STabs #end`）里忽略 `size`，一律 md | 原生 `click`；slot 默认。`to`/`href` 形态 `disabled`/`loading` 时渲染无 `href` 的 `<a aria-disabled="true">` |
 | `SRowAction` | 表格行操作：纯文字小按钮（`secondary` + `xs`，参照 new-api 的「测试 / 禁用 / 编辑」），手机卡片里是 `ghost` + `sm`。UI 3.7 起不再画图标（`icon` 改为可选，仍接受、不显示，老插件不用改；`hostUICompat` 低于 `^3.7` 的插件仍应传 `icon`，装在老核心上才有图标） | `label`（必填）、`icon`（可选，不显示）、`tone`（`default`/`danger`/`info`，与 `SButton` 相同：danger 文字红色、info 蓝色）、`disabled`、`loading`（文字前加载圈）、`title`（默认 `label`） | emits `click`（已 `stop`）；其余属性落到 `<button>`，可作 `SDropdown` 的 `#trigger` |
 | `SDropdown` | 操作菜单（Teleport 到 body，自动定位/翻转）。菜单项是 `<button role="menuitem">`：↑/↓/Home/End 移动，Enter/空格选择，Esc 关闭并把焦点还给触发按钮，Tab 关闭 | `actions: MenuAction[]`（必填）、`label`、`ariaLabel`（只有图标时默认 `ui.moreActions`）、`align`（`end`/`start`，end）、`width`（CSS 宽度，`'11rem'`）、`disabled` | emits `select(key)`、`open`、`close`；slot 默认为触发按钮内容（缺省显示 `label` 或 `more` 图标）；slot `trigger`（`{open, toggle, attrs}`：整个替换触发按钮，自己的按钮要 `v-bind="attrs"`（`aria-haspopup`/`aria-expanded`/`aria-controls`）并 `@click="toggle"`）；slot `header`（菜单顶部说明） |
 | `SBadge` | 徽标 | `tone: Tone`（gray；`purple` 与 `accent` 同色）、`dot`、`size`（`xs`/`sm`，sm） | slot 默认 |
@@ -1558,6 +1558,17 @@ type ProxyResolver interface {
 | `useTabbedForm(current, tabs)` | 保存逻辑。部分 `TabbedFormPart {tab, check?, body, dirty?, fields?, applyErrors?, invalid?}` 用 `form.register`（返回取消函数）或子组件里的 `useTabbedFormPart(part, active?)` 登记，`active`（默认 `true`）为假时不登记、随它变化登记或取消，组件不必重新挂载；`check` 可返回 `Promise<boolean>`；`fields` 前缀 `a` 认领 `a`、`a.x`、`a[0]`；给了 `invalid`（部分现在是否显示着错误）的部分，标签红点只看它，没给的看上一次保存的结果。`submit(send)`：跑全部 `check`，有失败的标红并打开第一个、返回 `false`；否则合并各部分的 `body()` 调 `send` 一次；`ApiError` 带字段错误时按 `fields` 前缀交给对应部分的 `applyErrors`、标红并打开第一个标签、返回 `false`，同时没被认领的字段错误拼成一条错误 toast；一条也没被认领的失败原样拒绝。另有 `saving`（从检查开始到请求结束）、`dirtyTabs`、`errorTabs`、`anyDirty`、`clearErrors` |
 
 控制台的账号分组编辑（`views/groups/GroupEditModal.vue`）与用户分组编辑（`views/segments/SegmentEditor.vue`）共用外壳 `components/TabbedFormModal.vue`（`SFormModal` 加 `layout="top"` 的 `STabbedForm` 和一次请求的保存）；账号分组编辑的“用户分组倍率”标签只给有 `segment:read` 的调用者显示；用户定价抽屉（`views/users/UserPricingDrawer.vue`）没有标签，倍率表随“可编辑”动态登记，把用户转成专享后不用重开就能保存；原来分步保存的 `src/composables/useTabbedSave.ts` 删除。账号编辑器（`views/accounts/AccountEditor.vue`）用 `layout="side"`：接入配置、协议与模型、调度与限流、高级各是一个部分（`accountParts.ts`，字段前缀见 `editorErrors.ts` 的 `SECTION_FIELDS`，凭证由接入配置部分的异步 `check` 向插件表单收取），插件声明的分区（§87.4）排在后面、图标取声明的 `icon`；账号类型卡片放在 `before-nav`；接口、请求体与用量限制的单独保存（§73）不变，原来的 `AccountEditorNav.vue` 删除。账号编辑器没有“未保存”标记（与迁移前一致）；插件凭证表单的校验不通过时，接入配置标签标红到下一次保存。账号分组、用户分组两个弹窗提交的是核心 0.1.308 起的一次写入接口（`POST/PATCH /groups` 带 `model_prices`、`model_rates`、`segment_rates`、`segment_model_rates`，`POST/PATCH /segments` 带 `group_rates`、`model_rates`；整体校验、一个事务，字段错误路径 `<列表>.<i>.<字段>` 由各部分的 `fields` 前缀认领，§97.6）。
+
+### 23.7 可新建的下拉与默认展开的行（UI 4.2，2026-11-23，用户要求）
+
+账号分组的模型价格、模型倍率和用户分组的模型倍率要能给任意模型名设置（还没有全局价、账号还不支持的模型也行，§97），所以“添加模型”下拉要能直接输入。`@sub2api/ui` 4.2 只新增两个属性和一个事件（`HOST_UI_VERSION` 4.2.0；用到的插件声明 `hostUICompat: "^4.2"`；说明见 `web/packages/ui/README.md`“可新建的下拉与默认展开的行（UI SDK 4.2）”）：
+
+| 新增 | 说明 |
+|---|---|
+| `SSelect` 的 `creatable` | 只对 `searchable` 生效：输入的文字（去掉首尾空白、非空）不等于任何选项的 label 或 value 时，列表末尾多一行“添加“{name}””（文案 `ui.createItem`），选中它发出 `create(text)`，不发 `update:modelValue`，这一行固定在面板底部（提示文字之上）始终可见；回车优先选标签或值与输入完全相同的选项，没有才选第一个匹配项（只在 `creatable` 时）；已有的条目可作为禁用选项列出（例如“已添加”），输入与之相同时不出现新建行。 |
+| `STable` 的 `defaultExpanded(row)` | 行的 key 第一次出现时返回 true 就展开，之后保持用户的操作；默认展开不发 `expand` 事件；同时用 `expandSingle` 时只在当前没有展开行时展开第一行。 |
+
+控制台的 `components/pricing/AddSelect.vue` 用 `creatable` 把输入的模型名当作 `add` 发出，三处“添加模型”的选项由 `components/pricing/addModelOptions.ts` 统一生成，顺序是账号提供的模型 → 有全局价（模型价格）的模型 → 手动输入（2026-11-23 所有者定），每项标来源；`AccessRateTable` 用 `defaultExpanded` 让已有模型倍率的行默认展开。
 
 ## 24. 插件改写候选账号的调度参数（priority / weight）（2026-09-29，用户要求）
 
@@ -5562,8 +5573,8 @@ node 任务（可工作节点各跑，`RequireWork`）：
 
 | 请求 | 响应 | 模型范围与价格 |
 |---|---|---|
-| 不带 `group_id` | `{group: null, rate_multiplier: "1", prices: [{model, mode, config, expression, groups: [{id, name}]}]}` | 全部已启用的全局价，价格就是全局价（不带 `source`、`rate`、`rate_source`）；`groups` 是调用者可用（`/me/groups` 的范围）且提供该模型的分组，可以为空 |
-| 带 `group_id` | `{group: {id, name}, rate_multiplier, rate_source, prices: [{model, mode, config, expression, source, rate, rate_source}]}` | 该账号分组提供且能计费（有启用的全局价）的模型；每行是调用者在该账号分组的标价（账号分组的模型价格 → 全局价，`source` 为 `group` \| `global`；出自本节点给请求计费用的价格快照），形状是 §97.6 的 `PriceDef`。表达式不改写，配置不缩放。每行的 `rate` 是调用者调这个模型实际付的倍率（四层取一：用户分组模型倍率 → 用户分组倍率 → 模型倍率 → 基本倍率，§97.1），`rate_source` 是它的来源（`segment_model` \| `segment` \| `group_model` \| `group`），实付 = 标价 × `rate`，与实际扣费一致。顶层 `rate_multiplier` 是调用者在该账号分组不含模型的倍率（用户分组倍率或基本倍率），`rate_source` 是它的来源（`segment` \| `group`） |
+| 不带 `group_id` | `{group: null, rate_multiplier: "1", prices: [{model, mode, config, expression, groups: [{id, name}]}]}` | 全部已启用的全局价，价格就是全局价（不带 `source`、`rate`、`rate_source`）；`groups` 是调用者可用（`/me/groups` 的范围）且提供该模型的分组，可以为空；只有账号分组模型价格、没有全局价的模型不在这里列出，带 `group_id` 才看得到（§97.1） |
+| 带 `group_id` | `{group: {id, name}, rate_multiplier, rate_source, prices: [{model, mode, config, expression, source, rate, rate_source}]}` | 该账号分组提供且能计费（有该账号分组的模型价格或启用的全局价）的模型；每行是调用者在该账号分组的标价（账号分组的模型价格 → 全局价，`source` 为 `group` \| `global`；出自本节点给请求计费用的价格快照），形状是 §97.6 的 `PriceDef`。表达式不改写，配置不缩放。每行的 `rate` 是调用者调这个模型实际付的倍率（四层取一：用户分组模型倍率 → 用户分组倍率 → 模型倍率 → 基本倍率，§97.1），`rate_source` 是它的来源（`segment_model` \| `segment` \| `group_model` \| `group`），实付 = 标价 × `rate`，与实际扣费一致。顶层 `rate_multiplier` 是调用者在该账号分组不含模型的倍率（用户分组倍率或基本倍率），`rate_source` 是它的来源（`segment` \| `group`） |
 
 - 调用者不可用的分组（不存在、已停用、私有且没有授权给调用者所在的用户分组）回 404；`group_id` 不是正整数回 400 `invalid_argument`。
 - “分组提供的模型”按分组里的账号算（§97.1），所以带 `group_id` 时不再与该分组的 API Key 读到的 `GET /key/prices` 相同：后者仍是分组模型名单放行的全部已启用模型（§17.1）。两者的标价与倍率按同一套规则解析，表达方式不同：这里给标价和每个模型自己的倍率；`GET /key/prices` 的读者只乘一个倍率，模型倍率与它的比值已经折进返回的价格（§97.6）。
@@ -6413,8 +6424,8 @@ type KVBatch interface {
 UI 3.8 及以前，`SPageHeader` 只有在自己的 `title` 与路由标题文字完全相同、且没有 `#before` / `#title-extra` 时，才把说明和操作交给顶栏。标题不同名的页面（个人设置、全站概览、全站日志、用量概览、使用日志）、没有路由标题的插件页面（`/p/:plugin/:page`）、带返回按钮或徽章的页面（价格来源、价格编辑、价格同步、插件详情、插件设置）都在页面里另画一行标题。
 
 - **规则。** 页面声明，顶栏显示：直接处在控制台外壳下的 `SPageHeader` 总是把 `title`、`description` 交给顶栏，不比较文字。顶栏标题取页面给的，页面还没给时（加载中、没有 `SPageHeader` 的页面）取路由 `meta.title`。侧栏菜单名（`nav.items.*`）和面包屑不受影响，可以与页面标题不同。
-- **`@sub2api/ui`。** `provideTitleContext(title, sink?)`：第二个参数由原来的 `description`、`actions` 两个参数改为 `PageHeadSink`（`{ head: Ref<PageHead | null>, extra?: string, actions?: string }`，`extra`、`actions` 是顶栏里两个容器的选择器；UI 4.2 去掉 `actions`，§133）；`PageHead` 是 `{ owner, title, description }`，`owner` 标识写入它的页头，页头卸载时只清自己写的那份。新导出类型 `PageHead`、`PageHeadSink`。只传 `title` 的调用（`STitleScope`、插件自己的嵌套范围）不变。
-- **宽屏（≥768px）。** `#before`、`#title-extra` 传送到顶栏标题后（`#s-page-title-extra`）。原来“没有 `#filters` / `#filters-primary` 时 `#actions` 传送到顶栏（`#s-page-actions`）”的规则已被 §133 取代：UI 4.2 起 `#actions` 总在页面里，与筛选是一行，`PageHeadSink.actions` 与 `#s-page-actions` 删除。
+- **`@sub2api/ui`。** `provideTitleContext(title, sink?)`：第二个参数由原来的 `description`、`actions` 两个参数改为 `PageHeadSink`（`{ head: Ref<PageHead | null>, extra?: string, actions?: string }`，`extra`、`actions` 是顶栏里两个容器的选择器；UI 4.3 去掉 `actions`，§133）；`PageHead` 是 `{ owner, title, description }`，`owner` 标识写入它的页头，页头卸载时只清自己写的那份。新导出类型 `PageHead`、`PageHeadSink`。只传 `title` 的调用（`STitleScope`、插件自己的嵌套范围）不变。
+- **宽屏（≥768px）。** `#before`、`#title-extra` 传送到顶栏标题后（`#s-page-title-extra`）。原来“没有 `#filters` / `#filters-primary` 时 `#actions` 传送到顶栏（`#s-page-actions`）”的规则已被 §133 取代：UI 4.3 起 `#actions` 总在页面里，与筛选是一行，`PageHeadSink.actions` 与 `#s-page-actions` 删除。
 - **窄屏。** 顶栏只放标题；`#before`、`#title-extra`、`#actions` 留在页面里，说明不显示（同 UI 3.8）。
 - **嵌套范围。** 标签页、`STitleScope`、弹窗、抽屉没有 `sink`，里面的 `SPageHeader` 行为与 UI 3.8 相同。
 - **控制台。** `useAppStore().pageHead` 取代 `pageDescription`；顶栏标题可截断（`data-testid="page-title"`）。价格来源、价格编辑、价格同步页去掉页头里的「返回」按钮（面包屑已有上级页面）；插件授权确认页、插件发布进度页由手写 `<h1>` 改为 `SPageHeader`，发布进度页回插件详情的链接改为页头操作按钮。
@@ -6496,7 +6507,7 @@ kind: users | groups | api-keys | accounts | models | proxies
 | groups | `groups` | `name` | 无（分组没有平台字段，平台由账号类型推出，§13） | `status` | — |
 | api-keys | `api_keys`（所属用户取自 `users`） | `name` | 全量：所属用户的 `email`；`mine=true`：`key_prefix` | `status`（不反映过期） | 已软删除 |
 | accounts | `accounts` | `name` | `plugin_key` | `status` | 已软删除 |
-| models | `model_prices` | `model` | 无 | 无 | — |
+| models | `model_prices` 并上 `price_rules` 的模型名（§97.1：账号分组自己定价、没有全局价的模型也在内） | `model` | 无 | 无 | — |
 | proxies | `proxies` | `name` | `protocol://host:port` | `status` | — |
 
 | kind | 全量（不带 `mine`） | `mine=true` |
@@ -6505,7 +6516,7 @@ kind: users | groups | api-keys | accounts | models | proxies
 | groups | `group:read`：全部分组，含已停用；只有 `account:group:bind`：调用者自己可用的分组（与 `mine=true` 同一范围，即 own 级账号可绑定的分组，`segment.UsableGroup`）；两者都没有：调用者自己的权限范围里点名的分组（任一动作的 `group/G`、`group/G/account/X`，访问密钥按密钥自己的权限，`PermissionSet.ScopeGroups`，`Entity.Named`），让控制台按名称显示自己的范围，一个都没有时 403（权限加固期 4 验证修复） | 任何登录用户：`GET /me/groups` 的范围（状态 `active`，且公开或已授权给调用者所在的用户分组，§97） |
 | api-keys | `usage:all:read`：全部用户的密钥（使用记录本来就向它展示所有密钥的 id、名称、所属用户） | `apikey:self:manage`：调用者自己的密钥 |
 | accounts | `account:read`：全部账号；只有 `account:own:read` 时自动只看自己创建的（同 `GET /accounts`，§21.2） | `account:read` 或 `account:own:read`：只看自己创建的 |
-| models | `price:read`：价格表里的全部模型，含已停用的价格 | `apikey:self:manage`：已启用的价格里，调用者任一可用分组（`/me/groups` 的范围）的模型名单放行的模型（0.1.279 时这等于 `GET /me/prices` 对每个可用分组结果的并集；§97 起 `/me/prices?group_id=` 只列分组里的账号提供的模型，所以这个范围是各可用分组 `/me/prices?group_id=` 结果并集的超集，§79.5） |
+| models | `price:read`：价格表里的全部模型，含已停用的价格，以及账号分组的模型价格所在的模型 | `apikey:self:manage`：调用者任一可用分组（`/me/groups` 的范围）里有标价（启用的全局价或该账号分组的模型价格，`group.PricedModels`）且该分组的模型名单放行的模型（0.1.279 时这等于 `GET /me/prices` 对每个可用分组结果的并集；§97 起 `/me/prices?group_id=` 只列分组里的账号提供的模型，所以这个范围是各可用分组 `/me/prices?group_id=` 结果并集的超集，§79.5） |
 | proxies | `proxy:read`：全部代理；只有 `proxy:own:read` 时自动只看自己创建的（同 `GET /proxies`） | `proxy:read` 或 `proxy:own:read`：只看自己创建的 |
 
 - accounts 与 `GET /accounts` 的一处不同：插件已停用或卸载的账号也能查到（列表默认隐藏它们）。选择器用来筛使用记录，这些账号的记录还在。
@@ -6521,7 +6532,7 @@ kind: users | groups | api-keys | accounts | models | proxies
 - 查找协议（参数解析、“名称包含或 id 相等”、排序、`more`、响应）只在 `server/internal/lookup/lookup.go` 实现一次；每个 kind 是 `entities.go` 里的一条 `Entity` 描述（表、id 列、名称列、额外参与 `q` 匹配的列 `Search`、hint 表达式、状态列、软删除条件、权限、`mine` 范围、附加参数）。新增 kind 只加一条描述。描述集中放在 lookup 包而不是分散到各模块：每条只有几行，读的表使用记录模块本来就按名称连接，放在一起就是这张权限表。
 - 没有迁移和新索引。名称匹配是 `ILIKE '%q%'`，不带 `q` 时按名称取前 `limit + 1` 行，都是顺序扫描加 top-N 排序，与现有列表接口的 `q` 同一量级。只有 users、api-keys 的全量查找会扫大表（要 `user:read` / `usage:all:read`）；`mine`、“自己创建的”、`user_id` 和 `ids` 走已有索引或只读小表。api-keys 的所属用户用子查询取，只对截断后返回的行读 `users`。合成数据实测（PostgreSQL 16，100 万用户、200 万密钥）：这两种全量查找每次约 0.1 到 0.5 秒（不并行时约 1 秒），其余在 30 毫秒内。表到这个规模以后再给名称列加 `pg_trgm` 索引。
 - 旧核心（滚动窗口内）没有这条路由，返回 404 `not_found`。
-- 测试：`server/internal/lookup/lookup_test.go` 的 `TestLookup`（PostgreSQL，表驱动：匹配与排序、`ids`、`limit` 与 `more`、通配符转义、按显示名找用户、软删除、各 kind 的权限与范围、范围外的行用 `ids` 或 `q` 里的 id 也查不到、`user_id`、`prefer_group_id`、响应形状、400 / 403 / 404）、`TestLookupAccessKey`（访问密钥按自己的权限调用）、`TestLookupMineIsTheSelfServiceRange`（`mine=true` 的分组与同一个库上真实的 `/me/groups` 结果一致；`mine=true` 的模型是各分组 `/me/prices?group_id=` 并集的超集）。
+- 测试：`server/internal/lookup/lookup_test.go` 的 `TestLookup`（PostgreSQL，表驱动：匹配与排序、`ids`、`limit` 与 `more`、通配符转义、按显示名找用户、软删除、各 kind 的权限与范围、范围外的行用 `ids` 或 `q` 里的 id 也查不到、`user_id`、`prefer_group_id`、响应形状、400 / 403 / 404）、`TestLookupAccessKey`（访问密钥按自己的权限调用）、`TestLookupMineIsTheSelfServiceRange`（`mine=true` 的分组与同一个库上真实的 `/me/groups` 结果一致；`mine=true` 的模型是各分组 `/me/prices?group_id=` 并集的超集）、`TestLookupGroupOnlyModels`（只有账号分组模型价格的模型在价格表里，`mine=true` 只在那个分组按其模型名单放行时出现）。
 
 ### 96.6 控制台：UI 3.11 与 `EntityPicker`
 
@@ -6572,7 +6583,7 @@ kind: users | groups | api-keys | accounts | models | proxies
 | 词 | 含义 | 英文、字段 |
 |---|---|---|
 | 全局价 | §17 价格表里按模型设置的那条价格 | global price；`base` |
-| 原价 | 按全局价算的费用：全局价 × 用量，不含模型价格和倍率 | base price；`base_cost`、`standard_cost`、`billing_detail.cost` |
+| 原价 | 按全局价算的费用：全局价 × 用量，不含模型价格和倍率；模型没有全局价、按模型价格计费时等于标价费用 | base price；`base_cost`、`standard_cost`、`billing_detail.cost` |
 | 模型价格 | 账号分组给一个模型定的自己的价格（只有独立价格一种） | `price_rules`；接口里 `price` / `model_prices` |
 | 标价 | 倍率之前的价格：有模型价格时是它，否则是全局价。标价 × 用量是标价费用 | list price；`list_price`、`list_cost` |
 | 倍率 | 四层里生效的那一个数（基本倍率、模型倍率、用户分组倍率、用户分组模型倍率之一） | `rate_multiplier`、`rate` |
@@ -6594,16 +6605,17 @@ kind: users | groups | api-keys | accounts | models | proxies
 
 **模型价格**（每个账号分组在每个模型上至多一条）：只有独立价格一种（接口里没有 `kind`，`price_rules.kind` 恒为 `custom`）：一个自己的价格，取代全局价，不随全局价变化；和全局价一样写（可视化或表达式，任意档位、条件、加价规则），校验也与全局价相同，与全局价是什么形状无关（§131.4）。
 
-- 模型没有启用的全局价时不能计费，模型价格不生效，请求被拒（§17.3）；保存模型价格也要求模型有启用的全局价。
-- 模型价格没有失效一说：全局价之后怎么改，它照样取代全局价。
+- 模型价格自己就能计费，不要求模型有全局价：可以设在任何模型名上，包括没有全局价、还没有账号支持的模型。有全局价时它取代全局价；没有时这个模型在本账号分组按它计费，在别的账号分组仍没有标价。模型名去掉首尾空白后必须是完整的模型 ID（与全局价的模型同一条规则，`manifest.ValidModelID`）。2026-11-23 用户决定。
+- 模型在请求的账号分组里没有标价（既没有本账号分组的模型价格，也没有启用的全局价）时不能计费，请求被拒（§17.3），绝不按 0 计费。
+- 模型价格没有失效一说：全局价之后怎么改（包括停用、删除），它照样是这个模型在本账号分组的标价。
 - 可以设在账号分组还不提供的模型上：先定价，再接入提供这个模型的账号；没有请求到得了时它留着不起作用。
 
 **模型倍率与用户分组模型倍率**
 
-- 账号分组的模型倍率和用户分组模型倍率都要求模型有启用的全局价，账号分组提不提供它都可以（与模型价格相同）；用户分组模型倍率另要求账号分组存在。删除（倍率写 `null`）总是允许。
+- 账号分组的模型倍率和用户分组模型倍率可以设在任何模型名上（同模型价格的模型名规则），不要求模型有标价，账号分组提不提供它都可以；模型有了标价（本账号分组的模型价格或启用的全局价）才起作用，在那之前它留着不起作用，请求照样被拒。用户分组模型倍率另要求账号分组存在。删除（倍率写 `null`）总是允许。2026-11-23 用户决定。
 - 所有倍率（基本倍率、模型倍率、用户分组倍率、用户分组模型倍率）都用 `core.ParseRate` 校验：不小于 0、小于 1000000、最多 4 位小数，0 表示免费。
 
-**账号分组提供的模型**：账号分组内未删除的账号声明的模型；只要有一个账号没有声明模型（不限模型），再加上全部已启用全局价的模型；最后经账号分组的模型名单（白名单或黑名单）过滤。`GET /groups` 的 `model_count` 和 `?model=`、价格试算、`GET /me/prices?group_id=` 用的都是这个范围；定价表列出这个范围，再并上有模型价格或模型倍率的模型（97.6）。
+**账号分组提供的模型**：账号分组内未删除的账号声明的模型；只要有一个账号没有声明模型（不限模型），再加上在本账号分组有标价的模型（全部已启用全局价的模型和本账号分组有模型价格的模型）；最后经账号分组的模型名单（白名单或黑名单）过滤（`group.Models.Offers`、`group.OfferedModels`）。`GET /groups` 的 `model_count` 和 `?model=`、价格试算、`GET /me/prices?group_id=` 用的都是这个范围；定价表列出这个范围，再并上有模型价格、模型倍率或用户分组模型倍率的模型（97.6）。
 
 **实际倍率**：保存时每一层都已是 `numeric(10,4)` 存得下的数，解析只是挑一层，不再相乘、取整或封顶；生效的那个数原样写进 `usage_logs.rate_multiplier numeric(10,4)`，首次结算、结算重试和对账都用它。取整（4 位小数，四舍五入）和封顶（999999.9999）只出现在迁移 0124 的换算里（97.10）。
 
@@ -6633,7 +6645,7 @@ DDL 以迁移文件为准（`0095_segments.sql`、`0096_usage_base_cost.sql`、`
 
 **标价与模型的倍率**（`billing` 的价格快照）：快照同时载入全局价、`price_rules`、`group_model_rates`、`segment_model_rates`，同一个 TTL、同一个 `config:changed` 失效；同一个失效代次的并发载入合并成一次读库（`singleflight`，载入不随某个请求取消）。
 
-- `core.Pricer.Resolve(ctx, PriceQuery{Model, GroupID}, segmentID, levels) (*PriceRule, RateLevels, error)`：一次调用从**同一份快照**取标价和这个模型的倍率层。模型没有启用的全局价返回 `ErrPriceNotConfigured`（§17.3），这时不看模型价格；否则取 `(账号分组, 模型)` 的模型价格，没有就是全局价；`GroupID` 为 0 只取全局价。返回的 `RateLevels` 是在鉴权给的两层（`levels`）上补上这个模型的模型倍率和用户分组 `segmentID` 的用户分组模型倍率。标价和倍率出自同一份快照，快照在两者之间刷新也不会让一个调用拿到新标价配旧倍率。
+- `core.Pricer.Resolve(ctx, PriceQuery{Model, GroupID}, segmentID, levels) (*PriceRule, RateLevels, error)`：一次调用从**同一份快照**取标价和这个模型的倍率层：取 `(账号分组, 模型)` 的模型价格，没有就是全局价，有没有全局价都一样（`priceSnapshot.resolve`）；两者都没有返回 `ErrPriceNotConfigured`（§17.3）；`GroupID` 为 0 只取全局价。返回的 `RateLevels` 是在鉴权给的两层（`levels`）上补上这个模型的模型倍率和用户分组 `segmentID` 的用户分组模型倍率。标价和倍率出自同一份快照，快照在两者之间刷新也不会让一个调用拿到新标价配旧倍率。
 - 生效的倍率只由 `core.RateLevels.Rate()` 选出（97.9）。
 
 网关（`gateway/pipeline_billing.go` 的 `prepareBilling`、`priceOf`）：主模型的标价和倍率一次取得（`Pricer.Resolve`），成功后才写进使用记录的 `Price`、`RateMultiplier`、`RateSource`，失败时记录里不会留下半个结果；引用模型（`prepareReferencedPrices`）各按自己的模型同样一次取得；附加和替换分项按准入它的模型计价，引用模型用该模型的价格和倍率，记在请求模型上的分项沿用主模型的（§120）。计费方式准入看 `BillingType()`。价格入参的捕获（`Pricer.Inputs`）取生效表达式和 `Base` 两条表达式读的请求参数、请求头的并集：模型价格可以取代任何全局价，结算时还要用同一份入参再算一次全局价得出原价。原价只用于展示：全局价算不出时原价记成标价费用、`billing_detail.base_fallback: true`、打一条警告日志，照常扣费（`usage/pricing.go` 的 `withRule`）；带替换项或附加项的记录，任一分项回退时顶层也标 `base_fallback`，分项明细里各自也带（`usage/additional.go`）。
@@ -6644,8 +6656,9 @@ DDL 以迁移文件为准（`0095_segments.sql`、`0096_usage_base_cost.sql`、`
 |---|---|---|---|
 | 全局价 | 空 | 全局价的 | nil |
 | 模型价格 | `group` | 模型价格自己的（保存时生成并存下，同时写进 `model_price_history`） | 全局价的 `{Expression, ExprHash}`，用来算原价 |
+| 模型价格，模型没有全局价 | `group` | 同上 | nil |
 
-- `Source` 为空就是全局价，常量 `core.PriceSourceGlobal`（`global`）只用在给人看的接口里；冻结到使用记录时省略（97.4）。`ID` 始终取全局价的，`usage_logs.price_id` 一直指向全局价那一行；命中模型价格的记录 `usage_logs.expr_hash` 是模型价格表达式的哈希，在 `model_price_history` 里查得到。`VideoOnly`、`PerRequest` 取生效表达式的（`billing.traitsOf`）。
+- `Source` 为空就是全局价，常量 `core.PriceSourceGlobal`（`global`）只用在给人看的接口里；冻结到使用记录时省略（97.4）。`ID` 始终取全局价的，`usage_logs.price_id` 一直指向全局价那一行；模型没有全局价时 `ID` 为 0，`price_id` 为 `NULL`。`Model` 是请求的模型。命中模型价格的记录 `usage_logs.expr_hash` 是模型价格表达式的哈希，在 `model_price_history` 里查得到。`VideoOnly`、`PerRequest` 取生效表达式的（`billing.traitsOf`）。
 - `PriceRule.Scale` 只为 0124 之前冻结、还没结算完的记录保留（兼容代码，删除条件见 97.4）：`Resolve` 不再设它；结算时由 `usage` 的 `frozenRule.rate`（倍率 × `scale`，没有 `scale` 就是倍率本身）应用，`frozenRule.applied` 据此区分标价费用与原价。
 - 插件的只读报价 `PriceModelUsage`（`billing/usage_quote.go`）仍按全局价、倍率 1。`POST /prices/preview` 的 `group_id` 只取账号分组基本倍率。
 - WebSocket 每一轮（`response.create`）开始之前用握手时的 API Key 重新鉴权（`gateway/websocket.go` 的 `refresh`，§35），标价和倍率每一轮重新解析：连接期间改了授权或倍率，下一轮就生效；授权被撤销时这一轮 403 并关闭连接。
@@ -6665,7 +6678,7 @@ DDL 以迁移文件为准（`0095_segments.sql`、`0096_usage_base_cost.sql`、`
 | `rate_source` | 倍率来源：`segment_model` \| `segment` \| `group_model` \| `group`。0124 之前的记录还可能是 `discount`（已删除的全场折扣），只作记录 |
 | `price_source` | 标价来源：`group`（模型价格）；标价是全局价时省略。0123 之前的记录可能是 `segment`（已删除的用户分组专属价） |
 | `scale` | 只在 0124 之前命中“按倍数”规则的记录上有：规则的 N |
-| `base` | 只在命中模型价格时有：当时的全局价表达式，用来算原价 |
+| `base` | 只在命中模型价格、模型又有全局价时有：当时的全局价表达式，用来算原价 |
 
 - 倍率来源是 `group`、标价是全局价时，整个 `pricing` 省略。
 - 附加和替换分项（`core.PricedUsage`）整条持久化自己的 `Price` 和 `RateMultiplier`，`Source`、`Base`（旧记录还有 `Scale`）随它一起冻结。
@@ -6683,17 +6696,17 @@ DDL 以迁移文件为准（`0095_segments.sql`、`0096_usage_base_cost.sql`、`
          OR jsonb_path_exists(billing_detail, '$.inputs.replacement[*].Price.Scale'));
   ```
 
-- 读回冻结价格的两条 SQL 共用 `usage/settle.go` 的 `frozenPrice`：先按 `expr_hash` 在 `model_price_history` 里找；找不到时回退到 `price_id` 指向的全局价现在的表达式，但只对**没有命中模型价格**的记录回退（`inputs.pricing.base` 为空）。命中模型价格而历史表缺行时：重试进 `failed`（`price expression not found`），对账保持 `reserved` 并在 `pending_settlements.last_error` 留痕，主项缺表达式的带分项记录整条进 `failed`；都不会静默按全局价扣费。正常路径下不会缺行：保存模型价格和写历史表在同一个事务里。
+- 读回冻结价格的两条 SQL 共用 `usage/settle.go` 的 `frozenPrice`：先按 `expr_hash` 在 `model_price_history` 里找；找不到时回退到 `price_id` 指向的全局价现在的表达式，但只对**没有命中模型价格**的记录回退（`inputs.pricing.base` 为空；按没有全局价的模型价格计费的记录 `price_id` 为 `NULL`，也不会回退）。命中模型价格而历史表缺行时：重试进 `failed`（`price expression not found`），对账保持 `reserved` 并在 `pending_settlements.last_error` 留痕，主项缺表达式的带分项记录整条进 `failed`；都不会静默按全局价扣费。正常路径下不会缺行：保存模型价格和写历史表在同一个事务里。
 
 ### 97.5 三个金额
 
 | 名称 | 含义 | 存放 |
 |---|---|---|
-| 原价 `base_cost` | 全局价 × 用量 | `usage_logs.base_cost`；`billing_detail.cost`（倍率前、全局价）。命中模型价格而全局价算不出时等于标价费用，`base_fallback` 为 `true`（97.3） |
-| 标价费用 `list_cost` | 标价 × 用量 | `billing_detail.list_cost`，只在命中模型价格时写（0124 之前命中按倍数规则的记录也有） |
+| 原价 `base_cost` | 全局价 × 用量 | `usage_logs.base_cost`；`billing_detail.cost`（倍率前、全局价）。命中模型价格而全局价算不出时等于标价费用，`base_fallback` 为 `true`（97.3）；模型没有全局价时也等于标价费用（没有 `base_fallback`） |
+| 标价费用 `list_cost` | 标价 × 用量 | `billing_detail.list_cost`，只在命中模型价格、模型又有全局价时写（0124 之前命中按倍数规则的记录也有）；没有时标价费用就是 `cost` |
 | 实付 `total_cost` | 标价费用 × 倍率 | `usage_logs.total_cost` |
 
-- 三个数由 `usage` 的 `priceOne` 对一个计费项一次算出：没有模型价格时原价 = 标价费用 = 表达式的结果；命中模型价格时标价费用 = 模型价格表达式的结果，原价 = 全局价表达式（`base`）再求值一次，用它自己的用量归一化。主项和每个附加、替换分项各算各的，三个数都累加。`total_cost` 在哪里写，`base_cost` 就在哪里同步写；关闭记录和置为免费时写 0。
+- 三个数由 `usage` 的 `priceOne` 对一个计费项一次算出：没有模型价格或模型没有全局价（`inputs.pricing.base` 为空）时原价 = 标价费用 = 表达式的结果；命中模型价格且有全局价时标价费用 = 模型价格表达式的结果，原价 = 全局价表达式（`base`）再求值一次，用它自己的用量归一化。主项和每个附加、替换分项各算各的，三个数都累加。`total_cost` 在哪里写，`base_cost` 就在哪里同步写；关闭记录和置为免费时写 0。
 - `usage_logs.rate_multiplier` 是这次请求生效的那个倍率（四层之一），`total_cost ÷ rate_multiplier` 是标价费用。0124 之前命中按倍数规则的记录，`rate_multiplier` 不含规则倍数，`total_cost ÷ rate_multiplier` 是原价 × N。
 - `billing_detail.cost` 保持全局价口径，下面三处因此不随售价变化：账号原始费用（§73.2，`account_usage_raw_cost` 优先读它）；统计里的“原价”（`standard_cost` = `COALESCE(base_cost, <原公式>)`，§66.1）；导出的原价一列（§66.5）。
 - 使用记录详情在倍率旁显示来源（用户分组模型倍率 / 用户分组倍率 / 模型倍率 / 基本倍率），命中模型价格时显示标价来源和标价费用；数据来自 `inputs.pricing` 和 `list_cost`。
@@ -6713,11 +6726,11 @@ DDL 以迁移文件为准（`0095_segments.sql`、`0096_usage_base_cost.sql`、`
 | `SegmentGroupSetting` | 一个用户分组在一个账号分组的设置：`segment: SegmentRef`、`group: {id, name, description, status, visibility, rate_multiplier, platforms?}`、`accessible`（公开或已授权）、`granted`、`rate_override`（用户分组倍率，`null` = 跟随）、`rate: EffectiveRate`（不含模型的那两层：用户分组倍率或基本倍率）、`model_rates: ModelRate[]`（该用户分组在这个账号分组的用户分组模型倍率，按模型）、`member_count` |
 | `CustomPrice`（接口里的模型价格） | `{mode: "visual", config, expression?}` 或 `{mode: "expression", expression}`：与 `/prices` 的同名字段写法相同（可视化的 `config` 是任意 `{tiers, rules}`，`expression` 不读、返回时是生成的那条；表达式的 `config` 省略或 `{}`，`expression` 必填），§131.4。没有 `kind`：模型价格只有独立价格一种，响应不输出 `kind`，请求里的 `kind` 不读（`price_rules.kind` 列恒为 `custom`，97.2） |
 | `PriceDef` | `{mode, config, expression}`：一个价格，字段与 `/prices` 相同 |
-| `ModelPriceRow` | 定价表的一行：`model`、`offered`（账号分组现在是否提供它；`false` 的行是有模型价格或模型倍率、现在却不提供的模型）、`base: PriceDef \| null`（全局价，`null` = 没有，不能计费）、`price: CustomPrice \| null`（模型价格）、`rate`（模型倍率，`null` = 基本倍率） |
+| `ModelPriceRow` | 定价表的一行：`model`、`offered`（账号分组现在是否提供它；`false` 的行是有模型价格、模型倍率或用户分组模型倍率、现在却不提供的模型）、`base: PriceDef \| null`（全局价，`null` = 没有：按模型价格计费，`price` 也是 `null` 时不能计费）、`price: CustomPrice \| null`（模型价格）、`rate`（模型倍率，`null` = 基本倍率） |
 | `GroupModelPrices` | `{group: {id, name}, rate: EffectiveRate, models: ModelPriceRow[]}`；`rate` 是基本倍率，`models` 按模型名排序 |
 | `CatalogPrice` | `{model, price: PriceDef}`：一条启用的全局价 |
 
-`list_price`（试算、`/me/prices?group_id=` 的价格）由 `billing` 的 `listPrice` 得出：有模型价格时是它自己的价格（`expression` 是保存时生成的那条），否则是全局价原样；没有全局价时为 `null`。展示路径不改写表达式、不缩放配置。唯一的例外是 GET `/key/prices`（见下）。
+`list_price`（试算、`/me/prices?group_id=` 的价格）由 `billing` 的 `listPrice` 得出：有模型价格时是它自己的价格（`expression` 是保存时生成的那条），否则是全局价原样（模型没有全局价时也是模型价格）；两者都没有时为 `null`。展示路径不改写表达式、不缩放配置。唯一的例外是 GET `/key/prices`（见下）。
 
 **账号分组的写入：模型价格、模型倍率、用户分组倍率随账号分组一次提交**
 
@@ -6725,10 +6738,10 @@ POST `/groups`、PATCH `/groups/:id`（`group:manage`）在账号分组自己的
 
 | 列表 | 项 | 含义与校验 |
 |---|---|---|
-| `model_prices` | `{model, rule: CustomPrice \| null}` | 设或删一个模型的模型价格。设时模型必须有启用的全局价（字段 `model_prices.<i>.model`），价格按全局价的规则校验（`model_prices.<i>.rule`），两项错误同时报，不因前一项失败而跳过后一项；`mode` 不是 `visual` / `expression`（含旧的 `{kind: "multiplier", multiplier}`）报 `model_prices.<i>.rule`，“mode 必须为可视化（visual）或表达式（expression）” / “mode must be visual or expression”；删除总是允许。保存时存下生成的（或手写的）表达式并写进 `model_price_history`（97.4）。同一个模型出现多次：任一项删除就先删，最后一项是设置时以它为准 |
-| `model_rates` | `{model, rate: string \| null}` | 设或删一个模型的模型倍率。`rate` 必填，`null` = 删除（`model_rates.<i>.rate`）；设时模型必须有启用的全局价（`model_rates.<i>.model`），倍率按 `core.ParseRate`（`model_rates.<i>.rate`），两项错误同时报；同一个模型后面的项生效 |
+| `model_prices` | `{model, rule: CustomPrice \| null}` | 设或删一个模型的模型价格，任何模型名都可以，不要求有全局价（97.1）。模型名去掉首尾空白，为空报 `model_prices.<i>.model`（`required`，“模型必填” / “model is required”），不是完整的模型 ID 报同一字段（`invalid`，“完整的模型 ID：字母、数字和 . _ : / @ + -（不含通配符）” / “a complete model id: letters, digits and . _ : / @ + - (no wildcards)”，`core.ModelErrors`，删除时也查）；价格按全局价的规则校验（`model_prices.<i>.rule`），两项错误同时报，不因前一项失败而跳过后一项；`mode` 不是 `visual` / `expression`（含旧的 `{kind: "multiplier", multiplier}`）报 `model_prices.<i>.rule`，“mode 必须为可视化（visual）或表达式（expression）” / “mode must be visual or expression”；删除不看有没有价格。保存时存下生成的（或手写的）表达式并写进 `model_price_history`（97.4）。同一个模型出现多次：任一项删除就先删，最后一项是设置时以它为准 |
+| `model_rates` | `{model, rate: string \| null}` | 设或删一个模型的模型倍率，任何模型名都可以，不要求模型有标价，有了标价才起作用（97.1）。`rate` 必填，`null` = 删除（`model_rates.<i>.rate`）；模型名同 `model_prices` 的规则和文案（`model_rates.<i>.model`），倍率按 `core.ParseRate`（`model_rates.<i>.rate`），两项错误同时报；同一个模型后面的项生效 |
 | `segment_rates` | `{segment_id, granted?, rate: string \| null, remove?: true}` | 一个用户分组在本账号分组的授权和用户分组倍率。`granted` 没传 = 不动；`rate` 必填，`null` = 跟随，值按 `core.ParseRate`（`segment_rates.<i>.rate`）；用户分组不存在（`segment_rates.<i>.segment_id`）；同一个用户分组后面的项生效；既没有授权也没有倍率的行删除。`remove: true` 是“移除”：删除这个用户分组在本账号分组的授权、用户分组倍率和全部用户分组模型倍率，`granted`、`rate` 不读也不必填；用户分组不存在仍报 `segment_rates.<i>.segment_id`，调用者是它的成员仍 409；控制台“用户分组倍率”页的“移除”发它（`{granted: false, rate: null}` 只撤销授权、倍率改回跟随，用户分组模型倍率不动）。有 `remove` 项时提交后价格快照失效 |
-| `segment_model_rates` | `{segment_id, model, rate: string \| null}` | 一个用户分组在本账号分组对一个模型的用户分组模型倍率，即用户分组 `model_rates` 的另一个方向（同一张表 `segment_model_rates`、同一套校验和文案；项里的 `group_id` 可带但不读，取本账号分组）。两个列表各自的解码错误和条目错误一起返回。`rate` 必填，`null` 删除；用户分组不存在（`segment_model_rates.<i>.segment_id`）；设时模型名为空或模型没有启用的全局价（`segment_model_rates.<i>.model`）；倍率（`segment_model_rates.<i>.rate`），同一项的错误同时报。同一对 `(用户分组, 模型)` 后面的项生效；写在 `segment_rates` 之后，同一请求里“移除”一个用户分组再给它设的模型倍率照样生效。提交后价格快照失效。2026-11-23 用户要求（“账号分组里的用户分组倍率也能指定每个模型的倍率，和用户分组里指定账号分组的倍率一样，只是反向”） |
+| `segment_model_rates` | `{segment_id, model, rate: string \| null}` | 一个用户分组在本账号分组对一个模型的用户分组模型倍率，即用户分组 `model_rates` 的另一个方向（同一张表 `segment_model_rates`、同一套校验和文案；项里的 `group_id` 可带但不读，取本账号分组）。两个列表各自的解码错误和条目错误一起返回。`rate` 必填，`null` 删除；用户分组不存在（`segment_model_rates.<i>.segment_id`）；模型名同 `model_prices` 的规则和文案，不要求模型有标价（`segment_model_rates.<i>.model`）；倍率（`segment_model_rates.<i>.rate`），同一项的错误同时报。同一对 `(用户分组, 模型)` 后面的项生效；写在 `segment_rates` 之后，同一请求里“移除”一个用户分组再给它设的模型倍率照样生效。提交后价格快照失效。2026-11-23 用户要求（“账号分组里的用户分组倍率也能指定每个模型的倍率，和用户分组里指定账号分组的倍率一样，只是反向”） |
 
 - **整体校验，一个事务**：账号分组自己的字段和四个列表一起校验，所有字段错误一次返回，路径形如 `<列表>.<i>.<字段>`（`<i>` 是该项在请求列表里的原始位置），整个请求不改任何东西；列表本身不是数组时字段错误在列表名上。校验通过后，账号分组的行和各部分在同一个事务里写（新建时各部分拿到新 id），任何一步失败全部回滚。机制是 `core.GroupWritePart`：`billing`（`model_prices`、`model_rates`）和 `segment`（`segment_rates`、`segment_model_rates`）各实现 `PrepareGroupWrite`，`group` 读一次请求体、收齐字段错误、开事务按顺序 `Apply`，提交后跑各部分的 `AfterCommit`（`billing` 让价格快照失效），由 `app` 组装（`group.Service.Parts`）。
 - `segment_rates`、`segment_model_rates` 在事务里锁住列出的用户分组并再查一次存在；调用者本人是其中任一用户分组的成员时 409（见下面“自己所在用户分组的设置”）。
@@ -6758,7 +6771,7 @@ POST `/groups`、PATCH `/groups/:id`（`group:manage`）在账号分组自己的
 | 列表 | 项 | 含义与校验 |
 |---|---|---|
 | `group_rates` | `{group_id, granted?, rate: string \| null, remove?: true}` | 本用户分组在一个账号分组的授权和用户分组倍率，同 `segment_rates` 的另一个方向（同一个项结构，`segment_id` 可带但不读）。账号分组不存在（`group_rates.<i>.group_id`），`rate` 必填、`null` = 跟随（`group_rates.<i>.rate`）。`remove: true` 与 `segment_rates` 的相同：删掉本用户分组在该账号分组的授权、倍率和全部用户分组模型倍率；同一请求的 `model_rates` 在它之后写，照样生效 |
-| `model_rates` | `{group_id, model, rate: string \| null}` | 本用户分组在一个账号分组对一个模型的用户分组模型倍率，`rate` 必填，`null` 删除（`segment_id` 可带但不读，取本用户分组）。账号分组不存在（`model_rates.<i>.group_id`）；设时模型名为空或模型没有启用的全局价（`model_rates.<i>.model`，与账号分组的 `model_rates` 同一条规则、同一个文案）；倍率（`model_rates.<i>.rate`）。同一项的错误同时报 |
+| `model_rates` | `{group_id, model, rate: string \| null}` | 本用户分组在一个账号分组对一个模型的用户分组模型倍率，`rate` 必填，`null` 删除（`segment_id` 可带但不读，取本用户分组）。账号分组不存在（`model_rates.<i>.group_id`）；模型名同账号分组 `model_prices` 的规则和文案，不要求模型有标价（`model_rates.<i>.model`）；倍率（`model_rates.<i>.rate`）。同一项的错误同时报 |
 
 - 带倍率列表时，事务里锁住用到的账号分组并再查一次存在，再做“自己所在用户分组”的检查（与账号分组一侧同一个顺序、同一段代码：`segment` 包的 `rateWrite`，两个方向是同一批行）；遇到并发冲突回 409（`core.ChangedMeanwhile`，同上）。同一对 `(账号分组)` 或 `(账号分组, 模型)` 后面的项生效；写入按固定顺序进行，两个写同样行的请求不会死锁。`model_rates` 提交后让价格快照失效。
 
@@ -6768,7 +6781,7 @@ POST `/groups`、PATCH `/groups/:id`（`group:manage`）在账号分组自己的
 
 | 接口 | 权限 | 说明 |
 |---|---|---|
-| GET `/groups/:id/model-prices` | `group:read` | `GroupModelPrices`。行是账号分组提供的模型并上有模型价格或模型倍率的模型，`offered` 区分两者；全部出自本节点给请求计费用的价格快照。账号分组不存在 404。只读：写入走 POST/PATCH `/groups` |
+| GET `/groups/:id/model-prices` | `group:read` | `GroupModelPrices`。行是账号分组提供的模型并上有模型价格、模型倍率或用户分组模型倍率的模型（不论有没有全局价，没有时 `base` 为 `null`），`offered` 区分两者；全部出自本节点给请求计费用的价格快照。账号分组不存在 404。只读：写入走 POST/PATCH `/groups` |
 | GET `/pricing/catalog` | `group:read` | `CatalogPrice[]`，不分页：全部启用的全局价，按模型名排序，出自价格快照。定价页给账号分组添加模型时从这里选，新建账号分组（还没有 id）时也能用 |
 | POST `/pricing/quote` | `price:read` 且 `group:read`；带 `user_id` 还要 `user:read`，带 `segment_id` 还要 `segment:read` | 试算一个用户（或一个用户分组的任何成员）在某个账号分组调用某个模型付多少。缺哪一项权限回 403 `permission_denied`，`details.permission` 是缺的那一项；这个检查在请求体的其它校验之前 |
 
@@ -6782,12 +6795,12 @@ POST `/groups`、PATCH `/groups/:id`（`group:manage`）在账号分组自己的
 |---|---|
 | `segment` | 按哪个用户分组算的（`SegmentRef`） |
 | `accessible`、`access_source` | 能不能用这个账号分组及原因：`disabled`（账号分组已停用）\| `public` \| `grant`（私有，已授权）\| `none`（私有，没有授权）。不能用时照样给出价格和费用 |
-| `base`、`list_price` | 全局价和标价（`PriceDef`）；没有全局价时都是 `null` |
-| `price_source` | `group` \| `global`；没有全局价时是 `global` |
+| `base`、`list_price` | 全局价和标价（`PriceDef`）；没有全局价时 `base` 是 `null`，`list_price` 是模型价格；两者都没有时都是 `null` |
+| `price_source` | `group` \| `global`；两者都没有时是 `global` |
 | `price_levels` | `{group: CustomPrice \| null}`：账号分组的模型价格 |
 | `rate` | `EffectiveRate`：这个模型生效的倍率和来源 |
 | `rate_levels` | `{segment_model, segment, group_model, group}`：四层各自的值，没设的为 `null`（`group` 总有值）；`rate.source` 指出生效的那一层 |
-| `list_cost`、`cost` | 标价费用和实付；没有全局价时都是 `"0"` |
+| `list_cost`、`cost` | 标价费用和实付；没有标价（既没有模型价格也没有全局价，请求会被拒）时都是 `"0"` |
 
 - 金额走真实计费的同一条路径：`Resolve`、`core.RateLevels.Rate`、`Quote`；标价、模型价格、模型倍率与费用出自本节点同一份价格快照，用户分组的授权与倍率每次读库。它与 `POST /prices/preview` 的分工：后者试一条全局价的表达式，前者回答“这个人在这个账号分组实际付多少”。
 
@@ -6850,11 +6863,11 @@ POST `/groups`、PATCH `/groups/:id`（`group:manage`）在账号分组自己的
 | 引用一个账号分组 | `core.GroupRef{ID, Name}` | 各接口里的 `{id, name}` | 同一个形状只有一个类型 |
 | 锁定并校验命名用户分组 | `segment.LockNamed(ctx, tx, id *int64)` | 移回命名用户分组（`to`）、`iam` 新建用户时指定用户分组 | 锁住直到事务结束；不是命名用户分组时 `core.ErrNotFound` |
 | 删个人专属 | `segment.DropPersonal(ctx, tx, userIDs...)` | 成员移入命名用户分组、移回接口、`iam` 软删除用户 | 连同授权和倍率一起删（级联） |
-| 账号分组提供的模型 | `group.Models.Offers(model, priced, policy)`；对外入口 `group.OfferedModels(ctx, q, groups, priced)` | `model_count`、`?model=`、定价表、试算、`/me/prices` | 账号声明的模型由 `group.ProvidedModels` 读出，GET `/groups/:id/models` 直接返回它 |
-| 定价条数 | `group` 的 `ruleCounts`：`price_rules` 与 `group_model_rates` 的模型按账号分组去重计数 | GET `/groups` 的 `price_rule_count` | 与定价表列出的行同一口径 |
+| 账号分组提供的模型 | `group.Models.Offers(model, priced, policy)`；对外入口 `group.OfferedModels(ctx, q, groups, priced)`，`priced(groupID)` 给出在该账号分组有标价的模型（`billing` 传价格快照的 `priced`，`group` 自己用 `group.PricedModels` 读启用的全局价和 `price_rules`，实体查找的 models 也用它） | `model_count`、`?model=`、定价表、试算、`/me/prices` | 账号声明的模型由 `group.ProvidedModels` 读出，GET `/groups/:id/models` 直接返回它 |
+| 定价条数 | `group` 的 `ruleCounts`：`price_rules` 与 `group_model_rates` 的模型按账号分组去重计数 | GET `/groups` 的 `price_rule_count` | 与定价表里账号分组自己设了价格或倍率的行同一口径（只有用户分组模型倍率的行不算） |
 | 一个账号分组各模型的标价 | `billing` 的 `(*priceSnapshot).each(groupID, models, add)` | `/me/prices?group_id=`、`/key/prices` | 读本节点给请求计费用的那份快照 |
 | 待结算输入 | `usage` 的 `recordInputs(rec)` | 首次结算、写入待结算行 | 两边逐字段相同（97.4） |
-| 模型价格到展示用标价 | `billing` 的 `listPrice(base, rule) PriceDef` | 试算、`/me/prices?group_id=`、`/key/prices` | 有模型价格是它自己的价格，否则是全局价；不改写表达式、不缩放配置 |
+| 模型价格到展示用标价 | `billing` 的 `listPrice(global, rule) (*PriceDef, source)` | 试算、`/me/prices?group_id=`、`/key/prices` | 有模型价格是它自己的价格（有没有全局价都一样），否则是全局价，两者都没有时为 nil；不改写表达式、不缩放配置 |
 | 价格到导出用价格 | `billing` 的 `exportPrice(model, price, keyRate, modelRate)`：比值不为 1 时用同步价格的 `scalePrice` 折进价格，比值除不尽时写成表达式 `(原表达式) * 模型倍率 / 密钥倍率` | 只有 `GET /key/prices` | 下游只乘一个倍率，所以只有这里把模型倍率与密钥倍率的比值折进价格（97.6、§17.1） |
 
 包的分工与依赖方向：`segment` 管用户分组的读写（增删改、成员、个人专属、两个方向的授权与倍率、用户分组模型倍率）和账号分组写入里的 `segment_rates`；`billing` 管 `price_rules`、`group_model_rates` 的存取与校验、价格快照（含两张模型倍率表）、`Resolve`、定价表、试算、`/me/prices`、`/key/prices`，以及账号分组写入里的 `model_prices`、`model_rates`；`group` 管账号分组的行和写入事务；`apikey`、`iam`、`lookup`、`usage`、`gateway` 各改自己的接口和 SQL。依赖方向是 `billing → group, segment`，`apikey / group / iam / lookup → segment`，`segment` 不依赖它们，没有环；账号分组写入的两个部分经 `core.GroupWritePart` 注入 `group`（`app` 在构造阶段 `buildGroups` 建好 `segment` 服务并给 `group.Service.Parts` 赋值，注册路由时不再改它），`segment` 写完用户分组模型倍率经注入的 `RatesChanged` 通知 `billing`。成员列表放在 `iam`；`SegmentGroupSetting.group.platforms` 的平台查询由 `app` 注入 `segment`。
@@ -8669,7 +8682,7 @@ ALTER TABLE usage_logs
 
 ### 120.3 明细里的主用量与各项
 
-有附加用量或替代计费用量的记录，`billing_detail` 顶层的 `cost`、`list_cost`、`total_cost` 是主用量与全部分项之和；顶层的 `tier`、`rules`、`breakdown`、`rate_multiplier`、`inputs.pricing` 是主用量的。每一项在 `additional[i]` / `replacement[i]`（`usage.AdditionalBillingDetail`：`kind`、`model`、`price_id`、`expression_hash`、`free`、`billing_reason`）的 `detail` 里有它自己完整的明细（`breakdown`、`rate_multiplier`、`total_cost` 等），token 在 `inputs.additional[i]` / `inputs.replacement[i]` 的 `Tokens`，下标一一对应。免费项的 `detail` 是零值。
+有附加用量或替代计费用量的记录，`billing_detail` 顶层的 `cost`、`list_cost`、`total_cost` 是主用量与全部分项之和；顶层的 `tier`、`rules`、`breakdown`、`rate_multiplier`、`inputs.pricing` 是主用量的。每一项在 `additional[i]` / `replacement[i]`（`usage.AdditionalBillingDetail`：`kind`、`model`、`price_id`（全局价的 id；按没有全局价的账号分组模型价格计费的项为 0，§97.3）、`expression_hash`、`free`、`billing_reason`）的 `detail` 里有它自己完整的明细（`breakdown`、`rate_multiplier`、`total_cost` 等），token 在 `inputs.additional[i]` / `inputs.replacement[i]` 的 `Tokens`，下标一一对应。免费项的 `detail` 是零值。
 
 主用量计价时（有附加用量、没有替代计费用量），顶层另存主用量自己的三个数（2026-11-19 起；之前结算的记录没有）：
 
@@ -9258,6 +9271,8 @@ Go 类型是 `expr.VisualConfig`、`TierConfig`、`TierCond`、`TokenPrices`、`
   - `gt`、`gte`、`lt`、`lte`：值是数字；`param` 写成 `(param("k") ?? 0)`，缺的参数按 0 比。
 - **不变的输出**：原按 token 的五个单价、原可视化分档（0121）、原 `max_len` 分档与原按次价（0122）迁移过来后，没有规则的表达式与原生成器逐字节相同、`expr_hash` 不变（`expr/generate_test.go` 的 `TestGenerateMatchesOldGenerator` 用迁移后形状的配置对照原生成器的输出，迁移测试断言每行 config 生成的哈希等于所存的）。有规则时的写法见 131.3。
 
+- **控制台里空着的价格不是 0**（2026-11-23，所有者定“没价格就拒绝”，不能误存成免费）：可视化编辑器（全局价与账号分组自定义价同一个编辑器）里勾选了却没填的价格是“没填”，本地检查 `prices.local.tierBlank` 拦下保存（“档位“{name}”有价格没填：请填写价格（免费也要写 0），或取消勾选”），免费要显式写 0；没有全局价的模型的自定义价从空白档位起步。服务器照旧：config 里缺省的 `p`/`c` 按 0 计费，控制台载入已存的配置时把缺省的 `p`/`c` 补成 0（`visualPrice.editableTier`），所以 0122 转出的、API 写入的缺字段价格打开后照常可存、不显示改动。
+
 ### 131.3 规则写在表达式语言里（取代 `|||`）
 
 - 删掉规则分隔符 `|||`（`expr.RuleSeparator`）和按它切分表达式的做法。含 `|||` 的表达式不再能编译（`syntax`）。
@@ -9345,12 +9360,12 @@ Go 类型是 `expr.VisualConfig`、`TierConfig`、`TierCond`、`TokenPrices`、`
 - 混跑：旧控制台拿到新菜单时，账号、分组、代理在管理员组里平铺（区标签取旧的“网关”，管理员组不画区标题）；新控制台拿到旧菜单时，“账号/代理”目录里只有账号、代理，分组暂时没有侧栏入口（地址仍能打开）。刷新页面后恢复一致。
 
 
-## 133. 页面操作留在页面里（UI 4.2，2026-11-23，用户要求“全局通用采用账号列表的样式，统一放到页面里面”；无迁移，核心 0.1.311）
+## 133. 页面操作留在页面里（UI 4.3，2026-11-23，用户要求“全局通用采用账号列表的样式，统一放到页面里面”；无迁移，核心 0.1.311）
 
 取代 §94 里“没有筛选时 `#actions` 传送到顶栏”的规则；§94 其余不变。
 
 - **规则。** 页面的操作按钮不进顶栏，每个页面放在同一个位置，样式以账号列表为准。只有四个位置：① 页头工具栏右侧（默认）：`SPageHeader` 在页面里是一行，筛选在左、操作在右，没有筛选时操作单独一行靠右；② 有标签的页面放 `STabs #end`；③ 左列表、右详情的页面放列表卡片的 `SCard #footer`，一个 `block` 按钮（角色页“新建角色”）；④ 页面已有筛选条或工具条时放在其中“重置”“搜索”旁（用量概览的刷新、价格同步的“重新拉取”）。没有“返回”按钮，上级页面走面包屑。按钮只用 `variant` 区分主次，不做按用途命名的按钮组件，尺寸和浮动由所在容器决定。
-- **`@sub2api/ui` 4.2。** `PageHeadSink` 去掉 `actions`（只剩 `head`、`extra`），控制台顶栏的 `#s-page-actions` 删除。新增内部的工具栏上下文（`src/toolbar.ts`、`internal/ToolbarScope.vue`，不导出）：`SPageHeader` 提供它（直接在外壳下时 `float` 为真），`STabs` 新插槽 `#end`（标签栏右端，在可滚动的标签之外；标签栏不显示时单独一行靠右）提供 `float` 为假的。工具栏里的 `SButton` 忽略自己的 `size`，一律 md；浮动工具栏里带 `icon` 的 `variant="primary"`、非 `block` 按钮在手机上是右下角圆形按钮（同 `fab`），`:fab="false"` 关掉（显式的 `fab` 总是优先）。`SAutoRefresh` 新 props `button`、`loading`：宽屏在菜单后加“刷新”按钮（调 `@refresh`，`loading` 时转圈），手机仍是一个图标按钮、菜单里有“立即刷新”；SDK 文案新增 `ui.refresh`（Refresh / 刷新）。说明见 `web/packages/ui/README.md`“页面操作留在页面里（UI SDK 4.2）”。
+- **`@sub2api/ui` 4.3。** `PageHeadSink` 去掉 `actions`（只剩 `head`、`extra`），控制台顶栏的 `#s-page-actions` 删除。新增内部的工具栏上下文（`src/toolbar.ts`、`internal/ToolbarScope.vue`，不导出）：`SPageHeader` 提供它（直接在外壳下时 `float` 为真），`STabs` 新插槽 `#end`（标签栏右端，在可滚动的标签之外；标签栏不显示时单独一行靠右）提供 `float` 为假的。工具栏里的 `SButton` 忽略自己的 `size`，一律 md；浮动工具栏里带 `icon` 的 `variant="primary"`、非 `block` 按钮在手机上是右下角圆形按钮（同 `fab`），`:fab="false"` 关掉（显式的 `fab` 总是优先）。`SAutoRefresh` 新 props `button`、`loading`：宽屏在菜单后加“刷新”按钮（调 `@refresh`，`loading` 时转圈），手机仍是一个图标按钮、菜单里有“立即刷新”；SDK 文案新增 `ui.refresh`（Refresh / 刷新）。说明见 `web/packages/ui/README.md`“页面操作留在页面里（UI SDK 4.3）”。
 - **控制台。** 账号、分组、节点、任务、插件详情、发布者、发布进度、模型价格、价格来源、价格编辑、价格同步、角色、用量概览按上面四个位置调整；节点、任务、账号的刷新改用 `SAutoRefresh button`。
-- **版本。** `HOST_UI_VERSION`、`@sub2api/ui`、`@sub2api/host`、`@sub2api/vite-preset` 4.2.0（`ui-contract.spec.ts` 锁定，并检查 README 的 `（UI SDK 4.2）` 与 `hostUICompat: "^4.2"`）。用到 `STabs #end` 或 `SAutoRefresh` 的 `button` / `loading` 的插件声明 `hostUICompat: "^4.2"`、`hostCompat >=0.1.311`（0.1.310 是最后一个带 UI 4.1 的核心）；核心按 `hostCompat` 安装、不看 `hostUICompat`（§23.1），`sdk/manifest` 没有按 UI 版本的核心下限检查，所以这一步靠插件作者。`tools/sub2api-plugin` 的 `TestPluginsStartAtTheFirstCoreOfTheProtocol` 原来要求下限正好是 `protocol.FirstCoreVersion`（0.1.304），改为不低于它（仍只有一个下限）。`:fab="false"` 在旧宿主上同样有效，不必抬声明。随核心 0.1.311 滚动更新，没有迁移。
-- **插件兼容。** 原生插件用的是宿主的 `@sub2api/ui`：旧插件不重新构建，页头操作在新宿主上自动留在页面里；页头里带图标的 primary 按钮会在手机上浮动。dynweight 0.7.0 把刷新移进 `STabs #end`（`hostUICompat ^4.2`、`hostCompat >=0.1.311 <0.2.0`；升级夹具随之改为 `0.7.1-test`）；guard 0.3.1 的时间范围移到 `#filters-primary`，“管理规则”加 `:fab="false"`（兼容声明不变；guardtest 构建为 `0.3.1-test`）；moderation 页头只有一个次要的刷新按钮，不改。
+- **版本。** `HOST_UI_VERSION`、`@sub2api/ui`、`@sub2api/host`、`@sub2api/vite-preset` 4.3.0（`ui-contract.spec.ts` 锁定，并检查 README 的 `（UI SDK 4.3）` 与 `hostUICompat: "^4.3"`）。用到 `STabs #end` 或 `SAutoRefresh` 的 `button` / `loading` 的插件声明 `hostUICompat: "^4.3"`、`hostCompat >=0.1.311`（0.1.310 是最后一个带 UI 4.3 的核心）；核心按 `hostCompat` 安装、不看 `hostUICompat`（§23.1），`sdk/manifest` 没有按 UI 版本的核心下限检查，所以这一步靠插件作者。`tools/sub2api-plugin` 的 `TestPluginsStartAtTheFirstCoreOfTheProtocol` 原来要求下限正好是 `protocol.FirstCoreVersion`（0.1.304），改为不低于它（仍只有一个下限）。`:fab="false"` 在旧宿主上同样有效，不必抬声明。随核心 0.1.311 滚动更新，没有迁移。
+- **插件兼容。** 原生插件用的是宿主的 `@sub2api/ui`：旧插件不重新构建，页头操作在新宿主上自动留在页面里；页头里带图标的 primary 按钮会在手机上浮动。dynweight 0.7.0 把刷新移进 `STabs #end`（`hostUICompat ^4.3`、`hostCompat >=0.1.311 <0.2.0`；升级夹具随之改为 `0.7.1-test`）；guard 0.3.1 的时间范围移到 `#filters-primary`，“管理规则”加 `:fab="false"`（兼容声明不变；guardtest 构建为 `0.3.1-test`）；moderation 页头只有一个次要的刷新按钮，不改。

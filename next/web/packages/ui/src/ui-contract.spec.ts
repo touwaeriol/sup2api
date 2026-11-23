@@ -13,11 +13,12 @@ describe('host UI 4 contract', () => {
     expect('STabLayout' in ui).toBe(false)
     expect('TabBar' in ui).toBe(false)
   })
-  it('rejects plugins built for UI 3 or older and accepts ^4.0 to ^4.2', () => {
-    expect(HOST_UI_VERSION).toBe('4.2.0')
+  it('rejects plugins built for UI 3 or older and accepts ^4.0 to ^4.3', () => {
+    expect(HOST_UI_VERSION).toBe('4.3.0')
     expect(satisfiesRange(HOST_UI_VERSION, '^4.1')).toBe(true)
     expect(satisfiesRange(HOST_UI_VERSION, '^4.2')).toBe(true)
-    expect(satisfiesRange(HOST_UI_VERSION, '^4.3')).toBe(false)
+    expect(satisfiesRange(HOST_UI_VERSION, '^4.3')).toBe(true)
+    expect(satisfiesRange(HOST_UI_VERSION, '^4.4')).toBe(false)
     for (const range of ['^1.0', '^2.0', '^3.0', '^3.20']) expect(satisfiesRange(HOST_UI_VERSION, range), range).toBe(false)
     expect(satisfiesRange(HOST_UI_VERSION, '^4.0')).toBe(true)
     expect(satisfiesRange('3.20.0', '^4.0')).toBe(false)
@@ -77,9 +78,15 @@ describe('host UI 4 contract', () => {
     expect(readme).toContain('（UI SDK 4.1）')
     expect(readme).toContain('hostUICompat: "^4.1"')
   })
-  it('keeps page actions in the page: tab bar end, auto-refresh button (UI 4.2)', () => {
+  it('documents the creatable select and the rows a table opens first (UI 4.2)', () => {
     expect(readme).toContain('（UI SDK 4.2）')
     expect(readme).toContain('hostUICompat: "^4.2"')
+    expect(readme).toContain('`creatable`')
+    expect(readme).toContain('`defaultExpanded(row)`')
+  })
+  it('keeps page actions in the page: tab bar end, auto-refresh button (UI 4.3)', () => {
+    expect(readme).toContain('（UI SDK 4.3）')
+    expect(readme).toContain('hostUICompat: "^4.3"')
     expectTypeOf<ui.PageHeadSink>().not.toHaveProperty('actions')
   })
   it('exports the horizontal clip probe the permission matrix uses (UI 3.16)', () => {

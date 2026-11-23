@@ -174,7 +174,7 @@ func (s *Service) quote(ctx context.Context, in QuoteRequest) (*PricingQuote, er
 	on := core.PriceQuery{Model: in.Model, GroupID: in.GroupID}
 	rule, levels := snap.rules.of(on), snap.rates.levels(on, terms.SegmentID, terms.Levels())
 	out.Base = snap.bases.base(on.Model)
-	out.ListPrice, out.PriceSource = listedPrice(out.Base, rule)
+	out.ListPrice, out.PriceSource = listPrice(out.Base, rule)
 	out.PriceLevels.Group = rule.view()
 	out.Rate, out.RateLevels = segment.RateOf(levels), RateLevels(levels)
 	out.ListCost, out.Cost, err = s.quoteCosts(ctx, snap.resolve(on), in.Usage, out.Rate.Value)
@@ -184,7 +184,7 @@ func (s *Service) quote(ctx context.Context, in QuoteRequest) (*PricingQuote, er
 // quoteSubject reads the group of the quote and the terms there of who it
 // is for; the group must provide the model.
 func quoteSubject(ctx context.Context, q *gorm.DB, snap *priceSnapshot, in QuoteRequest) (pricedGroup, segment.Terms, error) {
-	gp, err := loadGroupPrices(ctx, q, snap.bases, "g.id = ?", in.GroupID)
+	gp, err := loadGroupPrices(ctx, q, snap, "g.id = ?", in.GroupID)
 	if err != nil {
 		return pricedGroup{}, segment.Terms{}, err
 	}
@@ -227,9 +227,10 @@ func accessSource(g pricedGroup, granted bool) string {
 }
 
 // quoteCosts prices usage the way a request is billed at the list price rule
-// (as the snapshot resolves it; nil = the model has no global price): through
-// Quote. listCost is before the rate and cost after it. Both are zero for a model without a global price. A price the
-// usage cannot be evaluated with is an error, as it is for a request.
+// (as the snapshot resolves it; nil = the model has no price in the group):
+// through Quote. listCost is before the rate and cost after it. Both are
+// zero for a model without a price, which a request is refused for. A price
+// the usage cannot be evaluated with is an error, as it is for a request.
 func (s *Service) quoteCosts(ctx context.Context, rule *core.PriceRule, u QuoteUsage, rate decimal.Decimal) (listCost, cost decimal.Decimal, err error) {
 	if rule == nil {
 		return decimal.Zero, decimal.Zero, nil

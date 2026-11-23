@@ -18,19 +18,29 @@ export default {
     mode: '定价方式',
     kind: {
       none: '跟随原价',
+      unpriced: '不定价',
       custom: '自定义价格'
     },
     customText: '自定义',
     customHint: '和“模型价格”页同一个编辑器：可以分档、按次或写表达式。原价变了不跟着变；要按比例算，请用“模型倍率”。',
     preview: '模型价格 {price}，乘倍率 {rate} 后实付 {paid}',
-    noBase: '这个模型还没有原价，先到“模型价格”页设置。'
+    noBase: '这个模型没有全局价格：自定义价格从空白开始填，只用于本账号分组。'
   },
   price: {
     perRequest: '{price} / 次',
     expression: '表达式计费',
     expressionTimes: '表达式计费 {rate}',
     none: '未定价',
+    unpriced: '未定价：给它设置价格（本账号分组的自定义价格或全局价格）之前，这个模型的请求会被拒绝',
     tiered: '{n} 档，显示兜底档位'
+  },
+  add: {
+    source: {
+      offered: '账号提供',
+      catalog: '模型价格',
+      added: '已添加'
+    },
+    footer: '先列账号提供的模型，再列模型价格里有的；也可以直接输入任意模型名'
   },
   table: {
     title: '模型价格',
@@ -56,7 +66,6 @@ export default {
     clearHint: '“清除”= 模型价格跟随原价、模型倍率跟随基本倍率',
     add: '添加模型',
     addNone: '没有可添加的模型',
-    addFooter: '只能添加在“模型价格”页定了原价的模型',
     unsavedCount: '{n} 项改动未保存',
     search: '搜索模型',
     onlySet: '只看单独设置的',

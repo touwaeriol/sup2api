@@ -111,21 +111,26 @@ func TestCreateSegmentWithRates(t *testing.T) {
 	require.Equal(t, int64(0), f.id(`SELECT count(*) FROM segments WHERE name = 'other'`), "a wrong rate creates nothing")
 }
 
-// A segment's model rate takes a model with a global price; removing one
-// always can.
-func TestSegmentModelRatesNeedGlobalPrice(t *testing.T) {
+// A segment's model rate takes any complete model id, with a price or not:
+// it prices once the model has one. Removing one always can; a model that
+// is no model id is refused, in both languages.
+func TestSegmentModelRatesAnyModel(t *testing.T) {
 	f := newSettingsFixture(t)
 	rates := func(items ...map[string]any) response {
 		return f.do(f.admin, "PATCH", path("/segments/%d", f.vip), map[string]any{"model_rates": items})
 	}
-	fe := rates(map[string]any{"group_id": f.public, "model": "m", "rate": "1"},
-		map[string]any{"group_id": f.public, "model": " unpriced ", "rate": "1"}).invalid("model_rates.1.model")
-	require.Equal(t, "the model has no global price", fe["message"])
-	f.exec(`INSERT INTO segment_model_rates (segment_id, group_id, model, rate) VALUES ($1, $2, 'unpriced', 0.5)`, f.vip, f.public)
+	rates(map[string]any{"group_id": f.public, "model": "m", "rate": "1"},
+		map[string]any{"group_id": f.public, "model": " unpriced ", "rate": "0.5"}).ok(200)
+	require.Equal(t, "0.5000", f.modelRateOf(f.vip, f.public, "unpriced"), "the model is trimmed")
 	rates(map[string]any{"group_id": f.public, "model": "unpriced", "rate": nil}).ok(200)
 	require.Equal(t, "none", f.modelRateOf(f.vip, f.public, "unpriced"))
 	f.exec(`UPDATE model_prices SET enabled = false WHERE model = 'm'`)
-	rates(map[string]any{"group_id": f.public, "model": "m", "rate": "1"}).invalid("model_rates.0.model")
+	rates(map[string]any{"group_id": f.public, "model": "m", "rate": "2"}).ok(200)
+	require.Equal(t, "2.0000", f.modelRateOf(f.vip, f.public, "m"))
+
+	fe := rates(map[string]any{"group_id": f.public, "model": "gpt-*", "rate": "1"}).invalid("model_rates.0.model")
+	require.Contains(t, fe["message"], "a complete model id")
+	require.Equal(t, "2.0000", f.modelRateOf(f.vip, f.public, "m"))
 }
 
 // POST/PATCH /segments refuse fields they do not have, such as the removed

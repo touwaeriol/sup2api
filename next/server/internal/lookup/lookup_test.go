@@ -431,3 +431,22 @@ func TestLookupMineIsTheSelfServiceRange(t *testing.T) {
 	got, _ = found(t, f.get(f.carol, "groups"))
 	require.ElementsMatch(t, names(carol), got)
 }
+
+// A model an account group prices on its own, without a global price, is a
+// model of the price table, and in the caller's range for that group alone,
+// as its model policy allows: GET /me/prices?group_id= lists it there.
+func TestLookupGroupOnlyModels(t *testing.T) {
+	f := newFixture(t)
+	rule := `INSERT INTO price_rules (group_id, model, mode, config, expression, expr_hash)
+		VALUES ($1, $2, 'expression', '{}', 'flat(1)', 'h') RETURNING id`
+	f.insert(rule, f.zeta, "lk-claude-own")
+	f.insert(rule, f.zeta, "lk-gemini-own") // zeta allows lk-claude-* only
+	f.insert(rule, f.hidden, "lk-claude-hidden")
+	got, _ := found(t, f.get(f.admin, "models?q=own"))
+	require.Equal(t, []string{"lk-claude-own", "lk-gemini-own"}, got)
+
+	prices := data[struct{ Prices []struct{ Model string } }](t, f.call(strconv.FormatInt(f.alice, 10), fmt.Sprintf("/me/prices?group_id=%d", f.zeta)))
+	require.Contains(t, prices.Prices, struct{ Model string }{"lk-claude-own"})
+	got, _ = found(t, f.get(f.alice, "models?mine=true"))
+	require.Equal(t, []string{"lk-claude-a", "lk-claude-own", "lk-gemini-1"}, got)
+}

@@ -48,27 +48,22 @@ func (r *storedRule) view() *Rule {
 	return &out
 }
 
-// price returns the list price the rule makes of the global one: its own
-// expression, and what it tells, with the global one kept as Base. ID is
-// always the global price's. A nil rule is the global price as it is, its
+// price returns the list price of model under the rule, global being the
+// global price (nil = none): the rule's own expression, and what it tells,
+// with the global price kept as Base and its ID, which a price of the group
+// alone does not have (0). A nil rule is the global price as it is, its
 // Source left empty (core.PriceRule.Source).
-func (r *storedRule) price(global core.PriceRule) *core.PriceRule {
+func (r *storedRule) price(model string, global *core.PriceRule) *core.PriceRule {
 	if r == nil {
-		return &global
+		return global
 	}
-	global.Source = core.PriceSourceGroup
-	global.Base = &core.PriceBase{Expression: global.Expression, ExprHash: global.ExprHash}
-	global.Mode, global.Expression, global.ExprHash, global.ExprVersion = r.Mode, r.Expression, r.exprHash, r.exprVersion
-	r.traits.apply(&global)
-	return &global
-}
-
-// source is where the list price comes from under the rule (nil = none).
-func (r *storedRule) source() string {
-	if r == nil {
-		return core.PriceSourceGlobal
+	out := &core.PriceRule{Model: model, Mode: r.Mode, Expression: r.Expression, ExprHash: r.exprHash,
+		ExprVersion: r.exprVersion, Source: core.PriceSourceGroup}
+	if global != nil {
+		out.ID, out.Base = global.ID, &core.PriceBase{Expression: global.Expression, ExprHash: global.ExprHash}
 	}
-	return core.PriceSourceGroup
+	r.traits.apply(out)
+	return out
 }
 
 // ruleSet is the price rules of groups, by group id and then model.

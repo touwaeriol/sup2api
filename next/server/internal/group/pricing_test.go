@@ -206,6 +206,24 @@ func TestGroupModels(t *testing.T) {
 	require.Contains(t, rows, "narrowed")
 }
 
+// A group's own price is a price there: an account that serves every model
+// provides the model in that group, without a global price, and in no
+// other group.
+func TestGroupModelsOfOwnPrice(t *testing.T) {
+	e := setup(t)
+	own := e.one(`INSERT INTO groups (name) VALUES ('own') RETURNING id`)
+	other := e.one(`INSERT INTO groups (name) VALUES ('other') RETURNING id`)
+	e.account([]string{}, own, other)
+	e.exec(`INSERT INTO price_rules (group_id, model, mode, config, expression, expr_hash)
+		VALUES ($1, 'own-model', 'expression', '{}', 'flat(1)', 'h')`, own)
+
+	rows, _ := e.listed(e.admin, "/groups")
+	require.Equal(t, []any{float64(1), float64(0)}, []any{rows["own"]["model_count"], rows["other"]["model_count"]})
+	rows, total := e.listed(e.admin, "/groups?model=own-model")
+	require.EqualValues(t, 1, total)
+	require.Contains(t, rows, "own")
+}
+
 // myGroupRow is a row of GET /me/groups as TestMyGroupsRates reads it.
 type myGroupRow struct {
 	rate, source, groupRate string

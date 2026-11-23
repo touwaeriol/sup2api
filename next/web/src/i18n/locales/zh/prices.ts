@@ -85,6 +85,7 @@ export default {
     }
   },
   tier: {
+    required: '请填写价格',
     listHint: '按顺序匹配档位，第一个满足条件的档位决定价格；最后一档兜底。',
     add: '添加档位',
     matchOnly: '始终匹配（只有这一个档位）',
@@ -371,6 +372,7 @@ export default {
     condDepth: '档位"{name}"的条件最多嵌套 {n} 层',
     condLeaves: '档位"{name}"最多 {n} 个条件',
     tierPrice: '档位"{name}"需要填写按次价格',
+    tierBlank: '档位"{name}"有价格没填：请填写价格（免费也要写 0），或取消勾选',
     negative: '档位"{name}"的价格不能为负数',
     ruleField: '第 {n} 条加价规则不完整或有误：倍数不能为负，比较的值不能为空，大小比较要填数字',
     ruleHeader: '第 {n} 条加价规则的请求头名称无效',
