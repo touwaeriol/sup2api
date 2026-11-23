@@ -135,7 +135,7 @@ function runRowAction(key: string, p: Price) {
         <SButton v-if="canSimulate" data-testid="price-simulate" @click="simulate()">{{ t('prices.simulate') }}</SButton>
         <SButton v-if="canManage" data-testid="price-sync" @click="router.push('/prices/sources')">{{ t('prices.syncPrices') }}</SButton>
         <SButton v-else variant="ghost" data-testid="price-sources" @click="router.push('/prices/sources')">{{ t('prices.viewSources') }}</SButton>
-        <SButton v-if="canManage" variant="primary" icon="plus" @click="router.push('/prices/new')">{{ t('prices.new') }}</SButton>
+        <SButton v-if="canManage" variant="primary" icon="plus" fab @click="router.push('/prices/new')">{{ t('prices.new') }}</SButton>
       </template>
       <template #filters-primary>
         <SInput v-model="filters.q" class="w-64" icon="search" clearable :aria-label="t('common.search')" :placeholder="t('prices.searchPlaceholder')" />

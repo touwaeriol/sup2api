@@ -222,7 +222,7 @@ async function revokeKey(p: Publisher, k: PublisherKey) {
   <div>
     <SPageHeader :title="t('publishers.title')" :description="t('publishers.description')">
       <template #actions>
-        <SButton v-if="canManage" variant="primary" @click="openCreate">+ {{ t('publishers.create') }}</SButton>
+        <SButton v-if="canManage" variant="primary" icon="plus" fab @click="openCreate">{{ t('publishers.create') }}</SButton>
       </template>
     </SPageHeader>
 

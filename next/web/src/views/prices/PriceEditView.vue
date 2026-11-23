@@ -210,11 +210,7 @@ watch(priceId, load, { immediate: true })
 
 <template>
   <div class="space-y-4">
-    <SPageHeader :title="t('prices.title')">
-      <template #actions>
-        <SButton size="sm" variant="ghost" @click="router.push('/prices')">{{ t('prices.edit.backToList') }}</SButton>
-      </template>
-    </SPageHeader>
+    <SPageHeader :title="t('prices.title')" />
 
     <div class="grid items-start gap-4 xl:grid-cols-[18rem_minmax(0,1fr)]">
       <PriceModelList ref="modelList" :current="priceId" :can-manage="!readonly" class="hidden xl:sticky xl:top-4 xl:flex xl:h-[calc(100vh-8rem)]" />

@@ -7,7 +7,8 @@
 // When the tabs overflow, the bar scrolls sideways, fades the edge that hides
 // more tabs and centres the selected tab whenever it changes. Tabs are 44px
 // high on touch screens. `dirty` and `errors` (tab keys) put a mark after
-// a tab's title (TabMarks), as STabbedForm does.
+// a tab's title (TabMarks), as STabbedForm does. #end sits at the right end
+// of the bar, outside the scrolling tabs (the page's actions for all tabs).
 import { computed, nextTick, ref, useId } from 'vue'
 import type { TabItem } from '../types'
 import { navIndex } from '../keyboard'
@@ -49,8 +50,8 @@ function onKey(e: KeyboardEvent) {
 
 <template>
   <div>
-    <div class="border-b border-gray-200 dark:border-dark-700">
-      <div ref="scroller" class="relative -mb-px overflow-x-auto" :class="fade">
+    <div class="flex items-center gap-3 border-b border-gray-200 dark:border-dark-700">
+      <div ref="scroller" class="relative -mb-px min-w-0 flex-1 overflow-x-auto" :class="fade">
         <nav ref="nav" class="flex w-max min-w-full gap-1" role="tablist" :aria-label="ariaLabel" @keydown="onKey">
           <button
             v-for="tab in tabs"
@@ -78,6 +79,7 @@ function onKey(e: KeyboardEvent) {
           </button>
         </nav>
       </div>
+      <div v-if="$slots.end" class="flex shrink-0 items-center gap-2 py-1" data-testid="tab-bar-end"><slot name="end" /></div>
     </div>
   </div>
 </template>

@@ -292,7 +292,7 @@ const denseRows = ref(true)
         <!-- Row density means nothing to phone cards; there the auto-refresh menu holds "Refresh now". -->
         <SSwitch v-model="denseRows" class="max-md:hidden" :label="t('accounts.listUi.compact')" />
         <SAutoRefresh v-model="refreshSeconds" @refresh="list.reload()" />
-        <SButton class="max-md:hidden" :loading="list.loading.value" :title="t('accounts.listUi.refresh')" data-testid="account-refresh" @click="list.reload()">{{ t('common.refresh') }}</SButton>
+        <SButton class="max-md:hidden" icon="refresh" :loading="list.loading.value" :title="t('accounts.listUi.refresh')" data-testid="account-refresh" @click="list.reload()">{{ t('common.refresh') }}</SButton>
         <SButton v-if="canCreate" variant="primary" icon="plus" fab data-testid="account-new" @click="openCreate">{{ t('accounts.new') }}</SButton>
       </template>
     </SPageHeader>

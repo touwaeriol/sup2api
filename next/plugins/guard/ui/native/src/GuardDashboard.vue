@@ -78,8 +78,10 @@ const recentColumns = computed<TableColumn[]>(() => [
 <template>
   <div>
     <SPageHeader :title="t('title')" :description="t('subtitle')">
-      <template #actions>
+      <template #filters-primary>
         <STimeRange v-model:range="range" from="" to="" :keys="rangeKeys" variant="segmented" size="sm" :label="false" />
+      </template>
+      <template #actions>
         <SButton icon="refresh" :loading="loading" @click="load">{{ t('refresh') }}</SButton>
         <SButton v-if="host.can('rules:read')" variant="primary" icon="shield" @click="rulesOpen = true">{{ t('manageRules') }}</SButton>
       </template>
