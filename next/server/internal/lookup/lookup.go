@@ -74,7 +74,7 @@ type ownRows struct {
 	// perms allow mine=true, any one of them; none means every signed-in user.
 	perms []string
 	// scope adds the conditions that leave only the caller's rows.
-	scope func(ctx context.Context, q *gorm.DB, uid int64, f *store.Conds) error
+	scope func(ctx context.Context, s *Service, uid int64, f *store.Conds) error
 	// hint replaces entity.hint when set.
 	hint string
 }
@@ -125,14 +125,15 @@ type Result struct {
 
 // Service serves the lookup endpoint.
 type Service struct {
-	db    *store.DB
-	authz core.Authorizer
-	kinds map[string]*entity
+	db     *store.DB
+	authz  core.Authorizer
+	priced core.PricedModels // the models with a list price in a group (billing)
+	kinds  map[string]*entity
 }
 
 // New builds the service over the kinds of entities.go.
-func New(db *store.DB, authz core.Authorizer) *Service {
-	s := &Service{db: db, authz: authz, kinds: make(map[string]*entity, len(entities))}
+func New(db *store.DB, authz core.Authorizer, priced core.PricedModels) *Service {
+	s := &Service{db: db, authz: authz, priced: priced, kinds: make(map[string]*entity, len(entities))}
 	for _, e := range entities {
 		s.kinds[e.kind] = e
 	}
@@ -182,7 +183,7 @@ func (s *Service) lookup(c *gin.Context) {
 	}
 	if a.own {
 		uid, _ := core.UserID(ctx)
-		if err := e.mine.scope(ctx, s.db.Gorm, uid, &f); err != nil {
+		if err := e.mine.scope(ctx, s, uid, &f); err != nil {
 			httpapi.Fail(c, err)
 			return
 		}

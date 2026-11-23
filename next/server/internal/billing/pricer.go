@@ -147,6 +147,34 @@ func (snap *priceSnapshot) priced(groupID int64) []string {
 	return slices.Compact(models)
 }
 
+// pricedOf is priced, of model only when it is not empty.
+func (snap *priceSnapshot) pricedOf(groupID int64, model string) []string {
+	if model == "" {
+		return snap.priced(groupID)
+	}
+	if _, global := snap.bases[model]; !global && snap.rules[groupID][model] == nil {
+		return nil
+	}
+	return []string{model}
+}
+
+var _ core.PricedModels = (*Service)(nil)
+
+// PricedModels implements core.PricedModels from the snapshot requests are
+// billed by: a price written in a request shows once billing drops the
+// snapshot after the commit.
+func (s *Service) PricedModels(ctx context.Context, groupIDs []int64, model string) (map[int64][]string, error) {
+	snap, err := s.snapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[int64][]string, len(groupIDs))
+	for _, id := range groupIDs {
+		out[id] = snap.pricedOf(id, model)
+	}
+	return out, nil
+}
+
 // Resolve implements core.Pricer. Prices are global per model: the platform
 // and account type serving the request do not matter (ARCHITECTURE 7.3). A
 // price of the caller's group replaces the global price, and stands without

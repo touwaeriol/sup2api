@@ -44,8 +44,11 @@ function rateProblems(item: any): Problem[] {
   return item.rate === null || validRate(item.rate) ? [] : [['rate', 'invalid', RATE_RULE]]
 }
 
-/** The model of an item: any name, trimmed, not empty (a global price is not needed). */
-const modelProblems = (item: any): Problem[] => (String(item.model ?? '').trim() ? [] : [['model', 'required', 'model is required']])
+/** The model an item names, trimmed: any name (a global price is not needed). */
+const modelOf = (item: any) => String(item.model ?? '').trim()
+
+/** The model of an item: not empty. */
+const modelProblems = (item: any): Problem[] => (modelOf(item) ? [] : [['model', 'required', 'model is required']])
 
 /** The rule of a model price: none removes it; else checked as a global price is. */
 function ruleProblems(rule: any): Problem[] {
@@ -61,17 +64,17 @@ const priceProblems = (item: any): Problem[] => [...modelProblems(item), ...rule
 /** Why a model rate cannot be saved: a model named and a rate or null. */
 const modelRateProblems = (item: any): Problem[] => [...modelProblems(item), ...rateProblems(item)]
 
+/** The far end `key` of an item, which must exist (`exists`). */
+const farProblems = (key: string, exists: (id: number) => boolean, item: any): Problem[] => (exists(Number(item[key])) ? [] : [[key, 'not_found', 'not found']])
+
 /** Why a pair (a segment in a group) cannot be saved; `exists` says whether the other end does. An item of segment_rates may `remove` the pair instead. */
 const pairProblems = (key: string, exists: (id: number) => boolean): ItemCheck => (item) => [
-  ...(exists(Number(item[key])) ? [] : [[key, 'not_found', 'not found'] as Problem]),
+  ...farProblems(key, exists, item),
   ...(item.remove === true ? [] : rateProblems(item))
 ]
 
 /** Why a model rate of a segment in a group cannot be saved: the far end `key` that exists, and what a model rate of a group takes. */
-const segmentModelRateProblems = (key: string, exists: (id: number) => boolean): ItemCheck => (item) => [
-  ...(exists(Number(item[key])) ? [] : [[key, 'not_found', 'not found'] as Problem]),
-  ...modelRateProblems(item)
-]
+const segmentModelRateProblems = (key: string, exists: (id: number) => boolean): ItemCheck => (item) => [...farProblems(key, exists, item), ...modelRateProblems(item)]
 
 const hasSegment = (id: number) => !!findSegment(id)
 
@@ -126,14 +129,14 @@ function applySegmentRate(gid: number, item: any) {
 
 /** Applies the checked prices and rates of group `gid`, in the order given (a later item on the same thing wins). */
 export function applyGroupPricing(gid: number, body: any) {
-  for (const item of listOf(body, 'model_prices')) setModelPrice(gid, String(item.model).trim(), storedPrice(item.rule))
-  for (const item of listOf(body, 'model_rates')) setModelRate(null, gid, String(item.model).trim(), item.rate)
+  for (const item of listOf(body, 'model_prices')) setModelPrice(gid, modelOf(item), storedPrice(item.rule))
+  for (const item of listOf(body, 'model_rates')) setModelRate(null, gid, modelOf(item), item.rate)
   for (const item of listOf(body, 'segment_rates')) applySegmentRate(gid, item)
-  for (const item of listOf(body, 'segment_model_rates')) setModelRate(Number(item.segment_id), gid, String(item.model).trim(), item.rate)
+  for (const item of listOf(body, 'segment_model_rates')) setModelRate(Number(item.segment_id), gid, modelOf(item), item.rate)
 }
 
 /** Applies the checked rates of segment `sid`, in the order given. */
 export function applySegmentRates(sid: number, body: any) {
   for (const item of listOf(body, 'group_rates')) setPair(sid, Number(item.group_id), { granted: item.granted, rate_override: item.rate })
-  for (const item of listOf(body, 'model_rates')) setModelRate(sid, Number(item.group_id), String(item.model).trim(), item.rate)
+  for (const item of listOf(body, 'model_rates')) setModelRate(sid, Number(item.group_id), modelOf(item), item.rate)
 }

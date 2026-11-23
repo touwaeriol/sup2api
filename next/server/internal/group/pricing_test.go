@@ -3,6 +3,7 @@ package group
 import (
 	"context"
 	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -35,16 +36,38 @@ func (e *env) account(models []string, groups ...int64) {
 	}
 }
 
+// fakePriced is core.PricedModels over the prices the tests set: billing
+// owns the rule and is tested there.
+type fakePriced struct {
+	global []string           // enabled global prices
+	own    map[int64][]string // the groups' own prices
+}
+
+func (f *fakePriced) PricedModels(_ context.Context, ids []int64, model string) (map[int64][]string, error) {
+	out := map[int64][]string{}
+	for _, id := range ids {
+		models := slices.Concat(f.global, f.own[id])
+		if model != "" {
+			models = slices.DeleteFunc(models, func(m string) bool { return m != model })
+		}
+		slices.Sort(models)
+		out[id] = slices.Compact(models)
+	}
+	return out, nil
+}
+
 // rule gives the group a model price of its own on the model.
 func (e *env) rule(group int64, model string) {
 	e.t.Helper()
 	e.exec(`INSERT INTO price_rules (group_id, model, mode, config, expression) VALUES ($1, $2, 'expression', '{}', '0')`, group, model)
+	if e.priced.own == nil {
+		e.priced.own = map[int64][]string{}
+	}
+	e.priced.own[group] = append(e.priced.own[group], model)
 }
 
-func (e *env) price(model string, enabled bool) {
-	e.t.Helper()
-	e.exec(`INSERT INTO model_prices (model, mode, expression, expr_hash, source, enabled) VALUES ($1, 'expression', '0', 'h', 'manual', $2)`, model, enabled)
-}
+// price gives the models an enabled global price.
+func (e *env) price(models ...string) { e.priced.global = append(e.priced.global, models...) }
 
 // listed returns the rows of a groups list by name, and its total.
 func (e *env) listed(uid int64, path string) (map[string]map[string]any, float64) {
@@ -125,7 +148,7 @@ func TestRuleCountsOfAnyModel(t *testing.T) {
 	open := e.one(`INSERT INTO groups (name) VALUES ('open') RETURNING id`)
 	e.account([]string{"m1"}, declared)
 	e.account([]string{}, open) // serves every model that has a global price
-	e.price("priced", true)
+	e.price("priced")
 	e.rule(declared, "m1")
 	e.rule(declared, "gone")
 	e.exec(`INSERT INTO group_model_rates (group_id, model, rate) VALUES ($1, 'priced', 1), ($2, 'gone', 1)`, declared, open)
@@ -141,7 +164,7 @@ func TestRuleCountsOfAnyModel(t *testing.T) {
 
 	require.Equal(t, map[string][]any{"declared": {float64(3), float64(1)}, "open": {float64(1), float64(1)}}, counts())
 	// Once the price is disabled, open provides nothing; its rule still counts.
-	e.exec(`UPDATE model_prices SET enabled = false WHERE model = 'priced'`)
+	e.priced.global = nil
 	require.Equal(t, map[string][]any{"declared": {float64(3), float64(1)}, "open": {float64(1), float64(0)}}, counts())
 }
 
@@ -159,9 +182,7 @@ func TestGroupModels(t *testing.T) {
 	e.account([]string{"m1"}, declared, denied)
 	e.account([]string{}, unrestricted, narrowed)
 	e.account([]string{"m1"}, narrowed)
-	e.price("p1", true)
-	e.price("p2", true)
-	e.price("off", false)
+	e.price("p1", "p2")
 
 	rows, total := e.listed(e.admin, "/groups")
 	require.EqualValues(t, 5, total)
@@ -181,7 +202,6 @@ func TestGroupModels(t *testing.T) {
 	}{
 		{"m1", []string{"declared"}},
 		{"p1", []string{"unrestricted", "narrowed"}},
-		{"off", nil}, // no enabled price: an account that serves every model does not provide it
 		{"unknown", nil},
 	} {
 		rows, total := e.listed(e.admin, "/groups?model="+tc.model)
@@ -214,8 +234,7 @@ func TestGroupModelsOfOwnPrice(t *testing.T) {
 	own := e.one(`INSERT INTO groups (name) VALUES ('own') RETURNING id`)
 	other := e.one(`INSERT INTO groups (name) VALUES ('other') RETURNING id`)
 	e.account([]string{}, own, other)
-	e.exec(`INSERT INTO price_rules (group_id, model, mode, config, expression, expr_hash)
-		VALUES ($1, 'own-model', 'expression', '{}', 'flat(1)', 'h')`, own)
+	e.rule(own, "own-model")
 
 	rows, _ := e.listed(e.admin, "/groups")
 	require.Equal(t, []any{float64(1), float64(0)}, []any{rows["own"]["model_count"], rows["other"]["model_count"]})

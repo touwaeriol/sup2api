@@ -14,7 +14,7 @@ import (
 
 func kind(t *testing.T, name string) *entity {
 	t.Helper()
-	e, ok := New(nil, nil).kinds[name]
+	e, ok := New(nil, nil, nil).kinds[name]
 	if !ok {
 		t.Fatalf("no kind %s", name)
 	}

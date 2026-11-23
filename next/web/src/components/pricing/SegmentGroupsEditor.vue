@@ -11,6 +11,7 @@ import GroupVisibilityBadge from './GroupVisibilityBadge.vue'
 import ModelRatesToggle from './ModelRatesToggle.vue'
 import SegmentModelRates from './SegmentModelRates.vue'
 import { blankGroupSetting } from './accessRateDrafts'
+import { catalogOnce } from './groupModels'
 import { rateText } from './pricingFormat'
 import { useAccessModelRates } from './useAccessModelRates'
 import { useAccessRateDrafts } from './useAccessRateDrafts'
@@ -36,6 +37,8 @@ async function fetchSettings(): Promise<SegmentGroupSetting[]> {
 const groups = useAccessRateDrafts({ side: 'group', fetch: fetchSettings })
 const modelRates = useAccessModelRates(groups, 'group', props.tab, () => !!props.editable)
 const { rows, loading, error, refresh, change } = groups
+/** The global prices every row adds models from: asked once for all of them. */
+const catalog = catalogOnce()
 watch(
   () => props.segmentId,
   () => {
@@ -74,17 +77,13 @@ watch(
     </template>
     <template #expand="{ row }">
       <SegmentModelRates
-        :rows="modelRates.rowsOf(row.id)"
+        v-bind="modelRates.under(row.id)"
         :group-id="row.id"
+        :catalog="catalog"
         :override="row.rate_override"
         :group-rate="row.rate.group_default"
         :editable="editable"
         :disabled="disabled"
-        :errors="modelRates.rowErrors.value"
-        @add="(model, rate) => modelRates.add(row.id, model, rate)"
-        @change="(r, rate) => modelRates.change(r, rate)"
-        @remove="(r) => modelRates.change(r, null)"
-        @undo="modelRates.undo"
       />
     </template>
   </AccessRateTable>

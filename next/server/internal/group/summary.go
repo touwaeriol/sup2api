@@ -39,7 +39,7 @@ func (s *Service) fillSummary(ctx context.Context, gs []*Group) error {
 	if err != nil {
 		return err
 	}
-	offered, err := offeredModels(ctx, s.db.Gorm, policies)
+	offered, err := s.offeredModels(ctx, policies)
 	if err != nil {
 		return err
 	}

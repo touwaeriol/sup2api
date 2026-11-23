@@ -204,7 +204,7 @@ export function rateOf(s: MockSegment | null, g: PricedGroup, model?: string): {
 }
 
 /** The list price a model price gives: a price of its own that stands alone, else the global price `base`; none without either. */
-export function appliedPrice(base: PriceDef | null, price: ModelPrice | null): PriceDef | null {
+function appliedPrice(base: PriceDef | null, price: ModelPrice | null): PriceDef | null {
   if (!price) return base
   return price.mode === 'expression' ? { mode: price.mode, config: {}, expression: price.expression } : configPrice(price.mode, price.config)
 }

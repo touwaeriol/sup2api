@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { enableAutoUnmount, flushPromises, mount, shallowMount } from '@vue/test-utils'
 import { defineComponent, h } from 'vue'
 import SSelect from './SSelect.vue'
@@ -304,8 +304,8 @@ describe('creatable searchable select (UI 4.2)', () => {
     expect(w.emitted('update:modelValue')).toHaveLength(1)
   })
 
-  it('pins the add row over the footer, keeps it an option of the listbox, and scrolls the active option clear of it', async () => {
-    const many = Array.from({ length: 12 }, (_, i) => ({ label: `gpt-${i}`, value: `gpt-${i}` }))
+  /** Records each scrollIntoView (the row's text, its scroll margin) while the pinned block is 64px high; undone when the test ends. */
+  function recordScrolls() {
     const scrolled: { value: string; margin: string }[] = []
     const proto = Element.prototype as { scrollIntoView?: (this: HTMLElement) => void }
     const native = proto.scrollIntoView
@@ -315,6 +315,16 @@ describe('creatable searchable select (UI 4.2)', () => {
     const height = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
       return this.hasAttribute('data-pinned') ? 64 : 0
     })
+    onTestFinished(() => {
+      proto.scrollIntoView = native
+      height.mockRestore()
+    })
+    return scrolled
+  }
+
+  it('pins the add row over the footer, keeps it an option of the listbox, and scrolls the active option clear of it', async () => {
+    const scrolled = recordScrolls()
+    const many = Array.from({ length: 12 }, (_, i) => ({ label: `gpt-${i}`, value: `gpt-${i}` }))
     const w = mount(SSelect, { props: { modelValue: null, options: many, searchable: true, creatable: true, footer: 'Type any name' } })
     const input = w.get('input')
     await input.trigger('focus')
@@ -336,8 +346,6 @@ describe('creatable searchable select (UI 4.2)', () => {
     expect(scrolled.at(-1)?.value).toBe('gpt-1')
     await input.trigger('keydown', { key: 'Enter' })
     expect(w.emitted('create')).toEqual([['gpt']])
-    proto.scrollIntoView = native
-    height.mockRestore()
   })
 
   it('adds by a click and offers nothing for blank text or without creatable', async () => {

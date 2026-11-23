@@ -25,6 +25,8 @@ type Service struct {
 	reg core.PluginRegistry   // optional: platforms are [] without it
 	// grants clears the scoped grants naming a deleted group (CONTRACTS §21).
 	grants core.ScopeGrantClearer
+	// priced gives the models with a list price in a group (billing).
+	priced core.PricedModels
 	// Protocols reports the protocols the accounts of a group serve, for
 	// GET /groups/:id and GET /me/groups; optional (served_protocols is []
 	// without it). The account module is built after this one, so it is
@@ -38,9 +40,9 @@ type Service struct {
 
 // New builds the group service. rdb, bus and reg may be nil; reg resolves
 // the platforms a group serves from its account types. grants is needed to
-// delete groups.
-func New(db *store.DB, rdb redis.UniversalClient, bus core.Bus, reg core.PluginRegistry, grants core.ScopeGrantClearer) *Service {
-	return &Service{db: db, rdb: rdb, bus: bus, reg: reg, grants: grants}
+// delete groups, priced to list them.
+func New(db *store.DB, rdb redis.UniversalClient, bus core.Bus, reg core.PluginRegistry, grants core.ScopeGrantClearer, priced core.PricedModels) *Service {
+	return &Service{db: db, rdb: rdb, bus: bus, reg: reg, grants: grants, priced: priced}
 }
 
 // RegisterRoutes mounts the group endpoints.

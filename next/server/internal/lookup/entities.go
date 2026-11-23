@@ -7,7 +7,6 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
-	"github.com/Sub2API-Devs/sup2api/next/server/internal/group"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/segment"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/x"
@@ -86,33 +85,32 @@ const groupOpenTo = segment.UsableGroup
 
 // callerIs is the Scope of a kind whose own rows one condition selects; its
 // "?" takes the caller's id.
-func callerIs(cond string) func(context.Context, *gorm.DB, int64, *store.Conds) error {
-	return func(_ context.Context, _ *gorm.DB, uid int64, f *store.Conds) error {
+func callerIs(cond string) func(context.Context, *Service, int64, *store.Conds) error {
+	return func(_ context.Context, _ *Service, uid int64, f *store.Conds) error {
 		f.And(cond, uid)
 		return nil
 	}
 }
 
 // usableModels leaves the models the caller's groups allow: a model with a
-// list price in one of them (group.PricedModels: an enabled global price or
+// list price in one of them (core.PricedModels: an enabled global price or
 // the group's own) that its model policy lets through. The picker on a
 // user's own pages is not tied to a group, so this is the union over all of
 // them. GET /me/prices?group_id= lists a subset of it: of these, only the
 // models the accounts of that group provide. The group policy is a glob list
 // (core.GroupInfo.AllowsModel), evaluated here rather than rewritten in SQL.
-func usableModels(ctx context.Context, q *gorm.DB, uid int64, f *store.Conds) error {
-	db := store.G(ctx, q)
-	groups, err := modelPolicies(db, uid)
+func usableModels(ctx context.Context, s *Service, uid int64, f *store.Conds) error {
+	groups, err := modelPolicies(store.G(ctx, s.db.Gorm), uid)
 	if err != nil {
 		return err
 	}
-	priced, err := group.PricedModels(ctx, db, groups)
+	priced, err := s.priced.PricedModels(ctx, core.GroupIDs(groups), "")
 	if err != nil {
 		return err
 	}
 	usable := []string{}
 	for _, g := range groups {
-		usable = append(usable, slices.DeleteFunc(priced(g.ID), func(m string) bool { return !g.AllowsModel(m) })...)
+		usable = append(usable, slices.DeleteFunc(priced[g.ID], func(m string) bool { return !g.AllowsModel(m) })...)
 	}
 	f.And("mp.model = ANY(?)", store.Strings(x.Unique(usable)))
 	return nil

@@ -156,7 +156,7 @@ const nobody = computed(() => restricted.value && !loading.value && !error.value
       </template>
       <template #expand="{ row }">
         <SegmentModelRates
-          :rows="modelRates.rowsOf(row.id)"
+          v-bind="modelRates.under(row.id)"
           :group-id="groupId"
           :models="groupModels.result.value"
           :priced="priced"
@@ -164,11 +164,6 @@ const nobody = computed(() => restricted.value && !loading.value && !error.value
           :group-rate="row.rate.group_default"
           :editable="editable"
           :disabled="disabled || row.removed"
-          :errors="modelRates.rowErrors.value"
-          @add="(model, rate) => modelRates.add(row.id, model, rate)"
-          @change="(r, rate) => modelRates.change(r, rate)"
-          @remove="(r) => modelRates.change(r, null)"
-          @undo="modelRates.undo"
         />
       </template>
     </AccessRateTable>

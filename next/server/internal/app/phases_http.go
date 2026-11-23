@@ -37,7 +37,7 @@ func (b *boot) registerRoutes(r *httpapi.Router) {
 	b.prx.RegisterRoutes(r)
 	b.acc.RegisterRoutes(r)
 	b.bill.RegisterRoutes(r)
-	lookup.New(b.db, b.az).RegisterRoutes(r)
+	lookup.New(b.db, b.az, b.bill).RegisterRoutes(r)
 	b.settler.RegisterRoutes(r)
 	b.tasks.RegisterRoutes(r, b.cl.Registry)
 	api.New(api.Deps{

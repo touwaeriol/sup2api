@@ -2,6 +2,7 @@ package billing
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"github.com/shopspring/decimal"
@@ -123,4 +124,29 @@ func checkGroupOnlyListings(t *testing.T, e *pricingEnv) {
 	require.Equal(t, "9", costOf(t, got["claude-own"].Expression), "6 at the model's rate 3 over the key's 2")
 	_, got = e.keyPrices(fakeKeys{Group: e.open})
 	require.NotContains(t, got, "claude-own")
+}
+
+// PricedModels (core.PricedModels) gives the models with a list price in
+// each group from the snapshot: the enabled global prices and the group's
+// own. A price written with the group shows once the write commits.
+func TestPricedModels(t *testing.T) {
+	e := groupOnlyEnv(t)
+	priced := func(model string) map[int64][]string {
+		t.Helper()
+		got, err := e.svc.PricedModels(t.Context(), []int64{e.open, e.private}, model)
+		require.NoError(t, err)
+		return got
+	}
+	require.Equal(t, map[int64][]string{e.open: nil, e.private: nil}, priced("claude-own"))
+	require.Nil(t, e.writeGroup(e.private, map[string]any{"model_prices": []any{patch("claude-own", written(ownExpr))}}))
+	require.Equal(t, map[int64][]string{e.open: nil, e.private: {"claude-own"}}, priced("claude-own"))
+	all := priced("")
+	require.Contains(t, all[e.open], "gpt-5")
+	require.Equal(t, all[e.open], slices.DeleteFunc(slices.Clone(all[e.private]), func(m string) bool { return m == "claude-own" }),
+		"the global prices in both, sorted")
+
+	e.exec(`UPDATE model_prices SET enabled = false WHERE model = 'gpt-5'`)
+	e.svc.invalidate()
+	require.Equal(t, map[int64][]string{e.open: nil, e.private: nil}, priced("gpt-5"), "a disabled price prices nothing")
+	require.NotContains(t, priced("")[e.open], "gpt-5")
 }

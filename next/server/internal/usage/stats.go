@@ -101,10 +101,11 @@ const promptTokens = `CASE
 			u.input_tokens + u.cache_read_tokens + u.cache_creation_tokens + u.cache_creation_1h_tokens
 		END`
 
-// standardCost is a row's cost at the global price, before price rules and
-// the rate: usage_logs.base_cost (CONTRACTS §97). A row from before that
-// column has the charge divided by its multiplier, where a free group
-// (multiplier 0) charged nothing and reports nothing.
+// standardCost is a row's cost at the global price (the list price of a
+// model without one), before price rules and the rate: usage_logs.base_cost
+// (CONTRACTS §97). A row from before that column has the charge divided by
+// its multiplier, where a free group (multiplier 0) charged nothing and
+// reports nothing.
 const standardCost = `COALESCE(u.base_cost, CASE WHEN u.rate_multiplier > 0 THEN u.total_cost / u.rate_multiplier ELSE u.total_cost END)`
 
 // Totals is one window of GET /me/usage/overview.

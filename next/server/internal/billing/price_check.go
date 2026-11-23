@@ -74,12 +74,6 @@ func reportFailure(rep *expr.Report, confirm bool) error {
 	})
 }
 
-// modelField is the field error for a model that is not a complete model id.
-func modelField(code string) core.FieldError {
-	return core.FieldError{Field: "model", Code: code,
-		Message: "a complete model id: letters, digits and . _ : / @ + - (no wildcards)"}
-}
-
 // priceConfig is the config a price is checked with: {} when there is none,
 // as an expression price has none.
 func priceConfig(config json.RawMessage) json.RawMessage {

@@ -16,15 +16,14 @@ import type { DraftedSetting, SettingDraft, SettingSide } from './accessRateDraf
 // caller names a row in #lead (on one line) and #note (a line under it,
 // which gets the row's `expanded` and `toggleExpand`: with STable's
 // `expandable`, the #expand slot shows under an open row, and a row with
-// saved model rates starts open). Editable, a row
-// has a switch and a rate field and reports what they change (`change`);
-// read-only it says the same in words. Where the rows are the user groups of
-// an account group, a public one keeps its grants on disabled switches: they
-// apply again once it is private. `removable` adds a Remove action per row
-// (`remove`; a row removed and not saved offers `undo`); `rowErrors` are the
-// server's refusals by row id. Other
-// attributes (loading, error, empty-text, @retry, expandable, expand-toggle)
-// are STable's.
+// saved model rates starts open). Editable, a row has a switch and a rate
+// field and reports what they change (`change`); read-only it says the same
+// in words. Where the rows are the user groups of an account group, a public
+// one keeps its grants on disabled switches: they apply again once it is
+// private. `removable` adds a Remove action per row (`remove`; a row removed
+// and not saved offers `undo`); `rowErrors` are the server's refusals by row
+// id. Other attributes (loading, error, empty-text, @retry, expandable,
+// expand-toggle) are STable's.
 defineOptions({ inheritAttrs: false })
 const props = defineProps<{ rows: DraftedSetting[]; side: SettingSide; editable?: boolean; disabled?: boolean; removable?: boolean; rowErrors?: ReadonlyMap<number, string> }>()
 const emit = defineEmits<{ (e: 'change', row: DraftedSetting, draft: SettingDraft): void; (e: 'remove' | 'undo', row: DraftedSetting): void }>()

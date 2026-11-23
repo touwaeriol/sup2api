@@ -7,6 +7,7 @@
 // presets.ts.
 import {
   asVisualConfig,
+  chargedKeys,
   condKind,
   num,
   valueText,
@@ -77,8 +78,8 @@ export function moveTier(tiers: VisualTier[], i: number, by: number) {
   tiers.splice(i + by, 0, ...tiers.splice(i, 1))
 }
 
-/** Whether a tier charges a price: p and c always, any other while its key is in the tier. */
-export const priceOn = (t: VisualTier, k: PriceKey) => k === 'p' || k === 'c' || k in t
+/** Whether a tier charges a price (chargedKeys: p and c always, any other while its key is in the tier). */
+export const priceOn = (t: VisualTier, k: PriceKey) => chargedKeys(t).includes(k)
 
 /** Charges a price (its key held as null until it is typed) or stops charging it; p and c are always charged. */
 export function setPriceOn(t: VisualTier, k: PriceKey, on: boolean) {

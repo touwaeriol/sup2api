@@ -6,7 +6,7 @@ import ModelBadge from '@/components/platform/ModelBadge.vue'
 import AddSelect from './AddSelect.vue'
 import DraftBadge from './DraftBadge.vue'
 import { addModelOptions } from './addModelOptions'
-import { listPriceIn, useGroupModels, type GroupModels } from './groupModels'
+import { fetchCatalog, listPriceIn, useGroupModels, type CatalogFetch, type GroupModels } from './groupModels'
 import RateInput from './RateInput.vue'
 import type { DraftedModelRate } from './modelRateDrafts'
 import { effectiveRate, listPriceOf, rateText } from './pricingFormat'
@@ -20,10 +20,12 @@ import { effectiveRate, listPriceOf, rateText } from './pricingFormat'
 // (addModelOptions: those the account group's accounts offer, then those
 // with a global price), from its saved price table and the global prices:
 // the parent's `models` when it has them for every row (null while they
-// load), else asked here; any other model name may be typed. A model with no price
-// there says so: its requests are refused until it has one, and its rate
-// applies from then on. `priced` (by model) overrides what the saved table
-// says with what the account group's pricing tab has drafted. A row reports
+// load), else asked here (the global prices by `catalog`: an editor of
+// several rows passes one that asks them once); any other model name may be
+// typed. A model with no price there says so: its requests are refused until
+// it has one, and its rate applies from then on. `priced` (by model)
+// overrides what the saved table says with what the account group's pricing
+// tab has drafted. A row reports
 // what changes (`add` at the rate the model pays now, `change`, `remove`,
 // `undo`) and the parent keeps the drafts. `errors` are the server's
 // refusals by row key.
@@ -33,6 +35,7 @@ const props = defineProps<{
   override: string | null
   groupRate: string
   models?: GroupModels | null
+  catalog?: CatalogFetch
   editable?: boolean
   disabled?: boolean
   errors?: ReadonlyMap<string, string>
@@ -45,7 +48,10 @@ const emit = defineEmits<{
 }>()
 const { t } = useI18n()
 
-const prices = useGroupModels(() => (props.editable && props.models === undefined ? (props.groupId ?? 0) : null))
+const prices = useGroupModels(
+  () => (props.editable && props.models === undefined ? (props.groupId ?? 0) : null),
+  () => (props.catalog ?? fetchCatalog)()
+)
 
 /** The account group's models; null while they load, and when nobody asked (read-only). */
 const known = computed(() => (props.models === undefined ? prices.result.value : props.models) ?? null)

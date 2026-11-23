@@ -112,8 +112,8 @@ type BillingDetail struct {
 	Tier        string                    `json:"tier"`
 	Rules       []expr.RuleResult         `json:"rules"`
 	Breakdown   expr.Breakdown            `json:"breakdown"`
-	Cost        decimal.Decimal           `json:"cost"`                // at the global price, before the rate
-	ListCost    *decimal.Decimal          `json:"list_cost,omitempty"` // at the list price, before the rate; only when a price rule applied
+	Cost        decimal.Decimal           `json:"cost"`                // at the global price (the list price without one), before the rate
+	ListCost    *decimal.Decimal          `json:"list_cost,omitempty"` // at the list price, before the rate; only when a price rule over a global price applied
 	// BaseFallback marks a Cost that is the list cost: the global price a
 	// custom rule replaced could not be evaluated (priceOne).
 	BaseFallback   bool            `json:"base_fallback,omitempty"`
@@ -131,9 +131,9 @@ type BillingDetail struct {
 }
 
 // amounts are the three figures of priced usage (CONTRACTS §97): base is its
-// cost at the global price and list its cost at the list price, both before
-// the rate; total is what is charged. Without a price rule base and list are
-// the same.
+// cost at the global price (the list price without one) and list its cost at
+// the list price, both before the rate; total is what is charged. Without a
+// price rule over a global price base and list are the same.
 type amounts struct{ base, list, total decimal.Decimal }
 
 func (a amounts) add(b amounts) amounts {

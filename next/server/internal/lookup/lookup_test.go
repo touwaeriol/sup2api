@@ -138,10 +138,11 @@ func newFixture(t *testing.T) *fixture {
 		f.erin: {"user:read:team"},
 	}
 	r := httpapi.NewRouter(engine, fakeTokens{}, authz)
-	New(f.db, authz).RegisterRoutes(r)
+	bill := billing.New(f.db, nil, nil, nil, nil)
+	New(f.db, authz, bill).RegisterRoutes(r)
 	// The self-service lists that mine=true is defined by.
-	group.New(f.db, nil, nil, nil, nil).RegisterRoutes(r)
-	billing.New(f.db, nil, nil, nil, nil).RegisterRoutes(r)
+	group.New(f.db, nil, nil, nil, nil, bill).RegisterRoutes(r)
+	bill.RegisterRoutes(r)
 	f.h = engine
 	return f
 }

@@ -160,6 +160,14 @@ describe('the model rates of a segment in an account group', () => {
     expect(mocks.get).not.toHaveBeenCalledWith('/groups/1/model-prices')
   })
 
+  it('asks the global prices once for every open row, and the models of each account group', async () => {
+    const { openModels } = await render({ segmentId: 2, editable: true })
+    await openModels(1)
+    await openModels(2)
+    const calls = (path: string) => mocks.get.mock.calls.filter(([p]) => p === path).length
+    expect([calls('/pricing/catalog'), calls('/groups/1/model-prices'), calls('/groups/2/model-prices')]).toEqual([1, 1, 1])
+  })
+
   it('adds a model at the rate it pays now: the account group\'s model rate, or the row\'s once it has one', async () => {
     mocks.get.mockImplementation(async (path: string) => {
       if (path === '/pricing/catalog') return catalog()

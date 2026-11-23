@@ -985,9 +985,9 @@ type SummaryRow struct {
 	PromptTokens *int64 `json:"prompt_tokens"`
 	// TotalTokens is input + output + cache read + cache write.
 	TotalTokens int64 `json:"total_tokens"`
-	// StandardCost is the cost at the global price, before price rules and
-	// the rate (base_cost; rows without it: total_cost / rate_multiplier,
-	// and a free group reports 0).
+	// StandardCost is the cost at the global price (standardCost), before
+	// price rules and the rate (base_cost; rows without it: total_cost /
+	// rate_multiplier, and a free group reports 0).
 	StandardCost decimal.Decimal `json:"standard_cost"`
 	// The averages are over the successful requests that report a time.
 	LatencyMsAvg    int64 `json:"latency_ms_avg"`

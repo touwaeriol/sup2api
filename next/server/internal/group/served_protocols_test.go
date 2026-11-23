@@ -36,8 +36,8 @@ func (f *fakeProtocols) GroupServedProtocols(_ context.Context, groupIDs []int64
 func TestGroupDetailServedProtocols(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := testutil.DB(t)
-	e := &env{t: t, db: db, admin: mkUser(t, db, "admin@x.com")}
-	svc := New(db, nil, nil, fakeRegistry{gen: testGen()}, authz.New(authz.Deps{}))
+	e := &env{t: t, db: db, admin: mkUser(t, db, "admin@x.com"), priced: &fakePriced{}}
+	svc := New(db, nil, nil, fakeRegistry{gen: testGen()}, authz.New(authz.Deps{}), e.priced)
 	engine := gin.New()
 	svc.RegisterRoutes(httpapi.NewRouter(engine, fakeTokens{}, fakeAuthz{admin: e.admin}))
 	e.h = engine
@@ -89,8 +89,8 @@ func TestGroupDetailServedProtocols(t *testing.T) {
 func TestMyGroupsServedProtocols(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := testutil.DB(t)
-	e := &env{t: t, db: db, admin: mkUser(t, db, "admin@x.com"), user: mkUser(t, db, "user@x.com")}
-	svc := New(db, nil, nil, fakeRegistry{gen: testGen()}, authz.New(authz.Deps{}))
+	e := &env{t: t, db: db, admin: mkUser(t, db, "admin@x.com"), user: mkUser(t, db, "user@x.com"), priced: &fakePriced{}}
+	svc := New(db, nil, nil, fakeRegistry{gen: testGen()}, authz.New(authz.Deps{}), e.priced)
 	engine := gin.New()
 	svc.RegisterRoutes(httpapi.NewRouter(engine, fakeTokens{}, fakeAuthz{admin: e.admin}))
 	e.h = engine

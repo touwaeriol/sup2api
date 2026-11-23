@@ -47,8 +47,8 @@ import { useTableReorder } from './tableReorder'
 import { useTableColumns, type TableColumnStorage } from './tableColumns'
 import STableColumnSettings from './STableColumnSettings.vue'
 import { useScrollClip } from './scrollClip'
-import { useTableSwipeSelect } from './tableSwipeSelect'
 import { useTableExpand } from './tableExpand'
+import { useTableSelect } from './tableSelect'
 import { useViewport } from './viewport'
 import { cardFields, TABLE_CARD } from './tableCard'
 import ReorderHandle from './internal/ReorderHandle.vue'
@@ -97,7 +97,21 @@ const props = withDefaults(
     /** Phone form: rows as cards (default) or the scrolling table. */
     mobile?: 'card' | 'scroll'
   }>(),
-  { rowKey: 'id', expandToggle: true, selected: () => [], swipeSelect: true, mobile: 'card', emptyText: undefined, rowSelectable: undefined, rowClass: undefined, rowAttrs: undefined, defaultExpanded: undefined, error: undefined, errorText: undefined, onRetry: undefined }
+  {
+    rowKey: 'id',
+    expandToggle: true,
+    selected: () => [],
+    swipeSelect: true,
+    mobile: 'card',
+    emptyText: undefined,
+    rowSelectable: undefined,
+    rowClass: undefined,
+    rowAttrs: undefined,
+    defaultExpanded: undefined,
+    error: undefined,
+    errorText: undefined,
+    onRetry: undefined
+  }
 )
 const emit = defineEmits<{
   (e: 'row-click', row: T): void
@@ -108,8 +122,12 @@ const emit = defineEmits<{
   (e: 'filter', column: TableColumn, value: string, row: T): void
 }>()
 const t = useUiT()
-const columnState = useTableColumns(() => props.columns, () => props.columnSettingsKey, () => props.columnStorage)
-const visibleColumns = computed(() => props.columnSettingsKey ? columnState.visibleColumns.value : props.columns)
+const columnState = useTableColumns(
+  () => props.columns,
+  () => props.columnSettingsKey,
+  () => props.columnStorage
+)
+const visibleColumns = computed(() => (props.columnSettingsKey ? columnState.visibleColumns.value : props.columns))
 const { compact } = useViewport()
 const cardLayout = computed(() => compact.value && props.mobile === 'card')
 const rootClass = computed(() => {
@@ -123,14 +141,21 @@ const table = ref<HTMLTableElement>()
 const cards = ref<{ list?: HTMLElement }>()
 const root = ref<HTMLElement>()
 const inner = ref<HTMLElement>()
-const clipped = useScrollClip(computed(() => (props.card ? inner.value : root.value)), table)
+const clipped = useScrollClip(
+  computed(() => (props.card ? inner.value : root.value)),
+  table
+)
 const reorderHelp = useId()
 const reorderMessage = ref('')
-const reorder = useTableReorder(computed(() => cards.value?.list ?? table.value), props, event => {
-  reorderMessage.value = t('ui.rowReordered', { from: event.from + 1, to: event.to + 1 })
-  emit('update:rows', event.rows)
-  emit('reorder', event)
-})
+const reorder = useTableReorder(
+  computed(() => cards.value?.list ?? table.value),
+  props,
+  event => {
+    reorderMessage.value = t('ui.rowReordered', { from: event.from + 1, to: event.to + 1 })
+    emit('update:rows', event.rows)
+    emit('reorder', event)
+  }
+)
 
 function keyOf(row: T, i: number): unknown {
   const k = row[props.rowKey]
@@ -166,39 +191,16 @@ function cellStyle(c: TableColumn) {
   }
 }
 
-// ---------------------------------------------------------------- selection
-const selectedSet = computed(() => new Set(props.selected))
-const canSelect = (row: T) => !props.rowSelectable || props.rowSelectable(row)
-const selectableKeys = computed(() => keyed.value.filter(r => canSelect(r.row)).map(r => r.key))
-const allSelected = computed(() => selectableKeys.value.length > 0 && selectableKeys.value.every(k => selectedSet.value.has(k)))
-const someSelected = computed(() => !allSelected.value && selectableKeys.value.some(k => selectedSet.value.has(k)))
-function toggleAll(on: boolean) {
-  const pageKeys = new Set(selectableKeys.value)
-  const rest = props.selected.filter(k => !pageKeys.has(k))
-  emit('update:selected', on ? [...rest, ...selectableKeys.value] : rest)
-}
-// Shift+click extends from the last clicked row (anchor) to this one.
-let anchor = -1
-let shiftClick = false
-const markShift = (e: MouseEvent) => { shiftClick = e.shiftKey }
-function toggleRow(key: unknown, on: boolean, index: number) {
-  const range = shiftClick && anchor >= 0 && anchor < keyed.value.length && anchor !== index
-  shiftClick = false
-  const lo = range ? Math.min(anchor, index) : index
-  const hi = range ? Math.max(anchor, index) : index
-  anchor = index
-  const keys = keyed.value.slice(lo, hi + 1).filter(r => canSelect(r.row)).map(r => r.key)
-  const touched = new Set(keys)
-  const rest = props.selected.filter(x => !touched.has(x))
-  emit('update:selected', on ? [...rest, ...keys] : rest)
-}
-const swipe = useTableSwipeSelect(table, {
-  enabled: () => !!props.selectable && props.swipeSelect && !props.loading,
-  keys: () => keyed.value.map(r => r.key),
-  canSelect: i => !!keyed.value[i] && canSelect(keyed.value[i].row),
-  selected: () => props.selected,
-  update: keys => emit('update:selected', keys)
-})
+const { selectedSet, canSelect, selectableKeys, allSelected, someSelected, toggleAll, markShift, toggleRow, swipe } = useTableSelect(
+  keyed,
+  table,
+  {
+    selected: () => props.selected,
+    rowSelectable: () => props.rowSelectable,
+    swipe: () => !!props.selectable && props.swipeSelect && !props.loading,
+    update: keys => emit('update:selected', keys)
+  }
+)
 
 const chevrons = computed(() => !!props.expandable && props.expandToggle)
 const span = computed(
@@ -215,26 +217,12 @@ function onRowKey(e: KeyboardEvent, row: T) {
 </script>
 
 <template>
-  <component
-    :is="card ? 'section' : 'div'"
-    ref="root"
-    :class="rootClass"
-  >
+  <component :is="card ? 'section' : 'div'" ref="root" :class="rootClass">
     <template v-if="reorderable">
-      <span
-        :id="reorderHelp"
-        class="sr-only"
-      >{{ t('ui.reorderHelp') }}</span>
-      <span
-        class="sr-only"
-        role="status"
-        aria-live="polite"
-      >{{ reorderMessage }}</span>
+      <span :id="reorderHelp" class="sr-only">{{ t('ui.reorderHelp') }}</span>
+      <span class="sr-only" role="status" aria-live="polite">{{ reorderMessage }}</span>
     </template>
-    <div
-      v-if="columnSettingsKey || (card && $slots.toolbar)"
-      class="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2"
-    >
+    <div v-if="columnSettingsKey || (card && $slots.toolbar)" class="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
       <slot name="toolbar" />
       <STableColumnSettings v-if="columnSettingsKey" :state="columnState" class="ms-auto" />
     </div>
@@ -288,16 +276,8 @@ function onRowKey(e: KeyboardEvent, row: T) {
       >
         <thead>
           <tr>
-            <th
-              v-if="reorderable"
-              class="w-10"
-              :aria-label="t('ui.reorderRows')"
-            />
-            <th
-              v-if="selectable"
-              class="w-10 !pr-0"
-              :title="swipeSelect ? t('ui.bulkHint') : undefined"
-            >
+            <th v-if="reorderable" class="w-10" :aria-label="t('ui.reorderRows')" />
+            <th v-if="selectable" class="w-10 !pr-0" :title="swipeSelect ? t('ui.bulkHint') : undefined">
               <SCheckbox
                 bare
                 :model-value="allSelected"
@@ -307,20 +287,14 @@ function onRowKey(e: KeyboardEvent, row: T) {
                 @update:model-value="toggleAll"
               />
             </th>
-            <th
-              v-if="chevrons"
-              class="w-8"
-            />
+            <th v-if="chevrons" class="w-8" />
             <th
               v-for="c in visibleColumns"
               :key="c.key"
               :style="c.width ? { width: c.width } : undefined"
               :class="[ALIGN[c.align ?? 'left'], c.headerClass, { 's-table-actions': c.key === 'actions', 's-table-grow': c.grow }]"
             >
-              <slot
-                :name="`head-${c.key}`"
-                :column="c"
-              >
+              <slot :name="`head-${c.key}`" :column="c">
                 {{ c.label }}
               </slot>
             </th>
@@ -328,52 +302,30 @@ function onRowKey(e: KeyboardEvent, row: T) {
         </thead>
         <tbody>
           <tr v-if="loading && rows.length === 0">
-            <td
-              :colspan="span"
-              class="py-10 text-center text-gray-400"
-            >
+            <td :colspan="span" class="py-10 text-center text-gray-400">
               <SSpinner />
             </td>
           </tr>
           <tr v-else-if="error && rows.length === 0">
-            <td
-              :colspan="span"
-              class="py-10 text-center"
-              data-testid="table-error"
-            >
+            <td :colspan="span" class="py-10 text-center" data-testid="table-error">
               <slot name="error" :error="error">
                 <TableLoadError :text="errorText" :retry="onRetry" />
               </slot>
             </td>
           </tr>
           <tr v-else-if="rows.length === 0">
-            <td
-              :colspan="span"
-              class="py-10 text-center text-gray-400"
-            >
+            <td :colspan="span" class="py-10 text-center text-gray-400">
               <slot name="empty">
                 {{ emptyText || t('ui.noData') }}
               </slot>
             </td>
           </tr>
           <tr v-if="error && rows.length > 0 && !loading">
-            <td
-              :colspan="span"
-              class="!p-0"
-              data-testid="table-error"
-            >
-              <TableLoadError
-                inline
-                :class="dense ? 'px-3 py-1.5' : 'px-3 py-2.5'"
-                :text="errorText"
-                :retry="onRetry"
-              />
+            <td :colspan="span" class="!p-0" data-testid="table-error">
+              <TableLoadError inline :class="dense ? 'px-3 py-1.5' : 'px-3 py-2.5'" :text="errorText" :retry="onRetry" />
             </td>
           </tr>
-          <template
-            v-for="{ row, i, key } in keyed"
-            :key="String(key)"
-          >
+          <template v-for="{ row, i, key } in keyed" :key="String(key)">
             <tr
               v-bind="attrsOf(row, i)"
               :class="[
@@ -389,24 +341,10 @@ function onRowKey(e: KeyboardEvent, row: T) {
               @click="emit('row-click', row)"
               @keydown="onRowKey($event, row)"
             >
-              <td
-                v-if="reorderable"
-                class="w-10 !pr-0"
-                @click.stop
-              >
-                <ReorderHandle
-                  :index="i"
-                  :reorder="reorder"
-                  :describedby="reorderHelp"
-                />
+              <td v-if="reorderable" class="w-10 !pr-0" @click.stop>
+                <ReorderHandle :index="i" :reorder="reorder" :describedby="reorderHelp" />
               </td>
-              <td
-                v-if="selectable"
-                class="s-table-select w-10 !pr-0"
-                data-select-handle
-                @click.capture="markShift"
-                @click.stop
-              >
+              <td v-if="selectable" class="s-table-select w-10 !pr-0" data-select-handle @click.capture="markShift" @click.stop>
                 <SCheckbox
                   bare
                   :model-value="selectedSet.has(key)"
@@ -415,10 +353,7 @@ function onRowKey(e: KeyboardEvent, row: T) {
                   @update:model-value="toggleRow(key, $event, i)"
                 />
               </td>
-              <td
-                v-if="chevrons"
-                class="w-8 !pr-0"
-              >
+              <td v-if="chevrons" class="w-8 !pr-0">
                 <button
                   type="button"
                   class="rounded p-0.5 text-gray-400 hover:text-gray-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500/40 dark:hover:text-gray-200"
@@ -426,17 +361,17 @@ function onRowKey(e: KeyboardEvent, row: T) {
                   :aria-label="expanded.has(key) ? t('ui.collapseRow') : t('ui.expandRow')"
                   @click.stop="toggle(row, key)"
                 >
-                  <SIcon
-                    name="chevron-right"
-                    class="h-4 w-4 transition-transform"
-                    :class="expanded.has(key) ? 'rotate-90' : ''"
-                  />
+                  <SIcon name="chevron-right" class="h-4 w-4 transition-transform" :class="expanded.has(key) ? 'rotate-90' : ''" />
                 </button>
               </td>
               <td
                 v-for="c in visibleColumns"
                 :key="c.key"
-                :class="[ALIGN[c.align ?? 'left'], c.class, { 's-table-actions': c.key === 'actions', 'whitespace-nowrap': c.nowrap, 's-table-grow': c.grow }]"
+                :class="[
+                  ALIGN[c.align ?? 'left'],
+                  c.class,
+                  { 's-table-actions': c.key === 'actions', 'whitespace-nowrap': c.nowrap, 's-table-grow': c.grow }
+                ]"
                 :style="cellStyle(c)"
                 :title="(c.ellipsis || c.grow) && !$slots[`cell-${c.key}`] ? displayValue(valueOf(row, c.key)) : undefined"
               >
@@ -448,46 +383,23 @@ function onRowKey(e: KeyboardEvent, row: T) {
                   layout="table"
                   v-bind="expansion(row, key)"
                 >
-                  <TableCell
-                    :column="c"
-                    :value="valueOf(row, c.key)"
-                    @filter="emit('filter', c, $event, row)"
-                  />
+                  <TableCell :column="c" :value="valueOf(row, c.key)" @filter="emit('filter', c, $event, row)" />
                 </slot>
               </td>
             </tr>
-            <tr
-              v-if="expandable && expanded.has(key)"
-              class="s-table-expand"
-            >
-              <td
-                :colspan="span"
-                class="bg-gray-50/60 dark:bg-dark-900/40"
-              >
-                <div
-                  v-if="fitExpandedToContainer"
-                  class="s-table-expand-content"
-                >
-                  <slot
-                    name="expand"
-                    :row="row"
-                  />
+            <tr v-if="expandable && expanded.has(key)" class="s-table-expand">
+              <td :colspan="span" class="bg-gray-50/60 dark:bg-dark-900/40">
+                <div v-if="fitExpandedToContainer" class="s-table-expand-content">
+                  <slot name="expand" :row="row" />
                 </div>
-                <slot
-                  v-else
-                  name="expand"
-                  :row="row"
-                />
+                <slot v-else name="expand" :row="row" />
               </td>
             </tr>
           </template>
         </tbody>
       </table>
     </div>
-    <div
-      v-if="card && $slots.footer"
-      class="border-t border-line px-4"
-    >
+    <div v-if="card && $slots.footer" class="border-t border-line px-4">
       <slot name="footer" />
     </div>
   </component>

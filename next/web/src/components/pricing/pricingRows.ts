@@ -1,7 +1,8 @@
 // The pricing table of a group while it is edited: per model its model price
-// (a price of its own, standing alone, or the original price) and its model rate (or the
-// group's base rate). What a price starts from, whether one may be saved, how
-// a row reads under its unsaved changes and what the request sends.
+// (a price of its own, standing alone, or the original price) and its model
+// rate (or the group's base rate). What a price starts from, whether one may
+// be saved, how a row reads under its unsaved changes and what the request
+// sends.
 import type { CatalogPrice, CustomPrice, ModelPricePatch, ModelPriceRow, ModelRatePatch, PriceDef } from '@/api/pricing'
 import { asVisualConfig, blankPrices, compactVisualConfig, visualExpr } from '@/views/prices/priceExpr'
 import { checkPrice, type LocalIssue } from '@/views/prices/priceCheck'

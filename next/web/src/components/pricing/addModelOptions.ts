@@ -9,7 +9,7 @@ import { priceLabel } from './priceLabels'
 import type { Translate } from './pricingFormat'
 
 /** A model the accounts offer, at its list price in the account group. */
-export interface OfferedModel {
+interface OfferedModel {
   model: string
   price: PriceDef | null
 }

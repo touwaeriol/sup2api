@@ -175,7 +175,7 @@ func (b *boot) buildKeys() error {
 // rates, the model prices and rates) in the group's transaction
 // (CONTRACTS §97).
 func (b *boot) buildGroups() {
-	b.grp = group.New(b.db, b.rdb, b.cl.Bus, b.reg, b.az)
+	b.grp = group.New(b.db, b.rdb, b.cl.Bus, b.reg, b.az, b.bill)
 	b.seg = segment.New(segment.Deps{DB: b.db, Authz: b.az, Users: b.az, Platforms: b.grp.Platforms, RatesChanged: b.bill.RatesChanged})
 	b.grp.Parts = []core.GroupWritePart{b.seg, b.bill}
 }

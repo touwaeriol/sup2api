@@ -231,7 +231,8 @@ export function requestTier(price: number | null): VisualConfig {
 
 // ------------------------------------------------------------------ config as saved
 
-const orNull = (v: unknown) => (isSet(v) ? num(v) : null)
+/** A price or value as a number; null while blank. */
+export const orNull = (v: unknown) => (isSet(v) ? num(v) : null)
 
 /** A condition as saved: a comparison's value a number (blank stays null), a zone only on a time; a node of no known shape as it is. */
 function compactWhen(n: TierCond): TierCond {

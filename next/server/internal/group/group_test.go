@@ -148,7 +148,7 @@ func TestPlatformResolver(t *testing.T) {
 
 func TestGroupPlatformsWithoutRegistry(t *testing.T) {
 	// No registry: no database access, every group gets [].
-	s := New(nil, nil, nil, nil, nil)
+	s := New(nil, nil, nil, nil, nil, nil)
 	ps, err := s.Platforms(context.Background(), []int64{1, 2})
 	if err != nil || len(ps) != 2 || ps[1] == nil || len(ps[2]) != 0 {
 		t.Fatalf("platforms: %v %v", ps, err)
@@ -160,14 +160,16 @@ func TestGroupPlatformsWithoutRegistry(t *testing.T) {
 }
 
 type env struct {
-	t     *testing.T
-	db    *store.DB
-	svc   *Service
-	h     http.Handler
-	mr    *miniredis.Miniredis
-	bus   *fakeBus
-	admin int64
-	user  int64
+	t   *testing.T
+	db  *store.DB
+	svc *Service
+	h   http.Handler
+	mr  *miniredis.Miniredis
+	bus *fakeBus
+	// priced stands in for billing: the models with a list price.
+	priced *fakePriced
+	admin  int64
+	user   int64
 }
 
 func setup(t *testing.T) *env {
@@ -175,12 +177,12 @@ func setup(t *testing.T) *env {
 	db := testutil.DB(t)
 	mr := miniredis.RunT(t)
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
-	e := &env{t: t, db: db, mr: mr, bus: &fakeBus{}}
+	e := &env{t: t, db: db, mr: mr, bus: &fakeBus{}, priced: &fakePriced{}}
 	e.admin = mkUser(t, db, "admin@x.com")
 	e.user = mkUser(t, db, "user@x.com")
 	engine := gin.New()
 	r := httpapi.NewRouter(engine, fakeTokens{}, fakeAuthz{admin: e.admin})
-	e.svc = New(db, rdb, e.bus, fakeRegistry{gen: testGen()}, authz.New(authz.Deps{}))
+	e.svc = New(db, rdb, e.bus, fakeRegistry{gen: testGen()}, authz.New(authz.Deps{}), e.priced)
 	e.svc.RegisterRoutes(r)
 	e.h = engine
 	return e

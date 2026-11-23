@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { SButton, SCheckbox, SDropdown, SIcon, SInput, SSelect } from '@sub2api/ui'
 import { usd } from '@/components/pricing/pricingFormat'
-import { MAX_COND_DEPTH, MAX_COND_LEAVES, chargedKeys, isSet, num, type PriceKey, type VisualTier } from './priceExpr'
+import { MAX_COND_DEPTH, MAX_COND_LEAVES, chargedKeys, orNull, type PriceKey, type VisualTier } from './priceExpr'
 import { condText } from './tierCond'
 import { priceOn, setPriceOn } from './visualPrice'
 import TierCondTree from './TierCondTree.vue'
@@ -32,7 +32,7 @@ const condition = computed(() => {
 })
 
 /** A price as typed: '—' while blank. */
-const typed = (v: unknown) => usd(isSet(v) ? num(v) : null)
+const typed = (v: unknown) => usd(orNull(v))
 const summary = computed(() => {
   const x = tier.value
   if (x.unit === 'request') return [{ k: t('prices.def.perRequestLabel'), v: typed(x.price) }]

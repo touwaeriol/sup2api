@@ -23,6 +23,15 @@ type GroupInfo struct {
 	ConversionLossPolicy string
 }
 
+// GroupIDs are the ids of the groups.
+func GroupIDs(groups []GroupInfo) []int64 {
+	ids := make([]int64, len(groups))
+	for i, g := range groups {
+		ids[i] = g.ID
+	}
+	return ids
+}
+
 // APIKeyPrincipal is the result of gateway authentication. Group.RateMultiplier
 // is the group's base rate.
 type APIKeyPrincipal struct {

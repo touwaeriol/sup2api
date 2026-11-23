@@ -1,8 +1,8 @@
 import { computed, ref, shallowRef } from 'vue'
-import { api } from '@sub2api/host'
-import type { CatalogPrice, GroupModelPrices, ModelPriceRow } from '@/api/pricing'
+import type { ModelPriceRow } from '@/api/pricing'
 import { i18n } from '@/i18n'
 import { listRequest, withDraft } from './drafts'
+import { fetchCatalog, fetchGroupModels, type GroupModels } from './groupModels'
 import { effectiveRate } from './pricingFormat'
 import { catalogPrices, catalogRow, draftedRow, mergeRowDraft, groupModelRatePatches, modelPricePatches, savedPrice, validPrice, type DraftedRow, type RowDraft } from './pricingRows'
 import { useDrafts } from './useDrafts'
@@ -14,12 +14,6 @@ export interface PricingTableOptions {
   baseRate: () => string
   /** Also fetches the catalog of original prices, to add models from. */
   editable: () => boolean
-}
-
-interface Saved {
-  rows: ModelPriceRow[]
-  /** The original prices, to add a model with. */
-  catalog: CatalogPrice[]
 }
 
 /** A row as the table shows it: what applies under its draft, the rate included. */
@@ -40,7 +34,7 @@ export interface PricingRow extends DraftedRow {
  * the drafts on top. body() is what the group's request sends of them.
  */
 export function usePricingTable(options: PricingTableOptions) {
-  const state = useDrafts<Saved, string, RowDraft>({ empty: () => ({ rows: [], catalog: [] }), fetch: () => fetchSaved(options), problem: incomplete })
+  const state = useDrafts<GroupModels, string, RowDraft>({ empty: () => ({ rows: [], catalog: [] }), fetch: () => fetchSaved(options), problem: incomplete })
   const added = ref<string[]>([])
   const rowErrors = shallowRef<ReadonlyMap<string, string>>(new Map())
   const rows = computed(() => listedRows(state.saved.value, added.value).map(viewRow))
@@ -67,24 +61,20 @@ export function usePricingTable(options: PricingTableOptions) {
 }
 
 /** The group's pricing table, and the catalog when models may be added. */
-async function fetchSaved(options: PricingTableOptions): Promise<Saved> {
-  const id = options.groupId()
-  const [prices, catalog] = await Promise.all([
-    id === null ? null : api.get<GroupModelPrices>(`/groups/${id}/model-prices`),
-    options.editable() ? api.get<CatalogPrice[]>('/pricing/catalog') : []
-  ])
-  return { rows: (prices?.models ?? []).map((r) => ({ ...r, price: savedPrice(r.price) })), catalog }
+async function fetchSaved(options: PricingTableOptions): Promise<GroupModels> {
+  const { rows, catalog } = await fetchGroupModels(options.groupId() ?? 0, options.editable() ? fetchCatalog : null)
+  return { rows: rows.map((r) => ({ ...r, price: savedPrice(r.price) })), catalog }
 }
 
 /** The saved rows, then the models added here that the server does not list, from the catalog. */
-function listedRows(saved: Saved, added: string[]): ModelPriceRow[] {
+function listedRows(saved: GroupModels, added: string[]): ModelPriceRow[] {
   const rows = new Map(saved.rows.map((r) => [r.model, r]))
   const prices = catalogPrices(saved.catalog)
   added.filter((m) => !rows.has(m)).forEach((m) => rows.set(m, catalogRow(m, prices.get(m) ?? null)))
   return [...rows.values()]
 }
 
-type TableState = ReturnType<typeof useDrafts<Saved, string, RowDraft>>
+type TableState = ReturnType<typeof useDrafts<GroupModels, string, RowDraft>>
 
 /** Adding a model and taking an added one away again. */
 function modelChanges(state: TableState, added: { value: string[] }) {

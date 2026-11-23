@@ -106,21 +106,21 @@ const matched = computed(() => {
   const q = query.value.trim().toLocaleLowerCase()
   return choices.value.filter((o) => [o.label, o.hint, o.description].some((text) => text?.toLocaleLowerCase().includes(q)))
 })
+/** Whether an option is labelled or valued `text`. */
+const names = (o: Choice, text: string) => o.label === text || o.value === text
 /** What a creatable select offers to add: the typed text, trimmed, unless an option is labelled or valued so already. */
 const creating = computed(() => {
   const text = query.value.trim()
-  return props.creatable && text && !flat.value.some((o) => o.label === text || o.value === text) ? text : undefined
+  return props.creatable && text && !flat.value.some((o) => names(o, text)) ? text : undefined
 })
 const filtered = computed<Choice[]>(() => {
   const text = creating.value
-  return text === undefined ? matched.value : [...matched.value, { value: null, label: t('ui.createItem', { name: text }), accent: true, create: text }]
+  return text === undefined ? matched.value : [...matched.value, { value: null, label: t('ui.createItem', { name: text }), create: text }]
 })
 /** Where the "Add" row is in `filtered` (always last); -1 without one. */
 const addAt = computed(() => (creating.value === undefined ? -1 : filtered.value.length - 1))
 /** The block pinned to the bottom of the panel: the "Add" row, then the footer. */
 const pinned = computed(() => !!props.footer || addAt.value >= 0)
-/** The option holding the value (the "Add" row never does). */
-const isPicked = (o: Choice) => o.create === undefined && o.value === props.modelValue
 const shown = computed(() => {
   const given = props.selected
   return given && given.value === props.modelValue ? given : choices.value.find((o) => o.value === props.modelValue)
@@ -144,7 +144,7 @@ const CREATE_ROW = 'border-t border-dashed border-line'
 function labelClass(o: Choice) {
   if (o.accent) return PRIMARY_TEXT
   if (o.muted) return 'text-fg-muted'
-  return isPicked(o) ? `font-semibold ${PRIMARY_TEXT}` : ''
+  return o.value === props.modelValue ? `font-semibold ${PRIMARY_TEXT}` : ''
 }
 /** A row's text as [before, typed, after] around the typed text of a remote search (any case); the whole text when it is not there. */
 function cut(text: string, o: Choice): string[] {
@@ -195,7 +195,7 @@ function search(e: Event) {
 /** The enabled option a creatable select's typed text names exactly (label or value); -1 for none. */
 function exactIndex(): number {
   const text = query.value.trim()
-  return props.creatable && text ? filtered.value.findIndex((o) => !o.disabled && o.create === undefined && (o.label === text || o.value === text)) : -1
+  return props.creatable && text ? matched.value.findIndex((o) => !o.disabled && names(o, text)) : -1
 }
 /** After the list changed: its first enabled option is active (in a creatable select the one the text names exactly) and the panel is placed again. */
 function relist() {
@@ -399,7 +399,7 @@ const control = computed(() =>
             :id="`${listId}-${i}`"
             role="option"
             :data-index="i"
-            :aria-selected="isPicked(o)"
+            :aria-selected="o.value === modelValue"
             :aria-disabled="o.disabled || undefined"
             class="cursor-pointer py-2"
             :class="[
@@ -431,7 +431,7 @@ const control = computed(() =>
                 </template>
               </span>
             </span>
-            <SIcon v-if="sheet && isPicked(o)" name="check" class="h-4 w-4 shrink-0 text-primary-600" />
+            <SIcon v-if="sheet && o.value === modelValue" name="check" class="h-4 w-4 shrink-0 text-primary-600" />
           </li>
         </template>
         <li v-if="loading" role="presentation" class="flex items-center gap-2 py-2 text-sm text-fg-muted" :class="sheet ? 'px-5' : 'px-3'">

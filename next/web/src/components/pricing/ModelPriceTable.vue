@@ -19,10 +19,9 @@ import { usePricingTable, type PricingRow } from './usePricingTable'
 // rows are the models the group provides and those it sets something on; a
 // group not saved yet (groupId null) provides nothing yet, so its table
 // starts empty. Any model name can be added (addModelOptions offers those
-// the accounts offer, then those with a global price); one without any
-// price says it is not priced, and its
-// requests are refused until it has one. "Change
-// price" opens a row's price editor under it, one row at a time. Edits stay
+// with a global price); one without any price says it is not priced, and its
+// requests are refused until it has one. "Change price" opens a row's price
+// editor under it, one row at a time. Edits stay
 // in drafts, which the group's request sends (the part of tab `tab` of the
 // enclosing tabbed form); without `editable` the table only shows. `priced`
 // reports, by model, whether each row is priced as drafted (the user group

@@ -328,13 +328,7 @@ func TestSnapshotLoadsOnce(t *testing.T) {
 	e := newPricingEnv(t, allowAll{})
 	ctx := context.Background()
 	e.svc.invalidate()
-	var queries atomic.Int64
-	require.NoError(t, e.db.Gorm.Callback().Query().After("gorm:query").Register("count_price_loads", func(db *gorm.DB) {
-		if db.Statement.Table == "model_prices" {
-			queries.Add(1)
-		}
-	}))
-	t.Cleanup(func() { _ = e.db.Gorm.Callback().Query().Remove("count_price_loads") })
+	queries := countPriceLoads(t, e)
 
 	// The first load is held until every caller asked for the snapshot.
 	tx, err := testutil.Begin(ctx, e.db)
@@ -343,20 +337,10 @@ func TestSnapshotLoadsOnce(t *testing.T) {
 	_, err = store.SQLTx(tx).ExecContext(ctx, `LOCK TABLE model_prices IN ACCESS EXCLUSIVE MODE`)
 	require.NoError(t, err)
 	const callers = 8
-	snaps := make(chan *priceSnapshot, callers)
-	for range callers {
-		go func() {
-			snap, err := e.svc.snapshot(ctx)
-			assert.NoError(t, err)
-			snaps <- snap
-		}()
-	}
-	require.Eventually(t, func() bool {
-		var waiting int
-		err := e.db.SQL.QueryRowContext(ctx, `SELECT count(*) FROM pg_stat_activity
-			WHERE datname = current_database() AND wait_event_type = 'Lock'`).Scan(&waiting)
-		return err == nil && waiting > 0
-	}, 10*time.Second, 5*time.Millisecond)
+	snaps := askSnapshots(t, e, callers)
+	wait, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	auditBillingWaitLocks(t, wait, e.db, 1)
 	time.Sleep(50 * time.Millisecond) // the other callers join meanwhile
 	require.NoError(t, tx.Commit().Error)
 	first := <-snaps
@@ -364,4 +348,30 @@ func TestSnapshotLoadsOnce(t *testing.T) {
 		require.Same(t, first, <-snaps)
 	}
 	require.Equal(t, int64(1), queries.Load())
+}
+
+// countPriceLoads counts the queries of model_prices from now on.
+func countPriceLoads(t *testing.T, e *pricingEnv) *atomic.Int64 {
+	var queries atomic.Int64
+	require.NoError(t, e.db.Gorm.Callback().Query().After("gorm:query").Register("count_price_loads", func(db *gorm.DB) {
+		if db.Statement.Table == "model_prices" {
+			queries.Add(1)
+		}
+	}))
+	t.Cleanup(func() { _ = e.db.Gorm.Callback().Query().Remove("count_price_loads") })
+	return &queries
+}
+
+// askSnapshots asks for the snapshot from n callers at once; each sends
+// what it got.
+func askSnapshots(t *testing.T, e *pricingEnv, n int) <-chan *priceSnapshot {
+	snaps := make(chan *priceSnapshot, n)
+	for range n {
+		go func() {
+			snap, err := e.svc.snapshot(context.Background())
+			assert.NoError(t, err)
+			snaps <- snap
+		}()
+	}
+	return snaps
 }

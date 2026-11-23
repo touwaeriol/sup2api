@@ -11,7 +11,6 @@ import (
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 
-	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/billing/expr"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/httpapi"
@@ -182,7 +181,7 @@ func (s *Service) createPrice(c *gin.Context) {
 		return
 	}
 	name, mode := deref(in.Model), deref(in.Mode)
-	if fields := newPriceFields(name, mode); len(fields) > 0 {
+	if fields := newPriceFields(ctx, name, mode); len(fields) > 0 {
 		httpapi.Fail(c, core.InvalidFields(fields...))
 		return
 	}
@@ -200,15 +199,10 @@ func (s *Service) createPrice(c *gin.Context) {
 	s.replySaved(c, p, err, httpapi.Created)
 }
 
-// newPriceFields are the field errors of the model and mode of a new price.
-func newPriceFields(name, mode string) []core.FieldError {
-	var fields []core.FieldError
-	switch {
-	case name == "":
-		fields = append(fields, modelField("required"))
-	case !manifest.ValidModelID(name):
-		fields = append(fields, modelField("invalid"))
-	}
+// newPriceFields are the field errors of the model (core.ModelErrors) and
+// mode of a new price.
+func newPriceFields(ctx context.Context, name, mode string) []core.FieldError {
+	fields := core.ModelErrors(ctx, "model", name)
 	if mode == "" {
 		fields = append(fields, core.FieldError{Field: "mode", Code: "required", Message: "visual or expression"})
 	}
@@ -297,8 +291,8 @@ func (s *Service) reprice(ctx context.Context, tx *gorm.DB, cur *Price, in price
 // expression is checked (reprice).
 func (s *Service) priceChanges(ctx context.Context, tx *gorm.DB, cur *Price, in priceInput) (map[string]any, error) {
 	name, mode := core.ValueOr(in.Model, cur.Model), core.ValueOr(in.Mode, cur.Mode)
-	if !manifest.ValidModelID(name) {
-		return nil, core.InvalidFields(modelField("invalid"))
+	if fields := core.ModelErrors(ctx, "model", name); len(fields) > 0 {
+		return nil, core.InvalidFields(fields...)
 	}
 	config, src, hash, version := cur.Config, cur.Expression, cur.ExprHash, cur.ExprVersion
 	pricing := in.Mode != nil || in.Config != nil || in.Expression != nil

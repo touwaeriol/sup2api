@@ -101,6 +101,16 @@ type Pricer interface {
 	Inputs(rule *PriceRule) (bodyPaths []string, headerNames []string)
 }
 
+// PricedModels tells which models have a list price in account groups: an
+// enabled global price or a price of the group (CONTRACTS §97.1). billing
+// implements it from the price snapshot requests are billed by, the one
+// place the rule is written; group and lookup ask it.
+type PricedModels interface {
+	// PricedModels returns, by group id, the models with a list price in
+	// each of the groups, sorted; with model set, only it, where it has one.
+	PricedModels(ctx context.Context, groupIDs []int64, model string) (map[int64][]string, error)
+}
+
 // What a request pays when its client hangs up while the upstream is
 // answering (settings "billing".client_disconnect_policy, CONTRACTS §25.8).
 const (
