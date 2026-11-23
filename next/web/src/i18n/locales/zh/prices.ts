@@ -51,7 +51,6 @@ export default {
   toExpression: '改用表达式编辑',
   serverGenerated: '服务端生成的表达式',
   edit: {
-    backToList: '返回列表',
     modeHint: {
       visual: '按档位计价：每档按 token 或按次收费，按顺序取第一个满足条件（长度、token 数、时间）的档位，最后一档兜底；再按请求参数、请求头、用量字段或时间加价。保存时转成表达式计费。',
       expression: '界面写不了的复杂计费用表达式。从可视化切过来会填入它生成的表达式；只有可视化生成的表达式才能切回可视化。'

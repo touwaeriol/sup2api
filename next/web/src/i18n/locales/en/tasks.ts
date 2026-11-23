@@ -1,7 +1,6 @@
 export default {
   title: 'Scheduled tasks',
   description: 'Scheduled tasks of the core and plugins: a cluster task runs once per slot on one node, a node task runs on every node.',
-  autoRefresh: 'Refreshes every 10 seconds',
   summary: {
     total: 'Tasks',
     running: 'Running',

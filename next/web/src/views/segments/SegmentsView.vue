@@ -154,7 +154,7 @@ function movedBack() {
     <SPageHeader :title="t('segments.title')" :description="t('segments.description')">
       <template #actions>
         <PersonalSegmentPicker :label="t('segments.convert.pickShort')" @select="picked" />
-        <SButton v-if="canManage" variant="primary" icon="plus" fab data-testid="segment-create" @click="openEditor(null)">{{ t('segments.create') }}</SButton>
+        <SButton v-if="canManage" variant="primary" icon="plus" data-testid="segment-create" @click="openEditor(null)">{{ t('segments.create') }}</SButton>
       </template>
       <template #filters-primary>
         <SSegmented v-model="list.filters.kind" size="sm" :options="kindOptions" :aria-label="t('segments.kinds.label')" data-testid="segment-kind" />

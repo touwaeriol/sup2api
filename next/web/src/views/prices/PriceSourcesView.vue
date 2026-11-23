@@ -103,7 +103,7 @@ function viewPrices(s: PriceSource) {
     <SPageHeader :title="t('prices.sources.title')" :description="t('prices.sources.description')">
       <template #actions>
         <SButton :loading="loading" icon="refresh" @click="load">{{ t('common.refresh') }}</SButton>
-        <SButton v-if="canManage" variant="primary" data-testid="price-source-new" icon="plus" fab @click="openEditor(null)">{{
+        <SButton v-if="canManage" variant="primary" data-testid="price-source-new" icon="plus" @click="openEditor(null)">{{
           t('prices.sources.create')
         }}</SButton>
       </template>

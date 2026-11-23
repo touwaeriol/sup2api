@@ -54,3 +54,16 @@ describe('buttons in a toolbar', () => {
     expect(fabs()).toBe(0)
   })
 })
+
+describe('filters in a page header', () => {
+  it('never float, even a primary button with an icon', () => {
+    const header = defineComponent({
+      setup() {
+        provideTitleContext(() => '页面', { head: shallowRef<PageHead | null>(null) })
+        return () => h(SPageHeader, { title: '页面' }, { 'filters-primary': () => create() })
+      }
+    })
+    mountPinned(header)
+    expect(fabs()).toBe(0)
+  })
+})

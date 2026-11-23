@@ -191,8 +191,7 @@ function openTask(name: string, node = '') {
   <div>
     <SPageHeader :title="t('tasks.title')" :description="t('tasks.description')">
       <template #actions>
-        <SAutoRefresh v-model="refreshSeconds" :choices="REFRESH_CHOICES" @refresh="load(true)" />
-        <SButton class="max-md:hidden" icon="refresh" :loading="loading" @click="load(true)">{{ t('common.refresh') }}</SButton>
+        <SAutoRefresh v-model="refreshSeconds" :choices="REFRESH_CHOICES" button :loading="loading" @refresh="load(true)" />
       </template>
     </SPageHeader>
 

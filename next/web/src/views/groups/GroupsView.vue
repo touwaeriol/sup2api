@@ -144,7 +144,7 @@ async function onAction(listed: Group, key: string) {
   <div>
     <SPageHeader :title="t('groups.title')" :description="t('groups.description')">
       <template #actions>
-        <SButton v-if="canManage" variant="primary" icon="plus" fab @click="openCreate">{{ t('groups.create') }}</SButton>
+        <SButton v-if="canManage" variant="primary" icon="plus" @click="openCreate">{{ t('groups.create') }}</SButton>
       </template>
     </SPageHeader>
 

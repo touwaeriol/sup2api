@@ -2,7 +2,7 @@ export default {
   listUi: {
     loadFailedEmpty: '账号列表加载失败，请刷新重试',
     identity: '账号 / 接入类型', filters: '账号筛选', search: '搜索账号名称', advanced: '高级筛选', advancedApplied: '高级筛选条件已生效',
-    clear: '清除筛选（{count}）', compact: '紧凑显示', refresh: '刷新账号列表',
+    clear: '清除筛选（{count}）', compact: '紧凑显示',
     loadFailed: '刷新失败，正在显示上次加载的数据',
     emptyFiltered: '没有符合筛选条件的账号，请调整或清除筛选。', empty: '暂无可见账号。', limitsColumn: '并发 / RPM / TPM / 会话',
     numberRange: '{label}须为 {min}–{max} 的整数', clearIds: '清除账号 ID 筛选', idsTruncated: '{label}（前 {n} 个）',

@@ -2,7 +2,7 @@ export default {
   listUi: {
     loadFailedEmpty: 'Accounts could not be loaded. Refresh to retry.',
     identity: 'Account / integration', filters: 'Account filters', search: 'Search account names', advanced: 'More filters', advancedApplied: 'Advanced filters are applied',
-    clear: 'Clear filters ({count})', compact: 'Compact rows', refresh: 'Refresh accounts',
+    clear: 'Clear filters ({count})', compact: 'Compact rows',
     loadFailed: 'Refresh failed; showing the previous results',
     emptyFiltered: 'No accounts match these filters. Adjust or clear the filters.', empty: 'No visible accounts.', limitsColumn: 'Concurrency / RPM / TPM / Sessions',
     numberRange: '{label} must be a whole number from {min} to {max}', clearIds: 'Clear the account id filter', idsTruncated: '{label} (first {n})',

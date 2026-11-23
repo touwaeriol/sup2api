@@ -6,7 +6,7 @@
 // #actions on the right (alone, they end the row). Actions never go into the
 // title bar: every page keeps them in the same place. The header is a
 // toolbar (toolbar.ts): its buttons take one size, and directly in a shell a
-// primary button with an icon floats on a phone.
+// primary action with an icon floats on a phone (filters never float).
 // In a nested scope (a tab, a dialog) or outside a shell it is a title block
 // with the actions beside it and the filters below; a title that repeats the
 // scope's is not drawn again.
@@ -17,7 +17,7 @@
 import { computed, onBeforeUnmount, useSlots, watchEffect } from 'vue'
 import { usePageHeadSink, useTitleVisibility } from './titleContext'
 import { useViewport } from './viewport'
-import { provideToolbar } from './toolbar'
+import ToolbarScope from './internal/ToolbarScope.vue'
 import FilterSheet from './internal/FilterSheet.vue'
 
 const props = withDefaults(defineProps<{ title: string; description?: string; filtersActiveCount?: number }>(), {
@@ -29,7 +29,6 @@ const sink = usePageHeadSink()
 const lifted = !!sink
 const distinct = useTitleVisibility(() => props.title)
 const showTitle = computed(() => !lifted && distinct.value)
-provideToolbar({ float: lifted })
 
 // A phone's title bar has room for the title only: what goes with the title
 // and the actions stay in the page there (and the description is not shown).
@@ -81,7 +80,7 @@ let headers = 0
       v-if="$slots.actions"
       class="flex flex-wrap items-center gap-2"
     >
-      <slot name="actions" />
+      <ToolbarScope :float="lifted"><slot name="actions" /></ToolbarScope>
     </div>
   </div>
   <Teleport
@@ -105,29 +104,31 @@ let headers = 0
       v-if="hasFilters()"
       class="flex min-w-0 flex-1 flex-wrap items-end gap-2"
     >
-      <FilterSheet
-        :collapse="compact"
-        :active-count="filtersActiveCount"
-      >
-        <template
-          v-if="$slots['filters-primary']"
-          #primary
+      <ToolbarScope>
+        <FilterSheet
+          :collapse="compact"
+          :active-count="filtersActiveCount"
         >
-          <slot name="filters-primary" />
-        </template>
-        <template
-          v-if="$slots.filters"
-          #default
-        >
-          <slot name="filters" />
-        </template>
-      </FilterSheet>
+          <template
+            v-if="$slots['filters-primary']"
+            #primary
+          >
+            <slot name="filters-primary" />
+          </template>
+          <template
+            v-if="$slots.filters"
+            #default
+          >
+            <slot name="filters" />
+          </template>
+        </FilterSheet>
+      </ToolbarScope>
     </div>
     <div
       v-if="!headed() && $slots.actions"
       class="ms-auto flex max-w-full shrink-0 flex-wrap items-center gap-2"
     >
-      <slot name="actions" />
+      <ToolbarScope :float="lifted"><slot name="actions" /></ToolbarScope>
     </div>
   </div>
 </template>

@@ -1,7 +1,6 @@
 export default {
   title: '定时任务',
   description: '核心和插件的定时任务：全集群任务每个时段只在一个节点运行一次，每节点任务在每个节点各自运行。',
-  autoRefresh: '每 10 秒自动刷新',
   summary: {
     total: '任务总数',
     running: '正在运行',

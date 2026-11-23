@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '@sub2api/host'
-import { SAutoRefresh, SDateTime, statusTone, useAutoRefresh, SBadge, SButton, SChip, SCode, SGrid, SHint, SLink, SPageHeader, SStatCard, SStatusDot, STable, type TableColumn, type Tone, type StatusTone } from '@sub2api/ui'
+import { SAutoRefresh, SDateTime, statusTone, useAutoRefresh, SBadge, SChip, SCode, SGrid, SHint, SLink, SPageHeader, SStatCard, SStatusDot, STable, type TableColumn, type Tone, type StatusTone } from '@sub2api/ui'
 import type { NodeInfo, PluginSandboxStatus } from '@/api/types'
 import type { NodePluginState } from '@/api/admin'
 import type { ShellNode } from '@/api/observability'
@@ -179,8 +179,7 @@ const versionsText = computed(() => (gatewayVersions.value?.size ? t('nodes.vers
   <div>
     <SPageHeader :title="t('nodes.title')" :description="t('nodes.description')">
       <template #actions>
-        <SAutoRefresh v-model="refreshSeconds" :choices="REFRESH_CHOICES" @refresh="load(true)" />
-        <SButton class="max-md:hidden" icon="refresh" :loading="loading" @click="load(true)">{{ t('common.refresh') }}</SButton>
+        <SAutoRefresh v-model="refreshSeconds" :choices="REFRESH_CHOICES" button :loading="loading" @refresh="load(true)" />
       </template>
     </SPageHeader>
 
