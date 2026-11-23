@@ -266,14 +266,14 @@
 | GET `/plugins/:key/events` | `plugin:read` | 游标、积压、死信 |
 | GET `/ui/plugins` | `self:plugin_ui`（§80.1：会话天然持有，访问密钥须勾选） | 前端扩展：`[{key, version, asset_base, menus, pages, slots, account_actions, native_entry, trust}]`（按权限过滤） |
 | GET `/nodes` | `node:read` | |
-| GET `/market/sources`、GET `/market/plugins?source_id=` | `plugin:market:read` | |
+| GET `/market/sources`、GET `/market/plugins?source_id=` | `plugin:market:read` | 源为 `{id, name, url, enabled, created_at}`（没有 `public_key`）；插件列表的字段见 §136 |
 | GET/POST `/publishers`，POST `/publishers/:id/keys`，POST `/publishers/:id/revoke`，POST `/publisher-keys/:key_id/revoke` | `publisher:read` / `publisher:manage` | |
 
 补充约定（C1）：
 - 插件配置加密存于 `plugin_installs.config_enc`，AES-GCM 的 AAD 为 `"plugin-config:"+key`；配置变更后在 `config:changed` 广播 `{"type":"config","plugin_key":k}`
 - 宿主版本取 `main.Version`，比较兼容范围时忽略预发布后缀
 - `/nodes` 中每个节点、插件详情 `nodes[]` 中每项的插件状态字段为 `state`（结构见 §15.3）；插件列表与详情的节点汇总都叫 `node_summary` `{total, states}`
-- 市场源 `url` 可以指向 `index.json`，也可以是以 `/` 结尾的目录（自动补 `index.json`）
+- 市场源 `url` 可以指向 `index.json`，也可以是以 `/` 结尾的目录（自动补 `index.json`）；只接受 https，`SUB2API_MARKET_ALLOW_HTTP=true` 时也接受 http（§136）
 - 插件详情中的钩子统计来自 `core.HookStatsSource`（G），手动执行任务通过 `core.JobTrigger`（H）
 - 发布行为（C2）：Disable 立即提交，返回时状态已是 `disabled`；Enable 优先启用 `active_version`，否则取最新的已批准版本；`plugins` 行删除后，各节点在一次对账内停止实例
 - **内置插件**（`plugins.builtin=true`，本期为 anthropic）：随镜像提供（`SUB2API_BUILTIN_PLUGIN_DIR`，默认 `/opt/sub2api/builtin`），核心启动时在一个节点上（锁 `plugins:builtin`）自动上传、授予全部宿主权限（新插件权限按 manifest `defaults` 授予角色，§4）、首次安装后启用（**只安装**类的除外，见 §26.8），镜像带新版本时自动升级；管理员禁用后保持禁用。签内置包的密钥始终信任：取 `SUB2API_BUILTIN_TRUST_KEY`（`keyId=base64pub`），未设时取内置目录的 `trust.pub` + `trust.keyid`（镜像与 Release 包都带）。`DELETE /plugins/:key` 对内置插件返回 403，`details.reason = "builtin"`；列表与详情返回 `builtin` 字段
@@ -379,29 +379,47 @@
 
 ### 11.1 插件市场索引（C1 读取，E 的 `sub2api-plugin index` 生成）
 
-`index.json`：
+`index.json` v2（2026-11-24 起，§136；登记处仓库的文件与 `sub2api-plugin` 的用法见 §135）。核心只读这一个文件，没有签名文件，市场源也没有公钥：
 
 ```json
 {
-  "version": 1,
-  "generated_at": "2026-09-24T12:00:00Z",
+  "version": 2,
+  "generated_at": "2026-11-24T00:00:00Z",
+  "publishers": [{
+    "id": "sub2api",
+    "name": {"en": "Sub2API", "zh": "Sub2API"},
+    "homepage": "https://github.com/touwaeriol/sup2api",
+    "trust": "official",
+    "status": "active"
+  }],
   "plugins": [{
-    "key": "anthropic",
-    "name": {"en": "Anthropic", "zh": "Anthropic"},
-    "description": {"en": "...", "zh": "..."},
+    "key": "codex",
     "publisher": "sub2api",
+    "name": {"en": "Codex", "zh": "Codex"},
+    "description": {"en": "...", "zh": "..."},
+    "repo": "touwaeriol/sup2api",
+    "source": "https://github.com/touwaeriol/sup2api/tree/main/next/plugins/codex",
+    "builtin": true,
+    "deprecated": {"reason": {"en": "...", "zh": "..."}},
     "versions": [{
-      "version": "0.1.0",
-      "url": "https://example.com/anthropic-0.1.0.s2plugin",
+      "version": "0.2.3",
+      "url": "https://github.com/touwaeriol/sup2api/releases/download/codex-v0.2.3/codex-0.2.3.s2plugin",
       "sha256": "<hex of the .s2plugin file>",
       "size": 1234567,
-      "host_compat": ">=0.1.0 <0.2.0"
+      "host_compat": ">=0.1.311",
+      "release_url": "https://github.com/touwaeriol/sup2api/releases/tag/codex-v0.2.3",
+      "deprecated": {"reason": {"en": "...", "zh": "..."}}
     }]
   }]
 }
 ```
 
-`index.json.sig`：一行 base64，内容为 Ed25519 对 ASCII 字符串 `"sub2api-market-index-v1:" + sha256hex(index.json 原始字节)` 的签名，使用市场源配置的公钥验证。`url` 可以是相对地址（相对 index.json 所在目录）。
+- `version` 必须是 2，其他值（包括旧的 1）整份索引作废（`GET /market/plugins` 503 `unavailable`，信息 `market index is invalid: …`）。`publishers[].trust` 只能是 `official`、`verified`、`community`，`status` 只能是 `active`、`revoked`，否则同样整份作废。
+- 可选字段缺省时省略：`homepage`、`source`、`builtin`、`deprecated`。`publishers` 按 `id` 排序，`plugins` 按 `key` 排序，`versions` 按 semver 降序；核心不依赖这些顺序。
+- `plugins[].publisher` 是 `publishers[].id`，也是包清单的 `publisher`；`key`、`version`、`host_compat` 与清单的 `key`、`version`、`hostCompat` 一致（由登记处的检查保证，核心安装时照常按清单校验）。
+- `url` 可以是相对地址，相对 index.json 所在目录解析（本地与测试市场用相对地址；登记处生成的是 GitHub Release 的绝对地址）。解析后的地址须是 https，开了 `SUB2API_MARKET_ALLOW_HTTP` 时也接受 http。
+- `release_url` 是该版本的发布页（更新说明），核心只透传，不校验格式（本地导入可能只是 `…/releases`）。
+- 核心的行为（信任取自索引、发布者被吊销或不在索引中、弃用、https）见 §136。
 
 ### 11.2 插件出口 SDK（D 实现 `sdk/pluginsdk/egress`，E 调用）
 
@@ -443,7 +461,7 @@ Anthropic 的 `cache_creation_input_tokens` 是总量（含 1 小时缓存）。
 **token 计数不占资源**（2026-11-04，用户决定）：`*.count_tokens` 不占 API Key 和账号的并发，不计 Key 和账号的 RPM、TPM，不扣额度也不查余额。计数失败可以换账号，但不改变账号状态：不冷却、不自动禁用、不观测额度，失败策略规则也不参与。仍要通过鉴权，已冷却或禁用的账号不会被选中，使用记录照常写一条不计费的记录。粘性会话：计数与粘性无关，按权重随机选账号，不读也不写绑定（2026-11-04，用户决定）。映射：参数错误 400 `invalid_request_error`（上游 4xx 原样透传，不冷却账号）、鉴权 401/403、真正的上游故障 5xx
 - `usage_logs.error_type` 取值另含 `model_not_allowed`、`price_not_configured`、`rate_limited`、`invalid_request`、`plugin_unavailable`、`blocked_by_hook`
 - 钩子熔断按节点计数：同一钩子在本节点连续失败 10 次后熔断 30 秒
-- 测试环境的市场地址为内网 `http://caddy:3120/market/index.json`（市场客户端目前不过滤内网地址；市场源只有 `publisher:manage` 能配置）
+- 测试环境的市场地址为内网 `http://caddy:3120/market/index.json`（e2e 栈设 `SUB2API_MARKET_ALLOW_HTTP=true` 才能用 http，§136；市场客户端目前不过滤内网地址；市场源只来自核心的环境变量 `SUB2API_MARKET_SOURCES`）
 
 ### 11.7 插件调用超时（C2）与任务、事件（H）
 
@@ -548,7 +566,7 @@ compose 里的 `mock-upstream` 服务模拟 Anthropic `/v1/messages` 与 `/v1/me
 
 - **卸载清除账号**：`DELETE /plugins/:key?purge=&purge_accounts=true` 时调用 `core.PluginAccountPurger.PurgePluginAccounts`（账号模块实现，软删除该插件所有账号类型的账号并发事件）；默认保留（孤立账号）。
 - **旧版本缓存清理**：节点上不再被 active/desired/standby 引用的插件版本，实例排空后删除其解包目录并关闭包文件句柄。
-- **节点重新验签**：节点解包前除 sha256 外再用信任库验证包签名（官方根密钥 + publisher_keys），失败则拒绝加载并在节点状态中报告。
+- **节点重新验签**：节点解包前除 sha256 外再用信任库验证包签名（官方根密钥 + publisher_keys），失败则拒绝加载并在节点状态中报告。从市场安装的版本（`signature_status = indexed`）不验签，只要求其发布者在本核心未被吊销；`revoked` 的版本一律不加载（`TrustStore.VerifyRecorded`，§136）。
 - **资源限制即时生效**：`PUT /plugins/:key/resources` 后广播 `{"type":"resources","plugin_key"}`，各节点用新限制逐个重启该插件实例（先启动新实例再排空旧实例）。
 - **插件接口节点自我隔离**：节点 `Healthy()` 为 false 时 `/api/v1/p/:key/*` 与网关端点返回 503 `unavailable`。
 - **市场兼容性**：`GET /market/plugins` 每个版本增加 `compatible`（按核心版本判断 `host_compat`）；响应顶层 `host_version`。
@@ -7566,7 +7584,7 @@ type Error string                           // ErrSelf, ErrCycle, ErrTooDeep, Er
 
 ### 103.6 端到端安全测试
 
-`next/e2e/ac28_supplier_agent_test.go`（`TestAC28_SupplierAgentTeam`）在真实核心上搭 admin → 代理 A → 代理 B → 供应商 C，另有无关的代理 X 与普通用户 U，逐项验证计划 §5.1–5.6：用户、账号、代理、`/account-usage`、`/lookup` 越出 team 一律 404（403 用于不带范围的入口）；角色指派（不在可分配清单、team 外、对自己、角色不变的重放）、`owner_cannot_manage`、operator 不能分配或管理代理（D6）；owner 的 self、cycle（含两个并发移动）、`too_deep`（8 层链）；访问密钥先收窄再展开；dynweight 的账号路由（read 看 team，update 只能自己的）；删除用户后 team 照旧（D7）；管理员改账号所属后可见性立即跟随。单节点即可跑：`sub2api-plugin dev`（anthropic、dynweight 内置）加本机 `deploy/mock-upstream`，`E2E_NODE_URLS` 指向同一节点。同样的单节点也能跑 AC02、AC04、AC07、AC23 与网关的故障转移、冷却测试（冷却靠 dev 内存 Redis 按时过期，§47）；用到 `/market/` 的（AC02 插件矩阵、AC27）要在核心前面放一个提供签名市场目录（`sub2api-plugin pack`/`sign`/`index` 生成）、其余请求转发给核心的服务，`E2E_BASE_URL` 指向它，e2e 栈里这是 Caddy。
+`next/e2e/ac28_supplier_agent_test.go`（`TestAC28_SupplierAgentTeam`）在真实核心上搭 admin → 代理 A → 代理 B → 供应商 C，另有无关的代理 X 与普通用户 U，逐项验证计划 §5.1–5.6：用户、账号、代理、`/account-usage`、`/lookup` 越出 team 一律 404（403 用于不带范围的入口）；角色指派（不在可分配清单、team 外、对自己、角色不变的重放）、`owner_cannot_manage`、operator 不能分配或管理代理（D6）；owner 的 self、cycle（含两个并发移动）、`too_deep`（8 层链）；访问密钥先收窄再展开；dynweight 的账号路由（read 看 team，update 只能自己的）；删除用户后 team 照旧（D7）；管理员改账号所属后可见性立即跟随。单节点即可跑：`sub2api-plugin dev`（anthropic、dynweight 内置）加本机 `deploy/mock-upstream`，`E2E_NODE_URLS` 指向同一节点。同样的单节点也能跑 AC02、AC04、AC07、AC23 与网关的故障转移、冷却测试（冷却靠 dev 内存 Redis 按时过期，§47）；用到 `/market/` 的（AC02 插件矩阵、AC27）要在核心前面放一个提供市场目录（index.json v2 与包，§11.1）、其余请求转发给核心的服务（核心设 `SUB2API_MARKET_ALLOW_HTTP=true` 才能读 http 市场），`E2E_BASE_URL` 指向它，e2e 栈里这是 Caddy。
 
 ## 104. 上游流的内容类型嗅探、OpenAI 端点不带 `/v1`（2026-11-17，用户要求：codex 账号计费为 0、客户端 base URL 不带 /v1；无迁移）
 
@@ -9407,3 +9425,37 @@ Go 类型是 `expr.VisualConfig`、`TierConfig`、`TierCond`、`TokenPrices`、`
   - Anthropic：`{"data":[{"type":"model","id","display_name","created_at":"1970-01-01T00:00:00Z"}],"has_more":false,"first_id","last_id"}`。
   - Gemini：`{"models":[{"name":"models/<id>","version":"001","displayName","supportedGenerationMethods":[…]}]}`，不分页（忽略 `pageSize`、`pageToken`，不返回 `nextPageToken`）；查单个时模型可带或不带 `models/`。`supportedGenerationMethods` 取网关在该版本实际声明的 `POST /<版本>/models/:model:<方法>` 端点：名字含 `embedding` 的模型列含 embed 的方法，其余列另外那些。
 - 鉴权与 `GET /v1/usage` 共用 `authenticateKey`（Authorization Bearer、`x-api-key`、`x-goog-api-key`、`?key=`）。模型来源是 key 所在分组的可用模型（`core.GroupModelLister`，由 group 模块的 `offeredModels` 实现，与 `/me/prices`、分组的模型数同一规则）；三种格式列同一份清单，不按协议过滤（核心会做协议转换）。
+
+
+## 136. 插件商店：信任取自索引，去掉密钥，只用 HTTPS，弃用（2026-11-24，用户定“全部去掉密钥”“包地址只限 GitHub Release”“下架两种都支持”；迁移 0125，单向）
+
+登记处仓库与 `sub2api-plugin index`、`registry` 的用法见 §135，index.json v2 的格式见 §11.1。这里是核心一侧的约定。
+
+### 136.1 没有密钥
+
+- 市场不再签名：没有 `index.json.sig`，核心只拉 `index.json`；`market.VerifyIndex`、`SignIndex`、`IndexSignaturePrefix` 与 v1 格式删除。
+- 市场源没有公钥：迁移 `0125_market_sources_drop_public_key.sql` 删除 `market_sources.public_key`；`GET /market/sources` 不再返回 `public_key`。`SUB2API_MARKET_SOURCES` 为 `[{name, url}]`（同名的源更新 `url`；旧配置里多写的 `public_key` 不读）。
+- 可信来源是登记处仓库（PR 审核）、HTTPS 与索引里审核过的 sha256：市场源地址与解析后的包地址只接受 `https://`；`SUB2API_MARKET_ALLOW_HTTP=true`（默认 false，网关外壳透传给核心）时也接受 `http://`，只给本地市场用（e2e 栈的 Caddy、`deploy/single`、ovh 上的本地市场、网关真实核心测试的 httptest）。它不像 `SUB2API_PLUGIN_DEV_MODE` 那样关沙箱。启动时 `SUB2API_MARKET_SOURCES` 里有不合规的地址，核心启动失败；库里已有的 http 源在不放开时读取失败（列出全部源时跳过它，单独查它 400 `invalid_argument`）。
+- 手动上传与内置插件的包签名规则不变（官方根密钥、`publisher_keys`、`SUB2API_PLUGIN_ALLOW_UNSIGNED`）。
+
+### 136.2 市场来源的信任取自索引
+
+- `market.Download`（`review-from-market`、`install-from-market` 共用）先看该插件的发布者在索引里的状态：`active` 才下载；`revoked` 403 `permission_denied`，`details.reason = "revoked"`；索引的 `publishers` 里没有它 403 `permission_denied`，`details.reason = "publisher_unlisted"`。
+- 下载的包按索引的大小与 sha256 校验后交给安装器，`UploadOptions.Indexed` 带上索引里的发布者（`pkg.IndexedPublisher{Name, Trust, Status}`）。安装器对带 `Indexed` 的包不读签名（包签不签、签名对不对都不影响），改由 `TrustStore.VerifyIndexed` 决定信任：发布者须是清单的 `publisher`（否则 400 `fields[{field:"publisher", code:"publisher_mismatch"}]`）；上传时按名字登记到 `publishers`（新发布者以索引的 `trust` 建行，已有的把 `trust_level` 改成索引的值：同名发布者手动上传的包此后也按这个级别），预审只读（未登记时按 id 0 判断，与官方根密钥的预审相同）；本核心已吊销的发布者照旧 403 `reason = "revoked"`。信任级别能申请什么不变（`pkg.CheckTrust`），保留标识里市场来源仍是可信渠道（§55.2）。
+- 版本行的 `signature_status` 记为新值 `indexed`（列没有取值约束，不需要迁移；审计 `plugin.upload` 的 `signature_status` 同），`key_id` 为空，`publisher_id` 为登记的发布者。review、插件详情照常返回 `trust`（发布者行的级别）与 `signature_status: "indexed"`；控制台确认页把 `indexed` 当作通过（“由商店索引担保”），不显示签名警告。
+- 同意（`install.Consent`）照旧按发布者行的级别与状态检查，不再看索引。
+- 节点加载：`registry.TrustVerifier` 改调 `TrustStore.VerifyRecorded`：按版本行的 `signature_status`，`indexed` 不验签（包已按版本行的 sha256 校验），只要求发布者在本核心未被吊销；`revoked` 的版本一律不加载；其余照旧 `VerifyInstalled`。吊销发布者（`POST /publishers/:id/revoke`）同样把它的 `indexed` 版本改为 `revoked` 并禁用插件。
+
+### 136.3 商店列表
+
+`GET /market/plugins` 每项新增：`publisher_name`（多语言，索引没有该发布者时省略）、`publisher_homepage`、`trust`（索引给发布者的级别；不在索引中时为空串，不再按本地 `publishers` 表取，也不再有 `unknown`）、`publisher_status`（`active`；`revoked`：索引里吊销或本核心吊销；`missing`：索引里没有）、`repo`、`source_url`（索引的 `source`）、`builtin`、`deprecated`（`{reason}`，省略即未弃用）；`versions[]` 新增 `release_url` 与 `deprecated`。`latest_version` 是兼容当前核心且未弃用的最新版本，`update_available` 只与它比较：弃用的版本既不是最新版本，也不触发“有更新”，但仍列出、仍可安装。整个插件弃用（`plugins[].deprecated`）只是透传标记，不影响 `latest_version`。
+
+### 136.4 控制台
+
+插件市场页（`MarketView.vue`）：每个插件显示发布者名称与信任级别（`TrustBadge`）、发布者已吊销或不在索引中的标记（此时“安装/升级”按钮禁用并说明原因）、内置、弃用（悬停与下方提示显示原因）、发布者主页、仓库（`https://github.com/<repo>`）与源码链接（新窗口打开）；页头筛选条新增“发布者”下拉。选择版本的弹窗标出弃用的版本（原因）并给每个版本一个“更新说明”链接（`release_url`，新窗口）。判断与筛选放在 `views/plugins/marketUtil.ts`，标记与链接是 `parts/MarketBadges.vue`、`parts/MarketLinks.vue`；mock 的市场在 `web/mock/market.ts`。
+
+### 136.5 迁移与发布
+
+- 0125 单向：删掉的公钥此后任何核心都不用，回退靠升级前的备份；可以重跑。改库，走 `primary-first-v1`。
+- 部署：生产的 `SUB2API_MARKET_SOURCES` 指向 `https://raw.githubusercontent.com/touwaeriol/sup2api-plugin/index/index.json`；用本地 http 市场的栈加 `SUB2API_MARKET_ALLOW_HTTP=true`（e2e、single 的 compose 与 ovh 的 compose 已加）。
+- 测试：`market`（v2 解析、发布者状态、弃用与最新版本、https 规则、下载拒绝吊销与缺失的发布者）、`pkg`（`VerifyIndexed`、`VerifyRecorded`）、`plugin/api`（未签名的包经市场安装取得索引的 official，手动上传同一个包被拒）、`registry`（加载时按版本行验签）。

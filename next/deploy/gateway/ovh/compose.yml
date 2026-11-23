@@ -28,6 +28,7 @@ x-node: &node
     SUB2API_PLUGIN_OFFICIAL_KEYS: ${PLUGIN_TRUST_KEY:?}
     SUB2API_BUILTIN_TRUST_KEY: ${PLUGIN_TRUST_KEY:?}
     SUB2API_MARKET_SOURCES: ${MARKET_SOURCES:?}
+    SUB2API_MARKET_ALLOW_HTTP: "true"
     # Plugin packages are signed with sup2api-plugins-2026 (keys/plugin-sign on ovh);
     # PLUGIN_TRUST_KEY is that key. Landlock was checked against every plugin (2026-10-29).
     SUB2API_PLUGIN_VERIFY_SIGNATURES: "true"

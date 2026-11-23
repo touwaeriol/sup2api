@@ -39,3 +39,18 @@ func TestSQLTrustRegisterOfficial(t *testing.T) {
 		})
 	})
 }
+
+// A market install registers its publisher with the index's trust level,
+// or sets that level on the registered one.
+func TestSQLTrustUpsertPublisher(t *testing.T) {
+	gormtest.Assert(t, func(db *gorm.DB) *gorm.DB {
+		return upsertPublisher(db, "acme", TrustVerified)
+	})
+}
+
+func TestSQLTrustRecordedVersion(t *testing.T) {
+	gormtest.Assert(t, func(db *gorm.DB) *gorm.DB {
+		var v model.PluginVersion
+		return recordedVersion(db, "demo", "1.2.0").Take(&v)
+	})
+}

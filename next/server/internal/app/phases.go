@@ -179,7 +179,7 @@ func (b *boot) startPluginRuntime(trust *pkg.TrustStore) error {
 		DB: b.db, Trust: trust, Authz: b.az, Permissions: b.az, Defaults: defaults,
 		Rollout: b.ctl, Schemas: b.schemas, Bus: b.cl.Bus, Accounts: b.acc, KV: rt, Nodes: b.cl.Registry, Packages: b.packageSrc,
 	}, install.Options{HostVersion: b.version, Plugins: b.cfg.Plugins})
-	b.mkt = market.New(b.db, b.inst, b.marketClient, b.cfg.Plugins.MaxPackageBytes)
+	b.mkt = market.New(b.db, b.inst, b.marketClient, market.Options{MaxPackageBytes: b.cfg.Plugins.MaxPackageBytes, AllowHTTP: b.cfg.Plugins.MarketAllowHTTP})
 	if b.managed == nil || b.managed.prepare.Bootstrap {
 		if err := b.mkt.SeedSources(b.ctx, b.cfg.Plugins.MarketSourcesJSON); err != nil {
 			return fmt.Errorf("market sources: %w", err)

@@ -20,6 +20,7 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/sdk/pkgsig"
 	pluginpkg "github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/pkg"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/registry/registrytest"
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/testutil"
 )
 
 func zipFiles(t *testing.T, files map[string][]byte) []byte {
@@ -83,8 +84,8 @@ func TestMaterializeRejectsBadSignature(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	// The querier is never reached: the signature check fails first.
-	s := NewPackages(nil, dir, WithVerifier(TrustVerifier(trust, nil, pluginpkg.Limits{})))
+	// No version row: the package is verified by its signature, which fails.
+	s := NewPackages(nil, dir, WithVerifier(TrustVerifier(trust, testutil.DB(t).Gorm, pluginpkg.Limits{})))
 	p := pkgFor(dir, data, "sig", "1.0.0")
 	err = s.materialize(context.Background(), p, func() ([]byte, error) { return data, nil })
 	if err == nil || !strings.Contains(err.Error(), "signature verification failed") {
@@ -110,15 +111,16 @@ func TestMaterializeUnsignedPolicy(t *testing.T) {
 	data := registrytest.Package(t, m, []byte("bin"), nil)
 	dir := t.TempDir()
 
+	db := testutil.DB(t).Gorm
 	strict, _ := pluginpkg.NewTrustStore(nil, false)
-	s := NewPackages(nil, dir, WithVerifier(TrustVerifier(strict, nil, pluginpkg.Limits{})))
+	s := NewPackages(nil, dir, WithVerifier(TrustVerifier(strict, db, pluginpkg.Limits{})))
 	if err := s.materialize(context.Background(), pkgFor(dir, data, "uns", "1.0.0"),
 		func() ([]byte, error) { return data, nil }); err == nil {
 		t.Fatal("unsigned package accepted although unsigned plugins are not allowed")
 	}
 
 	lax, _ := pluginpkg.NewTrustStore(nil, true)
-	s = NewPackages(nil, dir, WithVerifier(TrustVerifier(lax, nil, pluginpkg.Limits{})))
+	s = NewPackages(nil, dir, WithVerifier(TrustVerifier(lax, db, pluginpkg.Limits{})))
 	p := pkgFor(dir, data, "uns", "1.0.0")
 	if err := s.materialize(context.Background(), p, func() ([]byte, error) { return data, nil }); err != nil {
 		t.Fatal(err)
@@ -129,7 +131,7 @@ func TestMaterializeUnsignedPolicy(t *testing.T) {
 	}
 
 	// Manifest identity must match the requested version.
-	s = NewPackages(nil, t.TempDir(), WithVerifier(TrustVerifier(lax, nil, pluginpkg.Limits{})))
+	s = NewPackages(nil, t.TempDir(), WithVerifier(TrustVerifier(lax, db, pluginpkg.Limits{})))
 	other := pkgFor(s.dataDir, data, "uns", "2.0.0")
 	if err := s.materialize(context.Background(), other, func() ([]byte, error) { return data, nil }); err == nil {
 		t.Fatal("package of another version accepted")

@@ -1,0 +1,6 @@
+-- sql
+INSERT INTO "publishers" ("name","trust_level","revoked_at") VALUES ($1,$2,$3) ON CONFLICT ("name") DO UPDATE SET "trust_level"="excluded"."trust_level" RETURNING "id","status","created_at"
+-- vars
+$1 string "acme"
+$2 string "verified"
+$3 *time.Time nil

@@ -1,13 +1,8 @@
 package e2e
 
 import (
-	"crypto/ed25519"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/hex"
 	"fmt"
 	"net/http"
-	"strings"
 	"testing"
 	"time"
 )
@@ -62,53 +57,7 @@ func TestAC01_ComposeStack(t *testing.T) {
 		}
 	})
 
-	t.Run("market index served and signed", func(t *testing.T) {
-		c := NewClient(e.BaseURL)
-		r := c.Do(t, http.MethodGet, "/market/index.json", nil)
-		if r.Status != 200 {
-			t.Fatalf("index: %s", r)
-		}
-		idx := r.JSON()
-		if idx.Get("version").Int() != 1 || !idx.Get("plugins").IsArray() {
-			t.Fatalf("index format: %s", r.Body)
-		}
-		// The image always builds tools/sub2api-plugin and packages plugins/*
-		// (deploy/docker/build-go.sh), so in this deployment an empty or
-		// unsigned index means the build chain broke, not "not ready yet".
-		// Returning early here used to hide every assertion below - the
-		// ed25519 verification, dev-official.pub and the per-version package
-		// download - while the test still reported PASS.
-		if len(idx.Get("plugins").Array()) == 0 {
-			t.Fatalf("market index lists no plugins: build-go.sh packaged nothing (index: %s)", r.Body)
-		}
-		sig := c.Do(t, http.MethodGet, "/market/index.json.sig", nil)
-		if sig.Status != 200 {
-			t.Fatalf("index.json.sig: %s; the market index must be signed with the dev key (CONTRACTS §11.1)", sig)
-		}
-		pubResp := c.Do(t, http.MethodGet, "/market/dev-official.pub", nil)
-		if pubResp.Status != 200 {
-			t.Fatalf("dev-official.pub: %s", pubResp)
-		}
-		pub, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(pubResp.Body)))
-		if err != nil || len(pub) != ed25519.PublicKeySize {
-			t.Fatalf("bad dev public key %q", pubResp.Body)
-		}
-		raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(sig.Body)))
-		if err != nil {
-			t.Fatalf("index.json.sig not base64: %v", err)
-		}
-		h := sha256.Sum256(r.Body)
-		msg := []byte("sub2api-market-index-v1:" + hex.EncodeToString(h[:]))
-		if !ed25519.Verify(pub, msg, raw) {
-			t.Fatal("index.json.sig does not verify with dev-official.pub (CONTRACTS §11.1)")
-		}
-		for _, p := range idx.Get("plugins").Array() {
-			for _, v := range p.Get("versions").Array() {
-				e2 := e.With(t)
-				e2.MarketPackage(p.Get("key").String(), v.Get("version").String())
-			}
-		}
-	})
+	t.Run("market index served", func(t *testing.T) { checkMarketIndex(t, e) })
 
 	t.Run("mock upstream", func(t *testing.T) {
 		m := e.Mock()
@@ -182,4 +131,34 @@ func TestAC01_ComposeStack(t *testing.T) {
 			t.Fatalf("mock recorded %d requests with x-api-key %q, want >= 10", mine, key)
 		}
 	})
+}
+
+// checkMarketIndex checks the market index the stack serves: index.json v2
+// (CONTRACTS §11.1) listing plugins of active publishers, each version
+// downloadable and matching its size and sha256.
+func checkMarketIndex(t *testing.T, e *Env) {
+	r := NewClient(e.BaseURL).Do(t, http.MethodGet, "/market/index.json", nil)
+	if r.Status != 200 {
+		t.Fatalf("index: %s", r)
+	}
+	idx := r.JSON()
+	if idx.Get("version").Int() != 2 || !idx.Get("publishers").IsArray() || !idx.Get("plugins").IsArray() {
+		t.Fatalf("index format (CONTRACTS §11.1 v2): %s", r.Body)
+	}
+	// The image always builds tools/sub2api-plugin and packages plugins/*
+	// (deploy/docker/build-go.sh), so in this deployment an empty index
+	// means the build chain broke, not "not ready yet".
+	if len(idx.Get("plugins").Array()) == 0 {
+		t.Fatalf("market index lists no plugins: build-go.sh packaged nothing (index: %s)", r.Body)
+	}
+	for _, p := range idx.Get("plugins").Array() {
+		pub := idx.Get(fmt.Sprintf(`publishers.#(id==%q)`, p.Get("publisher").String()))
+		if pub.Get("status").String() != "active" || pub.Get("trust").String() == "" {
+			t.Fatalf("plugin %s: publisher not listed active: %s", p.Get("key"), r.Body)
+		}
+		for _, v := range p.Get("versions").Array() {
+			e2 := e.With(t)
+			e2.MarketPackage(p.Get("key").String(), v.Get("version").String())
+		}
+	}
 }

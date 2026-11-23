@@ -77,6 +77,7 @@ export default {
     revoked: 'revoked',
     expired: 'expired',
     untrusted: 'untrusted key',
+    indexed: 'vouched for by the market index',
     unknown: 'unknown'
   },
 
@@ -179,7 +180,19 @@ export default {
     incompatible: 'Incompatible with this core',
     incompatibleReason: 'This version requires core {range}; the running core is v{version}, so it cannot be installed.',
     noCompatible: 'No version is compatible with the running core (v{version}); it cannot be installed.',
-    newerIncompatible: 'Newer version v{version} is incompatible with this core; upgrade the core first.'
+    newerIncompatible: 'Newer version v{version} is incompatible with this core; upgrade the core first.',
+    publisherFilter: 'Publisher',
+    allPublishers: 'All publishers',
+    publisherRevoked: 'Publisher revoked',
+    publisherMissing: 'Publisher not in the index',
+    publisherBlocked: 'Its publisher is revoked or not listed in the market index; it cannot be installed.',
+    builtin: 'Built-in',
+    deprecated: 'Deprecated',
+    deprecatedReason: 'Deprecated: {reason}',
+    homepage: 'Homepage',
+    repo: 'Repository',
+    sourceCode: 'Source code',
+    releaseNotes: 'Release notes'
   },
 
   consent: {

@@ -1,0 +1,4 @@
+-- sql
+SELECT "name" FROM "publishers" WHERE status <> $1
+-- vars
+$1 string "active"

@@ -208,9 +208,10 @@ func WithSource(src *blobs.Source) PackagesOption {
 	return func(s *Packages) { s.source = src }
 }
 
-// TrustVerifier verifies packages with the plugin trust store (official
-// root keys and publisher_keys read through q). lim bounds unpacking and
-// should match the upload limits.
+// TrustVerifier verifies packages with the plugin trust store as their
+// version rows were recorded (TrustStore.VerifyRecorded: official root keys
+// and publisher_keys, or the publisher of a market install, read through
+// q). lim bounds unpacking and should match the upload limits.
 func TrustVerifier(trust *pluginpkg.TrustStore, q *gorm.DB, lim pluginpkg.Limits) PackageVerifier {
 	return func(ctx context.Context, key, version string, data []byte) error {
 		p, err := pluginpkg.Open(data, lim)
@@ -220,8 +221,7 @@ func TrustVerifier(trust *pluginpkg.TrustStore, q *gorm.DB, lim pluginpkg.Limits
 		if p.Manifest.Key != key || p.Manifest.Version != version {
 			return fmt.Errorf("package manifest identifies %s@%s", p.Manifest.Key, p.Manifest.Version)
 		}
-		_, err = trust.VerifyInstalled(ctx, q, p)
-		return err
+		return trust.VerifyRecorded(ctx, q, p)
 	}
 }
 

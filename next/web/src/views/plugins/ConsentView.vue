@@ -111,7 +111,8 @@ function toggle(row: HPRow, v: boolean) {
 
 const missingRequired = computed(() => rows.value.filter((r) => !r.optional && !checked[r.id]))
 const blockedByPermission = computed(() => rows.value.filter((r) => !r.optional && !r.allowed))
-const signatureOk = computed(() => review.value?.signature_status === 'valid')
+// A market install is vouched for by its index, not its signature (CONTRACTS §136).
+const signatureOk = computed(() => ['valid', 'indexed'].includes(review.value?.signature_status ?? ''))
 // Grants to roles the caller may not name go to a super admin's review instead of blocking (D2).
 const canSubmit = computed(() => !!review.value && review.value.host_compat_ok !== false && blockedByPermission.value.length === 0)
 const { colon, hpLabel } = useConsentLabels()

@@ -27,6 +27,10 @@ type UploadOptions struct {
 	// PackageURL is the market download URL; every node fetches the package
 	// from it. Empty for uploads, which nodes fetch from a node holding them.
 	PackageURL string
+	// Indexed is what the market index says of the package's publisher: a
+	// market install takes its trust level from it, not from the package
+	// signature (TrustStore.VerifyIndexed, CONTRACTS §136). Nil otherwise.
+	Indexed *pkg.IndexedPublisher
 }
 
 // Upload validates a package, stores it and returns the review. New plugins

@@ -32,7 +32,7 @@ type uploadState struct {
 // (ReviewPackage), which only reads and checks them. Upload and the preview
 // share it, so the preview fails as the upload would.
 func (s *Service) readUploadState(ctx context.Context, tx *gorm.DB, p *pkg.Package, opt UploadOptions, write bool) (*uploadState, error) {
-	ver, err := s.verifyTrust(ctx, tx, p, write)
+	ver, err := s.verifyTrust(ctx, tx, p, opt, write)
 	if err != nil {
 		return nil, err
 	}
@@ -53,15 +53,10 @@ func (s *Service) readUploadState(ctx context.Context, tx *gorm.DB, p *pkg.Packa
 	return st, nil
 }
 
-// verifyTrust verifies the signature of p, registering an official
-// publisher in a write (Verify) and reading only otherwise
-// (VerifyReadOnly), and checks what its trust level allows.
-func (s *Service) verifyTrust(ctx context.Context, tx *gorm.DB, p *pkg.Package, write bool) (*pkg.Verification, error) {
-	verify := s.d.Trust.VerifyReadOnly
-	if write {
-		verify = s.d.Trust.Verify
-	}
-	ver, err := verify(ctx, tx, p)
+// verifyTrust resolves the trust of p (verifyPackage) and checks what its
+// trust level allows.
+func (s *Service) verifyTrust(ctx context.Context, tx *gorm.DB, p *pkg.Package, opt UploadOptions, write bool) (*pkg.Verification, error) {
+	ver, err := s.verifyPackage(ctx, tx, p, opt, write)
 	if err != nil {
 		return nil, err
 	}
@@ -69,6 +64,21 @@ func (s *Service) verifyTrust(ctx context.Context, tx *gorm.DB, p *pkg.Package, 
 		return nil, err
 	}
 	return ver, nil
+}
+
+// verifyPackage takes the trust of a market install from its index
+// (VerifyIndexed) and verifies the signature of any other package. A write
+// registers the publisher (Verify), otherwise it is only read
+// (VerifyReadOnly).
+func (s *Service) verifyPackage(ctx context.Context, tx *gorm.DB, p *pkg.Package, opt UploadOptions, write bool) (*pkg.Verification, error) {
+	if opt.Indexed != nil {
+		return s.d.Trust.VerifyIndexed(ctx, tx, p, *opt.Indexed, write)
+	}
+	verify := s.d.Trust.VerifyReadOnly
+	if write {
+		verify = s.d.Trust.Verify
+	}
+	return verify(ctx, tx, p)
 }
 
 // readPlugin reads the status and publisher of plugin key, locking its row

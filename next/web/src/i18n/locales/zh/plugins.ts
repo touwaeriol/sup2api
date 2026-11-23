@@ -77,6 +77,7 @@ export default {
     revoked: '签名已吊销',
     expired: '密钥已过期',
     untrusted: '密钥不受信任',
+    indexed: '由商店索引担保',
     unknown: '未知'
   },
 
@@ -179,7 +180,19 @@ export default {
     incompatible: '不兼容当前核心版本',
     incompatibleReason: '该版本要求核心版本 {range}，当前核心为 v{version}，无法安装。',
     noCompatible: '没有兼容当前核心版本（v{version}）的版本，无法安装。',
-    newerIncompatible: '新版本 v{version} 不兼容当前核心版本，需先升级核心。'
+    newerIncompatible: '新版本 v{version} 不兼容当前核心版本，需先升级核心。',
+    publisherFilter: '发布者',
+    allPublishers: '全部发布者',
+    publisherRevoked: '发布者已吊销',
+    publisherMissing: '索引中没有该发布者',
+    publisherBlocked: '发布者已吊销或不在商店索引中，无法安装。',
+    builtin: '内置',
+    deprecated: '已弃用',
+    deprecatedReason: '已弃用：{reason}',
+    homepage: '主页',
+    repo: '仓库',
+    sourceCode: '源码',
+    releaseNotes: '更新说明'
   },
 
   consent: {

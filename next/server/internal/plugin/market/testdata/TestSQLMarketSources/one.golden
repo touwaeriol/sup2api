@@ -1,5 +1,5 @@
 -- sql
-SELECT id, name, url, public_key, enabled, created_at FROM "market_sources" WHERE id = $1 LIMIT $2
+SELECT id, name, url, enabled, created_at FROM "market_sources" WHERE id = $1 LIMIT $2
 -- vars
 $1 int 5
 $2 int 1
