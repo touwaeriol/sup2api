@@ -98,3 +98,17 @@ describe('tab bar that scrolls', () => {
     expect(scrollTo).toHaveBeenLastCalledWith({ left: 340, behavior: 'smooth' })
   })
 })
+
+describe('tab bar end', () => {
+  const two = [{ key: 'a', label: '甲' }, { key: 'b', label: '乙' }]
+  it('puts #end at the right end of the bar', () => {
+    const w = mount(STabs, { props: { tabs: two, modelValue: 'a' }, slots: { end: () => h('button', '刷新') } })
+    expect(w.get('[role="tablist"]').text()).not.toContain('刷新')
+    expect(w.get('[data-testid="tab-bar-end"]').text()).toBe('刷新')
+  })
+  it('keeps #end on its own row when the bar is not shown', () => {
+    const w = mount(STabs, { props: { tabs: two.slice(0, 1), modelValue: 'a' }, slots: { end: () => h('button', '刷新') } })
+    expect(w.find('[role="tablist"]').exists()).toBe(false)
+    expect(w.text()).toContain('刷新')
+  })
+})

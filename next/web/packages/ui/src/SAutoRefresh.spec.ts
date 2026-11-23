@@ -35,3 +35,18 @@ describe('SAutoRefresh on a phone', () => {
     expect(document.body.textContent).not.toContain('Refresh now')
   })
 })
+
+describe('SAutoRefresh button', () => {
+  it('adds a Refresh button on a wide screen that refreshes now', async () => {
+    const onRefresh = vi.fn()
+    const w = mountPinned(SAutoRefresh, { props: { modelValue: 10, button: true, loading: false, onRefresh } }, { compact: false })
+    const now = w.get('[data-testid="auto-refresh-now"]')
+    expect(now.text()).toBe('Refresh')
+    await now.trigger('click')
+    expect(onRefresh).toHaveBeenCalledOnce()
+  })
+  it('keeps the one icon button on a phone', () => {
+    const w = mountPinned(SAutoRefresh, { props: { modelValue: 10, button: true, onRefresh: () => {} } })
+    expect(w.find('[data-testid="auto-refresh-now"]').exists()).toBe(false)
+  })
+})
