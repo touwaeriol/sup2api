@@ -2,9 +2,11 @@
 // Page header. Directly in an app shell (provideTitleContext with a sink) the
 // shell's title bar shows the page's title and description, and on a wide
 // screen what the page puts beside its title (#before, #title-extra); the
-// header itself is a single toolbar row: #filters on the left, #actions on
-// the right. With no #filters the actions alone would take that row, so on a
-// wide screen they move into the title bar too.
+// header itself is a single toolbar row in the page: #filters on the left,
+// #actions on the right (alone, they end the row). Actions never go into the
+// title bar: every page keeps them in the same place. The header is a
+// toolbar (toolbar.ts): its buttons take one size, and directly in a shell a
+// primary action with an icon floats on a phone (filters never float).
 // In a nested scope (a tab, a dialog) or outside a shell it is a title block
 // with the actions beside it and the filters below; a title that repeats the
 // scope's is not drawn again.
@@ -15,6 +17,7 @@
 import { computed, onBeforeUnmount, useSlots, watchEffect } from 'vue'
 import { usePageHeadSink, useTitleVisibility } from './titleContext'
 import { useViewport } from './viewport'
+import ToolbarScope from './internal/ToolbarScope.vue'
 import FilterSheet from './internal/FilterSheet.vue'
 
 const props = withDefaults(defineProps<{ title: string; description?: string; filtersActiveCount?: number }>(), {
@@ -36,7 +39,6 @@ const hasExtras = () => !!slots.before || !!slots['title-extra']
 const extrasUp = () => lifted && !!sink.extra && hasExtras() && !compact.value
 const headed = () => (lifted ? hasExtras() && !extrasUp() : showTitle.value || hasExtras() || !!props.description)
 const hasFilters = () => !!slots.filters || !!slots['filters-primary']
-const actionsUp = () => lifted && !!sink.actions && !headed() && !hasFilters() && !!slots.actions && !compact.value
 
 const owner = ++headers
 watchEffect(() => {
@@ -78,7 +80,7 @@ let headers = 0
       v-if="$slots.actions"
       class="flex flex-wrap items-center gap-2"
     >
-      <slot name="actions" />
+      <ToolbarScope :float="lifted"><slot name="actions" /></ToolbarScope>
     </div>
   </div>
   <Teleport
@@ -94,49 +96,39 @@ let headers = 0
       <slot name="title-extra" />
     </div>
   </Teleport>
-  <Teleport
-    v-if="actionsUp()"
-    defer
-    :to="sink!.actions!"
-  >
-    <div
-      class="flex shrink-0 items-center gap-2"
-      data-testid="page-actions"
-    >
-      <slot name="actions" />
-    </div>
-  </Teleport>
   <div
-    v-else-if="hasFilters() || (!headed() && $slots.actions)"
+    v-if="hasFilters() || (!headed() && $slots.actions)"
     class="mb-3 flex flex-wrap items-end gap-2"
   >
     <div
       v-if="hasFilters()"
       class="flex min-w-0 flex-1 flex-wrap items-end gap-2"
     >
-      <FilterSheet
-        :collapse="compact"
-        :active-count="filtersActiveCount"
-      >
-        <template
-          v-if="$slots['filters-primary']"
-          #primary
+      <ToolbarScope>
+        <FilterSheet
+          :collapse="compact"
+          :active-count="filtersActiveCount"
         >
-          <slot name="filters-primary" />
-        </template>
-        <template
-          v-if="$slots.filters"
-          #default
-        >
-          <slot name="filters" />
-        </template>
-      </FilterSheet>
+          <template
+            v-if="$slots['filters-primary']"
+            #primary
+          >
+            <slot name="filters-primary" />
+          </template>
+          <template
+            v-if="$slots.filters"
+            #default
+          >
+            <slot name="filters" />
+          </template>
+        </FilterSheet>
+      </ToolbarScope>
     </div>
     <div
       v-if="!headed() && $slots.actions"
       class="ms-auto flex max-w-full shrink-0 flex-wrap items-center gap-2"
     >
-      <slot name="actions" />
+      <ToolbarScope :float="lifted"><slot name="actions" /></ToolbarScope>
     </div>
   </div>
 </template>

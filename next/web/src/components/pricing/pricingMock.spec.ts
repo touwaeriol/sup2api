@@ -137,7 +137,7 @@ describe('the rest of the group pricing mock', () => {
     const provided = ((await call('GET', '/groups/2/model-prices')).body.data.models as Array<{ model: string }>).map((m) => m.model)
     const model = catalog.map((c) => c.model).find((m) => !provided.includes(m))!
     const price = { mode: 'expression', expression: 'p * 2' }
-    const wrong = await call('PATCH', '/groups/2', { name: 'vip2', model_prices: [{ model, rule: price }, { model: 'no-such-model', rule: price }], model_rates: [{ model, rate: '0.' }], segment_rates: [{ segment_id: 2, rate: '0.5' }] })
+    const wrong = await call('PATCH', '/groups/2', { name: 'vip2', model_prices: [{ model, rule: price }, { model: ' ', rule: price }], model_rates: [{ model, rate: '0.' }], segment_rates: [{ segment_id: 2, rate: '0.5' }] })
     expect([wrong.status, fields(wrong)]).toEqual([400, ['model_prices.1.model', 'model_rates.0.rate']])
     expect((await call('GET', '/groups/2')).body.data.name).toBe('vip')
 

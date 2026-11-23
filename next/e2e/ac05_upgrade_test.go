@@ -16,7 +16,7 @@ import (
 // dynweight's adds a migration.
 const (
 	anthropicUpgradeFixture   = "0.4.1-test"
-	dynweightUpgradeFixture   = "0.6.1-test"
+	dynweightUpgradeFixture   = "0.7.1-test"
 	dynweightFixtureMigration = "0004_config_rule_count.sql"
 )
 

@@ -4,7 +4,7 @@ import { list, mocks } from './testing/accountsState'
 import { flushPromises, shallowMount } from '@vue/test-utils'
 import type { Account } from '@/api/types'
 import { i18n } from '@/i18n'
-import { SDropdown, SModal, SSwitch } from '@sub2api/ui'
+import { SAutoRefresh, SDropdown, SModal, SSwitch } from '@sub2api/ui'
 import AccountModelTest from './AccountModelTest.vue'
 import AccountGroupsCell from './AccountGroupsCell.vue'
 import PlatformIcon from '@/components/platform/PlatformIcon.vue'
@@ -14,6 +14,21 @@ describe('account editor dialog', () => {
   it('keeps one fixed size for every account type and step', () => {
     const editor = render().findAllComponents(SModal).find(m => m.props('width') === '2xl' && m.props('persistent'))
     expect(editor?.props('fixed')).toBe(true)
+  })
+})
+
+describe('account list toolbar', () => {
+  it('refreshes from the auto-refresh control, whose button spins while the list loads', () => {
+    vi.clearAllMocks()
+    list.loading.value = true
+    try {
+      const auto = render({ SPageHeader: { template: '<div><slot name="actions" /></div>' } }).getComponent(SAutoRefresh)
+      expect(auto.props()).toMatchObject({ button: true, loading: true })
+      auto.props('onRefresh')?.()
+      expect(mocks.reload).toHaveBeenCalledOnce()
+    } finally {
+      list.loading.value = false
+    }
   })
 })
 

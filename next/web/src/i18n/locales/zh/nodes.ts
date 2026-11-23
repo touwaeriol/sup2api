@@ -10,7 +10,6 @@ export default {
   error: '错误',
   alive: '在线',
   stale: '心跳超时',
-  autoRefresh: '每 5 秒自动刷新',
   online: '在线节点',
   pluginIssues: '插件异常',
   hostVersions: '版本数',

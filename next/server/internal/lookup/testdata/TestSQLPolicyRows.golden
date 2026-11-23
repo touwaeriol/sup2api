@@ -1,5 +1,5 @@
 -- sql
-SELECT g.model_allowlist, g.model_filter_mode FROM groups g WHERE g.status = 'active' AND (g.visibility = 'public' OR EXISTS (SELECT 1 FROM segment_groups sg
+SELECT g.id, g.model_allowlist, g.model_filter_mode FROM groups g WHERE g.status = 'active' AND (g.visibility = 'public' OR EXISTS (SELECT 1 FROM segment_groups sg
 		JOIN users su ON su.segment_id = sg.segment_id
 		WHERE sg.group_id = g.id AND sg.granted AND su.id = $1))
 -- vars

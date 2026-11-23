@@ -54,7 +54,7 @@ describe('nodes view', () => {
     expect(upgradeCalls()).toBe(1)
 
     shells = () => Promise.resolve({ nodes: [{ node_id: 'node-1', gateway_version: '0.1.135' }] })
-    await w.get('button').trigger('click')
+    await w.get('[data-testid="auto-refresh-now"]').trigger('click')
     await flushPromises()
     expect(upgradeCalls()).toBe(2)
     expect(w.text()).toContain('网关版本')

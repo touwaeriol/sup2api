@@ -425,11 +425,7 @@ async function restoreDefaults() {
 
 <template>
   <div>
-    <SPageHeader :title="t('roles.title')" :description="t('roles.description')">
-      <template #actions>
-        <SButton v-if="canDefine" variant="primary" icon="plus" data-testid="role-create" @click="openCreate">{{ t('roles.create') }}</SButton>
-      </template>
-    </SPageHeader>
+    <SPageHeader :title="t('roles.title')" :description="t('roles.description')" />
 
     <SSpinner v-if="loading" block />
 
@@ -455,6 +451,9 @@ async function restoreDefaults() {
             <SHint v-if="roleMemberCount(r) !== undefined" inline size="xs" class="shrink-0">{{ roleMemberCount(r) }}</SHint>
           </button>
         </div>
+        <template v-if="canDefine" #footer>
+          <SButton block icon="plus" data-testid="role-create" @click="openCreate">{{ t('roles.create') }}</SButton>
+        </template>
       </SCard>
 
       <!-- editor -->

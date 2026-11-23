@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { SButton, SPageHeader } from '@sub2api/ui'
+import { SPageHeader } from '@sub2api/ui'
 import UsageOverview from './UsageOverview.vue'
 import type { UsageView } from './view'
 
@@ -9,8 +9,6 @@ import type { UsageView } from './view'
 // the accounts in the caller's reach (`account`, CONTRACTS §103.5).
 const props = withDefaults(defineProps<{ view?: UsageView }>(), { view: 'self' })
 const { t } = useI18n()
-const revision = ref(0)
-const loading = ref(false)
 const PAGES: Record<UsageView, { summary: string; title: string; description: string }> = {
   all: { summary: '/usage/summary', title: 'usage.overviewTitle', description: 'usage.overviewDescription' },
   self: { summary: '/me/usage/summary', title: 'usage.myOverviewTitle', description: 'usage.myOverviewDescription' },
@@ -21,11 +19,7 @@ const page = computed(() => PAGES[props.view])
 
 <template>
   <div>
-    <SPageHeader :title="t(page.title)" :description="t(page.description)">
-      <template #actions>
-        <SButton :loading="loading" icon="refresh" @click="revision++">{{ t('common.refresh') }}</SButton>
-      </template>
-    </SPageHeader>
-    <UsageOverview v-model:loading="loading" :revision="revision" :summary-path="page.summary" :default-range="view === 'self' ? '7d' : 'today'" :view="view" />
+    <SPageHeader :title="t(page.title)" :description="t(page.description)" />
+    <UsageOverview :summary-path="page.summary" :default-range="view === 'self' ? '7d' : 'today'" :view="view" />
   </div>
 </template>

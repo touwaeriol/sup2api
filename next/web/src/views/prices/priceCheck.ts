@@ -11,6 +11,7 @@ import {
   PRICE_KEYS,
   TIME_RANGES,
   asVisualConfig,
+  blankPrices,
   condChildren,
   condDepth,
   condKind,
@@ -142,7 +143,7 @@ export function checkVisualConfig(cfg: VisualConfig): LocalIssue[] {
     if (!TIER_NAME.test(t.name)) out.push({ key: 'prices.local.tierName', params: { n: i + 1 } })
     else if (names.has(t.name)) out.push({ key: 'prices.local.tierDup', params: { name } })
     names.add(t.name)
-    if (t.unit === 'request' && !isSet(t.price)) out.push({ key: 'prices.local.tierPrice', params: { name } })
+    if (blankPrices(t).length) out.push({ key: t.unit === 'request' ? 'prices.local.tierPrice' : 'prices.local.tierBlank', params: { name } })
     else if ([t.price, ...PRICE_KEYS.map(k => t[k])].some(v => isSet(v) && num(v) < 0))
       out.push({ key: 'prices.local.negative', params: { name } })
     const issue = tierWhenIssue(t, i === cfg.tiers.length - 1, name)

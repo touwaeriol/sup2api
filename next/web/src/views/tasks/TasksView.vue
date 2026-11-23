@@ -6,7 +6,7 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { api, isApiError } from '@sub2api/host'
-import { SBadge, SButton, SDateTime, SDropdown, SFilterBar, SGrid, SHint, SInput, SPageHeader, SSelect, SStatCard, SStatusBadge, SStatusDot, SSwitch, STable, STabs, toast, useAutoRefresh, type TableColumn } from '@sub2api/ui'
+import { SAutoRefresh, SBadge, SButton, SDateTime, SDropdown, SFilterBar, SGrid, SHint, SInput, SPageHeader, SSelect, SStatCard, SStatusBadge, SSwitch, STable, STabs, toast, useAutoRefresh, type TableColumn } from '@sub2api/ui'
 import { useAuthStore } from '@/stores/auth'
 import { notifyError } from '@/utils/errors'
 import NodeTaskCell from './NodeTaskCell.vue'
@@ -14,7 +14,7 @@ import RecentRuns from './RecentRuns.vue'
 import TaskDrawer from './TaskDrawer.vue'
 import { STATUSES, clusterStatus, describeSchedule, formatDuration, nodeTaskNames, runTone, sortClusterTasks, taskTitle, type ClusterTask, type NodeTask, type TasksOverview } from './tasks'
 
-const REFRESH_MS = 10_000
+const REFRESH_CHOICES = [0, 10, 30, 60]
 
 const { t, te, locale } = useI18n()
 const auth = useAuthStore()
@@ -24,7 +24,8 @@ const canManage = computed(() => auth.has('task:manage'))
 
 const overview = ref<TasksOverview | null>(null)
 const loading = ref(true)
-const lastLoaded = ref<Date | null>(null)
+const refreshing = ref(false)
+const refreshSeconds = ref(10)
 const tab = ref(route.query.tab === 'nodes' ? 'nodes' : 'cluster')
 const focusNode = ref(typeof route.query.node === 'string' ? route.query.node : '')
 const search = ref('')
@@ -38,9 +39,9 @@ let failures = 0
 async function load(manual = false) {
   if (inflight) return
   inflight = true
+  refreshing.value = manual
   try {
     overview.value = await api.get<TasksOverview>('/system/tasks')
-    lastLoaded.value = new Date()
     failures = 0
   } catch (e) {
     if (manual || failures === 0) notifyError(e)
@@ -48,9 +49,10 @@ async function load(manual = false) {
   } finally {
     inflight = false
     loading.value = false
+    refreshing.value = false
   }
 }
-useAutoRefresh(load, REFRESH_MS)
+useAutoRefresh(load, () => refreshSeconds.value * 1000)
 void load()
 
 watch(tab, (v) => { void router.replace({ query: { ...route.query, tab: v === 'cluster' ? undefined : v } }) })
@@ -192,13 +194,7 @@ function openTask(name: string, node = '') {
   <div>
     <SPageHeader :title="t('tasks.title')" :description="t('tasks.description')">
       <template #actions>
-        <SStatusDot tone="success" pulse size="xs">
-          <SHint inline size="xs">
-            {{ t('tasks.autoRefresh') }}
-            <template v-if="lastLoaded">· <SDateTime muted :value="lastLoaded" mode="relative" live /></template>
-          </SHint>
-        </SStatusDot>
-        <SButton size="sm" icon="refresh" :loading="loading" @click="load(true)">{{ t('common.refresh') }}</SButton>
+        <SAutoRefresh v-model="refreshSeconds" :choices="REFRESH_CHOICES" button :loading="refreshing" @refresh="load(true)" />
       </template>
     </SPageHeader>
 

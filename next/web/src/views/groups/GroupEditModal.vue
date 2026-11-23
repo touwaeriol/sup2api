@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, reactive, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '@sub2api/host'
 import { SChoiceCards, SField, SGrid, SHint, SInput, SSelect, SSettingsGroup, STextarea, toast, useTabbedForm, type ChoiceOption, type FormTab, type TabbedFormPart } from '@sub2api/ui'
@@ -61,6 +61,8 @@ const form = reactive(blankForm())
 const opened = ref(blankForm())
 /** The base rate the form has, once it is one: what the tables' paid prices and rates are at. */
 const baseRate = computed(() => typedRate(form.rate_multiplier) ?? '')
+/** Whether each model of the pricing tab is priced as drafted there, for the user group rates. */
+const priced = shallowRef<ReadonlyMap<string, boolean>>()
 const tab = ref<GroupEditTab>('basic')
 const auth = useAuthStore()
 const tabKeys = computed(() => GROUP_EDIT_TABS.filter((key) => key !== 'segments' || auth.has('segment:read')))
@@ -158,9 +160,18 @@ function saved() {
         <SField :label="t('groups.rateMultiplier')" required :hint="t('groups.multiplierHint')" :error="errors.rate_multiplier" class="rounded-xl border border-line p-4">
           <RateInput v-model="form.rate_multiplier" size="md" class="sm:w-48" data-testid="group-default-rate" />
         </SField>
-        <ModelPriceTable :group-id="group?.id ?? null" :base-rate="baseRate" editable tab="pricing" />
+        <ModelPriceTable :group-id="group?.id ?? null" :base-rate="baseRate" editable tab="pricing" @priced="priced = $event" />
       </div>
-      <GroupSegmentsEditor v-else-if="key === 'segments'" :group-id="group?.id ?? null" :visibility="form.visibility" :default-rate="form.rate_multiplier" editable :disabled="tabbed.saving.value" tab="segments" />
+      <GroupSegmentsEditor
+        v-else-if="key === 'segments'"
+        :group-id="group?.id ?? null"
+        :visibility="form.visibility"
+        :default-rate="form.rate_multiplier"
+        :priced="priced"
+        editable
+        :disabled="tabbed.saving.value"
+        tab="segments"
+      />
       <div v-else class="space-y-4">
         <SField :label="t('accounts.conversion.title')" :hint="t('groups.conversionHint')" :error="errors.conversion_loss_policy">
           <SSelect v-model="form.conversion_loss_policy" :options="conversionOptions" data-testid="group-conversion-policy" />

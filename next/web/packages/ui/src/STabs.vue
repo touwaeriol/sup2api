@@ -1,7 +1,10 @@
 <script setup lang="ts">
+// Tabs over one panel. #end goes at the right end of the tab bar (actions
+// for every tab), or on a row of its own when the bar is not shown.
 import { computed, useId } from 'vue'
 import TabBar from './internal/TabBar.vue'
 import STitleScope from './STitleScope.vue'
+import ToolbarScope from './internal/ToolbarScope.vue'
 import type { TabItem } from './types'
 
 const props = withDefaults(defineProps<{
@@ -29,7 +32,10 @@ const visible = computed(() => props.showTabs && props.tabs.length > (props.show
       :size="size"
       :aria-label="ariaLabel"
       @update:model-value="emit('update:modelValue', $event)"
-    />
+    >
+      <template v-if="$slots.end" #end><ToolbarScope><slot name="end" /></ToolbarScope></template>
+    </TabBar>
+    <div v-else-if="$slots.end" class="flex flex-wrap items-center justify-end gap-2"><ToolbarScope><slot name="end" /></ToolbarScope></div>
     <STitleScope
       :id="visible && current ? `${prefix}-panel-${current.key}` : undefined"
       class="space-y-5"

@@ -8,6 +8,8 @@ const tier = (name: string, max: number | null, prices: Partial<VisualTier> = {}
   name,
   ...(max === null ? {} : { when: upTo(max) }),
   unit: 'token',
+  p: 1,
+  c: 1,
   ...prices
 })
 const cfg = (tiers: VisualTier[], rules: MarkupRule[] = []): VisualConfig => ({ tiers, rules })
@@ -31,9 +33,19 @@ describe('the local checks of tiers', () => {
   })
 })
 
+describe('the local checks of the prices of a tier', () => {
+  it('want every price charged filled in: blank is not 0', () => {
+    expect(keys(cfg([tier('a', null, { p: null, c: null })]))).toEqual(['tierBlank'])
+    expect(keys(cfg([tier('a', null, { cr: null })]))).toEqual(['tierBlank'])
+    expect(keys(cfg([{ name: 'a', unit: 'token', p: 0 }]))).toEqual(['tierBlank'])
+    expect(keys(cfg([tier('a', null, { p: 0, c: 0, cr: 0 })]))).toEqual([])
+    expect(keys(cfg([{ ...tier('a', null, { p: null }), unit: 'request', price: 0.1 }]))).toEqual([])
+  })
+})
+
 describe('the local checks of a tier condition', () => {
   it('want every tier condition whole, as the server checks it', () => {
-    const one = (when: unknown) => keys(cfg([{ name: 'a', when: when as TierCond, unit: 'token' }, tier('b', null)]))
+    const one = (when: unknown) => keys(cfg([{ name: 'a', when: when as TierCond, unit: 'token', p: 1, c: 1 }, tier('b', null)]))
     expect(one({ var: 'len', op: '>', value: -5 })).toEqual([])
     expect(one({ var: 'len', op: '>', value: '200000' })).toEqual([])
     expect(one({ var: 'len', op: '>', value: null })).toEqual(['condValue'])
@@ -54,7 +66,7 @@ describe('the local checks of a tier condition', () => {
     expect(one({ var: 'minute', op: '>=', value: 59, tz: 'Asia/Shanghai' })).toEqual([])
   })
   it('want a tier condition at most 5 deep and of at most 20 comparisons', () => {
-    const one = (when: TierCond) => keys(cfg([{ name: 'a', when, unit: 'token' }, tier('b', null)]))
+    const one = (when: TierCond) => keys(cfg([{ name: 'a', when, unit: 'token', p: 1, c: 1 }, tier('b', null)]))
     const nest = (depth: number): TierCond => (depth === 1 ? upTo(1) : { not: nest(depth - 1) })
     expect(one(nest(5))).toEqual([])
     expect(one(nest(6))).toEqual(['condDepth'])

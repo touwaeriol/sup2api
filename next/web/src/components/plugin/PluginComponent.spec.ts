@@ -71,7 +71,7 @@ describe('PluginComponent', () => {
   })
 
   it('asks to upgrade a plugin whose module was built for an older UI contract, without Retry', () => {
-    store.state.errors.mailer = 'hostUICompat ^3.20 does not match host UI 4.1.0'
+    store.state.errors.mailer = 'hostUICompat ^3.20 does not match host UI 4.2.0'
     store.state.mismatch.mailer = 'plugin'
     const w = render()
     expect(w.get('[data-testid="plugin-component-failed"]').text()).toBe("This plugin version's interface is no longer supported. Upgrade the plugin.")
@@ -79,7 +79,7 @@ describe('PluginComponent', () => {
   })
 
   it('asks to upgrade the core for a module built for a newer UI contract, without Retry', () => {
-    store.state.errors.mailer = 'hostUICompat ^4.2 does not match host UI 4.1.0'
+    store.state.errors.mailer = 'hostUICompat ^4.3 does not match host UI 4.2.0'
     store.state.mismatch.mailer = 'core'
     const w = render()
     expect(w.get('[data-testid="plugin-component-failed"]').text()).toBe("This plugin's interface needs a newer console. Upgrade the core.")

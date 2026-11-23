@@ -74,7 +74,7 @@ type call struct {
 	// (convert_policy.go)
 	conversion conversionState
 
-	// billing: the model's global price (nil on a free endpoint)
+	// billing: the model's list price (nil on a free endpoint)
 	price                *core.PriceRule
 	modelRefs            []modelReference
 	upstreamRefs         map[string]core.PricedUsage

@@ -266,11 +266,6 @@ async function apply() {
       <template #title-extra>
         <SBadge v-if="source" tone="gray">{{ t(`prices.sources.kind.${source.kind}`) }}</SBadge>
       </template>
-      <template #actions>
-        <SButton :loading="fetching" data-testid="price-sync-refetch" icon="refresh" @click="fetchPreview">{{
-          t('prices.sync.refetch')
-        }}</SButton>
-      </template>
     </SPageHeader>
 
     <SCard v-if="fetching && !preview" data-testid="price-sync-fetching">
@@ -290,9 +285,12 @@ async function apply() {
     </SCard>
 
     <template v-else-if="preview">
-      <SHint size="xs" class="mb-3" data-testid="price-sync-fetched">
-        {{ t('prices.sync.fetchedAt', { time: formatDateTime(preview.fetched_at), total: formatNumber(preview.total) }) }}
-      </SHint>
+      <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <SHint size="xs" data-testid="price-sync-fetched">
+          {{ t('prices.sync.fetchedAt', { time: formatDateTime(preview.fetched_at), total: formatNumber(preview.total) }) }}
+        </SHint>
+        <SButton :loading="fetching" data-testid="price-sync-refetch" icon="refresh" @click="fetchPreview">{{ t('prices.sync.refetch') }}</SButton>
+      </div>
 
       <!-- stats -->
       <SGrid variant="stats" :cols="3" :lg-cols="5" :gap="3" class="mb-4" data-testid="price-sync-stats">

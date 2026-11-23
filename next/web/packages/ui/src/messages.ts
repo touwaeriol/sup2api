@@ -53,6 +53,7 @@ export default {
     removeItem: 'Remove {name}',
     clear: 'Clear',
     clearItem: 'Clear {name}',
+    createItem: 'Add “{name}”',
     show: 'Show',
     hide: 'Hide',
     showPassword: 'Show password',
@@ -134,6 +135,7 @@ export default {
     goToPage: 'Go to page',
     go: 'Go',
     refreshNow: 'Refresh now',
+    refresh: 'Refresh',
     // Forms (useForm, SForm and the form building blocks)
     form: {
       secretKeep: 'A value is stored. Leave empty to keep it.',
@@ -232,6 +234,7 @@ export default {
     removeItem: '移除 {name}',
     clear: '清空',
     clearItem: '清除{name}',
+    createItem: '添加“{name}”',
     show: '显示',
     hide: '隐藏',
     showPassword: '显示密码',
@@ -313,6 +316,7 @@ export default {
     goToPage: '跳转到页',
     go: '跳转',
     refreshNow: '立即刷新',
+    refresh: '刷新',
     // Forms (useForm, SForm and the form building blocks)
     form: {
       secretKeep: '已保存值，留空表示不修改。',

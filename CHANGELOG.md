@@ -8,6 +8,12 @@
 
 开发完成、尚未上线的改动。发布时改成发布日期的一节，补上提交、实际版本号和发布过程。
 
+### 核心 0.1.311（草稿）：页面操作统一留在页面里（无迁移，可滚动；UI SDK 4.3，dynweight 0.7.0、guard 0.3.1）
+
+尚未构建发布；发布时补上提交、清单、构建与发布过程。
+
+- 页面的操作按钮不再进顶栏，所有页面都照账号列表的样式放在页面里：页头一行，筛选在左、操作在右；有标签的页面放在标签栏右端；左列表、右详情的页面放在列表卡片底部（如角色页“新建角色”）；已有筛选条的页面放在“重置”“搜索”旁（用量概览的刷新、价格同步的“重新拉取”）。去掉页头里的“返回”按钮，上级页面走面包屑。节点、任务、账号页的自动刷新旁多一个“刷新”按钮（手机上在自动刷新菜单里）。同一行的按钮一样高，手机上页头带图标的主按钮浮在右下角。`HOST_UI_VERSION` 4.3.0：`STabs` 新插槽 `#end`、`SAutoRefresh` 新属性 `button` / `loading`，用到的插件声明 `hostUICompat: "^4.3"`、`hostCompat >=0.1.311`；旧插件不用重新构建，操作自动留在页面里（CONTRACTS §133）。dynweight 0.7.0 的刷新移到标签栏右端；guard 0.3.1 的时间范围进页头筛选位，“管理规则”在手机上不浮动。
+
 #### 插件先授权再安装（核心与控制台；无迁移，可滚动）
 
 - 从市场安装、升级或上传插件时，先看到这个包要的全部权限（升级时与当前版本比较），确认授权后才下载、安装；取消则什么都不留下（用户要求）。此前要先登记一个待授权的版本，再进授权页。
@@ -15,6 +21,22 @@
 - 接口：新增 POST `/plugins/review-upload`、`/plugins/review-from-market`（安装预审，返回与 GET review 同结构的审查信息，不写任何记录）；POST `/plugins/upload`（multipart 字段 `consent`）与 `/plugins/install-from-market`（字段 `consent`）可带上同意的内容和预审返回的 `package_sha256`，登记后立即同意，返回 `{review, consent}`；包与预审的不同时 409 `package_changed`，同意失败时撤销本次登记（审计 `plugin.upload.undo`）。带 `consent` 的安装要二次验证 `plugin.grant`，不带时仍是 `plugin.install`，行为不变。见 CONTRACTS §5.7“先授权再安装”、§80.2。
 
 ## 2026-11-23
+
+### 核心 0.1.310：没有全局价、账号还不支持的模型也能设价格和倍率（`5c083499e`；无迁移，滚动更新；UI SDK 4.2；网关仍 0.1.139）
+
+- **构建**：照 0.1.309 的做法在 ovh 上从 touwaeriol/sup2api develop `5c083499e` 构建（`stage/own-0.1.310/`，151 秒，内置包用 `sup2api-plugins-2026` 重签）。清单 sha256 `ffeb73ad00396cbcc17038de6f8dc5f9e3be665a4ec27e9b592509f7183fdd3e`（`release_id` `core-v0.1.310`，amd64 bundle `7bff809f…183e`、arm64 `aafa6fda…1ffa`），strategy rolling，schema `395364cf…2436` 不变（最后一个迁移仍是 0124）。内置插件版本与线上相同，插件包与 0.1.309 逐字节相同；`next/plugins/released.json` 不用改。
+- **发布前**：GitHub next CI 通过（backend-security 是既有失败）；新核心只读运行 `sub2api admin check-prices` 通过。
+- **ovh 集群**（北京时间 2026-11-23 12:27–12:29，所有者授权此类无迁移发布自主进行）：import 后预检 rolling-v1、无阻断（expected_revision 583），计划 `ba4819f0f7da62586681a36e49e8793c` 12:27:23.4→12:29:20.3：ccp 12:27:36 让出、12:28:00 就绪，ovh 12:28:07 让出、等进行中的请求排空到 12:29:13 停止、12:29:18 就绪；ovh 3130 与 api.prophey.ai `/readyz` 全程 200，没有 503，切换期间 25 个请求全部成功。没有关 new-api 渠道（392 由管理员关着，未动）。
+- **核验**：两节点核心 0.1.310、网关 0.1.139，7 个启用插件 active、ready、restarts 0；升级后 `check-prices` 通过；控制台 /prices、/groups 与懒加载资源 200；GET `/groups`、`/groups/:id/segments`、`/groups/:id/model-prices`、`/segments`、`/segments/:id/groups`、`/me/prices`（含 `?group_id=`，每行带 `rate`、`rate_source`）都 200（只读，没有写线上配置）；账号分组“用户分组倍率”页的“设置模型倍率”按钮与“添加模型”提示（账号提供在前）在线上界面确认。经 api.prophey.ai 的非流式、流式 `/v1/messages`（临时密钥，已删）200、`billed`、`rate_multiplier` 1.0、费用与价格一致。升级前 15 分钟 193 个请求全部成功，升级后 15 分钟 177 个请求只有 1 个 499（客户端取消），没有 5xx；新核心日志只有 12:31:17 的 5 条控制台用量统计请求被浏览器取消（`context canceled`）的 ERROR，ccp 没有 ERROR。
+- 回滚：无迁移，可以用同样方式滚动回 0.1.309（清单 `11169283…5116`）。
+
+本次发布包含的改动：
+
+- **账号分组的模型价格单独成立**：不再要求先有全局价。标价 = 账号分组价，没有再用全局价；两者都没有的请求照旧拒绝（`price_not_configured`），不按 0 计费（用户定）。只有分组价的计费记录 `price_id` 为空、`inputs.pricing` 只有 `price_source: group`，原价 = 标价（CONTRACTS §97）。
+- **模型倍率可设在任意模型上**：`model_prices`、`model_rates`、`segment_model_rates`（POST/PATCH /groups）与 `model_rates`（POST/PATCH /segments）接受任意完整模型 ID（去首尾空白，`core.ModelErrors` 校验，规则同全局价）；没有价格的模型倍率先存着，有价格后生效。
+- **列表**：`GET /groups/:id/model-prices` 列出只有分组价或只有用户分组模型倍率的模型（`base` 为 null）；`/me/prices?group_id=`、`/key/prices`、`/pricing/quote`、账号分组 `model_count` / `?model=`、实体查找的 models 都包含只有分组价的模型，只在该分组。
+- **界面**：价格页、账号分组“用户分组倍率”、用户分组“账号分组倍率”三处“添加模型”按“账号提供 → 模型价格 → 手动输入”提示，可直接输入模型名；没有任何价格的模型显示“未定价”提示（计入同一编辑器里未保存的价格）；“模型倍率”改成按钮，已有模型倍率的行默认展开；可视化价格里空着的价格不再当 0 存，要填数字（免费写 0）或取消勾选，全局价格编辑同样。已存的缺 `p`/`c` 的配置载入时补 0（与服务器计费一致），打开后照常可存（CONTRACTS §131.2）。
+- **UI SDK 4.2**：`SSelect` 加 `creatable`（`create` 事件）、`STable` 加 `defaultExpanded`（CONTRACTS §23.7）。
 
 ### 核心 0.1.309：账号分组里给用户分组设模型倍率（`331aace0a`；无迁移，滚动更新；网关仍 0.1.139）
 

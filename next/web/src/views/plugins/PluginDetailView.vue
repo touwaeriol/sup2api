@@ -210,29 +210,6 @@ onMounted(load)
           <TrustBadge :trust="detail.trust" />
           <SBadge v-if="detail.builtin" tone="info" :title="t('plugins.builtinHint')">{{ t('plugins.builtin') }}</SBadge>
         </template>
-        <template #actions>
-          <SButton v-if="inRollout" :to="`/plugins/${encodeURIComponent(detail.key)}/rollout`">
-            <SSpinner size="sm" />{{ t('plugins.detail.viewRollout') }}
-          </SButton>
-          <template v-if="canManage">
-            <SButton
-              v-if="status === 'installed' || status === 'disabled'"
-              variant="primary"
-              icon="play"
-              :loading="acting === 'enable'"
-              @click="startRollout('enable')"
-            >
-              {{ t('common.enable') }}
-            </SButton>
-            <SButton v-if="status === 'enabled' && approvedUpgrades.length" variant="primary" icon="upload" @click="openUpgrade">
-              {{ t('plugins.detail.upgrade') }}
-            </SButton>
-            <SButton v-if="status === 'enabled'" :loading="acting === 'disable'" icon="stop" @click="startRollout('disable')">
-              {{ t('common.disable') }}
-            </SButton>
-          </template>
-          <SDropdown :actions="moreActions" @select="onMore" />
-        </template>
       </SPageHeader>
 
       <SHint v-if="detail.status_reason" tone="danger" class="-mt-3 mb-4">{{ detail.status_reason }}</SHint>
@@ -278,6 +255,29 @@ onMounted(load)
       </SAlert>
 
       <STabs :model-value="tab" :tabs="tabs" @update:model-value="switchTab">
+        <template #end>
+          <SButton v-if="inRollout" :to="`/plugins/${encodeURIComponent(detail.key)}/rollout`">
+            <SSpinner size="sm" />{{ t('plugins.detail.viewRollout') }}
+          </SButton>
+          <template v-if="canManage">
+            <SButton
+              v-if="status === 'installed' || status === 'disabled'"
+              variant="primary"
+              icon="play"
+              :loading="acting === 'enable'"
+              @click="startRollout('enable')"
+            >
+              {{ t('common.enable') }}
+            </SButton>
+            <SButton v-if="status === 'enabled' && approvedUpgrades.length" variant="primary" icon="upload" @click="openUpgrade">
+              {{ t('plugins.detail.upgrade') }}
+            </SButton>
+            <SButton v-if="status === 'enabled'" :loading="acting === 'disable'" icon="stop" @click="startRollout('disable')">
+              {{ t('common.disable') }}
+            </SButton>
+          </template>
+          <SDropdown :actions="moreActions" @select="onMore" />
+        </template>
 
         <OverviewTab v-if="tab === 'overview'" :detail="detail" />
         <PermissionsTab v-else-if="tab === 'permissions'" :key="detail.key" :detail="detail" @changed="load" />

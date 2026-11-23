@@ -55,12 +55,12 @@ export function effectiveRate(levels: RateLevels): EffectiveRate {
 }
 
 /**
- * The list price of a model: the group's model price, a price of its own,
- * or else the global price `base`. Without a global price there is none,
- * whatever model price is set.
+ * The list price of a model: the group's model price, a price of its own
+ * that stands alone, or else the global price `base`; none without either
+ * (the model is not priced: its requests are refused).
  */
 export function listPriceOf(base: PriceDef | null, price: CustomPrice | null): PriceDef | null {
-  if (!price || !base) return base
+  if (!price) return base
   return { mode: price.mode, config: price.config ?? {}, expression: price.expression ?? '' }
 }
 

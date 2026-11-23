@@ -123,46 +123,20 @@ type modelRateInput struct {
 	Rate  core.RateInput `json:"rate"`
 }
 
-// rateRefs are what the rates of a write refer to: the far ends that exist
-// and the models with an enabled global price.
-type rateRefs struct {
-	known  map[int64]bool
-	priced map[string]bool
-}
-
 // modelRateErrors are the field errors of the model rates of the list,
-// their models trimmed: a far end (key) that does not exist, no model, no
-// rate, or a rate set on a model with no global price (removing one always
-// can).
-func modelRateErrors(ctx context.Context, list, key string, items []modelRateInput, refs rateRefs) []core.FieldError {
+// their models trimmed: a far end (key, not among known) that does not
+// exist, a wrong model (core.ModelErrors), no rate. The model need not have
+// a price: the rate prices once it has one (CONTRACTS §97).
+func modelRateErrors(ctx context.Context, list, key string, items []modelRateInput, known map[int64]bool) []core.FieldError {
 	var fe []core.FieldError
 	for i, it := range items {
-		if !refs.known[it.end(key)] {
+		if !known[it.end(key)] {
 			fe = append(fe, unknownItem(ctx, core.ItemField(list, i, key)))
 		}
-		rateErrs := it.Rate.Errors(ctx, core.ItemField(list, i, "rate"))
-		model := core.ItemField(list, i, "model")
-		switch {
-		case it.Model == "":
-			fe = append(fe, core.NewFieldError(ctx, model, "required", "model is required", "模型必填"))
-		case len(rateErrs) == 0 && it.Rate.Value != nil && !refs.priced[it.Model]:
-			fe = append(fe, core.NewFieldError(ctx, model, "invalid", "the model has no global price", "该模型没有全局价格"))
-		}
-		fe = append(fe, rateErrs...)
+		fe = append(fe, core.ModelErrors(ctx, core.ItemField(list, i, "model"), it.Model)...)
+		fe = append(fe, it.Rate.Errors(ctx, core.ItemField(list, i, "rate"))...)
 	}
 	return fe
-}
-
-// pricedModels reports which of models have an enabled global price.
-func pricedModels(ctx context.Context, q *gorm.DB, models []string) (map[string]bool, error) {
-	var found []string
-	if len(models) > 0 {
-		if err := store.G(ctx, q).Model(&model.ModelPrice{}).Where("enabled AND model = ANY(?)", store.Strings(models)).
-			Pluck("model", &found).Error; err != nil {
-			return nil, err
-		}
-	}
-	return setOf(found), nil
 }
 
 // setOf is the set of the values.

@@ -54,7 +54,7 @@ describe('usage overview page', () => {
     charts.vm.$emit('select-secondary', '7')
     await flushPromises()
     expect(summaries[0].filters).toMatchObject({ model_contains: 'opus', api_key_id: '7' })
-    await w.setProps({ revision: 1 })
+    await w.get('[data-testid="usage-refresh"]').trigger('click')
     expect(summaries[0].reload).toHaveBeenCalled()
     expect(charts.props('revision')).toBe(1)
   })

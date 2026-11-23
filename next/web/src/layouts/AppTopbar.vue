@@ -92,7 +92,6 @@ async function logout() {
         <p v-if="app.pageHead?.description" class="hidden min-w-0 flex-1 truncate text-xs text-fg-muted md:block" :title="app.pageHead.description" data-testid="page-description">{{ app.pageHead.description }}</p>
       </div>
     </div>
-    <div id="s-page-actions" class="flex shrink-0 items-center empty:hidden" />
 
     <RouterLink
       v-if="auth.balance !== null"

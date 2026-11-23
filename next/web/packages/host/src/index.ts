@@ -15,7 +15,7 @@ export { errorMessage, isSilentError } from './errors'
 export { useGuardedSettings, CUSTOM_SETTINGS_PERMISSION, type AccountTypeView, type GuardedSettings } from './guarded'
 
 /** Version of the host UI contract; plugins declare hostUICompat against it. */
-export const HOST_UI_VERSION = '4.1.0'
+export const HOST_UI_VERSION = '4.3.0'
 
 /**
  * Accounts per plugin account action request and per `GET /accounts?ids=`

@@ -41,8 +41,9 @@ type MyPrices struct {
 // myPrices answers GET /me/prices?group_id= (CONTRACTS §79.5) from the price
 // snapshot requests are billed by. Without a group it is every model at its
 // global price, with the caller's groups that provide it. With one it is the
-// models that group provides and can bill, at the list price and the rate
-// the caller gets there. A group the caller cannot use is a 404.
+// models that group provides and can bill (a global price or the group's
+// own), at the list price and the rate the caller gets there. A group the
+// caller cannot use is a 404.
 func (s *Service) myPrices(c *gin.Context) {
 	ctx := c.Request.Context()
 	uid, _ := core.UserID(ctx)
@@ -83,7 +84,7 @@ func (s *Service) pricesOfGroups(ctx context.Context, uid int64) (*MyPrices, err
 	if err != nil {
 		return nil, err
 	}
-	offered, err := offeredModels(ctx, s.db.Gorm, groups, snap.bases)
+	offered, err := offeredModels(ctx, s.db.Gorm, groups, snap)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +109,7 @@ func (s *Service) pricesInGroup(ctx context.Context, uid, groupID int64) (*MyPri
 	if err != nil {
 		return nil, err
 	}
-	gp, err := loadGroupPrices(ctx, s.db.Gorm, snap.bases, usableBy+" AND g.id = ?", uid, groupID)
+	gp, err := loadGroupPrices(ctx, s.db.Gorm, snap, usableBy+" AND g.id = ?", uid, groupID)
 	if err != nil {
 		return nil, err
 	}
@@ -122,9 +123,9 @@ func (s *Service) pricesInGroup(ctx context.Context, uid, groupID int64) (*MyPri
 	}
 	group, rate := gp.group.ref(), segment.RateOf(t.Levels())
 	out := &MyPrices{Group: &group, RateMultiplier: rate.Value, RateSource: rate.Source, Prices: []MyPriceRow{}}
-	snap.each(groupID, gp.models, func(model string, base PriceDef, rule *storedRule) {
-		r, source := snap.rates.levels(core.PriceQuery{Model: model, GroupID: groupID}, t.SegmentID, t.Levels()).Rate()
-		out.Prices = append(out.Prices, MyPriceRow{Model: model, PriceDef: listPrice(base, rule), Source: rule.source(), Rate: &r, RateSource: source})
+	snap.each(groupID, gp.models, func(model string, price PriceDef, source string) {
+		r, rateSource := snap.rates.levels(core.PriceQuery{Model: model, GroupID: groupID}, t.SegmentID, t.Levels()).Rate()
+		out.Prices = append(out.Prices, MyPriceRow{Model: model, PriceDef: price, Source: source, Rate: &r, RateSource: rateSource})
 	})
 	return out, nil
 }

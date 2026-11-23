@@ -208,7 +208,7 @@ function remove(k: ApiKey) {
         <SSelect v-model="list.filters.group_id" :options="groupFilterOptions" class="w-36" :aria-label="t('common.group')" data-testid="key-group-filter" />
       </template>
       <template #actions>
-        <SButton variant="primary" icon="plus" fab data-testid="create-key" @click="openEditor(null)">{{ t('apikeys.create') }}</SButton>
+        <SButton variant="primary" icon="plus" data-testid="create-key" @click="openEditor(null)">{{ t('apikeys.create') }}</SButton>
       </template>
     </SPageHeader>
 

@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '@sub2api/host'
-import { SDateTime, statusTone, useAutoRefresh, SBadge, SButton, SChip, SCode, SGrid, SHint, SLink, SPageHeader, SStatCard, SStatusDot, STable, type TableColumn, type Tone, type StatusTone } from '@sub2api/ui'
+import { SAutoRefresh, SDateTime, statusTone, useAutoRefresh, SBadge, SChip, SCode, SGrid, SHint, SLink, SPageHeader, SStatCard, SStatusDot, STable, type TableColumn, type Tone, type StatusTone } from '@sub2api/ui'
 import type { NodeInfo, PluginSandboxStatus } from '@/api/types'
 import type { NodePluginState } from '@/api/admin'
 import type { ShellNode } from '@/api/observability'
@@ -16,7 +16,7 @@ const { t } = useI18n()
 
 /** Heartbeats older than this are considered stale (node likely gone). */
 const STALE_SECONDS = 30
-const REFRESH_MS = 5000
+const REFRESH_CHOICES = [0, 5, 10, 30, 60]
 
 const nodes = ref<NodeInfo[]>([])
 const auth = useAuthStore()
@@ -32,7 +32,8 @@ const canReadGateways = computed(() => auth.has('system:update:read'))
  */
 const gatewayVersions = ref<Map<string, string> | null>()
 const loading = ref(true)
-const lastLoaded = ref<Date | null>(null)
+const refreshing = ref(false)
+const refreshSeconds = ref(5)
 const tick = ref(Date.now())
 let clock: ReturnType<typeof setInterval> | undefined
 let inflight = false
@@ -41,6 +42,7 @@ let failures = 0
 async function load(manual = false) {
   if (inflight) return
   inflight = true
+  refreshing.value = manual
   try {
     const items = await fetchFirstPage<NodeInfo>('/nodes')
     nodes.value = [...items].sort((a, b) => a.node_id.localeCompare(b.node_id))
@@ -51,7 +53,6 @@ async function load(manual = false) {
     if (canReadGateways.value && (manual || gatewayVersions.value !== null)) {
       gatewayVersions.value = await api.get<{ nodes: ShellNode[] }>('/system/upgrades').then((o) => new Map((o.nodes || []).map((n) => [n.node_id, n.gateway_version || ''])), () => gatewayVersions.value ?? null)
     }
-    lastLoaded.value = new Date()
     failures = 0
   } catch (e) {
     // Only toast the first failure of a streak (or a manual refresh) to avoid a toast every 5s.
@@ -60,10 +61,11 @@ async function load(manual = false) {
   } finally {
     inflight = false
     loading.value = false
+    refreshing.value = false
   }
 }
 
-useAutoRefresh(load, REFRESH_MS)
+useAutoRefresh(load, () => refreshSeconds.value * 1000)
 onMounted(() => {
   load()
   clock = setInterval(() => (tick.value = Date.now()), 1000)
@@ -180,13 +182,7 @@ const versionsText = computed(() => (gatewayVersions.value?.size ? t('nodes.vers
   <div>
     <SPageHeader :title="t('nodes.title')" :description="t('nodes.description')">
       <template #actions>
-        <SStatusDot tone="success" pulse size="xs">
-          <SHint inline size="xs">
-            {{ t('nodes.autoRefresh') }}
-            <template v-if="lastLoaded">· <SDateTime muted :value="lastLoaded" mode="relative" live /></template>
-          </SHint>
-        </SStatusDot>
-        <SButton size="sm" icon="refresh" :loading="loading" @click="load(true)">{{ t('common.refresh') }}</SButton>
+        <SAutoRefresh v-model="refreshSeconds" :choices="REFRESH_CHOICES" button :loading="refreshing" @refresh="load(true)" />
       </template>
     </SPageHeader>
 

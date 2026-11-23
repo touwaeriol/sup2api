@@ -12,14 +12,14 @@ afterEach(() => {
   document.body.innerHTML = ''
 })
 
-// An app shell: a top bar that takes the page's title, what goes with it and its actions, and the page under it.
+// An app shell: a top bar that takes the page's title and what goes with it, and the page under it.
 const head = shallowRef<PageHead | null>(null)
 function shell(slots: Record<string, () => unknown>, title = '分组', page: () => VNode = () => h(SPageHeader, { title, description: '说明' }, slots)) {
   head.value = null
   return defineComponent({
     setup() {
-      provideTitleContext(() => head.value?.title || '路由标题', { head, extra: '#page-title-extra', actions: '#page-actions' })
-      return () => h('div', [h('div', { id: 'page-title-extra' }), h('div', { id: 'page-actions' }), page()])
+      provideTitleContext(() => head.value?.title || '路由标题', { head, extra: '#page-title-extra' })
+      return () => h('div', [h('div', { id: 'page-title-extra' }), page()])
     }
   })
 }
@@ -77,7 +77,6 @@ describe('page header in an app shell', () => {
     expect(head.value).toBeNull()
     expect(same.find('h1').exists()).toBe(false)
     expect(same.text()).toBe('说明保存')
-    expect(bar('#page-actions')).toBe('')
     same.unmount()
     const other = mountPinned(shell({}, '', nested('高级')), {}, { compact: false })
     await nextTick()
@@ -95,25 +94,30 @@ describe('page header outside a shell', () => {
 })
 
 describe('page header actions', () => {
-  it('moves the actions of a header with no filters into the top bar on a wide screen', async () => {
+  it('keeps the actions of a header with no filters in the page, at the end of their own row', async () => {
     const w = mountPinned(shell({ actions: () => h('button', '新建分组') }), {}, { compact: false })
     await nextTick()
-    expect(bar('#page-actions')).toBe('新建分组')
-    expect(w.find('.mb-3').exists()).toBe(false)
+    expect(w.get('.mb-3').text()).toBe('新建分组')
+    expect(w.get('.mb-3 > .ms-auto').text()).toBe('新建分组')
   })
 
   it('keeps the actions in the page on a narrow screen', async () => {
     const w = mountPinned(shell({ actions: () => h('button', '新建分组') }))
     await nextTick()
-    expect(bar('#page-actions')).toBe('')
     expect(w.get('.mb-3').text()).toBe('新建分组')
   })
 
   it('keeps the actions beside the filters when there are filters', async () => {
     const w = mountPinned(shell({ filters: () => h('input'), actions: () => h('button', '新建分组') }), {}, { compact: false })
     await nextTick()
-    expect(bar('#page-actions')).toBe('')
     expect(w.get('.mb-3').text()).toBe('新建分组')
+  })
+
+  it('keeps the actions in the page beside what goes with the title in the top bar', async () => {
+    const w = mountPinned(shell({ 'title-extra': () => h('b', 'v1.2'), actions: () => h('button', '启用') }), {}, { compact: false })
+    await nextTick()
+    expect(bar('#page-title-extra')).toBe('v1.2')
+    expect(w.get('.mb-3').text()).toBe('启用')
   })
 })
 

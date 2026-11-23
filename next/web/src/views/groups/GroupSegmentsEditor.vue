@@ -2,12 +2,13 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '@sub2api/host'
-import { SAlert, SBadge, SHint, SLink, type SelectOption } from '@sub2api/ui'
+import { SAlert, SBadge, SHint, type SelectOption } from '@sub2api/ui'
 import type { Group } from '@/api/types'
 import type { Segment, SegmentGroupSetting, SegmentRef } from '@/api/pricing'
 import AccessRateTable from '@/components/pricing/AccessRateTable.vue'
 import AddSelect from '@/components/pricing/AddSelect.vue'
 import GroupVisibilityBadge from '@/components/pricing/GroupVisibilityBadge.vue'
+import ModelRatesToggle from '@/components/pricing/ModelRatesToggle.vue'
 import PersonalSegmentPicker from '@/components/pricing/PersonalSegmentPicker.vue'
 import SegmentBadge from '@/components/pricing/SegmentBadge.vue'
 import SegmentModelRates from '@/components/pricing/SegmentModelRates.vue'
@@ -30,8 +31,17 @@ import { fetchAllPages } from '@/composables/lookups'
 // the form being edited. Edits stay in drafts, which the group's request
 // sends (`segment_rates`, `segment_model_rates`: the part of tab `tab` of the
 // enclosing tabbed form while `editable`). A group not created yet (groupId
-// null) starts from every named user group with nothing set.
-const props = defineProps<{ groupId: number | null; visibility: Group['visibility']; defaultRate: string; editable: boolean; tab: string; disabled?: boolean }>()
+// null) starts from every named user group with nothing set. `priced` is
+// whether each model of the group's pricing tab is priced as drafted there.
+const props = defineProps<{
+  groupId: number | null
+  visibility: Group['visibility']
+  defaultRate: string
+  editable: boolean
+  tab: string
+  disabled?: boolean
+  priced?: ReadonlyMap<string, boolean>
+}>()
 const { t } = useI18n()
 
 /** Personal segments picked here: fetched although the group has nothing for them yet. */
@@ -139,18 +149,17 @@ const nobody = computed(() => restricted.value && !loading.value && !error.value
         <SegmentBadge v-else :segment="row.segment" />
       </template>
       <template #note="{ row, expanded, toggleExpand }">
-        <SHint size="xs">
-          <SLink as="button" :aria-expanded="expanded" data-testid="group-segment-model-rates-toggle" @click="toggleExpand()">
-            {{ t('segments.modelRates.toggle', { n: modelRates.rowsOf(row.id).length }) }}
-          </SLink>
-          <template v-if="editable && row.model_rates.length"> · {{ t('pricingAccess.inGroup.modelRates') }}</template>
-        </SHint>
+        <div class="mt-1 flex flex-wrap items-center gap-2">
+          <ModelRatesToggle :count="modelRates.rowsOf(row.id).length" :expanded="expanded" :editable="editable" data-testid="group-segment-model-rates-toggle" @toggle="toggleExpand()" />
+          <SHint v-if="editable && row.model_rates.length" inline size="xs">{{ t('pricingAccess.inGroup.modelRates') }}</SHint>
+        </div>
       </template>
       <template #expand="{ row }">
         <SegmentModelRates
           :rows="modelRates.rowsOf(row.id)"
           :group-id="groupId"
           :models="groupModels.result.value"
+          :priced="priced"
           :override="row.rate_override"
           :group-rate="row.rate.group_default"
           :editable="editable"

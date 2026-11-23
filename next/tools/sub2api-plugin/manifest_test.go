@@ -7,12 +7,15 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Masterminds/semver/v3"
+
 	"github.com/Sub2API-Devs/sup2api/next/sdk/protocol"
 )
 
 // Every plugin of the platform is built for the current plugin protocol, so
-// its hostCompat starts at the first core of that protocol: the version the
-// outdated-contract message sends an operator to look for.
+// its hostCompat starts no earlier than the first core of that protocol: the
+// version the outdated-contract message sends an operator to look for. A
+// plugin using a later core's additions starts at that core (AGENTS.md).
 func TestPluginsStartAtTheFirstCoreOfTheProtocol(t *testing.T) {
 	paths, err := filepath.Glob(filepath.Join("..", "..", "plugins", "*", "manifest.json"))
 	if err != nil || len(paths) == 0 {
@@ -35,8 +38,8 @@ func TestPluginsStartAtTheFirstCoreOfTheProtocol(t *testing.T) {
 				lower = append(lower, v)
 			}
 		}
-		if len(lower) != 1 || lower[0] != protocol.FirstCoreVersion {
-			t.Errorf("%s: hostCompat %q, want the lower bound >=%s (protocol.FirstCoreVersion)", path, m.HostCompat, protocol.FirstCoreVersion)
+		if len(lower) != 1 || semver.MustParse(lower[0]).LessThan(semver.MustParse(protocol.FirstCoreVersion)) {
+			t.Errorf("%s: hostCompat %q, want one lower bound of at least >=%s (protocol.FirstCoreVersion)", path, m.HostCompat, protocol.FirstCoreVersion)
 		}
 	}
 }

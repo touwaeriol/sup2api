@@ -344,7 +344,7 @@ function remove(u: User) {
   <div>
     <SPageHeader :title="t('users.title')" :description="t('users.description')" :filters-active-count="activeFilterCount(list.filters)">
       <template #actions>
-        <SButton v-if="auth.hasAction(P.UserCreate)" variant="primary" icon="plus" fab @click="openCreate">{{ t('users.create') }}</SButton>
+        <SButton v-if="auth.hasAction(P.UserCreate)" variant="primary" icon="plus" @click="openCreate">{{ t('users.create') }}</SButton>
       </template>
       <template #filters-primary>
         <SInput v-model="list.filters.q" class="w-64" icon="search" clearable :aria-label="t('common.search')" :placeholder="t('users.searchPlaceholder')" />

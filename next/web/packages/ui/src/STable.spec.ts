@@ -77,6 +77,22 @@ describe('STable', () => {
     expect(w.findAll('.more').map(e => e.text())).toEqual(['2'])
   })
 
+  it('opens the rows defaultExpanded picks when first listed and leaves rows seen before as the user made them', async () => {
+    const slots = { 'cell-name': '<button class="open" @click="params.toggleExpand()">{{ params.expanded }}</button>', expand: '<i class="more">{{ params.row.id }}</i>' }
+    const props = { columns, rows: rows.slice(0, 2), expandable: true, expandToggle: false, defaultExpanded: (r: any) => r.id !== 2 }
+    const w = mount(STable, { props, slots })
+    expect(w.findAll('.more').map(e => e.text())).toEqual(['1'])
+    await w.findAll('.open')[0].trigger('click')
+    expect(w.find('.more').exists()).toBe(false)
+    // New row objects for the same keys keep row 1 closed; a key listed for the first time opens.
+    await w.setProps({ rows: rows.map(r => ({ ...r })) })
+    expect(w.findAll('.more').map(e => e.text())).toEqual(['3'])
+    // expandSingle: only the first of them, and only while no row is open.
+    const single = mount(STable, { props: { ...props, rows, expandSingle: true, defaultExpanded: () => true }, slots })
+    expect(single.findAll('.more').map(e => e.text())).toEqual(['1'])
+    expect(single.emitted('expand')).toBeUndefined()
+  })
+
   it('gives cell slots a closed row and a toggle that does nothing when rows do not expand', async () => {
     const slots = { 'cell-name': '<button class="open" @click="params.toggleExpand()">{{ params.expanded }}</button>' }
     const w = mount(STable, { props: { columns, rows }, slots })

@@ -7,12 +7,16 @@
 // When the tabs overflow, the bar scrolls sideways, fades the edge that hides
 // more tabs and centres the selected tab whenever it changes. Tabs are 44px
 // high on touch screens. `dirty` and `errors` (tab keys) put a mark after
-// a tab's title (TabMarks), as STabbedForm does.
+// a tab's title (TabMarks), as STabbedForm does. #end sits at the right end
+// of the bar, outside the scrolling tabs (the page's actions for all tabs);
+// on a phone it takes a row of its own above the bar, so the tabs keep the
+// width.
 import { computed, nextTick, ref, useId } from 'vue'
 import type { TabItem } from '../types'
 import { navIndex } from '../keyboard'
 import { useCentredSelection, useScrollFade } from '../scrollClip'
 import TabMarks from './TabMarks.vue'
+import { useViewport } from '../viewport'
 
 const props = withDefaults(
   defineProps<{ tabs: TabItem[]; modelValue: string; idPrefix?: string; size?: 'sm' | 'md'; ariaLabel?: string; dirty?: readonly string[]; errors?: readonly string[] }>(),
@@ -24,6 +28,7 @@ const prefix = computed(() => props.idPrefix || uid)
 const scroller = ref<HTMLElement>()
 const nav = ref<HTMLElement>()
 const fade = useScrollFade(scroller, nav)
+const { compact } = useViewport()
 
 const tabId = (key: string) => `${prefix.value}-tab-${key}`
 const panelId = (key: string) => `${prefix.value}-panel-${key}`
@@ -49,8 +54,9 @@ function onKey(e: KeyboardEvent) {
 
 <template>
   <div>
-    <div class="border-b border-gray-200 dark:border-dark-700">
-      <div ref="scroller" class="relative -mb-px overflow-x-auto" :class="fade">
+    <div v-if="$slots.end && compact" class="mb-2 flex flex-wrap items-center justify-end gap-2" data-testid="tab-bar-end"><slot name="end" /></div>
+    <div class="flex items-end gap-3 border-b border-gray-200 dark:border-dark-700">
+      <div ref="scroller" class="relative -mb-px min-w-0 flex-1 overflow-x-auto" :class="fade">
         <nav ref="nav" class="flex w-max min-w-full gap-1" role="tablist" :aria-label="ariaLabel" @keydown="onKey">
           <button
             v-for="tab in tabs"
@@ -78,6 +84,7 @@ function onKey(e: KeyboardEvent) {
           </button>
         </nav>
       </div>
+      <div v-if="$slots.end && !compact" class="flex shrink-0 items-center gap-2 py-1" data-testid="tab-bar-end"><slot name="end" /></div>
     </div>
   </div>
 </template>

@@ -32,11 +32,11 @@ export default {
     groups: '账号分组倍率'
   },
   modelRates: {
-    toggle: '模型倍率（{n}）',
+    toggle: '模型倍率 {n}',
+    setUp: '设置模型倍率',
     intro: '单独设了倍率的模型按 原价 × 模型倍率 计费；其他模型按各自生效的倍率：这一行的倍率，没填时用账号分组的模型倍率或基本倍率。',
     add: '添加模型',
     addNone: '没有可添加的模型',
-    addFooter: '只列这个账号分组里有原价的模型',
     empty: '还没有单独设倍率的模型',
     rateOf: '{model} 的模型倍率',
     undo: '撤销',

@@ -64,3 +64,25 @@ func TestDecodeListBadRate(t *testing.T) {
 		t.Fatalf("got %+v, %v", items, fe)
 	}
 }
+
+// The model of an item is a complete model id, priced or not: none is
+// required, one with a wildcard or a space is invalid, in the caller's
+// language.
+func TestModelErrors(t *testing.T) {
+	ctx, zh := context.Background(), WithLocale(context.Background(), "zh")
+	path := ItemField("model_rates", 1, "model")
+	if fe := ModelErrors(ctx, path, "no-price-anywhere"); fe != nil {
+		t.Errorf("a model id: %v", fe)
+	}
+	if fe := ModelErrors(zh, path, ""); len(fe) != 1 || fe[0] != (FieldError{Field: path, Code: "required", Message: "模型必填"}) {
+		t.Errorf("no model: %v", fe)
+	}
+	for _, model := range []string{"gpt-*", "gpt 5"} {
+		if fe := ModelErrors(ctx, path, model); len(fe) != 1 || fe[0].Field != path || fe[0].Code != "invalid" {
+			t.Errorf("%q: %v", model, fe)
+		}
+	}
+	if fe := ModelErrors(zh, path, "gpt-?"); len(fe) != 1 || fe[0].Message != "完整的模型 ID：字母、数字和 . _ : / @ + -（不含通配符）" {
+		t.Errorf("in Chinese: %v", fe)
+	}
+}

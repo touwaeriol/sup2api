@@ -49,35 +49,26 @@ func (w *rateWrite) trimModels() {
 	}
 }
 
-// refs reads what the items refer to. With lock, in a transaction, the far
-// ends are locked against deletion until it ends.
-func (w *rateWrite) refs(ctx context.Context, q *gorm.DB, lock bool) (rateRefs, error) {
-	known, err := knownRows(ctx, q, w.farTable(), w.farIDs(), lock)
-	if err != nil {
-		return rateRefs{}, err
-	}
-	models := make([]string, len(w.models))
-	for i, it := range w.models {
-		models[i] = it.Model
-	}
-	priced, err := pricedModels(ctx, q, x.Unique(models))
-	return rateRefs{known: known, priced: priced}, err
+// known reads which far ends the items name exist. With lock, in a
+// transaction, they are locked against deletion until it ends.
+func (w *rateWrite) known(ctx context.Context, q *gorm.DB, lock bool) (map[int64]bool, error) {
+	return knownRows(ctx, q, w.farTable(), w.farIDs(), lock)
 }
 
-// errors are the field errors of the items against what they refer to.
-func (w *rateWrite) errors(ctx context.Context, refs rateRefs) []core.FieldError {
-	return append(pairErrors(ctx, w.pairList, w.far, w.pairs, refs.known), modelRateErrors(ctx, w.modelList, w.far, w.models, refs)...)
+// errors are the field errors of the items against the far ends known.
+func (w *rateWrite) errors(ctx context.Context, known map[int64]bool) []core.FieldError {
+	return append(pairErrors(ctx, w.pairList, w.far, w.pairs, known), modelRateErrors(ctx, w.modelList, w.far, w.models, known)...)
 }
 
 // check trims the models and returns the field errors of the write, read
 // outside the transaction that writes it.
 func (w *rateWrite) check(ctx context.Context, q *gorm.DB) ([]core.FieldError, error) {
 	w.trimModels()
-	refs, err := w.refs(ctx, q, false)
+	known, err := w.known(ctx, q, false)
 	if err != nil {
 		return nil, err
 	}
-	return w.errors(ctx, refs), nil
+	return w.errors(ctx, known), nil
 }
 
 // segments are the segments the write changes the terms of, made from
@@ -106,11 +97,11 @@ func (s *Service) writeRates(ctx context.Context, tx *gorm.DB, self int64, w *ra
 	near := otherKey(w.far)
 	setEnds(w.pairs, near, self)
 	setEnds(w.models, near, self)
-	refs, err := w.refs(ctx, tx, true)
+	known, err := w.known(ctx, tx, true)
 	if err != nil {
 		return err
 	}
-	if fe := w.errors(ctx, refs); len(fe) > 0 {
+	if fe := w.errors(ctx, known); len(fe) > 0 {
 		return core.InvalidFields(fe...)
 	}
 	if err := guardOwnSegments(ctx, tx, s.users, w.segments(self)); err != nil {

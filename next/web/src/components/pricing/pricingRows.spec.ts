@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { CustomPrice, ModelPriceRow, PriceDef } from '@/api/pricing'
 import { requestTier, singleTier, type VisualConfig } from '@/views/prices/priceExpr'
 import { newPriceDraft } from '@/views/prices/priceDraft'
-import { catalogRow, customPriceOf, draftedRow, mergeRowDraft, groupModelRatePatches, modelPricePatches, priceDraftOfCustom, priceIssues, samePrice, startPrice, validPrice, type RowDrafts } from './pricingRows'
+import { catalogRow, customPriceOf, draftedRow, mergeRowDraft, groupModelRatePatches, modelPricePatches, priceDraftOfCustom, priceIssues, samePrice, savedPrice, startDraft, validPrice, type RowDrafts } from './pricingRows'
 
 const perToken: PriceDef = { mode: 'visual', config: singleTier({ p: 3, c: 15, cr: 0.3 }), expression: 'tier("base", p*3 + c*15 + cr*0.3)' }
 const tieredConfig: VisualConfig = { tiers: [{ name: 'a', when: { var: 'len', op: '<=', value: 200000 }, p: 3, c: 15 }, { name: 'b', p: 6, c: 22.5 }], rules: [] }
@@ -15,11 +15,16 @@ function row(over: Partial<ModelPriceRow> = {}): ModelPriceRow {
   return { model: 'gpt-4o', offered: true, base: perToken, price: null, rate: null, ...over }
 }
 
+const startPrice = (base: PriceDef | null) => customPriceOf(startDraft(base))
+
 describe('the model price a row starts from', () => {
   it('is the original price as a price of its own, whatever its shape', () => {
     expect(startPrice(perToken)).toMatchObject({ mode: 'visual', config: { tiers: [{ name: 'base', unit: 'token', p: 3, c: 15, cr: 0.3 }], rules: [] } })
     expect(startPrice(tiered)).toMatchObject({ mode: 'visual', config: { tiers: [{ name: 'a' }, { name: 'b' }] } })
     expect(startPrice(expression)).toEqual(written('tier("base", p*3 + c*15)'))
+  })
+  it('is blank without an original price: one token tier, its prices not typed yet', () => {
+    expect(startDraft(null)).toEqual({ mode: 'visual', config: { tiers: [{ name: 'base', unit: 'token', p: null, c: null }], rules: [] }, expression: '' })
   })
   it('goes back and forth to the price editor', () => {
     const rule = startPrice(tiered)
@@ -40,11 +45,36 @@ describe('a model price that may be saved', () => {
   })
 })
 
+describe('a saved model price', () => {
+  // As the server and older consoles store them: p and c absent read 0, other prices absent are not charged.
+  const stored = visual({ tiers: [{ name: 'short', when: { var: 'len', op: '<=', value: 1000 }, p: 3 }, { name: 'rest', unit: 'token', c: 0, img: 2 }], rules: [] })
+
+  it('reads as the server bills it: valid, and the same price once its editor sends it back', () => {
+    const read = savedPrice(stored)!
+    expect(read.config?.tiers).toMatchObject([{ name: 'short', unit: 'token', p: 3, c: 0 }, { name: 'rest', unit: 'token', p: 0, c: 0, img: 2 }])
+    expect(validPrice(read)).toBe(true)
+    expect(samePrice(customPriceOf(priceDraftOfCustom(read)), read)).toBe(true)
+    expect(savedPrice(null)).toBeNull()
+    expect(savedPrice(written('p*2'))).toEqual(written('p*2'))
+  })
+  it('keeps a blank of a draft blank when its editor opens it again', () => {
+    const draft = customPriceOf(startDraft(null))
+    expect(priceDraftOfCustom(draft).config.tiers[0]).toMatchObject({ p: null, c: null })
+    expect(validPrice(draft)).toBe(false)
+  })
+  it('starts a price of its own from an original price stored without c, valid', () => {
+    expect(validPrice(startPrice({ mode: 'visual', config: { tiers: [{ name: 'base', p: 1 }], rules: [] }, expression: '' }))).toBe(true)
+  })
+})
+
 describe('model prices that price alike', () => {
   it('are compared by what they bill: every tier and markup rule, or the expression', () => {
     expect(samePrice(null, null)).toBe(true)
     expect(samePrice(visual(singleTier({ p: 3, c: 15 })), null)).toBe(false)
     expect(samePrice(visual(singleTier({ p: 3, c: 15 })), visual(singleTier({ p: 3, c: 15, cr: null })))).toBe(true)
+    // A price left blank is not 0.
+    expect(samePrice(visual(singleTier({ p: 3, c: null })), visual(singleTier({ p: 3, c: 0 })))).toBe(false)
+    expect(samePrice(visual(requestTier(null)), visual(requestTier(0)))).toBe(false)
     expect(samePrice(visual(tieredConfig), visual({ ...tieredConfig, tiers: [tieredConfig.tiers[0], { name: 'b', p: 6, c: 30 }] }))).toBe(false)
     const ruled: VisualConfig = { ...tieredConfig, rules: [{ name: 'hd', multiplier: 2, conds: [{ source: 'header', key: 'x', op: 'exists' }] }] }
     expect(samePrice(visual(tieredConfig), visual(ruled))).toBe(false)
@@ -70,9 +100,9 @@ describe('a row under its draft', () => {
     expect(draftedRow(row(), { price: visual(requestTier(null)) }).invalid).toBe(true)
     expect(draftedRow(row(), { rate: null }).invalid).toBe(false)
   })
-  it('keeps the price without an original price, which prices nothing', () => {
-    expect(draftedRow(row({ base: null }), { price: own })).toMatchObject({ price: own, list_price: null })
-    expect(draftedRow(row({ base: null })).list_price).toBeNull()
+  it('prices a model without an original price by its model price alone, and not at all without one', () => {
+    expect(draftedRow(row({ base: null }), { price: own })).toMatchObject({ price: own, list_price: { mode: 'visual', config: requestTier(0.1) } })
+    expect(draftedRow(row({ base: null, rate: '2' })).list_price).toBeNull()
   })
   it('of a model the server does not list yet is its original price, with nothing set', () => {
     expect(catalogRow('o3', perToken)).toEqual({ model: 'o3', offered: false, base: perToken, price: null, rate: null })

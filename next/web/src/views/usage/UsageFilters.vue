@@ -199,6 +199,10 @@ async function pick(patch: Record<string, string>, held = false) {
         v-if="searchable && !bottomRow"
         class="ms-auto flex items-center gap-2"
       >
+        <slot
+          v-if="!compact"
+          name="tools"
+        />
         <UsageSearchButtons @reset="reset" />
       </div>
     </div>

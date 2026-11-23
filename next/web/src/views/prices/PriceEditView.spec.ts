@@ -127,12 +127,10 @@ describe('the price editor', () => {
     expect(again.getComponent(SPagination).props('page')).toBe(3)
   })
 
-  it('read-only, still leads back to the list, and its guide inserts nothing', async () => {
+  it('read-only, offers no save, and its guide inserts nothing', async () => {
     can.manage = false
-    const { w, router } = await render()
-    await w.findAll('button').find(b => b.text() === '返回列表')!.trigger('click')
-    await flushPromises()
-    expect(router.currentRoute.value.path).toBe('/prices')
+    const { w } = await render()
+    expect(w.find('[data-testid="price-save"]').exists()).toBe(false)
     const guide = mount(ExprGuide, { props: { readonly: true }, global: { plugins: [i18n] } })
     expect(guide.findAll('button').map(b => b.text())).not.toContain('插入')
     expect(guide.findAll('button').map(b => b.text())).not.toContain('填入')

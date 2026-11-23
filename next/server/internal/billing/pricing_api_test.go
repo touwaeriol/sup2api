@@ -304,8 +304,8 @@ func checkResolvedGroupPrice(t *testing.T, e *pricingEnv, q core.PriceQuery, glo
 }
 
 // A rule removed behind the service's back (another node) applies until the
-// snapshot is dropped; without a global price there is nothing a rule could
-// apply to.
+// snapshot is dropped. A group's price stands without a global price, with
+// neither id nor base; without either the model is refused.
 func checkResolveStaleness(t *testing.T, e *pricingEnv, q core.PriceQuery) {
 	e.exec(`DELETE FROM price_rules WHERE group_id = $1`, e.open)
 	require.Equal(t, core.PriceSourceGroup, mustPrice(t, e, q).Source)
@@ -315,6 +315,10 @@ func checkResolveStaleness(t *testing.T, e *pricingEnv, q core.PriceQuery) {
 	require.Nil(t, e.writeGroup(e.open, map[string]any{"model_prices": []any{patch(q.Model, custom("visual", oneTierConfig(map[string]any{"p": 0.8, "c": 4})))}}))
 	e.exec(`UPDATE model_prices SET enabled = false WHERE model = $1`, q.Model)
 	e.svc.invalidate()
+	r := mustPrice(t, e, q)
+	require.Equal(t, []any{q.Model, core.PriceSourceGroup, int64(0), (*core.PriceBase)(nil), `tier("base", p*0.8 + c*4)`},
+		[]any{r.Model, r.Source, r.ID, r.Base, r.Expression})
+	require.Nil(t, e.writeGroup(e.open, map[string]any{"model_prices": []any{patch(q.Model, nil)}}))
 	_, err := priceOf(context.Background(), e.svc, q)
 	require.Equal(t, "model_price_not_configured", core.AsError(err).Code)
 }

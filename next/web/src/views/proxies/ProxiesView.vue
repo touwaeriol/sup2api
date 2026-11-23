@@ -266,7 +266,7 @@ function onAction(p: Proxy, key: string) {
   <div>
     <SPageHeader :title="t('proxies.title')" :description="t('proxies.description')" :filters-active-count="activeFilterCount(list.filters)">
       <template #actions>
-        <SButton v-if="canCreate" variant="primary" data-testid="proxy-new" icon="plus" fab @click="openCreate">{{ t('proxies.create') }}</SButton>
+        <SButton v-if="canCreate" variant="primary" data-testid="proxy-new" icon="plus" @click="openCreate">{{ t('proxies.create') }}</SButton>
       </template>
       <template #filters>
         <EntityPicker v-if="showOwner" v-model:id="list.filters.created_by" kind="user" class="w-72" data-testid="created-by-filter" :placeholder="t('proxies.createdBy')" />

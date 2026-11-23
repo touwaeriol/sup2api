@@ -10,15 +10,13 @@ export interface PageHead {
 
 /**
  * The title bar of an app shell, as a page header sees it. `head` is where
- * the page puts its title and description. `extra` and `actions` are
- * selectors of elements beside that title: `extra` takes what a page shows
- * with its title (a version, a status badge), `actions` takes the actions of
- * a header with no filters, so a lone button does not take a row of its own.
+ * the page puts its title and description. `extra` is the selector of an
+ * element beside that title, which takes what a page shows with its title
+ * (a version, a status badge). A page's actions stay in the page.
  */
 export interface PageHeadSink {
   head: Ref<PageHead | null>
   extra?: string | null
-  actions?: string | null
 }
 
 const TITLE_CONTEXT: InjectionKey<ComputedRef<string>> = Symbol('s-title-context')

@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/billing/expr"
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 )
 
 // Global prices a model rate may be folded into.
@@ -20,13 +21,21 @@ var (
 )
 
 // The list price under a group's model price, as the pricing endpoints show
-// it: the global price without one, the group's own price with one.
+// it: the global price without one, the group's own price with one, also
+// without a global price; none without either.
 func TestListPrice(t *testing.T) {
 	own := &storedRule{Rule: Rule{Mode: "visual", Config: json.RawMessage(`{"tiers":[{"name":"base","p":0.8,"c":4}]}`),
 		Expression: `tier("base", p*0.8 + c*4)`}}
-	require.Equal(t, perTokenPrice, listPrice(perTokenPrice, nil))
-	require.JSONEq(t, `{"mode": "visual", "config": {"tiers": [{"name": "base", "p": 0.8, "c": 4}]}, "expression": "tier(\"base\", p*0.8 + c*4)"}`,
-		jsonOf(t, listPrice(perTokenPrice, own)))
+	price, source := listPrice(&perTokenPrice, nil)
+	require.Equal(t, []any{&perTokenPrice, core.PriceSourceGlobal}, []any{price, source})
+	const ownJSON = `{"mode": "visual", "config": {"tiers": [{"name": "base", "p": 0.8, "c": 4}]}, "expression": "tier(\"base\", p*0.8 + c*4)"}`
+	for _, global := range []*PriceDef{&perTokenPrice, nil} {
+		price, source = listPrice(global, own)
+		require.JSONEq(t, ownJSON, jsonOf(t, price))
+		require.Equal(t, core.PriceSourceGroup, source)
+	}
+	price, source = listPrice(nil, nil)
+	require.Equal(t, []any{(*PriceDef)(nil), core.PriceSourceGlobal}, []any{price, source})
 }
 
 func jsonOf(t *testing.T, v any) string {

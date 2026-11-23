@@ -175,9 +175,6 @@ onBeforeUnmount(() => {
         <PluginStatusBadge :status="rollout.phase" :title="t('plugins.rollout.phase')" />
         <SSpinner v-if="running" size="sm" class="text-primary-500" />
       </template>
-      <template #actions>
-        <SButton :to="`/plugins/${encodeURIComponent(key)}`" icon="arrow-left">{{ t('plugins.rollout.backToDetail') }}</SButton>
-      </template>
     </SPageHeader>
 
     <div v-if="loading" class="flex justify-center py-20"><SSpinner size="lg" /></div>

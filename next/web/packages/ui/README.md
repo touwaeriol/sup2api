@@ -110,10 +110,11 @@ const columns: TableColumn[] = [
 
 - 当前标签可见时，面板内 `SPageHeader`、`SSettingsGroup`、`SSectionTitle` 的同名 `title` 默认不再显示；不同名称的分组保持可见。判断来自组件上下文，不扫描 DOM，也不使用模糊文字匹配。
 - 说明、保存按钮、开关、筛选器等独立内容保留。只有标题且标题重复时不留下空标题栏；只读时调用方应使用 `v-if` 省略没有操作的 `#actions` 插槽。
-- 控制台外壳（`provideTitleContext(title, sink)` 的第二个参数 `PageHeadSink`）下，页面里的 `SPageHeader` 把自己的 `title`、`description` 交给顶栏显示，页面内不再画标题行；标题文字不需要和菜单、路由标题相同。宽屏（≥768px）时 `#before`、`#title-extra`（版本号、状态徽章）也进顶栏、排在标题后；没有 `#filters`、只有 `#actions` 时按钮同样进顶栏，不再单独占一行。窄屏时顶栏只放标题，这些内容留在页面里，说明不显示。
+- 控制台外壳（`provideTitleContext(title, sink)` 的第二个参数 `PageHeadSink`）下，页面里的 `SPageHeader` 把自己的 `title`、`description` 交给顶栏显示，页面内不再画标题行；标题文字不需要和菜单、路由标题相同。宽屏（≥768px）时 `#before`、`#title-extra`（版本号、状态徽章）也进顶栏、排在标题后。`#actions` 从不进顶栏（UI 4.3）：页头在页面里是一行工具栏，筛选在左、操作在右，没有筛选时操作单独一行靠右，见“页面操作留在页面里（UI SDK 4.3）”。窄屏时顶栏只放标题，这些内容留在页面里，说明不显示。
 - 标签页、`STitleScope`、弹窗和抽屉是嵌套范围，没有 `sink`：里面的 `SPageHeader` 留在原处，只省略与当前范围同名的标题。
 - 只有一个标签时默认隐藏标签栏，恢复内容自身标题；需要显示单标签可用 `show-single`。`show-tabs=false` 同样恢复自身标题。
 - 嵌套容器使用最近层的标题，弹窗和抽屉重置上下文。折叠分组必须保留折叠按钮及名称；自定义标题插槽保持原样，避免误删其中的状态或交互。
+- `#end`（UI 4.3）放对所有标签生效的操作：在标签栏右端、不随标签滚动（手机上在标签栏上方单独一行靠右），标签栏不显示时单独一行靠右；它是工具栏，按钮一律 md（见“页面操作留在页面里（UI SDK 4.3）”）。
 - `STabs` 不自动重建内容组件。需要保留草稿可继续用 `v-show` 或 `KeepAlive`，需要切换时重新创建则由调用方设置 `key`。
 - 控制台插件设置宿主已提供该上下文；原生插件自建标签页应使用上述容器。普通 HTML 标题、iframe 内部内容不自动处理。
 - 新插件使用增强 `STabs` 时，`hostCompat` 最低核心版本应为 `>=0.1.154`（并保留项目要求的上界）。`hostUICompat` 声明 UI 3.0；使用旧入口的插件必须迁移，不提供兼容别名。
@@ -226,6 +227,8 @@ useAutoRefresh(list.reload, () => seconds.value * 1000, { enabled: () => !editor
 
 上一次加载结束后才排下一次，慢接口不会堆积；页面隐藏时暂停，回到页面时补一次；间隔为 0 或 `enabled` 为 false 时暂停。组件内挂载后才开始，首次加载仍由调用方负责。
 
+`<SAutoRefresh v-model="seconds" button :loading="list.loading.value" @refresh="list.reload()" />`（UI 4.3）：宽屏在菜单按钮后再放一个“刷新”按钮（`ui.refresh`，`loading` 时转圈），点它调 `@refresh`（没绑 `@refresh` 时不显示）；手机仍只有一个图标按钮，“立即刷新”在它的菜单里。页面不必再自己写刷新按钮。
+
 ### 筛选条：`SFilterBar`
 
 ```vue
@@ -277,11 +280,11 @@ const columns: TableColumn[] = [
 - 卡片里的 `SRowAction` 变成小号文字按钮；卡片底部的操作宜不超过三个，其余放进该行的“更多” `SDropdown`。选择、展开、拖动排序在卡片上照常可用，列设置变成“字段”底部抽屉。
 - 卡片宽度跟着屏幕走，标签／值网格每格约半张卡片宽。单元格内容要能换行或收窄：为宽表格写的固定宽度（如 `max-width: 14rem`）要在窄屏下放开，写在 `@media (max-width: 767.98px)` 里改成 `max-width: 100%`（可同时 `flex-wrap: wrap`）；不要在宽屏也用百分比，表格单元格里的百分比上限不参与列宽计算，那一列会变宽。收不进卡片的内容在卡片边缘被裁掉，不会把页面撑出横向滚动。
 
-**筛选与页头。** `SFilterBar` 的默认插槽收进“筛选”按钮（`active-count` 角标）打开的底部抽屉，里面还有 `#end` 和重置，筛选随 v-model 即时生效；按“搜索”才生效的草稿式筛选监听 `@done`（点“完成”或在抽屉字段里回车时触发并关闭抽屉）。`#primary`（如搜索框）留在按钮旁、宽屏时排在最前。`SPageHeader` 对应 `#filters-primary` 与 `filters-active-count`，手机上页头操作留在页面里。
+**筛选与页头。** `SFilterBar` 的默认插槽收进“筛选”按钮（`active-count` 角标）打开的底部抽屉，里面还有 `#end` 和重置，筛选随 v-model 即时生效；按“搜索”才生效的草稿式筛选监听 `@done`（点“完成”或在抽屉字段里回车时触发并关闭抽屉）。`#primary`（如搜索框）留在按钮旁、宽屏时排在最前。`SPageHeader` 对应 `#filters-primary` 与 `filters-active-count`；页头操作在任何宽度都留在页面里（UI 4.3）。
 
 **弹层。** `SDrawer` 新增 `side="bottom"`：底部抽屉（全宽、最高 92dvh、顶部拖动条，可下滑关闭，避开 Home 指示条），手机上的弹层都基于它：`SModal` 与 `SFormModal` 的 `mobile`（类型 `ModalMobile`）为 `auto`（默认，sm/md 宽度为抽屉、lg 以上为整页）、`sheet`、`fullscreen`、`center`；左右 `SDrawer` 变成整页；`SDropdown` 为底部操作表（`mobile="popover"` 保留浮动菜单）；可搜索的 `SSelect`、`SDateRange`、`STimeRange` 以抽屉选择。手机或触屏上浏览器“返回”关闭最上层弹层：`dismissTopLayer()` 关闭在手机或触屏上打开的最上层（持久层除外）并返回 `true`；没有弹层、宽屏鼠标下打开的弹层或持久层返回 `false`，照常导航。控制台路由在“返回／前进”时调用它。
 
-**其他组件。** `SPagination` 为「共 N 条 + ‹ 3 / 12 ›」，点页码跳页、选每页条数；`SBulkBar` 有选择时固定在屏幕底部，原位置不占高度（根元素 `display: contents`，带 `data-bulk-dock`），改用父元素的 `::after` 在它末尾留出同样高度：所以要把它和它操作的列表放在同一个容器里（末尾几行和分页才能滚出停靠条），这个容器自己不要再用 `::after`，也不要是横向 flex 或多列 grid；停靠条里的操作按钮放不下时横向滚动（触屏上不显示滚动条），藏着按钮的一侧渐隐，只露出一部分的按钮点一下只滚进视野、不触发操作（键盘按下照常触发），危险操作照常放在最后；`STabs` 的标签放不下时标签栏自己横向滚动（藏着标签的一侧渐隐，选中的标签滚到中间）；`SAutoRefresh` 是带运行点的图标按钮，绑定 `@refresh` 时菜单里有“立即刷新”；`SButton fab`（需 `icon`）是右下角 56px 圆形按钮，带 `data-fab`，控制台据此在页面底部留出空间；`SBulkBar` 停靠期间 fab 不显示，控制台也不再为它留空间（只剩停靠条自己那一份；按页面里有没有 `data-bulk-dock` 判断，`v-show` 藏起来的停靠条也算）；`SGrid variant="stats"` 保持两列统计卡片；`SSegmented` 横向滚动；`STooltip` 在触屏上点按切换；`SSteps` 的 `direction` 默认改为 `'auto'`（手机竖排、宽屏横排，宽屏与以前一致）；`SChart` 默认 220px 高并使用手机图例；Toast 在顶部居中。
+**其他组件。** `SPagination` 为「共 N 条 + ‹ 3 / 12 ›」，点页码跳页、选每页条数；`SBulkBar` 有选择时固定在屏幕底部，原位置不占高度（根元素 `display: contents`，带 `data-bulk-dock`），改用父元素的 `::after` 在它末尾留出同样高度：所以要把它和它操作的列表放在同一个容器里（末尾几行和分页才能滚出停靠条），这个容器自己不要再用 `::after`，也不要是横向 flex 或多列 grid；停靠条里的操作按钮放不下时横向滚动（触屏上不显示滚动条），藏着按钮的一侧渐隐，只露出一部分的按钮点一下只滚进视野、不触发操作（键盘按下照常触发），危险操作照常放在最后；`STabs` 的标签放不下时标签栏自己横向滚动（藏着标签的一侧渐隐，选中的标签滚到中间）；`SAutoRefresh` 是带运行点的图标按钮，绑定 `@refresh` 时菜单里有“立即刷新”（`button` 在宽屏另加的“刷新”按钮手机上不显示）；`SButton fab`（需 `icon`）是右下角 56px 圆形按钮，带 `data-fab`，控制台据此在页面底部留出空间；`SBulkBar` 停靠期间 fab 不显示，控制台也不再为它留空间（只剩停靠条自己那一份；按页面里有没有 `data-bulk-dock` 判断，`v-show` 藏起来的停靠条也算）；`SGrid variant="stats"` 保持两列统计卡片；`SSegmented` 横向滚动；`STooltip` 在触屏上点按切换；`SSteps` 的 `direction` 默认改为 `'auto'`（手机竖排、宽屏横排，宽屏与以前一致）；`SChart` 默认 220px 高并使用手机图例；Toast 在顶部居中。
 
 ## 更多筛选与单行单元格（UI SDK 3.10）
 
@@ -572,3 +575,45 @@ async function save() {
 - **`useTabbedForm(current, tabs)`**：`current` 是当前标签的 `Ref`（即 `v-model`），`tabs` 是按顺序的标签 key（数组、`Ref` 或函数）。它把表单 provide 给调用者下面的组件。返回 `{ current, saving, dirtyTabs, errorTabs, anyDirty, register, submit, clearErrors }`。
 - **部分**（`TabbedFormPart`）：`{ tab, check?(): boolean | Promise<boolean>, body(): Record<string, unknown>, dirty?: boolean | Ref | () => boolean, fields?: string[], applyErrors?(errors), invalid?: boolean | Ref | () => boolean }`。`check` 可以等待（例如插件表单的校验）。给了 `invalid`（这个部分现在是否显示着错误：输入时就发现的，或服务端返回、还没被改掉的）时，它的标签是否标红只看 `invalid`，错误随改随消；没给时看上一次保存的结果。一个标签可以有几个部分。调用 `useTabbedForm` 的组件用 `form.register(part)` 登记（返回取消登记的函数）；标签页里的子组件用 `useTabbedFormPart(part, active?)`，组件卸载时自动取消；`active`（布尔值、`Ref` 或函数，默认 `true`）为假时不登记，变真时登记、再变假时取消，组件不必重新挂载（例如控制台定价抽屉里把用户转成专享后，同一个倍率表变成可编辑）；不在这样的表单里时什么也不做。`fields` 是这个部分发的请求体字段前缀：`"model_prices"` 认领字段错误 `model_prices`、`model_prices.0.rule` 和 `model_prices[0]`，不认领 `model_prices_x`。
 - **`submit(send)`**：先跑所有部分的 `check`（全部都跑，每个标签自己显示原因），有失败的就标红这些标签、打开其中第一个（按 `tabs` 的顺序），返回 `false`，不发请求；否则把各部分的 `body()` 合并成一个对象（各部分的字段不要重叠），调 `send` 一次并返回它的结果。`send` 以 `ApiError` 拒绝且带字段错误（`ApiError.fields`，§3.1）时，按字段前缀找到对应的部分，把它认领的错误（键是完整路径）交给它的 `applyErrors`，标红并打开第一个标签，返回 `false`；有部分认领、但也有没被任何部分认领的字段错误时，后者拼成一条错误 toast（`字段: 信息`，用 `; ` 分隔），不会静默丢掉；一条也没被认领的失败原样拒绝，由调用方提示。`saving` 从检查开始到请求结束都为真；`errorTabs` 在下一次 `submit` 或 `clearErrors()` 时清空。
+
+## 可新建的下拉与默认展开的行（UI SDK 4.2）
+
+只新增两个可选属性和一个事件，4.1 的接口不变。用到它们的插件声明 `hostUICompat: "^4.2"`；更早的控制台忽略它们（没有“添加”行，行一开始都收起）。
+
+- **`SSelect` 的 `creatable`**（只在 `searchable` 时生效）：输入的文字去掉首尾空白后不为空、且不是任何选项的 `label` 或 `value` 时，列表末尾多一行“添加“文字””（`ui.createItem`，主色、上方虚线）。这一行和 `footer` 一起固定在面板底部（仍是 listbox 里的 `option`，键盘、高亮、`aria-activedescendant`、点击都照常），列表再长也不会被遮住；键盘移动时高亮的选项会滚到这块固定区域上方。选中这一行（点击，或高亮后回车）发出 `create(text)`，`text` 已去掉首尾空白，不发 `update:modelValue`；它不是值，`modelValue` 不变，由调用方决定怎么用（例如加进列表）。高亮仍默认落在第一个匹配的选项上，所以回车先选已有的选项；输入的文字正好是某个可选选项的 `label` 或 `value` 时，高亮落在这个选项上（完全一致优先于第一个匹配，只在 `creatable` 时如此）；和某个禁用选项完全一致时也不出现“添加”行（例如标成“已添加”的项）。没有匹配时这一行是唯一的一行。`remote` 时同样生效（只和当前给出的 `options` 比较）。
+- **`STable` 的 `defaultExpanded(row)`**（配合 `expandable`）：一行第一次出现在表里时，函数为真就展开（例如已有内容的行）。之后这一行（按 `rowKey`）保持用户的选择：收起后换一批行对象也不会再自动展开；第一次出现的 key 才看函数。同时有 `expandSingle` 时只展开其中第一行，且只在没有展开的行时。默认展开不发 `expand` 事件。
+
+```vue
+<SSelect :model-value="null" :options="models" searchable clearable creatable placeholder="添加模型" @update:model-value="add" @create="add" />
+<STable :columns="columns" :rows="rows" expandable :default-expanded="(row) => row.items.length > 0" />
+```
+
+## 页面操作留在页面里（UI SDK 4.3）
+
+页面的操作按钮（新建、刷新、管理……）不再进控制台顶栏，每个页面都放在同一个位置，样式以账号列表为准。只改了宿主的渲染：旧插件不重新构建也照这样显示。用到本节新增的 `STabs #end`、`SAutoRefresh` 的 `button` / `loading` 的插件声明 `hostUICompat: "^4.3"`，`hostCompat` 要求核心 `>=0.1.311`（0.1.310 是最后一个带 UI 4.2 的核心）。`:fab="false"` 在旧宿主上同样有效（`fab` 原来就是 `SButton` 的属性），只为它不必抬声明。
+
+```vue
+<SPageHeader :title="t('title')">
+  <template #filters-primary><STimeRange v-model:range="range" … /></template>
+  <template #actions>
+    <SAutoRefresh v-model="seconds" button :loading="loading" @refresh="load" />
+    <SButton variant="primary" icon="plus" @click="create">{{ t('create') }}</SButton>
+  </template>
+</SPageHeader>
+
+<STabs v-model="tab" :tabs="tabs">
+  <template #end><SButton icon="refresh" :loading="loading" @click="refresh">{{ t('refresh') }}</SButton></template>
+  <template #default="{ active }">…</template>
+</STabs>
+```
+
+操作只有四个位置：
+
+1. **页头工具栏右侧**（默认）：`SPageHeader` 在页面里是一行，`#filters-primary` / `#filters` 在左、`#actions` 在右；没有筛选时操作单独一行、靠右。`PageHeadSink` 不再有 `actions`（只剩 `head`、`extra`），控制台的 `#s-page-actions` 容器删除。
+2. **`STabs` 的 `#end`**（有标签的页面）：在标签栏右端，不随标签横向滚动（手机上在标签栏上方单独一行靠右，标签不被挤窄），对所有标签生效；标签栏不显示（只有一个标签、`show-tabs=false`）时单独一行、靠右。
+3. **列表卡片的 `SCard #footer`**（左列表、右详情的页面）：一个 `block` 按钮，例如控制台角色页的“新建角色”。
+4. **已有的筛选条或工具条里**：和“重置”“搜索”放在一起，例如控制台用量概览的刷新、价格同步的“重新拉取”。
+
+没有“返回”按钮，上级页面走面包屑。
+
+**工具栏决定按钮的尺寸和浮动。** 页头的工具栏和 `STabs #end` 是工具栏：里面的 `SButton` 忽略自己的 `size`，一律是 md，所以每个工具栏都是一个控件高。直接在控制台外壳下的页头工具栏里，带 `icon` 的 `variant="primary"` 按钮在手机上变成右下角的圆形按钮（同 `SButton fab`）；不想浮动时写 `:fab="false"`（显式的 `fab` 总是优先）。`STabs #end`、嵌套范围（标签页、弹窗、抽屉）里的页头不浮动，`block` 按钮也不浮动。从工具栏里打开的弹窗、抽屉和底部面板不属于工具栏：里面的按钮照常用自己的 `size`，也不浮动。按钮只用 `variant` 区分主次，不另做按用途命名的按钮组件；尺寸和浮动交给所在的容器。

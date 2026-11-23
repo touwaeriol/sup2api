@@ -10,7 +10,6 @@ export default {
   error: 'Error',
   alive: 'Online',
   stale: 'No heartbeat',
-  autoRefresh: 'Auto refresh every 5s',
   online: 'Online nodes',
   pluginIssues: 'Plugin issues',
   hostVersions: 'Versions',
