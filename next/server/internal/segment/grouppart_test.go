@@ -190,13 +190,38 @@ func TestGroupWriteRemoveThenModelRates(t *testing.T) {
 }
 
 // rowOfSegment is the row of segment id among rows of GET /groups/:id/segments.
-func rowOfSegment(rows []map[string]any, id int64) map[string]any {
+func rowOfSegment(rows []map[string]any, id int64) map[string]any { return rowOf(rows, "segment", id) }
+
+// rowOf is the row whose end key ("segment" or "group") has id.
+func rowOf(rows []map[string]any, key string, id int64) map[string]any {
 	for _, r := range rows {
-		if seg, _ := r["segment"].(map[string]any); seg != nil && int64(seg["id"].(float64)) == id {
+		if end, _ := r[key].(map[string]any); end != nil && int64(end["id"].(float64)) == id {
 			return r
 		}
 	}
 	return nil
+}
+
+// The two editors set one record: what the account group side writes the
+// user group side reads, and the other way round.
+func TestRatesBothSides(t *testing.T) {
+	f := newSettingsFixture(t)
+	fe, err := f.groupWriteBody(f.admin, f.public, map[string]any{
+		"segment_rates":       []any{map[string]any{"segment_id": f.vip, "rate": "0.7"}},
+		"segment_model_rates": []any{map[string]any{"segment_id": f.vip, "model": "gpt-4o", "rate": "0.6"}}})
+	require.NoError(t, err)
+	require.Empty(t, fe)
+	row := rowOf(f.do(f.admin, "GET", path("/segments/%d/groups", f.vip), nil).ok(200).rows(), "group", f.public)
+	require.Equal(t, "0.7", row["rate_override"])
+	require.Equal(t, []any{map[string]any{"model": "gpt-4o", "rate": "0.6"}}, row["model_rates"])
+
+	f.do(f.admin, "PATCH", path("/segments/%d", f.vip), map[string]any{
+		"group_rates": []any{map[string]any{"group_id": f.public, "rate": "0.8"}},
+		"model_rates": []any{map[string]any{"group_id": f.public, "model": "gpt-4o", "rate": nil},
+			map[string]any{"group_id": f.public, "model": "claude", "rate": "0.9"}}}).ok(200)
+	row = rowOfSegment(f.do(f.admin, "GET", path("/groups/%d/segments", f.public), nil).ok(200).rows(), f.vip)
+	require.Equal(t, "0.8", row["rate_override"])
+	require.Equal(t, []any{map[string]any{"model": "claude", "rate": "0.9"}}, row["model_rates"])
 }
 
 // Saves of the same pairs at once, from either side and in either order, all
