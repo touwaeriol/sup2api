@@ -8,12 +8,22 @@
 
 开发完成、尚未上线的改动。发布时改成发布日期的一节，补上提交、实际版本号和发布过程。
 
-### 核心（未定版本）：账号分组里给用户分组设模型倍率（核心、控制台；无迁移，可滚动）
+## 2026-11-23
+
+### 核心 0.1.309：账号分组里给用户分组设模型倍率（`331aace0a`；无迁移，滚动更新；网关仍 0.1.139）
+
+- **构建**：照 0.1.308 的做法在 ovh 上从 touwaeriol/sup2api develop `331aace0a` 构建（`stage/own-0.1.309/`，148 秒，内置包用 `sup2api-plugins-2026` 重签）。清单 sha256 `11169283ccc91916635b78efe1a07e08452eafae8ed0f19a0fd6d00996b45116`（`release_id` `core-v0.1.309`，amd64 bundle `8bc22b57…2910`、arm64 `85c1cfb0…d968`），strategy rolling，schema `395364cf…2436` 不变（最后一个迁移仍是 0124）。内置插件版本与线上相同，插件包与 0.1.308 逐字节相同，只有 `sub2api`、`sub2api-plugin` 两个二进制变了；`next/plugins/released.json` 不用改。
+- **发布前**：GitHub next CI（server、plugins、web console、frontend、golangci-lint、sdk/tools/e2e 等）通过，backend-security 是既有失败；新核心只读运行 `sub2api admin check-prices` 通过。
+- **ovh 集群**（北京时间 2026-11-23 09:15–09:16，所有者授权此类无迁移发布自主进行）：import 后预检 rolling-v1、无阻断（expected_revision 581），计划 `7422870de57b9f5fef983862370c091f` 09:15:27.9→09:16:19.7：ccp 09:15:38 让出、09:16:04 就绪，ovh 09:16:09 让出、09:16:17 就绪；ovh 3130 与 api.prophey.ai `/readyz` 全程 200，没有 503。没有关 new-api 渠道（392 由管理员关着，未动）。
+- **核验**：两节点核心 0.1.309、网关 0.1.139，7 个启用插件 active、ready、restarts 0；升级后 `check-prices` 通过；控制台 /prices、/groups 与懒加载资源 200；GET `/groups`、`/groups/:id/segments`、`/groups/:id/model-prices`、`/segments`、`/segments/:id/groups` 都 200，PATCH `/groups/9` 带指向不存在用户分组的 `segment_model_rates` 回 400（字段 `segment_model_rates.0.segment_id`），什么也没写。经 api.prophey.ai 的非流式、流式 `/v1/messages`（临时密钥，已删）200、`billed`、`rate_multiplier` 1.0、费用与价格一致；升级刚完成时（09:16:40）的第一个非流式测试请求在 120 秒内上游没有应答，客户端超时取消（499），2 分钟后重试正常。两节点日志无 ERROR。升级前 15 分钟没有请求，升级后 15 分钟 3 个都是测试请求（2 个 200、1 个上述 499）。
+- 回滚：无迁移，可以用同样方式滚动回 0.1.308（清单 `87bcd859…2ce9`）。
+
+本次发布包含的改动：
+
+#### 账号分组里给用户分组设模型倍率（核心、控制台；无迁移，可滚动）
 
 - 账号分组编辑的“用户分组倍率”页，每个用户分组（含专享用户）那一行下可展开设它在本账号分组的**用户分组模型倍率**，与用户分组编辑里每个账号分组下的模型倍率是同一份设置，只是从账号分组一侧看（用户 2026-11-23 要求）。可添加的模型是本账号分组已保存的定价表里有原价的模型（新建账号分组时是全部启用的全局价），新加的一行默认填这个模型现在实付的倍率；行的“移除”连同模型倍率一起删，未保存的模型倍率随之丢掉。
 - 接口：POST/PATCH `/groups` 新增列表 `segment_model_rates`（`{segment_id, model, rate}`，`rate` 必填、`null` 删除），与用户分组的 `model_rates` 同一套校验、文案和写入（`segment` 包的 `rateWrite`），写在 `segment_rates` 之后，提交后价格快照失效；调用者是其中任一用户分组的成员时 409。见 CONTRACTS §97.6。
-
-## 2026-11-23
 
 ### 核心 0.1.308：账号分组 / 用户分组定价重做、一次请求保存的编辑器、侧栏“账号/代理”目录（`f0e4d77ca`；迁移 0124，单向，停机维护；网关仍 0.1.139）
 
