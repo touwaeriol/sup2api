@@ -79,24 +79,42 @@ func demoPlugin(t *testing.T) string {
 	return dir
 }
 
-func TestPackSignVerifyIndex(t *testing.T) {
-	dir := demoPlugin(t)
-	keys := t.TempDir()
-	market := t.TempDir()
+func TestPackSignVerify(t *testing.T) {
+	dir, market := demoPlugin(t), t.TempDir()
+	priv, pub := keygenDev(t)
+	pkg1 := strings.TrimSpace(runOK(t, "pack", "--dir", dir, "--out-dir", market))
+	if filepath.Base(pkg1) != "demo-0.1.0.s2plugin" {
+		t.Fatalf("pkg1 = %s", pkg1)
+	}
+	checkPackedFiles(t, pkg1)
+	// Deterministic output.
+	again := filepath.Join(t.TempDir(), "again.s2plugin")
+	runOK(t, "pack", "--dir", dir, "--out", again)
+	a, _ := os.ReadFile(pkg1)
+	b, _ := os.ReadFile(again)
+	if !bytes.Equal(a, b) {
+		t.Error("pack output is not deterministic")
+	}
+	pkg2 := checkOverlayPack(t, dir, market)
+	checkSignVerify(t, priv, pub, pkg1, pkg2)
+	checkTamperDetected(t, pub, pkg1)
+}
 
+// keygenDev creates the key dev-1 and returns its private and public files.
+func keygenDev(t *testing.T) (string, string) {
+	t.Helper()
+	keys := t.TempDir()
 	out := runOK(t, "keygen", "--key-id", "dev-1", "--out", keys)
 	if !strings.Contains(out, "public_key:") {
 		t.Fatalf("keygen output: %s", out)
 	}
 	runFail(t, "keygen", "--key-id", "dev-1", "--out", keys) // no overwrite
-	priv := filepath.Join(keys, "dev-1.key")
-	pub := filepath.Join(keys, "dev-1.pub")
+	return filepath.Join(keys, "dev-1.key"), filepath.Join(keys, "dev-1.pub")
+}
 
-	pkg1 := strings.TrimSpace(runOK(t, "pack", "--dir", dir, "--out-dir", market))
-	if filepath.Base(pkg1) != "demo-0.1.0.s2plugin" {
-		t.Fatalf("pkg1 = %s", pkg1)
-	}
-	files, err := readPackage(pkg1)
+func checkPackedFiles(t *testing.T, pkg string) {
+	t.Helper()
+	files, err := readPackage(pkg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,24 +129,18 @@ func TestPackSignVerifyIndex(t *testing.T) {
 			t.Errorf("unexpected %s", p)
 		}
 	}
-	zr, _ := zip.OpenReader(pkg1)
+	zr, _ := zip.OpenReader(pkg)
+	defer zr.Close()
 	for _, f := range zr.File {
 		if f.Name == "runtimes/linux-amd64/plugin" && f.Mode().Perm() != 0o755 {
 			t.Errorf("runtime mode = %v", f.Mode())
 		}
 	}
-	zr.Close()
+}
 
-	// Deterministic output.
-	again := filepath.Join(t.TempDir(), "again.s2plugin")
-	runOK(t, "pack", "--dir", dir, "--out", again)
-	a, _ := os.ReadFile(pkg1)
-	b, _ := os.ReadFile(again)
-	if !bytes.Equal(a, b) {
-		t.Error("pack output is not deterministic")
-	}
-
-	// Overlay: 0.2.0 with an extra migration and a patched manifest.
+// checkOverlayPack packs 0.2.0: an extra migration and a patched manifest.
+func checkOverlayPack(t *testing.T, dir, market string) string {
+	t.Helper()
 	pkg2 := strings.TrimSpace(runOK(t, "pack", "--dir", dir, "--overlay", "testdata/v2", "--out-dir", market))
 	files2, _ := readPackage(pkg2)
 	if _, ok := files2["migrations/0002_more.sql"]; !ok || filepath.Base(pkg2) != "demo-0.2.0.s2plugin" {
@@ -139,25 +151,32 @@ func TestPackSignVerifyIndex(t *testing.T) {
 	if m2["version"] != "0.2.0" || m2["name"].(map[string]any)["zh"] != nil || m2["key"] != "demo" {
 		t.Fatalf("patched manifest = %v", m2)
 	}
+	return pkg2
+}
 
-	// Unsigned verify fails; sign; verify ok.
+// checkSignVerify: unsigned verify fails; sign; verify ok; re-signing
+// replaces the signature.
+func checkSignVerify(t *testing.T, priv, pub, pkg1, pkg2 string) {
+	t.Helper()
 	runFail(t, "verify", "--pub", pub, pkg1)
 	runOK(t, "sign", pkg1, pkg2, "--key", priv, "--key-id", "dev-1")
-	out = runOK(t, "verify", "--pub", pub, pkg1, pkg2)
-	if strings.Count(out, "OK ") != 2 {
+	if out := runOK(t, "verify", "--pub", pub, pkg1, pkg2); strings.Count(out, "OK ") != 2 {
 		t.Fatalf("verify output: %s", out)
 	}
-	files, _ = readPackage(pkg1)
+	files, _ := readPackage(pkg1)
 	var sig pkgsig.Signature
 	_ = json.Unmarshal(files[pkgsig.SignatureFile], &sig)
 	if sig.Publisher != "tester" || sig.KeyID != "dev-1" || sig.Algorithm != "ed25519" {
 		t.Fatalf("signature = %+v", sig)
 	}
-	// Re-signing replaces the signature.
 	runOK(t, "sign", "--key", priv, "--key-id", "dev-1", pkg1)
 	runOK(t, "verify", "--pub", pub, pkg1)
+}
 
-	// Tampering is detected.
+// checkTamperDetected: a changed file or another key fails verification.
+func checkTamperDetected(t *testing.T, pub, pkg string) {
+	t.Helper()
+	files, _ := readPackage(pkg)
 	files["runtimes/linux-amd64/plugin"] = []byte("evil")
 	tampered := filepath.Join(t.TempDir(), "tampered.s2plugin")
 	if err := writePackage(tampered, files); err != nil {
@@ -166,46 +185,9 @@ func TestPackSignVerifyIndex(t *testing.T) {
 	if msg := runFail(t, "verify", "--pub", pub, tampered); !strings.Contains(msg, "digest mismatch") {
 		t.Fatalf("tamper message: %s", msg)
 	}
-	// Wrong key.
 	other := t.TempDir()
 	runOK(t, "keygen", "--key-id", "other", "--out", other)
-	runFail(t, "verify", "--pub", filepath.Join(other, "other.pub"), pkg1)
-
-	// Index.
-	runOK(t, "index", "--dir", market, "--key", priv)
-	raw, err := os.ReadFile(filepath.Join(market, "index.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	sigLine, _ := os.ReadFile(filepath.Join(market, "index.json.sig"))
-	pubKey, err := loadPublicKey(pub)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !verifyIndex(raw, string(sigLine), pubKey) || strings.Contains(string(sigLine), "\n") {
-		t.Fatal("index signature invalid")
-	}
-	var idx marketIndex
-	if err := json.Unmarshal(raw, &idx); err != nil {
-		t.Fatal(err)
-	}
-	if idx.Version != 1 || len(idx.Plugins) != 1 || len(idx.Plugins[0].Versions) != 2 {
-		t.Fatalf("index = %s", raw)
-	}
-	p := idx.Plugins[0]
-	if p.Key != "demo" || p.Publisher != "tester" || p.Versions[0].Version != "0.1.0" || p.Versions[1].Version != "0.2.0" ||
-		p.Versions[0].URL != "demo-0.1.0.s2plugin" || len(p.Versions[0].SHA256) != 64 || p.Versions[0].HostCompat != ">=0.1.0 <0.2.0" {
-		t.Fatalf("index plugin = %+v", p)
-	}
-	st, _ := os.Stat(pkg1)
-	if p.Versions[0].Size != st.Size() {
-		t.Fatalf("size = %d, want %d", p.Versions[0].Size, st.Size())
-	}
-	runOK(t, "index", "--dir", market, "--key", priv, "--base-url", "https://example.com/m/")
-	raw, _ = os.ReadFile(filepath.Join(market, "index.json"))
-	if !strings.Contains(string(raw), `"url": "https://example.com/m/demo-0.1.0.s2plugin"`) {
-		t.Fatalf("base url index = %s", raw)
-	}
+	runFail(t, "verify", "--pub", filepath.Join(other, "other.pub"), pkg)
 }
 
 func TestPackChecks(t *testing.T) {

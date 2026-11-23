@@ -24,7 +24,7 @@ note at the top of [single/README.md](single/README.md)): do not run its
 bring the old containers back up on the same ports.
 
 Automated acceptance tests use the separate `e2e/` stack: two nodes behind
-Caddy on `127.0.0.1:3120`, their own PostgreSQL/Redis, signed plugin market and
+Caddy on `127.0.0.1:3120`, their own PostgreSQL/Redis, plugin market and
 mock upstream. See [e2e/README.md](e2e/README.md) for setup and commands. Never
 run these destructive tests against a production stack or the unit-test
 `testdb` database.
@@ -58,9 +58,11 @@ using the dedicated Compose project `sub2api-next-e2e` by default.
   and settings pages exist only as that UI).
 - Runtime `debian:trixie-slim`, user `sub2api` (1000), `/usr/local/bin/sub2api`,
   `/usr/local/bin/sub2api-plugin`, `/opt/sub2api/market/`, data in `/var/lib/sub2api`.
-- The entrypoint derives `SUB2API_PLUGIN_OFFICIAL_KEYS=sub2api-dev=<pub>` and
-  `SUB2API_MARKET_SOURCES=[{"name":"local-dev","url":$SUB2API_DEV_MARKET_URL,...}]`
-  from the dev public key unless those variables are set.
+- The entrypoint derives `SUB2API_PLUGIN_OFFICIAL_KEYS=sub2api-dev=<pub>` from
+  the dev public key and `SUB2API_MARKET_SOURCES=[{"name":"local-dev","url":$SUB2API_DEV_MARKET_URL}]`
+  unless those variables are set. The bundled market's `index.json` (v2, not
+  signed) is built by `build-demo.sh` with `sub2api-plugin registry import`
+  and `index` (CONTRACTS §135).
 
 Node settings live in each stack's `compose.yml`. The E2E stack explicitly
 enables package signature checks, plugin seccomp and strict networking. Its

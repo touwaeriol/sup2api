@@ -11,14 +11,15 @@
 #            (the plugin UIs build with web/'s toolchain, so web/ must be
 #            there; see deploy/docker/build-ui.sh)
 #   build  - builds server, tools/sub2api-plugin and the plugins; packs and
-#            signs plugins with a dev key and writes the market index
+#            signs plugins with a dev key and writes the (unsigned) market index
 #   final  - debian:trixie-slim runtime
 #
 # The dev signing key is generated on first build and kept in a BuildKit cache
 # mount (id=sub2api-next-devkeys) so rebuilds keep the same key and installed
 # plugins stay verifiable. Only the PUBLIC key is copied into the image
 # (/opt/sub2api/market/dev-official.pub); the entrypoint turns it into
-# SUB2API_PLUGIN_OFFICIAL_KEYS / SUB2API_MARKET_SOURCES unless they are set.
+# SUB2API_PLUGIN_OFFICIAL_KEYS unless set, and points SUB2API_MARKET_SOURCES at
+# the bundled market unless set.
 # =============================================================================
 
 ARG NODE_IMAGE=node:24

@@ -1,12 +1,14 @@
 #!/bin/sh
-# Builds, packs and signs every plugin under next/plugins and writes a signed
-# market index. POSIX sh; run from anywhere.
+# Builds, packs and signs every plugin under next/plugins and writes a local
+# market: the packages and their index.json (CONTRACTS §135).
+# POSIX sh; run from anywhere.
 #
 # Usage: build-demo.sh <outdir> <keydir> <keyid> [publisher]
 #
 #   <keydir>/<keyid>.key must exist (create it once with
 #   `sub2api-plugin keygen --key-id <keyid> --out <keydir>`); it is reused,
-#   never regenerated. The same key signs the packages and the index.
+#   never regenerated. It signs the packages (built-in and uploaded packages
+#   are still verified by signature; the market index is not signed).
 #   Every plugin with a native UI needs its ui/native/dist first
 #   (deploy/docker/build-ui.sh builds them all); pack refuses a missing one.
 #
@@ -16,7 +18,8 @@
 #     plugin lands in the market with no change to this script,
 #   <outdir>/anthropic-0.4.1-test.s2plugin, dynweight-0.7.1-test.s2plugin
 #     (upgrade test fixtures),
-#   <outdir>/index.json, index.json.sig,
+#   <outdir>/index.json  index v2 of the packages above, built from a
+#     temporary registry (publisher trust official, relative package urls),
 #   <outdir>/test/guard-<version>-test.s2plugin  (guardtest build, not indexed)
 #
 #   Which plugins are *built into the image* is a separate, deliberate
@@ -35,7 +38,7 @@
 set -eu
 
 if [ $# -lt 3 ]; then
-  sed -n '2,34p' "$0"
+  sed -n '2,37p' "$0"
   exit 2
 fi
 
@@ -124,7 +127,10 @@ package anthropic anthropic-upgrade "$OUT" testdata/upgrade
 package dynweight dynweight-upgrade "$OUT" testdata/upgrade
 package guard guard-test "$OUT/test" testdata/guardtest guardtest
 
-"$BIN" index --dir "$OUT" --key "$KEY"
+# The market's registry: each package's version file with a relative url,
+# so the index works wherever the directory is served.
+"$BIN" registry import --registry "$WORK/registry" --repo touwaeriol/sup2api --trust official "$OUT"/*.s2plugin >/dev/null
+"$BIN" index --registry "$WORK/registry" --out "$OUT/index.json"
 if [ -f "$KEYDIR/$KEYID.pub" ]; then
   "$BIN" verify --pub "$KEYDIR/$KEYID.pub" "$OUT"/*.s2plugin "$OUT"/test/*.s2plugin
 fi

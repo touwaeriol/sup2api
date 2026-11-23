@@ -5,7 +5,6 @@
 *.s2plugin
 *.key
 index.json
-index.json.sig
 
 # The repository root ignores "scripts"; keep this tool's scripts.
 !/scripts/

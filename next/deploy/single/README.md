@@ -4,7 +4,7 @@
 
 > 插件包从 2026-10-02 起不再存 PG（核心迁移 0022），没有网关的部署只用本机目录保存插件包，所以本栈的两个节点之间无法同步上传的插件；多节点请使用网关托管部署。
 
-One sub2api-next node with its own PostgreSQL 16, a Valkey 9 cache and the signed plugin
+One sub2api-next node with its own PostgreSQL 16, a Valkey 9 cache and the plugin
 market bundled in the image, all started by docker compose (project `sup2api`).
 The cache is any Redis-protocol server: set `CACHE_IMAGE=redis:7` to run Redis
 instead (the service keeps the name `redis`, and `SUB2API_REDIS_URL` accepts
@@ -63,4 +63,5 @@ forwards to `127.0.0.1:3130` with streaming enabled (`flush_interval -1` in
 Caddy) and set `SUP2API_PUBLIC_URL` in `.env` to the public URL.
 
 The anthropic and guard plugins are in the bundled market (Plugins → Market),
-signed with the key generated when the image was first built on this server.
+whose packages are signed with the key generated when the image was first built
+on this server (the market index itself is not signed, CONTRACTS §11.1).

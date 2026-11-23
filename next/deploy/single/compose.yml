@@ -1,6 +1,6 @@
 # sup2api: single-node deployment of sub2api-next.
 #
-# PostgreSQL, Redis and the signed plugin market stay on the project network;
+# PostgreSQL, Redis and the plugin market stay on the project network;
 # only the service is published, on ${SUP2API_BIND:-127.0.0.1}:${SUP2API_PORT:-3130}
 # (SUP2API_BIND=0.0.0.0 exposes it directly). See README.md in this directory.
 #
@@ -130,7 +130,7 @@ services:
     volumes:
       - appdata2:/var/lib/sub2api
 
-  # Copies the signed plugin market bundled in the image into a volume.
+  # Copies the plugin market bundled in the image into a volume.
   market-init:
     image: sup2api:latest
     pull_policy: never

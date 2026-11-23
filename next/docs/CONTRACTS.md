@@ -9407,3 +9407,38 @@ Go 类型是 `expr.VisualConfig`、`TierConfig`、`TierCond`、`TokenPrices`、`
   - Anthropic：`{"data":[{"type":"model","id","display_name","created_at":"1970-01-01T00:00:00Z"}],"has_more":false,"first_id","last_id"}`。
   - Gemini：`{"models":[{"name":"models/<id>","version":"001","displayName","supportedGenerationMethods":[…]}]}`，不分页（忽略 `pageSize`、`pageToken`，不返回 `nextPageToken`）；查单个时模型可带或不带 `models/`。`supportedGenerationMethods` 取网关在该版本实际声明的 `POST /<版本>/models/:model:<方法>` 端点：名字含 `embedding` 的模型列含 embed 的方法，其余列另外那些。
 - 鉴权与 `GET /v1/usage` 共用 `authenticateKey`（Authorization Bearer、`x-api-key`、`x-goog-api-key`、`?key=`）。模型来源是 key 所在分组的可用模型（`core.GroupModelLister`，由 group 模块的 `offeredModels` 实现，与 `/me/prices`、分组的模型数同一规则）；三种格式列同一份清单，不按协议过滤（核心会做协议转换）。
+
+## 135. 插件商店的索引登记处与 `sub2api-plugin index` / `registry`（2026-11-24，用户定“全部去掉密钥”“包地址只限 GitHub Release”“下架两种都支持”；工具部分；索引格式见 §11.1）
+
+商店的可信来源是索引仓库 touwaeriol/sup2api-plugin（PR 审核）加索引里审核过的 sha256，索引不签名，市场源没有公钥（`SUB2API_MARKET_SOURCES` 是 `[{name,url}]`）。插件包仍可以带签名，手动上传与内置插件照旧验签。
+
+**仓库文件**（JSON 一律严格解析，未知字段报错；`plugins/<key>/` 下只能有 `plugin.json`、`icon.svg`、`versions/`，`versions/` 与 `publishers/` 下只能有 `*.json`）：
+
+- `publishers/<id>.json`：`{"id","name":{"zh","en"},"homepage"?,"github":["login",...],"trust":"official|verified|community","status":"active|revoked"}`。`id` 等于文件名，也等于包清单的 `publisher`；`github` 只给 CI 用，不进索引；`homepage` 必须是 https。
+- `plugins/<key>/plugin.json`：`{"key","publisher","name":{"zh","en"},"description":{"zh","en"},"repo":"owner/name","source"?,"builtin"?,"deprecated"?:{"reason":{"zh","en"}}}`。`key` 等于目录名，规则同清单：`^[a-z](_?[a-z0-9]){1,29}$` 且不超过 30 字节（目录用 key，所以 `azure_openai` 的目录不是源码里的 `azure-openai`）；`publisher` 必须有对应的发布者文件。
+- `plugins/<key>/versions/<version>.json`：`{"version","url","sha256","size","host_compat","release_url","deprecated"?}`。`version` 等于文件名且是 semver；`url` 以 `.s2plugin` 结尾；`sha256` 是包文件的小写 hex；`size` 在 1 到 `runtime-contract.PluginPackageMaxBytes`（64 MiB）之间；`host_compat` 是 semver 范围；`release_url` 是 GitHub Release 页面（商店里的“更新说明”）。已发布的版本文件只能加上（或改写）`deprecated`，不能去掉它，其他字段不能改。
+- 下架：删除版本文件（商店里消失），或加 `deprecated`（仍可安装，但不算最新版本、不触发“有更新”）；`plugin.json` 也可以整体加 `deprecated`。
+
+**命令**（`next/tools/sub2api-plugin`）：
+
+```
+sub2api-plugin index --registry <仓库根> [--out <index.json>]
+sub2api-plugin registry check --registry <PR 头> --base <PR 基> --author <GitHub login> [--summary <file.md>] [--json]
+sub2api-plugin registry add-version --registry <仓库根> --plugin <key> [--tag <tag>]
+sub2api-plugin registry codeowners --registry <仓库根> [--default-owner <login>]
+sub2api-plugin registry import --registry <目录> --repo <owner/name> [--trust <级别>] [--url-prefix <url>] <file.s2plugin>...
+```
+
+- `index`：校验全部文件（不下载）后写出 index.json v2（默认 stdout）：发布者按 id、插件按 key 排序，版本按 semver 从新到旧，可选字段缺省时省略。旧的“扫描 `*.s2plugin` 目录 + `--key` 签名”用法与 `index.json.sig` 已删除。
+- `registry add-version`：读 `plugin.json` 的 `repo`，调 GitHub REST `GET /repos/{repo}/releases/latest` 或 `/releases/tags/{tag}`（有 `GITHUB_TOKEN` 就带上，只发给 API），要求 Release 恰好有一个 `*.s2plugin` 附件、tag 是 `v<version>`、`<key>-v<version>` 或 `plugin-<key>-v<version>`、`html_url` 是 `https://github.com/<repo>/releases/tag/<tag>`、附件地址在这个 tag 下、附件有 `digest`（`sha256:<hex>`）时与下载算出的一致；下载（上限 `PluginPackageMaxBytes`）、解包、按 `pack` 的规则校验清单，清单的 `key`、`publisher` 必须与 `plugin.json` 一致，然后写 `versions/<version>.json`（已存在则报错）。
+- `registry check`：所有文件通过上面的结构校验；对比 PR 头与基的全部文件（只跳过 `.git`）：
+  - 一个 PR 只能改一个发布者名下的文件（`publishers/<id>.json` 或它的插件目录），否则失败；
+  - 改动已有插件时，`--author` 必须在基里该发布者的 `github` 列表里（不分大小写）且发布者 `active`，否则失败；
+  - 新增或改动发布者文件、新增或删除插件、改动 `plugin.json` 或 `icon.svg`、删除版本、改动 `publishers/`、`plugins/` 以外的文件（包括 `.github/`）不判失败，标为需人工审核（`needs_manual_review: true`）；
+  - 每个新增的版本文件：`url` 必须是 `https://github.com/<plugin.repo>/releases/download/<tag>/<文件>.s2plugin`，按 url 里的 tag 读 Release 并做 add-version 的全部检查，再要求版本文件与 Release、包推出的内容完全一致（`version`、`url`、`sha256`、`size`、`host_compat`、`release_url`）；
+  - 已有版本文件只能加 `deprecated`。
+  - 输出：默认 stdout 写 Markdown 摘要，`--json` 改写机器可读的结果（`ok`、`needs_manual_review`、`publisher`、`errors`、`manual_review`、`versions`），`--summary` 另把 Markdown 写进文件。摘要对每个新版本列出与该插件上一版（基里最新的非弃用版本）相比增删的宿主权限（新增的 high/critical 单独标出）、用户权限（带风险级别）、迁移文件名、出口域名（`net` 权限的 `domains` 与 `externalServices`）。有问题时退出码 1，需人工审核不影响退出码。
+- `registry codeowners`：stdout 输出 CODEOWNERS：第一行 `* @touwaeriol`，然后每个 `active` 且有 `github` 的发布者 `/publishers/<id>.json @login...`（按 id），再 `/plugins/<key>/ @login...`（按 key）。
+- `registry import`：开发与测试用，不联网：把本地包登记进一个 registry 目录（缺发布者文件、`plugin.json` 时按清单生成，`--trust` 只用于新建的发布者），版本 `url` 默认是包的文件名（相对 index.json 所在目录），`release_url` 填 `https://github.com/<repo>/releases`。`tools/sub2api-plugin/scripts/build-demo.sh`（镜像里的开发市场）与 `deploy/ci/check.sh` 用它加 `index` 生成本地市场，发布者 `sub2api` 的 trust 为 `official`。
+
+测试：`tools/sub2api-plugin/registry_test.go`、`registry_check_test.go`（假 GitHub 用 httptest，不访问网络）。

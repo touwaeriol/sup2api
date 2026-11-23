@@ -1,189 +1,76 @@
 package main
 
 import (
-	"bytes"
-	"crypto/ed25519"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
+	"maps"
 	"os"
-	"path/filepath"
-	"sort"
-	"strings"
+	"slices"
 	"time"
-
-	"golang.org/x/mod/semver"
-
-	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
-	"github.com/Sub2API-Devs/sup2api/next/sdk/pkgsig"
 )
 
-// Market index format, CONTRACTS §11.1.
+// Market index format v2, CONTRACTS §11.1, built from the registry files
+// (CONTRACTS §135). Unsigned: the trust is the registry's review.
+const indexFormatVersion = 2
+
 type marketIndex struct {
-	Version     int           `json:"version"`
-	GeneratedAt string        `json:"generated_at"`
-	Plugins     []indexPlugin `json:"plugins"`
+	Version     int              `json:"version"`
+	GeneratedAt string           `json:"generated_at"`
+	Publishers  []indexPublisher `json:"publishers"`
+	Plugins     []indexPlugin    `json:"plugins"`
 }
 
 type indexPlugin struct {
-	Key         string                 `json:"key"`
-	Name        manifest.LocalizedText `json:"name"`
-	Description manifest.LocalizedText `json:"description,omitempty"`
-	Publisher   string                 `json:"publisher"`
-	Versions    []indexVersion         `json:"versions"`
+	regPlugin
+	Versions []regVersion `json:"versions"`
 }
 
-type indexVersion struct {
-	Version    string `json:"version"`
-	URL        string `json:"url"`
-	SHA256     string `json:"sha256"`
-	Size       int64  `json:"size"`
-	HostCompat string `json:"host_compat"`
-}
-
-// IndexSigPrefix is prepended to the hex sha256 of index.json before signing.
-const IndexSigPrefix = "sub2api-market-index-v1:"
-
-// cmdIndex builds and signs index.json for every .s2plugin in --dir.
+// cmdIndex validates a registry checkout and writes its index.json.
 func cmdIndex(args []string, stdout, stderr io.Writer) error {
 	fs := newFlagSet("index", stderr)
-	dir := fs.String("dir", ".", "market directory containing *.s2plugin")
-	keyPath := fs.String("key", "", "market private key file (required)")
-	baseURL := fs.String("base-url", "", "absolute URL prefix for packages (default: relative file names)")
+	root := fs.String("registry", "", "registry checkout (publishers/, plugins/) (required)")
+	out := fs.String("out", "", "output file (default: stdout)")
 	if _, err := parseInterspersed(fs, args); err != nil {
 		return err
 	}
-	if *keyPath == "" {
-		return errors.New("--key is required")
+	if *root == "" {
+		return errors.New("--registry is required")
 	}
-	priv, err := loadPrivateKey(*keyPath)
+	reg, err := loadRegistry(*root)
 	if err != nil {
 		return err
 	}
-	idx, err := buildIndex(*dir, *baseURL, time.Now().UTC(), stderr)
+	raw, err := encodeJSON(buildIndex(reg, time.Now().UTC()))
 	if err != nil {
 		return err
 	}
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	enc.SetIndent("", "  ")
-	if err := enc.Encode(idx); err != nil {
+	if *out == "" {
+		_, err = stdout.Write(raw)
 		return err
 	}
-	raw := buf.Bytes()
-	sig := signIndex(raw, priv)
-	indexPath := filepath.Join(*dir, "index.json")
-	if err := os.WriteFile(indexPath, raw, 0o644); err != nil {
+	if err := os.WriteFile(*out, raw, 0o644); err != nil {
 		return err
 	}
-	if err := os.WriteFile(indexPath+".sig", []byte(sig), 0o644); err != nil {
-		return err
-	}
-	n := 0
-	for _, p := range idx.Plugins {
-		n += len(p.Versions)
-	}
-	fmt.Fprintf(stdout, "wrote %s (%d plugins, %d versions) and %s.sig\n", indexPath, len(idx.Plugins), n, indexPath)
+	fmt.Fprintf(stderr, "wrote %s (%d publishers, %d plugins)\n", *out, len(reg.publishers), len(reg.plugins))
 	return nil
 }
 
-// signIndex returns the base64 signature line for index bytes.
-func signIndex(raw []byte, priv ed25519.PrivateKey) string {
-	sum := sha256.Sum256(raw)
-	msg := IndexSigPrefix + hex.EncodeToString(sum[:])
-	return base64.StdEncoding.EncodeToString(ed25519.Sign(priv, []byte(msg)))
-}
-
-// verifyIndex checks an index signature line.
-func verifyIndex(raw []byte, sigLine string, pub ed25519.PublicKey) bool {
-	sig, err := base64.StdEncoding.DecodeString(strings.TrimSpace(sigLine))
-	if err != nil {
-		return false
+// buildIndex lists every publisher by id, every plugin by key and each
+// plugin's versions newest first.
+func buildIndex(reg *registry, now time.Time) *marketIndex {
+	idx := &marketIndex{Version: indexFormatVersion, GeneratedAt: now.Format(time.RFC3339),
+		Publishers: []indexPublisher{}, Plugins: []indexPlugin{}}
+	for _, id := range slices.Sorted(maps.Keys(reg.publishers)) {
+		idx.Publishers = append(idx.Publishers, reg.publishers[id].indexPublisher)
 	}
-	sum := sha256.Sum256(raw)
-	return ed25519.Verify(pub, []byte(IndexSigPrefix+hex.EncodeToString(sum[:])), sig)
-}
-
-func semverKey(v string) string {
-	if !strings.HasPrefix(v, "v") {
-		v = "v" + v
+	for _, key := range slices.Sorted(maps.Keys(reg.plugins)) {
+		e := reg.plugins[key]
+		p := indexPlugin{regPlugin: e.plugin, Versions: []regVersion{}}
+		for _, v := range e.sortedVersions() {
+			p.Versions = append(p.Versions, *v)
+		}
+		idx.Plugins = append(idx.Plugins, p)
 	}
-	return v
-}
-
-func buildIndex(dir, baseURL string, now time.Time, stderr io.Writer) (*marketIndex, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, err
-	}
-	type pkgInfo struct {
-		m    *manifest.Manifest
-		file string
-		size int64
-		sum  string
-	}
-	byKey := map[string][]pkgInfo{}
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), PackageExt) {
-			continue
-		}
-		p := filepath.Join(dir, e.Name())
-		sum, size, err := fileSHA256(p)
-		if err != nil {
-			return nil, err
-		}
-		// Only the manifest is needed: a large package is not read into
-		// memory just to be listed.
-		files, err := readPackageMeta(p)
-		if err != nil {
-			return nil, err
-		}
-		m, err := parseManifest(files[pkgsig.ManifestFile])
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", p, err)
-		}
-		if !semver.IsValid(semverKey(m.Version)) {
-			return nil, fmt.Errorf("%s: version %q is not semver", p, m.Version)
-		}
-		if _, ok := files[pkgsig.SignatureFile]; !ok {
-			fmt.Fprintf(stderr, "warning: %s is not signed\n", e.Name())
-		}
-		for _, other := range byKey[m.Key] {
-			if other.m.Version == m.Version {
-				return nil, fmt.Errorf("%s and %s both contain %s %s", other.file, e.Name(), m.Key, m.Version)
-			}
-		}
-		byKey[m.Key] = append(byKey[m.Key], pkgInfo{m: m, file: e.Name(), size: size, sum: sum})
-	}
-	idx := &marketIndex{Version: 1, GeneratedAt: now.Format(time.RFC3339), Plugins: []indexPlugin{}}
-	keys := make([]string, 0, len(byKey))
-	for k := range byKey {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		pkgs := byKey[k]
-		sort.Slice(pkgs, func(i, j int) bool {
-			return semver.Compare(semverKey(pkgs[i].m.Version), semverKey(pkgs[j].m.Version)) < 0
-		})
-		latest := pkgs[len(pkgs)-1].m
-		ip := indexPlugin{Key: k, Name: latest.Name, Description: latest.Description, Publisher: latest.Publisher}
-		for _, pk := range pkgs {
-			u := pk.file
-			if baseURL != "" {
-				u = strings.TrimRight(baseURL, "/") + "/" + url.PathEscape(pk.file)
-			}
-			ip.Versions = append(ip.Versions, indexVersion{
-				Version: pk.m.Version, URL: u, SHA256: pk.sum, Size: pk.size, HostCompat: pk.m.HostCompat,
-			})
-		}
-		idx.Plugins = append(idx.Plugins, ip)
-	}
-	return idx, nil
+	return idx
 }

@@ -16,7 +16,7 @@ if [ ! -f .env ]; then
   kid=$(docker run --rm --entrypoint cat sup2api:latest /opt/sub2api/market/dev-official.keyid | tr -d ' \r\n')
   pub=$(docker run --rm --entrypoint cat sup2api:latest /opt/sub2api/market/dev-official.pub | tr -d ' \r\n')
   printf "PLUGIN_TRUST_KEY=%s=%s\n" "$kid" "$pub" >> .env
-  printf "MARKET_SOURCES='[{\"name\":\"local-dev\",\"url\":\"http://market:8080/index.json\",\"public_key\":\"%s\"}]'\n" "$pub" >> .env
+  printf "MARKET_SOURCES='[{\"name\":\"local-dev\",\"url\":\"http://market:8080/index.json\"}]'\n" >> .env
 fi
 
 # ---- cluster CA, node and release-origin certificates

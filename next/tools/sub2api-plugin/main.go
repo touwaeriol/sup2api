@@ -1,7 +1,7 @@
 // Command sub2api-plugin is the developer tool for sub2api-next plugins:
-// key generation, cross-compilation, packaging, signing, verification and
-// market index generation, a local core for development (dev), and the
-// migrations of a plugin's GORM models (db).
+// key generation, cross-compilation, packaging, signing and verification,
+// the plugin store's registry and index (index, registry), a local core for
+// development (dev), and the migrations of a plugin's GORM models (db).
 package main
 
 import (
@@ -22,7 +22,14 @@ Usage:
                                              and a database; see db below for the PostgreSQL it needs)
   sub2api-plugin sign   --key <private key file> --key-id <id> [--publisher <name>] <file.s2plugin>
   sub2api-plugin verify --pub <public key file|base64> <file.s2plugin>
-  sub2api-plugin index  --dir <market dir> --key <private key file> [--base-url <url>]
+  sub2api-plugin index  --registry <registry dir> [--out <index.json>]   (validate the registry, write index.json v2)
+  sub2api-plugin registry check --registry <head dir> --base <base dir> --author <GitHub login> [--summary <file.md>] [--json]
+                        (review a registry pull request; downloads every new version's package)
+  sub2api-plugin registry add-version --registry <dir> --plugin <key> [--tag <tag>]
+                        (write versions/<version>.json from the plugin repo's GitHub release; GITHUB_TOKEN is used if set)
+  sub2api-plugin registry codeowners --registry <dir> [--default-owner <login>]   (print CODEOWNERS)
+  sub2api-plugin registry import --registry <dir> --repo <owner/name> [--trust <level>] [--url-prefix <url>] <file.s2plugin>...
+                        (register local packages for a development market)
   sub2api-plugin manifest --dir <plugin dir> [--overlay <dir>]   (print the effective manifest)
   sub2api-plugin dev    [--dir <plugin dir>] [--with <dir|file.s2plugin>]... [--addr 127.0.0.1:8080] [--core <sub2api>] [--reset] [--no-watch]
                         (run a local core with the plugin installed; rebuild on change)
@@ -39,23 +46,26 @@ func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
+// commands are the subcommands by name.
+var commands = map[string]func([]string, io.Writer, io.Writer) error{
+	"keygen":   cmdKeygen,
+	"build":    cmdBuild,
+	"pack":     cmdPack,
+	"sign":     cmdSign,
+	"verify":   cmdVerify,
+	"index":    cmdIndex,
+	"manifest": cmdManifest,
+	"dev":      cmdDev,
+	"db":       cmdDB,
+	"registry": cmdRegistry,
+}
+
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
 		fmt.Fprint(stdout, usage)
 		return 0
 	}
-	cmds := map[string]func([]string, io.Writer, io.Writer) error{
-		"keygen":   cmdKeygen,
-		"build":    cmdBuild,
-		"pack":     cmdPack,
-		"sign":     cmdSign,
-		"verify":   cmdVerify,
-		"index":    cmdIndex,
-		"manifest": cmdManifest,
-		"dev":      cmdDev,
-		"db":       cmdDB,
-	}
-	fn, ok := cmds[args[0]]
+	fn, ok := commands[args[0]]
 	if !ok {
 		fmt.Fprintf(stderr, "unknown command %q\n\n%s", args[0], usage)
 		return 2

@@ -38,14 +38,14 @@ docker compose -f next/deploy/e2e/compose.yml --env-file next/deploy/e2e/.env ru
 docker compose -f next/deploy/e2e/compose.yml --env-file next/deploy/e2e/.env up -d --no-build --wait --wait-timeout 240
 ```
 
-使用预先构建的镜像时跳过 `build`。`market-init` 会检查签名索引和公钥存在，随后复制镜像内市场到本项目的数据卷；配置错误或签名市场缺失会阻止节点启动。应用入口脚本从同一镜像的公钥配置市场及插件信任；不会关闭签名验证。
+使用预先构建的镜像时跳过 `build`。`market-init` 会检查市场索引（`index.json` v2，不签名，由 `build-demo.sh` 经 `sub2api-plugin registry import` 与 `index` 生成，CONTRACTS §135）和公钥存在，随后复制镜像内市场到本项目的数据卷；配置错误或市场缺失会阻止节点启动。应用入口脚本把市场源配置为 `[{name,url}]`，并从同一镜像的公钥配置插件信任（市场里的包仍带开发密钥的签名，上传与内置包照常验签）；不会关闭签名验证。
 
 Caddy 路由：
 
 - `/`：按最少在途请求选择节点，按 `/healthz` 的 200 状态做主动健康检查，网络失败后暂时被动剔除节点。只有 GET/HEAD 分支启用 5 秒的选择重试窗口；POST、PUT、DELETE 等写请求不启用重试，业务 503 不触发被动摘除。
 - `/__node1/*`、`/__node2/*`：去掉前缀后固定访问指定节点，保留原响应与健康状态。
 - `/__mock/*`：去掉前缀后访问 mock 的控制和观测接口。
-- `/market/*`：只读提供签名索引、签名、公钥和插件包。
+- `/market/*`：只读提供索引、公钥和插件包。
 
 容器内 mock 地址为 `http://mock-upstream:8080`；Caddy 内部地址为 `http://caddy:3120`，用于测试的自调用保护检查。PG 用户和数据库均为 `sub2api`，SQL/Redis 检查通过专用容器的 `docker exec` 完成，无需发布数据库端口。
 

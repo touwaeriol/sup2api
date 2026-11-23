@@ -177,7 +177,7 @@ services:
       - sh
       - -ec
       - >-
-        test -s /opt/sub2api/market/index.json.sig &&
+        test -s /opt/sub2api/market/index.json &&
         test -s /opt/sub2api/market/dev-official.pub &&
         cp -a /opt/sub2api/market/. /market/ &&
         chmod -R a+rX /market &&

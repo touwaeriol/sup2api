@@ -4,8 +4,8 @@
 # Builds (inside the Docker build stage, cwd-independent):
 #   <out>/bin/sub2api          core server (-X main.Version=$VERSION)
 #   <out>/bin/sub2api-plugin   plugin CLI
-#   <out>/market/              *.s2plugin signed with the dev key, index.json,
-#                              index.json.sig, dev-official.pub, dev-official.keyid
+#   <out>/market/              *.s2plugin signed with the dev key, index.json
+#                              (unsigned index v2), dev-official.pub, dev-official.keyid
 #   <out>/builtin/             the built-in plugins' packages and trust key
 #
 # The dev key lives in <keydir> (a BuildKit cache mount) and is created on
@@ -60,7 +60,7 @@ manifest_version() {
 # build-demo.sh builds, packs and signs one package per
 # plugins/<name>/manifest.json (the list is discovered there, so a new plugin
 # needs no change in either script), plus the e2e fixtures (the anthropic and
-# dynweight upgrade versions, the guard test build), and writes the signed
+# dynweight upgrade versions, the guard test build), and writes the market
 # index.
 # Everything packaged here is in the market; only BUILTIN_PLUGINS below is
 # built into the image. pack refuses a plugin whose native UI was not built
@@ -71,7 +71,8 @@ echo "==> tools/sub2api-plugin/scripts/build-demo.sh"
 # workflow has one and passes SKIP_DB_CHECK=0.
 SKIP_DB_CHECK=${SKIP_DB_CHECK:-1} sh tools/sub2api-plugin/scripts/build-demo.sh "$OUT/market" "$KEYS" "$KEY_ID"
 
-# Public half of the dev key; the entrypoint derives the trust settings from it.
+# Public half of the dev key; the entrypoint derives the official package key
+# from it.
 cp "$KEYS/$KEY_ID.pub" "$OUT/market/dev-official.pub"
 printf '%s\n' "$KEY_ID" > "$OUT/market/dev-official.keyid"
 ls -l "$OUT/market"

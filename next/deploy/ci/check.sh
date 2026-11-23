@@ -102,7 +102,10 @@ plugins() {
   # The overlay's migration has no model on purpose: no db check for it.
   pkg=$("$checks/sub2api-plugin" pack --dir plugins/dynweight --runtimes "$checks/dynweight-next-runtime" --overlay testdata/upgrade --skip-db-check --out-dir "$checks/builtin-next")
   "$checks/sub2api-plugin" sign --key "$checks/keys/managed-test.key" --key-id managed-test --publisher sub2api "$pkg" >> "$out/plugin-build-dynweight.log"
-  "$checks/sub2api-plugin" index --dir "$checks/market" --key "$checks/keys/managed-test.key" > "$out/plugin-market-index.log"
+  # The market's unsigned index v2, from a registry of its packages.
+  rm -rf "$checks/registry"
+  "$checks/sub2api-plugin" registry import --registry "$checks/registry" --repo touwaeriol/sup2api --trust official "$checks"/market/*.s2plugin > "$out/plugin-market-index.log"
+  "$checks/sub2api-plugin" index --registry "$checks/registry" --out "$checks/market/index.json" >> "$out/plugin-market-index.log" 2>&1
   ls "$checks/builtin" "$checks/builtin-next" "$checks/upload" "$checks/market"
 }
 
@@ -130,8 +133,8 @@ SQL
   export TEST_CORE_V1="$checks/core-r1" TEST_CORE_V2="$checks/core-r2" TEST_SHELL_NODES=3
   export TEST_BUILTIN_DIR="$checks/builtin" TEST_BUILTIN_NEXT_DIR="$checks/builtin-next" TEST_EXPECT_MIGRATION=9999_managed_upgrade_probe.sql TEST_MOCK_URL=http://mock:8080
   TEST_BUILTIN_KEY="managed-test=$(cat "$checks/keys/managed-test.pub")"
-  TEST_UPLOAD_PACKAGE=$(ls "$checks"/upload/*.s2plugin) TEST_MARKET_DIR="$checks/market" TEST_MARKET_KEY=$(cat "$checks/keys/managed-test.pub")
-  export TEST_UPLOAD_PACKAGE TEST_MARKET_DIR TEST_MARKET_KEY
+  TEST_UPLOAD_PACKAGE=$(ls "$checks"/upload/*.s2plugin) TEST_MARKET_DIR="$checks/market"
+  export TEST_UPLOAD_PACKAGE TEST_MARKET_DIR
   export TEST_BUILTIN_KEY
   set +e
   go test -race -count=1 -timeout 45m -v ./gateway/internal/control -run "${REALCORE_RUN:-TestRealCore}" > "$out/realcore.log" 2>&1

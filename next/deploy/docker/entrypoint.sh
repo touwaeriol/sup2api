@@ -5,8 +5,9 @@
 # written at build time) and the operator did not configure trust explicitly,
 # derive:
 #   SUB2API_PLUGIN_OFFICIAL_KEYS = "<keyId>=<pub>"
-#   SUB2API_MARKET_SOURCES       = [{"name":"local-dev","url":$SUB2API_DEV_MARKET_URL,"public_key":<pub>}]
-# Production deployments set both variables and ignore the dev key.
+#   SUB2API_MARKET_SOURCES       = [{"name":"local-dev","url":$SUB2API_DEV_MARKET_URL}]
+# The market index is not signed (CONTRACTS §11.1); the bundled market's
+# packages are. Production deployments set both variables and ignore the dev key.
 set -eu
 MARKET=/opt/sub2api/market
 if [ -f "$MARKET/dev-official.pub" ] && [ "${SUB2API_USE_DEV_KEYS:-true}" = "true" ]; then
@@ -16,7 +17,7 @@ if [ -f "$MARKET/dev-official.pub" ] && [ "${SUB2API_USE_DEV_KEYS:-true}" = "tru
     export SUB2API_PLUGIN_OFFICIAL_KEYS="$kid=$pub"
   fi
   if [ -z "${SUB2API_MARKET_SOURCES:-}" ] && [ -n "${SUB2API_DEV_MARKET_URL:-}" ]; then
-    export SUB2API_MARKET_SOURCES="[{\"name\":\"local-dev\",\"url\":\"$SUB2API_DEV_MARKET_URL\",\"public_key\":\"$pub\"}]"
+    export SUB2API_MARKET_SOURCES="[{\"name\":\"local-dev\",\"url\":\"$SUB2API_DEV_MARKET_URL\"}]"
   fi
 fi
 exec "$@"

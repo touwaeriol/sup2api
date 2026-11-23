@@ -113,12 +113,16 @@ func applyMergePatch(doc, patch []byte) ([]byte, error) {
 	if err := json.Unmarshal(patch, &p); err != nil {
 		return nil, err
 	}
-	merged := mergePatch(d, p)
+	return encodeJSON(mergePatch(d, p))
+}
+
+// encodeJSON encodes v indented, without HTML escaping, newline-terminated.
+func encodeJSON(v any) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
 	enc.SetIndent("", "  ")
-	if err := enc.Encode(merged); err != nil {
+	if err := enc.Encode(v); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil

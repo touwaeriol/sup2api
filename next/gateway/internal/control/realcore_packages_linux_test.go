@@ -27,13 +27,12 @@ import (
 // the core release.
 //
 // Besides the real-core variables it needs TEST_UPLOAD_PACKAGE (a signed
-// package that is neither bundled nor in the market), TEST_MARKET_DIR (a
-// directory with index.json, index.json.sig and its packages) and
-// TEST_MARKET_KEY (the base64 public key that signed the index).
+// package that is neither bundled nor in the market) and TEST_MARKET_DIR (a
+// directory with index.json and its packages).
 func TestRealCorePluginPackagesTravelBetweenNodes(t *testing.T) {
-	uploadPath, marketDir, marketKey := os.Getenv("TEST_UPLOAD_PACKAGE"), os.Getenv("TEST_MARKET_DIR"), os.Getenv("TEST_MARKET_KEY")
-	if uploadPath == "" || marketDir == "" || marketKey == "" {
-		t.Skip("requires TEST_UPLOAD_PACKAGE, TEST_MARKET_DIR and TEST_MARKET_KEY in addition to the real-core variables")
+	uploadPath, marketDir := os.Getenv("TEST_UPLOAD_PACKAGE"), os.Getenv("TEST_MARKET_DIR")
+	if uploadPath == "" || marketDir == "" {
+		t.Skip("requires TEST_UPLOAD_PACKAGE and TEST_MARKET_DIR in addition to the real-core variables")
 	}
 	uploaded, err := os.ReadFile(uploadPath)
 	if err != nil {
@@ -52,7 +51,7 @@ func TestRealCorePluginPackagesTravelBetweenNodes(t *testing.T) {
 	const adminEmail, adminPassword = "admin@real.test", "Real-core-admin-pass!"
 	c := newRealCluster(t, ctx, realOptions{coreEnv: []string{
 		"SUB2API_BOOTSTRAP_ADMIN_EMAIL=" + adminEmail, "SUB2API_BOOTSTRAP_ADMIN_PASSWORD=" + adminPassword,
-		`SUB2API_MARKET_SOURCES=[{"name":"test","url":"` + market.URL + `/index.json","public_key":"` + marketKey + `"}]`,
+		`SUB2API_MARKET_SOURCES=[{"name":"test","url":"` + market.URL + `/index.json"}]`,
 	}})
 	db := c.db
 	tick := time.NewTicker(200 * time.Millisecond)

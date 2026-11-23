@@ -339,39 +339,6 @@ func (l *limitedWriter) Write(p []byte) (int, error) {
 	return l.w.Write(p)
 }
 
-// readPackageMeta reads only manifest.json and signature.json of a package
-// (the other entries are listed but not decompressed).
-func readPackageMeta(src string) (map[string][]byte, error) {
-	zr, err := zip.OpenReader(src)
-	if err != nil {
-		return nil, err
-	}
-	defer zr.Close()
-	files := map[string][]byte{}
-	for _, f := range zr.File {
-		if f.Name != pkgsig.ManifestFile && f.Name != pkgsig.SignatureFile {
-			continue
-		}
-		if _, dup := files[f.Name]; dup {
-			return nil, fmt.Errorf("duplicate entry %q in package", f.Name)
-		}
-		rc, err := f.Open()
-		if err != nil {
-			return nil, err
-		}
-		b, err := io.ReadAll(io.LimitReader(rc, 16<<20))
-		rc.Close()
-		if err != nil {
-			return nil, err
-		}
-		files[f.Name] = b
-	}
-	if _, ok := files[pkgsig.ManifestFile]; !ok {
-		return nil, fmt.Errorf("%s: manifest.json missing", src)
-	}
-	return files, nil
-}
-
 // fileSHA256 streams a file through SHA-256.
 func fileSHA256(p string) (string, int64, error) {
 	f, err := os.Open(p)
