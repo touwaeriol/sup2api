@@ -451,5 +451,5 @@ return form.Normalized(), nil
 ## 10. 插件 id 与发布者（CONTRACTS §137）
 
 - 插件由“发布者 + key”确定：`manifest.PluginID(publisher, key)`，第一方发布者 `sub2api` 的插件 id 就是 key，其他发布者的是 `_<publisher>__<key>`。核心的接口路径（`/plugins/:key`）、权限键（`plugin.<id>:…`）、任务名（`plugin.<id>.<job>`）、表前缀与数据库身份、插件进程的 `SUB2API_PLUGIN_KEY` 都用 id；界面显示 `erio/codex` 这样的形式（`manifest.DisplayID`）。插件自己的 `GetInfo` 仍报清单的 `key`。
-- 发布者 id：小写字母、数字和单个下划线，以字母或数字开头和结尾（`^[a-z0-9](_?[a-z0-9]){0,26}$`）；插件 id 不超过 30 字节，所以发布者与 key 合起来最多 27 字节。`sub2api-plugin db check` 等工具的 `-key` 传插件 id。
+- 发布者 id：小写字母、数字和单个下划线，以字母或数字开头和结尾（`^[a-z0-9](_?[a-z0-9])*$`），至多 25 字节；插件 id 不超过 30 字节，所以发布者与 key 合起来最多 27 字节（key 至少 2 字节，发布者因此至多 25）。`sub2api-plugin db check` 等工具的 `-key` 传插件 id。
 - 同一个 key 可以属于不同发布者，它们是不同的插件，可以同时安装。发布者 `sub2api` 只给官方级别的包。
