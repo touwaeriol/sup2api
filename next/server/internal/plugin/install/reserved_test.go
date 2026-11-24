@@ -380,3 +380,27 @@ func TestReservedChannel(t *testing.T) {
 		t.Fatalf("mailer: %v", err)
 	}
 }
+
+// Resource owners are plugin ids (CONTRACTS §137.2): a third-party plugin
+// keyed like an approved official one does not own its platform, while the
+// official plugin's next version still does.
+func TestSameKeyOtherPublisherConflicts(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	acme := acmePublisher(t, e, pkg.TrustVerified)
+	official := renamePlatform(pkgtest.Platform("vidkit", "1.0.0", "sub2api"), "vid")
+	if _, err := e.svc.Upload(ctx, pkgtest.Build(official, e.root), e.admin, UploadOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.Consent(ctx, "vidkit", "1.0.0", allGrants(official), e.admin); err != nil {
+		t.Fatal(err)
+	}
+	third := renamePlatform(pkgtest.Platform("vidkit", "1.0.0", "acme"), "vid")
+	if _, err := e.svc.Upload(ctx, pkgtest.Build(third, acme), e.admin, UploadOptions{}); fieldCode(err, "platforms[0].id") != "platform_conflict" {
+		t.Fatalf("acme/vidkit took the platform of vidkit: %v", err)
+	}
+	next := renamePlatform(pkgtest.Platform("vidkit", "1.1.0", "sub2api"), "vid")
+	if _, err := e.svc.Upload(ctx, pkgtest.Build(next, e.root), e.admin, UploadOptions{}); err != nil {
+		t.Fatalf("vidkit 1.1.0 conflicts with its own platform: %v", err)
+	}
+}

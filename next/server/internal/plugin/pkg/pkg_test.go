@@ -567,7 +567,7 @@ func TestValidatePlatformAndAccountTypes(t *testing.T) {
 func TestValidateOtherPlugins(t *testing.T) {
 	other := pkgtest.Platform("video", "0.1.0", "sub2api")
 	pfs, eps := OthersFromManifests([]*manifest.Manifest{other, pkgtest.Anthropic("anthropic", "0.1.0", "sub2api")})
-	if len(pfs) != 1 || pfs[0].PluginKey != "video" || pfs[0].ID != "video" || len(pfs[0].Endpoints) != 2 || len(eps) != 2 || eps[1].Platform != "video" {
+	if len(pfs) != 1 || pfs[0].PluginID != "video" || pfs[0].ID != "video" || len(pfs[0].Endpoints) != 2 || len(eps) != 2 || eps[1].Platform != "video" {
 		t.Fatalf("others = %+v %+v", pfs, eps)
 	}
 

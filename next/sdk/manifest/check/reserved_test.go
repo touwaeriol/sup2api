@@ -55,7 +55,7 @@ func TestConflictsOnlyOtherPlugins(t *testing.T) {
 		t.Fatalf("conflicts: %v", got)
 	}
 	// Its own earlier versions are not conflicts.
-	pfs, eps = OthersFromManifests([]*manifest.Manifest{{Key: "mine", Platforms: []manifest.Platform{validPlatform()}}})
+	pfs, eps = OthersFromManifests([]*manifest.Manifest{{Publisher: m.Publisher, Key: "mine", Platforms: []manifest.Platform{validPlatform()}}})
 	if got := Conflicts(m, pfs, eps, nil); len(got) != 0 {
 		t.Fatalf("own versions: %v", got)
 	}
@@ -68,7 +68,7 @@ func TestConflictsOnlyOtherPlugins(t *testing.T) {
 		got[0].Field != "notifications.channels[0].id" || got[0].Code != "channel_conflict" {
 		t.Fatalf("channel: %v", got)
 	}
-	provider.Key = "mine"
+	provider.Publisher, provider.Key = m.Publisher, "mine"
 	if got := Conflicts(m, nil, nil, ChannelsFromManifests([]*manifest.Manifest{provider})); len(got) != 0 {
 		t.Fatalf("own channel: %v", got)
 	}

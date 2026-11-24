@@ -32,8 +32,8 @@ func (v *validator) platforms() {
 			v.add(f+".id", "duplicate", "platform %q declared twice", p.ID)
 		default:
 			for _, o := range v.opt.OtherPlatforms {
-				if o.PluginKey != v.m.Key && o.ID == p.ID {
-					v.add(f+".id", "platform_conflict", "platform %q is already declared by plugin %q", p.ID, o.PluginKey)
+				if o.PluginID != v.m.ID() && o.ID == p.ID {
+					v.add(f+".id", "platform_conflict", "platform %q is already declared by plugin %q", p.ID, manifest.DisplayID(o.PluginID))
 					break
 				}
 			}
@@ -93,12 +93,12 @@ func (v *validator) endpointConflicts(ef string, e manifest.Endpoint, own *[]own
 		}
 	}
 	for _, o := range v.opt.OtherEndpoints {
-		if o.PluginKey == v.m.Key {
+		if o.PluginID == v.m.ID() {
 			continue
 		}
 		if EndpointsConflict(manifest.Endpoint{Method: o.Method, Path: o.Path}, e) {
 			v.add(ef+".path", "endpoint_conflict", "endpoint %s %s conflicts with plugin %q (%s %s)",
-				strings.ToUpper(e.Method), e.Path, o.PluginKey, o.Method, o.Path)
+				strings.ToUpper(e.Method), e.Path, manifest.DisplayID(o.PluginID), o.Method, o.Path)
 		}
 	}
 }

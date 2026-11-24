@@ -72,15 +72,15 @@ const (
 // EndpointOwner is a gateway endpoint of a platform declared by another
 // installed plugin.
 type EndpointOwner struct {
-	PluginKey string
-	Platform  string
-	Method    string
-	Path      string
+	PluginID string // manifest.PluginID of the owner
+	Platform string
+	Method   string
+	Path     string
 }
 
 // PlatformOwner is a platform declared by another installed plugin.
 type PlatformOwner struct {
-	PluginKey string
+	PluginID  string // manifest.PluginID of the owner
 	ID        string
 	Endpoints []manifest.Endpoint
 }
@@ -88,8 +88,8 @@ type PlatformOwner struct {
 // ChannelOwner is a notification channel declared by another installed
 // plugin.
 type ChannelOwner struct {
-	PluginKey string
-	ID        string
+	PluginID string // manifest.PluginID of the owner
+	ID       string
 }
 
 // ValidateOptions carries host facts needed by Validate.
@@ -129,9 +129,9 @@ func OthersFromManifests(ms []*manifest.Manifest) ([]PlatformOwner, []EndpointOw
 	var eps []EndpointOwner
 	for _, m := range ms {
 		for _, p := range m.Platforms {
-			pfs = append(pfs, PlatformOwner{PluginKey: m.Key, ID: p.ID, Endpoints: p.Endpoints})
+			pfs = append(pfs, PlatformOwner{PluginID: m.ID(), ID: p.ID, Endpoints: p.Endpoints})
 			for _, e := range p.Endpoints {
-				eps = append(eps, EndpointOwner{PluginKey: m.Key, Platform: p.ID, Method: e.Method, Path: e.Path})
+				eps = append(eps, EndpointOwner{PluginID: m.ID(), Platform: p.ID, Method: e.Method, Path: e.Path})
 			}
 		}
 	}
@@ -147,7 +147,7 @@ func ChannelsFromManifests(ms []*manifest.Manifest) []ChannelOwner {
 			continue
 		}
 		for _, c := range m.Notifications.Channels {
-			out = append(out, ChannelOwner{PluginKey: m.Key, ID: c.ID})
+			out = append(out, ChannelOwner{PluginID: m.ID(), ID: c.ID})
 		}
 	}
 	return out

@@ -29,8 +29,8 @@ func (v *validator) notifications() {
 			v.add(f+".id", "invalid_format", "channel id %q must match %s", c.ID, keyRe.String())
 		} else if seen[c.ID] {
 			v.add(f+".id", "duplicate", "channel %q declared twice", c.ID)
-		} else if i := slices.IndexFunc(v.opt.OtherChannels, func(o ChannelOwner) bool { return o.PluginKey != v.m.Key && o.ID == c.ID }); i >= 0 {
-			v.add(f+".id", "channel_conflict", "notification channel %q is already declared by plugin %q", c.ID, v.opt.OtherChannels[i].PluginKey)
+		} else if i := slices.IndexFunc(v.opt.OtherChannels, func(o ChannelOwner) bool { return o.PluginID != v.m.ID() && o.ID == c.ID }); i >= 0 {
+			v.add(f+".id", "channel_conflict", "notification channel %q is already declared by plugin %q", c.ID, manifest.DisplayID(v.opt.OtherChannels[i].PluginID))
 		}
 		seen[c.ID] = true
 		if firstText(c.Label) == "" {

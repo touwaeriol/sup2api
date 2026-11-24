@@ -345,7 +345,8 @@ func (s *Service) otherResources(ctx context.Context, q *gorm.DB, key string) ([
 	}
 	var ms []*manifest.Manifest
 	for _, r := range rows {
-		m := &manifest.Manifest{Key: r.PluginKey}
+		publisher, key, _ := manifest.ParsePluginID(r.PluginKey)
+		m := &manifest.Manifest{Publisher: publisher, Key: key}
 		if r.Platforms != nil && json.Unmarshal(r.Platforms, &m.Platforms) != nil ||
 			r.Notifications != nil && json.Unmarshal(r.Notifications, &m.Notifications) != nil {
 			continue

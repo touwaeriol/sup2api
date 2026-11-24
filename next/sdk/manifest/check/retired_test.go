@@ -144,7 +144,7 @@ func TestAccountTypesNeedNoAccountGrant(t *testing.T) {
 func TestForeignFacts(t *testing.T) {
 	usage, task, plain := pluginSourcePlatform().Endpoints[0], taskPlatform().Endpoints[0], validPlatform().Endpoints[0]
 	usage.ID, task.ID, plain.ID = "usage", "task", "plain"
-	other := []PlatformOwner{{PluginKey: "other", ID: "foreign", Endpoints: []manifest.Endpoint{usage, task, plain}}}
+	other := []PlatformOwner{{PluginID: "other", ID: "foreign", Endpoints: []manifest.Endpoint{usage, task, plain}}}
 	for _, tc := range []struct {
 		name      string
 		endpoints []string
