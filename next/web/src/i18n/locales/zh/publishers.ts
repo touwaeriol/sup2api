@@ -1,6 +1,17 @@
 export default {
   title: '发布者',
-  description: '插件发布者及其 ed25519 签名公钥。插件包会用这些公钥校验签名。',
+  description: '商店发布者由官方商店维护；本地发布者只用于手动上传的签名包。',
+  tabs: { store: '商店发布者', local: '本地发布者' },
+  store: {
+    hint: '只读，来自官方商店索引（默认渠道）。增删或吊销发布者请向商店仓库提 PR：',
+    plugins: '商店插件',
+    installed: '已安装',
+    empty: '商店索引里没有发布者'
+  },
+  local: {
+    hint: '本地发布者及其 ed25519 签名公钥，只用于校验手动上传的插件包。',
+    idRule: '本地发布者 ID 不能是 sub2api，也不能和商店发布者重名，保证“发布者 + key”全站唯一。'
+  },
   create: '新建发布者',
   trustLevel: '信任级别',
   trust_: {

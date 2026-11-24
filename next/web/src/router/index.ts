@@ -60,6 +60,8 @@ const children: RouteRecordRaw[] = [
   // The old platforms page.
   { path: 'platforms', redirect: '/accounts' },
 
+  // The plugin store's channels, a system settings page (CONTRACTS §136).
+  { path: 'settings/market', component: () => import('@/views/plugins/StoreSettingsView.vue'), meta: { perm: 'plugin:market:read', title: 'market.settings.title', parent: '/settings' } },
   { path: 'prices', component: () => import('@/views/prices/PricesView.vue'), meta: { perm: 'price:read', title: 'nav.items.prices', parent: '/settings' } },
   { path: 'prices/new', component: () => import('@/views/prices/PriceEditView.vue'), meta: { perm: 'price:manage', title: 'prices.newTitle', parent: '/prices' } },
   { path: 'prices/sources', component: () => import('@/views/prices/PriceSourcesView.vue'), meta: { perm: 'price:read', title: 'prices.sources.title', parent: '/prices' } },
@@ -124,6 +126,12 @@ const children: RouteRecordRaw[] = [
     meta: { title: 'nav.crumbs.pluginSettings', parent: '/plugins' }
   },
   { path: 'market', component: () => import('@/views/plugins/MarketView.vue'), meta: { perm: 'plugin:market:read', title: 'nav.items.market' } },
+  // A store plugin by publisher and key (its plugin id, CONTRACTS §137).
+  {
+    path: 'market/:publisher/:key',
+    component: () => import('@/views/plugins/MarketPluginView.vue'),
+    meta: { perm: 'plugin:market:read', title: 'nav.crumbs.marketPlugin', parent: '/market' }
+  },
   { path: 'publishers', component: () => import('@/views/plugins/PublishersView.vue'), meta: { perm: 'publisher:read', title: 'nav.items.publishers' } },
   { path: 'nodes', component: () => import('@/views/nodes/NodesView.vue'), meta: { perm: 'node:read', title: 'nav.items.nodes' } },
   { path: 'system/tasks', component: () => import('@/views/tasks/TasksView.vue'), meta: { perm: 'task:read', title: 'nav.items.tasks' } },

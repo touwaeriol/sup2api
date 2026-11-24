@@ -1,0 +1,55 @@
+<script setup lang="ts">
+// The store publishers tab: read-only, the publishers of the official store's
+// index (its default channel) with their trust, status, GitHub logins (when the
+// core sends them), store plugins and installed plugins; changed by a pull
+// request to the store repository (CONTRACTS §136, §137).
+import { computed, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { SBadge, SEmpty, SHint, SLink, STable, type TableColumn } from '@sub2api/ui'
+import TrustBadge from '../parts/TrustBadge.vue'
+import { useMarket } from '../useMarket'
+import { storePublishers } from './storePublishers'
+
+const emit = defineEmits<{ count: [n: number] }>()
+const { t } = useI18n()
+const market = useMarket()
+
+const rows = computed(() => storePublishers(market.items.value, Object.values(market.installed.value)))
+const columns = computed<TableColumn[]>(() => [
+  { key: 'id', label: t('market.publisher.id'), mobile: 'title' },
+  { key: 'name', label: t('market.publisher.name'), mobile: 'meta' },
+  { key: 'trust', label: t('market.publisher.trust'), mobile: 'meta' },
+  { key: 'status', label: t('market.publisher.status'), mobile: 'status' },
+  { key: 'github', label: t('market.publisher.github'), mobile: 'meta' },
+  { key: 'plugins', label: t('publishers.store.plugins'), align: 'right', mobile: 'meta' },
+  { key: 'installed', label: t('publishers.store.installed'), align: 'right', mobile: 'meta' }
+])
+
+onMounted(async () => {
+  await market.load()
+  emit('count', rows.value.length)
+})
+</script>
+
+<template>
+  <div>
+    <p class="mb-3 text-sm text-fg-muted" data-testid="store-publishers-hint">
+      {{ t('publishers.store.hint') }}
+      <SLink v-if="market.store.value" :href="`https://github.com/${market.store.value.repo}`" external class="font-mono">{{ market.store.value.repo }}</SLink>
+    </p>
+    <STable :columns="columns" :rows="rows" :loading="market.loading.value || market.loadingStore.value" row-key="id" data-testid="store-publishers">
+      <template #empty><SEmpty icon="market" :text="t('publishers.store.empty')" /></template>
+      <template #cell-id="{ row }"><span class="font-mono">{{ row.id }}</span></template>
+      <template #cell-trust="{ row }"><TrustBadge v-if="row.trust" :trust="row.trust" /><SHint v-else inline>—</SHint></template>
+      <template #cell-status="{ row }">
+        <SBadge :tone="row.status === 'active' ? 'success' : 'danger'" dot>{{ t(`market.publisherStatus.${row.status}`) }}</SBadge>
+      </template>
+      <template #cell-github="{ row }">
+        <span v-if="row.github.length" class="flex flex-wrap gap-2">
+          <SLink v-for="g in row.github" :key="g" :href="`https://github.com/${g}`" external>@{{ g }}</SLink>
+        </span>
+        <SHint v-else inline>—</SHint>
+      </template>
+    </STable>
+  </div>
+</template>

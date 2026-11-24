@@ -8,6 +8,7 @@ import { formatNumber } from '@/utils/format'
 import { accountTypesOf, asArray, capabilityIdsOf, endpointText, pick, platformsOf, type PluginDetail } from '../pluginUtil'
 import PluginGatewayDecl from '../parts/PluginGatewayDecl.vue'
 import TrustBadge from '../parts/TrustBadge.vue'
+import PluginIdText from '../parts/PluginIdText.vue'
 
 const props = defineProps<{ detail: PluginDetail }>()
 const { t } = useI18n()
@@ -46,7 +47,7 @@ const nodeStates = computed(() => {
       <p v-if="description" class="mb-4 text-sm text-gray-700 dark:text-gray-300">{{ description }}</p>
       <dl class="kv">
         <dt>{{ t('plugins.key') }}</dt>
-        <dd class="font-mono">{{ detail.key }}</dd>
+        <dd><PluginIdText :id="detail.key" /></dd>
         <dt>{{ t('common.status') }}</dt>
         <dd class="flex flex-wrap items-center gap-2">
           <PluginStatusBadge :status="detail.status" />

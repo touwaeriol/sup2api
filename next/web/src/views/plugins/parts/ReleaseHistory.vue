@@ -7,7 +7,7 @@ import PluginStatusBadge from './PluginStatusBadge.vue'
 import type { PluginHistory, PluginRelease } from '@/api/observability'
 import { formatDateTime } from '@/utils/format'
 import { errorMessage } from '@/utils/errors'
-import { usePluginStatusLabel } from '../pluginUtil'
+import { displayPluginId, usePluginStatusLabel } from '../pluginUtil'
 const props = defineProps<{ pluginKey?: string; since?: string }>()
 const { t } = useI18n()
 const statusLabel = usePluginStatusLabel()
@@ -61,7 +61,7 @@ onBeforeUnmount(() => { disposed = true })
           :aria-pressed="selected?.id === item.id"
           @click="select(item)"
         >
-          <strong>{{ item.plugin_key }}</strong>
+          <strong>{{ displayPluginId(item.plugin_key) }}</strong>
           <SCode inline :text="`#${item.id} · ${item.from_version || '—'} → ${item.target_version || '—'}`" />
           <PluginStatusBadge :status="item.phase" />
           <SHint inline size="xs">{{ formatDateTime(item.created_at) }}</SHint>
@@ -74,7 +74,7 @@ onBeforeUnmount(() => { disposed = true })
     </div>
     <SPagination v-if="total > size" v-model:page="page" :page-size="size" :page-sizes="[size]" :total="total" />
     <div v-if="selected || allEvents" class="space-y-3 border-t border-gray-200 pt-4 dark:border-dark-700">
-      <h3 class="font-semibold">{{ t('observe.timeline') }} · {{ selected?.plugin_key || pluginKey }} <template v-if="selected">#{{ selected.id }}</template></h3>
+      <h3 class="font-semibold">{{ t('observe.timeline') }} · {{ displayPluginId(selected?.plugin_key || pluginKey || '') }} <template v-if="selected">#{{ selected.id }}</template></h3>
       <SHint v-if="!events.length">{{ t('observe.noHistory') }}</SHint>
       <div v-for="group in groups" :key="group.node" class="rounded-lg bg-gray-50 p-3 dark:bg-dark-800">
         <strong class="text-sm">{{ group.node || t('observe.cluster') }}</strong>

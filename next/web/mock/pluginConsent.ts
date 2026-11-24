@@ -7,6 +7,7 @@ import { fail, on, type MockRequest } from './router'
 import { caller, stepUp, type Identity } from './core'
 import { bumpAuthz } from './roles'
 import { invalid } from './common'
+import { pluginId } from './pluginIds'
 import { diffItem, find, forViewer, grant, guardReview, notFound, plugins, reviewFor, reviewQueue, reviews, settleRoleGrants, stageVersion, type Any } from './plugins'
 
 /** The sha256 of a version's package (made up, the same for every download). */
@@ -77,11 +78,12 @@ on('POST', '/plugins/:key/versions/:version/consent', stepUp('plugin.grant', (re
 
 // The package is not read: an uploaded file is always guard 0.1.1.
 const uploadedReview = () => guardReview('0.1.1', { added: [], widened: [diffItem('gateway.hook', 'high')], removed: [] })
+// The store names a plugin by its publisher and key (the plugin id, CONTRACTS §137).
 const marketReview = (req: MockRequest) => {
-  const { key, version } = req.body || {}
-  return key && version ? reviewFor(key, version) : null
+  const { publisher, key, version } = req.body || {}
+  return publisher && key && version ? reviewFor(pluginId(publisher, key), version) : null
 }
-const needKeyVersion = () => fail(400, 'invalid_argument', 'key and version are required')
+const needKeyVersion = () => fail(400, 'invalid_argument', 'publisher, key and version are required')
 
 // Reviews before anything is registered (no rows, no audit).
 on('POST', '/plugins/review-upload', (req) => preInstallReview(uploadedReview(), caller(req)))

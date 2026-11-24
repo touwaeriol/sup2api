@@ -110,7 +110,7 @@ describe('the settings entry', () => {
   it('is refused without any page of the view, as is a link to a configuration page', async () => {
     auth.denied = ['settings:read', 'sticky:read']
     expect(await follow('/settings?tab=billing')).toMatch(/^\/forbidden\?perm=settings:read/)
-    auth.denied.push('group:read', 'price:read')
+    auth.denied.push('group:read', 'price:read', 'plugin:market:read')
     expect(await follow('/settings')).toMatch(/^\/forbidden\?perm=settings:read/)
   })
 })

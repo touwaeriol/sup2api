@@ -1279,7 +1279,10 @@ export interface PluginSummary {
   role_grants_to_review?: PluginRoleGrant[]
   /** Non-empty: the plugin is abnormal (another plugin claimed a resource first, or the core holds it). */
   resource_conflicts?: ResourceConflict[]
+  /** The plugin id (manifest.PluginID: the bare key of a sub2api plugin, "_<publisher>__<key>" otherwise). */
   key: string
+  /** manifest.DisplayID of key: "codex" or "erio/codex". */
+  display_id?: string
   name: LText
   status: string
   /** Ships with the image: can be disabled, not uninstalled. */
@@ -1289,6 +1292,8 @@ export interface PluginSummary {
   desired_version?: string | null
   publisher?: string
   trust?: Trust
+  /** The current version's signature status: `indexed` for a version installed from the store. */
+  signature_status?: string
   /** Live nodes of the cluster; nodes that did not report the plugin count as `absent`. */
   node_summary?: { total: number; states: Record<string, number> }
   /** Set when nodes refuse to load the plugin (built for an older plugin contract). */
@@ -1648,61 +1653,6 @@ export interface Publisher {
   created_at: string
   revoked_at?: string | null
   keys?: Array<{ key_id: string; public_key: string; status: string; not_before?: string | null; not_after?: string | null; created_at?: string }>
-}
-
-export interface MarketSource {
-  id: number
-  name: string
-  url: string
-  enabled: boolean
-}
-
-/** Deprecation of a market plugin or version: still installable, never the latest (CONTRACTS §136). */
-export interface MarketDeprecation {
-  reason: LText
-}
-
-/** Publisher status of a market plugin: only an active publisher's plugins install (CONTRACTS §136). */
-export type MarketPublisherStatus = 'active' | 'revoked' | 'missing'
-
-/** A plugin of GET /market/plugins (CONTRACTS §11.1, §136). */
-export interface MarketPlugin {
-  source_id: number
-  source_name: string
-  key: string
-  name: LText
-  description?: LText
-  /** Publisher id of the index (the manifest's publisher). */
-  publisher: string
-  publisher_name?: LText
-  publisher_homepage?: string
-  /** Trust level the index gives the publisher; '' when it does not list it. */
-  trust: Trust
-  publisher_status: MarketPublisherStatus
-  /** GitHub repository (owner/name) the packages are released from. */
-  repo?: string
-  /** Source code URL. */
-  source_url?: string
-  builtin: boolean
-  deprecated?: MarketDeprecation
-  /** Newest compatible version that is not deprecated ('' when none). */
-  latest_version: string
-  versions: MarketVersion[]
-  installed_version?: string
-  installed_status?: string
-  update_available: boolean
-}
-
-/** A version of a market plugin (CONTRACTS §11.1, §14.3). */
-export interface MarketVersion {
-  version: string
-  size?: number
-  host_compat?: string
-  /** host_compat satisfied by the running core version. */
-  compatible: boolean
-  /** GitHub release page of the version (release notes). */
-  release_url?: string
-  deprecated?: MarketDeprecation
 }
 
 // ------------------------------------------------------------------ plugin egress (CONTRACTS §14.2)

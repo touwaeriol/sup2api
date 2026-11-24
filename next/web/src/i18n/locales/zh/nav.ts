@@ -40,6 +40,7 @@ export default {
   label: '控制台菜单',
   backToConsole: '返回控制台',
   crumbs: {
+    marketPlugin: '商店插件详情',
     pluginDetail: '插件详情',
     pluginRollout: '发布进度',
     pluginConsent: '安装授权',

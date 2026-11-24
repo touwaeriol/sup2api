@@ -1,6 +1,17 @@
 export default {
   title: 'Publishers',
-  description: 'Plugin publishers and their ed25519 signing keys. Plugin packages are verified against these keys.',
+  description: 'Store publishers are kept by the official store; local publishers only sign manually uploaded packages.',
+  tabs: { store: 'Store publishers', local: 'Local publishers' },
+  store: {
+    hint: 'Read-only, from the official store index (default channel). To add or revoke a publisher, open a PR to the store repository:',
+    plugins: 'Store plugins',
+    installed: 'Installed',
+    empty: 'The store index lists no publishers'
+  },
+  local: {
+    hint: 'Local publishers and their ed25519 signing keys, used only to verify manually uploaded packages.',
+    idRule: 'A local publisher id cannot be sub2api or a store publisher id, so that "publisher + key" stays unique.'
+  },
   create: 'New publisher',
   trustLevel: 'Trust level',
   trust_: {

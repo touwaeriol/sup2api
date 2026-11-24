@@ -10,7 +10,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useConsentTarget } from './consent/useConsentTarget'
 import InstallSteps from './consent/InstallSteps.vue'
 import ConsentUnavailable from './consent/ConsentUnavailable.vue'
-import { RISK_ORDER, asArray, capabilityIdsOf, riskOf, type Risk } from './pluginUtil'
+import { RISK_ORDER, asArray, capabilityIdsOf, displayPluginId, riskOf, type Risk } from './pluginUtil'
 import PluginAvatar from './parts/PluginAvatar.vue'
 import TrustBadge from './parts/TrustBadge.vue'
 import ProvidesSummary from './consent/ProvidesSummary.vue'
@@ -22,6 +22,11 @@ import { permissionFate, useConsentMatrix } from './consent/consentMatrix'
 import ConsentNeed from './consent/ConsentNeed.vue'
 import UpgradePermissionChanges from './consent/UpgradePermissionChanges.vue'
 import DatabaseMigrations from './consent/DatabaseMigrations.vue'
+import SourceCheck from './consent/SourceCheck.vue'
+import NewRiskAck from './consent/NewRiskAck.vue'
+import EgressDomains from './consent/EgressDomains.vue'
+import { useMarketOrigin } from './consent/useMarketOrigin'
+import PluginIdText from './parts/PluginIdText.vue'
 import DatabaseAccessList from './parts/DatabaseAccessList.vue'
 import ScopeChips from './parts/ScopeChips.vue'
 import PermissionMatrix from '@/components/permission/PermissionMatrix.vue'
@@ -36,6 +41,8 @@ const auth = useAuthStore()
 
 const { source, review, loading, failure, busy, settled, isUpgrade, load, approve, reject, cancel } = useConsentTarget()
 const showMissing = ref(false)
+/** A market install: the channel and index entry its source check shows. */
+const origin = useMarketOrigin(source.market)
 
 const checked = reactive<Record<string, boolean>>({})
 const consent = useConsentMatrix(review)
@@ -109,12 +116,16 @@ function toggle(row: HPRow, v: boolean) {
   checked[row.id] = v
 }
 
+/** The high and critical host permissions this version newly asks for: approving waits for their acknowledgement. */
+const newRisk = computed(() => rows.value.filter((r) => r.diffTag === 'added' && (r.risk === 'high' || r.risk === 'critical')))
+const acknowledged = ref(false)
+const needsAck = computed(() => newRisk.value.length > 0 && !acknowledged.value)
 const missingRequired = computed(() => rows.value.filter((r) => !r.optional && !checked[r.id]))
 const blockedByPermission = computed(() => rows.value.filter((r) => !r.optional && !r.allowed))
 // A market install is vouched for by its index, not its signature (CONTRACTS §136).
 const signatureOk = computed(() => ['valid', 'indexed'].includes(review.value?.signature_status ?? ''))
 // Grants to roles the caller may not name go to a super admin's review instead of blocking (D2).
-const canSubmit = computed(() => !!review.value && review.value.host_compat_ok !== false && blockedByPermission.value.length === 0)
+const canSubmit = computed(() => !!review.value && review.value.host_compat_ok !== false && blockedByPermission.value.length === 0 && !needsAck.value)
 const { colon, hpLabel } = useConsentLabels()
 
 function sigLabel(s: string | undefined): string {
@@ -146,13 +157,16 @@ function submit() {
 }
 
 // A review loaded again (409 package_changed) starts from its own ticks.
-watch(review, (r) => r && initChecks())
-onMounted(load)
+watch(review, (r) => {
+  acknowledged.value = false
+  if (r) initChecks()
+})
+onMounted(() => Promise.all([load(), origin.load()]))
 </script>
 
 <template>
   <div class="mx-auto max-w-5xl pb-24">
-    <SPageHeader :title="review ? `${isUpgrade ? t('plugins.consent.titleUpgrade') : t('plugins.consent.titleInstall')}${colon}${lt(review.name) || review.plugin_key}` : t(source.reject ? 'nav.crumbs.pluginConsent' : 'nav.crumbs.pluginInstall')">
+    <SPageHeader :title="review ? `${isUpgrade ? t('plugins.consent.titleUpgrade') : t('plugins.consent.titleInstall')}${colon}${lt(review.name) || displayPluginId(review.plugin_key)}` : t(source.reject ? 'nav.crumbs.pluginConsent' : 'nav.crumbs.pluginInstall')">
       <template v-if="review" #title-extra>
         <span class="font-mono text-sm text-gray-500">v{{ review.version }}</span>
       </template>
@@ -168,6 +182,11 @@ onMounted(load)
         <div class="flex flex-wrap items-start gap-4">
           <PluginAvatar :name="lt(review.name)" :plugin-key="review.plugin_key" size="lg" />
           <div class="min-w-0 flex-1">
+            <div class="mb-2 flex flex-wrap items-center gap-2">
+              <span class="font-semibold">{{ lt(review.name) || displayPluginId(review.plugin_key) }}</span>
+              <PluginIdText :id="review.plugin_key" class="text-sm text-fg-muted" />
+              <span v-if="review.upgrade_from" class="font-mono text-sm" data-testid="consent-version-change">v{{ review.upgrade_from }} → <b class="text-warning-700 dark:text-warning-300">v{{ review.version }}</b></span>
+            </div>
             <div class="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm">
               <span class="inline-flex items-center gap-2">
                 <SHint inline>{{ t('plugins.publisher') }}</SHint>
@@ -189,6 +208,7 @@ onMounted(load)
           </div>
         </div>
       </SCard>
+      <SourceCheck v-if="source.market" :review="review" :origin="origin.origin.value" :version="origin.version.value" />
       <InstallSteps v-if="!source.reject" :upgrade="isUpgrade" :version="review.version" :from="review.upgrade_from" :approved="review.consent_status === 'approved'" />
 
       <!-- warnings -->
@@ -256,6 +276,8 @@ onMounted(load)
         </template>
       </HostPermissionTable>
       <DatabaseMigrations :review="review" />
+      <EgressDomains :review="review" />
+      <NewRiskAck v-model="acknowledged" :rows="newRisk" />
 
       <!-- footer -->
       <StickyActionBar class="mt-4">
@@ -263,6 +285,7 @@ onMounted(load)
         <p v-else-if="blockedByPermission.length" class="text-warning-700 dark:text-warning-300">
           {{ t('plugins.consent.blockedByPermission', { list: blockedByPermission.map((x) => hpLabel(x.id)).join(', ') }) }}
         </p>
+        <p v-else-if="needsAck" class="text-danger-600 dark:text-danger-400" data-testid="consent-ack-required">{{ t('pluginInstall.ackRequired') }}</p>
         <p v-else-if="missingRequired.length" class="text-fg-muted">
           {{ t('plugins.consent.stillRequired', { n: missingRequired.length }) }}
         </p>

@@ -7,7 +7,7 @@ import { SButton, SCard, SEmpty, SPageHeader, SSpinner } from '@sub2api/ui'
 import { lt } from '@/i18n'
 import { errorMessage } from '@/utils/errors'
 import { usePluginStore } from '@/stores/plugins'
-import { consoleSettings, nativeSettingsPath, type PluginSettings } from './pluginUtil'
+import { consoleSettings, displayPluginId, nativeSettingsPath, type PluginSettings } from './pluginUtil'
 import SettingsTab from './detail/SettingsTab.vue'
 
 // A plugin's settings on their own page: the one page for holders of the
@@ -21,7 +21,7 @@ const route = useRoute()
 const router = useRouter()
 const plugins = usePluginStore()
 const key = computed(() => String(route.params.key))
-const name = computed(() => lt(plugins.plugin(key.value)?.name) || key.value)
+const name = computed(() => lt(plugins.plugin(key.value)?.name) || displayPluginId(key.value))
 const settings = ref<PluginSettings | null>(null)
 const loading = ref(true)
 const error = ref('')

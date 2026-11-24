@@ -1,42 +1,43 @@
 import { describe, expect, it } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { i18n } from '@/i18n'
-import type { MarketPlugin } from '@/api/types'
+import { channel, storePlugin } from '@/testing/marketFixtures'
 import MarketRow from './MarketRow.vue'
 
-const tool: MarketPlugin = {
-  source_id: 1,
-  source_name: 'official',
-  key: 'tool',
-  name: { en: 'Tool' },
-  publisher: 'acme',
-  trust: 'verified',
-  publisher_status: 'active',
-  builtin: false,
-  latest_version: '1.0.0',
-  update_available: false,
-  versions: [{ version: '1.0.0', compatible: true }]
-}
+const tool = storePlugin('acme', 'tool', {
+  versions: [
+    { version: '1.0.0', compatible: true, host_compat: '>=0.1.0' },
+    { version: '0.9.0', compatible: true, deprecated: { reason: { en: 'broken' } } }
+  ]
+})
 
 const render = (props: Partial<InstanceType<typeof MarketRow>['$props']> = {}) =>
   mount(MarketRow, {
-    props: { plugin: tool, installedVersion: '', hasDetail: false, state: 'install', blocked: '', canInstall: true, ...props },
-    global: { plugins: [i18n], stubs: { RouterLink: true } }
+    props: { plugin: tool, channel: channel(1), installedVersion: '', state: 'install', blocked: '', canInstall: true, ...props },
+    global: { plugins: [i18n], stubs: { RouterLink: { props: ['to'], template: '<a><slot /></a>' } } }
   })
 
 describe('MarketRow', () => {
-  it('shows the latest version the core reports and opens the picker', async () => {
+  it('shows the id as publisher/key, the core it needs and installs the latest version', async () => {
+    i18n.global.locale.value = 'en'
     const w = render()
-    expect(w.text()).toContain('v1.0.0')
-    await w.find('button').trigger('click')
-    expect(w.emitted('pick')).toHaveLength(1)
+    expect(w.get('[data-plugin-id]').text()).toBe('acme/tool')
+    expect(w.text()).toContain(i18n.global.t('market.requiresCore', { range: '>=0.1.0' }))
+    await w.get('[data-testid="market-install"]').trigger('click')
+    expect(w.emitted('install')).toEqual([['1.0.0']])
+  })
+  it('notes the deprecated version', () => {
+    expect(render().get('[data-testid="market-version-deprecated"]').text()).toContain('v0.9.0')
   })
   it('explains and disables a blocked install', () => {
     const w = render({ blocked: 'revoked' })
-    expect(w.find('[data-testid="market-blocked"]').text()).toContain('revoked')
-    expect(w.find('button').attributes('disabled')).toBeDefined()
+    expect(w.get('[data-testid="market-blocked"]').text()).toContain('revoked')
+    expect(w.get('[data-testid="market-not-installable"]').attributes('disabled')).toBeDefined()
+    expect(w.find('[data-testid="market-versions"]').exists()).toBe(false)
   })
-  it('offers no action without plugin:install', () => {
-    expect(render({ canInstall: false }).find('button').exists()).toBe(false)
+  it('offers no install without plugin:install, only the versions', () => {
+    const w = render({ canInstall: false })
+    expect(w.find('[data-testid="market-install"]').exists()).toBe(false)
+    expect(w.find('[data-testid="market-versions"]').exists()).toBe(true)
   })
 })

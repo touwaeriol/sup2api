@@ -92,7 +92,7 @@ describe('protocol binding in the mock', () => {
 
   it('lists for an account with a model list only the protocols one of its models is served on', async () => {
     // video-1 serves one model: bound to another protocol by name, no own protocol is left open "for the other models".
-    const type = ((await data('GET', '/account-types')) as AccountType[]).find(t => t.plugin_key === 'videogen' && t.type === 'video_key')!
+    const type = ((await data('GET', '/account-types')) as AccountType[]).find(t => t.plugin_key === '_videolabs__videogen' && t.type === 'video_key')!
     const [own] = protocolColumns(type).own
     const before = await served(17)
     expect(before.every(([, , models]) => models === null)).toBe(true)
