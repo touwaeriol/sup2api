@@ -114,7 +114,7 @@ func TestRegistryCommandsRefuseExtraArguments(t *testing.T) {
 }
 
 func TestRegistryFieldRules(t *testing.T) {
-	pub := regPublisher{indexPublisher: indexPublisher{ID: "p", Name: map[string]string{"zh": "p", "en": "p"}, Trust: "community", Status: "active"}}
+	pub := regPublisher{ID: "p", Name: map[string]string{"zh": "p", "en": "p"}, Trust: "community", Status: "active"}
 	for logins, want := range map[string]string{
 		"":                      "at least one",
 		"a-b,A-B":               "listed twice",

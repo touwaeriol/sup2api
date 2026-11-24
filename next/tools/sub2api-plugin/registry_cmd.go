@@ -154,8 +154,7 @@ func importPackage(o importOptions, pkg string) (string, error) {
 		return "", err
 	}
 	m := info.m
-	pub := regPublisher{indexPublisher: indexPublisher{ID: m.Publisher, Name: bilingual(nil, m.Publisher), Trust: o.trust, Status: "active"},
-		GitHub: []string{importLogin}}
+	pub := regPublisher{ID: m.Publisher, Name: bilingual(nil, m.Publisher), Trust: o.trust, Status: "active", GitHub: []string{importLogin}}
 	if err := writeIfMissing(filepath.Join(o.root, regPublishersDir, m.Publisher+regJSONExt), m.Publisher, &pub, checkPublisher); err != nil {
 		return "", err
 	}

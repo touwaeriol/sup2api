@@ -32,20 +32,16 @@ type deprecation struct {
 	Reason manifest.LocalizedText `json:"reason"`
 }
 
-// indexPublisher is a publisher as index.json lists it.
-type indexPublisher struct {
+// regPublisher is publishers/<id>.json, and the publisher as index.json
+// lists it. GitHub holds the logins allowed to publish for it: registry
+// check and CODEOWNERS use them, the console shows them.
+type regPublisher struct {
 	ID       string                 `json:"id"`
 	Name     manifest.LocalizedText `json:"name"`
 	Homepage string                 `json:"homepage,omitempty"`
+	GitHub   []string               `json:"github"`
 	Trust    string                 `json:"trust"`
 	Status   string                 `json:"status"`
-}
-
-// regPublisher is publishers/<id>.json: the index fields plus the GitHub
-// logins allowed to publish for it (CI only, not in the index).
-type regPublisher struct {
-	indexPublisher
-	GitHub []string `json:"github"`
 }
 
 // regPlugin is plugins/<publisher>/<key>/plugin.json.

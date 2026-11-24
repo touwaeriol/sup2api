@@ -15,10 +15,10 @@ import (
 const indexFormatVersion = 2
 
 type marketIndex struct {
-	Version     int              `json:"version"`
-	GeneratedAt string           `json:"generated_at"`
-	Publishers  []indexPublisher `json:"publishers"`
-	Plugins     []indexPlugin    `json:"plugins"`
+	Version     int            `json:"version"`
+	GeneratedAt string         `json:"generated_at"`
+	Publishers  []regPublisher `json:"publishers"`
+	Plugins     []indexPlugin  `json:"plugins"`
 }
 
 type indexPlugin struct {
@@ -61,9 +61,9 @@ func cmdIndex(args []string, stdout, stderr io.Writer) error {
 // (sortedPlugins) and each plugin's versions newest first.
 func buildIndex(reg *registry, now time.Time) *marketIndex {
 	idx := &marketIndex{Version: indexFormatVersion, GeneratedAt: now.Format(time.RFC3339),
-		Publishers: []indexPublisher{}, Plugins: []indexPlugin{}}
+		Publishers: []regPublisher{}, Plugins: []indexPlugin{}}
 	for _, id := range slices.Sorted(maps.Keys(reg.publishers)) {
-		idx.Publishers = append(idx.Publishers, reg.publishers[id].indexPublisher)
+		idx.Publishers = append(idx.Publishers, *reg.publishers[id])
 	}
 	for _, e := range reg.sortedPlugins() {
 		p := indexPlugin{regPlugin: e.plugin, Versions: []regVersion{}}

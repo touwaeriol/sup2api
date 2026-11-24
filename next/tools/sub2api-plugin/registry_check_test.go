@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -141,7 +142,7 @@ func TestRegistryIndexAndCodeowners(t *testing.T) {
 	pubs, plugins := idx["publishers"].([]any), idx["plugins"].([]any)
 	versions := plugins[0].(map[string]any)["versions"].([]any)
 	if idx["version"] != float64(2) || len(pubs) != 2 || pubs[0].(map[string]any)["id"] != "other" ||
-		pubs[1].(map[string]any)["github"] != nil || versions[0].(map[string]any)["version"] != "0.2.0" ||
+		fmt.Sprint(pubs[0].(map[string]any)["github"]) != "[carol]" || fmt.Sprint(pubs[1].(map[string]any)["github"]) != "[alice]" || versions[0].(map[string]any)["version"] != "0.2.0" ||
 		plugins[0].(map[string]any)["repo"] != "acme/demo" || plugins[0].(map[string]any)["deprecated"] != nil {
 		t.Fatalf("index = %v", idx)
 	}
