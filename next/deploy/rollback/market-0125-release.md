@@ -25,7 +25,7 @@
    ```
 
    有行时在**旧版本**上卸载这些插件，并在“已安装插件”页底部的退役标识里释放它们（释放会清掉它们留下的表与数据），再重跑预检。升级后从商店或手动上传重装。
-2. **市场源**（只读）：`SELECT id, name, url, enabled FROM market_sources ORDER BY id;`。0125 只保留名为 `official` 的行（改成“正式”/`main`，id 不变），**其他行一律删除**。已发布的核心按 `SUB2API_MARKET_SOURCES` 种源，名字取自那里的配置，不一定叫 `official`：如果指向官方索引的那一行叫别的名字，又想保留它的 id（审计 `plugin.upload` 的 `source` 记的 `market:<id>` 是它），先在旧版本上 `UPDATE market_sources SET name = 'official' WHERE id = <那一行>`（名字唯一，先确认没有别的 `official` 行）；不在乎 id 的话不用动，0125 会新建“正式”/`main`。
+2. **市场源**（只读）：`SELECT id, name, url, enabled FROM market_sources ORDER BY id;`。0125 只保留名为 `official` 的行（改成“正式”/`main`，id 不变），**其他行一律删除**。已发布的核心按 `SUB2API_MARKET_SOURCES` 种源，名字取自那里的配置，不一定叫 `official`：如果指向官方索引的那一行叫别的名字，又想保留它的 id（审计 `plugin.upload` 的 `source` 记的 `market:<id>` 是它），先在旧版本上 `UPDATE market_sources SET name = 'official' WHERE id = <那一行>`（名字唯一，先确认没有别的 `official` 行）；不在乎 id 的话不用动，0125 会新建“正式”/`main`。那一行指向的不是官方索引（比如以前单机栈的本地市场 `local-dev`）时也不要改名：改名会把来自本地市场的旧上传记录挂到正式频道下，接受删除即可（ovh 生产 11-25 演练时就是这种情况）。
 3. **网关**：生产用默认的官方地址，不依赖新网关。用本地 http 市场的栈（设了 `SUB2API_MARKET_BASE_URL`、`SUB2API_MARKET_ALLOW_HTTP`）要先换上把这两个变量列进透传白名单的网关，再发核心，否则核心收不到它们，会去读官方商店。
 4. **备份**：`pg_dump -Fc` 整库（或确认托管数据库有升级前的快照），记下时间。回退只靠它。
 
@@ -35,7 +35,7 @@
 
 - `market_sources` 没有 `public_key`、`url` 列，是官方商店的两个频道“正式”（`main`，默认；原来有 `official` 行时保留它的 id）与“测试”（`develop`）；`GET /market/sources` 返回的地址是 `https://raw.githubusercontent.com/touwaeriol/sup2api-plugin/index-<分支>/index.json`；`market_stores` 只有官方商店；`plugin_versions` 有 `trust_level`。
 - 控制台“插件市场”页选官方商店的“正式”频道能列出插件，发布者、信任级别正确；系统设置的“商店配置”页只有官方商店一张卡片和它的两个频道。
-- 之后重建网关容器时，从各节点的 `.env` 删掉 `MARKET_SOURCES`（本仓库的 ovh、clicodeplus compose 已不再引用它）。
+- 之后重建网关容器时，先把节点上的 compose 换成本仓库的版本（ovh、clicodeplus 的 compose 已不再引用 `MARKET_SOURCES`；节点上旧 compose 是必填写法 `${MARKET_SOURCES:?}`，先删变量会让 compose 起不来），再从 `.env` 删掉 `MARKET_SOURCES`。
 
 ## 三、回退
 
