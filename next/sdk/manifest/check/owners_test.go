@@ -10,18 +10,9 @@ import (
 // keyed like an installed official one does not own that plugin's platform,
 // endpoints or notification channels.
 func TestOwnersByPluginID(t *testing.T) {
-	channels := &manifest.Notifications{Channels: []manifest.NotificationChannel{{ID: "relay", Label: manifest.LocalizedText{"en": "Relay"}}}}
-	official := controlsManifest(nil)
-	official.Key, official.Publisher, official.Notifications = "codex", manifest.OfficialPublisher, channels
-	pfs, eps := OthersFromManifests([]*manifest.Manifest{official})
-	chs := ChannelsFromManifests([]*manifest.Manifest{official})
-	if pfs[0].PluginID != "codex" || eps[0].PluginID != "codex" || chs[0].PluginID != "codex" {
-		t.Fatalf("owners = %+v %+v %+v", pfs, eps, chs)
-	}
-	opt := ValidateOptions{Tooling: true, OtherPlatforms: pfs, OtherEndpoints: eps, OtherChannels: chs}
-
+	official, opt := officialCodex(t)
 	third := controlsManifest(nil)
-	third.Key, third.Publisher, third.Notifications = "codex", "erio", channels
+	third.Key, third.Publisher, third.Notifications = "codex", "erio", official.Notifications
 	third.Capabilities = append(third.Capabilities, manifest.Capability{ID: manifest.CapNotifyChannel})
 	err := Validate(third, map[string][]byte{}, opt)
 	for field, code := range map[string]string{
@@ -41,6 +32,21 @@ func TestOwnersByPluginID(t *testing.T) {
 			t.Errorf("codex upgrade: %s reported in %v", field, err)
 		}
 	}
+}
+
+// officialCodex is the official codex with a platform, an endpoint and a
+// channel, and the options that name them as installed, owned by its id.
+func officialCodex(t *testing.T) (*manifest.Manifest, ValidateOptions) {
+	t.Helper()
+	official := controlsManifest(nil)
+	official.Key, official.Publisher = "codex", manifest.OfficialPublisher
+	official.Notifications = &manifest.Notifications{Channels: []manifest.NotificationChannel{{ID: "relay", Label: manifest.LocalizedText{"en": "Relay"}}}}
+	pfs, eps := OthersFromManifests([]*manifest.Manifest{official})
+	chs := ChannelsFromManifests([]*manifest.Manifest{official})
+	if pfs[0].PluginID != "codex" || eps[0].PluginID != "codex" || chs[0].PluginID != "codex" {
+		t.Fatalf("owners = %+v %+v %+v", pfs, eps, chs)
+	}
+	return official, ValidateOptions{Tooling: true, OtherPlatforms: pfs, OtherEndpoints: eps, OtherChannels: chs}
 }
 
 func hasAnyCode(fields []FieldError, field string) bool {

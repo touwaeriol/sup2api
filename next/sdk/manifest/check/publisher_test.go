@@ -34,3 +34,15 @@ func TestValidatePluginID(t *testing.T) {
 		}
 	}
 }
+
+// A manifest without a publisher misses a required field; an invalid one
+// is malformed.
+func TestManifestPublisherRequired(t *testing.T) {
+	for publisher, code := range map[string]string{"": "required", "Acme": "invalid_format"} {
+		m := minimal()
+		m.Publisher = publisher
+		if err := Validate(m, nil, ValidateOptions{Tooling: true}); !hasCode(err, "publisher", code) {
+			t.Errorf("publisher %q: %v, want %s", publisher, err, code)
+		}
+	}
+}

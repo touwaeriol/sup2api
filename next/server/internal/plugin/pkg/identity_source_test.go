@@ -11,17 +11,32 @@ import (
 )
 
 // bareKeyAllowed are the files that may read a manifest's bare key, and how
-// often: the handshake compares it with what the plugin calls itself.
+// often: the handshake compares it with what the plugin calls itself, and
+// the manifest check checks the key itself.
 var bareKeyAllowed = map[string]int{
-	"plugin/grpcruntime/instance.go": 2,
+	"plugin/grpcruntime/instance.go":  2,
+	"sdk/manifest/check/publisher.go": 1,
+}
+
+// bareKeyRoots are the trees TestNoBareManifestKey reads, by the prefix of
+// their files in bareKeyAllowed: the core's internal packages and the
+// manifest check the core and the plugin tool share.
+var bareKeyRoots = map[string]string{
+	filepath.Join("..", ".."): "",
+	filepath.Join("..", "..", "..", "..", "sdk", "manifest", "check"): "sdk/manifest/check/",
 }
 
 // The core keys a plugin by its id (CONTRACTS §137): production code reads
-// m.ID() of a manifest, not m.Key (x.Manifest.Key or m.Key), outside the
-// few places bareKeyAllowed lists.
+// m.ID() of a manifest, not m.Key (x.Manifest.Key, m.Key or v.m.Key),
+// outside the few places bareKeyAllowed lists.
 func TestNoBareManifestKey(t *testing.T) {
 	t.Parallel()
-	found := bareKeyReads(t, filepath.Join("..", ".."))
+	found := map[string]int{}
+	for root, prefix := range bareKeyRoots {
+		for file, n := range bareKeyReads(t, root) {
+			found[prefix+file] = n
+		}
+	}
 	for file, n := range found {
 		if bareKeyAllowed[file] != n {
 			t.Errorf("%s reads a manifest's bare key %d times (allowed %d): use m.ID(), the plugin id", file, n, bareKeyAllowed[file])
@@ -62,11 +77,11 @@ func bareKeyReads(t *testing.T, root string) map[string]int {
 	return found
 }
 
-// isManifest reports whether x reads as a manifest: x.Manifest or m.
+// isManifest reports whether x reads as a manifest: x.Manifest, x.m or m.
 func isManifest(x ast.Expr) bool {
 	switch x := x.(type) {
 	case *ast.SelectorExpr:
-		return x.Sel.Name == "Manifest"
+		return x.Sel.Name == "Manifest" || x.Sel.Name == "m"
 	case *ast.Ident:
 		return x.Name == "m"
 	}

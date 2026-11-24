@@ -215,3 +215,15 @@ func TestUserPermissionScope(t *testing.T) {
 		assert.Equal(t, c.want, fieldCodes(Validate(m, nil, ValidateOptions{Tooling: true}), "userPermissions"), c.name)
 	}
 }
+
+// A permission key's length counts the plugin id (manifest.PermissionKey of
+// m.ID()), not the bare key: plugin._tester__demo:<local> may not exceed
+// 150 bytes even where plugin.demo:<local> would not.
+func TestUserPermissionKeyLengthByPluginID(t *testing.T) {
+	m := minimal()
+	local := "x:" + strings.Repeat("a", 128)
+	m.UserPermissions = []manifest.UserPermission{{Key: local, Label: label("Long")}}
+	require.LessOrEqual(t, len(manifest.PermissionKey(m.Key, local)), 150)
+	assert.Equal(t, map[string]string{"userPermissions[0].key": "invalid_format"},
+		fieldCodes(Validate(m, nil, ValidateOptions{Tooling: true}), "userPermissions"))
+}

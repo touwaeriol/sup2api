@@ -58,7 +58,9 @@ func (v *validator) identity() {
 	if keyCode != "" {
 		v.add("key", keyCode, "%s", keyMsg)
 	}
-	if err := ValidatePublisherID(m.Publisher); err != nil {
+	if m.Publisher == "" {
+		v.add("publisher", "required", "publisher is required")
+	} else if err := ValidatePublisherID(m.Publisher); err != nil {
 		v.add("publisher", "invalid_format", "%s", err)
 	} else if keyCode == "" && len(m.ID()) > manifest.PluginIDMaxLen {
 		v.add("key", "too_long", "plugin id %q is longer than %d bytes: shorten the key or the publisher", m.ID(), manifest.PluginIDMaxLen)
