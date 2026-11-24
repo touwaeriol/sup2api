@@ -360,7 +360,7 @@ if !sticky.Enabled { ... }
 插件的表放在核心所用的模式里（线上是 `public`），和核心的表、别的插件的表并列；隔离靠名字前缀和数据库身份，不靠 schema（CONTRACTS §130）。
 
 - **声明**：manifest 声明 `database`（`{"migrations": "migrations/"}`，没有 `schema` 字段）并获授 `db.schema`。
-- **只能建表、索引、序列、视图和类型，名字带前缀**：迁移能建的对象只有关系（表、索引、序列、视图、物化视图）和类型（枚举、域、范围、复合类型），一律命名 `plg_<key>__<本地名>`（`manifest.TablePrefix(key)`，例如 `plg_moderation__rules`），名字不超过 63 字节（PostgreSQL 会不报错地截断更长的名字）。函数、过程、触发器、运算符、规则、策略等其他对象一律不允许，带前缀也不行；`DO` 块可以用（`db diff` 用它包新约束），它建的对象照样要守这条规则。PostgreSQL 自动起的名字也算：主键索引 `<表>_pkey`、唯一约束的索引 `<表>_<列>_key`、`serial`/`bigserial`/identity 列的序列 `<表>_<列>_seq`，表名带了前缀它们也就带上；自己起名的索引和约束（`CREATE INDEX`、`CONSTRAINT ... UNIQUE`）要自己写上前缀。GORM 模型里的索引必须写带前缀的名字（`index:<名字>`、`uniqueIndex:<名字>`）：不写名字的 `index`、`uniqueIndex` 由 GORM 起名 `idx_<表>_<列>`，没有前缀，`db check` 直接报错；不带名字的 `unique` 在迁移里已有该列的唯一约束时没问题，否则 GORM 起的 `uni_<表>_<列>` 也没有前缀，`db diff` 生成的迁移过不了检查，报错时提示改写成 `uniqueIndex:plg_<key>__<名字>`。插件键不含 `__`、不以 `_` 结尾、最多 30 字节，所以一个插件的前缀不会是另一个插件前缀的开头。
+- **只能建表、索引、序列、视图和类型，名字带前缀**：迁移能建的对象只有关系（表、索引、序列、视图、物化视图）和类型（枚举、域、范围、复合类型），一律命名 `plg_<插件 id>__<本地名>`（`manifest.TablePrefix(id)`，例如 `plg_moderation__rules`；插件 id = 发布者 + key，第一方插件就是 key，其他发布者的是 `_<发布者>__<key>`，如 `plg__erio__codex__rules`，见第 10 节），名字不超过 63 字节（PostgreSQL 会不报错地截断更长的名字）。函数、过程、触发器、运算符、规则、策略等其他对象一律不允许，带前缀也不行；`DO` 块可以用（`db diff` 用它包新约束），它建的对象照样要守这条规则。PostgreSQL 自动起的名字也算：主键索引 `<表>_pkey`、唯一约束的索引 `<表>_<列>_key`、`serial`/`bigserial`/identity 列的序列 `<表>_<列>_seq`，表名带了前缀它们也就带上；自己起名的索引和约束（`CREATE INDEX`、`CONSTRAINT ... UNIQUE`）要自己写上前缀。GORM 模型里的索引必须写带前缀的名字（`index:<名字>`、`uniqueIndex:<名字>`）：不写名字的 `index`、`uniqueIndex` 由 GORM 起名 `idx_<表>_<列>`，没有前缀，`db check` 直接报错；不带名字的 `unique` 在迁移里已有该列的唯一约束时没问题，否则 GORM 起的 `uni_<表>_<列>` 也没有前缀，`db diff` 生成的迁移过不了检查，报错时提示改写成 `uniqueIndex:plg_<key>__<名字>`。插件键不含 `__`、不以 `_` 结尾、最多 30 字节，所以一个插件的前缀不会是另一个插件前缀的开头。
 - **一个身份**：每个插件有一个自己的数据库身份（登录角色 `plg<库OID>_<key>`），密码由核心主密钥派生，只在核心进程里。插件的表归这个身份所有；核心的表、别的插件的表它没有任何权限，漏写前缀去改核心的表会被数据库拒绝。
 - **连接**：`Host.DB(ctx)` 拿 GORM 句柄，每次调用重新取（CONTRACTS §2“插件数据库”）。句柄背后的 DSN 来自 `HostService.GetDSN`，不论是否开严格网络都是虚拟地址 `postgres://plugin@db.sub2api:5432/...?sslmode=disable`，没有密码；SDK 按地址选路，虚拟地址一律经出口隧道到核心的数据库代理，核心以插件的身份登录（TLS、密码认证都在核心），把会话的 `search_path` 固定为核心模式，之后原样转发协议；语句的 ctx 结束时 pgx 发的取消请求也由核心转给服务器。`GetDSN` 返回的 `schema` 是核心模式。插件进程里没有数据库凭据。
 - **连接数**：由插件自己的池决定（默认每节点 4 个，`pluginsdk.WithDBPoolSize`），每条都是插件身份对数据库的一条连接，运维按它规划 `max_connections`。
@@ -412,7 +412,7 @@ if !sticky.Enabled { ... }
 - 主请求和辅助请求（`Fetch`）的主机：写死的写进清单 `externalServices`，运营方填的地址字段写进 `upstreamFields`（账号自己的上游地址不用另写；每个账号类型都要写这个键，没有就写 `[]`）；不设 `Host` 头。
 - 测试里调一致性套件；用 `standard` 写的插件另跑黄金样例。
 - 不读写文件；确实需要时申请 `fs.data`，只用 `SUB2API_PLUGIN_DATA_DIR` 下的路径（6.2 节）。
-- 新增第一方插件时，把插件键加进 `server/internal/plugin/install/reserved.go` 的 `reservedKeys`（`TestReservedCoverRepo` 会检查）。
+- 第一方插件的清单写 `"publisher": "sub2api"`：这个发布者是保留的，只有官方级别的包能用（CONTRACTS §137.3），不用再登记插件键。插件声明的平台 ID 与通知渠道由 `server/internal/plugin/install/reserved.go` 按插件 id 保留（`TestReservedCoverRepo` 会检查）。
 - 改了第 5 节表涉及的行为，同步本文和 CONTRACTS 对应章节，并在 HTTP 与 WebSocket 上补测试（参考 `gateway/disconnect_test.go`、`execute_test.go`）。
 
 ## 9. SDK 里的账号表单辅助
@@ -447,3 +447,9 @@ if bad := check(form.Creds, form.Settings); bad != nil { // 插件自己的校�
 }
 return form.Normalized(), nil
 ```
+
+## 10. 插件 id 与发布者（CONTRACTS §137）
+
+- 插件由“发布者 + key”确定：`manifest.PluginID(publisher, key)`，第一方发布者 `sub2api` 的插件 id 就是 key，其他发布者的是 `_<publisher>__<key>`。核心的接口路径（`/plugins/:key`）、权限键（`plugin.<id>:…`）、任务名（`plugin.<id>.<job>`）、表前缀与数据库身份、插件进程的 `SUB2API_PLUGIN_KEY` 都用 id；界面显示 `erio/codex` 这样的形式（`manifest.DisplayID`）。插件自己的 `GetInfo` 仍报清单的 `key`。
+- 发布者 id：小写字母、数字和单个下划线，以字母或数字开头和结尾（`^[a-z0-9](_?[a-z0-9]){0,26}$`）；插件 id 不超过 30 字节，所以发布者与 key 合起来最多 27 字节。`sub2api-plugin db check` 等工具的 `-key` 传插件 id。
+- 同一个 key 可以属于不同发布者，它们是不同的插件，可以同时安装。发布者 `sub2api` 只给官方级别的包。

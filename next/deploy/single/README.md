@@ -65,6 +65,7 @@ Caddy) and set `SUP2API_PUBLIC_URL` in `.env` to the public URL.
 The anthropic and guard plugins are in the bundled market (Plugins → Market),
 whose packages are signed with the key generated when the image was first built
 on this server (the market index itself is not signed, CONTRACTS §11.1). The
-core reads only the plugin store; `SUB2API_MARKET_URL` in the compose file
-points it at the bundled market (set it in `.env` to the official index URL to
-use the official store, CONTRACTS §136.1).
+official plugin store's base is `SUB2API_MARKET_BASE_URL` in the compose
+file, the bundled market (set it in `.env` to
+`https://raw.githubusercontent.com/touwaeriol/sup2api-plugin` to use the real
+store, CONTRACTS §137.6).

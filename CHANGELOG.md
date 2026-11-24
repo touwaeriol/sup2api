@@ -11,14 +11,22 @@
 ### 插件商店：只接受官方商店、信任取自索引、去掉密钥、只用 HTTPS、弃用（分支 `feat/market`、`feat/market-official`；迁移 0125，单向，改库走 `primary-first-v1`；CONTRACTS §11.1、§136；发布与回退见 `next/deploy/rollback/market-0125-release.md`）
 
 - **index.json v2**：核心只拉 `index.json`，不再有 `index.json.sig`；v2 带 `publishers`（`trust`、`status`）、插件的 `repo`/`source`/`builtin`/`deprecated`、版本的 `release_url`/`deprecated`。v1 与 `market.VerifyIndex`/`SignIndex` 删除。发布者 `id` 不合规时整份索引无效；`homepage`、`source`、`release_url` 不是 https 地址时丢弃该字段。
-- **只接受官方商店**：核心只读官方商店 `https://raw.githubusercontent.com/touwaeriol/sup2api-plugin/index/index.json`（源名 `official`），启动时删掉其他市场源；`SUB2API_MARKET_SOURCES` 删除，新变量 `SUB2API_MARKET_URL` 只给 e2e、单机栈与本地开发指向本地市场，生产不设。控制台插件市场页只读显示“商店地址”，不再有来源下拉。
+- **商店与频道**（CONTRACTS §137.6）：商店是登记处的 GitHub 仓库（`market_stores`），官方商店 touwaeriol/sup2api-plugin 由 0125 种下、不能删；管理员可以加第三方商店。频道是仓库的分支，索引在 `https://raw.githubusercontent.com/<仓库>/index-<分支>/index.json`；官方商店种下“正式”/`main`（默认）与“测试”/`develop`，每个商店一个默认频道，可增删改频道。新接口 `/market/stores`（增删改查）与 `POST /market/stores/:id/sources`，`PATCH`/`DELETE /market/sources/:id`。`SUB2API_MARKET_SOURCES` 删除，`SUB2API_MARKET_BASE_URL` 只给 e2e、单机栈与本地开发把官方商店指向本地市场，生产不设。第三方商店的包至多 `community`，发布者 `sub2api` 只来自官方商店，发布者归属第一个登记它的商店（别的商店装它的插件 409 `publisher_other_store`）。市场页先选商店再选频道，系统设置下有“商店配置”页。
 - **市场源去掉公钥**：迁移 `0125_market_sources_drop_public_key.sql` 删除 `market_sources.public_key`（并给 `plugin_versions` 加 `trust_level`）；源与包地址只接受 https（跳转也一样），开关 `SUB2API_MARKET_ALLOW_HTTP=true` 才接受 http，只给本地市场（e2e、single 的 compose 已设）。
-- **发布顺序**：用本地 http 市场的栈要**先换上**透传 `SUB2API_MARKET_URL`、`SUB2API_MARKET_ALLOW_HTTP` 的网关，再发核心；生产用默认的官方地址，不依赖新网关，发布前也不用改 `.env`（旧核心照旧读 `MARKET_SOURCES`，新核心不读），升级后从 `.env` 删掉 `MARKET_SOURCES`（ovh、clicodeplus 的 compose 已不再引用它）。回退只能恢复升级前的备份。
+- **发布顺序**：用本地 http 市场的栈要**先换上**透传 `SUB2API_MARKET_BASE_URL`、`SUB2API_MARKET_ALLOW_HTTP` 的网关，再发核心；生产用默认的官方地址，不依赖新网关，发布前也不用改 `.env`（旧核心照旧读 `MARKET_SOURCES`，新核心不读），升级后从 `.env` 删掉 `MARKET_SOURCES`（ovh、clicodeplus 的 compose 已不再引用它）。回退只能恢复升级前的备份。
 - **信任**：从市场安装/预审的包不看签名，信任级别取自索引里发布者的 `trust`，**记在版本行上**（`plugin_versions.trust_level`）；本地发布者按名字登记为 `community`，已有的发布者行不被索引改写。同意、授权、节点加载、review、插件列表都按“版本行的级别，没有时发布者行的级别”。发布者在索引里吊销或缺失时 403 `permission_denied`（`details.reason` 为 `revoked` / `publisher_unlisted`）。版本行 `signature_status` 新值 `indexed`；节点加载时这类版本不验签、只查发布者已登记且未被吊销。手动上传与内置插件不变。
 - **升级**：插件 id 相同就可以从商店升级，不管当前版本是手动上传、内置还是从商店装的。
-- **保留标识**：市场不再是可信渠道，第一方插件的键要索引把发布者列为 `official` 才能从市场占用（手动上传仍要官方签名，内置不变）。
+- **保留标识**：改为保留发布者 `sub2api`（见下一节），市场不是可信渠道。
 - **弃用**：`GET /market/plugins` 透传插件与版本的 `deprecated`；`latest_version`、`update_available` 不计弃用版本，弃用版本仍可安装。列表新增 `publisher_name`、`publisher_homepage`、`publisher_status`、`repo`、`source_url`、`builtin`，`trust` 改为索引的值。安装总是重新拉索引。
+- **商店列表**：`GET /market/plugins` 返回 `{data, host_version, generated_at, fetched_at}`，每项带 `id`、`display_id`、`store_id`、`store_name`、`publisher_github`，版本带 `sha256`。
 - **控制台**：插件市场页显示发布者名称与信任级别、吊销/缺失标记（禁止安装）、内置、弃用（原因）、主页/仓库/源码链接，可按发布者筛选；选版本时标出弃用版本并给出“更新说明”链接；确认页把 `indexed` 当作通过。
+
+### 插件 id = 发布者 + key（分支 `feat/plugin-identity`；迁移 0126，单向；CONTRACTS §137）
+
+- **插件 id**：第一方发布者 `sub2api` 的插件 id 就是 key，其他发布者的是 `_<发布者>__<key>`；核心以前存插件 key 的地方（插件行、表前缀与数据库身份、数据目录、权限键、任务名、`/plugins/:key`）都存 id，界面显示 `erio/codex` 这样的形式。不同发布者可以各有同名插件。已有插件都是 `sub2api` 的，数据不变。
+- **保留发布者**：清单发布者是 `sub2api` 的包只有官方级别才能装（403 `plugin_publisher_reserved`），取代保留键表。本地发布者的名字须是合规的发布者 id（小写字母、数字、单个下划线，最长 27），不能是 `sub2api`，也不能与官方商店索引里的发布者同名（409 `publisher_in_store`）。
+- **市场**：按 `(publisher, key)` 找插件，索引里同一对出现两次整份无效；预审与安装的请求体要带 `publisher`。
+- **迁移 0126**：装着非 `sub2api` 发布者的插件时升级失败并列出它们，要在上一个版本先卸载（释放标识），升级后重装。
 
 ## 2026-11-23
 

@@ -464,10 +464,10 @@ guard-0.1.0.s2plugin
 ```jsonc
 {
   "apiVersion": 1,
-  "key": "guard",                               // 全局唯一：小写字母、数字、下划线
+  "key": "guard",                               // 发布者内唯一：小写字母、数字、下划线；插件 id = 发布者 + key（CONTRACTS §137）
   "name": { "zh": "请求守卫", "en": "Guard" },
   "version": "0.1.0",                           // semver
-  "publisher": "sub2api",                       // 与 signature.json 中的发布者一致
+  "publisher": "sub2api",                       // 发布者 id，与 signature.json 中的发布者一致；sub2api 只给官方级别的包
   "runtime": "grpc",                            // 预留 "js"
   "entry": { "grpc": { "binaries": "runtimes/{os}-{arch}/plugin" } },
   "hostCompat": ">=0.1.0 <0.2.0",
@@ -685,8 +685,8 @@ stateDiagram-v2
 
 | 项目 | 做法 |
 |---|---|
-| 表 | 在核心的模式里（核心连接的 `current_schema()`，线上 `public`），表、索引、序列、视图一律以 `plg_<key>__` 开头（`manifest.TablePrefix`） |
-| 数据库身份 | 每个插件一个登录角色 `plg<库OID>_<key>`，密码由主密钥派生、不落库（设密码只发 SCRAM 校验值）；插件的表归它所有，核心的表和别的插件的表它没有权限。核心的用户要有 `CREATEROLE`，否则 `plugin_db_isolation_unavailable`，插件不启动 |
+| 表 | 在核心的模式里（核心连接的 `current_schema()`，线上 `public`），表、索引、序列、视图一律以 `plg_<插件 id>__` 开头（`manifest.TablePrefix`；第一方插件的 id 就是 key，其他发布者的是 `_<发布者>__<key>`，CONTRACTS §137） |
+| 数据库身份 | 每个插件一个登录角色 `plg<库OID>_<插件 id>`，密码由主密钥派生、不落库（设密码只发 SCRAM 校验值）；插件的表归它所有，核心的表和别的插件的表它没有权限。核心的用户要有 `CREATEROLE`，否则 `plugin_db_isolation_unavailable`，插件不启动 |
 | 连接 | `HostService.GetDSN` 一律给不带凭据的虚拟地址 `db.sub2api:5432`，连接经出口隧道到核心的 pgproxy，核心以插件的身份登录（`search_path` 为核心的模式）后原样转发协议；插件进程里没有数据库密码，核心的真实数据库地址任何插件都连不上 |
 | 插件以外的表 | 清单 `database.access` 逐表申请列和权限（select/insert/update/delete/references），要 `db.core_read`（极高风险）；授予记在该授予的范围里，升级多要任何东西都要重新同意；身份的 GRANT 照授予执行 |
 | 迁移脚本 | 核心临时给身份模式的 CREATE，以身份另开连接执行 `migrations/*.sql`，按文件名排序，每个文件一个事务；身份建了不带前缀的对象就回滚该文件；结束或失败都收回 CREATE |
@@ -1356,8 +1356,8 @@ flowchart TD
 
 ### 11.3 插件市场（本期只做客户端）
 
-- 只接受官方商店：索引地址是核心常量（只接受 HTTPS；`SUB2API_MARKET_URL` 只给测试栈与本地开发指向本地市场），控制台只读显示；`market_sources` 表留作以后可配置商店地址；索引是一个**不签名的静态 JSON 文件**（index.json v2，CONTRACTS §11.1），由登记处仓库 touwaeriol/sup2api-plugin 经 PR 审核（`sub2api-plugin registry check`）后 CI 用 `sub2api-plugin index` 生成（CONTRACTS §135）：发布者（信任级别、状态）、插件、版本、GitHub Release 下载地址、sha256、弃用标记
-- 控制台"插件市场"页：浏览、按发布者筛选、一键安装（下载 → 按索引校验大小与 sha256 → 进入授权确认）、检查已安装插件的更新（弃用的版本不算更新）
+- 商店可配置（CONTRACTS §137.6）：一个商店是一个登记处的 GitHub 仓库（`market_stores`），官方商店 touwaeriol/sup2api-plugin 固定存在；频道是仓库的分支（`market_sources`），索引在 `https://raw.githubusercontent.com/<仓库>/index-<分支>/index.json`，每个商店一个默认频道；只接受 HTTPS（`SUB2API_MARKET_BASE_URL` 只给测试栈与本地开发把官方商店指向本地市场）；第三方商店的包至多 `community`，发布者归属第一个登记它的商店；索引是一个**不签名的静态 JSON 文件**（index.json v2，CONTRACTS §11.1），由登记处仓库 touwaeriol/sup2api-plugin 经 PR 审核（`sub2api-plugin registry check`）后 CI 用 `sub2api-plugin index` 生成（CONTRACTS §135）：发布者（信任级别、状态）、插件、版本、GitHub Release 下载地址、sha256、弃用标记
+- 控制台"插件市场"页：先选商店再选频道，浏览、按发布者筛选、一键安装（下载 → 按索引校验大小与 sha256 → 进入授权确认）、检查已安装插件的更新（弃用的版本不算更新）
 - 可信来源是登记处仓库的审核与 HTTPS：没有索引签名，也没有市场公钥；从市场安装的包不看包签名，信任级别取自索引里发布者的 `trust`，记在这个版本上（`plugin_versions.trust_level`），不改本地发布者；发布者被吊销或不在索引中时拒绝安装；插件 id 相同即可从商店升级（CONTRACTS §136）
 
 ### 11.4 开发工具

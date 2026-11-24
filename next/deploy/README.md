@@ -59,10 +59,11 @@ using the dedicated Compose project `sub2api-next-e2e` by default.
 - Runtime `debian:trixie-slim`, user `sub2api` (1000), `/usr/local/bin/sub2api`,
   `/usr/local/bin/sub2api-plugin`, `/opt/sub2api/market/`, data in `/var/lib/sub2api`.
 - The entrypoint derives `SUB2API_PLUGIN_OFFICIAL_KEYS=sub2api-dev=<pub>` from
-  the dev public key unless it is set. The core reads only the official plugin
-  store; the e2e and single stacks point it at the bundled market with
-  `SUB2API_MARKET_URL` (and `SUB2API_MARKET_ALLOW_HTTP=true`, since that market
-  is plain http; CONTRACTS §136). The bundled market's `index.json` (v2, not
+  the dev public key unless it is set. The e2e and single stacks point the
+  official plugin store's base at the bundled market with
+  `SUB2API_MARKET_BASE_URL` (and `SUB2API_MARKET_ALLOW_HTTP=true`, since that
+  market is plain http; CONTRACTS §137.6); the market serves the same index
+  for every channel at `index-<branch>/index.json`. The bundled market's `index.json` (v2, not
   signed) is built by `build-demo.sh` with `sub2api-plugin registry import`
   and `index --dev` (CONTRACTS §135).
 

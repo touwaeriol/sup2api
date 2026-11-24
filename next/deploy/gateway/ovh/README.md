@@ -6,7 +6,7 @@
 >
 > 2026-10-27 清理：文中引用的本机 `artifacts/` 与 ovh 上 `~/sup2api/checks/`、旧 `release-*`、`~/sup2api-managed/{stage,backups,publish,ccgateway-images}/` 下的旧版本原始记录已删除，路径仅作出处；现存位置见 [CLI-TEST-PLAN](../../../plugins/ccgateway/docs/CLI-TEST-PLAN.md)。
 
-> 插件商店（迁移 0125，CONTRACTS §136）：核心只读官方商店 `https://raw.githubusercontent.com/touwaeriol/sup2api-plugin/index/index.json`（默认地址，控制台只读显示），compose 不再设 `SUB2API_MARKET_SOURCES`、`SUB2API_MARKET_ALLOW_HTTP`，本集群也没有本地市场服务（以前 `.env` 里的 `http://market:8080` 是单机栈的容器）。升级到带 0125 的核心前不用改 `.env`，升级后从两个节点的 `.env` 删掉 `MARKET_SOURCES`；步骤见 [市场 0125 发布手册](../../rollback/market-0125-release.md)。
+> 插件商店（迁移 0125，CONTRACTS §136、§137.6）：官方商店默认读 `https://raw.githubusercontent.com/touwaeriol/sup2api-plugin/index-<分支>/index.json`（频道“正式”是 `index-main`），compose 不设 `SUB2API_MARKET_BASE_URL`、`SUB2API_MARKET_ALLOW_HTTP`，也不再设 `SUB2API_MARKET_SOURCES`，本集群也没有本地市场服务（以前 `.env` 里的 `http://market:8080` 是单机栈的容器）。升级到带 0125 的核心前不用改 `.env`，升级后从两个节点的 `.env` 删掉 `MARKET_SOURCES`；步骤见 [市场 0125 发布手册](../../rollback/market-0125-release.md)。
 
 2026-11-21 核心 **0.1.305**（在 ovh 上从 touwaeriol/sup2api develop `c2cc87ceb` 构建，没有 tag、没有 Release；内置 codex 0.2.1；北京时间 04:21–04:22；无迁移，滚动；网关仍 0.1.139）：
 - 更新源：03:49:57 用 `~/rel304/update-source.py`（`sudo`，sup2api-1 的管理 socket `PUT /system/update-source`）把线上的更新源从 `Sub2API-Devs/sup2api` 改成 `touwaeriol/sup2api`（github、检测开启、无密钥，`revision` 0→1；输出 `~/rel304/update-source-{before,set,after,check}.out`）。touwaeriol 上 `gateway-v0.1.139` 有 Release（tag 推送触发，04:07:57 发布），`core-v0.1.304` 的运行停在 validate tag（第一个 `core-v*` 要手动给 `schema_before`），核心线没有 Release。
