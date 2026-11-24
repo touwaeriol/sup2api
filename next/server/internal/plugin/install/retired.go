@@ -110,8 +110,8 @@ func retiredByOther(q *gorm.DB, publisher *int64) (bool, error) {
 
 // keyRetired is the error of installing key retired by another publisher.
 func keyRetired(key string) error {
-	return ErrKeyRetired.WithMessage(fmt.Sprintf("plugin key %q belonged to an uninstalled plugin of another publisher; "+
-		"an administrator must release it first (POST /api/v1/plugins/retired-keys/%s/release), which can delete the accounts and data it left behind", key, key))
+	return ErrKeyRetired.WithMessage(fmt.Sprintf("plugin %q belonged to an uninstalled plugin of another publisher; "+
+		"an administrator must release it first (POST /api/v1/plugins/retired-keys/%s/release), which can delete the accounts and data it left behind", manifest.DisplayID(key), key))
 }
 
 // RetiredKey is a plugin_key_retirements row with what the plugin left.

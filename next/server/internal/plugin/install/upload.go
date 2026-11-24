@@ -280,7 +280,7 @@ func priorVersion(g *gorm.DB, p *pkg.Package) (priorUpload, error) {
 	case old.PackageSha256 == p.SHA256:
 		return priorUpload{found: true, consent: consent}, nil
 	}
-	return priorUpload{}, core.ErrConflict.WithMessage(fmt.Sprintf("version %s of %q was already uploaded with different content", m.Version, m.ID()))
+	return priorUpload{}, core.ErrConflict.WithMessage(fmt.Sprintf("version %s of %q was already uploaded with different content", m.Version, manifest.DisplayID(m.ID())))
 }
 
 // newPlugin is the plugins row of a first upload of m, awaiting consent.

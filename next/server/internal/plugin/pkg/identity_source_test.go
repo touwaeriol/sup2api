@@ -11,11 +11,9 @@ import (
 )
 
 // bareKeyAllowed are the files that may read a manifest's bare key, and how
-// often: the handshake compares it with what the plugin calls itself, and
-// the outdated-contract message names the plugin as the SDK's does.
+// often: the handshake compares it with what the plugin calls itself.
 var bareKeyAllowed = map[string]int{
 	"plugin/grpcruntime/instance.go": 2,
-	"plugin/grpcruntime/runtime.go":  1,
 }
 
 // The core keys a plugin by its id (CONTRACTS §137): production code reads

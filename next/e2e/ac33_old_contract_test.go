@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/protocol"
 	"github.com/tidwall/gjson"
 )
@@ -51,7 +52,7 @@ func TestAC33_OldContractPackagesRefused(t *testing.T) {
 			pkg := dp.Package(e, edit)
 			version := fmt.Sprint(pkg.Manifest(t)["version"])
 			r := e.UploadPlugin(admin, dp.Key+".s2plugin", pkg.Bytes(t))
-			want := protocol.OutdatedContractMessage(dp.Key, version, hostVersion)
+			want := protocol.OutdatedContractMessage(manifest.DisplayID(dp.ID), version, hostVersion)
 			if r.Status != http.StatusBadRequest || r.JSON().Get("error.message").String() != want {
 				t.Fatalf("upload: %s\nwant 400 with %q", r, want)
 			}
@@ -92,7 +93,7 @@ func TestAC33_OldContractPackagesRefused(t *testing.T) {
 			})
 		})
 		admin.API(t, http.MethodPost, "/plugins/"+dp.ID+"/enable", nil)
-		want := protocol.OutdatedContractMessage(dp.Key, version, hostVersion)
+		want := protocol.OutdatedContractMessage(manifest.DisplayID(dp.ID), version, hostVersion)
 		// The nodes refuse to prepare the version, with the one message, and
 		// the plugin list says so; the refusal the console shows outlives
 		// the failed rollout: the rollout kept the code with each node's

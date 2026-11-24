@@ -294,7 +294,7 @@ func TestPackAccountTypes(t *testing.T) {
 // a removed account grant - gets the host's one outdated-contract message
 // from every command that reads it, not a field or decode error.
 func TestOutdatedContract(t *testing.T) {
-	want := protocol.OutdatedContractMessage("demo", "0.1.0", protocol.FirstCoreVersion)
+	want := protocol.OutdatedContractMessage("tester/demo", "0.1.0", protocol.FirstCoreVersion)
 	grpc := `"runtime": "grpc"`
 	for name, old := range map[string]string{
 		"runtime none":       strings.Replace(demoManifest, grpc, `"runtime": "none"`, 1),

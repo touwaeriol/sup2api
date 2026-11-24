@@ -39,7 +39,7 @@ func OutdatedPackage(m *manifest.Manifest, manifestJSON []byte, hostVersion stri
 	if m == nil || !outdatedContract(Validate(m, map[string][]byte{"manifest.json": manifestJSON}, ValidateOptions{Tooling: true})) {
 		return "", false
 	}
-	return protocol.OutdatedContractMessage(m.Key, m.Version, hostVersion), true
+	return protocol.OutdatedContractMessage(manifest.DisplayID(m.ID()), m.Version, hostVersion), true
 }
 
 // What the single Execute path removed from the manifest.

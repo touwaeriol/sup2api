@@ -103,7 +103,7 @@ func (s *Service) checkResources(ctx context.Context, q *gorm.DB, m *manifest.Ma
 // except in dev mode.
 func checkReserved(m *manifest.Manifest, source, trust string, dev bool) error {
 	if release, ok := removedKeys[m.ID()]; ok {
-		return ErrReservedKey.WithMessage(fmt.Sprintf("plugin %q was removed in core %s and cannot be installed (see CHANGELOG %s)", m.ID(), release, release))
+		return ErrReservedKey.WithMessage(fmt.Sprintf("plugin %q was removed in core %s and cannot be installed (see CHANGELOG %s)", manifest.DisplayID(m.ID()), release, release))
 	}
 	if field, msg := reservedUse(m); field != "" {
 		return ErrReservedKey.WithMessage(msg)

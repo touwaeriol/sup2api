@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/protocol"
 )
 
@@ -72,7 +73,7 @@ func TestAC43_PluginAccountContext(t *testing.T) {
 			})
 			version := fmt.Sprint(pkg.Manifest(t)["version"])
 			r := e.UploadPlugin(admin, dp.Key+".s2plugin", pkg.Bytes(t))
-			if want := protocol.OutdatedContractMessage(dp.Key, version, hostVersion); r.Status != http.StatusBadRequest || r.JSON().Get("error.message").String() != want {
+			if want := protocol.OutdatedContractMessage(manifest.DisplayID(dp.ID), version, hostVersion); r.Status != http.StatusBadRequest || r.JSON().Get("error.message").String() != want {
 				t.Fatalf("upload with %v: %s\nwant 400 with %q", grant["id"], r, want)
 			}
 		}

@@ -36,9 +36,10 @@ const HostAPIVersion = runtimecontract.HostAPIVersion
 // ProtocolVersion, or a manifest the check rejects with
 // check.CodeOutdatedContract. hostVersion is the core's own version; the
 // version to look for is FirstCoreVersion, whatever core of the protocol
-// refuses. Upload, install and load all report exactly this.
-func OutdatedContractMessage(pluginKey, pluginVersion, hostVersion string) string {
-	return fmt.Sprintf(outdatedContractFormat, pluginKey, pluginVersion, hostVersion, ProtocolVersion, FirstCoreVersion)
+// refuses. Upload, install and load all report exactly this. displayID is
+// the plugin as people see it (manifest.DisplayID: "codex", "erio/codex").
+func OutdatedContractMessage(displayID, pluginVersion, hostVersion string) string {
+	return fmt.Sprintf(outdatedContractFormat, displayID, pluginVersion, hostVersion, ProtocolVersion, FirstCoreVersion)
 }
 
 const outdatedContractFormat = "plugin %s@%s was built for an older plugin protocol and cannot be loaded by this core (%s, plugin protocol %d); install a version built for core %s or later"

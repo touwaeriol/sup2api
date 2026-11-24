@@ -14,6 +14,7 @@ import (
 
 	runtimecontract "github.com/Sub2API-Devs/sup2api/next/runtime-contract"
 	"github.com/Sub2API-Devs/sup2api/next/runtime-contract/gormpg"
+	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest/check"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/migrations"
@@ -242,11 +243,11 @@ func approvedPluginsReady(ctx context.Context, db *store.DB, reg core.PluginRegi
 			continue
 		}
 		if gen == nil {
-			return "", fmt.Errorf("plugin %s has not loaded", p.Key)
+			return "", fmt.Errorf("plugin %s has not loaded", manifest.DisplayID(p.Key))
 		}
 		local, ok := gen.Plugin(p.Key)
 		if !ok || (local.Version != p.Active && local.Version != p.From && local.Version != p.Target) {
-			return "", fmt.Errorf("plugin %s has not converged to an approved version", p.Key)
+			return "", fmt.Errorf("plugin %s has not converged to an approved version", manifest.DisplayID(p.Key))
 		}
 		approved, err := gormpg.Exists(g, g.Model(&model.PluginVersion{}).
 			Where("plugin_key = ? AND version = ? AND consent_status = 'approved'", p.Key, local.Version))
@@ -254,10 +255,10 @@ func approvedPluginsReady(ctx context.Context, db *store.DB, reg core.PluginRegi
 			return "", err
 		}
 		if !approved {
-			return "", fmt.Errorf("plugin %s approval is missing", p.Key)
+			return "", fmt.Errorf("plugin %s approval is missing", manifest.DisplayID(p.Key))
 		}
 		if local.Manifest == nil {
-			return "", fmt.Errorf("plugin %s manifest is missing", p.Key)
+			return "", fmt.Errorf("plugin %s manifest is missing", manifest.DisplayID(p.Key))
 		}
 		granted, err := grants.Granted(ctx, db.Gorm, p.Key, local.Version, local.Manifest.HostPermissions)
 		if err != nil {
@@ -265,17 +266,17 @@ func approvedPluginsReady(ctx context.Context, db *store.DB, reg core.PluginRegi
 		}
 		for _, permission := range local.GrantedPermissions {
 			if _, ok := granted[permission]; !ok {
-				return "", fmt.Errorf("plugin %s permission revocation has not converged", p.Key)
+				return "", fmt.Errorf("plugin %s permission revocation has not converged", manifest.DisplayID(p.Key))
 			}
 		}
 		for _, permission := range local.Manifest.HostPermissions {
 			if _, ok := granted[permission.ID]; !ok && !permission.Optional {
-				return "", fmt.Errorf("plugin %s required permission %s is not granted", p.Key, permission.ID)
+				return "", fmt.Errorf("plugin %s required permission %s is not granted", manifest.DisplayID(p.Key), permission.ID)
 			}
 		}
 		compatible, err := check.HostCompatible(local.Manifest.HostCompat, hostVersion)
 		if err != nil || !compatible {
-			return "", fmt.Errorf("plugin %s is incompatible with core %s", p.Key, hostVersion)
+			return "", fmt.Errorf("plugin %s is incompatible with core %s", manifest.DisplayID(p.Key), hostVersion)
 		}
 	}
 	sort.Strings(evidence)

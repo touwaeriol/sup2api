@@ -117,7 +117,7 @@ func (s *Service) checkTarget(ctx context.Context, tx *gorm.DB, p *pkg.Package, 
 	case plugin == nil:
 		return checkRetiredKey(ctx, tx, m.ID(), ver.PublisherID)
 	case !sameID(plugin.PublisherID, ver.PublisherID):
-		return core.ErrConflict.WithMessage(fmt.Sprintf("plugin %q is owned by another publisher", m.ID()))
+		return core.ErrConflict.WithMessage(fmt.Sprintf("plugin %q is owned by another publisher", manifest.DisplayID(m.ID())))
 	}
 	return checkUninstall(ctx, tx, m.ID())
 }

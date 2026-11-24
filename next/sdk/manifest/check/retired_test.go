@@ -102,7 +102,7 @@ func TestOutdatedContract(t *testing.T) {
 		}
 		// The one decision upload, install, load and the CLI share reads
 		// the manifest alone.
-		if msg, outdated := OutdatedPackage(m, files["manifest.json"], "0.1.310"); !outdated || msg != protocol.OutdatedContractMessage(m.Key, m.Version, "0.1.310") {
+		if msg, outdated := OutdatedPackage(m, files["manifest.json"], "0.1.310"); !outdated || msg != protocol.OutdatedContractMessage(manifest.DisplayID(m.ID()), m.Version, "0.1.310") {
 			t.Errorf("%s: OutdatedPackage = %q, %v", tc.name, msg, outdated)
 		}
 	}

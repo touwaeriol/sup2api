@@ -195,11 +195,11 @@ func (r *Runtime) Load(ctx context.Context, pkg *registry.Package) (*Instance, e
 	}
 	binPath, sum, err := pkg.ExtractBinary(runtime.GOOS, runtime.GOARCH)
 	if err != nil {
-		return nil, fmt.Errorf("plugin %s@%s: %w", pkg.Key, pkg.Version, err)
+		return nil, fmt.Errorf("plugin %s@%s: %w", manifest.DisplayID(pkg.Key), pkg.Version, err)
 	}
 	st, err := r.loadSettings(ctx, pkg)
 	if err != nil {
-		return nil, fmt.Errorf("plugin %s@%s: load settings: %w", pkg.Key, pkg.Version, err)
+		return nil, fmt.Errorf("plugin %s@%s: load settings: %w", manifest.DisplayID(pkg.Key), pkg.Version, err)
 	}
 	inst := newInstance(r, pkg, binPath, sum, st)
 	if err := inst.startFirst(ctx); err != nil {
@@ -229,10 +229,10 @@ func (e *outdatedContractError) Is(target error) bool { return target == ErrOutd
 
 // outdatedContract is the one answer to a package of an older plugin
 // contract, whatever gave it away (cause): its manifest, the handshake of
-// its binary or the protocol version it reports. It names the manifest's
-// key, as the manifest check does (check.OutdatedPackage).
+// its binary or the protocol version it reports. It names the plugin as
+// people see it, as the manifest check does (check.OutdatedPackage).
 func (r *Runtime) outdatedContract(pkg *registry.Package, cause error) error {
-	return &outdatedContractError{msg: protocol.OutdatedContractMessage(pkg.Manifest.Key, pkg.Version, r.o.HostVersion), cause: cause}
+	return &outdatedContractError{msg: protocol.OutdatedContractMessage(manifest.DisplayID(pkg.Key), pkg.Version, r.o.HostVersion), cause: cause}
 }
 
 // checkContract rejects a package whose manifest is of an older plugin
@@ -256,7 +256,7 @@ func (r *Runtime) checkHostCompat(pkg *registry.Package) error {
 		return nil
 	}
 	if compatible, err := check.HostCompatible(pkg.Manifest.HostCompat, r.o.HostVersion); err != nil || !compatible {
-		return fmt.Errorf("plugin %s@%s is incompatible with host %s", pkg.Key, pkg.Version, r.o.HostVersion)
+		return fmt.Errorf("plugin %s@%s is incompatible with host %s", manifest.DisplayID(pkg.Key), pkg.Version, r.o.HostVersion)
 	}
 	return nil
 }
