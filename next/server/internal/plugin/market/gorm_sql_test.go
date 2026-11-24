@@ -10,20 +10,11 @@ import (
 
 // The SQL of the market statements built with GORM (see package gormtest).
 
-// EnsureStores points each channel at the base and brings back the
-// default one.
-func TestSQLMarketEnsureStores(t *testing.T) {
-	const base = "https://market.example/m"
-	t.Run("urls", func(t *testing.T) {
-		gormtest.Assert(t, func(db *gorm.DB) *gorm.DB {
-			return staleURLs(db, 2, base).Update("url", channelURLExpr(base))
-		})
-	})
-	t.Run("stores", func(t *testing.T) {
-		gormtest.Assert(t, func(db *gorm.DB) *gorm.DB {
-			var out []Store
-			return storeRows(db).Order("official DESC, id").Find(&out)
-		})
+// The stores, the official one first.
+func TestSQLMarketStores(t *testing.T) {
+	gormtest.Assert(t, func(db *gorm.DB) *gorm.DB {
+		var out []Store
+		return storeRows(db).Order("official DESC, id").Find(&out)
 	})
 }
 

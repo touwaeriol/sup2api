@@ -40,8 +40,7 @@ type MarketPlugin struct {
 	// PublisherGitHub are the GitHub logins the index lists for the
 	// publisher (who may register its plugins).
 	PublisherGitHub []string `json:"publisher_github,omitempty"`
-	// Trust is the publisher's trust level in the index, at most community
-	// for a store other than the official one (capTrust); "" when the index
+	// Trust is the publisher's trust level in the index; "" when the index
 	// does not list it.
 	Trust string `json:"trust"`
 	// PublisherStatus is active, revoked (in the index or on this core) or
@@ -139,18 +138,17 @@ func (st *listState) plugin(src *Source, idx *Index, p IndexPlugin) MarketPlugin
 	mp := MarketPlugin{StoreID: src.StoreID, StoreName: src.StoreName, SourceID: src.ID, SourceName: src.Name, ID: id, DisplayID: manifest.DisplayID(id), Key: p.Key,
 		Name: p.Name, Description: p.Description, Repo: p.Repo, SourceURL: p.Source, Builtin: p.Builtin, Deprecated: p.Deprecated,
 		Versions: []MarketVersion{}}
-	st.setPublisher(&mp, idx, p.Publisher, src.Official)
+	st.setPublisher(&mp, idx, p.Publisher)
 	latest := st.setVersions(&mp, p.Versions)
 	st.setInstalled(&mp, latest)
 	return mp
 }
 
-// setPublisher fills in the publisher id of mp as idx, of the official
-// store or not, lists it.
-func (st *listState) setPublisher(mp *MarketPlugin, idx *Index, id string, official bool) {
+// setPublisher fills in the publisher id of mp as idx lists it.
+func (st *listState) setPublisher(mp *MarketPlugin, idx *Index, id string) {
 	pub, ok := idx.publisher(id)
 	mp.Publisher, mp.PublisherName, mp.PublisherHomepage, mp.PublisherGitHub = id, pub.Name, pub.Homepage, pub.GitHub
-	mp.Trust, mp.PublisherStatus = capTrust(pub.Trust, official), pub.Status
+	mp.Trust, mp.PublisherStatus = pub.Trust, pub.Status
 	switch {
 	case !ok:
 		mp.PublisherStatus = PublisherMissing

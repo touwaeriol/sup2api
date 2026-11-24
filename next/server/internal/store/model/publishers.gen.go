@@ -14,7 +14,6 @@ type Publisher struct {
 	Status     *string    `gorm:"column:status;default:(-)"`                          // character varying(20) default 'active'::character varying
 	CreatedAt  time.Time  `gorm:"column:created_at;default:(-);autoCreateTime:false"` // timestamp with time zone default now()
 	RevokedAt  *time.Time `gorm:"column:revoked_at"`                                  // timestamp with time zone
-	StoreID    *int64     `gorm:"column:store_id"`                                    // bigint
 }
 
 // TableName implements gorm's schema.Tabler.

@@ -92,11 +92,15 @@ func parseIndex(raw []byte, allowHTTP bool) (*Index, error) {
 	return &idx, nil
 }
 
-// checkPlugins fails when two plugins of the index have one plugin id
-// (manifest.PluginID): a publisher lists a key once (CONTRACTS §11.1).
+// checkPlugins fails when a plugin of the index has no valid plugin id
+// (check.ValidatePluginID) or two have one plugin id (manifest.PluginID): a
+// publisher lists a key once (CONTRACTS §11.1).
 func (idx *Index) checkPlugins() error {
 	seen := make(map[string]bool, len(idx.Plugins))
 	for _, p := range idx.Plugins {
+		if err := check.ValidatePluginID(p.Publisher, p.Key); err != nil {
+			return fmt.Errorf("plugin %q of publisher %q: %w", p.Key, p.Publisher, err)
+		}
 		id := p.ID()
 		if seen[id] {
 			return fmt.Errorf("plugin %q of publisher %q is listed twice", p.Key, p.Publisher)

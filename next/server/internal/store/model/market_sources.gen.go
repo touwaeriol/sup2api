@@ -10,7 +10,6 @@ import (
 type MarketSource struct {
 	ID        int64     `gorm:"column:id;primaryKey;default:(-)"`                   // bigint default nextval('market_sources_id_seq'::regclass)
 	Name      string    `gorm:"column:name"`                                        // character varying(100)
-	URL       string    `gorm:"column:url"`                                         // text
 	Enabled   *bool     `gorm:"column:enabled;default:(-)"`                         // boolean default true
 	CreatedAt time.Time `gorm:"column:created_at;default:(-);autoCreateTime:false"` // timestamp with time zone default now()
 	Branch    string    `gorm:"column:branch"`                                      // character varying(64)

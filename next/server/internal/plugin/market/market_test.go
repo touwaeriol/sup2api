@@ -57,6 +57,8 @@ func serveIndex(t *testing.T, raw, pkgBytes []byte) (srv *httptest.Server, hits 
 		if r.URL.Path == "/m/index-main/index.json" {
 			*hits++
 			_, _ = w.Write(raw)
+		} else if r.URL.Path == "/m/index-rc/index.json" {
+			_, _ = w.Write(raw)
 		} else if body, ok := files[r.URL.Path]; ok {
 			_, _ = w.Write(body)
 		} else {
@@ -67,8 +69,8 @@ func serveIndex(t *testing.T, raw, pkgBytes []byte) (srv *httptest.Server, hits 
 	return srv, hits
 }
 
-// seedChannels points the channels at the base of s, twice (it is
-// idempotent), and returns the default channel's id.
+// seedChannels brings in the official store, twice (it is idempotent), and
+// returns the default channel's id.
 func seedChannels(t *testing.T, s *Service) int64 {
 	ctx := context.Background()
 	for range 2 {
@@ -148,11 +150,7 @@ func checkDownload(t *testing.T, s *Service, srcID int64, base string, pkgBytes 
 	if err != nil || !bytes.Equal(got, pkgBytes) {
 		t.Fatalf("download = %d bytes, %v", len(got), err)
 	}
-	src, err := s.channel(ctx, srcID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := pkg.IndexedPublisher{Name: "acme", Trust: pkg.TrustVerified, Status: pkg.PublisherActive, StoreID: src.StoreID}
+	want := pkg.IndexedPublisher{Name: "acme", Trust: pkg.TrustVerified, Status: pkg.PublisherActive}
 	if opt.ExpectID != "_acme__tool" || opt.ExpectVersion != "1.1.0" || opt.Source != fmt.Sprintf("market:%d", srcID) ||
 		opt.PackageURL != base+"pkgs/tool-1.1.0.s2plugin" || opt.Indexed == nil || *opt.Indexed != want {
 		t.Fatalf("options = %+v", opt)

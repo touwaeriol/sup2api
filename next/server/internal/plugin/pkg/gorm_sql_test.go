@@ -40,11 +40,11 @@ func TestSQLTrustRegisterOfficial(t *testing.T) {
 	})
 }
 
-// A market install registers its publisher as community, bound to the
-// index's store, unless it is registered.
+// A market install registers its publisher as community unless it is
+// registered.
 func TestSQLTrustRegisterIndexed(t *testing.T) {
 	gormtest.Assert(t, func(db *gorm.DB) *gorm.DB {
-		return registerIndexed(db, IndexedPublisher{Name: "acme", StoreID: 3})
+		return registerIndexed(db, IndexedPublisher{Name: "acme"})
 	})
 }
 

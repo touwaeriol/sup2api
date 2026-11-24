@@ -1,4 +1,4 @@
 -- sql
-SELECT c.id, c.store_id, st.name AS store_name, c.name, c.branch, c.url, c.enabled, c.is_default, c.created_at, st.official FROM market_sources AS c JOIN market_stores AS st ON st.id = c.store_id WHERE c.store_id = $1 ORDER BY st.official DESC, c.store_id, c.is_default DESC, c.id
+SELECT c.id, c.store_id, st.name AS store_name, c.name, c.branch, c.enabled, c.is_default, c.created_at, st.official, st.repo FROM market_sources AS c JOIN market_stores AS st ON st.id = c.store_id WHERE c.store_id = $1 ORDER BY st.official DESC, c.store_id, c.is_default DESC, c.id
 -- vars
 $1 int 2

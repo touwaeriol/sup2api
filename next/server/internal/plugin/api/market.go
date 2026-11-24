@@ -24,16 +24,6 @@ func (a *API) marketStores(c *gin.Context) {
 	reply(c, stores, err)
 }
 
-// createStore adds a third-party store (market.CreateStore).
-func (a *API) createStore(c *gin.Context) {
-	var in market.StoreInput
-	if !a.marketReady(c) || !httpapi.BindJSON(c, &in) {
-		return
-	}
-	st, err := a.d.Market.CreateStore(ctx(c), in, actor(c))
-	created(c, st, err)
-}
-
 // updateStore renames a store (market.UpdateStore).
 func (a *API) updateStore(c *gin.Context) {
 	var in market.StorePatch
@@ -43,15 +33,6 @@ func (a *API) updateStore(c *gin.Context) {
 	}
 	st, err := a.d.Market.UpdateStore(ctx(c), id, in, actor(c))
 	reply(c, st, err)
-}
-
-// deleteStore deletes a third-party store (market.DeleteStore).
-func (a *API) deleteStore(c *gin.Context) {
-	id, ok := httpapi.PathID(c, "id")
-	if !ok || !a.marketReady(c) {
-		return
-	}
-	noContent(c, a.d.Market.DeleteStore(ctx(c), id, actor(c)))
 }
 
 // marketSources lists the channels, of one store with ?store_id=

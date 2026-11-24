@@ -195,10 +195,11 @@ type hostVersion string
 func (v hostVersion) HostVersion() string { return string(v) }
 
 // ensureMarket checks the store's base (SUB2API_MARKET_BASE_URL) on every
-// node, then brings the store's channels in line with it
+// node, then brings back the official store and its default channel
 // (market.EnsureStores) on every start of a core that may coordinate
-// plugins: an unmanaged one, a bootstrap or the managed primary, so that an
-// upgrade or a changed base takes effect without a bootstrap.
+// plugins: an unmanaged one, a bootstrap or the managed primary. The
+// channels' index URLs follow the base when read, so a changed base needs
+// no write.
 func (b *boot) ensureMarket() error {
 	if err := b.mkt.ValidateBase(); err != nil {
 		return err

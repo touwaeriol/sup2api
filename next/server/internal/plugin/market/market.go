@@ -188,7 +188,11 @@ func Fetch(ctx context.Context, client *http.Client, u string, limit int64) ([]b
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, core.ErrUnavailable.WithMessage(fmt.Sprintf("market fetch %s: HTTP %d", redact(u), resp.StatusCode))
+		err := core.ErrUnavailable.WithMessage(fmt.Sprintf("market fetch %s: HTTP %d", redact(u), resp.StatusCode))
+		if resp.StatusCode == http.StatusNotFound {
+			err = err.WithCause(ErrNotPublished)
+		}
+		return nil, err
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
@@ -199,6 +203,10 @@ func Fetch(ctx context.Context, client *http.Client, u string, limit int64) ([]b
 	}
 	return b, nil
 }
+
+// ErrNotPublished is the cause of a market fetch answered 404: nothing is
+// published at the URL (a channel whose branch has no index yet).
+var ErrNotPublished = errors.New("not published")
 
 func redact(u string) string {
 	p, err := url.Parse(u)

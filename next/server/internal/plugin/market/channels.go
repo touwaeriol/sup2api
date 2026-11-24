@@ -2,6 +2,7 @@ package market
 
 import (
 	"context"
+	"errors"
 	"regexp"
 	"strconv"
 	"strings"
@@ -28,17 +29,39 @@ const (
 )
 
 // Source is a channel of a store: a market_sources row with its store.
+// URL is not stored but derived (Service.withURL).
 type Source struct {
 	ID        int64     `json:"id"`
 	StoreID   int64     `json:"store_id"`
 	StoreName string    `json:"store_name"`
 	Name      string    `json:"name"`
 	Branch    string    `json:"branch"`
-	URL       string    `json:"url"` // the channel's index, derived from the store's base and Branch
+	URL       string    `json:"url" gorm:"-"` // the channel's index
 	Enabled   bool      `json:"enabled"`
 	IsDefault bool      `json:"is_default"`
 	CreatedAt time.Time `json:"created_at"`
 	Official  bool      `json:"-"` // the store's
+	Repo      string    `json:"-"` // the store's
+	// Warning is set on a channel just created whose index cannot be read
+	// yet (WarningNoIndex); the channel is saved anyway.
+	Warning string `json:"warning,omitempty" gorm:"-"`
+}
+
+// WarningNoIndex is the warning of a new channel whose branch has
+// no readable index yet: CI publishes index-<branch> after its first push.
+const WarningNoIndex = "no_index"
+
+// probe fetches the index at url once: "" when it reads, WarningNoIndex
+// otherwise.
+func (s *Service) probe(ctx context.Context, url string) string {
+	u, err := s.indexURL(url)
+	if err == nil {
+		_, err = s.fetchIndex(ctx, u.String())
+	}
+	if err != nil {
+		return WarningNoIndex
+	}
+	return ""
 }
 
 // branchRe is the rule of a channel's branch: one git ref name segment.
@@ -47,7 +70,7 @@ var branchRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
 // sources selects market_sources rows with their store as Source.
 func sources(db *gorm.DB) *gorm.DB {
 	return db.Table("market_sources AS c").Joins("JOIN market_stores AS st ON st.id = c.store_id").
-		Select("c.id, c.store_id, st.name AS store_name, c.name, c.branch, c.url, c.enabled, c.is_default, c.created_at, st.official")
+		Select("c.id, c.store_id, st.name AS store_name, c.name, c.branch, c.enabled, c.is_default, c.created_at, st.official, st.repo")
 }
 
 // ListSources returns the channels of store storeID (every store's for
@@ -61,16 +84,23 @@ func (s *Service) ListSources(ctx context.Context, storeID int64) ([]Source, err
 	if err := q.Find(&out).Error; err != nil {
 		return nil, err
 	}
+	for i := range out {
+		s.withURL(&out[i])
+	}
 	return out, nil
 }
 
 // source is the enabled channel id, the official store's default one for 0.
 func (s *Service) source(ctx context.Context, id int64) (*Source, error) {
-	q := sources(store.G(ctx, s.db.Gorm))
+	q := sources(store.G(ctx, s.db.Gorm)).Where("c.id = ?", id)
 	if id == 0 {
-		return takeSource(q.Where("st.official AND c.is_default"))
+		q = sources(store.G(ctx, s.db.Gorm)).Where("st.official AND c.is_default")
 	}
-	return takeSource(q.Where("c.id = ?", id))
+	src, err := takeSource(q)
+	if err != nil {
+		return nil, err
+	}
+	return s.withURL(src), nil
 }
 
 // takeSource reads the channel q selects: 404 when it is missing or
@@ -93,7 +123,8 @@ func takeSource(q *gorm.DB) (*Source, error) {
 // ListsPublisher reports whether the index of an enabled channel of the
 // official store, fetched afresh, lists publisher id
 // (install.StorePublishers): a publisher of the test channel reaches
-// production when its branch is merged.
+// production when its branch is merged. A channel whose index is not
+// published (404) lists no one; any other failure to read one refuses.
 func (s *Service) ListsPublisher(ctx context.Context, id string) (bool, error) {
 	var ids []int64
 	g := store.G(ctx, s.db.Gorm)
@@ -104,7 +135,10 @@ func (s *Service) ListsPublisher(ctx context.Context, id string) (bool, error) {
 	}
 	for _, src := range ids {
 		idx, _, err := s.Index(ctx, src, true)
-		if err != nil {
+		switch {
+		case errors.Is(err, ErrNotPublished):
+			continue // a channel without an index yet lists no one
+		case err != nil:
 			return false, err
 		}
 		if _, ok := idx.publisher(id); ok {
@@ -143,7 +177,7 @@ func (s *Service) CreateChannel(ctx context.Context, storeID int64, in ChannelIn
 	if err != nil {
 		return nil, err
 	}
-	row := model.MarketSource{StoreID: st.ID, Name: in.Name, Branch: in.Branch, URL: channelURL(s.storeBase(st.Official, st.Repo), in.Branch)}
+	row := model.MarketSource{StoreID: st.ID, Name: in.Name, Branch: in.Branch}
 	err = s.db.Tx(ctx, func(tx *gorm.DB) error {
 		if err := store.G(ctx, tx).Create(&row).Error; err != nil {
 			return err
@@ -153,7 +187,11 @@ func (s *Service) CreateChannel(ctx context.Context, storeID int64, in ChannelIn
 	if err != nil {
 		return nil, channelError(err)
 	}
-	return s.channel(ctx, row.ID)
+	src, err := s.channel(ctx, row.ID)
+	if err == nil {
+		src.Warning = s.probe(ctx, src.URL)
+	}
+	return src, err
 }
 
 // UpdateChannel renames, enables or disables channel id or makes it its
@@ -177,9 +215,10 @@ func (s *Service) UpdateChannel(ctx context.Context, id int64, p ChannelPatch, a
 }
 
 // applyPatch sets the columns set of p on channel id, which it locks
-// first; a new default takes the place of its store's old one.
+// first; a new default takes the place of its store's old one, under the
+// lock of the store so that concurrent new defaults take turns.
 func applyPatch(g *gorm.DB, id int64, p ChannelPatch, set map[string]any) error {
-	cur, err := lockChannel(g, id)
+	cur, err := lockRow[model.MarketSource](g, id, "market channel")
 	if err != nil {
 		return err
 	}
@@ -187,6 +226,9 @@ func applyPatch(g *gorm.DB, id int64, p ChannelPatch, set map[string]any) error 
 		return err
 	}
 	if p.makesDefault() {
+		if _, err := lockRow[model.MarketStore](g, cur.StoreID, "plugin store"); err != nil {
+			return err
+		}
 		if err := otherDefault(g, cur).Update("is_default", false).Error; err != nil {
 			return err
 		}
@@ -198,7 +240,7 @@ func applyPatch(g *gorm.DB, id int64, p ChannelPatch, set map[string]any) error 
 func (s *Service) DeleteChannel(ctx context.Context, id int64, actorID int64) error {
 	err := s.db.Tx(ctx, func(tx *gorm.DB) error {
 		g := store.G(ctx, tx)
-		cur, err := lockChannel(g, id)
+		cur, err := lockRow[model.MarketSource](g, id, "market channel")
 		if err != nil {
 			return err
 		}
@@ -222,20 +264,7 @@ func (s *Service) channel(ctx context.Context, id int64) (*Source, error) {
 	if err := sources(store.G(ctx, s.db.Gorm)).Where("c.id = ?", id).Take(&src).Error; err != nil {
 		return nil, err
 	}
-	return &src, nil
-}
-
-// lockChannel reads and locks channel id: 404 when there is none.
-func lockChannel(g *gorm.DB, id int64) (*model.MarketSource, error) {
-	if err := store.RequireTx(g); err != nil {
-		return nil, err
-	}
-	var row model.MarketSource
-	err := g.Where("id = ?", id).Clauses(store.ForUpdate()).Take(&row).Error
-	if store.IsNoRows(err) {
-		return nil, core.ErrNotFound.WithMessage("market channel not found")
-	}
-	return &row, err
+	return s.withURL(&src), nil
 }
 
 // otherDefault selects the default channel of cur's store unless it is cur.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
@@ -17,8 +18,7 @@ import (
 // publisher must be listed active (403 otherwise,
 // pkg.IndexedPublisher.Check). The options are the ones to hand it to the
 // installer with (install.Upload, ReviewPackage, InstallWithConsent): its
-// trust level is the index's (at most community from a store other than the
-// official one), not its signature's (CONTRACTS §136, §137.6).
+// trust level is the index's, not its signature's (CONTRACTS §136, §137.6).
 func (s *Service) Download(ctx context.Context, sourceID int64, publisher, key, version string) ([]byte, install.UploadOptions, error) {
 	e, err := s.findEntry(ctx, sourceID, publisher, key, version)
 	if err != nil {
@@ -68,14 +68,17 @@ func (s *Service) newEntry(src *Source, idx *Index, p *IndexPlugin, v *IndexVers
 	if err != nil {
 		return nil, core.ErrInvalidArgument.WithMessage(err.Error())
 	}
-	pub := idx.indexed(p.Publisher)
-	pub.Trust, pub.StoreID = capTrust(pub.Trust, src.Official), src.StoreID
-	return &entry{src: src, base: base, version: v, publisher: pub}, nil
+	return &entry{src: src, base: base, version: v, publisher: idx.indexed(p.Publisher)}, nil
 }
 
+// releaseAssetRe is the form of a package URL of the official store: the
+// .s2plugin asset of a GitHub release.
+var releaseAssetRe = regexp.MustCompile(`^https://github\.com/[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+/releases/download/[^/?#]+/[^/?#]+\.s2plugin$`)
+
 // downloadURL is the package URL of e resolved against its index URL:
-// https (http with AllowHTTP), for a version whose size is within the
-// download limit.
+// https (http with AllowHTTP), a GitHub release asset (releaseAssetRe)
+// unless the market is a local one (Options.BaseURL or AllowHTTP set), for
+// a version whose size is within the download limit.
 func (s *Service) downloadURL(e *entry) (string, error) {
 	ref, err := url.Parse(e.version.URL)
 	if err != nil {
@@ -85,10 +88,19 @@ func (s *Service) downloadURL(e *entry) (string, error) {
 	if !schemeAllowed(dl, s.opt.AllowHTTP) {
 		return "", core.ErrUnavailable.WithMessage("market entry url must be https")
 	}
+	if s.releasesOnly() && !releaseAssetRe.MatchString(dl.String()) {
+		return "", core.ErrUnavailable.WithMessage("market entry url must be https://github.com/<owner>/<repo>/releases/download/<tag>/<file>.s2plugin")
+	}
 	if e.version.Size > s.opt.MaxPackageBytes {
 		return "", core.ErrInvalidArgument.WithMessage(fmt.Sprintf("package size %d exceeds the limit of %d bytes", e.version.Size, s.opt.MaxPackageBytes))
 	}
 	return dl.String(), nil
+}
+
+// releasesOnly reports whether packages come from GitHub releases only: the
+// market is not a local one (SUB2API_MARKET_BASE_URL, SUB2API_MARKET_ALLOW_HTTP).
+func (s *Service) releasesOnly() bool {
+	return strings.TrimSpace(s.opt.BaseURL) == "" && !s.opt.AllowHTTP
 }
 
 // fetchChecked downloads the package at dl and checks it against the size

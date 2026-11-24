@@ -3,7 +3,6 @@ package market
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -15,7 +14,6 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/runtime-contract/gormpg"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/audit"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
-	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/pkg"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store/model"
 )
@@ -23,9 +21,9 @@ import (
 // A plugin store (CONTRACTS §137.6) is a GitHub repository of a plugin
 // registry, read at its base https://raw.githubusercontent.com/<repo>. Its
 // channels are branches: CI publishes a channel's index to the branch
-// index-<branch>. The official store is seeded and stays; an administrator
-// adds others, whose packages install with at most community trust and
-// never as the first-party publisher.
+// index-<branch>. Only the official store exists: migration 0125 seeds it
+// and it cannot be added or deleted; an administrator renames it and
+// manages its channels.
 const (
 	OfficialRepo      = "touwaeriol/sup2api-plugin"
 	OfficialStoreName = "官方商店"
@@ -42,9 +40,6 @@ type Store struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// repoRe is the rule of a store's repository: owner/name on GitHub.
-var repoRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$`)
-
 // maxName is the width of market_stores.name and market_sources.name.
 const maxName = 100
 
@@ -57,18 +52,21 @@ func officialBase(base string) string {
 	return strings.TrimSuffix(base, "/")
 }
 
-// storeBase is the base of the store of repo: the official store's
-// (Options.BaseURL) when official.
-func (s *Service) storeBase(official bool, repo string) string {
-	if official {
-		return s.base
-	}
-	return githubRaw + repo
-}
-
 // channelURL is the index URL of the channel of branch under base.
 func channelURL(base, branch string) string {
 	return base + "/index-" + branch + "/index.json"
+}
+
+// withURL derives the index URL of channel src from its store's base and
+// its branch: the official store's base is Options.BaseURL
+// (SUB2API_MARKET_BASE_URL), another store's its GitHub repository.
+func (s *Service) withURL(src *Source) *Source {
+	base := s.base
+	if !src.Official {
+		base = githubRaw + src.Repo
+	}
+	src.URL = channelURL(base, src.Branch)
+	return src
 }
 
 // ValidateBase checks the official store's base (Options.BaseURL) as a
@@ -82,9 +80,7 @@ func (s *Service) ValidateBase() error {
 }
 
 // EnsureStores brings the stores in line with this core at start: the
-// official store exists with a default channel (main unless it has one),
-// and each channel's url follows its store's base (a changed
-// SUB2API_MARKET_BASE_URL takes effect).
+// official store exists with a default channel (main unless it has one).
 func (s *Service) EnsureStores(ctx context.Context) error {
 	if err := s.ValidateBase(); err != nil {
 		return err
@@ -95,10 +91,7 @@ func (s *Service) EnsureStores(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if err := ensureDefault(g, id, channelURL(s.base, DefaultChannelBranch)); err != nil {
-			return err
-		}
-		return s.refreshURLs(g)
+		return ensureDefault(g, id)
 	})
 }
 
@@ -116,42 +109,16 @@ func ensureOfficial(g *gorm.DB) (int64, error) {
 	return id, err
 }
 
-// refreshURLs rewrites the url of each channel that does not follow its
-// store's base.
-func (s *Service) refreshURLs(g *gorm.DB) error {
-	var stores []model.MarketStore
-	if err := g.Select("id", "repo", "official").Find(&stores).Error; err != nil {
-		return err
-	}
-	for _, st := range stores {
-		base := s.storeBase(st.Official, st.Repo)
-		if err := staleURLs(g, st.ID, base).Update("url", channelURLExpr(base)).Error; err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// channelURLExpr is channelURL of each row's branch under base, in SQL.
-func channelURLExpr(base string) any {
-	return gorm.Expr("? || branch || ?", base+"/index-", "/index.json")
-}
-
-// staleURLs selects the channels of store id whose url does not follow base.
-func staleURLs(db *gorm.DB, id int64, base string) *gorm.DB {
-	return db.Model(&model.MarketSource{}).Where("store_id = ? AND url <> ? || branch || ?", id, base+"/index-", "/index.json")
-}
-
-// ensureDefault makes the main channel (at url) of store id its default,
-// enabled, unless the store has a default channel.
-func ensureDefault(g *gorm.DB, id int64, url string) error {
+// ensureDefault makes the main channel of store id its default, enabled,
+// unless the store has a default channel.
+func ensureDefault(g *gorm.DB, id int64) error {
 	ok, err := gormpg.Exists(g, g.Model(&model.MarketSource{}).Where("store_id = ? AND is_default", id))
 	if err != nil || ok {
 		return err
 	}
 	set := clause.Assignments(map[string]any{"enabled": true, "is_default": true})
 	return g.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "store_id"}, {Name: "branch"}}, DoUpdates: set}).
-		Create(&model.MarketSource{StoreID: id, Name: DefaultChannelName, Branch: DefaultChannelBranch, URL: url, IsDefault: true}).Error
+		Create(&model.MarketSource{StoreID: id, Name: DefaultChannelName, Branch: DefaultChannelBranch, IsDefault: true}).Error
 }
 
 // ListStores returns the stores, the official one first.
@@ -178,58 +145,10 @@ func (s *Service) store(ctx context.Context, id int64) (*Store, error) {
 	return &st, err
 }
 
-// StoreInput is the body of POST /market/stores: the store and the branch
-// of its default channel.
-type StoreInput struct {
-	Name   string `json:"name"`
-	Repo   string `json:"repo"`
-	Branch string `json:"branch"`
-}
-
 // StorePatch is the body of PATCH /market/stores/:id. A store's repository
 // does not change; another repository is another store.
 type StorePatch struct {
 	Name *string `json:"name"`
-}
-
-// CreateStore adds a third-party store with its default channel.
-func (s *Service) CreateStore(ctx context.Context, in StoreInput, actorID int64) (*Store, error) {
-	if err := in.check(); err != nil {
-		return nil, err
-	}
-	row := model.MarketStore{Name: in.Name, Repo: in.Repo}
-	err := s.db.Tx(ctx, func(tx *gorm.DB) error {
-		g := store.G(ctx, tx)
-		if err := g.Create(&row).Error; err != nil {
-			return err
-		}
-		ch := model.MarketSource{StoreID: row.ID, Name: DefaultChannelName, Branch: in.Branch,
-			URL: channelURL(s.storeBase(false, in.Repo), in.Branch), IsDefault: true}
-		if err := g.Create(&ch).Error; err != nil {
-			return err
-		}
-		return audit.Audit(ctx, tx, actorID, "market.store.create", "market_store", strconv.FormatInt(row.ID, 10), in)
-	})
-	if err != nil {
-		return nil, storeError(err)
-	}
-	return s.store(ctx, row.ID)
-}
-
-// check trims in's name and checks its fields.
-func (in *StoreInput) check() error {
-	in.Name, in.Repo = strings.TrimSpace(in.Name), strings.TrimSpace(in.Repo)
-	errs := nameErrors(in.Name)
-	if !validRepo(in.Repo) {
-		errs = append(errs, core.FieldError{Field: "repo", Code: "invalid_format", Message: "repo must be owner/name of a GitHub repository"})
-	}
-	if !validBranch(in.Branch) {
-		errs = append(errs, branchError())
-	}
-	if len(errs) > 0 {
-		return core.InvalidFields(errs...)
-	}
-	return nil
 }
 
 // UpdateStore renames store id.
@@ -257,42 +176,16 @@ func (s *Service) UpdateStore(ctx context.Context, id int64, p StorePatch, actor
 	return s.store(ctx, id)
 }
 
-// DeleteStore deletes third-party store id with its channels. The
-// publishers it registered stay, bound to no store.
-func (s *Service) DeleteStore(ctx context.Context, id int64, actorID int64) error {
-	var channels []int64
-	err := s.db.Tx(ctx, func(tx *gorm.DB) error {
-		g := store.G(ctx, tx)
-		st, err := lockStore(g, id)
-		if err != nil {
-			return err
-		}
-		if st.Official {
-			return core.ErrConflict.WithMessage("the official store cannot be deleted")
-		}
-		if err := g.Model(&model.MarketSource{}).Where("store_id = ?", id).Pluck("id", &channels).Error; err != nil {
-			return err
-		}
-		if err := g.Where("id = ?", id).Delete(&model.MarketStore{}).Error; err != nil {
-			return err
-		}
-		return audit.Audit(ctx, tx, actorID, "market.store.delete", "market_store", strconv.FormatInt(id, 10), map[string]any{"repo": st.Repo})
-	})
-	if err == nil {
-		s.forget(channels...)
-	}
-	return err
-}
-
-// lockStore reads and locks store id: 404 when there is none.
-func lockStore(g *gorm.DB, id int64) (*model.MarketStore, error) {
+// lockRow reads and locks row id of the table of T: 404 (what not found)
+// when there is none.
+func lockRow[T any](g *gorm.DB, id int64, what string) (*T, error) {
 	if err := store.RequireTx(g); err != nil {
 		return nil, err
 	}
-	var row model.MarketStore
+	var row T
 	err := g.Where("id = ?", id).Clauses(store.ForUpdate()).Take(&row).Error
 	if store.IsNoRows(err) {
-		return nil, core.ErrNotFound.WithMessage("plugin store not found")
+		return nil, core.ErrNotFound.WithMessage(what + " not found")
 	}
 	return &row, err
 }
@@ -306,35 +199,10 @@ func (s *Service) forget(ids ...int64) {
 	}
 }
 
-// capTrust is the trust level a store gives a publisher its index rates
-// trust: the index's for the official store, at most community for another
-// (CONTRACTS §137.6), which keeps it off the first-party publisher too.
-func capTrust(trust string, official bool) string {
-	if official || trust == "" {
-		return trust
-	}
-	return pkg.TrustCommunity
-}
-
 // nameErrors are the problems of a store's or channel's display name.
 func nameErrors(name string) []core.FieldError {
 	if name == "" || utf8.RuneCountInString(name) > maxName {
 		return []core.FieldError{{Field: "name", Code: "invalid", Message: fmt.Sprintf("name must be 1-%d characters", maxName)}}
 	}
 	return nil
-}
-
-// validRepo reports whether repo may name a store: owner/name on GitHub.
-func validRepo(repo string) bool {
-	_, name, _ := strings.Cut(repo, "/")
-	return repoRe.MatchString(repo) && name != "." && name != ".." && !strings.HasSuffix(name, ".git")
-}
-
-// storeError is err of a store write, a conflict for a repository another
-// store has.
-func storeError(err error) error {
-	if store.IsUniqueViolation(err, "") {
-		return core.ErrConflict.WithMessage("another store has this repository")
-	}
-	return err
 }

@@ -1,8 +1,0 @@
--- sql
-UPDATE "market_sources" SET "url"=$1 || branch || $2 WHERE store_id = $3 AND url <> $4 || branch || $5
--- vars
-$1 string "https://market.example/m/index-"
-$2 string "/index.json"
-$3 int64 2
-$4 string "https://market.example/m/index-"
-$5 string "/index.json"

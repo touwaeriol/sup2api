@@ -11,7 +11,8 @@ import (
 )
 
 // marketCase is one start of ensureMarket: the node's managed state, its
-// SUB2API_MARKET_BASE_URL and whether it writes the channels or fails.
+// SUB2API_MARKET_BASE_URL and whether it brings back the default channel
+// or fails.
 type marketCase struct {
 	name    string
 	managed *managedCore
@@ -23,8 +24,8 @@ type marketCase struct {
 const testStore = "https://store.example/s"
 
 // Every node checks SUB2API_MARKET_BASE_URL at start; only a core that may
-// coordinate plugins (unmanaged, bootstrap, managed primary) writes the
-// channels' urls.
+// coordinate plugins (unmanaged, bootstrap, managed primary) brings back a
+// lost default channel, whose index follows the base.
 func TestEnsureMarketGating(t *testing.T) {
 	preparing := func(p rc.PrepareRequest) *managedCore { return &managedCore{mode: "preparing", prepare: p} }
 	for _, tc := range []marketCase{
@@ -40,6 +41,9 @@ func TestEnsureMarketGating(t *testing.T) {
 
 func (tc marketCase) run(t *testing.T) {
 	db, ctx := testutil.DB(t), context.Background()
+	if _, err := db.SQL.ExecContext(ctx, `DELETE FROM market_sources`); err != nil {
+		t.Fatal(err)
+	}
 	mkt := market.New(db, nil, nil, market.Options{BaseURL: tc.url})
 	b := &boot{ctx: ctx, cfg: &config.Config{}, managed: tc.managed, mkt: mkt}
 	if err := b.ensureMarket(); (err != nil) != tc.fails {
@@ -49,7 +53,7 @@ func (tc marketCase) run(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if wrote := len(srcs) == 2 && srcs[0].URL == testStore+"/index-main/index.json"; wrote != tc.writes || len(srcs) != 2 {
+	if wrote := len(srcs) == 1 && srcs[0].IsDefault && srcs[0].URL == testStore+"/index-main/index.json"; wrote != tc.writes || len(srcs) > 1 {
 		t.Fatalf("sources = %+v, want written %v", srcs, tc.writes)
 	}
 }

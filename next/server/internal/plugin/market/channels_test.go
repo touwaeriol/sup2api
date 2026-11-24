@@ -2,6 +2,7 @@ package market
 
 import (
 	"context"
+	"net/http"
 	"testing"
 
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
@@ -13,6 +14,7 @@ import (
 func TestCreateChannel(t *testing.T) {
 	ctx := context.Background()
 	s := New(testutil.DB(t), fakeInstaller{}, nil, Options{})
+	githubOffline(s)
 	store := listChannels(t, s)[0].StoreID
 	create := func(name, branch string) func() error {
 		return func() error {
@@ -21,7 +23,7 @@ func TestCreateChannel(t *testing.T) {
 		}
 	}
 	rc, err := s.CreateChannel(ctx, store, ChannelInput{Name: " 候选 ", Branch: "rc-1.2"}, 0)
-	if err != nil || rc.Name != "候选" || rc.URL != OfficialBase+"/index-rc-1.2/index.json" || !rc.Enabled || rc.IsDefault || rc.StoreID != store {
+	if err != nil || rc.Name != "候选" || rc.URL != OfficialBase+"/index-rc-1.2/index.json" || !rc.Enabled || rc.IsDefault || rc.StoreID != store || rc.Warning != WarningNoIndex {
 		t.Fatalf("create = %+v %v", rc, err)
 	}
 	wantCode(t, "same branch", core.ErrConflict.Code, create("x", "rc-1.2"))
@@ -30,6 +32,20 @@ func TestCreateChannel(t *testing.T) {
 		wantCode(t, "branch "+b, core.ErrInvalidArgument.Code, create("n"+b, b))
 	}
 	wantCode(t, "missing store", core.ErrNotFound.Code, func() error { _, err := s.CreateChannel(ctx, 999, ChannelInput{Name: "x", Branch: "x"}, 0); return err })
+}
+
+// A new channel is saved whether or not its branch has an index yet; one
+// without warns (WarningNoIndex).
+func TestCreateChannelProbe(t *testing.T) {
+	ctx := context.Background()
+	s, _, _, _, _ := newMarket(t)
+	store := listChannels(t, s)[0].StoreID
+	for branch, warning := range map[string]string{"rc": "", "nightly": WarningNoIndex} {
+		ch, err := s.CreateChannel(ctx, store, ChannelInput{Name: branch, Branch: branch}, 0)
+		if err != nil || ch.Warning != warning {
+			t.Errorf("%s: %+v %v, want warning %q", branch, ch, err, warning)
+		}
+	}
 }
 
 // An administrator renames, enables, disables, defaults and deletes
@@ -68,5 +84,63 @@ func wantCode(t *testing.T, what, code string, fn func() error) {
 	t.Helper()
 	if e := core.AsError(fn()); e == nil || e.Code != code {
 		t.Errorf("%s: %v, want %s", what, e, code)
+	}
+}
+
+// Concurrent requests to make channels the default take turns on the
+// store: each succeeds and one default is left.
+func TestConcurrentDefault(t *testing.T) {
+	ctx := context.Background()
+	s := New(testutil.DB(t), fakeInstaller{}, nil, Options{})
+	githubOffline(s)
+	chs := listChannels(t, s)
+	for _, b := range []string{"a", "b", "c"} {
+		ch, err := s.CreateChannel(ctx, chs[0].StoreID, ChannelInput{Name: b, Branch: b}, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		chs = append(chs, *ch)
+	}
+	yes := true
+	errs := make(chan error, len(chs))
+	for _, ch := range chs {
+		go func() { _, err := s.UpdateChannel(ctx, ch.ID, ChannelPatch{IsDefault: &yes}, 0); errs <- err }()
+	}
+	for range chs {
+		if err := <-errs; err != nil {
+			t.Errorf("make default: %v", err)
+		}
+	}
+	all, err := s.ListSources(ctx, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaults := 0
+	for _, ch := range all {
+		if ch.IsDefault {
+			defaults++
+		}
+	}
+	if defaults != 1 {
+		t.Fatalf("%d defaults, want 1", defaults)
+	}
+}
+
+// The official store lists a publisher when an enabled channel's index
+// does; a channel whose index is not published (develop here) lists no
+// one, and a channel that cannot be read refuses.
+func TestListsPublisher(t *testing.T) {
+	ctx := context.Background()
+	s, _, _, _, _ := newMarket(t)
+	for id, want := range map[string]bool{"acme": true, "nobody": false} {
+		if got, err := s.ListsPublisher(ctx, id); err != nil || got != want {
+			t.Errorf("%s: %v %v, want %v", id, got, err, want)
+		}
+	}
+	s.client.Transport = roundTrip(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusBadGateway, Body: http.NoBody, Header: http.Header{}, Request: r}, nil
+	})
+	if _, err := s.ListsPublisher(ctx, "acme"); err == nil {
+		t.Fatal("an unreadable index lists no one")
 	}
 }
