@@ -106,8 +106,7 @@ func (e *Env) DerivedGuardPackage(pluginKey string, key *SigningKey, keepNative 
 		edit(m)
 	}
 	// The tables are named after the plugin id (manifest.TablePrefix): the
-	// migrations create the new id's (buildGuardBinary renames the
-	// binary's).
+	// migrations create the new id's (buildGuardBinary renames the binary's).
 	id := key.PluginID(pluginKey)
 	for p, b := range pkg {
 		if strings.HasPrefix(p, "migrations/") {

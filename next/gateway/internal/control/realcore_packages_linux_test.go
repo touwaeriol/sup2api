@@ -44,10 +44,7 @@ func TestRealCorePluginPackagesTravelBetweenNodes(t *testing.T) {
 		if strings.HasSuffix(r.URL.Path, ".s2plugin") {
 			marketPackageGets.Add(1)
 		}
-		if _, rest, ok := strings.Cut(strings.TrimPrefix(r.URL.Path, "/"), "/"); ok {
-			r.URL.Path = "/" + rest // index-<branch>/x -> x
-		}
-		http.FileServer(http.Dir(marketDir)).ServeHTTP(w, r)
+		serveChannels(w, r, marketDir)
 	}))
 	defer market.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
@@ -280,4 +277,13 @@ func firstMarketPlugin(t *testing.T, listing apiResponse) (string, string) {
 	}
 	t.Fatalf("market lists no plugin: %s", listing)
 	return "", ""
+}
+
+// serveChannels serves the market in dir as the index of every channel:
+// <base>/index-<branch>/x is dir/x.
+func serveChannels(w http.ResponseWriter, r *http.Request, dir string) {
+	if _, rest, ok := strings.Cut(strings.TrimPrefix(r.URL.Path, "/"), "/"); ok {
+		r.URL.Path = "/" + rest
+	}
+	http.FileServer(http.Dir(dir)).ServeHTTP(w, r)
 }
