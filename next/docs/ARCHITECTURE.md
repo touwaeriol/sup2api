@@ -1356,7 +1356,7 @@ flowchart TD
 
 ### 11.3 插件市场（本期只做客户端）
 
-- 商店可配置（CONTRACTS §137.6）：一个商店是一个登记处的 GitHub 仓库（`market_stores`），官方商店 touwaeriol/sup2api-plugin 固定存在；频道是仓库的分支（`market_sources`），索引在 `https://raw.githubusercontent.com/<仓库>/index-<分支>/index.json`，每个商店一个默认频道；只接受 HTTPS（`SUB2API_MARKET_BASE_URL` 只给测试栈与本地开发把官方商店指向本地市场）；第三方商店的包至多 `community`，发布者归属第一个登记它的商店；索引是一个**不签名的静态 JSON 文件**（index.json v2，CONTRACTS §11.1），由登记处仓库 touwaeriol/sup2api-plugin 经 PR 审核（`sub2api-plugin registry check`）后 CI 用 `sub2api-plugin index` 生成（CONTRACTS §135）：发布者（信任级别、状态）、插件、版本、GitHub Release 下载地址、sha256、弃用标记
+- 商店与频道（CONTRACTS §137.6）：商店是登记处的 GitHub 仓库（`market_stores`），只有官方商店 touwaeriol/sup2api-plugin（2026-11-24 用户定只有官方仓库能做商店，表留着以后扩展）；频道是仓库的分支（`market_sources`，可增删改），索引在 `https://raw.githubusercontent.com/<仓库>/index-<分支>/index.json`（地址读时推出，不存库），一个默认频道；只接受 HTTPS，包只从 GitHub Release 下载（`SUB2API_MARKET_BASE_URL` 只给测试栈与本地开发把官方商店指向本地市场）；索引是一个**不签名的静态 JSON 文件**（index.json v2，CONTRACTS §11.1），由登记处仓库 touwaeriol/sup2api-plugin 经 PR 审核（`sub2api-plugin registry check`）后 CI 用 `sub2api-plugin index` 生成（CONTRACTS §135）：发布者（信任级别、状态）、插件、版本、GitHub Release 下载地址、sha256、弃用标记
 - 控制台"插件市场"页：先选商店再选频道，浏览、按发布者筛选、一键安装（下载 → 按索引校验大小与 sha256 → 进入授权确认）、检查已安装插件的更新（弃用的版本不算更新）
 - 可信来源是登记处仓库的审核与 HTTPS：没有索引签名，也没有市场公钥；从市场安装的包不看包签名，信任级别取自索引里发布者的 `trust`，记在这个版本上（`plugin_versions.trust_level`），不改本地发布者；发布者被吊销或不在索引中时拒绝安装；插件 id 相同即可从商店升级（CONTRACTS §136）
 

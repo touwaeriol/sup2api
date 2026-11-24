@@ -266,14 +266,14 @@
 | GET `/plugins/:key/events` | `plugin:read` | 游标、积压、死信 |
 | GET `/ui/plugins` | `self:plugin_ui`（§80.1：会话天然持有，访问密钥须勾选） | 前端扩展：`[{key, version, asset_base, menus, pages, slots, account_actions, native_entry, trust}]`（按权限过滤） |
 | GET `/nodes` | `node:read` | |
-| GET `/market/sources`、GET `/market/plugins?source_id=` | `plugin:market:read` | 源为 `{id, name, url, enabled, created_at}`（没有 `public_key`）；不带 `source_id` 时列官方商店（§136.1），读不了时原样返回错误；插件列表的字段见 §136 |
+| GET `/market/stores`、GET `/market/sources`、GET `/market/plugins?source_id=&refresh=` | `plugin:market:read` | 商店与频道的形状见 §137.6（频道没有 `public_key`，`url` 由商店 base 与分支推出）；插件列表不带 `source_id` 时列官方商店的默认频道，`refresh=true` 现拉索引，读不了时原样返回错误；字段见 §136、§137.4 |
 | GET/POST `/publishers`，POST `/publishers/:id/keys`，POST `/publishers/:id/revoke`，POST `/publisher-keys/:key_id/revoke` | `publisher:read` / `publisher:manage` | |
 
 补充约定（C1）：
 - 插件配置加密存于 `plugin_installs.config_enc`，AES-GCM 的 AAD 为 `"plugin-config:"+key`；配置变更后在 `config:changed` 广播 `{"type":"config","plugin_key":k}`
 - 宿主版本取 `main.Version`，比较兼容范围时忽略预发布后缀
 - `/nodes` 中每个节点、插件详情 `nodes[]` 中每项的插件状态字段为 `state`（结构见 §15.3）；插件列表与详情的节点汇总都叫 `node_summary` `{total, states}`
-- 市场源只有一个：官方商店（名字 `official`，§136.1）。它的 `url` 可以指向 `index.json`，也可以是以 `/` 结尾的目录（自动补 `index.json`）；只接受 https，`SUB2API_MARKET_ALLOW_HTTP=true` 时也接受 http（§136）
+- 商店只有一个：官方商店（§137.6）。它的频道是仓库的分支，索引在 `<base>/index-<分支>/index.json`；只接受 https，`SUB2API_MARKET_ALLOW_HTTP=true` 时也接受 http（§136）
 - 插件详情中的钩子统计来自 `core.HookStatsSource`（G），手动执行任务通过 `core.JobTrigger`（H）
 - 发布行为（C2）：Disable 立即提交，返回时状态已是 `disabled`；Enable 优先启用 `active_version`，否则取最新的已批准版本；`plugins` 行删除后，各节点在一次对账内停止实例
 - **内置插件**（`plugins.builtin=true`，本期为 anthropic）：随镜像提供（`SUB2API_BUILTIN_PLUGIN_DIR`，默认 `/opt/sub2api/builtin`），核心启动时在一个节点上（锁 `plugins:builtin`）自动上传、授予全部宿主权限（新插件权限按 manifest `defaults` 授予角色，§4）、首次安装后启用（**只安装**类的除外，见 §26.8），镜像带新版本时自动升级；管理员禁用后保持禁用。签内置包的密钥始终信任：取 `SUB2API_BUILTIN_TRUST_KEY`（`keyId=base64pub`），未设时取内置目录的 `trust.pub` + `trust.keyid`（镜像与 Release 包都带）。`DELETE /plugins/:key` 对内置插件返回 403，`details.reason = "builtin"`；列表与详情返回 `builtin` 字段
@@ -9431,7 +9431,7 @@ Go 类型是 `expr.VisualConfig`、`TierConfig`、`TierCond`、`TokenPrices`、`
 
 ## 135. 插件商店的索引登记处与 `sub2api-plugin index` / `registry`（2026-11-24，用户定“全部去掉密钥”“包地址只限 GitHub Release”“下架两种都支持”“Release 带上发布包信息”；同日用户定插件身份是发布者加 key、版本记录只放在登记处、登记处分测试与正式两个频道，目录改为 `plugins/<publisher>/<key>/`、加 `source_digest` 与 `released-check`；工具部分；索引格式见 §11.1）
 
-官方商店的可信来源是索引仓库 touwaeriol/sup2api-plugin（PR 审核）加索引里审核过的 sha256，索引不签名，市场源没有公钥；核心读管理员配置的商店，官方商店就是这个仓库，第三方商店的仓库按同样的布局、用同一个工具生成索引（§137.6）。插件包仍可以带签名，手动上传与内置插件照旧验签。
+官方商店的可信来源是索引仓库 touwaeriol/sup2api-plugin（PR 审核）加索引里审核过的 sha256，索引不签名，市场源没有公钥；核心只有这一个商店（§137.6）。插件包仍可以带签名，手动上传与内置插件照旧验签。
 
 **频道**。商店是登记处这个仓库，频道是它的一个分支：分支 `<branch>` 的 index.json 由 CI 发布到分支 `index-<branch>`，地址是 `https://raw.githubusercontent.com/touwaeriol/sup2api-plugin/index-<branch>/index.json`。现在有两个频道：
 
@@ -9482,7 +9482,7 @@ sub2api-plugin released-check --plugins <插件目录的上级> --index <index.j
 
 测试：`tools/sub2api-plugin/registry_test.go`、`registry_check_test.go`、`registry_rules_test.go`、`registry_layout_test.go`、`released_test.go`（假 GitHub 与索引用 httptest，不访问网络）。
 
-## 136. 插件商店：信任取自索引，去掉密钥，只用 HTTPS，弃用（2026-11-24，用户定“全部去掉密钥”“包地址只限 GitHub Release”“下架两种都支持”“插件 id 一致都可以升级”；同日的“只接受官方的商店”已被可配置的商店与频道取代，§137.6；迁移 0125，单向）
+## 136. 插件商店：信任取自索引，去掉密钥，只用 HTTPS，弃用（2026-11-24，用户定“全部去掉密钥”“包地址只限 GitHub Release”“下架两种都支持”“插件 id 一致都可以升级”；同日 16:03 用户最终定“只有官方仓库能做商店”，它的频道可配置，§137.6；迁移 0125，单向）
 
 登记处仓库与 `sub2api-plugin index`、`registry` 的用法见 §135，index.json v2 的格式见 §11.1。这里是核心一侧的约定。
 
@@ -9490,24 +9490,24 @@ sub2api-plugin released-check --plugins <插件目录的上级> --index <index.j
 
 - 市场不再签名：没有 `index.json.sig`，核心只拉 `index.json`；`market.VerifyIndex`、`SignIndex`、`IndexSignaturePrefix` 与 v1 格式删除。
 - 市场源没有公钥：迁移 `0125_market_sources_drop_public_key.sql` 删除 `market_sources.public_key`；`GET /market/sources` 不再返回 `public_key`。
-- 商店、频道与它们的地址见 §137.6：核心读管理员配置的商店，官方商店（touwaeriol/sup2api-plugin）由 0125 种下，每个频道的索引在 `<商店 base>/index-<分支>/index.json`；`SUB2API_MARKET_SOURCES` 删除，`SUB2API_MARKET_BASE_URL` 只改官方商店的 base（e2e、单机栈与本地开发），由 `market.EnsureStores` 在能协调插件的核心上每次启动按它重算频道地址，网关外壳透传它。
-- 可信来源是登记处仓库（PR 审核）、HTTPS 与索引里审核过的 sha256：市场源地址与解析后的包地址只接受 `https://`；`SUB2API_MARKET_ALLOW_HTTP=true`（默认 false，网关外壳透传给核心）时也接受 `http://`，只给本地市场用（e2e 栈的 Caddy、`deploy/single`、网关真实核心测试的 httptest），生产不设。市场客户端只跟随到同样合规的地址的跳转（`market.CheckRedirect`，核心各节点下载市场包也用它），https 的源跳到 http 时请求失败。它不像 `SUB2API_PLUGIN_DEV_MODE` 那样关沙箱。`SUB2API_MARKET_BASE_URL` 不合规（`market.ValidateBase`）时每个节点都启动失败（主节点和从节点一样）。
+- 商店、频道与它们的地址见 §137.6：唯一的商店是官方商店（touwaeriol/sup2api-plugin，0125 种下），每个频道的索引在 `<商店 base>/index-<分支>/index.json`；`SUB2API_MARKET_SOURCES` 删除，`SUB2API_MARKET_BASE_URL` 只改官方商店的 base（e2e、单机栈与本地开发）。频道地址不存库，每次读频道时由 base 与分支推出，所以改了它重启即生效；网关外壳透传它。
+- 可信来源是登记处仓库（PR 审核）、HTTPS 与索引里审核过的 sha256：市场源地址与解析后的包地址只接受 `https://`；`SUB2API_MARKET_ALLOW_HTTP=true`（默认 false，网关外壳透传给核心）时也接受 `http://`，只给本地市场用（e2e 栈的 Caddy、`deploy/single`、网关真实核心测试的 httptest），生产不设。市场客户端只跟随到同样合规的地址的跳转（`market.CheckRedirect`，核心各节点下载市场包也用它），https 的源跳到 http 时请求失败。解析后的包地址还必须是 GitHub Release 的附件 `https://github.com/<owner>/<repo>/releases/download/<tag>/<文件>.s2plugin`（`market.releaseAssetRe`，与登记处的规则一致，§135），否则下载 503 `unavailable`；设了 `SUB2API_MARKET_BASE_URL` 或 `SUB2API_MARKET_ALLOW_HTTP` 的本地市场不限。它不像 `SUB2API_PLUGIN_DEV_MODE` 那样关沙箱。`SUB2API_MARKET_BASE_URL` 不合规（`market.ValidateBase`）时每个节点都启动失败（主节点和从节点一样）。
 - 手动上传与内置插件的包签名规则不变（官方根密钥、`publisher_keys`、`SUB2API_PLUGIN_ALLOW_UNSIGNED`）。
 
 ### 136.2 市场来源的信任取自索引
 
 - `market.Download`（`review-from-market`、`install-from-market` 共用）每次都重新拉索引（不用列表的缓存），再看该插件的发布者在索引里的状态：`active` 才下载；`revoked` 403 `permission_denied`，`details.reason = "revoked"`；索引的 `publishers` 里没有它 403 `permission_denied`，`details.reason = "publisher_unlisted"`。
-- 下载的包按索引的大小与 sha256 校验后交给安装器，`UploadOptions.Indexed` 带上索引里的发布者（`pkg.IndexedPublisher{Name, Trust, Status, StoreID}`；第三方商店的级别封顶 `community`、发布者归属商店，§137.6）。安装器对带 `Indexed` 的包不读签名（包签不签、签名对不对都不影响；市场包的签名一律不读，这是接受的取舍：信任来自登记处的审核与 sha256），改由 `TrustStore.VerifyIndexed` 决定信任：发布者须是清单的 `publisher`（否则 400 `fields[{field:"publisher", code:"publisher_mismatch"}]`）；本核心已吊销的发布者 403 `reason = "revoked"`。上传时按名字登记发布者：没有的以 `community` 建行（`ON CONFLICT DO NOTHING`），**已有的发布者行从不被索引改写**，所以索引的级别不会带到同名发布者手动上传的包上。预审只读（未登记时按 id 0 判断，与官方根密钥的预审相同）。
-- **信任按版本记**：索引给的级别写在这个版本行的 `plugin_versions.trust_level`（0125 新增，可空；手动上传与内置的版本为空）。运行时读信任的地方（同意、单项授权、节点加载与原生界面、review、插件列表与详情）一律用 `pkg.VersionTrust`：版本行有值用它，否则用发布者行的级别，都没有（未签名）为 `unsigned`。信任级别能申请什么不变（`pkg.CheckTrust`）；保留的发布者 `sub2api` 要官方级别（§137.3），所以第一方插件从市场安装要官方商店的索引把 `sub2api` 列为 `official`；第三方商店的级别封顶 `community`（§137.6）。
+- 下载的包按索引的大小与 sha256 校验后交给安装器，`UploadOptions.Indexed` 带上索引里的发布者（`pkg.IndexedPublisher{Name, Trust, Status}`）。安装器对带 `Indexed` 的包不读签名（包签不签、签名对不对都不影响；市场包的签名一律不读，这是接受的取舍：信任来自登记处的审核与 sha256），改由 `TrustStore.VerifyIndexed` 决定信任：发布者须是清单的 `publisher`（否则 400 `fields[{field:"publisher", code:"publisher_mismatch"}]`）；本核心已吊销的发布者 403 `reason = "revoked"`。上传时按名字登记发布者：没有的以 `community` 建行（`ON CONFLICT DO NOTHING`），**已有的发布者行从不被索引改写**，所以索引的级别不会带到同名发布者手动上传的包上。预审只读（未登记时按 id 0 判断，与官方根密钥的预审相同）。
+- **信任按版本记**：索引给的级别写在这个版本行的 `plugin_versions.trust_level`（0125 新增，可空；手动上传与内置的版本为空）。运行时读信任的地方（同意、单项授权、节点加载与原生界面、review、插件列表与详情）一律用 `pkg.VersionTrust`：版本行有值用它，否则用发布者行的级别，都没有（未签名）为 `unsigned`。信任级别能申请什么不变（`pkg.CheckTrust`）；保留的发布者 `sub2api` 要官方级别（§137.3），所以第一方插件从市场安装要官方商店的索引把 `sub2api` 列为 `official`。
 - **升级只看插件 id**（2026-11-24 用户定“只要我们插件的 id 一致都是可以升级的”）：插件 id 相同就可以从商店升级，不管当前版本是手动上传、内置还是从商店装的（发布者须相同的规则照旧）。
 - 版本行的 `signature_status` 记为新值 `indexed`（列没有取值约束；审计 `plugin.upload` 的 `signature_status` 同），`key_id` 为空，`publisher_id` 为登记的发布者。review、插件详情返回版本的 `trust` 与 `signature_status: "indexed"`；控制台确认页把 `indexed` 当作通过（“由商店索引担保”），不显示签名警告。
 - 同意（`install.Consent`）照旧检查发布者行的状态，级别按上面的版本信任，不再看索引。
 - 节点加载：`registry.TrustVerifier` 改调 `TrustStore.VerifyRecorded`：按版本行的 `signature_status`，`indexed` 不验签（包已按版本行的 sha256 校验），只要求发布者在本核心已登记且未被吊销（缺了发布者行按吊销报 403，不是数据库错误）；`revoked` 的版本一律不加载；其余照旧 `VerifyInstalled`。吊销发布者（`POST /publishers/:id/revoke`）同样把它的 `indexed` 版本改为 `revoked` 并禁用插件。
-- 索引的校验：发布者的 `id` 用与登记处工具相同的规则（`check.ValidatePublisherID`，2026-11-24 起是 `^[a-z0-9](_?[a-z0-9])*$`、至多 25 字节，§137.1），不合规整份索引无效；控制台原样打开的链接（发布者 `homepage`、插件 `source`、版本 `release_url`）不是绝对的 https 地址（开了 `SUB2API_MARKET_ALLOW_HTTP` 时也可以是 http）时丢弃该字段，索引照常可用。
+- 索引的校验：发布者的 `id` 用与登记处工具相同的规则（`check.ValidatePublisherID`，2026-11-24 起是 `^[a-z0-9](_?[a-z0-9])*$`、至多 25 字节，§137.1），不合规整份索引无效；插件的 `publisher` 与 `key` 组不成合规的插件 id（`check.ValidatePluginID`）时同样整份无效；控制台原样打开的链接（发布者 `homepage`、插件 `source`、版本 `release_url`）不是绝对的 https 地址（开了 `SUB2API_MARKET_ALLOW_HTTP` 时也可以是 http）时丢弃该字段，索引照常可用。
 
 ### 136.3 商店列表
 
-`GET /market/plugins` 每项新增：`publisher_name`（多语言，索引没有该发布者时省略）、`publisher_homepage`、`trust`（索引给发布者的级别，第三方商店封顶 `community`，§137.6；不在索引中时为空串，不再按本地 `publishers` 表取，也不再有 `unknown`）、`publisher_status`（`active`；`revoked`：索引里吊销或本核心吊销；`missing`：索引里没有）、`repo`、`source_url`（索引的 `source`）、`builtin`、`deprecated`（`{reason}`，省略即未弃用）；`versions[]` 新增 `release_url` 与 `deprecated`。`latest_version` 是兼容当前核心且未弃用的最新版本，`update_available` 只与它比较：弃用的版本既不是最新版本，也不触发“有更新”，但仍列出、仍可安装。整个插件弃用（`plugins[].deprecated`）只是透传标记，不影响 `latest_version`。
+`GET /market/plugins` 每项新增：`publisher_name`（多语言，索引没有该发布者时省略）、`publisher_homepage`、`trust`（索引给发布者的级别；不在索引中时为空串，不再按本地 `publishers` 表取，也不再有 `unknown`）、`publisher_status`（`active`；`revoked`：索引里吊销或本核心吊销；`missing`：索引里没有）、`repo`、`source_url`（索引的 `source`）、`builtin`、`deprecated`（`{reason}`，省略即未弃用）；`versions[]` 新增 `release_url` 与 `deprecated`。`latest_version` 是兼容当前核心且未弃用的最新版本，`update_available` 只与它比较：弃用的版本既不是最新版本，也不触发“有更新”，但仍列出、仍可安装。整个插件弃用（`plugins[].deprecated`）只是透传标记，不影响 `latest_version`。
 
 ### 136.4 控制台
 
@@ -9515,54 +9515,59 @@ sub2api-plugin released-check --plugins <插件目录的上级> --index <index.j
 
 ### 136.5 迁移与发布
 
-- 0125 单向：删除 `market_sources.public_key`，加 `plugin_versions.trust_level`。删掉的公钥此后任何核心都不用，回退只能恢复升级前的备份；可以重跑。改库，走 `primary-first-v1`。发布与回退步骤见 `next/deploy/rollback/market-0125-release.md`。
+- 0125（`0125_market_sources_drop_public_key.sql`）一个事务，先检查后改库，单向，改库走 `primary-first-v1`：
+  - 检查：装着清单发布者不是 `sub2api` 的插件、或留着这样的发布者退役的标识时，在改任何东西之前失败并列出它们（§137.5）。
+  - 本节的部分：删除 `market_sources.public_key`，加 `plugin_versions.trust_level`。
+  - 商店与频道的部分（§137.6）：建 `market_stores` 并种下官方商店；`market_sources` 加 `store_id`、`branch`、`is_default`，删除 `url`；第一次运行（还没有行带分支）时加“测试”/`develop`，把名为 `official` 的源行改成默认频道“正式”/`main`（保留 id），删除其他源行；商店没有默认频道时加“正式”/`main`。
+  - 可以重跑：重跑不改数据，管理员删掉、改过的频道保持原样。删掉的公钥、地址与源行此后任何核心都不用，回退只能恢复升级前的备份。预检查询（检查的两条 SQL、源行的名字）与发布、回退步骤见 `next/deploy/rollback/market-0125-release.md`。
 - 部署：生产（ovh、clicodeplus）不设 `SUB2API_MARKET_BASE_URL` 和 `SUB2API_MARKET_ALLOW_HTTP`，用官方商店的默认地址；compose 已删掉 `SUB2API_MARKET_SOURCES`。新核心不读 `SUB2API_MARKET_SOURCES`，旧核心照旧读它，所以发布前不用改 `.env`，升级后再从 `.env` 删掉 `MARKET_SOURCES`。用本地 http 市场的栈设 `SUB2API_MARKET_BASE_URL` 与 `SUB2API_MARKET_ALLOW_HTTP=true`（e2e、single 的 compose 已设），这样的栈要先换上透传这两个变量的网关再发核心。
-- 测试：`app`（`ensureMarket`：不受托管、bootstrap、主节点写入，从节点不写但仍检查 base）、`market`（`EnsureStores` 补回官方商店与默认频道、按 base 重算地址、不删频道，不带源 id 的列表读官方商店的默认频道、v2 解析、发布者 id、链接丢弃、跳转、发布者状态、弃用与最新版本、https 规则、下载拒绝吊销与缺失的发布者、下载重新拉索引）、`pkg`（`VerifyIndexed` 不改发布者行、`VerifyRecorded` 含缺失的发布者、`ReadVersionTrust`）、`install`（插件 id 相同即可从商店升级、索引列的发布者与已装插件不同时 409、版本信任、保留标识要索引的 official）、`plugin/api`（未签名的包经市场安装取得索引的 official，手动上传同一个包被拒；版本信任出现在列表与 review，发布者行仍是 community）、`registry`（加载时按版本行验签）。
+- 测试：`app`（`ensureMarket`：不受托管、bootstrap、主节点补回丢了的默认频道，从节点不写但仍检查 base；频道地址跟随 base）、`market`（`EnsureStores` 补回官方商店与默认频道、不删频道，不带源 id 的列表读官方商店的默认频道、v2 解析、发布者 id 与插件 id、链接丢弃、跳转、包地址只限 GitHub Release、发布者状态、弃用与最新版本、https 规则、下载拒绝吊销与缺失的发布者、下载重新拉索引）、`pkg`（`VerifyIndexed` 不改发布者行、`VerifyRecorded` 含缺失的发布者、`ReadVersionTrust`）、`install`（插件 id 相同即可从商店升级、索引列的发布者与已装插件不同时 409、版本信任、保留标识要索引的 official、官方发布者不能加密钥）、`plugin/api`（未签名的包经市场安装取得索引的 official，手动上传同一个包被拒；版本信任出现在列表与 review，发布者行仍是 community）、`registry`（加载时按版本行验签）、`migrations`（0125 的检查、首次运行与重跑）。
 
-## 137. 插件标识：发布者 + key；商店与频道（2026-11-24，用户定“插件 id = 发布者 + key”“商店 = 一个 GitHub 仓库，频道 = 分支”“商店可配置”；迁移 0125（未发布，原地修改）、0126，单向）
+## 137. 插件标识：发布者 + key；商店与频道（2026-11-24，用户定“插件 id = 发布者 + key”“商店 = 一个 GitHub 仓库，频道 = 分支”，16:03 定“只有官方仓库能做商店”；迁移 0125（未发布，原地修改），单向）
 
 ### 137.1 插件 id
 
 - `sdk/manifest/pluginid.go`：`OfficialPublisher = "sub2api"`，`PluginIDMaxLen = 30`。`PluginID(publisher, key)`：第一方发布者 `sub2api` 的插件 id 就是 key（`codex`），其他发布者是 `_<publisher>__<key>`（`_erio__codex`）；`(*Manifest).ID()`、`ParsePluginID(id)`、`DisplayID(id)`（给人看的形式：`codex`、`erio/codex`）。
-- 发布者 id 的规则（`check.ValidatePublisherID`）：`^[a-z0-9](_?[a-z0-9])*$`，不含 `-`、`__`，不以 `_` 结尾，至多 `check.PublisherIDMaxLen` = 25 字节（30 − `_` − `__` − 最短的 key 2 字节：再长就组不成合规的插件 id）；`check.ValidatePluginID(publisher, key)` 另要求 id 不超过 30 字节（清单检查报 `publisher/invalid_format`、`key/too_long`）。
+- 发布者 id 的规则（`check.ValidatePublisherID`）：`^[a-z0-9](_?[a-z0-9])*$`，不含 `-`、`__`，不以 `_` 结尾，至多 `check.PublisherIDMaxLen` = 25 字节（30 − `_` − `__` − 最短的 key 2 字节：再长就组不成合规的插件 id）；`check.ValidatePluginID(publisher, key)` 另要求 id 不超过 30 字节。清单检查：没有 `publisher` 报 `publisher/required`，不合规报 `publisher/invalid_format`，id 太长报 `key/too_long`；用户权限键的长度（至多 150 字节）按 `plugin.<插件 id>:<键>` 算。
 - 第一方的 id 以字母开头，其他的以 `_` 开头，两部分都不含 `__`：任何 id 的前缀 `plg_<id>__` 都不是另一个 id 前缀的开头，id 也是可以不加引号的 SQL 标识符片段。
 
 ### 137.2 核心按 id 存插件
 
 - 以前存“插件 key”的地方一律存插件 id，列名仍叫 `key`：`plugins.key` 与引用它的外键、`/plugins/:key` 路由、表前缀与数据库身份（§130）、数据目录、权限键 `plugin.<id>:…`、任务名 `plugin.<id>.<job>`、插件进程的 `SUB2API_PLUGIN_KEY`（`protocol.EnvPluginKey`）等。已有的行都是 `sub2api` 的，id 等于 key，数据不变。
-- 握手仍比对 `GetInfo.plugin_key` 与清单的裸 `key`，协议不变；`pkg` 的源码测试 `TestNoBareManifestKey` 保证生产代码只在握手（`grpcruntime/instance.go`）读清单的裸 key。
+- 握手仍比对 `GetInfo.plugin_key` 与清单的裸 `key`，协议不变（插件按裸 key 报自己；宿主给的 `SUB2API_PLUGIN_KEY` 是 id，测试插件 `grpcruntime/testdata/testplugin` 用 `manifest.ParsePluginID` 取回 key）；`pkg` 的源码测试 `TestNoBareManifestKey` 扫核心的 `internal` 与 `sdk/manifest/check`（`x.Manifest.Key`、`m.Key`、`v.m.Key`），保证生产代码只在握手（`grpcruntime/instance.go`）与清单检查 key 本身（`check/publisher.go`）时读清单的裸 key。
 - 安装时检查的独占资源（平台、网关端点、通知渠道）按插件 id 判断归属：`check.OthersFromManifests`、`ChannelsFromManifests` 的 `PluginID` 是 `m.ID()`，与正在装的插件的 `m.ID()` 比较；核心从版本行读回其他插件的清单时按 `manifest.ParsePluginID` 还原发布者与 key。所以 `erio/codex` 声明官方 `codex` 已有的平台、端点或渠道时报 `platform_conflict`、`endpoint_conflict`、`channel_conflict`，升级官方 `codex` 不算冲突。
 - 工具同样按 id：`sub2api-plugin db diff|check` 以插件 id 的表前缀比对（生成的比对程序 `pgdbtool.DriftMain` 的 `-key` 收插件 id），`dev` 按 id 命名内置目录里的包。
-- 给人看的一律是 `display_id`（`manifest.DisplayID`）：过时契约的信息（`protocol.OutdatedContractMessage`，上传、安装、加载与 SDK 的检查同一条）、资源冲突、退役标识、插件归属与重复上传的错误信息、托管升级的插件检查都写 `erio/codex` 这样的形式。接口新增字段：插件列表与详情（`PluginSummary`）`publisher`、`display_id`；`GET /ui/plugins` 每项 `key`（id）、`publisher`、`display_id`；review 的 `plugin_key` 是 id，另有 `publisher`、`display_id`；退役标识（§55.1）`display_id`。`publisher` 从 id 推出（`pkg.IdentityOf`）。
+- 给人看的一律是 `display_id`（`manifest.DisplayID`）：过时契约的信息（`protocol.OutdatedContractMessage`，上传、安装、加载与 SDK 的检查同一条）、资源冲突、平台的归属（`registry`）、插件调用与授权的错误（`grpcruntime`）、节点取包的错误、退役标识、插件归属与重复上传的错误信息、托管升级的插件检查都写 `erio/codex` 这样的形式；错误详情里的 `plugin_key` 仍是 id。接口新增字段：插件列表与详情（`PluginSummary`）`publisher`、`display_id`；`GET /ui/plugins` 每项 `key`（id）、`publisher`、`display_id`；review 的 `plugin_key` 是 id，另有 `publisher`、`display_id`；退役标识（§55.1）`display_id`。`publisher` 从 id 推出（`pkg.IdentityOf`）。
 
 ### 137.3 保留的第一方发布者与本地发布者
 
 - 清单 `publisher` 是 `sub2api` 的包只有官方级别才能装：官方签名的手动上传、官方商店索引列为 `official` 的市场安装、内置安装；`SUB2API_PLUGIN_DEV_MODE` 下不限制。每次上传都检查，违反时 403 `plugin_publisher_reserved`。取代原来的保留键表；保留的平台、通知渠道与删除过的插件（`removedKeys`，都按 id）照旧 403 `plugin_key_reserved`（§55.2）。
-- 本地发布者（`POST /publishers`，手动上传的签名密钥）的名字就是发布者 id：须符合 137.1 的规则（400 `fields[{field:"name", code:"invalid_format"}]`），不能是 `sub2api`（`code:"reserved"`），也不能是官方商店（任一启用的频道，现拉索引）列出的发布者（409 `publisher_in_store`）；拉不到索引时拒绝。没有市场的节点（测试）不查商店。
+- 本地发布者（`POST /publishers`，手动上传的签名密钥）的名字就是发布者 id：须符合 137.1 的规则（400 `fields[{field:"name", code:"invalid_format"}]`），不能是 `sub2api`（`code:"reserved"`），也不能是官方商店（任一启用的频道，现拉索引）列出的发布者（409 `publisher_in_store`）；频道的索引还没发布（404）算没有列出，其他拉不到索引的情况拒绝。没有市场的节点（测试）不查商店。
+- 官方级别的发布者（`sub2api`，或任何 `trust_level = official` 的行）不能经 `POST /publishers/:id/keys` 加签名密钥（409）：第一方的密钥随核心配置，手动加的密钥会让手动上传的包取得官方级别。
 
 ### 137.4 市场按 (publisher, key) 找插件
 
 - 索引里同一对 `(publisher, key)` 出现两次整份作废（§11.1）；查找、已装状态都按 id。
 - `POST /plugins/review-from-market`、`/plugins/install-from-market` 的请求体：`{source_id?, publisher, key, version, consent?}`，`publisher`、`key`、`version` 必填；`source_id` 是频道 id，省略或 0 时用官方商店的默认频道，负数 400。
-- `GET /market/plugins?source_id=` 返回 `{data, host_version, generated_at, fetched_at}`：`generated_at` 是索引的 `generated_at`，`fetched_at` 是本核心最后一次拉取它的时间，核心还没拉到索引时两者都省略。每项新增 `id`、`display_id`、`store_id`、`store_name`、`publisher_github`（索引里发布者的 `github`，省略即无），`versions[]` 新增 `sha256`；`trust` 对第三方商店封顶 `community`（137.6）；去掉 2026-11-24 上午加的 `channel`。
+- `GET /market/plugins?source_id=` 返回 `{data, host_version, generated_at, fetched_at}`：`generated_at` 是索引的 `generated_at`，`fetched_at` 是本核心最后一次拉取它的时间，核心还没拉到索引时两者都省略。每项新增 `id`、`display_id`、`store_id`、`store_name`、`publisher_github`（索引里发布者的 `github`，省略即无），`versions[]` 新增 `sha256`；去掉 2026-11-24 上午加的 `channel`。
 
-### 137.5 迁移 0126
+### 137.5 迁移 0125 的检查
 
-`0126_plugin_id_guard.sql` 只检查、不改数据：`plugin_versions` 里有清单发布者不是 `sub2api` 的行时 `RAISE EXCEPTION`，列出插件 id 与发布者，提示在上一个版本先卸载它们（并释放标识），升级后重新安装。旧核心按裸 key 存其他发布者的插件，那个 key 现在是 `sub2api` 同名插件的 id，搬迁要连表、身份、数据目录、授权一起动，所以不做。可以重跑。
+0125（§136.5）开头的 `DO` 块只检查、不改数据，在改库之前：`plugin_versions` 里有清单发布者不是 `sub2api` 的行，或 `plugin_key_retirements` 里有发布者（`publishers.name`）不是 `sub2api` 的行时 `RAISE EXCEPTION`，列出插件 id 与发布者，提示在上一个版本先卸载它们并释放标识，升级后重新安装。旧核心按裸 key 存其他发布者的插件和它们退役的标识，那个 key 现在是 `sub2api` 同名插件的 id，搬迁要连表、身份、数据目录、授权一起动，所以不做。没有发布者的退役行（未签名的插件）不拦：它照旧挡住任何签名的发布者。原来单独的 0126 并入 0125（都未发布）。可以重跑。
 
 ### 137.6 商店与频道
 
-- **商店**是一个插件登记处的 GitHub 仓库，`market_stores`（`id, name, repo` 唯一, `official, created_at`），base 是 `https://raw.githubusercontent.com/<repo>`。官方商店（`touwaeriol/sup2api-plugin`，名字“官方商店”）由 0125 种下，不能删、仓库不能改，可以改名；`SUB2API_MARKET_BASE_URL`（只给 e2e、单机栈与本地开发）只改官方商店的 base。管理员可以加第三方商店（名字、仓库、默认频道的分支），改名，删除（连同频道）。市场页只显示商店的名字，仓库只在商店配置页显示。
-- **频道**是商店仓库的一个分支，CI 把它的索引发布到分支 `index-<分支>`，地址 `<base>/index-<分支>/index.json`。`market_sources` 的行就是频道：新增 `store_id`（外键，删商店级联）、`branch varchar(64)`、`is_default`；每个商店的分支、名字各唯一，每个商店恰好一个默认频道（部分唯一索引）。0125 把旧的 `official` 行改为官方商店的默认频道“正式”/`main`（保留 id），加“测试”/`develop`，删除其他行。分支须符合 `^[A-Za-z0-9._-]{1,64}$`，不含 `..`、不以 `.` 开头、不以 `.lock` 结尾。默认频道不能停用、不能删除、不能取消默认；另一个频道设为默认时原来的自动取消。
-- 启动：每个节点检查官方商店的 base（`market.ValidateBase`，https，开了 `SUB2API_MARKET_ALLOW_HTTP` 时也可以 http），不合规启动失败；能协调插件的核心（`coordinateAllowed`）每次启动由 `market.EnsureStores` 在一个事务里补回官方商店与它的默认频道（缺了时），并按各自商店的 base 重算每个频道的 `url`（改了 `SUB2API_MARKET_BASE_URL` 就生效），不删管理员留下的任何频道。网关外壳透传 `SUB2API_MARKET_BASE_URL`。
-- **第三方商店的信任**：非官方商店的包信任级别至多 `community`，不管索引怎么写（商店列表的 `trust` 同样封顶）；所以发布者 `sub2api` 只能来自官方商店（137.3）。发布者归属第一个在本核心登记它的商店：市场安装第一次建发布者行时记下 `publishers.store_id`（0125 新增，删商店时置空），手动登记的、或 0125 之前的发布者行在第一次商店安装时归属那个商店；之后从别的商店安装、升级它的插件一律 409 `publisher_other_store`（预审也是）。手动上传照旧按签名的规则。
+- **商店**是插件登记处的 GitHub 仓库，`market_stores`（`id, name, repo` 唯一, `official, created_at`），base 是 `https://raw.githubusercontent.com/<repo>`。2026-11-24 16:03 用户定“只有官方仓库能做商店”：唯一的商店是官方商店（`touwaeriol/sup2api-plugin`，名字“官方商店”），由 0125 种下，不能加、不能删、仓库不能改，可以改名；表与频道的 `store_id` 留着，以后可以扩展。`SUB2API_MARKET_BASE_URL`（只给 e2e、单机栈与本地开发）只改官方商店的 base。市场页只显示商店的名字，仓库只在商店配置页显示。
+- **频道**是商店仓库的一个分支，CI 把它的索引发布到分支 `index-<分支>`，地址 `<base>/index-<分支>/index.json`，不存库，读频道时由 base 与分支推出（`Source.URL`，接口照旧返回 `url`）。`market_sources` 的行就是频道：`store_id`（外键）、`branch varchar(64)`、`is_default`；每个商店的分支、名字各唯一，每个商店恰好一个默认频道（部分唯一索引）。0125 怎样种频道见 §136.5。分支须符合 `^[A-Za-z0-9._-]{1,64}$`，不含 `..`、不以 `.` 开头、不以 `.lock` 结尾。默认频道不能停用、不能删除、不能取消默认；另一个频道设为默认时原来的自动取消（先锁商店行，同时设默认的请求依次进行，不撞唯一索引）。新建频道时核心试拉一次它的索引：拉不到也照样保存，201 的频道带 `warning: "no_index"`（控制台提示“该分支暂时没有索引”）。
+- 启动：每个节点检查官方商店的 base（`market.ValidateBase`，https，开了 `SUB2API_MARKET_ALLOW_HTTP` 时也可以 http），不合规启动失败；能协调插件的核心（`coordinateAllowed`）每次启动由 `market.EnsureStores` 在一个事务里补回官方商店与它的默认频道（缺了时），不删管理员留下的任何频道。网关外壳透传 `SUB2API_MARKET_BASE_URL`。
+- 信任：包的信任级别就是官方商店索引给发布者的级别（§136.2），发布者 `sub2api` 要索引列为 `official`（137.3）。
 - 接口（读 `plugin:market:read`，写 `plugin:manage`）：
-  - `GET /market/stores` → `[{id, name, repo, official, created_at}]`，官方商店在前；`POST /market/stores` `{name, repo, branch}` → 201 商店（同时建默认频道“正式”/`branch`）；`PATCH /market/stores/:id` `{name}`；`DELETE /market/stores/:id` → 204（官方商店 409）。仓库重复 409，仓库格式不对 400 `fields[{field:"repo"}]`。
-  - `GET /market/sources?store_id=` → `[{id, store_id, store_name, name, branch, url, enabled, is_default, created_at}]`（不带 `store_id` 时列全部，官方商店在前，每个商店默认频道在前）；`POST /market/stores/:id/sources` `{name, branch}` → 201 频道；`PATCH /market/sources/:id` `{name?, enabled?, is_default?}`；`DELETE /market/sources/:id` → 204。名字或分支在商店内重复 409。
-  - 审计：`market.store.create|update|delete`、`market.channel.create|update|delete`。
-- “有更新”：市场页按正在看的频道算；已装插件列表的标记与计数按官方商店的默认频道。
-- 控制台：市场页先选商店（名字下拉，按浏览器记住），再选频道（启用的频道做标签，默认选默认频道）；不显示索引地址。系统设置下有“商店配置”页：商店表（官方商店的仓库只读）与每个商店的频道表（增、改名、启用、设为默认、删除）。
+  - `GET /market/stores` → `[{id, name, repo, official, created_at}]`（现在只有官方商店）；`PATCH /market/stores/:id` `{name}`。没有新建、删除商店的接口。
+  - `GET /market/sources?store_id=` → `[{id, store_id, store_name, name, branch, url, enabled, is_default, created_at}]`（不带 `store_id` 时列全部，官方商店在前，每个商店默认频道在前）；`POST /market/stores/:id/sources` `{name, branch}` → 201 频道（可能带 `warning`）；`PATCH /market/sources/:id` `{name?, enabled?, is_default?}`；`DELETE /market/sources/:id` → 204。名字或分支在商店内重复 409。
+  - 审计：`market.store.update`、`market.channel.create|update|delete`。
+- “有更新”：市场页按正在看的频道算；已装插件列表的标记、计数与“有更新”筛选按官方商店的默认频道（`GET /market/plugins` 不带 `source_id`）。
+- 控制台：市场页先选商店（名字下拉，列出配置的商店，现在只有一个），再选频道（启用的频道做标签，默认选默认频道，刷新按钮带 `refresh=true`）；不显示索引地址。系统设置下的“商店配置”页只有官方商店一张卡片：改名，频道表（增、改名、启用、设为默认、删除）。
 
 ### 137.7 测试
 
-`sdk/manifest/check`（`TestOwnersByPluginID`：第三方 `codex` 声明官方 `codex` 的平台、端点、渠道报冲突，官方 `codex` 自己的不算；`TestValidatePublisherID` 的 25 字节上限）、`tools/sub2api-plugin`（`db` 与 `dev` 的测试插件是第三方发布者的，表前缀 `plg__tester__demo__`）、`dbschema`（`TestPluginIDsCoexist`：`k` 与 `_k__codex` 并存、互不为 stray、清除一个不动另一个、拒绝不是 id 的形式）、`install`（`TestReservedPublisher`、`TestReservedPlatformOtherPublisher`、`TestReservedPublisherFromMarket`、`TestMarketSameKeyOtherPublisher`、`TestLocalPublisherID`、退役与渠道按 id）、`task`（任务名接受 `_erio__codex`）、`market`（按对查找、重复的对作废、频道与商店的增删改、第三方商店封顶 `community`、`EnsureStores`）、`pkg`（`TestVerifyIndexedStore`、`TestNoBareManifestKey`）、`migrations`（`TestMigration0125Stores`、`TestMigration0126Guard`）、e2e 的发布者 id 与派生插件的 id。
+`sdk/manifest/check`（`TestOwnersByPluginID`：第三方 `codex` 声明官方 `codex` 的平台、端点、渠道报冲突，官方 `codex` 自己的不算；`TestValidatePublisherID` 的 25 字节上限）、`tools/sub2api-plugin`（`db` 与 `dev` 的测试插件是第三方发布者的，表前缀 `plg__tester__demo__`）、`dbschema`（`TestPluginIDsCoexist`：`k` 与 `_k__codex` 并存、互不为 stray、清除一个不动另一个、拒绝不是 id 的形式）、`install`（`TestReservedPublisher`、`TestReservedPlatformOtherPublisher`、`TestReservedPublisherFromMarket`、`TestMarketSameKeyOtherPublisher`、`TestLocalPublisherID`、退役与渠道按 id）、`task`（任务名接受 `_erio__codex`）、`market`（按对查找、重复的对作废、插件 id 不合规作废、频道的增删改与新频道的索引试拉、同时设默认、商店改名、`EnsureStores`、`ListsPublisher` 对 404 的频道、包地址只限 GitHub Release）、`pkg`（`TestNoBareManifestKey`，含 `sdk/manifest/check`）、`sdk/manifest/check`（`TestUserPermissionKeyLengthByPluginID`、`TestManifestPublisherRequired`）、`install`（`TestAddKeyOfficialPublisher`）、`migrations`（`TestMigration0125Stores`、`TestMigration0125Seed`、`TestMigration0125GuardPlugins`、`TestMigration0125GuardRetirements`）、e2e 的发布者 id 与派生插件的 id。
