@@ -202,16 +202,8 @@ func (s *Service) AddPublisherKey(ctx context.Context, pubID int64, k KeyInput, 
 		return nil, core.InvalidFields(errs...)
 	}
 	err := s.d.DB.Tx(ctx, func(tx *gorm.DB) error {
-		var status string
-		err := store.G(ctx, tx).Model(&model.Publisher{}).Select("status").Where("id = ?", pubID).Clauses(store.ForUpdate()).Take(&status).Error
-		if store.IsNoRows(err) {
-			return core.ErrNotFound.WithMessage("publisher not found")
-		}
-		if err != nil {
+		if err := lockKeyTarget(store.G(ctx, tx), pubID); err != nil {
 			return err
-		}
-		if status != "active" {
-			return core.ErrConflict.WithMessage("publisher is revoked")
 		}
 		if err := insertKey(ctx, tx, pubID, k); err != nil {
 			return err
@@ -225,6 +217,29 @@ func (s *Service) AddPublisherKey(ctx context.Context, pubID int64, k KeyInput, 
 		return nil, err
 	}
 	return s.getPublisher(ctx, pubID)
+}
+
+// lockKeyTarget locks publisher pubID, which may get a signing key: active
+// and not official. The official publisher's keys come with the core (the
+// first-party key) and the official trust of others with the index; a key
+// added here would make hand uploads official.
+func lockKeyTarget(g *gorm.DB, pubID int64) error {
+	if err := store.RequireTx(g); err != nil {
+		return err
+	}
+	var pub model.Publisher
+	err := g.Select("status", "trust_level").Where("id = ?", pubID).Clauses(store.ForUpdate()).Take(&pub).Error
+	switch {
+	case store.IsNoRows(err):
+		return core.ErrNotFound.WithMessage("publisher not found")
+	case err != nil:
+		return err
+	case core.ValueOr(pub.Status, "") != pkg.PublisherActive:
+		return core.ErrConflict.WithMessage("publisher is revoked")
+	case pub.TrustLevel == pkg.TrustOfficial:
+		return core.ErrConflict.WithMessage("keys cannot be added to an official publisher")
+	}
+	return nil
 }
 
 func (s *Service) getPublisher(ctx context.Context, id int64) (*Publisher, error) {

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/pkg"
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/pkg/pkgtest"
 )
 
 // fakeStore lists the publishers of the official store's index; err fails
@@ -47,5 +48,21 @@ func TestLocalPublisherID(t *testing.T) {
 	e.svc.d.Store = fakeStore{err: errors.New("offline")}
 	if err := create("acme"); err == nil {
 		t.Fatal("created a publisher the store could not be asked about")
+	}
+}
+
+// An official publisher gets no signing key by hand: its key comes with
+// the core, and a key here would make its hand uploads official.
+func TestAddKeyOfficialPublisher(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	var id int64
+	err := e.svc.d.DB.SQL.QueryRowContext(ctx, `INSERT INTO publishers (name, trust_level) VALUES ('sub2api', 'official') RETURNING id`).Scan(&id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := pkgtest.NewKey("sub2api-x")
+	if _, err := e.svc.AddPublisherKey(ctx, id, KeyInput{KeyID: k.ID, PublicKey: k.PubB64()}, e.admin); errCode(err) != "conflict" {
+		t.Fatalf("add key to official: %v", err)
 	}
 }
