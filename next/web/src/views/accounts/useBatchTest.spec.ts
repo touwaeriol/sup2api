@@ -54,6 +54,15 @@ describe('batch account test without a time limit', () => {
     expect(mocks.toast).toHaveBeenCalledWith('批量测试已停止：成功 0，失败 0', 'info')
   })
 
+  it('counts the passed tests with warnings in the outcome (CONTRACTS §122.5)', async () => {
+    const warnings = [{ code: 'model_price_not_configured', message: '本地没有配置模型 m 的价格' }]
+    mocks.post.mockImplementation((path: string) => Promise.resolve({ ok: true, status: 200, latency_ms: 5, warnings: path === '/accounts/1/test' ? warnings : undefined }))
+    const { batch, tested } = setup()
+    await batch.batchTest([1, 2])
+    expect(tested).toHaveBeenCalledWith(1, expect.objectContaining({ ok: true, message: warnings[0].message }))
+    expect(mocks.toast).toHaveBeenCalledWith('批量测试完成：成功 2，失败 0；其中 1 个有警告', 'warning')
+  })
+
   it('aborts the batch when the page is left', async () => {
     const signals = hangingTests()
     const { w, batch } = setup()

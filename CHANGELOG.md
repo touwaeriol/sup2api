@@ -8,6 +8,11 @@
 
 开发完成、尚未上线的改动。发布时改成发布日期的一节，补上提交、实际版本号和发布过程。
 
+### 账号测试提示缺少模型价格（分支 `feat/account-test-price-check`；无迁移，滚动更新；CONTRACTS §122.5）
+
+- 账号测试照常测上游；测试成功时，如果模型（账号映射之前的名字）在账号的某个分组里没有价格（分组价和全局价都没有；账号不在分组时只看全局价），结果会带上 `warnings`（`model_price_not_configured`，列出缺价的分组）。原来测试成功、客户端调用却被 403 拒绝的情况，现在测试时就能看出来。
+- 成功的测试把警告写进最近测试的消息。控制台在模型测试弹窗里显示“成功，有警告”和警告提示条，账号列表“最近测试”显示“有警告”，模型测试和批量测试结束时的提示会附上有警告的个数。
+
 ### 插件商店：官方商店与频道、信任取自索引、去掉密钥、只用 HTTPS、弃用（分支 `feat/market`、`feat/market-official`、`feat/plugin-identity`；迁移 0125，单向，改库走 `primary-first-v1`；CONTRACTS §11.1、§136、§137.6；发布与回退见 `next/deploy/rollback/market-0125-release.md`）
 
 - **index.json v2**：核心只拉各频道的 `index.json`，不再有 `index.json.sig`；v2 带 `publishers`（`trust`、`status`、`github`）、插件的 `repo`/`source`/`builtin`/`deprecated`、版本的 `release_url`/`deprecated`/`source_digest`（核心忽略后者）。v1 与 `market.VerifyIndex`/`SignIndex` 删除。发布者 `id` 不合规时整份索引无效；`homepage`、`source`、`release_url` 不是 https 地址时丢弃该字段。

@@ -11,7 +11,7 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '@sub2api/host'
-import { SBadge, SButton, SCheckbox, SCode, SCopyButton, SDescItem, SDescriptions, SHint, SIcon, SInput, SLink, SModal, STable, toast, type TableColumn } from '@sub2api/ui'
+import { SAlert, SBadge, SButton, SCheckbox, SCode, SCopyButton, SDescItem, SDescriptions, SHint, SIcon, SInput, SLink, SModal, STable, toast, type TableColumn } from '@sub2api/ui'
 import type { Account, AccountLastTest, AccountTestResult, AccountType } from '@/api/types'
 import { ACCOUNT_ACTIONS, useScope } from '@/composables/useScope'
 import { useAbortScope } from '@/composables/useAbortScope'
@@ -20,7 +20,7 @@ import { errorMessage, notifyError } from '@/utils/errors'
 import { copyText } from '@/utils/format'
 import { runPool } from './pool'
 import { isModelId, splitModelIds } from './modelIds'
-import { LATENCY_CLASS, TEST_CONCURRENCY, candidateModels, formatLatency, lastTestOf, latencyLevel, mergeCandidates, prettyBody, summarize, withoutModels, type Candidate, type CandidateSource, type TestRow } from './accountTest'
+import { LATENCY_CLASS, TEST_CONCURRENCY, candidateModels, formatLatency, hasWarnings, lastTestOf, latencyLevel, mergeCandidates, prettyBody, summarize, withoutModels, type Candidate, type CandidateSource, type TestRow } from './accountTest'
 
 const props = defineProps<{ open: boolean; account: Account | null; accountType?: AccountType | null }>()
 const emit = defineEmits<{
@@ -133,8 +133,9 @@ async function runMany(list: TestRow[]) {
     return signal.aborted
   })
   const s = summarize(list)
-  const msg = t(stopped ? 'accounts.modelTest.stoppedToast' : 'accounts.modelTest.doneToast', { ok: s.ok, fail: s.fail })
-  toast(msg, s.fail ? 'warning' : stopped ? 'info' : 'success')
+  const warned = list.filter((r) => hasWarnings(r.result)).length
+  const msg = t(stopped ? 'accounts.modelTest.stoppedToast' : 'accounts.modelTest.doneToast', { ok: s.ok, fail: s.fail }) + (warned ? t('accounts.testWarnedSuffix', { n: warned }) : '')
+  toast(msg, s.fail || warned ? 'warning' : stopped ? 'info' : 'success')
 }
 const testAll = () => runMany(visible.value)
 const testSelected = () => runMany(rows.value.filter((r) => selected.has(r.model)))
@@ -224,8 +225,9 @@ function close() {
 function sourceLabel(s: CandidateSource) {
   return t(`accounts.modelTest.source.${s}`)
 }
-function stateBadge(r: TestRow): { tone: 'gray' | 'info' | 'success' | 'danger'; label: string } {
+function stateBadge(r: TestRow): { tone: 'gray' | 'info' | 'success' | 'warning' | 'danger'; label: string } {
   if (r.state === 'testing') return { tone: 'info', label: t('accounts.modelTest.state.testing') }
+  if (r.state === 'ok' && hasWarnings(r.result)) return { tone: 'warning', label: t('accounts.modelTest.state.okWarned') }
   if (r.state === 'ok') return { tone: 'success', label: t('accounts.modelTest.state.ok') }
   if (r.state === 'fail') return { tone: 'danger', label: t('accounts.modelTest.state.fail') }
   if (r.state === 'canceled') return { tone: 'gray', label: t('accounts.modelTest.state.canceled') }
@@ -319,7 +321,7 @@ function actualModel(r: TestRow): string {
         <!-- Like new-api: the outcome and request time; a failure lists what went wrong below it. -->
         <template #cell-state="{ row }">
           <div class="max-w-[26rem] space-y-0.5 text-xs">
-            <div class="flex items-center gap-2">
+            <div class="flex flex-wrap items-center gap-x-2 gap-y-0.5">
               <SBadge :tone="stateBadge(row).tone" dot>{{ stateBadge(row).label }}</SBadge>
               <span v-if="row.result" class="tabular-nums" :class="LATENCY_CLASS[latencyLevel(row.result.latency_ms)]" data-testid="model-test-duration">{{ t('accounts.modelTest.duration', { time: formatLatency(row.result.latency_ms) }) }}</span>
               <span v-if="row.result?.protocol" class="font-mono text-xxs text-fg-muted" :title="t('accounts.testProtocol')" data-testid="model-test-protocol">{{ row.result.protocol }}</span>
@@ -338,6 +340,8 @@ function actualModel(r: TestRow): string {
               <div v-if="requestId(row)" class="break-all font-mono text-xxs text-fg-muted" data-testid="model-test-request-id">Request ID: {{ requestId(row) }}</div>
               <SBadge v-if="row.result.error_source !== 'response' && effectBadge(row.result.effect)" :tone="effectBadge(row.result.effect)!.tone" :title="t('accounts.testEffectNotApplied')">{{ effectBadge(row.result.effect)!.label }}</SBadge>
             </template>
+            <!-- The upstream answered, but client calls would still fail (CONTRACTS §122.5). -->
+            <SAlert v-for="(w, i) in row.result?.warnings || []" :key="i" tone="warning" dense class="mt-1 break-all" data-testid="model-test-warning">{{ w.message }}</SAlert>
           </div>
         </template>
         <template #cell-actions="{ row }">

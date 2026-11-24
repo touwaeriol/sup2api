@@ -540,11 +540,12 @@ export default {
     selectVisible: '全选（当前 {n} 个）', selectFailed: '选中失败的', selected: '已选 {n} 个',
     noCandidates: '账号没有模型列表，插件也没有预设模型：可添加模型 ID、从上游获取，或用插件默认模型测试。', noMatch: '没有匹配的模型',
     notRun: '尚未测试', requested: '请求模型',
-    state: { idle: '未测试', testing: '测试中', ok: '成功', fail: '失败', canceled: '已取消' },
+    state: { idle: '未测试', testing: '测试中', ok: '成功', okWarned: '成功，有警告', fail: '失败', canceled: '已取消' },
     source: { account: '模型列表', mapping: '映射', default: '插件预设', upstream: '上游', custom: '自定义' },
     stop: '停止', testSelected: '测试所选（{n}）', testAll: '测试全部（{n}）', doneToast: '测试完成：成功 {ok}，失败 {fail}', stoppedToast: '测试已停止：成功 {ok}，失败 {fail}'
   },
-  lastTest: { column: '最近测试', never: '未测试', failed: '失败', testing: '测试中', model: '模型' },
+  testWarnedSuffix: '；其中 {n} 个有警告',
+  lastTest: { column: '最近测试', never: '未测试', failed: '失败', testing: '测试中', model: '模型', warned: '有警告' },
   batchTest: { run: '批量测试（{n}）', progress: '测试中 {done}/{total}', hint: '每个账号用插件默认模型测一次，最多同时 3 个', done: '批量测试完成：成功 {ok}，失败 {fail}', stopped: '批量测试已停止：成功 {ok}，失败 {fail}' },
   bulk: {
     edit: '批量编辑（{n}）', more: '更多批量操作', delete: '删除（{n}）',

@@ -477,10 +477,8 @@ var errViewPanicked = errors.New("account: list read failed")
 
 // fillGroups sets GroupIDs and Groups (ordered by group id).
 func (s *Service) fillGroups(ctx context.Context, ids []int64, byID map[int64]*View) error {
-	var refs []accountGroupRef
-	if err := store.G(ctx, s.d.DB.Gorm).Table("account_groups ag").Select("ag.account_id, g.id, g.name").
-		Joins("JOIN groups g ON g.id = ag.group_id").Where("ag.account_id = ANY(?)", store.Int64s(ids)).
-		Order("g.id").Scan(&refs).Error; err != nil {
+	refs, err := s.accountGroupRefs(ctx, ids)
+	if err != nil {
 		return err
 	}
 	for _, r := range refs {
@@ -491,7 +489,16 @@ func (s *Service) fillGroups(ctx context.Context, ids []int64, byID map[int64]*V
 	return nil
 }
 
-// accountGroupRef is one group of an account, as fillGroups reads it.
+// accountGroupRefs reads the groups of accounts ids, ordered by group id.
+func (s *Service) accountGroupRefs(ctx context.Context, ids []int64) ([]accountGroupRef, error) {
+	var refs []accountGroupRef
+	err := store.G(ctx, s.d.DB.Gorm).Table("account_groups ag").Select("ag.account_id, g.id, g.name").
+		Joins("JOIN groups g ON g.id = ag.group_id").Where("ag.account_id = ANY(?)", store.Int64s(ids)).
+		Order("g.id").Scan(&refs).Error
+	return refs, err
+}
+
+// accountGroupRef is one group of an account, as accountGroupRefs reads it.
 type accountGroupRef struct {
 	AccountID int64
 	ID        int64
