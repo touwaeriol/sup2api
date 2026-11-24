@@ -1,5 +1,5 @@
 // The store publishers tab's rows: the publishers of the store's listing
-// (default channel), with how many plugins each has in the store and how many of those are installed here.
+// (the official store's default channel), with how many plugins each has in the store and how many of those are installed here.
 import type { MarketPlugin } from '@/api/marketTypes'
 import type { PluginSummary, Trust } from '@/api/types'
 import { OFFICIAL_PUBLISHER } from '../pluginUtil'

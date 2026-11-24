@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // The store publishers tab: read-only, the publishers of the official store's
-// index (default channel) with their trust, status, GitHub logins (when the
+// index (its default channel) with their trust, status, GitHub logins (when the
 // core sends them), store plugins and installed plugins; changed by a pull
 // request to the store repository (CONTRACTS §136, §137).
 import { computed, onMounted } from 'vue'
@@ -8,7 +8,6 @@ import { useI18n } from 'vue-i18n'
 import { SBadge, SEmpty, SHint, SLink, STable, type TableColumn } from '@sub2api/ui'
 import TrustBadge from '../parts/TrustBadge.vue'
 import { useMarket } from '../useMarket'
-import { OFFICIAL_STORE_REPO } from '../marketChannels'
 import { storePublishers } from './storePublishers'
 
 const emit = defineEmits<{ count: [n: number] }>()
@@ -36,7 +35,7 @@ onMounted(async () => {
   <div>
     <p class="mb-3 text-sm text-fg-muted" data-testid="store-publishers-hint">
       {{ t('publishers.store.hint') }}
-      <SLink :href="`https://github.com/${OFFICIAL_STORE_REPO}`" external class="font-mono">{{ OFFICIAL_STORE_REPO }}</SLink>
+      <SLink v-if="market.store.value" :href="`https://github.com/${market.store.value.repo}`" external class="font-mono">{{ market.store.value.repo }}</SLink>
     </p>
     <STable :columns="columns" :rows="rows" :loading="market.loading.value || market.loadingStore.value" row-key="id" data-testid="store-publishers">
       <template #empty><SEmpty icon="market" :text="t('publishers.store.empty')" /></template>

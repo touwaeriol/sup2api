@@ -18,12 +18,13 @@ export interface StorePluginRef {
   key: string
 }
 
-/** The store's page of a plugin: its versions (of a channel, when named) and publisher. */
-export function marketPluginPath(m: StorePluginRef, channel?: number): RouteLocationRaw {
-  return { path: `/market/${enc(m.publisher)}/${enc(m.key)}`, query: channel ? { channel: String(channel) } : {} }
+/** The store's page of a plugin: its versions (of a store's channel, when named) and publisher. */
+export function marketPluginPath(m: StorePluginRef, channel?: { id: number; store_id: number }): RouteLocationRaw {
+  const query = channel ? { store: String(channel.store_id), channel: String(channel.id) } : {}
+  return { path: `/market/${enc(m.publisher)}/${enc(m.key)}`, query }
 }
 
-/** The store's configuration: its channels (system settings). */
+/** The stores' configuration: each store and its channels (system settings). */
 export const STORE_SETTINGS_PATH = '/settings/market'
 
 /** The consent page of a market version before anything is downloaded or registered. */

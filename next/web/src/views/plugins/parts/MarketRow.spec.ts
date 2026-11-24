@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { i18n } from '@/i18n'
-import { storePlugin } from '@/testing/marketFixtures'
+import { channel, storePlugin } from '@/testing/marketFixtures'
 import MarketRow from './MarketRow.vue'
 
 const tool = storePlugin('acme', 'tool', {
@@ -13,7 +13,7 @@ const tool = storePlugin('acme', 'tool', {
 
 const render = (props: Partial<InstanceType<typeof MarketRow>['$props']> = {}) =>
   mount(MarketRow, {
-    props: { plugin: tool, channel: 1, installedVersion: '', state: 'install', blocked: '', canInstall: true, ...props },
+    props: { plugin: tool, channel: channel(1), installedVersion: '', state: 'install', blocked: '', canInstall: true, ...props },
     global: { plugins: [i18n], stubs: { RouterLink: { props: ['to'], template: '<a><slot /></a>' } } }
   })
 

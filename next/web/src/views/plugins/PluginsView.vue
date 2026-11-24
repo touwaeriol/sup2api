@@ -28,7 +28,7 @@ const loading = ref(false)
 const q = ref('')
 const status = ref<string | null>(null)
 const fileInput = ref<HTMLInputElement>()
-/** The store's upgrades of the installed plugins (default channel). */
+/** The store's upgrades of the installed plugins (the official store's default channel). */
 const upgrades = usePluginUpgrades(items)
 
 const STATUSES = ['awaiting_consent', 'installed', 'enabling', 'enabled', 'upgrading', 'disabled']

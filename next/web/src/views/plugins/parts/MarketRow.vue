@@ -5,7 +5,7 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { SBadge, SButton, SHint, SIcon, SLink } from '@sub2api/ui'
-import type { MarketPlugin } from '@/api/marketTypes'
+import type { MarketPlugin, MarketSource } from '@/api/marketTypes'
 import { lt } from '@/i18n'
 import { deprecatedVersion, newerIncompatible, versionOf, type MarketState } from '../marketUtil'
 import { marketPluginPath } from '../consent/paths'
@@ -17,7 +17,7 @@ import MarketLinks from './MarketLinks.vue'
 const props = defineProps<{
   plugin: MarketPlugin
   /** The channel being viewed: the plugin's page opens its versions. */
-  channel: number
+  channel: MarketSource
   /** Version installed here ('' when none). */
   installedVersion: string
   state: MarketState

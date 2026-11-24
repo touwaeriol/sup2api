@@ -1,16 +1,17 @@
 <script setup lang="ts">
-// The store settings' channel dialog: a new channel (name and branch) or a
-// channel's new name; the branch is a git ref name segment (CONTRACTS §136).
+// The store settings' channel dialog: a new channel of a store (name and
+// branch) or a channel's new name; the branch is a git ref name segment
+// (CONTRACTS §136).
 import { computed, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '@sub2api/host'
 import { SField, SFormModal, SInput, toast } from '@sub2api/ui'
 import type { MarketSource, MarketSourceCreate } from '@/api/marketTypes'
 import { applyFormError } from '@/utils/formErrors'
-import { validBranch } from './channelRules'
+import { validBranch } from './storeRules'
 
-/** null: a new channel; a channel: renaming it. */
-const props = defineProps<{ open: boolean; channel: MarketSource | null }>()
+/** channel null: a new channel of the store; a channel: renaming it. */
+const props = defineProps<{ open: boolean; storeId: number; channel: MarketSource | null }>()
 const emit = defineEmits<{ 'update:open': [open: boolean]; saved: [] }>()
 const { t } = useI18n()
 
@@ -41,7 +42,7 @@ async function submit() {
   try {
     const name = form.name.trim()
     if (props.channel) await api.patch(`/market/sources/${props.channel.id}`, { name })
-    else await api.post('/market/sources', { name, branch: form.branch.trim() })
+    else await api.post(`/market/stores/${props.storeId}/sources`, { name, branch: form.branch.trim() })
     toast(props.channel ? t('common.updated') : t('common.created'), 'success')
     emit('update:open', false)
     emit('saved')

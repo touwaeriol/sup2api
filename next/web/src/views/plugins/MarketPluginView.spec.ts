@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { i18n } from '@/i18n'
-import { INSTALLED, STORE, channel } from '@/testing/marketFixtures'
+import { STORE, channel, serveStore, store } from '@/testing/marketFixtures'
 
 const mocks = vi.hoisted(() => ({
   firstPage: vi.fn(),
   raw: vi.fn(),
   push: vi.fn(),
-  route: { params: { publisher: 'sub2api', key: 'codex' } as Record<string, string>, query: { channel: '2' } as Record<string, string> }
+  route: { params: { publisher: 'sub2api', key: 'codex' } as Record<string, string>, query: { store: '2', channel: '4' } as Record<string, string> }
 }))
 vi.mock('@/composables/lookups', () => ({ fetchFirstPage: mocks.firstPage }))
 vi.mock('@sub2api/host', async original => ({ ...(await original<object>()), requestRaw: mocks.raw }))
@@ -34,14 +34,16 @@ describe('MarketPluginView', () => {
     vi.clearAllMocks()
     i18n.global.locale.value = 'zh'
     mocks.route.params = { publisher: 'sub2api', key: 'codex' }
-    mocks.firstPage.mockImplementation(async (path: string) => (path === '/market/sources' ? [channel(1), channel(2, { name: '测试' })] : INSTALLED))
+    const channels = [channel(1), channel(3, { store_id: 2, name: '稳定', is_default: true }), channel(4, { store_id: 2, name: '测试', is_default: false })]
+    mocks.firstPage.mockImplementation(serveStore({ stores: [store(1), store(2, { name: '团队商店' })], channels }))
     mocks.raw.mockResolvedValue({ data: STORE, host_version: '0.1.5' })
   })
 
-  it('lists the versions of the channel the market was viewing', async () => {
+  it('lists the versions of the store and channel the market was viewing', async () => {
     const w = await render()
-    expect(mocks.raw).toHaveBeenCalledWith('GET', '/market/plugins', { query: { source_id: 2 } })
-    expect(w.get('[data-testid="market-detail-channel"]').text()).toContain('测试')
+    expect(mocks.firstPage).toHaveBeenCalledWith('/market/sources', { store_id: 2 })
+    expect(mocks.raw).toHaveBeenCalledWith('GET', '/market/plugins', { query: { source_id: 4 } })
+    expect(w.get('[data-testid="market-detail-channel"]').text()).toBe(i18n.global.t('market.detail.channel', { store: '团队商店', name: '测试' }))
     expect(w.findAll('[data-testid="market-versions-table"] [data-version]').map(c => c.attributes('data-version'))).toEqual(['0.2.3', '0.2.2', '0.2.1', '0.2.0'])
   })
 
@@ -61,9 +63,9 @@ describe('MarketPluginView', () => {
   it('reviews a picked version first, from that channel', async () => {
     const w = await render()
     await w.get('[data-testid="version-install-0.2.2"]').trigger('click')
-    expect(mocks.push).toHaveBeenCalledWith({ path: '/plugins/install/market', query: { source_id: '2', publisher: 'sub2api', key: 'codex', version: '0.2.2' } })
+    expect(mocks.push).toHaveBeenCalledWith({ path: '/plugins/install/market', query: { source_id: '4', publisher: 'sub2api', key: 'codex', version: '0.2.2' } })
     await w.get('[data-testid="market-upgrade"]').trigger('click')
-    expect(mocks.push).toHaveBeenLastCalledWith({ path: '/plugins/install/market', query: { source_id: '2', publisher: 'sub2api', key: 'codex', version: '0.2.3' } })
+    expect(mocks.push).toHaveBeenLastCalledWith({ path: '/plugins/install/market', query: { source_id: '4', publisher: 'sub2api', key: 'codex', version: '0.2.3' } })
   })
 
   it('shows the publisher card, and tells a third-party plugin apart by its publisher', async () => {

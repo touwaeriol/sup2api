@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { i18n } from '@/i18n'
-import { STORE, channel, installedPlugin } from '@/testing/marketFixtures'
+import { STORE, channel, installedPlugin, serveStore, store } from '@/testing/marketFixtures'
 
 const mocks = vi.hoisted(() => ({ firstPage: vi.fn(), raw: vi.fn(), get: vi.fn(async () => []), perms: null as string[] | null }))
 vi.mock('@/composables/lookups', async original => ({ ...(await original<object>()), fetchFirstPage: mocks.firstPage }))
@@ -12,7 +12,8 @@ enableAutoUnmount(afterEach)
 
 import PluginsView from './PluginsView.vue'
 
-const CHANNELS = [channel(2, { name: '测试', branch: 'develop' }), channel(1)]
+const STORES = [store(2), store(1)]
+const CHANNELS = [channel(2, { name: '测试', branch: 'develop', is_default: false }), channel(1), channel(3, { store_id: 2, is_default: true })]
 const INSTALLED = [
   installedPlugin('codex', '0.2.1', { builtin: true }),
   installedPlugin('gemini', '1.0.0', { signature_status: 'indexed' }),
@@ -33,12 +34,15 @@ describe('PluginsView', () => {
     vi.clearAllMocks()
     mocks.perms = null
     i18n.global.locale.value = 'zh'
-    mocks.firstPage.mockImplementation(async (path: string) => (path === '/market/sources' ? CHANNELS : INSTALLED))
+    mocks.firstPage.mockImplementation(serveStore({ stores: STORES, channels: CHANNELS, installed: INSTALLED }))
+    localStorage.clear()
     mocks.raw.mockResolvedValue({ data: STORE, host_version: '0.1.5' })
   })
 
-  it('counts the upgrades against the default channel', async () => {
+  it('counts the upgrades against the official store default channel, whatever the viewer last browsed', async () => {
+    localStorage.setItem('s2a.market', JSON.stringify({ store: 2, channels: { 1: 2, 2: 3 } }))
     const w = await render()
+    expect(mocks.firstPage).toHaveBeenCalledWith('/market/sources', { store_id: 1 })
     expect(mocks.raw).toHaveBeenCalledWith('GET', '/market/plugins', { query: { source_id: 1 } })
     expect(w.get('[data-testid="plugins-updatable"]').text()).toBe(tt('market.updatable', { n: 2 }))
   })

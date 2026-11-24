@@ -6,7 +6,7 @@ import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { createPinia } from 'pinia'
 import { i18n } from '@/i18n'
 import type { PluginReview } from '@/api/types'
-import { channel, storePlugin } from '@/testing/marketFixtures'
+import { channel, serveStoreList, storePlugin } from '@/testing/marketFixtures'
 import ConsentView from './ConsentView.vue'
 import { formatBytes } from '@/utils/format'
 
@@ -75,7 +75,7 @@ describe('market upgrade consent', () => {
     vi.clearAllMocks()
     i18n.global.locale.value = 'zh'
     mocks.get.mockResolvedValue([])
-    mocks.list.mockResolvedValue({ items: [channel(1), channel(2, { name: '测试', branch: 'develop' })] })
+    mocks.list.mockImplementation(serveStoreList({ channels: [channel(1), channel(2, { name: '测试', branch: 'develop', is_default: false })] }))
     const codex = storePlugin('sub2api', 'codex', { versions: [{ version: '0.2.3', compatible: true, size: 19_293_798, release_url: RELEASE }] })
     mocks.raw.mockResolvedValue({ data: [codex], host_version: '0.1.5' })
   })
@@ -84,7 +84,7 @@ describe('market upgrade consent', () => {
     const w = await render(review())
     expect(mocks.raw).toHaveBeenCalledWith('GET', '/market/plugins', { query: { source_id: 2 } })
     const check = w.get('[data-testid="consent-source-check"]').text()
-    expect(check).toContain(tt('market.origin.sourceValue', { channel: '测试', branch: 'develop' }))
+    expect(check).toContain(tt('market.origin.sourceValue', { store: '官方商店', channel: '测试', branch: 'develop' }))
     expect(check).toContain('plugin-codex-v0.2.3')
     expect(check).toContain(formatBytes(19_293_798))
     expect(check).toContain(SHA)

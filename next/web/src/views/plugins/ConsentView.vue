@@ -208,7 +208,7 @@ onMounted(() => Promise.all([load(), origin.load()]))
           </div>
         </div>
       </SCard>
-      <SourceCheck v-if="source.market" :review="review" :channel="origin.channel.value" :version="origin.version.value" />
+      <SourceCheck v-if="source.market" :review="review" :origin="origin.origin.value" :version="origin.version.value" />
       <InstallSteps v-if="!source.reject" :upgrade="isUpgrade" :version="review.version" :from="review.upgrade_from" :approved="review.consent_status === 'approved'" />
 
       <!-- warnings -->

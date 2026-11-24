@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { i18n } from '@/i18n'
-import { INSTALLED, STORE, channel, installedPlugin, storePlugin } from '@/testing/marketFixtures'
+import { INSTALLED, STORE, installedPlugin, serveStore, storePlugin } from '@/testing/marketFixtures'
 import { storePublishers } from './publishers/storePublishers'
 
 const LOCAL = [{ id: 1, name: 'ourteam', trust_level: 'community', status: 'active', keys: [] }]
@@ -42,7 +42,7 @@ describe('PublishersView', () => {
     vi.clearAllMocks()
     mocks.perms = null
     i18n.global.locale.value = 'zh'
-    mocks.firstPage.mockImplementation(async (path: string) => (path === '/market/sources' ? [channel(1)] : INSTALLED))
+    mocks.firstPage.mockImplementation(serveStore())
     mocks.raw.mockResolvedValue({ data: STORE, host_version: '0.1.5' })
     mocks.list.mockResolvedValue({ items: LOCAL, page: { total: 1 } })
   })

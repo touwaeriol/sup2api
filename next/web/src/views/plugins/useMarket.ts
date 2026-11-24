@@ -1,17 +1,18 @@
-// The plugin store as the store pages read it: the official store's channels
-// (CONTRACTS §136), the listing of the channel being viewed with the running
-// core's version, and the plugins installed here by plugin id (CONTRACTS §137).
+// The plugin store as the store pages read it: the configured stores and the
+// channels of the store being viewed (CONTRACTS §136), the listing of the
+// channel being viewed with the running core's version, and the plugins
+// installed here by plugin id (CONTRACTS §137).
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { requestRaw } from '@sub2api/host'
-import type { MarketListing, MarketPlugin, MarketSource } from '@/api/marketTypes'
+import type { MarketListing, MarketPlugin, MarketSource, MarketStore } from '@/api/marketTypes'
 import type { PluginSummary } from '@/api/types'
 import { fetchFirstPage } from '@/composables/lookups'
 import { notifyError } from '@/utils/errors'
 import { useAuthStore } from '@/stores/auth'
 import { marketInstallLocation } from './consent/paths'
 import { installedVersionOf, marketStateOf, noCompatible, publisherBlocked } from './marketUtil'
-import { pickChannel, rememberChannel } from './marketChannels'
+import { NO_PREFS, pickChannel, pickStore, rememberChannel, rememberStore, type MarketPrefs } from './marketChannels'
 
 /** The listing as the store pages keep it (no plugins until it loads). */
 const emptyListing = (): MarketListing => ({ data: [], host_version: '' })
@@ -22,10 +23,15 @@ export async function fetchListing(sourceId: number): Promise<MarketListing> {
   return { ...emptyListing(), ...json, data: Array.isArray(json?.data) ? json.data : [] }
 }
 
-export const fetchChannels = () => fetchFirstPage<MarketSource>('/market/sources')
+export const fetchStores = () => fetchFirstPage<MarketStore>('/market/stores')
+export const fetchChannels = (storeId: number) => fetchFirstPage<MarketSource>('/market/sources', { store_id: storeId })
 
 function createState() {
   return {
+    stores: ref<MarketStore[]>([]),
+    /** The store being viewed (null when no store is configured). */
+    store: ref<MarketStore | null>(null),
+    /** The channels of the store being viewed. */
     channels: ref<MarketSource[]>([]),
     /** The channel being viewed (null when the store has no enabled channel). */
     channel: ref<MarketSource | null>(null),
@@ -38,11 +44,18 @@ function createState() {
 }
 type State = ReturnType<typeof createState>
 
-async function loadChannels(s: State, preferred: () => number | null) {
+async function loadChannels(s: State, prefs: MarketPrefs) {
+  const store = s.store.value
+  s.channels.value = store ? await fetchChannels(store.id) : []
+  s.channel.value = store ? pickChannel(s.channels.value, prefs.channel(store.id)) : null
+}
+
+async function loadStores(s: State, prefs: MarketPrefs) {
   s.loadingStore.value = true
   try {
-    s.channels.value = await fetchChannels()
-    s.channel.value = pickChannel(s.channels.value, preferred())
+    s.stores.value = await fetchStores()
+    s.store.value = pickStore(s.stores.value, prefs.store())
+    await loadChannels(s, prefs)
   } catch (e) {
     notifyError(e)
   } finally {
@@ -71,17 +84,31 @@ async function loadInstalled(s: State) {
   }
 }
 
-/** Switches to another channel, remembered for this viewer, and lists it. */
+/** Switches to another store, remembered for this viewer, and lists its channel (the viewer's last one there, else the default). */
+async function selectStore(s: State, prefs: MarketPrefs, id: number) {
+  const store = s.stores.value.find(x => x.id === id)
+  if (!store || store.id === s.store.value?.id) return
+  s.store.value = store
+  rememberStore(id)
+  try {
+    await loadChannels(s, prefs)
+  } catch (e) {
+    notifyError(e)
+  }
+  return loadListing(s)
+}
+
+/** Switches to another channel of the store, remembered for this viewer, and lists it. */
 function selectChannel(s: State, id: number) {
   const c = s.channels.value.find(x => x.id === id && x.enabled)
   if (!c || c.id === s.channel.value?.id) return
   s.channel.value = c
-  rememberChannel(id)
+  rememberChannel(c.store_id, id)
   return loadListing(s)
 }
 
-/** The store pages' state; `preferred` names the channel to open (the default channel when it gives none or a disabled one). */
-export function useMarket(preferred: () => number | null = () => null) {
+/** The store pages' state; `prefs` names the store and channel to open (the official store's default channel when it names none). */
+export function useMarket(prefs: MarketPrefs = NO_PREFS) {
   const { t } = useI18n()
   const auth = useAuthStore()
   const s = createState()
@@ -99,10 +126,11 @@ export function useMarket(preferred: () => number | null = () => null) {
     enabledChannels: computed(() => s.channels.value.filter(c => c.enabled)),
     loadListing: () => loadListing(s),
     loadInstalled: installedLoad,
-    /** Loads the channels and the chosen channel's listing. */
-    loadChannelListing: () => loadChannels(s, preferred).then(() => loadListing(s)),
-    /** Loads the channels and the chosen channel's listing, and what is installed here. */
-    load: () => Promise.all([loadChannels(s, preferred).then(() => loadListing(s)), installedLoad()]),
+    /** Loads the stores, the chosen store's channels and the chosen channel's listing. */
+    loadChannelListing: () => loadStores(s, prefs).then(() => loadListing(s)),
+    /** Loads the chosen channel's listing (as loadChannelListing) and what is installed here. */
+    load: () => Promise.all([loadStores(s, prefs).then(() => loadListing(s)), installedLoad()]),
+    selectStore: (id: number) => selectStore(s, prefs, id),
     selectChannel: (id: number) => selectChannel(s, id),
     installedOf: (m: MarketPlugin) => installedVersionOf(m, s.installed.value[m.id]),
     stateOf: (m: MarketPlugin) => marketStateOf(m, s.installed.value[m.id]),

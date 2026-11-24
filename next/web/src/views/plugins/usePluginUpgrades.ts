@@ -1,6 +1,6 @@
 // The installed plugins list's upgrades: the store's newer version of each
-// installed plugin, counted against the store's default channel (CONTRACTS
-// §136), and the consent page that installs one.
+// installed plugin, counted against the official store's default channel
+// (CONTRACTS §136), and the consent page that installs one.
 import { computed, type Ref } from 'vue'
 import type { PluginSummary } from '@/api/types'
 import { useAuthStore } from '@/stores/auth'

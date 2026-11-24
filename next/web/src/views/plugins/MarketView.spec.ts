@@ -1,18 +1,26 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { i18n } from '@/i18n'
-import { INSTALLED, STORE, channel } from '@/testing/marketFixtures'
+import { STORE, channel, serveStore, store } from '@/testing/marketFixtures'
 
 const mocks = vi.hoisted(() => ({ firstPage: vi.fn(), raw: vi.fn(), push: vi.fn() }))
 vi.mock('@/composables/lookups', () => ({ fetchFirstPage: mocks.firstPage }))
 vi.mock('@sub2api/host', async original => ({ ...(await original<object>()), requestRaw: mocks.raw }))
-vi.mock('vue-router', () => ({ useRouter: () => ({ push: mocks.push }), RouterLink: { props: ['to'], template: '<a><slot /></a>' } }))
+vi.mock('vue-router', () => ({ useRouter: () => ({ push: mocks.push }), RouterLink: { props: ['to'], template: '<a :data-to="to"><slot /></a>' } }))
 vi.mock('@/stores/auth', () => ({ useAuthStore: () => ({ has: () => true }) }))
 enableAutoUnmount(afterEach)
 
 import MarketView from './MarketView.vue'
+import StoreCard from './parts/StoreCard.vue'
 
-const CHANNELS = [channel(1), channel(2, { name: '测试', branch: 'develop' }), channel(3, { enabled: false })]
+const STORES = [store(1), store(2, { name: '团队商店' })]
+const CHANNELS = [
+  channel(1),
+  channel(2, { name: '测试', branch: 'develop' }),
+  channel(3, { enabled: false }),
+  channel(4, { store_id: 2, name: '稳定', is_default: true }),
+  channel(5, { store_id: 2, name: '尝鲜', is_default: false })
+]
 const tt = (key: string, named: Record<string, unknown> = {}) => i18n.global.t(key, named)
 
 async function render() {
@@ -27,19 +35,22 @@ describe('MarketView', () => {
     vi.clearAllMocks()
     localStorage.clear()
     i18n.global.locale.value = 'zh'
-    mocks.firstPage.mockImplementation(async (path: string) => (path === '/market/sources' ? CHANNELS : INSTALLED))
+    mocks.firstPage.mockImplementation(serveStore({ stores: STORES, channels: CHANNELS }))
     mocks.raw.mockResolvedValue({ data: STORE, host_version: '0.1.5' })
   })
 
-  it('opens the default channel: the store repository, its branch and read-only index URL', async () => {
+  it('opens the official store on its default channel, showing names only, no repository or index address', async () => {
     const w = await render()
-    expect(w.get('[data-testid="market-repo"]').text()).toBe('touwaeriol/sup2api-plugin')
-    const url = w.get('[data-testid="market-store-url"] input, input[data-testid="market-store-url"]')
-    expect((url.element as HTMLInputElement).value).toBe(CHANNELS[0].url)
-    expect(url.attributes('readonly')).toBeDefined()
+    expect(mocks.firstPage).toHaveBeenCalledWith('/market/sources', { store_id: 1 })
     expect(mocks.raw).toHaveBeenCalledWith('GET', '/market/plugins', { query: { source_id: 1 } })
+    const card = w.get('[data-testid="market-store"]')
+    expect(card.get('[data-testid="market-viewing"]').text()).toContain(tt('market.viewing', { store: '官方商店', channel: '正式' }))
+    expect(card.text()).not.toContain('touwaeriol/sup2api-plugin')
+    expect(card.text()).not.toContain('raw.githubusercontent.com')
+    expect(card.find('[data-testid="market-branch"]').exists()).toBe(false)
     // The disabled channel is not offered.
     expect(w.findAll('[data-testid="market-channels"] input').map(i => (i.element as HTMLInputElement).value)).toEqual(['1', '2'])
+    expect(w.get('[data-testid="market-store-settings"]').attributes('data-to')).toBe('/settings/market')
   })
 
   it('switches channels, lists the new one and remembers it; the next visit opens it', async () => {
@@ -47,11 +58,32 @@ describe('MarketView', () => {
     await w.get('[data-testid="market-channels"] input[value="2"]').setValue(true)
     await flushPromises()
     expect(mocks.raw).toHaveBeenLastCalledWith('GET', '/market/plugins', { query: { source_id: 2 } })
-    expect(localStorage.getItem('s2a.market.channel')).toBe('2')
     w.unmount()
     mocks.raw.mockClear()
     await render()
     expect(mocks.raw).toHaveBeenCalledWith('GET', '/market/plugins', { query: { source_id: 2 } })
+  })
+
+  it('switches stores: lists the default channel of the store, and remembers the store and the channel of each', async () => {
+    const w = await render()
+    w.findComponent(StoreCard).vm.$emit('selectStore', 2)
+    await flushPromises()
+    expect(mocks.firstPage).toHaveBeenCalledWith('/market/sources', { store_id: 2 })
+    expect(mocks.raw).toHaveBeenLastCalledWith('GET', '/market/plugins', { query: { source_id: 4 } })
+    expect(w.findAll('[data-testid="market-channels"] input').map(i => (i.element as HTMLInputElement).value)).toEqual(['4', '5'])
+    await w.get('[data-testid="market-channels"] input[value="5"]').setValue(true)
+    await flushPromises()
+    w.findComponent(StoreCard).vm.$emit('selectStore', 1)
+    await flushPromises()
+    expect(mocks.raw).toHaveBeenLastCalledWith('GET', '/market/plugins', { query: { source_id: 1 } })
+    w.unmount()
+    mocks.raw.mockClear()
+    const again = await render()
+    // The last store is the official one; back to the team store, its last channel opens.
+    expect(mocks.raw).toHaveBeenCalledWith('GET', '/market/plugins', { query: { source_id: 1 } })
+    again.findComponent(StoreCard).vm.$emit('selectStore', 2)
+    await flushPromises()
+    expect(mocks.raw).toHaveBeenLastCalledWith('GET', '/market/plugins', { query: { source_id: 5 } })
   })
 
   it('shows each state with its action and counts the updates', async () => {
@@ -90,10 +122,20 @@ describe('MarketView', () => {
     })
   })
 
-  it('says the store is unavailable without an enabled channel and lists nothing', async () => {
-    mocks.firstPage.mockResolvedValue([channel(1, { enabled: false })])
+  it('says the store has no enabled channel, keeping the store picker', async () => {
+    mocks.firstPage.mockImplementation(serveStore({ stores: STORES, channels: [channel(1, { enabled: false })] }))
     const w = await render()
-    expect(w.text()).toContain(tt('market.storeUnavailable'))
+    expect(w.get('[data-testid="market-no-channel"]').text()).toContain(tt('market.noChannel'))
+    expect(w.find('[data-testid="market-store"]').exists()).toBe(true)
+    expect(mocks.raw).not.toHaveBeenCalled()
+  })
+
+  it('without a configured store, links to the store settings', async () => {
+    mocks.firstPage.mockImplementation(serveStore({ stores: [] }))
+    const w = await render()
+    expect(w.get('[data-testid="market-no-store"]').text()).toContain(tt('market.noStore'))
+    expect(w.get('[data-testid="market-configure"]').attributes('data-to')).toBe('/settings/market')
+    expect(w.find('[data-testid="market-store"]').exists()).toBe(false)
     expect(mocks.raw).not.toHaveBeenCalled()
   })
 })

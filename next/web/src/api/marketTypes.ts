@@ -1,23 +1,45 @@
-// The plugin store's types: its channels (/market/sources) and listings (GET /market/plugins); CONTRACTS §11.1, §136, §137.
+// The plugin store's types: its stores (/market/stores), their channels
+// (/market/sources) and listings (GET /market/plugins); CONTRACTS §11.1, §136, §137.
 import type { LText, Trust } from './types'
 
 /**
- * A channel of the plugin store (GET /market/sources; CONTRACTS §136): a
- * branch of the store repository, whose index CI publishes to index-<branch>.
- * The default channel cannot be disabled or deleted.
+ * A configured plugin store (GET /market/stores; CONTRACTS §136): a GitHub
+ * repository whose branches are its channels. The official store is seeded,
+ * cannot be deleted and keeps its repository; the market shows only the name.
+ */
+export interface MarketStore {
+  id: number
+  name: string
+  /** GitHub repository, owner/name: shown on the store settings page only. */
+  repo: string
+  official: boolean
+}
+
+/** POST /market/stores: a third-party store and the branch of its default channel. */
+export interface MarketStoreCreate {
+  name: string
+  repo: string
+  branch: string
+}
+
+/**
+ * A channel of a store (GET /market/sources?store_id=): a branch of the
+ * store repository, whose index CI publishes to index-<branch>. Each store
+ * has one default channel, which cannot be disabled or deleted.
  */
 export interface MarketSource {
   id: number
+  store_id: number
   /** Display name. */
   name: string
   branch: string
-  /** The channel's index URL, derived from the store base and the branch. */
+  /** The channel's index URL, derived from the store base and the branch (not shown). */
   url: string
   enabled: boolean
   is_default: boolean
 }
 
-/** POST /market/sources: a new channel. */
+/** POST /market/stores/:id/sources: a new channel of the store. */
 export interface MarketSourceCreate {
   name: string
   branch: string

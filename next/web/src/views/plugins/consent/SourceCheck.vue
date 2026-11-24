@@ -1,17 +1,17 @@
 <script setup lang="ts">
-// The consent page's source check of a market install: the official store
-// and channel it comes from, the publisher and its trust level, the release,
+// The consent page's source check of a market install: the store and
+// channel it comes from, the publisher and its trust level, the release,
 // size, the package's full sha256 (the core checks it against the index) and
 // whether this core satisfies the version's host range (CONTRACTS §136).
 import { useI18n } from 'vue-i18n'
 import { SBadge, SCard, SDescItem, SDescriptions, SIcon, SLink } from '@sub2api/ui'
-import type { MarketSource, MarketVersion } from '@/api/marketTypes'
+import type { MarketSource, MarketStore, MarketVersion } from '@/api/marketTypes'
 import type { PluginReview } from '@/api/types'
 import { formatBytes } from '@/utils/format'
 import { releaseTag } from '../marketUtil'
 import TrustBadge from '../parts/TrustBadge.vue'
 
-defineProps<{ review: PluginReview; channel: MarketSource | null; version?: MarketVersion }>()
+defineProps<{ review: PluginReview; origin: { store: MarketStore; channel: MarketSource } | null; version?: MarketVersion }>()
 const { t } = useI18n()
 </script>
 
@@ -24,7 +24,8 @@ const { t } = useI18n()
     </template>
     <SDescriptions :columns="3" dense stacked>
       <SDescItem :label="t('market.origin.source')">
-        {{ channel ? t('market.origin.sourceValue', { channel: channel.name, branch: channel.branch }) : t('market.storeTitle') }}
+        <template v-if="origin">{{ t('market.origin.sourceValue', { store: origin.store.name, channel: origin.channel.name, branch: origin.channel.branch }) }}</template>
+        <template v-else>—</template>
       </SDescItem>
       <SDescItem :label="t('market.origin.publisher')">
         <span class="inline-flex items-center gap-1.5">{{ review.publisher || '—' }}<TrustBadge :trust="review.trust" /></span>

@@ -9,7 +9,7 @@ import { SBadge, SCard, SEmpty, SPageHeader, SSpinner } from '@sub2api/ui'
 import { lt } from '@/i18n'
 import { useAuthStore } from '@/stores/auth'
 import { useMarket } from './useMarket'
-import { rememberedChannel } from './marketChannels'
+import { REMEMBERED } from './marketChannels'
 import MarketPluginHeader from './parts/MarketPluginHeader.vue'
 import MarketVersionsTable from './parts/MarketVersionsTable.vue'
 import MarketPublisherCard from './parts/MarketPublisherCard.vue'
@@ -18,8 +18,11 @@ const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
-/** The channel the market list was viewing (?channel=), else the viewer's last one. */
-const market = useMarket(() => Number(route.query.channel) || rememberedChannel())
+/** The store and channel the market list was viewing (?store=&channel=), else the viewer's last ones. */
+const market = useMarket({
+  store: () => Number(route.query.store) || REMEMBERED.store(),
+  channel: store => Number(route.query.channel) || REMEMBERED.channel(store)
+})
 const { items, loading, loadingStore } = market
 
 const plugin = computed(() => items.value.find(m => m.publisher === route.params.publisher && m.key === route.params.key) ?? null)
@@ -37,14 +40,14 @@ onMounted(market.load)
   <div>
     <SPageHeader :title="title">
       <template v-if="market.channel.value && plugin" #title-extra>
-        <SBadge tone="gray" data-testid="market-detail-channel">{{ t('market.detail.channel', { name: market.channel.value.name }) }}</SBadge>
+        <SBadge tone="gray" data-testid="market-detail-channel">{{ t('market.detail.channel', { store: market.store.value?.name, name: market.channel.value.name }) }}</SBadge>
       </template>
     </SPageHeader>
 
     <div v-if="loadingStore || loading" class="flex justify-center py-20"><SSpinner size="lg" /></div>
 
     <SCard v-else-if="!plugin">
-      <SEmpty icon="market" :text="market.channel.value ? t('market.detail.notFound') : t('market.storeUnavailable')" />
+      <SEmpty icon="market" :text="market.channel.value ? t('market.detail.notFound') : t(market.store.value ? 'market.noChannel' : 'market.noStore')" />
     </SCard>
 
     <template v-else>

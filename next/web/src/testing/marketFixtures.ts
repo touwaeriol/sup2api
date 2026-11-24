@@ -1,10 +1,22 @@
-// Store fixtures of the plugin store specs: channels, listings and installed
-// plugins in the shapes of GET /market/sources, /market/plugins and /plugins.
-import type { MarketPlugin, MarketSource } from '@/api/marketTypes'
+// Store fixtures of the plugin store specs: stores, channels, listings and
+// installed plugins in the shapes of GET /market/stores, /market/sources,
+// /market/plugins and /plugins.
+import type { MarketPlugin, MarketSource, MarketStore } from '@/api/marketTypes'
 import type { PluginSummary } from '@/api/types'
 
+/** A store: the first is the official one. */
+export const store = (id: number, over: Partial<MarketStore> = {}): MarketStore => ({
+  id,
+  name: id === 1 ? '官方商店' : `store${id}`,
+  repo: id === 1 ? 'touwaeriol/sup2api-plugin' : `team${id}/s2-plugins`,
+  official: id === 1,
+  ...over
+})
+
+/** A channel of store 1 unless over names another. */
 export const channel = (id: number, over: Partial<MarketSource> = {}): MarketSource => ({
   id,
+  store_id: 1,
   name: id === 1 ? '正式' : `c${id}`,
   branch: id === 1 ? 'main' : `b${id}`,
   url: `https://raw.githubusercontent.com/touwaeriol/sup2api-plugin/index-${id === 1 ? 'main' : `b${id}`}/index.json`,
@@ -70,3 +82,25 @@ export const STORE: MarketPlugin[] = [
 ]
 
 export const INSTALLED: PluginSummary[] = [installedPlugin('codex', '0.2.1', { builtin: true }), installedPlugin('gemini', '1.0.0')]
+
+interface StoreData {
+  stores?: MarketStore[]
+  /** Channels of every store: a request gets those of its store_id. */
+  channels?: MarketSource[]
+  installed?: PluginSummary[]
+}
+
+/** fetchFirstPage as the store specs serve it: the stores, a store's channels (by store_id) and the installed plugins. */
+export function serveStore(data: StoreData = {}) {
+  return async (path: string, query: Record<string, unknown> = {}): Promise<unknown[]> => {
+    if (path === '/market/stores') return data.stores ?? [store(1)]
+    if (path === '/market/sources') return (data.channels ?? [channel(1)]).filter(c => c.store_id === Number(query.store_id))
+    return data.installed ?? INSTALLED
+  }
+}
+
+/** api.list as the store specs serve it (fetchFirstPage left real). */
+export function serveStoreList(data: StoreData = {}) {
+  const serve = serveStore(data)
+  return async (path: string, query: Record<string, unknown> = {}) => ({ items: await serve(path, query) })
+}

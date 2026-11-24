@@ -1,10 +1,11 @@
-// Mock handlers of the plugin market: the only source, the official store,
-// and GET /market/plugins as the core lists index.json v2 (CONTRACTS §11.1,
-// §136, §137): each plugin's id, its
+// Mock handlers of the plugin market: GET /market/plugins of a store's channel
+// as the core lists index.json v2 (CONTRACTS §11.1, §136, §137): the official
+// store's index, or the team store's (community trust at most, no sub2api
+// publisher); each plugin's id, its
 // publisher with its trust level and status, repo, source, built-in and
 // deprecation; latest_version and update_available skip deprecated versions.
 import { fail, on } from './router'
-import { channelOf } from './marketChannels'
+import { channelOf } from './marketStores'
 import { HOST_VERSION, plugins, type Any } from './plugins'
 import { displayId, pluginId } from './pluginIds'
 
@@ -114,11 +115,27 @@ const market: Any[] = [
   third(community('ghost', undefined, '', 'missing'), 'orphan', L('Orphan', '无主插件'), L('Its publisher is not in the index.', '索引中没有它的发布者。'), 'ghost/orphan', [
     v('ghost/orphan', '1.0.0', '>=0.1.0')
   ])
-].map(m => ({ ...m, id: pluginId(m.publisher, m.key), display_id: displayId(pluginId(m.publisher, m.key)) }))
+].map(withId)
 
-/** The store listing of a plugin id. */
+/** The team store's index (a third-party store): its own publisher, trusted as community. */
+const ourteam = community('ourteam', L('Our Team', '我们团队'), 'community')
+const teamStore: Any[] = [
+  third(ourteam, 'billing_bridge', L('Billing bridge', '内部计费桥'), L('Sends usage to the internal billing system.', '把用量同步到内部计费系统。'), 'ourteam/billing-bridge', [
+    v('ourteam/billing-bridge', '0.1.0', '>=0.1.0', 2_097_152),
+    v('ourteam/billing-bridge', '0.2.0', '>=0.1.0', 2_228_224)
+  ]),
+  third(ourteam, 'quota_report', L('Quota report', '额度周报'), L('Weekly quota report by group.', '按分组生成额度周报。'), 'ourteam/quota-report', [
+    v('ourteam/quota-report', '1.0.0', '>=0.1.0', 1_572_864)
+  ])
+].map(withId)
+
+function withId(m: Any): Any {
+  return { ...m, id: pluginId(m.publisher, m.key), display_id: displayId(pluginId(m.publisher, m.key)) }
+}
+
+/** The store listing of a plugin id, in any store. */
 export function marketEntry(id: string): Any | undefined {
-  return market.find(x => x.id === id)
+  return [...market, ...teamStore].find(x => x.id === id)
 }
 
 /** Newest compatible version that is not deprecated, as the core computes latest_version. */
@@ -148,14 +165,17 @@ const testing: Record<string, Any[]> = {
   _erio__codex: [v('erio/s2-codex', '1.3.0', '>=0.1.4', 5_373_952)]
 }
 
-/** The store as a channel lists it: the main branch's index, or that plus the versions in testing. */
-const ofChannel = (branch: string) => (branch === 'main' ? market : market.map(m => ({ ...m, versions: [...m.versions, ...(testing[m.id] ?? [])] })))
+/** The store as a channel lists it: the main branch's index, or that plus the versions in testing; the team store has one index. */
+function ofChannel(official: boolean, branch: string): Any[] {
+  if (!official) return teamStore
+  return branch === 'main' ? market : market.map(m => ({ ...m, versions: [...m.versions, ...(testing[m.id] ?? [])] }))
+}
 
 // host_version sits next to data (CONTRACTS §14.3); the listing is not paged.
 on('GET', '/market/plugins', req => {
   const c = channelOf(req.query.source_id)
   if (!c?.enabled) return fail(404, 'not_found', 'no such enabled channel')
-  return { data: ofChannel(c.branch).map(listed), host_version: HOST_VERSION }
+  return { data: ofChannel(c.store.official, c.branch).map(listed), host_version: HOST_VERSION }
 })
 
 function cmp(a: string, b: string): number {

@@ -7,6 +7,7 @@ import { createPinia } from 'pinia'
 import { toastState } from '@sub2api/ui'
 import { i18n } from '@/i18n'
 import type { PluginReview } from '@/api/types'
+import { channel, serveStoreList } from '@/testing/marketFixtures'
 import ConsentView from './ConsentView.vue'
 import { clearPendingUpload, setPendingUpload } from './consent/pendingUpload'
 
@@ -100,7 +101,7 @@ describe('consent page sources', () => {
     mocks.manage = true
     plugin('installed')
     mocks.post.mockImplementation(async (path: string) => (path.endsWith('review-from-market') ? review() : {}))
-    mocks.list.mockResolvedValue({ items: [{ id: 2, name: '测试', branch: 'develop', url: 'https://x/index-develop/index.json', enabled: true, is_default: false }] })
+    mocks.list.mockImplementation(serveStoreList({ channels: [channel(2, { name: '测试', branch: 'develop', is_default: false })] }))
     mocks.raw.mockResolvedValue({ data: [], host_version: '0.1.0' })
   })
 
