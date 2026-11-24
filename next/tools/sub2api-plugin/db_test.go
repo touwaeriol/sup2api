@@ -192,7 +192,7 @@ func gormPlugin(t *testing.T) string {
 		"replace github.com/Sub2API-Devs/sup2api/next/sdk => "+sdk+"\n\n"+
 		"replace github.com/Sub2API-Devs/sup2api/next/runtime-contract => "+filepath.Join(sdk, "..", "runtime-contract")+"\n")
 	writeFile(t, filepath.Join(dir, "go.sum"), string(sum))
-	writeFile(t, filepath.Join(dir, "migrations", "0001_init.sql"), `CREATE TABLE plg_demo__t (id bigserial PRIMARY KEY);`)
+	writeFile(t, filepath.Join(dir, "migrations", "0001_init.sql"), `CREATE TABLE plg__tester__demo__t (id bigserial PRIMARY KEY);`)
 	writeFile(t, filepath.Join(dir, filepath.FromSlash(modelDir), "model.go"), demoModel(""))
 	// Outside the workspace, offline: the module cache has what the SDK
 	// needs, and go.mod may take the requirements it is missing.
@@ -213,7 +213,7 @@ type T struct {
 	` + extra + `
 }
 
-func (T) TableName() string { return "plg_demo__t" }
+func (T) TableName() string { return "plg__tester__demo__t" }
 
 func All() []any { return []any{&T{}} }
 `
@@ -244,20 +244,20 @@ func TestDBDiff(t *testing.T) {
 	}
 
 	// testdata/v2 adds column x to t, which no model maps.
-	if msg := runFail(t, "db", "check", "--dir", dir, "--overlay", "testdata/v2"); !strings.Contains(msg, "column plg_demo__t.x") {
+	if msg := runFail(t, "db", "check", "--dir", dir, "--overlay", "testdata/v2"); !strings.Contains(msg, "column plg__tester__demo__t.x") {
 		t.Fatalf("check with overlay: %s", msg)
 	}
-	if msg := runFail(t, "pack", "--dir", dir, "--overlay", "testdata/v2", "--out-dir", t.TempDir()); !strings.Contains(msg, "column plg_demo__t.x") {
+	if msg := runFail(t, "pack", "--dir", dir, "--overlay", "testdata/v2", "--out-dir", t.TempDir()); !strings.Contains(msg, "column plg__tester__demo__t.x") {
 		t.Fatalf("pack with overlay: %s", msg)
 	}
 
 	writeFile(t, filepath.Join(dir, filepath.FromSlash(modelDir), "model.go"), demoModel("M int64 `gorm:\"not null\"`"))
-	if msg := runFail(t, "db", "diff", "--dir", dir); !strings.Contains(msg, `! ALTER TABLE "plg_demo__t" ADD "m" bigint NOT NULL`) {
+	if msg := runFail(t, "db", "diff", "--dir", dir); !strings.Contains(msg, `! ALTER TABLE "plg__tester__demo__t" ADD "m" bigint NOT NULL`) {
 		t.Fatalf("diff with a NOT NULL column: %s", msg)
 	}
 	// A UNIQUE on a table that has rows fails on duplicates: left to a person.
 	writeFile(t, filepath.Join(dir, filepath.FromSlash(modelDir), "model.go"), demoModel("U string `gorm:\"unique\"`"))
-	if msg := runFail(t, "db", "diff", "--dir", dir); !strings.Contains(msg, `! ALTER TABLE "plg_demo__t" ADD CONSTRAINT "uni_plg_demo__t_u" UNIQUE ("u")`) {
+	if msg := runFail(t, "db", "diff", "--dir", dir); !strings.Contains(msg, `! ALTER TABLE "plg__tester__demo__t" ADD CONSTRAINT "uni_plg__tester__demo__t_u" UNIQUE ("u")`) {
 		t.Fatalf("diff with a new UNIQUE on an existing table: %s", msg)
 	}
 }
@@ -283,8 +283,8 @@ func TestDBDiffDifferences(t *testing.T) {
 	}
 	dir := gormPlugin(t)
 	writeFile(t, filepath.Join(dir, "migrations", "0001_init.sql"),
-		`CREATE TABLE plg_demo__t (id bigserial PRIMARY KEY, n bigint NOT NULL DEFAULT 0, code text DEFAULT '');`)
-	want := "column plg_demo__t.code: migrations: text DEFAULT ''::text; models: text NOT NULL DEFAULT ''::text"
+		`CREATE TABLE plg__tester__demo__t (id bigserial PRIMARY KEY, n bigint NOT NULL DEFAULT 0, code text DEFAULT '');`)
+	want := "column plg__tester__demo__t.code: migrations: text DEFAULT ''::text; models: text NOT NULL DEFAULT ''::text"
 	if msg := runFail(t, "db", "check", "--dir", dir); !strings.Contains(msg, want) {
 		t.Fatalf("check: %s", msg)
 	}
@@ -301,17 +301,17 @@ func TestDBCheckUnmanaged(t *testing.T) {
 	}
 	dir := gormPlugin(t)
 	writeFile(t, filepath.Join(dir, "migrations", "0001_init.sql"),
-		`CREATE TABLE plg_demo__t (id bigserial PRIMARY KEY, n bigint NOT NULL DEFAULT 0, code text NOT NULL DEFAULT '');
-CREATE VIEW plg_demo__t_count AS SELECT count(*) FROM plg_demo__t;`)
-	if msg := runFail(t, "db", "check", "--dir", dir); !strings.Contains(msg, "view plg_demo__t_count") {
+		`CREATE TABLE plg__tester__demo__t (id bigserial PRIMARY KEY, n bigint NOT NULL DEFAULT 0, code text NOT NULL DEFAULT '');
+CREATE VIEW plg__tester__demo__t_count AS SELECT count(*) FROM plg__tester__demo__t;`)
+	if msg := runFail(t, "db", "check", "--dir", dir); !strings.Contains(msg, "view plg__tester__demo__t_count") {
 		t.Fatalf("check: %s", msg)
 	}
 	writeFile(t, filepath.Join(dir, filepath.FromSlash(modelDir), "unmanaged.go"),
-		"package model\n\nfunc Unmanaged() []string { return []string{\"view plg_demo__t_count\"} }\n")
+		"package model\n\nfunc Unmanaged() []string { return []string{\"view plg__tester__demo__t_count\"} }\n")
 	runOK(t, "db", "check", "--dir", dir)
 	writeFile(t, filepath.Join(dir, "migrations", "0002_count.sql"),
-		`CREATE FUNCTION plg_demo__count() RETURNS bigint LANGUAGE sql AS 'SELECT count(*) FROM plg_demo__t';`)
-	if msg := runFail(t, "db", "check", "--dir", dir); !strings.Contains(msg, "0002_count.sql: function plg_demo__count (not allowed)") {
+		`CREATE FUNCTION plg__tester__demo__count() RETURNS bigint LANGUAGE sql AS 'SELECT count(*) FROM plg__tester__demo__t';`)
+	if msg := runFail(t, "db", "check", "--dir", dir); !strings.Contains(msg, "0002_count.sql: function plg__tester__demo__count (not allowed)") {
 		t.Fatalf("check with a function: %s", msg)
 	}
 }
@@ -325,23 +325,23 @@ func TestDBCheckPrefix(t *testing.T) {
 	}
 	dir := gormPlugin(t)
 	writeFile(t, filepath.Join(dir, "migrations", "0001_init.sql"),
-		`CREATE TABLE plg_demo__t (id bigserial PRIMARY KEY, n bigint NOT NULL DEFAULT 0, code text NOT NULL DEFAULT '');
+		`CREATE TABLE plg__tester__demo__t (id bigserial PRIMARY KEY, n bigint NOT NULL DEFAULT 0, code text NOT NULL DEFAULT '');
 CREATE TABLE extra (id serial PRIMARY KEY);`)
 	for _, args := range [][]string{{"db", "check"}, {"db", "diff"}} {
 		msg := runFail(t, append(args, "--dir", dir)...)
-		for _, want := range []string{refusedTitle, "0001_init.sql: table extra (not named plg_demo__...)",
-			"0001_init.sql: index extra_pkey (not named plg_demo__...)", "0001_init.sql: sequence extra_id_seq (not named plg_demo__...)"} {
+		for _, want := range []string{refusedTitle, "0001_init.sql: table extra (not named plg__tester__demo__...)",
+			"0001_init.sql: index extra_pkey (not named plg__tester__demo__...)", "0001_init.sql: sequence extra_id_seq (not named plg__tester__demo__...)"} {
 			if !strings.Contains(msg, want) {
 				t.Errorf("%v: no %q in %s", args, want, msg)
 			}
 		}
 	}
 	writeFile(t, filepath.Join(dir, "migrations", "0001_init.sql"),
-		`CREATE TABLE plg_demo__t (id bigserial PRIMARY KEY, n bigint NOT NULL DEFAULT 0, code text NOT NULL DEFAULT '');`)
+		`CREATE TABLE plg__tester__demo__t (id bigserial PRIMARY KEY, n bigint NOT NULL DEFAULT 0, code text NOT NULL DEFAULT '');`)
 	runOK(t, "db", "check", "--dir", dir)
 	writeFile(t, filepath.Join(dir, filepath.FromSlash(modelDir), "model.go"),
-		strings.Replace(demoModel(""), `return "plg_demo__t"`, `return "t"`, 1))
-	if msg := runFail(t, "db", "check", "--dir", dir); !strings.Contains(msg, `is not named with the plugin's prefix "plg_demo__"`) {
+		strings.Replace(demoModel(""), `return "plg__tester__demo__t"`, `return "t"`, 1))
+	if msg := runFail(t, "db", "check", "--dir", dir); !strings.Contains(msg, `is not named with the plugin's prefix "plg__tester__demo__"`) {
 		t.Fatalf("check with an unprefixed model table: %s", msg)
 	}
 }
@@ -354,8 +354,8 @@ func TestDBCheckAccessHint(t *testing.T) {
 	}
 	dir := gormPlugin(t)
 	writeFile(t, filepath.Join(dir, "migrations", "0001_init.sql"),
-		`CREATE TABLE plg_demo__t (id bigserial PRIMARY KEY, n bigint NOT NULL DEFAULT 0, code text NOT NULL DEFAULT '');
-CREATE VIEW plg_demo__names AS SELECT id FROM users;`)
+		`CREATE TABLE plg__tester__demo__t (id bigserial PRIMARY KEY, n bigint NOT NULL DEFAULT 0, code text NOT NULL DEFAULT '');
+CREATE VIEW plg__tester__demo__names AS SELECT id FROM users;`)
 	if msg := runFail(t, "db", "check", "--dir", dir); strings.Contains(msg, accessHint) {
 		t.Fatalf("hint without database.access: %s", msg)
 	}
@@ -377,18 +377,18 @@ func TestDBDiffUniqueHint(t *testing.T) {
 	}
 	dir := gormPlugin(t)
 	writeFile(t, filepath.Join(dir, "migrations", "0001_init.sql"),
-		`CREATE TABLE plg_demo__t (id bigserial PRIMARY KEY, n bigint NOT NULL DEFAULT 0, code text NOT NULL DEFAULT '');`)
+		`CREATE TABLE plg__tester__demo__t (id bigserial PRIMARY KEY, n bigint NOT NULL DEFAULT 0, code text NOT NULL DEFAULT '');`)
 	writeFile(t, filepath.Join(dir, filepath.FromSlash(modelDir), "model.go"), strings.Replace(demoModel(""),
 		"func All() []any { return []any{&T{}} }", `type U struct {
 	ID   int64  `+"`gorm:\"primaryKey\"`"+`
 	Code string `+"`gorm:\"unique\"`"+`
 }
 
-func (U) TableName() string { return "plg_demo__u" }
+func (U) TableName() string { return "plg__tester__demo__u" }
 
 func All() []any { return []any{&T{}, &U{}} }`, 1))
-	if msg := runFail(t, "db", "diff", "--dir", dir); !strings.Contains(msg, "index uni_plg_demo__u_code (not named plg_demo__...)") ||
-		!strings.Contains(msg, uniqueHint("demo")) {
+	if msg := runFail(t, "db", "diff", "--dir", dir); !strings.Contains(msg, "index uni_plg__tester__demo__u_code (not named plg__tester__demo__...)") ||
+		!strings.Contains(msg, uniqueHint("_tester__demo")) {
 		t.Fatalf("diff with a unique tag on a new table: %s", msg)
 	}
 }

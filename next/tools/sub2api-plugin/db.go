@@ -160,7 +160,7 @@ func cmdDBDiff(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	next, err := newMigration(p.migrations, p.key, *name, report)
+	next, err := newMigration(p.migrations, p.id, *name, report)
 	switch {
 	case errors.Is(err, errManual):
 		printStatements(stderr, "DDL the models need (! can lose data, rewrite a table or fail on existing rows):", markManual(report.Statements))
@@ -200,7 +200,7 @@ func printStatements(w io.Writer, title string, lines []string) {
 type dbPlugin struct {
 	dir        string // absolute
 	module     string // Go module path
-	key        string // the manifest's key
+	id         string // the plugin id (manifest.PluginID): its table prefix
 	access     bool   // the manifest asks for tables outside the plugin (database.access)
 	migrations string // absolute migrations directory
 	overlay    string // the overlay's migrations directory, "" for none
@@ -232,7 +232,7 @@ func loadDBPlugin(dir, overlay string) (*dbPlugin, error) {
 	if module == "" {
 		return nil, fmt.Errorf("%s/go.mod: no module path", abs)
 	}
-	p := &dbPlugin{dir: abs, module: module, key: m.Key, access: len(m.Database.Access) > 0,
+	p := &dbPlugin{dir: abs, module: module, id: m.ID(), access: len(m.Database.Access) > 0,
 		migrations: filepath.Join(abs, filepath.FromSlash(m.Database.Migrations))}
 	// Overlay files land in the package at their own path (collectPackage),
 	// so the overlay's copy of the migrations directory joins the plugin's.
@@ -343,7 +343,7 @@ func (p *dbPlugin) drift(dsn string, files []sqlFile, stderr io.Writer) (*pgdbto
 		}
 	}
 	var out, errOut bytes.Buffer
-	cmd := exec.Command("go", "run", "./"+filepath.Base(tmp), "-key", p.key, migrations)
+	cmd := exec.Command("go", "run", "./"+filepath.Base(tmp), "-key", p.id, migrations)
 	cmd.Dir = p.dir
 	cmd.Env = append(os.Environ(), pgdbtool.DriftDSNEnv+"="+dsn)
 	cmd.Stdout, cmd.Stderr = &out, io.MultiWriter(stderr, &errOut)
@@ -383,7 +383,7 @@ func (p *dbPlugin) verify(dsn string, files []sqlFile, next *migration, stderr i
 	if !report.Clean() {
 		printReport(stderr, report, " after it")
 		if slices.ContainsFunc(report.Refused, func(r string) bool { return strings.Contains(r, ": index "+gormUniquePrefix) }) {
-			return fmt.Errorf("the generated %s does not bring the schema to the models; not written: %s", next.name, uniqueHint(p.key))
+			return fmt.Errorf("the generated %s does not bring the schema to the models; not written: %s", next.name, uniqueHint(p.id))
 		}
 		return fmt.Errorf("the generated %s does not bring the schema to the models; not written", next.name)
 	}
@@ -394,11 +394,11 @@ func (p *dbPlugin) verify(dsn string, files []sqlFile, next *migration, stderr i
 // field tagged unique: uni_<table>_<column>.
 const gormUniquePrefix = "uni_"
 
-// uniqueHint explains a refused uni_ index of the plugin key: the name of
-// a unique tag lacks the prefix, a named uniqueIndex has it.
-func uniqueHint(key string) string {
+// uniqueHint explains a refused uni_ index of plugin id: the name of a
+// unique tag lacks the prefix, a named uniqueIndex has it.
+func uniqueHint(id string) string {
 	return "GORM names the unique constraint of a field tagged unique " + gormUniquePrefix + "<table>_<column>, without the plugin's prefix; " +
-		"tag the field uniqueIndex:" + manifest.TablePrefix(key) + "<name> instead"
+		"tag the field uniqueIndex:" + manifest.TablePrefix(id) + "<name> instead"
 }
 
 var (
@@ -478,7 +478,7 @@ type migration struct {
 // changes a primary key or redefines an index it finds by name): a partial
 // file would hide what is left. verify catches a difference the statements
 // leave.
-func newMigration(dir, key, name string, report *pgdbtool.DriftReport) (*migration, error) {
+func newMigration(dir, id, name string, report *pgdbtool.DriftReport) (*migration, error) {
 	if slices.Contains(manual(report.Statements), true) || len(report.Unmapped) > 0 || len(report.Refused) > 0 ||
 		(len(report.Statements) == 0 && len(report.Differences) > 0) {
 		return nil, errManual
@@ -491,8 +491,8 @@ func newMigration(dir, key, name string, report *pgdbtool.DriftReport) (*migrati
 		return nil, err
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "-- %s %s: written by `sub2api-plugin db diff` from the GORM models (%s).\n", key, number, modelDir)
-	fmt.Fprintf(&b, "-- Runs as the plugin's database identity in the core's schema: every name starts with %s.\n", manifest.TablePrefix(key))
+	fmt.Fprintf(&b, "-- %s %s: written by `sub2api-plugin db diff` from the GORM models (%s).\n", manifest.DisplayID(id), number, modelDir)
+	fmt.Fprintf(&b, "-- Runs as the plugin's database identity in the core's schema: every name starts with %s.\n", manifest.TablePrefix(id))
 	b.WriteString("-- Idempotent: every statement can run again.\n\n")
 	for _, s := range report.Statements {
 		b.WriteString(idempotent(s) + ";\n")

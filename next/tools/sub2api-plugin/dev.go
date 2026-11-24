@@ -196,17 +196,17 @@ func (d *devSession) prepare() error {
 		if err != nil {
 			return err
 		}
-		if seen[m.Key] {
-			return fmt.Errorf("plugin %s is given twice", m.Key)
+		if seen[m.ID()] {
+			return fmt.Errorf("plugin %s is given twice", manifest.DisplayID(m.ID()))
 		}
-		seen[m.Key] = true
+		seen[m.ID()] = true
 		if err := d.sign(files, m); err != nil {
 			return err
 		}
-		if err := writePackage(filepath.Join(staging, m.Key+PackageExt), files); err != nil {
+		if err := writePackage(filepath.Join(staging, m.ID()+PackageExt), files); err != nil {
 			return err
 		}
-		versions[m.Key] = m.Version
+		versions[m.ID()] = m.Version
 	}
 	if err := os.MkdirAll(d.builtin, 0o755); err != nil {
 		return err
@@ -254,7 +254,7 @@ func (d *devSession) packSource(s *devSource, stamp string) (map[string][]byte, 
 	}
 	// The dev version goes into a full manifest in a generated overlay, next
 	// to the files of the plugin's own overlay.
-	ov := filepath.Join(d.work, m.Key, "overlay")
+	ov := filepath.Join(d.work, m.ID(), "overlay")
 	if err := os.RemoveAll(ov); err != nil {
 		return nil, nil, err
 	}
@@ -273,7 +273,7 @@ func (d *devSession) packSource(s *devSource, stamp string) (map[string][]byte, 
 	if err := os.WriteFile(filepath.Join(ov, overlayManifest), raw, 0o644); err != nil {
 		return nil, nil, err
 	}
-	out := filepath.Join(d.work, m.Key)
+	out := filepath.Join(d.work, m.ID())
 	if err := os.RemoveAll(filepath.Join(out, "runtimes")); err != nil {
 		return nil, nil, err
 	}
@@ -511,7 +511,7 @@ func (d *devSession) waitReady(ctx context.Context, stdout io.Writer) bool {
 				sort.Strings(keys)
 				fmt.Fprintf(stdout, "\nready in %s: http://%s\n", time.Since(began).Round(100*time.Millisecond), d.addr)
 				for _, k := range keys {
-					fmt.Fprintf(stdout, "  %s %s\n", k, d.versions[k])
+					fmt.Fprintf(stdout, "  %s %s\n", manifest.DisplayID(k), d.versions[k])
 				}
 				fmt.Fprintln(stdout)
 				return true

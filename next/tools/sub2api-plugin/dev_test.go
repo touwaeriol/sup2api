@@ -74,7 +74,7 @@ func TestDevPrepare(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := d.versions["anthropic"]
-	if !strings.Contains(first, "-dev.") || d.versions["demo"] != "0.1.0" {
+	if !strings.Contains(first, "-dev.") || d.versions["_tester__demo"] != "0.1.0" {
 		t.Fatalf("versions %v", d.versions)
 	}
 	entries, _ := os.ReadDir(d.builtin)
@@ -82,7 +82,7 @@ func TestDevPrepare(t *testing.T) {
 	for _, e := range entries {
 		names = append(names, e.Name())
 	}
-	if strings.Join(names, ",") != "anthropic.s2plugin,demo.s2plugin" {
+	if strings.Join(names, ",") != "_tester__demo.s2plugin,anthropic.s2plugin" {
 		t.Fatalf("built-in dir: %v", names)
 	}
 	// Each package verifies with the key the core is told to trust, and
@@ -113,7 +113,7 @@ func TestDevPrepare(t *testing.T) {
 			t.Fatalf("%s: %v", name, err)
 		}
 		m, _ := parseManifest(files[pkgsig.ManifestFile])
-		if sig.Publisher != m.Publisher || m.Version != d.versions[m.Key] {
+		if sig.Publisher != m.Publisher || m.Version != d.versions[m.ID()] {
 			t.Fatalf("%s: signature %+v manifest %s %s", name, sig, m.Publisher, m.Version)
 		}
 	}
