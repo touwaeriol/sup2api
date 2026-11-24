@@ -13,7 +13,7 @@
 - 账号测试照常测上游；测试成功时，如果模型（账号映射之前的名字）在账号的某个分组里没有价格（分组价和全局价都没有；账号不在分组时只看全局价），结果会带上 `warnings`（`model_price_not_configured`，列出缺价的分组）。原来测试成功、客户端调用却被 403 拒绝的情况，现在测试时就能看出来。
 - 成功的测试把警告写进最近测试的消息。控制台在模型测试弹窗里显示“成功，有警告”和警告提示条，账号列表“最近测试”显示“有警告”，模型测试和批量测试结束时的提示会附上有警告的个数。
 
-### 插件商店：官方商店与频道、信任取自索引、去掉密钥、只用 HTTPS、弃用（分支 `feat/market`、`feat/market-official`、`feat/plugin-identity`；迁移 0125，单向，改库走 `primary-first-v1`；CONTRACTS §11.1、§136、§137.6；发布与回退见 `next/deploy/rollback/market-0125-release.md`）
+### 插件商店：官方商店与频道、信任取自索引、去掉密钥、只用 HTTPS、弃用（分支 `feat/market`、`feat/market-official`、`feat/plugin-identity`、`feat/plugin-release`；迁移 0125，单向，改库走 `primary-first-v1`；CONTRACTS §11.1、§136、§137.6；发布与回退见 `next/deploy/rollback/market-0125-release.md`）
 
 - **index.json v2**：核心只拉各频道的 `index.json`，不再有 `index.json.sig`；v2 带 `publishers`（`trust`、`status`、`github`）、插件的 `repo`/`source`/`builtin`/`deprecated`、版本的 `release_url`/`deprecated`/`source_digest`（核心忽略后者）。v1 与 `market.VerifyIndex`/`SignIndex` 删除。发布者 `id` 不合规时整份索引无效；`homepage`、`source`、`release_url` 不是 https 地址时丢弃该字段。
 - **商店与频道**（CONTRACTS §137.6）：只有官方仓库能做商店：唯一的商店是登记处 touwaeriol/sup2api-plugin（`market_stores`，0125 种下，可以改名，不能加、删）。频道是仓库的分支，索引在 `https://raw.githubusercontent.com/<仓库>/index-<分支>/index.json`（地址读时推出，不存库）；0125 第一次运行时种下“正式”/`main`（默认）与“测试”/`develop`，管理员可增删改频道、换默认频道，新频道的分支还没有索引时照样保存并提示。新接口 `GET`/`PATCH /market/stores`、`POST /market/stores/:id/sources`、`PATCH`/`DELETE /market/sources/:id`，`GET /market/plugins` 可带 `refresh=true`。`SUB2API_MARKET_SOURCES` 删除，`SUB2API_MARKET_BASE_URL` 只给 e2e、单机栈与本地开发把官方商店指向本地市场，生产不设。市场页先选商店再选频道，系统设置下的“商店配置”页是官方商店的卡片（改名、频道）。
@@ -27,6 +27,7 @@
 - **商店列表**：`GET /market/plugins` 返回 `{data, host_version, generated_at, fetched_at}`，每项带 `id`、`display_id`、`store_id`、`store_name`、`publisher_github`，版本带 `sha256`。
 - **控制台**：插件市场页先选商店再选频道，显示发布者名称与信任级别、吊销/缺失标记（禁止安装）、内置、弃用（原因）、主页/仓库/源码链接，可按发布者筛选；插件页列出频道里的全部版本，标出弃用版本并给出“更新说明”链接；确认页把 `indexed` 当作通过。已装插件的“来源”列：内置、商店（`indexed`）或手动上传。
 - **索引登记处与插件版本记录**（CONTRACTS §135）：登记处目录改为 `plugins/<publisher>/<key>/`（`--plugin` 写 `publisher/key`，只写 key 指 `sub2api`），索引里插件先列 `sub2api` 的再按发布者、key 排序；登记处的频道是分支，索引发布到 `index-<branch>`：测试频道 `develop`（`index-develop`，登记 PR 提到这里）和正式频道 `main`（`index-main`，由 `develop` 晋级），晋级 PR 用 `registry check --promotion`。`pack` 在包里写 `source.json`（源码摘要），`registry add-version` 记成版本的 `source_digest`，`registry check` 核对。`next/plugins/released.json` 与 `TestReleasedPluginsBumped` 删除，改由 next CI 的 `sub2api-plugin released-check --strict` 对照 `index-develop`：已登记的版本源码变了就失败，要升版本、发布、向登记处 `develop` 提 `add-version` PR。
+- **第一方插件发 Release**：`.github/workflows/plugin-release.yml` 按 tag `plugin-<key>-v<版本>`（提交须在 develop 上，版本须等于清单版本）构建原生界面与 linux/amd64、arm64 运行时，打包（带 `source.json`，不签名）并发成只含这一个 `.s2plugin` 的 Release，供登记处 `registry add-version` 登记；脚本在 `.github/plugin-release/package-plugin.sh`。
 
 ### 插件 id = 发布者 + key（分支 `feat/plugin-identity`；迁移 0125 的检查；CONTRACTS §137）
 

@@ -70,7 +70,7 @@ git push origin core-v0.1.293
 
 - **第一个 `core-v*` 发布**没有上一版清单可读：推 tag 触发的运行会在 validate tag 失败。在 Actions 里手动运行本工作流，填这个 tag、取消 `dry_run`，`schema_before` 填它要升级的线上核心的 `sub2api schema-contract` 输出（64 位十六进制）；与本版相同时策略记为 `rolling`，不同时为 `maintenance`（主节点优先升级）。
 - 镜像按摘要推送发生在审批之前；审批被拒时 GHCR 里只留下一个无标签的版本，可在包设置里删掉。节点只认清单里记录的镜像摘要。
-- **插件版本**：插件内容变了必须先升版本（next CI 的 `released-check` 对照测试频道的索引把关，CONTRACTS §135）。插件包发到 GitHub Release（一个 Release 一个 `.s2plugin`，tag `plugin-<key>-v<版本>`）后，在 touwaeriol/sup2api-plugin 的 checkout 里运行 `sub2api-plugin registry add-version --registry . --plugin <key> --tag plugin-<key>-v<版本>`，向 `develop` 提 PR 登记；在测试频道（`develop`，索引 `index-develop`）验证后，由 `develop` 合进 `main` 进入正式频道（`index-main`）。
+- **插件版本**：插件内容变了必须先升版本（next CI 的 `released-check` 对照测试频道的索引把关，CONTRACTS §135）。发插件包：在 develop 上的提交打 tag `plugin-<key>-v<版本>`（key 是 manifest 的 `key`，版本等于 manifest 版本）并推送，`.github/workflows/plugin-release.yml` 构建原生界面与两个平台的运行时、打包（带 `source.json`，不签名）并发成只含这一个 `.s2plugin` 的 Release。之后在 touwaeriol/sup2api-plugin 的 checkout 里运行 `sub2api-plugin registry add-version --registry . --plugin <key> --tag plugin-<key>-v<版本>`，向 `develop` 提 PR 登记；在测试频道（`develop`，索引 `index-develop`）验证后，由 `develop` 合进 `main` 进入正式频道（`index-main`）。
 
 ## 镜像源：`sub2api-release mirror`
 
