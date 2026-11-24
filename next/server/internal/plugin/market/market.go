@@ -121,20 +121,36 @@ const (
 	OfficialURL  = "https://raw.githubusercontent.com/touwaeriol/sup2api-plugin/index/index.json"
 )
 
+// storeAddr is the address the official row takes: indexURL
+// (SUB2API_MARKET_URL), or OfficialURL when it is empty.
+func storeAddr(indexURL string) string {
+	if indexURL == "" {
+		return OfficialURL
+	}
+	return indexURL
+}
+
+// ValidateStoreURL checks SUB2API_MARKET_URL ("" = OfficialURL) as a market
+// URL: https, or http with Options.AllowHTTP. Every node checks it at start;
+// only the node that may write the source calls EnsureOfficial.
+func (s *Service) ValidateStoreURL(indexURL string) error {
+	if _, err := s.indexURL(storeAddr(indexURL)); err != nil {
+		return fmt.Errorf("market url: %w", err)
+	}
+	return nil
+}
+
 // EnsureOfficial makes the official store the only market source at start:
 // its row takes indexURL ("" = OfficialURL; SUB2API_MARKET_URL points it at
-// the local market of a test stack or development) and every other row is
-// deleted.
+// the local market of a test stack or development) and is enabled, and
+// every other row is deleted.
 func (s *Service) EnsureOfficial(ctx context.Context, indexURL string) error {
-	if indexURL == "" {
-		indexURL = OfficialURL
-	}
-	if _, err := s.indexURL(indexURL); err != nil {
-		return fmt.Errorf("market url: %w", err)
+	if err := s.ValidateStoreURL(indexURL); err != nil {
+		return err
 	}
 	return s.db.Tx(ctx, func(tx *gorm.DB) error {
 		g := store.G(ctx, tx)
-		if err := seedSource(g, OfficialName, indexURL).Error; err != nil {
+		if err := seedSource(g, OfficialName, storeAddr(indexURL)).Error; err != nil {
 			return err
 		}
 		return otherSources(g).Delete(&model.MarketSource{}).Error
@@ -146,9 +162,11 @@ func otherSources(db *gorm.DB) *gorm.DB {
 	return db.Where("name <> ?", OfficialName)
 }
 
-// seedSource upserts the source name: an existing one takes addr.
+// seedSource upserts the source name: an existing one takes addr and is
+// enabled.
 func seedSource(db *gorm.DB, name, addr string) *gorm.DB {
-	return db.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "name"}}, DoUpdates: clause.AssignmentColumns([]string{"url"})}).
+	set := clause.Assignments(map[string]any{"url": addr, "enabled": true})
+	return db.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "name"}}, DoUpdates: set}).
 		Create(&model.MarketSource{Name: name, URL: addr})
 }
 
@@ -167,9 +185,26 @@ func (s *Service) ListSources(ctx context.Context) ([]Source, error) {
 	return out, nil
 }
 
+// source is the enabled source id.
 func (s *Service) source(ctx context.Context, id int64) (*Source, error) {
+	return takeSource(sources(store.G(ctx, s.db.Gorm)).Where("id = ?", id))
+}
+
+// officialSource is the official store's row (EnsureOfficial).
+func (s *Service) officialSource(ctx context.Context) (*Source, error) {
+	return takeSource(officialRow(store.G(ctx, s.db.Gorm)))
+}
+
+// officialRow selects the official store's row as Source.
+func officialRow(db *gorm.DB) *gorm.DB {
+	return sources(db).Where("name = ?", OfficialName)
+}
+
+// takeSource reads the source q selects: 404 when it is missing or
+// disabled.
+func takeSource(q *gorm.DB) (*Source, error) {
 	var src Source
-	err := sources(store.G(ctx, s.db.Gorm)).Where("id = ?", id).Take(&src).Error
+	err := q.Take(&src).Error
 	if store.IsNoRows(err) {
 		return nil, core.ErrNotFound.WithMessage("market source not found")
 	}

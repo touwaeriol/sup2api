@@ -164,7 +164,7 @@ export default {
     storeURL: '商店地址',
     storeURLHint: '官方插件商店，不可修改。',
     searchPlaceholder: '搜索插件',
-    noSources: '插件商店不可用',
+    storeUnavailable: '插件商店不可用',
     noMatch: '没有匹配的插件',
     empty: '商店里没有插件',
     installedVersion: '已安装 v{version}',

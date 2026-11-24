@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { requestRaw } from '@sub2api/host'
@@ -29,7 +29,7 @@ const q = ref('')
 /** Publisher filter ('' = all). */
 const publisher = ref('')
 const loading = ref(false)
-const loadingSources = ref(true)
+const loadingStore = ref(true)
 
 /** The plugin whose version picker is open. */
 const picker = ref<MarketPlugin | null>(null)
@@ -60,15 +60,15 @@ const rows = computed(() => {
   return items.value.filter(m => (!publisher.value || m.publisher === publisher.value) && (!kw || matches(m, kw)))
 })
 
-async function loadSources() {
-  loadingSources.value = true
+async function loadStore() {
+  loadingStore.value = true
   try {
     const items = await fetchFirstPage<MarketSource>('/market/sources')
     store.value = items.find(s => s.enabled) ?? null
   } catch (e) {
     notifyError(e)
   } finally {
-    loadingSources.value = false
+    loadingStore.value = false
   }
 }
 
@@ -109,12 +109,8 @@ function install(version: string) {
   router.push(marketInstallLocation(sourceId.value, m.key, version))
 }
 
-watch(sourceId, () => {
-  publisher.value = ''
-  loadPlugins()
-})
 onMounted(async () => {
-  await Promise.all([loadSources(), loadInstalled()])
+  await Promise.all([loadStore().then(loadPlugins), loadInstalled()])
 })
 </script>
 
@@ -145,10 +141,10 @@ onMounted(async () => {
       </template>
     </SPageHeader>
 
-    <div v-if="loadingSources || (loading && !items.length)" class="flex justify-center py-20"><SSpinner size="lg" /></div>
+    <div v-if="loadingStore || (loading && !items.length)" class="flex justify-center py-20"><SSpinner size="lg" /></div>
 
     <SCard v-else-if="!store">
-      <SEmpty icon="market" :text="t('plugins.market.noSources')" />
+      <SEmpty icon="market" :text="t('plugins.market.storeUnavailable')" />
     </SCard>
 
     <SCard v-else-if="!rows.length">

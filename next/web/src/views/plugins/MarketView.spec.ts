@@ -13,6 +13,7 @@ import MarketView from './MarketView.vue'
 
 describe('MarketView', () => {
   beforeEach(() => {
+    vi.clearAllMocks()
     i18n.global.locale.value = 'en'
     mocks.firstPage.mockImplementation(async (path: string) =>
       path === '/market/sources' ? [{ id: 7, name: 'official', url: official, enabled: true }] : []
@@ -26,6 +27,15 @@ describe('MarketView', () => {
     const input = w.find('[data-testid="market-store-url"] input, input[data-testid="market-store-url"]')
     expect((input.element as HTMLInputElement).value).toBe(official)
     expect(input.attributes('readonly')).toBeDefined()
+    expect(mocks.raw).toHaveBeenCalledOnce()
     expect(mocks.raw).toHaveBeenCalledWith('GET', '/market/plugins', { query: { source_id: 7 } })
+  })
+
+  it('says the store is unavailable without an enabled store and lists nothing', async () => {
+    mocks.firstPage.mockResolvedValue([])
+    const w = mount(MarketView, { global: { plugins: [i18n], stubs: { RouterLink: true } } })
+    await flushPromises()
+    expect(w.text()).toContain(i18n.global.t('plugins.market.storeUnavailable'))
+    expect(mocks.raw).not.toHaveBeenCalled()
   })
 })

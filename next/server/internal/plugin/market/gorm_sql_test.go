@@ -37,6 +37,12 @@ func TestSQLMarketSources(t *testing.T) {
 			return sources(db).Where("id = ?", 5).Take(&src)
 		})
 	})
+	t.Run("official", func(t *testing.T) {
+		gormtest.Assert(t, func(db *gorm.DB) *gorm.DB {
+			var src Source
+			return officialRow(db).Take(&src)
+		})
+	})
 }
 
 func TestSQLMarketRevokedPublishers(t *testing.T) {

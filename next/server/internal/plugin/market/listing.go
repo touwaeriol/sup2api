@@ -70,11 +70,18 @@ func Compatible(hostCompat, hostVersion string) bool {
 	return err == nil && ok
 }
 
-// ListPlugins lists the plugins of one source (sourceID > 0) or of every
-// enabled source, annotated with their publisher, install state and update
+// ListPlugins lists the plugins of source sourceID (0: the official
+// store), annotated with their publisher, install state and update
 // availability.
 func (s *Service) ListPlugins(ctx context.Context, sourceID int64, refresh bool) ([]MarketPlugin, error) {
-	ids, err := s.sourceIDs(ctx, sourceID)
+	if sourceID == 0 {
+		src, err := s.officialSource(ctx)
+		if err != nil {
+			return nil, err
+		}
+		sourceID = src.ID
+	}
+	idx, src, err := s.Index(ctx, sourceID, refresh)
 	if err != nil {
 		return nil, err
 	}
@@ -82,38 +89,11 @@ func (s *Service) ListPlugins(ctx context.Context, sourceID int64, refresh bool)
 	if err != nil {
 		return nil, err
 	}
-	out := []MarketPlugin{}
-	for _, id := range ids {
-		idx, src, err := s.Index(ctx, id, refresh)
-		if err != nil {
-			if sourceID > 0 {
-				return nil, err
-			}
-			continue // skip broken sources when listing all
-		}
-		for _, p := range idx.Plugins {
-			out = append(out, st.plugin(src, idx, p))
-		}
+	out := make([]MarketPlugin, 0, len(idx.Plugins))
+	for _, p := range idx.Plugins {
+		out = append(out, st.plugin(src, idx, p))
 	}
 	return out, nil
-}
-
-// sourceIDs is sourceID, or every enabled source when it is 0.
-func (s *Service) sourceIDs(ctx context.Context, sourceID int64) ([]int64, error) {
-	if sourceID > 0 {
-		return []int64{sourceID}, nil
-	}
-	srcs, err := s.ListSources(ctx)
-	if err != nil {
-		return nil, err
-	}
-	var ids []int64
-	for _, src := range srcs {
-		if src.Enabled {
-			ids = append(ids, src.ID)
-		}
-	}
-	return ids, nil
 }
 
 // listState is what a listing annotates the indexes with.

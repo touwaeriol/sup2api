@@ -164,7 +164,7 @@ export default {
     storeURL: 'Store address',
     storeURLHint: 'The official plugin store; it cannot be changed.',
     searchPlaceholder: 'Search plugins',
-    noSources: 'The plugin store is not available',
+    storeUnavailable: 'The plugin store is not available',
     noMatch: 'No plugin matches your search',
     empty: 'The store has no plugins',
     installedVersion: 'installed v{version}',

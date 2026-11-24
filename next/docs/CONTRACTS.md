@@ -266,7 +266,7 @@
 | GET `/plugins/:key/events` | `plugin:read` | 游标、积压、死信 |
 | GET `/ui/plugins` | `self:plugin_ui`（§80.1：会话天然持有，访问密钥须勾选） | 前端扩展：`[{key, version, asset_base, menus, pages, slots, account_actions, native_entry, trust}]`（按权限过滤） |
 | GET `/nodes` | `node:read` | |
-| GET `/market/sources`、GET `/market/plugins?source_id=` | `plugin:market:read` | 源为 `{id, name, url, enabled, created_at}`（没有 `public_key`）；插件列表的字段见 §136 |
+| GET `/market/sources`、GET `/market/plugins?source_id=` | `plugin:market:read` | 源为 `{id, name, url, enabled, created_at}`（没有 `public_key`）；不带 `source_id` 时列官方商店（§136.1），读不了时原样返回错误；插件列表的字段见 §136 |
 | GET/POST `/publishers`，POST `/publishers/:id/keys`，POST `/publishers/:id/revoke`，POST `/publisher-keys/:key_id/revoke` | `publisher:read` / `publisher:manage` | |
 
 补充约定（C1）：
@@ -9470,8 +9470,8 @@ sub2api-plugin registry import --registry <目录> --repo <owner/name> [--trust 
 
 - 市场不再签名：没有 `index.json.sig`，核心只拉 `index.json`；`market.VerifyIndex`、`SignIndex`、`IndexSignaturePrefix` 与 v1 格式删除。
 - 市场源没有公钥：迁移 `0125_market_sources_drop_public_key.sql` 删除 `market_sources.public_key`；`GET /market/sources` 不再返回 `public_key`。
-- **只接受官方商店**（2026-11-24 用户定“目前我们只接受官方的商店……默认就是官方的地址，不可编辑”）：官方索引地址是核心常量 `market.OfficialURL`（`https://raw.githubusercontent.com/touwaeriol/sup2api-plugin/index/index.json`），源名 `official`。`SUB2API_MARKET_SOURCES` 删除；核心启动时（不受托管的核心、首次安装的 bootstrap、托管集群的主节点，每次启动都做）`market.EnsureOfficial` 在一个事务里把 `official` 行的地址设为 `SUB2API_MARKET_URL`（空 = 官方地址；只给 e2e、单机栈与本地开发指向本地市场用，生产不设），并删除其他所有源行（`market_sources` 没有外键引用）。`market_sources` 表与接口里的 `source_id` 保留，作为以后可配置商店地址的数据模型；没有修改源的接口。网关外壳透传 `SUB2API_MARKET_URL`（取代 `SUB2API_MARKET_SOURCES`）。
-- 可信来源是登记处仓库（PR 审核）、HTTPS 与索引里审核过的 sha256：市场源地址与解析后的包地址只接受 `https://`；`SUB2API_MARKET_ALLOW_HTTP=true`（默认 false，网关外壳透传给核心）时也接受 `http://`，只给本地市场用（e2e 栈的 Caddy、`deploy/single`、网关真实核心测试的 httptest），生产不设。市场客户端只跟随到同样合规的地址的跳转（`market.CheckRedirect`，核心各节点下载市场包也用它），https 的源跳到 http 时请求失败。它不像 `SUB2API_PLUGIN_DEV_MODE` 那样关沙箱。`SUB2API_MARKET_URL` 不合规时核心启动失败。
+- **只接受官方商店**（2026-11-24 用户定“目前我们只接受官方的商店……默认就是官方的地址，不可编辑”）：官方索引地址是核心常量 `market.OfficialURL`（`https://raw.githubusercontent.com/touwaeriol/sup2api-plugin/index/index.json`），源名 `official`。`SUB2API_MARKET_SOURCES` 删除；每个节点启动时先用 `market.ValidateStoreURL` 检查 `SUB2API_MARKET_URL`（空 = 官方地址；只给 e2e、单机栈与本地开发指向本地市场用，生产不设），不合规就启动失败；能协调插件的核心（不受托管的核心、首次安装的 bootstrap、托管集群的主节点，即 `coordinateAllowed`，每次启动都做）再由 `market.EnsureOfficial` 在一个事务里把 `official` 行的地址设为它、把这一行重新启用，并删除其他所有源行（`market_sources` 没有外键引用）；其他节点不写。`market_sources` 表与接口里的 `source_id` 保留，作为以后可配置商店地址的数据模型；没有修改源的接口。网关外壳透传 `SUB2API_MARKET_URL`（取代 `SUB2API_MARKET_SOURCES`）。
+- 可信来源是登记处仓库（PR 审核）、HTTPS 与索引里审核过的 sha256：市场源地址与解析后的包地址只接受 `https://`；`SUB2API_MARKET_ALLOW_HTTP=true`（默认 false，网关外壳透传给核心）时也接受 `http://`，只给本地市场用（e2e 栈的 Caddy、`deploy/single`、网关真实核心测试的 httptest），生产不设。市场客户端只跟随到同样合规的地址的跳转（`market.CheckRedirect`，核心各节点下载市场包也用它），https 的源跳到 http 时请求失败。它不像 `SUB2API_PLUGIN_DEV_MODE` 那样关沙箱。`SUB2API_MARKET_URL` 不合规时每个节点都启动失败（主节点和从节点一样）。
 - 手动上传与内置插件的包签名规则不变（官方根密钥、`publisher_keys`、`SUB2API_PLUGIN_ALLOW_UNSIGNED`）。
 
 ### 136.2 市场来源的信任取自索引
@@ -9497,4 +9497,4 @@ sub2api-plugin registry import --registry <目录> --repo <owner/name> [--trust 
 
 - 0125 单向：删除 `market_sources.public_key`，加 `plugin_versions.trust_level`。删掉的公钥此后任何核心都不用，回退只能恢复升级前的备份；可以重跑。改库，走 `primary-first-v1`。发布与回退步骤见 `next/deploy/rollback/market-0125-release.md`。
 - 部署：生产（ovh、clicodeplus）不设 `SUB2API_MARKET_URL` 和 `SUB2API_MARKET_ALLOW_HTTP`，用默认的官方地址；compose 已删掉 `SUB2API_MARKET_SOURCES`。新核心不读 `SUB2API_MARKET_SOURCES`，旧核心照旧读它，所以发布前不用改 `.env`，升级后再从 `.env` 删掉 `MARKET_SOURCES`。用本地 http 市场的栈设 `SUB2API_MARKET_URL` 与 `SUB2API_MARKET_ALLOW_HTTP=true`（e2e、single 的 compose 已设），这样的栈要先换上透传这两个变量的网关再发核心。
-- 测试：`market`（只留官方商店、v2 解析、发布者 id、链接丢弃、跳转、发布者状态、弃用与最新版本、https 规则、下载拒绝吊销与缺失的发布者、下载重新拉索引）、`pkg`（`VerifyIndexed` 不改发布者行、`VerifyRecorded` 含缺失的发布者、`ReadVersionTrust`）、`install`（插件 id 相同即可从商店升级、版本信任、保留标识要索引的 official）、`plugin/api`（未签名的包经市场安装取得索引的 official，手动上传同一个包被拒；版本信任出现在列表与 review，发布者行仍是 community）、`registry`（加载时按版本行验签）。
+- 测试：`app`（`ensureMarket`：不受托管、bootstrap、主节点写入，从节点不写但仍检查地址）、`market`（只留官方商店并重新启用、不带源 id 的列表读官方商店、v2 解析、发布者 id、链接丢弃、跳转、发布者状态、弃用与最新版本、https 规则、下载拒绝吊销与缺失的发布者、下载重新拉索引）、`pkg`（`VerifyIndexed` 不改发布者行、`VerifyRecorded` 含缺失的发布者、`ReadVersionTrust`）、`install`（插件 id 相同即可从商店升级、索引列的发布者与已装插件不同时 409、版本信任、保留标识要索引的 official）、`plugin/api`（未签名的包经市场安装取得索引的 official，手动上传同一个包被拒；版本信任出现在列表与 review，发布者行仍是 community）、`registry`（加载时按版本行验签）。

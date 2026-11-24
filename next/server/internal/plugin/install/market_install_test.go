@@ -2,6 +2,7 @@ package install
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/pkg"
@@ -62,6 +63,20 @@ func wantPublisherTrust(t *testing.T, e *env, name, want string) {
 	err := e.db.SQL.QueryRowContext(context.Background(), `SELECT trust_level FROM publishers WHERE name = $1`, name).Scan(&trust)
 	if err != nil || trust != want {
 		t.Fatalf("%s trust_level = %q %v, want %q", name, trust, err, want)
+	}
+}
+
+// A store install of a plugin whose listing names another publisher than
+// the installed plugin's is refused (409): the same id is not enough.
+func TestMarketUpgradeOtherPublisher(t *testing.T) {
+	e := newEnv(t)
+	acme := acmePublisher(t, e, pkg.TrustCommunity)
+	if err := e.installed(t, pkgtest.Build(pkgtest.Minimal("acme_tool", "1.0.0", "acme"), acme), UploadOptions{Source: "upload"}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := e.svc.Upload(context.Background(), indexedPackage("acme_tool", "1.0.1", "other"), e.admin, fromMarket("1", "other", pkg.TrustVerified))
+	if errCode(err) != "conflict" || !strings.Contains(err.Error(), "owned by another publisher") {
+		t.Fatalf("store install by another publisher: %v", err)
 	}
 }
 

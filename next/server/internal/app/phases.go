@@ -186,16 +186,20 @@ func (b *boot) startPluginRuntime(trust *pkg.TrustStore) error {
 	return b.startBuiltins()
 }
 
-// ensureMarket makes the official store the only market source
-// (market.EnsureOfficial, at SUB2API_MARKET_URL) on every start of a core
-// that may write it: an unmanaged one, a bootstrap, or the managed primary
-// (it coordinates plugins), so that an upgrade or a changed
+// ensureMarket checks SUB2API_MARKET_URL on every node, then makes the
+// official store the only market source (market.EnsureOfficial) on every
+// start of a core that may coordinate plugins: an unmanaged one, a
+// bootstrap or the managed primary, so that an upgrade or a changed
 // SUB2API_MARKET_URL takes effect without a bootstrap.
 func (b *boot) ensureMarket() error {
-	if m := b.managed; m != nil && !m.prepare.Bootstrap && !m.prepare.CoordinatePlugins {
+	url := b.cfg.Plugins.MarketURL
+	if err := b.mkt.ValidateStoreURL(url); err != nil {
+		return err
+	}
+	if m := b.managed; m != nil && !m.coordinateAllowed() {
 		return nil
 	}
-	if err := b.mkt.EnsureOfficial(b.ctx, b.cfg.Plugins.MarketURL); err != nil {
+	if err := b.mkt.EnsureOfficial(b.ctx, url); err != nil {
 		return fmt.Errorf("market: %w", err)
 	}
 	return nil

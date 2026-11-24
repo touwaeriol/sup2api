@@ -1,5 +1,7 @@
 -- sql
-INSERT INTO "market_sources" ("name","url") VALUES ($1,$2) ON CONFLICT ("name") DO UPDATE SET "url"="excluded"."url" RETURNING "id","enabled","created_at"
+INSERT INTO "market_sources" ("name","url") VALUES ($1,$2) ON CONFLICT ("name") DO UPDATE SET "enabled"=$3,"url"=$4 RETURNING "id","enabled","created_at"
 -- vars
 $1 string "official"
 $2 string "https://market.example/index.json"
+$3 bool true
+$4 string "https://market.example/index.json"

@@ -1,0 +1,5 @@
+-- sql
+SELECT id, name, url, enabled, created_at FROM "market_sources" WHERE name = $1 LIMIT $2
+-- vars
+$1 string "official"
+$2 int 1
