@@ -11,7 +11,15 @@ import (
 // a market index and the plugin registry name it (CONTRACTS §11.1). Like a
 // plugin key it holds no "__" and does not end in "_", so that a plugin id
 // (manifest.PluginID) splits back into its publisher and key.
-var publisherIDRe = regexp.MustCompile(`^[a-z0-9](_?[a-z0-9]){0,26}$`)
+var publisherIDRe = regexp.MustCompile(`^[a-z0-9](_?[a-z0-9])*$`)
+
+// PublisherIDMaxLen is the longest publisher id: the one that still makes a
+// plugin id of manifest.PluginIDMaxLen bytes with the shortest plugin key
+// ("_" + publisher + "__" + two bytes).
+const PublisherIDMaxLen = manifest.PluginIDMaxLen - len("_") - len("__") - minPluginKeyLen
+
+// minPluginKeyLen is the shortest plugin key pluginKeyRe accepts.
+const minPluginKeyLen = 2
 
 // ValidatePublisherID reports why id cannot be a publisher id of a market
 // index or the plugin registry (nil when it can). The registry tool and the
@@ -19,6 +27,9 @@ var publisherIDRe = regexp.MustCompile(`^[a-z0-9](_?[a-z0-9]){0,26}$`)
 func ValidatePublisherID(id string) error {
 	if !publisherIDRe.MatchString(id) {
 		return fmt.Errorf("publisher id %q must match %s", id, publisherIDRe)
+	}
+	if len(id) > PublisherIDMaxLen {
+		return fmt.Errorf("publisher id %q is longer than %d bytes", id, PublisherIDMaxLen)
 	}
 	return nil
 }

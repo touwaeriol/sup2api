@@ -6,12 +6,12 @@ import (
 )
 
 func TestValidatePublisherID(t *testing.T) {
-	for _, id := range []string{"sub2api", "acme_labs", "a", "0x_1", strings.Repeat("a", 27)} {
+	for _, id := range []string{"sub2api", "acme_labs", "a", "0x_1", strings.Repeat("a", PublisherIDMaxLen), strings.Repeat("a_", 12) + "a"} {
 		if err := ValidatePublisherID(id); err != nil {
 			t.Errorf("%q: %v", id, err)
 		}
 	}
-	for _, id := range []string{"", "Acme", "-acme", "_acme", "ac me", "acme.io", "ac/me", "acme-labs", "ac__me", "acme_", strings.Repeat("a", 28)} {
+	for _, id := range []string{"", "Acme", "-acme", "_acme", "ac me", "acme.io", "ac/me", "acme-labs", "ac__me", "acme_", strings.Repeat("a", PublisherIDMaxLen+1), strings.Repeat("a_", 13) + "a"} {
 		if ValidatePublisherID(id) == nil {
 			t.Errorf("%q accepted", id)
 		}
@@ -19,6 +19,9 @@ func TestValidatePublisherID(t *testing.T) {
 }
 
 func TestValidatePluginID(t *testing.T) {
+	if err := ValidatePluginID(strings.Repeat("p", PublisherIDMaxLen), "ab"); err != nil {
+		t.Errorf("longest publisher, shortest key: %v", err)
+	}
 	if err := ValidatePluginID("sub2api", "a"+strings.Repeat("b", 29)); err != nil {
 		t.Errorf("official 30-byte key: %v", err)
 	}
