@@ -9534,7 +9534,7 @@ sub2api-plugin released-check --plugins <插件目录的上级> --index <index.j
   - 检查：装着清单发布者不是 `sub2api` 的插件、或留着这样的发布者退役的标识时，在改任何东西之前失败并列出它们（§137.5）。
   - 本节的部分：删除 `market_sources.public_key`，加 `plugin_versions.trust_level`。
   - 商店与频道的部分（§137.6）：建 `market_stores` 并种下官方商店；`market_sources` 加 `store_id`、`branch`、`is_default`，删除 `url`；第一次运行（还没有行带分支）时加“测试”/`develop`，把名为 `official` 的源行改成默认频道“正式”/`main`（保留 id），删除其他源行；商店没有默认频道时加“正式”/`main`。
-  - 可以重跑：重跑不改数据，管理员删掉、改过的频道保持原样。删掉的公钥、地址与源行此后任何核心都不用，回退只能恢复升级前的备份。预检查询（检查的两条 SQL、源行的名字）与发布、回退步骤见 `next/deploy/rollback/market-0125-release.md`。
+  - 可以重跑：重跑不改数据，管理员删掉、改过的频道保持原样。删掉的公钥、地址与源行此后任何核心都不用，回退只能恢复升级前的备份。预检查询（检查的两条 SQL、源行的名字）与发布、回退步骤见 `next/deploy/rollback/0.1.313-market-0125-release.md`。
 - 部署：生产（ovh、clicodeplus）不设 `SUB2API_MARKET_BASE_URL` 和 `SUB2API_MARKET_ALLOW_HTTP`，用官方商店的默认地址；compose 已删掉 `SUB2API_MARKET_SOURCES`。新核心不读 `SUB2API_MARKET_SOURCES`，旧核心照旧读它，所以发布前不用改 `.env`，升级后再从 `.env` 删掉 `MARKET_SOURCES`。用本地 http 市场的栈设 `SUB2API_MARKET_BASE_URL` 与 `SUB2API_MARKET_ALLOW_HTTP=true`（e2e、single 的 compose 已设），这样的栈要先换上透传这两个变量的网关再发核心。
 - 测试：`app`（`ensureMarket`：不受托管、bootstrap、主节点补回丢了的默认频道，从节点不写但仍检查 base；频道地址跟随 base）、`market`（`EnsureStores` 补回官方商店与默认频道、不删频道，不带源 id 的列表读官方商店的默认频道、v2 解析、发布者 id 与插件 id、链接丢弃、跳转、包地址只限 GitHub Release、发布者状态、弃用与最新版本、https 规则、下载拒绝吊销与缺失的发布者、下载重新拉索引）、`pkg`（`VerifyIndexed` 不改发布者行、`VerifyRecorded` 含缺失的发布者、`ReadVersionTrust`）、`install`（插件 id 相同即可从商店升级、索引列的发布者与已装插件不同时 409、版本信任、保留标识要索引的 official、官方发布者不能加密钥）、`plugin/api`（未签名的包经市场安装取得索引的 official，手动上传同一个包被拒；版本信任出现在列表与 review，发布者行仍是 community）、`registry`（加载时按版本行验签）、`migrations`（0125 的检查、首次运行与重跑）。
 

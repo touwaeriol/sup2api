@@ -8,12 +8,29 @@
 
 开发完成、尚未上线的改动。发布时改成发布日期的一节，补上提交、实际版本号和发布过程。
 
-### 账号测试提示缺少模型价格（分支 `feat/account-test-price-check`；无迁移，滚动更新；CONTRACTS §122.5）
+## 2026-11-25
+
+### 核心 0.1.313：插件商店（官方商店与频道、信任取自索引）、插件 id = 发布者 + key、账号测试提示缺少模型价格（`be1636496`；迁移 0125，单向，停机维护；网关仍 0.1.139）
+
+- **构建**：照 0.1.308 的做法在 ovh 上从 touwaeriol/sup2api develop `be1636496` 构建（`stage/own-0.1.313/`，153 秒，内置包用 `sup2api-plugins-2026` 重签；`prepare-core-release.sh` 要逐个查 sup2api-1…4 四个节点，现在的集群对不上，所以照旧用 `own-<版本>` 的 env.sh、build.sh、pack.sh）。清单 sha256 `c32581bb642fb67b04e8acfad42b2a448ffb0347256a69d5f61534393691e324`（`release_id` `core-v0.1.313`，amd64 bundle `f9f57de1…dc8`、arm64 `ab2dca1e…dda`），strategy maintenance，schema `395364cf…2436` → `d3f7a424a653aac5cb9e96054b4fb37f2d890a5dc86a4c768c075932d622b927`。内置插件版本与 0.1.312 相同，但 10 个包的字节都变了（SDK 改动编进每个插件），`trust.pub`、`trust.keyid`、`install-only.txt` 不变；核心按版本判断内置插件已就位，继续用库里登记的包，没有重新上传或升级。
+- **发布前**：GitHub next CI 通过（`be1636496` 的 run 45456717102；Security Scan 是既有失败）。在生产库副本上演练过一次（本机，同库 OID、两节点、网关 0.1.139 + 核心 0.1.312 起步，`primary-first-v1`，主节点停 3.2 秒，0125 约 10 毫秒，商店装插件、请求计费、日志都正常）。对线上库只读重跑手册第一节第 1、2 项：两条都是 0 行；`market_sources` 只有 `id=1 local-dev`（`http://market:8080/index.json`，以前单机栈的本地市场），按演练结论接受 0125 删除它、不改名（审计里 6 条 2026-09/10 的 `plugin.upload source=market:1` 来自本地市场，不挂到“正式”频道上）。新核心只读 `check-prices` 通过。没有另做数据库备份（Supabase 自动备份的时间点未查）。
+- **ovh 集群**（北京时间 2026-11-25 04:00–04:01，用户原话“同意在流量发布版本零点幺点三幺三到 ovh集群。”）：用户选择不停用 new-api 渠道 392，带流量升级（发布前 30 分钟 sup2api 有 1213 个请求，1197 个经 new-api 渠道 392）。03:53:31 import，预检 primary-first-v1、无阻断（expected_revision 589），计划 `75bc4bbb7944a78a5192c09053ef71b4` 04:00:56.7→04:01:49.1，迁移 0125 于 04:01:17.53 应用，revision 589→591；ovh 3130 `/readyz` 503 约 9.1 秒（04:01:12.8→04:01:21.9），api.prophey.ai 约 8.5 秒（04:01:13.2→04:01:21.7，0.5 秒探测）。停机前后的请求：04:00:31–04:01:09 开始的 33 个流式请求里 9 个被切断（记为 499 `client_canceled`），new-api 侧对应 04:01:13 的 5 个 502 和 04:01:16 的 1 个 503（停机窗口里的请求在网关返回 503，不进使用记录）；没有 5xx 进使用记录。之后那位 new-api 用户一度没有新请求，04:03:20 起恢复，200。
+- **核验**：两节点核心 0.1.313、网关 0.1.139，7 个启用插件 active、ready、restarts 0；moderation、mailer 的设置可读，dynweight、moderation 仍以 `plg713988_*` 身份连库；`market_sources` 已没有 `public_key`、`url`，是官方商店的两个频道 `67 正式 main 默认`、`66 测试 develop`，`GET /market/sources` 给出 `index-main`、`index-develop` 的地址；`market_stores` 一行（官方商店，touwaeriol/sup2api-plugin）；`plugin_versions.trust_level` 已加（原有 143 个版本为 NULL）；`GET /market/plugins` 正式频道 16 个插件，都是官方；升级后 `check-prices` 通过；经 api.prophey.ai 用临时密钥（分组 9、账号 127，已删）非流式、流式 `/v1/messages`（claude-haiku-5-5）200、`billed`。两节点日志从计划完成起没有 ERROR，唯一一条 ERROR 是 04:01:13 旧核心停止时 River 的 `Error starting transaction: context canceled`。没有从商店装或升级插件，没有重建网关容器。ec2pool 未升级。
+- 回退：0125 单向，只能停掉全部节点、把数据库恢复到升级前的备份、换回 0.1.312（清单 `5b3eb0bd…05cc`）。
+
+#### 升级须知
+
+- 发布与回退步骤见 [`next/deploy/rollback/0.1.313-market-0125-release.md`](next/deploy/rollback/0.1.313-market-0125-release.md)（ec2pool 还没升级，手册保留）。
+- 之后重建网关容器时，先换上不引用 `MARKET_SOURCES` 的 compose，再从两个节点的 `.env` 删掉 `MARKET_SOURCES`（新核心不读它）。
+
+本次发布包含的改动：
+
+#### 账号测试提示缺少模型价格（分支 `feat/account-test-price-check`；无迁移，滚动更新；CONTRACTS §122.5）
 
 - 账号测试照常测上游；测试成功时，如果模型（账号映射之前的名字）在账号的某个分组里没有价格（分组价和全局价都没有；账号不在分组时只看全局价），结果会带上 `warnings`（`model_price_not_configured`，列出缺价的分组）。原来测试成功、客户端调用却被 403 拒绝的情况，现在测试时就能看出来。
 - 成功的测试把警告写进最近测试的消息。控制台在模型测试弹窗里显示“成功，有警告”和警告提示条，账号列表“最近测试”显示“有警告”，模型测试和批量测试结束时的提示会附上有警告的个数。
 
-### 插件商店：官方商店与频道、信任取自索引、去掉密钥、只用 HTTPS、弃用（分支 `feat/market`、`feat/market-official`、`feat/plugin-identity`、`feat/plugin-release`；迁移 0125，单向，改库走 `primary-first-v1`；CONTRACTS §11.1、§136、§137.6；发布与回退见 `next/deploy/rollback/market-0125-release.md`）
+#### 插件商店：官方商店与频道、信任取自索引、去掉密钥、只用 HTTPS、弃用（分支 `feat/market`、`feat/market-official`、`feat/plugin-identity`、`feat/plugin-release`；迁移 0125，单向，改库走 `primary-first-v1`；CONTRACTS §11.1、§136、§137.6；发布与回退见 `next/deploy/rollback/0.1.313-market-0125-release.md`）
 
 - **index.json v2**：核心只拉各频道的 `index.json`，不再有 `index.json.sig`；v2 带 `publishers`（`trust`、`status`、`github`）、插件的 `repo`/`source`/`builtin`/`deprecated`、版本的 `release_url`/`deprecated`/`source_digest`（核心忽略后者）。v1 与 `market.VerifyIndex`/`SignIndex` 删除。发布者 `id` 不合规时整份索引无效；`homepage`、`source`、`release_url` 不是 https 地址时丢弃该字段。
 - **商店与频道**（CONTRACTS §137.6）：只有官方仓库能做商店：唯一的商店是登记处 touwaeriol/sup2api-plugin（`market_stores`，0125 种下，可以改名，不能加、删）。频道是仓库的分支，索引在 `https://raw.githubusercontent.com/<仓库>/index-<分支>/index.json`（地址读时推出，不存库）；0125 第一次运行时种下“正式”/`main`（默认）与“测试”/`develop`，管理员可增删改频道、换默认频道，新频道的分支还没有索引时照样保存并提示。新接口 `GET`/`PATCH /market/stores`、`POST /market/stores/:id/sources`、`PATCH`/`DELETE /market/sources/:id`，`GET /market/plugins` 可带 `refresh=true`。`SUB2API_MARKET_SOURCES` 删除，`SUB2API_MARKET_BASE_URL` 只给 e2e、单机栈与本地开发把官方商店指向本地市场，生产不设。市场页先选商店再选频道，系统设置下的“商店配置”页是官方商店的卡片（改名、频道）。
@@ -29,7 +46,7 @@
 - **索引登记处与插件版本记录**（CONTRACTS §135）：登记处目录改为 `plugins/<publisher>/<key>/`（`--plugin` 写 `publisher/key`，只写 key 指 `sub2api`），索引里插件先列 `sub2api` 的再按发布者、key 排序；登记处的频道是分支，索引发布到 `index-<branch>`：测试频道 `develop`（`index-develop`，登记 PR 提到这里）和正式频道 `main`（`index-main`，由 `develop` 晋级），晋级 PR 用 `registry check --promotion`。`pack` 在包里写 `source.json`（源码摘要），`registry add-version` 记成版本的 `source_digest`，`registry check` 核对。`next/plugins/released.json` 与 `TestReleasedPluginsBumped` 删除，改由 next CI 的 `sub2api-plugin released-check --strict` 对照 `index-develop`：已登记的版本源码变了就失败，要升版本、发布、向登记处 `develop` 提 `add-version` PR。
 - **第一方插件发 Release**：`.github/workflows/plugin-release.yml` 在推送到 develop 时给每个清单版本还没有 Release 的插件发版（tag `plugin-<key>-v<版本>` 由 Release 建在该提交上；也可以在 develop 的提交上手动推这样的 tag，版本须等于清单版本）：构建原生界面与 linux/amd64、arm64 运行时，打包（带 `source.json`，不签名）并发成只含这一个 `.s2plugin` 的 Release，供登记处 `registry add-version` 登记；脚本在 `.github/plugin-release/`。
 
-### 插件 id = 发布者 + key（分支 `feat/plugin-identity`；迁移 0125 的检查；CONTRACTS §137）
+#### 插件 id = 发布者 + key（分支 `feat/plugin-identity`；迁移 0125 的检查；CONTRACTS §137）
 
 - **插件 id**：第一方发布者 `sub2api` 的插件 id 就是 key，其他发布者的是 `_<发布者>__<key>`；核心以前存插件 key 的地方（插件行、表前缀与数据库身份、数据目录、权限键、任务名、`/plugins/:key`）都存 id，界面显示 `erio/codex` 这样的形式。不同发布者可以各有同名插件。已有插件都是 `sub2api` 的，数据不变。
 - **保留发布者**：清单发布者是 `sub2api` 的包只有官方级别才能装（403 `plugin_publisher_reserved`），取代保留键表。本地发布者的名字须是合规的发布者 id（小写字母、数字、单个下划线，至多 25 字节），不能是 `sub2api`，也不能与官方商店索引里的发布者同名（409 `publisher_in_store`）。
