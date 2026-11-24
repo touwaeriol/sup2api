@@ -1,9 +1,8 @@
 <script setup lang="ts">
-// One store of the store settings: its name, official or third-party, its
-// repository (shown only here), its actions (rename, add a channel, delete a
-// third-party store) and its channels: enable or disable, set the default,
-// rename, delete. The default channel cannot be disabled or deleted; a
-// third-party store's note gives its trust rules (CONTRACTS §136).
+// The store of the store settings: its name, its repository (shown only
+// here), its actions (rename, add a channel) and its channels: enable or
+// disable, set the default, rename, delete. The default channel cannot be
+// disabled or deleted (CONTRACTS §137.6).
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '@sub2api/host'
@@ -35,7 +34,6 @@ async function patch(c: MarketSource, body: MarketSourcePatch) {
 }
 
 const removeChannel = (c: MarketSource) => deleteWithConfirm(`/market/sources/${c.id}`, t('market.settings.deleteConfirm', { name: c.name }), () => emit('changed'))
-const removeStore = () => deleteWithConfirm(`/market/stores/${props.store.id}`, t('market.stores.deleteConfirm', { name: props.store.name }), () => emit('changed'))
 </script>
 
 <template>
@@ -43,14 +41,11 @@ const removeStore = () => deleteWithConfirm(`/market/stores/${props.store.id}`, 
     <template #toolbar>
       <div class="flex w-full flex-wrap items-center gap-x-3 gap-y-2">
         <h2 class="text-base font-semibold">{{ store.name }}</h2>
-        <SBadge :tone="store.official ? 'accent' : 'gray'" :data-testid="`store-kind-${store.id}`">{{ t(store.official ? 'market.stores.official' : 'market.stores.thirdParty') }}</SBadge>
+        <SBadge v-if="store.official" tone="accent" :data-testid="`store-kind-${store.id}`">{{ t('market.stores.official') }}</SBadge>
         <span class="font-mono text-xs text-fg-muted" :data-testid="`store-repo-${store.id}`">{{ store.repo }}</span>
         <div v-if="canManage" class="ml-auto flex flex-wrap gap-1">
           <SButton size="sm" variant="ghost" :data-testid="`store-rename-${store.id}`" @click="emit('rename')">{{ t('market.settings.rename') }}</SButton>
           <SButton size="sm" variant="ghost" icon="plus" :data-testid="`store-add-channel-${store.id}`" @click="emit('addChannel')">{{ t('market.settings.add') }}</SButton>
-          <SButton v-if="!store.official" size="sm" variant="ghost" tone="danger" :data-testid="`store-delete-${store.id}`" @click="removeStore">
-            {{ t('market.stores.delete') }}
-          </SButton>
         </div>
       </div>
     </template>
@@ -61,7 +56,7 @@ const removeStore = () => deleteWithConfirm(`/market/stores/${props.store.id}`, 
         :model-value="row.enabled"
         :disabled="!canManage || row.is_default"
         :title="row.is_default ? t('market.settings.defaultLocked') : undefined"
-        :aria-label="t('market.settings.enabled')"
+        :aria-label="t('market.settings.enabledOf', { name: row.name })"
         :data-testid="`channel-enabled-${row.id}`"
         @update:model-value="v => patch(row, { enabled: v })"
       />
@@ -90,9 +85,7 @@ const removeStore = () => deleteWithConfirm(`/market/stores/${props.store.id}`, 
       </div>
     </template>
     <template #footer>
-      <SHint size="xs" class="py-2.5" :tone="store.official ? undefined : 'warning'" :data-testid="`store-note-${store.id}`">
-        {{ t(store.official ? 'market.stores.officialNote' : 'market.stores.thirdPartyNote') }}
-      </SHint>
+      <SHint size="xs" class="py-2.5" :data-testid="`store-note-${store.id}`">{{ t('market.stores.officialNote') }}</SHint>
     </template>
   </STable>
 </template>

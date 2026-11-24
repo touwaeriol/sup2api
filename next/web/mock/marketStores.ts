@@ -1,19 +1,19 @@
-// Mock of the plugin stores and their channels (CONTRACTS §137.6), in the
-// shapes of plugin/market: a store is a GitHub repository, a channel one of
-// its branches, whose index CI publishes to index-<branch>. Seeded with the
-// official store (正式/main default and 测试/develop) and a third-party team
-// store (正式/main). The official store cannot be deleted; a new store gets
-// the default channel 正式 on the branch it names; each store has one default
-// channel, which stays enabled and the default until another takes its place
-// and cannot be deleted; deleting a store deletes its channels.
+// Mock of the plugin store and its channels (CONTRACTS §137.6), in the
+// shapes of plugin/market: the store is the official GitHub repository, a
+// channel one of its branches, whose index CI publishes to index-<branch>.
+// Only the official store exists (正式/main default and 测试/develop): it is
+// renamed, never added or deleted. It has one default channel, which stays
+// enabled and the default until another takes its place and cannot be
+// deleted. A new channel whose branch has no index yet is saved with the
+// warning no_index.
 import { fail, noContent, now, on } from './router'
 import { invalid } from './common'
 import type { Any } from './plugins'
 
 const BRANCH = /^[A-Za-z0-9._-]{1,64}$/
-const REPO = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/
+/** The branches that have an index: main, develop (with the versions in testing) and an rc branch. */
+export const INDEXED_BRANCHES = ['main', 'develop', 'rc']
 const MAX_NAME = 100
-const DEFAULT_CHANNEL = '正式'
 
 interface Store {
   id: number
@@ -33,17 +33,12 @@ interface Channel {
   created_at: string
 }
 
-let storeSeq = 2
-let channelSeq = 3
+let channelSeq = 2
 const seeded = '2026-11-24T06:00:00Z'
-const stores: Store[] = [
-  { id: 1, name: '官方商店', repo: 'touwaeriol/sup2api-plugin', official: true, created_at: seeded },
-  { id: 2, name: '团队内部商店', repo: 'ourteam/s2-plugins', official: false, created_at: seeded }
-]
+const stores: Store[] = [{ id: 1, name: '官方商店', repo: 'touwaeriol/sup2api-plugin', official: true, created_at: seeded }]
 const channels: Channel[] = [
-  { id: 1, store_id: 1, name: DEFAULT_CHANNEL, branch: 'main', enabled: true, is_default: true, created_at: seeded },
-  { id: 2, store_id: 1, name: '测试', branch: 'develop', enabled: true, is_default: false, created_at: seeded },
-  { id: 3, store_id: 2, name: DEFAULT_CHANNEL, branch: 'main', enabled: true, is_default: true, created_at: seeded }
+  { id: 1, store_id: 1, name: '正式', branch: 'main', enabled: true, is_default: true, created_at: seeded },
+  { id: 2, store_id: 1, name: '测试', branch: 'develop', enabled: true, is_default: false, created_at: seeded }
 ]
 
 const storeOf = (c: Channel) => stores.find(s => s.id === c.store_id)!
@@ -62,39 +57,20 @@ export function channelOf(sourceId: unknown): (Channel & { store: Store }) | und
 
 /** market.validBranch: one git ref name segment. */
 const badBranch = (branch: string) => !BRANCH.test(branch) || branch.includes('..') || branch.startsWith('.') || branch.endsWith('.lock')
-/** market.validRepo: owner/name on GitHub. */
-const badRepo = (repo: string) => {
-  const name = repo.split('/')[1] ?? ''
-  return !REPO.test(repo) || name === '.' || name === '..' || name.endsWith('.git')
-}
 const badName = (name: string) => !name || [...name].length > MAX_NAME
 const nameInvalid = () => invalid('name', `name must be 1-${MAX_NAME} characters`)
 const branchInvalid = () => invalid('branch', 'branch must match ^[A-Za-z0-9._-]{1,64}$ without ".."', 'invalid_format')
 const channelTaken = () => fail(409, 'conflict', 'another channel of the store has this name or branch')
 
-function addChannel(store: Store, body: Any, isDefault = false): Any {
+function addChannel(store: Store, body: Any): Any {
   const name = String(body?.name ?? '').trim()
   const branch = String(body?.branch ?? '')
   if (badName(name)) return nameInvalid()
   if (badBranch(branch)) return branchInvalid()
   if (channels.some(c => c.store_id === store.id && (c.branch === branch || c.name === name))) return channelTaken()
-  const c = { id: ++channelSeq, store_id: store.id, name, branch, enabled: true, is_default: isDefault, created_at: now() }
+  const c = { id: ++channelSeq, store_id: store.id, name, branch, enabled: true, is_default: false, created_at: now() }
   channels.push(c)
-  return created(view(c))
-}
-
-function addStore(body: Any): Any {
-  const name = String(body?.name ?? '').trim()
-  const repo = String(body?.repo ?? '').trim()
-  const branch = String(body?.branch ?? '')
-  if (badName(name)) return nameInvalid()
-  if (badRepo(repo)) return invalid('repo', 'repo must be owner/name of a GitHub repository', 'invalid_format')
-  if (badBranch(branch)) return branchInvalid()
-  if (stores.some(s => s.repo === repo)) return fail(409, 'conflict', 'another store has this repository')
-  const s = { id: ++storeSeq, name, repo, official: false, created_at: now() }
-  stores.push(s)
-  addChannel(s, { name: DEFAULT_CHANNEL, branch }, true)
-  return created(s)
+  return created({ ...view(c), ...(INDEXED_BRANCHES.includes(branch) ? {} : { warning: 'no_index' }) })
 }
 
 /** market.ChannelPatch.check: the store keeps an enabled default channel. */
@@ -135,17 +111,7 @@ function renameStore(s: Store, body: Any): Any {
 
 // The official store first (plugin/market ListStores).
 on('GET', '/market/stores', () => [...stores].sort((a, b) => Number(b.official) - Number(a.official) || a.id - b.id))
-on('POST', '/market/stores', req => addStore(req.body))
 on('PATCH', '/market/stores/:id', req => found(stores, 'plugin store', req.params.id, s => renameStore(s, req.body)))
-on('DELETE', '/market/stores/:id', req =>
-  found(stores, 'plugin store', req.params.id, s => {
-    if (s.official) return fail(409, 'conflict', 'the official store cannot be deleted')
-    stores.splice(stores.indexOf(s), 1)
-    for (let i = channels.length - 1; i >= 0; i--) if (channels[i].store_id === s.id) channels.splice(i, 1)
-    return noContent()
-  })
-)
-
 on('GET', '/market/sources', req => listed(channels.filter(c => !req.query.store_id || c.store_id === Number(req.query.store_id))).map(view))
 on('POST', '/market/stores/:id/sources', req => found(stores, 'plugin store', req.params.id, s => addChannel(s, req.body)))
 on('PATCH', '/market/sources/:id', req => found(channels, 'market channel', req.params.id, c => updateChannel(c, req.body)))

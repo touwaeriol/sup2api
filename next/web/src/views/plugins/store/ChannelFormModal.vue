@@ -1,7 +1,8 @@
 <script setup lang="ts">
-// The store settings' channel dialog: a new channel of a store (name and
-// branch) or a channel's new name; the branch is a git ref name segment
-// (CONTRACTS §136).
+// The store settings' channel dialog: a new channel of the store (name and
+// branch) or a channel's new name; the branch is a git ref name segment. A
+// new channel whose branch has no index yet is saved, with a warning
+// (CONTRACTS §137.6).
 import { computed, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '@sub2api/host'
@@ -38,12 +39,14 @@ function check(): boolean {
 
 async function submit() {
   if (!check()) return
+  let noIndex = false
   saving.value = true
   try {
     const name = form.name.trim()
     if (props.channel) await api.patch(`/market/sources/${props.channel.id}`, { name })
-    else await api.post(`/market/stores/${props.storeId}/sources`, { name, branch: form.branch.trim() })
+    else noIndex = (await api.post<MarketSource>(`/market/stores/${props.storeId}/sources`, { name, branch: form.branch.trim() }))?.warning === 'no_index'
     toast(props.channel ? t('common.updated') : t('common.created'), 'success')
+    if (noIndex) toast(t('market.settings.noIndex', { branch: form.branch.trim() }), 'warning', 8000)
     emit('update:open', false)
     emit('saved')
   } catch (e) {

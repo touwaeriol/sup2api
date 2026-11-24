@@ -3,9 +3,9 @@
 import type { LText, Trust } from './types'
 
 /**
- * A configured plugin store (GET /market/stores; CONTRACTS §136): a GitHub
- * repository whose branches are its channels. The official store is seeded,
- * cannot be deleted and keeps its repository; the market shows only the name.
+ * The plugin store (GET /market/stores; CONTRACTS §137.6): the official
+ * registry's GitHub repository, whose branches are its channels. It is the
+ * only store, seeded, renamed only (PATCH {name}); the market shows only the name.
  */
 export interface MarketStore {
   id: number
@@ -14,13 +14,6 @@ export interface MarketStore {
   repo: string
   official: boolean
   created_at: string
-}
-
-/** POST /market/stores: a third-party store and the branch of its default channel. */
-export interface MarketStoreCreate {
-  name: string
-  repo: string
-  branch: string
 }
 
 /**
@@ -40,6 +33,8 @@ export interface MarketSource {
   enabled: boolean
   is_default: boolean
   created_at: string
+  /** Only in the answer to POST /market/stores/:id/sources: no_index when the branch has no readable index yet (the channel is saved). */
+  warning?: 'no_index'
 }
 
 /** POST /market/stores/:id/sources: a new channel of the store. */
@@ -87,7 +82,7 @@ export interface MarketPlugin {
   publisher: string
   publisher_name?: LText
   publisher_homepage?: string
-  /** Trust level the index gives the publisher, at most community from a third-party store; '' when it does not list it. */
+  /** Trust level the index gives the publisher; '' when it does not list it. */
   trust: Trust
   publisher_status: MarketPublisherStatus
   /** The publisher's GitHub logins (the registry's publishers/<id>.json); absent when the index lists none. */

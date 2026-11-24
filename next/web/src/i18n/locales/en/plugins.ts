@@ -580,7 +580,6 @@ export default {
     packageGone: 'No reachable node holds the package of this plugin version (the nodes holding it may be down, or it was cleaned up after a failed upgrade). Bring a node that holds it back online, upload it again, or install it from the market.',
     clusterChangeBusy: 'Another cluster change (a plugin or core change) is being submitted. Try again in a moment.',
     publisherReserved: 'The publisher sub2api is reserved for the official plugins: only a package signed by an official key, listed as official by the official store, or built in may name it.',
-    publisherInStore: 'The official store already lists this publisher; choose another id for the local publisher.',
-    publisherOtherStore: 'This publisher belongs to another plugin store on this core; its plugins cannot be installed or upgraded from this store.'
+    publisherInStore: 'The official store already lists this publisher; choose another id for the local publisher.'
   }
 }

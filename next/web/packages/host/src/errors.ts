@@ -15,7 +15,6 @@ const KNOWN_ERRORS: Record<string, string> = {
   cluster_change_busy: 'plugins.errors.clusterChangeBusy',
   plugin_publisher_reserved: 'plugins.errors.publisherReserved',
   publisher_in_store: 'plugins.errors.publisherInStore',
-  publisher_other_store: 'plugins.errors.publisherOtherStore',
   'permission_denied proxy:manage:own': 'proxies.cannotCreate'
 }
 

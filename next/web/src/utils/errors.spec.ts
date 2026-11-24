@@ -26,8 +26,7 @@ describe('errorMessage', () => {
   it('words the plugin publisher refusals (CONTRACTS §137) in both languages', () => {
     const cases: Array<[number, string, string]> = [
       [403, 'plugin_publisher_reserved', 'publisherReserved'],
-      [409, 'publisher_in_store', 'publisherInStore'],
-      [409, 'publisher_other_store', 'publisherOtherStore']
+      [409, 'publisher_in_store', 'publisherInStore']
     ]
     for (const [status, code, key] of cases) {
       const e = new ApiError(status, { code, message: 'server text' })

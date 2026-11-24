@@ -1,12 +1,11 @@
-// Mock handlers of the plugin market: GET /market/plugins of a store's channel
-// as the core lists its index (CONTRACTS §11.1, §136, §137): the official
-// store's, or the team store's (trust capped at community, no sub2api
-// publisher). Each row names its store and channel, the plugin id and
+// Mock handlers of the plugin market: GET /market/plugins of a channel of the
+// official store as the core lists its index (CONTRACTS §11.1, §136, §137).
+// Each row names its store and channel, the plugin id and
 // display id, the publisher with its GitHub logins, trust level and status,
 // repo, source, built-in and deprecation; each version its sha256;
 // latest_version and update_available skip deprecated versions.
 import { fail, now, on } from './router'
-import { channelOf } from './marketStores'
+import { channelOf, INDEXED_BRANCHES } from './marketStores'
 import { HOST_VERSION, plugins, type Any } from './plugins'
 import { displayId, pluginId } from './pluginIds'
 
@@ -123,25 +122,13 @@ const market: Any[] = [
   ])
 ].map(withId)
 
-/** The team store's index (a third-party store): its own publisher, which its index rates verified and the core caps at community. */
-const ourteam = community('ourteam', L('Our Team', '我们团队'), 'verified')
-const teamStore: Any[] = [
-  third(ourteam, 'billing_bridge', L('Billing bridge', '内部计费桥'), L('Sends usage to the internal billing system.', '把用量同步到内部计费系统。'), 'ourteam/billing-bridge', [
-    v('ourteam/billing-bridge', '0.1.0', '>=0.1.0', 2_097_152),
-    v('ourteam/billing-bridge', '0.2.0', '>=0.1.0', 2_228_224)
-  ]),
-  third(ourteam, 'quota_report', L('Quota report', '额度周报'), L('Weekly quota report by group.', '按分组生成额度周报。'), 'ourteam/quota-report', [
-    v('ourteam/quota-report', '1.0.0', '>=0.1.0', 1_572_864)
-  ])
-].map(withId)
-
 function withId(m: Any): Any {
   return { ...m, id: pluginId(m.publisher, m.key), display_id: displayId(pluginId(m.publisher, m.key)) }
 }
 
-/** The store listing of a plugin id, in any store. */
+/** The store listing of a plugin id. */
 export function marketEntry(id: string): Any | undefined {
-  return [...market, ...teamStore].find(x => x.id === id)
+  return market.find(x => x.id === id)
 }
 
 /** Newest compatible version that is not deprecated, as the core computes latest_version. */
@@ -152,7 +139,7 @@ function latestOf(versions: Any[]): string {
 
 type Listed = NonNullable<ReturnType<typeof channelOf>>
 
-/** A listing row of channel c: its store and channel, trust capped at community off the official store, the install state here. */
+/** A listing row of channel c: its store and channel, the install state here. */
 function listed(m: Any, c: Listed): Any {
   const versions = [...m.versions]
     .sort((a, b) => cmp(b.version, a.version))
@@ -166,7 +153,6 @@ function listed(m: Any, c: Listed): Any {
     source_id: c.id,
     source_name: c.name,
     ...m,
-    trust: c.store.official || !m.trust ? m.trust : 'community',
     versions,
     installed_version: installed,
     installed_status: here?.status,
@@ -181,9 +167,9 @@ const testing: Record<string, Any[]> = {
   _erio__codex: [v('erio/s2-codex', '1.3.0', '>=0.1.4', 5_373_952)]
 }
 
-/** The store as a channel lists it: the main branch's index, or that plus the versions in testing; the team store has one index. */
-function ofChannel(official: boolean, branch: string): Any[] {
-  if (!official) return teamStore
+/** The store as a channel lists it: the main branch's index, or that plus the versions in testing; a branch without an index fails as the core does. */
+function ofChannel(branch: string): Any[] | null {
+  if (!INDEXED_BRANCHES.includes(branch)) return null
   return branch === 'main' ? market : market.map(m => ({ ...m, versions: [...m.versions, ...(testing[m.id] ?? [])] }))
 }
 
@@ -194,7 +180,9 @@ on('GET', '/market/plugins', req => {
   const c = channelOf(req.query.source_id)
   if (!c) return fail(404, 'not_found', 'market channel not found')
   if (!c.enabled) return fail(404, 'not_found', 'market channel is disabled')
-  const data = ofChannel(c.store.official, c.branch).map(m => listed(m, c))
+  const index = ofChannel(c.branch)
+  if (!index) return fail(503, 'unavailable', `market fetch https://raw.githubusercontent.com/${c.store.repo}/index-${c.branch}/index.json: HTTP 404`)
+  const data = index.map(m => listed(m, c))
   return { data, host_version: HOST_VERSION, generated_at: generatedAt, fetched_at: now() }
 })
 
