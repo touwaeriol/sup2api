@@ -798,7 +798,6 @@ function summary(p: MockPlugin): Any {
     // Like the server (plugins.go): the manifest declares ui.settings.
     has_settings: !!p.settings,
     name: p.name,
-    description: p.description,
     status: p.status,
     status_reason: p.status_reason,
     resource_conflicts: p.resource_conflicts || [],
@@ -905,10 +904,10 @@ on('GET', '/plugins', (req) => paginate([...plugins.values()].map(summary), req.
 // CONTRACTS §55.1: an uninstalled plugin's key stays with its publisher.
 interface RetiredKeyRow { key: string; publisher: string; retired_at: string; accounts: number; schema: boolean }
 const retiredKeys = new Map<string, RetiredKeyRow>([
-  ['acme_tool', { key: 'acme_tool', publisher: 'acme', retired_at: '2026-10-08T09:30:00Z', accounts: 2, schema: true }]
+  ['_acme__tool', { key: '_acme__tool', publisher: 'acme', retired_at: '2026-10-08T09:30:00Z', accounts: 2, schema: true }]
 ])
 on('GET', '/plugins/retired-keys', () => ({
-  items: [...retiredKeys.values()].map((r) => ({ ...r, installed: plugins.has(r.key) }))
+  items: [...retiredKeys.values()].map((r) => ({ ...r, display_id: displayId(r.key), installed: plugins.has(r.key) }))
 }))
 on('POST', '/plugins/retired-keys/:key/release', (req) => {
   const r = retiredKeys.get(req.params.key)

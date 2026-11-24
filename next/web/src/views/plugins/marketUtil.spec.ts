@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { MarketPlugin } from '@/api/marketTypes'
 import type { PluginSummary } from '@/api/types'
+import { marketVersion as mv, storePlugin } from '@/testing/marketFixtures'
 import {
   deprecatedVersion,
   marketStateOf,
@@ -21,38 +22,25 @@ import {
 const reason = { reason: { en: 'old', zh: '旧' } }
 
 function plugin(over: Partial<MarketPlugin> = {}): MarketPlugin {
-  return {
-    source_id: 1,
-    source_name: 'official',
-    id: '_acme__tool',
-    key: 'tool',
+  return storePlugin('acme', 'tool', {
     name: { en: 'Tool' },
-    publisher: 'acme',
     publisher_name: { en: 'Acme' },
     trust: 'verified',
-    publisher_status: 'active',
     repo: 'acme/tool',
-    builtin: false,
-    latest_version: '1.0.0',
-    update_available: false,
-    versions: [
-      { version: '1.0.0', compatible: true },
-      { version: '1.1.0', compatible: true, deprecated: reason },
-      { version: '2.0.0', compatible: false }
-    ],
+    versions: [mv('1.0.0'), mv('1.1.0', { deprecated: reason }), mv('2.0.0', { compatible: false })],
     ...over
-  }
+  })
 }
 
 describe('market versions', () => {
   it('reports a newer version this core cannot run, beside the latest one the core reports', () => {
     expect(newerIncompatible(plugin())).toBe('2.0.0')
     expect(newerIncompatible(plugin({ latest_version: '' }))).toBe('')
-    expect(newerIncompatible(plugin({ versions: [{ version: '1.0.0', compatible: true }] }))).toBe('')
+    expect(newerIncompatible(plugin({ versions: [mv('1.0.0')] }))).toBe('')
   })
   it('reports a listing no version of which runs on this core', () => {
     expect(noCompatible(plugin())).toBe(false)
-    expect(noCompatible(plugin({ versions: [{ version: '2.0.0', compatible: false }] }))).toBe(true)
+    expect(noCompatible(plugin({ versions: [mv('2.0.0', { compatible: false })] }))).toBe(true)
     expect(noCompatible(plugin({ versions: [] }))).toBe(false)
   })
 })
@@ -98,12 +86,12 @@ describe('market state', () => {
     expect(['install', 'upgrade', 'installed'].filter(s => stateMatches(s as never, ''))).toHaveLength(3)
   })
   it('never offers a built-in plugin a version below the installed one', () => {
-    const v = (version: string) => ({ version, compatible: true })
+    const v = (version: string) => mv(version)
     expect(offersVersion(plugin({ builtin: true }), v('0.9.0'), '1.0.0')).toBe(false)
     expect(offersVersion(plugin(), v('0.9.0'), '1.0.0')).toBe(true)
     expect(offersVersion(plugin({ builtin: true }), v('1.1.0'), '1.0.0')).toBe(true)
     expect(offersVersion(plugin({ builtin: true }), v('1.0.0'), '1.0.0')).toBe(false)
-    expect(offersVersion(plugin(), { version: '2.0.0', compatible: false }, '')).toBe(false)
+    expect(offersVersion(plugin(), mv('2.0.0', { compatible: false }), '')).toBe(false)
   })
   it('notes the newest deprecated version, unless the whole plugin is deprecated', () => {
     expect(deprecatedVersion(plugin())?.version).toBe('1.1.0')
@@ -125,9 +113,11 @@ describe('market text', () => {
 })
 
 describe('installed source', () => {
-  it('is the store for an indexed version, else built-in or a manual upload', () => {
-    expect(pluginSource({ signature_status: 'indexed', builtin: true })).toBe('market')
+  it('is built-in for a built-in plugin, else the store for an indexed version, else a manual upload', () => {
+    expect(pluginSource({ signature_status: 'indexed', builtin: true })).toBe('builtin')
     expect(pluginSource({ signature_status: 'valid', builtin: true })).toBe('builtin')
+    expect(pluginSource({ signature_status: 'indexed', builtin: false })).toBe('market')
     expect(pluginSource({ signature_status: 'valid', builtin: false })).toBe('upload')
+    expect(pluginSource({ signature_status: 'unsigned' })).toBe('upload')
   })
 })

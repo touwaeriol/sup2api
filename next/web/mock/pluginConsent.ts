@@ -7,17 +7,17 @@ import { fail, on, type MockRequest } from './router'
 import { caller, stepUp, type Identity } from './core'
 import { bumpAuthz } from './roles'
 import { invalid } from './common'
-import { pluginId } from './pluginIds'
+import { displayId, pluginId } from './pluginIds'
 import { diffItem, find, forViewer, grant, guardReview, notFound, plugins, reviewFor, reviewQueue, reviews, settleRoleGrants, stageVersion, type Any } from './plugins'
 
 /** The sha256 of a version's package (made up, the same for every download). */
 const packageSha = (r: Any) => createHash('sha256').update(`${r.plugin_key}@${r.version}`).digest('hex')
 
-/** A review as served: the package it describes and, for an upgrade, the version installed now. */
+/** A review as served: the plugin id as people see it, the package it describes and, for an upgrade, the version installed now. */
 function served(r: Any, who: Identity): Any {
   const active = plugins.get(r.plugin_key)?.active_version
   const from = active && active !== r.version ? { upgrade_from: active } : {}
-  return forViewer({ ...r, package_sha256: packageSha(r), ...from }, who)
+  return forViewer({ ...r, display_id: displayId(r.plugin_key), package_sha256: packageSha(r), ...from }, who)
 }
 
 /** A review of a package nothing was registered for. */

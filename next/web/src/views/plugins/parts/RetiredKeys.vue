@@ -3,7 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '@sub2api/host'
 import { SBadge, SButton, SCard, SChoiceCards, SField, SHint, SIcon, SInput, SFormModal, STable, toast, type ChoiceOption, type TableColumn } from '@sub2api/ui'
-import type { ReleaseRetiredKeyResult, RetiredKey } from '@/api/types'
+import type { ReleaseRetiredKeyResult, RetiredKey } from '@/api/pluginKeys'
 import { notifyError } from '@/utils/errors'
 import { useAuthStore } from '@/stores/auth'
 import { formatDateTime } from '@/utils/format'
@@ -24,7 +24,7 @@ const purge = computed(() => purgeChoice.value.includes('purge'))
 const purgeAccounts = computed(() => purgeChoice.value.includes('accounts'))
 const typed = ref('')
 const busy = ref(false)
-const matches = computed(() => !!releasing.value && typed.value.trim() === releasing.value.key)
+const matches = computed(() => !!releasing.value && typed.value.trim() === releasing.value.display_id)
 
 const purgeOptions = computed<ChoiceOption[]>(() => {
   const k = releasing.value
@@ -67,7 +67,7 @@ async function release() {
       purge: purge.value,
       purge_accounts: purgeAccounts.value
     })
-    toast(t('plugins.retired.released', { key: k.key, n: r?.accounts_deleted ?? 0 }), 'success')
+    toast(t('plugins.retired.released', { key: k.display_id, n: r?.accounts_deleted ?? 0 }), 'success')
     releasing.value = null
     await load()
   } catch (e) {
@@ -111,7 +111,7 @@ defineExpose({ load })
 
     <SFormModal
       :open="!!releasing"
-      :title="releasing ? t('plugins.retired.releaseTitle', { key: releasing.key }) : ''"
+      :title="releasing ? t('plugins.retired.releaseTitle', { key: releasing.display_id }) : ''"
       width="md"
       :loading="busy"
       :submit-disabled="!matches"
@@ -127,13 +127,13 @@ defineExpose({ load })
           :options="purgeOptions"
           :cols="1"
           multiple
-          :aria-label="t('plugins.retired.releaseTitle', { key: releasing.key })"
+          :aria-label="t('plugins.retired.releaseTitle', { key: releasing.display_id })"
         />
         <SHint v-if="!purge || !purgeAccounts" size="xs" tone="warning" class="flex items-center gap-1.5">
           <SIcon name="warning" class="h-4 w-4" />{{ t('plugins.retired.inheritWarn') }}
         </SHint>
-        <SField :label="t('plugins.uninstall.typeKey', { key: releasing.key })">
-          <SInput v-model="typed" mono :placeholder="releasing.key" autocomplete="off" />
+        <SField :label="t('plugins.uninstall.typeKey', { key: releasing.display_id })">
+          <SInput v-model="typed" mono :placeholder="releasing.display_id" autocomplete="off" />
         </SField>
       </div>
     </SFormModal>

@@ -1,7 +1,7 @@
 // Store fixtures of the plugin store specs: stores, channels, listings and
 // installed plugins in the shapes of GET /market/stores, /market/sources,
 // /market/plugins and /plugins.
-import type { MarketPlugin, MarketSource, MarketStore } from '@/api/marketTypes'
+import type { MarketPlugin, MarketSource, MarketStore, MarketVersion } from '@/api/marketTypes'
 import type { PluginSummary } from '@/api/types'
 
 /** A store: the first is the official one. */
@@ -10,6 +10,7 @@ export const store = (id: number, over: Partial<MarketStore> = {}): MarketStore 
   name: id === 1 ? '官方商店' : `store${id}`,
   repo: id === 1 ? 'touwaeriol/sup2api-plugin' : `team${id}/s2-plugins`,
   official: id === 1,
+  created_at: '2026-11-24T00:00:00Z',
   ...over
 })
 
@@ -17,22 +18,39 @@ export const store = (id: number, over: Partial<MarketStore> = {}): MarketStore 
 export const channel = (id: number, over: Partial<MarketSource> = {}): MarketSource => ({
   id,
   store_id: 1,
+  store_name: '官方商店',
   name: id === 1 ? '正式' : `c${id}`,
   branch: id === 1 ? 'main' : `b${id}`,
   url: `https://raw.githubusercontent.com/touwaeriol/sup2api-plugin/index-${id === 1 ? 'main' : `b${id}`}/index.json`,
   enabled: true,
   is_default: id === 1,
+  created_at: '2026-11-24T00:00:00Z',
   ...over
 })
 
 const id = (publisher: string, key: string) => (publisher === 'sub2api' ? key : `_${publisher}__${key}`)
+const displayId = (publisher: string, key: string) => (publisher === 'sub2api' ? key : `${publisher}/${key}`)
+
+/** A compatible version of a store plugin. */
+export const marketVersion = (version: string, over: Partial<MarketVersion> = {}): MarketVersion => ({
+  version,
+  sha256: 'ab'.repeat(32),
+  size: 1024,
+  host_compat: '>=0.1.0',
+  compatible: true,
+  release_url: `https://github.com/x/releases/tag/v${version}`,
+  ...over
+})
 
 /** A store plugin; its id follows its publisher and key. */
 export function storePlugin(publisher: string, key: string, over: Partial<MarketPlugin> = {}): MarketPlugin {
   return {
+    store_id: 1,
+    store_name: '官方商店',
     source_id: 1,
     source_name: '正式',
     id: id(publisher, key),
+    display_id: displayId(publisher, key),
     key,
     name: { en: key, zh: key },
     publisher,
@@ -42,13 +60,14 @@ export function storePlugin(publisher: string, key: string, over: Partial<Market
     builtin: false,
     latest_version: '1.0.0',
     update_available: false,
-    versions: [{ version: '1.0.0', compatible: true, size: 1024, host_compat: '>=0.1.0', release_url: `https://github.com/x/releases/tag/${key}-v1.0.0` }],
+    versions: [marketVersion('1.0.0', { release_url: `https://github.com/x/releases/tag/${key}-v1.0.0` })],
     ...over
   }
 }
 
 export const installedPlugin = (key: string, version: string | null, over: Partial<PluginSummary> = {}): PluginSummary => ({
   key,
+  display_id: key.startsWith('_') ? key.slice(1).replace('__', '/') : key,
   name: { en: key, zh: key },
   status: version ? 'enabled' : 'awaiting_consent',
   active_version: version,
@@ -68,15 +87,12 @@ export const STORE: MarketPlugin[] = [
   storePlugin('sub2api', 'codex', {
     builtin: true,
     latest_version: '0.2.3',
-    versions: ['0.2.3', '0.2.2', '0.2.1', '0.2.0'].map(version => ({
-      version,
-      compatible: true,
-      host_compat: '>=0.1.0',
-      ...(version === '0.2.0' ? { deprecated: { reason: { en: 'leaks slots', zh: '并发位泄漏' } } } : {})
-    }))
+    versions: ['0.2.3', '0.2.2', '0.2.1', '0.2.0'].map(version =>
+      marketVersion(version, version === '0.2.0' ? { deprecated: { reason: { en: 'leaks slots', zh: '并发位泄漏' } } } : {})
+    )
   }),
   storePlugin('sub2api', 'gemini'),
-  storePlugin('erio', 'codex', { latest_version: '1.2.0', versions: [{ version: '1.2.0', compatible: true, host_compat: '>=0.1.4' }] }),
+  storePlugin('erio', 'codex', { latest_version: '1.2.0', versions: [marketVersion('1.2.0', { host_compat: '>=0.1.4' })] }),
   storePlugin('acme', 'log_export', { deprecated: { reason: { en: 'replaced', zh: '已取代' } } }),
   storePlugin('shady', 'tool', { publisher_status: 'revoked' })
 ]

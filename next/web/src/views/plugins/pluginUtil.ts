@@ -50,7 +50,9 @@ export const RISK_ORDER: Record<string, number> = { critical: 0, high: 1, medium
 export const OFFICIAL_PUBLISHER = 'sub2api'
 const PLUGIN_ID_MAX = 30
 const PLUGIN_KEY = /^[a-z](_?[a-z0-9]){1,29}$/
-const PUBLISHER_ID = /^[a-z0-9](_?[a-z0-9]){0,26}$/
+const PUBLISHER_ID = /^[a-z0-9](_?[a-z0-9])*$/
+/** check.PublisherIDMaxLen: a publisher id that still makes a plugin id with the shortest key. */
+export const PUBLISHER_ID_MAX = 25
 
 /** manifest.ParsePluginID: an official id is the bare key, any other "_<publisher>__<key>"; null for neither. */
 export function parsePluginId(id: string): { publisher: string; key: string } | null {
@@ -71,7 +73,8 @@ export function displayPluginId(id: string): string {
 export function isPluginKey(id: string): boolean {
   const p = parsePluginId(id)
   if (!p || id.length > PLUGIN_ID_MAX || !PLUGIN_KEY.test(p.key)) return false
-  return p.publisher === OFFICIAL_PUBLISHER ? !id.startsWith('_') : PUBLISHER_ID.test(p.publisher)
+  if (p.publisher === OFFICIAL_PUBLISHER) return !id.startsWith('_')
+  return PUBLISHER_ID.test(p.publisher) && p.publisher.length <= PUBLISHER_ID_MAX
 }
 
 /** The prefix of every table, index and sequence of the plugin (by its id) in the core's schema (manifest.TablePrefix). */

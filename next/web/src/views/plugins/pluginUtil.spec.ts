@@ -7,6 +7,7 @@ import { i18n } from '@/i18n'
 import {
   HOST_PERMISSION_RISK,
   OFFICIAL_PUBLISHER,
+  PUBLISHER_ID_MAX,
   accountTypesOf,
   consoleSettings,
   consoleSettingsPath,
@@ -113,7 +114,10 @@ describe('isPluginKey', () => {
   })
   it('takes a third-party plugin id: a valid publisher and key, at most 30 bytes in all', () => {
     const rule = readFileSync('../sdk/manifest/check/publisher.go', 'utf8').match(/\bpublisherIDRe\s*=\s*regexp\.MustCompile\(`([^`]+)`\)/)?.[1]
-    expect(rule).toBe('^[a-z0-9](_?[a-z0-9]){0,26}$')
+    expect(rule).toBe('^[a-z0-9](_?[a-z0-9])*$')
+    const derived = readFileSync('../sdk/manifest/check/publisher.go', 'utf8').match(/\bPublisherIDMaxLen = manifest\.PluginIDMaxLen - len\("_"\) - len\("__"\) - minPluginKeyLen\b/)
+    expect(derived && 30 - 3 - 2).toBe(PUBLISHER_ID_MAX)
+    expect(isPluginKey(`_${'p'.repeat(PUBLISHER_ID_MAX)}__ab`)).toBe(true)
     for (const id of ['_erio__codex', '_a1__x1', '_my_team__billing_bridge']) expect([id, isPluginKey(id)]).toEqual([id, true])
     const bad = ['_erio__', '__codex', '_erio_codex', '_Erio__codex', '_erio-x__codex', '_sub2api__codex', '_erio__Codex', '_er__io__codex', `_erio__${'x'.repeat(24)}`]
     for (const id of bad) expect([id, isPluginKey(id)]).toEqual([id, false])

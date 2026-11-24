@@ -5,7 +5,7 @@ import { api } from '@sub2api/host'
 import { SButton, SChoiceCards, SField, SHint, SInput, SModal, SIcon, toast, type ChoiceOption } from '@sub2api/ui'
 import type { UninstallResult } from '@/api/types'
 import { notifyError } from '@/utils/errors'
-import { tablePrefix } from '../pluginUtil'
+import { displayPluginId, tablePrefix } from '../pluginUtil'
 
 // DELETE /plugins/:key?purge=&purge_accounts= (CONTRACTS §5.7, §14.3).
 // Accounts of the plugin's account types are kept (orphaned) unless
@@ -23,7 +23,9 @@ const typed = ref('')
 const busy = ref(false)
 /** Set after a successful uninstall with purge_accounts: the modal shows the result. */
 const result = ref<{ accountsDeleted: number } | null>(null)
-const matches = computed(() => typed.value.trim() === props.pluginKey)
+/** The plugin id as people see it, which the dialog asks to type. */
+const shownId = computed(() => displayPluginId(props.pluginKey))
+const matches = computed(() => typed.value.trim() === shownId.value)
 
 const purgeOptions = computed<ChoiceOption[]>(() => [
   {
@@ -106,8 +108,8 @@ function close() {
       <SHint v-if="purgeAccounts" size="xs" tone="danger" class="flex items-center gap-1.5">
         <SIcon name="warning" class="h-4 w-4" />{{ t('plugins.uninstall.purgeAccountsWarn') }}
       </SHint>
-      <SField :label="t('plugins.uninstall.typeKey', { key: pluginKey })">
-        <SInput v-model="typed" mono :placeholder="pluginKey" autocomplete="off" @keyup.enter="submit" />
+      <SField :label="t('plugins.uninstall.typeKey', { key: shownId })">
+        <SInput v-model="typed" mono :placeholder="shownId" autocomplete="off" @keyup.enter="submit" />
       </SField>
     </div>
     <template #footer>

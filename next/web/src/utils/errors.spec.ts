@@ -22,6 +22,22 @@ describe('errorMessage', () => {
     i18n.global.locale.value = 'en'
     expect(errorMessage(e)).toContain('Try again in a moment')
   })
+
+  it('words the plugin publisher refusals (CONTRACTS §137) in both languages', () => {
+    const cases: Array<[number, string, string]> = [
+      [403, 'plugin_publisher_reserved', 'publisherReserved'],
+      [409, 'publisher_in_store', 'publisherInStore'],
+      [409, 'publisher_other_store', 'publisherOtherStore']
+    ]
+    for (const [status, code, key] of cases) {
+      const e = new ApiError(status, { code, message: 'server text' })
+      for (const locale of ['zh', 'en'] as const) {
+        i18n.global.locale.value = locale
+        expect(errorMessage(e)).toBe(i18n.global.t(`plugins.errors.${key}`))
+        expect(errorMessage(e)).not.toBe(`plugins.errors.${key}`)
+      }
+    }
+  })
 })
 
 describe('fieldErrors', () => {

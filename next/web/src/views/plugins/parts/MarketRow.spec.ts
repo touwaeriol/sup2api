@@ -1,14 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { i18n } from '@/i18n'
-import { channel, storePlugin } from '@/testing/marketFixtures'
+import { channel, marketVersion, storePlugin } from '@/testing/marketFixtures'
 import MarketRow from './MarketRow.vue'
 
 const tool = storePlugin('acme', 'tool', {
-  versions: [
-    { version: '1.0.0', compatible: true, host_compat: '>=0.1.0' },
-    { version: '0.9.0', compatible: true, deprecated: { reason: { en: 'broken' } } }
-  ]
+  versions: [marketVersion('1.0.0'), marketVersion('0.9.0', { deprecated: { reason: { en: 'broken' } } })]
 })
 
 const render = (props: Partial<InstanceType<typeof MarketRow>['$props']> = {}) =>

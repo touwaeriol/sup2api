@@ -2,6 +2,7 @@
 // "assumed" are not spelled out in the contract; views must tolerate their
 // absence.
 import type { GroupPricingSummary, MyGroupPricing, SegmentRef } from './pricing'
+import type { SignatureStatus } from './pluginKeys'
 
 export type LText = string | Record<string, string>
 
@@ -1282,7 +1283,7 @@ export interface PluginSummary {
   /** The plugin id (manifest.PluginID: the bare key of a sub2api plugin, "_<publisher>__<key>" otherwise). */
   key: string
   /** manifest.DisplayID of key: "codex" or "erio/codex". */
-  display_id?: string
+  display_id: string
   name: LText
   status: string
   /** Ships with the image: can be disabled, not uninstalled. */
@@ -1290,15 +1291,14 @@ export interface PluginSummary {
   status_reason?: string
   active_version?: string | null
   desired_version?: string | null
-  publisher?: string
+  publisher: string
   trust?: Trust
   /** The current version's signature status: `indexed` for a version installed from the store. */
-  signature_status?: string
+  signature_status?: SignatureStatus
   /** Live nodes of the cluster; nodes that did not report the plugin count as `absent`. */
   node_summary?: { total: number; states: Record<string, number> }
   /** Set when nodes refuse to load the plugin (built for an older plugin contract). */
   refusal?: PluginRefusal | null
-  description?: LText
   /** Manifest icon of the current version: `text:<label>` or a package path below `asset_base`. */
   icon?: string
   asset_base?: string
@@ -1384,12 +1384,14 @@ export interface ReviewPlatform {
 }
 
 export interface PluginReview {
+  /** The plugin id; display_id is how people see it (manifest.DisplayID). */
   plugin_key: string
+  display_id: string
   version: string
   name: LText
   publisher: string
   trust: Trust
-  signature_status: string
+  signature_status: SignatureStatus
   /** '' for a pre-install review (review-upload, review-from-market): nothing is registered. */
   consent_status?: string
   host_compat_ok: boolean
@@ -1609,7 +1611,10 @@ export interface UIPluginSlot {
 }
 
 export interface UIPlugin {
+  /** The plugin id; display_id is how people see it (manifest.DisplayID). */
   key: string
+  publisher: string
+  display_id: string
   version: string
   name?: LText
   asset_base: string
@@ -1702,26 +1707,6 @@ export interface EgressReport {
   summary?: EgressSummaryRow[]
   domains?: EgressDomain[]
   items?: EgressLogRow[]
-}
-
-/** GET /plugins/retired-keys item (CONTRACTS §55.1). */
-export interface RetiredKey {
-  key: string
-  /** Publisher that owned the key; empty for an unsigned plugin. */
-  publisher: string
-  retired_at: string
-  /** The same publisher installed the key again. */
-  installed: boolean
-  /** Accounts left behind (not deleted). */
-  accounts: number
-  /** Tables named with the key's prefix (plg_<key>__) are left in the core's schema. */
-  schema: boolean
-}
-
-/** Response of POST /plugins/retired-keys/:key/release. */
-export interface ReleaseRetiredKeyResult {
-  accounts_deleted: number
-  kv_deleted: number
 }
 
 /** Response of DELETE /plugins/:key (CONTRACTS §14.3). */

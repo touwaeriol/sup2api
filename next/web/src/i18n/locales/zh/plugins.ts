@@ -578,6 +578,9 @@ export default {
   },
   errors: {
     packageGone: '没有能连上的节点持有该插件版本的安装包（持有它的节点可能离线，或它在升级失败后被清理）。请让持有它的节点恢复在线，或重新上传插件包、从插件市场安装。',
-    clusterChangeBusy: '另一项集群变更（插件或核心变更）正在提交，请稍后重试。'
+    clusterChangeBusy: '另一项集群变更（插件或核心变更）正在提交，请稍后重试。',
+    publisherReserved: '发布者 sub2api 保留给官方插件：只有官方签名的包、官方商店列为官方的插件或内置插件可以使用它。',
+    publisherInStore: '官方商店已经有这个发布者，请为本地发布者换一个 id。',
+    publisherOtherStore: '这个发布者属于本核心上的另一个插件商店，不能从这个商店安装或升级它的插件。'
   }
 }

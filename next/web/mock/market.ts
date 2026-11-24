@@ -1,10 +1,11 @@
 // Mock handlers of the plugin market: GET /market/plugins of a store's channel
-// as the core lists index.json v2 (CONTRACTS §11.1, §136, §137): the official
-// store's index, or the team store's (community trust at most, no sub2api
-// publisher); each plugin's id, its
-// publisher with its trust level and status, repo, source, built-in and
-// deprecation; latest_version and update_available skip deprecated versions.
-import { fail, on } from './router'
+// as the core lists its index (CONTRACTS §11.1, §136, §137): the official
+// store's, or the team store's (trust capped at community, no sub2api
+// publisher). Each row names its store and channel, the plugin id and
+// display id, the publisher with its GitHub logins, trust level and status,
+// repo, source, built-in and deprecation; each version its sha256;
+// latest_version and update_available skip deprecated versions.
+import { fail, now, on } from './router'
 import { channelOf } from './marketStores'
 import { HOST_VERSION, plugins, type Any } from './plugins'
 import { displayId, pluginId } from './pluginIds'
@@ -15,12 +16,16 @@ const official = {
   publisher: 'sub2api',
   publisher_name: L('Sub2API', 'Sub2API'),
   publisher_homepage: 'https://github.com/touwaeriol/sup2api',
+  publisher_github: ['touwaeriol'],
   trust: 'official',
   publisher_status: 'active'
 }
 const release = (repo: string, version: string) => `https://github.com/${repo}/releases/tag/v${version}`
-const v = (repo: string, version: string, hostCompat: string, size?: number, deprecated?: Any) => ({
+/** A stand-in sha256 of a package (64 hex digits). */
+const sha = (repo: string, version: string) => [...`${repo}@${version}`].map(c => c.charCodeAt(0).toString(16).padStart(2, '0')).join('').padEnd(64, '0').slice(0, 64)
+const v = (repo: string, version: string, hostCompat: string, size = 4_194_304, deprecated?: Any) => ({
   version,
+  sha256: sha(repo, version),
   host_compat: hostCompat,
   size,
   release_url: release(repo, version),
@@ -45,6 +50,7 @@ const first = (key: string, name: Any, description: Any, versions: Any[], extra:
 const community = (publisher: string, name: Any | undefined, trust: string, status = 'active') => ({
   publisher,
   publisher_name: name,
+  ...(name ? { publisher_github: [publisher] } : {}),
   trust,
   publisher_status: status,
   builtin: false
@@ -117,8 +123,8 @@ const market: Any[] = [
   ])
 ].map(withId)
 
-/** The team store's index (a third-party store): its own publisher, trusted as community. */
-const ourteam = community('ourteam', L('Our Team', '我们团队'), 'community')
+/** The team store's index (a third-party store): its own publisher, which its index rates verified and the core caps at community. */
+const ourteam = community('ourteam', L('Our Team', '我们团队'), 'verified')
 const teamStore: Any[] = [
   third(ourteam, 'billing_bridge', L('Billing bridge', '内部计费桥'), L('Sends usage to the internal billing system.', '把用量同步到内部计费系统。'), 'ourteam/billing-bridge', [
     v('ourteam/billing-bridge', '0.1.0', '>=0.1.0', 2_097_152),
@@ -144,16 +150,26 @@ function latestOf(versions: Any[]): string {
   return ok.sort((a, b) => cmp(b, a))[0] ?? ''
 }
 
-function listed(m: Any): Any {
+type Listed = NonNullable<ReturnType<typeof channelOf>>
+
+/** A listing row of channel c: its store and channel, trust capped at community off the official store, the install state here. */
+function listed(m: Any, c: Listed): Any {
   const versions = [...m.versions]
     .sort((a, b) => cmp(b.version, a.version))
     .map((x: Any) => ({ ...x, compatible: satisfies(HOST_VERSION, x.host_compat) }))
-  const installed = plugins.get(m.id)?.active_version ?? undefined
+  const here = plugins.get(m.id)
+  const installed = here?.active_version ?? undefined
   const latest = latestOf(versions)
   return {
+    store_id: c.store.id,
+    store_name: c.store.name,
+    source_id: c.id,
+    source_name: c.name,
     ...m,
+    trust: c.store.official || !m.trust ? m.trust : 'community',
     versions,
     installed_version: installed,
+    installed_status: here?.status,
     latest_version: latest,
     update_available: !!installed && !!latest && cmp(latest, installed) > 0
   }
@@ -171,11 +187,15 @@ function ofChannel(official: boolean, branch: string): Any[] {
   return branch === 'main' ? market : market.map(m => ({ ...m, versions: [...m.versions, ...(testing[m.id] ?? [])] }))
 }
 
-// host_version sits next to data (CONTRACTS §14.3); the listing is not paged.
+const generatedAt = '2026-11-24T06:00:00Z'
+
+// host_version sits next to data (CONTRACTS §14.3), with when the index was generated and fetched; the listing is not paged.
 on('GET', '/market/plugins', req => {
   const c = channelOf(req.query.source_id)
-  if (!c?.enabled) return fail(404, 'not_found', 'no such enabled channel')
-  return { data: ofChannel(c.store.official, c.branch).map(listed), host_version: HOST_VERSION }
+  if (!c) return fail(404, 'not_found', 'market channel not found')
+  if (!c.enabled) return fail(404, 'not_found', 'market channel is disabled')
+  const data = ofChannel(c.store.official, c.branch).map(m => listed(m, c))
+  return { data, host_version: HOST_VERSION, generated_at: generatedAt, fetched_at: now() }
 })
 
 function cmp(a: string, b: string): number {

@@ -8,12 +8,14 @@ import { codexAsset, codexUIPlugin } from './codex'
 import { controlsAsset, controlsUIPlugin } from './controls'
 import { mailerAsset, mailerUIPlugin } from './mailer'
 import { apiKeyFormAsset, apiKeyFormUIPlugins } from './apiKeyForms'
+import { displayId, publisherOf } from './pluginIds'
 
 // Mock handlers: GET /ui/plugins, plugin-owned routes (/p/<key>/...) and the
 // /plugin-ui/<key>/<hash>/... static files (guard native UI from its dist
 // folder, a demo iframe page and a demo iframe account form).
 
 interface MockUIPlugin {
+  key: string
   menus?: unknown[]
   pages?: Record<string, unknown>
   slots?: unknown[]
@@ -64,7 +66,9 @@ const uiPlugins = [
 // native account form (codex) is listed here exactly when it is in production.
 const hasExtension = (p: MockUIPlugin) =>
   !!(p.menus?.length || Object.keys(p.pages || {}).length || p.slots?.length || p.account_actions?.length || p.native_entry)
-on('GET', '/ui/plugins', () => uiPlugins.filter(hasExtension))
+/** An entry as served: the plugin id with the publisher it names and how people see it (CONTRACTS §137.2). */
+const served = (p: MockUIPlugin) => ({ ...p, publisher: publisherOf(p.key), display_id: displayId(p.key) })
+on('GET', '/ui/plugins', () => uiPlugins.filter(hasExtension).map(served))
 
 on('GET', '/p/demo/ping', () => ({ pong: true, at: now() }))
 

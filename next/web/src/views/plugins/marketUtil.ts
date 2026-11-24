@@ -124,11 +124,11 @@ export function upgradesByPlugin(items: MarketPlugin[], installed: PluginSummary
 export type PluginSource = 'market' | 'builtin' | 'upload'
 
 /**
- * The source of p's current version, from what the plugin list says: a store
- * install's signature status is indexed (pkg.SigIndexed); otherwise a
- * built-in plugin's version came with the core, any other was uploaded.
+ * The source of p, from what the plugin list says: a built-in plugin ships
+ * with the core image (builtin), a store install's signature status is
+ * indexed (pkg.SigIndexed), anything else was uploaded.
  */
 export function pluginSource(p: Pick<PluginSummary, 'signature_status' | 'builtin'>): PluginSource {
-  if (p.signature_status === 'indexed') return 'market'
-  return p.builtin ? 'builtin' : 'upload'
+  if (p.builtin) return 'builtin'
+  return p.signature_status === 'indexed' ? 'market' : 'upload'
 }

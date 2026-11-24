@@ -47,6 +47,7 @@ enableAutoUnmount(afterEach)
 const SHA = 'c0ffee'
 const review = (over: Partial<PluginReview> = {}): PluginReview => ({
   plugin_key: 'bar',
+  display_id: 'bar',
   version: '1.0.0',
   name: { en: 'Bar', zh: 'Bar' },
   publisher: 'bar-labs',

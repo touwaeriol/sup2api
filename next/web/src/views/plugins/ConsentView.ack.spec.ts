@@ -6,7 +6,7 @@ import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { createPinia } from 'pinia'
 import { i18n } from '@/i18n'
 import type { PluginReview } from '@/api/types'
-import { channel, serveStoreList, storePlugin } from '@/testing/marketFixtures'
+import { channel, marketVersion, serveStoreList, storePlugin } from '@/testing/marketFixtures'
 import ConsentView from './ConsentView.vue'
 import { formatBytes } from '@/utils/format'
 
@@ -35,6 +35,7 @@ const tt = (key: string, named: Record<string, unknown> = {}, n?: number) => (n 
 
 const review = (over: Partial<PluginReview> = {}): PluginReview => ({
   plugin_key: 'codex',
+  display_id: 'codex',
   version: '0.2.3',
   upgrade_from: '0.2.1',
   name: { en: 'Codex', zh: 'Codex' },
@@ -76,7 +77,7 @@ describe('market upgrade consent', () => {
     i18n.global.locale.value = 'zh'
     mocks.get.mockResolvedValue([])
     mocks.list.mockImplementation(serveStoreList({ channels: [channel(1), channel(2, { name: '测试', branch: 'develop', is_default: false })] }))
-    const codex = storePlugin('sub2api', 'codex', { versions: [{ version: '0.2.3', compatible: true, size: 19_293_798, release_url: RELEASE }] })
+    const codex = storePlugin('sub2api', 'codex', { versions: [marketVersion('0.2.3', { size: 19_293_798, release_url: RELEASE })] })
     mocks.raw.mockResolvedValue({ data: [codex], host_version: '0.1.5' })
   })
 

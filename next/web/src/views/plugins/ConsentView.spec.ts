@@ -37,6 +37,7 @@ enableAutoUnmount(afterEach)
 
 const review = (over: Partial<PluginReview> = {}): PluginReview => ({
   plugin_key: 'demo',
+  display_id: 'demo',
   version: '1.2.0',
   name: { en: 'Demo', zh: '示例' },
   publisher: 'acme',
