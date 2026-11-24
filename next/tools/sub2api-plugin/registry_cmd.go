@@ -40,15 +40,15 @@ func cmdRegistry(args []string, stdout, stderr io.Writer) error {
 func cmdRegistryAddVersion(args []string, stdout, stderr io.Writer) error {
 	fs := newFlagSet("registry add-version", stderr)
 	root := fs.String("registry", "", "registry checkout (required)")
-	key := fs.String("plugin", "", "plugin key (required)")
+	plugin := fs.String("plugin", "", "plugin as <publisher>/<key>, or a bare key of publisher sub2api (required)")
 	tag := fs.String("tag", "", "release tag (default: the latest release)")
 	if err := parseNoArgs(fs, args); err != nil {
 		return err
 	}
-	if *root == "" || *key == "" {
+	if *root == "" || *plugin == "" {
 		return errors.New("--registry and --plugin are required")
 	}
-	written, err := addVersion(*root, *key, *tag, newRemote())
+	written, err := addVersion(*root, parseRegRef(*plugin), *tag, newRemote())
 	if err != nil {
 		return err
 	}
@@ -56,24 +56,24 @@ func cmdRegistryAddVersion(args []string, stdout, stderr io.Writer) error {
 	return nil
 }
 
-func addVersion(root, key, tag string, r *remote) (string, error) {
+func addVersion(root, ref, tag string, r *remote) (string, error) {
 	reg, err := loadRegistry(root, false)
 	if err != nil {
 		return "", err
 	}
-	e, ok := reg.plugins[key]
+	e, ok := reg.plugins[ref]
 	if !ok {
-		return "", fmt.Errorf("no plugins/%s/%s", key, regPluginFile)
+		return "", fmt.Errorf("no %s/%s", pluginDir(ref), regPluginFile)
 	}
 	_, v, err := r.releaseVersion(&e.plugin, tag)
 	if err != nil {
 		return "", err
 	}
-	return writeVersion(root, key, v)
+	return writeVersion(root, ref, v)
 }
 
 // cmdRegistryCodeowners prints a CODEOWNERS file: each active publisher's
-// GitHub logins own its publisher file and its plugins' directories.
+// GitHub logins own its publisher file and its plugins directory.
 func cmdRegistryCodeowners(args []string, stdout, stderr io.Writer) error {
 	fs := newFlagSet("registry codeowners", stderr)
 	root := fs.String("registry", "", "registry checkout (required)")
@@ -98,11 +98,7 @@ func codeowners(reg *registry, def string) string {
 	for _, id := range slices.Sorted(maps.Keys(reg.publishers)) {
 		if owners := ownersOf(reg.publishers[id]); owners != "" {
 			fmt.Fprintf(&b, "/%s/%s%s %s\n", regPublishersDir, id, regJSONExt, owners)
-		}
-	}
-	for _, key := range slices.Sorted(maps.Keys(reg.plugins)) {
-		if owners := ownersOf(reg.publishers[reg.plugins[key].plugin.Publisher]); owners != "" {
-			fmt.Fprintf(&b, "/%s/%s/ %s\n", regPluginsDir, key, owners)
+			fmt.Fprintf(&b, "/%s/%s/ %s\n", regPluginsDir, id, owners)
 		}
 	}
 	return b.String()
@@ -163,13 +159,14 @@ func importPackage(o importOptions, pkg string) (string, error) {
 	if err := writeIfMissing(filepath.Join(o.root, regPublishersDir, m.Publisher+regJSONExt), m.Publisher, &pub, checkPublisher); err != nil {
 		return "", err
 	}
+	ref := regRef(m.Publisher, m.Key)
 	pl := regPlugin{Key: m.Key, Publisher: m.Publisher, Name: bilingual(m.Name, m.Key), Description: bilingual(m.Description, m.Key), Repo: o.repo}
-	if err := writeIfMissing(filepath.Join(o.root, regPluginsDir, m.Key, regPluginFile), m.Key, &pl, checkPlugin); err != nil {
+	if err := writeIfMissing(filepath.Join(o.root, filepath.FromSlash(pluginDir(ref)), regPluginFile), ref, &pl, checkPlugin); err != nil {
 		return "", err
 	}
 	v := info.version(o.urlPrefix + url.PathEscape(filepath.Base(pkg)))
 	v.ReleaseURL = githubURL(o.repo, "releases") // no release behind a local package
-	return writeVersion(o.root, m.Key, v)
+	return writeVersion(o.root, ref, v)
 }
 
 // bilingual fills every registry language from t, falling back to the other
@@ -187,10 +184,10 @@ func bilingual(t manifest.LocalizedText, fallback string) manifest.LocalizedText
 	return out
 }
 
-// writeVersion creates plugins/<key>/versions/<version>.json; an existing
+// writeVersion creates plugins/<ref>/versions/<version>.json; an existing
 // file is an error.
-func writeVersion(root, key string, v regVersion) (string, error) {
-	p := filepath.Join(root, regPluginsDir, key, regVersionsDir, v.Version+regJSONExt)
+func writeVersion(root, ref string, v regVersion) (string, error) {
+	p := filepath.Join(root, filepath.FromSlash(pluginDir(ref)), regVersionsDir, v.Version+regJSONExt)
 	return p, writeRegistryFile(p, v.Version, &v, checkVersion)
 }
 

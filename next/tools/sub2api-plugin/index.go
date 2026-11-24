@@ -57,16 +57,15 @@ func cmdIndex(args []string, stdout, stderr io.Writer) error {
 	return nil
 }
 
-// buildIndex lists every publisher by id, every plugin by key and each
-// plugin's versions newest first.
+// buildIndex lists every publisher by id, the plugins in registry order
+// (sortedPlugins) and each plugin's versions newest first.
 func buildIndex(reg *registry, now time.Time) *marketIndex {
 	idx := &marketIndex{Version: indexFormatVersion, GeneratedAt: now.Format(time.RFC3339),
 		Publishers: []indexPublisher{}, Plugins: []indexPlugin{}}
 	for _, id := range slices.Sorted(maps.Keys(reg.publishers)) {
 		idx.Publishers = append(idx.Publishers, reg.publishers[id].indexPublisher)
 	}
-	for _, key := range slices.Sorted(maps.Keys(reg.plugins)) {
-		e := reg.plugins[key]
+	for _, e := range reg.sortedPlugins() {
 		p := indexPlugin{regPlugin: e.plugin, Versions: []regVersion{}}
 		for _, v := range e.sortedVersions() {
 			p.Versions = append(p.Versions, *v)

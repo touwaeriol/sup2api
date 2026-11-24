@@ -14,8 +14,8 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest/check"
 )
 
-// Registry identifiers. A plugin key follows the manifest's rule
-// (check.ValidatePluginKey); a publisher id is the manifest's publisher
+// Registry identifiers. A plugin's publisher and key follow the manifest's
+// rules (check.ValidatePluginID); a publisher id is the manifest's publisher
 // (check.ValidatePublisherID, which the core's market client applies too). A
 // GitHub login is alphanumeric with single inner hyphens, at most 39 bytes.
 var (
@@ -96,13 +96,14 @@ func validRepo(repo string) bool {
 	return regRepoRe.MatchString(repo) && validLogin(owner) && name != "." && name != ".."
 }
 
+// checkPlugin validates a plugin.json against its directory, the plugin
+// ref name.
 func checkPlugin(name string, pl *regPlugin) []string {
 	var p problems
-	p.when(pl.Key != name, "key %q must equal the directory name %q", pl.Key, name)
-	if err := check.ValidatePluginKey(pl.Key); err != nil {
-		p.addf("key %q: %v", pl.Key, err)
+	p.when(regRef(pl.Publisher, pl.Key) != name, "publisher %q and key %q must equal the directory %s", pl.Publisher, pl.Key, pluginDir(name))
+	if err := check.ValidatePluginID(pl.Publisher, pl.Key); err != nil {
+		p.addf("%v", err)
 	}
-	p.when(pl.Publisher == "", "publisher is required")
 	p.text("name", pl.Name)
 	p.text("description", pl.Description)
 	p.when(!validRepo(pl.Repo), "repo %q must be a GitHub owner/name", pl.Repo)
@@ -125,6 +126,7 @@ func checkVersion(name string, v *regVersion) []string {
 	p.when(err != nil, "host_compat %q is not a semver range", v.HostCompat)
 	p.when(v.ReleaseURL == "", "release_url is required")
 	p.httpsURL("release_url", v.ReleaseURL)
+	p.when(v.SourceDigest != "" && !sourceDigestRe.MatchString(v.SourceDigest), "source_digest must be sha256:<64 lowercase hex digits>")
 	p.deprecated("deprecated", v.Deprecated)
 	return p
 }

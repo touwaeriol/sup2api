@@ -1618,7 +1618,7 @@ next/
 │   ├── pluginsdk/                 # Serve()、Host 客户端、出口隧道 Transport/Dialer/Resolver、测试工具
 │   ├── pgdb/                      # 插件的 GORM 句柄、组合器、TestNoRawSQL/TestNoPgxImports
 │   └── testpg/                    # 测试用 PostgreSQL（TEST_DATABASE_URL 或本机 embedded-postgres）
-├── plugins/                       # 官方插件，每个是独立 Go module；released.json 记录线上版本
+├── plugins/                       # 官方插件，每个是独立 Go module；版本登记在 touwaeriol/sup2api-plugin
 │   ├── anthropic/  openai/  gemini/  relay/
 │   ├── codex/                     # 含 ui/native
 │   ├── dynweight/  guard/  moderation/   # 含 ui/native

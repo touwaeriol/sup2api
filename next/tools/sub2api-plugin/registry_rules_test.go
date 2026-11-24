@@ -19,24 +19,24 @@ type failCase struct {
 func checkFailCases() map[string]failCase {
 	return map[string]failCase{
 		"non-member new plugin": {func(t *testing.T, f *regFixture, head string) {
-			raw, _ := os.ReadFile(filepath.Join(head, "plugins", "demo", "plugin.json"))
-			writeFile(t, filepath.Join(head, "plugins", "demo_two", "plugin.json"), strings.Replace(string(raw), `"demo"`, `"demo_two"`, 1))
-		}, "mallory", "plugins/demo_two: mallory is not in the github list of publishers/tester.json"},
+			raw, _ := os.ReadFile(filepath.Join(head, "plugins", "tester", "demo", "plugin.json"))
+			writeFile(t, filepath.Join(head, "plugins", "tester", "demo_two", "plugin.json"), strings.Replace(string(raw), `"demo"`, `"demo_two"`, 1))
+		}, "mallory", "plugins/tester/demo_two: mallory is not in the github list of publishers/tester.json"},
 		"revoked publisher": {func(t *testing.T, f *regFixture, head string) {
 			revoke(t, f.base)
 			revoke(t, head)
-			runOK(t, "registry", "add-version", "--registry", head, "--plugin", "demo")
-		}, "alice", "plugins/demo: publisher tester is revoked"},
+			runOK(t, "registry", "add-version", "--registry", head, "--plugin", demoRef)
+		}, "alice", "plugins/tester/demo: publisher tester is revoked"},
 		"deprecation removed": {func(t *testing.T, f *regFixture, head string) {
-			v := readVersionFile(t, f.base, "demo", "0.1.0")
+			v := readVersionFile(t, f.base, demoRef, "0.1.0")
 			v.Deprecated = &deprecation{Reason: map[string]string{"zh": "旧", "en": "Old"}}
-			writeVersionFile(t, f.base, "demo", v)
+			writeVersionFile(t, f.base, demoRef, v)
 			v.Deprecated = nil
-			writeVersionFile(t, head, "demo", v)
+			writeVersionFile(t, head, demoRef, v)
 		}, "alice", "a deprecation cannot be removed"},
 		"symlinked versions": {func(t *testing.T, f *regFixture, head string) {
-			moveBehindSymlink(t, filepath.Join(head, "plugins", "demo", "versions"))
-		}, "alice", "plugins/demo/versions: not a directory"},
+			moveBehindSymlink(t, filepath.Join(head, "plugins", "tester", "demo", "versions"))
+		}, "alice", "plugins/tester/demo/versions: not a directory"},
 		"control character": {func(t *testing.T, f *regFixture, head string) {
 			writeFile(t, filepath.Join(head, "notes\n.txt"), "x")
 		}, "alice", `"notes\n.txt": a path with control characters`},
@@ -91,8 +91,8 @@ func TestRegistrySymlinksAreRefused(t *testing.T) {
 func TestRegistryCheckBaseFailingTodaysRules(t *testing.T) {
 	f := newRegFixture(t)
 	head := f.head(t)
-	runOK(t, "registry", "add-version", "--registry", head, "--plugin", "demo")
-	writeFile(t, filepath.Join(f.base, "plugins", "demo", "NOTES"), "an old stray file")
+	runOK(t, "registry", "add-version", "--registry", head, "--plugin", demoRef)
+	writeFile(t, filepath.Join(f.base, "plugins", "tester", "demo", "NOTES"), "an old stray file")
 	res := f.check(t, head, "alice", true)
 	if !res.NeedsManualReview || !strings.Contains(joined(res.ManualReview), "the base does not pass the current checks") || len(res.Versions) != 1 {
 		t.Fatalf("result = %+v", res)
@@ -104,7 +104,7 @@ func TestRegistryCommandsRefuseExtraArguments(t *testing.T) {
 	for _, args := range [][]string{
 		{"index", "--registry", root, "extra"},
 		{"registry", "codeowners", "--registry", root, "extra"},
-		{"registry", "add-version", "--registry", root, "--plugin", "demo", "extra"},
+		{"registry", "add-version", "--registry", root, "--plugin", demoRef, "extra"},
 		{"registry", "check", "--registry", root, "--base", root, "--author", "a", "--json", "extra"},
 	} {
 		if msg := runFail(t, args...); !strings.Contains(msg, `unexpected argument "extra"`) {

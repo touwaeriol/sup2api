@@ -115,10 +115,11 @@ func (r *remote) spend(n int64) {
 
 // pkgInfo is a package read for the registry.
 type pkgInfo struct {
-	sha256 string
-	size   int64
-	m      *manifest.Manifest
-	files  map[string][]byte
+	sha256       string
+	size         int64
+	sourceDigest string // from source.json; "" without one
+	m            *manifest.Manifest
+	files        map[string][]byte
 }
 
 // inspectPackage reads a package and validates its manifest the way pack
@@ -135,16 +136,20 @@ func inspectPackage(p string) (*pkgInfo, error) {
 	if invalid := validateManifest(m, files); len(invalid) > 0 {
 		return nil, fmt.Errorf("invalid manifest: %s", strings.Join(invalid, "; "))
 	}
+	source, err := packageSourceDigest(files)
+	if err != nil {
+		return nil, err
+	}
 	sum, size, err := fileSHA256(p)
 	if err != nil {
 		return nil, err
 	}
-	return &pkgInfo{sha256: sum, size: size, m: m, files: files}, nil
+	return &pkgInfo{sha256: sum, size: size, sourceDigest: source, m: m, files: files}, nil
 }
 
 // version is the registry version file describing this package at u.
 func (i *pkgInfo) version(u string) regVersion {
-	return regVersion{Version: i.m.Version, URL: u, SHA256: i.sha256, Size: i.size, HostCompat: i.m.HostCompat}
+	return regVersion{Version: i.m.Version, URL: u, SHA256: i.sha256, Size: i.size, HostCompat: i.m.HostCompat, SourceDigest: i.sourceDigest}
 }
 
 // fetchPackage downloads a release asset of plugin p and checks that the

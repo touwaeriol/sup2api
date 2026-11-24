@@ -110,7 +110,29 @@ func collectPackage(dir, runtimesDir, overlay string, allowMissingUI bool) (map[
 	if err := add(filepath.Join(runtimesDir, "runtimes"), "runtimes", nil); err != nil {
 		return nil, nil, nil, err
 	}
-	// Icon stored in the package.
+	if err := addIcons(files, dir, m); err != nil {
+		return nil, nil, nil, err
+	}
+	// Overlay files (except the manifest override files) win.
+	if overlay != "" {
+		if err := add(overlay, "", func(rel string) bool { return rel == overlayManifest || rel == overlayPatch }); err != nil {
+			return nil, nil, nil, err
+		}
+	}
+	// The digest of the plugin directory's sources (not the overlay's).
+	if files[sourceFile], err = sourceJSON(dir); err != nil {
+		return nil, nil, nil, err
+	}
+
+	w, err := checkPackage(files, m, allowMissingUI)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return files, m, append(warnings, w...), nil
+}
+
+// addIcons stores the plugin's and its account types' icon files.
+func addIcons(files map[string][]byte, dir string, m *manifest.Manifest) error {
 	icons := []string{m.Icon}
 	for _, at := range m.AccountTypes {
 		icons = append(icons, at.Icon)
@@ -119,23 +141,12 @@ func collectPackage(dir, runtimesDir, overlay string, allowMissingUI bool) (map[
 		if icon != "" && !strings.HasPrefix(icon, "text:") {
 			b, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(icon)))
 			if err != nil {
-				return nil, nil, nil, fmt.Errorf("icon: %w", err)
+				return fmt.Errorf("icon: %w", err)
 			}
 			files[icon] = b
 		}
 	}
-	// Overlay files (except the manifest override files) win.
-	if overlay != "" {
-		if err := add(overlay, "", func(rel string) bool { return rel == overlayManifest || rel == overlayPatch }); err != nil {
-			return nil, nil, nil, err
-		}
-	}
-
-	w, err := checkPackage(files, m, allowMissingUI)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	return files, m, append(warnings, w...), nil
+	return nil
 }
 
 // addTree adds every regular file below root (if it exists) under prefix.

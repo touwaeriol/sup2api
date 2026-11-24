@@ -15,14 +15,14 @@ func joined(lines []string) string { return strings.Join(lines, "\n") }
 func TestRegistryCheckRejectsBadVersions(t *testing.T) {
 	f := newRegFixture(t)
 	good := f.head(t)
-	runOK(t, "registry", "add-version", "--registry", good, "--plugin", "demo")
-	v := readVersionFile(t, good, "demo", "0.2.0")
+	runOK(t, "registry", "add-version", "--registry", good, "--plugin", demoRef)
+	v := readVersionFile(t, good, demoRef, "0.2.0")
 	for name, tc := range badVersionCases() {
 		t.Run(name, func(t *testing.T) {
 			head := f.head(t)
 			bad := v
 			tc.edit(&bad)
-			writeVersionFile(t, head, "demo", bad)
+			writeVersionFile(t, head, demoRef, bad)
 			if res := f.check(t, head, "alice", false); !strings.Contains(joined(res.Errors), tc.want) {
 				t.Fatalf("errors = %q, want %q", res.Errors, tc.want)
 			}
@@ -45,26 +45,28 @@ func badVersionCases() map[string]badVersionCase {
 		"missing": {func(v *regVersion) {
 			v.URL, v.ReleaseURL = strings.Replace(v.URL, "/demo-v0.2.0/", "/plugin-demo-v0.2.0/", 1), releasePage("acme/demo", "plugin-demo-v0.2.0")
 		}, "404"},
-		"release_url": {func(v *regVersion) { v.ReleaseURL = releasePage("acme/demo", "v0.1.0") }, `release_url "`},
-		"other tag":   {func(v *regVersion) { v.URL = strings.Replace(v.URL, "demo-v0.2.0", "v0.1.0", 1) }, `tag "v0.1.0" must be one of`},
+		"release_url":      {func(v *regVersion) { v.ReleaseURL = releasePage("acme/demo", "v0.1.0") }, `release_url "`},
+		"other tag":        {func(v *regVersion) { v.URL = strings.Replace(v.URL, "demo-v0.2.0", "v0.1.0", 1) }, `tag "v0.1.0" must be one of`},
+		"source_digest":    {func(v *regVersion) { v.SourceDigest = "sha256:" + strings.Repeat("0", 64) }, "source_digest is"},
+		"no source_digest": {func(v *regVersion) { v.SourceDigest = "" }, `source_digest is "", expected "sha256:`},
 	}
 }
 
 func TestRegistryCheckPublishedVersionIsImmutable(t *testing.T) {
 	f := newRegFixture(t)
-	v := readVersionFile(t, f.base, "demo", "0.1.0")
+	v := readVersionFile(t, f.base, demoRef, "0.1.0")
 	head := f.head(t)
 	v.Deprecated = &deprecation{Reason: map[string]string{"zh": "请升级", "en": "Upgrade"}}
-	writeVersionFile(t, head, "demo", v)
+	writeVersionFile(t, head, demoRef, v)
 	if res := f.check(t, head, "alice", true); res.NeedsManualReview {
 		t.Fatalf("deprecating: %+v", res)
 	}
 	v.Size++
-	writeVersionFile(t, head, "demo", v)
+	writeVersionFile(t, head, demoRef, v)
 	if res := f.check(t, head, "alice", false); !strings.Contains(joined(res.Errors), "may only add deprecated") {
 		t.Fatalf("size change: %+v", res)
 	}
-	if err := os.Remove(filepath.Join(head, "plugins", "demo", "versions", "0.1.0.json")); err != nil {
+	if err := os.Remove(filepath.Join(head, "plugins", "tester", "demo", "versions", "0.1.0.json")); err != nil {
 		t.Fatal(err)
 	}
 	if res := f.check(t, head, "alice", true); !res.NeedsManualReview || !strings.Contains(joined(res.ManualReview), "version 0.1.0 deleted") {
@@ -82,10 +84,10 @@ type manualCase struct {
 func manualReviewCases() map[string]manualCase {
 	return map[string]manualCase{
 		"plugin.json": {func(t *testing.T, head string) {
-			p := filepath.Join(head, "plugins", "demo", "plugin.json")
+			p := filepath.Join(head, "plugins", "tester", "demo", "plugin.json")
 			raw, _ := os.ReadFile(p)
 			writeFile(t, p, strings.Replace(string(raw), "A demo", "The demo", 1))
-		}, "alice", "plugins/demo/plugin.json modified"},
+		}, "alice", "plugins/tester/demo/plugin.json modified"},
 		"publisher file": {func(t *testing.T, head string) {
 			writeFile(t, filepath.Join(head, "publishers", "other.json"), otherPublisher)
 		}, "carol", "publishers/other.json: publisher file added"},
@@ -93,9 +95,9 @@ func manualReviewCases() map[string]manualCase {
 			writeFile(t, filepath.Join(head, ".github", "workflows", "x.yml"), "on: push")
 		}, "alice", ".github/workflows/x.yml: added outside"},
 		"new plugin": {func(t *testing.T, head string) {
-			raw, _ := os.ReadFile(filepath.Join(head, "plugins", "demo", "plugin.json"))
-			writeFile(t, filepath.Join(head, "plugins", "demo_two", "plugin.json"), strings.Replace(string(raw), `"demo"`, `"demo_two"`, 1))
-		}, "alice", "plugins/demo_two: new plugin"},
+			raw, _ := os.ReadFile(filepath.Join(head, "plugins", "tester", "demo", "plugin.json"))
+			writeFile(t, filepath.Join(head, "plugins", "tester", "demo_two", "plugin.json"), strings.Replace(string(raw), `"demo"`, `"demo_two"`, 1))
+		}, "alice", "plugins/tester/demo_two: new plugin"},
 	}
 }
 
@@ -116,21 +118,21 @@ func TestRegistryCheckManualReview(t *testing.T) {
 func TestRegistryCheckOnePublisherPerPullRequest(t *testing.T) {
 	f := newRegFixture(t)
 	head := f.head(t)
-	runOK(t, "registry", "add-version", "--registry", head, "--plugin", "demo")
+	runOK(t, "registry", "add-version", "--registry", head, "--plugin", demoRef)
 	writeFile(t, filepath.Join(head, "publishers", "other.json"), otherPublisher)
 	if res := f.check(t, head, "alice", false); !strings.Contains(joined(res.Errors), "one publisher only; this one changes other, tester") {
 		t.Fatalf("errors = %q", res.Errors)
 	}
 	head = f.head(t)
-	writeFile(t, filepath.Join(head, "plugins", "demo", "plugin.json"), `{"key": "demo"}`)
-	if res := f.check(t, head, "alice", false); !strings.Contains(joined(res.Errors), "plugins/demo/plugin.json") {
+	writeFile(t, filepath.Join(head, "plugins", "tester", "demo", "plugin.json"), `{"key": "demo"}`)
+	if res := f.check(t, head, "alice", false); !strings.Contains(joined(res.Errors), "plugins/tester/demo/plugin.json") {
 		t.Fatalf("invalid head: %q", res.Errors)
 	}
 }
 
 func TestRegistryIndexAndCodeowners(t *testing.T) {
 	f := newRegFixture(t)
-	runOK(t, "registry", "add-version", "--registry", f.base, "--plugin", "demo")
+	runOK(t, "registry", "add-version", "--registry", f.base, "--plugin", demoRef)
 	writeFile(t, filepath.Join(f.base, "publishers", "other.json"), otherPublisher)
 	var idx map[string]any
 	if err := json.Unmarshal([]byte(runOK(t, "index", "--registry", f.base)), &idx); err != nil {
@@ -143,12 +145,12 @@ func TestRegistryIndexAndCodeowners(t *testing.T) {
 		plugins[0].(map[string]any)["repo"] != "acme/demo" || plugins[0].(map[string]any)["deprecated"] != nil {
 		t.Fatalf("index = %v", idx)
 	}
-	want := "* @touwaeriol\n/publishers/other.json @carol\n/publishers/tester.json @alice\n/plugins/demo/ @alice\n"
+	want := "* @touwaeriol\n/publishers/other.json @carol\n/plugins/other/ @carol\n/publishers/tester.json @alice\n/plugins/tester/ @alice\n"
 	if got := runOK(t, "registry", "codeowners", "--registry", f.base); got != want {
 		t.Fatalf("codeowners =\n%s", got)
 	}
 	out := filepath.Join(t.TempDir(), "index.json")
-	writeFile(t, filepath.Join(f.base, "plugins", "demo", "README.md"), "x")
+	writeFile(t, filepath.Join(f.base, "plugins", "tester", "demo", "README.md"), "x")
 	if msg := runFail(t, "index", "--registry", f.base, "--out", out); !strings.Contains(msg, `unexpected entry "README.md"`) {
 		t.Fatalf("stray file: %s", msg)
 	}
@@ -160,7 +162,7 @@ func TestRegistryImport(t *testing.T) {
 	p2 := strings.TrimSpace(runOK(t, "pack", "--dir", dir, "--overlay", "testdata/v2", "--out-dir", pkgs))
 	runOK(t, "registry", "import", "--registry", reg, "--repo", "acme/demo", "--trust", "official", p1, p2)
 	runFail(t, "registry", "import", "--registry", reg, "--repo", "acme/demo", p1)
-	if v := readVersionFile(t, reg, "demo", "0.2.0"); v.URL != "demo-0.2.0.s2plugin" {
+	if v := readVersionFile(t, reg, "tester/demo", "0.2.0"); v.URL != "demo-0.2.0.s2plugin" {
 		t.Fatalf("url = %q", v.URL)
 	}
 	out := filepath.Join(t.TempDir(), "index.json")
@@ -189,9 +191,14 @@ func TestRegistryValidation(t *testing.T) {
 	if p := checkVersion("1.0.0", &v); len(p) != 1 || !strings.Contains(p[0], "url") {
 		t.Fatal(p)
 	}
+	v.URL = "https://github.com/a/b/releases/download/v1/b.s2plugin"
+	v.SourceDigest = "sha256:" + strings.Repeat("A", 64)
+	if p := checkVersion("1.0.0", &v); len(p) != 1 || !strings.Contains(p[0], "source_digest") {
+		t.Fatal(p)
+	}
 	for key, ok := range map[string]bool{"azure_openai": true, "demo": true, "a__b": false, "trailing_": false, "Demo": false, "x": false, "core": false} {
-		pl := regPlugin{Key: key}
-		if got := !strings.Contains(joined(checkPlugin(key, &pl)), "key "); got != ok {
+		pl := regPlugin{Key: key, Publisher: "sub2api"}
+		if got := !strings.Contains(joined(checkPlugin(regRef("sub2api", key), &pl)), "key "); got != ok {
 			t.Errorf("key %q valid = %v, want %v", key, got, ok)
 		}
 	}
