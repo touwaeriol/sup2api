@@ -13,6 +13,7 @@ import NodeTaskCell from './NodeTaskCell.vue'
 import RecentRuns from './RecentRuns.vue'
 import TaskDrawer from './TaskDrawer.vue'
 import { STATUSES, clusterStatus, describeSchedule, formatDuration, nodeTaskNames, runTone, sortClusterTasks, taskTitle, type ClusterTask, type NodeTask, type TasksOverview } from './tasks'
+import { displayPluginId } from '@/views/plugins/pluginId'
 
 const REFRESH_CHOICES = [0, 10, 30, 60]
 
@@ -220,7 +221,7 @@ function openTask(name: string, node = '') {
           <div class="font-medium text-fg">{{ title(row) }}</div>
           <div class="flex items-center gap-1.5">
             <SHint size="xs" class="font-mono">{{ row.name }}</SHint>
-            <SBadge v-if="row.plugin_key" tone="purple">{{ t('tasks.plugin') }} {{ row.plugin_key }}</SBadge>
+            <SBadge v-if="row.plugin_key" tone="purple">{{ t('tasks.plugin') }} {{ displayPluginId(row.plugin_key) }}</SBadge>
             <SBadge v-if="!row.enabled" tone="gray">{{ t('tasks.disabled') }}</SBadge>
           </div>
         </template>

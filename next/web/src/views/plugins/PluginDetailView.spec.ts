@@ -25,7 +25,7 @@ async function render(query = '', extra: Record<string, unknown> = {}, settings:
     const matrix = path.match(/^\/permissions\/plugins\/(\w+)$/)?.[1]
     if (matrix) return matrixOf(matrix)
     const key = path.match(/^\/plugins\/(\w+)$/)?.[1]
-    return key ? { key, name: key, status: 'enabled', grants: [], versions: [], ...extra } : []
+    return key ? { key, display_id: key, name: key, status: 'enabled', grants: [], versions: [], ...extra } : []
   })
   const router = createRouter({
     history: createMemoryHistory(),

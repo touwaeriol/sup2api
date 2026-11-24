@@ -12,7 +12,8 @@ import { useAuthStore } from '@/stores/auth'
 import { refreshShell } from '@/stores/app'
 import { consentPath } from './consent/paths'
 import RoleGrantsReview from './parts/RoleGrantsReview.vue'
-import { compareVersions, conflictLines, consoleSettings, displayPluginId, isPendingConsent, nativeSettingsPath, refusalText, rolloutAfterConsent, shownStatus, tabOf, type PluginDetail, type PluginSettings } from './pluginUtil'
+import { compareVersions, conflictLines, consoleSettings, isPendingConsent, nativeSettingsPath, refusalText, rolloutAfterConsent, shownStatus, tabOf, type PluginDetail, type PluginSettings } from './pluginUtil'
+import { displayPluginId } from './pluginId'
 import TrustBadge from './parts/TrustBadge.vue'
 import PluginIdText from './parts/PluginIdText.vue'
 import OverviewTab from './detail/OverviewTab.vue'
@@ -46,7 +47,7 @@ const uninstallOpen = ref(false)
 const upgradeOpen = ref(false)
 const upgradeVersion = ref('')
 
-const name = computed(() => (detail.value ? lt(detail.value.name) : '') || displayPluginId(key.value))
+const name = computed(() => (detail.value ? lt(detail.value.name) || detail.value.display_id : displayPluginId(key.value)))
 const status = computed(() => detail.value?.status || '')
 const canManage = computed(() => auth.has('plugin:manage'))
 const inRollout = computed(() => status.value === 'enabling' || status.value === 'upgrading')
@@ -203,7 +204,7 @@ onMounted(load)
     <template v-else>
       <SPageHeader :title="name">
         <template #title-extra>
-          <PluginIdText :id="detail.key" class="text-sm text-fg-muted" />
+          <PluginIdText :id="detail.key" :display-id="detail.display_id" class="text-sm text-fg-muted" />
           <span class="font-mono text-sm text-gray-500">{{ detail.active_version ? 'v' + detail.active_version : '' }}</span>
           <span v-if="detail.desired_version && detail.desired_version !== detail.active_version" class="font-mono text-xs text-primary-600 dark:text-primary-400">
             → v{{ detail.desired_version }}
@@ -298,7 +299,7 @@ onMounted(load)
 
       </STabs>
 
-      <UninstallModal v-model:open="uninstallOpen" :plugin-key="detail.key" :name="name" :has-database="hasDatabase" @done="onUninstalled" />
+      <UninstallModal v-model:open="uninstallOpen" :plugin-key="detail.key" :display-id="detail.display_id" :name="name" :has-database="hasDatabase" @done="onUninstalled" />
 
       <SFormModal v-model:open="upgradeOpen" :title="t('plugins.detail.upgradeTitle', { name })" width="sm" :loading="acting === 'upgrade'" :submit-disabled="!upgradeVersion" :submit-text="t('plugins.detail.upgrade')" :enter-submit="false" @submit="startRollout('upgrade', upgradeVersion)">
         <SHint class="mb-3">{{ t('plugins.detail.upgradeHint', { version: detail.active_version || '—' }) }}</SHint>

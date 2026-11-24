@@ -47,7 +47,7 @@ const nodeStates = computed(() => {
       <p v-if="description" class="mb-4 text-sm text-gray-700 dark:text-gray-300">{{ description }}</p>
       <dl class="kv">
         <dt>{{ t('plugins.key') }}</dt>
-        <dd><PluginIdText :id="detail.key" /></dd>
+        <dd><PluginIdText :id="detail.key" :display-id="detail.display_id" /></dd>
         <dt>{{ t('common.status') }}</dt>
         <dd class="flex flex-wrap items-center gap-2">
           <PluginStatusBadge :status="detail.status" />

@@ -7,7 +7,8 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { SBadge, SCard, SDisclosure, SHint } from '@sub2api/ui'
 import type { PluginReview, ReviewMigration } from '@/api/types'
-import { asArray, tablePrefix } from '../pluginUtil'
+import { asArray } from '../pluginUtil'
+import { tablePrefix } from '../pluginId'
 import MigrationScript from '../parts/MigrationScript.vue'
 
 const props = defineProps<{ review: PluginReview }>()

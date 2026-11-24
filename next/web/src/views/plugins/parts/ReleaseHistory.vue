@@ -7,7 +7,8 @@ import PluginStatusBadge from './PluginStatusBadge.vue'
 import type { PluginHistory, PluginRelease } from '@/api/observability'
 import { formatDateTime } from '@/utils/format'
 import { errorMessage } from '@/utils/errors'
-import { displayPluginId, usePluginStatusLabel } from '../pluginUtil'
+import { usePluginStatusLabel } from '../pluginUtil'
+import { displayPluginId } from '../pluginId'
 const props = defineProps<{ pluginKey?: string; since?: string }>()
 const { t } = useI18n()
 const statusLabel = usePluginStatusLabel()

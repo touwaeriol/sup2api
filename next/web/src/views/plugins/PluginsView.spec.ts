@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { i18n } from '@/i18n'
-import { STORE, channel, installedPlugin, serveStore, store } from '@/testing/marketFixtures'
+import { STORE, installedPlugin, serveStore } from '@/testing/marketFixtures'
 
 const mocks = vi.hoisted(() => ({ firstPage: vi.fn(), raw: vi.fn(), get: vi.fn(async () => []), perms: null as string[] | null }))
 vi.mock('@/composables/lookups', async original => ({ ...(await original<object>()), fetchFirstPage: mocks.firstPage }))
@@ -12,8 +12,6 @@ enableAutoUnmount(afterEach)
 
 import PluginsView from './PluginsView.vue'
 
-const STORES = [store(2), store(1)]
-const CHANNELS = [channel(2, { name: '测试', branch: 'develop', is_default: false }), channel(1), channel(3, { store_id: 2, is_default: true })]
 const INSTALLED = [
   installedPlugin('codex', '0.2.1', { builtin: true }),
   installedPlugin('gemini', '1.0.0', { signature_status: 'indexed' }),
@@ -34,17 +32,40 @@ describe('PluginsView', () => {
     vi.clearAllMocks()
     mocks.perms = null
     i18n.global.locale.value = 'zh'
-    mocks.firstPage.mockImplementation(serveStore({ stores: STORES, channels: CHANNELS, installed: INSTALLED }))
+    mocks.firstPage.mockImplementation(serveStore({ installed: INSTALLED }))
     localStorage.clear()
     mocks.raw.mockResolvedValue({ data: STORE, host_version: '0.1.5' })
   })
 
   it('counts the upgrades against the official store default channel, whatever the viewer last browsed', async () => {
-    localStorage.setItem('s2a.market', JSON.stringify({ store: 2, channels: { 1: 2, 2: 3 } }))
+    localStorage.setItem('s2a.market', JSON.stringify({ store: 1, channels: { 1: 2 } }))
     const w = await render()
-    expect(mocks.firstPage).toHaveBeenCalledWith('/market/sources', { store_id: 1 })
-    expect(mocks.raw).toHaveBeenCalledWith('GET', '/market/plugins', { query: { source_id: 1 } })
+    expect(mocks.firstPage).not.toHaveBeenCalledWith('/market/sources', expect.anything())
+    expect(mocks.raw).toHaveBeenCalledWith('GET', '/market/plugins', { query: {} })
     expect(w.get('[data-testid="plugins-updatable"]').text()).toBe(tt('market.updatable', { n: 2 }))
+  })
+
+  it('refreshes the list and the upgrades, the index fetched afresh', async () => {
+    const w = await render()
+    await w.get('[data-testid="plugins-refresh"]').trigger('click')
+    await flushPromises()
+    expect(mocks.raw).toHaveBeenLastCalledWith('GET', '/market/plugins', { query: { refresh: true } })
+  })
+
+  it('filters the plugins the store has a newer version of', async () => {
+    const w = await render()
+    await w.findComponent({ name: 'SSelect' }).vm.$emit('update:modelValue', 'upgrade')
+    await flushPromises()
+    expect(w.findAll('[data-plugin-id]').map(e => e.attributes('data-plugin-id'))).toEqual(['codex', '_erio__codex'])
+  })
+
+  it('shows the upgrade without a link to the consent to a viewer who cannot install', async () => {
+    mocks.perms = ['plugin:read', 'plugin:market:read']
+    const w = await render()
+    const badge = row(w, 'codex').get('[data-testid="plugin-upgrade-badge"]')
+    expect(badge.text()).toBe(tt('market.upgradeBadge', { version: '0.2.3' }))
+    expect(badge.element.tagName).not.toBe('A')
+    expect(row(w, 'codex').find('a[data-to]').exists()).toBe(false)
   })
 
   it('offers the upgrade of a plugin the store has newer, linking to its consent', async () => {

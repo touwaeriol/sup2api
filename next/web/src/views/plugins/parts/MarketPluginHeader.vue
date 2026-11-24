@@ -24,8 +24,8 @@ const { t } = useI18n()
       <PluginAvatar :name="lt(plugin.name)" :plugin-key="plugin.id" size="lg" />
       <div class="min-w-0 flex-[1_1_24rem] space-y-2">
         <div class="flex flex-wrap items-center gap-2">
-          <span class="text-lg font-semibold">{{ lt(plugin.name) || plugin.key }}</span>
-          <PluginIdText :id="plugin.id" class="text-sm text-fg-muted" />
+          <span class="text-lg font-semibold">{{ lt(plugin.name) || plugin.display_id }}</span>
+          <PluginIdText :id="plugin.id" :display-id="plugin.display_id" class="text-sm text-fg-muted" />
           <MarketBadges :plugin="plugin" :upgrade="state === 'upgrade' && !blocked" />
         </div>
         <p v-if="plugin.description" class="text-sm text-fg">{{ lt(plugin.description) }}</p>

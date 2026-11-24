@@ -9,6 +9,7 @@ import { fetchFirstPage } from '@/composables/lookups'
 import type { NodeInfo } from '@/api/types'
 import type { Release, ShellNode } from '@/api/observability'
 import NodeTopology from './NodeTopology.vue'
+import { displayPluginId } from '@/views/plugins/pluginId'
 const { t } = useI18n(), auth = useAuthStore()
 const view = ref<'chart' | 'topology'>('topology')
 const viewOptions = computed<SelectOption[]>(() => (['chart', 'topology'] as const).map((mode) => ({ value: mode, label: t(`observe.${mode}View`) })))
@@ -112,7 +113,7 @@ onBeforeUnmount(() => { disposed = true })
               <div class="my-1 text-xs">{{ t(card.shell?.stopped ? 'observe.stopped' : card.core ? 'observe.running' : 'observe.unknown') }} · {{ (card.shell?.core_boot_id || card.core?.boot_id)?.slice(0,8) || '—' }}</div>
               <div class="mt-3 text-xs font-semibold text-fg-muted">{{ t('observe.plugins') }}</div>
               <div v-for="plugin in card.plugins" :key="plugin.key" class="mt-2 rounded-lg border p-2" :class="plugin.fallback ? 'border-amber-400 bg-amber-50 dark:border-amber-700 dark:bg-amber-950/30' : 'border-line'">
-                <div class="flex items-center justify-between gap-1"><strong>{{ plugin.key }}</strong><SStatusBadge :status="plugin.state" /></div>
+                <div class="flex items-center justify-between gap-1"><strong>{{ displayPluginId(plugin.key) }}</strong><SStatusBadge :status="plugin.state" /></div>
                 <div class="font-mono text-xs">{{ plugin.serving || '—' }}<span v-if="plugin.standby"> → {{ plugin.standby }}</span></div>
                 <SHint v-if="plugin.fallback" tone="warning" size="xs">{{ t('observe.fallback') }}: {{ plugin.fallback }}</SHint>
                 <div class="text-xs text-fg-muted">{{ t('observe.instances') }} {{ plugin.instances?.length || 0 }} · {{ t('observe.restarts') }} {{ plugin.instances?.reduce((sum, i) => sum + i.restarts, 0) || 0 }}</div>

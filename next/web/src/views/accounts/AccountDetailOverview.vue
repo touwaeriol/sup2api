@@ -15,6 +15,7 @@ import AccountTypePlatforms from './AccountTypePlatforms.vue'
 import AccountUsageCell from './AccountUsageCell.vue'
 import { hasBalance, hasQuota } from './accountQuota'
 import { coolingDown, statusView } from './accountStatus'
+import { displayPluginId } from '@/views/plugins/pluginId'
 
 // The overview tab of an account's details: what it is, its status (with a
 // reset while it cools down), groups, scheduling, limits, usage, quota and
@@ -63,7 +64,7 @@ function expiry(at: string | null | undefined): string {
       <SDescItem label="ID">{{ account.id }}</SDescItem>
       <SDescItem :label="t('accounts.type')">
         {{ accountTypes.typeLabel(account.plugin_key, account.type, account.type_label) }}
-        <SHint inline size="xs">· {{ accountTypes.pluginName(account.plugin_key) }} <span class="font-mono">({{ account.plugin_key }}/{{ account.type }})</span></SHint>
+        <SHint inline size="xs">· {{ accountTypes.pluginName(account.plugin_key) }} <span class="font-mono">({{ displayPluginId(account.plugin_key) }} · {{ account.type }})</span></SHint>
       </SDescItem>
       <SDescItem v-if="type" :label="t('platforms.supported')"><AccountTypePlatforms :items="type.platforms" /></SDescItem>
       <SDescItem :label="t('accounts.servesEndpoints')">

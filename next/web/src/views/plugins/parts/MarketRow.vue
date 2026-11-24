@@ -39,8 +39,8 @@ const newer = computed(() => (props.state !== 'install' ? newerIncompatible(prop
     <PluginAvatar :name="lt(plugin.name)" :plugin-key="plugin.id" size="lg" />
     <div class="min-w-0 flex-1 space-y-1">
       <div class="flex flex-wrap items-center gap-2">
-        <SLink :to="detail" class="font-semibold" data-testid="market-name">{{ lt(plugin.name) || plugin.key }}</SLink>
-        <PluginIdText :id="plugin.id" class="text-sm text-fg-muted" />
+        <SLink :to="detail" class="font-semibold" data-testid="market-name">{{ lt(plugin.name) || plugin.display_id }}</SLink>
+        <PluginIdText :id="plugin.id" :display-id="plugin.display_id" class="text-sm text-fg-muted" />
         <MarketBadges :plugin="plugin" :upgrade="state === 'upgrade' && !blocked" />
       </div>
       <p v-if="plugin.description" class="line-clamp-2 text-sm text-fg">{{ lt(plugin.description) }}</p>
@@ -71,7 +71,9 @@ const newer = computed(() => (props.state !== 'install' ? newerIncompatible(prop
       <SHint v-else-if="newer" size="xs">{{ t('market.newerIncompatible', { version: newer }) }}</SHint>
     </div>
     <div class="flex shrink-0 items-center gap-2">
-      <SButton v-if="!blocked" size="sm" variant="ghost" :to="detail" data-testid="market-versions">{{ t('market.versions') }}</SButton>
+      <SButton v-if="!blocked" size="sm" variant="ghost" :to="detail" :aria-label="t('market.versionsOf', { name: lt(plugin.name) || plugin.display_id })" data-testid="market-versions">
+        {{ t('market.versions') }}
+      </SButton>
       <SButton v-if="blocked" size="sm" disabled :title="blocked" data-testid="market-not-installable">{{ t('market.notInstallable') }}</SButton>
       <SBadge v-else-if="state === 'installed'" tone="success" data-testid="market-up-to-date">{{ t('market.upToDate') }}</SBadge>
       <template v-else-if="canInstall">

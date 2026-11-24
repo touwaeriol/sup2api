@@ -1,7 +1,7 @@
-// The plugin store as the store pages read it: the configured stores and the
-// channels of the store being viewed (CONTRACTS §136), the listing of the
-// channel being viewed with the running core's version, and the plugins
-// installed here by plugin id (CONTRACTS §137).
+// The plugin store as the store pages read it: the stores and the channels
+// of the store being viewed (CONTRACTS §137.6), the listing of the channel
+// being viewed with the running core's version, and the plugins installed
+// here by plugin id (CONTRACTS §137).
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { requestRaw } from '@sub2api/host'
@@ -17,14 +17,29 @@ import { NO_PREFS, pickChannel, pickStore, rememberChannel, rememberStore, type 
 /** The listing as the store pages keep it (no plugins until it loads). */
 const emptyListing = (): MarketListing => ({ data: [], host_version: '' })
 
-/** GET /market/plugins of a channel: a raw envelope, host_version sits next to data. */
-export async function fetchListing(sourceId: number): Promise<MarketListing> {
-  const json = await requestRaw('GET', '/market/plugins', { query: { source_id: sourceId } })
+/**
+ * GET /market/plugins of a channel, the official store's default one without
+ * sourceId; refresh fetches the index afresh instead of the core's cached
+ * copy. A raw envelope: host_version sits next to data.
+ */
+export async function fetchListing(sourceId?: number, refresh = false): Promise<MarketListing> {
+  const query = { ...(sourceId ? { source_id: sourceId } : {}), ...(refresh ? { refresh: true } : {}) }
+  const json = await requestRaw('GET', '/market/plugins', { query })
   return { ...emptyListing(), ...json, data: Array.isArray(json?.data) ? json.data : [] }
 }
 
 export const fetchStores = () => fetchFirstPage<MarketStore>('/market/stores')
-export const fetchChannels = (storeId: number) => fetchFirstPage<MarketSource>('/market/sources', { store_id: storeId })
+/** The channels of store storeId, of every store without it. */
+export const fetchChannels = (storeId?: number) => fetchFirstPage<MarketSource>('/market/sources', storeId ? { store_id: storeId } : {})
+
+/** The plugins installed here by plugin id; none when they cannot be read. */
+export async function fetchInstalled(): Promise<Record<string, PluginSummary>> {
+  try {
+    return Object.fromEntries((await fetchFirstPage<PluginSummary>('/plugins')).map(p => [p.key, p]))
+  } catch {
+    return {}
+  }
+}
 
 function createState() {
   return {
@@ -36,6 +51,8 @@ function createState() {
     /** The channel being viewed (null when the store has no enabled channel). */
     channel: ref<MarketSource | null>(null),
     listing: ref<MarketListing>(emptyListing()),
+    /** Counts the listing requests: only the newest one's answer is kept. */
+    listingSeq: { n: 0 },
     /** The plugins installed here, by plugin id. */
     installed: ref<Record<string, PluginSummary>>({}),
     loadingStore: ref(true),
@@ -44,10 +61,15 @@ function createState() {
 }
 type State = ReturnType<typeof createState>
 
+/** Lists the channels of the store being viewed; the old store's are gone before the request, so none of them is listed meanwhile. */
 async function loadChannels(s: State, prefs: MarketPrefs) {
   const store = s.store.value
-  s.channels.value = store ? await fetchChannels(store.id) : []
-  s.channel.value = store ? pickChannel(s.channels.value, prefs.channel(store.id)) : null
+  s.channels.value = []
+  s.channel.value = null
+  const list = store ? await fetchChannels(store.id) : []
+  if (store !== s.store.value) return
+  s.channels.value = list
+  s.channel.value = store ? pickChannel(list, prefs.channel(store.id)) : null
 }
 
 async function loadStores(s: State, prefs: MarketPrefs) {
@@ -63,24 +85,20 @@ async function loadStores(s: State, prefs: MarketPrefs) {
   }
 }
 
-async function loadListing(s: State) {
+/** Lists the channel being viewed (afresh with refresh); an answer that a newer request overtook is dropped. */
+async function loadListing(s: State, refresh = false) {
+  const seq = ++s.listingSeq.n
   if (!s.channel.value) return void (s.listing.value = emptyListing())
   s.loading.value = true
   try {
-    s.listing.value = await fetchListing(s.channel.value.id)
+    const listing = await fetchListing(s.channel.value.id, refresh)
+    if (seq === s.listingSeq.n) s.listing.value = listing
   } catch (e) {
+    if (seq !== s.listingSeq.n) return
     s.listing.value = emptyListing()
     notifyError(e)
   } finally {
-    s.loading.value = false
-  }
-}
-
-async function loadInstalled(s: State) {
-  try {
-    s.installed.value = Object.fromEntries((await fetchFirstPage<PluginSummary>('/plugins')).map(p => [p.key, p]))
-  } catch {
-    s.installed.value = {}
+    if (seq === s.listingSeq.n) s.loading.value = false
   }
 }
 
@@ -107,24 +125,28 @@ function selectChannel(s: State, id: number) {
   return loadListing(s)
 }
 
+/** Why m cannot be installed or upgraded at all ('' when it can), against the core version of the listing. */
+function blockedOf(t: ReturnType<typeof useI18n>['t'], m: MarketPlugin, hostVersion: string): string {
+  if (m.publisher_status === 'revoked') return t('market.revokedExplain')
+  if (publisherBlocked(m)) return t('market.missingExplain')
+  return noCompatible(m) ? t('market.noCompatible', { version: hostVersion || '?' }) : ''
+}
+
 /** The store pages' state; `prefs` names the store and channel to open (the official store's default channel when it names none). */
 export function useMarket(prefs: MarketPrefs = NO_PREFS) {
   const { t } = useI18n()
   const auth = useAuthStore()
   const s = createState()
-  /** Why m cannot be installed or upgraded at all ('' when it can). */
-  const blockedOf = (m: MarketPlugin): string => {
-    if (m.publisher_status === 'revoked') return t('market.revokedExplain')
-    if (publisherBlocked(m)) return t('market.missingExplain')
-    return noCompatible(m) ? t('market.noCompatible', { version: s.listing.value.host_version || '?' }) : ''
+  const installedLoad = async () => {
+    if (auth.has('plugin:read')) s.installed.value = await fetchInstalled()
   }
-  const installedLoad = () => (auth.has('plugin:read') ? loadInstalled(s) : Promise.resolve())
   return {
     ...s,
     items: computed(() => s.listing.value.data),
     hostVersion: computed(() => s.listing.value.host_version),
     enabledChannels: computed(() => s.channels.value.filter(c => c.enabled)),
-    loadListing: () => loadListing(s),
+    /** Lists the channel being viewed; refresh fetches its index afresh (the refresh button). */
+    loadListing: (refresh = false) => loadListing(s, refresh),
     loadInstalled: installedLoad,
     /** Loads the stores, the chosen store's channels and the chosen channel's listing. */
     loadChannelListing: () => loadStores(s, prefs).then(() => loadListing(s)),
@@ -134,7 +156,7 @@ export function useMarket(prefs: MarketPrefs = NO_PREFS) {
     selectChannel: (id: number) => selectChannel(s, id),
     installedOf: (m: MarketPlugin) => installedVersionOf(m, s.installed.value[m.id]),
     stateOf: (m: MarketPlugin) => marketStateOf(m, s.installed.value[m.id]),
-    blockedOf,
+    blockedOf: (m: MarketPlugin) => blockedOf(t, m, s.listing.value.host_version),
     /** The consent page of a version of the channel being viewed: nothing is downloaded or registered before it. */
     installLocation: (m: MarketPlugin, version: string) => marketInstallLocation(s.channel.value?.id ?? 0, m, version)
   }

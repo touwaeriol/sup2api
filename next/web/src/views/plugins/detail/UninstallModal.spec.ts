@@ -7,7 +7,7 @@ vi.mock('@sub2api/host', async (original) => ({ ...(await original<object>()), a
 enableAutoUnmount(afterEach)
 
 const render = (hasDatabase: boolean) =>
-  mount(UninstallModal, { props: { open: true, pluginKey: 'guard', name: 'Guard', hasDatabase }, global: { plugins: [i18n], stubs: { teleport: true } } })
+  mount(UninstallModal, { props: { open: true, pluginKey: 'guard', displayId: 'guard', name: 'Guard', hasDatabase }, global: { plugins: [i18n], stubs: { teleport: true } } })
 
 describe('uninstall dialog', () => {
   it('names the tables purging drops and says the database identity goes either way', () => {

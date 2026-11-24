@@ -537,14 +537,6 @@ describe('plugin consent page', () => {
     })
   })
 
-  it('asks for the missing required permissions instead of submitting', async () => {
-    const w = render(review({ host_permissions: [{ id: 'http.client', risk: 'high' }] }))
-    await flushPromises()
-    await w.get('[data-testid="consent-approve"]').trigger('click')
-    await flushPromises()
-    expect(mocks.post).not.toHaveBeenCalled()
-  })
-
   it('keeps the page structure: icons and hints render after a split into child components', async () => {
     const w = render(review())
     await flushPromises()

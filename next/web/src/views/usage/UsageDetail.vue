@@ -25,6 +25,7 @@ import CacheWriteFacts from './CacheWriteFacts.vue'
 import { componentCacheWriteMetrics, otherUsageMetrics } from './cacheWriteEvidence'
 import FailureDecisionDetails from '@/views/settings/FailureDecisionDetails.vue'
 import type { FailureDecision } from '@/views/settings/failurePolicy'
+import { displayPluginId } from '@/views/plugins/pluginId'
 
 // Expanded usage record: billing detail (A.14), request info, tokens, hooks, sticky.
 // `view` `self`: the caller's own records, whose attempts show no accounts;
@@ -162,7 +163,7 @@ const schedulingHint = computed(() => u.value.error_type === 'no_account' && !!s
           {{ accountTypes.typeLabel(u.plugin_key, u.account_type) }}
           <SHint inline size="xs">
             · {{ accountTypes.pluginName(u.plugin_key) }}
-            <span class="font-mono">({{ u.plugin_key }}/{{ u.account_type }})</span>
+            <span class="font-mono">({{ displayPluginId(u.plugin_key) }} · {{ u.account_type }})</span>
           </SHint>
         </SDescItem>
         <SDescItem :label="t('usage.cols.upstreamProtocol')"><div class="flex flex-wrap items-center gap-2">
@@ -190,7 +191,7 @@ const schedulingHint = computed(() => u.value.error_type === 'no_account' && !!s
           <template #actions><SBadge size="xs">{{ hooks.length }}</SBadge></template>
           <ul class="space-y-1 text-sm">
             <li v-for="(h, i) in hooks" :key="i" class="flex flex-wrap items-center gap-2">
-              <span class="font-mono text-xs">{{ h.plugin_key }}/{{ h.hook_id }}</span>
+              <span class="font-mono text-xs">{{ displayPluginId(h.plugin_key) }} · {{ h.hook_id }}</span>
               <SBadge :tone="hookTone(h.decision)">{{ h.decision }}</SBadge>
               <SHint inline size="xs">{{ h.latency_ms }} ms</SHint>
               <span v-if="h.note" class="text-xs">{{ h.note }}</span>

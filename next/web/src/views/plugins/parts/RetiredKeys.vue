@@ -7,7 +7,7 @@ import type { ReleaseRetiredKeyResult, RetiredKey } from '@/api/pluginKeys'
 import { notifyError } from '@/utils/errors'
 import { useAuthStore } from '@/stores/auth'
 import { formatDateTime } from '@/utils/format'
-import { tablePrefix } from '../pluginUtil'
+import { tablePrefix } from '../pluginId'
 import PluginIdText from './PluginIdText.vue'
 
 // Keys of uninstalled plugins stay with their publisher (CONTRACTS §55.1): only
@@ -86,7 +86,7 @@ defineExpose({ load })
     <SHint class="mb-3">{{ t('plugins.retired.description') }}</SHint>
     <STable :columns="columns" :rows="items" row-key="key">
       <template #cell-key="{ row }">
-        <PluginIdText :id="row.key" class="text-sm" />
+        <PluginIdText :id="row.key" :display-id="row.display_id" class="text-sm" />
         <SBadge v-if="row.installed" tone="info" class="ml-2">{{ t('plugins.retired.reinstalled') }}</SBadge>
       </template>
       <template #cell-publisher="{ row }">

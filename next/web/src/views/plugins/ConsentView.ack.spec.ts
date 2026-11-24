@@ -1,6 +1,7 @@
 // A market upgrade's consent: the source check (channel, publisher, release,
-// size, sha256, host range), the egress domains and the acknowledgement new
-// high-risk host permissions wait for.
+// size, sha256, host range), the egress domains, the acknowledgement new or
+// widened high-risk host permissions wait for, and the required permissions
+// approving asks for.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { createPinia } from 'pinia'
@@ -93,11 +94,14 @@ describe('market upgrade consent', () => {
     expect(w.get('[data-testid="consent-version-change"]').text()).toContain('v0.2.1 → v0.2.3')
   })
 
-  it('waits for the acknowledgement of a new high-risk permission before approving', async () => {
+  it('waits for the acknowledgement of a new or widened high-risk permission before approving', async () => {
     const w = await render(review())
     const card = w.get('[data-testid="consent-new-risk"]')
-    expect(card.findAll('[data-new-risk]').map((r) => r.attributes('data-new-risk'))).toEqual(['users.read'])
-    expect(card.text()).toContain(tt('pluginInstall.newRisk', { n: 1 }, 1))
+    expect(card.findAll('[data-new-risk]').map((r) => [r.attributes('data-new-risk'), r.text().includes(tt('plugins.consent.diffWidened'))])).toEqual([
+      ['net', true],
+      ['users.read', false]
+    ])
+    expect(card.text()).toContain(tt('pluginInstall.newRisk', { n: 2 }, 2))
     expect(approve(w).disabled).toBe(true)
     expect(w.get('[data-testid="consent-ack-required"]').text()).toBe(tt('pluginInstall.ackRequired'))
     await w.get('[data-testid="consent-ack"] input, input[data-testid="consent-ack"]').setValue(true)
@@ -105,16 +109,23 @@ describe('market upgrade consent', () => {
     expect(w.find('[data-testid="consent-ack-required"]').exists()).toBe(false)
   })
 
-  it('asks for nothing more when no high-risk permission is new', async () => {
+  it('asks for nothing more when no high-risk permission is new or widened', async () => {
     const w = await render(review({ diff: { added: [{ id: 'jobs', risk: 'medium' }], widened: [], removed: [] } }))
     expect(w.find('[data-testid="consent-new-risk"]').exists()).toBe(false)
     expect(approve(w).disabled).toBe(false)
   })
 
+  it('asks for the missing required permissions instead of submitting', async () => {
+    const w = await render(review({ upgrade_from: undefined, host_permissions: [{ id: 'users.read', risk: 'high' }], diff: null }))
+    await w.get('[data-testid="consent-approve"]').trigger('click')
+    await flushPromises()
+    expect(mocks.post.mock.calls.map(([path]) => path).filter((path) => !String(path).endsWith('review-from-market'))).toEqual([])
+  })
+
   it('lists the egress domains, the new one marked', async () => {
     const w = await render(review())
     const domains = w.findAll('[data-testid="consent-egress"] [data-domain]')
-    expect(domains.map((d) => [d.attributes('data-domain'), d.text().includes(tt('pluginInstall.egressNew'))])).toEqual([
+    expect(domains.map((d) => [d.attributes('data-domain'), d.text().includes(tt('pluginInstall.egressNewMark'))])).toEqual([
       ['chatgpt.com', false],
       ['ab.chatgpt.com', true]
     ])

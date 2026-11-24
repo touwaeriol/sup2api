@@ -4,7 +4,7 @@
 import type { MarketPlugin, MarketSource, MarketStore, MarketVersion } from '@/api/marketTypes'
 import type { PluginSummary } from '@/api/types'
 
-/** A store: the first is the official one. */
+/** A store: store 1 is the official one, the only store the core has. */
 export const store = (id: number, over: Partial<MarketStore> = {}): MarketStore => ({
   id,
   name: id === 1 ? '官方商店' : `store${id}`,
@@ -101,16 +101,16 @@ export const INSTALLED: PluginSummary[] = [installedPlugin('codex', '0.2.1', { b
 
 interface StoreData {
   stores?: MarketStore[]
-  /** Channels of every store: a request gets those of its store_id. */
+  /** Channels of every store: a request gets those of its store_id, every one without. */
   channels?: MarketSource[]
   installed?: PluginSummary[]
 }
 
-/** fetchFirstPage as the store specs serve it: the stores, a store's channels (by store_id) and the installed plugins. */
+/** fetchFirstPage as the store specs serve it: the stores, the channels (of store_id when given) and the installed plugins. */
 export function serveStore(data: StoreData = {}) {
   return async (path: string, query: Record<string, unknown> = {}): Promise<unknown[]> => {
     if (path === '/market/stores') return data.stores ?? [store(1)]
-    if (path === '/market/sources') return (data.channels ?? [channel(1)]).filter(c => c.store_id === Number(query.store_id))
+    if (path === '/market/sources') return (data.channels ?? [channel(1)]).filter(c => query.store_id == null || c.store_id === Number(query.store_id))
     return data.installed ?? INSTALLED
   }
 }

@@ -5,13 +5,13 @@ import { api } from '@sub2api/host'
 import { SButton, SChoiceCards, SField, SHint, SInput, SModal, SIcon, toast, type ChoiceOption } from '@sub2api/ui'
 import type { UninstallResult } from '@/api/types'
 import { notifyError } from '@/utils/errors'
-import { displayPluginId, tablePrefix } from '../pluginUtil'
+import { tablePrefix } from '../pluginId'
 
 // DELETE /plugins/:key?purge=&purge_accounts= (CONTRACTS §5.7, §14.3).
 // Accounts of the plugin's account types are kept (orphaned) unless
 // purge_accounts is set; the response then reports accounts_deleted.
-/** hasDatabase: the plugin declares a database, so purging drops its tables as well. */
-const props = defineProps<{ open: boolean; pluginKey: string; name: string; hasDatabase: boolean }>()
+/** displayId: the plugin's display_id, which the dialog asks to type; hasDatabase: the plugin declares a database, so purging drops its tables as well. */
+const props = defineProps<{ open: boolean; pluginKey: string; displayId: string; name: string; hasDatabase: boolean }>()
 const emit = defineEmits<{ (e: 'update:open', v: boolean): void; (e: 'done'): void }>()
 const { t } = useI18n()
 
@@ -24,7 +24,7 @@ const busy = ref(false)
 /** Set after a successful uninstall with purge_accounts: the modal shows the result. */
 const result = ref<{ accountsDeleted: number } | null>(null)
 /** The plugin id as people see it, which the dialog asks to type. */
-const shownId = computed(() => displayPluginId(props.pluginKey))
+const shownId = computed(() => props.displayId)
 const matches = computed(() => typed.value.trim() === shownId.value)
 
 const purgeOptions = computed<ChoiceOption[]>(() => [

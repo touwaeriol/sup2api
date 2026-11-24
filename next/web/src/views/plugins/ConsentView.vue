@@ -10,7 +10,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useConsentTarget } from './consent/useConsentTarget'
 import InstallSteps from './consent/InstallSteps.vue'
 import ConsentUnavailable from './consent/ConsentUnavailable.vue'
-import { RISK_ORDER, asArray, capabilityIdsOf, displayPluginId, riskOf, type Risk } from './pluginUtil'
+import { RISK_ORDER, asArray, capabilityIdsOf, riskOf, type Risk } from './pluginUtil'
 import PluginAvatar from './parts/PluginAvatar.vue'
 import TrustBadge from './parts/TrustBadge.vue'
 import ProvidesSummary from './consent/ProvidesSummary.vue'
@@ -116,8 +116,8 @@ function toggle(row: HPRow, v: boolean) {
   checked[row.id] = v
 }
 
-/** The high and critical host permissions this version newly asks for: approving waits for their acknowledgement. */
-const newRisk = computed(() => rows.value.filter((r) => r.diffTag === 'added' && (r.risk === 'high' || r.risk === 'critical')))
+/** The high and critical host permissions this version newly asks for or widens (a net with new domains): approving waits for their acknowledgement. */
+const newRisk = computed(() => rows.value.filter((r) => r.diffTag !== null && (r.risk === 'high' || r.risk === 'critical')))
 const acknowledged = ref(false)
 const needsAck = computed(() => newRisk.value.length > 0 && !acknowledged.value)
 const missingRequired = computed(() => rows.value.filter((r) => !r.optional && !checked[r.id]))
@@ -166,7 +166,7 @@ onMounted(() => Promise.all([load(), origin.load()]))
 
 <template>
   <div class="mx-auto max-w-5xl pb-24">
-    <SPageHeader :title="review ? `${isUpgrade ? t('plugins.consent.titleUpgrade') : t('plugins.consent.titleInstall')}${colon}${lt(review.name) || displayPluginId(review.plugin_key)}` : t(source.reject ? 'nav.crumbs.pluginConsent' : 'nav.crumbs.pluginInstall')">
+    <SPageHeader :title="review ? `${isUpgrade ? t('plugins.consent.titleUpgrade') : t('plugins.consent.titleInstall')}${colon}${lt(review.name) || review.display_id}` : t(source.reject ? 'nav.crumbs.pluginConsent' : 'nav.crumbs.pluginInstall')">
       <template v-if="review" #title-extra>
         <span class="font-mono text-sm text-gray-500">v{{ review.version }}</span>
       </template>
@@ -183,8 +183,8 @@ onMounted(() => Promise.all([load(), origin.load()]))
           <PluginAvatar :name="lt(review.name)" :plugin-key="review.plugin_key" size="lg" />
           <div class="min-w-0 flex-1">
             <div class="mb-2 flex flex-wrap items-center gap-2">
-              <span class="font-semibold">{{ lt(review.name) || displayPluginId(review.plugin_key) }}</span>
-              <PluginIdText :id="review.plugin_key" class="text-sm text-fg-muted" />
+              <span class="font-semibold">{{ lt(review.name) || review.display_id }}</span>
+              <PluginIdText :id="review.plugin_key" :display-id="review.display_id" class="text-sm text-fg-muted" />
               <span v-if="review.upgrade_from" class="font-mono text-sm" data-testid="consent-version-change">v{{ review.upgrade_from }} → <b class="text-warning-700 dark:text-warning-300">v{{ review.version }}</b></span>
             </div>
             <div class="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm">

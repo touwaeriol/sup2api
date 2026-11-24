@@ -1,5 +1,6 @@
 <script setup lang="ts">
 // The local publishers tab: the publishers and ed25519 keys that sign manually uploaded packages.
+// Its "new publisher" action sits in the publishers page's tab bar (openCreate, CONTRACTS §133).
 import { computed, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { api } from '@sub2api/host'
@@ -15,7 +16,6 @@ import {
   SIcon,
   SInput,
   SFormModal,
-  SPageHeader,
   SPagination,
   SSelect,
   SStatusBadge,
@@ -43,7 +43,8 @@ const list = useList<Publisher>('/publishers')
 const emit = defineEmits<{ count: [n: number] }>()
 watch(() => list.total.value, (n) => emit('count', n), { immediate: true })
 
-const TRUST_LEVELS = ['official', 'verified', 'community'] as const
+/** The levels a local publisher may have: official is the core's own publisher's, never given by hand. */
+const TRUST_LEVELS = ['verified', 'community'] as const
 
 function trustTone(level: string): Tone {
   return level === 'official' ? 'purple' : level === 'verified' ? 'primary' : 'gray'
@@ -219,15 +220,12 @@ async function revokeKey(p: Publisher, k: PublisherKey) {
     }
   )
 }
+defineExpose({ openCreate })
 </script>
 
 <template>
   <div>
-    <SPageHeader :title="t('publishers.tabs.local')" :description="t('publishers.local.hint')">
-      <template #actions>
-        <SButton v-if="canManage" variant="primary" icon="plus" @click="openCreate">{{ t('publishers.create') }}</SButton>
-      </template>
-    </SPageHeader>
+    <SHint class="mb-1" data-testid="local-publisher-hint">{{ t('publishers.local.hint') }}</SHint>
     <SHint size="xs" class="mb-3" data-testid="local-publisher-id-rule">{{ t('publishers.local.idRule') }}</SHint>
 
     <STable :columns="columns" :rows="list.items.value" :loading="list.loading.value" :error="list.error.value" expandable @retry="list.reload">

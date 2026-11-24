@@ -6,6 +6,7 @@ import type { LedgerEntry } from '@/api/types'
 import { formatDelta, formatNumber } from '@/utils/format'
 import { useOptionalT } from '@/composables/optionalText'
 import { KIND_TONE } from './kinds'
+import { displayPluginId } from '@/views/plugins/pluginId'
 
 type Row = LedgerEntry & { user_name?: string; idempotency_key?: string }
 
@@ -62,7 +63,7 @@ function deltaCls(v: string) {
         <SHint v-if="row.ref_type || row.ref_id" inline size="xs" class="ml-1 truncate font-mono" :title="`${row.ref_type}:${row.ref_id}`">
           {{ row.ref_type }}:{{ row.ref_id && row.ref_id.length > 18 ? row.ref_id.slice(0, 18) + '…' : row.ref_id }}
         </SHint>
-        <SHint v-if="row.plugin_key" inline size="xs" class="ml-1">· {{ row.plugin_key }}</SHint>
+        <SHint v-if="row.plugin_key" inline size="xs" class="ml-1">· {{ displayPluginId(row.plugin_key) }}</SHint>
         <SHint v-if="row.operator_id" inline size="xs" class="ml-1">· {{ t('ledger.operator', { id: row.operator_id }) }}</SHint>
         <SHint v-if="!row.note && !row.ref_type && !row.ref_id" inline>—</SHint>
       </div>

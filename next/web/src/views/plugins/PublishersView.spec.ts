@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
+import { SFormModal } from '@sub2api/ui'
 import { i18n } from '@/i18n'
 import { INSTALLED, STORE, installedPlugin, serveStore, storePlugin } from '@/testing/marketFixtures'
 import { storePublishers } from './publishers/storePublishers'
@@ -56,6 +57,16 @@ describe('PublishersView', () => {
     expect(store.findAll('button').length).toBe(0)
     expect(w.get('[data-testid="store-publishers-hint"]').text()).toContain('touwaeriol/sup2api-plugin')
     expect(w.get('[data-testid="local-publisher-id-rule"]').text()).toBe(i18n.global.t('publishers.local.idRule'))
+    expect(mocks.raw).toHaveBeenCalledWith('GET', '/market/plugins', { query: {} })
+    expect(w.find('[data-testid="publisher-create"]').exists()).toBe(false)
+  })
+
+  it('offers a new local publisher at the end of the tab bar, on the local tab only', async () => {
+    const w = await render()
+    await w.findAll('[role="tab"]')[1].trigger('click')
+    await w.get('[data-testid="publisher-create"]').trigger('click')
+    await flushPromises()
+    expect(w.findAllComponents(SFormModal).filter(m => m.props('open')).map(m => m.props('title'))).toEqual([i18n.global.t('publishers.create')])
   })
 
   it('shows only the local publishers without the market permission', async () => {

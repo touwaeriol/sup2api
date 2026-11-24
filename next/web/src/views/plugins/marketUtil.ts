@@ -2,7 +2,8 @@
 import type { MarketPlugin, MarketVersion } from '@/api/marketTypes'
 import type { PluginSummary } from '@/api/types'
 import { lt } from '@/i18n'
-import { OFFICIAL_PUBLISHER, compareVersions, displayPluginId } from './pluginUtil'
+import { compareVersions } from './pluginUtil'
+import { OFFICIAL_PUBLISHER } from './pluginId'
 
 /** Where a store plugin stands here: not installed, an upgrade offered, installed and up to date. */
 export type MarketState = 'install' | 'upgrade' | 'installed'
@@ -73,7 +74,7 @@ export function shortSha(sha: string): string {
 
 /** Whether m matches the search keyword kw (lower case): name, id as shown, key, description or publisher. */
 export function matches(m: MarketPlugin, kw: string): boolean {
-  const texts = [m.key, displayPluginId(m.id), lt(m.name), lt(m.description), m.publisher, publisherLabel(m)]
+  const texts = [m.key, m.display_id, lt(m.name), lt(m.description), m.publisher, publisherLabel(m)]
   return texts.some(s => (s || '').toLowerCase().includes(kw))
 }
 

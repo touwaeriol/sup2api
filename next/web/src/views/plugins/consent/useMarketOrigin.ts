@@ -3,22 +3,19 @@
 // channel's index lists it (size, release, sha256). Nothing when the page is
 // not a market install, or the store cannot be read (CONTRACTS §136).
 import { computed, ref } from 'vue'
-import type { MarketPlugin, MarketSource, MarketStore } from '@/api/marketTypes'
-import { fetchChannels, fetchListing, fetchStores } from '../useMarket'
+import type { MarketPlugin, MarketSource } from '@/api/marketTypes'
+import { fetchChannels, fetchListing } from '../useMarket'
 import { versionOf } from '../marketUtil'
 import type { MarketTarget } from './consentSources'
 
-/** The channel of id among the stores' channels, with its store. */
-async function channelOf(id: number): Promise<{ store: MarketStore; channel: MarketSource } | null> {
-  const stores = await fetchStores()
-  const lists = await Promise.all(stores.map(s => fetchChannels(s.id)))
-  const channel = lists.flat().find(c => c.id === id)
-  const store = channel && stores.find(s => s.id === channel.store_id)
-  return store && channel ? { store, channel } : null
+/** The channel of id, with its store's name (one GET /market/sources of every store). */
+async function channelOf(id: number): Promise<MarketSource | null> {
+  return (await fetchChannels()).find(c => c.id === id) ?? null
 }
 
 export function useMarketOrigin(target: MarketTarget | undefined) {
-  const origin = ref<{ store: MarketStore; channel: MarketSource } | null>(null)
+  /** The channel installed from (its store_name names the store). */
+  const origin = ref<MarketSource | null>(null)
   const plugin = ref<MarketPlugin | null>(null)
 
   async function load() {

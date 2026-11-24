@@ -1,7 +1,7 @@
 <script setup lang="ts">
-// The high and critical host permissions an upgrade newly asks for,
-// highlighted, with the acknowledgement the approval waits for. Rendered
-// only when there are any.
+// The high and critical host permissions an upgrade newly asks for or
+// widens, highlighted, with the acknowledgement the approval waits for.
+// Rendered only when there are any.
 import { useI18n } from 'vue-i18n'
 import { SBadge, SCard, SCheckbox, SHint } from '@sub2api/ui'
 import RiskDot from '../parts/RiskDot.vue'
@@ -25,7 +25,7 @@ const { hpLabel } = useConsentLabels()
     <ul class="space-y-1.5">
       <li v-for="r in rows" :key="r.id" class="flex flex-wrap items-center gap-2 rounded-lg bg-danger-50 px-3 py-2 text-sm dark:bg-danger-900/20" :data-new-risk="r.id">
         <RiskDot :risk="r.risk" />
-        <SBadge tone="danger">{{ t('plugins.consent.diffAdded') }}</SBadge>
+        <SBadge tone="danger">{{ t(r.diffTag === 'widened' ? 'plugins.consent.diffWidened' : 'plugins.consent.diffAdded') }}</SBadge>
         <code class="font-mono text-xs">{{ r.id }}</code>
         <span>{{ hpLabel(r.id) }}</span>
         <span class="ml-auto text-xs font-semibold text-danger-700 dark:text-danger-300">{{ t(`plugins.risk.${r.risk}`) }}</span>

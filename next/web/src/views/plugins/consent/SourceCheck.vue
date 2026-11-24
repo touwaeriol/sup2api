@@ -5,13 +5,14 @@
 // whether this core satisfies the version's host range (CONTRACTS §136).
 import { useI18n } from 'vue-i18n'
 import { SBadge, SCard, SDescItem, SDescriptions, SIcon, SLink } from '@sub2api/ui'
-import type { MarketSource, MarketStore, MarketVersion } from '@/api/marketTypes'
+import type { MarketSource, MarketVersion } from '@/api/marketTypes'
 import type { PluginReview } from '@/api/types'
 import { formatBytes } from '@/utils/format'
 import { releaseTag } from '../marketUtil'
 import TrustBadge from '../parts/TrustBadge.vue'
 
-defineProps<{ review: PluginReview; origin: { store: MarketStore; channel: MarketSource } | null; version?: MarketVersion }>()
+/** origin: the channel installed from, with its store's name. */
+defineProps<{ review: PluginReview; origin: MarketSource | null; version?: MarketVersion }>()
 const { t } = useI18n()
 </script>
 
@@ -19,12 +20,12 @@ const { t } = useI18n()
   <SCard class="mt-4" data-testid="consent-source-check">
     <template #title>
       <h3 class="flex items-center gap-1.5 text-sm font-semibold">
-        <SIcon name="shield" class="h-4 w-4 text-emerald-600 dark:text-emerald-400" />{{ t('market.origin.title') }}
+        <SIcon name="shield" class="h-4 w-4 text-success-600 dark:text-success-400" />{{ t('market.origin.title') }}
       </h3>
     </template>
     <SDescriptions :columns="3" dense stacked>
       <SDescItem :label="t('market.origin.source')">
-        <template v-if="origin">{{ t('market.origin.sourceValue', { store: origin.store.name, channel: origin.channel.name, branch: origin.channel.branch }) }}</template>
+        <template v-if="origin">{{ t('market.origin.sourceValue', { store: origin.store_name, channel: origin.name, branch: origin.branch }) }}</template>
         <template v-else>—</template>
       </SDescItem>
       <SDescItem :label="t('market.origin.publisher')">

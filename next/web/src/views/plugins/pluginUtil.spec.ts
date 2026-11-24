@@ -4,25 +4,8 @@ import { describe, expect, it } from 'vitest'
 import en from '@/i18n/locales/en/plugins'
 import zh from '@/i18n/locales/zh/plugins'
 import { i18n } from '@/i18n'
-import {
-  HOST_PERMISSION_RISK,
-  OFFICIAL_PUBLISHER,
-  PUBLISHER_ID_MAX,
-  accountTypesOf,
-  consoleSettings,
-  consoleSettingsPath,
-  displayPluginId,
-  endpointText,
-  hpKey,
-  isPluginKey,
-  nativeSettingsPath,
-  parsePluginId,
-  platformsOf,
-  pluginSettingsPath,
-  pluginStatusTone,
-  refusalText,
-  tablePrefix
-} from './pluginUtil'
+import { HOST_PERMISSION_RISK, accountTypesOf, consoleSettings, consoleSettingsPath, endpointText, hpKey, nativeSettingsPath, platformsOf, pluginSettingsPath, pluginStatusTone, refusalText } from './pluginUtil'
+import { OFFICIAL_PUBLISHER, PUBLISHER_ID_MAX, displayPluginId, isPluginKey, parsePluginId, tablePrefix } from './pluginId'
 
 describe('plugin endpoint declarations', () => {
   it('preserves the same subset in manifests and installation reviews', () => {

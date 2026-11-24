@@ -9,7 +9,7 @@ vi.mock('@sub2api/host', async (original) => ({ ...(await original<object>()), a
 enableAutoUnmount(afterEach)
 
 const DATABASE = { prefix: 'plg_guard__', role: 'plg713988_guard', access: [], migrations: [] }
-const detail = (over: Partial<PluginDetail> = {}): PluginDetail => ({ key: 'guard', name: 'Guard', status: 'enabled', active_version: '0.1.0', ...over })
+const detail = (over: Partial<PluginDetail> = {}): PluginDetail => ({ key: 'guard', display_id: 'guard', name: 'Guard', status: 'enabled', active_version: '0.1.0', ...over })
 const render = (d = detail()) => mount(DatabaseTab, { props: { detail: d }, global: { plugins: [i18n] } })
 
 describe('plugin database tab', () => {

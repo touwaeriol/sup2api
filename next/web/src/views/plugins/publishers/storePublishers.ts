@@ -2,7 +2,7 @@
 // (the official store's default channel), with how many plugins each has in the store and how many of those are installed here.
 import type { MarketPlugin } from '@/api/marketTypes'
 import type { PluginSummary, Trust } from '@/api/types'
-import { OFFICIAL_PUBLISHER } from '../pluginUtil'
+import { OFFICIAL_PUBLISHER } from '../pluginId'
 import { publisherLabel } from '../marketUtil'
 
 export interface StorePublisher {

@@ -9,7 +9,7 @@ import { useI18n } from 'vue-i18n'
 import { SButton, SCard, SEmpty, SFilterBar, SHint, SInput, SPageHeader, SSelect, SSpinner } from '@sub2api/ui'
 import type { MarketPlugin } from '@/api/marketTypes'
 import { useAuthStore } from '@/stores/auth'
-import { OFFICIAL_PUBLISHER } from './pluginUtil'
+import { OFFICIAL_PUBLISHER } from './pluginId'
 import { matches, publisherOptions, stateMatches, type MarketStatusFilter } from './marketUtil'
 import { useMarket } from './useMarket'
 import { MARKET_MANAGE_PERM, REMEMBERED } from './marketChannels'
@@ -51,7 +51,8 @@ function install(m: MarketPlugin, version: string) {
   if (version) router.push(market.installLocation(m, version))
 }
 
-const refresh = () => Promise.all([market.loadListing(), market.loadInstalled()])
+/** The refresh button: the channel's index fetched afresh, and what is installed here. */
+const refresh = () => Promise.all([market.loadListing(true), market.loadInstalled()])
 onMounted(market.load)
 </script>
 

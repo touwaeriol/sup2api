@@ -16,7 +16,7 @@ import RetiredKeys from './parts/RetiredKeys.vue'
 import TrustBadge from './parts/TrustBadge.vue'
 import PluginIdText from './parts/PluginIdText.vue'
 import PluginSourceBadge from './parts/PluginSourceBadge.vue'
-import { conflictLines, consoleSettingsPath, displayPluginId, refusalText, shownStatus } from './pluginUtil'
+import { conflictLines, consoleSettingsPath, refusalText, shownStatus } from './pluginUtil'
 import { usePluginUpgrades } from './usePluginUpgrades'
 
 const { t } = useI18n()
@@ -32,7 +32,13 @@ const fileInput = ref<HTMLInputElement>()
 const upgrades = usePluginUpgrades(items)
 
 const STATUSES = ['awaiting_consent', 'installed', 'enabling', 'enabled', 'upgrading', 'disabled']
-const statusOptions = computed(() => STATUSES.map((s) => ({ value: s, label: t(`plugins.status.${s}`) })))
+/** The status filter: a plugin status, or UPGRADE for the plugins the store has a newer version of. */
+const UPGRADE = 'upgrade'
+const statusOptions = computed(() => [
+  ...STATUSES.map((s) => ({ value: s, label: t(`plugins.status.${s}`) })),
+  ...(auth.has('plugin:market:read') ? [{ value: UPGRADE, label: t('market.status.upgrade') }] : [])
+])
+const statusMatches = (p: PluginSummary) => !status.value || (status.value === UPGRADE ? !!upgrades.upgrades.value[p.key] : p.status === status.value)
 
 const columns = computed<TableColumn[]>(() => [
   { key: 'name', label: t('plugins.list.plugin'), mobile: 'title' },
@@ -47,9 +53,9 @@ const columns = computed<TableColumn[]>(() => [
 const rows = computed(() => {
   const kw = q.value.trim().toLowerCase()
   return items.value.filter((p) => {
-    if (status.value && p.status !== status.value) return false
+    if (!statusMatches(p)) return false
     if (!kw) return true
-    return p.key.toLowerCase().includes(kw) || displayPluginId(p.key).includes(kw) || lt(p.name).toLowerCase().includes(kw) || (p.publisher || '').toLowerCase().includes(kw)
+    return p.key.toLowerCase().includes(kw) || p.display_id.includes(kw) || lt(p.name).toLowerCase().includes(kw) || (p.publisher || '').toLowerCase().includes(kw)
   })
 })
 /** The text of each refused plugin's refusal, by key: shown and as the tooltip. */
@@ -109,6 +115,8 @@ function onFile(e: Event) {
   router.push(UPLOAD_INSTALL_PATH)
 }
 
+/** The refresh button: the list and the store's upgrades, its index fetched afresh. */
+const refresh = () => Promise.all([load(), upgrades.load(true)])
 onMounted(() => Promise.all([load(), upgrades.load()]))
 </script>
 
@@ -116,7 +124,7 @@ onMounted(() => Promise.all([load(), upgrades.load()]))
   <div>
     <SPageHeader :title="t('nav.items.plugins')" :description="t('plugins.list.description')">
       <template #actions>
-        <SButton :loading="loading" icon="refresh" @click="load">{{ t('common.refresh') }}</SButton>
+        <SButton :loading="loading" icon="refresh" data-testid="plugins-refresh" @click="refresh">{{ t('common.refresh') }}</SButton>
         <SButton v-if="auth.has('plugin:market:read')" to="/market" icon="market" data-testid="plugins-market">
           {{ t('market.title') }}
           <SBadge v-if="upgrades.count.value" tone="warning" class="ml-1" data-testid="plugins-updatable">{{ t('market.updatable', { n: upgrades.count.value }) }}</SBadge>
@@ -142,8 +150,8 @@ onMounted(() => Promise.all([load(), upgrades.load()]))
         <div class="flex items-center gap-3">
           <PluginAvatar :name="lt(row.name)" :plugin-key="row.key" :icon="row.icon" :asset-base="row.asset_base" />
           <div class="min-w-0">
-            <div class="truncate font-medium text-gray-900 dark:text-white">{{ lt(row.name) || displayPluginId(row.key) }}</div>
-            <SHint size="xs" class="truncate"><PluginIdText :id="row.key" /></SHint>
+            <div class="truncate font-medium text-gray-900 dark:text-white">{{ lt(row.name) || row.display_id }}</div>
+            <SHint size="xs" class="truncate"><PluginIdText :id="row.key" :display-id="row.display_id" /></SHint>
           </div>
         </div>
       </template>
@@ -178,9 +186,12 @@ onMounted(() => Promise.all([load(), upgrades.load()]))
           :title="t('plugins.desiredVersion')"
           >→ v{{ row.desired_version }}</span
         >
-        <SLink v-if="upgrades.upgrades.value[row.key]" class="ml-1.5" :to="upgrades.location(row)" data-testid="plugin-upgrade-badge" @click.stop>
-          <SBadge tone="warning">{{ t('market.upgradeBadge', { version: upgrades.upgrades.value[row.key].latest_version }) }}</SBadge>
-        </SLink>
+        <template v-if="upgrades.upgrades.value[row.key]">
+          <SLink v-if="auth.has('plugin:install')" class="ml-1.5" :to="upgrades.location(row)" data-testid="plugin-upgrade-badge" @click.stop>
+            <SBadge tone="warning">{{ t('market.upgradeBadge', { version: upgrades.upgrades.value[row.key].latest_version }) }}</SBadge>
+          </SLink>
+          <SBadge v-else tone="warning" class="ml-1.5" data-testid="plugin-upgrade-badge">{{ t('market.upgradeBadge', { version: upgrades.upgrades.value[row.key].latest_version }) }}</SBadge>
+        </template>
       </template>
       <template #cell-publisher="{ row }">
         <div class="flex items-center gap-2">

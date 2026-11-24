@@ -18,7 +18,7 @@ const domains = computed(() => egressDomains(props.review))
     <div class="flex flex-wrap gap-1.5">
       <SBadge v-for="d in domains" :key="d.host" :tone="d.added ? 'success' : 'gray'" :data-domain="d.host">
         <span class="font-mono">{{ d.added ? '+ ' : '' }}{{ d.host }}</span>
-        <span v-if="d.added">（{{ t('pluginInstall.egressNew') }}）</span>
+        <span v-if="d.added">{{ t('pluginInstall.egressNewMark') }}</span>
       </SBadge>
     </div>
   </SCard>

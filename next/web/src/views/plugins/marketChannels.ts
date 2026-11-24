@@ -7,6 +7,9 @@ import type { MarketSource, MarketStore } from '@/api/marketTypes'
 /** Managing the stores and their channels. */
 export const MARKET_MANAGE_PERM = 'plugin:manage'
 
+/** The official store's repository (market.OfficialRepo): the one store, whose publishers change by a pull request to it. */
+export const OFFICIAL_STORE_REPO = 'touwaeriol/sup2api-plugin'
+
 const STORAGE_KEY = 's2a.market'
 
 /** What this viewer last looked at: the store, and the channel of each store. */
