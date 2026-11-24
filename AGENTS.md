@@ -82,7 +82,7 @@ CCGateway 插件（Claude Code 托管账号、它的 companions 与 `cli-reverse
 - 一次请求上的超时和大小上限只有管理员配置的（请求体上限、上游超时、钩子和热路径超时等），加上安全、钱算对和防止崩溃的检查；不要在请求路径上加写死的超时、大小或次数上限（所有者决定，完整列表见 CONTRACTS §112.16）。
 - 平台插件（声明账号类型的插件）都是有进程的代码插件，没有只有清单的插件。每个网关请求只有一条路径（CONTRACTS §112）：核心做完协议转换和运营方的改写，把完整请求体交给账号类型插件的 `PlatformService.Execute`；插件构造最终请求，经 `HostService.RelayUpstream` 交给核心的 HTTP 客户端发出（插件不开套接字，账号代理、SSRF、超时、运营方的请求头设置由核心强制；插件随 `Account` 收到账号的凭证和代理详情，但代理只是数据，不得用于自行联网，CONTRACTS §124）；用量与任务事实只在 `Execute` / `Monitor` 的返回值里。插件写法、`sdk/pluginsdk/standard` 库、`jsonedit`、一致性套件见 `next/docs/PLUGIN-DEVELOPMENT.md`。
 - 平台插件必须遵守全部系统设置：每项设置在 HTTP 与 WebSocket 两种传输上由谁生效、插件要配合什么，见 `next/docs/PLUGIN-DEVELOPMENT.md` 第 5 节，改动相关行为时同步它。
-- 内置插件随核心升级（CONTRACTS §37）。**插件内容变了必须升版本号**：版本记录只在索引仓库 touwaeriol/sup2api-plugin（CONTRACTS §135），`pack` 把源码摘要写进包里的 `source.json`，登记时记成版本的 `source_digest`；CI 的 `sub2api-plugin released-check` 对照测试频道的索引（`index-develop`），某个插件的清单版本已经登记、源码摘要却变了就失败。发布插件后用 `sub2api-plugin registry add-version` 生成版本文件，向 sup2api-plugin 的 `develop` 提 PR 登记。
+- 内置插件随核心升级（CONTRACTS §37）。**插件内容变了必须升版本号**：版本记录只在索引仓库 touwaeriol/sup2api-plugin（CONTRACTS §135），`pack` 把源码摘要写进包里的 `source.json`，登记时记成版本的 `source_digest`；CI 的 `sub2api-plugin released-check` 对照测试频道的索引（`index-develop`），某个插件的清单版本已经登记、源码摘要却变了就失败。升了版本的清单一合进 develop，`plugin-release.yml` 就把它打包发成 GitHub Release（tag `plugin-<key>-v<版本>`，发过的版本不再改），所以内容定了再升版本；之后用 `sub2api-plugin registry add-version` 生成版本文件，向 sup2api-plugin 的 `develop` 提 PR 登记。
 - Host API 版本在 `runtime-contract.HostAPIVersion`（现为 10），`sdk/protocol.HostAPIVersion` 就定义为它。插件线协议是 `sdk/protocol.ProtocolVersion`（现为 2）：改了不兼容的插件契约就升它，旧插件包在握手和清单检查时以同一条信息被拒绝（CONTRACTS §112.10）。
 
 ### 网关与托管升级（CONTRACTS §33、§34、§39、§82、§102）

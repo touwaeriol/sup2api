@@ -6,11 +6,12 @@ name: plugin release
 #
 #   plugin-<key>-v<version>  ->  release with <key>-<version>.s2plugin
 #
-# Started by pushing such a tag on a develop commit, or by hand on develop
-# (workflow_dispatch) for the given keys, or every plugin, at their manifest
-# versions; then the release creates the tag and versions already released
-# are skipped (.github/plugin-release/resolve-tags.sh). The tag must name the
-# plugin's manifest key and version (.github/plugin-release/package-plugin.sh).
+# A push to develop releases every plugin whose manifest version has no
+# release yet, the release creating the tag at that commit
+# (.github/plugin-release/resolve-tags.sh): bumping a version on develop
+# publishes it. Pushing such a tag on a develop commit releases that one.
+# The tag must name the plugin's manifest key and version
+# (.github/plugin-release/package-plugin.sh).
 # The package is not signed (store installs trust the index's sha256,
 # CONTRACTS §136). After the release, register it in the registry:
 #   sub2api-plugin registry add-version --registry . --plugin <key> --tag <tag>
@@ -24,12 +25,12 @@ on:
   push:
     tags:
       - 'plugin-*-v*'
-  workflow_dispatch:
-    inputs:
-      plugins:
-        description: Plugin keys separated by spaces (empty = every plugin whose manifest version has no release)
-        required: false
-        default: ''
+    branches:
+      - develop
+    paths:
+      - 'next/plugins/*/manifest.json'
+      - '.github/plugin-release/**'
+      - '.github/workflows/plugin-release.yml'
 
 permissions:
   contents: read
@@ -45,10 +46,8 @@ jobs:
     outputs:
       tags: ${{ steps.tags.outputs.tags }}
     env:
-      EVENT: ${{ github.event_name }}
-      REF: ${{ github.ref }}
+      REF_TYPE: ${{ github.ref_type }}
       REF_NAME: ${{ github.ref_name }}
-      PLUGINS: ${{ inputs.plugins }}
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
@@ -57,12 +56,10 @@ jobs:
           persist-credentials: false
       - id: tags
         run: |
-          if [ "$EVENT" = push ]; then
+          if [ "$REF_TYPE" = tag ]; then
             tags=$(jq -cn --arg t "$REF_NAME" '[$t]')
           else
-            [ "$REF" = refs/heads/develop ] || { echo "::error::run it on develop"; exit 1; }
-            # shellcheck disable=SC2086 # PLUGINS is a list of keys
-            tags=$(sh .github/plugin-release/resolve-tags.sh $PLUGINS)
+            tags=$(sh .github/plugin-release/resolve-tags.sh)
           fi
           echo "tags=$tags" >> "$GITHUB_OUTPUT"
           echo "releasing: $tags"
@@ -145,7 +142,7 @@ jobs:
       contents: write
     env:
       TAG: ${{ matrix.tag }}
-      EVENT: ${{ github.event_name }}
+      REF_TYPE: ${{ github.ref_type }}
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
@@ -162,7 +159,7 @@ jobs:
           # Never "Latest" (that is the core's); a version with a pre-release
           # part is a prerelease.
           set -- --latest=false
-          # A pushed tag must exist; by hand the release creates it here.
-          if [ "$EVENT" = push ]; then set -- "$@" --verify-tag; else set -- "$@" --target "$GITHUB_SHA"; fi
+          # A pushed tag exists; on develop the release creates it here.
+          if [ "$REF_TYPE" = tag ]; then set -- "$@" --verify-tag; else set -- "$@" --target "$GITHUB_SHA"; fi
           case "${rest##*-v}" in *-*) set -- "$@" --prerelease ;; esac
           gh release create "$TAG" "$pkg" --title "插件 $name" --notes "$notes" "$@"
