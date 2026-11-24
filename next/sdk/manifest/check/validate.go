@@ -355,18 +355,14 @@ func (v *validator) basics() {
 	if m.APIVersion != manifest.APIVersion {
 		v.add("apiVersion", "unsupported", "apiVersion must be %d", manifest.APIVersion)
 	}
-	if code, msg := pluginKeyProblem(m.Key); code != "" {
-		v.add("key", code, "%s", msg)
-	}
+	v.identity()
 	if strings.TrimSpace(m.Name["en"]) == "" {
 		v.add("name", "required", "name.en is required")
 	}
 	if _, err := semver.StrictNewVersion(m.Version); err != nil {
 		v.add("version", "invalid_semver", "version %q is not a valid semver (x.y.z)", m.Version)
 	}
-	if strings.TrimSpace(m.Publisher) == "" {
-		v.add("publisher", "required", "publisher is required")
-	}
+
 	switch {
 	case m.Runtime == retiredRuntimeNone:
 		v.add("runtime", CodeOutdatedContract, "runtime %q is no longer supported: every plugin has a process (runtime %q)", m.Runtime, manifest.RuntimeGRPC)

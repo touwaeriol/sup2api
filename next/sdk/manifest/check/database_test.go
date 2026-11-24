@@ -12,7 +12,7 @@ import (
 func TestPluginKeyForm(t *testing.T) {
 	for _, key := range []string{"ab", "a_b", "demo2", "my_plugin_1", "a" + strings.Repeat("b", 29)} {
 		m := minimal()
-		m.Key = key
+		m.Key, m.Publisher = key, manifest.OfficialPublisher
 		if c := codes(Validate(m, nil, ValidateOptions{Tooling: true})); len(c) > 0 {
 			t.Errorf("key %q rejected: %v", key, c)
 		}
