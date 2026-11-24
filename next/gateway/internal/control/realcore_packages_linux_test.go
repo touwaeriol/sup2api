@@ -51,7 +51,7 @@ func TestRealCorePluginPackagesTravelBetweenNodes(t *testing.T) {
 	const adminEmail, adminPassword = "admin@real.test", "Real-core-admin-pass!"
 	c := newRealCluster(t, ctx, realOptions{coreEnv: []string{
 		"SUB2API_BOOTSTRAP_ADMIN_EMAIL=" + adminEmail, "SUB2API_BOOTSTRAP_ADMIN_PASSWORD=" + adminPassword,
-		`SUB2API_MARKET_SOURCES=[{"name":"test","url":"` + market.URL + `/index.json"}]`,
+		"SUB2API_MARKET_URL=" + market.URL + "/index.json",
 		"SUB2API_MARKET_ALLOW_HTTP=true",
 	}})
 	db := c.db

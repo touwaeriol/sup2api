@@ -295,7 +295,7 @@ func newVersion(p *pkg.Package, ver *pkg.Verification, opt UploadOptions, actorI
 		PluginKey: m.Key, Version: m.Version, Manifest: p.ManifestRaw, ManifestHash: p.ManifestHash,
 		PackageSha256: p.SHA256, PackageURL: opt.PackageURL, PackageSize: int64(len(p.Raw)),
 		PublisherID: ver.PublisherID, KeyID: nullStr(ver.KeyID), SignatureStatus: ver.SignatureStatus,
-		TrustLevel: versionTrust(ver), Source: nullStr(opt.Source), ConsentStatus: &consent, UploadedBy: nullID(actorID),
+		TrustLevel: versionTrust(ver), ConsentStatus: &consent, UploadedBy: nullID(actorID),
 	}
 }
 

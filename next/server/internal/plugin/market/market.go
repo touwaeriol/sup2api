@@ -4,7 +4,6 @@ package market
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -115,38 +114,36 @@ func CheckRedirect(allowHTTP bool) func(req *http.Request, via []*http.Request) 
 	}
 }
 
-// seed is one source of SUB2API_MARKET_SOURCES.
-type seed struct {
-	Name string `json:"name"`
-	URL  string `json:"url"`
-}
+// The official plugin store (CONTRACTS §136): the only market source. Its
+// row keeps an id so that a configurable store address can be added later.
+const (
+	OfficialName = "official"
+	OfficialURL  = "https://raw.githubusercontent.com/touwaeriol/sup2api-plugin/index/index.json"
+)
 
-// SeedSources upserts sources from SUB2API_MARKET_SOURCES ([{name,url}]);
-// existing sources with the same name take the url.
-func (s *Service) SeedSources(ctx context.Context, sourcesJSON string) error {
-	if strings.TrimSpace(sourcesJSON) == "" {
-		return nil
+// EnsureOfficial makes the official store the only market source at start:
+// its row takes indexURL ("" = OfficialURL; SUB2API_MARKET_URL points it at
+// the local market of a test stack or development) and every other row is
+// deleted.
+func (s *Service) EnsureOfficial(ctx context.Context, indexURL string) error {
+	if indexURL == "" {
+		indexURL = OfficialURL
 	}
-	var in []seed
-	if err := json.Unmarshal([]byte(sourcesJSON), &in); err != nil {
-		return fmt.Errorf("market sources: %w", err)
+	if _, err := s.indexURL(indexURL); err != nil {
+		return fmt.Errorf("market url: %w", err)
 	}
-	for _, src := range in {
-		if err := s.seed(ctx, src); err != nil {
+	return s.db.Tx(ctx, func(tx *gorm.DB) error {
+		g := store.G(ctx, tx)
+		if err := seedSource(g, OfficialName, indexURL).Error; err != nil {
 			return err
 		}
-	}
-	return nil
+		return otherSources(g).Delete(&model.MarketSource{}).Error
+	})
 }
 
-func (s *Service) seed(ctx context.Context, src seed) error {
-	if src.Name == "" {
-		return errors.New("market sources: name is required")
-	}
-	if _, err := s.indexURL(src.URL); err != nil {
-		return fmt.Errorf("market source %q: %w", src.Name, err)
-	}
-	return seedSource(store.G(ctx, s.db.Gorm), src.Name, src.URL).Error
+// otherSources selects the market sources besides the official one.
+func otherSources(db *gorm.DB) *gorm.DB {
+	return db.Where("name <> ?", OfficialName)
 }
 
 // seedSource upserts the source name: an existing one takes addr.

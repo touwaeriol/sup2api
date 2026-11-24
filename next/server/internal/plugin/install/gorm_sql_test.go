@@ -240,11 +240,3 @@ func TestSQLRunningSignedBy(t *testing.T) {
 		return runningSignedBy(db, "k1").Scan(&keys)
 	})
 }
-
-// A market install reads the source of the plugin's current version.
-func TestSQLCurrentSource(t *testing.T) {
-	gormtest.Assert(t, func(db *gorm.DB) *gorm.DB {
-		var source *string
-		return currentSource(db, "demo").Scan(&source)
-	})
-}

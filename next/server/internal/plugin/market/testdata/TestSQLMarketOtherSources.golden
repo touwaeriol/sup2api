@@ -1,0 +1,4 @@
+-- sql
+DELETE FROM "market_sources" WHERE name <> $1
+-- vars
+$1 string "official"

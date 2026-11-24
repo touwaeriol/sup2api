@@ -101,11 +101,11 @@ services:
       # on by default; "false" turns it off.
       SUB2API_PLUGIN_LANDLOCK: ${SUB2API_PLUGIN_LANDLOCK:-true}
       SUB2API_PLUGIN_MAX_MEMORY_MB: ${SUB2API_PLUGIN_MAX_MEMORY_MB:-}
-      # Empty = trust the signing key generated at image build time and use
-      # the bundled market below.
+      # Empty = trust the signing key generated at image build time.
       SUB2API_PLUGIN_OFFICIAL_KEYS: ${SUB2API_PLUGIN_OFFICIAL_KEYS:-}
-      SUB2API_MARKET_SOURCES: ${SUB2API_MARKET_SOURCES:-}
-      SUB2API_DEV_MARKET_URL: http://market:8080/index.json
+      # The plugin store is the bundled market below (the official store when
+      # set to the official index URL).
+      SUB2API_MARKET_URL: ${SUB2API_MARKET_URL:-http://market:8080/index.json}
       SUB2API_MARKET_ALLOW_HTTP: "true"
     volumes:
       - appdata:/var/lib/sub2api

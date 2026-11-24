@@ -180,12 +180,25 @@ func (b *boot) startPluginRuntime(trust *pkg.TrustStore) error {
 		Rollout: b.ctl, Schemas: b.schemas, Bus: b.cl.Bus, Accounts: b.acc, KV: rt, Nodes: b.cl.Registry, Packages: b.packageSrc,
 	}, install.Options{HostVersion: b.version, Plugins: b.cfg.Plugins})
 	b.mkt = market.New(b.db, b.inst, b.marketClient, market.Options{MaxPackageBytes: b.cfg.Plugins.MaxPackageBytes, AllowHTTP: b.cfg.Plugins.MarketAllowHTTP})
-	if b.managed == nil || b.managed.prepare.Bootstrap {
-		if err := b.mkt.SeedSources(b.ctx, b.cfg.Plugins.MarketSourcesJSON); err != nil {
-			return fmt.Errorf("market sources: %w", err)
-		}
+	if err := b.ensureMarket(); err != nil {
+		return err
 	}
 	return b.startBuiltins()
+}
+
+// ensureMarket makes the official store the only market source
+// (market.EnsureOfficial, at SUB2API_MARKET_URL) on every start of a core
+// that may write it: an unmanaged one, a bootstrap, or the managed primary
+// (it coordinates plugins), so that an upgrade or a changed
+// SUB2API_MARKET_URL takes effect without a bootstrap.
+func (b *boot) ensureMarket() error {
+	if m := b.managed; m != nil && !m.prepare.Bootstrap && !m.prepare.CoordinatePlugins {
+		return nil
+	}
+	if err := b.mkt.EnsureOfficial(b.ctx, b.cfg.Plugins.MarketURL); err != nil {
+		return fmt.Errorf("market: %w", err)
+	}
+	return nil
 }
 
 // newRuntime builds the plugin runtime on the egress of startEgress.

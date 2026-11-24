@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -63,7 +62,7 @@ func (h *harness) serveMarket(data []byte, key, pub, trust string) int64 {
 	h.t.Cleanup(srv.Close)
 	m := market.New(h.db, h.api.d.Install, srv.Client(), market.Options{MaxPackageBytes: 10 << 20, AllowHTTP: true})
 	ctx := context.Background()
-	if err := m.SeedSources(ctx, fmt.Sprintf(`[{"name":"official","url":%q}]`, srv.URL+"/m/")); err != nil {
+	if err := m.EnsureOfficial(ctx, srv.URL+"/m/"); err != nil {
 		h.t.Fatal(err)
 	}
 	srcs, err := m.ListSources(ctx)

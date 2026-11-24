@@ -18,8 +18,8 @@
 # mount (id=sub2api-next-devkeys) so rebuilds keep the same key and installed
 # plugins stay verifiable. Only the PUBLIC key is copied into the image
 # (/opt/sub2api/market/dev-official.pub); the entrypoint turns it into
-# SUB2API_PLUGIN_OFFICIAL_KEYS unless set, and points SUB2API_MARKET_SOURCES at
-# the bundled market unless set.
+# SUB2API_PLUGIN_OFFICIAL_KEYS unless set. Stacks that serve the bundled
+# market point SUB2API_MARKET_URL at it.
 # =============================================================================
 
 ARG NODE_IMAGE=node:24

@@ -63,12 +63,12 @@ func serveIndex(t *testing.T, raw, pkgBytes []byte) (srv *httptest.Server, hits 
 	return srv, hits
 }
 
-// seedOfficial seeds the source official at url, twice (it is idempotent),
-// and returns its id.
+// seedOfficial points the official source at url, twice (it is
+// idempotent), and returns its id.
 func seedOfficial(t *testing.T, s *Service, url string) int64 {
 	ctx := context.Background()
 	for range 2 {
-		if err := s.SeedSources(ctx, fmt.Sprintf(`[{"name":"official","url":%q}]`, url)); err != nil {
+		if err := s.EnsureOfficial(ctx, url); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -180,11 +180,11 @@ func TestUpdateAvailable(t *testing.T) {
 func TestMarketHTTPS(t *testing.T) {
 	ctx := context.Background()
 	s := New(testutil.DB(t), fakeInstaller{}, nil, Options{})
-	if err := s.SeedSources(ctx, `[{"name":"plain","url":"http://market.example/"}]`); err == nil {
+	if err := s.EnsureOfficial(ctx, "http://market.example/"); err == nil {
 		t.Fatal("http source accepted")
 	}
 	dev := New(testutil.DB(t), fakeInstaller{}, nil, Options{AllowHTTP: true})
-	if err := dev.SeedSources(ctx, `[{"name":"plain","url":"http://market.example/"}]`); err != nil {
+	if err := dev.EnsureOfficial(ctx, "http://market.example/"); err != nil {
 		t.Fatalf("allow http: %v", err)
 	}
 	base, _ := s.indexURL("https://market.example/m/")

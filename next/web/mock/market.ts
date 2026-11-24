@@ -1,13 +1,13 @@
-// Mock handlers of the plugin market: the sources and GET /market/plugins as
-// the core lists index.json v2 (CONTRACTS §11.1, §136): each plugin's
+// Mock handlers of the plugin market: the only source, the official store,
+// and GET /market/plugins as the core lists index.json v2 (CONTRACTS §11.1,
+// §136): each plugin's
 // publisher with its trust level and status, repo, source, built-in and
 // deprecation; latest_version and update_available skip deprecated versions.
 import { on } from './router'
 import { HOST_VERSION, plugins, type Any } from './plugins'
 
 const sources = [
-  { id: 1, name: 'Official market', url: 'https://raw.githubusercontent.com/touwaeriol/sup2api-plugin/index/index.json', enabled: true },
-  { id: 2, name: 'Community', url: 'https://example.com/s2a/index.json', enabled: true }
+  { id: 1, name: 'official', url: 'https://raw.githubusercontent.com/touwaeriol/sup2api-plugin/index/index.json', enabled: true }
 ]
 
 const L = (en: string, zh: string) => ({ en, zh })
@@ -38,97 +38,92 @@ const first = (key: string, name: Any, description: Any, versions: Any[], extra:
   ...extra
 })
 
-const market: Record<number, Any[]> = {
-  1: [
-    first(
-      'anthropic',
-      L('Anthropic', 'Anthropic'),
-      L('Claude API keys and OAuth accounts.', 'Claude API Key 与 OAuth 账号。'),
-      [
-        v(
-          'touwaeriol/sup2api',
-          '0.1.0',
-          '>=0.1.0 <0.2.0',
-          9_830_400,
-          L('Fixes a token count bug; upgrade to 0.2.0.', '有 token 计数错误，请升级到 0.2.0。')
-        ),
-        v('touwaeriol/sup2api', '0.2.0', '>=0.1.0 <0.2.0', 10_223_616),
-        // needs a newer core than HOST_VERSION
-        v('touwaeriol/sup2api', '0.3.0', '>=0.2.0 <0.3.0', 10_485_760)
-      ],
-      { builtin: true }
-    ),
-    first('guard', L('Guard', '请求守卫'), L('Request inspection and blocking.', '请求检查与拦截。'), [
-      v('touwaeriol/sup2api', '0.1.0', '>=0.1.0 <0.2.0', 7_340_032)
-    ]),
-    first('openai', L('OpenAI', 'OpenAI'), L('OpenAI API keys for the built-in openai platform.', '内置 openai 平台的 OpenAI API Key。'), [
-      v('touwaeriol/sup2api', '0.1.0', '>=0.1.0 <0.2.0', 8_912_896)
-    ]),
-    first(
-      'gemini',
-      L('Gemini', 'Gemini'),
-      L('Google AI Studio API keys for the built-in gemini platform.', '内置 gemini 平台的 Google AI Studio API Key。'),
-      [v('touwaeriol/sup2api', '0.1.0', '>=0.1.0 <0.2.0', 8_650_752)]
-    )
-  ],
-  2: [
-    // Not installed: a first install from the market.
-    {
-      key: 'bar_platform',
-      name: L('Bar Platform', 'Bar 平台'),
-      description: L('Community adapter for the Bar API.', 'Bar API 的社区适配器。'),
-      publisher: 'bar-labs',
-      publisher_name: L('Bar Labs', 'Bar 实验室'),
-      trust: 'community',
-      publisher_status: 'active',
-      repo: 'bar-labs/s2a-bar',
-      builtin: false,
-      versions: [v('bar-labs/s2a-bar', '1.0.0', '>=0.1.0', 6_291_456)]
-    },
-    {
-      key: 'foo_platform',
-      name: L('Foo Platform', 'Foo 平台'),
-      description: L('Community adapter for the Foo API.', 'Foo API 的社区适配器。'),
-      publisher: 'foo-labs',
-      publisher_name: L('Foo Labs', 'Foo 实验室'),
-      trust: 'verified',
-      publisher_status: 'active',
-      repo: 'foo-labs/s2a-foo',
-      builtin: false,
-      deprecated: { reason: L('Superseded by bar_platform.', '已由 bar_platform 取代。') },
-      versions: [v('foo-labs/s2a-foo', '1.0.0', '>=0.1.0')]
-    },
-    {
-      key: 'legacy_tool',
-      name: L('Legacy tool', '旧版工具'),
-      description: L('Its publisher was revoked.', '发布者已被吊销。'),
-      publisher: 'someone',
-      publisher_name: L('Someone', 'Someone'),
-      trust: 'community',
-      publisher_status: 'revoked',
-      repo: 'someone/legacy',
-      builtin: false,
-      versions: [v('someone/legacy', '0.0.3', '>=0.0.1 <0.1.0')]
-    },
-    {
-      key: 'orphan',
-      name: L('Orphan', '无主插件'),
-      description: L('Its publisher is not in the index.', '索引中没有它的发布者。'),
-      publisher: 'ghost',
-      trust: '',
-      publisher_status: 'missing',
-      repo: 'ghost/orphan',
-      builtin: false,
-      versions: [v('ghost/orphan', '1.0.0', '>=0.1.0')]
-    }
-  ]
-}
+const market: Any[] = [
+  first(
+    'anthropic',
+    L('Anthropic', 'Anthropic'),
+    L('Claude API keys and OAuth accounts.', 'Claude API Key 与 OAuth 账号。'),
+    [
+      v(
+        'touwaeriol/sup2api',
+        '0.1.0',
+        '>=0.1.0 <0.2.0',
+        9_830_400,
+        L('Fixes a token count bug; upgrade to 0.2.0.', '有 token 计数错误，请升级到 0.2.0。')
+      ),
+      v('touwaeriol/sup2api', '0.2.0', '>=0.1.0 <0.2.0', 10_223_616),
+      // needs a newer core than HOST_VERSION
+      v('touwaeriol/sup2api', '0.3.0', '>=0.2.0 <0.3.0', 10_485_760)
+    ],
+    { builtin: true }
+  ),
+  first('guard', L('Guard', '请求守卫'), L('Request inspection and blocking.', '请求检查与拦截。'), [
+    v('touwaeriol/sup2api', '0.1.0', '>=0.1.0 <0.2.0', 7_340_032)
+  ]),
+  first('openai', L('OpenAI', 'OpenAI'), L('OpenAI API keys for the built-in openai platform.', '内置 openai 平台的 OpenAI API Key。'), [
+    v('touwaeriol/sup2api', '0.1.0', '>=0.1.0 <0.2.0', 8_912_896)
+  ]),
+  first(
+    'gemini',
+    L('Gemini', 'Gemini'),
+    L('Google AI Studio API keys for the built-in gemini platform.', '内置 gemini 平台的 Google AI Studio API Key。'),
+    [v('touwaeriol/sup2api', '0.1.0', '>=0.1.0 <0.2.0', 8_650_752)]
+  ),
+  // Community publishers: not installed, a deprecated plugin, a revoked
+  // publisher and one the index does not list.
+  {
+    key: 'bar_platform',
+    name: L('Bar Platform', 'Bar 平台'),
+    description: L('Community adapter for the Bar API.', 'Bar API 的社区适配器。'),
+    publisher: 'bar-labs',
+    publisher_name: L('Bar Labs', 'Bar 实验室'),
+    trust: 'community',
+    publisher_status: 'active',
+    repo: 'bar-labs/s2a-bar',
+    builtin: false,
+    versions: [v('bar-labs/s2a-bar', '1.0.0', '>=0.1.0', 6_291_456)]
+  },
+  {
+    key: 'foo_platform',
+    name: L('Foo Platform', 'Foo 平台'),
+    description: L('Community adapter for the Foo API.', 'Foo API 的社区适配器。'),
+    publisher: 'foo-labs',
+    publisher_name: L('Foo Labs', 'Foo 实验室'),
+    trust: 'verified',
+    publisher_status: 'active',
+    repo: 'foo-labs/s2a-foo',
+    builtin: false,
+    deprecated: { reason: L('Superseded by bar_platform.', '已由 bar_platform 取代。') },
+    versions: [v('foo-labs/s2a-foo', '1.0.0', '>=0.1.0')]
+  },
+  {
+    key: 'legacy_tool',
+    name: L('Legacy tool', '旧版工具'),
+    description: L('Its publisher was revoked.', '发布者已被吊销。'),
+    publisher: 'someone',
+    publisher_name: L('Someone', 'Someone'),
+    trust: 'community',
+    publisher_status: 'revoked',
+    repo: 'someone/legacy',
+    builtin: false,
+    versions: [v('someone/legacy', '0.0.3', '>=0.0.1 <0.1.0')]
+  },
+  {
+    key: 'orphan',
+    name: L('Orphan', '无主插件'),
+    description: L('Its publisher is not in the index.', '索引中没有它的发布者。'),
+    publisher: 'ghost',
+    trust: '',
+    publisher_status: 'missing',
+    repo: 'ghost/orphan',
+    builtin: false,
+    versions: [v('ghost/orphan', '1.0.0', '>=0.1.0')]
+  }
+]
 
-/** The market listing of key, in any source. */
+/** The store listing of key. */
 export function marketEntry(key: string): Any | undefined {
-  return Object.values(market)
-    .flat()
-    .find(x => x.key === key)
+  return market.find(x => x.key === key)
 }
 
 /** Newest compatible version that is not deprecated, as the core computes latest_version. */
@@ -155,7 +150,7 @@ function listed(m: Any): Any {
 on('GET', '/market/sources', () => sources)
 
 // host_version sits next to data (CONTRACTS §14.3); the listing is not paged.
-on('GET', '/market/plugins', req => ({ data: (market[Number(req.query.source_id || 1)] || []).map(listed), host_version: HOST_VERSION }))
+on('GET', '/market/plugins', () => ({ data: market.map(listed), host_version: HOST_VERSION }))
 
 function cmp(a: string, b: string): number {
   const pa = a.split('.').map(Number)

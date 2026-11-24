@@ -86,7 +86,7 @@
 
 ## 3. 组装（`server/internal/app/app.go`）
 
-所有模块已在 `app.Run` 中组装，启动顺序：PG + 核心迁移 → Redis → cluster（心跳）→ event/registry/packages → billing、usage → authz.Start → iam.Bootstrap → group/apikey/proxy/account → egress（`AlwaysAllow` 含 PG 地址）、launcher、dbschema、grpcruntime → gateway → DefaultsApplier(authz, billing, gateway) → rollout.Start → install、market.SeedSources → job、delivery → HTTP。关闭按相反顺序（先 `srv.Shutdown`）。
+所有模块已在 `app.Run` 中组装，启动顺序：PG + 核心迁移 → Redis → cluster（心跳）→ event/registry/packages → billing、usage → authz.Start → iam.Bootstrap → group/apikey/proxy/account → egress（`AlwaysAllow` 含 PG 地址）、launcher、dbschema、grpcruntime → gateway → DefaultsApplier(authz, billing, gateway) → rollout.Start → install、market.EnsureOfficial → job、delivery → HTTP。关闭按相反顺序（先 `srv.Shutdown`）。
 
 HTTP 挂载：`/healthz`（节点自我隔离时 503）→ `httpapi.NewRouter` → 各模块 `RegisterRoutes` → `routes.RegisterAssets(engine)`（`/plugin-ui`）→ `engine.NoRoute(gw.Middleware(), webui.Serve)`：先按插件声明分发网关端点，未命中再走控制台 SPA 回退（`/api/`、`/plugin-ui/` 前缀返回 JSON 404；index.html 每次替换 `__CSP_NONCE__` 并发 CSP 头）。
 

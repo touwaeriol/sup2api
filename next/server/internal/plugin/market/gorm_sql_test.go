@@ -6,6 +6,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store/gormtest"
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/store/model"
 )
 
 // The SQL of the market statements built with GORM (see package gormtest).
@@ -13,6 +14,13 @@ import (
 func TestSQLMarketSeedSource(t *testing.T) {
 	gormtest.Assert(t, func(db *gorm.DB) *gorm.DB {
 		return seedSource(db, "official", "https://market.example/index.json")
+	})
+}
+
+// EnsureOfficial deletes every source but the official one.
+func TestSQLMarketOtherSources(t *testing.T) {
+	gormtest.Assert(t, func(db *gorm.DB) *gorm.DB {
+		return otherSources(db).Delete(&model.MarketSource{})
 	})
 }
 

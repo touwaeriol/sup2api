@@ -13,16 +13,13 @@ import (
 
 // ------------------------------------------------------------------ market
 
-// MarketSource returns the id of the dev market source (seeded from
-// SUB2API_MARKET_SOURCES, name "local-dev"), falling back to the first one.
+// MarketSource returns the id of the only market source, the official
+// store (official, pointed at the stack's market by SUB2API_MARKET_URL).
 func (e *Env) MarketSource(admin *Session) int64 {
 	e.T.Helper()
 	srcs := admin.OK(e.T, http.MethodGet, "/market/sources", nil).Array()
-	if len(srcs) == 0 {
-		e.T.Fatal("no market sources configured (SUB2API_MARKET_SOURCES)")
-	}
-	if s, ok := Find(srcs, "name", "local-dev"); ok {
-		return s.Get("id").Int()
+	if len(srcs) != 1 || srcs[0].Get("name").String() != "official" {
+		e.T.Fatalf("market sources = %s, want only official", srcs)
 	}
 	return srcs[0].Get("id").Int()
 }

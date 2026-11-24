@@ -46,7 +46,8 @@ x-node: &node
     SUB2API_PLUGIN_SECCOMP: "true"
     # Both nodes trust the signing key bundled in this exact application image.
     SUB2API_USE_DEV_KEYS: "true"
-    SUB2API_DEV_MARKET_URL: http://caddy:3120/market/index.json
+    # The plugin store is the stack's market behind Caddy (CONTRACTS §136).
+    SUB2API_MARKET_URL: http://caddy:3120/market/index.json
     SUB2API_MARKET_ALLOW_HTTP: "true"
     # The mock upstream is on the private, isolated E2E network. This exception
     # does not disable plugin seccomp, strict networking or package signatures.

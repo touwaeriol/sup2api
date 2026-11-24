@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/pkg"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/pkg/pkgtest"
 )
@@ -32,30 +31,37 @@ func (e *env) installed(t *testing.T, data []byte, opt UploadOptions) error {
 	return err
 }
 
-// A plugin installed from a market source upgrades from that source only
-// (CONTRACTS §136.2); one uploaded by hand may move to a market. Each
-// market version runs with the trust level its index gave, while the
-// publisher row keeps its own.
-func TestMarketUpgradeSameSource(t *testing.T) {
+// A plugin with the same id upgrades from the store whatever it was
+// installed from (CONTRACTS §136.2). Each store version runs with the trust
+// level its index gave, while the publisher row keeps its own.
+func TestMarketUpgradeTrust(t *testing.T) {
 	e := newEnv(t)
 	acme := acmePublisher(t, e, pkg.TrustCommunity)
 	if err := e.installed(t, pkgtest.Build(pkgtest.Minimal("acme_tool", "1.0.0", "acme"), acme), UploadOptions{Source: "upload"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.installed(t, indexedPackage("acme_tool", "1.0.1", "acme"), fromMarket("2", "acme", pkg.TrustVerified)); err != nil {
-		t.Fatalf("hand upload to market: %v", err)
+	if err := e.installed(t, indexedPackage("acme_tool", "1.0.1", "acme"), fromMarket("1", "acme", pkg.TrustVerified)); err != nil {
+		t.Fatalf("hand upload to store: %v", err)
 	}
-	_, err := e.svc.Upload(context.Background(), indexedPackage("acme_tool", "1.0.2", "acme"), e.admin, fromMarket("3", "acme", pkg.TrustOfficial))
-	if e := core.AsError(err); e == nil || e.Code != "permission_denied" || e.Details["reason"] != "source_mismatch" {
-		t.Fatalf("other market source: %v", err)
+	if err := e.installed(t, indexedPackage("acme_tool", "1.0.2", "acme"), fromMarket("2", "acme", pkg.TrustOfficial)); err != nil {
+		t.Fatalf("store upgrade: %v", err)
 	}
-	if err := e.installed(t, indexedPackage("acme_tool", "1.0.2", "acme"), fromMarket("2", "acme", pkg.TrustVerified)); err != nil {
-		t.Fatalf("same market source: %v", err)
-	}
-	for version, want := range map[string]string{"1.0.0": pkg.TrustCommunity, "1.0.2": pkg.TrustVerified} {
-		if got, err := pkg.ReadVersionTrust(e.db.Gorm, "acme_tool", version); err != nil || got != want {
-			t.Fatalf("%s trust = %q %v, want %q", version, got, err, want)
+	want := map[string]string{"1.0.0": pkg.TrustCommunity, "1.0.1": pkg.TrustVerified, "1.0.2": pkg.TrustOfficial}
+	for version, trust := range want {
+		if got, err := pkg.ReadVersionTrust(e.db.Gorm, "acme_tool", version); err != nil || got != trust {
+			t.Fatalf("%s trust = %q %v, want %q", version, got, err, trust)
 		}
+	}
+	wantPublisherTrust(t, e, "acme", pkg.TrustCommunity)
+}
+
+// wantPublisherTrust fails unless publisher name has trust level want.
+func wantPublisherTrust(t *testing.T, e *env, name, want string) {
+	t.Helper()
+	var trust string
+	err := e.db.SQL.QueryRowContext(context.Background(), `SELECT trust_level FROM publishers WHERE name = $1`, name).Scan(&trust)
+	if err != nil || trust != want {
+		t.Fatalf("%s trust_level = %q %v, want %q", name, trust, err, want)
 	}
 }
 

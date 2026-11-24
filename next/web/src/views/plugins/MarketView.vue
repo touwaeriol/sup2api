@@ -18,8 +18,9 @@ const { t } = useI18n()
 const router = useRouter()
 const auth = useAuthStore()
 
-const sources = ref<MarketSource[]>([])
-const sourceId = ref<number | null>(null)
+/** The plugin store: the official one, the only market source (CONTRACTS §136); its address is read-only. */
+const store = ref<MarketSource | null>(null)
+const sourceId = computed(() => store.value?.id ?? null)
 const items = ref<MarketPlugin[]>([])
 /** Version of the running core (top-level host_version of GET /market/plugins). */
 const hostVersion = ref('')
@@ -33,9 +34,6 @@ const loadingSources = ref(true)
 /** The plugin whose version picker is open. */
 const picker = ref<MarketPlugin | null>(null)
 
-const sourceOptions = computed(() =>
-  sources.value.map(s => ({ value: s.id, label: s.enabled ? s.name : `${s.name} (${t('common.disabled')})` }))
-)
 const publisherChoices = computed(() => [{ value: '', label: t('plugins.market.allPublishers') }, ...publisherOptions(items.value)])
 
 function installedOf(m: MarketPlugin): string {
@@ -66,8 +64,7 @@ async function loadSources() {
   loadingSources.value = true
   try {
     const items = await fetchFirstPage<MarketSource>('/market/sources')
-    sources.value = items
-    sourceId.value = (items.find(s => s.enabled) || items[0])?.id ?? null
+    store.value = items.find(s => s.enabled) ?? null
   } catch (e) {
     notifyError(e)
   } finally {
@@ -128,13 +125,8 @@ onMounted(async () => {
         <SButton :loading="loading" icon="refresh" @click="(loadPlugins(), loadInstalled())">{{ t('common.refresh') }}</SButton>
       </template>
       <template #filters>
-        <SField :label="t('plugins.market.source')" class="w-56">
-          <SSelect
-            :model-value="sourceId"
-            :options="sourceOptions"
-            :disabled="loadingSources || !sources.length"
-            @update:model-value="v => (sourceId = v === null ? null : Number(v))"
-          />
+        <SField :label="t('plugins.market.storeURL')" :hint="t('plugins.market.storeURLHint')" class="w-96">
+          <SInput :model-value="store?.url ?? ''" readonly data-testid="market-store-url" />
         </SField>
         <SField :label="t('plugins.market.publisherFilter')" class="w-56">
           <SSelect
@@ -155,7 +147,7 @@ onMounted(async () => {
 
     <div v-if="loadingSources || (loading && !items.length)" class="flex justify-center py-20"><SSpinner size="lg" /></div>
 
-    <SCard v-else-if="!sources.length">
+    <SCard v-else-if="!store">
       <SEmpty icon="market" :text="t('plugins.market.noSources')" />
     </SCard>
 

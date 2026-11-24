@@ -273,7 +273,7 @@
 - 插件配置加密存于 `plugin_installs.config_enc`，AES-GCM 的 AAD 为 `"plugin-config:"+key`；配置变更后在 `config:changed` 广播 `{"type":"config","plugin_key":k}`
 - 宿主版本取 `main.Version`，比较兼容范围时忽略预发布后缀
 - `/nodes` 中每个节点、插件详情 `nodes[]` 中每项的插件状态字段为 `state`（结构见 §15.3）；插件列表与详情的节点汇总都叫 `node_summary` `{total, states}`
-- 市场源 `url` 可以指向 `index.json`，也可以是以 `/` 结尾的目录（自动补 `index.json`）；只接受 https，`SUB2API_MARKET_ALLOW_HTTP=true` 时也接受 http（§136）
+- 市场源只有一个：官方商店（名字 `official`，§136.1）。它的 `url` 可以指向 `index.json`，也可以是以 `/` 结尾的目录（自动补 `index.json`）；只接受 https，`SUB2API_MARKET_ALLOW_HTTP=true` 时也接受 http（§136）
 - 插件详情中的钩子统计来自 `core.HookStatsSource`（G），手动执行任务通过 `core.JobTrigger`（H）
 - 发布行为（C2）：Disable 立即提交，返回时状态已是 `disabled`；Enable 优先启用 `active_version`，否则取最新的已批准版本；`plugins` 行删除后，各节点在一次对账内停止实例
 - **内置插件**（`plugins.builtin=true`，本期为 anthropic）：随镜像提供（`SUB2API_BUILTIN_PLUGIN_DIR`，默认 `/opt/sub2api/builtin`），核心启动时在一个节点上（锁 `plugins:builtin`）自动上传、授予全部宿主权限（新插件权限按 manifest `defaults` 授予角色，§4）、首次安装后启用（**只安装**类的除外，见 §26.8），镜像带新版本时自动升级；管理员禁用后保持禁用。签内置包的密钥始终信任：取 `SUB2API_BUILTIN_TRUST_KEY`（`keyId=base64pub`），未设时取内置目录的 `trust.pub` + `trust.keyid`（镜像与 Release 包都带）。`DELETE /plugins/:key` 对内置插件返回 403，`details.reason = "builtin"`；列表与详情返回 `builtin` 字段
@@ -461,7 +461,7 @@ Anthropic 的 `cache_creation_input_tokens` 是总量（含 1 小时缓存）。
 **token 计数不占资源**（2026-11-04，用户决定）：`*.count_tokens` 不占 API Key 和账号的并发，不计 Key 和账号的 RPM、TPM，不扣额度也不查余额。计数失败可以换账号，但不改变账号状态：不冷却、不自动禁用、不观测额度，失败策略规则也不参与。仍要通过鉴权，已冷却或禁用的账号不会被选中，使用记录照常写一条不计费的记录。粘性会话：计数与粘性无关，按权重随机选账号，不读也不写绑定（2026-11-04，用户决定）。映射：参数错误 400 `invalid_request_error`（上游 4xx 原样透传，不冷却账号）、鉴权 401/403、真正的上游故障 5xx
 - `usage_logs.error_type` 取值另含 `model_not_allowed`、`price_not_configured`、`rate_limited`、`invalid_request`、`plugin_unavailable`、`blocked_by_hook`
 - 钩子熔断按节点计数：同一钩子在本节点连续失败 10 次后熔断 30 秒
-- 测试环境的市场地址为内网 `http://caddy:3120/market/index.json`（e2e 栈设 `SUB2API_MARKET_ALLOW_HTTP=true` 才能用 http，§136；市场客户端目前不过滤内网地址；市场源只来自核心的环境变量 `SUB2API_MARKET_SOURCES`）
+- 测试环境的市场地址为内网 `http://caddy:3120/market/index.json`（e2e 栈设 `SUB2API_MARKET_ALLOW_HTTP=true` 才能用 http，§136；市场客户端目前不过滤内网地址；官方商店的地址由 e2e 栈的 `SUB2API_MARKET_URL` 指向这里，§136.1）
 
 ### 11.7 插件调用超时（C2）与任务、事件（H）
 
@@ -9428,7 +9428,7 @@ Go 类型是 `expr.VisualConfig`、`TierConfig`、`TierCond`、`TokenPrices`、`
 
 ## 135. 插件商店的索引登记处与 `sub2api-plugin index` / `registry`（2026-11-24，用户定“全部去掉密钥”“包地址只限 GitHub Release”“下架两种都支持”“Release 带上发布包信息”；工具部分；索引格式见 §11.1）
 
-商店的可信来源是索引仓库 touwaeriol/sup2api-plugin（PR 审核）加索引里审核过的 sha256，索引不签名，市场源没有公钥（`SUB2API_MARKET_SOURCES` 是 `[{name,url}]`）。插件包仍可以带签名，手动上传与内置插件照旧验签。
+商店的可信来源是索引仓库 touwaeriol/sup2api-plugin（PR 审核）加索引里审核过的 sha256，索引不签名，市场源没有公钥；核心只读官方商店（§136.1）。插件包仍可以带签名，手动上传与内置插件照旧验签。
 
 **仓库文件**。只读普通文件和真正的目录：符号链接或其他类型的文件一律报错（不跟随，登记处之外的文件读不到）。JSON 一律严格解析，未知字段报错；`plugins/<key>/` 下只能有 `plugin.json`、`icon.svg` 两个普通文件和 `versions/` 目录，`versions/` 与 `publishers/` 下只能有 `*.json` 普通文件。
 
@@ -9462,15 +9462,16 @@ sub2api-plugin registry import --registry <目录> --repo <owner/name> [--trust 
 
 测试：`tools/sub2api-plugin/registry_test.go`、`registry_check_test.go`、`registry_rules_test.go`（假 GitHub 用 httptest，不访问网络）。
 
-## 136. 插件商店：信任取自索引，去掉密钥，只用 HTTPS，弃用（2026-11-24，用户定“全部去掉密钥”“包地址只限 GitHub Release”“下架两种都支持”；迁移 0125，单向）
+## 136. 插件商店：只接受官方商店，信任取自索引，去掉密钥，只用 HTTPS，弃用（2026-11-24，用户定“全部去掉密钥”“包地址只限 GitHub Release”“下架两种都支持”“只接受官方的商店”“插件 id 一致都可以升级”；迁移 0125，单向）
 
 登记处仓库与 `sub2api-plugin index`、`registry` 的用法见 §135，index.json v2 的格式见 §11.1。这里是核心一侧的约定。
 
 ### 136.1 没有密钥
 
 - 市场不再签名：没有 `index.json.sig`，核心只拉 `index.json`；`market.VerifyIndex`、`SignIndex`、`IndexSignaturePrefix` 与 v1 格式删除。
-- 市场源没有公钥：迁移 `0125_market_sources_drop_public_key.sql` 删除 `market_sources.public_key`；`GET /market/sources` 不再返回 `public_key`。`SUB2API_MARKET_SOURCES` 为 `[{name, url}]`（同名的源更新 `url`；旧配置里多写的 `public_key` 不读）。
-- 可信来源是登记处仓库（PR 审核）、HTTPS 与索引里审核过的 sha256：市场源地址与解析后的包地址只接受 `https://`；`SUB2API_MARKET_ALLOW_HTTP=true`（默认 false，网关外壳透传给核心）时也接受 `http://`，只给本地市场用（e2e 栈的 Caddy、`deploy/single`、网关真实核心测试的 httptest），生产不设。市场客户端只跟随到同样合规的地址的跳转（`market.CheckRedirect`，核心各节点下载市场包也用它），https 的源跳到 http 时请求失败。它不像 `SUB2API_PLUGIN_DEV_MODE` 那样关沙箱。启动时 `SUB2API_MARKET_SOURCES` 里有不合规的地址，核心启动失败；库里已有的 http 源在不放开时读取失败（列出全部源时跳过它，单独查它 400 `invalid_argument`）。
+- 市场源没有公钥：迁移 `0125_market_sources_drop_public_key.sql` 删除 `market_sources.public_key`；`GET /market/sources` 不再返回 `public_key`。
+- **只接受官方商店**（2026-11-24 用户定“目前我们只接受官方的商店……默认就是官方的地址，不可编辑”）：官方索引地址是核心常量 `market.OfficialURL`（`https://raw.githubusercontent.com/touwaeriol/sup2api-plugin/index/index.json`），源名 `official`。`SUB2API_MARKET_SOURCES` 删除；核心启动时（不受托管的核心、首次安装的 bootstrap、托管集群的主节点，每次启动都做）`market.EnsureOfficial` 在一个事务里把 `official` 行的地址设为 `SUB2API_MARKET_URL`（空 = 官方地址；只给 e2e、单机栈与本地开发指向本地市场用，生产不设），并删除其他所有源行（`market_sources` 没有外键引用）。`market_sources` 表与接口里的 `source_id` 保留，作为以后可配置商店地址的数据模型；没有修改源的接口。网关外壳透传 `SUB2API_MARKET_URL`（取代 `SUB2API_MARKET_SOURCES`）。
+- 可信来源是登记处仓库（PR 审核）、HTTPS 与索引里审核过的 sha256：市场源地址与解析后的包地址只接受 `https://`；`SUB2API_MARKET_ALLOW_HTTP=true`（默认 false，网关外壳透传给核心）时也接受 `http://`，只给本地市场用（e2e 栈的 Caddy、`deploy/single`、网关真实核心测试的 httptest），生产不设。市场客户端只跟随到同样合规的地址的跳转（`market.CheckRedirect`，核心各节点下载市场包也用它），https 的源跳到 http 时请求失败。它不像 `SUB2API_PLUGIN_DEV_MODE` 那样关沙箱。`SUB2API_MARKET_URL` 不合规时核心启动失败。
 - 手动上传与内置插件的包签名规则不变（官方根密钥、`publisher_keys`、`SUB2API_PLUGIN_ALLOW_UNSIGNED`）。
 
 ### 136.2 市场来源的信任取自索引
@@ -9478,7 +9479,7 @@ sub2api-plugin registry import --registry <目录> --repo <owner/name> [--trust 
 - `market.Download`（`review-from-market`、`install-from-market` 共用）每次都重新拉索引（不用列表的缓存），再看该插件的发布者在索引里的状态：`active` 才下载；`revoked` 403 `permission_denied`，`details.reason = "revoked"`；索引的 `publishers` 里没有它 403 `permission_denied`，`details.reason = "publisher_unlisted"`。
 - 下载的包按索引的大小与 sha256 校验后交给安装器，`UploadOptions.Indexed` 带上索引里的发布者（`pkg.IndexedPublisher{Name, Trust, Status}`）。安装器对带 `Indexed` 的包不读签名（包签不签、签名对不对都不影响；市场包的签名一律不读，这是接受的取舍：信任来自登记处的审核与 sha256），改由 `TrustStore.VerifyIndexed` 决定信任：发布者须是清单的 `publisher`（否则 400 `fields[{field:"publisher", code:"publisher_mismatch"}]`）；本核心已吊销的发布者 403 `reason = "revoked"`。上传时按名字登记发布者：没有的以 `community` 建行（`ON CONFLICT DO NOTHING`），**已有的发布者行从不被索引改写**，所以索引的级别不会带到同名发布者手动上传的包上。预审只读（未登记时按 id 0 判断，与官方根密钥的预审相同）。
 - **信任按版本记**：索引给的级别写在这个版本行的 `plugin_versions.trust_level`（0125 新增，可空；手动上传与内置的版本为空）。运行时读信任的地方（同意、单项授权、节点加载与原生界面、review、插件列表与详情）一律用 `pkg.VersionTrust`：版本行有值用它，否则用发布者行的级别，都没有（未签名）为 `unsigned`。信任级别能申请什么不变（`pkg.CheckTrust`）；保留标识要官方级别，市场来源不再是可信渠道（§55.2），所以第一方插件从市场安装要索引把 `sub2api` 列为 `official`。
-- **同源升级**：版本行的 `plugin_versions.source`（0125 新增，可空）记上传来源（`upload`、`builtin`、`market:<id>`）。已安装的插件当前版本来自 `market:<id>` 时，市场安装只能来自同一个源，否则 403 `permission_denied`，`details.reason = "source_mismatch"`、`details.source` 为当前版本的来源；当前版本是手动上传或内置的，可以从任一市场升级。
+- **升级只看插件 id**（2026-11-24 用户定“只要我们插件的 id 一致都是可以升级的”）：插件 id 相同就可以从商店升级，不管当前版本是手动上传、内置还是从商店装的（发布者须相同的规则照旧）。
 - 版本行的 `signature_status` 记为新值 `indexed`（列没有取值约束；审计 `plugin.upload` 的 `signature_status` 同），`key_id` 为空，`publisher_id` 为登记的发布者。review、插件详情返回版本的 `trust` 与 `signature_status: "indexed"`；控制台确认页把 `indexed` 当作通过（“由商店索引担保”），不显示签名警告。
 - 同意（`install.Consent`）照旧检查发布者行的状态，级别按上面的版本信任，不再看索引。
 - 节点加载：`registry.TrustVerifier` 改调 `TrustStore.VerifyRecorded`：按版本行的 `signature_status`，`indexed` 不验签（包已按版本行的 sha256 校验），只要求发布者在本核心已登记且未被吊销（缺了发布者行按吊销报 403，不是数据库错误）；`revoked` 的版本一律不加载；其余照旧 `VerifyInstalled`。吊销发布者（`POST /publishers/:id/revoke`）同样把它的 `indexed` 版本改为 `revoked` 并禁用插件。
@@ -9490,10 +9491,10 @@ sub2api-plugin registry import --registry <目录> --repo <owner/name> [--trust 
 
 ### 136.4 控制台
 
-插件市场页（`MarketView.vue`）：每个插件显示发布者名称与信任级别（`TrustBadge`）、发布者已吊销或不在索引中的标记（此时“安装/升级”按钮禁用并说明原因）、内置、弃用（悬停与下方提示显示原因）、发布者主页、仓库（`https://github.com/<repo>`）与源码链接（新窗口打开）；页头筛选条新增“发布者”下拉。选择版本的弹窗标出弃用的版本（原因）并给每个版本一个“更新说明”链接（`release_url`，新窗口）。判断与筛选放在 `views/plugins/marketUtil.ts`（最新版本直接用接口的 `latest_version`），列表行、选择版本的弹窗、标记与链接是 `parts/MarketRow.vue`、`parts/MarketVersionPicker.vue`、`parts/MarketBadges.vue`、`parts/MarketLinks.vue`；mock 的市场在 `web/mock/market.ts`。
+插件市场页（`MarketView.vue`）：页头显示“商店地址”（官方商店的 `url`，只读，不可编辑），不再有来源下拉。每个插件显示发布者名称与信任级别（`TrustBadge`）、发布者已吊销或不在索引中的标记（此时“安装/升级”按钮禁用并说明原因）、内置、弃用（悬停与下方提示显示原因）、发布者主页、仓库（`https://github.com/<repo>`）与源码链接（新窗口打开）；页头筛选条新增“发布者”下拉。选择版本的弹窗标出弃用的版本（原因）并给每个版本一个“更新说明”链接（`release_url`，新窗口）。判断与筛选放在 `views/plugins/marketUtil.ts`（最新版本直接用接口的 `latest_version`），列表行、选择版本的弹窗、标记与链接是 `parts/MarketRow.vue`、`parts/MarketVersionPicker.vue`、`parts/MarketBadges.vue`、`parts/MarketLinks.vue`；mock 的市场在 `web/mock/market.ts`。
 
 ### 136.5 迁移与发布
 
-- 0125 单向：删除 `market_sources.public_key`，加 `plugin_versions.trust_level`、`plugin_versions.source`。删掉的公钥此后任何核心都不用，回退只能恢复升级前的备份；可以重跑。改库，走 `primary-first-v1`。发布与回退步骤见 `next/deploy/rollback/market-0125-release.md`。
-- 部署：生产（ovh、clicodeplus）的 `SUB2API_MARKET_SOURCES` 指向 `https://raw.githubusercontent.com/touwaeriol/sup2api-plugin/index/index.json`，不设 `SUB2API_MARKET_ALLOW_HTTP`；用本地 http 市场的栈加 `SUB2API_MARKET_ALLOW_HTTP=true`（e2e、single 的 compose 已加），这样的栈要先换上透传这个变量的网关再发核心。旧核心要求市场源带 `public_key`、新核心拒绝 http 源，所以发布前先把 `MARKET_SOURCES` 改成 https 地址并暂留旧的 `public_key`（手册第一节）。
-- 测试：`market`（v2 解析、发布者 id、链接丢弃、跳转、发布者状态、弃用与最新版本、https 规则、下载拒绝吊销与缺失的发布者、下载重新拉索引）、`pkg`（`VerifyIndexed` 不改发布者行、`VerifyRecorded` 含缺失的发布者、`ReadVersionTrust`）、`install`（同源升级、保留标识要索引的 official）、`plugin/api`（未签名的包经市场安装取得索引的 official，手动上传同一个包被拒；版本信任出现在列表与 review，发布者行仍是 community）、`registry`（加载时按版本行验签）。
+- 0125 单向：删除 `market_sources.public_key`，加 `plugin_versions.trust_level`。删掉的公钥此后任何核心都不用，回退只能恢复升级前的备份；可以重跑。改库，走 `primary-first-v1`。发布与回退步骤见 `next/deploy/rollback/market-0125-release.md`。
+- 部署：生产（ovh、clicodeplus）不设 `SUB2API_MARKET_URL` 和 `SUB2API_MARKET_ALLOW_HTTP`，用默认的官方地址；compose 已删掉 `SUB2API_MARKET_SOURCES`。新核心不读 `SUB2API_MARKET_SOURCES`，旧核心照旧读它，所以发布前不用改 `.env`，升级后再从 `.env` 删掉 `MARKET_SOURCES`。用本地 http 市场的栈设 `SUB2API_MARKET_URL` 与 `SUB2API_MARKET_ALLOW_HTTP=true`（e2e、single 的 compose 已设），这样的栈要先换上透传这两个变量的网关再发核心。
+- 测试：`market`（只留官方商店、v2 解析、发布者 id、链接丢弃、跳转、发布者状态、弃用与最新版本、https 规则、下载拒绝吊销与缺失的发布者、下载重新拉索引）、`pkg`（`VerifyIndexed` 不改发布者行、`VerifyRecorded` 含缺失的发布者、`ReadVersionTrust`）、`install`（插件 id 相同即可从商店升级、版本信任、保留标识要索引的 official）、`plugin/api`（未签名的包经市场安装取得索引的 official，手动上传同一个包被拒；版本信任出现在列表与 review，发布者行仍是 community）、`registry`（加载时按版本行验签）。

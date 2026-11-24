@@ -104,9 +104,8 @@ func readPlugin(ctx context.Context, tx *gorm.DB, key string, write bool) (*mode
 
 // checkTarget checks that p (verified as ver) may go to plugin, nil for a
 // first upload: reserved keys, a key retired by another publisher (claimed
-// in a write, only checked otherwise), the publisher owning the plugin, the
-// market source of its current version (checkSource) and an uninstall in
-// progress.
+// in a write, only checked otherwise), the publisher owning the plugin and
+// an uninstall in progress.
 func (s *Service) checkTarget(ctx context.Context, tx *gorm.DB, p *pkg.Package, opt UploadOptions, ver *pkg.Verification, plugin *model.Plugin, write bool) error {
 	m := p.Manifest
 	if err := checkReserved(m, opt.Source, ver.Trust, plugin == nil && !s.opt.Plugins.DevMode); err != nil {
@@ -119,9 +118,6 @@ func (s *Service) checkTarget(ctx context.Context, tx *gorm.DB, p *pkg.Package, 
 		return checkRetiredKey(ctx, tx, m.Key, ver.PublisherID)
 	case !sameID(plugin.PublisherID, ver.PublisherID):
 		return core.ErrConflict.WithMessage(fmt.Sprintf("plugin %q is owned by another publisher", m.Key))
-	}
-	if err := checkSource(ctx, tx, m.Key, opt.Source); err != nil {
-		return err
 	}
 	return checkUninstall(ctx, tx, m.Key)
 }

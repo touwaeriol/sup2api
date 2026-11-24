@@ -110,17 +110,17 @@ func readUpdaterToken() (string, error) {
 }
 
 type PluginConfig struct {
-	DataDir           string   // SUB2API_PLUGIN_DIR, default "/var/lib/sub2api/plugins"
-	DevMode           bool     // SUB2API_PLUGIN_DEV_MODE: allow non-Linux, no sandbox
-	AllowUnsigned     bool     // SUB2API_PLUGIN_ALLOW_UNSIGNED
-	VerifySignatures  bool     // SUB2API_PLUGIN_VERIFY_SIGNATURES, default true
-	OfficialRootKeys  []string // SUB2API_PLUGIN_OFFICIAL_KEYS: comma separated "keyId=base64pub"
-	StrictNetwork     bool     // SUB2API_PLUGIN_STRICT_NETWORK, default true on linux
-	Seccomp           bool     // SUB2API_PLUGIN_SECCOMP, default true on linux
-	MaxPackageBytes   int64    // SUB2API_PLUGIN_MAX_PACKAGE_BYTES, default rc.PluginPackageMaxBytes (64 MiB)
-	MaxMemoryMB       int      // SUB2API_PLUGIN_MAX_MEMORY_MB, node cap on per-plugin memory; default 0 = no cap
-	Landlock          bool     // SUB2API_PLUGIN_LANDLOCK: Landlock (files, unix sockets, signals), default true on linux (CONTRACTS §43.8)
-	MarketSourcesJSON string   // SUB2API_MARKET_SOURCES: JSON [{name,url}] seeded at start
+	DataDir          string   // SUB2API_PLUGIN_DIR, default "/var/lib/sub2api/plugins"
+	DevMode          bool     // SUB2API_PLUGIN_DEV_MODE: allow non-Linux, no sandbox
+	AllowUnsigned    bool     // SUB2API_PLUGIN_ALLOW_UNSIGNED
+	VerifySignatures bool     // SUB2API_PLUGIN_VERIFY_SIGNATURES, default true
+	OfficialRootKeys []string // SUB2API_PLUGIN_OFFICIAL_KEYS: comma separated "keyId=base64pub"
+	StrictNetwork    bool     // SUB2API_PLUGIN_STRICT_NETWORK, default true on linux
+	Seccomp          bool     // SUB2API_PLUGIN_SECCOMP, default true on linux
+	MaxPackageBytes  int64    // SUB2API_PLUGIN_MAX_PACKAGE_BYTES, default rc.PluginPackageMaxBytes (64 MiB)
+	MaxMemoryMB      int      // SUB2API_PLUGIN_MAX_MEMORY_MB, node cap on per-plugin memory; default 0 = no cap
+	Landlock         bool     // SUB2API_PLUGIN_LANDLOCK: Landlock (files, unix sockets, signals), default true on linux (CONTRACTS §43.8)
+	MarketURL        string   // SUB2API_MARKET_URL: plugin store index, "" = official; local markets of test stacks only (CONTRACTS §136)
 	// MarketAllowHTTP accepts http:// market sources and package URLs
 	// besides https:// (SUB2API_MARKET_ALLOW_HTTP, default false): local
 	// markets of test stacks and development only (CONTRACTS §136).
@@ -266,10 +266,10 @@ func env(k, def string) string {
 	return def
 }
 
-// loadMarket reads the market settings: the sources seeded at start and
-// whether http market URLs are accepted.
+// loadMarket reads the market settings: the store index and whether http
+// market URLs are accepted.
 func (p *PluginConfig) loadMarket() {
-	p.MarketSourcesJSON = os.Getenv("SUB2API_MARKET_SOURCES")
+	p.MarketURL = strings.TrimSpace(os.Getenv("SUB2API_MARKET_URL"))
 	p.MarketAllowHTTP = boolEnv("SUB2API_MARKET_ALLOW_HTTP", false)
 }
 
