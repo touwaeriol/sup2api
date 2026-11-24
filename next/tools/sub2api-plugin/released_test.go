@@ -1,168 +1,132 @@
 package main
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
-	"flag"
-	"fmt"
-	"io/fs"
-	"os"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 )
 
-// releasedFile records, per plugin directory, the version production runs
-// and the digest (pluginDigest) of the sources it was built from.
-var releasedFile = filepath.Join("..", "..", "plugins", "released.json")
-
-// recordReleased rewrites releasedFile from the plugins in the directory it
-// names (after a release: the plugins/ of the released commit):
-//
-//	go test -run TestReleasedPluginsBumped -args -record-released=../../plugins
-var recordReleased = flag.String("record-released", "", "plugins directory to record in "+releasedFile)
-
-type releasedPlugin struct {
-	Version string `json:"version"`
-	Digest  string `json:"digest"`
+// releasedFixture is a plugins directory holding demo (publisher tester)
+// and an index served over HTTP that registers versions of it.
+type releasedFixture struct {
+	plugins string
+	digest  string // of plugins/demo
+	index   string // served at url
+	url     string
 }
 
-type released struct {
-	Comment string                    `json:"_comment"`
-	Plugins map[string]releasedPlugin `json:"plugins"`
-}
-
-// A built-in plugin whose package content changed must get a new version:
-// the core keeps the package it already has under a version (an upload of
-// the same version with other content only logs a warning), so the change
-// would never reach a deployment (review 1116 R2, T2).
-func TestReleasedPluginsBumped(t *testing.T) {
-	if *recordReleased != "" {
-		recordReleasedPlugins(t, *recordReleased)
-		return
-	}
-	b, err := os.ReadFile(releasedFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var rec released
-	if err := json.Unmarshal(b, &rec); err != nil {
-		t.Fatal(err)
-	}
-	current := pluginVersions(t, filepath.Dir(releasedFile))
-	for name, version := range current {
-		r, ok := rec.Plugins[name]
-		if !ok || r.Version != version {
-			continue // new, or bumped since the release
-		}
-		digest, err := pluginDigest(filepath.Join(filepath.Dir(releasedFile), name))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if digest != r.Digest {
-			t.Errorf("plugin %s: what its package is built from changed since %s was released (%s), but the version did not: bump the manifest version (and the plugin's Version constant, if it has one)",
-				name, version, releasedFile)
-		}
-	}
-}
-
-// pluginVersions maps every plugin directory below root to its manifest
-// version.
-func pluginVersions(t *testing.T, root string) map[string]string {
+func newReleasedFixture(t *testing.T) *releasedFixture {
 	t.Helper()
-	manifests, err := filepath.Glob(filepath.Join(root, "*", "manifest.json"))
-	if err != nil || len(manifests) == 0 {
-		t.Fatalf("no plugins in %s: %v", root, err)
+	f := &releasedFixture{plugins: t.TempDir()}
+	writeFile(t, filepath.Join(f.plugins, "demo", "manifest.json"), demoManifest)
+	writeFile(t, filepath.Join(f.plugins, "demo", "main.go"), "package main")
+	var err error
+	if f.digest, err = pluginDigest(filepath.Join(f.plugins, "demo")); err != nil {
+		t.Fatal(err)
 	}
-	out := map[string]string{}
-	for _, m := range manifests {
-		b, err := os.ReadFile(m)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var v struct{ Version string }
-		if err := json.Unmarshal(b, &v); err != nil || v.Version == "" {
-			t.Fatalf("%s: no version (%v)", m, err)
-		}
-		out[filepath.Base(filepath.Dir(m))] = v.Version
-	}
-	return out
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(f.index))
+	}))
+	t.Cleanup(srv.Close)
+	f.url = srv.URL + "/index.json"
+	useClient(t, srv.Client())
+	return f
 }
 
-func recordReleasedPlugins(t *testing.T, root string) {
-	rec := released{
-		Comment: "The plugin versions production runs and the digests of their sources: TestReleasedPluginsBumped (tools/sub2api-plugin) fails when a plugin's sources changed and its version did not. Rewrite after each release.",
-		Plugins: map[string]releasedPlugin{},
+// useClient makes the tool's HTTP requests with c.
+func useClient(t *testing.T, c *http.Client) {
+	saved := newRemote
+	newRemote = func() *remote { return &remote{client: c} }
+	t.Cleanup(func() { newRemote = saved })
+}
+
+// register serves an index listing demo of publisher pub at version ver
+// with digest ("" for none).
+func (f *releasedFixture) register(pub, ver, digest string) {
+	v := `{"version": "` + ver + `"`
+	if digest != "" {
+		v += `, "source_digest": "` + digest + `"`
 	}
-	for name, version := range pluginVersions(t, root) {
-		digest, err := pluginDigest(filepath.Join(root, name))
-		if err != nil {
-			t.Fatal(err)
-		}
-		rec.Plugins[name] = releasedPlugin{Version: version, Digest: digest}
+	f.index = `{"version": 2, "publishers": [], "plugins": [{"key": "demo", "publisher": "` + pub + `", "versions": [` + v + `}]}]}`
+}
+
+func (f *releasedFixture) check(t *testing.T, extra ...string) (string, bool) {
+	t.Helper()
+	var out, errb strings.Builder
+	code := run(append([]string{"released-check", "--plugins", f.plugins, "--index", f.url}, extra...), &out, &errb)
+	return out.String() + errb.String(), code == 0
+}
+
+func TestReleasedCheck(t *testing.T) {
+	other := "sha256:" + strings.Repeat("0", 64)
+	cases := map[string]struct {
+		pub, ver, digest string
+		ok               bool
+	}{
+		"same sources":        {"tester", "0.1.0", "same", true},
+		"no source_digest":    {"tester", "0.1.0", "", true},
+		"bumped since":        {"tester", "0.0.9", other, true},
+		"another publisher":   {"sub2api", "0.1.0", other, true},
+		"changed, not bumped": {"tester", "0.1.0", other, false},
 	}
-	b, err := json.MarshalIndent(rec, "", "  ")
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newReleasedFixture(t)
+			digest := tc.digest
+			if digest == "same" {
+				digest = f.digest
+			}
+			f.register(tc.pub, tc.ver, digest)
+			out, ok := f.check(t, "--strict")
+			if ok != tc.ok {
+				t.Fatalf("ok = %v, want %v: %s", ok, tc.ok, out)
+			}
+			if want := "tester/demo 0.1.0 is registered with other sources"; !ok && !strings.Contains(out, want) {
+				t.Fatalf("message %s, want %q", out, want)
+			}
+		})
+	}
+}
+
+func TestReleasedCheckUnreadableIndex(t *testing.T) {
+	f := newReleasedFixture(t)
+	f.index = "not json"
+	if out, ok := f.check(t); !ok || !strings.Contains(out, "warning: released versions not checked") {
+		t.Fatalf("local run: ok %v: %s", ok, out)
+	}
+	if out, ok := f.check(t, "--strict"); ok || !strings.Contains(out, "index.json") {
+		t.Fatalf("strict: ok %v: %s", ok, out)
+	}
+	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(releasedFile, append(b, '\n'), 0o644); err != nil {
-		t.Fatal(err)
+	f.url = "http://" + l.Addr().String() + "/index.json"
+	l.Close()
+	useClient(t, &http.Client{})
+	if out, ok := f.check(t); !ok || !strings.Contains(out, "warning") {
+		t.Fatalf("unreachable, local run: ok %v: %s", ok, out)
+	}
+	if out, ok := f.check(t, "--strict"); ok {
+		t.Fatalf("unreachable, strict: %s", out)
 	}
 }
 
-var (
-	// unpackedDirs hold no package input: tests, dependencies, build
-	// outputs.
-	unpackedDirs = map[string]bool{"testdata": true, "node_modules": true, "dist": true, "runtimes": true, "__tests__": true}
-	// packedDirs are copied into the package (pack) or built into its ui.
-	packedDirs = append([]string{"ui/"}, func() (out []string) {
-		for _, d := range packDirs {
-			out = append(out, d+"/")
-		}
-		return out
-	}()...)
-	// unpackedFiles are tests, docs and lock files: dependency-only changes
-	// (go.mod as well; the SDK lives outside the plugin too) rebuild the
-	// same plugin, and a release may keep the package production has.
-	unpackedFiles = regexp.MustCompile(`(_test\.go|\.(test|spec)\.[cm]?[jt]sx?|\.md)$|(^|/)(go\.mod|go\.sum|package-lock\.json)$`)
-)
-
-// pluginDigest hashes what the package of the plugin in dir is built from:
-// manifest.json, the directories pack copies, ui/ and every Go file of the
-// plugin's binaries; see unpackedDirs and unpackedFiles for what is left out.
-func pluginDigest(dir string) (string, error) {
-	h := sha256.New()
-	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(dir, p)
-		if err != nil {
-			return err
-		}
-		rel = filepath.ToSlash(rel)
-		if d.IsDir() {
-			if rel != "." && (unpackedDirs[d.Name()] || strings.HasPrefix(d.Name(), ".") || strings.HasPrefix(d.Name(), "_")) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		packed := rel == "manifest.json" || strings.HasSuffix(rel, ".go")
-		for _, prefix := range packedDirs {
-			packed = packed || strings.HasPrefix(rel, prefix)
-		}
-		if !packed || unpackedFiles.MatchString(rel) || strings.HasPrefix(d.Name(), ".") || !d.Type().IsRegular() {
-			return nil
-		}
-		b, err := os.ReadFile(p)
-		if err != nil {
-			return err
-		}
-		fmt.Fprintf(h, "%s\x00%d\x00", rel, len(b))
-		h.Write(b)
-		return nil
-	})
-	return "sha256:" + hex.EncodeToString(h.Sum(nil)), err
+func TestPackWritesSourceDigest(t *testing.T) {
+	dir := demoPlugin(t)
+	pkg := strings.TrimSpace(runOK(t, "pack", "--dir", dir, "--out-dir", t.TempDir()))
+	info, err := inspectPackage(pkg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := pluginDigest(dir)
+	if err != nil || info.sourceDigest != want {
+		t.Fatalf("source digest %q, want %q (%v)", info.sourceDigest, want, err)
+	}
+	if _, err := packageSourceDigest(map[string][]byte{sourceFile: []byte(`{"digest": "md5:x"}`)}); err == nil {
+		t.Fatal("malformed source.json accepted")
+	}
 }

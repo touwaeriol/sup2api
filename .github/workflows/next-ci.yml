@@ -83,6 +83,14 @@ jobs:
         run: sh .github/next-ci/next-check-module.sh next/protocol-codec
       - name: plugin CLI
         run: sh .github/next-ci/next-check-module.sh next/tools/sub2api-plugin
+      # A plugin whose sources changed under a version the test channel's index
+      # already registers must get a new version (CONTRACTS §135); an index
+      # that cannot be read fails here (--strict), a local run only warns.
+      - name: plugin versions bumped (released-check)
+        working-directory: next/tools/sub2api-plugin
+        run: >-
+          go run . released-check --plugins ../../plugins --strict
+          --index https://raw.githubusercontent.com/touwaeriol/sup2api-plugin/index-develop/index.json
       - name: mock-upstream
         run: sh .github/next-ci/next-check-module.sh next/deploy/mock-upstream
       # e2e: gofmt, vet and build only. `go vet ./...` type-checks the test

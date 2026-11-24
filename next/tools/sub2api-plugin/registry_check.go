@@ -44,13 +44,14 @@ func cmdRegistryCheck(args []string, stdout, stderr io.Writer) error {
 	author := fs.String("author", "", "GitHub login of the pull request author (required)")
 	summary := fs.String("summary", "", "also write the Markdown summary to this file")
 	asJSON := fs.Bool("json", false, "print the result as JSON instead of Markdown")
+	promotion := fs.Bool("promotion", false, "the pull request promotes develop to main: skip the author, one-publisher and package checks done on develop")
 	if err := parseNoArgs(fs, args); err != nil {
 		return err
 	}
 	if *head == "" || *base == "" || *author == "" {
 		return errors.New("--registry, --base and --author are required")
 	}
-	res := runRegistryCheck(*head, *base, *author, newRemote())
+	res := runRegistryCheck(*head, *base, *author, *promotion, newRemote())
 	if err := reportCheck(res, *summary, *asJSON, stdout); err != nil {
 		return err
 	}
@@ -78,14 +79,18 @@ func reportCheck(res *checkResult, summary string, asJSON bool, stdout io.Writer
 	return err
 }
 
-// checker holds one review.
+// checker holds one review. A promotion (develop merged into main) brings
+// changes each checked by its own pull request on develop: it is held to the
+// file rules and the immutability of published versions only, and lists its
+// new versions for the maintainer instead of downloading them again.
 type checker struct {
 	head, base *registry
 	author     string
+	promotion  bool
 	remote     *remote
 	res        *checkResult
 	owners     map[string]bool             // publishers whose files change
-	previous   map[string]*previousPackage // by plugin key
+	previous   map[string]*previousPackage // by plugin ref
 }
 
 // previousPackage is the version a plugin's new versions are compared with.
@@ -95,10 +100,10 @@ type previousPackage struct {
 	err     string
 }
 
-func runRegistryCheck(headRoot, baseRoot, author string, r *remote) *checkResult {
+func runRegistryCheck(headRoot, baseRoot, author string, promotion bool, r *remote) *checkResult {
 	budget := int64(checkDownloadBudget)
 	r.budget = &budget
-	c := &checker{author: author, remote: r, owners: map[string]bool{}, previous: map[string]*previousPackage{},
+	c := &checker{author: author, promotion: promotion, remote: r, owners: map[string]bool{}, previous: map[string]*previousPackage{},
 		res: &checkResult{Errors: []string{}, ManualReview: []string{}, Versions: []versionReport{}}}
 	var err error
 	c.head, err = loadRegistry(headRoot, false)
@@ -141,71 +146,83 @@ func (c *checker) manual(format string, args ...any) {
 func (c *checker) review(changes []fileChange) {
 	byPlugin := map[string][]fileChange{}
 	for _, ch := range changes {
-		dir, rest, _ := strings.Cut(ch.path, "/")
-		switch {
-		case strings.ContainsFunc(ch.path, unicode.IsControl):
-			c.fail("%q: a path with control characters", ch.path)
-		case dir == regPublishersDir:
-			c.owners[strings.TrimSuffix(rest, regJSONExt)] = true
-			c.manual("%s: publisher file %s", ch.path, ch.kind)
-		case dir == regPluginsDir:
-			key, _, _ := strings.Cut(rest, "/")
-			byPlugin[key] = append(byPlugin[key], ch)
-		default:
-			c.manual("%s: %s outside %s/ and %s/", ch.path, ch.kind, regPublishersDir, regPluginsDir)
+		if ref := c.classify(ch); ref != "" {
+			byPlugin[ref] = append(byPlugin[ref], ch)
 		}
 	}
-	for _, key := range slices.Sorted(maps.Keys(byPlugin)) {
-		c.pluginChanges(key, byPlugin[key])
+	for _, ref := range slices.Sorted(maps.Keys(byPlugin)) {
+		c.pluginChanges(ref, byPlugin[ref])
 	}
-	if len(c.owners) > 1 {
+	if len(c.owners) > 1 && !c.promotion {
 		c.fail("a pull request may change the files of one publisher only; this one changes %s", strings.Join(slices.Sorted(maps.Keys(c.owners)), ", "))
 	}
 }
 
-// pluginChanges reviews the changed files of plugins/<key>/.
-func (c *checker) pluginChanges(key string, chs []fileChange) {
-	old, cur := c.base.plugins[key], c.head.plugins[key]
-	what := path.Join(regPluginsDir, key)
+// classify reviews a change outside the plugin directories and returns the
+// plugin ref of one inside them: the publisher always comes from the path.
+func (c *checker) classify(ch fileChange) string {
+	dir, rest, _ := strings.Cut(ch.path, "/")
+	switch {
+	case strings.ContainsFunc(ch.path, unicode.IsControl):
+		c.fail("%q: a path with control characters", ch.path)
+	case dir == regPublishersDir:
+		c.owners[strings.TrimSuffix(rest, regJSONExt)] = true
+		c.manual("%s: publisher file %s", ch.path, ch.kind)
+	case dir == regPluginsDir:
+		parts := strings.SplitN(rest, "/", 3)
+		c.owners[parts[0]] = true
+		if len(parts) == 3 {
+			return regRef(parts[0], parts[1])
+		}
+		c.manual("%s %s", ch.path, ch.kind)
+	default:
+		c.manual("%s: %s outside %s/ and %s/", ch.path, ch.kind, regPublishersDir, regPluginsDir)
+	}
+	return ""
+}
+
+// pluginChanges reviews the changed files of plugins/<ref>/.
+func (c *checker) pluginChanges(ref string, chs []fileChange) {
+	pub, _, _ := strings.Cut(ref, refSep)
+	old, cur := c.base.plugins[ref], c.head.plugins[ref]
+	what := pluginDir(ref)
 	switch {
 	case old == nil:
-		c.owners[cur.plugin.Publisher] = true
 		c.manual("%s: new plugin", what)
-		if _, known := c.base.publishers[cur.plugin.Publisher]; known {
-			c.requireAuthor(cur.plugin.Publisher, what)
+		if _, known := c.base.publishers[pub]; known {
+			c.requireAuthor(pub, what)
 		}
 	case cur == nil:
-		c.owners[old.plugin.Publisher] = true
 		c.manual("%s: plugin removed", what)
 	default:
-		c.owners[cur.plugin.Publisher] = true
-		c.owners[old.plugin.Publisher] = true
-		c.requireAuthor(old.plugin.Publisher, what)
+		c.requireAuthor(pub, what)
 	}
 	for _, ch := range chs {
-		c.pluginFileChange(key, ch)
+		c.pluginFileChange(ref, ch)
 	}
 }
 
-func (c *checker) pluginFileChange(key string, ch fileChange) {
-	rel := strings.TrimPrefix(ch.path, regPluginsDir+"/"+key+"/")
+func (c *checker) pluginFileChange(ref string, ch fileChange) {
+	rel := strings.TrimPrefix(ch.path, pluginDir(ref)+"/")
 	ver, isVersion := strings.CutPrefix(rel, regVersionsDir+"/")
 	ver = strings.TrimSuffix(ver, regJSONExt)
-	old := c.baseVersion(key, ver)
+	old := c.baseVersion(ref, ver)
 	switch {
 	case !isVersion:
 		c.manual("%s %s", ch.path, ch.kind)
 	case ch.kind == changeDeleted:
 		c.manual("%s: version %s deleted", ch.path, ver)
 	case ch.kind == changeModified && old != nil:
-		c.immutable(ch.path, old, c.head.plugins[key].versions[ver])
+		c.immutable(ch.path, old, c.head.plugins[ref].versions[ver])
+	case c.promotion:
+		c.manual("%s: version %s promoted from develop", ch.path, ver)
 	default: // added, or a base version that did not load
-		c.verifyNew(key, c.head.plugins[key].versions[ver])
+		c.verifyNew(ref, c.head.plugins[ref].versions[ver])
 	}
 }
 
-func (c *checker) baseVersion(key, ver string) *regVersion {
-	if e := c.base.plugins[key]; e != nil {
+func (c *checker) baseVersion(ref, ver string) *regVersion {
+	if e := c.base.plugins[ref]; e != nil {
 		return e.versions[ver]
 	}
 	return nil
@@ -216,6 +233,7 @@ func (c *checker) baseVersion(key, ver string) *regVersion {
 func (c *checker) requireAuthor(pubID, what string) {
 	pub := c.base.publishers[pubID]
 	switch {
+	case c.promotion: // each change was checked on develop
 	case pub == nil:
 		c.manual("%s: publisher %s did not load from the base, the author is not checked", what, pubID)
 	case pub.Status != "active":
@@ -239,10 +257,11 @@ func (c *checker) immutable(file string, old, cur *regVersion) {
 }
 
 // verifyNew reads the release a new version's url names, downloads its
-// package and compares the version file with what they say.
-func (c *checker) verifyNew(key string, v *regVersion) {
-	file := path.Join(regPluginsDir, key, regVersionsDir, v.Version+regJSONExt)
-	p := &c.head.plugins[key].plugin
+// package and compares the version file with what they say, source_digest
+// included (the package's source.json).
+func (c *checker) verifyNew(ref string, v *regVersion) {
+	file := path.Join(pluginDir(ref), regVersionsDir, v.Version+regJSONExt)
+	p := &c.head.plugins[ref].plugin
 	tag, err := releaseAssetTag(p.Repo, v.URL)
 	var info *pkgInfo
 	var want regVersion
@@ -258,20 +277,20 @@ func (c *checker) verifyNew(key string, v *regVersion) {
 		c.fail("%s: does not match the package: %s", file, versionMismatch(*v, want))
 		return
 	}
-	prev := c.previousOf(key)
-	c.res.Versions = append(c.res.Versions, versionReport{Plugin: key, Version: v.Version, URL: v.URL, SHA256: v.SHA256,
+	prev := c.previousOf(ref)
+	c.res.Versions = append(c.res.Versions, versionReport{Plugin: ref, Version: v.Version, URL: v.URL, SHA256: v.SHA256,
 		Size: v.Size, Previous: prev.version, PreviousError: prev.err, Changes: compareManifests(factsOf(prev.info), factsOf(info))})
 }
 
-// previousOf is the newest non-deprecated version the base lists for key,
+// previousOf is the newest non-deprecated version the base lists for ref,
 // downloaded once per plugin.
-func (c *checker) previousOf(key string) *previousPackage {
-	if prev, ok := c.previous[key]; ok {
+func (c *checker) previousOf(ref string) *previousPackage {
+	if prev, ok := c.previous[ref]; ok {
 		return prev
 	}
 	prev := &previousPackage{}
-	c.previous[key] = prev
-	old := c.base.plugins[key]
+	c.previous[ref] = prev
+	old := c.base.plugins[ref]
 	if old == nil {
 		return prev
 	}
@@ -294,6 +313,7 @@ func versionMismatch(file, want regVersion) string {
 		{"size", strconv.FormatInt(file.Size, 10), strconv.FormatInt(want.Size, 10)},
 		{"host_compat", file.HostCompat, want.HostCompat},
 		{"release_url", file.ReleaseURL, want.ReleaseURL},
+		{"source_digest", file.SourceDigest, want.SourceDigest},
 	}
 	var out []string
 	for _, f := range fields {

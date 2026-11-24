@@ -21,8 +21,8 @@
 | `next/gateway` | 节点外壳 `sub2api-gateway`：公网入口、管理本机核心进程（supervisor）、托管升级；另有发布打包工具 `sub2api-release` |
 | `next/runtime-contract` | 外壳与核心的协议，以及核心、网关、SDK 共用的数据库层 `gormpg`（打开连接、组合器、SQL 检查器 `gormpg/sqlcheck`） |
 | `next/sdk` | 插件契约：`proto`/`gen`（gRPC）、`manifest`、`pluginsdk`（插件开发包）、`pgdb`（插件的 GORM 句柄）、`hierarchy`（表里的树：物化路径，核心的用户上级也用它）、`testpg`（测试用 PostgreSQL） |
-| `next/plugins/*` | 官方插件，每个是独立 Go 模块；`plugins/released.json` 记录线上版本 |
-| `next/tools/sub2api-plugin` | 插件 CLI：keygen、build、pack、sign、verify、index、`db diff/check`、`dev` |
+| `next/plugins/*` | 官方插件，每个是独立 Go 模块；发布过的版本登记在索引仓库 touwaeriol/sup2api-plugin（CONTRACTS §135） |
+| `next/tools/sub2api-plugin` | 插件 CLI：keygen、build、pack、sign、verify、index、`registry`、`released-check`、`db diff/check`、`dev` |
 | `next/web` | 控制台（Vue 3 + Vite + TS + Pinia + Tailwind），`packages/` 下是共享给插件的 `@sub2api/ui`、`@sub2api/host`、`@sub2api/vite-preset` |
 | `next/deploy` | 镜像构建脚本、网关托管部署（`gateway/`）、单机栈（`single/`）、e2e 栈、单向发布进行中的发布与回退手册（`rollback/`，发布完成、不能再回退后删除；现在有协议绑定的升级手册 `protocol-binding-release.md` 和它的只读查询 `protocol-binding-conversions.sql`，以及插件商店迁移 0125 的发布手册 `market-0125-release.md`） |
 | `next/e2e` | 验收测试，需要部署好的栈；CI 只编译不运行 |
@@ -82,7 +82,7 @@ CCGateway 插件（Claude Code 托管账号、它的 companions 与 `cli-reverse
 - 一次请求上的超时和大小上限只有管理员配置的（请求体上限、上游超时、钩子和热路径超时等），加上安全、钱算对和防止崩溃的检查；不要在请求路径上加写死的超时、大小或次数上限（所有者决定，完整列表见 CONTRACTS §112.16）。
 - 平台插件（声明账号类型的插件）都是有进程的代码插件，没有只有清单的插件。每个网关请求只有一条路径（CONTRACTS §112）：核心做完协议转换和运营方的改写，把完整请求体交给账号类型插件的 `PlatformService.Execute`；插件构造最终请求，经 `HostService.RelayUpstream` 交给核心的 HTTP 客户端发出（插件不开套接字，账号代理、SSRF、超时、运营方的请求头设置由核心强制；插件随 `Account` 收到账号的凭证和代理详情，但代理只是数据，不得用于自行联网，CONTRACTS §124）；用量与任务事实只在 `Execute` / `Monitor` 的返回值里。插件写法、`sdk/pluginsdk/standard` 库、`jsonedit`、一致性套件见 `next/docs/PLUGIN-DEVELOPMENT.md`。
 - 平台插件必须遵守全部系统设置：每项设置在 HTTP 与 WebSocket 两种传输上由谁生效、插件要配合什么，见 `next/docs/PLUGIN-DEVELOPMENT.md` 第 5 节，改动相关行为时同步它。
-- 内置插件随核心升级（CONTRACTS §37）。**插件内容变了必须升版本号**：`tools/sub2api-plugin` 的 `TestReleasedPluginsBumped` 对照 `next/plugins/released.json`，内容变了而版本没升就失败；每次发布后按该测试的说明重写这个文件。
+- 内置插件随核心升级（CONTRACTS §37）。**插件内容变了必须升版本号**：版本记录只在索引仓库 touwaeriol/sup2api-plugin（CONTRACTS §135），`pack` 把源码摘要写进包里的 `source.json`，登记时记成版本的 `source_digest`；CI 的 `sub2api-plugin released-check` 对照测试频道的索引（`index-develop`），某个插件的清单版本已经登记、源码摘要却变了就失败。发布插件后用 `sub2api-plugin registry add-version` 生成版本文件，向 sup2api-plugin 的 `develop` 提 PR 登记。
 - Host API 版本在 `runtime-contract.HostAPIVersion`（现为 10），`sdk/protocol.HostAPIVersion` 就定义为它。插件线协议是 `sdk/protocol.ProtocolVersion`（现为 2）：改了不兼容的插件契约就升它，旧插件包在握手和清单检查时以同一条信息被拒绝（CONTRACTS §112.10）。
 
 ### 网关与托管升级（CONTRACTS §33、§34、§39、§82、§102）
@@ -106,7 +106,7 @@ CCGateway 插件（Claude Code 托管账号、它的 companions 与 `cli-reverse
    - 架构变化 → `next/docs/ARCHITECTURE.md`；
    - 用户能看到的变化、版本、迁移 → `CHANGELOG.md` 的“未发布”一节；
    - 发布、回退步骤 → `next/deploy/rollback/`（单向发布完成、不能再回退后删除）和 `next/deploy/gateway/*/README.md` 的手册。
-4. 插件改了内容就升版本（见上文 `released.json`）；manifest 用到新核心能力时同时提高 `hostCompat` 下限。
+4. 插件改了内容就升版本（见上文 `released-check`）；manifest 用到新核心能力时同时提高 `hostCompat` 下限。
 5. 新增 Go 模块要加进 `next/go.work`，并在 `go.mod` 里按相对路径 `replace` `next/sdk` 和 `next/runtime-contract`（CONTRACTS §2）。整理依赖用 `GOWORK=off go mod tidy`，然后 `cd next && go work sync`，提交 `go.sum`/`go.work.sum` 的变化（CI 检查它们没有未提交的改动）。
 6. Linux 专有代码用 `//go:build linux`，并提供非 Linux 的空实现。
 7. 测试不假设某个端口空闲：要证明“连不上”就 `net.Listen(":0")` 拿端口再立刻关掉。
@@ -147,7 +147,8 @@ go test -race -count=1 -timeout 30m ./...
 cd next/gateway && go test -race -count=1 ./...          # 控制器测试需要 PG，同样走 testpg
 cd next/runtime-contract && go test -race -count=1 ./...
 cd next/sdk && go test -count=1 ./...                    # 含 pgdb 的 TestNoRawSQL、TestNoPgxImports
-cd next/tools/sub2api-plugin && go test -count=1 ./...   # 含 TestReleasedPluginsBumped、TestDBCheck
+cd next/tools/sub2api-plugin && go test -count=1 ./...   # 含 TestDBCheck、TestReleasedCheck
+cd next/tools/sub2api-plugin && go run . released-check --plugins ../../plugins --index https://raw.githubusercontent.com/touwaeriol/sup2api-plugin/index-develop/index.json   # 读不到索引只警告，CI 加 --strict
 cd next/plugins/<name> && go test -count=1 ./...
 ```
 
@@ -179,7 +180,7 @@ CI 只跑 `npm ci`、`typecheck`、`test`；`lint` 本地也要跑。
 - 提交说明用英文，格式是 `<范围>: <小写开头的短句>`，范围写模块或包名，多个用逗号分开，例如 `authz: lazy enforcer users, in-place reloads`、`store, billing: ...`、`web(session): ...`、`docs: ...`；发布用 `release 0.1.290: ...`。说清楚改了什么、为什么，不写空泛的 `fix bug`。
 - 推送前先问用户。
 - 上游 `Sub2API-Devs/sup2api` 只在用户明确要求时同步，同步一律走 PR，不直接推送。
-- 发布（核心、网关、插件三条版本线）按 `next/deploy/` 下的手册做：`deploy/gateway/README.md`（发布包与托管升级）、`deploy/gateway/*/README.md`（各环境的部署记录）、`deploy/rollback/<版本>-*.md`（单向迁移的发布与回退）。发布后更新 `CHANGELOG.md` 和 `next/plugins/released.json`。
+- 发布（核心、网关、插件三条版本线）按 `next/deploy/` 下的手册做：`deploy/gateway/README.md`（发布包与托管升级）、`deploy/gateway/*/README.md`（各环境的部署记录）、`deploy/rollback/<版本>-*.md`（单向迁移的发布与回退）。发布后更新 `CHANGELOG.md`；插件版本变了的，用 `sub2api-plugin registry add-version` 向 touwaeriol/sup2api-plugin 的 `develop` 提 PR 登记（测试通过后由 `develop` 合进 `main` 进入正式频道）。
 
 ## 读代码从哪里开始
 

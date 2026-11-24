@@ -86,31 +86,67 @@ func collectPackage(dir, runtimesDir, overlay string, allowMissingUI bool) (map[
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	var warnings []string
 	files := map[string][]byte{pkgsig.ManifestFile: raw}
-	add := func(root, prefix string, skip func(rel string) bool) error {
-		return addTree(files, root, prefix, skip)
+	if err := addPluginFiles(files, dir, runtimesDir, m); err != nil {
+		return nil, nil, nil, err
 	}
+	if err := addOverlay(files, overlay); err != nil {
+		return nil, nil, nil, err
+	}
+	if err := addSource(files, dir); err != nil {
+		return nil, nil, nil, err
+	}
+	warnings, err := checkPackage(files, m, allowMissingUI)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return files, m, warnings, nil
+}
 
+// addPluginFiles adds the plugin directory's packed trees, the runtimes and
+// the icons.
+func addPluginFiles(files map[string][]byte, dir, runtimesDir string, m *manifest.Manifest) error {
+	type tree struct {
+		root, prefix string
+		skip         func(rel string) bool
+	}
+	var trees []tree
 	for _, d := range packDirs {
-		if err := add(filepath.Join(dir, d), d, nil); err != nil {
-			return nil, nil, nil, err
+		trees = append(trees, tree{filepath.Join(dir, d), d, nil})
+	}
+	trees = append(trees,
+		// ui/: everything except the native sources; native comes from its dist.
+		tree{filepath.Join(dir, "ui"), "ui", func(rel string) bool { return rel == "native" || strings.HasPrefix(rel, "native/") }},
+		tree{filepath.Join(dir, "ui", "native", "dist"), "ui/native", nil},
+		tree{filepath.Join(runtimesDir, "runtimes"), "runtimes", nil},
+	)
+	for _, t := range trees {
+		if err := addTree(files, t.root, t.prefix, t.skip); err != nil {
+			return err
 		}
 	}
-	// ui/: everything except the native sources; native comes from its dist.
-	if err := add(filepath.Join(dir, "ui"), "ui", func(rel string) bool {
-		return rel == "native" || strings.HasPrefix(rel, "native/")
-	}); err != nil {
-		return nil, nil, nil, err
+	return addIcons(files, dir, m)
+}
+
+// addOverlay adds the overlay's files, which win, except the manifest
+// override files.
+func addOverlay(files map[string][]byte, overlay string) error {
+	if overlay == "" {
+		return nil
 	}
-	if err := add(filepath.Join(dir, "ui", "native", "dist"), "ui/native", nil); err != nil {
-		return nil, nil, nil, err
-	}
-	// Runtimes.
-	if err := add(filepath.Join(runtimesDir, "runtimes"), "runtimes", nil); err != nil {
-		return nil, nil, nil, err
-	}
-	// Icon stored in the package.
+	return addTree(files, overlay, "", func(rel string) bool { return rel == overlayManifest || rel == overlayPatch })
+}
+
+// addSource adds source.json: the digest of the plugin directory's sources
+// (not the overlay's).
+func addSource(files map[string][]byte, dir string) error {
+	raw, err := sourceJSON(dir)
+	files[sourceFile] = raw
+	return err
+}
+
+// addIcons stores the plugin's and its account types' icon files.
+func addIcons(files map[string][]byte, dir string, m *manifest.Manifest) error {
 	icons := []string{m.Icon}
 	for _, at := range m.AccountTypes {
 		icons = append(icons, at.Icon)
@@ -119,23 +155,12 @@ func collectPackage(dir, runtimesDir, overlay string, allowMissingUI bool) (map[
 		if icon != "" && !strings.HasPrefix(icon, "text:") {
 			b, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(icon)))
 			if err != nil {
-				return nil, nil, nil, fmt.Errorf("icon: %w", err)
+				return fmt.Errorf("icon: %w", err)
 			}
 			files[icon] = b
 		}
 	}
-	// Overlay files (except the manifest override files) win.
-	if overlay != "" {
-		if err := add(overlay, "", func(rel string) bool { return rel == overlayManifest || rel == overlayPatch }); err != nil {
-			return nil, nil, nil, err
-		}
-	}
-
-	w, err := checkPackage(files, m, allowMissingUI)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	return files, m, append(warnings, w...), nil
+	return nil
 }
 
 // addTree adds every regular file below root (if it exists) under prefix.

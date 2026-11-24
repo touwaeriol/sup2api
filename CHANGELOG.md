@@ -20,6 +20,7 @@
 - **弃用**：`GET /market/plugins` 透传插件与版本的 `deprecated`；`latest_version`、`update_available` 不计弃用版本，弃用版本仍可安装。列表新增 `publisher_name`、`publisher_homepage`、`publisher_status`、`repo`、`source_url`、`builtin`，`trust` 改为索引的值。安装总是重新拉索引。
 - **商店列表**：`GET /market/plugins` 返回 `{data, host_version, generated_at, fetched_at}`，每项带 `id`、`display_id`、`store_id`、`store_name`、`publisher_github`，版本带 `sha256`。
 - **控制台**：插件市场页显示发布者名称与信任级别、吊销/缺失标记（禁止安装）、内置、弃用（原因）、主页/仓库/源码链接，可按发布者筛选；选版本时标出弃用版本并给出“更新说明”链接；确认页把 `indexed` 当作通过。
+- **索引登记处与插件版本记录**（CONTRACTS §135）：登记处目录改为 `plugins/<publisher>/<key>/`（`--plugin` 写 `publisher/key`，只写 key 指 `sub2api`），索引里插件先列 `sub2api` 的再按发布者、key 排序；登记处的频道是分支，索引发布到 `index-<branch>`：测试频道 `develop`（`index-develop`，登记 PR 提到这里）和正式频道 `main`（`index-main`，由 `develop` 晋级），晋级 PR 用 `registry check --promotion`。`pack` 在包里写 `source.json`（源码摘要），`registry add-version` 记成版本的 `source_digest`，`registry check` 核对。`next/plugins/released.json` 与 `TestReleasedPluginsBumped` 删除，改由 next CI 的 `sub2api-plugin released-check --strict` 对照 `index-develop`：已登记的版本源码变了就失败，要升版本、发布、向登记处 `develop` 提 `add-version` PR。
 
 ### 插件 id = 发布者 + key（分支 `feat/plugin-identity`；迁移 0126，单向；CONTRACTS §137）
 

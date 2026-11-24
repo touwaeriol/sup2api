@@ -2,18 +2,21 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"path"
+	"slices"
 	"strings"
 
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
 )
 
 // The plugin store's index registry (CONTRACTS §135): one JSON file per
-// publisher, per plugin and per plugin version, from which `index` builds
+// publisher, per plugin (plugins/<publisher>/<key>/) and per plugin version, from which `index` builds
 // index.json and `registry check` reviews pull requests.
 const (
 	regPublishersDir = "publishers"
@@ -29,23 +32,19 @@ type deprecation struct {
 	Reason manifest.LocalizedText `json:"reason"`
 }
 
-// indexPublisher is a publisher as index.json lists it.
-type indexPublisher struct {
+// regPublisher is publishers/<id>.json, and the publisher as index.json
+// lists it. GitHub holds the logins allowed to publish for it: registry
+// check and CODEOWNERS use them, the console shows them.
+type regPublisher struct {
 	ID       string                 `json:"id"`
 	Name     manifest.LocalizedText `json:"name"`
 	Homepage string                 `json:"homepage,omitempty"`
+	GitHub   []string               `json:"github"`
 	Trust    string                 `json:"trust"`
 	Status   string                 `json:"status"`
 }
 
-// regPublisher is publishers/<id>.json: the index fields plus the GitHub
-// logins allowed to publish for it (CI only, not in the index).
-type regPublisher struct {
-	indexPublisher
-	GitHub []string `json:"github"`
-}
-
-// regPlugin is plugins/<key>/plugin.json.
+// regPlugin is plugins/<publisher>/<key>/plugin.json.
 type regPlugin struct {
 	Key         string                 `json:"key"`
 	Publisher   string                 `json:"publisher"`
@@ -57,15 +56,16 @@ type regPlugin struct {
 	Deprecated  *deprecation           `json:"deprecated,omitempty"`
 }
 
-// regVersion is plugins/<key>/versions/<version>.json.
+// regVersion is plugins/<publisher>/<key>/versions/<version>.json.
 type regVersion struct {
-	Version    string       `json:"version"`
-	URL        string       `json:"url"`
-	SHA256     string       `json:"sha256"`
-	Size       int64        `json:"size"`
-	HostCompat string       `json:"host_compat"`
-	ReleaseURL string       `json:"release_url"` // the GitHub release page, the version's release notes
-	Deprecated *deprecation `json:"deprecated,omitempty"`
+	Version      string       `json:"version"`
+	URL          string       `json:"url"`
+	SHA256       string       `json:"sha256"`
+	Size         int64        `json:"size"`
+	HostCompat   string       `json:"host_compat"`
+	ReleaseURL   string       `json:"release_url"`             // the GitHub release page, the version's release notes
+	SourceDigest string       `json:"source_digest,omitempty"` // the package's source.json; none in packages packed before it
+	Deprecated   *deprecation `json:"deprecated,omitempty"`
 }
 
 // regEntry is one plugin directory.
@@ -74,10 +74,47 @@ type regEntry struct {
 	versions map[string]*regVersion
 }
 
+// ref is the entry's plugin ref.
+func (e *regEntry) ref() string { return regRef(e.plugin.Publisher, e.plugin.Key) }
+
 // registry is a loaded and validated registry checkout.
 type registry struct {
 	publishers map[string]*regPublisher
-	plugins    map[string]*regEntry
+	plugins    map[string]*regEntry // by ref
+}
+
+// A plugin ref names a plugin in the registry as "<publisher>/<key>", its
+// directory below plugins/: two publishers may each have a plugin "codex".
+const refSep = "/"
+
+func regRef(publisher, key string) string { return publisher + refSep + key }
+
+// parseRegRef reads a --plugin value: "<publisher>/<key>", or a bare key of
+// the official publisher.
+func parseRegRef(s string) string {
+	if strings.Contains(s, refSep) {
+		return s
+	}
+	return regRef(manifest.OfficialPublisher, s)
+}
+
+// pluginDir is the directory of a plugin ref, relative to the checkout.
+func pluginDir(ref string) string { return path.Join(regPluginsDir, ref) }
+
+// sortedPlugins lists the plugins in display order: the official
+// publisher's first, then by publisher and key.
+func (reg *registry) sortedPlugins() []*regEntry {
+	rank := func(e *regEntry) int {
+		if e.plugin.Publisher == manifest.OfficialPublisher {
+			return 0
+		}
+		return 1
+	}
+	out := slices.Collect(maps.Values(reg.plugins))
+	slices.SortFunc(out, func(a, b *regEntry) int {
+		return cmp.Or(cmp.Compare(rank(a), rank(b)), strings.Compare(a.plugin.Publisher, b.plugin.Publisher), strings.Compare(a.plugin.Key, b.plugin.Key))
+	})
+	return out
 }
 
 // loadRegistry reads and validates every publisher, plugin and version file
@@ -89,45 +126,60 @@ func loadRegistry(root string, dev bool) (*registry, error) {
 	var errs []error
 	for _, name := range jsonFiles(root, regPublishersDir, &errs) {
 		p := &regPublisher{}
-		if addErr(&errs, readRegistryFile(root, path.Join(regPublishersDir, name), p, checkPublisher)) {
+		rel := path.Join(regPublishersDir, name)
+		if addErr(&errs, readRegistryFile(root, rel, strings.TrimSuffix(name, regJSONExt), p, checkPublisher)) {
 			reg.publishers[p.ID] = p
 		}
 	}
-	dirs, err := readDirIfExists(root, regPluginsDir)
-	addErr(&errs, err)
-	for _, d := range dirs {
-		e, perrs := loadPluginDir(root, d, dev)
-		errs = append(errs, perrs...)
-		if e != nil {
-			reg.plugins[e.plugin.Key] = e
-		}
-	}
-	for _, e := range reg.plugins {
-		if _, ok := reg.publishers[e.plugin.Publisher]; !ok {
-			errs = append(errs, fmt.Errorf("plugins/%s/plugin.json: publisher %q has no publishers/%[2]s.json", e.plugin.Key, e.plugin.Publisher))
+	reg.loadPlugins(root, dev, &errs)
+	for ref, e := range reg.plugins {
+		if pub := e.plugin.Publisher; reg.publishers[pub] == nil {
+			errs = append(errs, fmt.Errorf("%s: publisher %q has no %s", path.Join(pluginDir(ref), regPluginFile), pub, path.Join(regPublishersDir, pub+regJSONExt)))
 		}
 	}
 	return reg, errors.Join(errs...)
 }
 
-// loadPluginDir reads plugins/<key>/: plugin.json, an optional icon.svg and
+// loadPlugins reads plugins/<publisher>/<key>/ for every publisher and key
+// directory.
+func (reg *registry) loadPlugins(root string, dev bool, errs *[]error) {
+	pubs, err := readDirIfExists(root, regPluginsDir)
+	addErr(errs, err)
+	for _, pd := range pubs {
+		if !pd.IsDir() {
+			*errs = append(*errs, fmt.Errorf("%s: not a directory", path.Join(regPluginsDir, pd.Name())))
+			continue
+		}
+		keys, err := readDirIfExists(root, path.Join(regPluginsDir, pd.Name()))
+		addErr(errs, err)
+		for _, kd := range keys {
+			e, perrs := loadPluginDir(root, regRef(pd.Name(), kd.Name()), kd, dev)
+			*errs = append(*errs, perrs...)
+			if e != nil {
+				reg.plugins[e.ref()] = e
+			}
+		}
+	}
+}
+
+// loadPluginDir reads plugins/<ref>/: plugin.json, an optional icon.svg and
 // versions/*.json, and nothing else.
-func loadPluginDir(root string, d fs.DirEntry, dev bool) (*regEntry, []error) {
-	rel := path.Join(regPluginsDir, d.Name())
+func loadPluginDir(root, ref string, d fs.DirEntry, dev bool) (*regEntry, []error) {
+	rel := pluginDir(ref)
 	if !d.IsDir() {
 		return nil, []error{fmt.Errorf("%s: not a directory", rel)}
 	}
 	var errs []error
 	addErr(&errs, onlyEntries(root, rel, []string{regPluginFile, regIconFile}, []string{regVersionsDir}))
 	e := &regEntry{versions: map[string]*regVersion{}}
-	if !addErr(&errs, readRegistryFile(root, path.Join(rel, regPluginFile), &e.plugin, checkPlugin)) {
+	if !addErr(&errs, readRegistryFile(root, path.Join(rel, regPluginFile), ref, &e.plugin, checkPlugin)) {
 		return nil, errs
 	}
 	vdir := path.Join(rel, regVersionsDir)
 	for _, name := range jsonFiles(root, vdir, &errs) {
 		v := &regVersion{}
 		file := path.Join(vdir, name)
-		if !addErr(&errs, readRegistryFile(root, file, v, checkVersion)) {
+		if !addErr(&errs, readRegistryFile(root, file, strings.TrimSuffix(name, regJSONExt), v, checkVersion)) {
 			continue
 		}
 		if dev || addErr(&errs, prefixErr(file, releaseConsistent(&e.plugin, v))) {
@@ -137,9 +189,9 @@ func loadPluginDir(root string, d fs.DirEntry, dev bool) (*regEntry, []error) {
 	return e, errs
 }
 
-// readRegistryFile decodes rel strictly into v and validates it against its
-// file name (the stem of rel, or its directory for plugin.json).
-func readRegistryFile[T any](root, rel string, v *T, check func(name string, v *T) []string) error {
+// readRegistryFile decodes rel strictly into v and validates it against
+// name: the file's stem, or the plugin ref for a plugin.json.
+func readRegistryFile[T any](root, rel, name string, v *T, check func(name string, v *T) []string) error {
 	raw, err := readRegular(root, rel)
 	if err != nil {
 		return err
@@ -148,10 +200,6 @@ func readRegistryFile[T any](root, rel string, v *T, check func(name string, v *
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
 		return fmt.Errorf("%s: %w", rel, err)
-	}
-	name := strings.TrimSuffix(path.Base(rel), regJSONExt)
-	if name == strings.TrimSuffix(regPluginFile, regJSONExt) {
-		name = path.Base(path.Dir(rel))
 	}
 	if problems := check(name, v); len(problems) > 0 {
 		return fmt.Errorf("%s: %s", rel, strings.Join(problems, "; "))

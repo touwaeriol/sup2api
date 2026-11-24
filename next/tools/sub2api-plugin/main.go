@@ -1,6 +1,6 @@
 // Command sub2api-plugin is the developer tool for sub2api-next plugins:
 // key generation, cross-compilation, packaging, signing and verification,
-// the plugin store's registry and index (index, registry), a local core for
+// the plugin store's registry and index (index, registry, released-check), a local core for
 // development (dev), and the migrations of a plugin's GORM models (db).
 package main
 
@@ -19,18 +19,23 @@ Usage:
   sub2api-plugin build  --dir <plugin dir> [--out <dir>] [--dev] [--tags a,b] [--overlay <dir>] [--platforms linux/amd64,...]
   sub2api-plugin pack   --dir <plugin dir> (--out <file.s2plugin> | --out-dir <dir>) [--runtimes <dir>] [--overlay <dir>] [--allow-missing-ui]
                         [--skip-db-check]   (pack runs db check, overlay included, when the plugin has internal/model
-                                             and a database; see db below for the PostgreSQL it needs)
+                                             and a database; see db below for the PostgreSQL it needs;
+                                             source.json records the digest of the plugin directory's sources)
   sub2api-plugin sign   --key <private key file> --key-id <id> [--publisher <name>] <file.s2plugin>
   sub2api-plugin verify --pub <public key file|base64> <file.s2plugin>
   sub2api-plugin index  --registry <registry dir> [--out <index.json>] [--dev]
                         (validate the registry, write index.json v2; --dev: a local market, relative urls allowed)
   sub2api-plugin registry check --registry <head dir> --base <base dir> --author <GitHub login> [--summary <file.md>] [--json]
                         (review a registry pull request; downloads every new version's package)
-  sub2api-plugin registry add-version --registry <dir> --plugin <key> [--tag <tag>]
-                        (write versions/<version>.json from the plugin repo's GitHub release; GITHUB_TOKEN is used if set)
+  sub2api-plugin registry add-version --registry <dir> --plugin <publisher/key | key of sub2api> [--tag <tag>]
+                        (write plugins/<publisher>/<key>/versions/<version>.json from the plugin repo's GitHub release,
+                         source_digest from the package's source.json; GITHUB_TOKEN is used if set)
   sub2api-plugin registry codeowners --registry <dir> [--default-owner <login>]   (print CODEOWNERS)
   sub2api-plugin registry import --registry <dir> --repo <owner/name> [--trust <level>] [--url-prefix <url>] <file.s2plugin>...
                         (register local packages for a development market)
+  sub2api-plugin released-check --plugins <dir> --index <index.json url> [--strict]
+                        (fail when a plugin's sources changed under a version the index registers with another
+                         source_digest; an unreadable index only warns unless --strict)
   sub2api-plugin manifest --dir <plugin dir> [--overlay <dir>]   (print the effective manifest)
   sub2api-plugin dev    [--dir <plugin dir>] [--with <dir|file.s2plugin>]... [--addr 127.0.0.1:8080] [--core <sub2api>] [--reset] [--no-watch]
                         (run a local core with the plugin installed; rebuild on change)
@@ -49,16 +54,17 @@ func main() {
 
 // commands are the subcommands by name.
 var commands = map[string]func([]string, io.Writer, io.Writer) error{
-	"keygen":   cmdKeygen,
-	"build":    cmdBuild,
-	"pack":     cmdPack,
-	"sign":     cmdSign,
-	"verify":   cmdVerify,
-	"index":    cmdIndex,
-	"manifest": cmdManifest,
-	"dev":      cmdDev,
-	"db":       cmdDB,
-	"registry": cmdRegistry,
+	"keygen":         cmdKeygen,
+	"build":          cmdBuild,
+	"pack":           cmdPack,
+	"sign":           cmdSign,
+	"verify":         cmdVerify,
+	"index":          cmdIndex,
+	"manifest":       cmdManifest,
+	"dev":            cmdDev,
+	"db":             cmdDB,
+	"registry":       cmdRegistry,
+	"released-check": cmdReleasedCheck,
 }
 
 func run(args []string, stdout, stderr io.Writer) int {

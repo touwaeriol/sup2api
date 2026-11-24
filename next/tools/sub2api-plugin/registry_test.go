@@ -64,12 +64,17 @@ func (rt rewriteTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	return http.DefaultTransport.RoundTrip(r)
 }
 
-// regFixture is a base registry listing demo 0.1.0 (publisher tester,
-// GitHub login alice) and a fake GitHub releasing demo 0.1.0 and 0.2.0.
+// regFixture is a base registry listing tester/demo 0.1.0 (GitHub login
+// alice) and a fake GitHub releasing demo 0.1.0 and 0.2.0, both packed from
+// dir.
 type regFixture struct {
 	gh   *fakeGitHub
 	base string
+	dir  string
 }
+
+// demoRef is the fixture plugin's ref.
+const demoRef = "tester/demo"
 
 func newRegFixture(t *testing.T) *regFixture {
 	t.Helper()
@@ -88,10 +93,10 @@ func newRegFixture(t *testing.T) *regFixture {
 	base := t.TempDir()
 	writeFile(t, filepath.Join(base, "publishers", "tester.json"), `{"id": "tester", "name": {"zh": "测试", "en": "Tester"},
   "github": ["alice"], "trust": "community", "status": "active"}`)
-	writeFile(t, filepath.Join(base, "plugins", "demo", "plugin.json"), `{"key": "demo", "publisher": "tester",
+	writeFile(t, filepath.Join(base, "plugins", "tester", "demo", "plugin.json"), `{"key": "demo", "publisher": "tester",
   "name": {"zh": "演示", "en": "Demo"}, "description": {"zh": "演示插件", "en": "A demo"}, "repo": "acme/demo"}`)
-	runOK(t, "registry", "add-version", "--registry", base, "--plugin", "demo", "--tag", "v0.1.0")
-	return &regFixture{gh: gh, base: base}
+	runOK(t, "registry", "add-version", "--registry", base, "--plugin", demoRef, "--tag", "v0.1.0")
+	return &regFixture{gh: gh, base: base, dir: dir}
 }
 
 // head copies the base registry for a pull request.
@@ -104,11 +109,13 @@ func (f *regFixture) head(t *testing.T) string {
 	return head
 }
 
-// check runs `registry check --json` and decodes the result.
-func (f *regFixture) check(t *testing.T, head, author string, wantOK bool) checkResult {
+// check runs `registry check --json` (with extra flags) and decodes the
+// result.
+func (f *regFixture) check(t *testing.T, head, author string, wantOK bool, extra ...string) checkResult {
 	t.Helper()
 	var out, errb strings.Builder
-	code := run([]string{"registry", "check", "--registry", head, "--base", f.base, "--author", author, "--json"}, &out, &errb)
+	args := []string{"registry", "check", "--registry", head, "--base", f.base, "--author", author, "--json"}
+	code := run(append(args, extra...), &out, &errb)
 	var res checkResult
 	if err := json.Unmarshal([]byte(out.String()), &res); err != nil {
 		t.Fatalf("exit %d, output %q, stderr %s: %v", code, out.String(), errb.String(), err)
@@ -119,9 +126,9 @@ func (f *regFixture) check(t *testing.T, head, author string, wantOK bool) check
 	return res
 }
 
-func readVersionFile(t *testing.T, root, key, ver string) regVersion {
+func readVersionFile(t *testing.T, root, ref, ver string) regVersion {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(root, "plugins", key, "versions", ver+".json"))
+	raw, err := os.ReadFile(filepath.Join(root, "plugins", filepath.FromSlash(ref), "versions", ver+".json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,45 +139,50 @@ func readVersionFile(t *testing.T, root, key, ver string) regVersion {
 	return v
 }
 
-func writeVersionFile(t *testing.T, root, key string, v regVersion) {
+func writeVersionFile(t *testing.T, root, ref string, v regVersion) {
 	t.Helper()
 	raw, err := encodeJSON(v)
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeFile(t, filepath.Join(root, "plugins", key, "versions", v.Version+".json"), string(raw))
+	writeFile(t, filepath.Join(root, "plugins", filepath.FromSlash(ref), "versions", v.Version+".json"), string(raw))
 }
 
 func TestRegistryAddVersion(t *testing.T) {
 	f := newRegFixture(t)
-	v := readVersionFile(t, f.base, "demo", "0.1.0")
+	v := readVersionFile(t, f.base, demoRef, "0.1.0")
 	sum, size, err := fileSHA256(f.gh.pkgs["v0.1.0"])
 	if err != nil {
 		t.Fatal(err)
 	}
+	digest, err := pluginDigest(f.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	want := regVersion{Version: "0.1.0", URL: "https://github.com/acme/demo/releases/download/v0.1.0/demo-0.1.0.s2plugin",
-		SHA256: sum, Size: size, HostCompat: ">=0.1.0 <0.2.0", ReleaseURL: "https://github.com/acme/demo/releases/tag/v0.1.0"}
+		SHA256: sum, Size: size, HostCompat: ">=0.1.0 <0.2.0", ReleaseURL: "https://github.com/acme/demo/releases/tag/v0.1.0", SourceDigest: digest}
 	if v != want || f.gh.auth[0] != "Bearer tok" {
 		t.Fatalf("version = %+v, auth %q", v, f.gh.auth)
 	}
-	if msg := runFail(t, "registry", "add-version", "--registry", f.base, "--plugin", "demo", "--tag", "v0.1.0"); !strings.Contains(msg, "already exists") {
+	if msg := runFail(t, "registry", "add-version", "--registry", f.base, "--plugin", demoRef, "--tag", "v0.1.0"); !strings.Contains(msg, "already exists") {
 		t.Fatalf("second add: %s", msg)
 	}
-	runOK(t, "registry", "add-version", "--registry", f.base, "--plugin", "demo")
-	if v := readVersionFile(t, f.base, "demo", "0.2.0"); !strings.HasSuffix(v.URL, "/demo-v0.2.0/demo-0.2.0.s2plugin") {
+	runOK(t, "registry", "add-version", "--registry", f.base, "--plugin", demoRef)
+	if v := readVersionFile(t, f.base, demoRef, "0.2.0"); !strings.HasSuffix(v.URL, "/demo-v0.2.0/demo-0.2.0.s2plugin") || v.SourceDigest != digest {
 		t.Fatalf("latest = %+v", v)
 	}
-	if msg := runFail(t, "registry", "add-version", "--registry", f.base, "--plugin", "nope"); !strings.Contains(msg, "no plugins/nope") {
-		t.Fatalf("unknown plugin: %s", msg)
+	// A bare key names a plugin of the official publisher.
+	if msg := runFail(t, "registry", "add-version", "--registry", f.base, "--plugin", "demo"); !strings.Contains(msg, "no plugins/sub2api/demo/plugin.json") {
+		t.Fatalf("bare key: %s", msg)
 	}
 }
 
 func TestRegistryCheckNewVersion(t *testing.T) {
 	f := newRegFixture(t)
 	head := f.head(t)
-	runOK(t, "registry", "add-version", "--registry", head, "--plugin", "demo")
+	runOK(t, "registry", "add-version", "--registry", head, "--plugin", demoRef)
 	res := f.check(t, head, "Alice", true)
-	if res.NeedsManualReview || res.Publisher != "tester" || len(res.Versions) != 1 {
+	if res.NeedsManualReview || res.Publisher != "tester" || len(res.Versions) != 1 || res.Versions[0].Plugin != demoRef {
 		t.Fatalf("result = %+v", res)
 	}
 	v := res.Versions[0]
@@ -205,7 +217,7 @@ func TestRegistryAddVersionRejectsRelease(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			f := newRegFixture(t)
 			tc.edit(f.gh.releases["demo-v0.2.0"])
-			if msg := runFail(t, "registry", "add-version", "--registry", f.base, "--plugin", "demo"); !strings.Contains(msg, tc.want) {
+			if msg := runFail(t, "registry", "add-version", "--registry", f.base, "--plugin", demoRef); !strings.Contains(msg, tc.want) {
 				t.Fatalf("message %q, want %q", msg, tc.want)
 			}
 		})
