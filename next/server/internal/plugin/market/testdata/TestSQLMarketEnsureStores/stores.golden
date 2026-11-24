@@ -1,0 +1,3 @@
+-- sql
+SELECT id, name, repo, official, created_at FROM "market_stores" ORDER BY official DESC, id
+-- vars

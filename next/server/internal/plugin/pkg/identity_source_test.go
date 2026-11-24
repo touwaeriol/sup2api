@@ -23,9 +23,24 @@ var bareKeyAllowed = map[string]int{
 // few places bareKeyAllowed lists.
 func TestNoBareManifestKey(t *testing.T) {
 	t.Parallel()
+	found := bareKeyReads(t, filepath.Join("..", ".."))
+	for file, n := range found {
+		if bareKeyAllowed[file] != n {
+			t.Errorf("%s reads a manifest's bare key %d times (allowed %d): use m.ID(), the plugin id", file, n, bareKeyAllowed[file])
+		}
+	}
+	for file := range bareKeyAllowed {
+		if found[file] == 0 {
+			t.Errorf("bareKeyAllowed lists %s, which reads no bare key", file)
+		}
+	}
+}
+
+// bareKeyReads counts the reads of a manifest's bare key in each Go file
+// under root (tests aside), by path relative to root.
+func bareKeyReads(t *testing.T, root string) map[string]int {
 	fset := token.NewFileSet()
 	found := map[string]int{}
-	root := filepath.Join("..", "..")
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return err
@@ -46,16 +61,7 @@ func TestNoBareManifestKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for file, n := range found {
-		if bareKeyAllowed[file] != n {
-			t.Errorf("%s reads a manifest's bare key %d times (allowed %d): use m.ID(), the plugin id", file, n, bareKeyAllowed[file])
-		}
-	}
-	for file := range bareKeyAllowed {
-		if found[file] == 0 {
-			t.Errorf("bareKeyAllowed lists %s, which reads no bare key", file)
-		}
-	}
+	return found
 }
 
 // isManifest reports whether x reads as a manifest: x.Manifest or m.

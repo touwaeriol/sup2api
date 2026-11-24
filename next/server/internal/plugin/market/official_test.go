@@ -8,17 +8,18 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/testutil"
 )
 
-// Migration 0125 seeds the channels 正式 (main, default) and 测试
-// (develop). EnsureChannels points every channel at the base keeping its
-// id, and brings a default channel back when the database has none.
-func TestEnsureChannels(t *testing.T) {
+// Migration 0125 seeds the official store with the channels 正式 (main,
+// default) and 测试 (develop). EnsureStores points every channel of the
+// official store at the base keeping its id, and brings its default channel
+// back when the database has none.
+func TestEnsureStores(t *testing.T) {
 	db, ctx := testutil.DB(t), context.Background()
 	s := New(db, fakeInstaller{}, nil, Options{BaseURL: "https://mirror.example/m/"})
-	if err := s.EnsureChannels(ctx); err != nil {
+	if err := s.EnsureStores(ctx); err != nil {
 		t.Fatal(err)
 	}
 	srcs := listChannels(t, s)
-	if srcs[0].Name != DefaultChannelName || srcs[0].Branch != "main" || !srcs[0].IsDefault || srcs[0].Repo != OfficialRepo ||
+	if srcs[0].Name != DefaultChannelName || srcs[0].Branch != "main" || !srcs[0].IsDefault || srcs[0].StoreName != OfficialStoreName ||
 		srcs[0].URL != "https://mirror.example/m/index-main/index.json" || srcs[1].Branch != "develop" ||
 		srcs[1].URL != "https://mirror.example/m/index-develop/index.json" || srcs[1].IsDefault {
 		t.Fatalf("channels = %+v", srcs)
@@ -27,7 +28,7 @@ func TestEnsureChannels(t *testing.T) {
 		t.Fatal(err)
 	}
 	official := New(db, fakeInstaller{}, nil, Options{})
-	if err := official.EnsureChannels(ctx); err != nil {
+	if err := official.EnsureStores(ctx); err != nil {
 		t.Fatal(err)
 	}
 	again := listChannels(t, official)
@@ -53,7 +54,7 @@ func TestListPluginsDefaultMissing(t *testing.T) {
 // listChannels lists the two channels of s.
 func listChannels(t *testing.T, s *Service) []Source {
 	t.Helper()
-	srcs, err := s.ListSources(context.Background())
+	srcs, err := s.ListSources(context.Background(), 0)
 	if err != nil || len(srcs) != 2 {
 		t.Fatalf("channels = %+v %v", srcs, err)
 	}

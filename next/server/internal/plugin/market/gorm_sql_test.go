@@ -10,18 +10,19 @@ import (
 
 // The SQL of the market statements built with GORM (see package gormtest).
 
-// EnsureChannels points each channel at the base and brings back the
+// EnsureStores points each channel at the base and brings back the
 // default one.
-func TestSQLMarketEnsureChannels(t *testing.T) {
+func TestSQLMarketEnsureStores(t *testing.T) {
 	const base = "https://market.example/m"
 	t.Run("urls", func(t *testing.T) {
 		gormtest.Assert(t, func(db *gorm.DB) *gorm.DB {
-			return staleURLs(db, base).Update("url", channelURLExpr(base))
+			return staleURLs(db, 2, base).Update("url", channelURLExpr(base))
 		})
 	})
-	t.Run("default", func(t *testing.T) {
+	t.Run("stores", func(t *testing.T) {
 		gormtest.Assert(t, func(db *gorm.DB) *gorm.DB {
-			return upsertDefault(db, base+"/index-main/index.json")
+			var out []Store
+			return storeRows(db).Order("official DESC, id").Find(&out)
 		})
 	})
 }
@@ -30,19 +31,19 @@ func TestSQLMarketSources(t *testing.T) {
 	t.Run("list", func(t *testing.T) {
 		gormtest.Assert(t, func(db *gorm.DB) *gorm.DB {
 			var out []Source
-			return sources(db).Order("is_default DESC, id").Find(&out)
+			return sources(db).Where("c.store_id = ?", 2).Order("st.official DESC, c.store_id, c.is_default DESC, c.id").Find(&out)
 		})
 	})
 	t.Run("one", func(t *testing.T) {
 		gormtest.Assert(t, func(db *gorm.DB) *gorm.DB {
 			var src Source
-			return sources(db).Where("id = ?", 5).Take(&src)
+			return sources(db).Where("c.id = ?", 5).Take(&src)
 		})
 	})
 	t.Run("default", func(t *testing.T) {
 		gormtest.Assert(t, func(db *gorm.DB) *gorm.DB {
 			var src Source
-			return sources(db).Where("is_default").Take(&src)
+			return sources(db).Where("st.official AND c.is_default").Take(&src)
 		})
 	})
 }

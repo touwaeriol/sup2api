@@ -20,10 +20,9 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store/model"
 )
 
-// Review is the consent screen payload (CONTRACTS §5.7). PluginKey is the
-// plugin id.
+// Review is the consent screen payload (CONTRACTS §5.7).
 type Review struct {
-	PluginKey   string             `json:"plugin_key"`
+	PluginKey   string             `json:"plugin_key"` // the plugin id
 	Version     string             `json:"version"`
 	Name        core.LocalizedText `json:"name"`
 	Description core.LocalizedText `json:"description,omitempty"`

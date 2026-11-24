@@ -38,9 +38,9 @@ type Options struct {
 	// AllowHTTP accepts http:// source and package URLs besides https://
 	// (SUB2API_MARKET_ALLOW_HTTP: local markets of test stacks and development).
 	AllowHTTP bool
-	// BaseURL is where the store's channel indexes are, OfficialBase when
-	// empty (SUB2API_MARKET_BASE_URL: the local market of a test stack or
-	// development).
+	// BaseURL is where the official store's channel indexes are,
+	// OfficialBase when empty (SUB2API_MARKET_BASE_URL: the local market of
+	// a test stack or development).
 	BaseURL string
 }
 
@@ -51,7 +51,7 @@ type Service struct {
 	client *http.Client
 	pkg    *http.Client // client with at least rc.PluginPackageTransferTimeout
 	opt    Options
-	base   string // the store's base (Options.BaseURL)
+	base   string // the official store's base (Options.BaseURL)
 	now    func() time.Time
 
 	mu    sync.Mutex
@@ -75,7 +75,7 @@ func New(db *store.DB, inst Installer, client *http.Client, opt Options) *Servic
 	if opt.MaxPackageBytes <= 0 {
 		opt.MaxPackageBytes = rc.PluginPackageMaxBytes
 	}
-	s := &Service{db: db, inst: inst, opt: opt, base: storeBase(opt.BaseURL), now: time.Now, cache: map[int64]cached{}}
+	s := &Service{db: db, inst: inst, opt: opt, base: officialBase(opt.BaseURL), now: time.Now, cache: map[int64]cached{}}
 	idxClient, pkgClient := *client, *client
 	idxClient.CheckRedirect = CheckRedirect(opt.AllowHTTP)
 	pkgClient.CheckRedirect = idxClient.CheckRedirect

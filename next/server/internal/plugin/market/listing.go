@@ -23,6 +23,8 @@ const PublisherMissing = "missing"
 
 // MarketPlugin is one listing row.
 type MarketPlugin struct {
+	StoreID    int64  `json:"store_id"`
+	StoreName  string `json:"store_name"`
 	SourceID   int64  `json:"source_id"`
 	SourceName string `json:"source_name"`
 	// ID is the plugin id (manifest.PluginID) of Publisher's Key, the key
@@ -38,7 +40,8 @@ type MarketPlugin struct {
 	// PublisherGitHub are the GitHub logins the index lists for the
 	// publisher (who may register its plugins).
 	PublisherGitHub []string `json:"publisher_github,omitempty"`
-	// Trust is the publisher's trust level in the index, "" when the index
+	// Trust is the publisher's trust level in the index, at most community
+	// for a store other than the official one (capTrust); "" when the index
 	// does not list it.
 	Trust string `json:"trust"`
 	// PublisherStatus is active, revoked (in the index or on this core) or
@@ -133,20 +136,21 @@ func (s *Service) listState(ctx context.Context) (*listState, error) {
 // plugin is the listing row of p, listed by idx of src.
 func (st *listState) plugin(src *Source, idx *Index, p IndexPlugin) MarketPlugin {
 	id := p.ID()
-	mp := MarketPlugin{SourceID: src.ID, SourceName: src.Name, ID: id, DisplayID: manifest.DisplayID(id), Key: p.Key,
+	mp := MarketPlugin{StoreID: src.StoreID, StoreName: src.StoreName, SourceID: src.ID, SourceName: src.Name, ID: id, DisplayID: manifest.DisplayID(id), Key: p.Key,
 		Name: p.Name, Description: p.Description, Repo: p.Repo, SourceURL: p.Source, Builtin: p.Builtin, Deprecated: p.Deprecated,
 		Versions: []MarketVersion{}}
-	st.setPublisher(&mp, idx, p.Publisher)
+	st.setPublisher(&mp, idx, p.Publisher, src.Official)
 	latest := st.setVersions(&mp, p.Versions)
 	st.setInstalled(&mp, latest)
 	return mp
 }
 
-// setPublisher fills in the publisher id of mp as idx lists it.
-func (st *listState) setPublisher(mp *MarketPlugin, idx *Index, id string) {
+// setPublisher fills in the publisher id of mp as idx, of the official
+// store or not, lists it.
+func (st *listState) setPublisher(mp *MarketPlugin, idx *Index, id string, official bool) {
 	pub, ok := idx.publisher(id)
 	mp.Publisher, mp.PublisherName, mp.PublisherHomepage, mp.PublisherGitHub = id, pub.Name, pub.Homepage, pub.GitHub
-	mp.Trust, mp.PublisherStatus = pub.Trust, pub.Status
+	mp.Trust, mp.PublisherStatus = capTrust(pub.Trust, official), pub.Status
 	switch {
 	case !ok:
 		mp.PublisherStatus = PublisherMissing

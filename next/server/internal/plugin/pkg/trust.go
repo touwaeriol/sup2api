@@ -282,7 +282,7 @@ func lookupOfficial(g *gorm.DB, name, keyID string) (*int64, error) {
 // revoked.
 func activePublisher(g *gorm.DB, name string) (*model.Publisher, error) {
 	var pub model.Publisher
-	if err := g.Select("id", "trust_level", "status").Where("name = ?", name).Take(&pub).Error; err != nil {
+	if err := g.Select("id", "trust_level", "status", "store_id").Where("name = ?", name).Take(&pub).Error; err != nil {
 		return nil, err
 	}
 	if core.ValueOr(pub.Status, "") != "active" {

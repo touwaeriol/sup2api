@@ -74,8 +74,6 @@ func TestRegistryNamesAndSources(t *testing.T) {
 	s.Title = nil // plugin tasks fall back to their id
 	_, err = r.Add(s, SourcePluginRuntime, "dynweight")
 	require.NoError(t, err)
-	_, err = r.Add(spec("plugin._erio__codex.sync", core.TaskCluster), SourcePluginManifest, "_erio__codex")
-	require.NoError(t, err, "a third-party plugin id")
 
 	node := spec("core.test.node", core.TaskNode)
 	node.Every = time.Second
@@ -88,9 +86,9 @@ func TestRegistryNamesAndSources(t *testing.T) {
 		}
 		return out
 	}
-	require.Equal(t, []string{"core.test.task", "plugin._erio__codex.sync", "plugin.dynweight.evaluate-v2.fast"}, names(r.List(core.TaskCluster)))
+	require.Equal(t, []string{"core.test.task", "plugin.dynweight.evaluate-v2.fast"}, names(r.List(core.TaskCluster)))
 	require.Equal(t, []string{"core.test.node"}, names(r.List(core.TaskNode)))
-	require.Len(t, r.List(""), 4)
+	require.Len(t, r.List(""), 3)
 	require.True(t, r.Remove("core.test.node"))
 	require.False(t, r.Remove("core.test.node"))
 	_, ok := r.Get("core.test.node")
@@ -154,4 +152,13 @@ func TestScheduleAlignmentAndMinPeriod(t *testing.T) {
 	_, err = ParseSchedule("not a schedule")
 	require.Error(t, err)
 	require.False(t, errors.Is(err, core.ErrTaskInvalid))
+}
+
+// A plugin's tasks are named after its plugin id, a third-party one's too
+// (CONTRACTS §137).
+func TestRegistryPluginIDNames(t *testing.T) {
+	_, err := NewRegistry().Add(spec("plugin._erio__codex.sync", core.TaskCluster), SourcePluginManifest, "_erio__codex")
+	require.NoError(t, err)
+	_, err = NewRegistry().Add(spec("plugin._erio__codex.sync", core.TaskCluster), SourcePluginManifest, "codex")
+	require.ErrorIs(t, err, core.ErrTaskInvalid, "another plugin's name space")
 }

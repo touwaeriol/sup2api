@@ -24,6 +24,7 @@ func All() []any {
 		&GroupModelRate{},
 		&Group{},
 		&MarketSource{},
+		&MarketStore{},
 		&ModelPriceHistory{},
 		&ModelPrice{},
 		&Notification{},

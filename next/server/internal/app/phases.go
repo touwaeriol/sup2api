@@ -196,7 +196,7 @@ func (v hostVersion) HostVersion() string { return string(v) }
 
 // ensureMarket checks the store's base (SUB2API_MARKET_BASE_URL) on every
 // node, then brings the store's channels in line with it
-// (market.EnsureChannels) on every start of a core that may coordinate
+// (market.EnsureStores) on every start of a core that may coordinate
 // plugins: an unmanaged one, a bootstrap or the managed primary, so that an
 // upgrade or a changed base takes effect without a bootstrap.
 func (b *boot) ensureMarket() error {
@@ -206,7 +206,7 @@ func (b *boot) ensureMarket() error {
 	if m := b.managed; m != nil && !m.coordinateAllowed() {
 		return nil
 	}
-	if err := b.mkt.EnsureChannels(b.ctx); err != nil {
+	if err := b.mkt.EnsureStores(b.ctx); err != nil {
 		return fmt.Errorf("market: %w", err)
 	}
 	return nil

@@ -62,10 +62,10 @@ func (h *harness) serveMarket(data []byte, key, pub, trust string) int64 {
 	h.t.Cleanup(srv.Close)
 	m := market.New(h.db, h.api.d.Install, srv.Client(), market.Options{MaxPackageBytes: 10 << 20, AllowHTTP: true, BaseURL: srv.URL + "/m/"})
 	ctx := context.Background()
-	if err := m.EnsureChannels(ctx); err != nil {
+	if err := m.EnsureStores(ctx); err != nil {
 		h.t.Fatal(err)
 	}
-	srcs, err := m.ListSources(ctx)
+	srcs, err := m.ListSources(ctx, 0)
 	if err != nil || len(srcs) != 2 || !srcs[0].IsDefault {
 		h.t.Fatalf("sources: %v %v", srcs, err)
 	}

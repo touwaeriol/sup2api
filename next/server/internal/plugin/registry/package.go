@@ -28,12 +28,10 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store/model"
 )
 
-// Package is one verified .s2plugin cached on local disk. Files are read
-// straight from the zip; the struct is safe for concurrent use.
+// Package is one verified .s2plugin cached on local disk, read straight
+// from the zip; the struct is safe for concurrent use.
 type Package struct {
-	// Key is the plugin id (manifest.PluginID, CONTRACTS §137), the key of
-	// the plugins row; Manifest.Key is the bare key the plugin calls itself.
-	Key       string
+	Key       string // the plugin id (CONTRACTS §137); Manifest.Key is the bare key
 	Version   string
 	SHA256    string // hex sha256 of the .s2plugin file
 	Manifest  *manifest.Manifest

@@ -1,16 +1,12 @@
 package api
 
 import (
-	"net/http"
-	"strconv"
-
 	"github.com/gin-gonic/gin"
 
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/httpapi"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/install"
-	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/market"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/pkg"
 )
 
@@ -77,109 +73,6 @@ func (a *API) uiPlugins(c *gin.Context) {
 		out = append(out, item)
 	}
 	httpapi.OK(c, out)
-}
-
-// ---------------------------------------------------------------- market
-
-func (a *API) marketSources(c *gin.Context) {
-	if a.d.Market == nil {
-		httpapi.OK(c, []any{})
-		return
-	}
-	srcs, err := a.d.Market.ListSources(c.Request.Context())
-	if err != nil {
-		httpapi.Fail(c, err)
-		return
-	}
-	httpapi.OK(c, srcs)
-}
-
-// createChannel adds a channel of the store (market.CreateChannel).
-func (a *API) createChannel(c *gin.Context) {
-	var in market.ChannelInput
-	if !a.marketReady(c) || !httpapi.BindJSON(c, &in) {
-		return
-	}
-	src, err := a.d.Market.CreateChannel(ctx(c), in, actor(c))
-	if err != nil {
-		httpapi.Fail(c, err)
-		return
-	}
-	httpapi.Created(c, src)
-}
-
-// updateChannel changes a channel of the store (market.UpdateChannel).
-func (a *API) updateChannel(c *gin.Context) {
-	var in market.ChannelPatch
-	id, ok := httpapi.PathID(c, "id")
-	if !ok || !a.marketReady(c) || !httpapi.BindJSON(c, &in) {
-		return
-	}
-	src, err := a.d.Market.UpdateChannel(ctx(c), id, in, actor(c))
-	reply(c, src, err)
-}
-
-// deleteChannel deletes a channel of the store (market.DeleteChannel).
-func (a *API) deleteChannel(c *gin.Context) {
-	id, ok := httpapi.PathID(c, "id")
-	if !ok || !a.marketReady(c) {
-		return
-	}
-	if err := a.d.Market.DeleteChannel(ctx(c), id, actor(c)); err != nil {
-		httpapi.Fail(c, err)
-		return
-	}
-	httpapi.NoContent(c)
-}
-
-// marketReady fails the request when this node has no market client.
-func (a *API) marketReady(c *gin.Context) bool {
-	if a.d.Market == nil {
-		httpapi.Fail(c, core.ErrUnavailable.WithMessage("market unavailable"))
-		return false
-	}
-	return true
-}
-
-func (a *API) marketPlugins(c *gin.Context) {
-	if a.d.Market == nil {
-		marketList(c, &market.Listing{Plugins: []market.MarketPlugin{}}, a.hostVersion())
-		return
-	}
-	var sourceID int64
-	if s := c.Query("source_id"); s != "" {
-		id, err := strconv.ParseInt(s, 10, 64)
-		if err != nil || id <= 0 {
-			httpapi.Fail(c, core.ErrInvalidArgument.WithMessage("invalid source_id"))
-			return
-		}
-		sourceID = id
-	}
-	refresh, _ := strconv.ParseBool(c.Query("refresh"))
-	list, err := a.d.Market.ListPlugins(c.Request.Context(), sourceID, refresh)
-	if err != nil {
-		httpapi.Fail(c, err)
-		return
-	}
-	marketList(c, list, a.hostVersion())
-}
-
-func (a *API) hostVersion() string {
-	if a.d.Install == nil {
-		return ""
-	}
-	return a.d.Install.HostVersion()
-}
-
-// marketList renders listing l: {"data": [...], "host_version": "0.2.0",
-// "generated_at": ..., "fetched_at": ...}, the times only once the core
-// has fetched an index.
-func marketList(c *gin.Context, l *market.Listing, hostVersion string) {
-	body := gin.H{"data": l.Plugins, "host_version": hostVersion}
-	if !l.FetchedAt.IsZero() {
-		body["generated_at"], body["fetched_at"] = l.GeneratedAt, l.FetchedAt
-	}
-	c.JSON(http.StatusOK, body)
 }
 
 // ---------------------------------------------------------------- publishers

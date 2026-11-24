@@ -70,8 +70,12 @@ func (a *API) RegisterRoutes(r *httpapi.Router) {
 	r.Self(http.MethodGet, "/ui/plugins", PermSelfUI, a.uiPlugins)
 	r.Perm(http.MethodGet, "/nodes", PermNodeRead, a.nodes)
 
+	r.Perm(http.MethodGet, "/market/stores", PermMarketRead, a.marketStores)
+	r.Perm(http.MethodPost, "/market/stores", PermManage, a.createStore)
+	r.Perm(http.MethodPatch, "/market/stores/:id", PermManage, a.updateStore)
+	r.Perm(http.MethodDelete, "/market/stores/:id", PermManage, a.deleteStore)
+	r.Perm(http.MethodPost, "/market/stores/:id/sources", PermManage, a.createChannel)
 	r.Perm(http.MethodGet, "/market/sources", PermMarketRead, a.marketSources)
-	r.Perm(http.MethodPost, "/market/sources", PermManage, a.createChannel)
 	r.Perm(http.MethodPatch, "/market/sources/:id", PermManage, a.updateChannel)
 	r.Perm(http.MethodDelete, "/market/sources/:id", PermManage, a.deleteChannel)
 	r.Perm(http.MethodGet, "/market/plugins", PermMarketRead, a.marketPlugins)

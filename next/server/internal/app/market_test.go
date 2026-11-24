@@ -45,7 +45,7 @@ func (tc marketCase) run(t *testing.T) {
 	if err := b.ensureMarket(); (err != nil) != tc.fails {
 		t.Fatalf("ensureMarket = %v, want failure %v", err, tc.fails)
 	}
-	srcs, err := mkt.ListSources(ctx)
+	srcs, err := mkt.ListSources(ctx, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

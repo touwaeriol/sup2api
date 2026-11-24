@@ -1,6 +1,7 @@
 -- sql
-INSERT INTO "publishers" ("name","trust_level","revoked_at") VALUES ($1,$2,$3) ON CONFLICT ("name") DO NOTHING RETURNING "id","status","created_at"
+INSERT INTO "publishers" ("name","trust_level","revoked_at","store_id") VALUES ($1,$2,$3,$4) ON CONFLICT ("name") DO NOTHING RETURNING "id","status","created_at"
 -- vars
 $1 string "sub2api"
 $2 string "official"
 $3 *time.Time nil
+$4 *int64 nil

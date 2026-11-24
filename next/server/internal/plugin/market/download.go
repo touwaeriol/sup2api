@@ -17,7 +17,8 @@ import (
 // publisher must be listed active (403 otherwise,
 // pkg.IndexedPublisher.Check). The options are the ones to hand it to the
 // installer with (install.Upload, ReviewPackage, InstallWithConsent): its
-// trust level is the index's, not its signature's (CONTRACTS §136).
+// trust level is the index's (at most community from a store other than the
+// official one), not its signature's (CONTRACTS §136, §137.6).
 func (s *Service) Download(ctx context.Context, sourceID int64, publisher, key, version string) ([]byte, install.UploadOptions, error) {
 	e, err := s.findEntry(ctx, sourceID, publisher, key, version)
 	if err != nil {
@@ -67,7 +68,9 @@ func (s *Service) newEntry(src *Source, idx *Index, p *IndexPlugin, v *IndexVers
 	if err != nil {
 		return nil, core.ErrInvalidArgument.WithMessage(err.Error())
 	}
-	return &entry{src: src, base: base, version: v, publisher: idx.indexed(p.Publisher)}, nil
+	pub := idx.indexed(p.Publisher)
+	pub.Trust, pub.StoreID = capTrust(pub.Trust, src.Official), src.StoreID
+	return &entry{src: src, base: base, version: v, publisher: pub}, nil
 }
 
 // downloadURL is the package URL of e resolved against its index URL:

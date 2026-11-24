@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/dbschema"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/testutil"
 )
@@ -22,13 +23,7 @@ func TestPluginIDsCoexist(t *testing.T) {
 	k := randKey()
 	ids := []string{k, manifest.PluginID(k, "codex")}
 	for _, id := range ids {
-		install(t, db, id, nil, false)
-		if _, err := m.Migrate(ctx, id, scripts("0001.sql", `CREATE TABLE `+manifest.TablePrefix(id)+`items (id int)`)); err != nil {
-			t.Fatalf("%s: %v", id, err)
-		}
-		if err := queryErr(asPlugin(t, m, dsn, id), `INSERT INTO `+manifest.TablePrefix(id)+`items VALUES (1)`); err != nil {
-			t.Fatalf("%s writes its table: %v", id, err)
-		}
+		withItems(t, db, m, dsn, id)
 	}
 	for _, id := range ids {
 		if strays, err := m.Strays(ctx, id); err != nil || len(strays) > 0 {
@@ -43,6 +38,18 @@ func TestPluginIDsCoexist(t *testing.T) {
 		if err := m.Ensure(ctx, bad); err == nil {
 			t.Fatalf("Ensure(%q) accepted", bad)
 		}
+	}
+}
+
+// withItems installs plugin id with a table items that it writes to.
+func withItems(t *testing.T, db *store.DB, m *dbschema.Manager, dsn, id string) {
+	t.Helper()
+	install(t, db, id, nil, false)
+	if _, err := m.Migrate(context.Background(), id, scripts("0001.sql", `CREATE TABLE `+manifest.TablePrefix(id)+`items (id int)`)); err != nil {
+		t.Fatalf("%s: %v", id, err)
+	}
+	if err := queryErr(asPlugin(t, m, dsn, id), `INSERT INTO `+manifest.TablePrefix(id)+`items VALUES (1)`); err != nil {
+		t.Fatalf("%s writes its table: %v", id, err)
 	}
 }
 

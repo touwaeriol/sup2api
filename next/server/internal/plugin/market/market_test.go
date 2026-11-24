@@ -72,11 +72,11 @@ func serveIndex(t *testing.T, raw, pkgBytes []byte) (srv *httptest.Server, hits 
 func seedChannels(t *testing.T, s *Service) int64 {
 	ctx := context.Background()
 	for range 2 {
-		if err := s.EnsureChannels(ctx); err != nil {
+		if err := s.EnsureStores(ctx); err != nil {
 			t.Fatal(err)
 		}
 	}
-	srcs, err := s.ListSources(ctx)
+	srcs, err := s.ListSources(ctx, 0)
 	if err != nil || len(srcs) != 2 || !srcs[0].IsDefault {
 		t.Fatalf("sources: %v %v", err, srcs)
 	}
@@ -148,7 +148,11 @@ func checkDownload(t *testing.T, s *Service, srcID int64, base string, pkgBytes 
 	if err != nil || !bytes.Equal(got, pkgBytes) {
 		t.Fatalf("download = %d bytes, %v", len(got), err)
 	}
-	want := pkg.IndexedPublisher{Name: "acme", Trust: pkg.TrustVerified, Status: pkg.PublisherActive}
+	src, err := s.channel(ctx, srcID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := pkg.IndexedPublisher{Name: "acme", Trust: pkg.TrustVerified, Status: pkg.PublisherActive, StoreID: src.StoreID}
 	if opt.ExpectID != "_acme__tool" || opt.ExpectVersion != "1.1.0" || opt.Source != fmt.Sprintf("market:%d", srcID) ||
 		opt.PackageURL != base+"pkgs/tool-1.1.0.s2plugin" || opt.Indexed == nil || *opt.Indexed != want {
 		t.Fatalf("options = %+v", opt)
@@ -188,12 +192,12 @@ func TestUpdateAvailable(t *testing.T) {
 // (SUB2API_MARKET_ALLOW_HTTP).
 func TestMarketHTTPS(t *testing.T) {
 	ctx := context.Background()
-	if err := New(testutil.DB(t), fakeInstaller{}, nil, Options{BaseURL: "http://market.example/"}).EnsureChannels(ctx); err == nil {
+	if err := New(testutil.DB(t), fakeInstaller{}, nil, Options{BaseURL: "http://market.example/"}).EnsureStores(ctx); err == nil {
 		t.Fatal("http source accepted")
 	}
 	s := New(testutil.DB(t), fakeInstaller{}, nil, Options{})
 	dev := New(testutil.DB(t), fakeInstaller{}, nil, Options{AllowHTTP: true, BaseURL: "http://market.example/"})
-	if err := dev.EnsureChannels(ctx); err != nil {
+	if err := dev.EnsureStores(ctx); err != nil {
 		t.Fatalf("allow http: %v", err)
 	}
 	base, _ := s.indexURL("https://market.example/m/")

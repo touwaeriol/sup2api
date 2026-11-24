@@ -615,11 +615,10 @@ func TestPublisherRevocation(t *testing.T) {
 		if _, err := e.svc.Upload(ctx, pkgtest.Build(pkgtest.Minimal(key, "1.0.0", "acme"), signer), e.admin, UploadOptions{}); err != nil {
 			t.Fatal(err)
 		}
-		id := manifest.PluginID("acme", key)
-		if _, err := e.svc.Consent(ctx, id, "1.0.0", ConsentRequest{}, e.admin); err != nil {
+		if _, err := e.svc.Consent(ctx, manifest.PluginID("acme", key), "1.0.0", ConsentRequest{}, e.admin); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := e.db.SQL.ExecContext(ctx, `UPDATE plugins SET status = 'enabled', active_version = '1.0.0' WHERE key = $1`, id); err != nil {
+		if _, err := e.db.SQL.ExecContext(ctx, `UPDATE plugins SET status = 'enabled', active_version = '1.0.0' WHERE key = '_acme__'||$1`, key); err != nil {
 			t.Fatal(err)
 		}
 	}

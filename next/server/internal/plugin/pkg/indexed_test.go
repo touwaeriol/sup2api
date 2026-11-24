@@ -140,3 +140,30 @@ func TestReadVersionTrust(t *testing.T) {
 	execSQL(t, db, `UPDATE plugin_versions SET publisher_id = NULL`)
 	want("0.1.0", TrustUnsigned)
 }
+
+// A publisher belongs to the store that first installed its plugins
+// (CONTRACTS §137.6): the first install binds it, one bound to another
+// store is refused, a preview included; a publisher registered by hand is
+// bound by its first store install.
+func TestVerifyIndexedStore(t *testing.T) {
+	db, ctx := testutil.DB(t), context.Background()
+	ts, _ := NewTrustStore(nil, false)
+	execSQL(t, db, `INSERT INTO market_stores (id, name, repo) VALUES (101, 'a', 'a/r'), (102, 'b', 'b/r')`)
+	execSQL(t, db, `INSERT INTO publishers (name, trust_level) VALUES ('local', 'verified')`)
+	for _, name := range []string{"acme", "local"} {
+		p := unsignedPackage(t, "tool", name)
+		from := func(store int64) IndexedPublisher {
+			return IndexedPublisher{Name: name, Trust: TrustCommunity, Status: PublisherActive, StoreID: store}
+		}
+		if _, err := ts.VerifyIndexed(ctx, db.Gorm, p, from(101), true); err != nil {
+			t.Fatalf("%s from store a: %v", name, err)
+		}
+		for _, register := range []bool{true, false} {
+			_, err := ts.VerifyIndexed(ctx, db.Gorm, p, from(102), register)
+			wantCode(t, name+" from store b", err, "publisher_other_store", "")
+		}
+		if _, err := ts.VerifyIndexed(ctx, db.Gorm, p, from(101), true); err != nil {
+			t.Fatalf("%s from store a again: %v", name, err)
+		}
+	}
+}

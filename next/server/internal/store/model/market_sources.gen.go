@@ -15,6 +15,7 @@ type MarketSource struct {
 	CreatedAt time.Time `gorm:"column:created_at;default:(-);autoCreateTime:false"` // timestamp with time zone default now()
 	Branch    string    `gorm:"column:branch"`                                      // character varying(64)
 	IsDefault bool      `gorm:"column:is_default;default:(-)"`                      // boolean default false
+	StoreID   int64     `gorm:"column:store_id"`                                    // bigint
 }
 
 // TableName implements gorm's schema.Tabler.

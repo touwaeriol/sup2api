@@ -160,9 +160,8 @@ func TestBuiltinTakesBackRetiredKey(t *testing.T) {
 // The first-party publisher is reserved (CONTRACTS §137): a package naming
 // it installs with official trust, from the built-in channel or in dev
 // mode only. Another publisher's plugin of a first-party key installs next
-// to it under its own id. A reserved platform id belongs to its plugin
-// (audit 2026-10-09 P1-5).
-func TestReservedPublisherAndPlatforms(t *testing.T) {
+// to it under its own id.
+func TestReservedPublisher(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
 	acme := acmePublisher(t, e, pkg.TrustVerified)
@@ -190,8 +189,15 @@ func TestReservedPublisherAndPlatforms(t *testing.T) {
 	if _, err := e.svc.Upload(ctx, pkgtest.Build(pkgtest.Minimal("relay", "1.0.0", "sub2api"), pkgtest.Key{}), e.admin, UploadOptions{}); err != nil {
 		t.Fatalf("dev mode: %v", err)
 	}
+}
+
+// A reserved platform id belongs to its first-party plugin, whatever
+// another publisher's plugin is keyed (audit 2026-10-09 P1-5).
+func TestReservedPlatformOtherPublisher(t *testing.T) {
+	e := newEnv(t)
+	acme := acmePublisher(t, e, pkg.TrustVerified)
 	m := renamePlatform(pkgtest.Platform("typesafe", "1.0.0", "acme"), "typesafe")
-	if _, err := e.svc.Upload(ctx, pkgtest.Build(m, acme), e.admin, UploadOptions{}); errCode(err) != "plugin_key_reserved" {
+	if _, err := e.svc.Upload(context.Background(), pkgtest.Build(m, acme), e.admin, UploadOptions{}); errCode(err) != "plugin_key_reserved" {
 		t.Fatalf("acme/typesafe declared the reserved platform: %v", err)
 	}
 }

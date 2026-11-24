@@ -3,6 +3,7 @@ package pkg
 import (
 	"context"
 	"fmt"
+	"net/http"
 
 	"gorm.io/gorm"
 
@@ -24,12 +25,19 @@ const (
 
 // IndexedPublisher is what a market index says of the publisher of a
 // package it lists: its id (the manifest's publisher), trust level and
-// status, "" when the index does not list it.
+// status, "" when the index does not list it; StoreID is the store whose
+// index it is (0: none, a test's).
 type IndexedPublisher struct {
-	Name   string
-	Trust  string
-	Status string
+	Name    string
+	Trust   string
+	Status  string
+	StoreID int64
 }
+
+// ErrPublisherOtherStore: the publisher belongs to another store, the one
+// that first installed its plugins on this core (CONTRACTS §137.6).
+var ErrPublisherOtherStore = core.NewError(http.StatusConflict, "publisher_other_store",
+	"the publisher belongs to another plugin store on this core")
 
 // Check fails unless the index lists the publisher as active: a revoked
 // one as a revoked publisher, a missing one as unlisted (both 403).
@@ -71,26 +79,50 @@ func (t *TrustStore) VerifyIndexed(ctx context.Context, q *gorm.DB, p *Package, 
 // first when register.
 func indexedPublisherID(g *gorm.DB, ip IndexedPublisher, register bool) (*int64, error) {
 	if register {
-		if err := registerIndexed(g, ip.Name).Error; err != nil {
+		if err := registerIndexed(g, ip).Error; err != nil {
 			return nil, err
 		}
 	}
 	pub, err := activePublisher(g, ip.Name)
 	switch {
-	case err == nil:
-		return &pub.ID, nil
 	case !register && store.IsNoRows(err):
 		return new(int64), nil
+	case err != nil:
+		return nil, err
 	}
-	return nil, err
+	return &pub.ID, bindStore(g, pub, ip, register)
 }
 
-// registerIndexed registers the publisher name of a market install unless
-// it is registered: as community, the level of a publisher without a key
-// here (its hand uploads are not trusted any higher). A registered one is
-// never changed by an index.
-func registerIndexed(g *gorm.DB, name string) *gorm.DB {
-	return g.Clauses(onConflictNothing("name")).Create(&model.Publisher{Name: name, TrustLevel: TrustCommunity})
+// registerIndexed registers the publisher of a market install unless it is
+// registered: as community, the level of a publisher without a key here
+// (its hand uploads are not trusted any higher), bound to the index's
+// store. A registered one is never changed by an index but for bindStore.
+func registerIndexed(g *gorm.DB, ip IndexedPublisher) *gorm.DB {
+	return g.Clauses(onConflictNothing("name")).Create(&model.Publisher{Name: ip.Name, TrustLevel: TrustCommunity, StoreID: storeRef(ip.StoreID)})
+}
+
+// bindStore holds publisher pub to the store that first installed its
+// plugins: an install from another store is refused (409), and a write
+// binds a publisher bound to none (registered by hand, or before stores)
+// to the index's store.
+func bindStore(g *gorm.DB, pub *model.Publisher, ip IndexedPublisher, register bool) error {
+	switch {
+	case ip.StoreID == 0:
+		return nil
+	case pub.StoreID != nil && *pub.StoreID != ip.StoreID:
+		return ErrPublisherOtherStore.WithMessage(fmt.Sprintf("publisher %q belongs to another plugin store on this core", ip.Name))
+	case pub.StoreID == nil && register:
+		return g.Model(&model.Publisher{}).Where("id = ? AND store_id IS NULL", pub.ID).Update("store_id", ip.StoreID).Error
+	}
+	return nil
+}
+
+// storeRef is the store_id of store id, NULL for 0.
+func storeRef(id int64) *int64 {
+	if id == 0 {
+		return nil
+	}
+	return &id
 }
 
 // VerifyRecorded re-checks the package p of a recorded version when a node
