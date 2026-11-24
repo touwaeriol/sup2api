@@ -21,6 +21,16 @@ export interface ConsentSource {
   approve(review: PluginReview, consent: ConsentRequest): Promise<ConsentResult>
   /** Discards a registered version; an install has nothing to discard. */
   reject?: () => Promise<unknown>
+  /** A market install: the store version asked for. */
+  market?: MarketTarget
+}
+
+/** What a market install names: the store, the plugin by publisher and key, the version (POST /plugins/review-from-market). */
+export interface MarketTarget {
+  source_id: number
+  publisher: string
+  key: string
+  version: string
 }
 
 /** The uploaded file is gone (the page was reloaded): there is nothing to review. */
@@ -45,14 +55,15 @@ function registeredSource(key: string, version: string): ConsentSource {
 
 function marketSource(query: RouteLocationNormalizedLoaded['query']): ConsentSource {
   const text = (name: string) => String(query[name] ?? '')
-  const target = { source_id: Number(text('source_id')), key: text('key'), version: text('version') }
+  const target: MarketTarget = { source_id: Number(text('source_id')), publisher: text('publisher'), key: text('key'), version: text('version') }
   const install = (consent: InstallConsent) => api.post<ConsentedInstall>('/plugins/install-from-market', { ...target, consent })
   return {
     kind: 'market',
     version: target.version,
     back: '/market',
     review: () => api.post<PluginReview>('/plugins/review-from-market', target),
-    approve: async (r, consent) => (await install(forPackage(r, consent))).consent
+    approve: async (r, consent) => (await install(forPackage(r, consent))).consent,
+    market: target
   }
 }
 

@@ -4,7 +4,24 @@ import { describe, expect, it } from 'vitest'
 import en from '@/i18n/locales/en/plugins'
 import zh from '@/i18n/locales/zh/plugins'
 import { i18n } from '@/i18n'
-import { HOST_PERMISSION_RISK, accountTypesOf, consoleSettings, consoleSettingsPath, endpointText, hpKey, isPluginKey, nativeSettingsPath, platformsOf, pluginSettingsPath, pluginStatusTone, refusalText } from './pluginUtil'
+import {
+  HOST_PERMISSION_RISK,
+  OFFICIAL_PUBLISHER,
+  accountTypesOf,
+  consoleSettings,
+  consoleSettingsPath,
+  displayPluginId,
+  endpointText,
+  hpKey,
+  isPluginKey,
+  nativeSettingsPath,
+  parsePluginId,
+  platformsOf,
+  pluginSettingsPath,
+  pluginStatusTone,
+  refusalText,
+  tablePrefix
+} from './pluginUtil'
 
 describe('plugin endpoint declarations', () => {
   it('preserves the same subset in manifests and installation reviews', () => {
@@ -93,6 +110,27 @@ describe('isPluginKey', () => {
     expect(rule).toBe('^[a-z](_?[a-z0-9]){1,29}$')
     for (const key of ['mailer', 'azure_openai', 'a1', 'x'.repeat(30)]) expect([key, isPluginKey(key)]).toEqual([key, true])
     for (const key of ['', 'a', '..', 'a/b', 'Mailer', 'guard-on', '1st', 'a__b', 'guard_', 'x'.repeat(31), 'a_'.repeat(15) + 'b']) expect([key, isPluginKey(key)]).toEqual([key, false])
+  })
+  it('takes a third-party plugin id: a valid publisher and key, at most 30 bytes in all', () => {
+    const rule = readFileSync('../sdk/manifest/check/publisher.go', 'utf8').match(/\bpublisherIDRe\s*=\s*regexp\.MustCompile\(`([^`]+)`\)/)?.[1]
+    expect(rule).toBe('^[a-z0-9](_?[a-z0-9]){0,26}$')
+    for (const id of ['_erio__codex', '_a1__x1', '_my_team__billing_bridge']) expect([id, isPluginKey(id)]).toEqual([id, true])
+    const bad = ['_erio__', '__codex', '_erio_codex', '_Erio__codex', '_erio-x__codex', '_sub2api__codex', '_erio__Codex', '_er__io__codex', `_erio__${'x'.repeat(24)}`]
+    for (const id of bad) expect([id, isPluginKey(id)]).toEqual([id, false])
+  })
+})
+
+describe('plugin ids (manifest.ParsePluginID, DisplayID)', () => {
+  it('reads both parts back and shows another publisher as publisher/key', () => {
+    expect(parsePluginId('codex')).toEqual({ publisher: OFFICIAL_PUBLISHER, key: 'codex' })
+    expect(parsePluginId('_erio__codex')).toEqual({ publisher: 'erio', key: 'codex' })
+    expect(parsePluginId('_my_team__a_b')).toEqual({ publisher: 'my_team', key: 'a_b' })
+    for (const id of ['', '_', '_erio', '_erio__', '___codex']) expect([id, parsePluginId(id)]).toEqual([id, null])
+    expect(['codex', '_erio__codex', '_sub2api__codex', '_broken'].map(displayPluginId)).toEqual(['codex', 'erio/codex', '_sub2api__codex', '_broken'])
+  })
+  it('prefixes the tables of a plugin with its id', () => {
+    expect(tablePrefix('codex')).toBe('plg_codex__')
+    expect(tablePrefix('_erio__codex')).toBe('plg__erio__codex__')
   })
 })
 

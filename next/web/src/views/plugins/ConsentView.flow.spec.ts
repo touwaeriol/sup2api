@@ -14,6 +14,8 @@ const mocks = vi.hoisted(() => ({
   get: vi.fn(),
   post: vi.fn(),
   upload: vi.fn(),
+  list: vi.fn(),
+  raw: vi.fn(),
   push: vi.fn(),
   confirm: vi.fn(),
   route: { path: '', params: {} as Record<string, string>, query: {} as Record<string, string> },
@@ -21,7 +23,8 @@ const mocks = vi.hoisted(() => ({
 }))
 vi.mock('@sub2api/host', async (original) => ({
   ...(await original<object>()),
-  api: { get: mocks.get, post: mocks.post, upload: mocks.upload },
+  api: { get: mocks.get, post: mocks.post, upload: mocks.upload, list: mocks.list },
+  requestRaw: mocks.raw,
   isApiError: (e: unknown) => typeof e === 'object' && e !== null && 'code' in e
 }))
 vi.mock('@sub2api/ui', async (original) => ({ ...(await original<object>()), confirm: mocks.confirm }))
@@ -72,7 +75,7 @@ function plugin(status: string, active: string | null = null) {
   mocks.get.mockImplementation(async (path: string) => (path === '/me/assignable-roles' ? [] : { key: 'x', status, active_version: active }))
 }
 const at = (path: string, params: Record<string, string> = {}, query: Record<string, string> = {}) => Object.assign(mocks.route, { path, params, query })
-const atMarket = () => at('/plugins/install/market', {}, { source_id: '2', key: 'bar', version: '1.0.0' })
+const atMarket = () => at('/plugins/install/market', {}, { source_id: '2', publisher: 'barlabs', key: 'bar', version: '1.0.0' })
 
 function mountView() {
   return mount(ConsentView, { global: { plugins: [i18n, createPinia()], stubs: { teleport: true } } })
@@ -97,6 +100,8 @@ describe('consent page sources', () => {
     mocks.manage = true
     plugin('installed')
     mocks.post.mockImplementation(async (path: string) => (path.endsWith('review-from-market') ? review() : {}))
+    mocks.list.mockResolvedValue({ items: [{ id: 2, name: '测试', branch: 'develop', url: 'https://x/index-develop/index.json', enabled: true, is_default: false }] })
+    mocks.raw.mockResolvedValue({ data: [], host_version: '0.1.0' })
   })
 
   describe('market', () => {
@@ -104,7 +109,7 @@ describe('consent page sources', () => {
 
     it('reviews before anything is installed and says so above the steps', async () => {
       const w = await shown()
-      expect(mocks.post).toHaveBeenCalledWith('/plugins/review-from-market', { source_id: 2, key: 'bar', version: '1.0.0' })
+      expect(mocks.post).toHaveBeenCalledWith('/plugins/review-from-market', { source_id: 2, publisher: 'barlabs', key: 'bar', version: '1.0.0' })
       expect(w.get('[data-testid="install-steps"]').text()).toContain(tt('pluginInstall.steps.install.note'))
       expect(w.get('[data-testid="consent-approve"]').text()).toBe(tt('plugins.consent.approve'))
       expect(w.text()).not.toContain(tt('plugins.consent.reject'))
@@ -129,7 +134,7 @@ describe('consent page sources', () => {
       const w = await shown()
       await click(w, 'consent-approve')
       const consent = { ...CONSENT, package_sha256: SHA }
-      expect(mocks.post).toHaveBeenCalledWith('/plugins/install-from-market', { source_id: 2, key: 'bar', version: '1.0.0', consent })
+      expect(mocks.post).toHaveBeenCalledWith('/plugins/install-from-market', { source_id: 2, publisher: 'barlabs', key: 'bar', version: '1.0.0', consent })
       expect(mocks.post).toHaveBeenCalledWith('/plugins/bar/enable', undefined)
       expect(mocks.push).toHaveBeenCalledWith('/plugins/bar/rollout')
     })

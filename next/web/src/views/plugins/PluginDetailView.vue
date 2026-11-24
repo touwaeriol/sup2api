@@ -12,8 +12,9 @@ import { useAuthStore } from '@/stores/auth'
 import { refreshShell } from '@/stores/app'
 import { consentPath } from './consent/paths'
 import RoleGrantsReview from './parts/RoleGrantsReview.vue'
-import { compareVersions, conflictLines, consoleSettings, isPendingConsent, nativeSettingsPath, refusalText, rolloutAfterConsent, shownStatus, tabOf, type PluginDetail, type PluginSettings } from './pluginUtil'
+import { compareVersions, conflictLines, consoleSettings, displayPluginId, isPendingConsent, nativeSettingsPath, refusalText, rolloutAfterConsent, shownStatus, tabOf, type PluginDetail, type PluginSettings } from './pluginUtil'
 import TrustBadge from './parts/TrustBadge.vue'
+import PluginIdText from './parts/PluginIdText.vue'
 import OverviewTab from './detail/OverviewTab.vue'
 import PermissionsTab from './detail/PermissionsTab.vue'
 import NodesTab from './detail/NodesTab.vue'
@@ -45,7 +46,7 @@ const uninstallOpen = ref(false)
 const upgradeOpen = ref(false)
 const upgradeVersion = ref('')
 
-const name = computed(() => (detail.value ? lt(detail.value.name) || detail.value.key : key.value))
+const name = computed(() => (detail.value ? lt(detail.value.name) : '') || displayPluginId(key.value))
 const status = computed(() => detail.value?.status || '')
 const canManage = computed(() => auth.has('plugin:manage'))
 const inRollout = computed(() => status.value === 'enabling' || status.value === 'upgrading')
@@ -194,7 +195,7 @@ onMounted(load)
     <div v-if="loading" class="flex justify-center py-20"><SSpinner size="lg" /></div>
 
     <SCard v-else-if="!detail">
-      <SEmpty icon="plugin" :text="notFound ? t('plugins.detail.notFound', { key }) : loadError || t('common.loadFailed')">
+      <SEmpty icon="plugin" :text="notFound ? t('plugins.detail.notFound', { key: displayPluginId(key) }) : loadError || t('common.loadFailed')">
         <SButton size="sm" @click="load">{{ t('common.refresh') }}</SButton>
       </SEmpty>
     </SCard>
@@ -202,6 +203,7 @@ onMounted(load)
     <template v-else>
       <SPageHeader :title="name">
         <template #title-extra>
+          <PluginIdText :id="detail.key" class="text-sm text-fg-muted" />
           <span class="font-mono text-sm text-gray-500">{{ detail.active_version ? 'v' + detail.active_version : '' }}</span>
           <span v-if="detail.desired_version && detail.desired_version !== detail.active_version" class="font-mono text-xs text-primary-600 dark:text-primary-400">
             → v{{ detail.desired_version }}

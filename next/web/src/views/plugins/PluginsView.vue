@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { SBadge, SButton, SEmpty, SHint, SInput, SPageHeader, SSelect, STable, toast, type TableColumn, type Tone } from '@sub2api/ui'
+import { SBadge, SButton, SEmpty, SHint, SInput, SLink, SPageHeader, SSelect, STable, toast, type TableColumn, type Tone } from '@sub2api/ui'
 import PluginStatusBadge from './parts/PluginStatusBadge.vue'
 import type { PluginSummary } from '@/api/types'
 import { lt } from '@/i18n'
@@ -14,7 +14,10 @@ import { setPendingUpload } from './consent/pendingUpload'
 import PluginAvatar from './parts/PluginAvatar.vue'
 import RetiredKeys from './parts/RetiredKeys.vue'
 import TrustBadge from './parts/TrustBadge.vue'
-import { conflictLines, consoleSettingsPath, refusalText, shownStatus } from './pluginUtil'
+import PluginIdText from './parts/PluginIdText.vue'
+import PluginSourceBadge from './parts/PluginSourceBadge.vue'
+import { conflictLines, consoleSettingsPath, displayPluginId, refusalText, shownStatus } from './pluginUtil'
+import { usePluginUpgrades } from './usePluginUpgrades'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -25,6 +28,8 @@ const loading = ref(false)
 const q = ref('')
 const status = ref<string | null>(null)
 const fileInput = ref<HTMLInputElement>()
+/** The store's upgrades of the installed plugins (default channel). */
+const upgrades = usePluginUpgrades(items)
 
 const STATUSES = ['awaiting_consent', 'installed', 'enabling', 'enabled', 'upgrading', 'disabled']
 const statusOptions = computed(() => STATUSES.map((s) => ({ value: s, label: t(`plugins.status.${s}`) })))
@@ -34,6 +39,7 @@ const columns = computed<TableColumn[]>(() => [
   { key: 'status', label: t('common.status'), mobile: 'status' },
   { key: 'version', label: t('common.version'), mobile: 'meta' },
   { key: 'publisher', label: t('plugins.publisher'), mobile: 'meta', mobileSpan: 2 },
+  { key: 'source', label: t('market.source.title'), mobile: 'meta' },
   { key: 'nodes', label: t('plugins.list.nodes'), mobile: 'meta' },
   { key: 'actions', label: '', align: 'right' }
 ])
@@ -43,7 +49,7 @@ const rows = computed(() => {
   return items.value.filter((p) => {
     if (status.value && p.status !== status.value) return false
     if (!kw) return true
-    return p.key.toLowerCase().includes(kw) || lt(p.name).toLowerCase().includes(kw) || (p.publisher || '').toLowerCase().includes(kw)
+    return p.key.toLowerCase().includes(kw) || displayPluginId(p.key).includes(kw) || lt(p.name).toLowerCase().includes(kw) || (p.publisher || '').toLowerCase().includes(kw)
   })
 })
 /** The text of each refused plugin's refusal, by key: shown and as the tooltip. */
@@ -103,7 +109,7 @@ function onFile(e: Event) {
   router.push(UPLOAD_INSTALL_PATH)
 }
 
-onMounted(load)
+onMounted(() => Promise.all([load(), upgrades.load()]))
 </script>
 
 <template>
@@ -111,8 +117,9 @@ onMounted(load)
     <SPageHeader :title="t('nav.items.plugins')" :description="t('plugins.list.description')">
       <template #actions>
         <SButton :loading="loading" icon="refresh" @click="load">{{ t('common.refresh') }}</SButton>
-        <SButton v-if="auth.has('plugin:market:read')" to="/market" icon="market">
-          {{ t('plugins.market.title') }}
+        <SButton v-if="auth.has('plugin:market:read')" to="/market" icon="market" data-testid="plugins-market">
+          {{ t('market.title') }}
+          <SBadge v-if="upgrades.count.value" tone="warning" class="ml-1" data-testid="plugins-updatable">{{ t('market.updatable', { n: upgrades.count.value }) }}</SBadge>
         </SButton>
         <SButton v-if="auth.has('plugin:install')" variant="primary" icon="upload" @click="pickFile">
           {{ t('plugins.list.upload') }}
@@ -135,8 +142,8 @@ onMounted(load)
         <div class="flex items-center gap-3">
           <PluginAvatar :name="lt(row.name)" :plugin-key="row.key" :icon="row.icon" :asset-base="row.asset_base" />
           <div class="min-w-0">
-            <div class="truncate font-medium text-gray-900 dark:text-white">{{ lt(row.name) || row.key }}</div>
-            <SHint size="xs" class="truncate font-mono">{{ row.key }}</SHint>
+            <div class="truncate font-medium text-gray-900 dark:text-white">{{ lt(row.name) || displayPluginId(row.key) }}</div>
+            <SHint size="xs" class="truncate"><PluginIdText :id="row.key" /></SHint>
           </div>
         </div>
       </template>
@@ -171,14 +178,17 @@ onMounted(load)
           :title="t('plugins.desiredVersion')"
           >→ v{{ row.desired_version }}</span
         >
+        <SLink v-if="upgrades.upgrades.value[row.key]" class="ml-1.5" :to="upgrades.location(row)" data-testid="plugin-upgrade-badge" @click.stop>
+          <SBadge tone="warning">{{ t('market.upgradeBadge', { version: upgrades.upgrades.value[row.key].latest_version }) }}</SBadge>
+        </SLink>
       </template>
       <template #cell-publisher="{ row }">
         <div class="flex items-center gap-2">
           <span class="text-sm">{{ row.publisher || '—' }}</span>
           <TrustBadge :trust="row.trust" />
-          <SBadge v-if="row.builtin" tone="info" :title="t('plugins.builtinHint')">{{ t('plugins.builtin') }}</SBadge>
         </div>
       </template>
+      <template #cell-source="{ row }"><PluginSourceBadge :plugin="row" /></template>
       <template #cell-nodes="{ row }">
         <div class="flex flex-wrap gap-1">
           <SBadge v-for="n in nodeSummary(row)" :key="n.state" :tone="nodeTone(n.state)">{{ n.state }} × {{ n.count }}</SBadge>
@@ -190,6 +200,9 @@ onMounted(load)
           <SButton v-if="row.status === 'awaiting_consent' && auth.has('plugin:install')" size="sm" variant="primary" icon="shield" @click="review(row)">
             {{ t('plugins.list.review') }}
           </SButton>
+          <SButton v-if="upgrades.upgrades.value[row.key] && auth.has('plugin:install')" size="sm" variant="warning" icon="upload" :to="upgrades.location(row)" data-testid="plugin-upgrade">
+            {{ t('market.upgrade') }}
+          </SButton>
           <SButton size="sm" variant="ghost" @click="open(row)">{{ t('common.detail') }}</SButton>
           <SButton v-if="settingsPath(row)" size="sm" :to="settingsPath(row)" icon="settings">
             {{ t('plugins.detail.tabs.settings') }}
@@ -197,6 +210,11 @@ onMounted(load)
         </div>
       </template>
     </STable>
+
+    <div class="mt-3 space-y-1" data-testid="plugins-footnote">
+      <SHint size="xs">{{ t('market.sourceNote') }}</SHint>
+      <SHint size="xs">{{ t('market.identityNote') }}</SHint>
+    </div>
 
     <RetiredKeys />
   </div>

@@ -10,6 +10,8 @@ import { pluginAccountCount, uninstallPluginAccounts } from './accounts'
 import { invalid } from './common'
 import { mailerSettings } from './mailer'
 import { marketEntry } from './market'
+import { genericReview } from './marketReviews'
+import { displayId } from './pluginIds'
 
 export type Any = Record<string, any>
 
@@ -18,7 +20,8 @@ export const HOST_VERSION = '0.1.5'
 /** First mock core of the current plugin protocol (the refusal's first_core_version). */
 const FIRST_CORE_VERSION = '0.1.4'
 
-interface MockPlugin {
+export interface MockPlugin {
+  /** The plugin id (pluginIds.ts). */
   key: string
   name: Any
   description: Any
@@ -30,6 +33,8 @@ interface MockPlugin {
   desired_version: string | null
   publisher: string
   trust: string
+  /** The current version's: indexed when it came from the store, valid (signed) by default. */
+  signature_status?: string
   egress_policy: string
   resources: Any
   versions: Array<{ version: string; consent_status: string }>
@@ -296,21 +301,21 @@ for (const key of ['openai', 'gemini'] as const) {
   })
 }
 
-plugins.set('foo_platform', {
-  key: 'foo_platform',
+plugins.set('_foolabs__foo_platform', {
+  key: '_foolabs__foo_platform',
   name: { en: 'Foo Platform', zh: 'Foo 平台' },
   description: { en: 'Community adapter for the Foo API.', zh: 'Foo API 的社区适配器。' },
   status: 'awaiting_consent',
   status_reason: '',
   active_version: null,
   desired_version: '1.0.0',
-  publisher: 'foo-labs',
+  publisher: 'foolabs',
   trust: 'community',
   egress_policy: 'allow_all',
   resources: {},
   versions: [{ version: '1.0.0', consent_status: 'pending' }],
   grants: [],
-  manifest: { key: 'foo_platform', version: '1.0.0', publisher: 'foo-labs', hostCompat: '>=0.1.0' },
+  manifest: { key: 'foo_platform', version: '1.0.0', publisher: 'foolabs', hostCompat: '>=0.1.0' },
   settings: null
 })
 
@@ -324,8 +329,8 @@ plugins.set('relay', {
   status_reason: '',
   active_version: '0.3.0',
   desired_version: '0.3.0',
-  publisher: 'relay-labs',
-  trust: 'verified',
+  publisher: 'sub2api',
+  trust: 'official',
   egress_policy: 'allow_all',
   resources: { memory_mb: 64, cpu: 0.1 },
   versions: [{ version: '0.3.0', consent_status: 'approved' }],
@@ -335,7 +340,7 @@ plugins.set('relay', {
   manifest: {
     key: 'relay',
     version: '0.3.0',
-    publisher: 'relay-labs',
+    publisher: 'sub2api',
     description: { en: 'Keys of Anthropic-compatible relays.', zh: 'Anthropic 兼容中转站的 Key。' },
     hostCompat: '>=0.1.0',
     capabilities: [{ id: 'platform.adapter.v1' }],
@@ -351,7 +356,7 @@ function videogenManifest(version: string): Any {
   return {
     key: 'videogen',
     version,
-    publisher: 'video-labs',
+    publisher: 'videolabs',
     description: { en: 'Adds the myvideo platform (video generation endpoints) and its account type.', zh: '新增 myvideo 平台（视频生成端点）及其账号类型。' },
     hostCompat: '>=0.1.0',
     capabilities: [{ id: 'gateway.platform.v1' }, { id: 'platform.adapter.v1' }],
@@ -373,8 +378,8 @@ function videogenManifest(version: string): Any {
   }
 }
 
-plugins.set('videogen', {
-  key: 'videogen',
+plugins.set('_videolabs__videogen', {
+  key: '_videolabs__videogen',
   name: { en: 'Video generation', zh: '视频生成' },
   description: videogenManifest('0.2.0').description,
   status: 'enabled',
@@ -385,7 +390,7 @@ plugins.set('videogen', {
   ],
   active_version: '0.2.0',
   desired_version: '0.2.0',
-  publisher: 'video-labs',
+  publisher: 'videolabs',
   trust: 'verified',
   egress_policy: 'allow_all',
   resources: { memory_mb: 128, cpu: 0.25 },
@@ -560,54 +565,7 @@ function anthropicReview(version: string): Any {
       { id: 'routes.webhook', risk: 'high', scope: { paths: ['/oauth/callback'] }, requires: 'plugin:grant:high' },
       { id: 'net', risk: 'high', scope: { domains: ['api.anthropic.com', 'console.anthropic.com'] }, requires: 'plugin:grant:high' }
     ],
-    diff: version === '0.1.0' ? null : { added: [diffItem('jobs', 'medium'), diffItem('routes.webhook', 'high')], widened: [diffItem('net', 'high')], removed: [] }
-  }
-}
-
-function genericReview(key: string, version: string, name: Any, publisher: string, trust: string): Any {
-  // foo_platform declares the "foo" platform (bar_platform "bar"); other generic plugins use their key.
-  const pid = key.replace(/_platform$/, '')
-  return {
-    plugin_key: key,
-    version,
-    name,
-    publisher,
-    trust,
-    signature_status: trust === 'unsigned' ? 'unsigned' : 'valid',
-    host_compat_ok: key !== 'legacy_tool',
-    host_compat: key === 'legacy_tool' ? '>=0.0.1 <0.1.0' : '>=0.1.0',
-    capabilities: [{ id: 'gateway.platform.v1' }, { id: 'platform.adapter.v1' }],
-    gateway_endpoints: [{ method: 'POST', path: `/v1/${pid}/chat`, protocol: `${pid}.chat` }],
-    platforms: [
-      {
-        id: pid,
-        label: name,
-        endpoints: [
-          { method: 'POST', path: `/v1/${pid}/chat`, protocol: `${pid}.chat`, billing: 'usage' },
-          { method: 'POST', path: `/v1/${pid}/tokens`, protocol: `${pid}.tokens`, billing: 'free' }
-        ]
-      }
-    ],
-    account_types: [
-      // manifest-shaped platform entries are accepted too
-      { id: 'apikey', label: { en: 'API key', zh: 'API Key' }, form_mode: 'native', platforms: [{ platform: pid }, 'openai'] }
-    ],
-    hooks: [],
-    jobs: [],
-    events: [],
-    routes: [],
-    menus: [],
-    user_permissions: [],
-    database: null,
-    resources: { memoryMB: 64, cpu: 0.1 },
-    external_services: [`api.${pid}.dev`],
-    host_permissions: [
-      { id: 'kv', risk: 'low' },
-      { id: 'log', risk: 'low' },
-      { id: 'platform.register', risk: 'high', requires: 'plugin:grant:high' },
-      { id: 'gateway.endpoint', risk: 'high', requires: 'plugin:grant:high' },
-      { id: 'net', risk: 'high', scope: { domains: ['api.foo.dev'] }, optional: true, requires: 'plugin:grant:high' }
-    ]
+    diff: version === '0.1.0' ? null : { added: [diffItem('jobs', 'medium'), diffItem('routes.webhook', 'high')], widened: [{ ...diffItem('net', 'high'), previous_scope: { domains: ['api.anthropic.com'] } }], removed: [] }
   }
 }
 
@@ -706,7 +664,7 @@ export const reviews = new Map<string, Any>()
 reviews.set('guard@0.1.0', guardReview('0.1.0'))
 // 0.2.0 asks for more tables and privileges than the db.core_read grant of 0.1.0 holds: a wider scope.
 reviews.set('guard@0.2.0', guardReview('0.2.0', { added: [diffItem('net', 'high')], widened: [diffItem('db.core_read', 'critical')], removed: [] }))
-reviews.set('foo_platform@1.0.0', genericReview('foo_platform', '1.0.0', { en: 'Foo Platform', zh: 'Foo 平台' }, 'foo-labs', 'community'))
+reviews.set('_foolabs__foo_platform@1.0.0', genericReview('_foolabs__foo_platform', '1.0.0', { key: 'foo_platform', name: { en: 'Foo Platform', zh: 'Foo 平台' }, publisher: 'foolabs', trust: 'community' }))
 reviews.set('anthropic@0.2.0', anthropicReview('0.2.0'))
 
 export function reviewFor(key: string, version: string): Any {
@@ -715,10 +673,7 @@ export function reviewFor(key: string, version: string): Any {
   let r: Any
   if (key === 'guard') r = guardReview(version)
   else if (key === 'anthropic') r = anthropicReview(version)
-  else {
-    const m = marketEntry(key)
-    r = genericReview(key, version, m?.name ?? { en: key }, m?.publisher ?? 'unknown', m?.trust ?? 'unsigned')
-  }
+  else r = genericReview(key, version, marketEntry(key))
   reviews.set(`${key}@${version}`, r)
   return r
 }
@@ -738,6 +693,7 @@ export function stageVersion(review: Any): Any {
       desired_version: review.version,
       publisher: review.publisher,
       trust: review.trust,
+      signature_status: review.signature_status,
       egress_policy: 'allow_all',
       resources: {},
       versions: [],
@@ -820,7 +776,7 @@ function startRollout(p: MockPlugin, action: MockRollout['action'], target: stri
     target_version: target,
     started: Date.now(),
     cancelled: false,
-    failNode: p.key === 'foo_platform'
+    failNode: p.key === '_foolabs__foo_platform'
   }
   rollouts.set(p.key, r)
   p.status_reason = ''
@@ -838,6 +794,7 @@ function summary(p: MockPlugin): Any {
   const running = p.status === 'enabled' || p.status === 'upgrading'
   return {
     key: p.key,
+    display_id: displayId(p.key),
     // Like the server (plugins.go): the manifest declares ui.settings.
     has_settings: !!p.settings,
     name: p.name,
@@ -851,6 +808,7 @@ function summary(p: MockPlugin): Any {
     desired_version: p.desired_version,
     publisher: p.publisher,
     trust: p.trust,
+    signature_status: p.signature_status ?? 'valid',
     node_summary: {
       total: NODES.length,
       states: p.refused_version ? { failed: NODES.length } : running ? { active: NODES.length } : { stopped: NODES.length }

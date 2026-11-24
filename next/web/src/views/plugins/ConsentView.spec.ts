@@ -13,12 +13,11 @@ vi.mock('@sub2api/host', async (original) => ({
   api: { get: mocks.get, post: mocks.post },
   isApiError: (e: unknown) => typeof e === 'object' && e !== null && 'code' in e
 }))
-const leave = vi.hoisted(() => ({ guard: null as null | (() => unknown) }))
 vi.mock('vue-router', () => ({
   RouterLink: { template: '<a><slot /></a>' },
   useRoute: () => ({ path: '/plugins/demo/versions/1.2.0/consent', params: { key: 'demo', version: '1.2.0' }, query: {} }),
   useRouter: () => ({ push: mocks.push }),
-  onBeforeRouteLeave: (g: () => unknown) => (leave.guard = g)
+  onBeforeRouteLeave: () => undefined
 }))
 vi.mock('@/stores/auth', () => ({
   useAuthStore: () => {
@@ -396,6 +395,7 @@ describe('plugin consent page', () => {
     // The diff lists items as the server sends them (review.go DiffItem), by id.
     expect(w.findAll('[data-testid="hp-carried"]')).toHaveLength(1)
     expect(w.text()).not.toContain('[object Object]')
+    await w.get('input[data-testid="consent-ack"]').setValue(true) // db.core_read is new and critical: acknowledged first
     expect((w.get('[data-testid="consent-approve"]').element as HTMLButtonElement).disabled).toBe(false)
     await w.findAll('[data-testid="host-permissions"] input[type="checkbox"]').find((b) => !(b.element as HTMLInputElement).disabled && !(b.element as HTMLInputElement).checked)!.setValue(true)
     await w.get('[data-testid="consent-approve"]').trigger('click')

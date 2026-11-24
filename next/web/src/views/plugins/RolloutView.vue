@@ -10,7 +10,7 @@ import { lt } from '@/i18n'
 import { errorMessage, notifyError } from '@/utils/errors'
 import { useAuthStore } from '@/stores/auth'
 import { refreshShell } from '@/stores/app'
-import { ROLLOUT_RUNNING, asArray, display, formatDuration, pick, type PluginDetail } from './pluginUtil'
+import { ROLLOUT_RUNNING, asArray, display, displayPluginId, formatDuration, pick, type PluginDetail } from './pluginUtil'
 import ReleaseHistory from './parts/ReleaseHistory.vue'
 
 type StepState = 'waiting' | 'running' | 'done' | 'failed' | 'skipped' | 'cancelled'
@@ -34,7 +34,7 @@ let shellRefreshedFor: number | null = null
 const phase = computed(() => rollout.value?.phase || '')
 const running = computed(() => ROLLOUT_RUNNING.has(phase.value))
 const nodes = computed<RolloutNode[]>(() => rollout.value?.nodes || [])
-const name = computed(() => (detail.value ? lt(detail.value.name) || detail.value.key : key.value))
+const name = computed(() => (detail.value ? lt(detail.value.name) : '') || displayPluginId(key.value))
 const migrations = computed(() => asArray<Record<string, any>>(pick(rollout.value, 'migrations')))
 
 const migrationStep = computed<StepState>(() => {

@@ -12,7 +12,7 @@ import type { ConsentRequest, ConsentResult } from '@/api/pluginConsent'
 import { lt } from '@/i18n'
 import { errorMessage, notifyError } from '@/utils/errors'
 import { useAuthStore } from '@/stores/auth'
-import { rolloutAfterConsent, type PluginDetail } from '../pluginUtil'
+import { displayPluginId, rolloutAfterConsent, type PluginDetail } from '../pluginUtil'
 import { UploadMissingError, consentSourceOf } from './consentSources'
 import { consentedLocation, pluginPath, rolloutPath } from './paths'
 import { clearPendingUpload } from './pendingUpload'
@@ -41,7 +41,7 @@ function createTarget() {
 }
 type Target = ReturnType<typeof createTarget>
 
-const nameOf = (r: PluginReview) => lt(r.name) || r.plugin_key
+const nameOf = (r: PluginReview) => lt(r.name) || displayPluginId(r.plugin_key)
 
 async function load(c: Target) {
   c.loading.value = true

@@ -40,6 +40,7 @@ export default {
   label: 'Console menu',
   backToConsole: 'Back to console',
   crumbs: {
+    marketPlugin: 'Store plugin',
     pluginDetail: 'Plugin details',
     pluginRollout: 'Rollout',
     pluginConsent: 'Review and install',

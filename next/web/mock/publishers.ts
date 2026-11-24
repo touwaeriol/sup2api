@@ -29,6 +29,9 @@ const publishers: MockPublisher[] = [
   { id: 2, name: 'acme', trust_level: 'verified', status: 'active', created_at: now(-86400 * 30), revoked_at: null, keys: [
     { key_id: 'acme-1', public_key: 'Zm9vYmFyYmF6cXV4cXV1eGNvcmdlZ3JhdWx0Z2FycGw=', status: 'active', not_before: null, not_after: null, created_at: now(-86400 * 30) }
   ] },
+  { id: 4, name: 'ourteam', trust_level: 'verified', status: 'active', created_at: now(-86400 * 7), revoked_at: null, keys: [
+    { key_id: 'ourteam-1', public_key: 'b3VydGVhbXNpZ25pbmdrZXlmb3JtYW51YWx1cGxvYWQ=', status: 'active', not_before: null, not_after: null, created_at: now(-86400 * 7) }
+  ] },
   { id: 3, name: 'shady-plugins', trust_level: 'community', status: 'revoked', created_at: now(-86400 * 60), revoked_at: now(-86400 * 10), keys: [] }
 ]
 

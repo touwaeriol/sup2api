@@ -1,78 +1,87 @@
 <script setup lang="ts">
-// One plugin of the market list: name, latest version, badges, links, installed version, warnings and the install action (CONTRACTS §136.4).
+// One plugin of the market list: name (opens its store page), plugin id,
+// badges, publisher links, installed and latest versions, notes (deprecated,
+// blocked, newer but incompatible) and the action of its state (CONTRACTS §136.4).
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { SBadge, SButton, SHint, SIcon, SLink } from '@sub2api/ui'
-import type { MarketPlugin } from '@/api/types'
+import type { MarketPlugin } from '@/api/marketTypes'
 import { lt } from '@/i18n'
-import { newerIncompatible } from '../marketUtil'
+import { deprecatedVersion, newerIncompatible, versionOf, type MarketState } from '../marketUtil'
+import { marketPluginPath } from '../consent/paths'
 import PluginAvatar from './PluginAvatar.vue'
+import PluginIdText from './PluginIdText.vue'
 import MarketBadges from './MarketBadges.vue'
 import MarketLinks from './MarketLinks.vue'
 
-defineProps<{
+const props = defineProps<{
   plugin: MarketPlugin
+  /** The channel being viewed: the plugin's page opens its versions. */
+  channel: number
   /** Version installed here ('' when none). */
   installedVersion: string
-  /** The plugin has a row here (its detail page exists). */
-  hasDetail: boolean
-  state: 'install' | 'upgrade' | 'installed'
-  /** Why the plugin cannot be installed ('' when it can). */
+  state: MarketState
+  /** Why the plugin cannot be installed or upgraded ('' when it can). */
   blocked: string
   canInstall: boolean
 }>()
-const emit = defineEmits<{ pick: [] }>()
+const emit = defineEmits<{ install: [version: string] }>()
 const { t } = useI18n()
+
+const detail = computed(() => marketPluginPath(props.plugin, props.channel))
+const latest = computed(() => versionOf(props.plugin, props.plugin.latest_version))
+const oldDeprecated = computed(() => deprecatedVersion(props.plugin))
+const newer = computed(() => (props.state !== 'install' ? newerIncompatible(props.plugin) : ''))
 </script>
 
 <template>
-  <div
-    class="flex flex-wrap items-center gap-4 border-b border-gray-100 px-5 py-4 last:border-b-0 dark:border-dark-700"
-    :data-plugin="plugin.key"
-  >
-    <PluginAvatar :name="lt(plugin.name)" :plugin-key="plugin.key" size="lg" />
-    <div class="min-w-0 flex-1">
+  <div class="flex flex-wrap items-start gap-4 border-b border-line px-5 py-4 last:border-b-0" :data-plugin="plugin.id">
+    <PluginAvatar :name="lt(plugin.name)" :plugin-key="plugin.id" size="lg" />
+    <div class="min-w-0 flex-1 space-y-1">
       <div class="flex flex-wrap items-center gap-2">
-        <span class="font-semibold text-gray-900 dark:text-white">{{ lt(plugin.name) || plugin.key }}</span>
-        <SHint inline size="xs" class="font-mono">{{ plugin.key }}</SHint>
-        <span v-if="plugin.latest_version" class="font-mono text-sm">v{{ plugin.latest_version }}</span>
-        <MarketBadges :plugin="plugin" />
+        <SLink :to="detail" class="font-semibold" data-testid="market-name">{{ lt(plugin.name) || plugin.key }}</SLink>
+        <PluginIdText :id="plugin.id" class="text-sm text-fg-muted" />
+        <MarketBadges :plugin="plugin" :upgrade="state === 'upgrade' && !blocked" />
       </div>
-      <p v-if="plugin.description" class="mt-1 line-clamp-2 text-sm text-gray-600 dark:text-gray-300">{{ lt(plugin.description) }}</p>
-      <SHint size="xs" class="mt-1">
-        <MarketLinks :plugin="plugin" />
+      <p v-if="plugin.description" class="line-clamp-2 text-sm text-fg">{{ lt(plugin.description) }}</p>
+      <SHint size="xs" class="flex flex-wrap items-center gap-x-1">
+        <MarketLinks :plugin="plugin" with-publisher />
         <template v-if="installedVersion">
-          · {{ t('plugins.market.installedVersion', { version: installedVersion }) }}
-          <SLink v-if="hasDetail" :to="`/plugins/${encodeURIComponent(plugin.key)}`" class="ml-1">{{ t('common.detail') }}</SLink>
+          · <span data-testid="market-installed-version">{{ t('market.installedVersion', { version: installedVersion }) }}</span>
+          <span v-if="state === 'upgrade' && plugin.latest_version">, {{ t('market.latestVersion', { version: plugin.latest_version }) }}</span>
+          <span v-else-if="installedVersion === plugin.latest_version">{{ t('market.latestMark') }}</span>
+        </template>
+        <template v-else-if="plugin.latest_version">
+          · {{ t('market.latestVersion', { version: plugin.latest_version }) }}
+          <span v-if="latest?.host_compat"> · {{ t('market.requiresCore', { range: latest.host_compat }) }}</span>
+        </template>
+        <template v-if="latest?.release_url">
+          · <SLink :href="latest.release_url" external data-testid="market-release">{{ t('market.releaseNotes') }}</SLink>
         </template>
       </SHint>
-      <SHint v-if="plugin.deprecated" size="xs" tone="warning" class="mt-1" data-testid="market-deprecated-reason">
-        {{ t('plugins.market.deprecatedReason', { reason: lt(plugin.deprecated.reason) }) }}
+      <SHint v-if="plugin.deprecated" size="xs" tone="warning" data-testid="market-deprecated-reason">
+        {{ t('market.deprecatedReason', { reason: lt(plugin.deprecated.reason) }) }}
       </SHint>
-      <SHint v-if="blocked" size="xs" tone="danger" class="mt-1 flex items-center gap-1" data-testid="market-blocked">
-        <SIcon name="warning" class="h-3.5 w-3.5" />{{ blocked }}
+      <SHint v-if="oldDeprecated?.deprecated" size="xs" tone="warning" data-testid="market-version-deprecated">
+        {{ t('market.versionDeprecated', { version: oldDeprecated.version, reason: lt(oldDeprecated.deprecated.reason) }) }}
       </SHint>
-      <SHint v-else-if="state !== 'install' && newerIncompatible(plugin)" size="xs" class="mt-1">
-        {{ t('plugins.market.newerIncompatible', { version: newerIncompatible(plugin) }) }}
+      <SHint v-if="blocked" size="xs" tone="danger" class="flex items-center gap-1" data-testid="market-blocked">
+        <SIcon name="warning" class="h-3.5 w-3.5 shrink-0" />{{ blocked }}
       </SHint>
+      <SHint v-else-if="newer" size="xs">{{ t('market.newerIncompatible', { version: newer }) }}</SHint>
     </div>
     <div class="flex shrink-0 items-center gap-2">
-      <template v-if="state === 'installed'">
-        <SBadge tone="success"><SIcon name="check" class="h-3.5 w-3.5" />{{ t('plugins.market.installed') }}</SBadge>
-        <SButton v-if="canInstall && (plugin.versions?.length || 0) > 1" size="sm" variant="ghost" @click="emit('pick')">
-          {{ t('plugins.market.versions') }}
+      <SButton v-if="!blocked" size="sm" variant="ghost" :to="detail" data-testid="market-versions">{{ t('market.versions') }}</SButton>
+      <SButton v-if="blocked" size="sm" disabled :title="blocked" data-testid="market-not-installable">{{ t('market.notInstallable') }}</SButton>
+      <SBadge v-else-if="state === 'installed'" tone="success" data-testid="market-up-to-date">{{ t('market.upToDate') }}</SBadge>
+      <template v-else-if="canInstall">
+        <SButton v-if="state === 'upgrade'" size="sm" variant="warning" icon="upload" data-testid="market-upgrade" @click="emit('install', plugin.latest_version)">
+          {{ t('market.upgradeTo', { version: plugin.latest_version }) }}
+        </SButton>
+        <SButton v-else size="sm" :variant="plugin.deprecated ? 'secondary' : 'primary'" icon="download" data-testid="market-install" @click="emit('install', plugin.latest_version)">
+          {{ plugin.deprecated ? t('market.installAnyway') : t('market.install') }}
         </SButton>
       </template>
-      <SButton
-        v-else-if="canInstall"
-        :variant="state === 'upgrade' ? 'warning' : 'primary'"
-        size="sm"
-        :icon="state === 'upgrade' ? 'upload' : 'download'"
-        :disabled="!!blocked"
-        :title="blocked || undefined"
-        @click="emit('pick')"
-      >
-        {{ state === 'upgrade' ? t('plugins.market.upgrade') : t('plugins.market.install') }}
-      </SButton>
     </div>
   </div>
 </template>

@@ -23,6 +23,7 @@ import './pluginEgress'
 import './updates'
 import './observability'
 import './plugins'
+import './communityPlugins'
 import './pluginConsent'
 
 async function readBody(req: IncomingMessage): Promise<any> {

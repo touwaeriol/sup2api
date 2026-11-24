@@ -12,7 +12,7 @@ const PLUGINS = [
   { key: 'openai', version: '0.1.0', name: { en: 'OpenAI', zh: 'OpenAI' } },
   { key: 'gemini', version: '0.1.0', name: { en: 'Gemini', zh: 'Gemini' } },
   { key: 'relay', version: '0.3.0', name: { en: 'Relay', zh: '中转' } },
-  { key: 'videogen', version: '0.2.0', name: { en: 'Video generation', zh: '视频生成' } }
+  { key: '_videolabs__videogen', version: '0.2.0', name: { en: 'Video generation', zh: '视频生成' } }
 ]
 
 /** A GET /ui/plugins entry with no menu or page, only the native entry holding the account forms. */
@@ -41,7 +41,7 @@ export function register(host) {
 `
 
 export function apiKeyFormAsset(key: string, path: string): { type: string; body: string | Buffer } | null {
-  if (key === 'videogen') return path === 'ui/native/entry.js' ? { type: 'text/javascript', body: VIDEOGEN_ENTRY } : null
+  if (key === '_videolabs__videogen') return path === 'ui/native/entry.js' ? { type: 'text/javascript', body: VIDEOGEN_ENTRY } : null
   return nativeDistAsset(key, path)
 }
 

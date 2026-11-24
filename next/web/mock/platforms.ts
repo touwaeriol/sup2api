@@ -53,7 +53,7 @@ export const pluginPlatforms: Array<MockPlatform & { enabled: boolean }> = [
     id: 'myvideo',
     label: { en: 'MyVideo', zh: 'MyVideo 视频' },
     builtin: false,
-    plugin_key: 'videogen',
+    plugin_key: '_videolabs__videogen',
     enabled: true,
     endpoints: [ep('POST', '/v1/video/generations', 'myvideo.generate'), ep('GET', '/v1/video/generations/:id', 'myvideo.status', 'free')]
   },
@@ -62,7 +62,7 @@ export const pluginPlatforms: Array<MockPlatform & { enabled: boolean }> = [
     id: 'foo',
     label: { en: 'Foo', zh: 'Foo' },
     builtin: false,
-    plugin_key: 'foo_platform',
+    plugin_key: '_foolabs__foo_platform',
     enabled: false,
     endpoints: [ep('POST', '/v1/foo/chat', 'foo.chat')]
   }

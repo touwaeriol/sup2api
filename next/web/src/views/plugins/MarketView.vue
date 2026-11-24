@@ -1,176 +1,112 @@
 <script setup lang="ts">
+// The plugin market: the official store and the channel being viewed (the
+// viewer's last one, else the default), its plugins filtered by name,
+// publisher and state, and each plugin's action: install, upgrade to the
+// channel's latest version, or why it cannot (CONTRACTS §136, §137).
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { requestRaw } from '@sub2api/host'
-import { SButton, SCard, SEmpty, SField, SHint, SInput, SPageHeader, SSelect, SSpinner } from '@sub2api/ui'
-import type { MarketPlugin, MarketSource, PluginSummary } from '@/api/types'
-import { notifyError } from '@/utils/errors'
-import { fetchFirstPage } from '@/composables/lookups'
+import { SButton, SCard, SEmpty, SFilterBar, SHint, SInput, SPageHeader, SSelect, SSpinner } from '@sub2api/ui'
+import type { MarketPlugin } from '@/api/marketTypes'
 import { useAuthStore } from '@/stores/auth'
-import { marketInstallLocation } from './consent/paths'
-import { compareVersions } from './pluginUtil'
-import { matches, noCompatible, publisherBlocked, publisherOptions } from './marketUtil'
+import { OFFICIAL_PUBLISHER } from './pluginUtil'
+import { matches, publisherOptions, stateMatches, type MarketStatusFilter } from './marketUtil'
+import { useMarket } from './useMarket'
+import { MARKET_MANAGE_PERM, rememberedChannel } from './marketChannels'
+import { STORE_SETTINGS_PATH } from './consent/paths'
+import StoreCard from './parts/StoreCard.vue'
 import MarketRow from './parts/MarketRow.vue'
-import MarketVersionPicker from './parts/MarketVersionPicker.vue'
 
 const { t } = useI18n()
 const router = useRouter()
 const auth = useAuthStore()
+const market = useMarket(rememberedChannel)
+const { channel, listing, items, hostVersion, loading, loadingStore, enabledChannels } = market
 
-/** The plugin store: the official one, the only market source (CONTRACTS §136); its address is read-only. */
-const store = ref<MarketSource | null>(null)
-const sourceId = computed(() => store.value?.id ?? null)
-const items = ref<MarketPlugin[]>([])
-/** Version of the running core (top-level host_version of GET /market/plugins). */
-const hostVersion = ref('')
-const installed = ref<Record<string, PluginSummary>>({})
 const q = ref('')
 /** Publisher filter ('' = all). */
 const publisher = ref('')
-const loading = ref(false)
-const loadingStore = ref(true)
+const status = ref<MarketStatusFilter>('')
 
-/** The plugin whose version picker is open. */
-const picker = ref<MarketPlugin | null>(null)
-
-const publisherChoices = computed(() => [{ value: '', label: t('plugins.market.allPublishers') }, ...publisherOptions(items.value)])
-
-function installedOf(m: MarketPlugin): string {
-  const p = installed.value[m.key]
-  return p?.active_version || p?.desired_version || m.installed_version || ''
-}
-
-function stateOf(m: MarketPlugin): 'install' | 'upgrade' | 'installed' {
-  const iv = installedOf(m)
-  if (!iv && !installed.value[m.key]) return 'install'
-  if (!iv) return 'installed'
-  // Only offer upgrades this core can run, never to a deprecated version (latest_version).
-  return m.latest_version && compareVersions(m.latest_version, iv) > 0 ? 'upgrade' : 'installed'
-}
-
-/** Why m cannot be installed at all ('' when it can). */
-function blockedReason(m: MarketPlugin): string {
-  if (publisherBlocked(m)) return t('plugins.market.publisherBlocked')
-  return noCompatible(m) ? t('plugins.market.noCompatible', { version: hostVersion.value || '?' }) : ''
-}
+const publisherChoices = computed(() => [
+  { value: '', label: t('market.allPublishers') },
+  ...publisherOptions(items.value).map(o => (o.value === OFFICIAL_PUBLISHER ? { ...o, label: t('market.officialPublisher', { name: o.label }) } : o))
+])
+const statusChoices = computed(() =>
+  (['', 'upgrade', 'installed', 'notInstalled'] as const).map(value => ({ value, label: t(`market.status.${value || 'all'}`) }))
+)
+const activeFilters = computed(() => [publisher.value, status.value].filter(Boolean).length)
 
 const rows = computed(() => {
   const kw = q.value.trim().toLowerCase()
-  return items.value.filter(m => (!publisher.value || m.publisher === publisher.value) && (!kw || matches(m, kw)))
+  return items.value.filter(
+    m => (!publisher.value || m.publisher === publisher.value) && stateMatches(market.stateOf(m), status.value) && (!kw || matches(m, kw))
+  )
 })
+const updatable = computed(() => items.value.filter(m => market.stateOf(m) === 'upgrade' && !market.blockedOf(m)).length)
 
-async function loadStore() {
-  loadingStore.value = true
-  try {
-    const items = await fetchFirstPage<MarketSource>('/market/sources')
-    store.value = items.find(s => s.enabled) ?? null
-  } catch (e) {
-    notifyError(e)
-  } finally {
-    loadingStore.value = false
-  }
+/** Reviews the version first: nothing is downloaded or registered before the consent. */
+function install(m: MarketPlugin, version: string) {
+  if (version) router.push(market.installLocation(m, version))
 }
 
-async function loadInstalled() {
-  if (!auth.has('plugin:read')) return
-  try {
-    const items = await fetchFirstPage<PluginSummary>('/plugins')
-    installed.value = Object.fromEntries(items.map(p => [p.key, p]))
-  } catch {
-    installed.value = {}
-  }
-}
-
-async function loadPlugins() {
-  if (sourceId.value === null) {
-    items.value = []
-    return
-  }
-  loading.value = true
-  try {
-    // Raw envelope: host_version sits next to data.
-    const json = await requestRaw('GET', '/market/plugins', { query: { source_id: sourceId.value } })
-    items.value = Array.isArray(json?.data) ? json.data : []
-    hostVersion.value = String(json?.host_version ?? '')
-  } catch (e) {
-    items.value = []
-    notifyError(e)
-  } finally {
-    loading.value = false
-  }
-}
-
-/** Reviews the picked version first: nothing is downloaded or registered before the consent. */
-function install(version: string) {
-  const m = picker.value
-  if (!m || sourceId.value === null) return
-  picker.value = null
-  router.push(marketInstallLocation(sourceId.value, m.key, version))
-}
-
-onMounted(async () => {
-  await Promise.all([loadStore().then(loadPlugins), loadInstalled()])
-})
+const refresh = () => Promise.all([market.loadListing(), market.loadInstalled()])
+onMounted(market.load)
 </script>
 
 <template>
   <div>
-    <SPageHeader :title="t('plugins.market.title')" :description="t('plugins.market.description')">
-      <template #actions>
-        <SButton :loading="loading" icon="refresh" @click="(loadPlugins(), loadInstalled())">{{ t('common.refresh') }}</SButton>
-      </template>
-      <template #filters>
-        <SField :label="t('plugins.market.storeURL')" :hint="t('plugins.market.storeURLHint')" class="w-96">
-          <SInput :model-value="store?.url ?? ''" readonly data-testid="market-store-url" />
-        </SField>
-        <SField :label="t('plugins.market.publisherFilter')" class="w-56">
-          <SSelect
-            :model-value="publisher"
-            :options="publisherChoices"
-            data-testid="market-publisher-filter"
-            @update:model-value="v => (publisher = String(v ?? ''))"
-          />
-        </SField>
-        <SField :label="t('common.search')" class="w-72">
-          <SInput v-model="q" :placeholder="t('plugins.market.searchPlaceholder')" />
-        </SField>
-        <SHint v-if="hostVersion" size="xs" class="self-end pb-2" data-testid="market-host-version">
-          {{ t('plugins.market.hostVersion', { version: hostVersion }) }}
-        </SHint>
-      </template>
-    </SPageHeader>
+    <SPageHeader :title="t('market.title')" :description="t('market.description')" />
 
-    <div v-if="loadingStore || (loading && !items.length)" class="flex justify-center py-20"><SSpinner size="lg" /></div>
+    <div v-if="loadingStore" class="flex justify-center py-20"><SSpinner size="lg" /></div>
 
-    <SCard v-else-if="!store">
-      <SEmpty icon="market" :text="t('plugins.market.storeUnavailable')" />
+    <SCard v-else-if="!channel">
+      <SEmpty icon="market" :text="t('market.storeUnavailable')" />
     </SCard>
 
-    <SCard v-else-if="!rows.length">
-      <SEmpty icon="market" :text="q || publisher ? t('plugins.market.noMatch') : t('plugins.market.empty')" />
-    </SCard>
+    <template v-else>
+      <StoreCard :channels="enabledChannels" :channel="channel" :listing="listing" :loading="loading" @select="market.selectChannel" @refresh="refresh" />
 
-    <SCard v-else :padded="false" :class="loading ? 'opacity-60' : ''">
-      <MarketRow
-        v-for="m in rows"
-        :key="m.key"
-        :plugin="m"
-        :installed-version="installedOf(m)"
-        :has-detail="!!installed[m.key]"
-        :state="stateOf(m)"
-        :blocked="blockedReason(m)"
-        :can-install="auth.has('plugin:install')"
-        @pick="picker = m"
-      />
-    </SCard>
+      <SFilterBar :card="false" :active-count="activeFilters" class="mb-4">
+        <template #primary>
+          <SInput v-model="q" class="w-72" :placeholder="t('market.searchPlaceholder')" :aria-label="t('common.search')" />
+        </template>
+        <div class="w-52">
+          <SSelect v-model="publisher" :options="publisherChoices" searchable :aria-label="t('market.publisherFilter')" data-testid="market-publisher-filter" />
+        </div>
+        <div class="w-44">
+          <SSelect v-model="status" :options="statusChoices" :aria-label="t('market.statusFilter')" data-testid="market-status-filter" />
+        </div>
+        <template #end>
+          <SHint v-if="hostVersion" size="xs" data-testid="market-summary">
+            {{ t('market.hostVersion', { version: hostVersion }) }} · {{ t('market.updatable', { n: updatable }) }}
+          </SHint>
+          <SButton v-if="auth.has(MARKET_MANAGE_PERM)" size="sm" variant="ghost" icon="settings" :to="STORE_SETTINGS_PATH" data-testid="market-store-settings">
+            {{ t('market.storeSettings') }}
+          </SButton>
+        </template>
+      </SFilterBar>
 
-    <MarketVersionPicker
-      :plugin="picker"
-      :installed-version="picker ? installedOf(picker) : ''"
-      :host-version="hostVersion"
-      @close="picker = null"
-      @install="install"
-    />
+      <div v-if="loading && !items.length" class="flex justify-center py-20"><SSpinner size="lg" /></div>
+
+      <SCard v-else-if="!rows.length">
+        <SEmpty icon="market" :text="q || publisher || status ? t('market.noMatch') : t('market.empty')" />
+      </SCard>
+
+      <SCard v-else :padded="false" :class="loading ? 'opacity-60' : ''">
+        <SHint size="xs" class="border-b border-line px-5 py-2.5" data-testid="market-total">{{ t('market.total', { n: rows.length }) }}</SHint>
+        <MarketRow
+          v-for="m in rows"
+          :key="m.id"
+          :plugin="m"
+          :channel="channel.id"
+          :installed-version="market.installedOf(m)"
+          :state="market.stateOf(m)"
+          :blocked="market.blockedOf(m)"
+          :can-install="auth.has('plugin:install')"
+          @install="v => install(m, v)"
+        />
+      </SCard>
+    </template>
   </div>
 </template>

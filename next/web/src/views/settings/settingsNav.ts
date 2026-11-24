@@ -9,7 +9,8 @@ import type { PermRef } from '@/generated/permissions'
 /**
  * System settings (CONTRACTS §90): the configuration pages of the settings
  * page (?tab=<key>) and, in the sidebar's settings view, the pages with an
- * address of their own that belong with them: model prices. Groups sit with
+ * address of their own that belong with them: model prices, the plugin store's
+ * channels. Groups sit with
  * the accounts (§132).
  */
 
@@ -72,7 +73,8 @@ const LAYOUT: Group[] = [
     pages: [
       page('updates', 'settings:read', 'coreUpdates.sourceTitle', 'download'),
       page('environment', 'settings:read', 'settings.tabs.environment', 'code'),
-      page('plugin-egress', 'settings:read', 'pluginEgress.title', 'globe')
+      page('plugin-egress', 'settings:read', 'pluginEgress.title', 'globe'),
+      ownPage('/settings/market', 'plugin:market:read', 'market.settings.title', 'market')
     ]
   }
 ]

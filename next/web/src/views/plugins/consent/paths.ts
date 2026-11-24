@@ -12,10 +12,24 @@ export function consentPath(key: string, version: string): string {
   return `${pluginPath(key)}/versions/${enc(version)}/consent`
 }
 
+/** A plugin of the store, by its publisher and key (CONTRACTS §137). */
+export interface StorePluginRef {
+  publisher: string
+  key: string
+}
+
+/** The store's page of a plugin: its versions (of a channel, when named) and publisher. */
+export function marketPluginPath(m: StorePluginRef, channel?: number): RouteLocationRaw {
+  return { path: `/market/${enc(m.publisher)}/${enc(m.key)}`, query: channel ? { channel: String(channel) } : {} }
+}
+
+/** The store's configuration: its channels (system settings). */
+export const STORE_SETTINGS_PATH = '/settings/market'
+
 /** The consent page of a market version before anything is downloaded or registered. */
 export const MARKET_INSTALL_PATH = '/plugins/install/market'
-export function marketInstallLocation(sourceId: number, key: string, version: string): RouteLocationRaw {
-  return { path: MARKET_INSTALL_PATH, query: { source_id: String(sourceId), key, version } }
+export function marketInstallLocation(sourceId: number, m: StorePluginRef, version: string): RouteLocationRaw {
+  return { path: MARKET_INSTALL_PATH, query: { source_id: String(sourceId), publisher: m.publisher, key: m.key, version } }
 }
 
 /** The consent page of the file chosen on the plugins page (held in memory: pendingUpload). */
