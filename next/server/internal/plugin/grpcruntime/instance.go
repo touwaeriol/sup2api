@@ -417,9 +417,9 @@ func (i *Instance) verifyInfo(ctx context.Context, p *proc) error {
 	if err != nil {
 		return fmt.Errorf("GetInfo: %w", err)
 	}
-	if info.GetPluginKey() != i.pkg.Key || info.GetVersion() != i.pkg.Version {
+	if info.GetPluginKey() != i.pkg.Manifest.Key || info.GetVersion() != i.pkg.Version {
 		return fmt.Errorf("GetInfo: plugin reports %s@%s, package is %s@%s",
-			info.GetPluginKey(), info.GetVersion(), i.pkg.Key, i.pkg.Version)
+			info.GetPluginKey(), info.GetVersion(), i.pkg.Manifest.Key, i.pkg.Version)
 	}
 	if info.GetProtocolVersion() != protocol.ProtocolVersion {
 		return i.rt.outdatedContract(i.pkg, fmt.Errorf("GetInfo: protocol version %d, host supports %d", info.GetProtocolVersion(), protocol.ProtocolVersion))

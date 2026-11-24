@@ -8,41 +8,54 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/testutil"
 )
 
-// The official store is the only market source: its row defaults to the
-// official index, takes SUB2API_MARKET_URL keeping its id, is enabled again,
-// and every other row goes.
-func TestEnsureOfficial(t *testing.T) {
+// Migration 0125 seeds the channels 正式 (main, default) and 测试
+// (develop). EnsureChannels points every channel at the base keeping its
+// id, and brings a default channel back when the database has none.
+func TestEnsureChannels(t *testing.T) {
 	db, ctx := testutil.DB(t), context.Background()
-	if _, err := db.SQL.ExecContext(ctx, `INSERT INTO market_sources (name, url, enabled) VALUES ('official', 'https://old.example/', false), ('local-dev', 'http://market:8080/index.json', true), ('community', 'https://example.com/index.json', true)`); err != nil {
+	s := New(db, fakeInstaller{}, nil, Options{BaseURL: "https://mirror.example/m/"})
+	if err := s.EnsureChannels(ctx); err != nil {
 		t.Fatal(err)
 	}
-	s := New(db, fakeInstaller{}, nil, Options{})
-	want := func(url string) int64 {
-		t.Helper()
-		srcs, err := s.ListSources(ctx)
-		if err != nil || len(srcs) != 1 || srcs[0].Name != OfficialName || srcs[0].URL != url || !srcs[0].Enabled {
-			t.Fatalf("sources = %+v %v, want only official enabled at %s", srcs, err, url)
-		}
-		return srcs[0].ID
+	srcs := listChannels(t, s)
+	if srcs[0].Name != DefaultChannelName || srcs[0].Branch != "main" || !srcs[0].IsDefault || srcs[0].Repo != OfficialRepo ||
+		srcs[0].URL != "https://mirror.example/m/index-main/index.json" || srcs[1].Branch != "develop" ||
+		srcs[1].URL != "https://mirror.example/m/index-develop/index.json" || srcs[1].IsDefault {
+		t.Fatalf("channels = %+v", srcs)
 	}
-	if err := s.EnsureOfficial(ctx, ""); err != nil {
+	if _, err := db.SQL.ExecContext(ctx, `UPDATE market_sources SET is_default = false, enabled = false`); err != nil {
 		t.Fatal(err)
 	}
-	id := want(OfficialURL)
-	if err := s.EnsureOfficial(ctx, "https://mirror.example/m/"); err != nil {
+	official := New(db, fakeInstaller{}, nil, Options{})
+	if err := official.EnsureChannels(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if want("https://mirror.example/m/") != id {
-		t.Fatal("the official source changed its id")
+	again := listChannels(t, official)
+	if again[0].ID != srcs[0].ID || !again[0].IsDefault || !again[0].Enabled ||
+		again[0].URL != OfficialBase+"/index-main/index.json" {
+		t.Fatalf("channels after = %+v", again)
 	}
 }
 
-// A listing without a source id reads the official store and returns its
-// errors: here it has no row.
-func TestListPluginsOfficialMissing(t *testing.T) {
-	s := New(testutil.DB(t), fakeInstaller{}, nil, Options{})
-	_, err := s.ListPlugins(context.Background(), 0, false)
-	if e := core.AsError(err); e == nil || e.Code != core.ErrNotFound.Code {
-		t.Fatalf("list without the official store = %v, want not found", err)
+// A listing without a channel reads the default one and returns its
+// errors: here there is none.
+func TestListPluginsDefaultMissing(t *testing.T) {
+	db := testutil.DB(t)
+	if _, err := db.SQL.ExecContext(context.Background(), `DELETE FROM market_sources`); err != nil {
+		t.Fatal(err)
 	}
+	_, err := New(db, fakeInstaller{}, nil, Options{}).ListPlugins(context.Background(), 0, false)
+	if e := core.AsError(err); e == nil || e.Code != core.ErrNotFound.Code {
+		t.Fatalf("list without a default channel = %v, want not found", err)
+	}
+}
+
+// listChannels lists the two channels of s.
+func listChannels(t *testing.T, s *Service) []Source {
+	t.Helper()
+	srcs, err := s.ListSources(context.Background())
+	if err != nil || len(srcs) != 2 {
+		t.Fatalf("channels = %+v %v", srcs, err)
+	}
+	return srcs
 }

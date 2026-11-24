@@ -1,3 +1,3 @@
 -- sql
-SELECT id, name, url, enabled, created_at FROM "market_sources" ORDER BY id
+SELECT id, name, branch, url, enabled, is_default, created_at FROM "market_sources" ORDER BY is_default DESC, id
 -- vars

@@ -168,7 +168,7 @@ func overrideGrants(m *manifest.Manifest, in map[string]map[string]manifest.Role
 			errs = append(errs, core.FieldError{Field: "new_permission_roles." + local, Code: "unknown", Message: fmt.Sprintf("permission %q is not declared by the plugin", local)})
 			continue
 		}
-		key := manifest.PermissionKey(m.Key, local)
+		key := manifest.PermissionKey(m.ID(), local)
 		roles := map[string][]string{}
 		for _, role := range slices.Sorted(maps.Keys(in[local])) {
 			suffixes, bad := in[local][role].Suffixes(func(v string) (string, bool) { return scopeSuffix(key, up.Scope, v) })
@@ -252,10 +252,10 @@ func (s *Service) decideAndApply(ctx context.Context, tx *gorm.DB, key, version 
 	if err != nil {
 		return nil, err
 	}
-	if err := cat.DiscardStaged(ctx, tx, m.Key); err != nil {
+	if err := cat.DiscardStaged(ctx, tx, m.ID()); err != nil {
 		return nil, err
 	}
-	existing, err := loadCatalogPerms(ctx, cat, tx, m.Key)
+	existing, err := loadCatalogPerms(ctx, cat, tx, m.ID())
 	if err != nil {
 		return nil, err
 	}
@@ -400,12 +400,12 @@ func (s *Service) settleRoleGrants(ctx context.Context, tx *gorm.DB, actorID int
 	}
 	markPlan(plan, gs, canDefine, mode)
 	plan = slices.DeleteFunc(plan, func(g RoleGrant) bool {
-		local, _ := manifest.LocalPermission(m.Key, g.Permission)
+		local, _ := manifest.LocalPermission(m.ID(), g.Permission)
 		return g.Via != viaOverride && g.Nameable && overrides[local] != nil
 	})
 	if mode != modeSystem {
 		made := slices.DeleteFunc(slices.Clone(plan), func(g RoleGrant) bool { return g.Withheld || g.Via == viaOverride })
-		if err := s.checkGrantable(ctx, tx, actorID, m.Key, made); err != nil {
+		if err := s.checkGrantable(ctx, tx, actorID, m.ID(), made); err != nil {
 			return nil, err
 		}
 	}
@@ -599,7 +599,7 @@ func (s *Service) checkRoleGrantRights(ctx context.Context, tx *gorm.DB, actorID
 	}
 	var named []RoleGrant
 	for _, up := range m.UserPermissions {
-		key := manifest.PermissionKey(m.Key, up.Key)
+		key := manifest.PermissionKey(m.ID(), up.Key)
 		if existing.has(key) {
 			continue
 		}
@@ -607,7 +607,7 @@ func (s *Service) checkRoleGrantRights(ctx context.Context, tx *gorm.DB, actorID
 			named = append(named, RoleGrant{Permission: key, Role: role, Risk: up.RiskLevel(), Via: viaOverride})
 		}
 	}
-	return s.checkGrantable(ctx, tx, actorID, m.Key, named)
+	return s.checkGrantable(ctx, tx, actorID, m.ID(), named)
 }
 
 // checkGrantable verifies that the operator may make the grants of gs,

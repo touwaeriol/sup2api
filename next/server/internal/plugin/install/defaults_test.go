@@ -17,7 +17,7 @@ import (
 // with its scope_type (the values resource for a values scope) and the
 // defaults as canonical suffixes; grants only what the consent decided.
 func TestPermissionDefsSort(t *testing.T) {
-	m := &manifest.Manifest{Key: "mod",
+	m := &manifest.Manifest{Publisher: manifest.OfficialPublisher, Key: "mod",
 		PermissionGroups: []manifest.PermissionGroup{{Key: "flow", Label: manifest.LocalizedText{"en": "Flows"}}, {Key: "action"}},
 		UserPermissions: []manifest.UserPermission{
 			{Key: "flow:read", Group: "flow"},
@@ -67,7 +67,7 @@ func TestPermissionDefsSort(t *testing.T) {
 // to drop or withhold ({} included).
 func TestRoleGrantsPriority(t *testing.T) {
 	all := manifest.RoleDefault{Unscoped: true}
-	m := &manifest.Manifest{Key: "referral", UserPermissions: []manifest.UserPermission{
+	m := &manifest.Manifest{Publisher: manifest.OfficialPublisher, Key: "referral", UserPermissions: []manifest.UserPermission{
 		{Key: "referral:use", Defaults: map[string]manifest.RoleDefault{"user": all, "admin": all}, InheritFrom: []string{"referral:read"}},
 		{Key: "referral:stats:read"},
 		{Key: "flow:manage", Scope: &manifest.PermissionScope{Resource: "flow", Own: true},
@@ -106,7 +106,7 @@ func TestRoleGrantsPriority(t *testing.T) {
 // invalid under new_permission_roles.<local>.<role>, an undeclared key
 // unknown; false and [] grant the role nothing.
 func TestOverrideGrants(t *testing.T) {
-	m := &manifest.Manifest{Key: "mod", UserPermissions: []manifest.UserPermission{
+	m := &manifest.Manifest{Publisher: manifest.OfficialPublisher, Key: "mod", UserPermissions: []manifest.UserPermission{
 		{Key: "flow:manage", Scope: &manifest.PermissionScope{Resource: "flow", Own: true}},
 		{Key: "flow:read", Scope: &manifest.PermissionScope{Resource: "flow"}},
 		{Key: "input:check", Scope: &manifest.PermissionScope{Values: []manifest.ScopeValue{{Key: "input"}, {Key: "output"}}}},
@@ -149,7 +149,7 @@ func TestOverrideGrants(t *testing.T) {
 // On an upgrade a grant the current one covers is carried, named again or
 // not; one wider than the current grant, or on a first install, is new.
 func TestDecideCarriesCoveredGrants(t *testing.T) {
-	m := &manifest.Manifest{Key: "demo", HostPermissions: []manifest.HostPermission{
+	m := &manifest.Manifest{Publisher: manifest.OfficialPublisher, Key: "demo", HostPermissions: []manifest.HostPermission{
 		{ID: "ui.native"}, {ID: "users.read"},
 		{ID: "events", Scope: map[string]any{"subscribe": []any{"a", "b"}}},
 	}}

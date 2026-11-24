@@ -985,7 +985,7 @@ func TestSyncPluginSort(t *testing.T) {
 	if _, err := db.SQL.ExecContext(ctx, `INSERT INTO plugins (key, name, status) VALUES ('guard', '{"en":"Guard"}', 'enabled')`); err != nil {
 		t.Fatal(err)
 	}
-	m := &manifest.Manifest{Key: "guard", UserPermissions: []manifest.UserPermission{{Key: "stats:read"}, {Key: "rules:manage"}}}
+	m := &manifest.Manifest{Publisher: manifest.OfficialPublisher, Key: "guard", UserPermissions: []manifest.UserPermission{{Key: "stats:read"}, {Key: "rules:manage"}}}
 	sorts := func() string {
 		t.Helper()
 		var got string

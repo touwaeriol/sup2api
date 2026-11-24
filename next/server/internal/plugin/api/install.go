@@ -23,10 +23,11 @@ var consentKeys = []perm.Key{perm.PluginGrantHigh, perm.PluginGrantCritical, per
 // marketRequest is the body of POST /plugins/install-from-market and
 // /plugins/review-from-market (which ignores consent).
 type marketRequest struct {
-	SourceID int64                   `json:"source_id"`
-	Key      string                  `json:"key"`
-	Version  string                  `json:"version"`
-	Consent  *install.InstallConsent `json:"consent,omitempty"`
+	SourceID  int64                   `json:"source_id"` // the channel; 0 or absent: the default one
+	Publisher string                  `json:"publisher"`
+	Key       string                  `json:"key"`
+	Version   string                  `json:"version"`
+	Consent   *install.InstallConsent `json:"consent,omitempty"`
 }
 
 // upload takes a package (multipart field "file") and records it
@@ -157,8 +158,8 @@ func bindMarket(c *gin.Context) (*marketRequest, bool) {
 	if !httpapi.BindJSON(c, &in) {
 		return nil, false
 	}
-	if in.SourceID <= 0 || in.Key == "" || in.Version == "" {
-		httpapi.Fail(c, core.ErrInvalidArgument.WithMessage("source_id, key and version are required"))
+	if in.SourceID < 0 || in.Publisher == "" || in.Key == "" || in.Version == "" {
+		httpapi.Fail(c, core.ErrInvalidArgument.WithMessage("publisher, key and version are required, source_id (the channel, default when absent) is positive"))
 		return nil, false
 	}
 	return &in, true
@@ -167,11 +168,10 @@ func bindMarket(c *gin.Context) (*marketRequest, bool) {
 // marketPackage downloads the version in names, checked against the
 // market index (market.Download), with the options to upload it with.
 func (a *API) marketPackage(c *gin.Context, in *marketRequest) ([]byte, install.UploadOptions, bool) {
-	if a.d.Market == nil {
-		httpapi.Fail(c, core.ErrUnavailable.WithMessage("market unavailable"))
+	if !a.marketReady(c) {
 		return nil, install.UploadOptions{}, false
 	}
-	data, opt, err := a.d.Market.Download(ctx(c), in.SourceID, in.Key, in.Version)
+	data, opt, err := a.d.Market.Download(ctx(c), in.SourceID, in.Publisher, in.Key, in.Version)
 	if err != nil {
 		httpapi.Fail(c, err)
 		return nil, install.UploadOptions{}, false

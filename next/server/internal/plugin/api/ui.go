@@ -10,12 +10,15 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/httpapi"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/install"
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/market"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/pkg"
 )
 
 // UIPlugin is one entry of GET /ui/plugins.
 type UIPlugin struct {
-	Key       string                   `json:"key"`
+	Key string `json:"key"` // the plugin id
+	pkg.Identity
+
 	Version   string                   `json:"version"`
 	Name      core.LocalizedText       `json:"name"`
 	AssetBase string                   `json:"asset_base"`
@@ -60,7 +63,7 @@ func (a *API) uiPlugins(c *gin.Context) {
 		// A plugin key shows at any scope; the plugin routes narrow the data.
 		vis := manifest.FilterUI(m.UI,
 			func(perm string) bool { return ps.HasSome(manifest.PermissionKey(p.Key, perm)) }, ps.Has)
-		item := UIPlugin{Key: p.Key, Version: p.Version, Name: core.LocalizedText(m.Name), AssetBase: p.AssetBase,
+		item := UIPlugin{Key: p.Key, Identity: pkg.IdentityOf(p.Key), Version: p.Version, Name: core.LocalizedText(m.Name), AssetBase: p.AssetBase,
 			Menus: vis.Menus, Pages: vis.Pages, Slots: vis.Slots, AccountActions: vis.AccountActions,
 			Trust: p.Trust, HostUICompat: m.HostUICompat}
 		if m.UI.Native != nil && (p.Trust == pkg.TrustOfficial || p.Trust == pkg.TrustVerified) {
@@ -91,9 +94,56 @@ func (a *API) marketSources(c *gin.Context) {
 	httpapi.OK(c, srcs)
 }
 
+// createChannel adds a channel of the store (market.CreateChannel).
+func (a *API) createChannel(c *gin.Context) {
+	var in market.ChannelInput
+	if !a.marketReady(c) || !httpapi.BindJSON(c, &in) {
+		return
+	}
+	src, err := a.d.Market.CreateChannel(ctx(c), in, actor(c))
+	if err != nil {
+		httpapi.Fail(c, err)
+		return
+	}
+	httpapi.Created(c, src)
+}
+
+// updateChannel changes a channel of the store (market.UpdateChannel).
+func (a *API) updateChannel(c *gin.Context) {
+	var in market.ChannelPatch
+	id, ok := httpapi.PathID(c, "id")
+	if !ok || !a.marketReady(c) || !httpapi.BindJSON(c, &in) {
+		return
+	}
+	src, err := a.d.Market.UpdateChannel(ctx(c), id, in, actor(c))
+	reply(c, src, err)
+}
+
+// deleteChannel deletes a channel of the store (market.DeleteChannel).
+func (a *API) deleteChannel(c *gin.Context) {
+	id, ok := httpapi.PathID(c, "id")
+	if !ok || !a.marketReady(c) {
+		return
+	}
+	if err := a.d.Market.DeleteChannel(ctx(c), id, actor(c)); err != nil {
+		httpapi.Fail(c, err)
+		return
+	}
+	httpapi.NoContent(c)
+}
+
+// marketReady fails the request when this node has no market client.
+func (a *API) marketReady(c *gin.Context) bool {
+	if a.d.Market == nil {
+		httpapi.Fail(c, core.ErrUnavailable.WithMessage("market unavailable"))
+		return false
+	}
+	return true
+}
+
 func (a *API) marketPlugins(c *gin.Context) {
 	if a.d.Market == nil {
-		marketList(c, []any{}, a.hostVersion())
+		marketList(c, &market.Listing{Plugins: []market.MarketPlugin{}}, a.hostVersion())
 		return
 	}
 	var sourceID int64
@@ -121,11 +171,15 @@ func (a *API) hostVersion() string {
 	return a.d.Install.HostVersion()
 }
 
-// marketList renders the market listing. data stays the plugin array (as
-// before); host_version is a top-level sibling so existing clients keep
-// working: {"data": [...], "host_version": "0.2.0"}.
-func marketList(c *gin.Context, list any, hostVersion string) {
-	c.JSON(http.StatusOK, gin.H{"data": list, "host_version": hostVersion})
+// marketList renders listing l: {"data": [...], "host_version": "0.2.0",
+// "generated_at": ..., "fetched_at": ...}, the times only once the core
+// has fetched an index.
+func marketList(c *gin.Context, l *market.Listing, hostVersion string) {
+	body := gin.H{"data": l.Plugins, "host_version": hostVersion}
+	if !l.FetchedAt.IsZero() {
+		body["generated_at"], body["fetched_at"] = l.GeneratedAt, l.FetchedAt
+	}
+	c.JSON(http.StatusOK, body)
 }
 
 // ---------------------------------------------------------------- publishers

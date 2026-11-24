@@ -192,7 +192,7 @@ func Files(m *manifest.Manifest) map[string][]byte {
 		"runtimes/linux-arm64/plugin": []byte("\x7fELF arm64"),
 	}
 	if m.Database != nil {
-		files[m.Database.Migrations+"0001_init.sql"] = []byte("CREATE TABLE " + manifest.TablePrefix(m.Key) + "rules (id bigserial PRIMARY KEY);")
+		files[m.Database.Migrations+"0001_init.sql"] = []byte("CREATE TABLE " + manifest.TablePrefix(m.ID()) + "rules (id bigserial PRIMARY KEY);")
 	}
 	if m.UI != nil && m.UI.Native != nil {
 		files[m.UI.Native.Entry] = []byte("export default {}")

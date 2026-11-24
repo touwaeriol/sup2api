@@ -13,7 +13,7 @@ import (
 
 // The SQL of the fixture inserts built with GORM (see package gormtest).
 
-var snapManifest = &manifest.Manifest{Key: "demo", Version: "1.2.0"}
+var snapManifest = &manifest.Manifest{Publisher: manifest.OfficialPublisher, Key: "demo", Version: "1.2.0"}
 
 func TestSQLFixturePlugin(t *testing.T) {
 	gormtest.Assert(t, func(db *gorm.DB) *gorm.DB {

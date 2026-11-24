@@ -120,7 +120,7 @@ type PluginConfig struct {
 	MaxPackageBytes  int64    // SUB2API_PLUGIN_MAX_PACKAGE_BYTES, default rc.PluginPackageMaxBytes (64 MiB)
 	MaxMemoryMB      int      // SUB2API_PLUGIN_MAX_MEMORY_MB, node cap on per-plugin memory; default 0 = no cap
 	Landlock         bool     // SUB2API_PLUGIN_LANDLOCK: Landlock (files, unix sockets, signals), default true on linux (CONTRACTS §43.8)
-	MarketURL        string   // SUB2API_MARKET_URL: plugin store index, "" = official; local markets of test stacks only (CONTRACTS §136)
+	MarketBaseURL    string   // SUB2API_MARKET_BASE_URL: base of the plugin store's channel indexes, "" = official; local markets of test stacks only (CONTRACTS §137.6)
 	// MarketAllowHTTP accepts http:// market sources and package URLs
 	// besides https:// (SUB2API_MARKET_ALLOW_HTTP, default false): local
 	// markets of test stacks and development only (CONTRACTS §136).
@@ -269,7 +269,7 @@ func env(k, def string) string {
 // loadMarket reads the market settings: the store index and whether http
 // market URLs are accepted.
 func (p *PluginConfig) loadMarket() {
-	p.MarketURL = strings.TrimSpace(os.Getenv("SUB2API_MARKET_URL"))
+	p.MarketBaseURL = strings.TrimSpace(os.Getenv("SUB2API_MARKET_BASE_URL"))
 	p.MarketAllowHTTP = boolEnv("SUB2API_MARKET_ALLOW_HTTP", false)
 }
 

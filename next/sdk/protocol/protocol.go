@@ -100,6 +100,8 @@ const (
 var DatabaseAddress = net.JoinHostPort(DatabaseHost, strconv.Itoa(DatabasePort))
 
 // Environment variables the host sets for every plugin process.
+// EnvPluginKey holds the plugin id (manifest.PluginID, CONTRACTS §137): the
+// bare key of an official plugin, "_<publisher>__<key>" of any other.
 const (
 	EnvPluginKey     = "SUB2API_PLUGIN_KEY"
 	EnvPluginVersion = "SUB2API_PLUGIN_VERSION"

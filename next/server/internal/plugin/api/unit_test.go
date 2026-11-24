@@ -61,8 +61,8 @@ type stepUpCase struct {
 // stepUpCases are the routes TestPluginRoutesStepUp checks. The ones taking
 // no proof fail further on (no database or market here), not with 403.
 func stepUpCases(t *testing.T) []stepUpCase {
-	market := map[string]any{"source_id": 1, "key": "guard", "version": "0.1.0"}
-	withConsent := map[string]any{"source_id": 1, "key": "guard", "version": "0.1.0", "consent": map[string]any{"package_sha256": "00"}}
+	market := map[string]any{"source_id": 1, "publisher": "sub2api", "key": "guard", "version": "0.1.0"}
+	withConsent := map[string]any{"source_id": 1, "publisher": "sub2api", "key": "guard", "version": "0.1.0", "consent": map[string]any{"package_sha256": "00"}}
 	return []stepUpCase{
 		{"POST", "/plugins/upload", fileBody(t, []byte("x")), core.StepUpPluginInstall},
 		{"POST", "/plugins/upload", consentFileBody(t, []byte("x"), `{"package_sha256":"00"}`), core.StepUpPluginGrant},

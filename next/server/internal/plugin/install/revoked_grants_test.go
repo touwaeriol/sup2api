@@ -218,7 +218,7 @@ func TestRevocationOutlivesAWithdrawnStagedSet(t *testing.T) {
 // fails, an optional one stays revoked; without a revocation the risk rules
 // are unchanged.
 func TestDecideRevokedPermissions(t *testing.T) {
-	m := &manifest.Manifest{Key: "mini", HostPermissions: []manifest.HostPermission{
+	m := &manifest.Manifest{Publisher: manifest.OfficialPublisher, Key: "mini", HostPermissions: []manifest.HostPermission{
 		{ID: "kv"}, {ID: "log", Optional: true}, {ID: "db.schema"}, {ID: "net", Optional: true}}}
 	all := map[string]bool{"kv": true, "log": true, "db.schema": true, "net": true}
 	current := map[string]Grant{}

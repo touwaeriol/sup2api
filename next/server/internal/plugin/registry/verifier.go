@@ -19,8 +19,8 @@ func TrustVerifier(trust *pluginpkg.TrustStore, q *gorm.DB, lim pluginpkg.Limits
 		if err != nil {
 			return err
 		}
-		if p.Manifest.Key != key || p.Manifest.Version != version {
-			return fmt.Errorf("package manifest identifies %s@%s", p.Manifest.Key, p.Manifest.Version)
+		if p.Manifest.ID() != key || p.Manifest.Version != version {
+			return fmt.Errorf("package manifest identifies %s@%s", p.Manifest.ID(), p.Manifest.Version)
 		}
 		return trust.VerifyRecorded(ctx, q, p)
 	}

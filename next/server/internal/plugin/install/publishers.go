@@ -2,12 +2,16 @@ package install
 
 import (
 	"context"
+	"fmt"
+	"net/http"
 	"regexp"
 	"strconv"
 	"time"
 
 	"gorm.io/gorm"
 
+	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
+	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest/check"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/pkgsig"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/audit"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
@@ -16,6 +20,7 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store/model"
 )
 
+// nameRe is the rule of a signing key id.
 var nameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$`)
 
 // Publisher is a publishers row with its keys.
@@ -106,21 +111,22 @@ func validateKey(i int, k KeyInput) []core.FieldError {
 	return errs
 }
 
+// ErrStorePublisher: a local publisher would take the id of a publisher the
+// official store lists, whose plugins it could then upgrade (CONTRACTS §137).
+var ErrStorePublisher = core.NewError(http.StatusConflict, "publisher_in_store",
+	"the official plugin store lists a publisher with this id; a local publisher must have another")
+
+// StorePublishers tells whether the official store's index lists a
+// publisher id (market.Service).
+type StorePublishers interface {
+	ListsPublisher(ctx context.Context, id string) (bool, error)
+}
+
 // CreatePublisher registers a verified or community publisher. Official
 // publishers come only from the configured root keys.
 func (s *Service) CreatePublisher(ctx context.Context, in CreatePublisherInput, actorID int64) (*Publisher, error) {
-	var errs []core.FieldError
-	if !nameRe.MatchString(in.Name) {
-		errs = append(errs, core.FieldError{Field: "name", Code: "invalid_format", Message: "name must be 1-100 letters, digits, _ . -"})
-	}
-	if in.TrustLevel != pkg.TrustVerified && in.TrustLevel != pkg.TrustCommunity {
-		errs = append(errs, core.FieldError{Field: "trust_level", Code: "invalid", Message: "trust_level must be verified or community"})
-	}
-	for i, k := range in.Keys {
-		errs = append(errs, validateKey(i, k)...)
-	}
-	if len(errs) > 0 {
-		return nil, core.InvalidFields(errs...)
+	if err := s.checkNewPublisher(ctx, in); err != nil {
+		return nil, err
 	}
 	var id int64
 	err := s.d.DB.Tx(ctx, func(tx *gorm.DB) error {
@@ -143,6 +149,41 @@ func (s *Service) CreatePublisher(ctx context.Context, in CreatePublisherInput, 
 		return nil, err
 	}
 	return s.getPublisher(ctx, id)
+}
+
+// checkNewPublisher checks a new local publisher: its fields, and an id
+// (its name, the manifests' publisher) that is a valid publisher id, not
+// the first-party one and not one the official store lists.
+func (s *Service) checkNewPublisher(ctx context.Context, in CreatePublisherInput) error {
+	errs := publisherNameErrors(in.Name)
+	if in.TrustLevel != pkg.TrustVerified && in.TrustLevel != pkg.TrustCommunity {
+		errs = append(errs, core.FieldError{Field: "trust_level", Code: "invalid", Message: "trust_level must be verified or community"})
+	}
+	for i, k := range in.Keys {
+		errs = append(errs, validateKey(i, k)...)
+	}
+	if len(errs) > 0 {
+		return core.InvalidFields(errs...)
+	}
+	if s.d.Store == nil {
+		return nil
+	}
+	listed, err := s.d.Store.ListsPublisher(ctx, in.Name)
+	if err == nil && listed {
+		err = ErrStorePublisher.WithMessage(fmt.Sprintf("the official plugin store lists publisher %q; choose another id for a local publisher", in.Name))
+	}
+	return err
+}
+
+// publisherNameErrors are the problems of name as a local publisher id.
+func publisherNameErrors(name string) []core.FieldError {
+	if err := check.ValidatePublisherID(name); err != nil {
+		return []core.FieldError{{Field: "name", Code: "invalid_format", Message: err.Error()}}
+	}
+	if name == manifest.OfficialPublisher {
+		return []core.FieldError{{Field: "name", Code: "reserved", Message: fmt.Sprintf("publisher %q is reserved for the first-party plugins", name)}}
+	}
+	return nil
 }
 
 func insertKey(ctx context.Context, tx *gorm.DB, pubID int64, k KeyInput) error {

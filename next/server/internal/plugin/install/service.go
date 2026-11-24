@@ -61,7 +61,7 @@ const (
 // (CONTRACTS §5.7).
 var ErrPackageGone = core.NewError(http.StatusGone, "package_gone", "no reachable node holds the package of this version; bring a node that holds it back online, or upload it again")
 
-// Deps are the collaborators of Service. Bus, Schemas and Accounts may be nil.
+// Deps are the collaborators of Service. Bus, Schemas, Accounts and Store may be nil.
 type Deps struct {
 	Mutations   core.PluginMutationGate
 	DB          *store.DB
@@ -81,6 +81,9 @@ type Deps struct {
 	KV PluginKVPurger
 	// Packages holds the package bytes; PostgreSQL keeps only their sha256.
 	Packages *blobs.Source
+	// Store tells whether the official store lists a publisher id, which a
+	// local publisher may not take; nil when there is no store.
+	Store StorePublishers
 }
 
 // Options are host facts.

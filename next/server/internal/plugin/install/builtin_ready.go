@@ -47,9 +47,9 @@ func (s *Service) BuiltinRequirements(dir string) (map[string]BuiltinRequirement
 		if err != nil {
 			return nil, err
 		}
-		old, ok := out[p.Manifest.Key]
+		old, ok := out[p.Manifest.ID()]
 		if !ok || old.Version.LessThan(v) {
-			out[p.Manifest.Key] = BuiltinRequirement{v, only[p.Manifest.Key]}
+			out[p.Manifest.ID()] = BuiltinRequirement{v, only[p.Manifest.ID()]}
 		}
 	}
 	return out, nil

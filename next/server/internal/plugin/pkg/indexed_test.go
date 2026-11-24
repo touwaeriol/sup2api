@@ -116,9 +116,9 @@ func TestVerifyRecorded(t *testing.T) {
 func insertIndexedVersion(t *testing.T, db *store.DB) {
 	t.Helper()
 	execSQL(t, db, `INSERT INTO publishers (name, trust_level) VALUES ('acme', 'community')`)
-	execSQL(t, db, `INSERT INTO plugins (key, name, publisher_id, status) SELECT 'tool', '{}', id, 'installed' FROM publishers WHERE name = 'acme'`)
+	execSQL(t, db, `INSERT INTO plugins (key, name, publisher_id, status) SELECT '_acme__tool', '{}', id, 'installed' FROM publishers WHERE name = 'acme'`)
 	execSQL(t, db, `INSERT INTO plugin_versions (plugin_key, version, manifest, manifest_hash, package_sha256, package_size, publisher_id, signature_status, trust_level)
-		SELECT 'tool', '0.1.0', '{}', 'h', 's', 1, id, 'indexed', 'official' FROM publishers WHERE name = 'acme'`)
+		SELECT '_acme__tool', '0.1.0', '{}', 'h', 's', 1, id, 'indexed', 'official' FROM publishers WHERE name = 'acme'`)
 }
 
 // A version's trust is its own level, else its publisher's; a version
@@ -128,7 +128,7 @@ func TestReadVersionTrust(t *testing.T) {
 	insertIndexedVersion(t, db)
 	want := func(version, trust string) {
 		t.Helper()
-		got, err := ReadVersionTrust(db.Gorm, "tool", version)
+		got, err := ReadVersionTrust(db.Gorm, "_acme__tool", version)
 		if err != nil || got != trust {
 			t.Fatalf("%s trust = %q %v, want %q", version, got, err, trust)
 		}

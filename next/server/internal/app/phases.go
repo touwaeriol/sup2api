@@ -175,31 +175,38 @@ func (b *boot) startPluginRuntime(trust *pkg.TrustStore) error {
 	if err := b.startRollout(rt, mutations, defaults); err != nil {
 		return err
 	}
+	b.mkt = market.New(b.db, hostVersion(b.version), b.marketClient, market.Options{
+		MaxPackageBytes: b.cfg.Plugins.MaxPackageBytes, AllowHTTP: b.cfg.Plugins.MarketAllowHTTP, BaseURL: b.cfg.Plugins.MarketBaseURL})
 	b.inst = install.New(install.Deps{Mutations: mutations,
 		DB: b.db, Trust: trust, Authz: b.az, Permissions: b.az, Defaults: defaults,
 		Rollout: b.ctl, Schemas: b.schemas, Bus: b.cl.Bus, Accounts: b.acc, KV: rt, Nodes: b.cl.Registry, Packages: b.packageSrc,
+		Store: b.mkt,
 	}, install.Options{HostVersion: b.version, Plugins: b.cfg.Plugins})
-	b.mkt = market.New(b.db, b.inst, b.marketClient, market.Options{MaxPackageBytes: b.cfg.Plugins.MaxPackageBytes, AllowHTTP: b.cfg.Plugins.MarketAllowHTTP})
 	if err := b.ensureMarket(); err != nil {
 		return err
 	}
 	return b.startBuiltins()
 }
 
-// ensureMarket checks SUB2API_MARKET_URL on every node, then makes the
-// official store the only market source (market.EnsureOfficial) on every
-// start of a core that may coordinate plugins: an unmanaged one, a
-// bootstrap or the managed primary, so that an upgrade or a changed
-// SUB2API_MARKET_URL takes effect without a bootstrap.
+// hostVersion is the core version as the market's market.Installer, which
+// is built before the installer it hands packages to.
+type hostVersion string
+
+func (v hostVersion) HostVersion() string { return string(v) }
+
+// ensureMarket checks the store's base (SUB2API_MARKET_BASE_URL) on every
+// node, then brings the store's channels in line with it
+// (market.EnsureChannels) on every start of a core that may coordinate
+// plugins: an unmanaged one, a bootstrap or the managed primary, so that an
+// upgrade or a changed base takes effect without a bootstrap.
 func (b *boot) ensureMarket() error {
-	url := b.cfg.Plugins.MarketURL
-	if err := b.mkt.ValidateStoreURL(url); err != nil {
+	if err := b.mkt.ValidateBase(); err != nil {
 		return err
 	}
 	if m := b.managed; m != nil && !m.coordinateAllowed() {
 		return nil
 	}
-	if err := b.mkt.EnsureOfficial(b.ctx, url); err != nil {
+	if err := b.mkt.EnsureChannels(b.ctx); err != nil {
 		return fmt.Errorf("market: %w", err)
 	}
 	return nil

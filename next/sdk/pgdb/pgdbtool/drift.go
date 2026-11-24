@@ -385,9 +385,9 @@ func (s *scratch) refused(tx *gorm.DB, prefix string) ([]string, error) {
 //	func main() { pgdbtool.DriftMain(model.All(), model.Unmanaged()...) }
 //
 // (Unmanaged when the package declares it). It reads the server DSN from
-// DriftDSNEnv, the plugin key from -key and the migrations directory from
-// its only argument, runs Drift with the key's manifest.TablePrefix and
-// writes the DriftReport as JSON to stdout.
+// DriftDSNEnv, the plugin id (manifest.PluginID) from -key and the
+// migrations directory from its only argument, runs Drift with the id's
+// manifest.TablePrefix and writes the DriftReport as JSON to stdout.
 func DriftMain(models []any, unmanaged ...string) {
 	if err := driftMain(os.Args[1:], os.Stdout, models, unmanaged); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -397,13 +397,13 @@ func DriftMain(models []any, unmanaged ...string) {
 
 func driftMain(args []string, stdout io.Writer, models []any, unmanaged []string) error {
 	fs := flag.NewFlagSet("drift", flag.ContinueOnError)
-	key := fs.String("key", "", "plugin key")
+	key := fs.String("key", "", "plugin id (manifest.PluginID)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	dsn := os.Getenv(DriftDSNEnv)
 	if dsn == "" || *key == "" || fs.NArg() != 1 {
-		return errors.New("usage: " + DriftDSNEnv + "=<dsn> drift -key <plugin key> <migrations dir>")
+		return errors.New("usage: " + DriftDSNEnv + "=<dsn> drift -key <plugin id> <migrations dir>")
 	}
 	migrations, err := ReadMigrations(fs.Arg(0))
 	if err != nil {

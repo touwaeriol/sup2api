@@ -19,9 +19,10 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store/model"
 )
 
-// UploadOptions constrain an upload (market installs pin key and version).
+// UploadOptions constrain an upload (market installs pin plugin id and
+// version).
 type UploadOptions struct {
-	ExpectKey     string
+	ExpectID      string // the plugin id (manifest.PluginID)
 	ExpectVersion string
 	Source        string // "upload" | "market:<source id>"
 	// PackageURL is the market download URL; every node fetches the package
@@ -69,7 +70,7 @@ func (s *Service) upload(ctx context.Context, data []byte, actorID int64, opt Up
 	if c != nil {
 		return s.consentUpload(ctx, r, rec, c, actorID)
 	}
-	return &InstallResult{Review: r}, s.carryOverConsent(ctx, r, p.Manifest.Key, p.Manifest.Version, actorID)
+	return &InstallResult{Review: r}, s.carryOverConsent(ctx, r, p.Manifest.ID(), p.Manifest.Version, actorID)
 }
 
 // uploadRecord is what recordUpload leaves for the review: the state it
@@ -104,7 +105,7 @@ func (s *Service) preparePackage(ctx context.Context, data []byte, opt UploadOpt
 	return p, nil
 }
 
-// openAndValidate unpacks the package and checks the caller's key/version
+// openAndValidate unpacks the package and checks the caller's id/version
 // expectations and its plugin contract. Unpacking and hashing a large package depends on nothing
 // shared, so it runs before the short cluster change lock.
 func (s *Service) openAndValidate(ctx context.Context, data []byte, opt UploadOptions) (*pkg.Package, error) {
@@ -113,8 +114,8 @@ func (s *Service) openAndValidate(ctx context.Context, data []byte, opt UploadOp
 		return nil, err
 	}
 	m := p.Manifest
-	if opt.ExpectKey != "" && m.Key != opt.ExpectKey {
-		return nil, core.ErrInvalidArgument.WithMessage(fmt.Sprintf("package key %q does not match %q", m.Key, opt.ExpectKey))
+	if opt.ExpectID != "" && m.ID() != opt.ExpectID {
+		return nil, core.ErrInvalidArgument.WithMessage(fmt.Sprintf("package plugin %q does not match %q", manifest.DisplayID(m.ID()), manifest.DisplayID(opt.ExpectID)))
 	}
 	if opt.ExpectVersion != "" && m.Version != opt.ExpectVersion {
 		return nil, core.ErrInvalidArgument.WithMessage(fmt.Sprintf("package version %q does not match %q", m.Version, opt.ExpectVersion))
@@ -144,7 +145,7 @@ func (s *Service) checkContent(ctx context.Context, p *pkg.Package, opt UploadOp
 func (s *Service) storedIdentical(ctx context.Context, p *pkg.Package) (bool, error) {
 	g := store.G(ctx, s.d.DB.Gorm)
 	var ok bool
-	err := gormpg.ExistsQuery(g, versionRow(g, p.Manifest.Key, p.Manifest.Version).
+	err := gormpg.ExistsQuery(g, versionRow(g, p.Manifest.ID(), p.Manifest.Version).
 		Where("package_sha256 = ? AND consent_status <> ?", p.SHA256, ConsentRejected)).Scan(&ok).Error
 	return ok, err
 }
@@ -153,7 +154,7 @@ func (s *Service) storedIdentical(ctx context.Context, p *pkg.Package) (bool, er
 // plugins' exclusive resources.
 func (s *Service) validatePackage(ctx context.Context, p *pkg.Package, opt UploadOptions) error {
 	m := p.Manifest
-	otherPlatforms, otherEndpoints, otherChannels, err := s.otherResources(ctx, s.d.DB.Gorm, m.Key)
+	otherPlatforms, otherEndpoints, otherChannels, err := s.otherResources(ctx, s.d.DB.Gorm, m.ID())
 	if err != nil {
 		return err
 	}
@@ -226,10 +227,10 @@ func writeUpload(ctx context.Context, tx *gorm.DB, p *pkg.Package, actorID int64
 	if rec.inserted = inserted; !inserted {
 		rec.consent = priorConsent // idempotent re-upload keeps its status
 	}
-	if err := versionRow(g, m.Key, m.Version).Select("uploaded_at").Take(&rec.uploadedAt).Error; err != nil {
+	if err := versionRow(g, m.ID(), m.Version).Select("uploaded_at").Take(&rec.uploadedAt).Error; err != nil {
 		return err
 	}
-	return audit.Audit(ctx, tx, actorID, "plugin.upload", "plugin", m.Key, map[string]any{
+	return audit.Audit(ctx, tx, actorID, "plugin.upload", "plugin", m.ID(), map[string]any{
 		"version": m.Version, "sha256": p.SHA256, "trust": ver.Trust, "signature_status": ver.SignatureStatus,
 		"source": opt.Source,
 	})
@@ -246,7 +247,7 @@ func insertVersionRow(ctx context.Context, tx *gorm.DB, p *pkg.Package, ver *pkg
 		return false, "", err
 	case prior.rejected:
 		// A rejected upload may be retried (possibly with other content).
-		if err := versionRow(g, p.Manifest.Key, p.Manifest.Version).Delete(&model.PluginVersion{}).Error; err != nil {
+		if err := versionRow(g, p.Manifest.ID(), p.Manifest.Version).Delete(&model.PluginVersion{}).Error; err != nil {
 			return false, "", err
 		}
 	case prior.found:
@@ -267,7 +268,7 @@ type priorUpload struct {
 func priorVersion(g *gorm.DB, p *pkg.Package) (priorUpload, error) {
 	m := p.Manifest
 	var old model.PluginVersion
-	err := versionRow(g, m.Key, m.Version).Select("package_sha256, consent_status").Take(&old).Error
+	err := versionRow(g, m.ID(), m.Version).Select("package_sha256, consent_status").Take(&old).Error
 	consent := core.ValueOr(old.ConsentStatus, "")
 	switch {
 	case store.IsNoRows(err):
@@ -279,20 +280,20 @@ func priorVersion(g *gorm.DB, p *pkg.Package) (priorUpload, error) {
 	case old.PackageSha256 == p.SHA256:
 		return priorUpload{found: true, consent: consent}, nil
 	}
-	return priorUpload{}, core.ErrConflict.WithMessage(fmt.Sprintf("version %s of %q was already uploaded with different content", m.Version, m.Key))
+	return priorUpload{}, core.ErrConflict.WithMessage(fmt.Sprintf("version %s of %q was already uploaded with different content", m.Version, m.ID()))
 }
 
 // newPlugin is the plugins row of a first upload of m, awaiting consent.
 func newPlugin(m *manifest.Manifest, publisherID *int64, actorID int64) *model.Plugin {
 	name, _ := json.Marshal(m.Name)
-	return &model.Plugin{Key: m.Key, Name: name, PublisherID: publisherID, Status: StatusAwaitingConsent, InstalledBy: nullID(actorID)}
+	return &model.Plugin{Key: m.ID(), Name: name, PublisherID: publisherID, Status: StatusAwaitingConsent, InstalledBy: nullID(actorID)}
 }
 
 // newVersion is the plugin_versions row of an upload of p, awaiting consent.
 func newVersion(p *pkg.Package, ver *pkg.Verification, opt UploadOptions, actorID int64) *model.PluginVersion {
 	m, consent := p.Manifest, ConsentAwaiting
 	return &model.PluginVersion{
-		PluginKey: m.Key, Version: m.Version, Manifest: p.ManifestRaw, ManifestHash: p.ManifestHash,
+		PluginKey: m.ID(), Version: m.Version, Manifest: p.ManifestRaw, ManifestHash: p.ManifestHash,
 		PackageSha256: p.SHA256, PackageURL: opt.PackageURL, PackageSize: int64(len(p.Raw)),
 		PublisherID: ver.PublisherID, KeyID: nullStr(ver.KeyID), SignatureStatus: ver.SignatureStatus,
 		TrustLevel: versionTrust(ver), ConsentStatus: &consent, UploadedBy: nullID(actorID),

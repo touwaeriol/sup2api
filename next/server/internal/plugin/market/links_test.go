@@ -80,7 +80,7 @@ func TestDownloadFreshIndex(t *testing.T) {
 	if _, err := s.ListPlugins(ctx, src, false); err != nil || *hits != 1 {
 		t.Fatalf("list: hits=%d %v", *hits, err)
 	}
-	if _, _, err := s.Download(ctx, src, "tool", "1.1.0"); err != nil || *hits != 2 {
+	if _, _, err := s.Download(ctx, src, "acme", "tool", "1.1.0"); err != nil || *hits != 2 {
 		t.Fatalf("download: hits=%d %v", *hits, err)
 	}
 }

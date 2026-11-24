@@ -229,9 +229,10 @@ func (e *outdatedContractError) Is(target error) bool { return target == ErrOutd
 
 // outdatedContract is the one answer to a package of an older plugin
 // contract, whatever gave it away (cause): its manifest, the handshake of
-// its binary or the protocol version it reports.
+// its binary or the protocol version it reports. It names the manifest's
+// key, as the manifest check does (check.OutdatedPackage).
 func (r *Runtime) outdatedContract(pkg *registry.Package, cause error) error {
-	return &outdatedContractError{msg: protocol.OutdatedContractMessage(pkg.Key, pkg.Version, r.o.HostVersion), cause: cause}
+	return &outdatedContractError{msg: protocol.OutdatedContractMessage(pkg.Manifest.Key, pkg.Version, r.o.HostVersion), cause: cause}
 }
 
 // checkContract rejects a package whose manifest is of an older plugin

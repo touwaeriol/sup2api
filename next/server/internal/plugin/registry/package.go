@@ -31,6 +31,8 @@ import (
 // Package is one verified .s2plugin cached on local disk. Files are read
 // straight from the zip; the struct is safe for concurrent use.
 type Package struct {
+	// Key is the plugin id (manifest.PluginID, CONTRACTS §137), the key of
+	// the plugins row; Manifest.Key is the bare key the plugin calls itself.
 	Key       string
 	Version   string
 	SHA256    string // hex sha256 of the .s2plugin file
@@ -41,7 +43,7 @@ type Package struct {
 	// installed_at): the first claimant of an exclusive resource keeps it.
 	// Zero when unknown (dev tooling, tests).
 	ClaimedAt time.Time
-	// Dir is DataDir/<key>/<version>-<hash8>; the package file and the
+	// Dir is DataDir/<plugin id>/<version>-<hash8>; the package file and the
 	// extracted binary live below it.
 	Dir string
 
@@ -332,8 +334,8 @@ func (s *Packages) load(ctx context.Context, key, version string) (*Package, err
 	if err := json.Unmarshal(manifestJSON, &m); err != nil {
 		return nil, fmt.Errorf("plugin %s@%s: decode manifest: %w", key, version, err)
 	}
-	if m.Key != key || m.Version != version {
-		return nil, fmt.Errorf("plugin %s@%s: manifest identifies %s@%s", key, version, m.Key, m.Version)
+	if m.ID() != key || m.Version != version {
+		return nil, fmt.Errorf("plugin %s@%s: manifest identifies %s@%s", key, version, m.ID(), m.Version)
 	}
 	p := &Package{Key: key, Version: version, SHA256: sum, Manifest: &m}
 	if publisher != nil {
@@ -454,8 +456,8 @@ func LoadPackage(dir string, data []byte, publisher, trust string) (*Package, er
 		return nil, err
 	}
 	sum := sha256.Sum256(data)
-	p := &Package{Key: m.Key, Version: m.Version, SHA256: hex.EncodeToString(sum[:]), Manifest: &m, Publisher: publisher, Trust: trust}
-	p.Dir = filepath.Join(dir, m.Key, p.VersionHash())
+	p := &Package{Key: m.ID(), Version: m.Version, SHA256: hex.EncodeToString(sum[:]), Manifest: &m, Publisher: publisher, Trust: trust}
+	p.Dir = filepath.Join(dir, p.Key, p.VersionHash())
 	if err := os.MkdirAll(p.Dir, 0o755); err != nil {
 		return nil, err
 	}

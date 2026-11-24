@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
+	"time"
 
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/pkg"
@@ -19,6 +21,8 @@ type fakeInstaller struct{}
 
 func (fakeInstaller) HostVersion() string { return "0.1.0" }
 
+var generatedAt = time.Date(2026, 11, 24, 6, 0, 0, 0, time.UTC)
+
 var deprecated = &Deprecation{Reason: core.LocalizedText{"en": "use 1.1.0"}}
 
 // testIndex is the index the market test serves: tool by acme (active):
@@ -26,8 +30,8 @@ var deprecated = &Deprecation{Reason: core.LocalizedText{"en": "use 1.1.0"}}
 // needs a newer host; gone by the revoked publisher old; lost by nobody
 // the index lists.
 func testIndex(pkgBytes []byte) []byte {
-	idx := Index{Version: indexFormat, Publishers: []IndexPublisher{
-		{ID: "acme", Name: core.LocalizedText{"en": "Acme"}, Trust: pkg.TrustVerified, Status: pkg.PublisherActive},
+	idx := Index{Version: indexFormat, GeneratedAt: generatedAt, Publishers: []IndexPublisher{
+		{ID: "acme", Name: core.LocalizedText{"en": "Acme"}, GitHub: []string{"acme-dev"}, Trust: pkg.TrustVerified, Status: pkg.PublisherActive},
 		{ID: "old", Name: core.LocalizedText{"en": "Old"}, Trust: pkg.TrustCommunity, Status: pkg.PublisherRevoked},
 	}, Plugins: []IndexPlugin{
 		{Key: "tool", Name: core.LocalizedText{"en": "Tool"}, Publisher: "acme", Repo: "acme/tool", Builtin: true, Versions: []IndexVersion{
@@ -44,13 +48,13 @@ func testIndex(pkgBytes []byte) []byte {
 	return raw
 }
 
-// serveIndex serves raw at /m/index.json and the packages of tool over
-// TLS; hits counts the index downloads.
+// serveIndex serves raw as the index of the channel main of the store at
+// /m and the packages of tool over TLS; hits counts the index downloads.
 func serveIndex(t *testing.T, raw, pkgBytes []byte) (srv *httptest.Server, hits *int) {
 	hits = new(int)
-	files := map[string][]byte{"/m/pkgs/tool-1.1.0.s2plugin": pkgBytes, "/m/pkgs/tool-1.0.0.s2plugin": []byte("x")}
+	files := map[string][]byte{"/m/index-main/pkgs/tool-1.1.0.s2plugin": pkgBytes, "/m/index-main/pkgs/tool-1.0.0.s2plugin": []byte("x")}
 	srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/m/index.json" {
+		if r.URL.Path == "/m/index-main/index.json" {
 			*hits++
 			_, _ = w.Write(raw)
 		} else if body, ok := files[r.URL.Path]; ok {
@@ -63,38 +67,40 @@ func serveIndex(t *testing.T, raw, pkgBytes []byte) (srv *httptest.Server, hits 
 	return srv, hits
 }
 
-// seedOfficial points the official source at url, twice (it is
-// idempotent), and returns its id.
-func seedOfficial(t *testing.T, s *Service, url string) int64 {
+// seedChannels points the channels at the base of s, twice (it is
+// idempotent), and returns the default channel's id.
+func seedChannels(t *testing.T, s *Service) int64 {
 	ctx := context.Background()
 	for range 2 {
-		if err := s.EnsureOfficial(ctx, url); err != nil {
+		if err := s.EnsureChannels(ctx); err != nil {
 			t.Fatal(err)
 		}
 	}
 	srcs, err := s.ListSources(ctx)
-	if err != nil || len(srcs) != 1 {
+	if err != nil || len(srcs) != 2 || !srcs[0].IsDefault {
 		t.Fatalf("sources: %v %v", err, srcs)
 	}
 	return srcs[0].ID
 }
 
-// newMarket serves the test index over TLS to a market (https only) with
-// one source, whose id it returns, and the package of tool 1.1.0.
+// newMarket serves the test index over TLS to a market (https only) as its
+// default channel, whose id and index directory it returns, and the
+// package of tool 1.1.0.
 func newMarket(t *testing.T) (s *Service, src int64, base string, pkgBytes []byte, hits *int) {
 	pkgBytes = pkgtest.Build(pkgtest.Minimal("tool", "1.1.0", "acme"), pkgtest.NewKey("acme-1"))
 	srv, hits := serveIndex(t, testIndex(pkgBytes), pkgBytes)
-	s = New(testutil.DB(t), fakeInstaller{}, srv.Client(), Options{MaxPackageBytes: 1 << 20})
-	return s, seedOfficial(t, s, srv.URL+"/m/"), srv.URL + "/m/", pkgBytes, hits
+	s = New(testutil.DB(t), fakeInstaller{}, srv.Client(), Options{MaxPackageBytes: 1 << 20, BaseURL: srv.URL + "/m/"})
+	return s, seedChannels(t, s), srv.URL + "/m/index-main/", pkgBytes, hits
 }
 
 func TestMarket(t *testing.T) {
 	ctx := context.Background()
 	s, src, base, pkgBytes, hits := newMarket(t)
-	list, err := s.ListPlugins(ctx, src, false)
-	if err != nil || len(list) != 3 {
-		t.Fatalf("list = %+v %v", list, err)
+	l, err := s.ListPlugins(ctx, src, false)
+	if err != nil || len(l.Plugins) != 3 || !l.GeneratedAt.Equal(generatedAt) || l.FetchedAt.IsZero() {
+		t.Fatalf("list = %+v %v", l, err)
 	}
+	list := l.Plugins
 	if _, err := s.ListPlugins(ctx, 0, false); err != nil || *hits != 1 {
 		t.Fatalf("cache: hits=%d err=%v", *hits, err)
 	}
@@ -109,10 +115,12 @@ func TestMarket(t *testing.T) {
 func checkTool(t *testing.T, m MarketPlugin) {
 	t.Helper()
 	if m.LatestVersion != "1.1.0" || len(m.Versions) != 4 || m.Versions[0].Version != "2.0.0" || m.Versions[0].Compatible ||
-		m.Versions[1].Deprecated == nil || m.Versions[2].Deprecated != nil || m.Versions[2].ReleaseURL != "https://github.com/acme/tool/releases/tag/v1.1.0" {
+		m.Versions[1].Deprecated == nil || m.Versions[2].Deprecated != nil || m.Versions[2].ReleaseURL != "https://github.com/acme/tool/releases/tag/v1.1.0" ||
+		m.Versions[3].SHA256 != "00" {
 		t.Fatalf("tool versions = %+v", m)
 	}
-	if m.Trust != pkg.TrustVerified || m.PublisherStatus != pkg.PublisherActive || m.PublisherName["en"] != "Acme" ||
+	if m.ID != "_acme__tool" || m.DisplayID != "acme/tool" || m.Key != "tool" ||
+		m.Trust != pkg.TrustVerified || m.PublisherStatus != pkg.PublisherActive || m.PublisherName["en"] != "Acme" || !slices.Equal(m.PublisherGitHub, []string{"acme-dev"}) ||
 		m.Repo != "acme/tool" || !m.Builtin || m.Deprecated != nil {
 		t.Fatalf("tool = %+v", m)
 	}
@@ -136,22 +144,23 @@ func checkPublishers(t *testing.T, gone, lost MarketPlugin) {
 // publisher are refused.
 func checkDownload(t *testing.T, s *Service, srcID int64, base string, pkgBytes []byte) {
 	ctx := context.Background()
-	got, opt, err := s.Download(ctx, srcID, "tool", "1.1.0")
+	got, opt, err := s.Download(ctx, srcID, "acme", "tool", "1.1.0")
 	if err != nil || !bytes.Equal(got, pkgBytes) {
 		t.Fatalf("download = %d bytes, %v", len(got), err)
 	}
 	want := pkg.IndexedPublisher{Name: "acme", Trust: pkg.TrustVerified, Status: pkg.PublisherActive}
-	if opt.ExpectKey != "tool" || opt.ExpectVersion != "1.1.0" || opt.Source != fmt.Sprintf("market:%d", srcID) ||
+	if opt.ExpectID != "_acme__tool" || opt.ExpectVersion != "1.1.0" || opt.Source != fmt.Sprintf("market:%d", srcID) ||
 		opt.PackageURL != base+"pkgs/tool-1.1.0.s2plugin" || opt.Indexed == nil || *opt.Indexed != want {
 		t.Fatalf("options = %+v", opt)
 	}
-	for _, c := range []struct{ key, version, code, reason string }{
-		{"tool", "1.0.0", "invalid_argument", ""},
-		{"tool", "9.9.9", "not_found", ""},
-		{"gone", "1.0.0", "permission_denied", "revoked"},
-		{"lost", "1.0.0", "permission_denied", "publisher_unlisted"},
+	for _, c := range []struct{ publisher, key, version, code, reason string }{
+		{"acme", "tool", "1.0.0", "invalid_argument", ""},
+		{"acme", "tool", "9.9.9", "not_found", ""},
+		{"sub2api", "tool", "1.1.0", "not_found", ""},
+		{"old", "gone", "1.0.0", "permission_denied", "revoked"},
+		{"nobody", "lost", "1.0.0", "permission_denied", "publisher_unlisted"},
 	} {
-		_, _, err := s.Download(ctx, srcID, c.key, c.version)
+		_, _, err := s.Download(ctx, srcID, c.publisher, c.key, c.version)
 		if e := core.AsError(err); e == nil || e.Code != c.code || c.reason != "" && e.Details["reason"] != c.reason {
 			t.Errorf("%s@%s: %v", c.key, c.version, err)
 		}
@@ -167,7 +176,7 @@ func TestUpdateAvailable(t *testing.T) {
 		t.Fatal(err)
 	}
 	for installed, want := range map[string]bool{"1.0.0": true, "1.1.0": false, "1.2.0": false} {
-		st := &listState{hostVersion: "0.1.0", installed: map[string][2]string{"tool": {installed, "enabled"}}}
+		st := &listState{hostVersion: "0.1.0", installed: map[string][2]string{"_acme__tool": {installed, "enabled"}, "tool": {"0.0.1", "enabled"}}}
 		m := st.plugin(&Source{ID: 1}, idx, idx.Plugins[0])
 		if m.UpdateAvailable != want || m.InstalledVersion != installed || m.LatestVersion != "1.1.0" {
 			t.Errorf("installed %s: %+v", installed, m)
@@ -179,12 +188,12 @@ func TestUpdateAvailable(t *testing.T) {
 // (SUB2API_MARKET_ALLOW_HTTP).
 func TestMarketHTTPS(t *testing.T) {
 	ctx := context.Background()
-	s := New(testutil.DB(t), fakeInstaller{}, nil, Options{})
-	if err := s.EnsureOfficial(ctx, "http://market.example/"); err == nil {
+	if err := New(testutil.DB(t), fakeInstaller{}, nil, Options{BaseURL: "http://market.example/"}).EnsureChannels(ctx); err == nil {
 		t.Fatal("http source accepted")
 	}
-	dev := New(testutil.DB(t), fakeInstaller{}, nil, Options{AllowHTTP: true})
-	if err := dev.EnsureOfficial(ctx, "http://market.example/"); err != nil {
+	s := New(testutil.DB(t), fakeInstaller{}, nil, Options{})
+	dev := New(testutil.DB(t), fakeInstaller{}, nil, Options{AllowHTTP: true, BaseURL: "http://market.example/"})
+	if err := dev.EnsureChannels(ctx); err != nil {
 		t.Fatalf("allow http: %v", err)
 	}
 	base, _ := s.indexURL("https://market.example/m/")
@@ -197,8 +206,9 @@ func TestMarketHTTPS(t *testing.T) {
 	}
 }
 
-// Only index.json v2 with valid publisher ids and known trust levels and
-// statuses is read.
+// Only index.json v2 with valid publisher ids, known trust levels and
+// statuses and each (publisher, key) once is read; two publishers may list
+// one key.
 func TestParseIndex(t *testing.T) {
 	for _, raw := range []string{
 		`{"version":1,"plugins":[]}`,
@@ -206,6 +216,8 @@ func TestParseIndex(t *testing.T) {
 		`{"version":2,"publishers":[{"id":"a","trust":"official","status":"paused"}]}`,
 		`{"version":2,"publishers":[{"id":"Acme","trust":"official","status":"active"}]}`,
 		`{"version":2,"publishers":[{"id":"","trust":"official","status":"active"}]}`,
+		`{"version":2,"publishers":[{"id":"my-pub","trust":"official","status":"active"}]}`,
+		`{"version":2,"plugins":[{"key":"codex","publisher":"erio"},{"key":"codex","publisher":"erio"}]}`,
 		`not json`,
 	} {
 		if _, err := parseIndex([]byte(raw), false); err == nil {
@@ -214,6 +226,25 @@ func TestParseIndex(t *testing.T) {
 	}
 	if _, err := parseIndex(testIndex(nil), false); err != nil {
 		t.Fatal(err)
+	}
+	two := `{"version":2,"plugins":[{"key":"codex","publisher":"sub2api"},{"key":"codex","publisher":"erio"}]}`
+	if _, err := parseIndex([]byte(two), false); err != nil {
+		t.Fatalf("one key of two publishers: %v", err)
+	}
+}
+
+// find matches the (publisher, key) pair: two publishers' codex stay apart.
+func TestIndexFindPair(t *testing.T) {
+	v := []IndexVersion{{Version: "1.0.0"}}
+	idx := &Index{Plugins: []IndexPlugin{{Key: "codex", Publisher: "sub2api", Versions: v}, {Key: "codex", Publisher: "erio", Name: core.LocalizedText{"en": "E"}, Versions: v}}}
+	if p, _, ok := idx.find("erio", "codex", "1.0.0"); !ok || p.Name["en"] != "E" || p.ID() != "_erio__codex" {
+		t.Fatalf("find erio/codex = %+v %v", p, ok)
+	}
+	if p, _, ok := idx.find("sub2api", "codex", "1.0.0"); !ok || p.ID() != "codex" {
+		t.Fatalf("find codex = %+v %v", p, ok)
+	}
+	if _, _, ok := idx.find("acme", "codex", "1.0.0"); ok {
+		t.Fatal("found codex of a publisher that does not list it")
 	}
 }
 

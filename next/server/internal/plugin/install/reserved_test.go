@@ -46,69 +46,91 @@ func allGrants(m *manifest.Manifest) ConsentRequest {
 	return req
 }
 
-// After an uninstall the key stays with its publisher (audit 2026-10-09
-// P1-4): another publisher cannot claim it - and inherit the accounts, schema
-// and KV left behind - until an administrator releases it.
+// allowUnsigned makes e accept unsigned packages, beside the signed ones.
+func allowUnsigned(t *testing.T, e *env) {
+	t.Helper()
+	ts, err := pkg.NewTrustStore([]string{e.root.ID + "=" + e.root.PubB64()}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.svc.d.Trust = ts
+}
+
+// After an uninstall the plugin id stays with its publisher (audit
+// 2026-10-09 P1-4): another claimant of it - here an unsigned package
+// naming the same publisher, which no publisher row vouches for - cannot
+// take it and inherit the accounts, schema and KV left behind until an
+// administrator releases it.
 func TestRetiredKeyStaysWithPublisher(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
 	kv := &fakeKV{}
 	e.svc.d.KV = kv
 	acme := acmePublisher(t, e, pkg.TrustCommunity)
+	allowUnsigned(t, e)
+	const id = "_acme__acme_tool"
 	install := func(version string) {
 		t.Helper()
 		if _, err := e.svc.Upload(ctx, pkgtest.Build(pkgtest.Minimal("acme_tool", version, "acme"), acme), e.admin, UploadOptions{}); err != nil {
 			t.Fatalf("upload %s: %v", version, err)
 		}
-		if _, err := e.svc.Consent(ctx, "acme_tool", version, ConsentRequest{}, e.admin); err != nil {
+		if _, err := e.svc.Consent(ctx, id, version, ConsentRequest{}, e.admin); err != nil {
 			t.Fatal(err)
 		}
 	}
 	install("1.0.0")
-	if _, err := e.svc.Uninstall(ctx, "acme_tool", UninstallOptions{}, e.admin); err != nil {
+	if _, err := e.svc.Uninstall(ctx, id, UninstallOptions{}, e.admin); err != nil {
 		t.Fatal(err)
 	}
 	if len(kv.purged) != 0 {
 		t.Fatal("KV purged without purge")
 	}
-	other := pkgtest.Build(pkgtest.Minimal("acme_tool", "2.0.0", "sub2api"), e.root)
+	other := pkgtest.Build(pkgtest.Minimal("acme_tool", "2.0.0", "acme"), pkgtest.Key{})
 	if _, err := e.svc.Upload(ctx, other, e.admin, UploadOptions{}); errCode(err) != "plugin_key_retired" {
-		t.Fatalf("other publisher claimed a retired key: %v", err)
+		t.Fatalf("other publisher claimed a retired id: %v", err)
 	}
 	// The same publisher reinstalls freely, and the retirement survives it.
 	install("1.0.1")
-	if _, err := e.svc.ReleaseRetiredKey(ctx, "acme_tool", ReleaseOptions{}, e.admin); errCode(err) != "conflict" {
-		t.Fatalf("release of an installed key: %v", err)
+	if _, err := e.svc.ReleaseRetiredKey(ctx, id, ReleaseOptions{}, e.admin); errCode(err) != "conflict" {
+		t.Fatalf("release of an installed id: %v", err)
 	}
-	if _, err := e.svc.Uninstall(ctx, "acme_tool", UninstallOptions{Purge: true}, e.admin); err != nil {
+	if _, err := e.svc.Uninstall(ctx, id, UninstallOptions{Purge: true}, e.admin); err != nil {
 		t.Fatal(err)
 	}
 	if len(kv.purged) != 1 {
 		t.Fatalf("uninstall with purge: KV purges %v", kv.purged)
 	}
-	// A relation of the key's prefix is what the plugin left in the database.
-	if _, err := e.db.SQL.ExecContext(ctx, `CREATE TABLE plg_acme_tool__kept (id int)`); err != nil {
+	checkRelease(t, e, id, other)
+}
+
+// checkRelease lists and releases the retired id, after which other
+// installs.
+func checkRelease(t *testing.T, e *env, id string, other []byte) {
+	t.Helper()
+	ctx, kv := context.Background(), e.svc.d.KV.(*fakeKV)
+	// A relation of the id's prefix is what the plugin left in the database.
+	if _, err := e.db.SQL.ExecContext(ctx, `CREATE TABLE `+manifest.TablePrefix(id)+`kept (id int)`); err != nil {
 		t.Fatal(err)
 	}
 	keys, err := e.svc.ListRetiredKeys(ctx)
-	if err != nil || len(keys) != 1 || keys[0].Key != "acme_tool" || keys[0].Publisher != "acme" || keys[0].Installed || !keys[0].Schema {
+	if err != nil || len(keys) != 1 || keys[0].Key != id || keys[0].DisplayID != manifest.DisplayID(id) || keys[0].Publisher != "acme" || keys[0].Installed || !keys[0].Schema {
 		t.Fatalf("retired keys: %v %+v", err, keys)
 	}
-	res, err := e.svc.ReleaseRetiredKey(ctx, "acme_tool", ReleaseOptions{Purge: true, PurgeAccounts: true}, e.admin)
-	if err != nil || res.AccountsDeleted != 3 || res.KVDeleted != 2 {
+	res, err := e.svc.ReleaseRetiredKey(ctx, id, ReleaseOptions{Purge: true, PurgeAccounts: true}, e.admin)
+	if err != nil || res.AccountsDeleted != 3 || res.KVDeleted != 2 || len(kv.purged) != 2 {
 		t.Fatalf("release: %v %+v", err, res)
 	}
-	if len(e.accounts.purged) != 1 || e.accounts.purged[0] != "acme_tool" || e.schemas.dropped[len(e.schemas.dropped)-1] != "acme_tool" {
+	if len(e.accounts.purged) != 1 || e.accounts.purged[0] != id || e.schemas.dropped[len(e.schemas.dropped)-1] != id {
 		t.Fatalf("release side effects: accounts=%v schemas=%v", e.accounts.purged, e.schemas.dropped)
 	}
-	if _, err := e.svc.ReleaseRetiredKey(ctx, "acme_tool", ReleaseOptions{}, e.admin); errCode(err) != "not_found" {
+	if _, err := e.svc.ReleaseRetiredKey(ctx, id, ReleaseOptions{}, e.admin); errCode(err) != "not_found" {
 		t.Fatalf("second release: %v", err)
 	}
 	if _, err := e.svc.Upload(ctx, other, e.admin, UploadOptions{}); err != nil {
 		t.Fatalf("upload after release: %v", err)
 	}
 	var audits int
-	_ = e.db.SQL.QueryRowContext(ctx, `SELECT count(*) FROM audit_logs WHERE action = 'plugin.key.release' AND target_id = 'acme_tool'`).Scan(&audits)
+	_ = e.db.SQL.QueryRowContext(ctx, `SELECT count(*) FROM audit_logs WHERE action = 'plugin.key.release' AND target_id = $1`, id).Scan(&audits)
 	if audits != 1 {
 		t.Fatalf("release audit rows = %d", audits)
 	}
@@ -135,27 +157,62 @@ func TestBuiltinTakesBackRetiredKey(t *testing.T) {
 	}
 }
 
-// First-party keys and platform ids are reserved (audit 2026-10-09 P1-5).
-func TestReservedKeysAndPlatforms(t *testing.T) {
+// The first-party publisher is reserved (CONTRACTS §137): a package naming
+// it installs with official trust, from the built-in channel or in dev
+// mode only. Another publisher's plugin of a first-party key installs next
+// to it under its own id. A reserved platform id belongs to its plugin
+// (audit 2026-10-09 P1-5).
+func TestReservedPublisherAndPlatforms(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
 	acme := acmePublisher(t, e, pkg.TrustVerified)
-	guard := pkgtest.Build(pkgtest.Minimal("guard", "1.0.0", "acme"), acme)
-	if _, err := e.svc.Upload(ctx, guard, e.admin, UploadOptions{}); errCode(err) != "plugin_key_reserved" {
-		t.Fatalf("hand upload of a reserved key: %v", err)
+	allowUnsigned(t, e)
+	rogue := pkgtest.Build(pkgtest.Minimal("codex", "1.0.0", "sub2api"), pkgtest.Key{})
+	verified := &pkg.IndexedPublisher{Name: "sub2api", Trust: pkg.TrustVerified, Status: pkg.PublisherActive}
+	for name, opt := range map[string]UploadOptions{"unsigned": {}, "community market": {Source: "market:1", Indexed: verified}} {
+		if _, err := e.svc.Upload(ctx, rogue, e.admin, opt); errCode(err) != "plugin_publisher_reserved" {
+			t.Fatalf("%s package naming sub2api: %v", name, err)
+		}
 	}
-	if _, err := e.svc.Upload(ctx, guard, e.admin, UploadOptions{Source: "market:1"}); errCode(err) != "plugin_key_reserved" {
-		t.Fatalf("verified market install of a reserved key: %v", err)
+	if _, err := e.svc.Upload(ctx, pkgtest.Build(pkgtest.Minimal("codex", "1.0.0", "sub2api"), e.root), e.admin, UploadOptions{}); err != nil {
+		t.Fatalf("official upload: %v", err)
 	}
-	// An officially signed hand upload may claim it.
-	if _, err := e.svc.Upload(ctx, pkgtest.Build(pkgtest.Minimal("payment", "1.0.0", "sub2api"), e.root), e.admin, UploadOptions{}); err != nil {
-		t.Fatalf("official upload of a reserved key: %v", err)
+	if _, err := e.svc.Upload(ctx, pkgtest.Build(pkgtest.Minimal("codex", "1.0.0", "acme"), acme), e.admin, UploadOptions{}); err != nil {
+		t.Fatalf("acme/codex next to codex: %v", err)
 	}
-	// A reserved platform id belongs to its plugin, whatever the channel.
-	m := renamePlatform(pkgtest.Platform("acme_video", "1.0.0", "acme"), "typesafe")
-	if _, err := e.svc.Upload(ctx, pkgtest.Build(m, acme), e.admin, UploadOptions{Source: "market:1"}); errCode(err) != "plugin_key_reserved" {
-		t.Fatalf("reserved platform id: %v", err)
+	if ids := pluginIDs(t, e); strings.Join(ids, " ") != "_acme__codex codex" {
+		t.Fatalf("plugins = %v", ids)
 	}
+	if _, err := e.svc.Upload(ctx, pkgtest.Build(pkgtest.Minimal("guard", "1.0.0", "sub2api"), pkgtest.Key{}), e.admin, UploadOptions{Source: "builtin"}); err != nil {
+		t.Fatalf("built-in unsigned package naming sub2api: %v", err)
+	}
+	e.svc.opt.Plugins.DevMode = true
+	if _, err := e.svc.Upload(ctx, pkgtest.Build(pkgtest.Minimal("relay", "1.0.0", "sub2api"), pkgtest.Key{}), e.admin, UploadOptions{}); err != nil {
+		t.Fatalf("dev mode: %v", err)
+	}
+	m := renamePlatform(pkgtest.Platform("typesafe", "1.0.0", "acme"), "typesafe")
+	if _, err := e.svc.Upload(ctx, pkgtest.Build(m, acme), e.admin, UploadOptions{}); errCode(err) != "plugin_key_reserved" {
+		t.Fatalf("acme/typesafe declared the reserved platform: %v", err)
+	}
+}
+
+// pluginIDs are the keys of the plugins rows, sorted.
+func pluginIDs(t *testing.T, e *env) []string {
+	t.Helper()
+	rows, err := e.db.SQL.QueryContext(context.Background(), `SELECT key FROM plugins ORDER BY key`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	return ids
 }
 
 // A version awaiting approval holds no platform or endpoint; Consent checks
@@ -175,7 +232,7 @@ func TestUnapprovedVersionsHoldNoResources(t *testing.T) {
 	if _, err := e.svc.Consent(ctx, "vid_b", "1.0.0", allGrants(b), e.admin); err != nil {
 		t.Fatal(err)
 	}
-	_, err := e.svc.Consent(ctx, "vid_a", "1.0.0", allGrants(a), e.admin)
+	_, err := e.svc.Consent(ctx, "_acme__vid_a", "1.0.0", allGrants(a), e.admin)
 	if errCode(err) != "plugin_resource_conflict" || fieldCode(err, "platforms[0].id") != "platform_conflict" {
 		t.Fatalf("consent of a conflicting version: %v", err)
 	}
@@ -208,7 +265,7 @@ func TestChannelHeldByOneProvider(t *testing.T) {
 	if _, err := e.svc.Consent(ctx, "sms_b", "1.0.0", allGrants(b), e.admin); err != nil {
 		t.Fatal(err)
 	}
-	_, err := e.svc.Consent(ctx, "sms_a", "1.0.0", allGrants(a), e.admin)
+	_, err := e.svc.Consent(ctx, "_acme__sms_a", "1.0.0", allGrants(a), e.admin)
 	if errCode(err) != "plugin_resource_conflict" || fieldCode(err, "notifications.channels[0].id") != "channel_conflict" {
 		t.Fatalf("consent of a second provider: %v", err)
 	}
@@ -232,15 +289,49 @@ func renamePlatform(m *manifest.Manifest, id string) *manifest.Manifest {
 	return m
 }
 
-// The reservations cover every first-party plugin in next/plugins, and only
-// those: its key and the platform and notification channel ids it declares.
-// A removed key is no longer in the repository.
+// The reservations cover the first-party plugins in next/plugins, and
+// only those: every one is the first-party publisher's, its platform and
+// notification channel ids are reserved for it, and a removed plugin is no
+// longer in the repository.
 func TestReservedCoverRepo(t *testing.T) {
+	ids := firstPartyIDs(t)
+	for id, m := range ids {
+		if m.Publisher != manifest.OfficialPublisher || id != m.Key {
+			t.Errorf("first-party plugin %q is published by %q", m.Key, m.Publisher)
+		}
+		if _, ok := removedKeys[id]; ok {
+			t.Errorf("removed plugin %q is still a first-party plugin", id)
+		}
+		for _, p := range m.Platforms {
+			if reservedPlatforms[p.ID] != id {
+				t.Errorf("platform %q of %q is not reserved for it", p.ID, id)
+			}
+		}
+		if m.Notifications != nil {
+			for _, c := range m.Notifications.Channels {
+				if reservedChannels[c.ID] != id {
+					t.Errorf("notification channel %q of %q is not reserved for it", c.ID, id)
+				}
+			}
+		}
+	}
+	for _, owners := range []map[string]string{reservedPlatforms, reservedChannels} {
+		for res, owner := range owners {
+			if ids[owner] == nil {
+				t.Errorf("%q is reserved for %q, which is no first-party plugin", res, owner)
+			}
+		}
+	}
+}
+
+// firstPartyIDs reads the manifests of next/plugins by plugin id.
+func firstPartyIDs(t *testing.T) map[string]*manifest.Manifest {
+	t.Helper()
 	paths, err := filepath.Glob(filepath.Join("..", "..", "..", "..", "plugins", "*", "manifest.json"))
 	if err != nil || len(paths) < 5 {
 		t.Fatalf("first-party manifests: %v %v", err, paths)
 	}
-	keys := map[string]bool{}
+	ids := map[string]*manifest.Manifest{}
 	for _, path := range paths {
 		raw, err := os.ReadFile(path)
 		if err != nil {
@@ -250,41 +341,9 @@ func TestReservedCoverRepo(t *testing.T) {
 		if err := json.Unmarshal(raw, &m); err != nil {
 			t.Fatalf("%s: %v", path, err)
 		}
-		keys[m.Key] = true
-		if !reservedKeys[m.Key] {
-			t.Errorf("first-party key %q is not reserved", m.Key)
-		}
-		if _, ok := removedKeys[m.Key]; ok {
-			t.Errorf("removed key %q is still a first-party plugin", m.Key)
-		}
-		for _, p := range m.Platforms {
-			if reservedPlatforms[p.ID] != m.Key {
-				t.Errorf("platform %q of %q is not reserved for it", p.ID, m.Key)
-			}
-		}
-		if m.Notifications != nil {
-			for _, c := range m.Notifications.Channels {
-				if reservedChannels[c.ID] != m.Key {
-					t.Errorf("notification channel %q of %q is not reserved for it", c.ID, m.Key)
-				}
-			}
-		}
+		ids[m.ID()] = &m
 	}
-	for key := range reservedKeys {
-		if !keys[key] {
-			t.Errorf("reserved key %q is no first-party plugin: remove it, or move it to removedKeys", key)
-		}
-	}
-	for id, owner := range reservedPlatforms {
-		if !keys[owner] {
-			t.Errorf("platform %q is reserved for %q, which is no first-party plugin", id, owner)
-		}
-	}
-	for id, owner := range reservedChannels {
-		if !keys[owner] {
-			t.Errorf("notification channel %q is reserved for %q, which is no first-party plugin", id, owner)
-		}
-	}
+	return ids
 }
 
 // A removed plugin installs from no source, officially signed or not: the
@@ -303,13 +362,15 @@ func TestRemovedKeyRefused(t *testing.T) {
 	}
 }
 
+// A notification channel id is reserved for its plugin id: another
+// publisher's plugin of the same key does not get it.
 func TestReservedChannel(t *testing.T) {
-	m := &manifest.Manifest{Key: "acme", Notifications: &manifest.Notifications{Channels: []manifest.NotificationChannel{{ID: "email"}}}}
-	if err := checkReserved(m, "upload", pkg.TrustOfficial, true); err == nil {
-		t.Fatal("a third-party plugin declared the reserved email channel")
+	m := &manifest.Manifest{Key: "mailer", Publisher: "acme", Notifications: &manifest.Notifications{Channels: []manifest.NotificationChannel{{ID: "email"}}}}
+	if err := checkReserved(m, "upload", pkg.TrustOfficial, false); err == nil {
+		t.Fatal("acme/mailer declared the reserved email channel")
 	}
-	m.Key = "mailer"
-	if err := checkReserved(m, "builtin", "", true); err != nil {
+	m.Publisher = manifest.OfficialPublisher
+	if err := checkReserved(m, "builtin", "", false); err != nil {
 		t.Fatalf("mailer: %v", err)
 	}
 }

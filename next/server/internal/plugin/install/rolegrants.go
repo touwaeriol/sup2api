@@ -110,7 +110,7 @@ func (s *Service) planRoleGrants(ctx context.Context, q *gorm.DB, m *manifest.Ma
 	var out []RoleGrant
 	var skipped []InheritSkip
 	for _, up := range m.UserPermissions {
-		key := manifest.PermissionKey(m.Key, up.Key)
+		key := manifest.PermissionKey(m.ID(), up.Key)
 		if existing.has(key) {
 			continue
 		}
@@ -143,7 +143,7 @@ func (s *Service) inheritHolders(ctx context.Context, q *gorm.DB, m *manifest.Ma
 	var from []string
 	for _, up := range m.UserPermissions {
 		for _, k := range up.InheritFrom {
-			if key := manifest.PermissionKey(m.Key, k); existing.has(key) {
+			if key := manifest.PermissionKey(m.ID(), k); existing.has(key) {
 				from = append(from, key)
 			}
 		}
@@ -167,7 +167,7 @@ func (s *Service) inheritHolders(ctx context.Context, q *gorm.DB, m *manifest.Ma
 // cannot see the risk of a key no longer declared); the sources left out
 // are returned with why. Super admin roles hold no grants (holders).
 func inheritGrants(m *manifest.Manifest, up manifest.UserPermission, existing catalogPerms, holders map[string][]core.PermissionHolder) ([]RoleGrant, []InheritSkip) {
-	key := manifest.PermissionKey(m.Key, up.Key)
+	key := manifest.PermissionKey(m.ID(), up.Key)
 	var scope manifest.PermissionScope
 	if up.Scope != nil {
 		scope = *up.Scope
@@ -176,7 +176,7 @@ func inheritGrants(m *manifest.Manifest, up manifest.UserPermission, existing ca
 	var gs []RoleGrant
 	var skipped []InheritSkip
 	for _, k := range up.InheritFrom {
-		old := manifest.PermissionKey(m.Key, k)
+		old := manifest.PermissionKey(m.ID(), k)
 		src := existing[old]
 		for _, h := range holders[old] {
 			var skip InheritSkip
@@ -229,7 +229,7 @@ func withholdGrants(m *manifest.Manifest, existing catalogPerms, plan []RoleGran
 	roles := map[string]map[string][]string{}
 	pending := []RoleGrant{}
 	for _, up := range m.UserPermissions {
-		if !existing.has(manifest.PermissionKey(m.Key, up.Key)) {
+		if !existing.has(manifest.PermissionKey(m.ID(), up.Key)) {
 			roles[up.Key] = map[string][]string{}
 		}
 	}
@@ -238,7 +238,7 @@ func withholdGrants(m *manifest.Manifest, existing catalogPerms, plan []RoleGran
 			pending = append(pending, g)
 			continue
 		}
-		local, _ := manifest.LocalPermission(m.Key, g.Permission)
+		local, _ := manifest.LocalPermission(m.ID(), g.Permission)
 		roles[local][g.Role] = append(roles[local][g.Role], g.Scope)
 	}
 	return roles, pending
@@ -429,18 +429,18 @@ func carryRenamedHolders(ctx context.Context, cat core.PermissionCatalog, tx *go
 	retires := map[string]bool{} // by local key: inherits from a key retired now
 	for _, up := range m.UserPermissions {
 		for _, from := range up.InheritFrom {
-			if old := manifest.PermissionKey(m.Key, from); before.has(old) && !before.removed(old) {
+			if old := manifest.PermissionKey(m.ID(), from); before.has(old) && !before.removed(old) {
 				keys, retires[up.Key] = append(keys, old), true
 			}
 		}
 		if retires[up.Key] {
-			keys = append(keys, manifest.PermissionKey(m.Key, up.Key))
+			keys = append(keys, manifest.PermissionKey(m.ID(), up.Key))
 		}
 	}
 	if len(keys) == 0 {
 		return nil
 	}
-	perms, err := loadCatalogPerms(ctx, cat, tx, m.Key)
+	perms, err := loadCatalogPerms(ctx, cat, tx, m.ID())
 	if err != nil {
 		return err
 	}
@@ -448,13 +448,13 @@ func carryRenamedHolders(ctx context.Context, cat core.PermissionCatalog, tx *go
 	if err != nil {
 		return err
 	}
-	planned, overridden, err := consentDecisions(ctx, tx, m.Key, m.Version)
+	planned, overridden, err := consentDecisions(ctx, tx, m.ID(), m.Version)
 	if err != nil {
 		return err
 	}
 	pending := []RoleGrant{}
 	for _, up := range m.UserPermissions {
-		key := manifest.PermissionKey(m.Key, up.Key)
+		key := manifest.PermissionKey(m.ID(), up.Key)
 		if !retires[up.Key] || perms.removed(key) || overridden[up.Key] {
 			continue
 		}
@@ -471,7 +471,7 @@ func carryRenamedHolders(ctx context.Context, cat core.PermissionCatalog, tx *go
 	if len(pending) == 0 {
 		return nil
 	}
-	return audit.Audit(ctx, tx, 0, AuditRoleGrantsCarry, "plugin", m.Key, map[string]any{"version": m.Version, "pending": pending})
+	return audit.Audit(ctx, tx, 0, AuditRoleGrantsCarry, "plugin", m.ID(), map[string]any{"version": m.Version, "pending": pending})
 }
 
 // consentDecisions reads what the latest consent of key@version decided on

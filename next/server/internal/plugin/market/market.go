@@ -13,28 +13,15 @@ import (
 	"sync"
 	"time"
 
-	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
-
 	rc "github.com/Sub2API-Devs/sup2api/next/runtime-contract"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store"
-	"github.com/Sub2API-Devs/sup2api/next/server/internal/store/model"
 )
 
 const (
 	cacheTTL      = 5 * time.Minute
 	maxIndexBytes = 8 << 20
 )
-
-// Source is a market_sources row.
-type Source struct {
-	ID        int64     `json:"id"`
-	Name      string    `json:"name"`
-	URL       string    `json:"url"`
-	Enabled   bool      `json:"enabled"`
-	CreatedAt time.Time `json:"created_at"`
-}
 
 // Installer is the part of install.Service the market needs: the host
 // version the index entries are checked against. Downloaded packages go to
@@ -51,6 +38,10 @@ type Options struct {
 	// AllowHTTP accepts http:// source and package URLs besides https://
 	// (SUB2API_MARKET_ALLOW_HTTP: local markets of test stacks and development).
 	AllowHTTP bool
+	// BaseURL is where the store's channel indexes are, OfficialBase when
+	// empty (SUB2API_MARKET_BASE_URL: the local market of a test stack or
+	// development).
+	BaseURL string
 }
 
 // Service fetches and caches market indexes.
@@ -60,6 +51,7 @@ type Service struct {
 	client *http.Client
 	pkg    *http.Client // client with at least rc.PluginPackageTransferTimeout
 	opt    Options
+	base   string // the store's base (Options.BaseURL)
 	now    func() time.Time
 
 	mu    sync.Mutex
@@ -83,7 +75,7 @@ func New(db *store.DB, inst Installer, client *http.Client, opt Options) *Servic
 	if opt.MaxPackageBytes <= 0 {
 		opt.MaxPackageBytes = rc.PluginPackageMaxBytes
 	}
-	s := &Service{db: db, inst: inst, opt: opt, now: time.Now, cache: map[int64]cached{}}
+	s := &Service{db: db, inst: inst, opt: opt, base: storeBase(opt.BaseURL), now: time.Now, cache: map[int64]cached{}}
 	idxClient, pkgClient := *client, *client
 	idxClient.CheckRedirect = CheckRedirect(opt.AllowHTTP)
 	pkgClient.CheckRedirect = idxClient.CheckRedirect
@@ -114,109 +106,6 @@ func CheckRedirect(allowHTTP bool) func(req *http.Request, via []*http.Request) 
 	}
 }
 
-// The official plugin store (CONTRACTS §136): the only market source. Its
-// row keeps an id so that a configurable store address can be added later.
-const (
-	OfficialName = "official"
-	OfficialURL  = "https://raw.githubusercontent.com/touwaeriol/sup2api-plugin/index/index.json"
-)
-
-// storeAddr is the address the official row takes: indexURL
-// (SUB2API_MARKET_URL), or OfficialURL when it is empty.
-func storeAddr(indexURL string) string {
-	if indexURL == "" {
-		return OfficialURL
-	}
-	return indexURL
-}
-
-// ValidateStoreURL checks SUB2API_MARKET_URL ("" = OfficialURL) as a market
-// URL: https, or http with Options.AllowHTTP. Every node checks it at start;
-// only the node that may write the source calls EnsureOfficial.
-func (s *Service) ValidateStoreURL(indexURL string) error {
-	if _, err := s.indexURL(storeAddr(indexURL)); err != nil {
-		return fmt.Errorf("market url: %w", err)
-	}
-	return nil
-}
-
-// EnsureOfficial makes the official store the only market source at start:
-// its row takes indexURL ("" = OfficialURL; SUB2API_MARKET_URL points it at
-// the local market of a test stack or development) and is enabled, and
-// every other row is deleted.
-func (s *Service) EnsureOfficial(ctx context.Context, indexURL string) error {
-	if err := s.ValidateStoreURL(indexURL); err != nil {
-		return err
-	}
-	return s.db.Tx(ctx, func(tx *gorm.DB) error {
-		g := store.G(ctx, tx)
-		if err := seedSource(g, OfficialName, storeAddr(indexURL)).Error; err != nil {
-			return err
-		}
-		return otherSources(g).Delete(&model.MarketSource{}).Error
-	})
-}
-
-// otherSources selects the market sources besides the official one.
-func otherSources(db *gorm.DB) *gorm.DB {
-	return db.Where("name <> ?", OfficialName)
-}
-
-// seedSource upserts the source name: an existing one takes addr and is
-// enabled.
-func seedSource(db *gorm.DB, name, addr string) *gorm.DB {
-	set := clause.Assignments(map[string]any{"url": addr, "enabled": true})
-	return db.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "name"}}, DoUpdates: set}).
-		Create(&model.MarketSource{Name: name, URL: addr})
-}
-
-// sources selects market_sources rows as Source, whose fields are its
-// columns.
-func sources(db *gorm.DB) *gorm.DB {
-	return db.Table("market_sources").Select("id, name, url, enabled, created_at")
-}
-
-// ListSources returns all sources.
-func (s *Service) ListSources(ctx context.Context) ([]Source, error) {
-	out := []Source{}
-	if err := sources(store.G(ctx, s.db.Gorm)).Order("id").Find(&out).Error; err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-// source is the enabled source id.
-func (s *Service) source(ctx context.Context, id int64) (*Source, error) {
-	return takeSource(sources(store.G(ctx, s.db.Gorm)).Where("id = ?", id))
-}
-
-// officialSource is the official store's row (EnsureOfficial).
-func (s *Service) officialSource(ctx context.Context) (*Source, error) {
-	return takeSource(officialRow(store.G(ctx, s.db.Gorm)))
-}
-
-// officialRow selects the official store's row as Source.
-func officialRow(db *gorm.DB) *gorm.DB {
-	return sources(db).Where("name = ?", OfficialName)
-}
-
-// takeSource reads the source q selects: 404 when it is missing or
-// disabled.
-func takeSource(q *gorm.DB) (*Source, error) {
-	var src Source
-	err := q.Take(&src).Error
-	if store.IsNoRows(err) {
-		return nil, core.ErrNotFound.WithMessage("market source not found")
-	}
-	if err != nil {
-		return nil, err
-	}
-	if !src.Enabled {
-		return nil, core.ErrNotFound.WithMessage("market source is disabled")
-	}
-	return &src, nil
-}
-
 // schemeAllowed reports whether a market URL may use the scheme of u:
 // https, or http with allowHTTP (Options.AllowHTTP).
 func schemeAllowed(u *url.URL, allowHTTP bool) bool {
@@ -236,7 +125,8 @@ func (s *Service) indexURL(raw string) (*url.URL, error) {
 	return u, nil
 }
 
-// Index returns the index of a source (cached for 5 minutes).
+// Index returns the index of channel sourceID, 0 for the default one
+// (cached for 5 minutes).
 func (s *Service) Index(ctx context.Context, sourceID int64, refresh bool) (*Index, *Source, error) {
 	src, err := s.source(ctx, sourceID)
 	if err != nil {
@@ -253,6 +143,7 @@ func (s *Service) Index(ctx context.Context, sourceID int64, refresh bool) (*Ind
 	if err != nil {
 		return nil, nil, err
 	}
+	idx.fetched = s.now()
 	s.mu.Lock()
 	s.cache[src.ID] = cached{at: s.now(), indexURL: u.String(), idx: idx}
 	s.mu.Unlock()

@@ -71,6 +71,9 @@ func (a *API) RegisterRoutes(r *httpapi.Router) {
 	r.Perm(http.MethodGet, "/nodes", PermNodeRead, a.nodes)
 
 	r.Perm(http.MethodGet, "/market/sources", PermMarketRead, a.marketSources)
+	r.Perm(http.MethodPost, "/market/sources", PermManage, a.createChannel)
+	r.Perm(http.MethodPatch, "/market/sources/:id", PermManage, a.updateChannel)
+	r.Perm(http.MethodDelete, "/market/sources/:id", PermManage, a.deleteChannel)
 	r.Perm(http.MethodGet, "/market/plugins", PermMarketRead, a.marketPlugins)
 
 	r.Perm(http.MethodGet, "/publishers", PermPubRead, a.listPublishers)

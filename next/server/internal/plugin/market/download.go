@@ -6,19 +6,20 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/install"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/pkg"
 )
 
-// Download downloads key@version from market source sourceID and checks
-// its size and sha256 against the index. Its publisher must be listed
-// active (403 otherwise, pkg.IndexedPublisher.Check). The options are the
-// ones to hand it to the installer with (install.Upload, ReviewPackage,
-// InstallWithConsent): its trust level is the index's, not its signature's
-// (CONTRACTS §136).
-func (s *Service) Download(ctx context.Context, sourceID int64, key, version string) ([]byte, install.UploadOptions, error) {
-	e, err := s.findEntry(ctx, sourceID, key, version)
+// Download downloads publisher's key@version from channel sourceID (0: the
+// default one) and checks its size and sha256 against the index. Its
+// publisher must be listed active (403 otherwise,
+// pkg.IndexedPublisher.Check). The options are the ones to hand it to the
+// installer with (install.Upload, ReviewPackage, InstallWithConsent): its
+// trust level is the index's, not its signature's (CONTRACTS §136).
+func (s *Service) Download(ctx context.Context, sourceID int64, publisher, key, version string) ([]byte, install.UploadOptions, error) {
+	e, err := s.findEntry(ctx, sourceID, publisher, key, version)
 	if err != nil {
 		return nil, install.UploadOptions{}, err
 	}
@@ -33,7 +34,7 @@ func (s *Service) Download(ctx context.Context, sourceID int64, key, version str
 	if err != nil {
 		return nil, install.UploadOptions{}, err
 	}
-	return data, install.UploadOptions{ExpectKey: key, ExpectVersion: version, Source: fmt.Sprintf("market:%d", e.src.ID),
+	return data, install.UploadOptions{ExpectID: manifest.PluginID(publisher, key), ExpectVersion: version, Source: fmt.Sprintf("market:%d", e.src.ID),
 		PackageURL: dl, Indexed: &e.publisher}, nil
 }
 
@@ -46,16 +47,16 @@ type entry struct {
 	publisher pkg.IndexedPublisher
 }
 
-// findEntry finds key@version in a fresh copy of the index of source
-// sourceID: an install goes by what the market lists now.
-func (s *Service) findEntry(ctx context.Context, sourceID int64, key, version string) (*entry, error) {
+// findEntry finds publisher's key@version in a fresh copy of the index of
+// source sourceID: an install goes by what the market lists now.
+func (s *Service) findEntry(ctx context.Context, sourceID int64, publisher, key, version string) (*entry, error) {
 	idx, src, err := s.Index(ctx, sourceID, true)
 	if err != nil {
 		return nil, err
 	}
-	p, v, ok := idx.find(key, version)
+	p, v, ok := idx.find(publisher, key, version)
 	if !ok {
-		return nil, core.ErrNotFound.WithMessage(fmt.Sprintf("plugin %s %s not found in market index", key, version))
+		return nil, core.ErrNotFound.WithMessage(fmt.Sprintf("plugin %s %s not found in market index", manifest.DisplayID(manifest.PluginID(publisher, key)), version))
 	}
 	return s.newEntry(src, idx, p, v)
 }

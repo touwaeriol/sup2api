@@ -40,11 +40,11 @@ func NewDefaultsApplier(perms core.PermissionCatalog) *DefaultsApplier {
 // Plugins bring no sticky rules (CONTRACTS §5.6).
 func (a *DefaultsApplier) ApplyDefaults(ctx context.Context, tx *gorm.DB, m *manifest.Manifest, grants map[string]map[string][]string) error {
 	if a.perms != nil {
-		before, err := loadCatalogPerms(ctx, a.perms, tx, m.Key)
+		before, err := loadCatalogPerms(ctx, a.perms, tx, m.ID())
 		if err != nil {
 			return err
 		}
-		if err := a.perms.SyncPlugin(ctx, tx, m.Key, PermissionDefs(m, grants)); err != nil {
+		if err := a.perms.SyncPlugin(ctx, tx, m.ID(), PermissionDefs(m, grants)); err != nil {
 			return fmt.Errorf("sync plugin permissions: %w", err)
 		}
 		if grants == nil {
@@ -57,7 +57,7 @@ func (a *DefaultsApplier) ApplyDefaults(ctx context.Context, tx *gorm.DB, m *man
 	for _, hp := range m.HostPermissions {
 		ids = append(ids, hp.ID)
 	}
-	if err := pruneGrants(store.G(ctx, tx), m.Key, ids).Error; err != nil {
+	if err := pruneGrants(store.G(ctx, tx), m.ID(), ids).Error; err != nil {
 		return fmt.Errorf("prune grants: %w", err)
 	}
 	return nil
@@ -82,8 +82,8 @@ func PermissionDefs(m *manifest.Manifest, grants map[string]map[string][]string)
 	defs := make([]core.PermissionDef, 0, len(m.UserPermissions))
 	for i, up := range m.UserPermissions {
 		d := core.PermissionDef{
-			Key:         manifest.PermissionKey(m.Key, up.Key),
-			Module:      manifest.PermissionModule(m.Key),
+			Key:         manifest.PermissionKey(m.ID(), up.Key),
+			Module:      manifest.PermissionModule(m.ID()),
 			Label:       core.LocalizedText(up.Label),
 			Description: core.LocalizedText(up.Description),
 			Risk:        up.RiskLevel(),
@@ -96,7 +96,7 @@ func PermissionDefs(m *manifest.Manifest, grants map[string]map[string][]string)
 			d.GroupLabel, d.GroupSort = core.LocalizedText(m.PermissionGroups[g].Label), (g+1)*10
 		}
 		for _, r := range up.Requires {
-			d.Requires = append(d.Requires, manifest.PermissionKey(m.Key, r))
+			d.Requires = append(d.Requires, manifest.PermissionKey(m.ID(), r))
 		}
 		d.Scope, d.ScopeType = core.StoredPluginScope(up.Scope), core.PluginScopeType(up.Scope)
 		defs = append(defs, d)
@@ -160,7 +160,7 @@ func roleGrants(m *manifest.Manifest, overrides map[string]map[string][]string, 
 	for _, up := range m.UserPermissions {
 		roles := map[string][]string{}
 		out[up.Key] = roles
-		if existing.has(manifest.PermissionKey(m.Key, up.Key)) {
+		if existing.has(manifest.PermissionKey(m.ID(), up.Key)) {
 			continue
 		}
 		if !renamed(m, up, existing) {
@@ -175,5 +175,5 @@ func roleGrants(m *manifest.Manifest, overrides map[string]map[string][]string, 
 // a rename or split, which keeps the old key's holders instead of getting
 // the manifest defaults.
 func renamed(m *manifest.Manifest, up manifest.UserPermission, existing catalogPerms) bool {
-	return slices.ContainsFunc(up.InheritFrom, func(from string) bool { return existing.has(manifest.PermissionKey(m.Key, from)) })
+	return slices.ContainsFunc(up.InheritFrom, func(from string) bool { return existing.has(manifest.PermissionKey(m.ID(), from)) })
 }

@@ -1,0 +1,9 @@
+-- sql
+INSERT INTO "market_sources" ("name","url","branch","is_default") VALUES ($1,$2,$3,$4) ON CONFLICT ("branch") DO UPDATE SET "enabled"=$5,"is_default"=$6 RETURNING "id","enabled","created_at","is_default"
+-- vars
+$1 string "正式"
+$2 string "https://market.example/m/index-main/index.json"
+$3 string "main"
+$4 bool true
+$5 bool true
+$6 bool true

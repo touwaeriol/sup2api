@@ -36,7 +36,7 @@ func (s *Service) readUploadState(ctx context.Context, tx *gorm.DB, p *pkg.Packa
 	if err != nil {
 		return nil, err
 	}
-	plugin, err := readPlugin(ctx, tx, p.Manifest.Key, write)
+	plugin, err := readPlugin(ctx, tx, p.Manifest.ID(), write)
 	if err != nil {
 		return nil, err
 	}
@@ -103,33 +103,33 @@ func readPlugin(ctx context.Context, tx *gorm.DB, key string, write bool) (*mode
 }
 
 // checkTarget checks that p (verified as ver) may go to plugin, nil for a
-// first upload: reserved keys, a key retired by another publisher (claimed
+// first upload: the reservations, an id retired by another publisher (claimed
 // in a write, only checked otherwise), the publisher owning the plugin and
 // an uninstall in progress.
 func (s *Service) checkTarget(ctx context.Context, tx *gorm.DB, p *pkg.Package, opt UploadOptions, ver *pkg.Verification, plugin *model.Plugin, write bool) error {
 	m := p.Manifest
-	if err := checkReserved(m, opt.Source, ver.Trust, plugin == nil && !s.opt.Plugins.DevMode); err != nil {
+	if err := checkReserved(m, opt.Source, ver.Trust, s.opt.Plugins.DevMode); err != nil {
 		return err
 	}
 	switch {
 	case plugin == nil && write:
-		return claimRetiredKey(ctx, tx, m.Key, ver.PublisherID, opt.Source)
+		return claimRetiredKey(ctx, tx, m.ID(), ver.PublisherID, opt.Source)
 	case plugin == nil:
-		return checkRetiredKey(ctx, tx, m.Key, ver.PublisherID)
+		return checkRetiredKey(ctx, tx, m.ID(), ver.PublisherID)
 	case !sameID(plugin.PublisherID, ver.PublisherID):
-		return core.ErrConflict.WithMessage(fmt.Sprintf("plugin %q is owned by another publisher", m.Key))
+		return core.ErrConflict.WithMessage(fmt.Sprintf("plugin %q is owned by another publisher", m.ID()))
 	}
-	return checkUninstall(ctx, tx, m.Key)
+	return checkUninstall(ctx, tx, m.ID())
 }
 
 // readPrior reads into st what an upgrade of the installed plugin to m is
 // reviewed and decided against: its grants, its revoked host permissions
 // (loadPriorGrants) and the version it replaces.
 func (s *Service) readPrior(ctx context.Context, tx *gorm.DB, m *manifest.Manifest, st *uploadState) (err error) {
-	if st.current, st.revoked, err = loadPriorGrants(ctx, tx, m.Key); err != nil {
+	if st.current, st.revoked, err = loadPriorGrants(ctx, tx, m.ID()); err != nil {
 		return err
 	}
-	st.upgradeOf, err = s.runningVersion(ctx, tx, m.Key, m.Version)
+	st.upgradeOf, err = s.runningVersion(ctx, tx, m.ID(), m.Version)
 	return err
 }
 

@@ -4,10 +4,12 @@ import (
 	"context"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"gorm.io/gorm"
 
+	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/install"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/pkg"
@@ -21,14 +23,21 @@ const PublisherMissing = "missing"
 
 // MarketPlugin is one listing row.
 type MarketPlugin struct {
-	SourceID          int64              `json:"source_id"`
-	SourceName        string             `json:"source_name"`
+	SourceID   int64  `json:"source_id"`
+	SourceName string `json:"source_name"`
+	// ID is the plugin id (manifest.PluginID) of Publisher's Key, the key
+	// of its row once installed; DisplayID is how people see it.
+	ID                string             `json:"id"`
+	DisplayID         string             `json:"display_id"`
 	Key               string             `json:"key"`
 	Name              core.LocalizedText `json:"name"`
 	Description       core.LocalizedText `json:"description"`
 	Publisher         string             `json:"publisher"`
 	PublisherName     core.LocalizedText `json:"publisher_name,omitempty"`
 	PublisherHomepage string             `json:"publisher_homepage,omitempty"`
+	// PublisherGitHub are the GitHub logins the index lists for the
+	// publisher (who may register its plugins).
+	PublisherGitHub []string `json:"publisher_github,omitempty"`
 	// Trust is the publisher's trust level in the index, "" when the index
 	// does not list it.
 	Trust string `json:"trust"`
@@ -48,6 +57,7 @@ type MarketPlugin struct {
 
 type MarketVersion struct {
 	Version    string `json:"version"`
+	SHA256     string `json:"sha256"`
 	Size       int64  `json:"size"`
 	HostCompat string `json:"host_compat"`
 	// Compatible reports whether this host could install the version:
@@ -70,17 +80,17 @@ func Compatible(hostCompat, hostVersion string) bool {
 	return err == nil && ok
 }
 
-// ListPlugins lists the plugins of source sourceID (0: the official
-// store), annotated with their publisher, install state and update
-// availability.
-func (s *Service) ListPlugins(ctx context.Context, sourceID int64, refresh bool) ([]MarketPlugin, error) {
-	if sourceID == 0 {
-		src, err := s.officialSource(ctx)
-		if err != nil {
-			return nil, err
-		}
-		sourceID = src.ID
-	}
+// Listing is the listing of a channel: its plugins, when CI generated its
+// index and when this core fetched it.
+type Listing struct {
+	Plugins     []MarketPlugin
+	GeneratedAt time.Time
+	FetchedAt   time.Time
+}
+
+// ListPlugins lists the plugins of channel sourceID (0: the default one),
+// annotated with their publisher, install state and update availability.
+func (s *Service) ListPlugins(ctx context.Context, sourceID int64, refresh bool) (*Listing, error) {
 	idx, src, err := s.Index(ctx, sourceID, refresh)
 	if err != nil {
 		return nil, err
@@ -89,9 +99,9 @@ func (s *Service) ListPlugins(ctx context.Context, sourceID int64, refresh bool)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]MarketPlugin, 0, len(idx.Plugins))
+	out := &Listing{Plugins: make([]MarketPlugin, 0, len(idx.Plugins)), GeneratedAt: idx.GeneratedAt, FetchedAt: idx.fetched}
 	for _, p := range idx.Plugins {
-		out = append(out, st.plugin(src, idx, p))
+		out.Plugins = append(out.Plugins, st.plugin(src, idx, p))
 	}
 	return out, nil
 }
@@ -99,7 +109,7 @@ func (s *Service) ListPlugins(ctx context.Context, sourceID int64, refresh bool)
 // listState is what a listing annotates the indexes with.
 type listState struct {
 	hostVersion string
-	installed   map[string][2]string // key -> [current version, status]
+	installed   map[string][2]string // plugin id -> [current version, status]
 	revoked     map[string]bool      // publishers revoked on this core
 }
 
@@ -122,8 +132,10 @@ func (s *Service) listState(ctx context.Context) (*listState, error) {
 
 // plugin is the listing row of p, listed by idx of src.
 func (st *listState) plugin(src *Source, idx *Index, p IndexPlugin) MarketPlugin {
-	mp := MarketPlugin{SourceID: src.ID, SourceName: src.Name, Key: p.Key, Name: p.Name, Description: p.Description,
-		Repo: p.Repo, SourceURL: p.Source, Builtin: p.Builtin, Deprecated: p.Deprecated, Versions: []MarketVersion{}}
+	id := p.ID()
+	mp := MarketPlugin{SourceID: src.ID, SourceName: src.Name, ID: id, DisplayID: manifest.DisplayID(id), Key: p.Key,
+		Name: p.Name, Description: p.Description, Repo: p.Repo, SourceURL: p.Source, Builtin: p.Builtin, Deprecated: p.Deprecated,
+		Versions: []MarketVersion{}}
 	st.setPublisher(&mp, idx, p.Publisher)
 	latest := st.setVersions(&mp, p.Versions)
 	st.setInstalled(&mp, latest)
@@ -133,7 +145,7 @@ func (st *listState) plugin(src *Source, idx *Index, p IndexPlugin) MarketPlugin
 // setPublisher fills in the publisher id of mp as idx lists it.
 func (st *listState) setPublisher(mp *MarketPlugin, idx *Index, id string) {
 	pub, ok := idx.publisher(id)
-	mp.Publisher, mp.PublisherName, mp.PublisherHomepage = id, pub.Name, pub.Homepage
+	mp.Publisher, mp.PublisherName, mp.PublisherHomepage, mp.PublisherGitHub = id, pub.Name, pub.Homepage, pub.GitHub
 	mp.Trust, mp.PublisherStatus = pub.Trust, pub.Status
 	switch {
 	case !ok:
@@ -149,7 +161,7 @@ func (st *listState) setVersions(mp *MarketPlugin, vs []IndexVersion) *semver.Ve
 	var latest *semver.Version
 	for _, v := range sortedVersions(vs) {
 		ok := Compatible(v.HostCompat, st.hostVersion)
-		mp.Versions = append(mp.Versions, MarketVersion{Version: v.Version, Size: v.Size, HostCompat: v.HostCompat, Compatible: ok,
+		mp.Versions = append(mp.Versions, MarketVersion{Version: v.Version, SHA256: v.SHA256, Size: v.Size, HostCompat: v.HostCompat, Compatible: ok,
 			ReleaseURL: v.ReleaseURL, Deprecated: v.Deprecated})
 		sv, err := semver.NewVersion(v.Version)
 		if err == nil && ok && v.Deprecated == nil && (latest == nil || sv.GreaterThan(latest)) {
@@ -162,7 +174,7 @@ func (st *listState) setVersions(mp *MarketPlugin, vs []IndexVersion) *semver.Ve
 // setInstalled fills in the installed version of mp and whether latest
 // is newer.
 func (st *listState) setInstalled(mp *MarketPlugin, latest *semver.Version) {
-	inst, ok := st.installed[mp.Key]
+	inst, ok := st.installed[mp.ID]
 	if !ok {
 		return
 	}
@@ -184,7 +196,7 @@ func sortedVersions(vs []IndexVersion) []IndexVersion {
 	return out
 }
 
-// installed maps plugin key -> [current version, status].
+// installed maps plugin id -> [current version, status].
 func (s *Service) installed(ctx context.Context) (map[string][2]string, error) {
 	var plugins []model.Plugin
 	if err := store.G(ctx, s.db.Gorm).Select("key", "status").Find(&plugins).Error; err != nil {

@@ -13,29 +13,26 @@ import (
 )
 
 // First-party plugins (next/plugins) are shipped in the image or in the
-// official market. Their keys and the platform ids they declare are reserved
-// (audit 2026-10-09 P1-5): a package uploaded by hand may use them only with
-// an official signature, so nobody can take a key or platform a later image
-// ships as built-in (the built-in install would fail on every node). Built-in
-// installs are a trusted channel; a market install claims one only when its
-// index lists the publisher as official (the version's trust level, CONTRACTS
-// §136.2), like any other package. A platform or
-// notification channel id is reserved for its own plugin whatever the source:
-// the channel's provider reads every notification sent on it.
-// TestReservedCoverRepo keeps the lists in step with next/plugins.
+// official store under manifest.OfficialPublisher, whose plugin ids are
+// their bare keys (CONTRACTS §137). That publisher is reserved: a package
+// naming it installs only with official trust (an official signature, or
+// the official store's index listing the publisher as official, the
+// version's trust level, §136.2) or from the built-in channel, so nobody
+// can take an id a later image ships as built-in (the built-in install
+// would fail on every node). Any other publisher's ids start with "_" and
+// never meet a first-party one. A platform or notification channel id is
+// reserved for its own plugin whatever the source: the channel's provider
+// reads every notification sent on it. TestReservedCoverRepo keeps the
+// lists in step with next/plugins.
 var (
-	reservedKeys = map[string]bool{
-		"anthropic": true, "azure_openai": true, "bedrock": true, "codex": true, "dynweight": true, "gemini": true, "guard": true,
-		"mailer": true, "moderation": true, "newapi": true, "openai": true, "payment": true, "relay": true, "sub2api": true, "typesafe": true,
-		"vertex": true,
-	}
-	// removedKeys maps the key of a first-party plugin the core no longer
-	// supports to the release that removed it: no package of it installs,
-	// whatever its signature or source, since the core side it needs is gone.
+	// removedKeys maps the plugin id of a first-party plugin the core no
+	// longer supports to the release that removed it: no package of it
+	// installs, whatever its signature or source, since the core side it
+	// needs is gone.
 	removedKeys = map[string]string{"ccgateway": "0.1.290", "claude_oauth": "0.1.304", "custom": "0.1.301", "growth": "0.1.304", "volcengine": "0.1.304"}
-	// reservedPlatforms maps a platform id to the plugin it belongs to.
+	// reservedPlatforms maps a platform id to the plugin id it belongs to.
 	reservedPlatforms = map[string]string{"typesafe": "typesafe"}
-	// reservedChannels maps a notification channel id to the plugin it
+	// reservedChannels maps a notification channel id to the plugin id it
 	// belongs to.
 	reservedChannels = map[string]string{"email": "mailer"}
 )
@@ -44,7 +41,7 @@ var (
 // for another plugin: its field path and a message, or "" when none.
 func reservedUse(m *manifest.Manifest) (field, msg string) {
 	for i, p := range m.Platforms {
-		if owner, ok := reservedPlatforms[p.ID]; ok && owner != m.Key {
+		if owner, ok := reservedPlatforms[p.ID]; ok && owner != m.ID() {
 			return fmt.Sprintf("platforms[%d].id", i), fmt.Sprintf("platform id %q is reserved for the first-party plugin %q", p.ID, owner)
 		}
 	}
@@ -52,17 +49,20 @@ func reservedUse(m *manifest.Manifest) (field, msg string) {
 		return "", ""
 	}
 	for i, c := range m.Notifications.Channels {
-		if owner, ok := reservedChannels[c.ID]; ok && owner != m.Key {
+		if owner, ok := reservedChannels[c.ID]; ok && owner != m.ID() {
 			return fmt.Sprintf("notifications.channels[%d].id", i), fmt.Sprintf("notification channel %q is reserved for the first-party plugin %q", c.ID, owner)
 		}
 	}
 	return "", ""
 }
 
-// ErrReservedKey: a package neither official nor built in claims the key of
-// a first-party plugin, or a package uses a platform or notification channel
-// id reserved for another plugin.
-var ErrReservedKey = core.NewError(http.StatusForbidden, "plugin_key_reserved", "the plugin key, platform or notification channel id is reserved")
+// ErrReservedKey: a package of a removed first-party plugin, or one using a
+// platform or notification channel id reserved for another plugin.
+var ErrReservedKey = core.NewError(http.StatusForbidden, "plugin_key_reserved", "the plugin, platform or notification channel id is reserved")
+
+// ErrReservedPublisher: a package neither official nor built in names the
+// first-party publisher (manifest.OfficialPublisher).
+var ErrReservedPublisher = core.NewError(http.StatusForbidden, "plugin_publisher_reserved", "the publisher is reserved for the first-party plugins")
 
 // ErrResourceConflict: a version declares a platform, gateway endpoint or
 // notification channel another approved plugin holds, a built-in platform id or a path the core
@@ -84,7 +84,7 @@ func (s *Service) CheckResources(ctx context.Context, key, version string) error
 }
 
 func (s *Service) checkResources(ctx context.Context, q *gorm.DB, m *manifest.Manifest) error {
-	others, endpoints, channels, err := s.otherResources(ctx, q, m.Key)
+	others, endpoints, channels, err := s.otherResources(ctx, q, m.ID())
 	if err != nil {
 		return err
 	}
@@ -98,18 +98,18 @@ func (s *Service) checkResources(ctx context.Context, q *gorm.DB, m *manifest.Ma
 }
 
 // checkReserved applies the reservations to a package from source with the
-// given trust level. claim is true when the key is not installed yet: only a
-// new claim of a reserved key needs a trusted channel (an installed plugin
-// keeps its publisher check). A removed key is refused from any source.
-func checkReserved(m *manifest.Manifest, source, trust string, claim bool) error {
-	if release, ok := removedKeys[m.Key]; ok {
-		return ErrReservedKey.WithMessage(fmt.Sprintf("plugin %q was removed in core %s and cannot be installed (see CHANGELOG %s)", m.Key, release, release))
+// given trust level. A removed plugin is refused from any source; the
+// first-party publisher needs official trust or the built-in channel,
+// except in dev mode.
+func checkReserved(m *manifest.Manifest, source, trust string, dev bool) error {
+	if release, ok := removedKeys[m.ID()]; ok {
+		return ErrReservedKey.WithMessage(fmt.Sprintf("plugin %q was removed in core %s and cannot be installed (see CHANGELOG %s)", m.ID(), release, release))
 	}
 	if field, msg := reservedUse(m); field != "" {
 		return ErrReservedKey.WithMessage(msg)
 	}
-	if !claim || !reservedKeys[m.Key] || trust == pkg.TrustOfficial || source == "builtin" {
+	if dev || m.Publisher != manifest.OfficialPublisher || trust == pkg.TrustOfficial || source == "builtin" {
 		return nil
 	}
-	return ErrReservedKey.WithMessage(fmt.Sprintf("plugin key %q is reserved for a first-party plugin: only an official package (signed, or listed by a market under an official publisher) may claim it", m.Key))
+	return ErrReservedPublisher.WithMessage(fmt.Sprintf("publisher %q is reserved for the first-party plugins: only an official package (signed by an official key, or listed by the official store under an official publisher) may name it", m.Publisher))
 }

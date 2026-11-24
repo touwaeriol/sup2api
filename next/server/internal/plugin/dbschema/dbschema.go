@@ -14,7 +14,6 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -25,18 +24,18 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/runtime-contract/gormpg"
 	"github.com/Sub2API-Devs/sup2api/next/runtime-contract/gormpg/pgproxy"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
+	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest/check"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store"
 )
 
-// keyRe is the plugin key rule of the manifest check: no "__" and no
-// trailing "_", so that no plugin's prefix starts another's; at most 30
-// bytes (validKey).
-var keyRe = regexp.MustCompile(`^[a-z](_?[a-z0-9]){1,29}$`)
-
-func validKey(key string) error {
-	if len(key) > 30 || !keyRe.MatchString(key) {
-		return fmt.Errorf("invalid plugin key %q", key)
+// validKey checks a plugin id (manifest.PluginID, CONTRACTS §137): a valid
+// publisher and key that make exactly id, at most manifest.PluginIDMaxLen
+// bytes, so that no plugin's prefix or identity starts another's.
+func validKey(id string) error {
+	publisher, key, ok := manifest.ParsePluginID(id)
+	if !ok || check.ValidatePluginID(publisher, key) != nil || manifest.PluginID(publisher, key) != id {
+		return fmt.Errorf("invalid plugin id %q", id)
 	}
 	return nil
 }
@@ -187,8 +186,8 @@ func (m *Manager) publicCreates(g *gorm.DB) (bool, error) {
 func (m *Manager) Schema() string { return m.schema }
 
 // Identity is the name of plugin pluginKey's database identity,
-// "plg<database OID>_<key>". Roles belong to the whole PostgreSQL cluster;
-// the OID keeps the plugins of two databases apart.
+// "plg<database OID>_<plugin id>". Roles belong to the whole PostgreSQL
+// cluster; the OID keeps the plugins of two databases apart.
 func (m *Manager) Identity(pluginKey string) string { return m.identityPrefix() + pluginKey }
 
 // identityPrefix starts the name of every plugin identity of this database.

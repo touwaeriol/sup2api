@@ -22,9 +22,9 @@ import (
 const PermLock = "lock"
 
 // LockKey is the core lock key of a plugin's lock name; the locker stores it
-// as lock:plugin:{pluginKey}:{name}. Plugin keys match ^[a-z][a-z0-9_]{1,29}$
-// (manifest validation), so they never contain ':' and the first ':' after
-// "plugin:" always ends the key: two plugins cannot reach each other's locks
+// as lock:plugin:{pluginKey}:{name}. A plugin id (manifest.PluginID) holds
+// only [a-z0-9_], so it never contains ':' and the first ':' after
+// "plugin:" always ends the id: two plugins cannot reach each other's locks
 // whatever names they pick.
 func LockKey(pluginKey, name string) string { return "plugin:" + pluginKey + ":" + name }
 

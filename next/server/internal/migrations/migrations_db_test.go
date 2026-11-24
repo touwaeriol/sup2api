@@ -890,7 +890,7 @@ func TestMigration0104DropsCustomPlugin(t *testing.T) {
 	}
 	exec(`INSERT INTO plugins (key, name, status, builtin) VALUES ('custom', '{"en":"Custom upstream"}', 'enabled', true), ('guard', '{"en":"Guard"}', 'enabled', false);
 		INSERT INTO plugin_versions (plugin_key, version, manifest, manifest_hash, package_sha256, package_size, signature_status)
-			VALUES ('custom', '0.1.1', '{}', 'x', 'x', 1, 'valid'), ('guard', '0.2.10', '{}', 'y', 'y', 1, 'valid');
+			VALUES ('custom', '0.1.1', '{"publisher":"sub2api"}', 'x', 'x', 1, 'valid'), ('guard', '0.2.10', '{"publisher":"sub2api"}', 'y', 'y', 1, 'valid');
 		INSERT INTO plugin_egress_domains (plugin_key, host) VALUES ('custom', 'example.com'), ('guard', 'example.com');
 		INSERT INTO accounts (name, plugin_key, type, credentials_enc) VALUES ('orphan', 'custom', 't', '')`)
 
@@ -1072,7 +1072,7 @@ func TestMigration0111DropsClaudeOAuthPlugin(t *testing.T) {
 	exec(`INSERT INTO roles (key, name, superuser) VALUES ('ops', '{}', false), ('other', '{}', false);
 		INSERT INTO plugins (key, name, status, builtin) VALUES ('claude_oauth', '{"en":"Claude OAuth Accounts"}', 'enabled', false), ('guard', '{"en":"Guard"}', 'enabled', false);
 		INSERT INTO plugin_versions (plugin_key, version, manifest, manifest_hash, package_sha256, package_size, signature_status)
-			VALUES ('claude_oauth', '0.2.5', '{}', 'x', 'x', 1, 'valid'), ('guard', '0.2.10', '{}', 'y', 'y', 1, 'valid');
+			VALUES ('claude_oauth', '0.2.5', '{"publisher":"sub2api"}', 'x', 'x', 1, 'valid'), ('guard', '0.2.10', '{"publisher":"sub2api"}', 'y', 'y', 1, 'valid');
 		INSERT INTO plugin_rollouts (plugin_key, action, target_version, phase) VALUES ('claude_oauth', 'enable', '0.2.5', 'active');
 		INSERT INTO permissions (key, module, label, source, plugin_key) VALUES
 			('plugin.claude_oauth:claude_oauth:manage', 'claude_oauth', '{}', 'plugin', 'claude_oauth'), ('guard:x', 'guard', '{}', 'plugin', 'guard');
@@ -1138,7 +1138,7 @@ func TestMigration0116DropsAccountGrants(t *testing.T) {
 	}
 	exec(`INSERT INTO plugins (key, name, status) VALUES ('codex', '{"en":"c"}', 'enabled');
 		INSERT INTO plugin_versions (plugin_key, version, manifest, manifest_hash, package_sha256, package_size, signature_status)
-			VALUES ('codex', '0.2.0', '{}', 'x', 'x', 1, 'valid');
+			VALUES ('codex', '0.2.0', '{"publisher":"sub2api"}', 'x', 'x', 1, 'valid');
 		INSERT INTO plugin_permission_grants (plugin_key, permission, scope, status, plugin_version, manifest_hash) VALUES
 			('codex', 'accounts.credentials', '{"types":"own"}', 'granted', '0.1.11', 'x'),
 			('codex', 'accounts.read', '{}', 'revoked', '0.1.11', 'x'),
@@ -1261,7 +1261,7 @@ func TestMigration0117DropsGrowthPlugin(t *testing.T) {
 	exec(`INSERT INTO roles (key, name, superuser) VALUES ('ops', '{}', false), ('other', '{}', false);
 		INSERT INTO plugins (key, name, status, builtin) VALUES ('growth', '{"en":"Growth & Engagement"}', 'enabled', false), ('guard', '{"en":"Guard"}', 'enabled', false);
 		INSERT INTO plugin_versions (plugin_key, version, manifest, manifest_hash, package_sha256, package_size, signature_status)
-			VALUES ('growth', '0.2.2', '{}', 'x', 'x', 1, 'valid'), ('guard', '0.2.10', '{}', 'y', 'y', 1, 'valid');
+			VALUES ('growth', '0.2.2', '{"publisher":"sub2api"}', 'x', 'x', 1, 'valid'), ('guard', '0.2.10', '{"publisher":"sub2api"}', 'y', 'y', 1, 'valid');
 		INSERT INTO plugin_rollouts (plugin_key, action, target_version, phase) VALUES ('growth', 'enable', '0.2.2', 'active');
 		INSERT INTO plugin_migrations (plugin_key, migration_id, checksum) VALUES ('growth', '0001_init.sql', 'c');
 		INSERT INTO permissions (key, module, label, source, plugin_key) VALUES
@@ -1359,7 +1359,7 @@ func TestMigration0119DropsVolcenginePlugin(t *testing.T) {
 	exec(`INSERT INTO roles (key, name, superuser) VALUES ('ops', '{}', false), ('other', '{}', false);
 		INSERT INTO plugins (key, name, status, builtin) VALUES ('volcengine', '{"en":"Volcengine Ark"}', 'enabled', true), ('guard', '{"en":"Guard"}', 'enabled', false);
 		INSERT INTO plugin_versions (plugin_key, version, manifest, manifest_hash, package_sha256, package_size, signature_status)
-			VALUES ('volcengine', '0.12.8', '{}', 'x', 'x', 1, 'valid'), ('guard', '0.2.10', '{}', 'y', 'y', 1, 'valid');
+			VALUES ('volcengine', '0.12.8', '{"publisher":"sub2api"}', 'x', 'x', 1, 'valid'), ('guard', '0.2.10', '{"publisher":"sub2api"}', 'y', 'y', 1, 'valid');
 		INSERT INTO plugin_rollouts (plugin_key, action, target_version, phase) VALUES ('volcengine', 'enable', '0.12.8', 'active');
 		INSERT INTO plugin_migrations (plugin_key, migration_id, checksum) VALUES ('volcengine', '0001_init.sql', 'c'), ('guard', '0001_init.sql', 'g');
 		INSERT INTO permissions (key, module, label, source, plugin_key) VALUES

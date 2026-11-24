@@ -74,6 +74,8 @@ func TestRegistryNamesAndSources(t *testing.T) {
 	s.Title = nil // plugin tasks fall back to their id
 	_, err = r.Add(s, SourcePluginRuntime, "dynweight")
 	require.NoError(t, err)
+	_, err = r.Add(spec("plugin._erio__codex.sync", core.TaskCluster), SourcePluginManifest, "_erio__codex")
+	require.NoError(t, err, "a third-party plugin id")
 
 	node := spec("core.test.node", core.TaskNode)
 	node.Every = time.Second
@@ -86,9 +88,9 @@ func TestRegistryNamesAndSources(t *testing.T) {
 		}
 		return out
 	}
-	require.Equal(t, []string{"core.test.task", "plugin.dynweight.evaluate-v2.fast"}, names(r.List(core.TaskCluster)))
+	require.Equal(t, []string{"core.test.task", "plugin._erio__codex.sync", "plugin.dynweight.evaluate-v2.fast"}, names(r.List(core.TaskCluster)))
 	require.Equal(t, []string{"core.test.node"}, names(r.List(core.TaskNode)))
-	require.Len(t, r.List(""), 3)
+	require.Len(t, r.List(""), 4)
 	require.True(t, r.Remove("core.test.node"))
 	require.False(t, r.Remove("core.test.node"))
 	_, ok := r.Get("core.test.node")

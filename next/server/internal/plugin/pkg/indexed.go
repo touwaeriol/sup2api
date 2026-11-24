@@ -101,7 +101,7 @@ func registerIndexed(g *gorm.DB, name string) *gorm.DB {
 func (t *TrustStore) VerifyRecorded(ctx context.Context, q *gorm.DB, p *Package) error {
 	g := store.G(ctx, q)
 	var v model.PluginVersion
-	err := recordedVersion(g, p.Manifest.Key, p.Manifest.Version).Take(&v).Error
+	err := recordedVersion(g, p.Manifest.ID(), p.Manifest.Version).Take(&v).Error
 	switch {
 	case err != nil && !store.IsNoRows(err):
 		return err

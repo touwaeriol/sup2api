@@ -1,0 +1,4 @@
+-- sql
+SELECT id, name, branch, url, enabled, is_default, created_at FROM "market_sources" WHERE is_default LIMIT $1
+-- vars
+$1 int 1

@@ -76,7 +76,7 @@ func Manifest(key, version string) *manifest.Manifest {
 		Key:        key,
 		Name:       manifest.LocalizedText{"en": "Test " + key, "zh": "测试 " + key},
 		Version:    version,
-		Publisher:  "test",
+		Publisher:  manifest.OfficialPublisher,
 		Runtime:    "grpc",
 		Entry:      manifest.Entry{GRPC: &manifest.GRPCEntry{Binaries: "runtimes/{os}-{arch}/plugin"}},
 		HostCompat: ">=0.1.0",
@@ -188,7 +188,7 @@ func Install(t testing.TB, db *store.DB, m *manifest.Manifest, pkg []byte, grant
 	t.Helper()
 	g := store.G(context.Background(), db.Gorm)
 	name, _ := json.Marshal(m.Name)
-	if err := g.Create(&model.Plugin{Key: m.Key, Name: name, Status: status}).Error; err != nil {
+	if err := g.Create(&model.Plugin{Key: m.ID(), Name: name, Status: status}).Error; err != nil {
 		t.Fatal(err)
 	}
 	AddVersion(t, db, m, pkg)
@@ -201,7 +201,7 @@ func Install(t testing.TB, db *store.DB, m *manifest.Manifest, pkg []byte, grant
 
 // grantRow is the grant of perm with scope to the version of m.
 func grantRow(m *manifest.Manifest, perm, scope string) *model.PluginPermissionGrant {
-	return &model.PluginPermissionGrant{PluginKey: m.Key, Permission: perm, Scope: json.RawMessage(scope),
+	return &model.PluginPermissionGrant{PluginKey: m.ID(), Permission: perm, Scope: json.RawMessage(scope),
 		Status: "granted", PluginVersion: m.Version, ManifestHash: "x"}
 }
 
@@ -222,7 +222,7 @@ func AddVersion(t testing.TB, db *store.DB, m *manifest.Manifest, pkg []byte) {
 // versionRow is the approved, unsigned plugin_versions row of m, whose
 // manifest is mj.
 func versionRow(m *manifest.Manifest, mj []byte, manifestSum, pkgSum [sha256.Size]byte, size int) *model.PluginVersion {
-	return &model.PluginVersion{PluginKey: m.Key, Version: m.Version, Manifest: mj,
+	return &model.PluginVersion{PluginKey: m.ID(), Version: m.Version, Manifest: mj,
 		ManifestHash: hex.EncodeToString(manifestSum[:]), PackageSha256: hex.EncodeToString(pkgSum[:]), PackageSize: int64(size),
 		SignatureStatus: "unsigned", ConsentStatus: new("approved")}
 }

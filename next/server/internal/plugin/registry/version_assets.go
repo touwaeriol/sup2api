@@ -112,7 +112,7 @@ func (s *Packages) readPackageAsset(ctx context.Context, v servedPackage, name s
 	if err != nil {
 		return versionAsset{}, err
 	}
-	if p.Manifest.Key != v.key || p.Manifest.Version != v.version {
+	if p.Manifest.ID() != v.key || p.Manifest.Version != v.version {
 		return versionAsset{}, errors.New("package identity mismatch")
 	}
 	data, ok := p.Files[name]

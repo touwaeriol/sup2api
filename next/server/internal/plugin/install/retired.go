@@ -115,9 +115,11 @@ func keyRetired(key string) error {
 }
 
 // RetiredKey is a plugin_key_retirements row with what the plugin left.
+// Key is the plugin id; Publisher the publisher that retired it.
 type RetiredKey struct {
 	Key       string    `json:"key"`
 	Publisher string    `json:"publisher"`
+	DisplayID string    `json:"display_id"`
 	RetiredAt time.Time `json:"retired_at"`
 	// Installed: the same publisher installed the key again.
 	Installed bool `json:"installed"`
@@ -137,6 +139,7 @@ func (s *Service) ListRetiredKeys(ctx context.Context) ([]RetiredKey, error) {
 	out := make([]RetiredKey, len(rows))
 	for i, r := range rows {
 		out[i] = RetiredKey(r)
+		out[i].DisplayID = manifest.DisplayID(r.Key)
 	}
 	return out, nil
 }
@@ -145,6 +148,7 @@ func (s *Service) ListRetiredKeys(ctx context.Context) ([]RetiredKey, error) {
 type retiredKeyRow struct {
 	Key       string    `gorm:"column:key"`
 	Publisher string    `gorm:"column:publisher"`
+	DisplayID string    `gorm:"-"`
 	RetiredAt time.Time `gorm:"column:retired_at"`
 	Installed bool      `gorm:"column:installed"`
 	Accounts  int       `gorm:"column:accounts"`

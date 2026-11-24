@@ -123,8 +123,10 @@
 // A plugin with a database (manifest "database", grant "db.schema") keeps
 // its tables in the core's schema beside the core's and other plugins'
 // (CONTRACTS §130). Its migrations create relations (tables, indexes,
-// sequences, views) and types only, named with manifest.TablePrefix:
-// plg_<key>__<name>, at most 63 bytes, PostgreSQL's own names included
+// sequences, views) and types only, named with manifest.TablePrefix of the
+// plugin id (manifest.PluginID: the key of a sub2api plugin,
+// "_<publisher>__<key>" of any other, CONTRACTS §137):
+// plg_<plugin id>__<name>, at most 63 bytes, PostgreSQL's own names included
 // (<table>_pkey, <table>_<column>_key, <table>_<column>_seq carry the
 // prefix when the table does; an index or constraint named by hand must
 // carry it too). Functions, triggers, operators and every other kind of
@@ -203,7 +205,7 @@
 //     everything the identity owns in the core's schema, not only what the
 //     file created: a relation or type without the plugin's prefix, or an
 //     object of any other kind, rolls the file back. The host records each in the plugin's own table
-//     plg_<key>__schema_migrations (and runs a changed one again); the
+//     plg_<plugin id>__schema_migrations (and runs a changed one again); the
 //     migrations leave that table alone. The plugin never runs AutoMigrate.
 //
 // The sub2api-plugin command keeps the two together:

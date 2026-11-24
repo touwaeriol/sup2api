@@ -52,9 +52,15 @@ func (m *migrationDB) rows(sql string) string {
 // migrate runs the pending migrations and returns those it ran.
 func (m *migrationDB) migrate() []string {
 	m.t.Helper()
-	done, err := store.Migrate(m.ctx, m.db, migrations.FS, store.CoreTracker{}, store.MigrateOptions{LockKey: store.CoreMigrationLockKey})
+	done, err := m.migrateErr()
 	require.NoError(m.t, err)
 	return done
+}
+
+// migrateErr runs the pending migrations and returns those it ran and the
+// error that stopped them.
+func (m *migrationDB) migrateErr() ([]string, error) {
+	return store.Migrate(m.ctx, m.db, migrations.FS, store.CoreTracker{}, store.MigrateOptions{LockKey: store.CoreMigrationLockKey})
 }
 
 // migrateFirst runs the migrations from id on for the first time.

@@ -62,7 +62,7 @@ func IsBuiltin(ctx context.Context, q *gorm.DB, key string) (bool, error) {
 
 type builtinPkg struct {
 	path    string
-	key     string
+	key     string // the plugin id
 	version *semver.Version
 	data    []byte
 }
@@ -107,7 +107,7 @@ func (s *Service) EnsureBuiltin(ctx context.Context, dir string, log *slog.Logge
 	if err != nil {
 		return err
 	}
-	// Newest version per key.
+	// Newest version per plugin id.
 	latest := map[string]*builtinPkg{}
 	for _, p := range paths {
 		data, err := os.ReadFile(p)
@@ -125,8 +125,8 @@ func (s *Service) EnsureBuiltin(ctx context.Context, dir string, log *slog.Logge
 			log.Error("builtin plugin: invalid version", "path", p, "version", pk.Manifest.Version)
 			continue
 		}
-		if cur := latest[pk.Manifest.Key]; cur == nil || v.GreaterThan(cur.version) {
-			latest[pk.Manifest.Key] = &builtinPkg{path: p, key: pk.Manifest.Key, version: v, data: data}
+		if cur := latest[pk.Manifest.ID()]; cur == nil || v.GreaterThan(cur.version) {
+			latest[pk.Manifest.ID()] = &builtinPkg{path: p, key: pk.Manifest.ID(), version: v, data: data}
 		}
 	}
 	keys := make([]string, 0, len(latest))
@@ -146,7 +146,7 @@ func (s *Service) EnsureBuiltin(ctx context.Context, dir string, log *slog.Logge
 
 func (s *Service) ensureBuiltin(ctx context.Context, b *builtinPkg, installOnly bool, log *slog.Logger) error {
 	version := b.version.Original()
-	_, err := s.Upload(ctx, b.data, 0, UploadOptions{ExpectKey: b.key, ExpectVersion: version, Source: "builtin"})
+	_, err := s.Upload(ctx, b.data, 0, UploadOptions{ExpectID: b.key, ExpectVersion: version, Source: "builtin"})
 	var ce *core.Error
 	switch {
 	case err == nil:

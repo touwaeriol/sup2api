@@ -13,6 +13,8 @@ type MarketSource struct {
 	URL       string    `gorm:"column:url"`                                         // text
 	Enabled   *bool     `gorm:"column:enabled;default:(-)"`                         // boolean default true
 	CreatedAt time.Time `gorm:"column:created_at;default:(-);autoCreateTime:false"` // timestamp with time zone default now()
+	Branch    string    `gorm:"column:branch"`                                      // character varying(64)
+	IsDefault bool      `gorm:"column:is_default;default:(-)"`                      // boolean default false
 }
 
 // TableName implements gorm's schema.Tabler.

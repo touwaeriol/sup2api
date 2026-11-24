@@ -45,7 +45,7 @@ func TestNameableRule(t *testing.T) {
 // permission to admin, operator, supplier or supplier agent (the agent's
 // share of a user default included); on a first install none does.
 func TestPlanNeedsConsentByRisk(t *testing.T) {
-	m := &manifest.Manifest{Key: "mod", UserPermissions: []manifest.UserPermission{
+	m := &manifest.Manifest{Publisher: manifest.OfficialPublisher, Key: "mod", UserPermissions: []manifest.UserPermission{
 		newPerm("low:read", "", "admin", "user"), newPerm("flow:manage", manifest.RiskSensitive, "admin"),
 	}}
 	roles := roleGrants(m, map[string]map[string][]string{"low:read": {"auditor": {""}}}, nil)

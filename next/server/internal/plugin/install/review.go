@@ -20,14 +20,15 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store/model"
 )
 
-// Review is the consent screen payload (CONTRACTS §5.7).
+// Review is the consent screen payload (CONTRACTS §5.7). PluginKey is the
+// plugin id.
 type Review struct {
-	PluginKey        string              `json:"plugin_key"`
-	Version          string              `json:"version"`
-	Name             core.LocalizedText  `json:"name"`
-	Description      core.LocalizedText  `json:"description,omitempty"`
-	Icon             string              `json:"icon,omitempty"`
-	Publisher        string              `json:"publisher"`
+	PluginKey   string             `json:"plugin_key"`
+	Version     string             `json:"version"`
+	Name        core.LocalizedText `json:"name"`
+	Description core.LocalizedText `json:"description,omitempty"`
+	Icon        string             `json:"icon,omitempty"`
+	pkg.Identity
 	Trust            string              `json:"trust"`
 	SignatureStatus  string              `json:"signature_status"`
 	KeyID            string              `json:"key_id,omitempty"`
@@ -382,12 +383,12 @@ func SortedGrants(m map[string]Grant) []Grant {
 // buildReview renders the review. current is nil for first installs.
 func buildReview(m *manifest.Manifest, files map[string][]byte, ver *pkg.Verification, hostVersion string, current map[string]Grant) *Review {
 	r := &Review{
-		PluginKey:              m.Key,
+		PluginKey:              m.ID(),
 		Version:                m.Version,
 		Name:                   core.LocalizedText(m.Name),
 		Description:            core.LocalizedText(m.Description),
 		Icon:                   m.Icon,
-		Publisher:              ver.Publisher,
+		Identity:               pkg.IdentityOf(m.ID()),
 		Trust:                  ver.Trust,
 		SignatureStatus:        ver.SignatureStatus,
 		KeyID:                  ver.KeyID,
@@ -594,7 +595,7 @@ func (s *Service) resolveRoleGrants(ctx context.Context, r *Review, m *manifest.
 		if err != nil {
 			return err
 		}
-		existing, err := loadCatalogPerms(ctx, cat, tx, m.Key)
+		existing, err := loadCatalogPerms(ctx, cat, tx, m.ID())
 		if err != nil {
 			return err
 		}
@@ -613,7 +614,7 @@ func (s *Service) resolveRoleGrants(ctx context.Context, r *Review, m *manifest.
 		}
 		var revivedKeys []string
 		for _, up := range m.UserPermissions {
-			if key := manifest.PermissionKey(m.Key, up.Key); existing.removed(key) {
+			if key := manifest.PermissionKey(m.ID(), up.Key); existing.removed(key) {
 				revivedKeys = append(revivedKeys, key)
 			}
 		}
@@ -624,7 +625,7 @@ func (s *Service) resolveRoleGrants(ctx context.Context, r *Review, m *manifest.
 		}
 		for i := range r.UserPermissions {
 			up := &r.UserPermissions[i]
-			key := manifest.PermissionKey(m.Key, up.Key)
+			key := manifest.PermissionKey(m.ID(), up.Key)
 			decl, _ := m.FindUserPermission(up.Key)
 			up.New, up.Revived, up.Renamed = !existing.has(key), existing.removed(key), renamed(m, decl, existing)
 			for _, col := range r.RoleColumns {
@@ -730,13 +731,13 @@ func (s *Service) noteRemovedPerms(ctx context.Context, tx *gorm.DB, r *Review, 
 	if err != nil {
 		return err
 	}
-	perms, err := cat.PluginPermissions(ctx, tx, m.Key)
+	perms, err := cat.PluginPermissions(ctx, tx, m.ID())
 	if err != nil {
 		return err
 	}
 	var gone []core.PluginPermission
 	for _, p := range perms {
-		local, _ := manifest.LocalPermission(m.Key, p.Key)
+		local, _ := manifest.LocalPermission(m.ID(), p.Key)
 		if _, declared := m.FindUserPermission(local); !declared && p.Status != permStatusRemoved {
 			gone = append(gone, p)
 		}
@@ -753,7 +754,7 @@ func (s *Service) noteRemovedPerms(ctx context.Context, tx *gorm.DB, r *Review, 
 	}
 	for _, p := range gone {
 		rp := ReviewRemovedPerm{Label: p.Label}
-		rp.Key, _ = manifest.LocalPermission(m.Key, p.Key)
+		rp.Key, _ = manifest.LocalPermission(m.ID(), p.Key)
 		if seeHolders {
 			rp.Holders = []string{}
 		}

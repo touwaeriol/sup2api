@@ -20,20 +20,20 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store/model"
 )
 
-// PluginSummary is one row of GET /plugins.
+// PluginSummary is one row of GET /plugins. Key is the plugin id.
 type PluginSummary struct {
-	Key             string             `json:"key"`
-	Name            core.LocalizedText `json:"name"`
-	Status          string             `json:"status"`
-	StatusReason    string             `json:"status_reason"`
-	ActiveVersion   *string            `json:"active_version"`
-	DesiredVersion  *string            `json:"desired_version"`
-	CurrentVersion  string             `json:"current_version"`
-	Publisher       string             `json:"publisher"`
-	Trust           string             `json:"trust"`
-	SignatureStatus string             `json:"signature_status"`
-	PendingVersions []string           `json:"pending_versions"`
-	Nodes           NodeSummary        `json:"node_summary"`
+	Key            string             `json:"key"`
+	Name           core.LocalizedText `json:"name"`
+	Status         string             `json:"status"`
+	StatusReason   string             `json:"status_reason"`
+	ActiveVersion  *string            `json:"active_version"`
+	DesiredVersion *string            `json:"desired_version"`
+	CurrentVersion string             `json:"current_version"`
+	pkg.Identity
+	Trust           string      `json:"trust"`
+	SignatureStatus string      `json:"signature_status"`
+	PendingVersions []string    `json:"pending_versions"`
+	Nodes           NodeSummary `json:"node_summary"`
 	// Refusal is set when nodes refuse to load the plugin because it was
 	// built for an older plugin contract (forwarding v2, design 9.2).
 	Refusal      *Refusal  `json:"refusal"`

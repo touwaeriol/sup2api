@@ -6,21 +6,23 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store/gormtest"
-	"github.com/Sub2API-Devs/sup2api/next/server/internal/store/model"
 )
 
 // The SQL of the market statements built with GORM (see package gormtest).
 
-func TestSQLMarketSeedSource(t *testing.T) {
-	gormtest.Assert(t, func(db *gorm.DB) *gorm.DB {
-		return seedSource(db, "official", "https://market.example/index.json")
+// EnsureChannels points each channel at the base and brings back the
+// default one.
+func TestSQLMarketEnsureChannels(t *testing.T) {
+	const base = "https://market.example/m"
+	t.Run("urls", func(t *testing.T) {
+		gormtest.Assert(t, func(db *gorm.DB) *gorm.DB {
+			return staleURLs(db, base).Update("url", channelURLExpr(base))
+		})
 	})
-}
-
-// EnsureOfficial deletes every source but the official one.
-func TestSQLMarketOtherSources(t *testing.T) {
-	gormtest.Assert(t, func(db *gorm.DB) *gorm.DB {
-		return otherSources(db).Delete(&model.MarketSource{})
+	t.Run("default", func(t *testing.T) {
+		gormtest.Assert(t, func(db *gorm.DB) *gorm.DB {
+			return upsertDefault(db, base+"/index-main/index.json")
+		})
 	})
 }
 
@@ -28,7 +30,7 @@ func TestSQLMarketSources(t *testing.T) {
 	t.Run("list", func(t *testing.T) {
 		gormtest.Assert(t, func(db *gorm.DB) *gorm.DB {
 			var out []Source
-			return sources(db).Order("id").Find(&out)
+			return sources(db).Order("is_default DESC, id").Find(&out)
 		})
 	})
 	t.Run("one", func(t *testing.T) {
@@ -37,10 +39,10 @@ func TestSQLMarketSources(t *testing.T) {
 			return sources(db).Where("id = ?", 5).Take(&src)
 		})
 	})
-	t.Run("official", func(t *testing.T) {
+	t.Run("default", func(t *testing.T) {
 		gormtest.Assert(t, func(db *gorm.DB) *gorm.DB {
 			var src Source
-			return officialRow(db).Take(&src)
+			return sources(db).Where("is_default").Take(&src)
 		})
 	})
 }

@@ -47,7 +47,7 @@ func (h *harness) pluginRows() (plugins, versions int) {
 	return plugins, versions
 }
 
-// serveMarket gives h a market source (id returned) whose index offers
+// serveMarket gives h a store whose default channel (id returned) offers
 // key 0.1.0 as data, by publisher pub with trust.
 func (h *harness) serveMarket(data []byte, key, pub, trust string) int64 {
 	h.t.Helper()
@@ -56,17 +56,17 @@ func (h *harness) serveMarket(data []byte, key, pub, trust string) int64 {
 			Versions: []market.IndexVersion{{Version: "0.1.0", URL: key + ".s2plugin", SHA256: pkg.SHA256Hex(data), Size: int64(len(data)), HostCompat: ">=0.1.0"}}}}}
 	raw, _ := json.Marshal(idx)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body := map[string][]byte{"/m/index.json": raw, "/m/" + key + ".s2plugin": data}[r.URL.Path]
+		body := map[string][]byte{"/m/index-main/index.json": raw, "/m/index-main/" + key + ".s2plugin": data}[r.URL.Path]
 		_, _ = w.Write(body)
 	}))
 	h.t.Cleanup(srv.Close)
-	m := market.New(h.db, h.api.d.Install, srv.Client(), market.Options{MaxPackageBytes: 10 << 20, AllowHTTP: true})
+	m := market.New(h.db, h.api.d.Install, srv.Client(), market.Options{MaxPackageBytes: 10 << 20, AllowHTTP: true, BaseURL: srv.URL + "/m/"})
 	ctx := context.Background()
-	if err := m.EnsureOfficial(ctx, srv.URL+"/m/"); err != nil {
+	if err := m.EnsureChannels(ctx); err != nil {
 		h.t.Fatal(err)
 	}
 	srcs, err := m.ListSources(ctx)
-	if err != nil || len(srcs) != 1 {
+	if err != nil || len(srcs) != 2 || !srcs[0].IsDefault {
 		h.t.Fatalf("sources: %v %v", srcs, err)
 	}
 	h.api.d.Market = m
@@ -117,7 +117,7 @@ func TestAPIMarketWithConsent(t *testing.T) {
 	if code, out := h.do("POST", "/plugins/review-upload", "admin", fileBody(t, pkgBytes)); code != 400 {
 		t.Fatalf("unsigned upload review = %d %v", code, out)
 	}
-	body := map[string]any{"source_id": src, "key": "guard", "version": "0.1.0"}
+	body := map[string]any{"source_id": src, "publisher": "sub2api", "key": "guard", "version": "0.1.0"}
 	code, out := h.do("POST", "/plugins/review-from-market", "admin", body)
 	if r := data(out); code != 200 || r["package_sha256"] != pkg.SHA256Hex(pkgBytes) || r["consent_status"] != "" ||
 		r["trust"] != pkg.TrustOfficial || r["signature_status"] != pkg.SigIndexed {
@@ -140,16 +140,18 @@ func TestAPIMarketWithConsent(t *testing.T) {
 func TestAPIMarketVersionTrust(t *testing.T) {
 	h, _ := newHarness(t)
 	pkgBytes := pkgtest.Zip(pkgtest.Files(pkgtest.Guard("acme_guard", "0.1.0", "acme")))
-	body := map[string]any{"source_id": h.serveMarket(pkgBytes, "acme_guard", "acme", pkg.TrustVerified), "key": "acme_guard", "version": "0.1.0",
-		"consent": guardConsent(pkg.SHA256Hex(pkgBytes))}
+	h.serveMarket(pkgBytes, "acme_guard", "acme", pkg.TrustVerified)
+	body := map[string]any{"publisher": "acme", "key": "acme_guard", "version": "0.1.0", "consent": guardConsent(pkg.SHA256Hex(pkgBytes))}
 	if code, out := h.do("POST", "/plugins/install-from-market", "admin", body); code != 200 {
 		t.Fatalf("market install = %d %v", code, out)
 	}
-	if code, out := h.do("GET", "/plugins/acme_guard", "admin", nil); code != 200 || data(out)["trust"] != pkg.TrustVerified {
+	const id = "_acme__acme_guard"
+	if code, out := h.do("GET", "/plugins/"+id, "admin", nil); code != 200 || data(out)["trust"] != pkg.TrustVerified ||
+		data(out)["publisher"] != "acme" || data(out)["display_id"] != "acme/acme_guard" {
 		t.Fatalf("summary = %d %v", code, out)
 	}
-	code, out := h.do("GET", "/plugins/acme_guard/versions/0.1.0/review", "admin", nil)
-	if code != 200 || data(out)["trust"] != pkg.TrustVerified {
+	code, out := h.do("GET", "/plugins/"+id+"/versions/0.1.0/review", "admin", nil)
+	if code != 200 || data(out)["trust"] != pkg.TrustVerified || data(out)["plugin_key"] != id || data(out)["display_id"] != "acme/acme_guard" {
 		t.Fatalf("review = %d %v", code, out)
 	}
 	var trust string

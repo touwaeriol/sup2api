@@ -39,8 +39,10 @@ const (
 )
 
 var (
-	coreNameRe   = regexp.MustCompile(`^core\.[a-z0-9_]+\.[a-z0-9_]+$`)
-	pluginNameRe = regexp.MustCompile(`^plugin\.([a-z][a-z0-9_]{1,29})\.[a-z0-9][a-z0-9_.-]{0,63}$`)
+	coreNameRe = regexp.MustCompile(`^core\.[a-z0-9_]+\.[a-z0-9_]+$`)
+	// pluginNameRe: plugin.<plugin id>.<job id>; an id (manifest.PluginID)
+	// starts with a letter, or "_" for a third-party plugin's.
+	pluginNameRe = regexp.MustCompile(`^plugin\.([a-z_][a-z0-9_]{1,29})\.[a-z0-9][a-z0-9_.-]{0,63}$`)
 )
 
 const maxNameLen = 120

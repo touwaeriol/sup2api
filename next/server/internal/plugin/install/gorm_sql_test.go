@@ -139,13 +139,13 @@ func TestSQLRetiredKeys(t *testing.T) {
 // them out, and consent_status is written.
 
 func TestSQLInsertPlugin(t *testing.T) {
-	m := &manifest.Manifest{Key: "demo", Name: map[string]string{"en": "Demo"}}
+	m := &manifest.Manifest{Publisher: manifest.OfficialPublisher, Key: "demo", Name: map[string]string{"en": "Demo"}}
 	pub := int64(3)
 	gormtest.Assert(t, func(db *gorm.DB) *gorm.DB { return db.Create(newPlugin(m, &pub, 7)) })
 }
 
 func TestSQLInsertVersion(t *testing.T) {
-	p := &pkg.Package{Manifest: &manifest.Manifest{Key: "demo", Version: "1.2.0"}, ManifestRaw: []byte(`{"key":"demo"}`),
+	p := &pkg.Package{Manifest: &manifest.Manifest{Publisher: manifest.OfficialPublisher, Key: "demo", Version: "1.2.0"}, ManifestRaw: []byte(`{"key":"demo"}`),
 		ManifestHash: "mh", SHA256: "sha", Raw: make([]byte, 42)}
 	ver := &pkg.Verification{SignatureStatus: pkg.SigUnsigned}
 	gormtest.Assert(t, func(db *gorm.DB) *gorm.DB { return db.Create(newVersion(p, ver, UploadOptions{}, 0)) })

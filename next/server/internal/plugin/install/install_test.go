@@ -575,26 +575,21 @@ func TestRejectAndCommunityTrust(t *testing.T) {
 	if _, err := e.svc.Upload(ctx, pkgtest.Build(mini, k), e.admin, UploadOptions{}); err != nil {
 		t.Fatalf("upload: %v", err)
 	}
-	// Another publisher cannot take the key over.
-	other := pkgtest.Minimal("acme_tool", "1.0.1", "sub2api")
-	if _, err := e.svc.Upload(ctx, pkgtest.Build(other, e.root), e.admin, UploadOptions{}); core.AsError(err).Code != "conflict" {
-		t.Fatalf("takeover: %v", err)
-	}
-	if err := e.svc.Reject(ctx, "acme_tool", "1.0.0", e.admin); err != nil {
+	if err := e.svc.Reject(ctx, "_acme__acme_tool", "1.0.0", e.admin); err != nil {
 		t.Fatal(err)
 	}
 	var n int
-	_ = e.db.SQL.QueryRowContext(ctx, `SELECT count(*) FROM plugins WHERE key = 'acme_tool'`).Scan(&n)
+	_ = e.db.SQL.QueryRowContext(ctx, `SELECT count(*) FROM plugins WHERE key = '_acme__acme_tool'`).Scan(&n)
 	if n != 0 {
 		t.Fatal("rejected new plugin should be removed")
 	}
 	// Its permissions go first, with their grants: the plugin row's foreign
 	// key cascades to permissions, not to casbin_rule.
-	if !slices.Contains(e.perms.deleted, "acme_tool") {
+	if !slices.Contains(e.perms.deleted, "_acme__acme_tool") {
 		t.Fatalf("rejecting the plugin left its permissions to the cascade: deleted %v", e.perms.deleted)
 	}
 	// Market pinning.
-	if _, err := e.svc.Upload(ctx, pkgtest.Build(mini, k), e.admin, UploadOptions{ExpectKey: "other"}); core.AsError(err).Code != "invalid_argument" {
+	if _, err := e.svc.Upload(ctx, pkgtest.Build(mini, k), e.admin, UploadOptions{ExpectID: "other"}); core.AsError(err).Code != "invalid_argument" {
 		t.Fatalf("expect key: %v", err)
 	}
 }
@@ -620,23 +615,24 @@ func TestPublisherRevocation(t *testing.T) {
 		if _, err := e.svc.Upload(ctx, pkgtest.Build(pkgtest.Minimal(key, "1.0.0", "acme"), signer), e.admin, UploadOptions{}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := e.svc.Consent(ctx, key, "1.0.0", ConsentRequest{}, e.admin); err != nil {
+		id := manifest.PluginID("acme", key)
+		if _, err := e.svc.Consent(ctx, id, "1.0.0", ConsentRequest{}, e.admin); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := e.db.SQL.ExecContext(ctx, `UPDATE plugins SET status = 'enabled', active_version = '1.0.0' WHERE key = $1`, key); err != nil {
+		if _, err := e.db.SQL.ExecContext(ctx, `UPDATE plugins SET status = 'enabled', active_version = '1.0.0' WHERE key = $1`, id); err != nil {
 			t.Fatal(err)
 		}
 	}
 	res, err := e.svc.RevokeKey(ctx, k2.ID, "leaked", e.admin)
-	if err != nil || res.RevokedVersions != 1 || len(res.DisabledPlugins) != 1 || res.DisabledPlugins[0] != "tool_b" {
+	if err != nil || res.RevokedVersions != 1 || len(res.DisabledPlugins) != 1 || res.DisabledPlugins[0] != "_acme__tool_b" {
 		t.Fatalf("revoke key: %v %+v", err, res)
 	}
 	res, err = e.svc.RevokePublisher(ctx, pub.ID, "compromised", e.admin)
-	if err != nil || res.RevokedVersions != 2 || len(res.DisabledPlugins) != 1 || res.DisabledPlugins[0] != "tool_a" {
+	if err != nil || res.RevokedVersions != 2 || len(res.DisabledPlugins) != 1 || res.DisabledPlugins[0] != "_acme__tool_a" {
 		t.Fatalf("revoke publisher: %v %+v", err, res)
 	}
 	var sig string
-	_ = e.db.SQL.QueryRowContext(ctx, `SELECT signature_status FROM plugin_versions WHERE plugin_key = 'tool_a'`).Scan(&sig)
+	_ = e.db.SQL.QueryRowContext(ctx, `SELECT signature_status FROM plugin_versions WHERE plugin_key = '_acme__tool_a'`).Scan(&sig)
 	if sig != pkg.SigRevoked {
 		t.Fatalf("signature_status = %s", sig)
 	}

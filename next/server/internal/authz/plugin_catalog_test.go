@@ -215,7 +215,7 @@ func TestSyncPluginSplitsAndRenamesKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	all := manifest.RoleDefault{Unscoped: true}
-	renamed := &manifest.Manifest{Key: "referral", UserPermissions: []manifest.UserPermission{
+	renamed := &manifest.Manifest{Publisher: manifest.OfficialPublisher, Key: "referral", UserPermissions: []manifest.UserPermission{
 		{Key: "referral:use", Defaults: map[string]manifest.RoleDefault{"user": all, "admin": all}, InheritFrom: []string{"referral:read"}},
 		{Key: "referral:stats:read", Risk: manifest.RiskSensitive, Defaults: map[string]manifest.RoleDefault{"admin": all}, InheritFrom: []string{"referral:manage"}},
 	}}
