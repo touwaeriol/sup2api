@@ -9437,7 +9437,7 @@ Go 类型是 `expr.VisualConfig`、`TierConfig`、`TierCond`、`TokenPrices`、`
 | 正式 | `main` | `index-main` | 核心的默认频道 |
 | 测试 | `develop` | `index-develop` | 登记 PR 的目标；测试环境与 next CI 的 `released-check` 读它 |
 
-登记 PR 一律提到 `develop`；测试通过后由维护者从本仓库的 `develop` 向 `main` 提“晋级”PR（`registry check --promotion`，见下）。频道分支的 push 触发 `publish.yml`，目标分支由推送的分支名推出（`index-${{ github.ref_name }}`），把 `sub2api-plugin index` 的结果推过去（除 `generated_at` 外没变就不推）；分支名必须符合核心对频道分支的规则 `^[A-Za-z0-9._-]{1,64}$`、不含 `..`。触发列表现在是 `main`、`develop`，加频道只要把分支名加进 `publish.yml` 与 `check.yml` 的列表。PR 检查是同一个 `pull_request_target` 工作流 `check.yml`（job `registry-check`），目标分支 `develop`、`main` 都跑；工作流、`setup-tool` action、评论脚本都取自 PR 的目标分支，PR 只作为数据检出，绝不执行 PR 里的代码。
+登记 PR 一律提到 `develop`；测试通过后由维护者从本仓库的 `develop` 向 `main` 提“晋级”PR（`registry check --promotion`，见下）。目标为 `main` 而不是这个晋级 PR 的，`check.yml` 直接判失败（版本只登记到 `develop`）。频道分支的 push 触发 `publish.yml`，目标分支由推送的分支名推出（`index-${{ github.ref_name }}`），把 `sub2api-plugin index` 的结果推过去（除 `generated_at` 外没变就不推）；分支名必须符合核心对频道分支的规则 `^[A-Za-z0-9._-]{1,64}$`、不含 `..`；手动触发只接受分支，不接受 tag。触发列表现在是 `main`、`develop`，加频道只要把分支名加进 `publish.yml` 与 `check.yml` 的列表。PR 检查是同一个 `pull_request_target` 工作流 `check.yml`（job `registry-check`），目标分支 `develop`、`main` 都跑；工作流、`setup-tool` action、评论脚本都取自 PR 的目标分支，PR 只作为数据检出，绝不执行 PR 里的代码。
 
 **插件身份**。插件由发布者加 key 确定（§137）：两个发布者可以各有一个 `codex`，登记处按路径 `plugins/<publisher>/<key>/` 区分。命令行里写插件用 `<publisher>/<key>`，只写 key 指发布者 `sub2api` 的插件。
 
@@ -9459,7 +9459,7 @@ sub2api-plugin registry import --registry <目录> --repo <owner/name> [--trust 
 sub2api-plugin released-check --plugins <插件目录的上级> --index <index.json 地址> [--strict]
 ```
 
-- `index`：离线校验全部文件（规则同上，不下载）后写出 index.json v2（默认 stdout）：发布者按 id 排序；插件先列发布者 `sub2api` 的，再按发布者、key 排序（只按 key 认第一个条目的旧核心因此拿到官方插件）；版本按 semver 从新到旧（相等时按字符串），可选字段缺省时省略。`--dev` 只用于开发与测试的本地市场：放宽“`url`、tag、`release_url` 指向插件仓库的 Release”这三条，允许相对 `url`（相对 index.json 所在目录），其余规则不变。旧的“扫描 `*.s2plugin` 目录 + `--key` 签名”用法与 `index.json.sig` 已删除。
+- `index`：离线校验全部文件（规则同上，不下载）后写出 index.json v2（默认 stdout）：发布者按 id 排序；插件按展示顺序排列：先列发布者 `sub2api` 的，再按发布者、key 排序；版本按 semver 从新到旧（相等时按字符串），可选字段缺省时省略。`--dev` 只用于开发与测试的本地市场：放宽“`url`、tag、`release_url` 指向插件仓库的 Release”这三条，允许相对 `url`（相对 index.json 所在目录），其余规则不变。旧的“扫描 `*.s2plugin` 目录 + `--key` 签名”用法与 `index.json.sig` 已删除。
 - `registry add-version`：读 `plugin.json` 的 `repo`，调 GitHub REST `GET /repos/{repo}/releases/latest` 或 `/releases/tags/{tag}`（有 `GITHUB_TOKEN` 就带上，只发给 API），要求 Release 恰好有一个 `*.s2plugin` 附件、tag 按上面三种命名之一对应包的版本、`html_url` 是 `https://github.com/<repo>/releases/tag/<tag>`、附件地址在这个 tag 下、附件有 `digest`（`sha256:<hex>`）时与下载算出的一致；下载（上限 `PluginPackageMaxBytes`）、解包、按 `pack` 的规则校验清单，清单的 `key`、`publisher` 必须与 `plugin.json` 一致，然后写 `plugins/<publisher>/<key>/versions/<version>.json`（已存在则报错），包里有 `source.json` 时带上 `source_digest`。
 - `registry check`：PR 头的文件必须通过上面的全部校验；PR 基按同样的规则读，读不过（例如规则收紧了）不判失败，读得到多少用多少，并标为需人工审核、在摘要里说明。对比头与基的全部文件（只跳过 `.git`；符号链接等非普通文件直接失败，路径带控制字符直接失败）：
   - 一个 PR 只能改一个发布者名下的文件（`publishers/<id>.json` 或它的插件目录 `plugins/<id>/`），否则失败；发布者一律取自路径；

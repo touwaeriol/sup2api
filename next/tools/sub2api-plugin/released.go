@@ -30,13 +30,9 @@ func cmdReleasedCheck(args []string, stdout, stderr io.Writer) error {
 	if *plugins == "" || *indexURL == "" {
 		return errors.New("--plugins and --index are required")
 	}
-	idx, err := fetchIndex(*indexURL)
-	if err != nil && *strict {
+	idx, err := readIndex(*indexURL, *strict, stderr)
+	if idx == nil {
 		return err
-	}
-	if err != nil {
-		fmt.Fprintf(stderr, "warning: released versions not checked: %v\n", err)
-		return nil
 	}
 	problems, err := releasedProblems(*plugins, registeredDigests(idx))
 	if err != nil {
@@ -50,6 +46,17 @@ func cmdReleasedCheck(args []string, stdout, stderr io.Writer) error {
 	}
 	fmt.Fprintf(stdout, "released-check: no registered version changed (%s)\n", *indexURL)
 	return nil
+}
+
+// readIndex fetches the index; when it cannot, the error is returned if
+// strict, otherwise a warning goes to stderr. A nil index means: stop.
+func readIndex(u string, strict bool, stderr io.Writer) (*marketIndex, error) {
+	idx, err := fetchIndex(u)
+	if err == nil || strict {
+		return idx, err
+	}
+	fmt.Fprintf(stderr, "warning: released versions not checked: %v\n", err)
+	return nil, nil
 }
 
 // fetchIndex downloads and decodes a market index.

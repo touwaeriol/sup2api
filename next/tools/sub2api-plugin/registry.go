@@ -105,9 +105,8 @@ func parseRegRef(s string) string {
 // pluginDir is the directory of a plugin ref, relative to the checkout.
 func pluginDir(ref string) string { return path.Join(regPluginsDir, ref) }
 
-// sortedPlugins lists the plugins by publisher and key, the official
-// publisher's first: a core that matches index entries by key alone then
-// finds the official plugin first.
+// sortedPlugins lists the plugins in display order: the official
+// publisher's first, then by publisher and key.
 func (reg *registry) sortedPlugins() []*regEntry {
 	rank := func(e *regEntry) int {
 		if e.plugin.Publisher == manifest.OfficialPublisher {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -76,5 +77,81 @@ func TestRegistryCheckPromotion(t *testing.T) {
 	writeVersionFile(t, head, demoRef, v)
 	if res := f.check(t, head, "touwaeriol", false, "--promotion"); !strings.Contains(joined(res.Errors), "may only add deprecated") {
 		t.Fatalf("promotion changing a published version: %+v", res)
+	}
+}
+
+// addAcmeDemo registers publisher acme (GitHub login carol) with its own
+// plugin keyed demo, next to tester/demo.
+func addAcmeDemo(t *testing.T, root string) {
+	t.Helper()
+	writeFile(t, filepath.Join(root, "publishers", "acme.json"), `{"id": "acme", "name": {"zh": "Acme", "en": "Acme"},
+  "github": ["carol"], "trust": "community", "status": "active"}`)
+	writeFile(t, filepath.Join(root, "plugins", "acme", "demo", "plugin.json"), `{"key": "demo", "publisher": "acme",
+  "name": {"zh": "另一个演示", "en": "Another demo"}, "description": {"zh": "同名插件", "en": "Same key"}, "repo": "acme/demo"}`)
+}
+
+func TestRegistrySameKeyTwoPublishers(t *testing.T) {
+	f := newRegFixture(t)
+	head := f.head(t)
+	addAcmeDemo(t, head)
+	res := f.check(t, head, "carol", true)
+	if res.Publisher != "acme" || !strings.Contains(joined(res.ManualReview), "plugins/acme/demo: new plugin") {
+		t.Fatalf("new acme/demo: %+v", res)
+	}
+	addAcmeDemo(t, f.base)
+	head = f.head(t)
+	runOK(t, "registry", "add-version", "--registry", head, "--plugin", demoRef)
+	res = f.check(t, head, "alice", true)
+	if res.NeedsManualReview || res.Publisher != "tester" || len(res.Versions) != 1 || res.Versions[0].Plugin != demoRef {
+		t.Fatalf("tester/demo version next to acme/demo: %+v", res)
+	}
+	var idx marketIndex
+	if err := json.Unmarshal([]byte(runOK(t, "index", "--registry", head)), &idx); err != nil {
+		t.Fatal(err)
+	}
+	if len(idx.Plugins) != 2 || idx.Plugins[0].Publisher != "acme" || len(idx.Plugins[0].Versions) != 0 ||
+		idx.Plugins[1].Publisher != "tester" || len(idx.Plugins[1].Versions) != 2 {
+		t.Fatalf("index plugins = %+v", idx.Plugins)
+	}
+	if got := runOK(t, "registry", "codeowners", "--registry", head); !strings.Contains(got, "/plugins/acme/ @carol\n") {
+		t.Fatalf("codeowners:\n%s", got)
+	}
+}
+
+// stripSource removes source.json from the package released under tag, as
+// packed before source digests, and updates the release's asset digest.
+func stripSource(t *testing.T, f *regFixture, tag string) {
+	t.Helper()
+	p := f.gh.pkgs[tag]
+	files, err := readPackage(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delete(files, sourceFile)
+	if err := writePackage(p, files); err != nil {
+		t.Fatal(err)
+	}
+	sum, _, err := fileSHA256(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.gh.releases[tag].Assets[1].Digest = "sha256:" + sum
+}
+
+func TestRegistryCheckSourceDigestWithoutSourceJSON(t *testing.T) {
+	f := newRegFixture(t)
+	stripSource(t, f, "demo-v0.2.0")
+	head := f.head(t)
+	runOK(t, "registry", "add-version", "--registry", head, "--plugin", demoRef)
+	v := readVersionFile(t, head, demoRef, "0.2.0")
+	if v.SourceDigest != "" {
+		t.Fatalf("a package without source.json recorded %q", v.SourceDigest)
+	}
+	f.check(t, head, "alice", true)
+	v.SourceDigest = "sha256:" + strings.Repeat("0", 64)
+	writeVersionFile(t, head, demoRef, v)
+	if res := f.check(t, head, "alice", false); !strings.Contains(joined(res.Errors), `source_digest is "sha256:`) ||
+		!strings.Contains(joined(res.Errors), `expected ""`) {
+		t.Fatalf("errors = %q", res.Errors)
 	}
 }
