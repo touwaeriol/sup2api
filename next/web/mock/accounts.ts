@@ -270,15 +270,20 @@ for (const a of accounts) {
 }
 // One account an administrator gave the agent (agent@example.com), so its creator is not its owner.
 accounts.find((a) => a.id === 17).owner_id = agentUser.id
+// The warning of a test of a model without a local price (CONTRACTS §122.5).
+function priceWarning(model: string, groups: string[]) {
+  return { code: 'model_price_not_configured', message: `本地没有配置模型 ${model} 的价格（分组 ${groups.join('、')}），客户端调用会被拒绝（403），请先在模型价格里配置`, details: { model, groups } }
+}
 // Latest tests (last_test): fast, slow, failed; the others were never tested.
 const seedTest = (id: number, ok: boolean, latency: number, model: string, message: string, ago: number) => {
   const a = accounts.find((x) => x.id === id)
   if (a) a.last_test = { at: now(-ago), ok, latency_ms: latency, model, message }
 }
-seedTest(12, true, 640, 'claude-haiku-4-5', 'model claude-haiku-4-5 answered', 1800)
-seedTest(13, true, 3820, 'claude-sonnet-4-5', 'model claude-sonnet-4-5 answered', 7200)
+// A passed test keeps only its warnings as the message (CONTRACTS §122.5).
+seedTest(12, true, 640, 'claude-haiku-4-5', priceWarning('claude-haiku-4-5', ['default']).message, 1800)
+seedTest(13, true, 3820, 'claude-sonnet-4-5', '', 7200)
 seedTest(14, false, 212, 'claude-haiku-4-5', 'authentication_error: invalid x-api-key', 86400)
-seedTest(19, true, 1450, 'gpt-4o-mini', 'model gpt-4o-mini answered', 600)
+seedTest(19, true, 1450, 'gpt-4o-mini', '', 600)
 
 // ---------------------------------------------------------------- subscription quota
 // Plan windows of subscription accounts (QuotaSnapshot). Types without plan
@@ -852,7 +857,8 @@ on('POST', '/accounts/:id/test', async (req) => {
   const path = ({ 'openai.chat': '/v1/chat/completions', 'openai.responses': '/v1/responses', 'openai.embeddings': '/v1/embeddings', 'openai.images': '/v1/images/generations' } as Record<string, string>)[protocol] || '/v1/messages'
   const upstream = `${String(a.credentials?.base_url || 'https://api.anthropic.com').replace(/\/+$/, '')}${path}`
   // Mocked outcomes: disabled = 401 (would disable), *opus* = 429 (would cool down),
-  // *unknown* / *gpt-5* = 404 model not found, otherwise OK with a random latency.
+  // *unknown* / *gpt-5* = 404 model not found, otherwise OK with a random latency;
+  // *haiku* passes with the warning of a model without a local price (§122.5).
   const latency = a.status === 'disabled' ? 212 : 300 + Math.round(Math.random() * (model.includes('pro') ? 6000 : 2500))
   await new Promise((ok) => setTimeout(ok, Math.min(1500, latency / 3)))
   let out: Record<string, unknown>
@@ -867,15 +873,16 @@ on('POST', '/accounts/:id/test', async (req) => {
       ok: true,
       status: 200,
       latency_ms: latency,
-      message: `model ${model} answered`,
       reason: '',
+      warnings: asked.includes('haiku') ? [priceWarning(asked, ['default'])] : undefined,
       effect: '',
       usage: { input_tokens: 12, output_tokens: 8, cache_read_tokens: 0, cache_creation_tokens: 0 },
       body: JSON.stringify({ id: 'msg_mock', type: 'message', role: 'assistant', model, content: [{ type: 'text', text: 'pong' }], stop_reason: 'end_turn', usage: { input_tokens: 12, output_tokens: 8 } })
     }
   }
   out = { ...out, model, requested_model: requested, protocol, upstream }
-  a.last_test = { at: now(), ok: out.ok, latency_ms: latency, model, protocol, message: String(out.message || '') }
+  const warnings = (out.warnings as { message: string }[] | undefined) || []
+  a.last_test = { at: now(), ok: out.ok, latency_ms: latency, model, protocol, message: out.ok ? warnings.map((w) => w.message).join('\n') : String(out.message || '') }
   return out
 })
 // Fetch models from the upstream (CONTRACTS §19). Per plugin a fixed list; a

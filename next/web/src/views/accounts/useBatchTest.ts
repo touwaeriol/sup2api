@@ -10,7 +10,7 @@ import { toast } from '@sub2api/ui'
 import type { AccountLastTest, AccountTestResult } from '@/api/types'
 import { useAbortScope } from '@/composables/useAbortScope'
 import { errorMessage } from '@/utils/errors'
-import { TEST_CONCURRENCY, lastTestOf } from './accountTest'
+import { TEST_CONCURRENCY, hasWarnings, lastTestOf } from './accountTest'
 import { runPool } from './pool'
 
 export interface BatchTestDeps {
@@ -32,6 +32,7 @@ export function useBatchTest(deps: BatchTestDeps) {
     batchTotal.value = ids.length
     let ok = 0
     let failed = 0
+    let warned = 0
     const stopped = await requests.run(async ({ signal }) => {
       try {
         await runPool(ids, TEST_CONCURRENCY, async (id) => {
@@ -40,6 +41,7 @@ export function useBatchTest(deps: BatchTestDeps) {
             const r = await api.post<AccountTestResult>(`/accounts/${id}/test`, {}, { signal })
             if (r.ok) ok++
             else failed++
+            if (hasWarnings(r)) warned++
             deps.tested(id, lastTestOf(r, ''))
           } catch (e) {
             if (signal.aborted) return
@@ -57,8 +59,8 @@ export function useBatchTest(deps: BatchTestDeps) {
       }
       return signal.aborted
     })
-    const msg = t(stopped ? 'accounts.batchTest.stopped' : 'accounts.batchTest.done', { ok, fail: failed })
-    toast(msg, failed ? 'warning' : stopped ? 'info' : 'success')
+    const msg = t(stopped ? 'accounts.batchTest.stopped' : 'accounts.batchTest.done', { ok, fail: failed }) + (warned ? t('accounts.testWarnedSuffix', { n: warned }) : '')
+    toast(msg, failed || warned ? 'warning' : stopped ? 'info' : 'success')
   }
 
   return {

@@ -542,11 +542,12 @@ export default {
     selectVisible: 'Select all ({n} shown)', selectFailed: 'Select failed', selected: '{n} selected',
     noCandidates: 'The account has no model list and the plugin has no preset: add model ids, fetch them from the upstream, or test with the plugin default model.', noMatch: 'No model matches',
     notRun: 'Not tested yet', requested: 'Requested model',
-    state: { idle: 'Not tested', testing: 'Testing', ok: 'Passed', fail: 'Failed', canceled: 'Canceled' },
+    state: { idle: 'Not tested', testing: 'Testing', ok: 'Passed', okWarned: 'Passed with warnings', fail: 'Failed', canceled: 'Canceled' },
     source: { account: 'model list', mapping: 'mapping', default: 'plugin preset', upstream: 'upstream', custom: 'custom' },
     stop: 'Stop', testSelected: 'Test selected ({n})', testAll: 'Test all ({n})', doneToast: 'Tests finished: {ok} passed, {fail} failed', stoppedToast: 'Tests stopped: {ok} passed, {fail} failed'
   },
-  lastTest: { column: 'Last test', never: 'Never', failed: 'Failed', testing: 'Testing', model: 'Model' },
+  testWarnedSuffix: '; {n} with warnings',
+  lastTest: { column: 'Last test', never: 'Never', failed: 'Failed', testing: 'Testing', model: 'Model', warned: 'With warnings' },
   batchTest: { run: 'Test selected ({n})', progress: 'Testing {done}/{total}', hint: 'Each account is tested once with its plugin default model, at most 3 at a time', done: 'Batch test finished: {ok} passed, {fail} failed', stopped: 'Batch test stopped: {ok} passed, {fail} failed' },
   bulk: {
     edit: 'Bulk edit ({n})', more: 'More bulk actions', delete: 'Delete ({n})',

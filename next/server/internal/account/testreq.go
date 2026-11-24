@@ -1,6 +1,7 @@
 package account
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -65,6 +66,9 @@ type TestResult struct {
 	// "cooldown", "disable" or empty. Shown to the operator only: a test
 	// never changes the account (see classifyTest).
 	Effect string `json:"effect,omitempty"`
+	// Warnings do not fail the test but tell that client calls would still
+	// fail, such as a model without a price (CONTRACTS §122.5).
+	Warnings []TestWarning `json:"warnings,omitempty"`
 }
 
 // TestUsage is the token usage read from a test response. Fields follow the
@@ -131,6 +135,7 @@ func (s *Service) test(c *gin.Context) {
 		return
 	}
 	protocols := tp.of(model)
+	clientModel := model
 	if model != "" {
 		ref := core.AccountRef{ModelMapping: a.mapping()}
 		model = ref.MapModel(model)
@@ -159,6 +164,11 @@ func (s *Service) test(c *gin.Context) {
 	}
 	res := s.runTest(ctx, bt, acct, eg, model, req)
 	res.RequestedModel = requested
+	if res.OK {
+		// Without a model of its own the plugin chose one: the account has
+		// no model list then, nor a mapping a client name would go through.
+		res.Warnings = s.priceWarnings(ctx, a.ID, cmp.Or(clientModel, res.Model))
+	}
 	s.recordTest(ctx, a.ID, res)
 	httpapi.OK(c, res)
 }
@@ -248,8 +258,9 @@ type LastTest struct {
 	Model string `json:"model"`
 	// Protocol tested (TestResult.protocol); "" when unknown.
 	Protocol string `json:"protocol,omitempty"`
-	// Message is empty on success; on failure the plugin's reason, else the
-	// upstream message, at most maxLastTestMessage bytes.
+	// Message is, on success, the warnings (§122.5), usually none; on failure
+	// the plugin's reason, else the upstream message; at most
+	// maxLastTestMessage bytes (lastTestMessage).
 	Message     string `json:"message"`
 	Status      *int   `json:"status,omitempty"`
 	ErrorCode   string `json:"error_code,omitempty"`
@@ -271,21 +282,7 @@ func (s *Service) recordTest(ctx context.Context, id int64, res TestResult) {
 	if ctx.Err() != nil {
 		return
 	}
-	msg := ""
-	if !res.OK {
-		// The plugin's reason first, then what the upstream answered: the
-		// reason alone ("upstream server error (502)") hides the cause.
-		reason, upstream := strings.TrimSpace(res.Reason), strings.TrimSpace(res.Message)
-		switch {
-		case res.ErrorSource == "response" || reason == "":
-			msg = upstream
-		case upstream == "" || strings.HasSuffix(reason, upstream):
-			msg = reason
-		default:
-			msg = reason + ": " + upstream
-		}
-		msg = cutBytes(msg, maxLastTestMessage)
-	}
+	msg := lastTestMessage(res)
 	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), recordTestTimeout)
 	defer cancel()
 	// updated_at stays.

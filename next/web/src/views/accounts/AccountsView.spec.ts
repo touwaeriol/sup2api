@@ -239,6 +239,24 @@ describe('account status recovery', () => {
     }
   })
 
+  it('shows the warnings of a passed test and keeps them as the last test message (CONTRACTS §122.5)', async () => {
+    const warning = { code: 'model_price_not_configured', message: '本地没有配置模型 claude-test 的价格（分组 vip）' }
+    mocks.post.mockResolvedValue({ ok: true, status: 200, latency_ms: 12, warnings: [warning] })
+    const w = shallowMount(AccountModelTest, { props: { open: false, account: { ...list.items.value[0], models: ['claude-test'] } }, global: { plugins: [i18n], stubs: {
+      SModal: { template: '<div><slot /></div>' },
+      STable: { props: ['rows'], template: '<div><div v-for="row in rows" :key="row.model"><slot name="cell-state" :row="row" /><slot name="cell-actions" :row="row" /></div></div>' },
+      SButton: { template: '<button><slot /></button>' },
+      SBadge: { template: '<span><slot /></span>' },
+      SAlert: { template: '<div><slot /></div>' },
+    } } })
+    await w.setProps({ open: true })
+    await w.get('[data-testid="model-test-one"]').trigger('click')
+    await flushPromises()
+    expect(w.get('[data-testid="model-test-warning"]').text()).toBe(warning.message)
+    expect(w.text()).toContain('成功，有警告')
+    expect(w.emitted('tested')?.[0]?.[1]).toMatchObject({ ok: true, message: warning.message })
+  })
+
   it('shows a successful model test like new-api: outcome and request time, request id only in the details', async () => {
     mocks.post.mockResolvedValue({ ok: true, status: 200, latency_ms: 3550, model: 'claude-test', protocol: 'anthropic.messages', message: 'ok', response_headers: { 'request-id': 'req_ok_1' } })
     const w = shallowMount(AccountModelTest, { props: { open: false, account: { ...list.items.value[0], models: ['claude-test'] } }, global: { plugins: [i18n], stubs: {

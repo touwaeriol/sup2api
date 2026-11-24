@@ -65,6 +65,10 @@ type Deps struct {
 	// CanWork admits background quota queries on this node (managed cores
 	// run them only once admitted); nil always allows.
 	CanWork func() bool
+	// Priced tells whether the model of a test has a price in the account's
+	// groups: a test of one without warns (CONTRACTS §122.5). nil checks
+	// nothing.
+	Priced core.PricedModels
 }
 
 const (

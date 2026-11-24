@@ -895,6 +895,17 @@ export interface AccountTestResult {
    * A diagnosis only: a test never cools down or disables the account.
    */
   effect?: string
+  /**
+   * Findings that do not fail the test but mean client calls would still
+   * fail (CONTRACTS §122.5), such as `model_price_not_configured`.
+   */
+  warnings?: AccountTestWarning[]
+}
+
+export interface AccountTestWarning {
+  code: string
+  message: string
+  details?: Record<string, unknown>
 }
 
 // ------------------------------------------------------------------ billing

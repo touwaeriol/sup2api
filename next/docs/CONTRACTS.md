@@ -192,7 +192,7 @@
 | POST `/accounts` | `account:create` | `{name, plugin_key, type, group_ids[], proxy_id \| proxy_url, priority, weight, max_concurrency, schedulable, auto_disable, models[], model_mapping{}, rpm_limit, tpm_limit, credentials:{...}}`（§18、§21.4、§42.3）；响应另带 `proxy_created` |
 | GET/PATCH `/accounts/:id` | `account:read` / `account:update` | 凭证中的敏感字段返回 `"******"`；PATCH 时敏感字段传 `"******"` 表示不修改 |
 | DELETE `/accounts/:id` | `account:delete` | |
-| POST `/accounts/:id/test` | `account:test` | `{model?}` → TestResult `{ok, status, latency_ms, message, model, requested_model, protocol, upstream, body, usage, reason, effect}`（§15.9、§50、§122）；结果记入账号的 `last_test` |
+| POST `/accounts/:id/test` | `account:test` | `{model?}` → TestResult `{ok, status, latency_ms, message, model, requested_model, protocol, upstream, body, usage, reason, effect, warnings}`（§15.9、§50、§122；`warnings` 见 §122.5）；结果记入账号的 `last_test` |
 | POST `/accounts/:id/models/fetch`、POST `/account-types/:plugin_key/:type/models/fetch` | `account:test` / `account:create` | 从上游拉取模型列表（§19） |
 | POST `/account-types/:plugin_key/:type/proxy-ticket` | `account:create` / `account:update`（任意范围） | 账号表单的代理选择（`proxy_id` / `proxy_url` / 都不给）按上一行同样检查后加密成代理票据，给建账号之前的授权流程用（§117） |
 | POST `/accounts/:id/credentials/reveal` | `account:credential:view` | 明文凭证 |
@@ -8903,6 +8903,21 @@ ALTER TABLE usage_logs
 - 迁移 0115：`accounts` 加可空列 `last_test_protocol text`（只加列，旧核心跑在新表上不受影响）；每次测试写入，`last_test` 加 `protocol`（未知时省略，迁移之前的记录没有）。
 - 控制台：模型测试弹窗每个模型的结果旁显示所测协议，展开的详情里有“测试协议”；账号列表“最近测试”的提示里同样显示。
 - 已知限制：测试只读应答的前 8 KiB（`maxTestBody`），生图应答的用量在一张 base64 图之后，生图测试的 `usage` 一般为空；状态码与正文前缀足以判断可用，不为此改读取长度。
+
+### 122.5 测试结果提示缺少模型价格（2026-11-24，所有者要求“测试成功，但是要提示本地没有配置模型价格”；无迁移）
+
+账号测试只验证上游能不能通，网关处理客户端请求时还要先查价格，查不到就 403 `model_price_not_configured`（§97）。所以会出现测试成功、客户端调用失败的情况。现在测试结果会给出提示：
+
+- **照常测试上游**：价格不影响测试本身，`ok` 仍然只看上游的应答。
+- **什么时候查**：只在上游测试成功时查，失败时以失败原因为准。
+- **怎么查**：用账号映射**之前**的模型名，也就是客户端请求时用的名字，与网关计价一致；没点名时用自动选出的测试模型；账号既没有模型列表也没有映射时，用插件报告的模型（这时客户端请求的名字就是它）；都没有时不查。逐个检查账号所在的分组，规则是 `core.PricedModels`，和网关计价用的是同一份价格快照：先看分组价，再看启用的全局价。账号不在任何分组时只查全局价。
+- **结果**：测试成功且有分组没有价格时，TestResult 加上 `warnings: [{code: "model_price_not_configured", message, details: {model, groups}}]`。`groups` 是缺价的分组名，账号不在分组时为空。`message` 按请求的语言给出，例如“本地没有配置模型 X 的价格（分组 A、B），客户端调用会被拒绝（403），请先在模型价格里配置”。查价本身出错时只记日志，不给提示。
+- **最近一次测试**：测试成功时，`last_test_message` 写入各条警告的 `message`，用换行隔开；以前成功时这一列总是空的，所以不需要迁移。测试失败时照旧写失败原因。
+- **装配**：`account.Deps.Priced` 在 app 里接到 billing；为 nil 时不检查。
+- **控制台**：
+  - 模型测试弹窗：成功但有警告的行显示“成功，有警告”，下面用警告色提示条列出每条警告；
+  - 账号列表“最近测试”：成功且有消息时显示警告色圆点和“有警告”，悬停可以看到完整提示；
+  - 模型测试和批量测试结束时的提示：有警告时追加“其中 N 个有警告”，并改用警告色。
 
 ## 123. 已有账号的出站一律按账号取客户端（2026-11-19，所有者要求“每次都保证最新的代理就行了呀。获取 HTTP 客户端的时候，直接就绑定一个账号呗，用这个账号对应的代理”“用已保存的代理，那就正确应用”“代理配置了就走，没配置就不走，配置了就不要泄露 IP”；无迁移；Host API、插件协议不变）
 

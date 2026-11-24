@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AccountTestResult } from '@/api/types'
-import { candidateModels, formatLatency, lastTestOf, latencyLevel, mergeCandidates, prettyBody, summarize, withoutModels } from './accountTest'
+import { candidateModels, formatLatency, hasWarnings, lastTestOf, latencyLevel, mergeCandidates, prettyBody, summarize, withoutModels } from './accountTest'
 
 describe('account test helpers', () => {
   it('offers the account model list when it has one', () => {
@@ -45,7 +45,12 @@ describe('account test helpers', () => {
   it('derives last_test from a result', () => {
     const at = new Date('2026-10-05T00:00:00Z')
     const r = (o: Partial<AccountTestResult>): AccountTestResult => ({ ok: true, status: 200, latency_ms: 10, ...o })
-    expect(lastTestOf(r({ model: 'up', message: 'hi' }), 'req', at)).toEqual({ at: at.toISOString(), ok: true, status: 200, latency_ms: 10, model: 'up', message: 'hi' })
+    // A success records its warnings as the message, as the server does (CONTRACTS §122.5).
+    expect(lastTestOf(r({ model: 'up', message: 'hi' }), 'req', at)).toMatchObject({ at: at.toISOString(), ok: true, status: 200, latency_ms: 10, model: 'up', message: '' })
+    const warnings = [{ code: 'model_price_not_configured', message: 'no price' }, { code: 'x', message: 'other' }]
+    expect(lastTestOf(r({ warnings }), 'req', at).message).toBe('no price\nother')
+    expect(hasWarnings(r({ warnings }))).toBe(true)
+    expect(hasWarnings(r({}))).toBe(false)
     expect(lastTestOf(r({ ok: false, reason: 'rate_limited' }), 'req', at)).toMatchObject({ ok: false, model: 'req', message: 'rate_limited' })
     expect(lastTestOf(r({ requested_model: 'rq' }), '', at).model).toBe('rq')
     expect(lastTestOf(r({ protocol: 'openai.responses' }), 'req', at).protocol).toBe('openai.responses')

@@ -191,6 +191,8 @@ func (b *boot) buildAccounts() error {
 		// Credential refresh: one renewal per account cluster-wide, one
 		// sweeping node, only once admitted (CONTRACTS §48).
 		Locker: b.cl.Locker, CanWork: b.canWork,
+		// A test warns about a model without a price (CONTRACTS §122.5).
+		Priced: b.bill,
 	})
 	// The group page lists the protocols the accounts of a group serve.
 	b.grp.Protocols = b.acc

@@ -92,9 +92,16 @@ export function withoutModels(models: string[], failed: string[]): string[] | nu
   return next.length === models.length ? null : next
 }
 
-/** The last_test the server records for a result (used to update the list at once). */
+/** Whether a result carries warnings (CONTRACTS §122.5). */
+export const hasWarnings = (r?: AccountTestResult): boolean => !!r?.warnings?.length
+
+/**
+ * The last_test the server records for a result (used to update the list at
+ * once): a success keeps its warnings as the message.
+ */
 export function lastTestOf(r: AccountTestResult, requested: string, at = new Date()): AccountLastTest {
-  return { at: at.toISOString(), ok: r.ok, status: r.status, error_code: r.error_code, error_source: r.error_source, latency_ms: r.latency_ms, model: r.model || r.requested_model || requested, protocol: r.protocol, message: r.message || (r.error_source === 'response' ? '' : r.reason) || '' }
+  const message = r.ok ? (r.warnings || []).map((w) => w.message).join('\n') : r.message || (r.error_source === 'response' ? '' : r.reason) || ''
+  return { at: at.toISOString(), ok: r.ok, status: r.status, error_code: r.error_code, error_source: r.error_source, latency_ms: r.latency_ms, model: r.model || r.requested_model || requested, protocol: r.protocol, message }
 }
 
 /**
