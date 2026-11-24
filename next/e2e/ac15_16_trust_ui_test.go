@@ -56,10 +56,8 @@ func TestAC15_SignatureAndTrust(t *testing.T) {
 	t.Run("revoking a publisher disables its plugins", func(t *testing.T) {
 		e := e.With(t)
 		const pk = "e2e_revoke"
-		if _, ok := e.Plugin(admin, pk); ok {
-			e.Uninstall(admin, pk, true)
-		}
-		key := NewSigningKey(t, "e2e-rev-"+e.RunID, "e2e-rev-"+e.RunID)
+		key := NewSigningKey(t, e.PublisherID(), "e2e-rev-"+e.RunID)
+		id := key.PluginID(pk)
 		pubID := e.RegisterPublisher(admin, key, "verified")
 		pkg := e.DerivedGuardPackage(pk, key, false)
 		r := e.UploadPlugin(admin, pk+".s2plugin", pkg.Bytes(t))
@@ -71,19 +69,19 @@ func TestAC15_SignatureAndTrust(t *testing.T) {
 			t.Fatalf("review trust: %s", rev.Raw)
 		}
 		e.ConsentAll(admin, rev, nil)
-		e.Enable(admin, pk)
+		e.Enable(admin, id)
 
 		admin.OK(t, http.MethodPost, fmt.Sprintf("/publishers/%d/revoke", pubID), nil)
-		d := e.WaitPlugin(admin, pk, "disabled", "")
+		d := e.WaitPlugin(admin, id, "disabled", "")
 		if !strings.Contains(strings.ToLower(d.Get("status_reason").String()), "revoked") {
 			t.Fatalf("status_reason: %s", d.Raw)
 		}
-		e.Uninstall(admin, pk, true)
+		e.Uninstall(admin, id, true)
 	})
 
 	t.Run("community publisher cannot request ui.native", func(t *testing.T) {
 		e := e.With(t)
-		key := NewSigningKey(t, "e2e-com-"+e.RunID, "e2e-com-"+e.RunID)
+		key := NewSigningKey(t, e.PublisherID(), "e2e-com-"+e.RunID)
 		pubID := e.RegisterPublisher(admin, key, "community")
 		defer admin.API(t, http.MethodPost, fmt.Sprintf("/publishers/%d/revoke", pubID), nil)
 		pkg := e.DerivedGuardPackage("e2e_native", key, true)
@@ -103,9 +101,9 @@ func TestAC15_SignatureAndTrust(t *testing.T) {
 		if rv := reviewOf(e, r.Data()); rv.Get("trust").String() != "community" {
 			t.Fatalf("trust: %s", rv.Raw)
 		}
-		admin.API(t, http.MethodPost, "/plugins/e2e_native/versions/"+pkg.Manifest(t)["version"].(string)+"/reject", nil)
+		admin.API(t, http.MethodPost, "/plugins/"+key.PluginID("e2e_native")+"/versions/"+pkg.Manifest(t)["version"].(string)+"/reject", nil)
 		Eventually(t, 10*time.Second, time.Second, "rejected plugin gone", func() bool {
-			d, ok := e.Plugin(admin, "e2e_native")
+			d, ok := e.Plugin(admin, key.PluginID("e2e_native"))
 			return !ok || d.Get("status").String() != "awaiting_consent"
 		})
 	})

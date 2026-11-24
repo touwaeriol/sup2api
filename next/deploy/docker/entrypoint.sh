@@ -6,7 +6,7 @@
 # derive SUB2API_PLUGIN_OFFICIAL_KEYS = "<keyId>=<pub>": the bundled market's
 # packages are signed with it. Production deployments set the variable and
 # ignore the dev key. The market is the official store unless a stack points
-# SUB2API_MARKET_URL at its own market (CONTRACTS §136).
+# SUB2API_MARKET_BASE_URL at its own market (CONTRACTS §137.6).
 set -eu
 MARKET=/opt/sub2api/market
 if [ -f "$MARKET/dev-official.pub" ] && [ "${SUB2API_USE_DEV_KEYS:-true}" = "true" ]; then

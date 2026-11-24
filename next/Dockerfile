@@ -19,7 +19,7 @@
 # plugins stay verifiable. Only the PUBLIC key is copied into the image
 # (/opt/sub2api/market/dev-official.pub); the entrypoint turns it into
 # SUB2API_PLUGIN_OFFICIAL_KEYS unless set. Stacks that serve the bundled
-# market point SUB2API_MARKET_URL at it.
+# market point SUB2API_MARKET_BASE_URL at it.
 # =============================================================================
 
 ARG NODE_IMAGE=node:24

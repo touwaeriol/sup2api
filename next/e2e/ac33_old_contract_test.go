@@ -58,11 +58,11 @@ func TestAC33_OldContractPackagesRefused(t *testing.T) {
 			if f, ok := Find(r.JSON().Get("error.details.fields").Array(), "code", "outdated_contract"); !ok || f.Get("message").String() != want {
 				t.Fatalf("upload field error: %s", r.Body)
 			}
-			if _, ok := e.Plugin(admin, dp.Key); ok {
-				t.Fatalf("a refused upload left plugin %s", dp.Key)
+			if _, ok := e.Plugin(admin, dp.ID); ok {
+				t.Fatalf("a refused upload left plugin %s", dp.ID)
 			}
 			e.RequireDocker()
-			if rows := e.SQL(fmt.Sprintf(`SELECT count(*) FROM plugin_versions WHERE plugin_key=%s`, sqlText(dp.Key))); len(rows) != 1 || rows[0] != "0" {
+			if rows := e.SQL(fmt.Sprintf(`SELECT count(*) FROM plugin_versions WHERE plugin_key=%s`, sqlText(dp.ID))); len(rows) != 1 || rows[0] != "0" {
 				t.Fatalf("a refused upload left version rows: %v", rows)
 			}
 		})
@@ -78,20 +78,20 @@ func TestAC33_OldContractPackagesRefused(t *testing.T) {
 			if rest, ok := strings.CutPrefix(p, "runtimes/"); ok {
 				osArch, _, _ := strings.Cut(rest, "/")
 				goos, goarch, _ := strings.Cut(osArch, "-")
-				pkg[p] = buildGuardBinary(t, goos, goarch, dp.Key, version, map[string]string{"zz_e2e_old_protocol.go": oldProtocolSource})
+				pkg[p] = buildGuardBinary(t, goos, goarch, dp.ID, version, map[string]string{"zz_e2e_old_protocol.go": oldProtocolSource})
 			}
 		}
 		pkg.Sign(t, dp.Signer)
 		rev := e.UploadPackage(admin, pkg)
 		e.ConsentAll(admin, rev, []string{"admin"})
 		t.Cleanup(func() {
-			admin.API(t, http.MethodPost, "/plugins/"+dp.Key+"/disable", nil)
-			Eventually(t, 60*time.Second, time.Second, "uninstall "+dp.Key, func() bool {
-				r := admin.API(t, http.MethodDelete, "/plugins/"+dp.Key, nil, Query("purge", "true"))
+			admin.API(t, http.MethodPost, "/plugins/"+dp.ID+"/disable", nil)
+			Eventually(t, 60*time.Second, time.Second, "uninstall "+dp.ID, func() bool {
+				r := admin.API(t, http.MethodDelete, "/plugins/"+dp.ID, nil, Query("purge", "true"))
 				return r.Status == 200 || r.Status == 204 || r.Status == 404
 			})
 		})
-		admin.API(t, http.MethodPost, "/plugins/"+dp.Key+"/enable", nil)
+		admin.API(t, http.MethodPost, "/plugins/"+dp.ID+"/enable", nil)
 		want := protocol.OutdatedContractMessage(dp.Key, version, hostVersion)
 		// The nodes refuse to prepare the version, with the one message, and
 		// the plugin list says so; the refusal the console shows outlives
@@ -99,7 +99,7 @@ func TestAC33_OldContractPackagesRefused(t *testing.T) {
 		// outcome.
 		var listed gjson.Result
 		Eventually(t, 90*time.Second, time.Second, func() string { return "refusal in the plugin list: " + listed.Raw }, func() bool {
-			listed, _ = Find(admin.ListAll(t, "/plugins"), "key", dp.Key)
+			listed, _ = Find(admin.ListAll(t, "/plugins"), "key", dp.ID)
 			return listed.Get("refusal.code").String() == "outdated_contract"
 		})
 		if listed.Get("status").String() == "enabled" {
@@ -110,7 +110,7 @@ func TestAC33_OldContractPackagesRefused(t *testing.T) {
 			r.Get("protocol_version").Int() != protocol.ProtocolVersion || r.Get("first_core_version").String() != protocol.FirstCoreVersion {
 			t.Fatalf("refusal: %s", listed.Raw)
 		}
-		d, _ := e.Plugin(admin, dp.Key)
+		d, _ := e.Plugin(admin, dp.ID)
 		for node, st := range PluginNodeStates(d) {
 			if st == "active" {
 				t.Fatalf("%s runs the refused plugin: %s", node, d.Raw)

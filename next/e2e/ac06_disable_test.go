@@ -159,14 +159,14 @@ func TestAC06_UninstallDropsPluginGrants(t *testing.T) {
 	pkg := dp.Package(e)
 	e.InstallVersion(admin, pkg, nil)
 	roleKey := e.RoleKey("un")
-	e.CreateRole(admin, roleKey, roleKey, []string{"plugin." + dp.Key + ":rules:read"})
+	e.CreateRole(admin, roleKey, roleKey, []string{"plugin." + dp.ID + ":rules:read"})
 
-	e.Uninstall(admin, dp.Key, true)
-	if m, ok := e.PluginPermissions(admin, dp.Key); ok {
+	e.Uninstall(admin, dp.ID, true)
+	if m, ok := e.PluginPermissions(admin, dp.ID); ok {
 		t.Errorf("plugin permissions left after uninstall: %s", m.Raw)
 	}
 	for k := range e.RolePermissionKeys(admin, roleKey) {
-		if strings.HasPrefix(k, "plugin."+dp.Key+":") {
+		if strings.HasPrefix(k, "plugin."+dp.ID+":") {
 			t.Errorf("role %s kept %s after uninstall", roleKey, k)
 		}
 	}
@@ -177,7 +177,7 @@ func TestAC06_UninstallDropsPluginGrants(t *testing.T) {
 			t.Errorf("reinstall review: %s not new", up.Get("key").String())
 		}
 	}
-	if d, _ := e.Plugin(admin, dp.Key); len(d.Get("role_grants_to_review").Array()) != 0 {
+	if d, _ := e.Plugin(admin, dp.ID); len(d.Get("role_grants_to_review").Array()) != 0 {
 		t.Errorf("reinstall has role grants to review: %s", d.Get("role_grants_to_review").Raw)
 	}
 }

@@ -137,7 +137,7 @@ func TestAC01_ComposeStack(t *testing.T) {
 // (CONTRACTS §11.1) listing plugins of active publishers, each version
 // downloadable and matching its size and sha256.
 func checkMarketIndex(t *testing.T, e *Env) {
-	r := NewClient(e.BaseURL).Do(t, http.MethodGet, "/market/index.json", nil)
+	r := NewClient(e.BaseURL).Do(t, http.MethodGet, "/market/"+marketChannel+"/index.json", nil)
 	if r.Status != 200 {
 		t.Fatalf("index: %s", r)
 	}

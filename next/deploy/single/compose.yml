@@ -103,9 +103,9 @@ services:
       SUB2API_PLUGIN_MAX_MEMORY_MB: ${SUB2API_PLUGIN_MAX_MEMORY_MB:-}
       # Empty = trust the signing key generated at image build time.
       SUB2API_PLUGIN_OFFICIAL_KEYS: ${SUB2API_PLUGIN_OFFICIAL_KEYS:-}
-      # The plugin store is the bundled market below (the official store when
-      # set to the official index URL).
-      SUB2API_MARKET_URL: ${SUB2API_MARKET_URL:-http://market:8080/index.json}
+      # The official store's base is the bundled market below (the real
+      # store when set to https://raw.githubusercontent.com/touwaeriol/sup2api-plugin).
+      SUB2API_MARKET_BASE_URL: ${SUB2API_MARKET_BASE_URL:-http://market:8080}
       SUB2API_MARKET_ALLOW_HTTP: "true"
     volumes:
       - appdata:/var/lib/sub2api

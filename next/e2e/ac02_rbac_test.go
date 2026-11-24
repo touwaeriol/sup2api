@@ -130,14 +130,14 @@ func TestAC02_PluginRoleMatrixRemovedAndRevived(t *testing.T) {
 	e := Setup(t)
 	admin := e.Admin()
 	dp := e.NewDerivedPlugin(admin, "e2emx")
-	read, manage := "plugin."+dp.Key+":rules:read", "plugin."+dp.Key+":rules:manage"
+	read, manage := "plugin."+dp.ID+":rules:read", "plugin."+dp.ID+":rules:manage"
 	version := func(v string) func(map[string]any) { return func(m map[string]any) { m["version"] = v } }
 
 	// rules:manage defaults to admin; the consent grants it to nobody.
 	e.InstallVersion(admin, dp.Package(e, version("1.0.0")), map[string]any{"rules:manage": map[string]any{}})
 	roleKey := e.RoleKey("mx")
 	_, u := e.NewUserWithRoles(admin, roleKey, []string{})
-	matrix := admin.OK(t, http.MethodPut, "/permissions/plugins/"+dp.Key,
+	matrix := admin.OK(t, http.MethodPut, "/permissions/plugins/"+dp.ID,
 		map[string]any{"roles": map[string]any{roleKey: []string{read, manage}}})
 	rowKeys := func(m gjson.Result, role string) []string {
 		row, ok := Find(m.Get("roles").Array(), "key", role)
@@ -163,14 +163,14 @@ func TestAC02_PluginRoleMatrixRemovedAndRevived(t *testing.T) {
 	if gone, ok := Find(rev.Get("removed_user_permissions").Array(), "key", "rules:manage"); !ok || !slices.Contains(Strings(gone.Get("holders")), roleKey) {
 		t.Errorf("1.0.1 review removed_user_permissions: %s", rev.Get("removed_user_permissions").Raw)
 	}
-	mod, _ := e.PluginPermissions(admin, dp.Key)
+	mod, _ := e.PluginPermissions(admin, dp.ID)
 	if p, _ := Find(mod.Get("permissions").Array(), "key", manage); p.Get("status").String() != "removed" {
 		t.Errorf("rules:manage after 1.0.1: %s", p.Raw)
 	}
 	if p := u.Permissions(t); !p[read] || p[manage] {
 		t.Errorf("/me after 1.0.1: want %s without %s, got %v", read, manage, p)
 	}
-	matrix = admin.OK(t, http.MethodGet, "/permissions/plugins/"+dp.Key, nil)
+	matrix = admin.OK(t, http.MethodGet, "/permissions/plugins/"+dp.ID, nil)
 	if got := rowKeys(matrix, roleKey); !slices.Equal(got, []string{manage, read}) {
 		t.Errorf("removed grant not kept: %v", got)
 	}
@@ -185,7 +185,7 @@ func TestAC02_PluginRoleMatrixRemovedAndRevived(t *testing.T) {
 	if p := u.Permissions(t); !p[read] || !p[manage] {
 		t.Errorf("/me after 1.0.2: %v", p)
 	}
-	matrix = admin.OK(t, http.MethodGet, "/permissions/plugins/"+dp.Key, nil)
+	matrix = admin.OK(t, http.MethodGet, "/permissions/plugins/"+dp.ID, nil)
 	if got := rowKeys(matrix, "admin"); slices.Contains(got, manage) {
 		t.Errorf("revived rules:manage defaulted to admin again: %v", got)
 	}

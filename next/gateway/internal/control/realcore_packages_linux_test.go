@@ -28,7 +28,8 @@ import (
 //
 // Besides the real-core variables it needs TEST_UPLOAD_PACKAGE (a signed
 // package that is neither bundled nor in the market) and TEST_MARKET_DIR (a
-// directory with index.json and its packages).
+// directory with index.json and its packages, served as the index of every
+// channel: <base>/index-<branch>/).
 func TestRealCorePluginPackagesTravelBetweenNodes(t *testing.T) {
 	uploadPath, marketDir := os.Getenv("TEST_UPLOAD_PACKAGE"), os.Getenv("TEST_MARKET_DIR")
 	if uploadPath == "" || marketDir == "" {
@@ -43,6 +44,9 @@ func TestRealCorePluginPackagesTravelBetweenNodes(t *testing.T) {
 		if strings.HasSuffix(r.URL.Path, ".s2plugin") {
 			marketPackageGets.Add(1)
 		}
+		if _, rest, ok := strings.Cut(strings.TrimPrefix(r.URL.Path, "/"), "/"); ok {
+			r.URL.Path = "/" + rest // index-<branch>/x -> x
+		}
 		http.FileServer(http.Dir(marketDir)).ServeHTTP(w, r)
 	}))
 	defer market.Close()
@@ -51,7 +55,7 @@ func TestRealCorePluginPackagesTravelBetweenNodes(t *testing.T) {
 	const adminEmail, adminPassword = "admin@real.test", "Real-core-admin-pass!"
 	c := newRealCluster(t, ctx, realOptions{coreEnv: []string{
 		"SUB2API_BOOTSTRAP_ADMIN_EMAIL=" + adminEmail, "SUB2API_BOOTSTRAP_ADMIN_PASSWORD=" + adminPassword,
-		"SUB2API_MARKET_URL=" + market.URL + "/index.json",
+		"SUB2API_MARKET_BASE_URL=" + market.URL,
 		"SUB2API_MARKET_ALLOW_HTTP=true",
 	}})
 	db := c.db
@@ -146,7 +150,7 @@ func TestRealCorePluginPackagesTravelBetweenNodes(t *testing.T) {
 	listing := adminC.ok(http.MethodGet, "/market/plugins?source_id="+strconv.FormatInt(sourceID, 10), nil)
 	marketKey2, marketVersion := firstMarketPlugin(t, listing)
 	before := marketPackageGets.Load()
-	review := adminC.ok(http.MethodPost, "/plugins/install-from-market", map[string]any{"source_id": sourceID, "key": marketKey2, "version": marketVersion})
+	review := adminC.ok(http.MethodPost, "/plugins/install-from-market", map[string]any{"source_id": sourceID, "publisher": "sub2api", "key": marketKey2, "version": marketVersion})
 	adminC.consentAll(review)
 	adminC.ok(http.MethodPost, "/plugins/"+marketKey2+"/enable", nil)
 	wait(marketKey2+" enabled on every node", 3*time.Minute, func() bool { return enabledEverywhere(marketKey2) })

@@ -13,33 +13,39 @@ import (
 
 // ------------------------------------------------------------------ market
 
-// MarketSource returns the id of the only market source, the official
-// store (official, pointed at the stack's market by SUB2API_MARKET_URL).
+// marketChannel is the store branch whose index the e2e market serves
+// (deploy/docker/build-go.sh serves every channel the same index).
+const marketChannel = "index-main"
+
+// MarketSource returns the id of the default channel of the plugin store
+// (main, its base pointed at the stack's market by SUB2API_MARKET_BASE_URL).
 func (e *Env) MarketSource(admin *Session) int64 {
 	e.T.Helper()
 	srcs := admin.OK(e.T, http.MethodGet, "/market/sources", nil).Array()
-	if len(srcs) != 1 || srcs[0].Get("name").String() != "official" {
-		e.T.Fatalf("market sources = %s, want only official", srcs)
+	def, ok := Find(srcs, "is_default", "true")
+	if !ok || def.Get("branch").String() != "main" {
+		e.T.Fatalf("market sources = %s, want the default channel main", srcs)
 	}
-	return srcs[0].Get("id").Int()
+	return def.Get("id").Int()
 }
 
-// MarketIndex fetches the static index.json served by Caddy.
+// MarketIndex fetches the static index.json of the main channel served by
+// Caddy.
 func (e *Env) MarketIndex() gjson.Result {
 	e.T.Helper()
-	r := NewClient(e.BaseURL).Do(e.T, http.MethodGet, "/market/index.json", nil)
+	r := NewClient(e.BaseURL).Do(e.T, http.MethodGet, "/market/"+marketChannel+"/index.json", nil)
 	if r.Status != 200 {
 		e.T.Fatalf("market index: %s", r)
 	}
 	return r.JSON()
 }
 
-// MarketPackage downloads a package listed in the static index.
+// MarketPackage downloads a first-party package listed in the static index.
 func (e *Env) MarketPackage(key, version string) []byte {
 	e.T.Helper()
 	idx := e.MarketIndex()
 	for _, p := range idx.Get("plugins").Array() {
-		if p.Get("key").String() != key {
+		if p.Get("key").String() != key || p.Get("publisher").String() != "sub2api" {
 			continue
 		}
 		for _, v := range p.Get("versions").Array() {
@@ -48,7 +54,7 @@ func (e *Env) MarketPackage(key, version string) []byte {
 			}
 			u := v.Get("url").String()
 			if !strings.Contains(u, "://") {
-				u = e.BaseURL + "/market/" + strings.TrimPrefix(u, "./")
+				u = e.BaseURL + "/market/" + marketChannel + "/" + strings.TrimPrefix(u, "./")
 			}
 			resp, err := http.Get(u)
 			if err != nil {
@@ -76,7 +82,7 @@ func (e *Env) InstallFromMarket(admin *Session, key, version string) gjson.Resul
 	e.T.Helper()
 	src := e.MarketSource(admin)
 	d := admin.OK(e.T, http.MethodPost, "/plugins/install-from-market",
-		map[string]any{"source_id": src, "key": key, "version": version})
+		map[string]any{"source_id": src, "publisher": "sub2api", "key": key, "version": version})
 	return reviewOf(e, d)
 }
 

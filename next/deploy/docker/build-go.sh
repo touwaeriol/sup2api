@@ -5,7 +5,8 @@
 #   <out>/bin/sub2api          core server (-X main.Version=$VERSION)
 #   <out>/bin/sub2api-plugin   plugin CLI
 #   <out>/market/              *.s2plugin signed with the dev key, index.json
-#                              (unsigned index v2), dev-official.pub, dev-official.keyid
+#                              (unsigned index v2), dev-official.pub, dev-official.keyid;
+#                              index-main and index-develop link to it
 #   <out>/builtin/             the built-in plugins' packages and trust key
 #
 # The dev key lives in <keydir> (a BuildKit cache mount) and is created on
@@ -75,6 +76,10 @@ SKIP_DB_CHECK=${SKIP_DB_CHECK:-1} sh tools/sub2api-plugin/scripts/build-demo.sh 
 # from it.
 cp "$KEYS/$KEY_ID.pub" "$OUT/market/dev-official.pub"
 printf '%s\n' "$KEY_ID" > "$OUT/market/dev-official.keyid"
+# The store reads a channel's index at <base>/index-<branch>/index.json
+# (CONTRACTS §137.6): both seeded channels serve this one market.
+ln -sfn . "$OUT/market/index-main"
+ln -sfn . "$OUT/market/index-develop"
 ls -l "$OUT/market"
 
 # Built-in plugins (installed by the core at startup, cannot be uninstalled,

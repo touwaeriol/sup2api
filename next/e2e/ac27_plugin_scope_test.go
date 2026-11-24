@@ -14,7 +14,7 @@ import (
 // forwarding, so guard itself, which ignores ?set=, needs no change.
 
 // scopePlugin installs a fresh guard derivative with the scopes above and
-// returns its key.
+// returns its plugin id.
 func (e *Env) scopePlugin(admin *Session) string {
 	e.T.Helper()
 	dp := e.NewDerivedPlugin(admin, "e2esc")
@@ -22,7 +22,7 @@ func (e *Env) scopePlugin(admin *Session) string {
 	pkg[statsPage] = []byte(`<!doctype html><title>stats</title>`)
 	pkg.Sign(e.T, dp.Signer)
 	e.InstallVersion(admin, pkg, nil)
-	return dp.Key
+	return dp.ID
 }
 
 // scopedGuardManifest gives rules:read and stats:read the values a and b,

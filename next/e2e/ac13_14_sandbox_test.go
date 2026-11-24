@@ -117,7 +117,7 @@ func TestAC14_ResourceLimits(t *testing.T) {
 
 	t.Run("a large memory request is no limit and is accepted without a node cap", func(t *testing.T) {
 		e := e.With(t)
-		key := NewSigningKey(t, "e2e-verified-"+e.RunID, "e2e-verified-"+e.RunID)
+		key := NewSigningKey(t, e.PublisherID(), "e2e-verified-"+e.RunID)
 		pubID := e.RegisterPublisher(admin, key, "verified")
 		defer admin.API(t, http.MethodPost, fmt.Sprintf("/publishers/%d/revoke", pubID), nil)
 		pkg := e.DerivedGuardPackage("e2e_res", key, false)
