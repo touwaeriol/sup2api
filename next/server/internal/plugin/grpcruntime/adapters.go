@@ -86,7 +86,7 @@ func (i *Instance) call(ctx context.Context, class callClass, timeout time.Durat
 		select {
 		case sem <- struct{}{}:
 		case <-ctx.Done():
-			return fmt.Errorf("plugin %s: waiting for a free call slot: %w", i.pkg.Key, ctx.Err())
+			return fmt.Errorf("plugin %s: waiting for a free call slot: %w", i.name(), ctx.Err())
 		}
 		defer func() { <-sem }()
 	}
@@ -116,9 +116,12 @@ func (i *Instance) finish() {
 	}
 }
 
+// name is how messages name the plugin: its display id.
+func (i *Instance) name() string { return manifest.DisplayID(i.pkg.Key) }
+
 func (i *Instance) unavailable(reason string) error {
 	return core.ErrPluginUnavailable.WithDetails(map[string]any{"plugin_key": i.pkg.Key}).
-		WithCause(fmt.Errorf("plugin %s@%s: %s", i.pkg.Key, i.pkg.Version, reason))
+		WithCause(fmt.Errorf("plugin %s@%s: %s", i.name(), i.pkg.Version, reason))
 }
 
 // mapErr converts gRPC status errors into core errors. Deadline and
@@ -134,9 +137,9 @@ func (i *Instance) mapErr(err error) error {
 	msg := st.Message()
 	switch st.Code() {
 	case codes.DeadlineExceeded:
-		return fmt.Errorf("plugin %s: %w", i.pkg.Key, context.DeadlineExceeded)
+		return fmt.Errorf("plugin %s: %w", i.name(), context.DeadlineExceeded)
 	case codes.Canceled:
-		return fmt.Errorf("plugin %s: %w", i.pkg.Key, context.Canceled)
+		return fmt.Errorf("plugin %s: %w", i.name(), context.Canceled)
 	case codes.Unavailable:
 		return core.ErrPluginUnavailable.WithDetails(map[string]any{"plugin_key": i.pkg.Key}).WithCause(err)
 	case codes.Unimplemented:
@@ -155,7 +158,7 @@ func (i *Instance) mapErr(err error) error {
 	case codes.ResourceExhausted:
 		return core.ErrRateLimited.WithMessage(msg).WithCause(err)
 	}
-	return core.ErrInternal.WithCause(fmt.Errorf("plugin %s: %s: %s", i.pkg.Key, st.Code(), msg))
+	return core.ErrInternal.WithCause(fmt.Errorf("plugin %s: %s: %s", i.name(), st.Code(), msg))
 }
 
 // ------------------------------------------------------------------ capability accessors (registry.Extension)

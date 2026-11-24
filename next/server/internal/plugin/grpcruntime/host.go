@@ -56,7 +56,7 @@ func (h *hostServer) key() string { return h.i.pkg.Key }
 
 func (h *hostServer) require(ctx context.Context, permission string) error {
 	if !h.i.Grants().Has(permission) {
-		return status.Errorf(codes.PermissionDenied, "plugin %s has no %q grant", h.key(), permission)
+		return status.Errorf(codes.PermissionDenied, "plugin %s has no %q grant", h.i.name(), permission)
 	}
 	// Pub/sub accelerates local convergence but cannot authorize calls made
 	// after an emergency revocation has committed in PG. Also reject a stale
@@ -67,7 +67,7 @@ func (h *hostServer) require(ctx context.Context, permission string) error {
 			return status.Error(codes.Unavailable, "cannot verify current plugin grant")
 		}
 		if !allowed {
-			return status.Errorf(codes.PermissionDenied, "plugin %s grant %q was revoked or changed", h.key(), permission)
+			return status.Errorf(codes.PermissionDenied, "plugin %s grant %q was revoked or changed", h.i.name(), permission)
 		}
 	}
 	return nil

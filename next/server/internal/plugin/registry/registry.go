@@ -247,7 +247,7 @@ func platformOwner(b core.PlatformBinding) string {
 	if b.Builtin {
 		return "the core (built-in)"
 	}
-	return fmt.Sprintf("plugin %q", b.Plugin.Key)
+	return fmt.Sprintf("plugin %q", manifest.DisplayID(b.Plugin.Key))
 }
 
 // unknownProtocols returns the protocols of a declarative match that no

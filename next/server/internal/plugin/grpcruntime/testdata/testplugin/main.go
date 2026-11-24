@@ -43,6 +43,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
+	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/protocol"
 )
 
@@ -79,9 +80,12 @@ func (s *server) hostClient() pluginv1.HostServiceClient {
 	return s.host
 }
 
+// GetInfo names the plugin by its bare key, as a real plugin does: the
+// host's SUB2API_PLUGIN_KEY is the plugin id (CONTRACTS §137).
 func (s *server) GetInfo(context.Context, *pluginv1.GetInfoRequest) (*pluginv1.GetInfoResponse, error) {
+	_, key, _ := manifest.ParsePluginID(os.Getenv(protocol.EnvPluginKey))
 	return &pluginv1.GetInfoResponse{
-		PluginKey:       os.Getenv(protocol.EnvPluginKey),
+		PluginKey:       key,
 		Version:         os.Getenv(protocol.EnvPluginVersion),
 		SdkVersion:      "test",
 		ProtocolVersion: int32(protocolOr(infoProtocol)),

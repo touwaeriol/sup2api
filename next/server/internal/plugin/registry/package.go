@@ -320,20 +320,20 @@ func (s *Packages) load(ctx context.Context, key, version string) (*Package, err
 		Row().Scan(&manifestJSON, &sum, &url, &sigStatus, &publisher, &trust, &claimedAt)
 	if err != nil {
 		if store.IsNoRows(err) {
-			return nil, fmt.Errorf("plugin %s@%s: version not found", key, version)
+			return nil, fmt.Errorf("plugin %s@%s: version not found", manifest.DisplayID(key), version)
 		}
 		return nil, err
 	}
 	sum = strings.ToLower(sum)
 	if len(sum) != 64 {
-		return nil, fmt.Errorf("plugin %s@%s: invalid package_sha256", key, version)
+		return nil, fmt.Errorf("plugin %s@%s: invalid package_sha256", manifest.DisplayID(key), version)
 	}
 	var m manifest.Manifest
 	if err := json.Unmarshal(manifestJSON, &m); err != nil {
-		return nil, fmt.Errorf("plugin %s@%s: decode manifest: %w", key, version, err)
+		return nil, fmt.Errorf("plugin %s@%s: decode manifest: %w", manifest.DisplayID(key), version, err)
 	}
 	if m.ID() != key || m.Version != version {
-		return nil, fmt.Errorf("plugin %s@%s: manifest identifies %s@%s", key, version, m.ID(), m.Version)
+		return nil, fmt.Errorf("plugin %s@%s: manifest identifies %s@%s", manifest.DisplayID(key), version, m.ID(), m.Version)
 	}
 	p := &Package{Key: key, Version: version, SHA256: sum, Manifest: &m}
 	if publisher != nil {
@@ -374,7 +374,7 @@ func (s *Packages) materialize(ctx context.Context, p *Package, fetch func() ([]
 		}
 		h := sha256.Sum256(data)
 		if hex.EncodeToString(h[:]) != sum {
-			return fmt.Errorf("plugin %s@%s: package sha256 mismatch", key, version)
+			return fmt.Errorf("plugin %s@%s: package sha256 mismatch", manifest.DisplayID(key), version)
 		}
 		tmp := file + ".tmp"
 		if err := os.WriteFile(tmp, data, 0o644); err != nil {
@@ -393,13 +393,13 @@ func (s *Packages) materialize(ctx context.Context, p *Package, fetch func() ([]
 			}
 			h := sha256.Sum256(data)
 			if hex.EncodeToString(h[:]) != sum {
-				return fmt.Errorf("plugin %s@%s: cached package sha256 mismatch", key, version)
+				return fmt.Errorf("plugin %s@%s: cached package sha256 mismatch", manifest.DisplayID(key), version)
 			}
 		}
 		// attach re-hashes the opened file, so what is served is what was
 		// verified here.
 		if err := s.verifier(ctx, key, version, data); err != nil {
-			return fmt.Errorf("plugin %s@%s: signature verification failed: %w", key, version, err)
+			return fmt.Errorf("plugin %s@%s: signature verification failed: %w", manifest.DisplayID(key), version, err)
 		}
 	}
 	f, err := os.Open(file)
@@ -426,12 +426,12 @@ func (p *Package) attach(f *os.File) error {
 	}
 	if hex.EncodeToString(h.Sum(nil)) != sum {
 		_ = f.Close()
-		return fmt.Errorf("plugin %s@%s: cached package sha256 mismatch", key, version)
+		return fmt.Errorf("plugin %s@%s: cached package sha256 mismatch", manifest.DisplayID(key), version)
 	}
 	zr, err := zip.NewReader(f, st.Size())
 	if err != nil {
 		_ = f.Close()
-		return fmt.Errorf("plugin %s@%s: open package: %w", key, version, err)
+		return fmt.Errorf("plugin %s@%s: open package: %w", manifest.DisplayID(key), version, err)
 	}
 	p.file, p.zr = f, zr
 	return nil
