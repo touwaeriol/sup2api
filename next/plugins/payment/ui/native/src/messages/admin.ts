@@ -21,6 +21,7 @@ export default {
       creditWithBonus: '{amount} (with a {bonus} bonus)',
       completed: 'Order completed, balance credited',
       bonus: '+{amount} bonus',
+      refund: 'Refund',
       stats: { today: 'Topped up today', count: '{n} orders', month: 'This month', pending: 'Pending', failed: 'Failed' },
       fields: {
         out_trade_no: 'Order number',
@@ -28,6 +29,7 @@ export default {
         amount: 'Amount',
         bonus: 'Bonus',
         pay_amount: 'Paid',
+        refunded_amount: 'Refunded',
         method: 'Method',
         status: 'Status',
         promo_code: 'Promo code',
@@ -38,6 +40,39 @@ export default {
         completed_at: 'Completed',
         expires_at: 'Expires'
       }
+    },
+    refund: {
+      title: 'Refund order',
+      submit: 'Refund',
+      done: 'Order refunded',
+      left: 'Left to refund',
+      paidWith: '{amount} (paid {pay})',
+      amount: 'Refund amount',
+      amountHint: 'Up to {max}; refunds {pay} of the payment',
+      amountMax: 'At most {max}',
+      reason: 'Reason',
+      reasonPlaceholder: 'e.g. duplicate top-up, refund agreed with the user',
+      mode: 'Refund method',
+      modes: {
+        gateway: { title: 'Back to the original payment (Stripe refund)', body: 'Submitting asks Stripe to refund {pay} to the payment method the user paid with.' },
+        manual: {
+          title: 'Refunded offline in the Epay dashboard, record only',
+          body: 'Epay has no refund API: refund {pay} to the user in the Epay merchant dashboard yourself, then record it here.'
+        }
+      },
+      deduct: "Take {amount} back from the user's balance",
+      deductHint: 'Debited through the core ledger',
+      bonusAll: 'This refunds the rest of the order, so the {bonus} bonus is taken back too.',
+      bonusPart: 'A partial refund keeps the {bonus} bonus; it is taken back with the refund of the rest.',
+      force: 'Debit below zero when the balance is short',
+      forceHint: "The user's balance goes negative by the shortfall",
+      shortfall: 'Balance {balance}, to take back {deduct}.',
+      records: 'Refunds',
+      modeShort: { gateway: 'Original payment', manual: 'Recorded offline' },
+      deducted: 'Took back {amount}',
+      kept: 'Balance kept',
+      status: { pending: 'Processing', succeeded: 'Done', failed: 'Failed' },
+      fields: { created_at: 'Time / by', amount: 'Amount', mode: 'Method', status: 'Status', reason: 'Reason' }
     },
     redeem: {
       title: 'Redeem codes',
@@ -122,6 +157,7 @@ export default {
       creditWithBonus: '{amount}（含赠送 {bonus}）',
       completed: '已补单，余额已入账',
       bonus: '+{amount} 赠送',
+      refund: '退款',
       stats: { today: '今日充值', count: '{n} 笔', month: '本月充值', pending: '待支付', failed: '失败' },
       fields: {
         out_trade_no: '订单号',
@@ -129,6 +165,7 @@ export default {
         amount: '充值金额',
         bonus: '赠送',
         pay_amount: '实付',
+        refunded_amount: '已退金额',
         method: '支付方式',
         status: '状态',
         promo_code: '优惠码',
@@ -139,6 +176,36 @@ export default {
         completed_at: '完成时间',
         expires_at: '过期时间'
       }
+    },
+    refund: {
+      title: '订单退款',
+      submit: '确认退款',
+      done: '退款完成',
+      left: '可退余额',
+      paidWith: '{amount}（实付 {pay}）',
+      amount: '退款金额',
+      amountHint: '最多 {max}，对应退还实付 {pay}',
+      amountMax: '不能超过可退余额 {max}',
+      reason: '退款原因',
+      reasonPlaceholder: '如：用户重复充值，协商退款',
+      mode: '退款方式',
+      modes: {
+        gateway: { title: '原路退回（调用 Stripe 退款）', body: '提交后调用 Stripe 退款接口，把 {pay} 退回用户的原支付方式。' },
+        manual: { title: '已在易支付后台线下退款，仅登记', body: '易支付不支持接口退款：请先自行到易支付商户后台给用户退回 {pay}，再在这里登记。' }
+      },
+      deduct: '从用户余额扣回 {amount}',
+      deductHint: '通过核心账本扣减用户余额',
+      bonusAll: '全额退款，一并扣回赠送的 {bonus}。',
+      bonusPart: '部分退款不扣回赠送的 {bonus}，退完剩余金额时一并扣回。',
+      force: '余额不足时强制扣成负数',
+      forceHint: '不足的部分记为用户余额的负数',
+      shortfall: '当前余额 {balance}，需扣回 {deduct}。',
+      records: '退款记录',
+      modeShort: { gateway: '原路退回', manual: '线下登记' },
+      deducted: '扣回 {amount}',
+      kept: '未扣余额',
+      status: { pending: '处理中', succeeded: '成功', failed: '失败' },
+      fields: { created_at: '时间 / 操作人', amount: '金额', mode: '方式', status: '状态', reason: '原因' }
     },
     redeem: {
       title: '兑换码',

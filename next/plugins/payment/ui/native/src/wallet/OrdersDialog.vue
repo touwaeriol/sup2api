@@ -1,14 +1,19 @@
 <script setup lang="ts">
 import { computed, watch } from 'vue'
 import { useList } from '@sub2api/host'
-import { SDateTime, SInput, SModal, SPagination, SRowAction, SStatusBadge, STable, type TableColumn, type Tone } from '@sub2api/ui'
-import { usePaymentHost, type Order, type OrderStatus } from '../host'
-import { balance, localMoney } from './money'
+import { SDateTime, SInput, SModal, SPagination, SRowAction, STable, type TableColumn } from '@sub2api/ui'
+import { usePaymentHost, type Order } from '../host'
+import { formatLocal, formatUsd } from '../format'
+import MethodName from '../components/MethodName.vue'
+import PayStatusBadge from '../components/PayStatusBadge.vue'
+import { methodLook } from '../components/methodCatalog'
+import type { CheckoutMethod } from './useTopupQuote'
 
 // The caller's top-up orders (new-api's billing history): searchable by
 // order number, paged; a pending order that has not expired can be paid
-// from here ("continue paying" hands it to the parent).
-const props = defineProps<{ open: boolean }>()
+// from here ("continue paying" hands it to the parent). `methods` (the
+// checkout's) give each order's method its mark.
+const props = defineProps<{ open: boolean; methods: CheckoutMethod[] }>()
 const emit = defineEmits<{ (e: 'update:open', v: boolean): void; (e: 'resume', order: Order): void }>()
 const host = usePaymentHost()
 const t = host.t
@@ -21,8 +26,6 @@ watch(
 
 const resumable = (o: Order) => o.status === 'pending' && !!o.pay_url && Date.parse(o.expires_at) > Date.now()
 
-const TONES: Record<OrderStatus, Tone> = { pending: 'warning', paid: 'info', recharging: 'info', completed: 'success', failed: 'danger', expired: 'gray', cancelled: 'gray' }
-const labels = computed(() => Object.fromEntries(Object.keys(TONES).map((s) => [s, t(`status.${s}`)])))
 const columns = computed<TableColumn[]>(() => [
   { key: 'out_trade_no', label: t('wallet.orders.no'), mobile: 'title', nowrap: true },
   { key: 'amount', label: t('wallet.orders.amount'), align: 'right', mobile: 'meta' },
@@ -42,10 +45,13 @@ const columns = computed<TableColumn[]>(() => [
     <STable :columns="columns" :rows="list.items.value" :loading="list.loading.value" :error="list.error.value" :empty-text="t('wallet.orders.empty')" row-key="out_trade_no" @retry="list.reload">
       <template #cell-out_trade_no="{ row }"><span class="pay-mono">{{ row.out_trade_no }}</span></template>
       <template #cell-amount="{ row }">
-        {{ balance(row.amount) }}<span v-if="row.bonus" class="pay-bonus"> +{{ balance(row.bonus) }}</span>
+        {{ formatUsd(row.amount) }}<span v-if="row.bonus" class="pay-bonus"> +{{ formatUsd(row.bonus) }}</span>
       </template>
-      <template #cell-pay_amount="{ row }">{{ localMoney(row.pay_amount, row.currency) }}</template>
-      <template #cell-status="{ row }"><SStatusBadge :status="row.status" :labels="labels" :tones="TONES" /></template>
+      <template #cell-pay_amount="{ row }">{{ formatLocal(row.pay_amount, row.currency) }}</template>
+      <template #cell-method_name="{ row }">
+        <MethodName :method="methodLook(methods, row.method, row.method_name)" />
+      </template>
+      <template #cell-status="{ row }"><PayStatusBadge kind="order" :status="row.status" /></template>
       <template #cell-created_at="{ row }"><SDateTime :value="row.created_at" mode="absolute" /></template>
       <template #cell-actions="{ row }">
         <span><SRowAction v-if="resumable(row)" :label="t('wallet.orders.resume')" data-testid="pay-resume" @click="emit('resume', row)" /></span>

@@ -2,8 +2,9 @@ import { computed, ref } from 'vue'
 import type { FilterChipItem, RangeKey, SelectOption } from '@sub2api/ui'
 import { paymentApi, usePaymentHost, type Order } from '../host'
 import { formatUsd } from '../format'
+import { loadMethods } from '../components/methodCatalog'
 import { confirmRun } from './actions'
-import { ORDER_STATUSES } from './status'
+import { ORDER_STATUSES } from '../components/status'
 
 // Filters of the orders page and the manual completion of an order.
 
@@ -19,7 +20,7 @@ export function useOrderFilters(filters: OrderFilters) {
   const range = ref<RangeKey>('all')
   const methods = ref<SelectOption[]>([])
   // The enabled methods name the options; without them the filter offers only "any".
-  paymentApi.checkout().then((c) => (methods.value = c.methods.map((m) => ({ value: m.type, label: m.name }))), () => undefined)
+  loadMethods().then((list) => (methods.value = list.map((m) => ({ value: m.type, label: m.name }))), () => undefined)
 
   const any = (name: string): SelectOption => ({ value: '', label: t('admin.anyOf', { name }) })
   const statusOptions = computed(() => [any(t('admin.orders.fields.status')), ...ORDER_STATUSES.map((s) => ({ value: s, label: t(`status.${s}`) }))])

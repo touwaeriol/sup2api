@@ -20,9 +20,12 @@ export interface PaymentMethod {
   type: string
   name: string
   gateway: GatewayKey
-  /** Icon key (alipay / wxpay / stripe / card / ...) or a color dot. */
+  /** Built-in icon key (alipay / wxpay / qqpay / stripe / card); another key shows the name's initial. */
   icon: string
+  /** Background of the built-in icon (#rrggbb); its brand color when empty. */
   color?: string
+  /** Custom logo in place of the built-in icon: a base64 image data URL (PNG / JPEG / WebP / SVG, at most 64 KB) or an https address. */
+  logo?: string
   /** Optional minimum top-up for this method (balance units); 0 = the global one. */
   min_topup?: number
   enabled: boolean
@@ -76,7 +79,7 @@ export interface CheckoutInfo {
   max_topup: number
   amount_options: number[]
   discounts: DiscountTier[]
-  methods: Array<Pick<PaymentMethod, 'type' | 'name' | 'icon' | 'color' | 'min_topup'>>
+  methods: Array<Pick<PaymentMethod, 'type' | 'name' | 'icon' | 'color' | 'logo' | 'min_topup'>>
 }
 
 /** Price of a top-up before paying (POST /orders/preview). */
@@ -91,7 +94,41 @@ export interface OrderPreview {
   promo_error?: string
 }
 
-export type OrderStatus = 'pending' | 'paid' | 'recharging' | 'completed' | 'failed' | 'expired' | 'cancelled'
+export type OrderStatus = 'pending' | 'paid' | 'recharging' | 'completed' | 'failed' | 'expired' | 'cancelled' | 'refunding' | 'refunded' | 'partially_refunded'
+
+/** gateway: through the gateway's refund API (Stripe); manual: refunded at the provider by hand, only recorded here (Epay). */
+export type RefundMode = 'gateway' | 'manual'
+
+/** One refund of an order, kept as its audit record. */
+export interface OrderRefund {
+  id: number
+  created_at: string
+  /** Balance units refunded (USD). */
+  amount: number
+  /** The matching share of what the user paid, in the order's currency. */
+  pay_amount: number
+  reason: string
+  /** Email of the admin who refunded. */
+  operator: string
+  mode: RefundMode
+  deduct_balance: boolean
+  /** Balance taken back from the user: the amount, plus the bonus when the order is refunded in full. */
+  deducted_amount: number
+  /** pending while the gateway has not confirmed the refund. */
+  status: 'pending' | 'succeeded' | 'failed'
+}
+
+/** POST /admin/orders/:id/refund. */
+export interface RefundRequest {
+  /** Balance units, at most amount − refunded_amount. */
+  amount: number
+  reason: string
+  /** Take the refund back from the user's balance (core ledger debit). */
+  deduct_balance: boolean
+  /** Debit even below zero; without it a short balance is 409 insufficient_balance (details: balance, deduct). */
+  force: boolean
+  mode: RefundMode
+}
 
 export interface Order {
   id: number
@@ -113,6 +150,10 @@ export interface Order {
   paid_at?: string
   completed_at?: string
   expires_at: string
+  /** Balance units refunded so far (USD). */
+  refunded_amount: number
+  /** Refund records, newest first (admin routes only). */
+  refunds?: OrderRefund[]
   /** Where to pay, while pending (the user's own orders only): "continue paying". */
   pay_url?: string
   qr_code?: string
@@ -178,6 +219,7 @@ export const paymentApi = {
   adminOrders: (query: Record<string, string>) => api().list<Order>('/admin/orders', query),
   orderStats: () => api().get<OrderStats>('/admin/orders/stats'),
   completeOrder: (id: number) => api().post<Order>(`/admin/orders/${id}/complete`, {}),
+  refundOrder: (id: number, body: RefundRequest) => api().post<Order>(`/admin/orders/${id}/refund`, body),
 
   redeemCodes: (query: Record<string, string>) => api().list<RedeemCode>('/redeem-codes', query),
   createRedeemCodes: (body: { count: number; value: number; expires_at?: string; notes?: string }) => api().post<{ codes: string[] }>('/redeem-codes', body),

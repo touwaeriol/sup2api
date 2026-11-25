@@ -1,12 +1,15 @@
 <script setup lang="ts">
 // Add / edit one payment method (a draft; the page saves the whole list).
 // The type key is picked from the gateway's known keys or typed in, and must
-// be unique: users' orders name their method by it.
+// be unique: users' orders name their method by it. Its mark is a built-in
+// icon on a color or a custom image; only the chosen one is saved.
 import { computed, ref, watch } from 'vue'
-import { SField, SForm, SFormModal, SGrid, SInput, SSelect, SSwitch, useForm, type Rules, type SelectOption } from '@sub2api/ui'
+import { SField, SForm, SFormModal, SGrid, SInput, SSegmented, SSelect, SSwitch, useForm, type Rules, type SelectOption } from '@sub2api/ui'
 import { usePaymentHost, type PaymentMethod } from '../host'
-import MethodIcon from './MethodIcon.vue'
-import { GATEWAY_TYPES, GATEWAYS, isKnownType, METHOD_ICONS } from './settingsForm'
+import MethodIcon from '../components/MethodIcon.vue'
+import { BUILTIN_ICONS, brandColor, builtinIcon } from '../components/methodIcon'
+import LogoUpload from './LogoUpload.vue'
+import { GATEWAY_TYPES, GATEWAYS, isKnownType, logoValidator } from './settingsForm'
 
 const props = defineProps<{ open: boolean; method: PaymentMethod; editing: boolean; taken: string[] }>()
 const emit = defineEmits<{ (e: 'update:open', v: boolean): void; (e: 'submit', m: PaymentMethod): void }>()
@@ -14,7 +17,10 @@ const host = usePaymentHost()
 const t = host.t
 
 type Draft = PaymentMethod & Record<string, unknown>
+type IconMode = 'builtin' | 'custom'
 const draft = ref<Draft>({ ...props.method })
+const mode = ref<IconMode>(props.method.logo ? 'custom' : 'builtin')
+const custom = () => mode.value === 'custom'
 const rules: Rules<Draft> = {
   name: { required: true, whitespace: true, max: 32 },
   gateway: { required: true, enum: GATEWAYS },
@@ -23,6 +29,10 @@ const rules: Rules<Draft> = {
     { validator: (v: string) => !props.taken.includes(v) || t('settings.methods.rule.typeTaken') }
   ],
   color: { pattern: /^#[0-9a-fA-F]{6}$/, message: () => t('settings.methods.rule.color') },
+  logo: [
+    { required: true, when: custom, message: () => t('settings.methods.logo.rule.required') },
+    { validator: logoValidator(t), when: custom }
+  ],
   min_topup: { type: 'number', min: 0 }
 }
 const form = useForm<Draft>({ model: () => draft.value, update: (v) => (draft.value = v), rules })
@@ -32,14 +42,20 @@ watch(
   (open) => {
     if (!open) return
     draft.value = { ...props.method }
+    mode.value = props.method.logo ? 'custom' : 'builtin'
     form.clearValidate()
   }
 )
+// A message of the hidden mode would come back stale.
+watch(mode, () => form.clearValidate('logo'))
 
 const gatewayOptions = computed(() => GATEWAYS.map((g) => ({ value: g, label: t(`gateway.${g}`) })))
+const modeOptions = computed(() => (['builtin', 'custom'] as const).map((m) => ({ value: m, label: t(`settings.methods.iconMode.${m}`) })))
+/** The method as users will see it: the image only in custom mode. */
+const look = computed(() => (custom() ? draft.value : { ...draft.value, logo: undefined }))
 
 const typeLabel = (k: string) => (isKnownType(k) ? t(`settings.methods.typeName.${k}`) : k)
-const iconLabel = (k: string) => (k in METHOD_ICONS ? t(`settings.methods.iconName.${k}`) : k)
+const iconLabel = (k: string) => (builtinIcon(k) ? t(`settings.methods.iconName.${k}`) : k)
 
 /** Known keys plus the current one when typed in. */
 function keyOptions(keys: string[], current: string, label: (k: string) => string): SelectOption[] {
@@ -52,7 +68,7 @@ const typeOptions = computed(() =>
     props.taken.includes(String(o.value)) ? { ...o, disabled: true, tag: t('settings.methods.taken') } : o
   )
 )
-const iconOptions = computed(() => keyOptions(Object.keys(METHOD_ICONS), draft.value.icon, iconLabel))
+const iconOptions = computed(() => keyOptions(Object.keys(BUILTIN_ICONS), draft.value.icon, iconLabel))
 
 /** A known type brings its name, icon and color along when those are still blank or the previous type's. */
 function pickType(type: string) {
@@ -61,7 +77,7 @@ function pickType(type: string) {
   if (!isKnownType(type)) return
   if (!draft.value.name || draft.value.name === typeLabel(prev)) form.set('name', typeLabel(type))
   if (!draft.value.icon || draft.value.icon === prev) form.set('icon', type)
-  if (!draft.value.color || draft.value.color === METHOD_ICONS[prev]) form.set('color', METHOD_ICONS[type])
+  if (!draft.value.color || draft.value.color === brandColor(prev)) form.set('color', brandColor(type))
 }
 
 /** Another gateway drops a type key it does not know (epay keeps custom ones). */
@@ -73,8 +89,9 @@ function pickGateway(gateway: PaymentMethod['gateway']) {
 
 async function submit() {
   if (!(await form.validate())) return
-  const d = draft.value
-  emit('submit', { ...d, name: d.name.trim(), min_topup: d.min_topup || 0 })
+  const { logo, ...d } = draft.value
+  const method: PaymentMethod = { ...d, name: d.name.trim(), min_topup: d.min_topup || 0 }
+  emit('submit', custom() ? { ...method, logo } : method)
 }
 </script>
 
@@ -91,7 +108,7 @@ async function submit() {
     <SForm :form="form">
       <div class="payment-dialog">
         <div class="payment-preview">
-          <MethodIcon :icon="draft.icon" :color="draft.color" :name="draft.name" size="md" />
+          <MethodIcon :method="look" size="lg" />
           <div class="payment-preview-text">
             <strong>{{ draft.name || t('settings.methods.unnamed') }}</strong>
             <span class="payment-muted">{{ t('settings.methods.previewHint') }}</span>
@@ -116,8 +133,12 @@ async function submit() {
         <SField prop="name" :label="t('settings.methods.name')" :hint="t('settings.methods.nameHint')">
           <SInput v-bind="form.bind('name')" :maxlength="32" :placeholder="t('settings.methods.namePlaceholder')" />
         </SField>
-        <SGrid :cols="2" :gap="4">
-          <SField prop="icon" :label="t('settings.methods.icon')">
+        <SField :label="t('settings.methods.icon')">
+          <SSegmented v-model="mode" :options="modeOptions" size="sm" data-testid="payment-icon-mode" />
+        </SField>
+        <LogoUpload v-if="mode === 'custom'" :model-value="draft.logo" :name="draft.name" @update:model-value="form.set('logo', $event)" />
+        <SGrid v-else :cols="2" :gap="4">
+          <SField prop="icon" :label="t('settings.methods.iconKey')">
             <SSelect :model-value="draft.icon || undefined" :options="iconOptions" searchable creatable :placeholder="t('settings.methods.iconPlaceholder')" @update:model-value="form.set('icon', $event)" @create="form.set('icon', $event)" />
           </SField>
           <SField prop="color" :label="t('settings.methods.color')">
@@ -126,6 +147,8 @@ async function submit() {
               <SInput v-bind="form.bind('color')" mono placeholder="#1677ff" />
             </div>
           </SField>
+        </SGrid>
+        <SGrid :cols="2" :gap="4">
           <SField prop="min_topup" :label="t('settings.methods.minTopup')" :hint="t('settings.methods.minTopupHint')">
             <SInput type="number" v-bind="form.bindNumber('min_topup')" :min="0" :step="0.01" :suffix="t('settings.unit.usd')" />
           </SField>

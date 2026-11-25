@@ -6,7 +6,7 @@ import { computed, ref } from 'vue'
 import { SAlert, SBadge, SButton, SDropdown, SEmpty, SRowAction, SSettingsGroup, SSwitch, STable, type MenuAction, type TableColumn } from '@sub2api/ui'
 import { usePaymentHost, type GatewayKey, type PaymentMethod } from '../host'
 import MethodDialog from './MethodDialog.vue'
-import MethodIcon from './MethodIcon.vue'
+import MethodName from '../components/MethodName.vue'
 import { bindSwitch, GATEWAYS, newMethod, TEMPLATE_KEYS, templateType, type SettingsForm, type SettingsTab, type TemplateKey } from './settingsForm'
 
 const props = defineProps<{ form: SettingsForm }>()
@@ -94,10 +94,7 @@ function fromTemplate(key: string) {
       <SEmpty v-if="!methods.length" :text="t('settings.methods.empty')" icon="balance" />
       <STable v-else :rows="methods" :columns="columns" row-key="type" reorderable dense @update:rows="setMethods">
         <template #cell-name="{ row }">
-          <span class="payment-method-name">
-            <MethodIcon :icon="row.icon" :color="row.color" :name="row.name" />
-            <span>{{ row.name }}</span>
-          </span>
+          <MethodName :method="row" size="md" />
         </template>
         <template #cell-type="{ row }"><code class="payment-code">{{ row.type }}</code></template>
         <template #cell-gateway="{ row }">
@@ -110,7 +107,7 @@ function fromTemplate(key: string) {
           <span v-if="row.min_topup">{{ host.i18n.formatMoney(row.min_topup, 2) }}</span>
           <span v-else class="payment-muted">{{ t('settings.methods.minGlobal') }}</span>
         </template>
-        <template #cell-enabled="{ row, index }">
+        <template #cell-enabled="{ index }">
           <SSwitch size="sm" v-bind="bindSwitch(form, `methods.${index}.enabled`)" :aria-label="t('settings.methods.enabled')" />
         </template>
         <template #cell-actions="{ row, index }">

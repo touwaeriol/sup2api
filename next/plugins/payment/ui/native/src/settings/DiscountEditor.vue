@@ -4,7 +4,8 @@
 import { computed } from 'vue'
 import { SButton, SChip, SEmpty, SField, SInput, SRowAction, SSettingsGroup, STable, type TableColumn } from '@sub2api/ui'
 import { usePaymentHost, type DiscountTier } from '../host'
-import { currencySymbol, discountParams, type SettingsForm } from './settingsForm'
+import { discountLabel, formatLocal } from '../format'
+import type { SettingsForm } from './settingsForm'
 
 const props = defineProps<{ form: SettingsForm; currency: string }>()
 const host = usePaymentHost()
@@ -19,7 +20,7 @@ const columns = computed<TableColumn[]>(() => [
   { key: 'actions', label: '', width: '4.5rem' }
 ])
 
-const money = (n: number) => currencySymbol(props.currency) + host.i18n.formatNumber(n, 2)
+const money = (n: number) => formatLocal(n, props.currency)
 
 /** What a top-up of exactly this tier's amount costs, before and after the discount. */
 function example(tier: DiscountTier) {
@@ -60,7 +61,7 @@ function remove(i: number) {
           </SField>
         </template>
         <template #cell-phrase="{ row }">
-          <SChip v-if="row.rate > 0 && row.rate < 1" size="xs" tone="success">{{ t('settings.discounts.phraseText', discountParams(row.rate)) }}</SChip>
+          <SChip v-if="discountLabel(row.rate)" size="xs" tone="success">{{ discountLabel(row.rate) }}</SChip>
           <span v-else class="payment-muted">—</span>
         </template>
         <template #cell-example="{ row }">

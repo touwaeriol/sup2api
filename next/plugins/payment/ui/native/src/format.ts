@@ -5,12 +5,15 @@ import { usePaymentHost } from './host'
 
 type Amount = number | string | null | undefined
 
+/** Rounds to cents (the gateways charge whole cents). */
+export const cents = (v: number) => Math.round(v * 100) / 100
+
 /** A balance amount in USD with two decimals ("$12.50"), '—' when missing. */
 export function formatUsd(v: Amount): string {
   return usePaymentHost().i18n.formatMoney(v, 2)
 }
 
-/** An amount in a local currency with its symbol ("¥73.00"); an unknown code is written before the number. */
+/** An amount in a local currency with its narrow symbol ("¥73.00", not "CN¥"); an unknown code is written before the number. */
 export function formatLocal(v: Amount, currency: string): string {
   if (v === null || v === undefined || v === '') return '—'
   const n = Number(v)
@@ -21,4 +24,13 @@ export function formatLocal(v: Amount, currency: string): string {
   } catch {
     return `${currency} ${n.toFixed(2)}`
   }
+}
+
+/** Both readings of a discount rate, for the locale's message to pick: 0.95 -> 9.5 (折) / 5 (% off). */
+export const discountParams = (rate: number) => ({ zhe: Number((rate * 10).toFixed(2)), off: Number(((1 - rate) * 100).toFixed(2)) })
+
+/** "9.5 折" / "5% off" of a rate below 1 (0.95), else "". The wording is the wallet's, which settings previews too. */
+export function discountLabel(rate: number): string {
+  if (!(rate > 0 && rate < 1)) return ''
+  return usePaymentHost().t('wallet.discount', discountParams(rate))
 }

@@ -4,7 +4,7 @@ import { SBadge } from '@sub2api/ui'
 import type { CheckoutInfo } from '../host'
 import { usePaymentHost } from '../host'
 import ChoiceTiles from './ChoiceTiles.vue'
-import { balance, discountLabel, localMoney } from './money'
+import { discountLabel, formatLocal, formatUsd } from '../format'
 import { quoteOf } from './useTopupQuote'
 
 // Preset amounts: the balance credited, what it costs in the local currency
@@ -20,14 +20,14 @@ const presets = computed(() =>
     quote: quoteOf(a, props.info)
   }))
 )
-const money = (v: number) => localMoney(v, props.info.currency)
+const money = (v: number) => formatLocal(v, props.info.currency)
 </script>
 
 <template>
   <ChoiceTiles :model-value="modelValue" :tiles="presets" :label="t('wallet.amount')" @update:model-value="emit('update:modelValue', $event)">
     <template #default="{ tile }">
       <span class="pay-amount">
-        <span class="pay-amount-value">{{ balance(tile.value) }}</span>
+        <span class="pay-amount-value">{{ formatUsd(tile.value) }}</span>
         <span class="pay-amount-pay">
           {{ t('wallet.pay', { amount: money(tile.quote.pay) }) }}
           <s v-if="tile.quote.rate < 1" class="pay-amount-was">{{ money(tile.quote.original) }}</s>

@@ -5,7 +5,7 @@ import type { CheckoutInfo } from '../host'
 import { usePaymentHost } from '../host'
 import AmountGrid from './AmountGrid.vue'
 import MethodPicker from './MethodPicker.vue'
-import { balance, cents, discountLabel, localMoney } from './money'
+import { cents, discountLabel, formatLocal, formatUsd } from '../format'
 import { useTopupQuote, type CheckoutMethod } from './useTopupQuote'
 
 // The top-up card (new-api's recharge form): preset amounts, a custom
@@ -16,15 +16,15 @@ const emit = defineEmits<{ (e: 'pay', amount: number, method: CheckoutMethod): v
 const t = usePaymentHost().t
 const q = useTopupQuote(toRef(props, 'info'))
 
-const range = computed(() => (props.info ? t('wallet.range', { min: balance(q.min.value), max: balance(props.info.max_topup) }) : ''))
+const range = computed(() => (props.info ? t('wallet.range', { min: formatUsd(q.min.value), max: formatUsd(props.info.max_topup) }) : ''))
 const errorText = computed(() => {
   const e = q.error.value
-  if (e === 'min') return t('wallet.amountMin', { amount: balance(q.min.value) })
-  if (e === 'max') return t('wallet.amountMax', { amount: balance(props.info?.max_topup ?? 0) })
+  if (e === 'min') return t('wallet.amountMin', { amount: formatUsd(q.min.value) })
+  if (e === 'max') return t('wallet.amountMax', { amount: formatUsd(props.info?.max_topup ?? 0) })
   return ''
 })
 const canPay = computed(() => !q.error.value && !!q.selected.value && !q.blocked(q.selected.value))
-const money = (v: number) => localMoney(v, props.info?.currency ?? 'CNY')
+const money = (v: number) => formatLocal(v, props.info?.currency ?? 'CNY')
 
 function setAmount(v: unknown) {
   q.amount.value = typeof v === 'number' && v > 0 ? cents(v) : null

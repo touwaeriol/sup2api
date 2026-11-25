@@ -2,7 +2,7 @@
 import { ref } from 'vue'
 import { SButton, SCard, SField, SInput } from '@sub2api/ui'
 import { errorMessage, paymentApi, usePaymentHost } from '../host'
-import { balance } from './money'
+import { formatUsd } from '../format'
 
 // Redeem code card: the code's value goes straight to the balance.
 const emit = defineEmits<{ (e: 'credited'): void }>()
@@ -20,7 +20,7 @@ async function redeem() {
   busy.value = true
   try {
     const res = await paymentApi.redeem(value)
-    host.toast(t('wallet.redeem.success', { amount: balance(res.amount) }), 'success')
+    host.toast(t('wallet.redeem.success', { amount: formatUsd(res.amount) }), 'success')
     code.value = ''
     emit('credited')
   } catch (e) {

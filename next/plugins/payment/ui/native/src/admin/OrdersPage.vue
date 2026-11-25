@@ -3,21 +3,26 @@ import { computed, ref } from 'vue'
 import { SButton, SDateRange, SDateTime, SFilterBar, SFilterChips, SInput, SPageHeader, SPagination, SRowAction, SSelect, STable, type TableColumn } from '@sub2api/ui'
 import { paymentApi, usePaymentHost, type Order, type OrderStats as Stats } from '../host'
 import { formatLocal, formatUsd } from '../format'
+import MethodName from '../components/MethodName.vue'
+import { useMethodCatalog } from '../components/methodCatalog'
 import OrderDetailDrawer from './OrderDetailDrawer.vue'
 import OrderStats from './OrderStats.vue'
-import PayStatusBadge from './PayStatusBadge.vue'
+import PayStatusBadge from '../components/PayStatusBadge.vue'
+import RefundModal from './RefundModal.vue'
 import { actionsColumn, columnOf, useAdminList } from './actions'
 import { ORDER_RANGES, completeOrder, emptyOrderFilters, useOrderFilters, type OrderFilters } from './orders'
-import { completable } from './status'
+import { completable } from '../components/status'
 
-// Top-up orders (admin): totals, filters, the list, an order's detail and
-// the manual completion of an order that was paid but not credited.
+// Top-up orders (admin): totals, filters, the list, an order's detail, the
+// manual completion of an order that was paid but not credited and the
+// refund of a credited one.
 const host = usePaymentHost()
 const t = host.t
 
 const list = useAdminList<Order>('/admin/orders', emptyOrderFilters())
 const filters = list.filters as OrderFilters
 const bar = useOrderFilters(filters)
+const catalog = useMethodCatalog()
 
 const stats = ref<Stats | null>(null)
 const statsLoading = ref(false)
@@ -65,6 +70,13 @@ async function complete(o: Order) {
   detailOpen.value = false
   refresh()
 }
+
+const refundOpen = ref(false)
+// The drawer stays open on the refunded order, its new refund record on top.
+function refunded(o: Order) {
+  detail.value = o
+  refresh()
+}
 </script>
 
 <template>
@@ -109,7 +121,7 @@ async function complete(o: Order) {
         <span v-if="row.bonus" class="payment-bonus">{{ t('admin.orders.bonus', { amount: formatUsd(row.bonus) }) }}</span>
       </template>
       <template #cell-pay_amount="{ row }"><span class="payment-num">{{ formatLocal(row.pay_amount, row.currency) }}</span></template>
-      <template #cell-method="{ row }">{{ row.method_name }}</template>
+      <template #cell-method="{ row }"><MethodName :method="catalog.look(row.method, row.method_name)" /></template>
       <template #cell-status="{ row }"><PayStatusBadge kind="order" :status="row.status" /></template>
       <template #cell-created_at="{ row }"><SDateTime :value="row.created_at" mode="absolute" muted /></template>
       <template #cell-completed_at="{ row }"><SDateTime :value="row.completed_at" mode="absolute" muted /></template>
@@ -124,7 +136,8 @@ async function complete(o: Order) {
       </template>
     </STable>
 
-    <OrderDetailDrawer v-model:open="detailOpen" :order="detail" @complete="complete" />
+    <OrderDetailDrawer v-model:open="detailOpen" :order="detail" @complete="complete" @refund="refundOpen = true" />
+    <RefundModal v-model:open="refundOpen" :order="detail" @refunded="refunded" />
   </div>
 </template>
 

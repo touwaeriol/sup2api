@@ -85,7 +85,7 @@ function resume(order: Order) {
 
     <ConfirmDialog v-if="draft && info" v-model:open="confirmOpen" :amount="draft.amount" :method="draft.method" :currency="info.currency" :submitting="submitting" @confirm="placeOrder" />
     <PayingDialog v-model:open="payingOpen" :order="paying" :blocked="blocked" @credited="props.onCredited?.()" />
-    <OrdersDialog v-model:open="ordersOpen" @resume="resume" />
+    <OrdersDialog v-model:open="ordersOpen" :methods="info?.methods ?? []" @resume="resume" />
   </div>
 </template>
 

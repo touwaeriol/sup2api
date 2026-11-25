@@ -2,8 +2,8 @@
 import { computed, ref, watch } from 'vue'
 import { SButton, SField, SInput, SModal, SSkeleton } from '@sub2api/ui'
 import { errorMessage, paymentApi, usePaymentHost, type OrderPreview } from '../host'
-import MethodMark from './MethodMark.vue'
-import { balance, cents, discountLabel, localMoney } from './money'
+import { cents, discountLabel, formatLocal, formatUsd } from '../format'
+import MethodName from '../components/MethodName.vue'
 import type { CheckoutMethod } from './useTopupQuote'
 
 // Confirms a top-up with the server's price (preview): amount, bonus,
@@ -58,7 +58,7 @@ function confirm() {
   if (preview.value) emit('confirm', applied.value, preview.value)
 }
 
-const money = (v: number) => localMoney(v, props.currency)
+const money = (v: number) => formatLocal(v, props.currency)
 const discounted = computed(() => !!preview.value && preview.value.discount_rate < 1)
 const saved = computed(() => (preview.value ? cents(preview.value.original_pay_amount - preview.value.pay_amount) : 0))
 </script>
@@ -68,16 +68,16 @@ const saved = computed(() => (preview.value ? cents(preview.value.original_pay_a
     <dl class="pay-rows">
       <div class="pay-row">
         <dt>{{ t('wallet.confirm.amount') }}</dt>
-        <dd class="pay-strong">{{ balance(amount) }}</dd>
+        <dd class="pay-strong">{{ formatUsd(amount) }}</dd>
       </div>
       <template v-if="preview && preview.bonus > 0">
         <div class="pay-row">
           <dt>{{ t('wallet.confirm.bonus') }}</dt>
-          <dd>+{{ balance(preview.bonus) }}</dd>
+          <dd>+{{ formatUsd(preview.bonus) }}</dd>
         </div>
         <div class="pay-row">
           <dt>{{ t('wallet.confirm.credited') }}</dt>
-          <dd>{{ balance(amount + preview.bonus) }}</dd>
+          <dd>{{ formatUsd(amount + preview.bonus) }}</dd>
         </div>
       </template>
       <template v-if="preview && discounted">
@@ -92,7 +92,7 @@ const saved = computed(() => (preview.value ? cents(preview.value.original_pay_a
       </template>
       <div class="pay-row">
         <dt>{{ t('wallet.confirm.method') }}</dt>
-        <dd class="pay-method"><MethodMark :method="method" size="sm" />{{ method.name }}</dd>
+        <dd class="pay-method"><MethodName :method="method" /></dd>
       </div>
       <div class="pay-row pay-row--total">
         <dt>{{ t('wallet.confirm.pay') }}</dt>
@@ -101,7 +101,7 @@ const saved = computed(() => (preview.value ? cents(preview.value.original_pay_a
       </div>
     </dl>
 
-    <SField :label="t('wallet.confirm.promo')" :error="promoError" :hint="applied ? t('wallet.confirm.applied', { amount: balance(preview?.bonus ?? 0) }) : ''">
+    <SField :label="t('wallet.confirm.promo')" :error="promoError" :hint="applied ? t('wallet.confirm.applied', { amount: formatUsd(preview?.bonus ?? 0) }) : ''">
       <div class="pay-promo">
         <SInput v-model="promo" mono :placeholder="t('wallet.confirm.promoPlaceholder')" data-testid="pay-promo" @keydown.enter.prevent="apply" />
         <SButton :loading="applying" :disabled="!promo.trim()" data-testid="pay-promo-apply" @click="apply">{{ t('wallet.confirm.apply') }}</SButton>
@@ -148,9 +148,7 @@ const saved = computed(() => (preview.value ? cents(preview.value.original_pay_a
   color: rgb(var(--fg-subtle));
 }
 .pay-method {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
+  min-width: 0;
   font-weight: 500;
 }
 .pay-total {

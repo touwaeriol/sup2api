@@ -2,9 +2,9 @@
 import { computed } from 'vue'
 import type { CheckoutInfo } from '../host'
 import { usePaymentHost } from '../host'
+import { formatUsd } from '../format'
+import MethodIcon from '../components/MethodIcon.vue'
 import ChoiceTiles from './ChoiceTiles.vue'
-import MethodMark from './MethodMark.vue'
-import { balance } from './money'
 import { belowMin, methodMin } from './useTopupQuote'
 
 // Payment methods; one whose minimum the amount does not reach is disabled
@@ -17,7 +17,7 @@ const tiles = computed(() =>
   props.info.methods.map((m) => {
     const min = methodMin(props.info, m)
     const disabled = belowMin(props.amount, props.info, m)
-    return { value: m.type, method: m, disabled, min, title: disabled ? t('wallet.methodMinTitle', { name: m.name, amount: balance(min) }) : undefined }
+    return { value: m.type, method: m, disabled, min, title: disabled ? t('wallet.methodMinTitle', { name: m.name, amount: formatUsd(min) }) : undefined }
   })
 )
 </script>
@@ -25,10 +25,10 @@ const tiles = computed(() =>
 <template>
   <ChoiceTiles :model-value="modelValue" :tiles="tiles" :label="t('wallet.method')" @update:model-value="emit('update:modelValue', $event)">
     <template #default="{ tile }">
-      <MethodMark :method="tile.method" />
+      <MethodIcon :method="tile.method" />
       <span class="pay-method">
         <span class="pay-method-name">{{ tile.method.name }}</span>
-        <span v-if="tile.disabled" class="pay-method-min">{{ t('wallet.methodMin', { amount: balance(tile.min) }) }}</span>
+        <span v-if="tile.disabled" class="pay-method-min">{{ t('wallet.methodMin', { amount: formatUsd(tile.min) }) }}</span>
       </span>
     </template>
   </ChoiceTiles>

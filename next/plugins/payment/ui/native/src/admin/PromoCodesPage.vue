@@ -3,10 +3,10 @@ import { computed, ref } from 'vue'
 import { SAlert, SButton, SDateTime, SPageHeader, SPagination, SProgress, SRowAction, STable, type TableColumn } from '@sub2api/ui'
 import { paymentApi, usePaymentHost, type PromoCode } from '../host'
 import { formatUsd } from '../format'
-import PayStatusBadge from './PayStatusBadge.vue'
+import PayStatusBadge from '../components/PayStatusBadge.vue'
 import PromoEditModal from './PromoEditModal.vue'
 import { actionsColumn, columnOf, confirmRun, runAction, useAdminList } from './actions'
-import { promoState } from './status'
+import { promoState } from '../components/status'
 
 // Promo codes (admin): a bonus credited on top of a paid top-up when the
 // user enters the code at checkout.

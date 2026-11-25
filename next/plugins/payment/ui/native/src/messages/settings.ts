@@ -31,7 +31,6 @@ export default {
       rate: 'Rate',
       phrase: 'Discount',
       example: 'Example',
-      phraseText: '{off}% off',
       exampleText: '{amount} USD costs {pay} (was {original})'
     },
     rule: {
@@ -56,6 +55,7 @@ export default {
       minGlobal: 'Global',
       enabled: 'Enabled',
       icon: 'Icon',
+      iconKey: 'Icon style',
       color: 'Color',
       taken: 'added',
       added: '{name} added',
@@ -72,6 +72,26 @@ export default {
       typeHint: 'Sent to the gateway (epay type). Pick one or type your own.',
       typePlaceholder: 'Pick or type a key',
       iconPlaceholder: 'Pick or type an icon key',
+      iconMode: { builtin: 'Built-in icon', custom: 'Custom image' },
+      logo: {
+        drop: 'Drag an image here, or click to choose',
+        dropActive: 'Drop the image to upload',
+        limits: 'PNG, SVG, JPG or WebP, up to {max} KB. Square images look best.',
+        uploaded: '{type} image · {size} KB',
+        linked: 'Image from {host}',
+        replace: 'Replace',
+        remove: 'Remove',
+        url: 'Or use an image address',
+        urlPlaceholder: 'https://example.com/logo.png',
+        readFailed: 'Could not read the file',
+        rule: {
+          required: 'Upload an image or enter its address',
+          type: 'Only PNG, SVG, JPG or WebP images',
+          size: 'The image is {size} KB; the limit is {max} KB',
+          format: 'Not an image: upload one or enter an https:// address',
+          urlLength: 'The address is longer than {max} characters'
+        }
+      },
       minTopupHint: '0 uses the global minimum.',
       enabledHint: 'Off hides it from users.',
       typeName: { alipay: 'Alipay', wxpay: 'WeChat Pay', qqpay: 'QQ Wallet', stripe: 'Stripe' },
@@ -144,7 +164,6 @@ export default {
       rate: '折扣率',
       phrase: '折扣',
       example: '示例',
-      phraseText: '{zhe} 折',
       exampleText: '充 {amount} 美元实付 {pay}（原价 {original}）'
     },
     rule: {
@@ -169,6 +188,7 @@ export default {
       minGlobal: '使用全局',
       enabled: '启用',
       icon: '图标',
+      iconKey: '图标样式',
       color: '颜色',
       taken: '已添加',
       added: '已添加“{name}”',
@@ -185,6 +205,26 @@ export default {
       typeHint: '传给网关的支付类型（易支付的 type），可选择或直接输入。',
       typePlaceholder: '选择或输入类型键',
       iconPlaceholder: '选择或输入图标键',
+      iconMode: { builtin: '内置图标', custom: '自定义图片' },
+      logo: {
+        drop: '拖拽图片到这里，或点击选择',
+        dropActive: '松开即可上传',
+        limits: '支持 PNG、SVG、JPG、WebP，不超过 {max} KB，建议使用正方形图片。',
+        uploaded: '{type} 图片 · {size} KB',
+        linked: '来自 {host} 的图片',
+        replace: '更换',
+        remove: '移除',
+        url: '或填写图片地址',
+        urlPlaceholder: 'https://example.com/logo.png',
+        readFailed: '读取文件失败',
+        rule: {
+          required: '请上传图片或填写图片地址',
+          type: '只支持 PNG、SVG、JPG、WebP 图片',
+          size: '图片大小 {size} KB，超过上限 {max} KB',
+          format: '不是有效的图片：请上传图片或填写 https:// 地址',
+          urlLength: '地址不能超过 {max} 个字符'
+        }
+      },
       minTopupHint: '0 表示使用全局最低充值金额。',
       enabledHint: '关闭后用户看不到这个方式。',
       typeName: { alipay: '支付宝', wxpay: '微信支付', qqpay: 'QQ 钱包', stripe: 'Stripe' },

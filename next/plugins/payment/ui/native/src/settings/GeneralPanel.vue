@@ -4,12 +4,12 @@
 import { computed } from 'vue'
 import { SInput, SSelect, SSettingRow, SSettingsGroup, SSwitch, STagInput } from '@sub2api/ui'
 import { usePaymentHost } from '../host'
+import { formatLocal } from '../format'
 import DiscountEditor from './DiscountEditor.vue'
-import { bindSwitch, CURRENCIES, currencySymbol, type SettingsForm } from './settingsForm'
+import { bindSwitch, CURRENCIES, type SettingsForm } from './settingsForm'
 
 const props = defineProps<{ form: SettingsForm }>()
-const host = usePaymentHost()
-const t = host.t
+const t = usePaymentHost().t
 
 /** The numeric limits, one row each. */
 const LIMITS = [
@@ -20,14 +20,13 @@ const LIMITS = [
 ] as const
 
 const currency = computed(() => props.form.get<string>('currency') || 'CNY')
-const currencyOptions = computed(() => CURRENCIES.map((c) => ({ value: c.code, label: `${t(`settings.currency.${c.code}`)} (${c.code})` })))
+const currencyOptions = computed(() => CURRENCIES.map((c) => ({ value: c, label: `${t(`settings.currency.${c}`)} (${c})` })))
 
 /** "Topping up $100 costs ¥730.00" under the price. */
 const priceExample = computed(() => {
   const price = props.form.get<number>('price')
   if (!(price > 0)) return t('settings.general.price.help')
-  const pay = currencySymbol(currency.value) + host.i18n.formatNumber(price * 100, 2)
-  return t('settings.general.price.example', { pay })
+  return t('settings.general.price.example', { pay: formatLocal(price * 100, currency.value) })
 })
 
 /** Presets as chips: numbers only, ascending. */

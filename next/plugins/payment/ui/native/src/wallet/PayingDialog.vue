@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { SAlert, SButton, SDescItem, SDescriptions, SModal, SSpinner, useNow } from '@sub2api/ui'
 import { errorMessage, paymentApi, usePaymentHost } from '../host'
-import { balance, localMoney } from './money'
+import { formatLocal, formatUsd } from '../format'
 import { openPayPage } from './payWindow'
 import QrCode from './QrCode.vue'
 import type { PayingOrder } from './types'
@@ -55,8 +55,8 @@ async function cancel() {
   }
 }
 
-const credited = computed(() => balance((props.order?.amount ?? 0) + (props.order?.bonus ?? 0)))
-const payText = computed(() => (props.order ? localMoney(props.order.pay_amount, props.order.currency) : ''))
+const credited = computed(() => formatUsd((props.order?.amount ?? 0) + (props.order?.bonus ?? 0)))
+const payText = computed(() => (props.order ? formatLocal(props.order.pay_amount, props.order.currency) : ''))
 const endedText = computed(() => t('wallet.paying.ended', { status: t(`status.${live.status.value}`) }))
 </script>
 

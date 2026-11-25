@@ -55,34 +55,6 @@
   min-width: 0;
 }
 
-/* Method mark: a colored tile with a glyph. */
-.payment-mark {
-  display: inline-flex;
-  flex-shrink: 0;
-  align-items: center;
-  justify-content: center;
-  border-radius: 0.375rem;
-  background: rgb(var(--fg-subtle));
-  color: #fff;
-  font-weight: 600;
-  line-height: 1;
-}
-.payment-mark-sm {
-  width: 1.5rem;
-  height: 1.5rem;
-  font-size: 0.75rem;
-}
-.payment-mark-md {
-  width: 2.5rem;
-  height: 2.5rem;
-  border-radius: 0.5rem;
-  font-size: 1.125rem;
-}
-.payment-mark-icon {
-  width: 60%;
-  height: 60%;
-}
-
 .payment-dialog {
   display: flex;
   flex-direction: column;
@@ -117,6 +89,75 @@
 .payment-color-swatch {
   width: 3rem;
   flex-shrink: 0;
+}
+
+/* Custom logo: a drop zone, or the image with its actions; an address below. */
+.payment-logo {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.payment-logo-zone {
+  border: 1px dashed rgb(var(--line-strong));
+  border-radius: 0.75rem;
+  background: rgb(var(--surface-2));
+  transition:
+    border-color 0.15s,
+    background-color 0.15s;
+}
+.payment-logo-zone--over {
+  border-color: rgb(var(--fg));
+  background: rgb(var(--fg) / 0.05);
+}
+.payment-logo-zone--filled {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border-style: solid;
+  border-color: rgb(var(--line));
+}
+.payment-logo-drop {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 1.25rem 1rem;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  color: rgb(var(--fg-muted));
+  font: inherit;
+  font-size: 0.8125rem;
+  cursor: pointer;
+}
+.payment-logo-drop:hover {
+  color: rgb(var(--fg));
+}
+.payment-logo-drop:focus-visible {
+  outline: 2px solid rgb(var(--fg) / 0.4);
+  outline-offset: 2px;
+}
+.payment-logo-drop-icon {
+  width: 1.5rem;
+  height: 1.5rem;
+  color: rgb(var(--fg-subtle));
+}
+.payment-logo-summary {
+  flex: 1;
+  min-width: 8rem;
+  color: rgb(var(--fg));
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+.payment-logo-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+.payment-logo-file {
+  display: none;
 }
 
 .payment-url {

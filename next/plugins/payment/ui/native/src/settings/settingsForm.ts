@@ -1,5 +1,6 @@
 import type { PluginSettingsForm, Rules } from '@sub2api/ui'
 import type { GatewayKey, PaymentMethod, PaymentSettingsValue } from '../host'
+import { brandColor, isLogoType, LOGO_TYPES, parseLogo } from '../components/methodIcon'
 
 // The admin payment settings as a form (usePluginSettings over
 // PaymentSettingsValue): defaults, rules, tabs, and the catalogs the editors
@@ -33,17 +34,8 @@ export const SETTINGS_DEFAULTS: Partial<SettingsModel> = {
   stripe: { enabled: false, secret_key: '', webhook_secret: '', allow_promotion_codes: false }
 }
 
-/** Currencies users pay in, with the symbol amounts show. */
-export const CURRENCIES: ReadonlyArray<{ code: string; symbol: string }> = [
-  { code: 'CNY', symbol: '¥' },
-  { code: 'USD', symbol: '$' },
-  { code: 'HKD', symbol: 'HK$' },
-  { code: 'EUR', symbol: '€' },
-  { code: 'GBP', symbol: '£' },
-  { code: 'JPY', symbol: 'JP¥' }
-]
-
-export const currencySymbol = (code: string) => CURRENCIES.find((c) => c.code === code)?.symbol ?? `${code} `
+/** Currencies users pay in. */
+export const CURRENCIES: readonly string[] = ['CNY', 'USD', 'HKD', 'EUR', 'GBP', 'JPY']
 
 export const GATEWAYS: GatewayKey[] = ['epay', 'stripe']
 
@@ -53,9 +45,6 @@ export const GATEWAY_TYPES: Record<GatewayKey, string[]> = { epay: ['alipay', 'w
 const KNOWN_TYPES = Object.values(GATEWAY_TYPES).flat()
 /** A type key with a translated name (settings.methods.typeName.*). */
 export const isKnownType = (type: string) => KNOWN_TYPES.includes(type)
-
-/** Icon keys of a method, with their brand color. */
-export const METHOD_ICONS: Record<string, string> = { alipay: '#1677ff', wxpay: '#07c160', qqpay: '#12b7f5', stripe: '#635bff', card: '#475569' }
 
 /** The webhook a gateway calls back (the plugin's webhook route). */
 export const webhookUrl = (pluginKey: string, gateway: GatewayKey) => `${window.location.origin}/api/v1/p/${pluginKey}/webhook/${gateway}`
@@ -81,11 +70,32 @@ export const templateType = (key: TemplateKey) => TEMPLATES[key].type
 export function newMethod(t: Translate, key: TemplateKey = 'epay_custom'): PaymentMethod {
   const { gateway, type } = TEMPLATES[key]
   const name = type ? t(`settings.methods.typeName.${type}`) : ''
-  return { type, name, gateway, icon: type, color: METHOD_ICONS[type] ?? '', min_topup: 0, enabled: true }
+  return { type, name, gateway, icon: type, color: brandColor(type), min_topup: 0, enabled: true }
 }
 
-/** Both readings of a discount rate, for the locale's message to pick: 0.95 -> 9.5 (折) / 5 (% off). */
-export const discountParams = (rate: number) => ({ zhe: Number((rate * 10).toFixed(2)), off: Number(((1 - rate) * 100).toFixed(2)) })
+/** Largest custom logo, decoded (it is stored inline in the settings). */
+export const LOGO_MAX_BYTES = 64 * 1024
+/** The file picker's accept list. */
+export const LOGO_ACCEPT = Object.keys(LOGO_TYPES).join(',')
+const LOGO_MAX_URL = 2048
+export const kb = (bytes: number) => Math.ceil(bytes / 1024)
+
+/** Why a picked file cannot be a logo, '' when it can. */
+export function logoFileError(file: File, t: Translate): string {
+  if (!isLogoType(file.type)) return t('settings.methods.logo.rule.type')
+  return file.size > LOGO_MAX_BYTES ? t('settings.methods.logo.rule.size', { size: kb(file.size), max: kb(LOGO_MAX_BYTES) }) : ''
+}
+
+/** Rule of method.logo: empty, an allowed image data URL within the size, or an https address. */
+export function logoValidator(t: Translate) {
+  return (v: string | undefined) => {
+    if (!v) return true
+    const src = parseLogo(v)
+    if (!src) return t('settings.methods.logo.rule.format')
+    if (src.kind === 'url') return v.length <= LOGO_MAX_URL || t('settings.methods.logo.rule.urlLength', { max: LOGO_MAX_URL })
+    return src.bytes <= LOGO_MAX_BYTES || t('settings.methods.logo.rule.size', { size: kb(src.bytes), max: kb(LOGO_MAX_BYTES) })
+  }
+}
 
 /** v-bind of an SSwitch at a boolean path. */
 export const bindSwitch = (form: SettingsForm, path: string) => ({ modelValue: !!form.get(path), 'onUpdate:modelValue': (v: boolean) => form.set(path, v) })
@@ -116,6 +126,7 @@ export function settingsRules(t: Translate): Rules<SettingsModel> {
       { validator: (v: number, { model }) => model.discounts.filter((d) => d.amount === v).length < 2 || t('settings.rule.duplicateTier') }
     ],
     'discounts.*.rate': [{ required: true, type: 'number' }, { validator: (v: number) => (v > 0 && v < 1) || t('settings.rule.rate') }],
+    'methods.*.logo': { validator: logoValidator(t) },
     'epay.endpoint': { required: true, type: 'url', when: epayOn },
     'epay.merchant_id': { required: true, whitespace: true, when: epayOn },
     'epay.key': { required: true, when: epayOn },

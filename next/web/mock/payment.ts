@@ -45,6 +45,11 @@ export function paymentAsset(path: string): { type: string; body: Buffer } | nul
 
 const SECRETS = ['epay/key', 'stripe/secret_key', 'stripe/webhook_secret']
 
+// A method with a custom logo: a small SVG stored inline as a data URL, as the settings dialog uploads it.
+const USDT_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><circle cx="16" cy="16" r="16" fill="#26a17b"/><path fill="#fff" d="M17.92 17.38c-.11 0-.69.04-1.98.04-1.03 0-1.75-.03-2-.04-3.97-.17-6.94-.87-6.94-1.7s2.97-1.52 6.94-1.7v2.7c.26.02 1 .06 2.02.06 1.22 0 1.83-.05 1.94-.06v-2.7c3.96.18 6.92.87 6.92 1.7s-2.96 1.53-6.92 1.7zm0-3.66V11.3h5.53V7.6H8.4v3.7h5.53v2.42c-4.5.2-7.88 1.1-7.88 2.17s3.38 1.96 7.88 2.17v7.75h3.99v-7.75c4.48-.21 7.86-1.1 7.86-2.17s-3.38-1.96-7.86-2.17z"/></svg>'
+const USDT_LOGO = `data:image/svg+xml;base64,${Buffer.from(USDT_SVG).toString('base64')}`
+
 const settings = {
   enabled: true,
   currency: 'CNY',
@@ -61,6 +66,7 @@ const settings = {
   methods: [
     { type: 'alipay', name: '支付宝', gateway: 'epay', icon: 'alipay', color: '#1677ff', min_topup: 0, enabled: true },
     { type: 'wxpay', name: '微信支付', gateway: 'epay', icon: 'wxpay', color: '#07c160', min_topup: 0, enabled: true },
+    { type: 'usdt', name: 'USDT', gateway: 'epay', icon: '', color: '', logo: USDT_LOGO, min_topup: 0, enabled: true },
     { type: 'stripe', name: 'Stripe', gateway: 'stripe', icon: 'stripe', color: '#635bff', min_topup: 5, enabled: false }
   ],
   epay: { enabled: true, endpoint: 'https://pay.example.com', merchant_id: '1001', key: '******' },
@@ -115,7 +121,8 @@ function seedOrder(i: number): any {
     created_at: now(created),
     paid_at: status === 'completed' ? now(created + 40) : undefined,
     completed_at: status === 'completed' ? now(created + 41) : undefined,
-    expires_at: now(created + 1800)
+    expires_at: now(created + 1800),
+    refunded_amount: 0
   }
 }
 
@@ -144,7 +151,7 @@ function checkAmount(body: any) {
 }
 
 on('GET', '/p/payment/checkout', () => {
-  const methods = settings.methods.filter((m) => m.enabled).map(({ type, name, icon, color, min_topup }) => ({ type, name, icon, color, min_topup }))
+  const methods = settings.methods.filter((m) => m.enabled).map(({ type, name, icon, color, logo, min_topup }) => ({ type, name, icon, color, logo, min_topup }))
   const { enabled, currency, price, min_topup, max_topup, amount_options, discounts } = settings
   return { enabled, currency, price, min_topup, max_topup, amount_options, discounts, methods }
 })
@@ -192,6 +199,63 @@ on('POST', '/p/payment/admin/orders/:id/complete', (req) => {
   Object.assign(o, { status: 'completed', paid_at: now(), completed_at: now(), trade_no: o.trade_no || 'manual' })
   return o
 })
+
+// ---- refunds ----
+
+// Stripe orders refund through its API, Epay ones are refunded by hand and only recorded.
+const REFUND_MODES: Record<string, string> = { stripe: 'gateway', epay: 'manual' }
+const STRIPE = { method: 'stripe', method_name: 'Stripe', gateway: 'stripe' }
+// Balances the refund debits; bob's is short, to show the 409 without force.
+const balances: Record<string, number> = { 'admin@example.com': 1000, 'alice@example.com': 260, 'bob@example.com': 3, 'carol@example.com': 88 }
+const cents = (n: number) => Math.round(n * 100) / 100
+const refundLeft = (o: any) => cents(o.amount - o.refunded_amount)
+// The bonus is taken back with the refund that leaves nothing on the order.
+const refundDeduct = (o: any, b: any) => (b.deduct_balance ? cents(b.amount + (b.amount >= refundLeft(o) ? o.bonus : 0)) : 0)
+const invalid = (field: string, message: string) => fail(400, 'invalid_argument', message, { fields: [{ field, message }] })
+let refundSeq = 0
+
+/** Debits the user, appends the audit record and moves the order on (refunding while the gateway has not confirmed). */
+function recordRefund(o: any, b: any, status = 'succeeded', at = now()) {
+  const deducted = refundDeduct(o, b)
+  const all = b.amount >= refundLeft(o)
+  const pay = cents((o.pay_amount * b.amount) / o.amount)
+  const record = { id: ++refundSeq, created_at: at, amount: b.amount, pay_amount: pay, reason: b.reason, operator: EMAILS[0], mode: b.mode, deduct_balance: !!b.deduct_balance, deducted_amount: deducted, status }
+  balances[o.user_email] = cents((balances[o.user_email] ?? 0) - deducted)
+  o.refunds = [record, ...(o.refunds ?? [])]
+  o.refunded_amount = cents(o.refunded_amount + b.amount)
+  o.status = status === 'pending' ? 'refunding' : all ? 'refunded' : 'partially_refunded'
+}
+
+function refundError(o: any, b: any) {
+  if (!o || !['completed', 'partially_refunded'].includes(o.status)) return fail(409, 'conflict', '这个订单不能退款')
+  const left = refundLeft(o)
+  if (!(b.amount > 0 && b.amount <= left)) return invalid('amount', `退款金额须在 0 到 ${left} 之间`)
+  if (!b.reason) return invalid('reason', '请填写退款原因')
+  if (b.mode !== REFUND_MODES[o.gateway]) return fail(400, 'invalid_argument', '退款方式与订单的支付网关不符')
+  const deduct = refundDeduct(o, b)
+  const balance = balances[o.user_email] ?? 0
+  if (deduct > balance && !b.force) return fail(409, 'insufficient_balance', '用户余额不足，勾选强制可扣成负数', { balance, deduct })
+  return null
+}
+
+on('POST', '/p/payment/admin/orders/:id/refund', (req) => {
+  const o = orders.find((x) => x.id === Number(req.params.id))
+  const b = { ...req.body, amount: cents(Number(req.body?.amount)), reason: String(req.body?.reason ?? '').trim() }
+  const err = refundError(o, b)
+  if (err) return err
+  recordRefund(o, b)
+  return o
+})
+
+// Seeds: a Stripe order to refund, one partly refunded by hand, one refunded in full (bonus included), one still refunding.
+function seedRefunds() {
+  const [, alice20, , , admin200, , , carol20, , alice100] = orders
+  for (const o of [alice20, carol20, alice100]) Object.assign(o, STRIPE)
+  recordRefund(admin200, { amount: 50, reason: '用户反馈多充了，协商退回 50', mode: 'manual', deduct_balance: true }, 'succeeded', now(-3600 * 18))
+  recordRefund(carol20, { amount: 20, reason: '误充，用户申请全额退款', mode: 'gateway', deduct_balance: true }, 'succeeded', now(-3600 * 30))
+  recordRefund(alice100, { amount: 100, reason: '服务中断期间的充值，全额退回', mode: 'gateway', deduct_balance: true }, 'pending', now(-600))
+}
+seedRefunds()
 
 // ---- redeem codes ----
 

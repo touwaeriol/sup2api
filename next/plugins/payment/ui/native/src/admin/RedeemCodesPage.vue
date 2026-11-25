@@ -3,11 +3,11 @@ import { computed, ref } from 'vue'
 import { SButton, SDateTime, SFilterBar, SPageHeader, SPagination, SRowAction, SSelect, STable, type TableColumn } from '@sub2api/ui'
 import { paymentApi, usePaymentHost, type RedeemCode } from '../host'
 import { formatUsd } from '../format'
-import PayStatusBadge from './PayStatusBadge.vue'
+import PayStatusBadge from '../components/PayStatusBadge.vue'
 import RedeemGenerateModal from './RedeemGenerateModal.vue'
 import RedeemResultModal from './RedeemResultModal.vue'
 import { actionsColumn, columnOf, confirmRun, useAdminList } from './actions'
-import { REDEEM_STATUSES } from './status'
+import { REDEEM_STATUSES } from '../components/status'
 
 // Redeem codes (admin): generated in batches, listed masked, the unused ones
 // can be voided.

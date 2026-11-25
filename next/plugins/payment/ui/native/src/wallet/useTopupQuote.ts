@@ -1,6 +1,6 @@
 import { computed, ref, watch, type Ref } from 'vue'
 import type { CheckoutInfo, DiscountTier } from '../host'
-import { cents } from './money'
+import { cents } from '../format'
 
 export type CheckoutMethod = CheckoutInfo['methods'][number]
 
