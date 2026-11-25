@@ -89,7 +89,7 @@ func (p *Plugin) ClassifyError(_ context.Context, in *pluginv1.ClassifyErrorRequ
 
 // withClientCode passes the upstream error code on to the client as
 // client_error_code when it is a plain code (a usage limit reports it as the
-// error type).
+// error type), with the status it stands for (clientStatuses).
 func withClientCode(resp *pluginv1.ClassifyErrorResponse, in *pluginv1.ClassifyErrorRequest) *pluginv1.ClassifyErrorResponse {
 	e := parseError(in.GetBodyPrefix())
 	code := e.Code
@@ -99,8 +99,21 @@ func withClientCode(resp *pluginv1.ClassifyErrorResponse, in *pluginv1.ClassifyE
 	if clientCode.MatchString(code) {
 		resp.ClientErrorCode = code
 	}
+	if status, ok := clientStatuses[code]; ok {
+		resp.ClientStatus = status
+	}
 	return resp
 }
+
+// clientStatuses are the client's statuses of Codex backend error codes whose
+// own status says less: an overloaded backend fails a stream it opened (the
+// core answers it as a 500) or answers 5xx, and is 529, the "overloaded"
+// status clients retry on (docs/PLUGIN-CODEX.md §24). The classification
+// (cooldown, failover) stays the one of the upstream status.
+var clientStatuses = map[string]int32{"server_is_overloaded": statusOverloaded}
+
+// statusOverloaded is the non-standard "overloaded" HTTP status.
+const statusOverloaded = 529
 
 // clientCode is the shape the host accepts for client_error_code.
 var clientCode = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$`)

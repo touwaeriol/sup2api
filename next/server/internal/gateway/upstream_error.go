@@ -51,12 +51,14 @@ func (c *call) closeErrorBodies() {
 }
 
 // Classification controls retries/account state, never the upstream HTTP body.
-// The log message is independent of rendering; parsing it cannot rewrite bytes.
+// The reply keeps the upstream status unless the plugin named another
+// (replyStatus). The log message is independent of rendering; parsing it
+// cannot rewrite bytes.
 func (c *call) preserveHTTPError(e *gwError, status int, h http.Header, body *upstreamErrorBody) {
 	if e == nil || body == nil {
 		return
 	}
-	e.Status, e.RawResponse = status, true
+	e.Status, e.RawResponse = replyStatus(e.PluginStatus, status), true
 	e.Raw, e.RawFile = body.prefix, body.file
 	e.ContentType, e.Headers = h.Get("Content-Type"), core.ProviderHeaders(h)
 	e.Message = upstreamErrorMessage(body.prefix)

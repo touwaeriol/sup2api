@@ -8,6 +8,11 @@
 
 开发完成、尚未上线的改动。发布时改成发布日期的一节，补上提交、实际版本号和发布过程。
 
+### 核心：插件的 `client_status` 生效；codex 0.2.3：`server_is_overloaded` 回给客户端 529（无迁移，滚动更新）
+
+- **核心**（CONTRACTS §139）：插件在 `ClassifyError` 里给出的 `client_status`（400–599）现在就是上游错误回答的回复状态和使用记录的状态，有没有故障策略都一样；以前核心总用上游状态覆盖它。故障策略照旧按上游状态匹配，重试、换号不变；回复 body 照旧是上游原样。现有其他插件都不设它，行为不变。
+- **codex 0.2.3**（[PLUGIN-CODEX.md](next/docs/PLUGIN-CODEX.md) 第 24 节）：错误码 `server_is_overloaded`（ChatGPT 后端过载，开头的流内错误事件被核心按 500 交来，或只流式收集时按 502）给 `client_status` 529，其余分类不变（5xx 冷却 10 秒、换号）。换号用完时客户端收到 HTTP 529，body 是上游错误对象（`{"error":{"message":"Our servers are currently overloaded. Please try again later.","type":"service_unavailable_error","code":"server_is_overloaded",…}}`）。需要带 §139 的核心才生效；在旧核心上照旧是 500（只流式收集时 502）。经转换的 Anthropic Messages 入站同样是 529，body 是上游的 OpenAI 形状错误体（§26.6，不重新包装成 `overloaded_error`）；WebSocket 轮次不受影响。
+
 ## 2026-11-25
 
 ### 核心 0.1.315：Responses 流扣到回答开始，开头的过载错误按 HTTP 500 换号（`22e17fd6f`，含 `a3b1dfdc5`；无迁移；ovh 滚动、ec2pool 单节点；网关仍 0.1.139）

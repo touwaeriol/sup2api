@@ -10,6 +10,12 @@ import (
 	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
 )
 
+// overloadedBody is the error object of the overload error event the ChatGPT
+// backends sent on 2026-11-25, as the core hands it to ClassifyError.
+const overloadedBody = `{"error":{"message":"Our servers are currently overloaded. Please try again later.",` +
+	`"type":"service_unavailable_error","param":null,"code":"server_is_overloaded",` +
+	`"headers":{"retry-after":"309","retry-after-ms":"309000"}}}`
+
 func TestClassifyError(t *testing.T) {
 	p := newTestPlugin(DefaultEndpoints)
 	now := testNow.Unix()
@@ -23,16 +29,17 @@ func TestClassifyError(t *testing.T) {
 	full5h := slotHeaders(map[string]string{}, "primary", "300", "100", "1800003600")
 	weekAhead := strconv.FormatInt(now+8*24*3600, 10)
 	for _, tc := range []struct {
-		name      string
-		status    int32
-		headers   map[string]string
-		body      string
-		transport string
-		action    pluginv1.ClassifyErrorResponse_Action
-		effect    pluginv1.ClassifyErrorResponse_AccountEffect
-		until     int64 // cooldown and automatic disable; 0 = no automatic disable
-		code      string
-		reason    string // substring
+		name         string
+		status       int32
+		headers      map[string]string
+		body         string
+		transport    string
+		action       pluginv1.ClassifyErrorResponse_Action
+		effect       pluginv1.ClassifyErrorResponse_AccountEffect
+		until        int64 // cooldown and automatic disable; 0 = no automatic disable
+		code         string
+		clientStatus int32  // client_status, 0 = the upstream status
+		reason       string // substring
 	}{
 		{name: "429 with a full 5h window", status: 429,
 			headers: slotHeaders(slotHeaders(map[string]string{}, "primary", "300", "100", "1800003600"), "secondary", "10080", "30", "1800500000"),
@@ -79,7 +86,16 @@ func TestClassifyError(t *testing.T) {
 		{name: "server error", status: 502, body: `bad gateway`, action: fail, effect: cool},
 		{name: "bad request", status: 400, body: `{"error":{"message":"Unsupported parameter: foo","type":"invalid_request_error","code":"unsupported_parameter"}}`,
 			action: ret, effect: none, code: "unsupported_parameter"},
-		{name: "transport", status: 0, transport: "connection reset", action: fail, effect: cool},
+		{name: "transport", status: 0, transport: "connection reset", action: fail, effect: cool, clientStatus: 502},
+		// The error the ChatGPT backends sent on 2026-11-25: as the core hands
+		// over an early stream error (500) and a stream-only one (502).
+		{name: "overloaded stream error", status: 500, body: overloadedBody,
+			action: fail, effect: cool, code: "server_is_overloaded", clientStatus: 529, reason: "500"},
+		{name: "overloaded on a stream-only answer", status: 502, body: overloadedBody,
+			action: fail, effect: cool, code: "server_is_overloaded", clientStatus: 529},
+		{name: "server_error keeps the upstream status", status: 500,
+			body:   `{"error":{"message":"An error occurred while processing your request.","type":"server_error","param":null,"code":"server_error"}}`,
+			action: fail, effect: cool, code: "server_error"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r, err := p.ClassifyError(context.Background(), &pluginv1.ClassifyErrorRequest{
@@ -94,6 +110,9 @@ func TestClassifyError(t *testing.T) {
 			}
 			if tc.code != "" && r.GetClientErrorCode() != tc.code {
 				t.Fatalf("client code = %q, want %q", r.GetClientErrorCode(), tc.code)
+			}
+			if r.GetClientStatus() != tc.clientStatus {
+				t.Fatalf("client status = %d, want %d", r.GetClientStatus(), tc.clientStatus)
 			}
 			if !strings.Contains(r.GetReason(), tc.reason) {
 				t.Fatalf("reason = %q, want %q", r.GetReason(), tc.reason)

@@ -924,6 +924,7 @@ func (c *call) applyClassification(ctx context.Context, rt *typeRoute, acct *plu
 		res := c.classifyFailure(ctx, acct.GetId(), status, header, body, transportErr, rt.conv != nil)
 		if res.err != nil {
 			res.err.LocalFailure = cls.GetLocalFailure()
+			res.err.PluginStatus = int(cls.GetClientStatus())
 		}
 		if status > 0 {
 			c.applyPluginAccountState(ctx, acct.GetId(), cls)
@@ -943,8 +944,8 @@ func (c *call) applyClassification(ctx context.Context, rt *typeRoute, acct *plu
 	if clientStatus < 400 || clientStatus > 599 {
 		clientStatus = http.StatusBadGateway
 	}
-	e := &gwError{Status: clientStatus, Type: cls.GetClientErrorType(), Message: cls.GetClientMessage(), LocalFailure: cls.GetLocalFailure(),
-		RecordType: errTypeUpstream, Code: clientErrorCode(ctx, cls.GetClientErrorCode(), rt.binding.Plugin.Key)}
+	e := &gwError{Status: clientStatus, PluginStatus: int(cls.GetClientStatus()), Type: cls.GetClientErrorType(), Message: cls.GetClientMessage(),
+		LocalFailure: cls.GetLocalFailure(), RecordType: errTypeUpstream, Code: clientErrorCode(ctx, cls.GetClientErrorCode(), rt.binding.Plugin.Key)}
 	if rt.conv != nil {
 		// The upstream speaks another protocol: its error body and error
 		// types do not fit the endpoint's errorFormat, which always wins.

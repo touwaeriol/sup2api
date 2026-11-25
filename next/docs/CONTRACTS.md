@@ -1914,7 +1914,7 @@ message RankedAccount {
 
 #### 1. `ClassifyErrorResponse.client_error_code`
 
-**2026-10-19 更新（Core 0.1.168）：以下插件错误码规则只用于本系统生成的错误结构。收到真实上游 HTTP 错误时，最终响应的状态、Content-Type 和正文原样传给客户端，不新增/替换 code，不因插件分类或协议转换重新包装 JSON；空正文、HTML、文本、非 UTF-8 和超长正文同样保留。分类仍用于重试及账号效果。Core 的 64 KiB 限制现在仅用于分类/诊断前缀，完整大错误体写私有临时文件，调用结束清理；读取不完整等本地转发失败才生成自己的错误。用量日志独立提取真实 message，不用调度原因替代它；数据库不接受的字节只在诊断中转义。**
+**2026-10-19 更新（Core 0.1.168）：以下插件错误码规则只用于本系统生成的错误结构。收到真实上游 HTTP 错误时，最终响应的状态（插件给出 400–599 的 `client_status` 时用它，§139）、Content-Type 和正文原样传给客户端，不新增/替换 code，不因插件分类或协议转换重新包装 JSON；空正文、HTML、文本、非 UTF-8 和超长正文同样保留。分类仍用于重试及账号效果。Core 的 64 KiB 限制现在仅用于分类/诊断前缀，完整大错误体写私有临时文件，调用结束清理；读取不完整等本地转发失败才生成自己的错误。用量日志独立提取真实 message，不用调度原因替代它；数据库不接受的字节只在诊断中转义。**
 
 网关原来把客户端错误码**硬编码**成 `"upstream_error"`，插件已经分类出来的信息在最后一步被抹掉——Ark 的 `InputTextSensitiveContentDetected`（内容审核拦截）和普通参数错误，到 OpenAI SDK 手里都是 `400 + invalid_request_error + code="upstream_error"`，客户端分不出「换个 prompt」和「改参数」。
 
@@ -3862,7 +3862,7 @@ GET `/groups/:id/models`（`group:read`）返回所有未删除成员账号的�
 - 上游返回 HTTP 错误（`status > 0`，不含传输错误）时，即使发布了故障策略，核心也调用插件 `ClassifyError`（等待形式的中继则用 `Execute` 返回的分类，§112.2；传输错误不问插件，与 `classify` 一致），并执行其中两项：
   1. `quota`：配额观测照常保存（§44）。
   2. `automatic_state` 为 `DISABLE` 且带解除时间（`until_unix` 在未来，或 `duration_seconds` > 0，最长 366 天）：账号立即设为 `auto_disabled`，`auto_disabled_until` = 解除时间，原因用插件给的 `reason`。解除时间一过调度即可再选中它（惰性过期），核心的低频巡检随后把状态写回 `active`。
-- 其余仍由策略决定：是否重试、同账号重试次数、换号、冷却、返回给客户端的内容。插件的 `action`、`account_effect`、`cooldown_until_unix` 不采用。
+- 其余仍由策略决定：是否重试、同账号重试次数、换号、冷却、返回给客户端的内容。插件的 `action`、`account_effect`、`cooldown_until_unix` 不采用。例外：插件给出 400–599 的 `client_status` 时，上游错误回答以它为回复状态（§139；策略照旧按上游状态匹配）。
 - 临时禁用仍受全局自动禁用开关（策略的 `account_enabled`）和账号自己的 `auto_disable` 约束，管理员手动停用的账号不受影响。策略里的禁用规则已经停用了账号时，不再重复处理。
 - 禁用后本次请求的 `failureState.blocked` 置位，策略的"同账号重试"直接跳到换号；`policyCandidates` 每次尝试前重新读取候选账号，被禁用的账号不在其中。粘性会话：除非粘性设置开了"账号停用时保留绑定"（`KeepOnAccountDisabled`），立即解除到该账号的绑定，本次和后续请求改绑到新账号。
 - 使用记录 `failure_policy` 事件里该次尝试的 `account_result` 为 `disabled_by_plugin`。
@@ -9609,4 +9609,13 @@ ChatGPT（Codex）上游常先回 200，发出 `response.created`、`response.in
 ### 138.4 实现与测试
 
 `server/internal/gateway/streamhead.go`（`holdStreamHead`、`readStreamHead`，与 §83 共用的 `streamFailure`、`failStream`、`errorEventFailure`）、`sse_reader.go`（`sseReader`：逐个读事件，可留住读过的字节；§83 的 `readStreamOnly` 也改用它），接入点在 `dispatch.go` 的 `collectStreamOnly` 之后。测试 `streamhead_test.go`（测试上游在错误前照真实上游发 `response.in_progress`、`keepalive`、`response.metadata`，错误事件用真实的形状）：开头报错换号后客户端只看到成功的回答、只有一个账号时回 500 和错误体、`response.failed` 带 429 也回 500、开头就结束按传输错误、扣住的开头逐字节转发、开头之后的 `error` 与 `response.failed` 仍在流里、经适配的 Chat Completions 同样回 500、没有输出直接 `response.completed` 的流放行、不先宣布就发 delta 的流放行并逐字节转发、开头的无名错误块回 500、回答一开始就放行（不等后面的流，`io.Pipe`）、`sseReader` 的边界；`usagerules/stream_error_test.go`：原始错误事件被复制留住。扣住阶段的读缓冲是 4 KiB（`headBufferSize`，只是缓冲，超长的行照样整行读）。
+
+## 139. 插件的 `client_status` 是上游错误回答的回复状态（2026-11-25，所有者要求 codex 把 `server_is_overloaded` 回成 529；无迁移；插件协议、Host API 不变）
+
+- `ClassifyErrorResponse.client_status` 的定义一直是“回给客户端的状态，0 = 上游状态”，但核心在回上游的 HTTP 错误回答（`upstreamFailure`、等待形式的 `classified`）时一律用上游状态覆盖了它（`preserveHTTPError`），发布了故障策略时也根本不读它，所以以前没有生效。
+- 现在：插件给出 400–599 的 `client_status` 时，它就是回复的状态和使用记录的状态，有没有故障策略都一样：分类把它带在 `gwError.PluginStatus` 上，`preserveHTTPError` 用 `replyStatus(插件状态, 上游状态)` 定回复状态；没给或不在范围内时照旧是上游状态（包括 400–599 以外的，例如没跟随的 3xx），与以前逐字节一致。回复的 body 照旧是上游原样（`RawResponse`），`client_status` 不改 body，也不按入站协议重新包装（§26.6）：经转换的 Anthropic Messages 入站拿到的是 529 加上游的 OpenAI 形状错误体，不是 `overloaded_error`。
+- 故障策略的匹配（`classifyFailure` 的事实、500–599 等规则）照旧用上游状态，所以插件改回复状态不会改变重试、换号；attempts 记录里失败那一步的状态是回复状态。
+- 传输错误（状态 0）不经过这里，照旧（插件的 `client_status` 在没有故障策略时本来就生效）。WebSocket 不经过这里：握手被拒、轮次里的错误事件的状态都照旧，`client_status` 不生效。
+- 第一个用到它的是 codex 0.2.3：错误码 `server_is_overloaded` → 529（[PLUGIN-CODEX.md](PLUGIN-CODEX.md) 第 24 节）。现有其他插件都不设 `client_status`（SDK `classify` 只在传输错误时设 502），行为不变。
+- 测试：`gateway/client_status_test.go`（有、无故障策略都回 529 且 body 原样；只配 500 的重试规则照旧换号、策略事件记上游的 500；不给 `client_status` 时上游 302 原样回 302；`replyStatus` 的取值表）。
 

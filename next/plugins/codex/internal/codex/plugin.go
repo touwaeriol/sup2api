@@ -31,7 +31,7 @@ import (
 const (
 	// Version is the plugin version (manifest.json "version"); it is part of
 	// the User-Agent every request sends.
-	Version = "0.2.2"
+	Version = "0.2.3"
 	// UserAgent and Originator name sup2api as the client, truthfully: the
 	// built-in values of the client headers (agent.go).
 	UserAgent  = "sup2api-codex/" + Version

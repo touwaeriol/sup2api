@@ -96,9 +96,12 @@ type gwError struct {
 	// platform plugin gave no client-facing type or message.
 	Raw         []byte
 	RawResponse bool // Includes empty and non-JSON upstream HTTP responses.
-	RawFile     *os.File
-	ContentType string
-	Headers     http.Header
+	// PluginStatus is the plugin's client_status for an upstream failure
+	// (0: none), the status of the upstream error answer it replies with.
+	PluginStatus int
+	RawFile      *os.File
+	ContentType  string
+	Headers      http.Header
 	// RecordType is the usage_logs.error_type for this failure.
 	RecordType string
 	// LocalFailure: the account is not to blame (ClassifyError's
