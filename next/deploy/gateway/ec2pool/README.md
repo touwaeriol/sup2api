@@ -2,7 +2,9 @@
 
 ec2pool（AWS us-west-2，x86_64）上的 sup2api 是一个独立集群，和 ovh/clicodeplus 集群不共用数据库。同一台机器上还有 sakura-2api、cli-proxy-api、antigravity 和 kin 容器，与 sup2api 无关，操作时不要碰。
 
-## 现状（2026-11-21 起）：网关托管，单节点，网关 0.1.139、核心 0.1.305（本机构建）
+## 现状（2026-11-25 起）：网关托管，单节点，网关 0.1.139、核心 0.1.314（本机构建）
+
+> 0.1.306–0.1.311 的发布记录在 `/opt/sup2api-gw/rel306`、`rel307`、`rel311` 与 `stage/own-<版本>/`，本文件没有逐条补录。
 
 - 目录 `/opt/sup2api-gw`，compose 项目 `sup2api-gw`，接入外部网络 `sup2api_default`。
   - `node-a`（容器 `sup2api-gw-a`，主节点，`127.0.0.1:18080`），镜像 `sup2api-gateway:0.1.139`（本机从源码构建），状态卷 `sup2api-gw_node-a`（`/var/lib/sub2api`，持久）。只有一个节点（用户 11-17 决定）：核心更新没有别的节点承接流量，走主节点优先，会短暂停服；网关一键更新单节点中断约 10 秒，控制台要求确认。
@@ -14,6 +16,15 @@ ec2pool（AWS us-west-2，x86_64）上的 sup2api 是一个独立集群，和 ov
 - 内置插件签名密钥：核心 0.1.298 起在没设 `SUB2API_BUILTIN_TRUST_KEY` 时自己读 `builtin/trust.pub`，compose 里不再设这个变量（0.1.297 期间手动设过，备份 `compose.yml.bak-with-trustkey`；回到 0.1.297 要加回去）。
 - 本机构建的内置包用只留在这台机器上的插件密钥 `sup2api-ec2pool-2026` 签名（`keys/plugin-sign/`，0700；公钥 `YnVgIX8xaLoG1A9SgZ8nGIp+vl/opLYEK/UbxRwE+Ts=`），ovh 的 `sup2api-plugins-2026` 私钥没有搬过来。分组 `chatGPT`（id 1）下有 73 个 `codex_device` 账号（id 2–75），是有真实流量的环境。`SUB2API_PLUGIN_MAX_MEMORY_MB=1024` 仍设着（0.1.304 起默认不封顶，平台插件要经手完整请求体，见 CHANGELOG 0.1.304 升级须知）。
 - 插件：`SUB2API_PLUGIN_VERIFY_SIGNATURES=false`（沿用旧部署）；已装插件包原来由旧核心用开发密钥 `sub2api-dev` 签名，Release 内置包用 `sup2api-plugins-2026` 签名，同版本的包保留原样。
+
+## 2026-11-25 核心 0.1.314（从 0.1.311，经过迁移 0125，主节点优先，本机构建）
+
+- 用户 07:10 UTC 在卡片上选“ovh 滚动 + ec2pool 停机升级”，07:35 UTC 原话“同意发布 0.1.314 到 ovh 和 ec2pool”。
+- 发布前（只读）：0125 手册第一节第 1 项两条都是 0 行；`market_sources` 只有 `id=1 local-dev`（`http://market:8080/index.json`，本地开发市场 `sup2api-market-1`），按演练结论不改名，接受 0125 删除；compose 的 `SUB2API_MARKET_SOURCES` 是 `""`、`SUB2API_DEV_MARKET_URL` 照旧，不用改 compose，不重建网关容器。没有另做数据库备份（用户规则）。
+- 构建：`src314`（`git -C src311 worktree add`，develop `038a34977`），`stage/own-0.1.314/`（env.sh、build.sh、pack.sh 照 own-0.1.311，`LIVE_SCHEMA` `395364cf…2436`、`SCHEMA` `d3f7a424…b927`，密钥 `sup2api-ec2pool-2026`，`PREV_TRUST_SHA256` `2214b9b9…03ad`），165 秒；清单 `38c993ee64946ab6e7cde8660a03ee4815bc29dee76702517cf4c042d1270243`（amd64 `99e44c68…61b`、arm64 `6f109abc…f1c`），maintenance。核心二进制与 ovh 的构建逐字节相同。
+- 升级（`rel314/`，北京时间）：清单与 bundle 放进 `publish/sup2api/`，15:37:19 `docker compose exec -T node-a sub2api-shell import …`；`observe.py` 预检 primary-first-v1、只有 node-a、无阻断（expected_revision 18）；计划 `0307b401bc327db2b4191aaa02d7643e` 15:37:32.3→15:37:40.1（prepare、maintenance、stop、start-primary 时迁移 0125、admit、local），revision 18→20。**停服**：`127.0.0.1:18080` 与公网 sslip `/readyz` 503 15:37:37.2→15:37:40.2 约 3 秒。
+- 核验（`check.sh`、`chatgpt_test.py`、`evtypes.py`）：核心 0.1.314、网关 0.1.139；anthropic 0.4.0、codex 0.2.2、gemini 0.4.1、moderation 0.13.0、openai 0.5.0 active、restarts 0；商店是官方商店的 `6 正式 main 默认`、`5 测试 develop`；日志无 ERROR（WARN 只有 Landlock、验签关闭、内置包同版本不同内容这些已知项）；临时密钥（已删）chat、responses 非流式与流式都返回 200。`evtypes.py`（只打印事件名和时间）抓到过载流的真实顺序与错误对象（CHANGELOG 0.1.314），据此在 `a3b1dfdc5` 修正了扣住的判定，0.1.314 上开头的过载仍是 `response_committed`。
+- 回滚：经过 0125，只能恢复备份（没有另做），不回退，修复前进。
 
 ## 2026-11-21 核心 0.1.305 + 网关 0.1.139（停机重新部署，本机构建，先备份）
 

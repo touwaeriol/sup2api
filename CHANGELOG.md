@@ -8,7 +8,7 @@
 
 开发完成、尚未上线的改动。发布时改成发布日期的一节，补上提交、实际版本号和发布过程。
 
-### 核心：Responses 流开头就报错时按 HTTP 500 处理，可以换号（无迁移，滚动更新）
+### 核心：Responses 流开头就报错时按 HTTP 500 处理，可以换号（无迁移，滚动更新；第一版随 0.1.314 上线未生效，`a3b1dfdc5` 修正）
 
 - 起因：ChatGPT（Codex）上游自 11-24 起常先回 200，发出 `response.created`、`response.in_progress`、`keepalive`、`response.metadata`，几秒后再发 `error` 事件和 `response.failed`（`service_unavailable_error` / `server_is_overloaded`，“Our servers are currently overloaded”）就结束。核心已经把 200 和开头的事件转给了客户端，故障策略记 `response_committed`，不能换号；下游（例如 New API）收不到用量，记成“上游没有返回计费信息”的 0 费用请求。
 - 现在上游协议是 `openai.responses` 的 HTTP 流式回答（按上游协议生效，与插件无关：codex、openai、azure-openai、newapi、sub2api 等账号类型都算，入站是 Responses、经适配的 Chat Completions 或经转换的 Messages 都算），核心先扣住开头，读到回答开始（第一个 `response.` 开头、又不是 `response.created` / `in_progress` / `queued` / `metadata` 的事件，通常是 `response.output_item.added`）再把扣住的字节原样补在前面转发；`keepalive` 等不以 `response.` 开头的事件一起扣住（0.1.314 只扣 created、in_progress，真实上游在错误前还发 keepalive、metadata，修复没生效，0.1.315 改成现在的判定）。在这之前收到错误事件（`error`、无名的 `{"error":…}` 块、`response.failed`），一律按上游 HTTP 500 处理：插件分类，故障策略按 500 重试或换号（线上的 500–599 规则会接住），重试用完客户端收到 HTTP 500 和 `{"error": {...}}`（上游的错误对象）。回答开始之后的错误事件照旧留在流里。开头就断掉的流按传输错误处理，不再给客户端一个没有回答的 200。扣住的时间只受管理员配置的流式空闲超时和上游整体超时约束，没有写死的上限。代价：扣住期间客户端收不到响应头，首字节晚到回答开始（有首字节超时的下游要留意）；使用记录的首字时间（`first_token_ms`）因此记的是回答开始的时间，比以前的 `response.created` 晚；开头就断的流按传输错误处理，故障策略可能重放（上游若其实还在生成会多耗一次额度）。
@@ -16,6 +16,14 @@
 - 契约见 CONTRACTS §138。
 
 ## 2026-11-25
+
+### 核心 0.1.314：Responses 流开头扣住、开头的错误事件按 HTTP 500 处理（第一版，线上未生效）；ec2pool 升到带迁移 0125 的核心（`038a34977`；ovh 无迁移、滚动，ec2pool 经过 0125、停机；网关仍 0.1.139）
+
+- **内容**：在 0.1.313 之上只有 `038a34977`（CONTRACTS §138 的第一版：只扣 `response.created`、`response.in_progress`；流内错误事件整条打 WARN）。线上发现 ChatGPT 后端在错误前还发 `keepalive`、`response.metadata`，扣住在 `keepalive` 处就放行了，开头的过载错误照样 `response_committed`、不能换号，行为与 0.1.313 相同；修正在 `a3b1dfdc5`（见“未发布”一节，计划作 0.1.315）。WARN 日志这一半生效了：拿到了真实的过载事件（`error` 事件的 `error` 与 `response.failed` 的 `response.error` 都是 `{"type":"service_unavailable_error","code":"server_is_overloaded","message":"Our servers are currently overloaded. Please try again later.","param":null,"headers":{"retry-after":"359","retry-after-ms":"359000"}}`），流的顺序是 `response.created` → `response.in_progress` → `keepalive` → `response.metadata` → `error` → `response.failed`。
+- **构建**：两处各自照 0.1.313 / 0.1.311 的做法在本机从 develop `038a34977` 构建（ovh `stage/own-0.1.314/` 157 秒，用 `sup2api-plugins-2026` 签；ec2pool `/opt/sup2api-gw/stage/own-0.1.314/` 165 秒，用 `sup2api-ec2pool-2026` 签），核心与插件 CLI 两边逐字节相同（amd64 `sub2api` `ef89484b…fe2ad7`）。ovh 清单 `085591c7411c3a6493a4972f58a151177eb81153e26dbf8c57b33efb8b9090bb`（amd64 `789bbfc1…af8`、arm64 `4651ce9a…178`），rolling，schema `d3f7a424…b927` 不变；ec2pool 清单 `38c993ee64946ab6e7cde8660a03ee4815bc29dee76702517cf4c042d1270243`（amd64 `99e44c68…61b`、arm64 `6f109abc…f1c`），maintenance，schema `395364cf…2436` → `d3f7a424…b927`。内置插件版本不变。
+- **ovh 集群**（北京时间 2026-11-25 15:35–15:36，用户“同意发布 0.1.314 到 ovh 和 ec2pool”）：import 后预检 rolling-v1、无阻断（expected_revision 591），计划 `b670d19dc04d6236698bafc2db572683` 15:35:32.9→15:36:21.1，先 ccp 后 sup2api-1；ovh 3130 与 api.prophey.ai `/readyz` 全程 200（无 503）。没有关 new-api 渠道 392（无迁移滚动）。核验（`~/rel314/verify314.py`）：两节点核心 0.1.314、网关 0.1.139，7 个启用插件 active，商店频道、`market_stores` 正常，强制检测无更新；经 api.prophey.ai 的临时密钥（分组 9，已删）非流式、流式 `/v1/messages` 200、`billed`；两节点日志无 ERROR；期间真实流量 10 个请求都已计费。
+- **ec2pool**（北京时间 15:37）：先按 [0125 手册](next/deploy/rollback/0.1.313-market-0125-release.md) 只读预检，两条检查都是 0 行；`market_sources` 只有 `id=1 local-dev`（本地开发市场 `http://market:8080`），按演练结论不改名，接受 0125 删除；compose 里 `SUB2API_MARKET_SOURCES` 是空字符串（不是必填写法），没有改 compose、没有重建网关容器。没有另做数据库备份（用户规则）。import 后预检 primary-first-v1、无阻断（expected_revision 18），计划 `0307b401bc327db2b4191aaa02d7643e` 15:37:32.3→15:37:40.1，revision 18→20；`/readyz` 503 约 3.0 秒（15:37:37.2→15:37:40.2，公网 sslip 同样）。核验：核心 0.1.314，anthropic、codex 0.2.2、gemini、moderation、openai active、restarts 0；`market_sources` 是官方商店的 `6 正式 main 默认`、`5 测试 develop`，`market_stores` 一行，`plugin_versions.trust_level` 已加（36 个旧版本为 NULL）；日志无 ERROR；`chatgpt_test.py`（临时密钥，已删）chat 与 responses 的非流式、流式都返回 200，流式里有 5 个碰上过载，仍是 `response_committed`（上面说的未生效）。
+- 回退：ovh 无迁移，可滚动回 0.1.313（清单 `c32581bb…e324`）；ec2pool 经过 0125，只能恢复备份（没有另做），不回退，修复前进。
 
 ### 核心 0.1.313：插件商店（官方商店与频道、信任取自索引）、插件 id = 发布者 + key、账号测试提示缺少模型价格（`be1636496`；迁移 0125，单向，停机维护；网关仍 0.1.139）
 
@@ -27,7 +35,7 @@
 
 #### 升级须知
 
-- 发布与回退步骤见 [`next/deploy/rollback/0.1.313-market-0125-release.md`](next/deploy/rollback/0.1.313-market-0125-release.md)（ec2pool 还没升级，手册保留）。
+- 发布与回退步骤见 [`next/deploy/rollback/0.1.313-market-0125-release.md`](next/deploy/rollback/0.1.313-market-0125-release.md)（ec2pool 已于 2026-11-25 随 0.1.314 升级）。
 - 之后重建网关容器时，先换上不引用 `MARKET_SOURCES` 的 compose，再从两个节点的 `.env` 删掉 `MARKET_SOURCES`（新核心不读它）。
 
 本次发布包含的改动：
