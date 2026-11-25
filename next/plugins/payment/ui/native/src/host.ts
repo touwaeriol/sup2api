@@ -1,0 +1,187 @@
+import { definePluginHost } from '@sub2api/host'
+
+// Plugin-scoped host handed to register(); shared by all payment components,
+// with the types and calls of the plugin routes (/api/v1/p/payment/...).
+export const { setHost, useHost: usePaymentHost } = definePluginHost('payment')
+
+/** Human-readable message of a failed call (ApiError is an Error), else `fallback`. */
+export function errorMessage(e: unknown, fallback: string): string {
+  return e instanceof Error && e.message ? e.message : fallback
+}
+
+// ---- Settings (plugin settings, GET/PUT /plugins/payment/settings) ----
+
+/** A payment gateway the plugin talks to; each has its own credentials. */
+export type GatewayKey = 'epay' | 'stripe'
+
+/** A payment method users pick when topping up, served by one gateway (new-api PayMethods). */
+export interface PaymentMethod {
+  /** Type key sent to the gateway (epay: alipay / wxpay / qqpay / custom; stripe: stripe). */
+  type: string
+  name: string
+  gateway: GatewayKey
+  /** Icon key (alipay / wxpay / stripe / card / ...) or a color dot. */
+  icon: string
+  color?: string
+  /** Optional minimum top-up for this method (balance units); 0 = the global one. */
+  min_topup?: number
+  enabled: boolean
+}
+
+/** Discount by top-up amount: from `amount` up, pay `rate` of the price (0.95 = 5% off). */
+export interface DiscountTier {
+  amount: number
+  rate: number
+}
+
+export interface EpayConfig {
+  enabled: boolean
+  endpoint: string
+  merchant_id: string
+  key: string
+}
+
+export interface StripeConfig {
+  enabled: boolean
+  secret_key: string
+  webhook_secret: string
+  allow_promotion_codes: boolean
+}
+
+export interface PaymentSettingsValue {
+  enabled: boolean
+  /** Local currency the user pays in. */
+  currency: string
+  /** Local currency per 1 balance unit (USD). */
+  price: number
+  min_topup: number
+  max_topup: number
+  order_timeout_minutes: number
+  max_pending_orders: number
+  amount_options: number[]
+  discounts: DiscountTier[]
+  methods: PaymentMethod[]
+  epay: EpayConfig
+  stripe: StripeConfig
+}
+
+// ---- User side ----
+
+/** What the wallet's top-up card needs (GET /checkout). */
+export interface CheckoutInfo {
+  enabled: boolean
+  currency: string
+  price: number
+  min_topup: number
+  max_topup: number
+  amount_options: number[]
+  discounts: DiscountTier[]
+  methods: Array<Pick<PaymentMethod, 'type' | 'name' | 'icon' | 'color' | 'min_topup'>>
+}
+
+/** Price of a top-up before paying (POST /orders/preview). */
+export interface OrderPreview {
+  amount: number
+  /** Balance credited on top (promo code). */
+  bonus: number
+  discount_rate: number
+  /** What the user pays, in the local currency. */
+  pay_amount: number
+  original_pay_amount: number
+  promo_error?: string
+}
+
+export type OrderStatus = 'pending' | 'paid' | 'recharging' | 'completed' | 'failed' | 'expired' | 'cancelled'
+
+export interface Order {
+  id: number
+  out_trade_no: string
+  user_id: number
+  user_email?: string
+  amount: number
+  bonus: number
+  pay_amount: number
+  currency: string
+  method: string
+  method_name: string
+  gateway: GatewayKey
+  promo_code?: string
+  status: OrderStatus
+  trade_no?: string
+  failed_reason?: string
+  created_at: string
+  paid_at?: string
+  completed_at?: string
+  expires_at: string
+}
+
+/** POST /orders: where to pay. */
+export interface CreatedOrder {
+  out_trade_no: string
+  pay_url?: string
+  qr_code?: string
+  expires_at: string
+}
+
+// ---- Admin side ----
+
+export interface OrderStats {
+  today_amount: number
+  today_count: number
+  month_amount: number
+  pending_count: number
+  failed_count: number
+}
+
+export type RedeemStatus = 'unused' | 'used' | 'expired'
+
+export interface RedeemCode {
+  id: number
+  /** Masked except right after generating. */
+  code: string
+  value: number
+  status: RedeemStatus
+  used_by?: number
+  used_by_email?: string
+  used_at?: string
+  expires_at?: string
+  notes?: string
+  created_at: string
+}
+
+export interface PromoCode {
+  id: number
+  code: string
+  bonus_amount: number
+  max_uses: number
+  used_count: number
+  status: 'active' | 'disabled'
+  expires_at?: string
+  notes?: string
+  created_at: string
+}
+
+const api = () => usePaymentHost().pluginApi
+
+export const paymentApi = {
+  checkout: () => api().get<CheckoutInfo>('/checkout'),
+  preview: (body: { amount: number; method: string; promo_code?: string }) => api().post<OrderPreview>('/orders/preview', body),
+  createOrder: (body: { amount: number; method: string; promo_code?: string }) => api().post<CreatedOrder>('/orders', body),
+  myOrders: (query: Record<string, string>) => api().list<Order>('/orders', query),
+  order: (outTradeNo: string) => api().get<Order>(`/orders/${encodeURIComponent(outTradeNo)}`),
+  cancelOrder: (outTradeNo: string) => api().post<Order>(`/orders/${encodeURIComponent(outTradeNo)}/cancel`, {}),
+  redeem: (code: string) => api().post<{ amount: number }>('/redeem', { code }),
+
+  adminOrders: (query: Record<string, string>) => api().list<Order>('/admin/orders', query),
+  orderStats: () => api().get<OrderStats>('/admin/orders/stats'),
+  completeOrder: (id: number) => api().post<Order>(`/admin/orders/${id}/complete`, {}),
+
+  redeemCodes: (query: Record<string, string>) => api().list<RedeemCode>('/redeem-codes', query),
+  createRedeemCodes: (body: { count: number; value: number; expires_at?: string; notes?: string }) => api().post<{ codes: string[] }>('/redeem-codes', body),
+  voidRedeemCode: (id: number) => api().del<void>(`/redeem-codes/${id}`),
+
+  promoCodes: (query: Record<string, string>) => api().list<PromoCode>('/promo-codes', query),
+  createPromoCode: (body: Partial<PromoCode>) => api().post<PromoCode>('/promo-codes', body),
+  updatePromoCode: (id: number, body: Partial<PromoCode>) => api().patch<PromoCode>(`/promo-codes/${id}`, body),
+  deletePromoCode: (id: number) => api().del<void>(`/promo-codes/${id}`)
+}

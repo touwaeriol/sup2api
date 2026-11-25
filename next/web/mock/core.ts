@@ -477,7 +477,10 @@ const MENU_PERMS: Record<string, string | string[]> = {
   '/me/wallet': 'balance:self:read',
   '/ledger': 'balance:all:read',
   '/p/guard/dashboard': 'plugin.guard:stats:read',
-  '/p/dynweight/dashboard': 'plugin.dynweight:dynweight:read'
+  '/p/dynweight/dashboard': 'plugin.dynweight:dynweight:read',
+  '/p/payment/orders': 'plugin.payment:config:manage',
+  '/p/payment/redeem': 'plugin.payment:config:manage',
+  '/p/payment/promo': 'plugin.payment:config:manage'
 }
 
 on('GET', '/me/menus', (req) => {
@@ -527,7 +530,12 @@ const MENUS = [
   {
     section: 'finance',
     label: L('Finance', '财务'),
-    items: [{ id: 'ledger', label: L('Balance ledger', '余额流水'), icon: 'balance', path: '/ledger' }]
+    items: [
+      { id: 'ledger', label: L('Balance ledger', '余额流水'), icon: 'balance', path: '/ledger' },
+      { id: 'payment:orders', label: L('Top-up orders', '充值订单'), icon: 'balance', path: '/p/payment/orders', plugin_key: 'payment' },
+      { id: 'payment:redeem', label: L('Redeem codes', '兑换码'), icon: 'key', path: '/p/payment/redeem', plugin_key: 'payment' },
+      { id: 'payment:promo', label: L('Promo codes', '优惠码'), icon: 'price', path: '/p/payment/promo', plugin_key: 'payment' }
+    ]
   },
   {
     section: 'users',

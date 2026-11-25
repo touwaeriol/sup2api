@@ -7,6 +7,7 @@ import { dynweightAsset, dynweightUIPlugin } from './dynweight'
 import { codexAsset, codexUIPlugin } from './codex'
 import { controlsAsset, controlsUIPlugin } from './controls'
 import { mailerAsset, mailerUIPlugin } from './mailer'
+import { paymentAsset, paymentUIPlugin } from './payment'
 import { apiKeyFormAsset, apiKeyFormUIPlugins } from './apiKeyForms'
 import { displayId, publisherOf } from './pluginIds'
 
@@ -31,6 +32,7 @@ const uiPlugins = [
   codexUIPlugin,
   controlsUIPlugin,
   mailerUIPlugin,
+  paymentUIPlugin,
   ...apiKeyFormUIPlugins,
   {
     key: 'guard',
@@ -182,6 +184,7 @@ export function pluginAsset(pathname: string): { type: string; body: string | Bu
   if (key === 'codex') return codexAsset(path)
   if (key === 'controls_demo') return controlsAsset(path)
   if (key === 'mailer') return mailerAsset(path)
+  if (key === 'payment') return paymentAsset(path)
   if (apiKeyFormUIPlugins.some((p) => p.key === key)) return apiKeyFormAsset(key, path)
   if (key === 'guard' && path.startsWith('ui/native/')) {
     const rel = normalize(path.slice('ui/native/'.length))
