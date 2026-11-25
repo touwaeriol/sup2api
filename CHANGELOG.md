@@ -8,12 +8,22 @@
 
 开发完成、尚未上线的改动。发布时改成发布日期的一节，补上提交、实际版本号和发布过程。
 
-### 核心：插件的 `client_status` 生效；codex 0.2.3：`server_is_overloaded` 回给客户端 529（无迁移，滚动更新）
+## 2026-11-25
+
+### 核心 0.1.316：插件的 `client_status` 生效，codex 0.2.3 把 `server_is_overloaded` 回成 529（`83f734cb3`；无迁移；ovh 滚动、ec2pool 单节点；网关仍 0.1.139）
+
+- **构建**：两处照 0.1.315 的做法在本机从 develop `83f734cb3` 构建（ovh `stage/own-0.1.316/` 158 秒，`sup2api-plugins-2026`；ec2pool 162 秒，`sup2api-ec2pool-2026`），核心二进制两边逐字节相同（amd64 `sub2api` `6d59bdc1…ff0a`），内置 codex 0.2.3（包摘要两边都是 `ed365994…9b99`，只差签名）。ovh 清单 `93fe853040de1f504322c3b38b1e205aac5bf79669dbebc33a1186c5a3c45f14`（amd64 `fc4bcc1f…0b39`、arm64 `1acfd8f4…0271`），ec2pool 清单 `93dafeb00beeaa4a2a4927841baa8e93cd9d341de5bf950f20a8ece4980454bb`（amd64 `1185e9b2…b24b`、arm64 `86980084…cab3`），都是 rolling，schema 不变。GitHub next CI 在 `83f734cb3` 上 plugins 任务失败（dynweight、guard、moderation、payment 四个用数据库的插件，CI 里内嵌 PostgreSQL 的问题），本地对真实 PostgreSQL 16 跑同一个检查全部通过；codex 0.2.3 的 Release `plugin-codex-v0.2.3` 已由 plugin-release 发出，并登记到 touwaeriol/sup2api-plugin 的 develop（`cdf865f`）。
+- **ovh 集群**（北京时间 2026-11-25 19:55–19:56，用户“合并 pr，更新服务”）：import 后预检 rolling-v1、无阻断（expected_revision 595），计划 `5a96c262c578331dd2bee2a80afb8ac9` 19:55:27.7→19:56:25.1，ovh 3130 与 api.prophey.ai `/readyz` 全程 200；没有关 new-api 渠道 392。核验：两节点核心 0.1.316，codex 0.2.3 等 7 个启用插件 active；临时密钥（已删）非流式、流式 `/v1/messages` 200、`billed`；两节点日志无 ERROR。
+- **ec2pool**（北京时间 19:57）：import 后预检 primary-first-v1（单节点，expected_revision 22），计划 `385356769033597463fa127f22a335bf` 19:57:29.3→19:57:37.1；`/readyz` 503 约 3.0 秒（19:57:34.3→19:57:37.3）。核心 0.1.316，codex 0.2.3（内置同步 19:57:42 升级，rollout 23）等 5 个启用插件 active、restarts 0，日志无 ERROR；`chatgpt_test.py`（临时密钥，已删）11 个请求全部 200、`billed`。
+- **观察**（ec2pool，19:57–20:10）：外部 New API 的 key 1 共 118 个请求，108 个成功；失败 10 个里 7 个是 `server_is_overloaded`，客户端收到 **529**（使用记录状态 529、`upstream_error`），另有 `server_error` 的 502 等。这些 529 都是 attempts 1、没有换号：北京时间 19:58:07 超级管理员（user 1，控制台）把故障策略改成了 revision 2、`retry_enabled: false`（不是发布脚本改的；历史在 `failure_policy_history`），之后上游 5xx 一律直接返回。19:58 之前（revision 1）同类过载会先换号。
+- 回退：无迁移，可滚动回 0.1.315（ovh 清单 `22bd9df8…3f08`、ec2pool `ef85b6ef…f0ea`）。
+
+本次发布包含的改动：
+
+#### 插件的 `client_status` 生效；codex 0.2.3：`server_is_overloaded` 回给客户端 529（`83f734cb3`；CONTRACTS §139）
 
 - **核心**（CONTRACTS §139）：插件在 `ClassifyError` 里给出的 `client_status`（400–599）现在就是上游错误回答的回复状态和使用记录的状态，有没有故障策略都一样；以前核心总用上游状态覆盖它。故障策略照旧按上游状态匹配，重试、换号不变；回复 body 照旧是上游原样。现有其他插件都不设它，行为不变。
 - **codex 0.2.3**（[PLUGIN-CODEX.md](next/docs/PLUGIN-CODEX.md) 第 24 节）：错误码 `server_is_overloaded`（ChatGPT 后端过载，开头的流内错误事件被核心按 500 交来，或只流式收集时按 502）给 `client_status` 529，其余分类不变（5xx 冷却 10 秒、换号）。换号用完时客户端收到 HTTP 529，body 是上游错误对象（`{"error":{"message":"Our servers are currently overloaded. Please try again later.","type":"service_unavailable_error","code":"server_is_overloaded",…}}`）。需要带 §139 的核心才生效；在旧核心上照旧是 500（只流式收集时 502）。经转换的 Anthropic Messages 入站同样是 529，body 是上游的 OpenAI 形状错误体（§26.6，不重新包装成 `overloaded_error`）；WebSocket 轮次不受影响。
-
-## 2026-11-25
 
 ### 核心 0.1.315：Responses 流扣到回答开始，开头的过载错误按 HTTP 500 换号（`22e17fd6f`，含 `a3b1dfdc5`；无迁移；ovh 滚动、ec2pool 单节点；网关仍 0.1.139）
 

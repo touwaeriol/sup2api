@@ -2,7 +2,7 @@
 
 ec2pool（AWS us-west-2，x86_64）上的 sup2api 是一个独立集群，和 ovh/clicodeplus 集群不共用数据库。同一台机器上还有 sakura-2api、cli-proxy-api、antigravity 和 kin 容器，与 sup2api 无关，操作时不要碰。
 
-## 现状（2026-11-25 起）：网关托管，单节点，网关 0.1.139、核心 0.1.315（本机构建）
+## 现状（2026-11-25 起）：网关托管，单节点，网关 0.1.139、核心 0.1.316（本机构建）
 
 > 0.1.306–0.1.311 的发布记录在 `/opt/sup2api-gw/rel306`、`rel307`、`rel311` 与 `stage/own-<版本>/`，本文件没有逐条补录。
 
@@ -16,6 +16,15 @@ ec2pool（AWS us-west-2，x86_64）上的 sup2api 是一个独立集群，和 ov
 - 内置插件签名密钥：核心 0.1.298 起在没设 `SUB2API_BUILTIN_TRUST_KEY` 时自己读 `builtin/trust.pub`，compose 里不再设这个变量（0.1.297 期间手动设过，备份 `compose.yml.bak-with-trustkey`；回到 0.1.297 要加回去）。
 - 本机构建的内置包用只留在这台机器上的插件密钥 `sup2api-ec2pool-2026` 签名（`keys/plugin-sign/`，0700；公钥 `YnVgIX8xaLoG1A9SgZ8nGIp+vl/opLYEK/UbxRwE+Ts=`），ovh 的 `sup2api-plugins-2026` 私钥没有搬过来。分组 `chatGPT`（id 1）下有 73 个 `codex_device` 账号（id 2–75），是有真实流量的环境。`SUB2API_PLUGIN_MAX_MEMORY_MB=1024` 仍设着（0.1.304 起默认不封顶，平台插件要经手完整请求体，见 CHANGELOG 0.1.304 升级须知）。
 - 插件：`SUB2API_PLUGIN_VERIFY_SIGNATURES=false`（沿用旧部署）；已装插件包原来由旧核心用开发密钥 `sub2api-dev` 签名，Release 内置包用 `sup2api-plugins-2026` 签名，同版本的包保留原样。
+
+## 2026-11-25 核心 0.1.316（无迁移，本机构建，codex 0.2.3）
+
+- 用户 11:47 UTC 原话“合并 pr，更新服务”。
+- 构建：`src316`（develop `83f734cb3`），`stage/own-0.1.316/`（照 own-0.1.315），162 秒；清单 `93dafeb00beeaa4a2a4927841baa8e93cd9d341de5bf950f20a8ece4980454bb`（amd64 `1185e9b2…b24b`、arm64 `86980084…cab3`），内置 codex 0.2.3 用 `sup2api-ec2pool-2026` 签名。
+- 升级（`rel316/`，北京时间）：19:57:19 import，预检 primary-first-v1（expected_revision 22），计划 `385356769033597463fa127f22a335bf` 19:57:29.3→19:57:37.1；`/readyz` 503 19:57:34.3→19:57:37.3 约 3 秒。内置同步 19:57:42 把 codex 升到 0.2.3（rollout 23）。
+- 核验：核心 0.1.316，5 个启用插件 active、restarts 0，日志无 ERROR；`chatgpt_test.py` 11 个请求全部 200、`billed`。
+- 观察 19:57–20:10：key 1 的 `server_is_overloaded` 失败 7 个，客户端收到 529（使用记录 529），都没有换号，因为 19:58:07 超级管理员在控制台把故障策略改成 revision 2、`retry_enabled: false`（`settings.failure_policy`，旧版本在 `failure_policy_history`）。
+- 回滚：无迁移，可用 0.1.315 清单 `ef85b6ef…f0ea` 建计划。
 
 ## 2026-11-25 核心 0.1.315（无迁移，本机构建）
 
