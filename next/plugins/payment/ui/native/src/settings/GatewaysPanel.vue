@@ -74,8 +74,5 @@ const on = (g: GatewayKey) => !!props.form.get(`${g}.enabled`)
         <SCopyButton :text="urls.stripe" icon-only :label="t('action.copy')" />
       </div>
     </SSettingRow>
-    <SSettingRow prop="stripe.allow_promotion_codes" :label="t('settings.gateways.stripe.promo')" :description="t('settings.gateways.stripe.promoHelp')">
-      <SSwitch v-bind="bindSwitch(form, 'stripe.allow_promotion_codes')" />
-    </SSettingRow>
   </SSettingsGroup>
 </template>

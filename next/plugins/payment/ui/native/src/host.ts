@@ -48,7 +48,6 @@ export interface StripeConfig {
   enabled: boolean
   secret_key: string
   webhook_secret: string
-  allow_promotion_codes: boolean
 }
 
 export interface PaymentSettingsValue {
@@ -94,41 +93,7 @@ export interface OrderPreview {
   promo_error?: string
 }
 
-export type OrderStatus = 'pending' | 'paid' | 'recharging' | 'completed' | 'failed' | 'expired' | 'cancelled' | 'refunding' | 'refunded' | 'partially_refunded'
-
-/** gateway: through the gateway's refund API (Stripe); manual: refunded at the provider by hand, only recorded here (Epay). */
-export type RefundMode = 'gateway' | 'manual'
-
-/** One refund of an order, kept as its audit record. */
-export interface OrderRefund {
-  id: number
-  created_at: string
-  /** Balance units refunded (USD). */
-  amount: number
-  /** The matching share of what the user paid, in the order's currency. */
-  pay_amount: number
-  reason: string
-  /** Email of the admin who refunded. */
-  operator: string
-  mode: RefundMode
-  deduct_balance: boolean
-  /** Balance taken back from the user: the amount, plus the bonus when the order is refunded in full. */
-  deducted_amount: number
-  /** pending while the gateway has not confirmed the refund. */
-  status: 'pending' | 'succeeded' | 'failed'
-}
-
-/** POST /admin/orders/:id/refund. */
-export interface RefundRequest {
-  /** Balance units, at most amount − refunded_amount. */
-  amount: number
-  reason: string
-  /** Take the refund back from the user's balance (core ledger debit). */
-  deduct_balance: boolean
-  /** Debit even below zero; without it a short balance is 409 insufficient_balance (details: balance, deduct). */
-  force: boolean
-  mode: RefundMode
-}
+export type OrderStatus = 'pending' | 'paid' | 'recharging' | 'completed' | 'failed' | 'expired' | 'cancelled'
 
 export interface Order {
   id: number
@@ -144,16 +109,13 @@ export interface Order {
   gateway: GatewayKey
   promo_code?: string
   status: OrderStatus
+  /** The gateway's transaction number (Epay trade_no, Stripe PaymentIntent id), for reconciliation. */
   trade_no?: string
   failed_reason?: string
   created_at: string
   paid_at?: string
   completed_at?: string
   expires_at: string
-  /** Balance units refunded so far (USD). */
-  refunded_amount: number
-  /** Refund records, newest first (admin routes only). */
-  refunds?: OrderRefund[]
   /** Where to pay, while pending (the user's own orders only): "continue paying". */
   pay_url?: string
   qr_code?: string
@@ -218,8 +180,6 @@ export const paymentApi = {
 
   adminOrders: (query: Record<string, string>) => api().list<Order>('/admin/orders', query),
   orderStats: () => api().get<OrderStats>('/admin/orders/stats'),
-  completeOrder: (id: number) => api().post<Order>(`/admin/orders/${id}/complete`, {}),
-  refundOrder: (id: number, body: RefundRequest) => api().post<Order>(`/admin/orders/${id}/refund`, body),
 
   redeemCodes: (query: Record<string, string>) => api().list<RedeemCode>('/redeem-codes', query),
   createRedeemCodes: (body: { count: number; value: number; expires_at?: string; notes?: string }) => api().post<{ codes: string[] }>('/redeem-codes', body),

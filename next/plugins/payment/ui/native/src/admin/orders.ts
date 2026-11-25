@@ -1,12 +1,10 @@
 import { computed, ref } from 'vue'
 import type { FilterChipItem, RangeKey, SelectOption } from '@sub2api/ui'
-import { paymentApi, usePaymentHost, type Order } from '../host'
-import { formatUsd } from '../format'
+import { usePaymentHost } from '../host'
 import { loadMethods } from '../components/methodCatalog'
-import { confirmRun } from './actions'
 import { ORDER_STATUSES } from '../components/status'
 
-// Filters of the orders page and the manual completion of an order.
+// Filters of the orders page.
 
 export const ORDER_RANGES: RangeKey[] = ['all', 'today', '7d', '30d', 'month', 'lastMonth', 'custom']
 
@@ -38,19 +36,4 @@ export function useOrderFilters(filters: OrderFilters) {
   }
 
   return { range, statusOptions, methodOptions, chips, activeCount, advancedCount, dirty, reset }
-}
-
-/** Confirms and completes an order by hand: the user is credited the order's amount and bonus. */
-export function completeOrder(o: Order): Promise<boolean> {
-  const t = usePaymentHost().t
-  const credit = o.bonus ? t('admin.orders.creditWithBonus', { amount: formatUsd(o.amount + o.bonus), bonus: formatUsd(o.bonus) }) : formatUsd(o.amount)
-  return confirmRun(
-    {
-      title: t('admin.orders.completeTitle'),
-      message: t('admin.orders.completeConfirm', { no: o.out_trade_no, user: o.user_email || `#${o.user_id}`, credit }),
-      confirmText: t('admin.orders.complete')
-    },
-    () => paymentApi.completeOrder(o.id),
-    t('admin.orders.completed')
-  )
 }

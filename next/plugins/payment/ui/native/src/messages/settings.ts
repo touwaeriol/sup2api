@@ -127,9 +127,7 @@ export default {
         webhookSecret: 'Webhook signing secret',
         webhookSecretHelp: 'Signing secret (whsec_…) of the endpoint below.',
         webhook: 'Webhook endpoint',
-        webhookHelp: 'Add this endpoint in the Stripe dashboard and subscribe to:',
-        promo: 'Allow promotion codes',
-        promoHelp: 'Users can enter Stripe promotion codes on the checkout page.'
+        webhookHelp: 'Add this endpoint in the Stripe dashboard and subscribe to:'
       }
     }
   },
@@ -260,9 +258,7 @@ export default {
         webhookSecret: 'Webhook 签名密钥',
         webhookSecretHelp: '下面这个端点的签名密钥（whsec_…）。',
         webhook: 'Webhook 地址',
-        webhookHelp: '在 Stripe 后台添加这个端点，并订阅以下事件：',
-        promo: '允许输入促销码',
-        promoHelp: '用户可以在 Stripe 支付页输入 Stripe 促销码。'
+        webhookHelp: '在 Stripe 后台添加这个端点，并订阅以下事件：'
       }
     }
   }

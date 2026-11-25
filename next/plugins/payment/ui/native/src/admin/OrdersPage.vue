@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { SButton, SDateRange, SDateTime, SFilterBar, SFilterChips, SInput, SPageHeader, SPagination, SRowAction, SSelect, STable, type TableColumn } from '@sub2api/ui'
+import { SButton, SDateRange, SDateTime, SFilterBar, SFilterChips, SInput, SPageHeader, SPagination, SSelect, STable, type TableColumn } from '@sub2api/ui'
 import { paymentApi, usePaymentHost, type Order, type OrderStats as Stats } from '../host'
 import { formatLocal, formatUsd } from '../format'
 import MethodName from '../components/MethodName.vue'
@@ -8,14 +8,11 @@ import { useMethodCatalog } from '../components/methodCatalog'
 import OrderDetailDrawer from './OrderDetailDrawer.vue'
 import OrderStats from './OrderStats.vue'
 import PayStatusBadge from '../components/PayStatusBadge.vue'
-import RefundModal from './RefundModal.vue'
-import { actionsColumn, columnOf, useAdminList } from './actions'
-import { ORDER_RANGES, completeOrder, emptyOrderFilters, useOrderFilters, type OrderFilters } from './orders'
-import { completable } from '../components/status'
+import { columnOf, useAdminList } from './actions'
+import { ORDER_RANGES, emptyOrderFilters, useOrderFilters, type OrderFilters } from './orders'
 
-// Top-up orders (admin): totals, filters, the list, an order's detail, the
-// manual completion of an order that was paid but not credited and the
-// refund of a credited one.
+// Top-up orders (admin, read-only): totals, filters, the list and an order's
+// detail for reconciling with the gateway.
 const host = usePaymentHost()
 const t = host.t
 
@@ -53,8 +50,7 @@ const columns = computed<TableColumn[]>(() => {
     col('method', { mobile: 'meta' }),
     col('status', { mobile: 'status' }),
     col('created_at', { mobile: 'meta' }),
-    col('completed_at', { mobile: 'meta' }),
-    actionsColumn()
+    col('completed_at', { mobile: 'meta' })
   ]
 })
 
@@ -63,19 +59,6 @@ const detailOpen = ref(false)
 function openDetail(o: Order) {
   detail.value = o
   detailOpen.value = true
-}
-
-async function complete(o: Order) {
-  if (!(await completeOrder(o))) return
-  detailOpen.value = false
-  refresh()
-}
-
-const refundOpen = ref(false)
-// The drawer stays open on the refunded order, its new refund record on top.
-function refunded(o: Order) {
-  detail.value = o
-  refresh()
 }
 </script>
 
@@ -125,19 +108,12 @@ function refunded(o: Order) {
       <template #cell-status="{ row }"><PayStatusBadge kind="order" :status="row.status" /></template>
       <template #cell-created_at="{ row }"><SDateTime :value="row.created_at" mode="absolute" muted /></template>
       <template #cell-completed_at="{ row }"><SDateTime :value="row.completed_at" mode="absolute" muted /></template>
-      <template #cell-actions="{ row }">
-        <span class="payment-row-actions">
-          <SRowAction :label="t('admin.orders.detail')" @click="openDetail(row)" />
-          <SRowAction v-if="completable(row.status)" :label="t('admin.orders.complete')" tone="info" @click="complete(row)" />
-        </span>
-      </template>
       <template #footer>
         <SPagination v-model:page="list.page.value" v-model:page-size="list.pageSize.value" :total="list.total.value" />
       </template>
     </STable>
 
-    <OrderDetailDrawer v-model:open="detailOpen" :order="detail" @complete="complete" @refund="refundOpen = true" />
-    <RefundModal v-model:open="refundOpen" :order="detail" @refunded="refunded" />
+    <OrderDetailDrawer v-model:open="detailOpen" :order="detail" />
   </div>
 </template>
 

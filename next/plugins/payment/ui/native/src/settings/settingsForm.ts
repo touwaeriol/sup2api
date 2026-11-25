@@ -31,7 +31,7 @@ export const SETTINGS_DEFAULTS: Partial<SettingsModel> = {
   discounts: [],
   methods: [],
   epay: { enabled: false, endpoint: '', merchant_id: '', key: '' },
-  stripe: { enabled: false, secret_key: '', webhook_secret: '', allow_promotion_codes: false }
+  stripe: { enabled: false, secret_key: '', webhook_secret: '' }
 }
 
 /** Currencies users pay in. */

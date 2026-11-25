@@ -70,7 +70,7 @@ const settings = {
     { type: 'stripe', name: 'Stripe', gateway: 'stripe', icon: 'stripe', color: '#635bff', min_topup: 5, enabled: false }
   ],
   epay: { enabled: true, endpoint: 'https://pay.example.com', merchant_id: '1001', key: '******' },
-  stripe: { enabled: false, secret_key: '', webhook_secret: '', allow_promotion_codes: false }
+  stripe: { enabled: false, secret_key: '', webhook_secret: '' }
 }
 
 plugins.set('payment', {
@@ -97,10 +97,15 @@ const STATUSES = ['completed', 'completed', 'completed', 'pending', 'completed',
 const EMAILS = ['admin@example.com', 'alice@example.com', 'bob@example.com', 'carol@example.com']
 const AMOUNTS = [10, 20, 50, 100, 200, 500]
 
+// Mostly Epay (Alipay / WeChat Pay); every sixth order went through Stripe before it was switched off.
+const seedMethod = (i: number) => settings.methods[i % 6 === 5 ? 3 : i % 2]
+// The gateway's transaction number: an Epay trade_no, or a Stripe PaymentIntent id.
+const seedTradeNo = (gateway: string, i: number) => (gateway === 'stripe' ? `pi_3QxK${(0x9f2c1 + i * 4099).toString(36)}Lm2R` : `2026112522001${400000 + i}`)
+
 function seedOrder(i: number): any {
   const status = STATUSES[i % STATUSES.length]
   const amount = AMOUNTS[i % AMOUNTS.length]
-  const method = settings.methods[i % 2]
+  const method = seedMethod(i)
   const created = -3600 * (i * 5 + 1)
   return {
     id: 500 - i,
@@ -116,13 +121,12 @@ function seedOrder(i: number): any {
     gateway: method.gateway,
     promo_code: i % 7 === 0 ? 'WELCOME10' : undefined,
     status,
-    trade_no: status === 'completed' ? `2026112522001${400000 + i}` : undefined,
+    trade_no: status === 'completed' ? seedTradeNo(method.gateway, i) : undefined,
     failed_reason: status === 'failed' ? 'ledger credit rejected: daily limit reached' : undefined,
     created_at: now(created),
     paid_at: status === 'completed' ? now(created + 40) : undefined,
     completed_at: status === 'completed' ? now(created + 41) : undefined,
-    expires_at: now(created + 1800),
-    refunded_amount: 0
+    expires_at: now(created + 1800)
   }
 }
 
@@ -171,7 +175,8 @@ on('POST', '/p/payment/orders', (req) => {
 
 function filterOrders(query: Record<string, string>, base: any[]) {
   const q = (query.q || '').toLowerCase()
-  return base.filter((o) => (!query.status || o.status === query.status) && (!query.method || o.method === query.method) && (!q || o.out_trade_no.includes(q) || String(o.user_email).includes(q)))
+  const hit = (o: any) => [o.out_trade_no, o.trade_no, o.user_email].some((v) => String(v ?? '').toLowerCase().includes(q))
+  return base.filter((o) => (!query.status || o.status === query.status) && (!query.method || o.method === query.method) && (!q || hit(o)))
 }
 
 on('GET', '/p/payment/orders', (req) => paginate(filterOrders(req.query, orders.filter((o) => o.user_id === 1)), req.query))
@@ -192,70 +197,6 @@ on('GET', '/p/payment/admin/orders/stats', () => {
   const sum = (xs: any[]) => xs.reduce((s, o) => s + o.amount, 0)
   return { today_amount: sum(done.slice(0, 4)), today_count: 4, month_amount: sum(done), pending_count: orders.filter((o) => o.status === 'pending').length, failed_count: orders.filter((o) => o.status === 'failed').length }
 })
-
-on('POST', '/p/payment/admin/orders/:id/complete', (req) => {
-  const o = orders.find((x) => x.id === Number(req.params.id))
-  if (!o || !['pending', 'expired', 'failed'].includes(o.status)) return fail(409, 'conflict', '这个订单不能补单')
-  Object.assign(o, { status: 'completed', paid_at: now(), completed_at: now(), trade_no: o.trade_no || 'manual' })
-  return o
-})
-
-// ---- refunds ----
-
-// Stripe orders refund through its API, Epay ones are refunded by hand and only recorded.
-const REFUND_MODES: Record<string, string> = { stripe: 'gateway', epay: 'manual' }
-const STRIPE = { method: 'stripe', method_name: 'Stripe', gateway: 'stripe' }
-// Balances the refund debits; bob's is short, to show the 409 without force.
-const balances: Record<string, number> = { 'admin@example.com': 1000, 'alice@example.com': 260, 'bob@example.com': 3, 'carol@example.com': 88 }
-const cents = (n: number) => Math.round(n * 100) / 100
-const refundLeft = (o: any) => cents(o.amount - o.refunded_amount)
-// The bonus is taken back with the refund that leaves nothing on the order.
-const refundDeduct = (o: any, b: any) => (b.deduct_balance ? cents(b.amount + (b.amount >= refundLeft(o) ? o.bonus : 0)) : 0)
-const invalid = (field: string, message: string) => fail(400, 'invalid_argument', message, { fields: [{ field, message }] })
-let refundSeq = 0
-
-/** Debits the user, appends the audit record and moves the order on (refunding while the gateway has not confirmed). */
-function recordRefund(o: any, b: any, status = 'succeeded', at = now()) {
-  const deducted = refundDeduct(o, b)
-  const all = b.amount >= refundLeft(o)
-  const pay = cents((o.pay_amount * b.amount) / o.amount)
-  const record = { id: ++refundSeq, created_at: at, amount: b.amount, pay_amount: pay, reason: b.reason, operator: EMAILS[0], mode: b.mode, deduct_balance: !!b.deduct_balance, deducted_amount: deducted, status }
-  balances[o.user_email] = cents((balances[o.user_email] ?? 0) - deducted)
-  o.refunds = [record, ...(o.refunds ?? [])]
-  o.refunded_amount = cents(o.refunded_amount + b.amount)
-  o.status = status === 'pending' ? 'refunding' : all ? 'refunded' : 'partially_refunded'
-}
-
-function refundError(o: any, b: any) {
-  if (!o || !['completed', 'partially_refunded'].includes(o.status)) return fail(409, 'conflict', '这个订单不能退款')
-  const left = refundLeft(o)
-  if (!(b.amount > 0 && b.amount <= left)) return invalid('amount', `退款金额须在 0 到 ${left} 之间`)
-  if (!b.reason) return invalid('reason', '请填写退款原因')
-  if (b.mode !== REFUND_MODES[o.gateway]) return fail(400, 'invalid_argument', '退款方式与订单的支付网关不符')
-  const deduct = refundDeduct(o, b)
-  const balance = balances[o.user_email] ?? 0
-  if (deduct > balance && !b.force) return fail(409, 'insufficient_balance', '用户余额不足，勾选强制可扣成负数', { balance, deduct })
-  return null
-}
-
-on('POST', '/p/payment/admin/orders/:id/refund', (req) => {
-  const o = orders.find((x) => x.id === Number(req.params.id))
-  const b = { ...req.body, amount: cents(Number(req.body?.amount)), reason: String(req.body?.reason ?? '').trim() }
-  const err = refundError(o, b)
-  if (err) return err
-  recordRefund(o, b)
-  return o
-})
-
-// Seeds: a Stripe order to refund, one partly refunded by hand, one refunded in full (bonus included), one still refunding.
-function seedRefunds() {
-  const [, alice20, , , admin200, , , carol20, , alice100] = orders
-  for (const o of [alice20, carol20, alice100]) Object.assign(o, STRIPE)
-  recordRefund(admin200, { amount: 50, reason: '用户反馈多充了，协商退回 50', mode: 'manual', deduct_balance: true }, 'succeeded', now(-3600 * 18))
-  recordRefund(carol20, { amount: 20, reason: '误充，用户申请全额退款', mode: 'gateway', deduct_balance: true }, 'succeeded', now(-3600 * 30))
-  recordRefund(alice100, { amount: 100, reason: '服务中断期间的充值，全额退回', mode: 'gateway', deduct_balance: true }, 'pending', now(-600))
-}
-seedRefunds()
 
 // ---- redeem codes ----
 
