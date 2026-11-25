@@ -8,14 +8,24 @@
 
 开发完成、尚未上线的改动。发布时改成发布日期的一节，补上提交、实际版本号和发布过程。
 
-### 核心：Responses 流开头就报错时按 HTTP 500 处理，可以换号（无迁移，滚动更新；第一版随 0.1.314 上线未生效，`a3b1dfdc5` 修正）
+## 2026-11-25
+
+### 核心 0.1.315：Responses 流扣到回答开始，开头的过载错误按 HTTP 500 换号（`22e17fd6f`，含 `a3b1dfdc5`；无迁移；ovh 滚动、ec2pool 单节点；网关仍 0.1.139）
+
+- **构建**：两处照 0.1.314 的做法在本机从 develop `22e17fd6f` 构建（ovh `stage/own-0.1.315/` 157 秒，`sup2api-plugins-2026`；ec2pool `/opt/sup2api-gw/stage/own-0.1.315/` 167 秒，`sup2api-ec2pool-2026`），核心二进制两边逐字节相同（amd64 `sub2api` `1e1e21da…9445`）。ovh 清单 `22bd9df8f0c446f39ad5b7c55e5bd65456ec4af3092732fbd1dd49a961993f08`（amd64 `28516fac…ca63`、arm64 `909073f4…33da`），ec2pool 清单 `ef85b6efda27136a7c93ec5be4f488afd65a546302dfa8202162f45d568af0ea`（amd64 `a73ce738…c635`、arm64 `0fcc3f85…aab8`），都是 rolling，schema `d3f7a424…b927` 不变；内置插件版本不变。
+- **ovh 集群**（北京时间 2026-11-25 16:09–16:10，用户“同意发布 0.1.315 到 ovh 和 ec2pool”）：import 后预检 rolling-v1、无阻断（expected_revision 593），计划 `a922afa6602594f2be175397e12959c7` 16:09:30.6→16:10:18.1，ovh 3130 与 api.prophey.ai `/readyz` 全程 200；没有关 new-api 渠道 392。核验（`~/rel315/verify315.py`）：两节点核心 0.1.315，7 个启用插件 active，强制检测无更新；临时密钥（已删）非流式、流式 `/v1/messages` 200、`billed`；两节点日志无 ERROR。
+- **ec2pool**（北京时间 16:11）：import 后预检 primary-first-v1（单节点，expected_revision 20），计划 `dda7e23bda61801c249ba3464f68a91c` 16:11:04.7→16:11:12.4；`/readyz` 503 约 3.0 秒（16:11:09.6→16:11:12.6，公网 sslip 同样）。核心 0.1.315，5 个启用插件 active、restarts 0，日志无 ERROR。`evtypes.py`（临时密钥，已删）8 个流式请求都成功，其中一个开头过载：账号 47 记 500（`http-transient`，`switch_reset`），换到账号 63 成功、`billed`。
+- **效果**（ec2pool，外部 New API 的 key 1，`usage_logs`）：升级前一小时流式 53 个里 16 个因开头过载失败（`response_committed`），0.1.314 期间 12 个里 5 个；0.1.315 上线后 16 分钟（16:11–16:27）流式 24 个全部成功，其中 1 个是开头过载转 500 后换号成功，过载失败 0；非流式 17 个全部成功（6 个经只流式收集的 502 换号成功，原有行为）。同期 WARN `gateway: upstream stream error event` 10 条，原始事件照旧整条记录（例：账号 36 的 `error` 事件，`service_unavailable_error` / `server_is_overloaded`，`retry-after` 364）。
+- 回退：无迁移，可滚动回 0.1.314（ovh 清单 `085591c7…af8`、ec2pool `38c993ee…0243`），但那就回到不能换号的状态。
+
+本次发布包含的改动：
+
+#### Responses 流开头就报错时按 HTTP 500 处理，可以换号（CONTRACTS §138；第一版 `038a34977` 随 0.1.314 上线未生效，`a3b1dfdc5` 修正）
 
 - 起因：ChatGPT（Codex）上游自 11-24 起常先回 200，发出 `response.created`、`response.in_progress`、`keepalive`、`response.metadata`，几秒后再发 `error` 事件和 `response.failed`（`service_unavailable_error` / `server_is_overloaded`，“Our servers are currently overloaded”）就结束。核心已经把 200 和开头的事件转给了客户端，故障策略记 `response_committed`，不能换号；下游（例如 New API）收不到用量，记成“上游没有返回计费信息”的 0 费用请求。
 - 现在上游协议是 `openai.responses` 的 HTTP 流式回答（按上游协议生效，与插件无关：codex、openai、azure-openai、newapi、sub2api 等账号类型都算，入站是 Responses、经适配的 Chat Completions 或经转换的 Messages 都算），核心先扣住开头，读到回答开始（第一个 `response.` 开头、又不是 `response.created` / `in_progress` / `queued` / `metadata` 的事件，通常是 `response.output_item.added`）再把扣住的字节原样补在前面转发；`keepalive` 等不以 `response.` 开头的事件一起扣住（0.1.314 只扣 created、in_progress，真实上游在错误前还发 keepalive、metadata，修复没生效，0.1.315 改成现在的判定）。在这之前收到错误事件（`error`、无名的 `{"error":…}` 块、`response.failed`），一律按上游 HTTP 500 处理：插件分类，故障策略按 500 重试或换号（线上的 500–599 规则会接住），重试用完客户端收到 HTTP 500 和 `{"error": {...}}`（上游的错误对象）。回答开始之后的错误事件照旧留在流里。开头就断掉的流按传输错误处理，不再给客户端一个没有回答的 200。扣住的时间只受管理员配置的流式空闲超时和上游整体超时约束，没有写死的上限。代价：扣住期间客户端收不到响应头，首字节晚到回答开始（有首字节超时的下游要留意）；使用记录的首字时间（`first_token_ms`）因此记的是回答开始的时间，比以前的 `response.created` 晚；开头就断的流按传输错误处理，故障策略可能重放（上游若其实还在生成会多耗一次额度）。
 - 流内错误事件（`error`、无名的 `{"error":…}` 块、`response.failed`；扣住阶段、转发之后、Responses WebSocket 的轮次、只流式上游的收集）都以 WARN `gateway: upstream stream error event` 把原始事件整条记进日志（带 request_id、插件、账号、事件名；转发之后一个流里有几个时只记最后一个），以后据此细分处理；使用记录的错误信息不变。扣住阶段的错误另有一条 `gateway: upstream server error`（500 的通用日志）。
 - 契约见 CONTRACTS §138。
-
-## 2026-11-25
 
 ### 核心 0.1.314：Responses 流开头扣住、开头的错误事件按 HTTP 500 处理（第一版，线上未生效）；ec2pool 升到带迁移 0125 的核心（`038a34977`；ovh 无迁移、滚动，ec2pool 经过 0125、停机；网关仍 0.1.139）
 
