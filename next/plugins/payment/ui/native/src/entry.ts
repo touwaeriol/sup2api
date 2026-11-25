@@ -4,8 +4,8 @@ import messages from './messages'
 import { setHost } from './host'
 
 // Native UI entry of the payment plugin (manifest ui.native.entry). Component
-// names match manifest ui.pages.*.component, ui.slots[wallet.topup] and
-// ui.settings.component.
+// names match manifest ui.pages.*.component and ui.slots[wallet.topup]; the
+// settings are the "settings" page (ui.settings.page).
 export function register(host: PluginHost) {
   setHost(host)
   host.addMessages(messages)
@@ -13,6 +13,7 @@ export function register(host: PluginHost) {
   host.registerComponent('PaymentOrders', lazyPage(() => import('./admin/OrdersPage.vue')))
   host.registerComponent('PaymentRedeemCodes', lazyPage(() => import('./admin/RedeemCodesPage.vue')))
   host.registerComponent('PaymentPromoCodes', lazyPage(() => import('./admin/PromoCodesPage.vue')))
+  host.registerComponent('PaymentMyOrders', lazyPage(() => import('./wallet/MyOrdersPage.vue')))
   host.registerComponent('WalletTopup', lazyPage(() => import('./wallet/WalletTopup.vue')))
 }
 

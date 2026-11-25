@@ -67,7 +67,6 @@ function openDetail(o: Order) {
     <SPageHeader :title="t('admin.orders.title')">
       <template #actions>
         <SButton icon="refresh" :loading="list.loading.value" @click="refresh">{{ t('action.refresh') }}</SButton>
-        <SButton icon="settings" :to="{ path: '/plugins/payment', query: { tab: 'settings' } }">{{ t('admin.orders.settings') }}</SButton>
       </template>
     </SPageHeader>
 

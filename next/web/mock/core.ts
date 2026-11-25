@@ -479,6 +479,8 @@ const MENU_PERMS: Record<string, string | string[]> = {
   '/p/guard/dashboard': 'plugin.guard:stats:read',
   '/p/dynweight/dashboard': 'plugin.dynweight:dynweight:read',
   '/p/payment/orders': 'plugin.payment:config:manage',
+  '/p/payment/settings': 'plugin.payment:config:manage',
+  '/p/payment/my-orders': 'plugin.payment:recharge:use',
   '/p/payment/redeem': 'plugin.payment:config:manage',
   '/p/payment/promo': 'plugin.payment:config:manage'
 }
@@ -531,8 +533,15 @@ const MENUS = [
     section: 'finance',
     label: L('Finance', '财务'),
     items: [
-      { id: 'ledger', label: L('Balance ledger', '余额流水'), icon: 'balance', path: '/ledger' },
+      { id: 'ledger', label: L('Balance ledger', '余额流水'), icon: 'balance', path: '/ledger' }
+    ]
+  },
+  {
+    section: 'payment:pay',
+    label: L('Top-up & payment', '充值/支付'),
+    items: [
       { id: 'payment:orders', label: L('Top-up orders', '充值订单'), icon: 'balance', path: '/p/payment/orders', plugin_key: 'payment' },
+      { id: 'payment:settings', label: L('Top-up settings', '充值配置'), icon: 'settings', path: '/p/payment/settings', plugin_key: 'payment' },
       { id: 'payment:redeem', label: L('Redeem codes', '兑换码'), icon: 'key', path: '/p/payment/redeem', plugin_key: 'payment' },
       { id: 'payment:promo', label: L('Promo codes', '优惠码'), icon: 'price', path: '/p/payment/promo', plugin_key: 'payment' }
     ]
@@ -571,6 +580,7 @@ const MENUS = [
     label: L('Personal', '个人中心'),
     items: [
       { id: 'my-wallet', label: L('Wallet', '钱包'), icon: 'balance', path: '/me/wallet' },
+      { id: 'payment:my-orders', label: L('Top-up history', '充值记录'), icon: 'list', path: '/p/payment/my-orders', plugin_key: 'payment' },
       { id: 'my-profile', label: L('Profile', '个人设置'), icon: 'user', path: '/me/profile' }
     ]
   }

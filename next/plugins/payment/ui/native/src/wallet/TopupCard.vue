@@ -12,7 +12,7 @@ import { useTopupQuote, type CheckoutMethod } from './useTopupQuote'
 // amount, the payment method and what to pay. "Pay now" hands the choice to
 // the parent, which confirms and places the order.
 const props = defineProps<{ info: CheckoutInfo | null; loading: boolean }>()
-const emit = defineEmits<{ (e: 'pay', amount: number, method: CheckoutMethod): void; (e: 'history'): void }>()
+const emit = defineEmits<{ (e: 'pay', amount: number, method: CheckoutMethod): void }>()
 const t = usePaymentHost().t
 const q = useTopupQuote(toRef(props, 'info'))
 
@@ -37,7 +37,7 @@ function pay() {
 <template>
   <SCard :title="t('wallet.title')" :subtitle="t('wallet.subtitle')">
     <template #actions>
-      <SButton size="sm" icon="list" data-testid="pay-history" @click="emit('history')">{{ t('wallet.history') }}</SButton>
+      <SButton size="sm" icon="list" to="/p/payment/my-orders" data-testid="pay-history">{{ t('wallet.history') }}</SButton>
     </template>
 
     <div v-if="loading" class="pay-sections" aria-busy="true">

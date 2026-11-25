@@ -18,15 +18,22 @@ export const paymentUIPlugin = {
   version: VERSION,
   name: L('Payment & Recharge', '充值支付'),
   asset_base: `/plugin-ui/payment/${VERSION}-dev`,
+  // The admin pages fold into one submenu of their own (ui.sections); the
+  // caller's order history joins the core "me" section.
+  sections: [{ id: 'pay', label: L('Top-up & payment', '充值/支付'), order: 410 }],
   menus: [
-    { id: 'orders', section: 'finance', label: L('Top-up orders', '充值订单'), page: 'orders', icon: 'balance' },
-    { id: 'redeem', section: 'finance', label: L('Redeem codes', '兑换码'), page: 'redeem', icon: 'key' },
-    { id: 'promo', section: 'finance', label: L('Promo codes', '优惠码'), page: 'promo', icon: 'price' }
+    { id: 'orders', section: 'pay', label: L('Top-up orders', '充值订单'), page: 'orders', icon: 'balance' },
+    { id: 'settings', section: 'pay', label: L('Top-up settings', '充值配置'), page: 'settings', icon: 'settings' },
+    { id: 'redeem', section: 'pay', label: L('Redeem codes', '兑换码'), page: 'redeem', icon: 'key' },
+    { id: 'promo', section: 'pay', label: L('Promo codes', '优惠码'), page: 'promo', icon: 'price' },
+    { id: 'my-orders', section: 'me', label: L('Top-up history', '充值记录'), page: 'my-orders', icon: 'list', permission: 'recharge:use' }
   ],
   pages: {
     orders: { type: 'native', title: L('Top-up orders', '充值订单'), component: 'PaymentOrders' },
+    settings: { type: 'native', title: L('Top-up settings', '充值配置'), component: 'PaymentSettings' },
     redeem: { type: 'native', title: L('Redeem codes', '兑换码'), component: 'PaymentRedeemCodes' },
-    promo: { type: 'native', title: L('Promo codes', '优惠码'), component: 'PaymentPromoCodes' }
+    promo: { type: 'native', title: L('Promo codes', '优惠码'), component: 'PaymentPromoCodes' },
+    'my-orders': { type: 'native', title: L('Top-up history', '充值记录'), component: 'PaymentMyOrders' }
   },
   slots: [{ slot: 'wallet.topup', component: 'WalletTopup', permission: 'recharge:use' }],
   native_entry: 'ui/native/entry.js',
@@ -87,8 +94,8 @@ plugins.set('payment', {
   resources: { memory_mb: 128, cpu: 0.25, max_threads: 64, max_open_files: 256 },
   versions: [{ version: VERSION, consent_status: 'approved' }],
   grants: ['db.schema', 'routes.user', 'routes.admin', 'routes.webhook', 'ui.native'].map((p) => grant(p, null, VERSION)),
-  manifest: { key: 'payment', version: VERSION, name: paymentUIPlugin.name, ui: { native: { entry: 'ui/native/entry.js' }, settings: { mode: 'native', component: 'PaymentSettings', secrets: SECRETS.map((path) => ({ path })) } } },
-  settings: { mode: 'native', component: 'PaymentSettings', secret_fields: SECRETS, values: settings }
+  manifest: { key: 'payment', version: VERSION, name: paymentUIPlugin.name, ui: { native: { entry: 'ui/native/entry.js' }, settings: { mode: 'native', page: 'settings', permission: 'config:manage', secrets: SECRETS.map((path) => ({ path })) } } },
+  settings: { mode: 'native', page: 'settings', secret_fields: SECRETS, values: settings }
 } as any)
 
 // ---- orders ----

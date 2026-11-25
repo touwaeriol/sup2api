@@ -1,12 +1,11 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { errorMessage, paymentApi, usePaymentHost, type CheckoutInfo, type Order, type OrderPreview } from '../host'
+import { errorMessage, paymentApi, usePaymentHost, type CheckoutInfo, type OrderPreview } from '../host'
 import ConfirmDialog from './ConfirmDialog.vue'
-import OrdersDialog from './OrdersDialog.vue'
 import PayingDialog from './PayingDialog.vue'
 import RedeemCard from './RedeemCard.vue'
 import TopupCard from './TopupCard.vue'
-import { openPayPage, reservePayWindow } from './payWindow'
+import { reservePayWindow } from './payWindow'
 import type { PayingOrder } from './types'
 import type { CheckoutMethod } from './useTopupQuote'
 
@@ -68,24 +67,15 @@ async function placeOrder(promoCode: string, preview: OrderPreview) {
     submitting.value = false
   }
 }
-
-// history
-const ordersOpen = ref(false)
-function resume(order: Order) {
-  const opened = !!order.pay_url && openPayPage(order.pay_url)
-  ordersOpen.value = false
-  showPaying(order, opened)
-}
 </script>
 
 <template>
   <div class="pay-wallet">
-    <TopupCard :info="info" :loading="loading" @pay="startPay" @history="ordersOpen = true" />
+    <TopupCard :info="info" :loading="loading" @pay="startPay" />
     <RedeemCard @credited="props.onCredited?.()" />
 
     <ConfirmDialog v-if="draft && info" v-model:open="confirmOpen" :amount="draft.amount" :method="draft.method" :currency="info.currency" :submitting="submitting" @confirm="placeOrder" />
     <PayingDialog v-model:open="payingOpen" :order="paying" :blocked="blocked" @credited="props.onCredited?.()" />
-    <OrdersDialog v-model:open="ordersOpen" :methods="info?.methods ?? []" @resume="resume" />
   </div>
 </template>
 

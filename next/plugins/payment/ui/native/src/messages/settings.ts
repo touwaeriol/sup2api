@@ -1,7 +1,8 @@
 // Messages of the settings area (plugin.payment.settings.*).
 export default {
   en: {
-    title: 'Payment settings',
+    title: 'Top-up settings',
+    description: 'Prices, top-up options, payment methods and the Epay / Stripe gateways. Keys are stored encrypted.',
     tabs: { general: 'General', methods: 'Payment methods', gateways: 'Gateways' },
     currency: { CNY: 'Chinese yuan', USD: 'US dollar', HKD: 'Hong Kong dollar', EUR: 'Euro', GBP: 'British pound', JPY: 'Japanese yen' },
     unit: { usd: 'USD', minutes: 'min', orders: 'orders' },
@@ -132,7 +133,8 @@ export default {
     }
   },
   zh: {
-    title: '支付设置',
+    title: '充值配置',
+    description: '价格、充值选项、支付方式与易支付 / Stripe 网关。密钥加密保存。',
     tabs: { general: '通用', methods: '支付方式', gateways: '支付网关' },
     currency: { CNY: '人民币', USD: '美元', HKD: '港币', EUR: '欧元', GBP: '英镑', JPY: '日元' },
     unit: { usd: '美元', minutes: '分钟', orders: '笔' },

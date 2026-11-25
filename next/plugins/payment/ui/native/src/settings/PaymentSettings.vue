@@ -1,6 +1,7 @@
 <script setup lang="ts">
-// The payment plugin settings (manifest ui.settings.component) on the
-// plugin's settings tab: general / methods / gateways tabs over one
+// The payment settings, a page of the plugin's "Top-up & payment" menu
+// (manifest ui.settings.page, so the plugin detail has no settings tab):
+// general / methods / gateways tabs over one
 // usePluginSettings form, saved together by SSettingsPage's bar
 // (GET / PUT /plugins/payment/settings; secrets come back as "******").
 import { computed, ref, watch } from 'vue'
@@ -34,7 +35,7 @@ watch(errorCount, (n) => {
 </script>
 
 <template>
-  <SSettingsPage :settings="settings">
+  <SSettingsPage :settings="settings" :title="t('settings.title')" :description="t('settings.description')">
     <STabs v-model="tab" :tabs="tabs" :aria-label="t('settings.title')">
       <template #default="{ active }">
         <GeneralPanel v-if="active === 'general'" :form="settings" />
