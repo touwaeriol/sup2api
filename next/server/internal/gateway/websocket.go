@@ -871,7 +871,7 @@ func (s *wsSession) observe(ctx context.Context, t *wsTurn, data []byte) (bool, 
 	if !terminalEvents[name] {
 		return false, wsOutcome{}
 	}
-	if streamErrorEvent(name) {
+	if streamErrorEvent(name, data) {
 		cl.warnStreamError(ctx, s.rt, s.acc.ID, name, data)
 	}
 	switch name {

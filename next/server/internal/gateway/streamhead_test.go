@@ -6,17 +6,21 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tidwall/gjson"
 )
 
 // ---------------------------------------------------------------- holding the head of a stream (CONTRACTS §138)
 
-var overloadedEvent = map[string]any{"type": "error", "code": "server_is_overloaded",
-	"message": "Our servers are currently overloaded. Please try again later.", "param": nil, "sequence_number": 2}
+// overloadedEvent is the error event the ChatGPT backends sent on 2026-11-25.
+var overloadedEvent = map[string]any{"type": "error", "sequence_number": 4, "error": map[string]any{
+	"type": "service_unavailable_error", "code": "server_is_overloaded", "param": nil,
+	"message": "Our servers are currently overloaded. Please try again later."}}
 
 // headEnv is a streaming Responses route on account 10 alone whose next n
-// upstream streams end after response.created, with ev when it is set.
+// upstream streams send the head of an overloaded ChatGPT backend stream and
+// end, with ev when it is set.
 func headEnv(t *testing.T, n int, ev map[string]any) (*env, *fakePlatform, *responsesUpstream) {
 	t.Helper()
 	e, plat, up := streamOnlyEnv(t, openAIStreamOnly())
@@ -133,13 +137,15 @@ func TestStreamHeadLaterErrorStaysInStream(t *testing.T) {
 }
 
 func TestReadStreamHead(t *testing.T) {
-	prelude := streamPreludes[protocolResponses]
-	const head = ": keepalive\n\nevent: response.created\ndata: {\"type\":\"response.created\"}\n\n" +
-		"data: {\"type\":\"response.in_progress\"}\n\n"
+	rule := streamHeads[protocolResponses]
+	// The head of a ChatGPT backend stream as it was seen on 2026-11-25.
+	const head = ": comment\n\nevent: response.created\ndata: {\"type\":\"response.created\"}\n\n" +
+		"data: {\"type\":\"response.in_progress\"}\n\nevent: keepalive\ndata: {\"type\":\"keepalive\"}\n\n" +
+		"event: response.metadata\ndata: {\"type\":\"response.metadata\"}\n\n"
 	t.Run("content", func(t *testing.T) {
 		in := head + "event: response.output_item.added\ndata: {}\n\nevent: response.completed\ndata: {}\n\n"
 		r := newSSEReader(strings.NewReader(in), headBufferSize, true)
-		if f := readStreamHead(r, prelude); f.broken != nil || f.errBody != nil {
+		if f := readStreamHead(r, rule); f.broken != nil || f.errBody != nil {
 			t.Fatalf("failure %+v", f)
 		}
 		if out, _ := io.ReadAll(r.rest()); string(out) != in {
@@ -147,15 +153,37 @@ func TestReadStreamHead(t *testing.T) {
 		}
 	})
 	t.Run("error event", func(t *testing.T) {
-		ev := `{"type":"error","error":{"type":"service_unavailable_error","code":"server_is_overloaded","message":"busy"}}`
-		f := readStreamHead(newSSEReader(strings.NewReader(head+"event: error\ndata: "+ev), headBufferSize, true), prelude)
+		ev := `{"type":"error","error":{"type":"service_unavailable_error","code":"server_is_overloaded","message":"busy","param":null}}`
+		f := readStreamHead(newSSEReader(strings.NewReader(head+"event: error\ndata: "+ev), headBufferSize, true), rule)
 		if f.status != 500 || f.event != "error" || string(f.data) != ev ||
 			gjson.GetBytes(f.errBody, "error.code").String() != "server_is_overloaded" {
 			t.Fatalf("failure %+v %s", f, f.errBody)
 		}
 	})
+	t.Run("completed without output", func(t *testing.T) {
+		in := head + "event: response.completed\ndata: {}\n\n"
+		if f := readStreamHead(newSSEReader(strings.NewReader(in), headBufferSize, true), rule); f.broken != nil || f.errBody != nil {
+			t.Fatalf("failure %+v", f)
+		}
+	})
+	t.Run("delta without announcement", func(t *testing.T) {
+		in := head + "event: response.output_text.delta\ndata: {}\n\nevent: response.done\ndata: {}\n\n"
+		r := newSSEReader(strings.NewReader(in), headBufferSize, true)
+		if f := readStreamHead(r, rule); f.broken != nil || f.errBody != nil {
+			t.Fatalf("failure %+v", f)
+		}
+		if out, _ := io.ReadAll(r.rest()); string(out) != in {
+			t.Fatalf("rest %q", out)
+		}
+	})
+	t.Run("unnamed error chunk", func(t *testing.T) {
+		f := readStreamHead(newSSEReader(strings.NewReader(head+`data: {"error":{"message":"busy"}}`+"\n\n"), headBufferSize, true), rule)
+		if f.status != 500 || gjson.GetBytes(f.errBody, "error.message").String() != "busy" {
+			t.Fatalf("failure %+v %s", f, f.errBody)
+		}
+	})
 	t.Run("ended", func(t *testing.T) {
-		if f := readStreamHead(newSSEReader(strings.NewReader(head), headBufferSize, true), prelude); f.broken != errStreamHeadUnfinished {
+		if f := readStreamHead(newSSEReader(strings.NewReader(head), headBufferSize, true), rule); f.broken != errStreamHeadUnfinished {
 			t.Fatalf("failure %+v", f)
 		}
 	})
@@ -199,5 +227,26 @@ func TestStreamHeadLaterResponseFailed(t *testing.T) {
 	}
 	if rec := e.record(); rec.StatusCode != 200 || strings.HasPrefix(rec.ErrorMessage, "upstream stream error") {
 		t.Fatalf("record %+v", rec)
+	}
+}
+
+// The hold ends as soon as the answer starts: it does not wait for more of
+// the stream.
+func TestReadStreamHeadReleasesAtAnswer(t *testing.T) {
+	pr, pw := io.Pipe()
+	defer pw.Close()
+	go func() {
+		_, _ = io.WriteString(pw, "event: response.created\ndata: {}\n\nevent: keepalive\ndata: {}\n\n"+
+			"event: response.output_item.added\ndata: {}\n\n")
+	}()
+	done := make(chan streamFailure, 1)
+	go func() { done <- readStreamHead(newSSEReader(pr, headBufferSize, true), streamHeads[protocolResponses]) }()
+	select {
+	case f := <-done:
+		if f.broken != nil || f.errBody != nil {
+			t.Fatalf("failure %+v", f)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the head was still held after the answer started")
 	}
 }

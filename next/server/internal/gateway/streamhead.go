@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/usagerules"
@@ -15,22 +16,40 @@ import (
 // Holding the head of a stream (CONTRACTS §138).
 //
 // Some upstreams answer 200, open the event stream and only then fail: the
-// ChatGPT backends send response.created and, seconds later, an error event
-// ("Our servers are currently overloaded"). Relayed as it comes, the client
-// has its 200 before the error and the attempt can no longer move to another
-// account. A streaming answer of a protocol listed here is therefore held
-// until its first event that is not prelude. An error event before it is an
-// upstream HTTP 500 answer whatever the event names (the owner's choice: the
-// plugin classifies it, the failure policy retries or returns it); a stream
-// that breaks before it is a transport error. Nothing bounds the hold but the
-// administrator's stream idle timeout and relay timeout (§112.16).
+// ChatGPT backends send response.created, response.in_progress, keepalive and
+// response.metadata and, seconds later, an error event (type
+// service_unavailable_error, code server_is_overloaded). Relayed as it comes,
+// the client has its 200 before the error and the attempt can no longer move
+// to another account. A streaming answer of a protocol listed here is
+// therefore held while it sends only what comes before its answer. An error
+// event meanwhile is an upstream HTTP 500 answer whatever it names (the
+// owner's choice: the plugin classifies it, the failure policy retries or
+// returns it); a stream that breaks meanwhile is a transport error. Nothing
+// bounds the hold but the administrator's stream idle timeout and relay
+// timeout (§112.16).
 
 const protocolResponses = manifest.PlatformOpenAI + ".responses"
 
-// streamPreludes are, per upstream protocol, the events a stream opens with
-// before it carries anything of the answer.
-var streamPreludes = map[string]map[string]bool{
-	protocolResponses: {"response.created": true, "response.in_progress": true},
+// streamHead tells, for one upstream protocol, the events a stream sends
+// before its answer from the answer itself: any event of the protocol's
+// family is the answer, except the ones listed. Events outside the family
+// (keepalive, vendor notices), comments and empty blocks come before it too,
+// so an upstream that adds a notice is still held, and one that skips an
+// announcement (a delta without response.output_item.added) is not.
+type streamHead struct {
+	family string
+	before map[string]bool
+}
+
+// answers reports whether event name starts the answer.
+func (h streamHead) answers(name string) bool {
+	return strings.HasPrefix(name, h.family) && !h.before[name]
+}
+
+// streamHeads are the protocols whose streams are held, with their head.
+var streamHeads = map[string]streamHead{
+	protocolResponses: {family: "response.", before: map[string]bool{
+		"response.created": true, "response.in_progress": true, "response.queued": true, "response.metadata": true}},
 }
 
 // headBufferSize is the read buffer of a held head: it stays under the
@@ -52,7 +71,9 @@ type streamFailure struct {
 }
 
 // streamErrorEvent reports whether an event of the stream names a failure.
-func streamErrorEvent(name string) bool { return name == "error" || name == "response.failed" }
+func streamErrorEvent(name string, data []byte) bool {
+	return usagerules.ErrorEvent(name, data) || name == "response.failed"
+}
 
 // errorEventFailure is the failure of error event name with data, with the
 // status the event carries (streamOnlyError).
@@ -61,17 +82,17 @@ func errorEventFailure(name string, data []byte) streamFailure {
 	return streamFailure{event: name, data: bytes.Clone(data), status: status, errBody: body}
 }
 
-// holdStreamHead reads the head of a streaming answer whose upstream protocol
-// has a prelude. failed reports an attempt that ended there; otherwise the
-// bytes read are put back in front of resp.Body for forward.
+// holdStreamHead reads the head of a streaming answer whose upstream
+// protocol is listed in streamHeads. failed reports an attempt that ended
+// there; otherwise the bytes read are put back in front of resp.Body.
 func (c *call) holdStreamHead(ctx, uctx context.Context, x *execution, resp *http.Response) (attemptResult, bool) {
-	prelude := streamPreludes[x.rt.upstream]
-	if prelude == nil || !c.stream || !isSSE(resp.Header.Get("Content-Type")) {
+	head, held := streamHeads[x.rt.upstream]
+	if !held || !c.stream || !isSSE(resp.Header.Get("Content-Type")) {
 		return attemptResult{}, false
 	}
 	c.drain.arm()
 	r := newSSEReader(resp.Body, headBufferSize, true)
-	if res, failed := c.failStream(ctx, uctx, x, resp, readStreamHead(r, prelude)); failed {
+	if res, failed := c.failStream(ctx, uctx, x, resp, readStreamHead(r, head)); failed {
 		return res, true
 	}
 	resp.Body = struct {
@@ -81,21 +102,21 @@ func (c *call) holdStreamHead(ctx, uctx context.Context, x *execution, resp *htt
 	return attemptResult{}, false
 }
 
-// readStreamHead reads r up to its first event that is neither prelude nor an
-// error event, and reports the failure the head amounts to, if any.
-func readStreamHead(r *sseReader, prelude map[string]bool) streamFailure {
+// readStreamHead reads r up to the event that starts the answer or an error
+// event, and reports the failure the head amounts to, if any.
+func readStreamHead(r *sseReader, head streamHead) streamFailure {
 	for {
 		event, data, err := r.next()
 		if err != nil {
 			return streamFailure{broken: unfinished(err, errStreamHeadUnfinished)}
 		}
 		name := usagerules.EventName(event, data)
-		if streamErrorEvent(name) {
+		if streamErrorEvent(name, data) {
 			f := errorEventFailure(name, data)
 			f.status = http.StatusInternalServerError
 			return f
 		}
-		if !prelude[name] {
+		if head.answers(name) {
 			return streamFailure{}
 		}
 	}

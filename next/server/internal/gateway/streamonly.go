@@ -99,7 +99,7 @@ func streamOnlyEvent(event string, data []byte, items map[int64][]byte, ans *str
 		}
 		ans.body = []byte(resp.Raw)
 		return true
-	case streamErrorEvent(name):
+	case streamErrorEvent(name, data):
 		ans.streamFailure = errorEventFailure(name, data)
 		return true
 	}

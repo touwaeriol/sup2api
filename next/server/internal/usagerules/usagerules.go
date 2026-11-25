@@ -310,11 +310,17 @@ func (u *Acc) ApplySSE(event string, data []byte) {
 	}
 }
 
+// ErrorEvent reports whether an event of a stream is an error event: a named
+// "error" event or an unnamed {"error": {...}} chunk.
+func ErrorEvent(name string, data []byte) bool {
+	return name == "error" || (name == "" && gjson.GetBytes(data, "error").IsObject())
+}
+
 // applyStreamError notes an error event. Anthropic/Responses name error
 // events; OpenAI chat and Gemini send an unnamed {"error": {...}} chunk.
 // A Responses response.failed is kept for the log only.
 func (u *Acc) applyStreamError(name string, data []byte) {
-	errorEvent := name == "error" || (name == "" && gjson.GetBytes(data, "error").IsObject())
+	errorEvent := ErrorEvent(name, data)
 	if errorEvent {
 		msg := gjson.GetBytes(data, "error.message").String()
 		if msg == "" {

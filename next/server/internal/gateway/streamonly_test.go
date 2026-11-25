@@ -112,6 +112,10 @@ func (u *responsesUpstream) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	send(map[string]any{"type": "response.created", "response": soResponse("in_progress", []any{})})
 	if early {
+		// What the ChatGPT backends send before an overload error.
+		send(map[string]any{"type": "response.in_progress", "response": soResponse("in_progress", []any{})})
+		send(map[string]any{"type": "keepalive"})
+		send(map[string]any{"type": "response.metadata"})
 		if earlyEvent != nil {
 			send(earlyEvent)
 		}

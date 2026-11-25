@@ -9591,15 +9591,15 @@ sub2api-plugin released-check --plugins <插件目录的上级> --index <index.j
 
 ### 138.1 起因
 
-ChatGPT（Codex）上游常先回 200 和 `response.created`，几秒后再发一个 `error` 事件（例如 `{"type":"error","code":"server_is_overloaded","message":"Our servers are currently overloaded. ..."}`）就结束，没有用量。以前核心收到 200 就开始转发（`forward`），故障策略只能记 `response_committed`、不能换号，客户端拿到 200 加一个错误事件，下游记成 0 费用的请求。
+ChatGPT（Codex）上游常先回 200，发出 `response.created`、`response.in_progress`、`keepalive`、`response.metadata`，几秒后再发一个 `error` 事件和 `response.failed` 就结束，没有用量。2026-11-25 在 ec2pool 上看到的错误对象是 `{"type":"service_unavailable_error","code":"server_is_overloaded","message":"Our servers are currently overloaded. Please try again later.","param":null,"headers":{"retry-after":"359","retry-after-ms":"359000"}}`（`error` 事件的 `error`、`response.failed` 的 `response.error` 里都是它）。以前核心收到 200 就开始转发（`forward`），故障策略只能记 `response_committed`、不能换号，客户端拿到 200 加一个错误事件，下游记成 0 费用的请求。
 
 ### 138.2 规则
 
-- 范围：上游协议是 `openai.responses` 的 HTTP 流式回答（客户端要流式；`streamPreludes` 按上游协议登记，现在只有它），不论哪个插件、入站是 Responses 还是经适配的 Chat Completions。只流式上游的非流式请求（§83）、WebSocket 轮次（§35）不在此列。
-- 开头事件：`response.created`、`response.in_progress`，以及注释和空的事件块。核心读回答直到第一个别的事件，读过的字节原样（逐字节）补在剩下的流前面交给 `forward`；正常请求的客户端只是晚收到开头的几个事件。扣住期间客户端连响应头也收不到，有首字节超时的下游要留意。使用记录的 `first_token_ms` 与观察 `FirstStreamEvent` 在 `forward` 里记，回放是瞬间的，所以记的是第一个内容事件到达的时间（以前是 `response.created`）。
-- 在这之前收到 `error` 或 `response.failed`：按上游返回 HTTP **500** 处理，不看事件里的 `status`、`code`（所有者定：先一律 500，看日志再细分）。错误体是 `{"error": <事件的错误对象>}`，事件没有错误对象时（平铺的 Responses `error` 事件）取顶层的 `type`、`code`、`message`、`param`（与 §83 的 `streamOnlyError` 同一份转换），交给 `upstreamFailure`：插件 `ClassifyError`，故障策略决定重试、换号或返回；返回时客户端收到 500 和这个错误体，使用记录的错误信息照旧取错误体的 `message`。
+- 范围：上游协议是 `openai.responses` 的 HTTP 流式回答（客户端要流式；`streamAnswerEvents` 按上游协议登记，现在只有它），不论哪个插件、入站是 Responses 还是经适配的 Chat Completions。只流式上游的非流式请求（§83）、WebSocket 轮次（§35）不在此列。
+- 扣住到回答开始：`openai.responses` 的回答开始于第一个 `response.` 开头、又不是回答前事件（`response.created`、`response.in_progress`、`response.queued`、`response.metadata`）的事件，通常是 `response.output_item.added`；不标准的上游直接发 `response.output_text.delta` 或以 `response.done` 结束也照样放行。不以 `response.` 开头的事件（`keepalive`、上游自加的通知）、注释、空块都算回答前，一起扣住，所以上游以后加的通知不会让扣住提前结束。规则在 `streamHeads`（按上游协议登记的事件族加回答前事件）。读过的字节原样（逐字节）补在剩下的流前面交给 `forward`。最初的实现（核心 0.1.314）只扣 `response.created`、`response.in_progress`，真实上游在错误前还发 `keepalive`、`response.metadata`，于是照样提前提交，0.1.315 改成现在的判定；正常请求的客户端只是晚收到开头的几个事件。扣住期间客户端连响应头也收不到，有首字节超时的下游要留意。使用记录的 `first_token_ms` 与观察 `FirstStreamEvent` 在 `forward` 里记，回放是瞬间的，所以记的是回答开始的时间（以前是 `response.created`）。
+- 在这之前收到错误事件（`error`、无名的 `{"error":…}` 块，与 `usagerules.ErrorEvent` 同一个判定，或 `response.failed`）：按上游返回 HTTP **500** 处理，不看事件里的 `status`、`code`（所有者定：先一律 500，看日志再细分）。错误体是 `{"error": <事件的错误对象>}`，事件没有错误对象时（平铺的 Responses `error` 事件）取顶层的 `type`、`code`、`message`、`param`（与 §83 的 `streamOnlyError` 同一份转换），交给 `upstreamFailure`：插件 `ClassifyError`，故障策略决定重试、换号或返回；返回时客户端收到 500 和这个错误体，使用记录的错误信息照旧取错误体的 `message`。
 - 在这之前流断了或结束了（`upstream stream ended before any content`）：按传输错误处理（状态 0，插件分类，客户端默认 502），与 §83 只流式上游读不完时一样，故障策略可以重放（上游已收下请求，若其实还在生成会多耗一次额度）；客户端离开时按取消处理（扣住前已 `drain.arm()`，断开策略与转发时相同）。
-- 第一个别的事件之后的错误事件照旧留在流里，不能换号，使用记录照旧：`error` 事件（和无名的 `{"error":…}` 块）记 `upstream stream error: …`，`response.failed` 不改记录（只记日志）。
+- 回答开始之后的错误事件照旧留在流里，不能换号，使用记录照旧：`error` 事件（和无名的 `{"error":…}` 块）记 `upstream stream error: …`，`response.failed` 不改记录（只记日志）。
 - 扣住没有写死的时间或大小上限（§112.16）：只受管理员配置的流式空闲超时和上游整体超时约束。
 
 ### 138.3 日志
@@ -9608,5 +9608,5 @@ ChatGPT（Codex）上游常先回 200 和 `response.created`，几秒后再发�
 
 ### 138.4 实现与测试
 
-`server/internal/gateway/streamhead.go`（`holdStreamHead`、`readStreamHead`，与 §83 共用的 `streamFailure`、`failStream`、`errorEventFailure`）、`sse_reader.go`（`sseReader`：逐个读事件，可留住读过的字节；§83 的 `readStreamOnly` 也改用它），接入点在 `dispatch.go` 的 `collectStreamOnly` 之后。测试 `streamhead_test.go`：开头报错换号后客户端只看到成功的回答、只有一个账号时回 500 和错误体、`response.failed` 带 429 也回 500、开头就结束按传输错误、扣住的开头逐字节转发、开头之后的 `error` 与 `response.failed` 仍在流里、经适配的 Chat Completions 同样回 500、`sseReader` 的边界；`usagerules/stream_error_test.go`：原始错误事件被复制留住。扣住阶段的读缓冲是 4 KiB（`headBufferSize`，只是缓冲，超长的行照样整行读）。
+`server/internal/gateway/streamhead.go`（`holdStreamHead`、`readStreamHead`，与 §83 共用的 `streamFailure`、`failStream`、`errorEventFailure`）、`sse_reader.go`（`sseReader`：逐个读事件，可留住读过的字节；§83 的 `readStreamOnly` 也改用它），接入点在 `dispatch.go` 的 `collectStreamOnly` 之后。测试 `streamhead_test.go`（测试上游在错误前照真实上游发 `response.in_progress`、`keepalive`、`response.metadata`，错误事件用真实的形状）：开头报错换号后客户端只看到成功的回答、只有一个账号时回 500 和错误体、`response.failed` 带 429 也回 500、开头就结束按传输错误、扣住的开头逐字节转发、开头之后的 `error` 与 `response.failed` 仍在流里、经适配的 Chat Completions 同样回 500、没有输出直接 `response.completed` 的流放行、不先宣布就发 delta 的流放行并逐字节转发、开头的无名错误块回 500、回答一开始就放行（不等后面的流，`io.Pipe`）、`sseReader` 的边界；`usagerules/stream_error_test.go`：原始错误事件被复制留住。扣住阶段的读缓冲是 4 KiB（`headBufferSize`，只是缓冲，超长的行照样整行读）。
 
