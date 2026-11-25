@@ -135,7 +135,7 @@ go test -race -count=1 -timeout 30m ./...
 # 只跑一个包：go test -race -count=1 ./internal/authz/...
 ```
 
-- 数据库测试用 `testutil.DB(t)`（插件用 `pluginsdktest.NewSchema`），库来自 `sdk/testpg`：设了 `TEST_DATABASE_URL`（超级用户 DSN，CI 的 `server` 任务就是这样）就用它；没设时由 Go 在本机启动 PostgreSQL 16（首次下载约 25 MB，之后常驻共用；CI 的 `plugins`、`sdk-tools` 任务就是这样，取不到时测试失败，不会跳过）。停掉用 `go run ./sdk/testpg/cmd/testpg stop`（在 `next/` 下）。有代理变量时加 `NO_PROXY=127.0.0.1,localhost`。`SUB2API_TESTPG=off` 会跳过数据库测试，正常不要用。
+- 数据库测试用 `testutil.DB(t)`（插件用 `pluginsdktest.NewSchema`），库来自 `sdk/testpg`：设了 `TEST_DATABASE_URL`（超级用户 DSN，CI 的 `server`、`plugins`、`sdk-tools` 任务都用 `postgres:16` 服务这样做）就用它；没设时由 Go 在本机启动 PostgreSQL 16（首次从 Maven Central 下载约 25 MB，之后常驻共用；取不到时测试失败，不会跳过）。停掉用 `go run ./sdk/testpg/cmd/testpg stop`（在 `next/` 下）。有代理变量时加 `NO_PROXY=127.0.0.1,localhost`。`SUB2API_TESTPG=off` 会跳过数据库测试，正常不要用。
 - Redis 单测用 miniredis；集成测试可设 `TEST_REDIS_URL`。
 - CI 另跑：`go test -race -count=1 -timeout=10m ./gateway/... ./runtime-contract/... ./server/internal/app/... ./server/internal/background/...`（在 `next/` 下）。
 - 热路径基准与基线：`server/internal/store/gormtest/BASELINE.md`（命令、机器、各批次的 allocs/op 对照）。改热路径的语句时按那里的命令前后各跑一次，比较 allocs/op。`casbinx` 的基准在 `internal/authz/casbinx/bench_test.go`。

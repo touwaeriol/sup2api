@@ -57,6 +57,27 @@ jobs:
   sdk-tools:
     name: sdk, tools and e2e
     runs-on: ubuntu-latest
+    # The database tests (sdk/testpg, pluginsdktest.NewSchema, the plugin CLI's
+    # db check) use this server through TEST_DATABASE_URL, like the server job.
+    # Without it testpg downloads PostgreSQL from Maven Central and starts it
+    # on the runner, which failed now and then (2026-11-25: the sdk step of
+    # 038a34977, the database plugins of 83f734cb3).
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: sub2api
+          POSTGRES_USER: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      TEST_DATABASE_URL: postgres://postgres:sub2api@127.0.0.1:5432/postgres?sslmode=disable
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
@@ -105,6 +126,27 @@ jobs:
   plugins:
     name: plugins
     runs-on: ubuntu-latest
+    # The database tests (sdk/testpg, pluginsdktest.NewSchema, the plugin CLI's
+    # db check) use this server through TEST_DATABASE_URL, like the server job.
+    # Without it testpg downloads PostgreSQL from Maven Central and starts it
+    # on the runner, which failed now and then (2026-11-25: the sdk step of
+    # 038a34977, the database plugins of 83f734cb3).
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: sub2api
+          POSTGRES_USER: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      TEST_DATABASE_URL: postgres://postgres:sub2api@127.0.0.1:5432/postgres?sslmode=disable
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
