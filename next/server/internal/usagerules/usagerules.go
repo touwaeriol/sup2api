@@ -6,6 +6,7 @@
 package usagerules
 
 import (
+	"bytes"
 	"log/slog"
 	"slices"
 	"strconv"
@@ -53,6 +54,11 @@ type Acc struct {
 	Metrics map[string]any
 	// StreamError is set when an SSE stream carried an error event.
 	StreamError string
+	// StreamErrorEvent and StreamErrorData are the last error event of the
+	// stream as the upstream sent it, for the log: the one StreamError reads
+	// or a response.failed, which leaves the record as it is.
+	StreamErrorEvent string
+	StreamErrorData  []byte
 	// final is set once an SSE event reported the stream's final usage
 	// (Final).
 	final bool
@@ -286,18 +292,7 @@ func (u *Acc) ApplySSE(event string, data []byte) {
 	name := EventName(event, data)
 	u.applyAttempts(name, data, true)
 	u.applyAdditional(name, data, true)
-	// Anthropic/Responses name error events; OpenAI chat and Gemini send an
-	// unnamed {"error": {...}} chunk.
-	if name == "error" || (name == "" && gjson.GetBytes(data, "error").IsObject()) {
-		msg := gjson.GetBytes(data, "error.message").String()
-		if msg == "" {
-			msg = gjson.GetBytes(data, "message").String()
-		}
-		if msg == "" {
-			msg = string(data)
-		}
-		u.StreamError = "upstream stream error: " + msg
-	}
+	u.applyStreamError(name, data)
 	for _, rule := range u.rules.SSE {
 		if rule.Event != "" && rule.Event != name {
 			continue
@@ -312,6 +307,26 @@ func (u *Acc) ApplySSE(event string, data []byte) {
 		if rule.Event == "" || rule.Event == name {
 			u.observeCacheEvidence(data, rule.Map, "sse")
 		}
+	}
+}
+
+// applyStreamError notes an error event. Anthropic/Responses name error
+// events; OpenAI chat and Gemini send an unnamed {"error": {...}} chunk.
+// A Responses response.failed is kept for the log only.
+func (u *Acc) applyStreamError(name string, data []byte) {
+	errorEvent := name == "error" || (name == "" && gjson.GetBytes(data, "error").IsObject())
+	if errorEvent {
+		msg := gjson.GetBytes(data, "error.message").String()
+		if msg == "" {
+			msg = gjson.GetBytes(data, "message").String()
+		}
+		if msg == "" {
+			msg = string(data)
+		}
+		u.StreamError = "upstream stream error: " + msg
+	}
+	if errorEvent || name == "response.failed" {
+		u.StreamErrorEvent, u.StreamErrorData = name, bytes.Clone(data)
 	}
 }
 

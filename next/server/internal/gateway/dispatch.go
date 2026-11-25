@@ -818,6 +818,9 @@ func (c *call) send(ctx context.Context, x *execution, req *pluginv1.UpstreamReq
 			return res
 		}
 	}
+	if res, failed := c.holdStreamHead(ctx, uctx, x, resp); failed {
+		return res
+	}
 	if w := x.waited; w != nil {
 		return w.answer(ctx, resp)
 	}

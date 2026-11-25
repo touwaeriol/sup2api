@@ -1,14 +1,12 @@
 package gateway
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"errors"
 	"io"
 	"net/http"
 	"slices"
-	"strings"
 
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -47,15 +45,10 @@ func forceStreamPath(body []byte, path string) ([]byte, error) {
 }
 
 // streamOnlyAnswer is what an SSE answer of a stream-only upstream amounts to:
-// a JSON response body, an upstream error event, or a broken stream.
+// a JSON response body, or the failure the stream is instead.
 type streamOnlyAnswer struct {
+	streamFailure
 	body []byte
-	// status and errBody describe an error event: the HTTP status the event
-	// carries (502 when none) and an OpenAI style {"error": {...}} body.
-	status  int
-	errBody []byte
-	// broken is a stream that failed or ended without a terminal event.
-	broken error
 }
 
 var errStreamOnlyUnfinished = errors.New("upstream stream ended before response.completed")
@@ -63,42 +56,17 @@ var errStreamOnlyUnfinished = errors.New("upstream stream ended before response.
 // readStreamOnly reads the SSE answer of a stream-only upstream. Only the
 // terminal event's response object and the output_item.done items are kept,
 // never the whole stream.
-func readStreamOnly(r io.Reader) streamOnlyAnswer {
-	br := bufio.NewReaderSize(r, 64<<10)
-	var event string
-	var data []byte
+func readStreamOnly(rd io.Reader) streamOnlyAnswer {
+	r := newSSEReader(rd, 64<<10, false)
 	items := map[int64][]byte{}
 	var ans streamOnlyAnswer
 	for {
-		line, rerr := readLine(br)
-		t := bytes.TrimRight(line, "\r\n")
-		switch {
-		case len(line) > 0 && len(t) == 0:
-			if streamOnlyEvent(event, data, items, &ans) {
-				return finishStreamOnly(ans, items)
-			}
-			event, data = "", data[:0]
-		case bytes.HasPrefix(t, []byte("event:")):
-			event = strings.TrimSpace(string(t[len("event:"):]))
-		case bytes.HasPrefix(t, []byte("data:")):
-			d := t[len("data:"):]
-			if len(d) > 0 && d[0] == ' ' {
-				d = d[1:]
-			}
-			if len(data) > 0 {
-				data = append(data, '\n')
-			}
-			data = append(data, d...)
+		event, data, err := r.next()
+		if err != nil {
+			return streamOnlyAnswer{streamFailure: streamFailure{broken: unfinished(err, errStreamOnlyUnfinished)}}
 		}
-		if rerr != nil {
-			// The last event may lack its blank line.
-			if rerr == io.EOF && streamOnlyEvent(event, data, items, &ans) {
-				return finishStreamOnly(ans, items)
-			}
-			if rerr == io.EOF {
-				rerr = errStreamOnlyUnfinished
-			}
-			return streamOnlyAnswer{broken: rerr}
+		if streamOnlyEvent(event, data, items, &ans) {
+			return finishStreamOnly(ans, items)
 		}
 	}
 }
@@ -131,8 +99,8 @@ func streamOnlyEvent(event string, data []byte, items map[int64][]byte, ans *str
 		}
 		ans.body = []byte(resp.Raw)
 		return true
-	case name == "response.failed" || name == "error":
-		ans.status, ans.errBody = streamOnlyError(name, data)
+	case streamErrorEvent(name):
+		ans.streamFailure = errorEventFailure(name, data)
 		return true
 	}
 	return false
@@ -220,27 +188,10 @@ func (c *call) collectStreamOnly(ctx, uctx context.Context, x *execution, resp *
 	}
 	c.drain.arm()
 	ans := readStreamOnly(resp.Body)
-	switch {
-	case ans.broken != nil:
-		if ctx.Err() != nil {
-			c.upstreamResponded = true
-			return attemptResult{kind: attemptCanceled, err: canceledErr()}, true
-		}
-		msg := ans.broken.Error()
-		if cause := context.Cause(uctx); errors.Is(cause, errRelayTimeout) || errors.Is(cause, errStreamIdleTimeout) {
-			msg = cause.Error()
-		}
-		return c.classifyUpstream(ctx, x, 0, nil, nil, msg), true
-	case ans.errBody != nil:
-		h := resp.Header.Clone()
-		h.Set("Content-Type", "application/json")
-		h.Del("Content-Length")
-		return c.upstreamFailure(ctx, x, ans.status, h, &upstreamErrorBody{prefix: ans.errBody}), true
+	if res, failed := c.failStream(ctx, uctx, x, resp, ans.streamFailure); failed {
+		return res, true
 	}
-	h := resp.Header.Clone()
-	h.Set("Content-Type", "application/json")
-	h.Del("Content-Length")
-	resp.Header = h
+	resp.Header = jsonHeader(resp.Header)
 	resp.ContentLength = int64(len(ans.body))
 	resp.Body = io.NopCloser(bytes.NewReader(ans.body))
 	return attemptResult{}, false

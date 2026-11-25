@@ -47,6 +47,10 @@ type responsesUpstream struct {
 	// linger, when set, keeps the stream open after the last event until the
 	// request is canceled, which it is then told.
 	linger chan struct{}
+	// early streams of the next ones end right after response.created, with
+	// earlyEvent when it is set (streamhead_test.go).
+	early      int
+	earlyEvent map[string]any
 }
 
 func newResponsesUpstream(t *testing.T) *responsesUpstream {
@@ -78,6 +82,10 @@ func (u *responsesUpstream) handle(w http.ResponseWriter, r *http.Request) {
 	u.mu.Lock()
 	u.bodies = append(u.bodies, raw)
 	streamOnly, empty, terminal, linger := u.streamOnly, u.emptyOutput, u.terminal, u.linger
+	early, earlyEvent := u.early > 0 && gjson.GetBytes(raw, "stream").Bool(), u.earlyEvent
+	if early {
+		u.early--
+	}
 	u.mu.Unlock()
 	if linger != nil {
 		defer func() {
@@ -103,6 +111,12 @@ func (u *responsesUpstream) handle(w http.ResponseWriter, r *http.Request) {
 		w.(http.Flusher).Flush()
 	}
 	send(map[string]any{"type": "response.created", "response": soResponse("in_progress", []any{})})
+	if early {
+		if earlyEvent != nil {
+			send(earlyEvent)
+		}
+		return
+	}
 	send(map[string]any{"type": "response.output_item.added", "output_index": 0, "item": map[string]any{"id": "msg_1", "type": "message", "role": "assistant", "content": []any{}}})
 	send(map[string]any{"type": "response.output_text.delta", "output_index": 0, "content_index": 0, "delta": "hello"})
 	output := []any{soMessage("msg_1", "hello")}

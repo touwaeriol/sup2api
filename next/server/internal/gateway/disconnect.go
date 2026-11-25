@@ -142,7 +142,8 @@ func (d *upstreamDrain) served() bool {
 }
 
 // arm marks the exchange as worth finishing: forward is about to relay a
-// successful answer, or a stream-only answer is being collected for it. A
+// successful answer, a stream-only answer is being collected for it, or the
+// head of a stream is being held (streamhead.go). A
 // client that left before the first arm has already canceled it; one that
 // left after it stays armed for forward.
 func (d *upstreamDrain) arm() {

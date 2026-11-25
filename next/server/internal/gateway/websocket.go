@@ -871,6 +871,9 @@ func (s *wsSession) observe(ctx context.Context, t *wsTurn, data []byte) (bool, 
 	if !terminalEvents[name] {
 		return false, wsOutcome{}
 	}
+	if streamErrorEvent(name) {
+		cl.warnStreamError(ctx, s.rt, s.acc.ID, name, data)
+	}
 	switch name {
 	case "response.completed", "response.incomplete":
 		return true, wsOutcome{ok: true}

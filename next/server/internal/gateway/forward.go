@@ -132,6 +132,9 @@ func (c *call) forward(ctx context.Context, rt *typeRoute, acct *pluginv1.Accoun
 	// The answer is written (or, for a relay that waits, held back until
 	// its facts commit: waited.go). The plugin reading the usage is handed
 	// the observation armed below only after forward returned.
+	if u.StreamErrorEvent != "" {
+		c.warnStreamError(ctx, rt, acct.GetId(), u.StreamErrorEvent, u.StreamErrorData)
+	}
 	if u.StreamError != "" {
 		c.recordStreamFailure(ctx, acct.GetId(), u.StreamError)
 	}

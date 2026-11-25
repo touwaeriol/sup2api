@@ -8,6 +8,13 @@
 
 开发完成、尚未上线的改动。发布时改成发布日期的一节，补上提交、实际版本号和发布过程。
 
+### 核心：Responses 流开头就报错时按 HTTP 500 处理，可以换号（无迁移，滚动更新）
+
+- 起因：ChatGPT（Codex）上游自 11-24 起常先回 200 和 `response.created`，几秒后再发一个 `error` 事件（“Our servers are currently overloaded”）就结束。核心已经把 200 和开头的事件转给了客户端，故障策略记 `response_committed`，不能换号；下游（例如 New API）收不到用量，记成“上游没有返回计费信息”的 0 费用请求。
+- 现在上游协议是 `openai.responses` 的 HTTP 流式回答（按上游协议生效，与插件无关：codex、openai、azure-openai、newapi、sub2api 等账号类型都算，入站是 Responses、经适配的 Chat Completions 或经转换的 Messages 都算），核心先扣住开头的 `response.created`、`response.in_progress`（和注释、空行），读到第一个别的事件再把扣住的字节原样补在前面转发。在这之前收到 `error` 或 `response.failed`，一律按上游 HTTP 500 处理：插件分类，故障策略按 500 重试或换号（线上的 500–599 规则会接住），重试用完客户端收到 HTTP 500 和 `{"error": {...}}`（上游的错误对象）。开头之后的错误事件照旧留在流里。开头就断掉的流按传输错误处理，不再给客户端一个没有回答的 200。扣住的时间只受管理员配置的流式空闲超时和上游整体超时约束，没有写死的上限。代价：扣住期间客户端收不到响应头，首字节晚到第一个内容事件（有首字节超时的下游要留意）；使用记录的首字时间（`first_token_ms`）因此记的是第一个内容事件，比以前的 `response.created` 晚；开头就断的流按传输错误处理，故障策略可能重放（上游若其实还在生成会多耗一次额度）。
+- 流内错误事件（`error`、无名的 `{"error":…}` 块、`response.failed`；扣住阶段、转发之后、Responses WebSocket 的轮次、只流式上游的收集）都以 WARN `gateway: upstream stream error event` 把原始事件整条记进日志（带 request_id、插件、账号、事件名；转发之后一个流里有几个时只记最后一个），以后据此细分处理；使用记录的错误信息不变。扣住阶段的错误另有一条 `gateway: upstream server error`（500 的通用日志）。
+- 契约见 CONTRACTS §138。
+
 ## 2026-11-25
 
 ### 核心 0.1.313：插件商店（官方商店与频道、信任取自索引）、插件 id = 发布者 + key、账号测试提示缺少模型价格（`be1636496`；迁移 0125，单向，停机维护；网关仍 0.1.139）
