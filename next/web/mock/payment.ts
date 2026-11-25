@@ -156,8 +156,10 @@ on('POST', '/p/payment/orders', (req) => {
   if (method.__status) return method
   const p = preview(req.body)
   const order = { ...seedOrder(0), id: 501 + orders.length, out_trade_no: `s2a_${Date.now().toString(16)}`, user_id: 1, user_email: EMAILS[0], amount: p.amount, bonus: p.bonus, pay_amount: p.pay_amount, method: method.type, method_name: method.name, gateway: method.gateway, promo_code: req.body?.promo_code || undefined, status: 'pending', trade_no: undefined, paid_at: undefined, completed_at: undefined, created_at: now(), expires_at: now(settings.order_timeout_minutes * 60) }
+  // Kept on the order while pending, so the history can continue paying it.
+  Object.assign(order, { pay_url: `https://pay.example.com/submit.php?out_trade_no=${order.out_trade_no}`, qr_code: `weixin://wxpay/bizpayurl?pr=${order.out_trade_no}` })
   orders.unshift(order)
-  return { out_trade_no: order.out_trade_no, pay_url: `https://pay.example.com/submit.php?out_trade_no=${order.out_trade_no}`, qr_code: `weixin://wxpay/bizpayurl?pr=${order.out_trade_no}`, expires_at: order.expires_at }
+  return { out_trade_no: order.out_trade_no, pay_url: order.pay_url, qr_code: order.qr_code, expires_at: order.expires_at }
 })
 
 function filterOrders(query: Record<string, string>, base: any[]) {

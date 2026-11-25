@@ -113,6 +113,9 @@ export interface Order {
   paid_at?: string
   completed_at?: string
   expires_at: string
+  /** Where to pay, while pending (the user's own orders only): "continue paying". */
+  pay_url?: string
+  qr_code?: string
 }
 
 /** POST /orders: where to pay. */

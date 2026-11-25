@@ -1,0 +1,55 @@
+import { computed, ref } from 'vue'
+import type { FilterChipItem, RangeKey, SelectOption } from '@sub2api/ui'
+import { paymentApi, usePaymentHost, type Order } from '../host'
+import { formatUsd } from '../format'
+import { confirmRun } from './actions'
+import { ORDER_STATUSES } from './status'
+
+// Filters of the orders page and the manual completion of an order.
+
+export const ORDER_RANGES: RangeKey[] = ['all', 'today', '7d', '30d', 'month', 'lastMonth', 'custom']
+
+export const emptyOrderFilters = () => ({ q: '', status: '', method: '', from: '', to: '' })
+export type OrderFilters = ReturnType<typeof emptyOrderFilters>
+
+/** Status and method options (method names from the checkout's methods), the chips and counts of the filter bar. */
+export function useOrderFilters(filters: OrderFilters) {
+  const host = usePaymentHost()
+  const t = host.t
+  const range = ref<RangeKey>('all')
+  const methods = ref<SelectOption[]>([])
+  // The enabled methods name the options; without them the filter offers only "any".
+  paymentApi.checkout().then((c) => (methods.value = c.methods.map((m) => ({ value: m.type, label: m.name }))), () => undefined)
+
+  const any = (name: string): SelectOption => ({ value: '', label: t('admin.anyOf', { name }) })
+  const statusOptions = computed(() => [any(t('admin.orders.fields.status')), ...ORDER_STATUSES.map((s) => ({ value: s, label: t(`status.${s}`) }))])
+  const methodOptions = computed(() => [any(t('admin.orders.fields.method')), ...methods.value])
+  const methodLabel = (v: string) => methods.value.find((m) => m.value === v)?.label ?? v
+
+  const chips = computed<FilterChipItem[]>(() => (filters.method ? [{ key: 'method', label: t('admin.orders.fields.method'), value: methodLabel(filters.method) }] : []))
+  const activeCount = computed(() => [filters.status, range.value !== 'all'].filter(Boolean).length)
+  const advancedCount = computed(() => chips.value.length)
+  const dirty = computed(() => activeCount.value + advancedCount.value > 0 || !!filters.q)
+
+  function reset() {
+    range.value = 'all'
+    Object.assign(filters, emptyOrderFilters())
+  }
+
+  return { range, statusOptions, methodOptions, chips, activeCount, advancedCount, dirty, reset }
+}
+
+/** Confirms and completes an order by hand: the user is credited the order's amount and bonus. */
+export function completeOrder(o: Order): Promise<boolean> {
+  const t = usePaymentHost().t
+  const credit = o.bonus ? t('admin.orders.creditWithBonus', { amount: formatUsd(o.amount + o.bonus), bonus: formatUsd(o.bonus) }) : formatUsd(o.amount)
+  return confirmRun(
+    {
+      title: t('admin.orders.completeTitle'),
+      message: t('admin.orders.completeConfirm', { no: o.out_trade_no, user: o.user_email || `#${o.user_id}`, credit }),
+      confirmText: t('admin.orders.complete')
+    },
+    () => paymentApi.completeOrder(o.id),
+    t('admin.orders.completed')
+  )
+}
