@@ -150,6 +150,13 @@ var coreModules = []coreModule{
 		{key: perm.BalanceAdjustAny, en: "Adjust balances of any managed user", zh: "调整任意可管理用户的余额", sensitive: true, superOnly: true,
 			desc: lt("With balance:adjust, also adjust the balance of users you may manage that hold other roles (operators, suppliers, custom roles).", "配合 balance:adjust，也能给持有其他角色（运维、供应商、自定义角色）的可管理用户调余额。"), requires: req(perm.BalanceAdjust)},
 	}},
+	{"redeem", lt("Redeem codes", "兑换码"), []corePerm{
+		{key: perm.RedeemUse, en: "Redeem codes", zh: "使用兑换码",
+			desc: lt("Redeem a code into your own balance.", "用兑换码给自己的余额充值。"), requires: req(perm.BalanceSelfRead)},
+		// Generating codes mints balance, so it is sensitive like adjusting it.
+		{key: perm.RedeemManage, en: "Manage redeem codes", zh: "管理兑换码", sensitive: true,
+			desc: lt("Generate, list and void redeem codes.", "批量生成、查看与作废兑换码。"), requires: req(perm.BalanceAllRead)},
+	}},
 	{"usage", lt("Usage", "使用记录"), []corePerm{
 		{key: perm.UsageSelfRead, en: "View own usage", zh: "查看自己的用量",
 			desc: lt("View your own usage logs and statistics.", "查看自己的使用日志与统计。")},

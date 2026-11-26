@@ -8,6 +8,7 @@ import './billing/sources'
 import './billing/usage'
 import './billing/accountUsage'
 import './billing/ledger'
+import './billing/redeem'
 import './billing/settings'
 import './billing/stickyRules'
 

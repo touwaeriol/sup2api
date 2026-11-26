@@ -83,6 +83,7 @@ const children: RouteRecordRaw[] = [
   // Its own entry in the finance section; a row of the users list opens it filtered.
   { path: 'ledger', component: () => import('@/views/ledger/LedgerView.vue'), meta: { perm: 'balance:all:read', title: 'nav.items.ledger' } },
   { path: 'me/ledger', redirect: '/me/wallet' },
+  { path: 'redeem-codes', component: () => import('@/views/redeem/RedeemCodesView.vue'), meta: { perm: 'redeem:manage', title: 'nav.items.redeemCodes' } },
   { path: 'me/balance', redirect: '/me/wallet' },
   { path: 'sticky', redirect: { path: '/settings', query: { tab: 'sticky' } } },
   {

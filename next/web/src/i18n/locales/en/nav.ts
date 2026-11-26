@@ -21,6 +21,7 @@ export default {
     accountUsageOverview: 'Account usage overview',
     accountUsage: 'Account usage logs',
     ledger: 'Balance ledger',
+    redeemCodes: 'Redeem codes',
     users: 'Users',
     segments: 'User groups',
     roles: 'Roles & permissions',

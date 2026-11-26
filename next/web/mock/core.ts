@@ -15,6 +15,7 @@ export const ALL_PERMISSIONS = [
   'proxy:read', 'proxy:manage',
   'price:read', 'price:manage',
   'balance:self:read', 'balance:all:read', 'balance:adjust', 'balance:adjust:any',
+  'redeem:use', 'redeem:manage',
   'usage:self:read', 'usage:all:read', 'usage:account:read', 'usage:settle',
   'sticky:read', 'sticky:manage',
   'plugin:read', 'plugin:install', 'plugin:manage', 'plugin:uninstall', 'plugin:grant:high', 'plugin:grant:critical', 'plugin:grant:db_schema_unconfined', 'plugin:egress:read', 'plugin:market:read',
@@ -38,7 +39,7 @@ export interface Identity {
 // The built-in roles' defaults (authz/catalog.go): the user role's, the
 // supplier's, and the supplier agent's (CONTRACTS §103.1): both of those and
 // its team's.
-export const USER_KEYS = ['apikey:self:manage', 'balance:self:read', 'usage:self:read', 'gateway:use']
+export const USER_KEYS = ['apikey:self:manage', 'balance:self:read', 'redeem:use', 'usage:self:read', 'gateway:use']
 export const SUPPLIER_KEYS = [
   'account:read:own', 'account:create:own', 'account:update:own', 'account:delete:own', 'account:test:own', 'account:credential:view:own',
   'proxy:read:own', 'proxy:manage:own', 'usage:self:read', 'usage:account:read:own'
@@ -476,12 +477,12 @@ const MENU_PERMS: Record<string, string | string[]> = {
   '/me/usage/overview': 'usage:self:read',
   '/me/wallet': 'balance:self:read',
   '/ledger': 'balance:all:read',
+  '/redeem-codes': 'redeem:manage',
   '/p/guard/dashboard': 'plugin.guard:stats:read',
   '/p/dynweight/dashboard': 'plugin.dynweight:dynweight:read',
   '/p/payment/orders': 'plugin.payment:config:manage',
   '/p/payment/settings': 'plugin.payment:config:manage',
   '/p/payment/my-orders': 'plugin.payment:recharge:use',
-  '/p/payment/redeem': 'plugin.payment:config:manage',
   '/p/payment/promo': 'plugin.payment:config:manage'
 }
 
@@ -533,7 +534,8 @@ const MENUS = [
     section: 'finance',
     label: L('Finance', '财务'),
     items: [
-      { id: 'ledger', label: L('Balance ledger', '余额流水'), icon: 'balance', path: '/ledger' }
+      { id: 'ledger', label: L('Balance ledger', '余额流水'), icon: 'balance', path: '/ledger' },
+      { id: 'redeem-codes', label: L('Redeem codes', '兑换码'), icon: 'key', path: '/redeem-codes' }
     ]
   },
   {
@@ -542,7 +544,6 @@ const MENUS = [
     items: [
       { id: 'payment:orders', label: L('Top-up orders', '充值订单'), icon: 'balance', path: '/p/payment/orders', plugin_key: 'payment' },
       { id: 'payment:settings', label: L('Top-up settings', '充值配置'), icon: 'settings', path: '/p/payment/settings', plugin_key: 'payment' },
-      { id: 'payment:redeem', label: L('Redeem codes', '兑换码'), icon: 'key', path: '/p/payment/redeem', plugin_key: 'payment' },
       { id: 'payment:promo', label: L('Promo codes', '优惠码'), icon: 'price', path: '/p/payment/promo', plugin_key: 'payment' }
     ]
   },

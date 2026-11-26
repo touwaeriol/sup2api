@@ -4,7 +4,7 @@ import { SStatusBadge } from '@sub2api/ui'
 import { usePaymentHost } from '../host'
 import { statusLabelKey, statusTones, type StatusKind } from './status'
 
-// Status badge of an order, a redeem code or a promo code.
+// Status badge of an order, a promo code or a promo code use.
 const props = defineProps<{ kind: StatusKind; status: string }>()
 const host = usePaymentHost()
 const label = computed(() => host.t(statusLabelKey(props.kind, props.status)))

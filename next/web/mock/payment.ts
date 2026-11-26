@@ -24,14 +24,12 @@ export const paymentUIPlugin = {
   menus: [
     { id: 'orders', section: 'pay', label: L('Top-up orders', '充值订单'), page: 'orders', icon: 'balance' },
     { id: 'settings', section: 'pay', label: L('Top-up settings', '充值配置'), page: 'settings', icon: 'settings' },
-    { id: 'redeem', section: 'pay', label: L('Redeem codes', '兑换码'), page: 'redeem', icon: 'key' },
     { id: 'promo', section: 'pay', label: L('Promo codes', '优惠码'), page: 'promo', icon: 'price' },
     { id: 'my-orders', section: 'me', label: L('Top-up history', '充值记录'), page: 'my-orders', icon: 'list', permission: 'recharge:use' }
   ],
   pages: {
     orders: { type: 'native', title: L('Top-up orders', '充值订单'), component: 'PaymentOrders' },
     settings: { type: 'native', title: L('Top-up settings', '充值配置'), component: 'PaymentSettings' },
-    redeem: { type: 'native', title: L('Redeem codes', '兑换码'), component: 'PaymentRedeemCodes' },
     promo: { type: 'native', title: L('Promo codes', '优惠码'), component: 'PaymentPromoCodes' },
     'my-orders': { type: 'native', title: L('Top-up history', '充值记录'), component: 'PaymentMyOrders' }
   },
@@ -83,7 +81,7 @@ const settings = {
 plugins.set('payment', {
   key: 'payment',
   name: paymentUIPlugin.name,
-  description: L('Online top-up, redeem codes and promo codes.', '在线充值订单、兑换码与优惠码，余额通过核心账本入账。'),
+  description: L('Online top-up and promo codes.', '在线充值订单与优惠码，余额通过核心账本入账。'),
   status: 'enabled',
   status_reason: '',
   active_version: VERSION,
@@ -215,35 +213,9 @@ on('GET', '/p/payment/admin/orders/stats', () => {
   return { today_amount: sum(done.slice(0, 4)), today_count: 4, month_amount: sum(done), pending_count: orders.filter((o) => o.status === 'pending').length, failed_count: orders.filter((o) => o.status === 'failed').length }
 })
 
-// ---- redeem codes ----
-
-const mask = (code: string) => `${code.slice(0, 4)}••••••••${code.slice(-4)}`
-const newCode = () => Array.from({ length: 4 }, () => Math.random().toString(36).slice(2, 6).toUpperCase().padEnd(4, 'X')).join('-')
-
-const redeemCodes: any[] = Array.from({ length: 14 }, (_, i) => {
-  const status = i < 3 ? 'used' : i === 4 ? 'expired' : 'unused'
-  return { id: 300 - i, code: mask(newCode()), value: [10, 50, 100][i % 3], status, used_by: status === 'used' ? 2 : undefined, used_by_email: status === 'used' ? 'alice@example.com' : undefined, used_at: status === 'used' ? now(-86400 * i) : undefined, expires_at: i % 4 === 0 ? now(86400 * 30) : undefined, notes: i < 6 ? '双十一活动' : '', created_at: now(-86400 * (i + 2)) }
-})
-
-on('GET', '/p/payment/redeem-codes', (req) => paginate(redeemCodes.filter((c) => !req.query.status || c.status === req.query.status), req.query))
-
-on('POST', '/p/payment/redeem-codes', (req) => {
-  const count = Math.min(1000, Math.max(1, Number(req.body?.count) || 1))
-  const codes = Array.from({ length: count }, newCode)
-  codes.forEach((c, i) => redeemCodes.unshift({ id: 400 + redeemCodes.length + i, code: mask(c), value: Number(req.body?.value), status: 'unused', expires_at: req.body?.expires_at, notes: req.body?.notes || '', created_at: now() }))
-  return { codes }
-})
-
-on('DELETE', '/p/payment/redeem-codes/:id', (req) => {
-  const c = redeemCodes.find((x) => x.id === Number(req.params.id))
-  if (!c || c.status !== 'unused') return fail(409, 'conflict', '只能作废未使用的兑换码')
-  c.status = 'expired'
-  return noContent()
-})
-
-on('POST', '/p/payment/redeem', (req) => (String(req.body?.code || '').trim().length >= 8 ? { amount: 50 } : fail(400, 'invalid_argument', '兑换码无效或已使用')))
-
 // ---- promo codes ----
+
+const newCode = () => Math.random().toString(36).slice(2, 10).toUpperCase()
 
 const promoCodes: any[] = [
   { id: 3, code: 'WELCOME10', bonus_amount: 10, min_amount: 20, max_uses: 500, used_count: 4, status: 'active', expires_at: now(86400 * 20), notes: '新用户首充', created_at: now(-86400 * 10) },

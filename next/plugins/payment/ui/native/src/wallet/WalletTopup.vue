@@ -3,16 +3,15 @@ import { onMounted, ref } from 'vue'
 import { errorMessage, paymentApi, usePaymentHost, type CheckoutInfo, type OrderPreview } from '../host'
 import ConfirmDialog from './ConfirmDialog.vue'
 import PayingDialog from './PayingDialog.vue'
-import RedeemCard from './RedeemCard.vue'
 import TopupCard from './TopupCard.vue'
 import { reservePayWindow } from './payWindow'
 import type { PayingOrder } from './types'
 import type { CheckoutMethod } from './useTopupQuote'
 
-// Slot wallet.topup (Mine > Wallet): the top-up card and the redeem code
-// card side by side (stacked on narrow screens), and the flow behind "Pay
-// now": confirm → order → wait for payment. `onCredited` refreshes the
-// wallet's balance and ledger after money arrives.
+// Slot wallet.topup (Mine > Wallet): the top-up card and the flow behind
+// "Pay now": confirm → order → wait for payment. Redeem codes are the core's
+// (the wallet shows its card beside this slot). `onCredited` refreshes the
+// wallet's balance after money arrives.
 const props = defineProps<{ onCredited?: () => void }>()
 const host = usePaymentHost()
 const t = host.t
@@ -70,25 +69,11 @@ async function placeOrder(promoCode: string, preview: OrderPreview) {
 </script>
 
 <template>
-  <div class="pay-wallet">
+  <div>
     <TopupCard :info="info" :loading="loading" @pay="startPay" />
-    <RedeemCard @credited="props.onCredited?.()" />
 
     <ConfirmDialog v-if="draft && info" v-model:open="confirmOpen" :amount="draft.amount" :method="draft.method" :currency="info.currency" :submitting="submitting" @confirm="placeOrder" />
     <PayingDialog v-model:open="payingOpen" :order="paying" :blocked="blocked" @credited="props.onCredited?.()" />
   </div>
 </template>
 
-<style scoped>
-.pay-wallet {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  align-items: start;
-  gap: 1rem;
-}
-@media (min-width: 1024px) {
-  .pay-wallet {
-    grid-template-columns: minmax(0, 2fr) minmax(18rem, 1fr);
-  }
-}
-</style>

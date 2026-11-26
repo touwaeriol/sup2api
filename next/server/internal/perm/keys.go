@@ -34,6 +34,8 @@ const (
 	BalanceAllRead                Key = "balance:all:read"
 	BalanceAdjust                 Key = "balance:adjust"
 	BalanceAdjustAny              Key = "balance:adjust:any"
+	RedeemUse                     Key = "redeem:use"
+	RedeemManage                  Key = "redeem:manage"
 	UsageSelfRead                 Key = "usage:self:read"
 	UsageAllRead                  Key = "usage:all:read"
 	UsageAccountRead              Key = "usage:account:read"

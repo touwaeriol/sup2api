@@ -139,22 +139,6 @@ export interface OrderStats {
   failed_count: number
 }
 
-export type RedeemStatus = 'unused' | 'used' | 'expired'
-
-export interface RedeemCode {
-  id: number
-  /** Masked except right after generating. */
-  code: string
-  value: number
-  status: RedeemStatus
-  used_by?: number
-  used_by_email?: string
-  used_at?: string
-  expires_at?: string
-  notes?: string
-  created_at: string
-}
-
 export interface PromoCode {
   id: number
   code: string
@@ -190,14 +174,10 @@ export const paymentApi = {
   myOrders: (query: Record<string, string>) => api().list<Order>('/orders', query),
   order: (outTradeNo: string) => api().get<Order>(`/orders/${encodeURIComponent(outTradeNo)}`),
   cancelOrder: (outTradeNo: string) => api().post<Order>(`/orders/${encodeURIComponent(outTradeNo)}/cancel`, {}),
-  redeem: (code: string) => api().post<{ amount: number }>('/redeem', { code }),
 
   adminOrders: (query: Record<string, string>) => api().list<Order>('/admin/orders', query),
   orderStats: () => api().get<OrderStats>('/admin/orders/stats'),
 
-  redeemCodes: (query: Record<string, string>) => api().list<RedeemCode>('/redeem-codes', query),
-  createRedeemCodes: (body: { count: number; value: number; expires_at?: string; notes?: string }) => api().post<{ codes: string[] }>('/redeem-codes', body),
-  voidRedeemCode: (id: number) => api().del<void>(`/redeem-codes/${id}`),
 
   promoCodes: (query: Record<string, string>) => api().list<PromoCode>('/promo-codes', query),
   createPromoCode: (body: Partial<PromoCode>) => api().post<PromoCode>('/promo-codes', body),

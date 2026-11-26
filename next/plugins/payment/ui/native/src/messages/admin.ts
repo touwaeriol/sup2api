@@ -32,36 +32,6 @@ export default {
       },
       sections: { order: 'Order', payment: 'Payment', timeline: 'Timeline' }
     },
-    redeem: {
-      title: 'Redeem codes',
-      empty: 'No redeem codes',
-      generate: 'Generate codes',
-      void: 'Void',
-      voidTitle: 'Void this redeem code?',
-      voidConfirm: '{code} ({value}) can no longer be redeemed. This cannot be undone.',
-      voided: 'Redeem code voided',
-      status: { unused: 'Unused', used: 'Used', expired: 'Expired' },
-      fields: { code: 'Code', value: 'Value', status: 'Status', used_by: 'Used by', used_at: 'Used at', expires_at: 'Expires', notes: 'Notes', created_at: 'Created' },
-      form: {
-        title: 'Generate redeem codes',
-        submit: 'Generate',
-        count: 'Count',
-        countHint: '1 to 1000 codes at a time',
-        value: 'Value',
-        valueHint: 'Balance credited to the user who redeems a code',
-        expires: 'Expires',
-        expiresHint: 'Leave empty for codes that never expire',
-        notes: 'Notes',
-        notesPlaceholder: 'e.g. Black Friday campaign'
-      },
-      result: {
-        title: '{n} redeem codes generated',
-        warn: 'The codes are not shown again once this is closed. Copy or download them first.',
-        copyAll: 'Copy all',
-        download: 'Download .txt',
-        done: 'I saved them'
-      }
-    },
     promo: {
       title: 'Promo codes',
       intro: 'Users enter a promo code when confirming a top-up; once the payment succeeds they are credited the bonus on top.',
@@ -138,36 +108,6 @@ export default {
         expires_at: '过期时间'
       },
       sections: { order: '订单信息', payment: '支付信息', timeline: '时间' }
-    },
-    redeem: {
-      title: '兑换码',
-      empty: '暂无兑换码',
-      generate: '批量生成',
-      void: '作废',
-      voidTitle: '作废兑换码？',
-      voidConfirm: '{code}（面额 {value}）作废后不能再兑换，此操作不能撤销。',
-      voided: '兑换码已作废',
-      status: { unused: '未使用', used: '已使用', expired: '已失效' },
-      fields: { code: '兑换码', value: '面额', status: '状态', used_by: '使用者', used_at: '使用时间', expires_at: '过期时间', notes: '备注', created_at: '创建时间' },
-      form: {
-        title: '批量生成兑换码',
-        submit: '生成',
-        count: '数量',
-        countHint: '一次 1–1000 个',
-        value: '面额',
-        valueHint: '兑换后给用户入账的余额',
-        expires: '过期时间',
-        expiresHint: '留空表示永不过期',
-        notes: '备注',
-        notesPlaceholder: '如：双十一活动'
-      },
-      result: {
-        title: '已生成 {n} 个兑换码',
-        warn: '关闭后不再显示明文，请先复制或下载保存。',
-        copyAll: '复制全部',
-        download: '下载 txt',
-        done: '我已保存'
-      }
     },
     promo: {
       title: '优惠码',

@@ -11,7 +11,6 @@ export function register(host: PluginHost) {
   host.addMessages(messages)
   host.registerComponent('PaymentSettings', lazyPage(() => import('./settings/PaymentSettings.vue')))
   host.registerComponent('PaymentOrders', lazyPage(() => import('./admin/OrdersPage.vue')))
-  host.registerComponent('PaymentRedeemCodes', lazyPage(() => import('./admin/RedeemCodesPage.vue')))
   host.registerComponent('PaymentPromoCodes', lazyPage(() => import('./admin/PromoCodesPage.vue')))
   host.registerComponent('PaymentMyOrders', lazyPage(() => import('./wallet/MyOrdersPage.vue')))
   host.registerComponent('WalletTopup', lazyPage(() => import('./wallet/WalletTopup.vue')))

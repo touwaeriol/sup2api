@@ -15,7 +15,8 @@ export default {
     admin_adjust: '管理员调整',
     plugin_credit: '插件入账',
     plugin_debit: '插件扣减',
-    refund: '退款'
+    refund: '退款',
+    redeem: '兑换码'
   },
   adjust: {
     currentBalance: '当前余额',

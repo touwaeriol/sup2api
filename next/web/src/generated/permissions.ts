@@ -35,6 +35,8 @@ export const P = {
   BalanceAllRead: 'balance:all:read',
   BalanceAdjust: 'balance:adjust',
   BalanceAdjustAny: 'balance:adjust:any',
+  RedeemUse: 'redeem:use',
+  RedeemManage: 'redeem:manage',
   UsageSelfRead: 'usage:self:read',
   UsageAllRead: 'usage:all:read',
   UsageAccountRead: 'usage:account:read',
@@ -415,6 +417,26 @@ export const PERMISSIONS: Record<PermKey, PermMeta> = {
     description: {
       en: 'With balance:adjust, also adjust the balance of users you may manage that hold other roles (operators, suppliers, custom roles).',
       zh: '配合 balance:adjust，也能给持有其他角色（运维、供应商、自定义角色）的可管理用户调余额。'
+    }
+  },
+  'redeem:use': {
+    module: 'redeem',
+    risk: 'low',
+    stepUp: false,
+    requires: ['balance:self:read'],
+    description: {
+      en: 'Redeem a code into your own balance.',
+      zh: '用兑换码给自己的余额充值。'
+    }
+  },
+  'redeem:manage': {
+    module: 'redeem',
+    risk: 'sensitive',
+    stepUp: false,
+    requires: ['balance:all:read'],
+    description: {
+      en: 'Generate, list and void redeem codes.',
+      zh: '批量生成、查看与作废兑换码。'
     }
   },
   'usage:self:read': {

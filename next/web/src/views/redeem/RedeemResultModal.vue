@@ -1,14 +1,13 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { SAlert, SButton, SCopyButton, SModal, STextarea } from '@sub2api/ui'
-import { usePaymentHost } from '../host'
 
 // The plain codes of a batch just generated: shown once, to copy or save as
 // a text file; closing drops them (the list keeps them masked).
 const props = defineProps<{ open: boolean; codes: string[] }>()
 const emit = defineEmits<{ 'update:open': [open: boolean] }>()
-const host = usePaymentHost()
-const t = host.t
+const { t } = useI18n()
 
 const text = computed(() => props.codes.join('\n'))
 
@@ -29,19 +28,13 @@ function download() {
 </script>
 
 <template>
-  <SModal :open="open" :title="t('admin.redeem.result.title', { n: codes.length })" width="lg" persistent @update:open="emit('update:open', $event)">
-    <SAlert tone="warning" class="payment-result-warn">{{ t('admin.redeem.result.warn') }}</SAlert>
-    <STextarea :model-value="text" :rows="Math.min(12, Math.max(4, codes.length))" mono readonly :aria-label="t('admin.redeem.fields.code')" />
+  <SModal :open="open" :title="t('redeem.result.title', { n: codes.length })" width="lg" persistent @update:open="emit('update:open', $event)">
+    <SAlert tone="warning" class="mb-3">{{ t('redeem.result.warn') }}</SAlert>
+    <STextarea :model-value="text" :rows="Math.min(12, Math.max(4, codes.length))" mono readonly :aria-label="t('redeem.cols.code')" />
     <template #footer>
-      <SCopyButton :text="text" :label="t('admin.redeem.result.copyAll')" variant="secondary" size="md" />
-      <SButton icon="download" @click="download">{{ t('admin.redeem.result.download') }}</SButton>
-      <SButton variant="primary" @click="emit('update:open', false)">{{ t('admin.redeem.result.done') }}</SButton>
+      <SCopyButton :text="text" :label="t('redeem.result.copyAll')" variant="secondary" size="md" />
+      <SButton icon="download" @click="download">{{ t('redeem.result.download') }}</SButton>
+      <SButton variant="primary" @click="emit('update:open', false)">{{ t('redeem.result.done') }}</SButton>
     </template>
   </SModal>
 </template>
-
-<style scoped>
-.payment-result-warn {
-  margin-bottom: 0.75rem;
-}
-</style>

@@ -99,7 +99,8 @@ export default {
     today: 'Spent today',
     yesterday: 'Spent yesterday',
     last30d: 'Spent in 30 days',
-    topupHint: 'Online top-up is not available yet. Contact your administrator to add funds.'
+    topupHint: 'Online top-up is not available yet. Contact your administrator to add funds.',
+    topupHintRedeem: 'Online top-up is not available yet. Use a redeem code, or contact your administrator to add funds.'
   },
   models: {
     title: 'Models & prices',

@@ -99,7 +99,8 @@ export default {
     today: '今日消费',
     yesterday: '昨日消费',
     last30d: '近 30 天消费',
-    topupHint: '暂不支持在线充值。需要充值请联系管理员。'
+    topupHint: '暂不支持在线充值。需要充值请联系管理员。',
+    topupHintRedeem: '暂不支持在线充值。可以用兑换码充值，或联系管理员。'
   },
   models: {
     title: '模型与价格',

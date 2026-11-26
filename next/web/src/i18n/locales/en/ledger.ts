@@ -15,7 +15,8 @@ export default {
     admin_adjust: 'Admin adjustment',
     plugin_credit: 'Plugin credit',
     plugin_debit: 'Plugin debit',
-    refund: 'Refund'
+    refund: 'Refund',
+    redeem: 'Redeem code'
   },
   adjust: {
     currentBalance: 'Current balance',

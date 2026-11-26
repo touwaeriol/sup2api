@@ -21,6 +21,7 @@ export default {
     accountUsageOverview: '账号用量概览',
     accountUsage: '账号日志',
     ledger: '余额流水',
+    redeemCodes: '兑换码',
     users: '用户',
     segments: '用户分组',
     roles: '角色与权限',

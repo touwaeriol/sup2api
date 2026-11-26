@@ -74,15 +74,6 @@ export default {
       resume: 'Continue paying',
       empty: 'No top-ups yet'
     },
-    redeem: {
-      title: 'Redeem code',
-      subtitle: 'Add funds with a code',
-      placeholder: 'Enter a redeem code',
-      submit: 'Redeem',
-      required: 'Enter a redeem code',
-      success: '{amount} credited',
-      failed: 'Could not redeem the code'
-    }
   },
   zh: {
     title: '充值',
@@ -158,14 +149,5 @@ export default {
       resume: '继续支付',
       empty: '暂无充值记录'
     },
-    redeem: {
-      title: '兑换码',
-      subtitle: '使用兑换码直接为余额充值',
-      placeholder: '输入兑换码',
-      submit: '兑换',
-      required: '请输入兑换码',
-      success: '已入账 {amount}',
-      failed: '兑换失败'
-    }
   }
 }
