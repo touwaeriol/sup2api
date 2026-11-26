@@ -98,10 +98,7 @@ export default {
     description: '你的余额、消费和充值。每一笔余额变动在“使用日志”的余额变动里。',
     today: '今日消费',
     yesterday: '昨日消费',
-    last30d: '近 30 天消费',
-    topupHint: '暂不支持在线充值。需要充值请联系管理员。',
-    noOnline: '在线充值暂未开通',
-    noOnlineHint: '需要用其他方式充值时，请联系管理员。'
+    last30d: '近 30 天消费'
   },
   models: {
     title: '模型与价格',

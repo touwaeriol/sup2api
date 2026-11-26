@@ -37,6 +37,9 @@ export const P = {
   BalanceAdjustAny: 'balance:adjust:any',
   RedeemUse: 'redeem:use',
   RedeemManage: 'redeem:manage',
+  TopupUse: 'topup:use',
+  TopupOrderRead: 'topup:order:read',
+  TopupManage: 'topup:manage',
   UsageSelfRead: 'usage:self:read',
   UsageAllRead: 'usage:all:read',
   UsageAccountRead: 'usage:account:read',
@@ -437,6 +440,36 @@ export const PERMISSIONS: Record<PermKey, PermMeta> = {
     description: {
       en: 'Generate, list and void redeem codes.',
       zh: '批量生成、查看与作废兑换码。'
+    }
+  },
+  'topup:use': {
+    module: 'topup',
+    risk: 'low',
+    stepUp: false,
+    requires: ['balance:self:read'],
+    description: {
+      en: 'Top up your own balance with the enabled payment methods and see your own orders.',
+      zh: '用已启用的支付方式给自己充值，查看自己的充值记录。'
+    }
+  },
+  'topup:order:read': {
+    module: 'topup',
+    risk: 'low',
+    stepUp: false,
+    requires: ['balance:all:read'],
+    description: {
+      en: "View every user's top-up orders and the top-up statistics (read only).",
+      zh: '查看全站充值订单与统计（只读）。'
+    }
+  },
+  'topup:manage': {
+    module: 'topup',
+    risk: 'sensitive',
+    stepUp: false,
+    requires: ['topup:order:read'],
+    description: {
+      en: 'Edit the top-up settings, payment methods, built-in gateway credentials and promo codes.',
+      zh: '修改充值配置、支付方式、内置网关密钥与优惠码。'
     }
   },
   'usage:self:read': {

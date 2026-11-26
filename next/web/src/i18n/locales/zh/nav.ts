@@ -22,6 +22,9 @@ export default {
     accountUsage: '账号日志',
     ledger: '余额流水',
     redeemCodes: '兑换码',
+    topupOrders: '充值订单',
+    topupSettings: '充值配置',
+    promoCodes: '优惠码',
     users: '用户',
     segments: '用户分组',
     roles: '角色与权限',
@@ -36,6 +39,7 @@ export default {
     myUsage: '使用日志',
     myModels: '模型与价格',
     myWallet: '钱包',
+    myTopupOrders: '充值记录',
     myProfile: '个人设置'
   },
   label: '控制台菜单',

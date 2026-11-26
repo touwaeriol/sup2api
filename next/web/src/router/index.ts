@@ -84,6 +84,11 @@ const children: RouteRecordRaw[] = [
   { path: 'ledger', component: () => import('@/views/ledger/LedgerView.vue'), meta: { perm: 'balance:all:read', title: 'nav.items.ledger' } },
   { path: 'me/ledger', redirect: '/me/wallet' },
   { path: 'redeem-codes', component: () => import('@/views/redeem/RedeemCodesView.vue'), meta: { perm: 'redeem:manage', title: 'nav.items.redeemCodes' } },
+  // Core top-up (Top-up & payment section, Mine > Top-up history).
+  { path: 'topup/orders', component: () => import('@/views/topup/admin/OrdersPage.vue'), meta: { perm: 'topup:order:read', title: 'nav.items.topupOrders' } },
+  { path: 'topup/settings', component: () => import('@/views/topup/settings/PaymentSettings.vue'), meta: { perm: 'topup:manage', title: 'nav.items.topupSettings' } },
+  { path: 'promo-codes', component: () => import('@/views/topup/admin/PromoCodesPage.vue'), meta: { perm: 'topup:manage', title: 'nav.items.promoCodes' } },
+  { path: 'me/topup-orders', component: () => import('@/views/topup/wallet/MyOrdersPage.vue'), meta: { perm: 'topup:use', title: 'nav.items.myTopupOrders' } },
   { path: 'me/balance', redirect: '/me/wallet' },
   { path: 'sticky', redirect: { path: '/settings', query: { tab: 'sticky' } } },
   {

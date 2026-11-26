@@ -72,6 +72,10 @@ export const MODULES: ModuleDef[] = [
   { module: 'redeem', label: L('Redeem codes', '兑换码'), source: 'core', status: 'active', permissions: [
     { key: 'redeem:use', label: L('Redeem a code', '使用兑换码') },
     { key: 'redeem:manage', label: L('Generate and void codes', '生成与作废兑换码'), risk: 'sensitive' }] },
+  { module: 'topup', label: L('Top-up & payment', '充值/支付'), source: 'core', status: 'active', permissions: [
+    { key: 'topup:use', label: L('Top up online', '在线充值') },
+    { key: 'topup:order:read', label: L('View top-up orders', '查看充值订单') },
+    { key: 'topup:manage', label: L('Manage top-up', '管理充值'), risk: 'sensitive' }] },
   { module: 'usage', label: L('Usage', '使用记录'), source: 'core', status: 'active', permissions: [
     { key: 'usage:self:read', label: L('View own', '查看自己的') }, { key: 'usage:all:read', label: L('View all', '查看全部') },
     { key: 'usage:settle', label: L('Settle usage', '结算用量'), risk: 'sensitive' }] },

@@ -23,7 +23,7 @@ import './pluginEgress'
 import './updates'
 import './observability'
 import './plugins'
-import './payment'
+import './topup'
 import './communityPlugins'
 import './pluginConsent'
 

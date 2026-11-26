@@ -98,10 +98,7 @@ export default {
     description: 'Your balance, spending and top-ups. Every balance change is under Usage logs, balance changes.',
     today: 'Spent today',
     yesterday: 'Spent yesterday',
-    last30d: 'Spent in 30 days',
-    topupHint: 'Online top-up is not available yet. Contact your administrator to add funds.',
-    noOnline: 'Online top-up is not available yet',
-    noOnlineHint: 'To add funds another way, contact your administrator.'
+    last30d: 'Spent in 30 days'
   },
   models: {
     title: 'Models & prices',

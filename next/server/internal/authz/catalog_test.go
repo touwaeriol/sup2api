@@ -47,7 +47,7 @@ func TestCatalogModuleOrder(t *testing.T) {
 			t.Errorf("module %s has no label", m.key)
 		}
 	}
-	want := []string{"user", "role", "apikey", "group", "segment", "account", "proxy", "price", "balance", "usage", "sticky",
+	want := []string{"user", "role", "apikey", "group", "segment", "account", "proxy", "price", "balance", "redeem", "topup", "usage", "sticky",
 		"plugin", "publisher", "node", "audit", "task", "gateway", "settings", "system_update"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("modules = %v\nwant %v", got, want)
@@ -122,10 +122,10 @@ func TestCatalogFlaggedSets(t *testing.T) {
 		"balance:adjust", "balance:adjust:any", "group:manage",
 		"plugin:grant:critical", "plugin:grant:db_schema_unconfined", "plugin:grant:high",
 		"plugin:install", "plugin:manage", "plugin:uninstall",
-		"price:manage", "proxy:manage", "publisher:manage",
+		"price:manage", "proxy:manage", "publisher:manage", "redeem:manage",
 		"role:assign", "role:define", "settings:manage",
 		"system:update:execute", "system:update:recover",
-		"task:manage", "task:run", "usage:account:read", "usage:settle", "user:delete", "user:password:reset",
+		"task:manage", "task:run", "topup:manage", "usage:account:read", "usage:settle", "user:delete", "user:password:reset",
 	}
 	wantStepUp := []string{
 		"account:credential:view",

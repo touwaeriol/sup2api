@@ -1,4 +1,0 @@
-{
-  "extends": "../../../../web/packages/vite-preset/tsconfig.plugin.json",
-  "include": ["src/**/*.ts", "src/**/*.vue"]
-}

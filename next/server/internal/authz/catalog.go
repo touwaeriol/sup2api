@@ -157,6 +157,15 @@ var coreModules = []coreModule{
 		{key: perm.RedeemManage, en: "Manage redeem codes", zh: "管理兑换码", sensitive: true,
 			desc: lt("Generate, list and void redeem codes.", "批量生成、查看与作废兑换码。"), requires: req(perm.BalanceAllRead)},
 	}},
+	{"topup", lt("Top-up & payment", "充值/支付"), []corePerm{
+		{key: perm.TopupUse, en: "Top up online", zh: "在线充值",
+			desc: lt("Top up your own balance with the enabled payment methods and see your own orders.", "用已启用的支付方式给自己充值，查看自己的充值记录。"), requires: req(perm.BalanceSelfRead)},
+		{key: perm.TopupOrderRead, en: "View top-up orders", zh: "查看充值订单",
+			desc: lt("View every user's top-up orders and the top-up statistics (read only).", "查看全站充值订单与统计（只读）。"), requires: req(perm.BalanceAllRead)},
+		// Payment credentials and promo bonuses decide where money goes and how much balance is minted.
+		{key: perm.TopupManage, en: "Manage top-up", zh: "管理充值",
+			desc: lt("Edit the top-up settings, payment methods, built-in gateway credentials and promo codes.", "修改充值配置、支付方式、内置网关密钥与优惠码。"), sensitive: true, requires: req(perm.TopupOrderRead)},
+	}},
 	{"usage", lt("Usage", "使用记录"), []corePerm{
 		{key: perm.UsageSelfRead, en: "View own usage", zh: "查看自己的用量",
 			desc: lt("View your own usage logs and statistics.", "查看自己的使用日志与统计。")},

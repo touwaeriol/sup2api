@@ -22,6 +22,9 @@ export default {
     accountUsage: 'Account usage logs',
     ledger: 'Balance ledger',
     redeemCodes: 'Redeem codes',
+    topupOrders: 'Top-up orders',
+    topupSettings: 'Top-up settings',
+    promoCodes: 'Promo codes',
     users: 'Users',
     segments: 'User groups',
     roles: 'Roles & permissions',
@@ -36,6 +39,7 @@ export default {
     myUsage: 'Usage logs',
     myModels: 'Models & prices',
     myWallet: 'Wallet',
+    myTopupOrders: 'Top-up history',
     myProfile: 'Profile'
   },
   label: 'Console menu',
