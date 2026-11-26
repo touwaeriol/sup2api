@@ -103,12 +103,12 @@ describe('the settings entry', () => {
   })
 
   it('leads a caller without one to the first page of the view that is theirs', async () => {
-    auth.denied = ['settings:read', 'sticky:read']
+    auth.denied = ['settings:read', 'sticky:read', 'topup:manage']
     expect(await follow('/settings')).toBe('/prices')
   })
 
   it('is refused without any page of the view, as is a link to a configuration page', async () => {
-    auth.denied = ['settings:read', 'sticky:read']
+    auth.denied = ['settings:read', 'sticky:read', 'topup:manage']
     expect(await follow('/settings?tab=billing')).toMatch(/^\/forbidden\?perm=settings:read/)
     auth.denied.push('group:read', 'price:read', 'plugin:market:read')
     expect(await follow('/settings')).toMatch(/^\/forbidden\?perm=settings:read/)
@@ -127,7 +127,7 @@ describe('links to plugin settings as a tab', () => {
   })
 
   it("do not ask for the settings page's permissions: the core checks the plugin's", async () => {
-    auth.denied = ['settings:read', 'sticky:read']
+    auth.denied = ['settings:read', 'sticky:read', 'topup:manage']
     expect(await follow('/settings?tab=plugin:mailer')).toBe('/plugins/mailer/settings')
     expect(await follow('/settings?tab=billing')).toMatch(/^\/forbidden/)
   })

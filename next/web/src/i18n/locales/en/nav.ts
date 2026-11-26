@@ -23,7 +23,6 @@ export default {
     ledger: 'Balance ledger',
     redeemCodes: 'Redeem codes',
     topupOrders: 'Top-up orders',
-    topupSettings: 'Top-up settings',
     promoCodes: 'Promo codes',
     users: 'Users',
     segments: 'User groups',

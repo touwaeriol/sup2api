@@ -467,7 +467,7 @@ const MENU_PERMS: Record<string, string | string[]> = {
   '/publishers': 'publisher:read',
   '/nodes': 'node:read',
   '/groups': 'group:read',
-  '/settings': ['settings:read', 'sticky:read', 'price:read'],
+  '/settings': ['settings:read', 'sticky:read', 'price:read', 'topup:manage'],
   '/system/upgrades': 'system:update:read',
   '/system/audit': 'audit:read',
   '/system/tasks': 'task:read',
@@ -481,7 +481,6 @@ const MENU_PERMS: Record<string, string | string[]> = {
   '/p/guard/dashboard': 'plugin.guard:stats:read',
   '/p/dynweight/dashboard': 'plugin.dynweight:dynweight:read',
   '/topup/orders': 'topup:order:read',
-  '/topup/settings': 'topup:manage',
   '/promo-codes': 'topup:manage',
   '/me/topup-orders': 'topup:use'
 }
@@ -542,7 +541,6 @@ const MENUS = [
     label: L('Top-up & payment', '充值/支付'),
     items: [
       { id: 'topup-orders', label: L('Top-up orders', '充值订单'), icon: 'balance', path: '/topup/orders' },
-      { id: 'topup-settings', label: L('Top-up settings', '充值配置'), icon: 'settings', path: '/topup/settings' },
       { id: 'redeem-codes', label: L('Redeem codes', '兑换码'), icon: 'key', path: '/redeem-codes' },
       { id: 'promo-codes', label: L('Promo codes', '优惠码'), icon: 'price', path: '/promo-codes' }
     ]

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// Top-up & payment > Top-up settings (core): general / methods / gateways
+// System settings > Top-up settings (core, ?tab=topup): general / methods / gateways
 // tabs over one settings form, saved together by SSettingsPage's bar
 // (GET / PUT /topup/settings; secrets come back as "******"). Plugin
 // gateways are listed on the gateways tab; their credentials are the
@@ -36,7 +36,7 @@ watch(errorCount, (n) => {
 </script>
 
 <template>
-  <SSettingsPage :settings="settings" :title="t('topup.settings.title')" :description="t('topup.settings.description')">
+  <SSettingsPage :settings="settings">
     <STabs v-model="tab" :tabs="tabs" :aria-label="t('topup.settings.title')">
       <template #default="{ active }">
         <GeneralPanel v-if="active === 'general'" :form="settings" />

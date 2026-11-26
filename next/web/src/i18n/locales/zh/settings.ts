@@ -5,7 +5,8 @@ export default {
     gateway: '网关',
     pricing: '定价',
     billing: '计费与通知',
-    runtime: '运行环境'
+    runtime: '运行环境',
+    topup: '充值/支付'
   },
   tabs: {
     notifications: '通知',
@@ -13,7 +14,8 @@ export default {
     billing: '计费',
     gateway: '网关设置',
     sticky: '粘性会话',
-    offload: 'CPU 保护'
+    offload: 'CPU 保护',
+    topup: '充值配置'
   },
   scheduling: {
     tabs: { failure: '故障策略', balance: '均衡负载' }

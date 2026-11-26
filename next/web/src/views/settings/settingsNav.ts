@@ -10,7 +10,7 @@ import type { PermRef } from '@/generated/permissions'
  * System settings (CONTRACTS §90): the configuration pages of the settings
  * page (?tab=<key>) and, in the sidebar's settings view, the pages with an
  * address of their own that belong with them: model prices, the plugin store's
- * channels. Groups sit with
+ * channels, the top-up settings. Groups sit with
  * the accounts (§132).
  */
 
@@ -67,6 +67,10 @@ const LAYOUT: Group[] = [
       page('billing', 'settings:read', 'settings.tabs.billing', 'balance'),
       page('notifications', 'settings:read', 'settings.tabs.notifications', 'inbox')
     ]
+  },
+  {
+    key: 'topup',
+    pages: [page('topup', 'topup:manage', 'settings.tabs.topup', 'coin')]
   },
   {
     key: 'runtime',

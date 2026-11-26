@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { defineAsyncComponent } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { SAlert, SPageHeader, STitleScope } from '@sub2api/ui'
 import StickyView from '@/views/sticky/StickyView.vue'
@@ -11,6 +12,9 @@ import PluginEgressSettingsCard from './PluginEgressSettingsCard.vue'
 import SchedulingPolicyView from './SchedulingPolicyView.vue'
 import UpdateSourceCard from './UpdateSourceCard.vue'
 import { useSettingsNav } from './settingsNav'
+
+// The top-up settings (core top-up) load with their tab only.
+const TopupSettings = defineAsyncComponent(() => import('@/views/topup/settings/PaymentSettings.vue'))
 
 const { t } = useI18n()
 
@@ -33,6 +37,7 @@ const { activeTab: active, activeLabel, missing } = useSettingsNav()
       <OffloadSettingsCard v-else-if="active === 'offload'" />
       <UpdateSourceCard v-else-if="active === 'updates'" />
       <PluginEgressSettingsCard v-else-if="active === 'plugin-egress'" />
+      <TopupSettings v-else-if="active === 'topup'" />
     </STitleScope>
   </div>
 </template>

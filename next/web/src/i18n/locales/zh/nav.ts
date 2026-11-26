@@ -23,7 +23,6 @@ export default {
     ledger: '余额流水',
     redeemCodes: '兑换码',
     topupOrders: '充值订单',
-    topupSettings: '充值配置',
     promoCodes: '优惠码',
     users: '用户',
     segments: '用户分组',

@@ -5,7 +5,8 @@ export default {
     gateway: 'Gateway',
     pricing: 'Pricing',
     billing: 'Billing & notifications',
-    runtime: 'Runtime'
+    runtime: 'Runtime',
+    topup: 'Top-up & payment'
   },
   tabs: {
     notifications: 'Notifications',
@@ -13,7 +14,8 @@ export default {
     billing: 'Billing',
     gateway: 'Gateway settings',
     sticky: 'Sticky sessions',
-    offload: 'CPU protection'
+    offload: 'CPU protection',
+    topup: 'Top-up settings'
   },
   scheduling: {
     tabs: { failure: 'Failure policy', balance: 'Load balancing' }
