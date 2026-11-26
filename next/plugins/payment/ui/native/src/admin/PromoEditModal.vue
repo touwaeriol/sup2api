@@ -14,6 +14,7 @@ const t = host.t
 interface Draft extends Record<string, unknown> {
   code?: string
   bonus_amount?: number
+  min_amount?: number
   max_uses?: number
   expires_at?: string
   notes?: string
@@ -22,12 +23,14 @@ interface Draft extends Record<string, unknown> {
 const rules: Rules<Draft> = {
   code: { pattern: /^[A-Za-z0-9_-]{3,32}$/, message: () => t('admin.promo.form.codeInvalid') },
   bonus_amount: [{ required: true, type: 'number' }, { validator: (v) => Number(v) > 0 || t('admin.positive') }],
+  min_amount: { required: true, type: 'number', min: 0 },
   max_uses: { required: true, type: 'integer', min: 0 },
   notes: { max: 200 }
 }
 
 const fromPromo = (p: PromoCode | null): Draft =>
-  p ? { code: p.code, bonus_amount: p.bonus_amount, max_uses: p.max_uses, expires_at: p.expires_at, notes: p.notes } : { bonus_amount: 5, max_uses: 0 }
+  p ? { code: p.code, bonus_amount: p.bonus_amount, min_amount: p.min_amount, max_uses: p.max_uses, expires_at: p.expires_at, notes: p.notes }
+    : { bonus_amount: 5, min_amount: 20, max_uses: 0 }
 const { form, saving, reset, submit } = useModalForm<Draft>(() => fromPromo(props.promo), rules)
 const editing = computed(() => !!props.promo)
 
@@ -40,7 +43,8 @@ watch(
 function body(d: Draft): Partial<PromoCode> {
   const code = editing.value ? undefined : d.code?.trim().toUpperCase() || undefined
   // An emptied expiry is sent as '' so an edit can take it away.
-  return { code, bonus_amount: Number(d.bonus_amount), max_uses: Number(d.max_uses), expires_at: d.expires_at ?? '', notes: d.notes?.trim() ?? '' }
+  const amounts = { bonus_amount: Number(d.bonus_amount), min_amount: Number(d.min_amount), max_uses: Number(d.max_uses) }
+  return { code, ...amounts, expires_at: d.expires_at ?? '', notes: d.notes?.trim() ?? '' }
 }
 
 async function save() {
@@ -67,6 +71,9 @@ async function save() {
       </SField>
       <SField prop="bonus_amount" :label="t('admin.promo.form.bonus')" :hint="t('admin.promo.form.bonusHint')">
         <SInput type="number" min="0" step="0.01" suffix="USD" v-bind="form.bindNumber('bonus_amount')" />
+      </SField>
+      <SField prop="min_amount" :label="t('admin.promo.form.minAmount')" :hint="t('admin.promo.form.minAmountHint')">
+        <SInput type="number" min="0" step="1" suffix="USD" v-bind="form.bindNumber('min_amount')" />
       </SField>
       <SField prop="max_uses" :label="t('admin.promo.form.maxUses')" :hint="t('admin.promo.form.maxUsesHint')">
         <SInput type="number" min="0" step="1" v-bind="form.bindNumber('max_uses')" />

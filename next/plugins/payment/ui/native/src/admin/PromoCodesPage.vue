@@ -20,6 +20,7 @@ const columns = computed<TableColumn[]>(() => {
   return [
     col('code', { mobile: 'title' }),
     col('bonus_amount', { align: 'right', mobile: 'meta' }),
+    col('min_amount', { align: 'right', mobile: 'meta' }),
     col('usage', { mobile: 'meta' }),
     col('expires_at', { mobile: 'meta' }),
     col('status', { mobile: 'status' }),
@@ -67,6 +68,9 @@ async function remove(p: PromoCode) {
     <STable card :columns="columns" :rows="list.items.value" :loading="list.loading.value" :error="list.error.value" :empty-text="t('admin.promo.empty')" @retry="list.reload">
       <template #cell-code="{ row }"><span class="payment-mono">{{ row.code }}</span></template>
       <template #cell-bonus_amount="{ row }"><span class="payment-num">{{ formatUsd(row.bonus_amount) }}</span></template>
+      <template #cell-min_amount="{ row }">
+        <span class="payment-num" :class="{ 'payment-muted': !row.min_amount }">{{ row.min_amount ? formatUsd(row.min_amount) : t('admin.promo.anyAmount') }}</span>
+      </template>
       <template #cell-usage="{ row }">
         <div class="payment-usage">
           <SProgress v-if="row.max_uses" :value="row.used_count" :max="row.max_uses" :tone="row.used_count >= row.max_uses ? 'warning' : 'primary'">{{ usageText(row) }}</SProgress>

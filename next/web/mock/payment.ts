@@ -148,8 +148,18 @@ function preview(body: any) {
   const promo = String(body?.promo_code || '').trim().toUpperCase()
   const original = Math.round(amount * settings.price * 100) / 100
   const rate = rateOf(amount)
-  const bonus = promo === 'WELCOME10' ? 10 : 0
-  return { amount, bonus, discount_rate: rate, pay_amount: Math.round(original * rate * 100) / 100, original_pay_amount: original, promo_error: promo && !bonus ? '优惠码不存在或已用完' : undefined }
+  const { bonus, error } = promoBonus(promo, amount)
+  return { amount, bonus, discount_rate: rate, pay_amount: Math.round(original * rate * 100) / 100, original_pay_amount: original, promo_error: error }
+}
+
+// A usable code credits its bonus from its minimum top-up up; one message for unknown, disabled, used up or expired.
+function promoBonus(code: string, amount: number): { bonus: number; error?: string } {
+  if (!code) return { bonus: 0 }
+  const usable = (x: any) => x.code === code && x.status === 'active' && (!x.max_uses || x.used_count < x.max_uses) && (!x.expires_at || x.expires_at > now())
+  const p = promoCodes.find(usable)
+  if (!p) return { bonus: 0, error: '优惠码无效或已用完' }
+  if (amount < p.min_amount) return { bonus: 0, error: '充值满 $' + p.min_amount + ' 才能使用这个优惠码' }
+  return { bonus: p.bonus_amount }
 }
 
 function checkAmount(body: any) {
@@ -236,9 +246,9 @@ on('POST', '/p/payment/redeem', (req) => (String(req.body?.code || '').trim().le
 // ---- promo codes ----
 
 const promoCodes: any[] = [
-  { id: 3, code: 'WELCOME10', bonus_amount: 10, max_uses: 500, used_count: 132, status: 'active', expires_at: now(86400 * 20), notes: '新用户首充', created_at: now(-86400 * 10) },
-  { id: 2, code: 'DOUBLE11', bonus_amount: 20, max_uses: 100, used_count: 100, status: 'active', expires_at: now(-86400), notes: '双十一', created_at: now(-86400 * 20) },
-  { id: 1, code: 'VIP2026', bonus_amount: 50, max_uses: 0, used_count: 8, status: 'disabled', notes: '', created_at: now(-86400 * 40) }
+  { id: 3, code: 'WELCOME10', bonus_amount: 10, min_amount: 20, max_uses: 500, used_count: 132, status: 'active', expires_at: now(86400 * 20), notes: '新用户首充', created_at: now(-86400 * 10) },
+  { id: 2, code: 'DOUBLE11', bonus_amount: 20, min_amount: 100, max_uses: 100, used_count: 100, status: 'active', expires_at: now(-86400), notes: '双十一', created_at: now(-86400 * 20) },
+  { id: 1, code: 'VIP2026', bonus_amount: 50, min_amount: 500, max_uses: 0, used_count: 8, status: 'disabled', notes: '', created_at: now(-86400 * 40) }
 ]
 
 on('GET', '/p/payment/promo-codes', (req) => paginate(promoCodes, req.query))

@@ -159,6 +159,8 @@ export interface PromoCode {
   id: number
   code: string
   bonus_amount: number
+  /** Smallest top-up (balance units) the code applies to; 0 = any. Keeps a fixed bonus from beating a tiny top-up. */
+  min_amount: number
   max_uses: number
   used_count: number
   status: 'active' | 'disabled'
