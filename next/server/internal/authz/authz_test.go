@@ -206,6 +206,7 @@ var operatorDefaults = []string{
 	"proxy:read", "proxy:manage",
 	"price:read",
 	"balance:self:read", "balance:all:read",
+	"redeem:use", "topup:use",
 	"usage:self:read", "usage:all:read", "usage:account:read",
 	"node:read",
 	"audit:read",
@@ -266,7 +267,7 @@ func TestSyncCoreSeedsCatalogAndRoles(t *testing.T) {
 	agent := byKey[RoleSupplierAgent]
 	wantAgent := slices.Sorted(slices.Values(append(slices.DeleteFunc(slices.Clone(wantSup), func(k string) bool {
 		return k == "account:read:own" || k == "usage:account:read:own" || k == "usage:self:read"
-	}), "apikey:self:manage", "balance:self:read", "usage:self:read", "gateway:use",
+	}), "apikey:self:manage", "balance:self:read", "usage:self:read", "gateway:use", "topup:use", "redeem:use",
 		"account:read:team", "usage:account:read:team", "user:read:team", "user:create:team", "user:update:team", "role:read", "role:assign")))
 	if agent == nil || !agent.Builtin || agent.Superuser || !slices.Equal(slices.Sorted(slices.Values(agent.PermissionKeys)), wantAgent) || agent.AssignCustom {
 		t.Fatalf("supplier agent: %+v", agent)
@@ -1081,7 +1082,7 @@ func TestOwnershipCatalog(t *testing.T) {
 			t.Fatalf("%s scope type = %q", key, d.ScopeType)
 		}
 	}
-	if join(userRolePermissions) != "apikey:self:manage,balance:self:read,usage:self:read,gateway:use" {
+	if join(userRolePermissions) != "apikey:self:manage,balance:self:read,usage:self:read,gateway:use,topup:use,redeem:use" {
 		t.Fatalf("user role changed: %v", userRolePermissions)
 	}
 	menuKeys := map[string]string{}

@@ -65,6 +65,8 @@ type Harness struct {
 	Migration pluginv1.MigrationServiceClient
 	// Notification serves notify.channel.v1.
 	Notification pluginv1.NotificationServiceClient
+	// Payment serves payment.gateway.v1.
+	Payment pluginv1.PaymentGatewayServiceClient
 }
 
 // Start serves p and completes the host handshake. Everything is torn down
@@ -163,6 +165,7 @@ func startPlugin(t testing.TB, p any, opts Options, fh *FakeHost, dialHost func(
 		Migration: pluginv1.NewMigrationServiceClient(conn),
 
 		Notification: pluginv1.NewNotificationServiceClient(conn),
+		Payment:      pluginv1.NewPaymentGatewayServiceClient(conn),
 	}
 }
 

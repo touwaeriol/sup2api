@@ -8,9 +8,9 @@ import { notifyError } from '@/utils/errors'
 import { formatMoney } from '@/utils/format'
 import RedeemGenerateModal from './RedeemGenerateModal.vue'
 import RedeemResultModal from './RedeemResultModal.vue'
-import { REDEEM_STATUSES, REDEEM_TONES, type RedeemCode } from './redeem'
+import { REDEEM_STATUSES, REDEEM_TONES, maskCode, type RedeemCode } from './redeem'
 
-// Finance > Redeem codes (core, redeem:manage): generated in batches, listed
+// Top-up & payment > Redeem codes (core, redeem:manage): generated in batches, listed
 // masked, the unused ones can be voided. Users redeem them in their wallet.
 const { t } = useI18n()
 
@@ -34,7 +34,7 @@ function onGenerated(next: string[]) {
 }
 
 async function voidCode(c: RedeemCode) {
-  const ok = await confirm({ title: t('redeem.voidTitle'), message: t('redeem.voidConfirm', { code: c.code, value: formatMoney(c.value, 2) }), confirmText: t('redeem.void'), danger: true })
+  const ok = await confirm({ title: t('redeem.voidTitle'), message: t('redeem.voidConfirm', { code: maskCode(c.code_tail), value: formatMoney(c.value, 2) }), confirmText: t('redeem.void'), danger: true })
   if (!ok) return
   try {
     await api.del(`/redeem-codes/${c.id}`)
@@ -59,7 +59,7 @@ async function voidCode(c: RedeemCode) {
     </SFilterBar>
 
     <STable card class="mt-3" :columns="columns" :rows="list.items.value" :loading="list.loading.value" :error="list.error.value" :empty-text="t('redeem.empty')" @retry="list.reload">
-      <template #cell-code="{ row }"><span class="font-mono text-xs">{{ row.code }}</span></template>
+      <template #cell-code="{ row }"><span class="font-mono text-xs">{{ maskCode(row.code_tail) }}</span></template>
       <template #cell-value="{ row }"><span class="tabular-nums">{{ formatMoney(row.value, 2) }}</span></template>
       <template #cell-status="{ row }"><SStatusBadge :status="row.status" :label="t(`redeem.status.${row.status}`)" :tones="REDEEM_TONES" size="xs" /></template>
       <template #cell-used_by="{ row }">{{ row.used_by_email || (row.used_by ? `#${row.used_by}` : '—') }}</template>

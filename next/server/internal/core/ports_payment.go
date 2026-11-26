@@ -10,7 +10,7 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-// Online top-up (CONTRACTS §138): the core owns orders, settings, promo
+// Online top-up (CONTRACTS §140): the core owns orders, settings, promo
 // codes and crediting; a payment gateway only creates payments and tells
 // which order a notification is about and what was paid. The built-in
 // gateways (epay, stripe) and the gateways plugins declare
@@ -166,7 +166,7 @@ type PaymentGatewayGeneration interface {
 
 // zeroDecimalCurrencies have no minor unit (ISO 4217 exponent 0) among the
 // currencies a top-up may settle in.
-var zeroDecimalCurrencies = map[string]bool{"JPY": true, "KRW": true, "VND": true, "CLP": true, "ISK": true}
+var zeroDecimalCurrencies = map[string]bool{"JPY": true, "KRW": true, "VND": true, "CLP": true}
 
 // PaymentExponent is the number of decimals of currency's minor unit.
 func PaymentExponent(currency string) int32 {

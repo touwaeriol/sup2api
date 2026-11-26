@@ -16,6 +16,8 @@ export default {
     plugin_credit: '插件入账',
     plugin_debit: '插件扣减',
     refund: '退款',
+    topup: '充值',
+    promo_bonus: '优惠码赠送',
     redeem: '兑换码'
   },
   adjust: {

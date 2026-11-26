@@ -1,0 +1,136 @@
+syntax = "proto3";
+
+package sub2api.plugin.v1;
+
+import "sub2api/plugin/v1/app.proto";
+
+option go_package = "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1;pluginv1";
+
+// PaymentGatewayService is served by a plugin declaring payment gateways
+// ("payment.gateway.v1", manifest payments.gateways, CONTRACTS §140). The
+// core owns orders, amounts and crediting: a gateway creates payments and
+// says whether a notification is authentic and what it reports; the core
+// matches every fact against the order before it credits anything. Every
+// request names the plugin-local gateway id it is for.
+service PaymentGatewayService {
+  rpc CreatePayment(CreatePaymentRequest) returns (CreatePaymentResponse);
+  rpc ParseNotification(ParseNotificationRequest) returns (ParseNotificationResponse);
+  // A gateway declared with query false, or a plugin answering UNIMPLEMENTED,
+  // cannot be queried; the core then only expires the order.
+  rpc QueryPayment(QueryPaymentRequest) returns (QueryPaymentResponse);
+}
+
+message CreatePaymentRequest {
+  // The plugin-local gateway id (manifest payments.gateways[].id).
+  string gateway = 1;
+  string out_trade_no = 2;
+  // What the user pays, a decimal string exact in the currency's minor unit
+  // ("12.30"), and the same amount in the minor unit (1230).
+  string amount = 3;
+  int64 amount_minor = 4;
+  // ISO 4217, upper case.
+  string currency = 5;
+  // The payment method's type key (one of the gateway's methods[].type).
+  string method_type = 6;
+  string subject = 7;
+  // Built by the core from the site address: notifications go to
+  // notify_url (/api/v1/payment/notify/<plugin id>.<gateway id>), the user
+  // comes back to return_url.
+  string notify_url = 8;
+  string return_url = 9;
+  int64 expires_at_unix = 10;
+  string client_ip = 11;
+}
+
+// At least one of pay_url and qr_code.
+message CreatePaymentResponse {
+  string pay_url = 1;
+  string qr_code = 2;
+  // The gateway's session or payment id, given back in QueryPayment.
+  string session_id = 3;
+  // The merchant the payment was created under; the core stores it on the
+  // order, and a result naming another merchant does not match the order.
+  string merchant_ref = 4;
+}
+
+// The notification as it arrived at the core: the body is capped and the
+// cookie and authorization headers are dropped.
+message ParseNotificationRequest {
+  string gateway = 1;
+  string method = 2;
+  string raw_query = 3;
+  // Canonical header names (net/http).
+  map<string, HeaderValues> headers = 4;
+  bytes body = 5;
+}
+
+// The plugin decides the bytes of the answer to the gateway, the core
+// decides which of the three replies is sent. A reply is a property of the
+// gateway's protocol, not of one notification: the core may answer any
+// notification of the gateway with the replies of another one.
+message ParseNotificationResponse {
+  // False: the notification is not authentic (bad or missing signature,
+  // unknown merchant); result is ignored and the core answers rejected.
+  bool verified = 1;
+  // Why it was not verified, for the event log (never a secret).
+  string reason = 2;
+  PaymentResult result = 3;
+  // Processed, a duplicate, or about no order of this site.
+  PaymentReply handled = 4;
+  // Failed verification or did not match the order.
+  PaymentReply rejected = 5;
+  // The core cannot process it now; the gateway should retry.
+  PaymentReply retry = 6;
+}
+
+message QueryPaymentRequest {
+  string gateway = 1;
+  string out_trade_no = 2;
+  string session_id = 3;
+  string method_type = 4;
+  string merchant_ref = 5;
+}
+
+message QueryPaymentResponse {
+  PaymentResult result = 1;
+}
+
+enum PaymentStatus {
+  // Invalid in a result.
+  PAYMENT_STATUS_UNSPECIFIED = 0;
+  PAYMENT_STATUS_PAID = 1;
+  PAYMENT_STATUS_PENDING = 2;
+  PAYMENT_STATUS_FAILED = 3;
+  PAYMENT_STATUS_EXPIRED = 4;
+}
+
+// PaymentResult is what the gateway says about one payment. The core
+// requires out_trade_no to name an order of this gateway and amount and
+// currency to equal the order's; merchant_ref and method_type, when not
+// empty, must equal the order's too.
+message PaymentResult {
+  string out_trade_no = 1;
+  // The gateway's transaction number; unique across orders.
+  string trade_no = 2;
+  string session_id = 3;
+  // In the currency's minor unit.
+  int64 amount = 4;
+  string currency = 5;
+  PaymentStatus status = 6;
+  // Unique per gateway: a notification with an event id already recorded is
+  // a duplicate.
+  string event_id = 7;
+  string merchant_ref = 8;
+  string method_type = 9;
+  // Non-secret fields kept on the payment_events row (never a signature, a
+  // key or the whole body).
+  map<string, string> fields = 10;
+}
+
+// An HTTP answer to the gateway. Status 0 takes the core's default for the
+// outcome (200 handled, 400 rejected, 503 retry).
+message PaymentReply {
+  int32 status = 1;
+  string content_type = 2;
+  bytes body = 3;
+}

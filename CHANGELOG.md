@@ -8,6 +8,17 @@
 
 开发完成、尚未上线的改动。发布时改成发布日期的一节，补上提交、实际版本号和发布过程。
 
+#### 核心内置在线充值：易支付、Stripe、插件扩展支付方式；优惠码、兑换码搬进核心（CONTRACTS §140；迁移 0126，只新增表，可回退）
+
+- **在线充值**：核心内置易支付与 Stripe 两个网关，插件可经新能力 `payment.gateway.v1`（高风险宿主权限 `payment.gateway`）扩展其他支付方式。下单、回调、查单只有一条代码路径；回调先验签，再在一个事务里逐项核对网关、商户、方式、会话、状态、金额与币种、流水号和事件 id，入账与订单完成同事务，用租约防重复入账。站点地址必须是 https 才能开通。管理员订单只读，不退款、不补单。
+- **配置**：系统设置新增“充值配置”页（`/settings?tab=topup`，`topup:manage`），密钥加密存储、接口只回显 `******`；侧栏新增“充值/支付”分组：充值订单、兑换码、优惠码。
+- **用户侧**：钱包始终显示充值卡（未开通时显示“暂未开放在线充值”）和兑换码卡；普通用户角色默认获得 `topup:use`、`redeem:use`。
+- **优惠码**：每人每码一次、最低金额、使用记录；**兑换码**：只存哈希与末 4 位，同事务兑换，按用户限速、连续失败锁定一小时防爆破。
+- **账本**：新类型 `topup`、`promo_bonus`、`redeem`。
+- **插件**：删除 payment 插件（`next/plugins/payment`），商店下架 `sub2api/payment`；迁移 0126 一次性复制它的优惠码和未使用的兑换码。开发用的模拟网关在 `sdk/pluginsdk/pluginsdktest/mockpay`，不打包、不发布。
+- **依赖**：新增 `github.com/stripe/stripe-go/v87`，`shopspring/decimal` 升到 1.5.0。
+- 发布与回退见 `next/deploy/rollback/topup-0126-release.md`（带迁移，发布前先关 newapi 接 sup2api 的渠道）。
+
 ## 2026-11-25
 
 ### 核心 0.1.316：插件的 `client_status` 生效，codex 0.2.3 把 `server_is_overloaded` 回成 529（`83f734cb3`；无迁移；ovh 滚动、ec2pool 单节点；网关仍 0.1.139）

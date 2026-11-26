@@ -1,6 +1,6 @@
 import type { Tone } from '@sub2api/ui'
 
-// Core redeem codes (Finance > Redeem codes, CONTRACTS §46 moved here):
+// Core redeem codes (Top-up & payment > Redeem codes, CONTRACTS §140):
 // GET/POST /redeem-codes, DELETE /redeem-codes/:id voids an unused one,
 // POST /me/redeem redeems one into the caller's balance.
 
@@ -12,8 +12,8 @@ export const REDEEM_TONES: Record<RedeemStatus, Tone> = { unused: 'success', use
 
 export interface RedeemCode {
   id: number
-  /** Masked (the last 4 characters); the plain code is only in the generate response. */
-  code: string
+  /** The code's last 4 characters: the server keeps no more, the plain code is only in the generate response. */
+  code_tail: string
   value: string
   status: RedeemStatus
   used_by?: number
@@ -30,3 +30,17 @@ export interface GenerateRequest {
   expires_at?: string
   notes?: string
 }
+
+/** POST /redeem-codes: the plain codes (XXXX-XXXX-…), shown this once. */
+export interface Generated {
+  codes: string[]
+}
+
+/** POST /me/redeem: what was credited and the balance after it. */
+export interface Redeemed {
+  amount: string
+  balance: string
+}
+
+/** A listed code, masked: only its last 4 characters are known. */
+export const maskCode = (tail: string) => `••••-••••-••••-${tail}`

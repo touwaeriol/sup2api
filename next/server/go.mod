@@ -31,8 +31,9 @@ require (
 	github.com/riverqueue/river/rivertype v0.49.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
-	github.com/shopspring/decimal v1.4.0
+	github.com/shopspring/decimal v1.5.0
 	github.com/stretchr/testify v1.12.1
+	github.com/stripe/stripe-go/v87 v87.2.0
 	github.com/tidwall/gjson v1.19.0
 	github.com/tidwall/sjson v1.2.5
 	github.com/tiktoken-go/tokenizer v0.10.0

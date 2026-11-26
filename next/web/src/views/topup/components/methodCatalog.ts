@@ -2,7 +2,7 @@ import { ref } from 'vue'
 import { paymentApi, type CheckoutInfo } from '../topup'
 import type { MethodLook } from './methodIcon'
 
-// The enabled payment methods (GET /checkout) for pages that show orders:
+// The enabled payment methods (GET /me/topup) for pages that show orders:
 // an order names its method by type key and keeps the name it had then.
 
 type CatalogMethod = CheckoutInfo['methods'][number]

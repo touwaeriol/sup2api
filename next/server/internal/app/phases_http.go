@@ -16,6 +16,8 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/lookup"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/api"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/routes"
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/ratelimit"
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/redeem"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/updater"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/webui"
 	"github.com/Sub2API-Devs/sup2api/next/server/web"
@@ -37,6 +39,8 @@ func (b *boot) registerRoutes(r *httpapi.Router) {
 	b.prx.RegisterRoutes(r)
 	b.acc.RegisterRoutes(r)
 	b.bill.RegisterRoutes(r)
+	b.pay.RegisterRoutes(r)
+	redeem.New(b.db, b.bill, b.rdb, ratelimit.NewMinute(b.rdb, "redeem")).RegisterRoutes(r)
 	lookup.New(b.db, b.az, b.bill).RegisterRoutes(r)
 	b.settler.RegisterRoutes(r)
 	b.tasks.RegisterRoutes(r, b.cl.Registry)

@@ -23,6 +23,7 @@
 //	HTTP       -> HTTPService       ("http.routes.v1")
 //	AccountRanker -> SchedulerService.RankAccounts ("scheduler.rank.v1")
 //	NotificationChannel -> NotificationService.DeliverNotification ("notify.channel.v1")
+//	PaymentGateway -> PaymentGatewayService ("payment.gateway.v1", see PaymentGatewayMux)
 //	Migration  -> MigrationService  ("migration.data.v1")
 //
 // A Platform may also implement the optional PlatformService calls, found

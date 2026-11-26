@@ -1,4 +1,4 @@
--- Online top-up, promo codes and redeem codes in the core (CONTRACTS §138):
+-- Online top-up, promo codes and redeem codes in the core (CONTRACTS §140):
 -- the payment plugin's tables move here. Payment methods, orders, gateway
 -- events, promo codes with their usages, and redeem codes (hash and last
 -- four characters only, never the code).

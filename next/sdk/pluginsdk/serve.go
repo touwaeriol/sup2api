@@ -161,6 +161,9 @@ func Register(s grpc.ServiceRegistrar, p any, dial HostDialer, opts ...Option) e
 	if v, ok := p.(NotificationChannel); ok {
 		pluginv1.RegisterNotificationServiceServer(s, notificationServer{impl: v})
 	}
+	if v, ok := p.(PaymentGateway); ok {
+		pluginv1.RegisterPaymentGatewayServiceServer(s, paymentServer{impl: v})
+	}
 	return nil
 }
 
@@ -210,6 +213,9 @@ func Capabilities(p any) []string {
 	}
 	if _, ok := p.(NotificationChannel); ok {
 		caps = append(caps, manifest.CapNotifyChannel)
+	}
+	if _, ok := p.(PaymentGateway); ok {
+		caps = append(caps, manifest.CapPaymentGateway)
 	}
 	return caps
 }

@@ -24,7 +24,7 @@
 | `next/plugins/*` | 官方插件，每个是独立 Go 模块；发布过的版本登记在索引仓库 touwaeriol/sup2api-plugin（CONTRACTS §135） |
 | `next/tools/sub2api-plugin` | 插件 CLI：keygen、build、pack、sign、verify、index、`registry`、`released-check`、`db diff/check`、`dev` |
 | `next/web` | 控制台（Vue 3 + Vite + TS + Pinia + Tailwind），`packages/` 下是共享给插件的 `@sub2api/ui`、`@sub2api/host`、`@sub2api/vite-preset` |
-| `next/deploy` | 镜像构建脚本、网关托管部署（`gateway/`）、单机栈（`single/`）、e2e 栈、单向发布进行中的发布与回退手册（`rollback/`，发布完成、不能再回退后删除；现在有协议绑定的升级手册 `protocol-binding-release.md` 和它的只读查询 `protocol-binding-conversions.sql`，以及插件商店迁移 0125 的发布手册 `market-0125-release.md`） |
+| `next/deploy` | 镜像构建脚本、网关托管部署（`gateway/`）、单机栈（`single/`）、e2e 栈、单向发布进行中的发布与回退手册（`rollback/`，发布完成、不能再回退后删除；现在有协议绑定的升级手册 `protocol-binding-release.md` 和它的只读查询 `protocol-binding-conversions.sql`，以及插件商店迁移 0125 的发布手册 `0.1.313-market-0125-release.md`、核心充值迁移 0126 的发布手册 `topup-0126-release.md`） |
 | `next/e2e` | 验收测试，需要部署好的栈；CI 只编译不运行 |
 | `next/protocol-codec` | 早期为 ccgateway 引入的协议转换库。`next/` 里没有模块 import 它（next CI 仍按普通模块检查它）；但根目录旧版 `backend/` 经 `replace` 依赖它（根目录 `Dockerfile` 也复制它），所以暂不能删（CONVERT-MATRIX.md 开头）。不要在新代码里引用 |
 | `next/docs` | 契约、架构、设计稿、交接、审计记录 |
@@ -48,7 +48,7 @@ CCGateway 插件（Claude Code 托管账号、它的 companions 与 `cli-reverse
 ### 数据库：PostgreSQL 16 + GORM
 
 - 驱动是 pgx v5 的 `stdlib`，连接池是 `database/sql`，GORM 跑在上面。连接由 `runtime-contract/gormpg` 一处打开，核心、网关、插件 SDK 共用；连接池大小只由环境变量（核心 `SUB2API_PG_MAX_CONNS`、网关 `SUB2API_GATEWAY_POOL_MAX_CONNS`）或默认值决定，DSN 里不写 `pool_*` 参数。PostgreSQL 错误的 SQLSTATE、约束名也只经 `gormpg`（核心经 `store` 的同名函数）读取。
-- **表结构只以 SQL 迁移为准**：核心迁移在 `server/internal/migrations/NNNN_*.sql`（目前到 0125），已应用的文件不许再改。核心的 GORM 模型由迁移生成（`store/modelgen`，加或改迁移后在 `next/server` 下跑 `go run ./cmd/gen-models`），生成的 `internal/store/model` 不手改。运行时不跑 AutoMigrate。
+- **表结构只以 SQL 迁移为准**：核心迁移在 `server/internal/migrations/NNNN_*.sql`（目前到 0126），已应用的文件不许再改。核心的 GORM 模型由迁移生成（`store/modelgen`，加或改迁移后在 `next/server` 下跑 `go run ./cmd/gen-models`），生成的 `internal/store/model` 不手改。运行时不跑 AutoMigrate。
 - **只用 GORM 的模型和查询构造器写语句**（`Create`、`Updates`、`Where`、`clause.OnConflict`、`clause.Returning`、`store.ForUpdate()` 等；子查询和 `UNION ALL` 用 `(?)` 组合）。整条手写的 SQL 只允许出现在允许列表登记过的地方：账本的 4 条 data-modifying CTE（`billing` 的 precharge、apply、release、settle）、`store` 里非数据语句的小助手（事务级 advisory 锁、`SetLocal`、`ClockTimestamp` 等）、`DDL`、迁移执行器、`modelgen`，以及 `gormpg` 的薄组合器（`Exists`、`InsertSelect`、`NextIDs`、`RelationExists`、`TryXactLock`）。
 - 交给 GORM 的 SQL 文本必须由常量构成，**值只走 `?` 参数**；运行时选的列名经固定白名单变成 `clause.Column`/`clause.OrderByColumn`。
 - 这些规则由源码检查强制执行，检查器是 `runtime-contract/gormpg/sqlcheck`，各模块只保留自己的允许列表：核心是 `server/internal/store/gormguard`（`[raw-sql]`、`[sql-const]`、`[tx-lock]`、`[gorm-tx]`、`[pgx-import]`、`[casbin-api]` 等，说明见 `gormguard/doc.go`，允许列表在 `rawsql_test.go`），网关是 `gateway/internal/sqlguard`，SDK 与插件是 `sdk/pgdb` 的 `TestNoRawSQL`、`TestNoPgxImports`。允许列表里没有命中的条目也算失败。
@@ -184,7 +184,7 @@ CI 只跑 `npm ci`、`typecheck`、`test`；`lint` 本地也要跑。
 
 ## 读代码从哪里开始
 
-- 契约与构建规则：`next/docs/CONTRACTS.md` §1–§3；最近的大改动：§137（插件 id = 发布者 + key，`_<发布者>__<key>`；只有官方商店，频道是它的分支；迁移 0125 并入原 0126 的检查）、§136（插件商店：信任取自索引并记在版本行，去掉密钥，只用 HTTPS，包只限 GitHub Release，弃用）、§135（索引登记处 touwaeriol/sup2api-plugin、`sub2api-plugin index`/`registry`/`released-check`）、§97（账号分组与用户分组定价：实付 = 标价 × 四层里取一个的倍率，账号分组、用户分组连同价格和倍率一次请求写入；迁移 0124）、§133（页面操作留在页面里：页头工具栏、`STabs #end`、列表卡片底部、筛选条四个位置，UI 4.3）、§132（侧栏“账号/代理”目录）、§112（平台插件转发 V2）、§113（插件联网）、§114（插件包不依赖主节点）、§130（插件数据库隔离，取代 §115）、§131（计费方式只留可视化与表达式）、§116（删除 Claude OAuth）、§117（代理票据）、§118（OpenAI 生图）、§119（上游插件 newapi、sub2api、typesafe）、§124（插件按归属收到账号的全部信息）、§125（删除 growth）、§127（密钥与基础地址）、§128（删除 volcengine）、§129（删除 anthropic 的模型目录）、§23 与 §75（插件界面只用代码写、界面包 4.0）、§52（账号余额）、§111（请求体上限、插件内存）、§110（协议绑定）、§99（Casbin）、§100（会话）、§2 的“核心的 SQL”“插件数据库”。
+- 契约与构建规则：`next/docs/CONTRACTS.md` §1–§3；最近的大改动：§140（核心内置充值：易支付、Stripe、插件网关 `payment.gateway.v1`、优惠码与兑换码；迁移 0126）、§137（插件 id = 发布者 + key，`_<发布者>__<key>`；只有官方商店，频道是它的分支；迁移 0125 并入原 0126 的检查）、§136（插件商店：信任取自索引并记在版本行，去掉密钥，只用 HTTPS，包只限 GitHub Release，弃用）、§135（索引登记处 touwaeriol/sup2api-plugin、`sub2api-plugin index`/`registry`/`released-check`）、§97（账号分组与用户分组定价：实付 = 标价 × 四层里取一个的倍率，账号分组、用户分组连同价格和倍率一次请求写入；迁移 0124）、§133（页面操作留在页面里：页头工具栏、`STabs #end`、列表卡片底部、筛选条四个位置，UI 4.3）、§132（侧栏“账号/代理”目录）、§112（平台插件转发 V2）、§113（插件联网）、§114（插件包不依赖主节点）、§130（插件数据库隔离，取代 §115）、§131（计费方式只留可视化与表达式）、§116（删除 Claude OAuth）、§117（代理票据）、§118（OpenAI 生图）、§119（上游插件 newapi、sub2api、typesafe）、§124（插件按归属收到账号的全部信息）、§125（删除 growth）、§127（密钥与基础地址）、§128（删除 volcengine）、§129（删除 anthropic 的模型目录）、§23 与 §75（插件界面只用代码写、界面包 4.0）、§52（账号余额）、§111（请求体上限、插件内存）、§110（协议绑定）、§99（Casbin）、§100（会话）、§2 的“核心的 SQL”“插件数据库”。
 - 架构与数据模型：`next/docs/ARCHITECTURE.md` §2–§5、§13、§16。
 - 最近发生了什么：`CHANGELOG.md` 的“未发布”与最新几节。
 - 组装入口：`next/server/cmd/sub2api/main.go`、`next/server/internal/app`。

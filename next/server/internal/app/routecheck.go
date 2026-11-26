@@ -22,6 +22,10 @@ var permissionlessRoutes = func() map[string]httpapi.Access {
 	// Signing in, and the public price list of an API key.
 	add(httpapi.AccessPublic, "POST /auth/login", "POST /auth/login/2fa",
 		"POST /auth/passkey/begin", "POST /auth/passkey/finish", "GET /key/prices")
+	// Payment gateways' notifications (CONTRACTS §140): no caller signs
+	// in; the gateway verifies each one and the core checks it against
+	// its order.
+	add(httpapi.AccessPublic, "GET /payment/notify/:gateway", "POST /payment/notify/:gateway")
 	// Who the caller is and what they may see, each under the caller's own
 	// limits (the handler narrows); step-up verification of the caller
 	// (CONTRACTS §80.2).

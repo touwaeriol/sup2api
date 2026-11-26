@@ -1,4 +1,4 @@
-// Redeem codes (core, Finance > Redeem codes; Mine > Wallet redeem card).
+// Redeem codes (core, Top-up & payment > Redeem codes; Mine > Wallet redeem card).
 export default {
   title: '兑换码',
   description: '批量生成兑换码发给用户，用户在钱包里兑换后直接加余额。明文只在生成时显示一次。',

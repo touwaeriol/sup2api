@@ -4,7 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { api, isApiError } from '@sub2api/host'
 import { SDateTimeInput, SField, SForm, SFormModal, SInput, useForm, type Rules } from '@sub2api/ui'
 import { notifyError } from '@/utils/errors'
-import type { GenerateRequest } from './redeem'
+import type { GenerateRequest, Generated } from './redeem'
 
 // Generates a batch of redeem codes (POST /redeem-codes); the plain codes go
 // to the result modal, the list only ever shows them masked.
@@ -48,7 +48,7 @@ async function save() {
   if (saving.value || !(await form.validate())) return
   saving.value = true
   try {
-    const res = await api.post<{ codes: string[] }>('/redeem-codes', body(form.value()))
+    const res = await api.post<Generated>('/redeem-codes', body(form.value()))
     emit('update:open', false)
     emit('generated', res.codes)
   } catch (e) {

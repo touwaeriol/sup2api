@@ -3030,131 +3030,9 @@ QuotaSnapshot = { supported: boolean, source: "passive"|"active"|"", updated_at:
 
 0.1.304 删除了 growth 插件（§125）。本节原文见 `git show d466a6daa:next/docs/CONTRACTS.md`，插件最后的源码见 `git show d466a6daa:next/plugins/growth/manifest.json`。
 
-## 46. 充值支付与兑换码插件 payment（0.1.0，2026-10-04 起草，2026-10-05 按合并后实现修正）
+## 46. 充值支付与兑换码插件 payment（已删除）
 
-原稿是 feat-payment worktree 的 §44，本节按合并进主干的实现（`next/plugins/payment/`）修正，与原稿不同之处都标了"修正"。
-
-插件 `payment` 提供在线充值订单、兑换码和优惠码。余额变动全部通过核心账本 `ledger.credit`（§25）完成，插件不直接改核心表。
-
-**当前状态（必须先读）**：0.1.0 是**骨架 + 兑换码可用**。
-- 兑换码的生成、兑换、作废是真实实现。
-- 在线支付的渠道下单和回调验签**都没有实现**：`pay_url` 是占位地址，回调解析写死成 mock。所以不能对外开放在线充值。
-- 没有前端，也没有订单过期任务。
-
-用户已决定支付功能暂缓（2026-10-05），缺口见 46.9。
-### 46.1 包结构与 manifest
-
-- 目录：`next/plugins/payment/`，已加入 `next/go.work`。`main.go`（`pluginsdk.Serve`，嵌入 manifest）+ `internal/payment/`（业务）+ `migrations/0001_payment_schema.sql`。
-- 能力：只有 `http.routes.v1`。**修正**：原稿的 `events`（订阅 `user.created`）已删掉，插件没有事件处理器，也用不上这个事件。
-- 数据库：`database.schema = "plg_payment"`（**修正**：原稿写的 `payment` 通不过 SDK 校验，规则要求 `plg_<key>`），`database.migrations = "migrations/"`。表都建在 search_path 指定的插件 schema 里。
-- manifest 能通过 `sdk/manifest/check.Validate`（Tooling 模式），由 `manifest_test.go` 守护。
-
-### 46.2 数据模型
-
-插件 schema 里有这些表：
-
-- `payment_orders`：订单。`out_trade_no` 带 `s2a_` 前缀加 UUID，有唯一索引。金额字段是 `amount`（入账金额）、`pay_amount`（加手续费后的应付金额）、`fee_rate`（百分比），类型都是 `DECIMAL(20,8)`。
-- `payment_provider_instances`：支付渠道实例（`provider_key`、`config` JSONB、`limits` JSONB、启用状态）。**表已建好，但还没有读写代码。**
-- `payment_audit_logs`：**表已建好，但还没有写入代码。**
-- `redeem_codes`：兑换码，同时存明文 `code` 和 `code_hash`（SHA-256），两列都有唯一索引。**修正**：原稿说“哈希后存储”，实际明文也存了，管理员列表接口不返回明文。
-- `promo_codes`：优惠码，明文存储，有唯一索引。`promo_code_usage` 记录每个用户对每个码的使用，有唯一约束 `(promo_code_id, user_id)`。
-- `payment_config`：单行配置表（`id = 1`）。迁移会插入一行默认值：启用、金额范围 1 到 10000、超时 30 分钟、最多 3 个待支付订单、手续费率 0。
-
-### 46.3 路由（全部在 `/api/v1/p/payment` 下）
-
-**修正**：原稿把用户接口声明成 `routes.public`。但核心对 public 路由不做鉴权，`Caller.user_id` 恒为 0，handler 就会一直回 401。现在这些接口改成 `scope: user`，权限为 `recharge:use`。
-
-| 方法 | 路径 | scope / 权限 | 实现状态 |
-|---|---|---|---|
-| POST | `/orders` | user / `recharge:use` | 创建订单：真实；渠道下单：占位 |
-| GET | `/orders` | user / `recharge:use` | 真实（只返回自己的订单） |
-| POST | `/redeem` | user / `recharge:use` | 真实 |
-| GET | `/redeem/history` | user / `recharge:use` | 真实 |
-| POST | `/webhook/:provider` | webhook（不鉴权） | **mock**，见 46.5 |
-| GET / PUT | `/config` | admin / `config:manage` | **stub**：GET 返回写死的值，PUT 不落库 |
-| GET / POST | `/providers` | admin / `config:manage` | **stub**：GET 返回空数组，POST 返回 501 |
-| GET / POST | `/redeem-codes` | admin / `config:manage` | 真实 |
-| DELETE | `/redeem-codes/:id` | admin / `config:manage` | 真实（只能作废 `unused` 的码，状态置为 `expired`） |
-| GET / POST | `/promo-codes` | admin / `config:manage` | 真实 |
-| PATCH / DELETE | `/promo-codes/:id` | admin / `config:manage` | 真实 |
-
-- 用户权限有两个：`recharge:use` 和 `config:manage`。`config:manage` 标了 `risk: "sensitive"`（仅展示标记，admin 调用无需二次验证，§3.3）。
-- **修正**：原稿的 `GET /payment-methods` 和 `POST /promo` 都没有 handler，已从 manifest 和本节删掉。优惠码目前**没有任何用户入口**（见 46.6）。
-
-### 46.4 在线充值流程（目标设计；带 ⚠ 的步骤尚未实现）
-
-1. 用户调用 `POST /orders {amount, payment_type, order_type, plan_id?}`。
-2. 插件读取 `payment_config` 并校验：已启用、在金额范围内、待支付订单数未超上限。手续费为 `amount × fee_rate / 100`，四舍五入到分，`pay_amount = amount + 手续费`。然后插入一条 `pending` 订单，过期时间默认 30 分钟。
-   - ⚠ 没有校验 `payment_type` 是否在 `enabled_payment_types` 里，没有执行 `daily_limit`，`order_type` 为空时也没有补默认值。
-   - ⚠ `user_email` 写的是占位值 `user_{id}@example.com`（核心没有用户查询 Host 接口）。
-3. ⚠ 选择渠道实例并调渠道下单：没有实现。现在返回的 `pay_url` 是 `https://pay.example.com/checkout?order=<out_trade_no>`，`qr_code` 为空。
-4. 渠道回调 `POST /webhook/:provider`。
-5. ⚠ 按渠道验签、解析通知：没有实现（见 46.5）。拿到通知后的处理是真实代码：按 `out_trade_no` 找订单，已经 `completed` 或 `refunded` 的直接返回成功；金额与 `pay_amount` 核对，容差 0.01；用条件更新把订单从 `pending` 或 `expired` 改为 `paid`。
-6. 履约：订单从 `paid` 改为 `recharging`，然后调用 `LedgerCredit{user_id, amount = 订单 amount, idempotency_key = "payment_order_<order id>", ref_type = "payment_order", ref_id = <order id>}`。成功后订单改为 `completed`；失败则改为 `failed` 并记录原因。
-   - **修正**：SDK 的 `LedgerChange` 没有 `kind` 字段，核心统一记为 `plugin_credit`。
-   - ⚠ 没有乘 `balance_recharge_multiplier`。`order_type = subscription` 的订单同样按余额入账，订阅开通没有实现。
-7. ⚠ 订单过期：没有实现。manifest 没有声明 `jobs`，没有任何代码会把订单改成 `expired`。原稿里“5 分钟宽限期”的常量定义了，但没有代码使用。
-
-状态机（目标）：`pending → paid → recharging → completed | failed`，另有 `expired`、`cancelled`、`refunding`、`refunded`。目前代码只会写出 `pending / paid / recharging / completed / failed`。
-
-### 46.5 Webhook 安全契约
-
-- 核心不对 webhook 路由做任何鉴权（`server/internal/plugin/routes`），原始 body（上限 1 MiB）和除被剥离头以外的请求头都原样转给插件。**验签、防重放、来源校验必须全部由插件自己完成。**
-- 现状：`HandlePaymentNotification` **不验签，也不解析 body**，用的是写死的通知（`out_trade_no = "mock_out_trade_no"`，金额 100）。真实订单号都带 `s2a_` 前缀，不会命中这个 mock，所以现在调用这个接口不会给任何人入账，只会返回 `200 OK`。也正因为这样，渠道没接通之前不能声称“支持在线充值”。
-- 接入真实渠道时必须满足：
-  1. 按渠道验签（支付宝 RSA2、微信 APIv3 平台证书加 AES-GCM 解密、Stripe `Stripe-Signature` 的 HMAC 与时间戳容差、易支付 MD5 签名），验签失败返回 4xx，并且不能动订单；
-  2. 防重放：校验通知里的时间戳或 nonce。至少要靠“订单状态条件更新 + 账本幂等键”保证同一通知重复投递只入账一次。这一点现在的代码已经满足：重复投递时 `paid` 条件更新影响 0 行，`LedgerCredit` 返回 `Duplicate`；
-  3. 金额以渠道通知为准，与 `pay_amount` 核对，商户号或 app_id 必须与渠道实例配置一致；
-  4. “订单不存在”现在靠匹配错误字符串返回 200，应改成哨兵错误。
-
-### 46.6 兑换码与优惠码
-
-**兑换码**（真实实现）：
-
-- 生成：`POST /redeem-codes {count (1–1000), type?, value, expires_at?, notes?}`，在一个事务里批量插入，返回明文码。**只有 `balance` 一种类型**（与 new-api 的兑换码只给额度相同）：`type` 不写时为 `balance`，写了别的值 400（`unsupported code type`）。0.2.0 起不再接受 `group_id`、`validity_days`（JSON 里的这两个键被忽略、不再写入），此前接受的 `subscription`、`invitation` 从没实现过；表里这两列保留（插件迁移须向后兼容旧版本），不再读写，管理员列表也不再返回 `validity_days`。
-- 兑换：`POST /redeem {code}`。先 trim 并转大写，算出 `code_hash`，然后在事务内 `SELECT … FOR UPDATE`，校验状态为 `unused` 且未过期，再校验 `type = balance`，然后标记为 `used` 并调用 `LedgerCredit{idempotency_key = "redeem_code_<code id>", ref_type = "redeem_code"}`。并发兑换由行锁保证只有一次成功。
-  - 类型不是 `balance` 的码（旧版本存下的空串、`subscription` 等）兑换时 400 `unsupported code type`，**码保持 `unused`**（0.2.0 起；此前标成已用、返回成功，却什么都不给）。管理员可以作废它们，按 `balance` 重新生成。
-  - ⚠ 账本调用发生在事务提交之前。如果入账成功而提交失败，码仍然是 `unused`，别人再兑换时只会拿到 `Duplicate`（余额已经记在第一个人名下）。没有失败计数和锁定（常量 `RedeemMaxFailedAttempts` 定义了但没用上），可以被暴力枚举，只靠 128 位随机码的熵兜底。
-
-**优惠码**：
-
-- 管理员 CRUD 是真实实现。`ApplyPromoCode` 也实现了：行锁，校验状态、过期时间和次数，校验每用户只能用一次，然后调用 `LedgerCredit{idempotency_key = "promo_<promo id>_<user id>", ref_type = "promo_code"}`，写入使用记录，`used_count` 加一。
-- ⚠ **没有任何路由或流程调用 `ApplyPromoCode`**：既没有用户接口，也没有接到充值流程里。原稿的 `POST /promo` 没有实现。
-
-### 46.7 账本幂等键与授权
-
-- 插件传的键会被核心加上前缀 `plugin:payment:`（`grpcruntime/host.go`），所以只要求在插件内部唯一。
-- 键的列表：`payment_order_<orders.id>`、`redeem_code_<redeem_codes.id>`、`promo_<promo_codes.id>_<user_id>`。
-- ⚠ 风险：这三个键都基于插件 schema 里的 BIGSERIAL。如果插件被清除数据后重装（schema 被删了重建），序列从 1 重新开始，新订单会撞上旧的账本幂等键，被当成 `Duplicate`，**不会入账但订单仍会被标成 completed**。建议改成全局唯一值：订单用 `out_trade_no`，兑换码用 `code_hash`。
-- `ledger.credit` 的 scope：`{"maxPerTx": "100000", "maxPerDay": "1000000"}`。**修正**：原稿用的键是 `single_max/daily_max`，核心不认识这两个键，等于没有设上限；现在改成了核心实际读取的 `maxPerTx/maxPerDay`，由 `manifest_test.go` 守护。单日上限在 Redis 里先预占，失败或 Duplicate 时释放。
-
-### 46.8 权限申请（修正后）
-
-| host permission | 风险 | 用途 |
-|---|---|---|
-| `db.schema` | high | 插件 schema |
-| `routes.user` | medium | 用户充值、订单、兑换接口 |
-| `routes.admin` | medium | 配置与码管理 |
-| `routes.webhook` | high | 渠道回调 |
-| `ledger.credit` | critical | 入账，scope 见 46.7 |
-
-**修正**：原稿的 `db.migrations` 不是有效的 host permission，已删除；迁移由核心按 `database.migrations` 执行（§36）。`routes.public` 和 `events` 已删除。`ui.menu` 和 `ui.native` 在前端实现之前暂不申请（`ui.native` 是 critical 风险，没有页面却申请它就是过宽）。
-
-### 46.9 已知缺口（按优先级）
-
-1. 支付渠道（易支付、支付宝、微信、Stripe、Airwallex）下单和回调验签都没有实现。stripe-go、alipay、wechatpay-go 这几个依赖原来写在 go.mod 里但从未被 import，`go mod tidy` 时已移除，真正接入时再加回来。
-2. 渠道选择和负载均衡没有实现（`payment_provider_instances` 没有读写代码，`/providers` 是 stub）。
-3. `/config` 的读写是 stub，`payment_config` 只能直接改数据库。
-4. 订单过期任务没有实现（需要声明 `jobs` + `app.jobs.v1`，并申请 `jobs` 权限）。
-5. 优惠码没有用户入口。
-6. 没有前端。原稿设计的菜单是：用户侧的充值、订单记录、兑换码三项放在核心 `finance` 区；管理侧的支付配置放在 `system` 区。注意插件**不能**声明 id 为 `finance` 的 `ui.sections`，`finance` 是核心保留区，直接把菜单挂到 `section: "finance"` 即可。
-7. 核心缺口：没有用户查询 Host 接口（拿不到 email）；`recharge:use` 需要能默认授予普通用户角色，否则普通用户调不到充值接口（03-feature-gap.md §A4）。
-8. 46.7 的幂等键风险；46.6 里兑换码的提交顺序问题和缺少防爆破。
-
-### 46.10 测试
-
-- `manifest_test.go`（不需要数据库，`-short` 下也会跑）：manifest 通过核心校验；不含未知字段；`ledger.credit` scope 只包含 `maxPerTx/maxPerDay`；manifest 里的每条路由都有对应 handler。
-- `internal/payment/plugin_test.go`：其中 `TestPlugin_AmountPrecision` 不需要数据库。其余的订单履约、兑换码、并发兑换、优惠码测试用真实 PostgreSQL（§2：`TEST_DATABASE_URL` 或 testpg），`-short` 下跳过。这些测试直接调用 service 方法，没有覆盖 webhook 解析（因为那部分还是 mock）。
+充值、优惠码、兑换码已搬进核心（§140），插件删除。本节原文见 `git show 9e98668d8:next/docs/CONTRACTS.md`，插件最后的源码见 `git show 9e98668d8:next/plugins/payment/manifest.json`。
 
 ## 47. 本机一键启动：`sub2api dev` 与 `sub2api-plugin dev`（2026-10-05，用户要求）
 
@@ -5610,7 +5488,7 @@ node 任务（可工作节点各跑，`RequireWork`）：
 - 此前（0.1.279 及更早）只有带分组的形态：内容与 `GET /key/prices` 相同，不传 `group_id` 取第一个可见分组，`rate_multiplier` 是分组倍率。
 - 页面默认是不带分组的形态（“全部分组”，显示全局价和每个模型所在的分组），选了分组后每个模型显示实付 = 标价 × 这一行的 `rate`（没有 `rate` 时按 1），另有一列“你的倍率”显示 `×rate` 和来源（`segment_model` 你的用户分组给这个模型单独设的倍率、`segment` 你的用户分组在该账号分组的倍率、`group_model` 这个模型在该账号分组的倍率、`group` 账号分组的基本倍率）；顶层 `rate_multiplier` 不再参与显示；所选分组回 404 时退回不带分组的形态并提示。分档模型显示第一档并标明，自定义表达式显示“按规则计费”。（2026-11-23 前带 `multiplier` 的行、`rate_source: discount` 随迁移 0124 取消。）
 
-钱包不提供在线充值（§46，用户决定暂缓），只提示联系管理员。兑换码没有做：`payment` 插件没安装，且 §46.9 的第 7、8 项（`recharge:use` 默认授权、防爆破）要先解决。
+钱包始终显示充值卡和兑换码卡（§140）：未开通在线充值时充值卡显示“暂未开放在线充值”。
 
 ## 80. 访问密钥与二次验证（2026-11-05，用户要求，参考 new-api 的访问令牌；迁移 0088；2026-11-13 期 4 改写：按权限可配置 + 高危操作二次验证）
 
@@ -9619,3 +9497,196 @@ ChatGPT（Codex）上游常先回 200，发出 `response.created`、`response.in
 - 第一个用到它的是 codex 0.2.3：错误码 `server_is_overloaded` → 529（[PLUGIN-CODEX.md](PLUGIN-CODEX.md) 第 24 节）。现有其他插件都不设 `client_status`（SDK `classify` 只在传输错误时设 502），行为不变。
 - 测试：`gateway/client_status_test.go`（有、无故障策略都回 529 且 body 原样；只配 500 的重试规则照旧换号、策略事件记上游的 500；不给 `client_status` 时上游 302 原样回 302；`replyStatus` 的取值表）。
 
+## 140. 核心内置充值：易支付、Stripe、插件网关、优惠码与兑换码（2026-11-26，用户定“核心内置易支付和 Stripe，插件只扩展支付方式”“管理员订单只读，不退款、不补单”“回调严格校验”“保留兑换码和优惠码”“钱包始终显示充值卡”“充值配置放系统设置里面”；迁移 0126，只新增表，可回退换旧核心）
+
+在线充值、优惠码、兑换码从 payment 插件（原 §46）搬进核心；插件 `sub2api/payment` 删除并在商店下架。发布与回退见 `deploy/rollback/topup-0126-release.md`。
+
+### 140.0 网关接口与表
+
+- **网关接口**（`internal/core/ports_payment.go`）：`core.PaymentGateway{CreatePayment, ParseNotification, QueryPayment, Respond}`。核心拥有订单、设置、优惠码与入账；网关只负责创建支付、说明一条通知属于哪个订单、付了多少。`ParseNotification` 对不可信的通知返回包装 `core.ErrPaymentSignature` 的错误（核心回 `PaymentRejected`），其他错误核心回 `PaymentRetry`；`QueryPayment` 不支持时返回 `core.ErrPaymentQueryUnsupported`。`PaymentResult.Amount` 是币种最小单位的整数（`core.PaymentMinorUnits`；JPY、KRW、VND、CLP 无小数，其他按两位）；`MerchantRef`、`MethodType` 网关报了就必须与订单一致。`Respond` 把核心的处理结果（handled / rejected / retry）翻成发送方期望的应答。
+- **网关 id**：内置 `epay`、`stripe`；插件网关 `<插件 id>.<网关 id>`（§140.13）。插件网关不在当前代（插件停用、卸载、撤销授权）时，它的通知回 Retry。
+- **表**（迁移 0126，只新建不改旧表）：`payment_methods`、`payment_orders`、`payment_events`（`UNIQUE(gateway, event_id)`）、`promo_codes`、`promo_code_usages`（`UNIQUE(promo_code_id, user_id)`，每人每码一次）、`redeem_codes`（只存 sha256 哈希与末 4 位）。库里有 payment 插件的表时一次性复制它的优惠码（只保留已用次数）和未使用的余额兑换码；核心身份读不了插件表时只打 WARNING 跳过。
+- **账本类型**：`topup`、`promo_bonus`、`redeem`（`billing.KindTopup` / `KindPromoBonus` / `KindRedeem`），幂等键分别为 `topup:<订单号>`、`promo:<订单号>`、`redeem:<码 id>`。
+- **权限**：`topup:use`、`redeem:use` 进普通用户角色默认（启动时权限同步自动授予，无需迁移）；`topup:order:read`、`topup:manage`、`redeem:manage` 只给管理员。
+
+### 140.1 核心充值的组成（`internal/payment`）
+
+在线充值整套在核心：充值设置、支付方式、询价与下单、订单状态机与同事务入账、网关回调、定时任务、优惠码。网关实现 `core.PaymentGateway`（§140.0）：内置的 `epay`、`stripe`（子包，见各自小节）和插件声明的网关（`core.PaymentGatewayGeneration`），下单、回调、查单只有一条代码路径。payment 模块只经 `internal/core` 依赖别的模块：账本经 `core.Ledger`（外加 billing 的 `CacheBalance`，本地接口 `payment.Ledger`，app 传 `*billing.Service`），插件网关经 `core.PluginRegistry` 当前代的类型断言 `core.PaymentGatewayGeneration`；账本类型 `topup`、`promo_bonus` 在 payment 里以同名常量写出（模块之间不 import）。
+
+- **组装**（`internal/app/payment.go`）：`payment.New(payment.Deps{DB, Cipher, Ledger: b.bill, Plugins: b.reg, PublicURL: cfg.PublicURL, HTTP, OrderLimit, QuoteLimit})`。`HTTP` 是 `netguard.NewClient`（SSRF 防护、30 秒超时，`SUB2API_ALLOW_PRIVATE_UPSTREAM` 时放开私网），交给内置网关；`OrderLimit`/`QuoteLimit` 是 `ratelimit.NewMinute(rdb, "topup_order"|"topup_quote")`。`Deps.Builtin` 只给测试替换内置网关，生产留空由 `builtinGateways` 构造 `epay.New(s.epayConfig, client)`、`stripe.New(s.stripeConfig, client)`。定时任务 `core.payment.sweep` 在组装时注册。
+- **站点地址**：回调地址与跳回地址只用 `SUB2API_PUBLIC_URL` 拼：`<站点>/api/v1/payment/notify/<网关 id>`、`<站点>/me/wallet`，从不取请求里的地址。站点地址不是 `https` 时：保存设置时 `enabled=true` 报字段错误 `values.enabled`；已保存为开启的站点之后改成非 https，`GET /me/topup` 视为未开通（`enabled=false`、`methods=[]`），询价与下单回 409 “在线充值暂未开通”。
+- **金额上限**：核心账本本身没有单次与单日上限，沿用旧 payment 插件 `ledger.credit` 已批准的范围，在 payment 里定义：单次 100000（`maxCreditPerTx`：设置的 `max_topup` 不得超过它，优惠码的赠送不得超过它，入账时 `amount + bonus` 超过它订单记 `failed`）、单日 1000000（`maxCreditPerDay`：同一用户最近 24 小时已完成订单的 `amount + bonus` 加上本单超过它，订单记 `failed`）。
+
+### 140.2 充值设置与支付方式
+
+- **存储**：设置是核心 `settings` 表的一行，key `topup`（JSON）；支付方式是 `payment_methods` 表的行（按 `sort` 排序，`type` 唯一）。密钥字段 `epay.key`、`stripe.secret_key`、`stripe.webhook_secret` 用核心的 `secret.Cipher`（AES-256-GCM，主密钥）加密，AAD 为 `topup:<路径>`（如 `topup:epay/key`），以 base64 存在 JSON 里；读取时解密，接口上一律回显 `******`。
+- **`GET /api/v1/topup/settings`**（topup:manage）：`{mode:"native", values, secret_fields:["epay/key","stripe/secret_key","stripe/webhook_secret"], permission:"topup:manage"}`。`values` = `{enabled, currency, price, min_topup, max_topup, order_timeout_minutes, max_pending_orders, amount_options[], discounts[{amount,rate}], methods[{type,name,gateway,icon,color,logo,min_topup,enabled}], epay{enabled,endpoint,merchant_id,key}, stripe{enabled,secret_key,webhook_secret}}`，金额一律是 JSON 数字（服务端全程 decimal）。`permission` 让控制台的 `usePluginSettings` 判断能否编辑。从没保存过时是默认值（关闭、CNY、7.3、1–10000、30 分钟、3 笔）。
+- **`PUT /api/v1/topup/settings`**（topup:manage）收 `{values}`，设置与支付方式在一个事务里保存（settings 行 `FOR UPDATE`），回与 GET 相同的视图。密钥字段为 `******` 或空表示不改。支付方式整表替换：列表里没有的删除，其余按 `type` 写入，顺序即 `sort`（订单记有方式的类型键与名称，删方式不影响订单）。写核心审计 `topup.settings.update`（操作人、开关、货币、汇率、商户号、方式数、改了哪些密钥的路径，不含密钥）。
+- **校验**（`core.InvalidFields`，字段路径 `values.<路径>`，与控制台 `tabOfPath` 一致，如 `values.epay.key`、`values.methods.0.logo`、`values.discounts.1.rate`）：
+  - `enabled` 需要 https 站点；`currency` ∈ CNY、USD、HKD、EUR、GBP、JPY；`price > 0`；`min_topup ≥ 0`；`max_topup > min_topup` 且 ≤ 100000；`order_timeout_minutes` 1–1440；`max_pending_orders` 1–100；`amount_options` 至多 20 个、都在上下限内；`discounts` 至多 20 档、`amount > 0` 不重复、`0 < rate < 1`。
+  - 方式至多 50 个：`type` 为 `^[a-z0-9_]{1,50}$` 且不重复；`name` 1–100 字符；`gateway` 是 `epay`、`stripe` 或插件网关 id `<插件 id>.<网关 id>`（插件此刻可以没启用：它的方式只在插件启用时出现在钱包）；`icon` ≤ 50；`color` 空或 `#rrggbb`；`logo` 空、https 地址（≤ 2048）或 png/jpeg/webp/svg 的 base64 data URL（解码后 ≤ 64 KB）；`min_topup ≥ 0`。
+  - 易支付开启：`merchant_id`、`key` 必填，再用 `epay.Config.Validate()`（https、无用户信息/查询串/片段，商户号不含 `&` `=`），错误报在 `values.epay.endpoint`。Stripe 开启：`secret_key` 以 `sk_live_`、`sk_test_`、`rk_live_`、`rk_test_` 开头，`webhook_secret` 以 `whsec_` 开头。
+  - **商户锁**：某网关还有“可能付款”的订单（`pending`，或 `expired`/`cancelled` 且状态改变在 24 小时内）时，不许改它的商户号和密钥：易支付 `merchant_id`、`key`，Stripe `secret_key`、`webhook_secret`，错误报在改动的字段上。其他设置照常可改。下单事务以 `FOR SHARE` 读设置行，所以改商户与新订单互相等待，不会漏掉刚建的订单。
+- **密钥按订单验**：内置网关每次调用读当前设置，不看开关：网关停用只拦新下单（`gatewayOpen`），已有订单的回调与查单仍用已保存的商户与密钥；而商户锁保证这些密钥在订单可能付款期间不变。
+- **`GET /api/v1/topup/gateways`**（topup:manage）：充值配置“支付网关”标签的插件网关列表，`[{id, plugin_key, plugin_name, name, ready, methods[{type,name}], in_use}]`：当前代里的插件网关 `ready=true`（名称按请求语言）；方式还在用、但当前代里没有的网关（插件停用或卸载）也列出，`ready=false`、名称为 id、`methods=[]`。`in_use` 是用它的支付方式个数。
+
+### 140.3 用户接口（topup:use，只看自己的订单）
+
+- **`GET /api/v1/me/topup`**：`{enabled, currency, price, min_topup, max_topup, amount_options, discounts, methods[{type,name,icon,color?,logo?,min_topup}]}`。只列能下单的方式：方式启用、其网关开启（内置看开关，插件网关看是否在当前代）。充值开启（且站点 https）并且至少有一个方式时 `enabled=true`。不含网关、商户号和任何密钥。
+- **`POST /api/v1/me/topup/preview`**（每用户 30 次/分钟，超过 429 带 `Retry-After`）收 `{amount, method, promo_code?}`，回 `{amount, bonus, discount_rate, pay_amount, original_pay_amount, promo_error?}`。优惠码不适用不算失败，写进 `promo_error`；金额、方式的问题与下单相同地失败。
+- **`POST /api/v1/me/topup/orders`**（每用户 10 次/分钟）收同样的 `{amount, method, promo_code?}`，201 回 `{out_trade_no, pay_url?, qr_code?, expires_at}`。
+  - 金额：JSON 数字或数字字符串读成 decimal（NaN、Inf 读不进来），必须 > 0、至多 2 位小数、在 `max(全局最低, 方式最低)` 与 `max_topup` 之间（错误字段 `amount`）。方式必须启用且网关开启（“支付方式不可用”）。
+  - 定价：折扣取金额达到的各档里最低的 `rate`；`original_pay_amount = amount × price`、`pay_amount = amount × price × rate`，都按币种最小单位（`core.PaymentExponent`）四舍五入；实付换不成正的最小单位拒绝。
+  - 同一事务：`pg_advisory_xact_lock("topup:user:<id>")`（`store.XactLock`）→ `FOR SHARE` 读设置、读方式 → 校验 → 待支付上限（该用户 `pending` 且未到期的订单数 ≥ `max_pending_orders` 时 409）→ 定价 → 优惠码（锁行占名额，§140.6）→ 插入 `pending` 订单（`out_trade_no` = `s2a_` + crypto/rand 128 位十六进制；快照 `price`、`discount_rate`、`pay_amount`、`currency`、方式类型与名称、网关、优惠码与赠送；`expires_at` = 现在 + `order_timeout_minutes`）→ 写优惠码使用记录。提交后调网关 `CreatePayment`（`Subject` = `Top-up <amount> USD`，不含 `&` `=`），把 `pay_url`、`qr_code`、`gateway_session_id`、`merchant_ref`（网关返回的 `MerchantRef`，商户号快照）写回 `pending` 订单。网关失败（或返回超过 200 字节的会话号/商户）：订单改 `failed`（`fail_reason` “create payment failed”）、释放优惠码名额，回 503。
+- **`GET /api/v1/me/topup/orders`**：自己的订单，新的在前，`page`/`page_size`，`q` 按订单号模糊匹配，`status` 精确筛选。**`GET /api/v1/me/topup/orders/:out_trade_no`**：自己的一张订单；别人的或不存在一律 404 “订单不存在”。**`POST /api/v1/me/topup/orders/:out_trade_no/cancel`**：只能取消自己的 `pending` 订单（别人的 404，其他状态 409），同事务释放优惠码名额，回订单。
+- **订单形状**（控制台 `Order`）：`{id, out_trade_no, user_id, user_email?, amount, bonus, pay_amount, currency, method, method_name, gateway, promo_code?, status, trade_no?, failed_reason?, created_at, paid_at?, completed_at?, expires_at, pay_url?, qr_code?}`。`pay_url`/`qr_code` 只出现在用户自己的、`pending` 且未到期的订单上（“继续支付”）；管理员看不到。`status` 只有 `pending`、`paid`、`completed`、`failed`、`expired`、`cancelled`（原型的 `recharging` 不存在，`paid` 即“入账中”）。
+
+### 140.4 回调 `GET|POST /api/v1/payment/notify/:gateway`
+
+公开路由（`httpapi.AccessPublic`，登记在 app 的 permissionless 列表）。核心只做：请求体上限 1 MiB（超过按 `PaymentRejected` 回），删掉 `Cookie`、`Authorization`、`Proxy-Authorization` 头，把方法、原始查询串、头、正文交给网关 `ParseNotification`，最后用该网关的 `Respond(outcome)` 回。
+
+1. **网关**：`epay`、`stripe` 是内置的；其他 id 在当前插件代里找。找不到时：该 id 还有可能付款的订单 → 503（记 `GATEWAY_UNAVAILABLE` 事件，插件恢复后网关重试即可入账），否则 404。
+2. **验签**：错误包装 `core.ErrPaymentSignature` → 记 `SIGNATURE_INVALID`，`PaymentRejected`；其他错误（取配置失败、插件调用失败）→ `PaymentRetry`。
+3. 以下在**一个事务**里，订单行 `FOR UPDATE`：
+   1. 按 `out_trade_no` 找订单，找不到 → `ORDER_NOT_FOUND`，`PaymentHandled`（免得对方无限重试）。
+   2. 订单的网关必须是这个网关 → 否则 `GATEWAY_MISMATCH`，Rejected。
+   3. 网关报了 `MerchantRef` 就必须等于订单的 `merchant_ref`（`MERCHANT_MISMATCH`）；报了 `MethodType` 就必须等于订单的方式（`METHOD_MISMATCH`）；报了 `SessionID` 且订单有会话号就必须相等（`SESSION_MISMATCH`）。都是 Rejected。
+   4. 网关状态不是 `paid` → 只记 `NOTIFY_<状态>`（`NOTIFY_PENDING` 等），Handled。
+   5. 金额（`core.PaymentMinorUnits(pay_amount, currency)`）与币种（不分大小写）必须等于订单快照 → 否则 `PAYMENT_AMOUNT_MISMATCH`，Rejected；`trade_no` 为空 → `TRADE_NO_MISSING`，Rejected。
+   6. 订单已有流水号：相同 → `DUPLICATE`，Handled（订单还是 `paid` 时顺带重试入账）；不同 → `SECOND_PAYMENT`（同一订单的第二笔付款，记下给管理员看），Handled。
+   7. 订单状态必须允许：`pending`，或 `expired`/`cancelled` 且状态改变在 24 小时内（`updated_at`）；否则 `STATUS_NOT_PAYABLE`，Handled。
+   8. 事件 id 去重：`payment_events (gateway, event_id)` 已有 → `DUPLICATE`，Handled。流水号被别的订单用过 → `TRADE_NO_REUSED`，Rejected。
+   9. 通过：`WHERE status IN (pending, expired, cancelled)` 条件更新为 `paid`，写 `trade_no`、`paid_at`、（订单没有时）`gateway_session_id`；迟到付款按 §140.6 重新占优惠码名额。记 `NOTIFY_OK`，只有这一种事件保存 `event_id`（空的存 NULL）。
+   
+   事务失败（数据库错误）→ `PaymentRetry`，什么都不留下；撞上事件或流水号的唯一约束分别按 `DUPLICATE`（Handled）与 `TRADE_NO_REUSED`（Rejected，事务外补记事件）处理。
+4. 订单刚变成 `paid`（或重复通知遇到 `paid`）时立即入账（§140.5）；入账遇到数据库或账本的暂时错误 → `PaymentRetry`，订单留在 `paid` 由定时任务或重试的通知再入账。
+5. **事件表**：每条回调写一行 `payment_events`：网关、订单（有就记）、`kind`、`verified`（网关验签通过的结果才为 true）、`detail` = 核心自己的 `out_trade_no`、`trade_no`、`status`、`amount`、`currency` 加网关给的白名单 `Fields`（至多 32 项、每项 256 字节，不覆盖核心的键）。不记签名、密钥、完整正文。
+6. 插件网关的边界：插件只回答“哪张订单、付了多少”；订单归属、金额币种、流水号与事件去重、状态全部由核心检查，所以插件最多让“它自己网关下的订单”按订单金额入账。
+
+### 140.5 订单状态机与入账
+
+- 状态：`pending → paid → completed`；`pending → failed`（网关下单失败）；`paid → failed`（入账被拒）；`pending → expired`（定时任务）；`pending → cancelled`（用户）；`expired`/`cancelled` 在 24 小时内仍可 `→ paid`。每一步都是 `WHERE id = ? AND status = ANY(...)` 的条件更新，`updated_at` 随之改为 `now()`（它就是迟到窗口的起点）。
+- **入账租约**：`paid` 订单入账前先取租约：`UPDATE … SET lease_token = <128 位随机>, lease_until = now() + 5 分钟 WHERE status = 'paid' AND (lease_until IS NULL OR lease_until < now())`，影响 0 行说明别人持有，直接返回。每次取得的 token 都是新值（带版本），超时后被别人接管的旧持有者，它的事务里 `WHERE lease_token = 旧值` 找不到订单，什么也不做。
+- **同事务入账**：持有租约后开一个事务：订单行 `FOR UPDATE`（`status='paid' AND lease_token=token`）→ 用户 advisory 锁 → 单次与单日上限 → `ledger.ApplyTx` 充值（`kind=topup`、`ref_type=payment_order`、`ref_id=out_trade_no`、幂等键 `topup:<out_trade_no>`），有赠送再一条（`kind=promo_bonus`、幂等键 `promo:<out_trade_no>`）→ 优惠码使用记录改 `used` → 订单改 `completed`（`completed_at`，清空租约，条件含 token，影响行数不是 1 整体回滚）。提交后对非重复的账本结果调 `CacheBalance`。设计文档有一处写“一次 ledger.credit”，以“架构”表为准分两条。
+- **入账被拒**：超出单次/单日上限，或账本以 4xx 拒绝（如校验失败）：另开事务把订单改 `failed`，`fail_reason` 写原因（管理员在订单详情看到）。数据库等暂时错误不改状态，等定时任务重试。
+
+### 140.6 优惠码
+
+- **管理**（topup:manage）：`GET /api/v1/promo-codes`（分页，`q` 按码模糊匹配）、`POST /api/v1/promo-codes`（201）、`PATCH /api/v1/promo-codes/:id`、`DELETE /api/v1/promo-codes/:id`（204）、`GET /api/v1/promo-codes/:id/usages`。形状 `PromoCode{id, code, bonus_amount, min_amount, max_uses, used_count, status, expires_at?, notes?, created_at}`、`PromoUsage{id, user_id, user_email?, out_trade_no, bonus, status, created_at, used_at?}`。新建：`code` 可省（生成 10 位 A-Z、2-9 去掉易混字符），给定的转大写，规则 `^[A-Z0-9_-]{3,64}$`，重复 409；`bonus_amount` 必填，> 0、≤ 100000、至多 8 位小数；`min_amount ≥ 0`；`max_uses ≥ 0`（0 不限）；`status` 为 `active`/`disabled`。PATCH 只改送来的字段，`expires_at: null` 清除过期时间，码与 `used_count` 不可改。新建、修改、删除写审计 `promo_code.create|update|delete`（操作人）。删除码时使用记录随之删除，订单保留码与赠送快照。
+- **适用条件**（询价与下单相同）：码存在、`active`、未过期、`max_uses` 为 0 或 `used_count < max_uses`、这个用户没有它的使用记录（含自己未付的订单）；任何一条不满足都回同一句“优惠码无效或已用完”；只有金额低于 `min_amount` 单独提示“充值满 $X 才能使用这个优惠码”。
+- **占用**：下单事务里 `FOR UPDATE` 锁优惠码行再校验，插入 `reserved` 使用记录（含订单与赠送金额）、`used_count + 1`；最后一个名额被并发抢时只有一个订单占到，`(promo_code_id, user_id)` 唯一保证每人每码一次。
+- **使用与释放**：入账时改 `used`（`used_at`）；订单取消或过期时删掉 `reserved` 记录、`used_count - 1`（不低于 0）。
+- **迟到付款**：过期或取消的订单在 24 小时内付款时重新占名额（锁码行，同样的适用条件，不再看最低额）；占不到时订单 `bonus` 改为 0，`fail_reason` 写“paid late: the promo code no longer applies, its bonus is not credited”，只入充值金额。
+
+### 140.7 管理接口（topup:order:read）
+
+- **`GET /api/v1/topup/orders`**：全站订单，新的在前，`status`、`method` 精确筛选，`from`/`to` 按 `created_at`（RFC 3339，`to` 不含），`q` 模糊匹配订单号、网关流水号或用户邮箱；每项带 `user_email`，不带 `pay_url`/`qr_code`。只读，没有任何改单操作。
+- **`GET /api/v1/topup/orders/stats`**：`{today_amount, today_count, month_amount, pending_count, failed_count}`。今日与本月是 `completed` 订单的 `amount`（到账金额，不含赠送）之和与笔数，按 `completed_at` 落在请求时区（`tz=<IANA>`，默认 UTC）的今天 0 点、本月 1 日之后；核心没有站点时区设置，所以“按站点时区”由控制台带 `tz` 实现。`pending_count`、`failed_count` 是对应状态的订单数。
+
+### 140.8 定时任务 `core.payment.sweep`
+
+cluster 任务，每分钟一次，单次至多 5 分钟：
+- 取 `pending` 且 `expires_at` 在 1 分钟内（含已过）的订单（每次至多 200 张，按到期先后）：网关可用就先 `QueryPayment`；查到 `paid` 且订单号一致时按回调同一条路处理（§140.4 第 3–4 步，事件照记）；`ErrPaymentQueryUnsupported` 或其他错误（记日志）都不挡过期。已到期且没查到付款的订单 `WHERE status='pending'` 改 `expired`，同事务释放优惠码名额。之后的付款走迟到窗口。插件网关不可用时直接过期。
+- 取 `paid` 且租约空闲或已超时的订单（至多 200 张）重试入账（§140.5）。
+
+### 140.9 权限与菜单
+
+- 权限：普通用户角色 `user` 的默认权限加 `topup:use`、`redeem:use`（`userRolePermissions`；新权限在同步时授予已有的 `user` 角色，不需要迁移、不升 `rev`）。因为运维与代理供应商的默认权限包含 `userRolePermissions`，它们也得到这两项；管理员得到全部核心权限。`topup:order:read` 看全站订单与统计，`topup:manage`（敏感）管充值配置、支付方式、内置网关密钥、优惠码。
+- 侧栏（`authz/menus.go`）：核心分组 `topup`“充值/支付”（`manifest` 的 `coreMenuSections` 序号 450，在“财务”与“用户”之间）：充值订单 `/topup/orders`（`GET /topup/orders`，topup:order:read）、兑换码 `/redeem-codes`（`GET /redeem-codes`，redeem:manage）、优惠码 `/promo-codes`（`GET /promo-codes`，topup:manage）。个人中心在钱包后加“充值记录” `/me/topup-orders`（`GET /me/topup/orders`，topup:use）。充值配置在系统设置里（`/settings?tab=topup`），侧栏没有它；“系统设置”入口的路由加上 `GET /topup/settings`，只有 topup:manage 的人也能看到入口。
+
+### 140.10 测试（`internal/payment/*_test.go`，真实 PostgreSQL，假网关）
+
+同一通知并发 20 次只入账一次；12 个并发下单不超过待支付上限 3；租约取得后超时被接管、旧持有者事务找不到订单，只入账一次，失去租约的完成整体回滚；过期前 10 秒、过期后、取消后各付款两次都只入一次，超过 24 小时不入账（`STATUS_NOT_PAYABLE`）；定时任务快到期先查单并入账；单次上限被拒记 `failed`，`paid` 订单由定时任务重试入账；用户 A 查询、取消 B 的订单 404；`/me/topup` 不含网关、商户号、密钥；金额不符、商户不符、方式不符、会话不符、缺流水号、币种不符、网关不符回 Rejected 并记事件，对不上订单回 Handled，验签失败回 Rejected，插件网关不可用回 503、恢复后入账；优惠码最后一个名额 10 人并发只有一个占到，取消与过期释放名额，迟到付款占不到名额只入充值金额并写原因，未达门槛被拒；设置密钥加密存储与遮蔽回显、字段错误路径、非 https 不能开启、有可能付款的订单时拒绝改商户号与密钥；下单金额 0、负数、NaN、1e400、3 位小数、超上限、方式停用被拒，网关失败订单记 `failed`；每用户每分钟 10 次下单限流；管理员按邮箱搜索与统计；优惠码增改删与审计。
+
+### 140.11 易支付网关（`internal/payment/epay`）
+
+内置网关 `epay`（`core.PaymentGatewayEpay`），实现 `core.PaymentGateway`。包只 import `internal/core` 和标准库、`shopspring/decimal`，不 import `internal/payment`；由 payment 模块组装。
+
+- **构造**：`epay.New(cfg func(ctx) (epay.Config, error), client *http.Client) *epay.Gateway`，两个参数都不能是 nil（否则 panic）。`Config{Endpoint, MerchantID, Key}`：`Endpoint` 是易支付的基础地址（`https://pay.example.com`，可以带路径，结尾的 `/` 忽略），`MerchantID` 就是 `pid`。每次调用都经 `cfg` 取当前配置，不缓存。`Config.Validate()`：`Endpoint` 必须是 https、有主机，不带用户信息、查询串和片段；商户号和密钥必填；商户号不能含 `&`、`=`（它会原样出现在回调里）。设置保存时用同一个 `Validate` 检查。
+- **签名**（下单与回调共用一个函数）：参数里去掉 `sign`、`sign_type` 和空值，按 key 升序拼成 `k=v&k=v`（值是解码后的原文），后面直接接密钥，取 MD5 的小写十六进制。与 new-api 的 go-epay 算法相同。
+- **下单** `CreatePayment`：不请求易支付，只生成 `submit.php` 跳转地址。参数 `pid`、`type`（= `MethodType`）、`out_trade_no`、`notify_url`、`return_url`、`name`（= `Subject`）、`money`（两位小数），加 `sign` 与 `sign_type=MD5`；`PayURL` = `Endpoint + "/submit.php?" + 按 key 排序编码的参数`，`MerchantRef` = `pid`，没有 `SessionID`、`QRCode`（流水号随回调到来）。拒绝：币种不是 `CNY`；金额不是正的整分；`notify_url` 或 `return_url` 为空；`type`、`out_trade_no`、`name`、`money` 为空或含 `&`、`=`（这些值会随回调回来，回调一律拒绝这样的值，订单就永远验不过，所以下单时先拒绝；**核心生成的商品名不能含 `&`、`=`**）。`ExpiresAt`、`ClientIP` 不用（`submit.php` 不收）。
+- **回调** `ParseNotification`：GET 读查询串；POST 只收 `application/x-www-form-urlencoded`，读正文，同时带查询串的拒绝；其他方法拒绝。检查顺序：
+  1. 自己逐个切分参数（不用 `url.ParseQuery`，它会默默保留重复的 key）：同名参数出现两次（值相同也算）、没有 `=` 的片段或空片段、转义错误、值（解码后）里有 `&` 或 `=`、白名单外的参数，一律拒绝。
+  2. 白名单：`pid`、`trade_no`、`out_trade_no`、`type`、`name`、`money`、`trade_status`、`param`、`sign`、`sign_type`，以及常见分支会签名发送的 `api_trade_no`、`buyer`。白名单外的参数**拒绝而不是忽略**：发送方加的每个参数都参与签名，不认识的参数说明是没审过的协议变体；拒绝会记成验签失败的事件，管理员看得到，订单仍可由查单救回。
+  3. 缺 `sign` 或 `sign_type` 不是 `MD5` 拒绝；签名按上面的算法计算，`hmac.Equal` 常量时间比较（`sign` 的十六进制大小写不限）。
+  4. `pid` 必须存在且等于当前配置的商户号（不用配置值顶替缺失的 `pid`）；核心再要求它等于订单的 `merchant_ref`。
+  5. `out_trade_no`、`trade_no`、`type`、`money`、`trade_status` 必须有值；`money` 必须是普通十进制（不带符号、指数、`NaN`），经 `core.PaymentMinorUnits(…, "CNY")` 换成分，非正或不是整分拒绝。
+
+  以上任何一步不过，返回的错误都包装 `core.ErrPaymentSignature`（核心按 `PaymentRejected` 处理），错误信息不含密钥、签名和请求里的未知参数名；只有取配置失败或配置不合规返回别的错误（站点的问题，核心应回 `PaymentRetry` 让易支付重试）。结果：`Amount` 为分、`Currency = "CNY"`、`MerchantRef = pid`、`MethodType = type`、`TradeNo = trade_no`、`OutTradeNo`；`trade_status = TRADE_SUCCESS` 为 `paid`，其他一律 `pending`（核心只在 `paid` 时入账）；`EventID` 为空（易支付没有事件 id）；`Fields` 只放 `pid`、`trade_no`、`out_trade_no`、`api_trade_no`、`type`、`name`、`money`、`trade_status`（查单另有 `status`、`addtime`、`endtime`）里有值的项，不放 `sign`、`sign_type`、`param`、`buyer`。订单是否存在、网关是否为 epay、`type` 与金额是否等于订单、流水号去重都由核心检查。
+- **查单** `QueryPayment`：用传入的 client 带 ctx 发 `GET Endpoint/api.php?act=order&pid=…&key=…&out_trade_no=…`。密钥按协议在查询串里，所以错误里从不出现 URL（去掉 `*url.Error` 外壳，保留原因，`errors.Is(err, context.Canceled)` 仍成立），对方的 `msg` 遮掉密钥、截到 200 字节后才写进错误。响应体最多读 1 MiB。
+  - 订单的 `MerchantRef` 与当前配置的商户号不同（不能用当前密钥替它查）、HTTP 404/405/501、响应不是 JSON、`code` 不是 `1`、回答的 `out_trade_no` 或 `pid`（有时）不是所问的、已支付却没有或有非法的 `money`：包装 `core.ErrPaymentQueryUnsupported`，核心只做过期，不影响回调这条主路。
+  - 其他非 2xx 和网络错误返回普通错误（暂时的，下次再查）。
+  - `code`、`status`、`money` 等字段接受字符串或数字。状态：有 `trade_status` 时只认 `TRADE_SUCCESS`，没有时 `status = 1` 为已支付，其他 `pending`。结果的 `MerchantRef` 是配置的商户号，`MethodType` 是回答的 `type`（没有就空，核心不比），`Currency = "CNY"`，`EventID` 为空。
+- **回应** `Respond`：`PaymentHandled` → 200 `text/plain` `success`；`PaymentRejected` → 400 `fail`；`PaymentRetry` → 503 `fail`（易支付收不到 `success` 会重试）。
+- **测试**（`epay/*_test.go`）：下单参数与签名的黄金样例（签名在 Go 外用 md5sum 算出）；验签矩阵 GET、POST 各一遍：缺 sign、错 sign、换密钥、缺或错 `sign_type`、值里带 `&`/`=`（编码与未编码）、重复参数、无 `=` 片段、空片段、未知参数、转义错误、`pid` 不符或缺失、金额 `1.001`/负数/零/`NaN`/`1e2`/缺失、必填字段缺失、`type` 透传、非成功状态为 `pending`；POST 的 JSON、带查询串、PUT；取配置失败不算验签失败；查单用 httptest TLS 服务器测成功、`code` 非 1、404/501、非 JSON、别的订单或商户、HTTP 502、连不上、ctx 取消，并确认错误里没有密钥和 `api.php`。金额差 1 分、`type` 与订单不符属于核心的订单核对，在 payment 模块测。
+
+### 140.12 Stripe 网关（`internal/payment/stripe`）
+
+内置网关 `stripe`（`core.PaymentGatewayStripe`），实现 `core.PaymentGateway`。包只 import `internal/core`、标准库和 Stripe 官方 Go 库 `github.com/stripe/stripe-go/v87`（根包与 `webhook` 子包；它只依赖 `shopspring/decimal`，核心因此从 v1.4.0 升到 v1.5.0），不 import `internal/payment`；由 payment 模块组装。
+
+- **构造**：`stripe.New(cfg func(ctx) (stripe.Config, error), client *http.Client) *stripe.Gateway`，两个参数都不能是 nil（否则 panic：nil client 会让官方库退回它自己的 `http.Client`，绕过核心的出口策略）。`Config{SecretKey, WebhookSecret}`。每次调用都经 `cfg` 取当前配置，不缓存；每次调用按当前密钥新建官方库的客户端，`HTTPClient` 就是传入的 client，请求带调用方的 ctx。官方库的自动重试关掉（`MaxNetworkRetries = 0`：重试由核心的定时任务做，请求路径上不隐藏等待），日志级别 `LevelNull`（错误原样返回给调用方，由调用方决定记什么），遥测保持默认关闭。
+- **正式与测试**：密钥前缀 `sk_live_`、`rk_live_` 是正式，`sk_test_`、`rk_test_` 是测试，其他（含空、`pk_` 可发布密钥）一律不合规：下单、查单返回普通错误，回调按验签失败处理。`MerchantRef` 就是 `live` 或 `test`：核心把它记在订单上，回调与查单报的必须一致，所以测试模式的付款不能给正式订单入账（反之亦然）。**设置校验应调用同样的前缀规则**（可以在 payment 模块里按上面四个前缀检查；需要时本包可以导出 `ValidateConfig`）。
+- **下单** `CreatePayment`：`POST /v1/checkout/sessions`，参数只有这些：`mode=payment`；`line_items[0][price_data][currency]` = 小写币种，`[unit_amount]` = `core.PaymentMinorUnits(Amount, Currency)`（按 `core.PaymentExponent`：JPY、KRW、VND、CLP、ISK 不乘 100，其他乘 100），`[product_data][name]` = `Subject`，`line_items[0][quantity]=1`；`client_reference_id` 与 `metadata[out_trade_no]` 都是订单号；`success_url`、`cancel_url` 都是 `ReturnURL`；`expires_at` 见下。不传 `allow_promotion_codes`（促销码会让实付少于订单金额），不用后台的 Price，不指定 `payment_method_types`（由 Stripe 后台的支付方式设置决定）。金额不是正的、不是该币种最小单位的整数倍时不请求 Stripe 直接报错。返回 `PayURL` = `session.url`、`SessionID` = `session.id`、`MerchantRef` = `live`/`test`，没有 `QRCode`。`NotifyURL` 不用：Stripe 的 webhook 地址在 Stripe 后台配置（`https://<站点>/api/v1/payment/notify/stripe`，订阅 `checkout.session.completed`、`checkout.session.async_payment_succeeded`、`checkout.session.expired`）。`MethodType`、`ClientIP` 不用。
+- **会话过期时间**：Stripe 只接受会话创建后 30 分钟到 24 小时之间的 `expires_at`。网关把 `ExpiresAt` 夹到 [现在 + 31 分钟, 现在 + 23 小时 59 分钟]（各留 1 分钟抵消请求延迟和时钟偏差）。**对核心的影响**：订单超时设得短于 31 分钟时（默认 30 分钟就是），Stripe 会话比订单晚到期，用户可能在订单 `expired` 之后付款；核心本来就接受过期后 24 小时内验签通过的支付回调（订单状态一节），这笔会按迟到付款入账，优惠码名额按迟到付款的规则处理。订单超时长于 24 小时时，会话先于订单到期，`checkout.session.expired` 事件或查单会让订单提前过期。
+- **回调** `ParseNotification`（`/api/v1/payment/notify/stripe`）：依次检查，任何一步不过返回包装 `core.ErrPaymentSignature` 的错误（核心按 `PaymentRejected` 回 400）：
+  1. 方法必须是 POST；webhook 密钥已配置；有 `Stripe-Signature` 头。
+  2. 密钥前缀合规（定出正式或测试）。
+  3. 官方库 `webhook.ConstructEventWithOptions` 验签：HMAC-SHA256，时间戳容差 300 秒（`webhook.DefaultTolerance`），超时的签名拒绝（防重放）。**关掉了 API 版本检查**（`IgnoreAPIVersionMismatch`）：webhook 端点按它自己的版本（通常是账号默认版本）发事件，官方库默认要求与库固定的 release train 一致，否则每个事件都被拒；本包读的字段（事件的 `id`、`type`、`livemode`，会话的 `id`、`object`、`status`、`payment_status`、`amount_total`、`currency`、`client_reference_id`、`metadata`、`payment_intent`）在各版本里相同。
+  4. 事件的 `livemode` 必须与密钥的正式/测试一致。
+  5. `checkout.session.*` 事件：`data.object` 必须是 `object = "checkout.session"`；`client_reference_id` 必须等于 `metadata.out_trade_no`（两者都空也算相等：那是不是本站创建的会话，核心按“不是本站的订单”回 200）。
+
+  只有取配置失败返回别的错误（核心应回 `PaymentRetry`，让 Stripe 重试）。状态：`checkout.session.completed`、`checkout.session.async_payment_succeeded` 且 `payment_status = paid` 为 `paid`（延迟到账的支付方式先 completed 后 paid，completed 时还是 `unpaid` 就是 `pending`）；`checkout.session.expired` 为 `expired`；其他 `checkout.session.*`（如 `async_payment_failed`）为 `pending`，字段照常解析。非 `checkout.session.*` 事件（Stripe 后台多订阅了的）返回 `Status = pending`、`EventID`、`MerchantRef`、`Fields{event_type}`，没有订单号，核心只记事件。结果：`EventID` = `event.id`，`SessionID` = `session.id`，`OutTradeNo` = `client_reference_id`，`Amount` = `amount_total`（最小单位），`Currency` = 大写 `currency`，`MerchantRef` = `live`/`test`，`TradeNo` = `payment_intent` 的 id（会话还没有 PaymentIntent 时用 session id），`MethodType` 为空（核心不比）。`Fields` 只有 `event_type`、`session_status`、`payment_status`、`livemode`、`amount_total`、`currency`，不放签名、客户信息（邮箱、地址）、URL、metadata 和整个正文。订单存在、网关是 stripe、Session id 与订单号指向同一张订单、金额币种等于订单快照、`MerchantRef` 等于订单的、`event.id` 去重都由核心检查。
+- **查单** `QueryPayment`：`GET /v1/checkout/sessions/{SessionID}`，订单没有 `SessionID` 时返回普通错误不请求。映射与回调相同（同一个函数）：`status = complete` 且 `payment_status = paid` 为 `paid`，`status = expired` 为 `expired`，其他 `pending`；`client_reference_id` 与 `metadata.out_trade_no` 不一致返回包装 `core.ErrPaymentSignature` 的错误；`MerchantRef` 取会话的 `livemode`；`EventID` 为空。Stripe 的错误与网络错误返回普通错误（下次再查）。
+- **回应** `Respond`：`PaymentHandled` → 200，`PaymentRejected` → 400，`PaymentRetry` → 500，`text/plain` 正文是状态文字。Stripe 对任何非 2xx 都会按退避重试（最长约 3 天），所以 400 只用于重试也不会改变结果的情况。
+- **测试**（`stripe/*_test.go`，事件用 `webhook.GenerateTestSignedPayload` 本地签名，不需要 Stripe 账号）：错签名、篡改正文、时间戳超过 300 秒、缺头、未配置 webhook 密钥、未配置或不合规的密钥、GET、正式事件配测试密钥与测试事件配正式密钥、`client_reference_id` 与 `metadata` 不一致或 metadata 缺失、`data.object` 不是会话，全部 `ErrPaymentSignature`；取配置失败不算验签失败；各事件类型（含 completed 未付、async 成功与失败、expired、非 checkout 事件）的状态映射；字段透传（JPY `amount_total=1500` → `Amount=1500`、`Currency=JPY`、`TradeNo` 取 PaymentIntent 或回退到 session id、`Fields` 没有邮箱）；下单与查单用 httptest 假 Stripe 服务器校验路径、`Authorization`、表单参数完全等于上面的列表（金额 `12.34 USD → 1234`、`1500 JPY → 1500`、没有 `allow_promotion_codes`）、请求经传入的 client、Stripe 报错时只请求一次、ctx 取消、金额不合规或密钥不合规时不请求；`expires_at` 夹取。金额币种不符、同一事件重放、Session 与订单对不上属于核心的核对，在 payment 模块测。
+
+### 140.13 插件网关（`payment.gateway.v1`）
+
+插件只用来扩展核心没有内置的支付方式（支付宝官方直连、加密货币等）。照通知渠道（§74.4）的做法：插件声明能力，核心调用插件；插件不碰订单表，也调不了账本。内置的 epay、stripe 和插件网关实现同一个 `core.PaymentGateway`，下单、回调、查单只有一条代码路径。
+
+- **声明**：manifest 加能力 `payment.gateway.v1`、宿主权限 `payment.gateway` 和 `payments.gateways[]`，三者必须同时出现：声明了网关却缺能力或缺权限、只有能力或只有权限而没有 `payments`，`manifest/check` 都报错（字段 `payments`，code `missing_capability` / `missing_host_permission` / `required`）。
+  - `gateways[]` 1–8 个，每个 `{id, name, icon?, methods[], query?}`：
+    - `id`：插件内唯一，`^[a-z][a-z0-9_]{1,29}$`（不含点）。
+    - `name`：LocalizedText，必填。
+    - `icon`：可选，图标键，`^[a-z][a-z0-9_-]{0,49}$`。
+    - `methods[]`：1–16 个支付方式模板 `{type, name, icon?}`；`type` 是发给网关的类型键，网关内唯一，`^[a-z][a-z0-9_-]{0,49}$`（适配 `payment_methods.type` 的 varchar(50)）；`name` 必填；`icon` 同上（控制台认 alipay、wxpay、qqpay、stripe、card，其他键显示名称首字）。
+    - `query`：网关是否支持查单，默认 false。
+- **网关 id**：核心把插件网关命名为 `<插件 id>.<网关 id>`（`manifest.PaymentGatewayName`；第一方插件就是 `key.id`，其他发布者是 `_<发布者>__<key>.id`，§137）。插件 id 与网关 id 都不含点，所以全站唯一，也不会与内置的 `epay`、`stripe` 相撞；安装时无需冲突检查。注册表仍按“先到先得”兜底：同名的第二个被跳过，插件记为异常（`ResourceConflict{resource: "payment_gateway"}`）。回调地址是 `/api/v1/payment/notify/<网关 id>`。
+- **宿主权限 `payment.gateway`**：风险等级 High（需管理员逐项勾选，`plugin:grant:high`）。含义：本插件网关验签通过的通知可以把本网关的订单标记为已支付，金额以订单为准。核心只在插件持有该授权时把它的网关放进当前代；授权被撤销与插件停用同等处理。
+- **当前代**：注册表的代实现 `core.PaymentGatewayGeneration`，`PaymentGateways()` 返回已启用、声明了能力、持有授权、进程提供了服务的插件的网关绑定 `{Plugin, Gateway: {id, name, icon, methods, query}, Client}`，按插件批准顺序。
+- **停用与卸载**：插件停用、卸载、授权撤销或实例不在本节点时，它的网关不在当前代；核心对这样的网关的回调回 Retry（503），让网关稍后重试，插件恢复后再处理。实例在排空或重启中时，调用返回 `plugin_unavailable`，核心同样按 Retry 处理。
+- **gRPC 服务 `PaymentGatewayService`**（`sdk/proto/sub2api/plugin/v1/payment.proto`），每个请求都带插件内的网关 id `gateway`，一个插件多个网关用 `pluginsdk.PaymentGatewayMux` 分发：
+  - `CreatePayment{gateway, out_trade_no, amount（十进制字符串，按币种最小单位精确，如 "12.30"）, amount_minor（同一金额的最小单位，1230）, currency（ISO 4217 大写）, method_type, subject, notify_url, return_url, expires_at_unix, client_ip}` → `{pay_url, qr_code, session_id, merchant_ref}`；`pay_url`、`qr_code` 至少一个，否则核心按内部错误处理。地址都由核心按站点地址拼，不取自请求。
+  - `ParseNotification{gateway, method, raw_query, headers（net/http 规范名，多值）, body}`：核心已限制请求体并剥掉 cookie、authorization 头。返回 `{verified, reason, result, handled, rejected, retry}`：
+    - `verified=false`：通知不真实（签名错、缺签名、商户不对），核心得到包装 `core.ErrPaymentSignature` 的错误（带 `reason`，不得含密钥），回 rejected。插件不要为验签失败返回 gRPC 错误：错误会让核心回 Retry。
+    - `result`：`PaymentResult{out_trade_no, trade_no, session_id, amount（最小单位）, currency, status, event_id, merchant_ref, method_type, fields}`；`status` 为 `PAYMENT_STATUS_PAID|PENDING|FAILED|EXPIRED`，`UNSPECIFIED` 视为插件的错误回答（内部错误）。`fields` 是写进 `payment_events` 的白名单非机密字段。
+    - 三个回复 `PaymentReply{status, content_type, body}`：插件决定回网关的字节，核心决定结果（`core.PaymentOutcome`：handled = 已处理/重复/不是本站订单，rejected = 验签不过或与订单不符，retry = 核心暂时处理不了）。回复属于网关协议本身，不得随通知变化：适配器按网关保存插件最近一次 `ParseNotification` 回答里的三个回复（跨代保留，进程重启后在下一次回答时更新），`Respond` 用它；还没有回复、某个回复为空或状态不在 200–599 时用默认状态 200 / 400 / 503。
+  - `QueryPayment{gateway, out_trade_no, session_id, method_type, merchant_ref}` → `{result}`。清单里 `query=false` 的网关核心不调用，直接得到 `core.ErrPaymentQueryUnsupported`；插件回 `UNIMPLEMENTED`（`pluginsdk.ErrPaymentQueryUnsupported`）也映射为它。其他插件错误按运行时的统一映射原样返回（`NOT_FOUND` → `not_found`，未知错误 → `internal`，不可用 → `plugin_unavailable`）。
+  - 调用走控制台类并发槽，单次 30 秒上限（`grpcruntime.TimeoutPayment`，与插件路由相同）。
+- **核心的核对**（payment 模块，见本节前文）：适配器如实传递插件报的每个字段，不修正也不丢弃；订单存在、订单的网关就是这个插件网关、金额和币种等于订单快照、`merchant_ref`/`method_type` 非空时等于订单的、流水号和事件 id 没用过、订单状态允许，全部由核心检查后才入账。所以插件最多只能让“本网关下的订单”按订单金额入账，改不了金额，碰不到别的网关的订单。
+- **SDK**：`pluginsdk.PaymentGateway`（三个方法，`Serve` 自动注册服务并上报能力）、`PaymentGatewayMux`、`PaymentReplies` / `TextReply`、`VerifiedNotification` / `RejectedNotification`、`NotificationHeader`、`ErrPaymentQueryUnsupported`；`pluginsdktest.Harness.Payment` 是服务的客户端。
+- **模拟网关**：`sdk/pluginsdk/pluginsdktest/mockpay` 是测试插件网关这条路用的模拟网关（HMAC-SHA256 签名的 JSON 通知，`mock` 可查单、`mock_noquery` 不可查单），核心的运行时测试经 `server/internal/plugin/grpcruntime/testdata/paymentplugin` 把它作为真实插件进程加载。它不在 `next/plugins/` 下：那里的每个目录都会被 `build-demo.sh` 打进市场、被 `plugin-release.yml` 发布，模拟网关不上架商店。
+- **原 payment 插件**删除（`next/plugins/payment`、`go.work` 条目）；商店里的 `sub2api/payment` 下架。
+
+### 140.14 核心兑换码（`internal/redeem`）
+
+兑换码从 payment 插件搬进核心，不装任何插件也能用。表 `redeem_codes`（迁移 0126）。模块只 import `core`、`store`、`httpapi`、`audit`、`perm`、`x`，经接口拿账本和限流，组装在 `internal/app`。§46 里兑换码的部分作废。
+
+- **码**：`crypto/rand` 16 字节 → 32 位大写十六进制，显示成 4 位一组、`-` 连接（`XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX`）。规范化 = 去掉空白和 `-`、转大写；规范化后不是 32 位十六进制的输入直接按无效码处理，不查库。`code_hash` = 规范化后的码的 SHA-256 小写十六进制（与 payment 插件的哈希相同，0126 搬来的旧码照样能兑换），`code_tail` = 末 4 位。**库里只有哈希和末 4 位**，明文只出现在生成接口的那一次响应里（`Cache-Control: no-store`），审计日志也不记明文。
+- **状态**：库里存 `unused` / `used` / `voided`；`expired` 只在读出时由 `unused` 且 `expires_at <= now()` 推出，不落库。
+- **兑换**（`Service.Redeem`）：一个 `store.DB.Tx` 里 `SELECT … FOR UPDATE` 取 `code_hash = ? AND status = 'unused' AND (expires_at IS NULL OR expires_at > now())` 的码 → 改 `used`、记 `used_by`、`used_at` → `Ledger.ApplyTx` 入账（kind `redeem`，`ref_type = "redeem_code"`，`ref_id` = 码 id，幂等键 `redeem:<code_hash>`），一起提交；任何一步失败整体回滚，没有中间状态和重试任务。并发兑换同一个码时只有第一个取到行，其余的等锁后找不到 `unused` 的行。`ApplyTx` 回 `Duplicate`（只有码行被删后以同一哈希重建才会发生）当内部错误回滚。提交后调 `CacheBalance` 刷新余额缓存。
+- **统一错误**：码不存在、格式不对、已使用、已作废、已过期一律 400 `invalid_redeem_code`“兑换码无效或已使用”（英文 `invalid or used redeem code`），不透露码是否存在。空码 400 `invalid_argument` `fields[{field:"code", code:"required"}]`，不计失败。
+- **防爆破**：每个用户每分钟最多 5 次兑换（`core.RateWindows`，app 传 `ratelimit.NewMinute(rdb, "redeem")`，计数在 Redis `rl:redeem:<uid>:rpmb`）；回 `invalid_redeem_code` 的失败计入 Redis `redeem:fail:<uid>`，窗口从第一次失败起 1 小时，到第 10 次时窗口重新计 1 小时：期间 429 `rate_limited`“兑换失败次数过多，请稍后再试”，`details.retry_after_seconds`。超每分钟次数也是 429 `rate_limited`（“兑换过于频繁”）。先查锁定再计每分钟次数。账本或数据库出错不计失败。Redis 出错时记警告放行（与登录限流一致：128 位的码猜不中，限流只是减速）；没有 Redis 时都不限。
+- **生成**（`Service.Generate`）：`count` 1–1000；`value` > 0、不超过 100000（账本单次入账上限，旧 payment 插件 `ledger.credit` 的 `maxPerTx`）、至多 8 位小数；`expires_at` 可选，必须晚于现在；`notes` 至多 200 字符。违反时 400 `invalid_argument` 带 `fields`（字段名同请求）。一个事务里批量插入并写审计 `redeem_code.generate`（`target_type = "redeem_code"`，`target_id` 空，detail `{count, value, expires_at, first_id, last_id}`），操作人是调用者，`created_by` 记操作人。
+- **作废**（`Service.Void`）：`UPDATE … SET status='voided', voided_by=操作人 WHERE id=? AND status='unused'`（已过期的仍是 unused，可以作废），同一事务写审计 `redeem_code.void`（`target_id` = 码 id）。不存在 404，已使用或已作废 409 `conflict`“只能作废未使用的兑换码”。
+- **接口**（全部 `r.Perm`，不要求 step-up；访问密钥按其权限收窄）：
+
+  | 方法 路径 | 权限 | 请求 | 响应 |
+  | --- | --- | --- | --- |
+  | `POST /api/v1/me/redeem` | `redeem:use` | `{code}` | 200 `{data:{amount, balance}}`：到账金额与入账后的余额（十进制字符串） |
+  | `GET /api/v1/redeem-codes` | `redeem:manage` | `?status=unused\|used\|voided\|expired&page=&page_size=` | `{data:[…], page}`，按 id 倒序；每项 `{id, code_tail, value, status, used_by?, used_by_email?, used_at?, expires_at?, notes, created_at}`，`status` 是推出后的状态；其他 `status` 400 |
+  | `POST /api/v1/redeem-codes` | `redeem:manage` | `{count, value, expires_at?, notes?}`（`value` 数字或字符串） | 201 `{data:{codes:[…]}}`，明文分组码，`Cache-Control: no-store` |
+  | `DELETE /api/v1/redeem-codes/:id` | `redeem:manage` | — | 204 |
+
+- **前端**：管理页 `web/src/views/redeem/`（侧栏“充值/支付 → 兑换码”），列表用 `code_tail` 显示成 `••••-••••-••••-XXXX`；生成后的明文只在结果弹窗里（复制全部 / 下载 txt）。钱包页的兑换码卡 `views/me/RedeemCard.vue`（有 `redeem:use` 才显示）。mock `web/mock/billing/redeem.ts` 与上面的接口同形。余额流水的类型名：`topup`“充值”、`promo_bonus`“优惠码赠送”、`redeem`“兑换码”。
+- **测试**（`internal/redeem/*_test.go`，真实 PostgreSQL + miniredis）：大小写、空格、连字符不影响兑换，流水 kind 与幂等键；不存在、格式不对、已作废、已过期同一错误码；20 个用户并发兑换同一个码只成功一次、只有一条流水；账本在写完流水后报错时码仍是 unused、余额与流水都回滚、不计失败；失败 10 次后连有效码也被拒（429，约 3600 秒），其他用户不受影响，1 小时后解锁；每分钟第 6 次 429；生成后 `redeem_codes` 与 `audit_logs` 的整行文本里查不到明文（分组、规范化、小写三种形式），审计记操作人；生成参数校验；列表按四种状态筛选、使用者邮箱、作废记 `voided_by`、作废已用 409、不存在 404；无权限的用户调四个接口都 403，生成响应带 `no-store`。

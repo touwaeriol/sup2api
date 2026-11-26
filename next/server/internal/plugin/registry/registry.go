@@ -169,6 +169,7 @@ type generation struct {
 	subs      []core.SubscriptionBinding
 	observers []core.ObservationBinding
 	channels  []core.NotificationChannelBinding
+	payments  []core.PaymentGatewayBinding
 	assets    sync.Map // key + "\x00" + path -> asset
 	// conv are the core's converters an account type's adapted endpoints
 	// need (unservedAdapted).
@@ -347,6 +348,7 @@ func (g *generation) registerPlugin(ext Extension, pkg *Package) {
 	g.addJobsAndEvents(ext, info, m, grants)
 	g.addSettingsValidator(ext, info)
 	conflicts = append(conflicts, g.addNotificationChannels(ext, info, m)...)
+	conflicts = append(conflicts, g.addPaymentGateways(ext, info, m, grants)...)
 	if len(conflicts) > 0 {
 		info.Conflicts = conflicts
 		g.plugins[len(g.plugins)-1] = info

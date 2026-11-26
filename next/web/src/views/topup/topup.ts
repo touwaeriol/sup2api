@@ -81,7 +81,7 @@ export interface PaymentSettingsValue {
 
 // ---- User side ----
 
-/** What the wallet's top-up card needs (GET /checkout). */
+/** What the wallet's top-up card needs (GET /me/topup). */
 export interface CheckoutInfo {
   enabled: boolean
   currency: string
@@ -93,7 +93,7 @@ export interface CheckoutInfo {
   methods: Array<Pick<PaymentMethod, 'type' | 'name' | 'icon' | 'color' | 'logo' | 'min_topup'>>
 }
 
-/** Price of a top-up before paying (POST /orders/preview). */
+/** Price of a top-up before paying (POST /me/topup/preview). */
 export interface OrderPreview {
   amount: number
   /** Balance credited on top (promo code). */
@@ -105,7 +105,7 @@ export interface OrderPreview {
   promo_error?: string
 }
 
-export type OrderStatus = 'pending' | 'paid' | 'recharging' | 'completed' | 'failed' | 'expired' | 'cancelled'
+export type OrderStatus = 'pending' | 'paid' | 'completed' | 'failed' | 'expired' | 'cancelled'
 
 export interface Order {
   id: number
@@ -133,7 +133,7 @@ export interface Order {
   qr_code?: string
 }
 
-/** POST /orders: where to pay. */
+/** POST /me/topup/orders: where to pay. */
 export interface CreatedOrder {
   out_trade_no: string
   pay_url?: string
@@ -164,6 +164,9 @@ export interface PromoCode {
   notes?: string
   created_at: string
 }
+
+/** The body of POST and PATCH /promo-codes: a PATCH changes what it sends, expires_at null clears it; the code is set once. */
+export type PromoInput = Partial<Omit<PromoCode, 'expires_at'>> & { expires_at?: string | null }
 
 /** One user's use of a promo code: held by an unpaid order (reserved), or credited with it (used). */
 export interface PromoUsage {
@@ -213,8 +216,8 @@ export const paymentApi = {
 
 
   promoCodes: (query: Record<string, string>) => api().list<PromoCode>('/promo-codes', query),
-  createPromoCode: (body: Partial<PromoCode>) => api().post<PromoCode>('/promo-codes', body),
-  updatePromoCode: (id: number, body: Partial<PromoCode>) => api().patch<PromoCode>(`/promo-codes/${id}`, body),
+  createPromoCode: (body: PromoInput) => api().post<PromoCode>('/promo-codes', body),
+  updatePromoCode: (id: number, body: PromoInput) => api().patch<PromoCode>(`/promo-codes/${id}`, body),
   deletePromoCode: (id: number) => api().del<void>(`/promo-codes/${id}`),
   promoUsagesPath: (id: number) => `/promo-codes/${id}/usages`
 }

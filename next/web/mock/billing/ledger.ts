@@ -5,7 +5,7 @@ import { money } from './shared'
 import { USERS } from './usageData'
 import { usageRows } from './usageSeed'
 
-/** The balance events: a top-up of every user, the debit of each billed record, a refund and a plugin credit; oldest first. */
+/** The balance events: a top-up of every user, the debit of each billed record, a refund, an online top-up with its promo bonus and a redeemed code; oldest first. */
 function ledgerEvents(): any[] {
   const topUp = new Date(Date.now() - 8 * 86400000).toISOString()
   const events: any[] = USERS.map((user) => ({ user, delta: 20, kind: 'admin_adjust', at: topUp, note: 'top-up', ref_type: '', ref_id: '', operator_id: 1 }))
@@ -15,7 +15,9 @@ function ledgerEvents(): any[] {
     events.push({ user, delta: -Number(u.total_cost), kind: 'usage', at: u.created_at, note: '', ref_type: 'usage', ref_id: u.request_id, usage: u })
   }
   events.push({ user: USERS[1], delta: 0.5, kind: 'refund', at: now(-3600), note: 'refund for failed request', ref_type: 'usage', ref_id: 'req_refund0001', operator_id: 1 })
-  events.push({ user: USERS[2], delta: 5, kind: 'plugin_credit', at: now(-7200), note: 'promo code', ref_type: 'order', ref_id: 'ord_778', plugin_key: 'payments' })
+  events.push({ user: USERS[2], delta: 50, kind: 'topup', at: now(-7200), note: 'online top-up', ref_type: 'payment_order', ref_id: 's2a_9f3c2a7d1e4b4c08a6f1d2e3b4c5d6e7' })
+  events.push({ user: USERS[2], delta: 5, kind: 'promo_bonus', at: now(-7200), note: 'promo code WELCOME5', ref_type: 'payment_order', ref_id: 's2a_9f3c2a7d1e4b4c08a6f1d2e3b4c5d6e7' })
+  events.push({ user: USERS[1], delta: 10, kind: 'redeem', at: now(-5400), note: '', ref_type: 'redeem_code', ref_id: '296' })
   return events.sort((a, b) => a.at.localeCompare(b.at))
 }
 

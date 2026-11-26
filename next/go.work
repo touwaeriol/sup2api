@@ -15,7 +15,6 @@ use (
 	./plugins/moderation
 	./plugins/newapi
 	./plugins/openai
-	./plugins/payment
 	./plugins/relay
 	./plugins/sub2api
 	./plugins/typesafe

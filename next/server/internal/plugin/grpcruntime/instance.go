@@ -52,6 +52,10 @@ type Instance struct {
 	settings  atomic.Pointer[settings]
 	proc      atomic.Pointer[proc]
 	refreshMu sync.Mutex // serialize DB reads and Configure acknowledgements
+	// payReplies keeps, per payment gateway id, the last replies the plugin
+	// gave (*atomic.Pointer[paymentReplies]); every generation's adapter
+	// shares them.
+	payReplies sync.Map
 
 	mu        sync.Mutex
 	state     string
@@ -79,6 +83,7 @@ type proc struct {
 	sched      pluginv1.SchedulerServiceClient
 	migration  pluginv1.MigrationServiceClient
 	notifier   pluginv1.NotificationServiceClient
+	payment    pluginv1.PaymentGatewayServiceClient
 	pid        int
 	runDir     string // private run directory (sockets, TMPDIR); removed with the process
 	stopWatch  func()
@@ -395,7 +400,7 @@ func (i *Instance) newPluginClient(ctx context.Context, spec core.LaunchSpec, ru
 	return p, nil
 }
 
-// dispenseClients wires the eight service clients of the shared connection.
+// dispenseClients wires the service clients of the shared connection.
 // p.conn is never nil here: newPluginClient only returns a proc after Dispense
 // handed it a client with a connection.
 func (i *Instance) dispenseClients(p *proc) {
@@ -409,6 +414,7 @@ func (i *Instance) dispenseClients(p *proc) {
 	p.sched = pluginv1.NewSchedulerServiceClient(conn)
 	p.migration = pluginv1.NewMigrationServiceClient(conn)
 	p.notifier = pluginv1.NewNotificationServiceClient(conn)
+	p.payment = pluginv1.NewPaymentGatewayServiceClient(conn)
 }
 
 // verifyInfo checks GetInfo against the package identity and protocol.

@@ -9,13 +9,12 @@ export type StatusKind = 'order' | 'promo' | 'usage'
 /** What a promo code shows: its switch, or why an enabled one no longer applies. */
 export type PromoState = 'active' | 'disabled' | 'expired' | 'exhausted'
 
-export const ORDER_STATUSES: OrderStatus[] = ['pending', 'paid', 'recharging', 'completed', 'failed', 'expired', 'cancelled']
+export const ORDER_STATUSES: OrderStatus[] = ['pending', 'paid', 'completed', 'failed', 'expired', 'cancelled']
 
 const TONES: Record<StatusKind, Record<string, Tone>> = {
   order: {
     pending: 'warning',
     paid: 'info',
-    recharging: 'info',
     completed: 'success',
     failed: 'danger',
     expired: 'gray',

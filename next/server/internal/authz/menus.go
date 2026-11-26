@@ -87,6 +87,14 @@ var coreMenus = []coreMenuSection{
 	{"finance", lt("Finance", "财务"), []coreMenuItem{
 		{"ledger", lt("Balance ledger", "余额流水"), "balance", "/ledger", []string{"GET /ledger"}},
 	}},
+	// Online top-up (CONTRACTS §140): the site's orders, redeem codes and
+	// promo codes. The top-up settings are a page of system settings, so
+	// they have no item here.
+	{"topup", lt("Top-up & payment", "充值/支付"), []coreMenuItem{
+		{"topup-orders", lt("Top-up orders", "充值订单"), "balance", "/topup/orders", []string{"GET /topup/orders"}},
+		{"redeem-codes", lt("Redeem codes", "兑换码"), "key", "/redeem-codes", []string{"GET /redeem-codes"}},
+		{"promo-codes", lt("Promo codes", "优惠码"), "price", "/promo-codes", []string{"GET /promo-codes"}},
+	}},
 	// Roles are part of managing users, and so are the user groups they
 	// belong to (CONTRACTS §97).
 	{"users", lt("Users", "用户"), []coreMenuItem{
@@ -111,11 +119,12 @@ var coreMenus = []coreMenuSection{
 		{"upgrades", lt("Core updates", "核心升级"), "refresh", "/system/upgrades", []string{"GET /system/upgrades"}},
 		{"audit", lt("Audit logs", "审计日志"), "clock", "/system/audit", []string{"GET /audit-logs"}},
 		// The first page of each kind the entry leads to: a configuration
-		// page, sticky sessions, model prices.
-		{"settings", lt("System settings", "系统设置"), "settings", "/settings", []string{"GET /settings/gateway", "GET /sticky-rules", "GET /prices"}},
+		// page, sticky sessions, model prices, the top-up settings.
+		{"settings", lt("System settings", "系统设置"), "settings", "/settings", []string{"GET /settings/gateway", "GET /sticky-rules", "GET /prices", "GET /topup/settings"}},
 	}},
 	{"me", lt("Personal", "个人中心"), []coreMenuItem{
 		{"my-wallet", lt("Wallet", "钱包"), "balance", "/me/wallet", []string{"GET /me/balance"}},
+		{"my-topup-orders", lt("Top-up history", "充值记录"), "list", "/me/topup-orders", []string{"GET /me/topup/orders"}},
 		{"my-profile", lt("Profile", "个人设置"), "user", "/me/profile", nil},
 	}},
 }

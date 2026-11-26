@@ -26,6 +26,8 @@ func testMenuRoutes(id string) ([]string, bool) {
 		"GET /nodes": {"node:read"}, "GET /system/tasks": {"task:read"}, "GET /system/upgrades": {"system:update:read"},
 		"GET /audit-logs": {"audit:read"}, "GET /settings/gateway": {"settings:read"}, "GET /sticky-rules": {"sticky:read"},
 		"GET /groups": {"group:read"}, "GET /prices": {"price:read"}, "GET /me/balance": {"balance:self:read"},
+		"GET /topup/orders": {"topup:order:read"}, "GET /redeem-codes": {"redeem:manage"}, "GET /promo-codes": {"topup:manage"},
+		"GET /me/topup/orders": {"topup:use"}, "GET /topup/settings": {"topup:manage"},
 	}[id]
 	return keys, ok
 }

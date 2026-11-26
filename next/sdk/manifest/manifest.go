@@ -46,6 +46,8 @@ type Manifest struct {
 
 	// Notifications declares the notification channels the plugin delivers.
 	Notifications *Notifications `json:"notifications,omitempty"`
+	// Payments declares the payment gateways the plugin provides.
+	Payments *Payments `json:"payments,omitempty"`
 
 	// PermissionGroups are the groups userPermissions[].group names; the role
 	// editor shows plugin, group, permission in this order (UI 3.16).
@@ -1021,7 +1023,7 @@ type CoreMenuSection struct {
 // host (authz menus) and manifest validation. "plugins" is the shared group
 // plugin menus join by default.
 var coreMenuSections = []CoreMenuSection{
-	{"overview", 100}, {"gateway", 200}, {"security", 300}, {"finance", 400},
+	{"overview", 100}, {"gateway", 200}, {"security", 300}, {"finance", 400}, {"topup", 450},
 	{"users", 500}, {"plugins", 600}, {"system", 700}, {"me", 800},
 }
 
@@ -1203,6 +1205,7 @@ var HostPermissionRisk = map[string]string{
 	"scheduler.rank":      RiskHigh,
 	"sticky.clear":        RiskHigh,
 	"notify.send":         RiskHigh, // free-form mail from the deployment to any recipient (phishing), even rate limited
+	PermPaymentGateway:    RiskHigh, // what its gateways verify marks their orders paid (the order's amount, checked by the core)
 	"gateway.observe":     RiskHigh,
 	"users.read":          RiskHigh,
 	"ledger.credit":       RiskCritical,

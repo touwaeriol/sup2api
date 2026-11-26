@@ -673,7 +673,7 @@ stateDiagram-v2
 |---|---|
 | 🟢 低 | `kv`、`config`、`log`、`broadcast`、`secrets`（§72.2）、`prices`（只读按模型价格试算费用，§72.13.1） |
 | 🟡 中 | `routes.admin`、`routes.user`、`events`、`jobs`、`ui.menu`、`ui.iframe`、`authz.read`（`AuthzCheck` 查询非本插件的权限 key）、`lock`（CONTRACTS §27.3）、`fs.data`（读写本插件的数据目录，不授予时插件不能读写任何文件，CONTRACTS §43.8） |
-| 🟠 高 | `accounts.auto_state`、`db.schema`、`net`（白名单模式下）、`routes.public`、`routes.webhook`、`gateway.hook`、`gateway.endpoint`、`gateway.observe`、`platform.register`、`scheduler.rank`、`sticky.clear`（§74.2）、`users.read`、`notify.send`（经其他插件的渠道向任意外部地址发通知，核心限速，§74.4） |
+| 🟠 高 | `accounts.auto_state`、`db.schema`、`net`（白名单模式下）、`routes.public`、`routes.webhook`、`gateway.hook`、`gateway.endpoint`、`gateway.observe`、`platform.register`、`scheduler.rank`、`sticky.clear`（§74.2）、`payment.gateway`（验签通过的通知可把本网关的订单标为已支付，金额以订单为准，§140）、`users.read`、`notify.send`（经其他插件的渠道向任意外部地址发通知，核心限速，§74.4） |
 | 🔴 极高 | `ledger.credit`、`ledger.debit`、`ui.native`、`users.write`、`db.core_read`（清单 `database.access` 申请的插件以外的表，CONTRACTS §130.4） |
 
 - 高和极高风险需要逐项勾选；极高风险只能由拥有 `plugin:grant:critical` 的用户批准（2026-10-05 起不再要求再次输入密码，CONTRACTS §3.3）

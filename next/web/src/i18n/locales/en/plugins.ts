@@ -108,6 +108,7 @@ export default {
     scheduler_rank: 'Rewrite account scheduling',
     notify_send: 'Send notifications',
     sticky_clear: 'Clear sticky session bindings',
+    payment_gateway: 'Provide a payment gateway (its verified notifications mark its orders paid)',
     gateway_observe: 'Observe gateway requests',
     users_read: 'Read users',
     ledger_credit: 'Credit user balances',

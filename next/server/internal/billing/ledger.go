@@ -24,7 +24,7 @@ const (
 	KindPluginCredit = "plugin_credit"
 	KindPluginDebit  = "plugin_debit"
 	KindRefund       = "refund"
-	// Online top-up, its promo bonus and redeem codes (CONTRACTS §138).
+	// Online top-up, its promo bonus and redeem codes (CONTRACTS §140).
 	KindTopup      = "topup"
 	KindPromoBonus = "promo_bonus"
 	KindRedeem     = "redeem"

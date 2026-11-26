@@ -108,6 +108,7 @@ export default {
     scheduler_rank: '改写账号调度参数',
     notify_send: '发送通知',
     sticky_clear: '清除粘性会话绑定',
+    payment_gateway: '提供支付网关（验签通过的通知可把本网关订单标为已支付）',
     gateway_observe: '观测网关请求',
     users_read: '读取用户',
     ledger_credit: '余额入账',

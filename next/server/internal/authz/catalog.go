@@ -251,7 +251,7 @@ var coreModules = []coreModule{
 }
 
 // userRolePermissions are granted to the built-in "user" role.
-var userRolePermissions = []string{"apikey:self:manage", "balance:self:read", "usage:self:read", "gateway:use"}
+var userRolePermissions = []string{"apikey:self:manage", "balance:self:read", "usage:self:read", "gateway:use", "topup:use", "redeem:use"}
 
 // supplierPermissions are granted to the built-in "supplier" role: its own
 // accounts and proxies, its own usage and that of its accounts, nothing

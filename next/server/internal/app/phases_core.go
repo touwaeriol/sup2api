@@ -46,7 +46,7 @@ func (b *boot) buildCoreServices() (*pkg.TrustStore, error) {
 		return nil, err
 	}
 	b.buildPackages(trust)
-	for _, step := range []func() error{b.buildBilling, b.buildSettlement, b.buildIdentity, b.buildKeys, b.buildAccounts, b.startReconcile} {
+	for _, step := range []func() error{b.buildBilling, b.buildSettlement, b.buildIdentity, b.buildKeys, b.buildAccounts, b.startReconcile, b.buildPayment} {
 		if err := step(); err != nil {
 			return nil, err
 		}

@@ -639,7 +639,9 @@ func TestOfficialPluginMigrationsAreIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	overlays, _ := filepath.Glob(filepath.Join(root, "*", "testdata", "*", "migrations"))
-	if len(dirs) < 4 {
+	// dynweight, guard and moderation ship migrations (payment's moved into
+	// the core with migration 0126).
+	if len(dirs) < 3 {
 		t.Fatalf("found only %v under %s", dirs, root)
 	}
 	for _, dir := range dirs {

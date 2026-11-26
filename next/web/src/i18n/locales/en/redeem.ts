@@ -1,4 +1,4 @@
-// Redeem codes (core, Finance > Redeem codes; Mine > Wallet redeem card).
+// Redeem codes (core, Top-up & payment > Redeem codes; Mine > Wallet redeem card).
 export default {
   title: 'Redeem codes',
   description: 'Generate codes in batches for users to redeem in their wallet; each adds its value to the balance. Plain codes are shown once, when generated.',

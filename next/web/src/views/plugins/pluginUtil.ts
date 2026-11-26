@@ -34,6 +34,7 @@ export const HOST_PERMISSION_RISK: Record<string, Risk> = {
   'accounts.auto_state': 'high',
   'scheduler.rank': 'high',
   'sticky.clear': 'high',
+  'payment.gateway': 'high',
   'notify.send': 'high',
   'gateway.observe': 'high',
   'users.read': 'high',

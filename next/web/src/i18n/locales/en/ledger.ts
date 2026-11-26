@@ -16,6 +16,8 @@ export default {
     plugin_credit: 'Plugin credit',
     plugin_debit: 'Plugin debit',
     refund: 'Refund',
+    topup: 'Top-up',
+    promo_bonus: 'Promo code bonus',
     redeem: 'Redeem code'
   },
   adjust: {

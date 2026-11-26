@@ -28,6 +28,7 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/iam"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/job"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/notify"
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/payment"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/blobs"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/dbschema"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/egress"
@@ -82,6 +83,7 @@ type boot struct {
 	prx     *proxy.Service
 	stats   *account.Stats
 	acc     *account.Service
+	pay     *payment.Service
 
 	converters   *convert.Registry
 	limiter      *account.Limiter

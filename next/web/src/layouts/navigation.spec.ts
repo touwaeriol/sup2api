@@ -98,14 +98,14 @@ describe('sidebar', () => {
     overview,
     { section: 'gateway', items: [item('accounts', '/accounts'), item('groups', '/groups'), item('proxies', '/proxies')] },
     { section: 'security', items: [item('guard', '/p/guard/dashboard')] },
-    { section: 'finance', items: [item('recharge', '/p/payment/recharge')] },
+    { section: 'finance', items: [item('ledger', '/ledger')] },
     { section: 'users', items: [item('users', '/users'), item('roles', '/roles')] },
     { section: 'plugins', items: [item('plugins', '/plugins'), item('market', '/market'), item('inbox', '/p/mailer/inbox')] },
     { section: 'acme:media', label: { zh: '媒体库' }, items: [item('assets', '/p/acme/assets'), item('sets', '/p/acme/sets')] },
     { section: 'system', items: [item('nodes', '/nodes'), item('tasks', '/system/tasks'), settings] },
     { section: 'me', items: [item('wallet', '/me/wallet')] }
   ]
-  const flat = ['dashboard', 'wallet', 'guard', 'recharge']
+  const flat = ['dashboard', 'wallet', 'guard', 'ledger']
 
   it('lists security and finance flat, folds the other admin sections (accounts & proxies first) and ends with system settings', async () => {
     const { wrapper, app } = await mountSidebar(operatorMenu)
@@ -127,7 +127,7 @@ describe('sidebar', () => {
     expect(wrapper.text()).not.toContain('管理员')
     expect(submenus(wrapper)).toEqual([])
     expect(wrapper.findAll('nav a').map(a => a.attributes('aria-label'))).toEqual([
-      ...['dashboard', 'wallet', 'accounts', 'groups', 'proxies', 'guard', 'recharge'],
+      ...['dashboard', 'wallet', 'accounts', 'groups', 'proxies', 'guard', 'ledger'],
       ...['users', 'roles', 'plugins', 'market', 'inbox', 'assets', 'sets', 'nodes', 'tasks'],
       '系统设置'
     ])
@@ -171,7 +171,7 @@ describe('sidebar', () => {
     const accounts = await mountSidebar(operatorMenu, '/accounts')
     expect(current(accounts.wrapper)).toEqual(['accounts'])
     expect(accounts.wrapper.get('[data-testid="nav-submenu-gateway"]').attributes('aria-expanded')).toBe('true')
-    expect(labels(accounts.wrapper)).toEqual(['dashboard', 'wallet', 'accounts', 'groups', 'proxies', 'guard', 'recharge', '系统设置'])
+    expect(labels(accounts.wrapper)).toEqual(['dashboard', 'wallet', 'accounts', 'groups', 'proxies', 'guard', 'ledger', '系统设置'])
     // A page whose menu (here) has no entry of its own lights up its parent's.
     const detail = await mountSidebar(operatorMenu, '/users/3/detail')
     expect(current(detail.wrapper)).toEqual(['users'])

@@ -5,6 +5,7 @@ import { api } from '@sub2api/host'
 import { SButton, SCard, SField, SInput, toast } from '@sub2api/ui'
 import { errorMessage } from '@/utils/errors'
 import { formatMoney } from '@/utils/format'
+import type { Redeemed } from '@/views/redeem/redeem'
 
 // Mine > Wallet: redeem a code into the balance (POST /me/redeem, core
 // redeem codes). The server answers one message for a code that does not
@@ -22,7 +23,7 @@ async function redeem() {
   if (!value) return
   busy.value = true
   try {
-    const res = await api.post<{ amount: string }>('/me/redeem', { code: value })
+    const res = await api.post<Redeemed>('/me/redeem', { code: value })
     toast(t('redeem.card.success', { amount: formatMoney(res.amount, 2) }), 'success')
     code.value = ''
     emit('credited')

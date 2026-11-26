@@ -39,7 +39,7 @@ const settings = {
 }
 
 /** GET/PUT /topup/settings: the settings view, secrets masked ("******" or none keeps the stored one). */
-const settingsView = () => ({ mode: 'native', values: settings, secret_fields: SECRETS })
+const settingsView = () => ({ mode: 'native', values: settings, secret_fields: SECRETS, permission: 'topup:manage' })
 const getPath = (o: any, path: string) => path.split('/').reduce((v, k) => v?.[k], o)
 function keepSecrets(values: any) {
   for (const path of SECRETS) {
@@ -175,16 +175,26 @@ on('POST', '/me/topup/orders', (req) => {
 function filterOrders(query: Record<string, string>, base: any[]) {
   const q = (query.q || '').toLowerCase()
   const hit = (o: any) => [o.out_trade_no, o.trade_no, o.user_email].some((v) => String(v ?? '').toLowerCase().includes(q))
-  return base.filter((o) => (!query.status || o.status === query.status) && (!query.method || o.method === query.method) && (!q || hit(o)))
+  const inRange = (o: any) => (!query.from || o.created_at >= query.from) && (!query.to || o.created_at < query.to)
+  return base.filter((o) => (!query.status || o.status === query.status) && (!query.method || o.method === query.method) && (!q || hit(o)) && inRange(o))
 }
 
-on('GET', '/me/topup/orders', (req) => paginate(filterOrders(req.query, orders.filter((o) => o.user_id === 1)), req.query))
+// The caller's own: q finds an order number only, as the core.
+on('GET', '/me/topup/orders', (req) => {
+  const q = (req.query.q || '').toLowerCase()
+  const mine = orders.filter((o) => o.user_id === 1 && (!q || o.out_trade_no.toLowerCase().includes(q)))
+  return paginate(filterOrders({ status: req.query.status || '' }, mine), req.query)
+})
 
-on('GET', '/me/topup/orders/:no', (req) => orders.find((o) => o.out_trade_no === req.params.no) ?? fail(404, 'not_found', '订单不存在'))
+// Another user's order is not found, as an unknown one.
+const myOrder = (no: string) => orders.find((o) => o.out_trade_no === no && o.user_id === 1)
+
+on('GET', '/me/topup/orders/:no', (req) => myOrder(req.params.no) ?? fail(404, 'not_found', '订单不存在'))
 
 on('POST', '/me/topup/orders/:no/cancel', (req) => {
-  const o = orders.find((x) => x.out_trade_no === req.params.no)
-  if (!o || o.status !== 'pending') return fail(409, 'conflict', '只能取消待支付的订单')
+  const o = myOrder(req.params.no)
+  if (!o) return fail(404, 'not_found', '订单不存在')
+  if (o.status !== 'pending') return fail(409, 'conflict', '只能取消待支付的订单')
   o.status = 'cancelled'
   return o
 })
@@ -226,19 +236,24 @@ on('GET', '/promo-codes/:id/usages', (req) => {
   return paginate(orders.filter(held).map(usageOf), req.query)
 })
 
+// The code is upper-cased (a random one when none is given) and never changes; expires_at null clears it.
 on('POST', '/promo-codes', (req) => {
-  const p = { id: 10 + promoCodes.length, used_count: 0, status: 'active', created_at: now(), ...req.body, code: String(req.body?.code || newCode()).toUpperCase() }
+  const code = String(req.body?.code || '').trim().toUpperCase() || newCode()
+  if (!/^[A-Z0-9_-]{3,64}$/.test(code)) return fail(400, 'invalid_argument', 'invalid argument', { fields: [{ field: 'code', code: 'invalid', message: '3-64 位大写字母、数字、下划线或连字符' }] })
+  if (promoCodes.some((x) => x.code === code)) return fail(409, 'conflict', '优惠码已存在')
+  const p = { id: 10 + promoCodes.length, used_count: 0, status: 'active', created_at: now(), ...req.body, code }
   promoCodes.unshift(p)
-  return p
+  return { __status: 201, body: { data: p } }
 })
 
 on('PATCH', '/promo-codes/:id', (req) => {
   const p = promoCodes.find((x) => x.id === Number(req.params.id))
-  return p ? Object.assign(p, req.body) : fail(404, 'not_found', '优惠码不存在')
+  return p ? Object.assign(p, req.body, { code: p.code }) : fail(404, 'not_found', '优惠码不存在')
 })
 
 on('DELETE', '/promo-codes/:id', (req) => {
   const i = promoCodes.findIndex((x) => x.id === Number(req.params.id))
-  if (i >= 0) promoCodes.splice(i, 1)
+  if (i < 0) return fail(404, 'not_found', '优惠码不存在')
+  promoCodes.splice(i, 1)
   return noContent()
 })

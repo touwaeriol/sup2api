@@ -26,7 +26,7 @@ type View = 'waiting' | 'crediting' | 'success' | 'expired' | 'failed' | 'ended'
 const view = computed<View>(() => {
   const s = live.status.value
   if (s === 'completed') return 'success'
-  if (s === 'paid' || s === 'recharging') return 'crediting'
+  if (s === 'paid') return 'crediting'
   if (s === 'failed') return 'failed'
   if (s === 'expired' || (s === 'pending' && remaining.value <= 0)) return 'expired'
   return s === 'cancelled' ? 'ended' : 'waiting'

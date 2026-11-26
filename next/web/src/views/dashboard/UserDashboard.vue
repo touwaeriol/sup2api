@@ -124,7 +124,7 @@ const quick = computed(() => {
   if (canKeys.value) list.push({ to: '/me/api-keys', icon: 'key', tone: 'primary', title: t('dashboard.user.quickKeys'), sub: t('dashboard.user.quickKeysSub') })
   if (canUsage.value) list.push({ to: '/me/usage', icon: 'usage', tone: 'success', title: t('dashboard.user.quickUsage'), sub: t('dashboard.user.quickUsageSub') })
   if (canLedger.value) list.push({ to: '/me/wallet', icon: 'ledger', tone: 'info', title: t('dashboard.user.quickLedger'), sub: t('dashboard.user.quickLedgerSub') })
-  // Plugin pages the user can open (top-up, redeem codes, ...).
+  // Plugin pages the user can open.
   for (const s of app.menus) for (const i of s.items) if (i.pluginKey && list.length < 5) list.push({ to: i.path, icon: i.icon || 'puzzle', tone: 'warning', title: lt(i.label) || i.id, sub: '' })
   return list
 })

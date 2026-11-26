@@ -140,7 +140,7 @@ func TestMenusOfUser(t *testing.T) {
 	if got := menuPaths(menus[0]); got != "/dashboard,/me/api-keys,/me/models,/me/usage/overview,/me/usage" {
 		t.Fatalf("user console = %s", got)
 	}
-	if got := menuPaths(menus[2]); got != "/me/wallet,/me/profile" {
+	if got := menuPaths(menus[2]); got != "/me/wallet,/me/topup-orders,/me/profile" {
 		t.Fatalf("user personal = %s", got)
 	}
 	if p := menus[1].Items; len(p) != 1 || p[0].Path != "/p/guard/info" || p[0].PluginKey != "guard" {
@@ -153,7 +153,7 @@ func TestMenusOfAdmin(t *testing.T) {
 	f := newSidebarFixture(t)
 	sections, byKey := sectionsOf(f.menus(f.admin))
 	// Finance holds the site-wide balance ledger (balance:all:read).
-	if sections != "overview,gateway,security,mod:safety,finance,users,plugins,system,me" {
+	if sections != "overview,gateway,security,mod:safety,finance,topup,users,plugins,system,me" {
 		t.Fatalf("admin sections = %s", sections)
 	}
 	for section, want := range map[string]string{
@@ -216,6 +216,11 @@ func TestMenusFollowPermissions(t *testing.T) {
 		{"group_viewer", "gateway", "/groups", []string{"group:read"}},
 		{"group_viewer_system", "system", "", []string{"group:read"}},
 		{"bookkeeper", "finance", "/ledger", []string{"balance:all:read"}},
+		// Top-up: the orders, redeem and promo codes in their own section;
+		// the top-up settings are a page of system settings.
+		{"cashier", "topup", "/topup/orders,/redeem-codes,/promo-codes", []string{"topup:order:read", "topup:manage", "redeem:manage"}},
+		{"cashier_system", "system", "/settings", []string{"topup:manage"}},
+		{"buyer", "me", "/me/topup-orders,/me/profile", []string{"topup:use"}},
 	} {
 		if got := sectionPaths(t, f.s, f.role(tc.name, tc.perms...), tc.section); got != tc.want {
 			t.Fatalf("%s %s = %s", tc.name, tc.section, got)

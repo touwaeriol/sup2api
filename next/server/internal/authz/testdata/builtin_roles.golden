@@ -3,10 +3,11 @@ super_admin rev=1 superuser=true assign_custom=false
   menu overview: /dashboard,/me/api-keys,/me/models,/me/usage/overview,/me/usage,/usage/overview,/usage
   menu gateway: /accounts,/groups,/proxies
   menu finance: /ledger
+  menu topup: /topup/orders,/redeem-codes,/promo-codes
   menu users: /users,/segments,/roles
   menu plugins: /plugins,/market,/publishers
   menu system: /nodes,/system/tasks,/system/upgrades,/system/audit,/settings
-  menu me: /me/wallet,/me/profile
+  menu me: /me/wallet,/me/topup-orders,/me/profile
 admin rev=1 superuser=false assign_custom=true
   assignable: operator supplier supplier_agent user
   account:create
@@ -40,6 +41,8 @@ admin rev=1 superuser=false assign_custom=true
   proxy:manage
   proxy:read
   publisher:read
+  redeem:manage
+  redeem:use
   role:assign
   role:define
   role:read
@@ -53,6 +56,9 @@ admin rev=1 superuser=false assign_custom=true
   task:manage
   task:read
   task:run
+  topup:manage
+  topup:order:read
+  topup:use
   usage:account:read
   usage:all:read
   usage:self:read
@@ -65,10 +71,11 @@ admin rev=1 superuser=false assign_custom=true
   menu overview: /dashboard,/me/api-keys,/me/models,/me/usage/overview,/me/usage,/usage/overview,/usage
   menu gateway: /accounts,/groups,/proxies
   menu finance: /ledger
+  menu topup: /topup/orders,/redeem-codes,/promo-codes
   menu users: /users,/segments,/roles
   menu plugins: /plugins,/market,/publishers
   menu system: /nodes,/system/tasks,/system/upgrades,/system/audit,/settings
-  menu me: /me/wallet,/me/profile
+  menu me: /me/wallet,/me/topup-orders,/me/profile
 operator rev=1 superuser=false assign_custom=false
   assignable: supplier user
   account:create
@@ -88,12 +95,14 @@ operator rev=1 superuser=false assign_custom=false
   price:read
   proxy:manage
   proxy:read
+  redeem:use
   role:assign
   role:read
   segment:manage
   segment:read
   task:read
   task:run
+  topup:use
   usage:account:read
   usage:all:read
   usage:self:read
@@ -105,7 +114,7 @@ operator rev=1 superuser=false assign_custom=false
   menu finance: /ledger
   menu users: /users,/segments,/roles
   menu system: /nodes,/system/tasks,/system/audit,/settings
-  menu me: /me/wallet,/me/profile
+  menu me: /me/wallet,/me/topup-orders,/me/profile
 supplier rev=2 superuser=false assign_custom=false
   assignable: -
   account:create:own
@@ -134,8 +143,10 @@ supplier_agent rev=1 superuser=false assign_custom=false
   gateway:use
   proxy:manage:own
   proxy:read:own
+  redeem:use
   role:assign
   role:read
+  topup:use
   usage:account:read:team
   usage:self:read
   user:create:team
@@ -144,12 +155,14 @@ supplier_agent rev=1 superuser=false assign_custom=false
   menu overview: /dashboard,/me/api-keys,/me/models,/me/usage/overview,/me/usage,/account-usage/overview,/account-usage
   menu gateway: /accounts,/proxies
   menu users: /users,/roles
-  menu me: /me/wallet,/me/profile
+  menu me: /me/wallet,/me/topup-orders,/me/profile
 user rev=1 superuser=false assign_custom=false
   assignable: -
   apikey:self:manage
   balance:self:read
   gateway:use
+  redeem:use
+  topup:use
   usage:self:read
   menu overview: /dashboard,/me/api-keys,/me/models,/me/usage/overview,/me/usage
-  menu me: /me/wallet,/me/profile
+  menu me: /me/wallet,/me/topup-orders,/me/profile
