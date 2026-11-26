@@ -23,7 +23,7 @@ const _ = grpc.SupportPackageIsVersion7
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type PaymentGatewayServiceClient interface {
 	CreatePayment(ctx context.Context, in *CreatePaymentRequest, opts ...grpc.CallOption) (*CreatePaymentResponse, error)
-	ParseNotification(ctx context.Context, in *ParseNotificationRequest, opts ...grpc.CallOption) (*ParseNotificationResponse, error)
+	ParsePaymentNotification(ctx context.Context, in *ParsePaymentNotificationRequest, opts ...grpc.CallOption) (*ParsePaymentNotificationResponse, error)
 	// A gateway declared with query false, or a plugin answering UNIMPLEMENTED,
 	// cannot be queried; the core then only expires the order.
 	QueryPayment(ctx context.Context, in *QueryPaymentRequest, opts ...grpc.CallOption) (*QueryPaymentResponse, error)
@@ -46,9 +46,9 @@ func (c *paymentGatewayServiceClient) CreatePayment(ctx context.Context, in *Cre
 	return out, nil
 }
 
-func (c *paymentGatewayServiceClient) ParseNotification(ctx context.Context, in *ParseNotificationRequest, opts ...grpc.CallOption) (*ParseNotificationResponse, error) {
-	out := new(ParseNotificationResponse)
-	err := c.cc.Invoke(ctx, "/sub2api.plugin.v1.PaymentGatewayService/ParseNotification", in, out, opts...)
+func (c *paymentGatewayServiceClient) ParsePaymentNotification(ctx context.Context, in *ParsePaymentNotificationRequest, opts ...grpc.CallOption) (*ParsePaymentNotificationResponse, error) {
+	out := new(ParsePaymentNotificationResponse)
+	err := c.cc.Invoke(ctx, "/sub2api.plugin.v1.PaymentGatewayService/ParsePaymentNotification", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -69,7 +69,7 @@ func (c *paymentGatewayServiceClient) QueryPayment(ctx context.Context, in *Quer
 // for forward compatibility
 type PaymentGatewayServiceServer interface {
 	CreatePayment(context.Context, *CreatePaymentRequest) (*CreatePaymentResponse, error)
-	ParseNotification(context.Context, *ParseNotificationRequest) (*ParseNotificationResponse, error)
+	ParsePaymentNotification(context.Context, *ParsePaymentNotificationRequest) (*ParsePaymentNotificationResponse, error)
 	// A gateway declared with query false, or a plugin answering UNIMPLEMENTED,
 	// cannot be queried; the core then only expires the order.
 	QueryPayment(context.Context, *QueryPaymentRequest) (*QueryPaymentResponse, error)
@@ -83,8 +83,8 @@ type UnimplementedPaymentGatewayServiceServer struct {
 func (UnimplementedPaymentGatewayServiceServer) CreatePayment(context.Context, *CreatePaymentRequest) (*CreatePaymentResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CreatePayment not implemented")
 }
-func (UnimplementedPaymentGatewayServiceServer) ParseNotification(context.Context, *ParseNotificationRequest) (*ParseNotificationResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ParseNotification not implemented")
+func (UnimplementedPaymentGatewayServiceServer) ParsePaymentNotification(context.Context, *ParsePaymentNotificationRequest) (*ParsePaymentNotificationResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ParsePaymentNotification not implemented")
 }
 func (UnimplementedPaymentGatewayServiceServer) QueryPayment(context.Context, *QueryPaymentRequest) (*QueryPaymentResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method QueryPayment not implemented")
@@ -120,20 +120,20 @@ func _PaymentGatewayService_CreatePayment_Handler(srv interface{}, ctx context.C
 	return interceptor(ctx, in, info, handler)
 }
 
-func _PaymentGatewayService_ParseNotification_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ParseNotificationRequest)
+func _PaymentGatewayService_ParsePaymentNotification_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ParsePaymentNotificationRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(PaymentGatewayServiceServer).ParseNotification(ctx, in)
+		return srv.(PaymentGatewayServiceServer).ParsePaymentNotification(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/sub2api.plugin.v1.PaymentGatewayService/ParseNotification",
+		FullMethod: "/sub2api.plugin.v1.PaymentGatewayService/ParsePaymentNotification",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PaymentGatewayServiceServer).ParseNotification(ctx, req.(*ParseNotificationRequest))
+		return srv.(PaymentGatewayServiceServer).ParsePaymentNotification(ctx, req.(*ParsePaymentNotificationRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -168,8 +168,8 @@ var PaymentGatewayService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _PaymentGatewayService_CreatePayment_Handler,
 		},
 		{
-			MethodName: "ParseNotification",
-			Handler:    _PaymentGatewayService_ParseNotification_Handler,
+			MethodName: "ParsePaymentNotification",
+			Handler:    _PaymentGatewayService_ParsePaymentNotification_Handler,
 		},
 		{
 			MethodName: "QueryPayment",

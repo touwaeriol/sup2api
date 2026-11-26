@@ -2,12 +2,12 @@ package payment
 
 import (
 	"context"
+	"fmt"
 	"hash/fnv"
 	"io"
 	"log/slog"
 	"math"
 	"net/http"
-	"strconv"
 	"sync"
 	"time"
 
@@ -42,27 +42,18 @@ func reply(c *gin.Context, r core.PaymentReply) {
 	c.Data(r.Status, r.ContentType, r.Body)
 }
 
-func plainReply(status int, text string) core.PaymentReply {
-	return core.PaymentReply{Status: status, ContentType: "text/plain; charset=utf-8", Body: []byte(text)}
-}
-
-// admitNotify counts the notification against its client address. A
-// limiter that fails admits: notifications carry users' payments, and the
-// gateways' verification does not depend on the limiter.
+// admitNotify counts the notification against its client address
+// (core.Admit, which admits when the limiter fails: notifications carry
+// users' payments, and the gateways' verification does not depend on the
+// limiter). The refusal is plain text like every answer of the route.
 func (s *Service) admitNotify(c *gin.Context) bool {
-	if s.notes == nil {
+	err := core.Admit(c.Request.Context(), s.notifyLimit, addressKey("notify", c.ClientIP()), notifyRatePerMinute, "too many requests")
+	if err == nil {
 		return true
 	}
-	ok, retry, err := s.notes.Admit(c.Request.Context(), addressKey("notify", c.ClientIP()), notifyRatePerMinute, 0)
-	if err != nil {
-		slog.WarnContext(c.Request.Context(), "payment: notify rate limit unavailable", "err", err)
-		return true
-	}
-	if !ok {
-		c.Header("Retry-After", strconv.Itoa(int(math.Ceil(retry.Seconds()))))
-		reply(c, plainReply(http.StatusTooManyRequests, "too many requests"))
-	}
-	return ok
+	c.Header("Retry-After", fmt.Sprint(core.AsError(err).Details[core.RetryAfterSeconds]))
+	reply(c, core.PlainPaymentReply(http.StatusTooManyRequests, "too many requests"))
+	return false
 }
 
 // gatewayGone answers a notification for a gateway that is not there: 503
@@ -71,18 +62,19 @@ func (s *Service) gatewayGone(c *gin.Context, id string) {
 	open, err := hasPayableOrders(c.Request.Context(), s.db.Gorm, id, s.now())
 	if err != nil || open {
 		s.recordUnverified(c, id, verdict{kind: eventGatewayGone})
-		reply(c, plainReply(http.StatusServiceUnavailable, "retry later"))
+		reply(c, core.PlainPaymentReply(http.StatusServiceUnavailable, "retry later"))
 		return
 	}
-	reply(c, plainReply(http.StatusNotFound, "not found"))
+	reply(c, core.PlainPaymentReply(http.StatusNotFound, "not found"))
 }
 
 // recordUnverified records an event tied to no order while the client
-// address is within its share; past it the event is only counted.
+// address is within its share; past it, or while the limiter fails (it is
+// what keeps a flood out of the table), the event is only counted.
 func (s *Service) recordUnverified(c *gin.Context, gateway string, v verdict) {
 	ctx := c.Request.Context()
-	if s.notes != nil {
-		ok, _, err := s.notes.Admit(ctx, addressKey("event", c.ClientIP()), unverifiedEventsPerMinute, 0)
+	if s.notifyLimit != nil {
+		ok, _, err := s.notifyLimit.Admit(ctx, addressKey("event", c.ClientIP()), unverifiedEventsPerMinute, 0)
 		if err != nil || !ok {
 			s.dropped.note(ctx, gateway, v.kind, s.now())
 			return

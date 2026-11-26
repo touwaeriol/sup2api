@@ -106,7 +106,7 @@ func TestFirstPrechargeAndSettlementOfNewUser(t *testing.T) {
 	t.Run("settlement first", func(t *testing.T) {
 		e, uid := newUser(t, "first-settle")
 		first := e.begin()
-		charge := &core.LedgerChange{UserID: uid, Amount: decimal.RequireFromString("0.25"), Kind: KindUsage, RefType: "usage", RefID: "s1", IdempotencyKey: "usage:s1"}
+		charge := &core.LedgerChange{UserID: uid, Amount: decimal.RequireFromString("0.25"), Kind: core.LedgerKindUsage, RefType: "usage", RefID: "s1", IdempotencyKey: "usage:s1"}
 		if res, err := e.svc.SettleTx(ctx, first, uid, "s1", charge); err != nil || res == nil {
 			t.Fatalf("settle: %+v %v", res, err)
 		}
@@ -124,7 +124,7 @@ func TestFirstPrechargeAndSettlementOfNewUser(t *testing.T) {
 	t.Run("precharge first", func(t *testing.T) {
 		e, uid := newUser(t, "first-precharge")
 		first := e.begin()
-		ch := core.LedgerChange{UserID: uid, Amount: decimal.NewFromInt(1), Kind: KindUsage, RefType: "precharge",
+		ch := core.LedgerChange{UserID: uid, Amount: decimal.NewFromInt(1), Kind: core.LedgerKindUsage, RefType: "precharge",
 			RefID: "p1", IdempotencyKey: "precharge:p1", Note: "request precharge"}
 		if lr, err := e.svc.prechargeTx(ctx, first, ch, decimal.NewFromInt(-5)); err != nil || lr == nil {
 			t.Fatalf("precharge: %+v %v", lr, err)
@@ -157,7 +157,7 @@ func TestSettleWaitsBehindSameKey(t *testing.T) {
 				t.Fatal(err)
 			}
 			first := e.begin()
-			charge := &core.LedgerChange{UserID: uid, Amount: decimal.RequireFromString("1.5"), Kind: KindUsage, RefType: "usage", RefID: "twice", IdempotencyKey: "usage:twice"}
+			charge := &core.LedgerChange{UserID: uid, Amount: decimal.RequireFromString("1.5"), Kind: core.LedgerKindUsage, RefType: "usage", RefID: "twice", IdempotencyKey: "usage:twice"}
 			charged, err := e.svc.SettleTx(ctx, first, uid, "twice", charge)
 			if err != nil || charged == nil || !charged.BalanceAfter.Equal(decimal.RequireFromString("8.5")) {
 				t.Fatalf("first settlement: %+v %v", charged, err)
@@ -191,7 +191,7 @@ func TestApplyWaitsBehindSameKey(t *testing.T) {
 	ctx := context.Background()
 	uid := e.user("apply-same-key@test.invalid")
 	e.seed(uid, "10")
-	ch := core.LedgerChange{UserID: uid, Amount: decimal.RequireFromString("3"), Kind: KindAdminAdjust, IdempotencyKey: "adjust:once"}
+	ch := core.LedgerChange{UserID: uid, Amount: decimal.RequireFromString("3"), Kind: core.LedgerKindAdminAdjust, IdempotencyKey: "adjust:once"}
 	first := e.begin()
 	applied, err := e.svc.ApplyTx(ctx, first, ch)
 	if err != nil || applied == nil || applied.Duplicate {

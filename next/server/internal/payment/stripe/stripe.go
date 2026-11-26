@@ -19,6 +19,9 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 )
 
+// ID is the gateway's id in the payment module.
+const ID = "stripe"
+
 // Config is the gateway's current settings, read on every call so a key
 // change takes effect without rebuilding the gateway.
 type Config struct{ SecretKey, WebhookSecret string }
@@ -78,13 +81,19 @@ func (c Config) Validate() error {
 	return errors.Join(errs...)
 }
 
-// mode validates the configuration and tells whether its key is live or
-// test.
-func (c Config) mode() (string, error) {
-	if err := c.Validate(); err != nil {
-		return "", err
+// config is the current, validated configuration and whether its key is
+// live or test. Its errors are not ErrPaymentSignature: an unconfigured
+// gateway is the site's problem, so the core asks Stripe to retry instead of
+// rejecting the event (the Epay gateway does the same).
+func (g *Gateway) config(ctx context.Context) (Config, string, error) {
+	c, err := g.cfg(ctx)
+	if err != nil {
+		return Config{}, "", fmt.Errorf("stripe: load config: %w", err)
 	}
-	return secretKeyPattern.FindStringSubmatch(c.SecretKey)[2], nil
+	if err := c.Validate(); err != nil {
+		return Config{}, "", err
+	}
+	return c, secretKeyPattern.FindStringSubmatch(c.SecretKey)[2], nil
 }
 
 func modeOf(livemode bool) string {
@@ -104,11 +113,7 @@ var quietLogger = &stripego.LeveledLogger{Level: stripego.LevelNull}
 // library's default is on) so nothing but the request itself leaves the
 // node.
 func (g *Gateway) api(ctx context.Context) (*stripego.Client, string, error) {
-	c, err := g.cfg(ctx)
-	if err != nil {
-		return nil, "", fmt.Errorf("stripe: load config: %w", err)
-	}
-	mode, err := c.mode()
+	c, mode, err := g.config(ctx)
 	if err != nil {
 		return nil, "", err
 	}
@@ -120,22 +125,4 @@ func (g *Gateway) api(ctx context.Context) (*stripego.Client, string, error) {
 		LeveledLogger:     quietLogger,
 	})
 	return stripego.NewClient(c.SecretKey, stripego.WithBackends(backends)), mode, nil
-}
-
-// Respond answers Stripe: any non-2xx makes it retry the event with backoff,
-// which is what PaymentRetry wants; a rejection is retried too, but only a
-// fixed configuration (or nothing) can change its outcome.
-func (g *Gateway) Respond(o core.PaymentOutcome) core.PaymentReply {
-	status := http.StatusInternalServerError
-	switch o {
-	case core.PaymentHandled:
-		status = http.StatusOK
-	case core.PaymentRejected:
-		status = http.StatusBadRequest
-	}
-	return core.PaymentReply{
-		Status:      status,
-		ContentType: "text/plain; charset=utf-8",
-		Body:        []byte(http.StatusText(status)),
-	}
 }

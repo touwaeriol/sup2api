@@ -165,6 +165,13 @@ func (i *Instance) mapErr(err error) error {
 
 func (i *Instance) has(c string) bool { return i.caps[c] }
 
+// served reports whether the last handshake reported capability c, so the
+// process serves its service.
+func (i *Instance) served(c string) bool {
+	r := i.reported.Load()
+	return r != nil && (*r)[c]
+}
+
 func (i *Instance) Platform() core.PlatformPlugin {
 	if !i.has(manifest.CapPlatformAdapter) {
 		return nil

@@ -247,7 +247,7 @@ func TestFetchModels(t *testing.T) {
 		t.Fatalf("account fetch: %d %v", code, out)
 	}
 	if code, out = e.do("POST", fmt.Sprintf("/accounts/%d/models/fetch", id), map[string]any{
-		"credentials": map[string]any{"api_key": Mask, "base_url": "https://x.example.com"}}); code != 200 ||
+		"credentials": map[string]any{"api_key": core.SecretMask, "base_url": "https://x.example.com"}}); code != 200 ||
 		len(out["data"].(map[string]any)["models"].([]any)) != 2 {
 		t.Fatalf("account fetch with mask: %d %v", code, out)
 	}

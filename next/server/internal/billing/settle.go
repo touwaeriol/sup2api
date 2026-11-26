@@ -477,7 +477,7 @@ func (s *Service) SettleTx(ctx context.Context, tx *gorm.DB, userID int64, reque
 	if s.events != nil {
 		var evs []core.Event
 		if refunded != nil && !refunded.Duplicate {
-			evs = append(evs, balanceChanged(userID, refunded, st.release.amount, KindRefund))
+			evs = append(evs, balanceChanged(userID, refunded, st.release.amount, core.LedgerKindRefund))
 		}
 		if charged != nil && !charged.Duplicate {
 			delta := charge.Amount

@@ -26,10 +26,6 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store/model"
 )
 
-// Mask replaces secret setting values in responses; sending it back in a
-// PUT keeps the stored value.
-const Mask = "******"
-
 func isNoRows(err error) bool { return store.IsNoRows(err) }
 
 // SettingsView is GET /plugins/:key/settings.
@@ -183,12 +179,12 @@ func parentOf(m map[string]any, path []string) (map[string]any, bool) {
 	return obj, ok
 }
 
-// maskValues replaces every non-empty secret value in values with Mask.
+// maskValues replaces every non-empty secret value in values with core.SecretMask.
 func maskValues(fields []manifest.SecretField, values map[string]any) {
 	for _, f := range fields {
 		if obj, ok := parentOf(values, f.Path); ok {
 			if val, ok := obj[f.Path[len(f.Path)-1]]; ok && val != nil && val != "" {
-				obj[f.Path[len(f.Path)-1]] = Mask
+				obj[f.Path[len(f.Path)-1]] = core.SecretMask
 			}
 		}
 	}
@@ -207,7 +203,7 @@ func mergeSettings(fields []manifest.SecretField, old, in map[string]any, manage
 	for _, f := range fields {
 		obj, ok := parentOf(in, f.Path)
 		name := f.Path[len(f.Path)-1]
-		if !ok || obj[name] != Mask {
+		if !ok || obj[name] != core.SecretMask {
 			continue
 		}
 		if ov, ok := valueAt(old, f.Path); ok {

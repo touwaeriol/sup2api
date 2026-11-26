@@ -4,30 +4,46 @@
 // from a template or the dialog; methods whose gateway is off (a built-in
 // one switched off, a plugin one not answering) are flagged.
 import { computed, ref } from 'vue'
-import { SAlert, SBadge, SButton, SDropdown, SEmpty, SRowAction, SSettingsGroup, SSwitch, STable, type MenuAction, type TableColumn } from '@sub2api/ui'
-import { useTopup, type PaymentMethod } from '../topup'
+import { useI18n } from 'vue-i18n'
+import {
+  SAlert,
+  SBadge,
+  SButton,
+  SDropdown,
+  SEmpty,
+  SRowAction,
+  SSettingsGroup,
+  SSwitch,
+  STable,
+  toast,
+  type MenuAction,
+  type TableColumn
+} from '@sub2api/ui'
+import { formatMoney } from '@/utils/format'
 import MethodDialog from './MethodDialog.vue'
 import MethodName from '../components/MethodName.vue'
 import type { GatewayCatalog } from './gatewayCatalog'
-import { bindSwitch, newMethod, TEMPLATE_KEYS, templateType, type SettingsForm, type SettingsTab, type TemplateKey } from './settingsForm'
+import { newMethod, TEMPLATE_KEYS, templateType, type MethodModel, type SettingsTab, type TemplateKey } from './settingsForm'
+import type { TopupSettingsForm } from './useTopupSettings'
 
-const props = defineProps<{ form: SettingsForm; gateways: GatewayCatalog }>()
-const emit = defineEmits<{ (e: 'go', tab: SettingsTab): void }>()
-const host = useTopup()
-const t = host.t
+const props = defineProps<{ form: TopupSettingsForm; gateways: GatewayCatalog }>()
+const emit = defineEmits<{ go: [tab: SettingsTab] }>()
+const { t } = useI18n()
 
-const methods = computed(() => props.form.get<PaymentMethod[]>('methods') ?? [])
-const setMethods = (list: PaymentMethod[]) => props.form.set('methods', list)
+const methods = computed(() => props.form.get<MethodModel[]>('methods') ?? [])
+const setMethods = (list: MethodModel[]) => props.form.set('methods', list)
 const gatewayOn = (g: string) => props.gateways.isOn(g)
-const taken = computed(() => new Set(methods.value.map((m) => m.type)))
+const taken = computed(() => new Set(methods.value.map(m => m.type)))
 
 /** Gateways that are off while enabled methods use them. */
 const idleGateways = computed(() => {
-  const used = [...new Set(methods.value.filter((m) => m.enabled).map((m) => m.gateway))]
-  return used.filter((gateway) => !gatewayOn(gateway)).map((gateway) => ({ gateway, count: methods.value.filter((m) => m.gateway === gateway && m.enabled).length }))
+  const used = [...new Set(methods.value.filter(m => m.enabled).map(m => m.gateway))]
+  return used
+    .filter(gateway => !gatewayOn(gateway))
+    .map(gateway => ({ gateway, count: methods.value.filter(m => m.gateway === gateway && m.enabled).length }))
 })
 /** Top-up is on but users would see no method. */
-const noneUsable = computed(() => !!props.form.get('enabled') && !methods.value.some((m) => m.enabled && gatewayOn(m.gateway)))
+const noneUsable = computed(() => !!props.form.get('enabled') && !methods.value.some(m => m.enabled && gatewayOn(m.gateway)))
 
 const columns = computed<TableColumn[]>(() => [
   { key: 'name', label: t('topup.settings.methods.name') },
@@ -39,24 +55,29 @@ const columns = computed<TableColumn[]>(() => [
 ])
 
 const templateActions = computed<MenuAction[]>(() =>
-  TEMPLATE_KEYS.map((key) => {
+  TEMPLATE_KEYS.map(key => {
     const type = templateType(key)
     const added = !!type && taken.value.has(type)
-    return { key, label: t(`topup.settings.methods.template.${key}`) + (added ? ` · ${t('topup.settings.methods.taken')}` : ''), disabled: added, divider: !type }
+    return {
+      key,
+      label: t(`topup.settings.methods.template.${key}`) + (added ? ` · ${t('topup.settings.methods.taken')}` : ''),
+      disabled: added,
+      divider: !type
+    }
   })
 )
 
 /** The method in the dialog: index -1 adds it. */
-const editing = ref<{ index: number; method: PaymentMethod } | null>(null)
+const editing = ref<{ index: number; method: MethodModel } | null>(null)
 const dialogOpen = ref(false)
-const otherTypes = computed(() => methods.value.filter((_, i) => i !== editing.value?.index).map((m) => m.type))
+const otherTypes = computed(() => methods.value.filter((_, i) => i !== editing.value?.index).map(m => m.type))
 
-function open(index: number, method: PaymentMethod) {
+function open(index: number, method: MethodModel) {
   editing.value = { index, method }
   dialogOpen.value = true
 }
 
-function save(m: PaymentMethod) {
+function save(m: MethodModel) {
   const i = editing.value?.index ?? -1
   setMethods(i < 0 ? [...methods.value, m] : methods.value.map((x, j) => (j === i ? m : x)))
   dialogOpen.value = false
@@ -71,7 +92,7 @@ function fromTemplate(key: string) {
   const method = newMethod(t, key as TemplateKey)
   if (!method.type) return open(-1, method)
   setMethods([...methods.value, method])
-  host.toast(t('topup.settings.methods.added', { name: method.name }), 'success')
+  toast(t('topup.settings.methods.added', { name: method.name }), 'success')
 }
 </script>
 
@@ -88,38 +109,52 @@ function fromTemplate(key: string) {
     <template #actions>
       <SDropdown :actions="templateActions" width="14rem" @select="fromTemplate">
         <template #trigger="{ toggle, attrs }">
-          <SButton size="sm" icon-right="chevron-down" v-bind="attrs" data-testid="payment-method-templates" @click="toggle">{{ t('topup.settings.methods.templates') }}</SButton>
+          <SButton size="sm" icon-right="chevron-down" v-bind="attrs" data-testid="payment-method-templates" @click="toggle">{{
+            t('topup.settings.methods.templates')
+          }}</SButton>
         </template>
       </SDropdown>
-      <SButton size="sm" variant="primary" icon="plus" data-testid="payment-method-add" @click="open(-1, newMethod(t))">{{ t('topup.settings.methods.add') }}</SButton>
+      <SButton size="sm" variant="primary" icon="plus" data-testid="payment-method-add" @click="open(-1, newMethod(t))">{{
+        t('topup.settings.methods.add')
+      }}</SButton>
     </template>
-    <div class="payment-group-body">
+    <div class="py-3">
       <SEmpty v-if="!methods.length" :text="t('topup.settings.methods.empty')" icon="balance" />
       <STable v-else :rows="methods" :columns="columns" row-key="type" reorderable dense @update:rows="setMethods">
         <template #cell-name="{ row }">
           <MethodName :method="row" size="md" />
         </template>
-        <template #cell-type="{ row }"><code class="payment-code">{{ row.type }}</code></template>
+        <template #cell-type="{ row }"
+          ><code class="font-mono text-xs text-fg">{{ row.type }}</code></template
+        >
         <template #cell-gateway="{ row }">
-          <span class="payment-method-name">
+          <span class="inline-flex min-w-0 items-center gap-2">
             {{ gateways.label(row.gateway) }}
             <SBadge v-if="!gatewayOn(row.gateway)" tone="warning" size="xs">{{ t('topup.settings.methods.gatewayOffBadge') }}</SBadge>
           </span>
         </template>
         <template #cell-min_topup="{ row }">
-          <span v-if="row.min_topup">{{ host.i18n.formatMoney(row.min_topup, 2) }}</span>
-          <span v-else class="payment-muted">{{ t('topup.settings.methods.minGlobal') }}</span>
+          <span v-if="row.min_topup">{{ formatMoney(row.min_topup, 2) }}</span>
+          <span v-else class="text-[0.8125rem] text-fg-muted">{{ t('topup.settings.methods.minGlobal') }}</span>
         </template>
         <template #cell-enabled="{ index }">
-          <SSwitch size="sm" v-bind="bindSwitch(form, `methods.${index}.enabled`)" :aria-label="t('topup.settings.methods.enabled')" />
+          <SSwitch size="sm" v-bind="form.bind(`methods.${index}.enabled`)" :aria-label="t('topup.settings.methods.enabled')" />
         </template>
         <template #cell-actions="{ row, index }">
-          <SRowAction :label="t('topup.action.edit')" @click="open(index, { ...row })" />
-          <SRowAction :label="t('topup.action.delete')" tone="danger" @click="remove(index)" />
+          <SRowAction :label="t('common.edit')" @click="open(index, { ...row })" />
+          <SRowAction :label="t('common.delete')" tone="danger" @click="remove(index)" />
         </template>
       </STable>
     </div>
   </SSettingsGroup>
 
-  <MethodDialog v-if="editing" v-model:open="dialogOpen" :method="editing.method" :editing="editing.index >= 0" :taken="otherTypes" :gateways="gateways" @submit="save" />
+  <MethodDialog
+    v-if="editing"
+    v-model:open="dialogOpen"
+    :method="editing.method"
+    :editing="editing.index >= 0"
+    :taken="otherTypes"
+    :gateways="gateways"
+    @submit="save"
+  />
 </template>

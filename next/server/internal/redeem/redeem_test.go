@@ -34,13 +34,13 @@ type fixture struct {
 
 // newFixture is a real database and ledger, a miniredis for the limits, and
 // the service over ledger (nil: the billing service itself).
-func newFixture(t *testing.T, wrap func(Ledger) Ledger) *fixture {
+func newFixture(t *testing.T, wrap func(core.CachingLedger) core.CachingLedger) *fixture {
 	t.Helper()
 	f := &fixture{t: t, db: testutil.DB(t), mr: miniredis.RunT(t)}
 	f.rdb = redis.NewClient(&redis.Options{Addr: f.mr.Addr()})
 	t.Cleanup(func() { _ = f.rdb.Close() })
 	f.bill = billing.New(f.db, f.rdb, nil, nil, nil)
-	var ledger Ledger = f.bill
+	var ledger core.CachingLedger = f.bill
 	if wrap != nil {
 		ledger = wrap(f.bill)
 	}
@@ -165,17 +165,17 @@ func (f *fixture) redeemAtOnce(code string, users []int64) []error {
 
 // failingLedger writes the credit and then fails, as a ledger error after
 // its statement would: the whole transaction must roll back.
-type failingLedger struct{ Ledger }
+type failingLedger struct{ core.CachingLedger }
 
 func (l failingLedger) ApplyTx(ctx context.Context, tx *gorm.DB, ch core.LedgerChange) (*core.LedgerResult, error) {
-	if _, err := l.Ledger.ApplyTx(ctx, tx, ch); err != nil {
+	if _, err := l.CachingLedger.ApplyTx(ctx, tx, ch); err != nil {
 		return nil, err
 	}
 	return nil, errors.New("ledger failed")
 }
 
 func TestRedeemLedgerFailureKeepsCode(t *testing.T) {
-	f := newFixture(t, func(l Ledger) Ledger { return failingLedger{l} })
+	f := newFixture(t, func(l core.CachingLedger) core.CachingLedger { return failingLedger{l} })
 	user := testutil.InsertUser(t, f.db, "rd-fail@x.test")
 	code := f.seed(30, nil)
 

@@ -120,7 +120,7 @@ type RateHoldItem struct {
 // until it would pass; Reserve also reserves tokens until Settle; AddTokens
 // counts a finished response admitted without a reservation.
 type RateWindows interface {
-	Admit(ctx context.Context, id int64, rpm int, tpm int64) (ok bool, retry time.Duration, err error)
+	Admitter
 	Reserve(ctx context.Context, id int64, rpm int, tpm, tokens int64) (hold RateHold, ok bool, retry time.Duration, err error)
 	Settle(ctx context.Context, hold RateHold, actual int64)
 	AddTokens(ctx context.Context, id, n int64)

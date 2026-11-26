@@ -4,6 +4,7 @@ import (
 	"context"
 	"slices"
 
+	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store"
@@ -13,19 +14,19 @@ import (
 // Method is a payment method the administrator configured: a type key of
 // one gateway, shown to users by name and icon, in list order.
 type Method struct {
-	Type     string `json:"type"`
-	Name     string `json:"name"`
-	Gateway  string `json:"gateway"`
-	Icon     string `json:"icon"`
-	Color    string `json:"color"`
-	Logo     string `json:"logo"`
-	MinTopup Num    `json:"min_topup"`
-	Enabled  bool   `json:"enabled"`
+	Type     string          `json:"type"`
+	Name     string          `json:"name"`
+	Gateway  string          `json:"gateway"`
+	Icon     string          `json:"icon"`
+	Color    string          `json:"color"`
+	Logo     string          `json:"logo"`
+	MinTopup decimal.Decimal `json:"min_topup"`
+	Enabled  bool            `json:"enabled"`
 }
 
 func methodOf(m model.PaymentMethod) Method {
 	return Method{Type: m.Type, Name: m.Name, Gateway: m.Gateway, Icon: m.Icon, Color: m.Color, Logo: m.Logo,
-		MinTopup: num(m.MinTopup), Enabled: m.Enabled == nil || *m.Enabled}
+		MinTopup: m.MinTopup, Enabled: m.Enabled == nil || *m.Enabled}
 }
 
 // loadMethods reads the payment methods in list order.
@@ -65,7 +66,7 @@ func replaceMethods(ctx context.Context, tx *gorm.DB, ms []Method) error {
 	for i, m := range ms {
 		enabled := m.Enabled
 		row := model.PaymentMethod{Type: m.Type, Name: m.Name, Gateway: m.Gateway, Icon: m.Icon, Color: m.Color,
-			Logo: m.Logo, MinTopup: m.MinTopup.Decimal, Enabled: &enabled, Sort: i}
+			Logo: m.Logo, MinTopup: m.MinTopup, Enabled: &enabled, Sort: i}
 		upsert := store.UpsertOn([]string{"type"}, "name", "gateway", "icon", "color", "logo", "min_topup", "enabled", "sort")
 		if err := db.Clauses(upsert).Create(&row).Error; err != nil {
 			return err

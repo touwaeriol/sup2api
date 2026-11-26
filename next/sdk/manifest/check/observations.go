@@ -2,9 +2,7 @@ package check
 
 import (
 	"fmt"
-	"slices"
 
-	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/observation"
 )
 
@@ -18,7 +16,7 @@ func (v *validator) observations() {
 		}
 	}
 	if o == nil {
-		if slices.ContainsFunc(v.m.Capabilities, func(c manifest.Capability) bool { return c.ID == observation.Capability }) {
+		if v.hasCap(observation.Capability) {
 			v.add("observations", "required", "gateway.observe.v1 requires observations")
 		}
 		return

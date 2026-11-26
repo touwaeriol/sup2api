@@ -16,8 +16,6 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/lookup"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/api"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/routes"
-	"github.com/Sub2API-Devs/sup2api/next/server/internal/ratelimit"
-	"github.com/Sub2API-Devs/sup2api/next/server/internal/redeem"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/updater"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/webui"
 	"github.com/Sub2API-Devs/sup2api/next/server/web"
@@ -60,7 +58,7 @@ func (b *boot) registerRoutes(r *httpapi.Router) {
 func (b *boot) registerMoneyRoutes(r *httpapi.Router) {
 	b.bill.RegisterRoutes(r)
 	b.pay.RegisterRoutes(r)
-	redeem.New(b.db, b.bill, b.rdb, ratelimit.NewMinute(b.rdb, "redeem")).RegisterRoutes(r)
+	b.redeem.RegisterRoutes(r)
 }
 
 // startPluginWrites starts the audit log of plugin writes and registers its

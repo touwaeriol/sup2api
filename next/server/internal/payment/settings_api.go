@@ -9,28 +9,13 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/Sub2API-Devs/sup2api/next/runtime-contract/gormpg"
+	"github.com/Sub2API-Devs/sup2api/next/sdk/protocol"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/audit"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/httpapi"
-	"github.com/Sub2API-Devs/sup2api/next/server/internal/perm"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store/model"
 )
-
-// merchantField is a setting that names the merchant a gateway's orders
-// were created under or verifies their notifications: it cannot change
-// while that gateway has orders that may still be paid.
-type merchantField struct {
-	gateway, path string
-	of            func(*Settings) string
-}
-
-var merchantFields = []merchantField{
-	{core.PaymentGatewayEpay, "epay.merchant_id", func(v *Settings) string { return v.Epay.MerchantID }},
-	{core.PaymentGatewayEpay, "epay.key", func(v *Settings) string { return v.Epay.Key }},
-	{core.PaymentGatewayStripe, "stripe.secret_key", func(v *Settings) string { return v.Stripe.SecretKey }},
-	{core.PaymentGatewayStripe, "stripe.webhook_secret", func(v *Settings) string { return v.Stripe.WebhookSecret }},
-}
 
 func (s *Service) getSettings(c *gin.Context) {
 	s.renderSettings(c)
@@ -51,24 +36,18 @@ func (s *Service) putSettings(c *gin.Context) {
 }
 
 func (s *Service) renderSettings(c *gin.Context) {
-	ctx := c.Request.Context()
-	v, ms, err := s.terms(ctx, s.db.Gorm)
+	v, ms, err := s.terms(c.Request.Context(), s.db.Gorm)
 	if err != nil {
 		httpapi.Fail(c, err)
 		return
 	}
-	httpapi.NoStore(c)
-	httpapi.OK(c, settingsView{Mode: "native", Values: settingsValues{Settings: masked(v), Methods: ms},
-		SecretFields: secretPaths(), Permission: string(perm.TopupManage), NotifyBase: s.notifyBase()})
-}
-
-// notifyBase is where the gateways' notifications go, the gateway id
-// appended; empty while the site address cannot take top-up (not https).
-func (s *Service) notifyBase() string {
-	if !s.siteSecure() {
-		return ""
+	urls := make(map[string]string, len(builtinSpecs))
+	for _, b := range builtinSpecs {
+		urls[b.id] = s.notifyURL(b.id)
 	}
-	return s.siteURL(notifyPath)
+	httpapi.NoStore(c)
+	httpapi.OK(c, settingsView{Values: settingsValues{Settings: masked(v), Methods: ms}, SecretFields: secretPaths(),
+		NotifyURLs: urls, Currencies: protocol.PaymentCurrencies})
 }
 
 // saveSettings validates and stores the settings and methods in one
@@ -106,38 +85,37 @@ func (s *Service) saveSettings(ctx context.Context, in settingsValues) error {
 // with the stored merchant and secrets.
 func (s *Service) checkSettings(ctx context.Context, tx *gorm.DB, in settingsValues, stored Settings) error {
 	f := s.validateValues(ctx, in)
-	open := map[string]bool{}
-	for _, m := range merchantFields {
-		if m.of(&in.Settings) == m.of(&stored) {
+	busy := map[string]bool{}
+	for b, m := range merchantFields() {
+		if *m.at(&in.Settings) == *m.at(&stored) {
 			continue
 		}
-		busy, ok := open[m.gateway]
-		if !ok {
+		open, seen := busy[b.id]
+		if !seen {
 			var err error
-			if busy, err = hasPayableOrders(ctx, tx, m.gateway, s.now()); err != nil {
+			if open, err = hasPayableOrders(ctx, tx, b.id, s.now()); err != nil {
 				return err
 			}
-			open[m.gateway] = busy
+			busy[b.id] = open
 		}
-		f.check(!busy, m.path, "the gateway has orders that may still be paid: its merchant and secrets cannot change now",
+		f.check(!open, b.id+"."+m.name, "the gateway has orders that may still be paid: its merchant and secrets cannot change now",
 			"该网关还有可能付款的订单，暂时不能修改商户号和密钥")
 	}
 	return f.err()
 }
 
 // hasPayableOrders reports whether gateway has an order a notification may
-// still credit: pending, or expired or cancelled within the late window.
+// still credit (payable).
 func hasPayableOrders(ctx context.Context, tx *gorm.DB, gateway string, now time.Time) (bool, error) {
 	db := store.G(ctx, tx)
-	return gormpg.Exists(db, payable(db.Model(&model.PaymentOrder{}).Where("gateway = ?", gateway), now))
+	return gormpg.Exists(db, db.Model(&model.PaymentOrder{}).Where("gateway = ?", gateway).Scopes(payableOrders(now)))
 }
 
 // settingsAudit is the audit detail of a settings change: what changed,
 // never a secret.
 func settingsAudit(in settingsValues, stored Settings) map[string]any {
-	return map[string]any{
-		"enabled": in.Enabled, "currency": in.Currency, "price": in.Price.String(),
-		"epay_enabled": in.Epay.Enabled, "epay_merchant_id": in.Epay.MerchantID, "stripe_enabled": in.Stripe.Enabled,
-		"methods": len(in.Methods), "secrets_changed": changedSecrets(in.Settings, stored),
-	}
+	out := map[string]any{"enabled": in.Enabled, "currency": in.Currency, "price": in.Price.String(),
+		"methods": len(in.Methods), "secrets_changed": changedSecrets(in.Settings, stored)}
+	builtinAudit(out, in.Settings)
+	return out
 }

@@ -3,21 +3,18 @@ package payment
 import (
 	"context"
 	"encoding/base64"
-	"errors"
 	"fmt"
-	"net/url"
 	"regexp"
 	"slices"
 	"strings"
 
 	"github.com/shopspring/decimal"
 
+	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
+	"github.com/Sub2API-Devs/sup2api/next/sdk/protocol"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
-	"github.com/Sub2API-Devs/sup2api/next/server/internal/payment/stripe"
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/x"
 )
-
-// currencies are the currencies a top-up may settle in (the console's list).
-var currencies = []string{"CNY", "USD", "HKD", "EUR", "GBP", "JPY"}
 
 var (
 	typeKeyPattern = regexp.MustCompile(`^[a-z0-9_]{1,50}$`)
@@ -25,7 +22,7 @@ var (
 	logoDataURL    = regexp.MustCompile(`^data:image/(png|jpeg|webp|svg\+xml);base64,`)
 )
 
-// maxPrice bounds the rate so an order's payment (at most maxCreditPerTx
+// maxPrice bounds the rate so an order's payment (at most core.MaxCreditPerTx
 // times it) fits payment_orders.pay_amount, numeric(20,8). The decimals
 // match the snapshot columns: price numeric(20,8), discount_rate
 // numeric(10,4).
@@ -74,19 +71,22 @@ func (s *Service) validateValues(ctx context.Context, v settingsValues) *fieldEr
 	s.validateGeneral(f, v.Settings)
 	validateLists(f, v.Settings)
 	validateMethods(f, v.Methods)
-	validateGateways(f, v.Settings)
+	for _, b := range builtinSpecs {
+		b.check(f, v.Settings)
+	}
 	return f
 }
 
 func (s *Service) validateGeneral(f *fieldErrs, v Settings) {
 	f.check(!v.Enabled || s.siteSecure(), "enabled", "top-up needs an https site address (SUB2API_PUBLIC_URL)", "站点地址（SUB2API_PUBLIC_URL）必须是 https 才能开启充值")
-	f.check(slices.Contains(currencies, v.Currency), "currency", "unsupported currency", "不支持的货币")
-	f.check(v.Price.IsPositive() && v.Price.LessThanOrEqual(maxPrice) && exact(v.Price.Decimal, priceDecimals), "price",
+	settles := slices.ContainsFunc(protocol.PaymentCurrencies, func(c protocol.PaymentCurrency) bool { return c.Code == v.Currency })
+	f.check(settles, "currency", "unsupported currency", "不支持的货币")
+	f.check(v.Price.IsPositive() && v.Price.LessThanOrEqual(maxPrice) && x.Exact(v.Price, priceDecimals), "price",
 		"must be above 0 and at most "+maxPrice.String()+", with at most 8 decimals", "必须大于 0、不超过 "+maxPrice.String()+"，最多 8 位小数")
 	f.check(!v.MinTopup.IsNegative(), "min_topup", "must not be negative", "不能小于 0")
-	f.check(v.MaxTopup.GreaterThan(v.MinTopup.Decimal), "max_topup", "must be above the minimum", "必须大于最低充值")
-	f.check(v.MaxTopup.LessThanOrEqual(maxCreditPerTx), "max_topup",
-		"must not exceed the ledger's single credit limit "+maxCreditPerTx.String(), "不能超过账本单次入账上限 "+maxCreditPerTx.String())
+	f.check(v.MaxTopup.GreaterThan(v.MinTopup), "max_topup", "must be above the minimum", "必须大于最低充值")
+	f.check(v.MaxTopup.LessThanOrEqual(core.MaxCreditPerTx), "max_topup",
+		"must not exceed the ledger's single credit limit "+core.MaxCreditPerTx.String(), "不能超过账本单次入账上限 "+core.MaxCreditPerTx.String())
 	f.check(v.OrderTimeoutMinutes >= 1 && v.OrderTimeoutMinutes <= 1440, "order_timeout_minutes", "must be 1 to 1440", "必须在 1 到 1440 之间")
 	f.check(v.MaxPendingOrders >= 1 && v.MaxPendingOrders <= 100, "max_pending_orders", "must be 1 to 100", "必须在 1 到 100 之间")
 }
@@ -94,7 +94,7 @@ func (s *Service) validateGeneral(f *fieldErrs, v Settings) {
 func validateLists(f *fieldErrs, v Settings) {
 	f.check(len(v.AmountOptions) <= maxListItems, "amount_options", "at most 20 amounts", "最多 20 个金额")
 	for _, a := range v.AmountOptions {
-		f.check(!a.LessThan(v.MinTopup.Decimal) && !a.GreaterThan(v.MaxTopup.Decimal), "amount_options",
+		f.check(!a.LessThan(v.MinTopup) && !a.GreaterThan(v.MaxTopup), "amount_options",
 			"amounts must be within the minimum and maximum", "金额必须在最低和最高充值之间")
 	}
 	f.check(len(v.Discounts) <= maxListItems, "discounts", "at most 20 tiers", "最多 20 档折扣")
@@ -102,7 +102,7 @@ func validateLists(f *fieldErrs, v Settings) {
 	for i, d := range v.Discounts {
 		p := fmt.Sprintf("discounts.%d.", i)
 		f.check(d.Amount.IsPositive() && !seen[d.Amount.String()], p+"amount", "a positive amount, once", "金额必须大于 0 且不重复")
-		f.check(d.Rate.IsPositive() && d.Rate.LessThan(decimal.NewFromInt(1)) && exact(d.Rate.Decimal, rateDecimals), p+"rate",
+		f.check(d.Rate.IsPositive() && d.Rate.LessThan(decimal.NewFromInt(1)) && x.Exact(d.Rate, rateDecimals), p+"rate",
 			"must be between 0 and 1, with at most 4 decimals", "必须在 0 到 1 之间，最多 4 位小数")
 		seen[d.Amount.String()] = true
 	}
@@ -127,22 +127,15 @@ func validateMethods(f *fieldErrs, ms []Method) {
 // validGatewayID: a built-in gateway or a plugin's "<plugin id>.<gateway id>".
 // A plugin gateway need not be enabled now: its methods only show while it is.
 func validGatewayID(id string) bool {
-	if validBuiltin(id) {
-		return true
-	}
-	plugin, gw, ok := strings.Cut(id, ".")
-	return ok && plugin != "" && gw != "" && len(id) <= 100
+	_, _, plugin := manifest.ParsePaymentGatewayName(id)
+	return plugin || builtinOf(id) != nil
 }
 
 // validLogo: none, an https address, or a base64 image data URL of an
 // allowed type within logoMaxBytes.
 func validLogo(v string) bool {
-	if v == "" {
+	if v == "" || httpsURL(v) && len(v) <= logoMaxURL {
 		return true
-	}
-	if strings.HasPrefix(v, "https://") {
-		u, err := url.Parse(v)
-		return err == nil && u.Host != "" && len(v) <= logoMaxURL
 	}
 	loc := logoDataURL.FindStringIndex(v)
 	if loc == nil {
@@ -150,22 +143,4 @@ func validLogo(v string) bool {
 	}
 	data, err := base64.StdEncoding.DecodeString(v[loc[1]:])
 	return err == nil && len(data) <= logoMaxBytes
-}
-
-func validateGateways(f *fieldErrs, v Settings) {
-	if e := v.Epay; e.Enabled {
-		f.check(strings.TrimSpace(e.MerchantID) != "", "epay.merchant_id", "required", "必填")
-		f.check(e.Key != "", "epay.key", "required", "必填")
-		// The gateway's own check: an https endpoint without credentials,
-		// query or fragment, and a pid it can echo.
-		if err := epayConfigOf(v).Validate(); err != nil && e.MerchantID != "" && e.Key != "" {
-			f.add("epay.endpoint", err.Error(), err.Error())
-		}
-	}
-	if v.Stripe.Enabled {
-		// The gateway's own check, over the stored secrets the mask kept.
-		err := stripeConfigOf(v).Validate()
-		f.check(!errors.Is(err, stripe.ErrSecretKey), "stripe.secret_key", "a Stripe secret key (sk_live_, sk_test_, rk_live_ or rk_test_)", "Stripe 密钥（sk_live_、sk_test_、rk_live_ 或 rk_test_ 开头）")
-		f.check(!errors.Is(err, stripe.ErrWebhookSecret), "stripe.webhook_secret", "a Stripe webhook secret (whsec_)", "Stripe Webhook 密钥（whsec_ 开头）")
-	}
 }

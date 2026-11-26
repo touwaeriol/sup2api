@@ -23,6 +23,14 @@ func TestAdminRoutesNeedTheirPermissions(t *testing.T) {
 	require.Equal(t, http.StatusOK, f.call(uid, http.MethodGet, "/me/topup", "").Code)
 }
 
+// An event's amount shows in major units for a settlement currency, and as
+// it is for anything else.
+func TestMajorUnits(t *testing.T) {
+	for _, c := range [][3]string{{"7300", "CNY", "73"}, {"1230", "usd", "12.3"}, {"500", "JPY", "500"}, {"7300", "XYZ", "7300"}, {"x", "CNY", "x"}} {
+		require.Equal(t, c[2], majorUnits(c[0], c[1]), c)
+	}
+}
+
 // The administrator sees an order's events, newest first, with the fields
 // the core kept and nothing secret.
 func TestOrderEvents(t *testing.T) {
@@ -50,5 +58,6 @@ func TestOrderEvents(t *testing.T) {
 	require.Equal(t, eventAmountMismatch, mismatch.Kind)
 	require.Equal(t, "alipay", mismatch.Detail["type"])
 	require.Equal(t, o.OutTradeNo, mismatch.Detail["out_trade_no"])
+	require.Equal(t, o.PayAmount.Sub(dec("0.01")).String(), mismatch.Detail["amount"], "in major units")
 	require.NotContains(t, w.Body.String(), "epay-secret")
 }

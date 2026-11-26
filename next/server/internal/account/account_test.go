@@ -949,7 +949,7 @@ func TestAccountLifecycle(t *testing.T) {
 	acc := out["data"].(map[string]any)
 	id := int64(acc["id"].(float64))
 	creds := acc["credentials"].(map[string]any)
-	if creds["api_key"] != Mask || creds["org"] != "acme" || creds["base_url"] != "https://api.example.com" {
+	if creds["api_key"] != core.SecretMask || creds["org"] != "acme" || creds["base_url"] != "https://api.example.com" {
 		t.Fatalf("masked creds: %v", creds)
 	}
 	if acc["settings"].(map[string]any)["base_url"] != "https://api.example.com" || len(acc["group_ids"].([]any)) != 2 ||
@@ -972,7 +972,7 @@ func TestAccountLifecycle(t *testing.T) {
 
 	// PATCH keeping the masked secret.
 	code, out = e.do("PATCH", fmt.Sprintf("/accounts/%d", id), map[string]any{
-		"credentials": map[string]any{"api_key": Mask, "base_url": "https://b.example.com", "org": "acme2"},
+		"credentials": map[string]any{"api_key": core.SecretMask, "base_url": "https://b.example.com", "org": "acme2"},
 		"group_ids":   []int64{g2}, "status": "disabled"})
 	if code != 200 {
 		t.Fatalf("patch: %d %v", code, out)
@@ -1003,7 +1003,7 @@ func TestAccountLifecycle(t *testing.T) {
 	// Resubmitting the same credentials keeps the stored ciphertext; a real
 	// change re-encrypts it.
 	_ = e.db.SQL.QueryRowContext(ctx, `SELECT credentials_enc FROM accounts WHERE id = $1`, id).Scan(&enc)
-	same := map[string]any{"credentials": map[string]any{"api_key": Mask, "base_url": "https://b.example.com", "org": "acme2"}, "name": "same credentials"}
+	same := map[string]any{"credentials": map[string]any{"api_key": core.SecretMask, "base_url": "https://b.example.com", "org": "acme2"}, "name": "same credentials"}
 	if code, out = e.do("PATCH", fmt.Sprintf("/accounts/%d", id), same); code != 200 {
 		t.Fatalf("patch same credentials: %d %v", code, out)
 	}
@@ -1070,7 +1070,7 @@ func TestAccountLifecycle(t *testing.T) {
 	e.reg.set(&fakeGen{})
 	_, out = e.do("GET", fmt.Sprintf("/accounts/%d", id), nil)
 	acc = out["data"].(map[string]any)
-	if acc["orphaned"] != true || acc["credentials"].(map[string]any)["org"] != Mask || acc["type_label"] != nil {
+	if acc["orphaned"] != true || acc["credentials"].(map[string]any)["org"] != core.SecretMask || acc["type_label"] != nil {
 		t.Fatalf("orphaned view: %v", acc)
 	}
 	if code, _ = e.do("PATCH", fmt.Sprintf("/accounts/%d", id), map[string]any{"credentials": map[string]any{"api_key": "sk-good-key-456"}}); code != 503 {
@@ -1347,7 +1347,7 @@ func TestCredentialHelpers(t *testing.T) {
 		t.Fatalf("split: %v %v", sec, st)
 	}
 	masked := mask(mustJSON(all), []string{"api_key", "nested.token", "missing"})
-	if gjson.GetBytes(masked, "api_key").String() != Mask || gjson.GetBytes(masked, "nested.token").String() != Mask ||
+	if gjson.GetBytes(masked, "api_key").String() != core.SecretMask || gjson.GetBytes(masked, "nested.token").String() != core.SecretMask ||
 		gjson.GetBytes(masked, "nested.x").Int() != 1 || gjson.GetBytes(masked, "missing").Exists() {
 		t.Fatalf("mask: %s", masked)
 	}

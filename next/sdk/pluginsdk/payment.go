@@ -8,6 +8,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
+	"github.com/Sub2API-Devs/sup2api/next/sdk/protocol"
 )
 
 // Payment gateways ("payment.gateway.v1", manifest payments.gateways, host
@@ -23,13 +24,13 @@ import (
 
 // PaymentGateway mirrors pluginv1.PaymentGatewayServiceServer. Each request
 // names the plugin-local gateway id (Gateway); PaymentGatewayMux dispatches
-// on it. ParseNotification answers an unauthentic notification with
+// on it. ParsePaymentNotification answers an unauthentic notification with
 // RejectedNotification, not an error: an error makes the core ask the
 // gateway to retry. QueryPayment returns ErrPaymentQueryUnsupported when the
 // gateway cannot be queried.
 type PaymentGateway interface {
 	CreatePayment(context.Context, *pluginv1.CreatePaymentRequest) (*pluginv1.CreatePaymentResponse, error)
-	ParseNotification(context.Context, *pluginv1.ParseNotificationRequest) (*pluginv1.ParseNotificationResponse, error)
+	ParsePaymentNotification(context.Context, *pluginv1.ParsePaymentNotificationRequest) (*pluginv1.ParsePaymentNotificationResponse, error)
 	QueryPayment(context.Context, *pluginv1.QueryPaymentRequest) (*pluginv1.QueryPaymentResponse, error)
 }
 
@@ -37,11 +38,15 @@ type PaymentGateway interface {
 // cannot be queried; the core reads it as core.ErrPaymentQueryUnsupported.
 var ErrPaymentQueryUnsupported = status.Error(codes.Unimplemented, "payment gateway cannot be queried")
 
-// PaymentReplies are a gateway's answers to its notifications, one per
-// outcome the core decides. They belong to the gateway's protocol (epay's
-// "success", a webhook's 200) and must not depend on the notification.
+// PaymentReplies are a gateway's answers to one notification, one per
+// outcome the core decides (epay's "success", a webhook's 200). The core
+// answers that notification with them and no other.
 type PaymentReplies struct {
 	Handled, Rejected, Retry *pluginv1.PaymentReply
+}
+
+func (r PaymentReplies) response() *pluginv1.ParsePaymentNotificationResponse {
+	return &pluginv1.ParsePaymentNotificationResponse{Handled: r.Handled, Rejected: r.Rejected, Retry: r.Retry}
 }
 
 // TextReply is a plain-text answer.
@@ -51,25 +56,35 @@ func TextReply(status int, body string) *pluginv1.PaymentReply {
 
 // VerifiedNotification answers an authentic notification with what it
 // reports.
-func VerifiedNotification(r *pluginv1.PaymentResult, replies PaymentReplies) *pluginv1.ParseNotificationResponse {
-	return &pluginv1.ParseNotificationResponse{Verified: true, Result: r,
-		Handled: replies.Handled, Rejected: replies.Rejected, Retry: replies.Retry}
+func VerifiedNotification(r *pluginv1.PaymentResult, replies PaymentReplies) *pluginv1.ParsePaymentNotificationResponse {
+	out := replies.response()
+	out.Verified, out.Result = true, r
+	return out
 }
 
 // RejectedNotification answers a notification that is not authentic;
 // reason goes to the event log and must hold no secret.
-func RejectedNotification(reason string, replies PaymentReplies) *pluginv1.ParseNotificationResponse {
-	return &pluginv1.ParseNotificationResponse{Reason: reason,
-		Handled: replies.Handled, Rejected: replies.Rejected, Retry: replies.Retry}
+func RejectedNotification(reason string, replies PaymentReplies) *pluginv1.ParsePaymentNotificationResponse {
+	out := replies.response()
+	out.Reason = reason
+	return out
 }
 
-// NotificationHeader is the notification's headers as an http.Header.
-func NotificationHeader(in *pluginv1.ParseNotificationRequest) http.Header {
+// PaymentNotificationHeader is the notification's headers as an http.Header.
+func PaymentNotificationHeader(in *pluginv1.ParsePaymentNotificationRequest) http.Header {
 	h := make(http.Header, len(in.GetHeaders()))
 	for name, v := range in.GetHeaders() {
 		h[http.CanonicalHeaderKey(name)] = append([]string(nil), v.GetValues()...)
 	}
 	return h
+}
+
+// PaymentMinorUnits converts a decimal amount a gateway reports ("12.30")
+// to the currency's minor unit, PaymentResult.amount_minor (1230); ok is
+// false unless the currency is one a top-up settles in and the amount is
+// positive and exact in that unit. The core uses the same table.
+func PaymentMinorUnits(amount, currency string) (int64, bool) {
+	return protocol.PaymentMinorUnits(amount, currency)
 }
 
 // PaymentGatewayMux serves several gateways of one plugin, by gateway id.
@@ -91,12 +106,12 @@ func (m PaymentGatewayMux) CreatePayment(ctx context.Context, in *pluginv1.Creat
 	return gw.CreatePayment(ctx, in)
 }
 
-func (m PaymentGatewayMux) ParseNotification(ctx context.Context, in *pluginv1.ParseNotificationRequest) (*pluginv1.ParseNotificationResponse, error) {
+func (m PaymentGatewayMux) ParsePaymentNotification(ctx context.Context, in *pluginv1.ParsePaymentNotificationRequest) (*pluginv1.ParsePaymentNotificationResponse, error) {
 	gw, err := m.gateway(in.GetGateway())
 	if err != nil {
 		return nil, err
 	}
-	return gw.ParseNotification(ctx, in)
+	return gw.ParsePaymentNotification(ctx, in)
 }
 
 func (m PaymentGatewayMux) QueryPayment(ctx context.Context, in *pluginv1.QueryPaymentRequest) (*pluginv1.QueryPaymentResponse, error) {
@@ -116,8 +131,8 @@ func (s paymentServer) CreatePayment(ctx context.Context, in *pluginv1.CreatePay
 	return s.impl.CreatePayment(ctx, in)
 }
 
-func (s paymentServer) ParseNotification(ctx context.Context, in *pluginv1.ParseNotificationRequest) (*pluginv1.ParseNotificationResponse, error) {
-	return s.impl.ParseNotification(ctx, in)
+func (s paymentServer) ParsePaymentNotification(ctx context.Context, in *pluginv1.ParsePaymentNotificationRequest) (*pluginv1.ParsePaymentNotificationResponse, error) {
+	return s.impl.ParsePaymentNotification(ctx, in)
 }
 
 func (s paymentServer) QueryPayment(ctx context.Context, in *pluginv1.QueryPaymentRequest) (*pluginv1.QueryPaymentResponse, error) {

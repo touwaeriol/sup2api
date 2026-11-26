@@ -11,6 +11,7 @@ require (
 	github.com/Sub2API-Devs/sup2api/next/runtime-contract v0.0.0
 	github.com/Sub2API-Devs/sup2api/next/sdk v0.0.0-00010101000000-000000000000
 	github.com/alicebob/miniredis/v2 v2.39.0
+	github.com/boombuler/barcode v1.0.1-0.20190219062509-6c824513bacc
 	github.com/casbin/casbin/v3 v3.11.0
 	github.com/casbin/gorm-adapter/v3 v3.41.0
 	github.com/coder/websocket v1.8.14
@@ -52,7 +53,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.27 // indirect
 	github.com/aws/smithy-go v1.28.9 // indirect
 	github.com/bmatcuk/doublestar/v4 v4.9.1 // indirect
-	github.com/boombuler/barcode v1.0.1-0.20190219062509-6c824513bacc // indirect
 	github.com/bytedance/gopkg v0.1.3 // indirect
 	github.com/bytedance/sonic v1.15.0 // indirect
 	github.com/bytedance/sonic/loader v0.5.0 // indirect

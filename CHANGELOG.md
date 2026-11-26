@@ -10,11 +10,13 @@
 
 #### 核心内置在线充值：易支付、Stripe、插件扩展支付方式；优惠码、兑换码搬进核心（CONTRACTS §140；迁移 0126，只新增表，可回退）
 
-- **在线充值**：核心内置易支付与 Stripe 两个网关，插件可经新能力 `payment.gateway.v1`（高风险宿主权限 `payment.gateway`）扩展其他支付方式。下单、回调、查单只有一条代码路径；回调先验签（回应带 nosniff 与 CSP，按 IP 限流），再在一个事务里逐项核对网关、商户、方式、会话、状态、金额与币种、流水号和事件 id，入账与订单完成同事务，用租约防重复入账；下单前先查单笔 100000、单日 1000000 的上限，免得用户为入不了账的订单付钱。网关返回的支付地址必须是 https。站点地址必须是 https 才能开通。管理员订单只读，不退款、不补单，订单详情可看回调事件。
+- **在线充值**：核心内置易支付与 Stripe 两个网关，插件可经新能力 `payment.gateway.v1`（高风险宿主权限 `payment.gateway`）扩展其他支付方式。下单、回调、查单只有一条代码路径；回调先验签（回应带 nosniff 与 CSP，按 IP 限流），再在一个事务里逐项核对网关、商户、方式、会话、状态、金额与币种、流水号和事件 id，入账与订单完成在同一个事务里（锁住订单行，不用租约）；订单状态按一张迁移表走，进入失败、过期、取消时同事务释放优惠码；下单前先查单笔 100000、单日 1000000 的上限（单日把迟到窗口内仍可能付款的订单也算上），免得用户为入不了账的订单付钱。易支付只收人民币。二维码由服务端生成 PNG。网关返回的支付地址必须是 https。站点地址必须是 https 才能开通。管理员订单只读，不退款、不补单，订单详情可看回调事件。
 - **配置**：系统设置新增“充值配置”页（`/settings?tab=topup`，`topup:manage`），密钥加密存储、接口只回显 `******`；侧栏新增“充值/支付”分组：充值订单、兑换码、优惠码。
-- **用户侧**：钱包始终显示充值卡（未开通时显示“暂未开放在线充值”）和兑换码卡；普通用户角色默认获得 `topup:use`、`redeem:use`。
+- **用户侧**：钱包始终显示充值卡（未开通时显示“暂未开放在线充值”）和兑换码卡；普通用户、运维、供应商代理角色默认获得 `topup:use`、`redeem:use`。
 - **优惠码**：每人每码一次、最低金额、使用记录；**兑换码**：只存哈希与末 4 位，同事务兑换，按用户限速、连续失败锁定一小时防爆破；生成兑换码（`redeem:manage`）只给超级管理员，因为它等于铸币。
 - **账本**：新类型 `topup`、`promo_bonus`、`redeem`。
+- **限流应答**：控制台所有带等待时间的 429（登录、兑换码、充值下单等）都带 `Retry-After` 头与 `details.retry_after_seconds`（向上取整、至少 1 秒）；按用户、按地址的限流器出错时一律放行（CONTRACTS §3.1）。
+- **插件契约**（未发布，直接改名）：`PaymentResult.amount` 改为 `amount_minor`，`ParseNotification*` 改为 `ParsePaymentNotification*`，SDK `NotificationHeader` 改为 `PaymentNotificationHeader`；通知应答随解析结果一起返回，不再按网关共享，修复并发通知应答串号；币种小数位表在 `sdk/protocol`，插件用 `pluginsdk.PaymentMinorUnits`。
 - **插件**：删除 payment 插件（`next/plugins/payment`），商店下架 `sub2api/payment`；迁移 0126 一次性复制它的优惠码和未使用的兑换码。开发用的模拟网关在 `sdk/pluginsdk/pluginsdktest/mockpay`，不打包、不发布。
 - **依赖**：新增 `github.com/stripe/stripe-go/v87`，`shopspring/decimal` 升到 1.5.0。
 - 发布与回退见 `next/deploy/rollback/topup-0126-release.md`（带迁移，发布前先关 newapi 接 sup2api 的渠道）。

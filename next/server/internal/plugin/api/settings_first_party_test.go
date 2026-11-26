@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/install"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/pkg/pkgtest"
 )
@@ -56,7 +57,7 @@ func TestFirstPartyNativeSettingsSecrets(t *testing.T) {
 				want[k] = v
 			}
 			for _, s := range c.secrets {
-				want[s.(string)] = Mask
+				want[s.(string)] = core.SecretMask
 			}
 			assert.Equal(t, want, data(out)["values"])
 			assert.Equal(t, c.secrets, data(out)["secret_fields"])

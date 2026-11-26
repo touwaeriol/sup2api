@@ -54,11 +54,6 @@ func (s *Service) handleLogin(c *gin.Context) {
 	}
 	result, err := s.Login(sessionContext(c, loginMethodPassword), in.Email, in.Password, c.ClientIP())
 	if err != nil {
-		if e := core.AsError(err); e.Code == core.ErrRateLimited.Code {
-			if secs, ok := e.Details["retry_after_seconds"].(int64); ok {
-				c.Header("Retry-After", strconv.FormatInt(secs, 10))
-			}
-		}
 		httpapi.Fail(c, err)
 		return
 	}

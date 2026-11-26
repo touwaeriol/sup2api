@@ -5,22 +5,18 @@
 // gateways are listed on the gateways tab; their credentials are the
 // plugin's own settings.
 import { computed, ref, watch } from 'vue'
-import { SSettingsPage, STabs, usePluginSettings } from '@sub2api/ui'
-import { useTopup } from '../topup'
+import { useI18n } from 'vue-i18n'
+import { SSettingsPage, STabs } from '@sub2api/ui'
 import GatewaysPanel from './GatewaysPanel.vue'
 import { useGatewayCatalog } from './gatewayCatalog'
 import PluginGateways from './PluginGateways.vue'
 import GeneralPanel from './GeneralPanel.vue'
 import MethodsEditor from './MethodsEditor.vue'
-import { keepingNotifyBase, SETTINGS_DEFAULTS, SETTINGS_TABS, settingsRules, tabOfPath, type SettingsModel, type SettingsTab } from './settingsForm'
-import './settings.css'
+import { SETTINGS_TABS, settingsRules, tabOfPath, type SettingsTab } from './settingsForm'
+import { useTopupSettings } from './useTopupSettings'
 
-const host = useTopup()
-const t = host.t
-/** The core's notify address base, read with the settings ("" while the site address is not https). */
-const notifyBase = ref('')
-const api = keepingNotifyBase(host.api, notifyBase)
-const settings = usePluginSettings<SettingsModel>({ pluginKey: 'topup', path: '/topup/settings', api, rules: () => settingsRules(t), defaults: SETTINGS_DEFAULTS })
+const { t } = useI18n()
+const { settings, notifyUrls, currencies } = useTopupSettings(() => settingsRules(t))
 const gateways = useGatewayCatalog(settings)
 const tab = ref<SettingsTab>('general')
 
@@ -30,12 +26,14 @@ const errorCount = computed(() => {
   for (const path of Object.keys(settings.errors)) n[tabOfPath(path)]++
   return n
 })
-const tabs = computed(() => SETTINGS_TABS.map((key) => ({ key, label: t(`topup.settings.tabs.${key}`), badge: errorCount.value[key] || undefined })))
+const tabs = computed(() =>
+  SETTINGS_TABS.map(key => ({ key, label: t(`topup.settings.tabs.${key}`), badge: errorCount.value[key] || undefined }))
+)
 
 // A failed save with nothing wrong on this tab opens the first tab that has errors.
-watch(errorCount, (n) => {
+watch(errorCount, n => {
   if (n[tab.value]) return
-  const first = SETTINGS_TABS.find((k) => n[k])
+  const first = SETTINGS_TABS.find(k => n[k])
   if (first) tab.value = first
 })
 </script>
@@ -44,11 +42,11 @@ watch(errorCount, (n) => {
   <SSettingsPage :settings="settings">
     <STabs v-model="tab" :tabs="tabs" :aria-label="t('topup.settings.title')">
       <template #default="{ active }">
-        <GeneralPanel v-if="active === 'general'" :form="settings" />
+        <GeneralPanel v-if="active === 'general'" :form="settings" :currencies="currencies" />
         <MethodsEditor v-else-if="active === 'methods'" :form="settings" :gateways="gateways" @go="tab = $event" />
         <template v-else>
-          <GatewaysPanel :form="settings" :notify-base="notifyBase" />
-          <PluginGateways :notify-base="notifyBase" :gateways="gateways" />
+          <GatewaysPanel :form="settings" :notify-urls="notifyUrls" />
+          <PluginGateways :gateways="gateways" />
         </template>
       </template>
     </STabs>

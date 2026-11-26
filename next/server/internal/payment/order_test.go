@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/payment/stripe"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/ratelimit"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store/model"
 )
@@ -24,8 +25,9 @@ func TestCreateOrder(t *testing.T) {
 	f := newFixture(t)
 	f.configure()
 	uid := f.user("buyer")
-	w := f.call(uid, http.MethodPost, "/me/topup/orders", `{"amount":100,"method":"alipay"}`)
+	w := f.call(uid, http.MethodPost, "/me/topup/orders", `{"amount":"100","method":"alipay"}`)
 	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), `"qr_image":"data:image/png;base64,`)
 	var created struct{ Data createdView }
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &created))
 	require.Regexp(t, `^s2a_[0-9a-f]{32}$`, created.Data.OutTradeNo)
@@ -47,7 +49,7 @@ func TestCreateOrder(t *testing.T) {
 func TestCreateOrderRefusals(t *testing.T) {
 	f := newFixture(t)
 	f.configure(func(v *settingsValues) {
-		v.Methods = append(v.Methods, Method{Type: "card", Name: "Card", Gateway: core.PaymentGatewayStripe, Enabled: true})
+		v.Methods = append(v.Methods, Method{Type: "card", Name: "Card", Gateway: stripe.ID, Enabled: true})
 	})
 	uid := f.user("refused")
 	for _, body := range []string{`{"amount":0,"method":"alipay"}`, `{"amount":-5,"method":"alipay"}`, `{"amount":"NaN","method":"alipay"}`,
@@ -70,7 +72,7 @@ func TestPendingCapUnderConcurrency(t *testing.T) {
 	uid := f.user("racer")
 	var ok atomic.Int32
 	concurrently(12, func(int) {
-		if _, err := f.svc.placeOrder(context.Background(), uid, quoteInput{Amount: numInt(10), Method: "alipay"}, ""); err == nil {
+		if _, err := f.svc.placeOrder(context.Background(), uid, quoteInput{Amount: dec("10"), Method: "alipay"}, ""); err == nil {
 			ok.Add(1)
 		}
 	})
@@ -81,7 +83,8 @@ func TestPendingCapUnderConcurrency(t *testing.T) {
 }
 
 // A user sees and cancels only their own orders: someone else's are not
-// found; the list and the order carry where to pay while pending.
+// found; the list and the order carry where to pay while pending, and only
+// the order read with ?qr=1 renders its QR code.
 func TestOrdersAreTheirOwners(t *testing.T) {
 	f := newFixture(t)
 	f.configure()
@@ -93,9 +96,17 @@ func TestOrdersAreTheirOwners(t *testing.T) {
 	require.Contains(t, f.call(a, http.MethodGet, "/me/topup/orders", "").Body.String(), `"total":0`)
 	w := f.call(b, http.MethodGet, "/me/topup/orders?q="+o.OutTradeNo[4:12]+"&status=pending", "")
 	require.Contains(t, w.Body.String(), `"pay_url":"https://pay.test/`+o.OutTradeNo)
+	require.NotContains(t, w.Body.String(), "qr_image", "a list renders no QR codes")
+	polled := f.call(b, http.MethodGet, "/me/topup/orders/"+o.OutTradeNo, "").Body.String()
+	require.Contains(t, polled, `"pay_url":"https://pay.test/`)
+	require.NotContains(t, polled, "qr_image", "a poll renders no QR code")
+	require.Contains(t, f.call(b, http.MethodGet, "/me/topup/orders/"+o.OutTradeNo+"?qr=1", "").Body.String(), `"qr_image":"data:image/png;base64,`)
 	require.Equal(t, http.StatusOK, f.call(b, http.MethodPost, "/me/topup/orders/"+o.OutTradeNo+"/cancel", "{}").Code)
 	require.Equal(t, http.StatusConflict, f.call(b, http.MethodPost, "/me/topup/orders/"+o.OutTradeNo+"/cancel", "{}").Code)
-	require.NotContains(t, f.call(b, http.MethodGet, "/me/topup/orders/"+o.OutTradeNo, "").Body.String(), "pay_url")
+	body := f.call(b, http.MethodGet, "/me/topup/orders/"+o.OutTradeNo+"?qr=1", "").Body.String()
+	require.NotContains(t, body, "pay_url")
+	require.NotContains(t, body, "qr_image", "a closed order has nowhere to pay")
+	require.Contains(t, body, `"payable":true`, "a cancelled order may still be paid late")
 }
 
 // The preview prices with the discount and reports a promo code problem
@@ -107,16 +118,16 @@ func TestPreview(t *testing.T) {
 	uid := f.user("pv")
 	w := f.call(uid, http.MethodPost, "/me/topup/preview", `{"amount":20,"method":"alipay","promo_code":"welcome"}`)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-	require.JSONEq(t, `{"data":{"amount":20,"bonus":0,"discount_rate":1,"pay_amount":146,"original_pay_amount":146,"promo_error":"top up at least $50 to use this promo code"}}`, w.Body.String())
-	w = f.call(uid, http.MethodPost, "/me/topup/preview", `{"amount":100,"method":"alipay","promo_code":"welcome"}`)
-	require.JSONEq(t, `{"data":{"amount":100,"bonus":5,"discount_rate":0.9,"pay_amount":657,"original_pay_amount":730}}`, w.Body.String())
+	require.JSONEq(t, `{"data":{"amount":"20","bonus":"0","discount_rate":"1","pay_amount":"146","original_pay_amount":"146","promo_error":"top up at least $50 to use this promo code"}}`, w.Body.String())
+	w = f.call(uid, http.MethodPost, "/me/topup/preview", `{"amount":"100","method":"alipay","promo_code":"welcome"}`)
+	require.JSONEq(t, `{"data":{"amount":"100","bonus":"5","discount_rate":"0.9","pay_amount":"657","original_pay_amount":"730"}}`, w.Body.String())
 }
 
 // Orders are limited per user per minute.
 func TestOrderRateLimit(t *testing.T) {
 	f := newFixture(t)
 	f.configure(func(v *settingsValues) { v.MaxPendingOrders = 100 })
-	f.svc.order = ratelimit.NewMinute(redis.NewClient(&redis.Options{Addr: miniredis.RunT(t).Addr()}), "topup_order")
+	f.svc.orderLimit = ratelimit.NewMinute(redis.NewClient(&redis.Options{Addr: miniredis.RunT(t).Addr()}), "topup_order")
 	uid := f.user("limited")
 	codes := map[int]int{}
 	for i := 0; i < orderRatePerMinute+2; i++ {
@@ -136,14 +147,14 @@ func TestAdminOrders(t *testing.T) {
 	require.Contains(t, w.Body.String(), `"user_email":"listed@x.test"`)
 	require.False(t, strings.Contains(w.Body.String(), "pay_url"), "no pay address for the administrator")
 	w = f.call(f.admin, http.MethodGet, "/topup/orders/stats", "")
-	require.JSONEq(t, `{"data":{"today_amount":10,"today_count":1,"month_amount":10,"pending_count":0,"failed_count":0}}`, w.Body.String())
+	require.JSONEq(t, `{"data":{"today_amount":"10","today_count":1,"month_amount":"10","pending_count":0,"failed_count":0}}`, w.Body.String())
 }
 
 // Quotes are limited per user per minute.
 func TestPreviewRateLimit(t *testing.T) {
 	f := newFixture(t)
 	f.configure()
-	f.svc.quote = ratelimit.NewMinute(redis.NewClient(&redis.Options{Addr: miniredis.RunT(t).Addr()}), "topup_quote")
+	f.svc.quoteLimit = ratelimit.NewMinute(redis.NewClient(&redis.Options{Addr: miniredis.RunT(t).Addr()}), "topup_quote")
 	uid := f.user("quoting")
 	codes := map[int]int{}
 	for i := 0; i < quoteRatePerMinute+1; i++ {
@@ -153,16 +164,19 @@ func TestPreviewRateLimit(t *testing.T) {
 }
 
 // A gateway's pay address must be an absolute https URL without
-// credentials, or the order fails and gives back its promo use; a QR code
-// alone is enough.
+// credentials, and a QR code alone must render, or the order fails and
+// gives back its promo use; a QR code alone is enough, and one that does
+// not render next to a good pay address is dropped.
 func TestCreatedPaymentIsChecked(t *testing.T) {
 	f := newFixture(t)
 	f.configure(func(v *settingsValues) { v.MaxPendingOrders = 10 })
 	id := f.promo("SAFE", "1", "0", 0)
 	uid := f.user("payurl")
-	for _, bad := range []string{"http://pay.test/x", "https://user:pw@pay.test/x", "/relative", "javascript:alert(1)"} {
-		f.gw.answer = &core.PaymentCreated{PayURL: bad, MerchantRef: "1001"}
-		_, err := f.svc.placeOrder(context.Background(), uid, quoteInput{Amount: numInt(10), Method: "alipay", PromoCode: "safe"}, "")
+	for _, bad := range []core.PaymentCreated{{PayURL: "http://pay.test/x"}, {PayURL: "https://user:pw@pay.test/x"},
+		{PayURL: "/relative"}, {PayURL: "javascript:alert(1)"}, {QRCode: strings.Repeat("q", 8000)}, {}} {
+		bad.MerchantRef = "1001"
+		f.gw.answer = &bad
+		_, err := f.svc.placeOrder(context.Background(), uid, quoteInput{Amount: dec("10"), Method: "alipay", PromoCode: "safe"}, "")
 		require.Equal(t, http.StatusServiceUnavailable, core.AsError(err).Status, bad)
 		require.Equal(t, 0, f.promoRow(id).UsedCount, bad)
 	}
@@ -170,4 +184,8 @@ func TestCreatedPaymentIsChecked(t *testing.T) {
 	o := f.order(uid, "10")
 	require.Equal(t, statusPending, *o.Status)
 	require.Equal(t, "weixin://wxpay/x", o.QrCode)
+	f.gw.answer = &core.PaymentCreated{PayURL: "https://pay.test/x", QRCode: strings.Repeat("q", 8000), MerchantRef: "1001"}
+	o = f.order(uid, "10")
+	require.Equal(t, statusPending, *o.Status)
+	require.Empty(t, o.QrCode)
 }

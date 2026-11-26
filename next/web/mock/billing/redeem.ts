@@ -5,6 +5,7 @@
 // well-formed code (32 hex digits, case, spaces and hyphens ignored) that is
 // not on the list redeems for 50, as a code generated elsewhere.
 import { fail, noContent, now, on, paginate } from '../router'
+import { myWallet } from '../core'
 
 const HEX = '0123456789ABCDEF'
 const newCode = () => Array.from({ length: 32 }, () => HEX[Math.floor(Math.random() * 16)]).join('')
@@ -63,7 +64,6 @@ on('DELETE', '/redeem-codes/:id', (req) => {
   return noContent()
 })
 
-let balance = 20
 on('POST', '/me/redeem', (req) => {
   const code = normalize(String(req.body?.code || ''))
   if (!code) return fail(400, 'invalid_argument', 'invalid argument', { fields: [{ field: 'code', code: 'required', message: '请输入兑换码' }] })
@@ -72,6 +72,6 @@ on('POST', '/me/redeem', (req) => {
   if (!usable) return fail(400, 'invalid_redeem_code', '兑换码无效或已使用')
   const amount = c ? Number(c.value) : 50
   if (c) Object.assign(c, { status: 'used', used_by: 1, used_by_email: 'admin@example.com', used_at: now() })
-  balance += amount
-  return { amount: amount.toFixed(8), balance: balance.toFixed(8) }
+  myWallet.balance += amount
+  return { amount: amount.toFixed(8), balance: myWallet.balance.toFixed(8) }
 })

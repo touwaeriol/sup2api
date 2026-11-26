@@ -1,17 +1,21 @@
 package payment
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/payment/stripe"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/ratelimit"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store/model"
 )
@@ -42,7 +46,7 @@ func TestEventAndTradeNoReuse(t *testing.T) {
 	f := newFixture(t)
 	f.configure(withCard)
 	uid := f.user("reuse")
-	a, b, card := f.order(uid, "1"), f.order(uid, "2"), f.place(uid, quoteInput{Amount: numInt(3), Method: "card"})
+	a, b, card := f.order(uid, "1"), f.order(uid, "2"), f.place(uid, quoteInput{Amount: dec("3"), Method: "card"})
 	require.Equal(t, http.StatusOK, f.notify("epay", paid(a, "ev-a")))
 	sameEvent := paid(b, "ev-a")
 	require.Equal(t, http.StatusOK, f.notify("epay", sameEvent))
@@ -59,7 +63,7 @@ func TestEventAndTradeNoReuse(t *testing.T) {
 }
 
 func withCard(v *settingsValues) {
-	v.Methods = append(v.Methods, Method{Type: "card", Name: "Card", Gateway: core.PaymentGatewayStripe, Enabled: true})
+	v.Methods = append(v.Methods, Method{Type: "card", Name: "Card", Gateway: stripe.ID, Enabled: true})
 	v.Stripe = StripeSettings{Enabled: true, SecretKey: "sk_test_x", WebhookSecret: "whsec_x"}
 }
 
@@ -117,7 +121,8 @@ func TestOversizedAndUnknownResults(t *testing.T) {
 	require.Equal(t, statusPending, *f.load(o.OutTradeNo).Status)
 }
 
-// A failed verification keeps the gateway's reason, cut to 200 characters.
+// A failed verification keeps the gateway's reason, cut to 200 bytes
+// without splitting a character.
 func TestSignatureInvalidKeepsReason(t *testing.T) {
 	f := newFixture(t)
 	f.configure()
@@ -128,7 +133,9 @@ func TestSignatureInvalidKeepsReason(t *testing.T) {
 	var detail map[string]string
 	require.NoError(t, json.Unmarshal(ev.Detail, &detail))
 	require.Contains(t, detail["error"], "pid mismatch")
-	require.Equal(t, maxReasonRunes, utf8.RuneCountInString(detail["error"]))
+	require.True(t, utf8.ValidString(detail["error"]))
+	require.LessOrEqual(t, len(detail["error"]), maxReasonBytes)
+	require.Greater(t, len(detail["error"]), maxReasonBytes-utf8.UTFMax)
 	require.False(t, ev.Verified)
 }
 
@@ -137,7 +144,7 @@ func TestSignatureInvalidKeepsReason(t *testing.T) {
 func TestNotifyRateLimit(t *testing.T) {
 	f := newFixture(t)
 	f.configure()
-	f.svc.notes = ratelimit.NewMinute(redis.NewClient(&redis.Options{Addr: miniredis.RunT(t).Addr()}), "topup_notify")
+	f.svc.notifyLimit = ratelimit.NewMinute(redis.NewClient(&redis.Options{Addr: miniredis.RunT(t).Addr()}), "topup_notify")
 	codes := map[int]int{}
 	for i := 0; i < notifyRatePerMinute+1; i++ {
 		codes[f.notifyRaw("epay", "{}", "X-Bad-Sign", "flood").Code]++
@@ -146,4 +153,38 @@ func TestNotifyRateLimit(t *testing.T) {
 	var n int64
 	require.NoError(t, f.db.Gorm.Model(&model.PaymentEvent{}).Where("kind = ?", eventSignatureInvalid).Count(&n).Error)
 	require.EqualValues(t, unverifiedEventsPerMinute, n)
+}
+
+// A transaction number that another order of the gateway takes while this
+// notification is being settled hits the unique constraint: the
+// notification is rejected, and its TRADE_NO_REUSED event still names its
+// order.
+func TestTradeNoReusedRaceKeepsTheOrder(t *testing.T) {
+	f := newFixture(t)
+	f.configure()
+	uid := f.user("race")
+	a, b := f.order(uid, "1"), f.order(uid, "2")
+	taken, release := make(chan struct{}), make(chan struct{})
+	go func() {
+		_ = f.db.Tx(context.Background(), func(tx *gorm.DB) error {
+			err := tx.Model(&model.PaymentOrder{}).Where("id = ?", a.ID).Update("trade_no", "T-race").Error
+			close(taken)
+			<-release
+			return err
+		})
+	}()
+	<-taken
+	res := paid(b, "")
+	res.TradeNo = "T-race"
+	code := make(chan int)
+	go func() { code <- f.notify("epay", res) }()
+	require.Eventually(t, func() bool {
+		var waiting int64
+		f.db.Gorm.Table("pg_stat_activity").Where("wait_event_type = ? AND datname = current_database()", "Lock").Count(&waiting)
+		return waiting > 0
+	}, 10*time.Second, 10*time.Millisecond, "the notification waits on the uncommitted number")
+	close(release)
+	require.Equal(t, http.StatusBadRequest, <-code)
+	require.Equal(t, int64(1), f.events(b.ID, eventTradeNoReused))
+	require.Equal(t, statusPending, *f.load(b.OutTradeNo).Status)
 }

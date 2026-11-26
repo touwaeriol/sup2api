@@ -18,7 +18,7 @@ func TestPrechargeRoundTrips(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
 	uid := e.user("precharge-round-trips@test.invalid")
-	if _, err := e.svc.Apply(ctx, core.LedgerChange{UserID: uid, Amount: decimal.NewFromInt(10), Credit: true, Kind: KindAdminAdjust, IdempotencyKey: "seed"}); err != nil {
+	if _, err := e.svc.Apply(ctx, core.LedgerChange{UserID: uid, Amount: decimal.NewFromInt(10), Credit: true, Kind: core.LedgerKindAdminAdjust, IdempotencyKey: "seed"}); err != nil {
 		t.Fatal(err)
 	}
 	// Every statement is one round trip to the server, BEGIN and COMMIT

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -249,19 +250,30 @@ func TestMonitorAcrossProcess(t *testing.T) {
 	}
 }
 
+// buildFixture builds the plugin binary of a testdata package with extra
+// go build flags.
+func buildFixture(pkg string, flags ...string) ([]byte, error) {
+	_, file, _, _ := goruntime.Caller(0)
+	dir, err := os.MkdirTemp("", "s2p-fixture-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(dir)
+	out := filepath.Join(dir, "plugin")
+	cmd := exec.Command("go", append(append([]string{"build"}, flags...), "-o", out, pkg)...)
+	cmd.Dir = filepath.Dir(file)
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if b, err := cmd.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("build %s %v: %w\n%s", pkg, flags, err, b)
+	}
+	return os.ReadFile(out)
+}
+
 // testPluginVariant builds the test plugin with ldflags, as a binary of
 // another plugin protocol.
 func testPluginVariant(t testing.TB, ldflags string) []byte {
 	t.Helper()
-	_, file, _, _ := goruntime.Caller(0)
-	out := filepath.Join(t.TempDir(), "plugin")
-	cmd := exec.Command("go", "build", "-ldflags", ldflags, "-o", out, "./testdata/testplugin")
-	cmd.Dir = filepath.Dir(file)
-	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
-	if b, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("build test plugin (%s): %v\n%s", ldflags, err, b)
-	}
-	bin, err := os.ReadFile(out)
+	bin, err := buildFixture("./testdata/testplugin", "-ldflags", ldflags)
 	if err != nil {
 		t.Fatal(err)
 	}

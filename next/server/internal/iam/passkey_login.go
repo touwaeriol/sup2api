@@ -18,10 +18,10 @@ import (
 // passkeys it has for this site, so no email is asked for or revealed.
 func (s *Service) BeginPasskeyLogin(ctx context.Context, r *http.Request, ip string) (*PasskeyCeremony, error) {
 	if wait := s.limiter.check(ctx, "", ip); wait > 0 {
-		return nil, rateLimitedError(ctx, wait)
+		return nil, loginLocked(ctx, wait)
 	}
 	if wait := s.limiter.allowPasskeyBegin(ctx, ip); wait > 0 {
-		return nil, rateLimitedError(ctx, wait)
+		return nil, loginLocked(ctx, wait)
 	}
 	wa, err := s.webAuthnFor(r, "")
 	if err != nil {
@@ -43,7 +43,7 @@ func (s *Service) BeginPasskeyLogin(ctx context.Context, r *http.Request, ip str
 // again. Every failure looks the same and counts towards the login rate limit.
 func (s *Service) FinishPasskeyLogin(ctx context.Context, r *http.Request, flowToken string, credential json.RawMessage, ip string) (*LoginResult, error) {
 	if wait := s.limiter.check(ctx, "", ip); wait > 0 {
-		return nil, rateLimitedError(ctx, wait)
+		return nil, loginLocked(ctx, wait)
 	}
 	var session webauthn.SessionData
 	if _, err := s.takeFlow(ctx, flowToken, flowPasskeyLogin, 0, &session); err != nil {

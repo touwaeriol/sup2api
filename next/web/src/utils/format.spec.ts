@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatBalance } from './format'
+import { formatBalance, formatCurrency } from './format'
 
 // A balance is the upstream's number and unit as they are (CONTRACTS §52):
 // thousands separators, no trailing zeros, nothing rounded, the unit as text.
@@ -20,5 +20,16 @@ describe('formatBalance', () => {
     ['123456789012.500000', 'CNY', '123,456,789,012.5 CNY']
   ])('%s %s → %s', (amount, unit, want) => {
     expect(formatBalance(amount, unit)).toBe(want)
+  })
+})
+
+// A payment amount takes the currency's narrow symbol and decimals.
+describe('formatCurrency', () => {
+  it.each([
+    ['73', 'CNY', '¥73.00'],
+    ['1250', 'JPY', '¥1,250'],
+    [null, 'CNY', '—']
+  ])('%s %s → %s', (amount, currency, want) => {
+    expect(formatCurrency(amount, currency)).toBe(want)
   })
 })

@@ -52,13 +52,9 @@ type Instance struct {
 	settings  atomic.Pointer[settings]
 	proc      atomic.Pointer[proc]
 	refreshMu sync.Mutex // serialize DB reads and Configure acknowledgements
-	// payReplies keeps, per payment gateway id, the last replies the plugin
-	// gave (*atomic.Pointer[paymentReplies]); every generation's adapter
-	// shares them.
-	payReplies sync.Map
-	// payServed: the last handshake reported payment.gateway.v1, so the
-	// process serves PaymentGatewayService (notePaymentService).
-	payServed atomic.Bool
+	// reported are the capabilities the last handshake (GetInfo) reported:
+	// the services the process serves (served).
+	reported atomic.Pointer[map[string]bool]
 
 	mu        sync.Mutex
 	state     string
@@ -442,7 +438,7 @@ func (i *Instance) verifyInfo(ctx context.Context, p *proc) error {
 			i.log.Warn("plugin does not report a capability declared in its manifest", "capability", c)
 		}
 	}
-	i.notePaymentService(reported)
+	i.reported.Store(&reported)
 	return nil
 }
 

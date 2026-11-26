@@ -44,7 +44,7 @@ func FundUser(tb testing.TB, ledger core.Ledger, user int64) {
 	tb.Helper()
 	if _, err := ledger.Apply(context.Background(), core.LedgerChange{
 		UserID: user, Amount: decimal.NewFromInt(1_000_000_000), Credit: true,
-		Kind:           "admin_adjust", // billing.KindAdminAdjust; billing's tests import this package
+		Kind:           core.LedgerKindAdminAdjust,
 		IdempotencyKey: "testutil-fund-" + strconv.FormatInt(user, 10),
 	}); err != nil {
 		tb.Fatal(err)

@@ -62,9 +62,6 @@ CREATE TABLE IF NOT EXISTS payment_orders (
     qr_code             text          NOT NULL DEFAULT '',
     -- pending | paid | completed | failed | expired | cancelled
     status              varchar(20)   NOT NULL DEFAULT 'pending',
-    -- the crediting lease (paid -> completed): who holds it and until when
-    lease_token         varchar(64)   NOT NULL DEFAULT '',
-    lease_until         timestamptz,
     fail_reason         text          NOT NULL DEFAULT '',
     expires_at          timestamptz   NOT NULL,
     paid_at             timestamptz,
@@ -78,6 +75,9 @@ CREATE TABLE IF NOT EXISTS payment_orders (
 CREATE INDEX IF NOT EXISTS payment_orders_user_idx ON payment_orders (user_id, id DESC);
 CREATE INDEX IF NOT EXISTS payment_orders_status_idx ON payment_orders (status, expires_at);
 CREATE INDEX IF NOT EXISTS payment_orders_created_idx ON payment_orders (created_at DESC);
+-- the orders of a promo code: deleting the code locks them first and then
+-- sets their promo_code_id to NULL (ON DELETE SET NULL), both by this column
+CREATE INDEX IF NOT EXISTS payment_orders_promo_idx ON payment_orders (promo_code_id) WHERE promo_code_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS payment_events (
     id          bigserial     PRIMARY KEY,

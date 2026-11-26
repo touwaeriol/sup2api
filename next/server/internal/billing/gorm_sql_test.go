@@ -24,7 +24,7 @@ import (
 func TestSQLLedgerCount(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	c.Request = httptest.NewRequest("GET", "/ledger?kind="+KindUsage+"&from=2026-11-15T08:00:00Z", nil)
+	c.Request = httptest.NewRequest("GET", "/ledger?kind="+core.LedgerKindUsage+"&from=2026-11-15T08:00:00Z", nil)
 	uid := int64(7)
 	f, err := ledgerConds(c, &uid)
 	if err != nil {
@@ -76,18 +76,18 @@ func TestSQLLedger(t *testing.T) {
 	cases := map[string]func(*gorm.DB) *gorm.DB{
 		"ensure_balance": func(db *gorm.DB) *gorm.DB { return ensureBalanceRow(db, 7) },
 		"apply": func(db *gorm.DB) *gorm.DB {
-			return applyStmt.Raw(db, int64(7), amount.Neg(), KindAdminAdjust, "manual", "ref-1", "adjust:1", &operator, "", "note").Scan(&row)
+			return applyStmt.Raw(db, int64(7), amount.Neg(), core.LedgerKindAdminAdjust, "manual", "ref-1", "adjust:1", &operator, "", "note").Scan(&row)
 		},
 		"release": func(db *gorm.DB) *gorm.DB {
 			return releaseStmt.Raw(db, "req-1", int64(7), releaseKey("req-1"), "release request precharge").Scan(&row)
 		},
 		"precharge": func(db *gorm.DB) *gorm.DB {
-			return prechargeStmt.Raw(db, int64(7), "req-1", amount, KindUsage, "precharge", "req-1", "precharge:req-1", "request precharge", min).Scan(&row)
+			return prechargeStmt.Raw(db, int64(7), "req-1", amount, core.LedgerKindUsage, "precharge", "req-1", "precharge:req-1", "request precharge", min).Scan(&row)
 		},
 		// A precharge's balance row, behind its lock timeout.
 		"precharge_ensure": func(db *gorm.DB) *gorm.DB { return ensurePrechargeBalance(db, 7) },
 		"settle": func(db *gorm.DB) *gorm.DB {
-			ch := core.LedgerChange{UserID: 7, Amount: amount, Kind: KindUsage, RefType: "usage", RefID: "req-1", IdempotencyKey: "usage:req-1", Note: "note"}
+			ch := core.LedgerChange{UserID: 7, Amount: amount, Kind: core.LedgerKindUsage, RefType: "usage", RefID: "req-1", IdempotencyKey: "usage:req-1", Note: "note"}
 			return settleStmt.Raw(db, settleArgs(7, "req-1", &ch)...).Scan(&row)
 		},
 		// Without a charge the charge's arguments are inert: $5 is false.

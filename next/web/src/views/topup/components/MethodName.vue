@@ -8,25 +8,9 @@ withDefaults(defineProps<{ method: MethodLook; size?: 'sm' | 'md' }>(), { size: 
 </script>
 
 <template>
-  <span class="payment-method-label">
+  <span class="inline-flex min-w-0 max-w-full items-center gap-2 align-middle">
     <MethodIcon :method="method" :size="size" />
-    <span class="payment-method-label-text">{{ method.name }}</span>
+    <span class="truncate">{{ method.name }}</span>
     <slot />
   </span>
 </template>
-
-<style scoped>
-.payment-method-label {
-  display: inline-flex;
-  min-width: 0;
-  max-width: 100%;
-  align-items: center;
-  gap: 0.5rem;
-  vertical-align: middle;
-}
-.payment-method-label-text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-</style>

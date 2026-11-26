@@ -42,7 +42,7 @@ CCGateway 插件（Claude Code 托管账号、它的 companions 与 `cli-reverse
 ### 核心（`next/server`）
 
 - HTTP 用 Gin（`internal/httpapi`）。控制台接口在 `/api/v1`，网关在 `/v1` 等平台声明的端点，插件路由在 `/api/v1/p/:key/*`。路由用 `r.Public` / `r.Self` / `r.Perm` / `r.PermAny` / `r.PermScoped` 注册，启动时 `httpapi.CheckRoutes` 自检路由表（CONTRACTS §3.3）。
-- 模块化单体：`internal/` 下每个业务模块（`iam`、`authz`、`apikey`、`group`、`account`、`billing`、`usage`、`gateway`、`plugin`、`event`、`job`、`task`、`cluster` 等）只暴露构造函数、实现 `core` 接口的类型和 `RegisterRoutes`。**模块之间只通过 `internal/core` 里的接口依赖**，不 import 别人的包（`core`、`store`、`httpapi`、`config`、`testutil` 除外），组装在 `internal/app`（CONTRACTS §1）。`core` 自己不 import `store`（gormguard `[core-store]`）。
+- 模块化单体：`internal/` 下每个业务模块（`iam`、`authz`、`apikey`、`group`、`account`、`billing`、`usage`、`gateway`、`plugin`、`event`、`job`、`task`、`cluster` 等）只暴露构造函数、实现 `core` 接口的类型和 `RegisterRoutes`。**模块之间只通过 `internal/core` 里的接口依赖**，不 import 别人的包（`core`、`store`、`httpapi`、`config`、`testutil`，以及 Redis 限流工具包 `ratelimit`（`Minute` 窗口、`Lockout` 失败或次数锁定）除外），组装在 `internal/app`（CONTRACTS §1）。`core` 自己不 import `store`（gormguard `[core-store]`）。
 - 改 `CONTRACTS.md`、`sdk/proto`、`sdk/manifest`、`server/internal/core`、核心迁移，属于改契约，要在交付说明里写清楚并同步文档。
 
 ### 数据库：PostgreSQL 16 + GORM

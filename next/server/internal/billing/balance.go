@@ -74,14 +74,9 @@ func (s *Service) myLedger(c *gin.Context) {
 		return
 	}
 	g := store.G(ctx, s.db.Gorm)
-	var total int64
-	if err := ledgerRows(g, f).Count(&total).Error; err != nil {
-		httpapi.Fail(c, err)
-		return
-	}
-	items := []LedgerEntrySelf{}
-	if err := ledgerRows(g, f).Select("l.id, l.delta, l.balance_after, l.kind, l.note, l.created_at").
-		Order("l.id DESC").Limit(size).Offset((page - 1) * size).Scan(&items).Error; err != nil {
+	rows := ledgerRows(g, f).Select("l.id, l.delta, l.balance_after, l.kind, l.note, l.created_at").Order("l.id DESC")
+	items, total, err := store.FindPage[LedgerEntrySelf](rows, page, size)
+	if err != nil {
 		httpapi.Fail(c, err)
 		return
 	}
@@ -138,17 +133,12 @@ func (s *Service) listLedger(c *gin.Context, userID *int64) {
 		return
 	}
 	g := store.G(ctx, s.db.Gorm)
-	var total int64
-	if err := ledgerRows(g, f).Count(&total).Error; err != nil {
-		httpapi.Fail(c, err)
-		return
-	}
-	items := []LedgerEntry{}
-	if err := ledgerRows(g, f).Select(`l.id, l.user_id, COALESCE(u.email, '') AS user_email,
+	rows := ledgerRows(g, f).Select(`l.id, l.user_id, COALESCE(u.email, '') AS user_email,
 		COALESCE(u.display_name, '') AS user_name, l.delta, l.balance_after, l.kind, l.ref_type, l.ref_id,
 		l.idempotency_key, l.operator_id, l.plugin_key, l.note, l.created_at`).
-		Joins("LEFT JOIN users u ON u.id = l.user_id").Order("l.id DESC").Limit(size).Offset((page - 1) * size).
-		Scan(&items).Error; err != nil {
+		Joins("LEFT JOIN users u ON u.id = l.user_id").Order("l.id DESC")
+	items, total, err := store.FindPage[LedgerEntry](rows, page, size)
+	if err != nil {
 		httpapi.Fail(c, err)
 		return
 	}
@@ -198,7 +188,7 @@ func (s *Service) adjustBalance(c *gin.Context) {
 		UserID:         id,
 		Amount:         in.Amount,
 		Credit:         in.Credit,
-		Kind:           KindAdminAdjust,
+		Kind:           core.LedgerKindAdminAdjust,
 		RefType:        "admin",
 		RefID:          x.Itoa64(operator),
 		IdempotencyKey: scopedKey,

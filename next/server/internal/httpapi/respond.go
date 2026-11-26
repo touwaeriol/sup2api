@@ -49,12 +49,16 @@ func NoContent(c *gin.Context) { c.Status(http.StatusNoContent) }
 func NoStore(c *gin.Context) { c.Header("Cache-Control", "no-store") }
 
 // Fail renders {"error": {...}} using core.Error; unknown errors become
-// "internal" and are logged with their cause.
+// "internal" and are logged with their cause. A 429 that says how long to
+// wait (core.RateLimitedFor) also sends it as Retry-After.
 func Fail(c *gin.Context, err error) {
 	e := core.AsError(err)
 	if e.Status >= 500 {
 		slog.ErrorContext(c.Request.Context(), "request failed",
 			"request_id", core.RequestID(c.Request.Context()), "path", c.FullPath(), "err", err)
+	}
+	if secs, ok := e.Details[core.RetryAfterSeconds].(int64); ok && e.Status == http.StatusTooManyRequests {
+		c.Header("Retry-After", strconv.FormatInt(secs, 10))
 	}
 	c.AbortWithStatusJSON(e.Status, gin.H{"error": e})
 }

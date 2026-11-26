@@ -3,12 +3,14 @@ package payment
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 
+	"github.com/Sub2API-Devs/sup2api/next/sdk/protocol"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/httpapi"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store"
@@ -19,12 +21,7 @@ import (
 func (s *Service) pageOrders(c *gin.Context, conds store.Conds) ([]model.PaymentOrder, httpapi.Page, error) {
 	page, size := httpapi.Pagination(c)
 	db := store.G(c.Request.Context(), s.db.Gorm).Model(&model.PaymentOrder{}).Scopes(conds.Scope())
-	var total int64
-	if err := db.Count(&total).Error; err != nil {
-		return nil, httpapi.Page{}, err
-	}
-	var rows []model.PaymentOrder
-	err := db.Order("id DESC").Limit(size).Offset((page - 1) * size).Find(&rows).Error
+	rows, total, err := store.FindPage[model.PaymentOrder](db.Order("id DESC"), page, size)
 	return rows, httpapi.Page{Page: page, PageSize: size, Total: total}, err
 }
 
@@ -49,7 +46,7 @@ func (s *Service) adminOrders(c *gin.Context) {
 	}
 	out := make([]orderView, len(rows))
 	for i := range rows {
-		out[i] = viewOf(&rows[i], emails[rows[i].UserID])
+		out[i] = viewOf(&rows[i], emails[rows[i].UserID], s.now())
 	}
 	httpapi.List(c, out, page)
 }
@@ -65,7 +62,7 @@ func (s *Service) adminFilters(c *gin.Context) (store.Conds, error) {
 		if v := c.Query(f.q); v != "" {
 			at, err := time.Parse(time.RFC3339, v)
 			if err != nil {
-				return nil, core.ErrInvalidArgument.WithMessage("invalid " + f.q + " (RFC 3339)")
+				return nil, core.ErrInvalidArgument.WithMessage(t(c.Request.Context(), "invalid "+f.q+" (RFC 3339)", f.q+" 不是 RFC 3339 时间"))
 			}
 			conds.And(f.cond, at)
 		}
@@ -95,11 +92,11 @@ func (s *Service) emails(ctx context.Context, rows []model.PaymentOrder) (map[in
 
 // statsView is GET /topup/orders/stats (the console's OrderStats).
 type statsView struct {
-	TodayAmount  Num   `json:"today_amount"`
-	TodayCount   int64 `json:"today_count"`
-	MonthAmount  Num   `json:"month_amount"`
-	PendingCount int64 `json:"pending_count"`
-	FailedCount  int64 `json:"failed_count"`
+	TodayAmount  decimal.Decimal `json:"today_amount"`
+	TodayCount   int64           `json:"today_count"`
+	MonthAmount  decimal.Decimal `json:"month_amount"`
+	PendingCount int64           `json:"pending_count"`
+	FailedCount  int64           `json:"failed_count"`
 }
 
 // orderStats sums the completed top-ups (credited amount, bonus excluded)
@@ -108,25 +105,8 @@ type statsView struct {
 // orders.
 func (s *Service) orderStats(c *gin.Context) {
 	ctx := c.Request.Context()
-	now := s.now().In(core.TimeZone(ctx))
-	day := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-	month := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 	var out statsView
-	err := s.db.TxOptions(ctx, store.ReadOnly(), func(tx *gorm.DB) error {
-		var err error
-		if out.TodayAmount, out.TodayCount, err = completedSince(ctx, tx, day); err == nil {
-			out.MonthAmount, _, err = completedSince(ctx, tx, month)
-		}
-		for _, x := range []struct {
-			status string
-			n      *int64
-		}{{statusPending, &out.PendingCount}, {statusFailed, &out.FailedCount}} {
-			if err == nil {
-				err = store.G(ctx, tx).Model(&model.PaymentOrder{}).Where("status = ?", x.status).Count(x.n).Error
-			}
-		}
-		return err
-	})
+	err := s.db.TxOptions(ctx, store.ReadOnly(), func(tx *gorm.DB) error { return s.stats(ctx, tx, &out) })
 	if err != nil {
 		httpapi.Fail(c, err)
 		return
@@ -134,15 +114,34 @@ func (s *Service) orderStats(c *gin.Context) {
 	httpapi.OK(c, out)
 }
 
+func (s *Service) stats(ctx context.Context, tx *gorm.DB, out *statsView) error {
+	now := s.now().In(core.TimeZone(ctx))
+	day := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	month := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	var err error
+	if out.TodayAmount, out.TodayCount, err = completedSince(ctx, tx, day); err != nil {
+		return err
+	}
+	if out.MonthAmount, _, err = completedSince(ctx, tx, month); err != nil {
+		return err
+	}
+	for status, n := range map[string]*int64{statusPending: &out.PendingCount, statusFailed: &out.FailedCount} {
+		if err := store.G(ctx, tx).Model(&model.PaymentOrder{}).Where("status = ?", status).Count(n).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // completedSince sums and counts the orders completed since at.
-func completedSince(ctx context.Context, tx *gorm.DB, at time.Time) (Num, int64, error) {
+func completedSince(ctx context.Context, tx *gorm.DB, at time.Time) (decimal.Decimal, int64, error) {
 	var row struct {
 		Total decimal.NullDecimal
 		N     int64
 	}
 	err := store.G(ctx, tx).Model(&model.PaymentOrder{}).Select("sum(amount) AS total, count(*) AS n").
 		Where("status = ? AND completed_at >= ?", statusCompleted, at).Scan(&row).Error
-	return num(row.Total.Decimal), row.N, err
+	return row.Total.Decimal, row.N, err
 }
 
 // eventView is one payment_events row of an order: what the core made of a
@@ -157,13 +156,30 @@ type eventView struct {
 	CreatedAt time.Time         `json:"created_at"`
 }
 
+// eventViewOf is the event as the API shows it: the amount (kept in the
+// currency's minor unit) in major units.
 func eventViewOf(e *model.PaymentEvent) eventView {
 	v := eventView{ID: e.ID, Gateway: e.Gateway, Kind: e.Kind, Verified: e.Verified, Detail: map[string]string{}, CreatedAt: e.CreatedAt}
 	if e.EventID != nil {
 		v.EventID = *e.EventID
 	}
 	_ = json.Unmarshal(e.Detail, &v.Detail) // the core writes it as a string map
+	if minor, ok := v.Detail["amount"]; ok {
+		v.Detail["amount"] = majorUnits(minor, v.Detail["currency"])
+	}
 	return v
+}
+
+// majorUnits is a minor-unit amount of a settlement currency in major
+// units; anything else (a currency outside the table, not a number) as it
+// is.
+func majorUnits(minor, currency string) string {
+	exp, ok := protocol.PaymentExponent(currency)
+	n, err := strconv.ParseInt(minor, 10, 64)
+	if !ok || err != nil {
+		return minor
+	}
+	return decimal.New(n, -exp).String()
 }
 
 // orderEvents lists the events of an order, newest first: mismatches,
@@ -175,12 +191,7 @@ func (s *Service) orderEvents(c *gin.Context) {
 	}
 	page, size := httpapi.Pagination(c)
 	db := store.G(c.Request.Context(), s.db.Gorm).Model(&model.PaymentEvent{}).Where("order_id = ?", id)
-	var total int64
-	var rows []model.PaymentEvent
-	err := db.Count(&total).Error
-	if err == nil {
-		err = db.Order("id DESC").Limit(size).Offset((page - 1) * size).Find(&rows).Error
-	}
+	rows, total, err := store.FindPage[model.PaymentEvent](db.Order("id DESC"), page, size)
 	if err != nil {
 		httpapi.Fail(c, err)
 		return

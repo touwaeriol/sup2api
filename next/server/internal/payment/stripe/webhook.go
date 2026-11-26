@@ -37,19 +37,27 @@ type event struct {
 }
 
 // ParseNotification verifies a webhook event and maps it to a result. Events
-// other than the three checkout outcomes come back pending, so the core only
+// other than the two checkout outcomes come back pending, so the core only
 // records them. The request's shape is checked before the configuration is
-// read, so junk requests to this public route cost no settings read.
-func (g *Gateway) ParseNotification(ctx context.Context, n core.PaymentNotification) (*core.PaymentResult, error) {
+// read, so junk requests to this public route cost no settings read. Stripe
+// reads only the reply's status (core.StatusPaymentReply): any non-2xx makes
+// it retry the event with backoff, a rejection too, though only a fixed
+// configuration (or nothing) can change its outcome.
+func (g *Gateway) ParseNotification(ctx context.Context, n core.PaymentNotification) (*core.PaymentResult, core.PaymentResponder, error) {
+	res, err := g.parse(ctx, n)
+	return res, core.StatusPaymentReply, err
+}
+
+func (g *Gateway) parse(ctx context.Context, n core.PaymentNotification) (*core.PaymentResult, error) {
 	header, err := signatureOf(n)
 	if err != nil {
 		return nil, err
 	}
-	c, err := g.cfg(ctx)
+	c, mode, err := g.config(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("stripe: load config: %w", err)
+		return nil, err
 	}
-	ev, err := verifyEvent(c, n.Body, header)
+	ev, err := verifyEvent(c.WebhookSecret, mode, n.Body, header)
 	if err != nil {
 		return nil, err
 	}
@@ -57,7 +65,7 @@ func (g *Gateway) ParseNotification(ctx context.Context, n core.PaymentNotificat
 }
 
 func rejected(format string, args ...any) error {
-	return fmt.Errorf("%w: stripe: "+format, append([]any{core.ErrPaymentSignature}, args...)...)
+	return fmt.Errorf("stripe: "+format+": %w", append(args, core.ErrPaymentSignature)...)
 }
 
 // signatureOf is the Stripe-Signature header of a POST.
@@ -76,12 +84,8 @@ func signatureOf(n core.PaymentNotification) (string, error) {
 // timestamp within 300 s against replays) and that the event comes from the
 // same mode as the key: a test-mode payment must never credit a live
 // balance.
-func verifyEvent(c Config, body []byte, header string) (event, error) {
-	mode, err := c.mode()
-	if err != nil {
-		return event{}, fmt.Errorf("%w: %w", core.ErrPaymentSignature, err)
-	}
-	if err := webhook.ValidatePayloadWithTolerance(body, header, c.WebhookSecret, webhook.DefaultTolerance); err != nil {
+func verifyEvent(secret, mode string, body []byte, header string) (event, error) {
+	if err := webhook.ValidatePayloadWithTolerance(body, header, secret, webhook.DefaultTolerance); err != nil {
 		return event{}, rejected("%v", err)
 	}
 	var ev event
@@ -128,7 +132,7 @@ func eventSession(ev event) (session, error) {
 
 func eventStatus(t string, s session) core.PaymentStatus {
 	switch stripego.EventType(t) {
-	case stripego.EventTypeCheckoutSessionCompleted, stripego.EventTypeCheckoutSessionAsyncPaymentSucceeded:
+	case stripego.EventTypeCheckoutSessionCompleted:
 		return paidIf(s)
 	case stripego.EventTypeCheckoutSessionExpired:
 		return core.PaymentExpired

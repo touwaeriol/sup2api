@@ -4,10 +4,11 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/shopspring/decimal"
+
+	"github.com/Sub2API-Devs/sup2api/next/sdk/protocol"
 )
 
 // Online top-up (CONTRACTS §140): the core owns orders, settings, promo
@@ -15,13 +16,9 @@ import (
 // which order a notification is about and what was paid. The built-in
 // gateways (epay, stripe) and the gateways plugins declare
 // ("payment.gateway.v1") implement the same PaymentGateway, so creating,
-// notifying and querying have one code path in the payment module.
-
-// Built-in gateway ids. A plugin gateway's id is "<plugin id>.<gateway id>".
-const (
-	PaymentGatewayEpay   = "epay"
-	PaymentGatewayStripe = "stripe"
-)
+// notifying and querying have one code path in the payment module. A
+// plugin gateway's id is "<plugin id>.<gateway id>"
+// (manifest.PaymentGatewayName).
 
 // PaymentStatus is what a gateway says about a payment.
 type PaymentStatus string
@@ -96,35 +93,18 @@ type PaymentResult struct {
 	Fields map[string]string
 }
 
-// PaymentOutcome is how the core handled a notification; the gateway turns
-// it into the reply its sender expects (Respond).
-type PaymentOutcome int
-
-const (
-	// PaymentHandled: processed, a duplicate, or about no order of this site.
-	PaymentHandled PaymentOutcome = iota
-	// PaymentRejected: failed verification or did not match the order.
-	PaymentRejected
-	// PaymentRetry: the core could not process it now (database, ledger,
-	// gateway unavailable); the sender should retry.
-	PaymentRetry
-)
-
-// PaymentReply is the HTTP answer to a notification.
-type PaymentReply struct {
-	Status      int
-	ContentType string
-	Body        []byte
-}
-
 // PaymentGateway is one gateway. ParseNotification returns
 // ErrPaymentSignature (wrapped) when the notification is not authentic, and
 // QueryPayment ErrPaymentQueryUnsupported when the gateway cannot be asked.
+//
+// ParseNotification always returns a responder, also with an error: it
+// answers this notification, whatever the core makes of it, and no other.
+// A plugin's replies come with its answer to each notification, so
+// concurrent notifications must not share them.
 type PaymentGateway interface {
 	CreatePayment(ctx context.Context, in PaymentCreate) (*PaymentCreated, error)
-	ParseNotification(ctx context.Context, n PaymentNotification) (*PaymentResult, error)
+	ParseNotification(ctx context.Context, n PaymentNotification) (*PaymentResult, PaymentResponder, error)
 	QueryPayment(ctx context.Context, q PaymentQuery) (*PaymentResult, error)
-	Respond(o PaymentOutcome) PaymentReply
 }
 
 var (
@@ -150,7 +130,7 @@ type PaymentGatewayInfo struct {
 }
 
 // PaymentGatewayBinding is one gateway of an enabled plugin. Ids are unique
-// across a generation: the first claimant wins.
+// by construction: plugin ids are, and a plugin's gateway ids are.
 type PaymentGatewayBinding struct {
 	Plugin  PluginInfo
 	Gateway PaymentGatewayInfo
@@ -159,29 +139,25 @@ type PaymentGatewayBinding struct {
 
 // PaymentGatewayGeneration is implemented by generations that know payment
 // gateways. A gateway missing from the current generation (plugin disabled
-// or uninstalled) is unavailable: its notifications get PaymentRetry.
+// or uninstalled) is unavailable: its notifications are answered without a
+// gateway, 503 while orders of it may still be paid, else 404.
 type PaymentGatewayGeneration interface {
 	PaymentGateways() []PaymentGatewayBinding
 }
 
-// zeroDecimalCurrencies have no minor unit (ISO 4217 exponent 0) among the
-// currencies a top-up may settle in.
-var zeroDecimalCurrencies = map[string]bool{"JPY": true, "KRW": true, "VND": true, "CLP": true}
+// The settlement currencies and their minor units are shared with the
+// gateway plugins (sdk/protocol), which report amounts in those units.
 
-// PaymentExponent is the number of decimals of currency's minor unit.
+// PaymentExponent is the number of decimals of a settlement currency's
+// minor unit; 0 for any other currency, which PaymentMinorUnits refuses.
 func PaymentExponent(currency string) int32 {
-	if zeroDecimalCurrencies[strings.ToUpper(currency)] {
-		return 0
-	}
-	return 2
+	exp, _ := protocol.PaymentExponent(currency)
+	return exp
 }
 
 // PaymentMinorUnits converts an amount to the currency's minor unit; ok is
-// false unless the amount is positive and exact in that unit.
+// false unless the currency is a settlement currency and the amount is
+// positive and exact in that unit.
 func PaymentMinorUnits(amount decimal.Decimal, currency string) (int64, bool) {
-	exp := PaymentExponent(currency)
-	if amount.Sign() <= 0 || !amount.Equal(amount.Round(exp)) {
-		return 0, false
-	}
-	return amount.Shift(exp).IntPart(), true
+	return protocol.PaymentMinorUnits(amount.String(), currency)
 }

@@ -5,41 +5,43 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/audit"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/httpapi"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store/model"
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/x"
 )
 
 var promoCodePattern = regexp.MustCompile(`^[A-Z0-9_-]{3,64}$`)
 
-// promoView is a promo code in the API (the console's PromoCode).
+// promoView is a promo code in the API (the console's PromoCode): status is
+// the stored switch, state what the code is now (promoState).
 type promoView struct {
-	ID          int64      `json:"id"`
-	Code        string     `json:"code"`
-	BonusAmount Num        `json:"bonus_amount"`
-	MinAmount   Num        `json:"min_amount"`
-	MaxUses     int        `json:"max_uses"`
-	UsedCount   int        `json:"used_count"`
-	Status      string     `json:"status"`
-	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
-	Notes       string     `json:"notes,omitempty"`
-	CreatedAt   time.Time  `json:"created_at"`
+	ID          int64           `json:"id"`
+	Code        string          `json:"code"`
+	BonusAmount decimal.Decimal `json:"bonus_amount"`
+	MinAmount   decimal.Decimal `json:"min_amount"`
+	MaxUses     int             `json:"max_uses"`
+	UsedCount   int             `json:"used_count"`
+	Status      string          `json:"status"`
+	State       string          `json:"state"`
+	ExpiresAt   *time.Time      `json:"expires_at,omitempty"`
+	Notes       string          `json:"notes,omitempty"`
+	CreatedAt   time.Time       `json:"created_at"`
 }
 
-func promoViewOf(p *model.PromoCode) promoView {
-	v := promoView{ID: p.ID, Code: p.Code, BonusAmount: num(p.BonusAmount), MinAmount: num(p.MinAmount), MaxUses: p.MaxUses,
-		UsedCount: p.UsedCount, Status: promoActive, ExpiresAt: p.ExpiresAt, Notes: p.Notes, CreatedAt: p.CreatedAt}
+func promoViewOf(p *model.PromoCode, now time.Time) promoView {
+	v := promoView{ID: p.ID, Code: p.Code, BonusAmount: p.BonusAmount, MinAmount: p.MinAmount, MaxUses: p.MaxUses,
+		UsedCount: p.UsedCount, Status: promoActive, State: promoState(p, now), ExpiresAt: p.ExpiresAt, Notes: p.Notes,
+		CreatedAt: p.CreatedAt}
 	if p.Status != nil {
 		v.Status = *p.Status
 	}
@@ -49,13 +51,13 @@ func promoViewOf(p *model.PromoCode) promoView {
 // promoInput is the body of POST and PATCH /promo-codes: a PATCH changes
 // the fields it sends (expires_at null clears it); the code never changes.
 type promoInput struct {
-	Code        *string         `json:"code"`
-	BonusAmount *Num            `json:"bonus_amount"`
-	MinAmount   *Num            `json:"min_amount"`
-	MaxUses     *int            `json:"max_uses"`
-	Status      *string         `json:"status"`
-	ExpiresAt   json.RawMessage `json:"expires_at"`
-	Notes       *string         `json:"notes"`
+	Code        *string          `json:"code"`
+	BonusAmount *decimal.Decimal `json:"bonus_amount"`
+	MinAmount   *decimal.Decimal `json:"min_amount"`
+	MaxUses     *int             `json:"max_uses"`
+	Status      *string          `json:"status"`
+	ExpiresAt   json.RawMessage  `json:"expires_at"`
+	Notes       *string          `json:"notes"`
 }
 
 // columns validates in and returns the columns it sets.
@@ -84,14 +86,14 @@ func (in promoInput) columns(ctx context.Context) (map[string]any, error) {
 // amounts validates the bonus, the minimum top-up and the use limit.
 func (in promoInput) amounts(f *fieldErrs, set map[string]any) {
 	if in.BonusAmount != nil {
-		b := in.BonusAmount.Decimal
-		f.check(b.IsPositive() && b.LessThanOrEqual(maxCreditPerTx) && exact(b, 8), "bonus_amount",
+		b := *in.BonusAmount
+		f.check(b.IsPositive() && b.LessThanOrEqual(core.MaxCreditPerTx) && x.Exact(b, 8), "bonus_amount",
 			"must be above 0 and within the single credit limit", "必须大于 0 且不超过单次入账上限")
 		set["bonus_amount"] = b
 	}
 	if in.MinAmount != nil {
 		f.check(!in.MinAmount.IsNegative(), "min_amount", "must not be negative", "不能小于 0")
-		set["min_amount"] = in.MinAmount.Decimal
+		set["min_amount"] = *in.MinAmount
 	}
 	if in.MaxUses != nil {
 		f.check(*in.MaxUses >= 0, "max_uses", "must not be negative (0 = unlimited)", "不能小于 0（0 表示不限）")
@@ -100,25 +102,19 @@ func (in promoInput) amounts(f *fieldErrs, set map[string]any) {
 }
 
 func (s *Service) listPromos(c *gin.Context) {
-	ctx := c.Request.Context()
 	page, size := httpapi.Pagination(c)
-	db := store.G(ctx, s.db.Gorm).Model(&model.PromoCode{})
+	db := store.G(c.Request.Context(), s.db.Gorm).Model(&model.PromoCode{})
 	if q := c.Query("q"); q != "" {
 		db = db.Where("code ILIKE ?", "%"+store.Like(q)+"%")
 	}
-	var total int64
-	var rows []model.PromoCode
-	err := db.Count(&total).Error
-	if err == nil {
-		err = db.Order("id DESC").Limit(size).Offset((page - 1) * size).Find(&rows).Error
-	}
+	rows, total, err := store.FindPage[model.PromoCode](db.Order("id DESC"), page, size)
 	if err != nil {
 		httpapi.Fail(c, err)
 		return
 	}
 	out := make([]promoView, len(rows))
 	for i := range rows {
-		out[i] = promoViewOf(&rows[i])
+		out[i] = promoViewOf(&rows[i], s.now())
 	}
 	httpapi.List(c, out, httpapi.Page{Page: page, PageSize: size, Total: total})
 }
@@ -134,7 +130,7 @@ func (s *Service) createPromo(c *gin.Context) {
 		httpapi.Fail(c, err)
 		return
 	}
-	httpapi.Created(c, promoViewOf(p))
+	httpapi.Created(c, promoViewOf(p, s.now()))
 }
 
 // insertPromo creates a promo code: the given code upper-cased, or a
@@ -162,7 +158,7 @@ func (s *Service) insertPromo(ctx context.Context, in promoInput) (*model.PromoC
 		if err := db.Where("code = ?", code).Take(&p).Error; err != nil {
 			return err
 		}
-		return audit.Audit(ctx, tx, actor, "promo_code.create", "promo_code", strconv.FormatInt(p.ID, 10), map[string]any{"code": code})
+		return audit.Audit(ctx, tx, actor, "promo_code.create", "promo_code", x.Itoa64(p.ID), map[string]any{"code": code})
 	})
 	if store.IsUniqueViolation(err, "promo_codes_code_key") {
 		return nil, core.ErrConflict.WithMessage(t(ctx, "the promo code already exists", "优惠码已存在"))
@@ -206,7 +202,7 @@ func (s *Service) updatePromo(c *gin.Context) {
 		httpapi.Fail(c, err)
 		return
 	}
-	httpapi.OK(c, promoViewOf(p))
+	httpapi.OK(c, promoViewOf(p, s.now()))
 }
 
 // patchPromo writes the fields in sends; the used count stays as it is.
@@ -219,7 +215,7 @@ func (s *Service) patchPromo(ctx context.Context, id int64, in promoInput) (*mod
 	var p model.PromoCode
 	err = s.db.Tx(ctx, func(tx *gorm.DB) error {
 		db := store.G(ctx, tx)
-		set["updated_at"] = clause.Expr{SQL: "now()"}
+		set["updated_at"] = sqlNow
 		res := db.Model(&model.PromoCode{}).Where("id = ?", id).Updates(set)
 		if res.Error != nil {
 			return res.Error
@@ -230,7 +226,7 @@ func (s *Service) patchPromo(ctx context.Context, id int64, in promoInput) (*mod
 		if err := db.Where("id = ?", id).Take(&p).Error; err != nil {
 			return err
 		}
-		return audit.Audit(ctx, tx, actor, "promo_code.update", "promo_code", strconv.FormatInt(id, 10), auditColumns(set))
+		return audit.Audit(ctx, tx, actor, "promo_code.update", "promo_code", x.Itoa64(id), auditColumns(set))
 	})
 	return &p, err
 }
@@ -259,20 +255,53 @@ func (s *Service) deletePromo(c *gin.Context) {
 		return
 	}
 	ctx := audit.Context(c)
-	actor, _ := core.UserID(ctx)
-	err := s.db.Tx(ctx, func(tx *gorm.DB) error {
-		res := store.G(ctx, tx).Delete(&model.PromoCode{}, id)
-		if res.Error != nil {
-			return res.Error
-		}
-		if res.RowsAffected == 0 {
-			return errPromoNotFound(ctx)
-		}
-		return audit.Audit(ctx, tx, actor, "promo_code.delete", "promo_code", strconv.FormatInt(id, 10), nil)
-	})
-	if err != nil {
+	if err := txOnceMore(ctx, s.db, func(tx *gorm.DB) error { return removePromo(ctx, tx, id) }); err != nil {
 		httpapi.Fail(c, err)
 		return
 	}
 	httpapi.NoContent(c)
+}
+
+// txOnceMore runs fn in a transaction, and once more when the database
+// aborted it to break a deadlock (40P01): nothing of the first run was
+// applied, and the second starts after the other writer has gone on.
+func txOnceMore(ctx context.Context, db *store.DB, fn func(tx *gorm.DB) error) error {
+	err := db.Tx(ctx, fn)
+	if store.IsDeadlock(err) {
+		err = db.Tx(ctx, fn)
+	}
+	return err
+}
+
+// removePromo deletes promo code id, audited. Deleting it sets its orders'
+// promo_code_id to NULL, which locks those order rows after the code row,
+// while every other path (moveTo releasing a use, a late payment taking one
+// again, crediting) locks the order before the code; so the orders that
+// already name the code are locked first here, in id order, and never wait
+// on those paths in a cycle. An order naming it that commits between that
+// lock and the delete is still locked code-first by the delete: that rare
+// deadlock aborts one side whole, and deletePromo tries once more.
+func removePromo(ctx context.Context, tx *gorm.DB, id int64) error {
+	if err := lockPromoOrders(ctx, tx, id); err != nil {
+		return err
+	}
+	res := store.G(ctx, tx).Delete(&model.PromoCode{}, id)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return errPromoNotFound(ctx)
+	}
+	actor, _ := core.UserID(ctx)
+	return audit.Audit(ctx, tx, actor, "promo_code.delete", "promo_code", x.Itoa64(id), nil)
+}
+
+// lockPromoOrders locks the orders that name promo code id, in id order.
+func lockPromoOrders(ctx context.Context, tx *gorm.DB, id int64) error {
+	if err := store.RequireTx(tx); err != nil {
+		return err
+	}
+	var ids []int64
+	return store.G(ctx, tx).Model(&model.PaymentOrder{}).Clauses(store.ForUpdate()).
+		Where("promo_code_id = ?", id).Order("id").Pluck("id", &ids).Error
 }

@@ -7,7 +7,7 @@ import type { PaymentMethod } from '../topup'
 export type MethodLook = Pick<PaymentMethod, 'name'> & Partial<Pick<PaymentMethod, 'icon' | 'color' | 'logo'>>
 
 /** A built-in icon: its brand color and the glyph drawn on it, or a UI icon in place of the glyph. */
-export interface BuiltinIcon {
+interface BuiltinIcon {
   color: string
   glyph?: string
   uiIcon?: string
@@ -22,18 +22,19 @@ export const BUILTIN_ICONS: Record<string, BuiltinIcon> = {
 }
 
 /** The built-in icon of a key, if it is one. */
-export const builtinIcon = (key: string | undefined): BuiltinIcon | undefined => (key && Object.hasOwn(BUILTIN_ICONS, key) ? BUILTIN_ICONS[key] : undefined)
+export const builtinIcon = (key: string | undefined): BuiltinIcon | undefined =>
+  key && Object.hasOwn(BUILTIN_ICONS, key) ? BUILTIN_ICONS[key] : undefined
 
 /** Brand color of a built-in icon key ('' when unknown). */
 export const brandColor = (key: string) => builtinIcon(key)?.color ?? ''
 
 /** Image types a logo may have (data URLs carry one of these), with their display names. */
 export const LOGO_TYPES = { 'image/png': 'PNG', 'image/jpeg': 'JPG', 'image/webp': 'WebP', 'image/svg+xml': 'SVG' } as const
-export type LogoType = keyof typeof LOGO_TYPES
+type LogoType = keyof typeof LOGO_TYPES
 export const isLogoType = (v: string): v is LogoType => Object.hasOwn(LOGO_TYPES, v)
 
 /** A parsed logo: an inline image (type and decoded size) or an https address. */
-export type LogoSource = { kind: 'data'; type: LogoType; bytes: number } | { kind: 'url'; host: string }
+type LogoSource = { kind: 'data'; type: LogoType; bytes: number } | { kind: 'url'; host: string }
 
 const DATA_URL = /^data:(image\/[a-z+]+);base64,([A-Za-z0-9+/]*={0,2})$/
 

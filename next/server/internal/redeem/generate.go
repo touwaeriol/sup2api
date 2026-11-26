@@ -2,6 +2,7 @@ package redeem
 
 import (
 	"context"
+	"fmt"
 	"time"
 	"unicode/utf8"
 
@@ -12,12 +13,15 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store/model"
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/x"
 )
 
-// Batch bounds of POST /redeem-codes.
+// Batch bounds of POST /redeem-codes: a code's value is one ledger credit,
+// so at most core.MaxCreditPerTx with the ledger's decimals.
 const (
-	maxCount = 1000
-	maxNotes = 200
+	maxCount    = 1000
+	maxNotes    = 200
+	valuePlaces = 8
 )
 
 // GenerateRequest is the body of POST /redeem-codes.
@@ -36,20 +40,18 @@ type Generated struct {
 
 func (in GenerateRequest) validate(ctx context.Context) error {
 	var fields []core.FieldError
-	bad := func(field, en, zh string) {
-		fields = append(fields, core.FieldError{Field: field, Code: "invalid", Message: core.Text(ctx, en, zh)})
-	}
 	if in.Count < 1 || in.Count > maxCount {
-		bad("count", "1 to 1000 codes", "数量为 1–1000")
+		fields = append(fields, core.NewFieldError(ctx, "count", "invalid", fmt.Sprintf("1 to %d codes", maxCount), fmt.Sprintf("数量为 1–%d", maxCount)))
 	}
-	if !in.Value.IsPositive() || in.Value.GreaterThan(maxValue) || !in.Value.Equal(in.Value.Round(8)) {
-		bad("value", "above 0 and at most 100000, with at most 8 decimals", "须大于 0、不超过 100000，最多 8 位小数")
+	if !in.Value.IsPositive() || in.Value.GreaterThan(core.MaxCreditPerTx) || !x.Exact(in.Value, valuePlaces) {
+		fields = append(fields, core.NewFieldError(ctx, "value", "invalid", fmt.Sprintf("above 0 and at most %s, with at most %d decimals", core.MaxCreditPerTx, valuePlaces),
+			fmt.Sprintf("须大于 0、不超过 %s，最多 %d 位小数", core.MaxCreditPerTx, valuePlaces)))
 	}
 	if in.ExpiresAt != nil && !in.ExpiresAt.After(time.Now()) {
-		bad("expires_at", "must be in the future", "须晚于当前时间")
+		fields = append(fields, core.NewFieldError(ctx, "expires_at", "invalid", "must be in the future", "须晚于当前时间"))
 	}
 	if utf8.RuneCountInString(in.Notes) > maxNotes {
-		bad("notes", "at most 200 characters", "最多 200 个字符")
+		fields = append(fields, core.NewFieldError(ctx, "notes", "invalid", fmt.Sprintf("at most %d characters", maxNotes), fmt.Sprintf("最多 %d 个字符", maxNotes)))
 	}
 	if len(fields) > 0 {
 		return core.InvalidFields(fields...)

@@ -1,7 +1,8 @@
 import { computed, reactive, ref, watch } from 'vue'
 import type { FilterChipItem, RangeKey, SelectOption } from '@sub2api/ui'
-import { useTopup, type Order } from '../topup'
-import { ORDER_STATUSES } from '../components/status'
+import { useI18n } from 'vue-i18n'
+import type { Order } from '../topup'
+import { orderStatusOptions } from '../components/status'
 
 // Filters of the orders page.
 
@@ -17,23 +18,24 @@ export type OrderFilters = ReturnType<typeof emptyOrderFilters>
  */
 function useSeenMethods(rows: () => Order[]) {
   const seen = reactive(new Map<string, string>())
-  watch(rows, (list) => list.forEach((o) => seen.has(o.method) || seen.set(o.method, o.method_name || o.method)), { immediate: true })
+  watch(rows, list => list.forEach(o => seen.has(o.method) || seen.set(o.method, o.method_name || o.method)), { immediate: true })
   return computed<SelectOption[]>(() => [...seen].map(([value, label]) => ({ value, label })))
 }
 
 /** Status and method options, the chips and counts of the filter bar. */
 export function useOrderFilters(filters: OrderFilters, rows: () => Order[]) {
-  const host = useTopup()
-  const t = host.t
+  const { t } = useI18n()
   const range = ref<RangeKey>('all')
   const methods = useSeenMethods(rows)
 
   const any = (name: string): SelectOption => ({ value: '', label: t('topup.admin.anyOf', { name }) })
-  const statusOptions = computed(() => [any(t('topup.admin.orders.fields.status')), ...ORDER_STATUSES.map((s) => ({ value: s, label: t(`topup.status.${s}`) }))])
+  const statusOptions = computed(() => orderStatusOptions(t('topup.admin.anyOf', { name: t('topup.admin.orders.fields.status') })))
   const methodOptions = computed(() => [any(t('topup.admin.orders.fields.method')), ...methods.value])
-  const methodLabel = (v: string) => methods.value.find((m) => m.value === v)?.label ?? v
+  const methodLabel = (v: string) => methods.value.find(m => m.value === v)?.label ?? v
 
-  const chips = computed<FilterChipItem[]>(() => (filters.method ? [{ key: 'method', label: t('topup.admin.orders.fields.method'), value: methodLabel(filters.method) }] : []))
+  const chips = computed<FilterChipItem[]>(() =>
+    filters.method ? [{ key: 'method', label: t('topup.admin.orders.fields.method'), value: methodLabel(filters.method) }] : []
+  )
   const activeCount = computed(() => [filters.status, range.value !== 'all'].filter(Boolean).length)
   const advancedCount = computed(() => chips.value.length)
   const dirty = computed(() => activeCount.value + advancedCount.value > 0 || !!filters.q)

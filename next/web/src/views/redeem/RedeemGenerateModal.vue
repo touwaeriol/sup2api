@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { api, isApiError } from '@sub2api/host'
-import { SDateTimeInput, SField, SForm, SFormModal, SInput, useForm, type Rules } from '@sub2api/ui'
-import { notifyError } from '@/utils/errors'
+import { api } from '@sub2api/host'
+import { SDateTimeInput, SField, SForm, SFormModal, SInput, type Rules } from '@sub2api/ui'
+import { useModalForm } from '@/composables/useModalForm'
 import type { GenerateRequest, Generated } from './redeem'
 
 // Generates a batch of redeem codes (POST /redeem-codes); the plain codes go
@@ -27,36 +27,19 @@ const rules: Rules<Draft> = {
   notes: { max: 200 }
 }
 
-const draft = ref<Draft>({})
-const serverErrors = ref<Record<string, string>>({})
-const saving = ref(false)
-const form = useForm<Draft>({ model: () => draft.value, update: v => (draft.value = v), rules, serverErrors: () => serverErrors.value })
-
+const { form, saving, reset, submit } = useModalForm<Draft>(() => ({ count: 10, value: 10 }), rules)
 watch(
   () => props.open,
-  open => {
-    if (!open) return
-    draft.value = { count: 10, value: 10 }
-    serverErrors.value = {}
-    form.clearValidate()
-  }
+  open => open && reset()
 )
 
 const body = (d: Draft): GenerateRequest => ({ count: Number(d.count), value: Number(d.value), expires_at: d.expires_at || undefined, notes: d.notes?.trim() || undefined })
 
 async function save() {
-  if (saving.value || !(await form.validate())) return
-  saving.value = true
-  try {
-    const res = await api.post<Generated>('/redeem-codes', body(form.value()))
-    emit('update:open', false)
-    emit('generated', res.codes)
-  } catch (e) {
-    if (isApiError(e) && Object.keys(e.fields).length) serverErrors.value = e.fields
-    else notifyError(e)
-  } finally {
-    saving.value = false
-  }
+  const res = await submit(d => api.post<Generated>('/redeem-codes', body(d)))
+  if (!res) return
+  emit('update:open', false)
+  emit('generated', res.codes)
 }
 </script>
 

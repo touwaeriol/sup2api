@@ -12,6 +12,22 @@ export function formatMoney(v: string | number | null | undefined, digits = 4): 
 }
 
 /**
+ * An amount in a payment currency (ISO 4217) with its narrow symbol in the
+ * console language ("¥73.00", not "CN¥"); an unknown code is written before
+ * the number, '—' when missing.
+ */
+export function formatCurrency(v: string | number | null | undefined, currency: string): string {
+  if (v === null || v === undefined || v === '') return '—'
+  const n = Number(v)
+  if (!Number.isFinite(n)) return String(v)
+  try {
+    return new Intl.NumberFormat(currentLocale() === 'zh' ? 'zh-CN' : 'en-US', { style: 'currency', currency, currencyDisplay: 'narrowSymbol' }).format(n)
+  } catch {
+    return `${currency} ${n.toFixed(2)}`
+  }
+}
+
+/**
  * An account balance as the upstream reported it (CONTRACTS §52): the
  * decimal amount with thousands separators and without trailing zeros
  * (nothing rounded off, the string is never turned into a float), then the

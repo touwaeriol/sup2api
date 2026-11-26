@@ -17,55 +17,31 @@ watch(
 const src = computed(() => (!failed.value && parseLogo(props.method.logo) ? props.method.logo : ''))
 const builtin = computed(() => builtinIcon(props.method.icon))
 const glyph = computed(() => builtin.value?.glyph ?? (Array.from(props.method.name.trim())[0]?.toUpperCase() || '·'))
+const SIZES = {
+  sm: 'h-5 w-5 rounded-md text-[0.6875rem]',
+  md: 'h-7 w-7 rounded-lg text-[0.8125rem]',
+  lg: 'h-10 w-10 rounded-[0.625rem] text-lg'
+} as const
 const background = computed(() => props.method.color || builtin.value?.color)
 </script>
 
 <template>
-  <span class="payment-method-icon" :class="[`payment-method-icon--${size}`, { 'payment-method-icon--logo': src }]" :style="!src && background ? { background } : undefined" aria-hidden="true">
-    <img v-if="src" :src="src" alt="" class="payment-method-icon-img" draggable="false" referrerpolicy="no-referrer" @error="failed = true" />
-    <SIcon v-else-if="builtin?.uiIcon" :name="builtin.uiIcon" class="payment-method-icon-ui" />
+  <span
+    class="inline-flex shrink-0 items-center justify-center overflow-hidden font-semibold leading-none text-white"
+    :class="[SIZES[size], src ? 'bg-transparent' : 'bg-fg-muted']"
+    :style="!src && background ? { background } : undefined"
+    aria-hidden="true"
+  >
+    <img
+      v-if="src"
+      :src="src"
+      alt=""
+      class="h-full w-full object-cover"
+      draggable="false"
+      referrerpolicy="no-referrer"
+      @error="failed = true"
+    />
+    <SIcon v-else-if="builtin?.uiIcon" :name="builtin.uiIcon" class="h-[60%] w-[60%]" />
     <template v-else>{{ glyph }}</template>
   </span>
 </template>
-
-<style scoped>
-.payment-method-icon {
-  display: inline-flex;
-  flex-shrink: 0;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-  width: 1.75rem;
-  height: 1.75rem;
-  border-radius: 0.5rem;
-  background: rgb(var(--fg-muted));
-  color: #fff;
-  font-size: 0.8125rem;
-  font-weight: 600;
-  line-height: 1;
-}
-.payment-method-icon--logo {
-  background: transparent;
-}
-.payment-method-icon--sm {
-  width: 1.25rem;
-  height: 1.25rem;
-  border-radius: 0.375rem;
-  font-size: 0.6875rem;
-}
-.payment-method-icon--lg {
-  width: 2.5rem;
-  height: 2.5rem;
-  border-radius: 0.625rem;
-  font-size: 1.125rem;
-}
-.payment-method-icon-img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-.payment-method-icon-ui {
-  width: 60%;
-  height: 60%;
-}
-</style>

@@ -32,7 +32,13 @@ var requiredParams = []string{"out_trade_no", "trade_no", "type", "money", "trad
 // POST urlencoded form). Every problem with the notification itself wraps
 // core.ErrPaymentSignature so the core rejects it; only a missing or
 // invalid configuration returns another error (the core asks to retry).
-func (g *Gateway) ParseNotification(ctx context.Context, n core.PaymentNotification) (*core.PaymentResult, error) {
+// Epay's replies are the same for every notification.
+func (g *Gateway) ParseNotification(ctx context.Context, n core.PaymentNotification) (*core.PaymentResult, core.PaymentResponder, error) {
+	res, err := g.parse(ctx, n)
+	return res, respond, err
+}
+
+func (g *Gateway) parse(ctx context.Context, n core.PaymentNotification) (*core.PaymentResult, error) {
 	raw, err := notificationParams(n)
 	if err != nil {
 		return nil, err
@@ -140,8 +146,6 @@ func verify(params map[string]string, cfg Config) error {
 }
 
 // notificationResult turns verified parameters into the payment result.
-// Only TRADE_SUCCESS is paid; any other status is pending, which the core
-// records without crediting.
 func notificationResult(params map[string]string) (*core.PaymentResult, error) {
 	for _, k := range requiredParams {
 		if params[k] == "" {
@@ -152,14 +156,28 @@ func notificationResult(params map[string]string) (*core.PaymentResult, error) {
 	if err != nil {
 		return nil, rejected(err.Error())
 	}
-	status := core.PaymentPending
-	if params["trade_status"] == tradeStatusSuccess {
-		status = core.PaymentPaid
-	}
+	return resultOf(params, cents), nil
+}
+
+// resultOf is the result params report, a notification's or an order
+// query's answer.
+func resultOf(params map[string]string, cents int64) *core.PaymentResult {
 	return &core.PaymentResult{
 		OutTradeNo: params["out_trade_no"], TradeNo: params["trade_no"],
-		Amount: cents, Currency: currencyCNY, Status: status,
+		Amount: cents, Currency: currencyCNY, Status: statusOf(params),
 		MerchantRef: params["pid"], MethodType: params["type"],
 		Fields: fields(params),
-	}, nil
+	}
+}
+
+// statusOf: only TRADE_SUCCESS is paid; any other status is pending, which
+// the core records without crediting. A query answer without trade_status
+// (notifications always have one) falls back to the older numeric status,
+// where 1 means paid.
+func statusOf(params map[string]string) core.PaymentStatus {
+	ts := params["trade_status"]
+	if ts == tradeStatusSuccess || (ts == "" && params["status"] == "1") {
+		return core.PaymentPaid
+	}
+	return core.PaymentPending
 }

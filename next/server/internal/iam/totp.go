@@ -219,7 +219,7 @@ func (s *Service) lockedTOTPSecret(ctx context.Context, tx *gorm.DB, userID int6
 		return "", 0, err
 	}
 	if lockedUntil != nil && lockedUntil.After(time.Now()) {
-		return "", 0, rateLimitedError(ctx, time.Until(*lockedUntil))
+		return "", 0, loginLocked(ctx, time.Until(*lockedUntil))
 	}
 	secret, err := s.openTOTP(userID, sealed)
 	return secret, lastStep, err

@@ -6,7 +6,6 @@ import (
 
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 
 	"github.com/Sub2API-Devs/sup2api/next/runtime-contract/gormpg"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
@@ -20,10 +19,12 @@ import (
 // when the order expires or is cancelled. Each user uses a code once.
 
 const (
-	usageReserved = "reserved"
-	usageUsed     = "used"
-	promoActive   = "active"
-	promoDisabled = "disabled"
+	usageReserved  = "reserved"
+	usageUsed      = "used"
+	promoActive    = "active"
+	promoDisabled  = "disabled"
+	promoExpired   = "expired"
+	promoExhausted = "exhausted"
 )
 
 // promoCheck is a code that applies (code) or why it does not (refusal).
@@ -76,9 +77,20 @@ func judgePromo(ctx context.Context, q, find *gorm.DB, userID int64, amount deci
 }
 
 // promoOpen: enabled, not expired, a use left.
-func promoOpen(p *model.PromoCode, now time.Time) bool {
-	return (p.Status == nil || *p.Status == promoActive) && (p.ExpiresAt == nil || p.ExpiresAt.After(now)) &&
-		(p.MaxUses == 0 || p.UsedCount < p.MaxUses)
+func promoOpen(p *model.PromoCode, now time.Time) bool { return promoState(p, now) == promoActive }
+
+// promoState is the code's state as the API shows it: disabled first, then
+// expired, then exhausted (every use taken), else active.
+func promoState(p *model.PromoCode, now time.Time) string {
+	switch {
+	case p.Status != nil && *p.Status == promoDisabled:
+		return promoDisabled
+	case p.ExpiresAt != nil && !p.ExpiresAt.After(now):
+		return promoExpired
+	case p.MaxUses > 0 && p.UsedCount >= p.MaxUses:
+		return promoExhausted
+	}
+	return promoActive
 }
 
 // usedBy reports whether userID holds a use of the code (reserved or used).
@@ -88,11 +100,11 @@ func usedBy(ctx context.Context, q *gorm.DB, promoID, userID int64) (bool, error
 }
 
 // promoOutcome is the bonus of a check and its refusal's message.
-func promoOutcome(ctx context.Context, c promoCheck) (Num, string) {
+func promoOutcome(c promoCheck) (decimal.Decimal, string) {
 	if c.refusal != nil {
-		return numInt(0), c.refusal.Message
+		return decimal.Zero, c.refusal.Message
 	}
-	return num(c.code.BonusAmount), ""
+	return c.code.BonusAmount, ""
 }
 
 // reserveUse takes one use of promo for userID's order (the code row is
@@ -104,11 +116,11 @@ func reserveUse(ctx context.Context, tx *gorm.DB, p *model.PromoCode, userID, or
 		return err
 	}
 	return db.Model(&model.PromoCode{}).Where("id = ?", p.ID).
-		Updates(map[string]any{"used_count": gorm.Expr("used_count + 1"), "updated_at": clause.Expr{SQL: "now()"}}).Error
+		Updates(map[string]any{"used_count": gorm.Expr("used_count + 1"), "updated_at": sqlNow}).Error
 }
 
 // releaseUse gives back the use the order holds, if it still holds one
-// reserved: the order expired or was cancelled.
+// reserved: the order entered a state that never credits (moveTo).
 func releaseUse(ctx context.Context, tx *gorm.DB, orderID int64) error {
 	db := store.G(ctx, tx)
 	var use model.PromoCodeUsage
@@ -123,13 +135,13 @@ func releaseUse(ctx context.Context, tx *gorm.DB, orderID int64) error {
 		return err
 	}
 	return db.Model(&model.PromoCode{}).Where("id = ? AND used_count > 0", use.PromoCodeID).
-		Updates(map[string]any{"used_count": gorm.Expr("used_count - 1"), "updated_at": clause.Expr{SQL: "now()"}}).Error
+		Updates(map[string]any{"used_count": gorm.Expr("used_count - 1"), "updated_at": sqlNow}).Error
 }
 
 // markUsed turns the order's use into a credited one.
 func markUsed(ctx context.Context, tx *gorm.DB, orderID int64) error {
 	return store.G(ctx, tx).Model(&model.PromoCodeUsage{}).Where("order_id = ? AND status = ?", orderID, usageReserved).
-		Updates(map[string]any{"status": usageUsed, "used_at": clause.Expr{SQL: "now()"}}).Error
+		Updates(map[string]any{"status": usageUsed, "used_at": sqlNow}).Error
 }
 
 // reacquireUse makes a late-paid order hold its promo code again, its use

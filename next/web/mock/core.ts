@@ -585,7 +585,9 @@ const MENUS = [
   }
 ]
 
-on('GET', '/me/balance', () => ({ balance: '12.34000000', updated_at: now() }))
+/** The caller's balance, which a redeemed code or a completed top-up moves (billing/redeem.ts, topup.ts). */
+export const myWallet = { balance: 12.34 }
+on('GET', '/me/balance', () => ({ balance: myWallet.balance.toFixed(8), updated_at: now() }))
 
 // Failure policy (CONTRACTS §69): the production policy of 2026-11-04.
 const failureRule = (id: string, name: string, codes: string, keywords: string[], account: boolean) => ({

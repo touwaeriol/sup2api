@@ -1,16 +1,29 @@
-import type { Ref } from 'vue'
-import type { ApiClient } from '@sub2api/host'
-import type { PluginSettingsForm, Rules } from '@sub2api/ui'
+import type { Rules } from '@sub2api/ui'
 import type { GatewayKey, PaymentMethod, PaymentSettingsValue } from '../topup'
 import { brandColor, isLogoType, LOGO_TYPES, parseLogo } from '../components/methodIcon'
 
-// The admin payment settings as a form (usePluginSettings over
-// PaymentSettingsValue): defaults, rules, tabs, and the catalogs the editors
-// pick from. The server's validation of PUT /topup/settings is the final check.
+// The admin top-up settings as a form: the model (money as numbers while
+// edited), its mapping to and from the wire's decimal strings, the rules,
+// tabs, and the catalogs the editors pick from. The server's validation of
+// PUT /topup/settings is the final check.
 
-export type SettingsModel = PaymentSettingsValue & Record<string, unknown>
-export type SettingsForm = PluginSettingsForm<SettingsModel>
 type Translate = (key: string, params?: Record<string, unknown>) => string
+
+/** A payment method as edited: its minimum as a number. */
+export type MethodModel = Omit<PaymentMethod, 'min_topup'> & { min_topup?: number }
+
+/** PaymentSettingsValue with numbers for the amounts, prices and rates. */
+export interface SettingsModel
+  extends
+    Omit<PaymentSettingsValue, 'price' | 'min_topup' | 'max_topup' | 'amount_options' | 'discounts' | 'methods'>,
+    Record<string, unknown> {
+  price: number
+  min_topup: number
+  max_topup: number
+  amount_options: number[]
+  discounts: { amount: number; rate: number }[]
+  methods: MethodModel[]
+}
 
 export type SettingsTab = 'general' | 'methods' | 'gateways'
 export const SETTINGS_TABS: SettingsTab[] = ['general', 'methods', 'gateways']
@@ -21,12 +34,13 @@ const TAB_OF_KEY: Record<string, SettingsTab> = { methods: 'methods', epay: 'gat
 /** The tab showing a field path ('epay.key' -> gateways). */
 export const tabOfPath = (path: string): SettingsTab => TAB_OF_KEY[path.split(/[.[]/)[0]] ?? 'general'
 
-export const SETTINGS_DEFAULTS: Partial<SettingsModel> = {
+/** The form before the settings are read (the page shows a spinner until then). */
+export const DEFAULT_MODEL = (): SettingsModel => ({
   enabled: false,
   currency: 'CNY',
-  price: 7.3,
-  min_topup: 1,
-  max_topup: 10000,
+  price: 0,
+  min_topup: 0,
+  max_topup: 0,
   order_timeout_minutes: 30,
   max_pending_orders: 3,
   amount_options: [],
@@ -34,10 +48,33 @@ export const SETTINGS_DEFAULTS: Partial<SettingsModel> = {
   methods: [],
   epay: { enabled: false, endpoint: '', merchant_id: '', key: '' },
   stripe: { enabled: false, secret_key: '', webhook_secret: '' }
+})
+
+/** The values read, as the form edits them. */
+export function toModel(v: PaymentSettingsValue): SettingsModel {
+  return {
+    ...v,
+    price: Number(v.price),
+    min_topup: Number(v.min_topup),
+    max_topup: Number(v.max_topup),
+    amount_options: v.amount_options.map(Number),
+    discounts: v.discounts.map(d => ({ amount: Number(d.amount), rate: Number(d.rate) })),
+    methods: v.methods.map(m => ({ ...m, min_topup: Number(m.min_topup ?? 0) }))
+  }
 }
 
-/** Currencies users pay in. */
-export const CURRENCIES: readonly string[] = ['CNY', 'USD', 'HKD', 'EUR', 'GBP', 'JPY']
+/** The form as PUT /topup/settings takes it: amounts as decimal strings. */
+export function toValues(m: SettingsModel): PaymentSettingsValue {
+  return {
+    ...m,
+    price: String(m.price),
+    min_topup: String(m.min_topup),
+    max_topup: String(m.max_topup),
+    amount_options: m.amount_options.map(String),
+    discounts: m.discounts.map(d => ({ amount: String(d.amount), rate: String(d.rate) })),
+    methods: m.methods.map(x => ({ ...x, min_topup: String(x.min_topup ?? 0) }))
+  }
+}
 
 /** Type keys each gateway knows; epay also takes custom ones (its `type` parameter). */
 export const GATEWAY_TYPES: Record<GatewayKey, string[]> = { epay: ['alipay', 'wxpay', 'qqpay'], stripe: ['stripe'] }
@@ -45,23 +82,6 @@ export const GATEWAY_TYPES: Record<GatewayKey, string[]> = { epay: ['alipay', 'w
 const KNOWN_TYPES = Object.values(GATEWAY_TYPES).flat()
 /** A type key with a translated name (settings.methods.typeName.*). */
 export const isKnownType = (type: string) => KNOWN_TYPES.includes(type)
-
-/** Where a gateway posts its notifications: the core's notify_base (from the site address) plus the gateway id; '' while the core gives none. */
-export const notifyUrl = (base: string | undefined, gateway: string) => (base ? `${base.replace(/\/+$/, '')}/${gateway}` : '')
-
-/**
- * The settings form's API client, which also keeps the core's notify_base
- * from every read of GET /topup/settings (it is beside the values, which the
- * settings form does not expose): "" while the site address is not https.
- */
-export function keepingNotifyBase(api: ApiClient, base: Ref<string>): ApiClient {
-  const get = async (...args: Parameters<ApiClient['get']>) => {
-    const view = await api.get(...args)
-    base.value = typeof view?.notify_base === 'string' ? view.notify_base : ''
-    return view
-  }
-  return { ...api, get }
-}
 
 /** A method's type key and name as the core accepts them (PUT /topup/settings). */
 export const METHOD_TYPE_PATTERN = /^[a-z0-9_]{1,50}$/
@@ -85,7 +105,7 @@ const TEMPLATES: Record<TemplateKey, Pick<PaymentMethod, 'gateway' | 'type'>> = 
 export const templateType = (key: TemplateKey) => TEMPLATES[key].type
 
 /** A method made from a template (or a blank one for the gateway), named in the current locale. */
-export function newMethod(t: Translate, key: TemplateKey = 'epay_custom'): PaymentMethod {
+export function newMethod(t: Translate, key: TemplateKey = 'epay_custom'): MethodModel {
   const { gateway, type } = TEMPLATES[key]
   const name = type ? t(`topup.settings.methods.typeName.${type}`) : ''
   return { type, name, gateway, icon: type, color: brandColor(type), min_topup: 0, enabled: true }
@@ -115,9 +135,6 @@ export function logoValidator(t: Translate) {
   }
 }
 
-/** v-bind of an SSwitch at a boolean path. */
-export const bindSwitch = (form: SettingsForm, path: string) => ({ modelValue: !!form.get(path), 'onUpdate:modelValue': (v: boolean) => form.set(path, v) })
-
 const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
 
 const positiveRule = (t: Translate) => (v: unknown) => !isNum(v) || v > 0 || t('topup.settings.rule.positive')
@@ -142,14 +159,21 @@ function listRules(t: Translate): Rules<SettingsModel> {
   return {
     amount_options: {
       validator: (v: number[] = [], { model }) =>
-        v.every((n) => n >= (model.min_topup ?? 0) && n <= (model.max_topup ?? Infinity)) || t('topup.settings.rule.optionRange', { min: model.min_topup, max: model.max_topup })
+        v.every(n => n >= (model.min_topup ?? 0) && n <= (model.max_topup ?? Infinity)) ||
+        t('topup.settings.rule.optionRange', { min: model.min_topup, max: model.max_topup })
     },
     'discounts.*.amount': [
       { required: true, type: 'number' },
       { validator: positiveRule(t) },
-      { validator: (v: number, { model }) => model.discounts.filter((d) => d.amount === v).length < 2 || t('topup.settings.rule.duplicateTier') }
+      {
+        validator: (v: number, { model }) =>
+          model.discounts.filter(d => d.amount === v).length < 2 || t('topup.settings.rule.duplicateTier')
+      }
     ],
-    'discounts.*.rate': [{ required: true, type: 'number' }, { validator: (v: number) => (v > 0 && v < 1) || t('topup.settings.rule.rate') }],
+    'discounts.*.rate': [
+      { required: true, type: 'number' },
+      { validator: (v: number) => (v > 0 && v < 1) || t('topup.settings.rule.rate') }
+    ],
     'methods.*.logo': { validator: logoValidator(t) }
   }
 }
@@ -162,8 +186,14 @@ function gatewayRules(t: Translate): Rules<SettingsModel> {
     'epay.endpoint': { required: true, type: 'url', when: epayOn },
     'epay.merchant_id': { required: true, whitespace: true, when: epayOn },
     'epay.key': { required: true, when: epayOn },
-    'stripe.secret_key': [{ required: true, when: stripeOn }, { pattern: /^(sk|rk)_/, message: () => t('topup.settings.rule.stripeKey') }],
-    'stripe.webhook_secret': [{ required: true, when: stripeOn }, { pattern: /^whsec_/, message: () => t('topup.settings.rule.webhookSecret') }]
+    'stripe.secret_key': [
+      { required: true, when: stripeOn },
+      { pattern: /^(sk|rk)_/, message: () => t('topup.settings.rule.stripeKey') }
+    ],
+    'stripe.webhook_secret': [
+      { required: true, when: stripeOn },
+      { pattern: /^whsec_/, message: () => t('topup.settings.rule.webhookSecret') }
+    ]
   }
 }
 

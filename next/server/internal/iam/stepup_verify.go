@@ -175,7 +175,7 @@ func (s *Service) confirmPassword(ctx context.Context, userID int64, password, i
 		return err
 	}
 	if wait := s.limiter.check(ctx, email, ip); wait > 0 {
-		return rateLimitedError(ctx, wait)
+		return loginLocked(ctx, wait)
 	}
 	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) != nil {
 		s.limiter.fail(ctx, email, ip)
@@ -222,10 +222,10 @@ func (s *Service) BeginStepUpPasskey(ctx context.Context, r *http.Request, userI
 		return nil, errMethodUnavailable
 	}
 	if wait := s.limiter.check(ctx, "", ip); wait > 0 {
-		return nil, rateLimitedError(ctx, wait)
+		return nil, loginLocked(ctx, wait)
 	}
 	if wait := s.limiter.allowPasskeyBegin(ctx, ip); wait > 0 {
-		return nil, rateLimitedError(ctx, wait)
+		return nil, loginLocked(ctx, wait)
 	}
 	wa, err := s.webAuthnFor(r, "")
 	if err != nil {
@@ -250,7 +250,7 @@ func (s *Service) BeginStepUpPasskey(ctx context.Context, r *http.Request, userI
 // ceremony and records the passkey's use.
 func (s *Service) finishStepUpPasskey(ctx context.Context, r *http.Request, userID int64, flowToken string, credential json.RawMessage, ip string) error {
 	if wait := s.limiter.check(ctx, "", ip); wait > 0 {
-		return rateLimitedError(ctx, wait)
+		return loginLocked(ctx, wait)
 	}
 	var session webauthn.SessionData
 	if _, err := s.takeFlow(ctx, flowToken, flowStepUpPasskey, userID, &session); err != nil {

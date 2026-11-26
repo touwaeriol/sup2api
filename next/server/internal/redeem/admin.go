@@ -29,22 +29,23 @@ type Code struct {
 	CreatedAt   time.Time       `json:"created_at"`
 }
 
-// codeColumns reads a code with its reported status (expired: unused past
-// expires_at) and the email of who used it.
-const codeColumns = `r.id, r.code_tail, r.value,
-	CASE WHEN r.status = '` + statusUnused + `' AND r.expires_at <= now() THEN '` + statusExpired + `' ELSE r.status END AS status,
-	r.used_by, u.email AS used_by_email, r.used_at, r.expires_at, r.notes, r.created_at`
+// codeColumns reads a code with its reported status and the email of who
+// used it.
+const codeColumns = `redeem_codes.id, redeem_codes.code_tail, redeem_codes.value,
+	CASE WHEN ` + expired + ` THEN '` + statusExpired + `' ELSE redeem_codes.status END AS status,
+	redeem_codes.used_by, u.email AS used_by_email, redeem_codes.used_at, redeem_codes.expires_at,
+	redeem_codes.notes, redeem_codes.created_at`
 
 // statusConds are the ?status= filters by reported status.
 var statusConds = map[string]string{
-	statusUnused:  "r.status = '" + statusUnused + "' AND (r.expires_at IS NULL OR r.expires_at > now())",
-	statusExpired: "r.status = '" + statusUnused + "' AND r.expires_at <= now()",
-	statusUsed:    "r.status = '" + statusUsed + "'",
-	statusVoided:  "r.status = '" + statusVoided + "'",
+	statusUnused:  redeemable,
+	statusExpired: expired,
+	statusUsed:    "redeem_codes.status = '" + statusUsed + "'",
+	statusVoided:  "redeem_codes.status = '" + statusVoided + "'",
 }
 
 func codeRows(db *gorm.DB, f store.Conds) *gorm.DB {
-	return db.Table("redeem_codes r").Scopes(f.Scope())
+	return db.Model(&model.RedeemCode{}).Scopes(f.Scope())
 }
 
 // List is a page of codes, newest first; status "" is every code.
@@ -53,19 +54,13 @@ func (s *Service) List(ctx context.Context, status string, page, size int) ([]Co
 	if status != "" {
 		cond, ok := statusConds[status]
 		if !ok {
-			return nil, 0, core.ErrInvalidArgument.WithMessage("invalid status")
+			return nil, 0, core.ErrInvalidArgument.WithMessage(core.Text(ctx, "invalid status", "状态无效"))
 		}
 		f.And(cond)
 	}
 	g := store.G(ctx, s.db.Gorm)
-	var total int64
-	if err := codeRows(g, f).Count(&total).Error; err != nil {
-		return nil, 0, err
-	}
-	items := []Code{}
-	err := codeRows(g, f).Select(codeColumns).Joins("LEFT JOIN users u ON u.id = r.used_by").
-		Order("r.id DESC").Limit(size).Offset((page - 1) * size).Scan(&items).Error
-	return items, total, err
+	rows := codeRows(g, f).Select(codeColumns).Joins("LEFT JOIN users u ON u.id = redeem_codes.used_by").Order("redeem_codes.id DESC")
+	return store.FindPage[Code](rows, page, size)
 }
 
 // Void voids an unused code (an expired one too: it is still unused) for

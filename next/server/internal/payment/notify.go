@@ -77,17 +77,17 @@ func (s *Service) notify(c *gin.Context) {
 	}
 	n, err := readNotification(c)
 	if err != nil {
-		reply(c, gw.Respond(core.PaymentRejected))
+		reply(c, core.StatusPaymentReply(core.PaymentRejected))
 		return
 	}
-	res, err := gw.ParseNotification(ctx, n)
+	res, respond, err := gw.ParseNotification(ctx, n)
 	if errors.Is(err, core.ErrPaymentSignature) {
-		s.recordUnverified(c, id, verdict{kind: eventSignatureInvalid, reason: clipRunes(err.Error(), maxReasonRunes)})
-		reply(c, gw.Respond(core.PaymentRejected))
+		s.recordUnverified(c, id, verdict{kind: eventSignatureInvalid, reason: x.Truncate(err.Error(), maxReasonBytes)})
+		reply(c, respond(core.PaymentRejected))
 		return
 	}
 	outcome, _ := s.process(ctx, id, res, err)
-	reply(c, gw.Respond(outcome))
+	reply(c, respond(outcome))
 }
 
 // process settles a verified notification (or query result) and credits
@@ -120,7 +120,7 @@ func (s *Service) process(ctx context.Context, gateway string, res *core.Payment
 func (s *Service) settle(ctx context.Context, gateway string, res *core.PaymentResult) (verdict, error) {
 	var v verdict
 	err := s.db.Tx(ctx, func(tx *gorm.DB) error {
-		o, err := lockOrder(ctx, tx, res.OutTradeNo)
+		o, err := lockOrder(ctx, tx, numbered(res.OutTradeNo))
 		if err != nil {
 			return err
 		}
@@ -138,7 +138,8 @@ func (s *Service) settle(ctx context.Context, gateway string, res *core.PaymentR
 	case store.IsUniqueViolation(err, uniqueEventID):
 		return handled(eventDuplicate), nil
 	case store.IsUniqueViolation(err, uniqueTradeNo):
-		v = rejected(eventTradeNoReused)
+		// The rolled back verdict still names the order it was about.
+		v = verdict{outcome: core.PaymentRejected, kind: eventTradeNoReused, orderID: v.orderID}
 		return v, s.record(ctx, s.db.Gorm, gateway, v, res)
 	}
 	return v, err
@@ -175,7 +176,7 @@ func (s *Service) record(ctx context.Context, q *gorm.DB, gateway string, v verd
 const (
 	maxEventFields     = 32
 	maxEventFieldBytes = 256
-	maxReasonRunes     = 200
+	maxReasonBytes     = 200
 )
 
 // addFields adds fields to detail, without overriding what it holds,
@@ -187,12 +188,4 @@ func addFields(detail, fields map[string]string) {
 		}
 		detail[k] = x.Truncate(val, maxEventFieldBytes) // never splits a character
 	}
-}
-
-// clipRunes cuts s to at most n characters.
-func clipRunes(s string, n int) string {
-	if r := []rune(s); len(r) > n {
-		return string(r[:n])
-	}
-	return s
 }

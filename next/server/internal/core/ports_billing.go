@@ -192,6 +192,43 @@ type Ledger interface {
 	ApplyTx(ctx context.Context, tx *gorm.DB, ch LedgerChange) (*LedgerResult, error)
 }
 
+// BalanceCacher refreshes the balance cache. ApplyTx cannot do it itself:
+// the caller's transaction may still roll back, so the caller calls it after
+// the commit with the result's ledger id and balance.
+type BalanceCacher interface {
+	CacheBalance(ctx context.Context, userID, ledgerID int64, balance decimal.Decimal)
+}
+
+// CachingLedger is the ledger of a module that credits inside its own
+// transaction (redeem codes, top-up orders); billing's *Service is one.
+type CachingLedger interface {
+	Ledger
+	BalanceCacher
+}
+
+// LedgerChange.Kind values; billing accepts no other.
+const (
+	LedgerKindUsage        = "usage"
+	LedgerKindAdminAdjust  = "admin_adjust"
+	LedgerKindPluginCredit = "plugin_credit"
+	LedgerKindPluginDebit  = "plugin_debit"
+	LedgerKindRefund       = "refund"
+	// Online top-up, its promo bonus and redeem codes (CONTRACTS §140).
+	LedgerKindTopup      = "topup"
+	LedgerKindPromoBonus = "promo_bonus"
+	LedgerKindRedeem     = "redeem"
+)
+
+// Caps on the money a user is credited outside an administrator's adjust:
+// one credit (a top-up order, a redeem code) is at most MaxCreditPerTx, and a
+// user's top-up credits over any 24 hours at most MaxCreditPerDay. The ledger
+// itself has no cap; these carry over the old payment plugin's approved
+// ledger.credit scope (maxPerTx, maxPerDay).
+var (
+	MaxCreditPerTx  = decimal.NewFromInt(100000)
+	MaxCreditPerDay = decimal.NewFromInt(1000000)
+)
+
 // ============================================================ events (writer owner: B; delivery owner: H)
 
 // Event types; payload schemas in docs/CONTRACTS.md.

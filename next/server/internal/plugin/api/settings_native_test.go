@@ -15,6 +15,7 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/runtime-contract/secret"
 	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/install"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/pkg/pkgtest"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/rows"
@@ -91,16 +92,16 @@ func TestNativeSettingsMaskDeclaredSecrets(t *testing.T) {
 		"threshold": 3, "webhook_secret": "s3cret", "notify": map[string]any{"url": "https://hooks.example/x", "name": "n"}}})
 	require.Equal(t, http.StatusOK, code, out)
 	assert.Equal(t, "native", data(out)["mode"])
-	assert.Equal(t, map[string]any{"threshold": 3.0, "webhook_secret": Mask, "notify": map[string]any{"url": Mask, "name": "n"}}, data(out)["values"])
+	assert.Equal(t, map[string]any{"threshold": 3.0, "webhook_secret": core.SecretMask, "notify": map[string]any{"url": core.SecretMask, "name": "n"}}, data(out)["values"])
 	assert.Equal(t, []any{"notify/url", "webhook_secret"}, data(out)["secret_fields"])
 
 	code, out = h.do("PUT", "/plugins/guard/settings", "admin", map[string]any{"values": map[string]any{
-		"threshold": 4, "webhook_secret": Mask, "notify": map[string]any{"url": Mask, "name": "n"}}})
+		"threshold": 4, "webhook_secret": core.SecretMask, "notify": map[string]any{"url": core.SecretMask, "name": "n"}}})
 	require.Equal(t, http.StatusOK, code, out)
 	assert.JSONEq(t, `{"threshold":4,"webhook_secret":"s3cret","notify":{"url":"https://hooks.example/x","name":"n"}}`, h.storedSettings())
 
 	code, out = h.do("PUT", "/plugins/guard/settings", "viewer", map[string]any{"values": map[string]any{
-		"threshold": 5, "webhook_secret": Mask, "notify": map[string]any{"url": Mask, "name": "n"}}})
+		"threshold": 5, "webhook_secret": core.SecretMask, "notify": map[string]any{"url": core.SecretMask, "name": "n"}}})
 	require.Equal(t, http.StatusBadRequest, code, out)
 	assert.Equal(t, map[string]string{"values/webhook_secret": "reenter"}, fieldsOf(out))
 
@@ -111,7 +112,7 @@ func TestNativeSettingsMaskDeclaredSecrets(t *testing.T) {
 	require.NoError(t, err)
 	code, out = h.do("GET", "/plugins/guard/settings", "admin", nil)
 	require.Equal(t, http.StatusOK, code, out)
-	assert.Equal(t, map[string]any{"threshold": Mask, "webhook_secret": Mask, "notify": Mask}, data(out)["values"])
+	assert.Equal(t, map[string]any{"threshold": core.SecretMask, "webhook_secret": core.SecretMask, "notify": core.SecretMask}, data(out)["values"])
 	assert.Equal(t, []any{"notify", "threshold", "webhook_secret"}, data(out)["secret_fields"])
 
 	// secrets: [] declares that none is.
@@ -133,15 +134,15 @@ func TestNativeSettingsSecretThroughArray(t *testing.T) {
 	code, out := h.do("PUT", "/plugins/guard/settings", "admin", map[string]any{"values": map[string]any{
 		"threshold": 3, "hooks": []any{map[string]any{"url": "u", "secret": "s3cret"}}}})
 	require.Equal(t, http.StatusOK, code, out)
-	assert.Equal(t, map[string]any{"threshold": 3.0, "hooks": Mask}, data(out)["values"])
+	assert.Equal(t, map[string]any{"threshold": 3.0, "hooks": core.SecretMask}, data(out)["values"])
 	assert.Equal(t, []any{"hooks"}, data(out)["secret_fields"])
 
-	code, out = h.do("PUT", "/plugins/guard/settings", "admin", map[string]any{"values": map[string]any{"threshold": 4, "hooks": Mask}})
+	code, out = h.do("PUT", "/plugins/guard/settings", "admin", map[string]any{"values": map[string]any{"threshold": 4, "hooks": core.SecretMask}})
 	require.Equal(t, http.StatusOK, code, out)
 	assert.JSONEq(t, `{"threshold":4,"hooks":[{"url":"u","secret":"s3cret"}]}`, h.storedSettings())
 
 	// The plugin-permission holder re-enters it like any kept credential.
-	code, out = h.do("PUT", "/plugins/guard/settings", "viewer", map[string]any{"values": map[string]any{"threshold": 5, "hooks": Mask}})
+	code, out = h.do("PUT", "/plugins/guard/settings", "viewer", map[string]any{"values": map[string]any{"threshold": 5, "hooks": core.SecretMask}})
 	require.Equal(t, http.StatusBadRequest, code, out)
 	assert.Equal(t, map[string]string{"values/hooks": "reenter"}, fieldsOf(out))
 }
@@ -157,7 +158,7 @@ func TestNativeSettingsCredentialWinsAtOneValue(t *testing.T) {
 	require.Equal(t, http.StatusOK, code, out)
 	assert.Equal(t, []any{"hooks"}, data(out)["secret_fields"])
 
-	code, out = h.do("PUT", "/plugins/guard/settings", "viewer", map[string]any{"values": map[string]any{"threshold": 4, "hooks": Mask}})
+	code, out = h.do("PUT", "/plugins/guard/settings", "viewer", map[string]any{"values": map[string]any{"threshold": 4, "hooks": core.SecretMask}})
 	require.Equal(t, http.StatusBadRequest, code, out)
 	assert.Equal(t, map[string]string{"values/hooks": "reenter"}, fieldsOf(out))
 	assert.JSONEq(t, `{"threshold":3,"hooks":[{"url":"u","secret":"s3cret"}]}`, h.storedSettings())
@@ -181,7 +182,7 @@ func TestSettingsValidatedByPlugin(t *testing.T) {
 	check := &settingsCheck{answer: &pluginv1.ValidateSettingsResponse{Errors: []*pluginv1.FieldError{
 		{Field: "notify/url", Code: "pattern", Message: "bad url"}, {Field: "", Code: "invalid", Message: "whole"}}}}
 	h.validators["guard"] = check
-	code, out = put(map[string]any{"threshold": 4, "webhook_secret": Mask, "notify": map[string]any{"url": "x"}})
+	code, out = put(map[string]any{"threshold": 4, "webhook_secret": core.SecretMask, "notify": map[string]any{"url": "x"}})
 	require.Equal(t, http.StatusBadRequest, code, out)
 	assert.Equal(t, map[string]string{"values/notify/url": "pattern", "values": "invalid"}, fieldsOf(out))
 	require.Len(t, check.got, 1)
@@ -189,17 +190,17 @@ func TestSettingsValidatedByPlugin(t *testing.T) {
 	assert.JSONEq(t, `{"threshold":3,"webhook_secret":"s3cret"}`, h.storedSettings(), "nothing stored")
 
 	check.answer = &pluginv1.ValidateSettingsResponse{NormalizedConfigJson: `{"threshold":5,"webhook_secret":"s3cret","mode":"on"}`}
-	code, out = put(map[string]any{"threshold": "5", "webhook_secret": Mask})
+	code, out = put(map[string]any{"threshold": "5", "webhook_secret": core.SecretMask})
 	require.Equal(t, http.StatusOK, code, out)
 	assert.JSONEq(t, `{"threshold":5,"webhook_secret":"s3cret","mode":"on"}`, h.storedSettings())
-	assert.Equal(t, map[string]any{"threshold": 5.0, "webhook_secret": Mask, "mode": "on"}, data(out)["values"])
+	assert.Equal(t, map[string]any{"threshold": 5.0, "webhook_secret": core.SecretMask, "mode": "on"}, data(out)["values"])
 
 	check.answer = &pluginv1.ValidateSettingsResponse{NormalizedConfigJson: `[1]`}
 	code, out = put(map[string]any{"threshold": 6})
 	require.Equal(t, http.StatusServiceUnavailable, code, out)
 
 	check.err = status.Error(codes.Unimplemented, "plugin does not validate its settings")
-	code, out = put(map[string]any{"threshold": 7, "webhook_secret": Mask})
+	code, out = put(map[string]any{"threshold": 7, "webhook_secret": core.SecretMask})
 	require.Equal(t, http.StatusOK, code, out)
 	assert.JSONEq(t, `{"threshold":7,"webhook_secret":"s3cret"}`, h.storedSettings())
 

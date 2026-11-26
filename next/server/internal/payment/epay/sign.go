@@ -4,13 +4,10 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"errors"
-	"regexp"
 	"sort"
 	"strings"
 
-	"github.com/shopspring/decimal"
-
-	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
+	"github.com/Sub2API-Devs/sup2api/next/sdk/protocol"
 )
 
 // sign is the Epay MD5 signature: the non-empty parameters except sign and
@@ -38,32 +35,23 @@ func sign(params map[string]string, key string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// moneyPattern is a plain decimal: no sign, exponent, NaN or Inf text, and
-// short enough that converting to cents cannot overflow.
-var moneyPattern = regexp.MustCompile(`^[0-9]{1,12}(\.[0-9]{1,8})?$`)
-
-// parseMoney converts Epay's money (yuan) to cents. The value is never put
-// into the error: it can be long and comes from the request.
+// parseMoney converts Epay's money (yuan, a plain decimal: no sign,
+// exponent, NaN or Inf text) to cents, with the table the core converts
+// with. The value is never put into the error: it can be long and comes
+// from the request.
 func parseMoney(s string) (int64, error) {
-	if !moneyPattern.MatchString(s) {
-		return 0, errors.New("money is not a plain decimal")
-	}
-	d, err := decimal.NewFromString(s)
-	if err != nil {
-		return 0, errors.New("money is not a plain decimal")
-	}
-	cents, ok := core.PaymentMinorUnits(d, currencyCNY)
+	cents, ok := protocol.PaymentMinorUnits(s, currencyCNY)
 	if !ok {
-		return 0, errors.New("money is not a positive amount in fen")
+		return 0, errors.New("money is not a positive plain decimal in whole fen")
 	}
 	return cents, nil
 }
 
 // recordedFields are the parameters kept in payment_events: what an
-// operator needs to reconcile, never the signature or the buyer.
+// operator needs to reconcile, never the signature or the buyer, nor what
+// the core records under its own keys (out_trade_no, trade_no, status).
 var recordedFields = []string{
-	"pid", "trade_no", "out_trade_no", "api_trade_no", "type", "name",
-	"money", "trade_status", "status", "addtime", "endtime",
+	"pid", "api_trade_no", "type", "name", "money", "trade_status", "addtime", "endtime",
 }
 
 // fields is the recorded subset of params with a value.

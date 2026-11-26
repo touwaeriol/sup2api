@@ -45,10 +45,12 @@ func (s *Service) sweep(ctx context.Context, _ core.TaskRun) (core.TaskResult, e
 
 // sweepPending asks the gateway about each pending order about to expire,
 // settles what it says was paid, and expires the rest once due. A gateway
-// that cannot be asked (or fails to answer) does not keep an order open:
-// a paid notification still credits it within the late window. A gateway
-// that fails to answer is not asked again in this run (down), so one that
-// hangs costs one query timeout per run, not one per order.
+// that cannot be asked (ErrPaymentQueryUnsupported: a built-in one that
+// cannot, a plugin's declared without query) or fails to answer does not
+// keep an order open: a paid notification still credits it within the
+// late window. A gateway that fails to answer is not asked again in this
+// run (down), so one that hangs costs one query timeout per run, not one
+// per order.
 func (s *Service) sweepPending(ctx context.Context) (int, error) {
 	var rows []model.PaymentOrder
 	err := store.G(ctx, s.db.Gorm).Where("status = ? AND expires_at < ?", statusPending, s.now().Add(queryAhead)).
@@ -88,8 +90,8 @@ func (s *Service) reconcile(ctx context.Context, o *model.PaymentOrder, down map
 // reports the way a notification is settled; true only when the order is
 // paid now (a result the core rejects leaves it to expire).
 func (s *Service) queryPaid(ctx context.Context, o *model.PaymentOrder, down map[string]bool) bool {
-	gw, query, ok := s.lookup(o.Gateway)
-	if !ok || !query || down[o.Gateway] {
+	gw, ok := s.gateway(o.Gateway)
+	if !ok || down[o.Gateway] {
 		return false
 	}
 	qctx, cancel := context.WithTimeout(ctx, queryTimeout)
@@ -107,26 +109,34 @@ func (s *Service) queryPaid(ctx context.Context, o *model.PaymentOrder, down map
 	return false
 }
 
-// expire expires a pending order and releases its promo use.
+// expire expires a pending order, which releases its promo use.
 func (s *Service) expire(ctx context.Context, id int64) error {
 	return s.db.Tx(ctx, func(tx *gorm.DB) error {
-		ok, err := setStatus(ctx, tx, id, statusExpired, nil, statusPending)
-		if err != nil || !ok {
-			return err
-		}
-		return releaseUse(ctx, tx, id)
+		_, err := moveTo(ctx, tx, id, statusExpired, nil)
+		return err
 	})
 }
 
-// sweepPaid credits the paid orders whose lease is free or ran out.
-func (s *Service) sweepPaid(ctx context.Context) (int, error) {
+// sweepPaid credits the paid orders not credited yet (a notification whose
+// credit failed, or a crash in between).
+func (s *Service) sweepPaid(ctx context.Context) (int, error) { return s.creditPaid(ctx, sweepBatch) }
+
+// creditPaid credits up to limit paid orders, going round them in id order
+// from where the last run stopped (paidCursor), so orders whose credit keeps
+// failing cannot starve the ones after them. The cursor is the node's own:
+// a run on another node starts over, which only delays.
+func (s *Service) creditPaid(ctx context.Context, limit int) (int, error) {
 	var ids []int64
-	err := store.G(ctx, s.db.Gorm).Model(&model.PaymentOrder{}).
-		Where("status = ? AND (lease_until IS NULL OR lease_until < now())", statusPaid).
-		Order("id").Limit(sweepBatch).Pluck("id", &ids).Error
+	err := store.G(ctx, s.db.Gorm).Model(&model.PaymentOrder{}).Where("status = ? AND id > ?", statusPaid, s.paidCursor.Load()).
+		Order("id").Limit(limit).Pluck("id", &ids).Error
 	if err != nil {
 		return 0, err
 	}
+	next := int64(0) // a short batch reached the end: start over
+	if len(ids) == limit {
+		next = ids[len(ids)-1]
+	}
+	s.paidCursor.Store(next)
 	var errs []error
 	for _, id := range ids {
 		if err := s.credit(ctx, id); err != nil {

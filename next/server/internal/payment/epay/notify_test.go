@@ -62,7 +62,8 @@ func asPOST(raw string) core.PaymentNotification {
 var transports = map[string]func(string) core.PaymentNotification{"GET": asGET, "POST": asPOST}
 
 func parse(n core.PaymentNotification) (*core.PaymentResult, error) {
-	return newTestGateway(testConfig(), nil).ParseNotification(context.Background(), n)
+	res, _, err := newTestGateway(testConfig(), nil).ParseNotification(context.Background(), n)
+	return res, err
 }
 
 func TestNotificationGoldenSignature(t *testing.T) {
@@ -85,7 +86,9 @@ func TestNotificationAccepted(t *testing.T) {
 				OutTradeNo: "s2a_order1", TradeNo: "T20261126", Amount: 1234, Currency: "CNY",
 				Status: core.PaymentPaid, MerchantRef: "1001", MethodType: "wxpay",
 			}
-			if got.Fields["sign"] != "" || got.Fields["sign_type"] != "" || got.Fields["money"] != "12.34" {
+			// The core records the order and trade numbers under its own keys.
+			if got.Fields["sign"] != "" || got.Fields["sign_type"] != "" || got.Fields["money"] != "12.34" ||
+				got.Fields["out_trade_no"] != "" || got.Fields["trade_no"] != "" {
 				t.Fatalf("fields = %v", got.Fields)
 			}
 			got.Fields = nil
@@ -227,11 +230,17 @@ func TestNotificationTransportRejected(t *testing.T) {
 	}
 }
 
+// A configuration that cannot be read or is invalid is the site's problem:
+// the core asks Epay to retry instead of rejecting the notification.
 func TestNotificationConfigErrorIsNotRejection(t *testing.T) {
 	boom := errors.New("settings unavailable")
-	g := New(func(context.Context) (Config, error) { return Config{}, boom }, http.DefaultClient)
-	_, err := g.ParseNotification(context.Background(), asGET(signed(func(map[string]string) {})))
-	if !errors.Is(err, boom) || errors.Is(err, core.ErrPaymentSignature) {
-		t.Fatalf("err = %v", err)
+	for want, cfg := range map[error]func(context.Context) (Config, error){
+		boom:   func(context.Context) (Config, error) { return Config{}, boom },
+		ErrKey: func(context.Context) (Config, error) { c := testConfig(); c.Key = ""; return c, nil },
+	} {
+		_, respond, err := New(cfg, http.DefaultClient).ParseNotification(context.Background(), asGET(signed(func(map[string]string) {})))
+		if !errors.Is(err, want) || errors.Is(err, core.ErrPaymentSignature) || respond == nil {
+			t.Fatalf("err = %v", err)
+		}
 	}
 }

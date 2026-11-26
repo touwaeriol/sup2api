@@ -238,20 +238,18 @@ func applyPatch(g *gorm.DB, id int64, p ChannelPatch, set map[string]any) error 
 	return g.Model(&model.MarketSource{}).Where("id = ?", id).Updates(set).Error
 }
 
-// lockStoreOf locks the store of channel id before the channel itself.
-// Taking the channel first deadlocked: one transaction held the store and
-// waited for the old default's row, which another making that row the
-// default held while it waited for the store.
+// lockStoreOf locks the store of channel id before the channel itself, in
+// one statement; a missing channel locks nothing and the channel lock that
+// follows reports it. Taking the channel first deadlocked: one transaction
+// held the store and waited for the old default's row, which another making
+// that row the default held while it waited for the store.
 func lockStoreOf(g *gorm.DB, id int64) error {
-	var storeID int64
-	if err := g.Model(&model.MarketSource{}).Where("id = ?", id).Select("store_id").Scan(&storeID).Error; err != nil {
+	if err := store.RequireTx(g); err != nil {
 		return err
 	}
-	if storeID == 0 {
-		return nil // the channel lock that follows reports it missing
-	}
-	_, err := lockRow[model.MarketStore](g, storeID, "plugin store")
-	return err
+	storeOf := g.Model(&model.MarketSource{}).Select("store_id").Where("id = ?", id)
+	var locked []int64
+	return g.Model(&model.MarketStore{}).Clauses(store.ForUpdate()).Where("id = (?)", storeOf).Pluck("id", &locked).Error
 }
 
 // DeleteChannel deletes channel id, which may not be its store's default.

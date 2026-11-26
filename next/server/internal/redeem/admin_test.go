@@ -1,7 +1,6 @@
 package redeem
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -42,7 +41,7 @@ func TestRedeemLocksAfterTenFailures(t *testing.T) {
 	_, err = f.svc.Redeem(t.Context(), other, good)
 	require.NoError(t, err)
 	f.mr.FastForward(lockFor + time.Second)
-	require.Zero(t, f.svc.fails.lockedFor(t.Context(), user))
+	require.Zero(t, f.svc.fails.LockedFor(t.Context(), failKey(user)))
 }
 
 func TestRedeemFiveAMinute(t *testing.T) {
@@ -106,6 +105,12 @@ func TestGenerateValidates(t *testing.T) {
 		_, err := f.svc.Generate(t.Context(), 0, in)
 		require.Equal(t, "invalid_argument", core.AsError(err).Code, "%+v", in)
 	}
+	// The bounds in the messages are the ones enforced.
+	_, err := f.svc.Generate(t.Context(), 0, GenerateRequest{Count: 1001, Value: decimal.NewFromInt(100001)})
+	require.Equal(t, []core.FieldError{
+		{Field: "count", Code: "invalid", Message: "1 to 1000 codes"},
+		{Field: "value", Code: "invalid", Message: "above 0 and at most 100000, with at most 8 decimals"},
+	}, core.AsError(err).Details["fields"])
 }
 
 func TestListByStatus(t *testing.T) {
@@ -154,35 +159,13 @@ func TestVoidOnlyUnused(t *testing.T) {
 	require.EqualValues(t, 1, audited)
 }
 
-// fakeTokens reads the bearer token as the user id.
-type fakeTokens struct{}
-
-func (fakeTokens) VerifySession(_ context.Context, tok string) (int64, string, error) {
-	return testutil.SessionUser(tok, "")
-}
-func (fakeTokens) VerifyAccessKey(context.Context, string, string) (core.AccessKeyIdentity, error) {
-	return core.AccessKeyIdentity{}, core.ErrUnauthenticated
-}
-
-// fakeAuthz holds each user's permissions.
-type fakeAuthz map[int64][]string
-
-func (a fakeAuthz) Can(ctx context.Context, uid int64, p string) (bool, error) {
-	set, err := a.PermissionSet(ctx, uid)
-	return set.Has(p), err
-}
-func (a fakeAuthz) PermissionSet(_ context.Context, uid int64) (core.PermissionSet, error) {
-	return core.PermissionSetOf(a[uid]...), nil
-}
-func (fakeAuthz) CanGrant(context.Context, int64, []string) error { return nil }
-
 type caller func(uid int64, method, path, body string) *httptest.ResponseRecorder
 
 // routes serves the service's routes with az's permissions.
-func routes(f *fixture, az fakeAuthz) caller {
+func routes(f *fixture, az testutil.Perms) caller {
 	gin.SetMode(gin.TestMode)
 	engine := gin.New()
-	f.svc.RegisterRoutes(httpapi.NewRouter(engine, fakeTokens{}, az))
+	f.svc.RegisterRoutes(httpapi.NewRouter(engine, testutil.Tokens{}, az))
 	return func(uid int64, method, path, body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(method, "/api/v1"+path, strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer "+strconv.FormatInt(uid, 10))
@@ -197,7 +180,7 @@ func TestRoutesNeedPermissions(t *testing.T) {
 	f := newFixture(t, nil)
 	admin := testutil.InsertUser(t, f.db, "rd-http-admin@x.test")
 	user := testutil.InsertUser(t, f.db, "rd-http-user@x.test")
-	call := routes(f, fakeAuthz{admin: {"redeem:manage"}, user: {"redeem:use"}})
+	call := routes(f, testutil.Perms{admin: {"redeem:manage"}, user: {"redeem:use"}})
 	id := strconv.FormatInt(f.codeID(f.seed(5, nil)), 10)
 	for _, c := range []struct{ method, path, body string }{
 		{http.MethodGet, "/redeem-codes", ""},
@@ -218,4 +201,28 @@ func TestRoutesNeedPermissions(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	require.JSONEq(t, `{"data":{"amount":"7","balance":"7"}}`, w.Body.String())
 	require.Equal(t, http.StatusNoContent, call(admin, http.MethodDelete, "/redeem-codes/"+id, "").Code)
+}
+
+func TestRedeemLockedHTTPSendsRetryAfter(t *testing.T) {
+	f := newFixture(t, nil)
+	user := testutil.InsertUser(t, f.db, "rd-http-locked@x.test")
+	require.NoError(t, f.mr.Set(failKey(user), strconv.Itoa(maxFailures)))
+	f.mr.SetTTL(failKey(user), 90*time.Second)
+	w := routes(f, testutil.Perms{user: {"redeem:use"}})(user, http.MethodPost, "/me/redeem", `{"code":"x"}`)
+	require.Equal(t, http.StatusTooManyRequests, w.Code, w.Body.String())
+	require.Equal(t, "90", w.Header().Get("Retry-After"))
+	require.Contains(t, w.Body.String(), `"retry_after_seconds":90`)
+}
+
+func TestListPages(t *testing.T) {
+	f := newFixture(t, nil)
+	var codes []string
+	for i := range 3 {
+		codes = append(codes, f.seed(int64(i+1), nil))
+	}
+	items, total, err := f.svc.List(t.Context(), "", 2, 2)
+	require.NoError(t, err)
+	require.EqualValues(t, 3, total)
+	require.Len(t, items, 1)
+	require.Equal(t, normalize(codes[0])[codeLen-4:], items[0].CodeTail, "newest first: the oldest is on page 2")
 }

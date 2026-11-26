@@ -5,10 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"os"
-	"os/exec"
-	"path/filepath"
-	goruntime "runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -23,18 +19,8 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/registry/registrytest"
 )
 
-var paymentPlugin = sync.OnceValues(func() ([]byte, error) {
-	_, file, _, _ := goruntime.Caller(0)
-	out := filepath.Join(os.TempDir(), "s2p-paymentplugin-"+filepath.Base(filepath.Dir(file)))
-	cmd := exec.Command("go", "build", "-o", out, "./testdata/paymentplugin")
-	cmd.Dir = filepath.Dir(file)
-	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
-	if b, err := cmd.CombinedOutput(); err != nil {
-		return nil, errors.New(err.Error() + "\n" + string(b))
-	}
-	defer os.Remove(out)
-	return os.ReadFile(out)
-})
+// paymentPlugin is built once for the package's tests.
+var paymentPlugin = sync.OnceValues(func() ([]byte, error) { return buildFixture("./testdata/paymentplugin") })
 
 // paymentGateways loads the simulated gateway plugin (testdata/paymentplugin)
 // as a process and returns the bindings of a generation holding it. Its
@@ -114,20 +100,21 @@ func assertPaymentCreate(t *testing.T, gw core.PaymentGateway) {
 func assertPaymentNotifications(t *testing.T, gw core.PaymentGateway) {
 	ctx := context.Background()
 	n := mockpay.Notification{EventID: "e1", OutTradeNo: "s2a_other", TradeNo: "t1", Amount: 99999, Currency: "EUR", Status: "paid", MethodType: "x"}
-	r, err := gw.ParseNotification(ctx, signed(t, n))
+	r, respond, err := gw.ParseNotification(ctx, signed(t, n))
 	if err != nil || r.OutTradeNo != "s2a_other" || r.TradeNo != "t1" || r.Amount != 99999 || r.Currency != "EUR" || r.Status != core.PaymentPaid ||
 		r.EventID != "e1" || r.MethodType != "x" || r.MerchantRef != mockpay.MerchantRef || r.SessionID != "ms_s2a_other" || r.Fields["trade_no"] != "t1" {
 		t.Fatalf("parse: %+v %v", r, err)
 	}
-	if reply := gw.Respond(core.PaymentHandled); reply.Status != 200 || string(reply.Body) != "success" || reply.ContentType != "text/plain; charset=utf-8" {
+	if reply := respond(core.PaymentHandled); reply.Status != 200 || string(reply.Body) != "success" || reply.ContentType != "text/plain; charset=utf-8" {
 		t.Fatalf("handled reply: %+v", reply)
 	}
 	forged := signed(t, n)
 	forged.Header.Set(mockpay.SignatureHeader, "00")
-	if _, err := gw.ParseNotification(ctx, forged); !errors.Is(err, core.ErrPaymentSignature) || !strings.HasSuffix(err.Error(), ": bad signature") {
+	_, respond, err = gw.ParseNotification(ctx, forged)
+	if !errors.Is(err, core.ErrPaymentSignature) || !strings.HasSuffix(err.Error(), ": bad signature") {
 		t.Fatalf("forged: %v", err)
 	}
-	if reply := gw.Respond(core.PaymentRejected); reply.Status != 400 || string(reply.Body) != "fail" {
+	if reply := respond(core.PaymentRejected); reply.Status != 400 || string(reply.Body) != "fail" {
 		t.Fatalf("rejected reply: %+v", reply)
 	}
 }

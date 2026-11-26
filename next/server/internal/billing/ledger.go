@@ -17,21 +17,10 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/x"
 )
 
-// Ledger kinds.
-const (
-	KindUsage        = "usage"
-	KindAdminAdjust  = "admin_adjust"
-	KindPluginCredit = "plugin_credit"
-	KindPluginDebit  = "plugin_debit"
-	KindRefund       = "refund"
-	// Online top-up, its promo bonus and redeem codes (CONTRACTS §140).
-	KindTopup      = "topup"
-	KindPromoBonus = "promo_bonus"
-	KindRedeem     = "redeem"
-)
-
-var validKinds = map[string]bool{KindUsage: true, KindAdminAdjust: true, KindPluginCredit: true, KindPluginDebit: true, KindRefund: true,
-	KindTopup: true, KindPromoBonus: true, KindRedeem: true}
+// validKinds are the LedgerChange kinds the ledger accepts.
+var validKinds = map[string]bool{core.LedgerKindUsage: true, core.LedgerKindAdminAdjust: true, core.LedgerKindPluginCredit: true,
+	core.LedgerKindPluginDebit: true, core.LedgerKindRefund: true, core.LedgerKindTopup: true, core.LedgerKindPromoBonus: true,
+	core.LedgerKindRedeem: true}
 
 const balanceCacheTTL = 10 * time.Minute
 

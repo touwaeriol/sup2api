@@ -37,6 +37,7 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/registry"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/plugin/rollout"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/proxy"
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/redeem"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/segment"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/task"
@@ -84,6 +85,7 @@ type boot struct {
 	stats   *account.Stats
 	acc     *account.Service
 	pay     *payment.Service
+	redeem  *redeem.Service
 
 	converters   *convert.Registry
 	limiter      *account.Limiter

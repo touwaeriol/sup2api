@@ -95,6 +95,7 @@ const (
 	CapSchedulerRank     = "scheduler.rank.v1"
 	CapAppBroadcast      = "app.broadcast.v1"
 	CapNotifyChannel     = "notify.channel.v1"
+	CapPaymentGateway    = "payment.gateway.v1" // PaymentGatewayService for the gateways in payments
 )
 
 type Capability struct {
@@ -1178,6 +1179,9 @@ const (
 	RiskSensitive = "sensitive"
 )
 
+// HostPermissionRisk keys are string literals, never constants such as
+// PermPaymentGateway: the console's tests read this map from the source
+// text (web/src/views/plugins/pluginUtil.spec.ts).
 var HostPermissionRisk = map[string]string{
 	"kv":                  RiskLow,
 	"secrets":             RiskLow,

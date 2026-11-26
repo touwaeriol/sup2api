@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 
@@ -122,8 +123,10 @@ func TestCreatedURLVerifiesAsNotification(t *testing.T) {
 	}
 }
 
+// Every notification gets Epay's replies, also one that failed: only
+// "success" stops its retries.
 func TestRespond(t *testing.T) {
-	g := newTestGateway(testConfig(), nil)
+	_, respond, _ := newTestGateway(testConfig(), nil).ParseNotification(context.Background(), core.PaymentNotification{Method: http.MethodPut})
 	cases := []struct {
 		o      core.PaymentOutcome
 		status int
@@ -134,9 +137,34 @@ func TestRespond(t *testing.T) {
 		{core.PaymentRetry, 503, "fail"},
 	}
 	for _, c := range cases {
-		r := g.Respond(c.o)
+		r := respond(c.o)
 		if r.Status != c.status || string(r.Body) != c.body || !strings.HasPrefix(r.ContentType, "text/plain") {
-			t.Fatalf("Respond(%d) = %+v", c.o, r)
+			t.Fatalf("respond(%d) = %+v", c.o, r)
+		}
+	}
+}
+
+// Validate reports each bad field on its own error.
+func TestConfigValidate(t *testing.T) {
+	if err := testConfig().Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		cfg  Config
+		want []error
+	}{
+		{Config{}, []error{ErrEndpoint, ErrMerchantID, ErrKey}},
+		{Config{Endpoint: "http://pay.example.com", MerchantID: "1001", Key: "k"}, []error{ErrEndpoint}},
+		{Config{Endpoint: "https://u:p@pay.example.com", MerchantID: "1001", Key: "k"}, []error{ErrEndpoint}},
+		{Config{Endpoint: "https://pay.example.com?a=1", MerchantID: "1001", Key: "k"}, []error{ErrEndpoint}},
+		{Config{Endpoint: "https://pay.example.com", MerchantID: "10&01", Key: "k"}, []error{ErrMerchantID}},
+		{Config{Endpoint: "https://pay.example.com", MerchantID: " ", Key: ""}, []error{ErrMerchantID, ErrKey}},
+	} {
+		err := c.cfg.Validate()
+		for _, e := range []error{ErrEndpoint, ErrMerchantID, ErrKey} {
+			if errors.Is(err, e) != slices.Contains(c.want, e) {
+				t.Fatalf("%+v: %v", c.cfg, err)
+			}
 		}
 	}
 }

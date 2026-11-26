@@ -574,21 +574,21 @@ func TestGuardedSettings(t *testing.T) {
 	// it), any other custom value is not.
 	acc := e.createAs(alice, "a", map[string]any{"credentials": map[string]any{"api_key": key, "base_url": officialBaseURL}})
 	own := fmt.Sprintf("/accounts/%d", int64(acc["id"].(float64)))
-	if code, out := e.doAs(admin, "PATCH", own, map[string]any{"credentials": map[string]any{"api_key": Mask, "base_url": "https://custom.example"}}); code != 200 {
+	if code, out := e.doAs(admin, "PATCH", own, map[string]any{"credentials": map[string]any{"api_key": core.SecretMask, "base_url": "https://custom.example"}}); code != 200 {
 		t.Fatalf("admin custom patch: %d %v", code, out)
 	}
-	if code, out := e.doAs(alice, "PATCH", own, map[string]any{"name": "n", "credentials": map[string]any{"api_key": Mask, "base_url": "https://CUSTOM.example/"}}); code != 200 ||
+	if code, out := e.doAs(alice, "PATCH", own, map[string]any{"name": "n", "credentials": map[string]any{"api_key": core.SecretMask, "base_url": "https://CUSTOM.example/"}}); code != 200 ||
 		data(out)["name"] != "n" {
 		t.Fatalf("alice keeps old custom: %d %v", code, out)
 	}
-	if code, out := e.doAs(alice, "PATCH", own, map[string]any{"credentials": map[string]any{"api_key": Mask, "base_url": "https://other.example"}}); code != 400 ||
+	if code, out := e.doAs(alice, "PATCH", own, map[string]any{"credentials": map[string]any{"api_key": core.SecretMask, "base_url": "https://other.example"}}); code != 400 ||
 		fmt.Sprint(fieldsOf(out)) != "[credentials.base_url:forbidden]" {
 		t.Fatalf("alice other custom: %d %v", code, out)
 	}
-	if code, out := e.doAs(alice, "POST", own+"/models/fetch", map[string]any{"credentials": map[string]any{"api_key": Mask, "base_url": "https://other.example"}}); code != 400 {
+	if code, out := e.doAs(alice, "POST", own+"/models/fetch", map[string]any{"credentials": map[string]any{"api_key": core.SecretMask, "base_url": "https://other.example"}}); code != 400 {
 		t.Fatalf("alice fetch other custom: %d %v", code, out)
 	}
-	if code, out := e.doAs(alice, "PATCH", own, map[string]any{"credentials": map[string]any{"api_key": Mask, "base_url": officialBaseURL}}); code != 200 ||
+	if code, out := e.doAs(alice, "PATCH", own, map[string]any{"credentials": map[string]any{"api_key": core.SecretMask, "base_url": officialBaseURL}}); code != 200 ||
 		data(out)["settings"].(map[string]any)["base_url"] != officialBaseURL {
 		t.Fatalf("alice back to official: %d %v", code, out)
 	}
@@ -656,12 +656,12 @@ func TestGuardedSettingVersions(t *testing.T) {
 	// change"; the stored value is kept as typed.
 	acc := e.createAs(alice, "a", map[string]any{"credentials": map[string]any{"api_key": key, "base_url": officialBaseURL}})
 	path := fmt.Sprintf("/accounts/%d", int64(acc["id"].(float64)))
-	if code, out := e.doAs(admin, "PATCH", path, map[string]any{"credentials": map[string]any{"api_key": Mask, "base_url": "https://custom.example/v1"}}); code != 200 {
+	if code, out := e.doAs(admin, "PATCH", path, map[string]any{"credentials": map[string]any{"api_key": core.SecretMask, "base_url": "https://custom.example/v1"}}); code != 200 {
 		t.Fatalf("admin custom patch: %d %v", code, out)
 	}
 	patch := func(base string) (int, map[string]any) {
 		t.Helper()
-		return e.doAs(alice, "PATCH", path, map[string]any{"credentials": map[string]any{"api_key": Mask, "base_url": base}})
+		return e.doAs(alice, "PATCH", path, map[string]any{"credentials": map[string]any{"api_key": core.SecretMask, "base_url": base}})
 	}
 	if code, out := patch("https://custom.example"); code != 200 || data(out)["settings"].(map[string]any)["base_url"] != "https://custom.example" {
 		t.Fatalf("old with version: %d %v", code, out)
@@ -829,7 +829,7 @@ func TestInputProxyURL(t *testing.T) {
 	}
 }
 
-// TestMaskedSecretToNewAddress covers M2: a Mask value is restored from the
+// TestMaskedSecretToNewAddress covers M2: a core.SecretMask value is restored from the
 // stored secret only when the caller may reveal it or the upstream address
 // stays; otherwise the secret must be typed again and the plugin never sees
 // the request.
@@ -846,7 +846,7 @@ func TestMaskedSecretToNewAddress(t *testing.T) {
 	acc := e.createAs(admin, "relay", map[string]any{"plugin_key": "relay", "type": "relay_key",
 		"credentials": map[string]any{"api_key": key, "base_url": "https://a.example"}})
 	path := fmt.Sprintf("/accounts/%d", int64(acc["id"].(float64)))
-	moved := map[string]any{"credentials": map[string]any{"api_key": Mask, "base_url": "https://evil.example"}}
+	moved := map[string]any{"credentials": map[string]any{"api_key": core.SecretMask, "base_url": "https://evil.example"}}
 	calls := func() int {
 		e.plat.mu.Lock()
 		defer e.plat.mu.Unlock()
@@ -867,9 +867,9 @@ func TestMaskedSecretToNewAddress(t *testing.T) {
 			t.Fatalf("plugin validated %d times for %d", n-before, uid)
 		}
 	}
-	// Mask with an unchanged address (after normalization) passes.
+	// core.SecretMask with an unchanged address (after normalization) passes.
 	if code, out := e.doAs(op, "PATCH", path, map[string]any{"name": "kept",
-		"credentials": map[string]any{"api_key": Mask, "base_url": "https://A.example/"}}); code != 200 {
+		"credentials": map[string]any{"api_key": core.SecretMask, "base_url": "https://A.example/"}}); code != 200 {
 		t.Fatalf("same address: %d %v", code, out)
 	}
 	// A new address with the secret typed again passes.
@@ -943,7 +943,7 @@ func TestOwnChangeGroupsAndCaps(t *testing.T) {
 		_, out := e.doAs(alice, "GET", path, nil)
 		v := data(out)
 		body := map[string]any{"name": v["name"], "group_ids": v["group_ids"], "priority": v["priority"], "weight": v["weight"],
-			"max_concurrency": v["max_concurrency"], "status": v["status"], "credentials": map[string]any{"api_key": Mask}}
+			"max_concurrency": v["max_concurrency"], "status": v["status"], "credentials": map[string]any{"api_key": core.SecretMask}}
 		maps.Copy(body, change)
 		return e.doAs(alice, "PATCH", path, body)
 	}
@@ -1012,12 +1012,12 @@ func TestOwnCustomUpstream(t *testing.T) {
 	authz.keys[alice] = supplierKeys
 	path := fmt.Sprintf("/accounts/%d", int64(data(out)["id"].(float64)))
 	for _, change := range []map[string]any{{"name": "renamed"}, {"status": "disabled"}, {"status": "active"},
-		{"credentials": map[string]any{"api_key": Mask, "base_url": "https://relay.example"}}} {
+		{"credentials": map[string]any{"api_key": core.SecretMask, "base_url": "https://relay.example"}}} {
 		if code, out := e.doAs(alice, "PATCH", path, change); code != 200 {
 			t.Fatalf("patch %v: %d %v", change, code, out)
 		}
 	}
-	for _, key := range []string{Mask, "sk-good-key-123"} {
+	for _, key := range []string{core.SecretMask, "sk-good-key-123"} {
 		if code, out := e.doAs(alice, "PATCH", path, map[string]any{"credentials": map[string]any{"api_key": key, "base_url": "https://other.example"}}); code != 403 {
 			t.Fatalf("move base_url (key %s): %d %v", key, code, out)
 		}

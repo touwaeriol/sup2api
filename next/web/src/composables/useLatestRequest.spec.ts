@@ -85,6 +85,22 @@ describe('latest request', () => {
     expect(error.value).toBe('')
   })
 
+  it('asks again for the latest input on reload', async () => {
+    const { load, pending, result, error, reload } = setup('a')
+    await vi.advanceTimersByTimeAsync(300)
+    pending[0].reject(new Error('boom'))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(error.value).toBe('boom')
+
+    reload()
+    expect(error.value).toBe('')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(load).toHaveBeenLastCalledWith('a')
+    pending[1].resolve('A')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(result.value).toBe('A')
+  })
+
   it('stops asking when its scope ends', async () => {
     const { load, scope } = setup('a')
     scope.stop()

@@ -24,20 +24,22 @@ type refusal struct{ reason string }
 
 func (r refusal) Error() string { return r.reason }
 
-// credit credits a paid order under a crediting lease: paid → completed
-// and the ledger rows commit together. The lease is a fresh token per
-// claim, so a worker whose lease ran out and was taken over cannot finish
-// (its conditional updates name the old token), and the ledger's
-// idempotency keys stand behind that. A busy lease is not an error.
+// userLock is the advisory lock of a user's top-up: ordering and crediting
+// take it, so the limits add up the user's orders consistently.
+func userLock(ctx context.Context, tx *gorm.DB, userID int64) error {
+	return store.XactLock(ctx, tx, "topup:user:"+x.Itoa64(userID))
+}
+
+// credit credits a paid order: paid → completed and the ledger rows commit
+// in one transaction under the order's row lock, so concurrent credits of
+// one order wait for each other and the later ones find it no longer paid
+// (the ledger's idempotency keys stand behind that). An order that is not
+// paid (any more) is not an error.
 func (s *Service) credit(ctx context.Context, id int64) error {
-	token, err := s.claimLease(ctx, id)
-	if err != nil || token == "" {
-		return err
-	}
-	results, userID, err := s.creditTx(ctx, id, token)
+	results, userID, err := s.creditTx(ctx, id)
 	var r refusal
 	if errors.As(err, &r) {
-		return s.failCredit(ctx, id, token, r.reason)
+		return s.failCredit(ctx, id, r.reason)
 	}
 	if err != nil {
 		return err
@@ -50,39 +52,21 @@ func (s *Service) credit(ctx context.Context, id int64) error {
 	return nil
 }
 
-// claimLease takes the crediting lease of a paid order when it is free or
-// ran out; "" when another worker holds it.
-func (s *Service) claimLease(ctx context.Context, id int64) (string, error) {
-	token, err := randomHex()
-	if err != nil {
-		return "", err
-	}
-	res := store.G(ctx, s.db.Gorm).Model(&model.PaymentOrder{}).
-		Where("id = ? AND status = ? AND (lease_until IS NULL OR lease_until < now())", id, statusPaid).
-		Updates(map[string]any{"lease_token": token,
-			"lease_until": clause.Expr{SQL: "now() + make_interval(secs => ?)", Vars: []any{leaseTTL.Seconds()}}})
-	if res.Error != nil || res.RowsAffected == 0 {
-		return "", res.Error
-	}
-	return token, nil
-}
-
-// creditTx applies the order's ledger rows and completes it, in one
-// transaction under the user's advisory lock (the daily limit adds up the
-// user's credits).
-func (s *Service) creditTx(ctx context.Context, id int64, token string) ([]*core.LedgerResult, int64, error) {
+// creditTx locks the paid order, checks the limits under the user's lock,
+// applies its ledger rows and completes it.
+func (s *Service) creditTx(ctx context.Context, id int64) ([]*core.LedgerResult, int64, error) {
 	var out []*core.LedgerResult
 	var userID int64
 	err := s.db.Tx(ctx, func(tx *gorm.DB) error {
-		o, err := lockLeased(ctx, tx, id, token)
+		o, err := lockOrder(ctx, tx, inState(id, statusPaid))
 		if err != nil || o == nil {
 			return err
 		}
 		userID = o.UserID
-		if err := store.XactLock(ctx, tx, "topup:user:"+x.Itoa64(userID)); err != nil {
+		if err := userLock(ctx, tx, userID); err != nil {
 			return err
 		}
-		if err := s.checkLimits(ctx, tx, o); err != nil {
+		if err := s.checkCreditLimits(ctx, tx, o); err != nil {
 			return err
 		}
 		if out, err = s.applyLedger(ctx, tx, o); err != nil {
@@ -91,34 +75,27 @@ func (s *Service) creditTx(ctx context.Context, id int64, token string) ([]*core
 		if err := markUsed(ctx, tx, o.ID); err != nil {
 			return err
 		}
-		return finishLease(ctx, tx, o.ID, token, statusCompleted, map[string]any{"completed_at": clause.Expr{SQL: "now()"}})
+		return mustMove(moveTo(ctx, tx, o.ID, statusCompleted, map[string]any{"completed_at": sqlNow}))
 	})
 	return out, userID, err
 }
 
-// lockLeased reads the paid order under a row lock while token holds its
-// lease; nil when it no longer does.
-func lockLeased(ctx context.Context, tx *gorm.DB, id int64, token string) (*model.PaymentOrder, error) {
-	if err := store.RequireTx(tx); err != nil {
-		return nil, err
+// mustMove turns a transition that did not happen into errLostRace.
+func mustMove(ok bool, err error) error {
+	if err == nil && !ok {
+		return errLostRace
 	}
-	var o model.PaymentOrder
-	err := store.G(ctx, tx).Clauses(store.ForUpdate()).
-		Where("id = ? AND status = ? AND lease_token = ?", id, statusPaid, token).Take(&o).Error
-	if store.IsNoRows(err) {
-		return nil, nil
-	}
-	return &o, err
+	return err
 }
 
 // applyLedger credits the top-up and its promo bonus as two ledger rows
 // (kinds topup and promo_bonus, keys topup:<no> and promo:<no>). A change
 // the ledger refuses is a refusal.
 func (s *Service) applyLedger(ctx context.Context, tx *gorm.DB, o *model.PaymentOrder) ([]*core.LedgerResult, error) {
-	changes := []core.LedgerChange{{UserID: o.UserID, Amount: o.Amount, Credit: true, Kind: kindTopup,
+	changes := []core.LedgerChange{{UserID: o.UserID, Amount: o.Amount, Credit: true, Kind: core.LedgerKindTopup,
 		RefType: refTypeOrder, RefID: o.OutTradeNo, IdempotencyKey: "topup:" + o.OutTradeNo, Note: "online top-up"}}
 	if o.Bonus.IsPositive() {
-		changes = append(changes, core.LedgerChange{UserID: o.UserID, Amount: o.Bonus, Credit: true, Kind: kindPromoBonus,
+		changes = append(changes, core.LedgerChange{UserID: o.UserID, Amount: o.Bonus, Credit: true, Kind: core.LedgerKindPromoBonus,
 			RefType: refTypeOrder, RefID: o.OutTradeNo, IdempotencyKey: "promo:" + o.OutTradeNo, Note: "promo code " + o.PromoCode})
 	}
 	out := make([]*core.LedgerResult, 0, len(changes))
@@ -135,32 +112,17 @@ func (s *Service) applyLedger(ctx context.Context, tx *gorm.DB, o *model.Payment
 	return out, nil
 }
 
-// finishLease moves the order out of paid while token holds its lease,
-// releasing the lease.
-func finishLease(ctx context.Context, tx *gorm.DB, id int64, token, status string, set map[string]any) error {
-	set["status"], set["updated_at"] = status, clause.Expr{SQL: "now()"}
-	set["lease_token"], set["lease_until"] = "", nil
-	res := store.G(ctx, tx).Model(&model.PaymentOrder{}).
-		Where("id = ? AND status = ? AND lease_token = ?", id, statusPaid, token).Updates(set)
-	if res.Error == nil && res.RowsAffected != 1 {
-		return errLostRace
-	}
-	return res.Error
-}
-
 // appendReason adds reason to the order's fail_reason, keeping one it
 // already has (a late payment that lost its promo bonus).
 const appendReason = "CASE WHEN fail_reason = '' THEN ? ELSE fail_reason || '; ' || ? END"
 
-// failCredit fails a paid order whose credit was refused and gives back
-// the promo use it holds: the bonus will never be credited.
-func (s *Service) failCredit(ctx context.Context, id int64, token, reason string) error {
+// failCredit fails a paid order whose credit was refused; moving to failed
+// gives back its promo use, as the bonus will never be credited. The
+// refused credit's transaction rolled back, so this is a new one.
+func (s *Service) failCredit(ctx context.Context, id int64, reason string) error {
 	slog.WarnContext(ctx, "payment: credit refused", "order_id", id, "reason", reason)
 	return s.db.Tx(ctx, func(tx *gorm.DB) error {
-		set := map[string]any{"fail_reason": clause.Expr{SQL: appendReason, Vars: []any{reason, reason}}}
-		if err := finishLease(ctx, tx, id, token, statusFailed, set); err != nil {
-			return err
-		}
-		return releaseUse(ctx, tx, id)
+		_, err := moveTo(ctx, tx, id, statusFailed, map[string]any{"fail_reason": clause.Expr{SQL: appendReason, Vars: []any{reason, reason}}})
+		return err
 	})
 }

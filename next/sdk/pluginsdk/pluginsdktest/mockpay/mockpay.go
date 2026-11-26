@@ -116,14 +116,14 @@ func (g gateway) CreatePayment(_ context.Context, in *pluginv1.CreatePaymentRequ
 		return nil, status.Error(codes.InvalidArgument, "amount and out_trade_no are required")
 	}
 	session := "ms_" + in.GetOutTradeNo()
-	g.store.put(&pluginv1.PaymentResult{OutTradeNo: in.GetOutTradeNo(), SessionId: session, Amount: in.GetAmountMinor(),
+	g.store.put(&pluginv1.PaymentResult{OutTradeNo: in.GetOutTradeNo(), SessionId: session, AmountMinor: in.GetAmountMinor(),
 		Currency: in.GetCurrency(), Status: pluginv1.PaymentStatus_PAYMENT_STATUS_PENDING, MerchantRef: MerchantRef, MethodType: in.GetMethodType()})
 	return &pluginv1.CreatePaymentResponse{PayUrl: "https://mockpay.invalid/pay/" + in.GetOutTradeNo(),
 		QrCode: "mockpay:" + in.GetOutTradeNo(), SessionId: session, MerchantRef: MerchantRef}, nil
 }
 
-func (g gateway) ParseNotification(_ context.Context, in *pluginv1.ParseNotificationRequest) (*pluginv1.ParseNotificationResponse, error) {
-	sig := pluginsdk.NotificationHeader(in).Get(SignatureHeader)
+func (g gateway) ParsePaymentNotification(_ context.Context, in *pluginv1.ParsePaymentNotificationRequest) (*pluginv1.ParsePaymentNotificationResponse, error) {
+	sig := pluginsdk.PaymentNotificationHeader(in).Get(SignatureHeader)
 	if !hmac.Equal([]byte(sig), []byte(Sign(in.GetBody()))) {
 		return pluginsdk.RejectedNotification("bad signature", Replies), nil
 	}
@@ -135,7 +135,7 @@ func (g gateway) ParseNotification(_ context.Context, in *pluginv1.ParseNotifica
 	if !known {
 		return pluginsdk.RejectedNotification("malformed notification", Replies), nil
 	}
-	r := &pluginv1.PaymentResult{OutTradeNo: n.OutTradeNo, TradeNo: n.TradeNo, SessionId: "ms_" + n.OutTradeNo, Amount: n.Amount,
+	r := &pluginv1.PaymentResult{OutTradeNo: n.OutTradeNo, TradeNo: n.TradeNo, SessionId: "ms_" + n.OutTradeNo, AmountMinor: n.Amount,
 		Currency: n.Currency, Status: st, EventId: n.EventID, MerchantRef: MerchantRef, MethodType: n.MethodType,
 		Fields: map[string]string{"trade_no": n.TradeNo, "status": n.Status}}
 	g.store.put(r)

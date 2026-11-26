@@ -102,7 +102,7 @@ func TestPrechargeReservationLedgerAndReplay(t *testing.T) {
 	if n != 0 {
 		t.Fatal("refused first charge left the balance row it had created")
 	}
-	if _, err := e.svc.Apply(ctx, core.LedgerChange{UserID: uid, Amount: decimal.NewFromInt(1), Credit: true, Kind: KindAdminAdjust, IdempotencyKey: "seed"}); err != nil {
+	if _, err := e.svc.Apply(ctx, core.LedgerChange{UserID: uid, Amount: decimal.NewFromInt(1), Credit: true, Kind: core.LedgerKindAdminAdjust, IdempotencyKey: "seed"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.svc.Precharge(ctx, record("r1")); err != nil {
@@ -122,7 +122,7 @@ func TestPrechargeReservationLedgerAndReplay(t *testing.T) {
 	}
 	if !balance.Equal(decimal.RequireFromString("0.25")) || !delta.Equal(decimal.RequireFromString("-0.75")) ||
 		!after.Equal(decimal.RequireFromString("0.25")) || !amount.Equal(decimal.RequireFromString("0.75")) ||
-		kind != KindUsage || refType != "precharge" || refID != "r1" || key != "precharge:r1" || note != "request precharge" {
+		kind != core.LedgerKindUsage || refType != "precharge" || refID != "r1" || key != "precharge:r1" || note != "request precharge" {
 		t.Fatalf("charged %s/%s/%s/%s %s %s %s %s %q", balance, delta, after, amount, kind, refType, refID, key, note)
 	}
 	// Replay: success, nothing charged, nothing emitted.

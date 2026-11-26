@@ -115,13 +115,12 @@ func tradeNo(s session) string {
 }
 
 // sessionFields are the non-secret fields kept on the payment_events row:
-// no customer details, URLs or metadata beyond what the result carries.
+// no customer details, URLs or metadata, nor what the core records from the
+// result under its own keys (amount, currency).
 func sessionFields(s session) map[string]string {
 	return map[string]string{
 		"session_status": s.Status,
 		"payment_status": s.PaymentStatus,
 		"livemode":       strconv.FormatBool(s.Livemode),
-		"amount_total":   strconv.FormatInt(s.AmountTotal, 10),
-		"currency":       s.Currency,
 	}
 }

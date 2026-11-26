@@ -24,12 +24,12 @@ func start(t *testing.T) pluginv1.PaymentGatewayServiceClient {
 	return h.Payment
 }
 
-func notification(gw string, n mockpay.Notification, sig string) *pluginv1.ParseNotificationRequest {
+func notification(gw string, n mockpay.Notification, sig string) *pluginv1.ParsePaymentNotificationRequest {
 	body, _ := json.Marshal(n)
 	if sig == "" {
 		sig = mockpay.Sign(body)
 	}
-	return &pluginv1.ParseNotificationRequest{Gateway: gw, Method: "POST", Body: body,
+	return &pluginv1.ParsePaymentNotificationRequest{Gateway: gw, Method: "POST", Body: body,
 		Headers: map[string]*pluginv1.HeaderValues{mockpay.SignatureHeader: {Values: []string{sig}}}}
 }
 
@@ -43,11 +43,11 @@ func TestMockGatewayOverGRPC(t *testing.T) {
 		t.Fatalf("create: %v %v", created, err)
 	}
 	q, err := c.QueryPayment(ctx, &pluginv1.QueryPaymentRequest{Gateway: mockpay.GatewayMock, OutTradeNo: "s2a_1"})
-	if err != nil || q.GetResult().GetStatus() != pluginv1.PaymentStatus_PAYMENT_STATUS_PENDING || q.GetResult().GetAmount() != 1230 {
+	if err != nil || q.GetResult().GetStatus() != pluginv1.PaymentStatus_PAYMENT_STATUS_PENDING || q.GetResult().GetAmountMinor() != 1230 {
 		t.Fatalf("query pending: %v %v", q, err)
 	}
 	paid := mockpay.Notification{EventID: "e1", OutTradeNo: "s2a_1", TradeNo: "t1", Amount: 1230, Currency: "USD", Status: "paid"}
-	parsed, err := c.ParseNotification(ctx, notification(mockpay.GatewayMock, paid, ""))
+	parsed, err := c.ParsePaymentNotification(ctx, notification(mockpay.GatewayMock, paid, ""))
 	if r := parsed.GetResult(); err != nil || !parsed.GetVerified() || r.GetTradeNo() != "t1" || r.GetEventId() != "e1" ||
 		r.GetStatus() != pluginv1.PaymentStatus_PAYMENT_STATUS_PAID || string(parsed.GetHandled().GetBody()) != "success" {
 		t.Fatalf("parse: %v %v", parsed, err)
@@ -61,12 +61,12 @@ func TestMockGatewayOverGRPC(t *testing.T) {
 func TestMockGatewayRefusals(t *testing.T) {
 	c, ctx := start(t), context.Background()
 	n := mockpay.Notification{EventID: "e1", OutTradeNo: "s2a_1", Amount: 1, Currency: "USD", Status: "paid"}
-	parsed, err := c.ParseNotification(ctx, notification(mockpay.GatewayMock, n, "00"))
+	parsed, err := c.ParsePaymentNotification(ctx, notification(mockpay.GatewayMock, n, "00"))
 	if err != nil || parsed.GetVerified() || parsed.GetReason() != "bad signature" || parsed.GetRejected().GetStatus() != 400 {
 		t.Fatalf("bad signature: %v %v", parsed, err)
 	}
 	n.Status = "refunded"
-	if parsed, err = c.ParseNotification(ctx, notification(mockpay.GatewayMock, n, "")); err != nil || parsed.GetVerified() {
+	if parsed, err = c.ParsePaymentNotification(ctx, notification(mockpay.GatewayMock, n, "")); err != nil || parsed.GetVerified() {
 		t.Fatalf("unknown status: %v %v", parsed, err)
 	}
 	_, err = c.QueryPayment(ctx, &pluginv1.QueryPaymentRequest{Gateway: mockpay.GatewayNoQuery, OutTradeNo: "s2a_1"})

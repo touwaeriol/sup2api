@@ -2,6 +2,8 @@ package x
 
 import (
 	"testing"
+
+	"github.com/shopspring/decimal"
 )
 
 func TestItoa64(t *testing.T) {
@@ -37,6 +39,14 @@ func TestTruncUTF8(t *testing.T) {
 	for _, tt := range tests {
 		if got := TruncUTF8(tt.s, tt.n); got != tt.want {
 			t.Errorf("TruncUTF8(%q, %d) = %q, want %q", tt.s, tt.n, got, tt.want)
+		}
+	}
+}
+
+func TestExact(t *testing.T) {
+	for s, want := range map[string]bool{"1": true, "1.5": true, "0.00000001": true, "0.000000001": false, "-2.123456789": false} {
+		if got := Exact(decimal.RequireFromString(s), 8); got != want {
+			t.Errorf("Exact(%s, 8) = %v", s, got)
 		}
 	}
 }

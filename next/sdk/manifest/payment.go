@@ -1,8 +1,9 @@
 package manifest
 
-// CapPaymentGateway is the capability of a plugin serving
-// PaymentGatewayService for the gateways it declares in payments.
-const CapPaymentGateway = "payment.gateway.v1"
+import (
+	"regexp"
+	"strings"
+)
 
 // PermPaymentGateway is the host permission a payment gateway plugin asks
 // for: whatever it verifies can mark its own gateway's orders paid (for the
@@ -20,7 +21,7 @@ type Payments struct {
 
 // PaymentGateway is one gateway of a plugin.
 type PaymentGateway struct {
-	ID   string        `json:"id"` // ^[a-z][a-z0-9_]{1,29}$, unique within the plugin
+	ID   string        `json:"id"` // KeyPattern, unique within the plugin
 	Name LocalizedText `json:"name"`
 	Icon string        `json:"icon,omitempty"` // icon key, see PaymentMethod.Icon
 	// Methods are the payment methods it offers, the templates an
@@ -40,5 +41,30 @@ type PaymentMethod struct {
 	Icon string `json:"icon,omitempty"`
 }
 
+// KeyPattern is the shape of a plugin-local id: a payment gateway's, a
+// notification channel's, a permission group's key. It holds no dot, so
+// PaymentGatewayName can be read back.
+var KeyPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{1,29}$`)
+
+const gatewayNameSep = "."
+
 // PaymentGatewayName is the site-wide name of a plugin's gateway.
-func PaymentGatewayName(pluginID, gatewayID string) string { return pluginID + "." + gatewayID }
+func PaymentGatewayName(pluginID, gatewayID string) string {
+	return pluginID + gatewayNameSep + gatewayID
+}
+
+// ParsePaymentGatewayName splits a name PaymentGatewayName made into its
+// plugin id and gateway id; ok is false for any other string, which
+// includes the built-in gateways' names. The plugin key, a first-party
+// plugin's whole id, must have a key's shape too: ParsePluginID alone takes
+// any non-empty string for a first-party id.
+func ParsePaymentGatewayName(name string) (pluginID, gatewayID string, ok bool) {
+	pluginID, gatewayID, ok = strings.Cut(name, gatewayNameSep)
+	if !ok || len(pluginID) > PluginIDMaxLen || !KeyPattern.MatchString(gatewayID) {
+		return "", "", false
+	}
+	if _, key, ok := ParsePluginID(pluginID); !ok || !KeyPattern.MatchString(key) {
+		return "", "", false
+	}
+	return pluginID, gatewayID, true
+}

@@ -43,7 +43,7 @@ var (
 // §14.2); while email+IP or IP is locked out the password is not checked.
 func (s *Service) Login(ctx context.Context, email, password, ip string) (*LoginResult, error) {
 	if wait := s.limiter.check(ctx, email, ip); wait > 0 {
-		return nil, rateLimitedError(ctx, wait)
+		return nil, loginLocked(ctx, wait)
 	}
 	id, hash, status, err := s.checkLoginPassword(ctx, email, password, ip)
 	if err != nil {
@@ -167,7 +167,7 @@ func (s *Service) LoginSecondFactor(ctx context.Context, flowToken, code, ip str
 		return nil, err
 	}
 	if wait := s.limiter.check(ctx, payload.Email, ip); wait > 0 {
-		return nil, rateLimitedError(ctx, wait)
+		return nil, loginLocked(ctx, wait)
 	}
 	result, err := s.signIn(withLoginMethod(ctx, loginMethodTwoFactor), userID, s.secondFactorLogin(ctx, userID, flowToken, code, payload.Password))
 	if isBadSecondFactor(err) {

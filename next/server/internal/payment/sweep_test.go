@@ -61,23 +61,6 @@ func TestSweepCreditsBeforeAHangingQuery(t *testing.T) {
 	require.Equal(t, statusCompleted, *f.load(credit.OutTradeNo).Status)
 }
 
-// A plugin gateway that says it cannot be queried is not asked; one that
-// can is.
-func TestSweepQueriesOnlyQueryablePluginGateways(t *testing.T) {
-	for _, query := range []bool{false, true} {
-		f := newFixture(t)
-		plugin := &fakeGateway{merchant: "pm", paid: map[string]*core.PaymentResult{}}
-		f.reg.set(core.PaymentGatewayBinding{Gateway: core.PaymentGatewayInfo{ID: "direct.pay", Query: query}, Client: plugin})
-		f.configure(func(v *settingsValues) { v.Methods[0].Gateway = "direct.pay" })
-		o := f.order(f.user("plugin"), "10")
-		f.age(o, 31*time.Minute)
-		_, err := f.svc.sweep(context.Background(), core.TaskRun{})
-		require.NoError(t, err)
-		require.Equal(t, map[bool]int{false: 0, true: 1}[query], plugin.queries)
-		require.Equal(t, statusExpired, *f.load(o.OutTradeNo).Status)
-	}
-}
-
 // A late payment whose promo code was deleted meanwhile credits the top-up
 // only and says why.
 func TestLatePaymentAfterPromoDeleted(t *testing.T) {

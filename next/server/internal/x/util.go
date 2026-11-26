@@ -4,6 +4,8 @@ package x
 import (
 	"strconv"
 	"unicode/utf8"
+
+	"github.com/shopspring/decimal"
 )
 
 // Itoa64 converts an int64 to a string.
@@ -49,3 +51,7 @@ func TruncateEllipsis(s string, n int) string {
 	}
 	return TruncUTF8(s, n) + "…"
 }
+
+// Exact reports whether d has at most places decimals, so that storing it
+// at that scale loses nothing.
+func Exact(d decimal.Decimal, places int32) bool { return d.Equal(d.Round(places)) }

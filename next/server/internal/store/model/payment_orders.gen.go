@@ -30,8 +30,6 @@ type PaymentOrder struct {
 	PayURL           string           `gorm:"column:pay_url;default:(-)"`                         // text default ''::text
 	QrCode           string           `gorm:"column:qr_code;default:(-)"`                         // text default ''::text
 	Status           *string          `gorm:"column:status;default:(-)"`                          // character varying(20) default 'pending'::character varying
-	LeaseToken       string           `gorm:"column:lease_token;default:(-)"`                     // character varying(64) default ''::character varying
-	LeaseUntil       *time.Time       `gorm:"column:lease_until"`                                 // timestamp with time zone
 	FailReason       string           `gorm:"column:fail_reason;default:(-)"`                     // text default ''::text
 	ExpiresAt        time.Time        `gorm:"column:expires_at"`                                  // timestamp with time zone
 	PaidAt           *time.Time       `gorm:"column:paid_at"`                                     // timestamp with time zone

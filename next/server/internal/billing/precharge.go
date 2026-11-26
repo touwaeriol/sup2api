@@ -50,7 +50,7 @@ func (s *Service) Precharge(ctx context.Context, r *core.UsageRecord) error {
 	if err != nil {
 		return err
 	}
-	ch := core.LedgerChange{UserID: r.UserID, Amount: amount, Kind: KindUsage, RefType: "precharge",
+	ch := core.LedgerChange{UserID: r.UserID, Amount: amount, Kind: core.LedgerKindUsage, RefType: "precharge",
 		RefID: r.RequestID, IdempotencyKey: "precharge:" + r.RequestID, Note: "request precharge"}
 	// ApplyTx validated and rounded the same change; doing it before the
 	// transaction keeps the error and the SQL parameters identical.
@@ -288,7 +288,7 @@ func (s *Service) ReleasePrechargeTx(ctx context.Context, tx *gorm.DB, userID in
 	if err != nil || res == nil || res.Duplicate || s.events == nil {
 		return res, err
 	}
-	if err := s.events.Emit(ctx, tx, balanceChanged(userID, res, amount, KindRefund)); err != nil {
+	if err := s.events.Emit(ctx, tx, balanceChanged(userID, res, amount, core.LedgerKindRefund)); err != nil {
 		return nil, fmt.Errorf("emit balance.changed: %w", err)
 	}
 	return res, nil

@@ -70,7 +70,7 @@ const LAYOUT: Group[] = [
   },
   {
     key: 'topup',
-    pages: [page('topup', 'topup:manage', 'settings.tabs.topup', 'coin')]
+    pages: [page('topup', 'topup:manage', 'settings.tabs.topup', 'ledger')]
   },
   {
     key: 'runtime',

@@ -4,11 +4,8 @@ import (
 	"context"
 	"fmt"
 	"mime"
-	"net/http"
 	"slices"
 	"strings"
-	"sync/atomic"
-	"time"
 	"unicode"
 
 	"google.golang.org/grpc/codes"
@@ -22,7 +19,7 @@ import (
 
 // TimeoutPayment bounds one PaymentGatewayService call, like a plugin HTTP
 // route: at most a round trip to the gateway's API.
-const TimeoutPayment = 30 * time.Second
+const TimeoutPayment = TimeoutHTTP
 
 // Bounds of what a plugin hands the core for a notification. The reply is
 // written on the console's origin to anyone who calls the public notify
@@ -30,7 +27,6 @@ const TimeoutPayment = 30 * time.Second
 const (
 	maxPaymentReplyBytes  = 64 << 10
 	maxPaymentReasonBytes = 200
-	defaultReplyType      = "text/plain; charset=utf-8"
 )
 
 // paymentReplyTypes are the media types a reply may have: what gateways
@@ -39,49 +35,41 @@ var paymentReplyTypes = map[string]bool{"text/plain": true, "application/json": 
 
 func paymentOf(p *proc) pluginv1.PaymentGatewayServiceClient { return p.payment }
 
-// notePaymentService records whether the process reported
-// payment.gateway.v1 in its handshake: a plugin that does not serve the
-// service gets no gateway (PaymentGateway is nil, the registry marks it
-// abnormal), unlike other capabilities, which only log a warning.
-func (i *Instance) notePaymentService(reported map[string]bool) {
-	i.payServed.Store(reported[manifest.CapPaymentGateway])
-}
-
 // PaymentGateway is the plugin's gateway id (manifest payments.gateways[].id)
 // as a core.PaymentGateway (CONTRACTS §140), nil unless the plugin declares
-// payment.gateway.v1 and the gateway, and its process serves the service.
+// payment.gateway.v1 and the gateway, and its process reported the service
+// in its handshake: unlike other capabilities, which only log a warning, a
+// gateway the process does not serve is not registered (the registry marks
+// the plugin abnormal).
 func (i *Instance) PaymentGateway(id string) core.PaymentGateway {
 	p := i.pkg.Manifest.Payments
-	if !i.has(manifest.CapPaymentGateway) || p == nil || !i.payServed.Load() {
+	if !i.has(manifest.CapPaymentGateway) || p == nil || !i.served(manifest.CapPaymentGateway) {
 		return nil
 	}
 	n := slices.IndexFunc(p.Gateways, func(g manifest.PaymentGateway) bool { return g.ID == id })
 	if n < 0 {
 		return nil
 	}
-	replies, _ := i.payReplies.LoadOrStore(id, &atomic.Pointer[paymentReplies]{})
-	return paymentAdapter{i: i, gateway: id, query: p.Gateways[n].Query, replies: replies.(*atomic.Pointer[paymentReplies])}
+	return paymentAdapter{i: i, gateway: id, query: p.Gateways[n].Query}
 }
 
 // paymentAdapter passes the facts both ways as they are: the core checks
 // every one of them against the order, so the adapter neither fixes nor
-// drops any, and plugin errors stay errors.
+// drops any, and plugin errors stay errors. It holds no state of a
+// notification: each one's replies travel with its own answer.
 type paymentAdapter struct {
 	i       *Instance
 	gateway string
 	query   bool
-	replies *atomic.Pointer[paymentReplies]
 }
 
-// paymentReplies are the plugin's answers to the gateway, one per outcome.
-type paymentReplies [3]*pluginv1.PaymentReply
-
-// defaultReplyStatus answers an outcome the plugin gave no usable reply for
-// (or before it gave any replies, or with a status net/http cannot write).
-var defaultReplyStatus = [3]int{core.PaymentHandled: http.StatusOK, core.PaymentRejected: http.StatusBadRequest, core.PaymentRetry: http.StatusServiceUnavailable}
+// errorf is an error about the gateway: "plugin <id> payment gateway <id>: ...".
+func (a paymentAdapter) errorf(format string, args ...any) error {
+	return fmt.Errorf("plugin %s payment gateway %s: "+format, append([]any{a.i.name(), a.gateway}, args...)...)
+}
 
 func (a paymentAdapter) fail(format string, args ...any) error {
-	return core.ErrInternal.WithCause(fmt.Errorf("plugin %s payment gateway %s: %s", a.i.name(), a.gateway, fmt.Sprintf(format, args...)))
+	return core.ErrInternal.WithCause(a.errorf(format, args...))
 }
 
 func (a paymentAdapter) CreatePayment(ctx context.Context, in core.PaymentCreate) (*core.PaymentCreated, error) {
@@ -97,30 +85,29 @@ func (a paymentAdapter) CreatePayment(ctx context.Context, in core.PaymentCreate
 	if err != nil {
 		return nil, err
 	}
-	if out.GetPayUrl() == "" && out.GetQrCode() == "" {
-		return nil, a.fail("CreatePayment returned neither pay_url nor qr_code")
-	}
 	return &core.PaymentCreated{PayURL: out.GetPayUrl(), QRCode: out.GetQrCode(), SessionID: out.GetSessionId(), MerchantRef: out.GetMerchantRef()}, nil
 }
 
-// ParseNotification keeps the replies of every answer, verified or not, for
-// Respond; a notification the plugin did not verify is ErrPaymentSignature
-// with the plugin's reason.
-func (a paymentAdapter) ParseNotification(ctx context.Context, n core.PaymentNotification) (*core.PaymentResult, error) {
-	req := &pluginv1.ParseNotificationRequest{Gateway: a.gateway, Method: n.Method, RawQuery: n.RawQuery,
+// ParseNotification answers the notification with the replies of the
+// plugin's answer to it, verified or not, and with the defaults when the
+// plugin gave none; a notification the plugin did not verify is
+// ErrPaymentSignature with the plugin's reason.
+func (a paymentAdapter) ParseNotification(ctx context.Context, n core.PaymentNotification) (*core.PaymentResult, core.PaymentResponder, error) {
+	req := &pluginv1.ParsePaymentNotificationRequest{Gateway: a.gateway, Method: n.Method, RawQuery: n.RawQuery,
 		Headers: make(map[string]*pluginv1.HeaderValues, len(n.Header)), Body: n.Body}
 	for k, v := range n.Header {
 		req.Headers[k] = &pluginv1.HeaderValues{Values: v}
 	}
-	out, err := invoke(a.i, ctx, classConsole, TimeoutPayment, paymentOf, pluginv1.PaymentGatewayServiceClient.ParseNotification, req)
+	out, err := invoke(a.i, ctx, classConsole, TimeoutPayment, paymentOf, pluginv1.PaymentGatewayServiceClient.ParsePaymentNotification, req)
 	if err != nil {
-		return nil, err
+		return nil, core.StatusPaymentReply, err
 	}
-	a.replies.Store(&paymentReplies{core.PaymentHandled: out.GetHandled(), core.PaymentRejected: out.GetRejected(), core.PaymentRetry: out.GetRetry()})
+	respond := paymentReplies{core.PaymentHandled: out.GetHandled(), core.PaymentRejected: out.GetRejected(), core.PaymentRetry: out.GetRetry()}.respond
 	if !out.GetVerified() {
-		return nil, a.unverified(out.GetReason())
+		return nil, respond, a.unverified(out.GetReason())
 	}
-	return a.result(out.GetResult())
+	res, err := a.result(out.GetResult())
+	return res, respond, err
 }
 
 // unverified is the error of a notification the plugin did not verify:
@@ -130,9 +117,9 @@ func (a paymentAdapter) ParseNotification(ctx context.Context, n core.PaymentNot
 func (a paymentAdapter) unverified(reason string) error {
 	reason = strings.TrimSpace(x.Truncate(strings.Map(dropControl, reason), maxPaymentReasonBytes))
 	if reason == "" {
-		return fmt.Errorf("plugin %s payment gateway %s: %w", a.i.name(), a.gateway, core.ErrPaymentSignature)
+		return a.errorf("%w", core.ErrPaymentSignature)
 	}
-	return fmt.Errorf("plugin %s payment gateway %s: %w: %s", a.i.name(), a.gateway, core.ErrPaymentSignature, reason)
+	return a.errorf("%w: %s", core.ErrPaymentSignature, reason)
 }
 
 func dropControl(r rune) rune {
@@ -153,7 +140,7 @@ func (a paymentAdapter) QueryPayment(ctx context.Context, q core.PaymentQuery) (
 	out, err := invoke(a.i, ctx, classBackground, TimeoutPayment, paymentOf, pluginv1.PaymentGatewayServiceClient.QueryPayment, req)
 	// mapErr keeps the gRPC status as the cause; status.Code finds it.
 	if status.Code(err) == codes.Unimplemented {
-		return nil, fmt.Errorf("plugin %s payment gateway %s: %w", a.i.name(), a.gateway, core.ErrPaymentQueryUnsupported)
+		return nil, a.errorf("%w", core.ErrPaymentQueryUnsupported)
 	}
 	if err != nil {
 		return nil, err
@@ -174,33 +161,31 @@ func (a paymentAdapter) result(r *pluginv1.PaymentResult) (*core.PaymentResult, 
 		return nil, a.fail("result without a payment status")
 	}
 	return &core.PaymentResult{OutTradeNo: r.GetOutTradeNo(), TradeNo: r.GetTradeNo(), SessionID: r.GetSessionId(),
-		Amount: r.GetAmount(), Currency: r.GetCurrency(), Status: st, EventID: r.GetEventId(),
+		Amount: r.GetAmountMinor(), Currency: r.GetCurrency(), Status: st, EventID: r.GetEventId(),
 		MerchantRef: r.GetMerchantRef(), MethodType: r.GetMethodType(), Fields: r.GetFields()}, nil
 }
 
-// Respond answers with the plugin's reply for the outcome, from its latest
-// ParseNotification answer: the core may decide an outcome without a
-// verified result (the plugin failed, the notification was rejected). A
-// reply of another media type or over the size bound is replaced by the
-// default one as a whole.
-func (a paymentAdapter) Respond(o core.PaymentOutcome) core.PaymentReply {
-	if o < core.PaymentHandled || o > core.PaymentRetry {
-		o = core.PaymentRetry
+// paymentReplies are the plugin's replies to one notification, by outcome.
+type paymentReplies [3]*pluginv1.PaymentReply
+
+// respond answers with the plugin's reply for the outcome. A missing reply,
+// or one of another media type or over the size bound, is replaced by the
+// default one as a whole; a status net/http cannot write only by the
+// default status.
+func (r paymentReplies) respond(o core.PaymentOutcome) core.PaymentReply {
+	var reply *pluginv1.PaymentReply
+	if o >= core.PaymentHandled && o <= core.PaymentRetry {
+		reply = r[o]
 	}
-	out := core.PaymentReply{Status: defaultReplyStatus[o]}
-	var r *pluginv1.PaymentReply
-	if last := a.replies.Load(); last != nil {
-		r = last[o]
-	}
-	ct, ok := replyType(r)
+	ct, ok := replyType(reply)
 	if !ok {
-		return out
+		return core.StatusPaymentReply(o)
 	}
-	if s := int(r.GetStatus()); s >= 200 && s <= 599 {
-		out.Status = s
+	status := int(reply.GetStatus())
+	if status < 200 || status > 599 {
+		status = o.HTTPStatus()
 	}
-	out.ContentType, out.Body = ct, r.GetBody()
-	return out
+	return core.PaymentReply{Status: status, ContentType: ct, Body: reply.GetBody()}
 }
 
 // replyType is the content type r is written with (text/plain when it has
@@ -211,7 +196,7 @@ func replyType(r *pluginv1.PaymentReply) (string, bool) {
 	}
 	ct := r.GetContentType()
 	if ct == "" {
-		return defaultReplyType, true
+		return core.PlainTextReplyType, true
 	}
 	mt, params, err := mime.ParseMediaType(ct)
 	if err != nil || !paymentReplyTypes[mt] {

@@ -21,7 +21,7 @@ import (
 )
 
 var (
-	keyRe = regexp.MustCompile(`^[a-z][a-z0-9_]{1,29}$`)
+	keyRe = manifest.KeyPattern
 	// pluginKeyRe is keyRe without "__" or a trailing "_", so that no
 	// plugin's table prefix (manifest.TablePrefix) starts another's.
 	pluginKeyRe     = regexp.MustCompile(`^[a-z](_?[a-z0-9]){1,29}$`)
@@ -224,13 +224,37 @@ func (v *validator) needFile(field, p string) {
 	}
 }
 
+// hasCap reports whether the manifest declares capability capID.
+func (v *validator) hasCap(capID string) bool {
+	return slices.ContainsFunc(v.m.Capabilities, func(c manifest.Capability) bool { return c.ID == capID })
+}
+
 func (v *validator) needCap(field, capID string) {
-	for _, c := range v.m.Capabilities {
-		if c.ID == capID {
-			return
-		}
+	if !v.hasCap(capID) {
+		v.add(field, "missing_capability", "capability %q must be declared", capID)
 	}
-	v.add(field, "missing_capability", "capability %q must be declared", capID)
+}
+
+// count checks that a list declares between one and max entries.
+func (v *validator) count(field string, n, max int, noun string) {
+	if n == 0 || n > max {
+		v.add(field, "invalid", "declare between one and %d %s", max, noun)
+	}
+}
+
+// newKey checks a declared key's shape and that seen does not hold it yet;
+// false when it fails either.
+func (v *validator) newKey(field, what, key string, re *regexp.Regexp, seen map[string]bool) bool {
+	switch {
+	case !re.MatchString(key):
+		v.add(field, "invalid_format", "%s %q must match %s", what, key, re.String())
+	case seen[key]:
+		v.add(field, "duplicate", "%s %q declared twice", what, key)
+	default:
+		seen[key] = true
+		return true
+	}
+	return false
 }
 
 // sections are Validate's checks in the order they report. hostPermissions

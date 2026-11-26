@@ -13,26 +13,20 @@ const MaxNotificationChannels = 8
 func (v *validator) notifications() {
 	n := v.m.Notifications
 	if n == nil {
-		if slices.ContainsFunc(v.m.Capabilities, func(c manifest.Capability) bool { return c.ID == manifest.CapNotifyChannel }) {
+		if v.hasCap(manifest.CapNotifyChannel) {
 			v.add("notifications", "required", "notify.channel.v1 requires notifications")
 		}
 		return
 	}
 	v.needCap("notifications", manifest.CapNotifyChannel)
-	if len(n.Channels) == 0 || len(n.Channels) > MaxNotificationChannels {
-		v.add("notifications.channels", "invalid", "declare between one and %d channels", MaxNotificationChannels)
-	}
+	v.count("notifications.channels", len(n.Channels), MaxNotificationChannels, "channels")
 	seen := map[string]bool{}
 	for i, c := range n.Channels {
 		f := fmt.Sprintf("notifications.channels[%d]", i)
-		if !keyRe.MatchString(c.ID) {
-			v.add(f+".id", "invalid_format", "channel id %q must match %s", c.ID, keyRe.String())
-		} else if seen[c.ID] {
-			v.add(f+".id", "duplicate", "channel %q declared twice", c.ID)
-		} else if i := slices.IndexFunc(v.opt.OtherChannels, func(o ChannelOwner) bool { return o.PluginID != v.m.ID() && o.ID == c.ID }); i >= 0 {
+		fresh := v.newKey(f+".id", "channel id", c.ID, keyRe, seen)
+		if i := slices.IndexFunc(v.opt.OtherChannels, func(o ChannelOwner) bool { return o.PluginID != v.m.ID() && o.ID == c.ID }); fresh && i >= 0 {
 			v.add(f+".id", "channel_conflict", "notification channel %q is already declared by plugin %q", c.ID, manifest.DisplayID(v.opt.OtherChannels[i].PluginID))
 		}
-		seen[c.ID] = true
 		if firstText(c.Label) == "" {
 			v.add(f+".label", "required", "label is required")
 		}

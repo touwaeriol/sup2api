@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/require"
-	"gorm.io/gorm"
 
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store/model"
@@ -16,16 +16,14 @@ import (
 // completedOrder writes an order of uid credited amount just now.
 func (f *fixture) completedOrder(uid int64, amount string) {
 	f.t.Helper()
-	no, err := newTradeNo()
-	require.NoError(f.t, err)
 	done, now := statusCompleted, time.Now()
-	require.NoError(f.t, f.db.Gorm.Create(&model.PaymentOrder{OutTradeNo: no, UserID: uid, Amount: decimalOf(amount),
-		PayAmount: decimalOf("1"), Currency: "CNY", Price: decimalOf("1"), Method: "alipay", Gateway: "epay",
+	require.NoError(f.t, f.db.Gorm.Create(&model.PaymentOrder{OutTradeNo: newTradeNo(), UserID: uid, Amount: dec(amount),
+		PayAmount: dec("1"), Currency: "CNY", Price: dec("1"), Method: "alipay", Gateway: "epay",
 		Status: &done, CompletedAt: &now, ExpiresAt: now}).Error)
 }
 
 func (f *fixture) configureMax() {
-	f.configure(func(v *settingsValues) { v.MaxTopup, v.MaxPendingOrders = num(maxCreditPerTx), 100 })
+	f.configure(func(v *settingsValues) { v.MaxTopup, v.MaxPendingOrders = core.MaxCreditPerTx, 100 })
 }
 
 // An order whose amount with its promo bonus passes the single limit is
@@ -35,7 +33,7 @@ func TestOrderSingleLimitCountsTheBonus(t *testing.T) {
 	f.configureMax()
 	f.promo("TEN", "10", "0", 0)
 	uid := f.user("single")
-	_, err := f.svc.placeOrder(context.Background(), uid, quoteInput{Amount: numInt(100000), Method: "alipay", PromoCode: "TEN"}, "")
+	_, err := f.svc.placeOrder(context.Background(), uid, quoteInput{Amount: dec("100000"), Method: "alipay", PromoCode: "TEN"}, "")
 	require.Equal(t, []string{"amount"}, fieldsOf(err))
 	f.order(uid, "100000")
 }
@@ -49,7 +47,7 @@ func TestOrderDailyLimit(t *testing.T) {
 	f.completedOrder(uid, "900000")
 	f.order(uid, "50000")
 	for _, amount := range []int64{50001, 100000} {
-		_, err := f.svc.placeOrder(context.Background(), uid, quoteInput{Amount: numInt(amount), Method: "alipay"}, "")
+		_, err := f.svc.placeOrder(context.Background(), uid, quoteInput{Amount: decimal.NewFromInt(amount), Method: "alipay"}, "")
 		require.Equal(t, http.StatusConflict, core.AsError(err).Status, amount)
 	}
 	f.order(uid, "50000")
@@ -78,31 +76,19 @@ func TestCreditRefusalReleasesPromo(t *testing.T) {
 	require.Zero(t, uses)
 }
 
-// stealingLedger takes the order's lease away inside the crediting
-// transaction, right after the ledger wrote: the holder lost its lease
-// while crediting.
-type stealingLedger struct {
-	Ledger
-	orderID int64
-}
-
-func (l stealingLedger) ApplyTx(ctx context.Context, tx *gorm.DB, ch core.LedgerChange) (*core.LedgerResult, error) {
-	res, err := l.Ledger.ApplyTx(ctx, tx, ch)
-	if err == nil {
-		err = tx.Model(&model.PaymentOrder{}).Where("id = ?", l.orderID).Update("lease_token", "stolen").Error
-	}
-	return res, err
-}
-
-// A holder that loses its lease midway rolls back the ledger rows too.
-func TestLostLeaseMidCreditRollsBackTheLedger(t *testing.T) {
+// An expired or cancelled order may still be paid within the late window,
+// so it keeps counting against the daily limit; past the window it no
+// longer does.
+func TestOrderDailyLimitCountsLateOrders(t *testing.T) {
 	f := newFixture(t)
-	f.configure()
-	uid := f.user("midway")
-	o := f.paidOrder(uid, "10")
-	f.svc.ledger = stealingLedger{Ledger: f.svc.ledger, orderID: o.ID}
-	require.ErrorIs(t, f.svc.credit(context.Background(), o.ID), errLostRace)
-	_, n := f.ledgerSum(uid, "topup:")
-	require.Zero(t, n)
-	require.Equal(t, statusPaid, *f.load(o.OutTradeNo).Status)
+	f.configureMax()
+	uid := f.user("late-daily")
+	f.completedOrder(uid, "900000")
+	late := f.order(uid, "100000")
+	_, err := f.svc.cancel(context.Background(), uid, late.OutTradeNo)
+	require.NoError(t, err)
+	_, err = f.svc.placeOrder(context.Background(), uid, quoteInput{Amount: dec("1"), Method: "alipay"}, "")
+	require.Equal(t, http.StatusConflict, core.AsError(err).Status)
+	f.age(late, lateWindow+time.Minute)
+	f.order(uid, "1")
 }

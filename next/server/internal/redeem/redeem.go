@@ -9,9 +9,9 @@ import (
 	"net/http"
 
 	"github.com/redis/go-redis/v9"
-	"github.com/shopspring/decimal"
 
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/ratelimit"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store"
 )
 
@@ -24,40 +24,34 @@ const (
 	statusExpired = "expired"
 )
 
-// kindRedeem is billing.KindRedeem; modules do not import billing.
-const kindRedeem = "redeem"
-
-// maxValue is the ledger's cap on one credit (the old payment plugin's
-// ledger.credit maxPerTx): a code is one credit, so it cannot be worth more.
-var maxValue = decimal.NewFromInt(100000)
-
-// Ledger is core.Ledger plus the balance cache refresh billing needs after a
-// transaction that called ApplyTx commits (as usage.TxLedger);
-// *billing.Service implements it.
-type Ledger interface {
-	core.Ledger
-	CacheBalance(ctx context.Context, userID, ledgerID int64, balance decimal.Decimal)
-}
+// The two states of an unused code, on redeem_codes (qualified, so that they
+// hold in a join too): only a redeemable code can be redeemed.
+const (
+	redeemable = "redeem_codes.status = '" + statusUnused + "' AND (redeem_codes.expires_at IS NULL OR redeem_codes.expires_at > now())"
+	expired    = "redeem_codes.status = '" + statusUnused + "' AND redeem_codes.expires_at <= now()"
+)
 
 // Service serves redeem codes.
 type Service struct {
 	db     *store.DB
-	ledger Ledger
+	ledger core.CachingLedger
 	// windows caps redemptions per user per minute (nil: no cap).
-	windows core.RateWindows
-	fails   failLock
+	windows core.Admitter
+	fails   ratelimit.Lockout
 }
 
 // New builds the service. windows counts redemptions per user (the app
 // gives it a ratelimit.Minute of scope "redeem"); rdb holds the failure
 // lockout. Without Redis neither limits anything, like the login limits.
-func New(db *store.DB, ledger Ledger, rdb redis.Cmdable, windows core.RateWindows) *Service {
-	return &Service{db: db, ledger: ledger, windows: windows, fails: failLock{rdb: rdb}}
+func New(db *store.DB, ledger core.CachingLedger, rdb redis.Cmdable, windows core.Admitter) *Service {
+	return &Service{db: db, ledger: ledger, windows: windows, fails: ratelimit.Lockout{
+		Name: "redeem failures", RDB: rdb, Window: lockFor, Max: maxFailures, RestartAtMax: true}}
 }
 
-// errInvalidCode is the one answer for a code that does not exist, is used,
-// voided or expired: it never tells which.
+// codeInvalid is the code of the one answer for a code that does not exist,
+// is used, voided or expired: it never tells which.
+const codeInvalid = "invalid_redeem_code"
+
 func errInvalidCode(ctx context.Context) *core.Error {
-	return core.NewError(http.StatusBadRequest, "invalid_redeem_code",
-		core.Text(ctx, "invalid or used redeem code", "兑换码无效或已使用"))
+	return core.NewError(http.StatusBadRequest, codeInvalid, core.Text(ctx, "invalid or used redeem code", "兑换码无效或已使用"))
 }

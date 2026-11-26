@@ -3,7 +3,6 @@ package check
 import (
 	"fmt"
 	"regexp"
-	"slices"
 
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
 )
@@ -24,7 +23,7 @@ var paymentKeyRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,49}$`)
 func (v *validator) payments() {
 	p := v.m.Payments
 	if p == nil {
-		if slices.ContainsFunc(v.m.Capabilities, func(c manifest.Capability) bool { return c.ID == manifest.CapPaymentGateway }) {
+		if v.hasCap(manifest.CapPaymentGateway) {
 			v.add("payments", "required", "%s requires payments", manifest.CapPaymentGateway)
 		}
 		if _, ok := v.perms[manifest.PermPaymentGateway]; ok {
@@ -34,18 +33,11 @@ func (v *validator) payments() {
 	}
 	v.needCap("payments", manifest.CapPaymentGateway)
 	v.needPerm("payments", manifest.PermPaymentGateway, "payment gateways")
-	if len(p.Gateways) == 0 || len(p.Gateways) > MaxPaymentGateways {
-		v.add("payments.gateways", "invalid", "declare between one and %d gateways", MaxPaymentGateways)
-	}
+	v.count("payments.gateways", len(p.Gateways), MaxPaymentGateways, "gateways")
 	seen := map[string]bool{}
 	for i, gw := range p.Gateways {
 		f := fmt.Sprintf("payments.gateways[%d]", i)
-		if !keyRe.MatchString(gw.ID) {
-			v.add(f+".id", "invalid_format", "gateway id %q must match %s", gw.ID, keyRe.String())
-		} else if seen[gw.ID] {
-			v.add(f+".id", "duplicate", "gateway %q declared twice", gw.ID)
-		}
-		seen[gw.ID] = true
+		v.newKey(f+".id", "gateway id", gw.ID, keyRe, seen)
 		v.paymentGateway(f, gw)
 	}
 }
@@ -56,18 +48,11 @@ func (v *validator) paymentGateway(f string, gw manifest.PaymentGateway) {
 		v.add(f+".name", "required", "name is required")
 	}
 	v.paymentIcon(f+".icon", gw.Icon)
-	if len(gw.Methods) == 0 || len(gw.Methods) > MaxPaymentMethods {
-		v.add(f+".methods", "invalid", "declare between one and %d methods", MaxPaymentMethods)
-	}
+	v.count(f+".methods", len(gw.Methods), MaxPaymentMethods, "methods")
 	seen := map[string]bool{}
 	for i, m := range gw.Methods {
 		mf := fmt.Sprintf("%s.methods[%d]", f, i)
-		if !paymentKeyRe.MatchString(m.Type) {
-			v.add(mf+".type", "invalid_format", "method type %q must match %s", m.Type, paymentKeyRe.String())
-		} else if seen[m.Type] {
-			v.add(mf+".type", "duplicate", "method type %q declared twice", m.Type)
-		}
-		seen[m.Type] = true
+		v.newKey(mf+".type", "method type", m.Type, paymentKeyRe, seen)
 		if firstText(m.Name) == "" {
 			v.add(mf+".name", "required", "name is required")
 		}

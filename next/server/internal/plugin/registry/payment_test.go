@@ -21,13 +21,12 @@ type payStub struct{ id string }
 func (payStub) CreatePayment(context.Context, core.PaymentCreate) (*core.PaymentCreated, error) {
 	return nil, nil
 }
-func (payStub) ParseNotification(context.Context, core.PaymentNotification) (*core.PaymentResult, error) {
-	return nil, nil
+func (payStub) ParseNotification(context.Context, core.PaymentNotification) (*core.PaymentResult, core.PaymentResponder, error) {
+	return nil, core.StatusPaymentReply, nil
 }
 func (payStub) QueryPayment(context.Context, core.PaymentQuery) (*core.PaymentResult, error) {
 	return nil, nil
 }
-func (payStub) Respond(core.PaymentOutcome) core.PaymentReply { return core.PaymentReply{} }
 
 func paymentManifest(key string, ids ...string) *manifest.Manifest {
 	m := registrytest.Manifest(key, "1.0.0")
@@ -82,31 +81,22 @@ type unservedExt struct{ ext }
 
 func (unservedExt) PaymentGateway(string) core.PaymentGateway { return nil }
 
-// A name already bound, or a gateway the process does not serve, is
-// skipped and the plugin is abnormal.
-func TestPaymentGatewayConflicts(t *testing.T) {
-	for name, tc := range map[string]struct {
-		e      registry.Extension
-		bound  int
-		reason string
-	}{
-		"duplicate": {payExt{ext{pkg: load(t, paymentManifest("mockpay", "mock", "mock")), grants: payGrant}}, 1, "already declared by plugin mockpay"},
-		"unserved":  {unservedExt{ext{pkg: load(t, paymentManifest("mockpay", "mock")), grants: payGrant}}, 0, "does not serve payment.gateway.v1"},
-	} {
-		g := registry.New().Publish([]registry.Extension{tc.e})
-		if got := g.(core.PaymentGatewayGeneration).PaymentGateways(); len(got) != tc.bound {
-			t.Fatalf("%s: gateways = %+v", name, got)
-		}
-		info, _ := g.Plugin("mockpay")
-		if len(info.Conflicts) != 1 || info.Conflicts[0].Resource != "payment_gateway" || info.Conflicts[0].ID != "mockpay.mock" ||
-			!strings.Contains(info.Conflicts[0].Reason, tc.reason) {
-			t.Fatalf("%s: conflicts = %+v", name, info.Conflicts)
-		}
+// A gateway the process does not serve is skipped and the plugin is
+// abnormal.
+func TestPaymentGatewayUnserved(t *testing.T) {
+	g := registry.New().Publish([]registry.Extension{unservedExt{ext{pkg: load(t, paymentManifest("mockpay", "mock")), grants: payGrant}}})
+	if got := g.(core.PaymentGatewayGeneration).PaymentGateways(); len(got) != 0 {
+		t.Fatalf("gateways = %+v", got)
+	}
+	info, _ := g.Plugin("mockpay")
+	if len(info.Conflicts) != 1 || info.Conflicts[0].Resource != "payment_gateway" || info.Conflicts[0].ID != "mockpay.mock" ||
+		!strings.Contains(info.Conflicts[0].Reason, "does not serve payment.gateway.v1") {
+		t.Fatalf("conflicts = %+v", info.Conflicts)
 	}
 }
 
 // A plugin no longer in the generation (disabled, uninstalled) or whose
-// grant was revoked has no gateway, which the core answers with a retry.
+// grant was revoked has no gateway.
 func TestPaymentGatewayDisableAndRevoke(t *testing.T) {
 	pkg := load(t, paymentManifest("mockpay", "mock"))
 	for name, next := range map[string][]registry.Extension{

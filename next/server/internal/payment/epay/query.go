@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/x"
 )
 
 // maxQueryResponse caps the order query's body so a broken or hostile
@@ -52,7 +53,7 @@ func unsupported(reason string) error {
 }
 
 func (g *Gateway) fetchOrder(ctx context.Context, cfg Config, outTradeNo string) ([]byte, error) {
-	params := url.Values{"act": {"order"}, "pid": {cfg.MerchantID}, "key": {cfg.Key}, "out_trade_no": {outTradeNo}}
+	params := map[string]string{"act": "order", "pid": cfg.MerchantID, "key": cfg.Key, "out_trade_no": outTradeNo}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, cfg.scriptURL("api.php", params), nil)
 	if err != nil {
 		return nil, errors.New("epay: query request could not be built")
@@ -87,89 +88,63 @@ func withoutURL(err error) error {
 	return err
 }
 
-// queryResponse is the common api.php answer. Forks send numbers as
-// strings or numbers, hence flexString.
-type queryResponse struct {
-	Code        flexString `json:"code"`
-	Msg         flexString `json:"msg"`
-	PID         flexString `json:"pid"`
-	TradeNo     flexString `json:"trade_no"`
-	OutTradeNo  flexString `json:"out_trade_no"`
-	APITradeNo  flexString `json:"api_trade_no"`
-	Type        flexString `json:"type"`
-	Name        flexString `json:"name"`
-	Money       flexString `json:"money"`
-	Status      flexString `json:"status"`
-	TradeStatus flexString `json:"trade_status"`
-	AddTime     flexString `json:"addtime"`
-	EndTime     flexString `json:"endtime"`
-}
+// queryResponse is the api.php answer, by field name: code, msg and the
+// notification's fields (pid, trade_no, out_trade_no, type, money,
+// trade_status or the older status, ...). Forks send numbers as strings or
+// numbers, hence flexString.
+type queryResponse map[string]flexString
 
 func (r queryResponse) result(cfg Config, outTradeNo string) (*core.PaymentResult, error) {
-	if r.Code != "1" {
-		return nil, unsupported(fmt.Sprintf("answered code %q: %q", r.Code, remoteMessage(string(r.Msg), cfg.Key)))
+	params := make(map[string]string, len(r))
+	for k, v := range r {
+		params[k] = string(v)
 	}
-	if (r.OutTradeNo != "" && string(r.OutTradeNo) != outTradeNo) || (r.PID != "" && string(r.PID) != cfg.MerchantID) {
+	if params["code"] != "1" {
+		return nil, unsupported(fmt.Sprintf("answered code %q: %q", params["code"], remoteMessage(params["msg"], cfg.Key)))
+	}
+	if !echoes(params, "out_trade_no", outTradeNo) || !echoes(params, "pid", cfg.MerchantID) {
 		return nil, unsupported("answered about another order or merchant")
 	}
-	status := r.status()
 	var cents int64
-	if r.Money != "" || status == core.PaymentPaid {
+	if params["money"] != "" || statusOf(params) == core.PaymentPaid {
 		var err error
-		if cents, err = parseMoney(string(r.Money)); err != nil {
+		if cents, err = parseMoney(params["money"]); err != nil {
 			return nil, unsupported(err.Error())
 		}
 	}
-	return &core.PaymentResult{
-		OutTradeNo: outTradeNo, TradeNo: string(r.TradeNo),
-		Amount: cents, Currency: currencyCNY, Status: status,
-		MerchantRef: cfg.MerchantID, MethodType: string(r.Type),
-		Fields: fields(r.fields()),
-	}, nil
+	return resultOf(params, cents), nil
 }
 
-// status: trade_status wins when present; otherwise the older numeric
-// status, where 1 means paid.
-func (r queryResponse) status() core.PaymentStatus {
-	paid := r.TradeStatus == tradeStatusSuccess || (r.TradeStatus == "" && r.Status == "1")
-	if paid {
-		return core.PaymentPaid
+// echoes: the answer's field k, which forks may leave out, is want; an
+// absent one is filled in, so the result names the order and merchant
+// asked about.
+func echoes(params map[string]string, k, want string) bool {
+	if params[k] == "" {
+		params[k] = want
 	}
-	return core.PaymentPending
-}
-
-func (r queryResponse) fields() map[string]string {
-	return map[string]string{
-		"pid": string(r.PID), "trade_no": string(r.TradeNo), "out_trade_no": string(r.OutTradeNo),
-		"api_trade_no": string(r.APITradeNo), "type": string(r.Type), "name": string(r.Name),
-		"money": string(r.Money), "trade_status": string(r.TradeStatus), "status": string(r.Status),
-		"addtime": string(r.AddTime), "endtime": string(r.EndTime),
-	}
+	return params[k] == want
 }
 
 // remoteMessage is the gateway's msg made safe for an error: the key is
 // masked in case the gateway echoes the request, and the text is capped.
 func remoteMessage(msg, key string) string {
-	msg = strings.ReplaceAll(msg, key, "******")
-	if len(msg) <= maxRemoteMessage {
-		return msg
-	}
-	return strings.ToValidUTF8(msg[:maxRemoteMessage], "") + "…"
+	return x.TruncateEllipsis(strings.ReplaceAll(msg, key, core.SecretMask), maxRemoteMessage)
 }
 
-// flexString accepts a JSON string, number or null.
+// flexString is a JSON string or number as text. Anything else (null, an
+// object a fork adds) reads as empty rather than failing the answer: the
+// fields the gateway needs are checked where they are read.
 type flexString string
 
 func (f *flexString) UnmarshalJSON(b []byte) error {
 	var s string
-	if err := json.Unmarshal(b, &s); err == nil {
+	if json.Unmarshal(b, &s) == nil {
 		*f = flexString(s)
 		return nil
 	}
 	var n json.Number
-	if err := json.Unmarshal(b, &n); err != nil {
-		return err
+	if json.Unmarshal(b, &n) == nil {
+		*f = flexString(n.String())
 	}
-	*f = flexString(n.String())
 	return nil
 }

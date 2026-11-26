@@ -31,9 +31,9 @@ func TestMaskValuesNested(t *testing.T) {
 		"upstream":              map[string]any{"base_url": "https://u", "api/key": "k", "name": "n"},
 	}
 	maskValues(fields, v)
-	assert.Equal(t, Mask, v["notify_webhook_url"])
+	assert.Equal(t, core.SecretMask, v["notify_webhook_url"])
 	assert.Equal(t, "", v["notify_webhook_secret"], "empty values stay empty")
-	assert.Equal(t, map[string]any{"base_url": Mask, "api/key": Mask, "name": "n"}, v["upstream"])
+	assert.Equal(t, map[string]any{"base_url": core.SecretMask, "api/key": core.SecretMask, "name": "n"}, v["upstream"])
 	assert.Equal(t, 3.0, v["threshold"])
 }
 
@@ -133,7 +133,7 @@ func TestMergeSettingsPluginPermission(t *testing.T) {
 	t.Run("masked secret with nothing stored is dropped", func(t *testing.T) {
 		old := stored()
 		delete(old, "smtp_password")
-		v := in(func(v map[string]any) { v["smtp_password"] = Mask })
+		v := in(func(v map[string]any) { v["smtp_password"] = core.SecretMask })
 		changed, err := mergeSettings(fields, old, v, false, nil)
 		require.NoError(t, err)
 		assert.Empty(t, changed)
@@ -171,7 +171,7 @@ func TestMergeSettingsValidatesResolvedValues(t *testing.T) {
 func TestSecretsUndeclared(t *testing.T) {
 	v := &SettingsView{maskAll: true}
 	old := map[string]any{"api_key": "k", "opts": map[string]any{"a": 1.0}, "empty": ""}
-	fields := v.secrets(old, map[string]any{"api_key": Mask, "fresh": "x"})
+	fields := v.secrets(old, map[string]any{"api_key": core.SecretMask, "fresh": "x"})
 	var names []string
 	for _, f := range fields {
 		require.True(t, f.Credential)
@@ -181,10 +181,10 @@ func TestSecretsUndeclared(t *testing.T) {
 
 	shown := map[string]any{"api_key": "k", "opts": map[string]any{"a": 1.0}, "empty": ""}
 	maskValues(v.secrets(shown), shown)
-	assert.Equal(t, map[string]any{"api_key": Mask, "opts": Mask, "empty": ""}, shown)
+	assert.Equal(t, map[string]any{"api_key": core.SecretMask, "opts": core.SecretMask, "empty": ""}, shown)
 
 	// The plugin-permission holder changing anything re-enters what it keeps.
-	_, err := mergeSettings(fields, old, map[string]any{"api_key": Mask, "opts": Mask, "empty": "", "fresh": "x"}, false, nil)
+	_, err := mergeSettings(fields, old, map[string]any{"api_key": core.SecretMask, "opts": core.SecretMask, "empty": "", "fresh": "x"}, false, nil)
 	assert.ElementsMatch(t, []string{"values/api_key", "values/opts"}, reenterFields(t, err))
 
 	// Declared secrets ([] here) keep to their own fields.

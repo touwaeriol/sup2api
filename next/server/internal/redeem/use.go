@@ -2,11 +2,11 @@ package redeem
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store"
@@ -20,74 +20,60 @@ type Redeemed struct {
 	Balance decimal.Decimal `json:"balance"`
 }
 
-// usable is the code row a redemption may take: unused and not expired.
-const usable = "code_hash = ? AND status = '" + statusUnused + "' AND (expires_at IS NULL OR expires_at > now())"
-
-// Redeem credits the code's value to the user. Locking the code, marking it
-// used and the ledger credit commit together or not at all, so a code is
-// never used without its credit nor credited twice.
+// Redeem credits the code's value to the user. A wrong code counts towards
+// the user's lockout; anything else that fails does not.
 func (s *Service) Redeem(ctx context.Context, userID int64, raw string) (*Redeemed, error) {
 	code := normalize(raw)
 	if code == "" {
-		return nil, core.InvalidFields(core.FieldError{Field: "code", Code: "required",
-			Message: core.Text(ctx, "enter a redeem code", "请输入兑换码")})
+		return nil, core.InvalidFields(core.NewFieldError(ctx, "code", "required", "enter a redeem code", "请输入兑换码"))
 	}
 	if err := s.admit(ctx, userID); err != nil {
 		return nil, err
 	}
-	out, res, err := s.redeem(ctx, userID, code)
-	var invalid *core.Error
-	if errors.As(err, &invalid) && invalid.Code == "invalid_redeem_code" {
-		s.fails.fail(ctx, userID)
+	out, err := s.redeem(ctx, userID, code)
+	if err != nil && core.AsError(err).Code == codeInvalid {
+		s.fails.Fail(ctx, failKey(userID))
 	}
-	if err != nil {
-		return nil, err
-	}
-	s.ledger.CacheBalance(ctx, userID, res.LedgerID, res.BalanceAfter)
-	return out, nil
+	return out, err
 }
 
-func (s *Service) redeem(ctx context.Context, userID int64, code string) (*Redeemed, *core.LedgerResult, error) {
+// redeem spends the code and credits its value in one transaction, so that a
+// code is never used without its credit nor credited twice, then refreshes
+// the balance cache.
+func (s *Service) redeem(ctx context.Context, userID int64, code string) (*Redeemed, error) {
 	if !wellFormed(code) {
-		return nil, nil, errInvalidCode(ctx)
+		return nil, errInvalidCode(ctx)
 	}
-	hash := hashCode(code)
+	var row *model.RedeemCode
 	var res *core.LedgerResult
-	var value decimal.Decimal
 	err := s.db.Tx(ctx, func(tx *gorm.DB) error {
-		row, err := takeUsable(ctx, tx, hash)
-		if err != nil {
+		var err error
+		if row, err = spend(ctx, tx, userID, hashCode(code)); err != nil {
 			return err
 		}
-		value = row.Value
 		res, err = s.credit(ctx, tx, userID, row)
 		return err
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return &Redeemed{Amount: value, Balance: res.BalanceAfter}, res, nil
+	s.ledger.CacheBalance(ctx, userID, res.LedgerID, res.BalanceAfter)
+	return &Redeemed{Amount: row.Value, Balance: res.BalanceAfter}, nil
 }
 
-// takeUsable locks the usable code of hash; concurrent redemptions of one
-// code queue here and every one after the first finds it used.
-func takeUsable(ctx context.Context, tx *gorm.DB, hash string) (*model.RedeemCode, error) {
+// spentColumns are what spend reads back of the code it used.
+var spentColumns = clause.Returning{Columns: []clause.Column{{Name: "id"}, {Name: "value"}}}
+
+// spend marks the redeemable code of hash used by userID in one conditional
+// UPDATE. Concurrent redemptions of a code queue on its row; PostgreSQL
+// re-checks the condition for each once the first commits, so only one of
+// them finds the code redeemable and the others get the invalid code.
+func spend(ctx context.Context, tx *gorm.DB, userID int64, hash string) (*model.RedeemCode, error) {
 	if err := store.RequireTx(tx); err != nil {
 		return nil, err
 	}
-	var row model.RedeemCode
-	err := store.G(ctx, tx).Clauses(store.ForUpdate()).Select("id", "code_hash", "value").Where(usable, hash).Take(&row).Error
-	if store.IsNoRows(err) {
-		return nil, errInvalidCode(ctx)
-	}
-	return &row, err
-}
-
-// credit marks the locked code used by the user and credits its value. The
-// update repeats the unused condition so that the code is spent once even if
-// the lock above were ever taken without re-checking the row.
-func (s *Service) credit(ctx context.Context, tx *gorm.DB, userID int64, row *model.RedeemCode) (*core.LedgerResult, error) {
-	res := store.G(ctx, tx).Model(&model.RedeemCode{}).Where("id = ? AND status = ?", row.ID, statusUnused).Updates(map[string]any{
+	row := model.RedeemCode{CodeHash: hash}
+	res := store.G(ctx, tx).Model(&row).Clauses(spentColumns).Where("code_hash = ? AND "+redeemable, hash).Updates(map[string]any{
 		"status": statusUsed, "used_by": userID, "used_at": store.DBNow{}, "updated_at": store.DBNow{},
 	})
 	if res.Error != nil {
@@ -96,13 +82,13 @@ func (s *Service) credit(ctx context.Context, tx *gorm.DB, userID int64, row *mo
 	if res.RowsAffected != 1 {
 		return nil, errInvalidCode(ctx)
 	}
-	return s.apply(ctx, tx, userID, row)
+	return &row, nil
 }
 
-// apply is the ledger credit of a code just marked used.
-func (s *Service) apply(ctx context.Context, tx *gorm.DB, userID int64, row *model.RedeemCode) (*core.LedgerResult, error) {
+// credit is the ledger credit of the code just spent, in its transaction.
+func (s *Service) credit(ctx context.Context, tx *gorm.DB, userID int64, row *model.RedeemCode) (*core.LedgerResult, error) {
 	res, err := s.ledger.ApplyTx(ctx, tx, core.LedgerChange{
-		UserID: userID, Amount: row.Value, Credit: true, Kind: kindRedeem,
+		UserID: userID, Amount: row.Value, Credit: true, Kind: core.LedgerKindRedeem,
 		RefType: "redeem_code", RefID: x.Itoa64(row.ID), IdempotencyKey: "redeem:" + row.CodeHash,
 	})
 	if err == nil && res.Duplicate {

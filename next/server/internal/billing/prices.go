@@ -105,14 +105,9 @@ func (s *Service) listPrices(c *gin.Context) {
 		return
 	}
 	g := store.G(ctx, s.db.Gorm)
-	var total int64
-	if err := pricesWithSource(g).Scopes(f.Scope()).Count(&total).Error; err != nil {
-		httpapi.Fail(c, err)
-		return
-	}
-	var rows []priceRow
-	if err := pricesWithSource(g).Select(priceColumns).Scopes(f.Scope()).Order("mp.model, mp.id").
-		Limit(size).Offset((page - 1) * size).Scan(&rows).Error; err != nil {
+	q := pricesWithSource(g).Select(priceColumns).Scopes(f.Scope()).Order("mp.model, mp.id")
+	rows, total, err := store.FindPage[priceRow](q, page, size)
+	if err != nil {
 		httpapi.Fail(c, err)
 		return
 	}

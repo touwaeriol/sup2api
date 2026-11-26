@@ -3,7 +3,6 @@ package iam
 import (
 	"encoding/json"
 	"net/http"
-	"strconv"
 
 	"github.com/gin-gonic/gin"
 
@@ -131,16 +130,6 @@ func (s *Service) handleAccessKeyDelete(c *gin.Context) {
 	httpapi.NoContent(c)
 }
 
-// failLogin answers a failed login step with Retry-After when rate limited.
-func failLogin(c *gin.Context, err error) {
-	if e := core.AsError(err); e.Code == core.ErrRateLimited.Code {
-		if secs, ok := e.Details["retry_after_seconds"].(int64); ok {
-			c.Header("Retry-After", strconv.FormatInt(secs, 10))
-		}
-	}
-	httpapi.Fail(c, err)
-}
-
 func (s *Service) handleLogin2FA(c *gin.Context) {
 	var in struct {
 		FlowToken string `json:"flow_token"`
@@ -151,7 +140,7 @@ func (s *Service) handleLogin2FA(c *gin.Context) {
 	}
 	result, err := s.LoginSecondFactor(sessionContext(c, loginMethodTwoFactor), in.FlowToken, in.Code, c.ClientIP())
 	if err != nil {
-		failLogin(c, err)
+		httpapi.Fail(c, err)
 		return
 	}
 	httpapi.OK(c, result)
@@ -160,7 +149,7 @@ func (s *Service) handleLogin2FA(c *gin.Context) {
 func (s *Service) handlePasskeyLoginBegin(c *gin.Context) {
 	out, err := s.BeginPasskeyLogin(c.Request.Context(), c.Request, c.ClientIP())
 	if err != nil {
-		failLogin(c, err)
+		httpapi.Fail(c, err)
 		return
 	}
 	httpapi.OK(c, out)
@@ -176,7 +165,7 @@ func (s *Service) handlePasskeyLoginFinish(c *gin.Context) {
 	}
 	result, err := s.FinishPasskeyLogin(sessionContext(c, loginMethodPasskey), c.Request, in.FlowToken, in.Credential, c.ClientIP())
 	if err != nil {
-		failLogin(c, err)
+		httpapi.Fail(c, err)
 		return
 	}
 	httpapi.OK(c, result)
@@ -362,7 +351,7 @@ func (s *Service) handleVerifyBegin(c *gin.Context) {
 	}
 	out, err := s.BeginStepUpPasskey(c.Request.Context(), c.Request, actor(c), in.Scope, c.ClientIP())
 	if err != nil {
-		failLogin(c, err)
+		httpapi.Fail(c, err)
 		return
 	}
 	httpapi.OK(c, out)
@@ -375,7 +364,7 @@ func (s *Service) handleVerify(c *gin.Context) {
 	}
 	out, err := s.VerifyStepUp(audit.Context(c), c.Request, actor(c), in, c.ClientIP())
 	if err != nil {
-		failLogin(c, err)
+		httpapi.Fail(c, err)
 		return
 	}
 	httpapi.OK(c, out)

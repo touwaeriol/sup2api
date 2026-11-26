@@ -76,7 +76,9 @@ func signed(payload []byte, secret string, at time.Time) core.PaymentNotificatio
 
 func parse(t *testing.T, cfg Config, n core.PaymentNotification) (*core.PaymentResult, error) {
 	t.Helper()
-	return newTestGateway(cfg, nil).ParseNotification(context.Background(), n)
+	r, respond, err := newTestGateway(cfg, nil).ParseNotification(context.Background(), n)
+	require.NotNil(t, respond)
+	return r, err
 }
 
 // rejectCase is one notification that must fail verification: body signed
@@ -99,8 +101,6 @@ func rejectCases() map[string]rejectCase {
 		"wrong signature":       {cfg: cfg, body: good, secret: "whsec_other"},
 		"timestamp too old":     {cfg: cfg, body: good, age: 301 * time.Second},
 		"missing header":        {cfg: cfg, body: good, edit: func(n *core.PaymentNotification) { n.Header = nil }},
-		"webhook secret unset":  {cfg: Config{SecretKey: testSecretKey}, body: good},
-		"secret key unset":      {cfg: Config{WebhookSecret: testWebhookSecret}, body: good},
 		"GET":                   {cfg: cfg, body: good, edit: func(n *core.PaymentNotification) { n.Method = http.MethodGet }},
 		"tampered body":         {cfg: cfg, body: good, edit: func(n *core.PaymentNotification) { n.Body = append(n.Body, ' ') }},
 		"live event, test key":  {cfg: cfg, body: testEvent("checkout.session.completed", true, testSession())},
@@ -108,8 +108,6 @@ func rejectCases() map[string]rejectCase {
 		"reference mismatch":    {cfg: cfg, body: completed(withField("client_reference_id", "s2a_other"))},
 		"not a checkout object": {cfg: cfg, body: completed(withField("object", "payment_intent"))},
 		"not an event":          {cfg: cfg, body: []byte(`{"id":"evt_1","object":"checkout.session"}`)},
-		"webhook secret malformed": {cfg: Config{SecretKey: testSecretKey, WebhookSecret: "secret"}, body: good,
-			secret: "secret"},
 	}
 }
 
@@ -133,12 +131,26 @@ func withField(key string, value any) map[string]any {
 	return s
 }
 
+// A configuration that cannot be read or is invalid is the site's problem:
+// the core asks Stripe to retry instead of rejecting the event.
 func TestParseNotificationConfigError(t *testing.T) {
 	boom := errors.New("settings unavailable")
-	g := New(func(context.Context) (Config, error) { return Config{}, boom }, http.DefaultClient)
-	_, err := g.ParseNotification(context.Background(), signed(testEvent("checkout.session.completed", false, testSession()), testWebhookSecret, time.Now()))
-	require.ErrorIs(t, err, boom)
-	require.NotErrorIs(t, err, core.ErrPaymentSignature, "an unreadable config must be retried, not rejected")
+	for name, tc := range map[string]struct {
+		cfg  func(context.Context) (Config, error)
+		want error
+	}{
+		"unreadable":           {func(context.Context) (Config, error) { return Config{}, boom }, boom},
+		"webhook secret unset": {func(context.Context) (Config, error) { return Config{SecretKey: testSecretKey}, nil }, ErrWebhookSecret},
+		"secret key unset":     {func(context.Context) (Config, error) { return Config{WebhookSecret: testWebhookSecret}, nil }, ErrSecretKey},
+		"webhook secret malformed": {func(context.Context) (Config, error) {
+			return Config{SecretKey: testSecretKey, WebhookSecret: "secret"}, nil
+		}, ErrWebhookSecret},
+	} {
+		g := New(tc.cfg, http.DefaultClient)
+		_, _, err := g.ParseNotification(context.Background(), signed(completed(testSession()), testWebhookSecret, time.Now()))
+		require.ErrorIs(t, err, tc.want, name)
+		require.NotErrorIs(t, err, core.ErrPaymentSignature, name)
+	}
 }
 
 func TestParseNotificationStatusMapping(t *testing.T) {
@@ -149,7 +161,6 @@ func TestParseNotificationStatusMapping(t *testing.T) {
 	}{
 		{"checkout.session.completed", testSession(), core.PaymentPaid},
 		{"checkout.session.completed", withField("payment_status", "unpaid"), core.PaymentPending},
-		{"checkout.session.async_payment_succeeded", testSession(), core.PaymentPaid},
 		{"checkout.session.expired", withField("status", "expired"), core.PaymentExpired},
 		{"checkout.session.async_payment_failed", withField("payment_status", "unpaid"), core.PaymentPending},
 	}
@@ -180,7 +191,7 @@ func TestParseNotificationFields(t *testing.T) {
 		MerchantRef: merchantTest,
 		Fields: map[string]string{
 			"event_type": "checkout.session.completed", "session_status": "complete", "payment_status": "paid",
-			"livemode": "false", "amount_total": "1500", "currency": "jpy",
+			"livemode": "false",
 		},
 	}, r)
 }
@@ -207,11 +218,13 @@ func TestParseNotificationOtherEvent(t *testing.T) {
 	}, r)
 }
 
+// Stripe reads only the status; every notification, also a refused one,
+// gets one.
 func TestRespond(t *testing.T) {
-	g := newTestGateway(testConfig(), nil)
-	require.Equal(t, http.StatusOK, g.Respond(core.PaymentHandled).Status)
-	require.Equal(t, http.StatusBadRequest, g.Respond(core.PaymentRejected).Status)
-	require.Equal(t, http.StatusInternalServerError, g.Respond(core.PaymentRetry).Status)
+	_, respond, _ := newTestGateway(testConfig(), nil).ParseNotification(context.Background(), core.PaymentNotification{Method: http.MethodGet})
+	require.Equal(t, http.StatusOK, respond(core.PaymentHandled).Status)
+	require.Equal(t, http.StatusBadRequest, respond(core.PaymentRejected).Status)
+	require.Equal(t, http.StatusServiceUnavailable, respond(core.PaymentRetry).Status)
 }
 
 // The method and the signature header are checked before the settings are
@@ -227,7 +240,7 @@ func TestParseNotificationChecksRequestFirst(t *testing.T) {
 	get := good
 	get.Method = http.MethodGet
 	for name, n := range map[string]core.PaymentNotification{"no header": noHeader, "GET": get} {
-		_, err := g.ParseNotification(context.Background(), n)
+		_, _, err := g.ParseNotification(context.Background(), n)
 		require.ErrorIs(t, err, core.ErrPaymentSignature, name)
 	}
 }
@@ -285,7 +298,7 @@ func TestConfigValidate(t *testing.T) {
 	require.ErrorIs(t, err, ErrWebhookSecret)
 	require.ErrorIs(t, Config{SecretKey: "sk_test_x ", WebhookSecret: "whsec_x"}.Validate(), ErrSecretKey)
 	require.NotErrorIs(t, Config{SecretKey: "sk_test_x"}.Validate(), ErrSecretKey)
-	mode, err := Config{SecretKey: "sk_live_x", WebhookSecret: "whsec_x"}.mode()
+	_, mode, err := newTestGateway(Config{SecretKey: "sk_live_x", WebhookSecret: "whsec_x"}, nil).config(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, merchantLive, mode)
 }

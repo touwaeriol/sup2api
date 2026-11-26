@@ -14,7 +14,7 @@ option go_package = "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1;plugi
 // request names the plugin-local gateway id it is for.
 service PaymentGatewayService {
   rpc CreatePayment(CreatePaymentRequest) returns (CreatePaymentResponse);
-  rpc ParseNotification(ParseNotificationRequest) returns (ParseNotificationResponse);
+  rpc ParsePaymentNotification(ParsePaymentNotificationRequest) returns (ParsePaymentNotificationResponse);
   // A gateway declared with query false, or a plugin answering UNIMPLEMENTED,
   // cannot be queried; the core then only expires the order.
   rpc QueryPayment(QueryPaymentRequest) returns (QueryPaymentResponse);
@@ -55,7 +55,7 @@ message CreatePaymentResponse {
 
 // The notification as it arrived at the core: the body is capped and the
 // cookie and authorization headers are dropped.
-message ParseNotificationRequest {
+message ParsePaymentNotificationRequest {
   string gateway = 1;
   string method = 2;
   string raw_query = 3;
@@ -65,10 +65,10 @@ message ParseNotificationRequest {
 }
 
 // The plugin decides the bytes of the answer to the gateway, the core
-// decides which of the three replies is sent. A reply is a property of the
-// gateway's protocol, not of one notification: the core may answer any
-// notification of the gateway with the replies of another one.
-message ParseNotificationResponse {
+// decides which of the three replies is sent. The core answers this
+// notification with this response's replies only: concurrent notifications
+// never see each other's.
+message ParsePaymentNotificationResponse {
   // False: the notification is not authentic (bad or missing signature,
   // unknown merchant); result is ignored and the core answers rejected.
   bool verified = 1;
@@ -105,16 +105,16 @@ enum PaymentStatus {
 }
 
 // PaymentResult is what the gateway says about one payment. The core
-// requires out_trade_no to name an order of this gateway and amount and
-// currency to equal the order's; merchant_ref and method_type, when not
+// requires out_trade_no to name an order of this gateway and amount_minor
+// and currency to equal the order's; merchant_ref and method_type, when not
 // empty, must equal the order's too.
 message PaymentResult {
   string out_trade_no = 1;
   // The gateway's transaction number; unique across orders.
   string trade_no = 2;
   string session_id = 3;
-  // In the currency's minor unit.
-  int64 amount = 4;
+  // In the currency's minor unit (1230 for "12.30" USD).
+  int64 amount_minor = 4;
   string currency = 5;
   PaymentStatus status = 6;
   // Unique per gateway: a notification with an event id already recorded is

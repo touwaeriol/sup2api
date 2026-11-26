@@ -83,7 +83,7 @@ func (e *env) openPrecharge(uid int64, requestID string) *gorm.DB {
 		e.t.Fatal(err)
 	}
 	e.t.Cleanup(func() { _ = tx.Rollback().Error })
-	ch := core.LedgerChange{UserID: uid, Amount: decimal.NewFromInt(1), Kind: KindUsage, RefType: "precharge",
+	ch := core.LedgerChange{UserID: uid, Amount: decimal.NewFromInt(1), Kind: core.LedgerKindUsage, RefType: "precharge",
 		RefID: requestID, IdempotencyKey: "precharge:" + requestID, Note: "request precharge"}
 	if lr, err := e.svc.prechargeTx(ctx, tx, ch, decimal.Zero); err != nil || lr == nil {
 		e.t.Fatalf("open precharge: %+v %v", lr, err)
@@ -283,7 +283,7 @@ func TestApplyConcurrentSameKey(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
 	uid := e.user("apply-race@test.invalid")
-	ch := core.LedgerChange{UserID: uid, Amount: decimal.RequireFromString("3.5"), Credit: true, Kind: KindAdminAdjust, IdempotencyKey: "race:apply"}
+	ch := core.LedgerChange{UserID: uid, Amount: decimal.RequireFromString("3.5"), Credit: true, Kind: core.LedgerKindAdminAdjust, IdempotencyKey: "race:apply"}
 	const callers = 8
 	results := make([]*core.LedgerResult, callers)
 	errs := concurrently(callers, func(i int) error {

@@ -10,9 +10,10 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"sync/atomic"
 	"time"
 
-	"github.com/shopspring/decimal"
+	"gorm.io/gorm/clause"
 
 	"github.com/Sub2API-Devs/sup2api/next/runtime-contract/secret"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
@@ -21,30 +22,13 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store"
 )
 
-// Ledger kinds and idempotency key prefixes of a top-up (the billing
-// module's KindTopup and KindPromoBonus; modules share no packages).
-const (
-	kindTopup      = "topup"
-	kindPromoBonus = "promo_bonus"
-	refTypeOrder   = "payment_order"
-)
-
-// Limits of the money a top-up moves. The ledger has no cap of its own, so
-// these carry over the old payment plugin's approved ledger.credit scope
-// (maxPerTx 100000, maxPerDay 1000000): the settings' max_topup cannot
-// exceed the first, and crediting an order fails past either.
-var (
-	maxCreditPerTx  = decimal.NewFromInt(100000)
-	maxCreditPerDay = decimal.NewFromInt(1000000)
-)
+// refTypeOrder is the ledger rows' ref_type of a top-up order.
+const refTypeOrder = "payment_order"
 
 const (
 	// lateWindow is how long after an order expired or was cancelled a paid
 	// notification still credits it: the user may have paid in time.
 	lateWindow = 24 * time.Hour
-	// leaseTTL is how long a crediting lease holds before another worker
-	// may take it over.
-	leaseTTL = 5 * time.Minute
 	// notifyBodyLimit caps a notification's body.
 	notifyBodyLimit = 1 << 20
 	// walletPath is where a gateway sends the user back to.
@@ -66,24 +50,14 @@ const (
 	queryTimeout = 20 * time.Second
 )
 
-// Ledger is the core ledger with the balance cache refresh billing asks for
-// after a committed ApplyTx (billing's *Service).
-type Ledger interface {
-	core.Ledger
-	CacheBalance(ctx context.Context, userID, ledgerID int64, balance decimal.Decimal)
-}
-
-// Admitter counts a user's requests per minute (ratelimit.Minute); nil
-// admits everything.
-type Admitter interface {
-	Admit(ctx context.Context, id int64, rpm int, tpm int64) (ok bool, retry time.Duration, err error)
-}
+// sqlNow is the database's clock, for the timestamps a statement sets.
+var sqlNow = clause.Expr{SQL: "now()"}
 
 // Deps is what the payment module needs of the rest of the server.
 type Deps struct {
 	DB     *store.DB
 	Cipher *secret.Cipher
-	Ledger Ledger
+	Ledger core.CachingLedger
 	// Plugins gives the plugin gateways of the current generation.
 	Plugins core.PluginRegistry
 	// HTTP is the outbound client of the built-in gateways.
@@ -92,41 +66,43 @@ type Deps struct {
 	// return addresses are built from it alone, and top-up needs https.
 	PublicURL string
 	// OrderLimit and QuoteLimit count a user's orders and quotes.
-	OrderLimit, QuoteLimit Admitter
+	OrderLimit, QuoteLimit core.Admitter
 	// NotifyLimit counts the notifications of a client address (by hash),
 	// and apart from them the unverified events it writes.
-	NotifyLimit Admitter
-	// Builtin replaces the built-in gateways by id; nil builds epay and
-	// stripe over the stored settings (builtin.go).
-	Builtin map[string]core.PaymentGateway
+	NotifyLimit core.Admitter
 }
 
 // Service serves the top-up endpoints, notifications and the sweep.
 type Service struct {
-	db      *store.DB
-	cipher  *secret.Cipher
-	ledger  Ledger
-	plugins core.PluginRegistry
-	site    *url.URL
-	order   Admitter
-	quote   Admitter
-	notes   Admitter
-	builtin map[string]core.PaymentGateway
-	dropped dropLog
-	now     func() time.Time
+	db          *store.DB
+	cipher      *secret.Cipher
+	ledger      core.CachingLedger
+	plugins     core.PluginRegistry
+	site        *url.URL
+	orderLimit  core.Admitter
+	quoteLimit  core.Admitter
+	notifyLimit core.Admitter
+	builtin     map[string]core.PaymentGateway
+	dropped     dropLog
+	paidCursor  atomic.Int64 // creditPaid's position
+	now         func() time.Time
 }
 
 // New builds the payment module.
 func New(d Deps) *Service {
 	s := &Service{db: d.DB, cipher: d.Cipher, ledger: d.Ledger, plugins: d.Plugins,
-		order: d.OrderLimit, quote: d.QuoteLimit, notes: d.NotifyLimit, builtin: d.Builtin, now: time.Now}
+		orderLimit: d.OrderLimit, quoteLimit: d.QuoteLimit, notifyLimit: d.NotifyLimit, now: time.Now}
 	if u, err := url.Parse(d.PublicURL); err == nil && u.Host != "" {
 		s.site = u
 	}
-	if s.builtin == nil {
-		s.builtin = builtinGateways(s, d.HTTP)
-	}
+	s.builtin = builtinGateways(s.storedSettings, d.HTTP)
 	return s
+}
+
+// storedSettings reads the stored settings: the built-in gateways' config
+// source, read on every call.
+func (s *Service) storedSettings(ctx context.Context) (Settings, error) {
+	return s.loadSettings(ctx, s.db.Gorm)
 }
 
 // RegisterRoutes mounts the top-up endpoints.

@@ -1,20 +1,23 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { SAlert, SButton, SDateTime, SPageHeader, SPagination, SProgress, SRowAction, STable, type TableColumn } from '@sub2api/ui'
-import { paymentApi, useTopup, type PromoCode } from '../topup'
-import { formatUsd } from '../format'
+import { deleteWithConfirm, toggleStatus } from '@/composables/crud'
+import { useList } from '@/composables/useList'
+import { formatMoney, formatNumber } from '@/utils/format'
+import { TOPUP_PATHS } from '../api'
+import type { PromoCode } from '../topup'
 import PayStatusBadge from '../components/PayStatusBadge.vue'
 import PromoEditModal from './PromoEditModal.vue'
 import PromoUsageDrawer from './PromoUsageDrawer.vue'
-import { actionsColumn, columnOf, confirmRun, runAction, useAdminList } from './actions'
-import { promoState } from '../components/status'
+import { actionsColumn, columnOf } from './columns'
 
 // Promo codes (admin): a bonus credited on top of a paid top-up when the
-// user enters the code at checkout.
-const host = useTopup()
-const t = host.t
+// user enters the code at checkout. The state shown (expired, used up) is
+// the server's.
+const { t } = useI18n()
 
-const list = useAdminList<PromoCode>('/promo-codes', {})
+const list = useList<PromoCode>(TOPUP_PATHS.promoCodes)
 
 const columns = computed<TableColumn[]>(() => {
   const col = columnOf('admin.promo.fields')
@@ -31,7 +34,7 @@ const columns = computed<TableColumn[]>(() => {
   ]
 })
 
-const usageText = (p: PromoCode) => `${host.i18n.formatNumber(p.used_count)} / ${p.max_uses ? host.i18n.formatNumber(p.max_uses) : t('topup.admin.promo.unlimited')}`
+const usageText = (p: PromoCode) => `${formatNumber(p.used_count)} / ${p.max_uses ? formatNumber(p.max_uses) : t('common.unlimited')}`
 
 const editOpen = ref(false)
 const editing = ref<PromoCode | null>(null)
@@ -47,54 +50,68 @@ function openUsage(p: PromoCode) {
   usageOpen.value = true
 }
 
-async function toggle(p: PromoCode) {
-  const status = p.status === 'active' ? 'disabled' : 'active'
-  if (await runAction(() => paymentApi.updatePromoCode(p.id, { status }), t(`topup.admin.promo.toggled.${status}`))) list.reload()
-}
-
-async function remove(p: PromoCode) {
-  const ok = await confirmRun(
-    { title: t('topup.admin.promo.deleteTitle'), message: t('topup.admin.promo.deleteConfirm', { code: p.code }), confirmText: t('topup.action.delete'), danger: true },
-    () => paymentApi.deletePromoCode(p.id),
-    t('topup.admin.promo.deleted')
-  )
-  if (ok) list.reload()
-}
+const toggle = (p: PromoCode) => toggleStatus(TOPUP_PATHS.promoCode(p.id), p.status, list.reload)
+const remove = (p: PromoCode) =>
+  deleteWithConfirm(TOPUP_PATHS.promoCode(p.id), t('topup.admin.promo.deleteConfirm', { code: p.code }), list.reload)
 </script>
 
 <template>
   <div>
     <SPageHeader :title="t('topup.admin.promo.title')">
       <template #actions>
-        <SButton icon="refresh" :loading="list.loading.value" @click="list.reload">{{ t('topup.action.refresh') }}</SButton>
+        <SButton icon="refresh" :loading="list.loading.value" @click="list.reload">{{ t('common.refresh') }}</SButton>
         <SButton variant="primary" icon="plus" @click="openEdit(null)">{{ t('topup.admin.promo.create') }}</SButton>
       </template>
     </SPageHeader>
 
-    <SAlert tone="info" class="payment-intro">{{ t('topup.admin.promo.intro') }}</SAlert>
+    <SAlert tone="info" class="mb-3">{{ t('topup.admin.promo.intro') }}</SAlert>
 
-    <STable card :columns="columns" :rows="list.items.value" :loading="list.loading.value" :error="list.error.value" :empty-text="t('topup.admin.promo.empty')" @retry="list.reload">
-      <template #cell-code="{ row }"><span class="payment-mono">{{ row.code }}</span></template>
-      <template #cell-bonus_amount="{ row }"><span class="payment-num">{{ formatUsd(row.bonus_amount) }}</span></template>
+    <STable
+      card
+      :columns="columns"
+      :rows="list.items.value"
+      :loading="list.loading.value"
+      :error="list.error.value"
+      :empty-text="t('topup.admin.promo.empty')"
+      @retry="list.reload"
+    >
+      <template #cell-code="{ row }"
+        ><span class="font-mono text-[0.8125rem]">{{ row.code }}</span></template
+      >
+      <template #cell-bonus_amount="{ row }"
+        ><span class="tabular-nums">{{ formatMoney(row.bonus_amount, 2) }}</span></template
+      >
       <template #cell-min_amount="{ row }">
-        <span class="payment-num" :class="{ 'payment-muted': !row.min_amount }">{{ row.min_amount ? formatUsd(row.min_amount) : t('topup.admin.promo.anyAmount') }}</span>
+        <span class="tabular-nums" :class="{ 'text-fg-muted': !Number(row.min_amount) }">{{
+          Number(row.min_amount) ? formatMoney(row.min_amount, 2) : t('topup.admin.promo.anyAmount')
+        }}</span>
       </template>
       <template #cell-usage="{ row }">
-        <div class="payment-usage">
-          <SProgress v-if="row.max_uses" :value="row.used_count" :max="row.max_uses" :tone="row.used_count >= row.max_uses ? 'warning' : 'primary'">{{ usageText(row) }}</SProgress>
-          <span v-else class="payment-usage-text">{{ usageText(row) }}</span>
+        <div class="w-full md:min-w-32">
+          <SProgress
+            v-if="row.max_uses"
+            :value="row.used_count"
+            :max="row.max_uses"
+            :tone="row.used_count >= row.max_uses ? 'warning' : 'primary'"
+            >{{ usageText(row) }}</SProgress
+          >
+          <span v-else class="text-xs tabular-nums text-fg-muted">{{ usageText(row) }}</span>
         </div>
       </template>
-      <template #cell-expires_at="{ row }"><SDateTime :value="row.expires_at" mode="absolute" muted :empty="t('topup.admin.never')" /></template>
-      <template #cell-status="{ row }"><PayStatusBadge kind="promo" :status="promoState(row)" /></template>
-      <template #cell-notes="{ row }"><span :class="{ 'payment-muted': !row.notes }">{{ row.notes || '—' }}</span></template>
+      <template #cell-expires_at="{ row }"
+        ><SDateTime :value="row.expires_at" mode="absolute" muted :empty="t('topup.admin.never')"
+      /></template>
+      <template #cell-status="{ row }"><PayStatusBadge kind="promo" :status="row.state" /></template>
+      <template #cell-notes="{ row }"
+        ><span :class="{ 'text-fg-muted': !row.notes }">{{ row.notes || '—' }}</span></template
+      >
       <template #cell-created_at="{ row }"><SDateTime :value="row.created_at" mode="absolute" muted /></template>
       <template #cell-actions="{ row }">
-        <span class="payment-row-actions">
+        <span class="inline-flex flex-wrap justify-start gap-1.5 md:flex-nowrap md:justify-end">
           <SRowAction :label="t('topup.admin.promo.usages')" @click="openUsage(row)" />
-          <SRowAction :label="t('topup.action.edit')" @click="openEdit(row)" />
-          <SRowAction :label="row.status === 'active' ? t('topup.admin.promo.disable') : t('topup.admin.promo.enable')" @click="toggle(row)" />
-          <SRowAction :label="t('topup.action.delete')" tone="danger" @click="remove(row)" />
+          <SRowAction :label="t('common.edit')" @click="openEdit(row)" />
+          <SRowAction :label="row.status === 'active' ? t('common.disable') : t('common.enable')" @click="toggle(row)" />
+          <SRowAction :label="t('common.delete')" tone="danger" @click="remove(row)" />
         </span>
       </template>
       <template #footer>
@@ -106,5 +123,3 @@ async function remove(p: PromoCode) {
     <PromoUsageDrawer v-if="usagePromo" :key="usagePromo.id" v-model:open="usageOpen" :promo="usagePromo" />
   </div>
 </template>
-
-<style scoped src="./admin.css"></style>

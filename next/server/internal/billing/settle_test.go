@@ -16,7 +16,7 @@ import (
 
 func (e *env) seed(uid int64, amount string) {
 	e.t.Helper()
-	if _, err := e.svc.Apply(context.Background(), core.LedgerChange{UserID: uid, Amount: decimal.RequireFromString(amount), Credit: true, Kind: KindAdminAdjust, IdempotencyKey: "seed:" + itoa(uid)}); err != nil {
+	if _, err := e.svc.Apply(context.Background(), core.LedgerChange{UserID: uid, Amount: decimal.RequireFromString(amount), Credit: true, Kind: core.LedgerKindAdminAdjust, IdempotencyKey: "seed:" + itoa(uid)}); err != nil {
 		e.t.Fatal(err)
 	}
 }
@@ -43,7 +43,7 @@ func (e *env) settle(uid int64, requestID string, total string) (*core.LedgerRes
 	e.t.Helper()
 	var charge *core.LedgerChange
 	if total != "" {
-		charge = &core.LedgerChange{UserID: uid, Amount: decimal.RequireFromString(total), Kind: KindUsage, RefType: "usage", RefID: requestID, IdempotencyKey: "usage:" + requestID}
+		charge = &core.LedgerChange{UserID: uid, Amount: decimal.RequireFromString(total), Kind: core.LedgerKindUsage, RefType: "usage", RefID: requestID, IdempotencyKey: "usage:" + requestID}
 	}
 	var res *core.LedgerResult
 	err := e.db.Tx(context.Background(), func(tx *gorm.DB) error {
@@ -106,7 +106,7 @@ func TestSettleReleasesAndCharges(t *testing.T) {
 		kinds = append(kinds, k)
 	}
 	rows.Close()
-	if len(kinds) != 2 || kinds[0] != KindUsage || kinds[1] != KindRefund {
+	if len(kinds) != 2 || kinds[0] != core.LedgerKindUsage || kinds[1] != core.LedgerKindRefund {
 		t.Fatalf("event kinds %v", kinds)
 	}
 
@@ -181,7 +181,7 @@ func TestSettleRoundTrips(t *testing.T) {
 	settle := func(id string) {
 		t.Helper()
 		err := db.Tx(ctx, func(tx *gorm.DB) error {
-			_, err := svc.SettleTx(ctx, tx, uid, id, &core.LedgerChange{UserID: uid, Amount: decimal.RequireFromString("0.5"), Kind: KindUsage, RefType: "usage", RefID: id, IdempotencyKey: "usage:" + id})
+			_, err := svc.SettleTx(ctx, tx, uid, id, &core.LedgerChange{UserID: uid, Amount: decimal.RequireFromString("0.5"), Kind: core.LedgerKindUsage, RefType: "usage", RefID: id, IdempotencyKey: "usage:" + id})
 			return err
 		})
 		if err != nil {
@@ -193,7 +193,7 @@ func TestSettleRoundTrips(t *testing.T) {
 	settle("measured")
 	oneTx(t, "one settlement", trace.Take(), 4)
 	// ApplyTx on its own: BEGIN, the change (applySQL), the event, COMMIT.
-	if _, err := svc.Apply(ctx, core.LedgerChange{UserID: uid, Amount: decimal.NewFromInt(1), Credit: true, Kind: KindAdminAdjust, IdempotencyKey: "apply-measured"}); err != nil {
+	if _, err := svc.Apply(ctx, core.LedgerChange{UserID: uid, Amount: decimal.NewFromInt(1), Credit: true, Kind: core.LedgerKindAdminAdjust, IdempotencyKey: "apply-measured"}); err != nil {
 		t.Fatal(err)
 	}
 	oneTx(t, "one Apply", trace.Take(), 4)

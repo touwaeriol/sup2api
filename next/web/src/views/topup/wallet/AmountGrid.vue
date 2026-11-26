@@ -1,67 +1,48 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { SBadge } from '@sub2api/ui'
+import { useI18n } from 'vue-i18n'
+import { SBadge, SChoiceCards, type ChoiceOption } from '@sub2api/ui'
+import { formatCurrency, formatMoney } from '@/utils/format'
 import type { CheckoutInfo } from '../topup'
-import { useTopup } from '../topup'
-import ChoiceTiles from './ChoiceTiles.vue'
-import { discountLabel, formatLocal, formatUsd } from '../format'
-import { quoteOf } from './useTopupQuote'
+import { discountLabel } from '../format'
+import { quoteOf, type Quote } from './useTopupQuote'
 
 // Preset amounts: the balance credited, what it costs in the local currency
 // and the discount tier it reaches.
 const props = defineProps<{ modelValue: number | null; info: CheckoutInfo }>()
-const emit = defineEmits<{ (e: 'update:modelValue', v: number): void }>()
-const t = useTopup().t
+const emit = defineEmits<{ 'update:modelValue': [v: number] }>()
+const { t } = useI18n()
 
+const money = (v: number) => formatCurrency(v, props.info.currency)
 const presets = computed(() =>
-  props.info.amount_options.map((a) => ({
-    value: a,
-    disabled: a < props.info.min_topup || a > props.info.max_topup,
-    quote: quoteOf(a, props.info)
-  }))
+  props.info.amount_options.map(Number).map(a => {
+    const quote = quoteOf(a, props.info)
+    const option: ChoiceOption = {
+      value: a,
+      label: formatMoney(a, 2),
+      description: t('topup.wallet.pay', { amount: money(quote.pay) }),
+      disabled: a < Number(props.info.min_topup) || a > Number(props.info.max_topup)
+    }
+    return { option, quote }
+  })
 )
-const money = (v: number) => formatLocal(v, props.info.currency)
+const options = computed(() => presets.value.map(p => p.option))
+const discounted = (q: Quote) => q.rate < 1
 </script>
 
 <template>
-  <ChoiceTiles :model-value="modelValue" :tiles="presets" :label="t('topup.wallet.amount')" @update:model-value="emit('update:modelValue', $event)">
-    <template #default="{ tile }">
-      <span class="pay-amount">
-        <span class="pay-amount-value">{{ formatUsd(tile.value) }}</span>
-        <span class="pay-amount-pay">
-          {{ t('topup.wallet.pay', { amount: money(tile.quote.pay) }) }}
-          <s v-if="tile.quote.rate < 1" class="pay-amount-was">{{ money(tile.quote.original) }}</s>
-        </span>
+  <SChoiceCards
+    :model-value="modelValue ?? undefined"
+    :options="options"
+    :cols="3"
+    :aria-label="t('topup.wallet.amount')"
+    @update:model-value="emit('update:modelValue', Number($event))"
+  >
+    <template v-for="p in presets" :key="p.option.value" #[`option-${p.option.value}`]>
+      <span v-if="discounted(p.quote)" class="mt-1 flex flex-wrap items-center gap-1.5 text-xs">
+        <s class="text-fg-subtle">{{ money(p.quote.original) }}</s>
+        <SBadge tone="success" size="xs">{{ discountLabel(p.quote.rate) }}</SBadge>
       </span>
-      <SBadge v-if="tile.quote.rate < 1" class="pay-amount-badge" tone="success" size="xs">{{ discountLabel(tile.quote.rate) }}</SBadge>
     </template>
-  </ChoiceTiles>
+  </SChoiceCards>
 </template>
-
-<style scoped>
-.pay-amount {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 0.25rem;
-}
-.pay-amount-value {
-  font-size: 1.125rem;
-  font-weight: 600;
-  line-height: 1.5rem;
-  font-variant-numeric: tabular-nums;
-}
-.pay-amount-pay {
-  font-size: 0.75rem;
-  color: rgb(var(--fg-muted));
-}
-.pay-amount-was {
-  margin-left: 0.25rem;
-  color: rgb(var(--fg-subtle));
-}
-.pay-amount-badge {
-  position: absolute;
-  top: 0.5rem;
-  right: 0.5rem;
-}
-</style>

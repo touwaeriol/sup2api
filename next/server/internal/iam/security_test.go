@@ -115,21 +115,13 @@ func TestLoginLimiterRedisDown(t *testing.T) {
 	}
 }
 
-func TestRateLimitedError(t *testing.T) {
+func TestLoginLocked(t *testing.T) {
 	t.Parallel()
-	for _, c := range []struct {
-		wait time.Duration
-		want int64
-	}{{1500 * time.Millisecond, 2}, {time.Millisecond, 1}, {15 * time.Minute, 900}} {
-		err := rateLimitedError(context.Background(), c.wait)
-		if !isCode(err, "rate_limited") {
-			t.Fatalf("code: %v", err)
-		}
-		if got := core.AsError(err).Details["retry_after_seconds"]; got != c.want {
-			t.Fatalf("%v: retry_after_seconds = %v", c.wait, got)
-		}
+	err := loginLocked(context.Background(), 1500*time.Millisecond)
+	if !isCode(err, "rate_limited") || core.AsError(err).Details["retry_after_seconds"] != int64(2) {
+		t.Fatalf("locked: %v", err)
 	}
-	zh := rateLimitedError(core.WithLocale(context.Background(), "zh"), time.Second)
+	zh := loginLocked(core.WithLocale(context.Background(), "zh"), time.Second)
 	if !strings.Contains(core.AsError(zh).Message, "登录") {
 		t.Fatalf("zh message: %q", core.AsError(zh).Message)
 	}

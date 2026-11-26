@@ -2,10 +2,12 @@ package payment
 
 import (
 	"context"
-	"strings"
+	"maps"
+	"slices"
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/httpapi"
 )
@@ -16,23 +18,15 @@ import (
 // they are enabled: being switched off only stops new orders, and the
 // orders already made are still verified and credited.
 func (s *Service) gateway(id string) (core.PaymentGateway, bool) {
-	gw, _, ok := s.lookup(id)
-	return gw, ok
-}
-
-// lookup is gateway, also telling whether the gateway can be queried: the
-// built-in ones answer themselves (ErrPaymentQueryUnsupported), a plugin's
-// says so in its manifest.
-func (s *Service) lookup(id string) (gw core.PaymentGateway, query, ok bool) {
 	if g, ok := s.builtin[id]; ok {
-		return g, true, true
+		return g, true
 	}
 	for _, b := range s.pluginGateways() {
 		if b.Gateway.ID == id {
-			return b.Client, b.Gateway.Query, true
+			return b.Client, true
 		}
 	}
-	return nil, false, false
+	return nil, false
 }
 
 // pluginGateways are the gateways of the current plugin generation.
@@ -47,17 +41,20 @@ func (s *Service) pluginGateways() []core.PaymentGatewayBinding {
 	return g.PaymentGateways()
 }
 
-// gatewayOpen reports whether gateway id takes new orders: a built-in one
-// switched on in v, a plugin one while its plugin is enabled.
+// gatewayOpen reports whether gateway id takes new orders under v: a
+// built-in one while it is open (builtinSpec.open), a plugin one while its
+// plugin is enabled.
 func (s *Service) gatewayOpen(v Settings, id string) bool {
-	switch id {
-	case core.PaymentGatewayEpay:
-		return v.Epay.Enabled
-	case core.PaymentGatewayStripe:
-		return v.Stripe.Enabled
+	if b := builtinOf(id); b != nil {
+		return b.open(v)
 	}
 	_, ok := s.gateway(id)
 	return ok
+}
+
+// methodOpen reports whether method m takes new orders under v.
+func (s *Service) methodOpen(v Settings, m Method) bool {
+	return m.Enabled && s.gatewayOpen(v, m.Gateway)
 }
 
 // pluginGatewayView is a plugin gateway on the settings' gateways tab.
@@ -69,6 +66,7 @@ type pluginGatewayView struct {
 	Ready      bool             `json:"ready"`
 	Methods    []methodTemplate `json:"methods"`
 	InUse      int              `json:"in_use"`
+	NotifyURL  string           `json:"notify_url"`
 }
 
 type methodTemplate struct {
@@ -77,7 +75,7 @@ type methodTemplate struct {
 }
 
 // pluginGatewaysHandler lists the plugin gateways of the current generation
-// and, as not ready, those the methods still name.
+// and, as not ready, those the methods still name (by id).
 func (s *Service) pluginGatewaysHandler(c *gin.Context) {
 	ctx := c.Request.Context()
 	ms, err := loadMethods(ctx, s.db.Gorm)
@@ -91,22 +89,23 @@ func (s *Service) pluginGatewaysHandler(c *gin.Context) {
 	}
 	out := []pluginGatewayView{}
 	for _, b := range s.pluginGateways() {
-		out = append(out, bindingView(ctx, b, inUse[b.Gateway.ID]))
+		out = append(out, s.bindingView(ctx, b, inUse[b.Gateway.ID]))
 		delete(inUse, b.Gateway.ID)
 	}
-	for id, n := range inUse {
-		if !validBuiltin(id) {
-			key, _, _ := strings.Cut(id, ".")
-			out = append(out, pluginGatewayView{ID: id, PluginKey: key, PluginName: key, Name: id, Methods: []methodTemplate{}, InUse: n})
+	for _, id := range slices.Sorted(maps.Keys(inUse)) {
+		if pluginID, _, ok := manifest.ParsePaymentGatewayName(id); ok {
+			out = append(out, pluginGatewayView{ID: id, PluginKey: pluginID, PluginName: manifest.DisplayID(pluginID), Name: id,
+				Methods: []methodTemplate{}, InUse: inUse[id], NotifyURL: s.notifyURL(id)})
 		}
 	}
 	httpapi.OK(c, out)
 }
 
-func bindingView(ctx context.Context, b core.PaymentGatewayBinding, inUse int) pluginGatewayView {
+func (s *Service) bindingView(ctx context.Context, b core.PaymentGatewayBinding, inUse int) pluginGatewayView {
 	loc := core.Locale(ctx)
-	v := pluginGatewayView{ID: b.Gateway.ID, PluginKey: b.Plugin.Key, PluginName: b.Plugin.Key, Name: b.Gateway.Name.Get(loc),
-		Ready: true, Methods: make([]methodTemplate, len(b.Gateway.Methods)), InUse: inUse}
+	v := pluginGatewayView{ID: b.Gateway.ID, PluginKey: b.Plugin.Key, PluginName: manifest.DisplayID(b.Plugin.Key),
+		Name: b.Gateway.Name.Get(loc), Ready: true, Methods: make([]methodTemplate, len(b.Gateway.Methods)), InUse: inUse,
+		NotifyURL: s.notifyURL(b.Gateway.ID)}
 	if b.Plugin.Manifest != nil {
 		v.PluginName = core.LocalizedText(b.Plugin.Manifest.Name).Get(loc)
 	}
@@ -114,8 +113,4 @@ func bindingView(ctx context.Context, b core.PaymentGatewayBinding, inUse int) p
 		v.Methods[i] = methodTemplate{Type: m.Type, Name: m.Name.Get(loc)}
 	}
 	return v
-}
-
-func validBuiltin(id string) bool {
-	return id == core.PaymentGatewayEpay || id == core.PaymentGatewayStripe
 }

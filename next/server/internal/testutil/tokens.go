@@ -1,6 +1,7 @@
 package testutil
 
 import (
+	"context"
 	"strconv"
 	"strings"
 
@@ -18,3 +19,26 @@ func SessionUser(token, prefix string) (int64, string, error) {
 	}
 	return uid, "", nil
 }
+
+// Tokens is a core.TokenVerifier fake: a bearer token "<uid>" is a session
+// of user uid (SessionUser).
+type Tokens struct{}
+
+func (Tokens) VerifySession(_ context.Context, tok string) (int64, string, error) {
+	return SessionUser(tok, "")
+}
+
+// Perms is a core.Authorizer fake holding each user's permissions; it lets
+// every grant through.
+type Perms map[int64][]string
+
+func (p Perms) Can(ctx context.Context, uid int64, key string) (bool, error) {
+	set, err := p.PermissionSet(ctx, uid)
+	return set.Has(key), err
+}
+
+func (p Perms) PermissionSet(_ context.Context, uid int64) (core.PermissionSet, error) {
+	return core.PermissionSetOf(p[uid]...), nil
+}
+
+func (Perms) CanGrant(context.Context, int64, []string) error { return nil }

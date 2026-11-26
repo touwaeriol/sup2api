@@ -23,7 +23,7 @@ func TestConcurrentNotificationsCreditOnce(t *testing.T) {
 	for _, c := range codes {
 		require.Contains(t, []int{http.StatusOK, http.StatusServiceUnavailable}, c)
 	}
-	require.NoError(t, f.svc.credit(context.Background(), o.ID)) // a retried credit after a busy lease
+	require.NoError(t, f.svc.credit(context.Background(), o.ID)) // a retried credit of a credited order
 	sum, n := f.ledgerSum(uid, "topup:")
 	require.EqualValues(t, 1, n)
 	require.Equal(t, "100", sum.String())

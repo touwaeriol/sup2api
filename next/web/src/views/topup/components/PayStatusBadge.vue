@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { SStatusBadge } from '@sub2api/ui'
-import { useTopup } from '../topup'
 import { statusLabelKey, statusTones, type StatusKind } from './status'
 
 // Status badge of an order, a promo code or a promo code use.
 const props = defineProps<{ kind: StatusKind; status: string }>()
-const host = useTopup()
-const label = computed(() => host.t(statusLabelKey(props.kind, props.status)))
+const { t } = useI18n()
+const label = computed(() => t(statusLabelKey(props.kind, props.status)))
 </script>
 
 <template>

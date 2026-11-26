@@ -12,7 +12,7 @@ func TestPaymentHelpers(t *testing.T) {
 	if caps := Capabilities(PaymentGatewayMux{}); !slices.Equal(caps, []string{manifest.CapPaymentGateway}) {
 		t.Fatalf("capabilities = %v", caps)
 	}
-	h := NotificationHeader(&pluginv1.ParseNotificationRequest{Headers: map[string]*pluginv1.HeaderValues{
+	h := PaymentNotificationHeader(&pluginv1.ParsePaymentNotificationRequest{Headers: map[string]*pluginv1.HeaderValues{
 		"stripe-signature": {Values: []string{"t=1,v1=x"}}, "X-A": {Values: []string{"1", "2"}}}})
 	if h.Get("Stripe-Signature") != "t=1,v1=x" || len(h.Values("X-A")) != 2 {
 		t.Fatalf("header = %v", h)

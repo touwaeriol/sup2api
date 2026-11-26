@@ -360,7 +360,7 @@ func TestAPIFlow(t *testing.T) {
 		t.Fatalf("put settings = %d %v", code, out)
 	}
 	vals := data(out)["values"].(map[string]any)
-	if vals["webhook_secret"] != Mask || vals["threshold"] != float64(3) || data(out)["mode"] != "native" {
+	if vals["webhook_secret"] != core.SecretMask || vals["threshold"] != float64(3) || data(out)["mode"] != "native" {
 		t.Fatalf("settings = %v", data(out))
 	}
 	// ui.settings.permission lets its holders read and edit the settings
@@ -391,14 +391,14 @@ func TestAPIFlow(t *testing.T) {
 	}
 	// Only through the plugin permission, a masked secret is kept only while
 	// nothing else changes; changing another field needs the secret again.
-	code, out = h.do("PUT", "/plugins/guard/settings", "viewer", map[string]any{"values": map[string]any{"threshold": 4, "webhook_secret": Mask}})
+	code, out = h.do("PUT", "/plugins/guard/settings", "viewer", map[string]any{"values": map[string]any{"threshold": 4, "webhook_secret": core.SecretMask}})
 	require.Equal(t, http.StatusBadRequest, code, out)
 	fields, _ := out["error"].(map[string]any)["details"].(map[string]any)["fields"].([]any)
 	require.Len(t, fields, 1, out)
 	assert.Equal(t, "values/webhook_secret", fields[0].(map[string]any)["field"])
-	code, out = h.do("PUT", "/plugins/guard/settings", "viewer", map[string]any{"values": map[string]any{"threshold": 3, "webhook_secret": Mask}})
+	code, out = h.do("PUT", "/plugins/guard/settings", "viewer", map[string]any{"values": map[string]any{"threshold": 3, "webhook_secret": core.SecretMask}})
 	require.Equal(t, http.StatusOK, code, out)
-	code, out = h.do("PUT", "/plugins/guard/settings", "admin", map[string]any{"values": map[string]any{"threshold": 5, "webhook_secret": Mask}})
+	code, out = h.do("PUT", "/plugins/guard/settings", "admin", map[string]any{"values": map[string]any{"threshold": 5, "webhook_secret": core.SecretMask}})
 	require.Equal(t, http.StatusOK, code, out)
 	code, out = h.do("PUT", "/plugins/guard/settings", "viewer", map[string]any{"values": map[string]any{"threshold": 4, "webhook_secret": "s3cret"}})
 	require.Equal(t, http.StatusOK, code, out)
@@ -744,12 +744,12 @@ func TestOldSchemaSettingsPackage(t *testing.T) {
 
 			code, out = h.do("GET", "/plugins/guard/settings", "admin", nil)
 			require.Equal(t, http.StatusOK, code, out)
-			assert.Equal(t, map[string]any{"threshold": Mask, "webhook_secret": Mask}, data(out)["values"])
+			assert.Equal(t, map[string]any{"threshold": core.SecretMask, "webhook_secret": core.SecretMask}, data(out)["values"])
 			assert.Equal(t, []any{"threshold", "webhook_secret"}, data(out)["secret_fields"])
 			assert.NotContains(t, data(out), "schema")
 			assert.NotContains(t, data(out), "ui_schema")
 
-			code, out = h.do("PUT", "/plugins/guard/settings", "admin", map[string]any{"values": map[string]any{"threshold": Mask, "webhook_secret": Mask, "note": "n"}})
+			code, out = h.do("PUT", "/plugins/guard/settings", "admin", map[string]any{"values": map[string]any{"threshold": core.SecretMask, "webhook_secret": core.SecretMask, "note": "n"}})
 			require.Equal(t, http.StatusOK, code, out)
 			assert.JSONEq(t, `{"threshold":3,"webhook_secret":"s3cret","note":"n"}`, h.storedSettings())
 		})
@@ -780,7 +780,7 @@ func TestSettingsWithoutFormAreAllMasked(t *testing.T) {
 	code, out = h.do("PUT", "/plugins/guard/settings", "admin", map[string]any{"values": map[string]any{
 		"api_key": "k-1", "upstream": map[string]any{"url": "https://u.example", "token": "t-1"}, "note": ""}})
 	require.Equal(t, http.StatusOK, code, out)
-	masked := map[string]any{"api_key": Mask, "upstream": Mask, "note": ""}
+	masked := map[string]any{"api_key": core.SecretMask, "upstream": core.SecretMask, "note": ""}
 	assert.Equal(t, masked, data(out)["values"])
 	assert.ElementsMatch(t, []any{"api_key", "note", "upstream"}, data(out)["secret_fields"])
 
@@ -793,9 +793,9 @@ func TestSettingsWithoutFormAreAllMasked(t *testing.T) {
 
 	// Masks keep the stored values; a new value replaces its own key only.
 	code, out = h.do("PUT", "/plugins/guard/settings", "admin", map[string]any{"values": map[string]any{
-		"api_key": Mask, "upstream": Mask, "note": "n"}})
+		"api_key": core.SecretMask, "upstream": core.SecretMask, "note": "n"}})
 	require.Equal(t, http.StatusOK, code, out)
-	assert.Equal(t, map[string]any{"api_key": Mask, "upstream": Mask, "note": Mask}, data(out)["values"])
+	assert.Equal(t, map[string]any{"api_key": core.SecretMask, "upstream": core.SecretMask, "note": core.SecretMask}, data(out)["values"])
 	var enc []byte
 	require.NoError(t, h.db.SQL.QueryRowContext(context.Background(), `SELECT config_enc FROM plugins WHERE key = 'guard'`).Scan(&enc))
 	cipher, _ := secret.New(bytes.Repeat([]byte{7}, 32))

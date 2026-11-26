@@ -85,7 +85,7 @@ func TestRedeemDuplicateCreditRollsBack(t *testing.T) {
 	// The same credit already holds the code's key, as if its row had been
 	// re-created after it was redeemed: the ledger answers Duplicate.
 	_, err := f.bill.Apply(t.Context(), core.LedgerChange{UserID: user, Amount: decimal.NewFromInt(40), Credit: true,
-		Kind: kindRedeem, RefType: "redeem_code", RefID: "0", IdempotencyKey: "redeem:" + hashCode(normalize(code))})
+		Kind: core.LedgerKindRedeem, RefType: "redeem_code", RefID: "0", IdempotencyKey: "redeem:" + hashCode(normalize(code))})
 	require.NoError(t, err)
 
 	_, err = f.svc.Redeem(t.Context(), user, code)
@@ -98,10 +98,10 @@ func TestRedeemDuplicateCreditRollsBack(t *testing.T) {
 func TestGenerateUpperBounds(t *testing.T) {
 	f := newFixture(t, nil)
 	admin := testutil.InsertUser(t, f.db, "rd-bounds@x.test")
-	out, err := f.svc.Generate(t.Context(), admin, GenerateRequest{Count: maxCount, Value: maxValue})
+	out, err := f.svc.Generate(t.Context(), admin, GenerateRequest{Count: maxCount, Value: core.MaxCreditPerTx})
 	require.NoError(t, err)
 	require.Len(t, out.Codes, maxCount)
 	var n int64
-	require.NoError(t, f.db.Gorm.Model(&model.RedeemCode{}).Where("value = ?", maxValue).Count(&n).Error)
+	require.NoError(t, f.db.Gorm.Model(&model.RedeemCode{}).Where("value = ?", core.MaxCreditPerTx).Count(&n).Error)
 	require.EqualValues(t, maxCount, n)
 }

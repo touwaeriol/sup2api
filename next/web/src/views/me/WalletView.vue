@@ -57,7 +57,7 @@ const refresh = () => wallet.reload()
       <SStatCard :label="t('me.wallet.last30d')" :value="money(overview?.last_30d?.total_cost)" icon="chart" :loading="overviewLoading" />
     </SGrid>
     <SAlert v-if="wallet.negative.value" tone="danger" data-testid="wallet-negative">{{ t('ledger.negativeHint') }}</SAlert>
-    <div class="grid grid-cols-1 items-start gap-4" :class="{ 'lg:grid-cols-[minmax(0,2fr)_minmax(18rem,1fr)]': canRedeem }">
+    <div class="grid grid-cols-1 items-start gap-4" :class="{ 'lg:grid-cols-[minmax(0,2fr)_minmax(18rem,1fr)]': canTopup && canRedeem }">
       <WalletTopup v-if="canTopup" @credited="refresh" />
       <RedeemCard v-if="canRedeem" @credited="refresh" />
     </div>

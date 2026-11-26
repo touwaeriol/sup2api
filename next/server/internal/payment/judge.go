@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 
 	"github.com/Sub2API-Devs/sup2api/next/runtime-contract/gormpg"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
@@ -76,7 +75,7 @@ func (s *Service) judgeState(ctx context.Context, tx *gorm.DB, gateway string, o
 		v.credit = statusOf(o) == statusPaid
 		return v, nil
 	}
-	if !lateOK(o, s.now()) {
+	if !isPayable(o, s.now()) {
 		return handled(eventNotPayable), nil
 	}
 	db := store.G(ctx, tx)
@@ -100,7 +99,7 @@ func (s *Service) judgeState(ctx context.Context, tx *gorm.DB, gateway string, o
 // again; when the code no longer applies the order is credited without the
 // bonus and says why.
 func (s *Service) markPaid(ctx context.Context, tx *gorm.DB, o *model.PaymentOrder, res *core.PaymentResult) error {
-	set := map[string]any{"trade_no": res.TradeNo, "paid_at": clause.Expr{SQL: "now()"}}
+	set := map[string]any{"trade_no": res.TradeNo, "paid_at": sqlNow}
 	if o.GatewaySessionID == "" && res.SessionID != "" {
 		set["gateway_session_id"] = res.SessionID
 	}
@@ -113,11 +112,7 @@ func (s *Service) markPaid(ctx context.Context, tx *gorm.DB, o *model.PaymentOrd
 			set["bonus"], set["fail_reason"] = 0, "paid late: the promo code no longer applies, its bonus is not credited"
 		}
 	}
-	ok, err := setStatus(ctx, tx, o.ID, statusPaid, set, statusPending, statusExpired, statusCancelled)
-	if err == nil && !ok {
-		err = errLostRace
-	}
-	return err
+	return mustMove(moveTo(ctx, tx, o.ID, statusPaid, set))
 }
 
 // knownStatuses are the statuses of core.PaymentStatus; another one (a

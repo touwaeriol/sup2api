@@ -22,6 +22,8 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/billing"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/httpapi"
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/payment/epay"
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/payment/stripe"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/perm"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store/model"
@@ -60,7 +62,12 @@ func (g *fakeGateway) CreatePayment(_ context.Context, in core.PaymentCreate) (*
 		SessionID: "sess_" + in.OutTradeNo, MerchantRef: g.merchant}, nil
 }
 
-func (g *fakeGateway) ParseNotification(_ context.Context, n core.PaymentNotification) (*core.PaymentResult, error) {
+func (g *fakeGateway) ParseNotification(_ context.Context, n core.PaymentNotification) (*core.PaymentResult, core.PaymentResponder, error) {
+	res, err := g.parse(n)
+	return res, fakeRespond, err
+}
+
+func (g *fakeGateway) parse(n core.PaymentNotification) (*core.PaymentResult, error) {
 	if reason := n.Header.Get("X-Bad-Sign"); reason != "" {
 		return nil, fmt.Errorf("fake: %w: %s", core.ErrPaymentSignature, reason)
 	}
@@ -97,9 +104,8 @@ func (g *fakeGateway) QueryPayment(ctx context.Context, q core.PaymentQuery) (*c
 	return nil, core.ErrPaymentQueryUnsupported
 }
 
-func (g *fakeGateway) Respond(o core.PaymentOutcome) core.PaymentReply {
-	status := map[core.PaymentOutcome]int{core.PaymentHandled: 200, core.PaymentRejected: 400, core.PaymentRetry: 503}[o]
-	return core.PaymentReply{Status: status, ContentType: "text/plain", Body: []byte(strconv.Itoa(status))}
+func fakeRespond(o core.PaymentOutcome) core.PaymentReply {
+	return core.PlainPaymentReply(o.HTTPStatus(), strconv.Itoa(o.HTTPStatus()))
 }
 
 // fakeGeneration is a plugin generation with payment gateways.
@@ -148,12 +154,13 @@ func newFixture(t *testing.T) *fixture {
 	require.NoError(t, err)
 	f := &fixture{t: t, db: db, gw: &fakeGateway{merchant: "1001", paid: map[string]*core.PaymentResult{}}, reg: &fakeRegistry{}}
 	f.reg.set()
-	f.svc = New(Deps{DB: db, Cipher: cipher, Ledger: billing.New(db, rdb, nil, nil, nil), Plugins: f.reg,
-		PublicURL: "https://site.test", Builtin: map[string]core.PaymentGateway{core.PaymentGatewayEpay: f.gw, core.PaymentGatewayStripe: &fakeGateway{merchant: "test"}}})
+	f.svc = New(Deps{DB: db, Cipher: cipher, Ledger: billing.New(db, rdb, nil, nil, nil), Plugins: f.reg, PublicURL: "https://site.test",
+		HTTP: &http.Client{}})
+	f.svc.builtin = map[string]core.PaymentGateway{epay.ID: f.gw, stripe.ID: &fakeGateway{merchant: "test"}}
 	f.admin = testutil.InsertUser(t, db, "pay-admin@x.test")
 	gin.SetMode(gin.TestMode)
 	f.engine = gin.New()
-	f.svc.RegisterRoutes(httpapi.NewRouter(f.engine, fakeTokens{}, roles{admin: f.admin}))
+	f.svc.RegisterRoutes(httpapi.NewRouter(f.engine, testutil.Tokens{}, roles{admin: f.admin}))
 	return f
 }
 
@@ -164,9 +171,9 @@ func (f *fixture) adminCtx() context.Context { return core.WithUserID(context.Ba
 func (f *fixture) configure(edit ...func(*settingsValues)) {
 	f.t.Helper()
 	v := settingsValues{Settings: defaultSettings(), Methods: []Method{
-		{Type: "alipay", Name: "Alipay", Gateway: core.PaymentGatewayEpay, Icon: "alipay", Enabled: true}}}
-	v.Enabled, v.Currency, v.Price, v.MaxPendingOrders = true, "CNY", num(decimalOf("7.3")), 3
-	v.Discounts = []Discount{{Amount: numInt(100), Rate: num(decimalOf("0.9"))}}
+		{Type: "alipay", Name: "Alipay", Gateway: epay.ID, Icon: "alipay", Enabled: true}}}
+	v.Enabled, v.Currency, v.Price, v.MaxPendingOrders = true, "CNY", dec("7.3"), 3
+	v.Discounts = []Discount{{Amount: dec("100"), Rate: dec("0.9")}}
 	v.Epay = EpaySettings{Enabled: true, Endpoint: "https://epay.test", MerchantID: "1001", Key: "epay-secret"}
 	for _, e := range edit {
 		e(&v)
@@ -181,7 +188,7 @@ func (f *fixture) user(name string) int64 {
 // order places an order of amount for uid and returns it.
 func (f *fixture) order(uid int64, amount string, promo ...string) *model.PaymentOrder {
 	f.t.Helper()
-	in := quoteInput{Amount: num(decimalOf(amount)), Method: "alipay"}
+	in := quoteInput{Amount: dec(amount), Method: "alipay"}
 	if len(promo) > 0 {
 		in.PromoCode = promo[0]
 	}
@@ -274,11 +281,8 @@ func concurrently(n int, fn func(i int)) {
 	wg.Wait()
 }
 
-type fakeTokens struct{}
-
-func (fakeTokens) VerifySession(_ context.Context, tok string) (int64, string, error) {
-	return testutil.SessionUser(tok, "")
-}
+// dec is a decimal constant.
+func dec(s string) decimal.Decimal { return decimal.RequireFromString(s) }
 
 // roles grants the administrator every permission and everyone else
 // topup:use only, as the built-in roles do.

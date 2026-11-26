@@ -16,7 +16,14 @@ describe('parseLogo', () => {
   })
 
   it('refuses other schemes, types and encodings', () => {
-    for (const v of ['http://example.com/a.png', 'javascript:alert(1)', dataUrl('text/html', 4), 'data:image/svg+xml,<svg/>', 'logo.png', '']) {
+    for (const v of [
+      'http://example.com/a.png',
+      'javascript:alert(1)',
+      dataUrl('text/html', 4),
+      'data:image/svg+xml,<svg/>',
+      'logo.png',
+      ''
+    ]) {
       expect(parseLogo(v)).toBeNull()
     }
   })
@@ -39,7 +46,9 @@ describe('logo rules', () => {
 
   it('refuses a file of another type or over the size before reading it', () => {
     expect(logoFileError(new File(['x'], 'a.gif', { type: 'image/gif' }), t)).toBe('topup.settings.methods.logo.rule.type')
-    expect(logoFileError(new File([new Uint8Array(LOGO_MAX_BYTES + 1)], 'a.png', { type: 'image/png' }), t)).toBe('topup.settings.methods.logo.rule.size')
+    expect(logoFileError(new File([new Uint8Array(LOGO_MAX_BYTES + 1)], 'a.png', { type: 'image/png' }), t)).toBe(
+      'topup.settings.methods.logo.rule.size'
+    )
     expect(logoFileError(new File(['<svg/>'], 'a.svg', { type: 'image/svg+xml' }), t)).toBe('')
   })
 })

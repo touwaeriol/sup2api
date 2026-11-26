@@ -110,15 +110,15 @@ func TestLedger(t *testing.T) {
 	ctx := context.Background()
 	uid := e.user("a@example.com")
 
-	res, err := e.svc.Apply(ctx, core.LedgerChange{UserID: uid, Amount: decimal.RequireFromString("20"), Credit: true, Kind: KindAdminAdjust, IdempotencyKey: "k1"})
+	res, err := e.svc.Apply(ctx, core.LedgerChange{UserID: uid, Amount: decimal.RequireFromString("20"), Credit: true, Kind: core.LedgerKindAdminAdjust, IdempotencyKey: "k1"})
 	if err != nil || res.Duplicate || !res.BalanceAfter.Equal(decimal.NewFromInt(20)) {
 		t.Fatalf("credit: %+v %v", res, err)
 	}
-	res2, err := e.svc.Apply(ctx, core.LedgerChange{UserID: uid, Amount: decimal.RequireFromString("0.0158"), Kind: KindUsage, IdempotencyKey: "usage:r1", RefType: "usage", RefID: "r1"})
+	res2, err := e.svc.Apply(ctx, core.LedgerChange{UserID: uid, Amount: decimal.RequireFromString("0.0158"), Kind: core.LedgerKindUsage, IdempotencyKey: "usage:r1", RefType: "usage", RefID: "r1"})
 	if err != nil || !res2.BalanceAfter.Equal(decimal.RequireFromString("19.9842")) {
 		t.Fatalf("debit: %+v %v", res2, err)
 	}
-	dup, err := e.svc.Apply(ctx, core.LedgerChange{UserID: uid, Amount: decimal.RequireFromString("0.0158"), Kind: KindUsage, IdempotencyKey: "usage:r1"})
+	dup, err := e.svc.Apply(ctx, core.LedgerChange{UserID: uid, Amount: decimal.RequireFromString("0.0158"), Kind: core.LedgerKindUsage, IdempotencyKey: "usage:r1"})
 	if err != nil || !dup.Duplicate || dup.LedgerID != res2.LedgerID {
 		t.Fatalf("duplicate: %+v %v", dup, err)
 	}
@@ -144,17 +144,17 @@ func TestLedger(t *testing.T) {
 
 	// Validation and unknown users.
 	bad := []core.LedgerChange{
-		{UserID: uid, Amount: decimal.Zero, Kind: KindUsage, IdempotencyKey: "z"},
-		{UserID: uid, Amount: decimal.RequireFromString("0.000000001"), Kind: KindUsage, IdempotencyKey: "z"},
+		{UserID: uid, Amount: decimal.Zero, Kind: core.LedgerKindUsage, IdempotencyKey: "z"},
+		{UserID: uid, Amount: decimal.RequireFromString("0.000000001"), Kind: core.LedgerKindUsage, IdempotencyKey: "z"},
 		{UserID: uid, Amount: decimal.NewFromInt(1), Kind: "gift", IdempotencyKey: "z"},
-		{UserID: uid, Amount: decimal.NewFromInt(1), Kind: KindUsage},
+		{UserID: uid, Amount: decimal.NewFromInt(1), Kind: core.LedgerKindUsage},
 	}
 	for _, ch := range bad {
 		if _, err := e.svc.Apply(ctx, ch); core.AsError(err).Code != "invalid_argument" {
 			t.Fatalf("%+v: err %v", ch, err)
 		}
 	}
-	if _, err := e.svc.Apply(ctx, core.LedgerChange{UserID: 999999, Amount: decimal.NewFromInt(1), Credit: true, Kind: KindRefund, IdempotencyKey: "nouser"}); core.AsError(err).Code != "not_found" {
+	if _, err := e.svc.Apply(ctx, core.LedgerChange{UserID: 999999, Amount: decimal.NewFromInt(1), Credit: true, Kind: core.LedgerKindRefund, IdempotencyKey: "nouser"}); core.AsError(err).Code != "not_found" {
 		t.Fatalf("unknown user: %v", err)
 	}
 }
@@ -171,7 +171,7 @@ func TestBalanceGate(t *testing.T) {
 		t.Fatalf("empty balance: %v", err)
 	}
 	e.mr.FlushAll()
-	if _, err := e.svc.Apply(ctx, core.LedgerChange{UserID: uid, Amount: decimal.NewFromInt(5), Credit: true, Kind: KindAdminAdjust, IdempotencyKey: "g1"}); err != nil {
+	if _, err := e.svc.Apply(ctx, core.LedgerChange{UserID: uid, Amount: decimal.NewFromInt(5), Credit: true, Kind: core.LedgerKindAdminAdjust, IdempotencyKey: "g1"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.svc.CheckBalance(ctx, uid); err != nil {
@@ -194,7 +194,7 @@ func TestBalanceGate(t *testing.T) {
 	// Overdraft through usage makes the next request fail.
 	e.exec(`UPDATE settings SET value = '{"min_balance":"0"}' WHERE key = 'billing'`)
 	e.svc.invalidate()
-	if _, err := e.svc.Apply(ctx, core.LedgerChange{UserID: uid, Amount: decimal.NewFromInt(6), Kind: KindUsage, IdempotencyKey: "usage:x"}); err != nil {
+	if _, err := e.svc.Apply(ctx, core.LedgerChange{UserID: uid, Amount: decimal.NewFromInt(6), Kind: core.LedgerKindUsage, IdempotencyKey: "usage:x"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.svc.CheckBalance(ctx, uid); core.AsError(err).Code != "insufficient_balance" {

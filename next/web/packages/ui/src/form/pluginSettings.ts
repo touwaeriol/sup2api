@@ -43,8 +43,6 @@ const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v ?? {}))
 
 export function usePluginSettings<M extends Model = Model>(opts: {
   pluginKey: string
-  /** Where the settings are read and saved; /plugins/<pluginKey>/settings unless set (core settings pages that share this form, e.g. /topup/settings). */
-  path?: string
   /** host.api */
   api: ApiClient
   rules: Rules<M> | (() => Rules<M>)
@@ -53,7 +51,7 @@ export function usePluginSettings<M extends Model = Model>(opts: {
 }): PluginSettingsForm<M> {
   const host = useHost()
   const t = useUiT()
-  const path = opts.path ?? `/plugins/${encodeURIComponent(opts.pluginKey)}/settings`
+  const path = `/plugins/${encodeURIComponent(opts.pluginKey)}/settings`
   const view = ref<SettingsView | null>(null)
   const values = ref({}) as Ref<M>
   const serverErrors = ref<Record<string, string>>({})

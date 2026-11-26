@@ -4,15 +4,15 @@
 // another type or over the size limit is refused before it is read; the
 // form's rules check the stored value.
 import { computed, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { SButton, SField, SIcon, SInput } from '@sub2api/ui'
-import { useTopup } from '../topup'
 import MethodIcon from '../components/MethodIcon.vue'
 import { LOGO_TYPES, parseLogo } from '../components/methodIcon'
 import { kb, LOGO_ACCEPT, LOGO_MAX_BYTES, logoFileError } from './settingsForm'
 
 const props = defineProps<{ modelValue?: string; name: string }>()
 const emit = defineEmits<{ (e: 'update:modelValue', v: string): void }>()
-const t = useTopup().t
+const { t } = useI18n()
 
 const picker = ref<HTMLInputElement>()
 const dragging = ref(false)
@@ -22,7 +22,9 @@ const source = computed(() => parseLogo(props.modelValue))
 const summary = computed(() => {
   const s = source.value
   if (!s) return ''
-  return s.kind === 'url' ? t('topup.settings.methods.logo.linked', { host: s.host }) : t('topup.settings.methods.logo.uploaded', { type: LOGO_TYPES[s.type], size: kb(s.bytes) })
+  return s.kind === 'url'
+    ? t('topup.settings.methods.logo.linked', { host: s.host })
+    : t('topup.settings.methods.logo.uploaded', { type: LOGO_TYPES[s.type], size: kb(s.bytes) })
 })
 /** The address field shows an address, never an inline image. */
 const address = computed(() => (props.modelValue?.startsWith('data:') ? '' : (props.modelValue ?? '')))
@@ -70,12 +72,19 @@ function onLeave(e: DragEvent) {
 </script>
 
 <template>
-  <div class="payment-logo">
+  <div class="flex flex-col gap-2">
     <!-- Messages go under the zone, which is what a refused file or a missing logo is about; the address has its own field below. -->
     <SField prop="logo" :error="rejected || undefined" :hint="t('topup.settings.methods.logo.limits', { max: kb(LOGO_MAX_BYTES) })">
       <div
-        class="payment-logo-zone"
-        :class="{ 'payment-logo-zone--over': dragging, 'payment-logo-zone--filled': source}"
+        class="rounded-xl border transition-colors"
+        :class="[
+          dragging
+            ? 'border-dashed border-fg bg-fg/5'
+            : source
+              ? 'border-solid border-line bg-surface-2'
+              : 'border-dashed border-line-strong bg-surface-2',
+          { 'flex flex-wrap items-center gap-3 p-3': source }
+        ]"
         data-testid="payment-logo-zone"
         @dragover.prevent="dragging = true"
         @dragleave="onLeave"
@@ -83,21 +92,43 @@ function onLeave(e: DragEvent) {
       >
         <template v-if="source">
           <MethodIcon :method="{ name, logo: modelValue }" size="lg" />
-          <span class="payment-logo-summary">{{ summary }}</span>
-          <span class="payment-logo-actions">
+          <span class="min-w-32 flex-1 text-[0.8125rem] text-fg [overflow-wrap:anywhere]">{{ summary }}</span>
+          <span class="flex gap-2">
             <SButton size="sm" icon="upload" @click="picker?.click()">{{ t('topup.settings.methods.logo.replace') }}</SButton>
-            <SButton size="sm" variant="ghost" icon="trash" data-testid="payment-logo-remove" @click="set('')">{{ t('topup.settings.methods.logo.remove') }}</SButton>
+            <SButton size="sm" variant="ghost" icon="trash" data-testid="payment-logo-remove" @click="set('')">{{
+              t('topup.settings.methods.logo.remove')
+            }}</SButton>
           </span>
         </template>
-        <button v-else type="button" class="payment-logo-drop" @click="picker?.click()">
-          <SIcon name="upload" class="payment-logo-drop-icon" />
+        <button
+          v-else
+          type="button"
+          class="flex w-full cursor-pointer flex-col items-center gap-1.5 rounded-[inherit] border-0 bg-transparent px-4 py-5 text-[0.8125rem] text-fg-muted hover:text-fg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-fg/40"
+          @click="picker?.click()"
+        >
+          <SIcon name="upload" class="h-6 w-6 text-fg-subtle" />
           <span>{{ dragging ? t('topup.settings.methods.logo.dropActive') : t('topup.settings.methods.logo.drop') }}</span>
         </button>
       </div>
-      <input ref="picker" type="file" :accept="LOGO_ACCEPT" class="payment-logo-file" tabindex="-1" aria-hidden="true" data-testid="payment-logo-file" @change="onPick" />
+      <input
+        ref="picker"
+        type="file"
+        :accept="LOGO_ACCEPT"
+        class="hidden"
+        tabindex="-1"
+        aria-hidden="true"
+        data-testid="payment-logo-file"
+        @change="onPick"
+      />
     </SField>
     <SField :label="t('topup.settings.methods.logo.url')" size="sm">
-      <SInput :model-value="address" type="url" :placeholder="t('topup.settings.methods.logo.urlPlaceholder')" data-testid="payment-logo-url" @update:model-value="set(String($event ?? '').trim())" />
+      <SInput
+        :model-value="address"
+        type="url"
+        :placeholder="t('topup.settings.methods.logo.urlPlaceholder')"
+        data-testid="payment-logo-url"
+        @update:model-value="set(String($event ?? '').trim())"
+      />
     </SField>
   </div>
 </template>

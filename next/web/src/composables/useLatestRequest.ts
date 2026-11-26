@@ -7,6 +7,8 @@ export interface LatestRequest<R> {
   loading: Ref<boolean>
   /** Why the latest request failed, '' otherwise. */
   error: Ref<string>
+  /** Asks again for the latest input at once (after a failure, say). */
+  reload: () => void
 }
 
 /**
@@ -28,37 +30,36 @@ export function latestOnly(): () => () => boolean {
  * the answers of earlier ones are dropped. A null input asks nothing.
  */
 export function useLatestRequest<I, R>(input: WatchSource<I | null>, load: (input: I) => Promise<R>, delay = 300): LatestRequest<R> {
-  const result = shallowRef<R | null>(null)
-  const loading = ref(false)
-  const error = ref('')
+  const state = { result: shallowRef<R | null>(null), loading: ref(false), error: ref('') }
   const begin = latestOnly()
   let timer: ReturnType<typeof setTimeout> | undefined
+  let last: I | null = null
 
-  async function run(value: I, latest: () => boolean) {
-    try {
-      const r = await load(value)
-      if (latest()) result.value = r
-    } catch (e) {
-      if (!latest()) return
-      result.value = null
-      error.value = errorMessage(e)
-    } finally {
-      if (latest()) loading.value = false
-    }
+  function ask(value: I | null, wait: number) {
+    clearTimeout(timer)
+    last = value
+    const latest = begin()
+    state.error.value = ''
+    state.loading.value = value !== null
+    if (value === null) state.result.value = null
+    else timer = setTimeout(() => answer(state, () => load(value), latest), wait)
   }
 
-  watch(
-    input,
-    (value) => {
-      clearTimeout(timer)
-      const latest = begin()
-      error.value = ''
-      loading.value = value !== null
-      if (value === null) result.value = null
-      else timer = setTimeout(() => run(value, latest), delay)
-    },
-    { immediate: true }
-  )
+  watch(input, (value) => ask(value, delay), { immediate: true })
   onScopeDispose(() => clearTimeout(timer))
-  return { result, loading, error }
+  return { ...state, reload: () => ask(last, 0) }
+}
+
+/** Takes one request's answer or failure, if it is still the latest. */
+async function answer<R>(s: Omit<LatestRequest<R>, 'reload'>, request: () => Promise<R>, latest: () => boolean) {
+  try {
+    const r = await request()
+    if (latest()) s.result.value = r
+  } catch (e) {
+    if (!latest()) return
+    s.result.value = null
+    s.error.value = errorMessage(e)
+  } finally {
+    if (latest()) s.loading.value = false
+  }
 }

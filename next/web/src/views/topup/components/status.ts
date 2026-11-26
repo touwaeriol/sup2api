@@ -1,13 +1,11 @@
-import type { Tone } from '@sub2api/ui'
-import type { OrderStatus, PromoCode } from '../topup'
+import type { SelectOption, Tone } from '@sub2api/ui'
+import { i18n } from '@/i18n'
+import type { OrderStatus } from '../topup'
 
 // Badge tones of the payment statuses; labels come from the messages
 // (status.* for orders, admin.<kind>.status.* for the others).
 
 export type StatusKind = 'order' | 'promo' | 'usage'
-
-/** What a promo code shows: its switch, or why an enabled one no longer applies. */
-export type PromoState = 'active' | 'disabled' | 'expired' | 'exhausted'
 
 export const ORDER_STATUSES: OrderStatus[] = ['pending', 'paid', 'completed', 'failed', 'expired', 'cancelled']
 
@@ -25,14 +23,18 @@ const TONES: Record<StatusKind, Record<string, Tone>> = {
 }
 
 /** Message key prefix of each kind's status labels. */
-const LABEL_PREFIX: Record<StatusKind, string> = { order: 'topup.status', promo: 'topup.admin.promo.status', usage: 'topup.admin.promo.usage.status' }
+const LABEL_PREFIX: Record<StatusKind, string> = {
+  order: 'topup.status',
+  promo: 'topup.admin.promo.status',
+  usage: 'topup.admin.promo.usage.status'
+}
 
 export const statusTones = (kind: StatusKind) => TONES[kind]
 
 export const statusLabelKey = (kind: StatusKind, status: string) => `${LABEL_PREFIX[kind]}.${status}`
 
-export function promoState(p: PromoCode, now = Date.now()): PromoState {
-  if (p.status === 'disabled') return 'disabled'
-  if (p.expires_at && Date.parse(p.expires_at) <= now) return 'expired'
-  return p.max_uses > 0 && p.used_count >= p.max_uses ? 'exhausted' : 'active'
-}
+/** The options of an order status filter: "any" (labelled `any`) first, then each status. */
+export const orderStatusOptions = (any: string): SelectOption[] => [
+  { value: '', label: any },
+  ...ORDER_STATUSES.map(s => ({ value: s, label: i18n.global.t(statusLabelKey('order', s)) }))
+]

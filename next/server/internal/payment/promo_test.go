@@ -3,6 +3,7 @@ package payment
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"sync/atomic"
@@ -10,8 +11,10 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/store"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store/model"
 )
 
@@ -33,6 +36,73 @@ func (f *fixture) promoRow(id int64) model.PromoCode {
 	return p
 }
 
+// A code's state: disabled first, then expired, then exhausted.
+func TestPromoState(t *testing.T) {
+	now, past := time.Now(), time.Now().Add(-time.Minute)
+	disabled := promoDisabled
+	for want, p := range map[string]model.PromoCode{
+		promoActive:    {MaxUses: 2, UsedCount: 1},
+		promoExhausted: {MaxUses: 1, UsedCount: 1},
+		promoExpired:   {MaxUses: 1, UsedCount: 1, ExpiresAt: &past},
+		promoDisabled:  {Status: &disabled, ExpiresAt: &past},
+	} {
+		require.Equal(t, want, promoState(&p, now))
+	}
+}
+
+// Deleting a code while its orders are cancelled at the same time does not
+// deadlock: both lock the orders before the code.
+func TestPromoDeleteWithConcurrentCancels(t *testing.T) {
+	f := newFixture(t)
+	f.configure()
+	id := f.promo("DROP", "1", "0", 0)
+	orders := make([]*model.PaymentOrder, 6)
+	for i := range orders {
+		orders[i] = f.order(f.user("drop"+itoa(int64(i))), "10", "drop")
+	}
+	errs := make([]error, len(orders)+1)
+	concurrently(len(errs), func(i int) {
+		if i == len(orders) {
+			errs[i] = f.db.Tx(f.adminCtx(), func(tx *gorm.DB) error { return removePromo(f.adminCtx(), tx, id) })
+			return
+		}
+		_, errs[i] = f.svc.cancel(context.Background(), orders[i].UserID, orders[i].OutTradeNo)
+	})
+	require.NoError(t, errors.Join(errs...))
+	for _, o := range orders {
+		require.Nil(t, f.load(o.OutTradeNo).PromoCodeID)
+	}
+}
+
+// A transaction the database aborted to break a deadlock runs once more; a
+// second deadlock, or any other error, is returned.
+func TestTxOnceMore(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	deadlock := func(tx *gorm.DB) error {
+		// The error the server sends for one (SQLSTATE 40P01).
+		_, err := store.SQLTx(tx).ExecContext(ctx, `DO $$ BEGIN RAISE EXCEPTION 'deadlock detected' USING ERRCODE = '40P01'; END $$`)
+		return err
+	}
+	failure := errors.New("failure")
+	runs := 0
+	run := func(fn func(tx *gorm.DB) error) error {
+		runs = 0
+		return txOnceMore(ctx, f.db, func(tx *gorm.DB) error { runs++; return fn(tx) })
+	}
+	require.NoError(t, run(func(tx *gorm.DB) error {
+		if runs == 1 {
+			return deadlock(tx)
+		}
+		return nil
+	}))
+	require.Equal(t, 2, runs)
+	require.True(t, store.IsDeadlock(run(deadlock)))
+	require.Equal(t, 2, runs)
+	require.Equal(t, failure, run(func(*gorm.DB) error { return failure }))
+	require.Equal(t, 1, runs)
+}
+
 // The last use of a code goes to one of the users racing for it.
 func TestPromoLastUseUnderConcurrency(t *testing.T) {
 	f := newFixture(t)
@@ -44,7 +114,7 @@ func TestPromoLastUseUnderConcurrency(t *testing.T) {
 	}
 	var won atomic.Int32
 	concurrently(len(users), func(i int) {
-		in := quoteInput{Amount: numInt(10), Method: "alipay", PromoCode: "last"}
+		in := quoteInput{Amount: dec("10"), Method: "alipay", PromoCode: "last"}
 		if _, err := f.svc.placeOrder(context.Background(), users[i], in, ""); err == nil {
 			won.Add(1)
 		} else {
@@ -92,7 +162,7 @@ func TestPromoUse(t *testing.T) {
 	w := f.call(f.admin, http.MethodGet, "/promo-codes/"+itoa(id)+"/usages", "")
 	require.Contains(t, w.Body.String(), `"status":"used"`)
 	require.Contains(t, w.Body.String(), `"out_trade_no":"`+o.OutTradeNo+`"`)
-	_, err := f.svc.placeOrder(context.Background(), uid, quoteInput{Amount: numInt(10), Method: "alipay", PromoCode: "twice"}, "")
+	_, err := f.svc.placeOrder(context.Background(), uid, quoteInput{Amount: dec("10"), Method: "alipay", PromoCode: "twice"}, "")
 	require.Error(t, err, "one use per user")
 }
 
@@ -124,7 +194,7 @@ func TestPromoMinimum(t *testing.T) {
 	f := newFixture(t)
 	f.configure()
 	f.promo("BIG", "5", "50", 0)
-	_, err := f.svc.placeOrder(context.Background(), f.user("small"), quoteInput{Amount: numInt(10), Method: "alipay", PromoCode: "BIG"}, "")
+	_, err := f.svc.placeOrder(context.Background(), f.user("small"), quoteInput{Amount: dec("10"), Method: "alipay", PromoCode: "BIG"}, "")
 	require.Equal(t, "top up at least $50 to use this promo code", core.AsError(err).Message)
 }
 
@@ -134,7 +204,8 @@ func TestPromoAdmin(t *testing.T) {
 	id := f.promo("EDIT", "5", "0", 0)
 	w := f.call(f.admin, http.MethodPatch, "/promo-codes/"+itoa(id), `{"status":"disabled","expires_at":null,"bonus_amount":7}`)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-	require.Contains(t, w.Body.String(), `"bonus_amount":7`)
+	require.Contains(t, w.Body.String(), `"bonus_amount":"7"`)
+	require.Contains(t, w.Body.String(), `"state":"disabled"`)
 	require.Equal(t, http.StatusBadRequest, f.call(f.admin, http.MethodPatch, "/promo-codes/"+itoa(id), `{"bonus_amount":-1}`).Code)
 	require.Equal(t, http.StatusConflict, f.call(f.admin, http.MethodPost, "/promo-codes", `{"code":"edit","bonus_amount":1}`).Code)
 	require.Equal(t, http.StatusNoContent, f.call(f.admin, http.MethodDelete, "/promo-codes/"+itoa(id), "").Code)

@@ -82,14 +82,14 @@ func merge(secretJSON, settingsJSON []byte) (fields, error) {
 	return all, nil
 }
 
-// mask replaces non-empty sensitive values (gjson paths) with Mask.
+// mask replaces non-empty sensitive values (gjson paths) with core.SecretMask.
 func mask(b []byte, sensitive []string) []byte {
 	for _, p := range sensitive {
 		r := gjson.GetBytes(b, p)
 		if !r.Exists() || r.Type == gjson.Null || (r.Type == gjson.String && r.Str == "") {
 			continue
 		}
-		if nb, err := sjson.SetBytes(b, p, Mask); err == nil {
+		if nb, err := sjson.SetBytes(b, p, core.SecretMask); err == nil {
 			b = nb
 		}
 	}
@@ -101,18 +101,18 @@ func mask(b []byte, sensitive []string) []byte {
 func maskAll(secretPart fields) fields {
 	out := make(fields, len(secretPart))
 	for k := range secretPart {
-		out[k] = json.RawMessage(strconv.Quote(Mask))
+		out[k] = json.RawMessage(strconv.Quote(core.SecretMask))
 	}
 	return out
 }
 
-// unmask puts stored values back where the client sent Mask and returns the
+// unmask puts stored values back where the client sent core.SecretMask and returns the
 // paths it restored.
 func unmask(b, old []byte, sensitive []string) ([]byte, []string) {
 	var restored []string
 	for _, p := range sensitive {
 		r := gjson.GetBytes(b, p)
-		if r.Type != gjson.String || r.Str != Mask {
+		if r.Type != gjson.String || r.Str != core.SecretMask {
 			continue
 		}
 		var err error
@@ -210,7 +210,7 @@ func (s *Service) credBase(ctx context.Context, a *row) (*credBase, error) {
 
 // prepare validates credentials (the plugin, then the guarded
 // settings without account:settings:custom) and encrypts the non-settings
-// part. base is the stored account (nil on create): Mask values are replaced
+// part. base is the stored account (nil on create): core.SecretMask values are replaced
 // from it, guarded fields equal to their old value pass, and restoring a
 // secret the caller may not reveal while changing the upstream address fails
 // before the plugin sees it.

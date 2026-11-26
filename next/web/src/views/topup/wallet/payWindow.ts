@@ -2,14 +2,15 @@
 // inside the click (popup blockers allow only that) and pointed at the page
 // once the order exists; without the order it is closed again. Only an https
 // address is ever loaded: the blank window shares this console's origin, so
-// a javascript: (or any other) address would run as the console.
+// a javascript: (or any other) address would run as the console. The core
+// already refuses such addresses; this is the last line.
 
-/** How loading the payment page went: refused when the address is not https. */
-export type PayOpen = 'opened' | 'blocked' | 'refused'
+/** How loading the payment page went. */
+export type PayOpen = 'opened' | 'blocked'
 
-export interface PayWindow {
-  /** Loads the payment page. */
-  go(url: string): PayOpen
+interface PayWindow {
+  /** Loads the payment page; null (window closed) when the address is not https. */
+  go(url: string | undefined): PayOpen | null
   close(): void
 }
 
@@ -23,6 +24,11 @@ export function isPayUrl(url: string | undefined): url is string {
   }
 }
 
+/** Whether a QR code may be shown: the PNG data URL the core draws, nothing else. */
+export function isQrImage(src: string | undefined): src is string {
+  return !!src?.startsWith('data:image/png;base64,')
+}
+
 export function reservePayWindow(): PayWindow {
   const win = window.open('', '_blank')
   const close = () => win?.close()
@@ -30,7 +36,7 @@ export function reservePayWindow(): PayWindow {
     go(url) {
       if (!isPayUrl(url)) {
         close()
-        return 'refused'
+        return null
       }
       if (!win || win.closed) return 'blocked'
       win.opener = null
@@ -41,7 +47,27 @@ export function reservePayWindow(): PayWindow {
   }
 }
 
-/** Opens the payment page right away (inside a click). */
-export function openPayPage(url: string): PayOpen {
-  return isPayUrl(url) ? reservePayWindow().go(url) : 'refused'
+/** Opens the payment page right away (inside a click); null without an https address. */
+export function openPayPage(url: string | undefined): PayOpen | null {
+  return isPayUrl(url) ? reservePayWindow().go(url) : null
+}
+
+// Methods whose last order came with no page to open (a QR code only): the
+// next order through one reserves no blank window, which would only flash
+// open and shut. Should such a method give a page after all, it is opened
+// after the order (a blocker may stop that; the waiting dialog then offers
+// to reopen it).
+const pageless = new Set<string>()
+
+/** The payment window for an order through `method`, reserved inside the click unless the method gave no page last time. */
+export function payWindowFor(method: string): PayWindow {
+  const reserved = pageless.has(method) ? null : reservePayWindow()
+  return {
+    go(url) {
+      if (isPayUrl(url)) pageless.delete(method)
+      else pageless.add(method)
+      return reserved ? reserved.go(url) : openPayPage(url)
+    },
+    close: () => reserved?.close()
+  }
 }

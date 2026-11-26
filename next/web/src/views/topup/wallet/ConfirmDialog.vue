@@ -1,166 +1,131 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { SButton, SField, SInput, SModal, SSkeleton } from '@sub2api/ui'
-import { errorMessage, paymentApi, useTopup, type OrderPreview } from '../topup'
-import { cents, discountLabel, formatLocal, formatUsd } from '../format'
+import { useI18n } from 'vue-i18n'
+import { SAlert, SButton, SField, SInput, SModal, SSkeleton } from '@sub2api/ui'
+import { useLatestRequest } from '@/composables/useLatestRequest'
+import { formatCurrency, formatMoney } from '@/utils/format'
+import { topupApi } from '../api'
+import type { CheckoutMethod, OrderRequest } from '../topup'
+import { discountLabel } from '../format'
 import MethodName from '../components/MethodName.vue'
-import type { CheckoutMethod } from './useTopupQuote'
+import { roundTo } from '../rounding'
 
 // Confirms a top-up with the server's price (preview): amount, bonus,
 // original price, discount, what to pay and the method; a promo code is
 // checked with "Apply" before it counts. "Confirm payment" hands the applied
-// code to the parent, which places the order.
-const props = defineProps<{ open: boolean; amount: number; method: CheckoutMethod; currency: string; submitting: boolean }>()
-const emit = defineEmits<{ (e: 'update:open', v: boolean): void; (e: 'confirm', promoCode: string): void }>()
-const host = useTopup()
-const t = host.t
+// code to the parent, which places the order. Only the answer to the latest
+// question counts (an earlier one arriving late is dropped).
+const props = defineProps<{
+  open: boolean
+  amount: number
+  method: CheckoutMethod
+  currency: string
+  exponent: number
+  submitting: boolean
+}>()
+const emit = defineEmits<{ 'update:open': [v: boolean]; confirm: [promoCode: string] }>()
+const { t } = useI18n()
 
-const preview = ref<OrderPreview | null>(null)
 const promo = ref('')
-const applied = ref('')
-const promoError = ref('')
-const applying = ref(false)
-
-async function fetchPreview(code: string): Promise<OrderPreview | null> {
-  try {
-    return await paymentApi.preview({ amount: props.amount, method: props.method.type, promo_code: code || undefined })
-  } catch (e) {
-    host.toast(errorMessage(e, t('topup.wallet.confirm.previewFailed')), 'error')
-    return null
-  }
-}
-
+/** The code the shown price was asked with. */
+const tried = ref('')
 watch(
   () => props.open,
-  async (open) => {
-    if (!open) return
-    promo.value = applied.value = promoError.value = ''
-    preview.value = null
-    preview.value = await fetchPreview('')
-  },
-  { immediate: true }
+  open => open && (promo.value = tried.value = '')
 )
 
-async function apply() {
-  const code = promo.value.trim()
-  applying.value = true
-  const res = await fetchPreview(code)
-  applying.value = false
-  if (!res) return
-  preview.value = res
-  promoError.value = res.promo_error ?? ''
-  applied.value = res.promo_error ? '' : code
-}
+const request = computed<OrderRequest | null>(() =>
+  props.open ? { amount: String(props.amount), method: props.method.type, promo_code: tried.value || undefined } : null
+)
+const { result: preview, loading, error, reload } = useLatestRequest(request, topupApi.preview, 0)
+const promoError = computed(() => (loading.value ? '' : (preview.value?.promo_error ?? '')))
+const applied = computed(() => (loading.value || promoError.value ? '' : tried.value))
 
+const apply = () => (tried.value = promo.value.trim())
+const unapplied = computed(() => promo.value.trim() !== tried.value)
 // A typed but unapplied code is applied first; the user then confirms the new price.
+const confirmable = computed(() => unapplied.value || (!!preview.value && !loading.value && !promoError.value))
 function confirm() {
-  if (promo.value.trim() !== applied.value) return void apply()
-  if (preview.value) emit('confirm', applied.value)
+  if (unapplied.value) return apply()
+  if (confirmable.value) emit('confirm', applied.value)
 }
 
-const money = (v: number) => formatLocal(v, props.currency)
-const discounted = computed(() => !!preview.value && preview.value.discount_rate < 1)
-const saved = computed(() => (preview.value ? cents(preview.value.original_pay_amount - preview.value.pay_amount) : 0))
+const money = (v: string | number) => formatCurrency(v, props.currency)
+const usd = (v: string | number) => formatMoney(v, 2)
+const bonus = computed(() => Number(preview.value?.bonus ?? 0))
+const discounted = computed(() => !!preview.value && Number(preview.value.discount_rate) < 1)
+const saved = computed(() =>
+  preview.value ? roundTo(Number(preview.value.original_pay_amount) - Number(preview.value.pay_amount), props.exponent) : 0
+)
+const rows = computed(() => [
+  ...(bonus.value > 0
+    ? [
+        { key: 'bonus', value: `+${usd(bonus.value)}` },
+        { key: 'credited', value: usd(props.amount + bonus.value) }
+      ]
+    : []),
+  ...(discounted.value && preview.value
+    ? [
+        { key: 'original', value: money(preview.value.original_pay_amount), was: true },
+        { key: 'discount', value: `${discountLabel(preview.value.discount_rate)} · −${money(saved.value)}` }
+      ]
+    : [])
+])
 </script>
 
 <template>
   <SModal :open="open" :title="t('topup.wallet.confirm.title')" width="sm" @update:open="emit('update:open', $event)">
-    <dl class="pay-rows">
-      <div class="pay-row">
-        <dt>{{ t('topup.wallet.confirm.amount') }}</dt>
-        <dd class="pay-strong">{{ formatUsd(amount) }}</dd>
+    <SAlert v-if="error" tone="danger" dense class="mb-4">{{ error }}</SAlert>
+    <dl class="mb-5 flex flex-col gap-3 text-sm">
+      <div class="flex items-center justify-between gap-4">
+        <dt class="text-fg-muted">{{ t('topup.wallet.confirm.amount') }}</dt>
+        <dd class="font-semibold tabular-nums text-fg">{{ usd(amount) }}</dd>
       </div>
-      <template v-if="preview && preview.bonus > 0">
-        <div class="pay-row">
-          <dt>{{ t('topup.wallet.confirm.bonus') }}</dt>
-          <dd>+{{ formatUsd(preview.bonus) }}</dd>
-        </div>
-        <div class="pay-row">
-          <dt>{{ t('topup.wallet.confirm.credited') }}</dt>
-          <dd>{{ formatUsd(amount + preview.bonus) }}</dd>
-        </div>
-      </template>
-      <template v-if="preview && discounted">
-        <div class="pay-row">
-          <dt>{{ t('topup.wallet.confirm.original') }}</dt>
-          <dd><s class="pay-was">{{ money(preview.original_pay_amount) }}</s></dd>
-        </div>
-        <div class="pay-row">
-          <dt>{{ t('topup.wallet.confirm.discount') }}</dt>
-          <dd>{{ discountLabel(preview.discount_rate) }} · −{{ money(saved) }}</dd>
-        </div>
-      </template>
-      <div class="pay-row">
-        <dt>{{ t('topup.wallet.confirm.method') }}</dt>
-        <dd class="pay-method"><MethodName :method="method" /></dd>
+      <div v-for="r in rows" :key="r.key" class="flex items-center justify-between gap-4">
+        <dt class="text-fg-muted">{{ t(`topup.wallet.confirm.${r.key}`) }}</dt>
+        <dd class="tabular-nums" :class="r.was ? 'text-fg-subtle line-through' : 'text-fg'">{{ r.value }}</dd>
       </div>
-      <div class="pay-row pay-row--total">
-        <dt>{{ t('topup.wallet.confirm.pay') }}</dt>
-        <dd v-if="preview" class="pay-total" data-testid="pay-confirm-total">{{ money(preview.pay_amount) }}</dd>
+      <div class="flex items-center justify-between gap-4">
+        <dt class="text-fg-muted">{{ t('topup.wallet.confirm.method') }}</dt>
+        <dd class="min-w-0 font-medium text-fg"><MethodName :method="method" /></dd>
+      </div>
+      <div class="flex items-center justify-between gap-4 border-t border-line pt-3">
+        <dt class="text-fg-muted">{{ t('topup.wallet.confirm.pay') }}</dt>
+        <dd v-if="preview" class="text-2xl font-semibold tabular-nums text-fg" data-testid="pay-confirm-total">
+          {{ money(preview.pay_amount) }}
+        </dd>
         <dd v-else><SSkeleton width="6rem" height="1.75rem" /></dd>
       </div>
     </dl>
 
-    <SField :label="t('topup.wallet.confirm.promo')" :error="promoError" :hint="applied ? t('topup.wallet.confirm.applied', { amount: formatUsd(preview?.bonus ?? 0) }) : ''">
-      <div class="pay-promo">
-        <SInput v-model="promo" mono :placeholder="t('topup.wallet.confirm.promoPlaceholder')" data-testid="pay-promo" @keydown.enter.prevent="apply" />
-        <SButton :loading="applying" :disabled="!promo.trim()" data-testid="pay-promo-apply" @click="apply">{{ t('topup.wallet.confirm.apply') }}</SButton>
+    <SField
+      :label="t('topup.wallet.confirm.promo')"
+      :error="promoError"
+      :hint="applied ? t('topup.wallet.confirm.applied', { amount: usd(bonus) }) : ''"
+    >
+      <div class="flex gap-2">
+        <SInput
+          v-model="promo"
+          mono
+          class="min-w-0 flex-1"
+          :placeholder="t('topup.wallet.confirm.promoPlaceholder')"
+          data-testid="pay-promo"
+          @keydown.enter.prevent="apply"
+        />
+        <SButton :loading="loading && !!tried" :disabled="!promo.trim()" data-testid="pay-promo-apply" @click="apply">{{
+          t('topup.wallet.confirm.apply')
+        }}</SButton>
       </div>
     </SField>
 
     <template #footer>
-      <SButton :disabled="submitting" @click="emit('update:open', false)">{{ t('topup.action.cancel') }}</SButton>
-      <SButton variant="primary" :loading="submitting" :disabled="!preview || applying" data-testid="pay-confirm" @click="confirm">{{ t('topup.wallet.confirm.submit') }}</SButton>
+      <SButton :disabled="submitting" @click="emit('update:open', false)">{{ t('common.cancel') }}</SButton>
+      <SButton v-if="error && !loading" variant="primary" icon="refresh" data-testid="pay-confirm-retry" @click="reload">{{
+        t('topup.wallet.confirm.retry')
+      }}</SButton>
+      <SButton v-else variant="primary" :loading="submitting" :disabled="!confirmable" data-testid="pay-confirm" @click="confirm">{{
+        t('topup.wallet.confirm.submit')
+      }}</SButton>
     </template>
   </SModal>
 </template>
-
-<style scoped>
-.pay-rows {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-  margin: 0 0 1.25rem;
-}
-.pay-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  font-size: 0.875rem;
-}
-.pay-row dt {
-  color: rgb(var(--fg-muted));
-}
-.pay-row dd {
-  margin: 0;
-  color: rgb(var(--fg));
-  font-variant-numeric: tabular-nums;
-}
-.pay-row--total {
-  padding-top: 0.75rem;
-  border-top: 1px solid rgb(var(--line));
-}
-.pay-strong {
-  font-weight: 600;
-}
-.pay-was {
-  color: rgb(var(--fg-subtle));
-}
-.pay-method {
-  min-width: 0;
-  font-weight: 500;
-}
-.pay-total {
-  font-size: 1.5rem;
-  font-weight: 600;
-}
-.pay-promo {
-  display: flex;
-  gap: 0.5rem;
-}
-.pay-promo > :first-child {
-  min-width: 0;
-  flex: 1;
-}
-</style>

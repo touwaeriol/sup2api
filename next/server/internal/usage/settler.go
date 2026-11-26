@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
@@ -54,8 +53,7 @@ type TxLedger interface {
 	// SettleTx releases the request's precharge and applies the final charge
 	// (nil: none) in one batch under the user's balance lock.
 	SettleTx(ctx context.Context, tx *gorm.DB, userID int64, requestID string, charge *core.LedgerChange) (*core.LedgerResult, error)
-	// CacheBalance refreshes the balance cache after commit.
-	CacheBalance(ctx context.Context, userID, ledgerID int64, balance decimal.Decimal)
+	core.BalanceCacher
 }
 
 // Options tune the settler; zero values take defaults.
