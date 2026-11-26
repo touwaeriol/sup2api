@@ -24,9 +24,14 @@ const (
 	KindPluginCredit = "plugin_credit"
 	KindPluginDebit  = "plugin_debit"
 	KindRefund       = "refund"
+	// Online top-up, its promo bonus and redeem codes (CONTRACTS §138).
+	KindTopup      = "topup"
+	KindPromoBonus = "promo_bonus"
+	KindRedeem     = "redeem"
 )
 
-var validKinds = map[string]bool{KindUsage: true, KindAdminAdjust: true, KindPluginCredit: true, KindPluginDebit: true, KindRefund: true}
+var validKinds = map[string]bool{KindUsage: true, KindAdminAdjust: true, KindPluginCredit: true, KindPluginDebit: true, KindRefund: true,
+	KindTopup: true, KindPromoBonus: true, KindRedeem: true}
 
 const balanceCacheTTL = 10 * time.Minute
 
