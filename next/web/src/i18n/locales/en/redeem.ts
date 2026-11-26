@@ -35,8 +35,10 @@ export default {
   },
   card: {
     title: 'Redeem code',
+    mainTitle: 'Add funds',
     subtitle: 'Add funds with a code',
     placeholder: 'Enter a redeem code',
+    hint: 'Not case sensitive; spaces and dashes are optional.',
     submit: 'Redeem',
     required: 'Enter a redeem code',
     success: '{amount} credited',

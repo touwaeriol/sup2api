@@ -100,7 +100,8 @@ export default {
     yesterday: '昨日消费',
     last30d: '近 30 天消费',
     topupHint: '暂不支持在线充值。需要充值请联系管理员。',
-    topupHintRedeem: '暂不支持在线充值。可以用兑换码充值，或联系管理员。'
+    noOnline: '在线充值暂未开通',
+    noOnlineHint: '需要用其他方式充值时，请联系管理员。'
   },
   models: {
     title: '模型与价格',

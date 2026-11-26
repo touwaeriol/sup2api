@@ -35,8 +35,10 @@ export default {
   },
   card: {
     title: '兑换码',
+    mainTitle: '充值',
     subtitle: '使用兑换码直接为余额充值',
     placeholder: '输入兑换码',
+    hint: '不区分大小写，空格和横线可以不输。',
     submit: '兑换',
     required: '请输入兑换码',
     success: '已入账 {amount}',
