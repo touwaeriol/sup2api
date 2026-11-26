@@ -233,7 +233,7 @@ func TestAuthzHardeningMigration(t *testing.T) {
 	require.NotContains(t, opGrants, "role:define")
 	require.Contains(t, opGrants, "operator account:credential:view:own")
 	require.NotContains(t, h.roleGrants("admin", "operator"), "system:update:execute")
-	require.Equal(t, "user apikey:self:manage, user balance:self:read, user gateway:use, user usage:self:read", h.roleGrants("user"))
+	require.Equal(t, "user apikey:self:manage, user balance:self:read, user gateway:use, user redeem:use, user topup:use, user usage:self:read", h.roleGrants("user"))
 	// The resets are audited as role.reset by the system with the rev and
 	// the role before and after; the fill of what existed before the sync
 	// (the permission the user role lacked) with the rev.

@@ -3,7 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { SAlert, SButton, SDescItem, SDescriptions, SModal, SSpinner, useNow } from '@sub2api/ui'
 import { errorMessage, paymentApi, useTopup } from '../topup'
 import { formatLocal, formatUsd } from '../format'
-import { openPayPage } from './payWindow'
+import { isPayUrl, openPayPage } from './payWindow'
 import QrCode from './QrCode.vue'
 import type { PayingOrder } from './types'
 import { useOrderPolling } from './useOrderPolling'
@@ -55,15 +55,21 @@ async function cancel() {
   }
 }
 
-const credited = computed(() => formatUsd((props.order?.amount ?? 0) + (props.order?.bonus ?? 0)))
-const payText = computed(() => (props.order ? formatLocal(props.order.pay_amount, props.order.currency) : ''))
+// The amounts are the order's as the server reads it back (a new order's
+// create answer has none), never the confirm dialog's preview.
+const shown = computed(() => live.order.value ?? props.order)
+const credited = computed(() => (shown.value?.amount === undefined ? '—' : formatUsd(shown.value.amount + (shown.value.bonus ?? 0))))
+const payText = computed(() => (shown.value?.currency ? formatLocal(shown.value.pay_amount, shown.value.currency) : '—'))
+/** The order's payment page may be opened (https only). */
+const payable = computed(() => isPayUrl(props.order?.pay_url))
 const endedText = computed(() => t('topup.wallet.paying.ended', { status: t(`topup.status.${live.status.value}`) }))
 </script>
 
 <template>
   <SModal :open="open" :title="view === 'success' ? t('topup.wallet.paying.successTitle') : t('topup.wallet.paying.title')" width="md" @update:open="emit('update:open', $event)">
     <template v-if="order">
-      <SAlert v-if="view === 'waiting' && order.pay_url" :tone="blocked ? 'warning' : 'info'" dense class="pay-gap">
+      <SAlert v-if="view === 'waiting' && order.pay_url && !payable" tone="danger" dense class="pay-gap" data-testid="pay-bad-url">{{ t('topup.wallet.paying.badUrl') }}</SAlert>
+      <SAlert v-else-if="view === 'waiting' && order.pay_url" :tone="blocked ? 'warning' : 'info'" dense class="pay-gap">
         {{ blocked ? t('topup.wallet.paying.blocked') : t('topup.wallet.paying.opened') }}
       </SAlert>
       <SAlert v-else-if="view === 'success'" tone="success" class="pay-gap" data-testid="pay-success">{{ t('topup.wallet.paying.success', { amount: credited }) }}</SAlert>
@@ -94,7 +100,7 @@ const endedText = computed(() => t('topup.wallet.paying.ended', { status: t(`top
     <template #footer>
       <template v-if="view === 'waiting'">
         <SButton variant="ghost" tone="danger" :loading="cancelling" data-testid="pay-cancel" @click="cancel">{{ t('topup.wallet.paying.cancel') }}</SButton>
-        <SButton v-if="order?.pay_url" variant="primary" icon="external" data-testid="pay-reopen" @click="openPayPage(order.pay_url)">{{ t('topup.wallet.paying.reopen') }}</SButton>
+        <SButton v-if="payable && order?.pay_url" variant="primary" icon="external" data-testid="pay-reopen" @click="openPayPage(order.pay_url)">{{ t('topup.wallet.paying.reopen') }}</SButton>
       </template>
       <SButton v-else :variant="view === 'success' ? 'primary' : 'secondary'" @click="emit('update:open', false)">
         {{ view === 'success' ? t('topup.wallet.paying.done') : t('topup.wallet.paying.close') }}

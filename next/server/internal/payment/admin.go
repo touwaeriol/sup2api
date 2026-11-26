@@ -2,6 +2,7 @@ package payment
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -142,4 +143,51 @@ func completedSince(ctx context.Context, tx *gorm.DB, at time.Time) (Num, int64,
 	err := store.G(ctx, tx).Model(&model.PaymentOrder{}).Select("sum(amount) AS total, count(*) AS n").
 		Where("status = ? AND completed_at >= ?", statusCompleted, at).Scan(&row).Error
 	return num(row.Total.Decimal), row.N, err
+}
+
+// eventView is one payment_events row of an order: what the core made of a
+// notification or query, with the whitelisted fields it kept.
+type eventView struct {
+	ID        int64             `json:"id"`
+	Gateway   string            `json:"gateway"`
+	Kind      string            `json:"kind"`
+	Verified  bool              `json:"verified"`
+	EventID   string            `json:"event_id,omitempty"`
+	Detail    map[string]string `json:"detail"`
+	CreatedAt time.Time         `json:"created_at"`
+}
+
+func eventViewOf(e *model.PaymentEvent) eventView {
+	v := eventView{ID: e.ID, Gateway: e.Gateway, Kind: e.Kind, Verified: e.Verified, Detail: map[string]string{}, CreatedAt: e.CreatedAt}
+	if e.EventID != nil {
+		v.EventID = *e.EventID
+	}
+	_ = json.Unmarshal(e.Detail, &v.Detail) // the core writes it as a string map
+	return v
+}
+
+// orderEvents lists the events of an order, newest first: mismatches,
+// duplicates and second payments the administrator should see.
+func (s *Service) orderEvents(c *gin.Context) {
+	id, ok := httpapi.PathID(c, "id")
+	if !ok {
+		return
+	}
+	page, size := httpapi.Pagination(c)
+	db := store.G(c.Request.Context(), s.db.Gorm).Model(&model.PaymentEvent{}).Where("order_id = ?", id)
+	var total int64
+	var rows []model.PaymentEvent
+	err := db.Count(&total).Error
+	if err == nil {
+		err = db.Order("id DESC").Limit(size).Offset((page - 1) * size).Find(&rows).Error
+	}
+	if err != nil {
+		httpapi.Fail(c, err)
+		return
+	}
+	out := make([]eventView, len(rows))
+	for i := range rows {
+		out[i] = eventViewOf(&rows[i])
+	}
+	httpapi.List(c, out, httpapi.Page{Page: page, PageSize: size, Total: total})
 }

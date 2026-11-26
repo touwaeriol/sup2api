@@ -2,6 +2,7 @@ package registry_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
@@ -75,21 +76,49 @@ func TestPaymentGatewayBindings(t *testing.T) {
 	}
 }
 
-// A name already bound is skipped and the plugin is abnormal; a plugin no
-// longer in the generation (disabled, uninstalled) has no gateway, which the
-// core answers with a retry.
-func TestPaymentGatewayConflictAndDisable(t *testing.T) {
-	dup := load(t, paymentManifest("mockpay", "mock", "mock"))
-	g := registry.New().Publish([]registry.Extension{payExt{ext{pkg: dup, grants: payGrant}}})
-	if got := g.(core.PaymentGatewayGeneration).PaymentGateways(); len(got) != 1 || got[0].Gateway.ID != "mockpay.mock" {
-		t.Fatalf("gateways = %+v", got)
+// unservedExt is a plugin whose process does not serve the service: the
+// runtime has no client for any of its gateways.
+type unservedExt struct{ ext }
+
+func (unservedExt) PaymentGateway(string) core.PaymentGateway { return nil }
+
+// A name already bound, or a gateway the process does not serve, is
+// skipped and the plugin is abnormal.
+func TestPaymentGatewayConflicts(t *testing.T) {
+	for name, tc := range map[string]struct {
+		e      registry.Extension
+		bound  int
+		reason string
+	}{
+		"duplicate": {payExt{ext{pkg: load(t, paymentManifest("mockpay", "mock", "mock")), grants: payGrant}}, 1, "already declared by plugin mockpay"},
+		"unserved":  {unservedExt{ext{pkg: load(t, paymentManifest("mockpay", "mock")), grants: payGrant}}, 0, "does not serve payment.gateway.v1"},
+	} {
+		g := registry.New().Publish([]registry.Extension{tc.e})
+		if got := g.(core.PaymentGatewayGeneration).PaymentGateways(); len(got) != tc.bound {
+			t.Fatalf("%s: gateways = %+v", name, got)
+		}
+		info, _ := g.Plugin("mockpay")
+		if len(info.Conflicts) != 1 || info.Conflicts[0].Resource != "payment_gateway" || info.Conflicts[0].ID != "mockpay.mock" ||
+			!strings.Contains(info.Conflicts[0].Reason, tc.reason) {
+			t.Fatalf("%s: conflicts = %+v", name, info.Conflicts)
+		}
 	}
-	if info, _ := g.Plugin("mockpay"); len(info.Conflicts) != 1 || info.Conflicts[0].Resource != "payment_gateway" || info.Conflicts[0].ID != "mockpay.mock" {
-		t.Fatalf("conflicts = %+v", info.Conflicts)
-	}
-	r := registry.New()
-	r.Publish([]registry.Extension{payExt{ext{pkg: dup, grants: payGrant}}})
-	if got := r.Publish(nil).(core.PaymentGatewayGeneration).PaymentGateways(); len(got) != 0 {
-		t.Fatalf("after disable: %+v", got)
+}
+
+// A plugin no longer in the generation (disabled, uninstalled) or whose
+// grant was revoked has no gateway, which the core answers with a retry.
+func TestPaymentGatewayDisableAndRevoke(t *testing.T) {
+	pkg := load(t, paymentManifest("mockpay", "mock"))
+	for name, next := range map[string][]registry.Extension{
+		"disabled": nil,
+		"revoked":  {payExt{ext{pkg: pkg, grants: registry.Grants{}}}},
+	} {
+		r := registry.New()
+		if got := r.Publish([]registry.Extension{payExt{ext{pkg: pkg, grants: payGrant}}}).(core.PaymentGatewayGeneration).PaymentGateways(); len(got) != 1 {
+			t.Fatalf("%s: before: %+v", name, got)
+		}
+		if got := r.Publish(next).(core.PaymentGatewayGeneration).PaymentGateways(); len(got) != 0 {
+			t.Fatalf("%s: after: %+v", name, got)
+		}
 	}
 }

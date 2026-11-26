@@ -3,6 +3,7 @@ package payment
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -12,6 +13,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/payment/stripe"
 )
 
 // currencies are the currencies a top-up may settle in (the console's list).
@@ -21,7 +23,17 @@ var (
 	typeKeyPattern = regexp.MustCompile(`^[a-z0-9_]{1,50}$`)
 	colorPattern   = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
 	logoDataURL    = regexp.MustCompile(`^data:image/(png|jpeg|webp|svg\+xml);base64,`)
-	stripeKey      = regexp.MustCompile(`^(sk|rk)_(live|test)_`)
+)
+
+// maxPrice bounds the rate so an order's payment (at most maxCreditPerTx
+// times it) fits payment_orders.pay_amount, numeric(20,8). The decimals
+// match the snapshot columns: price numeric(20,8), discount_rate
+// numeric(10,4).
+var maxPrice = decimal.NewFromInt(1000000)
+
+const (
+	priceDecimals = 8
+	rateDecimals  = 4
 )
 
 const (
@@ -55,8 +67,8 @@ func (f *fieldErrs) err() error {
 	return core.InvalidFields(f.list...)
 }
 
-// validateValues checks the settings and methods on their own (open
-// orders are checked against the stored settings by lockedGateways).
+// validateValues checks the settings and methods on their own (the
+// merchant lock, against the stored settings, is checkSettings').
 func (s *Service) validateValues(ctx context.Context, v settingsValues) *fieldErrs {
 	f := &fieldErrs{ctx: ctx}
 	s.validateGeneral(f, v.Settings)
@@ -69,7 +81,8 @@ func (s *Service) validateValues(ctx context.Context, v settingsValues) *fieldEr
 func (s *Service) validateGeneral(f *fieldErrs, v Settings) {
 	f.check(!v.Enabled || s.siteSecure(), "enabled", "top-up needs an https site address (SUB2API_PUBLIC_URL)", "站点地址（SUB2API_PUBLIC_URL）必须是 https 才能开启充值")
 	f.check(slices.Contains(currencies, v.Currency), "currency", "unsupported currency", "不支持的货币")
-	f.check(v.Price.IsPositive(), "price", "must be greater than 0", "必须大于 0")
+	f.check(v.Price.IsPositive() && v.Price.LessThanOrEqual(maxPrice) && exact(v.Price.Decimal, priceDecimals), "price",
+		"must be above 0 and at most "+maxPrice.String()+", with at most 8 decimals", "必须大于 0、不超过 "+maxPrice.String()+"，最多 8 位小数")
 	f.check(!v.MinTopup.IsNegative(), "min_topup", "must not be negative", "不能小于 0")
 	f.check(v.MaxTopup.GreaterThan(v.MinTopup.Decimal), "max_topup", "must be above the minimum", "必须大于最低充值")
 	f.check(v.MaxTopup.LessThanOrEqual(maxCreditPerTx), "max_topup",
@@ -89,7 +102,8 @@ func validateLists(f *fieldErrs, v Settings) {
 	for i, d := range v.Discounts {
 		p := fmt.Sprintf("discounts.%d.", i)
 		f.check(d.Amount.IsPositive() && !seen[d.Amount.String()], p+"amount", "a positive amount, once", "金额必须大于 0 且不重复")
-		f.check(d.Rate.IsPositive() && d.Rate.LessThan(decimal.NewFromInt(1)), p+"rate", "must be between 0 and 1", "必须在 0 到 1 之间")
+		f.check(d.Rate.IsPositive() && d.Rate.LessThan(decimal.NewFromInt(1)) && exact(d.Rate.Decimal, rateDecimals), p+"rate",
+			"must be between 0 and 1, with at most 4 decimals", "必须在 0 到 1 之间，最多 4 位小数")
 		seen[d.Amount.String()] = true
 	}
 }
@@ -148,8 +162,10 @@ func validateGateways(f *fieldErrs, v Settings) {
 			f.add("epay.endpoint", err.Error(), err.Error())
 		}
 	}
-	if st := v.Stripe; st.Enabled {
-		f.check(stripeKey.MatchString(st.SecretKey), "stripe.secret_key", "a Stripe secret key (sk_live_, sk_test_, rk_live_ or rk_test_)", "Stripe 密钥（sk_live_、sk_test_、rk_live_ 或 rk_test_ 开头）")
-		f.check(strings.HasPrefix(st.WebhookSecret, "whsec_"), "stripe.webhook_secret", "a Stripe webhook secret (whsec_)", "Stripe Webhook 密钥（whsec_ 开头）")
+	if v.Stripe.Enabled {
+		// The gateway's own check, over the stored secrets the mask kept.
+		err := stripeConfigOf(v).Validate()
+		f.check(!errors.Is(err, stripe.ErrSecretKey), "stripe.secret_key", "a Stripe secret key (sk_live_, sk_test_, rk_live_ or rk_test_)", "Stripe 密钥（sk_live_、sk_test_、rk_live_ 或 rk_test_ 开头）")
+		f.check(!errors.Is(err, stripe.ErrWebhookSecret), "stripe.webhook_secret", "a Stripe webhook secret (whsec_)", "Stripe Webhook 密钥（whsec_ 开头）")
 	}
 }

@@ -90,7 +90,7 @@ var ConsoleSegments = []string{
 	"assets", "index.html", "favicon.svg", "LOBE-ICONS-LICENSE.txt",
 	"login", "forbidden", "dashboard", "me", "usage", "account-usage", "ledger", "users", "segments", "groups", "roles",
 	"accounts", "api-keys", "proxies", "platforms", "prices", "sticky", "settings",
-	"plugins", "p", "market", "publishers", "nodes", "system",
+	"plugins", "p", "market", "publishers", "nodes", "system", "topup", "promo-codes", "redeem-codes",
 }
 
 // ConsoleRouteOf returns the console path ("/login", "/assets", ...) a GET

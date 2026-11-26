@@ -38,8 +38,11 @@ const settings = {
   stripe: { enabled: false, secret_key: '', webhook_secret: '' }
 }
 
+/** Read only, beside the values: the core's site address joined with the notify route ("" on a site that is not https). */
+const NOTIFY_BASE = 'https://console.example.com/api/v1/payment/notify/'
+
 /** GET/PUT /topup/settings: the settings view, secrets masked ("******" or none keeps the stored one). */
-const settingsView = () => ({ mode: 'native', values: settings, secret_fields: SECRETS, permission: 'topup:manage' })
+const settingsView = () => ({ mode: 'native', values: settings, notify_base: NOTIFY_BASE, secret_fields: SECRETS, permission: 'topup:manage' })
 const getPath = (o: any, path: string) => path.split('/').reduce((v, k) => v?.[k], o)
 function keepSecrets(values: any) {
   for (const path of SECRETS) {
@@ -76,8 +79,11 @@ plugins.set('alipay_direct', {
   settings: { mode: 'schema', secret_fields: ['private_key'], values: { app_id: '2021000000000000', private_key: '******', sandbox: false } }
 } as any)
 
+const PLUGIN_GATEWAY = 'alipay_direct.alipay'
+const inUse = (id: string) => settings.methods.filter((m) => m.gateway === id).length
+
 on('GET', '/topup/gateways', () => [
-  { id: 'alipay_direct.alipay', plugin_key: 'alipay_direct', plugin_name: '支付宝官方直连', name: '支付宝（官方）', ready: true, methods: [{ type: 'alipay_pc', name: '电脑网站支付' }, { type: 'alipay_qr', name: '当面付扫码' }], in_use: 0 }
+  { id: PLUGIN_GATEWAY, plugin_key: 'alipay_direct', plugin_name: '支付宝官方直连', name: '支付宝（官方）', ready: true, methods: [{ type: 'alipay_pc', name: '电脑网站支付' }, { type: 'alipay_qr', name: '当面付扫码' }], in_use: inUse(PLUGIN_GATEWAY) }
 ])
 
 // ---- orders ----
@@ -205,6 +211,25 @@ on('GET', '/topup/orders/stats', () => {
   const done = orders.filter((o) => o.status === 'completed')
   const sum = (xs: any[]) => xs.reduce((s, o) => s + o.amount, 0)
   return { today_amount: sum(done.slice(0, 4)), today_count: 4, month_amount: sum(done), pending_count: orders.filter((o) => o.status === 'pending').length, failed_count: orders.filter((o) => o.status === 'failed').length }
+})
+
+// The gateway events of an order (GET /topup/orders/:id/events), newest
+// first: a paid order has its accepted notification (the first paid one also
+// a mismatched and a duplicate one), others a rejected one or none.
+function eventsOf(o: any): any[] {
+  const minor = String(Math.round(o.pay_amount * 100))
+  const detail = (extra: object = {}) => ({ out_trade_no: o.out_trade_no, trade_no: o.trade_no ?? '', status: 'paid', amount: minor, currency: o.currency, type: o.method, ...extra })
+  const at = (s: number) => new Date(Date.parse(o.created_at) + s * 1000).toISOString()
+  const ev = (id: number, kind: string, verified: boolean, s: number, extra?: object) => ({ id: o.id * 10 + id, gateway: o.gateway, kind, verified, detail: detail(extra), created_at: at(s) })
+  if (o.status === 'failed') return [ev(1, 'SIGNATURE_INVALID', false, 30, { error: 'signature mismatch' })]
+  if (o.status !== 'completed') return []
+  if (o.id !== orders.find((x) => x.status === 'completed')?.id) return [ev(1, 'NOTIFY_OK', true, 40)]
+  return [ev(3, 'DUPLICATE', true, 90), ev(2, 'NOTIFY_OK', true, 40), ev(1, 'PAYMENT_AMOUNT_MISMATCH', true, 35, { amount: String(Number(minor) - 1) })]
+}
+
+on('GET', '/topup/orders/:id/events', (req) => {
+  const o = orders.find((x) => x.id === Number(req.params.id))
+  return o ? paginate(eventsOf(o), req.query) : paginate([], req.query)
 })
 
 // ---- promo codes ----

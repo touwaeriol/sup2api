@@ -69,7 +69,7 @@ export default {
       previewHint: 'As users see it in the wallet',
       nameHint: 'Shown to users.',
       namePlaceholder: 'e.g. Alipay',
-      typeHint: 'Sent to the gateway (epay type). Pick one or type your own.',
+      typeHint: 'Sent to the gateway (the epay type, or a plugin gateway\'s method). Pick one or type your own.',
       typePlaceholder: 'Pick or type a key',
       iconPlaceholder: 'Pick or type an icon key',
       iconMode: { builtin: 'Built-in icon', custom: 'Custom image' },
@@ -98,7 +98,7 @@ export default {
       iconName: { alipay: 'Alipay', wxpay: 'WeChat Pay', qqpay: 'QQ Wallet', stripe: 'Stripe', card: 'Bank card' },
       template: { epay_alipay: 'Epay · Alipay', epay_wxpay: 'Epay · WeChat Pay', stripe: 'Stripe', epay_custom: 'Custom Epay method…' },
       rule: {
-        typeKey: 'Lowercase letters, digits, - and _ only',
+        typeKey: '1 to 50 lowercase letters, digits or _',
         typeTaken: 'Another method uses this key',
         color: 'A color like #1677ff'
       }
@@ -108,6 +108,7 @@ export default {
       off: 'Off',
       usage: 'Methods: {count}',
       enabled: 'Enable',
+      needHttps: 'The site address must be https to open top-up; the callback address shows once it is.',
       plugin: {
         title: 'Plugin gateways',
         badge: 'Plugin',
@@ -216,7 +217,7 @@ export default {
       previewHint: '用户在钱包里看到的样子',
       nameHint: '展示给用户的名称。',
       namePlaceholder: '例如 支付宝',
-      typeHint: '传给网关的支付类型（易支付的 type），可选择或直接输入。',
+      typeHint: '传给网关的支付类型（易支付的 type 或插件网关的方式），可选择或直接输入。',
       typePlaceholder: '选择或输入类型键',
       iconPlaceholder: '选择或输入图标键',
       iconMode: { builtin: '内置图标', custom: '自定义图片' },
@@ -245,7 +246,7 @@ export default {
       iconName: { alipay: '支付宝', wxpay: '微信支付', qqpay: 'QQ 钱包', stripe: 'Stripe', card: '银行卡' },
       template: { epay_alipay: '易支付 · 支付宝', epay_wxpay: '易支付 · 微信支付', stripe: 'Stripe', epay_custom: '自定义易支付方式…' },
       rule: {
-        typeKey: '只能包含小写字母、数字、- 和 _',
+        typeKey: '1–50 位小写字母、数字或 _',
         typeTaken: '其他支付方式已使用这个类型键',
         color: '颜色格式如 #1677ff'
       }
@@ -255,6 +256,7 @@ export default {
       off: '未启用',
       usage: '{count} 个支付方式',
       enabled: '启用',
+      needHttps: '站点地址需为 https 才能开通充值，配置后这里显示回调地址。',
       plugin: {
         title: '插件网关',
         badge: '插件',

@@ -30,7 +30,33 @@ export default {
         completed_at: 'Completed',
         expires_at: 'Expires'
       },
-      sections: { order: 'Order', payment: 'Payment', timeline: 'Timeline' }
+      sections: { order: 'Order', payment: 'Payment', timeline: 'Timeline' },
+      events: {
+        title: 'Gateway notifications',
+        empty: 'No notification or query recorded for this order',
+        more: 'Showing the latest {shown} of {total}',
+        verified: 'Verified',
+        unverified: 'Not verified',
+        fields: { trade_no: 'Transaction', status: 'Status', amount: 'Amount', type: 'Type', error: 'Error' },
+        kind: {
+          NOTIFY_OK: 'Accepted',
+          SIGNATURE_INVALID: 'Bad signature',
+          ORDER_NOT_FOUND: 'Order not found',
+          PAYMENT_AMOUNT_MISMATCH: 'Amount mismatch',
+          SECOND_PAYMENT: 'Second payment',
+          DUPLICATE: 'Duplicate',
+          TRADE_NO_REUSED: 'Transaction no. reused',
+          TRADE_NO_MISSING: 'Transaction no. missing',
+          GATEWAY_UNAVAILABLE: 'Gateway unavailable',
+          GATEWAY_MISMATCH: 'Other gateway',
+          MERCHANT_MISMATCH: 'Merchant mismatch',
+          METHOD_MISMATCH: 'Method mismatch',
+          SESSION_MISMATCH: 'Session mismatch',
+          STATUS_NOT_PAYABLE: 'Order not payable',
+          FIELD_TOO_LONG: 'Field too long',
+          STATUS_UNKNOWN: 'Unknown status'
+        }
+      }
     },
     promo: {
       title: 'Promo codes',
@@ -107,7 +133,33 @@ export default {
         completed_at: '完成时间',
         expires_at: '过期时间'
       },
-      sections: { order: '订单信息', payment: '支付信息', timeline: '时间' }
+      sections: { order: '订单信息', payment: '支付信息', timeline: '时间' },
+      events: {
+        title: '回调事件',
+        empty: '这笔订单还没有回调或查单记录',
+        more: '显示最新 {shown} 条，共 {total} 条',
+        verified: '已验签',
+        unverified: '未验签',
+        fields: { trade_no: '流水号', status: '状态', amount: '金额', type: '类型', error: '错误' },
+        kind: {
+          NOTIFY_OK: '已受理',
+          SIGNATURE_INVALID: '签名无效',
+          ORDER_NOT_FOUND: '订单不存在',
+          PAYMENT_AMOUNT_MISMATCH: '金额不符',
+          SECOND_PAYMENT: '重复付款',
+          DUPLICATE: '重复通知',
+          TRADE_NO_REUSED: '流水号被复用',
+          TRADE_NO_MISSING: '缺少流水号',
+          GATEWAY_UNAVAILABLE: '网关不可用',
+          GATEWAY_MISMATCH: '网关不符',
+          MERCHANT_MISMATCH: '商户号不符',
+          METHOD_MISMATCH: '支付方式不符',
+          SESSION_MISMATCH: '会话不符',
+          STATUS_NOT_PAYABLE: '订单不可支付',
+          FIELD_TOO_LONG: '字段过长',
+          STATUS_UNKNOWN: '未知状态'
+        }
+      }
     },
     promo: {
       title: '优惠码',

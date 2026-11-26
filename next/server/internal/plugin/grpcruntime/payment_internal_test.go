@@ -2,7 +2,10 @@ package grpcruntime
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/shopspring/decimal"
 	"google.golang.org/grpc"
@@ -20,6 +23,7 @@ type paymentRPC struct {
 	calls   int
 	created *pluginv1.CreatePaymentResponse
 	parsed  *pluginv1.ParseNotificationResponse
+	queried *pluginv1.QueryPaymentResponse
 	err     error
 }
 
@@ -35,23 +39,30 @@ func (p *paymentRPC) ParseNotification(context.Context, *pluginv1.ParseNotificat
 
 func (p *paymentRPC) QueryPayment(context.Context, *pluginv1.QueryPaymentRequest, ...grpc.CallOption) (*pluginv1.QueryPaymentResponse, error) {
 	p.calls++
-	return nil, p.err
+	return p.queried, p.err
 }
 
 func paymentInstance(rpc *paymentRPC) *Instance {
-	m := &manifest.Manifest{Payments: &manifest.Payments{Gateways: []manifest.PaymentGateway{{ID: "direct"}}}}
+	m := &manifest.Manifest{Payments: &manifest.Payments{Gateways: []manifest.PaymentGateway{{ID: "direct"}, {ID: "queried", Query: true}}}}
 	i := &Instance{pkg: &registry.Package{Key: "alipay", Version: "1", Manifest: m}, caps: map[string]bool{manifest.CapPaymentGateway: true},
-		sems: newSemaphores(Concurrency{Console: 1})}
+		sems: newSemaphores(Concurrency{Console: 1, Background: 1})}
 	i.proc.Store(&proc{payment: rpc})
+	i.notePaymentService(map[string]bool{manifest.CapPaymentGateway: true})
 	return i
 }
 
-// Only a declared gateway of a plugin with the capability is a gateway.
+// Only a declared gateway of a plugin with the capability whose process
+// reported the service is a gateway.
 func TestPaymentGatewayAccessor(t *testing.T) {
 	i := paymentInstance(&paymentRPC{})
 	if i.PaymentGateway("direct") == nil || i.PaymentGateway("wap") != nil {
 		t.Fatal("declared gateways")
 	}
+	i.notePaymentService(map[string]bool{manifest.CapHTTPRoutes: true})
+	if i.PaymentGateway("direct") != nil {
+		t.Fatal("gateway of a process not serving the service")
+	}
+	i = paymentInstance(&paymentRPC{})
 	i.caps = map[string]bool{}
 	if i.PaymentGateway("direct") != nil {
 		t.Fatal("gateway without the capability")
@@ -74,8 +85,8 @@ func TestPaymentRespond(t *testing.T) {
 	}
 	gw = i.PaymentGateway("direct")
 	for o, want := range map[core.PaymentOutcome]core.PaymentReply{
-		core.PaymentHandled:  {Status: 200, Body: []byte("success")},
-		core.PaymentRejected: {Status: 400, Body: []byte("fail")},
+		core.PaymentHandled:  {Status: 200, ContentType: defaultReplyType, Body: []byte("success")},
+		core.PaymentRejected: {Status: 400, ContentType: defaultReplyType, Body: []byte("fail")},
 		core.PaymentRetry:    {Status: 500, ContentType: "text/plain", Body: []byte("again")},
 	} {
 		if r := gw.Respond(o); r.Status != want.Status || r.ContentType != want.ContentType || string(r.Body) != string(want.Body) {
@@ -104,5 +115,64 @@ func TestPaymentAdapterErrors(t *testing.T) {
 	rpc.err = status.Error(codes.Unavailable, "down")
 	if _, err := gw.ParseNotification(ctx, core.PaymentNotification{}); core.AsError(err).Code != core.ErrPluginUnavailable.Code {
 		t.Fatalf("unavailable: %v", err)
+	}
+}
+
+// A reply of another media type or over 64 KiB is replaced by the default
+// one; an allowed type keeps its parameters, none means text/plain.
+func TestPaymentRespondBounds(t *testing.T) {
+	cases := []struct {
+		reply  *pluginv1.PaymentReply
+		status int
+		ctype  string
+		body   string
+	}{
+		{&pluginv1.PaymentReply{Status: 200, ContentType: "text/html", Body: []byte("<script>")}, 400, "", ""},
+		{&pluginv1.PaymentReply{ContentType: "image/svg+xml", Body: []byte("<svg/>")}, 400, "", ""},
+		{&pluginv1.PaymentReply{ContentType: "text/plain;;", Body: []byte("x")}, 400, "", ""},
+		{&pluginv1.PaymentReply{ContentType: "text/plain", Body: make([]byte, maxPaymentReplyBytes+1)}, 400, "", ""},
+		{&pluginv1.PaymentReply{Status: 409, ContentType: "Application/JSON; charset=UTF-8", Body: []byte(`{}`)}, 409, "application/json; charset=UTF-8", "{}"},
+		{&pluginv1.PaymentReply{Body: []byte("fail")}, 400, "text/plain; charset=utf-8", "fail"},
+	}
+	for n, tc := range cases {
+		i := paymentInstance(&paymentRPC{parsed: &pluginv1.ParseNotificationResponse{Rejected: tc.reply}})
+		gw := i.PaymentGateway("direct")
+		_, _ = gw.ParseNotification(context.Background(), core.PaymentNotification{})
+		if r := gw.Respond(core.PaymentRejected); r.Status != tc.status || r.ContentType != tc.ctype || string(r.Body) != tc.body {
+			t.Fatalf("case %d: %d %q %q", n, r.Status, r.ContentType, r.Body)
+		}
+	}
+}
+
+// An unverified notification is ErrPaymentSignature with the plugin's
+// reason, without control characters and cut to 200 bytes.
+func TestPaymentUnverifiedReason(t *testing.T) {
+	for reason, want := range map[string]string{
+		"bad\r\nsignature\x00":   "plugin alipay payment gateway direct: payment notification failed verification: badsignature",
+		"":                       "plugin alipay payment gateway direct: payment notification failed verification",
+		strings.Repeat("é", 150): "plugin alipay payment gateway direct: payment notification failed verification: " + strings.Repeat("é", 100),
+	} {
+		gw := paymentInstance(&paymentRPC{parsed: &pluginv1.ParseNotificationResponse{Reason: reason}}).PaymentGateway("direct")
+		_, err := gw.ParseNotification(context.Background(), core.PaymentNotification{})
+		if !errors.Is(err, core.ErrPaymentSignature) || err.Error() != want {
+			t.Fatalf("reason %q: %v", reason, err)
+		}
+	}
+}
+
+// QueryPayment waits for a background slot: a full console class does not
+// hold the sweep up.
+func TestPaymentQueryBackgroundSlot(t *testing.T) {
+	rpc := &paymentRPC{queried: &pluginv1.QueryPaymentResponse{Result: &pluginv1.PaymentResult{Status: pluginv1.PaymentStatus_PAYMENT_STATUS_PAID}}}
+	i := paymentInstance(rpc)
+	i.sems[classConsole] <- struct{}{}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if r, err := i.PaymentGateway("queried").QueryPayment(ctx, core.PaymentQuery{}); err != nil || r.Status != core.PaymentPaid {
+		t.Fatalf("query: %+v %v", r, err)
+	}
+	rpc.err = status.Error(codes.Unimplemented, "no")
+	if _, err := i.PaymentGateway("queried").QueryPayment(ctx, core.PaymentQuery{}); !errors.Is(err, core.ErrPaymentQueryUnsupported) {
+		t.Fatalf("unimplemented: %v", err)
 	}
 }

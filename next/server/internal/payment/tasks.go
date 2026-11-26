@@ -35,16 +35,20 @@ func (s *Service) SweepTaskSpec() core.TaskSpec {
 	}
 }
 
+// sweep credits first: crediting only touches the database, so a slow
+// gateway in the queries below cannot starve it.
 func (s *Service) sweep(ctx context.Context, _ core.TaskRun) (core.TaskResult, error) {
-	expired, err1 := s.sweepPending(ctx)
-	credited, err2 := s.sweepPaid(ctx)
+	credited, err1 := s.sweepPaid(ctx)
+	expired, err2 := s.sweepPending(ctx)
 	return core.TaskResult{Count: expired + credited}, errors.Join(err1, err2)
 }
 
 // sweepPending asks the gateway about each pending order about to expire,
 // settles what it says was paid, and expires the rest once due. A gateway
 // that cannot be asked (or fails to answer) does not keep an order open:
-// a paid notification still credits it within the late window.
+// a paid notification still credits it within the late window. A gateway
+// that fails to answer is not asked again in this run (down), so one that
+// hangs costs one query timeout per run, not one per order.
 func (s *Service) sweepPending(ctx context.Context) (int, error) {
 	var rows []model.PaymentOrder
 	err := store.G(ctx, s.db.Gorm).Where("status = ? AND expires_at < ?", statusPending, s.now().Add(queryAhead)).
@@ -52,12 +56,12 @@ func (s *Service) sweepPending(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	n := 0
+	n, down := 0, map[string]bool{}
 	for i := range rows {
 		if ctx.Err() != nil {
 			return n, ctx.Err()
 		}
-		if s.reconcile(ctx, &rows[i]) {
+		if s.reconcile(ctx, &rows[i], down) {
 			n++
 		}
 	}
@@ -66,16 +70,9 @@ func (s *Service) sweepPending(ctx context.Context) (int, error) {
 
 // reconcile queries one pending order and expires it when due and not
 // paid; true when it was handled.
-func (s *Service) reconcile(ctx context.Context, o *model.PaymentOrder) bool {
-	if gw, ok := s.gateway(o.Gateway); ok {
-		res, err := gw.QueryPayment(ctx, core.PaymentQuery{OutTradeNo: o.OutTradeNo, SessionID: o.GatewaySessionID,
-			MethodType: o.Method, MerchantRef: o.MerchantRef})
-		switch {
-		case err == nil && res.Status == core.PaymentPaid && res.OutTradeNo == o.OutTradeNo:
-			return s.handleResult(ctx, o.Gateway, res, nil) == core.PaymentHandled
-		case err != nil && !errors.Is(err, core.ErrPaymentQueryUnsupported):
-			slog.WarnContext(ctx, "payment: query order", "order", o.OutTradeNo, "gateway", o.Gateway, "err", err)
-		}
+func (s *Service) reconcile(ctx context.Context, o *model.PaymentOrder, down map[string]bool) bool {
+	if s.queryPaid(ctx, o, down) {
+		return true
 	}
 	if o.ExpiresAt.After(s.now()) {
 		return false
@@ -85,6 +82,29 @@ func (s *Service) reconcile(ctx context.Context, o *model.PaymentOrder) bool {
 		return false
 	}
 	return true
+}
+
+// queryPaid asks the order's gateway about it and settles a payment it
+// reports the way a notification is settled; true only when the order is
+// paid now (a result the core rejects leaves it to expire).
+func (s *Service) queryPaid(ctx context.Context, o *model.PaymentOrder, down map[string]bool) bool {
+	gw, query, ok := s.lookup(o.Gateway)
+	if !ok || !query || down[o.Gateway] {
+		return false
+	}
+	qctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	res, err := gw.QueryPayment(qctx, core.PaymentQuery{OutTradeNo: o.OutTradeNo, SessionID: o.GatewaySessionID,
+		MethodType: o.Method, MerchantRef: o.MerchantRef})
+	cancel()
+	switch {
+	case err == nil && res != nil && res.Status == core.PaymentPaid && res.OutTradeNo == o.OutTradeNo:
+		_, paid := s.process(ctx, o.Gateway, res, nil)
+		return paid
+	case err != nil && !errors.Is(err, core.ErrPaymentQueryUnsupported):
+		down[o.Gateway] = true
+		slog.WarnContext(ctx, "payment: query order", "order", o.OutTradeNo, "gateway", o.Gateway, "err", err)
+	}
+	return false
 }
 
 // expire expires a pending order and releases its promo use.

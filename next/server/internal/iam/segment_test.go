@@ -147,7 +147,7 @@ func TestCreateUserSegment(t *testing.T) {
 	vip := c.one(`INSERT INTO segments (name) VALUES ('vip') RETURNING id`)
 	own := c.personal(c.user("carol@example.com", 0))
 	// Creating a user grants the default role: the creator holds what it grants.
-	creator := c.as("creator", "user:create", "apikey:self:manage", "balance:self:read", "usage:self:read", "gateway:use")
+	creator := c.as("creator", "user:create", "apikey:self:manage", "balance:self:read", "usage:self:read", "gateway:use", "topup:use", "redeem:use")
 
 	for _, tc := range []struct {
 		name, token string

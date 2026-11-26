@@ -16,15 +16,23 @@ import (
 // they are enabled: being switched off only stops new orders, and the
 // orders already made are still verified and credited.
 func (s *Service) gateway(id string) (core.PaymentGateway, bool) {
+	gw, _, ok := s.lookup(id)
+	return gw, ok
+}
+
+// lookup is gateway, also telling whether the gateway can be queried: the
+// built-in ones answer themselves (ErrPaymentQueryUnsupported), a plugin's
+// says so in its manifest.
+func (s *Service) lookup(id string) (gw core.PaymentGateway, query, ok bool) {
 	if g, ok := s.builtin[id]; ok {
-		return g, true
+		return g, true, true
 	}
 	for _, b := range s.pluginGateways() {
 		if b.Gateway.ID == id {
-			return b.Client, true
+			return b.Client, b.Gateway.Query, true
 		}
 	}
-	return nil, false
+	return nil, false, false
 }
 
 // pluginGateways are the gateways of the current plugin generation.

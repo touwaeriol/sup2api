@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -12,11 +11,6 @@ import (
 
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 )
-
-// metaOutTradeNo carries the order number in the session's metadata as well
-// as in client_reference_id; a session whose two copies differ was not
-// created by this gateway as sent and is never matched to an order.
-const metaOutTradeNo = "out_trade_no"
 
 // Stripe accepts expires_at from 30 minutes to 24 hours after it creates the
 // session. The minute of margin on each side absorbs request latency and
@@ -29,6 +23,11 @@ const (
 // CreatePayment opens a Checkout Session for the order. The price is the
 // order's server-side amount (price_data), never a dashboard Price, and
 // promotion codes stay off so the paid amount always equals the order's.
+// Only cards are offered (allowed_payment_method_types, which replaced
+// payment_method_types in the pinned API version; Apple Pay and Google Pay
+// are cards): delayed methods (bank debits, vouchers) settle days later,
+// after the core stops accepting payments for an expired order, and would
+// be charged without being credited.
 func (g *Gateway) CreatePayment(ctx context.Context, in core.PaymentCreate) (*core.PaymentCreated, error) {
 	amount, ok := core.PaymentMinorUnits(in.Amount, in.Currency)
 	if !ok {
@@ -47,7 +46,8 @@ func (g *Gateway) CreatePayment(ctx context.Context, in core.PaymentCreate) (*co
 
 func (g *Gateway) sessionParams(in core.PaymentCreate, amount int64) *stripego.CheckoutSessionCreateParams {
 	return &stripego.CheckoutSessionCreateParams{
-		Mode: stripego.String(string(stripego.CheckoutSessionModePayment)),
+		Mode:                      stripego.String(string(stripego.CheckoutSessionModePayment)),
+		AllowedPaymentMethodTypes: []*string{stripego.String("card")},
 		LineItems: []*stripego.CheckoutSessionCreateLineItemParams{{
 			PriceData: &stripego.CheckoutSessionCreateLineItemPriceDataParams{
 				Currency:    stripego.String(strings.ToLower(in.Currency)),
@@ -91,11 +91,12 @@ func (g *Gateway) QueryPayment(ctx context.Context, q core.PaymentQuery) (*core.
 	if err != nil {
 		return nil, fmt.Errorf("stripe: retrieve checkout session: %w", err)
 	}
-	return sessionResult(s, queryStatus(s))
+	ss := sessionOf(s)
+	return sessionResult(ss, queryStatus(ss))
 }
 
-func queryStatus(s *stripego.CheckoutSession) core.PaymentStatus {
-	switch s.Status {
+func queryStatus(s session) core.PaymentStatus {
+	switch stripego.CheckoutSessionStatus(s.Status) {
 	case stripego.CheckoutSessionStatusComplete:
 		return paidIf(s)
 	case stripego.CheckoutSessionStatusExpired:
@@ -105,50 +106,10 @@ func queryStatus(s *stripego.CheckoutSession) core.PaymentStatus {
 }
 
 // paidIf: a completed session is paid only once its payment_status says so;
-// delayed methods (bank debits) complete the session first and pay later.
-func paidIf(s *stripego.CheckoutSession) core.PaymentStatus {
-	if s.PaymentStatus == stripego.CheckoutSessionPaymentStatusPaid {
+// delayed methods complete the session first and pay later.
+func paidIf(s session) core.PaymentStatus {
+	if stripego.CheckoutSessionPaymentStatus(s.PaymentStatus) == stripego.CheckoutSessionPaymentStatusPaid {
 		return core.PaymentPaid
 	}
 	return core.PaymentPending
-}
-
-// sessionResult maps a session the gateway trusts (signed event or API read)
-// to a result. The core matches OutTradeNo and SessionID to the same order
-// and compares amount, currency and merchant with the order's snapshot.
-func sessionResult(s *stripego.CheckoutSession, status core.PaymentStatus) (*core.PaymentResult, error) {
-	if s.Metadata[metaOutTradeNo] != s.ClientReferenceID {
-		return nil, rejected("client_reference_id and metadata.%s differ", metaOutTradeNo)
-	}
-	return &core.PaymentResult{
-		OutTradeNo:  s.ClientReferenceID,
-		TradeNo:     tradeNo(s),
-		SessionID:   s.ID,
-		Amount:      s.AmountTotal,
-		Currency:    strings.ToUpper(string(s.Currency)),
-		Status:      status,
-		MerchantRef: modeOf(s.Livemode),
-		Fields:      sessionFields(s),
-	}, nil
-}
-
-// tradeNo is the PaymentIntent, Stripe's id of the money movement; a session
-// without one (not paid yet) falls back to the session id.
-func tradeNo(s *stripego.CheckoutSession) string {
-	if s.PaymentIntent != nil && s.PaymentIntent.ID != "" {
-		return s.PaymentIntent.ID
-	}
-	return s.ID
-}
-
-// sessionFields are the non-secret fields kept on the payment_events row:
-// no customer details, URLs or metadata beyond what the result carries.
-func sessionFields(s *stripego.CheckoutSession) map[string]string {
-	return map[string]string{
-		"session_status": string(s.Status),
-		"payment_status": string(s.PaymentStatus),
-		"livemode":       strconv.FormatBool(s.Livemode),
-		"amount_total":   strconv.FormatInt(s.AmountTotal, 10),
-		"currency":       string(s.Currency),
-	}
 }

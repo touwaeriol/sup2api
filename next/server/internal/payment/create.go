@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/url"
 	"time"
 
 	"gorm.io/gorm"
@@ -70,25 +71,17 @@ func (s *Service) insertOrder(ctx context.Context, userID int64, in quoteInput) 
 	return o, err
 }
 
-// buildOrder checks in against the settings and the user's pending orders
-// and prices it, the promo code locked when there is one.
+// buildOrder checks in against the settings, the user's pending orders and
+// the credit limits, and prices it, the promo code locked when there is one.
 func (s *Service) buildOrder(ctx context.Context, tx *gorm.DB, userID int64, in quoteInput) (*model.PaymentOrder, *model.PromoCode, error) {
-	v, ms, err := s.lockTerms(ctx, tx)
-	if err != nil {
-		return nil, nil, err
-	}
-	m, err := s.checkMethod(ctx, v, ms, in)
-	if err == nil {
-		err = s.checkPending(ctx, tx, userID, v.MaxPendingOrders)
-	}
-	if err != nil {
-		return nil, nil, err
-	}
-	p, err := priceOf(ctx, v, in.Amount.Decimal)
+	v, m, p, err := s.priceTerms(ctx, tx, userID, in)
 	if err != nil {
 		return nil, nil, err
 	}
 	promo, err := s.orderPromo(ctx, tx, in.promoCode(), userID, p)
+	if err == nil {
+		err = s.checkOrderLimits(ctx, tx, userID, p.Amount, promo)
+	}
 	if err != nil {
 		return nil, nil, err
 	}
@@ -96,17 +89,25 @@ func (s *Service) buildOrder(ctx context.Context, tx *gorm.DB, userID int64, in 
 	return o, promo, err
 }
 
-// lockTerms reads the settings under a share lock, and the methods.
-func (s *Service) lockTerms(ctx context.Context, tx *gorm.DB) (Settings, []Method, error) {
+// priceTerms checks in against the settings read under a share lock and the
+// user's pending orders, and prices it.
+func (s *Service) priceTerms(ctx context.Context, tx *gorm.DB, userID int64, in quoteInput) (Settings, Method, price, error) {
 	if err := store.RequireTx(tx); err != nil {
-		return Settings{}, nil, err
+		return Settings{}, Method{}, price{}, err
 	}
-	v, err := s.loadSettings(ctx, tx, store.Lock(clause.LockingStrengthShare))
+	v, ms, err := s.terms(ctx, tx, store.Lock(clause.LockingStrengthShare))
 	if err != nil {
-		return Settings{}, nil, err
+		return Settings{}, Method{}, price{}, err
 	}
-	ms, err := loadMethods(ctx, tx)
-	return v, ms, err
+	m, err := s.checkMethod(ctx, v, ms, in)
+	if err == nil {
+		err = s.checkPending(ctx, tx, userID, v.MaxPendingOrders)
+	}
+	if err != nil {
+		return Settings{}, Method{}, price{}, err
+	}
+	p, err := priceOf(ctx, v, in.Amount.Decimal)
+	return v, m, p, err
 }
 
 // checkPending refuses an order past the user's cap of pending orders.
@@ -125,7 +126,7 @@ func (s *Service) orderPromo(ctx context.Context, tx *gorm.DB, code string, user
 	if code == "" {
 		return nil, nil
 	}
-	c, err := checkPromo(ctx, tx, code, userID, p.Amount, s.now(), true)
+	c, err := lockCheckPromo(ctx, tx, code, userID, p.Amount, s.now())
 	if err != nil {
 		return nil, err
 	}
@@ -161,13 +162,13 @@ func (s *Service) startPayment(ctx context.Context, o *model.PaymentOrder, clien
 	}
 	created, err := gw.CreatePayment(ctx, core.PaymentCreate{OutTradeNo: o.OutTradeNo, Amount: o.PayAmount,
 		Currency: o.Currency, MethodType: o.Method, Subject: "Top-up " + o.Amount.String() + " USD",
-		NotifyURL: s.siteURL("/api/v1/payment/notify/" + o.Gateway), ReturnURL: s.siteURL(walletPath),
+		NotifyURL: s.siteURL(notifyPath + o.Gateway), ReturnURL: s.siteURL(walletPath),
 		ExpiresAt: o.ExpiresAt, ClientIP: clientIP})
+	if err == nil {
+		err = checkCreated(created)
+	}
 	if err != nil {
 		return nil, err
-	}
-	if len(created.SessionID) > maxGatewayRef || len(created.MerchantRef) > maxGatewayRef {
-		return nil, errors.New("payment gateway returned an oversized session id or merchant")
 	}
 	o.PayURL, o.QrCode, o.GatewaySessionID, o.MerchantRef = created.PayURL, created.QRCode, created.SessionID, created.MerchantRef
 	set := map[string]any{"pay_url": o.PayURL, "qr_code": o.QrCode, "gateway_session_id": o.GatewaySessionID, "merchant_ref": o.MerchantRef}
@@ -188,4 +189,27 @@ func (s *Service) abandon(ctx context.Context, o *model.PaymentOrder, cause erro
 	if err != nil {
 		slog.ErrorContext(ctx, "payment: fail abandoned order", "order", o.OutTradeNo, "err", err)
 	}
+}
+
+// checkCreated refuses a created payment the order cannot keep or the user
+// should not be sent to: references wider than their columns, nowhere to
+// pay, or a pay address that is not an absolute https URL without
+// credentials (the wallet opens it).
+func checkCreated(c *core.PaymentCreated) error {
+	switch {
+	case c == nil:
+		return errNoResult
+	case len(c.SessionID) > maxGatewayRef || len(c.MerchantRef) > maxGatewayRef:
+		return errors.New("payment gateway returned an oversized session id or merchant")
+	case c.PayURL == "" && c.QRCode == "":
+		return errors.New("payment gateway returned nowhere to pay")
+	case c.PayURL != "" && !httpsURL(c.PayURL):
+		return errors.New("payment gateway returned a pay address that is not an absolute https URL")
+	}
+	return nil
+}
+
+func httpsURL(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && u.Scheme == "https" && u.Host != "" && u.User == nil
 }

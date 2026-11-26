@@ -35,6 +35,13 @@ export function belowMin(amount: number | null, info: CheckoutInfo, m: CheckoutM
 
 export type AmountError = '' | 'required' | 'min' | 'max'
 
+/** What is wrong with a typed amount against the minimum and the configured maximum. */
+export function amountError(v: number | null, min: number, info: CheckoutInfo | null): AmountError {
+  if (!v) return 'required'
+  if (v < min) return 'min'
+  return info && v > info.max_topup ? 'max' : ''
+}
+
 /**
  * State of the top-up card: the amount (a preset or typed), the method and
  * the local price estimate. The confirm dialog asks the server (preview) for
@@ -49,14 +56,7 @@ export function useTopupQuote(info: Ref<CheckoutInfo | null>) {
   const selected = computed(() => methods.value.find((m) => m.type === method.value))
   const min = computed(() => (info.value && selected.value ? methodMin(info.value, selected.value) : (info.value?.min_topup ?? 0)))
   const quote = computed(() => (info.value && amount.value ? quoteOf(amount.value, info.value) : null))
-
-  const error = computed<AmountError>(() => {
-    const v = amount.value
-    if (!v) return 'required'
-    if (v < min.value) return 'min'
-    return info.value && v > info.value.max_topup ? 'max' : ''
-  })
-
+  const error = computed<AmountError>(() => amountError(amount.value, min.value, info.value))
   const blocked = (m: CheckoutMethod) => !!info.value && belowMin(amount.value, info.value, m)
 
   // Start on the first preset and method; move off a method the amount no longer reaches.

@@ -22,20 +22,28 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/billing"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/httpapi"
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/perm"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store/model"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/testutil"
 )
 
 // fakeGateway is a gateway the tests drive: a notification's body is the
-// PaymentResult as JSON, header X-Bad-Sign fails verification, and queries
-// answer from paid (or are unsupported).
+// PaymentResult as JSON, header X-Bad-Sign fails verification (its value is
+// the reason), and queries answer from paid (or are unsupported, or fail
+// with queryErr, or block until their context ends).
 type fakeGateway struct {
-	mu       sync.Mutex
-	merchant string
-	paid     map[string]*core.PaymentResult
-	created  []core.PaymentCreate
-	fail     bool
+	mu        sync.Mutex
+	merchant  string
+	paid      map[string]*core.PaymentResult
+	created   []core.PaymentCreate
+	fail      bool
+	answer    *core.PaymentCreated // replaces the created payment
+	nilResult bool
+	queryErr  error
+	block     bool
+	queries   int
+	deadline  time.Duration // how long the last query's context had
 }
 
 func (g *fakeGateway) CreatePayment(_ context.Context, in core.PaymentCreate) (*core.PaymentCreated, error) {
@@ -45,13 +53,19 @@ func (g *fakeGateway) CreatePayment(_ context.Context, in core.PaymentCreate) (*
 		return nil, fmt.Errorf("gateway down")
 	}
 	g.created = append(g.created, in)
+	if g.answer != nil {
+		return g.answer, nil
+	}
 	return &core.PaymentCreated{PayURL: "https://pay.test/" + in.OutTradeNo, QRCode: "qr:" + in.OutTradeNo,
 		SessionID: "sess_" + in.OutTradeNo, MerchantRef: g.merchant}, nil
 }
 
 func (g *fakeGateway) ParseNotification(_ context.Context, n core.PaymentNotification) (*core.PaymentResult, error) {
-	if n.Header.Get("X-Bad-Sign") != "" {
-		return nil, fmt.Errorf("fake: %w", core.ErrPaymentSignature)
+	if reason := n.Header.Get("X-Bad-Sign"); reason != "" {
+		return nil, fmt.Errorf("fake: %w: %s", core.ErrPaymentSignature, reason)
+	}
+	if g.nilResult {
+		return nil, nil
 	}
 	if n.Header.Get("Cookie") != "" || n.Header.Get("Authorization") != "" {
 		return nil, fmt.Errorf("fake: credentials reached the gateway")
@@ -63,11 +77,22 @@ func (g *fakeGateway) ParseNotification(_ context.Context, n core.PaymentNotific
 	return &res, nil
 }
 
-func (g *fakeGateway) QueryPayment(_ context.Context, q core.PaymentQuery) (*core.PaymentResult, error) {
+func (g *fakeGateway) QueryPayment(ctx context.Context, q core.PaymentQuery) (*core.PaymentResult, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	g.queries++
+	if at, ok := ctx.Deadline(); ok {
+		g.deadline = time.Until(at)
+	}
+	if g.block {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
 	if res, ok := g.paid[q.OutTradeNo]; ok {
 		return res, nil
+	}
+	if g.queryErr != nil {
+		return nil, g.queryErr
 	}
 	return nil, core.ErrPaymentQueryUnsupported
 }
@@ -128,7 +153,7 @@ func newFixture(t *testing.T) *fixture {
 	f.admin = testutil.InsertUser(t, db, "pay-admin@x.test")
 	gin.SetMode(gin.TestMode)
 	f.engine = gin.New()
-	f.svc.RegisterRoutes(httpapi.NewRouter(f.engine, fakeTokens{}, allowAll{}))
+	f.svc.RegisterRoutes(httpapi.NewRouter(f.engine, fakeTokens{}, roles{admin: f.admin}))
 	return f
 }
 
@@ -160,6 +185,12 @@ func (f *fixture) order(uid int64, amount string, promo ...string) *model.Paymen
 	if len(promo) > 0 {
 		in.PromoCode = promo[0]
 	}
+	return f.place(uid, in)
+}
+
+// place places in for uid and returns the order.
+func (f *fixture) place(uid int64, in quoteInput) *model.PaymentOrder {
+	f.t.Helper()
 	out, err := f.svc.placeOrder(context.Background(), uid, in, "127.0.0.1")
 	require.NoError(f.t, err)
 	return f.load(out.OutTradeNo)
@@ -182,7 +213,12 @@ func paid(o *model.PaymentOrder, event string) core.PaymentResult {
 // notify posts res to the notify route of gateway and returns the status.
 func (f *fixture) notify(gateway string, res core.PaymentResult, header ...string) int {
 	body, _ := json.Marshal(res)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/payment/notify/"+gateway, strings.NewReader(string(body)))
+	return f.notifyRaw(gateway, string(body), header...).Code
+}
+
+// notifyRaw posts body to the notify route of gateway.
+func (f *fixture) notifyRaw(gateway, body string, header ...string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/payment/notify/"+gateway, strings.NewReader(body))
 	req.Header.Set("Cookie", "s=1")
 	req.Header.Set("Authorization", "Bearer 1")
 	for i := 0; i+1 < len(header); i += 2 {
@@ -190,7 +226,7 @@ func (f *fixture) notify(gateway string, res core.PaymentResult, header ...strin
 	}
 	w := httptest.NewRecorder()
 	f.engine.ServeHTTP(w, req)
-	return w.Code
+	return w
 }
 
 // call sends a console request as uid.
@@ -244,12 +280,17 @@ func (fakeTokens) VerifySession(_ context.Context, tok string) (int64, string, e
 	return testutil.SessionUser(tok, "")
 }
 
-// allowAll grants every permission: the routes' permissions are checked by
-// the route table, not here.
-type allowAll struct{}
+// roles grants the administrator every permission and everyone else
+// topup:use only, as the built-in roles do.
+type roles struct{ admin int64 }
 
-func (allowAll) Can(context.Context, int64, string) (bool, error) { return true, nil }
-func (allowAll) PermissionSet(context.Context, int64) (core.PermissionSet, error) {
-	return core.PermissionSetOf("*"), nil
+func (r roles) Can(_ context.Context, uid int64, p string) (bool, error) {
+	return uid == r.admin || p == string(perm.TopupUse), nil
 }
-func (allowAll) CanGrant(context.Context, int64, []string) error { return nil }
+func (r roles) PermissionSet(_ context.Context, uid int64) (core.PermissionSet, error) {
+	if uid == r.admin {
+		return core.PermissionSetOf("*"), nil
+	}
+	return core.PermissionSetOf(string(perm.TopupUse)), nil
+}
+func (roles) CanGrant(context.Context, int64, []string) error { return nil }

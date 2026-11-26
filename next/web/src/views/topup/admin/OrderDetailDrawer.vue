@@ -1,20 +1,19 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { SAlert, SDateTime, SDescriptions, SDrawer, SSectionTitle, type DescItem } from '@sub2api/ui'
-import { useTopup, type Order } from '../topup'
+import { gatewayName, useTopup, type Order } from '../topup'
 import { formatLocal, formatUsd } from '../format'
 import MethodName from '../components/MethodName.vue'
-import { useMethodCatalog } from '../components/methodCatalog'
 import PayStatusBadge from '../components/PayStatusBadge.vue'
+import OrderEvents from './OrderEvents.vue'
 
 // Every field of one order, read-only, grouped for reconciling it with the
 // gateway: the order, the payment (method, amount paid, the gateway's
-// transaction number and time) and its timeline.
+// transaction number and time), its timeline and the gateway events.
 const props = defineProps<{ open: boolean; order: Order | null }>()
 const emit = defineEmits<{ 'update:open': [open: boolean] }>()
 const host = useTopup()
 const t = host.t
-const catalog = useMethodCatalog()
 
 const SECTIONS = {
   order: ['out_trade_no', 'status', 'user', 'amount', 'bonus', 'promo_code'],
@@ -61,11 +60,12 @@ const sections = computed(() => {
             <span class="payment-muted">#{{ order.user_id }}</span>
           </template>
           <template #item-method>
-            <MethodName :method="catalog.look(order.method, order.method_name)"><span class="payment-muted">{{ t(`topup.gateway.${order.gateway}`) }}</span></MethodName>
+            <MethodName :method="{ name: order.method_name || order.method }"><span class="payment-muted">{{ gatewayName(t, order.gateway) }}</span></MethodName>
           </template>
           <template v-for="k in TIMES" :key="k" #[`item-${k}`]><SDateTime :value="order[k]" mode="absolute" /></template>
         </SDescriptions>
       </section>
+      <OrderEvents :order-id="order.id" />
     </template>
   </SDrawer>
 </template>

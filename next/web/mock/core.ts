@@ -143,7 +143,7 @@ export const pricerUser: Identity = {
 }
 
 /** The core's super-only keys (authz/catalog.go): critical, and not among admin's defaults. */
-export const SUPER_ONLY_KEYS = new Set(['balance:adjust:any', 'plugin:grant:critical', 'plugin:grant:db_schema_unconfined', 'publisher:manage', 'system:update:execute', 'system:update:recover'])
+export const SUPER_ONLY_KEYS = new Set(['balance:adjust:any', 'plugin:grant:critical', 'plugin:grant:db_schema_unconfined', 'publisher:manage', 'redeem:manage', 'system:update:execute', 'system:update:recover'])
 
 /**
  * The guard keys of the built-in admin role in the mock: rules:manage at the

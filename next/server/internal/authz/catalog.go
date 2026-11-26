@@ -153,8 +153,9 @@ var coreModules = []coreModule{
 	{"redeem", lt("Redeem codes", "兑换码"), []corePerm{
 		{key: perm.RedeemUse, en: "Redeem codes", zh: "使用兑换码",
 			desc: lt("Redeem a code into your own balance.", "用兑换码给自己的余额充值。"), requires: req(perm.BalanceSelfRead)},
-		// Generating codes mints balance, so it is sensitive like adjusting it.
-		{key: perm.RedeemManage, en: "Manage redeem codes", zh: "管理兑换码", sensitive: true,
+		// Generating codes mints balance a holder can redeem for anyone,
+		// itself included, so it is as strong as balance:adjust:any.
+		{key: perm.RedeemManage, en: "Manage redeem codes", zh: "管理兑换码", sensitive: true, superOnly: true,
 			desc: lt("Generate, list and void redeem codes.", "批量生成、查看与作废兑换码。"), requires: req(perm.BalanceAllRead)},
 	}},
 	{"topup", lt("Top-up & payment", "充值/支付"), []corePerm{

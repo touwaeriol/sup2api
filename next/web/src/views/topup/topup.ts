@@ -23,15 +23,23 @@ export function errorMessage(e: unknown, fallback: string): string {
 
 // ---- Settings (core, GET/PUT /topup/settings) ----
 
-/** A built-in payment gateway (its credentials are core settings); a plugin gateway is "<plugin>.<id>". */
+/** A built-in payment gateway (its credentials are core settings); a plugin gateway is "<plugin id>.<gateway id>". */
 export type GatewayKey = 'epay' | 'stripe'
+
+export const BUILTIN_GATEWAYS: readonly GatewayKey[] = ['epay', 'stripe']
+
+export const isBuiltinGateway = (id: string): id is GatewayKey => (BUILTIN_GATEWAYS as readonly string[]).includes(id)
+
+/** A gateway's display name where only its id is known (orders): built-in ones translated, a plugin one as its id. */
+export const gatewayName = (t: (key: string) => string, id: string) => (isBuiltinGateway(id) ? t(`topup.gateway.${id}`) : id)
 
 /** A payment method users pick when topping up, served by one gateway (new-api PayMethods). */
 export interface PaymentMethod {
   /** Type key sent to the gateway (epay: alipay / wxpay / qqpay / custom; stripe: stripe). */
   type: string
   name: string
-  gateway: GatewayKey
+  /** A built-in gateway or a plugin's "<plugin id>.<gateway id>" (GET /topup/gateways). */
+  gateway: string
   /** Built-in icon key (alipay / wxpay / qqpay / stripe / card); another key shows the name's initial. */
   icon: string
   /** Background of the built-in icon (#rrggbb); its brand color when empty. */
@@ -118,7 +126,7 @@ export interface Order {
   currency: string
   method: string
   method_name: string
-  gateway: GatewayKey
+  gateway: string
   promo_code?: string
   status: OrderStatus
   /** The gateway's transaction number (Epay trade_no, Stripe PaymentIntent id), for reconciliation. */
@@ -142,6 +150,22 @@ export interface CreatedOrder {
 }
 
 // ---- Admin side ----
+
+/**
+ * What the core made of one notification or query of an order
+ * (GET /topup/orders/:id/events): its kind (NOTIFY_OK, SIGNATURE_INVALID,
+ * PAYMENT_AMOUNT_MISMATCH, …), whether it was verified, and the whitelisted
+ * fields it kept (amount in the currency's minor unit).
+ */
+export interface PaymentEvent {
+  id: number
+  gateway: string
+  kind: string
+  verified: boolean
+  event_id?: string
+  detail: Record<string, string>
+  created_at: string
+}
 
 export interface OrderStats {
   today_amount: number
@@ -212,6 +236,7 @@ export const paymentApi = {
 
   adminOrders: (query: Record<string, string>) => api().list<Order>('/topup/orders', query),
   orderStats: () => api().get<OrderStats>('/topup/orders/stats'),
+  orderEvents: (id: number, query: Record<string, string>) => api().list<PaymentEvent>(`/topup/orders/${id}/events`, query),
   pluginGateways: () => api().get<PluginGateway[]>('/topup/gateways'),
 
 

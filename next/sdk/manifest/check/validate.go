@@ -233,6 +233,32 @@ func (v *validator) needCap(field, capID string) {
 	v.add(field, "missing_capability", "capability %q must be declared", capID)
 }
 
+// sections are Validate's checks in the order they report. hostPermissions
+// comes before the sections that ask for a permission (v.perms).
+var sections = []func(*validator){
+	(*validator).basics,
+	(*validator).hostPermissions,
+	(*validator).capabilities,
+	(*validator).platforms,
+	func(v *validator) { v.taskPairs(v.m.Platforms) },
+	(*validator).accountTypes,
+	(*validator).pricing,
+	(*validator).hooks,
+	(*validator).scheduler,
+	(*validator).observations,
+	(*validator).notifications,
+	(*validator).payments,
+	(*validator).events,
+	(*validator).jobs,
+	(*validator).database,
+	(*validator).userPermissions,
+	(*validator).retiredUserPermissionFields,
+	(*validator).retiredContractFields,
+	(*validator).routes,
+	(*validator).ui,
+	(*validator).resources,
+}
+
 // Validate checks a manifest against the package contents and host facts.
 // All problems are reported together as a *ValidationError.
 func Validate(m *manifest.Manifest, files map[string][]byte, opt ValidateOptions) error {
@@ -243,27 +269,9 @@ func Validate(m *manifest.Manifest, files map[string][]byte, opt ValidateOptions
 		opt.GOARCH = runtime.GOARCH
 	}
 	v := &validator{m: m, files: files, opt: opt, perms: map[string]*manifest.HostPermission{}}
-	v.basics()
-	v.hostPermissions()
-	v.capabilities()
-	v.platforms()
-	v.taskPairs(v.m.Platforms)
-	v.accountTypes()
-	v.pricing()
-	v.hooks()
-	v.scheduler()
-	v.observations()
-	v.notifications()
-	v.payments()
-	v.events()
-	v.jobs()
-	v.database()
-	v.userPermissions()
-	v.retiredUserPermissionFields()
-	v.retiredContractFields()
-	v.routes()
-	v.ui()
-	v.resources()
+	for _, section := range sections {
+		section(v)
+	}
 	if len(v.errs) > 0 {
 		return &ValidationError{Fields: v.errs}
 	}

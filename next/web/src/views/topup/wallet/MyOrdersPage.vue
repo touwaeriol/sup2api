@@ -9,13 +9,14 @@ import PayStatusBadge from '../components/PayStatusBadge.vue'
 import { useMethodCatalog } from '../components/methodCatalog'
 import { ORDER_STATUSES } from '../components/status'
 import PayingDialog from './PayingDialog.vue'
-import { openPayPage } from './payWindow'
+import { isPayUrl, openPayPage } from './payWindow'
 import type { PayingOrder } from './types'
 
 // Mine > Top-up history (new-api's billing history): the caller's own
 // orders, searchable by order number and filtered by status. A pending order
 // that has not expired can be paid from here: the payment page opens again
-// and the waiting dialog (which can also cancel it) polls it.
+// (or its QR code shows) and the waiting dialog (which can also cancel it)
+// polls it.
 const host = useTopup()
 const t = host.t
 
@@ -23,7 +24,8 @@ const list = useList<Order>(host.api, '/me/topup/orders', { q: '', status: '' },
 const catalog = useMethodCatalog()
 const statusOptions = computed(() => [{ value: '', label: t('topup.wallet.orders.anyStatus') }, ...ORDER_STATUSES.map((s) => ({ value: s, label: t(`topup.status.${s}`) }))])
 
-const resumable = (o: Order) => o.status === 'pending' && !!o.pay_url && Date.parse(o.expires_at) > Date.now()
+/** A pending order not yet expired with somewhere to pay: an https payment page or a QR code. */
+const resumable = (o: Order) => o.status === 'pending' && (isPayUrl(o.pay_url) || !!o.qr_code) && Date.parse(o.expires_at) > Date.now()
 
 const columns = computed<TableColumn[]>(() => [
   { key: 'out_trade_no', label: t('topup.wallet.orders.no'), mobile: 'title', nowrap: true },
@@ -41,9 +43,9 @@ const paying = ref<PayingOrder | null>(null)
 const payingOpen = ref(false)
 const blocked = ref(false)
 function resume(order: Order) {
-  const opened = !!order.pay_url && openPayPage(order.pay_url)
+  const opened = isPayUrl(order.pay_url) ? openPayPage(order.pay_url) : null
   paying.value = order
-  blocked.value = !opened
+  blocked.value = opened === 'blocked'
   payingOpen.value = true
 }
 </script>

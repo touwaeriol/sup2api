@@ -52,19 +52,23 @@ func (s *Service) putSettings(c *gin.Context) {
 
 func (s *Service) renderSettings(c *gin.Context) {
 	ctx := c.Request.Context()
-	v, err := s.loadSettings(ctx, s.db.Gorm)
-	if err != nil {
-		httpapi.Fail(c, err)
-		return
-	}
-	ms, err := loadMethods(ctx, s.db.Gorm)
+	v, ms, err := s.terms(ctx, s.db.Gorm)
 	if err != nil {
 		httpapi.Fail(c, err)
 		return
 	}
 	httpapi.NoStore(c)
 	httpapi.OK(c, settingsView{Mode: "native", Values: settingsValues{Settings: masked(v), Methods: ms},
-		SecretFields: secretPaths(), Permission: string(perm.TopupManage)})
+		SecretFields: secretPaths(), Permission: string(perm.TopupManage), NotifyBase: s.notifyBase()})
+}
+
+// notifyBase is where the gateways' notifications go, the gateway id
+// appended; empty while the site address cannot take top-up (not https).
+func (s *Service) notifyBase() string {
+	if !s.siteSecure() {
+		return ""
+	}
+	return s.siteURL(notifyPath)
 }
 
 // saveSettings validates and stores the settings and methods in one

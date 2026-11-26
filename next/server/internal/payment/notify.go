@@ -4,9 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"log/slog"
-	"net/http"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
@@ -15,6 +13,7 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store/model"
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/x"
 )
 
 // Kinds of payment_events rows.
@@ -29,6 +28,8 @@ const (
 	eventAmountMismatch   = "PAYMENT_AMOUNT_MISMATCH"
 	eventTradeNoMissing   = "TRADE_NO_MISSING"
 	eventTradeNoReused    = "TRADE_NO_REUSED"
+	eventFieldTooLong     = "FIELD_TOO_LONG"
+	eventStatusUnknown    = "STATUS_UNKNOWN"
 	eventDuplicate        = "DUPLICATE"
 	eventSecondPayment    = "SECOND_PAYMENT"
 	eventNotPayable       = "STATUS_NOT_PAYABLE"
@@ -39,15 +40,16 @@ const (
 // The unique constraints a settlement may hit (migration 0126).
 const (
 	uniqueEventID = "payment_events_gateway_event_id_key"
-	uniqueTradeNo = "payment_orders_trade_no_key"
+	uniqueTradeNo = "payment_orders_gateway_trade_no_key"
 )
 
 // verdict is how the core judged a payment result: the outcome the gateway
-// answers with, the event recorded, and whether the order is now paid and
-// to be credited.
+// answers with, the event recorded (reason: why an unverified one failed),
+// and whether the order is now paid and to be credited.
 type verdict struct {
 	outcome core.PaymentOutcome
 	kind    string
+	reason  string
 	orderID *int64
 	credit  bool
 }
@@ -55,11 +57,17 @@ type verdict struct {
 func handled(kind string) verdict  { return verdict{outcome: core.PaymentHandled, kind: kind} }
 func rejected(kind string) verdict { return verdict{outcome: core.PaymentRejected, kind: kind} }
 
+// errNoResult: a gateway reported neither a result nor an error.
+var errNoResult = errors.New("payment gateway returned no result")
+
 // notify takes a gateway's notification: the gateway verifies it and says
 // which order it is about and what was paid; the core checks that against
 // the order and credits it. Anyone can call this route, so nothing in the
 // request is trusted before the gateway verified it.
 func (s *Service) notify(c *gin.Context) {
+	if !s.admitNotify(c) {
+		return
+	}
 	ctx := c.Request.Context()
 	id := c.Param("gateway")
 	gw, ok := s.gateway(id)
@@ -73,60 +81,37 @@ func (s *Service) notify(c *gin.Context) {
 		return
 	}
 	res, err := gw.ParseNotification(ctx, n)
-	reply(c, gw.Respond(s.handleResult(ctx, id, res, err)))
-}
-
-// readNotification reads the request with its body capped and without the
-// headers that carry anyone's credentials.
-func readNotification(c *gin.Context) (core.PaymentNotification, error) {
-	body, err := io.ReadAll(http.MaxBytesReader(c.Writer, c.Request.Body, notifyBodyLimit))
-	h := c.Request.Header.Clone()
-	for _, k := range []string{"Cookie", "Authorization", "Proxy-Authorization"} {
-		h.Del(k)
-	}
-	return core.PaymentNotification{Method: c.Request.Method, RawQuery: c.Request.URL.RawQuery, Header: h, Body: body}, err
-}
-
-func reply(c *gin.Context, r core.PaymentReply) {
-	c.Data(r.Status, r.ContentType, r.Body)
-}
-
-// gatewayGone answers a notification for a gateway that is not there: 503
-// while orders of it may still be paid (its plugin may come back), else 404.
-func (s *Service) gatewayGone(c *gin.Context, id string) {
-	ctx := c.Request.Context()
-	open, err := hasPayableOrders(ctx, s.db.Gorm, id, s.now())
-	if err != nil || open {
-		s.record(ctx, s.db.Gorm, id, verdict{kind: eventGatewayGone}, nil)
-		c.Data(http.StatusServiceUnavailable, "text/plain; charset=utf-8", []byte("retry later"))
+	if errors.Is(err, core.ErrPaymentSignature) {
+		s.recordUnverified(c, id, verdict{kind: eventSignatureInvalid, reason: clipRunes(err.Error(), maxReasonRunes)})
+		reply(c, gw.Respond(core.PaymentRejected))
 		return
 	}
-	c.Data(http.StatusNotFound, "text/plain; charset=utf-8", []byte("not found"))
+	outcome, _ := s.process(ctx, id, res, err)
+	reply(c, gw.Respond(outcome))
 }
 
-// handleResult settles a parsed notification (or query result) and credits
-// the order it paid.
-func (s *Service) handleResult(ctx context.Context, gateway string, res *core.PaymentResult, err error) core.PaymentOutcome {
-	if errors.Is(err, core.ErrPaymentSignature) {
-		s.record(ctx, s.db.Gorm, gateway, verdict{kind: eventSignatureInvalid}, nil)
-		return core.PaymentRejected
+// process settles a verified notification (or query result) and credits
+// the order it paid; paid tells whether the order is paid now.
+func (s *Service) process(ctx context.Context, gateway string, res *core.PaymentResult, err error) (core.PaymentOutcome, bool) {
+	if err == nil && res == nil {
+		err = errNoResult
 	}
 	if err != nil {
 		slog.WarnContext(ctx, "payment: notification not parsed", "gateway", gateway, "err", err)
-		return core.PaymentRetry
+		return core.PaymentRetry, false
 	}
 	v, err := s.settle(ctx, gateway, res)
 	if err != nil {
 		slog.ErrorContext(ctx, "payment: settle notification", "gateway", gateway, "order", res.OutTradeNo, "err", err)
-		return core.PaymentRetry
+		return core.PaymentRetry, false
 	}
 	if v.credit {
 		if err := s.credit(ctx, *v.orderID); err != nil {
 			slog.ErrorContext(ctx, "payment: credit order", "order", res.OutTradeNo, "err", err)
-			return core.PaymentRetry
+			return core.PaymentRetry, true
 		}
 	}
-	return v.outcome
+	return v.outcome, v.credit
 }
 
 // settle judges res against its order under the order's row lock, turns a
@@ -164,16 +149,20 @@ func (s *Service) settle(ctx context.Context, gateway string, res *core.PaymentR
 // signature, a secret or the body. Only a processed payment keeps its event
 // id, which makes a repeat of it a duplicate.
 func (s *Service) record(ctx context.Context, q *gorm.DB, gateway string, v verdict, res *core.PaymentResult) error {
-	ev := model.PaymentEvent{OrderID: v.orderID, Gateway: gateway, Kind: v.kind, Verified: res != nil, Detail: json.RawMessage("{}")}
+	ev := model.PaymentEvent{OrderID: v.orderID, Gateway: gateway, Kind: v.kind, Verified: res != nil}
+	detail := map[string]string{}
+	if v.reason != "" {
+		detail["error"] = v.reason
+	}
 	if res != nil {
-		detail := map[string]string{"out_trade_no": res.OutTradeNo, "trade_no": res.TradeNo, "status": string(res.Status),
-			"amount": strconv.FormatInt(res.Amount, 10), "currency": res.Currency}
+		addFields(detail, map[string]string{"out_trade_no": res.OutTradeNo, "trade_no": res.TradeNo,
+			"status": string(res.Status), "amount": strconv.FormatInt(res.Amount, 10), "currency": res.Currency})
 		addFields(detail, res.Fields)
-		ev.Detail, _ = json.Marshal(detail)
 		if v.kind == eventNotifyOK && res.EventID != "" {
 			ev.EventID = &res.EventID
 		}
 	}
+	ev.Detail, _ = json.Marshal(detail)
 	err := store.G(ctx, q).Create(&ev).Error
 	if err != nil && !store.InTx(q) {
 		slog.WarnContext(ctx, "payment: record event", "gateway", gateway, "kind", v.kind, "err", err)
@@ -181,23 +170,29 @@ func (s *Service) record(ctx context.Context, q *gorm.DB, gateway string, v verd
 	return err
 }
 
-// Bounds of the gateway's fields kept on an event: a plugin gateway decides
-// what it reports, the event table stays small.
+// Bounds of the fields kept on an event: a plugin gateway decides what it
+// reports, and an unverified error text is anyone's; the table stays small.
 const (
 	maxEventFields     = 32
 	maxEventFieldBytes = 256
+	maxReasonRunes     = 200
 )
 
-// addFields adds the gateway's whitelisted fields to detail, without
-// overriding the core's own, within the bounds.
+// addFields adds fields to detail, without overriding what it holds,
+// within the bounds.
 func addFields(detail, fields map[string]string) {
 	for k, val := range fields {
 		if _, taken := detail[k]; taken || len(detail) >= maxEventFields || len(k) > maxEventFieldBytes {
 			continue
 		}
-		if len(val) > maxEventFieldBytes {
-			val = val[:maxEventFieldBytes]
-		}
-		detail[k] = val
+		detail[k] = x.Truncate(val, maxEventFieldBytes) // never splits a character
 	}
+}
+
+// clipRunes cuts s to at most n characters.
+func clipRunes(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n])
+	}
+	return s
 }

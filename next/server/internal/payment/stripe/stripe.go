@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -44,21 +45,46 @@ func New(cfg func(ctx context.Context) (Config, error), client *http.Client) *Ga
 
 // Merchant refs: an order created with a test key must not be credited by a
 // live event and vice versa, so the core stores the mode as the merchant and
-// requires notifications to name the same one.
+// requires notifications to name the same one. The values are the mode word
+// of the key prefix (secretKeyPattern's second group).
 const (
 	merchantLive = "live"
 	merchantTest = "test"
 )
 
-// keyMode tells whether a secret (sk_) or restricted (rk_) key is live or test.
-func keyMode(secretKey string) (string, error) {
-	switch {
-	case strings.HasPrefix(secretKey, "sk_live_"), strings.HasPrefix(secretKey, "rk_live_"):
-		return merchantLive, nil
-	case strings.HasPrefix(secretKey, "sk_test_"), strings.HasPrefix(secretKey, "rk_test_"):
-		return merchantTest, nil
+// secretKeyPattern is a secret (sk_) or restricted (rk_) key; the second
+// group is its mode. A publishable key (pk_) cannot create sessions.
+var secretKeyPattern = regexp.MustCompile(`^(sk|rk)_(live|test)_\S+$`)
+
+// Errors of Validate, one per field, so the settings can report each on
+// its own field (errors.Is on the joined error).
+var (
+	ErrSecretKey     = errors.New("stripe: secret key must start with sk_live_, sk_test_, rk_live_ or rk_test_")
+	ErrWebhookSecret = errors.New("stripe: webhook secret must start with whsec_")
+)
+
+// Validate reports whether the configuration can be used. Settings reuse it
+// so a key of the wrong kind is refused when saved, not when a user pays or
+// a webhook arrives. Both keys are required: without the webhook secret no
+// payment could be confirmed.
+func (c Config) Validate() error {
+	var errs []error
+	if !secretKeyPattern.MatchString(c.SecretKey) {
+		errs = append(errs, ErrSecretKey)
 	}
-	return "", errors.New("stripe: secret key must start with sk_live_, sk_test_, rk_live_ or rk_test_")
+	if !strings.HasPrefix(c.WebhookSecret, "whsec_") || len(c.WebhookSecret) == len("whsec_") {
+		errs = append(errs, ErrWebhookSecret)
+	}
+	return errors.Join(errs...)
+}
+
+// mode validates the configuration and tells whether its key is live or
+// test.
+func (c Config) mode() (string, error) {
+	if err := c.Validate(); err != nil {
+		return "", err
+	}
+	return secretKeyPattern.FindStringSubmatch(c.SecretKey)[2], nil
 }
 
 func modeOf(livemode bool) string {
@@ -74,13 +100,15 @@ var quietLogger = &stripego.LeveledLogger{Level: stripego.LevelNull}
 
 // api builds a Stripe client for the current key and tells its mode.
 // Retries are off: the core's scheduler queries and expires orders again, and
-// a request must not sleep behind the caller's back.
+// a request must not sleep behind the caller's back. Telemetry is off (the
+// library's default is on) so nothing but the request itself leaves the
+// node.
 func (g *Gateway) api(ctx context.Context) (*stripego.Client, string, error) {
 	c, err := g.cfg(ctx)
 	if err != nil {
 		return nil, "", fmt.Errorf("stripe: load config: %w", err)
 	}
-	mode, err := keyMode(c.SecretKey)
+	mode, err := c.mode()
 	if err != nil {
 		return nil, "", err
 	}
@@ -88,6 +116,7 @@ func (g *Gateway) api(ctx context.Context) (*stripego.Client, string, error) {
 		HTTPClient:        g.client,
 		URL:               stripego.String(g.apiURL),
 		MaxNetworkRetries: stripego.Int64(0),
+		EnableTelemetry:   stripego.Bool(false),
 		LeveledLogger:     quietLogger,
 	})
 	return stripego.NewClient(c.SecretKey, stripego.WithBackends(backends)), mode, nil

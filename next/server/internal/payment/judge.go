@@ -14,7 +14,8 @@ import (
 )
 
 // judge checks a verified payment result against its order (locked), in
-// this order: the order exists, is of this gateway, and the merchant,
+// this order: the order exists, the result's references fit the columns,
+// the order is of this gateway, and the merchant,
 // method and session the gateway reports are the order's; a status other
 // than paid is only recorded; the amount and currency equal the order's
 // snapshot; a repeat of the order's own payment is a duplicate (credited
@@ -40,6 +41,10 @@ func (s *Service) judge(ctx context.Context, tx *gorm.DB, gateway string, o *mod
 // exactly; an empty kind when it does.
 func matchOrder(gateway string, o *model.PaymentOrder, res *core.PaymentResult) verdict {
 	switch {
+	case oversized(res):
+		return rejected(eventFieldTooLong)
+	case !knownStatuses[res.Status]:
+		return rejected(eventStatusUnknown)
 	case o.Gateway != gateway:
 		return rejected(eventGatewayMismatch)
 	case res.MerchantRef != "" && res.MerchantRef != o.MerchantRef:
@@ -81,7 +86,7 @@ func (s *Service) judgeState(ctx context.Context, tx *gorm.DB, gateway string, o
 			return handled(eventDuplicate), err
 		}
 	}
-	reused, err := gormpg.Exists(db, db.Model(&model.PaymentOrder{}).Where("trade_no = ?", res.TradeNo))
+	reused, err := gormpg.Exists(db, db.Model(&model.PaymentOrder{}).Where("gateway = ? AND trade_no = ?", gateway, res.TradeNo))
 	if err != nil || reused {
 		return rejected(eventTradeNoReused), err
 	}
@@ -96,7 +101,7 @@ func (s *Service) judgeState(ctx context.Context, tx *gorm.DB, gateway string, o
 // bonus and says why.
 func (s *Service) markPaid(ctx context.Context, tx *gorm.DB, o *model.PaymentOrder, res *core.PaymentResult) error {
 	set := map[string]any{"trade_no": res.TradeNo, "paid_at": clause.Expr{SQL: "now()"}}
-	if o.GatewaySessionID == "" && res.SessionID != "" && len(res.SessionID) <= maxGatewayRef {
+	if o.GatewaySessionID == "" && res.SessionID != "" {
 		set["gateway_session_id"] = res.SessionID
 	}
 	if statusOf(o) != statusPending {
@@ -113,4 +118,20 @@ func (s *Service) markPaid(ctx context.Context, tx *gorm.DB, o *model.PaymentOrd
 		err = errLostRace
 	}
 	return err
+}
+
+// knownStatuses are the statuses of core.PaymentStatus; another one (a
+// plugin's) would not even fit the event's kind.
+var knownStatuses = map[core.PaymentStatus]bool{core.PaymentPaid: true, core.PaymentPending: true,
+	core.PaymentFailed: true, core.PaymentExpired: true}
+
+// oversized: a reference the result carries does not fit its column, so
+// it could never be stored; rejecting it beats retrying a failing write.
+func oversized(res *core.PaymentResult) bool {
+	for _, ref := range []string{res.TradeNo, res.SessionID, res.MerchantRef, res.EventID} {
+		if len(ref) > maxGatewayRef {
+			return true
+		}
+	}
+	return false
 }

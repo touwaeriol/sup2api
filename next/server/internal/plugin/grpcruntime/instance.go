@@ -56,6 +56,9 @@ type Instance struct {
 	// gave (*atomic.Pointer[paymentReplies]); every generation's adapter
 	// shares them.
 	payReplies sync.Map
+	// payServed: the last handshake reported payment.gateway.v1, so the
+	// process serves PaymentGatewayService (notePaymentService).
+	payServed atomic.Bool
 
 	mu        sync.Mutex
 	state     string
@@ -439,6 +442,7 @@ func (i *Instance) verifyInfo(ctx context.Context, p *proc) error {
 			i.log.Warn("plugin does not report a capability declared in its manifest", "capability", c)
 		}
 	}
+	i.notePaymentService(reported)
 	return nil
 }
 

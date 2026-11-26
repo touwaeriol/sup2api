@@ -3,8 +3,10 @@ package stripe
 import (
 	"cmp"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -104,8 +106,10 @@ func rejectCases() map[string]rejectCase {
 		"live event, test key":  {cfg: cfg, body: testEvent("checkout.session.completed", true, testSession())},
 		"test event, live key":  {cfg: live, body: good},
 		"reference mismatch":    {cfg: cfg, body: completed(withField("client_reference_id", "s2a_other"))},
-		"metadata missing":      {cfg: cfg, body: completed(withField("metadata", map[string]string{}))},
 		"not a checkout object": {cfg: cfg, body: completed(withField("object", "payment_intent"))},
+		"not an event":          {cfg: cfg, body: []byte(`{"id":"evt_1","object":"checkout.session"}`)},
+		"webhook secret malformed": {cfg: Config{SecretKey: testSecretKey, WebhookSecret: "secret"}, body: good,
+			secret: "secret"},
 	}
 }
 
@@ -208,4 +212,80 @@ func TestRespond(t *testing.T) {
 	require.Equal(t, http.StatusOK, g.Respond(core.PaymentHandled).Status)
 	require.Equal(t, http.StatusBadRequest, g.Respond(core.PaymentRejected).Status)
 	require.Equal(t, http.StatusInternalServerError, g.Respond(core.PaymentRetry).Status)
+}
+
+// The method and the signature header are checked before the settings are
+// read: junk requests to the public route cost no settings read.
+func TestParseNotificationChecksRequestFirst(t *testing.T) {
+	g := New(func(context.Context) (Config, error) {
+		t.Fatal("config read before the request was checked")
+		return Config{}, nil
+	}, http.DefaultClient)
+	good := signed(completed(testSession()), testWebhookSecret, time.Now())
+	noHeader := good
+	noHeader.Header = http.Header{}
+	get := good
+	get.Method = http.MethodGet
+	for name, n := range map[string]core.PaymentNotification{"no header": noHeader, "GET": get} {
+		_, err := g.ParseNotification(context.Background(), n)
+		require.ErrorIs(t, err, core.ErrPaymentSignature, name)
+	}
+}
+
+// While a webhook secret is being rolled Stripe signs with the old and the
+// new one; any matching v1 signature is enough.
+func TestParseNotificationSeveralSignatures(t *testing.T) {
+	body, now := completed(testSession()), time.Now()
+	sig := func(secret string) string { return hex.EncodeToString(webhook.ComputeSignature(now, body, secret)) }
+	n := signed(body, testWebhookSecret, now)
+	for _, order := range [][2]string{{"whsec_old", testWebhookSecret}, {testWebhookSecret, "whsec_old"}} {
+		n.Header.Set(signatureHeader, fmt.Sprintf("t=%d,v1=%s,v1=%s", now.Unix(), sig(order[0]), sig(order[1])))
+		r, err := parse(t, testConfig(), n)
+		require.NoError(t, err)
+		require.Equal(t, testOutTradeNo, r.OutTradeNo)
+	}
+	n.Header.Set(signatureHeader, fmt.Sprintf("t=%d,v1=%s,v1=%s", now.Unix(), sig("whsec_a"), sig("whsec_b")))
+	_, err := parse(t, testConfig(), n)
+	require.ErrorIs(t, err, core.ErrPaymentSignature)
+}
+
+// A session made by something else on the account (a Payment Link sets
+// client_reference_id, not our metadata) is authentic but about no order:
+// the core acknowledges it instead of making Stripe retry for days.
+func TestParseNotificationForeignSession(t *testing.T) {
+	for name, s := range map[string]map[string]any{
+		"metadata missing": withField("metadata", map[string]string{}),
+		"metadata absent":  withField("metadata", nil),
+	} {
+		r, err := parse(t, testConfig(), signed(completed(s), testWebhookSecret, time.Now()))
+		require.NoError(t, err, name)
+		require.Empty(t, r.OutTradeNo, name)
+		require.Equal(t, "evt_test_1", r.EventID, name)
+	}
+}
+
+// Fields the gateway does not read may have any shape: an event in another
+// API version still decodes. payment_intent may also arrive expanded.
+func TestParseNotificationOtherAPIVersion(t *testing.T) {
+	s := testSession()
+	s["payment_intent"] = map[string]any{"id": "pi_test_1", "object": "payment_intent"}
+	s["customer_details"] = "a shape the library's struct does not expect"
+	s["total_details"] = []int{1, 2}
+	r, err := parse(t, testConfig(), signed(completed(s), testWebhookSecret, time.Now()))
+	require.NoError(t, err)
+	require.Equal(t, "pi_test_1", r.TradeNo)
+	require.Equal(t, core.PaymentPaid, r.Status)
+}
+
+func TestConfigValidate(t *testing.T) {
+	require.NoError(t, testConfig().Validate())
+	require.NoError(t, Config{SecretKey: "rk_live_x", WebhookSecret: "whsec_x"}.Validate())
+	err := Config{SecretKey: "pk_live_x", WebhookSecret: "whsec_"}.Validate()
+	require.ErrorIs(t, err, ErrSecretKey)
+	require.ErrorIs(t, err, ErrWebhookSecret)
+	require.ErrorIs(t, Config{SecretKey: "sk_test_x ", WebhookSecret: "whsec_x"}.Validate(), ErrSecretKey)
+	require.NotErrorIs(t, Config{SecretKey: "sk_test_x"}.Validate(), ErrSecretKey)
+	mode, err := Config{SecretKey: "sk_live_x", WebhookSecret: "whsec_x"}.mode()
+	require.NoError(t, err)
+	require.Equal(t, merchantLive, mode)
 }

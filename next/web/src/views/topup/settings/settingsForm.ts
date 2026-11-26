@@ -1,3 +1,5 @@
+import type { Ref } from 'vue'
+import type { ApiClient } from '@sub2api/host'
 import type { PluginSettingsForm, Rules } from '@sub2api/ui'
 import type { GatewayKey, PaymentMethod, PaymentSettingsValue } from '../topup'
 import { brandColor, isLogoType, LOGO_TYPES, parseLogo } from '../components/methodIcon'
@@ -37,8 +39,6 @@ export const SETTINGS_DEFAULTS: Partial<SettingsModel> = {
 /** Currencies users pay in. */
 export const CURRENCIES: readonly string[] = ['CNY', 'USD', 'HKD', 'EUR', 'GBP', 'JPY']
 
-export const GATEWAYS: GatewayKey[] = ['epay', 'stripe']
-
 /** Type keys each gateway knows; epay also takes custom ones (its `type` parameter). */
 export const GATEWAY_TYPES: Record<GatewayKey, string[]> = { epay: ['alipay', 'wxpay', 'qqpay'], stripe: ['stripe'] }
 
@@ -46,8 +46,26 @@ const KNOWN_TYPES = Object.values(GATEWAY_TYPES).flat()
 /** A type key with a translated name (settings.methods.typeName.*). */
 export const isKnownType = (type: string) => KNOWN_TYPES.includes(type)
 
-/** Where a gateway posts its notifications (core route, CONTRACTS: core top-up). */
-export const notifyUrl = (gateway: string) => `${window.location.origin}/api/v1/payment/notify/${gateway}`
+/** Where a gateway posts its notifications: the core's notify_base (from the site address) plus the gateway id; '' while the core gives none. */
+export const notifyUrl = (base: string | undefined, gateway: string) => (base ? `${base.replace(/\/+$/, '')}/${gateway}` : '')
+
+/**
+ * The settings form's API client, which also keeps the core's notify_base
+ * from every read of GET /topup/settings (it is beside the values, which the
+ * settings form does not expose): "" while the site address is not https.
+ */
+export function keepingNotifyBase(api: ApiClient, base: Ref<string>): ApiClient {
+  const get = async (...args: Parameters<ApiClient['get']>) => {
+    const view = await api.get(...args)
+    base.value = typeof view?.notify_base === 'string' ? view.notify_base : ''
+    return view
+  }
+  return { ...api, get }
+}
+
+/** A method's type key and name as the core accepts them (PUT /topup/settings). */
+export const METHOD_TYPE_PATTERN = /^[a-z0-9_]{1,50}$/
+export const METHOD_NAME_MAX = 100
 
 /** Stripe events the webhook endpoint must subscribe to. */
 export const STRIPE_EVENTS = ['checkout.session.completed', 'checkout.session.expired']
@@ -102,35 +120,53 @@ export const bindSwitch = (form: SettingsForm, path: string) => ({ modelValue: !
 
 const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
 
-export function settingsRules(t: Translate): Rules<SettingsModel> {
-  const positive = (v: unknown) => !isNum(v) || v > 0 || t('topup.settings.rule.positive')
-  const epayOn = (m: SettingsModel) => !!m.epay?.enabled
-  const stripeOn = (m: SettingsModel) => !!m.stripe?.enabled
+const positiveRule = (t: Translate) => (v: unknown) => !isNum(v) || v > 0 || t('topup.settings.rule.positive')
+
+/** Rules of the general tab's scalars. */
+function generalRules(t: Translate): Rules<SettingsModel> {
   return {
     currency: { required: true },
-    price: [{ required: true, type: 'number' }, { validator: positive }],
+    price: [{ required: true, type: 'number' }, { validator: positiveRule(t) }],
     min_topup: { required: true, type: 'number', min: 0 },
     max_topup: [
       { required: true, type: 'number' },
       { validator: (v: number, { model }) => !isNum(model.min_topup) || v > model.min_topup || t('topup.settings.rule.maxAboveMin') }
     ],
     order_timeout_minutes: { required: true, type: 'integer', min: 1 },
-    max_pending_orders: { required: true, type: 'integer', min: 1 },
+    max_pending_orders: { required: true, type: 'integer', min: 1 }
+  }
+}
+
+/** Rules of the lists: amount presets, discount tiers and the methods' logos. */
+function listRules(t: Translate): Rules<SettingsModel> {
+  return {
     amount_options: {
       validator: (v: number[] = [], { model }) =>
         v.every((n) => n >= (model.min_topup ?? 0) && n <= (model.max_topup ?? Infinity)) || t('topup.settings.rule.optionRange', { min: model.min_topup, max: model.max_topup })
     },
     'discounts.*.amount': [
       { required: true, type: 'number' },
-      { validator: positive },
+      { validator: positiveRule(t) },
       { validator: (v: number, { model }) => model.discounts.filter((d) => d.amount === v).length < 2 || t('topup.settings.rule.duplicateTier') }
     ],
     'discounts.*.rate': [{ required: true, type: 'number' }, { validator: (v: number) => (v > 0 && v < 1) || t('topup.settings.rule.rate') }],
-    'methods.*.logo': { validator: logoValidator(t) },
+    'methods.*.logo': { validator: logoValidator(t) }
+  }
+}
+
+/** Rules of the built-in gateways' credentials, required while the gateway is on. */
+function gatewayRules(t: Translate): Rules<SettingsModel> {
+  const epayOn = (m: SettingsModel) => !!m.epay?.enabled
+  const stripeOn = (m: SettingsModel) => !!m.stripe?.enabled
+  return {
     'epay.endpoint': { required: true, type: 'url', when: epayOn },
     'epay.merchant_id': { required: true, whitespace: true, when: epayOn },
     'epay.key': { required: true, when: epayOn },
     'stripe.secret_key': [{ required: true, when: stripeOn }, { pattern: /^(sk|rk)_/, message: () => t('topup.settings.rule.stripeKey') }],
     'stripe.webhook_secret': [{ required: true, when: stripeOn }, { pattern: /^whsec_/, message: () => t('topup.settings.rule.webhookSecret') }]
   }
+}
+
+export function settingsRules(t: Translate): Rules<SettingsModel> {
+  return { ...generalRules(t), ...listRules(t), ...gatewayRules(t) }
 }

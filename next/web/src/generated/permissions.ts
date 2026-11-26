@@ -434,7 +434,7 @@ export const PERMISSIONS: Record<PermKey, PermMeta> = {
   },
   'redeem:manage': {
     module: 'redeem',
-    risk: 'sensitive',
+    risk: 'critical',
     stepUp: false,
     requires: ['balance:all:read'],
     description: {

@@ -39,12 +39,7 @@ type checkoutMethod struct {
 // only when it is open and has at least one.
 func (s *Service) checkout(c *gin.Context) {
 	ctx := c.Request.Context()
-	v, err := s.loadSettings(ctx, s.db.Gorm)
-	if err != nil {
-		httpapi.Fail(c, err)
-		return
-	}
-	ms, err := loadMethods(ctx, s.db.Gorm)
+	v, ms, err := s.terms(ctx, s.db.Gorm)
 	if err != nil {
 		httpapi.Fail(c, err)
 		return

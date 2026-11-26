@@ -83,14 +83,24 @@ func takeUsable(ctx context.Context, tx *gorm.DB, hash string) (*model.RedeemCod
 	return &row, err
 }
 
-// credit marks the locked code used by the user and credits its value.
+// credit marks the locked code used by the user and credits its value. The
+// update repeats the unused condition so that the code is spent once even if
+// the lock above were ever taken without re-checking the row.
 func (s *Service) credit(ctx context.Context, tx *gorm.DB, userID int64, row *model.RedeemCode) (*core.LedgerResult, error) {
-	err := store.G(ctx, tx).Model(&model.RedeemCode{}).Where("id = ?", row.ID).Updates(map[string]any{
+	res := store.G(ctx, tx).Model(&model.RedeemCode{}).Where("id = ? AND status = ?", row.ID, statusUnused).Updates(map[string]any{
 		"status": statusUsed, "used_by": userID, "used_at": store.DBNow{}, "updated_at": store.DBNow{},
-	}).Error
-	if err != nil {
-		return nil, err
+	})
+	if res.Error != nil {
+		return nil, res.Error
 	}
+	if res.RowsAffected != 1 {
+		return nil, errInvalidCode(ctx)
+	}
+	return s.apply(ctx, tx, userID, row)
+}
+
+// apply is the ledger credit of a code just marked used.
+func (s *Service) apply(ctx context.Context, tx *gorm.DB, userID int64, row *model.RedeemCode) (*core.LedgerResult, error) {
 	res, err := s.ledger.ApplyTx(ctx, tx, core.LedgerChange{
 		UserID: userID, Amount: row.Value, Credit: true, Kind: kindRedeem,
 		RefType: "redeem_code", RefID: x.Itoa64(row.ID), IdempotencyKey: "redeem:" + row.CodeHash,

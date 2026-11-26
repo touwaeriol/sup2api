@@ -1205,7 +1205,7 @@ var HostPermissionRisk = map[string]string{
 	"scheduler.rank":      RiskHigh,
 	"sticky.clear":        RiskHigh,
 	"notify.send":         RiskHigh, // free-form mail from the deployment to any recipient (phishing), even rate limited
-	PermPaymentGateway:    RiskHigh, // what its gateways verify marks their orders paid (the order's amount, checked by the core)
+	"payment.gateway":     RiskHigh, // what its gateways verify marks their orders paid (the order's amount, checked by the core)
 	"gateway.observe":     RiskHigh,
 	"users.read":          RiskHigh,
 	"ledger.credit":       RiskCritical,

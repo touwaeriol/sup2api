@@ -16,7 +16,8 @@ func (g *generation) PaymentGateways() []core.PaymentGatewayBinding { return g.p
 // addPaymentGateways registers the gateways the plugin declares, named
 // "<plugin id>.<gateway id>". The plugin id makes the names unique; a name
 // already taken is still skipped and marks the plugin abnormal, like a
-// conflicting notification channel.
+// conflicting notification channel. So does a gateway the runtime has no
+// client for: the process does not serve PaymentGatewayService.
 func (g *generation) addPaymentGateways(ext Extension, info core.PluginInfo, m *manifest.Manifest, grants Grants) []core.ResourceConflict {
 	source, ok := ext.(interface {
 		PaymentGateway(id string) core.PaymentGateway
@@ -26,13 +27,9 @@ func (g *generation) addPaymentGateways(ext Extension, info core.PluginInfo, m *
 	}
 	var conflicts []core.ResourceConflict
 	for _, gw := range m.Payments.Gateways {
-		client := source.PaymentGateway(gw.ID)
-		if client == nil {
-			continue
-		}
 		name := manifest.PaymentGatewayName(info.Key, gw.ID)
-		if i := slices.IndexFunc(g.payments, func(b core.PaymentGatewayBinding) bool { return b.Gateway.ID == name }); i >= 0 {
-			reason := "payment gateway already declared by plugin " + g.payments[i].Plugin.Key
+		client := source.PaymentGateway(gw.ID)
+		if reason := g.paymentConflict(name, client); reason != "" {
 			slog.Error("plugin registry: payment gateway skipped, the plugin is abnormal", "plugin", info.Key, "gateway", name, "reason", reason)
 			conflicts = append(conflicts, core.ResourceConflict{Resource: "payment_gateway", ID: name, Reason: reason})
 			continue
@@ -40,6 +37,18 @@ func (g *generation) addPaymentGateways(ext Extension, info core.PluginInfo, m *
 		g.payments = append(g.payments, core.PaymentGatewayBinding{Plugin: info, Gateway: paymentGatewayInfo(name, gw), Client: client})
 	}
 	return conflicts
+}
+
+// paymentConflict is why gateway name cannot be bound to client, "" when
+// it can.
+func (g *generation) paymentConflict(name string, client core.PaymentGateway) string {
+	if client == nil {
+		return "the plugin process does not serve " + manifest.CapPaymentGateway
+	}
+	if i := slices.IndexFunc(g.payments, func(b core.PaymentGatewayBinding) bool { return b.Gateway.ID == name }); i >= 0 {
+		return "payment gateway already declared by plugin " + g.payments[i].Plugin.Key
+	}
+	return ""
 }
 
 func paymentGatewayInfo(name string, gw manifest.PaymentGateway) core.PaymentGatewayInfo {

@@ -26,6 +26,7 @@ type fakeStripe struct {
 	form    url.Values
 	session map[string]any
 	status  int
+	header  http.Header
 }
 
 func newFakeStripe(t *testing.T) *fakeStripe {
@@ -34,6 +35,9 @@ func newFakeStripe(t *testing.T) *fakeStripe {
 		f.method, f.path, f.auth = r.Method, r.URL.Path, r.Header.Get("Authorization")
 		require.NoError(t, r.ParseForm())
 		f.form = r.PostForm
+		for k, v := range f.header {
+			w.Header()[k] = v
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(f.status)
 		require.NoError(t, json.NewEncoder(w).Encode(f.reply()))
@@ -93,6 +97,7 @@ func TestCreatePayment(t *testing.T) {
 	require.Equal(t, "Bearer "+testSecretKey, f.auth)
 	require.Equal(t, url.Values{
 		"mode":                                          {"payment"},
+		"allowed_payment_method_types[0]":               {"card"},
 		"line_items[0][price_data][currency]":           {"usd"},
 		"line_items[0][price_data][unit_amount]":        {"1234"},
 		"line_items[0][price_data][product_data][name]": {"Top-up"},
@@ -102,12 +107,12 @@ func TestCreatePayment(t *testing.T) {
 		"success_url":                                   {"https://site.example.com/wallet"},
 		"cancel_url":                                    {"https://site.example.com/wallet"},
 		"expires_at":                                    {strconv.FormatInt(testNow.Add(2*time.Hour).Unix(), 10)},
-	}, f.form, "exactly these parameters: no promotion codes, no dashboard price")
+	}, f.form, "exactly these parameters: cards only, no promotion codes, no dashboard price")
 }
 
 func TestCreatePaymentZeroDecimalCurrency(t *testing.T) {
 	f := newFakeStripe(t)
-	g, _ := f.gateway(Config{SecretKey: "rk_live_x"})
+	g, _ := f.gateway(Config{SecretKey: "rk_live_x", WebhookSecret: testWebhookSecret})
 	got, err := g.CreatePayment(context.Background(), testCreate("1500", "JPY"))
 	require.NoError(t, err)
 	require.Equal(t, merchantLive, got.MerchantRef)
@@ -121,11 +126,12 @@ func TestCreatePaymentRefusesBeforeCallingStripe(t *testing.T) {
 		cfg Config
 		in  core.PaymentCreate
 	}{
-		"inexact amount":  {testConfig(), testCreate("12.345", "USD")},
-		"fractional JPY":  {testConfig(), testCreate("10.5", "JPY")},
-		"zero amount":     {testConfig(), testCreate("0", "USD")},
-		"no secret key":   {Config{}, testCreate("1", "USD")},
-		"publishable key": {Config{SecretKey: "pk_test_x"}, testCreate("1", "USD")},
+		"inexact amount":    {testConfig(), testCreate("12.345", "USD")},
+		"fractional JPY":    {testConfig(), testCreate("10.5", "JPY")},
+		"zero amount":       {testConfig(), testCreate("0", "USD")},
+		"no secret key":     {Config{WebhookSecret: testWebhookSecret}, testCreate("1", "USD")},
+		"publishable key":   {Config{SecretKey: "pk_test_x", WebhookSecret: testWebhookSecret}, testCreate("1", "USD")},
+		"no webhook secret": {Config{SecretKey: testSecretKey}, testCreate("1", "USD")},
 	} {
 		t.Run(name, func(t *testing.T) {
 			g, tr := f.gateway(tc.cfg)
@@ -136,9 +142,12 @@ func TestCreatePaymentRefusesBeforeCallingStripe(t *testing.T) {
 	}
 }
 
+// The answer is one the library retries by default (a 500 that asks for a
+// retry), so a single request proves its retries are off.
 func TestCreatePaymentStripeError(t *testing.T) {
 	f := newFakeStripe(t)
-	f.status = http.StatusBadRequest
+	f.status = http.StatusInternalServerError
+	f.header = http.Header{"Stripe-Should-Retry": {"true"}}
 	g, tr := f.gateway(testConfig())
 	_, err := g.CreatePayment(context.Background(), testCreate("1", "USD"))
 	require.ErrorContains(t, err, "create checkout session")
@@ -201,6 +210,15 @@ func requireQueried(t *testing.T, f *fakeStripe, r *core.PaymentResult) {
 	require.Equal(t, "USD", r.Currency)
 	require.Equal(t, merchantTest, r.MerchantRef)
 	require.Empty(t, r.EventID)
+}
+
+func TestQueryPaymentForeignSession(t *testing.T) {
+	f := newFakeStripe(t)
+	delete(f.session, "metadata")
+	g, _ := f.gateway(testConfig())
+	r, err := g.QueryPayment(context.Background(), core.PaymentQuery{OutTradeNo: testOutTradeNo, SessionID: "cs_test_a1"})
+	require.NoError(t, err)
+	require.Empty(t, r.OutTradeNo, "a session without our metadata is about no order")
 }
 
 func TestQueryPaymentRejects(t *testing.T) {

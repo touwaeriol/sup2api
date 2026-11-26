@@ -7,23 +7,22 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/core"
 )
 
-// notifyParams is the whitelist of notification parameters: the protocol's
-// fields (pid … sign_type, param) and the extensions common Epay forks
-// sign and send (api_trade_no, buyer). Any other parameter is refused
-// rather than ignored: every parameter a sender adds takes part in the
-// signature, so an unknown one means a protocol variant nobody has
-// reviewed, and failing closed shows up as rejected events the operator
-// can see (the order is still recovered by the status query).
-var notifyParams = map[string]bool{
-	"pid": true, "trade_no": true, "out_trade_no": true, "type": true,
-	"name": true, "money": true, "trade_status": true, "param": true,
-	"sign": true, "sign_type": true, "api_trade_no": true, "buyer": true,
-}
+// paramKey is the shape every notification parameter name must have. The
+// protocol's fields (pid … sign_type, param) and the extensions forks add
+// (api_trade_no, buyer, timestamp, …) all fit it. A parameter outside the
+// protocol is accepted rather than refused because every non-empty
+// parameter takes part in the signature: with '&' and '=' refused in
+// values and repeated names refused, the signed string is unambiguous, so
+// a sender cannot add one without the key, while refusing a fork's signed
+// extension would reject every payment of that merchant. Only the
+// whitelisted fields (recordedFields) are ever stored.
+var paramKey = regexp.MustCompile(`^[a-z_]{1,32}$`)
 
 // requiredParams are always sent by Epay; without them the core could not
 // match the order, amount, method and trade number.
@@ -78,9 +77,9 @@ func notificationParams(n core.PaymentNotification) (string, error) {
 }
 
 // parseParams splits the parameters itself instead of using url.ParseQuery,
-// which silently keeps repeated keys: a repeated, unknown or malformed
-// parameter, or a value containing '&' or '=', makes the notification
-// ambiguous and is refused.
+// which silently keeps repeated keys: a repeated or malformed parameter, a
+// name outside paramKey, or a value containing '&' or '=', makes the
+// notification ambiguous and is refused.
 func parseParams(raw string) (map[string]string, error) {
 	if raw == "" {
 		return nil, rejected("has no parameters")
@@ -109,9 +108,10 @@ func parsePair(pair string) (string, string, error) {
 	if kerr != nil || verr != nil {
 		return "", "", rejected("has a malformed escape")
 	}
-	// The unknown key is not echoed: it comes from the request.
-	if !notifyParams[key] {
-		return "", "", rejected("has a parameter outside the whitelist")
+	// A name of the wrong shape is not echoed: it comes from the request.
+	// Names that pass paramKey are short lower-case words, safe to quote.
+	if !paramKey.MatchString(key) {
+		return "", "", rejected("has a malformed parameter name")
 	}
 	if strings.ContainsAny(value, "&=") {
 		return "", "", rejected("parameter " + key + " contains '&' or '='")

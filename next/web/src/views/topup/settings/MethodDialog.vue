@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // Add / edit one payment method (a draft; the page saves the whole list).
-// The type key is picked from the gateway's known keys or typed in, and must
+// It is served by a built-in gateway or a plugin's; the type key is picked
+// from the gateway's known keys (a plugin's templates) or typed in, and must
 // be unique: users' orders name their method by it. Its mark is a built-in
 // icon on a color or a custom image; only the chosen one is saved.
 import { computed, ref, watch } from 'vue'
@@ -9,9 +10,10 @@ import { useTopup, type PaymentMethod } from '../topup'
 import MethodIcon from '../components/MethodIcon.vue'
 import { BUILTIN_ICONS, brandColor, builtinIcon } from '../components/methodIcon'
 import LogoUpload from './LogoUpload.vue'
-import { GATEWAY_TYPES, GATEWAYS, isKnownType, logoValidator } from './settingsForm'
+import type { GatewayCatalog } from './gatewayCatalog'
+import { logoValidator, METHOD_NAME_MAX, METHOD_TYPE_PATTERN } from './settingsForm'
 
-const props = defineProps<{ open: boolean; method: PaymentMethod; editing: boolean; taken: string[] }>()
+const props = defineProps<{ open: boolean; method: PaymentMethod; editing: boolean; taken: string[]; gateways: GatewayCatalog }>()
 const emit = defineEmits<{ (e: 'update:open', v: boolean): void; (e: 'submit', m: PaymentMethod): void }>()
 const host = useTopup()
 const t = host.t
@@ -22,10 +24,10 @@ const draft = ref<Draft>({ ...props.method })
 const mode = ref<IconMode>(props.method.logo ? 'custom' : 'builtin')
 const custom = () => mode.value === 'custom'
 const rules: Rules<Draft> = {
-  name: { required: true, whitespace: true, max: 32 },
-  gateway: { required: true, enum: GATEWAYS },
+  name: { required: true, whitespace: true, max: METHOD_NAME_MAX },
+  gateway: { required: true },
   type: [
-    { required: true, max: 32, pattern: /^[a-z0-9_-]+$/, message: () => t('topup.settings.methods.rule.typeKey') },
+    { required: true, pattern: METHOD_TYPE_PATTERN, message: () => t('topup.settings.methods.rule.typeKey') },
     { validator: (v: string) => !props.taken.includes(v) || t('topup.settings.methods.rule.typeTaken') }
   ],
   color: { pattern: /^#[0-9a-fA-F]{6}$/, message: () => t('topup.settings.methods.rule.color') },
@@ -49,12 +51,11 @@ watch(
 // A message of the hidden mode would come back stale.
 watch(mode, () => form.clearValidate('logo'))
 
-const gatewayOptions = computed(() => GATEWAYS.map((g) => ({ value: g, label: t(`topup.gateway.${g}`) })))
 const modeOptions = computed(() => (['builtin', 'custom'] as const).map((m) => ({ value: m, label: t(`topup.settings.methods.iconMode.${m}`) })))
 /** The method as users will see it: the image only in custom mode. */
 const look = computed(() => (custom() ? draft.value : { ...draft.value, logo: undefined }))
 
-const typeLabel = (k: string) => (isKnownType(k) ? t(`topup.settings.methods.typeName.${k}`) : k)
+const typeLabel = (k: string) => props.gateways.typeName(draft.value.gateway, k)
 const iconLabel = (k: string) => (builtinIcon(k) ? t(`topup.settings.methods.iconName.${k}`) : k)
 
 /** Known keys plus the current one when typed in. */
@@ -62,9 +63,11 @@ function keyOptions(keys: string[], current: string, label: (k: string) => strin
   const all = current && !keys.includes(current) ? [...keys, current] : keys
   return all.map((k) => ({ value: k, label: label(k), hint: label(k) === k ? undefined : k }))
 }
+/** Every gateway, plus the method's own should it no longer be listed. */
+const gatewayOptions = computed(() => keyOptions(props.gateways.options.value.map((o) => String(o.value)), draft.value.gateway, props.gateways.label))
 /** Keys of the other methods show as taken. */
 const typeOptions = computed(() =>
-  keyOptions(GATEWAY_TYPES[draft.value.gateway] ?? [], draft.value.type, typeLabel).map((o) =>
+  keyOptions(props.gateways.types(draft.value.gateway), draft.value.type, typeLabel).map((o) =>
     props.taken.includes(String(o.value)) ? { ...o, disabled: true, tag: t('topup.settings.methods.taken') } : o
   )
 )
@@ -74,17 +77,19 @@ const iconOptions = computed(() => keyOptions(Object.keys(BUILTIN_ICONS), draft.
 function pickType(type: string) {
   const prev = draft.value.type
   form.set('type', type)
-  if (!isKnownType(type)) return
+  if (!props.gateways.types(draft.value.gateway).includes(type)) return
   if (!draft.value.name || draft.value.name === typeLabel(prev)) form.set('name', typeLabel(type))
   if (!draft.value.icon || draft.value.icon === prev) form.set('icon', type)
   if (!draft.value.color || draft.value.color === brandColor(prev)) form.set('color', brandColor(type))
 }
 
-/** Another gateway drops a type key it does not know (epay keeps custom ones). */
-function pickGateway(gateway: PaymentMethod['gateway']) {
+/** Another gateway drops a known type key it does not know (typed ones stay); one with a single known key picks it. */
+function pickGateway(gateway: string) {
+  const knew = props.gateways.types(draft.value.gateway).includes(draft.value.type)
   form.set('gateway', gateway)
-  if (isKnownType(draft.value.type) && !GATEWAY_TYPES[gateway].includes(draft.value.type)) form.set('type', '')
-  if (gateway === 'stripe' && !props.taken.includes('stripe')) pickType('stripe')
+  const types = props.gateways.types(gateway)
+  if (knew && !types.includes(draft.value.type)) form.set('type', '')
+  if (types.length === 1 && !props.taken.includes(types[0])) pickType(types[0])
 }
 
 async function submit() {
@@ -116,7 +121,7 @@ async function submit() {
         </div>
         <SGrid :cols="2" :gap="4">
           <SField prop="gateway" :label="t('topup.settings.methods.gateway')">
-            <SSelect :model-value="draft.gateway" :options="gatewayOptions" data-autofocus @update:model-value="pickGateway($event as PaymentMethod['gateway'])" />
+            <SSelect :model-value="draft.gateway" :options="gatewayOptions" data-autofocus @update:model-value="pickGateway(String($event))" />
           </SField>
           <SField prop="type" :label="t('topup.settings.methods.type')" :hint="t('topup.settings.methods.typeHint')">
             <SSelect
@@ -131,7 +136,7 @@ async function submit() {
           </SField>
         </SGrid>
         <SField prop="name" :label="t('topup.settings.methods.name')" :hint="t('topup.settings.methods.nameHint')">
-          <SInput v-bind="form.bind('name')" :maxlength="32" :placeholder="t('topup.settings.methods.namePlaceholder')" />
+          <SInput v-bind="form.bind('name')" :maxlength="METHOD_NAME_MAX" :placeholder="t('topup.settings.methods.namePlaceholder')" />
         </SField>
         <SField :label="t('topup.settings.methods.icon')">
           <SSegmented v-model="mode" :options="modeOptions" size="sm" data-testid="payment-icon-mode" />

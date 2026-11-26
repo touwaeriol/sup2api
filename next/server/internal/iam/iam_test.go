@@ -453,7 +453,7 @@ func TestHTTP(t *testing.T) {
 	// A superuser sees every core section that has items. security has no
 	// core item (only plugins join it, CONTRACTS §90) and empty sections are
 	// dropped; finance has the balance ledger.
-	if code, out = c.do("GET", "/me/menus", tok, nil); code != 200 || sectionKeys(out["data"]) != "overview,gateway,finance,users,plugins,system,me" {
+	if code, out = c.do("GET", "/me/menus", tok, nil); code != 200 || sectionKeys(out["data"]) != "overview,gateway,finance,topup,users,plugins,system,me" {
 		t.Fatalf("menus: %d %v", code, out)
 	}
 	if code, out = c.do("GET", "/permissions", tok, nil); code != 200 {

@@ -138,14 +138,9 @@ func startHost(t testing.TB, opts Options) (*FakeHost, *grpc.Server, func(uint32
 // Start so both servers are stopped in one place.
 func startPlugin(t testing.TB, p any, opts Options, fh *FakeHost, dialHost func(uint32) (*grpc.ClientConn, error)) (*grpc.Server, *grpc.ClientConn, *Harness) {
 	t.Helper()
-	sdkOpts := []pluginsdk.Option{pluginsdk.WithStrictNetwork(pluginsdk.StrictNever)}
-	if opts.Manifest != nil {
-		sdkOpts = append(sdkOpts, pluginsdk.WithManifest(opts.Manifest))
-	}
-	sdkOpts = append(sdkOpts, opts.SDK...)
 	plugLis := bufconn.Listen(1 << 20)
 	plugSrv := pluginsdk.NewGRPCServer(opts.PluginServer)
-	if err := pluginsdk.Register(plugSrv, p, dialHost, sdkOpts...); err != nil {
+	if err := pluginsdk.Register(plugSrv, p, dialHost, sdkOptions(opts)...); err != nil {
 		t.Fatalf("pluginsdktest: register: %v", err)
 	}
 	go func() { _ = plugSrv.Serve(plugLis) }()
@@ -154,7 +149,22 @@ func startPlugin(t testing.TB, p any, opts Options, fh *FakeHost, dialHost func(
 	if err != nil {
 		t.Fatalf("pluginsdktest: dial plugin: %v", err)
 	}
-	return plugSrv, conn, &Harness{
+	return plugSrv, conn, newHarness(t, fh, conn)
+}
+
+// sdkOptions are the Register options of opts: strict network off and the
+// manifest, then the test's own.
+func sdkOptions(opts Options) []pluginsdk.Option {
+	sdkOpts := []pluginsdk.Option{pluginsdk.WithStrictNetwork(pluginsdk.StrictNever)}
+	if opts.Manifest != nil {
+		sdkOpts = append(sdkOpts, pluginsdk.WithManifest(opts.Manifest))
+	}
+	return append(sdkOpts, opts.SDK...)
+}
+
+// newHarness is the harness of the plugin served on conn.
+func newHarness(t testing.TB, fh *FakeHost, conn *grpc.ClientConn) *Harness {
+	return &Harness{
 		T: t, Host: fh, Conn: conn,
 		Plugin:    pluginv1.NewPluginServiceClient(conn),
 		Platform:  pluginv1.NewPlatformServiceClient(conn),

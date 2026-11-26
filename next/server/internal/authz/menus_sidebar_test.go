@@ -40,6 +40,9 @@ type sidebarFixture struct {
 	s     *Service
 	reg   *fakeRegistry
 	admin int64
+	// super defines the test roles: only it holds the superOnly keys
+	// (redeem:manage) a role may need.
+	super int64
 }
 
 func newSidebarFixture(t *testing.T) sidebarFixture {
@@ -61,6 +64,7 @@ func newSidebarFixture(t *testing.T) sidebarFixture {
 		t.Fatal(err)
 	}
 	f.admin = addUser(t, f.s, "a@x.com", RoleAdmin)
+	f.super = addUser(t, f.s, "s@x.com", RoleSuperAdmin)
 	eventually(t, func() bool { ok, _ := f.s.Can(ctx, f.admin, "plugin.guard:stats:read"); return ok })
 	return f
 }
@@ -109,7 +113,7 @@ func (f sidebarFixture) sameAsUI(userID int64, menus []MenuSection) {
 // role adds a user with a new role of the permissions.
 func (f sidebarFixture) role(key string, perms ...string) int64 {
 	f.t.Helper()
-	role, err := f.s.CreateRole(context.Background(), f.admin, CreateRoleInput{Key: key, Name: core.LocalizedText{"en": key}, PermissionKeys: perms})
+	role, err := f.s.CreateRole(context.Background(), f.super, CreateRoleInput{Key: key, Name: core.LocalizedText{"en": key}, PermissionKeys: perms})
 	if err != nil {
 		f.t.Fatal(err)
 	}

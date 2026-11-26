@@ -2,12 +2,9 @@ package payment
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"log/slog"
 
-	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
@@ -56,11 +53,10 @@ func (s *Service) credit(ctx context.Context, id int64) error {
 // claimLease takes the crediting lease of a paid order when it is free or
 // ran out; "" when another worker holds it.
 func (s *Service) claimLease(ctx context.Context, id int64) (string, error) {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
+	token, err := randomHex()
+	if err != nil {
 		return "", err
 	}
-	token := hex.EncodeToString(b[:])
 	res := store.G(ctx, s.db.Gorm).Model(&model.PaymentOrder{}).
 		Where("id = ? AND status = ? AND (lease_until IS NULL OR lease_until < now())", id, statusPaid).
 		Updates(map[string]any{"lease_token": token,
@@ -86,7 +82,7 @@ func (s *Service) creditTx(ctx context.Context, id int64, token string) ([]*core
 		if err := store.XactLock(ctx, tx, "topup:user:"+x.Itoa64(userID)); err != nil {
 			return err
 		}
-		if err := checkLimits(ctx, tx, o); err != nil {
+		if err := s.checkLimits(ctx, tx, o); err != nil {
 			return err
 		}
 		if out, err = s.applyLedger(ctx, tx, o); err != nil {
@@ -113,24 +109,6 @@ func lockLeased(ctx context.Context, tx *gorm.DB, id int64, token string) (*mode
 		return nil, nil
 	}
 	return &o, err
-}
-
-// checkLimits refuses a credit past the single or the daily limit.
-func checkLimits(ctx context.Context, tx *gorm.DB, o *model.PaymentOrder) error {
-	total := o.Amount.Add(o.Bonus)
-	if total.GreaterThan(maxCreditPerTx) {
-		return refusal{"credit exceeds the single top-up limit " + maxCreditPerTx.String()}
-	}
-	var day decimal.NullDecimal
-	err := store.G(ctx, tx).Model(&model.PaymentOrder{}).Select("sum(amount + bonus)").
-		Where("user_id = ? AND status = ? AND completed_at > now() - interval '1 day'", o.UserID, statusCompleted).Row().Scan(&day)
-	if err != nil {
-		return err
-	}
-	if day.Decimal.Add(total).GreaterThan(maxCreditPerDay) {
-		return refusal{"credit exceeds the daily top-up limit " + maxCreditPerDay.String()}
-	}
-	return nil
 }
 
 // applyLedger credits the top-up and its promo bonus as two ledger rows
@@ -170,10 +148,19 @@ func finishLease(ctx context.Context, tx *gorm.DB, id int64, token, status strin
 	return res.Error
 }
 
-// failCredit fails a paid order whose credit was refused.
+// appendReason adds reason to the order's fail_reason, keeping one it
+// already has (a late payment that lost its promo bonus).
+const appendReason = "CASE WHEN fail_reason = '' THEN ? ELSE fail_reason || '; ' || ? END"
+
+// failCredit fails a paid order whose credit was refused and gives back
+// the promo use it holds: the bonus will never be credited.
 func (s *Service) failCredit(ctx context.Context, id int64, token, reason string) error {
 	slog.WarnContext(ctx, "payment: credit refused", "order_id", id, "reason", reason)
 	return s.db.Tx(ctx, func(tx *gorm.DB) error {
-		return finishLease(ctx, tx, id, token, statusFailed, map[string]any{"fail_reason": reason})
+		set := map[string]any{"fail_reason": clause.Expr{SQL: appendReason, Vars: []any{reason, reason}}}
+		if err := finishLease(ctx, tx, id, token, statusFailed, set); err != nil {
+			return err
+		}
+		return releaseUse(ctx, tx, id)
 	})
 }

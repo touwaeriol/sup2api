@@ -1,28 +1,31 @@
 <script setup lang="ts">
 // Methods tab: the payment methods users pick from, in the order shown to
 // them (drag to reorder), each served by one gateway. Methods are added
-// from a template or the dialog; methods whose gateway is off are flagged.
+// from a template or the dialog; methods whose gateway is off (a built-in
+// one switched off, a plugin one not answering) are flagged.
 import { computed, ref } from 'vue'
 import { SAlert, SBadge, SButton, SDropdown, SEmpty, SRowAction, SSettingsGroup, SSwitch, STable, type MenuAction, type TableColumn } from '@sub2api/ui'
-import { useTopup, type GatewayKey, type PaymentMethod } from '../topup'
+import { useTopup, type PaymentMethod } from '../topup'
 import MethodDialog from './MethodDialog.vue'
 import MethodName from '../components/MethodName.vue'
-import { bindSwitch, GATEWAYS, newMethod, TEMPLATE_KEYS, templateType, type SettingsForm, type SettingsTab, type TemplateKey } from './settingsForm'
+import type { GatewayCatalog } from './gatewayCatalog'
+import { bindSwitch, newMethod, TEMPLATE_KEYS, templateType, type SettingsForm, type SettingsTab, type TemplateKey } from './settingsForm'
 
-const props = defineProps<{ form: SettingsForm }>()
+const props = defineProps<{ form: SettingsForm; gateways: GatewayCatalog }>()
 const emit = defineEmits<{ (e: 'go', tab: SettingsTab): void }>()
 const host = useTopup()
 const t = host.t
 
 const methods = computed(() => props.form.get<PaymentMethod[]>('methods') ?? [])
 const setMethods = (list: PaymentMethod[]) => props.form.set('methods', list)
-const gatewayOn = (g: GatewayKey) => !!props.form.get(`${g}.enabled`)
+const gatewayOn = (g: string) => props.gateways.isOn(g)
 const taken = computed(() => new Set(methods.value.map((m) => m.type)))
 
 /** Gateways that are off while enabled methods use them. */
-const idleGateways = computed(() =>
-  GATEWAYS.map((gateway) => ({ gateway, count: methods.value.filter((m) => m.gateway === gateway && m.enabled).length })).filter((g) => g.count && !gatewayOn(g.gateway))
-)
+const idleGateways = computed(() => {
+  const used = [...new Set(methods.value.filter((m) => m.enabled).map((m) => m.gateway))]
+  return used.filter((gateway) => !gatewayOn(gateway)).map((gateway) => ({ gateway, count: methods.value.filter((m) => m.gateway === gateway && m.enabled).length }))
+})
 /** Top-up is on but users would see no method. */
 const noneUsable = computed(() => !!props.form.get('enabled') && !methods.value.some((m) => m.enabled && gatewayOn(m.gateway)))
 
@@ -74,7 +77,7 @@ function fromTemplate(key: string) {
 
 <template>
   <SAlert v-for="g in idleGateways" :key="g.gateway" tone="warning" dense data-testid="payment-idle-gateway">
-    {{ t('topup.settings.methods.gatewayOff', { gateway: t(`topup.gateway.${g.gateway}`), count: g.count }) }}
+    {{ t('topup.settings.methods.gatewayOff', { gateway: gateways.label(g.gateway), count: g.count }) }}
     <template #actions>
       <SButton size="sm" @click="emit('go', 'gateways')">{{ t('topup.settings.methods.toGateways') }}</SButton>
     </template>
@@ -99,7 +102,7 @@ function fromTemplate(key: string) {
         <template #cell-type="{ row }"><code class="payment-code">{{ row.type }}</code></template>
         <template #cell-gateway="{ row }">
           <span class="payment-method-name">
-            {{ t(`topup.gateway.${row.gateway}`) }}
+            {{ gateways.label(row.gateway) }}
             <SBadge v-if="!gatewayOn(row.gateway)" tone="warning" size="xs">{{ t('topup.settings.methods.gatewayOffBadge') }}</SBadge>
           </span>
         </template>
@@ -118,5 +121,5 @@ function fromTemplate(key: string) {
     </div>
   </SSettingsGroup>
 
-  <MethodDialog v-if="editing" v-model:open="dialogOpen" :method="editing.method" :editing="editing.index >= 0" :taken="otherTypes" @submit="save" />
+  <MethodDialog v-if="editing" v-model:open="dialogOpen" :method="editing.method" :editing="editing.index >= 0" :taken="otherTypes" :gateways="gateways" @submit="save" />
 </template>

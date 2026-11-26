@@ -42,5 +42,8 @@ export interface Redeemed {
   balance: string
 }
 
+/** Decimals a code's value is shown with: the ledger's 8, trailing zeros dropped (formatMoney keeps two). */
+export const REDEEM_DIGITS = 8
+
 /** A listed code, masked: only its last 4 characters are known. */
 export const maskCode = (tail: string) => `••••-••••-••••-${tail}`

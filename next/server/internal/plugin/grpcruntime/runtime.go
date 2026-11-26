@@ -124,10 +124,10 @@ type Concurrency struct {
 	// scheduler, classify). Default 64.
 	Hot int
 	// Console: credential checks, test and model requests, plugin HTTP
-	// routes. Default 16.
+	// routes, payment creation and notifications. Default 16.
 	Console int
-	// Background: jobs, events, broadcasts, monitors, refresh and data
-	// migrations. Default 8.
+	// Background: jobs, events, broadcasts, monitors, refresh, data
+	// migrations and payment status queries (the top-up sweep). Default 8.
 	Background int
 	// Platform Execute calls have no class limit: the account and API key
 	// slots of the core bound their concurrency. They are still counted in

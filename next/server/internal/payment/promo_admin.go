@@ -85,7 +85,7 @@ func (in promoInput) columns(ctx context.Context) (map[string]any, error) {
 func (in promoInput) amounts(f *fieldErrs, set map[string]any) {
 	if in.BonusAmount != nil {
 		b := in.BonusAmount.Decimal
-		f.check(b.IsPositive() && b.LessThanOrEqual(maxCreditPerTx) && b.Equal(b.Round(8)), "bonus_amount",
+		f.check(b.IsPositive() && b.LessThanOrEqual(maxCreditPerTx) && exact(b, 8), "bonus_amount",
 			"must be above 0 and within the single credit limit", "必须大于 0 且不超过单次入账上限")
 		set["bonus_amount"] = b
 	}

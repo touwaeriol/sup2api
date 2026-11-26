@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS payment_orders (
     merchant_ref        varchar(200)  NOT NULL DEFAULT '',
     promo_code_id       bigint        REFERENCES promo_codes(id) ON DELETE SET NULL,
     promo_code          varchar(64)   NOT NULL DEFAULT '',
-    trade_no            varchar(200)  UNIQUE,
+    trade_no            varchar(200),                   -- the gateway's transaction number
     gateway_session_id  varchar(200)  NOT NULL DEFAULT '',
     pay_url             text          NOT NULL DEFAULT '',
     qr_code             text          NOT NULL DEFAULT '',
@@ -70,7 +70,10 @@ CREATE TABLE IF NOT EXISTS payment_orders (
     paid_at             timestamptz,
     completed_at        timestamptz,
     created_at          timestamptz   NOT NULL DEFAULT now(),
-    updated_at          timestamptz   NOT NULL DEFAULT now()
+    updated_at          timestamptz   NOT NULL DEFAULT now(),
+    -- one gateway transaction pays one order; numbers of different gateways
+    -- may coincide
+    UNIQUE (gateway, trade_no)
 );
 CREATE INDEX IF NOT EXISTS payment_orders_user_idx ON payment_orders (user_id, id DESC);
 CREATE INDEX IF NOT EXISTS payment_orders_status_idx ON payment_orders (status, expires_at);
@@ -122,8 +125,10 @@ CREATE TABLE IF NOT EXISTS redeem_codes (
 CREATE INDEX IF NOT EXISTS redeem_codes_status_idx ON redeem_codes (status, id DESC);
 
 -- What the payment plugin holds: promo codes (their usages pointed at the
--- plugin's orders, so only the counts come along) and the redeem codes not
--- used yet, by hash (the plugin hashed the upper-case code the same way).
+-- plugin's orders, so only the counts come along; a code longer than the
+-- core's 64 characters stays behind, deploy/rollback counts them) and the
+-- redeem codes not used yet, by hash (the plugin hashed the upper-case code
+-- the same way).
 DO $$
 BEGIN
     IF to_regclass('plg_payment__promo_codes') IS NOT NULL THEN
@@ -132,6 +137,7 @@ BEGIN
                CASE WHEN status = 'active' THEN 'active' ELSE 'disabled' END,
                expires_at, coalesce(notes, ''), created_at, updated_at
           FROM plg_payment__promo_codes
+         WHERE length(code) <= 64
         ON CONFLICT (code) DO NOTHING;
     END IF;
     IF to_regclass('plg_payment__redeem_codes') IS NOT NULL THEN

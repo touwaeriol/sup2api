@@ -134,18 +134,8 @@ func TestRedeemConcurrentOnce(t *testing.T) {
 	for i := range users {
 		users[i] = testutil.InsertUser(t, f.db, fmt.Sprintf("rd-race-%d@x.test", i))
 	}
-	var wg sync.WaitGroup
-	errs := make([]error, len(users))
-	for i, u := range users {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			_, errs[i] = f.svc.Redeem(context.Background(), u, code)
-		}()
-	}
-	wg.Wait()
 	won := 0
-	for _, err := range errs {
+	for _, err := range f.redeemAtOnce(code, users) {
 		if err == nil {
 			won++
 			continue
@@ -156,6 +146,21 @@ func TestRedeemConcurrentOnce(t *testing.T) {
 	var credited int64
 	require.NoError(t, f.db.Gorm.Model(&model.BalanceLedger{}).Where("kind = ?", "redeem").Count(&credited).Error)
 	require.EqualValues(t, 1, credited)
+}
+
+// redeemAtOnce has every user redeem code concurrently and returns their errors.
+func (f *fixture) redeemAtOnce(code string, users []int64) []error {
+	var wg sync.WaitGroup
+	errs := make([]error, len(users))
+	for i, u := range users {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, errs[i] = f.svc.Redeem(context.Background(), u, code)
+		}()
+	}
+	wg.Wait()
+	return errs
 }
 
 // failingLedger writes the credit and then fails, as a ledger error after

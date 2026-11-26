@@ -8,15 +8,20 @@ import { computed, ref, watch } from 'vue'
 import { SSettingsPage, STabs, usePluginSettings } from '@sub2api/ui'
 import { useTopup } from '../topup'
 import GatewaysPanel from './GatewaysPanel.vue'
+import { useGatewayCatalog } from './gatewayCatalog'
 import PluginGateways from './PluginGateways.vue'
 import GeneralPanel from './GeneralPanel.vue'
 import MethodsEditor from './MethodsEditor.vue'
-import { SETTINGS_DEFAULTS, SETTINGS_TABS, settingsRules, tabOfPath, type SettingsModel, type SettingsTab } from './settingsForm'
+import { keepingNotifyBase, SETTINGS_DEFAULTS, SETTINGS_TABS, settingsRules, tabOfPath, type SettingsModel, type SettingsTab } from './settingsForm'
 import './settings.css'
 
 const host = useTopup()
 const t = host.t
-const settings = usePluginSettings<SettingsModel>({ pluginKey: 'topup', path: '/topup/settings', api: host.api, rules: () => settingsRules(t), defaults: SETTINGS_DEFAULTS })
+/** The core's notify address base, read with the settings ("" while the site address is not https). */
+const notifyBase = ref('')
+const api = keepingNotifyBase(host.api, notifyBase)
+const settings = usePluginSettings<SettingsModel>({ pluginKey: 'topup', path: '/topup/settings', api, rules: () => settingsRules(t), defaults: SETTINGS_DEFAULTS })
+const gateways = useGatewayCatalog(settings)
 const tab = ref<SettingsTab>('general')
 
 /** Errors shown per tab (rules and the server's field errors). */
@@ -40,10 +45,10 @@ watch(errorCount, (n) => {
     <STabs v-model="tab" :tabs="tabs" :aria-label="t('topup.settings.title')">
       <template #default="{ active }">
         <GeneralPanel v-if="active === 'general'" :form="settings" />
-        <MethodsEditor v-else-if="active === 'methods'" :form="settings" @go="tab = $event" />
+        <MethodsEditor v-else-if="active === 'methods'" :form="settings" :gateways="gateways" @go="tab = $event" />
         <template v-else>
-          <GatewaysPanel :form="settings" />
-          <PluginGateways />
+          <GatewaysPanel :form="settings" :notify-base="notifyBase" />
+          <PluginGateways :notify-base="notifyBase" :gateways="gateways" />
         </template>
       </template>
     </STabs>

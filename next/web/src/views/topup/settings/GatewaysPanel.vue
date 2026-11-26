@@ -2,21 +2,19 @@
 // Gateways tab: Epay and Stripe credentials. Secrets come back as "******"
 // (left empty = kept); the callback addresses are this site's webhook route.
 import { computed } from 'vue'
-import { SBadge, SChip, SCopyButton, SInput, SSecretInput, SSettingRow, SSettingsGroup, SSwitch } from '@sub2api/ui'
-import { useTopup, type GatewayKey, type PaymentMethod } from '../topup'
-import { bindSwitch, STRIPE_EVENTS, notifyUrl, type SettingsForm } from './settingsForm'
+import { SBadge, SChip, SInput, SSecretInput, SSettingRow, SSettingsGroup, SSwitch } from '@sub2api/ui'
+import { BUILTIN_GATEWAYS, useTopup, type GatewayKey, type PaymentMethod } from '../topup'
+import NotifyAddress from './NotifyAddress.vue'
+import { bindSwitch, STRIPE_EVENTS, type SettingsForm } from './settingsForm'
 
-const props = defineProps<{ form: SettingsForm }>()
+const props = defineProps<{ form: SettingsForm; notifyBase: string }>()
 const host = useTopup()
 const t = host.t
 
-const urls = { epay: notifyUrl('epay'), stripe: notifyUrl('stripe') }
-
-/** How many methods each gateway serves, for its header. */
+/** How many methods each built-in gateway serves, for its header. */
 const usage = computed(() => {
-  const n: Record<GatewayKey, number> = { epay: 0, stripe: 0 }
-  for (const m of props.form.get<PaymentMethod[]>('methods') ?? []) n[m.gateway]++
-  return n
+  const methods = props.form.get<PaymentMethod[]>('methods') ?? []
+  return Object.fromEntries(BUILTIN_GATEWAYS.map((g) => [g, methods.filter((m) => m.gateway === g).length])) as Record<GatewayKey, number>
 })
 
 const on = (g: GatewayKey) => !!props.form.get(`${g}.enabled`)
@@ -41,10 +39,7 @@ const on = (g: GatewayKey) => !!props.form.get(`${g}.enabled`)
       <SSecretInput v-bind="form.bind('epay.key')" class="payment-control-wide" />
     </SSettingRow>
     <SSettingRow :label="t('topup.settings.gateways.epay.notify')" :description="t('topup.settings.gateways.epay.notifyHelp')" stacked>
-      <div class="payment-url">
-        <SInput :model-value="urls.epay" readonly mono :aria-label="t('topup.settings.gateways.epay.notify')" />
-        <SCopyButton :text="urls.epay" icon-only :label="t('topup.action.copy')" />
-      </div>
+      <NotifyAddress :base="notifyBase" gateway="epay" :label="t('topup.settings.gateways.epay.notify')" />
     </SSettingRow>
   </SSettingsGroup>
 
@@ -69,10 +64,7 @@ const on = (g: GatewayKey) => !!props.form.get(`${g}.enabled`)
           <SChip v-for="e in STRIPE_EVENTS" :key="e" size="xs"><code class="payment-code">{{ e }}</code></SChip>
         </span>
       </template>
-      <div class="payment-url">
-        <SInput :model-value="urls.stripe" readonly mono :aria-label="t('topup.settings.gateways.stripe.webhook')" />
-        <SCopyButton :text="urls.stripe" icon-only :label="t('topup.action.copy')" />
-      </div>
+      <NotifyAddress :base="notifyBase" gateway="stripe" :label="t('topup.settings.gateways.stripe.webhook')" />
     </SSettingRow>
   </SSettingsGroup>
 </template>

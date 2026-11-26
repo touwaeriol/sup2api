@@ -116,3 +116,43 @@ func TestCheckoutHidesMerchant(t *testing.T) {
 	require.Contains(t, body, `"enabled":true`)
 	require.Contains(t, body, `"price":7.3`)
 }
+
+// The view gives the notify address prefix while the site is https. A
+// site that stops being https closes top-up: the wallet shows no method,
+// quotes and orders are refused.
+func TestNotifyBaseAndClosedSite(t *testing.T) {
+	f := newFixture(t)
+	f.configure()
+	var got struct{ Data settingsView }
+	require.NoError(t, json.Unmarshal(f.call(f.admin, http.MethodGet, "/topup/settings", "").Body.Bytes(), &got))
+	require.Equal(t, "https://site.test/api/v1/payment/notify/", got.Data.NotifyBase)
+
+	f.svc.site.Scheme = "http"
+	require.Contains(t, f.call(f.admin, http.MethodGet, "/topup/settings", "").Body.String(), `"notify_base":""`)
+	uid := f.user("closed")
+	w := f.call(uid, http.MethodGet, "/me/topup", "")
+	require.Contains(t, w.Body.String(), `"enabled":false`)
+	require.Contains(t, w.Body.String(), `"methods":[]`)
+	for _, path := range []string{"/me/topup/preview", "/me/topup/orders"} {
+		require.Equal(t, http.StatusConflict, f.call(uid, http.MethodPost, path, `{"amount":10,"method":"alipay"}`).Code, path)
+	}
+}
+
+// Stripe's keys are checked by the gateway's own Validate, over the stored
+// secrets the mask keeps; the rate and discounts fit their snapshot
+// columns.
+func TestSettingsStripeKeysAndPrecision(t *testing.T) {
+	f := newFixture(t)
+	f.configure(withCard)
+	f.configure(withCard, func(v *settingsValues) { v.Stripe.SecretKey, v.Stripe.WebhookSecret = mask, "" })
+	require.Equal(t, []string{"values.stripe.webhook_secret"}, fieldsOf(f.saveBad(func(v *settingsValues) {
+		withCard(v)
+		v.Stripe.WebhookSecret = "whsec_"
+	})))
+	err := f.saveBad(func(v *settingsValues) {
+		v.Price = num(decimalOf("7.123456789"))
+		v.Discounts[0].Rate = num(decimalOf("0.12345"))
+	})
+	require.Equal(t, []string{"values.price", "values.discounts.0.rate"}, fieldsOf(err))
+	require.Equal(t, []string{"values.price"}, fieldsOf(f.saveBad(func(v *settingsValues) { v.Price = numInt(1000001) })))
+}

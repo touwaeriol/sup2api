@@ -16,18 +16,19 @@
 
    ```sql
    SELECT to_regclass('plg_payment__promo_codes') AS promo, to_regclass('plg_payment__redeem_codes') AS redeem;
-   SELECT count(*) FROM plg_payment__promo_codes;
+   SELECT count(*) FROM plg_payment__promo_codes WHERE length(code) <= 64;
+   SELECT count(*) FROM plg_payment__promo_codes WHERE length(code) > 64;
    SELECT count(*) FROM plg_payment__redeem_codes WHERE status = 'unused' AND type = 'balance';
    ```
 
-   记下数字，发布后与核心表对照（第二节）。
+   记下数字，发布后与核心表对照（第二节）。第三条不为 0 时，这些码超过核心优惠码的 64 个字符，0126 **不搬**它们；需要的话发布后由管理员在“优惠码”页用不超过 64 个字符的新码重建。
 3. **备份**：`pg_dump -Fc` 整库（或确认托管数据库有升级前的快照），记下时间。
 
 ## 二、发布
 
 照常导入核心发布，计划是 `primary-first-v1`（有迁移）。完成后核验：
 
-- 六张新表都在；第一节第 2 项的数字与 `SELECT count(*) FROM promo_codes;`、`SELECT count(*) FROM redeem_codes WHERE status = 'unused';` 一致。迁移日志里有 `payment plugin tables not readable` 的 WARNING 时，按第四节手动复制。
+- 六张新表都在；第一节第 2 项的数字（优惠码取不超过 64 个字符的那条）与 `SELECT count(*) FROM promo_codes;`、`SELECT count(*) FROM redeem_codes WHERE status = 'unused';` 一致。迁移日志里有 `payment plugin tables not readable` 的 WARNING 时，按第四节手动复制。
 - 控制台侧栏有“充值/支付”分组（充值订单、兑换码、优惠码），系统设置里有“充值配置”；普通用户的钱包页有充值卡（未开通时显示“暂未开放在线充值”）和兑换码卡。
 - 恢复 newapi 接 sup2api 的渠道。
 - 在插件页卸载 `payment` 插件（卸载会删它的表），并在 touwaeriol/sup2api-plugin 下架 `sub2api/payment`（CONTRACTS §136 的弃用）。

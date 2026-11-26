@@ -49,9 +49,21 @@ const (
 	notifyBodyLimit = 1 << 20
 	// walletPath is where a gateway sends the user back to.
 	walletPath = "/me/wallet"
+	// notifyPath is the notify route, the gateway id appended.
+	notifyPath = "/api/v1/payment/notify/"
 	// orderRatePerMinute and quoteRatePerMinute cap a user's orders and quotes.
 	orderRatePerMinute = 10
 	quoteRatePerMinute = 30
+	// notifyRatePerMinute caps the notifications of one client address: far
+	// above what a gateway sends, it only stops a flood of the public route.
+	notifyRatePerMinute = 600
+	// unverifiedEventsPerMinute caps the payment_events rows one client
+	// address writes with notifications tied to no order (failed
+	// verification, gateway gone): anyone can send those.
+	unverifiedEventsPerMinute = 10
+	// queryTimeout bounds one gateway query of the sweep, background work
+	// whose round must end to take the next orders.
+	queryTimeout = 20 * time.Second
 )
 
 // Ledger is the core ledger with the balance cache refresh billing asks for
@@ -81,6 +93,9 @@ type Deps struct {
 	PublicURL string
 	// OrderLimit and QuoteLimit count a user's orders and quotes.
 	OrderLimit, QuoteLimit Admitter
+	// NotifyLimit counts the notifications of a client address (by hash),
+	// and apart from them the unverified events it writes.
+	NotifyLimit Admitter
 	// Builtin replaces the built-in gateways by id; nil builds epay and
 	// stripe over the stored settings (builtin.go).
 	Builtin map[string]core.PaymentGateway
@@ -95,14 +110,16 @@ type Service struct {
 	site    *url.URL
 	order   Admitter
 	quote   Admitter
+	notes   Admitter
 	builtin map[string]core.PaymentGateway
+	dropped dropLog
 	now     func() time.Time
 }
 
 // New builds the payment module.
 func New(d Deps) *Service {
 	s := &Service{db: d.DB, cipher: d.Cipher, ledger: d.Ledger, plugins: d.Plugins,
-		order: d.OrderLimit, quote: d.QuoteLimit, builtin: d.Builtin, now: time.Now}
+		order: d.OrderLimit, quote: d.QuoteLimit, notes: d.NotifyLimit, builtin: d.Builtin, now: time.Now}
 	if u, err := url.Parse(d.PublicURL); err == nil && u.Host != "" {
 		s.site = u
 	}
@@ -122,6 +139,7 @@ func (s *Service) RegisterRoutes(r *httpapi.Router) {
 	r.Perm("POST", "/me/topup/orders/:no/cancel", perm.TopupUse, s.cancelOrder)
 	r.Perm("GET", "/topup/orders", perm.TopupOrderRead, s.adminOrders)
 	r.Perm("GET", "/topup/orders/stats", perm.TopupOrderRead, s.orderStats)
+	r.Perm("GET", "/topup/orders/:id/events", perm.TopupOrderRead, s.orderEvents)
 	r.Perm("GET", "/topup/settings", perm.TopupManage, s.getSettings)
 	r.Perm("PUT", "/topup/settings", perm.TopupManage, s.putSettings)
 	r.Perm("GET", "/topup/gateways", perm.TopupManage, s.pluginGatewaysHandler)

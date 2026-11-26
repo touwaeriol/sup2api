@@ -103,6 +103,17 @@ func (s *Service) loadSettings(ctx context.Context, q *gorm.DB, clauses ...claus
 	return s.decodeSettings(raw)
 }
 
+// terms reads the settings and the payment methods; clauses go into the
+// settings' SELECT (a row lock).
+func (s *Service) terms(ctx context.Context, q *gorm.DB, clauses ...clause.Expression) (Settings, []Method, error) {
+	v, err := s.loadSettings(ctx, q, clauses...)
+	if err != nil {
+		return Settings{}, nil, err
+	}
+	ms, err := loadMethods(ctx, q)
+	return v, ms, err
+}
+
 // decodeSettings decodes a settings row and opens its secrets.
 func (s *Service) decodeSettings(raw json.RawMessage) (Settings, error) {
 	v := defaultSettings()
@@ -187,6 +198,8 @@ type settingsView struct {
 	Values       settingsValues `json:"values"`
 	SecretFields []string       `json:"secret_fields"`
 	Permission   string         `json:"permission"`
+	// NotifyBase is read only: the notify address without the gateway id.
+	NotifyBase string `json:"notify_base"`
 }
 
 // settingsValues are the settings with the payment methods.

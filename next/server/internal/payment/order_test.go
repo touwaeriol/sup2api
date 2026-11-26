@@ -138,3 +138,36 @@ func TestAdminOrders(t *testing.T) {
 	w = f.call(f.admin, http.MethodGet, "/topup/orders/stats", "")
 	require.JSONEq(t, `{"data":{"today_amount":10,"today_count":1,"month_amount":10,"pending_count":0,"failed_count":0}}`, w.Body.String())
 }
+
+// Quotes are limited per user per minute.
+func TestPreviewRateLimit(t *testing.T) {
+	f := newFixture(t)
+	f.configure()
+	f.svc.quote = ratelimit.NewMinute(redis.NewClient(&redis.Options{Addr: miniredis.RunT(t).Addr()}), "topup_quote")
+	uid := f.user("quoting")
+	codes := map[int]int{}
+	for i := 0; i < quoteRatePerMinute+1; i++ {
+		codes[f.call(uid, http.MethodPost, "/me/topup/preview", `{"amount":10,"method":"alipay"}`).Code]++
+	}
+	require.Equal(t, map[int]int{http.StatusOK: quoteRatePerMinute, http.StatusTooManyRequests: 1}, codes)
+}
+
+// A gateway's pay address must be an absolute https URL without
+// credentials, or the order fails and gives back its promo use; a QR code
+// alone is enough.
+func TestCreatedPaymentIsChecked(t *testing.T) {
+	f := newFixture(t)
+	f.configure(func(v *settingsValues) { v.MaxPendingOrders = 10 })
+	id := f.promo("SAFE", "1", "0", 0)
+	uid := f.user("payurl")
+	for _, bad := range []string{"http://pay.test/x", "https://user:pw@pay.test/x", "/relative", "javascript:alert(1)"} {
+		f.gw.answer = &core.PaymentCreated{PayURL: bad, MerchantRef: "1001"}
+		_, err := f.svc.placeOrder(context.Background(), uid, quoteInput{Amount: numInt(10), Method: "alipay", PromoCode: "safe"}, "")
+		require.Equal(t, http.StatusServiceUnavailable, core.AsError(err).Status, bad)
+		require.Equal(t, 0, f.promoRow(id).UsedCount, bad)
+	}
+	f.gw.answer = &core.PaymentCreated{QRCode: "weixin://wxpay/x", MerchantRef: "1001"}
+	o := f.order(uid, "10")
+	require.Equal(t, statusPending, *o.Status)
+	require.Equal(t, "weixin://wxpay/x", o.QrCode)
+}

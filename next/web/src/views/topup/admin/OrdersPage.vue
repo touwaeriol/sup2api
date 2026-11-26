@@ -4,7 +4,6 @@ import { SButton, SDateRange, SDateTime, SFilterBar, SFilterChips, SInput, SPage
 import { paymentApi, useTopup, type Order, type OrderStats as Stats } from '../topup'
 import { formatLocal, formatUsd } from '../format'
 import MethodName from '../components/MethodName.vue'
-import { useMethodCatalog } from '../components/methodCatalog'
 import OrderDetailDrawer from './OrderDetailDrawer.vue'
 import OrderStats from './OrderStats.vue'
 import PayStatusBadge from '../components/PayStatusBadge.vue'
@@ -18,8 +17,7 @@ const t = host.t
 
 const list = useAdminList<Order>('/topup/orders', emptyOrderFilters())
 const filters = list.filters as OrderFilters
-const bar = useOrderFilters(filters)
-const catalog = useMethodCatalog()
+const bar = useOrderFilters(filters, () => list.items.value)
 
 const stats = ref<Stats | null>(null)
 const statsLoading = ref(false)
@@ -103,7 +101,7 @@ function openDetail(o: Order) {
         <span v-if="row.bonus" class="payment-bonus">{{ t('topup.admin.orders.bonus', { amount: formatUsd(row.bonus) }) }}</span>
       </template>
       <template #cell-pay_amount="{ row }"><span class="payment-num">{{ formatLocal(row.pay_amount, row.currency) }}</span></template>
-      <template #cell-method="{ row }"><MethodName :method="catalog.look(row.method, row.method_name)" /></template>
+      <template #cell-method="{ row }"><MethodName :method="{ name: row.method_name || row.method }" /></template>
       <template #cell-status="{ row }"><PayStatusBadge kind="order" :status="row.status" /></template>
       <template #cell-created_at="{ row }"><SDateTime :value="row.created_at" mode="absolute" muted /></template>
       <template #cell-completed_at="{ row }"><SDateTime :value="row.completed_at" mode="absolute" muted /></template>

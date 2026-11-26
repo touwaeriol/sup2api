@@ -17,29 +17,39 @@ const (
 	signatureHeader     = "Stripe-Signature"
 	checkoutEventPrefix = "checkout.session."
 	checkoutObject      = "checkout.session"
+	eventObject         = "event"
 )
 
-// eventOptions: the 300 s tolerance rejects replays of old signed events.
-// The API version check is off because a webhook endpoint sends events in
-// its own (often the account's default) version; the fields read here (event
-// id, type, livemode and the session's id, status, payment_status,
-// amount_total, currency, client_reference_id, metadata, payment_intent) are
-// the same in every version, and enforcing the library's release train
-// would reject every event of an endpoint created on another one.
-var eventOptions = webhook.ConstructEventOptions{
-	Tolerance:                webhook.DefaultTolerance,
-	IgnoreAPIVersionMismatch: true,
+// event is the part of a webhook event the gateway reads. The payload is
+// verified with webhook.ValidatePayloadWithTolerance and decoded into this
+// rather than through ConstructEvent: the endpoint sends events in its own
+// API version (often the account's default), and these fields have the
+// same shape in every version, so no version check is needed and no field
+// the gateway does not read can make an authentic event undecodable.
+type event struct {
+	ID       string `json:"id"`
+	Object   string `json:"object"`
+	Type     string `json:"type"`
+	Livemode bool   `json:"livemode"`
+	Data     struct {
+		Object json.RawMessage `json:"object"`
+	} `json:"data"`
 }
 
 // ParseNotification verifies a webhook event and maps it to a result. Events
 // other than the three checkout outcomes come back pending, so the core only
-// records them.
+// records them. The request's shape is checked before the configuration is
+// read, so junk requests to this public route cost no settings read.
 func (g *Gateway) ParseNotification(ctx context.Context, n core.PaymentNotification) (*core.PaymentResult, error) {
+	header, err := signatureOf(n)
+	if err != nil {
+		return nil, err
+	}
 	c, err := g.cfg(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("stripe: load config: %w", err)
 	}
-	ev, err := verifyEvent(c, n)
+	ev, err := verifyEvent(c, n.Body, header)
 	if err != nil {
 		return nil, err
 	}
@@ -50,39 +60,47 @@ func rejected(format string, args ...any) error {
 	return fmt.Errorf("%w: stripe: "+format, append([]any{core.ErrPaymentSignature}, args...)...)
 }
 
-// verifyEvent checks the signature and that the event comes from the same
-// mode as the key: a test-mode payment must never credit a live balance.
-func verifyEvent(c Config, n core.PaymentNotification) (stripego.Event, error) {
+// signatureOf is the Stripe-Signature header of a POST.
+func signatureOf(n core.PaymentNotification) (string, error) {
+	if n.Method != http.MethodPost {
+		return "", rejected("method %s is not POST", n.Method)
+	}
 	header := n.Header.Get(signatureHeader)
-	switch {
-	case n.Method != http.MethodPost:
-		return stripego.Event{}, rejected("method %s is not POST", n.Method)
-	case c.WebhookSecret == "":
-		return stripego.Event{}, rejected("webhook secret is not configured")
-	case header == "":
-		return stripego.Event{}, rejected("missing %s header", signatureHeader)
+	if header == "" {
+		return "", rejected("missing %s header", signatureHeader)
 	}
-	mode, err := keyMode(c.SecretKey)
+	return header, nil
+}
+
+// verifyEvent checks the signature (any of the header's v1 signatures, its
+// timestamp within 300 s against replays) and that the event comes from the
+// same mode as the key: a test-mode payment must never credit a live
+// balance.
+func verifyEvent(c Config, body []byte, header string) (event, error) {
+	mode, err := c.mode()
 	if err != nil {
-		return stripego.Event{}, fmt.Errorf("%w: %w", core.ErrPaymentSignature, err)
+		return event{}, fmt.Errorf("%w: %w", core.ErrPaymentSignature, err)
 	}
-	ev, err := webhook.ConstructEventWithOptions(n.Body, header, c.WebhookSecret, eventOptions)
-	if err != nil {
-		return stripego.Event{}, rejected("%v", err)
+	if err := webhook.ValidatePayloadWithTolerance(body, header, c.WebhookSecret, webhook.DefaultTolerance); err != nil {
+		return event{}, rejected("%v", err)
+	}
+	var ev event
+	if json.Unmarshal(body, &ev) != nil || ev.Object != eventObject || ev.ID == "" {
+		return event{}, rejected("signed payload is not an event")
 	}
 	if modeOf(ev.Livemode) != mode {
-		return stripego.Event{}, rejected("event livemode=%t does not match the %s key", ev.Livemode, mode)
+		return event{}, rejected("event livemode=%t does not match the %s key", ev.Livemode, mode)
 	}
 	return ev, nil
 }
 
-func eventResult(ev stripego.Event) (*core.PaymentResult, error) {
-	if !strings.HasPrefix(string(ev.Type), checkoutEventPrefix) {
+func eventResult(ev event) (*core.PaymentResult, error) {
+	if !strings.HasPrefix(ev.Type, checkoutEventPrefix) {
 		return &core.PaymentResult{
 			Status:      core.PaymentPending,
 			EventID:     ev.ID,
 			MerchantRef: modeOf(ev.Livemode),
-			Fields:      map[string]string{"event_type": string(ev.Type)},
+			Fields:      map[string]string{"event_type": ev.Type},
 		}, nil
 	}
 	s, err := eventSession(ev)
@@ -94,22 +112,22 @@ func eventResult(ev stripego.Event) (*core.PaymentResult, error) {
 		return nil, err
 	}
 	r.EventID = ev.ID
-	r.Fields["event_type"] = string(ev.Type)
+	r.Fields["event_type"] = ev.Type
 	return r, nil
 }
 
 // eventSession decodes the event's Checkout Session. A signed event that
 // does not carry one is malformed and will not get better on a retry.
-func eventSession(ev stripego.Event) (*stripego.CheckoutSession, error) {
-	var s stripego.CheckoutSession
-	if ev.Data == nil || json.Unmarshal(ev.Data.Raw, &s) != nil || s.Object != checkoutObject {
-		return nil, rejected("event %s does not carry a checkout session", ev.ID)
+func eventSession(ev event) (session, error) {
+	var s session
+	if json.Unmarshal(ev.Data.Object, &s) != nil || s.Object != checkoutObject {
+		return session{}, rejected("event %s does not carry a checkout session", ev.ID)
 	}
-	return &s, nil
+	return s, nil
 }
 
-func eventStatus(t stripego.EventType, s *stripego.CheckoutSession) core.PaymentStatus {
-	switch t {
+func eventStatus(t string, s session) core.PaymentStatus {
+	switch stripego.EventType(t) {
 	case stripego.EventTypeCheckoutSessionCompleted, stripego.EventTypeCheckoutSessionAsyncPaymentSucceeded:
 		return paidIf(s)
 	case stripego.EventTypeCheckoutSessionExpired:

@@ -44,7 +44,7 @@ func (s *Service) checkMethod(ctx context.Context, v Settings, ms []Method, in q
 	}
 	low := decimal.Max(v.MinTopup.Decimal, m.MinTopup.Decimal)
 	a := in.Amount.Decimal
-	if !a.IsPositive() || !a.Equal(a.Round(amountDecimals)) || a.LessThan(low) || a.GreaterThan(v.MaxTopup.Decimal) {
+	if !a.IsPositive() || !exact(a, amountDecimals) || a.LessThan(low) || a.GreaterThan(v.MaxTopup.Decimal) {
 		return Method{}, core.InvalidFields(core.FieldError{Field: "amount", Code: "invalid",
 			Message: t(ctx, "the amount must be from "+low.String()+" to "+v.MaxTopup.String()+", at most 2 decimals",
 				"充值金额须在 "+low.String()+" 到 "+v.MaxTopup.String()+" 之间，最多 2 位小数")})
@@ -84,11 +84,7 @@ type previewView struct {
 // quote prices in for userID without reserving anything; a promo code that
 // does not apply is reported in PromoError, not as a failure.
 func (s *Service) quoteFor(ctx context.Context, userID int64, in quoteInput) (*previewView, error) {
-	v, err := s.loadSettings(ctx, s.db.Gorm)
-	if err != nil {
-		return nil, err
-	}
-	ms, err := loadMethods(ctx, s.db.Gorm)
+	v, ms, err := s.terms(ctx, s.db.Gorm)
 	if err != nil {
 		return nil, err
 	}

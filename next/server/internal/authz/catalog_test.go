@@ -134,7 +134,7 @@ func TestCatalogFlaggedSets(t *testing.T) {
 		"system:update:execute", "system:update:recover", "user:delete", "user:password:reset",
 	}
 	// Decision D2: what only the super admin holds by default.
-	wantSuper := []string{"balance:adjust:any", "plugin:grant:critical", "plugin:grant:db_schema_unconfined", "publisher:manage", "system:update:execute", "system:update:recover"}
+	wantSuper := []string{"balance:adjust:any", "plugin:grant:critical", "plugin:grant:db_schema_unconfined", "publisher:manage", "redeem:manage", "system:update:execute", "system:update:recover"}
 	slices.Sort(sensitive)
 	slices.Sort(stepUp)
 	if super := superOnlyKeys(); !slices.Equal(super, wantSuper) {

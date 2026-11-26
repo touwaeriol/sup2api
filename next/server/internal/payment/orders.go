@@ -28,13 +28,20 @@ const (
 
 var orderStatuses = []string{statusPending, statusPaid, statusCompleted, statusFailed, statusExpired, statusCancelled}
 
-// newTradeNo is an order number nobody can guess: s2a_ and 128 random bits.
-func newTradeNo() (string, error) {
+// randomHex is 128 random bits in hex: order numbers and crediting leases
+// nobody can guess.
+func randomHex() (string, error) {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		return "", err
 	}
-	return "s2a_" + hex.EncodeToString(b[:]), nil
+	return hex.EncodeToString(b[:]), nil
+}
+
+// newTradeNo is an order number: s2a_ and 128 random bits.
+func newTradeNo() (string, error) {
+	h, err := randomHex()
+	return "s2a_" + h, err
 }
 
 // payable narrows q to the orders a paid notification may still credit:

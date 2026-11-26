@@ -9,9 +9,9 @@ import type { CheckoutMethod } from './useTopupQuote'
 // Confirms a top-up with the server's price (preview): amount, bonus,
 // original price, discount, what to pay and the method; a promo code is
 // checked with "Apply" before it counts. "Confirm payment" hands the applied
-// code and the price to the parent, which places the order.
+// code to the parent, which places the order.
 const props = defineProps<{ open: boolean; amount: number; method: CheckoutMethod; currency: string; submitting: boolean }>()
-const emit = defineEmits<{ (e: 'update:open', v: boolean): void; (e: 'confirm', promoCode: string, preview: OrderPreview): void }>()
+const emit = defineEmits<{ (e: 'update:open', v: boolean): void; (e: 'confirm', promoCode: string): void }>()
 const host = useTopup()
 const t = host.t
 
@@ -55,7 +55,7 @@ async function apply() {
 // A typed but unapplied code is applied first; the user then confirms the new price.
 function confirm() {
   if (promo.value.trim() !== applied.value) return void apply()
-  if (preview.value) emit('confirm', applied.value, preview.value)
+  if (preview.value) emit('confirm', applied.value)
 }
 
 const money = (v: number) => formatLocal(v, props.currency)

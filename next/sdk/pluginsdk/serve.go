@@ -134,6 +134,14 @@ func Register(s grpc.ServiceRegistrar, p any, dial HostDialer, opts ...Option) e
 		return err
 	}
 	pluginv1.RegisterPluginServiceServer(s, rt)
+	registerGatewayServices(s, p, rt)
+	registerAppServices(s, p, rt)
+	return nil
+}
+
+// registerGatewayServices registers the services of the gateway request
+// path p implements.
+func registerGatewayServices(s grpc.ServiceRegistrar, p any, rt *runtime) {
 	if v, ok := p.(Platform); ok {
 		pluginv1.RegisterPlatformServiceServer(s, platformServer{impl: v, execute: rt.execute, runtime: rt})
 	}
@@ -143,6 +151,13 @@ func Register(s grpc.ServiceRegistrar, p any, dial HostDialer, opts ...Option) e
 	if v, ok := p.(Observer); ok {
 		pluginv1.RegisterObservationServiceServer(s, observationServer{impl: v})
 	}
+	if rk, ok := p.(AccountRanker); ok {
+		pluginv1.RegisterSchedulerServiceServer(s, schedulerServer{rank: rk})
+	}
+}
+
+// registerAppServices registers the other services p implements.
+func registerAppServices(s grpc.ServiceRegistrar, p any, rt *runtime) {
 	jr, hasJobs := p.(JobRunner)
 	eh, hasEvents := p.(EventHandler)
 	bh, hasBroadcast := p.(BroadcastHandler)
@@ -151,9 +166,6 @@ func Register(s grpc.ServiceRegistrar, p any, dial HostDialer, opts ...Option) e
 	}
 	if v, ok := p.(HTTP); ok {
 		pluginv1.RegisterHTTPServiceServer(s, httpServer{impl: v, runtime: rt})
-	}
-	if rk, ok := p.(AccountRanker); ok {
-		pluginv1.RegisterSchedulerServiceServer(s, schedulerServer{rank: rk})
 	}
 	if v, ok := p.(Migration); ok {
 		pluginv1.RegisterMigrationServiceServer(s, migrationServer{impl: v})
@@ -164,7 +176,6 @@ func Register(s grpc.ServiceRegistrar, p any, dial HostDialer, opts ...Option) e
 	if v, ok := p.(PaymentGateway); ok {
 		pluginv1.RegisterPaymentGatewayServiceServer(s, paymentServer{impl: v})
 	}
-	return nil
 }
 
 func buildOptions(opts []Option) options {
@@ -181,43 +192,37 @@ func buildOptions(opts []Option) options {
 // manifest declares them.
 func Capabilities(p any) []string {
 	var caps []string
-	if _, ok := p.(Platform); ok {
-		caps = append(caps, manifest.CapPlatformAdapter)
-	}
-	if _, ok := p.(TaskMonitor); ok {
-		caps = append(caps, manifest.CapPlatformMonitor)
-	}
-	if _, ok := p.(Hook); ok {
-		caps = append(caps, manifest.CapGatewayHook)
-	}
-	if _, ok := p.(Observer); ok {
-		caps = append(caps, manifest.CapGatewayObserve)
-	}
-	if _, ok := p.(JobRunner); ok {
-		caps = append(caps, manifest.CapAppJobs)
-	}
-	if _, ok := p.(EventHandler); ok {
-		caps = append(caps, manifest.CapAppEvents)
-	}
-	if _, ok := p.(BroadcastHandler); ok {
-		caps = append(caps, manifest.CapAppBroadcast)
-	}
-	if _, ok := p.(HTTP); ok {
-		caps = append(caps, manifest.CapHTTPRoutes)
-	}
-	if _, ok := p.(AccountRanker); ok {
-		caps = append(caps, manifest.CapSchedulerRank)
-	}
-	if _, ok := p.(Migration); ok {
-		caps = append(caps, manifest.CapMigrationData)
-	}
-	if _, ok := p.(NotificationChannel); ok {
-		caps = append(caps, manifest.CapNotifyChannel)
-	}
-	if _, ok := p.(PaymentGateway); ok {
-		caps = append(caps, manifest.CapPaymentGateway)
+	for _, c := range capabilityChecks {
+		if c.implements(p) {
+			caps = append(caps, c.id)
+		}
 	}
 	return caps
+}
+
+// capabilityChecks map each capability to the interface that implements
+// it, in the order Capabilities reports them.
+var capabilityChecks = []struct {
+	id         string
+	implements func(any) bool
+}{
+	{manifest.CapPlatformAdapter, implements[Platform]},
+	{manifest.CapPlatformMonitor, implements[TaskMonitor]},
+	{manifest.CapGatewayHook, implements[Hook]},
+	{manifest.CapGatewayObserve, implements[Observer]},
+	{manifest.CapAppJobs, implements[JobRunner]},
+	{manifest.CapAppEvents, implements[EventHandler]},
+	{manifest.CapAppBroadcast, implements[BroadcastHandler]},
+	{manifest.CapHTTPRoutes, implements[HTTP]},
+	{manifest.CapSchedulerRank, implements[AccountRanker]},
+	{manifest.CapMigrationData, implements[Migration]},
+	{manifest.CapNotifyChannel, implements[NotificationChannel]},
+	{manifest.CapPaymentGateway, implements[PaymentGateway]},
+}
+
+func implements[T any](p any) bool {
+	_, ok := p.(T)
+	return ok
 }
 
 // ---------------------------------------------------------------- PluginService

@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { errorMessage, paymentApi, useTopup, type CheckoutInfo, type OrderPreview } from '../topup'
+import { errorMessage, paymentApi, useTopup, type CheckoutInfo } from '../topup'
 import ConfirmDialog from './ConfirmDialog.vue'
 import PayingDialog from './PayingDialog.vue'
 import TopupCard from './TopupCard.vue'
-import { reservePayWindow } from './payWindow'
+import { reservePayWindow, type PayOpen, type PayWindow } from './payWindow'
 import type { PayingOrder } from './types'
 import type { CheckoutMethod } from './useTopupQuote'
 
@@ -40,24 +40,30 @@ function startPay(amount: number, method: CheckoutMethod) {
 const paying = ref<PayingOrder | null>(null)
 const payingOpen = ref(false)
 const blocked = ref(false)
-function showPaying(order: PayingOrder, opened: boolean) {
+function showPaying(order: PayingOrder, opened: PayOpen | null) {
   paying.value = order
-  blocked.value = !!order.pay_url && !opened
+  blocked.value = opened === 'blocked'
   payingOpen.value = true
 }
 
-async function placeOrder(promoCode: string, preview: OrderPreview) {
+/** Points the reserved window at the order's payment page, or closes it (no page, or not https). */
+function openReserved(win: PayWindow, payUrl: string | undefined): PayOpen | null {
+  const opened = payUrl ? win.go(payUrl) : null
+  if (opened !== 'opened') win.close()
+  if (opened === 'refused') host.toast(t('topup.wallet.paying.badUrl'), 'error')
+  return opened
+}
+
+async function placeOrder(promoCode: string) {
   const d = draft.value
   if (!d || !info.value) return
   const win = reservePayWindow()
   submitting.value = true
   try {
     const created = await paymentApi.createOrder({ amount: d.amount, method: d.method.type, promo_code: promoCode || undefined })
-    const opened = !!created.pay_url && win.go(created.pay_url)
-    if (!opened) win.close()
+    const opened = openReserved(win, created.pay_url)
     confirmOpen.value = false
-    const { amount, bonus, pay_amount } = preview
-    showPaying({ ...created, amount, bonus, pay_amount, currency: info.value.currency, method_name: d.method.name }, opened)
+    showPaying({ ...created, method_name: d.method.name }, opened)
   } catch (e) {
     win.close()
     host.toast(errorMessage(e, t('topup.wallet.orderFailed')), 'error')

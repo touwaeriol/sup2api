@@ -119,6 +119,10 @@ func passThroughCases() map[string]passThroughCase {
 			func(p map[string]string) { p["buyer"] = "someone@example.com"; p["api_trade_no"] = "A1" },
 			func(r *core.PaymentResult) bool { return r.Fields["buyer"] == "" && r.Fields["api_trade_no"] == "A1" },
 		},
+		"signed unknown parameter is verified, not recorded": {
+			func(p map[string]string) { p["timestamp"] = "1764140000" },
+			func(r *core.PaymentResult) bool { return r.Status == core.PaymentPaid && r.Fields["timestamp"] == "" },
+		},
 	}
 }
 
@@ -158,7 +162,11 @@ func rejectedRaw() map[string]string {
 		"repeated identical parameter": signed(func(map[string]string) {}) + "&money=12.34",
 		"parameter without =":          signed(func(map[string]string) {}) + "&money",
 		"empty segment":                signed(func(map[string]string) {}) + "&",
-		"unknown parameter":            set("extra", "1"),
+		"unsigned extra parameter":     signed(func(map[string]string) {}) + "&timestamp=1764140000",
+		"extra parameter, wrong sign":  strings.Replace(set("timestamp", "1764140000"), "timestamp=1764140000", "timestamp=1764140001", 1),
+		"name with upper case":         set("Timestamp", "1"),
+		"name with a digit":            set("ext1", "1"),
+		"name too long":                set(strings.Repeat("x", 33), "1"),
 		"bad escape":                   signed(func(map[string]string) {}) + "&param=%zz",
 	}
 	for k, v := range rejectedFields() {

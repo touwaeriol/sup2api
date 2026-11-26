@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	goruntime "runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -84,8 +85,16 @@ func signed(t *testing.T, n mockpay.Notification) core.PaymentNotification {
 // unauthentic notification and an unqueryable gateway to the core errors.
 func TestPaymentGatewayAcrossProcess(t *testing.T) {
 	inst, gws := paymentGateways(t)
-	ctx := context.Background()
 	gw := gws[inst.key+".mock"].Client
+	assertPaymentCreate(t, gw)
+	assertPaymentNotifications(t, gw)
+	assertPaymentErrors(t, inst, gws)
+}
+
+// assertPaymentCreate: a created payment is pending on a query; an amount
+// not exact in the minor unit never reaches the plugin.
+func assertPaymentCreate(t *testing.T, gw core.PaymentGateway) {
+	ctx := context.Background()
 	created, err := gw.CreatePayment(ctx, core.PaymentCreate{OutTradeNo: "s2a_1", Amount: decimal.RequireFromString("12.3"), Currency: "USD",
 		MethodType: mockpay.MethodType, ExpiresAt: time.Now().Add(30 * time.Minute)})
 	if err != nil || created.PayURL != "https://mockpay.invalid/pay/s2a_1" || created.SessionID != "ms_s2a_1" || created.MerchantRef != mockpay.MerchantRef {
@@ -97,7 +106,13 @@ func TestPaymentGatewayAcrossProcess(t *testing.T) {
 	if q, err := gw.QueryPayment(ctx, core.PaymentQuery{OutTradeNo: "s2a_1"}); err != nil || q.Status != core.PaymentPending || q.Amount != 1230 {
 		t.Fatalf("query: %+v %v", q, err)
 	}
-	// Another order and amount than created: passed on unchanged.
+}
+
+// assertPaymentNotifications: a signed notification is passed on unchanged
+// (another order and amount than created), a forged one is
+// ErrPaymentSignature, and each gets the plugin's reply.
+func assertPaymentNotifications(t *testing.T, gw core.PaymentGateway) {
+	ctx := context.Background()
 	n := mockpay.Notification{EventID: "e1", OutTradeNo: "s2a_other", TradeNo: "t1", Amount: 99999, Currency: "EUR", Status: "paid", MethodType: "x"}
 	r, err := gw.ParseNotification(ctx, signed(t, n))
 	if err != nil || r.OutTradeNo != "s2a_other" || r.TradeNo != "t1" || r.Amount != 99999 || r.Currency != "EUR" || r.Status != core.PaymentPaid ||
@@ -109,13 +124,12 @@ func TestPaymentGatewayAcrossProcess(t *testing.T) {
 	}
 	forged := signed(t, n)
 	forged.Header.Set(mockpay.SignatureHeader, "00")
-	if _, err := gw.ParseNotification(ctx, forged); !errors.Is(err, core.ErrPaymentSignature) {
+	if _, err := gw.ParseNotification(ctx, forged); !errors.Is(err, core.ErrPaymentSignature) || !strings.HasSuffix(err.Error(), ": bad signature") {
 		t.Fatalf("forged: %v", err)
 	}
 	if reply := gw.Respond(core.PaymentRejected); reply.Status != 400 || string(reply.Body) != "fail" {
 		t.Fatalf("rejected reply: %+v", reply)
 	}
-	assertPaymentErrors(t, inst, gws)
 }
 
 // assertPaymentErrors: plugin errors stay errors, and a stopped plugin

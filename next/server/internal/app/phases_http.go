@@ -38,9 +38,7 @@ func (b *boot) registerRoutes(r *httpapi.Router) {
 	b.keys.RegisterRoutes(r)
 	b.prx.RegisterRoutes(r)
 	b.acc.RegisterRoutes(r)
-	b.bill.RegisterRoutes(r)
-	b.pay.RegisterRoutes(r)
-	redeem.New(b.db, b.bill, b.rdb, ratelimit.NewMinute(b.rdb, "redeem")).RegisterRoutes(r)
+	b.registerMoneyRoutes(r)
 	lookup.New(b.db, b.az, b.bill).RegisterRoutes(r)
 	b.settler.RegisterRoutes(r)
 	b.tasks.RegisterRoutes(r, b.cl.Registry)
@@ -55,6 +53,14 @@ func (b *boot) registerRoutes(r *httpapi.Router) {
 	pr.RegisterAssets(b.engine)
 	b.gw.RegisterRoutes(r)
 	b.egress.RegisterRoutes(r)
+}
+
+// registerMoneyRoutes mounts the balance ledger, online top-up and redeem
+// codes (CONTRACTS §140).
+func (b *boot) registerMoneyRoutes(r *httpapi.Router) {
+	b.bill.RegisterRoutes(r)
+	b.pay.RegisterRoutes(r)
+	redeem.New(b.db, b.bill, b.rdb, ratelimit.NewMinute(b.rdb, "redeem")).RegisterRoutes(r)
 }
 
 // startPluginWrites starts the audit log of plugin writes and registers its

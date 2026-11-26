@@ -55,9 +55,8 @@ func TestPromoLastUseUnderConcurrency(t *testing.T) {
 	require.Equal(t, 1, f.promoRow(id).UsedCount)
 }
 
-// Cancelling or expiring an order releases its use; paying it marks the
-// use used and credits the bonus as its own ledger row.
-func TestPromoReleaseAndUse(t *testing.T) {
+// Cancelling or expiring an order releases its use.
+func TestPromoRelease(t *testing.T) {
 	f := newFixture(t)
 	f.configure()
 	id := f.promo("TWICE", "5", "10", 2)
@@ -73,8 +72,16 @@ func TestPromoReleaseAndUse(t *testing.T) {
 	_, err = f.svc.sweep(context.Background(), core.TaskRun{})
 	require.NoError(t, err)
 	require.Equal(t, 0, f.promoRow(id).UsedCount)
+}
 
-	o = f.order(uid, "10", "twice")
+// Paying an order marks its use used and credits the bonus as its own
+// ledger row; a user uses a code once.
+func TestPromoUse(t *testing.T) {
+	f := newFixture(t)
+	f.configure()
+	id := f.promo("TWICE", "5", "10", 2)
+	uid := f.user("promo")
+	o := f.order(uid, "10", "twice")
 	require.Equal(t, http.StatusOK, f.notify("epay", paid(o, "promo-paid")))
 	bonus, n := f.ledgerSum(uid, "promo:")
 	require.EqualValues(t, 1, n)
@@ -85,7 +92,7 @@ func TestPromoReleaseAndUse(t *testing.T) {
 	w := f.call(f.admin, http.MethodGet, "/promo-codes/"+itoa(id)+"/usages", "")
 	require.Contains(t, w.Body.String(), `"status":"used"`)
 	require.Contains(t, w.Body.String(), `"out_trade_no":"`+o.OutTradeNo+`"`)
-	_, err = f.svc.placeOrder(context.Background(), uid, quoteInput{Amount: numInt(10), Method: "alipay", PromoCode: "twice"}, "")
+	_, err := f.svc.placeOrder(context.Background(), uid, quoteInput{Amount: numInt(10), Method: "alipay", PromoCode: "twice"}, "")
 	require.Error(t, err, "one use per user")
 }
 

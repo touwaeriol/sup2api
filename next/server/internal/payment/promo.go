@@ -41,20 +41,26 @@ func errPromoMinimum(ctx context.Context, min decimal.Decimal) *core.Error {
 		"充值满 $"+min.String()+" 才能使用这个优惠码"))
 }
 
-// checkPromo tells whether code applies to a top-up of amount by userID.
-// Unknown, disabled, expired, used up and already used by the user all get
-// the same refusal; only the minimum top-up has its own. With lock the code
-// row stays locked until tx ends, so the last use goes to one order only.
-func checkPromo(ctx context.Context, q *gorm.DB, code string, userID int64, amount decimal.Decimal, now time.Time, lock ...bool) (promoCheck, error) {
-	db := store.G(ctx, q).Where("code = ?", code)
-	if len(lock) > 0 && lock[0] {
-		if err := store.RequireTx(q); err != nil {
-			return promoCheck{}, err
-		}
-		db = db.Clauses(store.ForUpdate())
+// checkPromo tells whether code applies to a top-up of amount by userID
+// (the preview). Unknown, disabled, expired, used up and already used by
+// the user all get the same refusal; only the minimum top-up has its own.
+func checkPromo(ctx context.Context, q *gorm.DB, code string, userID int64, amount decimal.Decimal, now time.Time) (promoCheck, error) {
+	return judgePromo(ctx, q, store.G(ctx, q).Where("code = ?", code), userID, amount, now)
+}
+
+// lockCheckPromo is checkPromo with the code row locked until tx ends, so
+// the last use goes to one order only.
+func lockCheckPromo(ctx context.Context, tx *gorm.DB, code string, userID int64, amount decimal.Decimal, now time.Time) (promoCheck, error) {
+	if err := store.RequireTx(tx); err != nil {
+		return promoCheck{}, err
 	}
+	return judgePromo(ctx, tx, store.G(ctx, tx).Clauses(store.ForUpdate()).Where("code = ?", code), userID, amount, now)
+}
+
+// judgePromo reads the code find selects and judges it for userID.
+func judgePromo(ctx context.Context, q, find *gorm.DB, userID int64, amount decimal.Decimal, now time.Time) (promoCheck, error) {
 	var p model.PromoCode
-	if err := db.Take(&p).Error; store.IsNoRows(err) {
+	if err := find.Take(&p).Error; store.IsNoRows(err) {
 		return promoCheck{refusal: errPromoInvalid(ctx)}, nil
 	} else if err != nil {
 		return promoCheck{}, err
@@ -90,7 +96,7 @@ func promoOutcome(ctx context.Context, c promoCheck) (Num, string) {
 }
 
 // reserveUse takes one use of promo for userID's order (the code row is
-// locked by checkPromo or lockPromo).
+// locked by lockCheckPromo or lockPromo).
 func reserveUse(ctx context.Context, tx *gorm.DB, p *model.PromoCode, userID, orderID int64) error {
 	db := store.G(ctx, tx)
 	use := model.PromoCodeUsage{PromoCodeID: p.ID, UserID: userID, OrderID: &orderID, BonusAmount: p.BonusAmount}
@@ -129,10 +135,13 @@ func markUsed(ctx context.Context, tx *gorm.DB, orderID int64) error {
 // reacquireUse makes a late-paid order hold its promo code again, its use
 // having been released when it expired or was cancelled. It reports
 // whether the order keeps its bonus: false when the code no longer applies
-// (disabled, expired, used up, or the user used it since).
+// (deleted, disabled, expired, used up, or the user used it since).
 func reacquireUse(ctx context.Context, tx *gorm.DB, o *model.PaymentOrder, now time.Time) (bool, error) {
-	if o.PromoCodeID == nil || !o.Bonus.IsPositive() {
+	if !o.Bonus.IsPositive() {
 		return true, nil
+	}
+	if o.PromoCodeID == nil {
+		return false, nil // the code was deleted (promo_code_id SET NULL)
 	}
 	db := store.G(ctx, tx)
 	held, err := gormpg.Exists(db, db.Model(&model.PromoCodeUsage{}).Where("order_id = ?", o.ID))

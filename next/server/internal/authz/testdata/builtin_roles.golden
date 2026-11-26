@@ -41,7 +41,6 @@ admin rev=1 superuser=false assign_custom=true
   proxy:manage
   proxy:read
   publisher:read
-  redeem:manage
   redeem:use
   role:assign
   role:define
@@ -71,7 +70,7 @@ admin rev=1 superuser=false assign_custom=true
   menu overview: /dashboard,/me/api-keys,/me/models,/me/usage/overview,/me/usage,/usage/overview,/usage
   menu gateway: /accounts,/groups,/proxies
   menu finance: /ledger
-  menu topup: /topup/orders,/redeem-codes,/promo-codes
+  menu topup: /topup/orders,/promo-codes
   menu users: /users,/segments,/roles
   menu plugins: /plugins,/market,/publishers
   menu system: /nodes,/system/tasks,/system/upgrades,/system/audit,/settings

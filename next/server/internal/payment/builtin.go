@@ -32,5 +32,9 @@ func epayConfigOf(v Settings) epay.Config {
 
 func (s *Service) stripeConfig(ctx context.Context) (stripe.Config, error) {
 	v, err := s.loadSettings(ctx, s.db.Gorm)
-	return stripe.Config{SecretKey: v.Stripe.SecretKey, WebhookSecret: v.Stripe.WebhookSecret}, err
+	return stripeConfigOf(v), err
+}
+
+func stripeConfigOf(v Settings) stripe.Config {
+	return stripe.Config{SecretKey: v.Stripe.SecretKey, WebhookSecret: v.Stripe.WebhookSecret}
 }

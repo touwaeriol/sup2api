@@ -19,3 +19,6 @@ func numInt(i int64) Num { return Num{decimal.NewFromInt(i)} }
 
 // decimalOf parses a decimal constant.
 func decimalOf(s string) decimal.Decimal { return decimal.RequireFromString(s) }
+
+// exact reports whether d has at most places decimals.
+func exact(d decimal.Decimal, places int32) bool { return d.Equal(d.Round(places)) }
