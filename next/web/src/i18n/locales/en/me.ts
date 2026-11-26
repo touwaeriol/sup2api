@@ -95,7 +95,7 @@ export default {
   },
   wallet: {
     title: 'Wallet',
-    description: 'Your balance, spending and every balance change.',
+    description: 'Your balance, spending and top-ups. Every balance change is under Usage logs, balance changes.',
     today: 'Spent today',
     yesterday: 'Spent yesterday',
     last30d: 'Spent in 30 days',

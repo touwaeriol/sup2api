@@ -95,7 +95,7 @@ export default {
   },
   wallet: {
     title: '钱包',
-    description: '你的余额、消费和每一笔余额变动。',
+    description: '你的余额、消费和充值。每一笔余额变动在“使用日志”的余额变动里。',
     today: '今日消费',
     yesterday: '昨日消费',
     last30d: '近 30 天消费',
