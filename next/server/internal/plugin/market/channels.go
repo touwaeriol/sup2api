@@ -214,10 +214,15 @@ func (s *Service) UpdateChannel(ctx context.Context, id int64, p ChannelPatch, a
 	return s.channel(ctx, id)
 }
 
-// applyPatch sets the columns set of p on channel id, which it locks
-// first; a new default takes the place of its store's old one, under the
-// lock of the store so that concurrent new defaults take turns.
+// applyPatch sets the columns set of p on channel id, which it locks; a new
+// default takes the place of its store's old one, under the lock of the
+// store so that concurrent new defaults take turns.
 func applyPatch(g *gorm.DB, id int64, p ChannelPatch, set map[string]any) error {
+	if p.makesDefault() {
+		if err := lockStoreOf(g, id); err != nil {
+			return err
+		}
+	}
 	cur, err := lockRow[model.MarketSource](g, id, "market channel")
 	if err != nil {
 		return err
@@ -226,14 +231,27 @@ func applyPatch(g *gorm.DB, id int64, p ChannelPatch, set map[string]any) error 
 		return err
 	}
 	if p.makesDefault() {
-		if _, err := lockRow[model.MarketStore](g, cur.StoreID, "plugin store"); err != nil {
-			return err
-		}
 		if err := otherDefault(g, cur).Update("is_default", false).Error; err != nil {
 			return err
 		}
 	}
 	return g.Model(&model.MarketSource{}).Where("id = ?", id).Updates(set).Error
+}
+
+// lockStoreOf locks the store of channel id before the channel itself.
+// Taking the channel first deadlocked: one transaction held the store and
+// waited for the old default's row, which another making that row the
+// default held while it waited for the store.
+func lockStoreOf(g *gorm.DB, id int64) error {
+	var storeID int64
+	if err := g.Model(&model.MarketSource{}).Where("id = ?", id).Select("store_id").Scan(&storeID).Error; err != nil {
+		return err
+	}
+	if storeID == 0 {
+		return nil // the channel lock that follows reports it missing
+	}
+	_, err := lockRow[model.MarketStore](g, storeID, "plugin store")
+	return err
 }
 
 // DeleteChannel deletes channel id, which may not be its store's default.
