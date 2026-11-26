@@ -4,7 +4,7 @@ import type { OrderStatus, PromoCode, RedeemStatus } from '../host'
 // Badge tones of the payment statuses; labels come from the messages
 // (status.* for orders, admin.<kind>.status.* for the others).
 
-export type StatusKind = 'order' | 'redeem' | 'promo'
+export type StatusKind = 'order' | 'redeem' | 'promo' | 'usage'
 
 /** What a promo code shows: its switch, or why an enabled one no longer applies. */
 export type PromoState = 'active' | 'disabled' | 'expired' | 'exhausted'
@@ -23,11 +23,12 @@ const TONES: Record<StatusKind, Record<string, Tone>> = {
     cancelled: 'gray'
   },
   redeem: { unused: 'success', used: 'info', expired: 'gray' },
-  promo: { active: 'success', disabled: 'gray', expired: 'warning', exhausted: 'warning' }
+  promo: { active: 'success', disabled: 'gray', expired: 'warning', exhausted: 'warning' },
+  usage: { reserved: 'warning', used: 'success' }
 }
 
 /** Message key prefix of each kind's status labels. */
-const LABEL_PREFIX: Record<StatusKind, string> = { order: 'status', redeem: 'admin.redeem.status', promo: 'admin.promo.status' }
+const LABEL_PREFIX: Record<StatusKind, string> = { order: 'status', redeem: 'admin.redeem.status', promo: 'admin.promo.status', usage: 'admin.promo.usage.status' }
 
 export const statusTones = (kind: StatusKind) => TONES[kind]
 

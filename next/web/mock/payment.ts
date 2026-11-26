@@ -246,12 +246,29 @@ on('POST', '/p/payment/redeem', (req) => (String(req.body?.code || '').trim().le
 // ---- promo codes ----
 
 const promoCodes: any[] = [
-  { id: 3, code: 'WELCOME10', bonus_amount: 10, min_amount: 20, max_uses: 500, used_count: 132, status: 'active', expires_at: now(86400 * 20), notes: '新用户首充', created_at: now(-86400 * 10) },
+  { id: 3, code: 'WELCOME10', bonus_amount: 10, min_amount: 20, max_uses: 500, used_count: 4, status: 'active', expires_at: now(86400 * 20), notes: '新用户首充', created_at: now(-86400 * 10) },
   { id: 2, code: 'DOUBLE11', bonus_amount: 20, min_amount: 100, max_uses: 100, used_count: 100, status: 'active', expires_at: now(-86400), notes: '双十一', created_at: now(-86400 * 20) },
   { id: 1, code: 'VIP2026', bonus_amount: 50, min_amount: 500, max_uses: 0, used_count: 8, status: 'disabled', notes: '', created_at: now(-86400 * 40) }
 ]
 
 on('GET', '/p/payment/promo-codes', (req) => paginate(promoCodes, req.query))
+
+// Each order that carried the code is one user's use: held while unpaid, used once credited.
+const usageOf = (o: any) => ({
+  id: o.id,
+  user_id: o.user_id,
+  user_email: o.user_email,
+  out_trade_no: o.out_trade_no,
+  bonus: o.bonus,
+  status: o.status === 'completed' ? 'used' : 'reserved',
+  created_at: o.created_at,
+  used_at: o.completed_at
+})
+on('GET', '/p/payment/promo-codes/:id/usages', (req) => {
+  const p = promoCodes.find((x) => x.id === Number(req.params.id))
+  const held = (o: any) => p && o.promo_code === p.code && (o.status === 'completed' || o.status === 'pending')
+  return paginate(orders.filter(held).map(usageOf), req.query)
+})
 
 on('POST', '/p/payment/promo-codes', (req) => {
   const p = { id: 10 + promoCodes.length, used_count: 0, status: 'active', created_at: now(), ...req.body, code: String(req.body?.code || newCode()).toUpperCase() }

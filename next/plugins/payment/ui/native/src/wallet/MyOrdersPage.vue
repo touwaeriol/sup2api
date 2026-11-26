@@ -29,6 +29,7 @@ const columns = computed<TableColumn[]>(() => [
   { key: 'out_trade_no', label: t('wallet.orders.no'), mobile: 'title', nowrap: true },
   { key: 'amount', label: t('wallet.orders.amount'), align: 'right', mobile: 'meta' },
   { key: 'pay_amount', label: t('wallet.orders.pay'), align: 'right', mobile: 'meta' },
+  { key: 'promo_code', label: t('wallet.orders.promo'), mobile: 'meta' },
   { key: 'method_name', label: t('wallet.orders.method'), mobile: 'meta' },
   { key: 'status', label: t('wallet.orders.status'), mobile: 'status' },
   { key: 'created_at', label: t('wallet.orders.created'), nowrap: true, mobile: 'subtitle' },
@@ -63,6 +64,9 @@ function resume(order: Order) {
       <template #cell-out_trade_no="{ row }"><span class="pay-mono">{{ row.out_trade_no }}</span></template>
       <template #cell-amount="{ row }">
         {{ formatUsd(row.amount) }}<span v-if="row.bonus" class="pay-bonus"> +{{ formatUsd(row.bonus) }}</span>
+      </template>
+      <template #cell-promo_code="{ row }">
+        <span v-if="row.promo_code" class="pay-mono">{{ row.promo_code }}</span><span v-else class="pay-bonus">—</span>
       </template>
       <template #cell-pay_amount="{ row }">{{ formatLocal(row.pay_amount, row.currency) }}</template>
       <template #cell-method_name="{ row }"><MethodName :method="catalog.look(row.method, row.method_name)" /></template>

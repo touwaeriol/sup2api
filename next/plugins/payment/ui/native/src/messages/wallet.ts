@@ -70,6 +70,7 @@ export default {
       status: 'Status',
       created: 'Created',
       completed: 'Credited',
+      promo: 'Promo code',
       resume: 'Continue paying',
       empty: 'No top-ups yet'
     },
@@ -153,6 +154,7 @@ export default {
       status: '状态',
       created: '创建时间',
       completed: '到账时间',
+      promo: '优惠码',
       resume: '继续支付',
       empty: '暂无充值记录'
     },

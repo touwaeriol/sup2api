@@ -69,6 +69,15 @@ export default {
       empty: 'No promo codes',
       unlimited: 'unlimited',
       anyAmount: 'Any',
+      usages: 'Usage',
+      usage: {
+        title: 'Usage of {code}',
+        summary: 'Used {count} times, unpaid orders holding a use included',
+        empty: 'Nobody has used this code yet',
+        fields: { user: 'User', out_trade_no: 'Order', bonus: 'Bonus', status: 'Status', created_at: 'Applied', used_at: 'Credited' },
+        status: { reserved: 'Held (unpaid)', used: 'Credited' },
+        hint: 'A held use is released when its order expires or is cancelled.'
+      },
       enable: 'Enable',
       disable: 'Disable',
       toggled: { active: 'Promo code enabled', disabled: 'Promo code disabled' },
@@ -167,6 +176,15 @@ export default {
       empty: '暂无优惠码',
       unlimited: '不限',
       anyAmount: '不限',
+      usages: '使用记录',
+      usage: {
+        title: '{code} 的使用记录',
+        summary: '共使用 {count} 次（含未付款订单占用的）',
+        empty: '还没有人用过这个优惠码',
+        fields: { user: '用户', out_trade_no: '订单号', bonus: '赠送', status: '状态', created_at: '使用时间', used_at: '到账时间' },
+        status: { reserved: '占用中（未付款）', used: '已到账' },
+        hint: '占用中的名额会在订单过期或取消时释放。'
+      },
       enable: '启用',
       disable: '停用',
       toggled: { active: '优惠码已启用', disabled: '优惠码已停用' },

@@ -5,6 +5,7 @@ import { paymentApi, usePaymentHost, type PromoCode } from '../host'
 import { formatUsd } from '../format'
 import PayStatusBadge from '../components/PayStatusBadge.vue'
 import PromoEditModal from './PromoEditModal.vue'
+import PromoUsageDrawer from './PromoUsageDrawer.vue'
 import { actionsColumn, columnOf, confirmRun, runAction, useAdminList } from './actions'
 import { promoState } from '../components/status'
 
@@ -37,6 +38,13 @@ const editing = ref<PromoCode | null>(null)
 function openEdit(p: PromoCode | null) {
   editing.value = p
   editOpen.value = true
+}
+
+const usageOpen = ref(false)
+const usagePromo = ref<PromoCode | null>(null)
+function openUsage(p: PromoCode) {
+  usagePromo.value = p
+  usageOpen.value = true
 }
 
 async function toggle(p: PromoCode) {
@@ -83,6 +91,7 @@ async function remove(p: PromoCode) {
       <template #cell-created_at="{ row }"><SDateTime :value="row.created_at" mode="absolute" muted /></template>
       <template #cell-actions="{ row }">
         <span class="payment-row-actions">
+          <SRowAction :label="t('admin.promo.usages')" @click="openUsage(row)" />
           <SRowAction :label="t('action.edit')" @click="openEdit(row)" />
           <SRowAction :label="row.status === 'active' ? t('admin.promo.disable') : t('admin.promo.enable')" @click="toggle(row)" />
           <SRowAction :label="t('action.delete')" tone="danger" @click="remove(row)" />
@@ -94,6 +103,7 @@ async function remove(p: PromoCode) {
     </STable>
 
     <PromoEditModal v-model:open="editOpen" :promo="editing" @saved="list.reload" />
+    <PromoUsageDrawer v-if="usagePromo" :key="usagePromo.id" v-model:open="usageOpen" :promo="usagePromo" />
   </div>
 </template>
 

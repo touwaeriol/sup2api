@@ -169,6 +169,18 @@ export interface PromoCode {
   created_at: string
 }
 
+/** One user's use of a promo code: held by an unpaid order (reserved), or credited with it (used). */
+export interface PromoUsage {
+  id: number
+  user_id: number
+  user_email?: string
+  out_trade_no: string
+  bonus: number
+  status: 'reserved' | 'used'
+  created_at: string
+  used_at?: string
+}
+
 const api = () => usePaymentHost().pluginApi
 
 export const paymentApi = {
@@ -190,5 +202,6 @@ export const paymentApi = {
   promoCodes: (query: Record<string, string>) => api().list<PromoCode>('/promo-codes', query),
   createPromoCode: (body: Partial<PromoCode>) => api().post<PromoCode>('/promo-codes', body),
   updatePromoCode: (id: number, body: Partial<PromoCode>) => api().patch<PromoCode>(`/promo-codes/${id}`, body),
-  deletePromoCode: (id: number) => api().del<void>(`/promo-codes/${id}`)
+  deletePromoCode: (id: number) => api().del<void>(`/promo-codes/${id}`),
+  promoUsagesPath: (id: number) => `/promo-codes/${id}/usages`
 }
