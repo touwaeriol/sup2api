@@ -14,14 +14,15 @@
 
 ## 2026-11-27
 
-### 核心 0.1.317：核心内置在线充值，优惠码、兑换码搬进核心（`a6c57802c`；迁移 0126；ovh 集群 primary-first；网关仍 0.1.139；ec2pool 未升）
+### 核心 0.1.317：核心内置在线充值，优惠码、兑换码搬进核心（`a6c57802c`；迁移 0126；ovh 集群与 ec2pool 单节点 primary-first；网关仍 0.1.139）
 
 - **构建**：在 ovh 本机从 develop `a6c57802c` 构建（worktree `~/sup2api/release-0.1.317`，`stage/own-0.1.317/`，取 0.1.316 的脚本、0.1.313 的 maintenance 断言；155 秒），插件密钥 `sup2api-plugins-2026`（`PREV_TRUST_SHA256` 与线上 `trust.pub` 一致）。清单 `4b9375b380a7f17ec23f7b20ef2b6e70f09150df6a9848cad29d104a1fd781e0`（amd64 `e92744ed…f5b5`、arm64 `6e1831da…0408`），strategy maintenance，Host API 10，schema `d3f7a424…b927` → `f8252885…5531`。内置插件版本与线上相同（anthropic 0.4.0、codex 0.2.3、dynweight 0.7.0、gemini 0.4.1、mailer 0.1.5、moderation 0.13.0、newapi 0.1.2、openai 0.5.0、sub2api 0.1.2、typesafe 0.1.1），payment 不再内置。
 - **发布前**（北京时间 22:01）：手册 `next/deploy/rollback/topup-0126-release.md` 第一节第 3 项只读计数全为 0（插件优惠码、未使用兑换码、订单都没有）；预检 primary-first-v1、无 blocker（expected_revision 597）；22:01:53–22:02:00 停用 payment 插件 0.2.0（rollout 309，两节点 stopped，未卸载）。没有关 new-api 渠道 392（用户选带流量升级），没有 `pg_dump`。
 - **ovh 集群**（北京时间 2026-11-27 22:02–22:03，用户“更新到ssh ovh”“晚上吧”）：计划 `26ca18e49618effde1c58d3c06e6e9d4` 22:02:10.4→22:03:00.4，迁移 0126 于 22:02:30.4 应用（无 “payment plugin tables not readable” 警告）；**停服**：ovh 3130 与 api.prophey.ai `/readyz` 503 22:02:26→22:02:35 约 9 秒；ccp 22:02:59 恢复 local。
 - **核验**：两节点核心 0.1.317、网关 0.1.139；8 个启用插件 active、ready、restarts 0，payment disabled；临时密钥（分组 9，账号 129）非流式、流式 `/v1/messages` 200、`billed`，密钥已删；六张新表都在，`promo_codes` 0、`redeem_codes` unused 0；`GET /api/v1/topup/settings` 200，菜单有“充值/支付”分组与“充值记录”；22:01:30 后两节点无 ERROR，22:03 后 usage_logs 无 5xx（维护期间 4 个 499）。记录在 ovh `~/rel317/`。
+- **ec2pool**（北京时间 2026-11-28 00:30–00:31，用户“更新上去”）：同一提交在那台机器上构建（184 秒，核心二进制与 ovh 逐字节相同，`sup2api-ec2pool-2026` 签名），清单 `97a426cfdd766334e3af54a67734a8988050bf20c16d8eb064df1eb53cffcd3e`，maintenance。payment 插件没装，不用停用。预检 primary-first-v1（单节点，expected_revision 24），计划 `41ba1a40f002b086859500e1f4444194` 00:30:56.9→00:31:03.7，迁移 0126 于 00:31:02.6 应用；`/readyz` 503 约 4 秒（00:30:59.8→00:31:03.8）。核心 0.1.317，5 个启用插件 active、restarts 0，日志无 ERROR；`chatgpt_test.py`（临时密钥，已删）11 个请求全部 200、`billed`；六张新表都在，计数都是 0；`GET /api/v1/topup/settings` 200。外部 New API 的 key 1 自 11-27 13:35 起没有请求，升级前后成功率无从对照。
 - **待办**：确认不再回退后卸载 payment 插件并在 touwaeriol/sup2api-plugin 下架 `sub2api/payment`；在线充值默认关闭，需管理员在“充值配置”配好网关再打开。
-- 回退：0126 只新建表，可用 0.1.316 清单 `93fe8530…3f14` 建反向计划；回退前按手册第三节关充值、查在途订单、兑换码对账，再重新启用 payment 插件。
+- 回退：0126 只新建表，可用 0.1.316 清单 `93fe8530…3f14` 建反向计划；回退前按手册第三节关充值、查在途订单、兑换码对账，再重新启用 payment 插件。ec2pool 可用 0.1.316 清单 `93dafeb0…54bb` 建反向计划。
 
 本次发布包含的改动：
 

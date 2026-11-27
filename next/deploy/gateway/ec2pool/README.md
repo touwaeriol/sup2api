@@ -2,7 +2,7 @@
 
 ec2pool（AWS us-west-2，x86_64）上的 sup2api 是一个独立集群，和 ovh/clicodeplus 集群不共用数据库。同一台机器上还有 sakura-2api、cli-proxy-api、antigravity 和 kin 容器，与 sup2api 无关，操作时不要碰。
 
-## 现状（2026-11-25 起）：网关托管，单节点，网关 0.1.139、核心 0.1.316（本机构建）
+## 现状（2026-11-28 起）：网关托管，单节点，网关 0.1.139、核心 0.1.317（本机构建）
 
 > 0.1.306–0.1.311 的发布记录在 `/opt/sup2api-gw/rel306`、`rel307`、`rel311` 与 `stage/own-<版本>/`，本文件没有逐条补录。
 
@@ -16,6 +16,15 @@ ec2pool（AWS us-west-2，x86_64）上的 sup2api 是一个独立集群，和 ov
 - 内置插件签名密钥：核心 0.1.298 起在没设 `SUB2API_BUILTIN_TRUST_KEY` 时自己读 `builtin/trust.pub`，compose 里不再设这个变量（0.1.297 期间手动设过，备份 `compose.yml.bak-with-trustkey`；回到 0.1.297 要加回去）。
 - 本机构建的内置包用只留在这台机器上的插件密钥 `sup2api-ec2pool-2026` 签名（`keys/plugin-sign/`，0700；公钥 `YnVgIX8xaLoG1A9SgZ8nGIp+vl/opLYEK/UbxRwE+Ts=`），ovh 的 `sup2api-plugins-2026` 私钥没有搬过来。分组 `chatGPT`（id 1）下有 73 个 `codex_device` 账号（id 2–75），是有真实流量的环境。`SUB2API_PLUGIN_MAX_MEMORY_MB=1024` 仍设着（0.1.304 起默认不封顶，平台插件要经手完整请求体，见 CHANGELOG 0.1.304 升级须知）。
 - 插件：`SUB2API_PLUGIN_VERIFY_SIGNATURES=false`（沿用旧部署）；已装插件包原来由旧核心用开发密钥 `sub2api-dev` 签名，Release 内置包用 `sup2api-plugins-2026` 签名，同版本的包保留原样。
+
+## 2026-11-28 核心 0.1.317（迁移 0126，主节点优先，本机构建）
+
+- 用户 2026-11-27 16:25 UTC 原话“更新上去”。
+- 发布前（只读，`rel317/precheck.out`）：payment 插件没装（`plugins` 无该行，`plg_payment__*` 表都不存在），0126 手册第一节第 2、3 项不适用；没有另做数据库备份（用户规则）。
+- 构建：`src317`（`git -C src316 worktree add`，develop `a6c57802c`，与 ovh 同一提交），`stage/own-0.1.317/`（env.sh 照 own-0.1.316，pack 断言 maintenance 照 own-0.1.314；`LIVE_SCHEMA` `d3f7a424…b927`、`SCHEMA` `f8252885…5531`，密钥 `sup2api-ec2pool-2026`，`PREV_TRUST_SHA256` `2214b9b9…03ad`），184 秒；清单 `97a426cfdd766334e3af54a67734a8988050bf20c16d8eb064df1eb53cffcd3e`（amd64 `e5bce6a8…fe96`、arm64 `617534a3…9825`），maintenance。核心二进制与 ovh 的构建逐字节相同，内置插件版本与线上相同。
+- 升级（`rel317/`，北京时间）：00:30:46 import，预检 primary-first-v1、只有 node-a、无阻断（expected_revision 24），计划 `41ba1a40f002b086859500e1f4444194` 00:30:56.9→00:31:03.7，迁移 0126 于 00:31:02.6 应用。**停服**：`127.0.0.1:18080` 与公网 sslip `/readyz` 503 00:30:59.8→00:31:03.8 约 4 秒。
+- 核验：核心 0.1.317、网关 0.1.139；5 个启用插件 active、restarts 0，日志无 ERROR；`chatgpt_test.py` 11 个请求全部 200、`billed`；六张新表都在，`promo_codes` 0、`redeem_codes` unused 0；`GET /api/v1/topup/settings` 200，菜单有“充值/支付”。key 1 自 11-27 13:35 起没有请求，升级前后成功率无从对照。
+- 回滚：0126 只新建表，可用 0.1.316 清单 `93dafeb0…54bb` 建反向计划（没有 payment 插件，不涉及兑换码对账）。
 
 ## 2026-11-25 核心 0.1.316（无迁移，本机构建，codex 0.2.3）
 
