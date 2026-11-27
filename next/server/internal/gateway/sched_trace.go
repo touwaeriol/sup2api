@@ -89,7 +89,7 @@ type unserved int
 
 const (
 	unservedNo      unserved = iota // the account may serve once free
-	unservedModel                   // its model list or binding leaves the request out
+	unservedModel                   // a model list leaves it out (any others: bindings)
 	unservedBinding                 // its protocol binding leaves the request out
 )
 
@@ -190,10 +190,9 @@ func (c *call) notServed(ctx context.Context, verdict unserved) *gwError {
 	}
 	for i := range resting {
 		reason, _, ok := c.ineligibleReason(&resting[i])
-		if ok {
+		if verdict = min(verdict, unservedBy(reason)); ok || verdict == unservedNo {
 			return nil
 		}
-		verdict = min(verdict, unservedBy(reason))
 	}
 	switch verdict {
 	case unservedBinding:

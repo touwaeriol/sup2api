@@ -682,7 +682,7 @@ func TestProtocolBindingNativeAccountServes(t *testing.T) {
 // or only out for a while keeps the answer of a passing shortage, which
 // clients retry.
 func TestProtocolBindingNotFoundOnlyWhenNoAccountServes(t *testing.T) {
-	overloaded := func(b *bindingEnv, status int) *core.UsageRecord {
+	noAccount := func(b *bindingEnv, status int) *core.UsageRecord {
 		t.Helper()
 		sent := b.sent()
 		if r := b.messagesFor(testModel); r.status != status {
@@ -704,7 +704,7 @@ func TestProtocolBindingNotFoundOnlyWhenNoAccountServes(t *testing.T) {
 	t.Run("an account does not list the model", func(t *testing.T) {
 		b := withNative()
 		b.accounts.set(1, func(a *core.Account) { a.Models = []string{otherModel} })
-		if rec := overloaded(b, 503); skipOf(rec.Scheduling, 1, core.SchedModelNotServed) == nil || rec.StatusCode != 503 {
+		if rec := noAccount(b, 503); skipOf(rec.Scheduling, 1, core.SchedModelNotServed) == nil || rec.StatusCode != 503 {
 			t.Fatalf("record %+v trace %+v", rec, rec.Scheduling)
 		}
 		// Not Anthropic's overload: an api_error naming what is missing.
@@ -721,14 +721,14 @@ func TestProtocolBindingNotFoundOnlyWhenNoAccountServes(t *testing.T) {
 		b.gw.d.Limiter = lim
 		b.accounts.set(1, func(a *core.Account) { a.RPMLimit = 1 })
 		lim.exhausted[1] = true
-		if rec := overloaded(b, 429); rec.Scheduling.Outcome != core.SchedulingBusy {
+		if rec := noAccount(b, 429); rec.Scheduling.Outcome != core.SchedulingBusy {
 			t.Fatalf("trace %+v", rec.Scheduling)
 		}
 	})
 	t.Run("an account that serves is cooling down", func(t *testing.T) {
 		b := withNative()
 		b.accounts.cooldown[1] = time.Now().Add(time.Minute)
-		if rec := overloaded(b, 529); skipOf(rec.Scheduling, 1, core.SchedNotSchedulable) == nil {
+		if rec := noAccount(b, 529); skipOf(rec.Scheduling, 1, core.SchedNotSchedulable) == nil {
 			t.Fatalf("trace %+v", rec.Scheduling)
 		}
 		// Disabled for good, it will not serve: the request is not served.
@@ -751,7 +751,7 @@ func TestProtocolBindingNotFoundOnlyWhenNoAccountServes(t *testing.T) {
 		}
 		// Converted for, it will serve once back: a passing shortage.
 		b.accounts.serveOn(12, messagesProtocol)
-		overloaded(b, 529)
+		noAccount(b, 529)
 	})
 }
 
@@ -781,6 +781,24 @@ func TestProtocolBindingStickySessionLeavesAClosedAccount(t *testing.T) {
 	rec = b.served(b.messages(session), 1, messagesProtocol)
 	if v, _ := b.mr.Get(key); v != "1" || rec.StickyHit || b.plat.buildCount() != builds {
 		t.Fatalf("binding %q after the account closed, record %+v", v, rec)
+	}
+}
+
+// A WebSocket handshake every account's model list leaves out answers a
+// plain 503, like an HTTP request.
+func TestProtocolBindingWebSocketModelNotServed(t *testing.T) {
+	e := newWSEnv(t)
+	for _, id := range []int64{11, 12} {
+		e.accounts.set(id, func(a *core.Account) { a.Models = []string{otherModel} })
+	}
+	c := e.mustDial()
+	c.send(create(wsModel, "hi"))
+	if ev := c.until("error"); ev[0].Get("status").Int() != 503 || ev[0].Get("error.message").String() != errModelNotServed.Message {
+		t.Fatalf("model lists: %v", ev)
+	}
+	if rec := e.record(); rec.StatusCode != 503 || rec.ErrorType != errTypeNoAccount || rec.Attempts != 0 ||
+		skipOf(rec.Scheduling, 11, core.SchedModelNotServed) == nil {
+		t.Fatalf("record %+v trace %+v", rec, rec.Scheduling)
 	}
 }
 

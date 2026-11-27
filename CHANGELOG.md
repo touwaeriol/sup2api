@@ -21,6 +21,10 @@
 - **依赖**：新增 `github.com/stripe/stripe-go/v87`，`shopspring/decimal` 升到 1.5.0。
 - 发布与回退见 `next/deploy/rollback/topup-0126-release.md`（带迁移，发布前先关 newapi 接 sup2api 的渠道）。
 
+#### 只因模型列表接不了的请求回普通 503，不再装成 529 过载（CONTRACTS §11.6；无迁移，可滚动）
+
+- 候选账号和冷却中、限时停用的账号全部因配置接不了这个请求，其中有账号是模型列表不含请求的模型（其余是协议绑定）时，所有格式都回 503 `no_available_account`「no account in this group serves this model」；`anthropic` 格式的 `error.type` 为 `api_error`，不再改写成 529 `overloaded_error`，客户端不会白白退避重试。全部是协议绑定时仍是 404；冷却、并发满、限流仍是 529/429。起因：11-27 线上分组 9 唯一可用账号的模型列表不含 claude-haiku-5-5，249 条请求全部回 529。
+
 ## 2026-11-25
 
 ### 核心 0.1.316：插件的 `client_status` 生效，codex 0.2.3 把 `server_is_overloaded` 回成 529（`83f734cb3`；无迁移；ovh 滚动、ec2pool 单节点；网关仍 0.1.139）

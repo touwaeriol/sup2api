@@ -460,7 +460,7 @@ Anthropic 的 `cache_creation_input_tokens` 是总量（含 1 小时缓存）。
 - 错误格式：`plain` 即核心 REST 格式 `{"error":{code,message}}`；`anthropic` 格式在 `error` 中额外带 `code`（如钩子拒绝时的 `guard_blocked`）
 - 所有尝试都失败时：最后一次是上游错误则返回该错误（按 ClassifyError 的状态码与类型）；是插件或账号问题返回 503 `no_available_account`；有账号但并发槽位全满返回 429
 - **`anthropic` 格式下没有可用账号按官方"过载"返回**（2026-10-10）：HTTP 529，`{"type":"error","error":{"type":"overloaded_error","message":"Overloaded","code":"no_available_account"}}`，与官方 API 的过载一致，Claude Code 与 SDK 会退避重试（`gateway/errors.go` `clientError`）。使用记录的 `status_code` 为 529，`error_type` 仍为 `no_account`，`error_message` 保留核心原因（如 `no available account`）。其他格式（`openai`、`gemini`、`plain`）仍是 503；上游原样透传的错误体不受影响。
-- **只因模型列表接不了时是普通 503，不按过载返回**（2026-11-27，用户决定）：提供给本次请求的候选账号全部因配置被过滤，其中至少一个是因模型列表不含请求模型或它引用的模型（`model_not_served` / `referenced_model_not_served`），其余是协议绑定（§110.5 的三个原因），且暂时退出的账号（§110.5）也都是因这些原因不能服务时，所有格式都返回 503，`code` 为 `no_available_account`，消息 `no account in this group serves this model`（`gateway/errors.go` `errModelNotServed`）；`anthropic` 格式的 `error.type` 为 `api_error`，不改写成 529。使用记录 `status_code` 503，`error_type` 为 `no_account`，`attempts` 为 0。配置不改不会恢复，按过载返回会让客户端白白退避重试（线上 11-27 分组 9 唯一可用账号不含 claude-haiku-5-5，249 条请求全回 529）。全部是协议绑定时仍是 §110.5 的 404；有候选因冷却、并发、限流、用量等原因没选上，或没有候选账号（全部禁用、冷却）时，仍按上一条返回 529/503。
+- **只因模型列表接不了时是普通 503，不按过载返回**（2026-11-27，用户决定）：提供给本次请求的候选账号（至少一个）和暂时退出的账号（§110.5）合起来全部因配置不能服务，其中至少一个是因模型列表不含请求模型或它引用的模型（`model_not_served` / `referenced_model_not_served`），其余是协议绑定（§110.5 的三个原因）时，所有格式都返回 503，`code` 为 `no_available_account`，消息 `no account in this group serves this model`（`gateway/errors.go` `errModelNotServed`）；`anthropic` 格式的 `error.type` 为 `api_error`，不改写成 529。使用记录 `status_code` 503，`error_type` 为 `no_account`，`attempts` 为 0。配置不改不会恢复，按过载返回会让客户端白白退避重试（线上 11-27 分组 9 唯一可用账号不含 claude-haiku-5-5，249 条请求全回 529）。全部是协议绑定时仍是 §110.5 的 404；有候选因冷却、并发、限流、用量等原因没选上，或没有候选账号（全部禁用、冷却）时，仍按上一条返回 529/503。
 - **模型名不合法时返回 400**（2026-11-02）：从请求取到的模型名含空白或控制字符或不是合法 UTF-8 时，在选号前返回 400 `invalid_request_error`，使用记录 `error_type` 为 `invalid_request`。此前只靠插件的可用性检查拦截，返回 503（§44.7）。模型名不限长度（转发 V2 收尾起；此前超过 256 字节也返回 400，使用记录把模型名截到 200 字节；迁移 0108 把存模型名的列改成 `text`，见 §112.16）。
 - **分组里根本没有能服务该端点的账号时返回 404**（2026-10-11，用户决定）：没有任何已启用的账号类型声明该端点，或调用方分组里没有这些类型的账号（不论账号状态，已删除的除外；`AccountDirectory.GroupHasType`），返回 404 `not_found_error`「no account in this group serves this endpoint」，`code` 为 `not_found`。客户端不会重试 404。使用记录的 `error_type` 为 `no_account`，`status_code` 为 404。分组里有这种账号、只是全部被禁用、冷却或占满时，仍按上一条返回 529/503。例：一个只有不声明 `count_tokens` 的账号类型的分组，调计数接口会得到 404（CCGateway 2026-11-04 起声明）。§110 起另有一种 404：分组里有这类账号，但提供给本次请求的候选账号全部被账号的协议绑定过滤（没有账号在这个端点上提供这个模型，含跨平台转换没有开启），消息为 `no account in this group serves this model on this endpoint`，条件见 §110.5。
 
@@ -7808,12 +7808,13 @@ ALTER TABLE accounts ADD COLUMN IF NOT EXISTS model_protocols jsonb NOT NULL DEF
 
 **暂时退出的账号**（`AccountDirectory.Resting(ctx, groupID, types)`）：分组调度快照里类型有路由、但 `Candidates` 现在不给的账号，即冷却中的和限时自动停用还没到期的。候选全部被协议绑定过滤时，网关对它们跑同一个 `ineligibleReason`（`gateway/sched_trace.go` `notServed`；候选全部因配置被过滤、部分是模型列表时同样判断，结果是 §11.6 的普通 503）：
 
-- 其中有一个不是因这三个原因被过滤（它能服务这个请求，或是因模型白名单、用量等别的原因不能）→ 不返回 404，按暂时缺账号处理：它回来后可能服务这个请求。
+- 其中有一个能服务这个请求，或是因用量等配置以外的原因不能 → 不返回 404，按暂时缺账号处理：它回来后可能服务这个请求。
+- 其中有因模型列表（模型白名单）不能服务的、其余都被协议绑定过滤 → 不返回 404，返回 §11.6 的普通 503（2026-11-27）。
 - 它们也都被协议绑定过滤 → 404。所以一个没开转换的账号在冷却，不会把 404 变成可重试的 503/529。
 - 永久停用、关闭调度的账号不在快照里，不算“会回来”，不妨碍 404。
 - 读取失败（读不到冷却状态）→ 不返回 404。
 
-`Resting` 读的是 `Candidates` 用的同一份快照（内存，30 秒，过期时与 `Candidates` 一样读一次库）加一次 Redis 管道查冷却，**不查数据库**，也没有账号数上限；只有候选全部被协议绑定过滤的请求才调用，有账号能服务的请求不调用。调度记录在“无账号”时的那次查库（§24.6 `not_schedulable`，`AccountDirectory.Unschedulable`，最多列 200 个账号）照旧，只用于记录，不参与 404 的判断。
+`Resting` 读的是 `Candidates` 用的同一份快照（内存，30 秒，过期时与 `Candidates` 一样读一次库）加一次 Redis 管道查冷却，**不查数据库**，也没有账号数上限；只有候选全部因配置（协议绑定或模型列表）被过滤的请求才调用，有账号能服务的请求不调用。调度记录在“无账号”时的那次查库（§24.6 `not_schedulable`，`AccountDirectory.Unschedulable`，最多列 200 个账号）照旧，只用于记录，不参与 404 的判断。
 
 **不返回 404、仍按现有规则（503，`anthropic` 格式 529；全部忙或限流时 429）的其他情况**：
 
