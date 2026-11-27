@@ -8,6 +8,23 @@
 
 开发完成、尚未上线的改动。发布时改成发布日期的一节，补上提交、实际版本号和发布过程。
 
+#### 只因模型列表接不了的请求回普通 503，不再装成 529 过载（CONTRACTS §11.6；无迁移，可滚动）
+
+- 候选账号和冷却中、限时停用的账号全部因配置接不了这个请求，其中有账号是模型列表不含请求的模型（其余是协议绑定）时，所有格式都回 503 `no_available_account`「no account in this group serves this model」；`anthropic` 格式的 `error.type` 为 `api_error`，不再改写成 529 `overloaded_error`，客户端不会白白退避重试。全部是协议绑定时仍是 404；冷却、并发满、限流仍是 529/429。起因：11-27 线上分组 9 唯一可用账号的模型列表不含 claude-haiku-5-5，249 条请求全部回 529。
+
+## 2026-11-27
+
+### 核心 0.1.317：核心内置在线充值，优惠码、兑换码搬进核心（`a6c57802c`；迁移 0126；ovh 集群 primary-first；网关仍 0.1.139；ec2pool 未升）
+
+- **构建**：在 ovh 本机从 develop `a6c57802c` 构建（worktree `~/sup2api/release-0.1.317`，`stage/own-0.1.317/`，取 0.1.316 的脚本、0.1.313 的 maintenance 断言；155 秒），插件密钥 `sup2api-plugins-2026`（`PREV_TRUST_SHA256` 与线上 `trust.pub` 一致）。清单 `4b9375b380a7f17ec23f7b20ef2b6e70f09150df6a9848cad29d104a1fd781e0`（amd64 `e92744ed…f5b5`、arm64 `6e1831da…0408`），strategy maintenance，Host API 10，schema `d3f7a424…b927` → `f8252885…5531`。内置插件版本与线上相同（anthropic 0.4.0、codex 0.2.3、dynweight 0.7.0、gemini 0.4.1、mailer 0.1.5、moderation 0.13.0、newapi 0.1.2、openai 0.5.0、sub2api 0.1.2、typesafe 0.1.1），payment 不再内置。
+- **发布前**（北京时间 22:01）：手册 `next/deploy/rollback/topup-0126-release.md` 第一节第 3 项只读计数全为 0（插件优惠码、未使用兑换码、订单都没有）；预检 primary-first-v1、无 blocker（expected_revision 597）；22:01:53–22:02:00 停用 payment 插件 0.2.0（rollout 309，两节点 stopped，未卸载）。没有关 new-api 渠道 392（用户选带流量升级），没有 `pg_dump`。
+- **ovh 集群**（北京时间 2026-11-27 22:02–22:03，用户“更新到ssh ovh”“晚上吧”）：计划 `26ca18e49618effde1c58d3c06e6e9d4` 22:02:10.4→22:03:00.4，迁移 0126 于 22:02:30.4 应用（无 “payment plugin tables not readable” 警告）；**停服**：ovh 3130 与 api.prophey.ai `/readyz` 503 22:02:26→22:02:35 约 9 秒；ccp 22:02:59 恢复 local。
+- **核验**：两节点核心 0.1.317、网关 0.1.139；8 个启用插件 active、ready、restarts 0，payment disabled；临时密钥（分组 9，账号 129）非流式、流式 `/v1/messages` 200、`billed`，密钥已删；六张新表都在，`promo_codes` 0、`redeem_codes` unused 0；`GET /api/v1/topup/settings` 200，菜单有“充值/支付”分组与“充值记录”；22:01:30 后两节点无 ERROR，22:03 后 usage_logs 无 5xx（维护期间 4 个 499）。记录在 ovh `~/rel317/`。
+- **待办**：确认不再回退后卸载 payment 插件并在 touwaeriol/sup2api-plugin 下架 `sub2api/payment`；在线充值默认关闭，需管理员在“充值配置”配好网关再打开。
+- 回退：0126 只新建表，可用 0.1.316 清单 `93fe8530…3f14` 建反向计划；回退前按手册第三节关充值、查在途订单、兑换码对账，再重新启用 payment 插件。
+
+本次发布包含的改动：
+
 #### 核心内置在线充值：易支付、Stripe、插件扩展支付方式；优惠码、兑换码搬进核心（CONTRACTS §140；迁移 0126，只新增表，可回退）
 
 - **在线充值**：核心内置易支付与 Stripe 两个网关，插件可经新能力 `payment.gateway.v1`（高风险宿主权限 `payment.gateway`）扩展其他支付方式。下单、回调、查单只有一条代码路径；回调先验签（回应带 nosniff 与 CSP，按 IP 限流），再在一个事务里逐项核对网关、商户、方式、会话、状态、金额与币种、流水号和事件 id，入账与订单完成在同一个事务里（锁住订单行，不用租约）；订单状态按一张迁移表走，进入失败、过期、取消时同事务释放优惠码；下单前先查单笔 100000、单日 1000000 的上限（单日把迟到窗口内仍可能付款的订单也算上），免得用户为入不了账的订单付钱。易支付只收人民币。二维码由服务端生成 PNG。网关返回的支付地址必须是 https。站点地址必须是 https 才能开通。管理员订单只读，不退款、不补单，订单详情可看回调事件。
@@ -20,10 +37,6 @@
 - **插件**：删除 payment 插件（`next/plugins/payment`），商店下架 `sub2api/payment`；迁移 0126 一次性复制它的优惠码和未使用的兑换码。开发用的模拟网关在 `sdk/pluginsdk/pluginsdktest/mockpay`，不打包、不发布。
 - **依赖**：新增 `github.com/stripe/stripe-go/v87`，`shopspring/decimal` 升到 1.5.0。
 - 发布与回退见 `next/deploy/rollback/topup-0126-release.md`（带迁移，发布前先关 newapi 接 sup2api 的渠道）。
-
-#### 只因模型列表接不了的请求回普通 503，不再装成 529 过载（CONTRACTS §11.6；无迁移，可滚动）
-
-- 候选账号和冷却中、限时停用的账号全部因配置接不了这个请求，其中有账号是模型列表不含请求的模型（其余是协议绑定）时，所有格式都回 503 `no_available_account`「no account in this group serves this model」；`anthropic` 格式的 `error.type` 为 `api_error`，不再改写成 529 `overloaded_error`，客户端不会白白退避重试。全部是协议绑定时仍是 404；冷却、并发满、限流仍是 529/429。起因：11-27 线上分组 9 唯一可用账号的模型列表不含 claude-haiku-5-5，249 条请求全部回 529。
 
 ## 2026-11-25
 
