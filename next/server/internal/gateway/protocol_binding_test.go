@@ -215,10 +215,12 @@ func (a *readsAccounts) Unschedulable(ctx context.Context, group int64) ([]core.
 	return a.fakeAccounts.Unschedulable(ctx, group)
 }
 
-// The request is not served (404) only when accounts were offered and each
-// one is closed by its protocol binding; an account left out for anything
-// else, or one that is only out for a while, keeps the answer it had.
-func TestProtocolNotServedOnlyWhenEveryAccountIsClosed(t *testing.T) {
+// The request is not served only when accounts were offered and each one is
+// out by its configuration: 404 when every one is closed by its protocol
+// binding, a plain 503 when model lists leave some out. An account left out
+// for anything else, or one only out for a while that may serve, keeps the
+// answer it had.
+func TestNotServedOnlyWhenEveryAccountIsOut(t *testing.T) {
 	notConverted := accountOf(1, crossType, nil)
 	protocolClosed := accountOf(2, ownType, core.NewProtocolRules([]string{"openai.chat"}, nil))
 	modelClosed := accountOf(3, ownType, core.NewProtocolRules(nil, []core.ModelProtocolRule{protocolRule([]string{"openai.chat"}, "m")}))
@@ -230,17 +232,18 @@ func TestProtocolNotServedOnlyWhenEveryAccountIsClosed(t *testing.T) {
 		name     string
 		offered  []core.AccountRef
 		eligible int
-		closed   bool
+		verdict  unserved
 	}{
-		{"no account offered", nil, 0, false},
-		{"every account closed", []core.AccountRef{notConverted, protocolClosed, modelClosed}, 0, true},
-		{"an account serves", []core.AccountRef{notConverted, serving}, 1, false},
-		{"an account is left out for its model list", []core.AccountRef{notConverted, otherModels}, 0, false},
+		{"no account offered", nil, 0, unservedNo},
+		{"every account closed", []core.AccountRef{notConverted, protocolClosed, modelClosed}, 0, unservedBinding},
+		{"an account serves", []core.AccountRef{notConverted, serving}, 1, unservedNo},
+		{"an account is left out for its model list", []core.AccountRef{notConverted, otherModels}, 0, unservedModel},
+		{"every account is left out for its model list", []core.AccountRef{otherModels}, 0, unservedModel},
 	} {
 		c := boundCall(messagesProtocol)
-		cands, closed := c.eligibleAccounts(tc.offered)
-		if len(cands) != tc.eligible || closed != tc.closed || c.sched.candidates != len(tc.offered) {
-			t.Errorf("%s: %d eligible of %d, closed %v", tc.name, len(cands), c.sched.candidates, closed)
+		cands, verdict := c.eligibleAccounts(tc.offered)
+		if len(cands) != tc.eligible || verdict != tc.verdict || c.sched.candidates != len(tc.offered) {
+			t.Errorf("%s: %d eligible of %d, verdict %v", tc.name, len(cands), c.sched.candidates, verdict)
 		}
 		if len(c.sched.skips) != len(tc.offered)-tc.eligible {
 			t.Errorf("%s: skips %+v", tc.name, c.sched.skips)
@@ -252,31 +255,37 @@ func TestProtocolNotServedOnlyWhenEveryAccountIsClosed(t *testing.T) {
 	cooling := func(id int64) func(a *readsAccounts) {
 		return func(a *readsAccounts) { a.cooldown[id] = time.Now().Add(time.Minute) }
 	}
+	modelOut := func(id int64) func(a *readsAccounts) {
+		return func(a *readsAccounts) {
+			cooling(id)(a)
+			a.set(id, func(acc *core.Account) { acc.Models = []string{"x"} })
+		}
+	}
 	for _, tc := range []struct {
-		name   string
-		closed bool
-		setup  func(a *readsAccounts)
-		status int // 0: the request goes on
+		name    string
+		verdict unserved
+		setup   func(a *readsAccounts)
+		status  int // 0: the request goes on
 	}{
-		{name: "an account can serve", closed: false, setup: cooling(7)},
-		{name: "every account closed", closed: true, status: 404},
-		{name: "the rest of the group is disabled", closed: true, status: 404,
+		{name: "an account can serve", verdict: unservedNo, setup: cooling(7)},
+		{name: "every account closed", verdict: unservedBinding, status: 404},
+		{name: "the rest of the group is disabled", verdict: unservedBinding, status: 404,
 			setup: func(a *readsAccounts) { a.disabled[7] = "admin" }},
-		{name: "an account that serves the request is cooling down", closed: true, setup: cooling(7)},
-		{name: "a cooling account is closed by its binding too", closed: true, status: 404, setup: cooling(8)},
-		{name: "a cooling account is closed, another serves", closed: true,
+		{name: "an account that serves the request is cooling down", verdict: unservedBinding, setup: cooling(7)},
+		{name: "a cooling account is closed by its binding too", verdict: unservedBinding, status: 404, setup: cooling(8)},
+		{name: "a cooling account is closed, another serves", verdict: unservedBinding,
 			setup: func(a *readsAccounts) { cooling(7)(a); cooling(8)(a) }},
-		{name: "a cooling account is out for its model list", closed: true,
-			setup: func(a *readsAccounts) {
-				cooling(7)(a)
-				a.set(7, func(acc *core.Account) { acc.Models = []string{"x"} })
-			}},
-		{name: "a cooling account closed the protocol", closed: true, status: 404,
+		{name: "a cooling account is out for its model list", verdict: unservedBinding, status: 503, setup: modelOut(7)},
+		{name: "a cooling account closed the protocol", verdict: unservedBinding, status: 404,
 			setup: func(a *readsAccounts) {
 				cooling(7)(a)
 				a.bind(7, []string{"openai.chat"})
 			}},
-		{name: "the resting accounts cannot be read", closed: true,
+		{name: "every account is out for its model list", verdict: unservedModel, status: 503},
+		{name: "a cooling account closed the protocol, the rest out for model lists", verdict: unservedModel, status: 503,
+			setup: func(a *readsAccounts) { cooling(8)(a) }},
+		{name: "out for model lists, a cooling account serves", verdict: unservedModel, setup: cooling(7)},
+		{name: "the resting accounts cannot be read", verdict: unservedModel,
 			setup: func(a *readsAccounts) { a.err = errors.New("redis down") }},
 	} {
 		dir := &readsAccounts{fakeAccounts: newFakeAccounts()}
@@ -288,12 +297,13 @@ func TestProtocolNotServedOnlyWhenEveryAccountIsClosed(t *testing.T) {
 		c := boundCall(messagesProtocol)
 		c.routeKeys = []core.AccountTypeKey{ownType, crossType}
 		c.g, c.principal = &Gateway{d: Deps{Accounts: dir}}, &core.APIKeyPrincipal{Group: core.GroupInfo{ID: testGroup}}
-		e := c.protocolNotServed(context.Background(), tc.closed)
-		if want := map[bool]int{true: 1}[tc.closed]; dir.resting != want || dir.unschedulable != 0 {
+		e := c.notServed(context.Background(), tc.verdict)
+		if want := map[bool]int{true: 1}[tc.verdict != unservedNo]; dir.resting != want || dir.unschedulable != 0 {
 			t.Errorf("%s: %d reads of the resting accounts, %d of the unschedulable", tc.name, dir.resting, dir.unschedulable)
 		}
-		if (e == nil) != (tc.status == 0) || e != nil && (e.Status != tc.status || e.Message != notServedMessage || e.RecordType != errTypeNoAccount) {
-			t.Errorf("%s: %+v", tc.name, e)
+		want := map[int]*gwError{404: errProtocolNotServed, 503: errModelNotServed}[tc.status]
+		if e != want {
+			t.Errorf("%s: %+v, want %+v", tc.name, e, want)
 		}
 		// Only the record of a request that found no account reads what the
 		// group holds from the database.
@@ -668,8 +678,9 @@ func TestProtocolBindingNativeAccountServes(t *testing.T) {
 }
 
 // Only a group none of whose accounts will serve the request answers 404:
-// an account left out for another reason, busy or only out for a while keeps
-// the answer of a passing shortage, which clients retry.
+// an account left out for its model list makes it a plain 503, and one busy
+// or only out for a while keeps the answer of a passing shortage, which
+// clients retry.
 func TestProtocolBindingNotFoundOnlyWhenNoAccountServes(t *testing.T) {
 	overloaded := func(b *bindingEnv, status int) *core.UsageRecord {
 		t.Helper()
@@ -693,9 +704,16 @@ func TestProtocolBindingNotFoundOnlyWhenNoAccountServes(t *testing.T) {
 	t.Run("an account does not list the model", func(t *testing.T) {
 		b := withNative()
 		b.accounts.set(1, func(a *core.Account) { a.Models = []string{otherModel} })
-		if rec := overloaded(b, 529); skipOf(rec.Scheduling, 1, core.SchedModelNotServed) == nil {
-			t.Fatalf("trace %+v", rec.Scheduling)
+		if rec := overloaded(b, 503); skipOf(rec.Scheduling, 1, core.SchedModelNotServed) == nil || rec.StatusCode != 503 {
+			t.Fatalf("record %+v trace %+v", rec, rec.Scheduling)
 		}
+		// Not Anthropic's overload: an api_error naming what is missing.
+		r := b.messagesFor(testModel)
+		if j := r.json(); r.status != 503 || j.Get("error.type").String() != "api_error" ||
+			j.Get("error.code").String() != "no_available_account" || j.Get("error.message").String() != errModelNotServed.Message {
+			t.Fatalf("%d %s", r.status, r.body)
+		}
+		b.record()
 	})
 	t.Run("an account is rate limited", func(t *testing.T) {
 		b := withNative()

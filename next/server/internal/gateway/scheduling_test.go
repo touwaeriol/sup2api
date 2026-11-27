@@ -154,11 +154,12 @@ func TestModelListFiltersCandidates(t *testing.T) {
 	}
 	e.record()
 
-	// No account serves the model: 529 no_available_account.
+	// No account serves the model: a plain 503 no_available_account, not
+	// Anthropic's overload.
 	e.accounts.set(2, func(acc *core.Account) { acc.Models = []string{"another-model"} })
 	e.accounts.set(3, func(acc *core.Account) { acc.Models = []string{"another-model"} })
 	r = e.messages(body(testModel, false))
-	if r.status != 529 || r.json().Get("error.type").String() != "overloaded_error" {
+	if r.status != 503 || r.json().Get("error.type").String() != "api_error" {
 		t.Fatalf("status %d %s", r.status, r.body)
 	}
 	if rec := e.record(); rec.ErrorType != errTypeNoAccount {

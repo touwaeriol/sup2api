@@ -57,7 +57,7 @@
 | 失败 | HTTP 状态码 + `{"error": {"code": "...", "message": "...", "details": {...}}}` |
 | 字段校验失败 | `invalid_argument`，`details.fields = [{"field","code","message"}]` |
 
-错误码（`core/errors.go`）：`invalid_argument` 400、`unauthenticated` 401、`permission_denied` 403、`verification_required` 403（缺少或无效的二次验证 proof，`details {scope, context, methods, password_required}`，§80.2，2026-11-13）、`not_found` 404、`conflict` 409、`cluster_change_busy` 409（另一项集群变更——插件变更或核心升级计划——正在提交、占着集群变更锁，稍后重试即可；定义在 `core.ErrClusterChangeBusy`。上传插件时同一个插件的首次上传恰好被另一处抢先建了插件行（不取集群变更锁的内置插件首次安装）也回这个码，信息是 `the plugin is being uploaded concurrently; retry`，重试即成功，此前是 `conflict`。“核心升级进行中或已暂停”仍是 `conflict`，要先完成或取消升级，2026-11-18）、`insufficient_balance` 402、`model_price_not_configured` 403、`model_not_allowed` 403、`group_deleted` / `group_disabled` / `group_not_allowed` 403（API Key 所属分组已删除 / 已停用 / 不再对其所有者开放，§15.1）、`rate_limited` 429、`no_available_account` 503（网关 `anthropic` 格式渲染为 529 `overloaded_error`，§11.6）、`plugin_unavailable` 503、`package_gone` 410（插件版本记录在、没有在线节点持有它的安装包，§5.7、§114）、`unavailable` 503、`internal` 500。（原 `step_up_required` 已随 2026-10 的二次验证一起删除，§3.3；2026-11-13 的新二次验证用 `verification_required`，§80.2。）
+错误码（`core/errors.go`）：`invalid_argument` 400、`unauthenticated` 401、`permission_denied` 403、`verification_required` 403（缺少或无效的二次验证 proof，`details {scope, context, methods, password_required}`，§80.2，2026-11-13）、`not_found` 404、`conflict` 409、`cluster_change_busy` 409（另一项集群变更——插件变更或核心升级计划——正在提交、占着集群变更锁，稍后重试即可；定义在 `core.ErrClusterChangeBusy`。上传插件时同一个插件的首次上传恰好被另一处抢先建了插件行（不取集群变更锁的内置插件首次安装）也回这个码，信息是 `the plugin is being uploaded concurrently; retry`，重试即成功，此前是 `conflict`。“核心升级进行中或已暂停”仍是 `conflict`，要先完成或取消升级，2026-11-18）、`insufficient_balance` 402、`model_price_not_configured` 403、`model_not_allowed` 403、`group_deleted` / `group_disabled` / `group_not_allowed` 403（API Key 所属分组已删除 / 已停用 / 不再对其所有者开放，§15.1）、`rate_limited` 429、`no_available_account` 503（网关 `anthropic` 格式渲染为 529 `overloaded_error`，只因模型列表接不了时除外，§11.6）、`plugin_unavailable` 503、`package_gone` 410（插件版本记录在、没有在线节点持有它的安装包，§5.7、§114）、`unavailable` 503、`internal` 500。（原 `step_up_required` 已随 2026-10 的二次验证一起删除，§3.3；2026-11-13 的新二次验证用 `verification_required`，§80.2。）
 
 **限流应答**（2026-11-26）：控制台接口里说得出要等多久的 429 `rate_limited`（登录与二次验证锁定、兑换码、充值的每分钟次数）由 `core.RateLimitedFor(message, wait)` 构造，`details.retry_after_seconds` 是要等的秒数（向上取整、至少 1，等 0 秒的客户端会立刻重试），`httpapi.Fail` 对带这个字段的 429 同时写 `Retry-After` 头，模块不自己写头。说不出等待时间的上限（通知每来源的条数、插件运行时任务与排队数、插件回的 `ResourceExhausted`）仍是不带 `details.retry_after_seconds` 与 `Retry-After` 的 `rate_limited`。按用户、按地址的限流（`core.Admit` 计一分钟窗口的次数，`ratelimit.Lockout` 计失败或次数锁定）只为减慢滥用：限流器（Redis）出错时记警告放行，不回 503；没有 Redis 时都不限。网关路径（`/v1`）的限流应答另见 §68、§71。
 
@@ -460,6 +460,7 @@ Anthropic 的 `cache_creation_input_tokens` 是总量（含 1 小时缓存）。
 - 错误格式：`plain` 即核心 REST 格式 `{"error":{code,message}}`；`anthropic` 格式在 `error` 中额外带 `code`（如钩子拒绝时的 `guard_blocked`）
 - 所有尝试都失败时：最后一次是上游错误则返回该错误（按 ClassifyError 的状态码与类型）；是插件或账号问题返回 503 `no_available_account`；有账号但并发槽位全满返回 429
 - **`anthropic` 格式下没有可用账号按官方"过载"返回**（2026-10-10）：HTTP 529，`{"type":"error","error":{"type":"overloaded_error","message":"Overloaded","code":"no_available_account"}}`，与官方 API 的过载一致，Claude Code 与 SDK 会退避重试（`gateway/errors.go` `clientError`）。使用记录的 `status_code` 为 529，`error_type` 仍为 `no_account`，`error_message` 保留核心原因（如 `no available account`）。其他格式（`openai`、`gemini`、`plain`）仍是 503；上游原样透传的错误体不受影响。
+- **只因模型列表接不了时是普通 503，不按过载返回**（2026-11-27，用户决定）：提供给本次请求的候选账号全部因配置被过滤，其中至少一个是因模型列表不含请求模型或它引用的模型（`model_not_served` / `referenced_model_not_served`），其余是协议绑定（§110.5 的三个原因），且暂时退出的账号（§110.5）也都是因这些原因不能服务时，所有格式都返回 503，`code` 为 `no_available_account`，消息 `no account in this group serves this model`（`gateway/errors.go` `errModelNotServed`）；`anthropic` 格式的 `error.type` 为 `api_error`，不改写成 529。使用记录 `status_code` 503，`error_type` 为 `no_account`，`attempts` 为 0。配置不改不会恢复，按过载返回会让客户端白白退避重试（线上 11-27 分组 9 唯一可用账号不含 claude-haiku-5-5，249 条请求全回 529）。全部是协议绑定时仍是 §110.5 的 404；有候选因冷却、并发、限流、用量等原因没选上，或没有候选账号（全部禁用、冷却）时，仍按上一条返回 529/503。
 - **模型名不合法时返回 400**（2026-11-02）：从请求取到的模型名含空白或控制字符或不是合法 UTF-8 时，在选号前返回 400 `invalid_request_error`，使用记录 `error_type` 为 `invalid_request`。此前只靠插件的可用性检查拦截，返回 503（§44.7）。模型名不限长度（转发 V2 收尾起；此前超过 256 字节也返回 400，使用记录把模型名截到 200 字节；迁移 0108 把存模型名的列改成 `text`，见 §112.16）。
 - **分组里根本没有能服务该端点的账号时返回 404**（2026-10-11，用户决定）：没有任何已启用的账号类型声明该端点，或调用方分组里没有这些类型的账号（不论账号状态，已删除的除外；`AccountDirectory.GroupHasType`），返回 404 `not_found_error`「no account in this group serves this endpoint」，`code` 为 `not_found`。客户端不会重试 404。使用记录的 `error_type` 为 `no_account`，`status_code` 为 404。分组里有这种账号、只是全部被禁用、冷却或占满时，仍按上一条返回 529/503。例：一个只有不声明 `count_tokens` 的账号类型的分组，调计数接口会得到 404（CCGateway 2026-11-04 起声明）。§110 起另有一种 404：分组里有这类账号，但提供给本次请求的候选账号全部被账号的协议绑定过滤（没有账号在这个端点上提供这个模型，含跨平台转换没有开启），消息为 `no account in this group serves this model on this endpoint`，条件见 §110.5。
 
@@ -7805,7 +7806,7 @@ ALTER TABLE accounts ADD COLUMN IF NOT EXISTS model_protocols jsonb NOT NULL DEF
 - 使用记录：`status_code` 404，`error_type` 为 `no_account`，`attempts` 为 0，没有 `account_id`、`upstream_protocol`、`conversion`；`anomalies.scheduling` 的 `outcome` 为 `none`，`eligible` 为 0，`skipped` 里是每个候选账号的原因，冷却、停用的账号照 §24.6 记为 `not_schedulable`。
 - 没有请求被转换、构建或发往上游。WebSocket 首轮同样处理，错误以该连接的错误事件返回（`status` 404）。
 
-**暂时退出的账号**（`AccountDirectory.Resting(ctx, groupID, types)`）：分组调度快照里类型有路由、但 `Candidates` 现在不给的账号，即冷却中的和限时自动停用还没到期的。候选全部被协议绑定过滤时，网关对它们跑同一个 `ineligibleReason`（`gateway/sched_trace.go` `protocolNotServed`）：
+**暂时退出的账号**（`AccountDirectory.Resting(ctx, groupID, types)`）：分组调度快照里类型有路由、但 `Candidates` 现在不给的账号，即冷却中的和限时自动停用还没到期的。候选全部被协议绑定过滤时，网关对它们跑同一个 `ineligibleReason`（`gateway/sched_trace.go` `notServed`；候选全部因配置被过滤、部分是模型列表时同样判断，结果是 §11.6 的普通 503）：
 
 - 其中有一个不是因这三个原因被过滤（它能服务这个请求，或是因模型白名单、用量等别的原因不能）→ 不返回 404，按暂时缺账号处理：它回来后可能服务这个请求。
 - 它们也都被协议绑定过滤 → 404。所以一个没开转换的账号在冷却，不会把 404 变成可重试的 503/529。
@@ -7816,7 +7817,7 @@ ALTER TABLE accounts ADD COLUMN IF NOT EXISTS model_protocols jsonb NOT NULL DEF
 
 **不返回 404、仍按现有规则（503，`anthropic` 格式 529；全部忙或限流时 429）的其他情况**：
 
-- 候选里有账号是因别的原因没选上（模型白名单、用量、限流、并发满等）。
+- 候选里有账号是因别的原因没选上（用量、限流、并发满等）。只因模型列表（模型白名单）没选上的是 §11.6 的普通 503（2026-11-27）。
 - 没有候选账号（全部禁用、冷却等）：与本节之前相同。
 
 ### 110.6 校验与错误码

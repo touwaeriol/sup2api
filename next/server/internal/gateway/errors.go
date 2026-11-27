@@ -126,10 +126,17 @@ func fromCore(e *core.Error, recordType string) *gwError {
 var errEndpointNotServed = fromCore(core.ErrNotFound.WithMessage("no account in this group serves this endpoint"), errTypeNoAccount)
 
 // errProtocolNotServed: every account offered for the request is closed to
-// it by its protocol binding (protocolNotServed): none serves the model on
+// it by its protocol binding (notServed): none serves the model on
 // this endpoint's protocol, or converts it from that protocol. A 404 for the
 // same reason as errEndpointNotServed.
 var errProtocolNotServed = fromCore(core.ErrNotFound.WithMessage("no account in this group serves this model on this endpoint"), errTypeNoAccount)
+
+// errModelNotServed: every account offered for the request, and every one
+// only out for a while, is closed to it by its model list (or its protocol
+// binding, the rest by model list): no account serves the model until one
+// is configured to. A plain 503 in every format, never shown as Anthropic's
+// overload (clientError), which clients would retry in vain.
+var errModelNotServed = fromCore(core.ErrNoAvailableAccount.WithMessage("no account in this group serves this model"), errTypeNoAccount)
 
 // statusOverloaded is Anthropic's "overloaded" status.
 const statusOverloaded = 529
@@ -137,14 +144,19 @@ const statusOverloaded = 529
 // clientError is err as the endpoint's clients receive it. Anthropic clients
 // see "no available account" as the API's own overload (529 overloaded_error
 // "Overloaded"), which Claude Code and the SDKs retry with backoff; the usage
-// record keeps the host's message.
+// record keeps the host's message. errModelNotServed is no passing shortage:
+// it stays a 503, typed api_error rather than an overload.
 func clientError(format string, err *gwError) *gwError {
-	if strings.EqualFold(format, FormatAnthropic) && err.Code == core.ErrNoAvailableAccount.Code && len(err.Raw) == 0 && !err.RawResponse {
-		shown := *err
-		shown.Status, shown.Type, shown.Message = statusOverloaded, "overloaded_error", "Overloaded"
-		return &shown
+	if !strings.EqualFold(format, FormatAnthropic) || err.Code != core.ErrNoAvailableAccount.Code || len(err.Raw) > 0 || err.RawResponse {
+		return err
 	}
-	return err
+	shown := *err
+	if err == errModelNotServed {
+		shown.Type = "api_error"
+	} else {
+		shown.Status, shown.Type, shown.Message = statusOverloaded, "overloaded_error", "Overloaded"
+	}
+	return &shown
 }
 
 // writeError renders err in the endpoint's error format.

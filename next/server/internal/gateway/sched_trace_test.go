@@ -47,7 +47,7 @@ func TestSchedulingTraceNoAccount(t *testing.T) {
 		for _, id := range []int64{1, 2, 3} {
 			e.accounts.set(id, func(a *core.Account) { a.Models = []string{"another-model"} })
 		}
-		if r := e.messages(body(testModel, false)); r.status != 529 {
+		if r := e.messages(body(testModel, false)); r.status != 503 {
 			t.Fatalf("%d %s", r.status, r.body)
 		}
 		rec := e.record()
@@ -71,7 +71,7 @@ func TestSchedulingTraceNoAccount(t *testing.T) {
 		for _, id := range []int64{1, 2, 3} {
 			e.accounts.set(id, func(a *core.Account) { a.Models = []string{testModel} })
 		}
-		if r := e.messages(fallbackHTTPBody(false)); r.status != 529 {
+		if r := e.messages(fallbackHTTPBody(false)); r.status != 503 {
 			t.Fatalf("%d %s", r.status, r.body)
 		}
 		tr := e.record().Scheduling

@@ -55,11 +55,11 @@ func (c *call) dispatch(ctx context.Context) {
 			return
 		}
 	}
-	cands, closed := c.eligibleAccounts(all)
-	// Every account offered is closed to the request by its protocol
-	// binding: a 404 like the one above, before anything is checked, bound
-	// or converted for the request.
-	if e := c.protocolNotServed(ctx, closed); e != nil {
+	cands, verdict := c.eligibleAccounts(all)
+	// Every account offered is closed to the request by its configuration
+	// (protocol binding: a 404 like the one above; model list: a plain 503),
+	// before anything is checked, bound or converted for the request.
+	if e := c.notServed(ctx, verdict); e != nil {
 		c.fail(e)
 		return
 	}

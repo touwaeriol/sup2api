@@ -559,8 +559,8 @@ func (s *wsSession) connect(ctx context.Context, cl *call) (func(), *gwError) {
 	if err != nil {
 		return nil, fromCore(core.ErrUnavailable.WithCause(err), errTypeInternal)
 	}
-	cands, closed := cl.eligibleAccounts(all)
-	if e := cl.protocolNotServed(ctx, closed); e != nil {
+	cands, verdict := cl.eligibleAccounts(all)
+	if e := cl.notServed(ctx, verdict); e != nil {
 		return nil, e
 	}
 	eligible := cands

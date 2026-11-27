@@ -82,6 +82,28 @@ func protocolSchedReason(reason string) bool {
 	return false
 }
 
+// unserved is how an account, or every account judged so far, is out of a
+// request by its configuration alone. The values are ordered: the verdict
+// of several accounts is the least of theirs.
+type unserved int
+
+const (
+	unservedNo      unserved = iota // the account may serve once free
+	unservedModel                   // its model list or binding leaves the request out
+	unservedBinding                 // its protocol binding leaves the request out
+)
+
+// unservedBy is the verdict of an account left out for reason.
+func unservedBy(reason string) unserved {
+	switch {
+	case protocolSchedReason(reason):
+		return unservedBinding
+	case reason == core.SchedModelNotServed, reason == core.SchedReferencedModelNotServed:
+		return unservedModel
+	}
+	return unservedNo
+}
+
 // ineligibleReason says why ref cannot serve this request whatever its load;
 // ok is true when it can. It is the one test of that for the first pick, a
 // refreshed snapshot and a later turn of a WebSocket (candidateEligible), and
@@ -126,13 +148,13 @@ func (c *call) protocolClosedReason(ref *core.AccountRef, rt *typeRoute) (reason
 }
 
 // eligibleAccounts keeps the accounts of all able to serve the request
-// whatever their load, and notes why each of the others is not. closed is
-// set when accounts were offered and every one is left out by its protocol
-// binding.
-func (c *call) eligibleAccounts(all []core.AccountRef) (cands []core.AccountRef, closed bool) {
+// whatever their load, and notes why each of the others is not. verdict is
+// how far every account offered is out by its configuration (unservedNo
+// when none was offered or one is eligible).
+func (c *call) eligibleAccounts(all []core.AccountRef) (cands []core.AccountRef, verdict unserved) {
 	c.sched.candidates = len(all)
 	cands = make([]core.AccountRef, 0, len(all))
-	unserved := 0
+	verdict = unservedBinding
 	for i := range all {
 		reason, detail, ok := c.ineligibleReason(&all[i])
 		if ok {
@@ -140,23 +162,25 @@ func (c *call) eligibleAccounts(all []core.AccountRef) (cands []core.AccountRef,
 			continue
 		}
 		c.skipAccount(all[i].ID, reason, detail)
-		if protocolSchedReason(reason) {
-			unserved++
-		}
+		verdict = min(verdict, unservedBy(reason))
 	}
-	return cands, unserved > 0 && unserved == len(all)
+	if len(cands) > 0 || len(all) == 0 {
+		return cands, unservedNo
+	}
+	return cands, verdict
 }
 
-// protocolNotServed is the answer to a request every account offered is
-// closed to by its protocol binding (closed, from eligibleAccounts): a 404,
-// which clients do not retry, since no account serves the model on the
-// endpoint until one is configured to. The accounts of the group that are
-// only out for a while (cooling down, or disabled until a time) are judged
-// like the offered ones, from the same snapshot: nil when one of them is not
-// closed by its binding, since it may serve the request once back, or when
-// they cannot be read. The request then ends as any passing shortage does.
-func (c *call) protocolNotServed(ctx context.Context, closed bool) *gwError {
-	if !closed {
+// notServed is the answer to a request every account offered is out of by
+// its configuration (verdict, from eligibleAccounts), since no account
+// serves it until one is configured to: a 404, which clients do not retry,
+// when the protocol bindings leave it out (§110.5); a plain 503, never
+// shown as an overload, when model lists do (§11.6). The accounts of the
+// group that are only out for a while (cooling down, or disabled until a
+// time) are judged like the offered ones, from the same snapshot: nil when
+// one of them may serve the request once back, or when they cannot be read.
+// The request then ends as any passing shortage does.
+func (c *call) notServed(ctx context.Context, verdict unserved) *gwError {
+	if verdict == unservedNo {
 		return nil
 	}
 	resting, err := c.g.d.Accounts.Resting(ctx, c.principal.Group.ID, c.routeKeys)
@@ -165,11 +189,19 @@ func (c *call) protocolNotServed(ctx context.Context, closed bool) *gwError {
 		return nil
 	}
 	for i := range resting {
-		if reason, _, ok := c.ineligibleReason(&resting[i]); ok || !protocolSchedReason(reason) {
+		reason, _, ok := c.ineligibleReason(&resting[i])
+		if ok {
 			return nil
 		}
+		verdict = min(verdict, unservedBy(reason))
 	}
-	return errProtocolNotServed
+	switch verdict {
+	case unservedBinding:
+		return errProtocolNotServed
+	case unservedModel:
+		return errModelNotServed
+	}
+	return nil
 }
 
 // noteDropped notes the accounts of before that are not in after.
