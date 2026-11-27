@@ -2,7 +2,7 @@
 
 ec2pool（AWS us-west-2，x86_64）上的 sup2api 是一个独立集群，和 ovh/clicodeplus 集群不共用数据库。同一台机器上还有 sakura-2api、cli-proxy-api、antigravity 和 kin 容器，与 sup2api 无关，操作时不要碰。
 
-## 现状（2026-11-28 起）：网关托管，单节点，网关 0.1.139、核心 0.1.317（本机构建）
+## 现状（2026-11-28 起）：网关托管，单节点，网关 0.1.139、核心 0.1.318（本机构建）
 
 > 0.1.306–0.1.311 的发布记录在 `/opt/sup2api-gw/rel306`、`rel307`、`rel311` 与 `stage/own-<版本>/`，本文件没有逐条补录。
 
@@ -16,6 +16,14 @@ ec2pool（AWS us-west-2，x86_64）上的 sup2api 是一个独立集群，和 ov
 - 内置插件签名密钥：核心 0.1.298 起在没设 `SUB2API_BUILTIN_TRUST_KEY` 时自己读 `builtin/trust.pub`，compose 里不再设这个变量（0.1.297 期间手动设过，备份 `compose.yml.bak-with-trustkey`；回到 0.1.297 要加回去）。
 - 本机构建的内置包用只留在这台机器上的插件密钥 `sup2api-ec2pool-2026` 签名（`keys/plugin-sign/`，0700；公钥 `YnVgIX8xaLoG1A9SgZ8nGIp+vl/opLYEK/UbxRwE+Ts=`），ovh 的 `sup2api-plugins-2026` 私钥没有搬过来。分组 `chatGPT`（id 1）下有 73 个 `codex_device` 账号（id 2–75），是有真实流量的环境。`SUB2API_PLUGIN_MAX_MEMORY_MB=1024` 仍设着（0.1.304 起默认不封顶，平台插件要经手完整请求体，见 CHANGELOG 0.1.304 升级须知）。
 - 插件：`SUB2API_PLUGIN_VERIFY_SIGNATURES=false`（沿用旧部署）；已装插件包原来由旧核心用开发密钥 `sub2api-dev` 签名，Release 内置包用 `sup2api-plugins-2026` 签名，同版本的包保留原样。
+
+## 2026-11-28 核心 0.1.318（无迁移，本机构建）
+
+- 用户 2026-11-27 18:41 UTC 原话“更新到ec2pool”。
+- 构建：`src318`（`git -C src317 worktree add`，develop `268bdf448`，与 ovh 0.1.318 同一提交），`stage/own-0.1.318/`（照 own-0.1.316 的 rolling 脚本，`LIVE_SCHEMA` = `SCHEMA` = `f8252885…5531`），168 秒；清单 `12a0756d69f33f66f96d87d097de50fe11b7597fca26f7e017fe844ab633d7dd`（amd64 `b588ff40…0535`、arm64 `20695da3…ffd4`），rolling。核心 amd64 `sub2api` `12b41a9a…9e37` 与 ovh 逐字节相同，内置包与本机 0.1.317 相同。
+- 升级（`rel318/`，北京时间）：02:45:45 import，预检 primary-first-v1（单节点，expected_revision 26），计划 `b32783b078ef5cf621e03d81fa5462ef` 02:45:48.6→02:45:55.1；`/readyz` 503 02:45:51.5→02:45:55.5 约 4 秒。
+- 核验：核心 0.1.318、网关 0.1.139；5 个启用插件 active、restarts 0，日志无 ERROR；`chatgpt_test.py` 11 个请求全部 200、`billed`。`nomodel_test.py`（chatGPT 分组请求列表外的 gpt-4o-mini）：openai 格式 503 `no_available_account`「no account in this group serves this model」（0.1.317 是「no available account」），anthropic 格式仍 404（全部协议绑定）。
+- 回滚：无迁移，可用 0.1.317 清单 `97a426cf…cd3e` 建计划。
 
 ## 2026-11-28 核心 0.1.317（迁移 0126，主节点优先，本机构建）
 
