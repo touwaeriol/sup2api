@@ -8,6 +8,18 @@
 
 开发完成、尚未上线的改动。发布时改成发布日期的一节，补上提交、实际版本号和发布过程。
 
+## 2026-11-28
+
+### 核心 0.1.318：只因模型列表接不了的请求回普通 503，不再装成 529 过载（`134e0c8d9`、`85c41a8cf`；无迁移；ovh 集群滚动；网关仍 0.1.139；ec2pool 未升）
+
+- **构建**：在 ovh 本机从 develop `268bdf448` 构建（= 0.1.317 的 `a6c57802c` 加上 `134e0c8d9`、`85c41a8cf` 和两条发布记录；`a6c57802c..268bdf448` 只改了 `next/server/internal/gateway` 和文档），worktree `~/sup2api/release-0.1.318`，`stage/own-0.1.318/`（取 0.1.316 的 rolling 脚本；153 秒），插件密钥 `sup2api-plugins-2026`（`PREV_TRUST_SHA256` 与线上 `trust.pub` 一致）。清单 `bd95b577665eeac823eae812e8a739660ff67aa6c6c20569d166f26fe7864891`（amd64 `87b72557…e4db`、arm64 `08b0b2b0…febc`），strategy rolling，Host API 10，schema 仍 `f8252885…5531`（0126）。核心 amd64 `sub2api` `12b41a9a…9e37`。内置插件版本与线上相同（anthropic 0.4.0、codex 0.2.3、dynweight 0.7.0、gemini 0.4.1、mailer 0.1.5、moderation 0.13.0、newapi 0.1.2、openai 0.5.0、sub2api 0.1.2、typesafe 0.1.1）。
+- **ovh 集群**（北京时间 2026-11-28 01:50–01:52，用户“先改更新到ovh”）：01:50:40 import，预检 rolling-v1、无阻断（expected_revision 599），计划 `54daead171e0a169db535cf2a6b2bab9` 01:50:52.2→01:52:08.5（先 sup2api-ccp 后 sup2api-1），ovh 3130 与 api.prophey.ai `/readyz` 全程 200；没有关 new-api 渠道 392（无迁移滚动）。
+- **核验**：两节点核心 0.1.318、网关 0.1.139；8 个启用插件（anthropic、azure_openai、codex、dynweight、gemini、mailer、moderation、openai）active、ready、restarts 0，payment 仍 disabled；临时密钥（分组 9，账号 129）经 api.prophey.ai 的 claude-haiku-4-5 非流式、流式 `/v1/messages` 200；另一把临时密钥请求分组 9 里没有启用账号列出的 claude-sonnet-4-5-20250929，非流式、流式都回 **503** `{"error":{"code":"no_available_account","message":"no account in this group serves this model","type":"api_error"},"type":"error"}`，使用记录 503、`no_account`；两把密钥已删。01:50:40 起两节点日志 ERROR 0。api_key 118（new-api 渠道 392）升级前 10 分钟 176/176、计划期间 26/26、升级后 10 分钟 208/208 成功，5xx 0；new-api 侧 392 同期 0 个错误。记录在 ovh `~/rel318/`。
+- **观察**：11-27 18:10 管理员已把 claude-haiku-5-5 加进账号 129 的模型列表（审计 10971），之后经 392 的 claude-haiku-5-5 都是 200，线上真实流量暂时碰不到这条新分支。
+- 回退：无迁移，可用 0.1.317 清单 `4b9375b3…81e0` 建滚动计划。
+
+本次发布包含的改动：
+
 #### 只因模型列表接不了的请求回普通 503，不再装成 529 过载（CONTRACTS §11.6；无迁移，可滚动）
 
 - 候选账号和冷却中、限时停用的账号全部因配置接不了这个请求，其中有账号是模型列表不含请求的模型（其余是协议绑定）时，所有格式都回 503 `no_available_account`「no account in this group serves this model」；`anthropic` 格式的 `error.type` 为 `api_error`，不再改写成 529 `overloaded_error`，客户端不会白白退避重试。全部是协议绑定时仍是 404；冷却、并发满、限流仍是 529/429。起因：11-27 线上分组 9 唯一可用账号的模型列表不含 claude-haiku-5-5，249 条请求全部回 529。
