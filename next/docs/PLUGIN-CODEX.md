@@ -379,13 +379,15 @@
 
 ## 25. 0.2.4：协议与官方 Codex CLI 对齐（2026-11-28，所有者要求“codex 插件跟官方 codex 仓库的代码逻辑保持一致”“转发逻辑 指纹 请求头保持一致”；对照 openai/codex `codex-rs` 提交 065e18b0；无迁移，可滚动）
 
-差异清单见 https://claude.ai/artifact/EuXnJNmaPkPe7M2g7iEBe1 。本节是插件内能改的部分；TLS 指纹、`User-Agent` / `originator` / `version` 这类客户端身份特征和遥测类 `x-codex-*` 头不模仿（第 1 节守线不变，默认仍如实标 sup2api，可按第 20 节自定义）。
+本节是插件内能改的部分（官方位置都写在各条里）；TLS 指纹、`User-Agent` / `originator` / `version` 这类客户端身份特征和遥测类 `x-codex-*` 头不模仿（第 1 节守线不变，默认仍如实标 sup2api，可按第 20 节自定义）。
 
 - **会话头**：`session_id` / `conversation_id` 改为 Codex CLI 的 `session-id`、`thread-id`、`x-client-request-id`（`codex-rs/codex-api/src/requests/headers.rs`、`endpoint/responses.rs`；`core/src/client.rs` 注释写明 ChatGPT 按 `session-id` 头做缓存亲和），三个头同值，值仍按第 20.1 节计算。
-- **粘性路由令牌**：清单 `passHeaders` 由 `[]` 改为 `["x-codex-turn-state"]`，插件把核心交来的客户端头作默认头转交（HTTP 与 WebSocket 握手）；核心把上游响应头 `x-codex-turn-state` 回给客户端（`core.ProviderHeaders`），Codex 客户端在同一轮的后续请求里回放它（`core/src/client.rs` `ModelClientSession`）。WebSocket 轮次的令牌在消息的 `client_metadata` 里，随请求体原样转发。
-- **刷新**：去掉 `scope`，加 `refresh_reason: "scheduled"`（核心按时间续期）；失败分类收窄到 Codex CLI 的（`login/src/auth/manager.rs` `classify_refresh_token_failure`）：`invalid_refresh_token`、`token_expired`、`invalid_client`（非 401）、非 400 的 `invalid_grant` 从“需重新授权”改为暂时失败，下一轮再试。错误码按 `error`、`error.code`、顶层 `code` 的顺序读（`login/src/oauth/error.rs`）。
+- **粘性路由令牌**：清单 `passHeaders` 由 `[]` 改为 `["x-codex-turn-state"]`，插件把核心交来的客户端头作默认头转交；核心把 HTTP 上游响应头 `x-codex-turn-state` 回给客户端（`core.ProviderHeaders`），Codex 客户端在同一轮的后续请求里回放它（`core/src/client.rs` `ModelClientSession`）。WebSocket：官方握手不带这个头（`build_websocket_headers`），核心先接受客户端升级再连上游，上游握手响应头回不到客户端；令牌由流内 `response.metadata` 事件带给客户端（`codex-api/src/endpoint/responses_websocket.rs`），客户端放进下一条消息的 `client_metadata`，都随消息原样转发。
+- **已知差异**：每次尝试按同样输入构建（CONTRACTS §112.2，一致性套件第 7 条），所以换号后的尝试也带着上一个账号的令牌；官方在账号变化时丢弃（`turn_state_with_auth_owner`）。要完全一致需核心换号时不交 `passHeaders`，放进第二批。
+- **刷新**：去掉 `scope`，加 `refresh_reason: "scheduled"`（核心不告诉插件续期原因，管理员强制刷新对应官方的 `forced` 也报 `scheduled`，只是诊断字段）；失败分类收窄到 Codex CLI 的（`login/src/auth/manager.rs` `classify_refresh_token_failure`）：`invalid_refresh_token`、`token_expired`、`invalid_client`（非 401）、非 400 的 `invalid_grant` 从“需重新授权”改为暂时失败，下一轮再试。错误码按 `error`、`error.code`、顶层 `code` 的顺序读（`login/src/oauth/error.rs`）。
 - **Sign in with Codex**：scope 加 `api.connectors.read api.connectors.invoke`，回调改为 `http://127.0.0.1:1455/auth/callback`，授权地址带 `originator`（账号表单此刻的值，默认 sup2api）（`login/src/server.rs`）。升级时正在进行的授权会话会因 redirect_uri 不一致换不到令牌，重新生成链接即可。
-- **身份**：email 缺失时读 profile 声明；`chatgpt_account_is_fedramp` 为真的账号加 `x-openai-fedramp: true`（`model-provider/src/bearer_auth_provider.rs`），每次请求从令牌读，不存字段。
-- **测试**：`execute_test.go`（新会话头、passHeaders 转交为默认头、FedRAMP 用例进一致性套件）、`refresh_test.go`（无 scope、refresh_reason、新的分类表）、`oauth_test.go`（授权地址参数）、`identity_test.go`；核心 `provider_headers_test.go`。
-- **没做（需改核心或待定）**：401 立即刷新并重发、WebSocket 流内 `codex.rate_limits` 用量采样、WebSocket 的 `websocket_connection_limit_reached` / `previous_response_not_found` 可重试与 426 回退、429 错误体 `resets_at` 是否作为用满依据（与第 13 节“只看响应头”冲突，待所有者定）。
+- **身份**：email 缺失时读 profile 声明；id_token 的 `chatgpt_account_is_fedramp` 为真的账号加 `x-openai-fedramp: true`（`model-provider/src/bearer_auth_provider.rs`，只看 id_token，与官方相同），每次请求从令牌读，不存字段。
+- **文件拆分**：`oauth.go`（726 行）拆成 `oauth.go`（公共部分与凭证）、`login_device.go`（设备码）、`login_codex.go`（Sign in with Codex），都在 500 行以内；`ParseRefreshResponse` 的补丁构造抽成 `refreshPatch`。
+- **测试**：`execute_test.go`（新会话头、passHeaders 转交为默认头、FedRAMP 用例进一致性套件）、`refresh_test.go`（无 scope、refresh_reason、新的分类表含大小写与无错误码的 401）、`oauth_test.go`（授权地址参数、表单自定义的 originator）、`identity_test.go`；核心 `provider_headers_test.go`。
+- **没做（需改核心或待定）**：换号时不交 `passHeaders`、401 立即刷新并重发、WebSocket 流内 `codex.rate_limits` 用量采样、WebSocket 的 `websocket_connection_limit_reached` / `previous_response_not_found` 可重试与 426 回退、429 错误体 `resets_at` 是否作为用满依据（与第 13 节“只看响应头”冲突，待所有者定）。
 

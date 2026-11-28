@@ -51,7 +51,7 @@ func executeCases() []executeCase {
 		)
 	}
 	fedramp := execRequest(TypeDevice, ProtocolResponses, `{"model":"gpt-5.4","stream":true,"input":"hello"}`)
-	fedramp.Account = account(TypeDevice, `{"access_token":"`+fakeJWT(map[string]any{authClaim: map[string]any{"chatgpt_account_is_fedramp": true}})+`"}`)
+	fedramp.Account = account(TypeDevice, `{"access_token":"at","id_token":"`+fakeJWT(map[string]any{authClaim: map[string]any{"chatgpt_account_is_fedramp": true}})+`"}`)
 	return append(out, executeCase{"codex_device/http fedramp", fedramp})
 }
 
@@ -63,13 +63,13 @@ const keptAbove = "the plugin's own header, written above the operator's header 
 // plugin, all of which the operator's header settings leave as the plugin
 // writes them. The conformance suite takes this table with executeCases.
 var authoritativeHeaders = map[string]string{
-	"authorization":      "credential",
-	"chatgpt-account-id": "credential: the ChatGPT account the token acts for",
-	"originator":         keptAbove + "; the account's client headers (agent.go)",
-	"user-agent":         keptAbove + "; the account's client headers (agent.go)",
-	"accept":             keptAbove,
-	"content-type":       keptAbove,
-	"openai-beta":        keptAbove,
+	"authorization":       "credential",
+	"chatgpt-account-id":  "credential: the ChatGPT account the token acts for",
+	"originator":          keptAbove + "; the account's client headers (agent.go)",
+	"user-agent":          keptAbove + "; the account's client headers (agent.go)",
+	"accept":              keptAbove,
+	"content-type":        keptAbove,
+	"openai-beta":         keptAbove,
 	"session-id":          keptAbove + "; the upstream session (upstreamSession)",
 	"thread-id":           keptAbove + "; the upstream session (upstreamSession)",
 	"x-client-request-id": keptAbove + "; the upstream session (upstreamSession)",

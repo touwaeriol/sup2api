@@ -20,7 +20,8 @@ func ProviderHeaders(source http.Header) http.Header {
 	out := http.Header{}
 	for name, values := range source {
 		lower := strings.ToLower(name)
-		allowed := lower == "request-id" || lower == "anthropic-request-id" || lower == "retry-after" || lower == "x-should-retry" || lower == "x-codex-turn-state" ||
+		allowed := lower == "request-id" || lower == "anthropic-request-id" || lower == "retry-after" ||
+			lower == "x-should-retry" || lower == "x-codex-turn-state" ||
 			strings.HasPrefix(lower, "anthropic-ratelimit-") || strings.HasPrefix(lower, "anthropic-fast-")
 		if !allowed || hop[lower] {
 			continue

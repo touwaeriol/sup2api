@@ -59,7 +59,7 @@ func (p *Plugin) accountHeaders(c credentials) map[string]string {
 	if c.ChatGPTAccountID != "" {
 		h["chatgpt-account-id"] = c.ChatGPTAccountID
 	}
-	if parseIdentity(c.IDToken, c.AccessToken).FedRAMP {
+	if isFedRAMP(c.IDToken) {
 		h[fedRAMPHeader] = "true"
 	}
 	return h
@@ -75,15 +75,6 @@ const fedRAMPHeader = "x-openai-fedramp"
 // session-id; thread-id and x-client-request-id carry the same
 // conversation.
 var sessionHeaders = []string{"session-id", "thread-id", "x-client-request-id"}
-
-// sessionHeaderMap is the session headers of session ("" for none).
-func sessionHeaderMap(session string) map[string]string {
-	h := make(map[string]string, len(sessionHeaders))
-	for _, name := range sessionHeaders {
-		h[name] = session
-	}
-	return h
-}
 
 // httpHeaders are the further headers of an HTTP request: the upstream only
 // streams.
@@ -161,7 +152,10 @@ func userMessage(text string) []byte {
 // The client headers the core hands over (manifest passHeaders: the Codex
 // backend's x-codex-turn-state sticky routing token, which a Codex client
 // replays on a turn's later requests, codex-rs core/src/client.rs) go on as
-// default headers.
+// default headers. Every attempt is built alike (CONTRACTS §112.2), so a
+// failover to another account carries the token too, where the Codex CLI
+// drops it on an account change (turn_state_with_auth_owner); see
+// docs/PLUGIN-CODEX.md §25.
 func (p *Plugin) BuildUpstream(_ context.Context, in *pluginv1.ExecuteRequest) (*pluginv1.UpstreamRequest, error) {
 	c, err := accountCredentials(in.GetAccount())
 	if err != nil {
@@ -176,9 +170,11 @@ func (p *Plugin) BuildUpstream(_ context.Context, in *pluginv1.ExecuteRequest) (
 		return nil, err
 	}
 	session := upstreamSession(in.GetAccount().GetId(), in.GetMeta().GetApiKeyId(), body)
-	return u.HeaderMap(p.accountHeaders(c)).
-		HeaderMap(sessionHeaderMap(session)).
-		DefaultHeaderMap(in.GetInboundHeaders()).
+	u.HeaderMap(p.accountHeaders(c))
+	for _, name := range sessionHeaders {
+		u.Header(name, session)
+	}
+	return u.DefaultHeaderMap(in.GetInboundHeaders()).
 		Body(body).
 		Model(upstreamModel(in)).
 		Build()

@@ -12,7 +12,6 @@ type identity struct {
 	Email     string
 	AccountID string // chatgpt_account_id
 	PlanType  string // chatgpt_plan_type
-	FedRAMP   bool   // chatgpt_account_is_fedramp
 }
 
 // authClaim and profileClaim are the OpenAI-specific claim objects of
@@ -62,10 +61,9 @@ func jwtClaims(token string) map[string]any {
 
 // parseIdentity reads the identity as the Codex CLI reads it
 // (codex-rs login/src/token_data.rs): email at the top level, else in the
-// profile claim; chatgpt_account_id, chatgpt_plan_type and
-// chatgpt_account_is_fedramp in the auth claim. The id_token comes first,
-// the access token (which carries the same claims) fills what it lacks.
-// Missing values stay empty.
+// profile claim; chatgpt_account_id and chatgpt_plan_type in the auth
+// claim. The id_token comes first, the access token (which carries the same
+// claims) fills what it lacks. Missing values stay empty.
 func parseIdentity(idToken, accessToken string) identity {
 	var id identity
 	for _, tok := range []string{idToken, accessToken} {
@@ -83,8 +81,15 @@ func (id *identity) fill(c map[string]any) {
 	id.Email = cmp.Or(id.Email, claimString(c, "email"), claimString(profile, "email"))
 	id.AccountID = cmp.Or(id.AccountID, claimString(auth, "chatgpt_account_id"))
 	id.PlanType = cmp.Or(id.PlanType, claimString(auth, "chatgpt_plan_type"))
+}
+
+// isFedRAMP reports a FedRAMP ChatGPT account: chatgpt_account_is_fedramp in
+// the id_token's auth claim, where the Codex CLI reads it
+// (codex-rs login/src/token_data.rs).
+func isFedRAMP(idToken string) bool {
+	auth, _ := jwtClaims(idToken)[authClaim].(map[string]any)
 	fedramp, _ := auth["chatgpt_account_is_fedramp"].(bool)
-	id.FedRAMP = id.FedRAMP || fedramp
+	return fedramp
 }
 
 // claimString is the string claim key of c, "" when c or the claim is

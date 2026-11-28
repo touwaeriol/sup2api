@@ -103,6 +103,8 @@ func TestParseRefreshResponse(t *testing.T) {
 		{"openai refresh_token_reused", TypeDevice, 401, `{"error":{"code":"refresh_token_reused","message":"already used"}}`, "", rejected, "refresh_token_reused"},
 		{"refresh_token_expired", TypeDevice, 400, `{"error":{"message":"x","type":"invalid_request_error","code":"refresh_token_expired"}}`, "", rejected, ""},
 		{"refresh_token_invalidated", TypeOAuth, 400, `{"error":"refresh_token_invalidated"}`, "", rejected, ""},
+		{"code case", TypeOAuth, 400, `{"error":"Invalid_Grant"}`, "", rejected, "Invalid_Grant"},
+		{"code-less 401", TypeDevice, 401, ``, "", rejected, "refresh token refused; authorize"},
 		{"top-level code", TypeDevice, 400, `{"code":"refresh_token_expired"}`, "", rejected, "refresh_token_expired"},
 		{"invalid_grant not 400", TypeOAuth, 403, `{"error":"invalid_grant"}`, "", transient, ""},
 		{"invalid_refresh_token", TypeOAuth, 400, `{"error":"invalid_refresh_token"}`, "", transient, ""},

@@ -88,7 +88,7 @@ describe('callbackShape', () => {
     expect(callbackShape('code=abc&state=s')).toBe('ok')
     expect(callbackShape('?code=abc&state=s')).toBe('ok')
     expect(callbackShape('127.0.0.1:1455/auth/callback?state=s&code=a%2Fb')).toBe('ok')
-    expect(callbackShape('  "http://localhost:1455/auth/callback?code=abc&amp;state=s"\n')).toBe('ok')
+    expect(callbackShape('  "http://127.0.0.1:1455/auth/callback?code=abc&amp;state=s"\n')).toBe('ok')
     expect(callbackShape('<http://127.0.0.1:1455/auth/callback?error=access_denied&state=s>')).toBe('denied')
     expect(callbackShape('http://127.0.0.1:1455/auth/callback#code=abc&state=s')).toBe('ok')
     expect(callbackShape('http://127.0.0.1:1455/auth/callback?code=abc#frag')).toBe('ok')

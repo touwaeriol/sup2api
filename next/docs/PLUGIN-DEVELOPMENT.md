@@ -89,7 +89,7 @@ func (p *Plugin) BuildUpstream(ctx context.Context, in *pluginv1.ExecuteRequest)
 
 - 鉴权头（`authorization`、`x-api-key`、`api-key` ……）和签名写入或覆盖的头放权威头；签名时用的 `content-type` 也算。
 - 原来是声明式的五个类型（openai、gemini、relay、azure_openai、anthropic 的 `apikey`）改写后**只有鉴权头**是权威头，其余都是默认头，和以前的行为一样（`standard` 库就这样做）。
-- 已经发布过的代码插件（codex；0.1.304 删除的 volcengine 也是）的头以前全都在运营方设置之上，改写后**保持全部权威**，运营方的透传和覆盖照旧改不了它们。没有发布过的 vertex、bedrock 按第一条写：只有凭证头（bedrock 的签名类型是签名头）是权威头，`content-type`、`accept` 是默认头。新插件按第一条写。
+- 已经发布过的代码插件（codex；0.1.304 删除的 volcengine 也是）的头以前全都在运营方设置之上，改写后**自己写的头保持全部权威**，运营方的透传和覆盖照旧改不了它们（codex 0.2.4 起只把 `passHeaders` 交来的 `x-codex-turn-state` 作默认头转交）。没有发布过的 vertex、bedrock 按第一条写：只有凭证头（bedrock 的签名类型是签名头）是权威头，`content-type`、`accept` 是默认头。新插件按第一条写。
 - 一致性套件第 4 条检查的是“声明的集合”：权威头的名字必须在插件声明的 `Credentials`（鉴权与签名头）与 `Authoritative`（其余要保留为权威的头，每个写理由）的并集里，`Credentials` 的头不能出现在默认头里。
 
 签名的插件不要写 `Headers(req.Header)`（会把请求上每个头都变成权威头），用 `reqsign.AWSSigV4Headers(req)` 只取签名写入或覆盖的那几个。
@@ -400,7 +400,7 @@ if !sticky.Enabled { ... }
 | azure_openai（目录 `plugins/azure-openai`，市场） | `standard` 库，两个类型（v1 与按部署） | 同上；错误分类用 openai 预设的策略 |
 | vertex（市场） | 自己的 `BuildUpstream`；把核心交来的 `user-agent`、`x-goog-api-client` 作为默认头转发；`externalServices` 是 `googleapis.com`（全局与各区域的 Vertex AI 主机都在它下面；不取回） | `ClassifyError`；凭证续期 `BuildRefreshRequest` / `ParseRefreshResponse`（CONTRACTS §48），第一枚令牌靠保存后续期（§48.3 第 5 条）；服务账号断言用 `golang-jwt/jwt/v5` 签名，密钥文件由插件自己解析（§109.6） |
 | bedrock（市场；只服务 anthropic 平台的 messages，OpenAI 协议的请求由核心转换后走同一条路；带 CONTRACTS §110 的核心上这是跨平台转换，要在账号上为模型开启） | 自己的 `BuildUpstream`：把 Messages 请求装进 InvokeModel 信封，清洗 Bedrock 不接受的字段（顶层的 `model`、`stream`、`metadata`、`service_tier`、`inference_geo`、`speed`、`provider` 总是删除，以及 `tools[].custom`、`cache_control.scope`；`cache_control.ttl` 只在认出模型版本且它不支持缓存 TTL 时删除，认不出的保留），客户端点名的 beta 和工具需要的 beta（computer use、tool search、tool examples）写进请求体的 `anthropic_beta`，AK/SK 与临时凭证类型自己做 SigV4 签名，鉴权头里没有会话令牌（Access Key 与 API Key 类型）时 `RemoveHeader("x-amz-security-token")`；是否流式只看 `meta.stream`（不看请求体的 `stream`，运营方参数覆盖加的 `stream:true` 不会把非流式请求变成流式），流式请求给 `response_stream`；`externalServices` 是 `amazonaws.com`（各区域的运行时主机） | `ClassifyError`；账号测试请求同样自己签；一致性套件的两处例外见第 4 节 |
-| codex | 自己的 `BuildUpstream`，HTTP 与 WebSocket | `ClassifyError`、额度头、`streamOnly`；`session_id` 由插件按 `prompt_cache_key` 派生（[PLUGIN-CODEX.md](PLUGIN-CODEX.md) §16）；全部头保持权威；两个类型 `passHeaders: []`，插件自己写出它发的每个头 |
+| codex | 自己的 `BuildUpstream`，HTTP 与 WebSocket | `ClassifyError`、额度头、`streamOnly`；`session-id` / `thread-id` / `x-client-request-id` 由插件按 `prompt_cache_key` 派生（[PLUGIN-CODEX.md](PLUGIN-CODEX.md) §16、§25）；自己写的头全部权威；两个类型 `passHeaders: ["x-codex-turn-state"]`，作默认头转交 |
 
 ## 8. 新插件自查
 

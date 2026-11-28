@@ -37,9 +37,10 @@ func refreshPermanent(status int32, code string) bool {
 		(status == http.StatusBadRequest && code == "invalid_grant")
 }
 
-// refreshReason is the refresh_reason of a refresh the core schedules: the
-// Codex CLI sends one of proactive_expiry, scheduled, unauthorized_recovery
-// and forced.
+// refreshReason is the refresh_reason of a refresh: the Codex CLI sends one
+// of proactive_expiry, scheduled, unauthorized_recovery and forced. The core
+// does not say why it refreshes (a sweep, or an administrator's forced
+// refresh), so every refresh reports the sweep's; the field is diagnostic.
 const refreshReason = "scheduled"
 
 // BuildRefreshRequest implements pluginsdk.CredentialRefresher: POST
@@ -105,28 +106,28 @@ func (p *Plugin) ParseRefreshResponse(_ context.Context, in *pluginv1.ParseRefre
 	if tr.AccessToken == "" {
 		return refreshError(pluginv1.RefreshResult_ERROR_TYPE_TRANSIENT, "token response has no access_token / 令牌响应中没有 access_token"), nil
 	}
+	b, _ := json.Marshal(p.refreshPatch(tr))
+	return &pluginv1.RefreshResult{CredentialsPatchJson: string(b)}, nil
+}
+
+// refreshPatch is the credentials patch of a refreshed token answer: the
+// access token and its expiry, and whatever of the rotated refresh token,
+// the id_token and the identity fields the answer carries.
+func (p *Plugin) refreshPatch(tr tokenResponse) map[string]any {
+	id := parseIdentity(tr.IDToken, tr.AccessToken)
 	patch := map[string]any{"access_token": tr.AccessToken}
+	for k, v := range map[string]string{
+		"refresh_token": strings.TrimSpace(tr.RefreshToken), "id_token": strings.TrimSpace(tr.IDToken),
+		"email": id.Email, "plan_type": id.PlanType, "chatgpt_account_id": id.AccountID,
+	} {
+		if v != "" {
+			patch[k] = v
+		}
+	}
 	if exp := p.expiresAt(tr); exp > 0 {
 		patch["expires_at"] = exp
 	}
-	if rt := strings.TrimSpace(tr.RefreshToken); rt != "" {
-		patch["refresh_token"] = rt
-	}
-	if idt := strings.TrimSpace(tr.IDToken); idt != "" {
-		patch["id_token"] = idt
-	}
-	id := parseIdentity(tr.IDToken, tr.AccessToken)
-	if id.Email != "" {
-		patch["email"] = id.Email
-	}
-	if id.PlanType != "" {
-		patch["plan_type"] = id.PlanType
-	}
-	if id.AccountID != "" {
-		patch["chatgpt_account_id"] = id.AccountID
-	}
-	b, _ := json.Marshal(patch)
-	return &pluginv1.RefreshResult{CredentialsPatchJson: string(b)}, nil
+	return patch
 }
 
 // refreshFailure is the result of a refusal of the token endpoint.
@@ -134,7 +135,10 @@ func refreshFailure(st int32, body []byte) *pluginv1.RefreshResult {
 	code := oauthErrorCode(body)
 	msg := fmt.Sprintf("token endpoint status %d / 令牌端点返回状态 %d: %s", st, st, textutil.Clip(string(body), 300))
 	if refreshPermanent(st, code) {
-		return refreshError(pluginv1.RefreshResult_ERROR_TYPE_AUTH_REJECTED, "refresh token refused ("+code+"); authorize the account again / 刷新令牌被拒绝，需重新授权: "+msg)
+		if code != "" {
+			code = " (" + code + ")"
+		}
+		return refreshError(pluginv1.RefreshResult_ERROR_TYPE_AUTH_REJECTED, "refresh token refused"+code+"; authorize the account again / 刷新令牌被拒绝，需重新授权: "+msg)
 	}
 	return refreshError(pluginv1.RefreshResult_ERROR_TYPE_TRANSIENT, msg)
 }

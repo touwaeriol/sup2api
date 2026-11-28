@@ -8060,7 +8060,7 @@ message UpstreamRequest {
 
 - 两个 map 的键都小写；`host`、`content-length`、`accept-encoding`、`connection`、`transfer-encoding` 归传输层，出现即拒绝（`Host` 永远是 URL 的主机，§112.17）；同名时权威头生效；名或值不合法拒绝。这条规则（连同方法）只在 `sdk/protocol.CheckRelayHeaders` 写一次：核心的 `RelayUpstream`（以 `INVALID_ARGUMENT` 回给插件）、网关发出前的检查（按插件的失败换号）和 SDK 的 `ValidateUpstreamRequest` 都调用它（2026-11-20 起；此前核心另有一份列表，只把头名转成小写后查传输头，不拒绝大写头名，现在大写头名在核心也被拒绝）。
 - 发送时自下而上（§86.5）：插件的**默认头** → 透传（账号 `header_passthrough` §81、`header_override` 的透传键 §108、粘性规则，**只补没有的**，不替换默认头）→ `header_override` 与 `param_override` 的请求头部分（可以设值或删除默认头）→ 插件的**权威头**（运营方改不掉；值为空表示删掉同名的头、不发，§112.17）→ 没有 Content-Type 时补 `application/json`。WebSocket 握手同样分层但不套透传。
-- 放哪一类是插件的约定，核心不判断：鉴权头和签名写入或覆盖的头（含签名用的 Content-Type）放权威头，其余放默认头。例外由所有者定：已发布过的代码插件（codex；volcengine 也是，0.1.304 删除）改写后保持全部头为权威头（与改写前一样，运营方的透传和覆盖改不了它们；codex 的 `User-Agent`、`originator` 改为在账号凭证或插件设置里自定义，见 [PLUGIN-CODEX.md](PLUGIN-CODEX.md) 第 20 节）；原来声明式的五个类型只有鉴权头是权威头（与声明式时一样）。一致性套件第 4 条检查“声明的集合”：权威头的名字必须在插件声明的 `Credentials` 与 `Authoritative` 之内。
+- 放哪一类是插件的约定，核心不判断：鉴权头和签名写入或覆盖的头（含签名用的 Content-Type）放权威头，其余放默认头。例外由所有者定：已发布过的代码插件（codex；volcengine 也是，0.1.304 删除）改写后保持自己写的全部头为权威头（与改写前一样，运营方的透传和覆盖改不了它们；codex 0.2.4 起另把 `passHeaders` 交来的客户端 `x-codex-turn-state` 作默认头转交；codex 的 `User-Agent`、`originator` 改为在账号凭证或插件设置里自定义，见 [PLUGIN-CODEX.md](PLUGIN-CODEX.md) 第 20 节）；原来声明式的五个类型只有鉴权头是权威头（与声明式时一样）。一致性套件第 4 条检查“声明的集合”：权威头的名字必须在插件声明的 `Credentials` 与 `Authoritative` 之内。
 - 插件交回的权威头能盖掉运营方设置的同名头，这是代码插件一直以来的行为，签名需要它。
 
 ### 112.5 发送前的检查
@@ -8359,7 +8359,7 @@ SDK 名 `pluginsdk.Fetch`。一个有界、非流式的请求，回答交还插�
 - **账号余额（§52）**：0.1.304 起已接通（核心调插件的 `BuildBalanceRequest` / `ParseBalanceResponse`，定时任务 `core.account.balance_sweep`），`BalanceProvider` 注册表已删除，见 §52。
 - **额度主动查询（§44）**：清单 `quota.query`、`quota.autoRefresh`，`PlatformService.BuildQuotaRequest` / `ParseQuotaResponse`（`pluginsdk.QuotaReader`），核心的主动查询与自动复查。现在没有第一方插件声明 `query`（codex 只用响应头被动采样），机制本身完整可用。
 
-仍在用、保留的：账号类型平台上的 `"passHeaders": []`（codex）、`"upstreamFields": []`（codex）、`refresh`（codex、vertex）、`pluginsdk.SaveCallerSession` / `LoadCallerSession`（codex）、`providers/anthropic`（bedrock、vertex 等）。
+仍在用、保留的：账号类型平台上的 `"passHeaders": []`（codex 0.2.4 起改为 `["x-codex-turn-state"]`，现在没有使用者，语义保留）、`"upstreamFields": []`（codex）、`refresh`（codex、vertex）、`pluginsdk.SaveCallerSession` / `LoadCallerSession`（codex）、`providers/anthropic`（bedrock、vertex 等）。
 
 ## 117. 代理票据：建账号之前的授权流程走账号表单选的代理（2026-11-18，所有者要求“账号授权时的第一次换令牌不走代理：修复bug”“在创建账号的时候通过代理获取授权”“如果是粘贴的代理串呢？”；无迁移；Host API 仍是 10；UI 3.20；设计见 [DESIGN-2026-11-18-ACCOUNT-PROXY-TICKET.md](DESIGN-2026-11-18-ACCOUNT-PROXY-TICKET.md)）
 
