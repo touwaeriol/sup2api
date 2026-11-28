@@ -50,8 +50,10 @@ type fakePlatform struct {
 	// quotaCalls counts the requests built.
 	quotaURL   string
 	quotaCalls int
-	// refreshURL is where BuildRefreshRequest points (empty: Unimplemented).
+	// refreshURL is where BuildRefreshRequest points (empty: Unimplemented);
+	// reasons are the reasons of the refreshes built.
 	refreshURL string
+	reasons    []pluginv1.BuildRefreshRequestRequest_Reason
 	// pluginCalls counts BuildRefreshRequest, ParseRefreshResponse and
 	// ParseQuotaResponse calls by method name.
 	pluginCalls map[string]int
@@ -142,6 +144,7 @@ func (p *fakePlatform) BuildRefreshRequest(_ context.Context, in *pluginv1.Build
 	p.count("BuildRefreshRequest")
 	p.mu.Lock()
 	u := p.refreshURL
+	p.reasons = append(p.reasons, in.GetReason())
 	p.mu.Unlock()
 	if u == "" {
 		return nil, status.Error(codes.Unimplemented, "not implemented")

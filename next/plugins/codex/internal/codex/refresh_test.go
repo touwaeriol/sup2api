@@ -17,7 +17,8 @@ func TestBuildRefreshRequest(t *testing.T) {
 
 	// Both types refresh as the Codex CLI does: no scope, a refresh reason.
 	for _, typ := range accountTypes {
-		r, err := h.Platform.BuildRefreshRequest(ctx, &pluginv1.BuildRefreshRequestRequest{Account: account(typ, deviceCreds)})
+		r, err := h.Platform.BuildRefreshRequest(ctx, &pluginv1.BuildRefreshRequestRequest{Account: account(typ, deviceCreds),
+			Reason: pluginv1.BuildRefreshRequestRequest_REASON_SCHEDULED})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -32,7 +33,35 @@ func TestBuildRefreshRequest(t *testing.T) {
 			t.Fatalf("%s body = %v", typ, body)
 		}
 	}
+}
 
+// The core's reason maps to the Codex CLI's refresh_reason; without one none
+// is sent, as the CLI does when it has none.
+func TestBuildRefreshRequestReason(t *testing.T) {
+	h := startPlugin(t, newTestPlugin(DefaultEndpoints))
+	ctx := context.Background()
+	for reason, want := range map[pluginv1.BuildRefreshRequestRequest_Reason]string{
+		pluginv1.BuildRefreshRequestRequest_REASON_SCHEDULED:    "scheduled",
+		pluginv1.BuildRefreshRequestRequest_REASON_FORCED:       "forced",
+		pluginv1.BuildRefreshRequestRequest_REASON_SAVED:        "proactive_expiry",
+		pluginv1.BuildRefreshRequestRequest_REASON_UNAUTHORIZED: "unauthorized_recovery",
+		pluginv1.BuildRefreshRequestRequest_REASON_UNSPECIFIED:  "",
+	} {
+		r, err := h.Platform.BuildRefreshRequest(ctx, &pluginv1.BuildRefreshRequestRequest{Account: account(TypeOAuth, deviceCreds), Reason: reason})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var body map[string]string
+		mustJSON(t, []byte(r.GetBodyJson()), &body)
+		if got, has := body["refresh_reason"]; got != want || has != (want != "") {
+			t.Errorf("%s: refresh_reason = %q (present %v), want %q", reason, got, has, want)
+		}
+	}
+}
+
+func TestBuildRefreshRequestRejects(t *testing.T) {
+	h := startPlugin(t, newTestPlugin(DefaultEndpoints))
+	ctx := context.Background()
 	for _, tc := range []struct {
 		acc  *pluginv1.Account
 		code codes.Code

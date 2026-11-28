@@ -81,7 +81,13 @@ func (p *Plugin) BuildUpstream(ctx context.Context, in *pluginv1.ExecuteRequest)
 | 写入时机 | 运营方的透传和覆盖**之后**，运营方改不掉 | 运营方设置**之前** |
 | 运营方能做什么 | 不能改 | 客户端头透传**只补没有的**（不替换默认头）；请求头覆盖（`header_override`）和参数覆盖的请求头部分可以设值或删除 |
 
-核心交给插件的客户端请求头（`inbound_headers`）已经按清单过滤过：账号类型在这个平台上写了 `passHeaders` 就用它，写成 `[]` 就一个都不交，没写才用平台的列表（`AccountPlatform.ClientHeaders`）。交来的头插件要作为默认头转发（一致性第 4 条），不想转发任何客户端头的类型在清单里写 `"passHeaders": []`（codex 就这样）。
+核心交给插件的客户端请求头（`inbound_headers`）已经按清单过滤过：账号类型在这个平台上写了 `passHeaders` 就用它，写成 `[]` 就一个都不交，没写才用平台的列表（`AccountPlatform.ClientHeaders`）。交来的头插件要作为默认头转发（一致性第 4 条），不想转发任何客户端头的类型在清单里写 `"passHeaders": []`（codex 0.2.4 以前就这样）。
+
+只对第一次尝试的账号有意义的客户端头（上游发给那个账号的路由令牌，例如 codex 的 `x-codex-turn-state`）在同一条目里写进 `accountBoundHeaders`：请求换到另一个账号后，核心交来的 `inbound_headers` 里就没有它们，同一账号上的重试照常有（CONTRACTS §141.4）。每个名字必须在这个类型在该平台上生效的 `passHeaders` 里（自己写了用自己的，没写用平台的），清单检查报 `not_passed`、`duplicate`、`required`。插件什么都不用改：仍然只转交交来的头，每次尝试按同样输入构建。
+
+```json
+"platforms": [{ "platform": "openai", "passHeaders": ["x-codex-turn-state"], "accountBoundHeaders": ["x-codex-turn-state"] }]
+```
 
 发送时自下而上：插件的默认头 → 透传（账号 `header_passthrough`、`header_override` 的透传键、粘性规则，只补没有的）→ `header_override` 与 `param_override` 的设值和删除 → 插件的权威头 → 没有 Content-Type 时补 `application/json`（CONTRACTS §86.5）。WebSocket 握手同样分层（`websocket.go` `dial` 调同一个 `layerHeaders`）：插件的默认头 → `header_override` 与 `param_override` 的设值和删除（来自第一轮消息的改写）→ 插件的权威头（空值删除），**不套透传**，也不补 Content-Type；插件给的传输层的头（`upgrade`、`sec-websocket-*`、`content-type`、`content-length` 等，`handshakeOwned`）被跳过。
 
@@ -328,6 +334,7 @@ if relay.Wait || !proto.Equal(ex.Response, pluginsdk.ReportHostUsage()) { ... }
 |---|---|---|---|
 | 故障策略、冷却、自动禁用 | 核心统一；**插件配合**：实现 `ClassifyError`，故障策略下核心只采用其中的额度观测和限时禁用；传输错误完全由策略决定。插件不可用（`Execute` 报错或崩溃、中继被核心拒绝、目标主机被拒）不经账号规则：有没有故障策略都只换号、不罚账号；客户端已经离开时插件返回的分类不采用 | 不等待形式由核心调 `ClassifyError`；等待形式由插件在返回值里给 `classification` / 握手和流内错误事件都分类 | `applyClassification`、`waited.go`；CONTRACTS §69 |
 | 订阅额度窗口（5 小时、周） | **插件配合**：在账号类型上声明 `quota.headers`；上游在 WebSocket 消息里报窗口的，另声明 `quota.events`（下文） | 一致 / 握手头、带头的错误事件和声明的流内用量事件 | `observeQuota`、`observeQuotaEvent`；CONTRACTS §44、§105、§142 |
+| 上游 401 时立即续期并重发 | 核心统一；**插件配合**：账号类型声明 `refresh` 并实现 `CredentialRefresher`（同定时续期）。`BuildRefreshRequest` 收到续期原因 `reason`（定时扫描、管理员强制、保存后、401 恢复），只作诊断，不关心可以忽略 | HTTP 生效（不等待与等待形式相同，任务提交不恢复）/ 握手只留了接口（`recovering`），尚未接线 | `gateway/recovery.go`、`account/refresh_recover.go`；CONTRACTS §141.2、§141.3 |
 
 **WebSocket 流内用量事件**（`accountTypes[].quota.events`，CONTRACTS §142）：上游在 WebSocket 会话里用一条消息报窗口时（Codex 的 `codex.rate_limits`），按消息的顶层 `type` 声明：
 
@@ -425,7 +432,7 @@ if !sticky.Enabled { ... }
 | azure_openai（目录 `plugins/azure-openai`，市场） | `standard` 库，两个类型（v1 与按部署） | 同上；错误分类用 openai 预设的策略 |
 | vertex（市场） | 自己的 `BuildUpstream`；把核心交来的 `user-agent`、`x-goog-api-client` 作为默认头转发；`externalServices` 是 `googleapis.com`（全局与各区域的 Vertex AI 主机都在它下面；不取回） | `ClassifyError`；凭证续期 `BuildRefreshRequest` / `ParseRefreshResponse`（CONTRACTS §48），第一枚令牌靠保存后续期（§48.3 第 5 条）；服务账号断言用 `golang-jwt/jwt/v5` 签名，密钥文件由插件自己解析（§109.6） |
 | bedrock（市场；只服务 anthropic 平台的 messages，OpenAI 协议的请求由核心转换后走同一条路；带 CONTRACTS §110 的核心上这是跨平台转换，要在账号上为模型开启） | 自己的 `BuildUpstream`：把 Messages 请求装进 InvokeModel 信封，清洗 Bedrock 不接受的字段（顶层的 `model`、`stream`、`metadata`、`service_tier`、`inference_geo`、`speed`、`provider` 总是删除，以及 `tools[].custom`、`cache_control.scope`；`cache_control.ttl` 只在认出模型版本且它不支持缓存 TTL 时删除，认不出的保留），客户端点名的 beta 和工具需要的 beta（computer use、tool search、tool examples）写进请求体的 `anthropic_beta`，AK/SK 与临时凭证类型自己做 SigV4 签名，鉴权头里没有会话令牌（Access Key 与 API Key 类型）时 `RemoveHeader("x-amz-security-token")`；是否流式只看 `meta.stream`（不看请求体的 `stream`，运营方参数覆盖加的 `stream:true` 不会把非流式请求变成流式），流式请求给 `response_stream`；`externalServices` 是 `amazonaws.com`（各区域的运行时主机） | `ClassifyError`；账号测试请求同样自己签；一致性套件的两处例外见第 4 节 |
-| codex | 自己的 `BuildUpstream`，HTTP 与 WebSocket | `ClassifyError`、额度头与 `codex.rate_limits` 流内用量事件、`streamOnly`；`session-id` / `thread-id` / `x-client-request-id` 由插件按 `prompt_cache_key` 派生（[PLUGIN-CODEX.md](PLUGIN-CODEX.md) §16、§25）；自己写的头全部权威；两个类型 `passHeaders: ["x-codex-turn-state"]`，作默认头转交 |
+| codex | 自己的 `BuildUpstream`，HTTP 与 WebSocket | `ClassifyError`、额度头与 `codex.rate_limits` 流内用量事件、`streamOnly`；`session-id` / `thread-id` / `x-client-request-id` 由插件按 `prompt_cache_key` 派生（[PLUGIN-CODEX.md](PLUGIN-CODEX.md) §16、§25）；自己写的头全部权威；两个类型 `passHeaders: ["x-codex-turn-state"]`，作默认头转交，并声明为 `accountBoundHeaders`（换号后核心不交）；续期原因映射成官方的 `refresh_reason` |
 
 ## 8. 新插件自查
 

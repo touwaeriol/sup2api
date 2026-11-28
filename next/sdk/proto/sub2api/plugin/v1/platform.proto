@@ -689,6 +689,17 @@ message BuildRefreshRequestRequest {
   // The account to renew, credentials included (the account type is always
   // this plugin's). platform is empty: no client endpoint is involved.
   Account account = 1;
+  // Why the core renews the credentials now (CONTRACTS §141.3). Diagnostic
+  // only: the request is built the same way for every reason. UNSPECIFIED
+  // comes from a core that does not say.
+  enum Reason {
+    REASON_UNSPECIFIED = 0;
+    REASON_SCHEDULED = 1;    // the sweep: the expiry is within beforeExpirySec
+    REASON_FORCED = 2;       // an administrator's refresh-credentials
+    REASON_SAVED = 3;        // right after a save stored credentials already due
+    REASON_UNAUTHORIZED = 4; // the upstream answered 401 to a gateway request
+  }
+  Reason reason = 2;
 }
 
 message BuildRefreshRequestResponse {

@@ -37,16 +37,36 @@ func refreshPermanent(status int32, code string) bool {
 		(status == http.StatusBadRequest && code == "invalid_grant")
 }
 
-// refreshReason is the refresh_reason of a refresh: the Codex CLI sends one
-// of proactive_expiry, scheduled, unauthorized_recovery and forced. The core
-// does not say why it refreshes (a sweep, or an administrator's forced
-// refresh), so every refresh reports the sweep's; the field is diagnostic.
-const refreshReason = "scheduled"
+// refreshReasons maps why the core renews (BuildRefreshRequestRequest.reason,
+// CONTRACTS §141.3) to the refresh_reason the Codex CLI sends
+// (codex-rs login/src/oauth/client.rs RefreshReason): the sweep is
+// scheduled, an administrator's refresh forced, the renewal right after a
+// save proactive_expiry (the saved credentials are already due) and the one
+// after an upstream 401 unauthorized_recovery. The field is diagnostic; a
+// core that gives no reason gets none sent, as the CLI omits it when it has
+// none.
+var refreshReasons = map[pluginv1.BuildRefreshRequestRequest_Reason]string{
+	pluginv1.BuildRefreshRequestRequest_REASON_SCHEDULED:    "scheduled",
+	pluginv1.BuildRefreshRequestRequest_REASON_FORCED:       "forced",
+	pluginv1.BuildRefreshRequestRequest_REASON_SAVED:        "proactive_expiry",
+	pluginv1.BuildRefreshRequestRequest_REASON_UNAUTHORIZED: "unauthorized_recovery",
+}
+
+// refreshBody is the JSON body of a refresh with refresh token rt for reason.
+func refreshBody(rt string, reason pluginv1.BuildRefreshRequestRequest_Reason) []byte {
+	body := map[string]string{"grant_type": "refresh_token", "client_id": CodexClientID, "refresh_token": rt}
+	if r, ok := refreshReasons[reason]; ok {
+		body["refresh_reason"] = r
+	}
+	b, _ := json.Marshal(body)
+	return b
+}
 
 // BuildRefreshRequest implements pluginsdk.CredentialRefresher: POST
 // <auth>/oauth/token, JSON {grant_type, client_id (Codex public client),
-// refresh_token, refresh_reason}, for both account types; no scope, as the
-// Codex CLI sends it (codex-rs login/src/oauth/client.rs refresh).
+// refresh_token, refresh_reason (refreshReasons)}, for both account types;
+// no scope, as the Codex CLI sends it (codex-rs login/src/oauth/client.rs
+// refresh).
 //
 // Credentials without a refresh token answer FAILED_PRECONDITION, which the
 // core records like a refusal until the account is authorized again.
@@ -62,11 +82,9 @@ func (p *Plugin) BuildRefreshRequest(_ context.Context, in *pluginv1.BuildRefres
 	if c.RefreshToken == "" {
 		return nil, status.Error(codes.FailedPrecondition, "the account has no refresh_token; authorize it again / 账号没有 refresh_token，请重新授权")
 	}
-	body, _ := json.Marshal(map[string]string{
-		"grant_type": "refresh_token", "client_id": CodexClientID, "refresh_token": c.RefreshToken, "refresh_reason": refreshReason,
-	})
 	h := p.agent(c).setHeaders(map[string]string{"Accept": "application/json", "Content-Type": "application/json"})
-	return &pluginv1.BuildRefreshRequestResponse{Method: http.MethodPost, Url: p.ep.Auth + "/oauth/token", Headers: h, BodyJson: string(body)}, nil
+	return &pluginv1.BuildRefreshRequestResponse{Method: http.MethodPost, Url: p.ep.Auth + "/oauth/token", Headers: h,
+		BodyJson: string(refreshBody(c.RefreshToken, in.GetReason()))}, nil
 }
 
 // tokenResponse is the answer of the token endpoint.

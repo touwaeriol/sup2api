@@ -105,6 +105,11 @@ type call struct {
 	// trail is each attempt sent upstream, in order
 	// (usage_logs.anomalies.attempts, CONTRACTS §98).
 	trail trailState
+	// recovery is the request's renewals after an upstream 401
+	// (recovery.go); firstAccount is the account of its first attempt
+	// (inboundHeaders).
+	recovery     unauthorizedRecovery
+	firstAccount int64
 	// balance is the core balancing's usage read for this request (balance.go),
 	// read at the same moment as the ranking and reused by failover.
 	balance     *balanceState

@@ -317,3 +317,13 @@ func googleStatus(status int) string {
 	}
 	return "UNKNOWN"
 }
+
+// firstNonEmpty is the first of s that is not empty, "" when none.
+func firstNonEmpty(s ...string) string {
+	for _, v := range s {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}

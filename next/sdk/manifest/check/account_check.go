@@ -123,6 +123,7 @@ func (v *validator) accountPlatform(pf string, ap manifest.AccountPlatform, seen
 	v.foreignFacts(pf, ap, own)
 	v.accountStreamOnly(pf, ap, own)
 	v.accountAdapted(pf, ap, own)
+	v.accountBoundHeaders(pf, ap, own)
 	for _, proto := range sortedKeys(ap.Usage) {
 		uf := pf + ".usage." + proto
 		if own != nil {
@@ -187,7 +188,7 @@ func (v *validator) referencedPlatform(id string, own *manifest.Platform) *manif
 	}
 	for _, other := range v.opt.OtherPlatforms {
 		if other.ID == id {
-			p = &manifest.Platform{ID: other.ID, Endpoints: other.Endpoints}
+			p = &manifest.Platform{ID: other.ID, Endpoints: other.Endpoints, PassHeaders: other.PassHeaders}
 		}
 	}
 	return p

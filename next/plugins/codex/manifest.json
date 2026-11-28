@@ -76,6 +76,7 @@
             "images_edits": { "model": "gpt-6-luna" }
           },
           "passHeaders": ["x-codex-turn-state"],
+          "accountBoundHeaders": ["x-codex-turn-state"],
           "streamOnly": ["openai.responses"]
         }
       ]
@@ -135,6 +136,7 @@
             "images_edits": { "model": "gpt-6-luna" }
           },
           "passHeaders": ["x-codex-turn-state"],
+          "accountBoundHeaders": ["x-codex-turn-state"],
           "streamOnly": ["openai.responses"]
         }
       ]

@@ -41,8 +41,11 @@ type typeRoute struct {
 	// that platform.
 	cross bool
 
-	passHeaders []string
-	usage       manifest.UsageRules
+	// passHeaders are the client headers handed to the plugin, boundHeaders
+	// those of them an attempt on another account leaves out (CONTRACTS
+	// §141.4).
+	passHeaders, boundHeaders []string
+	usage                     manifest.UsageRules
 	// pluginUsage and usageEvents are the upstream endpoint's usageSource /
 	// usageStreamEvents (CONTRACTS §25.3).
 	//
@@ -245,6 +248,7 @@ func (c *call) addRoute(b core.AccountTypeBinding, ap manifest.AccountPlatform, 
 	}
 	rt := &typeRoute{binding: b, platform: q, upstream: y, conv: conv, grade: convert.GradeNative, cross: c.crossPlatform(b),
 		passHeaders:        ap.ClientHeaders(&pf),
+		boundHeaders:       ap.AccountBoundHeaders,
 		usage:              usagerules.For(ap, &ep, &pf, y),
 		pluginUsage:        ep.PluginUsage(),
 		usageEvents:        ep.UsageStreamEvents,

@@ -311,6 +311,9 @@ func (w *waitedRelay) settle(ctx context.Context, res core.ExecutionResult, err 
 // the default one when it gave none. A task submission is never retried.
 func (w *waitedRelay) classified(ctx context.Context, cls *pluginv1.ClassifyErrorResponse) attemptResult {
 	x, f := w.x, w.failure
+	if x.c.recoverUnauthorized(ctx, x.rt, x.acct, int(f.GetStatus())) {
+		return attemptResult{kind: attemptRecovered}
+	}
 	if cls == nil {
 		cls = defaultClassification(int(f.GetStatus()))
 	}
