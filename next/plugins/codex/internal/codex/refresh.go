@@ -39,14 +39,16 @@ func refreshPermanent(status int32, code string) bool {
 
 // refreshReasons maps why the core renews (BuildRefreshRequestRequest.reason,
 // CONTRACTS §141.3) to the refresh_reason the Codex CLI sends
-// (codex-rs login/src/oauth/client.rs RefreshReason): the sweep is
-// scheduled, an administrator's refresh forced, the renewal right after a
-// save proactive_expiry (the saved credentials are already due) and the one
-// after an upstream 401 unauthorized_recovery. The field is diagnostic; a
+// (codex-rs login/src/oauth/client.rs RefreshReason): the sweep and the
+// renewal right after a save renew credentials close to their expiry
+// (beforeExpirySec), which the CLI calls proactive_expiry (its scheduled is
+// the eight-day renewal of a token without an expiry, which the core has
+// no counterpart of); an administrator's refresh is forced and the one after
+// an upstream 401 unauthorized_recovery. The field is diagnostic; a
 // core that gives no reason gets none sent, as the CLI omits it when it has
 // none.
 var refreshReasons = map[pluginv1.BuildRefreshRequestRequest_Reason]string{
-	pluginv1.BuildRefreshRequestRequest_REASON_SCHEDULED:    "scheduled",
+	pluginv1.BuildRefreshRequestRequest_REASON_SCHEDULED:    "proactive_expiry",
 	pluginv1.BuildRefreshRequestRequest_REASON_FORCED:       "forced",
 	pluginv1.BuildRefreshRequestRequest_REASON_SAVED:        "proactive_expiry",
 	pluginv1.BuildRefreshRequestRequest_REASON_UNAUTHORIZED: "unauthorized_recovery",

@@ -29,7 +29,7 @@ func TestBuildRefreshRequest(t *testing.T) {
 			t.Fatalf("%s refresh = %v", typ, r)
 		}
 		if body["client_id"] != CodexClientID || body["grant_type"] != "refresh_token" || body["refresh_token"] != "rt-device" ||
-			body["refresh_reason"] != "scheduled" || len(body) != 4 {
+			body["refresh_reason"] != "proactive_expiry" || len(body) != 4 {
 			t.Fatalf("%s body = %v", typ, body)
 		}
 	}
@@ -41,7 +41,7 @@ func TestBuildRefreshRequestReason(t *testing.T) {
 	h := startPlugin(t, newTestPlugin(DefaultEndpoints))
 	ctx := context.Background()
 	for reason, want := range map[pluginv1.BuildRefreshRequestRequest_Reason]string{
-		pluginv1.BuildRefreshRequestRequest_REASON_SCHEDULED:    "scheduled",
+		pluginv1.BuildRefreshRequestRequest_REASON_SCHEDULED:    "proactive_expiry",
 		pluginv1.BuildRefreshRequestRequest_REASON_FORCED:       "forced",
 		pluginv1.BuildRefreshRequestRequest_REASON_SAVED:        "proactive_expiry",
 		pluginv1.BuildRefreshRequestRequest_REASON_UNAUTHORIZED: "unauthorized_recovery",

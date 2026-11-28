@@ -9715,7 +9715,7 @@ cluster 任务，每分钟一次，单次至多 5 分钟，按下面的顺序：
 
 ## 141. 401 立即续期并重发；换号时不交账号绑定的客户端头；续期原因（2026-11-28，所有者选“插件加核心一起做”，对齐官方 Codex CLI；设计见 [DESIGN-2026-11-28-CODEX-CORE-ALIGN.md](DESIGN-2026-11-28-CODEX-CORE-ALIGN.md) 第 1、2 节；无迁移，可滚动；插件协议、Host API 不变，`BuildRefreshRequestRequest` 与清单只加字段）
 
-本节是设计里 HTTP 路径的部分（拆分 A）。WebSocket 握手的 401 恢复只留了接口（§141.2 末条），由拆分 B 接线；流内用量事件与上游重连（设计第 3、4 节）不在本节。
+本节是设计第 1、2 节：HTTP 请求与 WebSocket 握手的 401 恢复、换号时去掉账号绑定的头、续期原因；流内用量事件与上游重连（设计第 3、4 节）见 §142。
 
 ### 141.1 官方的做法
 
@@ -9732,13 +9732,13 @@ cluster 任务，每分钟一次，单次至多 5 分钟，按下面的顺序：
 - **重发**：回答“可以重试”时，这次尝试在**同一账号**上从头再跑一次（重新 `Load` 拿新凭证、重新 `Execute`、重新中继），结果就是这次尝试的结果：不算换号、不加尝试次数、不冷却、不罚账号，使用记录的 `attempts` 不变。续期期间客户端离开时按客户端断开结束，不再重发。
 - **只恢复一次**：每个请求每个账号最多一次（`call.recovery.tried`）。回答“不行”、续期出错，或重发后又是 401，都走原来的分类（冷却、自动禁用、换号、故障策略），与没有本节时完全相同。换到的下一个账号自己还能恢复一次。
 - **不恢复的**：账号类型没声明 `refresh`；任务提交端点（它的失败一律回给客户端、从不换号）；不经 `recovering` 跑的尝试（见下条）。
-- **接口**（给 WebSocket 握手）：`(*call).recovering(ctx, try func() attemptResult) attemptResult`。`try` 是在一个账号上的一次尝试，必须自己重新 `Load` 账号；`recovering` 在 `try` 期间允许恢复，`try` 返回 `attemptRecovered` 时（握手的 401 经 `cl.classify` 续期成功）再跑一次 `try`。HTTP 用 `attemptRecovering(ctx, ref, n)`（就是 `recovering` 包住 `attempt`）；WebSocket 在 `wsSession.connect` 里把 `res := s.dial(ctx, cl, ref)` 换成 `res := cl.recovering(ctx, func() attemptResult { return s.dial(ctx, cl, ref) })` 即可（握手被拒时还没有向客户端写过任何东西）。接线之前握手的 401 照旧直接分类：`recoverUnauthorized` 只在 `recovering` 里生效，`attemptRecovered` 不会漏到不认识它的地方。
+- **接线**：`(*call).recovering(ctx, try func() attemptResult) attemptResult`。`try` 是在一个账号上的一次尝试，必须自己重新 `Load` 账号；`recovering` 在 `try` 期间允许恢复，`try` 返回 `attemptRecovered` 时（握手的 401 经 `cl.classify` 续期成功）再跑一次 `try`。HTTP 用 `attemptRecovering(ctx, ref, n)`（就是 `recovering` 包住 `attempt`）；WebSocket 在 `wsSession.connect` 里用 `cl.recovering(ctx, func() attemptResult { return s.dial(ctx, cl, ref) })`（握手被拒时还没有向客户端写过任何东西；测试 `gateway/websocket_recovery_test.go`）。`recoverUnauthorized` 只在 `recovering` 里生效，`attemptRecovered` 不会漏到不认识它的地方。
 
 ### 141.3 续期原因 `BuildRefreshRequestRequest.reason`
 
 - 新字段 `Reason reason = 2`，枚举 `BuildRefreshRequestRequest.Reason`：`REASON_UNSPECIFIED`（0，不说原因的核心）、`REASON_SCHEDULED`（定时扫描，§48.3 第 1 条）、`REASON_FORCED`（管理员 `POST /accounts/:id/refresh-credentials`）、`REASON_SAVED`（保存后立即续期，§48.3 第 5 条）、`REASON_UNAUTHORIZED`（§141.2）。只是诊断信息，插件不必据此改变请求；不关心的插件忽略它。
 - 核心按原因决定检查（`account/refresh_renew.go` `renewalSkipped`）：扫描与保存后只续过期时间读得出且在 `beforeExpirySec` 以内的凭证；401 恢复不看过期时间；除管理员强制以外都跳过“已拒绝”的同一份凭证。各调用点各自填原因（`SweepRefresh`、`refreshCredentials`、`refreshSaved`、`RecoverCredentials`）。
-- codex 映射成官方的 `refresh_reason`：`scheduled` / `forced` / `proactive_expiry` / `unauthorized_recovery`，`UNSPECIFIED` 时不带这个字段（官方没有原因时也不带）。注意官方的 `scheduled` 指“上次刷新太久以前”、`proactive_expiry` 指“访问令牌快过期”，核心的扫描其实是按快过期挑的；映射按所有者定的对应关系，只影响诊断字段。
+- codex 映射成官方的 `refresh_reason`：定时扫描与保存后续期都是临近过期才续，报 `proactive_expiry`（官方的 `scheduled` 是没有过期时间的令牌每 8 天续一次，核心没有对应），管理员强制 `forced`，401 恢复 `unauthorized_recovery`；`UNSPECIFIED` 时不带这个字段（官方没有原因时也不带）。注意官方的 `scheduled` 指“上次刷新太久以前”、`proactive_expiry` 指“访问令牌快过期”，核心的扫描其实是按快过期挑的；映射按所有者定的对应关系，只影响诊断字段。
 - `pb.go` 按 protoc-gen-go v1.31.0 的输出格式补写（本次环境装不了 buf 与生成器）：原始描述符由 Go 的描述符库序列化，已核对未改动时与原文件逐字节相同。下次有工具时 `cd next/sdk && buf generate` 应得到同样的文件。
 
 ### 141.4 换号时不交账号绑定的客户端头（清单 `accountBoundHeaders`）

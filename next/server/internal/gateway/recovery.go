@@ -20,7 +20,7 @@ import (
 // is classified as before.
 //
 // Only attempts run through recovering recover: an HTTP attempt
-// (attemptRecovering) and, once wired, a WebSocket handshake.
+// (attemptRecovering) and a WebSocket handshake (wsSession.connect).
 
 // unauthorizedRecovery is a request's renewals after a 401.
 type unauthorizedRecovery struct {

@@ -8,7 +8,9 @@
 
 开发完成、尚未上线的改动。发布时改成发布日期的一节，补上提交、实际版本号和发布过程。
 
-#### codex 0.2.4：协议与官方 Codex CLI 对齐（无迁移，可滚动；核心一处小改）
+#### codex 0.2.5 与核心改动：协议与官方 Codex CLI 对齐（无迁移，可滚动；插件在旧核心上照常工作，只是没有核心那部分）
+
+（0.2.4 是本批前半部分合入 develop 时 CI 自动发出的 Release，只含插件改动，不登记商店。）
 
 - 会话头改为 Codex CLI 的 `session-id` / `thread-id` / `x-client-request-id`（ChatGPT 按 `session-id` 做提示缓存亲和，原来的 `session_id` / `conversation_id` 可能没起作用；上线后对比 ec2pool codex 的 cache_read/input，基线 26.6%）。
 - 转交客户端的 `x-codex-turn-state` 粘性路由令牌；核心把同名响应头回给客户端（`core.ProviderHeaders`）。
@@ -16,11 +18,11 @@
 - Sign in with Codex 的 scope、回调地址（`127.0.0.1:1455`）、授权地址的 `originator` 与 Codex CLI 相同；FedRAMP 账号带 `x-openai-fedramp`；email 可从 profile 声明读。
 - 不模仿 TLS 指纹和 User-Agent / originator 等客户端身份。详见 `next/docs/PLUGIN-CODEX.md` 第 25 节。
 - WebSocket 会话里的 `codex.rate_limits` 用量事件也更新 5 小时 / 周窗口（清单 `quota.events`，需核心带 CONTRACTS §142，旧核心忽略）。
-- 两个类型把 `x-codex-turn-state` 声明为 `accountBoundHeaders`；续期原因映射成官方的 `refresh_reason`（`scheduled` / `forced` / `proactive_expiry` / `unauthorized_recovery`）。需要下面的核心改动才生效，旧核心上照旧。
+- 两个类型把 `x-codex-turn-state` 声明为 `accountBoundHeaders`；续期原因映射成官方的 `refresh_reason`（`proactive_expiry` / `forced` / `unauthorized_recovery`）。需要下面的核心改动才生效，旧核心上照旧。
 
 #### 核心：上游 401 立即续期并重发、换号不交账号绑定的头、续期原因（CONTRACTS §141；无迁移，可滚动；插件协议、Host API 不变）
 
-- 声明了 `refresh` 的账号类型（codex、vertex）在网关请求上收到上游 401 时，核心立即对这个账号续期一次（同一把账号锁，锁被占时等它结束、不重复续期），成功后在同一账号上重发这次尝试，不冷却、不换号；续期失败或重发仍 401 照旧分类。每个请求每个账号最多一次。目前只在 HTTP 上，WebSocket 握手留了接口待接线。
+- 声明了 `refresh` 的账号类型（codex、vertex）在网关请求上收到上游 401 时，核心立即对这个账号续期一次（同一把账号锁，锁被占时等它结束、不重复续期），成功后在同一账号上重发这次尝试，不冷却、不换号；续期失败或重发仍 401 照旧分类。每个请求每个账号最多一次。HTTP 请求和 WebSocket 握手都生效。
 - 清单 `accountTypes[].platforms[].accountBoundHeaders`：请求换到另一个账号后，交给插件的客户端头里去掉这些头（必须是生效的 `passHeaders` 的子集，清单检查）。
 - `BuildRefreshRequestRequest` 加 `reason`（定时扫描、管理员强制、保存后、401 恢复）。
 

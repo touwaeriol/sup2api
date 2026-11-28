@@ -334,7 +334,7 @@ if relay.Wait || !proto.Equal(ex.Response, pluginsdk.ReportHostUsage()) { ... }
 |---|---|---|---|
 | 故障策略、冷却、自动禁用 | 核心统一；**插件配合**：实现 `ClassifyError`，故障策略下核心只采用其中的额度观测和限时禁用；传输错误完全由策略决定。插件不可用（`Execute` 报错或崩溃、中继被核心拒绝、目标主机被拒）不经账号规则：有没有故障策略都只换号、不罚账号；客户端已经离开时插件返回的分类不采用 | 不等待形式由核心调 `ClassifyError`；等待形式由插件在返回值里给 `classification` / 握手和流内错误事件都分类 | `applyClassification`、`waited.go`；CONTRACTS §69 |
 | 订阅额度窗口（5 小时、周） | **插件配合**：在账号类型上声明 `quota.headers`；上游在 WebSocket 消息里报窗口的，另声明 `quota.events`（下文） | 一致 / 握手头、带头的错误事件和声明的流内用量事件 | `observeQuota`、`observeQuotaEvent`；CONTRACTS §44、§105、§142 |
-| 上游 401 时立即续期并重发 | 核心统一；**插件配合**：账号类型声明 `refresh` 并实现 `CredentialRefresher`（同定时续期）。`BuildRefreshRequest` 收到续期原因 `reason`（定时扫描、管理员强制、保存后、401 恢复），只作诊断，不关心可以忽略 | HTTP 生效（不等待与等待形式相同，任务提交不恢复）/ 握手只留了接口（`recovering`），尚未接线 | `gateway/recovery.go`、`account/refresh_recover.go`；CONTRACTS §141.2、§141.3 |
+| 上游 401 时立即续期并重发 | 核心统一；**插件配合**：账号类型声明 `refresh` 并实现 `CredentialRefresher`（同定时续期）。`BuildRefreshRequest` 收到续期原因 `reason`（定时扫描、管理员强制、保存后、401 恢复），只作诊断，不关心可以忽略 | HTTP 生效（不等待与等待形式相同，任务提交不恢复）/ 握手同样生效（`recovering`） | `gateway/recovery.go`、`account/refresh_recover.go`；CONTRACTS §141.2、§141.3 |
 
 **WebSocket 流内用量事件**（`accountTypes[].quota.events`，CONTRACTS §142）：上游在 WebSocket 会话里用一条消息报窗口时（Codex 的 `codex.rate_limits`），按消息的顶层 `type` 声明：
 
