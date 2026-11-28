@@ -3128,7 +3128,7 @@ claude-oauth 插件原来有个每 30 分钟跑一次的 `refresh_tokens` 任务
 
 ### 48.2 插件接口（`PlatformService`）
 
-- `BuildRefreshRequest(account)` → `{method（默认 POST）, url, headers, body_json}`。
+- `BuildRefreshRequest(account, reason)` → `{method（默认 POST）, url, headers, body_json}`。`reason` 是这次续期的原因（2026-11-28 起，§141.3），只作诊断。
   - 核心经账号代理发送，受 netguard 限制（同 §43.4），响应体整份读（转发 V2 收尾起，§112.17；此前最多读 64 KiB）。
   - `body_json` 虽然叫这个名字，核心并不解析也不改写它，原样作为请求体发送（`account/quota.go` `sendPluginCall`，额度查询 §44 共用）：`headers` 里设置了 `Content-Type`（不区分大小写，如 OAuth 令牌端点要的 `application/x-www-form-urlencoded`，codex 插件即如此）时按插件给的发送；没有设置且 `body_json` 非空时核心补 `Content-Type: application/json`；`body_json` 为空时不发请求体，也不补 `Content-Type`。
   - 凭证根本无法续期（例如没有 refresh token）时返回 `FAILED_PRECONDITION`，核心按 `auth_rejected` 处理。
@@ -3158,6 +3158,7 @@ claude-oauth 插件原来有个每 30 分钟跑一次的 `refresh_tokens` 任务
    - 没到期的凭证（其余所有保存）什么都不启动；读不出过期时间的凭证同第 2 条，不续期。
    - 保存接口不等它，响应里的 `refresh` 仍是保存那一刻的状态。它不受请求取消影响；进程关停时也不等它，被打断的账号仍然到期，由下一轮扫描续上。协程里的 panic 被恢复并记 ERROR。
    - 用途：表单没法自己换到第一枚令牌的账号类型（vertex 的服务账号、用户凭证）在校验时把 `expires_at` 写成一个已经过去的值，保存后几秒内就有令牌。
+6. **401 立即续期**（2026-11-28，§141.2）：网关请求的上游回 401 时，网关请账号服务对这个账号做一次续期（`RecoverCredentials`，同一把账号锁；锁被占时等它结束、重读，不重复续期），成功后在同一账号上重发这次尝试。
 
 ### 48.4 数据与接口
 
@@ -8009,7 +8010,7 @@ ALTER TABLE accounts ADD COLUMN IF NOT EXISTS model_protocols jsonb NOT NULL DEF
 | `meta` (3) | `RequestMeta`；`model` 是映射后的上游模型 |
 | `account` (4) | 本次尝试的账号，含凭证 |
 | `body` (5) | 完整请求体，上游协议，核心的改写都已做完；WebSocket 端点是这一轮的消息。客户端请求过了请求体上限（§111）；核心自己的改写（转换内联的媒体、钩子补丁、参数覆盖）可能让它更大，不因此拒绝，交给插件时也不再检查大小 |
-| `inbound_headers` (6) | 白名单（`passHeaders`）内的客户端请求头，小写名 |
+| `inbound_headers` (6) | 白名单（`passHeaders`）内的客户端请求头，小写名；请求换到另一个账号后去掉清单 `accountBoundHeaders` 列的头（2026-11-28 起，§141.4） |
 | `attempt` (7) | 0 起，换号加一 |
 | `extract_usage` (8) | 端点的用量由本插件解析（`usageSource: "plugin"`，WebSocket 轮次恒为假） |
 | `task_submission` (9) | 端点是任务提交（`endpoint.task.action: "submit"`） |
@@ -8138,7 +8139,7 @@ SDK 名 `pluginsdk.Fetch`。一个有界、非流式的请求，回答交还插�
 ### 112.12 清单
 
 - `runtime` 只有 `grpc`（`js` 仍是保留值）；`manifest.RuntimeGRPC` 在 `manifest.go`（没有使用者的 `TransportHTTP`、`TransportWebSocket` 已删除）。
-- 账号类型在某个平台上的 `passHeaders`：**没写**（解码后为 nil）取平台的列表；**写成 `[]`** 表示不交给插件任何客户端请求头；非空按写的用（`AccountPlatform.ClientHeaders`）。此前空列表也回落到平台的列表，清单没法说“一个都不要”。字段的 JSON 标签是 `omitzero`，重新编码时“没写”和“空”仍然分得开。codex 的两个类型原来写的是 `[]`，0.2.4 起是 `["x-codex-turn-state"]`（Codex 后端的粘性路由令牌，插件作默认头转交；核心的 `ProviderHeaders` 把同名响应头回给客户端，[PLUGIN-CODEX.md](PLUGIN-CODEX.md) 第 25 节）。
+- 账号类型在某个平台上的 `passHeaders`：**没写**（解码后为 nil）取平台的列表；**写成 `[]`** 表示不交给插件任何客户端请求头；非空按写的用（`AccountPlatform.ClientHeaders`）。此前空列表也回落到平台的列表，清单没法说“一个都不要”。字段的 JSON 标签是 `omitzero`，重新编码时“没写”和“空”仍然分得开。codex 的两个类型原来写的是 `[]`，0.2.4 起是 `["x-codex-turn-state"]`（Codex 后端的粘性路由令牌，插件作默认头转交；核心的 `ProviderHeaders` 把同名响应头回给客户端，[PLUGIN-CODEX.md](PLUGIN-CODEX.md) 第 25 节），并把它声明为 `accountBoundHeaders`（换号后不交，§141.4）。
 - 声明了账号类型就必须有 `accounts.credentials {"types": "own"}`（原来声明式类型可以没有）。§124 起这个授权删除，清单里再写它按旧契约拒绝。
 - 账号类型的地址字段只认 `upstreamFields`：原来声明了 `upstream` 的类型自动得到 `["base_url"]`，现在要在清单里写出（五个改写的插件都写了）。它决定账号的自定义上游判断（§21）和取回允许的账号地址（§112.6）。2026-11-20 起每个账号类型都必须写（没有运营方填的地址写 `[]`，§21.3），没写时清单检查报 `required`。这是普通的字段错误，不是旧插件协议的标志，所以不报 `outdated_contract`：旧标志都是只有旧契约才会写的东西，缺这个键的却也可能是按新 SDK 构建、只是忘了写的包，对它说“装一个为新核心构建的版本”没有用；带旧标志的旧包照旧先以 `outdated_contract` 被拒（`pkg.CheckContract` 在字段检查之前）。
 - `usageSource: "plugin"`、`usageStreamEvents`、`usageRequestFields`（`EstimateUsage` 的入参，预扣不变，§25.8）、`endpoint.task` 不变（`usageMaxBytes` 在转发 V2 收尾删除：没有插件声明过它，见下一条）：`extract_usage` 来自端点的 `PluginUsage()`，`task_submission` 来自 `TaskSubmit()`。
@@ -9710,3 +9711,45 @@ cluster 任务，每分钟一次，单次至多 5 分钟，按下面的顺序：
 
 - **前端**：管理页 `web/src/views/redeem/`（侧栏“充值/支付 → 兑换码”，只有持有 `redeem:manage` 的人看得到，默认只有超级管理员），列表用 `code_tail` 显示成 `••••-••••-••••-XXXX`；生成后的明文只在结果弹窗里（复制全部 / 下载 txt）。钱包页的兑换码卡 `views/me/RedeemCard.vue`（有 `redeem:use` 才显示）。mock `web/mock/billing/redeem.ts` 与上面的接口同形。余额流水的类型名：`topup`“充值”、`promo_bonus`“优惠码赠送”、`redeem`“兑换码”。
 - **测试**（`internal/redeem/*_test.go`，真实 PostgreSQL + miniredis）：大小写、空格、连字符不影响兑换，流水 kind 与幂等键；不存在、格式不对、已作废、已过期同一错误码；20 个用户并发兑换同一个码只成功一次、只有一条流水；账本在写完流水后报错时码仍是 unused、余额与流水都回滚、不计失败；失败 10 次后连有效码也被拒（429，约 3600 秒），其他用户不受影响，1 小时后解锁；每分钟第 6 次 429；生成后 `redeem_codes` 与 `audit_logs` 的整行文本里查不到明文（分组、规范化、小写三种形式），审计记操作人；生成参数校验；列表按四种状态筛选、使用者邮箱、作废记 `voided_by`、作废已用 409、不存在 404；无权限的用户调四个接口都 403，生成响应带 `no-store`；Redis 不可用时每分钟限次与失败锁两处都放行；第 10 次失败从那时重新计 1 小时窗口，到期后能再兑换；空码不计失败也不计每分钟次数；`ApplyTx` 回 `Duplicate` 时整体回滚；`count=1000` 与 `value=100000` 的边界。
+
+## 141. 401 立即续期并重发；换号时不交账号绑定的客户端头；续期原因（2026-11-28，所有者选“插件加核心一起做”，对齐官方 Codex CLI；设计见 [DESIGN-2026-11-28-CODEX-CORE-ALIGN.md](DESIGN-2026-11-28-CODEX-CORE-ALIGN.md) 第 1、2 节；无迁移，可滚动；插件协议、Host API 不变，`BuildRefreshRequestRequest` 与清单只加字段）
+
+本节是设计里 HTTP 路径的部分（拆分 A）。WebSocket 握手的 401 恢复只留了接口（§141.2 末条），由拆分 B 接线；流内用量事件与上游重连（设计第 3、4 节）不在本节。
+
+### 141.1 官方的做法
+
+- 401：重新加载凭证 → 刷新令牌 → 用新令牌重发同一请求，再 401 才报错（codex-rs `login/src/auth/manager.rs` UnauthorizedRecovery、`core/src/client.rs`），刷新带 `refresh_reason: unauthorized_recovery`。
+- `x-codex-turn-state` 只在同一账号的同一轮内回放，账号变了就丢弃（`core/src/client.rs` `turn_state_with_auth_owner`）。
+
+### 141.2 401 立即续期并重发（`gateway/recovery.go`、`account/refresh_recover.go`）
+
+- **触发**：一次 HTTP 尝试的上游回 401，账号类型声明了 `refresh`（§48.1），核心有 `core.CredentialRecovery`（`gateway.Deps.Recovery`，组装时接账号服务），端点不是任务提交，这个请求还没有为这个账号恢复过。判断在分类的第一步（`recoverUnauthorized`）：不等待形式在 `classify` 开头、调插件的 `ClassifyError` 之前，等待形式（插件在 `Execute` 返回值里给分类）在 `waitedRelay.classified` 开头、采用插件的分类之前，故障策略下也一样；这时冷却、自动禁用、换号、故障策略的事实都还没发生。
+- **续期**：`RecoverCredentials(ctx, 账号, used)`，`used` 是被拒的这次尝试用的凭证（`AccountDirectory.Load` 读到的明文，即交给插件的 `credentials_json`）。账号服务拿账号锁 `account:refresh:<id>`（没有集群锁时是本节点的互斥锁，同 §48.3）；锁被别处持有时每 100 毫秒再试，直到拿到、客户端离开，或最多等锁的有效期 1 分钟（续期持锁不会更久）。拿到锁后重读账号：
+  - 凭证已经不是 `used`（别的续期或管理员刚保存过，包括别的节点）：不续期，丢掉本节点的账号快照（对方的 `account:changed` 可能还在路上），回答“可以重试”；
+  - 凭证还是 `used`，但刚才等过锁：持锁的那次续期没换掉它（失败或无事可做），**不重复续期**，回答“不行”；
+  - 否则按原因 `REASON_UNAUTHORIZED` 续期（§48.3 的流程：调插件、经账号代理发送、条件更新保存、审计、事件、`account:changed`）。这个原因不看过期时间（上游刚拒绝了这份凭证），但仍跳过被判“已拒绝”的同一份凭证（`rejected_cred_hash`，§48.3 第 4 条）；失败照常记进续期状态。续期一旦开始不受客户端离开影响（同 §48.3）。
+- **重发**：回答“可以重试”时，这次尝试在**同一账号**上从头再跑一次（重新 `Load` 拿新凭证、重新 `Execute`、重新中继），结果就是这次尝试的结果：不算换号、不加尝试次数、不冷却、不罚账号，使用记录的 `attempts` 不变。续期期间客户端离开时按客户端断开结束，不再重发。
+- **只恢复一次**：每个请求每个账号最多一次（`call.recovery.tried`）。回答“不行”、续期出错，或重发后又是 401，都走原来的分类（冷却、自动禁用、换号、故障策略），与没有本节时完全相同。换到的下一个账号自己还能恢复一次。
+- **不恢复的**：账号类型没声明 `refresh`；任务提交端点（它的失败一律回给客户端、从不换号）；不经 `recovering` 跑的尝试（见下条）。
+- **接口**（给 WebSocket 握手）：`(*call).recovering(ctx, try func() attemptResult) attemptResult`。`try` 是在一个账号上的一次尝试，必须自己重新 `Load` 账号；`recovering` 在 `try` 期间允许恢复，`try` 返回 `attemptRecovered` 时（握手的 401 经 `cl.classify` 续期成功）再跑一次 `try`。HTTP 用 `attemptRecovering(ctx, ref, n)`（就是 `recovering` 包住 `attempt`）；WebSocket 在 `wsSession.connect` 里把 `res := s.dial(ctx, cl, ref)` 换成 `res := cl.recovering(ctx, func() attemptResult { return s.dial(ctx, cl, ref) })` 即可（握手被拒时还没有向客户端写过任何东西）。接线之前握手的 401 照旧直接分类：`recoverUnauthorized` 只在 `recovering` 里生效，`attemptRecovered` 不会漏到不认识它的地方。
+
+### 141.3 续期原因 `BuildRefreshRequestRequest.reason`
+
+- 新字段 `Reason reason = 2`，枚举 `BuildRefreshRequestRequest.Reason`：`REASON_UNSPECIFIED`（0，不说原因的核心）、`REASON_SCHEDULED`（定时扫描，§48.3 第 1 条）、`REASON_FORCED`（管理员 `POST /accounts/:id/refresh-credentials`）、`REASON_SAVED`（保存后立即续期，§48.3 第 5 条）、`REASON_UNAUTHORIZED`（§141.2）。只是诊断信息，插件不必据此改变请求；不关心的插件忽略它。
+- 核心按原因决定检查（`account/refresh_renew.go` `renewalSkipped`）：扫描与保存后只续过期时间读得出且在 `beforeExpirySec` 以内的凭证；401 恢复不看过期时间；除管理员强制以外都跳过“已拒绝”的同一份凭证。各调用点各自填原因（`SweepRefresh`、`refreshCredentials`、`refreshSaved`、`RecoverCredentials`）。
+- codex 映射成官方的 `refresh_reason`：`scheduled` / `forced` / `proactive_expiry` / `unauthorized_recovery`，`UNSPECIFIED` 时不带这个字段（官方没有原因时也不带）。注意官方的 `scheduled` 指“上次刷新太久以前”、`proactive_expiry` 指“访问令牌快过期”，核心的扫描其实是按快过期挑的；映射按所有者定的对应关系，只影响诊断字段。
+- `pb.go` 按 protoc-gen-go v1.31.0 的输出格式补写（本次环境装不了 buf 与生成器）：原始描述符由 Go 的描述符库序列化，已核对未改动时与原文件逐字节相同。下次有工具时 `cd next/sdk && buf generate` 应得到同样的文件。
+
+### 141.4 换号时不交账号绑定的客户端头（清单 `accountBoundHeaders`）
+
+- 清单 `accountTypes[].platforms[].accountBoundHeaders: [名字]`（`manifest.AccountPlatform.AccountBoundHeaders`）：这个账号类型在这个平台上收到的客户端头里，只对请求第一次尝试的那个账号有意义的头（上游发给那个账号的路由令牌之类）。
+- 清单检查（`sdk/manifest/check/account_bound_headers.go`）：写了就至少一个；每个名字（不区分大小写、不重复）必须在这个类型在该平台上生效的 `passHeaders` 里（`ClientHeaders`：自己写了用自己的，没写用平台的）。没写 `passHeaders` 时要能解析出平台：内置平台、本插件的平台、其他已安装插件的平台（`PlatformOwner` 加了 `PassHeaders`）；打包工具解析不了别人的平台时不查，安装时再查。错误码 `required`、`duplicate`、`not_passed`、`unknown_platform`。
+- 核心（`gateway/account_bound.go` `inboundHeaders`）：交给插件的 `ExecuteRequest.inbound_headers` 在请求换到另一个账号之后（`attempt > 0` 且账号不是第 0 次尝试的账号）去掉这些头；同一账号上的重试（故障策略的同账号重试、§141.2 的重发）、换回第一个账号时都照常交。插件不变：仍只是把交来的头转交，一致性套件第 7 条（每次尝试按同样输入构建）照旧成立。WebSocket 每轮调 `Execute` 用同一个函数，会话连着期间账号不变。
+- codex 0.2.4 的两个类型声明 `["x-codex-turn-state"]`（[PLUGIN-CODEX.md](PLUGIN-CODEX.md) 第 25 节）。
+
+### 141.5 测试
+
+- `gateway/recovery_test.go`：续期成功后同一账号用新凭证重发、一次尝试、不冷却不禁用；续期失败照原样分类（禁用并换号）；每个账号只恢复一次（重发仍 401 被分类，下一个账号自己恢复）；没声明 `refresh` 或没有恢复器时不恢复；等待形式同样重发且只提交一次；不在 `recovering` 里的分类不恢复。
+- `gateway/account_bound_test.go`：换号后去掉账号绑定的头、同账号重试与换回第一个账号时保留；没声明时换号照常交。
+- `account/refresh_recover_test.go`：`recoveryStep` 的决策表；`awaitRefreshLock` 等集群锁与本节点锁、客户端离开时放弃；数据库用例（需要 PostgreSQL）：401 恢复不看过期时间且原因是 `REASON_UNAUTHORIZED`、过时的 `used` 不再续期、拒绝后同一份凭证不再试、锁被占时不重复续期（持锁者换了凭证则重试、没换则放弃）、扫描 / 强制 / 保存后三处的原因。
+- `sdk/manifest/check/account_bound_headers_test.go`；codex `manifest_test.go`、`internal/codex/refresh_test.go`（四种原因的映射、没有原因时不带字段）。

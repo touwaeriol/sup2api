@@ -67,8 +67,11 @@ type Deps struct {
 	// Quota receives the subscription quota headers of upstream responses
 	// for account types declaring manifest quota.headers (CONTRACTS §44);
 	// nil = not recorded.
-	Quota  core.QuotaObserver
-	Config *config.Config
+	Quota core.QuotaObserver
+	// Recovery renews the credentials of an account whose upstream answered
+	// 401, for one more try on it (CONTRACTS §141.2); nil = no recovery.
+	Recovery core.CredentialRecovery
+	Config   *config.Config
 	// Converters are the core's protocol converters (ARCHITECTURE 6.6);
 	// nil means convert.Default(). Hand the same registry (or the Gateway,
 	// see Converters/Conversion) to the account module as

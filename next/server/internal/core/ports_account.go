@@ -396,3 +396,20 @@ type AccountDirectory interface {
 type QuotaObserver interface {
 	ObserveQuotaHeaders(accountID int64, headers []manifest.QuotaHeader, status int, h http.Header)
 }
+
+// CredentialRecovery renews the credentials of an account whose upstream
+// has just answered 401 to them, for the gateway to try the same request
+// once more on the same account (CONTRACTS §141). Only account types
+// declaring manifest refresh are asked.
+type CredentialRecovery interface {
+	// RecoverCredentials takes the account's refresh lock, waiting for a
+	// renewal that holds it to end, and reports whether account id now has
+	// other credentials than used (its credentials as the refused attempt
+	// read them, AccountDirectory.Load): renewed by this call, or by another
+	// renewal or a save meanwhile. Credentials still equal to used after a
+	// wait are not renewed again: that renewal failed or found nothing to
+	// do. When true, Load serves the new credentials on this node. Renewal
+	// failures are recorded like any renewal's and answer false; errors are
+	// the database's and the lock's.
+	RecoverCredentials(ctx context.Context, id int64, used json.RawMessage) (bool, error)
+}

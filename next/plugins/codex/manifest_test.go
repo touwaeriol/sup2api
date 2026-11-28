@@ -124,9 +124,12 @@ func TestManifestShape(t *testing.T) {
 		ap := at.Platforms[0]
 		// The plugin identifies itself and writes every header it sends; of
 		// the client's headers it is handed only the Codex backend's turn
-		// state routing token, which it passes on (upstream.go).
+		// state routing token, which it passes on (upstream.go). The token is
+		// the account's: the core leaves it out once the request moves to
+		// another account (CONTRACTS §141.4).
 		if ap.Platform != "openai" || !slices.Equal(ap.Endpoints, []string{"responses", "responses_websocket"}) ||
-			!slices.Equal(ap.StreamOnly, []string{codex.ProtocolResponses}) || !slices.Equal(ap.PassHeaders, []string{"x-codex-turn-state"}) {
+			!slices.Equal(ap.StreamOnly, []string{codex.ProtocolResponses}) || !slices.Equal(ap.PassHeaders, []string{"x-codex-turn-state"}) ||
+			!slices.Equal(ap.AccountBoundHeaders, []string{"x-codex-turn-state"}) {
 			t.Errorf("%s platform = %+v", at.ID, ap)
 		}
 		// Chat completions and the image endpoints are served through the

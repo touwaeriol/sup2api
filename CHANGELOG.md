@@ -15,6 +15,13 @@
 - 令牌刷新去掉 scope、带 `refresh_reason`，失败分类与 Codex CLI 相同（更少把账号判成需重新授权）。
 - Sign in with Codex 的 scope、回调地址（`127.0.0.1:1455`）、授权地址的 `originator` 与 Codex CLI 相同；FedRAMP 账号带 `x-openai-fedramp`；email 可从 profile 声明读。
 - 不模仿 TLS 指纹和 User-Agent / originator 等客户端身份。详见 `next/docs/PLUGIN-CODEX.md` 第 25 节。
+- 两个类型把 `x-codex-turn-state` 声明为 `accountBoundHeaders`；续期原因映射成官方的 `refresh_reason`（`scheduled` / `forced` / `proactive_expiry` / `unauthorized_recovery`）。需要下面的核心改动才生效，旧核心上照旧。
+
+#### 核心：上游 401 立即续期并重发、换号不交账号绑定的头、续期原因（CONTRACTS §141；无迁移，可滚动；插件协议、Host API 不变）
+
+- 声明了 `refresh` 的账号类型（codex、vertex）在网关请求上收到上游 401 时，核心立即对这个账号续期一次（同一把账号锁，锁被占时等它结束、不重复续期），成功后在同一账号上重发这次尝试，不冷却、不换号；续期失败或重发仍 401 照旧分类。每个请求每个账号最多一次。目前只在 HTTP 上，WebSocket 握手留了接口待接线。
+- 清单 `accountTypes[].platforms[].accountBoundHeaders`：请求换到另一个账号后，交给插件的客户端头里去掉这些头（必须是生效的 `passHeaders` 的子集，清单检查）。
+- `BuildRefreshRequestRequest` 加 `reason`（定时扫描、管理员强制、保存后、401 恢复）。
 
 ## 2026-11-28
 

@@ -28,10 +28,11 @@ import (
 type attemptKind int
 
 const (
-	attemptDone     attemptKind = iota // response delivered (or stream ended)
-	attemptFailover                    // try another account
-	attemptReturn                      // send the error to the client
-	attemptCanceled                    // client went away
+	attemptDone      attemptKind = iota // response delivered (or stream ended)
+	attemptFailover                     // try another account
+	attemptReturn                       // send the error to the client
+	attemptCanceled                     // client went away
+	attemptRecovered                    // credentials renewed after a 401: try the same account again (recovery.go)
 )
 
 type attemptResult struct {
@@ -144,7 +145,7 @@ func (c *call) dispatch(ctx context.Context) {
 		c.beginFailureAttempt(ref)
 		begun := c.g.now()
 		c.rec.ErrorMessage = "" // each attempt states its own failure (noteAttempt)
-		res := func() attemptResult { defer release(); return c.attempt(c.slotCtx, ref, attempts-1) }()
+		res := func() attemptResult { defer release(); return c.attemptRecovering(c.slotCtx, ref, attempts-1) }()
 		c.noteAttempt(ref.ID, res.err, begun)
 		res = c.planFailure(ctx, ref, res, attempts, excluded)
 		c.observeAttemptResult(ref, res)
@@ -889,6 +890,9 @@ const (
 // status) is the policy's alone: there is no answer for the plugin to read.
 func (c *call) classify(ctx context.Context, rt *typeRoute, acct *pluginv1.Account,
 	status int, header http.Header, body []byte, transportErr string) attemptResult {
+	if c.recoverUnauthorized(ctx, rt, acct, status) {
+		return attemptResult{kind: attemptRecovered}
+	}
 	var cls *pluginv1.ClassifyErrorResponse
 	if status > 0 || c.failurePolicy == nil {
 		cls = c.classifyWithPlugin(ctx, rt, acct, status, header, body, transportErr)
@@ -1114,13 +1118,4 @@ func defaultClassification(status int) *pluginv1.ClassifyErrorResponse {
 		r.Action = pluginv1.ClassifyErrorResponse_ACTION_RETURN_TO_CLIENT
 	}
 	return r
-}
-
-func firstNonEmpty(s ...string) string {
-	for _, v := range s {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
 }

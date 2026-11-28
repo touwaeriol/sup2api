@@ -573,6 +573,13 @@ type AccountPlatform struct {
 	// difference when the struct is encoded again: a nil list is left out,
 	// an empty one is written as [].
 	PassHeaders []string `json:"passHeaders,omitzero"`
+	// AccountBoundHeaders are client headers, out of the ones the account
+	// type receives on Platform (ClientHeaders), that only mean something to
+	// the account the request was first tried on (a routing token the
+	// upstream handed that account): an attempt on another account of the
+	// same request is handed the client's headers without them
+	// (CONTRACTS §141.4).
+	AccountBoundHeaders []string `json:"accountBoundHeaders,omitempty"`
 	// Usage overrides the usage rules per protocol of the platform.
 	Usage map[string]UsageRules `json:"usage,omitempty"`
 	// StreamOnly lists the upstream protocols of Platform whose upstream

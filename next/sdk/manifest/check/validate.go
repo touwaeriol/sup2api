@@ -81,9 +81,10 @@ type EndpointOwner struct {
 
 // PlatformOwner is a platform declared by another installed plugin.
 type PlatformOwner struct {
-	PluginID  string // manifest.PluginID of the owner
-	ID        string
-	Endpoints []manifest.Endpoint
+	PluginID    string // manifest.PluginID of the owner
+	ID          string
+	Endpoints   []manifest.Endpoint
+	PassHeaders []string
 }
 
 // ChannelOwner is a notification channel declared by another installed
@@ -130,7 +131,7 @@ func OthersFromManifests(ms []*manifest.Manifest) ([]PlatformOwner, []EndpointOw
 	var eps []EndpointOwner
 	for _, m := range ms {
 		for _, p := range m.Platforms {
-			pfs = append(pfs, PlatformOwner{PluginID: m.ID(), ID: p.ID, Endpoints: p.Endpoints})
+			pfs = append(pfs, PlatformOwner{PluginID: m.ID(), ID: p.ID, Endpoints: p.Endpoints, PassHeaders: p.PassHeaders})
 			for _, e := range p.Endpoints {
 				eps = append(eps, EndpointOwner{PluginID: m.ID(), Platform: p.ID, Method: e.Method, Path: e.Path})
 			}
