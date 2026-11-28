@@ -55,7 +55,7 @@ func TestAccountStatsAdmissionPanicReleasesSlots(t *testing.T) {
 		s := &wsSession{g: e.gw, base: base, present: context.Background(), id: "panic-session"}
 		raw, err := json.Marshal(create(wsModel, "hello"))
 		require.NoError(t, err)
-		require.Panics(t, func() { _, _ = s.begin(context.Background(), wsMessage{data: raw}) })
+		require.Panics(t, func() { _ = s.begin(context.Background(), wsMessage{data: raw}) })
 		n, _ := e.slots.InUse(context.Background(), "account", 11)
 		require.Zero(t, n)
 		n, _ = e.slots.InUse(context.Background(), core.KeySlots, 5)

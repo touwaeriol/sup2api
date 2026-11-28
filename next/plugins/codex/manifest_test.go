@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Sub2API-Devs/sup2api/next/plugins/codex/internal/codex"
 	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
@@ -104,10 +105,12 @@ func TestManifestShape(t *testing.T) {
 		if len(at.DefaultModels) == 0 || !slices.Equal(at.DefaultModels, m.AccountTypes[0].DefaultModels) {
 			t.Errorf("%s default models = %v, want the same non-empty list for both types", at.ID, at.DefaultModels)
 		}
-		// Usage windows come from the x-codex-* headers of every answer,
-		// named by window length (docs/PLUGIN-CODEX.md §13): no usage query.
+		// Usage windows come from the x-codex-* headers of every answer and
+		// the codex.rate_limits events of a WebSocket session, named by
+		// window length (docs/PLUGIN-CODEX.md §13, §25): no usage query.
 		q := at.Quota
-		if q == nil || q.Query || q.AutoRefresh || !reflect.DeepEqual(q.Headers, codexQuotaHeaders) || at.ModelAvailability {
+		if q == nil || q.Query || q.AutoRefresh || !reflect.DeepEqual(q.Headers, codexQuotaHeaders) ||
+			!reflect.DeepEqual(q.Events, codexQuotaEvents) || at.ModelAvailability {
 			t.Fatalf("%s quota = %+v modelAvailability = %v", at.ID, q, at.ModelAvailability)
 		}
 		if len(q.Windows) != 2 || q.Windows[0].Key != "5h" || q.Windows[1].Key != "7d" {
@@ -244,6 +247,14 @@ var codexQuotaHeaders = []manifest.QuotaHeader{
 	{WindowMinutes: "x-codex-secondary-window-minutes", Utilization: "x-codex-secondary-used-percent", UtilizationUnit: "percent", Reset: "x-codex-secondary-reset-at"},
 }
 
+// codexQuotaEvents read the same windows from the codex.rate_limits event of
+// a WebSocket session (codex-rs codex-api/src/rate_limits.rs, CONTRACTS
+// §142).
+var codexQuotaEvents = []manifest.QuotaEvent{{Type: "codex.rate_limits", Windows: []manifest.QuotaEventWindow{
+	{WindowMinutes: "rate_limits.primary.window_minutes", Utilization: "rate_limits.primary.used_percent", UtilizationUnit: "percent", Reset: "rate_limits.primary.reset_at"},
+	{WindowMinutes: "rate_limits.secondary.window_minutes", Utilization: "rate_limits.secondary.used_percent", UtilizationUnit: "percent", Reset: "rate_limits.secondary.reset_at"},
+}}}
+
 // TestManifestServes runs the plugin with its embedded manifest.
 func TestManifestServes(t *testing.T) {
 	p, err := codex.New(manifestJSON)
@@ -291,4 +302,17 @@ func packageFiles(t *testing.T) map[string][]byte {
 		t.Fatal(err)
 	}
 	return files
+}
+
+// The declared codex.rate_limits event names its windows by length, whichever
+// slot carries which (CONTRACTS §142).
+func TestQuotaEventReadsTheOfficialEvent(t *testing.T) {
+	msg := []byte(`{"type":"codex.rate_limits","plan_type":"plus","rate_limits":{` +
+		`"primary":{"used_percent":12.5,"window_minutes":10080,"reset_at":1790500000},` +
+		`"secondary":{"used_percent":80,"window_minutes":300,"reset_at":1790003600}},"credits":null}`)
+	got := manifest.ReadQuotaEvent(codexQuotaEvents[0], msg, time.Unix(1_790_000_000, 0))
+	if len(got) != 2 || got[0].Key != "7d" || got[0].Utilization != 12.5 || got[1].Key != "5h" || got[1].Utilization != 80 ||
+		got[1].ResetsAt == nil || got[1].ResetsAt.Unix() != 1790003600 {
+		t.Fatalf("windows = %+v", got)
+	}
 }

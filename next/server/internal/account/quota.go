@@ -494,15 +494,7 @@ func (s *Service) ObserveQuotaHeaders(accountID int64, decls []manifest.QuotaHea
 		return
 	}
 	now := time.Now()
-	readings := manifest.ReadQuotaHeaders(decls, h.Get, now)
-	if len(readings) == 0 {
-		return
-	}
-	windows := make(map[string]store.QuotaWindow, len(readings))
-	for _, r := range readings {
-		windows[r.Key] = store.QuotaWindow{Utilization: r.Utilization, ResetsAt: r.ResetsAt, Status: r.Status}
-	}
-	s.quota.observe(accountID, windows, now)
+	s.observeQuota(accountID, manifest.ReadQuotaHeaders(decls, h.Get, now), now)
 }
 
 var _ core.QuotaObserver = (*Service)(nil)

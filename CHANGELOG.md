@@ -15,6 +15,12 @@
 - 令牌刷新去掉 scope、带 `refresh_reason`，失败分类与 Codex CLI 相同（更少把账号判成需重新授权）。
 - Sign in with Codex 的 scope、回调地址（`127.0.0.1:1455`）、授权地址的 `originator` 与 Codex CLI 相同；FedRAMP 账号带 `x-openai-fedramp`；email 可从 profile 声明读。
 - 不模仿 TLS 指纹和 User-Agent / originator 等客户端身份。详见 `next/docs/PLUGIN-CODEX.md` 第 25 节。
+- WebSocket 会话里的 `codex.rate_limits` 用量事件也更新 5 小时 / 周窗口（清单 `quota.events`，需核心带 CONTRACTS §142，旧核心忽略）。
+
+#### 核心：WebSocket 流内用量事件；上游连接结束不再关闭客户端连接（无迁移，可滚动；CONTRACTS §142）
+
+- 清单 `quota.events`：账号类型可声明上游 WebSocket 消息里的用量事件，核心按与响应头相同的窗口名采样，消息照常转发，不据此禁用账号。
+- 上游 WebSocket 连接断开（如上游 60 分钟连接上限）时客户端连接保留：进行中的一轮回 502 错误事件，下一轮重新调度、新建上游连接（此前以 1011 关闭客户端连接）。
 
 ## 2026-11-28
 

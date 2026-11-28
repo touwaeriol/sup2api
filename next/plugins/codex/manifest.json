@@ -39,6 +39,15 @@
           { "windowMinutes": "x-codex-primary-window-minutes", "utilization": "x-codex-primary-used-percent", "utilizationUnit": "percent", "reset": "x-codex-primary-reset-at" },
           { "windowMinutes": "x-codex-secondary-window-minutes", "utilization": "x-codex-secondary-used-percent", "utilizationUnit": "percent", "reset": "x-codex-secondary-reset-at" }
         ],
+        "events": [
+          {
+            "type": "codex.rate_limits",
+            "windows": [
+              { "windowMinutes": "rate_limits.primary.window_minutes", "utilization": "rate_limits.primary.used_percent", "utilizationUnit": "percent", "reset": "rate_limits.primary.reset_at" },
+              { "windowMinutes": "rate_limits.secondary.window_minutes", "utilization": "rate_limits.secondary.used_percent", "utilizationUnit": "percent", "reset": "rate_limits.secondary.reset_at" }
+            ]
+          }
+        ],
         "windows": [
           { "key": "5h", "label": { "en": "5-hour usage", "zh": "5 小时用量" }, "shortLabel": { "en": "5h", "zh": "5 小时" } },
           { "key": "7d", "label": { "en": "Weekly usage", "zh": "周用量" }, "shortLabel": { "en": "7d", "zh": "7 天" } }
@@ -88,6 +97,15 @@
         "headers": [
           { "windowMinutes": "x-codex-primary-window-minutes", "utilization": "x-codex-primary-used-percent", "utilizationUnit": "percent", "reset": "x-codex-primary-reset-at" },
           { "windowMinutes": "x-codex-secondary-window-minutes", "utilization": "x-codex-secondary-used-percent", "utilizationUnit": "percent", "reset": "x-codex-secondary-reset-at" }
+        ],
+        "events": [
+          {
+            "type": "codex.rate_limits",
+            "windows": [
+              { "windowMinutes": "rate_limits.primary.window_minutes", "utilization": "rate_limits.primary.used_percent", "utilizationUnit": "percent", "reset": "rate_limits.primary.reset_at" },
+              { "windowMinutes": "rate_limits.secondary.window_minutes", "utilization": "rate_limits.secondary.used_percent", "utilizationUnit": "percent", "reset": "rate_limits.secondary.reset_at" }
+            ]
+          }
         ],
         "windows": [
           { "key": "5h", "label": { "en": "5-hour usage", "zh": "5 小时用量" }, "shortLabel": { "en": "5h", "zh": "5 小时" } },

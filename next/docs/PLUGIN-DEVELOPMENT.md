@@ -29,7 +29,7 @@
 | 任务提交（`endpoint.task.action: "submit"`） | `task_submission` | `RelayAndWait` | `task`；上游出错时 `classification` | 同上 |
 
 - 等待形式下什么都没返回（或 `Execute` 报错、插件崩溃，或返回了 `host_usage` 而核心的读数完全为空）：同步请求记一条零费用的“未上报”记录（`error_type=usage_unreported`，预扣释放，ERROR 日志），已缓冲的非流式回答不发出、回 503，已开始的流异常结束；任务提交没有 `task` 时任务不登记、客户端报错、预扣释放（任务失败的路径，不是“未上报”）。等待期间插件崩溃或放弃调用，核心切断上游、这个请求不计费。核心不替插件补记用量。不等待形式下插件返回 `host_usage` 而核心的读数完全为空时，客户端已经拿到回答，记录同样是零费用的“未上报”（CONTRACTS §112.2）。
-- WebSocket（`platform.websocket.v1`）：会话的每一轮消息调一次 `Execute`，请求体是这一轮的消息。插件照常 `Relay` + `host_usage`，给出握手地址（`ws(s)://` 或 `http(s)://`）、握手头和最终消息；核心在会话还没有上游连接时用第一轮的 URL 和握手头建连，以后每轮只发消息。WebSocket 端点没有等待形式，不能给 `response_stream`（CONTRACTS §83.6、[OPENAI-RESPONSES-WEBSOCKET.md](OPENAI-RESPONSES-WEBSOCKET.md)）。
+- WebSocket（`platform.websocket.v1`）：会话的每一轮消息调一次 `Execute`，请求体是这一轮的消息。插件照常 `Relay` + `host_usage`，给出握手地址（`ws(s)://` 或 `http(s)://`）、握手头和最终消息；核心在会话还没有上游连接时用这一轮的 URL 和握手头建连（首轮，或上游连接结束后的下一轮，CONTRACTS §142），以后每轮只发消息。WebSocket 端点没有等待形式，不能给 `response_stream`（CONTRACTS §83.6、[OPENAI-RESPONSES-WEBSOCKET.md](OPENAI-RESPONSES-WEBSOCKET.md)）。
 - 插件只描述请求、不开套接字：上游请求、辅助请求都经核心的客户端发出，核心套上账号的代理、SSRF 规则、超时和运营方的请求头设置。插件不重试、不换号，一次执行最多一个中继。
 - `Execute` 不计时：插件在 `Execute` 里自己的工作没有时限，等待形式的交换也没有总时限（所有者决定“超时、限制都去掉”，CONTRACTS §112.16）。挂住的插件由客户端离开、上游超时（管理员配置）或它的进程结束收场：客户端离开会取消 `Execute` 调用，但等待形式下只到中继开始发送为止，之后上游交换按断开策略处理，插件读观察之后的工作不再随客户端取消（它的事实还要入账）；期间这次尝试占着账号和 API Key 的槽位，所以插件要自己保证每一步都会结束、把 `ctx` 传到底。平台调用超时（网关设置 `platform_call_timeout_ms`）只管不等待形式下的 `ClassifyError` 和读断开策略（CONTRACTS §111.4）。
 
@@ -327,7 +327,32 @@ if relay.Wait || !proto.Equal(ex.Response, pluginsdk.ReportHostUsage()) { ... }
 | 设置 | 归属 | HTTP / WebSocket | 说明与位置 |
 |---|---|---|---|
 | 故障策略、冷却、自动禁用 | 核心统一；**插件配合**：实现 `ClassifyError`，故障策略下核心只采用其中的额度观测和限时禁用；传输错误完全由策略决定。插件不可用（`Execute` 报错或崩溃、中继被核心拒绝、目标主机被拒）不经账号规则：有没有故障策略都只换号、不罚账号；客户端已经离开时插件返回的分类不采用 | 不等待形式由核心调 `ClassifyError`；等待形式由插件在返回值里给 `classification` / 握手和流内错误事件都分类 | `applyClassification`、`waited.go`；CONTRACTS §69 |
-| 订阅额度窗口（5 小时、周） | **插件配合**：在账号类型上声明 `quota.headers` | 一致 / 握手头和带头的错误事件 | `observeQuota`；CONTRACTS §44、§105 |
+| 订阅额度窗口（5 小时、周） | **插件配合**：在账号类型上声明 `quota.headers`；上游在 WebSocket 消息里报窗口的，另声明 `quota.events`（下文） | 一致 / 握手头、带头的错误事件和声明的流内用量事件 | `observeQuota`、`observeQuotaEvent`；CONTRACTS §44、§105、§142 |
+
+**WebSocket 流内用量事件**（`accountTypes[].quota.events`，CONTRACTS §142）：上游在 WebSocket 会话里用一条消息报窗口时（Codex 的 `codex.rate_limits`），按消息的顶层 `type` 声明：
+
+```json
+"quota": {
+  "events": [
+    {"type": "codex.rate_limits", "windows": [
+      {"windowMinutes": "rate_limits.primary.window_minutes", "utilization": "rate_limits.primary.used_percent",
+       "utilizationUnit": "percent", "reset": "rate_limits.primary.reset_at"}
+    ]}
+  ]
+}
+```
+
+| 字段 | 说明 |
+|---|---|
+| `events[].type` | 匹配的消息顶层 `type`，`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$`，不重复；最多 16 个事件 |
+| `events[].windows[]` | 至少 1 个、最多 16 个窗口；值都是消息 JSON 里的 gjson 路径（只能读一个值，与用量规则的路径同样检查） |
+| `windows[].windowMinutes` | 必填：窗口时长（分钟）的路径，窗口名按时长生成，与 `quota.headers` 的 `windowMinutes` 同一套名字（300 → `5h`，10080 → `7d`） |
+| `windows[].utilization` / `utilizationUnit` | 用量的路径；单位 `ratio`（默认，0–1）或 `percent` |
+| `windows[].reset` | 重置时刻的路径，Unix 秒（大于 1e11 视为毫秒）；`utilization` 与 `reset` 至少给一个 |
+
+核心把匹配的消息照常转给客户端，并交给与响应头相同的观察者和限频写入（§44.3）；字段缺失或类型不对时该值记为未知，窗口一个可用值都没有时不报。只记录窗口，不据此冷却或禁用账号（禁用仍由 `ClassifyError` 看 429）。只声明 `events` 也算声明了额度。插件可在单测里用 `manifest.ReadQuotaEvent` 验证声明。旧核心忽略这个字段，不需要提高 `hostCompat`。
+
+**WebSocket 上游连接结束**（CONTRACTS §142）：上游连接断开（例如上游的 60 分钟连接上限）时核心只丢掉这条上游连接，客户端连接保留；进行中的一轮以 502 错误事件结束，下一轮像首轮一样重新调度、调 `Execute` 拿握手并建连（可能换到别的账号）。核心不替客户端重发，也不解读上游错误码；插件不用为此做什么，但不要假设一个客户端会话只对应一条上游连接。
 
 ## 6. 读取系统设置与变更通知（核心 0.1.301 起）
 
@@ -400,7 +425,7 @@ if !sticky.Enabled { ... }
 | azure_openai（目录 `plugins/azure-openai`，市场） | `standard` 库，两个类型（v1 与按部署） | 同上；错误分类用 openai 预设的策略 |
 | vertex（市场） | 自己的 `BuildUpstream`；把核心交来的 `user-agent`、`x-goog-api-client` 作为默认头转发；`externalServices` 是 `googleapis.com`（全局与各区域的 Vertex AI 主机都在它下面；不取回） | `ClassifyError`；凭证续期 `BuildRefreshRequest` / `ParseRefreshResponse`（CONTRACTS §48），第一枚令牌靠保存后续期（§48.3 第 5 条）；服务账号断言用 `golang-jwt/jwt/v5` 签名，密钥文件由插件自己解析（§109.6） |
 | bedrock（市场；只服务 anthropic 平台的 messages，OpenAI 协议的请求由核心转换后走同一条路；带 CONTRACTS §110 的核心上这是跨平台转换，要在账号上为模型开启） | 自己的 `BuildUpstream`：把 Messages 请求装进 InvokeModel 信封，清洗 Bedrock 不接受的字段（顶层的 `model`、`stream`、`metadata`、`service_tier`、`inference_geo`、`speed`、`provider` 总是删除，以及 `tools[].custom`、`cache_control.scope`；`cache_control.ttl` 只在认出模型版本且它不支持缓存 TTL 时删除，认不出的保留），客户端点名的 beta 和工具需要的 beta（computer use、tool search、tool examples）写进请求体的 `anthropic_beta`，AK/SK 与临时凭证类型自己做 SigV4 签名，鉴权头里没有会话令牌（Access Key 与 API Key 类型）时 `RemoveHeader("x-amz-security-token")`；是否流式只看 `meta.stream`（不看请求体的 `stream`，运营方参数覆盖加的 `stream:true` 不会把非流式请求变成流式），流式请求给 `response_stream`；`externalServices` 是 `amazonaws.com`（各区域的运行时主机） | `ClassifyError`；账号测试请求同样自己签；一致性套件的两处例外见第 4 节 |
-| codex | 自己的 `BuildUpstream`，HTTP 与 WebSocket | `ClassifyError`、额度头、`streamOnly`；`session-id` / `thread-id` / `x-client-request-id` 由插件按 `prompt_cache_key` 派生（[PLUGIN-CODEX.md](PLUGIN-CODEX.md) §16、§25）；自己写的头全部权威；两个类型 `passHeaders: ["x-codex-turn-state"]`，作默认头转交 |
+| codex | 自己的 `BuildUpstream`，HTTP 与 WebSocket | `ClassifyError`、额度头与 `codex.rate_limits` 流内用量事件、`streamOnly`；`session-id` / `thread-id` / `x-client-request-id` 由插件按 `prompt_cache_key` 派生（[PLUGIN-CODEX.md](PLUGIN-CODEX.md) §16、§25）；自己写的头全部权威；两个类型 `passHeaders: ["x-codex-turn-state"]`，作默认头转交 |
 
 ## 8. 新插件自查
 

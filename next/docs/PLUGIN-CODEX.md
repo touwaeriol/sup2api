@@ -225,7 +225,7 @@
 用户要求“以响应头为准，不要乱加兜底”“429 + 响应头判断”。本节取代 §9.2–9.4（以及 §9.1 中按 ±5% 容差定 key、`reset-after-seconds`、`wham/usage` 的内容）。
 
 - 协议事实（openai/codex `codex-rs/codex-api/src/rate_limits.rs`）：`x-codex-{primary,secondary}-used-percent`（百分比）、`-window-minutes`、`-reset-at`（Unix 秒），没有别的。哪个槽位是 5 小时、哪个是周不固定。
-- manifest（两种类型，声明相同，`manifest_test` 断言）：`quota` 改为声明这 6 个头，每个槽位一条，用 `windowMinutes` 按窗口时长命名（CONTRACTS §105：300 → `5h`，10080 → `7d`，其他时长为 `<n>d` / `<n>h` / `<n>m`，没有容差；同一响应两个槽位同名时保留用得多的）；`windows` 保留 5 小时 / 周的标签；删掉 `query`、`autoRefresh`。核心的被动采样（CONTRACTS §44.3）在每个 2xx、429 HTTP 响应、每次 WebSocket 握手（101 或被拒的状态）和每个带 `headers` 对象的 WebSocket 错误事件（CONTRACTS §105）上读这些头，所以窗口随每个响应更新；WebSocket 会话里的 `codex.rate_limits` 事件不读。没有了主动查询，控制台点击用量只重新读取快照（用量随账号的下一次请求更新）；核心按旧声明建的查询计划因声明里没有 `query` 而跳过。
+- manifest（两种类型，声明相同，`manifest_test` 断言）：`quota` 改为声明这 6 个头，每个槽位一条，用 `windowMinutes` 按窗口时长命名（CONTRACTS §105：300 → `5h`，10080 → `7d`，其他时长为 `<n>d` / `<n>h` / `<n>m`，没有容差；同一响应两个槽位同名时保留用得多的）；`windows` 保留 5 小时 / 周的标签；删掉 `query`、`autoRefresh`。核心的被动采样（CONTRACTS §44.3）在每个 2xx、429 HTTP 响应、每次 WebSocket 握手（101 或被拒的状态）和每个带 `headers` 对象的 WebSocket 错误事件（CONTRACTS §105）上读这些头，所以窗口随每个响应更新；WebSocket 会话里的 `codex.rate_limits` 事件当时不读（0.2.4 起读，见第 25 节、CONTRACTS §142）。没有了主动查询，控制台点击用量只重新读取快照（用量随账号的下一次请求更新）；核心按旧声明建的查询计划因声明里没有 `query` 而跳过。
 - 删除 `wham/usage` 查询：`BuildQuotaRequest`、`ParseQuotaResponse` 及其解析、按时长定 key 的容差、窗口合并、`reset-after-seconds` 处理全部删除，插件不再实现 `pluginsdk.QuotaReader`（SDK 对查询调用回 `Unimplemented`）。`backendHeaders` 只剩重置次数接口在用，移到 `resetcredits.go`。
 - 头名只写在 manifest：`main.go` 把嵌入的 manifest 传给 `codex.New(manifestJSON)`，插件读出 `codex_device` 的 `quota.headers`，`ClassifyError` 用这份声明调 `manifest.ReadQuotaHeaders`（与核心采样同一个函数）；manifest 里没有这份声明时插件启动失败。
 - `ClassifyError`：
@@ -389,5 +389,7 @@
 - **身份**：email 缺失时读 profile 声明；id_token 的 `chatgpt_account_is_fedramp` 为真的账号加 `x-openai-fedramp: true`（`model-provider/src/bearer_auth_provider.rs`，只看 id_token，与官方相同），每次请求从令牌读，不存字段。
 - **文件拆分**：`oauth.go`（726 行）拆成 `oauth.go`（公共部分与凭证）、`login_device.go`（设备码）、`login_codex.go`（Sign in with Codex），都在 500 行以内；`ParseRefreshResponse` 的补丁构造抽成 `refreshPatch`。
 - **测试**：`execute_test.go`（新会话头、passHeaders 转交为默认头、FedRAMP 用例进一致性套件）、`refresh_test.go`（无 scope、refresh_reason、新的分类表含大小写与无错误码的 401）、`oauth_test.go`（授权地址参数、表单自定义的 originator）、`identity_test.go`；核心 `provider_headers_test.go`。
-- **没做（需改核心或待定）**：换号时不交 `passHeaders`、401 立即刷新并重发、WebSocket 流内 `codex.rate_limits` 用量采样、WebSocket 的 `websocket_connection_limit_reached` / `previous_response_not_found` 可重试与 426 回退、429 错误体 `resets_at` 是否作为用满依据（与第 13 节“只看响应头”冲突，待所有者定）。
+- **WebSocket 流内用量事件**（随核心，CONTRACTS §142）：两个类型的 `quota` 加 `events`，声明 `codex.rate_limits` 的 primary / secondary（`rate_limits.{primary,secondary}.{window_minutes,used_percent,reset_at}`，官方 `codex-api/src/rate_limits.rs` 的 `RateLimitEventWindow`；`credits`、`plan_type` 不读）。核心在 WebSocket 会话里收到这条事件时按窗口时长命名采样（与 `x-codex-*` 头同一套 `5h` / `7d`），事件照常转给客户端；只记录窗口，不据此禁用（禁用仍按第 13 节只看 429 的头）。插件代码不变。测试：`manifest_test.go`（两个类型声明相同的事件、读官方事件得到 `7d` / `5h`）。
+- **WebSocket 上游连接可重连**（只改核心，CONTRACTS §142.3）：上游连接结束（60 分钟上限的 `websocket_connection_limit_reached` 之后上游关闭，或断线）时核心保留客户端连接，这一轮的错误事件照常转给客户端，下一轮重新调度、握手新建上游连接；核心不替客户端重发，`previous_response_not_found` 也只是原样转给客户端（官方客户端据此改发完整请求）。此前上游一断客户端连接就以 1011 关闭。
+- **没做（需改核心或待定）**：换号时不交 `passHeaders`、401 立即刷新并重发（这两项同批另做，设计第 1、2 节）；426 回退 HTTP 是客户端的事，核心不做；429 错误体 `resets_at` 是否作为用满依据（与第 13 节“只看响应头”冲突，待所有者定）。
 
