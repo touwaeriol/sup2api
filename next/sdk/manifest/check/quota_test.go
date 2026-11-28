@@ -93,38 +93,46 @@ func TestAccountTypeQuota(t *testing.T) {
 	}
 }
 
-// Quota events of an account type (CONTRACTS §142).
-func TestAccountTypeQuotaEvents(t *testing.T) {
+// quotaEventWindow is a valid window of a quota event.
+var quotaEventWindow = manifest.QuotaEventWindow{WindowMinutes: "rate_limits.primary.window_minutes",
+	Utilization: "rate_limits.primary.used_percent", UtilizationUnit: "percent", Reset: "rate_limits.primary.reset_at"}
+
+// quotaEventsManifest is a platform plugin whose account type declares
+// events as its quota.
+func quotaEventsManifest(events ...manifest.QuotaEvent) *manifest.Manifest {
 	m := minimal()
 	m.Capabilities = []manifest.Capability{{ID: manifest.CapPlatformAdapter}}
-	m.HostPermissions = []manifest.HostPermission{
-		{ID: "gateway.endpoint"}, {ID: "platform.register"},
-	}
+	m.HostPermissions = []manifest.HostPermission{{ID: "gateway.endpoint"}, {ID: "platform.register"}}
 	m.Platforms = []manifest.Platform{validPlatform()}
-	window := manifest.QuotaEventWindow{WindowMinutes: "rate_limits.primary.window_minutes",
-		Utilization: "rate_limits.primary.used_percent", UtilizationUnit: "percent", Reset: "rate_limits.primary.reset_at"}
 	m.AccountTypes = []manifest.AccountType{{
-		ID: "oauth", Label: manifest.LocalizedText{"en": "OAuth"},
-		Form:           keyForm(m),
-		UpstreamFields: []string{},
-		Platforms:      []manifest.AccountPlatform{{Platform: "video"}},
-		Quota:          &manifest.AccountQuota{Events: []manifest.QuotaEvent{{Type: "codex.rate_limits", Windows: []manifest.QuotaEventWindow{window}}}},
+		ID: "oauth", Label: manifest.LocalizedText{"en": "OAuth"}, Form: keyForm(m), UpstreamFields: []string{},
+		Platforms: []manifest.AccountPlatform{{Platform: "video"}},
+		Quota:     &manifest.AccountQuota{Events: events},
 	}}
-	files := map[string][]byte{}
-	if err := Validate(m, files, ValidateOptions{Tooling: true}); err != nil {
+	return m
+}
+
+// A quota of events only is valid (CONTRACTS §142).
+func TestAccountTypeQuotaEvents(t *testing.T) {
+	m := quotaEventsManifest(manifest.QuotaEvent{Type: "codex.rate_limits", Windows: []manifest.QuotaEventWindow{quotaEventWindow}})
+	if err := Validate(m, map[string][]byte{}, ValidateOptions{Tooling: true}); err != nil {
 		t.Fatalf("events-only quota rejected: %v", codes(err))
 	}
-	m.AccountTypes[0].Quota = &manifest.AccountQuota{Events: []manifest.QuotaEvent{
-		{Type: "", Windows: []manifest.QuotaEventWindow{window}},
-		{Type: "bad type", Windows: []manifest.QuotaEventWindow{
+}
+
+// Every malformed event and window is reported at its field.
+func TestAccountTypeQuotaEventsInvalid(t *testing.T) {
+	m := quotaEventsManifest(
+		manifest.QuotaEvent{Type: "", Windows: []manifest.QuotaEventWindow{quotaEventWindow}},
+		manifest.QuotaEvent{Type: "bad type", Windows: []manifest.QuotaEventWindow{
 			{Utilization: "a..b", UtilizationUnit: "fraction"},
 			{WindowMinutes: "w", Reset: "r", UtilizationUnit: "ratio"},
 			{WindowMinutes: "w"},
 		}},
-		{Type: "x.limits"},
-		{Type: "x.limits", Windows: []manifest.QuotaEventWindow{window}},
-	}}
-	got := codes(Validate(m, files, ValidateOptions{Tooling: true}))
+		manifest.QuotaEvent{Type: "x.limits"},
+		manifest.QuotaEvent{Type: "x.limits", Windows: []manifest.QuotaEventWindow{quotaEventWindow}},
+	)
+	got := codes(Validate(m, map[string][]byte{}, ValidateOptions{Tooling: true}))
 	for f, c := range map[string]string{
 		"accountTypes[0].quota.events[0].type":                       "required",
 		"accountTypes[0].quota.events[1].type":                       "invalid_format",
@@ -140,11 +148,16 @@ func TestAccountTypeQuotaEvents(t *testing.T) {
 			t.Errorf("%s = %q, want %q (all: %v)", f, got[f], c, got)
 		}
 	}
-	m.AccountTypes[0].Quota = &manifest.AccountQuota{Events: make([]manifest.QuotaEvent, manifest.MaxQuotaHeaders+1)}
-	for i := range m.AccountTypes[0].Quota.Events {
-		m.AccountTypes[0].Quota.Events[i] = manifest.QuotaEvent{Type: "e" + string(rune('a'+i)), Windows: []manifest.QuotaEventWindow{window}}
+}
+
+// At most MaxQuotaHeaders events.
+func TestAccountTypeQuotaEventsTooMany(t *testing.T) {
+	events := make([]manifest.QuotaEvent, manifest.MaxQuotaHeaders+1)
+	for i := range events {
+		events[i] = manifest.QuotaEvent{Type: "e" + string(rune('a'+i)), Windows: []manifest.QuotaEventWindow{quotaEventWindow}}
 	}
-	if got := codes(Validate(m, files, ValidateOptions{Tooling: true})); got["accountTypes[0].quota.events"] != "too_many" {
+	got := codes(Validate(quotaEventsManifest(events...), map[string][]byte{}, ValidateOptions{Tooling: true}))
+	if got["accountTypes[0].quota.events"] != "too_many" {
 		t.Fatalf("too many: codes = %v", got)
 	}
 }

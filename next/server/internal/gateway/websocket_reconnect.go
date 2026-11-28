@@ -17,12 +17,16 @@ import (
 // event) has been relayed like any other message.
 
 // dropUpstream closes the session's upstream connection, if any, and forgets
-// it; the next turn connects again.
+// it; the next turn connects again. Its reader and pinger stop with it (a
+// message the reader still held is dropped with the connection).
 func (s *wsSession) dropUpstream() {
 	if s.up != nil {
 		_ = s.up.CloseNow()
 	}
-	s.up, s.upIn, s.upEnded = nil, nil, nil
+	if s.upStop != nil {
+		s.upStop()
+	}
+	s.up, s.upIn, s.upEnded, s.upStop = nil, nil, nil, nil
 }
 
 // upstreamLost handles the end of the upstream connection: a turn still in
@@ -45,6 +49,7 @@ func (s *wsSession) upstreamLost(ctx context.Context, turn *wsTurn, err error) {
 // again instead of writing to a connection that has ended.
 func (s *wsSession) watchUpstream(ctx context.Context, up *websocket.Conn) {
 	ended := &atomic.Bool{}
+	ctx, s.upStop = context.WithCancel(ctx)
 	s.upIn, s.upEnded = make(chan wsMessage, 1), ended
 	go s.read(ctx, up, s.upIn, func() { ended.Store(true) })
 	go s.heartbeat(ctx, up)

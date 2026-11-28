@@ -3,6 +3,8 @@ package manifest
 import (
 	"testing"
 	"time"
+
+	"github.com/tidwall/gjson"
 )
 
 // codexRateLimits is the Codex backend's WebSocket usage event as the
@@ -15,13 +17,18 @@ var codexRateLimits = QuotaEvent{Type: "codex.rate_limits", Windows: []QuotaEven
 		UtilizationUnit: QuotaUnitPercent, Reset: "rate_limits.secondary.reset_at"},
 }}
 
+// jsonPaths reads msg at gjson paths, as the host does.
+func jsonPaths(msg []byte) func(string) string {
+	return func(path string) string { return gjson.GetBytes(msg, path).String() }
+}
+
 // The windows of an event are named by their length and read like headers.
 func TestReadQuotaEvent(t *testing.T) {
 	now := time.Unix(1_790_000_000, 0)
 	msg := []byte(`{"type":"codex.rate_limits","plan_type":"plus","rate_limits":{
 		"primary":{"used_percent":42.5,"window_minutes":10080,"reset_at":1790500000},
 		"secondary":{"used_percent":7,"window_minutes":300,"reset_at":1790003600}}}`)
-	got := ReadQuotaEvent(codexRateLimits, msg, now)
+	got := ReadQuotaEvent(codexRateLimits, jsonPaths(msg), now)
 	if len(got) != 2 {
 		t.Fatalf("windows = %+v", got)
 	}
@@ -43,12 +50,12 @@ func TestReadQuotaEventIgnoresBadFields(t *testing.T) {
 		"bad length":      `{"rate_limits":{"primary":{"used_percent":5,"window_minutes":"soon"},"secondary":{"used_percent":5,"window_minutes":-1}}}`,
 		"no usable value": `{"rate_limits":{"primary":{"used_percent":"lots","window_minutes":300,"reset_at":{}}}}`,
 	} {
-		if got := ReadQuotaEvent(codexRateLimits, []byte(msg), now); len(got) != 0 {
+		if got := ReadQuotaEvent(codexRateLimits, jsonPaths([]byte(msg)), now); len(got) != 0 {
 			t.Errorf("%s: windows = %+v", name, got)
 		}
 	}
 	msg := []byte(`{"rate_limits":{"primary":{"used_percent":true,"window_minutes":300,"reset_at":1790003600}}}`)
-	got := ReadQuotaEvent(codexRateLimits, msg, now)
+	got := ReadQuotaEvent(codexRateLimits, jsonPaths(msg), now)
 	if len(got) != 1 || got[0].Key != "5h" || got[0].Utilization != 0 || got[0].ResetsAt == nil {
 		t.Fatalf("a bad utilization beside a good reset: %+v", got)
 	}

@@ -1,15 +1,17 @@
 package gateway
 
-// inboundHeaders is ExecuteRequest.inbound_headers for attempt n on account
-// id: the client headers rt hands the plugin (passHeaders), less the
-// account-bound ones (manifest accountBoundHeaders, CONTRACTS §141.4) once
-// the request is on another account than its first attempt's. A retry on
-// the same account (a failure policy's, a 401 recovery) keeps them.
-func (c *call) inboundHeaders(rt *typeRoute, id int64, n int) map[string]string {
+// attemptHeaders is ExecuteRequest.inbound_headers for an attempt on
+// account id: the client headers rt hands the plugin (passHeaders), less
+// the account-bound ones (manifest accountBoundHeaders, CONTRACTS §141.4)
+// on any other account than the owner's. The owner is the account the
+// request first built an attempt for, or the one a WebSocket session's
+// earlier turns were on (wsSession.owner); this call records it when there
+// is none yet. A retry on the owner (a failure policy's, a 401 recovery)
+// keeps them.
+func (c *call) attemptHeaders(rt *typeRoute, id int64) map[string]string {
 	h := c.passHeaders(rt.passHeaders)
-	if n == 0 {
+	if c.firstAccount == 0 {
 		c.firstAccount = id
-		return h
 	}
 	if id != c.firstAccount {
 		for _, name := range rt.boundHeaders {

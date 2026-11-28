@@ -24,8 +24,11 @@ import (
 
 // unauthorizedRecovery is a request's renewals after a 401.
 type unauthorizedRecovery struct {
-	// armed is set while recovering runs an attempt.
+	// armed is set while recovering runs an attempt; until is the context
+	// whose end (the client leaving) stops waiting for a renewal another
+	// one holds the lock of.
 	armed bool
+	until context.Context
 	// tried holds the accounts the request has recovered, or tried to.
 	tried map[int64]bool
 }
@@ -40,15 +43,16 @@ func (c *call) attemptRecovering(ctx context.Context, ref *core.AccountRef, n in
 // to it renewed the account's credentials (recoverUnauthorized), try runs
 // once more, on the same account, and its result is the attempt's. try must
 // load the account afresh (AccountDirectory.Load serves the renewed
-// credentials by then).
-func (c *call) recovering(ctx context.Context, try func() attemptResult) attemptResult {
-	c.recovery.armed = true
-	defer func() { c.recovery.armed = false }()
+// credentials by then). present ends when the client leaves: the request's
+// context, a WebSocket session's present.
+func (c *call) recovering(present context.Context, try func() attemptResult) attemptResult {
+	c.recovery.armed, c.recovery.until = true, present
+	defer func() { c.recovery.armed, c.recovery.until = false, nil }()
 	res := try()
 	if res.kind != attemptRecovered {
 		return res
 	}
-	if ctx.Err() != nil {
+	if present.Err() != nil {
 		return attemptResult{kind: attemptCanceled, err: canceledErr()}
 	}
 	return try()
@@ -72,8 +76,9 @@ func (c *call) recoverUnauthorized(ctx context.Context, rt *typeRoute, acct *plu
 		c.recovery.tried = map[int64]bool{}
 	}
 	c.recovery.tried[id] = true
-	ok, err := c.g.d.Recovery.RecoverCredentials(ctx, id, json.RawMessage(acct.GetCredentialsJson()))
-	if err != nil {
+	until := c.recovery.until
+	ok, err := c.g.d.Recovery.RecoverCredentials(until, id, json.RawMessage(acct.GetCredentialsJson()))
+	if err != nil && until.Err() == nil {
 		slog.WarnContext(ctx, "gateway: renew credentials after 401", "request_id", c.rid, "account", id, "err", err)
 	}
 	return ok

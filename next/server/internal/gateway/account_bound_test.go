@@ -2,25 +2,29 @@ package gateway
 
 import "testing"
 
-// The account-bound headers are handed to attempts on the first attempt's
-// account (a retry on it included) and left out on any other.
-func TestInboundHeadersAccountBound(t *testing.T) {
+// The account-bound headers are handed to attempts on the owner's account
+// (a retry on it included) and left out on any other. The owner is the
+// first account an attempt is built for, or the one a WebSocket session
+// carries over to its later turns.
+func TestAttemptHeadersAccountBound(t *testing.T) {
 	gc, _ := newTestContext(map[string]string{"X-Turn": "t1", "X-Other": "o1"})
-	c := &call{c: gc}
 	rt := &typeRoute{passHeaders: []string{"x-turn", "x-other"}, boundHeaders: []string{"X-Turn"}}
 	for _, tc := range []struct {
-		account  int64
-		n        int
-		wantTurn bool
+		name     string
+		owner    int64
+		accounts []int64
+		want     []bool
 	}{
-		{1, 0, true},  // first attempt
-		{1, 1, true},  // same account again
-		{2, 2, false}, // another account
-		{1, 3, true},  // back on the first account
+		{"request", 0, []int64{1, 1, 2, 1}, []bool{true, true, false, true}},
+		{"session reconnected elsewhere", 1, []int64{2, 2}, []bool{false, false}},
+		{"session on its owner", 1, []int64{1}, []bool{true}},
 	} {
-		h := c.inboundHeaders(rt, tc.account, tc.n)
-		if _, has := h["x-turn"]; has != tc.wantTurn || h["x-other"] != "o1" {
-			t.Errorf("attempt %d on %d: %v", tc.n, tc.account, h)
+		c := &call{c: gc, firstAccount: tc.owner}
+		for i, id := range tc.accounts {
+			h := c.attemptHeaders(rt, id)
+			if _, has := h["x-turn"]; has != tc.want[i] || h["x-other"] != "o1" {
+				t.Errorf("%s: attempt %d on %d: %v", tc.name, i, id, h)
+			}
 		}
 	}
 }

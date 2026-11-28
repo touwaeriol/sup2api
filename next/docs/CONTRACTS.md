@@ -3159,7 +3159,7 @@ claude-oauth 插件原来有个每 30 分钟跑一次的 `refresh_tokens` 任务
    - 没到期的凭证（其余所有保存）什么都不启动；读不出过期时间的凭证同第 2 条，不续期。
    - 保存接口不等它，响应里的 `refresh` 仍是保存那一刻的状态。它不受请求取消影响；进程关停时也不等它，被打断的账号仍然到期，由下一轮扫描续上。协程里的 panic 被恢复并记 ERROR。
    - 用途：表单没法自己换到第一枚令牌的账号类型（vertex 的服务账号、用户凭证）在校验时把 `expires_at` 写成一个已经过去的值，保存后几秒内就有令牌。
-6. **401 立即续期**（2026-11-28，§141.2）：网关请求的上游回 401 时，网关请账号服务对这个账号做一次续期（`RecoverCredentials`，同一把账号锁；锁被占时等它结束、重读，不重复续期），成功后在同一账号上重发这次尝试。
+6. **401 立即续期**（2026-11-28，§141.2）：网关请求的上游回 401 时，网关请账号服务对这个账号做一次续期（`RecoverCredentials`，同一把账号锁；锁被占时等它结束、重读；它在这份凭证上续期失败了就不再重复），成功后在同一账号上重发这次尝试。
 
 ### 48.4 数据与接口
 
@@ -8222,6 +8222,7 @@ SDK 名 `pluginsdk.Fetch`。一个有界、非流式的请求，回答交还插�
 | 预扣（余额闸门的 `Precharge`）15 秒（`gateway/precharge.go`） | 钱：预扣是转发前的一次账本写入，数据库挂住时请求以错误结束，不无限等着；不是对上游或插件的时限 |
 | 插件要求按期限停用账号时写库 2 秒（`gateway/dispatch.go` 的 `AutoDisableUntil`） | 不拒绝请求：只限这次写入，写不进记 WARN、账号这次不停用，请求照常走失败处理 |
 | 协议转换下载请求里的媒体 URL（转 Gemini 内联数据）每个文件 60 秒（`gateway/convert_media.go` 的 `mediaDownloadTimeout`，大小由 `media_download_max_mb` 管） | 核心替客户端去取一个由客户端指定的外部地址，不是上游交换；下载失败只让需要它的转换用不了 |
+| 上游 401 后的立即续期（§141.2）：等账号续期锁不另设期限（只随客户端离开结束，锁的有效期 1 分钟是持锁方死掉时的自然上限），续期本身用续期已有的时限（插件调用与上游请求 30 秒，加保存 15 秒，`account/refresh.go` 的 `renewalContext`）；每个请求每个账号一次 | 不是新的请求上限：续期的时限与锁是 §48 续期本来的规则，请求只是等它做完 |
 
 代码里还有几处不拒绝请求、只截断**派生副本**的常量，不在上表：交给钩子的 `prompt_text`（默认 32 KiB，清单可调）、交给 `EstimateUsage` 的提示文本 1 MiB、本地分词统计 32 MiB（§25.8）、上游的 HTTP 错误体在内存里只留前 64 KiB（`maxErrorBody`，`gateway/upstream_error.go`；更长的部分落临时文件，整份转给客户端，WebSocket 握手失败的错误体只读前 64 KiB），其中前 4 KiB 交给 `ClassifyError`（`core.ClassifyPrefixBytes`，`ClassifyErrorRequest.body_prefix`）与故障策略的关键词匹配（§58）。（`sdk/awseventstream` 的单条消息上限 4 MiB 已按上表删除。）
 
@@ -9724,15 +9725,15 @@ cluster 任务，每分钟一次，单次至多 5 分钟，按下面的顺序：
 
 ### 141.2 401 立即续期并重发（`gateway/recovery.go`、`account/refresh_recover.go`）
 
-- **触发**：一次 HTTP 尝试的上游回 401，账号类型声明了 `refresh`（§48.1），核心有 `core.CredentialRecovery`（`gateway.Deps.Recovery`，组装时接账号服务），端点不是任务提交，这个请求还没有为这个账号恢复过。判断在分类的第一步（`recoverUnauthorized`）：不等待形式在 `classify` 开头、调插件的 `ClassifyError` 之前，等待形式（插件在 `Execute` 返回值里给分类）在 `waitedRelay.classified` 开头、采用插件的分类之前，故障策略下也一样；这时冷却、自动禁用、换号、故障策略的事实都还没发生。
-- **续期**：`RecoverCredentials(ctx, 账号, used)`，`used` 是被拒的这次尝试用的凭证（`AccountDirectory.Load` 读到的明文，即交给插件的 `credentials_json`）。账号服务拿账号锁 `account:refresh:<id>`（没有集群锁时是本节点的互斥锁，同 §48.3）；锁被别处持有时每 100 毫秒再试，直到拿到、客户端离开，或最多等锁的有效期 1 分钟（续期持锁不会更久）。拿到锁后重读账号：
+- **触发**：一次 HTTP 尝试或 WebSocket 握手的上游回 401，账号类型声明了 `refresh`（§48.1），核心有 `core.CredentialRecovery`（`gateway.Deps.Recovery`，组装时接账号服务），端点不是任务提交，这个请求还没有为这个账号恢复过。判断在分类的第一步（`recoverUnauthorized`）：不等待形式在 `classify` 开头、调插件的 `ClassifyError` 之前，等待形式（插件在 `Execute` 返回值里给分类）在 `waitedRelay.classified` 开头、采用插件的分类之前，故障策略下也一样；这时冷却、自动禁用、换号、故障策略的事实都还没发生。
+- **续期**：`RecoverCredentials(ctx, 账号, used)`，`used` 是被拒的这次尝试用的凭证（`AccountDirectory.Load` 读到的明文，即交给插件的 `credentials_json`）。账号服务拿账号锁 `account:refresh:<id>`（没有集群锁时是本节点的互斥锁，同 §48.3）；锁被别处持有时先记下账号最近一次续期尝试的时间（续期状态的 `last_attempt_at`），然后每 100 毫秒再试，直到拿到或客户端离开；不另设期限（持锁方死掉时锁按有效期 1 分钟自然释放，续期持锁不会更久）。拿到锁后重读账号：
   - 凭证已经不是 `used`（别的续期或管理员刚保存过，包括别的节点）：不续期，丢掉本节点的账号快照（对方的 `account:changed` 可能还在路上），回答“可以重试”；
-  - 凭证还是 `used`，但刚才等过锁：持锁的那次续期没换掉它（失败或无事可做），**不重复续期**，回答“不行”；
+  - 凭证还是 `used`，而等锁期间有过一次新的续期尝试（`last_attempt_at` 比等锁前晚）：那次续期在这份凭证上失败了，**不重复续期**，回答“不行”；持锁方只是读过、没续期（别的请求的恢复发现凭证已变、扫描判断未到期）时不算，照常续期；
   - 否则按原因 `REASON_UNAUTHORIZED` 续期（§48.3 的流程：调插件、经账号代理发送、条件更新保存、审计、事件、`account:changed`）。这个原因不看过期时间（上游刚拒绝了这份凭证），但仍跳过被判“已拒绝”的同一份凭证（`rejected_cred_hash`，§48.3 第 4 条）；失败照常记进续期状态。续期一旦开始不受客户端离开影响（同 §48.3）。
-- **重发**：回答“可以重试”时，这次尝试在**同一账号**上从头再跑一次（重新 `Load` 拿新凭证、重新 `Execute`、重新中继），结果就是这次尝试的结果：不算换号、不加尝试次数、不冷却、不罚账号，使用记录的 `attempts` 不变。续期期间客户端离开时按客户端断开结束，不再重发。
+- **重发**：回答“可以重试”时，这次尝试在**同一账号**上从头再跑一次（重新 `Load` 拿新凭证、重新 `Execute`、重新中继），结果就是这次尝试的结果：不算换号、不加尝试次数、不冷却、不罚账号，使用记录的 `attempts` 不变。续期期间客户端离开时按客户端断开结束，不再重发（客户端离开指 HTTP 请求的上下文结束、WebSocket 会话的 `present` 结束；只停止等锁，已开始的续期照常完成）。被恢复掉的 401 已经发过一次 `ResponseStarted` 观察事件，重发再发一次，所以一次尝试可能有两个“开始”。
 - **只恢复一次**：每个请求每个账号最多一次（`call.recovery.tried`）。回答“不行”、续期出错，或重发后又是 401，都走原来的分类（冷却、自动禁用、换号、故障策略），与没有本节时完全相同。换到的下一个账号自己还能恢复一次。
 - **不恢复的**：账号类型没声明 `refresh`；任务提交端点（它的失败一律回给客户端、从不换号）；不经 `recovering` 跑的尝试（见下条）。
-- **接线**：`(*call).recovering(ctx, try func() attemptResult) attemptResult`。`try` 是在一个账号上的一次尝试，必须自己重新 `Load` 账号；`recovering` 在 `try` 期间允许恢复，`try` 返回 `attemptRecovered` 时（握手的 401 经 `cl.classify` 续期成功）再跑一次 `try`。HTTP 用 `attemptRecovering(ctx, ref, n)`（就是 `recovering` 包住 `attempt`）；WebSocket 在 `wsSession.connect` 里用 `cl.recovering(ctx, func() attemptResult { return s.dial(ctx, cl, ref) })`（握手被拒时还没有向客户端写过任何东西；测试 `gateway/websocket_recovery_test.go`）。`recoverUnauthorized` 只在 `recovering` 里生效，`attemptRecovered` 不会漏到不认识它的地方。
+- **接线**：`(*call).recovering(present context.Context, try func() attemptResult) attemptResult`，`present` 是客户端在场的上下文。`try` 是在一个账号上的一次尝试，必须自己重新 `Load` 账号；`recovering` 在 `try` 期间允许恢复，`try` 返回 `attemptRecovered` 时（握手的 401 经 `cl.classify` 续期成功）再跑一次 `try`。HTTP 用 `attemptRecovering(ctx, ref, n)`（就是 `recovering` 包住 `attempt`）；WebSocket 在 `wsSession.connect` 里用 `cl.recovering(s.present, func() attemptResult { return s.dial(ctx, cl, ref) })`（握手被拒时还没有向客户端写过任何东西；测试 `gateway/websocket_recovery_test.go`）。`recoverUnauthorized` 只在 `recovering` 里生效，`attemptRecovered` 不会漏到不认识它的地方。
 
 ### 141.3 续期原因 `BuildRefreshRequestRequest.reason`
 
@@ -9745,14 +9746,14 @@ cluster 任务，每分钟一次，单次至多 5 分钟，按下面的顺序：
 
 - 清单 `accountTypes[].platforms[].accountBoundHeaders: [名字]`（`manifest.AccountPlatform.AccountBoundHeaders`）：这个账号类型在这个平台上收到的客户端头里，只对请求第一次尝试的那个账号有意义的头（上游发给那个账号的路由令牌之类）。
 - 清单检查（`sdk/manifest/check/account_bound_headers.go`）：写了就至少一个；每个名字（不区分大小写、不重复）必须在这个类型在该平台上生效的 `passHeaders` 里（`ClientHeaders`：自己写了用自己的，没写用平台的）。没写 `passHeaders` 时要能解析出平台：内置平台、本插件的平台、其他已安装插件的平台（`PlatformOwner` 加了 `PassHeaders`）；打包工具解析不了别人的平台时不查，安装时再查。错误码 `required`、`duplicate`、`not_passed`、`unknown_platform`。
-- 核心（`gateway/account_bound.go` `inboundHeaders`）：交给插件的 `ExecuteRequest.inbound_headers` 在请求换到另一个账号之后（`attempt > 0` 且账号不是第 0 次尝试的账号）去掉这些头；同一账号上的重试（故障策略的同账号重试、§141.2 的重发）、换回第一个账号时都照常交。插件不变：仍只是把交来的头转交，一致性套件第 7 条（每次尝试按同样输入构建）照旧成立。WebSocket 每轮调 `Execute` 用同一个函数，会话连着期间账号不变。
+- 核心（`gateway/account_bound.go` `attemptHeaders`）：这些头属于请求第一次构建尝试的账号（在 `Execute` 之前就失败的尝试不算）；交给插件的 `ExecuteRequest.inbound_headers` 在别的账号上去掉这些头；同一账号上的重试（故障策略的同账号重试、§141.2 的重发）、换回这个账号时都照常交。插件不变：仍只是把交来的头转交，一致性套件第 7 条（每次尝试按同样输入构建）照旧成立。WebSocket 每轮调 `Execute` 用同一个函数；会话第一次建起上游连接的账号是整个会话的归属账号，之后某一轮按 §142.3 重连到别的账号时，升级请求带来的这些头不再交给新账号。
 - codex 0.2.4 的两个类型声明 `["x-codex-turn-state"]`（[PLUGIN-CODEX.md](PLUGIN-CODEX.md) 第 25 节）。
 
 ### 141.5 测试
 
 - `gateway/recovery_test.go`：续期成功后同一账号用新凭证重发、一次尝试、不冷却不禁用；续期失败照原样分类（禁用并换号）；每个账号只恢复一次（重发仍 401 被分类，下一个账号自己恢复）；没声明 `refresh` 或没有恢复器时不恢复；等待形式同样重发且只提交一次；不在 `recovering` 里的分类不恢复。
-- `gateway/account_bound_test.go`：换号后去掉账号绑定的头、同账号重试与换回第一个账号时保留；没声明时换号照常交。
-- `account/refresh_recover_test.go`：`recoveryStep` 的决策表；`awaitRefreshLock` 等集群锁与本节点锁、客户端离开时放弃；数据库用例（需要 PostgreSQL）：401 恢复不看过期时间且原因是 `REASON_UNAUTHORIZED`、过时的 `used` 不再续期、拒绝后同一份凭证不再试、锁被占时不重复续期（持锁者换了凭证则重试、没换则放弃）、扫描 / 强制 / 保存后三处的原因。
+- `gateway/account_bound_test.go`：换号后去掉账号绑定的头、同账号重试与换回第一个账号时保留；WebSocket 会话重连到别的账号后去掉、留在归属账号上保留；没声明时换号照常交。
+- `account/refresh_recover_test.go`：等锁期间是否有新的续期尝试的判断；数据库用例（需要 PostgreSQL）：`awaitRefreshLock` 等集群锁与本节点锁、客户端离开时放弃；401 恢复不看过期时间且原因是 `REASON_UNAUTHORIZED`、过时的 `used` 不再续期、拒绝后同一份凭证不再试、锁被占时（持锁者换了凭证则重试、在这份凭证上续期失败则放弃、只持锁没续期则照常续期）、扫描 / 强制 / 保存后三处的原因。
 - `sdk/manifest/check/account_bound_headers_test.go`；codex `manifest_test.go`、`internal/codex/refresh_test.go`（四种原因的映射、没有原因时不带字段）。
 
 ## 142. WebSocket 流内用量事件；上游连接结束不再关闭客户端连接（2026-11-28，所有者选“插件加核心一起做”；设计见 [DESIGN-2026-11-28-CODEX-CORE-ALIGN.md](DESIGN-2026-11-28-CODEX-CORE-ALIGN.md) 第 3、4 节；无迁移，可滚动；插件协议、Host API 不变；改契约：清单 `quota.events`、`core.QuotaObserver.ObserveQuotaEvent`）
@@ -9776,7 +9777,7 @@ cluster 任务，每分钟一次，单次至多 5 分钟，按下面的顺序：
 ```
 
 - `type`：匹配的上游 WebSocket 消息的顶层 `type`。`windows[]` 的值是消息 JSON 里的 gjson 路径，语义与 `quota.headers` 的同名字段相同（§44.2、§105），一条路径相当于一个头名：`windowMinutes` 必填，窗口名由 `manifest.QuotaWindowKey` 按时长生成，与响应头采样是同一套名字；`utilization` 的单位 `ratio`（默认）或 `percent`；`reset` 是 Unix 秒（大于 1e11 视为毫秒）。没有 `key`、`status`、`resetFormat`。
-- 读取：`manifest.ReadQuotaEvent(event, msg, now)` 把窗口当作头声明交给 `manifest.ReadQuotaHeaders`（读值、命名、同一消息里同名窗口保留用得多的，全部是同一份代码），取值是 `gjson.GetBytes(msg, path).String()`。路径不存在、值不是能解析的数字（字符串、布尔、对象）时该值记为未知；时长不可用或一个可用值都没有的窗口不报。`AccountQuota.Event(type)` 返回声明的事件。
+- 读取：`manifest.ReadQuotaEvent(event, get, now)` 把窗口当作头声明交给 `manifest.ReadQuotaHeaders`（读值、命名、同一消息里同名窗口保留用得多的，全部是同一份代码）；`get` 由调用方给，核心用 `gjson.GetBytes(msg, path).String()`（`manifest` 包不引入 JSON 路径库，插件 CLI 的 `db check` 等离线构建不多一个依赖）。路径不存在、值不是能解析的数字（字符串、布尔、对象）时该值记为未知；时长不可用或一个可用值都没有的窗口不报。`AccountQuota.Event(type)` 返回声明的事件。
 - `AccountQuota.Supported()` 把 `events` 算作声明：只声明 `events` 的类型也有额度视图。
 - 校验（`sdk/manifest/check`）：`.quota.events`（`too_many`，最多 `MaxQuotaHeaders` 16 个）、`.events[i].type`（`required` / `invalid_format`，`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$` / `duplicate`）、`.events[i].windows`（`required` / `too_many`，最多 16 个）、`.windows[j].windowMinutes`（`required`）、`.windows[j]`（`required`：`utilization`、`reset` 至少一个）、`.windows[j].windowMinutes|utilization|reset`（`invalid_path`：必须是读一个值的 gjson 路径，与用量规则的路径同一检查 `ValidUsagePath`）、`.windows[j].utilizationUnit`（`invalid`；没有 `utilization` 时 `unexpected`，与 `headers` 共用一个检查）。`quota` 为空时的错误信息改为 “quota must declare headers, events or query”。
 - 旧核心解析清单时容忍未知字段，只是不采样，`hostCompat` 不需要提高。

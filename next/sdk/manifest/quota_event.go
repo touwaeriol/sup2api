@@ -1,10 +1,6 @@
 package manifest
 
-import (
-	"time"
-
-	"github.com/tidwall/gjson"
-)
+import "time"
 
 // QuotaEvent declares quota windows an upstream reports inside a WebSocket
 // message rather than in response headers (Codex's "codex.rate_limits"). The
@@ -45,11 +41,12 @@ func (q *AccountQuota) Event(typ string) *QuotaEvent {
 	return nil
 }
 
-// ReadQuotaEvent applies a quota event declaration to one message: the
-// windows are read the way ReadQuotaHeaders reads headers, a path standing
-// for a header name.
-func ReadQuotaEvent(ev QuotaEvent, msg []byte, now time.Time) []QuotaReading {
-	get := func(path string) string { return gjson.GetBytes(msg, path).String() }
+// ReadQuotaEvent applies a quota event declaration to one message, whose
+// value at a gjson path get returns ("" when absent): the windows are read
+// the way ReadQuotaHeaders reads headers, a path standing for a header
+// name. (The caller reads the message, so that this package needs no JSON
+// path library.)
+func ReadQuotaEvent(ev QuotaEvent, get func(path string) string, now time.Time) []QuotaReading {
 	return ReadQuotaHeaders(ev.headers(), get, now)
 }
 

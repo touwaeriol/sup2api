@@ -69,7 +69,7 @@ func builtinConvergence(ctx context.Context, s builtinInstaller, locker core.Loc
 						func(err error) { log.Warn("builtin install incomplete; will retry", "err", err) })
 				}
 			}
-			if !waitOrDone(ctx, 5*time.Second) {
+			if !core.Pause(ctx, 5*time.Second) {
 				return
 			}
 		}
@@ -108,7 +108,7 @@ func startBuiltinUpgrade(ctx context.Context, s *install.Service, locker core.Lo
 				ensureBuiltinOnce(ctx, s, locker, dir, log, "builtin upgrade lock failed",
 					func(err error) { log.Info("bundled plugin upgrade not finished; will retry", "err", err) })
 			}
-			if !waitOrDone(ctx, 10*time.Second) {
+			if !core.Pause(ctx, 10*time.Second) {
 				return
 			}
 		}
@@ -131,19 +131,6 @@ func runBuiltinLoop(ctx context.Context, loop func(context.Context)) func(contex
 		case <-done:
 		case <-stopCtx.Done():
 		}
-	}
-}
-
-// waitOrDone sleeps for d and reports whether d elapsed; false means ctx
-// ended first, so the caller's loop should stop. The timer is always stopped.
-func waitOrDone(ctx context.Context, d time.Duration) bool {
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-ctx.Done():
-		return false
-	case <-t.C:
-		return true
 	}
 }
 

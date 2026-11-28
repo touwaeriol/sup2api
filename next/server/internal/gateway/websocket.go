@@ -140,11 +140,16 @@ type wsSession struct {
 	routes          map[core.AccountTypeKey]*typeRoute
 	session         string
 	upIn            chan wsMessage
-	upEnded         *atomic.Bool // set as soon as reading up fails
+	upEnded         *atomic.Bool       // set as soon as reading up fails
+	upStop          context.CancelFunc // stops up's reader and pinger (dropUpstream)
 	quotaGeneration int64
 	// opening is the first turn's message as the plugin relayed it with the
 	// handshake; that turn sends it, later turns ask the plugin again.
 	opening []byte
+	// owner is the account the session first opened its upstream on: the
+	// upgrade request's account-bound headers stay its, even when a later
+	// turn reconnects on another (attemptHeaders, CONTRACTS §141.4).
+	owner int64
 }
 
 type wsMessage struct {
@@ -427,6 +432,7 @@ func (s *wsSession) newCall(body []byte) *call {
 		autoDisable: b.autoDisable, scheduling: b.scheduling, failurePolicy: b.failurePolicy, principal: b.principal, body: body, stream: true}
 	cl.rec = cl.newRecord()
 	cl.rec.Stream = true
+	cl.firstAccount = s.owner
 	return cl
 }
 
@@ -615,10 +621,10 @@ func (s *wsSession) connect(ctx context.Context, cl *call) (func(), *gwError) {
 		cl.beginFailureAttempt(ref)
 		begun := cl.g.now()
 		cl.rec.ErrorMessage = "" // each attempt states its own failure (noteAttempt)
-		res := cl.recovering(ctx, func() attemptResult { return s.dial(ctx, cl, ref) })
+		res := cl.recovering(s.present, func() attemptResult { return s.dial(ctx, cl, ref) })
 		cl.noteAttempt(ref.ID, res.err, begun)
 		if res.kind == attemptDone {
-			s.ref = ref
+			s.ref, s.owner = ref, cl.firstAccount
 			s.routes = cl.routes
 			s.session = cl.session
 			s.quotaGeneration = cl.availability[ref.ID].generation()

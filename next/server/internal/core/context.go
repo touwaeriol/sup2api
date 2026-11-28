@@ -190,3 +190,16 @@ func (t LocalizedText) Get(locale string) string {
 	}
 	return ""
 }
+
+// Pause waits d, or less when ctx ends first; it reports whether d elapsed
+// (false: ctx ended, so a loop waiting with it should stop).
+func Pause(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}

@@ -3,6 +3,8 @@ package account
 import (
 	"time"
 
+	"github.com/tidwall/gjson"
+
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/store"
 )
@@ -13,7 +15,8 @@ import (
 // for headers. It only records the windows; it never disables the account.
 func (s *Service) ObserveQuotaEvent(accountID int64, event manifest.QuotaEvent, msg []byte) {
 	now := time.Now()
-	s.observeQuota(accountID, manifest.ReadQuotaEvent(event, msg, now), now)
+	get := func(path string) string { return gjson.GetBytes(msg, path).String() }
+	s.observeQuota(accountID, manifest.ReadQuotaEvent(event, get, now), now)
 }
 
 // observeQuota hands the windows of one passive sample to the throttled

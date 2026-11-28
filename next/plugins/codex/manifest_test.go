@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tidwall/gjson"
+
 	"github.com/Sub2API-Devs/sup2api/next/plugins/codex/internal/codex"
 	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
@@ -313,7 +315,8 @@ func TestQuotaEventReadsTheOfficialEvent(t *testing.T) {
 	msg := []byte(`{"type":"codex.rate_limits","plan_type":"plus","rate_limits":{` +
 		`"primary":{"used_percent":12.5,"window_minutes":10080,"reset_at":1790500000},` +
 		`"secondary":{"used_percent":80,"window_minutes":300,"reset_at":1790003600}},"credits":null}`)
-	got := manifest.ReadQuotaEvent(codexQuotaEvents[0], msg, time.Unix(1_790_000_000, 0))
+	get := func(path string) string { return gjson.GetBytes(msg, path).String() }
+	got := manifest.ReadQuotaEvent(codexQuotaEvents[0], get, time.Unix(1_790_000_000, 0))
 	if len(got) != 2 || got[0].Key != "7d" || got[0].Utilization != 12.5 || got[1].Key != "5h" || got[1].Utilization != 80 ||
 		got[1].ResetsAt == nil || got[1].ResetsAt.Unix() != 1790003600 {
 		t.Fatalf("windows = %+v", got)

@@ -122,7 +122,7 @@ func (x *execution) run(ctx context.Context, upModel string, n int) (core.Execut
 	c, rt := x.c, x.rt
 	meta := c.metaFor(rt)
 	meta.Model = upModel
-	in := &pluginv1.ExecuteRequest{Meta: meta, Account: x.acct, Body: x.body, InboundHeaders: c.inboundHeaders(rt, x.acc.ID, n),
+	in := &pluginv1.ExecuteRequest{Meta: meta, Account: x.acct, Body: x.body, InboundHeaders: c.attemptHeaders(rt, x.acc.ID),
 		Attempt: int32(n), ExtractUsage: rt.pluginUsage && !x.turn, TaskSubmission: c.ep.TaskSubmit()}
 	client := core.ExecutionClient{Check: x.check, Fetch: x.fetch}
 	if in.ExtractUsage || in.TaskSubmission {

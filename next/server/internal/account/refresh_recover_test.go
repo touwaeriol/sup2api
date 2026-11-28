@@ -11,23 +11,24 @@ import (
 
 	pluginv1 "github.com/Sub2API-Devs/sup2api/next/sdk/gen/pluginv1"
 	"github.com/Sub2API-Devs/sup2api/next/sdk/manifest"
+	"github.com/Sub2API-Devs/sup2api/next/server/internal/store"
 	"github.com/Sub2API-Devs/sup2api/next/server/internal/testutil"
 )
 
-func TestRecoveryStep(t *testing.T) {
-	old, renewed := []byte(`{"access_token":"a"}`), []byte(`{"access_token":"b"}`)
+// A renewal attempt counts when it is later than the one before the wait.
+func TestLastAttemptAdvanced(t *testing.T) {
+	t1, t2 := time.Unix(100, 0), time.Unix(200, 0)
 	for _, tc := range []struct {
-		name          string
-		current, used []byte
-		waited        bool
-		want          recoveryAction
+		name        string
+		before, now *time.Time
+		want        bool
 	}{
-		{"refused credentials, lock free", old, old, false, recoverRenew},
-		{"refused credentials, renewal ran meanwhile", old, old, true, recoverGiveUp},
-		{"renewed elsewhere", renewed, old, false, recoverWithCurrent},
-		{"renewed by the renewal waited for", renewed, old, true, recoverWithCurrent},
+		{"none either time", nil, nil, false},
+		{"first attempt meanwhile", nil, &t2, true},
+		{"later attempt meanwhile", &t1, &t2, true},
+		{"no attempt meanwhile", &t1, &t1, false},
 	} {
-		if got := recoveryStep(tc.current, tc.used, tc.waited); got != tc.want {
+		if got := (&lastAttempt{At: tc.before}).advancedTo(&lastAttempt{At: tc.now}); got != tc.want {
 			t.Errorf("%s: %v, want %v", tc.name, got, tc.want)
 		}
 	}
@@ -36,28 +37,37 @@ func TestRecoveryStep(t *testing.T) {
 // awaitRefreshLock waits for a renewal holding the lock, cluster lock or
 // node mutex, and gives up when the caller leaves.
 func TestAwaitRefreshLock(t *testing.T) {
-	locker := testutil.NewMemLocker()
-	for name, s := range map[string]*Service{"cluster": {d: Deps{Locker: locker}}, "node": {}} {
-		t.Run(name, func(t *testing.T) {
-			ctx := context.Background()
-			release, waited, err := s.awaitRefreshLock(ctx, 7)
-			if err != nil || release == nil || waited {
-				t.Fatalf("free lock: release %v waited %v err %v", release != nil, waited, err)
+	for _, cluster := range []bool{true, false} {
+		t.Run(fmt.Sprintf("cluster=%v", cluster), func(t *testing.T) {
+			s := setup(t).svc
+			if cluster {
+				s.d.Locker = testutil.NewMemLocker()
 			}
-			time.AfterFunc(150*time.Millisecond, release)
-			start := time.Now()
-			again, waited, err := s.awaitRefreshLock(ctx, 7)
-			if err != nil || again == nil || !waited || time.Since(start) < 100*time.Millisecond {
-				t.Fatalf("held lock: release %v waited %v err %v after %v", again != nil, waited, err, time.Since(start))
-			}
-			cctx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
-			defer cancel()
-			if r, waited, err := s.awaitRefreshLock(cctx, 7); r != nil || !waited || err != nil {
-				t.Fatalf("caller left: release %v waited %v err %v", r != nil, waited, err)
-			}
-			again()
+			expectAwait(t, s)
 		})
 	}
+}
+
+// expectAwait checks awaitRefreshLock on s: free at once, after a release,
+// abandoned when the caller leaves.
+func expectAwait(t *testing.T, s *Service) {
+	ctx := context.Background()
+	release, before, err := s.awaitRefreshLock(ctx, 7)
+	if err != nil || release == nil || before != nil {
+		t.Fatalf("free lock: release %v before %v err %v", release != nil, before, err)
+	}
+	time.AfterFunc(150*time.Millisecond, release)
+	start := time.Now()
+	again, before, err := s.awaitRefreshLock(ctx, 7)
+	if err != nil || again == nil || before == nil || time.Since(start) < 100*time.Millisecond {
+		t.Fatalf("held lock: release %v before %v err %v after %v", again != nil, before, err, time.Since(start))
+	}
+	cctx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+	defer cancel()
+	if r, _, err := s.awaitRefreshLock(cctx, 7); r != nil || err != nil {
+		t.Fatalf("caller left: release %v err %v", r != nil, err)
+	}
+	again()
 }
 
 // storedCreds is account id's credentials as Load reads them, the bytes a
@@ -145,19 +155,30 @@ func (e *env) recoverWhileHeld(id int64, during func()) bool {
 	return <-done
 }
 
-// A renewal holding the lock is waited for and not repeated: what it left
-// is retried when it changed the credentials, given up when not.
+// A holder of the lock is waited for. When it renewed the credentials they
+// are retried as they are; when it attempted a renewal of them that failed,
+// the recovery gives up; when it only held the lock (read them, found them
+// not due), they are renewed now.
 func TestRecoverCredentialsWaitsForTheLock(t *testing.T) {
 	e, up, id := recoveryFixture(t)
-	if e.recoverWhileHeld(id, func() {}) {
-		t.Fatal("a renewal that left the credentials as they were was retried")
+	if !e.recoverWhileHeld(id, func() {}) || up.calls.Load() != 1 {
+		t.Fatalf("credentials nobody renewed: upstream calls %d", up.calls.Load())
+	}
+	failed := func() {
+		st := store.RefreshState{AccountID: id, ErrorType: store.RefreshTransient, Error: "down"}
+		if err := store.RecordAccountRefresh(context.Background(), e.db.Gorm, st); err != nil {
+			t.Error(err)
+		}
+	}
+	if e.recoverWhileHeld(id, failed) {
+		t.Fatal("credentials a renewal just failed on were renewed again")
 	}
 	renewed := e.creds(id)
 	renewed["access_token"] = "at-elsewhere"
 	if !e.recoverWhileHeld(id, func() { e.setCreds(id, renewed) }) {
 		t.Fatal("credentials renewed by the lock holder were not retried")
 	}
-	if up.calls.Load() != 0 {
+	if up.calls.Load() != 1 {
 		t.Fatalf("the refresh was repeated: %d upstream calls", up.calls.Load())
 	}
 }
