@@ -30,7 +30,7 @@ function fakeHost(): PluginHost {
 
 const DEVICE_CREDS = { access_token: 'at', refresh_token: 'rt', id_token: 'it', expires_at: 1800000000, email: 'me@example.com', chatgpt_account_id: 'acc-1', plan_type: 'plus' }
 const OAUTH_CREDS = { access_token: 'at2', refresh_token: 'rt2', id_token: 'it2', expires_at: 1800000000, email: 'me@example.com', chatgpt_account_id: 'acc-2', plan_type: 'pro' }
-const CALLBACK = 'http://localhost:1455/auth/callback'
+const CALLBACK = 'http://127.0.0.1:1455/auth/callback'
 /** The client headers a call of a form without its own carries. */
 const NO_AGENT = { user_agent: '', originator: '' }
 

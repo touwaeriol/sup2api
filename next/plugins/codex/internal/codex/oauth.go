@@ -582,7 +582,8 @@ type CodexExchangeResponse struct {
 // authorize URL. It sends nothing to OpenAI; it still reads the route call,
 // as every route of a login does.
 func (p *Plugin) handleCodexStart(ctx context.Context, req *pluginv1.HTTPRequest) (*pluginv1.HTTPResponse, error) {
-	if _, refused := p.startCall(req); refused != nil {
+	call, refused := p.startCall(req)
+	if refused != nil {
 		return refused, nil
 	}
 	s := codexSession{State: randomToken(24), Verifier: randomToken(48)} // the verifier has 64 characters
@@ -590,21 +591,27 @@ func (p *Plugin) handleCodexStart(ctx context.Context, req *pluginv1.HTTPRequest
 	if err != nil {
 		return sessionNotStored(err), nil
 	}
+	return pluginsdk.DataResponse(CodexStartResponse{SessionID: sessionID, AuthorizeURL: p.authorizeURL(s, call.agent.Originator)}), nil
+}
+
+// authorizeURL is the Codex CLI's authorize URL for the PKCE session s
+// (codex-rs login/src/server.rs build_authorize_url): beside the OAuth
+// parameters, the workspaces in the id_token, the ChatGPT-only consent
+// without the API organization setup, and the client's originator (the
+// account form's, agent.go).
+func (p *Plugin) authorizeURL(s codexSession, originator string) string {
 	q := url.Values{}
-	q.Set("client_id", CodexClientID)
 	q.Set("response_type", "code")
+	q.Set("client_id", CodexClientID)
 	q.Set("redirect_uri", CodexRedirectURI)
-	q.Set("scope", CodexScope)
-	q.Set("state", s.State)
-	q.Set("code_challenge_method", "S256")
 	q.Set("code_challenge", pkceChallenge(s.Verifier))
-	// As the Codex CLI asks: the workspaces in the id_token, and the
-	// ChatGPT-only consent without the API organization setup.
+	q.Set("code_challenge_method", "S256")
+	q.Set("state", s.State)
+	q.Set("scope", CodexScope)
 	q.Set("id_token_add_organizations", "true")
 	q.Set("codex_cli_simplified_flow", "true")
-	return pluginsdk.DataResponse(CodexStartResponse{
-		SessionID: sessionID, AuthorizeURL: p.ep.Auth + "/oauth/authorize?" + q.Encode(),
-	}), nil
+	q.Set("originator", originator)
+	return p.ep.Auth + "/oauth/authorize?" + q.Encode()
 }
 
 // callbackParams are the parameters of the redirect to the local callback.

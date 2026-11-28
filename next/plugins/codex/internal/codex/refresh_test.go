@@ -15,7 +15,7 @@ func TestBuildRefreshRequest(t *testing.T) {
 	h := startPlugin(t, newTestPlugin(DefaultEndpoints))
 	ctx := context.Background()
 
-	// Both types refresh with the Codex client.
+	// Both types refresh as the Codex CLI does: no scope, a refresh reason.
 	for _, typ := range accountTypes {
 		r, err := h.Platform.BuildRefreshRequest(ctx, &pluginv1.BuildRefreshRequestRequest{Account: account(typ, deviceCreds)})
 		if err != nil {
@@ -28,7 +28,7 @@ func TestBuildRefreshRequest(t *testing.T) {
 			t.Fatalf("%s refresh = %v", typ, r)
 		}
 		if body["client_id"] != CodexClientID || body["grant_type"] != "refresh_token" || body["refresh_token"] != "rt-device" ||
-			body["scope"] != "openid profile email" || len(body) != 4 {
+			body["refresh_reason"] != "scheduled" || len(body) != 4 {
 			t.Fatalf("%s body = %v", typ, body)
 		}
 	}
@@ -103,9 +103,10 @@ func TestParseRefreshResponse(t *testing.T) {
 		{"openai refresh_token_reused", TypeDevice, 401, `{"error":{"code":"refresh_token_reused","message":"already used"}}`, "", rejected, "refresh_token_reused"},
 		{"refresh_token_expired", TypeDevice, 400, `{"error":{"message":"x","type":"invalid_request_error","code":"refresh_token_expired"}}`, "", rejected, ""},
 		{"refresh_token_invalidated", TypeOAuth, 400, `{"error":"refresh_token_invalidated"}`, "", rejected, ""},
-		{"invalid_refresh_token", TypeOAuth, 400, `{"error":"invalid_refresh_token"}`, "", rejected, ""},
-		{"token_expired", TypeOAuth, 400, `{"error":"token_expired"}`, "", rejected, ""},
-		{"invalid_client", TypeOAuth, 401, `{"error":"invalid_client"}`, "", rejected, "configuration error"},
+		{"top-level code", TypeDevice, 400, `{"code":"refresh_token_expired"}`, "", rejected, "refresh_token_expired"},
+		{"invalid_grant not 400", TypeOAuth, 403, `{"error":"invalid_grant"}`, "", transient, ""},
+		{"invalid_refresh_token", TypeOAuth, 400, `{"error":"invalid_refresh_token"}`, "", transient, ""},
+		{"invalid_client 401", TypeOAuth, 401, `{"error":"invalid_client"}`, "", rejected, "invalid_client"},
 		{"plain 401", TypeDevice, 401, `{"detail":"nope"}`, "", rejected, ""},
 		{"server error", TypeDevice, 503, `upstream down`, "", transient, "503"},
 		{"rate limited", TypeOAuth, 429, `{"error":"slow_down"}`, "", transient, ""},

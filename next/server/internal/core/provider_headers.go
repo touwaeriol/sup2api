@@ -6,8 +6,9 @@ import (
 )
 
 // ProviderHeaders are the provider response headers relayed to the client
-// and shown by an account test: request ids, retry hints and the rate limit
-// facts. Hop-by-hop headers and values with control characters are dropped;
+// and shown by an account test: request ids, retry hints, the rate limit
+// facts and the Codex backend's turn state routing token, which a Codex
+// client replays on the turn's later requests. Hop-by-hop headers and values with control characters are dropped;
 // nothing else of the upstream response headers is copied.
 func ProviderHeaders(source http.Header) http.Header {
 	hop := map[string]bool{}
@@ -19,7 +20,7 @@ func ProviderHeaders(source http.Header) http.Header {
 	out := http.Header{}
 	for name, values := range source {
 		lower := strings.ToLower(name)
-		allowed := lower == "request-id" || lower == "anthropic-request-id" || lower == "retry-after" || lower == "x-should-retry" ||
+		allowed := lower == "request-id" || lower == "anthropic-request-id" || lower == "retry-after" || lower == "x-should-retry" || lower == "x-codex-turn-state" ||
 			strings.HasPrefix(lower, "anthropic-ratelimit-") || strings.HasPrefix(lower, "anthropic-fast-")
 		if !allowed || hop[lower] {
 			continue

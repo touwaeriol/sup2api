@@ -70,9 +70,9 @@ const zh = {
     openLink: '在新窗口打开',
     step1: '在浏览器中打开授权链接，登录 ChatGPT 并同意授权',
     step2: '粘贴跳转后的完整网址',
-    redirectNote: '同意后浏览器会跳到一个 localhost:1455 开头、打不开的页面，这是正常的。把地址栏里的完整网址复制下来，粘到下面。',
+    redirectNote: '同意后浏览器会跳到一个 127.0.0.1:1455 开头、打不开的页面，这是正常的。把地址栏里的完整网址复制下来，粘到下面。',
     callbackLabel: '回调网址',
-    callbackPlaceholder: 'http://localhost:1455/auth/callback?code=…',
+    callbackPlaceholder: 'http://127.0.0.1:1455/auth/callback?code=…',
     complete: '完成授权',
     shape: {
       invalid: '无法解析这段内容（含有非法的 % 转义或分号），请粘贴地址栏里的完整网址。',
@@ -204,9 +204,9 @@ const en: Messages = {
     openLink: 'Open in a new window',
     step1: 'Open the link in your browser, sign in to ChatGPT and consent',
     step2: 'Paste the full address you were sent to',
-    redirectNote: 'After you consent, the browser goes to a page starting with localhost:1455 that does not load. That is expected: copy the full address from the address bar and paste it below.',
+    redirectNote: 'After you consent, the browser goes to a page starting with 127.0.0.1:1455 that does not load. That is expected: copy the full address from the address bar and paste it below.',
     callbackLabel: 'Callback address',
-    callbackPlaceholder: 'http://localhost:1455/auth/callback?code=…',
+    callbackPlaceholder: 'http://127.0.0.1:1455/auth/callback?code=…',
     complete: 'Complete sign-in',
     shape: {
       invalid: 'This cannot be read (a malformed % escape or a semicolon). Paste the full address from the address bar.',

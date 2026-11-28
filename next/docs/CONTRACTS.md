@@ -8138,7 +8138,7 @@ SDK 名 `pluginsdk.Fetch`。一个有界、非流式的请求，回答交还插�
 ### 112.12 清单
 
 - `runtime` 只有 `grpc`（`js` 仍是保留值）；`manifest.RuntimeGRPC` 在 `manifest.go`（没有使用者的 `TransportHTTP`、`TransportWebSocket` 已删除）。
-- 账号类型在某个平台上的 `passHeaders`：**没写**（解码后为 nil）取平台的列表；**写成 `[]`** 表示不交给插件任何客户端请求头；非空按写的用（`AccountPlatform.ClientHeaders`）。此前空列表也回落到平台的列表，清单没法说“一个都不要”。字段的 JSON 标签是 `omitzero`，重新编码时“没写”和“空”仍然分得开。codex 的两个类型写的是 `[]`。
+- 账号类型在某个平台上的 `passHeaders`：**没写**（解码后为 nil）取平台的列表；**写成 `[]`** 表示不交给插件任何客户端请求头；非空按写的用（`AccountPlatform.ClientHeaders`）。此前空列表也回落到平台的列表，清单没法说“一个都不要”。字段的 JSON 标签是 `omitzero`，重新编码时“没写”和“空”仍然分得开。codex 的两个类型原来写的是 `[]`，0.2.4 起是 `["x-codex-turn-state"]`（Codex 后端的粘性路由令牌，插件作默认头转交；核心的 `ProviderHeaders` 把同名响应头回给客户端，[PLUGIN-CODEX.md](PLUGIN-CODEX.md) 第 25 节）。
 - 声明了账号类型就必须有 `accounts.credentials {"types": "own"}`（原来声明式类型可以没有）。§124 起这个授权删除，清单里再写它按旧契约拒绝。
 - 账号类型的地址字段只认 `upstreamFields`：原来声明了 `upstream` 的类型自动得到 `["base_url"]`，现在要在清单里写出（五个改写的插件都写了）。它决定账号的自定义上游判断（§21）和取回允许的账号地址（§112.6）。2026-11-20 起每个账号类型都必须写（没有运营方填的地址写 `[]`，§21.3），没写时清单检查报 `required`。这是普通的字段错误，不是旧插件协议的标志，所以不报 `outdated_contract`：旧标志都是只有旧契约才会写的东西，缺这个键的却也可能是按新 SDK 构建、只是忘了写的包，对它说“装一个为新核心构建的版本”没有用；带旧标志的旧包照旧先以 `outdated_contract` 被拒（`pkg.CheckContract` 在字段检查之前）。
 - `usageSource: "plugin"`、`usageStreamEvents`、`usageRequestFields`（`EstimateUsage` 的入参，预扣不变，§25.8）、`endpoint.task` 不变（`usageMaxBytes` 在转发 V2 收尾删除：没有插件声明过它，见下一条）：`extract_usage` 来自端点的 `PluginUsage()`，`task_submission` 来自 `TaskSubmit()`。

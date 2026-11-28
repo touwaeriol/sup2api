@@ -8,6 +8,14 @@
 
 开发完成、尚未上线的改动。发布时改成发布日期的一节，补上提交、实际版本号和发布过程。
 
+#### codex 0.2.4：协议与官方 Codex CLI 对齐（无迁移，可滚动；核心一处小改）
+
+- 会话头改为 Codex CLI 的 `session-id` / `thread-id` / `x-client-request-id`（ChatGPT 按 `session-id` 做提示缓存亲和，原来的 `session_id` / `conversation_id` 可能没起作用；上线后对比 ec2pool codex 的 cache_read/input，基线 26.6%）。
+- 转交客户端的 `x-codex-turn-state` 粘性路由令牌；核心把同名响应头回给客户端（`core.ProviderHeaders`）。
+- 令牌刷新去掉 scope、带 `refresh_reason`，失败分类与 Codex CLI 相同（更少把账号判成需重新授权）。
+- Sign in with Codex 的 scope、回调地址（`127.0.0.1:1455`）、授权地址的 `originator` 与 Codex CLI 相同；FedRAMP 账号带 `x-openai-fedramp`；email 可从 profile 声明读。
+- 不模仿 TLS 指纹和 User-Agent / originator 等客户端身份。详见 `next/docs/PLUGIN-CODEX.md` 第 25 节。
+
 ## 2026-11-28
 
 ### 核心 0.1.318：只因模型列表接不了的请求回普通 503，不再装成 529 过载（`134e0c8d9`、`85c41a8cf`；无迁移；ovh 集群滚动；网关仍 0.1.139；ec2pool 单节点）

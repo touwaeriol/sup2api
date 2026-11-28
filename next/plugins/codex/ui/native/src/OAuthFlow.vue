@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // Sign in with Codex (codex_oauth), the Codex CLI's browser login: Generate →
 // POST /auth/codex/start → the link, opened in a new window → the operator
-// pastes the localhost callback address the browser could not open → POST
+// pastes the 127.0.0.1 callback address the browser could not open → POST
 // /auth/codex/exchange → credentials. Re-authorizing runs the same flow.
 // Not a <form>: the panel sits inside the account editor's form.
 import { computed, onBeforeUnmount, ref, watch } from 'vue'

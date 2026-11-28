@@ -47,7 +47,8 @@ func removedFields(ws bool) []string {
 // the account's client headers (agent). Every header of the plugin
 // (these, httpHeaders, the WebSocket beta and the session) is authoritative,
 // written after the operator's header settings: no passthrough or override
-// changes what the plugin sends. No client header is forwarded.
+// changes what the plugin sends. Of the client's headers only the passed
+// ones (manifest passHeaders) go on, below them (BuildUpstream).
 func (p *Plugin) accountHeaders(c credentials) map[string]string {
 	a := p.agent(c)
 	h := map[string]string{
@@ -57,6 +58,29 @@ func (p *Plugin) accountHeaders(c credentials) map[string]string {
 	}
 	if c.ChatGPTAccountID != "" {
 		h["chatgpt-account-id"] = c.ChatGPTAccountID
+	}
+	if parseIdentity(c.IDToken, c.AccessToken).FedRAMP {
+		h[fedRAMPHeader] = "true"
+	}
+	return h
+}
+
+// fedRAMPHeader marks the request of a FedRAMP ChatGPT account, as the Codex
+// CLI does (codex-rs model-provider/src/bearer_auth_provider.rs).
+const fedRAMPHeader = "x-openai-fedramp"
+
+// sessionHeaders carry the upstream session under the names the Codex CLI
+// sends it with (codex-rs codex-api/src/requests/headers.rs and the
+// responses endpoint): the backend keeps a conversation's prompt cache by
+// session-id; thread-id and x-client-request-id carry the same
+// conversation.
+var sessionHeaders = []string{"session-id", "thread-id", "x-client-request-id"}
+
+// sessionHeaderMap is the session headers of session ("" for none).
+func sessionHeaderMap(session string) map[string]string {
+	h := make(map[string]string, len(sessionHeaders))
+	for _, name := range sessionHeaders {
+		h[name] = session
 	}
 	return h
 }
@@ -133,6 +157,11 @@ func userMessage(text string) []byte {
 // ws(s) URL with the beta header) and the edited message; the core opens
 // the connection with the handshake of the session's first turn and sends
 // every turn's message on it.
+//
+// The client headers the core hands over (manifest passHeaders: the Codex
+// backend's x-codex-turn-state sticky routing token, which a Codex client
+// replays on a turn's later requests, codex-rs core/src/client.rs) go on as
+// default headers.
 func (p *Plugin) BuildUpstream(_ context.Context, in *pluginv1.ExecuteRequest) (*pluginv1.UpstreamRequest, error) {
 	c, err := accountCredentials(in.GetAccount())
 	if err != nil {
@@ -148,8 +177,8 @@ func (p *Plugin) BuildUpstream(_ context.Context, in *pluginv1.ExecuteRequest) (
 	}
 	session := upstreamSession(in.GetAccount().GetId(), in.GetMeta().GetApiKeyId(), body)
 	return u.HeaderMap(p.accountHeaders(c)).
-		Header("session_id", session).
-		Header("conversation_id", session).
+		HeaderMap(sessionHeaderMap(session)).
+		DefaultHeaderMap(in.GetInboundHeaders()).
 		Body(body).
 		Model(upstreamModel(in)).
 		Build()

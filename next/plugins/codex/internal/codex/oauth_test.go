@@ -415,9 +415,9 @@ func TestCodexStart(t *testing.T) {
 	// The Codex CLI's own browser login.
 	q := u.Query()
 	want := map[string]string{
-		"client_id": CodexClientID, "response_type": "code", "redirect_uri": "http://localhost:1455/auth/callback",
-		"scope": "openid profile email offline_access", "code_challenge_method": "S256",
-		"id_token_add_organizations": "true", "codex_cli_simplified_flow": "true",
+		"client_id": CodexClientID, "response_type": "code", "redirect_uri": "http://127.0.0.1:1455/auth/callback",
+		"scope": "openid profile email offline_access api.connectors.read api.connectors.invoke", "code_challenge_method": "S256",
+		"id_token_add_organizations": "true", "codex_cli_simplified_flow": "true", "originator": Originator,
 	}
 	for k, v := range want {
 		if q.Get(k) != v {

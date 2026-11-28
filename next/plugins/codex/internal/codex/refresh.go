@@ -19,20 +19,33 @@ import (
 // reads the answer; the core decides when, sends it through the account's
 // proxy under a cluster lock and saves the patch (the refresh token rotates).
 
-// terminalRefreshCodes mean the refresh token can never work again: the
-// account has to be authorized again.
-var terminalRefreshCodes = map[string]bool{
-	"invalid_grant":             true,
-	"invalid_refresh_token":     true,
-	"token_expired":             true,
+// permanentRefreshCodes are the error codes after which the refresh token
+// can never work again, as the Codex CLI classifies a refresh failure
+// (codex-rs login/src/auth/manager.rs classify_refresh_token_failure).
+var permanentRefreshCodes = map[string]bool{
 	"refresh_token_expired":     true,
-	"refresh_token_invalidated": true,
 	"refresh_token_reused":      true,
+	"refresh_token_invalidated": true,
 }
 
+// refreshPermanent reports a failed refresh the Codex CLI treats as
+// permanent: a 401, a permanent code, or a 400 invalid_grant. Every other
+// failure is temporary.
+func refreshPermanent(status int32, code string) bool {
+	code = strings.ToLower(code)
+	return status == http.StatusUnauthorized || permanentRefreshCodes[code] ||
+		(status == http.StatusBadRequest && code == "invalid_grant")
+}
+
+// refreshReason is the refresh_reason of a refresh the core schedules: the
+// Codex CLI sends one of proactive_expiry, scheduled, unauthorized_recovery
+// and forced.
+const refreshReason = "scheduled"
+
 // BuildRefreshRequest implements pluginsdk.CredentialRefresher: POST
-// <auth>/oauth/token, JSON {client_id (Codex public client), grant_type,
-// refresh_token, scope "openid profile email"}, for both account types.
+// <auth>/oauth/token, JSON {grant_type, client_id (Codex public client),
+// refresh_token, refresh_reason}, for both account types; no scope, as the
+// Codex CLI sends it (codex-rs login/src/oauth/client.rs refresh).
 //
 // Credentials without a refresh token answer FAILED_PRECONDITION, which the
 // core records like a refusal until the account is authorized again.
@@ -49,7 +62,7 @@ func (p *Plugin) BuildRefreshRequest(_ context.Context, in *pluginv1.BuildRefres
 		return nil, status.Error(codes.FailedPrecondition, "the account has no refresh_token; authorize it again / 账号没有 refresh_token，请重新授权")
 	}
 	body, _ := json.Marshal(map[string]string{
-		"client_id": CodexClientID, "grant_type": "refresh_token", "refresh_token": c.RefreshToken, "scope": RefreshScope,
+		"grant_type": "refresh_token", "client_id": CodexClientID, "refresh_token": c.RefreshToken, "refresh_reason": refreshReason,
 	})
 	h := p.agent(c).setHeaders(map[string]string{"Accept": "application/json", "Content-Type": "application/json"})
 	return &pluginv1.BuildRefreshRequestResponse{Method: http.MethodPost, Url: p.ep.Auth + "/oauth/token", Headers: h, BodyJson: string(body)}, nil
@@ -74,26 +87,15 @@ func (p *Plugin) expiresAt(tr tokenResponse) int64 {
 // ParseRefreshResponse implements pluginsdk.CredentialRefresher. A success
 // saves access_token and expires_at, plus refresh_token (rotated), id_token
 // and the identity fields read from it, when the answer carries them. A
-// terminal OAuth error or a 401 is AUTH_REJECTED (authorize again);
-// invalid_client is a client configuration error that retrying cannot fix
-// either; anything else is TRANSIENT.
+// permanent failure (refreshPermanent) is AUTH_REJECTED (authorize again);
+// anything else is TRANSIENT.
 func (p *Plugin) ParseRefreshResponse(_ context.Context, in *pluginv1.ParseRefreshResponseRequest) (*pluginv1.RefreshResult, error) {
 	st := in.GetStatus()
 	switch {
 	case in.GetTransportError() != "":
 		return refreshError(pluginv1.RefreshResult_ERROR_TYPE_TRANSIENT, "cannot reach the token endpoint / 无法连接令牌端点: "+in.GetTransportError()), nil
 	case st < 200 || st > 299:
-		code := oauthErrorCode(in.GetBody())
-		msg := fmt.Sprintf("token endpoint status %d / 令牌端点返回状态 %d: %s", st, st, textutil.Clip(string(in.GetBody()), 300))
-		switch {
-		case terminalRefreshCodes[code]:
-			return refreshError(pluginv1.RefreshResult_ERROR_TYPE_AUTH_REJECTED, "refresh token refused ("+code+"); authorize the account again / 刷新令牌被拒绝，需重新授权: "+msg), nil
-		case code == "invalid_client":
-			return refreshError(pluginv1.RefreshResult_ERROR_TYPE_AUTH_REJECTED, "OAuth client refused (invalid_client): configuration error; authorize the account again / 客户端配置错误，请重新授权: "+msg), nil
-		case st == http.StatusUnauthorized:
-			return refreshError(pluginv1.RefreshResult_ERROR_TYPE_AUTH_REJECTED, "refresh token refused; authorize the account again / 刷新令牌被拒绝，需重新授权: "+msg), nil
-		}
-		return refreshError(pluginv1.RefreshResult_ERROR_TYPE_TRANSIENT, msg), nil
+		return refreshFailure(st, in.GetBody()), nil
 	}
 	var tr tokenResponse
 	if err := json.Unmarshal(in.GetBody(), &tr); err != nil {
@@ -127,29 +129,33 @@ func (p *Plugin) ParseRefreshResponse(_ context.Context, in *pluginv1.ParseRefre
 	return &pluginv1.RefreshResult{CredentialsPatchJson: string(b)}, nil
 }
 
+// refreshFailure is the result of a refusal of the token endpoint.
+func refreshFailure(st int32, body []byte) *pluginv1.RefreshResult {
+	code := oauthErrorCode(body)
+	msg := fmt.Sprintf("token endpoint status %d / 令牌端点返回状态 %d: %s", st, st, textutil.Clip(string(body), 300))
+	if refreshPermanent(st, code) {
+		return refreshError(pluginv1.RefreshResult_ERROR_TYPE_AUTH_REJECTED, "refresh token refused ("+code+"); authorize the account again / 刷新令牌被拒绝，需重新授权: "+msg)
+	}
+	return refreshError(pluginv1.RefreshResult_ERROR_TYPE_TRANSIENT, msg)
+}
+
 func refreshError(t pluginv1.RefreshResult_ErrorType, msg string) *pluginv1.RefreshResult {
 	return &pluginv1.RefreshResult{ErrorType: t, ErrorMessage: textutil.Clip(msg, 500)}
 }
 
-// oauthErrorCode reads the error code of a token endpoint answer: the OAuth
-// {"error":"invalid_grant"} form, OpenAI's {"error":{"code"|"type"}} form,
-// or a top-level code / error_code. Empty when there is none.
+// oauthErrorCode reads the error code of a token endpoint answer where the
+// Codex CLI reads it (codex-rs login/src/oauth/error.rs): the OAuth
+// {"error":"invalid_grant"} form, then {"error":{"code"}}, then a top-level
+// code. Empty when there is none.
 func oauthErrorCode(body []byte) string {
 	if len(body) == 0 || !gjson.ValidBytes(body) {
 		return ""
 	}
-	e := gjson.GetBytes(body, "error")
-	if e.Type == gjson.String {
-		return strings.TrimSpace(e.String())
-	}
-	for _, r := range []gjson.Result{e.Get("code"), e.Get("type"), gjson.GetBytes(body, "code"), gjson.GetBytes(body, "error_code")} {
-		if s := strings.TrimSpace(r.String()); s != "" && (terminalRefreshCodes[s] || s == "invalid_client") {
-			return s
-		}
-	}
-	for _, r := range []gjson.Result{e.Get("code"), gjson.GetBytes(body, "code"), gjson.GetBytes(body, "error_code"), e.Get("type")} {
-		if s := strings.TrimSpace(r.String()); s != "" {
-			return s
+	for _, path := range []string{"error", "error.code", "code"} {
+		if r := gjson.GetBytes(body, path); r.Type == gjson.String {
+			if s := strings.TrimSpace(r.Str); s != "" {
+				return s
+			}
 		}
 	}
 	return ""

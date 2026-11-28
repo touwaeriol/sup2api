@@ -16,3 +16,12 @@ func TestProviderHeadersExcludeSecretsAndHopHeaders(t *testing.T) {
 		t.Fatal("aliased source")
 	}
 }
+
+// The Codex backend's turn state routing token reaches the client, which
+// replays it on the turn's later requests.
+func TestProviderHeadersRelayCodexTurnState(t *testing.T) {
+	out := ProviderHeaders(http.Header{"X-Codex-Turn-State": []string{"ts-1"}, "X-Codex-Other": []string{"x"}})
+	if out.Get("X-Codex-Turn-State") != "ts-1" || len(out) != 1 {
+		t.Fatal("turn state not relayed alone", out)
+	}
+}

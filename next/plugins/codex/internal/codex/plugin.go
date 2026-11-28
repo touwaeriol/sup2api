@@ -12,8 +12,9 @@
 // Requests identify themselves by default truthfully: originator "sup2api"
 // and User-Agent "sup2api-codex/<version>"; the operator may set others per
 // account or in the plugin settings (agent.go). The plugin does not imitate
-// the Codex CLI (no x-codex-* headers or TLS fingerprint) and does not add
-// the Codex system prompt.
+// the Codex CLI (no x-codex-* headers of its own, no TLS fingerprint) and
+// does not add the Codex system prompt; the protocol itself (logins, refresh,
+// session headers, the turn state routing token) follows the Codex CLI.
 package codex
 
 import (
@@ -31,7 +32,7 @@ import (
 const (
 	// Version is the plugin version (manifest.json "version"); it is part of
 	// the User-Agent every request sends.
-	Version = "0.2.3"
+	Version = "0.2.4"
 	// UserAgent and Originator name sup2api as the client, truthfully: the
 	// built-in values of the client headers (agent.go).
 	UserAgent  = "sup2api-codex/" + Version
@@ -54,12 +55,11 @@ const (
 	// CodexClientID is the Codex CLI's public OAuth client (both logins and
 	// the refresh).
 	CodexClientID = "app_EMoamEEZ73f0CkXaXp7hrann"
-	// RefreshScope is the scope of a refresh.
-	RefreshScope = "openid profile email"
-	// CodexRedirectURI and CodexScope are Sign in with Codex's: the redirect
-	// registered for the Codex client and the scope the Codex CLI asks for.
-	CodexRedirectURI = "http://localhost:1455/auth/callback"
-	CodexScope       = "openid profile email offline_access"
+	// CodexRedirectURI and CodexScope are Sign in with Codex's, as the Codex
+	// CLI's browser login sends them (codex-rs login/src/server.rs): the
+	// local callback on its default port and the scope it asks for.
+	CodexRedirectURI = "http://127.0.0.1:1455/auth/callback"
+	CodexScope       = "openid profile email offline_access api.connectors.read api.connectors.invoke"
 
 	// WebSocketBeta opts the upstream connection into the Responses
 	// WebSocket mode.

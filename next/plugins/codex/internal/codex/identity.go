@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"cmp"
 	"encoding/base64"
 	"encoding/json"
 	"strings"
@@ -11,10 +12,15 @@ type identity struct {
 	Email     string
 	AccountID string // chatgpt_account_id
 	PlanType  string // chatgpt_plan_type
+	FedRAMP   bool   // chatgpt_account_is_fedramp
 }
 
-// authClaim is the OpenAI-specific claim object of OpenAI's tokens.
-const authClaim = "https://api.openai.com/auth"
+// authClaim and profileClaim are the OpenAI-specific claim objects of
+// OpenAI's tokens: the ChatGPT account and the user's profile.
+const (
+	authClaim    = "https://api.openai.com/auth"
+	profileClaim = "https://api.openai.com/profile"
+)
 
 // jwtClaims decodes the payload of a JWT WITHOUT verifying its signature.
 //
@@ -54,30 +60,38 @@ func jwtClaims(token string) map[string]any {
 	return claims
 }
 
-// parseIdentity reads email (top level), chatgpt_account_id and
-// chatgpt_plan_type (in the https://api.openai.com/auth claim) from the
-// id_token, falling back to the access token, which carries the same auth
-// claim. Missing values stay empty.
+// parseIdentity reads the identity as the Codex CLI reads it
+// (codex-rs login/src/token_data.rs): email at the top level, else in the
+// profile claim; chatgpt_account_id, chatgpt_plan_type and
+// chatgpt_account_is_fedramp in the auth claim. The id_token comes first,
+// the access token (which carries the same claims) fills what it lacks.
+// Missing values stay empty.
 func parseIdentity(idToken, accessToken string) identity {
 	var id identity
 	for _, tok := range []string{idToken, accessToken} {
-		c := jwtClaims(tok)
-		if c == nil {
-			continue
-		}
-		if id.Email == "" {
-			id.Email, _ = c["email"].(string)
-		}
-		if auth, ok := c[authClaim].(map[string]any); ok {
-			if id.AccountID == "" {
-				id.AccountID, _ = auth["chatgpt_account_id"].(string)
-			}
-			if id.PlanType == "" {
-				id.PlanType, _ = auth["chatgpt_plan_type"].(string)
-			}
+		if c := jwtClaims(tok); c != nil {
+			id.fill(c)
 		}
 	}
 	return id
+}
+
+// fill sets the fields of id still empty from the claims c of one token.
+func (id *identity) fill(c map[string]any) {
+	profile, _ := c[profileClaim].(map[string]any)
+	auth, _ := c[authClaim].(map[string]any)
+	id.Email = cmp.Or(id.Email, claimString(c, "email"), claimString(profile, "email"))
+	id.AccountID = cmp.Or(id.AccountID, claimString(auth, "chatgpt_account_id"))
+	id.PlanType = cmp.Or(id.PlanType, claimString(auth, "chatgpt_plan_type"))
+	fedramp, _ := auth["chatgpt_account_is_fedramp"].(bool)
+	id.FedRAMP = id.FedRAMP || fedramp
+}
+
+// claimString is the string claim key of c, "" when c or the claim is
+// missing or not a string.
+func claimString(c map[string]any, key string) string {
+	s, _ := c[key].(string)
+	return s
 }
 
 // tokenExpiry returns the exp claim of a JWT access token, 0 when it has none.

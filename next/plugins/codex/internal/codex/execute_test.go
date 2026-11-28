@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
-	"slices"
 	"strings"
 	"testing"
 
@@ -23,9 +22,10 @@ import (
 	"github.com/Sub2API-Devs/sup2api/next/sdk/pluginsdk/pluginsdktest"
 )
 
-// The client's own headers never reach the upstream: the plugin sends the
-// account's client headers (agent.go) and nothing of the client's.
-var clientHeaders = map[string]string{"user-agent": "codex_cli_rs/0.99", "openai-beta": "responses=experimental", "x-stainless-lang": "js", "session_id": "client-session"}
+// clientHeaders are the client headers the core hands over: only the ones
+// of the manifest's passHeaders, the Codex backend's turn state. They go on
+// as default headers; every other header is the plugin's own.
+var clientHeaders = map[string]string{"x-codex-turn-state": "turn-1"}
 
 // userHello is userMessage("hello") as it goes upstream.
 const userHello = `[{"content":[{"text":"hello","type":"input_text"}],"role":"user","type":"message"}]`
@@ -50,7 +50,9 @@ func executeCases() []executeCase {
 				`{"type":"response.create","model":"gpt-5.4","input":[{"role":"system","content":"s"}],"stream_options":{"include_usage":true}}`)},
 		)
 	}
-	return out
+	fedramp := execRequest(TypeDevice, ProtocolResponses, `{"model":"gpt-5.4","stream":true,"input":"hello"}`)
+	fedramp.Account = account(TypeDevice, `{"access_token":"`+fakeJWT(map[string]any{authClaim: map[string]any{"chatgpt_account_is_fedramp": true}})+`"}`)
+	return append(out, executeCase{"codex_device/http fedramp", fedramp})
 }
 
 // keptAbove is why each non-credential header is authoritative.
@@ -68,8 +70,10 @@ var authoritativeHeaders = map[string]string{
 	"accept":             keptAbove,
 	"content-type":       keptAbove,
 	"openai-beta":        keptAbove,
-	"session_id":         keptAbove,
-	"conversation_id":    keptAbove,
+	"session-id":          keptAbove + "; the upstream session (upstreamSession)",
+	"thread-id":           keptAbove + "; the upstream session (upstreamSession)",
+	"x-client-request-id": keptAbove + "; the upstream session (upstreamSession)",
+	"x-openai-fedramp":    keptAbove + "; a FedRAMP account's marker",
 }
 
 // execRequest is a request of an account of type typ as the core hands it
@@ -128,15 +132,12 @@ func TestExecuteCases(t *testing.T) {
 		if tc.in.GetMeta().GetStream() && !gjson.GetBytes(body, "stream").Bool() {
 			t.Errorf("%s: the stream flag was lost: %s", tc.name, body)
 		}
-		if len(r.GetDefaultHeaders()) != 0 {
-			t.Errorf("%s: default headers %v; every header stays above the operator's settings", tc.name, r.GetDefaultHeaders())
+		if !maps.Equal(r.GetDefaultHeaders(), clientHeaders) {
+			t.Errorf("%s: default headers %v; only the passed client headers are", tc.name, r.GetDefaultHeaders())
 		}
-		for name, value := range r.GetHeaders() {
+		for name := range r.GetHeaders() {
 			if _, ok := authoritativeHeaders[name]; !ok {
 				t.Errorf("%s: %s is authoritative without a reason", tc.name, name)
-			}
-			if slices.Contains(slices.Collect(maps.Values(clientHeaders)), value) {
-				t.Errorf("%s: client header value forwarded as %s", tc.name, name)
 			}
 		}
 		// Deterministic, and every attempt is built again from what it is
@@ -172,7 +173,7 @@ func TestExecuteHTTP(t *testing.T) {
 		"accept":             "text/event-stream",
 		"content-type":       "application/json",
 	}
-	if !maps.Equal(r.GetHeaders(), wantAuth) || len(r.GetDefaultHeaders()) != 0 {
+	if !maps.Equal(r.GetHeaders(), wantAuth) || !maps.Equal(r.GetDefaultHeaders(), clientHeaders) {
 		t.Fatalf("headers = %v defaults = %v", r.GetHeaders(), r.GetDefaultHeaders())
 	}
 	// The edits land in place; every other byte is the client's.
@@ -250,10 +251,10 @@ func TestExecuteWebSocket(t *testing.T) {
 			r := relayed(t, h, execRequest(typ, ProtocolResponsesWS, turn))
 			wantHeaders := map[string]string{
 				"authorization": "Bearer at-device", "chatgpt-account-id": "acct-1", "originator": Originator, "user-agent": UserAgent,
-				"openai-beta": WebSocketBeta, "session_id": session, "conversation_id": session,
+				"openai-beta": WebSocketBeta, "session-id": session, "thread-id": session, "x-client-request-id": session,
 			}
 			if r.GetMethod() != http.MethodGet || r.GetUrl() != "wss://chatgpt.com/backend-api/codex/responses" ||
-				!maps.Equal(r.GetHeaders(), wantHeaders) || len(r.GetDefaultHeaders()) != 0 || r.GetResponseStream() != "" {
+				!maps.Equal(r.GetHeaders(), wantHeaders) || !maps.Equal(r.GetDefaultHeaders(), clientHeaders) || r.GetResponseStream() != "" {
 				t.Fatalf("%s turn %d handshake = %s %s %v %v", typ, i, r.GetMethod(), r.GetUrl(), r.GetHeaders(), r.GetDefaultHeaders())
 			}
 			if string(r.GetBody()) != want[i] {
@@ -278,27 +279,27 @@ func TestExecuteSession(t *testing.T) {
 		in := execRequest(TypeDevice, protocol, body)
 		in.Meta.ApiKeyId = apiKeyID
 		r := relayed(t, h, in)
-		if _, ok := r.GetDefaultHeaders()["session_id"]; ok {
+		if _, ok := r.GetDefaultHeaders()["session-id"]; ok {
 			t.Fatalf("session is a default header: %v", r.GetDefaultHeaders())
 		}
 		return r.GetHeaders()
 	}
 	conv := `{"model":"gpt-5.4","prompt_cache_key":"conv-1"}`
 	first := build(ProtocolResponses, 7, conv)
-	id := first["session_id"]
-	if len(id) != 36 || id[14] != '8' || first["conversation_id"] != id || strings.Contains(id, "conv-1") || id == "client-session" {
+	id := first["session-id"]
+	if len(id) != 36 || id[14] != '8' || first["thread-id"] != id || first["x-client-request-id"] != id || strings.Contains(id, "conv-1") {
 		t.Fatalf("session headers = %v", first)
 	}
-	if again := build(ProtocolResponses, 7, conv); again["session_id"] != id {
-		t.Fatalf("same conversation, other session: %q vs %q", again["session_id"], id)
+	if again := build(ProtocolResponses, 7, conv); again["session-id"] != id {
+		t.Fatalf("same conversation, other session: %q vs %q", again["session-id"], id)
 	}
-	if ws := build(ProtocolResponsesWS, 7, conv); ws["session_id"] != id || ws["conversation_id"] != id {
+	if ws := build(ProtocolResponsesWS, 7, conv); ws["session-id"] != id || ws["thread-id"] != id {
 		t.Fatalf("ws session headers = %v, want %q", ws, id)
 	}
-	if other := build(ProtocolResponses, 8, conv); other["session_id"] == id {
+	if other := build(ProtocolResponses, 8, conv); other["session-id"] == id {
 		t.Fatal("two API keys share an upstream session")
 	}
-	if next := build(ProtocolResponses, 7, `{"prompt_cache_key":"conv-2"}`); next["session_id"] == id {
+	if next := build(ProtocolResponses, 7, `{"prompt_cache_key":"conv-2"}`); next["session-id"] == id {
 		t.Fatal("two conversations share an upstream session")
 	}
 	// The account id salts the session: another account gets another one,
@@ -306,7 +307,7 @@ func TestExecuteSession(t *testing.T) {
 	in := execRequest(TypeDevice, ProtocolResponses, conv)
 	in.Account.Id = 8
 	r := relayed(t, h, in)
-	if other := r.GetHeaders()["session_id"]; other == id || other != upstreamSessionID(8, 7, "conv-1") || id != upstreamSessionID(7, 7, "conv-1") {
+	if other := r.GetHeaders()["session-id"]; other == id || other != upstreamSessionID(8, 7, "conv-1") || id != upstreamSessionID(7, 7, "conv-1") {
 		t.Fatalf("account 8 session %q, account 7 %q", other, id)
 	}
 	// The formula, computed here: SHA-256 of "<account id>:<api key id>:<key>",
@@ -334,11 +335,10 @@ func TestExecuteSession(t *testing.T) {
 	}
 	for _, body := range []string{`{}`, `{"prompt_cache_key":""}`, `{"prompt_cache_key":123}`} {
 		hd := build(ProtocolResponses, 7, body)
-		if _, ok := hd["session_id"]; ok {
-			t.Errorf("%s: session sent: %v", body, hd)
-		}
-		if _, ok := hd["conversation_id"]; ok {
-			t.Errorf("%s: conversation sent: %v", body, hd)
+		for _, name := range sessionHeaders {
+			if _, ok := hd[name]; ok {
+				t.Errorf("%s: %s sent: %v", body, name, hd)
+			}
 		}
 	}
 }
