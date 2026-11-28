@@ -121,6 +121,13 @@ func (u *wsUpstream) handle(w http.ResponseWriter, r *http.Request) {
 		case "hold":
 			send(map[string]any{"type": "response.created", "response": map[string]any{"id": id, "model": model}})
 			<-hold
+		case "connection-limit": // the 60-minute limit: an error event, then the connection ends
+			send(connectionLimitEvent)
+			_ = conn.Close(websocket.StatusNormalClosure, "")
+			return
+		case "rate-limits": // a usage event ahead of the answer
+			send(rateLimitsEvent)
+			fallthrough
 		default:
 			send(map[string]any{"type": "response.created", "response": map[string]any{"id": id, "model": model}})
 		}
@@ -480,14 +487,6 @@ func TestWebSocketUpstreamEventsDecideTheTurn(t *testing.T) {
 	c.until("response.completed")
 	if r := e.record(); !r.Success {
 		t.Fatalf("turn after errors: %+v", r)
-	}
-	// The upstream connection dropping ends the session.
-	c.send(create(wsModel, "drop"))
-	if code := c.closed(); code != websocket.StatusInternalError {
-		t.Fatalf("close after upstream drop: %d", code)
-	}
-	if r := e.record(); r.Success || r.ErrorType != errTypeUpstream {
-		t.Fatalf("dropped turn: %+v", r)
 	}
 }
 

@@ -414,11 +414,13 @@ type AccountRefresh struct {
 
 // AccountQuota is how the host learns the subscription quota of an account
 // type (CONTRACTS §44). Headers are read from the gateway's own upstream
-// responses (success and 429) at no extra upstream cost; Query says the
-// plugin also implements BuildQuotaRequest / ParseQuotaResponse, which the
-// host calls when its snapshot is stale. At least one of the two is required.
+// responses (success and 429) at no extra upstream cost, Events from the
+// messages of its upstream WebSocket sessions; Query says the plugin also
+// implements BuildQuotaRequest / ParseQuotaResponse, which the host calls
+// when its snapshot is stale. At least one of the three is required.
 type AccountQuota struct {
 	Headers     []QuotaHeader           `json:"headers,omitempty"`
+	Events      []QuotaEvent            `json:"events,omitempty"`
 	Query       bool                    `json:"query,omitempty"`
 	AutoRefresh bool                    `json:"autoRefresh,omitempty"`
 	Windows     []QuotaWindowDefinition `json:"windows,omitempty"`
@@ -488,7 +490,7 @@ const (
 
 // Supported reports whether the declaration tracks anything.
 func (q *AccountQuota) Supported() bool {
-	return q != nil && (len(q.Headers) > 0 || q.Query)
+	return q != nil && (len(q.Headers) > 0 || len(q.Events) > 0 || q.Query)
 }
 
 // AccountDefaultLimits are the suggested scheduling and limits of a new

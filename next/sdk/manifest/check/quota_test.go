@@ -93,6 +93,62 @@ func TestAccountTypeQuota(t *testing.T) {
 	}
 }
 
+// Quota events of an account type (CONTRACTS §142).
+func TestAccountTypeQuotaEvents(t *testing.T) {
+	m := minimal()
+	m.Capabilities = []manifest.Capability{{ID: manifest.CapPlatformAdapter}}
+	m.HostPermissions = []manifest.HostPermission{
+		{ID: "gateway.endpoint"}, {ID: "platform.register"},
+	}
+	m.Platforms = []manifest.Platform{validPlatform()}
+	window := manifest.QuotaEventWindow{WindowMinutes: "rate_limits.primary.window_minutes",
+		Utilization: "rate_limits.primary.used_percent", UtilizationUnit: "percent", Reset: "rate_limits.primary.reset_at"}
+	m.AccountTypes = []manifest.AccountType{{
+		ID: "oauth", Label: manifest.LocalizedText{"en": "OAuth"},
+		Form:           keyForm(m),
+		UpstreamFields: []string{},
+		Platforms:      []manifest.AccountPlatform{{Platform: "video"}},
+		Quota:          &manifest.AccountQuota{Events: []manifest.QuotaEvent{{Type: "codex.rate_limits", Windows: []manifest.QuotaEventWindow{window}}}},
+	}}
+	files := map[string][]byte{}
+	if err := Validate(m, files, ValidateOptions{Tooling: true}); err != nil {
+		t.Fatalf("events-only quota rejected: %v", codes(err))
+	}
+	m.AccountTypes[0].Quota = &manifest.AccountQuota{Events: []manifest.QuotaEvent{
+		{Type: "", Windows: []manifest.QuotaEventWindow{window}},
+		{Type: "bad type", Windows: []manifest.QuotaEventWindow{
+			{Utilization: "a..b", UtilizationUnit: "fraction"},
+			{WindowMinutes: "w", Reset: "r", UtilizationUnit: "ratio"},
+			{WindowMinutes: "w"},
+		}},
+		{Type: "x.limits"},
+		{Type: "x.limits", Windows: []manifest.QuotaEventWindow{window}},
+	}}
+	got := codes(Validate(m, files, ValidateOptions{Tooling: true}))
+	for f, c := range map[string]string{
+		"accountTypes[0].quota.events[0].type":                       "required",
+		"accountTypes[0].quota.events[1].type":                       "invalid_format",
+		"accountTypes[0].quota.events[1].windows[0].windowMinutes":   "required",
+		"accountTypes[0].quota.events[1].windows[0].utilization":     "invalid_path",
+		"accountTypes[0].quota.events[1].windows[0].utilizationUnit": "invalid",
+		"accountTypes[0].quota.events[1].windows[1].utilizationUnit": "unexpected",
+		"accountTypes[0].quota.events[1].windows[2]":                 "required",
+		"accountTypes[0].quota.events[2].windows":                    "required",
+		"accountTypes[0].quota.events[3].type":                       "duplicate",
+	} {
+		if got[f] != c {
+			t.Errorf("%s = %q, want %q (all: %v)", f, got[f], c, got)
+		}
+	}
+	m.AccountTypes[0].Quota = &manifest.AccountQuota{Events: make([]manifest.QuotaEvent, manifest.MaxQuotaHeaders+1)}
+	for i := range m.AccountTypes[0].Quota.Events {
+		m.AccountTypes[0].Quota.Events[i] = manifest.QuotaEvent{Type: "e" + string(rune('a'+i)), Windows: []manifest.QuotaEventWindow{window}}
+	}
+	if got := codes(Validate(m, files, ValidateOptions{Tooling: true})); got["accountTypes[0].quota.events"] != "too_many" {
+		t.Fatalf("too many: codes = %v", got)
+	}
+}
+
 // Credential refresh declarations of an account type (CONTRACTS §48).
 func TestAccountTypeRefresh(t *testing.T) {
 	m := minimal()

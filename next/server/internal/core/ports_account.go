@@ -393,6 +393,12 @@ type AccountDirectory interface {
 // type declaring manifest quota.headers, with that declaration. It must not
 // block: implementations parse the few declared headers and hand the result
 // to an asynchronous, throttled writer.
+//
+// ObserveQuotaEvent is the same for an upstream WebSocket message whose type
+// the account type declares in quota.events (CONTRACTS §142): its windows
+// are read from the message and go to the same writer under the same window
+// names.
 type QuotaObserver interface {
 	ObserveQuotaHeaders(accountID int64, headers []manifest.QuotaHeader, status int, h http.Header)
+	ObserveQuotaEvent(accountID int64, event manifest.QuotaEvent, msg []byte)
 }

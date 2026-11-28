@@ -17,11 +17,22 @@ type quotaCall struct {
 type fakeQuotaObserver struct {
 	calls   []quotaCall
 	headers []http.Header
+	events  []quotaEventCall
+}
+
+type quotaEventCall struct {
+	id  int64
+	typ string
+	msg string
 }
 
 func (f *fakeQuotaObserver) ObserveQuotaHeaders(id int64, h []manifest.QuotaHeader, status int, header http.Header) {
 	f.calls = append(f.calls, quotaCall{id, len(h), status})
 	f.headers = append(f.headers, header)
+}
+
+func (f *fakeQuotaObserver) ObserveQuotaEvent(id int64, ev manifest.QuotaEvent, msg []byte) {
+	f.events = append(f.events, quotaEventCall{id, ev.Type, string(msg)})
 }
 
 // Upstream responses of account types declaring quota headers reach the

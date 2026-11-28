@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -25,8 +26,9 @@ import (
 
 // WebSocket endpoints (manifest kind "websocket", CONTRACTS §35,
 // docs/OPENAI-RESPONSES-WEBSOCKET.md). The client upgrades once; every
-// message carrying a model at request.modelPath is a turn, served on the one
-// upstream WebSocket and account the first turn chose, metered with the
+// message carrying a model at request.modelPath is a turn, served on the
+// upstream WebSocket and account the first turn chose (a turn after that
+// connection ended opens a new one, websocket_reconnect.go), metered with the
 // usage.sse rules (matched by the message "type") and recorded and billed on
 // its own, exactly like a streaming HTTP request.
 //
@@ -39,9 +41,10 @@ import (
 
 // wsLimits are the session limits. They are fields only so tests can
 // shorten them. A session has no idle timeout: it stays open, on its account
-// and upstream connection, until the client disconnects (or the node drains,
-// the upstream closes or a ping goes unanswered); keepalive pings on both
-// connections keep proxies from dropping it and find dead peers.
+// and upstream connection, until the client disconnects (or the node drains
+// or a ping to the client goes unanswered; an upstream connection ending only
+// ends that connection); keepalive pings on both connections keep proxies
+// from dropping it and find dead peers.
 type wsLimits struct {
 	ping        time.Duration // keepalive ping interval on both connections; 0 = none
 	pingTimeout time.Duration // a ping unanswered this long closes that connection
@@ -137,6 +140,7 @@ type wsSession struct {
 	routes          map[core.AccountTypeKey]*typeRoute
 	session         string
 	upIn            chan wsMessage
+	upEnded         *atomic.Bool // set as soon as reading up fails
 	quotaGeneration int64
 	// opening is the first turn's message as the plugin relayed it with the
 	// handshake; that turn sends it, later turns ask the plugin again.
@@ -230,23 +234,17 @@ func (s *wsSession) run(ctx context.Context) {
 				end(code, truncateUTF8(e.Message, 120))
 				return
 			}
-			var fatal bool
-			if turn, fatal = s.begin(sctx, m); fatal {
-				end(websocket.StatusInternalError, "upstream connection failed; reconnect")
-				return
-			}
-			if turn != nil {
+			if turn = s.begin(sctx, m); turn != nil {
 				upstreamIdle.Reset(turn.cl.streamIdle())
 			}
 		case m := <-upIn:
 			if m.err != nil {
-				if turn != nil {
-					s.finish(sctx, turn, wsOutcome{status: http.StatusBadGateway, errType: errTypeUpstream,
-						msg: "upstream connection closed: " + truncateUTF8(m.err.Error(), 300)})
-				}
-				end(websocket.StatusInternalError, "upstream connection closed; reconnect")
-				return
+				s.upstreamLost(sctx, turn, m.err)
+				turn = nil
+				upstreamIdle.Stop()
+				continue
 			}
+			s.g.observeQuotaEvent(s.rt, s.acc.ID, m.data)
 			if err := s.write(sctx, m.typ, m.data); err != nil {
 				if turn != nil {
 					s.finish(sctx, turn, wsOutcome{status: statusClientClosed, errType: errTypeClientCanceled, msg: "client canceled"})
@@ -319,9 +317,9 @@ func (s *wsSession) read(ctx context.Context, conn *websocket.Conn, ch chan<- ws
 // goroutine of its own: a session loop blocked writing to a peer that stopped
 // reading does not answer for that peer. A ping that fails, or is not written
 // and answered within pingTimeout, closes c; its reader and any write to it
-// then report the error and the session ends the way it does for a
-// disconnect. A ping waits for the message being written, so pingTimeout is
-// also how long a peer may take to read the rest of one message.
+// then report the error, as for a disconnect. A ping waits for the message
+// being written, so pingTimeout is also how long a peer may take to read the
+// rest of one message.
 func (s *wsSession) heartbeat(ctx context.Context, c *websocket.Conn) {
 	if s.g.ws.ping <= 0 {
 		return
@@ -453,16 +451,16 @@ func wsMessageError(data []byte) *gwError {
 }
 
 // begin starts a turn for a message wsMessageError accepted, or answers why
-// it cannot run and records that.
-// fatal means the upstream connection broke and the session must end.
-func (s *wsSession) begin(ctx context.Context, m wsMessage) (_ *wsTurn, fatal bool) {
-	reject := func(cl *call, e *gwError) (*wsTurn, bool) {
+// it cannot run and records that. An upstream connection that cannot take
+// the turn's message is dropped; the next turn connects again.
+func (s *wsSession) begin(ctx context.Context, m wsMessage) *wsTurn {
+	reject := func(cl *call, e *gwError) *wsTurn {
 		if cl != nil {
 			cl.fail(e)
 			cl.submit()
 		}
 		s.sendError(ctx, e)
-		return nil, false
+		return nil
 	}
 	cl := s.newCall(m.data)
 	if e := cl.checkModel(ctx); e != nil {
@@ -502,7 +500,7 @@ func (s *wsSession) begin(ctx context.Context, m wsMessage) (_ *wsTurn, fatal bo
 		return reject(cl, e)
 	}
 	var e *gwError
-	opensUpstream := s.up == nil // this turn opens the upstream connection
+	opensUpstream := !s.upstreamOpen() // this turn opens the upstream connection
 	if opensUpstream {
 		releaseAccount, e = s.connect(ctx, cl)
 	} else {
@@ -541,10 +539,11 @@ func (s *wsSession) begin(ctx context.Context, m wsMessage) (_ *wsTurn, fatal bo
 	if err != nil {
 		s.finish(ctx, t, wsOutcome{status: http.StatusBadGateway, errType: errTypeUpstream, msg: "upstream write failed: " + err.Error()})
 		s.sendError(ctx, &gwError{Status: http.StatusBadGateway, Code: codeUpstreamError, Message: "upstream connection failed"})
-		return nil, true
+		s.dropUpstream()
+		return nil
 	}
 	handedOff = true
-	return t, false
+	return t
 }
 
 // connect is the first turn: schedule like an HTTP request (candidates,
@@ -711,9 +710,7 @@ func (s *wsSession) dial(ctx context.Context, cl *call, ref *core.AccountRef) at
 	up.SetReadLimit(-1) // an upstream message of any size (the library's default is 32 KiB)
 	s.up, s.acc, s.rt, s.pacct = up, acc, rt, pacct
 	s.opening = req.GetBody()
-	s.upIn = make(chan wsMessage, 1)
-	go s.read(ctx, up, s.upIn, func() {})
-	go s.heartbeat(ctx, up)
+	s.watchUpstream(ctx, up)
 	return attemptResult{kind: attemptDone}
 }
 

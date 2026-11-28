@@ -16,7 +16,7 @@ var (
 )
 
 // quota validates accountTypes[].quota (CONTRACTS §44): at least one header
-// window or query, distinct well-formed window keys (or a window length
+// window, event or query, distinct well-formed window keys (or a window length
 // header instead of a key), every window naming at least one header, valid
 // header names and known units and formats.
 func (v *validator) quota(f string, q *manifest.AccountQuota) {
@@ -27,21 +27,31 @@ func (v *validator) quota(f string, q *manifest.AccountQuota) {
 	if q.AutoRefresh && !q.Query {
 		v.add(f+".autoRefresh", "required", "autoRefresh requires query")
 	}
-	if len(q.Windows) > manifest.MaxQuotaHeaders {
+	v.quotaWindowDefinitions(f, q.Windows)
+	if !q.Supported() {
+		v.add(f, "required", "quota must declare headers, events or query")
+		return
+	}
+	v.quotaEvents(f, q.Events)
+	if len(q.Headers) > manifest.MaxQuotaHeaders {
+		v.add(f+".headers", "too_many", "at most %d quota windows", manifest.MaxQuotaHeaders)
+	}
+	keys := map[string]bool{}
+	for i, h := range q.Headers {
+		v.quotaHeader(fmt.Sprintf("%s.headers[%d]", f, i), h, keys)
+	}
+}
+
+// quotaWindowDefinitions validates quota.windows: distinct well-formed keys,
+// each with an English label.
+func (v *validator) quotaWindowDefinitions(f string, windows []manifest.QuotaWindowDefinition) {
+	if len(windows) > manifest.MaxQuotaHeaders {
 		v.add(f+".windows", "too_many", "at most %d quota windows", manifest.MaxQuotaHeaders)
 	}
 	definitions := map[string]bool{}
-	for i, w := range q.Windows {
+	for i, w := range windows {
 		wf := fmt.Sprintf("%s.windows[%d]", f, i)
-		switch {
-		case w.Key == "":
-			v.add(wf+".key", "required", "key is required")
-		case !quotaKeyRe.MatchString(w.Key):
-			v.add(wf+".key", "invalid_format", "key %q must match %s", w.Key, quotaKeyRe.String())
-		case definitions[w.Key]:
-			v.add(wf+".key", "duplicate", "window %q declared twice", w.Key)
-		}
-		definitions[w.Key] = true
+		v.quotaKey(wf+".key", w.Key, definitions)
 		if strings.TrimSpace(w.Label["en"]) == "" {
 			v.add(wf+".label", "required", "label.en is required")
 		}
@@ -49,56 +59,59 @@ func (v *validator) quota(f string, q *manifest.AccountQuota) {
 			v.add(wf+".shortLabel", "required", "shortLabel.en is required")
 		}
 	}
-	if !q.Supported() {
-		v.add(f, "required", "quota must declare headers or query")
-		return
+}
+
+// quotaKey validates a window key: present, well formed and not in seen,
+// which it is then added to.
+func (v *validator) quotaKey(f, key string, seen map[string]bool) {
+	switch {
+	case key == "":
+		v.add(f, "required", "key is required")
+	case !quotaKeyRe.MatchString(key):
+		v.add(f, "invalid_format", "key %q must match %s", key, quotaKeyRe.String())
+	case seen[key]:
+		v.add(f, "duplicate", "window %q declared twice", key)
 	}
-	if len(q.Headers) > manifest.MaxQuotaHeaders {
-		v.add(f+".headers", "too_many", "at most %d quota windows", manifest.MaxQuotaHeaders)
+	seen[key] = true
+}
+
+// quotaHeader validates one quota.headers window: a key (distinct across
+// keys) or a window length header, at least one value header, valid header
+// names, a known unit and reset format.
+func (v *validator) quotaHeader(hf string, h manifest.QuotaHeader, keys map[string]bool) {
+	switch {
+	case h.Key != "" && h.WindowMinutes != "":
+		v.add(hf+".windowMinutes", "unexpected", "windowMinutes names the window; leave key out")
+	case h.WindowMinutes != "":
+		// Named by the length header on each response: no key to check.
+	case h.Key == "":
+		v.add(hf+".key", "required", "key or windowMinutes is required")
+	default:
+		v.quotaKey(hf+".key", h.Key, keys)
 	}
-	keys := map[string]bool{}
-	for i, h := range q.Headers {
-		hf := fmt.Sprintf("%s.headers[%d]", f, i)
-		switch {
-		case h.Key != "" && h.WindowMinutes != "":
-			v.add(hf+".windowMinutes", "unexpected", "windowMinutes names the window; leave key out")
-		case h.WindowMinutes != "":
-			// Named by the length header on each response: no key to check.
-		case h.Key == "":
-			v.add(hf+".key", "required", "key or windowMinutes is required")
-		case !quotaKeyRe.MatchString(h.Key):
-			v.add(hf+".key", "invalid_format", "key %q must match %s", h.Key, quotaKeyRe.String())
-		case keys[h.Key]:
-			v.add(hf+".key", "duplicate", "window %q declared twice", h.Key)
+	if h.Utilization == "" && h.Reset == "" && h.Status == "" {
+		v.add(hf, "required", "at least one of utilization, reset and status is required")
+	}
+	for name, value := range map[string]string{"utilization": h.Utilization, "reset": h.Reset, "status": h.Status, "windowMinutes": h.WindowMinutes} {
+		if value != "" && !headerNameRe.MatchString(value) {
+			v.add(hf+"."+name, "invalid_format", "%q is not an HTTP header name", value)
 		}
-		if h.Key != "" {
-			keys[h.Key] = true
+	}
+	v.quotaUnit(hf, h.UtilizationUnit, h.Utilization)
+	v.quotaResetFormat(hf, h.ResetFormat, h.Reset)
+}
+
+// quotaResetFormat validates a resetFormat: a known format, and only beside
+// a reset.
+func (v *validator) quotaResetFormat(f, format, reset string) {
+	switch format {
+	case "", manifest.QuotaResetUnix, manifest.QuotaResetRFC3339, manifest.QuotaResetDelta:
+		if format != "" && reset == "" {
+			v.add(f+".resetFormat", "unexpected", "resetFormat needs reset")
 		}
-		if h.Utilization == "" && h.Reset == "" && h.Status == "" {
-			v.add(hf, "required", "at least one of utilization, reset and status is required")
-		}
-		for name, value := range map[string]string{"utilization": h.Utilization, "reset": h.Reset, "status": h.Status, "windowMinutes": h.WindowMinutes} {
-			if value != "" && !headerNameRe.MatchString(value) {
-				v.add(hf+"."+name, "invalid_format", "%q is not an HTTP header name", value)
-			}
-		}
-		switch h.UtilizationUnit {
-		case "", manifest.QuotaUnitRatio, manifest.QuotaUnitPercent:
-			if h.UtilizationUnit != "" && h.Utilization == "" {
-				v.add(hf+".utilizationUnit", "unexpected", "utilizationUnit needs utilization")
-			}
-		default:
-			v.add(hf+".utilizationUnit", "invalid", "utilizationUnit must be %q or %q", manifest.QuotaUnitRatio, manifest.QuotaUnitPercent)
-		}
-		switch h.ResetFormat {
-		case "", manifest.QuotaResetUnix, manifest.QuotaResetRFC3339, manifest.QuotaResetDelta:
-			if h.ResetFormat != "" && h.Reset == "" {
-				v.add(hf+".resetFormat", "unexpected", "resetFormat needs reset")
-			}
-		default:
-			v.add(hf+".resetFormat", "invalid", "resetFormat must be %q, %q or %q",
-				manifest.QuotaResetUnix, manifest.QuotaResetRFC3339, manifest.QuotaResetDelta)
-		}
+	default:
+		v.add(f+".resetFormat", "invalid", "resetFormat must be %q, %q or %q",
+			manifest.QuotaResetUnix, manifest.QuotaResetRFC3339, manifest.QuotaResetDelta)
 	}
 }
 

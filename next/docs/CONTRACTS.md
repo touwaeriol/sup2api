@@ -2622,9 +2622,9 @@ SDK 提供 `pluginsdk.TaskNotFound(reason)`、`pluginsdk.PollFailure(reason)` �
 
 **清单。** `Endpoint.Kind` 新增 `websocket`：必须 `GET`、`response.stream` 为 `websocket`、无 `response.nonStream`/`request.stream`/`request.streamPath`/`modelParam`/`modelSource`/`usageSource: plugin`/`task`，模型只从每条消息的 `request.modelPath` 读；`billing: usage` 时需要非空 `usage.sse`，规则按消息 `type` 匹配。新能力 `platform.websocket.v1`（需 `platform.adapter.v1`）表示插件的 `Execute` 能为本平台 WebSocket 协议的每一轮给出 `GET ws(s)://…` 握手和这一轮的消息（§83.6、§112.2）；SDK 在清单声明它时上报该能力。内置 openai 平台新增端点 `GET /v1/responses`，协议 `openai.responses_ws`，用量规则读取 `response.completed`/`response.incomplete`/`response.failed`，粘性规则 `openai-prompt-cache-key` 也匹配该协议。openai 插件 0.3.0 声明该能力，握手带 `OpenAI-Beta: responses_websockets=2026-02-06`（客户端自带版本时保留）。
 
-**会话。** 升级前完成鉴权与连接计数（Redis 并发位 `ws:<key id>`；每个 API Key 的会话数不设上限，转发 V2 收尾起，§112.16；此前集群范围 64 条，第 65 条 429）；排空中的节点不接受新会话。每条能开始一轮的客户端消息（格式检查通过的 `response.create`）在开始之前用握手时的 API Key 与客户端地址重新鉴权一次（与握手同一路径，单次最多 10 s），这一轮按新的 principal 运行（2026-11-12 权限加固 M4）：401/403（密钥被撤销、禁用、过期，用户被禁用，IP 不在白名单）→ 发 `error` 事件并以 **1008** 关闭，客户端不应重连；首轮之后密钥换了分组 → 409 `api_key_group_changed` 并以 **1012** 关闭，客户端应重连；其他鉴权错误（存储暂不可用、超时）只让这一轮失败，会话保留。在这一步被拒的轮次不写使用记录；格式不对的消息直接 400，不触发鉴权；进行中的一轮不被打断，空闲会话不定时复检。每条 `response.create` 是一轮：新请求 ID、模型白名单、钩子、价格与余额、API Key 并发位与限速；首轮按 HTTP 规则调度账号并建立上游连接，握手失败交给插件分类并换号（解除会话粘在失败账号上的绑定）；发布了失败策略（§69）时握手失败与 HTTP 尝试一样由策略决定原账号重试、换号和出口约束：协议升级不算已提交的响应（`retryBlocked` 对 WebSocket 不报 `response_committed`，因为只有握手那一轮会经过失败规划），尝试循环同样经 `policyCandidates` 选候选（`dispatch.go` 与 `websocket.go` 共用 `failOver`）；后续轮次复用同一账号与连接，账号并发位或限额最多等 10 s。每轮消息在钩子与模型映射之后交给插件的 `Execute`，插件交回这一轮的最终消息（首轮的那次调用同时给出握手，§83.6）。只路由到声明了 `platform.websocket.v1` 的插件的原生账号类型，不做协议转换。每轮一条使用记录（`protocol=openai.responses_ws`、`stream=true`）与一次结算，轮次结束即释放 API Key 与账号并发位。带 HTTP 状态的上游 `error` 事件交给插件分类以冷却或禁用账号，连接保持。会话不设空闲超时（2026-11-08 起；此前首条消息 30 s 以 1008、轮间空闲 300 s 以 1000 关闭），保持到客户端断开；核心每 30 s 向客户端与上游各发 ping，30 s 无 pong 即关闭该连接；上游断开以 1011 关闭客户端连接。节点排空时空闲会话立即以 1012 关闭，进行中的一轮最多再等 30 s；核心经 `gateway.Deps.Draining` 观察请求闸门，因为 `http.Server.Shutdown` 不跟踪已升级连接。
+**会话。** 升级前完成鉴权与连接计数（Redis 并发位 `ws:<key id>`；每个 API Key 的会话数不设上限，转发 V2 收尾起，§112.16；此前集群范围 64 条，第 65 条 429）；排空中的节点不接受新会话。每条能开始一轮的客户端消息（格式检查通过的 `response.create`）在开始之前用握手时的 API Key 与客户端地址重新鉴权一次（与握手同一路径，单次最多 10 s），这一轮按新的 principal 运行（2026-11-12 权限加固 M4）：401/403（密钥被撤销、禁用、过期，用户被禁用，IP 不在白名单）→ 发 `error` 事件并以 **1008** 关闭，客户端不应重连；首轮之后密钥换了分组 → 409 `api_key_group_changed` 并以 **1012** 关闭，客户端应重连；其他鉴权错误（存储暂不可用、超时）只让这一轮失败，会话保留。在这一步被拒的轮次不写使用记录；格式不对的消息直接 400，不触发鉴权；进行中的一轮不被打断，空闲会话不定时复检。每条 `response.create` 是一轮：新请求 ID、模型白名单、钩子、价格与余额、API Key 并发位与限速；首轮按 HTTP 规则调度账号并建立上游连接，握手失败交给插件分类并换号（解除会话粘在失败账号上的绑定）；发布了失败策略（§69）时握手失败与 HTTP 尝试一样由策略决定原账号重试、换号和出口约束：协议升级不算已提交的响应（`retryBlocked` 对 WebSocket 不报 `response_committed`，因为只有握手那一轮会经过失败规划），尝试循环同样经 `policyCandidates` 选候选（`dispatch.go` 与 `websocket.go` 共用 `failOver`）；后续轮次复用同一账号与连接，账号并发位或限额最多等 10 s。每轮消息在钩子与模型映射之后交给插件的 `Execute`，插件交回这一轮的最终消息（首轮的那次调用同时给出握手，§83.6）。只路由到声明了 `platform.websocket.v1` 的插件的原生账号类型，不做协议转换。每轮一条使用记录（`protocol=openai.responses_ws`、`stream=true`）与一次结算，轮次结束即释放 API Key 与账号并发位。带 HTTP 状态的上游 `error` 事件交给插件分类以冷却或禁用账号，连接保持。会话不设空闲超时（2026-11-08 起；此前首条消息 30 s 以 1008、轮间空闲 300 s 以 1000 关闭），保持到客户端断开；核心每 30 s 向客户端与上游各发 ping，30 s 无 pong 即关闭该连接；上游断开只丢掉上游连接，客户端连接保留，下一轮重新调度、建连（2026-11-28 起，§142；此前以 1011 关闭客户端连接）。节点排空时空闲会话立即以 1012 关闭，进行中的一轮最多再等 30 s；核心经 `gateway.Deps.Draining` 观察请求闸门，因为 `http.Server.Shutdown` 不跟踪已升级连接。
 
-**不在范围。** ChatGPT OAuth/Codex 账号、上游连接池与预热、断线后 `previous_response_id` 恢复和 HTTP 桥接回退未移植；上游断开时由客户端重连。
+**不在范围。** ChatGPT OAuth/Codex 账号、上游连接池与预热、断线后 `previous_response_id` 恢复和 HTTP 桥接回退未移植；上游断开后的下一轮由核心新建上游连接，是否重发由客户端决定（§142）。
 
 ## 36. 插件按节点独立更新，迁移由核心执行一次（2026-10-02）
 
@@ -2960,13 +2960,14 @@ PUT 是补丁语义（省略的字段不变），响应为保存后的完整设�
 | `headers[].windowMinutes` | 携带窗口时长（分钟）的响应头名；给了它就不写 `key`，窗口名按该头的值生成（§105） |
 | `headers[].utilizationUnit` | `ratio`（默认，0–1，乘 100 存储；Anthropic 即此）或 `percent` |
 | `headers[].resetFormat` | `unix`（默认，Unix 秒；大于 1e11 视为毫秒）、`rfc3339`、`delta`（距现在的秒数） |
+| `events[]` | WebSocket 流内用量事件：按消息顶层 `type` 匹配，窗口字段是消息里的 gjson 路径（§142） |
 | `query` | 插件实现 `BuildQuotaRequest` / `ParseQuotaResponse`（§44.4） |
 
 未声明 `quota`（或两者皆空，校验拒绝）的类型 = 不支持额度（API Key 类），账号视图 `quota` 为 null。状态头取值只认 `allowed` / `allowed_warning` / `rejected`（转小写），其他记为空。校验字段错误：`accountTypes[i].quota`（`required`）、`.quota.headers`（`too_many`）、`.quota.headers[j].key`（`required` / `invalid_format` / `duplicate`）、`.quota.headers[j]`（`required`）、`.quota.headers[j].utilization|reset|status`（`invalid_format`）、`.quota.headers[j].utilizationUnit|resetFormat`（`invalid`；对应头未声明时 `unexpected`）。头解析实现在 `sdk/manifest.ReadQuotaHeaders`，插件可在单测中直接用它验证声明。旧宿主忽略该字段，`hostCompat` 不需要提高（`windowMinutes` 除外，见 §105）。
 
 ### 44.3 被动采样（主要数据来源，零额外上游请求）
 
-- 网关在**每次上游响应**返回响应头后（HTTP 请求的两种中继形式共用 `send`，§112；WebSocket 握手响应同样处理）对声明了 `quota.headers` 的账号类型调用 `core.QuotaObserver.ObserveQuotaHeaders`；未声明的类型只多一次 nil 判断。观察者只接受 2xx、429 与 101（WebSocket 握手），其余状态码忽略。
+- 网关在**每次上游响应**返回响应头后（HTTP 请求的两种中继形式共用 `send`，§112；WebSocket 握手响应同样处理）对声明了 `quota.headers` 的账号类型调用 `core.QuotaObserver.ObserveQuotaHeaders`；未声明的类型只多一次 nil 判断。观察者只接受 2xx、429 与 101（WebSocket 握手），其余状态码忽略。WebSocket 会话中声明的流内用量事件经 `ObserveQuotaEvent` 进入同一个写入器（§142）。
 - 解析只读声明的几个头，结果交给账号模块的异步写入器，不阻塞热路径。写库按账号限频：同一节点每账号至少间隔 30 秒（`quotaPassiveInterval`）；任一窗口的 `status` 与上次所见不同（如 `allowed` → `rejected`，或恢复）立即写；间隔内的样本合并，由后台每 5 秒的刷新补写最后一个值，进程退出时全部写出。多节点各自限频（N 个节点最多 N 次 / 30 秒）。
 - 写入 `source = passive`、清空 `error`、更新 `updated_at` 与 `last_passive_at`。
 
@@ -9710,3 +9711,52 @@ cluster 任务，每分钟一次，单次至多 5 分钟，按下面的顺序：
 
 - **前端**：管理页 `web/src/views/redeem/`（侧栏“充值/支付 → 兑换码”，只有持有 `redeem:manage` 的人看得到，默认只有超级管理员），列表用 `code_tail` 显示成 `••••-••••-••••-XXXX`；生成后的明文只在结果弹窗里（复制全部 / 下载 txt）。钱包页的兑换码卡 `views/me/RedeemCard.vue`（有 `redeem:use` 才显示）。mock `web/mock/billing/redeem.ts` 与上面的接口同形。余额流水的类型名：`topup`“充值”、`promo_bonus`“优惠码赠送”、`redeem`“兑换码”。
 - **测试**（`internal/redeem/*_test.go`，真实 PostgreSQL + miniredis）：大小写、空格、连字符不影响兑换，流水 kind 与幂等键；不存在、格式不对、已作废、已过期同一错误码；20 个用户并发兑换同一个码只成功一次、只有一条流水；账本在写完流水后报错时码仍是 unused、余额与流水都回滚、不计失败；失败 10 次后连有效码也被拒（429，约 3600 秒），其他用户不受影响，1 小时后解锁；每分钟第 6 次 429；生成后 `redeem_codes` 与 `audit_logs` 的整行文本里查不到明文（分组、规范化、小写三种形式），审计记操作人；生成参数校验；列表按四种状态筛选、使用者邮箱、作废记 `voided_by`、作废已用 409、不存在 404；无权限的用户调四个接口都 403，生成响应带 `no-store`；Redis 不可用时每分钟限次与失败锁两处都放行；第 10 次失败从那时重新计 1 小时窗口，到期后能再兑换；空码不计失败也不计每分钟次数；`ApplyTx` 回 `Duplicate` 时整体回滚；`count=1000` 与 `value=100000` 的边界。
+
+## 142. WebSocket 流内用量事件；上游连接结束不再关闭客户端连接（2026-11-28，所有者选“插件加核心一起做”；设计见 [DESIGN-2026-11-28-CODEX-CORE-ALIGN.md](DESIGN-2026-11-28-CODEX-CORE-ALIGN.md) 第 3、4 节；无迁移，可滚动；插件协议、Host API 不变；改契约：清单 `quota.events`、`core.QuotaObserver.ObserveQuotaEvent`）
+
+官方 Codex CLI 在 WebSocket 下读流内事件 `codex.rate_limits` 更新用量，并把 `websocket_connection_limit_reached`（单条连接 60 分钟上限）、`previous_response_not_found` 当作可重试、新建连接重发（codex-rs `codex-api/src/rate_limits.rs`、`codex-api/src/endpoint/responses_websocket.rs`）。核心做成通用机制：清单声明、核心执行，核心里没有 codex 专用分支。
+
+### 142.1 清单：`accountTypes[].quota.events`
+
+```json
+"quota": {
+  "headers": [ … ],
+  "events": [
+    {"type": "codex.rate_limits", "windows": [
+      {"windowMinutes": "rate_limits.primary.window_minutes", "utilization": "rate_limits.primary.used_percent",
+       "utilizationUnit": "percent", "reset": "rate_limits.primary.reset_at"},
+      {"windowMinutes": "rate_limits.secondary.window_minutes", "utilization": "rate_limits.secondary.used_percent",
+       "utilizationUnit": "percent", "reset": "rate_limits.secondary.reset_at"}
+    ]}
+  ]
+}
+```
+
+- `type`：匹配的上游 WebSocket 消息的顶层 `type`。`windows[]` 的值是消息 JSON 里的 gjson 路径，语义与 `quota.headers` 的同名字段相同（§44.2、§105），一条路径相当于一个头名：`windowMinutes` 必填，窗口名由 `manifest.QuotaWindowKey` 按时长生成，与响应头采样是同一套名字；`utilization` 的单位 `ratio`（默认）或 `percent`；`reset` 是 Unix 秒（大于 1e11 视为毫秒）。没有 `key`、`status`、`resetFormat`。
+- 读取：`manifest.ReadQuotaEvent(event, msg, now)` 把窗口当作头声明交给 `manifest.ReadQuotaHeaders`（读值、命名、同一消息里同名窗口保留用得多的，全部是同一份代码），取值是 `gjson.GetBytes(msg, path).String()`。路径不存在、值不是能解析的数字（字符串、布尔、对象）时该值记为未知；时长不可用或一个可用值都没有的窗口不报。`AccountQuota.Event(type)` 返回声明的事件。
+- `AccountQuota.Supported()` 把 `events` 算作声明：只声明 `events` 的类型也有额度视图。
+- 校验（`sdk/manifest/check`）：`.quota.events`（`too_many`，最多 `MaxQuotaHeaders` 16 个）、`.events[i].type`（`required` / `invalid_format`，`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$` / `duplicate`）、`.events[i].windows`（`required` / `too_many`，最多 16 个）、`.windows[j].windowMinutes`（`required`）、`.windows[j]`（`required`：`utilization`、`reset` 至少一个）、`.windows[j].windowMinutes|utilization|reset`（`invalid_path`：必须是读一个值的 gjson 路径，与用量规则的路径同一检查 `ValidUsagePath`）、`.windows[j].utilizationUnit`（`invalid`；没有 `utilization` 时 `unexpected`，与 `headers` 共用一个检查）。`quota` 为空时的错误信息改为 “quota must declare headers, events or query”。
+- 旧核心解析清单时容忍未知字段，只是不采样，`hostCompat` 不需要提高。
+
+### 142.2 采样
+
+- 核心 WebSocket 中继每收到一条上游消息（轮内或轮间），账号类型声明了 `quota.events` 时读它的顶层 `type`，匹配就调用 `core.QuotaObserver.ObserveQuotaEvent(accountID, event, msg)`，然后照常把消息原样转给客户端；没有声明的类型只多一次 nil 判断（`gateway/quota_event.go` 的 `observeQuotaEvent`）。
+- 观察者（账号模块，`account/quota_event.go`）用 `ReadQuotaEvent` 读出窗口，交给与 `ObserveQuotaHeaders` 相同的限频写入器（§44.3：每节点每账号 30 秒、样本合并、`source = passive`）。事件没有状态码，不做 2xx/429/101 的筛选。
+- 只记录窗口，**不据此冷却或禁用账号**：用满禁用仍只由插件 `ClassifyError` 看 429（PLUGIN-CODEX.md §13）。错误事件的 `headers` 对象照旧按 §105 处理。
+- codex 0.2.4 的两个类型声明上面的 `codex.rate_limits` primary / secondary（字段以官方 `RateLimitEventWindow` 为准：`used_percent`、`window_minutes`、`reset_at`；`credits`、`plan_type` 不读）。
+
+### 142.3 上游连接结束不再关闭客户端连接
+
+- **此前**：上游连接读失败（上游关闭、ping 无响应）→ 进行中的一轮记为上游失败，客户端连接以 1011 关闭；这一轮的消息写不进上游连接 → 同样以 1011 关闭。上游的 `websocket_connection_limit_reached`、`previous_response_not_found` 是普通的错误事件（`status` 400）：原样转给客户端、交插件分类、这一轮结束、连接保持；上游随后关闭连接时客户端连接跟着以 1011 关闭。
+- **现在**（`gateway/websocket_reconnect.go`）：上游连接结束时核心关闭并丢掉它，**客户端连接保留**：
+  - 进行中的一轮记为上游失败（使用记录 502、`error_type=upstream`、“upstream connection closed: …”），客户端收到错误事件 `{"type":"error","status":502,"error":{"type":"server_error","code":"upstream_error","message":"upstream connection closed; send the request again"}}`；空闲时结束则什么都不发。
+  - 这一轮的消息写不进上游连接：这一轮照旧失败（502 `upstream connection failed` 错误事件），连接丢掉，客户端连接保留。
+  - 下一轮像首轮一样新建上游连接：重新调度（候选、粘性、排序、限额、换号与失败策略）、调 `Execute` 拿握手、建连，可能换到别的账号。上游连接的读协程一失败就做标记，所以在上游关闭与会话循环处理它之间到达的一轮也会重新建连，而不是写进已结束的连接。
+- 上游错误事件照常原样转给客户端，核心**不替客户端重发**请求体，也不解读错误码；新连接上的 `previous_response_not_found` 同样是上游的回答，原样转给客户端（官方客户端据此改发完整请求）。426 回退 HTTP 是客户端的事，核心不做。
+- 不变：账号租约丢失、上游静默超时、节点排空、密钥被撤销或换分组仍按 §35 关闭客户端连接。
+
+### 142.4 测试
+
+- `sdk/manifest`：`quota_event_test.go`（官方事件读出 `5h` / `7d`；坏字段忽略；`Event` 匹配；只有 `events` 也算声明）；`check/quota_test.go` `TestAccountTypeQuotaEvents`（各校验错误码、上限）。
+- 核心：`account/quota_event_test.go`（事件窗口进入写入器、无可用窗口不写）；`gateway/quota_event_test.go`（只有匹配的类型交给观察者；WebSocket 轮内的用量事件被采样、原样转给客户端、不冷却不禁用，没有事件的轮不采样）；`gateway/websocket_reconnect_test.go`（上游发 `websocket_connection_limit_reached` 后关闭：错误事件原样到达客户端，客户端连接不断，下一轮新握手，没有重发；轮内上游断开：502 错误事件，下一轮重新建连）。
+- codex：`manifest_test.go`（两个类型声明相同的 `events`；声明读官方事件得到 `7d` / `5h`）。

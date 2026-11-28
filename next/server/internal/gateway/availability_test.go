@@ -67,6 +67,7 @@ type availabilitySource struct {
 }
 
 func (s *availabilitySource) ObserveQuotaHeaders(int64, []manifest.QuotaHeader, int, http.Header) {}
+func (s *availabilitySource) ObserveQuotaEvent(int64, manifest.QuotaEvent, []byte)                {}
 func (s *availabilitySource) AccountQuotaSnapshots(_ context.Context, ids []int64) (map[int64]*pluginv1.AccountQuotaSnapshot, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
