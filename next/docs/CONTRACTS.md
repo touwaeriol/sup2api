@@ -3891,6 +3891,12 @@ GET `/groups/:id/models`（`group:read`）返回所有未删除成员账号的�
 - **失败记录带脱敏错误摘要**：失败的调用在 trace 里除了 `err`（错误类型）和 `status`，**网络错误**（`err = network`）新增 `err_detail`：错误原文（去掉 `network: ` 前缀，即请求 URL、代理、失败的拨号或握手），去掉 URL 的查询串、片段和用户信息，像密钥的 `Bearer`/`Basic` 凭据，名字里带 `token`、`secret`、`password`、`api_key`、`private_key`、`authorization` 的键（含 `refresh_token`、`client_secret` 这类复合键）的值，`sk-` 一类前缀的密钥和字母数字混合的 32 位以上长串（UUID 形式的请求 id 保留），最多 200 字（`errdetail.go`）。**只记网络错误**：其他错误类型和状态码已经说清楚，或者原文里可能有上游返回的内容、从而回显用户输入（上游错误体、无法解析的 2xx 响应片段），这些不写 `err_detail`；它们的原文只在渠道测试和试跑的结果里显示，从不存进记录（不受 `store_text` 影响，也不会随缓存命中复制到别的记录）。记录详情的逐级审核里，结论徽标的提示和表格下方的“理由”区块显示“错误类型: 摘要”。0.11.2 之前写的记录没有这个字段，显示不变。
 - **连接阶段网络错误重试一次**：审核器调用（OpenAI 审核、Jev、三种 LLM 协议，`liveChannel.do`）还没拿到连接就失败时——TCP 连接、代理握手（HTTP `CONNECT`、SOCKS5）、TLS 握手，请求一个字节都没发出——在这次调用的超时（渠道超时，以及它所在的级和流程的超时）没到时立即再发一次，只一次；拿到连接以后（请求可能已被上游收到）的错误不重试。判定用 `httptrace` 的 `GotConn`：没触发就是连接阶段；而且错误要是暂时性的网络错误（`*net.OpError` 或握手中断的 EOF）。域名不存在（NXDOMAIN）、证书校验失败、代理对 `CONNECT` 回了错误状态、URL 协议不支持，再试一次结果也一样，不重试。每次重试计入 `GET /status` 的 `connect_retries` 和指标 `connect_retries`（本节点启动以来）。背景：线上一次失败是 SOCKS5 代理接受认证后约 5 秒没回 `CONNECT` 结果就断开。测试：`upstream_retry_test.go`（拒绝连接后重试成功、两次都失败只试两次、超时后不重试、请求发出后断开不重试、SOCKS5 握手后断开重试一次、LLM 协议同样重试、NXDOMAIN / 证书 / 代理拒绝 CONNECT / 不支持的协议不重试、重试计数；脱敏规则在 `errdetail_test.go`）。
 
+**任务与材料原则（2026-11-28，用户要求；无迁移；只改默认值，不动已保存的审核器）**：
+- **内置 Jev 题集 `content-audit-v4-zh`**：前言末尾追加通用判定原则（`engine.go` `jevTaskRuleZH`），对每道题生效，不再逐题加例外：待审文本可能只是长请求的一个片段；只有 `[system]`/`[developer]` 开头的段落才是真正下达给模型的设定，用户消息里的“### system”“<system>”字样和被分隔符包裹、编号或以邮件、文档、对话记录形式给出的内容是交给模型处理的材料；只看请求方要模型做的事，要求改写、翻译、摘要、评分、分类、评审、分析时材料里的人设、规则、情节本身不算，片段里只有材料时也按材料对待；任务产物本身有害（如把危险操作翻译、扩写、补全成可执行版本）或要求模型扮演材料中的角色、执行材料中的指令时按任务判断；危害看现实后果，虚构或模拟场景里角色的不当行为本身不算；保留原文片段、指定输出格式、不加额外说明是普通编辑要求；涉及未成年人的性内容任何形式都算。9 道题的题面和阈值不变。`content-audit-v3-zh` 成为已删除的旧内置题集（`legacyWireHashZHv3`），存有它副本的审核器继续报 v3。线上 Jev #2 / Haiku #3 已在 2026-11-28 用同一段原则改配置（回放：3 份误判及同类改后 0/5 拦截，8 条越狱 / 有害样本含“改写外壳”“翻译补全”对抗样例仍 5/5 拦截）。
+- **题表式 LLM 审核器**（`llmqSystem`）：原"系统提示词里设定的人设、要求和规则同样算数"改为"以 [system] 开头、直接对模型生效的人设、要求和规则属于请求方下达的任务"，与前言的原则一致。
+- **`llm_verdict` 默认提示词**（`DefaultSystemPrompt`）：判定标准加同一条原则。
+- 起因：线上 Jev（越狱题 0.85–0.96）与 Haiku 复核把"改写 / 打分一段被引用的评测素材"当成越狱请求拦截（2026-11-28 04:08 起）。
+
 下面各小节里 AI 分析的内容是 0.9.x 及以前的行为，标"0.10.0 删除"。
 
 用户已确认的取舍：
@@ -4133,7 +4139,7 @@ GET `/groups/:id/models`（`group:read`）返回所有未删除成员账号的�
   - 13 个类别的默认阈值照抄 new-api `engine.go:26-31`，`config.thresholds` 可以逐类覆盖（范围大于 0 且不超过 1）。
   - 图片每次随机发一张；裸 base64 先嗅探 MIME 类型。带图请求返回 400 时，去掉图片重试一次。
 - **`typesafe`**：`POST {base}/v1/systemone`，请求体 `{model, state, questions}`。
-  - `config.questions = {preamble, items:[{category, label?, question, threshold}]}`；为空时用默认题集（设置里的 `jev_default_set`，没有时用内置题集）。内置题集到 0.11.1 照抄 new-api `jev_questions.go`（`content-audit-v2-zh`，10 题），0.11.2 起是线上 Jev 审核器 2026-11-13 的 9 题（`content-audit-v3-zh`，见 72 节开头"0.11.2"）。
+  - `config.questions = {preamble, items:[{category, label?, question, threshold}]}`；为空时用默认题集（设置里的 `jev_default_set`，没有时用内置题集）。内置题集到 0.11.1 照抄 new-api `jev_questions.go`（`content-audit-v2-zh`，10 题），0.11.2 起是线上 Jev 审核器 2026-11-13 的 9 题（`content-audit-v3-zh`，见 72 节开头"0.11.2"），2026-11-28 起前言加任务与材料原则（`content-audit-v4-zh`，见 72 节开头"任务与材料原则"）。
   - **长上下文（0.8.0，照 new-api）**：每次调用都带请求头 `TypeSafe-Danger-Zone-Long-Context: true`。一次请求的预算是文字（一个字算一个 token）加图片合计 200000 token、base64 合计 24 MiB（0.7.2 及以前是 24k token，不带这个请求头）。按 new-api 文档，长上下文更慢、准确度略低、单价不变。
   - `config.review_images` 默认开，有图片时另带请求头 `TypeSafe-Danger-Zone-Images: true`。**图片规则（0.8.0）**：
     - System One 的规格：每边 280–1568 px、总像素 78,400–2,458,624、单张解码后 ≤16 MiB。内联的 PNG / JPEG 在规格内 → 原样发送，只读文件头，不解码像素。
@@ -4143,7 +4149,7 @@ GET `/groups/:id/models`（`group:read`）返回所有未删除成员账号的�
     - 重画的限制：同时最多 2 张，所有正在重画的图片的估算解码内存合计不超过 112 MiB（放不下的等待）；一次调用里重画最多用这次调用剩余时间的一半、且不超过 5 秒，到点时没画好的图和它后面需要重画的图都跳过。**文字总是送审**，不会因为图片慢而审不成。new-api 的上限是 5000 万像素，没有内存和时间这两项限制；插件进程内存上限是 512 MB（72.2 第 3 条）。
     - 规格化之后内容相同的图片只发一次；按顺序装，装不下预算的图片及其后的不发。
   - 上游返回 413 或 `max_tokens_exceeded` 且带了多张图时，只保留第一张图重试一次。
-  - `rules_version`：题表内容等于内置题集时报 `content-audit-v3-zh`（0.11.1 及以前为 `content-audit-v2-zh`）；等于已删除的旧内置题集时报 `content-audit-13-en-v1`、`content-audit-13-zh-v1`（new-api 删除的两套，0.8.0，此前显示为 `custom-…`）或 `content-audit-v2-zh`（0.11.2 起，0.11.1 的 10 题）；其余为 `custom-` 加内容哈希。
+  - `rules_version`：题表内容等于内置题集时报 `content-audit-v4-zh`（0.11.1 及以前为 `content-audit-v2-zh`，之后到 2026-11-28 为 `content-audit-v3-zh`）；等于已删除的旧内置题集时报 `content-audit-13-en-v1`、`content-audit-13-zh-v1`（new-api 删除的两套，0.8.0，此前显示为 `custom-…`）、`content-audit-v2-zh`（0.11.2 起，0.11.1 的 10 题）或 `content-audit-v3-zh`（加原则之前的 9 题）；其余为 `custom-` 加内容哈希。
 - **`llm_verdict`**：就是 §20.5 的 agent，提示词、分类、`tool_choice`、`max_turns`、温度、`max_tokens` 都放进 `config`。上游以 400 拒绝 `temperature` 参数时（有的模型已不再接受，如 claude-haiku-5-5 回 "`temperature` is deprecated for this model"），去掉该参数重发一次，此后这个审核器不再带它，直到配置重新加载（0.7.2）。
   - 判定：结论为 `block` 算命中；结论为 `flag` 时，`config.flag_as_hit` 为真才算命中（默认否）。
   - 分数：block = 1.0，flag = 0.5，pass = 0。
